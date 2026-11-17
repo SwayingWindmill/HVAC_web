@@ -67,6 +67,8 @@ type internalCreateCommandRequest struct {
 	VerificationPointKey string                         `json:"verificationPointKey"`
 	PreconditionMode     commandmodel.PreconditionMode  `json:"preconditionMode,omitempty"`
 	BypassReason         string                         `json:"bypassReason,omitempty"`
+	PriorityTier         commandmodel.PriorityTier      `json:"priorityTier,omitempty"`
+	CommandSource        commandmodel.CommandSource     `json:"commandSource,omitempty"`
 	CurrentState         internalCurrentState           `json:"currentState"`
 }
 
@@ -134,6 +136,8 @@ type CommandView struct {
 	Status                commandmodel.IntentStatus      `json:"status"`
 	Risk                  commandmodel.RiskLevel         `json:"risk"`
 	ApprovalPolicy        commandmodel.ApprovalPolicy    `json:"approvalPolicy"`
+	PriorityTier          commandmodel.PriorityTier      `json:"priorityTier,omitempty"`
+	CommandSource         commandmodel.CommandSource     `json:"commandSource,omitempty"`
 	ApprovalCount         int                            `json:"approvalCount"`
 	RequiredApprovalCount int                            `json:"requiredApprovalCount"`
 	Parameters            commandmodel.CommandParameters `json:"parameters"`
@@ -283,6 +287,7 @@ func (h *HTTPHandler) createCommand(writer http.ResponseWriter, request *http.Re
 		PrincipalID: input.PrincipalID, IdempotencyKey: input.IdempotencyKey, TraceID: traceID,
 		Capability: input.Capability, Parameters: cloneParameters(input.Parameters), VerificationPointKey: input.VerificationPointKey,
 		PreconditionMode: input.PreconditionMode, BypassReason: input.BypassReason,
+		PriorityTier: input.PriorityTier, CommandSource: input.CommandSource,
 		CurrentState: commandmodel.CurrentStateEvidence{
 			EvaluationAvailability: input.CurrentState.EvaluationAvailability,
 			Presence:               input.CurrentState.Presence, Readiness: input.CurrentState.Readiness,
@@ -591,6 +596,7 @@ func commandView(intent commandmodel.CommandIntent) CommandView {
 		SiteID: intent.SiteID, DeviceID: intent.DeviceID, PointID: intent.PointID,
 		Capability: intent.Capability, CapabilityRevision: intent.CapabilityRevision,
 		Status: intent.Status, Risk: intent.Risk, ApprovalPolicy: intent.ApprovalPolicy,
+		PriorityTier: intent.PriorityTier, CommandSource: intent.CommandSource,
 		ApprovalCount: len(intent.Approvals), RequiredApprovalCount: requiredApprovalCount(intent.ApprovalPolicy),
 		Parameters: cloneParameters(intent.Parameters), DeviceCommandSequence: intent.DeviceCommandSequence,
 		Version: intent.Version, SnapshotRevision: intent.SnapshotRevision, Transitions: transitions,
@@ -614,6 +620,8 @@ func writeAuthorityError(writer http.ResponseWriter, err error) {
 		writeCommandProblem(writer, http.StatusBadRequest, "COMMAND_REQUEST_INVALID", false)
 	case errors.Is(err, ErrIdempotencyConflict):
 		writeCommandProblem(writer, http.StatusConflict, "COMMAND_IDEMPOTENCY_CONFLICT", false)
+	case errors.Is(err, ErrDevicePriorityLocked):
+		writeCommandProblem(writer, http.StatusConflict, "DEVICE_PRIORITY_LOCKED", false)
 	default:
 		writeCommandProblem(writer, http.StatusServiceUnavailable, "COMMAND_UNAVAILABLE", true)
 	}

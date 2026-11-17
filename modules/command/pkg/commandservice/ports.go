@@ -118,6 +118,13 @@ func controlErrorFromStore(err error, defaultDetail string) error {
 			Title:      "Current state unsafe",
 			Detail:     "The current Device state does not satisfy the control preconditions.",
 		}
+	case errors.Is(err, ErrDevicePriorityLocked):
+		return &ControlError{
+			HTTPStatus: http.StatusConflict,
+			Code:       "DEVICE_PRIORITY_LOCKED",
+			Title:      "Device priority locked",
+			Detail:     "The Device is locked or reserved at a higher Command priority.",
+		}
 	case errors.Is(err, ErrInvalidRequest), errors.Is(err, ErrCapabilityDenied):
 		detail := defaultDetail
 		if detail == "" {

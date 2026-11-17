@@ -22,6 +22,7 @@ func RunAll(hooks FaultHooks) (FullReport, error) {
 		CheckSingleCommandProtocol,
 		CheckMultiCommandDeviceExclusivity,
 		CheckReplyRecoveryQueueDrain,
+		CheckPriorityArbitrationAndLocks,
 	}
 	report := FullReport{
 		Passed: true,
@@ -2010,4 +2011,518 @@ func CheckReplyRecoveryQueueDrain(hooks FaultHooks) (SuiteReport, error) {
 		Transitions:   totalEdges,
 		Passed:        true,
 	}, nil
+}
+
+type prioArbState struct {
+	lockTier          commandmodel.PriorityTier
+	lowStatus         commandmodel.IntentStatus
+	medStatus         commandmodel.IntentStatus
+	safetyStatus      commandmodel.IntentStatus
+	deviceFrozen      bool
+	lowAdmittedLocked bool
+	medAdmittedLocked bool
+	lowClaimedLocked  bool
+	medClaimedLocked  bool
+}
+
+type prioArbNode struct {
+	state prioArbState
+	trace []string
+}
+
+func makePriorityLockForFormal(tier commandmodel.PriorityTier, now time.Time) *commandmodel.DevicePriorityLock {
+	if tier == "" {
+		return nil
+	}
+	return &commandmodel.DevicePriorityLock{
+		TenantID:       baseTenantID,
+		SiteID:         baseSiteID,
+		DeviceID:       baseDeviceID,
+		LockedPriority: tier,
+		CommandSource:  commandmodel.DefaultCommandSourceForPriority(tier),
+		LockedBy:       submitPrincipalID,
+		LockedUntil:    now.Add(15 * time.Minute),
+		Reason:         "formal verification priority lock",
+	}
+}
+
+func makePrioritySyntheticIntent(seq uint64, capability commandmodel.Capability, tier commandmodel.PriorityTier, status commandmodel.IntentStatus, now time.Time) commandmodel.CommandIntent {
+	intent := makeSyntheticIntentForCapability(seq, capability, status, true, now)
+	intent.PriorityTier = tier
+	intent.CommandSource = commandmodel.DefaultCommandSourceForPriority(tier)
+	return intent
+}
+
+func buildPriorityActiveStates(st prioArbState) []commandmodel.IntentPriorityState {
+	var states []commandmodel.IntentPriorityState
+	if st.lowStatus != "" {
+		states = append(states, commandmodel.IntentPriorityState{Status: st.lowStatus, PriorityTier: commandmodel.PriorityAIOptimization})
+	}
+	if st.medStatus != "" {
+		states = append(states, commandmodel.IntentPriorityState{Status: st.medStatus, PriorityTier: commandmodel.PriorityManualOverride})
+	}
+	if st.safetyStatus != "" {
+		states = append(states, commandmodel.IntentPriorityState{Status: st.safetyStatus, PriorityTier: commandmodel.PrioritySafetyInterlock})
+	}
+	return states
+}
+
+func buildPriorityQueuedPeers(st prioArbState, excludeSeq uint64) []commandservice.QueuedPeerState {
+	var peers []commandservice.QueuedPeerState
+	if excludeSeq != 1 && st.lowStatus != "" {
+		peers = append(peers, commandservice.QueuedPeerState{
+			Status:                st.lowStatus,
+			PriorityTier:          commandmodel.PriorityAIOptimization,
+			DeviceCommandSequence: 1,
+		})
+	}
+	if excludeSeq != 2 && st.medStatus != "" {
+		peers = append(peers, commandservice.QueuedPeerState{
+			Status:                st.medStatus,
+			PriorityTier:          commandmodel.PriorityManualOverride,
+			DeviceCommandSequence: 2,
+		})
+	}
+	if excludeSeq != 3 && st.safetyStatus != "" {
+		peers = append(peers, commandservice.QueuedPeerState{
+			Status:                st.safetyStatus,
+			PriorityTier:          commandmodel.PrioritySafetyInterlock,
+			DeviceCommandSequence: 3,
+		})
+	}
+	return peers
+}
+
+func assertPriorityArbitrationInvariants(st prioArbState, _ time.Time, trace []string) *Counterexample {
+	if st.lowAdmittedLocked {
+		return &Counterexample{
+			Property: PropertyP1,
+			Suite:    "PriorityArbitrationAndLocks",
+			Summary:  "AI_OPTIMIZATION command was submitted under a blocking higher priority lock",
+			Trace:    trace,
+		}
+	}
+	if st.medAdmittedLocked {
+		return &Counterexample{
+			Property: PropertyP1,
+			Suite:    "PriorityArbitrationAndLocks",
+			Summary:  "MANUAL_OVERRIDE command was submitted under a blocking SAFETY_INTERLOCK lock",
+			Trace:    trace,
+		}
+	}
+	dispatchingCount := 0
+	for _, s := range []commandmodel.IntentStatus{st.lowStatus, st.medStatus, st.safetyStatus} {
+		if s == commandmodel.IntentDispatching {
+			dispatchingCount++
+		}
+	}
+	if dispatchingCount > 1 {
+		return &Counterexample{
+			Property: PropertyP3,
+			Suite:    "PriorityArbitrationAndLocks",
+			Summary:  "multiple prioritized commands entered DISPATCHING simultaneously on one device",
+			Trace:    trace,
+		}
+	}
+	if st.deviceFrozen && dispatchingCount > 0 {
+		return &Counterexample{
+			Property: PropertyP3,
+			Suite:    "PriorityArbitrationAndLocks",
+			Summary:  "command entered DISPATCHING while device control group was frozen",
+			Trace:    trace,
+		}
+	}
+	if st.lowClaimedLocked {
+		return &Counterexample{
+			Property: PropertyP1,
+			Suite:    "PriorityArbitrationAndLocks",
+			Summary:  "AI_OPTIMIZATION command claimed for dispatch while higher priority lock held",
+			Trace:    trace,
+		}
+	}
+	if st.medClaimedLocked {
+		return &Counterexample{
+			Property: PropertyP1,
+			Suite:    "PriorityArbitrationAndLocks",
+			Summary:  "MANUAL_OVERRIDE command claimed for dispatch while SAFETY_INTERLOCK lock held",
+			Trace:    trace,
+		}
+	}
+	if st.safetyStatus == commandmodel.IntentQueued {
+		if st.lowStatus == commandmodel.IntentQueued ||
+			st.medStatus == commandmodel.IntentAwaitingApproval ||
+			st.medStatus == commandmodel.IntentQueued {
+			return &Counterexample{
+				Property: PropertyP3,
+				Suite:    "PriorityArbitrationAndLocks",
+				Summary:  fmt.Sprintf("lower-priority intent remained unpreempted after SAFETY_INTERLOCK submit (low=%s med=%s)", st.lowStatus, st.medStatus),
+				Trace:    trace,
+			}
+		}
+	}
+	return nil
+}
+
+// CheckPriorityArbitrationAndLocks exhaustively verifies priority lock enforcement,
+// priority-ordered dispatch claiming, and SAFETY_INTERLOCK preemption without OUTCOME_UNKNOWN freeze.
+func CheckPriorityArbitrationAndLocks(hooks FaultHooks) (SuiteReport, error) {
+	now := baseModelTime
+	initial := prioArbState{}
+	queue := []prioArbNode{{state: initial}}
+	visited := map[prioArbState]bool{initial: true}
+	transitions := 0
+
+	enqueue := func(next prioArbState, action string, parentTrace []string) (*Counterexample, error) {
+		transitions++
+		trace := make([]string, len(parentTrace)+1)
+		copy(trace, parentTrace)
+		trace[len(parentTrace)] = action
+		if cx := assertPriorityArbitrationInvariants(next, now, trace); cx != nil {
+			return cx, nil
+		}
+		if !visited[next] {
+			visited[next] = true
+			queue = append(queue, prioArbNode{state: next, trace: trace})
+		}
+		return nil, nil
+	}
+
+	failReport := func(cx *Counterexample) SuiteReport {
+		return SuiteReport{
+			Suite:          "PriorityArbitrationAndLocks",
+			VisitedStates:  len(visited),
+			Transitions:    transitions,
+			Passed:         false,
+			Counterexample: cx,
+		}
+	}
+
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		st := cur.state
+		lock := makePriorityLockForFormal(st.lockTier, now)
+		activeStates := buildPriorityActiveStates(st)
+
+		if st.lockTier == "" {
+			next := st
+			next.lockTier = commandmodel.PriorityManualOverride
+			if cx, err := enqueue(next, "AcquireLock(MANUAL_OVERRIDE)", cur.trace); err != nil {
+				return SuiteReport{}, err
+			} else if cx != nil {
+				return failReport(cx), nil
+			}
+		}
+		if st.lockTier != commandmodel.PrioritySafetyInterlock {
+			next := st
+			next.lockTier = commandmodel.PrioritySafetyInterlock
+			if cx, err := enqueue(next, "AcquireLock(SAFETY_INTERLOCK)", cur.trace); err != nil {
+				return SuiteReport{}, err
+			} else if cx != nil {
+				return failReport(cx), nil
+			}
+		}
+		if st.lockTier != "" {
+			next := st
+			next.lockTier = ""
+			if cx, err := enqueue(next, "ReleaseLock()", cur.trace); err != nil {
+				return SuiteReport{}, err
+			} else if cx != nil {
+				return failReport(cx), nil
+			}
+		}
+
+		if st.lowStatus == "" {
+			blockedByLock := commandservice.PriorityLockBlocking(commandmodel.PriorityAIOptimization, lock, now)
+			blockedByActive := commandservice.ActiveHigherPriorityBlocking(commandmodel.PriorityAIOptimization, activeStates)
+			if (!blockedByLock && !blockedByActive) || (hooks.AllowSubmitUnderHigherPriorityLock && blockedByLock) {
+				next := st
+				next.lowStatus = commandmodel.IntentQueued
+				next.lowAdmittedLocked = blockedByLock
+				if cx, err := enqueue(next, "Submit(AI_OPTIMIZATION)", cur.trace); err != nil {
+					return SuiteReport{}, err
+				} else if cx != nil {
+					return failReport(cx), nil
+				}
+			}
+		}
+
+		if st.medStatus == "" {
+			blockedByLock := commandservice.PriorityLockBlocking(commandmodel.PriorityManualOverride, lock, now)
+			blockedByActive := commandservice.ActiveHigherPriorityBlocking(commandmodel.PriorityManualOverride, activeStates)
+			if (!blockedByLock && !blockedByActive) || (hooks.AllowSubmitUnderHigherPriorityLock && blockedByLock) {
+				for _, target := range []commandmodel.IntentStatus{commandmodel.IntentAwaitingApproval, commandmodel.IntentQueued} {
+					next := st
+					next.medStatus = target
+					next.medAdmittedLocked = blockedByLock
+					if cx, err := enqueue(next, fmt.Sprintf("Submit(MANUAL_OVERRIDE,%s)", target), cur.trace); err != nil {
+						return SuiteReport{}, err
+					} else if cx != nil {
+						return failReport(cx), nil
+					}
+				}
+			}
+		}
+
+		if st.medStatus == commandmodel.IntentAwaitingApproval {
+			next := st
+			next.medStatus = commandmodel.IntentQueued
+			if cx, err := enqueue(next, "Approve(MANUAL_OVERRIDE)", cur.trace); err != nil {
+				return SuiteReport{}, err
+			} else if cx != nil {
+				return failReport(cx), nil
+			}
+		}
+
+		if st.safetyStatus == "" {
+			if !commandservice.PriorityLockBlocking(commandmodel.PrioritySafetyInterlock, lock, now) &&
+				!commandservice.ActiveHigherPriorityBlocking(commandmodel.PrioritySafetyInterlock, activeStates) {
+				next := st
+				next.safetyStatus = commandmodel.IntentQueued
+				if !hooks.SkipSafetyInterlockPreemption {
+					if commandservice.ShouldPreemptOnSafetyInterlock(commandmodel.PrioritySafetyInterlock, next.lowStatus, commandmodel.PriorityAIOptimization) {
+						next.lowStatus = commandmodel.IntentCancelled
+					}
+					if commandservice.ShouldPreemptOnSafetyInterlock(commandmodel.PrioritySafetyInterlock, next.medStatus, commandmodel.PriorityManualOverride) {
+						next.medStatus = commandmodel.IntentCancelled
+					}
+				}
+				if cx, err := enqueue(next, "Submit(SAFETY_INTERLOCK)", cur.trace); err != nil {
+					return SuiteReport{}, err
+				} else if cx != nil {
+					return failReport(cx), nil
+				}
+			}
+		}
+
+		if st.lowStatus == commandmodel.IntentQueued && commandservice.PriorityLockBlocking(commandmodel.PriorityAIOptimization, lock, now) {
+			if !commandmodel.TerminalPreSendRejection("DEVICE_PRIORITY_LOCKED") || !commandmodel.TerminalPreSendRejection("PRIORITY_PREEMPTED") {
+				return failReport(&Counterexample{
+					Property: PropertyP1,
+					Suite:    "PriorityArbitrationAndLocks",
+					Summary:  "priority lock/preemption code must be treated as terminal pre-send rejection",
+					Trace:    cur.trace,
+				}), nil
+			}
+			next := st
+			next.lowStatus = commandmodel.IntentRejected
+			if cx, err := enqueue(next, "RetireLocked(AI_OPTIMIZATION)", cur.trace); err != nil {
+				return SuiteReport{}, err
+			} else if cx != nil {
+				return failReport(cx), nil
+			}
+		}
+
+		if st.lowStatus == commandmodel.IntentQueued {
+			iLow := makePrioritySyntheticIntent(1, commandmodel.CapabilitySetTemperatureSetpoint, commandmodel.PriorityAIOptimization, st.lowStatus, now)
+			peers := buildPriorityQueuedPeers(st, 1)
+			canClaim := commandservice.CanClaimQueuedIntentWithPriority(iLow, st.deviceFrozen, lock, peers, now)
+			blockedByLock := commandservice.PriorityLockBlocking(commandmodel.PriorityAIOptimization, lock, now)
+			blockedByHigher := commandservice.IsBlockingEarlierIntentStatus(st.medStatus) || commandservice.IsBlockingEarlierIntentStatus(st.safetyStatus)
+			if hooks.BypassPriorityLockOnClaim && blockedByLock {
+				canClaim = true
+			}
+			if canClaim {
+				next := st
+				next.lowStatus = commandmodel.IntentDispatching
+				next.lowClaimedLocked = blockedByLock || blockedByHigher
+				if cx, err := enqueue(next, "Claim(AI_OPTIMIZATION)", cur.trace); err != nil {
+					return SuiteReport{}, err
+				} else if cx != nil {
+					return failReport(cx), nil
+				}
+			}
+		}
+
+		if st.medStatus == commandmodel.IntentQueued {
+			iMed := makePrioritySyntheticIntent(2, commandmodel.CapabilitySetTemperatureSetpoint, commandmodel.PriorityManualOverride, st.medStatus, now)
+			peers := buildPriorityQueuedPeers(st, 2)
+			blockedByLock := commandservice.PriorityLockBlocking(commandmodel.PriorityManualOverride, lock, now)
+			blockedByHigher := commandservice.IsBlockingEarlierIntentStatus(st.safetyStatus)
+			if commandservice.CanClaimQueuedIntentWithPriority(iMed, st.deviceFrozen, lock, peers, now) {
+				next := st
+				next.medStatus = commandmodel.IntentDispatching
+				next.medClaimedLocked = blockedByLock || blockedByHigher
+				if cx, err := enqueue(next, "Claim(MANUAL_OVERRIDE)", cur.trace); err != nil {
+					return SuiteReport{}, err
+				} else if cx != nil {
+					return failReport(cx), nil
+				}
+			}
+		}
+
+		if st.safetyStatus == commandmodel.IntentQueued {
+			iSafety := makePrioritySyntheticIntent(3, commandmodel.CapabilityStop, commandmodel.PrioritySafetyInterlock, st.safetyStatus, now)
+			peers := buildPriorityQueuedPeers(st, 3)
+			if commandservice.CanClaimQueuedIntentWithPriority(iSafety, st.deviceFrozen, lock, peers, now) {
+				next := st
+				next.safetyStatus = commandmodel.IntentDispatching
+				if cx, err := enqueue(next, "Claim(SAFETY_INTERLOCK)", cur.trace); err != nil {
+					return SuiteReport{}, err
+				} else if cx != nil {
+					return failReport(cx), nil
+				}
+			}
+		}
+
+		if st.lowStatus == commandmodel.IntentDispatching {
+			nextOK := st
+			nextOK.lowStatus = commandmodel.IntentSucceeded
+			if cx, err := enqueue(nextOK, "VerifyOK(AI_OPTIMIZATION)", cur.trace); err != nil {
+				return SuiteReport{}, err
+			} else if cx != nil {
+				return failReport(cx), nil
+			}
+			nextUnknown := st
+			nextUnknown.lowStatus = commandmodel.IntentOutcomeUnknown
+			nextUnknown.deviceFrozen = true
+			if cx, err := enqueue(nextUnknown, "TimeoutUnknown(AI_OPTIMIZATION)", cur.trace); err != nil {
+				return SuiteReport{}, err
+			} else if cx != nil {
+				return failReport(cx), nil
+			}
+		}
+		if st.medStatus == commandmodel.IntentDispatching {
+			nextOK := st
+			nextOK.medStatus = commandmodel.IntentSucceeded
+			if cx, err := enqueue(nextOK, "VerifyOK(MANUAL_OVERRIDE)", cur.trace); err != nil {
+				return SuiteReport{}, err
+			} else if cx != nil {
+				return failReport(cx), nil
+			}
+		}
+		if st.safetyStatus == commandmodel.IntentDispatching {
+			nextOK := st
+			nextOK.safetyStatus = commandmodel.IntentSucceeded
+			if cx, err := enqueue(nextOK, "VerifyOK(SAFETY_INTERLOCK)", cur.trace); err != nil {
+				return SuiteReport{}, err
+			} else if cx != nil {
+				return failReport(cx), nil
+			}
+		}
+	}
+
+	if cx, err := verifyRealServicePriorityAndAbortProtocol(now, hooks); err != nil {
+		return SuiteReport{}, err
+	} else if cx != nil {
+		return failReport(cx), nil
+	}
+
+	return SuiteReport{
+		Suite:         "PriorityArbitrationAndLocks",
+		VisitedStates: len(visited),
+		Transitions:   transitions,
+		Passed:        true,
+	}, nil
+}
+
+func verifyRealServicePriorityAndAbortProtocol(now time.Time, hooks FaultHooks) (*Counterexample, error) {
+	svc := commandservice.New(func() time.Time { return now })
+	seqReq := makeSubmitRequestForCapability("formal-prio-seq", commandmodel.CapabilityStartUnitSequence, now)
+	seqReq.Authorization.WorkloadSPIFFE = "spiffe://hvac.local/optimizer"
+	seqReq.Authorization.LeaseID = "lease-formal-1"
+	seqReq.Authorization.ArmedBy = submitPrincipalID
+	seqSub, err := svc.Submit(seqReq)
+	if err != nil {
+		return nil, fmt.Errorf("submit leased unit sequence failed: %w", err)
+	}
+	if seqSub.Intent.PriorityTier != commandmodel.PriorityAIOptimization || seqSub.Intent.CommandSource != commandmodel.SourceOptimization {
+		return &Counterexample{
+			Property: PropertyP1,
+			Suite:    "PriorityArbitrationAndLocks",
+			Summary:  fmt.Sprintf("leased command derived (%s, %s), want (AI_OPTIMIZATION, OPTIMIZATION)", seqSub.Intent.PriorityTier, seqSub.Intent.CommandSource),
+		}, nil
+	}
+	seqEnv, err := svc.PrepareDispatch(seqSub.Intent.ID, "disp-formal", now.Add(dispatchLeaseWindow))
+	if err != nil {
+		return nil, fmt.Errorf("prepare sequence dispatch failed: %w", err)
+	}
+	if err := svc.ResolveDispatch(seqEnv, commandmodel.ConnectorResult{
+		Phase:         commandmodel.ConnectorAcknowledged,
+		Acknowledged:  true,
+		EvidenceID:    "ev-seq-ack",
+		EdgeExecution: validUnitSequenceAcceptedEdgeExecution("chiller-1"),
+	}); err != nil {
+		return nil, fmt.Errorf("ack unit sequence failed: %w", err)
+	}
+
+	// Acquiring a MANUAL_OVERRIDE lock must still permit CancelPending(AbortActiveSequences) without OUTCOME_UNKNOWN freeze.
+	if _, err := svc.AcquireDevicePriorityLock(commandmodel.DevicePriorityLock{
+		TenantID:       baseTenantID,
+		SiteID:         baseSiteID,
+		DeviceID:       baseDeviceID,
+		LockedPriority: commandmodel.PriorityManualOverride,
+		CommandSource:  commandmodel.SourceOperator,
+		LockedBy:       approverPrincipalID,
+		LockedUntil:    now.Add(10 * time.Minute),
+		Reason:         "operator intervention before emergency stop",
+	}); err != nil {
+		return nil, fmt.Errorf("acquire priority lock failed: %w", err)
+	}
+	abortedIDs, err := svc.CancelPending(commandmodel.CancelPendingRequest{
+		TenantID:             baseTenantID,
+		SiteID:               baseSiteID,
+		DeviceIDs:            []string{baseDeviceID},
+		PrincipalID:          approverPrincipalID,
+		Reason:               "SAFETY_SHUTDOWN_ABORT",
+		CausationID:          "safety-abort-1",
+		AbortActiveSequences: true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("CancelPending(AbortActiveSequences) failed: %w", err)
+	}
+	seqAfter, err := svc.Get(seqSub.Intent.ID)
+	if err != nil {
+		return nil, fmt.Errorf("reload aborted sequence failed: %w", err)
+	}
+	if len(abortedIDs) != 1 || seqAfter.Status != commandmodel.IntentFailed {
+		return &Counterexample{
+			Property: PropertyP3,
+			Suite:    "PriorityArbitrationAndLocks",
+			Summary:  fmt.Sprintf("AbortActiveSequences left status=%s (aborted=%d), want FAILED without OUTCOME_UNKNOWN", seqAfter.Status, len(abortedIDs)),
+		}, nil
+	}
+
+	// Lower-priority submit under MANUAL_OVERRIDE lock fails closed; SAFETY_INTERLOCK succeeds and preempts queued MANUAL_OVERRIDE.
+	blockedLow := makeSubmitRequest("formal-blocked-low", 21.0, now)
+	blockedLow.Authorization.WorkloadSPIFFE = "spiffe://hvac.local/optimizer"
+	blockedLow.Authorization.LeaseID = "lease-formal-2"
+	blockedLow.Authorization.ArmedBy = submitPrincipalID
+	if !hooks.AllowSubmitUnderHigherPriorityLock {
+		if _, err := svc.Submit(blockedLow); !errors.Is(err, commandservice.ErrDevicePriorityLocked) {
+			return &Counterexample{
+				Property: PropertyP1,
+				Suite:    "PriorityArbitrationAndLocks",
+				Summary:  fmt.Sprintf("AI_OPTIMIZATION under MANUAL_OVERRIDE lock returned %v, want ErrDevicePriorityLocked", err),
+			}, nil
+		}
+	}
+
+	manualReq := makeSubmitRequest("formal-manual-queued", 21.0, now)
+	manualSub, err := svc.Submit(manualReq)
+	if err != nil {
+		return nil, fmt.Errorf("manual submit under equal lock failed: %w", err)
+	}
+	safetyReq := makeSubmitRequestForCapability("formal-safety-preempt", commandmodel.CapabilityStop, now)
+	safetyReq.PreconditionMode = commandmodel.PreconditionEmergencyBypass
+	safetyReq.BypassReason = "emergency thermal trip"
+	safetySub, err := svc.Submit(safetyReq)
+	if err != nil {
+		return nil, fmt.Errorf("safety submit failed: %w", err)
+	}
+	manualAfter, err := svc.Get(manualSub.Intent.ID)
+	if err != nil {
+		return nil, fmt.Errorf("reload preempted manual intent failed: %w", err)
+	}
+	if manualAfter.Status != commandmodel.IntentCancelled || lastTransitionReason(manualAfter) != "PRIORITY_PREEMPTED" {
+		return &Counterexample{
+			Property: PropertyP3,
+			Suite:    "PriorityArbitrationAndLocks",
+			Summary:  fmt.Sprintf("preempted manual command settled (%s, %s), want (CANCELLED, PRIORITY_PREEMPTED)", manualAfter.Status, lastTransitionReason(manualAfter)),
+		}, nil
+	}
+	if _, err := svc.PrepareDispatch(safetySub.Intent.ID, "disp-safety", now.Add(dispatchLeaseWindow)); err != nil {
+		return nil, fmt.Errorf("safety dispatch after preemption failed: %w", err)
+	}
+	return nil, nil
 }

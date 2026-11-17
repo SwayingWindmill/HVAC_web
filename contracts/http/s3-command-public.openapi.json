@@ -427,6 +427,8 @@
             ]
           },
           "risk": { "type": "string", "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"] },
+          "priorityTier": { "type": "string", "enum": ["SAFETY_INTERLOCK", "MANUAL_OVERRIDE", "PROTECTION_RULE", "AI_OPTIMIZATION", "SCHEDULE"] },
+          "commandSource": { "type": "string", "enum": ["SAFETY_INTERLOCK", "OPERATOR", "PROTECTION_RULE", "OPTIMIZATION", "SCHEDULE"] },
           "approvalPolicy": { "type": "string", "enum": ["NONE", "SINGLE_APPROVER", "TWO_PERSON"] },
           "approvalCount": { "type": "integer", "minimum": 0 },
           "requiredApprovalCount": { "type": "integer", "minimum": 0, "maximum": 2 },
@@ -483,6 +485,8 @@
               "COMMAND_CANCEL_REQUEST_INVALID",
               "COMMAND_CANCEL_INVALID",
               "COMMAND_CONTROL_LOCKED",
+              "DEVICE_PRIORITY_LOCKED",
+              "COMMAND_PRIORITY_INVALID",
               "STEP_UP_REQUIRED",
               "COMMAND_UNAVAILABLE"
             ]

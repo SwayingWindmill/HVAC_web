@@ -37,7 +37,9 @@ type publicAlarmRoute struct {
 	alarmID  string
 	action   alarmauth.Action
 	// siteRules is the Site's rules in effect (#693), read with the same grant as its alarm list.
-	siteRules bool
+	siteRules   bool
+	evaluations bool
+	now         time.Time
 }
 
 type alarmScope struct {
@@ -58,6 +60,7 @@ type AlarmConfig struct {
 	BackendAudience   string
 	Timeout           time.Duration
 	MaxResponseBytes  int64
+	Now               func() time.Time
 }
 
 type alarmController struct {
@@ -69,8 +72,23 @@ type alarmController struct {
 	maxResponseBytes int64
 }
 
+type alarmLifecycleSpec struct {
+	operation alarmmodel.Operation
+	suffix    string
+	noun      string
+	label     string
+}
+
+var alarmLifecycleSpecs = map[alarmauth.Action]alarmLifecycleSpec{
+	alarmauth.ActionAssign:     {operation: alarmmodel.OperationAssign, suffix: ":assign", noun: "assignment", label: "assigned"},
+	alarmauth.ActionUnassign:   {operation: alarmmodel.OperationUnassign, suffix: ":unassign", noun: "unassignment", label: "unassigned"},
+	alarmauth.ActionSuppress:   {operation: alarmmodel.OperationSuppress, suffix: ":suppress", noun: "suppression", label: "suppressed"},
+	alarmauth.ActionUnsuppress: {operation: alarmmodel.OperationUnsuppress, suffix: ":unsuppress", noun: "unsuppression", label: "unsuppressed"},
+}
+
 type directAlarmAdapter struct {
 	store alarmservice.Store
+	now   func() time.Time
 }
 
 func newDirectAlarmAdapter(store alarmservice.Store) AlarmOperations {
@@ -156,6 +174,29 @@ func (a *directAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Re
 		return bytes, http.StatusOK, nil
 	}
 
+	if route.action == alarmauth.ActionRead && route.evaluations {
+		limit, valid := validatePublicAlarmEvaluationsQuery(query)
+		if !valid {
+			failure := alarmInvalid("The Alarm evaluation query is invalid.")
+			return nil, 0, &failure
+		}
+		list, err := a.store.ListAlarmEvaluations(ctx, tenantID, route.siteID, route.alarmID, limit)
+		if err != nil {
+			if errors.Is(err, alarmservice.ErrNotFound) {
+				failure := alarmNotFound()
+				return nil, http.StatusNotFound, &failure
+			}
+			failure := alarmUnavailable("Alarm Service could not complete the request.")
+			return nil, http.StatusServiceUnavailable, &failure
+		}
+		bytes, err := json.Marshal(list)
+		if err != nil {
+			failure := alarmUnavailable("Alarm Service returned an invalid Alarm evaluation list.")
+			return nil, http.StatusServiceUnavailable, &failure
+		}
+		return bytes, http.StatusOK, nil
+	}
+
 	if route.action == alarmauth.ActionRead {
 		alarm, err := a.store.Get(ctx, tenantID, route.siteID, route.alarmID)
 		if err != nil {
@@ -214,7 +255,7 @@ func (a *directAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Re
 			ActorID:         actorID,
 			PolicyRevision:  "1",
 			CorrelationID:   corrID,
-			OccurredAt:      time.Now().UTC().Format(time.RFC3339Nano),
+			OccurredAt:      adapterReferenceTime(route, a.now).Format(time.RFC3339Nano),
 		}
 		res, err := a.store.Apply(ctx, tenantID, route.siteID, route.alarmID, mutation)
 		if err != nil {
@@ -237,51 +278,28 @@ func (a *directAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Re
 		return bytes, http.StatusOK, nil
 	}
 
-	if route.action == alarmauth.ActionAssign {
-		var payload struct {
-			ExpectedVersion uint64 `json:"expectedVersion"`
-			Reason          string `json:"reason"`
-			AssigneeID      string `json:"assigneeId"`
+	if spec, isMutation := alarmLifecycleSpecs[route.action]; isMutation {
+		mutation, _, failure := parseAlarmLifecycleMutation(publicRequest, route.action, adapterReferenceTime(route, a.now))
+		if failure != nil {
+			return nil, 0, failure
 		}
-		body, err := readBoundedBody(publicRequest.Body, 16<<10)
-		if err != nil || len(body) == 0 || decodeStrictAlarmJSON(body, &payload) != nil {
-			failure := alarmInvalid("The Alarm assignment request is invalid.")
-			return nil, 0, &failure
-		}
-		payload.Reason = strings.TrimSpace(payload.Reason)
-		payload.AssigneeID = strings.TrimSpace(payload.AssigneeID)
-		idempotencyKey := strings.TrimSpace(publicRequest.Header.Get("Idempotency-Key"))
-		if payload.ExpectedVersion == 0 || payload.Reason == "" || len(payload.Reason) > 256 || payload.AssigneeID == "" || len(payload.AssigneeID) > 256 || len(idempotencyKey) < 8 || len(idempotencyKey) > 128 {
-			failure := alarmInvalid("The Alarm assignment request is invalid.")
-			return nil, 0, &failure
-		}
-		actorID := "principal:operator"
-		if session, ok := routeSessionFromContext(publicRequest.Context()); ok && session.Principal.Subject != "" {
-			actorID = session.Principal.Subject
-		}
-		assigneeID := payload.AssigneeID
-		res, err := a.store.Apply(ctx, tenantID, route.siteID, route.alarmID, alarmservice.Mutation{
-			Operation: alarmmodel.OperationAssign, ExpectedVersion: payload.ExpectedVersion, Reason: payload.Reason,
-			AssigneeID: &assigneeID, IdempotencyKey: idempotencyKey,
-			ActorType: "PRINCIPAL", ActorID: actorID, PolicyRevision: "1", CorrelationID: idempotencyKey,
-			OccurredAt: time.Now().UTC().Format(time.RFC3339Nano),
-		})
+		res, err := a.store.Apply(ctx, tenantID, route.siteID, route.alarmID, mutation)
 		if err != nil {
 			switch {
 			case errors.Is(err, alarmservice.ErrNotFound):
 				failure := alarmNotFound()
 				return nil, http.StatusNotFound, &failure
 			case errors.Is(err, alarmmodel.ErrVersionConflict):
-				failure := ownerFailure{status: http.StatusConflict, code: "ALARM_VERSION_CONFLICT", title: "Alarm version conflict", detail: "The Alarm changed before assignment was committed."}
+				failure := ownerFailure{status: http.StatusConflict, code: "ALARM_VERSION_CONFLICT", title: "Alarm version conflict", detail: "The Alarm changed before " + spec.noun + " was committed."}
 				return nil, http.StatusConflict, &failure
 			case errors.Is(err, alarmservice.ErrIdempotencyConflict):
 				failure := alarmIdempotencyConflict()
 				return nil, http.StatusConflict, &failure
 			case errors.Is(err, alarmmodel.ErrInvalidOperation), errors.Is(err, alarmmodel.ErrInvalidTransition):
-				failure := ownerFailure{status: http.StatusUnprocessableEntity, code: "ALARM_TRANSITION_INVALID", title: "Alarm transition invalid", detail: "The Alarm cannot be assigned from its current authoritative state."}
+				failure := ownerFailure{status: http.StatusUnprocessableEntity, code: "ALARM_TRANSITION_INVALID", title: "Alarm transition invalid", detail: "The Alarm cannot be " + spec.label + " from its current authoritative state."}
 				return nil, http.StatusUnprocessableEntity, &failure
 			default:
-				failure := alarmUnavailable("Alarm Service could not complete the assignment.")
+				failure := alarmUnavailable("Alarm Service could not complete the " + spec.noun + ".")
 				return nil, http.StatusServiceUnavailable, &failure
 			}
 		}
@@ -302,6 +320,7 @@ type httpAlarmAdapter struct {
 	httpClient       *http.Client
 	timeout          time.Duration
 	maxResponseBytes int64
+	now              func() time.Time
 }
 
 func newHTTPAlarmAdapter(config AlarmConfig) AlarmOperations {
@@ -310,6 +329,7 @@ func newHTTPAlarmAdapter(config AlarmConfig) AlarmOperations {
 		httpClient:       config.BackendHTTPClient,
 		timeout:          config.Timeout,
 		maxResponseBytes: config.MaxResponseBytes,
+		now:              config.Now,
 	}
 }
 
@@ -363,12 +383,19 @@ func (a *httpAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Requ
 	var requestBody io.Reader
 	if route.alarmID != "" {
 		path += "/" + url.PathEscape(route.alarmID)
+		if route.evaluations {
+			path += "/evaluations"
+		}
 	}
 	upstreamURL := a.baseURL + path
 	if route.alarmID == "" {
 		query := publicRequest.URL.Query()
 		query.Del("siteId")
 		if encoded := query.Encode(); encoded != "" {
+			upstreamURL += "?" + encoded
+		}
+	} else if route.evaluations {
+		if encoded := publicRequest.URL.Query().Encode(); encoded != "" {
 			upstreamURL += "?" + encoded
 		}
 	}
@@ -385,18 +412,16 @@ func (a *httpAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Requ
 			requestBody = bytes.NewReader(body)
 		}
 	}
-	if route.action == alarmauth.ActionAssign {
-		method = http.MethodPost
-		path += ":assign"
-		upstreamURL = a.baseURL + path
-		if publicRequest.Body != nil && publicRequest.ContentLength != 0 {
-			body, err := readBoundedBody(publicRequest.Body, 16<<10)
-			if err != nil {
-				failure := alarmInvalid("The Alarm assignment body is too large or unreadable.")
-				return nil, 0, &failure
-			}
-			requestBody = bytes.NewReader(body)
+	spec, isMutation := alarmLifecycleSpecs[route.action]
+	if isMutation {
+		_, rawBody, failure := parseAlarmLifecycleMutation(publicRequest, route.action, adapterReferenceTime(route, a.now))
+		if failure != nil {
+			return nil, 0, failure
 		}
+		method = http.MethodPost
+		path += spec.suffix
+		upstreamURL = a.baseURL + path
+		requestBody = bytes.NewReader(rawBody)
 	}
 	request, err := http.NewRequestWithContext(callCtx, method, upstreamURL, requestBody)
 	if err != nil {
@@ -404,24 +429,18 @@ func (a *httpAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Requ
 		return nil, 0, &failure
 	}
 	request.Header.Set("Accept", "application/json, application/problem+json")
-	if route.action == alarmauth.ActionAck {
+	if route.action == alarmauth.ActionAck || isMutation {
 		request.Header.Set(alarmWriteContextHeader, serviceContext)
-		if publicRequest.ContentLength != 0 {
-			request.Header.Set("Content-Type", publicRequest.Header.Get("Content-Type"))
+		if ct := publicRequest.Header.Get("Content-Type"); strings.TrimSpace(ct) != "" {
+			request.Header.Set("Content-Type", ct)
+		} else if isMutation {
+			request.Header.Set("Content-Type", "application/json")
 		}
 		if key := strings.TrimSpace(publicRequest.Header.Get("Idempotency-Key")); key != "" {
 			request.Header.Set("Idempotency-Key", key)
 		}
 	} else {
 		request.Header.Set(alarmReadContextHeader, serviceContext)
-	}
-	if route.action == alarmauth.ActionAssign {
-		request.Header.Del(alarmReadContextHeader)
-		request.Header.Set(alarmWriteContextHeader, serviceContext)
-		request.Header.Set("Content-Type", publicRequest.Header.Get("Content-Type"))
-		if key := strings.TrimSpace(publicRequest.Header.Get("Idempotency-Key")); key != "" {
-			request.Header.Set("Idempotency-Key", key)
-		}
 	}
 	request.Header.Set("X-Request-ID", requestIDFromContext(publicRequest.Context()))
 	observability.InjectHTTP(publicRequest.Context(), request.Header)
@@ -461,7 +480,7 @@ func newAlarmController(config *AlarmConfig) *alarmController {
 	if resolved.Operations != nil {
 		ops = resolved.Operations
 	} else if resolved.Store != nil {
-		ops = newDirectAlarmAdapter(resolved.Store)
+		ops = &directAlarmAdapter{store: resolved.Store, now: resolved.Now}
 	} else if strings.TrimSpace(resolved.BackendBaseURL) != "" {
 		resolved.BackendBaseURL = strings.TrimRight(strings.TrimSpace(resolved.BackendBaseURL), "/")
 		if resolved.BackendHTTPClient == nil {
@@ -505,17 +524,34 @@ func matchPublicAlarmRoute(path string) (publicAlarmRoute, bool) {
 			template: "/api/v1/alarms/{alarmId}", alarmID: alarmID, action: alarmauth.ActionRead,
 		}, true
 	}
-	if segments[1] == "assign" {
+	switch segments[1] {
+	case "ack":
+		return publicAlarmRoute{
+			template: "/api/v1/alarms/{alarmId}/ack", alarmID: alarmID, action: alarmauth.ActionAck,
+		}, true
+	case "assign":
 		return publicAlarmRoute{
 			template: "/api/v1/alarms/{alarmId}/assign", alarmID: alarmID, action: alarmauth.ActionAssign,
 		}, true
-	}
-	if segments[1] != "ack" {
+	case "unassign":
+		return publicAlarmRoute{
+			template: "/api/v1/alarms/{alarmId}/unassign", alarmID: alarmID, action: alarmauth.ActionUnassign,
+		}, true
+	case "suppress":
+		return publicAlarmRoute{
+			template: "/api/v1/alarms/{alarmId}/suppress", alarmID: alarmID, action: alarmauth.ActionSuppress,
+		}, true
+	case "unsuppress":
+		return publicAlarmRoute{
+			template: "/api/v1/alarms/{alarmId}/unsuppress", alarmID: alarmID, action: alarmauth.ActionUnsuppress,
+		}, true
+	case "evaluations":
+		return publicAlarmRoute{
+			template: "/api/v1/alarms/{alarmId}/evaluations", alarmID: alarmID, action: alarmauth.ActionRead, evaluations: true,
+		}, true
+	default:
 		return publicAlarmRoute{}, false
 	}
-	return publicAlarmRoute{
-		template: "/api/v1/alarms/{alarmId}/ack", alarmID: alarmID, action: alarmauth.ActionAck,
-	}, true
 }
 
 func dispatchAlarmRoute(h *handler, writer http.ResponseWriter, request *http.Request, route publicAlarmRoute) {
@@ -524,10 +560,10 @@ func dispatchAlarmRoute(h *handler, writer http.ResponseWriter, request *http.Re
 		return
 	}
 	expectedMethod := http.MethodGet
-	if route.action == alarmauth.ActionAssign {
+	if route.action == alarmauth.ActionAck {
 		expectedMethod = http.MethodPost
 	}
-	if route.action == alarmauth.ActionAck {
+	if _, isMutation := alarmLifecycleSpecs[route.action]; isMutation {
 		expectedMethod = http.MethodPost
 	}
 	if request.Method != expectedMethod {
@@ -550,6 +586,17 @@ func dispatchAlarmRoute(h *handler, writer http.ResponseWriter, request *http.Re
 	if !ok {
 		return
 	}
+	if expectedMethod == http.MethodPost {
+		if h.identity == nil {
+			h.writeAlarmFailure(writer, request, alarmUnavailable("Session validation is unavailable."))
+			return
+		}
+		if failure := h.identity.validateStateChange(request, session, request.Header.Get("X-CSRF-Token")); failure != nil {
+			writeIdentityFailure(writer, request, *failure)
+			return
+		}
+	}
+	route.now = h.alarmReferenceNow()
 	limit := 0
 	if route.alarmID == "" {
 		var valid bool
@@ -559,7 +606,14 @@ func dispatchAlarmRoute(h *handler, writer http.ResponseWriter, request *http.Re
 			return
 		}
 	} else {
-		if len(request.URL.Query()) != 0 {
+		if route.evaluations {
+			var valid bool
+			limit, valid = validatePublicAlarmEvaluationsQuery(request.URL.Query())
+			if !valid {
+				h.writeAlarmFailure(writer, request, alarmInvalid("The Alarm evaluation query is invalid."))
+				return
+			}
+		} else if len(request.URL.Query()) != 0 {
 			h.writeAlarmFailure(writer, request, alarmInvalid("Alarm detail and acknowledgement do not accept query parameters."))
 			return
 		}
@@ -592,6 +646,11 @@ func dispatchAlarmRoute(h *handler, writer http.ResponseWriter, request *http.Re
 				"requestId": requestIDFromContext(request.Context()), "limit": limit,
 				"nextCursor": value.NextCursor, "hasMore": value.HasMore,
 			},
+		})
+	case alarmservice.AlarmEvaluationList:
+		writeJSON(writer, http.StatusOK, map[string]any{
+			"data": value,
+			"meta": map[string]any{"requestId": requestIDFromContext(request.Context())},
 		})
 	case alarmmodel.Alarm:
 		writeJSON(writer, http.StatusOK, map[string]any{
@@ -850,6 +909,16 @@ func validateAlarmResponse(scope ownerScope, call alarmCall, response ownerRespo
 			return nil, err
 		}
 		return list, list.Validate()
+	case call.route.evaluations:
+		var list alarmservice.AlarmEvaluationList
+		if err := decodeStrictAlarmJSON(response.body, &list); err != nil {
+			return nil, err
+		}
+		limit := call.limit
+		if limit == 0 {
+			limit = alarmservice.DefaultAlarmEvaluationsLimit
+		}
+		return list, list.Validate(scope.resourceID, limit)
 	case scope.resourceID == "":
 		var list alarmmodel.ListResponse
 		if err := decodeStrictAlarmJSON(response.body, &list); err != nil {
@@ -1054,4 +1123,113 @@ func writeV212Error(writer http.ResponseWriter, request *http.Request, status in
 			"requestId": requestIDFromContext(request.Context()),
 		},
 	})
+}
+
+func (h *handler) alarmReferenceNow() time.Time {
+	if h != nil && h.identity != nil && h.identity.now != nil {
+		return h.identity.now().UTC()
+	}
+	return time.Now().UTC()
+}
+
+func adapterReferenceTime(route publicAlarmRoute, adapterNow func() time.Time) time.Time {
+	if !route.now.IsZero() {
+		return route.now.UTC()
+	}
+	if adapterNow != nil {
+		return adapterNow().UTC()
+	}
+	return time.Now().UTC()
+}
+
+func validatePublicAlarmEvaluationsQuery(query url.Values) (int, bool) {
+	for key, values := range query {
+		if key != "limit" || len(values) != 1 {
+			return 0, false
+		}
+	}
+	limit := alarmservice.DefaultAlarmEvaluationsLimit
+	if raw := query.Get("limit"); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 1 || value > alarmservice.MaxAlarmEvaluationsLimit {
+			return 0, false
+		}
+		limit = value
+	}
+	return limit, true
+}
+
+func parseAlarmLifecycleMutation(publicRequest *http.Request, action alarmauth.Action, referenceNow time.Time) (alarmservice.Mutation, []byte, *ownerFailure) {
+	spec, ok := alarmLifecycleSpecs[action]
+	if !ok {
+		failure := alarmInvalid("Unsupported Alarm lifecycle action.")
+		return alarmservice.Mutation{}, nil, &failure
+	}
+	invalid := func() *ownerFailure {
+		failure := alarmInvalid("The Alarm " + spec.noun + " request is invalid.")
+		return &failure
+	}
+	if publicRequest.Body == nil {
+		return alarmservice.Mutation{}, nil, invalid()
+	}
+	body, err := readBoundedBody(publicRequest.Body, 16<<10)
+	if err != nil || len(body) == 0 {
+		return alarmservice.Mutation{}, nil, invalid()
+	}
+	var payload struct {
+		ExpectedVersion uint64  `json:"expectedVersion"`
+		Reason          string  `json:"reason"`
+		AssigneeID      *string `json:"assigneeId"`
+		SuppressedUntil *string `json:"suppressedUntil"`
+	}
+	if decodeStrictAlarmJSON(body, &payload) != nil {
+		return alarmservice.Mutation{}, nil, invalid()
+	}
+	payload.Reason = strings.TrimSpace(payload.Reason)
+	idempotencyKey := strings.TrimSpace(publicRequest.Header.Get("Idempotency-Key"))
+	if payload.ExpectedVersion == 0 || payload.Reason == "" || len(payload.Reason) > 256 || len(idempotencyKey) < 8 || len(idempotencyKey) > 128 {
+		return alarmservice.Mutation{}, nil, invalid()
+	}
+	mutation := alarmservice.Mutation{
+		Operation:       spec.operation,
+		ExpectedVersion: payload.ExpectedVersion,
+		Reason:          payload.Reason,
+		IdempotencyKey:  idempotencyKey,
+		ActorType:       "PRINCIPAL",
+		ActorID:         "principal:operator",
+		PolicyRevision:  "1",
+		CorrelationID:   idempotencyKey,
+		OccurredAt:      referenceNow.UTC().Format(time.RFC3339Nano),
+	}
+	if session, ok := routeSessionFromContext(publicRequest.Context()); ok && session.Principal.Subject != "" {
+		mutation.ActorID = session.Principal.Subject
+	}
+	switch action {
+	case alarmauth.ActionAssign:
+		if payload.AssigneeID == nil || payload.SuppressedUntil != nil {
+			return alarmservice.Mutation{}, nil, invalid()
+		}
+		assigneeID := strings.TrimSpace(*payload.AssigneeID)
+		if assigneeID == "" || len(assigneeID) > 256 {
+			return alarmservice.Mutation{}, nil, invalid()
+		}
+		mutation.AssigneeID = &assigneeID
+	case alarmauth.ActionSuppress:
+		if payload.AssigneeID != nil || payload.SuppressedUntil == nil {
+			return alarmservice.Mutation{}, nil, invalid()
+		}
+		suppressedUntil := strings.TrimSpace(*payload.SuppressedUntil)
+		expiresAt, err := time.Parse(time.RFC3339Nano, suppressedUntil)
+		if err != nil || !expiresAt.After(referenceNow.UTC()) {
+			return alarmservice.Mutation{}, nil, invalid()
+		}
+		mutation.SuppressedUntil = &suppressedUntil
+	case alarmauth.ActionUnassign, alarmauth.ActionUnsuppress:
+		if payload.AssigneeID != nil || payload.SuppressedUntil != nil {
+			return alarmservice.Mutation{}, nil, invalid()
+		}
+	default:
+		return alarmservice.Mutation{}, nil, invalid()
+	}
+	return mutation, body, nil
 }

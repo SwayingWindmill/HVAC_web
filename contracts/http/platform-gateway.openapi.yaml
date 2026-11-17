@@ -2387,6 +2387,86 @@
         }
       }
     },
+    "/api/v1/alarms/{alarmId}/unassign": {
+      "post": {
+        "operationId": "unassignAlarmV212",
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "x-shape-source": "contracts/http/s4-alarm-public.openapi.json",
+        "parameters": [
+          { "name": "alarmId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "name": "Idempotency-Key", "in": "header", "required": true, "schema": { "type": "string", "minLength": 8, "maxLength": 128 } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "./s4-alarm-public.openapi.json#/components/schemas/AlarmLifecycleReasonRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Current canonical Alarm after unassignment.", "content": { "application/json": { "schema": { "$ref": "./s4-alarm-public.openapi.json#/components/schemas/AlarmEnvelope" } } } },
+          "4XX": { "$ref": "#/components/responses/V212Error" },
+          "5XX": { "$ref": "#/components/responses/V212Error" }
+        }
+      }
+    },
+    "/api/v1/alarms/{alarmId}/suppress": {
+      "post": {
+        "operationId": "suppressAlarmV212",
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "x-shape-source": "contracts/http/s4-alarm-public.openapi.json",
+        "parameters": [
+          { "name": "alarmId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "name": "Idempotency-Key", "in": "header", "required": true, "schema": { "type": "string", "minLength": 8, "maxLength": 128 } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "./s4-alarm-public.openapi.json#/components/schemas/SuppressAlarmRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Current canonical Alarm after suppression.", "content": { "application/json": { "schema": { "$ref": "./s4-alarm-public.openapi.json#/components/schemas/AlarmEnvelope" } } } },
+          "4XX": { "$ref": "#/components/responses/V212Error" },
+          "5XX": { "$ref": "#/components/responses/V212Error" }
+        }
+      }
+    },
+    "/api/v1/alarms/{alarmId}/unsuppress": {
+      "post": {
+        "operationId": "unsuppressAlarmV212",
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "x-shape-source": "contracts/http/s4-alarm-public.openapi.json",
+        "parameters": [
+          { "name": "alarmId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "name": "Idempotency-Key", "in": "header", "required": true, "schema": { "type": "string", "minLength": 8, "maxLength": 128 } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "./s4-alarm-public.openapi.json#/components/schemas/AlarmLifecycleReasonRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Current canonical Alarm after unsuppression.", "content": { "application/json": { "schema": { "$ref": "./s4-alarm-public.openapi.json#/components/schemas/AlarmEnvelope" } } } },
+          "4XX": { "$ref": "#/components/responses/V212Error" },
+          "5XX": { "$ref": "#/components/responses/V212Error" }
+        }
+      }
+    },
+    "/api/v1/alarms/{alarmId}/evaluations": {
+      "get": {
+        "operationId": "listAlarmEvaluationsV212",
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "x-shape-source": "contracts/http/s4-alarm-public.openapi.json",
+        "parameters": [
+          { "name": "alarmId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 25 } }
+        ],
+        "responses": {
+          "200": { "description": "Recent Alarm rule evaluation snapshots.", "content": { "application/json": { "schema": { "$ref": "./s4-alarm-public.openapi.json#/components/schemas/AlarmEvaluationListEnvelope" } } } },
+          "4XX": { "$ref": "#/components/responses/V212Error" },
+          "5XX": { "$ref": "#/components/responses/V212Error" }
+        }
+      }
+    },
     "/api/v1/commands": {
       "get": {
         "operationId": "listCommandsV212",

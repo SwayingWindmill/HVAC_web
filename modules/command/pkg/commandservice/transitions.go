@@ -8,6 +8,8 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 )
 
+var ErrDevicePriorityLocked = errors.New("device is locked at a higher command priority")
+
 var blockingEarlierIntentStatuses = []commandmodel.IntentStatus{
 	commandmodel.IntentSubmitted,
 	commandmodel.IntentValidating,
@@ -44,6 +46,82 @@ func CanClaimQueuedIntent(intent commandmodel.CommandIntent, controlGroupFrozen 
 	}
 	for _, status := range earlierStatuses {
 		if IsBlockingEarlierIntentStatus(status) {
+			return false
+		}
+	}
+	return validateExecutionGovernance(intent, now) == nil
+}
+
+// QueuedPeerState describes another active intent on the same Device for priority-aware claim arbitration.
+type QueuedPeerState struct {
+	Status                commandmodel.IntentStatus
+	PriorityTier          commandmodel.PriorityTier
+	DeviceCommandSequence uint64
+}
+
+// PriorityLockBlocking reports whether an active device priority lock blocks commands of priority tier at now.
+func PriorityLockBlocking(priority commandmodel.PriorityTier, lock *commandmodel.DevicePriorityLock, now time.Time) bool {
+	if lock == nil || !lock.LockedUntil.After(now) {
+		return false
+	}
+	return commandmodel.PriorityRank(priority) < commandmodel.PriorityRank(lock.LockedPriority)
+}
+
+// ActiveHigherPriorityBlocking reports whether any active non-terminal intent on the same Device
+// holds a strictly higher priority rank than the incoming command priority.
+func ActiveHigherPriorityBlocking(priority commandmodel.PriorityTier, activeStatuses []commandmodel.IntentPriorityState) bool {
+	incomingRank := commandmodel.PriorityRank(priority)
+	for _, active := range activeStatuses {
+		if !IsBlockingEarlierIntentStatus(active.Status) {
+			continue
+		}
+		if commandmodel.PriorityRank(active.PriorityTier) > incomingRank {
+			return true
+		}
+	}
+	return false
+}
+
+// ShouldPreemptOnSafetyInterlock reports whether an incoming SAFETY_INTERLOCK command preempts
+// an existing AWAITING_APPROVAL or QUEUED lower-priority command on the same Device.
+func ShouldPreemptOnSafetyInterlock(incoming commandmodel.PriorityTier, existingStatus commandmodel.IntentStatus, existingPriority commandmodel.PriorityTier) bool {
+	if incoming != commandmodel.PrioritySafetyInterlock {
+		return false
+	}
+	if existingStatus != commandmodel.IntentAwaitingApproval && existingStatus != commandmodel.IntentQueued {
+		return false
+	}
+	return commandmodel.PriorityRank(existingPriority) < commandmodel.PriorityRank(incoming)
+}
+
+// CanClaimQueuedIntentWithPriority evaluates queued claim eligibility under active device priority locks
+// and priority-ranked peer ordering while preserving wire serialization on DISPATCHING/OUTCOME_UNKNOWN.
+func CanClaimQueuedIntentWithPriority(
+	intent commandmodel.CommandIntent,
+	controlGroupFrozen bool,
+	lock *commandmodel.DevicePriorityLock,
+	peers []QueuedPeerState,
+	now time.Time,
+) bool {
+	if intent.Status != commandmodel.IntentQueued || controlGroupFrozen {
+		return false
+	}
+	if PriorityLockBlocking(intent.PriorityTier, lock, now) {
+		return false
+	}
+	intentRank := commandmodel.PriorityRank(intent.PriorityTier)
+	for _, peer := range peers {
+		if !IsBlockingEarlierIntentStatus(peer.Status) {
+			continue
+		}
+		if peer.Status == commandmodel.IntentDispatching || peer.Status == commandmodel.IntentOutcomeUnknown {
+			return false
+		}
+		peerRank := commandmodel.PriorityRank(peer.PriorityTier)
+		if peerRank > intentRank {
+			return false
+		}
+		if peer.DeviceCommandSequence < intent.DeviceCommandSequence && peerRank >= intentRank {
 			return false
 		}
 	}

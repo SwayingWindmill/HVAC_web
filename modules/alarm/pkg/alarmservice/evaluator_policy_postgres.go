@@ -26,24 +26,34 @@ func (store *PostgresStore) ReleaseAlarmPolicyRevision(ctx context.Context, tena
 	if store == nil || store.pool == nil {
 		return ErrUnavailable
 	}
+	tx, err := store.beginTenantTransaction(ctx, tenantID, false)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := releaseAlarmPolicyRevisionInTx(ctx, tx, tenantID, siteID, policy, releasedAt, releasedBy); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit Alarm policy release: %w", err)
+	}
+	return nil
+}
+
+func releaseAlarmPolicyRevisionInTx(ctx context.Context, tx pgx.Tx, tenantID, siteID string, policy AlarmPolicyRevision, releasedAt time.Time, releasedBy string) error {
 	if !alarmmodel.IsUUIDv7(tenantID) || !alarmmodel.IsUUIDv7(siteID) || !boundedText(releasedBy, 256) || releasedAt.IsZero() {
 		return errors.New("alarm policy release metadata is invalid")
 	}
 	if err := policy.Validate(); err != nil {
 		return err
 	}
-	tx, err := store.beginTenantTransaction(ctx, tenantID, false)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
 	if err := lockArtifactStream(ctx, tx, tenantID+"|"+siteID+"|policy|"+policy.PolicyID); err != nil {
 		return err
 	}
 
 	var latestRevision uint64
 	var latestPolicyJSON []byte
-	err = tx.QueryRow(ctx, `
+	err := tx.QueryRow(ctx, `
 		SELECT revision, policy
 		FROM alarm_runtime.alarm_policy_revision
 		WHERE tenant_id=$1 AND site_id=$2 AND policy_id=$3
@@ -80,9 +90,6 @@ func (store *PostgresStore) ReleaseAlarmPolicyRevision(ctx context.Context, tena
 	if err != nil {
 		return fmt.Errorf("release Alarm policy revision: %w", err)
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit Alarm policy release: %w", err)
-	}
 	return nil
 }
 
@@ -90,6 +97,21 @@ func (store *PostgresStore) AssignAlarmPolicyRevision(ctx context.Context, tenan
 	if store == nil || store.pool == nil {
 		return ErrUnavailable
 	}
+	tx, err := store.beginTenantTransaction(ctx, tenantID, false)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := assignAlarmPolicyRevisionInTx(ctx, tx, tenantID, siteID, input); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit Alarm policy assignment: %w", err)
+	}
+	return nil
+}
+
+func assignAlarmPolicyRevisionInTx(ctx context.Context, tx pgx.Tx, tenantID, siteID string, input AlarmPolicyAssignmentInput) error {
 	if !alarmmodel.IsUUIDv7(tenantID) || !alarmmodel.IsUUIDv7(siteID) || !alarmmodel.IsUUIDv7(input.AssignmentID) || input.AssignmentRevision == 0 || !alarmmodel.IsUUIDv7(input.PolicyRevisionID) || !validEvaluationSubjectType(input.SubjectType) || !alarmmodel.IsUUIDv7(input.SubjectID) || !boundedText(input.AssignedBy, 256) {
 		return errors.New("alarm policy assignment is invalid")
 	}
@@ -100,11 +122,6 @@ func (store *PostgresStore) AssignAlarmPolicyRevision(ctx context.Context, tenan
 	if input.SubjectType == "SITE" && input.SubjectID != siteID {
 		return errors.New("alarm policy Site assignment is inconsistent")
 	}
-	tx, err := store.beginTenantTransaction(ctx, tenantID, false)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
 	if err := lockArtifactStream(ctx, tx, tenantID+"|"+siteID+"|assignment|"+input.AssignmentID); err != nil {
 		return err
 	}
@@ -175,9 +192,6 @@ func (store *PostgresStore) AssignAlarmPolicyRevision(ctx context.Context, tenan
 	if err != nil {
 		return fmt.Errorf("assign Alarm policy revision: %w", err)
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit Alarm policy assignment: %w", err)
-	}
 	return nil
 }
 
@@ -197,7 +211,28 @@ func (store *PostgresStore) PublishSitePolicy(ctx context.Context, tenantID, sit
 	if store == nil || store.pool == nil {
 		return AlarmPolicyRevision{}, false, ErrUnavailable
 	}
-	latest, assignmentRevision, assignedPolicyRevisionID, retired, err := store.sitePolicyState(ctx, tenantID, siteID, policy.PolicyID, assignmentID)
+	tx, err := store.beginTenantTransaction(ctx, tenantID, false)
+	if err != nil {
+		return AlarmPolicyRevision{}, false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	published, changed, err := publishSitePolicyInTx(ctx, tx, store, tenantID, siteID, policy, assignmentID, at, by)
+	if err != nil {
+		return AlarmPolicyRevision{}, false, err
+	}
+	if changed {
+		if err := tx.Commit(ctx); err != nil {
+			return AlarmPolicyRevision{}, false, fmt.Errorf("commit Site Alarm policy publish: %w", err)
+		}
+	}
+	return published, changed, nil
+}
+
+func publishSitePolicyInTx(ctx context.Context, tx pgx.Tx, store *PostgresStore, tenantID, siteID string, policy AlarmPolicyRevision, assignmentID string, at time.Time, by string) (AlarmPolicyRevision, bool, error) {
+	if store == nil || store.newID == nil {
+		return AlarmPolicyRevision{}, false, ErrUnavailable
+	}
+	latest, assignmentRevision, assignedPolicyRevisionID, retired, err := sitePolicyStateInTx(ctx, tx, tenantID, siteID, policy.PolicyID, assignmentID)
 	if err != nil {
 		return AlarmPolicyRevision{}, false, err
 	}
@@ -218,14 +253,14 @@ func (store *PostgresStore) PublishSitePolicy(ctx context.Context, tenantID, sit
 		if policy.Digest, err = AlarmPolicyDigest(policy); err != nil {
 			return AlarmPolicyRevision{}, false, err
 		}
-		if err := store.ReleaseAlarmPolicyRevision(ctx, tenantID, siteID, policy, at, by); err != nil {
+		if err := releaseAlarmPolicyRevisionInTx(ctx, tx, tenantID, siteID, policy, at, by); err != nil {
 			return AlarmPolicyRevision{}, false, err
 		}
 		latest = &policy
 	} else if assignedPolicyRevisionID == latest.PolicyRevisionID && !retired {
 		return *latest, false, nil
 	}
-	if err := store.AssignAlarmPolicyRevision(ctx, tenantID, siteID, AlarmPolicyAssignmentInput{
+	if err := assignAlarmPolicyRevisionInTx(ctx, tx, tenantID, siteID, AlarmPolicyAssignmentInput{
 		AssignmentID: assignmentID, AssignmentRevision: assignmentRevision + 1, PolicyRevisionID: latest.PolicyRevisionID,
 		SubjectType: "SITE", SubjectID: siteID, AssignedAt: at.UTC().Format(time.RFC3339Nano), AssignedBy: by,
 	}); err != nil {
@@ -234,18 +269,13 @@ func (store *PostgresStore) PublishSitePolicy(ctx context.Context, tenantID, sit
 	return *latest, true, nil
 }
 
-// sitePolicyState is the latest revision of a policy family (nil before the first) and the latest
+// sitePolicyStateInTx is the latest revision of a policy family (nil before the first) and the latest
 // revision of its Site assignment with the policy revision it points at and whether it is retired
 // (0, "" and false before the first).
-func (store *PostgresStore) sitePolicyState(ctx context.Context, tenantID, siteID, policyID, assignmentID string) (*AlarmPolicyRevision, uint64, string, bool, error) {
-	tx, err := store.beginTenantTransaction(ctx, tenantID, true)
-	if err != nil {
-		return nil, 0, "", false, err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
+func sitePolicyStateInTx(ctx context.Context, tx pgx.Tx, tenantID, siteID, policyID, assignmentID string) (*AlarmPolicyRevision, uint64, string, bool, error) {
 	var latest *AlarmPolicyRevision
 	var policyJSON []byte
-	err = tx.QueryRow(ctx, `
+	err := tx.QueryRow(ctx, `
 		SELECT policy FROM alarm_runtime.alarm_policy_revision
 		WHERE tenant_id=$1 AND site_id=$2 AND policy_id=$3
 		ORDER BY revision DESC LIMIT 1`, tenantID, siteID, policyID).Scan(&policyJSON)

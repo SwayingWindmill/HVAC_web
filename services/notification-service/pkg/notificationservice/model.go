@@ -14,6 +14,8 @@ const (
 	AlarmSeverityChanged AlarmAction = "SEVERITY_CHANGED"
 	AlarmAcknowledged    AlarmAction = "ACKNOWLEDGED"
 	AlarmCleared         AlarmAction = "CLEARED"
+	AlarmSuppressed      AlarmAction = "SUPPRESSED"
+	AlarmUnsuppressed    AlarmAction = "UNSUPPRESSED"
 )
 
 // AlarmEvent is one change of an Alarm, as the Alarm owner's outbox hands it over.
@@ -46,7 +48,7 @@ func (event AlarmEvent) Validate() error {
 	if event.Action == AlarmCleared && event.Condition != alarmmodel.ConditionCleared {
 		return errors.New("cleared notification event must carry CLEARED condition")
 	}
-	if event.Action != AlarmCleared && event.Condition == alarmmodel.ConditionCleared && event.Action != AlarmAcknowledged {
+	if event.Action != AlarmCleared && event.Condition == alarmmodel.ConditionCleared && event.Action != AlarmAcknowledged && event.Action != AlarmSuppressed && event.Action != AlarmUnsuppressed {
 		return errors.New("non-clear notification event has inconsistent condition")
 	}
 	return nil
@@ -54,7 +56,7 @@ func (event AlarmEvent) Validate() error {
 
 func validAlarmAction(action AlarmAction) bool {
 	switch action {
-	case AlarmCreated, AlarmSeverityChanged, AlarmAcknowledged, AlarmCleared:
+	case AlarmCreated, AlarmSeverityChanged, AlarmAcknowledged, AlarmCleared, AlarmSuppressed, AlarmUnsuppressed:
 		return true
 	default:
 		return false

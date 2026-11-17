@@ -1,12 +1,14 @@
 package alarmservice
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -86,9 +88,62 @@ type AlarmScope struct {
 	SiteID   string `json:"siteId"`
 }
 
+const (
+	AlarmEvaluationsSchemaVersion = 1
+	DefaultAlarmEvaluationsLimit  = 25
+	MaxAlarmEvaluationsLimit      = 100
+)
+
+type AlarmEvaluationRecord struct {
+	EvaluatedAt                 string           `json:"evaluatedAt"`
+	PolicyRevisionID            string           `json:"policyRevisionId"`
+	AssignmentID                string           `json:"assignmentId"`
+	InputRevision               string           `json:"inputRevision"`
+	Status                      EvaluationStatus `json:"status"`
+	Effect                      EvaluationEffect `json:"effect"`
+	QualityBlocker              *string          `json:"qualityBlocker,omitempty"`
+	Snapshot                    json.RawMessage  `json:"snapshot"`
+	ActiveIncidentCorrelationID *string          `json:"activeIncidentCorrelationId,omitempty"`
+}
+
+type AlarmEvaluationList struct {
+	SchemaVersion int                     `json:"schemaVersion"`
+	AlarmID       string                  `json:"alarmId"`
+	Items         []AlarmEvaluationRecord `json:"items"`
+}
+
+func (list AlarmEvaluationList) Validate(alarmID string, limit int) error {
+	if list.SchemaVersion != AlarmEvaluationsSchemaVersion || !alarmmodel.IsUUIDv7(alarmID) || list.AlarmID != alarmID || limit < 1 || limit > MaxAlarmEvaluationsLimit || len(list.Items) > limit {
+		return errors.New("alarm evaluation list envelope is invalid")
+	}
+	for _, item := range list.Items {
+		if _, err := time.Parse(time.RFC3339Nano, item.EvaluatedAt); err != nil {
+			return errors.New("alarm evaluation timestamp is invalid")
+		}
+		if !alarmmodel.IsUUIDv7(item.PolicyRevisionID) || !alarmmodel.IsUUIDv7(item.AssignmentID) || strings.TrimSpace(item.InputRevision) == "" {
+			return errors.New("alarm evaluation identity is invalid")
+		}
+		if item.Status != EvaluationMatched && item.Status != EvaluationNotMatched && item.Status != EvaluationIndeterminate {
+			return errors.New("alarm evaluation status is invalid")
+		}
+		if item.Effect != EvaluationEffectNone && item.Effect != EvaluationEffectPublish && item.Effect != EvaluationEffectClear {
+			return errors.New("alarm evaluation effect is invalid")
+		}
+		if item.ActiveIncidentCorrelationID != nil && !alarmmodel.IsUUIDv7(*item.ActiveIncidentCorrelationID) {
+			return errors.New("alarm evaluation correlation id is invalid")
+		}
+		trimmed := bytes.TrimSpace(item.Snapshot)
+		if len(trimmed) == 0 || trimmed[0] != '{' || !json.Valid(trimmed) {
+			return errors.New("alarm evaluation snapshot is invalid")
+		}
+	}
+	return nil
+}
+
 type Store interface {
 	List(context.Context, string, string, Filter) (alarmmodel.ListResponse, error)
 	Get(context.Context, string, string, string) (alarmmodel.Alarm, error)
+	ListAlarmEvaluations(context.Context, string, string, string, int) (AlarmEvaluationList, error)
 	ResolveScope(context.Context, string, string) (AlarmScope, error)
 	Apply(context.Context, string, string, string, Mutation) (MutationResult, error)
 	Publish(context.Context, string, string, Publication) (alarmmodel.Alarm, error)
@@ -102,11 +157,22 @@ type idempotencyRecord struct {
 
 type idGenerator func(time.Time) (string, error)
 
+type memoryEvaluationRecord struct {
+	tenantID      string
+	siteID        string
+	fingerprint   string
+	activeAlarmID string
+	stateVersion  uint64
+	evaluatedAt   time.Time
+	record        AlarmEvaluationRecord
+}
+
 type MemoryStore struct {
 	mu          sync.RWMutex
 	alarms      map[string]alarmmodel.Alarm
 	active      map[string]string
 	idempotency map[string]idempotencyRecord
+	evaluations []memoryEvaluationRecord
 	newID       idGenerator
 }
 
@@ -189,6 +255,68 @@ func (store *MemoryStore) Get(_ context.Context, tenantID, siteID, alarmID strin
 		return alarmmodel.Alarm{}, ErrNotFound
 	}
 	return cloneStoredAlarm(alarm), nil
+}
+
+func (store *MemoryStore) RecordEvaluation(tenantID, siteID, fingerprint, activeAlarmID string, stateVersion uint64, record AlarmEvaluationRecord) error {
+	evaluatedAt, err := time.Parse(time.RFC3339Nano, record.EvaluatedAt)
+	if err != nil || !alarmmodel.IsUUIDv7(tenantID) || !alarmmodel.IsUUIDv7(siteID) || stateVersion == 0 {
+		return errors.New("alarm evaluation record metadata is invalid")
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	record.EvaluatedAt = evaluatedAt.UTC().Format(time.RFC3339Nano)
+	store.evaluations = append(store.evaluations, memoryEvaluationRecord{
+		tenantID:      tenantID,
+		siteID:        siteID,
+		fingerprint:   fingerprint,
+		activeAlarmID: activeAlarmID,
+		stateVersion:  stateVersion,
+		evaluatedAt:   evaluatedAt.UTC(),
+		record:        cloneEvaluationRecord(record),
+	})
+	return nil
+}
+
+func (store *MemoryStore) ListAlarmEvaluations(_ context.Context, tenantID, siteID, alarmID string, limit int) (AlarmEvaluationList, error) {
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	limit = normalizeEvaluationLimit(limit)
+	alarm, ok := store.alarms[alarmID]
+	if !ok || alarm.TenantID != tenantID || alarm.SiteID != siteID {
+		return AlarmEvaluationList{}, ErrNotFound
+	}
+	firstOccurredAt, err := time.Parse(time.RFC3339Nano, alarm.FirstOccurredAt)
+	if err != nil {
+		return AlarmEvaluationList{}, errors.New("alarm first occurred time is invalid")
+	}
+	windowStart := firstOccurredAt.Add(-10 * time.Minute)
+	var matched []memoryEvaluationRecord
+	for _, entry := range store.evaluations {
+		if entry.tenantID != tenantID || entry.siteID != siteID {
+			continue
+		}
+		if entry.activeAlarmID == alarmID || (entry.activeAlarmID == "" && entry.fingerprint == alarm.Fingerprint && !entry.evaluatedAt.Before(windowStart) && !entry.evaluatedAt.After(firstOccurredAt)) {
+			matched = append(matched, entry)
+		}
+	}
+	sort.Slice(matched, func(left, right int) bool {
+		if !matched[left].evaluatedAt.Equal(matched[right].evaluatedAt) {
+			return matched[left].evaluatedAt.After(matched[right].evaluatedAt)
+		}
+		return matched[left].stateVersion > matched[right].stateVersion
+	})
+	if len(matched) > limit {
+		matched = matched[:limit]
+	}
+	items := make([]AlarmEvaluationRecord, 0, len(matched))
+	for _, entry := range matched {
+		items = append(items, cloneEvaluationRecord(entry.record))
+	}
+	return AlarmEvaluationList{
+		SchemaVersion: AlarmEvaluationsSchemaVersion,
+		AlarmID:       alarmID,
+		Items:         items,
+	}, nil
 }
 
 func (store *MemoryStore) ResolveScope(_ context.Context, tenantID, alarmID string) (AlarmScope, error) {
@@ -435,4 +563,30 @@ func cloneStoredAlarm(alarm alarmmodel.Alarm) alarmmodel.Alarm {
 	var result alarmmodel.Alarm
 	_ = json.Unmarshal(encoded, &result)
 	return result
+}
+
+func normalizeEvaluationLimit(limit int) int {
+	if limit <= 0 {
+		return DefaultAlarmEvaluationsLimit
+	}
+	if limit > MaxAlarmEvaluationsLimit {
+		return MaxAlarmEvaluationsLimit
+	}
+	return limit
+}
+
+func cloneEvaluationRecord(record AlarmEvaluationRecord) AlarmEvaluationRecord {
+	cloned := record
+	if record.QualityBlocker != nil {
+		value := *record.QualityBlocker
+		cloned.QualityBlocker = &value
+	}
+	if record.ActiveIncidentCorrelationID != nil {
+		value := *record.ActiveIncidentCorrelationID
+		cloned.ActiveIncidentCorrelationID = &value
+	}
+	if record.Snapshot != nil {
+		cloned.Snapshot = append(json.RawMessage(nil), record.Snapshot...)
+	}
+	return cloned
 }

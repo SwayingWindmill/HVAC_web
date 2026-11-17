@@ -5,6 +5,8 @@ import type { StepUpFailureReason } from '../../api/gateway-client';
 
 export type ControlErrorCode =
   | 'COMMAND_CONTROL_LOCKED'
+  | 'DEVICE_PRIORITY_LOCKED'
+  | 'COMMAND_PRIORITY_INVALID'
   | 'SAFE_SHUTDOWN_PRECONDITION_FAILED'
   | 'COMMAND_INTERLOCK_BLOCKED'
   | 'COMMAND_INTERLOCK_UNVERIFIABLE'
@@ -21,6 +23,8 @@ export type ControlErrorCode =
 
 export const CONTROL_ERROR_MESSAGE: Readonly<Record<ControlErrorCode, string>> = {
   COMMAND_CONTROL_LOCKED: '站点已切到人工接管或安全退出，或这台设备被锁定了，平台现在不下发指令。',
+  DEVICE_PRIORITY_LOCKED: '这台设备正由更高优先级的安全联锁或人工指令锁定，当前指令不能下发。',
+  COMMAND_PRIORITY_INVALID: '指令优先级与控制来源不匹配，请刷新页面后再试。',
   SAFE_SHUTDOWN_PRECONDITION_FAILED: '还有指令正在下发或等现场确认，先处理完再安全退出。',
   COMMAND_INTERLOCK_BLOCKED: '被水路联锁拦下：对应的水泵、冷却塔或主机状态不允许这样操作。',
   COMMAND_INTERLOCK_UNVERIFIABLE: '读不到联锁设备的运行状态，为安全起见没有下发。等读数恢复后再试。',

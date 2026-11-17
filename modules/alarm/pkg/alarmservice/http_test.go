@@ -62,6 +62,11 @@ func (store *countingStore) ClearActive(ctx context.Context, tenantID, siteID st
 	return store.delegate.ClearActive(ctx, tenantID, siteID, recovery)
 }
 
+func (store *countingStore) ListAlarmEvaluations(ctx context.Context, tenantID, siteID, alarmID string, limit int) (AlarmEvaluationList, error) {
+	store.calls.Add(1)
+	return store.delegate.ListAlarmEvaluations(ctx, tenantID, siteID, alarmID, limit)
+}
+
 type invalidProjectionStore struct{ alarm alarmmodel.Alarm }
 
 func (store invalidProjectionStore) List(context.Context, string, string, Filter) (alarmmodel.ListResponse, error) {
@@ -70,6 +75,10 @@ func (store invalidProjectionStore) List(context.Context, string, string, Filter
 
 func (store invalidProjectionStore) Get(context.Context, string, string, string) (alarmmodel.Alarm, error) {
 	return store.alarm, nil
+}
+
+func (store invalidProjectionStore) ListAlarmEvaluations(context.Context, string, string, string, int) (AlarmEvaluationList, error) {
+	return AlarmEvaluationList{SchemaVersion: AlarmEvaluationsSchemaVersion, AlarmID: store.alarm.AlarmID, Items: []AlarmEvaluationRecord{}}, nil
 }
 
 func (store invalidProjectionStore) ResolveScope(context.Context, string, string) (AlarmScope, error) {
@@ -486,5 +495,95 @@ func TestAlarmHTTPOverlapWindowFilterIncludesPreExistingActiveAndInWindowCleared
 	handler.ServeHTTP(badRecorder, badReq)
 	if badRecorder.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 on inverted activeFrom > activeTo, got %d", badRecorder.Code)
+	}
+}
+
+func TestAlarmHTTPListsEvaluationsAndEnforcesLimitsAndScope(t *testing.T) {
+	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+	signer := testSigner(t)
+	alarm := validHTTPAlarm()
+	memory, err := NewMemoryStore([]alarmmodel.Alarm{alarm})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policyRev := "01910000-2000-7000-8000-000000000001"
+	assignmentID := "01910000-2000-7000-8000-000000000002"
+	corrID := alarm.IncidentCorrelationID
+	blocker := "OUTSIDE_SCHEDULE"
+	if err := memory.RecordEvaluation(testTenantID, testSiteID, alarm.Fingerprint, "", 1, AlarmEvaluationRecord{
+		EvaluatedAt:      "2026-07-31T08:55:00Z",
+		PolicyRevisionID: policyRev,
+		AssignmentID:     assignmentID,
+		InputRevision:    "in-1",
+		Status:           EvaluationIndeterminate,
+		Effect:           EvaluationEffectNone,
+		QualityBlocker:   &blocker,
+		Snapshot:         json.RawMessage(`{"temp":29.5}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := memory.RecordEvaluation(testTenantID, testSiteID, alarm.Fingerprint, alarm.AlarmID, 2, AlarmEvaluationRecord{
+		EvaluatedAt:                 "2026-07-31T09:00:00Z",
+		PolicyRevisionID:            policyRev,
+		AssignmentID:                assignmentID,
+		InputRevision:               "in-2",
+		Status:                      EvaluationMatched,
+		Effect:                      EvaluationEffectPublish,
+		Snapshot:                    json.RawMessage(`{"temp":31.2}`),
+		ActiveIncidentCorrelationID: &corrID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	store := &countingStore{delegate: memory}
+	handler, err := NewHTTPHandler(HTTPConfig{Store: store, Rules: siteRules{}, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, InternalSiteAlarmsPrefix+testSiteID+"/alarms/"+testAlarmID+"/evaluations?limit=1", nil)
+	req.Header.Set(AlarmReadContextHeader, signedReadContext(t, signer, now, AlarmReadAction, testTenantID, testSiteID, testAlarmID))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("evaluations GET status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var payload AlarmEvaluationList
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.SchemaVersion != AlarmEvaluationsSchemaVersion || payload.AlarmID != testAlarmID || len(payload.Items) != 1 || payload.Items[0].InputRevision != "in-2" {
+		t.Fatalf("unexpected evaluations payload %#v", payload)
+	}
+
+	// Default limit returns both records ordered newest first.
+	allReq := httptest.NewRequest(http.MethodGet, InternalSiteAlarmsPrefix+testSiteID+"/alarms/"+testAlarmID+"/evaluations", nil)
+	allReq.Header.Set(AlarmReadContextHeader, signedReadContext(t, signer, now, AlarmReadAction, testTenantID, testSiteID, testAlarmID))
+	allRec := httptest.NewRecorder()
+	handler.ServeHTTP(allRec, allReq)
+	if allRec.Code != http.StatusOK {
+		t.Fatalf("default limit status=%d body=%s", allRec.Code, allRec.Body.String())
+	}
+	var full AlarmEvaluationList
+	if json.NewDecoder(allRec.Body).Decode(&full) != nil || len(full.Items) != 2 || full.Items[1].QualityBlocker == nil || *full.Items[1].QualityBlocker != blocker {
+		t.Fatalf("unexpected full evaluations payload %#v", full)
+	}
+
+	// Reject out-of-range limit or wrong grant scope before touching store.
+	callsBefore := store.calls.Load()
+	badLimitReq := httptest.NewRequest(http.MethodGet, InternalSiteAlarmsPrefix+testSiteID+"/alarms/"+testAlarmID+"/evaluations?limit=101", nil)
+	badLimitReq.Header.Set(AlarmReadContextHeader, signedReadContext(t, signer, now, AlarmReadAction, testTenantID, testSiteID, testAlarmID))
+	badLimitRec := httptest.NewRecorder()
+	handler.ServeHTTP(badLimitRec, badLimitReq)
+	if badLimitRec.Code != http.StatusBadRequest || store.calls.Load() != callsBefore {
+		t.Fatalf("bad limit status=%d callsBefore=%d callsAfter=%d", badLimitRec.Code, callsBefore, store.calls.Load())
+	}
+
+	listGrantReq := httptest.NewRequest(http.MethodGet, InternalSiteAlarmsPrefix+testSiteID+"/alarms/"+testAlarmID+"/evaluations", nil)
+	listGrantReq.Header.Set(AlarmReadContextHeader, signedReadContext(t, signer, now, AlarmListAction, testTenantID, testSiteID, ""))
+	listGrantRec := httptest.NewRecorder()
+	handler.ServeHTTP(listGrantRec, listGrantReq)
+	if listGrantRec.Code != http.StatusForbidden || store.calls.Load() != callsBefore {
+		t.Fatalf("list grant on evaluations status=%d calls=%d", listGrantRec.Code, store.calls.Load())
 	}
 }

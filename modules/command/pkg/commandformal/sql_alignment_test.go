@@ -177,3 +177,42 @@ func TestConnectivityReplyRecoveryQueryMatchesModel(t *testing.T) {
 		}
 	}
 }
+
+func TestPostgresPriorityArbitrationAndLockAlignment(t *testing.T) {
+	dispatchSrc := readRepoSource(t, filepath.Join("..", "commandservice", "postgres_dispatch.go"))
+	for _, snippet := range []string{
+		"command_runtime.device_priority_locks",
+		"rejectPriorityLockedQueued(",
+		"DEVICE_PRIORITY_LOCKED",
+		"WHEN 'SAFETY_INTERLOCK' THEN 500",
+		"WHEN 'MANUAL_OVERRIDE' THEN 400",
+		"WHEN 'PROTECTION_RULE' THEN 300",
+		"WHEN 'AI_OPTIMIZATION' THEN 200",
+		"WHEN 'SCHEDULE' THEN 100",
+		"ORDER BY (",
+	} {
+		if !strings.Contains(dispatchSrc, snippet) {
+			t.Fatalf("postgres_dispatch.go missing expected priority arbitration guard %q", snippet)
+		}
+	}
+
+	postgresSrc := readRepoSource(t, filepath.Join("..", "commandservice", "postgres.go"))
+	for _, snippet := range []string{
+		"PriorityLockBlocking(",
+		"ActiveHigherPriorityBlocking(",
+		"ShouldPreemptOnSafetyInterlock(",
+		"PRIORITY_PREEMPTED",
+		"command_runtime.device_priority_locks",
+	} {
+		if !strings.Contains(postgresSrc, snippet) {
+			t.Fatalf("postgres.go missing expected priority arbitration guard %q", snippet)
+		}
+	}
+
+	if !commandmodel.TerminalPreSendRejection("DEVICE_PRIORITY_LOCKED") {
+		t.Fatalf("DEVICE_PRIORITY_LOCKED must be a terminal pre-send rejection")
+	}
+	if !commandmodel.TerminalPreSendRejection("PRIORITY_PREEMPTED") {
+		t.Fatalf("PRIORITY_PREEMPTED must be a terminal pre-send rejection")
+	}
+}

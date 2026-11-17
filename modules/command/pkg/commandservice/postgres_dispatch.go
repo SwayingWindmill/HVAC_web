@@ -35,6 +35,17 @@ func (store *PostgresStore) ClaimDispatch(ctx context.Context, tenantID, leaseOw
 	return commandmodel.DispatchEnvelope{}, errors.New("dispatch claim transaction retry limit exceeded")
 }
 
+func priorityRankSQLExpr(column string) string {
+	return `CASE ` + column + `
+		WHEN 'SAFETY_INTERLOCK' THEN 500
+		WHEN 'MANUAL_OVERRIDE' THEN 400
+		WHEN 'PROTECTION_RULE' THEN 300
+		WHEN 'AI_OPTIMIZATION' THEN 200
+		WHEN 'SCHEDULE' THEN 100
+		ELSE 0
+	END`
+}
+
 func (store *PostgresStore) claimDispatchOnce(ctx context.Context, tenantID string, leaseOwner string, leaseFor time.Duration) (commandmodel.DispatchEnvelope, error) {
 	now := store.now().UTC()
 	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
@@ -60,12 +71,15 @@ func (store *PostgresStore) claimDispatchOnce(ctx context.Context, tenantID stri
 	if err := store.expireUnapprovedCommands(ctx, tx, tenantID, now); err != nil {
 		return commandmodel.DispatchEnvelope{}, err
 	}
+	if err := store.rejectPriorityLockedQueued(ctx, tx, tenantID, now); err != nil {
+		return commandmodel.DispatchEnvelope{}, err
+	}
 
 	var outboxID string
 	var intent commandmodel.CommandIntent
 	var capability string
 	var parameters []byte
-	err = tx.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, fmt.Sprintf(`
 SELECT o.outbox_id::text,
        i.command_id::text, i.tenant_id::text, i.site_id::text, i.device_id::text, i.point_id::text,
        i.capability_name, i.capability_revision,
@@ -81,6 +95,14 @@ WHERE o.tenant_id = $1::uuid
   AND (o.lease_until IS NULL OR o.lease_until <= $2)
   AND i.status = 'QUEUED'
   AND NOT (d.frozen_control_groups ? $3)
+  AND NOT EXISTS (
+        SELECT 1
+        FROM command_runtime.device_priority_locks l
+        WHERE l.tenant_id = i.tenant_id
+          AND l.device_id = i.device_id
+          AND l.locked_until > $2
+          AND (%[1]s) < (%[2]s)
+      )
   AND (
         (
           EXISTS (SELECT 1 FROM command_runtime.command_approval_snapshots a WHERE a.command_id = i.command_id)
@@ -105,13 +127,21 @@ WHERE o.tenant_id = $1::uuid
         SELECT 1 FROM command_runtime.command_intents earlier
         WHERE earlier.tenant_id = i.tenant_id
           AND earlier.device_id = i.device_id
-          AND earlier.device_command_sequence < i.device_command_sequence
+          AND earlier.command_id <> i.command_id
           AND earlier.status IN ('SUBMITTED','VALIDATING','AWAITING_APPROVAL','APPROVED','QUEUED','DISPATCHING','OUTCOME_UNKNOWN')
+          AND (
+            (earlier.status = 'DISPATCHING' OR earlier.status = 'OUTCOME_UNKNOWN')
+            OR (%[3]s) > (%[1]s)
+            OR (
+              earlier.device_command_sequence < i.device_command_sequence
+              AND (%[3]s) >= (%[1]s)
+            )
+          )
       )
-ORDER BY o.created_at, o.outbox_id
+ORDER BY (%[1]s) DESC, o.created_at, o.outbox_id
 FOR UPDATE OF o SKIP LOCKED
 LIMIT 1
-`, tenantID, now, setpointControlGroup).Scan(
+`, priorityRankSQLExpr("i.priority_tier"), priorityRankSQLExpr("l.locked_priority"), priorityRankSQLExpr("earlier.priority_tier")), tenantID, now, setpointControlGroup).Scan(
 		&outboxID, &intent.ID, &intent.TenantID, &intent.SiteID, &intent.DeviceID, &intent.PointID,
 		&capability, &intent.CapabilityRevision, &parameters,
 		&intent.PayloadHash, &intent.DeviceCommandSequence, &intent.Version, &intent.TraceID,
@@ -688,6 +718,79 @@ WHERE tenant_id = $1::uuid AND command_id = $2::uuid
 		}
 		if err := insertDispatchAudit(ctx, tx, auditID, intent, "COMMAND_APPROVAL_WINDOW_EXPIRED", map[string]any{
 			"reason": "APPROVAL_WINDOW_EXPIRED",
+		}, now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (store *PostgresStore) rejectPriorityLockedQueued(ctx context.Context, tx pgx.Tx, tenantID string, now time.Time) error {
+	type lockedQueuedCommand struct {
+		CommandID, SiteID, DeviceID, PayloadHash, LockedBy string
+		Version                                            uint64
+	}
+	rows, err := tx.Query(ctx, fmt.Sprintf(`
+SELECT i.command_id::text, i.site_id::text, i.device_id::text, i.payload_hash, i.version, l.locked_by
+FROM command_runtime.command_intents i
+JOIN command_runtime.device_priority_locks l
+  ON l.tenant_id = i.tenant_id AND l.device_id = i.device_id
+WHERE i.tenant_id = $1::uuid
+  AND i.status = 'QUEUED'
+  AND l.locked_until > $2
+  AND (%[1]s) < (%[2]s)
+FOR UPDATE OF i SKIP LOCKED
+LIMIT 50
+`, priorityRankSQLExpr("i.priority_tier"), priorityRankSQLExpr("l.locked_priority")), tenantID, now)
+	if err != nil {
+		return fmt.Errorf("select priority-locked queued commands: %w", err)
+	}
+	blocked := make([]lockedQueuedCommand, 0)
+	for rows.Next() {
+		var item lockedQueuedCommand
+		if err := rows.Scan(&item.CommandID, &item.SiteID, &item.DeviceID, &item.PayloadHash, &item.Version, &item.LockedBy); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan priority-locked queued command: %w", err)
+		}
+		blocked = append(blocked, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("iterate priority-locked queued commands: %w", err)
+	}
+	rows.Close()
+	for _, item := range blocked {
+		transitionID, err := store.newID(now)
+		if err != nil {
+			return err
+		}
+		auditID, err := store.newID(now)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+UPDATE command_runtime.command_intents
+SET status = 'REJECTED', version = $3, updated_at = $4
+WHERE tenant_id = $1::uuid AND command_id = $2::uuid AND status = 'QUEUED'
+`, tenantID, item.CommandID, item.Version+1, now); err != nil {
+			return fmt.Errorf("reject priority-locked command: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+UPDATE command_runtime.command_dispatch_outbox
+SET delivered_at = $3, lease_until = NULL
+WHERE tenant_id = $1::uuid AND command_id = $2::uuid AND delivered_at IS NULL
+`, tenantID, item.CommandID, now); err != nil {
+			return fmt.Errorf("retire priority-locked outbox: %w", err)
+		}
+		intent := commandmodel.CommandIntent{ID: item.CommandID, TenantID: tenantID, SiteID: item.SiteID, DeviceID: item.DeviceID, PayloadHash: item.PayloadHash, Version: item.Version}
+		if err := insertDispatchTransition(ctx, tx, transitionID, intent, item.Version+1,
+			commandmodel.IntentQueued, commandmodel.IntentRejected,
+			"DEVICE_PRIORITY_LOCKED", "command-service", item.LockedBy, "", now); err != nil {
+			return err
+		}
+		if err := insertDispatchAudit(ctx, tx, auditID, intent, "COMMAND_PRIORITY_LOCK_REJECTED", map[string]any{
+			"reason":   "DEVICE_PRIORITY_LOCKED",
+			"lockedBy": item.LockedBy,
 		}, now); err != nil {
 			return err
 		}

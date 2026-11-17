@@ -17,7 +17,12 @@ func catalogCapabilityValid(value string) bool {
 		return true
 	}
 	switch alarmauth.Action(value) {
-	case alarmauth.ActionRead, alarmauth.ActionAck, alarmauth.ActionAssign:
+	case alarmauth.ActionRead,
+		alarmauth.ActionAck,
+		alarmauth.ActionAssign,
+		alarmauth.ActionUnassign,
+		alarmauth.ActionSuppress,
+		alarmauth.ActionUnsuppress:
 		return true
 	}
 	switch workorderauth.Action(value) {

@@ -18,6 +18,11 @@
 
 #### 新增
 
+- 完善告警全生命周期治理、规则热更新、控制指令优先级仲裁与告警通知根因降噪能力（对应 P1 规则告警域演进）：
+  - 告警全生命周期与评估追踪（`modules/alarm`、`libs/alarmmodel`、`libs/alarmauth`、`cmd/energy-api`、`apps/hvac-web`）：新增取消认领（`UNASSIGN`）、检修静默与到期自动解静默（`SUPPRESS` / `UNSUPPRESS` / `SweepExpiredSuppressions`），补全规则评估历史持久化（`alarm_runtime.alarm_evaluation_event`）与预触发评估追溯接口 `GET /api/v1/alarms/{alarmId}/evaluations`，支持按站点热更新告警规则并保留未修改规则的在途评估状态与自动消警已下线规则；网页端「告警管理」补全「已静默」筛选视图、取消认领、检修静默弹窗及评估历程明细区。
+  - 控制指令优先级分级仲裁与设备优先级锁（`libs/commandmodel`、`modules/command`、`cmd/energy-api`、`apps/hvac-web`）：定义从安全联锁（`SAFETY_INTERLOCK`）、手动干预（`MANUAL_OVERRIDE`）、本地保护（`LOCAL_PROTECTION`）、AI 优化（`AI_OPTIMIZATION`）到定时场景（`SCHEDULED_SCENE`）的五档优先级与指令来源分类，支持高优先级自动抢占或拒绝低优先级指令与 `device_priority_locks` 独占锁，并将新不变量 `P7` 纳入 `command-safety` 形式化检验；控制日志与设备指令抽屉同步展示优先级与来源标签并提示抢占锁定报错。
+  - 告警通知根因抑制、静默期降噪与频次控制（`services/notification-service`）：发件箱投递联动同步告警静默窗与退避抑制，引入按路由级冷却间隔及 `DEVICE_ROOT_CAUSE` 父子设备根因抑制关系过滤网关断网等次生离线告警风暴。
+
 - 新增网关通信抓包、上行接收隔离排查接口与网关详情抽屉诊断视图（`infra/connectivity/postgres/init/uplink-quarantine-diagnostics.sql`、`modules/connectivity/pkg/packettap`、`cmd/connectivity`、`cmd/energy-api` 与 `apps/hvac-web`；网关路由注册表 `route-ownership.v1.json` 升级至第 `54` 版）：
   - 新增平台网关与连接服务诊断接口 `GET /api/v1/gateways/{gatewayId}/quarantine`、`GET /api/v1/gateways/{gatewayId}/packet-capture`、`POST /api/v1/gateways/{gatewayId}/packet-capture/start`（支持 `30` 至 `900` 秒抓包时长与最多 `32` 路活跃抓包上限）与 `POST /api/v1/gateways/{gatewayId}/packet-capture/stop`。
   - 迁移 `uplink-quarantine-diagnostics.sql` 为 `connectivity.uplink_quarantine` 补充 `occurrence_count`、`last_seen_at`、`payload_preview`（`<= 4096` 字节）、`payload_encoding`（`utf8`/`hex`/`empty`）与 `payload_truncated` 字段及清理函数 `connectivity.prune_expired_uplink_quarantine`；高频突发异常报文按冷却窗口合并累计次数，连接服务启动时及每小时自动清理超过 `7` 天的旧记录，并在优雅停机阶段刷写未落盘计数。
