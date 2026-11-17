@@ -506,10 +506,6 @@ func (connector *Connector) currentConnectionClosed() <-chan struct{} {
 	return connector.connClosed
 }
 
-func (connector *Connector) closeCurrentConnection() {
-	connector.closeConnection(nil)
-}
-
 func (connector *Connector) closeConnection(expected <-chan struct{}) {
 	if connector == nil {
 		return
