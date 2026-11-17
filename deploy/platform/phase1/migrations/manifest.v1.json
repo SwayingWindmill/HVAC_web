@@ -121,7 +121,8 @@
         "infra/registry/postgres/init/registry-tags-and-template-read.sql",
         "infra/registry/postgres/init/iam-registry-read-views.sql",
         "infra/connectivity/postgres/init/gateway-certificate-revocation.sql",
-        "infra/connectivity/postgres/init/gateway-config-shadows.sql"
+        "infra/connectivity/postgres/init/gateway-config-shadows.sql",
+        "infra/registry/postgres/init/optimization-monitor-lease.sql"
       ]
     },
     {
@@ -144,7 +145,8 @@
         "infra/telemetry/postgres/init/011-point-quality.sql",
         "infra/telemetry/postgres/init/012-measurement-uncertainty.sql",
         "infra/telemetry/postgres/init/013-schema-and-table-comments.sql",
-        "infra/telemetry/postgres/init/mqtt-runtime-events.sql"
+        "infra/telemetry/postgres/init/mqtt-runtime-events.sql",
+        "infra/telemetry/postgres/init/alarm-evaluation-dead-letter.sql"
       ]
     },
     {
@@ -159,7 +161,8 @@
         "modules/command/migrations/007_schema_and_table_comments.sql",
         "modules/command/migrations/008_command_precondition_mode.sql",
         "modules/command/migrations/command-template-capability-sync.sql",
-        "modules/command/migrations/command_intent_trace_context.sql"
+        "modules/command/migrations/command_intent_trace_context.sql",
+        "modules/command/migrations/control-alarm-outbox.sql"
       ]
     },
     {
