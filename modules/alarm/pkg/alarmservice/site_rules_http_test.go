@@ -3,8 +3,11 @@ package alarmservice
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -120,7 +123,7 @@ func TestAlarmHTTPSiteRulesNeedAnAlarmReadGrantForThatSite(t *testing.T) {
 }
 
 func TestSiteRuleListValidatesReasonsConditions(t *testing.T) {
-	rule, err := siteRuleView(SiteRule{
+	rule, err := siteRuleViewWithHopDepth(SiteRule{
 		AssignmentID: "018f3e00-7a02-7000-8000-000000000002",
 		Policy: AlarmPolicyRevision{
 			Title:       "数据不可信",
@@ -129,7 +132,7 @@ func TestSiteRuleListValidatesReasonsConditions(t *testing.T) {
 			Raise:       Condition{Kind: ConditionReasons, Input: testDeviceID + "/t18", Match: ReasonMatchAny, Reasons: []string{"OUT_OF_RANGE", "SOURCE_UNTRUSTED"}},
 			Clear:       Condition{Kind: ConditionReasons, Input: testDeviceID + "/t18", Match: ReasonMatchNone, Reasons: []string{"OUT_OF_RANGE", "SOURCE_UNTRUSTED"}},
 		},
-	})
+	}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,6 +153,216 @@ func TestSiteRuleListValidatesReasonsConditions(t *testing.T) {
 		invalid.Items[0].Raise = cond
 		if err := invalid.Validate(); err == nil {
 			t.Errorf("%s: invalid REASONS condition accepted", name)
+		}
+	}
+}
+
+func TestSiteRuleListProjectsSlopeExpressionAndHopDepth(t *testing.T) {
+	now := time.Date(2026, 11, 17, 10, 0, 0, 0, time.UTC)
+	signer := testSigner(t)
+	memory, err := NewMemoryStore(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseRule := supplyTooWarmRule()
+	delta := 2.5
+	slopeExprRule := SiteRule{
+		AssignmentID: "018f3e00-7a02-7000-8000-000000000003",
+		Policy: AlarmPolicyRevision{
+			AlarmType:        "CHW_DIFF_SLOPE",
+			Title:            "供回水温升过快",
+			Severity:         alarmmodel.SeverityMajor,
+			RuleKind:         RuleKindSlope,
+			TemplateKey:      "chiller-slope-rise",
+			OverriddenFields: []string{"raise.delta"},
+			DependsOnRuleIDs: []string{baseRule.AssignmentID},
+			QualityPolicy:    EvaluationQualityValidOnly,
+			FreshnessSeconds: 900,
+			TriggerMode:      TriggerSimple,
+			Raise: Condition{
+				Kind:          ConditionSlope,
+				Input:         testDeviceID + "/supply_water_temperature",
+				Operator:      CompareGTE,
+				Delta:         &delta,
+				WindowSeconds: 300,
+			},
+			Clear: Condition{
+				Kind:       ConditionExpression,
+				Expression: "t_diff <= 1.0",
+				ExprInputs: map[string]string{"t_diff": testDeviceID + "/supply_water_temperature"},
+			},
+		},
+	}
+	handler, err := NewHTTPHandler(HTTPConfig{
+		Store: memory, Rules: siteRules{siteID: testSiteID, rules: []SiteRule{baseRule, slopeExprRule}},
+		GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, InternalSiteAlarmsPrefix+testSiteID+"/alarm-rules", nil)
+	req.Header.Set(AlarmReadContextHeader, signedReadContext(t, signer, now, AlarmReadAction, testTenantID, testSiteID, ""))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var list SiteRuleList
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+	if err := list.Validate(); err != nil {
+		t.Fatalf("list.Validate failed: %v", err)
+	}
+	if len(list.Items) != 2 {
+		t.Fatalf("expected 2 rules, got %d", len(list.Items))
+	}
+	got := list.Items[1]
+	if got.RuleKind != RuleKindSlope || got.TemplateKey != "chiller-slope-rise" || got.HopDepth != 1 || !reflect.DeepEqual(got.DependsOnRuleIDs, []string{baseRule.AssignmentID}) {
+		t.Fatalf("unexpected enriched view: %#v", got)
+	}
+	if got.Raise.Kind != ConditionSlope || got.Raise.Delta == nil || *got.Raise.Delta != 2.5 || got.Raise.WindowSeconds != 300 {
+		t.Fatalf("unexpected slope raise: %#v", got.Raise)
+	}
+	if got.Clear.Kind != ConditionExpression || got.Clear.Expression != "t_diff <= 1.0" || got.Clear.Inputs["t_diff"].PointCode != "supply_water_temperature" {
+		t.Fatalf("unexpected expression clear: %#v", got.Clear)
+	}
+}
+
+func TestAlarmHTTPSimulateSiteRuleEvaluatesStepsInMemory(t *testing.T) {
+	now := time.Date(2026, 11, 17, 10, 0, 0, 0, time.UTC)
+	signer := testSigner(t)
+	memory, err := NewMemoryStore(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delta := 2.0
+	slopeRuleID := "018f3e00-7a02-7000-8000-000000000004"
+	baseRule := supplyTooWarmRule()
+	slopeRule := SiteRule{
+		AssignmentID: slopeRuleID,
+		Policy: AlarmPolicyRevision{
+			AlarmType:        "CHW_SUPPLY_RISE",
+			Title:            "供水温度爬升",
+			Severity:         alarmmodel.SeverityWarning,
+			RuleKind:         RuleKindSlope,
+			DependsOnRuleIDs: []string{baseRule.AssignmentID},
+			QualityPolicy:    EvaluationQualityValidOnly,
+			FreshnessSeconds: 900,
+			TriggerMode:      TriggerSimple,
+			Raise: Condition{
+				Kind:          ConditionSlope,
+				Input:         testDeviceID + "/supply_water_temperature",
+				Operator:      CompareGTE,
+				Delta:         &delta,
+				WindowSeconds: 300,
+			},
+			Clear: Condition{
+				Kind:     ConditionCompare,
+				Input:    testDeviceID + "/supply_water_temperature",
+				Operator: CompareLTE,
+				Value:    NumberValue(7.0),
+			},
+		},
+	}
+	handler, err := NewHTTPHandler(HTTPConfig{
+		Store: memory, Rules: siteRules{siteID: testSiteID, rules: []SiteRule{baseRule, slopeRule}},
+		GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	payload := mustJSON(t, SimulateSiteRuleRequest{
+		RuleID: slopeRuleID,
+		Steps: []SimulateRuleStepInput{
+			{Readings: []SimulateRuleReadingSample{{DeviceID: testDeviceID, PointCode: "supply_water_temperature", Value: 7.5}}},
+			{Readings: []SimulateRuleReadingSample{{DeviceID: testDeviceID, PointCode: "supply_water_temperature", Value: 10.0}}},
+			{Readings: []SimulateRuleReadingSample{{DeviceID: testDeviceID, PointCode: "supply_water_temperature", Value: 6.8}}},
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, InternalSiteAlarmsPrefix+testSiteID+"/alarm-rules:simulate", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(AlarmReadContextHeader, signedReadContext(t, signer, now, AlarmReadAction, testTenantID, testSiteID, ""))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var res SiteRuleSimulationResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	if err := res.Validate(slopeRuleID); err != nil {
+		t.Fatalf("result validation failed: %v", err)
+	}
+	if res.HopDepth != 1 || res.FinalActive || len(res.Steps) != 3 {
+		t.Fatalf("unexpected simulation summary: %#v", res)
+	}
+	if res.Steps[0].Effect != EvaluationEffectNone || res.Steps[0].Active ||
+		res.Steps[1].Effect != EvaluationEffectPublish || !res.Steps[1].Active ||
+		res.Steps[2].Effect != EvaluationEffectClear || res.Steps[2].Active {
+		t.Fatalf("unexpected simulation step transitions: %#v", res.Steps)
+	}
+
+	missingPayload := mustJSON(t, SimulateSiteRuleRequest{
+		RuleID: "018f3e00-7a02-7000-8000-0000000000ff",
+		Steps:  []SimulateRuleStepInput{{Readings: []SimulateRuleReadingSample{}}},
+	})
+	req404 := httptest.NewRequest(http.MethodPost, InternalSiteAlarmsPrefix+testSiteID+"/alarm-rules:simulate", strings.NewReader(missingPayload))
+	req404.Header.Set("Content-Type", "application/json")
+	req404.Header.Set(AlarmReadContextHeader, signedReadContext(t, signer, now, AlarmReadAction, testTenantID, testSiteID, ""))
+	rec404 := httptest.NewRecorder()
+	handler.ServeHTTP(rec404, req404)
+	if rec404.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for unknown rule, got %d body=%s", rec404.Code, rec404.Body.String())
+	}
+
+	// Supports canonical 128-char pointCode, canonical USABLE quality ("PARTIAL"), and rejects null readings / untrimmed pointCode / unsupported quality.
+	longPoint := strings.Repeat("p", 128)
+	usableRuleID := "018f3e00-7a02-7000-8000-000000000005"
+	usableHandler, err := NewHTTPHandler(HTTPConfig{
+		Store: memory,
+		Rules: siteRules{siteID: testSiteID, rules: []SiteRule{{
+			AssignmentID: usableRuleID,
+			Policy: AlarmPolicyRevision{
+				AlarmType: "LONG_POINT_RULE", Title: "长点位编码规则", Severity: alarmmodel.SeverityWarning,
+				QualityPolicy: EvaluationQualityUsable, FreshnessSeconds: 900, TriggerMode: TriggerSimple,
+				Raise: Condition{Kind: ConditionCompare, Input: testDeviceID + "/" + longPoint, Operator: CompareGTE, Value: NumberValue(10)},
+				Clear: Condition{Kind: ConditionCompare, Input: testDeviceID + "/" + longPoint, Operator: CompareLT, Value: NumberValue(5)},
+			},
+		}}},
+		GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	partialReq := httptest.NewRequest(http.MethodPost, InternalSiteAlarmsPrefix+testSiteID+"/alarm-rules:simulate", strings.NewReader(mustJSON(t, SimulateSiteRuleRequest{
+		RuleID: usableRuleID,
+		Steps: []SimulateRuleStepInput{{
+			Readings: []SimulateRuleReadingSample{{DeviceID: testDeviceID, PointCode: longPoint, Value: 12.0, Quality: "PARTIAL"}},
+		}},
+	})))
+	partialReq.Header.Set("Content-Type", "application/json")
+	partialReq.Header.Set(AlarmReadContextHeader, signedReadContext(t, signer, now, AlarmReadAction, testTenantID, testSiteID, ""))
+	partialRec := httptest.NewRecorder()
+	usableHandler.ServeHTTP(partialRec, partialReq)
+	if partialRec.Code != http.StatusOK {
+		t.Fatalf("long point / PARTIAL quality expected 200, got %d body=%s", partialRec.Code, partialRec.Body.String())
+	}
+	for name, badBody := range map[string]string{
+		"nil readings":        fmt.Sprintf(`{"ruleId":%q,"steps":[{}]}`, slopeRuleID),
+		"untrimmed pointCode": mustJSON(t, SimulateSiteRuleRequest{RuleID: slopeRuleID, Steps: []SimulateRuleStepInput{{Readings: []SimulateRuleReadingSample{{DeviceID: testDeviceID, PointCode: " temp", Value: 1}}}}}),
+		"legacy quality enum": mustJSON(t, SimulateSiteRuleRequest{RuleID: slopeRuleID, Steps: []SimulateRuleStepInput{{Readings: []SimulateRuleReadingSample{{DeviceID: testDeviceID, PointCode: "temp", Value: 1, Quality: "UNCERTAIN"}}}}}),
+	} {
+		badReq := httptest.NewRequest(http.MethodPost, InternalSiteAlarmsPrefix+testSiteID+"/alarm-rules:simulate", strings.NewReader(badBody))
+		badReq.Header.Set("Content-Type", "application/json")
+		badReq.Header.Set(AlarmReadContextHeader, signedReadContext(t, signer, now, AlarmReadAction, testTenantID, testSiteID, ""))
+		badRec := httptest.NewRecorder()
+		handler.ServeHTTP(badRec, badReq)
+		if badRec.Code != http.StatusBadRequest {
+			t.Fatalf("%s: expected 400, got %d body=%s", name, badRec.Code, badRec.Body.String())
 		}
 	}
 }

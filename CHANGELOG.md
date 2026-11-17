@@ -28,6 +28,11 @@
 
 #### 新增
 
+- 完成告警规则高阶编排、因果图校验与多步模拟试算能力（对应 P2-1 规则表达与 DAG 编排）：
+  - 表达式引擎、趋势斜率窗口与多级模板（`modules/alarm` 与迁移 `alarm-evaluation-slope-window.sql`）：新增受控递归下降 AST 三值表达式条件 `EXPRESSION`（上限 64 节点 / 16 深度 / 16 个输入别名，支持 `abs`/`min`/`max` 与除零不确定态隔离）、滑动时间窗趋势斜率条件 `SLOPE` 与持久化字段 `alarm_runtime.alarm_evaluation_state.sample_window`，以及模板多层继承覆写（`overriddenFields`）与规则级前置依赖解析。
+  - 因果有向无环图校验与防环阻断（`modules/alarm/pkg/rulegraph`、`alarmrules`、`alarmservice`）：引入 `ValidateDAG` 结合显式依赖与设备读写足迹检测环路与最大级联跳数（`MaxLinkageHops = 3`），在规则编译加载与站点规则同步阶段阻断环路与越界级联。
+  - 纯内存规则试算接口与网页工作台（`modules/alarm`、`cmd/energy-api`、`contracts/`、`apps/hvac-web`；路由注册表 `route-ownership.v1.json` 升级至第 `56` 版）：新增受 CSRF 保护的 `POST /api/v1/alarm-rules/simulate` 接口，在不写入告警状态或发布真实告警的前提下逐步推演触发与恢复过程；网页端「正在生效的规则」新增规则来源/模板派生与因果联动跳数展示，并提供「模拟试算」右侧抽屉进行多步采样推演。
+
 - 完善告警全生命周期治理、规则热更新、控制指令优先级仲裁与告警通知根因降噪能力（对应 P1 规则告警域演进）：
   - 告警全生命周期与评估追踪（`modules/alarm`、`libs/alarmmodel`、`libs/alarmauth`、`cmd/energy-api`、`apps/hvac-web`）：新增取消认领（`UNASSIGN`）、检修静默与到期自动解静默（`SUPPRESS` / `UNSUPPRESS` / `SweepExpiredSuppressions`），补全规则评估历史持久化（`alarm_runtime.alarm_evaluation_event`）与预触发评估追溯接口 `GET /api/v1/alarms/{alarmId}/evaluations`，支持按站点热更新告警规则并保留未修改规则的在途评估状态与自动消警已下线规则；网页端「告警管理」补全「已静默」筛选视图、取消认领、检修静默弹窗及评估历程明细区。
   - 控制指令优先级分级仲裁与设备优先级锁（`libs/commandmodel`、`modules/command`、`cmd/energy-api`、`apps/hvac-web`）：定义从安全联锁（`SAFETY_INTERLOCK`）、手动干预（`MANUAL_OVERRIDE`）、本地保护（`LOCAL_PROTECTION`）、AI 优化（`AI_OPTIMIZATION`）到定时场景（`SCHEDULED_SCENE`）的五档优先级与指令来源分类，支持高优先级自动抢占或拒绝低优先级指令与 `device_priority_locks` 独占锁，并将新不变量 `P7` 纳入 `command-safety` 形式化检验；控制日志与设备指令抽屉同步展示优先级与来源标签并提示抢占锁定报错。

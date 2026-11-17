@@ -412,3 +412,98 @@ func postgresEvaluatorSnapshot(revision string, asOf time.Time, value float64, q
 		CorrelationID: revision,
 	}
 }
+
+func TestPostgresSlopeSampleWindowAndExpressionPersistsAcrossRestart(t *testing.T) {
+	databaseURL := os.Getenv("S4_ALARM_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("S4_ALARM_TEST_DATABASE_URL is not configured")
+	}
+	const (
+		slopeTenantID     = "0190f000-0000-7000-8000-000000000097"
+		slopeSiteID       = "01910000-e000-7000-8000-000000000001"
+		slopePolicyID     = "01910000-e000-7000-8000-000000000011"
+		slopeRevisionID   = "01910000-e000-7000-8000-000000000012"
+		slopeAssignmentID = "01910000-e000-7000-8000-000000000013"
+		upstreamRuleID    = "01910000-e000-7000-8000-000000000099"
+	)
+	ctx := identitycontext.WithTenantID(context.Background(), slopeTenantID)
+	store, err := OpenPostgresStore(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	delta := 3.0
+	t0 := time.Date(2026, 12, 1, 10, 0, 0, 0, time.UTC)
+	policy := validAlarmPolicy()
+	policy.PolicyID = slopePolicyID
+	policy.PolicyRevisionID = slopeRevisionID
+	policy.AlarmType = "SLOPE_EXPRESSION_PERSIST"
+	policy.SourceReference = "alarm-policy:postgres-slope-expr"
+	policy.RuleKind = RuleKindSlope
+	policy.TemplateKey = "tpl-slope-rise"
+	policy.OverriddenFields = []string{"severity"}
+	policy.DependsOnRuleIDs = []string{upstreamRuleID}
+	policy.FreshnessSeconds = 900
+	policy.TriggerMode = TriggerSimple
+	policy.DurationSeconds = 0
+	policy.Raise = Condition{Kind: ConditionSlope, Input: "supplyTemp", Operator: CompareGTE, Delta: &delta, WindowSeconds: 300}
+	policy.Clear = Condition{Kind: ConditionExpression, Expression: "supplyTemp <= 20", ExprInputs: map[string]string{"supplyTemp": "supplyTemp"}}
+	sealAlarmPolicy(&policy)
+
+	if err := store.ReleaseAlarmPolicyRevision(ctx, slopeTenantID, slopeSiteID, policy, t0.Add(-time.Minute), "test:slope"); err != nil {
+		store.Close()
+		t.Fatal(err)
+	}
+	if err := store.AssignAlarmPolicyRevision(ctx, slopeTenantID, slopeSiteID, AlarmPolicyAssignmentInput{
+		AssignmentID: slopeAssignmentID, AssignmentRevision: 1, PolicyRevisionID: slopeRevisionID,
+		SubjectType: "SITE", SubjectID: slopeSiteID, AssignedAt: t0.Add(-30 * time.Second).Format(time.RFC3339Nano), AssignedBy: "test:slope",
+	}); err != nil {
+		store.Close()
+		t.Fatal(err)
+	}
+
+	snap := func(rev string, at time.Time, temp float64) EvaluationSnapshot {
+		return EvaluationSnapshot{
+			TenantID: slopeTenantID, SiteID: slopeSiteID, SubjectType: "SITE", SubjectID: slopeSiteID,
+			InputRevision: rev, AsOf: at.UTC().Format(time.RFC3339Nano),
+			Inputs:        map[string]InputFact{"supplyTemp": NumberInput("supplyTemp", temp, "GOOD", at.UTC().Format(time.RFC3339Nano))},
+			CorrelationID: rev,
+		}
+	}
+
+	first, err := store.EvaluateAssignedSnapshot(ctx, slopeAssignmentID, snap("slope-1", t0, 21.0), t0)
+	if err != nil {
+		store.Close()
+		t.Fatal(err)
+	}
+	if first.Effect != EvaluationEffectNone || len(first.State.SampleWindow) != 1 {
+		store.Close()
+		t.Fatalf("first slope evaluation did not persist sample_window: %#v", first)
+	}
+	store.Close()
+
+	// Re-open store to prove sample_window persisted across process restart.
+	store, err = OpenPostgresStore(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	t1 := t0.Add(2 * time.Minute)
+	raised, err := store.EvaluateAssignedSnapshot(ctx, slopeAssignmentID, snap("slope-2", t1, 24.5), t1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raised.Effect != EvaluationEffectPublish || len(raised.State.SampleWindow) != 2 {
+		t.Fatalf("restarted slope evaluation did not publish from persisted sample_window: %#v", raised)
+	}
+
+	t2 := t0.Add(3 * time.Minute)
+	cleared, err := store.EvaluateAssignedSnapshot(ctx, slopeAssignmentID, snap("slope-3", t2, 19.5), t2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleared.Effect != EvaluationEffectClear || len(cleared.State.SampleWindow) != 3 {
+		t.Fatalf("expression clear failed after slope publish: %#v", cleared)
+	}
+}

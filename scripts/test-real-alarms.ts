@@ -9,6 +9,10 @@ import {
   validateAlarmScope,
   type AlarmSuppression,
 } from '../apps/hvac-web/src/api/alarm-contract.ts';
+import {
+  alarmRuleListSchema,
+  alarmRuleSimulationEnvelopeSchema,
+} from '../apps/hvac-web/src/api/generated/platformGateway.gen.ts';
 
 const tenantId = '018f3e00-1000-7000-8000-000000000001';
 const siteId = '018f3e00-2000-7000-8000-000000000001';
@@ -182,4 +186,58 @@ test('Alarm suppression validation accepts valid ACTIVE suppression window and r
     version: 2,
     updatedAt: '2026-07-31T09:08:00Z',
   })));
+});
+
+test('AlarmRule and dry-run simulation contracts validate slope, expression, template and DAG metadata', () => {
+  const deviceId = '018f3e00-4000-7000-8000-000000000006';
+  const baseRuleId = '01910000-b100-7000-8000-00000000000a';
+  const slopeRuleId = '01910000-b100-7000-8000-00000000000d';
+  const parsedRules = alarmRuleListSchema.parse({
+    data: [{
+      ruleId: slopeRuleId,
+      title: '1 号冷机供水温度骤升',
+      severity: 'WARNING',
+      ruleKind: 'SLOPE',
+      templateKey: 'chiller-slope-rise',
+      overriddenFields: ['raise.delta'],
+      dependsOnRuleIds: [baseRuleId],
+      hopDepth: 1,
+      triggerMode: 'SIMPLE',
+      raise: {
+        kind: 'SLOPE',
+        reading: { deviceId, pointCode: 'supply_water_temperature' },
+        operator: 'GTE',
+        delta: 2,
+        windowSeconds: 300,
+      },
+      clear: {
+        kind: 'EXPRESSION',
+        expression: 'supply <= 8',
+        inputs: { supply: { deviceId, pointCode: 'supply_water_temperature' } },
+      },
+    }],
+    meta: { requestId: 'req-1' },
+  });
+  assert.equal(parsedRules.data[0].hopDepth, 1);
+
+  const sim = alarmRuleSimulationEnvelopeSchema.parse({
+    data: {
+      ruleId: slopeRuleId,
+      title: '1 号冷机供水温度骤升',
+      hopDepth: 1,
+      dependsOnRuleIds: [baseRuleId],
+      finalActive: false,
+      steps: [
+        { step: 1, evaluatedAt: '2026-11-17T10:00:00Z', status: 'NOT_MATCHED', effect: 'NONE', active: false },
+        { step: 2, evaluatedAt: '2026-11-17T10:01:00Z', status: 'MATCHED', effect: 'PUBLISH', active: true, matchedReasons: ['斜率变化达标'] },
+        { step: 3, evaluatedAt: '2026-11-17T10:02:00Z', status: 'MATCHED', effect: 'CLEAR', active: false, matchedReasons: ['满足恢复条件'] },
+      ],
+    },
+    meta: { requestId: 'req-2' },
+  });
+  assert.equal(sim.data.steps.length, 3);
+  assert.throws(() => alarmRuleListSchema.parse({
+    ...parsedRules,
+    data: [{ ...parsedRules.data[0], hopDepth: 4 }],
+  }));
 });

@@ -94,19 +94,70 @@ test('正在生效的规则 lists each rule with its devices, conditions and sev
   await expect(page).toHaveURL(/tab=rules/);
 
   const table = page.getByRole('table', { name: '正在生效的规则' });
-  const rule = (title: string) => table.getByRole('row').filter({ hasText: title });
-  await expect(table.getByRole('row')).toHaveCount(4);
+  const rule = (title: string) => table.getByRole('row').filter({ has: page.getByRole('cell', { name: title, exact: true }) });
+  await expect(table.getByRole('row')).toHaveCount(5);
   await expect(rule('冷冻水回水温度过低')).toContainText('CHILLER-01、BTU-METER-01');
   await expect(rule('冷冻水回水温度过低')).toContainText('chiller run state 为运行，并且');
   await expect(rule('冷冻水回水温度过低')).toContainText('btu meter return water temperature 不高于 10.5 °C，持续 5 分钟');
   await expect(rule('冷冻水回水温度过低')).toContainText('btu meter return water temperature 不低于 11.5 °C，或者 CHILLER-01 的 chiller run state 不为运行');
   await expect(rule('冷冻水回水温度过低')).toContainText('重要');
+  await expect(rule('1 号冷机供水温度骤升')).toContainText('BTU-METER-01、CHILLER-01');
+  await expect(rule('1 号冷机供水温度骤升')).toContainText('在 5 分钟内升高达到 2 °C');
+  await expect(rule('1 号冷机供水温度骤升')).toContainText('模板派生（覆盖变化幅度） · 斜率趋势');
+  await expect(rule('1 号冷机供水温度骤升')).toContainText('第 1 跳 · 依赖「冷冻水回水温度过低」');
   await expect(rule('CWP-01 读数长时间没有更新')).toContainText('CWP-01 的 4 个读数中任一个超过 30 分钟没有新读数');
   await expect(rule('CWP-01 读数长时间没有更新')).toContainText('CWP-01 的 4 个读数都有新读数');
   await expect(rule('网关上报中断')).toContainText('3 台设备的 5 个读数都超过 15 分钟没有新读数');
   await expect(rule('网关上报中断')).toContainText('3 台设备的 5 个读数中任一个有新读数');
   // Operators see names, never the identifiers or enums behind them.
-  await expect(table).not.toContainText(/[0-9a-f]{8}-[0-9a-f]{4}-|RUNNING|NO_DATA|MAJOR/);
+  await expect(table).not.toContainText(/[0-9a-f]{8}-[0-9a-f]{4}-|RUNNING|NO_DATA|MAJOR|SLOPE|EXPRESSION/);
+
+  const appearance = page.getByRole('radiogroup', { name: '外观' });
+  await appearance.getByRole('radio', { name: '浅色' }).click();
+  await expect.poll(() => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme)).toBe('light');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+
+  await appearance.getByRole('radio', { name: '深色' }).click();
+  await expect.poll(() => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme)).toBe('dark');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+});
+
+test('模拟试算 dry-runs a multi-step sampling sequence without mutating alarms', async ({ page, gateway }) => {
+  await page.goto(`/operations/alarms?site=${SITE_ID}&tab=rules`);
+  const appearance = page.getByRole('radiogroup', { name: '外观' });
+  await appearance.getByRole('radio', { name: '浅色' }).click();
+  const table = page.getByRole('table', { name: '正在生效的规则' });
+  const targetRow = table.getByRole('row').filter({ has: page.getByRole('cell', { name: '1 号冷机供水温度骤升', exact: true }) });
+  await targetRow.getByRole('button', { name: '模拟试算' }).click();
+
+  const sheet = page.getByRole('dialog');
+  await expect(sheet).toContainText('规则模拟试算：1 号冷机供水温度骤升');
+  await expect(sheet).toContainText('模板派生（覆盖变化幅度）');
+
+  const steps = sheet.locator('fieldset');
+  await expect(steps).toHaveCount(2);
+  await steps.nth(0).getByLabel(/btu meter supply water temperature/).fill('7');
+  await steps.nth(1).getByLabel(/btu meter supply water temperature/).fill('10.5');
+  await sheet.getByRole('button', { name: '添加采样步' }).click();
+  await expect(steps).toHaveCount(3);
+  await steps.nth(2).getByLabel(/btu meter supply water temperature/).fill('6.8');
+
+  await sheet.getByRole('button', { name: '运行模拟试算' }).click();
+  const resultTable = sheet.getByRole('table', { name: '试算结果明细' });
+  await expect(resultTable).toContainText('触发告警');
+  await expect(resultTable).toContainText('自动恢复');
+  await expect(resultTable).not.toContainText(/[0-9a-f]{8}-[0-9a-f]{4}-|MATCHED|PUBLISH|CLEAR/);
+
+  const simWrite = gateway.writes.find((write) => write.path === '/api/v1/alarm-rules/simulate');
+  expect(simWrite?.csrfToken).toBe('e2e-csrf-token');
+  expect(simWrite?.body).toMatchObject({
+    ruleId: '01910000-b100-7000-8000-00000000000d',
+    steps: [
+      { readings: [{ pointCode: 'supply_water_temperature', value: 7 }, { pointCode: 'run_state', value: 'RUNNING' }] },
+      { readings: [{ pointCode: 'supply_water_temperature', value: 10.5 }, { pointCode: 'run_state', value: 'RUNNING' }] },
+      { readings: [{ pointCode: 'supply_water_temperature', value: 6.8 }, { pointCode: 'run_state', value: 'RUNNING' }] },
+    ],
+  });
 });
 
 test('an alarm recovered because its rule was retired says so', async ({ page, gateway }) => {

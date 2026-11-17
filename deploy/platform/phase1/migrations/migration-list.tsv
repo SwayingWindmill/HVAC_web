@@ -151,6 +151,7 @@ hvac_s4|modules/alarm/migrations/015_s32_reading_gap_escalation.sql
 hvac_s4|modules/alarm/migrations/016_s32_rules_unevaluable.sql
 hvac_s4|modules/alarm/migrations/017_drop_legacy_migration_backups_and_comment_tables.sql
 hvac_s4|modules/alarm/migrations/alarm-suppression-notification-events.sql
+hvac_s4|modules/alarm/migrations/alarm-evaluation-slope-window.sql
 hvac_s5|modules/workorder/migrations/001_s5_work_order_runtime.sql
 hvac_s5|modules/workorder/migrations/002_s5_work_order_create_assignment.sql
 hvac_s5|modules/workorder/migrations/003_s5_work_order_lifecycle.sql

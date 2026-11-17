@@ -29,6 +29,8 @@ func TestMatchPublicAlarmRoutesUsesDomainV1Shape(t *testing.T) {
 		alarmID  string
 	}{
 		{path: "/api/v1/alarms", template: "/api/v1/alarms", action: alarmauth.ActionRead},
+		{path: "/api/v1/alarm-rules", template: "/api/v1/alarm-rules", action: alarmauth.ActionRead},
+		{path: "/api/v1/alarm-rules/simulate", template: "/api/v1/alarm-rules/simulate", action: alarmauth.ActionRead},
 		{path: "/api/v1/alarms/" + gatewayAlarmID, template: "/api/v1/alarms/{alarmId}", action: alarmauth.ActionRead, alarmID: gatewayAlarmID},
 		{path: "/api/v1/alarms/" + gatewayAlarmID + "/ack", template: "/api/v1/alarms/{alarmId}/ack", action: alarmauth.ActionAck, alarmID: gatewayAlarmID},
 		{path: "/api/v1/alarms/" + gatewayAlarmID + "/assign", template: "/api/v1/alarms/{alarmId}/assign", action: alarmauth.ActionAssign, alarmID: gatewayAlarmID},

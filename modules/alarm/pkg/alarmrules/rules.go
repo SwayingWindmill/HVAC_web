@@ -7,15 +7,18 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 	"github.com/quanlaihe/hvac-web/libs/nameplate"
 	"github.com/quanlaihe/hvac-web/modules/alarm/pkg/alarmservice"
+	"github.com/quanlaihe/hvac-web/modules/alarm/pkg/rulegraph"
 )
 
 type Compiled struct {
@@ -28,6 +31,7 @@ type rulesFile struct {
 	SchemaVersion      int                  `json:"schemaVersion"`
 	Note               string               `json:"note"`
 	SiteFile           string               `json:"siteFile"`
+	Templates          []ruleTemplate       `json:"templates,omitempty"`
 	Rules              []rule               `json:"rules"`
 	ReadingGaps        *readingsRule        `json:"readingGaps"`
 	ReadingsNotUpdated *readingsRule        `json:"readingsNotUpdated"`
@@ -35,6 +39,23 @@ type rulesFile struct {
 	ReadingsFlat       *flatRule            `json:"readingsFlat"`
 	DataQuality        *dataQualityFile     `json:"dataQuality"`
 	DeviceUntrusted    *deviceUntrustedRule `json:"deviceUntrusted"`
+}
+
+type ruleTemplate struct {
+	Key              string                                `json:"key"`
+	Extends          string                                `json:"extends,omitempty"`
+	Template         string                                `json:"template,omitempty"`
+	RuleKind         alarmservice.RuleKind                 `json:"ruleKind,omitempty"`
+	Title            *string                               `json:"title,omitempty"`
+	Summary          *string                               `json:"summary,omitempty"`
+	Severity         *alarmmodel.Severity                  `json:"severity,omitempty"`
+	QualityPolicy    *alarmservice.EvaluationQualityPolicy `json:"qualityPolicy,omitempty"`
+	FreshnessSeconds *int64                                `json:"freshnessSeconds,omitempty"`
+	TriggerMode      *alarmservice.TriggerMode             `json:"triggerMode,omitempty"`
+	DurationSeconds  *int64                                `json:"durationSeconds,omitempty"`
+	RepeatCount      *uint64                               `json:"repeatCount,omitempty"`
+	Raise            *alarmservice.Condition               `json:"raise,omitempty"`
+	Clear            *alarmservice.Condition               `json:"clear,omitempty"`
 }
 
 // dataQualityFile raises one alarm per point from that point's quality profile,
@@ -64,17 +85,21 @@ type deviceUntrustedRule struct {
 
 // A rule is a policy written with readings as "<device code>/<point code>".
 type rule struct {
-	Code             string                               `json:"code"`
-	Title            string                               `json:"title"`
-	Summary          string                               `json:"summary"`
-	Severity         alarmmodel.Severity                  `json:"severity"`
-	QualityPolicy    alarmservice.EvaluationQualityPolicy `json:"qualityPolicy"`
-	FreshnessSeconds int64                                `json:"freshnessSeconds"`
-	TriggerMode      alarmservice.TriggerMode             `json:"triggerMode"`
-	DurationSeconds  int64                                `json:"durationSeconds"`
-	RepeatCount      uint64                               `json:"repeatCount"`
-	Raise            alarmservice.Condition               `json:"raise"`
-	Clear            alarmservice.Condition               `json:"clear"`
+	Code             string                                `json:"code"`
+	Template         string                                `json:"template,omitempty"`
+	Device           string                                `json:"device,omitempty"`
+	RuleKind         alarmservice.RuleKind                 `json:"ruleKind,omitempty"`
+	DependsOn        []string                              `json:"dependsOn,omitempty"`
+	Title            *string                               `json:"title,omitempty"`
+	Summary          *string                               `json:"summary,omitempty"`
+	Severity         *alarmmodel.Severity                  `json:"severity,omitempty"`
+	QualityPolicy    *alarmservice.EvaluationQualityPolicy `json:"qualityPolicy,omitempty"`
+	FreshnessSeconds *int64                                `json:"freshnessSeconds,omitempty"`
+	TriggerMode      *alarmservice.TriggerMode             `json:"triggerMode,omitempty"`
+	DurationSeconds  *int64                                `json:"durationSeconds,omitempty"`
+	RepeatCount      *uint64                               `json:"repeatCount,omitempty"`
+	Raise            *alarmservice.Condition               `json:"raise,omitempty"`
+	Clear            *alarmservice.Condition               `json:"clear,omitempty"`
 }
 
 // readingsRule words a rule over the Site's own readings. readingGaps raises, per critical own
@@ -270,21 +295,28 @@ func Load(rulesPath string) (Compiled, error) {
 		order = append(order, entry.Code)
 	}
 
+	templates, err := resolveTemplates(rules.Templates)
+	if err != nil {
+		return Compiled{}, err
+	}
+
 	compiled := Compiled{TenantID: site.TenantID, SiteID: site.Site.ID}
+	ruleIndices := make(map[string]int, len(rules.Rules))
+	ruleEntries := make([]rule, 0, len(rules.Rules))
 	for _, entry := range rules.Rules {
-		raise, err := resolve(entry.Raise, devices)
+		if strings.TrimSpace(entry.Code) == "" {
+			return Compiled{}, fmt.Errorf("%s: rule code is required", rulesPath)
+		}
+		if _, duplicate := ruleIndices[entry.Code]; duplicate {
+			return Compiled{}, fmt.Errorf("duplicate rule code %s", entry.Code)
+		}
+		policy, err := compileRuleEntry(entry, templates, devices)
 		if err != nil {
 			return Compiled{}, fmt.Errorf("rule %s: %w", entry.Code, err)
 		}
-		clear, err := resolve(entry.Clear, devices)
-		if err != nil {
-			return Compiled{}, fmt.Errorf("rule %s: %w", entry.Code, err)
-		}
-		compiled.Policies = append(compiled.Policies, sitePolicy(site.Site.ID, site.Site.Code, entry.Code, alarmservice.AlarmPolicyRevision{
-			Title: entry.Title, Summary: entry.Summary, Severity: entry.Severity, QualityPolicy: entry.QualityPolicy,
-			FreshnessSeconds: entry.FreshnessSeconds, TriggerMode: entry.TriggerMode, DurationSeconds: entry.DurationSeconds,
-			RepeatCount: entry.RepeatCount, Raise: raise, Clear: clear,
-		}))
+		ruleIndices[entry.Code] = len(compiled.Policies)
+		ruleEntries = append(ruleEntries, entry)
+		compiled.Policies = append(compiled.Policies, sitePolicy(site.Site.ID, site.Site.Code, entry.Code, policy))
 	}
 	if gaps := rules.ReadingGaps; gaps != nil {
 		minutes := strconv.FormatInt(gaps.AgeSeconds/60, 10)
@@ -442,7 +474,379 @@ func Load(rulesPath string) (Compiled, error) {
 			}
 		}
 	}
+	if err := resolveRuleDependencies(&compiled, ruleEntries, ruleIndices); err != nil {
+		return Compiled{}, err
+	}
+	if _, err := alarmservice.ValidateSiteRuleGraph(compiled.Policies); err != nil {
+		if errors.Is(err, rulegraph.ErrRuleCycleDetected) {
+			return Compiled{}, fmt.Errorf("cyclic rule dependency graph: %w", err)
+		}
+		return Compiled{}, err
+	}
 	return compiled, nil
+}
+
+func resolveTemplates(rawTemplates []ruleTemplate) (map[string]ruleTemplate, error) {
+	byKey := make(map[string]ruleTemplate, len(rawTemplates))
+	for _, tmpl := range rawTemplates {
+		if strings.TrimSpace(tmpl.Key) == "" {
+			return nil, fmt.Errorf("rule template key is required")
+		}
+		if _, dup := byKey[tmpl.Key]; dup {
+			return nil, fmt.Errorf("duplicate rule template key %s", tmpl.Key)
+		}
+		if tmpl.Extends != "" && tmpl.Template != "" && tmpl.Extends != tmpl.Template {
+			return nil, fmt.Errorf("rule template %s specifies conflicting extends and template", tmpl.Key)
+		}
+		byKey[tmpl.Key] = tmpl
+	}
+
+	resolved := make(map[string]ruleTemplate, len(rawTemplates))
+	visiting := make(map[string]bool, len(rawTemplates))
+	var resolveOne func(key string) (ruleTemplate, error)
+	resolveOne = func(key string) (ruleTemplate, error) {
+		if cached, ok := resolved[key]; ok {
+			return cached, nil
+		}
+		if visiting[key] {
+			return ruleTemplate{}, fmt.Errorf("rule template %s has cyclic inheritance", key)
+		}
+		tmpl, ok := byKey[key]
+		if !ok {
+			return ruleTemplate{}, fmt.Errorf("unknown rule template %s", key)
+		}
+		visiting[key] = true
+		parentKey := tmpl.Extends
+		if parentKey == "" {
+			parentKey = tmpl.Template
+		}
+		var out ruleTemplate
+		if parentKey != "" {
+			parent, err := resolveOne(parentKey)
+			if err != nil {
+				return ruleTemplate{}, err
+			}
+			out = parent
+		}
+		out.Key = tmpl.Key
+		out.Extends = ""
+		out.Template = ""
+		mergeTemplateOverrides(&out, tmpl)
+		visiting[key] = false
+		resolved[key] = out
+		return out, nil
+	}
+
+	for _, tmpl := range rawTemplates {
+		if _, err := resolveOne(tmpl.Key); err != nil {
+			return nil, err
+		}
+	}
+	return resolved, nil
+}
+
+func mergeTemplateOverrides(dst *ruleTemplate, src ruleTemplate) {
+	if src.RuleKind != "" {
+		dst.RuleKind = src.RuleKind
+	}
+	if src.Title != nil {
+		v := *src.Title
+		dst.Title = &v
+	}
+	if src.Summary != nil {
+		v := *src.Summary
+		dst.Summary = &v
+	}
+	if src.Severity != nil {
+		v := *src.Severity
+		dst.Severity = &v
+	}
+	if src.QualityPolicy != nil {
+		v := *src.QualityPolicy
+		dst.QualityPolicy = &v
+	}
+	if src.FreshnessSeconds != nil {
+		v := *src.FreshnessSeconds
+		dst.FreshnessSeconds = &v
+	}
+	if src.TriggerMode != nil {
+		v := *src.TriggerMode
+		dst.TriggerMode = &v
+	}
+	if src.DurationSeconds != nil {
+		v := *src.DurationSeconds
+		dst.DurationSeconds = &v
+	}
+	if src.RepeatCount != nil {
+		v := *src.RepeatCount
+		dst.RepeatCount = &v
+	}
+	if src.Raise != nil {
+		cloned := cloneCondition(*src.Raise)
+		dst.Raise = &cloned
+	}
+	if src.Clear != nil {
+		cloned := cloneCondition(*src.Clear)
+		dst.Clear = &cloned
+	}
+}
+
+func compileRuleEntry(entry rule, templates map[string]ruleTemplate, devices map[string]device) (alarmservice.AlarmPolicyRevision, error) {
+	var merged ruleTemplate
+	var overridden []string
+	if entry.Template != "" {
+		tmpl, ok := templates[entry.Template]
+		if !ok {
+			return alarmservice.AlarmPolicyRevision{}, fmt.Errorf("unknown template %s", entry.Template)
+		}
+		merged = tmpl
+	}
+
+	policy := alarmservice.AlarmPolicyRevision{
+		RuleKind:    merged.RuleKind,
+		TemplateKey: entry.Template,
+	}
+	if entry.RuleKind != "" {
+		policy.RuleKind = entry.RuleKind
+		overridden = append(overridden, "ruleKind")
+	}
+	if merged.Title != nil {
+		policy.Title = *merged.Title
+	}
+	if merged.Summary != nil {
+		policy.Summary = *merged.Summary
+	}
+	if merged.Severity != nil {
+		policy.Severity = *merged.Severity
+	}
+	if merged.QualityPolicy != nil {
+		policy.QualityPolicy = *merged.QualityPolicy
+	}
+	if merged.FreshnessSeconds != nil {
+		policy.FreshnessSeconds = *merged.FreshnessSeconds
+	}
+	if merged.TriggerMode != nil {
+		policy.TriggerMode = *merged.TriggerMode
+	}
+	if merged.DurationSeconds != nil {
+		policy.DurationSeconds = *merged.DurationSeconds
+	}
+	if merged.RepeatCount != nil {
+		policy.RepeatCount = *merged.RepeatCount
+	}
+	var raiseCond, clearCond alarmservice.Condition
+	if merged.Raise != nil {
+		raiseCond = cloneCondition(*merged.Raise)
+	}
+	if merged.Clear != nil {
+		clearCond = cloneCondition(*merged.Clear)
+	}
+
+	if entry.Title != nil {
+		policy.Title = *entry.Title
+		overridden = append(overridden, "title")
+	}
+	if entry.Summary != nil {
+		policy.Summary = *entry.Summary
+		overridden = append(overridden, "summary")
+	}
+	if entry.Severity != nil {
+		policy.Severity = *entry.Severity
+		overridden = append(overridden, "severity")
+	}
+	if entry.QualityPolicy != nil {
+		policy.QualityPolicy = *entry.QualityPolicy
+		overridden = append(overridden, "qualityPolicy")
+	}
+	if entry.FreshnessSeconds != nil {
+		policy.FreshnessSeconds = *entry.FreshnessSeconds
+		overridden = append(overridden, "freshnessSeconds")
+	}
+	if entry.TriggerMode != nil {
+		policy.TriggerMode = *entry.TriggerMode
+		overridden = append(overridden, "triggerMode")
+		if *entry.TriggerMode == alarmservice.TriggerSimple {
+			policy.DurationSeconds = 0
+			policy.RepeatCount = 0
+		}
+	}
+	if entry.DurationSeconds != nil {
+		policy.DurationSeconds = *entry.DurationSeconds
+		overridden = append(overridden, "durationSeconds")
+	}
+	if entry.RepeatCount != nil {
+		policy.RepeatCount = *entry.RepeatCount
+		overridden = append(overridden, "repeatCount")
+	}
+	if entry.Raise != nil {
+		raiseCond = cloneCondition(*entry.Raise)
+		overridden = append(overridden, "raise")
+	}
+	if entry.Clear != nil {
+		clearCond = cloneCondition(*entry.Clear)
+		overridden = append(overridden, "clear")
+	}
+
+	if entry.Template != "" && len(overridden) > 0 {
+		sort.Strings(overridden)
+		policy.OverriddenFields = overridden
+	}
+
+	if entry.Device != "" {
+		dev, ok := devices[entry.Device]
+		if !ok {
+			return alarmservice.AlarmPolicyRevision{}, fmt.Errorf("unknown device %s", entry.Device)
+		}
+		policy.Title = strings.ReplaceAll(policy.Title, "{device}", dev.name)
+		policy.Summary = strings.ReplaceAll(policy.Summary, "{device}", dev.name)
+		raiseCond = substituteConditionDevice(raiseCond, dev.code)
+		clearCond = substituteConditionDevice(clearCond, dev.code)
+	} else {
+		if strings.Contains(policy.Title, "{device}") || strings.Contains(policy.Summary, "{device}") ||
+			conditionContainsPlaceholder(raiseCond, "{device}") || conditionContainsPlaceholder(clearCond, "{device}") {
+			return alarmservice.AlarmPolicyRevision{}, fmt.Errorf("uses {device} placeholder without specifying device")
+		}
+	}
+
+	raise, err := resolve(raiseCond, devices)
+	if err != nil {
+		return alarmservice.AlarmPolicyRevision{}, err
+	}
+	clear, err := resolve(clearCond, devices)
+	if err != nil {
+		return alarmservice.AlarmPolicyRevision{}, err
+	}
+	if policy.RuleKind != "" {
+		switch policy.RuleKind {
+		case alarmservice.RuleKindThreshold, alarmservice.RuleKindSlope, alarmservice.RuleKindExpression:
+		default:
+			return alarmservice.AlarmPolicyRevision{}, fmt.Errorf("invalid ruleKind %q", policy.RuleKind)
+		}
+	}
+	if err := raise.Validate(); err != nil {
+		return alarmservice.AlarmPolicyRevision{}, fmt.Errorf("raise: %w", err)
+	}
+	if err := clear.Validate(); err != nil {
+		return alarmservice.AlarmPolicyRevision{}, fmt.Errorf("clear: %w", err)
+	}
+	policy.Raise = raise
+	policy.Clear = clear
+	return policy, nil
+}
+
+func resolveRuleDependencies(compiled *Compiled, entries []rule, ruleIndices map[string]int) error {
+	assignmentByCode := make(map[string]string, len(compiled.Policies))
+	for _, siteRule := range compiled.Policies {
+		assignmentByCode[siteRule.Policy.AlarmType] = siteRule.AssignmentID
+	}
+
+	for _, entry := range entries {
+		if len(entry.DependsOn) == 0 {
+			continue
+		}
+		if len(entry.DependsOn) > 16 {
+			return fmt.Errorf("rule %s: dependsOn exceeds maximum of 16", entry.Code)
+		}
+		seen := make(map[string]bool, len(entry.DependsOn))
+		depIDs := make([]string, 0, len(entry.DependsOn))
+		for _, depCode := range entry.DependsOn {
+			if entry.Device != "" {
+				depCode = strings.ReplaceAll(depCode, "{device}", entry.Device)
+			} else if strings.Contains(depCode, "{device}") {
+				return fmt.Errorf("rule %s: dependsOn uses {device} placeholder without specifying device", entry.Code)
+			}
+			if depCode == entry.Code {
+				return fmt.Errorf("rule %s: cannot depend on itself", entry.Code)
+			}
+			if seen[depCode] {
+				return fmt.Errorf("rule %s: duplicate dependsOn %s", entry.Code, depCode)
+			}
+			seen[depCode] = true
+			upstreamID, ok := assignmentByCode[depCode]
+			if !ok {
+				return fmt.Errorf("rule %s: dependsOn unknown rule %s", entry.Code, depCode)
+			}
+			depIDs = append(depIDs, upstreamID)
+		}
+		idx := ruleIndices[entry.Code]
+		compiled.Policies[idx].Policy.DependsOnRuleIDs = depIDs
+	}
+	return nil
+}
+
+func cloneCondition(condition alarmservice.Condition) alarmservice.Condition {
+	cloned := condition
+	if condition.Minimum != nil {
+		v := *condition.Minimum
+		cloned.Minimum = &v
+	}
+	if condition.Maximum != nil {
+		v := *condition.Maximum
+		cloned.Maximum = &v
+	}
+	if condition.Delta != nil {
+		v := *condition.Delta
+		cloned.Delta = &v
+	}
+	if condition.Reasons != nil {
+		cloned.Reasons = append([]string(nil), condition.Reasons...)
+	}
+	if condition.ExprInputs != nil {
+		cloned.ExprInputs = make(map[string]string, len(condition.ExprInputs))
+		for k, v := range condition.ExprInputs {
+			cloned.ExprInputs[k] = v
+		}
+	}
+	if len(condition.Children) > 0 {
+		cloned.Children = make([]alarmservice.Condition, len(condition.Children))
+		for i, child := range condition.Children {
+			cloned.Children[i] = cloneCondition(child)
+		}
+	}
+	return cloned
+}
+
+func substituteConditionDevice(condition alarmservice.Condition, deviceCode string) alarmservice.Condition {
+	if len(condition.Children) > 0 {
+		children := make([]alarmservice.Condition, len(condition.Children))
+		for i, child := range condition.Children {
+			children[i] = substituteConditionDevice(child, deviceCode)
+		}
+		condition.Children = children
+		return condition
+	}
+	if condition.Kind == alarmservice.ConditionExpression && condition.ExprInputs != nil {
+		replaced := make(map[string]string, len(condition.ExprInputs))
+		for alias, ref := range condition.ExprInputs {
+			replaced[alias] = strings.ReplaceAll(ref, "{device}", deviceCode)
+		}
+		condition.ExprInputs = replaced
+		return condition
+	}
+	if condition.Input != "" {
+		condition.Input = strings.ReplaceAll(condition.Input, "{device}", deviceCode)
+	}
+	return condition
+}
+
+func conditionContainsPlaceholder(condition alarmservice.Condition, placeholder string) bool {
+	if len(condition.Children) > 0 {
+		for _, child := range condition.Children {
+			if conditionContainsPlaceholder(child, placeholder) {
+				return true
+			}
+		}
+		return false
+	}
+	if condition.Kind == alarmservice.ConditionExpression {
+		for _, ref := range condition.ExprInputs {
+			if strings.Contains(ref, placeholder) {
+				return true
+			}
+		}
+		return false
+	}
+	return strings.Contains(condition.Input, placeholder)
 }
 
 func decodeStrict(path string, target any) error {
@@ -472,17 +876,39 @@ func resolve(condition alarmservice.Condition, devices map[string]device) (alarm
 		condition.Children = children
 		return condition, nil
 	}
-	deviceCode, pointCode, _ := strings.Cut(condition.Input, "/")
+	if condition.Kind == alarmservice.ConditionExpression {
+		if len(condition.ExprInputs) > 0 {
+			resolvedInputs := make(map[string]string, len(condition.ExprInputs))
+			for alias, rawRef := range condition.ExprInputs {
+				resolvedRef, err := resolveInputRef(rawRef, devices)
+				if err != nil {
+					return alarmservice.Condition{}, err
+				}
+				resolvedInputs[alias] = resolvedRef
+			}
+			condition.ExprInputs = resolvedInputs
+		}
+		return condition, nil
+	}
+	resolvedRef, err := resolveInputRef(condition.Input, devices)
+	if err != nil {
+		return alarmservice.Condition{}, err
+	}
+	condition.Input = resolvedRef
+	return condition, nil
+}
+
+func resolveInputRef(inputRef string, devices map[string]device) (string, error) {
+	deviceCode, pointCode, _ := strings.Cut(inputRef, "/")
 	entry, ok := devices[deviceCode]
 	if ok {
 		for _, point := range entry.points {
 			if point.Code == pointCode {
-				condition.Input = entry.id + "/" + pointCode
-				return condition, nil
+				return entry.id + "/" + pointCode, nil
 			}
 		}
 	}
-	return alarmservice.Condition{}, fmt.Errorf("%s is not an active point of the site file", condition.Input)
+	return "", fmt.Errorf("%s is not an active point of the site file", inputRef)
 }
 
 // isCopied reports whether a point is copied from another device's channel ("from") rather than
@@ -1084,10 +1510,22 @@ func conditionTouchesDevice(condition alarmservice.Condition, deviceCode string,
 		}
 		return false
 	}
-	if origins.inputOrigins[condition.Input][deviceCode] {
+	if condition.Kind == alarmservice.ConditionExpression {
+		for _, inputKey := range condition.ExprInputs {
+			if inputTouchesDevice(inputKey, deviceCode, origins) {
+				return true
+			}
+		}
+		return false
+	}
+	return inputTouchesDevice(condition.Input, deviceCode, origins)
+}
+
+func inputTouchesDevice(inputKey, deviceCode string, origins deviceOriginMap) bool {
+	if origins.inputOrigins[inputKey][deviceCode] {
 		return true
 	}
-	devID, _, ok := strings.Cut(condition.Input, "/")
+	devID, _, ok := strings.Cut(inputKey, "/")
 	return ok && origins.idToCode[devID] == deviceCode
 }
 
