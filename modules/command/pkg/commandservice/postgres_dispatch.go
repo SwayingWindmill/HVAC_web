@@ -70,7 +70,7 @@ SELECT o.outbox_id::text,
        i.command_id::text, i.tenant_id::text, i.site_id::text, i.device_id::text, i.point_id::text,
        i.capability_name, i.capability_revision,
        i.canonical_parameters,
-       i.payload_hash, i.device_command_sequence, i.version
+       i.payload_hash, i.device_command_sequence, i.version, i.trace_id, i.trace_id
 FROM command_runtime.command_dispatch_outbox o
 JOIN command_runtime.command_intents i ON i.command_id = o.command_id
 JOIN command_runtime.device_control_state d
@@ -114,7 +114,7 @@ LIMIT 1
 `, tenantID, now, setpointControlGroup).Scan(
 		&outboxID, &intent.ID, &intent.TenantID, &intent.SiteID, &intent.DeviceID, &intent.PointID,
 		&capability, &intent.CapabilityRevision, &parameters,
-		&intent.PayloadHash, &intent.DeviceCommandSequence, &intent.Version,
+		&intent.PayloadHash, &intent.DeviceCommandSequence, &intent.Version, &intent.TraceID,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		if err := store.commitAndNotifyFailures(ctx, tx, failureEvents); err != nil {
@@ -212,7 +212,8 @@ WHERE tenant_id = $1::uuid AND outbox_id = $2::uuid AND delivered_at IS NULL
 	}
 	return commandmodel.DispatchEnvelope{
 		CommandID: intent.ID, AttemptID: attemptID, TenantID: intent.TenantID,
-		SiteID: intent.SiteID, DeviceID: intent.DeviceID, PointID: intent.PointID, Capability: intent.Capability,
+		SiteID: intent.SiteID, DeviceID: intent.DeviceID, PointID: intent.PointID,
+		TraceID: commandmodel.NormalizeTraceID(intent.TraceID), Capability: intent.Capability,
 		CapabilityRevision: intent.CapabilityRevision, Parameters: cloneParameters(intent.Parameters),
 		PayloadHash: intent.PayloadHash, ExecutionFence: executionFence,
 		DeviceCommandSequence: intent.DeviceCommandSequence, LeaseOwner: leaseOwner, LeaseUntil: leaseUntil,

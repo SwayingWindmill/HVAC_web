@@ -320,6 +320,7 @@ type SubmitRequest struct {
 	PointID              string
 	PrincipalID          string
 	IdempotencyKey       string
+	TraceID              string `json:"traceId,omitempty"`
 	Capability           Capability
 	Parameters           CommandParameters
 	VerificationPointKey string
@@ -465,6 +466,7 @@ type CommandIntent struct {
 	PointID               string
 	PrincipalID           string
 	IdempotencyKey        string
+	TraceID               string `json:"traceId,omitempty"`
 	Capability            Capability
 	CapabilityRevision    string
 	Risk                  RiskLevel
@@ -542,6 +544,7 @@ type DispatchEnvelope struct {
 	SiteID                string
 	DeviceID              string
 	PointID               string
+	TraceID               string `json:"traceId,omitempty"`
 	Capability            Capability
 	CapabilityRevision    string
 	Parameters            CommandParameters
@@ -731,4 +734,37 @@ type CommandCorrelation struct {
 	ReplyReasonCode  string
 	EdgeExecution    *EdgeExecutionEvidence
 	RepliedAt        time.Time
+}
+
+// NormalizeTraceID validates a W3C 32-hex distributed trace ID, rejects all-zero values,
+// and returns the lowercase 32-character form or empty string when invalid.
+func NormalizeTraceID(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if len(trimmed) != 32 {
+		return ""
+	}
+	var normalized [32]byte
+	nonZero := false
+	for i := 0; i < 32; i++ {
+		ch := trimmed[i]
+		switch {
+		case ch >= '0' && ch <= '9':
+			if ch != '0' {
+				nonZero = true
+			}
+			normalized[i] = ch
+		case ch >= 'a' && ch <= 'f':
+			nonZero = true
+			normalized[i] = ch
+		case ch >= 'A' && ch <= 'F':
+			nonZero = true
+			normalized[i] = ch + ('a' - 'A')
+		default:
+			return ""
+		}
+	}
+	if !nonZero {
+		return ""
+	}
+	return string(normalized[:])
 }

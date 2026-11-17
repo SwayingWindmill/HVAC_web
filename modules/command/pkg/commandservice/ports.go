@@ -355,6 +355,7 @@ type SubmitOperatorCommandInput struct {
 	CommandPointID string                         `json:"commandPointId"`
 	Parameters     commandmodel.CommandParameters `json:"parameters"`
 	IdempotencyKey string                         `json:"idempotencyKey"`
+	TraceID        string                         `json:"traceId,omitempty"`
 }
 
 type SubmitOperatorCommandOutput struct {

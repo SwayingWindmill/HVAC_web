@@ -53,6 +53,17 @@ type runtimeHTTPHandler struct {
 	verifier            string
 	coreRegistrySPIFFEs map[string]struct{}
 	failureNotifier     ControlFailureNotifier
+	failureQueue        controlFailureQueue
+}
+
+// Close drains queued control failure notifications before returning.
+func (handler *runtimeHTTPHandler) Close() {
+	if handler == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), controlFailureCloseTimeout)
+	defer cancel()
+	_ = handler.failureQueue.Close(ctx)
 }
 
 type runtimeClaimRequest struct {
@@ -252,7 +263,7 @@ func (handler *runtimeHTTPHandler) resolveDispatch(writer http.ResponseWriter, r
 				Parameters: input.Envelope.Parameters,
 			}
 			if event, notify := controlFailureEventFromDecision(intent, decision.IntentFinal, decision.Reason, input.Result.FailureCode, now); notify {
-				notifyControlFailureAsync(handler.failureNotifier, event)
+				handler.failureQueue.enqueue(handler.failureNotifier, event)
 			}
 		}
 	}
@@ -305,7 +316,7 @@ func (handler *runtimeHTTPHandler) resolveVerification(writer http.ResponseWrite
 		}
 		if decision, decErr := DecideVerificationResolutionWithEdge(intent, input.Envelope, input.Envelope.EdgeExecution, input.Result, input.Envelope.VerificationDeadline, now); decErr == nil {
 			if event, notify := controlFailureEventFromDecision(intent, decision.IntentFinal, decision.Reason, input.Result.FailureCode, now); notify {
-				notifyControlFailureAsync(handler.failureNotifier, event)
+				handler.failureQueue.enqueue(handler.failureNotifier, event)
 			}
 		}
 	}

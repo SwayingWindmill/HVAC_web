@@ -15,6 +15,7 @@ services:
       - ../../modules/command/migrations/006_command_control_locks_and_sequence_capabilities.sql:/docker-entrypoint-initdb.d/006_command_control_locks_and_sequence_capabilities.sql:ro
       - ../../modules/command/migrations/007_schema_and_table_comments.sql:/docker-entrypoint-initdb.d/007_schema_and_table_comments.sql:ro
       - ../../modules/command/migrations/008_command_precondition_mode.sql:/docker-entrypoint-initdb.d/008_command_precondition_mode.sql:ro
+      - ../../modules/command/migrations/command_intent_trace_context.sql:/docker-entrypoint-initdb.d/009_command_intent_trace_context.sql:ro
     ports:
       - "127.0.0.1:${S3_POSTGRES_HOST_PORT:-57432}:5432"
     healthcheck:

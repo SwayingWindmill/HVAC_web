@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/modules/command/pkg/commandservice"
 )
 
@@ -133,4 +134,29 @@ func writeTestJSON(writer http.ResponseWriter, status int, value any) {
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(value)
+}
+
+func TestRuntimeClientInjectsTraceparentHeader(t *testing.T) {
+	const traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+	var gotTraceparent string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		gotTraceparent = request.Header.Get("traceparent")
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	client, err := NewRuntimeClient(RuntimeClientConfig{
+		BaseURL: server.URL, HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracer := observability.NewTracer("command-dispatcher", nil)
+	ctx := observability.ContextWithRemoteParent(context.Background(), tracer, traceparent, "")
+	if _, err := client.ClaimDispatch(ctx, runtimeClientTestOrganization, "dispatcher-a", 30*time.Second); !errors.Is(err, commandservice.ErrNoDispatchAvailable) {
+		t.Fatalf("expected ErrNoDispatchAvailable, got %v", err)
+	}
+	if gotTraceparent != traceparent {
+		t.Fatalf("runtime client traceparent=%q, want %q", gotTraceparent, traceparent)
+	}
 }

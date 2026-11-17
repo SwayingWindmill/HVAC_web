@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -8,11 +9,13 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,6 +23,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
+	"github.com/quanlaihe/hvac-web/libs/commandauth"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/modules/alarm/pkg/alarmservice"
@@ -202,6 +206,147 @@ func TestEmbeddedCoreOutboxRelayConnectivityCARequiredAndMTLSClientsConfigured(t
 		}
 		if !tc.expectIAM && tr.TLSClientConfig.RootCAs == iamPool {
 			t.Fatalf("connectivity client unexpectedly fell back to iamPool")
+		}
+	}
+}
+
+func TestEmbeddedCommandHandlerExtractsTraceparentAndRecordsBoundedRoutes(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	iamKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gatewayKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const (
+		gatewaySPIFFE = "spiffe://hvac.local/platform-gateway"
+		wantTraceID   = "4bf92f3577b34da6a3ce929d0e0e4736"
+	)
+	gatewayURI, err := url.Parse(gatewaySPIFFE)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store := commandservice.NewMemoryAuthorityStore(func() time.Time { return now })
+	defer store.Close()
+
+	commandHandler, err := commandservice.NewHTTPHandler(commandservice.HTTPConfig{
+		Authority:                  store,
+		CommandGrantPublicKey:      &iamKey.PublicKey,
+		CommandGrantIssuer:         "spiffe://hvac.local/iam-service",
+		GatewaySPIFFE:              gatewaySPIFFE,
+		CommandGrantAudience:       "command-service",
+		GatewayDelegationPublicKey: &gatewayKey.PublicKey,
+		GatewayReadAudience:        "command-service",
+		Now:                        func() time.Time { return now },
+		CommandGrantUseChecker: func(claims commandauth.GrantClaims) (commandauth.UseStatus, error) {
+			return commandauth.UseStatus{
+				CurrentPolicyRevision:     claims.PolicyRevision,
+				CurrentRevocationRevision: claims.EmergencyRevocationRevision,
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stubOK := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusOK)
+	})
+	telemetry := observability.NewRuntime(observability.RuntimeConfig{Service: "energy-api-command", QueueSize: 16})
+	defer func() { _ = telemetry.Shutdown(context.Background()) }()
+	handler := newEmbeddedCommandHandler(gatewaySPIFFE, stubOK, commandHandler, stubOK, telemetry)
+
+	profile, ok := commandmodel.CapabilityProfileFor(commandmodel.CapabilitySetTemperatureSetpoint)
+	if !ok {
+		t.Fatal("missing setpoint capability profile")
+	}
+	grant, err := commandauth.SignGrant(iamKey, commandauth.GrantClaims{
+		Issuer: "spiffe://hvac.local/iam-service", Presenter: gatewaySPIFFE, Audience: "command-service",
+		GrantID: "grant-emb-1", Purpose: commandmodel.AuthorizationCommandSubmit,
+		PrincipalID: "principal-1", TenantID: "tenant-1", SiteID: "site-1", DeviceID: "device-1",
+		Capability: commandmodel.CapabilitySetTemperatureSetpoint, MaximumRisk: commandmodel.RiskLow,
+		CapabilityRevision: profile.Revision, PolicyRevision: "command-policy-1", EmergencyRevocationRevision: 1,
+		IssuedAt: now.Unix(), ExpiresAt: now.Add(25 * time.Second).Unix(), TokenID: "grant-emb-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	currentValue := 22.5
+	body, err := json.Marshal(map[string]any{
+		"tenantId":             "tenant-1",
+		"siteId":               "site-1",
+		"deviceId":             "device-1",
+		"pointId":              "point-1",
+		"principalId":          "principal-1",
+		"idempotencyKey":       "emb-trace-1",
+		"capability":           commandmodel.CapabilitySetTemperatureSetpoint,
+		"parameters":           map[string]any{commandmodel.ParameterSetpointC: 23.0},
+		"verificationPointKey": "zone.temperature_setpoint",
+		"currentState": map[string]any{
+			"evaluationAvailability": "AVAILABLE",
+			"presence":               "ONLINE",
+			"readiness":              "CURRENT",
+			"quality":                "GOOD",
+			"businessRevision":       10,
+			"currentValue":           currentValue,
+			"observedAt":             now,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, commandservice.InternalCommandsPath, bytes.NewReader(body))
+	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{{URIs: []*url.URL{gatewayURI}}}}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Command-Grant", grant)
+	req.Header.Set("traceparent", "00-"+wantTraceID+"-00f067aa0ba902b7-01")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("POST %s status=%d body=%s", commandservice.InternalCommandsPath, rec.Code, rec.Body.String())
+	}
+
+	var view commandservice.CommandView
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil || view.CommandID == "" {
+		t.Fatalf("decode CommandView err=%v body=%s", err, rec.Body.String())
+	}
+	intent, err := store.Get(context.Background(), "tenant-1", view.CommandID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if intent.TraceID != wantTraceID {
+		t.Fatalf("intent.TraceID=%q, want %q", intent.TraceID, wantTraceID)
+	}
+	env, err := store.ClaimDispatch(context.Background(), "tenant-1", "dispatcher-1", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env.TraceID != wantTraceID {
+		t.Fatalf("DispatchEnvelope.TraceID=%q, want %q", env.TraceID, wantTraceID)
+	}
+
+	modeReq := httptest.NewRequest(http.MethodPut, commandservice.InternalOperatorPrefix+"/sites/site-1/control-mode", nil)
+	modeReq.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{{URIs: []*url.URL{gatewayURI}}}}
+	handler.ServeHTTP(httptest.NewRecorder(), modeReq)
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, commandservice.InternalDispatchClaimPath, nil))
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/unexpected/path", nil))
+
+	metricsRec := httptest.NewRecorder()
+	telemetry.DiagnosticsHandler().ServeHTTP(metricsRec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	metricsBody := metricsRec.Body.String()
+	for _, wantMetric := range []string{
+		`hvac_command_http_requests_total{method="POST",route="commands.create",service="command-service",status_class="2xx"} 1`,
+		`hvac_command_http_requests_total{method="PUT",route="control.mode",service="command-service",status_class="2xx"} 1`,
+		`hvac_command_http_requests_total{method="POST",route="dispatch.claim",service="command-service",status_class="2xx"} 1`,
+		`hvac_command_http_requests_total{method="GET",route="unknown",service="command-service",status_class="2xx"} 1`,
+	} {
+		if !strings.Contains(metricsBody, wantMetric) {
+			t.Fatalf("metrics missing %q:\n%s", wantMetric, metricsBody)
 		}
 	}
 }

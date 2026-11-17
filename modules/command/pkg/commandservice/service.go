@@ -52,6 +52,17 @@ type Service struct {
 	deviceSequence  map[string]uint64
 	deviceFence     map[string]uint64
 	failureNotifier ControlFailureNotifier
+	failureQueue    controlFailureQueue
+}
+
+// Close drains queued control failure notifications before returning.
+func (s *Service) Close() {
+	if s == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), controlFailureCloseTimeout)
+	defer cancel()
+	_ = s.failureQueue.Close(ctx)
 }
 
 // ControlFailureEvent describes an operational control failure that needs immediate operator visibility.
@@ -131,16 +142,6 @@ func controlFailureEventFromDecision(
 	}
 }
 
-func notifyControlFailureAsync(notifier ControlFailureNotifier, event ControlFailureEvent) {
-	if notifier == nil {
-		return
-	}
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		notifier(ctx, event)
-	}()
-}
 
 type idempotencyRecord struct {
 	CommandID   string
@@ -196,6 +197,7 @@ func (s *Service) Submit(request commandmodel.SubmitRequest) (SubmitResult, erro
 		PointID:               request.PointID,
 		PrincipalID:           request.PrincipalID,
 		IdempotencyKey:        request.IdempotencyKey,
+		TraceID:               commandmodel.NormalizeTraceID(request.TraceID),
 		Capability:            request.Capability,
 		CapabilityRevision:    capabilityRevision,
 		Risk:                  risk.Level,
@@ -408,6 +410,7 @@ func (s *Service) PrepareDispatch(commandID, leaseOwner string, leaseUntil time.
 		SiteID:                intent.SiteID,
 		DeviceID:              intent.DeviceID,
 		PointID:               intent.PointID,
+		TraceID:               commandmodel.NormalizeTraceID(intent.TraceID),
 		Capability:            intent.Capability,
 		CapabilityRevision:    intent.CapabilityRevision,
 		Parameters:            cloneParameters(intent.Parameters),
@@ -473,7 +476,7 @@ func (s *Service) ResolveDispatch(envelope commandmodel.DispatchEnvelope, result
 	}
 	transition(intent, decision.IntentFinal, decision.Reason, "command-dispatcher", now, attempt.ID, result.EvidenceID)
 	if event, notify := controlFailureEventFromDecision(*intent, decision.IntentFinal, decision.Reason, result.FailureCode, now); notify {
-		notifyControlFailureAsync(s.failureNotifier, event)
+		s.failureQueue.enqueue(s.failureNotifier, event)
 	}
 	return nil
 }
@@ -512,7 +515,7 @@ func (s *Service) PrepareVerification(commandID, leaseOwner string, leaseUntil t
 			attempt.UpdatedAt = now
 			transition(intent, decision.IntentFinal, decision.Reason, "command-verifier", now, attempt.ID, attempt.ConnectorEvidenceID)
 			if event, notify := controlFailureEventFromDecision(*intent, decision.IntentFinal, decision.Reason, "", now); notify {
-				notifyControlFailureAsync(s.failureNotifier, event)
+				s.failureQueue.enqueue(s.failureNotifier, event)
 			}
 			return commandmodel.VerificationEnvelope{}, ErrVerificationNotAvailable
 		}
@@ -590,7 +593,7 @@ func (s *Service) ResolveVerification(envelope commandmodel.VerificationEnvelope
 	attempt.Status = decision.AttemptFinal
 	transition(intent, decision.IntentFinal, decision.Reason, "command-verifier", now, attempt.ID, result.EvidenceID)
 	if event, notify := controlFailureEventFromDecision(*intent, decision.IntentFinal, decision.Reason, result.FailureCode, now); notify {
-		notifyControlFailureAsync(s.failureNotifier, event)
+		s.failureQueue.enqueue(s.failureNotifier, event)
 	}
 	return nil
 }

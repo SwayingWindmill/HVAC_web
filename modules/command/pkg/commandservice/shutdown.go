@@ -157,7 +157,7 @@ func (a *ControlAuthority) ExecuteSiteControlShutdown(
 			return SiteControlShutdownResponse{}, cmdErr
 		}
 		submittedIDs = append(submittedIDs, cmdID)
-		notifyControlFailureAsync(a.failureNotifier, ControlFailureEvent{
+		a.failureQueue.enqueue(a.failureNotifier, ControlFailureEvent{
 			Kind:       "EMERGENCY_DO_RELEASE",
 			TenantID:   operator.TenantID,
 			SiteID:     siteID,
@@ -483,7 +483,7 @@ func (a *ControlAuthority) dispatchShutdownTarget(
 	idemKey := a.buildShutdownCommandIdempotencyKey(idemBase, target.point.ID)
 	res, err := a.mintGrantAndSubmit(
 		ctx, operator, target.device.SiteID, target.device.ID, target.point.ID,
-		idemKey, target.capability, target.profile, commandmodel.CommandParameters{},
+		idemKey, "", target.capability, target.profile, commandmodel.CommandParameters{},
 		target.feedbackPoint.PointCode, precondMode, cleanBypassReason, obs,
 	)
 	if err != nil {

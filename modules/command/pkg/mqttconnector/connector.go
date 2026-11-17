@@ -20,6 +20,7 @@ import (
 	"github.com/eclipse/paho.golang/autopaho"
 	"github.com/eclipse/paho.golang/paho"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/modules/command/pkg/commandservice"
 )
 
@@ -95,6 +96,7 @@ func buildCommandEnvelope(
 		SchemaVersion:  commandSchemaVersion,
 		MessageID:      envelope.AttemptID,
 		CommandID:      envelope.CommandID,
+		TraceID:        commandmodel.NormalizeTraceID(envelope.TraceID),
 		IssuedAt:       now.UnixMilli(),
 		ExpireAt:       expireAt.UnixMilli(),
 		DeviceID:       externalDeviceID,
@@ -475,6 +477,7 @@ func (connector *Connector) runReplyRecoveryLoop(ctx context.Context, interval t
 	if connector.recoveryDone != nil {
 		defer close(connector.recoveryDone)
 	}
+	defer observability.Recover(nil, nil, "command.mqtt_reply_recovery_loop")
 	if interval <= 0 {
 		interval = defaultReplyRecoveryInterval
 	}
@@ -491,6 +494,7 @@ func (connector *Connector) runReplyRecoveryLoop(ctx context.Context, interval t
 }
 
 func (connector *Connector) recoverReplies(ctx context.Context) {
+	defer observability.Recover(nil, nil, "command.mqtt_reply_recovery")
 	if connector.config.LateResultSink == nil {
 		return
 	}

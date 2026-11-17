@@ -153,7 +153,8 @@
         "modules/command/migrations/005_s11_edge_execution_evidence.sql",
         "modules/command/migrations/006_command_control_locks_and_sequence_capabilities.sql",
         "modules/command/migrations/007_schema_and_table_comments.sql",
-        "modules/command/migrations/008_command_precondition_mode.sql"
+        "modules/command/migrations/008_command_precondition_mode.sql",
+        "modules/command/migrations/command_intent_trace_context.sql"
       ]
     },
     {

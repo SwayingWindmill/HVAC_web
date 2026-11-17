@@ -223,6 +223,10 @@ func (h *OperatorHTTPHandler) handleCreateCommand(writer http.ResponseWriter, re
 	if strings.TrimSpace(input.IdempotencyKey) == "" {
 		input.IdempotencyKey = strings.TrimSpace(request.Header.Get("Idempotency-Key"))
 	}
+	input.TraceID = commandmodel.NormalizeTraceID(input.TraceID)
+	if input.TraceID == "" {
+		input.TraceID = traceIDFromHTTPRequest(request)
+	}
 	out, err := h.config.Authority.SubmitOperatorCommand(request.Context(), operator, input)
 	if err != nil {
 		writeControlError(writer, request, err)

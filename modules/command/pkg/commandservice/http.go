@@ -14,6 +14,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/commandauth"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
 const (
@@ -60,6 +61,7 @@ type internalCreateCommandRequest struct {
 	PointID              string                         `json:"pointId"`
 	PrincipalID          string                         `json:"principalId"`
 	IdempotencyKey       string                         `json:"idempotencyKey"`
+	TraceID              string                         `json:"traceId,omitempty"`
 	Capability           commandmodel.Capability        `json:"capability"`
 	Parameters           commandmodel.CommandParameters `json:"parameters"`
 	VerificationPointKey string                         `json:"verificationPointKey"`
@@ -272,9 +274,13 @@ func (h *HTTPHandler) createCommand(writer http.ResponseWriter, request *http.Re
 		writeCommandProblem(writer, http.StatusForbidden, "COMMAND_GRANT_REJECTED", false)
 		return
 	}
+	traceID := commandmodel.NormalizeTraceID(input.TraceID)
+	if traceID == "" {
+		traceID = traceIDFromHTTPRequest(request)
+	}
 	result, err := h.config.Authority.Submit(request.Context(), commandmodel.SubmitRequest{
 		TenantID: input.TenantID, SiteID: input.SiteID, DeviceID: input.DeviceID, PointID: input.PointID,
-		PrincipalID: input.PrincipalID, IdempotencyKey: input.IdempotencyKey,
+		PrincipalID: input.PrincipalID, IdempotencyKey: input.IdempotencyKey, TraceID: traceID,
 		Capability: input.Capability, Parameters: cloneParameters(input.Parameters), VerificationPointKey: input.VerificationPointKey,
 		PreconditionMode: input.PreconditionMode, BypassReason: input.BypassReason,
 		CurrentState: commandmodel.CurrentStateEvidence{
@@ -646,4 +652,101 @@ func containsCommandScope(scopes []string, expected string) bool {
 		}
 	}
 	return false
+}
+
+func traceIDFromHTTPRequest(request *http.Request) string {
+	if request == nil {
+		return ""
+	}
+	if traceID := commandmodel.NormalizeTraceID(observability.TraceID(request.Context())); traceID != "" {
+		return traceID
+	}
+	spanCtx, ok := observability.ParseTraceparent(request.Header.Get("traceparent"), "")
+	if !ok {
+		return ""
+	}
+	return commandmodel.NormalizeTraceID(spanCtx.TraceID)
+}
+
+func commandItemObservabilityRoute(remainder string) string {
+	switch {
+	case strings.HasSuffix(remainder, "/approve"):
+		commandID := strings.TrimSuffix(remainder, "/approve")
+		if commandID != "" && !strings.Contains(commandID, "/") {
+			return "commands.approve"
+		}
+	case strings.HasSuffix(remainder, "/reconcile"):
+		commandID := strings.TrimSuffix(remainder, "/reconcile")
+		if commandID != "" && !strings.Contains(commandID, "/") {
+			return "commands.reconcile"
+		}
+	case strings.HasSuffix(remainder, "/cancel"):
+		commandID := strings.TrimSuffix(remainder, "/cancel")
+		if commandID != "" && !strings.Contains(commandID, "/") {
+			return "commands.cancel"
+		}
+	default:
+		if !strings.Contains(remainder, "/") {
+			return "commands.get"
+		}
+	}
+	return "unknown"
+}
+
+// ObservabilityRoute maps Command Service internal HTTP endpoints onto the bounded route label catalog.
+func ObservabilityRoute(request *http.Request) string {
+	if request == nil {
+		return "unknown"
+	}
+	path := request.URL.Path
+	switch path {
+	case InternalCommandsPath, InternalOperatorCommandsPath:
+		if request.Method == http.MethodGet {
+			return "commands.get"
+		}
+		if request.Method == http.MethodPost {
+			return "commands.create"
+		}
+		return "unknown"
+	case InternalCommandsCancelBatch, InternalCommandCancelRetiredPath:
+		return "commands.cancel"
+	case InternalDispatchClaimPath:
+		return "dispatch.claim"
+	case InternalDispatchResolvePath:
+		return "dispatch.resolve"
+	case InternalVerificationClaimPath:
+		return "verification.claim"
+	case InternalVerificationResolvePath:
+		return "verification.resolve"
+	case InternalConnectorPreparePath:
+		return "connector.prepare"
+	case InternalConnectorCompletePath:
+		return "connector.complete"
+	}
+	if remainder, ok := strings.CutPrefix(path, InternalCommandsPath+"/"); ok && remainder != "" {
+		return commandItemObservabilityRoute(remainder)
+	}
+	if remainder, ok := strings.CutPrefix(path, InternalOperatorCommandsPath+"/"); ok && remainder != "" {
+		return commandItemObservabilityRoute(remainder)
+	}
+	if remainder, ok := strings.CutPrefix(path, InternalOperatorPrefix+"/sites/"); ok {
+		segments := strings.Split(remainder, "/")
+		if len(segments) == 2 && segments[0] != "" {
+			switch segments[1] {
+			case "control-state":
+				return "control.state"
+			case "control-mode":
+				return "control.mode"
+			case "control-shutdown":
+				return "control.shutdown"
+			}
+		}
+	}
+	if remainder, ok := strings.CutPrefix(path, InternalOperatorPrefix+"/assets/"); ok {
+		segments := strings.Split(remainder, "/")
+		if len(segments) == 2 && segments[0] != "" && segments[1] == "control-lock" {
+			return "control.lock"
+		}
+	}
+	return "unknown"
 }

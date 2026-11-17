@@ -730,3 +730,121 @@ func TestCompleteRecoveredReplyPropagatesEvidenceStoreErrorInsteadOfOutcomeUnkno
 		t.Fatalf("healed attempts=%#v want=%s", intentHealed.Attempts, commandmodel.AttemptAcknowledged)
 	}
 }
+
+type panickingTenantsTransportState struct {
+	fakeTransportState
+}
+
+func (s *panickingTenantsTransportState) Tenants(context.Context) ([]string, error) {
+	panic("simulated transport failure")
+}
+
+func TestExecuteEmitsNormalizedTraceIDInMQTTEnvelope(t *testing.T) {
+	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	service := commandservice.New(func() time.Time { return now })
+	transport := &routeAndReplyTransportState{
+		fakeTransportState: fakeTransportState{correlations: make(map[string]commandmodel.CommandCorrelation)},
+		route:              commandmodel.DeviceRoute{GatewayID: "01900000-0000-7000-8000-000000000100", ExternalDeviceID: "CHILLER-01", BindingRevision: 1},
+	}
+	connector, err := NewOffline(Config{
+		TransportState: transport,
+		EvidenceStore:  &failingEvidenceStore{},
+		ReplyTimeout:   25 * time.Second,
+		Now:            func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	submitAndInspect := func(key, rawTraceID string) map[string]any {
+		t.Helper()
+		current := 23.0
+		sub, err := service.Submit(commandmodel.SubmitRequest{
+			TenantID: "tenant-1", SiteID: "site-1", DeviceID: "device-1", PointID: "point-1",
+			PrincipalID: "principal-1", IdempotencyKey: key, TraceID: rawTraceID,
+			Capability: commandmodel.CapabilitySetTemperatureSetpoint, Parameters: commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 24},
+			VerificationPointKey: "zone.temperature_setpoint",
+			CurrentState: commandmodel.CurrentStateEvidence{
+				EvaluationAvailability: "AVAILABLE", Presence: "ONLINE", Readiness: "CURRENT", Quality: "GOOD",
+				BusinessRevision: 17, CurrentValue: &current, ObservedAt: now,
+			},
+			Authorization: commandmodel.AuthorizationSnapshot{
+				GrantID: "grant-" + key, PolicyRevision: "command-policy-1", Purpose: commandmodel.AuthorizationCommandSubmit,
+				PrincipalID: "principal-1", TenantID: "tenant-1", SiteID: "site-1", DeviceID: "device-1",
+				Capability: commandmodel.CapabilitySetTemperatureSetpoint, MaximumRisk: commandmodel.RiskHigh,
+				CapabilityRevision: "capability:set-temperature-setpoint:v1", EmergencyRevocationRevision: 1,
+				IssuedAt: now.Add(-5 * time.Second), ExpiresAt: now.Add(25 * time.Second),
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		env, err := service.PrepareDispatch(sub.Intent.ID, "dispatcher-a", now.Add(time.Minute))
+		if err != nil {
+			t.Fatal(err)
+		}
+		env.LeaseOwner = "dispatcher-a"
+		env.LeaseUntil = now.Add(time.Minute)
+		var publishedPayload []byte
+		connector.publish = func(_ context.Context, pub *paho.Publish) (*paho.PublishResponse, error) {
+			publishedPayload = append([]byte(nil), pub.Payload...)
+			key := replyKey(env.CommandID, env.ExecutionFence)
+			connector.mu.Lock()
+			waiter := connector.waiters[key]
+			connector.mu.Unlock()
+			waiter <- commandmodel.CommandCorrelation{
+				Envelope: env, GatewayID: "01900000-0000-7000-8000-000000000100", ExternalDeviceID: "CHILLER-01",
+				State: commandmodel.CorrelationReplied, ReplyStatus: "EXECUTED", ReplyEventTime: now, RepliedAt: now,
+				EdgeExecution: &commandmodel.EdgeExecutionEvidence{
+					Requested: commandmodel.NumberScalar(24), Effective: func() *commandmodel.ScalarValue { v := commandmodel.NumberScalar(24); return &v }(),
+					Applied: func() *commandmodel.ScalarValue { v := commandmodel.NumberScalar(24); return &v }(),
+					WinnerControllerID: "cloud-command-intent", Cycle: 1,
+				},
+			}
+			return &paho.PublishResponse{}, nil
+		}
+		res, execErr := connector.Execute(context.Background(), env)
+		if execErr != nil {
+			t.Fatalf("Execute failed: %v", execErr)
+		}
+		if err := service.ResolveDispatch(env, res); err != nil {
+			t.Fatalf("ResolveDispatch failed: %v", err)
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal(publishedPayload, &decoded); err != nil {
+			t.Fatalf("decode MQTT payload failed: %v", err)
+		}
+		return decoded
+	}
+
+	withTrace := submitAndInspect("mqtt-trace-valid", " 4BF92F3577B34DA6A3CE929D0E0E4736 ")
+	if got, _ := withTrace["traceId"].(string); got != "4bf92f3577b34da6a3ce929d0e0e4736" {
+		t.Fatalf("MQTT payload traceId=%q, want 4bf92f3577b34da6a3ce929d0e0e4736", got)
+	}
+
+	withInvalidTrace := submitAndInspect("mqtt-trace-invalid", "00000000000000000000000000000000")
+	if _, exists := withInvalidTrace["traceId"]; exists {
+		t.Fatalf("expected invalid all-zero traceId to be omitted, got %#v", withInvalidTrace["traceId"])
+	}
+}
+
+func TestRecoverRepliesRecoversFromPanic(t *testing.T) {
+	service := commandservice.New(nil)
+	transport := &panickingTenantsTransportState{
+		fakeTransportState: fakeTransportState{correlations: make(map[string]commandmodel.CommandCorrelation)},
+	}
+	connector, err := NewOffline(Config{
+		TransportState: transport,
+		EvidenceStore:  &failingEvidenceStore{},
+		LateResultSink: fakeLateResultSink{service: service},
+		ReplyTimeout:   25 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connector.recoverReplies(context.Background())
+	if !connector.recoverMu.TryLock() {
+		t.Fatal("expected recoverMu to be unlocked after panic recovery")
+	}
+	connector.recoverMu.Unlock()
+}

@@ -13,6 +13,7 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/commandauth"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
 const (
@@ -52,7 +53,18 @@ type ControlAuthority struct {
 	commandGrantAudience   string
 	commandGrantUseChecker func(commandauth.GrantClaims) (commandauth.UseStatus, error)
 	failureNotifier        ControlFailureNotifier
+	failureQueue           controlFailureQueue
 	now                    func() time.Time
+}
+
+// Close drains queued control failure notifications before returning.
+func (a *ControlAuthority) Close() {
+	if a == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), controlFailureCloseTimeout)
+	defer cancel()
+	_ = a.failureQueue.Close(ctx)
 }
 
 func NewControlAuthority(config ControlAuthorityConfig) (*ControlAuthority, error) {
@@ -323,9 +335,13 @@ func (a *ControlAuthority) SubmitOperatorCommand(
 		return SubmitOperatorCommandOutput{}, commandStepUpError("High-risk commands require a 6-digit verificationCode from your authenticator app.")
 	}
 
+	traceID := commandmodel.NormalizeTraceID(input.TraceID)
+	if traceID == "" {
+		traceID = commandmodel.NormalizeTraceID(observability.TraceID(ctx))
+	}
 	submitted, err := a.mintGrantAndSubmit(
 		ctx, operator, asset.SiteID, target.device.ID, target.point.ID,
-		strings.TrimSpace(input.IdempotencyKey), target.capability, target.profile,
+		strings.TrimSpace(input.IdempotencyKey), traceID, target.capability, target.profile,
 		input.Parameters, target.feedbackPoint.PointCode,
 		commandmodel.PreconditionRequireCurrentState, "", targetObs,
 	)
@@ -805,7 +821,7 @@ func (a *ControlAuthority) PutAssetControlLock(
 func (a *ControlAuthority) mintGrantAndSubmit(
 	ctx context.Context,
 	operator OperatorIdentity,
-	siteID, deviceID, pointID, idempotencyKey string,
+	siteID, deviceID, pointID, idempotencyKey, traceID string,
 	capability commandmodel.Capability,
 	profile commandmodel.CapabilityProfile,
 	parameters commandmodel.CommandParameters,
@@ -837,6 +853,10 @@ func (a *ControlAuthority) mintGrantAndSubmit(
 			ObservedAt:             obs.ObservedAt,
 		}
 	}
+	normalizedTraceID := commandmodel.NormalizeTraceID(traceID)
+	if normalizedTraceID == "" {
+		normalizedTraceID = commandmodel.NormalizeTraceID(observability.TraceID(ctx))
+	}
 	res, err := a.store.Submit(ctx, commandmodel.SubmitRequest{
 		TenantID:             operator.TenantID,
 		SiteID:               siteID,
@@ -844,6 +864,7 @@ func (a *ControlAuthority) mintGrantAndSubmit(
 		PointID:              pointID,
 		PrincipalID:          claims.PrincipalID,
 		IdempotencyKey:       idempotencyKey,
+		TraceID:              normalizedTraceID,
 		Capability:           capability,
 		Parameters:           cloneParameters(parameters),
 		VerificationPointKey: verificationPointKey,
