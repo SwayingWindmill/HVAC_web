@@ -2,6 +2,9 @@ package connectivity
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"slices"
@@ -11,12 +14,15 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
-	uplinkPositiveTTL     = 30 * time.Second
-	uplinkNegativeTTL     = 5 * time.Second
-	uplinkCacheMaxEntries = 4096
+	uplinkPositiveTTL        = 30 * time.Second
+	uplinkNegativeTTL        = 5 * time.Second
+	credVerifyPositiveTTL    = 15 * time.Second
+	uplinkFlightQueryTimeout = 5 * time.Second
+	uplinkCacheMaxEntries    = 4096
 )
 
 type cacheEntry[T any] struct {
@@ -42,6 +48,15 @@ type pointCacheKey struct {
 	pointCode string
 }
 
+type credVerifyCacheKey struct {
+	gatewayID   string
+	fingerprint string
+}
+
+type credVerifyCacheResult struct {
+	gatewayID string
+}
+
 type uplinkCache struct {
 	mu            sync.Mutex
 	seq           uint64
@@ -50,6 +65,10 @@ type uplinkCache struct {
 	gateways      map[string]cacheEntry[gatewayLookupResult]
 	devices       map[deviceCacheKey]cacheEntry[string]
 	points        map[pointCacheKey]cacheEntry[*adapter.ResolvedPoint]
+	credVerify    map[credVerifyCacheKey]cacheEntry[credVerifyCacheResult]
+	inFlightKeys  map[string]map[string]int
+	sfGroup       singleflight.Group
+	quarantine    quarantineBurstCache
 }
 
 func (cache *uplinkCache) gatewayEpochLocked(gatewayID string) uint64 {
@@ -67,6 +86,87 @@ func (cache *uplinkCache) bumpGatewayEpochLocked(gatewayID string) {
 		clear(cache.gatewayEpochs)
 	}
 	cache.gatewayEpochs[norm]++
+}
+
+func (cache *uplinkCache) registerFlight(gatewayID, sfKey string) {
+	norm := strings.ToLower(strings.TrimSpace(gatewayID))
+	if norm == "" || sfKey == "" {
+		return
+	}
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if cache.inFlightKeys == nil {
+		cache.inFlightKeys = make(map[string]map[string]int)
+	}
+	keys := cache.inFlightKeys[norm]
+	if keys == nil {
+		keys = make(map[string]int)
+		cache.inFlightKeys[norm] = keys
+	}
+	keys[sfKey]++
+}
+
+func (cache *uplinkCache) unregisterFlight(gatewayID, sfKey string) {
+	norm := strings.ToLower(strings.TrimSpace(gatewayID))
+	if norm == "" || sfKey == "" {
+		return
+	}
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	keys := cache.inFlightKeys[norm]
+	if keys == nil {
+		return
+	}
+	if count := keys[sfKey]; count <= 1 {
+		delete(keys, sfKey)
+	} else {
+		keys[sfKey] = count - 1
+	}
+	if len(keys) == 0 {
+		delete(cache.inFlightKeys, norm)
+	}
+}
+
+func gatewayFlightKey(gatewayID string) string {
+	return "gw:" + strings.ToLower(strings.TrimSpace(gatewayID))
+}
+
+func deviceFlightKey(tenantID, gatewayID, sourceKey string) string {
+	return "dev:" + tenantID + "\x00" + strings.ToLower(strings.TrimSpace(gatewayID)) + "\x00" + sourceKey
+}
+
+func credFlightKey(gatewayID, fingerprint string) string {
+	return "cred:" + strings.ToLower(strings.TrimSpace(gatewayID)) + "\x00" + fingerprint
+}
+
+func bindingsFlightKey(tenantID, gatewayID string, queries []adapter.DevicePointQuery) string {
+	pairs := make([]string, 0, len(queries))
+	seen := make(map[string]struct{}, len(queries))
+	for _, query := range queries {
+		if query.SourceKey == "" {
+			continue
+		}
+		pair := query.SourceKey + "\x00" + query.PointCode
+		if _, dup := seen[pair]; dup {
+			continue
+		}
+		seen[pair] = struct{}{}
+		pairs = append(pairs, pair)
+	}
+	slices.Sort(pairs)
+	hasher := sha256.New()
+	var lenBuf [4]byte
+	writePart := func(s string) {
+		binary.BigEndian.PutUint32(lenBuf[:], uint32(len(s)))
+		_, _ = hasher.Write(lenBuf[:])
+		_, _ = hasher.Write([]byte(s))
+	}
+	writePart(tenantID)
+	writePart(strings.ToLower(strings.TrimSpace(gatewayID)))
+	for _, pair := range pairs {
+		writePart(pair)
+	}
+	return "bind:" + hex.EncodeToString(hasher.Sum(nil))
 }
 
 func cacheGetOrEpoch[K comparable, V any](cache *uplinkCache, entries map[K]cacheEntry[V], key K, now time.Time, gatewayID string) (V, bool, uint64) {
@@ -166,9 +266,23 @@ func cloneResolvedPoint(point *adapter.ResolvedPoint) *adapter.ResolvedPoint {
 	return &copied
 }
 
-// InvalidateGatewayCache removes cached identity and source-key entries for a
-// Gateway and advances its invalidation epoch so any concurrent read that started
-// before commit cannot repopulate stale entries.
+func cloneResolvedBindings(src adapter.ResolvedBindings) adapter.ResolvedBindings {
+	dst := adapter.ResolvedBindings{
+		Devices: make(map[string]string, len(src.Devices)),
+		Points:  make(map[string]*adapter.ResolvedPoint, len(src.Points)),
+	}
+	for k, v := range src.Devices {
+		dst.Devices[k] = v
+	}
+	for k, v := range src.Points {
+		dst.Points[k] = cloneResolvedPoint(v)
+	}
+	return dst
+}
+
+// InvalidateGatewayCache removes cached identity, credential verification, and source-key
+// entries for a Gateway and advances its invalidation epoch so any concurrent read that
+// started before commit cannot repopulate stale entries.
 func (store *Store) InvalidateGatewayCache(gatewayID string) {
 	if store == nil {
 		return
@@ -177,8 +291,9 @@ func (store *Store) InvalidateGatewayCache(gatewayID string) {
 	if trimmed == "" {
 		return
 	}
+	norm := strings.ToLower(trimmed)
+
 	store.cache.mu.Lock()
-	defer store.cache.mu.Unlock()
 	store.cache.bumpGatewayEpochLocked(trimmed)
 	for key := range store.cache.gateways {
 		if strings.EqualFold(key, trimmed) {
@@ -189,6 +304,24 @@ func (store *Store) InvalidateGatewayCache(gatewayID string) {
 		if strings.EqualFold(key.gatewayID, trimmed) {
 			delete(store.cache.devices, key)
 		}
+	}
+	for key := range store.cache.credVerify {
+		if strings.EqualFold(key.gatewayID, trimmed) {
+			delete(store.cache.credVerify, key)
+		}
+	}
+	var flightKeys []string
+	if keys := store.cache.inFlightKeys[norm]; len(keys) > 0 {
+		flightKeys = make([]string, 0, len(keys))
+		for k := range keys {
+			flightKeys = append(flightKeys, k)
+		}
+	}
+	store.cache.mu.Unlock()
+
+	store.cache.sfGroup.Forget(gatewayFlightKey(trimmed))
+	for _, k := range flightKeys {
+		store.cache.sfGroup.Forget(k)
 	}
 }
 
@@ -202,24 +335,52 @@ func (store *Store) resolveGatewayCachedWith(
 	uncached func(context.Context, string, time.Time) (adapter.Gateway, time.Time, error),
 ) (adapter.Gateway, error) {
 	now := store.clock().UTC()
-	cached, ok, epoch := cacheGetOrEpoch(&store.cache, store.cache.gateways, gatewayID, now, gatewayID)
+	cached, ok, _ := cacheGetOrEpoch(&store.cache, store.cache.gateways, gatewayID, now, gatewayID)
 	if ok {
 		return cached.gateway, cached.err
 	}
-	gateway, validUntil, err := uncached(ctx, gatewayID, now)
-	switch {
-	case err == nil:
-		expiresAt := now.Add(uplinkPositiveTTL)
-		if !validUntil.IsZero() && validUntil.Before(expiresAt) {
-			expiresAt = validUntil
-		}
-		cacheSetIfEpoch(&store.cache, &store.cache.gateways, gatewayID, gatewayLookupResult{gateway: gateway}, expiresAt, now, gatewayID, epoch)
-		return gateway, nil
-	case errors.Is(err, adapter.ErrGatewayUnknown), errors.Is(err, adapter.ErrGatewayCredentialInactive):
-		cacheSetIfEpoch(&store.cache, &store.cache.gateways, gatewayID, gatewayLookupResult{gateway: gateway, err: err}, now.Add(uplinkNegativeTTL), now, gatewayID, epoch)
-		return gateway, err
-	default:
+	if err := ctx.Err(); err != nil {
 		return adapter.Gateway{}, err
+	}
+
+	sfKey := gatewayFlightKey(gatewayID)
+	ch := store.cache.sfGroup.DoChan(sfKey, func() (any, error) {
+		store.cache.registerFlight(gatewayID, sfKey)
+		defer store.cache.unregisterFlight(gatewayID, sfKey)
+
+		flightNow := store.clock().UTC()
+		if hitVal, hit, epoch := cacheGetOrEpoch(&store.cache, store.cache.gateways, gatewayID, flightNow, gatewayID); hit {
+			return hitVal, nil
+		} else {
+			queryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), uplinkFlightQueryTimeout)
+			defer cancel()
+			gateway, validUntil, err := uncached(queryCtx, gatewayID, flightNow)
+			switch {
+			case err == nil:
+				expiresAt := flightNow.Add(uplinkPositiveTTL)
+				if !validUntil.IsZero() && validUntil.Before(expiresAt) {
+					expiresAt = validUntil
+				}
+				cacheSetIfEpoch(&store.cache, &store.cache.gateways, gatewayID, gatewayLookupResult{gateway: gateway}, expiresAt, flightNow, gatewayID, epoch)
+				return gatewayLookupResult{gateway: gateway}, nil
+			case errors.Is(err, adapter.ErrGatewayUnknown), errors.Is(err, adapter.ErrGatewayCredentialInactive):
+				cacheSetIfEpoch(&store.cache, &store.cache.gateways, gatewayID, gatewayLookupResult{gateway: gateway, err: err}, flightNow.Add(uplinkNegativeTTL), flightNow, gatewayID, epoch)
+				return gatewayLookupResult{gateway: gateway, err: err}, nil
+			default:
+				return gatewayLookupResult{}, err
+			}
+		}
+	})
+
+	select {
+	case <-ctx.Done():
+		return adapter.Gateway{}, ctx.Err()
+	case res := <-ch:
+		if res.Err != nil {
+			return adapter.Gateway{}, res.Err
+		}
+		out := res.Val.(gatewayLookupResult)
+		return out.gateway, out.err
 	}
 }
 
@@ -267,20 +428,47 @@ func (store *Store) resolveDeviceCached(
 ) (string, error) {
 	now := store.clock().UTC()
 	key := deviceCacheKey{tenantID: gateway.TenantID, gatewayID: gateway.ID, sourceKey: sourceKey}
-	cached, ok, epoch := cacheGetOrEpoch(&store.cache, store.cache.devices, key, now, gateway.ID)
+	cached, ok, _ := cacheGetOrEpoch(&store.cache, store.cache.devices, key, now, gateway.ID)
 	if ok {
 		return cached, nil
 	}
-	deviceID, err := uncached(ctx, gateway, sourceKey)
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	ttl := uplinkPositiveTTL
-	if deviceID == "" {
-		ttl = uplinkNegativeTTL
+
+	sfKey := deviceFlightKey(gateway.TenantID, gateway.ID, sourceKey)
+	ch := store.cache.sfGroup.DoChan(sfKey, func() (any, error) {
+		store.cache.registerFlight(gateway.ID, sfKey)
+		defer store.cache.unregisterFlight(gateway.ID, sfKey)
+
+		flightNow := store.clock().UTC()
+		if hitVal, hit, epoch := cacheGetOrEpoch(&store.cache, store.cache.devices, key, flightNow, gateway.ID); hit {
+			return hitVal, nil
+		} else {
+			queryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), uplinkFlightQueryTimeout)
+			defer cancel()
+			deviceID, err := uncached(queryCtx, gateway, sourceKey)
+			if err != nil {
+				return "", err
+			}
+			ttl := uplinkPositiveTTL
+			if deviceID == "" {
+				ttl = uplinkNegativeTTL
+			}
+			cacheSetIfEpoch(&store.cache, &store.cache.devices, key, deviceID, flightNow.Add(ttl), flightNow, gateway.ID, epoch)
+			return deviceID, nil
+		}
+	})
+
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case res := <-ch:
+		if res.Err != nil {
+			return "", res.Err
+		}
+		return res.Val.(string), nil
 	}
-	cacheSetIfEpoch(&store.cache, &store.cache.devices, key, deviceID, now.Add(ttl), now, gateway.ID, epoch)
-	return deviceID, nil
 }
 
 type resolvedPointTarget struct {
@@ -300,38 +488,21 @@ func (store *Store) resolveBindingsCached(ctx context.Context, gateway adapter.G
 	return store.resolveBindingsCachedWith(ctx, gateway, queries, store.resolveBindingsUncached)
 }
 
-func (store *Store) resolveBindingsCachedWith(
-	ctx context.Context,
+func (store *Store) readCachedBindingsLocked(
 	gateway adapter.Gateway,
 	queries []adapter.DevicePointQuery,
-	uncached bindingsBatchUncachedFn,
-) (adapter.ResolvedBindings, error) {
+	uniqueSourceKeys []string,
+	now time.Time,
+) (adapter.ResolvedBindings, []string, []resolvedPointTarget, uint64) {
 	result := adapter.ResolvedBindings{
 		Devices: make(map[string]string),
 		Points:  make(map[string]*adapter.ResolvedPoint),
 	}
-	uniqueSourceKeys := make([]string, 0, len(queries))
-	sourceKeySeen := make(map[string]struct{}, len(queries))
-	for _, query := range queries {
-		if query.SourceKey == "" {
-			continue
-		}
-		if _, dup := sourceKeySeen[query.SourceKey]; !dup {
-			sourceKeySeen[query.SourceKey] = struct{}{}
-			uniqueSourceKeys = append(uniqueSourceKeys, query.SourceKey)
-		}
-	}
-	if len(uniqueSourceKeys) == 0 {
-		return result, nil
-	}
-
-	now := store.clock().UTC()
 	cachedDevices := make(map[string]string, len(uniqueSourceKeys))
 	var missingSourceKeys []string
 	var missingPointTargets []resolvedPointTarget
 	pointTargetSeen := make(map[resolvedPointTarget]struct{}, len(queries))
 
-	store.cache.mu.Lock()
 	epoch := store.cache.gatewayEpochLocked(gateway.ID)
 	for _, sourceKey := range uniqueSourceKeys {
 		key := deviceCacheKey{tenantID: gateway.TenantID, gatewayID: gateway.ID, sourceKey: sourceKey}
@@ -375,55 +546,115 @@ func (store *Store) resolveBindingsCachedWith(
 			missingPointTargets = append(missingPointTargets, target)
 		}
 	}
+	return result, missingSourceKeys, missingPointTargets, epoch
+}
+
+func (store *Store) resolveBindingsCachedWith(
+	ctx context.Context,
+	gateway adapter.Gateway,
+	queries []adapter.DevicePointQuery,
+	uncached bindingsBatchUncachedFn,
+) (adapter.ResolvedBindings, error) {
+	uniqueSourceKeys := make([]string, 0, len(queries))
+	sourceKeySeen := make(map[string]struct{}, len(queries))
+	for _, query := range queries {
+		if query.SourceKey == "" {
+			continue
+		}
+		if _, dup := sourceKeySeen[query.SourceKey]; !dup {
+			sourceKeySeen[query.SourceKey] = struct{}{}
+			uniqueSourceKeys = append(uniqueSourceKeys, query.SourceKey)
+		}
+	}
+	if len(uniqueSourceKeys) == 0 {
+		return adapter.ResolvedBindings{
+			Devices: make(map[string]string),
+			Points:  make(map[string]*adapter.ResolvedPoint),
+		}, nil
+	}
+
+	now := store.clock().UTC()
+	store.cache.mu.Lock()
+	result, missingSourceKeys, missingPointTargets, _ := store.readCachedBindingsLocked(gateway, queries, uniqueSourceKeys, now)
 	store.cache.mu.Unlock()
 
 	if len(missingSourceKeys) == 0 && len(missingPointTargets) == 0 {
 		return result, nil
 	}
-
-	fresh, queriedTargets, err := uncached(ctx, gateway, missingSourceKeys, missingPointTargets, queries)
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return adapter.ResolvedBindings{}, err
 	}
 
-	for _, sourceKey := range missingSourceKeys {
-		deviceID := fresh.Devices[sourceKey]
-		ttl := uplinkPositiveTTL
-		if deviceID != "" {
-			result.Devices[sourceKey] = deviceID
-		} else {
-			ttl = uplinkNegativeTTL
+	sfKey := bindingsFlightKey(gateway.TenantID, gateway.ID, queries)
+	ch := store.cache.sfGroup.DoChan(sfKey, func() (any, error) {
+		store.cache.registerFlight(gateway.ID, sfKey)
+		defer store.cache.unregisterFlight(gateway.ID, sfKey)
+
+		flightNow := store.clock().UTC()
+		store.cache.mu.Lock()
+		flightResult, flightMissingKeys, flightMissingTargets, epoch := store.readCachedBindingsLocked(gateway, queries, uniqueSourceKeys, flightNow)
+		store.cache.mu.Unlock()
+
+		if len(flightMissingKeys) == 0 && len(flightMissingTargets) == 0 {
+			return flightResult, nil
 		}
-		cacheSetIfEpoch(
-			&store.cache,
-			&store.cache.devices,
-			deviceCacheKey{tenantID: gateway.TenantID, gatewayID: gateway.ID, sourceKey: sourceKey},
-			deviceID,
-			now.Add(ttl),
-			now,
-			gateway.ID,
-			epoch,
-		)
-	}
-	for _, target := range queriedTargets {
-		bindingKey := adapter.PointBindingKey(target.deviceID, target.pointCode)
-		point := fresh.Points[bindingKey]
-		ttl := uplinkPositiveTTL
-		if point != nil {
-			result.Points[bindingKey] = cloneResolvedPoint(point)
-		} else {
-			ttl = uplinkNegativeTTL
+
+		queryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), uplinkFlightQueryTimeout)
+		defer cancel()
+		fresh, queriedTargets, err := uncached(queryCtx, gateway, flightMissingKeys, flightMissingTargets, queries)
+		if err != nil {
+			return adapter.ResolvedBindings{}, err
 		}
-		cacheSetIfEpoch(
-			&store.cache,
-			&store.cache.points,
-			pointCacheKey{tenantID: gateway.TenantID, deviceID: target.deviceID, pointCode: target.pointCode},
-			cloneResolvedPoint(point),
-			now.Add(ttl),
-			now,
-			gateway.ID,
-			epoch,
-		)
+
+		for _, sourceKey := range flightMissingKeys {
+			deviceID := fresh.Devices[sourceKey]
+			ttl := uplinkPositiveTTL
+			if deviceID != "" {
+				flightResult.Devices[sourceKey] = deviceID
+			} else {
+				ttl = uplinkNegativeTTL
+			}
+			cacheSetIfEpoch(
+				&store.cache,
+				&store.cache.devices,
+				deviceCacheKey{tenantID: gateway.TenantID, gatewayID: gateway.ID, sourceKey: sourceKey},
+				deviceID,
+				flightNow.Add(ttl),
+				flightNow,
+				gateway.ID,
+				epoch,
+			)
+		}
+		for _, target := range queriedTargets {
+			bindingKey := adapter.PointBindingKey(target.deviceID, target.pointCode)
+			point := fresh.Points[bindingKey]
+			ttl := uplinkPositiveTTL
+			if point != nil {
+				flightResult.Points[bindingKey] = cloneResolvedPoint(point)
+			} else {
+				ttl = uplinkNegativeTTL
+			}
+			cacheSetIfEpoch(
+				&store.cache,
+				&store.cache.points,
+				pointCacheKey{tenantID: gateway.TenantID, deviceID: target.deviceID, pointCode: target.pointCode},
+				cloneResolvedPoint(point),
+				flightNow.Add(ttl),
+				flightNow,
+				gateway.ID,
+				epoch,
+			)
+		}
+		return flightResult, nil
+	})
+
+	select {
+	case <-ctx.Done():
+		return adapter.ResolvedBindings{}, ctx.Err()
+	case res := <-ch:
+		if res.Err != nil {
+			return adapter.ResolvedBindings{}, res.Err
+		}
+		return cloneResolvedBindings(res.Val.(adapter.ResolvedBindings)), nil
 	}
-	return result, nil
 }

@@ -51,6 +51,7 @@ require (
 	github.com/quanlaihe/hvac-web/libs/telemetryhistorymodel v0.0.0
 	github.com/redis/go-redis/v9 v9.21.0
 	golang.org/x/crypto v0.54.0
+	golang.org/x/sync v0.22.0
 	google.golang.org/protobuf v1.36.12
 )
 
@@ -65,7 +66,6 @@ require (
 	github.com/simonvetter/modbus v1.6.4 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	golang.org/x/net v0.57.0 // indirect
-	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 )
