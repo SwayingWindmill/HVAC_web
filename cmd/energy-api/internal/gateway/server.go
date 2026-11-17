@@ -214,6 +214,9 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 		if h.serveGatewayConcentrator(writer, request) {
 			return
 		}
+		if h.serveGatewayConfigShadow(writer, request) {
+			return
+		}
 		if registryRoute, id, matches := matchPublicRegistryRoute(request.Method, request.URL.Path); matches {
 			dispatchRegistryRoute(h, writer, request, registryRoute, id)
 			return
@@ -748,6 +751,9 @@ func safeLogPath(path string) string {
 			return template
 		}
 		if template, matches := matchConcentratorPathTemplate(path); matches {
+			return template
+		}
+		if template, matches := matchConfigShadowPathTemplate(path); matches {
 			return template
 		}
 		if _, matches := matchSessionAuditPath(path); matches {

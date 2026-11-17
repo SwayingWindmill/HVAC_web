@@ -96,3 +96,21 @@ func TestWriteAtomicCRLFileReplacesTargetWithoutLeavingTempFiles(t *testing.T) {
 		t.Fatalf("unexpected temp files left behind: %+v", entries)
 	}
 }
+
+func TestGatewayOnlineTrackerTracksNormalizedPresence(t *testing.T) {
+	tracker := newGatewayOnlineTracker()
+	const gwUpper = "018F3E00-4000-7000-8000-000000000100"
+	const gwLower = "018f3e00-4000-7000-8000-000000000100"
+
+	if tracker.IsOnline(gwLower) {
+		t.Fatal("new tracker must report unknown gateway offline")
+	}
+	tracker.SetOnline(" "+gwUpper+" ", true)
+	if !tracker.IsOnline(gwLower) {
+		t.Fatal("expected normalized gateway online after SetOnline(true)")
+	}
+	tracker.SetOnline(gwLower, false)
+	if tracker.IsOnline(gwLower) {
+		t.Fatal("expected gateway offline after SetOnline(false)")
+	}
+}

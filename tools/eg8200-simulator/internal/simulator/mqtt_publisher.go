@@ -112,6 +112,7 @@ type MQTTPublisher struct {
 	connected      *atomic.Bool
 	eventSequence  *atomic.Uint64
 	session        *mqttSessionState
+	configShadow   *edgeConfigShadow
 }
 
 func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewayConfig, edgeRuntime *EdgeControlRuntime, metrics *observability.Registry) (*MQTTPublisher, error) {
@@ -146,6 +147,10 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 	connected := &atomic.Bool{}
 	eventSequence := &atomic.Uint64{}
 	session := &mqttSessionState{}
+	configShadow := newEdgeConfigShadow(filepath.Join(config.QueueDirectory, "config-shadow.v1.json"))
+	if err := configShadow.load(); err != nil {
+		return nil, err
+	}
 	_ = metrics.SetGauge("hvac_edge_mqtt_connected", "Whether the Edge publisher is connected to the MQTT broker.", nil, 0)
 	_ = metrics.SetGauge("hvac_edge_mqtt_queue_capacity_bytes", "Configured persistent MQTT queue capacity in bytes.", nil, float64(config.MaximumQueueBytes))
 	initialSessionID, initialSessionTime, err := session.next(time.Now().UTC())
@@ -225,6 +230,11 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 				flushContext, flushCancel := context.WithTimeout(ctx, 30*time.Second)
 				defer flushCancel()
 				_ = evidenceSpool.Flush(flushContext, manager)
+				if strings.TrimSpace(config.EnrollmentURL) != "" {
+					shadowContext, shadowCancel := context.WithTimeout(ctx, 15*time.Second)
+					defer shadowCancel()
+					_ = syncConfigShadowHTTP(shadowContext, config, configShadow, nil)
+				}
 			}()
 		},
 		ClientConfig: paho.ClientConfig{
@@ -251,6 +261,7 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 		connected:      connected,
 		eventSequence:  eventSequence,
 		session:        session,
+		configShadow:   configShadow,
 	}, nil
 }
 
@@ -301,6 +312,10 @@ func (publisher *MQTTPublisher) PublishMeasurements(ctx context.Context, measure
 	envelope, err := publisher.buildEnvelope(measurements)
 	if err != nil {
 		return err
+	}
+	if len(envelope.Payload.Devices) == 0 {
+		outcome = "throttled"
+		return nil
 	}
 	payload, err := json.Marshal(envelope)
 	if err != nil {
@@ -434,7 +449,6 @@ func (publisher *MQTTPublisher) buildEnvelope(measurements []Measurement) (mqttT
 	publishedAt := time.Time{}
 	var gatewaySequence uint64
 	for _, measurement := range measurements {
-		deviceID := measurement.DeviceID
 		point, ok := publisher.pointByKey[pointReference(measurement.DeviceID, measurement.TelemetryKey)]
 		if !ok {
 			return mqttTelemetryEnvelope{}, fmt.Errorf("MQTT point metadata is missing for %s/%s", measurement.DeviceID, measurement.TelemetryKey)
@@ -448,23 +462,36 @@ func (publisher *MQTTPublisher) buildEnvelope(measurements []Measurement) (mqttT
 		if !strings.EqualFold(strings.TrimSpace(measurement.Quality), "GOOD") {
 			quality = 1
 		}
-		batch := byDevice[deviceID]
-		batch.points = append(batch.points, mqttEnvelopePoint{
-			Code:    strings.TrimSpace(point.PointCode),
-			Value:   measurement.Value,
-			Quality: quality,
-			Unit:    unit,
-		})
-		if measurement.ObservedAt.After(batch.timestamp) {
-			batch.timestamp = measurement.ObservedAt
+		targets := publisher.configShadow.resolveAndFilterTargets(
+			measurement.DeviceID,
+			measurement.TelemetryKey,
+			strings.TrimSpace(point.PointCode),
+			measurement.ObservedAt,
+		)
+		for _, target := range targets {
+			batch := byDevice[target.DeviceID]
+			batch.points = append(batch.points, mqttEnvelopePoint{
+				Code:    target.PointCode,
+				Value:   measurement.Value,
+				Quality: quality,
+				Unit:    unit,
+			})
+			if measurement.ObservedAt.After(batch.timestamp) {
+				batch.timestamp = measurement.ObservedAt
+			}
+			byDevice[target.DeviceID] = batch
 		}
-		byDevice[deviceID] = batch
-		if measurement.ObservedAt.After(publishedAt) {
-			publishedAt = measurement.ObservedAt
+		if len(targets) > 0 {
+			if measurement.ObservedAt.After(publishedAt) {
+				publishedAt = measurement.ObservedAt
+			}
+			if measurement.Sequence > gatewaySequence {
+				gatewaySequence = measurement.Sequence
+			}
 		}
-		if measurement.Sequence > gatewaySequence {
-			gatewaySequence = measurement.Sequence
-		}
+	}
+	if len(byDevice) == 0 {
+		return mqttTelemetryEnvelope{}, nil
 	}
 	deviceIDs := make([]string, 0, len(byDevice))
 	for deviceID := range byDevice {

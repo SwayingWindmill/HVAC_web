@@ -9,6 +9,10 @@
 
 #### 新增
 
+- 新增网关与无线集中器配置影子同步链路（`infra/connectivity/postgres/init/gateway-config-shadows.sql`、`modules/connectivity`、`cmd/energy-api` 与 `tools/eg8200-simulator`；网关路由注册表 `route-ownership.v1.json` 升级至第 `53` 版）：
+  - 新增租户行级隔离表 `connectivity.gateway_desired_configs` 与 `connectivity.gateway_reported_configs`，提供运维读写接口 `GET/PUT /api/v1/gateways/{gatewayId}/config-shadow`（支持 `expectedDesiredRevision` 乐观并发锁、部分字段 `PUT` 局部更新、集中器 RS485 保护地址与重复 EID 校验、归一化顺序无关漂移对比 `UNCONFIGURED` / `PENDING_SYNC` / `SYNCED` / `DRIFTED`）及网关 mTLS 增量拉取与回执接口 `GET /gateway/v1/config-shadow`、`POST /gateway/v1/config-shadow/report`。
+  - 无线集中器参数与 EID 槽位写入新增 `stageIfOffline` 离线暂存能力与 `STAGED_SHADOW` 审计结果；写影子成功（针对在线网关）或收到网关 `GATEWAY_CONNECTED` 上线事件时按单网关串行异步对账并将集中器差异重放至边缘设备，离线换址保留当前总线地址待上电写入后再重键，未建基线的局部离线参数写入拒绝兜底默认值，失败时在影子中保留部分成功状态与漂移明细。
+  - `eg8200-simulator` 增加配置影子持久化状态与重连/定期增量同步（先成功上报回执再提交持久化修订号），并按生效影子中的 `pointMappings`（单源主点位与 `copyTargets` 复制映射）和 `samplingPolicies`（逐点与通配发布节流）生成并上送遥测信封。
 - 为资产与设备补充标签（`tags` jsonb + GIN 索引）、多维度/跨站点检索、模板只读接口与模板版本业务激活闭环（P1-3）：
   - 新增迁移 `registry-tags-and-template-read.sql`（`hvac_s1`）与 `command-template-capability-sync.sql`（`hvac_s3`）：为 `core_registry.assets` 与 `core_registry.devices` 增加最多 64 个键值对、序列化不超过 8192 字节的 `tags` 列与 GIN 索引；向运行时只读角色 `s1_core_runtime` 授予模板表（`registry_templates`、`registry_template_revisions`、`registry_template_assignments`）租户及站点行级隔离的只读权限；向 `s3_command_runtime` 授予 `command_runtime.capability_profiles` 写入权限。
   - 平台网关与契约新增跨站点检索接口 `GET /api/v1/assets`、`GET /api/v1/devices` 与站点内/跨站点多维过滤参数（`siteId`、`status`、`assetType`/`deviceType`、基于空间树递归查询的 `spaceId`、`templateKey`、`templateRevisionId` 与可重复的 `tag=key:value`/`tag=key`），并将过滤条件规范编码绑定到分页游标 `cursor` 防跨条件串页；同时新增模板只读接口 `GET /api/v1/templates`、`GET /api/v1/templates/revisions/{revisionId}` 与 `GET /api/v1/sites/{siteId}/template-assignments`，网关路由注册表 `route-ownership.v1.json` 升级至第 51 版。

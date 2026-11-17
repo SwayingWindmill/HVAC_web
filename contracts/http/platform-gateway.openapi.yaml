@@ -159,6 +159,48 @@
         }
       }
     },
+    "/api/v1/gateways/{gatewayId}/config-shadow": {
+      "get": {
+        "operationId": "getGatewayConfigShadow", "summary": "Read gateway configuration shadow, applied edge state, and drift details",
+        "x-owner": "connectivity", "x-public-ingress": "platform-gateway", "x-architecture-status": "ACTIVE", "x-shape-status": "READY",
+        "parameters": [
+          {"name": "gatewayId", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/UUIDv7"}}
+        ],
+        "responses": {
+          "200": {"description": "Gateway configuration shadow", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GatewayConfigShadow"}}}},
+          "400": {"$ref": "#/components/responses/Problem"},
+          "401": {"$ref": "#/components/responses/Problem"},
+          "403": {"$ref": "#/components/responses/Problem"},
+          "404": {"$ref": "#/components/responses/Problem"},
+          "409": {"$ref": "#/components/responses/Problem"},
+          "429": {"$ref": "#/components/responses/Problem"},
+          "502": {"$ref": "#/components/responses/Problem"},
+          "503": {"$ref": "#/components/responses/Problem"}
+        }
+      },
+      "put": {
+        "operationId": "updateGatewayConfigShadow", "summary": "Update desired gateway point mappings, sampling policies, and concentrator shadow",
+        "x-owner": "connectivity", "x-public-ingress": "platform-gateway", "x-architecture-status": "ACTIVE", "x-shape-status": "READY",
+        "parameters": [
+          {"name": "gatewayId", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/UUIDv7"}},
+          {"name": "X-CSRF-Token", "in": "header", "required": true, "schema": {"type": "string"}}
+        ],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GatewayConfigShadowUpdateRequest"}}}},
+        "responses": {
+          "200": {"description": "Updated desired configuration shadow", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GatewayConfigShadow"}}}},
+          "400": {"$ref": "#/components/responses/Problem"},
+          "401": {"$ref": "#/components/responses/Problem"},
+          "403": {"$ref": "#/components/responses/Problem"},
+          "404": {"$ref": "#/components/responses/Problem"},
+          "409": {"$ref": "#/components/responses/Problem"},
+          "413": {"$ref": "#/components/responses/Problem"},
+          "422": {"$ref": "#/components/responses/Problem"},
+          "429": {"$ref": "#/components/responses/Problem"},
+          "502": {"$ref": "#/components/responses/Problem"},
+          "503": {"$ref": "#/components/responses/Problem"}
+        }
+      }
+    },
     "/api/v1/health": {
       "get": {
         "operationId": "getHealth",
@@ -3204,7 +3246,7 @@
           "actorId": {"$ref": "#/components/schemas/UUIDv7"},
           "operation": {"type": "string", "enum": ["WRITE_PARAMS", "WRITE_EIDS"]},
           "requestId": {"$ref": "#/components/schemas/UUIDv7"},
-          "outcome": {"type": "string", "enum": ["APPLIED", "REJECTED", "FAILED", "TIMEOUT"]},
+          "outcome": {"type": "string", "enum": ["APPLIED", "REJECTED", "FAILED", "TIMEOUT", "STAGED_SHADOW"]},
           "reason": {"type": "string", "maxLength": 512},
           "diff": {"type": "object", "additionalProperties": true},
           "occurredAt": {"type": "string", "format": "date-time"}
@@ -3227,7 +3269,8 @@
         "required": ["params", "reason"],
         "properties": {
           "params": {"$ref": "#/components/schemas/ConcentratorParamsPatch"},
-          "reason": {"type": "string", "minLength": 1, "maxLength": 512}
+          "reason": {"type": "string", "minLength": 1, "maxLength": 512},
+          "stageIfOffline": {"type": "boolean"}
         }
       },
       "ConcentratorParamsWriteResult": {
@@ -3239,7 +3282,9 @@
           "requestId": {"$ref": "#/components/schemas/UUIDv7"},
           "writtenCount": {"type": "integer", "minimum": 0, "maximum": 14},
           "params": {"$ref": "#/components/schemas/ConcentratorParams"},
-          "audit": {"$ref": "#/components/schemas/ConcentratorAuditItem"}
+          "audit": {"$ref": "#/components/schemas/ConcentratorAuditItem"},
+          "staged": {"type": "boolean"},
+          "desiredRevision": {"type": "integer", "minimum": 1}
         }
       },
       "ConcentratorEidSlot": {
@@ -3266,7 +3311,8 @@
         "required": ["slots", "reason"],
         "properties": {
           "slots": {"type": "array", "minItems": 200, "maxItems": 200, "items": {"$ref": "#/components/schemas/ConcentratorEidSlot"}},
-          "reason": {"type": "string", "minLength": 1, "maxLength": 512}
+          "reason": {"type": "string", "minLength": 1, "maxLength": 512},
+          "stageIfOffline": {"type": "boolean"}
         }
       },
       "ConcentratorEidWriteResult": {
@@ -3279,7 +3325,107 @@
           "updatedSlots": {"type": "integer", "minimum": 0, "maximum": 200},
           "chunkCount": {"type": "integer", "minimum": 0, "maximum": 200},
           "slots": {"type": "array", "minItems": 200, "maxItems": 200, "items": {"$ref": "#/components/schemas/ConcentratorEidSlot"}},
-          "audit": {"$ref": "#/components/schemas/ConcentratorAuditItem"}
+          "audit": {"$ref": "#/components/schemas/ConcentratorAuditItem"},
+          "staged": {"type": "boolean"},
+          "desiredRevision": {"type": "integer", "minimum": 1}
+        }
+      },
+      "PointCopyTarget": {
+        "type": "object", "additionalProperties": false,
+        "required": ["deviceKey", "pointCode"],
+        "properties": {
+          "deviceKey": {"type": "string", "minLength": 1, "maxLength": 128},
+          "pointCode": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,127}$"}
+        }
+      },
+      "GatewayPointMapping": {
+        "type": "object", "additionalProperties": false,
+        "required": ["sourceChannel", "primaryDeviceKey", "primaryPointCode"],
+        "properties": {
+          "sourceChannel": {"type": "string", "minLength": 1, "maxLength": 128},
+          "primaryDeviceKey": {"type": "string", "minLength": 1, "maxLength": 128},
+          "primaryPointCode": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,127}$"},
+          "copyTargets": {"type": "array", "items": {"$ref": "#/components/schemas/PointCopyTarget"}}
+        }
+      },
+      "GatewaySamplingPolicy": {
+        "type": "object", "additionalProperties": false,
+        "required": ["deviceKey", "sampleIntervalMs", "publishIntervalMs"],
+        "properties": {
+          "deviceKey": {"type": "string", "minLength": 1, "maxLength": 128},
+          "pointCode": {"type": "string", "maxLength": 128},
+          "sampleIntervalMs": {"type": "integer", "minimum": 100, "maximum": 86400000},
+          "publishIntervalMs": {"type": "integer", "minimum": 100, "maximum": 86400000}
+        }
+      },
+      "ConcentratorUnitShadow": {
+        "type": "object", "additionalProperties": false,
+        "required": [],
+        "properties": {
+          "params": {"$ref": "#/components/schemas/ConcentratorParams"},
+          "eids": {"type": "array", "maxItems": 200, "items": {"$ref": "#/components/schemas/ConcentratorEidSlot"}}
+        }
+      },
+      "ConfigShadowDriftDetail": {
+        "type": "object", "additionalProperties": false,
+        "required": ["section", "target", "reason", "detail"],
+        "properties": {
+          "section": {"type": "string", "enum": ["POINT_MAPPINGS", "SAMPLING_POLICIES", "CONCENTRATOR"]},
+          "target": {"type": "string", "minLength": 1, "maxLength": 256},
+          "reason": {"type": "string", "enum": ["VALUE_MISMATCH", "MISSING_ON_EDGE", "UNEXPECTED_ON_EDGE", "EDGE_APPLY_FAILED"]},
+          "detail": {"type": "string", "minLength": 1, "maxLength": 512}
+        }
+      },
+      "GatewayDesiredConfig": {
+        "type": "object", "additionalProperties": false,
+        "required": ["desiredRevision", "pointMappings", "samplingPolicies", "concentratorConfigs", "updatedBy", "reason", "createdAt", "updatedAt"],
+        "properties": {
+          "desiredRevision": {"type": "integer", "minimum": 1},
+          "pointMappings": {"type": "array", "items": {"$ref": "#/components/schemas/GatewayPointMapping"}},
+          "samplingPolicies": {"type": "array", "items": {"$ref": "#/components/schemas/GatewaySamplingPolicy"}},
+          "concentratorConfigs": {"type": "object", "additionalProperties": {"$ref": "#/components/schemas/ConcentratorUnitShadow"}},
+          "updatedBy": {"$ref": "#/components/schemas/UUIDv7"},
+          "reason": {"type": "string", "minLength": 1, "maxLength": 1000},
+          "createdAt": {"type": "string", "format": "date-time"},
+          "updatedAt": {"type": "string", "format": "date-time"}
+        }
+      },
+      "GatewayReportedConfig": {
+        "type": "object", "additionalProperties": false,
+        "required": ["reportedRevision", "appliedStatus", "pointMappings", "samplingPolicies", "concentratorConfigs", "driftDetails", "reportedAt", "updatedAt"],
+        "properties": {
+          "reportedRevision": {"type": "integer", "minimum": 0},
+          "appliedStatus": {"type": "string", "enum": ["APPLIED", "PARTIAL", "REJECTED"]},
+          "pointMappings": {"type": "array", "items": {"$ref": "#/components/schemas/GatewayPointMapping"}},
+          "samplingPolicies": {"type": "array", "items": {"$ref": "#/components/schemas/GatewaySamplingPolicy"}},
+          "concentratorConfigs": {"type": "object", "additionalProperties": {"$ref": "#/components/schemas/ConcentratorUnitShadow"}},
+          "driftDetails": {"type": "array", "items": {"$ref": "#/components/schemas/ConfigShadowDriftDetail"}},
+          "errorMessage": {"type": ["string", "null"], "maxLength": 1024},
+          "reportedAt": {"type": "string", "format": "date-time"},
+          "updatedAt": {"type": "string", "format": "date-time"}
+        }
+      },
+      "GatewayConfigShadow": {
+        "type": "object", "additionalProperties": false,
+        "required": ["tenantId", "gatewayId", "syncStatus", "drift"],
+        "properties": {
+          "tenantId": {"$ref": "#/components/schemas/UUIDv7"},
+          "gatewayId": {"$ref": "#/components/schemas/UUIDv7"},
+          "syncStatus": {"type": "string", "enum": ["UNCONFIGURED", "PENDING_SYNC", "SYNCED", "DRIFTED"]},
+          "desired": {"$ref": "#/components/schemas/GatewayDesiredConfig"},
+          "reported": {"$ref": "#/components/schemas/GatewayReportedConfig"},
+          "drift": {"type": "array", "items": {"$ref": "#/components/schemas/ConfigShadowDriftDetail"}}
+        }
+      },
+      "GatewayConfigShadowUpdateRequest": {
+        "type": "object", "additionalProperties": false,
+        "required": ["reason"],
+        "properties": {
+          "expectedDesiredRevision": {"type": "integer", "minimum": 0},
+          "pointMappings": {"type": "array", "items": {"$ref": "#/components/schemas/GatewayPointMapping"}},
+          "samplingPolicies": {"type": "array", "items": {"$ref": "#/components/schemas/GatewaySamplingPolicy"}},
+          "concentratorConfigs": {"type": "object", "additionalProperties": {"$ref": "#/components/schemas/ConcentratorUnitShadow"}},
+          "reason": {"type": "string", "minLength": 1, "maxLength": 1000}
         }
       },
       "V212Meta": {

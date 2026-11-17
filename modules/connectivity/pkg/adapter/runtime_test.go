@@ -740,6 +740,9 @@ func TestRealBrokerInflightWindowIsolationWithStalledAndSheddingGateway(t *testi
 
 	second := broker.awaitConnection(t)
 	close(releaseA)
+	waitCondition(t, 2*time.Second, func() bool {
+		return runtime.Ready() && len(telemetry.accepted()) == 6
+	}, "stalled Gateway A queue drained and second session ready after release")
 	second.deliverGateway(t, testGatewayA, 7, 5, true)
 	second.awaitAcks(t, 7)
 
@@ -782,6 +785,9 @@ func TestRealBrokerClosesConnectionOnNonShedSpoolWriteError(t *testing.T) {
 		t.Fatal(err)
 	}
 	second := broker.awaitConnection(t)
+	waitCondition(t, 2*time.Second, func() bool {
+		return runtime.Ready()
+	}, "second session ready after reconnect")
 	second.deliverGateway(t, testGatewayB, 1, 100, true)
 	second.deliverGateway(t, testGatewayA, 2, 1, false)
 	second.awaitAcks(t, 1, 2)
