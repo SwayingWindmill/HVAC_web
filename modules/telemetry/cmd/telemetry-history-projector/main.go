@@ -52,7 +52,7 @@ func main() {
 	relay, err := telemetry.NewHistoryRelay(telemetry.HistoryRelayConfig{
 		Repository: repository,
 		Sink:       sink,
-		BatchSize:  integerEnv("TELEMETRY_HISTORY_BATCH_SIZE", 4096, 1, 4096),
+		BatchSize:  integerEnv("TELEMETRY_HISTORY_BATCH_SIZE", 4096, 1, 32768),
 		LeaseFor:   durationEnv("TELEMETRY_HISTORY_LEASE_DURATION", 30*time.Second, time.Second, 10*time.Minute),
 		RetryAfter: durationEnv("TELEMETRY_HISTORY_RETRY_DELAY", 5*time.Second, time.Second, time.Hour),
 	})

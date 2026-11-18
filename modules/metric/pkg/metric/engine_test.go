@@ -111,8 +111,8 @@ func (f *fakeSeries) InsertMetrics(_ context.Context, results []Result) error {
 	return nil
 }
 
-func (f *fakeSeries) HasMetricResult(_ context.Context, resultID string) (bool, error) {
-	return f.existing[resultID], nil
+func (f *fakeSeries) HasMetricResult(_ context.Context, result Result) (bool, error) {
+	return f.existing[result.ResultID], nil
 }
 
 type fakeLatest struct{ results []Result }

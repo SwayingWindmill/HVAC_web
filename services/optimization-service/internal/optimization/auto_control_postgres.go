@@ -1011,10 +1011,25 @@ func (reader *ClickHouseInputReader) ReadLiveAutoControlObservation(ctx context.
 		ChillersHealthy: true,
 	}
 
+	wetBulbCandidateKeys := []string{
+		"outdoor_wet_bulb",
+		"weather.ambient_wet_bulb_temperature",
+		"ambient_wet_bulb_temperature",
+		"cooling_tower.ambient_wet_bulb_temperature",
+	}
+	zoneKeys := query.effectiveZoneKeys()
+	allKeys := make([]string, 0, 1+len(zoneKeys)+len(wetBulbCandidateKeys))
+	if query.SupplyTemperatureKey != "" {
+		allKeys = append(allKeys, query.SupplyTemperatureKey)
+	}
+	allKeys = append(allKeys, zoneKeys...)
+	allKeys = append(allKeys, wetBulbCandidateKeys...)
+	useLive, liveResult, liveAmbiguous := reader.readLiveObservationsKeys(ctx, tenantID, siteID, atUTC, allKeys)
+
 	if query.SupplyTemperatureKey == "" {
 		result.SupplyErr = unavailable(ReasonSupplyTempMissing, "supplyTemperatureKey is missing")
 	} else {
-		supplyObs, supplyErr := reader.readTelemetry(ctx, query, query.SupplyTemperatureKey, ReasonSupplyTempMissing)
+		supplyObs, _, supplyErr := reader.readStateTelemetry(ctx, query, query.SupplyTemperatureKey, ReasonSupplyTempMissing, useLive, liveResult, liveAmbiguous)
 		if supplyErr != nil {
 			result.SupplyErr = supplyErr
 		} else if validErr := validateTelemetryEvidence(supplyObs, query.SupplyTemperatureKey, atUTC); validErr != nil {
@@ -1024,12 +1039,11 @@ func (reader *ClickHouseInputReader) ReadLiveAutoControlObservation(ctx context.
 		}
 	}
 
-	zoneKeys := query.effectiveZoneKeys()
 	if len(zoneKeys) == 0 {
 		result.ZoneErr = unavailable(ReasonZoneTempMissing, "no zoneTemperatureKeys configured")
 	} else {
 		for _, zoneKey := range zoneKeys {
-			obs, zoneErr := reader.readTelemetry(ctx, query, zoneKey, ReasonZoneTempMissing)
+			obs, _, zoneErr := reader.readStateTelemetry(ctx, query, zoneKey, ReasonZoneTempMissing, useLive, liveResult, liveAmbiguous)
 			if zoneErr != nil {
 				result.ZoneErr = zoneErr
 				break
@@ -1103,8 +1117,60 @@ func (reader *ClickHouseInputReader) ReadLiveAutoControlObservation(ctx context.
 			result.ChillerPowerKW = &chillerPowerSum
 		}
 	}
-	result.OutdoorWetBulbC = reader.readOptionalWetBulb(ctx, tenantID, siteID, atUTC)
+	if wetBulb, hit := selectLiveWetBulb(useLive, liveResult, liveAmbiguous, wetBulbCandidateKeys, atUTC); hit {
+		result.OutdoorWetBulbC = wetBulb
+	} else {
+		result.OutdoorWetBulbC = reader.readOptionalWetBulb(ctx, tenantID, siteID, atUTC)
+	}
 	return result, nil
+}
+
+func selectLiveWetBulb(
+	useLive bool,
+	liveResult OptimizationLiveObservationsResult,
+	liveAmbiguous map[string]struct{},
+	candidateKeys []string,
+	atUTC time.Time,
+) (*float64, bool) {
+	if !useLive {
+		return nil, false
+	}
+	for _, key := range candidateKeys {
+		if _, ambiguous := liveAmbiguous[key]; ambiguous {
+			continue
+		}
+		obs, found := liveResult.Observations[key]
+		if !found {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(obs.Quality), "GOOD") {
+			continue
+		}
+		val := obs.Value
+		if obs.ValueNumber != nil {
+			val = *obs.ValueNumber
+		}
+		if !finite(val) {
+			continue
+		}
+		sampledAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(obs.SampledAt))
+		if err != nil {
+			continue
+		}
+		sampledUTC := sampledAt.UTC()
+		if sampledUTC.After(atUTC) || atUTC.Sub(sampledUTC) > DefaultPreparationMaxTelemetryAge {
+			continue
+		}
+		if rawReceived := strings.TrimSpace(obs.ReceivedAt); rawReceived != "" {
+			receivedAt, err := time.Parse(time.RFC3339Nano, rawReceived)
+			if err != nil || receivedAt.UTC().After(atUTC) {
+				continue
+			}
+		}
+		valCopy := val
+		return &valCopy, true
+	}
+	return nil, false
 }
 
 func (reader *ClickHouseInputReader) readOptionalWetBulb(ctx context.Context, tenantID, siteID string, atUTC time.Time) *float64 {

@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/modules/telemetry/pkg/telemetryapi"
 )
 
 type stubLiveObservationReader struct {
@@ -42,13 +44,15 @@ func (stub *stubLiveObservationReader) snapshotRequests() []OptimizationLiveObse
 
 type fakeLiveObservationStore struct {
 	fakeSnapshotStore
-	resolved       map[string]resolvedNumericSitePoint
-	ambiguousKeys  []string
-	resolveErr     error
-	latestByPoint  map[string]OptimizationLiveObservation
-	readLatestErr  error
-	resolveCalls   int
-	readPointCalls [][]string
+	resolved        map[string]resolvedNumericSitePoint
+	ambiguousKeys   []string
+	resolveErr      error
+	latestByPoint   map[string]OptimizationLiveObservation
+	latestByDevice  map[string]map[string]OptimizationLiveObservation
+	readLatestErr   error
+	resolveCalls    int
+	readPointCalls  [][]string
+	readDeviceCalls [][]string
 }
 
 func (fake *fakeLiveObservationStore) ResolveNumericSitePoints(_ context.Context, _, _ string, _ []string) (map[string]resolvedNumericSitePoint, []string, error) {
@@ -72,6 +76,20 @@ func (fake *fakeLiveObservationStore) ReadLatestNumericObservations(_ context.Co
 	for _, id := range pointIDs {
 		if obs, ok := fake.latestByPoint[id]; ok {
 			out = append(out, obs)
+		}
+	}
+	return out, nil
+}
+
+func (fake *fakeLiveObservationStore) ReadLatestDeviceObservations(_ context.Context, _, _ string, deviceIDs []string) (map[string]map[string]OptimizationLiveObservation, error) {
+	fake.readDeviceCalls = append(fake.readDeviceCalls, append([]string(nil), deviceIDs...))
+	if fake.readLatestErr != nil {
+		return nil, fake.readLatestErr
+	}
+	out := make(map[string]map[string]OptimizationLiveObservation, len(deviceIDs))
+	for _, id := range deviceIDs {
+		if obs, ok := fake.latestByDevice[id]; ok {
+			out[id] = obs
 		}
 	}
 	return out, nil
@@ -329,5 +347,109 @@ func TestPostgresStoreLiveObservationNilGuards(t *testing.T) {
 	}
 	if _, err := nilStore.ReadLatestNumericObservations(t.Context(), tenantA, siteA, []string{deviceA}); err == nil {
 		t.Fatal("expected nil store error from ReadLatestNumericObservations")
+	}
+	if _, err := nilStore.ReadLatestDeviceObservations(t.Context(), tenantA, siteA, []string{deviceA}); err == nil {
+		t.Fatal("expected nil store error from ReadLatestDeviceObservations")
+	}
+}
+
+func TestOptimizationLiveObservationsDeviceReadsRedisAndPostgresFallback(t *testing.T) {
+	now := time.Date(2026, 11, 18, 4, 0, 0, 0, time.UTC)
+	unitKW := "kW"
+	deviceB := "018f2e00-3000-7000-8000-000000000002"
+	runStr := "STOPPED"
+	valKW := 420.5
+
+	cache := &memoryLatestCache{
+		snapshot: telemetryapi.DeviceObservationSnapshot{
+			SchemaVersion:    1,
+			DeviceId:         telemetryapi.UUIDv7(deviceA),
+			TenantId:         telemetryapi.UUIDv7(tenantA),
+			SiteId:           telemetryapi.UUIDv7(siteA),
+			BusinessRevision: 10,
+			EvaluatedAt:      telemetryapi.Instant(now.Format(time.RFC3339Nano)),
+			Values: []telemetryapi.TelemetryKeyState{
+				{
+					Present: &telemetryapi.TelemetryPresentState{
+						Key:        "chw_load",
+						State:      "PRESENT",
+						Value:      json.RawMessage(`420.5`),
+						ValueType:  "NUMBER",
+						Unit:       &unitKW,
+						SampledAt:  telemetryapi.Instant(now.Add(-10 * time.Second).Format(time.RFC3339Nano)),
+						ReceivedAt: telemetryapi.Instant(now.Add(-9 * time.Second).Format(time.RFC3339Nano)),
+						Quality:    "GOOD",
+					},
+				},
+				{
+					Present: &telemetryapi.TelemetryPresentState{
+						Key:        "running",
+						State:      "PRESENT",
+						Value:      json.RawMessage(`true`),
+						ValueType:  "BOOLEAN",
+						SampledAt:  telemetryapi.Instant(now.Add(-10 * time.Second).Format(time.RFC3339Nano)),
+						ReceivedAt: telemetryapi.Instant(now.Add(-9 * time.Second).Format(time.RFC3339Nano)),
+						Quality:    "GOOD",
+					},
+				},
+			},
+		},
+	}
+
+	store := &fakeLiveObservationStore{
+		latestByDevice: map[string]map[string]OptimizationLiveObservation{
+			deviceB: {
+				"chiller.run_state": {
+					DeviceID:     deviceB,
+					TelemetryKey: "chiller.run_state",
+					ValueType:    "STRING",
+					ValueString:  &runStr,
+					Quality:      "GOOD",
+					SampledAt:    now.Add(-20 * time.Second).Format(time.RFC3339Nano),
+					ReceivedAt:   now.Add(-19 * time.Second).Format(time.RFC3339Nano),
+				},
+			},
+		},
+	}
+
+	handler := NewHandler(ServerConfig{
+		Store:       store,
+		LatestCache: cache,
+	})
+
+	badReq := httptest.NewRequest(http.MethodPost, InternalOptimizationLiveObservationsPath, bytes.NewBufferString(`{"tenantId":"`+tenantA+`","siteId":"`+siteA+`","deviceIds":["not-a-uuid"]}`))
+	badReq.Header.Set("Content-Type", "application/json")
+	badReq.TLS = verifiedTLSState(DefaultOptimizationServiceSPIFFE)
+	badRec := httptest.NewRecorder()
+	handler.ServeHTTP(badRec, badReq)
+	if badRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid deviceId, got %d body=%s", badRec.Code, badRec.Body.String())
+	}
+
+	body := `{"tenantId":"` + tenantA + `","siteId":"` + siteA + `","deviceIds":["` + strings.ToUpper(deviceA) + `","` + deviceB + `","` + deviceA + `"]}`
+	req := httptest.NewRequest(http.MethodPost, InternalOptimizationLiveObservationsPath, bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.TLS = verifiedTLSState(DefaultOptimizationServiceSPIFFE)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp OptimizationLiveObservationsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if got := resp.DeviceObservations[deviceA]["chw_load"]; got.ValueNumber == nil || *got.ValueNumber != valKW || got.Unit != "kW" {
+		t.Fatalf("expected Redis NUMBER hit on deviceA, got %+v", got)
+	}
+	if got := resp.DeviceObservations[deviceA]["running"]; got.ValueBoolean == nil || !*got.ValueBoolean {
+		t.Fatalf("expected Redis BOOLEAN hit on deviceA, got %+v", got)
+	}
+	if got := resp.DeviceObservations[deviceB]["chiller.run_state"]; got.ValueString == nil || *got.ValueString != "STOPPED" {
+		t.Fatalf("expected PG STRING fallback on deviceB, got %+v", got)
+	}
+	if len(store.readDeviceCalls) != 1 || !slices.Equal(store.readDeviceCalls[0], []string{deviceB}) {
+		t.Fatalf("expected PG fallback only for Redis-missed deviceB, got %+v", store.readDeviceCalls)
 	}
 }

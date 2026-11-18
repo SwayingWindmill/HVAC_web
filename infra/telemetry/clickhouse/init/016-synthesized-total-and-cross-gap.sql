@@ -34,7 +34,7 @@ SELECT tenant_id, site_id, point_id, device_id, meter_name, ordinal
 FROM analytics.site_total_submeters FINAL
 WHERE (tenant_id, site_id, generation) IN (
   SELECT tenant_id, site_id, max(generation)
-  FROM analytics.site_total_submeter_syncs
+  FROM analytics.site_total_submeter_syncs FINAL
   GROUP BY tenant_id, site_id
   HAVING argMax(synthesized, generation) = 1
 );

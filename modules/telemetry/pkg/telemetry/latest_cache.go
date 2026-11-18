@@ -118,11 +118,16 @@ type OptimizationLiveObservation struct {
 	ReceivedAt      string   `json:"receivedAt"`
 	HealthAt        string   `json:"healthAt,omitempty"`
 	Value           float64  `json:"value"`
+	ValueType       string   `json:"valueType,omitempty"`
+	ValueNumber     *float64 `json:"valueNumber,omitempty"`
+	ValueString     *string  `json:"valueString,omitempty"`
+	ValueBoolean    *bool    `json:"valueBoolean,omitempty"`
 	Unit            string   `json:"unit"`
 	Quality         string   `json:"quality"`
 	QualityReasons  []string `json:"qualityReasons"`
 	HealthStatus    string   `json:"healthStatus,omitempty"`
 	HealthReasons   []string `json:"healthReasons,omitempty"`
+	SourceID        string   `json:"sourceId,omitempty"`
 	SourceEventID   string   `json:"sourceEventId"`
 	SourcePartition string   `json:"sourcePartition"`
 	SourceOffset    uint64   `json:"sourceOffset"`

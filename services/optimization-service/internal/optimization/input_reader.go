@@ -131,16 +131,25 @@ func (reader *ClickHouseInputReader) readLiveObservationsBatch(
 	query OptimizationStateQuery,
 	zoneKeys []string,
 ) (bool, OptimizationLiveObservationsResult, map[string]struct{}) {
-	if reader.liveObservations == nil {
-		return false, OptimizationLiveObservationsResult{}, nil
-	}
-	if reader.now().UTC().Sub(query.At.UTC()) > DefaultPreparationMaxTelemetryAge {
-		return false, OptimizationLiveObservationsResult{}, nil
-	}
 	keys := make([]string, 0, 1+len(zoneKeys))
 	keys = append(keys, query.SupplyTemperatureKey)
 	keys = append(keys, zoneKeys...)
-	liveResult, err := reader.liveObservations.ReadLiveObservations(ctx, query.TenantID, query.SiteID, keys)
+	return reader.readLiveObservationsKeys(ctx, query.TenantID, query.SiteID, query.At, keys)
+}
+
+func (reader *ClickHouseInputReader) readLiveObservationsKeys(
+	ctx context.Context,
+	tenantID, siteID string,
+	at time.Time,
+	keys []string,
+) (bool, OptimizationLiveObservationsResult, map[string]struct{}) {
+	if reader.liveObservations == nil {
+		return false, OptimizationLiveObservationsResult{}, nil
+	}
+	if reader.now().UTC().Sub(at.UTC()) > DefaultPreparationMaxTelemetryAge {
+		return false, OptimizationLiveObservationsResult{}, nil
+	}
+	liveResult, err := reader.liveObservations.ReadLiveObservations(ctx, tenantID, siteID, keys)
 	if err != nil {
 		return false, OptimizationLiveObservationsResult{}, nil
 	}

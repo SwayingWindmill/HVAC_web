@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -38,9 +39,18 @@ func TestClickHouseRetentionPrunerTieredDefaultsAndLegalHolds(t *testing.T) {
 			return
 		}
 		body, _ := io.ReadAll(request.Body)
+		sql := string(body)
+		switch {
+		case strings.HasPrefix(sql, "SELECT count() FROM system.mutations"):
+			_, _ = io.WriteString(writer, "0\n")
+			return
+		case strings.HasPrefix(sql, "SELECT 1 FROM "):
+			_, _ = io.WriteString(writer, "1\n")
+			return
+		}
 		mutex.Lock()
 		calls = append(calls, recordedClickHouseRetentionCall{
-			SQL:    string(body),
+			SQL:    sql,
 			Params: request.URL.Query(),
 		})
 		mutex.Unlock()
@@ -69,13 +79,13 @@ func TestClickHouseRetentionPrunerTieredDefaultsAndLegalHolds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.SubmittedTables) != 8 {
+	if len(result.SubmittedTables) != 5 {
 		t.Fatalf("submitted tables=%v", result.SubmittedTables)
 	}
 
 	mutex.Lock()
 	defer mutex.Unlock()
-	if len(calls) != 8 {
+	if len(calls) != 5 {
 		t.Fatalf("call count=%d", len(calls))
 	}
 
@@ -90,23 +100,11 @@ func TestClickHouseRetentionPrunerTieredDefaultsAndLegalHolds(t *testing.T) {
 			nullableScope: true,
 		},
 		{
-			sqlPrefix:   "ALTER TABLE telemetry_history.numeric_1min_states DELETE WHERE bucket < {cutoff:DateTime('UTC')}",
-			expectedCut: now.Add(-365 * 24 * time.Hour).Format("2006-01-02 15:04:05"),
-		},
-		{
-			sqlPrefix:   "ALTER TABLE telemetry_history.numeric_15min_states DELETE WHERE bucket < {cutoff:DateTime('UTC')}",
-			expectedCut: now.Add(-1825 * 24 * time.Hour).Format("2006-01-02 15:04:05"),
-		},
-		{
 			sqlPrefix:   "ALTER TABLE telemetry_history.numeric_gauge_1min_states DELETE WHERE bucket < {cutoff:DateTime('UTC')}",
 			expectedCut: now.Add(-365 * 24 * time.Hour).Format("2006-01-02 15:04:05"),
 		},
 		{
 			sqlPrefix:   "ALTER TABLE telemetry_history.numeric_gauge_15min_states DELETE WHERE bucket < {cutoff:DateTime('UTC')}",
-			expectedCut: now.Add(-1825 * 24 * time.Hour).Format("2006-01-02 15:04:05"),
-		},
-		{
-			sqlPrefix:   "ALTER TABLE telemetry_history.numeric_hourly_states DELETE WHERE hour < {cutoff:DateTime('UTC')}",
 			expectedCut: now.Add(-1825 * 24 * time.Hour).Format("2006-01-02 15:04:05"),
 		},
 		{
@@ -275,6 +273,12 @@ func TestClickHouseRetentionPrunerExportsArchiveBeforeDeletesAndPropagatesLegalH
 		mu.Lock()
 		defer mu.Unlock()
 		switch {
+		case strings.HasPrefix(sql, "SELECT count() FROM system.mutations"):
+			_, _ = io.WriteString(writer, "0\n")
+			return
+		case strings.HasPrefix(sql, "SELECT 1 FROM "):
+			_, _ = io.WriteString(writer, "1\n")
+			return
 		case strings.HasPrefix(sql, "SELECT "):
 			if strings.Contains(sql, "FROM telemetry_history.observations") {
 				ops = append(ops, "EXPORT:telemetry_history.observations")
@@ -332,15 +336,15 @@ func TestClickHouseRetentionPrunerExportsArchiveBeforeDeletesAndPropagatesLegalH
 	if !slices.Equal(result.ArchivedTables, wantArchived) {
 		t.Fatalf("ArchivedTables=%v want %v", result.ArchivedTables, wantArchived)
 	}
-	if len(result.SubmittedTables) != 8 {
-		t.Fatalf("SubmittedTables=%v want 8 tables", result.SubmittedTables)
+	if len(result.SubmittedTables) != 5 {
+		t.Fatalf("SubmittedTables=%v want 5 tables", result.SubmittedTables)
 	}
 
 	mu.Lock()
 	gotOps := slices.Clone(ops)
 	mu.Unlock()
-	if len(gotOps) != 10 {
-		t.Fatalf("expected 2 exports + 8 deletes = 10 ops, got %v", gotOps)
+	if len(gotOps) != 7 {
+		t.Fatalf("expected 2 exports + 5 deletes = 7 ops, got %v", gotOps)
 	}
 	if gotOps[0] != "EXPORT:telemetry_history.observations" || gotOps[1] != "EXPORT:analytics.energy_interval_facts" {
 		t.Fatalf("exports must execute before all deletes, got %v", gotOps)
@@ -380,7 +384,12 @@ func TestClickHouseRetentionPrunerRecordsColdArchiveRunMetrics(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		body, _ := io.ReadAll(request.Body)
-		if strings.HasPrefix(string(body), "SELECT ") {
+		sql := string(body)
+		if strings.HasPrefix(sql, "SELECT count() FROM system.mutations") {
+			_, _ = io.WriteString(writer, "0\n")
+			return
+		}
+		if strings.HasPrefix(sql, "SELECT ") {
 			_, _ = io.WriteString(writer, "")
 			return
 		}
@@ -421,5 +430,163 @@ func TestClickHouseRetentionPrunerRecordsColdArchiveRunMetrics(t *testing.T) {
 		if !strings.Contains(body, needle) {
 			t.Fatalf("missing %q in /metrics output:\n%s", needle, body)
 		}
+	}
+}
+
+func TestClickHouseRetentionPrunerDropsWholeExpiredPartitionsWithoutLegalHolds(t *testing.T) {
+	now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	var mu sync.Mutex
+	var dropped []string
+	var deletes []string
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		sql := string(body)
+		params := request.URL.Query()
+		switch {
+		case strings.Contains(sql, "FROM system.parts"):
+			if params.Get("param_db") == "telemetry_history" && params.Get("param_table") == "observations" {
+				_, _ = io.WriteString(writer, "202604\n202605\n202606\n")
+				return
+			}
+			writer.WriteHeader(http.StatusOK)
+			return
+		case strings.Contains(sql, "FROM system.mutations"):
+			_, _ = io.WriteString(writer, "0\n")
+			return
+		case strings.HasPrefix(sql, "SELECT 1 FROM "):
+			if strings.Contains(sql, "telemetry_history.observations") {
+				_, _ = io.WriteString(writer, "1\n")
+				return
+			}
+			writer.WriteHeader(http.StatusOK)
+			return
+		case strings.Contains(sql, "DROP PARTITION ID"):
+			mu.Lock()
+			dropped = append(dropped, sql)
+			mu.Unlock()
+			writer.WriteHeader(http.StatusOK)
+			return
+		case strings.Contains(sql, "DELETE WHERE"):
+			mu.Lock()
+			deletes = append(deletes, sql)
+			mu.Unlock()
+			writer.WriteHeader(http.StatusOK)
+			return
+		default:
+			http.Error(writer, "unexpected sql", http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+
+	pruner, err := NewClickHouseRetentionPruner(ClickHouseRetentionConfig{
+		BaseURL:    server.URL,
+		HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := pruner.Prune(t.Context(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDropped := []string{"telemetry_history.observations:202604"}
+	if !slices.Equal(result.DroppedPartitions, wantDropped) {
+		t.Fatalf("DroppedPartitions=%v want %v", result.DroppedPartitions, wantDropped)
+	}
+	if len(dropped) != 1 || dropped[0] != "ALTER TABLE telemetry_history.observations DROP PARTITION ID '202604'" {
+		t.Fatalf("dropped=%v", dropped)
+	}
+	if len(deletes) != 1 || !strings.HasPrefix(deletes[0], "ALTER TABLE telemetry_history.observations DELETE WHERE") {
+		t.Fatalf("expected tail delete only on observations, got %v", deletes)
+	}
+}
+
+func TestClickHouseRetentionPrunerGovernsMutationsExistenceAndCooldown(t *testing.T) {
+	now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	var activeMutations atomic.Int64
+	activeMutations.Store(1)
+	var obsHasRows atomic.Bool
+	obsHasRows.Store(false)
+
+	var mu sync.Mutex
+	var existsChecks int
+	var deleteCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		sql := string(body)
+		params := request.URL.Query()
+		switch {
+		case strings.Contains(sql, "FROM system.parts"):
+			writer.WriteHeader(http.StatusOK)
+		case strings.Contains(sql, "FROM system.mutations"):
+			if params.Get("param_table") == "observations" {
+				_, _ = io.WriteString(writer, strconv.FormatInt(activeMutations.Load(), 10)+"\n")
+				return
+			}
+			_, _ = io.WriteString(writer, "0\n")
+		case strings.HasPrefix(sql, "SELECT 1 FROM "):
+			mu.Lock()
+			existsChecks++
+			mu.Unlock()
+			if strings.Contains(sql, "telemetry_history.observations") && obsHasRows.Load() {
+				_, _ = io.WriteString(writer, "1\n")
+			}
+		case strings.Contains(sql, "DELETE WHERE"):
+			mu.Lock()
+			deleteCalls++
+			mu.Unlock()
+			writer.WriteHeader(http.StatusOK)
+		default:
+			http.Error(writer, "unexpected sql", http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+
+	pruner, err := NewClickHouseRetentionPruner(ClickHouseRetentionConfig{
+		BaseURL:    server.URL,
+		HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Pass 1: observations has active mutation (no existence check); other 4 tables have no rows (recorded cooldown).
+	if _, err := pruner.Prune(t.Context(), now); err != nil {
+		t.Fatal(err)
+	}
+	if existsChecks != 4 || deleteCalls != 0 {
+		t.Fatalf("pass 1 existsChecks=%d deleteCalls=%d want 4, 0", existsChecks, deleteCalls)
+	}
+
+	// Pass 2 (+1h): active mutation clears and observations now has tail rows; cooldown still blocks other 4 tables.
+	activeMutations.Store(0)
+	obsHasRows.Store(true)
+	res2, err := pruner.Prune(t.Context(), now.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(res2.SubmittedTables, []string{"telemetry_history.observations"}) {
+		t.Fatalf("pass 2 SubmittedTables=%v", res2.SubmittedTables)
+	}
+	if existsChecks != 5 || deleteCalls != 1 {
+		t.Fatalf("pass 2 existsChecks=%d deleteCalls=%d want 5, 1", existsChecks, deleteCalls)
+	}
+
+	// Pass 3 (+12h): all 5 tables remain inside the 24h cooldown window.
+	if _, err := pruner.Prune(t.Context(), now.Add(12*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if existsChecks != 5 || deleteCalls != 1 {
+		t.Fatalf("pass 3 existsChecks=%d deleteCalls=%d want 5, 1", existsChecks, deleteCalls)
+	}
+
+	// Pass 4 (+25h): cooldown elapsed for all tables.
+	res4, err := pruner.Prune(t.Context(), now.Add(25*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(res4.SubmittedTables, []string{"telemetry_history.observations"}) || deleteCalls != 2 {
+		t.Fatalf("pass 4 SubmittedTables=%v deleteCalls=%d", res4.SubmittedTables, deleteCalls)
 	}
 }

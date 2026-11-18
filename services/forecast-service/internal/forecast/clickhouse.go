@@ -111,9 +111,52 @@ func (sink *ClickHouseSink) InsertForecastPoints(ctx context.Context, points []P
 	return nil
 }
 
-func (sink *ClickHouseSink) ReadForecastJob(ctx context.Context, forecastJobID string) ([]Point, error) {
-	if !uuidPattern.MatchString(forecastJobID) {
-		return nil, errors.New("forecast job id must be a UUID")
+func forecastJobWhereClause(scope ForecastJobScope, qualifier string) (string, error) {
+	if !uuidPattern.MatchString(scope.ForecastJobID) {
+		return "", errors.New("forecast job id must be a UUID")
+	}
+	predicates := make([]string, 0, 7)
+	if scope.TenantID != "" {
+		if !uuidPattern.MatchString(scope.TenantID) {
+			return "", errors.New("forecast tenant id must be a UUID")
+		}
+		predicates = append(predicates, fmt.Sprintf("%stenant_id=toUUID('%s')", qualifier, scope.TenantID))
+	}
+	if scope.SiteID != "" {
+		if !uuidPattern.MatchString(scope.SiteID) {
+			return "", errors.New("forecast site id must be a UUID")
+		}
+		predicates = append(predicates, fmt.Sprintf("%ssite_id=toUUID('%s')", qualifier, scope.SiteID))
+	}
+	if scope.Target != "" {
+		if scope.Target != "SITE_LOAD" && scope.Target != "PV_GENERATION" {
+			return "", errors.New("forecast target is invalid")
+		}
+		predicates = append(predicates, fmt.Sprintf("%starget='%s'", qualifier, scope.Target))
+	}
+	if scope.SubjectType != "" {
+		if !identifier(strings.ToLower(scope.SubjectType)) {
+			return "", errors.New("forecast subject type is invalid")
+		}
+		predicates = append(predicates, fmt.Sprintf("%ssubject_type='%s'", qualifier, scope.SubjectType))
+	}
+	if scope.SubjectID != "" {
+		if !uuidPattern.MatchString(scope.SubjectID) {
+			return "", errors.New("forecast subject id must be a UUID")
+		}
+		predicates = append(predicates, fmt.Sprintf("%ssubject_id=toUUID('%s')", qualifier, scope.SubjectID))
+	}
+	if !scope.ForecastOrigin.IsZero() {
+		predicates = append(predicates, fmt.Sprintf("%sforecast_origin=parseDateTime64BestEffort('%s',3,'UTC')", qualifier, scope.ForecastOrigin.UTC().Format(time.RFC3339Nano)))
+	}
+	predicates = append(predicates, fmt.Sprintf("%sforecast_job_id=toUUID('%s')", qualifier, scope.ForecastJobID))
+	return strings.Join(predicates, " AND "), nil
+}
+
+func (sink *ClickHouseSink) ReadForecastJob(ctx context.Context, scope ForecastJobScope) ([]Point, error) {
+	where, err := forecastJobWhereClause(scope, "fact.")
+	if err != nil {
+		return nil, err
 	}
 	endpoint := *sink.baseURL
 	query := endpoint.Query()
@@ -124,7 +167,7 @@ func (sink *ClickHouseSink) ReadForecastJob(ctx context.Context, forecastJobID s
  toString(model_version_id) AS model_version_id,model_version,toString(feature_set_version_id) AS feature_set_version_id,feature_set_version,toString(input_snapshot_id) AS input_snapshot_id,
  toString(topology_version_id) AS topology_version_id,formatDateTime(forecast_origin,'%%FT%%TZ','UTC') AS forecast_origin,formatDateTime(forecast_for,'%%FT%%TZ','UTC') AS forecast_for,
  horizon_minutes,value,unit,lower_bound,upper_bound,quantile,quality,formatDateTime(generated_at,'%%FT%%TZ','UTC') AS generated_at
- FROM %s.%s AS fact WHERE fact.forecast_job_id=toUUID('%s') ORDER BY fact.forecast_for FORMAT JSONEachRow`, sink.database, sink.table, forecastJobID))
+ FROM %s.%s AS fact WHERE %s ORDER BY fact.forecast_for FORMAT JSONEachRow`, sink.database, sink.table, where))
 	endpoint.RawQuery = query.Encode()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
@@ -157,14 +200,18 @@ func (sink *ClickHouseSink) ReadForecastJob(ctx context.Context, forecastJobID s
 	return points, nil
 }
 
-func (sink *ClickHouseSink) HasForecastJob(ctx context.Context, forecastJobID string, expectedCount int) (bool, error) {
+func (sink *ClickHouseSink) HasForecastJob(ctx context.Context, scope ForecastJobScope, expectedCount int) (bool, error) {
 	if expectedCount <= 0 {
 		return false, errors.New("forecast expected result count must be positive")
+	}
+	where, err := forecastJobWhereClause(scope, "")
+	if err != nil {
+		return false, err
 	}
 	endpoint := *sink.baseURL
 	query := endpoint.Query()
 	query.Set("database", sink.database)
-	query.Set("query", fmt.Sprintf("SELECT count() FROM %s.%s WHERE forecast_job_id=toUUID('%s') FORMAT TabSeparated", sink.database, sink.table, strings.ReplaceAll(forecastJobID, "'", "''")))
+	query.Set("query", fmt.Sprintf("SELECT count() FROM %s.%s WHERE %s FORMAT TabSeparated", sink.database, sink.table, where))
 	endpoint.RawQuery = query.Encode()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {

@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS analytics.metric_result_facts (
   completeness Float64,
   calculation_run_id UUID,
   revision UInt64,
-  provenance String
+  provenance String,
+  INDEX result_id_bf result_id TYPE bloom_filter(0.01) GRANULARITY 1
 )
 ENGINE = MergeTree
 PARTITION BY toYYYYMM(period_start)
@@ -45,6 +46,8 @@ SETTINGS index_granularity = 8192,
 
 ALTER TABLE analytics.metric_result_facts
   MODIFY SETTING non_replicated_deduplication_window = 10000;
+ALTER TABLE analytics.metric_result_facts
+  ADD INDEX IF NOT EXISTS result_id_bf result_id TYPE bloom_filter(0.01) GRANULARITY 1;
 
 CREATE USER IF NOT EXISTS metric_engine_reader IDENTIFIED WITH no_password;
 CREATE USER IF NOT EXISTS metric_engine_writer IDENTIFIED WITH no_password;

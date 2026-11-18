@@ -5,14 +5,8 @@
 ALTER TABLE telemetry_history.observations MODIFY SETTING ttl_only_drop_parts = 1;
 ALTER TABLE telemetry_history.observations MODIFY TTL toDateTime(sampled_at) + INTERVAL 730 DAY DELETE;
 
-ALTER TABLE telemetry_history.numeric_1min_states MODIFY SETTING ttl_only_drop_parts = 1;
-ALTER TABLE telemetry_history.numeric_1min_states MODIFY TTL bucket + INTERVAL 730 DAY DELETE;
-
 ALTER TABLE telemetry_history.numeric_gauge_1min_states MODIFY SETTING ttl_only_drop_parts = 1;
 ALTER TABLE telemetry_history.numeric_gauge_1min_states MODIFY TTL bucket + INTERVAL 730 DAY DELETE;
-
-ALTER TABLE telemetry_history.numeric_15min_states MODIFY SETTING ttl_only_drop_parts = 1;
-ALTER TABLE telemetry_history.numeric_15min_states MODIFY TTL bucket + INTERVAL 1825 DAY DELETE;
 
 ALTER TABLE telemetry_history.numeric_gauge_15min_states MODIFY SETTING ttl_only_drop_parts = 1;
 ALTER TABLE telemetry_history.numeric_gauge_15min_states MODIFY TTL bucket + INTERVAL 1825 DAY DELETE;

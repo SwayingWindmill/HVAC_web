@@ -12,10 +12,20 @@ import (
 	"time"
 )
 
+type ForecastJobScope struct {
+	TenantID       string
+	SiteID         string
+	Target         string
+	SubjectType    string
+	SubjectID      string
+	ForecastJobID  string
+	ForecastOrigin time.Time
+}
+
 type Sink interface {
 	InsertForecastPoints(context.Context, []Point) error
-	HasForecastJob(context.Context, string, int) (bool, error)
-	ReadForecastJob(context.Context, string) ([]Point, error)
+	HasForecastJob(context.Context, ForecastJobScope, int) (bool, error)
+	ReadForecastJob(context.Context, ForecastJobScope) ([]Point, error)
 }
 
 // ForecastEngine owns model inference only. Durable job state and publication stay
@@ -211,7 +221,15 @@ func (service *Service) LatestForecast(ctx context.Context, tenantID, siteID, ta
 	if err != nil {
 		return PublishedForecast{}, err
 	}
-	points, err := service.sink.ReadForecastJob(ctx, reference.ForecastJobID)
+	points, err := service.sink.ReadForecastJob(ctx, ForecastJobScope{
+		TenantID:       tenantID,
+		SiteID:         siteID,
+		Target:         target,
+		SubjectType:    reference.SubjectType,
+		SubjectID:      reference.SubjectID,
+		ForecastJobID:  reference.ForecastJobID,
+		ForecastOrigin: reference.ForecastOrigin,
+	})
 	if err != nil {
 		return PublishedForecast{}, err
 	}
@@ -233,7 +251,15 @@ func (service *Service) Reconcile(ctx context.Context, staleBefore time.Time, li
 	}
 	repaired := 0
 	for _, publication := range publications {
-		present, checkErr := service.sink.HasForecastJob(ctx, publication.Request.ForecastJobID, publication.ResultCount)
+		present, checkErr := service.sink.HasForecastJob(ctx, ForecastJobScope{
+			TenantID:       publication.Request.TenantID,
+			SiteID:         publication.Request.SiteID,
+			Target:         publication.Request.Target,
+			SubjectType:    publication.Request.SubjectType,
+			SubjectID:      publication.Request.SubjectID,
+			ForecastJobID:  publication.Request.ForecastJobID,
+			ForecastOrigin: publication.Request.ForecastOrigin,
+		}, publication.ResultCount)
 		if checkErr != nil {
 			return repaired, checkErr
 		}

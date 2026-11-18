@@ -69,9 +69,9 @@ func (sink *captureEvaluationSink) InsertEvaluation(_ context.Context, evaluatio
 	sink.evaluations = append(sink.evaluations, evaluation)
 	return nil
 }
-func (sink *captureEvaluationSink) HasEvaluation(_ context.Context, evaluationID string) (bool, error) {
+func (sink *captureEvaluationSink) HasEvaluation(_ context.Context, target Evaluation) (bool, error) {
 	for _, evaluation := range sink.evaluations {
-		if evaluation.EvaluationID == evaluationID {
+		if evaluation.EvaluationID == target.EvaluationID {
 			return true, nil
 		}
 	}

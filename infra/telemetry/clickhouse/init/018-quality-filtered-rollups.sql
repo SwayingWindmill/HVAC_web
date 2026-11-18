@@ -170,5 +170,69 @@ GROUP BY bucket, tenant_id, site_id, device_id, point_id, point_revision, teleme
 GRANT SELECT ON telemetry_history.numeric_gauge_1min_states TO telemetry_query_history_reader;
 GRANT SELECT ON telemetry_history.numeric_gauge_15min_states TO telemetry_query_history_reader;
 
+CREATE OR REPLACE VIEW telemetry_history.numeric_1min
+DEFINER = CURRENT_USER
+SQL SECURITY DEFINER AS
+SELECT
+  bucket,
+  tenant_id,
+  site_id,
+  device_id,
+  point_id,
+  CAST(NULL, 'Nullable(UUID)') AS sensor_id,
+  telemetry_key,
+  nullIf(anyMerge(unit_state), '') AS unit,
+  countIfMerge(usable_count) AS sample_count,
+  avgIfMerge(usable_avg) AS average_value,
+  minIfMerge(usable_min) AS minimum_value,
+  maxIfMerge(usable_max) AS maximum_value
+FROM telemetry_history.numeric_gauge_1min_states
+GROUP BY bucket, tenant_id, site_id, device_id, point_id, telemetry_key
+HAVING sample_count > 0;
+
+CREATE OR REPLACE VIEW telemetry_history.numeric_15min
+DEFINER = CURRENT_USER
+SQL SECURITY DEFINER AS
+SELECT
+  bucket,
+  tenant_id,
+  site_id,
+  device_id,
+  point_id,
+  CAST(NULL, 'Nullable(UUID)') AS sensor_id,
+  telemetry_key,
+  nullIf(anyMerge(unit_state), '') AS unit,
+  countIfMerge(usable_count) AS sample_count,
+  avgIfMerge(usable_avg) AS average_value,
+  minIfMerge(usable_min) AS minimum_value,
+  maxIfMerge(usable_max) AS maximum_value
+FROM telemetry_history.numeric_gauge_15min_states
+GROUP BY bucket, tenant_id, site_id, device_id, point_id, telemetry_key
+HAVING sample_count > 0;
+
+CREATE OR REPLACE VIEW telemetry_history.numeric_hourly
+DEFINER = CURRENT_USER
+SQL SECURITY DEFINER AS
+SELECT
+  toStartOfHour(bucket) AS hour,
+  tenant_id,
+  site_id,
+  device_id,
+  point_id,
+  CAST(NULL, 'Nullable(UUID)') AS sensor_id,
+  telemetry_key,
+  nullIf(anyMerge(unit_state), '') AS unit,
+  countIfMerge(usable_count) AS sample_count,
+  avgIfMerge(usable_avg) AS average_value,
+  minIfMerge(usable_min) AS minimum_value,
+  maxIfMerge(usable_max) AS maximum_value
+FROM telemetry_history.numeric_gauge_15min_states
+GROUP BY hour, tenant_id, site_id, device_id, point_id, telemetry_key
+HAVING sample_count > 0;
+
+GRANT SELECT ON telemetry_history.numeric_1min TO telemetry_query_history_reader;
+GRANT SELECT ON telemetry_history.numeric_15min TO telemetry_query_history_reader;
+GRANT SELECT ON telemetry_history.numeric_hourly TO telemetry_query_history_reader;
+
 GRANT SELECT, ALTER DELETE ON telemetry_history.numeric_gauge_1min_states TO telemetry_retention_writer;
 GRANT SELECT, ALTER DELETE ON telemetry_history.numeric_gauge_15min_states TO telemetry_retention_writer;

@@ -188,8 +188,38 @@ func (s *ClickHouseStore) ReadPoint(ctx context.Context, b Binding, pointID stri
 	}
 	return Input{Reference: "point:" + pointID, Value: v, FirstValue: first, LastValue: last, Count: n, DurationSeconds: duration, Integral: integral, Rise: rise, Drops: drops, DropSum: dropSum, ValueAfterDrops: valueAfterDrops, Quality: q, Completeness: c}, nil
 }
-func (s *ClickHouseStore) HasMetricResult(ctx context.Context, resultID string) (bool, error) {
-	body, err := s.query(ctx, fmt.Sprintf(`SELECT count() FROM analytics.metric_result_facts WHERE result_id=toUUID(%s) FORMAT TabSeparated`, quote(resultID)))
+func metricResultWhereClause(result Result) string {
+	predicates := make([]string, 0, 9)
+	if result.Binding.TenantID != "" {
+		predicates = append(predicates, fmt.Sprintf("tenant_id=toUUID(%s)", quote(result.Binding.TenantID)))
+	}
+	if result.Binding.SiteID != "" {
+		predicates = append(predicates, fmt.Sprintf("site_id=toUUID(%s)", quote(result.Binding.SiteID)))
+	}
+	if result.Binding.MetricID != "" {
+		predicates = append(predicates, fmt.Sprintf("metric_id=toUUID(%s)", quote(result.Binding.MetricID)))
+	}
+	if result.Binding.SubjectType != "" {
+		predicates = append(predicates, fmt.Sprintf("subject_type=%s", quote(result.Binding.SubjectType)))
+	}
+	if result.Binding.SubjectID != "" {
+		predicates = append(predicates, fmt.Sprintf("subject_id=toUUID(%s)", quote(result.Binding.SubjectID)))
+	}
+	if result.Binding.Granularity != "" {
+		predicates = append(predicates, fmt.Sprintf("granularity=%s", quote(result.Binding.Granularity)))
+	}
+	if !result.PeriodStart.IsZero() {
+		predicates = append(predicates, fmt.Sprintf("period_start=parseDateTime64BestEffort(%s,3,'UTC')", quote(result.PeriodStart.UTC().Format(time.RFC3339Nano))))
+	}
+	if !result.PeriodEnd.IsZero() {
+		predicates = append(predicates, fmt.Sprintf("period_end=parseDateTime64BestEffort(%s,3,'UTC')", quote(result.PeriodEnd.UTC().Format(time.RFC3339Nano))))
+	}
+	predicates = append(predicates, fmt.Sprintf("result_id=toUUID(%s)", quote(result.ResultID)))
+	return strings.Join(predicates, " AND ")
+}
+
+func (s *ClickHouseStore) HasMetricResult(ctx context.Context, result Result) (bool, error) {
+	body, err := s.query(ctx, fmt.Sprintf(`SELECT count() FROM analytics.metric_result_facts WHERE %s FORMAT TabSeparated`, metricResultWhereClause(result)))
 	if err != nil {
 		return false, err
 	}
@@ -201,7 +231,7 @@ func (s *ClickHouseStore) HasMetricResult(ctx context.Context, resultID string) 
 }
 
 func (s *ClickHouseStore) ReadMetricResult(ctx context.Context, result Result) (Result, error) {
-	body, err := s.query(ctx, fmt.Sprintf(`SELECT value_number,unit,quality,completeness,calculated_at,revision FROM analytics.metric_result_facts WHERE result_id=toUUID(%s) LIMIT 1 FORMAT TabSeparated`, quote(result.ResultID)))
+	body, err := s.query(ctx, fmt.Sprintf(`SELECT value_number,unit,quality,completeness,calculated_at,revision FROM analytics.metric_result_facts WHERE %s LIMIT 1 FORMAT TabSeparated`, metricResultWhereClause(result)))
 	if err != nil {
 		return Result{}, err
 	}

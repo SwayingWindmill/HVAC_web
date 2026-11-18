@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
+	"github.com/quanlaihe/hvac-web/libs/planttwin"
 )
 
 // The baseline's price is the latest Site-local day that has ended, whose energy has all arrived
@@ -504,4 +505,107 @@ func TestOptimizationInputReaderUsesLiveHotSnapshotAndFallbacksCleanly(t *testin
 			t.Fatalf("expected historical query to skip live reader, got live=%d ch=%d state=%+v", liveStub.calls, chQueries.Load(), state)
 		}
 	})
+}
+
+type autoControlLiveDeviceStub struct {
+	liveObsReaderStub
+	deviceObs map[string]map[string]OptimizationLiveObservation
+	devCalls  int
+}
+
+func (s *autoControlLiveDeviceStub) ReadDeviceLiveObservations(_ context.Context, _, _ string, _ []string) (map[string]map[string]OptimizationLiveObservation, error) {
+	s.devCalls++
+	return s.deviceObs, nil
+}
+
+func TestReadLiveAutoControlObservationUsesBatchedLiveObservationsIncludingWetBulb(t *testing.T) {
+	at := time.Date(2026, 11, 14, 15, 0, 0, 0, time.UTC)
+	runStr := "RUNNING"
+	loadVal := 380.0
+	powerVal := 85.0
+
+	var chQueries atomic.Int32
+	chServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		sql := string(body)
+		if !strings.Contains(sql, "ORDER BY sampled_at ASC") {
+			chQueries.Add(1)
+		}
+		writer.Header().Set("Content-Type", "application/x-ndjson")
+	}))
+	defer chServer.Close()
+
+	twin := planttwin.SiteTwin{
+		Scope:           planttwin.SiteScope{TenantID: testPlantTenantID, SiteID: testPlantSiteID},
+		Timezone:        "Asia/Shanghai",
+		SiteControlMode: planttwin.ControlModeRemoteAuto,
+		Units: []planttwin.PlantUnit{
+			{AssetID: testChillerAID, AssetCode: "chiller-a", AssetName: "A 机组", AssetType: planttwin.AssetTypeChiller},
+		},
+		Devices: []planttwin.TwinDevice{
+			{DeviceID: testMeterAID, DeviceCode: "amp-a", SourceKey: "amp-a"},
+			{DeviceID: testBTUDevID, DeviceCode: "plant-btu", SourceKey: "plant-btu"},
+		},
+		PointBindings: []planttwin.PointBinding{
+			{PointID: "pt-load", DeviceID: testBTUDevID, DeviceCode: "plant-btu", DeviceSourceKey: "plant-btu", PointCode: "chw_load", WireSourceKey: "chw_load", PointType: "TELEMETRY", Unit: "kW", SubjectType: planttwin.SubjectTypeSite, BindingRole: planttwin.BindingDescribes, SemanticRole: planttwin.RoleCoolingLoad},
+			{PointID: "pt-pa", DeviceID: testMeterAID, DeviceCode: "amp-a", DeviceSourceKey: "amp-a", PointCode: "p_kw", WireSourceKey: "p_kw", PointType: "TELEMETRY", Unit: "kW", SubjectType: planttwin.SubjectTypeAsset, AssetID: testChillerAID, BindingRole: planttwin.BindingMeters, SemanticRole: planttwin.RoleActivePower},
+			{PointID: "pt-rs", DeviceID: testMeterAID, DeviceCode: "amp-a", DeviceSourceKey: "amp-a", PointCode: "run_state", WireSourceKey: "chiller.run_state", PointType: "TELEMETRY", SubjectType: planttwin.SubjectTypeAsset, AssetID: testChillerAID, BindingRole: planttwin.BindingDescribes, SemanticRole: planttwin.RoleRunState},
+		},
+	}
+
+	sampled := at.Add(-15 * time.Second).UTC().Format(time.RFC3339Nano)
+	received := at.Add(-14 * time.Second).UTC().Format(time.RFC3339Nano)
+	stub := &autoControlLiveDeviceStub{
+		liveObsReaderStub: liveObsReaderStub{
+			result: OptimizationLiveObservationsResult{
+				Observations: map[string]OptimizationLiveObservation{
+					"supply_water_temperature": {ObservationID: "01990000-2940-7000-8000-000000000001", DeviceID: testBTUDevID, PointID: "01990000-2910-7000-8000-000000000001", TelemetryKey: "supply_water_temperature", PointRevision: 1, SampledAt: sampled, ReceivedAt: received, Value: 6.8, Unit: "Cel", Quality: "GOOD", HealthStatus: "HEALTHY", QualityReasons: []string{}, SourceEventID: "01990000-2930-7000-8000-000000000001", SourcePartition: "p0", SourceOffset: 10},
+					"zone.t1":                  {ObservationID: "01990000-2940-7000-8000-000000000002", DeviceID: testBTUDevID, PointID: "01990000-2910-7000-8000-000000000002", TelemetryKey: "zone.t1", PointRevision: 1, SampledAt: sampled, ReceivedAt: received, Value: 23.1, Unit: "Cel", Quality: "GOOD", HealthStatus: "HEALTHY", QualityReasons: []string{}, SourceEventID: "01990000-2930-7000-8000-000000000002", SourcePartition: "p0", SourceOffset: 11},
+					"outdoor_wet_bulb":         {ObservationID: "01990000-2940-7000-8000-000000000003", DeviceID: testBTUDevID, PointID: "01990000-2910-7000-8000-000000000003", TelemetryKey: "outdoor_wet_bulb", PointRevision: 1, SampledAt: sampled, ReceivedAt: received, Value: 21.5, Unit: "Cel", Quality: "GOOD", HealthStatus: "HEALTHY", QualityReasons: []string{}, SourceEventID: "01990000-2930-7000-8000-000000000003", SourcePartition: "p0", SourceOffset: 12},
+				},
+			},
+		},
+		deviceObs: map[string]map[string]OptimizationLiveObservation{
+			testBTUDevID: {
+				"chw_load": {DeviceID: testBTUDevID, SourceID: "plant-btu", TelemetryKey: "chw_load", ValueType: "NUMBER", Value: loadVal, ValueNumber: &loadVal, Unit: "kW", Quality: "GOOD", SampledAt: sampled, ReceivedAt: received},
+			},
+			testMeterAID: {
+				"p_kw":              {DeviceID: testMeterAID, SourceID: "amp-a", TelemetryKey: "p_kw", ValueType: "NUMBER", Value: powerVal, ValueNumber: &powerVal, Unit: "kW", Quality: "GOOD", SampledAt: sampled, ReceivedAt: received},
+				"chiller.run_state": {DeviceID: testMeterAID, SourceID: "amp-a", TelemetryKey: "chiller.run_state", ValueType: "STRING", ValueString: &runStr, Quality: "GOOD", SampledAt: sampled, ReceivedAt: received},
+			},
+		},
+	}
+
+	reader, err := NewClickHouseInputReader(InputReaderConfig{
+		BaseURL:          chServer.URL,
+		Energy:           &energySeriesStub{},
+		LiveObservations: stub,
+		Now:              func() time.Time { return at.Add(2 * time.Second).UTC() },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	obs, err := reader.ReadLiveAutoControlObservation(
+		t.Context(),
+		testPlantTenantID,
+		testPlantSiteID,
+		InputMapping{SupplyTemperatureKey: "supply_water_temperature", ZoneTemperatureKeys: []string{"zone.t1"}},
+		StagingTopology{Twin: &twin},
+		at,
+	)
+	if err != nil {
+		t.Fatalf("ReadLiveAutoControlObservation: %v", err)
+	}
+	if chQueries.Load() != 0 || stub.calls != 1 || stub.devCalls != 1 {
+		t.Fatalf("expected 0 CH latest/wetbulb queries, got ch=%d siteCalls=%d devCalls=%d", chQueries.Load(), stub.calls, stub.devCalls)
+	}
+	if obs.SupplyTemp == nil || obs.SupplyTemp.Value != 6.8 || obs.ZoneTemps["zone.t1"].Value != 23.1 {
+		t.Fatalf("unexpected supply/zone obs: %+v", obs)
+	}
+	if obs.OutdoorWetBulbC == nil || *obs.OutdoorWetBulbC != 21.5 {
+		t.Fatalf("expected OutdoorWetBulbC=21.5, got %v", obs.OutdoorWetBulbC)
+	}
+	if obs.CoolingLoadKW == nil || *obs.CoolingLoadKW != 380 || obs.RunningChillers != 1 || obs.ChillerPowerKW == nil || *obs.ChillerPowerKW != 85 {
+		t.Fatalf("unexpected staging totals from live cache: %+v", obs)
+	}
 }

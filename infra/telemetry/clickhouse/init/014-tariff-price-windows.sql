@@ -30,11 +30,11 @@ CREATE TABLE IF NOT EXISTS analytics.tariff_price_window_syncs (
 ENGINE = ReplacingMergeTree(synced_at)
 ORDER BY (tenant_id, site_id, generation, covered_to);
 
-CREATE VIEW IF NOT EXISTS analytics.tariff_price_windows_visible AS
+CREATE OR REPLACE VIEW analytics.tariff_price_windows_visible AS
 SELECT tenant_id, site_id, window_start, window_end, period_code, energy_rate_per_kwh, tariff_version_id
 FROM analytics.tariff_price_windows FINAL
 WHERE (tenant_id, site_id, generation) IN (
-  SELECT tenant_id, site_id, max(generation) FROM analytics.tariff_price_window_syncs GROUP BY tenant_id, site_id
+  SELECT tenant_id, site_id, max(generation) FROM analytics.tariff_price_window_syncs FINAL GROUP BY tenant_id, site_id
 );
 
 GRANT SELECT ON analytics.tariff_price_windows TO analytics_projector_reader;

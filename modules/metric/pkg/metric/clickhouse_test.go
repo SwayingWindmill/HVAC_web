@@ -193,6 +193,67 @@ func TestDeleteMetricResultSubmitsAsyncMutation(t *testing.T) {
 	}
 }
 
+func TestMetricResultLookupsIncludeLeadingPrimaryKeyPredicates(t *testing.T) {
+	var seen []string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		sql := request.URL.Query().Get("query")
+		seen = append(seen, sql)
+		if strings.Contains(sql, "SELECT count()") {
+			_, _ = io.WriteString(writer, "1\n")
+			return
+		}
+		_, _ = io.WriteString(writer, "42.5\tkWh\tGOOD\t1\t2026-08-10 01:05:00.000\t2\n")
+	}))
+	defer server.Close()
+
+	store, err := NewClickHouseStore(server.URL, "", "", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := Result{
+		ResultID:    "01990000-1111-7000-8000-000000000001",
+		PeriodStart: time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC),
+		PeriodEnd:   time.Date(2026, 8, 10, 1, 0, 0, 0, time.UTC),
+		Revision:    2,
+		Binding: Binding{
+			TenantID:    "01990000-3000-7000-8000-000000000001",
+			SiteID:      "01990000-5000-7000-8000-000000000001",
+			MetricID:    "01990000-4000-7000-8000-000000000001",
+			SubjectType: "SITE",
+			SubjectID:   "01990000-5000-7000-8000-000000000001",
+			Granularity: "HOUR",
+		},
+	}
+	present, err := store.HasMetricResult(context.Background(), result)
+	if err != nil || !present {
+		t.Fatalf("HasMetricResult=%t err=%v", present, err)
+	}
+	loaded, err := store.ReadMetricResult(context.Background(), result)
+	if err != nil || loaded.Value != 42.5 {
+		t.Fatalf("ReadMetricResult=%#v err=%v", loaded, err)
+	}
+	if len(seen) != 2 {
+		t.Fatalf("expected 2 queries, got %d", len(seen))
+	}
+	for i, sql := range seen {
+		for _, marker := range []string{
+			"tenant_id=toUUID('01990000-3000-7000-8000-000000000001')",
+			"site_id=toUUID('01990000-5000-7000-8000-000000000001')",
+			"metric_id=toUUID('01990000-4000-7000-8000-000000000001')",
+			"subject_type='SITE'",
+			"subject_id=toUUID('01990000-5000-7000-8000-000000000001')",
+			"granularity='HOUR'",
+			"period_start=parseDateTime64BestEffort('2026-08-10T00:00:00Z',3,'UTC')",
+			"period_end=parseDateTime64BestEffort('2026-08-10T01:00:00Z',3,'UTC')",
+			"result_id=toUUID('01990000-1111-7000-8000-000000000001')",
+		} {
+			if !strings.Contains(sql, marker) {
+				t.Fatalf("query %d missing %q:\n%s", i, marker, sql)
+			}
+		}
+	}
+}
+
 func TestNewClickHouseStoreInitializesTunedDefaultHTTPTransport(t *testing.T) {
 	store, err := NewClickHouseStore("http://127.0.0.1:8123", "", "", nil)
 	if err != nil {

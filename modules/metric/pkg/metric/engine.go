@@ -104,7 +104,7 @@ type SeriesStore interface {
 	ReadPoint(context.Context, Binding, string, time.Time, time.Time) (Input, error)
 	ReadMetricResult(context.Context, Result) (Result, error)
 	InsertMetric(context.Context, Result) error
-	HasMetricResult(context.Context, string) (bool, error)
+	HasMetricResult(context.Context, Result) (bool, error)
 }
 
 // BatchSeriesStore optionally persists multiple reconciled metric results in one ClickHouse block.
@@ -272,7 +272,7 @@ func (e *Engine) reconcileResults(ctx context.Context, stale []Result) (int, err
 	missing := make([]Result, 0, len(stale))
 	completed := make([]Result, 0, len(stale))
 	for _, result := range stale {
-		exists, checkErr := e.series.HasMetricResult(ctx, result.ResultID)
+		exists, checkErr := e.series.HasMetricResult(ctx, result)
 		if checkErr != nil {
 			return repaired, checkErr
 		}

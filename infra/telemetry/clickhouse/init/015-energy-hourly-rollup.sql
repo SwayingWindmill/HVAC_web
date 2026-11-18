@@ -262,7 +262,7 @@ CREATE TABLE IF NOT EXISTS analytics.energy_hourly_states (
 )
 ENGINE = AggregatingMergeTree
 PARTITION BY toYYYYMM(hour)
-ORDER BY (tenant_id, site_id, point_id, hour, accounting_scope, energy_type, quality, load_device_id)
+ORDER BY (tenant_id, site_id, accounting_scope, energy_type, quality, point_id, load_device_id, hour)
 SETTINGS non_replicated_deduplication_window = 10000;
 
 -- Every inserted fact revision up to one hour long adds its energy to its hour; cross-gap

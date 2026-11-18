@@ -208,4 +208,31 @@ func TestWorkloadTelemetryLiveClientValidation(t *testing.T) {
 	if _, err := client.ReadLiveObservations(t.Context(), "invalid", siteID, []string{"k"}); err == nil {
 		t.Fatal("expected invalid tenantId error")
 	}
+
+	deviceID := "01990000-2900-7000-8000-000000000001"
+	runStr := "RUNNING"
+	stub.setResponse(http.StatusOK, OptimizationLiveObservationsResult{
+		DeviceObservations: map[string]map[string]OptimizationLiveObservation{
+			deviceID: {
+				"chiller.run_state": {
+					DeviceID:     deviceID,
+					TelemetryKey: "chiller.run_state",
+					ValueType:    "STRING",
+					ValueString:  &runStr,
+					Quality:      "GOOD",
+				},
+			},
+		},
+	}, "")
+	devObs, err := client.ReadDeviceLiveObservations(t.Context(), tenantID, siteID, []string{deviceID, deviceID})
+	if err != nil {
+		t.Fatalf("ReadDeviceLiveObservations: %v", err)
+	}
+	if devObs[deviceID]["chiller.run_state"].ValueString == nil || *devObs[deviceID]["chiller.run_state"].ValueString != "RUNNING" {
+		t.Fatalf("unexpected device obs: %+v", devObs)
+	}
+	captured := stub.snapshot()
+	if len(captured) != 1 || !slices.Equal(captured[0].Body.DeviceIDs, []string{deviceID}) || len(captured[0].Body.TelemetryKeys) != 0 {
+		t.Fatalf("unexpected device request payload: %+v", captured)
+	}
 }
