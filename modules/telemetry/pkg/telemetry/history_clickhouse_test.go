@@ -340,8 +340,8 @@ func TestNewClickHouseHistorySinkDefaultHTTPTransport(t *testing.T) {
 	if sink.httpClient == nil {
 		t.Fatal("expected default HTTPClient to be initialized")
 	}
-	if sink.httpClient.Timeout != 10*time.Second {
-		t.Fatalf("Timeout=%s, want 10s", sink.httpClient.Timeout)
+	if sink.httpClient.Timeout != 30*time.Second {
+		t.Fatalf("Timeout=%s, want 30s", sink.httpClient.Timeout)
 	}
 	transport, ok := sink.httpClient.Transport.(*http.Transport)
 	if !ok || transport == nil {
@@ -535,5 +535,64 @@ func TestClickHouseHistorySinkFoldsDuplicatePointSampleWithinBatch(t *testing.T)
 	}
 	if decodedRows[0].ObservationID != "018f2e00-9100-7000-8000-000000000002" || decodedRows[1].ObservationID != "018f2e00-9100-7000-8000-000000000003" {
 		t.Fatalf("unexpected winning rows: %+v", decodedRows)
+	}
+}
+
+func TestClickHouseHistorySinkSupports32KBatchAndTooManyPartsBackoff(t *testing.T) {
+	var seenParams url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		seenParams = request.URL.Query()
+		if seenParams.Get("insert_deduplication_token") == "fail_too_many_parts" {
+			writer.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(writer, "Code: 252. DB::Exception: Too many parts (301) in partition '202608'. (TOO_MANY_PARTS)")
+			return
+		}
+		if strings.Contains(request.Header.Get("User-Agent"), "") && seenParams.Get("max_insert_block_size") == "" {
+			http.Error(writer, "missing block size", http.StatusBadRequest)
+			return
+		}
+		if request.URL.Query().Get("insert_deduplication_token") != "" && seenParams.Get("min_insert_block_size_bytes") != "33554432" {
+			http.Error(writer, "bad min bytes", http.StatusBadRequest)
+			return
+		}
+		http.Error(writer, "Code: 252. DB::Exception: Too many parts (301). (TOO_MANY_PARTS)", http.StatusBadRequest)
+	}))
+	defer server.Close()
+
+	sink, err := NewClickHouseHistorySink(ClickHouseHistoryConfig{
+		BaseURL:    server.URL,
+		Database:   "telemetry_history",
+		Table:      "observations",
+		HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rows := make([]HistoryObservation, 5000)
+	digest := strings.Repeat("a", 64)
+	for i := range rows {
+		rows[i] = HistoryObservation{
+			ObservationID: fmt.Sprintf("018f2e00-9100-7000-8000-%012d", i+1),
+			PayloadSHA256: digest,
+		}
+	}
+	compressed, token, err := sink.PrepareObservations(1, rows)
+	if err != nil || len(compressed) == 0 || len(token) != 64 {
+		t.Fatalf("PrepareObservations(5000 rows) err=%v len=%d token=%q", err, len(compressed), token)
+	}
+	tooMany := make([]HistoryObservation, maxHistoryBatchRows+1)
+	if _, _, err := sink.PrepareObservations(1, tooMany); err == nil {
+		t.Fatal("expected PrepareObservations to reject 32769 rows")
+	}
+
+	err = sink.InsertPrepared(t.Context(), compressed, token)
+	if !IsClickHouseTooManyPartsError(err) || IsPermanentHistoryError(err) {
+		t.Fatalf("TOO_MANY_PARTS must classify as transient backoff, not permanent: err=%v", err)
+	}
+	if seenParams.Get("max_insert_block_size") != "32768" ||
+		seenParams.Get("min_insert_block_size_rows") != "32768" ||
+		seenParams.Get("min_insert_block_size_bytes") != "33554432" {
+		t.Fatalf("unexpected insert block params: %v", seenParams)
 	}
 }

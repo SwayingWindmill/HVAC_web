@@ -565,7 +565,7 @@ type historyProjectionSettings struct {
 }
 
 func parseHistoryProjectionSettings(lookup func(string) string) (historyProjectionSettings, error) {
-	batchSize, err := parseBoundedIntEnv(lookup, "TELEMETRY_HISTORY_BATCH_SIZE", 4096, 1, 4096)
+	batchSize, err := parseBoundedIntEnv(lookup, "TELEMETRY_HISTORY_BATCH_SIZE", 4096, 1, 32768)
 	if err != nil {
 		return historyProjectionSettings{}, err
 	}

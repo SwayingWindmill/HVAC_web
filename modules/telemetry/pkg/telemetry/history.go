@@ -9,11 +9,13 @@ import (
 )
 
 const (
-	historyInsertFailureCode      = "CLICKHOUSE_INSERT_FAILED"
-	historyPoisonRowFailureCode   = "CLICKHOUSE_POISON_ROW"
-	historyMaxAttemptsFailureCode = "CLICKHOUSE_MAX_ATTEMPTS_EXCEEDED"
-	historyPayloadInvalidCode     = "HISTORY_PAYLOAD_INVALID"
-	historyRowTooLargeCode        = "HISTORY_ROW_TOO_LARGE"
+	historyInsertFailureCode       = "CLICKHOUSE_INSERT_FAILED"
+	historyTooManyPartsFailureCode = "CLICKHOUSE_TOO_MANY_PARTS"
+	historyPoisonRowFailureCode    = "CLICKHOUSE_POISON_ROW"
+	historyMaxAttemptsFailureCode  = "CLICKHOUSE_MAX_ATTEMPTS_EXCEEDED"
+	historyPayloadInvalidCode      = "HISTORY_PAYLOAD_INVALID"
+	historyRowTooLargeCode         = "HISTORY_ROW_TOO_LARGE"
+	minClickHouseTooManyPartsDelay = 2 * time.Second
 )
 
 type HistoryObservation struct {
@@ -121,8 +123,8 @@ func NewHistoryRelay(config HistoryRelayConfig) (*HistoryRelay, error) {
 	if config.Repository == nil || config.Sink == nil {
 		return nil, errors.New("history relay repository and sink are required")
 	}
-	if config.BatchSize < 1 || config.BatchSize > 4096 {
-		return nil, errors.New("history relay batch size must be between 1 and 4096")
+	if config.BatchSize < 1 || config.BatchSize > maxHistoryBatchRows {
+		return nil, fmt.Errorf("history relay batch size must be between 1 and %d", maxHistoryBatchRows)
 	}
 	if config.LeaseFor < time.Second || config.LeaseFor > 10*time.Minute {
 		return nil, errors.New("history relay lease duration must be between 1 second and 10 minutes")
@@ -236,12 +238,9 @@ func (relay *HistoryRelay) executePreparedHistoryBatch(ctx context.Context, item
 			}
 			return 0, fmt.Errorf("dead-letter telemetry history batch after %d attempts: %w", batch.MaxAttempts, err)
 		}
-		retryAt := relay.now().UTC().Add(relay.retryAfter)
-		if ctx.Err() != nil {
-			retryAt = relay.now().UTC()
-		}
+		retryAt, errorCode := relay.retrySchedule(ctx, relay.now().UTC(), err)
 		settleCtx, cancelSettle := historySettleContext(ctx)
-		retryErr := relay.repository.RetryHistoryBatch(settleCtx, batch.LeaseID, retryAt, historyInsertFailureCode)
+		retryErr := relay.repository.RetryHistoryBatch(settleCtx, batch.LeaseID, retryAt, errorCode)
 		cancelSettle()
 		if retryErr != nil {
 			return 0, errors.Join(fmt.Errorf("insert telemetry history: %w", err), fmt.Errorf("retry telemetry history batch: %w", retryErr))
@@ -257,6 +256,21 @@ func (relay *HistoryRelay) executePreparedHistoryBatch(ctx context.Context, item
 	relay.metrics.ObserveHistoryFlushDuration(time.Since(start))
 	relay.metrics.AddHistoryRowsProjected(len(batch.Observations))
 	return len(batch.Observations), nil
+}
+
+func (relay *HistoryRelay) retrySchedule(ctx context.Context, now time.Time, err error) (time.Time, string) {
+	if ctx.Err() != nil {
+		return now, historyInsertFailureCode
+	}
+	delay := relay.retryAfter
+	code := historyInsertFailureCode
+	if IsClickHouseTooManyPartsError(err) {
+		code = historyTooManyPartsFailureCode
+		if delay < minClickHouseTooManyPartsDelay {
+			delay = minClickHouseTooManyPartsDelay
+		}
+	}
+	return now.Add(delay), code
 }
 
 func historySettleContext(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -313,12 +327,9 @@ func (relay *HistoryRelay) handlePermanentBatchFailure(ctx context.Context, batc
 			}
 			persistErrs = append(persistErrs, fmt.Errorf("dead-letter telemetry history split remainder after %d attempts: %w", batch.MaxAttempts, transientErr))
 		} else {
-			retryAt := now.Add(relay.retryAfter)
-			if ctx.Err() != nil {
-				retryAt = now
-			}
+			retryAt, errorCode := relay.retrySchedule(ctx, now, transientErr)
 			settleCtx, cancelSettle := historySettleContext(ctx)
-			retryErr := relay.repository.RetryHistoryBatch(settleCtx, batch.LeaseID, retryAt, historyInsertFailureCode)
+			retryErr := relay.repository.RetryHistoryBatch(settleCtx, batch.LeaseID, retryAt, errorCode)
 			cancelSettle()
 			if retryErr != nil {
 				persistErrs = append(persistErrs, fmt.Errorf("retry telemetry history split remainder: %w", retryErr))

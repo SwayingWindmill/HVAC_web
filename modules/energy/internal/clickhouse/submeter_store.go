@@ -24,7 +24,7 @@ type totalSubmeterSyncRow struct {
 
 func (reader *Reader) TotalSubmeterSync(ctx context.Context, site energy.PricedSite) (energy.TotalSubmeterSync, bool, error) {
 	payload, err := reader.query(ctx, "total submeter sync query", fmt.Sprintf(`SELECT toString(generation) AS generation, synthesized, sources_digest
-FROM %s.site_total_submeter_syncs
+FROM %s.site_total_submeter_syncs FINAL
 WHERE tenant_id = {tenant:UUID} AND site_id = {site:UUID}
 ORDER BY generation DESC
 LIMIT 1

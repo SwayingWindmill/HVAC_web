@@ -30,7 +30,7 @@ FROM %[1]s.%[2]s
 WHERE period_end >= {since:DateTime64(3, 'UTC')} AND energy_type = 'electricity' AND accounting_scope IN ('SITE', 'BRANCH')
 UNION DISTINCT
 SELECT toString(tenant_id) AS tenant_id, toString(site_id) AS site_id
-FROM %[1]s.%[3]s
+FROM %[1]s.%[3]s FINAL
 ORDER BY tenant_id, site_id
 FORMAT JSONEachRow`, reader.analyticsDatabase, reader.analyticsTable, syncTable), url.Values{"param_since": {clickHouseTime(since)}})
 	if err != nil {
@@ -57,7 +57,7 @@ type priceWindowSyncRow struct {
 
 func (reader *Reader) PriceWindowSync(ctx context.Context, site energy.PricedSite) (energy.PriceWindowSync, bool, error) {
 	payload, err := reader.query(ctx, "price window sync query", fmt.Sprintf(`SELECT toString(generation) AS generation, timeline_digest, toString(covered_to) AS covered_to
-FROM %s.tariff_price_window_syncs
+FROM %s.tariff_price_window_syncs FINAL
 WHERE tenant_id = {tenant:UUID} AND site_id = {site:UUID}
 ORDER BY generation DESC, covered_to DESC
 LIMIT 1

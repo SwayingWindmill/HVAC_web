@@ -17,10 +17,10 @@ func (sink *captureSink) InsertForecastPoints(_ context.Context, points []Point)
 	return sink.err
 }
 
-func (sink *captureSink) HasForecastJob(_ context.Context, _ string, expectedCount int) (bool, error) {
+func (sink *captureSink) HasForecastJob(_ context.Context, _ ForecastJobScope, expectedCount int) (bool, error) {
 	return len(sink.points) == expectedCount, nil
 }
-func (sink *captureSink) ReadForecastJob(_ context.Context, _ string) ([]Point, error) {
+func (sink *captureSink) ReadForecastJob(_ context.Context, _ ForecastJobScope) ([]Point, error) {
 	return append([]Point(nil), sink.points...), sink.err
 }
 

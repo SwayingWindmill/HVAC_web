@@ -16,7 +16,7 @@ import (
 
 type EvaluationSink interface {
 	InsertEvaluation(context.Context, Evaluation) error
-	HasEvaluation(context.Context, string) (bool, error)
+	HasEvaluation(context.Context, Evaluation) (bool, error)
 }
 
 type ClickHouseSink struct {
@@ -69,10 +69,41 @@ func (sink *ClickHouseSink) InsertEvaluation(ctx context.Context, evaluation Eva
 	return nil
 }
 
-func (sink *ClickHouseSink) HasEvaluation(ctx context.Context, evaluationID string) (bool, error) {
+func evaluationWhereClause(evaluation Evaluation) (string, error) {
+	if !uuidPattern.MatchString(evaluation.EvaluationID) {
+		return "", errors.New("optimization evaluation id must be a UUID")
+	}
+	predicates := make([]string, 0, 4)
+	if evaluation.TenantID != "" {
+		if !uuidPattern.MatchString(evaluation.TenantID) {
+			return "", errors.New("optimization tenant id must be a UUID")
+		}
+		predicates = append(predicates, fmt.Sprintf("tenant_id=toUUID('%s')", evaluation.TenantID))
+	}
+	if evaluation.SiteID != "" {
+		if !uuidPattern.MatchString(evaluation.SiteID) {
+			return "", errors.New("optimization site id must be a UUID")
+		}
+		predicates = append(predicates, fmt.Sprintf("site_id=toUUID('%s')", evaluation.SiteID))
+	}
+	if evaluation.OptimizationRunID != "" {
+		if !uuidPattern.MatchString(evaluation.OptimizationRunID) {
+			return "", errors.New("optimization run id must be a UUID")
+		}
+		predicates = append(predicates, fmt.Sprintf("optimization_run_id=toUUID('%s')", evaluation.OptimizationRunID))
+	}
+	predicates = append(predicates, fmt.Sprintf("evaluation_id=toUUID('%s')", evaluation.EvaluationID))
+	return strings.Join(predicates, " AND "), nil
+}
+
+func (sink *ClickHouseSink) HasEvaluation(ctx context.Context, evaluation Evaluation) (bool, error) {
+	where, err := evaluationWhereClause(evaluation)
+	if err != nil {
+		return false, err
+	}
 	endpoint := *sink.baseURL
 	query := endpoint.Query()
-	query.Set("query", fmt.Sprintf("SELECT count() FROM analytics.optimization_evaluations WHERE evaluation_id=toUUID('%s') FORMAT TabSeparated", strings.ReplaceAll(evaluationID, "'", "''")))
+	query.Set("query", fmt.Sprintf("SELECT count() FROM analytics.optimization_evaluations WHERE %s FORMAT TabSeparated", where))
 	endpoint.RawQuery = query.Encode()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {

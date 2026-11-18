@@ -153,7 +153,7 @@ func NewHandler(config ServerConfig) http.Handler {
 		if pgStore, ok := config.Store.(LiveObservationPostgresStore); ok {
 			if typedPG, isPG := pgStore.(*PostgresStore); !isPG || typedPG != nil {
 				siteCache, _ := config.LatestCache.(SiteLiveCache)
-				liveObservationReader = newPostgresLiveObservationReader(pgStore, siteCache)
+				liveObservationReader = newPostgresLiveObservationReader(pgStore, siteCache, config.LatestCache)
 			}
 		}
 	}

@@ -180,7 +180,7 @@ func (repository *HistoryPostgresRepository) ClaimPipelinedHistoryBatch(ctx cont
 	if repository == nil || repository.pool == nil {
 		return HistoryBatch{}, errors.New("telemetry history repository is closed")
 	}
-	if maxEvents < 1 || maxEvents > 4096 || now.IsZero() || leaseFor < time.Second || leaseFor > 10*time.Minute || maxInFlight < 1 {
+	if maxEvents < 1 || maxEvents > maxHistoryBatchRows || now.IsZero() || leaseFor < time.Second || leaseFor > 10*time.Minute || maxInFlight < 1 {
 		return HistoryBatch{}, errors.New("telemetry history claim parameters are invalid")
 	}
 	for attempt := 0; attempt < repository.retryAttempts(); attempt++ {

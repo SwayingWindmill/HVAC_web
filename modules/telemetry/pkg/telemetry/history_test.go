@@ -1233,3 +1233,40 @@ func TestHistoryRelayPipelineLeaseOwnershipAndReleaseFencing(t *testing.T) {
 		t.Fatalf("Stage 1 over-claimed b3 on Stage 2 failure: state=%s attempts=%d", repo.batches[2].state, repo.batches[2].attempts)
 	}
 }
+
+func TestHistoryRelayBacksOffTooManyPartsWithoutSplitting(t *testing.T) {
+	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	obs := []HistoryObservation{
+		{ObservationID: "018f2e00-9000-7000-8000-000000000801"},
+		{ObservationID: "018f2e00-9000-7000-8000-000000000802"},
+	}
+	repo := &historyRepositoryStub{batch: HistoryBatch{
+		LeaseID: "018f2e00-9000-7000-8000-000000000899", MaxAttempts: 1, Observations: obs,
+	}}
+	calls := 0
+	sink := &selectiveHistorySink{fn: func(_ []HistoryObservation) error {
+		calls++
+		return fmt.Errorf("%w: Code: 252. DB::Exception: Too many parts", ErrClickHouseTooManyParts)
+	}}
+	relay, err := NewHistoryRelay(HistoryRelayConfig{
+		Repository: repo,
+		Sink:       sink,
+		BatchSize:  32768,
+		LeaseFor:   30 * time.Second,
+		RetryAfter: time.Second,
+		Now:        func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	published, err := relay.RelayOnce(t.Context())
+	if !IsClickHouseTooManyPartsError(err) || published != 0 {
+		t.Fatalf("expected transient TOO_MANY_PARTS error, got published=%d err=%v", published, err)
+	}
+	if calls != 1 || len(repo.deadEvents) != 0 {
+		t.Fatalf("TOO_MANY_PARTS must not binary split or dead-letter: calls=%d dead=%v", calls, repo.deadEvents)
+	}
+	if !repo.retryAt.Equal(now.Add(2*time.Second)) || repo.errorCode != historyTooManyPartsFailureCode {
+		t.Fatalf("retryAt=%s code=%q, want +2s and %q", repo.retryAt, repo.errorCode, historyTooManyPartsFailureCode)
+	}
+}

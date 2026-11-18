@@ -537,6 +537,17 @@ func TestLoadClickHouseRetentionPrunerArchiveEnvWiring(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 			body, _ := io.ReadAll(request.Body)
 			sql := string(body)
+			switch {
+			case strings.Contains(sql, "FROM system.parts"):
+				writer.WriteHeader(http.StatusOK)
+				return
+			case strings.Contains(sql, "FROM system.mutations"):
+				_, _ = io.WriteString(writer, "0\n")
+				return
+			case strings.HasPrefix(sql, "SELECT 1 FROM "):
+				_, _ = io.WriteString(writer, "1\n")
+				return
+			}
 			mu.Lock()
 			if strings.HasPrefix(sql, "SELECT ") {
 				ops = append(ops, "SELECT")
@@ -564,7 +575,7 @@ func TestLoadClickHouseRetentionPrunerArchiveEnvWiring(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Prune failed: %v", err)
 		}
-		if len(res.ArchivedTables) != 2 || len(res.SubmittedTables) != 8 {
+		if len(res.ArchivedTables) != 2 || len(res.SubmittedTables) != 5 {
 			t.Fatalf("unexpected result: %+v", res)
 		}
 		entries, err := os.ReadDir(archiveDir)
@@ -576,7 +587,7 @@ func TestLoadClickHouseRetentionPrunerArchiveEnvWiring(t *testing.T) {
 		}
 		mu.Lock()
 		defer mu.Unlock()
-		if len(ops) != 10 || ops[0] != "SELECT" || ops[1] != "SELECT" {
+		if len(ops) != 7 || ops[0] != "SELECT" || ops[1] != "SELECT" {
 			t.Fatalf("unexpected query order: %v", ops)
 		}
 	})
@@ -613,5 +624,23 @@ func TestParseHistoryProjectionSettingsPipelineDepth(t *testing.T) {
 		})); err == nil {
 			t.Fatalf("expected error for TELEMETRY_HISTORY_PIPELINE_DEPTH=%q", invalid)
 		}
+	}
+
+	batchCfg, err := parseHistoryProjectionSettings(lookupFrom(map[string]string{
+		"TELEMETRY_HISTORY_BATCH_SIZE": "16384",
+	}))
+	if err != nil || batchCfg.BatchSize != 16384 {
+		t.Fatalf("BatchSize=%d err=%v, want 16384", batchCfg.BatchSize, err)
+	}
+	maxBatchCfg, err := parseHistoryProjectionSettings(lookupFrom(map[string]string{
+		"TELEMETRY_HISTORY_BATCH_SIZE": "32768",
+	}))
+	if err != nil || maxBatchCfg.BatchSize != 32768 {
+		t.Fatalf("max BatchSize=%d err=%v, want 32768", maxBatchCfg.BatchSize, err)
+	}
+	if _, err := parseHistoryProjectionSettings(lookupFrom(map[string]string{
+		"TELEMETRY_HISTORY_BATCH_SIZE": "32769",
+	})); err == nil {
+		t.Fatal("expected error for TELEMETRY_HISTORY_BATCH_SIZE=32769")
 	}
 }

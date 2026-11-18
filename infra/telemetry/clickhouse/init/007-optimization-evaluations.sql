@@ -17,7 +17,8 @@ CREATE TABLE IF NOT EXISTS analytics.optimization_evaluations (
   pv_forecast_snapshot_id Nullable(UUID),
   tariff_version_id UUID,
   evaluation_json String,
-  generated_at DateTime64(3, 'UTC')
+  generated_at DateTime64(3, 'UTC'),
+  INDEX evaluation_id_bf evaluation_id TYPE bloom_filter(0.01) GRANULARITY 1
 )
 ENGINE = MergeTree
 PARTITION BY toYYYYMM(generated_at)

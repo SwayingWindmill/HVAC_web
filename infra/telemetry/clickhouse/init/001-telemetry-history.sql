@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS telemetry_history.observations (
   -- History Sequence of the Telemetry batch that wrote the row; increases in visibility order.
   history_sequence UInt64,
   INDEX history_sequence_minmax history_sequence TYPE minmax GRANULARITY 1,
+  INDEX point_id_bf point_id TYPE bloom_filter(0.01) GRANULARITY 1,
+  INDEX device_telemetry_bf (device_id, telemetry_key) TYPE bloom_filter(0.01) GRANULARITY 1,
   CONSTRAINT accepted_tenant_scope CHECK acceptance_status != 'ACCEPTED' OR (tenant_id IS NOT NULL AND site_id IS NOT NULL AND device_id IS NOT NULL AND point_id IS NOT NULL)
 )
 ENGINE = MergeTree
@@ -51,85 +53,3 @@ ORDER BY (
 -- per poll interval); every remembered block stays in server memory.
 SETTINGS index_granularity = 8192,
          non_replicated_deduplication_window = 10000;
-
-CREATE TABLE IF NOT EXISTS telemetry_history.numeric_hourly_states (
-  hour DateTime('UTC'),
-  tenant_id UUID,
-  site_id UUID,
-  device_id UUID,
-  point_id UUID,
-  sensor_id UUID,
-  telemetry_key LowCardinality(String),
-  unit String,
-  sample_count AggregateFunction(count),
-  average_value AggregateFunction(avg, Float64),
-  minimum_value AggregateFunction(min, Float64),
-  maximum_value AggregateFunction(max, Float64)
-)
-ENGINE = AggregatingMergeTree
-PARTITION BY toYYYYMM(hour)
-ORDER BY (tenant_id, site_id, point_id, sensor_id, device_id, telemetry_key, unit, hour)
-SETTINGS non_replicated_deduplication_window = 10000;
-
-CREATE MATERIALIZED VIEW IF NOT EXISTS telemetry_history.observations_to_numeric_hourly
-TO telemetry_history.numeric_hourly_states
-AS
-SELECT
-  hour,
-  resolved_tenant_id AS tenant_id,
-  resolved_site_id AS site_id,
-  resolved_device_id AS device_id,
-  resolved_point_id AS point_id,
-  resolved_sensor_id AS sensor_id,
-  telemetry_key,
-  resolved_unit AS unit,
-  countState() AS sample_count,
-  avgState(value_number) AS average_value,
-  minState(value_number) AS minimum_value,
-  maxState(value_number) AS maximum_value
-FROM (
-  SELECT
-    toStartOfHour(sampled_at) AS hour,
-    assumeNotNull(tenant_id) AS resolved_tenant_id,
-    assumeNotNull(site_id) AS resolved_site_id,
-    assumeNotNull(device_id) AS resolved_device_id,
-    assumeNotNull(point_id) AS resolved_point_id,
-    ifNull(sensor_id, toUUID('00000000-0000-0000-0000-000000000000')) AS resolved_sensor_id,
-    telemetry_key,
-    ifNull(unit, '') AS resolved_unit,
-    assumeNotNull(value_number) AS value_number
-  FROM telemetry_history.observations
-  WHERE acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER')
-    AND point_type <> 'COUNTER'
-    AND value_number IS NOT NULL
-    AND tenant_id IS NOT NULL
-    AND site_id IS NOT NULL
-    AND device_id IS NOT NULL
-    AND point_id IS NOT NULL
-)
-GROUP BY
-  hour,
-  resolved_tenant_id,
-  resolved_site_id,
-  resolved_device_id,
-  resolved_point_id,
-  resolved_sensor_id,
-  telemetry_key,
-  resolved_unit;
-
-CREATE VIEW IF NOT EXISTS telemetry_history.numeric_hourly AS
-SELECT
-  hour,
-  tenant_id,
-  site_id,
-  device_id,
-  point_id,
-  nullIf(sensor_id, toUUID('00000000-0000-0000-0000-000000000000')) AS sensor_id,
-  telemetry_key,
-  nullIf(unit, '') AS unit,
-  countMerge(sample_count) AS sample_count,
-  avgMerge(average_value) AS average_value,
-  minMerge(minimum_value) AS minimum_value,
-  maxMerge(maximum_value) AS maximum_value
-FROM telemetry_history.numeric_hourly_states
-GROUP BY hour, tenant_id, site_id, point_id, sensor_id, device_id, telemetry_key, unit;

@@ -1752,12 +1752,14 @@ func (reader *ClickHouseInputReader) ReadStagingSnapshot(ctx context.Context, qu
 	}
 
 	var latestFilterSQL, historyFilterSQL string
+	var liveDeviceIDs []string
 	if twin != nil {
 		plan := buildTwinStagingQueryPlan(*twin)
 		latestFilterSQL = buildDeviceTelemetryFilterSQL(plan.allBindings)
 		if latestFilterSQL == "" {
 			return buildStagingSnapshotFromObservations(query.TenantID, query.SiteID, at, twin, topology, nil, nil), nil
 		}
+		liveDeviceIDs = collectAllUUIDDeviceIDs(plan.allBindings)
 		var histBranches []string
 		if runFilter := buildDeviceTelemetryFilterSQL(plan.chillerRunStateBindings); runFilter != "" {
 			histBranches = append(histBranches, fmt.Sprintf("(%s AND sampled_at >= parseDateTime64BestEffort('%s',3,'UTC'))", runFilter, formatOptimizationTime(runHistoryFrom)))
@@ -1780,7 +1782,9 @@ func (reader *ClickHouseInputReader) ReadStagingSnapshot(ctx context.Context, qu
 		)
 	}
 
-	latestSQL := fmt.Sprintf(`SELECT
+	latestRows, usedLive, err := reader.tryReadStagingLiveRows(ctx, query.TenantID, query.SiteID, liveDeviceIDs, latestFrom, at, maxDuration(2*policy.MaxTelemetryAge, 2*time.Hour))
+	if err != nil || !usedLive {
+		latestSQL := fmt.Sprintf(`SELECT
  toString(device_id) AS deviceId,
  source_id AS sourceId,
  telemetry_key AS telemetryKey,
@@ -1815,17 +1819,18 @@ FROM (
 )
 WHERE row_num = 1
 FORMAT JSONEachRow`,
-		clickHouseString(query.TenantID), clickHouseString(query.SiteID), latestFilterSQL,
-		formatOptimizationTime(latestFrom), formatOptimizationTime(at), formatOptimizationTime(at),
-	)
+			clickHouseString(query.TenantID), clickHouseString(query.SiteID), latestFilterSQL,
+			formatOptimizationTime(latestFrom), formatOptimizationTime(at), formatOptimizationTime(at),
+		)
 
-	latestPayload, err := reader.queryLimited(ctx, latestSQL, maximumStagingSnapshotResponseBytes)
-	if err != nil {
-		return StagingSnapshot{}, fmt.Errorf("query staging latest observations: %w", err)
-	}
-	latestRows, err := decodeStagingTelemetryRows(bytes.NewReader(latestPayload))
-	if err != nil {
-		return StagingSnapshot{}, fmt.Errorf("decode staging latest observations: %w", err)
+		latestPayload, err := reader.queryLimited(ctx, latestSQL, maximumStagingSnapshotResponseBytes)
+		if err != nil {
+			return StagingSnapshot{}, fmt.Errorf("query staging latest observations: %w", err)
+		}
+		latestRows, err = decodeStagingTelemetryRows(bytes.NewReader(latestPayload))
+		if err != nil {
+			return StagingSnapshot{}, fmt.Errorf("decode staging latest observations: %w", err)
+		}
 	}
 
 	var historyRows []stagingTelemetryRow
@@ -1865,6 +1870,116 @@ FORMAT JSONEachRow`,
 	}
 
 	return buildStagingSnapshotFromObservations(query.TenantID, query.SiteID, at, twin, topology, latestRows, historyRows), nil
+}
+
+func collectAllUUIDDeviceIDs(bindings []planttwin.PointBinding) []string {
+	if len(bindings) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(bindings))
+	deviceIDs := make([]string, 0, len(bindings))
+	for _, pb := range bindings {
+		clean := strings.ToLower(strings.TrimSpace(pb.DeviceID))
+		if !uuidPattern.MatchString(clean) {
+			return nil
+		}
+		if _, dup := seen[clean]; dup {
+			continue
+		}
+		seen[clean] = struct{}{}
+		deviceIDs = append(deviceIDs, clean)
+	}
+	sort.Strings(deviceIDs)
+	return deviceIDs
+}
+
+func (reader *ClickHouseInputReader) tryReadStagingLiveRows(
+	ctx context.Context,
+	tenantID, siteID string,
+	deviceIDs []string,
+	latestFrom, at time.Time,
+	maxCacheLag time.Duration,
+) ([]stagingTelemetryRow, bool, error) {
+	if len(deviceIDs) == 0 || reader.liveObservations == nil {
+		return nil, false, nil
+	}
+	devReader, ok := reader.liveObservations.(TelemetryDeviceLiveObservationReader)
+	if !ok {
+		return nil, false, nil
+	}
+	if reader.now().UTC().Sub(at.UTC()) > maxCacheLag {
+		return nil, false, nil
+	}
+	byDevice, err := devReader.ReadDeviceLiveObservations(ctx, tenantID, siteID, deviceIDs)
+	if err != nil {
+		return nil, false, err
+	}
+	normalized := make(map[string]map[string]OptimizationLiveObservation, len(byDevice))
+	for devID, entries := range byDevice {
+		normalized[strings.ToLower(strings.TrimSpace(devID))] = entries
+	}
+	rows := make([]stagingTelemetryRow, 0, len(deviceIDs)*4)
+	for _, devID := range deviceIDs {
+		entries := normalized[strings.ToLower(strings.TrimSpace(devID))]
+		if len(entries) == 0 {
+			return nil, false, nil
+		}
+		for mapKey, obs := range entries {
+			telKey := strings.TrimSpace(obs.TelemetryKey)
+			if telKey == "" {
+				telKey = strings.TrimSpace(mapKey)
+			}
+			if telKey == "" {
+				continue
+			}
+			sampledAt, parseErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(obs.SampledAt))
+			if parseErr != nil {
+				return nil, false, nil
+			}
+			sampledUTC := sampledAt.UTC()
+			if sampledUTC.After(at) {
+				return nil, false, nil
+			}
+			if rawReceived := strings.TrimSpace(obs.ReceivedAt); rawReceived != "" {
+				receivedAt, recErr := time.Parse(time.RFC3339Nano, rawReceived)
+				if recErr != nil || receivedAt.UTC().After(at) {
+					return nil, false, nil
+				}
+			}
+			if sampledUTC.Before(latestFrom) {
+				continue
+			}
+			row := stagingTelemetryRow{
+				DeviceID:     devID,
+				SourceID:     strings.TrimSpace(obs.SourceID),
+				TelemetryKey: telKey,
+				Unit:         obs.Unit,
+				Quality:      obs.Quality,
+				SampledAt:    sampledUTC,
+			}
+			if obs.ValueNumber != nil {
+				v := *obs.ValueNumber
+				row.ValueNumber = &v
+			} else if obs.ValueString != nil {
+				s := *obs.ValueString
+				row.ValueString = &s
+			} else if obs.ValueBoolean != nil {
+				s := "false"
+				if *obs.ValueBoolean {
+					s = "true"
+				}
+				row.ValueString = &s
+			} else if (obs.ValueType == "" || strings.EqualFold(obs.ValueType, "NUMBER")) && finite(obs.Value) {
+				v := obs.Value
+				row.ValueNumber = &v
+			}
+			rows = append(rows, row)
+		}
+	}
+	if len(rows) == 0 {
+		return nil, false, nil
+	}
+	return rows, true, nil
 }
 
 type twinStagingQueryPlan struct {

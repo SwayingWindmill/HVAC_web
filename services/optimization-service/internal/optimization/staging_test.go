@@ -813,6 +813,203 @@ func TestClickHouseInputReaderReadsStagingSnapshot(t *testing.T) {
 	}
 }
 
+func TestClickHouseInputReaderReadsStagingSnapshotViaLiveDeviceCache(t *testing.T) {
+	at := time.Date(2026, 11, 14, 15, 0, 0, 0, time.UTC)
+	twin := testFourChillerTwin(testPlantTenantID, testPlantSiteID)
+	twin.Units = twin.Units[2:4]
+	twin.PointBindings = append(twin.PointBindings,
+		planttwin.PointBinding{PointID: "pt-cl-c", DeviceID: testMeterCID, DeviceCode: "amp-c", DeviceSourceKey: "amp-c", PointCode: "chw_leaving_temperature", WireSourceKey: "chw_leaving_temperature", PointType: "TELEMETRY", Unit: "Cel", SubjectType: planttwin.SubjectTypeAsset, AssetID: testChillerCID, BindingRole: planttwin.BindingDescribes, SemanticRole: planttwin.RoleCHWLeavingTemp},
+		planttwin.PointBinding{PointID: "pt-rs-c", DeviceID: testMeterCID, DeviceCode: "amp-c", DeviceSourceKey: "amp-c", PointCode: "run_state", WireSourceKey: "chiller.run_state", PointType: "TELEMETRY", SubjectType: planttwin.SubjectTypeAsset, AssetID: testChillerCID, BindingRole: planttwin.BindingDescribes, SemanticRole: planttwin.RoleRunState},
+		planttwin.PointBinding{PointID: "pt-rs-d", DeviceID: testMeterDID, DeviceCode: "amp-d", DeviceSourceKey: "amp-d", PointCode: "run_state", WireSourceKey: "chiller.run_state", PointType: "TELEMETRY", SubjectType: planttwin.SubjectTypeAsset, AssetID: testChillerDID, BindingRole: planttwin.BindingDescribes, SemanticRole: planttwin.RoleRunState},
+	)
+	loader, err := planttwin.NewStaticLoader(twin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadedTwin, err := loader.LoadSiteTwin(t.Context(), planttwin.SiteScope{TenantID: testPlantTenantID, SiteID: testPlantSiteID}, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var seenQueries []string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		sql := string(body)
+		seenQueries = append(seenQueries, sql)
+		writer.Header().Set("Content-Type", "application/x-ndjson")
+		if strings.Contains(sql, "row_number() OVER") {
+			t.Fatalf("staging snapshot must not issue ClickHouse latest query when live device cache succeeds: %s", sql)
+		}
+		_, _ = writer.Write([]byte(
+			`{"deviceId":"` + testMeterDID + `","sourceId":"amp-d","telemetryKey":"chiller.run_state","valueString":"STOPPED","quality":"GOOD","sampledAt":"2026-11-14T14:50:00.000Z"}` + "\n" +
+				`{"deviceId":"` + testMeterDID + `","sourceId":"amp-d","telemetryKey":"chiller.run_state","valueString":"STOPPED","quality":"GOOD","sampledAt":"2026-11-14T14:59:00.000Z"}` + "\n",
+		))
+	}))
+	defer server.Close()
+
+	sampled := at.Add(-30 * time.Second).UTC().Format(time.RFC3339Nano)
+	received := at.Add(-29 * time.Second).UTC().Format(time.RFC3339Nano)
+	loadVal, powerVal, leavingVal := 480.0, 82.0, 7.1
+	runStr := "RUNNING"
+	stoppedBool := false
+	liveStub := &autoControlLiveDeviceStub{
+		deviceObs: map[string]map[string]OptimizationLiveObservation{
+			testBTUDevID: {
+				"chw_load": {DeviceID: testBTUDevID, SourceID: "plant-btu", TelemetryKey: "chw_load", ValueType: "NUMBER", Value: loadVal, ValueNumber: &loadVal, Unit: "kW", Quality: "GOOD", SampledAt: sampled, ReceivedAt: received},
+			},
+			testMeterCID: {
+				"p_kw":                    {DeviceID: testMeterCID, SourceID: "amp-c", TelemetryKey: "p_kw", ValueType: "NUMBER", Value: powerVal, ValueNumber: &powerVal, Unit: "kW", Quality: "GOOD", SampledAt: sampled, ReceivedAt: received},
+				"chw_leaving_temperature": {DeviceID: testMeterCID, SourceID: "amp-c", TelemetryKey: "chw_leaving_temperature", ValueType: "NUMBER", Value: leavingVal, ValueNumber: &leavingVal, Unit: "Cel", Quality: "GOOD", SampledAt: sampled, ReceivedAt: received},
+				"chiller.run_state":       {DeviceID: testMeterCID, SourceID: "amp-c", TelemetryKey: "chiller.run_state", ValueType: "STRING", ValueString: &runStr, Quality: "GOOD", SampledAt: sampled, ReceivedAt: received},
+			},
+			testMeterDID: {
+				"chiller.run_state": {DeviceID: testMeterDID, SourceID: "amp-d", TelemetryKey: "chiller.run_state", ValueType: "BOOLEAN", ValueBoolean: &stoppedBool, Quality: "GOOD", SampledAt: sampled, ReceivedAt: received},
+			},
+		},
+	}
+
+	reader, err := NewClickHouseInputReader(InputReaderConfig{
+		BaseURL:          server.URL,
+		Energy:           &energySeriesStub{},
+		LiveObservations: liveStub,
+		Now:              func() time.Time { return at.Add(5 * time.Second).UTC() },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := reader.ReadStagingSnapshot(t.Context(), StagingSnapshotQuery{
+		TenantID: testPlantTenantID,
+		SiteID:   testPlantSiteID,
+		At:       at,
+		Policy:   DefaultStagingPolicy(),
+		Twin:     &loadedTwin,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(seenQueries) != 1 || liveStub.devCalls != 1 {
+		t.Fatalf("expected 1 ClickHouse history query and 1 live device call, got ch=%d devCalls=%d", len(seenQueries), liveStub.devCalls)
+	}
+	if snapshot.PlantCoolingLoad == nil || snapshot.PlantCoolingLoad.Value != 480 {
+		t.Fatalf("PlantCoolingLoad = %+v", snapshot.PlantCoolingLoad)
+	}
+	var chillerC, chillerD *ChillerUnitInput
+	for i := range snapshot.Chillers {
+		switch snapshot.Chillers[i].AssetCode {
+		case "chiller-c":
+			chillerC = &snapshot.Chillers[i]
+		case "chiller-d":
+			chillerD = &snapshot.Chillers[i]
+		}
+	}
+	if chillerC == nil || chillerC.Power == nil || chillerC.Power.Value != 82 || chillerC.RunState != RunStateRunning {
+		t.Fatalf("chiller-c not resolved from live device cache: %+v", chillerC)
+	}
+	if chillerD == nil || chillerD.RunState != "false" || len(chillerD.RunStateHistory) != 2 {
+		t.Fatalf("chiller-d boolean state/history not populated cleanly: %+v", chillerD)
+	}
+}
+
+func TestClickHouseInputReaderFallsBackWhenStagingLiveRowsPostdateAtOrMissDevice(t *testing.T) {
+	at := time.Date(2026, 11, 14, 15, 0, 0, 0, time.UTC)
+	twin := testFourChillerTwin(testPlantTenantID, testPlantSiteID)
+	twin.Units = twin.Units[2:4]
+	twin.PointBindings = append(twin.PointBindings,
+		planttwin.PointBinding{PointID: "pt-rs-c", DeviceID: testMeterCID, DeviceCode: "amp-c", DeviceSourceKey: "amp-c", PointCode: "run_state", WireSourceKey: "chiller.run_state", PointType: "TELEMETRY", SubjectType: planttwin.SubjectTypeAsset, AssetID: testChillerCID, BindingRole: planttwin.BindingDescribes, SemanticRole: planttwin.RoleRunState},
+		planttwin.PointBinding{PointID: "pt-rs-d", DeviceID: testMeterDID, DeviceCode: "amp-d", DeviceSourceKey: "amp-d", PointCode: "run_state", WireSourceKey: "chiller.run_state", PointType: "TELEMETRY", SubjectType: planttwin.SubjectTypeAsset, AssetID: testChillerDID, BindingRole: planttwin.BindingDescribes, SemanticRole: planttwin.RoleRunState},
+	)
+	loader, err := planttwin.NewStaticLoader(twin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadedTwin, err := loader.LoadSiteTwin(t.Context(), planttwin.SiteScope{TenantID: testPlantTenantID, SiteID: testPlantSiteID}, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	makeFallbackServer := func(latestCount *int) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			body, _ := io.ReadAll(request.Body)
+			sql := string(body)
+			writer.Header().Set("Content-Type", "application/x-ndjson")
+			if strings.Contains(sql, "row_number() OVER") {
+				*latestCount++
+				_, _ = writer.Write([]byte(
+					`{"deviceId":"` + testBTUDevID + `","sourceId":"plant-btu","telemetryKey":"chw_load","valueNumber":455,"unit":"kW","quality":"GOOD","sampledAt":"2026-11-14T14:59:00.000Z"}` + "\n" +
+						`{"deviceId":"` + testMeterCID + `","sourceId":"amp-c","telemetryKey":"p_kw","valueNumber":79,"unit":"kW","quality":"GOOD","sampledAt":"2026-11-14T14:59:00.000Z"}` + "\n",
+				))
+				return
+			}
+			writer.WriteHeader(http.StatusOK)
+		}))
+	}
+
+	validSampled := at.Add(-30 * time.Second).UTC().Format(time.RFC3339Nano)
+	postAtSampled := at.Add(10 * time.Second).UTC().Format(time.RFC3339Nano)
+	loadVal := 480.0
+
+	t.Run("post-at live observation falls back to ClickHouse", func(t *testing.T) {
+		var latestCount int
+		server := makeFallbackServer(&latestCount)
+		defer server.Close()
+
+		reader, err := NewClickHouseInputReader(InputReaderConfig{
+			BaseURL: server.URL,
+			Energy:  &energySeriesStub{},
+			LiveObservations: &autoControlLiveDeviceStub{
+				deviceObs: map[string]map[string]OptimizationLiveObservation{
+					testBTUDevID: {"chw_load": {DeviceID: testBTUDevID, TelemetryKey: "chw_load", ValueType: "NUMBER", Value: loadVal, ValueNumber: &loadVal, Quality: "GOOD", SampledAt: postAtSampled}},
+					testMeterCID: {"p_kw": {DeviceID: testMeterCID, TelemetryKey: "p_kw", ValueType: "NUMBER", Value: 82, Quality: "GOOD", SampledAt: validSampled}},
+					testMeterDID: {"p_kw": {DeviceID: testMeterDID, TelemetryKey: "p_kw", ValueType: "NUMBER", Value: 0, Quality: "GOOD", SampledAt: validSampled}},
+				},
+			},
+			Now: func() time.Time { return at.Add(30 * time.Second).UTC() },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		snapshot, err := reader.ReadStagingSnapshot(t.Context(), StagingSnapshotQuery{
+			TenantID: testPlantTenantID, SiteID: testPlantSiteID, At: at, Policy: DefaultStagingPolicy(), Twin: &loadedTwin,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if latestCount != 1 || snapshot.PlantCoolingLoad == nil || snapshot.PlantCoolingLoad.Value != 455 {
+			t.Fatalf("expected ClickHouse fallback with value 455, got latestCount=%d load=%+v", latestCount, snapshot.PlantCoolingLoad)
+		}
+	})
+
+	t.Run("missing device in live cache falls back to ClickHouse", func(t *testing.T) {
+		var latestCount int
+		server := makeFallbackServer(&latestCount)
+		defer server.Close()
+
+		reader, err := NewClickHouseInputReader(InputReaderConfig{
+			BaseURL: server.URL,
+			Energy:  &energySeriesStub{},
+			LiveObservations: &autoControlLiveDeviceStub{
+				deviceObs: map[string]map[string]OptimizationLiveObservation{
+					testBTUDevID: {"chw_load": {DeviceID: testBTUDevID, TelemetryKey: "chw_load", ValueType: "NUMBER", Value: loadVal, ValueNumber: &loadVal, Quality: "GOOD", SampledAt: validSampled}},
+					testMeterCID: {"p_kw": {DeviceID: testMeterCID, TelemetryKey: "p_kw", ValueType: "NUMBER", Value: 82, Quality: "GOOD", SampledAt: validSampled}},
+				},
+			},
+			Now: func() time.Time { return at.Add(5 * time.Second).UTC() },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		snapshot, err := reader.ReadStagingSnapshot(t.Context(), StagingSnapshotQuery{
+			TenantID: testPlantTenantID, SiteID: testPlantSiteID, At: at, Policy: DefaultStagingPolicy(), Twin: &loadedTwin,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if latestCount != 1 || snapshot.PlantCoolingLoad == nil || snapshot.PlantCoolingLoad.Value != 455 {
+			t.Fatalf("expected ClickHouse fallback on missing device, got latestCount=%d load=%+v", latestCount, snapshot.PlantCoolingLoad)
+		}
+	})
+}
+
 type stagingSnapshotStub struct {
 	snapshot StagingSnapshot
 	err      error

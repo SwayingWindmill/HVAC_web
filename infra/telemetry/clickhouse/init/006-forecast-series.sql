@@ -24,7 +24,9 @@ CREATE TABLE IF NOT EXISTS analytics.forecast_series (
   upper_bound Nullable(Float64),
   quantile Nullable(Float64),
   quality LowCardinality(String),
-  generated_at DateTime64(3, 'UTC')
+  generated_at DateTime64(3, 'UTC'),
+  INDEX forecast_id_bf forecast_id TYPE bloom_filter(0.01) GRANULARITY 1,
+  INDEX forecast_job_id_bf forecast_job_id TYPE bloom_filter(0.01) GRANULARITY 1
 )
 ENGINE = MergeTree
 PARTITION BY toYYYYMM(forecast_for)

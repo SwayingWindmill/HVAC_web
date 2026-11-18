@@ -13,19 +13,38 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
-const maxHistoryBatchBytes = 8 << 20
+const (
+	maxHistoryBatchRows  = 32768
+	maxHistoryBatchBytes = 32 << 20
+)
 
 // ErrHistoryBatchPermanent marks a deterministic validation or schema error that retries cannot fix.
 var ErrHistoryBatchPermanent = errors.New("ClickHouse history batch rejected permanently")
 
+// ErrClickHouseTooManyParts marks ClickHouse part-count throttling (Code 252) as transient backoff.
+var ErrClickHouseTooManyParts = errors.New("ClickHouse history batch throttled due to too many parts")
+
 // IsPermanentHistoryError reports whether err is a permanent ClickHouse history failure.
 func IsPermanentHistoryError(err error) bool {
 	return errors.Is(err, ErrHistoryBatchPermanent)
+}
+
+// IsClickHouseTooManyPartsError reports whether err was caused by ClickHouse TOO_MANY_PARTS throttling.
+func IsClickHouseTooManyPartsError(err error) bool {
+	return errors.Is(err, ErrClickHouseTooManyParts)
+}
+
+func isClickHouseTooManyPartsMessage(message string) bool {
+	upper := strings.ToUpper(message)
+	return strings.Contains(upper, "TOO_MANY_PARTS") ||
+		strings.Contains(upper, "TOO MANY PARTS") ||
+		strings.Contains(message, "Code: 252")
 }
 
 var (
@@ -62,7 +81,7 @@ func NewClickHouseHistorySink(config ClickHouseHistoryConfig) (*ClickHouseHistor
 	}
 	client := config.HTTPClient
 	if client == nil {
-		client = newDefaultClickHouseHistoryHTTPClient(10 * time.Second)
+		client = newDefaultClickHouseHistoryHTTPClient(30 * time.Second)
 	}
 	return &ClickHouseHistorySink{
 		baseURL: parsed, database: config.Database, table: config.Table,
@@ -124,8 +143,8 @@ func (sink *ClickHouseHistorySink) PrepareObservations(sequence uint64, observat
 	if len(observations) == 0 {
 		return nil, "", nil
 	}
-	if len(observations) > 4096 {
-		return nil, "", errors.New("ClickHouse history insert batch exceeds 4096 observations")
+	if len(observations) > maxHistoryBatchRows {
+		return nil, "", fmt.Errorf("ClickHouse history insert batch exceeds %d observations", maxHistoryBatchRows)
 	}
 	if sequence == 0 {
 		return nil, "", errors.New("ClickHouse history insert requires the batch History Sequence")
@@ -145,7 +164,7 @@ func (sink *ClickHouseHistorySink) PrepareObservations(sequence uint64, observat
 			return nil, "", fmt.Errorf("%w: encode ClickHouse history observation %s: %w", ErrHistoryBatchPermanent, observation.ObservationID, err)
 		}
 		if encoded.Len()+len(body)+1 > maxHistoryBatchBytes {
-			return nil, "", fmt.Errorf("%w: ClickHouse history insert exceeds 8 MiB", ErrHistoryBatchPermanent)
+			return nil, "", fmt.Errorf("%w: ClickHouse history insert exceeds 32 MiB", ErrHistoryBatchPermanent)
 		}
 		encoded.Write(body)
 		encoded.WriteByte('\n')
@@ -286,9 +305,9 @@ func (sink *ClickHouseHistorySink) insertBatch(ctx context.Context, compressed [
 	query.Set("deduplicate_blocks_in_dependent_materialized_views", "1")
 	query.Set("materialized_views_ignore_errors", "0")
 	query.Set("input_format_parallel_parsing", "0")
-	query.Set("max_insert_block_size", "4096")
-	query.Set("min_insert_block_size_rows", "4096")
-	query.Set("min_insert_block_size_bytes", "8388608")
+	query.Set("max_insert_block_size", strconv.Itoa(maxHistoryBatchRows))
+	query.Set("min_insert_block_size_rows", strconv.Itoa(maxHistoryBatchRows))
+	query.Set("min_insert_block_size_bytes", strconv.Itoa(maxHistoryBatchBytes))
 
 	query.Set("wait_end_of_query", "1")
 	endpoint.RawQuery = query.Encode()
@@ -306,6 +325,7 @@ func (sink *ClickHouseHistorySink) insertBatch(ctx context.Context, compressed [
 		return fmt.Errorf("insert ClickHouse history batch %s: %w", token, err)
 	}
 	responseBody, readErr := io.ReadAll(io.LimitReader(response.Body, 8<<10))
+	_, _ = io.Copy(io.Discard, response.Body)
 	closeErr := response.Body.Close()
 	if readErr != nil {
 		return fmt.Errorf("read ClickHouse history response for %s: %w", token, readErr)
@@ -317,6 +337,9 @@ func (sink *ClickHouseHistorySink) insertBatch(ctx context.Context, compressed [
 		message := strings.TrimSpace(string(responseBody))
 		if len(message) > 512 {
 			message = message[:512]
+		}
+		if isClickHouseTooManyPartsMessage(message) {
+			return fmt.Errorf("%w: ClickHouse history insert returned %d for %s: %s", ErrClickHouseTooManyParts, response.StatusCode, token, message)
 		}
 		if response.StatusCode == http.StatusBadRequest {
 			return fmt.Errorf("%w: ClickHouse history insert returned %d for %s: %s", ErrHistoryBatchPermanent, response.StatusCode, token, message)

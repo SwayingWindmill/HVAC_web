@@ -553,7 +553,7 @@ func (service *Service) Reconcile(ctx context.Context, staleBefore time.Time, li
 	}
 	repaired := 0
 	for _, evaluation := range stale {
-		present, checkErr := service.evaluations.HasEvaluation(ctx, evaluation.EvaluationID)
+		present, checkErr := service.evaluations.HasEvaluation(ctx, evaluation)
 		if checkErr != nil {
 			return repaired, checkErr
 		}

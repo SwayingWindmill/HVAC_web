@@ -328,7 +328,7 @@ func TestColdArchiveExporterZeroRowsAndErrors(t *testing.T) {
 	}
 	if _, err := badExporter.ExportBeforePrune(t.Context(), ColdArchiveExportRequest{
 		Database: "telemetry_history",
-		Table:    "numeric_1min_states",
+		Table:    "numeric_gauge_1min_states",
 		Cutoff:   cutoff,
 	}); err == nil {
 		t.Fatal("accepted unsupported archive table")

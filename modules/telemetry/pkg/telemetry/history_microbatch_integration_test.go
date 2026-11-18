@@ -123,16 +123,16 @@ func TestHistoryMicrobatchMixedPartitionsRecoversMaterializedView(t *testing.T) 
 		t.Skip("ClickHouse not configured")
 	}
 	clickHouseQuery(t, baseURL, `CREATE TABLE telemetry_history.microbatch_raw AS telemetry_history.observations`)
-	clickHouseQuery(t, baseURL, `CREATE TABLE telemetry_history.microbatch_hourly AS telemetry_history.numeric_hourly_states`)
-	ddl := clickHouseQuery(t, baseURL, `SHOW CREATE TABLE telemetry_history.observations_to_numeric_hourly FORMAT TSVRaw`)
-	ddl = strings.ReplaceAll(ddl, "observations_to_numeric_hourly", "microbatch_mv")
-	ddl = strings.ReplaceAll(ddl, "numeric_hourly_states", "microbatch_hourly")
+	clickHouseQuery(t, baseURL, `CREATE TABLE telemetry_history.microbatch_gauge_15min AS telemetry_history.numeric_gauge_15min_states`)
+	ddl := clickHouseQuery(t, baseURL, `SHOW CREATE TABLE telemetry_history.observations_to_numeric_gauge_15min FORMAT TSVRaw`)
+	ddl = strings.ReplaceAll(ddl, "observations_to_numeric_gauge_15min", "microbatch_mv")
+	ddl = strings.ReplaceAll(ddl, "numeric_gauge_15min_states", "microbatch_gauge_15min")
 	ddl = strings.ReplaceAll(ddl, "telemetry_history.observations", "telemetry_history.microbatch_raw")
 	clickHouseQuery(t, baseURL, ddl)
 	defer func() {
 		clickHouseQuery(t, baseURL, `DROP TABLE telemetry_history.microbatch_mv`)
 		clickHouseQuery(t, baseURL, `DROP TABLE telemetry_history.microbatch_raw`)
-		clickHouseQuery(t, baseURL, `DROP TABLE telemetry_history.microbatch_hourly`)
+		clickHouseQuery(t, baseURL, `DROP TABLE telemetry_history.microbatch_gauge_15min`)
 	}()
 	sink, err := NewClickHouseHistorySink(ClickHouseHistoryConfig{BaseURL: baseURL, Database: "telemetry_history", Table: "microbatch_raw", Username: os.Getenv("S2_CLICKHOUSE_USERNAME"), Password: os.Getenv("S2_CLICKHOUSE_PASSWORD")})
 	if err != nil {
@@ -144,14 +144,14 @@ func TestHistoryMicrobatchMixedPartitionsRecoversMaterializedView(t *testing.T) 
 		value := float64(10 + 20*i)
 		rows[i] = HistoryObservation{ObservationID: fmt.Sprintf("018f2e00-9500-7000-8000-%012d", i), TenantID: stringPointer(tenantA), SiteID: stringPointer(siteA), DeviceID: stringPointer(deviceA), PointID: stringPointer("018f2e00-3100-7000-8000-000000000001"), SourceID: sourceA, SourceEventID: fmt.Sprintf("018f2e00-9600-7000-8000-%012d", i), SourcePartition: "microbatch-mv", SourceOffset: int64(i), SourcePath: "POLL", TelemetryKey: "temperature", PointType: stringPointer("TELEMETRY"), PointRevision: &revision, ValueType: stringPointer("NUMBER"), ValueNumber: &value, SampledAt: time.Date(2026, 7+time.Month(i), 1, 0, 0, 0, 0, time.UTC), ReceivedAt: time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC), AcceptanceStatus: "ACCEPTED", Quality: "GOOD", QualityReasons: []string{}, PayloadSHA256: strings.Repeat("a", 64)}
 	}
-	clickHouseQuery(t, baseURL, `ALTER TABLE telemetry_history.microbatch_hourly ADD CONSTRAINT injected_failure CHECK 0`)
+	clickHouseQuery(t, baseURL, `ALTER TABLE telemetry_history.microbatch_gauge_15min ADD CONSTRAINT injected_failure CHECK 0`)
 	if err := sink.InsertObservations(t.Context(), 1, rows); err == nil {
 		t.Fatal("MV failure was acknowledged as success")
 	}
 	if count := clickHouseQuery(t, baseURL, `SELECT count() FROM telemetry_history.microbatch_raw FORMAT TSVRaw`); count == "0" {
 		t.Fatal("fault injection did not exercise a partially committed insert")
 	}
-	clickHouseQuery(t, baseURL, `ALTER TABLE telemetry_history.microbatch_hourly DROP CONSTRAINT injected_failure`)
+	clickHouseQuery(t, baseURL, `ALTER TABLE telemetry_history.microbatch_gauge_15min DROP CONSTRAINT injected_failure`)
 	errors := make(chan error, 2)
 	for range 2 {
 		go func() { errors <- sink.InsertObservations(t.Context(), 1, rows) }()
@@ -164,8 +164,8 @@ func TestHistoryMicrobatchMixedPartitionsRecoversMaterializedView(t *testing.T) 
 	if actual := clickHouseQuery(t, baseURL, `SELECT count(),uniqExact(observation_id),sum(value_number) FROM telemetry_history.microbatch_raw FORMAT TSVRaw`); actual != "2\t2\t40" {
 		t.Fatalf("raw after recovery=%s", actual)
 	}
-	if actual := clickHouseQuery(t, baseURL, `SELECT countMerge(sample_count),avgMerge(average_value) FROM telemetry_history.microbatch_hourly FORMAT TSVRaw`); actual != "2\t20" {
-		t.Fatalf("hourly after recovery=%s", actual)
+	if actual := clickHouseQuery(t, baseURL, `SELECT countIfMerge(usable_count),avgIfMerge(usable_avg) FROM telemetry_history.microbatch_gauge_15min FORMAT TSVRaw`); actual != "2\t20" {
+		t.Fatalf("gauge 15min after recovery=%s", actual)
 	}
 }
 

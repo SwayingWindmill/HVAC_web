@@ -1,8 +1,10 @@
 package forecast
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -36,10 +38,76 @@ func TestSinkReadsWithTheReaderAccountAndWritesWithTheWriter(t *testing.T) {
 	if err := sink.InsertForecastPoints(t.Context(), points); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := sink.HasForecastJob(t.Context(), request.ForecastJobID, len(points)); err != nil {
+	scope := ForecastJobScope{
+		TenantID:       request.TenantID,
+		SiteID:         request.SiteID,
+		Target:         request.Target,
+		SubjectType:    request.SubjectType,
+		SubjectID:      request.SubjectID,
+		ForecastJobID:  request.ForecastJobID,
+		ForecastOrigin: request.ForecastOrigin,
+	}
+	if _, err := sink.HasForecastJob(t.Context(), scope, len(points)); err != nil {
 		t.Fatal(err)
 	}
 	if users[http.MethodPost] != "forecast_service_writer" || users[http.MethodGet] != "forecast_service_reader" {
 		t.Fatalf("ClickHouse users by method=%v", users)
+	}
+}
+
+func TestForecastClickHouseLookupsIncludeLeadingPrimaryKeyPredicates(t *testing.T) {
+	var queries []string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		query := request.URL.Query().Get("query")
+		queries = append(queries, query)
+		if strings.Contains(query, "SELECT count()") {
+			_, _ = io.WriteString(writer, "1\n")
+			return
+		}
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	sink, err := NewClickHouseSink(ClickHouseConfig{
+		BaseURL:        server.URL,
+		ReaderUsername: "forecast_service_reader",
+		HTTPClient:     server.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := validRequest()
+	scope := ForecastJobScope{
+		TenantID:       request.TenantID,
+		SiteID:         request.SiteID,
+		Target:         request.Target,
+		SubjectType:    request.SubjectType,
+		SubjectID:      request.SubjectID,
+		ForecastJobID:  request.ForecastJobID,
+		ForecastOrigin: request.ForecastOrigin,
+	}
+	if _, err := sink.HasForecastJob(t.Context(), scope, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sink.ReadForecastJob(t.Context(), scope); err != nil {
+		t.Fatal(err)
+	}
+	if len(queries) != 2 {
+		t.Fatalf("expected 2 queries, got %d", len(queries))
+	}
+	for i, sql := range queries {
+		for _, marker := range []string{
+			"tenant_id=toUUID('" + request.TenantID + "')",
+			"site_id=toUUID('" + request.SiteID + "')",
+			"target='" + request.Target + "'",
+			"subject_type='" + request.SubjectType + "'",
+			"subject_id=toUUID('" + request.SubjectID + "')",
+			"forecast_origin=parseDateTime64BestEffort('",
+			"forecast_job_id=toUUID('" + request.ForecastJobID + "')",
+		} {
+			if !strings.Contains(sql, marker) {
+				t.Fatalf("query %d missing %q:\n%s", i, marker, sql)
+			}
+		}
 	}
 }
