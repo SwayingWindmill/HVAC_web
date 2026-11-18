@@ -1,12 +1,15 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -234,7 +237,8 @@ func TestListSiteDataGapsEmptyAndHiddenSite(t *testing.T) {
 	}
 }
 
-func TestListSiteDataGapsFailsClosedWhenTotalElectricitySourcesFails(t *testing.T) {
+func newDataGapsSingleMeterFixture(t *testing.T, totalSources siteTotalElectricitySources) (*handler, string, string, alarmmodel.Alarm) {
+	t.Helper()
 	const (
 		tenantID = "01a14000-0000-7000-8000-000000000001"
 		siteID   = "01a14000-1000-7000-8000-000000000001"
@@ -248,7 +252,7 @@ func TestListSiteDataGapsFailsClosedWhenTotalElectricitySourcesFails(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := alarmStore.Publish(context.Background(), tenantID, siteID, alarmservice.Publication{
+	published, err := alarmStore.Publish(context.Background(), tenantID, siteID, alarmservice.Publication{
 		AlarmType:       "reading-gap/meter-uid2/active_energy_total",
 		DeviceID:        dataGapsStringPtr(meter2ID),
 		PointID:         dataGapsStringPtr(energyPt),
@@ -263,7 +267,8 @@ func TestListSiteDataGapsFailsClosedWhenTotalElectricitySourcesFails(t *testing.
 		ActorType:       "WORKLOAD",
 		ActorID:         "alarm-evaluator",
 		CorrelationID:   "corr-gap-energy",
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 	assetModel := platformapi.SiteAssetModel{
@@ -279,8 +284,181 @@ func TestListSiteDataGapsFailsClosedWhenTotalElectricitySourcesFails(t *testing.
 			PointType: "COUNTER", ValueType: "NUMBER", Unit: &unitKWh, SampleIntervalMS: 300000, PublishIntervalMS: 300000, StaleAfterMS: 900000,
 			SourceMetadata: map[string]any{"protocol": "MODBUS_RTU"}, Status: "ACTIVE", Revision: 1, CreatedAt: stamp, UpdatedAt: stamp,
 		}},
+		Counts: platformapi.AssetModelCounts{DeviceEndpoints: 1, Points: 1},
 	}
-	h, sessionID := newDataGapsTestHandler(t, now, tenantID, siteID, alarmStore, assetModel, siteTotalElectricitySources{SiteID: "FORCE_503"}, "")
+	h, sessionID := newDataGapsTestHandler(t, now, tenantID, siteID, alarmStore, assetModel, totalSources, "")
+	return h, siteID, sessionID, published
+}
+
+func TestListSiteDataGapsDegradesGracefullyWhenTotalElectricitySourcesFails(t *testing.T) {
+	t.Run("503", func(t *testing.T) {
+		h, siteID, sessionID, published := newDataGapsSingleMeterFixture(t, siteTotalElectricitySources{SiteID: "FORCE_503"})
+		var logBuf bytes.Buffer
+		h.logger = slog.New(slog.NewJSONHandler(&logBuf, nil))
+
+		req := httptest.NewRequest(http.MethodGet, "https://web.example.test/api/v1/sites/"+siteID+"/data-gaps", nil)
+		req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: sessionID})
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d; body = %s", rec.Code, rec.Body.String())
+		}
+
+		var got platformapi.SiteDataGapList
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if len(got.Items) != 1 || got.Items[0].AlarmID != published.AlarmID || got.Items[0].ExcludesDeviceFromTotal {
+			t.Fatalf("items = %#v", got.Items)
+		}
+
+		logged := logBuf.String()
+		if !strings.Contains(logged, "data_gaps_total_electricity_sources_degraded") || !strings.Contains(logged, siteID) {
+			t.Fatalf("expected structured degradation warning log, got: %s", logged)
+		}
+		for _, secret := range []string{sessionID, "Bearer", "X-Delegation-Grant", "data-gaps-csrf"} {
+			if strings.Contains(logged, secret) {
+				t.Fatalf("log leaked sensitive value %q: %s", secret, logged)
+			}
+		}
+	})
+
+	t.Run("timeout", func(t *testing.T) {
+		h, siteID, sessionID, published := newDataGapsSingleMeterFixture(t, siteTotalElectricitySources{SiteID: "01a14000-1000-7000-8000-000000000001"})
+		var logBuf bytes.Buffer
+		h.logger = slog.New(slog.NewJSONHandler(&logBuf, nil))
+		h.registry.coreTimeout = 15 * time.Millisecond
+		baseTransport := h.registry.coreHTTPClient.Transport
+		h.registry.coreHTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			if strings.HasSuffix(request.URL.Path, "/total-electricity-sources") {
+				<-request.Context().Done()
+				return nil, request.Context().Err()
+			}
+			return baseTransport.RoundTrip(request)
+		})}
+
+		req := httptest.NewRequest(http.MethodGet, "https://web.example.test/api/v1/sites/"+siteID+"/data-gaps", nil)
+		req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: sessionID})
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d; body = %s", rec.Code, rec.Body.String())
+		}
+
+		var got platformapi.SiteDataGapList
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if len(got.Items) != 1 || got.Items[0].AlarmID != published.AlarmID || got.Items[0].ExcludesDeviceFromTotal {
+			t.Fatalf("items = %#v", got.Items)
+		}
+
+		logged := logBuf.String()
+		if !strings.Contains(logged, "data_gaps_total_electricity_sources_degraded") || !strings.Contains(logged, "REGISTRY_TIMEOUT") {
+			t.Fatalf("expected timeout degradation warning log, got: %s", logged)
+		}
+	})
+}
+
+type barrierAlarmOperations struct {
+	inner   AlarmOperations
+	onEnter func()
+}
+
+func (b barrierAlarmOperations) ResolveScope(ctx context.Context, tenantID, alarmID string, serviceContext string) (alarmScope, *ownerFailure) {
+	return b.inner.ResolveScope(ctx, tenantID, alarmID, serviceContext)
+}
+
+func (b barrierAlarmOperations) Execute(ctx context.Context, publicRequest *http.Request, route publicAlarmRoute, serviceContext string) ([]byte, int, *ownerFailure) {
+	b.onEnter()
+	return b.inner.Execute(ctx, publicRequest, route, serviceContext)
+}
+
+func TestListSiteDataGapsFansOutAlarmAssetModelAndSourcesConcurrently(t *testing.T) {
+	h, siteID, sessionID, _ := newDataGapsSingleMeterFixture(t, siteTotalElectricitySources{SiteID: "01a14000-1000-7000-8000-000000000001"})
+
+	var (
+		mu      sync.Mutex
+		arrived = make(map[string]bool, 3)
+		allIn   = make(chan struct{})
+	)
+	markAndWait := func(name string) {
+		mu.Lock()
+		arrived[name] = true
+		if len(arrived) == 3 {
+			close(allIn)
+		}
+		mu.Unlock()
+		select {
+		case <-allIn:
+		case <-time.After(time.Second):
+			mu.Lock()
+			count := len(arrived)
+			mu.Unlock()
+			t.Errorf("upstream call %s timed out waiting for concurrent fan-out; arrivedCount=%d", name, count)
+		}
+	}
+
+	h.alarm.operations = barrierAlarmOperations{
+		inner:   h.alarm.operations,
+		onEnter: func() { markAndWait("alarms") },
+	}
+	baseTransport := h.registry.coreHTTPClient.Transport
+	h.registry.coreHTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		switch {
+		case strings.HasSuffix(request.URL.Path, "/asset-model"):
+			markAndWait("asset-model")
+		case strings.HasSuffix(request.URL.Path, "/total-electricity-sources"):
+			markAndWait("total-electricity-sources")
+		}
+		return baseTransport.RoundTrip(request)
+	})}
+
+	req := httptest.NewRequest(http.MethodGet, "https://web.example.test/api/v1/sites/"+siteID+"/data-gaps", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: sessionID})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d; body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestListSiteDataGapsDoesNotDegradeWhenRequestContextCancelled(t *testing.T) {
+	h, siteID, sessionID, _ := newDataGapsSingleMeterFixture(t, siteTotalElectricitySources{SiteID: "01a14000-1000-7000-8000-000000000001"})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	baseTransport := h.registry.coreHTTPClient.Transport
+	h.registry.coreHTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if strings.HasSuffix(request.URL.Path, "/total-electricity-sources") {
+			cancel()
+			<-request.Context().Done()
+			return nil, request.Context().Err()
+		}
+		return baseTransport.RoundTrip(request)
+	})}
+
+	req := httptest.NewRequest(http.MethodGet, "https://web.example.test/api/v1/sites/"+siteID+"/data-gaps", nil).WithContext(ctx)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: sessionID})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code == http.StatusOK {
+		t.Fatalf("expected non-200 failure when request context cancelled; got 200 body=%s", rec.Body.String())
+	}
+}
+
+func TestListSiteDataGapsFailsClosedWhenAssetModelFails(t *testing.T) {
+	h, siteID, sessionID, _ := newDataGapsSingleMeterFixture(t, siteTotalElectricitySources{SiteID: "01a14000-1000-7000-8000-000000000001"})
+	baseTransport := h.registry.coreHTTPClient.Transport
+	h.registry.coreHTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if strings.HasSuffix(request.URL.Path, "/asset-model") {
+			return telemetryJSONResponse(http.StatusServiceUnavailable, map[string]any{
+				"code": "REGISTRY_UNAVAILABLE", "title": "Registry unavailable", "detail": "down", "retryable": true,
+			}), nil
+		}
+		return baseTransport.RoundTrip(request)
+	})}
+
 	req := httptest.NewRequest(http.MethodGet, "https://web.example.test/api/v1/sites/"+siteID+"/data-gaps", nil)
 	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: sessionID})
 	rec := httptest.NewRecorder()
@@ -298,7 +476,7 @@ func newDataGapsTestHandler(
 	assetModel platformapi.SiteAssetModel,
 	totalSources siteTotalElectricitySources,
 	snapshotSampledAt string,
-) (http.Handler, string) {
+) (*handler, string) {
 	t.Helper()
 	signer := commandTestSigner(t)
 	owner := signedAlarmOwner{t: t, signer: &signer.PublicKey, store: newDirectAlarmAdapter(alarmStore)}

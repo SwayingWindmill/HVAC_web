@@ -278,9 +278,10 @@ export function hourlyCop(electricity: readonly DayPoint[], cooling: readonly Da
  * hourly readings the overview's 今天用能 sums. One scale fits both days; an hour yesterday without
  * a reading, or one later than now, has no mark (-1).
  */
-export function hourlyElectricity(today: readonly DayPoint[], yesterday: readonly DayPoint[], start: string, now: Date) {
+export function hourlyElectricity(today: readonly DayPoint[], yesterday: readonly DayPoint[], start: string, now: Date, yesterdayStart?: string) {
   const todayAt = byHour(today, Date.parse(start));
-  const yesterdayAt = byHour(yesterday, Date.parse(start) - 24 * HOUR_MS);
+  const yesterdayFrom = yesterdayStart === undefined ? Date.parse(start) - 24 * HOUR_MS : Date.parse(yesterdayStart);
+  const yesterdayAt = byHour(yesterday, yesterdayFrom);
   const { bars, top, scale, gaps } = hourBars(start, now, (hour) => todayAt.get(hour), scaleTop, Math.max(0, ...yesterdayAt.values()));
   return {
     bars: bars.map((bar) => {

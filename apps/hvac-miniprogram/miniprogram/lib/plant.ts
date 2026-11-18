@@ -1,4 +1,5 @@
 import { formatTelemetryDisplayValue, formatTelemetryUnit, telemetryPointDefinition } from '../shared/centralPlantTelemetry';
+import { GatewayError, type Gateway } from './gateway';
 
 // The plant as the web's 实时运行 and 设备 pages read it (apps/hvac-web/src/features/operations/realtime/plant-model.ts
 // over features/assets): the same equipment roles, run states and readings from the Site's asset model and the
@@ -53,7 +54,7 @@ interface ValueState {
   readonly probeOffsets?: readonly { readonly pairCode: string; readonly offsetK: number; readonly suggested: boolean; readonly applied: boolean; readonly alarm?: string }[];
 }
 
-interface Snapshot {
+export interface Snapshot {
   readonly evaluationAvailability: 'AVAILABLE' | 'UNAVAILABLE';
   readonly presence: { readonly applicability: string; readonly currentState?: string | null };
   readonly values: readonly ValueState[];
@@ -280,6 +281,22 @@ function firstReading(devices: readonly PlantDevice[], sourceKey: string): Plant
   return null;
 }
 
+export function buildPlantDevice(model: AssetModel, deviceId: string, snapshot: Snapshot | undefined, now: Date): PlantDevice | null {
+  const device = model.devices.find((candidate) => candidate.id === deviceId);
+  if (device === undefined || device.deviceType === 'GATEWAY') return null;
+  return toDevice(model, device, snapshot, now);
+}
+
+function mergeDeviceSnapshots(snapshots: readonly Snapshot[]): Snapshot | undefined {
+  if (snapshots.length === 0) return undefined;
+  if (snapshots.length === 1) return snapshots[0];
+  return {
+    evaluationAvailability: snapshots.every((snapshot) => snapshot.evaluationAvailability === 'AVAILABLE') ? 'AVAILABLE' : 'UNAVAILABLE',
+    presence: snapshots[0].presence,
+    values: snapshots.flatMap((snapshot) => snapshot.values),
+  };
+}
+
 export function buildPlant(model: AssetModel, snapshots: SnapshotsResponse, now: Date): Plant {
   const snapshotByDevice = new Map(snapshots.items
     .filter((item) => item.status === 'OK' && item.snapshot)
@@ -330,9 +347,31 @@ export interface SnapshotRequest {
   readonly keys: readonly string[];
 }
 
-// The gateway's limits for one current-value request (the web's features/assets/data.ts).
+// The gateway's limits for current-value requests (matching telemetryauth.MaximumKeysPerTarget = 64 for single-device).
 const MAX_BATCH_DEVICES = 100;
 const MAX_BATCH_KEYS = 2048;
+export const MAX_SINGLE_SNAPSHOT_KEYS = 64;
+
+function deviceObservedKeys(model: AssetModel, deviceId: string): string[] {
+  const seen = new Set<string>();
+  for (const point of model.telemetryPoints) {
+    if (point.reportingDeviceId === deviceId && point.status === 'ACTIVE' && point.pointType !== 'COMMAND') {
+      seen.add(point.pointCode);
+    }
+  }
+  return [...seen].sort();
+}
+
+/** Active non-COMMAND point codes for one device, chunked into <=64-key batches for GET observation-snapshot. */
+export function deviceSnapshotKeyBatches(model: AssetModel, deviceId: string): string[][] {
+  const keys = deviceObservedKeys(model, deviceId);
+  if (keys.length === 0) return [[]];
+  const batches: string[][] = [];
+  for (let offset = 0; offset < keys.length; offset += MAX_SINGLE_SNAPSHOT_KEYS) {
+    batches.push(keys.slice(offset, offset + MAX_SINGLE_SNAPSHOT_KEYS));
+  }
+  return batches;
+}
 
 /** Every device's observed points, packed into as few POST /api/v1/telemetry/observation-snapshots:batchGet requests as the limits allow. */
 export function snapshotBatches(model: AssetModel): SnapshotRequest[][] {
@@ -340,10 +379,7 @@ export function snapshotBatches(model: AssetModel): SnapshotRequest[][] {
   let batch: SnapshotRequest[] = [];
   let keyCount = 0;
   for (const device of model.devices) {
-    const keys = model.telemetryPoints
-      .filter((point) => point.reportingDeviceId === device.id && point.status === 'ACTIVE' && point.pointType !== 'COMMAND')
-      .map((point) => point.pointCode)
-      .sort();
+    const keys = deviceObservedKeys(model, device.id);
     if (batch.length > 0 && (batch.length >= MAX_BATCH_DEVICES || keyCount + keys.length > MAX_BATCH_KEYS)) {
       batches.push(batch);
       batch = [];
@@ -354,4 +390,47 @@ export function snapshotBatches(model: AssetModel): SnapshotRequest[][] {
   }
   if (batch.length > 0) batches.push(batch);
   return batches;
+}
+
+type ReadClient = Pick<Gateway, 'get'>;
+
+let cachedModel: { readonly siteId: string; readonly client: ReadClient; readonly model: AssetModel } | null = null;
+
+export async function readAssetModel(client: ReadClient, siteId: string, fresh: boolean): Promise<AssetModel> {
+  if (!fresh && cachedModel?.siteId === siteId && cachedModel.client === client) return cachedModel.model;
+  const model = await client.get<AssetModel>(`/api/v1/sites/${siteId}/asset-model`);
+  cachedModel = { siteId, client, model };
+  return model;
+}
+
+/**
+ * Fetches one device's readings via GET /api/v1/devices/{deviceId}/observation-snapshot
+ * (batching >64 keys); treats 404 as no snapshot yet for newly registered devices.
+ */
+export async function fetchPlantDevice(
+  client: ReadClient,
+  siteId: string,
+  deviceId: string,
+  fresh = false,
+  now: Date = new Date(),
+): Promise<PlantDevice | null> {
+  const model = await readAssetModel(client, siteId, fresh);
+  const device = model.devices.find((candidate) => candidate.id === deviceId);
+  if (device === undefined || device.deviceType === 'GATEWAY') return null;
+
+  const batches = deviceSnapshotKeyBatches(model, deviceId);
+  const basePath = `/api/v1/devices/${encodeURIComponent(deviceId)}/observation-snapshot`;
+  const snapshots = await Promise.all(
+    batches.map(async (keys): Promise<Snapshot | null> => {
+      const path = keys.length > 0 ? `${basePath}?keys=${encodeURIComponent(keys.join(','))}` : basePath;
+      try {
+        return await client.get<Snapshot>(path);
+      } catch (error) {
+        if (error instanceof GatewayError && error.status === 404) return null;
+        throw error;
+      }
+    }),
+  );
+  const present = snapshots.filter((snapshot): snapshot is Snapshot => snapshot !== null);
+  return buildPlantDevice(model, deviceId, mergeDeviceSnapshots(present), now);
 }

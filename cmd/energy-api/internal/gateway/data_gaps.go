@@ -4,12 +4,15 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/platformapi"
 	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/s2telemetryapi"
@@ -44,6 +47,35 @@ type resolvedGapCandidate struct {
 	alarm  alarmmodel.Alarm
 	device platformapi.Device
 	point  platformapi.TelemetryPoint
+}
+
+type dataGapsAlarmFailure struct {
+	status    int
+	code      string
+	title     string
+	detail    string
+	retryable bool
+}
+
+func (f *dataGapsAlarmFailure) Error() string {
+	return f.code
+}
+
+type dataGapsRegistryFailure struct {
+	result registryBackendResult
+	detail string
+}
+
+func (f *dataGapsRegistryFailure) Error() string {
+	return f.result.code
+}
+
+type totalElectricitySourcesOutcome struct {
+	sources  siteTotalElectricitySources
+	degraded bool
+	result   registryBackendResult
+	status   int
+	code     string
 }
 
 func matchPublicDataGapsRoute(path string) (string, bool) {
@@ -106,22 +138,84 @@ func dispatchDataGapsRoute(h *handler, writer http.ResponseWriter, request *http
 		return
 	}
 
-	gapAlarms, ok := h.listActiveReadingGapAlarms(ctx, writer, request, session, siteID)
-	if !ok {
-		return
-	}
-	if len(gapAlarms) == 0 {
-		writer.Header().Set("Cache-Control", "private, no-store")
-		writeJSON(writer, http.StatusOK, platformapi.SiteDataGapList{Items: []platformapi.SiteDataGap{}})
+	g, groupCtx := errgroup.WithContext(ctx)
+	g.SetLimit(3)
+
+	var (
+		gapAlarms      []alarmmodel.Alarm
+		assetModel     platformapi.SiteAssetModel
+		sourcesOutcome totalElectricitySourcesOutcome
+	)
+
+	g.Go(func() error {
+		alarms, failure := h.listActiveReadingGapAlarms(groupCtx, session, siteID)
+		if failure != nil {
+			return failure
+		}
+		gapAlarms = alarms
+		return nil
+	})
+
+	g.Go(func() error {
+		model, failure := h.fetchSiteAssetModelForDataGaps(groupCtx, siteID, regAuth.coreGrant, decision)
+		if failure != nil {
+			return failure
+		}
+		assetModel = model
+		return nil
+	})
+
+	g.Go(func() error {
+		sourcesOutcome = h.fetchSiteTotalElectricitySourcesForDataGaps(groupCtx, siteID, regAuth.coreGrant, decision)
+		return nil
+	})
+
+	if err := g.Wait(); err != nil {
+		var alarmFailure *dataGapsAlarmFailure
+		if errors.As(err, &alarmFailure) {
+			writeProblem(writer, request, alarmFailure.status, alarmFailure.code, alarmFailure.title, alarmFailure.detail, alarmFailure.retryable, nil)
+			return
+		}
+		var registryFailure *dataGapsRegistryFailure
+		if errors.As(err, &registryFailure) {
+			if registryFailure.detail != "" {
+				writeProblem(writer, request, http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", registryFailure.detail, true, nil)
+				return
+			}
+			h.writeRegistryBackendResult(writer, request, registryFailure.result)
+			return
+		}
+		writeProblem(writer, request, http.StatusServiceUnavailable, "DATA_GAPS_UNAVAILABLE", "Data gaps unavailable", "The Site data-gaps dependencies are temporarily unavailable.", true, nil)
 		return
 	}
 
-	assetModel, ok := h.fetchSiteAssetModelForDataGaps(ctx, writer, request, siteID, regAuth.coreGrant, decision)
-	if !ok {
-		return
+	totalSources := sourcesOutcome.sources
+	if sourcesOutcome.degraded {
+		if request.Context().Err() != nil {
+			if sourcesOutcome.result.status != 0 {
+				h.writeRegistryBackendResult(writer, request, sourcesOutcome.result)
+				return
+			}
+			writeProblem(writer, request, http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "The Registry is temporarily unavailable.", true, nil)
+			return
+		}
+		if h.logger != nil {
+			h.logger.WarnContext(
+				ctx,
+				"data_gaps_total_electricity_sources_degraded",
+				"site_id", siteID,
+				"status", sourcesOutcome.status,
+				"error_code", sourcesOutcome.code,
+				"request_id", requestIDFromContext(ctx),
+				"trace_id", traceIDFromContext(ctx),
+			)
+		}
+		totalSources = siteTotalElectricitySources{}
 	}
-	totalSources, ok := h.fetchSiteTotalElectricitySourcesForDataGaps(ctx, writer, request, siteID, regAuth.coreGrant, decision)
-	if !ok {
+
+	if len(gapAlarms) == 0 {
+		writer.Header().Set("Cache-Control", "private, no-store")
+		writeJSON(writer, http.StatusOK, platformapi.SiteDataGapList{Items: []platformapi.SiteDataGap{}})
 		return
 	}
 
@@ -206,14 +300,11 @@ func (h *handler) dataGapsSession(writer http.ResponseWriter, request *http.Requ
 
 func (h *handler) listActiveReadingGapAlarms(
 	ctx context.Context,
-	writer http.ResponseWriter,
-	request *http.Request,
 	session bffSession,
 	siteID string,
-) ([]alarmmodel.Alarm, bool) {
+) ([]alarmmodel.Alarm, *dataGapsAlarmFailure) {
 	if h.alarm == nil || h.alarm.operations == nil {
-		writeProblem(writer, request, http.StatusServiceUnavailable, "ALARM_UNAVAILABLE", "Alarm unavailable", "The Alarm service is not configured.", true, nil)
-		return nil, false
+		return nil, &dataGapsAlarmFailure{http.StatusServiceUnavailable, "ALARM_UNAVAILABLE", "Alarm unavailable", "The Alarm service is not configured.", true}
 	}
 	route := publicAlarmRoute{
 		template: "/api/v1/alarms",
@@ -249,28 +340,22 @@ func (h *handler) listActiveReadingGapAlarms(
 		)
 		if failure != nil {
 			if failure.status == http.StatusForbidden {
-				writeProblem(writer, request, http.StatusForbidden, "FORBIDDEN", "Forbidden", "The authenticated Principal is not authorized to read Alarms for this Site.", false, nil)
-				return nil, false
+				return nil, &dataGapsAlarmFailure{http.StatusForbidden, "FORBIDDEN", "Forbidden", "The authenticated Principal is not authorized to read Alarms for this Site.", false}
 			}
 			if failure.status == http.StatusNotFound {
-				writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
-				return nil, false
+				return nil, &dataGapsAlarmFailure{http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false}
 			}
-			writeProblem(writer, request, http.StatusServiceUnavailable, "ALARM_UNAVAILABLE", "Alarm unavailable", "Alarm Service is temporarily unavailable.", true, nil)
-			return nil, false
+			return nil, &dataGapsAlarmFailure{http.StatusServiceUnavailable, "ALARM_UNAVAILABLE", "Alarm unavailable", "Alarm Service is temporarily unavailable.", true}
 		}
 		if response.status == http.StatusForbidden {
-			writeProblem(writer, request, http.StatusForbidden, "FORBIDDEN", "Forbidden", "The authenticated Principal is not authorized to read Alarms for this Site.", false, nil)
-			return nil, false
+			return nil, &dataGapsAlarmFailure{http.StatusForbidden, "FORBIDDEN", "Forbidden", "The authenticated Principal is not authorized to read Alarms for this Site.", false}
 		}
 		if response.status != http.StatusOK {
-			writeProblem(writer, request, http.StatusServiceUnavailable, "ALARM_UNAVAILABLE", "Alarm unavailable", "Alarm Service could not list active Alarms.", true, nil)
-			return nil, false
+			return nil, &dataGapsAlarmFailure{http.StatusServiceUnavailable, "ALARM_UNAVAILABLE", "Alarm unavailable", "Alarm Service could not list active Alarms.", true}
 		}
 		list, ok := response.value.(alarmmodel.ListResponse)
 		if !ok {
-			writeProblem(writer, request, http.StatusServiceUnavailable, "ALARM_UNAVAILABLE", "Alarm unavailable", "Alarm Service returned an invalid Alarm list.", true, nil)
-			return nil, false
+			return nil, &dataGapsAlarmFailure{http.StatusServiceUnavailable, "ALARM_UNAVAILABLE", "Alarm unavailable", "Alarm Service returned an invalid Alarm list.", true}
 		}
 		for _, item := range list.Items {
 			if item.Condition == alarmmodel.ConditionActive && strings.HasPrefix(item.AlarmType, readingGapAlarmPrefix) {
@@ -282,17 +367,15 @@ func (h *handler) listActiveReadingGapAlarms(
 		}
 		cursor = *list.NextCursor
 	}
-	return gaps, true
+	return gaps, nil
 }
 
 func (h *handler) fetchSiteAssetModelForDataGaps(
 	ctx context.Context,
-	writer http.ResponseWriter,
-	request *http.Request,
 	siteID string,
 	grant string,
 	outer ownershipregistry.Decision,
-) (platformapi.SiteAssetModel, bool) {
+) (platformapi.SiteAssetModel, *dataGapsRegistryFailure) {
 	route := publicRegistryRoute{
 		template:     platformapi.GetSiteAssetModelPathTemplate,
 		internalPath: "/internal/v1/registry/sites/" + url.PathEscape(siteID) + "/asset-model",
@@ -310,25 +393,24 @@ func (h *handler) fetchSiteAssetModelForDataGaps(
 	}
 	result := h.executeCoreRegistry(ctx, route, "", grant, coreDecision)
 	if result.status != http.StatusOK {
-		h.writeRegistryBackendResult(writer, request, result)
-		return platformapi.SiteAssetModel{}, false
+		return platformapi.SiteAssetModel{}, &dataGapsRegistryFailure{result: result}
 	}
 	var model platformapi.SiteAssetModel
 	if err := json.Unmarshal(result.body, &model); err != nil {
-		writeProblem(writer, request, http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "Core Registry returned an invalid Site asset model.", true, nil)
-		return platformapi.SiteAssetModel{}, false
+		return platformapi.SiteAssetModel{}, &dataGapsRegistryFailure{
+			result: registryBackendResult{status: http.StatusServiceUnavailable, code: "REGISTRY_UNAVAILABLE"},
+			detail: "Core Registry returned an invalid Site asset model.",
+		}
 	}
-	return model, true
+	return model, nil
 }
 
 func (h *handler) fetchSiteTotalElectricitySourcesForDataGaps(
 	ctx context.Context,
-	writer http.ResponseWriter,
-	request *http.Request,
 	siteID string,
 	grant string,
 	outer ownershipregistry.Decision,
-) (siteTotalElectricitySources, bool) {
+) totalElectricitySourcesOutcome {
 	route := publicRegistryRoute{
 		template:     "/internal/v1/registry/sites/{siteId}/total-electricity-sources",
 		internalPath: "/internal/v1/registry/sites/" + url.PathEscape(siteID) + "/total-electricity-sources",
@@ -346,15 +428,27 @@ func (h *handler) fetchSiteTotalElectricitySourcesForDataGaps(
 	}
 	result := h.executeCoreRegistry(ctx, route, "", grant, coreDecision)
 	if result.status != http.StatusOK {
-		h.writeRegistryBackendResult(writer, request, result)
-		return siteTotalElectricitySources{}, false
+		code := result.code
+		if code == "" {
+			code = "REGISTRY_UNAVAILABLE"
+		}
+		return totalElectricitySourcesOutcome{
+			degraded: true,
+			result:   result,
+			status:   result.status,
+			code:     code,
+		}
 	}
 	var sources siteTotalElectricitySources
 	if err := json.Unmarshal(result.body, &sources); err != nil {
-		writeProblem(writer, request, http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "Core Registry returned invalid total electricity sources.", true, nil)
-		return siteTotalElectricitySources{}, false
+		return totalElectricitySourcesOutcome{
+			degraded: true,
+			result:   registryBackendResult{status: http.StatusServiceUnavailable, code: "REGISTRY_UNAVAILABLE"},
+			status:   http.StatusServiceUnavailable,
+			code:     "REGISTRY_INVALID_JSON",
+		}
 	}
-	return sources, true
+	return totalElectricitySourcesOutcome{sources: sources, status: http.StatusOK}
 }
 
 func resolveGapCandidates(alarms []alarmmodel.Alarm, model platformapi.SiteAssetModel) []resolvedGapCandidate {

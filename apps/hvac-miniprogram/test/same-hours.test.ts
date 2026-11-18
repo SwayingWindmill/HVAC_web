@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { compareWithYesterday, sameHoursWindows, summarize } from '../miniprogram/lib/today.ts';
+import { hourlyElectricity } from '../miniprogram/lib/run.ts';
+import {
+  compareWithYesterday,
+  queryNonEmptyHourly,
+  sameHoursWindows,
+  siteDayBounds,
+  summarize,
+} from '../miniprogram/lib/today.ts';
 
 // The web overview's 今日用能 (apps/hvac-web/src/features/energy-analysis/consumption/model.ts):
 // today runs from the Site's midnight to now, yesterday from the midnight before to the same
@@ -46,4 +53,51 @@ test('each change is against yesterday up to the same time, and needs something 
   assert.equal(change.cost?.toFixed(3), '0.300');
   assert.deepEqual(compareWithYesterday(today, { electricityKWh: null, coolingKWh: 0, cop: null, costCNY: null }),
     { electricity: null, cooling: null, cop: null, cost: null });
+});
+
+test('sameHoursWindows clamps yesterday at todayStart across a 23h spring-forward DST transition and at midnight', () => {
+  const springNow = new Date('2026-03-10T03:30:00.000Z');
+  const springBounds = siteDayBounds(springNow, 'America/New_York')!;
+  assert.deepEqual(sameHoursWindows(springBounds.todayStart, springNow, springBounds.yesterdayStart), {
+    today: { from: '2026-03-09T04:00:00.000Z', to: '2026-03-10T03:30:00.000Z' },
+    yesterday: { from: '2026-03-08T05:00:00.000Z', to: '2026-03-09T04:00:00.000Z' },
+  });
+
+  const midnight = new Date('2026-10-11T16:00:00.000Z');
+  assert.deepEqual(sameHoursWindows('2026-10-11T16:00:00.000Z', midnight, '2026-10-10T16:00:00.000Z'), {
+    today: { from: '2026-10-11T16:00:00.000Z', to: '2026-10-11T16:00:00.000Z' },
+    yesterday: { from: '2026-10-10T16:00:00.000Z', to: '2026-10-10T16:00:00.000Z' },
+  });
+
+  const yesterdayPoint = hour('2026-03-08T05:00:00.000Z', 50);
+  const todayPoint = hour('2026-03-09T04:00:00.000Z', 80);
+  const springChart = hourlyElectricity([todayPoint], [yesterdayPoint], springBounds.todayStart, springNow, springBounds.yesterdayStart);
+  assert.equal(springChart.bars[0].mark, 63);
+});
+
+test('queryNonEmptyHourly skips zero-width midnight windows and queries positive windows', async () => {
+  const posted: { from: string; to: string; energyType: string }[] = [];
+  const client = {
+    async post<T>(_path: string, body: unknown) {
+      const payload = body as { from: string; to: string; energyType: string };
+      posted.push(payload);
+      return { points: [hour(payload.from, 42)] } as T;
+    },
+  };
+  const site = { id: 'site-1', tenantId: 'tenant-1', timezone: 'Asia/Shanghai' };
+
+  const skipped = await queryNonEmptyHourly(client, site, 'electricity', {
+    from: '2026-10-11T16:00:00.000Z',
+    to: '2026-10-11T16:00:00.000Z',
+  });
+  assert.deepEqual(skipped, []);
+  assert.equal(posted.length, 0);
+
+  const loaded = await queryNonEmptyHourly(client, site, 'cooling', {
+    from: '2026-10-11T16:00:00.000Z',
+    to: '2026-10-11T17:00:00.000Z',
+  });
+  assert.equal(loaded.length, 1);
+  assert.equal(posted.length, 1);
+  assert.equal(posted[0].energyType, 'cooling');
 });

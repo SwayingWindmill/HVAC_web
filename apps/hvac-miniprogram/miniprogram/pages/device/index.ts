@@ -1,5 +1,5 @@
 import { electricityByDevice, siteTodayStart } from '../../lib/energy';
-import { loadPlant } from '../../lib/plant-load';
+import { loadPlantDevice } from '../../lib/plant-load';
 import { requireSession } from '../../lib/platform';
 import { whileShown } from '../../lib/refresh';
 import { presentDevice, type DeviceToday } from '../../lib/run';
@@ -62,9 +62,8 @@ Page({
         return;
       }
       const now = new Date();
-      const [plant, dayStart] = await Promise.all([loadPlant(site, rereadEquipment), Promise.allSettled([siteTodayStart(site, now)])]);
-      const device = plant.devices.find((candidate) => candidate.deviceId === deviceId);
-      if (device === undefined) {
+      const [device, dayStart] = await Promise.all([loadPlantDevice(site, deviceId, rereadEquipment), Promise.allSettled([siteTodayStart(site, now)])]);
+      if (device === null) {
         this.setData({ loading: false, failed: '这台设备已不在站点的设备清单里。' });
         return;
       }
