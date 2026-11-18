@@ -777,9 +777,10 @@ func TestRedisLatestCacheBatchGetForDevicesPipelinedPasses(t *testing.T) {
 						key, field := args[1], args[2]
 						var value string
 						var ok bool
-						if field == "site_id" {
+						switch field {
+						case "site_id":
 							value, ok = siteIndex[key]
-						} else if field == "snapshot" {
+						case "snapshot":
 							value, ok = snapshotValues[key]
 						}
 						if !ok {
