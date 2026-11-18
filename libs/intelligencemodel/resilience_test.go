@@ -218,7 +218,7 @@ func TestInvokeWithBumplessFallback(t *testing.T) {
 		wantFallbackUsed bool
 		wantReason       string
 		wantErr          bool
-		assertAfter      func(t *testing.T, cfg ResilientInvokeConfig, calls, fbCalls int32)
+		assertAfter      func(t *testing.T, cfg ResilientInvokeConfig, calls, fbCalls *int32)
 	}
 
 	cases := []tc{
@@ -242,9 +242,9 @@ func TestInvokeWithBumplessFallback(t *testing.T) {
 			wantVal:          "ai-setpoint:7.8",
 			wantFallbackUsed: false,
 			wantReason:       "",
-			assertAfter: func(t *testing.T, cfg ResilientInvokeConfig, calls, _ int32) {
-				if calls != 1 || cfg.Bulkhead.InUse() != 0 || cfg.Breaker.State() != BreakerClosed {
-					t.Fatalf("calls=%d inUse=%d state=%s", calls, cfg.Bulkhead.InUse(), cfg.Breaker.State())
+			assertAfter: func(t *testing.T, cfg ResilientInvokeConfig, calls, _ *int32) {
+				if atomic.LoadInt32(calls) != 1 || cfg.Bulkhead.InUse() != 0 || cfg.Breaker.State() != BreakerClosed {
+					t.Fatalf("calls=%d inUse=%d state=%s", atomic.LoadInt32(calls), cfg.Bulkhead.InUse(), cfg.Breaker.State())
 				}
 			},
 		},
@@ -269,9 +269,9 @@ func TestInvokeWithBumplessFallback(t *testing.T) {
 			wantVal:          "rule-fallback:7.0",
 			wantFallbackUsed: true,
 			wantReason:       FallbackReasonCircuitOpen,
-			assertAfter: func(t *testing.T, _ ResilientInvokeConfig, calls, _ int32) {
-				if calls != 0 {
-					t.Fatalf("primary call must not execute when circuit is open, calls=%d", calls)
+			assertAfter: func(t *testing.T, _ ResilientInvokeConfig, calls, _ *int32) {
+				if atomic.LoadInt32(calls) != 0 {
+					t.Fatalf("primary call must not execute when circuit is open, calls=%d", atomic.LoadInt32(calls))
 				}
 			},
 		},
@@ -301,10 +301,10 @@ func TestInvokeWithBumplessFallback(t *testing.T) {
 			wantVal:          "rule-fallback:bulkhead",
 			wantFallbackUsed: true,
 			wantReason:       FallbackReasonBulkheadFull,
-			assertAfter: func(t *testing.T, cfg ResilientInvokeConfig, calls, _ int32) {
+			assertAfter: func(t *testing.T, cfg ResilientInvokeConfig, calls, _ *int32) {
 				defer cfg.Bulkhead.Release()
-				if calls != 0 {
-					t.Fatalf("calls=%d, want 0", calls)
+				if atomic.LoadInt32(calls) != 0 {
+					t.Fatalf("calls=%d, want 0", atomic.LoadInt32(calls))
 				}
 				if cfg.Breaker.State() != BreakerHalfOpen || !cfg.Breaker.Allow() {
 					t.Fatalf("half-open slot must remain available after bulkhead rejection, state=%s", cfg.Breaker.State())
@@ -335,10 +335,7 @@ func TestInvokeWithBumplessFallback(t *testing.T) {
 			wantVal:          "rule-fallback:timeout",
 			wantFallbackUsed: true,
 			wantReason:       FallbackReasonTimeout,
-			assertAfter: func(t *testing.T, cfg ResilientInvokeConfig, calls, _ int32) {
-				if calls != 1 {
-					t.Fatalf("calls=%d, want 1", calls)
-				}
+			assertAfter: func(t *testing.T, cfg ResilientInvokeConfig, calls, _ *int32) {
 				if cfg.Breaker.State() != BreakerOpen {
 					t.Fatalf("breaker state=%s, want OPEN after timeout failure", cfg.Breaker.State())
 				}
@@ -349,6 +346,9 @@ func TestInvokeWithBumplessFallback(t *testing.T) {
 				}
 				if cfg.Bulkhead.InUse() != 0 {
 					t.Fatalf("bulkhead inUse=%d, want 0 after timed-out worker exits", cfg.Bulkhead.InUse())
+				}
+				if atomic.LoadInt32(calls) != 1 {
+					t.Fatalf("calls=%d, want 1", atomic.LoadInt32(calls))
 				}
 			},
 		},
@@ -368,9 +368,9 @@ func TestInvokeWithBumplessFallback(t *testing.T) {
 			wantVal:          "rule-fallback:upstream",
 			wantFallbackUsed: true,
 			wantReason:       FallbackReasonUpstreamError,
-			assertAfter: func(t *testing.T, cfg ResilientInvokeConfig, calls, _ int32) {
-				if calls != 1 || cfg.Breaker.State() != BreakerOpen {
-					t.Fatalf("calls=%d state=%s", calls, cfg.Breaker.State())
+			assertAfter: func(t *testing.T, cfg ResilientInvokeConfig, calls, _ *int32) {
+				if atomic.LoadInt32(calls) != 1 || cfg.Breaker.State() != BreakerOpen {
+					t.Fatalf("calls=%d state=%s", atomic.LoadInt32(calls), cfg.Breaker.State())
 				}
 			},
 		},
@@ -405,7 +405,7 @@ func TestInvokeWithBumplessFallback(t *testing.T) {
 					got, status, c.wantVal, c.wantFallbackUsed, c.wantReason)
 			}
 			if c.assertAfter != nil {
-				c.assertAfter(t, cfg, *calls, *fbCalls)
+				c.assertAfter(t, cfg, calls, fbCalls)
 			}
 		})
 	}
