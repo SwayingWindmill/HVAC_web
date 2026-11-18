@@ -185,6 +185,7 @@ COPY infra/registry/postgres/init/optimization-governance-flywheel.sql /opt/hvac
 COPY infra/registry/postgres/init/metric-backfill-recalc-job-grants.sql /opt/hvac/repo/infra/registry/postgres/init/metric-backfill-recalc-job-grants.sql
 COPY infra/telemetry/postgres/init/telemetry-runtime-unnest-and-indexes.sql /opt/hvac/repo/infra/telemetry/postgres/init/telemetry-runtime-unnest-and-indexes.sql
 COPY infra/telemetry/postgres/init/telemetry-accepted-point-sample-index.sql /opt/hvac/repo/infra/telemetry/postgres/init/telemetry-accepted-point-sample-index.sql
+COPY infra/durability/postgres/init/operations-domain-audit-ledger.sql /opt/hvac/repo/infra/durability/postgres/init/operations-domain-audit-ledger.sql
 
 FROM postgres:16.4-bookworm
 

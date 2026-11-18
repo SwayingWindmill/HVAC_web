@@ -857,6 +857,7 @@
                 "properties": {
                   "actor": { "type": "string", "maxLength": 512 },
                   "action": { "type": "string", "maxLength": 128 },
+                  "category": { "type": "string", "maxLength": 128 },
                   "resourceType": { "type": "string", "maxLength": 128 },
                   "resourceId": { "type": "string", "maxLength": 256 },
                   "outcome": { "type": "string", "maxLength": 64 },
@@ -4809,12 +4810,16 @@
           "messageId": { "type": "string" },
           "tenantId": { "type": "string" },
           "actor": { "type": "string" },
+          "actorDisplay": { "type": "string" },
+          "clientKind": { "type": "string", "enum": ["BROWSER", "MINI_PROGRAM", "SYSTEM"] },
           "action": { "type": "string" },
           "resourceType": { "type": "string" },
           "resourceId": { "type": "string" },
+          "targetLabel": { "type": "string" },
           "outcome": { "type": "string" },
           "policyRevision": { "type": "string" },
           "correlationId": { "type": "string" },
+          "changeSummary": { "type": "object", "additionalProperties": true },
           "occurredAt": { "type": "string", "format": "date-time" }
         }
       },

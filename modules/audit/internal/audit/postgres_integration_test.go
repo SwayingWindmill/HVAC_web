@@ -211,6 +211,55 @@ func TestAuditRuntimeRolesCannotWriteOtherSchemas(t *testing.T) {
 	}
 }
 
+func TestDomainAuditPersistsWithHashChainAndSearchCategoryFiltering(t *testing.T) {
+	harness := newLedgerHarness(t)
+	harness.reset(t)
+	now := time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC)
+	store, err := audit.OpenStore(context.Background(), harness.consumerDSN, harness.queryDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	tenantID := "018f3d00-0000-7000-8000-000000000001"
+	sessionEvent := fixtureAuditEvent(now, "msg-session-01", "session-01", tenantID, 1, "SESSION_CREATED")
+	if _, err := store.Consume(context.Background(), marshalEvent(t, sessionEvent), audit.MessageMetadata{Topic: sessionevent.ControlTopic, ReceivedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+
+	controlPayload := []byte(`{"schemaVersion":1,"messageId":"msg-control-01","tenantId":"018f3d00-0000-7000-8000-000000000001","category":"control-lock","targetId":"site:songyaxuan","aggregateVersion":1,"occurredAt":"2026-07-19T12:01:00Z","initiatingSubject":"operator-01","initiatingIssuer":"https://issuer.example.test","executingService":"platform-gateway","executingSpiffeId":"spiffe://hvac.local/platform-gateway","action":"SITE_CONTROL_MODE_UPDATED","outcome":"SUCCEEDED","policyRevision":"policy-v1","correlationId":"corr-01","causationId":"msg-control-01","traceId":"0123456789abcdef0123456789abcdef","clientIp":"10.20.30.40","clientKind":"MINI_PROGRAM","actorDisplay":"李值班","targetLabel":"松雅轩冷站","changeSummary":{"before":"LOCAL_MANUAL","after":"REMOTE_AUTO"}}`)
+	inserted, err := store.ConsumeDomain(context.Background(), controlPayload, audit.MessageMetadata{Topic: audit.GatewayDomainTopic, ReceivedAt: now.Add(time.Minute)})
+	if err != nil || !inserted {
+		t.Fatalf("ConsumeDomain inserted=%v err=%v", inserted, err)
+	}
+
+	schedulePayload := []byte(`{"schemaVersion":1,"messageId":"msg-schedule-01","tenantId":"018f3d00-0000-7000-8000-000000000001","category":"operating-schedule","targetId":"site:songyaxuan","aggregateVersion":1,"occurredAt":"2026-07-19T12:02:00Z","initiatingSubject":"operator-01","initiatingIssuer":"https://issuer.example.test","executingService":"platform-gateway","executingSpiffeId":"spiffe://hvac.local/platform-gateway","action":"OPERATING_SCHEDULE_UPDATED","outcome":"SUCCEEDED","policyRevision":"policy-v1","correlationId":"corr-02","causationId":"msg-schedule-01","traceId":"0123456789abcdef0123456789abcdee","clientIp":"10.20.30.41","clientKind":"BROWSER","actorDisplay":"张工","targetLabel":"松雅轩冷站运行计划","changeSummary":{"entriesCount":2}}`)
+	if _, err := store.ConsumeDomain(context.Background(), schedulePayload, audit.MessageMetadata{Topic: audit.GatewayDomainTopic, ReceivedAt: now.Add(2 * time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := store.GetRecord(context.Background(), tenantID, "msg-session-01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.GetRecord(context.Background(), tenantID, "msg-control-01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.PreviousRecordHash != first.RecordHash || second.ClientIP != "10.20.30.40" || second.ClientKind != audit.ClientKindMiniProgram {
+		t.Fatalf("domain record hash chain or metadata mismatch: first=%#v second=%#v", first, second)
+	}
+
+	grouped, err := store.SearchRecords(context.Background(), tenantID, audit.SearchFilter{Category: audit.CategoryControlSchedule, Limit: 10})
+	if err != nil || len(grouped) != 2 {
+		t.Fatalf("SearchRecords(control-schedule) len=%d err=%v", len(grouped), err)
+	}
+	all, err := store.SearchRecords(context.Background(), tenantID, audit.SearchFilter{Limit: 10})
+	if err != nil || len(all) != 3 {
+		t.Fatalf("SearchRecords(all) len=%d err=%v", len(all), err)
+	}
+}
+
 type ledgerHarness struct {
 	consumerDSN string
 	queryDSN    string

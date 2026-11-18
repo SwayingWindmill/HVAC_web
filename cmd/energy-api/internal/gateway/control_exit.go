@@ -16,6 +16,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
+	"github.com/quanlaihe/hvac-web/modules/audit/pkg/auditserver"
 	"github.com/quanlaihe/hvac-web/modules/command/pkg/commandservice"
 	"github.com/quanlaihe/hvac-web/modules/iam/pkg/iamserver"
 )
@@ -132,10 +133,18 @@ func dispatchControlExitRoute(h *handler, writer http.ResponseWriter, request *h
 		return
 	}
 	if !isLowerUUIDv7(route.resourceID) {
+		if requireWrite {
+			targetID, targetLabel, action := controlExitRouteAuditMeta(route)
+			h.emitControlExitAudit(request, session, targetID, targetLabel, action, auditOutcomeRejected, map[string]any{"reasonCode": "RESOURCE_NOT_FOUND"})
+		}
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site or Asset was not found.", false, nil)
 		return
 	}
 	if h.command == nil || h.command.baseURL == "" || h.command.httpClient == nil {
+		if requireWrite {
+			targetID, targetLabel, action := controlExitRouteAuditMeta(route)
+			h.emitControlExitAudit(request, session, targetID, targetLabel, action, auditOutcomeFailed, map[string]any{"reasonCode": "COMMAND_UNAVAILABLE"})
+		}
 		writeProblem(writer, request, http.StatusServiceUnavailable, "COMMAND_UNAVAILABLE", "Command unavailable", "Command Service is not configured.", true, nil)
 		return
 	}
@@ -180,19 +189,24 @@ func (h *handler) getSiteControlState(writer http.ResponseWriter, request *http.
 }
 
 func (h *handler) putSiteControlMode(writer http.ResponseWriter, request *http.Request, session bffSession, route publicControlExitRoute) {
+	targetID := "site:" + route.resourceID
 	if mediaType := strings.TrimSpace(strings.Split(request.Header.Get("Content-Type"), ";")[0]); mediaType != "application/json" {
+		h.emitControlExitAudit(request, session, targetID, "站点控制模式", "SITE_CONTROL_MODE_UPDATED", auditOutcomeRejected, map[string]any{"reasonCode": "CONTROL_EXIT_REQUEST_INVALID"})
 		writeProblem(writer, request, http.StatusUnsupportedMediaType, "CONTROL_EXIT_REQUEST_INVALID", "Control exit request invalid", "The control mode request must use application/json.", false, nil)
 		return
 	}
 	var input siteControlModeRequest
 	if !decodeStrictControlJSON(writer, request, &input, maximumControlExitRequestBody) {
+		h.emitControlExitAudit(request, session, targetID, "站点控制模式", "SITE_CONTROL_MODE_UPDATED", auditOutcomeRejected, map[string]any{"reasonCode": "CONTROL_EXIT_REQUEST_INVALID"})
 		writeProblem(writer, request, http.StatusBadRequest, "CONTROL_EXIT_REQUEST_INVALID", "Control exit request invalid", "The Site control mode request payload is invalid.", false, nil)
 		return
 	}
 	if input.ControlMode != siteControlModeRemoteAuto && input.ControlMode != siteControlModeManualOverride && input.ControlMode != siteControlModeSafeShutdownExit {
+		h.emitControlExitAudit(request, session, targetID, "站点控制模式", "SITE_CONTROL_MODE_UPDATED", auditOutcomeRejected, map[string]any{"reasonCode": "CONTROL_EXIT_REQUEST_INVALID"})
 		writeProblem(writer, request, http.StatusBadRequest, "CONTROL_EXIT_REQUEST_INVALID", "Control exit request invalid", "controlMode must be REMOTE_AUTO, MANUAL_OVERRIDE, or SAFE_SHUTDOWN_EXIT.", false, nil)
 		return
 	}
+	targetLabel := siteControlModeTargetLabel(input.ControlMode)
 
 	var extraHeaders map[string]string
 	if idem := strings.TrimSpace(request.Header.Get("Idempotency-Key")); idem != "" {
@@ -202,37 +216,51 @@ func (h *handler) putSiteControlMode(writer http.ResponseWriter, request *http.R
 		request, session, http.MethodPut, route.internalPath, input, extraHeaders, h.command.maxResponseBytes,
 	)
 	if failure != nil {
+		h.emitControlExitAudit(request, session, targetID, targetLabel, "SITE_CONTROL_MODE_UPDATED", auditOutcomeForStatus(failure.status), map[string]any{"afterMode": input.ControlMode, "reasonCode": failure.code})
 		h.writeCommandFailure(writer, request, *failure)
 		return
 	}
 	if status != http.StatusOK {
+		h.emitControlExitAudit(request, session, targetID, targetLabel, "SITE_CONTROL_MODE_UPDATED", auditOutcomeForStatus(status), map[string]any{"afterMode": input.ControlMode, "reasonCode": problemCodeFromRaw(rawBody)})
 		h.writeOperatorProblem(writer, request, status, rawBody, "")
 		return
 	}
 	var resp siteControlModeMutationResponse
 	if json.Unmarshal(rawBody, &resp) != nil || resp.TenantID != session.TenantID || resp.SiteID != route.resourceID {
+		h.emitControlExitAudit(request, session, targetID, targetLabel, "SITE_CONTROL_MODE_UPDATED", auditOutcomeFailed, map[string]any{"afterMode": input.ControlMode, "reasonCode": "COMMAND_RESPONSE_INVALID"})
 		h.writeCommandFailure(writer, request, commandUnavailable("Command Service returned an invalid Site control mode response."))
 		return
 	}
+	h.emitControlExitAudit(request, session, targetID, siteControlModeTargetLabel(resp.ControlMode), "SITE_CONTROL_MODE_UPDATED", auditOutcomeSucceeded, map[string]any{
+		"afterMode":      resp.ControlMode,
+		"reason":         resp.Reason,
+		"revision":       resp.Revision,
+		"cancelledCount": len(resp.CancelledCommandIDs),
+	})
 	h.populateSiteControlStateNames(request.Context(), session, derefOptionalString(resp.UpdatedBy), &resp.SiteControlStateView)
 	writer.Header().Set("Cache-Control", "private, no-store")
 	writeJSON(writer, http.StatusOK, resp)
 }
 
 func (h *handler) putAssetControlLock(writer http.ResponseWriter, request *http.Request, session bffSession, route publicControlExitRoute) {
+	targetID := "asset:" + route.resourceID
 	if mediaType := strings.TrimSpace(strings.Split(request.Header.Get("Content-Type"), ";")[0]); mediaType != "application/json" {
+		h.emitControlExitAudit(request, session, targetID, "设备控制锁定", "ASSET_CONTROL_LOCK_UPDATED", auditOutcomeRejected, map[string]any{"reasonCode": "CONTROL_EXIT_REQUEST_INVALID"})
 		writeProblem(writer, request, http.StatusUnsupportedMediaType, "CONTROL_EXIT_REQUEST_INVALID", "Control lock request invalid", "The Asset control lock request must use application/json.", false, nil)
 		return
 	}
 	var input assetControlLockRequest
 	if !decodeStrictControlJSON(writer, request, &input, maximumControlExitRequestBody) {
+		h.emitControlExitAudit(request, session, targetID, "设备控制锁定", "ASSET_CONTROL_LOCK_UPDATED", auditOutcomeRejected, map[string]any{"reasonCode": "CONTROL_EXIT_REQUEST_INVALID"})
 		writeProblem(writer, request, http.StatusBadRequest, "CONTROL_EXIT_REQUEST_INVALID", "Control lock request invalid", "The Asset control lock request payload is invalid.", false, nil)
 		return
 	}
 	if input.LockMode != assetControlLockUnlocked && input.LockMode != assetControlLockManual && input.LockMode != assetControlLockMaintenance {
+		h.emitControlExitAudit(request, session, targetID, "设备控制锁定", "ASSET_CONTROL_LOCK_UPDATED", auditOutcomeRejected, map[string]any{"reasonCode": "CONTROL_EXIT_REQUEST_INVALID"})
 		writeProblem(writer, request, http.StatusBadRequest, "CONTROL_EXIT_REQUEST_INVALID", "Control lock request invalid", "lockMode must be UNLOCKED, MANUAL_LOCK, or MAINTENANCE_LOCK.", false, nil)
 		return
 	}
+	targetLabel := assetControlLockTargetLabel(input.LockMode)
 
 	var extraHeaders map[string]string
 	if idem := strings.TrimSpace(request.Header.Get("Idempotency-Key")); idem != "" {
@@ -242,48 +270,65 @@ func (h *handler) putAssetControlLock(writer http.ResponseWriter, request *http.
 		request, session, http.MethodPut, route.internalPath, input, extraHeaders, h.command.maxResponseBytes,
 	)
 	if failure != nil {
+		h.emitControlExitAudit(request, session, targetID, targetLabel, "ASSET_CONTROL_LOCK_UPDATED", auditOutcomeForStatus(failure.status), map[string]any{"afterLockMode": input.LockMode, "reasonCode": failure.code})
 		h.writeCommandFailure(writer, request, *failure)
 		return
 	}
 	if status != http.StatusOK {
+		h.emitControlExitAudit(request, session, targetID, targetLabel, "ASSET_CONTROL_LOCK_UPDATED", auditOutcomeForStatus(status), map[string]any{"afterLockMode": input.LockMode, "reasonCode": problemCodeFromRaw(rawBody)})
 		h.writeOperatorProblem(writer, request, status, rawBody, "")
 		return
 	}
 	var resp assetControlLockMutationResponse
 	if json.Unmarshal(rawBody, &resp) != nil || resp.AssetID != route.resourceID || (resp.TenantID != "" && resp.TenantID != session.TenantID) {
+		h.emitControlExitAudit(request, session, targetID, targetLabel, "ASSET_CONTROL_LOCK_UPDATED", auditOutcomeFailed, map[string]any{"afterLockMode": input.LockMode, "reasonCode": "COMMAND_RESPONSE_INVALID"})
 		h.writeCommandFailure(writer, request, commandUnavailable("Command Service returned an invalid Asset control lock response."))
 		return
 	}
+	h.emitControlExitAudit(request, session, targetID, assetControlLockTargetLabel(resp.LockMode), "ASSET_CONTROL_LOCK_UPDATED", auditOutcomeSucceeded, map[string]any{
+		"afterLockMode":  resp.LockMode,
+		"reason":         resp.Reason,
+		"revision":       resp.Revision,
+		"cancelledCount": len(resp.CancelledCommandIDs),
+	})
 	h.populateAssetControlLockName(request.Context(), session, derefOptionalString(resp.UpdatedBy), &resp.AssetControlLockView)
 	writer.Header().Set("Cache-Control", "private, no-store")
 	writeJSON(writer, http.StatusOK, resp)
 }
 
 func (h *handler) postSiteControlShutdown(writer http.ResponseWriter, request *http.Request, session bffSession, route publicControlExitRoute) {
+	targetID := "site:" + route.resourceID
 	if mediaType := strings.TrimSpace(strings.Split(request.Header.Get("Content-Type"), ";")[0]); mediaType != "application/json" {
+		h.emitControlExitAudit(request, session, targetID, "紧急停机控制", "SITE_CONTROL_SHUTDOWN", auditOutcomeRejected, map[string]any{"reasonCode": "CONTROL_EXIT_REQUEST_INVALID"})
 		writeProblem(writer, request, http.StatusUnsupportedMediaType, "CONTROL_EXIT_REQUEST_INVALID", "Control exit request invalid", "The Site control shutdown request must use application/json.", false, nil)
 		return
 	}
 	var input siteControlShutdownRequest
 	if !decodeStrictControlJSON(writer, request, &input, maximumControlExitRequestBody) {
+		h.emitControlExitAudit(request, session, targetID, "紧急停机控制", "SITE_CONTROL_SHUTDOWN", auditOutcomeRejected, map[string]any{"reasonCode": "CONTROL_EXIT_REQUEST_INVALID"})
 		writeProblem(writer, request, http.StatusBadRequest, "CONTROL_EXIT_REQUEST_INVALID", "Control exit request invalid", "The Site control shutdown request payload is invalid.", false, nil)
 		return
 	}
 	switch input.Mode {
 	case siteControlShutdownModePlantSafe, siteControlShutdownModeEmergencyDoRelease, siteControlShutdownModeAbortUnitSequence:
 	default:
+		h.emitControlExitAudit(request, session, targetID, "紧急停机控制", "SITE_CONTROL_SHUTDOWN", auditOutcomeRejected, map[string]any{"reasonCode": "CONTROL_EXIT_REQUEST_INVALID"})
 		writeProblem(writer, request, http.StatusBadRequest, "CONTROL_EXIT_REQUEST_INVALID", "Control exit request invalid", "mode must be PLANT_SAFE_SHUTDOWN, EMERGENCY_DO_RELEASE, or ABORT_UNIT_SEQUENCE.", false, nil)
 		return
 	}
+	targetLabel := siteControlShutdownTargetLabel(input.Mode)
 	if strings.TrimSpace(input.Reason) == "" {
+		h.emitControlExitAudit(request, session, targetID, targetLabel, "SITE_CONTROL_SHUTDOWN", auditOutcomeRejected, map[string]any{"mode": input.Mode, "reasonCode": "CONTROL_EXIT_REQUEST_INVALID"})
 		writeProblem(writer, request, http.StatusBadRequest, "CONTROL_EXIT_REQUEST_INVALID", "Control exit request invalid", "A non-empty reason is required.", false, nil)
 		return
 	}
 	if input.Mode == siteControlShutdownModeAbortUnitSequence && strings.TrimSpace(input.UnitCode) == "" {
+		h.emitControlExitAudit(request, session, targetID, targetLabel, "SITE_CONTROL_SHUTDOWN", auditOutcomeRejected, map[string]any{"mode": input.Mode, "reason": input.Reason, "reasonCode": "CONTROL_EXIT_REQUEST_INVALID"})
 		writeProblem(writer, request, http.StatusBadRequest, "CONTROL_EXIT_REQUEST_INVALID", "Control exit request invalid", "unitCode is required when mode is ABORT_UNIT_SEQUENCE.", false, nil)
 		return
 	}
 	if input.Mode == siteControlShutdownModeEmergencyDoRelease && !input.ConfirmEmergencyDoRelease {
+		h.emitControlExitAudit(request, session, targetID, targetLabel, "SITE_CONTROL_SHUTDOWN", auditOutcomeRejected, map[string]any{"mode": input.Mode, "reason": input.Reason, "reasonCode": "CONTROL_EXIT_REQUEST_INVALID"})
 		writeProblem(writer, request, http.StatusBadRequest, "CONTROL_EXIT_REQUEST_INVALID", "Control exit request invalid", "confirmEmergencyDoRelease must be explicitly true for EMERGENCY_DO_RELEASE.", false, nil)
 		return
 	}
@@ -291,6 +336,7 @@ func (h *handler) postSiteControlShutdown(writer http.ResponseWriter, request *h
 	var extraActions []string
 	if strings.TrimSpace(input.VerificationCode) != "" {
 		if stepUpFailure := h.verifySubmitStepUpTOTP(request, session, input.VerificationCode); stepUpFailure != nil {
+			h.emitControlExitAudit(request, session, targetID, targetLabel, "SITE_CONTROL_SHUTDOWN", auditOutcomeDenied, map[string]any{"mode": input.Mode, "reason": input.Reason, "stepUpRequired": true, "reasonCode": stepUpFailure.code})
 			h.writeCommandFailure(writer, request, *stepUpFailure)
 			return
 		}
@@ -312,22 +358,99 @@ func (h *handler) postSiteControlShutdown(writer http.ResponseWriter, request *h
 		request, session, http.MethodPost, route.internalPath, payload, extraHeaders, h.command.maxResponseBytes, extraActions...,
 	)
 	if failure != nil {
+		h.emitControlExitAudit(request, session, targetID, targetLabel, "SITE_CONTROL_SHUTDOWN", auditOutcomeForStatus(failure.status), map[string]any{"mode": input.Mode, "reason": input.Reason, "reasonCode": failure.code})
 		h.writeCommandFailure(writer, request, *failure)
 		return
 	}
 	if status != http.StatusOK {
+		h.emitControlExitAudit(request, session, targetID, targetLabel, "SITE_CONTROL_SHUTDOWN", auditOutcomeForStatus(status), map[string]any{"mode": input.Mode, "reason": input.Reason, "reasonCode": problemCodeFromRaw(rawBody)})
 		h.writeOperatorProblem(writer, request, status, rawBody, "")
 		return
 	}
 	var resp siteControlShutdownResponse
 	if json.Unmarshal(rawBody, &resp) != nil ||
 		resp.SiteControlState.TenantID != session.TenantID || resp.SiteControlState.SiteID != route.resourceID {
+		h.emitControlExitAudit(request, session, targetID, targetLabel, "SITE_CONTROL_SHUTDOWN", auditOutcomeFailed, map[string]any{"mode": input.Mode, "reason": input.Reason, "unitCode": input.UnitCode, "reasonCode": "COMMAND_RESPONSE_INVALID"})
 		h.writeCommandFailure(writer, request, commandUnavailable("Command Service returned an invalid Site control shutdown response."))
 		return
 	}
+	h.emitControlExitAudit(request, session, targetID, siteControlShutdownTargetLabel(resp.Mode), "SITE_CONTROL_SHUTDOWN", auditOutcomeSucceeded, map[string]any{
+		"mode":           resp.Mode,
+		"afterMode":      resp.SiteControlState.ControlMode,
+		"reason":         input.Reason,
+		"unitCode":       input.UnitCode,
+		"cancelledCount": len(resp.CancelledCommandIDs),
+		"submittedCount": len(resp.SubmittedCommandIDs),
+	})
 	h.populateSiteControlStateNames(request.Context(), session, derefOptionalString(resp.SiteControlState.UpdatedBy), &resp.SiteControlState)
 	writer.Header().Set("Cache-Control", "private, no-store")
 	writeJSON(writer, http.StatusOK, resp)
+}
+
+func (h *handler) emitControlExitAudit(
+	request *http.Request,
+	session bffSession,
+	targetID, targetLabel, action, outcome string,
+	summary map[string]any,
+) {
+	h.emitDomainAudit(request.Context(), request, session, domainAuditInput{
+		Category:      auditserver.AggregateTypeControlLock,
+		TargetID:      targetID,
+		TargetLabel:   targetLabel,
+		Action:        action,
+		Outcome:       outcome,
+		ChangeSummary: summary,
+	})
+}
+
+func controlExitRouteAuditMeta(route publicControlExitRoute) (string, string, string) {
+	switch route.kind {
+	case "asset-control-lock":
+		return "asset:" + route.resourceID, "设备控制锁定", "ASSET_CONTROL_LOCK_UPDATED"
+	case "site-control-shutdown":
+		return "site:" + route.resourceID, "紧急停机控制", "SITE_CONTROL_SHUTDOWN"
+	default:
+		return "site:" + route.resourceID, "站点控制模式", "SITE_CONTROL_MODE_UPDATED"
+	}
+}
+
+func siteControlModeTargetLabel(mode string) string {
+	switch mode {
+	case siteControlModeRemoteAuto:
+		return "站点控制模式（远程自动）"
+	case siteControlModeManualOverride:
+		return "站点控制模式（本地手动）"
+	case siteControlModeSafeShutdownExit:
+		return "站点控制模式（安全退出停机）"
+	default:
+		return "站点控制模式"
+	}
+}
+
+func assetControlLockTargetLabel(lockMode string) string {
+	switch lockMode {
+	case assetControlLockUnlocked:
+		return "设备控制锁定（已解锁）"
+	case assetControlLockManual:
+		return "设备控制锁定（手动锁定）"
+	case assetControlLockMaintenance:
+		return "设备控制锁定（维保锁定）"
+	default:
+		return "设备控制锁定"
+	}
+}
+
+func siteControlShutdownTargetLabel(mode string) string {
+	switch mode {
+	case siteControlShutdownModePlantSafe:
+		return "紧急停机控制（全站安全停机）"
+	case siteControlShutdownModeEmergencyDoRelease:
+		return "紧急停机控制（紧急直出释放）"
+	case siteControlShutdownModeAbortUnitSequence:
+		return "紧急停机控制（中止机组序列）"
+	default:
+		return "紧急停机控制"
+	}
 }
 
 func decodeStrictControlJSON(writer http.ResponseWriter, request *http.Request, target any, maxBytes int64) bool {
