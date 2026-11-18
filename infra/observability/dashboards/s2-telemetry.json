@@ -13,6 +13,10 @@
     {"id":7,"title":"Outbox lag","type":"timeseries","targets":[{"expr":"histogram_quantile(0.99, sum by (le) (rate(hvac_s2_outbox_lag_seconds_bucket[5m])))"}]},
     {"id":8,"title":"Dependency failures","type":"timeseries","targets":[{"expr":"sum by (dependency,outcome) (rate(hvac_s2_upstream_requests_total[5m]))"}]},
     {"id":9,"title":"Exporter drops and failures","type":"timeseries","targets":[{"expr":"sum by (outcome,reason_family) (rate(hvac_s2_exporter_events_total[5m]))"}]},
-    {"id":10,"title":"Telemetry data good rate","type":"timeseries","targets":[{"expr":"sum(rate(hvac_s2_data_quality_records_total{quality=\"good\"}[5m])) / sum(rate(hvac_s2_data_quality_records_total[5m]))"}]}
+    {"id":10,"title":"Telemetry data good rate","type":"timeseries","targets":[{"expr":"sum(rate(hvac_s2_data_quality_records_total{quality=\"good\"}[5m])) / sum(rate(hvac_s2_data_quality_records_total[5m]))"}]},
+    {"id":11,"title":"History outbox depth by state","type":"timeseries","targets":[{"expr":"max by (state) (hvac_s2_history_outbox_depth)"}]},
+    {"id":12,"title":"History flush latency p95 and rows/s","type":"timeseries","targets":[{"expr":"histogram_quantile(0.95, sum by (le) (rate(hvac_s2_history_flush_duration_seconds_bucket[5m])))"},{"expr":"sum(rate(hvac_s2_history_rows_projected_total[5m]))"}]},
+    {"id":13,"title":"Replay observations and latest cache outcomes","type":"timeseries","targets":[{"expr":"sum(rate(hvac_s2_replay_observations_total[5m]))"},{"expr":"sum by (outcome) (rate(hvac_s2_latest_cache_updates_total[5m]))"}]},
+    {"id":14,"title":"Cold archive runs by outcome","type":"timeseries","targets":[{"expr":"sum by (outcome) (rate(hvac_s2_cold_archive_runs_total[5m]))"}]}
   ]
 }

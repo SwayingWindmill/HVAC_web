@@ -1605,6 +1605,7 @@ func TestRuntimeCatalogMetricsOnlineGatewaysTraceLogsAndPacketHook(t *testing.T)
 		`hvac_mqtt_messages_received_total{outcome="queued"} 4`,
 		`hvac_mqtt_messages_received_total{outcome="dropped"} 1`,
 		"hvac_mqtt_processing_queue_depth 2\n",
+		"hvac_mqtt_replay_queue_depth 0\n",
 	} {
 		if !strings.Contains(queuedBody, want) {
 			t.Fatalf("missing queued metric %q in:\n%s", want, queuedBody)
@@ -2391,10 +2392,21 @@ func TestRuntimeLiveMessagesJumpAheadOfReplayBacklogWithoutStarvingReplay(t *tes
 		}
 	}
 
+	queuedBody := scrapeMetricsText(runtime.metrics)
+	if !strings.Contains(queuedBody, fmt.Sprintf("hvac_mqtt_replay_queue_depth %d\n", replayCount)) {
+		t.Fatalf("expected hvac_mqtt_replay_queue_depth %d while backlogged:\n%s", replayCount, queuedBody)
+	}
+
 	close(telemetry.release)
 	waitCondition(t, 10*time.Second, func() bool {
 		return len(telemetry.accepted())+len(telemetry.recordedEvents()) == 1+replayCount+liveBurstCount
 	}, "all live and replay messages processed without starvation")
+
+	waitCondition(t, 2*time.Second, func() bool {
+		drainedBody := scrapeMetricsText(runtime.metrics)
+		return strings.Contains(drainedBody, "hvac_mqtt_replay_queue_depth 0\n") &&
+			strings.Contains(drainedBody, "hvac_mqtt_processing_queue_depth 0\n")
+	}, "replay and processing queue depth gauges return to zero after drain")
 
 	accepted := telemetry.accepted()
 	livePositions := 0
@@ -2500,4 +2512,73 @@ func TestRuntimeGracefulDrainTimeoutPreservesBothLiveAndReplaySpools(t *testing.
 	waitCondition(t, 3*time.Second, func() bool {
 		return len(recoveredTelemetry.accepted()) == 3
 	}, "all 3 preserved live and replay messages recovered on restart")
+}
+
+func TestRuntimeReplayQueueDepthMetricTracksQueuedReplayItems(t *testing.T) {
+	now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	telemetry := &fakeTelemetry{
+		release: make(chan struct{}),
+		entered: make(chan struct{}, 2),
+	}
+	registry := observability.NewRegistry()
+	overflowDir := t.TempDir()
+	processor, err := NewProcessor(newFakeIdentities(), telemetry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := NewRuntime(Config{
+		MQTT:             MQTTConfig{BrokerURL: "tls://localhost:8883", ClientID: "connectivity-replay-depth", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "mqtt.local"},
+		TelemetryRuntime: TelemetryRuntimeConfig{BaseURL: "https://telemetry.local", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "telemetry.local"},
+		QueueCapacity:    4,
+		OverflowDir:      overflowDir,
+		WorkerCount:      1,
+	}, processor, slog.New(slog.NewTextHandler(io.Discard, nil)), registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.now = func() time.Time { return now }
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(func() { cancel(); runtime.workers.Wait(); runtime.closeMailboxes() })
+
+	initialBody := scrapeMetricsText(registry)
+	if !strings.Contains(initialBody, "hvac_mqtt_replay_queue_depth 0\n") {
+		t.Fatalf("expected initial hvac_mqtt_replay_queue_depth 0:\n%s", initialBody)
+	}
+
+	acks := newAckLog()
+	if err := runtime.enqueue(ctx, nil, testLivePublishAt(testGatewayA, 1, now.Add(-time.Second)), acks.ack(messageID(1))); err != nil {
+		t.Fatal(err)
+	}
+	<-telemetry.entered
+
+	for i := 2; i <= 4; i++ {
+		if err := runtime.enqueue(ctx, nil, testReplayPublish(testGatewayA, i, false), acks.ack(messageID(i))); err != nil {
+			t.Fatalf("enqueue replay A %d: %v", i, err)
+		}
+	}
+	for i := 5; i <= 6; i++ {
+		if err := runtime.enqueue(ctx, nil, testReplayPublish(testGatewayB, i, false), acks.ack(messageID(i))); err != nil {
+			t.Fatalf("enqueue replay B %d: %v", i, err)
+		}
+	}
+
+	queuedBody := scrapeMetricsText(registry)
+	for _, want := range []string{
+		"hvac_mqtt_replay_queue_depth 5\n",
+		"hvac_mqtt_processing_queue_depth 3\n",
+	} {
+		if !strings.Contains(queuedBody, want) {
+			t.Fatalf("missing %q while queued across two gateways:\n%s", want, queuedBody)
+		}
+	}
+
+	close(telemetry.release)
+	waitCondition(t, 5*time.Second, func() bool {
+		return len(telemetry.accepted()) == 6
+	}, "all live and replay items processed across gateways")
+	waitCondition(t, 2*time.Second, func() bool {
+		body := scrapeMetricsText(registry)
+		return strings.Contains(body, "hvac_mqtt_replay_queue_depth 0\n") &&
+			strings.Contains(body, "hvac_mqtt_processing_queue_depth 0\n")
+	}, "replay and processing queue depth metrics drained to zero")
 }

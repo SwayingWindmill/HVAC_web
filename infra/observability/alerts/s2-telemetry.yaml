@@ -178,6 +178,29 @@ groups:
         annotations:
           summary: Observability exporter is failing or dropping signals
           runbook: docs/operations/alerts.md#指标导出失败
+  - name: s2-telemetry-history
+    interval: 30s
+    rules:
+      - alert: S2HistoryOutboxBacklogHigh
+        expr: max(hvac_s2_history_outbox_depth{state="pending"}) > 10000
+        for: 5m
+        labels:
+          severity: page
+          primary_owner: telemetry-platform
+          secondary_owner: database-platform
+        annotations:
+          summary: Telemetry history outbox pending backlog is high
+          runbook: docs/operations/alerts.md#历史待发队列积压
+      - alert: S2HistoryDeadLetterDetected
+        expr: max(hvac_s2_history_outbox_depth{state="dead_letter"}) > 0
+        for: 1m
+        labels:
+          severity: page
+          primary_owner: telemetry-platform
+          secondary_owner: platform-operations
+        annotations:
+          summary: Telemetry history observations entered dead-letter state
+          runbook: docs/operations/alerts.md#历史读数进入死信
   - name: platform-data-freshness
     interval: 1m
     rules:

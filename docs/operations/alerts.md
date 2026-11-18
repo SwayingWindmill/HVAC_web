@@ -171,6 +171,22 @@ Prometheus 的告警规则在 `infra/observability/alerts/`，每条规则的 `r
 
 写历史的程序一直重试同一批，直到 ClickHouse 收下（批次按顺序写，后面的批次在它后面排队），原因修好之后会自己补上，不用改库。日志里的错误是脱敏的，原因去 ClickHouse 查：`SELECT event_time, exception FROM system.query_log WHERE user = 'telemetry_history_writer' AND exception != '' ORDER BY event_time DESC LIMIT 5`。排队的批次和失败次数在 `telemetry_runtime.telemetry_history_outbox`（`delivery_state`、`attempts`、`last_error_code`）。2026-10-19 的原因是主机磁盘满了（见「主机磁盘和 PostgreSQL 的 WAL」）。
 
+### 历史待发队列积压
+
+告警：`S2HistoryOutboxBacklogHigh`（`hvac_s2_history_outbox_depth{state="pending"}` 连续 5 分钟超过 10000 条）。
+
+1. 在 Grafana「S2 Telemetry Security and Reliability」看板对比 `hvac_s2_history_outbox_depth`（按 `state` 拆开看 `pending`、`publishing`、`dead_letter`）、`hvac_s2_history_flush_duration_seconds` 和 `hvac_s2_history_rows_projected_total`，判断是 ClickHouse 写入变慢还是完全卡住。
+2. 查 `telemetry-worker` 日志里有没有 `telemetry_history_projection_failed`，再到 ClickHouse 查 `system.query_log`（`user = 'telemetry_history_writer' AND exception != ''`），确认是不是磁盘满、连接超时或表结构异常。
+3. 若因现场网关断网重连引发批量补传，同步查看 `hvac_mqtt_replay_queue_depth` 和 `hvac_s2_replay_observations_total`。只要 ClickHouse 正常接收批次，队列会按 `batch_sequence` 顺序自动追平，不要手工删除 `telemetry_runtime.telemetry_history_outbox` 里的 `PENDING` 记录。
+
+### 历史读数进入死信
+
+告警：`S2HistoryDeadLetterDetected`（`hvac_s2_history_outbox_depth{state="dead_letter"}` 大于 0）。
+
+1. 出现死信说明有一条或多条历史读数遇到重试无法修复的校验或入库错误（二分拆分隔离出的单条坏行 `CLICKHOUSE_POISON_ROW`、载体校验失败 `HISTORY_PAYLOAD_INVALID`、单条超过 8 MiB `HISTORY_ROW_TOO_LARGE`），或达到最大重试次数（`CLICKHOUSE_MAX_ATTEMPTS_EXCEEDED`），已被单独移出正常队列并标记为 `DEAD`，避免单条坏数据堵住整条历史写入流水线。
+2. 只读查询 `telemetry_runtime.telemetry_history_outbox` 中 `delivery_state = 'DEAD'` 的 `event_id`、`attempts`、`last_error_code` 和 `dead_lettered_at`，对照 `telemetry_runtime.source_observations` 排查是点位映射缺失、字段越界还是上游长期不可用；不要把读数值、租户凭据或连接串打进日志。
+3. 修好根因后按审计与回放流程处理受影响范围，不要直接把库里的 `DEAD` 改回 `PENDING` 来消告警。
+
 ### Redis 不可用
 
 告警：`S2RedisUnavailable`。依赖故障的告警按主、次负责人分别通知。Redis 只做缓存和推送，可以重建；它坏了不能触发退回旧系统或假数据。

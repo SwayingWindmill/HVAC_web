@@ -217,6 +217,7 @@ func NewRuntime(config Config, processor *Processor, logger *slog.Logger, metric
 	}
 	runtime.refreshQueueCapacityMetric()
 	runtime.recordProcessingQueueDepth(0)
+	runtime.recordReplayQueueDepth(0)
 	runtime.refreshOnlineGateways()
 	return runtime, nil
 }
@@ -1047,7 +1048,7 @@ func (runtime *Runtime) enqueue(ctx context.Context, connectionClosed <-chan str
 	} else {
 		runtime.maybeScheduleIdleLocked(ctx, gatewayID, state)
 	}
-	maxDepth := runtime.maxQueueDepthLocked()
+	maxDepth, replayDepth := runtime.queueDepthMetricsLocked()
 	runtime.queuesMu.Unlock()
 
 	if enqueueErr != nil {
@@ -1060,6 +1061,7 @@ func (runtime *Runtime) enqueue(ctx context.Context, connectionClosed <-chan str
 	runtime.recordQueueDepth(gatewayID, result.memDepth+result.overflowDepth)
 	runtime.recordOverflowDepth(gatewayID, result.overflowDepth)
 	runtime.recordProcessingQueueDepth(maxDepth)
+	runtime.recordReplayQueueDepth(replayDepth)
 	if result.shed {
 		_ = runtime.metrics.AddCounter("hvac_mqtt_messages_received_total", "MQTT uplink messages received by ingress outcome.", map[string]string{"outcome": "dropped"}, 1)
 		_ = runtime.metrics.AddCounter("hvac_mqtt_gateway_overflow_shed_total", "MQTT uplink messages left unacknowledged because a Gateway filled RAM and disk overflow.", map[string]string{"gateway_id": gatewayID}, 1)
@@ -1114,9 +1116,10 @@ func (runtime *Runtime) recoverOverflowMailboxes(workerCtx context.Context) erro
 		runtime.recordOverflowDepth(gatewayID, overflowDepth)
 		runtime.scheduleGatewayLocked(workerCtx, gatewayID, state)
 	}
-	maxDepth := runtime.maxQueueDepthLocked()
+	maxDepth, replayDepth := runtime.queueDepthMetricsLocked()
 	runtime.queuesMu.Unlock()
 	runtime.recordProcessingQueueDepth(maxDepth)
+	runtime.recordReplayQueueDepth(replayDepth)
 	if count > 0 && runtime.logger != nil {
 		runtime.logger.Info("mqtt_uplink_spool_recovered", "gateways", len(recovered), "messages", count)
 	}
@@ -1208,6 +1211,7 @@ func (runtime *Runtime) closeMailboxes() {
 		runtime.deleteGatewayGauges(gatewayID)
 	}
 	runtime.recordProcessingQueueDepth(0)
+	runtime.recordReplayQueueDepth(0)
 	for _, mailbox := range mailboxes {
 		if mailbox != nil {
 			mailbox.close(removeFiles)
@@ -1271,9 +1275,9 @@ func (runtime *Runtime) acquireGatewayMailbox(gatewayID string) (*gatewayMailbox
 	}
 	runtime.queues[gatewayID] = mailbox
 	runtime.states[gatewayID] = state
-	var maxDepth int
+	var maxDepth, replayDepth int
 	if len(evictedIDs) > 0 {
-		maxDepth = runtime.maxQueueDepthLocked()
+		maxDepth, replayDepth = runtime.queueDepthMetricsLocked()
 	}
 	runtime.queuesMu.Unlock()
 	for _, evictedID := range evictedIDs {
@@ -1281,6 +1285,7 @@ func (runtime *Runtime) acquireGatewayMailbox(gatewayID string) (*gatewayMailbox
 	}
 	if len(evictedIDs) > 0 {
 		runtime.recordProcessingQueueDepth(maxDepth)
+		runtime.recordReplayQueueDepth(replayDepth)
 	}
 	for _, mb := range evicted {
 		mb.close(true)
@@ -1398,10 +1403,11 @@ func (runtime *Runtime) reapIdleGateway(ctx context.Context, gatewayID string, g
 	mb := state.mailbox
 	delete(runtime.states, gatewayID)
 	delete(runtime.queues, gatewayID)
-	maxDepth := runtime.maxQueueDepthLocked()
+	maxDepth, replayDepth := runtime.queueDepthMetricsLocked()
 	runtime.queuesMu.Unlock()
 	runtime.deleteGatewayGauges(gatewayID)
 	runtime.recordProcessingQueueDepth(maxDepth)
+	runtime.recordReplayQueueDepth(replayDepth)
 	if mb != nil {
 		mb.close(true)
 	}
@@ -1833,8 +1839,14 @@ func (runtime *Runtime) recordProcessingQueueDepth(depth int) {
 	_ = runtime.metrics.SetGauge("hvac_mqtt_processing_queue_depth", "Maximum MQTT uplink queue depth across active gateways.", nil, float64(depth))
 }
 
-func (runtime *Runtime) maxQueueDepthLocked() int {
-	maxDepth := 0
+func (runtime *Runtime) recordReplayQueueDepth(depth int) {
+	if runtime == nil || runtime.metrics == nil {
+		return
+	}
+	_ = runtime.metrics.SetGauge("hvac_mqtt_replay_queue_depth", "Queued MQTT replay messages waiting across active gateways.", nil, float64(depth))
+}
+
+func (runtime *Runtime) queueDepthMetricsLocked() (maxDepth, replayDepth int) {
 	for _, mb := range runtime.queues {
 		if mb == nil {
 			continue
@@ -1843,8 +1855,9 @@ func (runtime *Runtime) maxQueueDepthLocked() int {
 		if total := memDepth + overflowDepth; total > maxDepth {
 			maxDepth = total
 		}
+		replayDepth += mb.replayDepth()
 	}
-	return maxDepth
+	return maxDepth, replayDepth
 }
 
 func (runtime *Runtime) refreshProcessingQueueDepth() {
@@ -1852,9 +1865,10 @@ func (runtime *Runtime) refreshProcessingQueueDepth() {
 		return
 	}
 	runtime.queuesMu.Lock()
-	maxDepth := runtime.maxQueueDepthLocked()
+	maxDepth, replayDepth := runtime.queueDepthMetricsLocked()
 	runtime.queuesMu.Unlock()
 	runtime.recordProcessingQueueDepth(maxDepth)
+	runtime.recordReplayQueueDepth(replayDepth)
 }
 
 func (runtime *Runtime) refreshOnlineGateways() {

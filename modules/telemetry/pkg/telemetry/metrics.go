@@ -10,9 +10,177 @@ import (
 	"github.com/quanlaihe/hvac-web/modules/telemetry/pkg/telemetryapi"
 )
 
+const (
+	HistoryOutboxStatePending    = "pending"
+	HistoryOutboxStatePublishing = "publishing"
+	HistoryOutboxStateDeadLetter = "dead_letter"
+
+	LatestCacheOutcomeApplied      = "applied"
+	LatestCacheOutcomeStaleSkipped = "stale_skipped"
+	LatestCacheOutcomeInvalidated  = "invalidated"
+	LatestCacheOutcomeError        = "error"
+
+	ColdArchiveOutcomeSucceeded = "succeeded"
+	ColdArchiveOutcomeFailed    = "failed"
+)
+
+// PipelineMetrics records bounded-label Prometheus metrics for telemetry ingest,
+// hot latest-cache updates, ClickHouse history writes, and cold archive pruning.
+type PipelineMetrics struct {
+	registry *observability.Registry
+}
+
+// NewPipelineMetrics wraps registry for telemetry pipeline instrumentation.
+func NewPipelineMetrics(registry *observability.Registry) *PipelineMetrics {
+	if registry == nil {
+		return nil
+	}
+	return &PipelineMetrics{registry: registry}
+}
+
+func (m *PipelineMetrics) SetHistoryOutboxDepth(state string, depth int) {
+	if m == nil || m.registry == nil {
+		return
+	}
+	normalized, ok := normalizeHistoryOutboxState(state)
+	if !ok {
+		return
+	}
+	if depth < 0 {
+		depth = 0
+	}
+	_ = m.registry.SetGauge(
+		"hvac_s2_history_outbox_depth",
+		"Current row count in the telemetry history outbox by delivery state.",
+		map[string]string{"state": normalized},
+		float64(depth),
+	)
+}
+
+func (m *PipelineMetrics) SetHistoryOutboxDepths(pending, publishing, deadLetter int) {
+	if m == nil || m.registry == nil {
+		return
+	}
+	m.SetHistoryOutboxDepth(HistoryOutboxStatePending, pending)
+	m.SetHistoryOutboxDepth(HistoryOutboxStatePublishing, publishing)
+	m.SetHistoryOutboxDepth(HistoryOutboxStateDeadLetter, deadLetter)
+}
+
+func (m *PipelineMetrics) ObserveHistoryFlushDuration(elapsed time.Duration) {
+	if m == nil || m.registry == nil {
+		return
+	}
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	_ = m.registry.ObserveHistogram(
+		"hvac_s2_history_flush_duration_seconds",
+		"Duration of telemetry history batch flushes to ClickHouse.",
+		nil,
+		elapsed.Seconds(),
+		nil,
+	)
+}
+
+func (m *PipelineMetrics) AddHistoryRowsProjected(count int) {
+	if m == nil || m.registry == nil || count <= 0 {
+		return
+	}
+	_ = m.registry.AddCounter(
+		"hvac_s2_history_rows_projected_total",
+		"Telemetry observations written to ClickHouse history.",
+		nil,
+		float64(count),
+	)
+}
+
+func (m *PipelineMetrics) AddReplayObservations(count int) {
+	if m == nil || m.registry == nil || count <= 0 {
+		return
+	}
+	_ = m.registry.AddCounter(
+		"hvac_s2_replay_observations_total",
+		"Telemetry replay observations processed by the runtime store.",
+		nil,
+		float64(count),
+	)
+}
+
+func (m *PipelineMetrics) AddLatestCacheUpdates(outcome string, count int) {
+	if m == nil || m.registry == nil || count <= 0 {
+		return
+	}
+	normalized, ok := normalizeLatestCacheOutcome(outcome)
+	if !ok {
+		return
+	}
+	_ = m.registry.AddCounter(
+		"hvac_s2_latest_cache_updates_total",
+		"Telemetry latest cache updates by bounded outcome.",
+		map[string]string{"outcome": normalized},
+		float64(count),
+	)
+}
+
+func (m *PipelineMetrics) ObserveColdArchiveRun(outcome string) {
+	if m == nil || m.registry == nil {
+		return
+	}
+	normalized, ok := normalizeColdArchiveOutcome(outcome)
+	if !ok {
+		return
+	}
+	_ = m.registry.AddCounter(
+		"hvac_s2_cold_archive_runs_total",
+		"ClickHouse cold archive and retention runs by outcome.",
+		map[string]string{"outcome": normalized},
+		1,
+	)
+}
+
+func normalizeHistoryOutboxState(state string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(state)) {
+	case HistoryOutboxStatePending:
+		return HistoryOutboxStatePending, true
+	case HistoryOutboxStatePublishing, "in_flight":
+		return HistoryOutboxStatePublishing, true
+	case HistoryOutboxStateDeadLetter, "dead":
+		return HistoryOutboxStateDeadLetter, true
+	default:
+		return "", false
+	}
+}
+
+func normalizeLatestCacheOutcome(outcome string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(outcome)) {
+	case LatestCacheOutcomeApplied:
+		return LatestCacheOutcomeApplied, true
+	case LatestCacheOutcomeStaleSkipped:
+		return LatestCacheOutcomeStaleSkipped, true
+	case LatestCacheOutcomeInvalidated:
+		return LatestCacheOutcomeInvalidated, true
+	case LatestCacheOutcomeError:
+		return LatestCacheOutcomeError, true
+	default:
+		return "", false
+	}
+}
+
+func normalizeColdArchiveOutcome(outcome string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(outcome)) {
+	case ColdArchiveOutcomeSucceeded:
+		return ColdArchiveOutcomeSucceeded, true
+	case ColdArchiveOutcomeFailed:
+		return ColdArchiveOutcomeFailed, true
+	default:
+		return "", false
+	}
+}
+
 type s2Metrics struct {
 	registry *observability.Registry
 	now      func() time.Time
+	pipeline *PipelineMetrics
 }
 
 type statusCaptureWriter struct {
@@ -41,7 +209,7 @@ func newS2Metrics(registry *observability.Registry, now func() time.Time) *s2Met
 	if now == nil {
 		now = time.Now
 	}
-	return &s2Metrics{registry: registry, now: now}
+	return &s2Metrics{registry: registry, now: now, pipeline: NewPipelineMetrics(registry)}
 }
 
 func InstrumentRealtimeTransport(delegate RealtimeTransport, registry *observability.Registry, now func() time.Time) RealtimeTransport {
@@ -217,6 +385,48 @@ func (metrics *s2Metrics) observeInvariant(invariant string) {
 		return
 	}
 	_ = metrics.registry.AddCounter("hvac_s2_security_zero_invariant_total", "S2 zero-tolerance security invariant violations.", map[string]string{"invariant": invariant}, 1)
+}
+
+func (metrics *s2Metrics) observeHistoryOutboxDepths(pending, publishing, deadLetter int) {
+	if metrics == nil || metrics.pipeline == nil {
+		return
+	}
+	metrics.pipeline.SetHistoryOutboxDepths(pending, publishing, deadLetter)
+}
+
+func (metrics *s2Metrics) observeHistoryFlushDuration(elapsed time.Duration) {
+	if metrics == nil || metrics.pipeline == nil {
+		return
+	}
+	metrics.pipeline.ObserveHistoryFlushDuration(elapsed)
+}
+
+func (metrics *s2Metrics) observeHistoryRowsProjected(count int) {
+	if metrics == nil || metrics.pipeline == nil {
+		return
+	}
+	metrics.pipeline.AddHistoryRowsProjected(count)
+}
+
+func (metrics *s2Metrics) observeReplayObservations(count int) {
+	if metrics == nil || metrics.pipeline == nil {
+		return
+	}
+	metrics.pipeline.AddReplayObservations(count)
+}
+
+func (metrics *s2Metrics) observeLatestCacheUpdates(outcome string, count int) {
+	if metrics == nil || metrics.pipeline == nil {
+		return
+	}
+	metrics.pipeline.AddLatestCacheUpdates(outcome, count)
+}
+
+func (metrics *s2Metrics) observeColdArchiveRun(outcome string) {
+	if metrics == nil || metrics.pipeline == nil {
+		return
+	}
+	metrics.pipeline.ObserveColdArchiveRun(outcome)
 }
 
 func quarantineReasonFamily(reason QuarantineReason) string {
