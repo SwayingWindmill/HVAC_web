@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -263,5 +264,162 @@ func TestShutdownGatewayReverseOrderWaitsForHTTPDrainBeforeCancel(t *testing.T) 
 	}
 	if !bgExited.Load() {
 		t.Fatal("expected background worker to exit before shutdownGateway returned")
+	}
+}
+
+type gatewayRecordingExporter struct {
+	name   string
+	record func(string)
+}
+
+func (e *gatewayRecordingExporter) Export(context.Context, []observability.SpanData) error {
+	return nil
+}
+
+func (e *gatewayRecordingExporter) Shutdown(context.Context) error {
+	if e.record != nil {
+		e.record(e.name)
+	}
+	return nil
+}
+
+func TestCleanupGatewayRuntimeDrainsEmbeddedHTTPBeforeBackgroundAndClose(t *testing.T) {
+	var mu sync.Mutex
+	var events []string
+	record := func(event string) {
+		mu.Lock()
+		events = append(events, event)
+		mu.Unlock()
+	}
+
+	gatewayTelemetry := observability.NewRuntime(observability.RuntimeConfig{
+		Service:  "platform-gateway-test",
+		Exporter: &gatewayRecordingExporter{name: "gateway_telemetry_shutdown", record: record},
+	})
+	gatewayTelemetry.MarkReady()
+
+	embeddedTelemetry := observability.NewRuntime(observability.RuntimeConfig{
+		Service:  "energy-api-embedded-test",
+		Exporter: &gatewayRecordingExporter{name: "embedded_telemetry_shutdown", record: record},
+	})
+	embeddedTelemetry.MarkReady()
+
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	embCtx, cancelEmb := context.WithCancel(runCtx)
+
+	httpEntered := make(chan struct{})
+	releaseHTTP := make(chan struct{})
+	embServer := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			close(httpEntered)
+			<-releaseHTTP
+			record("embedded_http_handler_done")
+			w.WriteHeader(http.StatusOK)
+		}),
+	}
+	embLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer embLn.Close()
+
+	embedded := &embeddedEnergyServices{
+		servers:   []*http.Server{embServer},
+		telemetry: []*observability.Runtime{embeddedTelemetry},
+		cancelBg:  cancelEmb,
+		closeFuncs: []func(){
+			func() { record("embedded_store_closed") },
+		},
+	}
+	embedded.httpWG.Add(1)
+	go func() {
+		defer embedded.httpWG.Done()
+		_ = embServer.Serve(embLn)
+		record("embedded_http_exited")
+	}()
+
+	embWorkerStarted := make(chan struct{})
+	launchEmbeddedWorker(&embedded.bgWG, func() {
+		close(embWorkerStarted)
+		<-embCtx.Done()
+		record("embedded_bg_exited")
+	})
+	<-embWorkerStarted
+
+	var bgWG sync.WaitGroup
+	gatewayWorkerStarted := make(chan struct{})
+	bgWG.Add(1)
+	go func() {
+		defer bgWG.Done()
+		close(gatewayWorkerStarted)
+		<-runCtx.Done()
+		record("gateway_bg_exited")
+	}()
+	<-gatewayWorkerStarted
+
+	reqErrCh := make(chan error, 1)
+	go func() {
+		resp, reqErr := http.Get("http://" + embLn.Addr().String() + "/embedded")
+		if reqErr == nil {
+			drainAndCloseBody(resp.Body)
+		}
+		reqErrCh <- reqErr
+	}()
+	<-httpEntered
+
+	cleanupDone := make(chan struct{})
+	go func() {
+		defer close(cleanupDone)
+		cleanupGatewayRuntime(gatewayTelemetry, embedded, cancelRun, &bgWG, 2*time.Second)
+		embedded.Close()
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for (gatewayTelemetry.Ready() || embeddedTelemetry.Ready()) && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if gatewayTelemetry.Ready() || embeddedTelemetry.Ready() {
+		close(releaseHTTP)
+		t.Fatal("expected gateway and embedded telemetry to be marked not-ready immediately")
+	}
+	if runCtx.Err() != nil || embCtx.Err() != nil {
+		close(releaseHTTP)
+		t.Fatal("background contexts canceled before embedded HTTP finished draining")
+	}
+
+	close(releaseHTTP)
+	if err := <-reqErrCh; err != nil {
+		t.Fatalf("embedded HTTP request failed: %v", err)
+	}
+	select {
+	case <-cleanupDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("cleanupGatewayRuntime timed out")
+	}
+
+	mu.Lock()
+	got := slices.Clone(events)
+	mu.Unlock()
+	if len(got) != 7 {
+		t.Fatalf("events = %v, want 7 events", got)
+	}
+	httpHandlerIdx := slices.Index(got, "embedded_http_handler_done")
+	httpExitIdx := slices.Index(got, "embedded_http_exited")
+	embBGIdx := slices.Index(got, "embedded_bg_exited")
+	gwBGIdx := slices.Index(got, "gateway_bg_exited")
+	embTelIdx := slices.Index(got, "embedded_telemetry_shutdown")
+	gwTelIdx := slices.Index(got, "gateway_telemetry_shutdown")
+	storeIdx := slices.Index(got, "embedded_store_closed")
+	if httpHandlerIdx < 0 || httpExitIdx < 0 || embBGIdx < 0 || gwBGIdx < 0 || embTelIdx < 0 || gwTelIdx < 0 || storeIdx < 0 {
+		t.Fatalf("missing expected cleanup events: %v", got)
+	}
+	if httpHandlerIdx >= embBGIdx || httpHandlerIdx >= gwBGIdx || httpExitIdx >= embBGIdx || httpExitIdx >= gwBGIdx {
+		t.Fatalf("expected embedded HTTP drain and exit before background exit, got %v", got)
+	}
+	if storeIdx != len(got)-1 {
+		t.Fatalf("expected embedded store close last, got %v", got)
+	}
+	if embTelIdx < embBGIdx || gwTelIdx < gwBGIdx || embTelIdx > storeIdx || gwTelIdx > storeIdx {
+		t.Fatalf("telemetry shutdown ordering invalid: %v", got)
 	}
 }

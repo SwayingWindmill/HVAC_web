@@ -30,43 +30,58 @@ const (
 )
 
 func main() {
-	logger := observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
-	slog.SetDefault(logger)
-	if err := run(logger); err != nil {
-		logger.Error("report_service_failed", "error_code", "REPORT_SERVICE_FAILED", "error", err)
-		os.Exit(1)
-	}
+	os.Exit(run())
 }
 
-func run(logger *slog.Logger) error {
+func run() int {
+	logger := observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
+	slog.SetDefault(logger)
+	if err := runService(logger); err != nil {
+		logger.Error("report_service_failed", "error_code", "REPORT_SERVICE_FAILED", "error", err)
+		return 1
+	}
+	return 0
+}
+
+func runService(logger *slog.Logger) error {
 	if logger == nil {
 		logger = observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	var closers []func()
+	defer func() {
+		for i := len(closers) - 1; i >= 0; i-- {
+			closers[i]()
+		}
+	}()
+
+	sigCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignals()
 
 	telemetry := observability.NewRuntime(observability.RuntimeConfig{
 		Service:      "report-service",
 		OTLPEndpoint: strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")),
 	})
 	metrics := telemetry.Metrics
+	var telemetryShutdownOnce sync.Once
+	shutdownTelemetry := func() {
+		telemetryShutdownOnce.Do(func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), defaultTelemetryShutdownPeriod)
+			defer cancel()
+			_ = telemetry.Shutdown(shutdownCtx)
+		})
+	}
+	// Defer telemetry shutdown after pool closers are registered above so LIFO flushes telemetry first and closes pools last.
+	defer shutdownTelemetry()
 
 	dsn, err := requiredEnv("REPORT_DATABASE_URL")
 	if err != nil {
 		return err
 	}
-	store, err := report.OpenPostgres(ctx, dsn)
+	store, err := report.OpenPostgres(sigCtx, dsn)
 	if err != nil {
 		return err
 	}
-	defer store.Close()
-
-	// Defer telemetry shutdown after DB defer so LIFO teardown flushes telemetry first and closes pool last.
-	defer func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), defaultTelemetryShutdownPeriod)
-		defer cancel()
-		_ = telemetry.Shutdown(shutdownCtx)
-	}()
+	closers = append(closers, store.Close)
 
 	telemetry.SetDependencies(
 		observability.Dependency{Name: "postgres", Required: true, Check: store.Ping},
@@ -136,9 +151,11 @@ func run(logger *slog.Logger) error {
 	}
 	workerID := envOrDefault("REPORT_WORKER_ID", "report-service:"+hostname())
 
-	var wg sync.WaitGroup
-	runSupervised(ctx, &wg, logger, metrics, "report.worker", defaultPanicRestartDelay, func() {
-		runReportWorkerLoop(ctx, defaultWorkerInterval, logger, func(runCtx context.Context) error {
+	workerCtx, cancelWorkers := context.WithCancel(context.Background())
+	defer cancelWorkers()
+	var bgWG sync.WaitGroup
+	runSupervised(workerCtx, &bgWG, logger, metrics, "report.worker", defaultPanicRestartDelay, func() {
+		runReportWorkerLoop(workerCtx, defaultWorkerInterval, logger, func(runCtx context.Context) error {
 			return report.RunScheduledGenerationsWithLogger(runCtx, queue, service, workerID, 4, logger)
 		})
 	})
@@ -164,9 +181,10 @@ func run(logger *slog.Logger) error {
 	telemetry.MarkReady()
 
 	serveErr := make(chan error, 2)
-	wg.Add(1)
+	var httpWG sync.WaitGroup
+	httpWG.Add(1)
 	go func() {
-		defer wg.Done()
+		defer httpWG.Done()
 		defer observability.Recover(logger, metrics, "report.diagnostics_server", func(any) {
 			select {
 			case serveErr <- errors.New("diagnostics server panicked"):
@@ -177,9 +195,9 @@ func run(logger *slog.Logger) error {
 			serveErr <- fmt.Errorf("diagnostics server: %w", serveErrVal)
 		}
 	}()
-	wg.Add(1)
+	httpWG.Add(1)
 	go func() {
-		defer wg.Done()
+		defer httpWG.Done()
 		defer observability.Recover(logger, metrics, "report.http_server", func(any) {
 			select {
 			case serveErr <- errors.New("http server panicked"):
@@ -194,25 +212,56 @@ func run(logger *slog.Logger) error {
 
 	var runErr error
 	select {
-	case <-ctx.Done():
+	case <-sigCtx.Done():
 		logger.Info("report_service_shutting_down")
 	case err := <-serveErr:
 		runErr = err
-		stop()
+		stopSignals()
 	}
 
-	telemetry.MarkNotReady()
-	shutdownDone, shutdownResult := startServerShutdown(defaultShutdownTimeout, logger, metrics, "report.shutdown", server, diagnostics)
-	<-shutdownDone
-	if shutdownErr := shutdownResult(); shutdownErr != nil {
+	if shutdownErr := shutdownServiceRuntime(logger, telemetry, defaultShutdownTimeout, defaultBackgroundDrainTimeout, "report.shutdown", &httpWG, cancelWorkers, &bgWG, shutdownTelemetry, server, diagnostics); shutdownErr != nil {
 		logger.Warn("report_server_shutdown_failed", "error_code", "REPORT_SHUTDOWN_FAILED", "error", shutdownErr)
 		if runErr == nil {
 			runErr = shutdownErr
 		}
 	}
-	waitBackground(&wg, defaultBackgroundDrainTimeout, logger)
 	logger.Info("report_service_stopped")
 	return runErr
+}
+
+func shutdownServiceRuntime(
+	logger *slog.Logger,
+	telemetry *observability.Runtime,
+	shutdownTimeout time.Duration,
+	drainTimeout time.Duration,
+	component string,
+	httpWG *sync.WaitGroup,
+	cancelWorkers context.CancelFunc,
+	bgWG *sync.WaitGroup,
+	shutdownTelemetry func(),
+	servers ...*http.Server,
+) error {
+	var metrics *observability.Registry
+	if telemetry != nil {
+		telemetry.MarkNotReady()
+		metrics = telemetry.Metrics
+	}
+	shutdownDone, shutdownResult := startServerShutdown(shutdownTimeout, logger, metrics, component, servers...)
+	<-shutdownDone
+	shutdownErr := shutdownResult()
+	if httpWG != nil {
+		waitBackground(httpWG, shutdownTimeout, logger)
+	}
+	if cancelWorkers != nil {
+		cancelWorkers()
+	}
+	if bgWG != nil {
+		waitBackground(bgWG, drainTimeout, logger)
+	}
+	if shutdownTelemetry != nil {
+		shutdownTelemetry()
+	}
+	return shutdownErr
 }
 
 func runReportWorkerLoop(ctx context.Context, interval time.Duration, logger *slog.Logger, runOnce func(context.Context) error) {

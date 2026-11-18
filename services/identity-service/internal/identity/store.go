@@ -136,6 +136,9 @@ func (store *Store) Close() {
 }
 
 func (store *Store) Ping(ctx context.Context) error {
+	if store == nil || store.pool == nil {
+		return errors.New("identity store is unavailable")
+	}
 	return store.pool.Ping(ctx)
 }
 

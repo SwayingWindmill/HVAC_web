@@ -57,18 +57,11 @@ func run() int {
 			closers = append(closers, fn)
 		}
 	}
+	var gatewayShutdownDone bool
 	defer func() {
-		cancelRun()
-		bgWG.Wait()
-		if embeddedServices != nil {
-			embeddedServices.WaitBackground()
+		if !gatewayShutdownDone {
+			cleanupGatewayRuntime(telemetry, embeddedServices, cancelRun, &bgWG, 10*time.Second)
 		}
-		obsCtx, cancelObs := context.WithTimeout(context.Background(), 5*time.Second)
-		if embeddedServices != nil {
-			embeddedServices.ShutdownTelemetry(obsCtx)
-		}
-		_ = telemetry.Shutdown(obsCtx)
-		cancelObs()
 		for i := len(closers) - 1; i >= 0; i-- {
 			closers[i]()
 		}
@@ -312,8 +305,43 @@ func run() int {
 	}
 
 	shutdownGateway(logger, telemetry, embeddedServices, server, internal, diagnostics, &httpWG, cancelRun, &bgWG, 10*time.Second)
+	gatewayShutdownDone = true
 	logger.Info("gateway_stopped", "service", "platform-gateway")
 	return exitCode
+}
+
+func cleanupGatewayRuntime(
+	telemetry *observability.Runtime,
+	embeddedServices *embeddedEnergyServices,
+	cancelRun context.CancelFunc,
+	bgWG *sync.WaitGroup,
+	shutdownTimeout time.Duration,
+) {
+	if shutdownTimeout <= 0 {
+		shutdownTimeout = 10 * time.Second
+	}
+	if telemetry != nil {
+		telemetry.MarkNotReady()
+	}
+	embeddedServices.MarkNotReady()
+	if embeddedServices != nil {
+		httpCtx, cancelHTTP := context.WithTimeout(context.Background(), shutdownTimeout)
+		embeddedServices.ShutdownHTTP(httpCtx)
+		cancelHTTP()
+	}
+	if cancelRun != nil {
+		cancelRun()
+	}
+	if bgWG != nil {
+		bgWG.Wait()
+	}
+	embeddedServices.WaitBackground()
+	obsCtx, cancelObs := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelObs()
+	embeddedServices.ShutdownTelemetry(obsCtx)
+	if telemetry != nil {
+		_ = telemetry.Shutdown(obsCtx)
+	}
 }
 
 func shutdownGateway(

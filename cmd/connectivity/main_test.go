@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -565,5 +566,85 @@ func TestShutdownConnectivityRuntimeOrder(t *testing.T) {
 	}
 	if strings.Join(order, ",") != strings.Join(want, ",") {
 		t.Fatalf("shutdown order = %v, want %v", order, want)
+	}
+}
+
+func TestShutdownConnectivityRuntimeWaitsBackgroundBeforeStoreAndTransportClose(t *testing.T) {
+	var mu sync.Mutex
+	var order []string
+	record := func(step string) {
+		mu.Lock()
+		order = append(order, step)
+		mu.Unlock()
+	}
+
+	credentialsDone := make(chan struct{})
+	runtimeDone := make(chan struct{})
+	commandsDone := make(chan struct{})
+	retentionDone := make(chan struct{})
+	diagnosticsDone := make(chan struct{})
+
+	ingressCtx, ingressCancel := context.WithCancel(context.Background())
+	var bgWG sync.WaitGroup
+	bgStarted := make(chan struct{})
+	bgWG.Add(1)
+	go func() {
+		defer bgWG.Done()
+		defer observability.Recover(nil, nil, "connectivity.test_reconcile")
+		close(bgStarted)
+		<-ingressCtx.Done()
+		time.Sleep(15 * time.Millisecond)
+		record("reconcile_done")
+	}()
+	<-bgStarted
+
+	shutdownConnectivityRuntime(connectivityShutdownDeps{
+		markShuttingDown: func() { record("mark_not_ready") },
+		shutdownCredentials: func(context.Context) error {
+			if ingressCtx.Err() != nil {
+				t.Error("ingressCtx canceled before credentials shutdown")
+			}
+			record("credentials_shutdown")
+			close(credentialsDone)
+			return nil
+		},
+		credentialsDone: credentialsDone,
+		closeTunnelHub:  func() { record("tunnel_close") },
+		cancelIngress: func() {
+			record("cancel_ingress")
+			ingressCancel()
+			close(runtimeDone)
+			close(commandsDone)
+			close(retentionDone)
+		},
+		runtimeDone: runtimeDone,
+		waitBackground: func(ctx context.Context) {
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				bgWG.Wait()
+			}()
+			awaitSignal(ctx, done)
+			record("wait_background")
+		},
+		commandsDone:      commandsDone,
+		retentionDone:     retentionDone,
+		closeConcentrator: func(context.Context) error { record("concentrator_close"); return nil },
+		closeMQTTSession:  func(context.Context) error { record("mqtt_close"); return nil },
+		shutdownDiagnostics: func(context.Context) error {
+			close(diagnosticsDone)
+			return nil
+		},
+		diagnosticsDone:   diagnosticsDone,
+		shutdownTelemetry: func(context.Context) error { record("telemetry_shutdown"); return nil },
+		closeStore:        func() { record("store_close") },
+	})
+
+	mu.Lock()
+	got := strings.Join(order, ",")
+	mu.Unlock()
+	want := "mark_not_ready,credentials_shutdown,tunnel_close,cancel_ingress,reconcile_done,wait_background,concentrator_close,mqtt_close,telemetry_shutdown,store_close"
+	if got != want {
+		t.Fatalf("shutdown order = %s, want %s", got, want)
 	}
 }

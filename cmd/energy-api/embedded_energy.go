@@ -170,7 +170,7 @@ func startEmbeddedEnergyServices(ctx context.Context, logger *slog.Logger) (*emb
 			services.servers = append(services.servers, server)
 			services.telemetry = append(services.telemetry, telemetry)
 		case "alarm":
-			server, telemetry, closeOwner, configureErr := newEmbeddedAlarmServer(serviceCtx, logger, alarmStoreRef)
+			server, telemetry, closeOwner, configureErr := newEmbeddedAlarmServer(serviceCtx, logger, alarmStoreRef, &services.bgWG)
 			if configureErr != nil {
 				return fail(fmt.Errorf("configure embedded Alarm: %w", configureErr))
 			}
@@ -1022,7 +1022,7 @@ func buildEmbeddedCommandControlFailureSender(alarmRef *embeddedAlarmStoreRef, c
 	}
 }
 
-func newEmbeddedAlarmServer(ctx context.Context, logger *slog.Logger, alarmRef *embeddedAlarmStoreRef) (*http.Server, *observability.Runtime, func(), error) {
+func newEmbeddedAlarmServer(ctx context.Context, logger *slog.Logger, alarmRef *embeddedAlarmStoreRef, bgWG *sync.WaitGroup) (*http.Server, *observability.Runtime, func(), error) {
 	certificate, err := tls.LoadX509KeyPair(energyRequiredEnv("ALARM_TLS_CERT"), energyRequiredEnv("ALARM_TLS_KEY"))
 	if err != nil {
 		return nil, nil, func() {}, err
@@ -1082,8 +1082,12 @@ func newEmbeddedAlarmServer(ctx context.Context, logger *slog.Logger, alarmRef *
 		store.Close()
 		return nil, nil, func() {}, err
 	}
+	evalCtx, cancelEval := context.WithCancel(ctx)
 	// A Site that stops reporting sends no telemetry to evaluate; only the scheduled pass notices it (#615).
-	alarmservice.RunScheduledEvaluations(ctx, store, logger)
+	scheduledDone := alarmservice.StartScheduledEvaluations(evalCtx, store, logger)
+	launchEmbeddedWorker(bgWG, func() {
+		<-scheduledDone
+	})
 	server := &http.Server{
 		Addr: envOr("ALARM_SERVICE_ADDR", ":8448"), Handler: router,
 		TLSConfig: &tls.Config{
@@ -1091,8 +1095,13 @@ func newEmbeddedAlarmServer(ctx context.Context, logger *slog.Logger, alarmRef *
 		},
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second,
 	}
+	closeOwner := func() {
+		cancelEval()
+		<-scheduledDone
+		store.Close()
+	}
 	logger.Info("energy_api_alarm_configured", "address", server.Addr)
-	return server, telemetry, store.Close, nil
+	return server, telemetry, closeOwner, nil
 }
 
 func newEmbeddedWorkOrderServer(ctx context.Context, logger *slog.Logger) (*http.Server, func(), error) {

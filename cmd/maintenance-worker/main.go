@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -17,25 +18,50 @@ import (
 )
 
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
+	var closers []func()
+	defer func() {
+		for i := len(closers) - 1; i >= 0; i-- {
+			closers[i]()
+		}
+	}()
+
 	logger := observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
 	telemetry := observability.NewRuntime(observability.RuntimeConfig{
 		Service: "maintenance-service", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond,
 	})
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
+	var telemetryShutdownOnce sync.Once
+	shutdownTelemetry := func() {
+		telemetryShutdownOnce.Do(func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = telemetry.Shutdown(shutdownCtx)
+		})
+	}
+	defer shutdownTelemetry()
+
+	sigCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignals()
 
 	config, err := loadWorkerSettings()
 	if err != nil {
 		logger.Error("maintenance_configuration_invalid", "error_code", "MAINTENANCE_CONFIGURATION_INVALID", "error", err.Error())
-		os.Exit(1)
+		return 1
 	}
 
-	store, err := openStore(ctx)
+	store, err := openStore(sigCtx)
 	if err != nil {
 		logger.Error("maintenance_configuration_invalid", "error_code", "MAINTENANCE_CONFIGURATION_INVALID", "error", err.Error())
-		os.Exit(1)
+		return 1
 	}
-	defer store.Close()
+	var closeStoreOnce sync.Once
+	closeStore := func() {
+		closeStoreOnce.Do(store.Close)
+	}
+	closers = append(closers, closeStore)
 	telemetry.SetDependencies(observability.Dependency{Name: "postgres", Required: true, Check: store.Ping})
 
 	hostname, _ := os.Hostname()
@@ -58,24 +84,107 @@ func main() {
 		Addr: envOr("MAINTENANCE_DIAGNOSTICS_ADDR", ":19093"), Handler: telemetry.DiagnosticsHandler(),
 		ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second,
 	}
+	diagDone := make(chan struct{})
+	diagErr := make(chan error, 1)
 	go func() {
-		defer observability.Recover(logger, telemetry.Metrics, "maintenance_worker.diagnostics")
+		defer close(diagDone)
+		defer observability.Recover(logger, telemetry.Metrics, "maintenance_worker.diagnostics", func(any) {
+			select {
+			case diagErr <- errors.New("diagnostics server panicked"):
+			default:
+			}
+		})
 		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("maintenance_diagnostics_failed", "error_code", "MAINTENANCE_DIAGNOSTICS_SERVE_FAILED")
-			cancel()
+			select {
+			case diagErr <- err:
+			default:
+			}
 		}
+	}()
+
+	workerCtx, cancelWorker := context.WithCancel(context.Background())
+	defer cancelWorker()
+	workerDone := make(chan struct{})
+	go func() {
+		defer close(workerDone)
+		defer observability.Recover(logger, telemetry.Metrics, "maintenance_worker.loop")
+		runWorkerLoop(workerCtx, worker, store, coldArchiveDir, scanInterval, auditInterval, telemetry, logger)
 	}()
 
 	telemetry.MarkReady()
 	logger.Info("maintenance_service_started", "scan_interval", scanInterval.String(), "audit_interval", auditInterval.String(), "worker_id", workerID, "cold_archive_audit_enabled", coldArchiveDir != "")
-	run(ctx, worker, store, coldArchiveDir, scanInterval, auditInterval, telemetry, logger)
-	telemetry.MarkNotReady()
 
-	shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer shutdownCancel()
-	_ = diagnostics.Shutdown(shutdownContext)
-	_ = telemetry.Shutdown(shutdownContext)
+	exitCode := 0
+	select {
+	case <-sigCtx.Done():
+	case <-diagErr:
+		exitCode = 1
+	}
+	stopSignals()
+
+	shutdownMaintenanceWorker(logger, telemetry, diagnostics, diagDone, cancelWorker, workerDone, shutdownTelemetry, closeStore, 10*time.Second)
 	logger.Info("maintenance_service_stopped")
+	return exitCode
+}
+
+func shutdownMaintenanceWorker(
+	logger *slog.Logger,
+	telemetry *observability.Runtime,
+	diagnostics *http.Server,
+	diagDone <-chan struct{},
+	cancelWorker context.CancelFunc,
+	workerDone <-chan struct{},
+	shutdownTelemetry func(),
+	closeStore func(),
+	drainTimeout time.Duration,
+) {
+	if drainTimeout <= 0 {
+		drainTimeout = 10 * time.Second
+	}
+	if telemetry != nil {
+		telemetry.MarkNotReady()
+	}
+	if diagnostics != nil {
+		httpCtx, cancelHTTP := context.WithTimeout(context.Background(), drainTimeout)
+		if err := diagnostics.Shutdown(httpCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			_ = diagnostics.Close()
+		}
+		if diagDone != nil {
+			select {
+			case <-diagDone:
+			case <-httpCtx.Done():
+			}
+		}
+		cancelHTTP()
+	} else if diagDone != nil {
+		timer := time.NewTimer(drainTimeout)
+		select {
+		case <-diagDone:
+		case <-timer.C:
+		}
+		timer.Stop()
+	}
+	if cancelWorker != nil {
+		cancelWorker()
+	}
+	if workerDone != nil {
+		timer := time.NewTimer(drainTimeout)
+		select {
+		case <-workerDone:
+		case <-timer.C:
+			if logger != nil {
+				logger.Warn("maintenance_worker_shutdown_timeout", "error_code", "MAINTENANCE_SHUTDOWN_TIMEOUT")
+			}
+		}
+		timer.Stop()
+	}
+	if shutdownTelemetry != nil {
+		shutdownTelemetry()
+	}
+	if closeStore != nil {
+		closeStore()
+	}
 }
 
 func openStore(ctx context.Context) (*maintenance.Store, error) {
@@ -86,7 +195,7 @@ type lifecycleAuditor interface {
 	AuditLifecycleGovernance(ctx context.Context, now time.Time) (maintenance.LifecycleAuditSummary, error)
 }
 
-func run(ctx context.Context, worker *maintenance.Worker, store *maintenance.Store, coldArchiveDir string, interval, auditInterval time.Duration, telemetry *observability.Runtime, logger *slog.Logger) {
+func runWorkerLoop(ctx context.Context, worker *maintenance.Worker, store *maintenance.Store, coldArchiveDir string, interval, auditInterval time.Duration, telemetry *observability.Runtime, logger *slog.Logger) {
 	runCycle(ctx, worker, telemetry, logger)
 	runLifecycleAudit(ctx, store, coldArchiveDir, telemetry, logger)
 	ticker := time.NewTicker(interval)

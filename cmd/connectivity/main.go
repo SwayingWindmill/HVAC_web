@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -26,6 +27,10 @@ import (
 )
 
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
 	diagnosticsAddress := flag.String("diagnostics-addr", envOr("MQTT_TELEMETRY_ADAPTER_DIAGNOSTICS_ADDR", ":19094"), "health server listen address")
 	initializeCA := flag.Bool("initialize-gateway-ca", false, "initialize new Gateway CA files and exit")
 	tunnelStdio := flag.String("tunnel-stdio", "", "bridge stdin/stdout to loopback tunnel address and exit")
@@ -36,14 +41,48 @@ func main() {
 		stdioCancel()
 		if err != nil {
 			_, _ = fmt.Fprintln(os.Stderr, err.Error())
-			os.Exit(1)
+			return 1
 		}
-		return
+		return 0
 	}
+
 	logger := observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
+	var closers []func()
+	addCloser := func(fn func()) {
+		if fn != nil {
+			closers = append(closers, fn)
+		}
+	}
+	var shutdownRan bool
+	defer func() {
+		if shutdownRan {
+			return
+		}
+		for i := len(closers) - 1; i >= 0; i-- {
+			closers[i]()
+		}
+	}()
+
 	telemetry := observability.NewRuntime(observability.RuntimeConfig{
 		Service: "mqtt-telemetry-adapter", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond,
 	})
+	var telemetryShutdownOnce sync.Once
+	shutdownTelemetry := func(ctx context.Context) error {
+		var shutdownErr error
+		telemetryShutdownOnce.Do(func() {
+			shutdownErr = telemetry.Shutdown(ctx)
+		})
+		return shutdownErr
+	}
+	defer func() {
+		if shutdownRan {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = shutdownTelemetry(ctx)
+	}()
+
 	if *initializeCA {
 		workloadCA, err := os.ReadFile(envOr("CONNECTIVITY_CA", "/run/hvac/pki/ca.crt"))
 		if err == nil {
@@ -56,24 +95,24 @@ func main() {
 			} else {
 				logger.Error("gateway_ca_initialization_failed", "error_code", "GATEWAY_CA_INITIALIZATION_FAILED")
 			}
-			os.Exit(1)
+			return 1
 		}
-		return
+		return 0
 	}
 	config := uplinkConfig()
 	if err := config.Validate(); err != nil {
 		logger.Error("connectivity_uplink_config_invalid", "cause", err.Error())
-		os.Exit(1)
+		return 1
 	}
 	rateLimitMPS, rateLimitBurst, err := gatewayRateLimitConfig()
 	if err != nil {
 		logger.Error("connectivity_rate_limit_config_invalid", "cause", err.Error())
-		os.Exit(1)
+		return 1
 	}
 
 	sigCtx, sigCancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer sigCancel()
-	ingressCtx, ingressCancel := context.WithCancel(sigCtx)
+	ingressCtx, ingressCancel := context.WithCancel(context.Background())
 	defer ingressCancel()
 	drainRootCtx, drainRootCancel := context.WithCancel(context.Background())
 	defer drainRootCancel()
@@ -84,9 +123,9 @@ func main() {
 	connectivityStore, err := connectivity.Open(sigCtx, connectivityDatabaseURL)
 	if err != nil {
 		logger.Error("iot_connectivity_store_unavailable", "error", err.Error())
-		os.Exit(1)
+		return 1
 	}
-	defer connectivityStore.Close()
+	addCloser(connectivityStore.Close)
 	telemetry.SetDependencies(observability.Dependency{
 		Name:     "postgres-connectivity",
 		Required: true,
@@ -95,21 +134,38 @@ func main() {
 	mqttSession, concentratorTransport, err := openConcentratorAndSharedSession(drainRootCtx, config.MQTT, logger, telemetry.Metrics, tap)
 	if err != nil {
 		logger.Error("connectivity_concentrator_mqtt_unavailable", "error_code", "CONCENTRATOR_MQTT_UNAVAILABLE", "error", err.Error())
-		os.Exit(1)
+		return 1
+	}
+	addCloser(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = concentratorTransport.Close(ctx)
+	})
+	if mqttSession != nil {
+		addCloser(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = mqttSession.Close(ctx)
+		})
 	}
 	telemetryRuntime, err := adapter.NewTelemetryRuntimeClientWithTracer(config.TelemetryRuntime, telemetry.Tracer)
 	if err != nil {
 		logger.Error("mqtt_telemetry_adapter_runtime_client_invalid", "error", err.Error())
-		os.Exit(1)
+		return 1
 	}
 	concentratorService := concentrator.NewService(connectivityStore, concentratorTransport)
 	presence := newGatewayOnlineTrackerWithMetrics(telemetry.Metrics)
 	credentials, tunnelHub, err := credentialServerWithDiagnostics(drainRootCtx, logger, telemetry.Metrics, presence, connectivityStore, concentratorService, telemetryRuntime, tap, tunnel.WithObservability(logger, telemetry.Metrics))
 	if err != nil {
 		logger.Error("connectivity_credentials_unavailable", "error_code", "CREDENTIAL_MODULE_UNAVAILABLE")
-		os.Exit(1)
+		return 1
 	}
-	defer tunnelHub.Close()
+	addCloser(tunnelHub.Close)
+	var (
+		bgMu     sync.RWMutex
+		bgClosed bool
+		bgWG     sync.WaitGroup
+	)
 	processor, err := adapter.NewProcessor(
 		connectivityStore,
 		telemetryRuntime,
@@ -120,14 +176,23 @@ func main() {
 		adapter.WithProcessorPacketHook(tap.Record),
 		adapter.WithGatewayPresenceHook(presence.SetOnline),
 		adapter.WithGatewayConnectHook(func(_ context.Context, gatewayID string) {
-			observability.GoSafe(logger, telemetry.Metrics, "connectivity.concentrator_shadow_reconcile", func() {
+			bgMu.RLock()
+			if bgClosed || ingressCtx.Err() != nil {
+				bgMu.RUnlock()
+				return
+			}
+			bgWG.Add(1)
+			bgMu.RUnlock()
+			go func() {
+				defer bgWG.Done()
+				defer observability.Recover(logger, telemetry.Metrics, "connectivity.concentrator_shadow_reconcile")
 				reconcileConcentratorShadowAsync(ingressCtx, concentratorService, logger, gatewayID)
-			})
+			}()
 		}),
 	)
 	if err != nil {
 		logger.Error("mqtt_telemetry_adapter_processor_invalid", "error", err.Error())
-		os.Exit(1)
+		return 1
 	}
 	runtimeOptions := []adapter.RuntimeOption{
 		adapter.WithCoverageReporter(connectivityStore, telemetryRuntime),
@@ -146,7 +211,7 @@ func main() {
 	)
 	if err != nil {
 		logger.Error("mqtt_telemetry_adapter_runtime_invalid", "error", err.Error())
-		os.Exit(1)
+		return 1
 	}
 
 	// Commands are part of Connectivity when enabled: if they cannot start, the process
@@ -155,8 +220,13 @@ func main() {
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("COMMAND_RUNTIME_IN_PROCESS_ENABLED")), "true") {
 		if commands, err = loadCommandRuntime(drainRootCtx, connectivityStore, logger, telemetry.Metrics, tap); err != nil {
 			logger.Error("connectivity_command_runtime_unavailable", "error_code", "COMMAND_MODULE_UNAVAILABLE", "error", err.Error())
-			os.Exit(1)
+			return 1
 		}
+		addCloser(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = commands.Close(ctx)
+		})
 	}
 	telemetry.MarkReady()
 	diagnostics := diagnosticsServer(*diagnosticsAddress, runtime, telemetry, &shuttingDown)
@@ -210,10 +280,12 @@ func main() {
 		close(commandsDone)
 	}
 
+	exitCode := 0
 	select {
 	case <-sigCtx.Done():
 	case diagnosticsRunErr := <-diagnosticsErr:
 		logger.Error("mqtt_telemetry_adapter_diagnostics_failed", "error", diagnosticsRunErr.Error())
+		exitCode = 1
 	}
 	shutdownConnectivityRuntime(connectivityShutdownDeps{
 		markShuttingDown: func() {
@@ -228,7 +300,18 @@ func main() {
 		cancelIngress:   ingressCancel,
 		cancelDrainRoot: drainRootCancel,
 		runtimeDone:     runtimeDone,
-		commandsDone:    commandsDone,
+		waitBackground: func(ctx context.Context) {
+			bgMu.Lock()
+			bgClosed = true
+			bgMu.Unlock()
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				bgWG.Wait()
+			}()
+			awaitSignal(ctx, done)
+		},
+		commandsDone: commandsDone,
 		waitCommands: func(ctx context.Context) error {
 			if commands == nil {
 				return nil
@@ -256,10 +339,12 @@ func main() {
 			return diagnostics.Shutdown(ctx)
 		},
 		diagnosticsDone:   diagnosticsDone,
-		shutdownTelemetry: telemetry.Shutdown,
+		shutdownTelemetry: shutdownTelemetry,
 		closeStore:        connectivityStore.Close,
 	})
+	shutdownRan = true
 	logger.Info("mqtt_telemetry_adapter_stopped")
+	return exitCode
 }
 
 type connectivityShutdownDeps struct {
@@ -270,6 +355,7 @@ type connectivityShutdownDeps struct {
 	cancelIngress       func()
 	cancelDrainRoot     func()
 	runtimeDone         <-chan struct{}
+	waitBackground      func(context.Context)
 	commandsDone        <-chan struct{}
 	waitCommands        func(context.Context) error
 	retentionDone       <-chan struct{}
@@ -307,6 +393,9 @@ func shutdownConnectivityRuntime(deps connectivityShutdownDeps) {
 		stopDrain = context.AfterFunc(drainCtx, deps.cancelDrainRoot)
 	}
 	awaitSignal(drainCtx, deps.runtimeDone)
+	if deps.waitBackground != nil {
+		deps.waitBackground(drainCtx)
+	}
 	awaitSignal(drainCtx, deps.commandsDone)
 	if deps.waitCommands != nil {
 		_ = deps.waitCommands(drainCtx)

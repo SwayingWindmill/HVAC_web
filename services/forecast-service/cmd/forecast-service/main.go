@@ -58,26 +58,48 @@ type forecastReconciler interface {
 }
 
 func main() {
-	logger := observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
-	slog.SetDefault(logger)
-	if err := run(logger); err != nil {
-		logger.Error("forecast_service_failed", "error_code", "FORECAST_SERVICE_FAILED", "error", err)
-		os.Exit(1)
-	}
+	os.Exit(run())
 }
 
-func run(logger *slog.Logger) error {
+func run() int {
+	logger := observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
+	slog.SetDefault(logger)
+	if err := runService(logger); err != nil {
+		logger.Error("forecast_service_failed", "error_code", "FORECAST_SERVICE_FAILED", "error", err)
+		return 1
+	}
+	return 0
+}
+
+func runService(logger *slog.Logger) error {
 	if logger == nil {
 		logger = observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+	var closers []func()
+	defer func() {
+		for i := len(closers) - 1; i >= 0; i-- {
+			closers[i]()
+		}
+	}()
+
+	sigCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignals()
 
 	telemetry := observability.NewRuntime(observability.RuntimeConfig{
 		Service:      "forecast-service",
 		OTLPEndpoint: strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")),
 	})
 	metrics := telemetry.Metrics
+	var telemetryShutdownOnce sync.Once
+	shutdownTelemetry := func() {
+		telemetryShutdownOnce.Do(func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), defaultTelemetryShutdownPeriod)
+			defer cancel()
+			_ = telemetry.Shutdown(shutdownCtx)
+		})
+	}
+	// Defer telemetry shutdown after pool closers are registered above so LIFO flushes telemetry first and closes pools last.
+	defer shutdownTelemetry()
 
 	clickHouseURL, err := requiredEnv("FORECAST_CLICKHOUSE_HTTP_URL")
 	if err != nil {
@@ -95,17 +117,17 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	defer sink.CloseIdleConnections()
+	closers = append(closers, sink.CloseIdleConnections)
 
 	dsn, err := requiredEnv("FORECAST_POSTGRES_DSN")
 	if err != nil {
 		return err
 	}
-	publication, err := forecast.OpenPostgres(ctx, dsn)
+	publication, err := forecast.OpenPostgres(sigCtx, dsn)
 	if err != nil {
 		return err
 	}
-	defer publication.Close()
+	closers = append(closers, publication.Close)
 
 	service, err := forecast.NewService(sink, publication, time.Now)
 	if err != nil {
@@ -119,14 +141,7 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	defer history.CloseIdleConnections()
-
-	// Defer telemetry shutdown after DB/ClickHouse defers so LIFO teardown flushes telemetry first and closes pools last.
-	defer func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), defaultTelemetryShutdownPeriod)
-		defer cancel()
-		_ = telemetry.Shutdown(shutdownCtx)
-	}()
+	closers = append(closers, history.CloseIdleConnections)
 
 	telemetry.SetDependencies(
 		observability.Dependency{Name: "postgres", Required: true, Check: publication.Ping},
@@ -196,15 +211,17 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	var wg sync.WaitGroup
-	runSupervised(ctx, &wg, logger, metrics, "forecast.worker", defaultPanicRestartDelay, func() {
-		runForecastWorker(ctx, queue, publication, service, preparer, workerID, claimInterval, claimBatch, leaseDuration, leaseRenew, logger, metrics)
+	workerCtx, cancelWorkers := context.WithCancel(context.Background())
+	defer cancelWorkers()
+	var bgWG sync.WaitGroup
+	runSupervised(workerCtx, &bgWG, logger, metrics, "forecast.worker", defaultPanicRestartDelay, func() {
+		runForecastWorker(workerCtx, queue, publication, service, preparer, workerID, claimInterval, claimBatch, leaseDuration, leaseRenew, logger, metrics)
 	})
 
 	// Cross-store repair is part of the Forecast runtime itself. It only repairs
 	// stale PERSISTING jobs after proving the expected result count in ClickHouse.
-	runSupervised(ctx, &wg, logger, metrics, "forecast.reconcile", defaultPanicRestartDelay, func() {
-		runReconcileLoop(ctx, defaultReconcileInterval, service, logger)
+	runSupervised(workerCtx, &bgWG, logger, metrics, "forecast.reconcile", defaultPanicRestartDelay, func() {
+		runReconcileLoop(workerCtx, defaultReconcileInterval, service, logger)
 	})
 
 	server := &http.Server{
@@ -228,9 +245,10 @@ func run(logger *slog.Logger) error {
 	telemetry.MarkReady()
 
 	serveErr := make(chan error, 2)
-	wg.Add(1)
+	var httpWG sync.WaitGroup
+	httpWG.Add(1)
 	go func() {
-		defer wg.Done()
+		defer httpWG.Done()
 		defer observability.Recover(logger, metrics, "forecast.diagnostics_server", func(any) {
 			select {
 			case serveErr <- errors.New("diagnostics server panicked"):
@@ -241,9 +259,9 @@ func run(logger *slog.Logger) error {
 			serveErr <- fmt.Errorf("diagnostics server: %w", err)
 		}
 	}()
-	wg.Add(1)
+	httpWG.Add(1)
 	go func() {
-		defer wg.Done()
+		defer httpWG.Done()
 		defer observability.Recover(logger, metrics, "forecast.http_server", func(any) {
 			select {
 			case serveErr <- errors.New("http server panicked"):
@@ -258,25 +276,56 @@ func run(logger *slog.Logger) error {
 
 	var runErr error
 	select {
-	case <-ctx.Done():
+	case <-sigCtx.Done():
 		logger.Info("forecast_service_shutting_down")
 	case err := <-serveErr:
 		runErr = err
-		stop()
+		stopSignals()
 	}
 
-	telemetry.MarkNotReady()
-	shutdownDone, shutdownResult := startServerShutdown(defaultShutdownTimeout, logger, metrics, "forecast.shutdown", server, diagnostics)
-	<-shutdownDone
-	if shutdownErr := shutdownResult(); shutdownErr != nil {
+	if shutdownErr := shutdownServiceRuntime(logger, telemetry, defaultShutdownTimeout, defaultBackgroundDrainTimeout, "forecast.shutdown", &httpWG, cancelWorkers, &bgWG, shutdownTelemetry, server, diagnostics); shutdownErr != nil {
 		logger.Warn("forecast_server_shutdown_failed", "error_code", "FORECAST_SHUTDOWN_FAILED", "error", shutdownErr)
 		if runErr == nil {
 			runErr = shutdownErr
 		}
 	}
-	waitBackground(&wg, defaultBackgroundDrainTimeout, logger)
 	logger.Info("forecast_service_stopped")
 	return runErr
+}
+
+func shutdownServiceRuntime(
+	logger *slog.Logger,
+	telemetry *observability.Runtime,
+	shutdownTimeout time.Duration,
+	drainTimeout time.Duration,
+	component string,
+	httpWG *sync.WaitGroup,
+	cancelWorkers context.CancelFunc,
+	bgWG *sync.WaitGroup,
+	shutdownTelemetry func(),
+	servers ...*http.Server,
+) error {
+	var metrics *observability.Registry
+	if telemetry != nil {
+		telemetry.MarkNotReady()
+		metrics = telemetry.Metrics
+	}
+	shutdownDone, shutdownResult := startServerShutdown(shutdownTimeout, logger, metrics, component, servers...)
+	<-shutdownDone
+	shutdownErr := shutdownResult()
+	if httpWG != nil {
+		waitBackground(httpWG, shutdownTimeout, logger)
+	}
+	if cancelWorkers != nil {
+		cancelWorkers()
+	}
+	if bgWG != nil {
+		waitBackground(bgWG, drainTimeout, logger)
+	}
+	if shutdownTelemetry != nil {
+		shutdownTelemetry()
+	}
+	return shutdownErr
 }
 
 func runSupervised(ctx context.Context, wg *sync.WaitGroup, logger *slog.Logger, metrics *observability.Registry, component string, restartDelay time.Duration, fn func()) {

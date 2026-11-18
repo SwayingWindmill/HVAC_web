@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -19,58 +20,166 @@ import (
 )
 
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
+	var closers []func()
+	defer func() {
+		for i := len(closers) - 1; i >= 0; i-- {
+			closers[i]()
+		}
+	}()
+
 	logger := observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
 	telemetry := observability.NewRuntime(observability.RuntimeConfig{
 		Service: "scheduler", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond,
 	})
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
+	var telemetryShutdownOnce sync.Once
+	shutdownTelemetry := func() {
+		telemetryShutdownOnce.Do(func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = telemetry.Shutdown(shutdownCtx)
+		})
+	}
+	defer shutdownTelemetry()
+
+	sigCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignals()
 
 	scanInterval, err := durationEnv("SCHEDULER_SCAN_INTERVAL", 2*time.Second, time.Second, time.Minute)
 	if err != nil {
 		logger.Error("scheduler_configuration_invalid", "error_code", "SCHEDULER_CONFIGURATION_INVALID", "variable", "SCHEDULER_SCAN_INTERVAL")
-		os.Exit(1)
+		return 1
 	}
 	scanBatch, err := integerEnv("SCHEDULER_SCAN_BATCH", 100, 1, 1000)
 	if err != nil {
 		logger.Error("scheduler_configuration_invalid", "error_code", "SCHEDULER_CONFIGURATION_INVALID", "variable", "SCHEDULER_SCAN_BATCH")
-		os.Exit(1)
+		return 1
 	}
 	fireTolerance := 2 * scanInterval
 	if fireTolerance < time.Minute {
 		fireTolerance = time.Minute
 	}
 
-	store, err := openStore(ctx)
+	store, err := openStore(sigCtx)
 	if err != nil {
 		logger.Error("scheduler_configuration_invalid", "error_code", "SCHEDULER_CONFIGURATION_INVALID")
-		os.Exit(1)
+		return 1
 	}
-	defer store.Close()
+	var closeStoreOnce sync.Once
+	closeStore := func() {
+		closeStoreOnce.Do(store.Close)
+	}
+	closers = append(closers, closeStore)
 	telemetry.SetDependencies(observability.Dependency{Name: "postgres", Required: true, Check: store.Ping})
 
 	diagnostics := &http.Server{
 		Addr: envOr("SCHEDULER_DIAGNOSTICS_ADDR", ":19092"), Handler: telemetry.DiagnosticsHandler(),
 		ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second,
 	}
+	diagDone := make(chan struct{})
+	diagErr := make(chan error, 1)
 	go func() {
-		defer observability.Recover(logger, telemetry.Metrics, "scheduler.diagnostics")
+		defer close(diagDone)
+		defer observability.Recover(logger, telemetry.Metrics, "scheduler.diagnostics", func(any) {
+			select {
+			case diagErr <- errors.New("diagnostics server panicked"):
+			default:
+			}
+		})
 		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("scheduler_diagnostics_failed", "error_code", "SCHEDULER_DIAGNOSTICS_SERVE_FAILED")
-			cancel()
+			select {
+			case diagErr <- err:
+			default:
+			}
 		}
+	}()
+
+	workerCtx, cancelWorker := context.WithCancel(context.Background())
+	defer cancelWorker()
+	workerDone := make(chan struct{})
+	go func() {
+		defer close(workerDone)
+		defer observability.Recover(logger, telemetry.Metrics, "scheduler.loop")
+		runWorkerLoop(workerCtx, store, scanInterval, scanBatch, fireTolerance, telemetry, logger)
 	}()
 
 	telemetry.MarkReady()
 	logger.Info("scheduler_started", "scan_interval", scanInterval.String(), "scan_batch", scanBatch)
-	run(ctx, store, scanInterval, scanBatch, fireTolerance, telemetry, logger)
-	telemetry.MarkNotReady()
 
-	shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer shutdownCancel()
-	_ = diagnostics.Shutdown(shutdownContext)
-	_ = telemetry.Shutdown(shutdownContext)
+	exitCode := 0
+	select {
+	case <-sigCtx.Done():
+	case <-diagErr:
+		exitCode = 1
+	}
+	stopSignals()
+
+	shutdownScheduler(logger, telemetry, diagnostics, diagDone, cancelWorker, workerDone, shutdownTelemetry, closeStore, 10*time.Second)
 	logger.Info("scheduler_stopped")
+	return exitCode
+}
+
+func shutdownScheduler(
+	logger *slog.Logger,
+	telemetry *observability.Runtime,
+	diagnostics *http.Server,
+	diagDone <-chan struct{},
+	cancelWorker context.CancelFunc,
+	workerDone <-chan struct{},
+	shutdownTelemetry func(),
+	closeStore func(),
+	drainTimeout time.Duration,
+) {
+	if drainTimeout <= 0 {
+		drainTimeout = 10 * time.Second
+	}
+	if telemetry != nil {
+		telemetry.MarkNotReady()
+	}
+	if diagnostics != nil {
+		httpCtx, cancelHTTP := context.WithTimeout(context.Background(), drainTimeout)
+		if err := diagnostics.Shutdown(httpCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			_ = diagnostics.Close()
+		}
+		if diagDone != nil {
+			select {
+			case <-diagDone:
+			case <-httpCtx.Done():
+			}
+		}
+		cancelHTTP()
+	} else if diagDone != nil {
+		timer := time.NewTimer(drainTimeout)
+		select {
+		case <-diagDone:
+		case <-timer.C:
+		}
+		timer.Stop()
+	}
+	if cancelWorker != nil {
+		cancelWorker()
+	}
+	if workerDone != nil {
+		timer := time.NewTimer(drainTimeout)
+		select {
+		case <-workerDone:
+		case <-timer.C:
+			if logger != nil {
+				logger.Warn("scheduler_shutdown_timeout", "error_code", "SCHEDULER_SHUTDOWN_TIMEOUT")
+			}
+		}
+		timer.Stop()
+	}
+	if shutdownTelemetry != nil {
+		shutdownTelemetry()
+	}
+	if closeStore != nil {
+		closeStore()
+	}
 }
 
 func openStore(ctx context.Context) (*scheduler.Store, error) {
@@ -106,7 +215,7 @@ func openStore(ctx context.Context) (*scheduler.Store, error) {
 	return store, nil
 }
 
-func run(ctx context.Context, store *scheduler.Store, interval time.Duration, batch int, fireTolerance time.Duration, telemetry *observability.Runtime, logger *slog.Logger) {
+func runWorkerLoop(ctx context.Context, store *scheduler.Store, interval time.Duration, batch int, fireTolerance time.Duration, telemetry *observability.Runtime, logger *slog.Logger) {
 	runCycle(ctx, store, batch, fireTolerance, telemetry, logger)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
