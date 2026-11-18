@@ -354,3 +354,24 @@ func TestEmbeddedCommandHandlerExtractsTraceparentAndRecordsBoundedRoutes(t *tes
 		}
 	}
 }
+
+func TestEmbeddedAlarmControlEventsSPIFFEsIncludesOptimizationService(t *testing.T) {
+	allowed := embeddedAlarmControlEventsSPIFFEs()
+	want := []string{
+		"spiffe://hvac.local/command-service",
+		"spiffe://hvac.local/connectivity-service",
+		"spiffe://hvac.local/optimization-service",
+	}
+	for _, entry := range want {
+		found := false
+		for _, candidate := range allowed {
+			if candidate == entry {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("embedded alarm control-events SPIFFE allowlist %v missing %q", allowed, entry)
+		}
+	}
+}

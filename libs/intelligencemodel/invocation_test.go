@@ -288,10 +288,11 @@ func TestTraceContextGenerationAndStructuredPropagation(t *testing.T) {
 	const validTraceID = "4bf92f3577b34da6a3ce929d0e0e4736"
 	tpPattern := regexp.MustCompile(`^00-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$`)
 
-	if got := TraceparentFromContext(nil); got != "" {
+	var nilCtx context.Context
+	if got := TraceparentFromContext(nilCtx); got != "" {
 		t.Fatalf("nil context traceparent=%q, want empty", got)
 	}
-	if got := TraceIDFromContext(nil); got != "" {
+	if got := TraceIDFromContext(nilCtx); got != "" {
 		t.Fatalf("nil context traceID=%q, want empty", got)
 	}
 

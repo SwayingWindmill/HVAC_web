@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/libs/intelligencemodel"
 )
 
 func (store *PostgresStore) ActiveAutoControlLease(ctx context.Context, tenantID, siteID string, at time.Time) (*AutoControlLeaseRecord, error) {
@@ -261,7 +262,7 @@ func (store *PostgresStore) recordExecutionMonitor(ctx context.Context, reg Auto
 		}
 		decisionIDPtr = &cleanDecisionID
 	}
-	cleanTraceID := strings.TrimSpace(reg.TraceID)
+	cleanTraceID := intelligencemodel.NormalizeTraceID32(reg.TraceID)
 	nowUTC := reg.At.UTC()
 	traceBytes := bytes.TrimSpace(reg.GuardrailTrace)
 	if len(traceBytes) == 0 || string(traceBytes) == "null" {

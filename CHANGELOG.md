@@ -16,6 +16,11 @@
 
 #### 新增与架构演进
 
+- 完成 Go 端 AI 调控影子试运行、多副本防重入与端到端追踪告警闭环 P1（`libs/intelligencemodel`、`modules/registry`、`modules/iam`、`modules/alarm`、`services/optimization-service`、`cmd/energy-api`、`contracts/`、`apps/hvac-web` 与迁移 `optimization-shadow-and-trace.sql`）：
+  - **影子跟跑（`SHADOW`）与 IAM 双重防线**：租约与执行监控新增 `executionMode`（`CLOSED_LOOP` / `SHADOW`）；开启 `SHADOW` 时，优化控制周期照常执行实时点位新鲜度检查与物理护栏评估，在最后一跳拦截仅写入 `SHADOW_RECORDED` 对照记录而绝不下发网关指令，且 IAM 授权侧同样对非回退 `SHADOW` 租约无条件拦截兜底。
+  - **多副本站点防重入与全链路决策追踪**：为优化执行作业接入 PostgreSQL 站点级非阻塞咨询锁防止多副本同站点周期踩踏；在推理、护栏、执行监控与下行命令之间贯通 UUIDv7 `decision_id` 与 W3C `trace_id`（`traceparent`）传播链。
+  - **设定值收敛偏差监测与安全告警联动**：超过 10 分钟收敛窗口后若反馈设定值仍明显偏离下发目标即判定 `setpoint_tracking_deviation` 并触发自动回退，同时向 `alarm-service` 推送 `SETPOINT_TRACKING_DEVIATION` 与 `AUTO_CONTROL_ROLLBACK_FAILED` 安全事件；前端租约弹窗新增运行模式切换卡片及影子状态中文标注。
+
 - 完成 Go 端 AI 自动调控物理安全护栏与推理韧性升级 P0（`libs/commandmodel`、`libs/intelligencemodel`、`modules/telemetry`、`modules/registry`、`modules/iam`、`modules/command`、`cmd/energy-api`、`services/optimization-service`、`contracts/`、`apps/hvac-web` 与迁移 `optimization-safety-guardrails.sql`）：
   - **纯 Go 确定性物理安全护栏与推理降级**：在 `libs/commandmodel/guardrails.go` 与 `diagnostics.go` 实现八段确定性护栏链（点位 90 秒新鲜度与防未来时间戳校验、故障报警与就地/手自动极性一票否决、人工退避拦截、水路与启停间隔互锁、`>= 5.0 °C` 冷冻水防冻硬下限钳位、单步爬坡限幅以及调节死区过滤）；`libs/intelligencemodel/resilience.go` 新增三态熔断器、协程池舱壁并发限制与 3 秒默认超时无扰降级。
   - **全链路实时点位取数与控制权仲裁闭环**：扩展 `modules/telemetry` 与 `optimization-service` 从 `telemetry_runtime` 直接读取实时传感器数值、质量与版本修订替代 15 分钟滞后快照，并彻底清除下游伪造 `GOOD`/`1`；操作员下发手动指令及现场手调水泵/主机设定值或切入就地手动时自动施加 2 小时人工退避锁；通过站点事务锁 + `PENDING_SUBMIT` 原子预占与崩溃超时回收消除并发超频与进程中断裂脑；监控窗口新增供水防冻下限及设备故障保护回退，且 `auto-rollback:` 合规通道可在断采/大幅漂移工况下执行 `EMERGENCY_BYPASS` 回退同时拦截非回退越权提权。

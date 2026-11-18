@@ -74,6 +74,9 @@ func (store *PostgresStore) AcquireSiteCycleLock(ctx context.Context, tenantID, 
 func acquireSiteCycleLockOnConn(ctx context.Context, conn siteAdvisoryLockConn, tenantID, siteID string) (func(), bool, error) {
 	var acquired bool
 	if err := conn.QueryRow(ctx, siteCycleTryLockSQL, tenantID, siteID).Scan(&acquired); err != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), siteCycleUnlockTimeout)
+		defer cancel()
+		conn.CloseOnError(cleanupCtx)
 		conn.Release()
 		return nil, false, fmt.Errorf("try site cycle advisory lock: %w", err)
 	}

@@ -154,8 +154,8 @@ func TestAcquireSiteCycleLockOnConnLifecycle(t *testing.T) {
 		if !errors.Is(err, wantErr) || acquired || release != nil {
 			t.Fatalf("got releaseNonNil=%t acquired=%v err=%v, want wrapped %v", release != nil, acquired, err, wantErr)
 		}
-		if conn.releaseCount.Load() != 1 || conn.unlockCount.Load() != 0 {
-			t.Fatalf("expected immediate release without unlock on error: releases=%d unlocks=%d", conn.releaseCount.Load(), conn.unlockCount.Load())
+		if conn.releaseCount.Load() != 1 || conn.unlockCount.Load() != 0 || conn.closeCount.Load() != 1 {
+			t.Fatalf("expected immediate close+release without unlock on error: releases=%d unlocks=%d closes=%d", conn.releaseCount.Load(), conn.unlockCount.Load(), conn.closeCount.Load())
 		}
 	})
 
