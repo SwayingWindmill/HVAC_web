@@ -87,6 +87,34 @@ func TestPostgresRealtimeOwnerRelayCurrentScopeAndRevocation(t *testing.T) {
 	if _, err := service.AuthorizeSubscribe(ctx, realtimeTestPrincipal, string(bootstrap.Subscriptions[0].Channel)); !errors.Is(err, ErrSubscriptionNotFound) {
 		t.Fatalf("owner-revoked channel remained subscribable: %v", err)
 	}
+
+	session1Access := access
+	session1Access.SessionID = "session-revoke-1"
+	session2Access := access
+	session2Access.SessionID = "session-revoke-2"
+	session1Boot, err := service.Bootstrap(ctx, session1Access, telemetryapi.SubscriptionBootstrapRequest{Subscriptions: []telemetryapi.SubscriptionTargetRequest{
+		{ClientSubscriptionId: "pg-sess-1", DeviceId: deviceA, Keys: []telemetryapi.TelemetryKey{"zone.temperature"}},
+	}})
+	if err != nil {
+		t.Fatalf("session1 bootstrap: %v", err)
+	}
+	session2Boot, err := service.Bootstrap(ctx, session2Access, telemetryapi.SubscriptionBootstrapRequest{Subscriptions: []telemetryapi.SubscriptionTargetRequest{
+		{ClientSubscriptionId: "pg-sess-2", DeviceId: deviceA, Keys: []telemetryapi.TelemetryKey{"zone.temperature"}},
+	}})
+	if err != nil {
+		t.Fatalf("session2 bootstrap: %v", err)
+	}
+	transport.Unsubscribes = nil
+	revokedBySession, err := service.RevokeMatching(ctx, SubscriptionRevocationFilter{TenantID: tenantA, SessionID: "session-revoke-1"}, now)
+	if err != nil || revokedBySession != 1 || len(transport.Unsubscribes) != 1 || transport.Unsubscribes[0].Channel != string(session1Boot.Subscriptions[0].Channel) {
+		t.Fatalf("session revoke count=%d unsubscribes=%+v err=%v", revokedBySession, transport.Unsubscribes, err)
+	}
+	if _, err := service.AuthorizeSubscribe(ctx, realtimeTestPrincipal, string(session1Boot.Subscriptions[0].Channel)); !errors.Is(err, ErrSubscriptionNotFound) {
+		t.Fatalf("session-1 channel remained subscribable: %v", err)
+	}
+	if _, err := service.AuthorizeSubscribe(ctx, realtimeTestPrincipal, string(session2Boot.Subscriptions[0].Channel)); err != nil {
+		t.Fatalf("session-2 channel was unexpectedly revoked: %v", err)
+	}
 }
 
 // A page reload or a second tab bootstraps again with the same client subscription id.

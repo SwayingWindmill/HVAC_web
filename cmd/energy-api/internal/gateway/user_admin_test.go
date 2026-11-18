@@ -7,11 +7,14 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/gateway"
+	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/platformapi"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/modules/iam/pkg/iamserver"
 	"github.com/quanlaihe/hvac-web/services/identity-service/pkg/identityadmin"
@@ -110,9 +113,12 @@ func (fake *fakeIAMAdmin) lastMutation(t *testing.T) map[string]any {
 type fakeUserDirectory struct {
 	mu             sync.Mutex
 	createErr      error
+	usersErr       error
 	created        []identityadmin.NewUser
 	enabled        map[string]bool
 	mfaEnabled     map[string]bool
+	lockedUntil    map[string]*time.Time
+	omitUsers      map[string]bool
 	administrators []string
 }
 
@@ -129,11 +135,22 @@ func (directory *fakeUserDirectory) CreateUser(_ context.Context, user identitya
 func (directory *fakeUserDirectory) UsersByID(_ context.Context, ids []string) ([]identityadmin.User, error) {
 	directory.mu.Lock()
 	defer directory.mu.Unlock()
+	if directory.usersErr != nil {
+		return nil, directory.usersErr
+	}
 	users := []identityadmin.User{}
 	for _, id := range ids {
+		if directory.omitUsers[id] {
+			continue
+		}
+		status := "ACTIVE"
+		if enabled, ok := directory.enabled[id]; ok && !enabled {
+			status = "DISABLED"
+		}
 		users = append(users, identityadmin.User{
-			ID: id, Username: "fixture", DisplayName: "Fixture User", Email: "fixture@example.test", Status: "ACTIVE",
-			MFAEnabled: directory.mfaEnabled[id],
+			ID: id, Username: "fixture", DisplayName: "Fixture User", Email: "fixture@example.test", Status: status,
+			MFAEnabled:  directory.mfaEnabled[id],
+			LockedUntil: directory.lockedUntil[id],
 		})
 	}
 	return users, nil
@@ -159,15 +176,24 @@ func (directory *fakeUserDirectory) ChangePassword(context.Context, string, stri
 	return identityadmin.ErrInvalidCredentials
 }
 
-func newUserAdminHarness(t *testing.T) (*authHarness, *fakeIAMAdmin, *fakeUserDirectory) {
+func newUserAdminHarness(t *testing.T, configureGateway ...func(*gateway.Config)) (*authHarness, *fakeIAMAdmin, *fakeUserDirectory) {
 	t.Helper()
 	iam := &fakeIAMAdmin{}
-	directory := &fakeUserDirectory{enabled: map[string]bool{}, mfaEnabled: map[string]bool{}}
-	harness := newAuthHarnessWithIAMFactory(t, func(clientSPIFFEID string) http.Handler {
+	directory := &fakeUserDirectory{
+		enabled:     map[string]bool{},
+		mfaEnabled:  map[string]bool{},
+		lockedUntil: map[string]*time.Time{},
+		omitUsers:   map[string]bool{},
+	}
+	var gatewayConfigFn func(*gateway.Config)
+	if len(configureGateway) > 0 {
+		gatewayConfigFn = configureGateway[0]
+	}
+	harness := buildAuthHarnessWithGatewayConfig(t, func(clientSPIFFEID string) http.Handler {
 		return iam.wrap(iamserver.NewHandler(iamserver.Config{
 			AllowedWorkloadSPIFFE: clientSPIFFEID, Audience: "iam-service", PrincipalCapabilityResolver: readerCapabilityResolver{},
 		}))
-	}, func(config *gateway.IdentityConfig) { config.UserDirectory = directory })
+	}, nil, gatewayConfigFn, func(config *gateway.IdentityConfig) { config.UserDirectory = directory })
 	iam.issuer = harness.oidcServer.URL
 	return harness, iam, directory
 }
@@ -325,5 +351,140 @@ func TestUserAdministrationListsMFAActivationWithoutSensitiveFields(t *testing.T
 	}
 	if got, ok := byPrincipal[userAdminMemberID]; !ok || got {
 		t.Fatalf("expected member %s mfaEnabled=false, got present=%v value=%v", userAdminMemberID, ok, got)
+	}
+}
+
+func TestDisablingUserTriggersTelemetryUnsubscribe(t *testing.T) {
+	var mu sync.Mutex
+	var revokedSessionIDs []string
+	telemetryServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var payload struct {
+			SessionID string `json:"sessionId"`
+			Reason    string `json:"reason"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		mu.Lock()
+		revokedSessionIDs = append(revokedSessionIDs, payload.SessionID)
+		mu.Unlock()
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"schemaVersion":1,"revokedSubscriptions":1}`))
+	}))
+	t.Cleanup(telemetryServer.Close)
+
+	harness, _, _ := newUserAdminHarness(t, func(cfg *gateway.Config) {
+		cfg.Telemetry = &gateway.TelemetryConfig{
+			RuntimeBaseURL:    telemetryServer.URL,
+			RuntimeHTTPClient: telemetryServer.Client(),
+			RuntimeAudience:   "telemetry-runtime-service",
+			Timeout:           time.Second,
+		}
+	})
+	user := harness.browserClient(t)
+	userPrincipal, _ := loginAndReadPrincipal(t, user, harness.gatewayURL, "")
+	admin := harness.browserClient(t)
+	adminPrincipal, _ := loginAndReadPrincipal(t, admin, harness.gatewayURL, "admin")
+
+	response := postAsUser(t, admin, harness, adminPrincipal.Session.CSRFToken, "/api/v1/iam/members/"+userAdminMemberID+"/status", `{"enabled":false}`)
+	if response.StatusCode != http.StatusNoContent {
+		t.Fatalf("status=%d", response.StatusCode)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(revokedSessionIDs) != 1 || revokedSessionIDs[0] != userPrincipal.Session.ID {
+		t.Fatalf("expected telemetry revocation for %s, got %v", userPrincipal.Session.ID, revokedSessionIDs)
+	}
+}
+
+func TestDirectDirectoryDisableOrLockRevokesSessionAndRejects(t *testing.T) {
+	var mu sync.Mutex
+	var revokedSessionIDs []string
+	telemetryServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var payload struct {
+			SessionID string `json:"sessionId"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		mu.Lock()
+		revokedSessionIDs = append(revokedSessionIDs, payload.SessionID)
+		mu.Unlock()
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"schemaVersion":1,"revokedSubscriptions":1}`))
+	}))
+	t.Cleanup(telemetryServer.Close)
+
+	harness, _, directory := newUserAdminHarness(t, func(cfg *gateway.Config) {
+		cfg.Telemetry = &gateway.TelemetryConfig{
+			RuntimeBaseURL:    telemetryServer.URL,
+			RuntimeHTTPClient: telemetryServer.Client(),
+			RuntimeAudience:   "telemetry-runtime-service",
+			Timeout:           time.Second,
+		}
+	})
+
+	userClient := harness.browserClient(t)
+	userPrincipal, _ := loginAndReadPrincipal(t, userClient, harness.gatewayURL, "")
+
+	directory.mu.Lock()
+	directory.enabled["fixture-user"] = false
+	directory.mu.Unlock()
+
+	resp, err := userClient.Get(harness.gatewayURL + platformapi.GetCurrentPrincipalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	assertProblemCode(t, resp, http.StatusUnauthorized, "SESSION_INVALID")
+
+	directory.mu.Lock()
+	directory.enabled["fixture-user"] = true
+	directory.mu.Unlock()
+	respAgain, err := userClient.Get(harness.gatewayURL + platformapi.GetCurrentPrincipalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer respAgain.Body.Close()
+	assertProblemCode(t, respAgain, http.StatusUnauthorized, "SESSION_INVALID")
+
+	adminClient := harness.browserClient(t)
+	adminPrincipal, _ := loginAndReadPrincipal(t, adminClient, harness.gatewayURL, "admin")
+	future := time.Now().UTC().Add(15 * time.Minute)
+	directory.mu.Lock()
+	directory.lockedUntil["fixture-admin"] = &future
+	directory.mu.Unlock()
+
+	lockedResp, err := adminClient.Get(harness.gatewayURL + platformapi.GetCurrentPrincipalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lockedResp.Body.Close()
+	assertProblemCode(t, lockedResp, http.StatusUnauthorized, "SESSION_INVALID")
+
+	mu.Lock()
+	gotRevocations := append([]string(nil), revokedSessionIDs...)
+	mu.Unlock()
+	if len(gotRevocations) != 2 || gotRevocations[0] != userPrincipal.Session.ID || gotRevocations[1] != adminPrincipal.Session.ID {
+		t.Fatalf("expected telemetry revocation for disabled and locked sessions, got %v", gotRevocations)
+	}
+
+	user2 := harness.browserClient(t)
+	directory.mu.Lock()
+	directory.enabled["fixture-user"] = true
+	directory.omitUsers["fixture-user"] = true
+	directory.mu.Unlock()
+	_, _ = loginAndReadPrincipal(t, user2, harness.gatewayURL, "")
+
+	directory.mu.Lock()
+	directory.usersErr = identityadmin.ErrUserNotFound
+	directory.mu.Unlock()
+	okResp, err := user2.Get(harness.gatewayURL + platformapi.GetCurrentPrincipalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer okResp.Body.Close()
+	if okResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected ErrUserNotFound guard to keep unseeded test session valid, got %d", okResp.StatusCode)
 	}
 }

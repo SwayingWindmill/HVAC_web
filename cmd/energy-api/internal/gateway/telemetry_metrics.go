@@ -27,6 +27,8 @@ func telemetryUpstreamOperation(path string) string {
 		return "bootstrap"
 	case path == internalTelemetryCheckpointPath || path == internalTelemetryCheckpointResolvePath:
 		return "checkpoint"
+	case path == internalTelemetrySubscriptionRevokePath:
+		return "revoke"
 	case strings.HasPrefix(path, internalTelemetrySinglePrefix):
 		return "snapshot"
 	default:

@@ -91,9 +91,10 @@ func snapshotFixture(deviceID string, evaluatedAt time.Time, keys []string) tele
 }
 
 type fakeLatestCache struct {
-	snapshots map[string]telemetryapi.DeviceObservationSnapshot
-	err       error
-	calls     []string
+	snapshots  map[string]telemetryapi.DeviceObservationSnapshot
+	err        error
+	calls      []string
+	batchCalls int
 }
 
 func (fake *fakeLatestCache) PutIfNewer(_ context.Context, snapshot telemetryapi.DeviceObservationSnapshot) (bool, error) {
@@ -125,6 +126,22 @@ func (fake *fakeLatestCache) GetForDevice(_ context.Context, tenantID, deviceID 
 		return telemetryapi.DeviceObservationSnapshot{}, ErrLatestCacheMiss
 	}
 	return snapshot, nil
+}
+
+func (fake *fakeLatestCache) BatchGetForDevices(_ context.Context, tenantID string, deviceIDs []string) (map[string]telemetryapi.DeviceObservationSnapshot, error) {
+	fake.batchCalls++
+	fake.calls = append(fake.calls, deviceIDs...)
+	if fake.err != nil {
+		return nil, fake.err
+	}
+	result := make(map[string]telemetryapi.DeviceObservationSnapshot, len(deviceIDs))
+	for _, deviceID := range deviceIDs {
+		snapshot, ok := fake.snapshots[deviceID]
+		if ok && string(snapshot.TenantId) == tenantID {
+			result[deviceID] = snapshot
+		}
+	}
+	return result, nil
 }
 
 func (fake *fakeLatestCache) Close() error { return nil }
@@ -501,6 +518,148 @@ func TestInternalSnapshotAppliesReadTimeFreshnessWithoutMutatingCache(t *testing
 	}
 	if latestCache.snapshots[deviceA].Values[0].Present.Freshness != "FRESH" {
 		t.Fatalf("cache was mutated during read: %#v", latestCache.snapshots[deviceA].Values[0].Present)
+	}
+}
+
+func TestInternalBatchUsesBatchGetAndIsolatesIncompleteSnapshot(t *testing.T) {
+	deviceB := "018f2e00-3000-7000-8000-000000000003"
+	deviceMissing := "018f2e00-3000-7000-8000-000000000004"
+	now := time.Date(2026, 10, 22, 8, 0, 0, 0, time.UTC)
+	store := &fakeSnapshotStore{
+		latest: map[string]telemetryapi.DeviceObservationSnapshot{
+			deviceB: snapshotFixture(deviceB, now, []string{"zone.temperature"}),
+		},
+	}
+	latestCache := &fakeLatestCache{
+		snapshots: map[string]telemetryapi.DeviceObservationSnapshot{
+			deviceA: snapshotFixture(deviceA, now, []string{"zone.temperature"}),
+		},
+	}
+	handler := NewHandler(ServerConfig{
+		Store: store, LatestCache: latestCache, Authorizer: &fakeAuthorizer{},
+		AllowedGatewaySPIFFE: gatewaySPIFFE, Now: func() time.Time { return now },
+	})
+
+	body := `{"requests":[{"requestId":"healthy-cache","deviceId":"` + deviceA + `","keys":["zone.temperature"]},{"requestId":"incomplete-store","deviceId":"` + deviceB + `","keys":["zone.temperature","new_unmaterialized_key"]},{"requestId":"not-found","deviceId":"` + deviceMissing + `","keys":["zone.temperature"]}]}`
+	recorder := postBatch(handler, body)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("batch with one incomplete device returned status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if latestCache.batchCalls != 1 {
+		t.Fatalf("expected 1 BatchGetForDevices call, got %d", latestCache.batchCalls)
+	}
+	if strings.Join(store.latestCalls, ",") != deviceB+","+deviceMissing {
+		t.Fatalf("expected store fallback only for misses, got %v", store.latestCalls)
+	}
+	var response telemetryapi.BatchGetObservationSnapshotsResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Items) != 3 {
+		t.Fatalf("items=%d", len(response.Items))
+	}
+	if response.Items[0].Success == nil || response.Items[0].Success.RequestId != "healthy-cache" {
+		t.Fatalf("item 0 expected OK, got %#v", response.Items[0])
+	}
+	if response.Items[1].Failure == nil || response.Items[1].Failure.Status != "ERROR" ||
+		response.Items[1].Failure.Problem.Status != http.StatusServiceUnavailable ||
+		response.Items[1].Failure.Problem.Code != "TELEMETRY_RUNTIME_UNAVAILABLE" ||
+		!response.Items[1].Failure.Problem.Retryable {
+		t.Fatalf("item 1 expected per-item 503 TELEMETRY_RUNTIME_UNAVAILABLE, got %#v", response.Items[1])
+	}
+	if response.Items[2].Failure == nil || response.Items[2].Failure.Problem.Status != http.StatusNotFound ||
+		response.Items[2].Failure.Problem.Code != "RESOURCE_NOT_FOUND" || response.Items[2].Failure.Problem.Retryable {
+		t.Fatalf("item 2 expected per-item 404 RESOURCE_NOT_FOUND, got %#v", response.Items[2])
+	}
+
+	singleOnly := `{"requests":[{"requestId":"only-incomplete","deviceId":"` + deviceB + `","keys":["new_unmaterialized_key"]}]}`
+	singleBatchRecorder := postBatch(handler, singleOnly)
+	if singleBatchRecorder.Code != http.StatusOK {
+		t.Fatalf("single-item incomplete batch status=%d body=%s", singleBatchRecorder.Code, singleBatchRecorder.Body.String())
+	}
+	singleRecorder := getSnapshot(handler, deviceB, "new_unmaterialized_key")
+	if singleRecorder.Code != http.StatusServiceUnavailable || !strings.Contains(singleRecorder.Body.String(), "TELEMETRY_RUNTIME_UNAVAILABLE") {
+		t.Fatalf("handleSingle incomplete snapshot status=%d body=%s", singleRecorder.Code, singleRecorder.Body.String())
+	}
+}
+
+func TestInternalRevocationBySessionSupportsGatewayAndRejectsInvalidScope(t *testing.T) {
+	now := time.Date(2026, 7, 24, 15, 0, 0, 0, time.UTC)
+	repository := NewMemoryRealtimeRepository()
+	transport := &RecordingRealtimeTransport{}
+	service := newRealtimeTestService(t, repository, transport, &now)
+
+	accessA := realtimeTestAccess()
+	accessA.TenantID = tenantA
+	accessA.SessionID = "session-a"
+	bootstrapA, err := service.Bootstrap(context.Background(), accessA, telemetryapi.SubscriptionBootstrapRequest{Subscriptions: []telemetryapi.SubscriptionTargetRequest{
+		{ClientSubscriptionId: "sub-a", DeviceId: realtimeTestDevice1, Keys: []telemetryapi.TelemetryKey{"temperature"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository.SetCurrentRevision(realtimeTestDevice1, 3)
+	checkpointA, err := service.Checkpoint(context.Background(), accessA, telemetryapi.RecoveryCursorCheckpointRequest{Checkpoints: []telemetryapi.RecoveryCursorCheckpoint{
+		{SubscriptionId: bootstrapA.Subscriptions[0].SubscriptionId, BusinessRevision: 3, TransportPosition: telemetryapi.TransportPosition{Epoch: "epoch-a", Offset: 7}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	accessB := accessA
+	accessB.SessionID = "session-b"
+	bootstrapB, err := service.Bootstrap(context.Background(), accessB, telemetryapi.SubscriptionBootstrapRequest{Subscriptions: []telemetryapi.SubscriptionTargetRequest{
+		{ClientSubscriptionId: "sub-b", DeviceId: realtimeTestDevice1, Keys: []telemetryapi.TelemetryKey{"temperature"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	handler := NewHandler(ServerConfig{
+		Realtime:             service,
+		AllowedIAMSPIFFE:     "spiffe://hvac.local/iam-service",
+		AllowedGatewaySPIFFE: gatewaySPIFFE,
+		Now:                  func() time.Time { return now },
+	})
+
+	missingTenant := httptest.NewRequest(http.MethodPost, InternalSubscriptionRevokePath, strings.NewReader(`{"sessionId":"session-a","reason":"SESSION_LOGGED_OUT","occurredAt":"`+now.Format(time.RFC3339Nano)+`"}`))
+	missingTenant.TLS = verifiedTLSState(gatewaySPIFFE)
+	missingTenantRec := httptest.NewRecorder()
+	handler.ServeHTTP(missingTenantRec, missingTenant)
+	if missingTenantRec.Code != http.StatusBadRequest || !strings.Contains(missingTenantRec.Body.String(), "TELEMETRY_REVOCATION_INVALID") {
+		t.Fatalf("missing tenantId status=%d body=%s", missingTenantRec.Code, missingTenantRec.Body.String())
+	}
+
+	byPrincipal := httptest.NewRequest(http.MethodPost, InternalSubscriptionRevokePath, strings.NewReader(`{"principalId":"`+realtimeTestPrincipal+`","reason":"SESSION_LOGGED_OUT","occurredAt":"`+now.Format(time.RFC3339Nano)+`"}`))
+	byPrincipal.TLS = verifiedTLSState(gatewaySPIFFE)
+	byPrincipalRec := httptest.NewRecorder()
+	handler.ServeHTTP(byPrincipalRec, byPrincipal)
+	if byPrincipalRec.Code != http.StatusUnauthorized {
+		t.Fatalf("gateway principal revocation status=%d body=%s", byPrincipalRec.Code, byPrincipalRec.Body.String())
+	}
+
+	revokeBody := `{"tenantId":"` + tenantA + `","sessionId":"session-a","reason":"SESSION_LOGGED_OUT","occurredAt":"` + now.Format(time.RFC3339Nano) + `"}`
+	req := httptest.NewRequest(http.MethodPost, InternalSubscriptionRevokePath, strings.NewReader(revokeBody))
+	req.TLS = verifiedTLSState(gatewaySPIFFE)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("session revoke status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(transport.Unsubscribes) != 1 || transport.Unsubscribes[0].Channel != string(bootstrapA.Subscriptions[0].Channel) {
+		t.Fatalf("expected immediate unsubscribe for session-a only, got %+v", transport.Unsubscribes)
+	}
+	if _, err := service.AuthorizeSubscribe(context.Background(), accessA.PrincipalID, string(bootstrapA.Subscriptions[0].Channel)); !errors.Is(err, ErrSubscriptionNotFound) {
+		t.Fatalf("session-a channel remained active: %v", err)
+	}
+	if _, err := service.AuthorizeSubscribe(context.Background(), accessB.PrincipalID, string(bootstrapB.Subscriptions[0].Channel)); err != nil {
+		t.Fatalf("session-b channel was unexpectedly revoked: %v", err)
+	}
+	cursor := checkpointA.Items[0].RecoveryCursor
+	if _, err := service.Bootstrap(context.Background(), accessA, telemetryapi.SubscriptionBootstrapRequest{Subscriptions: []telemetryapi.SubscriptionTargetRequest{
+		{ClientSubscriptionId: "sub-a", DeviceId: realtimeTestDevice1, Keys: []telemetryapi.TelemetryKey{"temperature"}, RecoveryCursor: &cursor},
+	}}); !errors.Is(err, ErrRecoveryCursorRejected) {
+		t.Fatalf("revoked session recovery cursor remained usable: %v", err)
 	}
 }
 

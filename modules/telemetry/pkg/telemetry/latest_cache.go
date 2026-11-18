@@ -144,6 +144,7 @@ type LatestCache interface {
 	PutIfNewer(context.Context, telemetryapi.DeviceObservationSnapshot) (bool, error)
 	Get(context.Context, string, string, string) (telemetryapi.DeviceObservationSnapshot, error)
 	GetForDevice(context.Context, string, string) (telemetryapi.DeviceObservationSnapshot, error)
+	BatchGetForDevices(context.Context, string, []string) (map[string]telemetryapi.DeviceObservationSnapshot, error)
 	Ping(context.Context) error
 	Close() error
 }
@@ -299,6 +300,87 @@ func (cache *RedisLatestCache) GetForDevice(ctx context.Context, tenantID, devic
 		return telemetryapi.DeviceObservationSnapshot{}, fmt.Errorf("read telemetry latest device site index: %w", err)
 	}
 	return cache.Get(ctx, tenantID, siteID, deviceID)
+}
+
+func (cache *RedisLatestCache) BatchGetForDevices(ctx context.Context, tenantID string, deviceIDs []string) (map[string]telemetryapi.DeviceObservationSnapshot, error) {
+	if cache == nil || cache.client == nil {
+		return nil, ErrLatestCacheUnavailable
+	}
+	uniqueIDs := make([]string, 0, len(deviceIDs))
+	seen := make(map[string]struct{}, len(deviceIDs))
+	for _, deviceID := range deviceIDs {
+		if deviceID == "" {
+			continue
+		}
+		if _, ok := seen[deviceID]; !ok {
+			seen[deviceID] = struct{}{}
+			uniqueIDs = append(uniqueIDs, deviceID)
+		}
+	}
+	if len(uniqueIDs) == 0 {
+		return map[string]telemetryapi.DeviceObservationSnapshot{}, nil
+	}
+
+	siteCmds := make(map[string]*redis.StringCmd, len(uniqueIDs))
+	if _, err := cache.client.Pipelined(ctx, func(pipe redis.Pipeliner) error {
+		for _, deviceID := range uniqueIDs {
+			siteCmds[deviceID] = pipe.HGet(ctx, cache.deviceSiteKey(telemetryapi.UUIDv7(tenantID), telemetryapi.UUIDv7(deviceID)), "site_id")
+		}
+		return nil
+	}); err != nil && !errors.Is(err, redis.Nil) {
+		return nil, fmt.Errorf("%w: batch read telemetry latest device site index: %w", ErrLatestCacheUnavailable, err)
+	}
+
+	siteIDs := make(map[string]string, len(uniqueIDs))
+	hitIDs := make([]string, 0, len(uniqueIDs))
+	for _, deviceID := range uniqueIDs {
+		siteID, err := siteCmds[deviceID].Result()
+		if errors.Is(err, redis.Nil) || siteID == "" {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%w: batch read telemetry latest device site index: %w", ErrLatestCacheUnavailable, err)
+		}
+		siteIDs[deviceID] = siteID
+		hitIDs = append(hitIDs, deviceID)
+	}
+	if len(hitIDs) == 0 {
+		return map[string]telemetryapi.DeviceObservationSnapshot{}, nil
+	}
+
+	snapshotCmds := make(map[string]*redis.StringCmd, len(hitIDs))
+	if _, err := cache.client.Pipelined(ctx, func(pipe redis.Pipeliner) error {
+		for _, deviceID := range hitIDs {
+			key := cache.key(telemetryapi.UUIDv7(tenantID), telemetryapi.UUIDv7(siteIDs[deviceID]), telemetryapi.UUIDv7(deviceID))
+			snapshotCmds[deviceID] = pipe.HGet(ctx, key, "snapshot")
+		}
+		return nil
+	}); err != nil && !errors.Is(err, redis.Nil) {
+		return nil, fmt.Errorf("%w: batch read telemetry latest snapshot: %w", ErrLatestCacheUnavailable, err)
+	}
+
+	snapshots := make(map[string]telemetryapi.DeviceObservationSnapshot, len(hitIDs))
+	for _, deviceID := range hitIDs {
+		raw, err := snapshotCmds[deviceID].Result()
+		if errors.Is(err, redis.Nil) || raw == "" {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%w: batch read telemetry latest snapshot: %w", ErrLatestCacheUnavailable, err)
+		}
+		var snapshot telemetryapi.DeviceObservationSnapshot
+		if err := json.Unmarshal([]byte(raw), &snapshot); err != nil {
+			continue
+		}
+		if err := validateLatestCacheSnapshot(snapshot); err != nil {
+			continue
+		}
+		if string(snapshot.TenantId) != tenantID || string(snapshot.SiteId) != siteIDs[deviceID] || string(snapshot.DeviceId) != deviceID {
+			continue
+		}
+		snapshots[deviceID] = snapshot
+	}
+	return snapshots, nil
 }
 
 func (cache *RedisLatestCache) Get(ctx context.Context, tenantID, siteID, deviceID string) (telemetryapi.DeviceObservationSnapshot, error) {

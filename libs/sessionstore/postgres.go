@@ -141,18 +141,11 @@ func (store *PostgresStore) GetSession(ctx context.Context, sessionID string) (S
 func (store *PostgresStore) TouchSession(ctx context.Context, sessionID string, at time.Time) (Session, error) {
 	ctx, span := observability.Start(ctx, "postgres.session.touch", observability.SpanKindClient, map[string]any{"db.system": "postgresql", "db.operation": "session.touch"})
 	defer span.End()
-	command, err := store.pool.Exec(ctx, `
+	return scanSession(store.pool.QueryRow(ctx, `
 		UPDATE gateway.sessions
 		SET last_activity_at = $2
 		WHERE session_id = $1 AND revoked_at IS NULL
-	`, sessionID, at.UTC())
-	if err != nil {
-		return Session{}, err
-	}
-	if command.RowsAffected() != 1 {
-		return Session{}, ErrSessionNotFound
-	}
-	return store.GetSession(ctx, sessionID)
+		RETURNING `+sessionColumns, sessionID, at.UTC()))
 }
 
 func (store *PostgresStore) ActiveSessionIDs(ctx context.Context, issuer, subject string) ([]string, error) {
@@ -272,12 +265,12 @@ func insertOutbox(ctx context.Context, tx pgx.Tx, event sessionevent.SessionAudi
 	return err
 }
 
-const sessionSelect = `
-	SELECT session_id, principal_subject, principal_issuer, display_name, email, roles,
+const sessionColumns = `session_id, principal_subject, principal_issuer, display_name, email, roles,
 	       tenant_id, csrf_token_ciphertext, provider_tokens_ciphertext,
 	       authentication_acr, authentication_amr, authentication_time,
-	       expires_at, last_activity_at, revoked_at, aggregate_version, last_audit_message_id, created_at, updated_at, client
-	FROM gateway.sessions`
+	       expires_at, last_activity_at, revoked_at, aggregate_version, last_audit_message_id, created_at, updated_at, client`
+
+const sessionSelect = `SELECT ` + sessionColumns + ` FROM gateway.sessions`
 
 type rowScanner interface {
 	Scan(...any) error

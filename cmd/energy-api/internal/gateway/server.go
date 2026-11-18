@@ -112,7 +112,7 @@ func NewHandler(config Config) http.Handler {
 	if telemetry == nil {
 		telemetry = observability.NewRuntime(observability.RuntimeConfig{Service: serviceName})
 	}
-	return &handler{
+	gw := &handler{
 		build:         build,
 		logger:        logger,
 		now:           now,
@@ -132,6 +132,10 @@ func NewHandler(config Config) http.Handler {
 		observability: telemetry,
 		rateLimiter:   config.RateLimiter,
 	}
+	if gw.identity != nil {
+		gw.identity.onSessionRevoked = gw.revokeTelemetrySessionSubscriptions
+	}
+	return gw
 }
 
 func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {

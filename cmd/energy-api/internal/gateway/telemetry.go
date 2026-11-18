@@ -23,18 +23,20 @@ import (
 )
 
 const (
-	defaultTelemetryTimeout                = 2 * time.Second
-	defaultTelemetryResponseLimit          = int64(2 << 20)
-	maximumTelemetryRequestSize            = int64(256 << 10)
-	telemetryDecisionBodyLimit             = int64(1 << 20)
-	telemetryDecisionPath                  = "/internal/v1/telemetry/decision"
-	internalTelemetrySinglePrefix          = "/internal/v1/devices/"
-	internalTelemetryBatchPath             = "/internal/v1/telemetry/observation-snapshots:batchGet"
-	internalTelemetryBootstrapPath         = "/internal/v1/telemetry/subscriptions:bootstrap"
-	internalTelemetryCheckpointResolvePath = "/internal/v1/telemetry/recovery-cursors:resolve"
-	internalTelemetryCheckpointPath        = "/internal/v1/telemetry/recovery-cursors:checkpoint"
-	telemetryContextGrantHeader            = "X-Telemetry-Context-Grant"
-	telemetryCheckpointResolveAction       = "telemetry:checkpoint:resolve"
+	defaultTelemetryTimeout                 = 2 * time.Second
+	defaultTelemetryResponseLimit           = int64(2 << 20)
+	maximumTelemetryRequestSize             = int64(256 << 10)
+	telemetryDecisionBodyLimit              = int64(1 << 20)
+	telemetryDecisionPath                   = "/internal/v1/telemetry/decision"
+	internalTelemetrySinglePrefix           = "/internal/v1/devices/"
+	internalTelemetryBatchPath              = "/internal/v1/telemetry/observation-snapshots:batchGet"
+	internalTelemetryBootstrapPath          = "/internal/v1/telemetry/subscriptions:bootstrap"
+	internalTelemetryCheckpointResolvePath  = "/internal/v1/telemetry/recovery-cursors:resolve"
+	internalTelemetryCheckpointPath         = "/internal/v1/telemetry/recovery-cursors:checkpoint"
+	internalTelemetrySubscriptionRevokePath = "/internal/v1/telemetry/subscriptions:revoke"
+	telemetrySubscriptionRevokeTimeout      = 2 * time.Second
+	telemetryContextGrantHeader             = "X-Telemetry-Context-Grant"
+	telemetryCheckpointResolveAction        = "telemetry:checkpoint:resolve"
 )
 
 var (
@@ -578,6 +580,73 @@ func telemetryPublicRoute(action telemetryauth.Action) string {
 	}
 }
 
+func (h *handler) revokeTelemetrySessionSubscriptions(ctx context.Context, tenantID, sessionID, reason string) {
+	if h == nil || h.telemetry == nil || h.telemetry.runtimeBaseURL == "" || h.telemetry.runtimeHTTPClient == nil || tenantID == "" || sessionID == "" {
+		return
+	}
+	startedAt := h.now().UTC()
+	outcome := "failed"
+	defer func() {
+		h.observeTelemetryUpstream(internalTelemetrySubscriptionRevokePath, outcome, h.now().UTC().Sub(startedAt))
+	}()
+
+	revokeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), telemetrySubscriptionRevokeTimeout)
+	defer cancel()
+
+	payload, err := json.Marshal(struct {
+		TenantID   string `json:"tenantId"`
+		SessionID  string `json:"sessionId"`
+		Reason     string `json:"reason"`
+		OccurredAt string `json:"occurredAt"`
+	}{
+		TenantID:   tenantID,
+		SessionID:  sessionID,
+		Reason:     reason,
+		OccurredAt: startedAt.Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		if h.logger != nil {
+			h.logger.WarnContext(revokeCtx, "telemetry_session_revocation_failed", "error_code", "TELEMETRY_REVOCATION_ENCODE_FAILED")
+		}
+		return
+	}
+	req, err := http.NewRequestWithContext(revokeCtx, http.MethodPost, h.telemetry.runtimeBaseURL+internalTelemetrySubscriptionRevokePath, bytes.NewReader(payload))
+	if err != nil {
+		if h.logger != nil {
+			h.logger.WarnContext(revokeCtx, "telemetry_session_revocation_failed", "error_code", "TELEMETRY_REVOCATION_REQUEST_INVALID")
+		}
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, application/problem+json")
+	if requestID := requestIDFromContext(ctx); requestID != "" {
+		req.Header.Set("X-Request-ID", requestID)
+	}
+	observability.InjectHTTP(revokeCtx, req.Header)
+
+	response, err := h.telemetry.runtimeHTTPClient.Do(req)
+	if err != nil {
+		if errors.Is(revokeCtx.Err(), context.DeadlineExceeded) {
+			outcome = "timeout"
+		} else {
+			outcome = "unavailable"
+		}
+		if h.logger != nil {
+			h.logger.WarnContext(revokeCtx, "telemetry_session_revocation_failed", "error_code", "TELEMETRY_REVOCATION_FAILED")
+		}
+		return
+	}
+	defer response.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+	if response.StatusCode != http.StatusOK {
+		if h.logger != nil {
+			h.logger.WarnContext(revokeCtx, "telemetry_session_revocation_rejected", "status", response.StatusCode, "error_code", "TELEMETRY_REVOCATION_REJECTED")
+		}
+		return
+	}
+	outcome = "success"
+}
+
 func (h *handler) executeTelemetryRuntime(ctx context.Context, publicRequest *http.Request, method, path string, keys []string, body []byte, grant string) ([]byte, *telemetryFailure) {
 	return h.executeTelemetryRuntimeWithContext(ctx, publicRequest, method, path, keys, body, grant, "")
 }
@@ -905,7 +974,7 @@ func validateTelemetryBatchResponse(response s2telemetryapi.BatchGetObservationS
 			}
 		case result.Failure != nil && result.Success == nil:
 			if result.Failure.Status != "ERROR" || result.Failure.RequestId != expected.RequestId || result.Failure.DeviceId != expected.DeviceId ||
-				result.Failure.Problem.Status != http.StatusNotFound || result.Failure.Problem.Code != "RESOURCE_NOT_FOUND" || result.Failure.Problem.Retryable {
+				!validBatchFailureProblem(result.Failure.Problem) {
 				return false
 			}
 		default:
@@ -913,6 +982,15 @@ func validateTelemetryBatchResponse(response s2telemetryapi.BatchGetObservationS
 		}
 	}
 	return true
+}
+
+func validBatchFailureProblem(problem s2telemetryapi.ProblemDetails) bool {
+	if problem.Status == http.StatusNotFound && problem.Code == "RESOURCE_NOT_FOUND" && !problem.Retryable {
+		return true
+	}
+	return problem.Status == http.StatusServiceUnavailable &&
+		(problem.Code == "TELEMETRY_RUNTIME_UNAVAILABLE" || problem.Code == "TELEMETRY_UNAVAILABLE") &&
+		problem.Retryable
 }
 
 func telemetryKeyStrings(keys []s2telemetryapi.TelemetryKey) []string {

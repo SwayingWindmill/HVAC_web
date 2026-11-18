@@ -307,9 +307,12 @@ func (h *handler) revokePersonSessions(request *http.Request, member iamserver.A
 		return unavailable
 	}
 	for _, id := range ids {
-		_, err := h.identity.store.RevokeSession(request.Context(), id, h.identity.mutationContext(request, "SESSION_REVOKED"))
+		revoked, err := h.identity.store.RevokeSession(request.Context(), id, h.identity.mutationContext(request, "SESSION_REVOKED"))
 		if err != nil && !errors.Is(err, sessionstore.ErrSessionRevoked) {
 			return unavailable
+		}
+		if err == nil {
+			h.revokeTelemetrySessionSubscriptions(request.Context(), revoked.TenantID, revoked.ID, "USER_DISABLED")
 		}
 	}
 	return nil

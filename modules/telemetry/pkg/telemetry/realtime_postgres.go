@@ -368,9 +368,12 @@ WHERE event_id = $1::uuid AND delivery_state = 'PENDING' AND claim_owner = $2
 	return nil
 }
 
-func (store *PostgresStore) RevokeSubscriptions(ctx context.Context, principalID, deviceID string, authorizedBefore, now time.Time) ([]RealtimeSubscription, error) {
+func (store *PostgresStore) RevokeSubscriptions(ctx context.Context, filter SubscriptionRevocationFilter, authorizedBefore, now time.Time) ([]RealtimeSubscription, error) {
 	if store == nil || store.pool == nil {
 		return nil, ErrRealtimeUnavailable
+	}
+	if !filter.valid() {
+		return nil, ErrSubscriptionConflict
 	}
 	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
@@ -380,26 +383,33 @@ func (store *PostgresStore) RevokeSubscriptions(ctx context.Context, principalID
 	if _, err := tx.Exec(ctx, `SET LOCAL ROLE s2_telemetry_runtime`); err != nil {
 		return nil, fmt.Errorf("activate telemetry runtime database identity: %w", err)
 	}
-	var principalArgument any
-	if principalID != "" {
-		principalArgument = principalID
+	var principalArgument, deviceArgument, tenantArgument, sessionArgument any
+	if filter.PrincipalID != "" {
+		principalArgument = filter.PrincipalID
 	}
-	var deviceArgument any
-	if deviceID != "" {
-		deviceArgument = deviceID
+	if filter.DeviceID != "" {
+		deviceArgument = filter.DeviceID
+	}
+	if filter.TenantID != "" {
+		tenantArgument = filter.TenantID
+	}
+	if filter.SessionID != "" {
+		sessionArgument = filter.SessionID
 	}
 	rows, err := tx.Query(ctx, `
 UPDATE telemetry_runtime.telemetry_subscriptions
-SET status = 'REVOKED', revoked_at = $3, updated_at = $3
+SET status = 'REVOKED', revoked_at = $5, updated_at = $5
 WHERE status = 'ACTIVE'
   AND ($1::uuid IS NULL OR principal_id = $1::uuid)
   AND ($2::uuid IS NULL OR device_id = $2::uuid)
-  AND updated_at <= $4
+  AND ($3::uuid IS NULL OR tenant_id = $3::uuid)
+  AND ($4::text IS NULL OR session_id = $4::text)
+  AND updated_at <= $6
 RETURNING subscription_id, client_subscription_id, principal_id::text, subject, subject_issuer,
           session_id, tenant_id::text, device_id::text, keys,
           scope_sha256, policy_revision_ref, channel, status,
           expires_at, revoked_at, created_at, updated_at
-`, principalArgument, deviceArgument, now, authorizedBefore)
+`, principalArgument, deviceArgument, tenantArgument, sessionArgument, now, authorizedBefore)
 	if err != nil {
 		return nil, fmt.Errorf("revoke realtime subscriptions: %w", err)
 	}
