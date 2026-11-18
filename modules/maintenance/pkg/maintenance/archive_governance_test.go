@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -178,5 +179,37 @@ func TestVerifyColdArchiveDirectoryRejectsInvalidInputsAndCancelledContext(t *te
 	cancel()
 	if _, err := VerifyColdArchiveDirectory(ctx, t.TempDir(), time.Now()); err == nil {
 		t.Fatal("expected error for cancelled context")
+	}
+}
+
+func TestVerifyColdArchiveDirectoryFollowsSymlinkRoot(t *testing.T) {
+	now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	baseDir := t.TempDir()
+	realDir := filepath.Join(baseDir, "real-archive")
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeVerifiedTestSlice(t, realDir, "slice_ok", now)
+	badHashArchive, _, gzBytes := writeVerifiedTestSlice(t, realDir, "slice_corrupt", now)
+	corrupted := append([]byte(nil), gzBytes...)
+	corrupted[0] ^= 0xff
+	if err := os.WriteFile(badHashArchive, corrupted, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	linkDir := filepath.Join(baseDir, "symlink-mount")
+	if err := os.Symlink(realDir, linkDir); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("symlink creation requires elevated privilege on Windows: %v", err)
+		}
+		t.Fatal(err)
+	}
+
+	report, err := VerifyColdArchiveDirectory(t.Context(), linkDir, now)
+	if err != nil {
+		t.Fatalf("VerifyColdArchiveDirectory via symlink failed: %v", err)
+	}
+	if report.ManifestsChecked != 2 || report.VerifiedCount != 1 || report.CorruptCount != 1 || report.Healthy() {
+		t.Fatalf("symlinked archive root was not audited: %+v", report)
 	}
 }

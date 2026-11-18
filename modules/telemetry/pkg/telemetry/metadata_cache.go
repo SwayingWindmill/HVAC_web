@@ -205,10 +205,6 @@ func (c *metadataCache) LookupDeviceScope(deviceID string) (string, string, bool
 	return tenantID, siteID, true
 }
 
-func (c *metadataCache) PutDevice(device ResolvedDevice) {
-	c.putDevice(device, 0, false)
-}
-
 func (c *metadataCache) PutDeviceIfEpoch(device ResolvedDevice, epoch uint64) {
 	c.putDevice(device, epoch, true)
 }
@@ -263,10 +259,6 @@ func (c *metadataCache) GetPoint(tenantID, siteID, deviceID, pointKey string) (R
 	point := cloneResolvedPoint(*entry.point)
 	shard.mu.RUnlock()
 	return point, true
-}
-
-func (c *metadataCache) PutPoint(tenantID, siteID, deviceID, pointKey string, point ResolvedPoint) {
-	c.putPoint(tenantID, siteID, deviceID, pointKey, point, 0, false)
 }
 
 func (c *metadataCache) PutPointIfEpoch(tenantID, siteID, deviceID, pointKey string, point ResolvedPoint, epoch uint64) {
@@ -340,10 +332,6 @@ func (c *metadataCache) GetFreshnessPolicy(tenantID, siteID, deviceID, pointKey 
 	return policy, true
 }
 
-func (c *metadataCache) PutFreshnessPolicy(tenantID, siteID, deviceID, pointKey string, policy cachedFreshnessPolicy) {
-	c.putFreshnessPolicy(tenantID, siteID, deviceID, pointKey, policy, 0, false)
-}
-
 func (c *metadataCache) PutFreshnessPolicyIfEpoch(tenantID, siteID, deviceID, pointKey string, policy cachedFreshnessPolicy, epoch uint64) {
 	c.putFreshnessPolicy(tenantID, siteID, deviceID, pointKey, policy, epoch, true)
 }
@@ -392,10 +380,6 @@ func (c *metadataCache) GetPresencePolicy(tenantID, siteID, deviceID string) (ca
 	policy := cloneCachedPresencePolicy(*entry.presence)
 	shard.mu.RUnlock()
 	return policy, true
-}
-
-func (c *metadataCache) PutPresencePolicy(tenantID, siteID, deviceID string, policy cachedPresencePolicy) {
-	c.putPresencePolicy(tenantID, siteID, deviceID, policy, 0, false)
 }
 
 func (c *metadataCache) PutPresencePolicyIfEpoch(tenantID, siteID, deviceID string, policy cachedPresencePolicy, epoch uint64) {
@@ -492,12 +476,27 @@ func (s *metadataCacheShard) removeEntryLocked(entry *metadataCacheEntry) {
 
 // InvalidateSite clears all cached device, point, and policy facts belonging to (tenantID, siteID).
 func (c *metadataCache) InvalidateSite(tenantID, siteID string) {
+	c.InvalidateSiteDevices(tenantID, siteID, nil)
+}
+
+// InvalidateSiteDevices clears cached entries for (tenantID, siteID) plus any prior-scope
+// entries matching deviceIDs (for example, when a device moves across sites or retires).
+func (c *metadataCache) InvalidateSiteDevices(tenantID, siteID string, deviceIDs []string) {
 	if c == nil {
 		return
 	}
 	tID := normalizeScopeID(tenantID)
 	sID := normalizeScopeID(siteID)
-	if tID == "" || sID == "" {
+	var devSet map[string]struct{}
+	if len(deviceIDs) > 0 {
+		devSet = make(map[string]struct{}, len(deviceIDs))
+		for _, rawID := range deviceIDs {
+			if normalized := normalizeScopeID(rawID); normalized != "" {
+				devSet[normalized] = struct{}{}
+			}
+		}
+	}
+	if (tID == "" || sID == "") && len(devSet) == 0 {
 		return
 	}
 	// Increment epoch before locking shards so concurrent miss-population checks ordered after
@@ -509,7 +508,9 @@ func (c *metadataCache) InvalidateSite(tenantID, siteID string) {
 		for elem := shard.order.Front(); elem != nil; {
 			next := elem.Next()
 			entry := elem.Value.(*metadataCacheEntry)
-			if entry.tenantID == tID && entry.siteID == sID {
+			matchesSite := tID != "" && sID != "" && entry.tenantID == tID && entry.siteID == sID
+			_, matchesDevice := devSet[entry.key.deviceID]
+			if matchesSite || matchesDevice {
 				shard.removeEntryLocked(entry)
 			}
 			elem = next

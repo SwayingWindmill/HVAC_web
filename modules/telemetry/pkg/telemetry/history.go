@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -70,8 +71,8 @@ type HistoryRepository interface {
 // PipelinedHistoryRepository optionally lets HistoryRelay prefetch and release ordered
 // batches across a bounded in-flight pipeline.
 type PipelinedHistoryRepository interface {
-	ClaimPipelinedHistoryBatch(ctx context.Context, maxEvents int, now time.Time, leaseFor time.Duration, maxInFlight int) (HistoryBatch, error)
-	ReleaseHistoryBatchLease(ctx context.Context, batchID string, now time.Time) error
+	ClaimPipelinedHistoryBatch(ctx context.Context, maxEvents int, now time.Time, leaseFor time.Duration, activeLeaseIDs []string, maxInFlight int) (HistoryBatch, error)
+	ReleaseHistoryBatchLease(ctx context.Context, leaseID string, now time.Time) error
 }
 
 type HistorySink interface {
@@ -457,10 +458,38 @@ func (relay *HistoryRelay) runPipelinedWave(
 	report func(int, error),
 ) (int, bool, error) {
 	depth := relay.pipelineDepth
-	stepTimeout := min(15*time.Second, relay.leaseFor/2)
+	stepTimeout := min(15*time.Second, max(200*time.Millisecond, relay.leaseFor/time.Duration(depth+1)))
 
 	stage1Ctx, cancelStage1 := context.WithCancel(ctx)
 	defer cancelStage1()
+
+	var leaseMu sync.Mutex
+	activeLeases := make(map[string]struct{}, depth)
+	snapshotActiveLeases := func() []string {
+		leaseMu.Lock()
+		defer leaseMu.Unlock()
+		out := make([]string, 0, len(activeLeases))
+		for id := range activeLeases {
+			out = append(out, id)
+		}
+		return out
+	}
+	addActiveLease := func(leaseID string) {
+		if leaseID == "" {
+			return
+		}
+		leaseMu.Lock()
+		activeLeases[leaseID] = struct{}{}
+		leaseMu.Unlock()
+	}
+	removeActiveLease := func(leaseID string) {
+		if leaseID == "" {
+			return
+		}
+		leaseMu.Lock()
+		delete(activeLeases, leaseID)
+		leaseMu.Unlock()
+	}
 
 	slots := make(chan struct{}, depth)
 	readyCh := make(chan preparedHistoryBatch, depth+1)
@@ -480,7 +509,14 @@ func (relay *HistoryRelay) runPipelinedWave(
 				return
 			}
 			claimCtx, cancelClaim := context.WithTimeout(stage1Ctx, stepTimeout)
-			batch, claimErr := pipelinedRepo.ClaimPipelinedHistoryBatch(claimCtx, relay.batchSize, relay.now().UTC(), relay.leaseFor, depth)
+			batch, claimErr := pipelinedRepo.ClaimPipelinedHistoryBatch(
+				claimCtx,
+				relay.batchSize,
+				relay.now().UTC(),
+				relay.leaseFor,
+				snapshotActiveLeases(),
+				depth,
+			)
 			cancelClaim()
 			if claimErr != nil {
 				<-slots
@@ -492,6 +528,7 @@ func (relay *HistoryRelay) runPipelinedWave(
 				readyCh <- preparedHistoryBatch{}
 				return
 			}
+			addActiveLease(batch.LeaseID)
 			item := relay.prepareBatch(batch)
 			readyCh <- item
 			if fullBatchOnly && len(batch.Observations) < relay.batchSize {
@@ -507,16 +544,12 @@ func (relay *HistoryRelay) runPipelinedWave(
 			if len(item.batch.Observations) == 0 {
 				return
 			}
-			<-slots
-			releaseID := item.batch.BatchID
-			if releaseID == "" {
-				releaseID = item.batch.LeaseID
-			}
-			if releaseID == "" {
+			defer removeActiveLease(item.batch.LeaseID)
+			if item.batch.LeaseID == "" {
 				return
 			}
 			settleCtx, cancelSettle := historySettleContext(ctx)
-			relErr := pipelinedRepo.ReleaseHistoryBatchLease(settleCtx, releaseID, relay.now().UTC())
+			relErr := pipelinedRepo.ReleaseHistoryBatchLease(settleCtx, item.batch.LeaseID, relay.now().UTC())
 			cancelSettle()
 			if relErr != nil {
 				releaseErrs = append(releaseErrs, fmt.Errorf("release unused telemetry history batch lease: %w", relErr))
@@ -558,7 +591,7 @@ func (relay *HistoryRelay) runPipelinedWave(
 		stage2Ctx, cancelStage2 := context.WithTimeout(ctx, stepTimeout)
 		published, execErr := relay.executePreparedHistoryBatch(stage2Ctx, item)
 		cancelStage2()
-		<-slots
+		removeActiveLease(item.batch.LeaseID)
 		batchesProcessed++
 		totalPublished += published
 		if report != nil {
@@ -568,6 +601,7 @@ func (relay *HistoryRelay) runPipelinedWave(
 			relErr := releaseLeftovers(nil)
 			return totalPublished, false, errors.Join(execErr, relErr)
 		}
+		<-slots
 		lastFull = published == relay.batchSize
 	}
 	<-stage1Done

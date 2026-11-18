@@ -11,7 +11,7 @@
 
 - 完成实时遥测管道与冷热分级存储 P2 规模化、归档合规与可观测性闭环（`libs/edgecontrol`、`modules/connectivity`、`modules/telemetry`、`modules/metric`、`modules/maintenance`、`cmd/telemetry-worker`、`cmd/maintenance-worker`、`tools/eg8200-simulator`、`infra/observability/` 与 `docs/`）：
   - **高吞吐流水线投递、连接池复用与分片元数据缓存**：`HistoryRelay` 改为按 `batch_sequence` 严格升序申领，开启多级流水线（`TELEMETRY_HISTORY_PIPELINE_DEPTH`）时仅在阶段一并发完成下一批预申领与 `gzip` 预编码，阶段二坚持按序提交 ClickHouse 与 PostgreSQL 回执并在失败或取消时归还预申领租约；ClickHouse 读写客户端统一复用 HTTP 连接池（`MaxIdleConnsPerHost: 32`），历史写入基于未压缩 NDJSON 计算 `insert_deduplication_token` 后通过 `sync.Pool` 池化 `gzip` 上传；入库预取接入 64 分片 FNV-1a 元数据 TTL 缓存并在同步变更时即时失效。
-  - **Fail-Closed 冷归档剪枝治理与边缘死区滤波**：新增 `ColdArchiveExporter` 在 ClickHouse 清理原始遥测与能耗明细前按 `LegalHolds` 排除范围原子导出 `.jsonl.gz` 与 `.manifest.json` 校验清单，配置 `TELEMETRY_RETENTION_ARCHIVE_REQUIRED=true` 时导出缺失或失败将阻断删数；`maintenance-worker` 周期核验归档 SHA-256 与陈旧 `.tmp` 残留；`libs/edgecontrol` 与采集模拟器支持按点位配置模拟量变化死区与静默心跳滤波。
+  - **剪枝前冷归档与未通过核验阻断删数、边缘死区滤波**：新增 `ColdArchiveExporter` 在 ClickHouse 清理原始遥测与能耗明细前按 `LegalHolds` 排除范围原子导出 `.jsonl.gz` 与 `.manifest.json` 校验清单，配置 `TELEMETRY_RETENTION_ARCHIVE_REQUIRED=true` 时导出缺失或失败将阻断删数；`maintenance-worker` 周期核验归档 SHA-256 与陈旧 `.tmp` 残留；`libs/edgecontrol` 与采集模拟器支持按点位配置模拟量变化死区与静默心跳滤波。
   - **全链路监控大盘、死信告警与架构决策沉淀**：补充连接回放队列深度（`hvac_mqtt_replay_queue_depth`）、历史发件箱分态积压（`hvac_s2_history_outbox_depth`）、ClickHouse 刷盘耗时、历史投递行数、补传处理行数、热缓存结果与冷归档运行次数指标及 Grafana 面板，完善发件箱积压与死信告警规则、中文值守手册及架构决策文档。
 
 - 完成实时遥测管道与冷热分级存储 P1 吞吐与数据质量升级（`modules/connectivity`、`modules/telemetry`、`modules/metric`、`services/optimization-service`、`cmd/telemetry-worker`、`cmd/metric-worker` 与迁移 `telemetry-runtime-unnest-and-indexes.sql`、`metric-backfill-recalc-job-grants.sql`、`018-quality-filtered-rollups.sql`）：

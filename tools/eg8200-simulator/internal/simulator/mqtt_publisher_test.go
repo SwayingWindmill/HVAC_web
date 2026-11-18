@@ -547,6 +547,22 @@ func TestMQTTPublisherAnalogDeadbandAndMaxSilenceFilter(t *testing.T) {
 				ValueType:    "NUMBER",
 				Unit:         "degC",
 			},
+			pointReference("CHILLER-01", "cond_pressure"): {
+				DeviceID:       "CHILLER-01",
+				TelemetryKey:   "cond_pressure",
+				PointCode:      "cond_pressure_kpa",
+				PointType:      "TELEMETRY",
+				ValueType:      "NUMBER",
+				Unit:           "kPa",
+				SourceMetadata: map[string]any{"deadband": 2.0},
+			},
+			pointReference("CHILLER-01", "run_state"): {
+				DeviceID:     "CHILLER-01",
+				TelemetryKey: "run_state",
+				PointCode:    "run_state",
+				PointType:    "STATE",
+				ValueType:    "STRING",
+			},
 			pointReference("METER-01", "total_kwh"): {
 				DeviceID:     "METER-01",
 				TelemetryKey: "total_kwh",
@@ -566,7 +582,9 @@ func TestMQTTPublisherAnalogDeadbandAndMaxSilenceFilter(t *testing.T) {
 
 	env0, err := publisher.buildEnvelope([]Measurement{
 		{DeviceID: "CHILLER-01", TelemetryKey: "chw_temp", Value: 7.0, Quality: "GOOD", ObservedAt: t0, Sequence: 1},
-		{DeviceID: "METER-01", TelemetryKey: "total_kwh", Value: 100.0, Quality: "GOOD", ObservedAt: t0, Sequence: 2},
+		{DeviceID: "CHILLER-01", TelemetryKey: "cond_pressure", Value: 10.0, Quality: "GOOD", ObservedAt: t0, Sequence: 2},
+		{DeviceID: "CHILLER-01", TelemetryKey: "run_state", Value: "RUNNING", Quality: "GOOD", ObservedAt: t0, Sequence: 3},
+		{DeviceID: "METER-01", TelemetryKey: "total_kwh", Value: 100.0, Quality: "GOOD", ObservedAt: t0, Sequence: 4},
 	})
 	if err != nil {
 		t.Fatalf("t0 buildEnvelope error = %v", err)
@@ -576,14 +594,27 @@ func TestMQTTPublisherAnalogDeadbandAndMaxSilenceFilter(t *testing.T) {
 	}
 
 	env10, err := publisher.buildEnvelope([]Measurement{
-		{DeviceID: "CHILLER-01", TelemetryKey: "chw_temp", Value: 7.2, Quality: "GOOD", ObservedAt: t0.Add(10 * time.Second), Sequence: 3},
-		{DeviceID: "METER-01", TelemetryKey: "total_kwh", Value: 100.0, Quality: "GOOD", ObservedAt: t0.Add(10 * time.Second), Sequence: 4},
+		{DeviceID: "CHILLER-01", TelemetryKey: "chw_temp", Value: 7.2, Quality: "GOOD", ObservedAt: t0.Add(10 * time.Second), Sequence: 5},
+		{DeviceID: "CHILLER-01", TelemetryKey: "cond_pressure", Value: 11.2, Quality: "GOOD", ObservedAt: t0.Add(10 * time.Second), Sequence: 6},
+		{DeviceID: "CHILLER-01", TelemetryKey: "run_state", Value: "RUNNING", Quality: "GOOD", ObservedAt: t0.Add(10 * time.Second), Sequence: 7},
+		{DeviceID: "METER-01", TelemetryKey: "total_kwh", Value: 100.2, Quality: "GOOD", ObservedAt: t0.Add(10 * time.Second), Sequence: 8},
 	})
 	if err != nil {
 		t.Fatalf("t0+10s buildEnvelope error = %v", err)
 	}
 	if len(env10.Payload.Devices) != 1 || env10.Payload.Devices[0].DeviceID != "METER-01" {
-		t.Fatalf("expected only COUNTER device at t0+10s, got %+v", env10.Payload.Devices)
+		t.Fatalf("expected only COUNTER device at t0+10s (unchanged STATE and per-point deadband suppressed), got %+v", env10.Payload.Devices)
+	}
+
+	env15, err := publisher.buildEnvelope([]Measurement{
+		{DeviceID: "CHILLER-01", TelemetryKey: "cond_pressure", Value: 12.1, Quality: "GOOD", ObservedAt: t0.Add(15 * time.Second), Sequence: 9},
+		{DeviceID: "CHILLER-01", TelemetryKey: "run_state", Value: "STOPPED", Quality: "GOOD", ObservedAt: t0.Add(15 * time.Second), Sequence: 10},
+	})
+	if err != nil {
+		t.Fatalf("t0+15s buildEnvelope error = %v", err)
+	}
+	if len(env15.Payload.Devices) != 1 || len(env15.Payload.Devices[0].Points) != 2 {
+		t.Fatalf("expected STATE change and >2.0 cond_pressure change at t0+15s, got %+v", env15.Payload.Devices)
 	}
 
 	env60, err := publisher.buildEnvelope([]Measurement{

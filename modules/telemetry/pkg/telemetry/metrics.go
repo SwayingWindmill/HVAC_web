@@ -180,7 +180,6 @@ func normalizeColdArchiveOutcome(outcome string) (string, bool) {
 type s2Metrics struct {
 	registry *observability.Registry
 	now      func() time.Time
-	pipeline *PipelineMetrics
 }
 
 type statusCaptureWriter struct {
@@ -209,7 +208,7 @@ func newS2Metrics(registry *observability.Registry, now func() time.Time) *s2Met
 	if now == nil {
 		now = time.Now
 	}
-	return &s2Metrics{registry: registry, now: now, pipeline: NewPipelineMetrics(registry)}
+	return &s2Metrics{registry: registry, now: now}
 }
 
 func InstrumentRealtimeTransport(delegate RealtimeTransport, registry *observability.Registry, now func() time.Time) RealtimeTransport {
@@ -385,48 +384,6 @@ func (metrics *s2Metrics) observeInvariant(invariant string) {
 		return
 	}
 	_ = metrics.registry.AddCounter("hvac_s2_security_zero_invariant_total", "S2 zero-tolerance security invariant violations.", map[string]string{"invariant": invariant}, 1)
-}
-
-func (metrics *s2Metrics) observeHistoryOutboxDepths(pending, publishing, deadLetter int) {
-	if metrics == nil || metrics.pipeline == nil {
-		return
-	}
-	metrics.pipeline.SetHistoryOutboxDepths(pending, publishing, deadLetter)
-}
-
-func (metrics *s2Metrics) observeHistoryFlushDuration(elapsed time.Duration) {
-	if metrics == nil || metrics.pipeline == nil {
-		return
-	}
-	metrics.pipeline.ObserveHistoryFlushDuration(elapsed)
-}
-
-func (metrics *s2Metrics) observeHistoryRowsProjected(count int) {
-	if metrics == nil || metrics.pipeline == nil {
-		return
-	}
-	metrics.pipeline.AddHistoryRowsProjected(count)
-}
-
-func (metrics *s2Metrics) observeReplayObservations(count int) {
-	if metrics == nil || metrics.pipeline == nil {
-		return
-	}
-	metrics.pipeline.AddReplayObservations(count)
-}
-
-func (metrics *s2Metrics) observeLatestCacheUpdates(outcome string, count int) {
-	if metrics == nil || metrics.pipeline == nil {
-		return
-	}
-	metrics.pipeline.AddLatestCacheUpdates(outcome, count)
-}
-
-func (metrics *s2Metrics) observeColdArchiveRun(outcome string) {
-	if metrics == nil || metrics.pipeline == nil {
-		return
-	}
-	metrics.pipeline.ObserveColdArchiveRun(outcome)
 }
 
 func quarantineReasonFamily(reason QuarantineReason) string {

@@ -477,6 +477,7 @@ type fakePipelinedBatch struct {
 	batch       HistoryBatch
 	state       string // PENDING, IN_FLIGHT, PUBLISHED, DEAD
 	availableAt time.Time
+	leasedUntil time.Time
 	attempts    int
 	errorCode   string
 }
@@ -488,7 +489,9 @@ type fakePipelinedHistoryRepo struct {
 	activeInFlight    int
 	maxObservedFlight int
 	inFlightLimitHit  bool
-	releasedBatchIDs  []string
+	releasedLeaseIDs  []string
+	releasedSeqs      []uint64
+	lastLeaseBySeq    map[uint64]string
 	releaseActiveCtx  []bool
 	retriedLeaseIDs   []string
 	publishedSeqs     []uint64
@@ -506,27 +509,46 @@ func newFakePipelinedHistoryRepo(batches []HistoryBatch) *fakePipelinedHistoryRe
 	}
 	return &fakePipelinedHistoryRepo{
 		batches:        items,
+		lastLeaseBySeq: make(map[uint64]string),
 		markPublishErr: make(map[uint64]error),
 	}
 }
 
 func (r *fakePipelinedHistoryRepo) ClaimHistoryBatch(ctx context.Context, maxEvents int, now time.Time, leaseFor time.Duration) (HistoryBatch, error) {
-	return r.ClaimPipelinedHistoryBatch(ctx, maxEvents, now, leaseFor, 1)
+	return r.ClaimPipelinedHistoryBatch(ctx, maxEvents, now, leaseFor, nil, 1)
 }
 
-func (r *fakePipelinedHistoryRepo) ClaimPipelinedHistoryBatch(_ context.Context, _ int, now time.Time, _ time.Duration, maxInFlight int) (HistoryBatch, error) {
+func (r *fakePipelinedHistoryRepo) ClaimPipelinedHistoryBatch(_ context.Context, _ int, now time.Time, leaseFor time.Duration, activeLeaseIDs []string, maxInFlight int) (HistoryBatch, error) {
 	r.mu.Lock()
-	if r.activeInFlight >= maxInFlight {
-		r.inFlightLimitHit = true
-		r.mu.Unlock()
-		return HistoryBatch{}, nil
+	owned := make(map[string]struct{}, len(activeLeaseIDs))
+	for _, id := range activeLeaseIDs {
+		if id != "" {
+			owned[id] = struct{}{}
+		}
 	}
+	activeOwned := 0
 	var claimed HistoryBatch
 	for _, item := range r.batches {
-		if item.state == "IN_FLIGHT" || item.state == "PUBLISHED" || item.state == "DEAD" {
+		if item.state == "PUBLISHED" || item.state == "DEAD" {
 			continue
 		}
-		if item.availableAt.After(now) {
+		if item.state == "IN_FLIGHT" {
+			if _, isOwned := owned[item.batch.LeaseID]; isOwned {
+				activeOwned++
+				if activeOwned >= maxInFlight {
+					r.inFlightLimitHit = true
+					r.mu.Unlock()
+					return HistoryBatch{}, nil
+				}
+				continue
+			}
+			if item.leasedUntil.After(now) {
+				r.mu.Unlock()
+				return HistoryBatch{}, nil
+			}
+			// Expired foreign/orphaned lease: reclaim this batch in sequence order.
+			r.activeInFlight--
+		} else if item.availableAt.After(now) {
 			r.mu.Unlock()
 			return HistoryBatch{}, nil
 		}
@@ -535,6 +557,8 @@ func (r *fakePipelinedHistoryRepo) ClaimPipelinedHistoryBatch(_ context.Context,
 		item.attempts++
 		item.batch.LeaseID = fmt.Sprintf("018f2e00-9000-7000-8000-%012d", r.nextLeaseSeq)
 		item.batch.MaxAttempts = item.attempts
+		item.leasedUntil = now.Add(leaseFor)
+		r.lastLeaseBySeq[item.batch.Sequence] = item.batch.LeaseID
 		r.activeInFlight++
 		if r.activeInFlight > r.maxObservedFlight {
 			r.maxObservedFlight = r.activeInFlight
@@ -550,21 +574,23 @@ func (r *fakePipelinedHistoryRepo) ClaimPipelinedHistoryBatch(_ context.Context,
 	return claimed, nil
 }
 
-func (r *fakePipelinedHistoryRepo) ReleaseHistoryBatchLease(ctx context.Context, batchID string, now time.Time) error {
+func (r *fakePipelinedHistoryRepo) ReleaseHistoryBatchLease(ctx context.Context, leaseID string, now time.Time) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.releaseActiveCtx = append(r.releaseActiveCtx, ctx.Err() == nil)
 	for _, item := range r.batches {
-		if (item.batch.BatchID == batchID || item.batch.LeaseID == batchID) && item.state == "IN_FLIGHT" {
+		if item.batch.LeaseID == leaseID && item.state == "IN_FLIGHT" {
 			item.state = "PENDING"
 			item.availableAt = now
+			item.leasedUntil = time.Time{}
 			item.errorCode = ""
 			if item.attempts > 0 {
 				item.attempts--
 			}
 			item.batch.LeaseID = ""
 			r.activeInFlight--
-			r.releasedBatchIDs = append(r.releasedBatchIDs, batchID)
+			r.releasedLeaseIDs = append(r.releasedLeaseIDs, leaseID)
+			r.releasedSeqs = append(r.releasedSeqs, item.batch.Sequence)
 			return nil
 		}
 	}
@@ -837,7 +863,9 @@ func TestHistoryRelayPipelineReleasesPrefetchedLeaseOnStage2Failure(t *testing.T
 	}
 
 	repo.mu.Lock()
-	released := slices.Clone(repo.releasedBatchIDs)
+	releasedSeqs := slices.Clone(repo.releasedSeqs)
+	releasedLeases := slices.Clone(repo.releasedLeaseIDs)
+	expectedB2Lease := repo.lastLeaseBySeq[batches[1].Sequence]
 	b1State := repo.batches[0].state
 	b1Available := repo.batches[0].availableAt
 	b2State := repo.batches[1].state
@@ -846,8 +874,8 @@ func TestHistoryRelayPipelineReleasesPrefetchedLeaseOnStage2Failure(t *testing.T
 	active := repo.activeInFlight
 	repo.mu.Unlock()
 
-	if !slices.Equal(released, []string{batches[1].BatchID}) {
-		t.Fatalf("releasedBatchIDs=%v, want [%s]", released, batches[1].BatchID)
+	if !slices.Equal(releasedSeqs, []uint64{batches[1].Sequence}) || !slices.Equal(releasedLeases, []string{expectedB2Lease}) || expectedB2Lease == "" {
+		t.Fatalf("released=(seqs=%v leases=%v), want seq=2 lease=%q", releasedSeqs, releasedLeases, expectedB2Lease)
 	}
 	if b1State != "PENDING" || !b1Available.Equal(clock.Add(5*time.Second)) {
 		t.Fatalf("batch 1 state=%s available=%s", b1State, b1Available)
@@ -909,8 +937,9 @@ func TestHistoryRelayPipelineReleasesPrefetchedLeaseOnStage2Failure(t *testing.T
 	if _, err := relay2.RelayPending(ctx2); err == nil {
 		t.Fatal("expected error on cancelled context")
 	}
-	if len(repo2.releasedBatchIDs) != 1 || repo2.releasedBatchIDs[0] != batches2[1].BatchID {
-		t.Fatalf("cancelled pipeline did not release prefetched batch: %v", repo2.releasedBatchIDs)
+	expectedB2Lease2 := repo2.lastLeaseBySeq[batches2[1].Sequence]
+	if !slices.Equal(repo2.releasedSeqs, []uint64{batches2[1].Sequence}) || !slices.Equal(repo2.releasedLeaseIDs, []string{expectedB2Lease2}) || expectedB2Lease2 == "" {
+		t.Fatalf("cancelled pipeline did not release prefetched lease: seqs=%v leases=%v want=%q", repo2.releasedSeqs, repo2.releasedLeaseIDs, expectedB2Lease2)
 	}
 	if len(repo2.releaseActiveCtx) != 1 || !repo2.releaseActiveCtx[0] {
 		t.Fatalf("expected release to use uncanceled settle context: %v", repo2.releaseActiveCtx)
@@ -1014,18 +1043,18 @@ func TestHistoryRelayRunWithPipelinedRepositoryPartialVsBacklog(t *testing.T) {
 func TestHistoryPostgresRepositoryClosedValidation(t *testing.T) {
 	var nilRepo *HistoryPostgresRepository
 	now := time.Date(2026, 7, 29, 9, 30, 0, 0, time.UTC)
-	if _, err := nilRepo.ClaimPipelinedHistoryBatch(t.Context(), 10, now, 30*time.Second, 2); err == nil {
+	if _, err := nilRepo.ClaimPipelinedHistoryBatch(t.Context(), 10, now, 30*time.Second, nil, 2); err == nil {
 		t.Fatal("expected error for nil repository")
 	}
 	if err := nilRepo.ReleaseHistoryBatchLease(t.Context(), "018f2e00-8000-7000-8000-000000000001", now); err == nil {
 		t.Fatal("expected error for nil repository release")
 	}
 	emptyRepo := NewHistoryPostgresRepository(nil, nil)
-	if _, err := emptyRepo.ClaimPipelinedHistoryBatch(t.Context(), 10, now, 30*time.Second, 0); err == nil {
+	if _, err := emptyRepo.ClaimPipelinedHistoryBatch(t.Context(), 10, now, 30*time.Second, nil, 0); err == nil {
 		t.Fatal("expected error for invalid maxInFlight / nil pool")
 	}
 	if err := emptyRepo.ReleaseHistoryBatchLease(t.Context(), "", now); err == nil {
-		t.Fatal("expected error for empty batchID / nil pool")
+		t.Fatal("expected error for empty leaseID / nil pool")
 	}
 }
 
@@ -1083,5 +1112,124 @@ func TestHistoryRelayRecordsPipelineMetricsAndOutboxDepths(t *testing.T) {
 		if !strings.Contains(body, needle) {
 			t.Fatalf("missing %q in /metrics output:\n%s", needle, body)
 		}
+	}
+}
+
+func TestHistoryRelayPipelineStopsAtForeignActiveInFlightUntilExpiry(t *testing.T) {
+	clock := time.Date(2026, 7, 29, 10, 0, 0, 0, time.UTC)
+	b1 := makeFakeBatch(1, 2)
+	b2 := makeFakeBatch(2, 2)
+	b3 := makeFakeBatch(3, 1)
+	repo := newFakePipelinedHistoryRepo([]HistoryBatch{b1, b2, b3})
+	// Simulate an orphaned/foreign active IN_FLIGHT lease left by an earlier crashed worker.
+	repo.batches[0].state = "IN_FLIGHT"
+	repo.batches[0].batch.LeaseID = "018f2e00-9999-7000-8000-000000000001"
+	repo.batches[0].leasedUntil = clock.Add(10 * time.Second)
+	repo.batches[0].attempts = 1
+	repo.activeInFlight = 1
+
+	sink := &fakePreparedHistorySink{}
+	relay, err := NewHistoryRelay(HistoryRelayConfig{
+		Repository:    repo,
+		Sink:          sink,
+		BatchSize:     4,
+		LeaseFor:      10 * time.Second,
+		RetryAfter:    time.Second,
+		PipelineDepth: 2,
+		Now:           func() time.Time { return clock },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	published, err := relay.RelayPending(t.Context())
+	if err != nil {
+		t.Fatalf("RelayPending while foreign lease active: %v", err)
+	}
+	if published != 0 || len(sink.insertTokens) != 0 {
+		t.Fatalf("pipeline skipped ahead of foreign active batch 1: published=%d tokens=%v", published, sink.insertTokens)
+	}
+
+	// Once the foreign lease expires, batch 1 is reclaimed first and all batches commit in order.
+	clock = clock.Add(11 * time.Second)
+	published, err = relay.RelayPending(t.Context())
+	if err != nil {
+		t.Fatalf("RelayPending after expiry: %v", err)
+	}
+	if published != 5 {
+		t.Fatalf("published=%d, want 5", published)
+	}
+	if !slices.Equal(repo.publishedSeqs, []uint64{1, 2, 3}) {
+		t.Fatalf("publishedSeqs=%v, want [1 2 3]", repo.publishedSeqs)
+	}
+}
+
+func TestHistoryRelayPipelineLeaseOwnershipAndReleaseFencing(t *testing.T) {
+	clock := time.Date(2026, 7, 29, 10, 5, 0, 0, time.UTC)
+	b1 := makeFakeBatch(1, 2)
+	b2 := makeFakeBatch(2, 2)
+	b3 := makeFakeBatch(3, 2)
+	repo := newFakePipelinedHistoryRepo([]HistoryBatch{b1, b2, b3})
+
+	// Claim b1 directly and advance past its lease expiry; passing b1's LeaseID in activeLeaseIDs
+	// must skip re-claiming b1 instead of clobbering its lease_id.
+	first, err := repo.ClaimPipelinedHistoryBatch(t.Context(), 4, clock, 5*time.Second, nil, 2)
+	if err != nil || first.Sequence != 1 {
+		t.Fatalf("ClaimPipelinedHistoryBatch b1=(%v, %v)", first.Sequence, err)
+	}
+	second, err := repo.ClaimPipelinedHistoryBatch(t.Context(), 4, clock.Add(6*time.Second), 5*time.Second, []string{first.LeaseID}, 2)
+	if err != nil || second.Sequence != 2 {
+		t.Fatalf("expected owned expired b1 to be skipped for b2, got seq=%d err=%v", second.Sequence, err)
+	}
+	// ReleaseHistoryBatchLease must refuse a BatchID or mismatched LeaseID.
+	if err := repo.ReleaseHistoryBatchLease(t.Context(), first.BatchID, clock); err == nil {
+		t.Fatal("expected ReleaseHistoryBatchLease to reject BatchID instead of LeaseID")
+	}
+	if err := repo.ReleaseHistoryBatchLease(t.Context(), second.LeaseID, clock); err != nil {
+		t.Fatalf("release b2 by LeaseID failed: %v", err)
+	}
+	if err := repo.ReleaseHistoryBatchLease(t.Context(), first.LeaseID, clock); err != nil {
+		t.Fatalf("release b1 by LeaseID failed: %v", err)
+	}
+
+	// Verify Stage 2 failure cancels Stage 1 before consuming another slot so b3 is never touched
+	// when b1 hits MaxAttempts dead-lettering.
+	sink := &fakePreparedHistorySink{}
+	b2Prepared := make(chan struct{})
+	sink.prepareHook = func(seq uint64) {
+		if seq == 2 {
+			close(b2Prepared)
+		}
+	}
+	sink.insertHook = func(token string) error {
+		if strings.HasPrefix(token, "seq:0001:") {
+			<-b2Prepared
+			return errors.New("transient ClickHouse write error")
+		}
+		return nil
+	}
+	relay, err := NewHistoryRelay(HistoryRelayConfig{
+		Repository:    repo,
+		Sink:          sink,
+		BatchSize:     4,
+		LeaseFor:      30 * time.Second,
+		RetryAfter:    time.Second,
+		MaxAttempts:   1,
+		PipelineDepth: 2,
+		Now:           func() time.Time { return clock },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := relay.RelayPending(t.Context()); err == nil {
+		t.Fatal("expected RelayPending error when b1 fails on max attempt")
+	}
+	repo.mu.Lock()
+	defer repo.mu.Unlock()
+	if repo.batches[0].state != "DEAD" {
+		t.Fatalf("b1 state=%s, want DEAD", repo.batches[0].state)
+	}
+	if repo.batches[2].attempts != 0 || repo.batches[2].state != "PENDING" {
+		t.Fatalf("Stage 1 over-claimed b3 on Stage 2 failure: state=%s attempts=%d", repo.batches[2].state, repo.batches[2].attempts)
 	}
 }

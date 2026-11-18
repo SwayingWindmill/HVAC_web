@@ -45,7 +45,7 @@ func TestMetadataCacheTTLExpiry(t *testing.T) {
 	siteID := "018f2e00-1000-7000-8000-000000000001"
 	deviceID := "018f2e00-3000-7000-8000-000000000001"
 
-	cache.PutDevice(ResolvedDevice{TenantID: tenantID, SiteID: siteID, DeviceID: deviceID})
+	cache.PutDeviceIfEpoch(ResolvedDevice{TenantID: tenantID, SiteID: siteID, DeviceID: deviceID}, cache.Epoch())
 	if got, ok := cache.GetDevice(tenantID, siteID, deviceID); !ok || got.DeviceID != deviceID {
 		t.Fatalf("expected immediate hit, got %+v ok=%v", got, ok)
 	}
@@ -101,21 +101,21 @@ func TestMetadataCacheEvictsExpiredThenOldestAtShardCapacity(t *testing.T) {
 
 	// Insert 100 entries that expire at t+30s, then advance 10s and insert 156 live entries (expires t+40s).
 	for i := 0; i < 100; i++ {
-		cache.PutPoint(tenantID, siteID, deviceID, sameShardKeys[i], ResolvedPoint{
+		cache.PutPointIfEpoch(tenantID, siteID, deviceID, sameShardKeys[i], ResolvedPoint{
 			PointID:       fmt.Sprintf("018f2e00-3100-7000-8000-%012d", i+1),
 			PointType:     "TELEMETRY",
 			ValueType:     "NUMBER",
 			PointRevision: int64(i + 1),
-		})
+		}, cache.Epoch())
 	}
 	now = now.Add(10 * time.Second)
 	for i := 100; i < 256; i++ {
-		cache.PutPoint(tenantID, siteID, deviceID, sameShardKeys[i], ResolvedPoint{
+		cache.PutPointIfEpoch(tenantID, siteID, deviceID, sameShardKeys[i], ResolvedPoint{
 			PointID:       fmt.Sprintf("018f2e00-3100-7000-8000-%012d", i+1),
 			PointType:     "TELEMETRY",
 			ValueType:     "NUMBER",
 			PointRevision: int64(i + 1),
-		})
+		}, cache.Epoch())
 	}
 	shard := &cache.shards[targetShard]
 	if got := len(shard.entries); got != 256 {
@@ -125,12 +125,12 @@ func TestMetadataCacheEvictsExpiredThenOldestAtShardCapacity(t *testing.T) {
 	// Advance to t+30s so the first 100 entries expire while the 156 newer entries remain live.
 	// Inserting 1 new entry must evict all expired entries first without touching live entry 100.
 	now = now.Add(20 * time.Second)
-	cache.PutPoint(tenantID, siteID, deviceID, sameShardKeys[256], ResolvedPoint{
+	cache.PutPointIfEpoch(tenantID, siteID, deviceID, sameShardKeys[256], ResolvedPoint{
 		PointID:       "018f2e00-3100-7000-8000-000000009999",
 		PointType:     "TELEMETRY",
 		ValueType:     "NUMBER",
 		PointRevision: 999,
-	})
+	}, cache.Epoch())
 	if got := len(shard.entries); got != 157 {
 		t.Fatalf("expected expired entries evicted first leaving 157 entries, got %d", got)
 	}
@@ -141,20 +141,20 @@ func TestMetadataCacheEvictsExpiredThenOldestAtShardCapacity(t *testing.T) {
 	// Now fill the shard back to 256 live entries and insert 3 more: oldest live entries must evict
 	// so shard length stays bounded <= 256.
 	for i := 257; i < 356; i++ {
-		cache.PutPoint(tenantID, siteID, deviceID, sameShardKeys[i], ResolvedPoint{
+		cache.PutPointIfEpoch(tenantID, siteID, deviceID, sameShardKeys[i], ResolvedPoint{
 			PointID:       fmt.Sprintf("018f2e00-3200-7000-8000-%012d", i+1),
 			PointType:     "TELEMETRY",
 			ValueType:     "NUMBER",
 			PointRevision: 1,
-		})
+		}, cache.Epoch())
 	}
 	if len(shard.entries) != 256 {
 		t.Fatalf("shard entries=%d, want 256", len(shard.entries))
 	}
 	for i := 356; i < 359; i++ {
-		cache.PutPoint(tenantID, siteID, deviceID, sameShardKeys[i], ResolvedPoint{
+		cache.PutPointIfEpoch(tenantID, siteID, deviceID, sameShardKeys[i], ResolvedPoint{
 			PointID: "018f2e00-3300-7000-8000-000000000001", PointType: "TELEMETRY", ValueType: "NUMBER", PointRevision: 1,
-		})
+		}, cache.Epoch())
 		if len(shard.entries) > 256 {
 			t.Fatalf("shard exceeded cap 256: %d", len(shard.entries))
 		}
@@ -193,8 +193,7 @@ func TestMetadataCacheDeepCopyIsolation(t *testing.T) {
 		CounterRolloverModulus: &modulus,
 		PointRevision:          3,
 	}
-	cache.PutPoint(tenantID, siteID, deviceID, "energy.total", inputPoint)
-	// Mutate caller pointers after Put.
+	cache.PutPointIfEpoch(tenantID, siteID, deviceID, "energy.total", inputPoint, cache.Epoch())
 	*inputPoint.SensorID = "mutated"
 	*inputPoint.Unit = "MWh"
 	*inputPoint.CounterDecreaseMode = "INVALID"
@@ -207,7 +206,6 @@ func TestMetadataCacheDeepCopyIsolation(t *testing.T) {
 	if *gotPoint.SensorID != "018f2e00-3200-7000-8000-000000000001" || *gotPoint.Unit != "kWh" || *gotPoint.CounterDecreaseMode != "ROLLOVER" || *gotPoint.CounterRolloverModulus != 10000.0 {
 		t.Fatalf("caller mutation leaked into cached point: %+v", gotPoint)
 	}
-	// Mutate pointer returned by GetPoint and verify cache stays clean.
 	*gotPoint.Unit = "W"
 	gotPoint2, _ := cache.GetPoint(tenantID, siteID, deviceID, "energy.total")
 	if *gotPoint2.Unit != "kWh" {
@@ -249,7 +247,7 @@ func TestMetadataCacheDeepCopyIsolation(t *testing.T) {
 			},
 		},
 	}
-	cache.PutFreshnessPolicy(tenantID, siteID, deviceID, "chiller.power", inputFP)
+	cache.PutFreshnessPolicyIfEpoch(tenantID, siteID, deviceID, "chiller.power", inputFP, cache.Epoch())
 	*inputFP.MinimumNumber = -999
 	*inputFP.QualityChecks.MaxStep = 999
 	inputFP.QualityChecks.Sentinels[0] = -1
@@ -278,7 +276,7 @@ func TestMetadataCacheDeepCopyIsolation(t *testing.T) {
 		MaxFutureClockSkew:  30 * time.Second,
 		MaxSourceLag:        10 * time.Minute,
 	}
-	cache.PutPresencePolicy(tenantID, siteID, deviceID, inputPP)
+	cache.PutPresencePolicyIfEpoch(tenantID, siteID, deviceID, inputPP, cache.Epoch())
 	inputPP.AcceptedSignalTypes[0] = "MUTATED"
 	gotPP, ok := cache.GetPresencePolicy(tenantID, siteID, deviceID)
 	if !ok || gotPP.AcceptedSignalTypes[0] != "SOURCE_ACTIVITY" {
@@ -299,15 +297,15 @@ func TestMetadataCacheInvalidateSiteAndConcurrency(t *testing.T) {
 	devA1 := "018f2e00-3000-7000-8000-000000000001"
 	devA2 := "018f2e00-3000-7000-8000-000000000002"
 
-	cache.PutDevice(ResolvedDevice{TenantID: tenantA, SiteID: siteA1, DeviceID: devA1})
-	cache.PutPoint(tenantA, siteA1, devA1, "temp", ResolvedPoint{PointID: "p1", PointType: "TELEMETRY", ValueType: "NUMBER", PointRevision: 1})
-	cache.PutFreshnessPolicy(tenantA, siteA1, devA1, "temp", cachedFreshnessPolicy{Revision: 1, FreshWithinSeconds: 300, Configured: true, ValueType: "NUMBER"})
-	cache.PutPresencePolicy(tenantA, siteA1, devA1, cachedPresencePolicy{Revision: 1, MaxFutureClockSkew: 30 * time.Second, MaxSourceLag: 10 * time.Minute})
+	cache.PutDeviceIfEpoch(ResolvedDevice{TenantID: tenantA, SiteID: siteA1, DeviceID: devA1}, cache.Epoch())
+	cache.PutPointIfEpoch(tenantA, siteA1, devA1, "temp", ResolvedPoint{PointID: "p1", PointType: "TELEMETRY", ValueType: "NUMBER", PointRevision: 1}, cache.Epoch())
+	cache.PutFreshnessPolicyIfEpoch(tenantA, siteA1, devA1, "temp", cachedFreshnessPolicy{Revision: 1, FreshWithinSeconds: 300, Configured: true, ValueType: "NUMBER"}, cache.Epoch())
+	cache.PutPresencePolicyIfEpoch(tenantA, siteA1, devA1, cachedPresencePolicy{Revision: 1, MaxFutureClockSkew: 30 * time.Second, MaxSourceLag: 10 * time.Minute}, cache.Epoch())
 
-	cache.PutDevice(ResolvedDevice{TenantID: tenantA, SiteID: siteA2, DeviceID: devA2})
-	cache.PutPoint(tenantA, siteA2, devA2, "temp", ResolvedPoint{PointID: "p2", PointType: "TELEMETRY", ValueType: "NUMBER", PointRevision: 1})
-	cache.PutFreshnessPolicy(tenantA, siteA2, devA2, "temp", cachedFreshnessPolicy{Revision: 1, FreshWithinSeconds: 300, Configured: true, ValueType: "NUMBER"})
-	cache.PutPresencePolicy(tenantA, siteA2, devA2, cachedPresencePolicy{Revision: 1, MaxFutureClockSkew: 30 * time.Second, MaxSourceLag: 10 * time.Minute})
+	cache.PutDeviceIfEpoch(ResolvedDevice{TenantID: tenantA, SiteID: siteA2, DeviceID: devA2}, cache.Epoch())
+	cache.PutPointIfEpoch(tenantA, siteA2, devA2, "temp", ResolvedPoint{PointID: "p2", PointType: "TELEMETRY", ValueType: "NUMBER", PointRevision: 1}, cache.Epoch())
+	cache.PutFreshnessPolicyIfEpoch(tenantA, siteA2, devA2, "temp", cachedFreshnessPolicy{Revision: 1, FreshWithinSeconds: 300, Configured: true, ValueType: "NUMBER"}, cache.Epoch())
+	cache.PutPresencePolicyIfEpoch(tenantA, siteA2, devA2, cachedPresencePolicy{Revision: 1, MaxFutureClockSkew: 30 * time.Second, MaxSourceLag: 10 * time.Minute}, cache.Epoch())
 
 	// Uppercase UUID input on invalidation must still match normalized lowercase entries.
 	cache.InvalidateSite("018F2D00-0000-7000-8000-000000000001", "018F2E00-1000-7000-8000-000000000001")
@@ -328,7 +326,6 @@ func TestMetadataCacheInvalidateSiteAndConcurrency(t *testing.T) {
 		t.Fatal("siteA1 presence policy remained cached after InvalidateSite")
 	}
 
-	// Site A2 must remain untouched.
 	if _, ok := cache.GetDevice(tenantA, siteA2, devA2); !ok {
 		t.Fatal("siteA2 device was wrongly invalidated")
 	}
@@ -342,7 +339,17 @@ func TestMetadataCacheInvalidateSiteAndConcurrency(t *testing.T) {
 		t.Fatal("siteA2 presence policy was wrongly invalidated")
 	}
 
-	// Verify epoch protection prevents stale inflight reads from repopulating after InvalidateSite.
+	// Verify InvalidateSiteDevices evicts a moved/retired device even if cached under another site.
+	cache.InvalidateSiteDevices(tenantA, siteA1, []string{devA2})
+	if _, ok := cache.GetDevice(tenantA, siteA2, devA2); ok {
+		t.Fatal("devA2 remained cached under prior site after InvalidateSiteDevices")
+	}
+	if _, _, ok := cache.LookupDeviceScope(devA2); ok {
+		t.Fatal("devA2 scope remained cached after InvalidateSiteDevices")
+	}
+
+	// Re-populate devA2 to test epoch protection against stale inflight writes.
+	cache.PutDeviceIfEpoch(ResolvedDevice{TenantID: tenantA, SiteID: siteA2, DeviceID: devA2}, cache.Epoch())
 	epochBefore := cache.Epoch()
 	cache.InvalidateSite(tenantA, siteA2)
 	cache.PutDeviceIfEpoch(ResolvedDevice{TenantID: tenantA, SiteID: siteA2, DeviceID: devA2}, epochBefore)
@@ -360,15 +367,16 @@ func TestMetadataCacheInvalidateSiteAndConcurrency(t *testing.T) {
 				dev := fmt.Sprintf("018f2e00-3000-7000-8000-%012d", (worker*10+i)%32)
 				site := fmt.Sprintf("018f2e00-1000-7000-8000-%012d", i%4)
 				key := fmt.Sprintf("k.%d", i%16)
-				cache.PutDevice(ResolvedDevice{TenantID: tenantA, SiteID: site, DeviceID: dev})
-				cache.PutPoint(tenantA, site, dev, key, ResolvedPoint{PointID: dev, PointType: "TELEMETRY", ValueType: "NUMBER", PointRevision: int64(i + 1)})
-				cache.PutFreshnessPolicy(tenantA, site, dev, key, cachedFreshnessPolicy{
+				ep := cache.Epoch()
+				cache.PutDeviceIfEpoch(ResolvedDevice{TenantID: tenantA, SiteID: site, DeviceID: dev}, ep)
+				cache.PutPointIfEpoch(tenantA, site, dev, key, ResolvedPoint{PointID: dev, PointType: "TELEMETRY", ValueType: "NUMBER", PointRevision: int64(i + 1)}, ep)
+				cache.PutFreshnessPolicyIfEpoch(tenantA, site, dev, key, cachedFreshnessPolicy{
 					Revision: int64(i + 1), FreshWithinSeconds: 60, Configured: true, ValueType: "NUMBER",
 					QualityChecks: &QualityChecks{Sentinels: []float64{1, 2}},
-				})
-				cache.PutPresencePolicy(tenantA, site, dev, cachedPresencePolicy{
+				}, ep)
+				cache.PutPresencePolicyIfEpoch(tenantA, site, dev, cachedPresencePolicy{
 					Revision: 1, AcceptedSignalTypes: []string{"SOURCE_ACTIVITY"}, MaxFutureClockSkew: 30 * time.Second, MaxSourceLag: time.Minute,
-				})
+				}, ep)
 				_, _ = cache.GetDevice(tenantA, site, dev)
 				_, _ = cache.GetPoint(tenantA, site, dev, key)
 				if fp, ok := cache.GetFreshnessPolicy(tenantA, site, dev, key); ok && fp.QualityChecks != nil && len(fp.QualityChecks.Sentinels) > 0 {
@@ -422,13 +430,11 @@ func TestPrefetchBatchPlanUsesCacheHitsAndQueriesMissesOnly(t *testing.T) {
 		},
 	}
 
-	// Cold cache: all lookups miss.
 	stateCold, planCold := planBatchPrefetch(cache, candidates)
 	if len(planCold.missDeviceIDs) != 2 || len(planCold.missReplayPoints) != 1 || len(planCold.missPolicyPoints) != 2 {
 		t.Fatalf("cold misses unexpected: devices=%v replay=%v policies=%v", planCold.missDeviceIDs, planCold.missReplayPoints, planCold.missPolicyPoints)
 	}
 
-	// Populate devHit metadata as if fetched from Postgres.
 	devHitFact := ResolvedDevice{TenantID: tenantID, SiteID: siteID, DeviceID: devHit}
 	stateCold.knownDevices[devHit] = devHitFact
 	populatePrefetchCache(
@@ -476,7 +482,7 @@ func TestPrefetchBatchPlanUsesCacheHitsAndQueriesMissesOnly(t *testing.T) {
 	}
 
 	// Scope-conflict candidate (wrong tenantID) must miss cache so Postgres catches DeviceConflict.
-	cache.PutDevice(devHitFact)
+	cache.PutDeviceIfEpoch(devHitFact, cache.Epoch())
 	conflictCandidates := []ObservationCandidate{{
 		SourceID:           sourceA,
 		SourcePath:         SourcePathPush,

@@ -228,13 +228,13 @@ func (store *PostgresStore) acceptObservationBatchOnce(ctx context.Context, cand
 			receipts[receiptIndex].StateChanged = commit.StateChanged
 		}
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("commit telemetry observation batch transaction: %w", err)
-	}
 	if store.metadataCache != nil {
 		for _, pt := range plan.points {
 			store.metadataCache.InvalidatePoint(pt.device.TenantID, pt.device.SiteID, pt.device.DeviceID, pt.key)
 		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit telemetry observation batch transaction: %w", err)
 	}
 	for index := range receipts {
 		if receipts[index].Status == ObservationQuarantined {
@@ -623,6 +623,16 @@ func populatePrefetchCache(
 	}
 }
 
+func splitDeviceKeys(keys []deviceKey) ([]string, []string) {
+	deviceIDs := make([]string, len(keys))
+	telemetryKeys := make([]string, len(keys))
+	for index, item := range keys {
+		deviceIDs[index] = item.deviceID
+		telemetryKeys[index] = item.key
+	}
+	return deviceIDs, telemetryKeys
+}
+
 func (store *PostgresStore) prefetchBatchFacts(ctx context.Context, tx pgx.Tx, candidates []ObservationCandidate) (*batchWorkingState, error) {
 	var cache *metadataCache
 	if store != nil {
@@ -687,12 +697,7 @@ WHERE device_id = ANY($1::uuid[])
 
 	var fetchedPoints []fetchedPointFact
 	if len(plan.missReplayPoints) > 0 {
-		replayDeviceIDs := make([]string, len(plan.missReplayPoints))
-		replayKeys := make([]string, len(plan.missReplayPoints))
-		for index, ptKey := range plan.missReplayPoints {
-			replayDeviceIDs[index] = ptKey.deviceID
-			replayKeys[index] = ptKey.key
-		}
+		replayDeviceIDs, replayKeys := splitDeviceKeys(plan.missReplayPoints)
 		batch.Queue(`
 SELECT p.device_id::text, p.telemetry_key, p.point_id::text, p.sensor_id::text, p.point_type,
        p.value_type, p.unit, p.counter_decrease_mode, p.counter_rollover_modulus, p.point_revision
@@ -719,12 +724,7 @@ JOIN unnest($1::uuid[], $2::text[]) AS req(device_id, telemetry_key)
 
 	var fetchedPolicies []fetchedPolicyFact
 	if len(plan.missPolicyPoints) > 0 {
-		policyDeviceIDs := make([]string, len(plan.missPolicyPoints))
-		policyKeys := make([]string, len(plan.missPolicyPoints))
-		for index, ptKey := range plan.missPolicyPoints {
-			policyDeviceIDs[index] = ptKey.deviceID
-			policyKeys[index] = ptKey.key
-		}
+		policyDeviceIDs, policyKeys := splitDeviceKeys(plan.missPolicyPoints)
 		batch.Queue(`
 SELECT f.device_id::text, f.telemetry_key,
        f.policy_revision, p.policy_revision, f.value_type, f.expected_unit,
@@ -785,12 +785,7 @@ WHERE f.configured
 	}
 
 	if len(plan.allBatchPoints) > 0 {
-		batchDeviceIDs := make([]string, len(plan.allBatchPoints))
-		batchKeys := make([]string, len(plan.allBatchPoints))
-		for index, ptKey := range plan.allBatchPoints {
-			batchDeviceIDs[index] = ptKey.deviceID
-			batchKeys[index] = ptKey.key
-		}
+		batchDeviceIDs, batchKeys := splitDeviceKeys(plan.allBatchPoints)
 		queueLatestPointLookup(batch, batchDeviceIDs, batchKeys, state.latestByPoint)
 	}
 
@@ -802,12 +797,7 @@ WHERE f.configured
 
 	missingPeerKeys := collectMissingQualityPeers(state.policies, plan.seenBatchPoints)
 	if len(missingPeerKeys) > 0 {
-		peerDeviceIDs := make([]string, len(missingPeerKeys))
-		peerKeys := make([]string, len(missingPeerKeys))
-		for index, peer := range missingPeerKeys {
-			peerDeviceIDs[index] = peer.deviceID
-			peerKeys[index] = peer.key
-		}
+		peerDeviceIDs, peerKeys := splitDeviceKeys(missingPeerKeys)
 		peerBatch := &pgx.Batch{}
 		queueLatestPointLookup(peerBatch, peerDeviceIDs, peerKeys, state.latestByPoint)
 		if err := tx.SendBatch(ctx, peerBatch).Close(); err != nil {

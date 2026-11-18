@@ -101,19 +101,17 @@ func compressHistoryGzip(raw []byte) ([]byte, error) {
 	if writer == nil {
 		writer, _ = gzip.NewWriterLevel(io.Discard, gzip.BestSpeed)
 	}
-	writer.Reset(&buf)
-	if _, err := writer.Write(raw); err != nil {
+	defer func() {
 		writer.Reset(io.Discard)
 		historyGzipWriterPool.Put(writer)
+	}()
+	writer.Reset(&buf)
+	if _, err := writer.Write(raw); err != nil {
 		return nil, fmt.Errorf("compress ClickHouse history batch: %w", err)
 	}
 	if err := writer.Close(); err != nil {
-		writer.Reset(io.Discard)
-		historyGzipWriterPool.Put(writer)
 		return nil, fmt.Errorf("finalize compressed ClickHouse history batch: %w", err)
 	}
-	writer.Reset(io.Discard)
-	historyGzipWriterPool.Put(writer)
 	return buf.Bytes(), nil
 }
 

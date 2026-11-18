@@ -65,7 +65,7 @@ func (f *DeadbandFilter) Allow(sample DeadbandSample) bool {
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	emit, nextState := f.evaluateLocked(key, sample, observedAt)
+	emit, nextState := f.evaluateLocked(key, sample, observedAt, f.Deadband)
 	if emit {
 		if f.states == nil {
 			f.states = map[string]deadbandPointState{}
@@ -75,8 +75,19 @@ func (f *DeadbandFilter) Allow(sample DeadbandSample) bool {
 	return emit
 }
 
+// IsAnalog reports whether sample is a finite analog value eligible for deadband suppression.
+func (sample DeadbandSample) IsAnalog() bool {
+	_, ok := classifyDeadbandAnalogValue(sample)
+	return ok
+}
+
 // Check evaluates whether sample should be emitted without updating filter state.
 func (f *DeadbandFilter) Check(sample DeadbandSample) bool {
+	return f.CheckWithMinDeadband(sample, 0)
+}
+
+// CheckWithMinDeadband evaluates whether sample should be emitted using max(f.Deadband, minDeadband).
+func (f *DeadbandFilter) CheckWithMinDeadband(sample DeadbandSample, minDeadband float64) bool {
 	if !f.Enabled() {
 		return true
 	}
@@ -85,10 +96,11 @@ func (f *DeadbandFilter) Check(sample DeadbandSample) bool {
 		return true
 	}
 	observedAt := normalizeDeadbandTime(sample.ObservedAt)
+	threshold := f.effectiveDeadband(minDeadband)
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	emit, _ := f.evaluateLocked(key, sample, observedAt)
+	emit, _ := f.evaluateLocked(key, sample, observedAt, threshold)
 	return emit
 }
 
@@ -136,7 +148,15 @@ func (f *DeadbandFilter) Reset() {
 	f.mu.Unlock()
 }
 
-func (f *DeadbandFilter) evaluateLocked(key string, sample DeadbandSample, observedAt time.Time) (bool, deadbandPointState) {
+func (f *DeadbandFilter) effectiveDeadband(minDeadband float64) float64 {
+	threshold := f.Deadband
+	if !math.IsNaN(minDeadband) && !math.IsInf(minDeadband, 0) && minDeadband > threshold {
+		threshold = minDeadband
+	}
+	return threshold
+}
+
+func (f *DeadbandFilter) evaluateLocked(key string, sample DeadbandSample, observedAt time.Time, threshold float64) (bool, deadbandPointState) {
 	nextState := buildDeadbandState(sample, observedAt)
 	prev, hasPrev := f.states[key]
 	if !hasPrev {
@@ -151,7 +171,7 @@ func (f *DeadbandFilter) evaluateLocked(key string, sample DeadbandSample, obser
 	if f.MaxSilence > 0 && observedAt.Sub(prev.emittedAt) >= f.MaxSilence {
 		return true, nextState
 	}
-	if math.Abs(nextState.value-prev.value) >= f.Deadband {
+	if math.Abs(nextState.value-prev.value) >= threshold {
 		return true, nextState
 	}
 	return false, deadbandPointState{}

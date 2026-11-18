@@ -935,15 +935,16 @@ func (publisher *MQTTPublisher) buildEnvelopeWithObservations(measurements []Mea
 			Quality:    edgecontrol.Quality(strings.ToUpper(strings.TrimSpace(measurement.Quality))),
 			ObservedAt: measurement.ObservedAt,
 		}
+		pointDeadband := telemetryDeadband(point, publisher.configShadow.deadbandFor(measurement.DeviceID, strings.TrimSpace(point.PointCode)))
+		isAnalogSample := deadbandSample.IsAnalog()
 		if !fullSnapshotDue {
-			if deadbandFilter != nil {
-				if !deadbandFilter.Check(deadbandSample) {
+			if deadbandFilter != nil && isAnalogSample {
+				if !deadbandFilter.CheckWithMinDeadband(deadbandSample, pointDeadband) {
 					continue
 				}
 			} else {
-				deadband := telemetryDeadband(point, publisher.configShadow.deadbandFor(measurement.DeviceID, strings.TrimSpace(point.PointCode)))
 				prevState, hasPrev := snapshotCopy[refKey]
-				changed := !hasPrev || prevState.quality != quality || telemetryValueChanged(prevState.value, measurement.Value, deadband)
+				changed := !hasPrev || prevState.quality != quality || telemetryValueChanged(prevState.value, measurement.Value, pointDeadband)
 				if !changed {
 					continue
 				}
@@ -981,7 +982,7 @@ func (publisher *MQTTPublisher) buildEnvelopeWithObservations(measurements []Mea
 		}
 		if len(targets) > 0 {
 			updatedPointStates[refKey] = lastEmittedPointState{value: measurement.Value, quality: quality}
-			if deadbandFilter != nil {
+			if deadbandFilter != nil && isAnalogSample {
 				emittedDeadbandSamples = append(emittedDeadbandSamples, deadbandSample)
 			}
 			channelCode := strings.TrimSpace(point.PointCode)

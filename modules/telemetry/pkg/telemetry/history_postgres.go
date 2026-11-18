@@ -154,6 +154,7 @@ func encodeHistoryObservation(observation HistoryObservation) ([]byte, string, e
 
 type assignedHistoryBatch struct {
 	batchID     string
+	leaseID     string
 	sequence    uint64
 	state       string
 	leasedUntil *time.Time
@@ -172,10 +173,10 @@ func (repository *HistoryPostgresRepository) retryAttempts() int {
 }
 
 func (repository *HistoryPostgresRepository) ClaimHistoryBatch(ctx context.Context, limit int, now time.Time, leaseFor time.Duration) (HistoryBatch, error) {
-	return repository.ClaimPipelinedHistoryBatch(ctx, limit, now, leaseFor, 1)
+	return repository.ClaimPipelinedHistoryBatch(ctx, limit, now, leaseFor, nil, 1)
 }
 
-func (repository *HistoryPostgresRepository) ClaimPipelinedHistoryBatch(ctx context.Context, maxEvents int, now time.Time, leaseFor time.Duration, maxInFlight int) (HistoryBatch, error) {
+func (repository *HistoryPostgresRepository) ClaimPipelinedHistoryBatch(ctx context.Context, maxEvents int, now time.Time, leaseFor time.Duration, activeLeaseIDs []string, maxInFlight int) (HistoryBatch, error) {
 	if repository == nil || repository.pool == nil {
 		return HistoryBatch{}, errors.New("telemetry history repository is closed")
 	}
@@ -183,7 +184,7 @@ func (repository *HistoryPostgresRepository) ClaimPipelinedHistoryBatch(ctx cont
 		return HistoryBatch{}, errors.New("telemetry history claim parameters are invalid")
 	}
 	for attempt := 0; attempt < repository.retryAttempts(); attempt++ {
-		batch, err := repository.claimPipelinedHistoryBatchOnce(ctx, maxEvents, now, leaseFor, maxInFlight)
+		batch, err := repository.claimPipelinedHistoryBatchOnce(ctx, maxEvents, now, leaseFor, activeLeaseIDs, maxInFlight)
 		if err == nil || ctx.Err() != nil || !retryableTelemetryTransaction(err) {
 			return batch, err
 		}
@@ -191,7 +192,7 @@ func (repository *HistoryPostgresRepository) ClaimPipelinedHistoryBatch(ctx cont
 	return HistoryBatch{}, errors.New("telemetry history claim transaction retry budget exhausted")
 }
 
-func (repository *HistoryPostgresRepository) claimPipelinedHistoryBatchOnce(ctx context.Context, limit int, now time.Time, leaseFor time.Duration, maxInFlight int) (HistoryBatch, error) {
+func (repository *HistoryPostgresRepository) claimPipelinedHistoryBatchOnce(ctx context.Context, limit int, now time.Time, leaseFor time.Duration, activeLeaseIDs []string, maxInFlight int) (HistoryBatch, error) {
 	nowUTC := now.UTC()
 	leaseID, err := repository.newLeaseID(nowUTC)
 	if err != nil {
@@ -208,9 +209,10 @@ func (repository *HistoryPostgresRepository) claimPipelinedHistoryBatchOnce(ctx 
 
 	batchRows, err := tx.Query(ctx, `
 SELECT batch_id::text,
+       COALESCE(MAX(lease_id::text) FILTER (WHERE delivery_state = 'IN_FLIGHT'), '') AS lease_id,
        batch_sequence,
        CASE WHEN bool_or(delivery_state = 'IN_FLIGHT') THEN 'IN_FLIGHT' ELSE 'PENDING' END AS delivery_state,
-       MAX(leased_until) AS leased_until,
+       MAX(leased_until) FILTER (WHERE delivery_state = 'IN_FLIGHT') AS leased_until,
        MIN(available_at) AS available_at
 FROM telemetry_runtime.telemetry_history_outbox
 WHERE batch_id IS NOT NULL AND delivery_state IN ('PENDING', 'IN_FLIGHT')
@@ -223,7 +225,7 @@ ORDER BY batch_sequence ASC, batch_id ASC
 	var existingBatches []assignedHistoryBatch
 	for batchRows.Next() {
 		var item assignedHistoryBatch
-		if scanErr := batchRows.Scan(&item.batchID, &item.sequence, &item.state, &item.leasedUntil, &item.availableAt); scanErr != nil {
+		if scanErr := batchRows.Scan(&item.batchID, &item.leaseID, &item.sequence, &item.state, &item.leasedUntil, &item.availableAt); scanErr != nil {
 			batchRows.Close()
 			return HistoryBatch{}, fmt.Errorf("scan telemetry history batch: %w", scanErr)
 		}
@@ -235,25 +237,41 @@ ORDER BY batch_sequence ASC, batch_id ASC
 	}
 	batchRows.Close()
 
-	activeInFlight := 0
-	for _, item := range existingBatches {
-		if item.state == "IN_FLIGHT" && item.leasedUntil != nil && item.leasedUntil.After(nowUTC) {
-			activeInFlight++
+	owned := make(map[string]struct{}, len(activeLeaseIDs))
+	for _, id := range activeLeaseIDs {
+		if id != "" {
+			owned[id] = struct{}{}
 		}
-	}
-	if activeInFlight >= maxInFlight {
-		if commitErr := tx.Commit(ctx); commitErr != nil {
-			return HistoryBatch{}, fmt.Errorf("commit busy telemetry history claim: %w", commitErr)
-		}
-		return HistoryBatch{}, nil
 	}
 
+	activeOwned := 0
 	var batchID string
 	var sequence uint64
 	newBatch := true
 	for _, item := range existingBatches {
-		if item.state == "IN_FLIGHT" && item.leasedUntil != nil && item.leasedUntil.After(nowUTC) {
-			continue
+		if item.state == "IN_FLIGHT" {
+			if item.leaseID != "" {
+				if _, isOwned := owned[item.leaseID]; isOwned {
+					activeOwned++
+					if activeOwned >= maxInFlight {
+						if commitErr := tx.Commit(ctx); commitErr != nil {
+							return HistoryBatch{}, fmt.Errorf("commit busy telemetry history claim: %w", commitErr)
+						}
+						return HistoryBatch{}, nil
+					}
+					continue
+				}
+			}
+			if item.leasedUntil != nil && item.leasedUntil.After(nowUTC) {
+				if commitErr := tx.Commit(ctx); commitErr != nil {
+					return HistoryBatch{}, fmt.Errorf("commit blocked telemetry history claim: %w", commitErr)
+				}
+				return HistoryBatch{}, nil
+			}
+			batchID = item.batchID
+			sequence = item.sequence
+			newBatch = false
+			break
 		}
 		if item.state == "PENDING" && item.availableAt.After(nowUTC) {
 			if commitErr := tx.Commit(ctx); commitErr != nil {
@@ -458,11 +476,11 @@ WHERE lease_id = $1::uuid AND delivery_state = 'IN_FLIGHT'
 	return nil
 }
 
-func (repository *HistoryPostgresRepository) ReleaseHistoryBatchLease(ctx context.Context, batchID string, now time.Time) error {
+func (repository *HistoryPostgresRepository) ReleaseHistoryBatchLease(ctx context.Context, leaseID string, now time.Time) error {
 	if repository == nil || repository.pool == nil {
 		return errors.New("telemetry history repository is closed")
 	}
-	if batchID == "" || now.IsZero() {
+	if leaseID == "" || now.IsZero() {
 		return errors.New("telemetry history lease release parameters are invalid")
 	}
 	command, err := repository.pool.Exec(ctx, `
@@ -473,8 +491,8 @@ SET delivery_state = 'PENDING',
     lease_id = NULL,
     leased_until = NULL,
     attempts = GREATEST(attempts - 1, 0)
-WHERE batch_id = $1::uuid AND delivery_state = 'IN_FLIGHT'
-`, batchID, now.UTC())
+WHERE lease_id = $1::uuid AND delivery_state = 'IN_FLIGHT'
+`, leaseID, now.UTC())
 	if err != nil {
 		return fmt.Errorf("release telemetry history batch lease: %w", err)
 	}

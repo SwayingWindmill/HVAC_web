@@ -330,6 +330,49 @@ func (c *byteCountWriter) Write(p []byte) (int, error) {
 	return written, err
 }
 
+func writeJSONEachRowGzipStream(gzWriter *gzip.Writer, body io.Reader) (int64, error) {
+	reader := bufio.NewReaderSize(body, 64<<10)
+	var rowCount int64
+	for {
+		line, readErr := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			trimmed := bytes.TrimSpace(line)
+			if len(trimmed) > 0 {
+				if !json.Valid(trimmed) {
+					return 0, errors.New("ClickHouse cold archive stream returned invalid JSONEachRow line")
+				}
+				if _, writeErr := gzWriter.Write(trimmed); writeErr != nil {
+					return 0, fmt.Errorf("write compressed cold archive row: %w", writeErr)
+				}
+				if _, writeErr := gzWriter.Write([]byte{'\n'}); writeErr != nil {
+					return 0, fmt.Errorf("write compressed cold archive delimiter: %w", writeErr)
+				}
+				rowCount++
+			}
+		}
+		if errors.Is(readErr, io.EOF) {
+			return rowCount, nil
+		}
+		if readErr != nil {
+			return 0, fmt.Errorf("read ClickHouse cold archive stream: %w", readErr)
+		}
+	}
+}
+
+func commitColdArchiveTempFile(tmpFile *os.File, tmpPath, finalPath, label string) error {
+	if err := tmpFile.Sync(); err != nil {
+		_ = tmpFile.Close()
+		return fmt.Errorf("sync %s: %w", label, err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("close %s: %w", label, err)
+	}
+	if err := os.Rename(tmpPath, finalPath); err != nil {
+		return fmt.Errorf("commit %s: %w", label, err)
+	}
+	return nil
+}
+
 func streamJSONEachRowGzipAtomic(dir, sliceBase, finalPath string, body io.Reader) (int64, int64, string, error) {
 	tmpFile, err := os.CreateTemp(dir, sliceBase+".jsonl.gz.*.tmp")
 	if err != nil {
@@ -347,39 +390,11 @@ func streamJSONEachRowGzipAtomic(dir, sliceBase, finalPath string, body io.Reade
 	counter := &byteCountWriter{w: io.MultiWriter(tmpFile, hasher)}
 	gzWriter := gzip.NewWriter(counter)
 
-	reader := bufio.NewReaderSize(body, 64<<10)
-	var rowCount int64
-	for {
-		line, readErr := reader.ReadBytes('\n')
-		if len(line) > 0 {
-			trimmed := bytes.TrimSpace(line)
-			if len(trimmed) > 0 {
-				if !json.Valid(trimmed) {
-					_ = gzWriter.Close()
-					_ = tmpFile.Close()
-					return 0, 0, "", errors.New("ClickHouse cold archive stream returned invalid JSONEachRow line")
-				}
-				if _, writeErr := gzWriter.Write(trimmed); writeErr != nil {
-					_ = gzWriter.Close()
-					_ = tmpFile.Close()
-					return 0, 0, "", fmt.Errorf("write compressed cold archive row: %w", writeErr)
-				}
-				if _, writeErr := gzWriter.Write([]byte{'\n'}); writeErr != nil {
-					_ = gzWriter.Close()
-					_ = tmpFile.Close()
-					return 0, 0, "", fmt.Errorf("write compressed cold archive delimiter: %w", writeErr)
-				}
-				rowCount++
-			}
-		}
-		if errors.Is(readErr, io.EOF) {
-			break
-		}
-		if readErr != nil {
-			_ = gzWriter.Close()
-			_ = tmpFile.Close()
-			return 0, 0, "", fmt.Errorf("read ClickHouse cold archive stream: %w", readErr)
-		}
+	rowCount, err := writeJSONEachRowGzipStream(gzWriter, body)
+	if err != nil {
+		_ = gzWriter.Close()
+		_ = tmpFile.Close()
+		return 0, 0, "", err
 	}
 
 	// Close gzip before finalizing size and SHA-256 so the trailer bytes are included.
@@ -387,15 +402,8 @@ func streamJSONEachRowGzipAtomic(dir, sliceBase, finalPath string, body io.Reade
 		_ = tmpFile.Close()
 		return 0, 0, "", fmt.Errorf("finalize compressed cold archive: %w", err)
 	}
-	if err := tmpFile.Sync(); err != nil {
-		_ = tmpFile.Close()
-		return 0, 0, "", fmt.Errorf("sync cold archive file: %w", err)
-	}
-	if err := tmpFile.Close(); err != nil {
-		return 0, 0, "", fmt.Errorf("close cold archive file: %w", err)
-	}
-	if err := os.Rename(tmpPath, finalPath); err != nil {
-		return 0, 0, "", fmt.Errorf("commit cold archive file: %w", err)
+	if err := commitColdArchiveTempFile(tmpFile, tmpPath, finalPath, "cold archive file"); err != nil {
+		return 0, 0, "", err
 	}
 	cleanup = false
 	return rowCount, counter.n, hex.EncodeToString(hasher.Sum(nil)), nil
@@ -424,15 +432,8 @@ func writeColdArchiveManifestAtomic(dir, sliceBase, finalPath string, manifest C
 		_ = tmpFile.Close()
 		return fmt.Errorf("write cold archive manifest: %w", err)
 	}
-	if err := tmpFile.Sync(); err != nil {
-		_ = tmpFile.Close()
-		return fmt.Errorf("sync cold archive manifest: %w", err)
-	}
-	if err := tmpFile.Close(); err != nil {
-		return fmt.Errorf("close cold archive manifest: %w", err)
-	}
-	if err := os.Rename(tmpPath, finalPath); err != nil {
-		return fmt.Errorf("commit cold archive manifest: %w", err)
+	if err := commitColdArchiveTempFile(tmpFile, tmpPath, finalPath, "cold archive manifest"); err != nil {
+		return err
 	}
 	cleanup = false
 	return nil

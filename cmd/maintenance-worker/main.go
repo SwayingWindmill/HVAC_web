@@ -141,42 +141,46 @@ func runLifecycleAudit(ctx context.Context, store lifecycleAuditor, coldArchiveD
 	}
 
 	if archiveDir != "" {
-		report, archiveErr := maintenance.VerifyColdArchiveDirectory(auditCtx, archiveDir, now)
-		if archiveErr != nil {
-			if metrics != nil {
-				_ = metrics.AddCounter("maintenance_cold_archive_audit_error_total", "Maintenance cold archive integrity audit errors.", nil, 1)
-			}
-			if logger != nil {
-				logger.Warn("maintenance_cold_archive_audit_failed", "error_code", "MAINTENANCE_COLD_ARCHIVE_AUDIT_FAILED")
-			}
-			return
-		}
+		runColdArchiveAudit(auditCtx, archiveDir, now, metrics, logger)
+	}
+}
+
+func runColdArchiveAudit(ctx context.Context, archiveDir string, now time.Time, metrics *observability.Registry, logger *slog.Logger) {
+	report, archiveErr := maintenance.VerifyColdArchiveDirectory(ctx, archiveDir, now)
+	if archiveErr != nil {
 		if metrics != nil {
-			_ = metrics.AddCounter("maintenance_cold_archive_audit_total", "Maintenance cold archive integrity audits.", nil, 1)
-			if !report.Healthy() {
-				_ = metrics.AddCounter("maintenance_cold_archive_audit_findings_total", "Maintenance cold archive integrity findings detected.", nil, float64(len(report.Findings)))
-			}
+			_ = metrics.AddCounter("maintenance_cold_archive_audit_error_total", "Maintenance cold archive integrity audit errors.", nil, 1)
 		}
-		if !report.Healthy() && logger != nil {
-			logger.Warn(
-				"maintenance_cold_archive_integrity_findings",
-				"error_code", "MAINTENANCE_COLD_ARCHIVE_INTEGRITY_FINDINGS",
-				"manifests_checked", report.ManifestsChecked,
-				"verified_count", report.VerifiedCount,
-				"temp_files_scanned", report.TempFilesScanned,
-				"stale_temp_count", report.StaleTempCount,
-				"corrupt_count", report.CorruptCount,
-				"missing_count", report.MissingCount,
-				"findings", len(report.Findings),
-			)
-		} else if report.ManifestsChecked > 0 && logger != nil {
-			logger.Info(
-				"maintenance_cold_archive_audit_completed",
-				"manifests_checked", report.ManifestsChecked,
-				"verified_count", report.VerifiedCount,
-				"temp_files_scanned", report.TempFilesScanned,
-			)
+		if logger != nil {
+			logger.Warn("maintenance_cold_archive_audit_failed", "error_code", "MAINTENANCE_COLD_ARCHIVE_AUDIT_FAILED")
 		}
+		return
+	}
+	if metrics != nil {
+		_ = metrics.AddCounter("maintenance_cold_archive_audit_total", "Maintenance cold archive integrity audits.", nil, 1)
+		if !report.Healthy() {
+			_ = metrics.AddCounter("maintenance_cold_archive_audit_findings_total", "Maintenance cold archive integrity findings detected.", nil, float64(len(report.Findings)))
+		}
+	}
+	if !report.Healthy() && logger != nil {
+		logger.Warn(
+			"maintenance_cold_archive_integrity_findings",
+			"error_code", "MAINTENANCE_COLD_ARCHIVE_INTEGRITY_FINDINGS",
+			"manifests_checked", report.ManifestsChecked,
+			"verified_count", report.VerifiedCount,
+			"temp_files_scanned", report.TempFilesScanned,
+			"stale_temp_count", report.StaleTempCount,
+			"corrupt_count", report.CorruptCount,
+			"missing_count", report.MissingCount,
+			"findings", len(report.Findings),
+		)
+	} else if report.ManifestsChecked > 0 && logger != nil {
+		logger.Info(
+			"maintenance_cold_archive_audit_completed",
+			"manifests_checked", report.ManifestsChecked,
+			"verified_count", report.VerifiedCount,
+			"temp_files_scanned", report.TempFilesScanned,
+		)
 	}
 }
 

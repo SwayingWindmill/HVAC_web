@@ -170,3 +170,34 @@ func TestDeadbandFilterCheckMarkEmittedForgetAndReset(t *testing.T) {
 		t.Fatal("sample after Reset should pass as first sample")
 	}
 }
+
+func TestDeadbandSampleIsAnalogAndCheckWithMinDeadband(t *testing.T) {
+	t0 := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	if !(DeadbandSample{PointType: "TELEMETRY", ValueType: "NUMBER", Value: 22.5}).IsAnalog() {
+		t.Fatal("expected TELEMETRY NUMBER to be analog")
+	}
+	for _, nonAnalog := range []DeadbandSample{
+		{PointType: "STATE", ValueType: "STRING", Value: "RUNNING"},
+		{PointType: "TELEMETRY", ValueType: "BOOLEAN", Value: true},
+		{PointType: "COUNTER", ValueType: "NUMBER", Value: 100.0},
+		{PointType: "TELEMETRY", ValueType: "NUMBER", Value: math.NaN()},
+	} {
+		if nonAnalog.IsAnalog() {
+			t.Fatalf("expected non-analog sample to report IsAnalog=false: %+v", nonAnalog)
+		}
+	}
+
+	filter := NewDeadbandFilter(0.5, 60*time.Second)
+	baseline := DeadbandSample{Key: "zone.pressure", PointType: "TELEMETRY", ValueType: "NUMBER", Value: 10.0, Quality: QualityGood, ObservedAt: t0}
+	filter.MarkEmitted(baseline)
+
+	if filter.CheckWithMinDeadband(DeadbandSample{Key: "zone.pressure", PointType: "TELEMETRY", ValueType: "NUMBER", Value: 11.2, Quality: QualityGood, ObservedAt: t0.Add(10 * time.Second)}, 2.0) {
+		t.Fatal("delta 1.2 within minDeadband 2.0 (> global 0.5) should be suppressed")
+	}
+	if !filter.CheckWithMinDeadband(DeadbandSample{Key: "zone.pressure", PointType: "TELEMETRY", ValueType: "NUMBER", Value: 12.1, Quality: QualityGood, ObservedAt: t0.Add(20 * time.Second)}, 2.0) {
+		t.Fatal("delta 2.1 exceeding minDeadband 2.0 should emit")
+	}
+	if !filter.CheckWithMinDeadband(DeadbandSample{Key: "zone.pressure", PointType: "TELEMETRY", ValueType: "NUMBER", Value: 10.0, Quality: QualityGood, ObservedAt: t0.Add(60 * time.Second)}, 2.0) {
+		t.Fatal("MaxSilence heartbeat should still emit with minDeadband override")
+	}
+}

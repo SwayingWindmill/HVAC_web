@@ -188,7 +188,18 @@ func validateColdArchiveRoot(dir string) (string, error) {
 	if !info.IsDir() {
 		return "", errors.New("cold archive path must be a directory")
 	}
-	return cleanDir, nil
+	resolvedDir, err := filepath.EvalSymlinks(cleanDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve cold archive symlink: %w", err)
+	}
+	resolvedInfo, err := os.Stat(resolvedDir)
+	if err != nil {
+		return "", fmt.Errorf("inspect resolved cold archive directory: %w", err)
+	}
+	if !resolvedInfo.IsDir() {
+		return "", errors.New("resolved cold archive path must be a directory")
+	}
+	return resolvedDir, nil
 }
 
 func verifyManifestEntry(rootDir, manifestPath, relSlash string) (ColdArchiveFinding, bool) {
