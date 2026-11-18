@@ -1,0 +1,11 @@
+<clickhouse>
+    <!-- Restrict the passwordless default user to container loopback so peer containers cannot query or drop tables over the network. -->
+    <users>
+        <default>
+            <networks replace="replace">
+                <ip>127.0.0.1</ip>
+                <ip>::1</ip>
+            </networks>
+        </default>
+    </users>
+</clickhouse>

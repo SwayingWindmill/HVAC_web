@@ -17,6 +17,8 @@
     <query_metric_log remove="1"/>
     <background_schedule_pool_log remove="1"/>
     <asynchronous_insert_log remove="1"/>
+    <transactions_info_log remove="1"/>
+    <blob_storage_log remove="1"/>
     <!-- query_log is what we read when a write fails (see docs/operations/alerts.md). Three days covers a
          weekend; at about 780k queries a day seven days grew it past the telemetry itself (718 MiB vs
          482 MiB on 2026-10-29). Changing this TTL makes ClickHouse rename the old table to
@@ -24,4 +26,10 @@
     <query_log>
         <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
     </query_log>
+    <backup_log>
+        <ttl>event_date + INTERVAL 30 DAY DELETE</ttl>
+    </backup_log>
+    <crash_log>
+        <ttl>event_date + INTERVAL 14 DAY DELETE</ttl>
+    </crash_log>
 </clickhouse>
