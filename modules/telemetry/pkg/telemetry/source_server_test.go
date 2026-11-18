@@ -547,3 +547,32 @@ func TestSourceEndpointsPropagateTraceIDAndTraceparentFallback(t *testing.T) {
 		t.Fatalf("events[2].TraceID=%q, want empty", eventAcceptor.events[2].TraceID)
 	}
 }
+
+func TestSourceRequestMapsEdgeReplayFlag(t *testing.T) {
+	obsAcceptor := &fakeObservationAcceptor{}
+	handler := NewHandler(ServerConfig{
+		ObservationAcceptor: obsAcceptor,
+		AllowedSourceSPIFFE: mqttSourceSPIFFE,
+	})
+	body := `{"observations":[
+		{"sourceId":"` + sourceA + `","sourcePath":"PUSH","externalEntityType":"DEVICE","externalId":"CHILLER-01",` + resolvedIdentityJSON + `,"telemetryKey":"zone.temperature","value":23.5,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-07-24T01:00:00Z","sourcePosition":{"partition":"tb-telemetry-0","offset":100,"eventId":"` + eventA + `"},"edgeReplay":true},
+		{"sourceId":"` + sourceA + `","sourcePath":"PUSH","externalEntityType":"DEVICE","externalId":"CHILLER-01",` + resolvedIdentityJSON + `,"telemetryKey":"zone.temperature","value":24.0,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-07-24T02:00:00Z","sourcePosition":{"partition":"tb-telemetry-0","offset":101,"eventId":"018f2e00-8000-7000-8000-000000000012"}}
+	]}`
+	request := httptest.NewRequest(http.MethodPost, InternalSourceObservationBatchPath, strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.TLS = verifiedTLSState(mqttSourceSPIFFE)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if len(obsAcceptor.candidates) != 2 {
+		t.Fatalf("candidates=%d, want 2", len(obsAcceptor.candidates))
+	}
+	if !obsAcceptor.candidates[0].EdgeReplay {
+		t.Fatal("expected edgeReplay=true on first candidate")
+	}
+	if obsAcceptor.candidates[1].EdgeReplay {
+		t.Fatal("expected edgeReplay=false when omitted on second candidate")
+	}
+}

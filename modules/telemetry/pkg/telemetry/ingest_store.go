@@ -139,7 +139,7 @@ func (store *PostgresStore) AcceptHistoricalObservationBatch(ctx context.Context
 		return nil, errors.New("telemetry historical observation batch size is invalid")
 	}
 	for _, candidate := range candidates {
-		if candidate.SourcePath != SourcePathHistoryReplay || candidate.ExternalEntityType != "DEVICE" || candidate.Device != nil || candidate.Point != nil {
+		if candidate.SourcePath != SourcePathHistoryReplay || candidate.ExternalEntityType != "DEVICE" || candidate.Device != nil || candidate.Point != nil || candidate.EdgeReplay {
 			return nil, errors.New("historical observation must use server-owned HISTORY_REPLAY Device provenance")
 		}
 	}
@@ -735,7 +735,11 @@ func evaluateBatchCandidates(
 
 	for index, candidate := range candidates {
 		facts, existingID := assembleObservationFacts(candidate, state)
-		decision := evaluate(candidate, facts, candidate.ReceivedAt)
+		candidateEvaluator := evaluate
+		if candidate.EdgeReplay && candidate.SourcePath != SourcePathHistoryReplay {
+			candidateEvaluator = EvaluateEdgeReplayObservation
+		}
+		decision := candidateEvaluator(candidate, facts, candidate.ReceivedAt)
 
 		if !decision.AdvancePosition {
 			evidenceID, err := newEventID(candidate.ReceivedAt)
@@ -1003,14 +1007,17 @@ func recordInMemoryAndPlanIdentity(
 		return
 	}
 	device := *candidate.Device
-	if _, exists := state.knownDevices[device.DeviceID]; !exists {
+	_, knownDevice := state.knownDevices[device.DeviceID]
+	if !knownDevice {
 		state.knownDevices[device.DeviceID] = device
 	}
-	if _, queued := deviceIndex[device.DeviceID]; !queued {
-		deviceIndex[device.DeviceID] = len(plan.devices)
-		plan.devices = append(plan.devices, deviceInsertRow{device: device, receivedAt: candidate.ReceivedAt})
+	if !candidate.EdgeReplay || !knownDevice {
+		if _, queued := deviceIndex[device.DeviceID]; !queued {
+			deviceIndex[device.DeviceID] = len(plan.devices)
+			plan.devices = append(plan.devices, deviceInsertRow{device: device, receivedAt: candidate.ReceivedAt})
+		}
 	}
-	if candidate.Point == nil || decision.PointID == "" {
+	if candidate.EdgeReplay || candidate.Point == nil || decision.PointID == "" {
 		return
 	}
 	point := *candidate.Point

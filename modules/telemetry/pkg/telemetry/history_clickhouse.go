@@ -18,6 +18,14 @@ import (
 
 const maxHistoryBatchBytes = 8 << 20
 
+// ErrHistoryBatchPermanent marks a deterministic validation or schema error that retries cannot fix.
+var ErrHistoryBatchPermanent = errors.New("ClickHouse history batch rejected permanently")
+
+// IsPermanentHistoryError reports whether err is a permanent ClickHouse history failure.
+func IsPermanentHistoryError(err error) bool {
+	return errors.Is(err, ErrHistoryBatchPermanent)
+}
+
 var (
 	clickHouseIdentifierPattern    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
 	clickHousePayloadDigestPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
@@ -80,54 +88,62 @@ func (sink *ClickHouseHistorySink) InsertObservations(ctx context.Context, seque
 	var encoded bytes.Buffer
 	for _, observation := range observations {
 		observation.HistorySequence = sequence
-		if !uuidV7Pattern.MatchString(observation.ObservationID) {
-			return errors.New("ClickHouse history observation ID must be UUIDv7")
-		}
-		if !clickHousePayloadDigestPattern.MatchString(observation.PayloadSHA256) {
-			return errors.New("ClickHouse history payload digest must be lowercase SHA-256 hex")
-		}
-		if observation.AcceptanceStatus == string(ObservationAccepted) ||
-			(observation.AcceptanceStatus == string(ObservationOutOfOrder) && observation.PointID != nil) {
-			if observation.TenantID == nil || observation.SiteID == nil || observation.DeviceID == nil || observation.PointID == nil ||
-				!uuidV7Pattern.MatchString(*observation.TenantID) || !uuidV7Pattern.MatchString(*observation.SiteID) ||
-				!uuidV7Pattern.MatchString(*observation.DeviceID) || !uuidV7Pattern.MatchString(*observation.PointID) ||
-				(observation.SensorID != nil && !uuidV7Pattern.MatchString(*observation.SensorID)) {
-				return errors.New("resolved ClickHouse history observation requires UUIDv7 Tenant, Site, Device and Point scope")
-			}
-			if observation.PointType == nil || observation.PointRevision == nil || *observation.PointRevision < 1 {
-				return errors.New("resolved ClickHouse history observation requires Point type and revision semantics")
-			}
-			if *observation.PointType == "COUNTER" {
-				if observation.ValueType == nil || *observation.ValueType != "NUMBER" || observation.CounterDecreaseMode == nil {
-					return errors.New("counter history observation requires numeric value type and decrease semantics")
-				}
-				switch *observation.CounterDecreaseMode {
-				case "RESET_TO_ZERO", "INVALID":
-					if observation.CounterRolloverModulus != nil {
-						return errors.New("non-rollover Counter history observation cannot define a rollover modulus")
-					}
-				case "ROLLOVER":
-					if observation.CounterRolloverModulus == nil || *observation.CounterRolloverModulus <= 0 {
-						return errors.New("rollover Counter history observation requires a positive modulus")
-					}
-				default:
-					return errors.New("counter history observation decrease semantics are invalid")
-				}
-			} else if observation.CounterDecreaseMode != nil || observation.CounterRolloverModulus != nil {
-				return errors.New("non-Counter history observation cannot define Counter semantics")
-			}
+		if err := validateHistoryObservation(observation); err != nil {
+			return err
 		}
 		body, err := json.Marshal(observation)
 		if err != nil {
-			return fmt.Errorf("encode ClickHouse history observation %s: %w", observation.ObservationID, err)
+			return fmt.Errorf("%w: encode ClickHouse history observation %s: %w", ErrHistoryBatchPermanent, observation.ObservationID, err)
 		}
 		if encoded.Len()+len(body)+1 > maxHistoryBatchBytes {
-			return errors.New("ClickHouse history insert exceeds 8 MiB")
+			return fmt.Errorf("%w: ClickHouse history insert exceeds 8 MiB", ErrHistoryBatchPermanent)
 		}
 		encoded.Write(body)
 		encoded.WriteByte('\n')
 	}
 	return sink.insertBatch(ctx, encoded.Bytes())
+}
+
+func validateHistoryObservation(observation HistoryObservation) error {
+	if !uuidV7Pattern.MatchString(observation.ObservationID) {
+		return fmt.Errorf("%w: ClickHouse history observation ID must be UUIDv7", ErrHistoryBatchPermanent)
+	}
+	if !clickHousePayloadDigestPattern.MatchString(observation.PayloadSHA256) {
+		return fmt.Errorf("%w: ClickHouse history payload digest must be lowercase SHA-256 hex", ErrHistoryBatchPermanent)
+	}
+	if observation.AcceptanceStatus != string(ObservationAccepted) &&
+		(observation.AcceptanceStatus != string(ObservationOutOfOrder) || observation.PointID == nil) {
+		return nil
+	}
+	if observation.TenantID == nil || observation.SiteID == nil || observation.DeviceID == nil || observation.PointID == nil ||
+		!uuidV7Pattern.MatchString(*observation.TenantID) || !uuidV7Pattern.MatchString(*observation.SiteID) ||
+		!uuidV7Pattern.MatchString(*observation.DeviceID) || !uuidV7Pattern.MatchString(*observation.PointID) ||
+		(observation.SensorID != nil && !uuidV7Pattern.MatchString(*observation.SensorID)) {
+		return fmt.Errorf("%w: resolved ClickHouse history observation requires UUIDv7 Tenant, Site, Device and Point scope", ErrHistoryBatchPermanent)
+	}
+	if observation.PointType == nil || observation.PointRevision == nil || *observation.PointRevision < 1 {
+		return fmt.Errorf("%w: resolved ClickHouse history observation requires Point type and revision semantics", ErrHistoryBatchPermanent)
+	}
+	if *observation.PointType == "COUNTER" {
+		if observation.ValueType == nil || *observation.ValueType != "NUMBER" || observation.CounterDecreaseMode == nil {
+			return fmt.Errorf("%w: counter history observation requires numeric value type and decrease semantics", ErrHistoryBatchPermanent)
+		}
+		switch *observation.CounterDecreaseMode {
+		case "RESET_TO_ZERO", "INVALID":
+			if observation.CounterRolloverModulus != nil {
+				return fmt.Errorf("%w: non-rollover Counter history observation cannot define a rollover modulus", ErrHistoryBatchPermanent)
+			}
+		case "ROLLOVER":
+			if observation.CounterRolloverModulus == nil || *observation.CounterRolloverModulus <= 0 {
+				return fmt.Errorf("%w: rollover Counter history observation requires a positive modulus", ErrHistoryBatchPermanent)
+			}
+		default:
+			return fmt.Errorf("%w: counter history observation decrease semantics are invalid", ErrHistoryBatchPermanent)
+		}
+	} else if observation.CounterDecreaseMode != nil || observation.CounterRolloverModulus != nil {
+		return fmt.Errorf("%w: non-Counter history observation cannot define Counter semantics", ErrHistoryBatchPermanent)
+	}
+	return nil
 }
 
 func (sink *ClickHouseHistorySink) insertBatch(ctx context.Context, body []byte) error {
@@ -172,6 +188,9 @@ func (sink *ClickHouseHistorySink) insertBatch(ctx context.Context, body []byte)
 		message := strings.TrimSpace(string(responseBody))
 		if len(message) > 512 {
 			message = message[:512]
+		}
+		if response.StatusCode == http.StatusBadRequest {
+			return fmt.Errorf("%w: ClickHouse history insert returned %d for %s: %s", ErrHistoryBatchPermanent, response.StatusCode, token, message)
 		}
 		return fmt.Errorf("ClickHouse history insert returned %d for %s: %s", response.StatusCode, token, message)
 	}

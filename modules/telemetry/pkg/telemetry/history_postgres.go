@@ -197,13 +197,13 @@ FOR UPDATE
 		}
 		return HistoryBatch{}, nil
 	}
-	query := `SELECT event_id::text, payload, outbox_payload_sha256
+	query := `SELECT event_id::text, payload, outbox_payload_sha256, attempts
 FROM telemetry_runtime.telemetry_history_outbox
 WHERE batch_id = $1::uuid AND delivery_state IN ('PENDING','IN_FLIGHT')
 ORDER BY event_id FOR UPDATE`
 	args := []any{batchID}
 	if newBatch {
-		query = `SELECT event_id::text, payload, outbox_payload_sha256
+		query = `SELECT event_id::text, payload, outbox_payload_sha256, attempts
 FROM telemetry_runtime.telemetry_history_outbox
 WHERE batch_id IS NULL AND delivery_state = 'PENDING' AND available_at <= $1
 ORDER BY available_at, event_id LIMIT $2 FOR UPDATE SKIP LOCKED`
@@ -215,45 +215,56 @@ ORDER BY available_at, event_id LIMIT $2 FOR UPDATE SKIP LOCKED`
 	}
 	observations := make([]HistoryObservation, 0, limit)
 	eventIDs := make([]string, 0, limit)
+	invalidByCode := make(map[string][]string)
 	batchBytes := 0
+	maxAttempts := 0
 	for rows.Next() {
 		var eventID, expectedDigest string
 		var payload []byte
-		if err := rows.Scan(&eventID, &payload, &expectedDigest); err != nil {
+		var attempts int
+		if err := rows.Scan(&eventID, &payload, &expectedDigest, &attempts); err != nil {
 			rows.Close()
 			return HistoryBatch{}, fmt.Errorf("scan telemetry history row: %w", err)
 		}
-		var observation HistoryObservation
-		if err := json.Unmarshal(payload, &observation); err != nil {
-			rows.Close()
-			return HistoryBatch{}, fmt.Errorf("decode telemetry history row %s: %w", eventID, err)
+		observation, rowBytes, failureCode := validateClaimedHistoryRow(eventID, payload, expectedDigest)
+		if failureCode != "" {
+			invalidByCode[failureCode] = append(invalidByCode[failureCode], eventID)
+			continue
 		}
-		encoded, actualDigest, err := encodeHistoryObservation(observation)
-		if err != nil {
-			rows.Close()
-			return HistoryBatch{}, err
-		}
-		if observation.ObservationID != eventID || actualDigest != expectedDigest {
-			rows.Close()
-			return HistoryBatch{}, errors.New("telemetry history outbox payload is inconsistent")
-		}
-		if batchBytes+len(encoded)+1 > maxHistoryBatchBytes {
-			if newBatch && len(observations) > 0 {
+		if batchBytes+rowBytes > maxHistoryBatchBytes {
+			if len(observations) > 0 {
 				break
 			}
 			rows.Close()
 			return HistoryBatch{}, errors.New("telemetry history persisted batch exceeds 8 MiB")
 		}
-		batchBytes += len(encoded) + 1
+		batchBytes += rowBytes
 		observations = append(observations, observation)
 		eventIDs = append(eventIDs, eventID)
+		if nextAttempts := attempts + 1; nextAttempts > maxAttempts {
+			maxAttempts = nextAttempts
+		}
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
 		return HistoryBatch{}, fmt.Errorf("iterate telemetry history rows: %w", err)
 	}
 	rows.Close()
+	for code, invalidIDs := range invalidByCode {
+		if _, err := tx.Exec(ctx, `UPDATE telemetry_runtime.telemetry_history_outbox
+SET batch_id = NULL, batch_sequence = NULL, delivery_state = 'DEAD',
+    lease_id = NULL, leased_until = NULL, published_at = NULL,
+    dead_lettered_at = $2, last_error_code = $3
+WHERE event_id = ANY($1::uuid[])`, invalidIDs, now.UTC(), code); err != nil {
+			return HistoryBatch{}, fmt.Errorf("dead-letter invalid telemetry history rows: %w", err)
+		}
+	}
 	if len(observations) == 0 {
+		if len(invalidByCode) > 0 {
+			if err := tx.Commit(ctx); err != nil {
+				return HistoryBatch{}, fmt.Errorf("commit dead-lettered telemetry history claim: %w", err)
+			}
+		}
 		return HistoryBatch{}, nil
 	}
 	if newBatch {
@@ -271,7 +282,23 @@ WHERE event_id = ANY($4::uuid[])`, batchID, leaseID, now.UTC().Add(leaseFor), ev
 	if err := tx.Commit(ctx); err != nil {
 		return HistoryBatch{}, fmt.Errorf("commit telemetry history claim: %w", err)
 	}
-	return HistoryBatch{LeaseID: leaseID, BatchID: batchID, Sequence: sequence, Observations: observations}, nil
+	return HistoryBatch{LeaseID: leaseID, BatchID: batchID, Sequence: sequence, MaxAttempts: maxAttempts, Observations: observations}, nil
+}
+
+func validateClaimedHistoryRow(eventID string, payload []byte, expectedDigest string) (HistoryObservation, int, string) {
+	var observation HistoryObservation
+	if err := json.Unmarshal(payload, &observation); err != nil {
+		return HistoryObservation{}, 0, historyPayloadInvalidCode
+	}
+	encoded, actualDigest, err := encodeHistoryObservation(observation)
+	if err != nil || observation.ObservationID != eventID || actualDigest != expectedDigest {
+		return HistoryObservation{}, 0, historyPayloadInvalidCode
+	}
+	rowBytes := len(encoded) + 1
+	if rowBytes > maxHistoryBatchBytes {
+		return HistoryObservation{}, 0, historyRowTooLargeCode
+	}
+	return observation, rowBytes, ""
 }
 
 func (repository *HistoryPostgresRepository) MarkHistoryBatchPublished(ctx context.Context, leaseID string, publishedAt time.Time) error {
@@ -286,6 +313,54 @@ WHERE lease_id = $1::uuid AND delivery_state = 'IN_FLIGHT'
 `, leaseID, publishedAt.UTC())
 	if err != nil {
 		return fmt.Errorf("mark telemetry history batch published: %w", err)
+	}
+	if command.RowsAffected() == 0 {
+		return errors.New("telemetry history lease was not found")
+	}
+	return nil
+}
+
+func (repository *HistoryPostgresRepository) MarkHistoryEventsPublished(ctx context.Context, leaseID string, eventIDs []string, publishedAt time.Time) error {
+	if repository == nil || repository.pool == nil {
+		return errors.New("telemetry history repository is closed")
+	}
+	if len(eventIDs) == 0 {
+		return nil
+	}
+	command, err := repository.pool.Exec(ctx, `
+UPDATE telemetry_runtime.telemetry_history_outbox
+SET delivery_state = 'PUBLISHED', published_at = $3, last_error_code = NULL,
+    lease_id = NULL, leased_until = NULL
+WHERE lease_id = $1::uuid AND delivery_state = 'IN_FLIGHT' AND event_id = ANY($2::uuid[])
+`, leaseID, eventIDs, publishedAt.UTC())
+	if err != nil {
+		return fmt.Errorf("mark telemetry history events published: %w", err)
+	}
+	if command.RowsAffected() == 0 {
+		return errors.New("telemetry history lease was not found")
+	}
+	return nil
+}
+
+func (repository *HistoryPostgresRepository) DeadLetterHistoryEvents(ctx context.Context, leaseID string, eventIDs []string, errorCode string, deadLetteredAt time.Time) error {
+	if repository == nil || repository.pool == nil {
+		return errors.New("telemetry history repository is closed")
+	}
+	if errorCode == "" || len(errorCode) > 128 {
+		return errors.New("telemetry history dead-letter parameters are invalid")
+	}
+	if len(eventIDs) == 0 {
+		return nil
+	}
+	command, err := repository.pool.Exec(ctx, `
+UPDATE telemetry_runtime.telemetry_history_outbox
+SET batch_id = NULL, batch_sequence = NULL, delivery_state = 'DEAD',
+    lease_id = NULL, leased_until = NULL, published_at = NULL,
+    dead_lettered_at = $4, last_error_code = $3
+WHERE lease_id = $1::uuid AND delivery_state = 'IN_FLIGHT' AND event_id = ANY($2::uuid[])
+`, leaseID, eventIDs, errorCode, deadLetteredAt.UTC())
+	if err != nil {
+		return fmt.Errorf("dead-letter telemetry history events: %w", err)
 	}
 	if command.RowsAffected() == 0 {
 		return errors.New("telemetry history lease was not found")

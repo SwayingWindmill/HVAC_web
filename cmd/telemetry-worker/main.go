@@ -36,8 +36,12 @@ type telemetryWorkerShutdown struct {
 	Server           *http.Server
 	CancelWorkers    func()
 	WorkersWG        *sync.WaitGroup
+	DrainRelays      func(context.Context)
+	CancelAnalytics  func()
+	AnalyticsWG      *sync.WaitGroup
 	HTTPTimeout      time.Duration
 	WorkerTimeout    time.Duration
+	DrainTimeout     time.Duration
 	TelemetryTimeout time.Duration
 	CloseHistory     func()
 	CloseLatestCache func()
@@ -78,6 +82,21 @@ func shutdownTelemetryWorker(cfg telemetryWorkerShutdown) {
 	}
 	if !waitWorkersBounded(cfg.WorkersWG, workerTimeout) && cfg.Logger != nil {
 		cfg.Logger.Warn("telemetry_worker_shutdown_timed_out", "error_code", "TELEMETRY_WORKER_SHUTDOWN_TIMEOUT")
+	}
+	if cfg.DrainRelays != nil {
+		drainTimeout := cfg.DrainTimeout
+		if drainTimeout <= 0 {
+			drainTimeout = 10 * time.Second
+		}
+		drainCtx, cancelDrain := context.WithTimeout(context.Background(), drainTimeout)
+		cfg.DrainRelays(drainCtx)
+		cancelDrain()
+	}
+	if cfg.CancelAnalytics != nil {
+		cfg.CancelAnalytics()
+	}
+	if !waitWorkersBounded(cfg.AnalyticsWG, workerTimeout) && cfg.Logger != nil {
+		cfg.Logger.Warn("telemetry_analytics_shutdown_timed_out", "error_code", "TELEMETRY_ANALYTICS_SHUTDOWN_TIMEOUT")
 	}
 	if cfg.CloseHistory != nil {
 		cfg.CloseHistory()
@@ -132,11 +151,13 @@ func runTelemetryWorker() int {
 	})
 	logger := observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
 	var workersWG sync.WaitGroup
+	var analyticsWG sync.WaitGroup
 	var workerCancels []context.CancelFunc
 	shutdownCfg := telemetryWorkerShutdown{
 		Observability: observabilityRuntime,
 		Logger:        logger,
 		WorkersWG:     &workersWG,
+		AnalyticsWG:   &analyticsWG,
 		CancelWorkers: func() {
 			for _, cancel := range workerCancels {
 				if cancel != nil {
@@ -146,6 +167,7 @@ func runTelemetryWorker() int {
 		},
 		HTTPTimeout:      10 * time.Second,
 		WorkerTimeout:    10 * time.Second,
+		DrainTimeout:     10 * time.Second,
 		TelemetryTimeout: 2 * time.Second,
 	}
 	var shutdownOnce sync.Once
@@ -196,6 +218,18 @@ func runTelemetryWorker() int {
 	runSupervised(retentionContext, &workersWG, observabilityRuntime, logger, "telemetry.probe_offset_sweep", func() {
 		runProbeOffsetSweep(retentionContext, store, 5*time.Second, logger)
 	})
+	clickHousePruner, clickHouseRetentionCtx, clickHouseRetentionCancel, err := loadClickHouseRetentionPruner()
+	if err != nil {
+		logger.Error("telemetry_clickhouse_retention_configuration_invalid", "error_code", "TELEMETRY_CLICKHOUSE_RETENTION_CONFIGURATION_INVALID")
+		return 1
+	}
+	if clickHouseRetentionCancel != nil {
+		workerCancels = append(workerCancels, clickHouseRetentionCancel)
+		clickHouseRetentionInterval := durationEnv("TELEMETRY_RETENTION_CLICKHOUSE_INTERVAL", time.Hour, time.Minute, 24*time.Hour)
+		runSupervised(clickHouseRetentionCtx, &workersWG, observabilityRuntime, logger, "telemetry.clickhouse_retention", func() {
+			runClickHouseRetention(clickHouseRetentionCtx, clickHousePruner, clickHouseRetentionInterval, logger)
+		})
+	}
 
 	latestCache, latestRelay, latestContext, latestCancel, err := loadLatestCache(store)
 	if err != nil {
@@ -239,14 +273,14 @@ func runTelemetryWorker() int {
 		return 1
 	}
 	if analyticsCancel != nil {
-		workerCancels = append(workerCancels, analyticsCancel)
-		runSupervised(analyticsContext, &workersWG, observabilityRuntime, logger, "telemetry.analytics_projection", func() {
+		shutdownCfg.CancelAnalytics = analyticsCancel
+		runSupervised(analyticsContext, &analyticsWG, observabilityRuntime, logger, "telemetry.analytics_projection", func() {
 			runAnalyticsProjection(analyticsContext, analyticsProjector, observabilityRuntime, logger)
 		})
-		runSupervised(analyticsContext, &workersWG, observabilityRuntime, logger, "telemetry.price_window_projection", func() {
+		runSupervised(analyticsContext, &analyticsWG, observabilityRuntime, logger, "telemetry.price_window_projection", func() {
 			runPriceWindowProjection(analyticsContext, priceWindows, observabilityRuntime, logger)
 		})
-		runSupervised(analyticsContext, &workersWG, observabilityRuntime, logger, "telemetry.total_submeter_projection", func() {
+		runSupervised(analyticsContext, &analyticsWG, observabilityRuntime, logger, "telemetry.total_submeter_projection", func() {
 			runTotalSubmeterProjection(analyticsContext, totalSubmeters, observabilityRuntime, logger)
 		})
 	}
@@ -308,6 +342,23 @@ func runTelemetryWorker() int {
 		runSupervised(alarmContext, &workersWG, observabilityRuntime, logger, "telemetry.alarm_evaluation_relay", func() {
 			runAlarmEvaluationRelay(alarmContext, alarmRelay, logger)
 		})
+	}
+
+	var drainTargets telemetryRelayDrainTargets
+	if latestRelay != nil {
+		drainTargets.LatestCache = latestRelay
+	}
+	if realtimeService != nil {
+		drainTargets.Realtime = realtimeService
+	}
+	if alarmRelay != nil {
+		drainTargets.Alarm = alarmRelay
+	}
+	if historyRelay != nil {
+		drainTargets.History = historyRelay
+	}
+	shutdownCfg.DrainRelays = func(drainCtx context.Context) {
+		drainTelemetryRelays(drainCtx, drainTargets, logger)
 	}
 
 	rateLimiter, closeRateLimiter, err := loadTelemetryRateLimiter()
@@ -379,19 +430,19 @@ func runTelemetryWorker() int {
 	})
 	observabilityRuntime.MarkReady()
 
-	shutdown := make(chan os.Signal, 1)
-	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
-	defer signal.Stop(shutdown)
+	signalCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignals()
 
 	exitCode := 0
 	select {
-	case <-shutdown:
+	case <-signalCtx.Done():
 	case serveErr := <-serverErr:
 		if serveErr != nil {
 			logger.Error("telemetry_runtime_stopped_unexpectedly", "error_code", "TELEMETRY_RUNTIME_SERVE_FAILED")
 			exitCode = 1
 		}
 	}
+	stopSignals()
 	runShutdown()
 	if exitCode == 0 {
 		logger.Info("telemetry_runtime_stopped", "service", "telemetry-runtime-service")
@@ -818,8 +869,144 @@ func runRuntimeRetention(ctx context.Context, store *telemetry.PostgresStore, lo
 		case err != nil && ctx.Err() == nil:
 			logger.Warn("telemetry_runtime_retention_failed", "error_code", "TELEMETRY_RUNTIME_RETENTION_FAILED")
 		case pruned != (telemetry.PrunedRuntimeHistory{}):
-			logger.Info("telemetry_runtime_history_pruned", "presence_signals", pruned.PresenceSignals, "publications", pruned.Publications,
-				"history_events", pruned.HistoryEvents, "source_observations", pruned.SourceObservations)
+			logger.Info("telemetry_runtime_history_pruned",
+				"presence_signals", pruned.PresenceSignals,
+				"publications", pruned.Publications,
+				"dead_publications", pruned.DeadPublications,
+				"history_events", pruned.HistoryEvents,
+				"dead_history_events", pruned.DeadHistoryEvents,
+				"source_observations", pruned.SourceObservations,
+				"mqtt_runtime_events", pruned.MQTTRuntimeEvents,
+				"ingest_quarantines", pruned.IngestQuarantines,
+				"recovery_cursors", pruned.RecoveryCursors,
+				"subscriptions", pruned.Subscriptions)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+type telemetryRelayBatchDrainer interface {
+	RelayOnce(context.Context, int) (int, error)
+}
+
+type telemetryHistoryRelayDrainer interface {
+	RelayOnce(context.Context) (int, error)
+}
+
+type telemetryRelayDrainTargets struct {
+	LatestCache telemetryRelayBatchDrainer
+	Realtime    telemetryRelayBatchDrainer
+	Alarm       telemetryRelayBatchDrainer
+	History     telemetryHistoryRelayDrainer
+}
+
+func drainTelemetryRelays(ctx context.Context, targets telemetryRelayDrainTargets, logger *slog.Logger) {
+	if targets.LatestCache != nil {
+		if _, err := targets.LatestCache.RelayOnce(ctx, 64); err != nil && logger != nil {
+			logger.Warn("telemetry_latest_cache_shutdown_drain_failed", "error_code", "TELEMETRY_LATEST_CACHE_DRAIN_FAILED")
+		}
+	}
+	if targets.Realtime != nil {
+		if _, err := targets.Realtime.RelayOnce(ctx, 64); err != nil && logger != nil {
+			logger.Warn("telemetry_realtime_shutdown_drain_failed", "error_code", "TELEMETRY_REALTIME_DRAIN_FAILED")
+		}
+	}
+	if targets.Alarm != nil {
+		if _, err := targets.Alarm.RelayOnce(ctx, 64); err != nil && logger != nil {
+			logger.Warn("telemetry_alarm_shutdown_drain_failed", "error_code", "TELEMETRY_ALARM_DRAIN_FAILED")
+		}
+	}
+	if targets.History != nil {
+		if _, err := targets.History.RelayOnce(ctx); err != nil && logger != nil {
+			logger.Warn("telemetry_history_shutdown_drain_failed", "error_code", "TELEMETRY_HISTORY_DRAIN_FAILED")
+		}
+	}
+}
+
+func loadClickHouseRetentionPruner() (*telemetry.ClickHouseRetentionPruner, context.Context, context.CancelFunc, error) {
+	username := strings.TrimSpace(os.Getenv("TELEMETRY_RETENTION_CLICKHOUSE_USER"))
+	if username == "" {
+		return nil, context.Background(), nil, nil
+	}
+	baseURL := envOr("TELEMETRY_RETENTION_CLICKHOUSE_HTTP_URL", strings.TrimSpace(os.Getenv("TELEMETRY_CLICKHOUSE_HTTP_URL")))
+	if baseURL == "" {
+		return nil, nil, nil, errors.New("TELEMETRY_CLICKHOUSE_HTTP_URL is required when ClickHouse retention is enabled")
+	}
+	password := os.Getenv("TELEMETRY_RETENTION_CLICKHOUSE_PASSWORD")
+	if password == "" {
+		password = os.Getenv("TELEMETRY_CLICKHOUSE_PASSWORD")
+	}
+	legalHolds, err := parseClickHouseLegalHolds(os.Getenv("TELEMETRY_RETENTION_LEGAL_HOLDS"))
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	pruner, err := telemetry.NewClickHouseRetentionPruner(telemetry.ClickHouseRetentionConfig{
+		BaseURL:           baseURL,
+		HistoryDatabase:   envOr("TELEMETRY_CLICKHOUSE_DATABASE", "telemetry_history"),
+		AnalyticsDatabase: envOr("ANALYTICS_CLICKHOUSE_DATABASE", "analytics"),
+		Username:          username,
+		Password:          password,
+		LegalHolds:        legalHolds,
+	})
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	retentionContext, retentionCancel := context.WithCancel(context.Background())
+	return pruner, retentionContext, retentionCancel, nil
+}
+
+func parseClickHouseLegalHolds(raw string) ([]telemetry.ClickHouseLegalHoldScope, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil, nil
+	}
+	entries := strings.Split(trimmed, ",")
+	holds := make([]telemetry.ClickHouseLegalHoldScope, 0, len(entries))
+	for _, entry := range entries {
+		item := strings.TrimSpace(entry)
+		if item == "" {
+			continue
+		}
+		tenantID, siteID, hasSite := strings.Cut(item, ":")
+		scope := telemetry.ClickHouseLegalHoldScope{TenantID: strings.TrimSpace(tenantID)}
+		if hasSite {
+			scope.SiteID = strings.TrimSpace(siteID)
+		}
+		holds = append(holds, scope)
+	}
+	return holds, nil
+}
+
+type clickHouseRetentionExecutor interface {
+	Prune(context.Context, time.Time) (telemetry.ClickHouseRetentionResult, error)
+}
+
+func runClickHouseRetention(ctx context.Context, pruner clickHouseRetentionExecutor, interval time.Duration, logger *slog.Logger) {
+	if pruner == nil {
+		return
+	}
+	if interval <= 0 {
+		interval = time.Hour
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		pruneCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		result, err := pruner.Prune(pruneCtx, time.Now())
+		cancel()
+		switch {
+		case err != nil && ctx.Err() == nil:
+			if logger != nil {
+				logger.Warn("telemetry_clickhouse_retention_failed", "error_code", "TELEMETRY_CLICKHOUSE_RETENTION_FAILED")
+			}
+		case len(result.SubmittedTables) > 0:
+			if logger != nil {
+				logger.Info("telemetry_clickhouse_retention_submitted", "table_count", len(result.SubmittedTables))
+			}
 		}
 		select {
 		case <-ctx.Done():
