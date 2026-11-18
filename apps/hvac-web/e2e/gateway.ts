@@ -1287,16 +1287,20 @@ export class Gateway {
       const limit = typeof body?.limit === 'number' && Number.isFinite(body.limit)
         ? Math.max(1, Math.min(100, body.limit))
         : 100;
+      const categorySet = typeof body?.category === 'string' && body.category
+        ? new Set(body.category === 'control-schedule' ? ['control-lock', 'operating-schedule'] : [body.category])
+        : null;
       const items = this.auditRecords
         .filter((record) =>
           (!body?.actor || record.actor === body.actor)
           && (!body?.action || record.action === body.action)
           && (!body?.resourceType || record.resourceType === body.resourceType)
+          && (!categorySet || (typeof record.resourceType === 'string' && categorySet.has(record.resourceType)))
           && (!body?.resourceId || record.resourceId === body.resourceId)
           && (!body?.outcome || record.outcome === body.outcome)
-          && (!body?.from || Date.parse(record.occurredAt) >= Date.parse(body.from))
-          && (!body?.to || Date.parse(record.occurredAt) <= Date.parse(body.to)))
-        .sort((left, right) => right.ledgerSequence - left.ledgerSequence)
+          && (!body?.from || Date.parse(String(record.occurredAt ?? '')) >= Date.parse(String(body.from)))
+          && (!body?.to || Date.parse(String(record.occurredAt ?? '')) <= Date.parse(String(body.to))))
+        .sort((left, right) => Number(right.ledgerSequence ?? 0) - Number(left.ledgerSequence ?? 0))
         .slice(0, limit);
       return { body: { items } };
     }

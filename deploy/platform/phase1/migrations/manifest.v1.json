@@ -35,7 +35,8 @@
         "infra/durability/postgres/init/006-s04-audit-search.sql",
         "infra/durability/postgres/init/007-audit-postgres-outbox-transport.sql",
         "infra/durability/postgres/init/008-session-client.sql",
-        "infra/durability/postgres/init/009-schema-and-table-comments.sql"
+        "infra/durability/postgres/init/009-schema-and-table-comments.sql",
+        "infra/durability/postgres/init/operations-domain-audit-ledger.sql"
       ]
     },
     {

@@ -13,6 +13,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
+	"github.com/quanlaihe/hvac-web/modules/audit/pkg/auditserver"
 )
 
 type publicOperatingScheduleRoute struct {
@@ -143,13 +144,22 @@ func dispatchOperatingScheduleRoute(h *handler, writer http.ResponseWriter, requ
 	readAuth, readFailure := h.authorizeRegistry(request.Context(), session, registryauth.ActionSiteRead)
 	if readFailure != nil {
 		if readFailure.status == http.StatusForbidden || readFailure.status == http.StatusNotFound {
+			if route.write {
+				h.emitOperatingScheduleOutcome(request, session, route, nil, auditOutcomeDenied, "SITE_SCOPE_FORBIDDEN")
+			}
 			writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
 			return
+		}
+		if route.write {
+			h.emitOperatingScheduleOutcome(request, session, route, nil, auditOutcomeForStatus(readFailure.status), readFailure.code)
 		}
 		writeProblem(writer, request, readFailure.status, readFailure.code, readFailure.title, readFailure.detail, readFailure.retryable, nil)
 		return
 	}
 	if _, visible := readAuth.allowedSiteIDs[route.siteID]; !visible {
+		if route.write {
+			h.emitOperatingScheduleOutcome(request, session, route, nil, auditOutcomeDenied, "SITE_SCOPE_FORBIDDEN")
+		}
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
 		return
 	}
@@ -163,10 +173,12 @@ func dispatchOperatingScheduleRoute(h *handler, writer http.ResponseWriter, requ
 			if errors.Is(err, errRegistryBodyTooLarge) {
 				code, status = "REGISTRY_MUTATION_TOO_LARGE", http.StatusRequestEntityTooLarge
 			}
+			h.emitOperatingScheduleOutcome(request, session, route, nil, auditOutcomeRejected, code)
 			writeProblem(writer, request, status, code, "Registry mutation invalid", "The Operating Schedule mutation payload is unreadable or exceeds the supported size.", false, nil)
 			return
 		}
 		if !json.Valid(raw) {
+			h.emitOperatingScheduleOutcome(request, session, route, nil, auditOutcomeRejected, "REGISTRY_MUTATION_INVALID")
 			writeProblem(writer, request, http.StatusBadRequest, "REGISTRY_MUTATION_INVALID", "Registry mutation invalid", "The Operating Schedule mutation payload must be valid JSON.", false, nil)
 			return
 		}
@@ -176,12 +188,14 @@ func dispatchOperatingScheduleRoute(h *handler, writer http.ResponseWriter, requ
 		case "schedule-put":
 			writeGrant, ok := h.authorizeSiteScheduleAction(writer, request, session, route.siteID, registryauth.ActionScheduleManage, "SCHEDULE_MANAGE_FORBIDDEN", "The authenticated Principal is not allowed to manage Operating Schedules on this Site.")
 			if !ok {
+				h.emitOperatingScheduleDenied(request, session, route, raw, "SCHEDULE_MANAGE_FORBIDDEN")
 				return
 			}
 			grant = writeGrant
 		case "exceptions-create":
 			action, forbiddenCode, err := resolveOperatingExceptionCreateAction(raw)
 			if err != nil {
+				h.emitOperatingScheduleOutcome(request, session, route, raw, auditOutcomeRejected, "REGISTRY_MUTATION_INVALID")
 				writeProblem(writer, request, http.StatusBadRequest, "REGISTRY_MUTATION_INVALID", "Registry mutation invalid", "The Operating Exception request payload is invalid.", false, nil)
 				return
 			}
@@ -191,17 +205,20 @@ func dispatchOperatingScheduleRoute(h *handler, writer http.ResponseWriter, requ
 			}
 			writeGrant, ok := h.authorizeSiteScheduleAction(writer, request, session, route.siteID, action, forbiddenCode, detail)
 			if !ok {
+				h.emitOperatingScheduleDenied(request, session, route, raw, forbiddenCode)
 				return
 			}
 			grant = writeGrant
 		case "exceptions-decide":
 			primaryAction, allowRequestFallback, err := resolveOperatingExceptionDecideAction(raw)
 			if err != nil {
+				h.emitOperatingScheduleOutcome(request, session, route, raw, auditOutcomeRejected, "REGISTRY_MUTATION_INVALID")
 				writeProblem(writer, request, http.StatusBadRequest, "REGISTRY_MUTATION_INVALID", "Registry mutation invalid", "The Operating Exception decision payload is invalid.", false, nil)
 				return
 			}
 			auth, failure := h.authorizeRegistry(request.Context(), session, primaryAction)
 			if failure != nil && failure.status != http.StatusForbidden && failure.status != http.StatusNotFound {
+				h.emitOperatingScheduleOutcome(request, session, route, raw, auditOutcomeForStatus(failure.status), failure.code)
 				writeProblem(writer, request, failure.status, failure.code, failure.title, failure.detail, failure.retryable, nil)
 				return
 			}
@@ -210,17 +227,24 @@ func dispatchOperatingScheduleRoute(h *handler, writer http.ResponseWriter, requ
 			} else if allowRequestFallback {
 				writeGrant, ok := h.authorizeSiteScheduleAction(writer, request, session, route.siteID, registryauth.ActionScheduleRequest, "SCHEDULE_REQUEST_FORBIDDEN", "The authenticated Principal is not allowed to cancel Operating Exceptions on this Site.")
 				if !ok {
+					h.emitOperatingScheduleDenied(request, session, route, raw, "SCHEDULE_REQUEST_FORBIDDEN")
 					return
 				}
 				grant = writeGrant
 			} else {
+				h.emitOperatingScheduleDenied(request, session, route, raw, "SCHEDULE_MANAGE_FORBIDDEN")
 				writeProblem(writer, request, http.StatusForbidden, "SCHEDULE_MANAGE_FORBIDDEN", "Operating Schedule management forbidden", "The authenticated Principal is not allowed to approve or reject Operating Exceptions on this Site.", false, nil)
 				return
 			}
 		}
 	}
 
-	h.forwardSiteRegistryBackendRequest(
+	var auditInput *domainAuditInput
+	if route.write {
+		built := buildOperatingScheduleAuditInput(route, body)
+		auditInput = &built
+	}
+	statusCode, respCode := h.forwardSiteRegistryBackendRequestWithAudit(
 		writer,
 		request,
 		session,
@@ -242,6 +266,16 @@ func dispatchOperatingScheduleRoute(h *handler, writer http.ResponseWriter, requ
 			upstreamTimeoutDetail:   "The Operating Schedule request timed out.",
 		},
 	)
+	if auditInput != nil {
+		auditInput.Outcome = auditOutcomeForStatus(statusCode)
+		if respCode != "" && statusCode >= http.StatusBadRequest {
+			if auditInput.ChangeSummary == nil {
+				auditInput.ChangeSummary = map[string]any{}
+			}
+			auditInput.ChangeSummary["reasonCode"] = respCode
+		}
+		h.emitDomainAudit(request.Context(), request, session, *auditInput)
+	}
 }
 
 func (h *handler) authorizeSiteScheduleAction(
@@ -311,6 +345,22 @@ func (h *handler) forwardSiteRegistryBackendRequest(
 	body []byte,
 	messages siteRegistryBackendMessages,
 ) {
+	_, _ = h.forwardSiteRegistryBackendRequestWithAudit(
+		writer, request, session, registryRevision, internalPath, write, grant, body, messages,
+	)
+}
+
+func (h *handler) forwardSiteRegistryBackendRequestWithAudit(
+	writer http.ResponseWriter,
+	request *http.Request,
+	session bffSession,
+	registryRevision int64,
+	internalPath string,
+	write bool,
+	grant string,
+	body []byte,
+	messages siteRegistryBackendMessages,
+) (int, string) {
 	targetURL := h.registry.coreBaseURL + internalPath
 	if !write && request.URL.RawQuery != "" {
 		targetURL += "?" + request.URL.RawQuery
@@ -324,7 +374,7 @@ func (h *handler) forwardSiteRegistryBackendRequest(
 	upstreamReq, err := http.NewRequestWithContext(reqCtx, request.Method, targetURL, bodyReader)
 	if err != nil {
 		writeProblem(writer, request, http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "The Core Registry request could not be constructed.", true, nil)
-		return
+		return http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE"
 	}
 	upstreamReq.Header.Set("Accept", "application/json, application/problem+json")
 	if write {
@@ -346,19 +396,19 @@ func (h *handler) forwardSiteRegistryBackendRequest(
 	if err != nil {
 		if errors.Is(reqCtx.Err(), context.DeadlineExceeded) {
 			writeProblem(writer, request, http.StatusGatewayTimeout, "REGISTRY_TIMEOUT", "Registry timeout", messages.gatewayTimeoutDetail, true, nil)
-			return
+			return http.StatusGatewayTimeout, "REGISTRY_TIMEOUT"
 		}
 		writeProblem(writer, request, http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "The Core Registry is temporarily unavailable.", true, nil)
-		return
+		return http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE"
 	}
 	defer response.Body.Close()
 
 	writer.Header().Set("X-Route-Policy-Revision", formatRevision(registryRevision))
-	writeSiteRegistryBackendResponse(writer, request, response, h.registry.maxResponseBytes, messages)
+	return writeSiteRegistryBackendResponse(writer, request, response, h.registry.maxResponseBytes, messages)
 }
 
 func writeOperatingScheduleBackendResponse(writer http.ResponseWriter, request *http.Request, response *http.Response, maxBytes int64) {
-	writeSiteRegistryBackendResponse(writer, request, response, maxBytes, siteRegistryBackendMessages{
+	_, _ = writeSiteRegistryBackendResponse(writer, request, response, maxBytes, siteRegistryBackendMessages{
 		badRequestTitle:         "Operating Schedule request invalid",
 		defaultBadRequestDetail: "The Operating Schedule request is invalid.",
 		forbiddenTitle:          "Operating Schedule action forbidden",
@@ -377,16 +427,16 @@ func writeSiteRegistryBackendResponse(
 	response *http.Response,
 	maxBytes int64,
 	messages siteRegistryBackendMessages,
-) {
+) (int, string) {
 	raw, err := readBoundedBody(response.Body, maxBytes)
 	if err != nil {
 		writeProblem(writer, request, http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "The Core Registry response exceeded the supported size.", false, nil)
-		return
+		return http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE"
 	}
 	if response.StatusCode == http.StatusOK || response.StatusCode == http.StatusCreated {
 		if !json.Valid(raw) {
 			writeProblem(writer, request, http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "The Core Registry response is malformed.", false, nil)
-			return
+			return http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE"
 		}
 		if response.Header.Get("X-Idempotent-Replay") == "true" {
 			writer.Header().Set("X-Idempotent-Replay", "true")
@@ -394,7 +444,7 @@ func writeSiteRegistryBackendResponse(
 		writer.Header().Set("Content-Type", "application/json")
 		writer.WriteHeader(response.StatusCode)
 		_, _ = writer.Write(append(bytes.TrimSpace(raw), '\n'))
-		return
+		return response.StatusCode, ""
 	}
 
 	var problem struct {
@@ -415,6 +465,7 @@ func writeSiteRegistryBackendResponse(
 			detail = messages.defaultBadRequestDetail
 		}
 		writeProblem(writer, request, http.StatusBadRequest, code, messages.badRequestTitle, detail, false, nil)
+		return http.StatusBadRequest, code
 	case http.StatusForbidden:
 		code := problem.Code
 		if code == "" {
@@ -425,8 +476,10 @@ func writeSiteRegistryBackendResponse(
 			detail = messages.defaultForbiddenDetail
 		}
 		writeProblem(writer, request, http.StatusForbidden, code, messages.forbiddenTitle, detail, false, nil)
+		return http.StatusForbidden, code
 	case http.StatusNotFound:
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", messages.notFoundDetail, false, nil)
+		return http.StatusNotFound, "RESOURCE_NOT_FOUND"
 	case http.StatusConflict:
 		code := problem.Code
 		if code == "" {
@@ -437,9 +490,117 @@ func writeSiteRegistryBackendResponse(
 			detail = messages.defaultConflictDetail
 		}
 		writeProblem(writer, request, http.StatusConflict, code, messages.conflictTitle, detail, false, nil)
+		return http.StatusConflict, code
 	case http.StatusGatewayTimeout:
 		writeProblem(writer, request, http.StatusGatewayTimeout, "REGISTRY_TIMEOUT", "Registry timeout", messages.upstreamTimeoutDetail, true, nil)
+		return http.StatusGatewayTimeout, "REGISTRY_TIMEOUT"
 	default:
 		writeProblem(writer, request, http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "The Core Registry is temporarily unavailable.", true, nil)
+		return http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE"
+	}
+}
+
+func (h *handler) emitOperatingScheduleDenied(request *http.Request, session bffSession, route publicOperatingScheduleRoute, body []byte, reasonCode string) {
+	h.emitOperatingScheduleOutcome(request, session, route, body, auditOutcomeDenied, reasonCode)
+}
+
+func (h *handler) emitOperatingScheduleOutcome(request *http.Request, session bffSession, route publicOperatingScheduleRoute, body []byte, outcome, reasonCode string) {
+	input := buildOperatingScheduleAuditInput(route, body)
+	input.Outcome = outcome
+	if reasonCode != "" {
+		if input.ChangeSummary == nil {
+			input.ChangeSummary = map[string]any{}
+		}
+		input.ChangeSummary["reasonCode"] = reasonCode
+	}
+	h.emitDomainAudit(request.Context(), request, session, input)
+}
+
+func buildOperatingScheduleAuditInput(route publicOperatingScheduleRoute, body []byte) domainAuditInput {
+	summary := map[string]any{}
+	payload := decodeFlatJSONObject(body)
+	var scheduleName, title, decision string
+	if len(payload) > 0 {
+		if tz := stringValue(payload, "timezone"); tz != "" {
+			summary["timezone"] = tz
+		}
+		if scheduleName = stringValue(payload, "name"); scheduleName != "" {
+			summary["scheduleName"] = scheduleName
+		}
+		if lead, ok := payload["preCoolLeadMinutes"].(float64); ok {
+			summary["preCoolLeadMinutes"] = int(lead)
+		}
+		if lag, ok := payload["coastDownLagMinutes"].(float64); ok {
+			summary["coastDownLagMinutes"] = int(lag)
+		}
+		if slots, ok := payload["slots"].([]any); ok {
+			summary["entriesCount"] = len(slots)
+		} else if replacementSlots, ok := payload["replacementSlots"].([]any); ok {
+			summary["entriesCount"] = len(replacementSlots)
+		}
+		if title = stringValue(payload, "title"); title != "" {
+			summary["title"] = title
+		}
+		if kind := stringValue(payload, "kind"); kind != "" {
+			summary["kind"] = kind
+		}
+		if startDate := stringValue(payload, "startDate"); startDate != "" {
+			summary["startDate"] = startDate
+		}
+		if endDate := stringValue(payload, "endDate"); endDate != "" {
+			summary["endDate"] = endDate
+		}
+		if decision = stringValue(payload, "decision"); decision != "" {
+			summary["decision"] = decision
+		}
+		if note := stringValue(payload, "decisionNote"); note != "" {
+			summary["decisionNote"] = note
+		}
+		if reason := firstNonEmpty(nestedStringValue(payload, "meta", "reason"), stringValue(payload, "reason")); reason != "" {
+			summary["reason"] = reason
+		}
+	}
+	switch route.kind {
+	case "schedule-put":
+		targetLabel := "站点运行计划"
+		if scheduleName != "" {
+			targetLabel = "站点运行计划（" + scheduleName + "）"
+		}
+		return domainAuditInput{
+			Category:      auditserver.AggregateTypeOperatingSchedule,
+			TargetID:      "site:" + route.siteID,
+			TargetLabel:   targetLabel,
+			Action:        "OPERATING_SCHEDULE_UPDATED",
+			ChangeSummary: summary,
+		}
+	case "exceptions-create":
+		targetLabel := "运行例外申请"
+		if title != "" {
+			targetLabel = "运行例外申请（" + title + "）"
+		}
+		return domainAuditInput{
+			Category:      auditserver.AggregateTypeOperatingSchedule,
+			TargetID:      "site:" + route.siteID,
+			TargetLabel:   targetLabel,
+			Action:        "OPERATING_EXCEPTION_CREATED",
+			ChangeSummary: summary,
+		}
+	default:
+		targetLabel := "运行例外审批"
+		switch decision {
+		case "APPROVE":
+			targetLabel = "运行例外审批（同意）"
+		case "REJECT":
+			targetLabel = "运行例外审批（驳回）"
+		case "CANCEL":
+			targetLabel = "运行例外审批（取消）"
+		}
+		return domainAuditInput{
+			Category:      auditserver.AggregateTypeOperatingSchedule,
+			TargetID:      "site:" + route.siteID + ":" + route.exceptionID,
+			TargetLabel:   targetLabel,
+			Action:        "OPERATING_EXCEPTION_DECIDED",
+			ChangeSummary: summary,
+		}
 	}
 }

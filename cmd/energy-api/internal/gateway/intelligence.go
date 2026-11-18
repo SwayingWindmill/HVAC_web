@@ -1080,7 +1080,7 @@ func (h *handler) serveOptimizationAutoCommand(writer http.ResponseWriter, reque
 			ctx = observability.ContextWithRemoteParent(ctx, tracer, rawTP, request.Header.Get("tracestate"))
 		}
 	}
-	view, status, location, cmdFailure := h.executeCommandCreate(ctx, prepared)
+	view, status, location, cmdFailure := h.executeCommandCreate(ctx, request, prepared)
 	if cmdFailure != nil {
 		h.writeCommandFailure(writer, request, *cmdFailure)
 		return

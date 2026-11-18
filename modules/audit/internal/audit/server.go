@@ -31,13 +31,19 @@ type OperationsEventWriter interface {
 	ConsumeOperations(context.Context, []byte, MessageMetadata) (bool, error)
 }
 
+type DomainEventWriter interface {
+	ConsumeDomain(context.Context, []byte, MessageMetadata) (bool, error)
+}
+
 type ServerConfig struct {
 	Store                           RecordReader
 	Searcher                        RecordSearcher
 	OperationsWriter                OperationsEventWriter
+	DomainWriter                    DomainEventWriter
 	AllowedWorkloadSPIFFE           string
 	AllowedOperationsProducerSPIFFE string
 	MaximumOperationsEventBytes     int64
+	MaximumDomainEventBytes         int64
 	Audience                        string
 	Logger                          *slog.Logger
 	Observability                   *observability.Runtime
@@ -48,9 +54,11 @@ type server struct {
 	store                           RecordReader
 	searcher                        RecordSearcher
 	operationsWriter                OperationsEventWriter
+	domainWriter                    DomainEventWriter
 	allowedWorkloadSPIFFE           string
 	allowedOperationsProducerSPIFFE string
 	maximumOperationsEventBytes     int64
+	maximumDomainEventBytes         int64
 	audience                        string
 	logger                          *slog.Logger
 	observability                   *observability.Runtime
@@ -83,6 +91,12 @@ func NewHandler(config ServerConfig) http.Handler {
 			searcher = candidate
 		}
 	}
+	domainWriter := config.DomainWriter
+	if domainWriter == nil {
+		if candidate, ok := config.Store.(DomainEventWriter); ok {
+			domainWriter = candidate
+		}
+	}
 	maximumOperationsEventBytes := config.MaximumOperationsEventBytes
 	if maximumOperationsEventBytes == 0 {
 		maximumOperationsEventBytes = 64 * 1024
@@ -90,13 +104,22 @@ func NewHandler(config ServerConfig) http.Handler {
 	if maximumOperationsEventBytes < 1 || maximumOperationsEventBytes > 1024*1024 {
 		panic("audit operations event size limit is invalid")
 	}
+	maximumDomainEventBytes := config.MaximumDomainEventBytes
+	if maximumDomainEventBytes == 0 {
+		maximumDomainEventBytes = 64 * 1024
+	}
+	if maximumDomainEventBytes < 1 || maximumDomainEventBytes > 1024*1024 {
+		panic("audit domain event size limit is invalid")
+	}
 	return &server{
 		store:                           config.Store,
 		searcher:                        searcher,
 		operationsWriter:                config.OperationsWriter,
+		domainWriter:                    domainWriter,
 		allowedWorkloadSPIFFE:           config.AllowedWorkloadSPIFFE,
 		allowedOperationsProducerSPIFFE: config.AllowedOperationsProducerSPIFFE,
 		maximumOperationsEventBytes:     maximumOperationsEventBytes,
+		maximumDomainEventBytes:         maximumDomainEventBytes,
 		audience:                        audience,
 		logger:                          logger,
 		observability:                   telemetry,
@@ -135,6 +158,10 @@ func (server *server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 
 	if request.Method == http.MethodPost && request.URL.Path == OperationsAuditPath {
 		status = server.serveOperationsIngest(writer, request)
+		return
+	}
+	if request.Method == http.MethodPost && request.URL.Path == DomainAuditPath {
+		status = server.serveDomainIngest(writer, request)
 		return
 	}
 	if request.Method == http.MethodPost && request.URL.Path == AuditSearchPath {
@@ -300,6 +327,85 @@ func (server *server) serveOperationsIngest(writer http.ResponseWriter, request 
 	return http.StatusNoContent
 }
 
+func (server *server) serveDomainIngest(writer http.ResponseWriter, request *http.Request) int {
+	if server.domainWriter == nil {
+		writeAuditProblem(writer, http.StatusNotFound, "AUDIT_ROUTE_NOT_FOUND", "Audit route not found")
+		return http.StatusNotFound
+	}
+	for _, header := range []string{
+		"Authorization", "Cookie", "X-Principal", "X-Roles",
+		"X-Tenant-ID", "X-Site-ID", "X-Admin",
+	} {
+		if request.Header.Get(header) != "" {
+			writeAuditProblem(writer, http.StatusBadRequest, "AUDIT_FORGED_IDENTITY_HEADER", "Caller identity headers are not accepted")
+			return http.StatusBadRequest
+		}
+	}
+	certificate, peerSPIFFE, ok := verifiedPeer(request)
+	if !ok || peerSPIFFE != server.allowedWorkloadSPIFFE {
+		writeAuditProblem(writer, http.StatusUnauthorized, "AUDIT_WORKLOAD_IDENTITY_INVALID", "Workload identity is invalid")
+		return http.StatusUnauthorized
+	}
+	claims, err := identitycontext.VerifyDelegation(certificate.PublicKey, request.Header.Get("X-Delegation-Grant"))
+	if err != nil {
+		writeAuditProblem(writer, http.StatusUnauthorized, "AUDIT_DELEGATION_INVALID", "Delegation grant is invalid")
+		return http.StatusUnauthorized
+	}
+	systemWorkload := claims.SessionID == ""
+	var validationErr error
+	if systemWorkload {
+		validationErr = identitycontext.ValidateWorkloadDelegation(claims, server.now(), peerSPIFFE, peerSPIFFE, server.audience, "audit:write", "tenant:"+claims.TenantID)
+	} else {
+		validationErr = identitycontext.ValidateDelegation(claims, server.now(), peerSPIFFE, server.audience, "audit:write", "tenant:"+claims.TenantID)
+	}
+	if validationErr != nil {
+		writeAuditProblem(writer, http.StatusForbidden, "AUDIT_DELEGATION_REJECTED", "Delegation grant is not authorized for domain audit writes")
+		return http.StatusForbidden
+	}
+	if !strings.HasPrefix(strings.ToLower(request.Header.Get("Content-Type")), "application/json") {
+		writeAuditProblem(writer, http.StatusUnsupportedMediaType, "AUDIT_CONTENT_TYPE_INVALID", "Domain Audit events require JSON")
+		return http.StatusUnsupportedMediaType
+	}
+	idempotencyKey := strings.TrimSpace(request.Header.Get("Idempotency-Key"))
+	if idempotencyKey == "" || len(idempotencyKey) > 768 || strings.ContainsAny(idempotencyKey, "\r\n") {
+		writeAuditProblem(writer, http.StatusBadRequest, "AUDIT_IDEMPOTENCY_KEY_INVALID", "Domain Audit Idempotency Key is invalid")
+		return http.StatusBadRequest
+	}
+	request.Body = http.MaxBytesReader(writer, request.Body, server.maximumDomainEventBytes)
+	payload, err := io.ReadAll(request.Body)
+	if err != nil {
+		writeAuditProblem(writer, http.StatusRequestEntityTooLarge, "AUDIT_EVENT_TOO_LARGE", "Domain Audit event is too large")
+		return http.StatusRequestEntityTooLarge
+	}
+	event, err := DecodeDomainEvent(payload)
+	subjectMatches := event.InitiatingSubject == claims.Subject
+	if systemWorkload {
+		subjectMatches = event.ClientKind == ClientKindSystem &&
+			(event.InitiatingSubject == peerSPIFFE || (claims.PrincipalID != "" && event.InitiatingSubject == claims.PrincipalID))
+	}
+	if err != nil ||
+		event.MessageID != idempotencyKey ||
+		event.TenantID != claims.TenantID ||
+		event.ExecutingSPIFFEID != peerSPIFFE ||
+		!subjectMatches {
+		writeAuditProblem(writer, http.StatusBadRequest, "AUDIT_EVENT_INVALID", "Domain Audit event is invalid")
+		return http.StatusBadRequest
+	}
+	_, err = server.domainWriter.ConsumeDomain(request.Context(), payload, MessageMetadata{
+		Topic: GatewayDomainTopic, ReceivedAt: server.now().UTC(),
+	})
+	if errors.Is(err, ErrEnvelopeConflict) {
+		writeAuditProblem(writer, http.StatusConflict, "AUDIT_EVENT_CONFLICT", "Domain Audit event identity conflicts with existing content")
+		return http.StatusConflict
+	}
+	if err != nil {
+		writeAuditProblem(writer, http.StatusServiceUnavailable, "AUDIT_INGEST_UNAVAILABLE", "Audit Ledger is temporarily unavailable")
+		return http.StatusServiceUnavailable
+	}
+	writer.WriteHeader(http.StatusNoContent)
+	return http.StatusNoContent
+}
+
 func verifiedPeer(request *http.Request) (*x509CertificateView, string, bool) {
 	if request.TLS == nil || len(request.TLS.PeerCertificates) == 0 || len(request.TLS.VerifiedChains) == 0 {
 		return nil, "", false
@@ -318,6 +424,9 @@ type x509CertificateView struct {
 func safeAuditPath(path string) string {
 	if path == OperationsAuditPath {
 		return OperationsAuditPath
+	}
+	if path == DomainAuditPath {
+		return DomainAuditPath
 	}
 	if path == AuditSearchPath {
 		return AuditSearchPath

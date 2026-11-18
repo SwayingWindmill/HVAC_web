@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
+	"github.com/quanlaihe/hvac-web/modules/audit/pkg/auditserver"
 	"github.com/quanlaihe/hvac-web/modules/iam/pkg/iamserver"
 	"github.com/quanlaihe/hvac-web/services/identity-service/pkg/identityadmin"
 )
@@ -131,6 +132,7 @@ func (h *handler) UserAdmin(writer http.ResponseWriter, request *http.Request) {
 				return
 			}
 		}
+		h.emitIAMAdminAudit(request, admin.session, "principal:"+principalID, "组织成员", iamAdminActionForPath(path), auditOutcomeRejected, map[string]any{"reasonCode": "RESOURCE_NOT_FOUND"})
 		writeIdentityFailure(writer, request, identityFailure{404, "RESOURCE_NOT_FOUND", "User not found", "This user is not a member of the current organization.", false})
 	})
 }
@@ -152,7 +154,18 @@ func (h *handler) withUserAdmin(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	var directory iamserver.AdminDirectory
-	if !h.callIAMAdmin(writer, request, session, internalIAMMembersPath, nil, &directory) {
+	status, code, ok := h.callIAMAdminWithOutcome(writer, request, session, internalIAMMembersPath, nil, &directory)
+	if !ok {
+		if request.Method != http.MethodGet {
+			h.emitDomainAudit(request.Context(), request, session, domainAuditInput{
+				Category:      auditserver.AggregateTypeIAMAdmin,
+				TargetID:      request.URL.Path,
+				TargetLabel:   "成员与权限管理",
+				Action:        "IAM_ADMIN_ACCESS",
+				Outcome:       auditOutcomeForStatus(status),
+				ChangeSummary: map[string]any{"reasonCode": code},
+			})
+		}
 		return
 	}
 	// Only people who sign in through this platform's identity directory are users; Workload
@@ -219,41 +232,81 @@ func (h *handler) listMembers(writer http.ResponseWriter, request *http.Request,
 func (h *handler) createMember(writer http.ResponseWriter, request *http.Request, admin userAdminRequest) {
 	var input createMemberRequest
 	if !decodeUserAdminBody(writer, request, &input) {
+		h.emitIAMAdminAudit(request, admin.session, publicMembersPath, "组织成员", "IAM_MEMBER_CREATED", auditOutcomeRejected, map[string]any{"reasonCode": "USER_ADMIN_REQUEST_INVALID"})
 		return
 	}
+	targetLabel := firstNonEmpty(strings.TrimSpace(input.DisplayName), strings.TrimSpace(input.Username), "组织成员")
 	if len(input.Assignments) == 0 {
+		h.emitIAMAdminAudit(request, admin.session, "username:"+strings.TrimSpace(input.Username), targetLabel, "IAM_MEMBER_CREATED", auditOutcomeRejected, map[string]any{"reasonCode": "USER_ADMIN_REQUEST_INVALID"})
 		writeIdentityFailure(writer, request, identityFailure{400, "USER_ADMIN_REQUEST_INVALID", "Request invalid", "A new user needs at least one role.", false})
 		return
 	}
 	assignments := make([]iamserver.AdminAssignment, len(input.Assignments))
-	for index, input := range input.Assignments {
-		role, ok := roleNamed(admin.directory, input.RoleKey)
+	roleKeys := make([]string, len(input.Assignments))
+	for index, item := range input.Assignments {
+		role, ok := roleNamed(admin.directory, item.RoleKey)
 		// IAM decides scope too, but by then the account would exist; refuse before creating it.
-		if !ok || (role.TenantScoped && input.SiteID != "") {
+		if !ok || (role.TenantScoped && item.SiteID != "") {
+			h.emitIAMAdminAudit(request, admin.session, "username:"+strings.TrimSpace(input.Username), targetLabel, "IAM_MEMBER_CREATED", auditOutcomeRejected, map[string]any{"reasonCode": "USER_ADMIN_REQUEST_INVALID"})
 			writeIdentityFailure(writer, request, identityFailure{400, "USER_ADMIN_REQUEST_INVALID", "Role invalid", "The role or its scope is not valid.", false})
 			return
 		}
-		assignments[index] = iamserver.AdminAssignment{RoleTemplateID: role.RoleTemplateID, SiteID: input.SiteID}
+		assignments[index] = iamserver.AdminAssignment{RoleTemplateID: role.RoleTemplateID, SiteID: item.SiteID}
+		roleKeys[index] = item.RoleKey
 	}
 	account, err := h.identity.config.UserDirectory.CreateUser(request.Context(), identityadmin.NewUser{
 		Username: input.Username, DisplayName: input.DisplayName, Email: input.Email, Password: input.Password,
 	})
 	if err != nil {
+		h.emitDomainAudit(request.Context(), request, admin.session, domainAuditInput{
+			Category:      auditserver.AggregateTypeIAMAdmin,
+			TargetID:      "username:" + strings.TrimSpace(input.Username),
+			TargetLabel:   targetLabel,
+			Action:        "IAM_MEMBER_CREATED",
+			Outcome:       auditOutcomeRejected,
+			ChangeSummary: map[string]any{"roles": roleKeys, "username": input.Username},
+		})
 		writeDirectoryFailure(writer, request, err)
 		return
 	}
 	var result iamserver.AdminMutationResult
-	if !h.callIAMAdmin(writer, request, admin.session, internalIAMAdminMutationPath, iamserver.AdminMutationRequest{
+	status, code, ok := h.callIAMAdminWithOutcome(writer, request, admin.session, internalIAMAdminMutationPath, iamserver.AdminMutationRequest{
 		Operation: "member.create", SubjectIssuer: admin.session.Principal.Issuer, Subject: account.ID,
 		DisplayName: account.DisplayName, Email: account.Email, Assignments: assignments,
-	}, &result) {
+	}, &result)
+	if !ok {
+		h.emitDomainAudit(request.Context(), request, admin.session, domainAuditInput{
+			Category:      auditserver.AggregateTypeIAMAdmin,
+			TargetID:      "subject:" + account.ID,
+			TargetLabel:   firstNonEmpty(account.DisplayName, targetLabel),
+			Action:        "IAM_MEMBER_CREATED",
+			Outcome:       auditOutcomeForStatus(status),
+			ChangeSummary: map[string]any{"roles": roleKeys, "username": input.Username, "reasonCode": code},
+		})
 		return
 	}
+	h.emitDomainAudit(request.Context(), request, admin.session, domainAuditInput{
+		Category:      auditserver.AggregateTypeIAMAdmin,
+		TargetID:      "principal:" + result.ResourceID,
+		TargetLabel:   firstNonEmpty(account.DisplayName, targetLabel),
+		Action:        "IAM_MEMBER_CREATED",
+		Outcome:       auditOutcomeSucceeded,
+		ChangeSummary: map[string]any{"roles": roleKeys, "username": input.Username},
+	})
 	writeJSON(writer, http.StatusCreated, map[string]string{"principalId": result.ResourceID})
 }
 
 func (h *handler) resetMemberPassword(writer http.ResponseWriter, request *http.Request, admin userAdminRequest, member iamserver.AdminMember) {
+	targetLabel := firstNonEmpty(member.DisplayName, "组织成员")
 	if member.PrincipalID == admin.directory.ActorPrincipalID {
+		h.emitDomainAudit(request.Context(), request, admin.session, domainAuditInput{
+			Category:      auditserver.AggregateTypeIAMAdmin,
+			TargetID:      "principal:" + member.PrincipalID,
+			TargetLabel:   targetLabel,
+			Action:        "IAM_MEMBER_PASSWORD_RESET",
+			Outcome:       auditOutcomeRejected,
+			ChangeSummary: map[string]any{"reasonCode": "OWN_PASSWORD_REQUIRES_CURRENT"},
+		})
 		writeIdentityFailure(writer, request, identityFailure{409, "OWN_PASSWORD_REQUIRES_CURRENT", "Use password change", "Change your own password with your current password.", false})
 		return
 	}
@@ -261,41 +314,87 @@ func (h *handler) resetMemberPassword(writer http.ResponseWriter, request *http.
 		Password string `json:"password"`
 	}
 	if !decodeUserAdminBody(writer, request, &input) {
+		h.emitIAMAdminAudit(request, admin.session, "principal:"+member.PrincipalID, targetLabel, "IAM_MEMBER_PASSWORD_RESET", auditOutcomeRejected, map[string]any{"passwordChanged": false, "reasonCode": "USER_ADMIN_REQUEST_INVALID"})
 		return
 	}
 	if err := h.identity.config.UserDirectory.SetPassword(request.Context(), admin.administrator(), member.Subject, input.Password); err != nil {
+		h.emitDomainAudit(request.Context(), request, admin.session, domainAuditInput{
+			Category:      auditserver.AggregateTypeIAMAdmin,
+			TargetID:      "principal:" + member.PrincipalID,
+			TargetLabel:   targetLabel,
+			Action:        "IAM_MEMBER_PASSWORD_RESET",
+			Outcome:       auditOutcomeRejected,
+			ChangeSummary: map[string]any{"passwordChanged": false},
+		})
 		writeDirectoryFailure(writer, request, err)
 		return
 	}
+	h.emitDomainAudit(request.Context(), request, admin.session, domainAuditInput{
+		Category:      auditserver.AggregateTypeIAMAdmin,
+		TargetID:      "principal:" + member.PrincipalID,
+		TargetLabel:   targetLabel,
+		Action:        "IAM_MEMBER_PASSWORD_RESET",
+		Outcome:       auditOutcomeSucceeded,
+		ChangeSummary: map[string]any{"passwordChanged": true},
+	})
 	writer.WriteHeader(http.StatusNoContent)
 }
 
 func (h *handler) setMemberStatus(writer http.ResponseWriter, request *http.Request, admin userAdminRequest, member iamserver.AdminMember) {
+	targetLabel := firstNonEmpty(member.DisplayName, "组织成员")
 	var input struct {
 		Enabled bool `json:"enabled"`
 	}
 	if !decodeUserAdminBody(writer, request, &input) {
+		h.emitIAMAdminAudit(request, admin.session, "principal:"+member.PrincipalID, targetLabel, "IAM_MEMBER_STATUS_UPDATED", auditOutcomeRejected, map[string]any{"reasonCode": "USER_ADMIN_REQUEST_INVALID"})
 		return
 	}
 	status := "SUSPENDED"
 	if input.Enabled {
 		status = "ACTIVE"
 	}
-	if !h.callIAMAdmin(writer, request, admin.session, internalIAMAdminMutationPath, iamserver.AdminMutationRequest{
+	beforeEnabled := strings.EqualFold(member.MembershipStatus, "ACTIVE")
+	iamStatus, code, ok := h.callIAMAdminWithOutcome(writer, request, admin.session, internalIAMAdminMutationPath, iamserver.AdminMutationRequest{
 		Operation: "membership.upsert", PrincipalID: member.PrincipalID, Status: status, ExpectedRevision: member.MembershipRevision,
-	}, nil) {
+	}, nil)
+	if !ok {
+		h.emitDomainAudit(request.Context(), request, admin.session, domainAuditInput{
+			Category:      auditserver.AggregateTypeIAMAdmin,
+			TargetID:      "principal:" + member.PrincipalID,
+			TargetLabel:   targetLabel,
+			Action:        "IAM_MEMBER_STATUS_UPDATED",
+			Outcome:       auditOutcomeForStatus(iamStatus),
+			ChangeSummary: map[string]any{"beforeEnabled": beforeEnabled, "afterEnabled": input.Enabled, "reasonCode": code},
+		})
 		return
 	}
 	if err := h.identity.config.UserDirectory.SetEnabled(request.Context(), admin.administrator(), member.Subject, input.Enabled); err != nil {
+		h.emitDomainAudit(request.Context(), request, admin.session, domainAuditInput{
+			Category:      auditserver.AggregateTypeIAMAdmin,
+			TargetID:      "principal:" + member.PrincipalID,
+			TargetLabel:   targetLabel,
+			Action:        "IAM_MEMBER_STATUS_UPDATED",
+			Outcome:       auditOutcomeFailed,
+			ChangeSummary: map[string]any{"beforeEnabled": beforeEnabled, "afterEnabled": input.Enabled},
+		})
 		writeDirectoryFailure(writer, request, err)
 		return
 	}
 	if !input.Enabled {
 		if failure := h.revokePersonSessions(request, member); failure != nil {
+			h.emitIAMAdminAudit(request, admin.session, "principal:"+member.PrincipalID, targetLabel, "IAM_MEMBER_STATUS_UPDATED", auditOutcomeFailed, map[string]any{"beforeEnabled": beforeEnabled, "afterEnabled": input.Enabled, "reasonCode": failure.code})
 			writeIdentityFailure(writer, request, *failure)
 			return
 		}
 	}
+	h.emitDomainAudit(request.Context(), request, admin.session, domainAuditInput{
+		Category:      auditserver.AggregateTypeIAMAdmin,
+		TargetID:      "principal:" + member.PrincipalID,
+		TargetLabel:   targetLabel,
+		Action:        "IAM_MEMBER_STATUS_UPDATED",
+		Outcome:       auditOutcomeSucceeded,
+		ChangeSummary: map[string]any{"beforeEnabled": beforeEnabled, "afterEnabled": input.Enabled},
+	})
 	writer.WriteHeader(http.StatusNoContent)
 }
 
@@ -324,28 +423,64 @@ func (h *handler) updateMemberProfile(writer http.ResponseWriter, request *http.
 		Email       string `json:"email"`
 	}
 	if !decodeUserAdminBody(writer, request, &input) {
+		h.emitIAMAdminAudit(request, admin.session, "principal:"+member.PrincipalID, firstNonEmpty(member.DisplayName, "组织成员"), "IAM_MEMBER_PROFILE_UPDATED", auditOutcomeRejected, map[string]any{"reasonCode": "USER_ADMIN_REQUEST_INVALID"})
 		return
 	}
-	if !h.callIAMAdmin(writer, request, admin.session, internalIAMAdminMutationPath, iamserver.AdminMutationRequest{
-		Operation: "principal.update", ResourceID: member.PrincipalID, DisplayName: strings.TrimSpace(input.DisplayName),
-		Email: strings.TrimSpace(input.Email), Status: member.PrincipalStatus, ExpectedRevision: member.PrincipalRevision,
-	}, nil) {
+	afterDisplayName := strings.TrimSpace(input.DisplayName)
+	afterEmail := strings.TrimSpace(input.Email)
+	targetLabel := firstNonEmpty(afterDisplayName, member.DisplayName, "组织成员")
+	iamStatus, code, ok := h.callIAMAdminWithOutcome(writer, request, admin.session, internalIAMAdminMutationPath, iamserver.AdminMutationRequest{
+		Operation: "principal.update", ResourceID: member.PrincipalID, DisplayName: afterDisplayName,
+		Email: afterEmail, Status: member.PrincipalStatus, ExpectedRevision: member.PrincipalRevision,
+	}, nil)
+	if !ok {
+		h.emitDomainAudit(request.Context(), request, admin.session, domainAuditInput{
+			Category:      auditserver.AggregateTypeIAMAdmin,
+			TargetID:      "principal:" + member.PrincipalID,
+			TargetLabel:   targetLabel,
+			Action:        "IAM_MEMBER_PROFILE_UPDATED",
+			Outcome:       auditOutcomeForStatus(iamStatus),
+			ChangeSummary: map[string]any{"beforeDisplayName": member.DisplayName, "afterDisplayName": afterDisplayName, "reasonCode": code},
+		})
 		return
 	}
 	if err := h.identity.config.UserDirectory.UpdateProfile(request.Context(), admin.administrator(), member.Subject, input.DisplayName, input.Email); err != nil {
+		h.emitDomainAudit(request.Context(), request, admin.session, domainAuditInput{
+			Category:      auditserver.AggregateTypeIAMAdmin,
+			TargetID:      "principal:" + member.PrincipalID,
+			TargetLabel:   targetLabel,
+			Action:        "IAM_MEMBER_PROFILE_UPDATED",
+			Outcome:       auditOutcomeFailed,
+			ChangeSummary: map[string]any{"beforeDisplayName": member.DisplayName, "afterDisplayName": afterDisplayName},
+		})
 		writeDirectoryFailure(writer, request, err)
 		return
 	}
+	h.emitDomainAudit(request.Context(), request, admin.session, domainAuditInput{
+		Category:    auditserver.AggregateTypeIAMAdmin,
+		TargetID:    "principal:" + member.PrincipalID,
+		TargetLabel: targetLabel,
+		Action:      "IAM_MEMBER_PROFILE_UPDATED",
+		Outcome:     auditOutcomeSucceeded,
+		ChangeSummary: map[string]any{
+			"beforeDisplayName": member.DisplayName,
+			"afterDisplayName":  afterDisplayName,
+			"emailChanged":      afterEmail != member.Email,
+		},
+	})
 	writer.WriteHeader(http.StatusNoContent)
 }
 
 func (h *handler) assignMemberRole(writer http.ResponseWriter, request *http.Request, admin userAdminRequest, member iamserver.AdminMember) {
+	targetLabel := firstNonEmpty(member.DisplayName, "组织成员")
 	var input assignmentInput
 	if !decodeUserAdminBody(writer, request, &input) {
+		h.emitIAMAdminAudit(request, admin.session, "principal:"+member.PrincipalID, targetLabel, "IAM_ROLE_ASSIGNED", auditOutcomeRejected, map[string]any{"reasonCode": "USER_ADMIN_REQUEST_INVALID"})
 		return
 	}
 	role, ok := roleNamed(admin.directory, input.RoleKey)
 	if !ok {
+		h.emitIAMAdminAudit(request, admin.session, "principal:"+member.PrincipalID, targetLabel, "IAM_ROLE_ASSIGNED", auditOutcomeRejected, map[string]any{"roleKey": input.RoleKey, "reasonCode": "USER_ADMIN_REQUEST_INVALID"})
 		writeIdentityFailure(writer, request, identityFailure{400, "USER_ADMIN_REQUEST_INVALID", "Role invalid", "The role is not valid.", false})
 		return
 	}
@@ -356,26 +491,65 @@ func (h *handler) assignMemberRole(writer http.ResponseWriter, request *http.Req
 			expectedRevision = existing.Revision
 		}
 	}
-	if h.callIAMAdmin(writer, request, admin.session, internalIAMAdminMutationPath, iamserver.AdminMutationRequest{
+	iamStatus, code, ok := h.callIAMAdminWithOutcome(writer, request, admin.session, internalIAMAdminMutationPath, iamserver.AdminMutationRequest{
 		Operation: "role-binding.upsert", PrincipalID: member.PrincipalID, RoleTemplateID: role.RoleTemplateID,
 		SiteID: input.SiteID, Status: "ACTIVE", ExpectedRevision: expectedRevision,
-	}, nil) {
-		writer.WriteHeader(http.StatusNoContent)
+	}, nil)
+	if !ok {
+		h.emitDomainAudit(request.Context(), request, admin.session, domainAuditInput{
+			Category:      auditserver.AggregateTypeIAMAdmin,
+			TargetID:      "principal:" + member.PrincipalID,
+			TargetLabel:   targetLabel,
+			Action:        "IAM_ROLE_ASSIGNED",
+			Outcome:       auditOutcomeForStatus(iamStatus),
+			ChangeSummary: map[string]any{"roleKey": input.RoleKey, "hasSiteScope": input.SiteID != "", "reasonCode": code},
+		})
+		return
 	}
+	h.emitDomainAudit(request.Context(), request, admin.session, domainAuditInput{
+		Category:      auditserver.AggregateTypeIAMAdmin,
+		TargetID:      "principal:" + member.PrincipalID,
+		TargetLabel:   targetLabel,
+		Action:        "IAM_ROLE_ASSIGNED",
+		Outcome:       auditOutcomeSucceeded,
+		ChangeSummary: map[string]any{"roleKey": input.RoleKey, "hasSiteScope": input.SiteID != ""},
+	})
+	writer.WriteHeader(http.StatusNoContent)
 }
 
 func (h *handler) revokeMemberRole(writer http.ResponseWriter, request *http.Request, admin userAdminRequest, member iamserver.AdminMember, bindingID string) {
+	targetLabel := firstNonEmpty(member.DisplayName, "组织成员")
 	for _, existing := range member.Assignments {
 		if existing.BindingID == bindingID && existing.Status == "ACTIVE" {
-			if h.callIAMAdmin(writer, request, admin.session, internalIAMAdminMutationPath, iamserver.AdminMutationRequest{
+			roleKey := roleKeyForTemplate(admin.directory, existing.RoleTemplateID)
+			iamStatus, code, ok := h.callIAMAdminWithOutcome(writer, request, admin.session, internalIAMAdminMutationPath, iamserver.AdminMutationRequest{
 				Operation: "role-binding.upsert", PrincipalID: member.PrincipalID, RoleTemplateID: existing.RoleTemplateID,
 				SiteID: existing.SiteID, Status: "REVOKED", ExpectedRevision: existing.Revision,
-			}, nil) {
-				writer.WriteHeader(http.StatusNoContent)
+			}, nil)
+			if !ok {
+				h.emitDomainAudit(request.Context(), request, admin.session, domainAuditInput{
+					Category:      auditserver.AggregateTypeIAMAdmin,
+					TargetID:      "principal:" + member.PrincipalID,
+					TargetLabel:   targetLabel,
+					Action:        "IAM_ROLE_REVOKED",
+					Outcome:       auditOutcomeForStatus(iamStatus),
+					ChangeSummary: map[string]any{"roleKey": roleKey, "hasSiteScope": existing.SiteID != "", "reasonCode": code},
+				})
+				return
 			}
+			h.emitDomainAudit(request.Context(), request, admin.session, domainAuditInput{
+				Category:      auditserver.AggregateTypeIAMAdmin,
+				TargetID:      "principal:" + member.PrincipalID,
+				TargetLabel:   targetLabel,
+				Action:        "IAM_ROLE_REVOKED",
+				Outcome:       auditOutcomeSucceeded,
+				ChangeSummary: map[string]any{"roleKey": roleKey, "hasSiteScope": existing.SiteID != ""},
+			})
+			writer.WriteHeader(http.StatusNoContent)
 			return
 		}
 	}
+	h.emitIAMAdminAudit(request, admin.session, "principal:"+member.PrincipalID, targetLabel, "IAM_ROLE_REVOKED", auditOutcomeRejected, map[string]any{"reasonCode": "RESOURCE_NOT_FOUND"})
 	writeIdentityFailure(writer, request, identityFailure{404, "RESOURCE_NOT_FOUND", "Role not found", "This role is not assigned to the user.", false})
 }
 
@@ -396,6 +570,16 @@ func (h *handler) OwnPassword(writer http.ResponseWriter, request *http.Request)
 		failure = &identityFailure{403, "PASSWORD_CHANGE_FORBIDDEN", "Password change unavailable", "This account's password is not managed by the platform.", false}
 	}
 	if failure != nil {
+		if session.TenantID != "" {
+			h.emitDomainAudit(request.Context(), request, session, domainAuditInput{
+				Category:      auditserver.AggregateTypeIAMAdmin,
+				TargetID:      "principal:" + session.Principal.Subject,
+				TargetLabel:   firstNonEmpty(session.Principal.DisplayName, "当前账号"),
+				Action:        "IAM_OWN_PASSWORD_CHANGED",
+				Outcome:       auditOutcomeForStatus(failure.status),
+				ChangeSummary: map[string]any{"passwordChanged": false, "reasonCode": failure.code},
+			})
+		}
 		writeIdentityFailure(writer, request, *failure)
 		return
 	}
@@ -403,18 +587,44 @@ func (h *handler) OwnPassword(writer http.ResponseWriter, request *http.Request)
 		CurrentPassword string `json:"currentPassword"`
 		NewPassword     string `json:"newPassword"`
 	}
+	targetLabel := firstNonEmpty(session.Principal.DisplayName, "当前账号")
 	if !decodeUserAdminBody(writer, request, &input) {
+		h.emitIAMAdminAudit(request, session, "principal:"+session.Principal.Subject, targetLabel, "IAM_OWN_PASSWORD_CHANGED", auditOutcomeRejected, map[string]any{"passwordChanged": false, "reasonCode": "USER_ADMIN_REQUEST_INVALID"})
 		return
 	}
 	err := h.identity.config.UserDirectory.ChangePassword(request.Context(), session.Principal.Subject, input.CurrentPassword, input.NewPassword)
 	if errors.Is(err, identityadmin.ErrInvalidCredentials) {
+		h.emitDomainAudit(request.Context(), request, session, domainAuditInput{
+			Category:      auditserver.AggregateTypeIAMAdmin,
+			TargetID:      "principal:" + session.Principal.Subject,
+			TargetLabel:   targetLabel,
+			Action:        "IAM_OWN_PASSWORD_CHANGED",
+			Outcome:       auditOutcomeRejected,
+			ChangeSummary: map[string]any{"passwordChanged": false, "reasonCode": "CURRENT_PASSWORD_INVALID"},
+		})
 		writeIdentityFailure(writer, request, identityFailure{400, "CURRENT_PASSWORD_INVALID", "Current password incorrect", "The current password is incorrect, or the account is locked for 15 minutes after repeated attempts.", false})
 		return
 	}
 	if err != nil {
+		h.emitDomainAudit(request.Context(), request, session, domainAuditInput{
+			Category:      auditserver.AggregateTypeIAMAdmin,
+			TargetID:      "principal:" + session.Principal.Subject,
+			TargetLabel:   targetLabel,
+			Action:        "IAM_OWN_PASSWORD_CHANGED",
+			Outcome:       auditOutcomeRejected,
+			ChangeSummary: map[string]any{"passwordChanged": false},
+		})
 		writeDirectoryFailure(writer, request, err)
 		return
 	}
+	h.emitDomainAudit(request.Context(), request, session, domainAuditInput{
+		Category:      auditserver.AggregateTypeIAMAdmin,
+		TargetID:      "principal:" + session.Principal.Subject,
+		TargetLabel:   targetLabel,
+		Action:        "IAM_OWN_PASSWORD_CHANGED",
+		Outcome:       auditOutcomeSucceeded,
+		ChangeSummary: map[string]any{"passwordChanged": true},
+	})
 	writer.WriteHeader(http.StatusNoContent)
 }
 
@@ -427,9 +637,18 @@ func roleNamed(directory iamserver.AdminDirectory, roleKey string) (iamserver.Ad
 	return iamserver.AdminRole{}, false
 }
 
-// callIAMAdmin sends one IAM administration request as the acting administrator and decodes the
-// reply into result when it is not nil. It writes the failure and returns false when IAM refuses.
-func (h *handler) callIAMAdmin(writer http.ResponseWriter, request *http.Request, session bffSession, internalPath string, body any, result any) bool {
+func roleKeyForTemplate(directory iamserver.AdminDirectory, roleTemplateID string) string {
+	for _, role := range directory.Roles {
+		if role.RoleTemplateID == roleTemplateID {
+			return role.RoleKey
+		}
+	}
+	return ""
+}
+
+// callIAMAdminWithOutcome sends one IAM administration request as the acting administrator and
+// decodes the reply into result when it is not nil, returning the public error status and code on refusal.
+func (h *handler) callIAMAdminWithOutcome(writer http.ResponseWriter, request *http.Request, session bffSession, internalPath string, body any, result any) (int, string, bool) {
 	var payload []byte
 	if body != nil {
 		payload, _ = json.Marshal(body)
@@ -437,23 +656,23 @@ func (h *handler) callIAMAdmin(writer http.ResponseWriter, request *http.Request
 	status, reply, failure := h.identity.forwardIAMAdmin(request.Context(), session, internalPath, payload)
 	if failure != nil {
 		writeIdentityFailure(writer, request, *failure)
-		return false
+		return failure.status, failure.code, false
 	}
 	if status != http.StatusOK {
-		writeIAMProblem(writer, request, status, reply)
-		return false
+		publicStatus, code := writeIAMProblem(writer, request, status, reply)
+		return publicStatus, code, false
 	}
 	if result != nil {
 		if err := json.Unmarshal(reply, result); err != nil {
 			writeIdentityFailure(writer, request, identityFailure{503, "IAM_RESPONSE_INVALID", "IAM response invalid", "IAM returned an unreadable reply.", true})
-			return false
+			return http.StatusServiceUnavailable, "IAM_RESPONSE_INVALID", false
 		}
 	}
-	return true
+	return http.StatusOK, "", true
 }
 
 // writeIAMProblem re-issues an IAM refusal as a Gateway problem the browser understands.
-func writeIAMProblem(writer http.ResponseWriter, request *http.Request, status int, body []byte) {
+func writeIAMProblem(writer http.ResponseWriter, request *http.Request, status int, body []byte) (int, string) {
 	var problem struct {
 		Code string `json:"code"`
 	}
@@ -461,14 +680,19 @@ func writeIAMProblem(writer http.ResponseWriter, request *http.Request, status i
 	switch problem.Code {
 	case "IAM_ADMIN_SELF_LOCKOUT":
 		writeIdentityFailure(writer, request, identityFailure{409, problem.Code, "Change refused", "You cannot disable yourself or remove your own administrator role.", false})
+		return http.StatusConflict, problem.Code
 	case "IAM_ADMIN_REVISION_CONFLICT":
 		writeIdentityFailure(writer, request, identityFailure{409, problem.Code, "Changed elsewhere", "This user was changed by someone else. Reload and try again.", false})
+		return http.StatusConflict, problem.Code
 	case "IAM_ADMIN_FORBIDDEN":
 		writeIdentityFailure(writer, request, identityFailure{403, problem.Code, "User administration forbidden", "Only administrators can manage users.", false})
+		return http.StatusForbidden, problem.Code
 	case "IAM_ADMIN_REQUEST_REJECTED", "IAM_ADMIN_REQUEST_INVALID", "IAM_ADMIN_RESOURCE_NOT_FOUND":
 		writeIdentityFailure(writer, request, identityFailure{400, problem.Code, "Request refused", "The change was not accepted.", false})
+		return http.StatusBadRequest, problem.Code
 	default:
 		writeIdentityFailure(writer, request, identityFailure{503, "IAM_UNAVAILABLE", "IAM unavailable", "IAM could not complete the request.", status >= 500})
+		return http.StatusServiceUnavailable, "IAM_UNAVAILABLE"
 	}
 }
 
@@ -498,4 +722,38 @@ func decodeUserAdminBody(writer http.ResponseWriter, request *http.Request, targ
 		return false
 	}
 	return true
+}
+
+func (h *handler) emitIAMAdminAudit(
+	request *http.Request,
+	session bffSession,
+	targetID, targetLabel, action, outcome string,
+	summary map[string]any,
+) {
+	h.emitDomainAudit(request.Context(), request, session, domainAuditInput{
+		Category:      auditserver.AggregateTypeIAMAdmin,
+		TargetID:      targetID,
+		TargetLabel:   targetLabel,
+		Action:        action,
+		Outcome:       outcome,
+		ChangeSummary: summary,
+	})
+}
+
+func iamAdminActionForPath(path string) string {
+	parts := strings.Split(strings.TrimPrefix(path, publicMembersPrefix), "/")
+	switch {
+	case len(parts) == 2 && parts[1] == "password":
+		return "IAM_MEMBER_PASSWORD_RESET"
+	case len(parts) == 2 && parts[1] == "status":
+		return "IAM_MEMBER_STATUS_UPDATED"
+	case len(parts) == 2 && parts[1] == "profile":
+		return "IAM_MEMBER_PROFILE_UPDATED"
+	case len(parts) == 2 && parts[1] == "assignments":
+		return "IAM_ROLE_ASSIGNED"
+	case len(parts) == 4 && parts[1] == "assignments" && parts[3] == "revoke":
+		return "IAM_ROLE_REVOKED"
+	default:
+		return "IAM_ADMIN_ACCESS"
+	}
 }

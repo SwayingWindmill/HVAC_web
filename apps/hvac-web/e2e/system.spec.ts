@@ -160,7 +160,7 @@ test('操作记录 refuses to query or search when the account lacks audit.read'
   expect(gateway.writes.filter((write) => write.path === '/api/v1/audit/search')).toHaveLength(0);
 });
 
-test('操作记录 renders translated audit facts with zero raw codes, zero overflow at 1440px, and supports search', async ({ page, gateway }) => {
+test('操作记录 renders translated audit facts with category filters, zero raw codes, zero overflow at 1440px, and supports search', async ({ page, gateway }) => {
   gateway.principalOverride = {
     ...principal,
     authorization: { ...principal.authorization, capabilities: [...principal.authorization.capabilities, 'audit.read'] },
@@ -172,20 +172,39 @@ test('操作记录 renders translated audit facts with zero raw codes, zero over
   const table = panel.getByRole('table', { name: '操作记录' });
   await expect(table).toBeVisible();
 
-  const auditQueries = gateway.writes.filter((write) => write.path === '/api/v1/audit/search');
-  expect(auditQueries.map((write) => write.body)).toEqual([{ limit: 100 }]);
+  const auditQueries = () => gateway.writes.filter((write) => write.path === '/api/v1/audit/search');
+  expect(auditQueries().map((write) => write.body)).toEqual([{ limit: 100 }]);
 
   const bodyRows = table.locator('tbody tr');
-  await expect(bodyRows).toHaveCount(3);
-  await expect(bodyRows.nth(0)).toContainText(/值班工程师.*撤销会话.*登录会话.*成功/);
-  await expect(bodyRows.nth(1)).toContainText(/其他账号.*未识别的操作.*其他对象.*拒绝/);
-  await expect(bodyRows.nth(2)).toContainText(/值班工程师.*登录.*登录会话.*成功/);
-  await expect(panel).not.toContainText(/[0-9a-f]{8}-[0-9a-f]{4}-|SESSION_|bff-session|SUCCEEDED|DENIED|SOMETHING_NEW|mystery/);
+  await expect(bodyRows).toHaveCount(9);
+  await expect(bodyRows.nth(0)).toContainText(/小程序.*王值班.*下发控制指令.*远程控制.*1号冷水机组温度调节.*温度设定 23\.5℃.*成功/);
+  await expect(bodyRows.nth(1)).toContainText(/网页.*张主管.*切换站点控制模式.*控制锁定.*松雅轩冷站.*模式：本地手动.*成功/);
+  await expect(bodyRows.nth(4)).toContainText(/网页.*值班工程师.*变更成员状态.*成员权限.*李值班.*状态：启用 → 停用.*成功/);
+  await expect(bodyRows.nth(6)).toContainText(/值班工程师.*撤销会话.*登录会话.*成功/);
+  await expect(bodyRows.nth(7)).toContainText(/其他账号.*未识别的操作.*其他对象.*权限校验未通过.*拒绝/);
+  await expect(bodyRows.nth(8)).toContainText(/值班工程师.*登录.*登录会话.*成功/);
+  await expect(panel).not.toContainText(
+    /[0-9a-f]{8}-[0-9a-f]{4}-|SESSION_|bff-session|SUCCEEDED|DENIED|REJECTED|SOMETHING_NEW|mystery|MINI_PROGRAM|BROWSER|remote-command|control-lock|operating-schedule|registry-mutation|iam-admin|gateway-credential/,
+  );
 
   const hasOverflow = await page.evaluate(
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
   );
   expect(hasOverflow).toBe(false);
+
+  const categoryFilter = panel.getByRole('radiogroup', { name: '按业务域筛选操作记录' });
+  await categoryFilter.getByRole('radio', { name: '运行与锁定', exact: true }).click();
+  await expect(bodyRows).toHaveCount(2);
+  await expect(bodyRows.nth(0)).toContainText(/切换站点控制模式/);
+  await expect(bodyRows.nth(1)).toContainText(/更新运行计划.*时段 3 条/);
+  expect(auditQueries().at(-1)?.body).toEqual({ limit: 100, category: 'control-schedule' });
+
+  await categoryFilter.getByRole('radio', { name: '设备登记', exact: true }).click();
+  await expect(bodyRows).toHaveCount(1);
+  await expect(bodyRows.first()).toContainText(/小程序.*王值班.*变更设备档案.*2号离心机.*变更字段：名称、状态/);
+
+  await categoryFilter.getByRole('radio', { name: '全部', exact: true }).click();
+  await expect(bodyRows).toHaveCount(9);
 
   const search = panel.getByRole('textbox', { name: '搜索操作记录', exact: true });
   await search.fill('撤销会话');

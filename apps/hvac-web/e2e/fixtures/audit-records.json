@@ -1,5 +1,124 @@
 [
   {
+    "ledgerSequence": 9,
+    "messageId": "01a12370-0000-7000-8000-000000000009",
+    "tenantId": "018f3d00-0000-7000-8000-000000000001",
+    "actor": "01a12360-f4a7-76f6-a654-170eac9bc171",
+    "actorDisplay": "王值班",
+    "clientKind": "MINI_PROGRAM",
+    "action": "COMMAND_SUBMITTED",
+    "resourceType": "remote-command",
+    "resourceId": "01a12370-0000-7000-8000-000000000109",
+    "targetLabel": "1号冷水机组温度调节",
+    "outcome": "SUCCEEDED",
+    "policyRevision": "7",
+    "correlationId": "01a12370-0000-7000-8000-000000000209",
+    "changeSummary": {
+      "parameters": {
+        "setpointC": 23.5
+      }
+    },
+    "occurredAt": "2026-10-14T05:10:00Z"
+  },
+  {
+    "ledgerSequence": 8,
+    "messageId": "01a12370-0000-7000-8000-000000000008",
+    "tenantId": "018f3d00-0000-7000-8000-000000000001",
+    "actor": "01a12360-f4a7-76f6-a654-170eac9bc172",
+    "actorDisplay": "张主管",
+    "clientKind": "BROWSER",
+    "action": "SITE_CONTROL_MODE_UPDATED",
+    "resourceType": "control-lock",
+    "resourceId": "01a12370-0000-7000-8000-000000000108",
+    "targetLabel": "松雅轩冷站",
+    "outcome": "SUCCEEDED",
+    "policyRevision": "7",
+    "correlationId": "01a12370-0000-7000-8000-000000000208",
+    "changeSummary": {
+      "afterMode": "MANUAL_OVERRIDE",
+      "cancelledCount": 2,
+      "reason": "现场维保接管"
+    },
+    "occurredAt": "2026-10-14T04:40:00Z"
+  },
+  {
+    "ledgerSequence": 7,
+    "messageId": "01a12370-0000-7000-8000-000000000007",
+    "tenantId": "018f3d00-0000-7000-8000-000000000001",
+    "actor": "01a12360-f4a7-76f6-a654-170eac9bc172",
+    "actorDisplay": "张主管",
+    "clientKind": "BROWSER",
+    "action": "OPERATING_SCHEDULE_UPDATED",
+    "resourceType": "operating-schedule",
+    "resourceId": "01a12370-0000-7000-8000-000000000107",
+    "targetLabel": "松雅轩冷站运行计划",
+    "outcome": "SUCCEEDED",
+    "policyRevision": "7",
+    "correlationId": "01a12370-0000-7000-8000-000000000207",
+    "changeSummary": {
+      "entriesCount": 3
+    },
+    "occurredAt": "2026-10-14T04:15:00Z"
+  },
+  {
+    "ledgerSequence": 6,
+    "messageId": "01a12370-0000-7000-8000-000000000006",
+    "tenantId": "018f3d00-0000-7000-8000-000000000001",
+    "actor": "01a12360-f4a7-76f6-a654-170eac9bc171",
+    "actorDisplay": "王值班",
+    "clientKind": "MINI_PROGRAM",
+    "action": "REGISTRY_ASSET_MUTATED",
+    "resourceType": "registry-mutation",
+    "resourceId": "01a12370-0000-7000-8000-000000000106",
+    "targetLabel": "2号离心机",
+    "outcome": "SUCCEEDED",
+    "policyRevision": "7",
+    "correlationId": "01a12370-0000-7000-8000-000000000206",
+    "changeSummary": {
+      "changedFields": ["displayName", "status"]
+    },
+    "occurredAt": "2026-10-14T03:50:00Z"
+  },
+  {
+    "ledgerSequence": 5,
+    "messageId": "01a12370-0000-7000-8000-000000000005",
+    "tenantId": "018f3d00-0000-7000-8000-000000000001",
+    "actor": "01a0e6dc-35fe-7c0f-bde3-959af7ea9e53",
+    "actorDisplay": "值班工程师",
+    "clientKind": "BROWSER",
+    "action": "IAM_MEMBER_STATUS_UPDATED",
+    "resourceType": "iam-admin",
+    "resourceId": "01a12370-0000-7000-8000-000000000105",
+    "targetLabel": "李值班",
+    "outcome": "SUCCEEDED",
+    "policyRevision": "7",
+    "correlationId": "01a12370-0000-7000-8000-000000000205",
+    "changeSummary": {
+      "beforeEnabled": true,
+      "afterEnabled": false
+    },
+    "occurredAt": "2026-10-14T03:10:00Z"
+  },
+  {
+    "ledgerSequence": 4,
+    "messageId": "01a12370-0000-7000-8000-000000000004",
+    "tenantId": "018f3d00-0000-7000-8000-000000000001",
+    "actor": "01a0e6dc-35fe-7c0f-bde3-959af7ea9e53",
+    "actorDisplay": "值班工程师",
+    "clientKind": "BROWSER",
+    "action": "GATEWAY_ENROLLMENT_CODE_ISSUED",
+    "resourceType": "gateway-credential",
+    "resourceId": "01a12370-0000-7000-8000-000000000104",
+    "targetLabel": "网关接入授权码",
+    "outcome": "SUCCEEDED",
+    "policyRevision": "7",
+    "correlationId": "01a12370-0000-7000-8000-000000000204",
+    "changeSummary": {
+      "credentialKind": "ENROLLMENT_CODE"
+    },
+    "occurredAt": "2026-10-14T02:45:00Z"
+  },
+  {
     "ledgerSequence": 3,
     "messageId": "01a12370-0000-7000-8000-000000000003",
     "tenantId": "018f3d00-0000-7000-8000-000000000001",

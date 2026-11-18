@@ -7,11 +7,31 @@ import (
 	"github.com/quanlaihe/hvac-web/modules/audit/internal/audit"
 )
 
-const SessionAuditPathPrefix = audit.SessionAuditPathPrefix
+const (
+	DomainEventSchemaVersion = audit.DomainEventSchemaVersion
+	SessionAuditPathPrefix   = audit.SessionAuditPathPrefix
+	DomainAuditPath          = audit.DomainAuditPath
+
+	AggregateTypeRemoteCommand     = audit.AggregateTypeRemoteCommand
+	AggregateTypeControlLock       = audit.AggregateTypeControlLock
+	AggregateTypeOperatingSchedule = audit.AggregateTypeOperatingSchedule
+	AggregateTypeRegistryMutation  = audit.AggregateTypeRegistryMutation
+	AggregateTypeIAMAdmin          = audit.AggregateTypeIAMAdmin
+	AggregateTypeGatewayCredential = audit.AggregateTypeGatewayCredential
+	CategoryControlSchedule        = audit.CategoryControlSchedule
+
+	ClientKindBrowser     = audit.ClientKindBrowser
+	ClientKindMiniProgram = audit.ClientKindMiniProgram
+	ClientKindSystem      = audit.ClientKindSystem
+)
 
 type Config = audit.ServerConfig
 type Record = audit.Record
 type RecordReader = audit.RecordReader
+type DomainEvent = audit.DomainEvent
+type DomainEventWriter = audit.DomainEventWriter
+type SearchFilter = audit.SearchFilter
+type SearchRecord = audit.SearchRecord
 type Store = audit.Store
 type MessageMetadata = audit.MessageMetadata
 

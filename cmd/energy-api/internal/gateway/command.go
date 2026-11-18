@@ -18,6 +18,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
 	"github.com/quanlaihe/hvac-web/libs/observability"
+	"github.com/quanlaihe/hvac-web/modules/audit/pkg/auditserver"
 	"github.com/quanlaihe/hvac-web/modules/command/pkg/commandservice"
 )
 
@@ -264,11 +265,13 @@ func (h *handler) createCommand(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	if mediaType := strings.TrimSpace(strings.Split(request.Header.Get("Content-Type"), ";")[0]); mediaType != "application/json" {
+		h.emitCommandRejected(request, session, request.URL.Path, "远程控制指令", "COMMAND_SUBMITTED", "COMMAND_REQUEST_INVALID")
 		writeProblem(writer, request, http.StatusUnsupportedMediaType, "COMMAND_REQUEST_INVALID", "Command request invalid", "The Command request must use application/json.", false, nil)
 		return
 	}
 	idempotencyKey := request.Header.Get("Idempotency-Key")
 	if len(idempotencyKey) < 8 || !requestIDPattern.MatchString(idempotencyKey) {
+		h.emitCommandRejected(request, session, request.URL.Path, "远程控制指令", "COMMAND_SUBMITTED", "COMMAND_REQUEST_INVALID")
 		writeProblem(writer, request, http.StatusBadRequest, "COMMAND_REQUEST_INVALID", "Command request invalid", "A valid Idempotency-Key is required.", false, nil)
 		return
 	}
@@ -278,6 +281,7 @@ func (h *handler) createCommand(writer http.ResponseWriter, request *http.Reques
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&input) != nil || ensureCommandJSONEOF(decoder) != nil ||
 		!isLowerUUIDv7(input.AssetID) || !isLowerUUIDv7(input.CommandPointID) {
+		h.emitCommandRejected(request, session, commandCreateAuditTargetID(input.AssetID, input.CommandPointID, request.URL.Path), "远程控制指令", "COMMAND_SUBMITTED", "COMMAND_REQUEST_INVALID")
 		writeProblem(writer, request, http.StatusBadRequest, "COMMAND_REQUEST_INVALID", "Command request invalid", "The Command request is invalid.", false, nil)
 		return
 	}
@@ -285,6 +289,14 @@ func (h *handler) createCommand(writer http.ResponseWriter, request *http.Reques
 	var extraActions []string
 	if strings.TrimSpace(input.VerificationCode) != "" {
 		if stepUpFailure := h.verifySubmitStepUpTOTP(request, session, input.VerificationCode); stepUpFailure != nil {
+			h.emitDomainAudit(request.Context(), request, session, domainAuditInput{
+				Category:      auditserver.AggregateTypeRemoteCommand,
+				TargetID:      input.AssetID + ":" + input.CommandPointID,
+				TargetLabel:   "远程控制指令",
+				Action:        "COMMAND_SUBMITTED",
+				Outcome:       auditOutcomeDenied,
+				ChangeSummary: map[string]any{"reasonCode": stepUpFailure.code, "stepUpRequired": true},
+			})
 			h.writeCommandFailure(writer, request, *stepUpFailure)
 			return
 		}
@@ -302,18 +314,56 @@ func (h *handler) createCommand(writer http.ResponseWriter, request *http.Reques
 		map[string]string{"Idempotency-Key": idempotencyKey}, h.command.maxResponseBytes, extraActions...,
 	)
 	if failure != nil {
+		h.emitDomainAudit(request.Context(), request, session, domainAuditInput{
+			Category:      auditserver.AggregateTypeRemoteCommand,
+			TargetID:      input.AssetID + ":" + input.CommandPointID,
+			TargetLabel:   "远程控制指令",
+			Action:        "COMMAND_SUBMITTED",
+			Outcome:       auditOutcomeForStatus(failure.status),
+			ChangeSummary: map[string]any{"reasonCode": failure.code},
+		})
 		h.writeCommandFailure(writer, request, *failure)
 		return
 	}
 	if status < http.StatusOK || status >= http.StatusMultipleChoices {
+		h.emitDomainAudit(request.Context(), request, session, domainAuditInput{
+			Category:      auditserver.AggregateTypeRemoteCommand,
+			TargetID:      input.AssetID + ":" + input.CommandPointID,
+			TargetLabel:   "远程控制指令",
+			Action:        "COMMAND_SUBMITTED",
+			Outcome:       auditOutcomeForStatus(status),
+			ChangeSummary: map[string]any{"reasonCode": problemCodeFromRaw(rawBody)},
+		})
 		h.writeOperatorProblem(writer, request, status, rawBody, "")
 		return
 	}
 	view, ok := decodeAndValidateCommandView(rawBody)
 	if !ok || view.TenantID != session.TenantID {
+		h.emitDomainAudit(request.Context(), request, session, domainAuditInput{
+			Category:      auditserver.AggregateTypeRemoteCommand,
+			TargetID:      input.AssetID + ":" + input.CommandPointID,
+			TargetLabel:   "远程控制指令",
+			Action:        "COMMAND_SUBMITTED",
+			Outcome:       auditOutcomeFailed,
+			ChangeSummary: map[string]any{"reasonCode": "COMMAND_RESPONSE_INVALID"},
+		})
 		h.writeCommandFailure(writer, request, commandUnavailable("Command Service returned an invalid Command projection."))
 		return
 	}
+	h.emitDomainAudit(request.Context(), request, session, domainAuditInput{
+		Category:    auditserver.AggregateTypeRemoteCommand,
+		TargetID:    view.CommandID,
+		TargetLabel: commandTargetLabel("submit", string(view.Capability)),
+		Action:      "COMMAND_SUBMITTED",
+		Outcome:     auditOutcomeSucceeded,
+		ChangeSummary: map[string]any{
+			"capability":     string(view.Capability),
+			"risk":           string(view.Risk),
+			"approvalPolicy": string(view.ApprovalPolicy),
+			"status":         string(view.Status),
+			"parameters":     parametersSummaryMap(view.Parameters),
+		},
+	})
 	writer.Header().Set("Location", "/api/v1/commands/"+view.CommandID)
 	writer.Header().Set("Cache-Control", "private, no-store")
 	writeJSON(writer, http.StatusAccepted, view)
@@ -411,10 +461,12 @@ func (h *handler) approveCommand(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	if !isLowerUUID(commandID) {
+		h.emitCommandRejected(request, session, commandID, "控制指令审批", "COMMAND_APPROVED", "RESOURCE_NOT_FOUND")
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Command was not found.", false, nil)
 		return
 	}
 	if mediaType := strings.TrimSpace(strings.Split(request.Header.Get("Content-Type"), ";")[0]); mediaType != "application/json" {
+		h.emitCommandRejected(request, session, commandID, "控制指令审批", "COMMAND_APPROVED", "COMMAND_APPROVAL_REQUEST_INVALID")
 		writeProblem(writer, request, http.StatusUnsupportedMediaType, "COMMAND_APPROVAL_REQUEST_INVALID", "Command approval invalid", "The Command approval request must use application/json.", false, nil)
 		return
 	}
@@ -423,6 +475,7 @@ func (h *handler) approveCommand(writer http.ResponseWriter, request *http.Reque
 	decoder := json.NewDecoder(request.Body)
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&input) != nil || ensureCommandJSONEOF(decoder) != nil {
+		h.emitCommandRejected(request, session, commandID, "控制指令审批", "COMMAND_APPROVED", "COMMAND_APPROVAL_REQUEST_INVALID")
 		writeProblem(writer, request, http.StatusBadRequest, "COMMAND_APPROVAL_REQUEST_INVALID", "Command approval invalid", "The public approval request must be an empty JSON object.", false, nil)
 		return
 	}
@@ -442,10 +495,12 @@ func (h *handler) reconcileCommand(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	if !isLowerUUID(commandID) {
+		h.emitCommandRejected(request, session, commandID, "控制指令结果确认", "COMMAND_RECONCILED", "RESOURCE_NOT_FOUND")
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Command was not found.", false, nil)
 		return
 	}
 	if mediaType := strings.TrimSpace(strings.Split(request.Header.Get("Content-Type"), ";")[0]); mediaType != "application/json" {
+		h.emitCommandRejected(request, session, commandID, "控制指令结果确认", "COMMAND_RECONCILED", "COMMAND_RECONCILIATION_REQUEST_INVALID")
 		writeProblem(writer, request, http.StatusUnsupportedMediaType, "COMMAND_RECONCILIATION_REQUEST_INVALID", "Command reconciliation invalid", "The Command reconciliation request must use application/json.", false, nil)
 		return
 	}
@@ -457,6 +512,7 @@ func (h *handler) reconcileCommand(writer http.ResponseWriter, request *http.Req
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&input) != nil || ensureCommandJSONEOF(decoder) != nil ||
 		(input.Outcome != commandmodel.ReconciledApplied && input.Outcome != commandmodel.ReconciledNotApplied) {
+		h.emitCommandRejected(request, session, commandID, "控制指令结果确认", "COMMAND_RECONCILED", "COMMAND_RECONCILIATION_REQUEST_INVALID")
 		writeProblem(writer, request, http.StatusBadRequest, "COMMAND_RECONCILIATION_REQUEST_INVALID", "Command reconciliation invalid", "The request must state the outcome as APPLIED or NOT_APPLIED and nothing else.", false, nil)
 		return
 	}
@@ -472,11 +528,13 @@ func (h *handler) cancelCommand(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	if !isLowerUUID(commandID) {
+		h.emitCommandRejected(request, session, commandID, "取消控制指令", "COMMAND_CANCELED", "RESOURCE_NOT_FOUND")
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Command was not found.", false, nil)
 		return
 	}
 	rawBody, err := io.ReadAll(io.LimitReader(request.Body, 1025))
 	if err != nil || len(rawBody) > 1024 {
+		h.emitCommandRejected(request, session, commandID, "取消控制指令", "COMMAND_CANCELED", "COMMAND_CANCEL_REQUEST_INVALID")
 		writeProblem(writer, request, http.StatusBadRequest, "COMMAND_CANCEL_REQUEST_INVALID", "Command cancel invalid", "The Command cancel request body is invalid.", false, nil)
 		return
 	}
@@ -487,10 +545,12 @@ func (h *handler) cancelCommand(writer http.ResponseWriter, request *http.Reques
 		decoder := json.NewDecoder(bytes.NewReader(rawBody))
 		decoder.DisallowUnknownFields()
 		if decoder.Decode(&input) != nil || ensureCommandJSONEOF(decoder) != nil {
+			h.emitCommandRejected(request, session, commandID, "取消控制指令", "COMMAND_CANCELED", "COMMAND_CANCEL_REQUEST_INVALID")
 			writeProblem(writer, request, http.StatusBadRequest, "COMMAND_CANCEL_REQUEST_INVALID", "Command cancel invalid", "The Command cancel request body is invalid.", false, nil)
 			return
 		}
 		if utf8.RuneCountInString(strings.TrimSpace(input.Reason)) > 256 {
+			h.emitCommandRejected(request, session, commandID, "取消控制指令", "COMMAND_CANCELED", "COMMAND_CANCEL_REQUEST_INVALID")
 			writeProblem(writer, request, http.StatusBadRequest, "COMMAND_CANCEL_REQUEST_INVALID", "Command cancel invalid", "reason must be at most 256 characters.", false, nil)
 			return
 		}
@@ -506,26 +566,176 @@ func (h *handler) forwardCommandItemMutation(
 	payload any,
 	extraActions ...string,
 ) {
+	auditAction, defaultLabel := commandMutationMeta(action)
+	extraSummary := extractCommandMutationSummary(action, payload)
 	status, rawBody, failure := h.callOperatorCommandBackend(
 		request, session, http.MethodPost,
 		internalOperatorCommandsPath+"/"+url.PathEscape(commandID)+"/"+action,
 		payload, nil, h.command.maxResponseBytes, extraActions...,
 	)
 	if failure != nil {
+		extraSummary["reasonCode"] = failure.code
+		h.emitDomainAudit(request.Context(), request, session, domainAuditInput{
+			Category:      auditserver.AggregateTypeRemoteCommand,
+			TargetID:      commandID,
+			TargetLabel:   defaultLabel,
+			Action:        auditAction,
+			Outcome:       auditOutcomeForStatus(failure.status),
+			ChangeSummary: extraSummary,
+		})
 		h.writeCommandFailure(writer, request, *failure)
 		return
 	}
 	if status != http.StatusOK {
+		if code := problemCodeFromRaw(rawBody); code != "" {
+			extraSummary["reasonCode"] = code
+		}
+		h.emitDomainAudit(request.Context(), request, session, domainAuditInput{
+			Category:      auditserver.AggregateTypeRemoteCommand,
+			TargetID:      commandID,
+			TargetLabel:   defaultLabel,
+			Action:        auditAction,
+			Outcome:       auditOutcomeForStatus(status),
+			ChangeSummary: extraSummary,
+		})
 		h.writeOperatorProblem(writer, request, status, rawBody, action)
 		return
 	}
 	view, ok := decodeAndValidateCommandView(rawBody)
 	if !ok || view.CommandID != commandID || view.TenantID != session.TenantID {
+		extraSummary["reasonCode"] = "COMMAND_RESPONSE_INVALID"
+		h.emitDomainAudit(request.Context(), request, session, domainAuditInput{
+			Category:      auditserver.AggregateTypeRemoteCommand,
+			TargetID:      commandID,
+			TargetLabel:   defaultLabel,
+			Action:        auditAction,
+			Outcome:       auditOutcomeFailed,
+			ChangeSummary: extraSummary,
+		})
 		h.writeCommandFailure(writer, request, commandUnavailable("Command Service returned an invalid Command projection."))
 		return
 	}
+	extraSummary["capability"] = string(view.Capability)
+	extraSummary["status"] = string(view.Status)
+	extraSummary["approvalCount"] = view.ApprovalCount
+	h.emitDomainAudit(request.Context(), request, session, domainAuditInput{
+		Category:      auditserver.AggregateTypeRemoteCommand,
+		TargetID:      commandID,
+		TargetLabel:   commandTargetLabel(action, string(view.Capability)),
+		Action:        auditAction,
+		Outcome:       auditOutcomeSucceeded,
+		ChangeSummary: extraSummary,
+	})
 	writer.Header().Set("Cache-Control", "private, no-store")
 	writeJSON(writer, http.StatusOK, view)
+}
+
+func commandMutationMeta(action string) (string, string) {
+	switch action {
+	case "approve":
+		return "COMMAND_APPROVED", "控制指令审批"
+	case "reconcile":
+		return "COMMAND_RECONCILED", "控制指令结果确认"
+	case "cancel":
+		return "COMMAND_CANCELED", "取消控制指令"
+	default:
+		return "COMMAND_MUTATED", "控制指令操作"
+	}
+}
+
+func commandCapabilityLabel(capability string) string {
+	switch commandmodel.Capability(capability) {
+	case commandmodel.CapabilityStart:
+		return "开机控制"
+	case commandmodel.CapabilityStop:
+		return "停机控制"
+	case commandmodel.CapabilityStartUnitSequence:
+		return "机组序列启动"
+	case commandmodel.CapabilityStopUnitSequence:
+		return "机组序列停止"
+	case commandmodel.CapabilityResetFault:
+		return "故障复位"
+	case commandmodel.CapabilitySetTemperatureSetpoint:
+		return "温度设定"
+	case commandmodel.CapabilitySetChilledWaterTemperatureSetpoint:
+		return "冷冻水温度设定"
+	case commandmodel.CapabilitySetFrequency:
+		return "频率设定"
+	case commandmodel.CapabilitySetFanSpeed:
+		return "风速设定"
+	case commandmodel.CapabilitySetLoadLimit:
+		return "负荷上限设定"
+	case commandmodel.CapabilitySetOpening:
+		return "阀门开度设定"
+	default:
+		return ""
+	}
+}
+
+func commandTargetLabel(action, capability string) string {
+	capLabel := commandCapabilityLabel(capability)
+	if action == "submit" {
+		if capLabel != "" {
+			return capLabel + "指令"
+		}
+		return "远程控制指令"
+	}
+	_, base := commandMutationMeta(action)
+	if capLabel != "" {
+		return base + "（" + capLabel + "）"
+	}
+	return base
+}
+
+func commandCreateAuditTargetID(assetID, pointID, fallback string) string {
+	if assetID != "" && pointID != "" {
+		return assetID + ":" + pointID
+	}
+	return firstNonEmpty(assetID, pointID, fallback)
+}
+
+func (h *handler) emitCommandRejected(request *http.Request, session bffSession, targetID, targetLabel, action, reasonCode string) {
+	h.emitDomainAudit(request.Context(), request, session, domainAuditInput{
+		Category:      auditserver.AggregateTypeRemoteCommand,
+		TargetID:      targetID,
+		TargetLabel:   targetLabel,
+		Action:        action,
+		Outcome:       auditOutcomeRejected,
+		ChangeSummary: map[string]any{"reasonCode": reasonCode},
+	})
+}
+
+func extractCommandMutationSummary(action string, payload any) map[string]any {
+	summary := map[string]any{}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return summary
+	}
+	var fields map[string]any
+	if json.Unmarshal(encoded, &fields) != nil {
+		return summary
+	}
+	if outcome, ok := fields["outcome"].(string); ok && outcome != "" {
+		summary["reconciledOutcome"] = outcome
+	}
+	if reason, ok := fields["reason"].(string); ok && strings.TrimSpace(reason) != "" {
+		summary["reason"] = strings.TrimSpace(reason)
+	}
+	if action == "approve" {
+		summary["approved"] = true
+	}
+	return summary
+}
+
+func parametersSummaryMap(parameters commandmodel.CommandParameters) map[string]any {
+	if len(parameters) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(parameters))
+	for key, value := range parameters {
+		out[key] = value
+	}
+	return out
 }
 
 func (h *handler) callOperatorCommandBackend(
@@ -907,7 +1117,10 @@ func commandBackendFailure(status int) commandFailure {
 	}
 }
 
-func (h *handler) executeCommandCreate(ctx context.Context, prepared preparedCommand) (commandView, int, string, *commandFailure) {
+func (h *handler) executeCommandCreate(ctx context.Context, request *http.Request, prepared preparedCommand) (view commandView, status int, location string, cmdFailure *commandFailure) {
+	defer func() {
+		h.emitAutoCommandAudit(ctx, request, prepared, view, cmdFailure)
+	}()
 	if h.command == nil || h.command.baseURL == "" || h.command.httpClient == nil {
 		failure := commandUnavailable("Command Service is not configured.")
 		return commandView{}, 0, "", &failure
@@ -934,17 +1147,17 @@ func (h *handler) executeCommandCreate(ctx context.Context, prepared preparedCom
 	}
 	requestContext, cancel := context.WithTimeout(ctx, h.command.timeout)
 	defer cancel()
-	request, err := http.NewRequestWithContext(requestContext, http.MethodPost, h.command.baseURL+internalCommandsPath, bytes.NewReader(body))
+	upstreamReq, err := http.NewRequestWithContext(requestContext, http.MethodPost, h.command.baseURL+internalCommandsPath, bytes.NewReader(body))
 	if err != nil {
 		failure := commandUnavailable("The Command Service request could not be constructed.")
 		return commandView{}, 0, "", &failure
 	}
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Accept", "application/json, application/problem+json")
-	request.Header.Set("X-Command-Grant", prepared.grant)
-	request.Header.Set("X-Request-ID", requestIDFromContext(ctx))
-	observability.InjectHTTP(ctx, request.Header)
-	response, err := h.command.httpClient.Do(request)
+	upstreamReq.Header.Set("Content-Type", "application/json")
+	upstreamReq.Header.Set("Accept", "application/json, application/problem+json")
+	upstreamReq.Header.Set("X-Command-Grant", prepared.grant)
+	upstreamReq.Header.Set("X-Request-ID", requestIDFromContext(ctx))
+	observability.InjectHTTP(ctx, upstreamReq.Header)
+	response, err := h.command.httpClient.Do(upstreamReq)
 	if err != nil {
 		failure := commandUnavailable("Command Service is temporarily unavailable.")
 		return commandView{}, 0, "", &failure
@@ -975,13 +1188,67 @@ func (h *handler) executeCommandCreate(ctx context.Context, prepared preparedCom
 		failure := commandBackendFailure(response.StatusCode)
 		return commandView{}, 0, "", &failure
 	}
-	view, ok := decodeAndValidateCommandView(rawBody)
-	if !ok || view.TenantID != prepared.tenantID || view.SiteID != prepared.siteID ||
-		view.DeviceID != prepared.deviceID || view.PointID != prepared.pointID || view.Capability != prepared.capability {
+	decoded, ok := decodeAndValidateCommandView(rawBody)
+	if !ok || decoded.TenantID != prepared.tenantID || decoded.SiteID != prepared.siteID ||
+		decoded.DeviceID != prepared.deviceID || decoded.PointID != prepared.pointID || decoded.Capability != prepared.capability {
 		failure := commandUnavailable("Command Service returned an invalid accepted Command.")
 		return commandView{}, 0, "", &failure
 	}
-	return view, http.StatusAccepted, response.Header.Get("Location"), nil
+	return decoded, http.StatusAccepted, response.Header.Get("Location"), nil
+}
+
+func autoCommandActorDisplay(source commandmodel.CommandSource) string {
+	switch source {
+	case commandmodel.SourceProtectionRule:
+		return "保护规则回退"
+	case commandmodel.SourceOptimization:
+		return "AI 自动优化"
+	default:
+		return "系统自动控制"
+	}
+}
+
+func (h *handler) emitAutoCommandAudit(
+	ctx context.Context,
+	request *http.Request,
+	prepared preparedCommand,
+	view commandView,
+	failure *commandFailure,
+) {
+	summary := map[string]any{
+		"capability":    string(prepared.capability),
+		"commandSource": string(prepared.commandSource),
+		"priorityTier":  string(prepared.priorityTier),
+	}
+	if params := parametersSummaryMap(prepared.parameters); len(params) > 0 {
+		summary["parameters"] = params
+	}
+	if prepared.bypassReason != "" {
+		summary["reason"] = prepared.bypassReason
+	}
+	if failure != nil {
+		summary["reasonCode"] = failure.code
+		h.emitSystemDomainAudit(ctx, request, prepared.tenantID, prepared.principalID, autoCommandActorDisplay(prepared.commandSource), "workload:spiffe", domainAuditInput{
+			Category:      auditserver.AggregateTypeRemoteCommand,
+			TargetID:      prepared.deviceID + ":" + prepared.pointID,
+			TargetLabel:   commandTargetLabel("submit", string(prepared.capability)),
+			Action:        "COMMAND_SUBMITTED",
+			Outcome:       auditOutcomeForStatus(failure.status),
+			ChangeSummary: summary,
+		})
+		return
+	}
+	summary["risk"] = string(view.Risk)
+	summary["approvalPolicy"] = string(view.ApprovalPolicy)
+	summary["status"] = string(view.Status)
+	h.emitSystemDomainAudit(ctx, request, prepared.tenantID, prepared.principalID, autoCommandActorDisplay(prepared.commandSource), "workload:spiffe", domainAuditInput{
+		Category:      auditserver.AggregateTypeRemoteCommand,
+		TargetID:      view.CommandID,
+		TargetLabel:   commandTargetLabel("submit", string(view.Capability)),
+		Action:        "COMMAND_SUBMITTED",
+		Outcome:       auditOutcomeSucceeded,
+		ChangeSummary: summary,
+	})
 }
 
 func cloneCommandParameters(parameters commandmodel.CommandParameters) commandmodel.CommandParameters {

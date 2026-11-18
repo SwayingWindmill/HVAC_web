@@ -245,7 +245,7 @@ func newEmbeddedAuditServer(ctx context.Context, logger *slog.Logger) (*http.Ser
 		Service: "energy-api-audit", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond,
 	})
 	handler := auditserver.NewHandler(auditserver.Config{
-		Store: store, OperationsWriter: store,
+		Store: store, OperationsWriter: store, DomainWriter: store,
 		AllowedWorkloadSPIFFE:           envOr("AUDIT_ALLOWED_WORKLOAD_SPIFFE", "spiffe://hvac.local/platform-gateway"),
 		AllowedOperationsProducerSPIFFE: envOr("AUDIT_OPERATIONS_PRODUCER_SPIFFE", "spiffe://hvac.local/operations-agent-service"),
 		Audience:                        envOr("AUDIT_AUDIENCE", "audit-ledger-service"),
