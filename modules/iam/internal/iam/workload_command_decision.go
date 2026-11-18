@@ -33,6 +33,7 @@ type AutoControlLeaseFacts struct {
 	SupplyTempMaxC      float64
 	MaxCommandsPerHour  int
 	ManualBackoffUntil  *time.Time
+	ExecutionMode       string
 }
 
 type CommandWorkloadAuthorizationFacts struct {
@@ -143,6 +144,20 @@ func evaluateWorkloadCommandAuthorization(
 		return decision, nil
 	}
 	lease := facts.ActiveLease
+	executionMode := strings.ToUpper(strings.TrimSpace(lease.ExecutionMode))
+	if executionMode == "" {
+		executionMode = "CLOSED_LOOP"
+	}
+	if !request.IsRollback && executionMode == "SHADOW" {
+		decision.ReasonCode = commandauth.ReasonDenyAutoLease
+		decision.Detail = "shadow_mode_lease_blocks_closed_loop_dispatch"
+		return decision, nil
+	}
+	if !request.IsRollback && executionMode != "CLOSED_LOOP" {
+		decision.ReasonCode = commandauth.ReasonDenyAutoLease
+		decision.Detail = "unsupported_lease_execution_mode"
+		return decision, nil
+	}
 	if request.IsRollback {
 		if !facts.MatchingObservingRollback {
 			decision.ReasonCode = commandauth.ReasonDenyAutoLease

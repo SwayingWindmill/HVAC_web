@@ -162,6 +162,7 @@ func buildAlarmOwnerRouter(store alarmservice.Store, gatewaySPIFFE string, gatew
 		ControlEventsSPIFFEs: []string{
 			envOr("ALARM_COMMAND_SPIFFE", "spiffe://hvac.local/command-service"),
 			envOr("ALARM_CONNECTIVITY_SPIFFE", "spiffe://hvac.local/connectivity-service"),
+			envOr("ALARM_OPTIMIZATION_SPIFFE", "spiffe://hvac.local/optimization-service"),
 		},
 		GatewayHandler:       gatewayHandler,
 		TelemetryHandler:     telemetryHandler,
