@@ -1,11 +1,17 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -203,6 +209,217 @@ func TestAgentSessionEventStreamOutlivesTheServerWriteTimeout(t *testing.T) {
 	}
 	if got := strings.Count(string(body), "event: session.snapshot"); got != 2 {
 		t.Fatalf("expected both events after the write timeout, got %d", got)
+	}
+}
+
+func TestAgentSessionEventStreamEmitsKeepaliveDuringIdlePause(t *testing.T) {
+	snapshot := "event: session.snapshot\ndata: " + string(agentSessionEventFixture("session.snapshot", map[string]any{"snapshot": agentSessionSnapshotFixture()}, nil)) + "\n\n"
+	delta := "event: assistant.delta\ndata: " + string(agentSessionEventFixture("assistant.delta", map[string]any{"messageId": "message-1", "delta": "ok"}, "run-1")) + "\n\n"
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		upstream, feed := io.Pipe()
+		go func() {
+			_, _ = feed.Write([]byte(snapshot))
+			time.Sleep(110 * time.Millisecond)
+			_, _ = feed.Write([]byte(delta))
+			_ = feed.Close()
+		}()
+		ctx, cancel := context.WithCancel(request.Context())
+		defer cancel()
+		_, _ = forwardAgentSessionEventStreamWithConfig(
+			ctx,
+			cancel,
+			&statusRecorder{ResponseWriter: writer, status: http.StatusOK},
+			upstream,
+			90*time.Millisecond,
+			30*time.Millisecond,
+		)
+	}))
+	server.Config.WriteTimeout = 50 * time.Millisecond
+	server.Start()
+	defer server.Close()
+
+	response, err := http.Get(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("stream failed during idle pause: %v", err)
+	}
+	text := string(body)
+	if keepalives := strings.Count(text, ": keepalive\n\n"); keepalives < 2 {
+		t.Fatalf("expected >= 2 keepalive comments during idle pause, got %d in %q", keepalives, text)
+	}
+	if !strings.Contains(text, "event: assistant.delta") {
+		t.Fatalf("expected trailing assistant.delta event, got %q", text)
+	}
+}
+
+type sseDeadlineStallConn struct {
+	net.Conn
+	stallWrites atomic.Bool
+	mu          sync.Mutex
+	deadline    time.Time
+	closed      chan struct{}
+	closeOnce   sync.Once
+}
+
+func (c *sseDeadlineStallConn) SetWriteDeadline(t time.Time) error {
+	c.mu.Lock()
+	c.deadline = t
+	c.mu.Unlock()
+	return c.Conn.SetWriteDeadline(t)
+}
+
+func (c *sseDeadlineStallConn) SetDeadline(t time.Time) error {
+	c.mu.Lock()
+	c.deadline = t
+	c.mu.Unlock()
+	return c.Conn.SetDeadline(t)
+}
+
+func (c *sseDeadlineStallConn) Close() error {
+	c.closeOnce.Do(func() {
+		close(c.closed)
+	})
+	return c.Conn.Close()
+}
+
+func (c *sseDeadlineStallConn) Write(p []byte) (int, error) {
+	if !c.stallWrites.Load() {
+		return c.Conn.Write(p)
+	}
+	c.mu.Lock()
+	dl := c.deadline
+	c.mu.Unlock()
+	if dl.IsZero() {
+		<-c.closed
+		return 0, net.ErrClosed
+	}
+	wait := time.Until(dl)
+	if wait <= 0 {
+		return 0, os.ErrDeadlineExceeded
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return 0, os.ErrDeadlineExceeded
+	case <-c.closed:
+		return 0, net.ErrClosed
+	}
+}
+
+type sseStallingListener struct {
+	net.Listener
+	onConn func(*sseDeadlineStallConn)
+}
+
+func (l *sseStallingListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	wrapped := &sseDeadlineStallConn{
+		Conn:   conn,
+		closed: make(chan struct{}),
+	}
+	if l.onConn != nil {
+		l.onConn(wrapped)
+	}
+	return wrapped, nil
+}
+
+func TestAgentSessionEventStreamWriteDeadlineCancelsUpstream(t *testing.T) {
+	snapshot := "event: session.snapshot\ndata: " + string(agentSessionEventFixture("session.snapshot", map[string]any{"snapshot": agentSessionSnapshotFixture()}, nil)) + "\n\n"
+	upstreamCanceled := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		writer.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(writer, snapshot)
+		if flusher, ok := writer.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		<-request.Context().Done()
+		close(upstreamCanceled)
+	}))
+	defer upstream.Close()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var accepted atomic.Pointer[sseDeadlineStallConn]
+	wrappedLn := &sseStallingListener{
+		Listener: ln,
+		onConn: func(c *sseDeadlineStallConn) {
+			accepted.Store(c)
+		},
+	}
+
+	streamErrCh := make(chan error, 1)
+	gatewaySrv := &http.Server{
+		Handler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			ctx, cancel := context.WithCancel(request.Context())
+			defer cancel()
+			upReq, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, upstream.URL, nil)
+			if reqErr != nil {
+				streamErrCh <- reqErr
+				return
+			}
+			upResp, doErr := upstream.Client().Do(upReq)
+			if doErr != nil {
+				streamErrCh <- doErr
+				return
+			}
+			defer upResp.Body.Close()
+			_, fwdErr := forwardAgentSessionEventStreamWithConfig(
+				ctx,
+				cancel,
+				&statusRecorder{ResponseWriter: writer, status: http.StatusOK},
+				upResp.Body,
+				45*time.Millisecond,
+				25*time.Millisecond,
+			)
+			streamErrCh <- fwdErr
+		}),
+	}
+	go func() { _ = gatewaySrv.Serve(wrappedLn) }()
+	defer func() { _ = gatewaySrv.Close() }()
+
+	clientConn, err := net.DialTimeout("tcp", ln.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = clientConn.Close() }()
+	if _, err := io.WriteString(clientConn, "GET /events HTTP/1.1\r\nHost: localhost\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	buf := make([]byte, 4096)
+	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	n, err := clientConn.Read(buf)
+	if err != nil || !strings.Contains(string(buf[:n]), "200 OK") {
+		t.Fatalf("expected initial SSE response headers/snapshot, got n=%d err=%v body=%q", n, err, string(buf[:n]))
+	}
+	if srvConn := accepted.Load(); srvConn != nil {
+		srvConn.stallWrites.Store(true)
+	}
+
+	select {
+	case fwdErr := <-streamErrCh:
+		if !errors.Is(fwdErr, os.ErrDeadlineExceeded) {
+			t.Fatalf("expected os.ErrDeadlineExceeded on stalled SSE write, got %v", fwdErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("stalled SSE stream did not fail within write deadline")
+	}
+
+	select {
+	case <-upstreamCanceled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("upstream SSE request context was not canceled after client write timeout")
 	}
 }
 

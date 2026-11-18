@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -777,5 +778,159 @@ func TestTunnelActiveTunnelsMetricTracksSessions(t *testing.T) {
 	hub.Close()
 	if body := scrape(); !strings.Contains(body, "hvac_mqtt_active_tunnels 0\n") {
 		t.Fatalf("expected hvac_mqtt_active_tunnels 0 after Close, got:\n%s", body)
+	}
+}
+
+type stalledTunnelConn struct {
+	net.Conn
+	stallWrites atomic.Bool
+	mu          sync.Mutex
+	deadline    time.Time
+	closed      chan struct{}
+	closeOnce   sync.Once
+}
+
+func newStalledTunnelConn(inner net.Conn) *stalledTunnelConn {
+	return &stalledTunnelConn{
+		Conn:   inner,
+		closed: make(chan struct{}),
+	}
+}
+
+func (c *stalledTunnelConn) SetWriteDeadline(t time.Time) error {
+	c.mu.Lock()
+	c.deadline = t
+	c.mu.Unlock()
+	return c.Conn.SetWriteDeadline(t)
+}
+
+func (c *stalledTunnelConn) SetDeadline(t time.Time) error {
+	c.mu.Lock()
+	c.deadline = t
+	c.mu.Unlock()
+	return c.Conn.SetDeadline(t)
+}
+
+func (c *stalledTunnelConn) Close() error {
+	c.closeOnce.Do(func() {
+		close(c.closed)
+	})
+	return c.Conn.Close()
+}
+
+func (c *stalledTunnelConn) Write(p []byte) (int, error) {
+	if !c.stallWrites.Load() {
+		return c.Conn.Write(p)
+	}
+	c.mu.Lock()
+	dl := c.deadline
+	c.mu.Unlock()
+	if dl.IsZero() {
+		<-c.closed
+		return 0, net.ErrClosed
+	}
+	wait := time.Until(dl)
+	if wait <= 0 {
+		return 0, os.ErrDeadlineExceeded
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return 0, os.ErrDeadlineExceeded
+	case <-c.closed:
+		return 0, net.ErrClosed
+	}
+}
+
+func TestTunnelSessionWriteTimeoutClosesStalledConnWithoutDeadlock(t *testing.T) {
+	hub := NewHub(
+		WithWriteTimeout(40*time.Millisecond),
+		WithPingInterval(25*time.Millisecond),
+		WithReadTimeout(2*time.Second),
+	)
+	defer hub.Close()
+
+	sRaw, cRaw := net.Pipe()
+	defer func() { _ = cRaw.Close() }()
+	stalled := newStalledTunnelConn(sRaw)
+	stalled.stallWrites.Store(true)
+
+	const gwID = "0193f000-2000-7000-8000-000000000201"
+	sess := hub.registerSession(gwID, stalled)
+	if sess == nil {
+		t.Fatal("registerSession returned nil")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runDone := make(chan struct{})
+	go func() {
+		defer close(runDone)
+		sess.run(ctx)
+	}()
+
+	errCh := make(chan error, 4)
+	for range 4 {
+		go func() {
+			errCh <- sess.sendFrame(Frame{Type: FrameData, StreamID: 1, Payload: []byte("telemetry")})
+		}()
+	}
+
+	var sawTimeout bool
+	for range 4 {
+		select {
+		case err := <-errCh:
+			if err == nil {
+				t.Fatal("expected stalled sendFrame to fail")
+			}
+			if errors.Is(err, os.ErrDeadlineExceeded) {
+				sawTimeout = true
+			}
+		case <-time.After(1 * time.Second):
+			t.Fatal("stalled sendFrame hung past write timeout")
+		}
+	}
+	if !sawTimeout {
+		t.Fatal("expected at least one sendFrame call to report os.ErrDeadlineExceeded")
+	}
+
+	select {
+	case <-sess.done:
+	case <-time.After(1 * time.Second):
+		t.Fatal("session did not close after write timeout")
+	}
+	select {
+	case <-runDone:
+	case <-time.After(1 * time.Second):
+		t.Fatal("session.run did not exit after write timeout")
+	}
+	if len(hub.ActiveGateways()) != 0 {
+		t.Fatalf("expected active gateways empty after write timeout, got %v", hub.ActiveGateways())
+	}
+}
+
+func TestTunnelRunEdgeConnWriteTimeoutClosesStalledConn(t *testing.T) {
+	left, right := net.Pipe()
+	defer func() { _ = left.Close() }()
+	stalled := newStalledTunnelConn(right)
+	stalled.stallWrites.Store(true)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	edgeDone := make(chan error, 1)
+	go func() {
+		edgeDone <- runEdgeConn(ctx, stalled, func(context.Context, uint16) (net.Conn, error) {
+			return nil, errors.New("unused")
+		}, 20*time.Millisecond, 40*time.Millisecond)
+	}()
+
+	select {
+	case err := <-edgeDone:
+		if err == nil {
+			t.Fatal("expected runEdgeConn to exit with error on stalled write")
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("runEdgeConn hung past write timeout")
 	}
 }

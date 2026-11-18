@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -24,6 +25,9 @@ const (
 	PublicAgentSessionStartRunPathTemplate    = "/api/v1/sites/{siteId}/operations/agent-sessions/{sessionId}:run"
 	PublicAgentSessionCancelPathTemplate      = "/api/v1/sites/{siteId}/operations/agent-sessions/{sessionId}:cancel"
 	PublicAgentSessionSubmitInputPathTemplate = "/api/v1/sites/{siteId}/operations/agent-sessions/{sessionId}:submit-input"
+
+	agentSessionSSEWriteTimeout      = 15 * time.Second
+	agentSessionSSEKeepaliveInterval = 15 * time.Second
 )
 
 type publicAgentSessionRoute struct {
@@ -779,73 +783,209 @@ type agentSessionStreamForwardResult struct {
 	started bool
 }
 
+type agentSSEBlock struct {
+	eventName string
+	data      []byte
+}
+
+type agentSSEItem struct {
+	block agentSSEBlock
+	err   error
+	eof   bool
+}
+
 func forwardAgentSessionEventStream(writer http.ResponseWriter, body io.Reader) (agentSessionStreamForwardResult, error) {
-	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
-	var eventName string
-	var data []byte
-	started := false
-	flush, _ := writer.(http.Flusher)
-	writeBlock := func() error {
-		if eventName == "" || len(data) == 0 {
-			return errors.New("incomplete Agent event stream block")
+	return forwardAgentSessionEventStreamWithConfig(
+		context.Background(),
+		nil,
+		writer,
+		body,
+		agentSessionSSEWriteTimeout,
+		agentSessionSSEKeepaliveInterval,
+	)
+}
+
+func forwardAgentSessionEventStreamWithConfig(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	writer http.ResponseWriter,
+	body io.Reader,
+	writeTimeout time.Duration,
+	keepaliveInterval time.Duration,
+) (agentSessionStreamForwardResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if cancel == nil {
+		cancel = func() {}
+	}
+	stopScan := make(chan struct{})
+	var stopOnce sync.Once
+	itemsCh := make(chan agentSSEItem)
+	scanDone := make(chan struct{})
+	go func() {
+		defer close(scanDone)
+		sendItem := func(item agentSSEItem) bool {
+			select {
+			case itemsCh <- item:
+				return true
+			case <-stopScan:
+				return false
+			}
 		}
-		sanitized, err := validateAgentSessionEvent(eventName, data)
+		scanner := bufio.NewScanner(body)
+		scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
+		var eventName string
+		var data []byte
+		for scanner.Scan() {
+			line := scanner.Text()
+			if line == "" {
+				if eventName == "" || len(data) == 0 {
+					sendItem(agentSSEItem{err: errors.New("incomplete Agent event stream block")})
+					return
+				}
+				if !sendItem(agentSSEItem{block: agentSSEBlock{eventName: eventName, data: data}}) {
+					return
+				}
+				eventName, data = "", nil
+				continue
+			}
+			switch {
+			case strings.HasPrefix(line, "event: ") && eventName == "":
+				eventName = strings.TrimPrefix(line, "event: ")
+			case strings.HasPrefix(line, "data: ") && len(data) == 0:
+				data = []byte(strings.TrimPrefix(line, "data: "))
+			default:
+				sendItem(agentSSEItem{err: errors.New("unsupported Agent event stream field")})
+				return
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			sendItem(agentSSEItem{err: err})
+			return
+		}
+		if eventName != "" || len(data) != 0 {
+			sendItem(agentSSEItem{err: errors.New("incomplete Agent event stream")})
+			return
+		}
+		sendItem(agentSSEItem{eof: true})
+	}()
+
+	closeUpstreamScan := func(abortUpstream bool) {
+		stopOnce.Do(func() {
+			close(stopScan)
+		})
+		if abortUpstream {
+			cancel()
+			if closer, ok := body.(io.Closer); ok {
+				_ = closer.Close()
+			}
+		}
+		<-scanDone
+	}
+
+	controller := http.NewResponseController(writer)
+	setWriteDeadline := func() error {
+		if writeTimeout <= 0 {
+			return nil
+		}
+		if err := controller.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+			return err
+		}
+		return nil
+	}
+	flushStream := func() error {
+		err := controller.Flush()
+		if errors.Is(err, http.ErrNotSupported) {
+			return nil
+		}
+		return err
+	}
+
+	started := false
+	var keepaliveTicker *time.Ticker
+	var keepaliveCh <-chan time.Time
+	defer func() {
+		if keepaliveTicker != nil {
+			keepaliveTicker.Stop()
+		}
+	}()
+
+	writeBlock := func(block agentSSEBlock) error {
+		sanitized, err := validateAgentSessionEvent(block.eventName, block.data)
 		if err != nil {
 			return err
 		}
 		if !started {
-			if eventName != "session.snapshot" {
+			if block.eventName != "session.snapshot" {
 				return errors.New("agent event stream must start from durable Session snapshot")
 			}
 			writer.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 			writer.Header().Set("Cache-Control", "no-store, no-transform")
 			writer.Header().Set("X-Accel-Buffering", "no")
-			// The server write timeout bounds ordinary responses; an Agent answer streams
-			// for as long as the Run lasts.
-			_ = http.NewResponseController(writer).SetWriteDeadline(time.Time{})
+			if err := setWriteDeadline(); err != nil {
+				return err
+			}
 			writer.WriteHeader(http.StatusOK)
 			started = true
+			if keepaliveInterval > 0 {
+				keepaliveTicker = time.NewTicker(keepaliveInterval)
+				keepaliveCh = keepaliveTicker.C
+			}
 		}
-		if _, err := writer.Write([]byte("event: " + eventName + "\n")); err != nil {
+		if err := setWriteDeadline(); err != nil {
+			return err
+		}
+		if _, err := writer.Write([]byte("event: " + block.eventName + "\n")); err != nil {
 			return err
 		}
 		if _, err := writer.Write(append(append([]byte("data: "), sanitized...), '\n', '\n')); err != nil {
 			return err
 		}
-		if flush != nil {
-			flush.Flush()
-		}
-		eventName, data = "", nil
-		return nil
+		return flushStream()
 	}
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			if err := writeBlock(); err != nil {
+
+	writeKeepalive := func() error {
+		if err := setWriteDeadline(); err != nil {
+			return err
+		}
+		if _, err := writer.Write([]byte(": keepalive\n\n")); err != nil {
+			return err
+		}
+		return flushStream()
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			closeUpstreamScan(true)
+			return agentSessionStreamForwardResult{started: started}, ctx.Err()
+		case item := <-itemsCh:
+			if item.eof {
+				closeUpstreamScan(false)
+				if !started {
+					return agentSessionStreamForwardResult{}, errors.New("empty Agent event stream")
+				}
+				return agentSessionStreamForwardResult{started: true}, nil
+			}
+			if item.err != nil {
+				closeUpstreamScan(true)
+				return agentSessionStreamForwardResult{started: started}, item.err
+			}
+			if err := writeBlock(item.block); err != nil {
+				closeUpstreamScan(true)
 				return agentSessionStreamForwardResult{started: started}, err
 			}
-			continue
+			if keepaliveTicker != nil {
+				keepaliveTicker.Reset(keepaliveInterval)
+			}
+		case <-keepaliveCh:
+			if err := writeKeepalive(); err != nil {
+				closeUpstreamScan(true)
+				return agentSessionStreamForwardResult{started: started}, err
+			}
 		}
-		switch {
-		case strings.HasPrefix(line, "event: ") && eventName == "":
-			eventName = strings.TrimPrefix(line, "event: ")
-		case strings.HasPrefix(line, "data: ") && len(data) == 0:
-			data = []byte(strings.TrimPrefix(line, "data: "))
-		default:
-			return agentSessionStreamForwardResult{started: started}, errors.New("unsupported Agent event stream field")
-		}
 	}
-	if err := scanner.Err(); err != nil {
-		return agentSessionStreamForwardResult{started: started}, err
-	}
-	if eventName != "" || len(data) != 0 {
-		return agentSessionStreamForwardResult{started: started}, errors.New("incomplete Agent event stream")
-	}
-	if !started {
-		return agentSessionStreamForwardResult{}, errors.New("empty Agent event stream")
-	}
-	return agentSessionStreamForwardResult{started: true}, nil
 }
 
 func (h *handler) proxyAgentSession(writer http.ResponseWriter, request *http.Request, route publicAgentSessionRoute) {
@@ -883,9 +1023,11 @@ func (h *handler) proxyAgentSession(writer http.ResponseWriter, request *http.Re
 		return
 	}
 
-	ctx := request.Context()
-	var cancel context.CancelFunc = func() {}
-	if route.kind != "STREAM" {
+	var ctx context.Context
+	var cancel context.CancelFunc
+	if route.kind == "STREAM" {
+		ctx, cancel = context.WithCancel(request.Context())
+	} else {
 		ctx, cancel = context.WithTimeout(request.Context(), h.operations.timeout)
 	}
 	defer cancel()
@@ -915,7 +1057,14 @@ func (h *handler) proxyAgentSession(writer http.ResponseWriter, request *http.Re
 			writeProblem(writer, request, http.StatusBadGateway, "OPERATIONS_AGENT_CONTRACT_FAILED", "Operations Agent contract failed", "The Operations Agent returned an invalid Agent event stream.", true, nil)
 			return
 		}
-		result, err := forwardAgentSessionEventStream(writer, response.Body)
+		result, err := forwardAgentSessionEventStreamWithConfig(
+			ctx,
+			cancel,
+			writer,
+			response.Body,
+			agentSessionSSEWriteTimeout,
+			agentSessionSSEKeepaliveInterval,
+		)
 		if err != nil && !result.started {
 			writeProblem(writer, request, http.StatusBadGateway, "OPERATIONS_AGENT_CONTRACT_FAILED", "Operations Agent contract failed", "The Operations Agent returned an invalid Agent event stream.", true, nil)
 		}

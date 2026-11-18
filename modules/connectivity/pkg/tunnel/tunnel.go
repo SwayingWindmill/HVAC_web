@@ -105,10 +105,11 @@ func truncateAuditReason(reason string) string {
 }
 
 const (
-	ProtocolName             = "hvac-gateway-tunnel/v1"
-	AllowedTargetPort uint16 = 1880
-	MaxFramePayload          = 64 * 1024
-	maxStreamBuffer          = 4 * 1024 * 1024
+	ProtocolName               = "hvac-gateway-tunnel/v1"
+	AllowedTargetPort   uint16 = 1880
+	MaxFramePayload            = 64 * 1024
+	maxStreamBuffer            = 4 * 1024 * 1024
+	defaultWriteTimeout        = 15 * time.Second
 )
 
 const (
@@ -214,6 +215,14 @@ func WithReadTimeout(timeout time.Duration) Option {
 	}
 }
 
+func WithWriteTimeout(timeout time.Duration) Option {
+	return func(h *Hub) {
+		if timeout > 0 {
+			h.writeTimeout = timeout
+		}
+	}
+}
+
 func WithOpenTimeout(timeout time.Duration) Option {
 	return func(h *Hub) {
 		if timeout > 0 {
@@ -243,6 +252,7 @@ type Hub struct {
 	defaultGatewayID string
 	pingInterval     time.Duration
 	readTimeout      time.Duration
+	writeTimeout     time.Duration
 	openTimeout      time.Duration
 	auditSink        AuditSink
 	logger           *slog.Logger
@@ -276,6 +286,7 @@ func NewHub(options ...Option) *Hub {
 		sessions:     make(map[string]*Session),
 		pingInterval: 25 * time.Second,
 		readTimeout:  75 * time.Second,
+		writeTimeout: defaultWriteTimeout,
 		openTimeout:  10 * time.Second,
 	}
 	for _, option := range options {
@@ -574,8 +585,17 @@ func NewUpgradeHandler(hub *Hub, parsePeer PeerParser, verifyPeer PeerVerifier) 
 			http.Error(w, "hijack unsupported", http.StatusInternalServerError)
 			return
 		}
-		// Clear http.Server read/write deadlines immediately so long-lived idle tunnels survive past 10s.
-		if err := conn.SetDeadline(time.Time{}); err != nil {
+		// Clear http.Server read deadline across Hijack() so idle tunnels outlive server timeouts.
+		if err := conn.SetReadDeadline(time.Time{}); err != nil {
+			_ = conn.Close()
+			return
+		}
+		if hub.writeTimeout > 0 {
+			if err := conn.SetWriteDeadline(time.Now().Add(hub.writeTimeout)); err != nil {
+				_ = conn.Close()
+				return
+			}
+		} else if err := conn.SetWriteDeadline(time.Time{}); err != nil {
 			_ = conn.Close()
 			return
 		}
@@ -815,15 +835,34 @@ func (s *Session) sendFrame(frame Frame) error {
 		return net.ErrClosed
 	}
 	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
 	if s.closed.Load() || s.conn == nil {
+		s.writeMu.Unlock()
 		return net.ErrClosed
 	}
-	err := WriteFrame(s.conn, frame)
-	if err == nil && frame.Type == FrameData {
+	var err error
+	reasonPrefix := "write_error: "
+	if s.hub != nil && s.hub.writeTimeout > 0 {
+		if deadlineErr := s.conn.SetWriteDeadline(time.Now().Add(s.hub.writeTimeout)); deadlineErr != nil {
+			err = deadlineErr
+			reasonPrefix = "write_deadline_error: "
+		}
+	}
+	if err == nil {
+		err = WriteFrame(s.conn, frame)
+	}
+	if err != nil {
+		closedNow := s.closeTransport()
+		s.writeMu.Unlock()
+		if closedNow {
+			s.emitCloseAudit(context.Background(), reasonPrefix+err.Error())
+		}
+		return err
+	}
+	if frame.Type == FrameData {
 		s.bytesTX.Add(int64(len(frame.Payload)))
 	}
-	return err
+	s.writeMu.Unlock()
+	return nil
 }
 
 func (s *Session) Close() {
@@ -1212,11 +1251,25 @@ func (st *Stream) Close() error {
 // RunEdgeConn executes the edge side of the multiplexed tunnel against dialTarget,
 // strictly rejecting any port != AllowedTargetPort with OPEN_ERR without dialing.
 func RunEdgeConn(ctx context.Context, conn net.Conn, dialTarget func(context.Context, uint16) (net.Conn, error), pingInterval time.Duration) error {
+	return runEdgeConn(ctx, conn, dialTarget, pingInterval, defaultWriteTimeout)
+}
+
+func runEdgeConn(ctx context.Context, conn net.Conn, dialTarget func(context.Context, uint16) (net.Conn, error), pingInterval, writeTimeout time.Duration) error {
 	var writeMu sync.Mutex
 	send := func(frame Frame) error {
 		writeMu.Lock()
 		defer writeMu.Unlock()
-		return WriteFrame(conn, frame)
+		if writeTimeout > 0 {
+			if err := conn.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
+				_ = conn.Close()
+				return err
+			}
+		}
+		err := WriteFrame(conn, frame)
+		if err != nil {
+			_ = conn.Close()
+		}
+		return err
 	}
 	var streamsMu sync.Mutex
 	streams := make(map[uint32]net.Conn)
