@@ -126,6 +126,7 @@ const expectedOperations = {
   updateSiteAsset: ['patch', `${site}/assets/{assetId}`],
   createSiteDevice: ['post', `${site}/devices`],
   updateSiteDevice: ['patch', `${site}/devices/{deviceId}`],
+  replaceDeviceHardware: ['post', `${site}/devices/{deviceId}/replace-hardware`],
   createSiteSensor: ['post', `${site}/sensors`],
   updateSiteSensor: ['patch', `${site}/sensors/{sensorId}`],
   createSitePoint: ['post', `${site}/points`],
@@ -290,6 +291,7 @@ for (const [operationId, schemaName] of Object.entries(expectedSuccessSchemas)) 
 }
 invariant(schemaRef(operations.recalculateSiteAccounting.operation, '202') === '#/components/schemas/AccountingRecalcJob', 'recalculateSiteAccounting accepted schema is unsupported');
 invariant(schemaRef(operations.createSiteMeterRatioVersion.operation, '201') === '#/components/schemas/MeterRatioVersion', 'createSiteMeterRatioVersion created schema is unsupported');
+invariant(schemaRef(operations.replaceDeviceHardware.operation, '201') === '#/components/schemas/ReplaceDeviceHardwareResult', 'replaceDeviceHardware success schema is unsupported');
 invariant(schemaRef(operations.getTemplateRevision.operation, '200') === './s05-registry-writer.openapi.json#/components/schemas/TemplateRevision', 'getTemplateRevision success schema is unsupported');
 invariant(operations.logout.operation.responses?.['204'], 'logout must return 204');
 invariant(operations.logout.operation.responses?.['204']?.headers?.Location?.schema?.format === 'uri', 'logout must publish the provider end-session Location header');
@@ -324,7 +326,12 @@ const schemaRequirements = {
   ]],
   Site: [['id', 'tenantId', 'code', 'displayName', 'timezone', 'status', 'revision', 'createdAt', 'updatedAt', 'floorAreaM2', 'climateZone']],
   Asset: [['id', 'tenantId', 'siteId', 'code', 'displayName', 'assetType', 'status', 'revision', 'createdAt', 'updatedAt'], ['ratedPower', 'ratedCapacity', 'tags', 'waterLoop', 'branchCode']],
-  Device: [['id', 'tenantId', 'siteId', 'code', 'displayName', 'deviceType', 'status', 'revision', 'createdAt', 'updatedAt'], ['tags']],
+  Device: [['id', 'tenantId', 'siteId', 'code', 'displayName', 'deviceType', 'status', 'revision', 'createdAt', 'updatedAt'], ['externalId', 'protocolAddress', 'tags']],
+  ReplaceDeviceHardwareResult: [[
+    'replacementId', 'tenantId', 'siteId', 'deviceId', 'revision', 'previousExternalId', 'newExternalId',
+    'previousGatewayDeviceId', 'newGatewayDeviceId', 'previousProtocolAddress', 'newProtocolAddress',
+    'reason', 'replacedBy', 'replacedAt', 'device', 'replayed',
+  ]],
   Template: [['id', 'tenantId', 'templateKey', 'templateKind', 'createdAt'], ['latestRevisionId', 'latestRevisionNumber', 'releasedAt']],
   TemplateCollection: [['items', 'nextCursor', 'hasMore']],
   TemplateAssignmentCollection: [['items', 'nextCursor', 'hasMore']],
@@ -549,6 +556,7 @@ const replacements = {
   __SITE_SPACE_PATH__: operations.updateSiteSpace.path,
   __SITE_ASSET_DETAIL_PATH__: operations.updateSiteAsset.path,
   __SITE_DEVICE_DETAIL_PATH__: operations.updateSiteDevice.path,
+  __SITE_DEVICE_REPLACE_HARDWARE_PATH__: operations.replaceDeviceHardware.path,
   __SITE_SENSORS_PATH__: operations.createSiteSensor.path,
   __SITE_SENSOR_PATH__: operations.updateSiteSensor.path,
   __SITE_POINTS_PATH__: operations.createSitePoint.path,

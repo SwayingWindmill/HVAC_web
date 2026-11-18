@@ -100,6 +100,7 @@ services:
       - ./postgres/init/mv-bivariate-weather-anchors.sql:/docker-entrypoint-initdb.d/0890.sql:ro
       - ./postgres/init/optimization-canary-write-rls.sql:/docker-entrypoint-initdb.d/0900.sql:ro
       - ./postgres/init/accounting-config-delete-grants.sql:/docker-entrypoint-initdb.d/0910.sql:ro
+      - ./postgres/init/device-hardware-replacements.sql:/docker-entrypoint-initdb.d/0920.sql:ro
     ports:
       - "127.0.0.1:${S1_POSTGRES_HOST_PORT:-55432}:5432"
     healthcheck:

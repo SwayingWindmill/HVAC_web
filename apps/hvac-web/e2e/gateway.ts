@@ -649,6 +649,7 @@ export class Gateway {
   readonly configShadows = new Map<string, Json>();
   readonly extraCrossSiteAssets: Json[] = [];
   readonly extraCrossSiteDevices: Json[] = [];
+  readonly deviceGatewayByDeviceId = new Map<string, string>();
   private p1Seq = 100;
   readonly templateRevisions: Json[] = [
     {
@@ -3876,6 +3877,80 @@ export class Gateway {
         if (!updated) return refuse(404, 'RESOURCE_NOT_FOUND', 'Asset not found');
         return { body: updated };
       }
+    }
+
+    const replaceHardwareMatch = path.match(/^\/api\/v1\/sites\/([^/]+)\/devices\/([^/]+)\/replace-hardware$/);
+    if (method === 'POST' && replaceHardwareMatch) {
+      const denied = requireCsrf();
+      if (denied) return denied;
+      const siteId = decodeURIComponent(replaceHardwareMatch[1]!);
+      const deviceId = decodeURIComponent(replaceHardwareMatch[2]!);
+      const list = siteId === SITE_ID
+        ? (this.assetModel.devices as Json[])
+        : this.extraCrossSiteDevices;
+      const idx = list.findIndex((item) => item.id === deviceId && item.siteId === siteId);
+      if (idx < 0) return refuse(404, 'RESOURCE_NOT_FOUND', 'Device not found');
+      const prev = list[idx]!;
+      if (prev.status !== 'ACTIVE') {
+        return refuse(400, 'REGISTRY_MUTATION_INVALID', 'Inactive device cannot replace hardware');
+      }
+      const newExternalId = typeof body?.newExternalId === 'string' ? body.newExternalId.trim() : '';
+      const reason = typeof body?.meta?.reason === 'string' ? body.meta.reason.trim() : '';
+      if (!newExternalId || !reason) {
+        return refuse(400, 'REGISTRY_MUTATION_INVALID', 'newExternalId and reason are required');
+      }
+      if (body?.meta?.expectedRevision !== prev.revision) {
+        return refuse(409, 'REGISTRY_REVISION_CONFLICT', 'Device revision conflict');
+      }
+      const requestedGatewayId = typeof body?.newGatewayDeviceId === 'string' ? body.newGatewayDeviceId : null;
+      if (requestedGatewayId) {
+        if (prev.deviceType === 'GATEWAY') {
+          return refuse(400, 'REGISTRY_MUTATION_INVALID', 'Gateway device cannot set parent gateway');
+        }
+        const gateway = list.find(
+          (item) => item.id === requestedGatewayId && item.siteId === siteId && item.deviceType === 'GATEWAY' && item.status === 'ACTIVE',
+        );
+        if (!gateway) {
+          return refuse(400, 'REGISTRY_MUTATION_INVALID', 'Target gateway device is invalid or inactive');
+        }
+      }
+      const previousExternalId: string | null = typeof prev.externalId === 'string' ? prev.externalId : null;
+      const previousGatewayDeviceId: string | null = this.deviceGatewayByDeviceId.get(deviceId) ?? null;
+      const previousProtocolAddress: Json | null = prev.protocolAddress ?? null;
+      const nextProtocolAddress: Json | null = body?.newProtocolAddress ?? previousProtocolAddress;
+      const nextGatewayDeviceId: string | null = requestedGatewayId ?? previousGatewayDeviceId;
+      if (nextGatewayDeviceId) {
+        this.deviceGatewayByDeviceId.set(deviceId, nextGatewayDeviceId);
+      }
+      const nextDevice: Json = {
+        ...prev,
+        externalId: newExternalId,
+        ...(nextProtocolAddress ? { protocolAddress: nextProtocolAddress } : {}),
+        revision: prev.revision + 1,
+        updatedAt: now,
+      };
+      list[idx] = nextDevice;
+      return {
+        status: 201,
+        body: {
+          replacementId: this.nextUuidV7('7600'),
+          tenantId: this.assetModel.tenantId,
+          siteId,
+          deviceId: nextDevice.id,
+          revision: nextDevice.revision,
+          previousExternalId,
+          newExternalId,
+          previousGatewayDeviceId,
+          newGatewayDeviceId: nextGatewayDeviceId,
+          previousProtocolAddress,
+          newProtocolAddress: nextProtocolAddress,
+          reason,
+          replacedBy: this.principalOverride?.principalId ?? MY_ID,
+          replacedAt: now,
+          device: nextDevice,
+          replayed: false,
+        },
+      };
     }
 
     const siteDevicesMatch = path.match(/^\/api\/v1\/sites\/([^/]+)\/devices(?:\/([^/]+))?$/);

@@ -795,7 +795,7 @@ func scanSite(row rowScanner) (Site, error) {
 const assetColumns = `id::text, tenant_id::text, site_id::text, code, display_name, asset_type, status, revision, created_at, updated_at, rated_power, rated_capacity, tags, water_loop, branch_code`
 
 // deviceColumns are what scanDevice reads, in its order.
-const deviceColumns = `id::text, tenant_id::text, site_id::text, code, display_name, device_type, status, revision, created_at, updated_at, tags`
+const deviceColumns = `id::text, tenant_id::text, site_id::text, code, display_name, device_type, status, revision, created_at, updated_at, external_id, protocol_address, tags`
 
 func scanAsset(row rowScanner) (Asset, error) {
 	var item Asset
@@ -819,9 +819,29 @@ func scanDevice(row rowScanner) (Device, error) {
 	var item Device
 	var createdAt time.Time
 	var updatedAt time.Time
+	var protocolAddressRaw []byte
 	var tagsRaw []byte
-	if err := row.Scan(&item.ID, &item.TenantID, &item.SiteID, &item.Code, &item.DisplayName, &item.DeviceType, &item.Status, &item.Revision, &createdAt, &updatedAt, &tagsRaw); err != nil {
+	if err := row.Scan(
+		&item.ID,
+		&item.TenantID,
+		&item.SiteID,
+		&item.Code,
+		&item.DisplayName,
+		&item.DeviceType,
+		&item.Status,
+		&item.Revision,
+		&createdAt,
+		&updatedAt,
+		&item.ExternalID,
+		&protocolAddressRaw,
+		&tagsRaw,
+	); err != nil {
 		return Device{}, err
+	}
+	if len(protocolAddressRaw) > 0 && string(protocolAddressRaw) != "null" {
+		if err := json.Unmarshal(protocolAddressRaw, &item.ProtocolAddress); err != nil {
+			return Device{}, err
+		}
 	}
 	tags, err := unmarshalTags(tagsRaw)
 	if err != nil {

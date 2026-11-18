@@ -115,6 +115,7 @@ hvac_s1|infra/registry/postgres/init/energy-tou-holidays-and-recalc.sql
 hvac_s1|infra/registry/postgres/init/mv-bivariate-weather-anchors.sql
 hvac_s1|infra/registry/postgres/init/optimization-canary-write-rls.sql
 hvac_s1|infra/registry/postgres/init/accounting-config-delete-grants.sql
+hvac_s1|infra/registry/postgres/init/device-hardware-replacements.sql
 hvac_s2|infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql
 hvac_s2|infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql
 hvac_s2|infra/telemetry/postgres/init/003-s2-telemetry-ingest.sql

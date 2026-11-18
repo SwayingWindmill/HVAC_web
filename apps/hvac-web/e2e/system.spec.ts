@@ -353,3 +353,63 @@ test('资源与绑定 supports tag CRUD, spatial subtree filter, tag filter, and
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: p1Shot('p1-registry-tags-dark.png') });
 });
+
+test('logical device hardware replacement preserves device identity and telemetry points at 1440px', async ({
+  page,
+  gateway,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  gateway.principalOverride = grantRegistryAdminPrincipal();
+
+  await page.goto('/system?tab=registry');
+  await page.getByRole('tab', { name: /设备 / }).click();
+
+  const deviceTable = page.getByRole('table', { name: '设备' });
+  const chillerRow = deviceTable.getByRole('row', { name: /CHILLER-01/ });
+  await chillerRow.getByRole('button', { name: '更换硬件' }).click();
+
+  const replaceDialog = page.getByRole('dialog', { name: '更换这台设备的现场硬件？' });
+  await expect(replaceDialog).toBeVisible();
+  await expect(replaceDialog).toContainText('保留原有设备与全部点位');
+  await expect(replaceDialog).not.toContainText('018f3e00-4000-7000-8000-000000000001');
+
+  await replaceDialog.getByLabel('新硬件序列号 / 外部标识').fill('SN-CHILLER-NEW-2026');
+  await replaceDialog.getByLabel('上级接入网关').click();
+  await page.getByRole('option', { name: 'EG8200-COMMERCIAL-001 (eg8200-commercial-001)' }).click();
+  await replaceDialog.getByLabel('新采集源标识（可选）').fill('chiller01_meter_b');
+  await replaceDialog.getByLabel('通信地址或端口备注（可选）').fill('Modbus 从站 03 / RS485-1');
+  await replaceDialog.getByLabel('更换原因').fill('现场主控网关主板故障更换');
+  await replaceDialog.getByRole('button', { name: '确认更换硬件' }).click();
+
+  await expect(replaceDialog).toHaveCount(0);
+  await expect(page.getByText(/已完成「CHILLER-01 通信端点」的硬件更换/)).toBeVisible();
+  await expect(chillerRow).toContainText('硬件标识: SN-CHILLER-NEW-2026');
+
+  const write = gateway.writes.find(
+    (entry) =>
+      entry.method === 'POST'
+      && entry.path === `/api/v1/sites/${SITE_ID}/devices/018f3e00-4000-7000-8000-000000000001/replace-hardware`,
+  );
+  expect(write?.csrfToken).toBe('e2e-csrf-token');
+  expect(write?.body?.newExternalId).toBe('SN-CHILLER-NEW-2026');
+  expect(write?.body?.newGatewayDeviceId).toBe('018f3e00-4000-7000-8000-000000000100');
+  expect(write?.body?.newSourceKey).toBe('chiller01_meter_b');
+
+  // Verify the same logical device still exposes its registered telemetry points.
+  await chillerRow.getByRole('button', { name: '查看点位' }).click();
+  await expect(page.getByRole('table', { name: 'CHILLER-01 通信端点点位登记' })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: p1Shot('p1-hardware-replace-light.png') });
+
+  // Reload to confirm the updated external hardware identifier persists on the same device.
+  await page.reload();
+  await page.getByRole('tab', { name: /设备 / }).click();
+  await expect(deviceTable.getByRole('row', { name: /CHILLER-01/ })).toContainText('硬件标识: SN-CHILLER-NEW-2026');
+
+  await page.getByRole('radiogroup', { name: '外观' }).getByRole('radio', { name: '深色' }).click();
+  await expect
+    .poll(() => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme))
+    .toBe('dark');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: p1Shot('p1-hardware-replace-dark.png') });
+});

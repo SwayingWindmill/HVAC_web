@@ -1016,6 +1016,8 @@ func parseRegistryRoute(method, path string) (registryRoute, bool) {
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/devices", resource: "device-write", parentID: segments[1], action: registryauth.ActionDeviceWrite, write: true}, true
 	case method == http.MethodPatch && len(segments) == 4 && segments[0] == "sites" && segments[2] == "devices":
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/devices/{deviceId}", resource: "device-write", parentID: segments[1], id: segments[3], action: registryauth.ActionDeviceWrite, write: true}, true
+	case method == http.MethodPost && len(segments) == 5 && segments[0] == "sites" && segments[2] == "devices" && segments[4] == "replace-hardware":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/devices/{deviceId}/replace-hardware", resource: "device-replace-hardware", parentID: segments[1], id: segments[3], action: registryauth.ActionDeviceWrite, write: true}, true
 	case method == http.MethodPost && len(segments) == 3 && segments[0] == "sites" && segments[2] == "spaces":
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/spaces", resource: "space-write", parentID: segments[1], action: registryauth.ActionSpaceWrite, write: true}, true
 	case method == http.MethodPatch && len(segments) == 4 && segments[0] == "sites" && segments[2] == "spaces":
