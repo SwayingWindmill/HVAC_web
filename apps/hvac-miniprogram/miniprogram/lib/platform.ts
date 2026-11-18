@@ -26,7 +26,11 @@ const transport: Transport = (request) => new Promise((resolve, reject) => {
     header: request.header,
     data: request.data as WechatMiniprogram.IAnyObject | undefined,
     timeout: REQUEST_TIMEOUT_MS,
-    success: (response) => resolve({ statusCode: response.statusCode, data: response.data }),
+    success: (response) => resolve({
+      statusCode: response.statusCode,
+      data: response.data,
+      header: response.header as Readonly<Record<string, string>> | undefined,
+    }),
     fail: reject,
   });
 });

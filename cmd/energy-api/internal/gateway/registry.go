@@ -181,6 +181,7 @@ func (h *handler) GetSiteAssetModel(writer http.ResponseWriter, request *http.Re
 	h.serveRegistry(writer, request, publicRegistryRoute{
 		template:     platformapi.GetSiteAssetModelPathTemplate,
 		internalPath: "/internal/v1/registry/sites/" + siteID + "/asset-model",
+		resource:     "asset-model",
 		action:       registryauth.ActionAssetModelRead,
 		scopeID:      siteID,
 	}, platformapi.ListRegistryParams{})
@@ -231,6 +232,12 @@ func (h *handler) serveRegistryWithQuery(writer http.ResponseWriter, request *ht
 		writeProblem(writer, request, authorizationFailure.status, authorizationFailure.code, authorizationFailure.title, authorizationFailure.detail, authorizationFailure.retryable, nil)
 		return
 	}
+	if route.resource == "asset-model" && route.scopeID != "" {
+		if _, allowed := authorization.allowedSiteIDs[route.scopeID]; !allowed {
+			writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Registry resource was not found.", false, nil)
+			return
+		}
+	}
 
 	values, _ := url.ParseQuery(encodeRegistryQuery(params))
 	for name, list := range extraQuery {
@@ -250,6 +257,10 @@ func (h *handler) serveRegistryWithQuery(writer http.ResponseWriter, request *ht
 	}
 	result := h.executeCoreRegistry(request.Context(), route, query, authorization.coreGrant, decision)
 	writer.Header().Set("X-Route-Policy-Revision", formatRevision(decision.RegistryRevision))
+	if route.resource == "asset-model" && result.status == http.StatusOK && request.Method == http.MethodGet {
+		h.writeAssetModelResult(writer, request, result)
+		return
+	}
 	h.writeRegistryBackendResult(writer, request, result)
 }
 
@@ -504,6 +515,98 @@ func (h *handler) decodeRegistryBackendResponse(owner string, response *http.Res
 	}
 	result.semanticHash = sha256Hex([]byte(fmt.Sprintf("%d:%s", result.status, result.code)))
 	return result
+}
+
+func (h *handler) writeAssetModelResult(writer http.ResponseWriter, request *http.Request, result registryBackendResult) {
+	etag := assetModelETag(result.body)
+	writer.Header().Set("ETag", etag)
+	writer.Header().Set("Cache-Control", "private, no-cache")
+	writer.Header().Set("Vary", "Cookie, Authorization")
+	if ifNoneMatchMatches(request.Header.Values("If-None-Match"), etag) {
+		writer.WriteHeader(http.StatusNotModified)
+		return
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	writer.WriteHeader(http.StatusOK)
+	_, _ = writer.Write(append(result.body, '\n'))
+}
+
+func assetModelETag(canonicalBody []byte) string {
+	sum := sha256.New()
+	_, _ = sum.Write([]byte("asset-model-v1:"))
+	_, _ = sum.Write(canonicalBody)
+	return `"` + hex.EncodeToString(sum.Sum(nil)) + `"`
+}
+
+func ifNoneMatchMatches(values []string, currentETag string) bool {
+	for _, raw := range values {
+		if ifNoneMatchHeaderMatches(raw, currentETag) {
+			return true
+		}
+	}
+	return false
+}
+
+func ifNoneMatchHeaderMatches(raw, currentETag string) bool {
+	i := 0
+	for i < len(raw) {
+		for i < len(raw) && (raw[i] == ' ' || raw[i] == '\t' || raw[i] == ',') {
+			i++
+		}
+		if i >= len(raw) {
+			return false
+		}
+		if raw[i] == '*' {
+			j := i + 1
+			for j < len(raw) && (raw[j] == ' ' || raw[j] == '\t') {
+				j++
+			}
+			if j == len(raw) || raw[j] == ',' {
+				return true
+			}
+			i = skipToNextComma(raw, j)
+			continue
+		}
+		if strings.HasPrefix(raw[i:], "W/") {
+			i += 2
+		}
+		if i >= len(raw) || raw[i] != '"' {
+			i = skipToNextComma(raw, i)
+			continue
+		}
+		end := strings.IndexByte(raw[i+1:], '"')
+		if end < 0 {
+			return false
+		}
+		candidate := raw[i : i+1+end+1]
+		i = i + 1 + end + 1
+		for i < len(raw) && (raw[i] == ' ' || raw[i] == '\t') {
+			i++
+		}
+		if i < len(raw) && raw[i] != ',' {
+			i = skipToNextComma(raw, i)
+			continue
+		}
+		if candidate == currentETag {
+			return true
+		}
+	}
+	return false
+}
+
+func skipToNextComma(raw string, start int) int {
+	inQuotes := false
+	for i := start; i < len(raw); i++ {
+		switch raw[i] {
+		case '"':
+			inQuotes = !inQuotes
+		case ',':
+			if !inQuotes {
+				return i + 1
+			}
+		}
+	}
+	return len(raw)
 }
 
 func (h *handler) writeRegistryBackendResult(writer http.ResponseWriter, request *http.Request, result registryBackendResult) {

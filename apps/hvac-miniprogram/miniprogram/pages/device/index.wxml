@@ -16,6 +16,100 @@
       </view>
     </view>
 
+    <view wx:if="{{hasControllablePoints}}" class="card card-pad control-card" aria-label="应急手动调节">
+      <view class="split control-head">
+        <view class="card-title">应急手动调节</view>
+        <text wx:if="{{!canControl}}" class="badge badge-neutral">只读权限</text>
+      </view>
+
+      <block wx:if="{{!canControl}}">
+        <view class="control-readonly">
+          <text class="caption">当前账号为只读查看权限，未开放现场设备遥控。如需在机房应急调节，请联系管理员开通控制权限。</text>
+        </view>
+      </block>
+
+      <block wx:else>
+        <view wx:if="{{commandStatus}}" class="command-banner command-banner-{{commandStatus.tone}}">
+          <view class="split">
+            <text class="badge badge-{{commandStatus.tone}}">{{commandStatus.label}}</text>
+            <button wx:if="{{!commandStatus.active}}" class="banner-close" bindtap="dismissCommandStatus" aria-label="关闭结果提示">收起</button>
+          </view>
+          <text class="command-detail">{{commandStatus.detail}}</text>
+          <text wx:if="{{pollingNote}}" class="caption">{{pollingNote}}</text>
+        </view>
+
+        <view wx:for="{{controlTargets}}" wx:key="assetId" class="control-target">
+          <view class="guard-box guard-box-{{item.guard.tone}}">
+            <view class="split">
+              <text class="guard-asset">{{item.assetName}}</text>
+              <text class="badge badge-{{item.guard.tone}}">{{item.guard.badge}}</text>
+            </view>
+            <text class="guard-headline">{{item.guard.headline}}</text>
+            <text class="caption">{{item.guard.detail}}</text>
+          </view>
+
+          <view wx:if="{{item.actions.length}}" class="action-grid">
+            <view wx:for="{{item.actions}}" wx:for-item="action" wx:key="pointId" class="action-item">
+              <button
+                class="control-action-btn {{action.danger ? 'control-action-danger' : 'button-outline'}}"
+                disabled="{{action.disabled || submitting}}"
+                data-asset-id="{{action.assetId}}"
+                data-point-id="{{action.pointId}}"
+                bindtap="tapAction"
+              >{{action.label}}</button>
+              <text wx:if="{{action.disabledReason}}" class="caption action-hint">{{action.disabledReason}}</text>
+            </view>
+          </view>
+
+          <view wx:if="{{item.settings.length}}" class="setting-list">
+            <view wx:for="{{item.settings}}" wx:for-item="setting" wx:key="pointId" class="setting-row">
+              <view class="split">
+                <text class="setting-label">{{setting.label}}</text>
+                <text class="caption">当前 {{setting.currentText}}</text>
+              </view>
+              <view class="caption setting-range">允许范围 {{setting.minimum}} 至 {{setting.maximum}}{{setting.unit ? ' ' + setting.unit : ''}}</view>
+              <view class="stepper-row">
+                <button
+                  class="stepper-btn"
+                  disabled="{{setting.disabled || submitting}}"
+                  data-point-id="{{setting.pointId}}"
+                  data-delta="-1"
+                  bindtap="stepSetting"
+                  aria-label="减小{{setting.label}}"
+                >-</button>
+                <input
+                  class="stepper-input"
+                  type="digit"
+                  disabled="{{setting.disabled || submitting}}"
+                  value="{{settingInputs[setting.pointId]}}"
+                  data-point-id="{{setting.pointId}}"
+                  bindinput="onSettingInput"
+                  bindblur="onSettingBlur"
+                  aria-label="{{setting.label}}目标值"
+                />
+                <button
+                  class="stepper-btn"
+                  disabled="{{setting.disabled || submitting}}"
+                  data-point-id="{{setting.pointId}}"
+                  data-delta="1"
+                  bindtap="stepSetting"
+                  aria-label="增大{{setting.label}}"
+                >+</button>
+                <button
+                  class="button-primary setting-send-btn"
+                  disabled="{{setting.disabled || submitting}}"
+                  data-asset-id="{{setting.assetId}}"
+                  data-point-id="{{setting.pointId}}"
+                  bindtap="tapSetting"
+                >设定</button>
+              </view>
+              <text wx:if="{{setting.disabledReason}}" class="caption action-hint">{{setting.disabledReason}}</text>
+            </view>
+          </view>
+        </view>
+      </block>
+    </view>
+
     <view wx:if="{{view.energy}}" class="card card-pad energy" aria-label="今天用电">
       <view class="split">
         <view class="card-title titled"><image class="title-icon" src="/assets/icon/zap.svg" aria-hidden="true" /><text>今天用电</text></view>
@@ -41,4 +135,65 @@
       </view>
     </view>
   </block>
+
+  <view wx:if="{{pendingIntent}}" class="control-sheet-mask" bindtap="cancelConfirmation">
+    <view class="control-sheet" catchtap="noop" aria-modal="true" aria-label="{{pendingIntent.title}}">
+      <view class="sheet-head">
+        <text class="sheet-title">{{pendingIntent.title}}</text>
+        <text class="caption">{{pendingIntent.deviceName}} · {{pendingIntent.parameterLabel}}</text>
+      </view>
+
+      <view class="diff-box">
+        <view class="diff-col">
+          <text class="caption">操作前</text>
+          <text class="diff-val">{{pendingIntent.beforeValue}}</text>
+        </view>
+        <text class="diff-arrow" aria-hidden="true">→</text>
+        <view class="diff-col">
+          <text class="caption">目标值</text>
+          <text class="diff-val diff-after">{{pendingIntent.afterValue}}</text>
+        </view>
+      </view>
+
+      <view wx:if="{{pendingIntent.highRisk}}" class="high-risk-box" bindtap="toggleHighRiskConfirm">
+        <view class="check-pill {{confirmChecked ? 'check-pill-on' : ''}}">{{confirmChecked ? '✓' : ''}}</view>
+        <view class="high-risk-text">
+          <text class="high-risk-title">关键设备启停确认</text>
+          <text class="caption">{{pendingIntent.acknowledgementLabel}}</text>
+        </view>
+      </view>
+
+      <view wx:if="{{pendingIntent.requiresTotp}}" class="totp-box">
+        <view class="split">
+          <text class="totp-label">6 位动态口令</text>
+          <text class="caption">查看身份验证器</text>
+        </view>
+        <input
+          class="totp-input mono"
+          type="number"
+          maxlength="6"
+          placeholder="请输入 6 位数字"
+          value="{{totpCode}}"
+          disabled="{{submitting}}"
+          bindinput="onTotpInput"
+          aria-label="6 位动态口令"
+        />
+      </view>
+
+      <view wx:if="{{submitError}}" class="submit-error">
+        <text class="submit-error-text">{{submitError}}</text>
+        <text wx:if="{{showMfaHint}}" class="caption">请先在网页端个人安全设置完成身份验证器绑定后再试。</text>
+      </view>
+
+      <view class="sheet-actions">
+        <button class="button-outline sheet-btn" disabled="{{submitting}}" bindtap="cancelConfirmation">取消</button>
+        <button
+          class="{{pendingIntent.highRisk ? 'control-action-danger sheet-btn' : 'button-primary sheet-btn'}}"
+          loading="{{submitting}}"
+          disabled="{{submitting || (pendingIntent.highRisk && !confirmChecked)}}"
+          bindtap="confirmSubmit"
+        >{{submitting ? '正在下发…' : '确认下发'}}</button>
+      </view>
+    </view>
+  </view>
 </view>

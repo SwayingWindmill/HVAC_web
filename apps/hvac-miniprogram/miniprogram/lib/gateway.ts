@@ -14,7 +14,12 @@ export interface TransportRequest {
 export interface TransportResponse {
   readonly statusCode: number;
   readonly data: unknown;
+  readonly header?: Readonly<Record<string, string | undefined>>;
 }
+
+export type ConditionalGetOutcome<T> =
+  | { readonly status: 200; readonly data: T; readonly etag: string | null }
+  | { readonly status: 304; readonly etag: string | null };
 
 /** One HTTP exchange; `wx.request` in the mini program, a fake in tests. */
 export type Transport = (request: TransportRequest) => Promise<TransportResponse>;
@@ -34,11 +39,13 @@ export interface SessionStore {
 export class GatewayError extends Error {
   readonly code: string;
   readonly status: number;
+  readonly reason?: string;
 
-  constructor(code: string, status: number) {
+  constructor(code: string, status: number, reason?: string) {
     super(code);
     this.code = code;
     this.status = status;
+    if (reason !== undefined) this.reason = reason;
   }
 }
 
@@ -66,6 +73,24 @@ const SIGN_IN_UNAVAILABLE = '暂时登录不了，请稍后再试。';
 const problemCode = (data: unknown): string => (
   typeof data === 'object' && data !== null && typeof (data as { code?: unknown }).code === 'string' ? (data as { code: string }).code : 'UNKNOWN'
 );
+
+const problemReason = (data: unknown): string | undefined => (
+  typeof data === 'object' && data !== null && typeof (data as { reason?: unknown }).reason === 'string'
+    ? (data as { reason: string }).reason
+    : undefined
+);
+
+const headerValue = (header: Readonly<Record<string, string | undefined>> | undefined, name: string): string | null => {
+  if (!header) return null;
+  const expected = name.toLowerCase();
+  for (const key of Object.keys(header)) {
+    if (key.toLowerCase() === expected) {
+      const value = header[key];
+      return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+    }
+  }
+  return null;
+};
 
 export function createGateway(options: {
   readonly origin: string;
@@ -98,13 +123,25 @@ export function createGateway(options: {
       session.clear();
       onSignedOut();
     }
-    return new GatewayError(problemCode(data), statusCode);
+    return new GatewayError(problemCode(data), statusCode, problemReason(data));
   };
 
   const call = async <T>(method: 'GET' | 'POST' | 'DELETE', path: string, data?: unknown, headers?: Record<string, string>): Promise<T> => {
     const response = await exchange(method, path, data, true, headers);
     if (response.statusCode < 200 || response.statusCode >= 300) throw refusal(response.statusCode, response.data);
     return response.data as T;
+  };
+
+  const getConditional = async <T>(path: string, ifNoneMatch?: string | null): Promise<ConditionalGetOutcome<T>> => {
+    const extra: Record<string, string> = {};
+    if (typeof ifNoneMatch === 'string' && ifNoneMatch.trim().length > 0) {
+      extra['If-None-Match'] = ifNoneMatch.trim();
+    }
+    const response = await exchange('GET', path, undefined, true, extra);
+    const etag = headerValue(response.header, 'etag');
+    if (response.statusCode === 304) return { status: 304, etag };
+    if (response.statusCode < 200 || response.statusCode >= 300) throw refusal(response.statusCode, response.data);
+    return { status: 200, data: response.data as T, etag };
   };
 
   /**
@@ -160,6 +197,8 @@ export function createGateway(options: {
 
   return {
     get: <T>(path: string) => call<T>('GET', path),
+    /** Conditional GET with If-None-Match returning either fresh 200 payload + ETag or 304 Not Modified. */
+    getConditional,
     /** A change; `headers` adds request headers such as an idempotency key. */
     post: <T>(path: string, data: unknown, headers?: Record<string, string>) => call<T>('POST', path, data, headers),
     remove: (path: string) => call<unknown>('DELETE', path),
