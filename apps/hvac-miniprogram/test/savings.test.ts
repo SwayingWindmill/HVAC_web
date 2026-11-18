@@ -5,7 +5,13 @@ import { monthToDate, savingsCard } from '../miniprogram/lib/savings.ts';
 test('the month so far is read from the start of the Site day the owner cut, never from the phone time zone', () => {
   // 00:00 on 21 October at a UTC+8 Site is 16:00Z the day before.
   assert.deepEqual(monthToDate('2026-10-20T16:00:00Z'), { from: '2026-10-01', to: '2026-10-21' });
-  // 00:00 on 1 November at a UTC−5 Site.
+  // 00:00 on 21 October in Pacific/Kiritimati (UTC+14) is 10:00Z the day before.
+  assert.deepEqual(monthToDate('2026-10-20T10:00:00Z'), { from: '2026-10-01', to: '2026-10-21' });
+  // 00:00 on 21 October at a UTC+13 Site is 11:00Z the day before.
+  assert.deepEqual(monthToDate('2026-10-20T11:00:00Z'), { from: '2026-10-01', to: '2026-10-21' });
+  // 00:00 on 20 October at a UTC-9 Site is 09:00Z on the same UTC date.
+  assert.deepEqual(monthToDate('2026-10-20T09:00:00Z'), { from: '2026-10-01', to: '2026-10-20' });
+  // 00:00 on 1 November at a UTC-5 Site.
   assert.deepEqual(monthToDate('2026-11-01T05:00:00Z'), { from: '2026-11-01', to: '2026-11-01' });
 });
 

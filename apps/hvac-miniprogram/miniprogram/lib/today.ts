@@ -1,14 +1,13 @@
-// Today so far against yesterday up to the same time of day, worked out exactly like the web
-// overview's 今日用能 (apps/hvac-web/src/features/energy-analysis/consumption/model.ts) so the two
-// show the same numbers at the same moment (#664). The Energy analytics owner cuts the Site's days
-// and the partial hours, so the mini program needs no time zone arithmetic: WeChat's JavaScript
-// runtime does not reliably support Intl time zones on every phone.
+// Today so far against yesterday up to the same time of day, worked out like the web overview's
+// 今日用能 (apps/hvac-web/src/features/energy-analysis/consumption/model.ts) so the two show the
+// same numbers at the same moment (#664). The Energy analytics owner cuts partial hours, while
+// siteDayBounds resolves local midnight from fixed offsets or verified Intl support and falls
+// back to recentDays when WeChat lacks Intl time zone data for a DST zone.
 
 import type { Gateway } from './gateway';
 
 const DAY_MS = 86_400_000;
 const MINUTE_MS = 60_000;
-const RECENT_HOURS_MS = 3 * DAY_MS;
 
 export interface SiteScope {
   readonly id: string;
@@ -19,10 +18,6 @@ export interface SiteScope {
 export interface EnergySeriesPayload {
   readonly points: HourPoint[];
   readonly devices?: { readonly deviceId: string; readonly points: DayPoint[] }[];
-}
-
-export function recentHourlyWindow(now: Date): Window {
-  return { from: new Date(now.getTime() - RECENT_HOURS_MS).toISOString(), to: now.toISOString() };
 }
 
 export function queryEnergySeries(
@@ -46,13 +41,17 @@ export function queryEnergySeries(
   });
 }
 
-export const fetchRecentHours = (
+export function queryNonEmptyHourly(
   client: Pick<Gateway, 'post'>,
   site: SiteScope,
   energyType: 'electricity' | 'cooling',
-  now: Date,
-): Promise<HourPoint[]> =>
-  queryEnergySeries(client, site, energyType, 'hour', recentHourlyWindow(now)).then((response) => response.points);
+  window: Window,
+): Promise<HourPoint[]> {
+  if (Date.parse(window.to) <= Date.parse(window.from)) {
+    return Promise.resolve([] as HourPoint[]);
+  }
+  return queryEnergySeries(client, site, energyType, 'hour', window).then((response) => response.points);
+}
 
 export const fetchRecentDays = (
   client: Pick<Gateway, 'post'>,
@@ -280,12 +279,17 @@ export function todayStart(days: readonly DayPoint[], now: Date): string | null 
 }
 
 /** Today from the Site's midnight to now, and yesterday from the midnight before to the same time of day. */
-export function sameHoursWindows(start: string, now: Date): { readonly today: Window; readonly yesterday: Window } {
+export function sameHoursWindows(
+  start: string,
+  now: Date,
+  yesterdayStart?: string,
+): { readonly today: Window; readonly yesterday: Window } {
   const from = Date.parse(start);
-  const elapsed = Math.min(now.getTime() - from, DAY_MS);
+  const yesterdayFrom = yesterdayStart === undefined ? from - DAY_MS : Date.parse(yesterdayStart);
+  const elapsed = Math.max(0, Math.min(now.getTime() - from, from - yesterdayFrom));
   return {
     today: { from: new Date(from).toISOString(), to: now.toISOString() },
-    yesterday: { from: new Date(from - DAY_MS).toISOString(), to: new Date(from - DAY_MS + elapsed).toISOString() },
+    yesterday: { from: new Date(yesterdayFrom).toISOString(), to: new Date(yesterdayFrom + elapsed).toISOString() },
   };
 }
 
@@ -297,43 +301,6 @@ export function hasRecentHourlyReading(hours: readonly DayPoint[], bounds: DayBo
     const endMs = Date.parse(point.periodEnd);
     return Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > yesterdayMs && startMs < nowMs;
   });
-}
-
-/**
- * Derives today's Site-local midnight from an hourly electricity series covering the recent window.
- * Returns null when the Site has no electricity reading today or yesterday, or when the runtime
- * cannot resolve a non-fixed/DST timezone locally.
- */
-export function deriveHourlyTodayStart(hours: readonly DayPoint[], now: Date, timezone: string): string | null {
-  const bounds = siteDayBounds(now, timezone);
-  if (bounds === null) return null;
-  return hasRecentHourlyReading(hours, bounds, now) ? bounds.todayStart : null;
-}
-
-/**
- * Slices a multi-day hourly series in memory into today's elapsed buckets and yesterday's matching
- * elapsed buckets (clamped at today's start so a 23h DST transition never bleeds into today).
- */
-export function splitHourlyWindow<T extends DayPoint>(
-  points: readonly T[],
-  start: string,
-  now: Date,
-  yesterdayStart?: string,
-): { readonly today: T[]; readonly yesterday: T[] } {
-  const todayFrom = Date.parse(start);
-  const todayTo = now.getTime();
-  const yesterdayFrom = yesterdayStart === undefined ? todayFrom - DAY_MS : Date.parse(yesterdayStart);
-  const elapsed = Math.max(0, Math.min(todayTo - todayFrom, todayFrom - yesterdayFrom));
-  const yesterdayTo = yesterdayFrom + elapsed;
-  const today: T[] = [];
-  const yesterday: T[] = [];
-  for (const point of points) {
-    const at = Date.parse(point.periodStart);
-    if (!Number.isFinite(at)) continue;
-    if (at >= todayFrom && at < todayTo) today.push(point);
-    else if (at >= yesterdayFrom && at < yesterdayTo) yesterday.push(point);
-  }
-  return { today, yesterday };
 }
 
 const sumOf = (values: readonly number[]) => values.reduce((total, value) => total + value, 0);

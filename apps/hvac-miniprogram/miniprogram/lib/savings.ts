@@ -4,20 +4,20 @@
 import type { Gateway } from './gateway';
 
 const DAY_MS = 86_400_000;
+const HOUR_MS = 3_600_000;
 const pad = (value: number) => String(value).padStart(2, '0');
 
 export const EMPTY_SAVINGS_TOTALS: SavingsTotals = { days: 0, avoidedKWh: 0, avoidedCost: 0, plantKWh: 0 };
 
 /**
- * The month so far as Site-local dates, read from the start of today's Site day as the Energy
- * analytics owner cut it: the Site's wall clock shows 00:00 at that instant, which gives its offset
- * without the phone's time zone support.
+ * The month so far as Site-local dates, read from the start of today's Site day as resolved
+ * locally or cut by the Energy analytics owner.
  */
 export function monthToDate(todayStart: string): { readonly from: string; readonly to: string } {
   const instant = Date.parse(todayStart);
   const intoUTCDay = ((instant % DAY_MS) + DAY_MS) % DAY_MS;
-  // Offsets run from UTC−12 to UTC+14: a midnight later than 12:00Z belongs to the next UTC day.
-  const offset = intoUTCDay > DAY_MS / 2 ? DAY_MS - intoUTCDay : -intoUTCDay;
+  // Match siteTime's UTC-10..UTC+14 split: midnights at or after 10:00Z belong to the next UTC date.
+  const offset = intoUTCDay >= 10 * HOUR_MS ? DAY_MS - intoUTCDay : -intoUTCDay;
   const local = new Date(instant + offset);
   const year = local.getUTCFullYear();
   const month = pad(local.getUTCMonth() + 1);

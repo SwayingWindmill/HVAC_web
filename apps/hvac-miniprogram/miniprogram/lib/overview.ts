@@ -21,13 +21,15 @@ import {
 import {
   compareWithYesterday,
   fetchRecentDays,
-  fetchRecentHours,
   hasRecentHourlyReading,
+  queryNonEmptyHourly,
+  sameHoursWindows,
   siteDayBounds,
-  splitHourlyWindow,
   summarize,
   todayStart,
+  type DayBounds,
   type EnergySummary,
+  type HourPoint,
   type SiteScope,
 } from './today';
 
@@ -170,87 +172,140 @@ async function loadRecommendation(client: Pick<Gateway, 'get'>, siteId: string):
 
 const settled = <T>(result: PromiseSettledResult<T>, failed: T): T => (result.status === 'fulfilled' ? result.value : failed);
 
-type ResolvedStart =
-  | { readonly status: 'ok'; readonly start: string | null; readonly yesterdayStart?: string }
-  | { readonly status: 'error' };
+function presentEnergySnapshot(
+  todayElectricity: readonly HourPoint[],
+  todayCooling: readonly HourPoint[],
+  yesterdayElectricity: readonly HourPoint[],
+  yesterdayCooling: readonly HourPoint[],
+  start: string,
+  now: Date,
+  yesterdayStart?: string,
+): { readonly energy: OverviewInputs['energy']; readonly charts: OverviewCharts } {
+  const today = summarize(todayElectricity, todayCooling);
+  const yesterday = summarize(yesterdayElectricity, yesterdayCooling);
+  return {
+    energy: { status: 'ok', today, change: compareWithYesterday(today, yesterday) },
+    charts: {
+      electricity: hourlyElectricity(todayElectricity, yesterdayElectricity, start, now, yesterdayStart),
+      cop: hourlyCop(todayElectricity, todayCooling, start, now),
+    },
+  };
+}
 
-async function resolveStart(
+interface EnergyAndSavingsLoad {
+  readonly energy: OverviewInputs['energy'];
+  readonly charts: OverviewCharts | null;
+  readonly totalsResult: PromiseSettledResult<SavingsTotals>;
+}
+
+async function loadBoundedEnergyAndSavings(
   gateway: Gateway,
   site: SiteScope,
   now: Date,
-  electricityHours: readonly import('./today').HourPoint[],
-  localBounds: ReturnType<typeof siteDayBounds>,
-): Promise<ResolvedStart> {
-  if (localBounds !== null) {
-    return {
-      status: 'ok',
-      start: hasRecentHourlyReading(electricityHours, localBounds, now) ? localBounds.todayStart : null,
-      yesterdayStart: localBounds.yesterdayStart,
-    };
+  bounds: DayBounds,
+): Promise<EnergyAndSavingsLoad> {
+  const windows = sameHoursWindows(bounds.todayStart, now, bounds.yesterdayStart);
+  const recentElectricityPromise = queryNonEmptyHourly(gateway, site, 'electricity', {
+    from: bounds.yesterdayStart,
+    to: now.toISOString(),
+  });
+  const todayCoolingPromise = queryNonEmptyHourly(gateway, site, 'cooling', windows.today);
+  const yesterdayElectricityPromise = queryNonEmptyHourly(gateway, site, 'electricity', windows.yesterday);
+  const yesterdayCoolingPromise = queryNonEmptyHourly(gateway, site, 'cooling', windows.yesterday);
+
+  // Only skip savings/summary when electricity succeeded and confirmed zero recent readings.
+  const totalsPromise: Promise<SavingsTotals> = recentElectricityPromise.then(
+    (hours) => (hasRecentHourlyReading(hours, bounds, now)
+      ? loadSavingsSummary(gateway, site.id, bounds.todayStart)
+      : EMPTY_SAVINGS_TOTALS),
+    () => loadSavingsSummary(gateway, site.id, bounds.todayStart),
+  );
+
+  const [recentElecResult, todayCoolResult, yesterdayElecResult, yesterdayCoolResult, totalsResult] =
+    await Promise.allSettled([
+      recentElectricityPromise,
+      todayCoolingPromise,
+      yesterdayElectricityPromise,
+      yesterdayCoolingPromise,
+      totalsPromise,
+    ]);
+
+  let energy: OverviewInputs['energy'] = { status: 'error' };
+  let charts: OverviewCharts | null = null;
+  if (recentElecResult.status === 'fulfilled') {
+    if (!hasRecentHourlyReading(recentElecResult.value, bounds, now)) {
+      energy = { status: 'empty' };
+    } else if (
+      todayCoolResult.status === 'fulfilled'
+      && yesterdayElecResult.status === 'fulfilled'
+      && yesterdayCoolResult.status === 'fulfilled'
+    ) {
+      const todayFromMs = Date.parse(bounds.todayStart);
+      const nowMs = now.getTime();
+      const todayElectricity = recentElecResult.value.filter((point) => {
+        const at = Date.parse(point.periodStart);
+        return at >= todayFromMs && at < nowMs;
+      });
+      ({ energy, charts } = presentEnergySnapshot(
+        todayElectricity,
+        todayCoolResult.value,
+        yesterdayElecResult.value,
+        yesterdayCoolResult.value,
+        bounds.todayStart,
+        now,
+        bounds.yesterdayStart,
+      ));
+    }
   }
-  // Fallback when the phone runtime lacks Intl timeZone support for a DST or unmapped zone.
-  try {
-    const days = await fetchRecentDays(gateway, site, now);
-    return { status: 'ok', start: todayStart(days, now) };
-  } catch {
-    return { status: 'error' };
-  }
+  return { energy, charts, totalsResult };
 }
 
-/** Loads overview owners concurrently and derives today's energy and savings from 72h hourly series. */
+async function loadFallbackEnergyAndSavings(
+  gateway: Gateway,
+  site: SiteScope,
+  now: Date,
+): Promise<EnergyAndSavingsLoad> {
+  // Reject totalsPromise if fetchRecentDays fails so upstream outages never mask savings as pending.
+  const startPromise = fetchRecentDays(gateway, site, now).then((days) => todayStart(days, now));
+  const totalsPromise: Promise<SavingsTotals> = startPromise.then((start) => (
+    start === null ? EMPTY_SAVINGS_TOTALS : loadSavingsSummary(gateway, site.id, start)
+  ));
+  const energyPromise = startPromise.then(async (start) => {
+    if (start === null) return { energy: { status: 'empty' as const }, charts: null };
+    const windows = sameHoursWindows(start, now);
+    const [todayElectricity, todayCooling, yesterdayElectricity, yesterdayCooling] = await Promise.all([
+      queryNonEmptyHourly(gateway, site, 'electricity', windows.today),
+      queryNonEmptyHourly(gateway, site, 'cooling', windows.today),
+      queryNonEmptyHourly(gateway, site, 'electricity', windows.yesterday),
+      queryNonEmptyHourly(gateway, site, 'cooling', windows.yesterday),
+    ]);
+    return presentEnergySnapshot(todayElectricity, todayCooling, yesterdayElectricity, yesterdayCooling, start, now);
+  });
+
+  const [energyResult, totalsResult] = await Promise.allSettled([energyPromise, totalsPromise]);
+  if (energyResult.status === 'fulfilled') {
+    return { ...energyResult.value, totalsResult };
+  }
+  return { energy: { status: 'error' }, charts: null, totalsResult };
+}
+
+/** Loads overview owners concurrently while slicing yesterday up to now for exact partial-hour parity. */
 export async function loadOverview<S extends SiteScope>(deps: OverviewDeps<S>, site: S, now: Date = new Date()) {
-  const electricityPromise = fetchRecentHours(deps.gateway, site, 'electricity', now);
-  const coolingPromise = fetchRecentHours(deps.gateway, site, 'cooling', now);
+  const localBounds = siteDayBounds(now, site.timezone);
+  const energyAndSavingsPromise = localBounds !== null
+    ? loadBoundedEnergyAndSavings(deps.gateway, site, now, localBounds)
+    : loadFallbackEnergyAndSavings(deps.gateway, site, now);
   const measuresPromise = loadSavingsMeasures(deps.gateway, site.id);
   const recommendationPromise = loadRecommendation(deps.gateway, site.id);
   const alarmsPromise = activeAlarms(deps.gateway, site.id);
   const plantPromise = deps.loadPlant(site);
 
-  const localBounds = siteDayBounds(now, site.timezone);
+  const [energyAndSavings, [measuresResult, recommendation, alarms, plant]] = await Promise.all([
+    energyAndSavingsPromise,
+    Promise.allSettled([measuresPromise, recommendationPromise, alarmsPromise, plantPromise]),
+  ]);
 
-  const resolvedStartPromise: Promise<ResolvedStart> = electricityPromise.then(
-    (electricityHours) => resolveStart(deps.gateway, site, now, electricityHours, localBounds),
-    () => ({ status: 'error' as const }),
-  );
-
-  const totalsPromise: Promise<SavingsTotals> = resolvedStartPromise.then((resolved) => {
-    if (resolved.status !== 'ok' || resolved.start === null) return EMPTY_SAVINGS_TOTALS;
-    return loadSavingsSummary(deps.gateway, site.id, resolved.start);
-  });
-
-  const [electricityResult, coolingResult, resolvedStart, totalsResult, measuresResult, recommendation, alarms, plant] =
-    await Promise.allSettled([
-      electricityPromise,
-      coolingPromise,
-      resolvedStartPromise,
-      totalsPromise,
-      measuresPromise,
-      recommendationPromise,
-      alarmsPromise,
-      plantPromise,
-    ]);
-
-  let energy: OverviewInputs['energy'] = { status: 'error' };
-  let charts: OverviewCharts | null = null;
-
-  const startInfo = resolvedStart.status === 'fulfilled' ? resolvedStart.value : { status: 'error' as const };
-  if (electricityResult.status === 'fulfilled' && startInfo.status === 'ok') {
-    if (startInfo.start === null) {
-      energy = { status: 'empty' };
-    } else if (coolingResult.status === 'fulfilled') {
-      const { start, yesterdayStart } = startInfo;
-      const elec = splitHourlyWindow(electricityResult.value, start, now, yesterdayStart);
-      const cool = splitHourlyWindow(coolingResult.value, start, now, yesterdayStart);
-      const today = summarize(elec.today, cool.today);
-      const yesterday = summarize(elec.yesterday, cool.yesterday);
-      energy = { status: 'ok', today, change: compareWithYesterday(today, yesterday) };
-      charts = {
-        electricity: hourlyElectricity(elec.today, elec.yesterday, start, now, yesterdayStart),
-        cop: hourlyCop(elec.today, cool.today, start, now),
-      };
-    }
-  }
-
+  const { energy, charts, totalsResult } = energyAndSavings;
   const savings: OverviewInputs['savings'] = totalsResult.status === 'fulfilled' && measuresResult.status === 'fulfilled'
     ? { status: 'ok', card: savingsCard(totalsResult.value, measuresResult.value) }
     : { status: 'error' };
