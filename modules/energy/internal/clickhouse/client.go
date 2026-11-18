@@ -136,9 +136,24 @@ func validateClientConfig(rawURL string, client *http.Client) (*url.URL, *http.C
 		return nil, nil, errors.New("ClickHouse analytics base URL must be an HTTP(S) origin without user info, path, query or fragment")
 	}
 	if client == nil {
-		client = &http.Client{Timeout: 15 * time.Second}
+		client = newDefaultAnalyticsHTTPClient(15 * time.Second)
 	}
 	return parsed, client, nil
+}
+
+func newDefaultAnalyticsHTTPClient(timeout time.Duration) *http.Client {
+	var transport *http.Transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok && base != nil {
+		transport = base.Clone()
+	} else {
+		transport = &http.Transport{}
+	}
+	transport.MaxIdleConns = 64
+	transport.MaxIdleConnsPerHost = 32
+	transport.IdleConnTimeout = 90 * time.Second
+	transport.TLSHandshakeTimeout = 10 * time.Second
+	transport.ExpectContinueTimeout = time.Second
+	return &http.Client{Timeout: timeout, Transport: transport}
 }
 
 const (
@@ -428,6 +443,7 @@ WHERE (has({observations:Array(UUID)}, delta.observation_id)
     OR has({observations:Array(UUID)}, ifNull(delta.previous_observation_id, toUUID('00000000-0000-0000-0000-000000000000'))))
   AND delta.transition_type IN ('INCREASE', 'UNCHANGED', 'RECOVERY', 'RESET', 'ROLLOVER')
   AND delta.delta_value IS NOT NULL
+  AND (delta.previous_sampled_at IS NULL OR delta.sampled_at > delta.previous_sampled_at)
   AND (existing.existing_fact_count = 0 OR existing.existing_fact_previous_observation_id != toString(delta.previous_observation_id))
 ORDER BY delta.sampled_at, delta.source_offset, delta.observation_id
 FORMAT JSONEachRow`, reader.sourceDatabase, reader.analyticsDatabase, reader.analyticsTable)
@@ -486,8 +502,10 @@ func (writer *Writer) AdvanceCheckpoint(ctx context.Context, cursor energy.Proje
 		return fmt.Errorf("encode energy projection checkpoint: %w", err)
 	}
 	return writer.insert(ctx, "checkpoint insert", url.Values{
-		"query":             {"INSERT INTO " + writer.database + ".energy_projection_checkpoints (projection_name, history_sequence, observation_id) FORMAT JSONEachRow"},
-		"wait_end_of_query": {"1"},
+		"query":                 {"INSERT INTO " + writer.database + ".energy_projection_checkpoints (projection_name, history_sequence, observation_id) FORMAT JSONEachRow"},
+		"async_insert":          {"1"},
+		"wait_for_async_insert": {"1"},
+		"wait_end_of_query":     {"1"},
 	}, append(body, '\n'))
 }
 

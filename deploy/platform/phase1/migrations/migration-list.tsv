@@ -127,6 +127,7 @@ hvac_s2|infra/telemetry/postgres/init/mqtt-runtime-events.sql
 hvac_s2|infra/telemetry/postgres/init/alarm-evaluation-dead-letter.sql
 hvac_s2|infra/telemetry/postgres/init/telemetry-history-dead-letter-and-retention.sql
 hvac_s2|infra/telemetry/postgres/init/telemetry-runtime-unnest-and-indexes.sql
+hvac_s2|infra/telemetry/postgres/init/telemetry-accepted-point-sample-index.sql
 hvac_s3|modules/command/migrations/001_s3_command_runtime.sql
 hvac_s3|modules/command/migrations/002_s3_target_runtime.sql
 hvac_s3|modules/command/migrations/003_s3_tenant_scope.sql

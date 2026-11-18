@@ -184,6 +184,7 @@ COPY infra/registry/postgres/init/optimization-shadow-and-trace.sql /opt/hvac/re
 COPY infra/registry/postgres/init/optimization-governance-flywheel.sql /opt/hvac/repo/infra/registry/postgres/init/optimization-governance-flywheel.sql
 COPY infra/registry/postgres/init/metric-backfill-recalc-job-grants.sql /opt/hvac/repo/infra/registry/postgres/init/metric-backfill-recalc-job-grants.sql
 COPY infra/telemetry/postgres/init/telemetry-runtime-unnest-and-indexes.sql /opt/hvac/repo/infra/telemetry/postgres/init/telemetry-runtime-unnest-and-indexes.sql
+COPY infra/telemetry/postgres/init/telemetry-accepted-point-sample-index.sql /opt/hvac/repo/infra/telemetry/postgres/init/telemetry-accepted-point-sample-index.sql
 
 FROM postgres:16.4-bookworm
 

@@ -198,6 +198,54 @@ func TestReaderBoundsEachDeltaQueryToItsArrivalsSampleSpan(t *testing.T) {
 	}
 }
 
+func TestWriterAdvanceCheckpointEnablesAsyncInsertAndPooledTransport(t *testing.T) {
+	var seenQuery url.Values
+	var seenBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		seenQuery = request.URL.Query()
+		_ = json.NewDecoder(request.Body).Decode(&seenBody)
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	writer, err := NewWriter(WriterConfig{
+		BaseURL: server.URL, Database: "analytics", Table: "energy_interval_facts", HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = writer.AdvanceCheckpoint(context.Background(), energy.ProjectionCursor{
+		HistorySequence: 42,
+		ObservationID:   "018f4e00-3000-7000-8000-000000000099",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seenQuery.Get("async_insert") != "1" || seenQuery.Get("wait_for_async_insert") != "1" || seenQuery.Get("wait_end_of_query") != "1" {
+		t.Fatalf("checkpoint query params=%v", seenQuery)
+	}
+	if seenBody["projection_name"] != energyProjection {
+		t.Fatalf("checkpoint body=%v", seenBody)
+	}
+
+	reader, err := NewReader(ReaderConfig{
+		BaseURL: "http://127.0.0.1:8123", SourceDatabase: "telemetry_history",
+		AnalyticsDatabase: "analytics", AnalyticsTable: "energy_interval_facts",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport, ok := reader.httpClient.Transport.(*http.Transport)
+	if !ok || transport == nil || transport.MaxIdleConns != 64 || transport.MaxIdleConnsPerHost != 32 || transport.IdleConnTimeout != 90*time.Second {
+		t.Fatalf("unexpected reader transport=%#v", reader.httpClient.Transport)
+	}
+
+	deltaSQL := reader.counterDeltaQuery()
+	if !strings.Contains(deltaSQL, "delta.sampled_at > delta.previous_sampled_at") {
+		t.Fatalf("counterDeltaQuery missing elapsed timestamp guard:\n%s", deltaSQL)
+	}
+}
+
 func validDelta() energy.CounterDelta {
 	delta := 2.75
 	return energy.CounterDelta{

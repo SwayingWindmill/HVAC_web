@@ -40,7 +40,11 @@ ORDER BY (
   revision,
   result_id
 )
-SETTINGS index_granularity = 8192;
+SETTINGS index_granularity = 8192,
+         non_replicated_deduplication_window = 10000;
+
+ALTER TABLE analytics.metric_result_facts
+  MODIFY SETTING non_replicated_deduplication_window = 10000;
 
 CREATE USER IF NOT EXISTS metric_engine_reader IDENTIFIED WITH no_password;
 CREATE USER IF NOT EXISTS metric_engine_writer IDENTIFIED WITH no_password;

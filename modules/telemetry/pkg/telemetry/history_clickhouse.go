@@ -115,8 +115,8 @@ func compressHistoryGzip(raw []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// PrepareObservations deterministically orders, validates, encodes, hashes, and gzip-compresses
-// one history batch so the deduplication token stays invariant across retries.
+// PrepareObservations deterministically orders, deduplicates resolved (point_id, sampled_at)
+// collisions, validates, encodes, hashes, and gzip-compresses one history batch.
 func (sink *ClickHouseHistorySink) PrepareObservations(sequence uint64, observations []HistoryObservation) ([]byte, string, error) {
 	if sink == nil {
 		return nil, "", errors.New("ClickHouse history sink is closed")
@@ -132,7 +132,7 @@ func (sink *ClickHouseHistorySink) PrepareObservations(sequence uint64, observat
 	}
 	// PostgreSQL UPDATE RETURNING has no order guarantee. Retries must produce
 	// identical rows, order and block boundaries, including after a worker restart.
-	observations = slices.Clone(observations)
+	observations = deduplicateResolvedBatchSamples(slices.Clone(observations))
 	slices.SortFunc(observations, func(a, b HistoryObservation) int { return strings.Compare(a.ObservationID, b.ObservationID) })
 	var encoded bytes.Buffer
 	for _, observation := range observations {
@@ -157,6 +157,52 @@ func (sink *ClickHouseHistorySink) PrepareObservations(sequence uint64, observat
 		return nil, "", err
 	}
 	return compressed, token, nil
+}
+
+type historyPointSampleKey struct {
+	pointID       string
+	sampledAtUnix int64
+}
+
+func deduplicateResolvedBatchSamples(observations []HistoryObservation) []HistoryObservation {
+	if len(observations) < 2 {
+		return observations
+	}
+	bestBySample := make(map[historyPointSampleKey]HistoryObservation, len(observations))
+	keep := make([]HistoryObservation, 0, len(observations))
+	for _, obs := range observations {
+		isResolvedSample := obs.PointID != nil && *obs.PointID != "" &&
+			(obs.AcceptanceStatus == string(ObservationAccepted) || obs.AcceptanceStatus == string(ObservationOutOfOrder))
+		if !isResolvedSample {
+			keep = append(keep, obs)
+			continue
+		}
+		key := historyPointSampleKey{
+			pointID:       strings.ToLower(strings.TrimSpace(*obs.PointID)),
+			sampledAtUnix: obs.SampledAt.UTC().Truncate(time.Millisecond).UnixMilli(),
+		}
+		existing, seen := bestBySample[key]
+		if !seen || historySampleWins(obs, existing) {
+			bestBySample[key] = obs
+		}
+	}
+	for _, obs := range bestBySample {
+		keep = append(keep, obs)
+	}
+	return keep
+}
+
+func historySampleWins(candidate, current HistoryObservation) bool {
+	if candidate.ReceivedAt.After(current.ReceivedAt) {
+		return true
+	}
+	if candidate.ReceivedAt.Before(current.ReceivedAt) {
+		return false
+	}
+	if candidate.SourceOffset != current.SourceOffset {
+		return candidate.SourceOffset > current.SourceOffset
+	}
+	return candidate.ObservationID < current.ObservationID
 }
 
 // InsertPrepared uploads a pre-encoded gzipped NDJSON batch produced by PrepareObservations.
