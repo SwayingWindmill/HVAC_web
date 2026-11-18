@@ -336,21 +336,24 @@ func TestPostgresOutboxDeduplicatesRetransmittedTimestampBeforeClickHouseMV(t *t
 		t.Fatal(err)
 	}
 	defer admin.Close()
-	resetIngestState(t, admin)
 	const livePartition = "tb-history-dedup-live"
 	const replayPartition = "tb-history-dedup-replay"
-	for _, partition := range []string{livePartition, replayPartition} {
-		for _, statement := range []string{
-			`DELETE FROM telemetry_runtime.telemetry_history_outbox WHERE payload ->> 'source_partition' = $1`,
-			`DELETE FROM telemetry_runtime.source_delivery_evidence WHERE source_partition = $1`,
-			`DELETE FROM telemetry_runtime.source_observations WHERE source_partition = $1`,
-			`DELETE FROM telemetry_runtime.source_positions WHERE source_partition = $1`,
-		} {
-			if _, err := admin.Exec(ctx, statement, partition); err != nil {
-				t.Fatal(err)
+	cleanup := func() {
+		for _, partition := range []string{livePartition, replayPartition} {
+			for _, statement := range []string{
+				`DELETE FROM telemetry_runtime.telemetry_history_outbox WHERE payload ->> 'source_partition' = $1`,
+				`DELETE FROM telemetry_runtime.source_delivery_evidence WHERE source_partition = $1`,
+				`DELETE FROM telemetry_runtime.source_observations WHERE source_partition = $1`,
+				`DELETE FROM telemetry_runtime.source_positions WHERE source_partition = $1`,
+			} {
+				if _, err := admin.Exec(ctx, statement, partition); err != nil {
+					t.Fatal(err)
+				}
 			}
 		}
 	}
+	cleanup()
+	defer cleanup()
 
 	store, err := OpenPostgresStore(ctx, runtimeURL)
 	if err != nil {
@@ -360,7 +363,7 @@ func TestPostgresOutboxDeduplicatesRetransmittedTimestampBeforeClickHouseMV(t *t
 
 	sampledAt := time.Date(2026, 7, 29, 10, 0, 5, 0, time.UTC)
 	live := ingestCandidate(
-		"018f2e00-9400-7000-8000-000000000001", sourceA, livePartition, 1, SourcePathPush,
+		"018f2e00-9f00-7000-8000-000000000001", sourceA, livePartition, 1, SourcePathPush,
 		"mqtt-device-tenant-a-site-1", "zone.temperature", json.RawMessage(`22.25`), "NUMBER", "Cel",
 		sampledAt, sampledAt.Add(time.Second),
 	)
@@ -371,7 +374,7 @@ func TestPostgresOutboxDeduplicatesRetransmittedTimestampBeforeClickHouseMV(t *t
 
 	// Simulate reconnect replay with a brand-new EventID and HISTORY_REPLAY partition for the exact same timestamp.
 	replayedSameSample := ingestCandidate(
-		"018f2e00-9400-7000-8000-000000000002", sourceA, replayPartition, 1, SourcePathHistoryReplay,
+		"018f2e00-9f00-7000-8000-000000000002", sourceA, replayPartition, 1, SourcePathHistoryReplay,
 		"mqtt-device-tenant-a-site-1", "zone.temperature", json.RawMessage(`22.25`), "NUMBER", "Cel",
 		sampledAt, sampledAt.Add(5*time.Minute),
 	)
