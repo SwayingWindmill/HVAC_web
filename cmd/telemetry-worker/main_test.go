@@ -707,12 +707,14 @@ func TestClonedHTTPTransportAndProbeSweepDebugLogging(t *testing.T) {
 	var infoBuf bytes.Buffer
 	infoCtx, cancelInfo := context.WithCancel(t.Context())
 	doneInfo := make(chan struct{})
+	exitedInfo := make(chan struct{})
 	go func() {
+		defer close(exitedInfo)
 		runProbeOffsetSweep(infoCtx, &stubProbeOffsetSweeper{done: doneInfo}, 10*time.Millisecond, observability.NewJSONLogger(&infoBuf, slog.LevelInfo))
 	}()
 	<-doneInfo
 	cancelInfo()
-	time.Sleep(15 * time.Millisecond)
+	<-exitedInfo
 	if strings.Contains(infoBuf.String(), "telemetry_probe_offsets_estimated") {
 		t.Fatalf("expected telemetry_probe_offsets_estimated suppressed at Info level, got: %s", infoBuf.String())
 	}
@@ -720,12 +722,14 @@ func TestClonedHTTPTransportAndProbeSweepDebugLogging(t *testing.T) {
 	var debugBuf bytes.Buffer
 	debugCtx, cancelDebug := context.WithCancel(t.Context())
 	doneDebug := make(chan struct{})
+	exitedDebug := make(chan struct{})
 	go func() {
+		defer close(exitedDebug)
 		runProbeOffsetSweep(debugCtx, &stubProbeOffsetSweeper{done: doneDebug}, 10*time.Millisecond, observability.NewJSONLogger(&debugBuf, slog.LevelDebug))
 	}()
 	<-doneDebug
 	cancelDebug()
-	time.Sleep(15 * time.Millisecond)
+	<-exitedDebug
 	if !strings.Contains(debugBuf.String(), "telemetry_probe_offsets_estimated") {
 		t.Fatalf("expected telemetry_probe_offsets_estimated at Debug level, got: %s", debugBuf.String())
 	}
