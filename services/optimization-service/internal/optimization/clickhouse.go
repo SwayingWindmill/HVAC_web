@@ -150,10 +150,8 @@ func (sink *ClickHouseSink) InsertEvaluation(ctx context.Context, evaluation Eva
 	defer drainAndClose(response.Body)
 	if response.StatusCode/100 != 2 {
 		detail, _ := io.ReadAll(io.LimitReader(response.Body, 2048))
-		_, _ = io.Copy(io.Discard, response.Body)
 		return fmt.Errorf("insert optimization evaluation returned %d: %s", response.StatusCode, strings.TrimSpace(string(detail)))
 	}
-	_, _ = io.Copy(io.Discard, response.Body)
 	return nil
 }
 
@@ -206,7 +204,6 @@ func (sink *ClickHouseSink) HasEvaluation(ctx context.Context, evaluation Evalua
 	}
 	defer drainAndClose(response.Body)
 	body, err := io.ReadAll(io.LimitReader(response.Body, 4096))
-	_, _ = io.Copy(io.Discard, response.Body)
 	if err != nil {
 		return false, err
 	}

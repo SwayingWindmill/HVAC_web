@@ -39,6 +39,22 @@ type ClickHouseSink struct {
 	client         *http.Client
 }
 
+func NewClickHouseSink(config ClickHouseConfig) (*ClickHouseSink, error) {
+	parsed, err := url.Parse(config.BaseURL)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return nil, errors.New("forecast ClickHouse URL must be absolute http/https")
+	}
+	database := config.Database
+	if database == "" {
+		database = "analytics"
+	}
+	table := config.Table
+	if table == "" {
+		table = "forecast_series"
+	}
+	if !identifier(database) || !identifier(table) {
+		return nil, errors.New("forecast ClickHouse database/table identifier is invalid")
+	}
 	client := config.HTTPClient
 	if client == nil {
 		client = newDefaultClickHouseHTTPClient(10 * time.Second)
@@ -177,10 +193,8 @@ func (sink *ClickHouseSink) InsertForecastPoints(ctx context.Context, points []P
 	defer drainAndClose(response.Body)
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		detail, _ := io.ReadAll(io.LimitReader(response.Body, 2048))
-		_, _ = io.Copy(io.Discard, response.Body)
 		return fmt.Errorf("insert forecast ClickHouse result returned %d: %s", response.StatusCode, strings.TrimSpace(string(detail)))
 	}
-	_, _ = io.Copy(io.Discard, response.Body)
 	return nil
 }
 
@@ -256,7 +270,6 @@ func (sink *ClickHouseSink) ReadForecastJob(ctx context.Context, scope ForecastJ
 	defer drainAndClose(response.Body)
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		detail, _ := io.ReadAll(io.LimitReader(response.Body, 2048))
-		_, _ = io.Copy(io.Discard, response.Body)
 		return nil, fmt.Errorf("query forecast ClickHouse result returned %d: %s", response.StatusCode, strings.TrimSpace(string(detail)))
 	}
 	decoder := json.NewDecoder(response.Body)
@@ -271,7 +284,6 @@ func (sink *ClickHouseSink) ReadForecastJob(ctx context.Context, scope ForecastJ
 		}
 		points = append(points, point)
 	}
-	_, _ = io.Copy(io.Discard, response.Body)
 	return points, nil
 }
 
@@ -301,7 +313,6 @@ func (sink *ClickHouseSink) HasForecastJob(ctx context.Context, scope ForecastJo
 	}
 	defer drainAndClose(response.Body)
 	body, err := io.ReadAll(io.LimitReader(response.Body, 4096))
-	_, _ = io.Copy(io.Discard, response.Body)
 	if err != nil {
 		return false, err
 	}

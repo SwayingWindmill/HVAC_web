@@ -263,7 +263,6 @@ func (evidence *ClickHouseEvidence) query(ctx context.Context, sql string) ([]by
 	}
 	defer drainAndClose(response.Body)
 	body, err := io.ReadAll(io.LimitReader(response.Body, maximumEvidenceResponseBytes+1))
-	_, _ = io.Copy(io.Discard, response.Body)
 	if err != nil {
 		return nil, err
 	}

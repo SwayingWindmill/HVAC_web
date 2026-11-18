@@ -461,7 +461,6 @@ func (reader *ClickHouseInputReader) queryLimited(ctx context.Context, sql strin
 	}
 	defer drainAndClose(response.Body)
 	payload, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
-	_, _ = io.Copy(io.Discard, response.Body)
 	if err != nil {
 		return nil, err
 	}

@@ -107,7 +107,6 @@ FORMAT JSONEachRow`, query.TenantID, query.SiteID, query.SubjectType, query.Subj
 	}
 	defer drainAndClose(response.Body)
 	payload, err := io.ReadAll(io.LimitReader(response.Body, maximumForecastHistoryResponseBytes+1))
-	_, _ = io.Copy(io.Discard, response.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read authoritative Forecast metric history: %w", err)
 	}

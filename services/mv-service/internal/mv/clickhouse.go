@@ -200,7 +200,6 @@ func (reader *ClickHouseHours) query(ctx context.Context, sql string) ([]byte, e
 	}
 	defer drainAndClose(response.Body)
 	payload, err := io.ReadAll(io.LimitReader(response.Body, maximumHourlyBytes+1))
-	_, _ = io.Copy(io.Discard, response.Body)
 	if err != nil {
 		return nil, err
 	}
