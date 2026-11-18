@@ -80,6 +80,7 @@ func (client *RuntimeClient) ClaimDispatch(ctx context.Context, tenantID, leaseO
 }
 
 func (client *RuntimeClient) ResolveDispatch(ctx context.Context, envelope commandmodel.DispatchEnvelope, result commandmodel.ConnectorResult) error {
+	ctx, _ = withCommandTraceContext(ctx, envelope.TraceID)
 	_, err := client.post(ctx, commandservice.InternalDispatchResolvePath, runtimeDispatchResolveRequest{Envelope: envelope, Result: result}, nil)
 	return err
 }
@@ -99,6 +100,7 @@ func (client *RuntimeClient) ClaimVerification(ctx context.Context, tenantID, le
 }
 
 func (client *RuntimeClient) ResolveVerification(ctx context.Context, envelope commandmodel.VerificationEnvelope, result commandmodel.VerificationResult) error {
+	ctx, _ = withCommandTraceContext(ctx, envelope.TraceID)
 	_, err := client.post(ctx, commandservice.InternalVerificationResolvePath, runtimeVerificationResolveRequest{Envelope: envelope, Result: result}, nil)
 	return err
 }
@@ -129,7 +131,10 @@ func (client *RuntimeClient) post(ctx context.Context, path string, input, outpu
 	if err != nil {
 		return 0, fmt.Errorf("command runtime request failed: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+		_ = response.Body.Close()
+	}()
 	responseBody, err := readRuntimeResponse(response.Body)
 	if err != nil {
 		return response.StatusCode, err

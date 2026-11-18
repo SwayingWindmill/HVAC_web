@@ -133,7 +133,8 @@
         "infra/registry/postgres/init/optimization-governance-flywheel.sql",
         "infra/registry/postgres/init/metric-backfill-recalc-job-grants.sql",
         "infra/registry/postgres/init/iam-expired-binding-revocation.sql",
-        "infra/registry/postgres/init/hydraulic-loop-topology.sql"
+        "infra/registry/postgres/init/hydraulic-loop-topology.sql",
+        "infra/connectivity/postgres/init/command-correlation-trace-and-audit-immutability.sql"
       ]
     },
     {
@@ -177,7 +178,8 @@
         "modules/command/migrations/command-template-capability-sync.sql",
         "modules/command/migrations/command_intent_trace_context.sql",
         "modules/command/migrations/control-alarm-outbox.sql",
-        "modules/command/migrations/command-priority-and-locks.sql"
+        "modules/command/migrations/command-priority-and-locks.sql",
+        "modules/command/migrations/command-audit-immutability.sql"
       ]
     },
     {

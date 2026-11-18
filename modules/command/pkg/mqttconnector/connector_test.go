@@ -1972,3 +1972,122 @@ func TestExecuteEmitsPublishMetricsWaitHistogramAndPacketHook(t *testing.T) {
 		t.Fatalf("PacketHook missing downlink=%v uplink=%v captured=%+v", sawDownlink, sawUplink, captured)
 	}
 }
+
+type traceRecordingTransport struct {
+	fakeTransportState
+	markTraceID string
+}
+
+func (s *traceRecordingTransport) RecordCommandReply(context.Context, string, string, string, uint64, string, string, time.Time, string, *commandmodel.EdgeExecutionEvidence, time.Time) (commandmodel.CommandCorrelation, error) {
+	return commandmodel.CommandCorrelation{}, commandmodel.ErrCommandCorrelationNotFound
+}
+
+func (s *traceRecordingTransport) MarkCommandCorrelationResolved(ctx context.Context, tenantID, attemptID string, executionFence uint64, resolvedAt time.Time) error {
+	s.markTraceID = observability.TraceID(ctx)
+	return s.fakeTransportState.MarkCommandCorrelationResolved(ctx, tenantID, attemptID, executionFence, resolvedAt)
+}
+
+type traceRecordingEvidenceStore struct {
+	completeTraceID string
+}
+
+func (s *traceRecordingEvidenceStore) Prepare(context.Context, commandmodel.PreparedConnectorEvidence) error {
+	return nil
+}
+
+func (s *traceRecordingEvidenceStore) Complete(ctx context.Context, _ commandmodel.CompletedConnectorEvidence) error {
+	s.completeTraceID = observability.TraceID(ctx)
+	return nil
+}
+
+type traceRecordingLateResultSink struct {
+	resolveTraceID string
+}
+
+func (s *traceRecordingLateResultSink) ResolveDispatch(ctx context.Context, _ commandmodel.DispatchEnvelope, _ commandmodel.ConnectorResult) error {
+	s.resolveTraceID = observability.TraceID(ctx)
+	return nil
+}
+
+func TestConnectorTracePropagationAcrossReplyRecoveryAndLogs(t *testing.T) {
+	const (
+		rawTrace  = "4BF92F3577B34DA6A3CE929D0E0E4736"
+		wantTrace = "4bf92f3577b34da6a3ce929d0e0e4736"
+		gwID      = "01900000-0000-7000-8000-000000000901"
+	)
+	now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	var logs bytes.Buffer
+	transport := &traceRecordingTransport{
+		fakeTransportState: fakeTransportState{correlations: make(map[string]commandmodel.CommandCorrelation)},
+	}
+	evidence := &traceRecordingEvidenceStore{}
+	lateSink := &traceRecordingLateResultSink{}
+
+	connector, err := NewOffline(Config{
+		TransportState: transport,
+		EvidenceStore:  evidence,
+		LateResultSink: lateSink,
+		Now:            func() time.Time { return now },
+		Logger:         observability.NewJSONLogger(&logs, slog.LevelInfo),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	transport.put(commandmodel.CommandCorrelation{
+		Envelope: commandmodel.DispatchEnvelope{
+			CommandID: "cmd-rec-trace-1", AttemptID: "att-rec-trace-1", TenantID: "tenant-1",
+			SiteID: "site-1", DeviceID: "device-1", PointID: "point-1", TraceID: rawTrace,
+			Capability: commandmodel.CapabilityStart, ExecutionFence: 5, PayloadHash: "hash-rec-1",
+		},
+		GatewayID: gwID, ExternalDeviceID: "CHILLER-01",
+		MappingRevision: "map-1", BindingRevision: "bind-1",
+		ProviderEndpoint: "hvac/v1/" + gwID + "/down/command", ProviderMethod: "start",
+		RequestSHA256: strings.Repeat("a", 64), PreparedAt: now,
+		State: commandmodel.CorrelationReplied, ReplySHA256: strings.Repeat("b", 64),
+		ReplyStatus: "FAILED", ReplyReasonCode: "DEVICE_OFFLINE", ReplyEventTime: now, RepliedAt: now,
+	})
+
+	if err := connector.RecoverTenantReplies(context.Background(), "tenant-1", 10); err != nil {
+		t.Fatalf("RecoverTenantReplies failed: %v", err)
+	}
+	if evidence.completeTraceID != wantTrace || lateSink.resolveTraceID != wantTrace || transport.markTraceID != wantTrace {
+		t.Fatalf("recovered trace mismatch complete=%q resolve=%q mark=%q want=%q", evidence.completeTraceID, lateSink.resolveTraceID, transport.markTraceID, wantTrace)
+	}
+
+	replyBody, err := json.Marshal(commandReply{
+		SchemaVersion:  commandSchemaVersion,
+		MessageID:      "msg-unmatched-trace",
+		CommandID:      "cmd-unmatched-1",
+		TraceID:        " " + rawTrace + " ",
+		EventTime:      now.UnixMilli(),
+		EdgeStatus:     "FAILED",
+		ExecutionFence: 9,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handled, onErr := connector.onReply(paho.PublishReceived{
+		Packet: &paho.Publish{
+			Topic:   "hvac/v1/" + gwID + "/up/reply",
+			Payload: replyBody,
+		},
+	})
+	if !handled || onErr != nil {
+		t.Fatalf("onReply = (%v, %v), want (true, nil)", handled, onErr)
+	}
+	connector.drainReplyWorkers(context.Background())
+
+	logOutput := logs.String()
+	for _, want := range []string{
+		`"msg":"mqtt_command_reply_recovery_resolved"`,
+		`"command_id":"cmd-rec-trace-1"`,
+		`"msg":"mqtt_command_reply_unmatched"`,
+		`"command_id":"cmd-unmatched-1"`,
+		`"trace_id":"` + wantTrace + `"`,
+	} {
+		if !strings.Contains(logOutput, want) {
+			t.Fatalf("missing log entry fragment %s in:\n%s", want, logOutput)
+		}
+	}
+}

@@ -14,20 +14,22 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 )
 
 type concentratorGatewayFixture struct {
 	*commandGatewayFixture
-	gatewayID          string
-	upstreamCalls      atomic.Int32
-	upstreamStatus     int
-	upstreamBody       string
-	upstreamErr        error
-	lastUpstreamPath   string
-	lastUpstreamMethod string
-	lastUpstreamBody   string
+	gatewayID               string
+	upstreamCalls           atomic.Int32
+	upstreamStatus          int
+	upstreamBody            string
+	upstreamErr             error
+	lastUpstreamPath        string
+	lastUpstreamMethod      string
+	lastUpstreamBody        string
+	lastUpstreamTraceparent string
 }
 
 func newConcentratorGatewayFixture(t *testing.T) *concentratorGatewayFixture {
@@ -90,6 +92,7 @@ func newConcentratorGatewayFixture(t *testing.T) *concentratorGatewayFixture {
 			fix.upstreamCalls.Add(1)
 			fix.lastUpstreamMethod = request.Method
 			fix.lastUpstreamPath = request.URL.Path
+			fix.lastUpstreamTraceparent = request.Header.Get("traceparent")
 			if request.Header.Get("X-Delegation-Grant") == "" {
 				t.Fatal("missing X-Delegation-Grant header to Connectivity")
 			}
@@ -351,5 +354,22 @@ func TestGatewayConcentratorRateLimitAndSafeLogPath(t *testing.T) {
 		if got := safeLogPath(path); got != want {
 			t.Fatalf("safeLogPath(%q) = %q, want %q", path, got, want)
 		}
+	}
+}
+
+func TestGatewayConcentratorPropagatesTraceparent(t *testing.T) {
+	fix := newConcentratorGatewayFixture(t)
+	const wantTraceID = "4bf92f3577b34da6a3ce929d0e0e4736"
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/gateways/"+fix.gatewayID+"/concentrators/1/status", nil)
+	fix.authenticate(req, false)
+	req.Header.Set("traceparent", "00-"+wantTraceID+"-00f067aa0ba902b7-01")
+	rec := httptest.NewRecorder()
+	fix.handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	parsed, ok := observability.ParseTraceparent(fix.lastUpstreamTraceparent, "")
+	if !ok || parsed.TraceID != wantTraceID {
+		t.Fatalf("connectivity traceparent=%q (ok=%t), want traceId=%s", fix.lastUpstreamTraceparent, ok, wantTraceID)
 	}
 }

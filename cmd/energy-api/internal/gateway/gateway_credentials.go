@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/modules/audit/pkg/auditserver"
@@ -158,6 +159,7 @@ func (h *handler) serveGatewayCredentials(w http.ResponseWriter, r *http.Request
 		request.Header.Set("Content-Type", "application/json")
 	}
 	request.Header.Set("X-Delegation-Grant", auth.coreGrant)
+	observability.InjectHTTP(r.Context(), request.Header)
 	response, err := h.connectivity.HTTPClient.Do(request)
 	if err != nil {
 		if r.Method == http.MethodPost {

@@ -6,9 +6,12 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/gateway"
 	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/platformapi"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
 // The WeChat mini program signs in with a username and password and carries the session it gets
@@ -211,4 +214,67 @@ func TestMiniProgramSignsInWithTheBoundWeChat(t *testing.T) {
 		t.Fatalf("pending sign-in = %#v", pending)
 	}
 	decodeAppSession(t, postAppJSON(t, client, harness.gatewayURL+"/api/v1/auth/app/sessions/totp", map[string]string{"pendingLogin": pending.PendingLogin, "code": "123456"}), http.StatusCreated)
+}
+
+type appSessionRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn appSessionRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return fn(request)
+}
+
+func TestAppSessionBackchannelPropagatesTraceparentWithoutLeakingToOIDC(t *testing.T) {
+	const wantTraceID = "4bf92f3577b34da6a3ce929d0e0e4736"
+	var mu sync.Mutex
+	traceByPath := map[string]string{}
+	harness := newAuthHarnessWithIAMFactory(t, nil, func(cfg *gateway.IdentityConfig) {
+		baseTransport := cfg.OIDCHTTPClient.Transport
+		if baseTransport == nil {
+			baseTransport = http.DefaultTransport
+		}
+		cfg.OIDCHTTPClient = &http.Client{
+			Timeout: cfg.OIDCHTTPClient.Timeout,
+			Transport: appSessionRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+				mu.Lock()
+				traceByPath[request.URL.Path] = request.Header.Get("traceparent")
+				mu.Unlock()
+				return baseTransport.RoundTrip(request)
+			}),
+		}
+	})
+	client := &http.Client{Transport: harness.transport}
+	encoded, err := json.Marshal(map[string]string{"username": "fixture", "password": "correct-password"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest(http.MethodPost, harness.gatewayURL+"/api/v1/auth/app/sessions", bytes.NewReader(encoded))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("traceparent", "00-"+wantTraceID+"-00f067aa0ba902b7-01")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	_ = decodeAppSession(t, resp, http.StatusCreated)
+
+	mu.Lock()
+	defer mu.Unlock()
+	backchannelTP, sawBackchannel := traceByPath["/app/login"]
+	if !sawBackchannel {
+		t.Fatalf("missing /app/login backchannel request in %v", traceByPath)
+	}
+	parsed, ok := observability.ParseTraceparent(backchannelTP, "")
+	if !ok || parsed.TraceID != wantTraceID {
+		t.Fatalf("backchannel traceparent=%q (ok=%t), want traceId=%s", backchannelTP, ok, wantTraceID)
+	}
+	if len(traceByPath) < 2 {
+		t.Fatalf("expected OIDC protocol requests alongside backchannel, got %v", traceByPath)
+	}
+	for path, tp := range traceByPath {
+		if path != "/app/login" && tp != "" {
+			t.Fatalf("OIDC endpoint %s unexpectedly received traceparent %q", path, tp)
+		}
+	}
 }

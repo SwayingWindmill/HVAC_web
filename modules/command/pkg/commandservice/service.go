@@ -568,7 +568,7 @@ func (s *Service) PrepareVerification(commandID, leaseOwner string, leaseUntil t
 		attempt.UpdatedAt = now
 		return commandmodel.VerificationEnvelope{
 			CommandID: intent.ID, AttemptID: attempt.ID, TenantID: intent.TenantID,
-			SiteID: intent.SiteID, DeviceID: intent.DeviceID, PointID: intent.PointID, Capability: intent.Capability,
+			SiteID: intent.SiteID, DeviceID: intent.DeviceID, PointID: intent.PointID, TraceID: commandmodel.NormalizeTraceID(intent.TraceID), Capability: intent.Capability,
 			CapabilityRevision: intent.CapabilityRevision, Parameters: cloneParameters(intent.Parameters), VerificationPointKey: intent.VerificationPointKey,
 			PayloadHash: intent.PayloadHash, ExecutionFence: attempt.ExecutionFence,
 			BaselineBusinessRevision: intent.SnapshotRevision, AcknowledgedAt: attempt.AcknowledgedAt,

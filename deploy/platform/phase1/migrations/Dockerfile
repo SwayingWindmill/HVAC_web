@@ -188,6 +188,8 @@ COPY infra/telemetry/postgres/init/telemetry-runtime-unnest-and-indexes.sql /opt
 COPY infra/telemetry/postgres/init/telemetry-accepted-point-sample-index.sql /opt/hvac/repo/infra/telemetry/postgres/init/telemetry-accepted-point-sample-index.sql
 COPY infra/durability/postgres/init/operations-domain-audit-ledger.sql /opt/hvac/repo/infra/durability/postgres/init/operations-domain-audit-ledger.sql
 COPY infra/registry/postgres/init/hydraulic-loop-topology.sql /opt/hvac/repo/infra/registry/postgres/init/hydraulic-loop-topology.sql
+COPY infra/connectivity/postgres/init/command-correlation-trace-and-audit-immutability.sql /opt/hvac/repo/infra/connectivity/postgres/init/command-correlation-trace-and-audit-immutability.sql
+COPY modules/command/migrations/command-audit-immutability.sql /opt/hvac/repo/modules/command/migrations/command-audit-immutability.sql
 
 FROM postgres:16.4-bookworm
 

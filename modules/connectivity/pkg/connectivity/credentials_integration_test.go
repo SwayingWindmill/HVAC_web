@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
@@ -41,7 +42,8 @@ func TestGatewayCredentialEnrollmentAndLifecycle(t *testing.T) {
 	const site = "0193f000-1000-7000-8000-000000000001"
 	const gateway = "0193f000-2000-7000-8000-000000000001"
 	cleanup := func() {
-		for _, table := range []string{"gateway_concentrator_audit", "gateway_credential_audit", "gateway_enrollments", "gateway_credentials"} {
+		_, _ = admin.Exec(ctx, "TRUNCATE TABLE connectivity.gateway_concentrator_audit, connectivity.gateway_credential_audit")
+		for _, table := range []string{"gateway_enrollments", "gateway_credentials"} {
 			_, _ = admin.Exec(ctx, "DELETE FROM connectivity."+table+" WHERE gateway_id=$1::uuid", gateway)
 		}
 		_, _ = admin.Exec(ctx, "DELETE FROM core_registry.devices WHERE id=$1::uuid", gateway)
@@ -220,6 +222,16 @@ func TestGatewayCredentialEnrollmentAndLifecycle(t *testing.T) {
 	if err := admin.QueryRow(ctx, `SELECT count(DISTINCT action) FROM connectivity.gateway_credential_audit WHERE gateway_id=$1 AND action IN ('ISSUED','RENEWED','REVOKED')`, gateway).Scan(&count); err != nil || count != 3 {
 		t.Fatalf("durable audit actions=%d err=%v", count, err)
 	}
+	for _, stmt := range []string{
+		`UPDATE connectivity.gateway_credential_audit SET action = 'REVOKED' WHERE gateway_id = $1::uuid`,
+		`DELETE FROM connectivity.gateway_credential_audit WHERE gateway_id = $1::uuid`,
+	} {
+		_, mutErr := admin.Exec(ctx, stmt, gateway)
+		var pgErr *pgconn.PgError
+		if !errors.As(mutErr, &pgErr) || pgErr.Code != "23000" {
+			t.Fatalf("expected integrity_constraint_violation (23000) for %s, got %v", stmt, mutErr)
+		}
+	}
 }
 
 func TestPostgresRevokeRetiredGatewayRevokesWithoutActiveRegistryRow(t *testing.T) {
@@ -252,7 +264,8 @@ func TestPostgresRevokeRetiredGatewayRevokesWithoutActiveRegistryRow(t *testing.
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cleanupCancel()
-		for _, table := range []string{"gateway_credential_audit", "gateway_enrollments", "gateway_credentials"} {
+		_, _ = admin.Exec(cleanupCtx, "TRUNCATE TABLE connectivity.gateway_concentrator_audit, connectivity.gateway_credential_audit")
+		for _, table := range []string{"gateway_enrollments", "gateway_credentials"} {
 			_, _ = admin.Exec(cleanupCtx, "DELETE FROM connectivity."+table+" WHERE gateway_id=$1::uuid", gateway)
 		}
 		_, _ = admin.Exec(cleanupCtx, `DELETE FROM core_registry.devices WHERE id=$1::uuid`, gateway)
@@ -373,7 +386,8 @@ func TestSingleCertificateRevocationLosslessRotationAndCRL(t *testing.T) {
 	const site = "0193f100-1000-7000-8000-000000000001"
 	const gateway = "0193f100-2000-7000-8000-000000000001"
 	cleanup := func() {
-		for _, table := range []string{"gateway_concentrator_audit", "gateway_credential_audit", "gateway_enrollments", "gateway_credentials"} {
+		_, _ = admin.Exec(ctx, "TRUNCATE TABLE connectivity.gateway_concentrator_audit, connectivity.gateway_credential_audit")
+		for _, table := range []string{"gateway_enrollments", "gateway_credentials"} {
 			_, _ = admin.Exec(ctx, "DELETE FROM connectivity."+table+" WHERE gateway_id=$1::uuid", gateway)
 		}
 		_, _ = admin.Exec(ctx, "DELETE FROM core_registry.devices WHERE id=$1::uuid", gateway)

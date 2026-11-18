@@ -2,10 +2,12 @@ package connectivity_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/connectivity"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/tunnel"
@@ -43,7 +45,7 @@ func TestPostgresGatewayTunnelAuditAndRLSIsolation(t *testing.T) {
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cleanupCancel()
-		_, _ = admin.Exec(cleanupCtx, `DELETE FROM connectivity.gateway_tunnel_audit WHERE gateway_id IN ($1::uuid, $2::uuid)`, gatewayA, unknownGateway)
+		_, _ = admin.Exec(cleanupCtx, `TRUNCATE TABLE connectivity.gateway_tunnel_audit`)
 		_, _ = admin.Exec(cleanupCtx, `DELETE FROM core_registry.devices WHERE id = $1::uuid`, gatewayA)
 		_, _ = admin.Exec(cleanupCtx, `DELETE FROM core_registry.sites WHERE id = $1::uuid`, siteA)
 		_, _ = admin.Exec(cleanupCtx, `DELETE FROM iam.tenants WHERE id IN ($1::uuid, $2::uuid)`, tenantA, tenantB)
@@ -184,5 +186,20 @@ func TestPostgresGatewayTunnelAuditAndRLSIsolation(t *testing.T) {
 	}
 	if countUnknownForA != 0 {
 		t.Fatalf("RLS leaked %d NULL-tenant rows to tenantA", countUnknownForA)
+	}
+
+	assertAuditMutationBlocked(t, ctx, admin, `UPDATE connectivity.gateway_tunnel_audit SET reason = 'tampered' WHERE gateway_id = $1::uuid`, gatewayA)
+	assertAuditMutationBlocked(t, ctx, admin, `DELETE FROM connectivity.gateway_tunnel_audit WHERE gateway_id = $1::uuid`, gatewayA)
+}
+
+func assertAuditMutationBlocked(t *testing.T, ctx context.Context, pool *pgxpool.Pool, query string, args ...any) {
+	t.Helper()
+	_, err := pool.Exec(ctx, query, args...)
+	if err == nil {
+		t.Fatalf("expected append-only audit mutation to be rejected: %s", query)
+	}
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23000" {
+		t.Fatalf("expected integrity_constraint_violation (23000) for %s, got %v", query, err)
 	}
 }

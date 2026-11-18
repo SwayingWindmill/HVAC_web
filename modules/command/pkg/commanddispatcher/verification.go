@@ -3,6 +3,7 @@ package commanddispatcher
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -52,6 +53,7 @@ func (verifier *AuthoritativeReportedStateVerifier) evaluateReportedState(ctx co
 	if verifier == nil || verifier.reader == nil {
 		return commandmodel.VerificationResult{}, false, errors.New("reported-state reader is not configured")
 	}
+	ctx, _ = withCommandTraceContext(ctx, envelope.TraceID)
 	evidenceID, reported, err := verifier.reader.ReadReportedState(ctx, envelope)
 	if err != nil {
 		return commandmodel.VerificationResult{}, false, err
@@ -172,15 +174,23 @@ func (worker *DurableVerificationWorker) RunOnce(ctx context.Context, tenantID s
 	if err != nil {
 		return err
 	}
-	result, err := worker.verifier.VerifyOnce(ctx, envelope)
+	verifyCtx, traceID := withCommandTraceContext(ctx, envelope.TraceID)
+	result, err := worker.verifier.VerifyOnce(verifyCtx, envelope)
 	if err != nil {
+		slog.WarnContext(verifyCtx, "command_verification_read_failed", "command_id", envelope.CommandID, "attempt_id", envelope.AttemptID, "execution_fence", envelope.ExecutionFence, "trace_id", traceID, "error", err.Error())
 		return err
 	}
 	if result.Outcome == commandmodel.VerificationInconclusive &&
 		result.FailureCode != "REPORTED_STATE_SCOPE_MISMATCH" &&
 		!envelope.VerificationDeadline.IsZero() &&
 		worker.currentTime().Before(envelope.VerificationDeadline) {
+		slog.InfoContext(verifyCtx, "command_verification_deferred", "command_id", envelope.CommandID, "attempt_id", envelope.AttemptID, "execution_fence", envelope.ExecutionFence, "trace_id", traceID, "outcome", string(result.Outcome))
 		return nil
 	}
-	return worker.store.ResolveVerification(ctx, envelope, result)
+	if err := worker.store.ResolveVerification(verifyCtx, envelope, result); err != nil {
+		slog.WarnContext(verifyCtx, "command_verification_resolve_failed", "command_id", envelope.CommandID, "attempt_id", envelope.AttemptID, "execution_fence", envelope.ExecutionFence, "trace_id", traceID, "outcome", string(result.Outcome), "failure_code", result.FailureCode, "error", err.Error())
+		return err
+	}
+	slog.InfoContext(verifyCtx, "command_verification_resolved", "command_id", envelope.CommandID, "attempt_id", envelope.AttemptID, "execution_fence", envelope.ExecutionFence, "trace_id", traceID, "outcome", string(result.Outcome), "failure_code", result.FailureCode)
+	return nil
 }
