@@ -6,6 +6,9 @@ x-default-logging: &default-logging
     max-size: ${DOCKER_LOG_MAX_SIZE:-20m}
     max-file: "${DOCKER_LOG_MAX_FILES:-5}"
 
+x-default-env: &default-env
+  TZ: ${TZ:-Asia/Shanghai}
+
 x-go-service: &go-service
   restart: unless-stopped
   security_opt:
@@ -13,6 +16,8 @@ x-go-service: &go-service
   read_only: true
   tmpfs:
     - /tmp
+  environment:
+    <<: *default-env
   logging: *default-logging
 
 x-phase1-deployment-tiers:
@@ -33,6 +38,8 @@ services:
         HVAC_WEB_REALTIME_PROTOCOL: ${HVAC_WEB_REALTIME_PROTOCOL:-centrifugo-v1}
     image: ${HVAC_WEB_IMAGE:-hvac/hvac-web-real:0.1.0-dev}
     restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
     depends_on:
       energy-api:
         condition: service_healthy
@@ -61,6 +68,7 @@ services:
       args: { SERVICE_PACKAGE: ./cmd/energy-api }
     image: ${ENERGY_API_IMAGE:-hvac/energy-api:0.1.0-dev}
     environment:
+      <<: *default-env
       ALARM_CLIENT_CA: ${ALARM_CLIENT_CA:-}
       ALARM_DATABASE_URL_FILE: ${ALARM_DATABASE_URL_FILE:-}
       ALARM_GATEWAY_DELEGATION_CERT: ${ALARM_GATEWAY_DELEGATION_CERT:-}
@@ -239,6 +247,7 @@ services:
       args: { SERVICE_PACKAGE: ./services/identity-service/cmd/identity-service }
     image: ${IDENTITY_SERVICE_IMAGE:-hvac/identity-service:0.1.0-dev}
     environment:
+      <<: *default-env
       IDENTITY_CLIENT_ID: ${IDENTITY_CLIENT_ID:-}
       IDENTITY_DATABASE_URL: ${IDENTITY_DATABASE_URL:-}
       IDENTITY_ISSUER: ${IDENTITY_ISSUER:-}
@@ -286,10 +295,12 @@ services:
       args: { SERVICE_PACKAGE: ./services/identity-service/cmd/signing-keygen }
     image: ${IDENTITY_KEYGEN_IMAGE:-hvac/identity-keygen:0.1.0-dev}
     environment:
+      <<: *default-env
       SSL_CERT_FILE: ${SSL_CERT_FILE:-}
       IDENTITY_SIGNING_KEY_OUT: /run/hvac/identity/signing-key.pem
     volumes:
       - ${IDENTITY_RUNTIME_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/identity}:/run/hvac/identity
+    mem_limit: 128m
 
   identity-mfa-keygen:
     <<: *go-service
@@ -301,10 +312,12 @@ services:
       args: { SERVICE_PACKAGE: ./services/identity-service/cmd/mfa-keygen }
     image: ${IDENTITY_MFA_KEYGEN_IMAGE:-hvac/identity-mfa-keygen:0.1.0-dev}
     environment:
+      <<: *default-env
       SSL_CERT_FILE: ${SSL_CERT_FILE:-}
       IDENTITY_MFA_KEY_OUT: /run/hvac/identity/mfa-encryption.key
     volumes:
       - ${IDENTITY_RUNTIME_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/identity}:/run/hvac/identity
+    mem_limit: 128m
 
   identity-admin:
     <<: *go-service
@@ -316,6 +329,7 @@ services:
       args: { SERVICE_PACKAGE: ./services/identity-service/cmd/identity-admin }
     image: ${IDENTITY_ADMIN_IMAGE:-hvac/identity-admin:0.1.0-dev}
     environment:
+      <<: *default-env
       SSL_CERT_FILE: ${SSL_CERT_FILE:-}
       IDENTITY_DATABASE_URL: ${IDENTITY_ADMIN_DATABASE_URL:-}
       IDENTITY_ADMIN_OPERATION: ${IDENTITY_ADMIN_OPERATION:-create}
@@ -329,6 +343,7 @@ services:
     volumes:
       - ${IDENTITY_RUNTIME_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/identity}:/run/hvac/identity:ro
     networks: [data]
+    mem_limit: 128m
 
   identity-reconciler:
     <<: *go-service
@@ -340,11 +355,13 @@ services:
       args: { SERVICE_PACKAGE: ./modules/iam/cmd/identity-reconciler }
     image: ${IDENTITY_RECONCILER_IMAGE:-hvac/identity-reconciler:0.1.0-dev}
     environment:
+      <<: *default-env
       IAM_RECONCILER_DATABASE_URL: ${IAM_RECONCILER_DATABASE_URL:-}
       IDENTITY_DIRECTORY_DATABASE_URL: ${IDENTITY_DIRECTORY_DATABASE_URL:-}
       IDENTITY_ISSUER: ${IDENTITY_ISSUER:-}
       SSL_CERT_FILE: ${SSL_CERT_FILE:-}
     networks: [data]
+    mem_limit: 128m
 
   scheduler:
     <<: *go-service
@@ -354,6 +371,7 @@ services:
       args: { SERVICE_PACKAGE: ./cmd/scheduler }
     image: ${SCHEDULER_IMAGE:-hvac/scheduler:0.1.0-dev}
     environment:
+      <<: *default-env
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       SCHEDULER_POSTGRES_DSN: ${SCHEDULER_POSTGRES_DSN:-}
       SCHEDULER_SCAN_BATCH: ${SCHEDULER_SCAN_BATCH:-}
@@ -383,6 +401,7 @@ services:
       args: { SERVICE_PACKAGE: ./cmd/maintenance-worker }
     image: ${MAINTENANCE_IMAGE:-hvac/maintenance:0.1.0-dev}
     environment:
+      <<: *default-env
       MAINTENANCE_POSTGRES_DSN: ${MAINTENANCE_POSTGRES_DSN:-}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       SSL_CERT_FILE: ${SSL_CERT_FILE:-}
@@ -411,6 +430,7 @@ services:
       args: { SERVICE_PACKAGE: ./cmd/telemetry-worker }
     image: ${TELEMETRY_WORKER_IMAGE:-hvac/telemetry-worker:0.1.0-dev}
     environment:
+      <<: *default-env
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       SSL_CERT_FILE: ${SSL_CERT_FILE:-}
       TELEMETRY_ALARM_CA: ${TELEMETRY_ALARM_CA:-}
@@ -452,7 +472,7 @@ services:
       TELEMETRY_ALARM_EVALUATION_ENABLED: "true"
       TELEMETRY_ALARM_EVALUATION_URL: https://alarm-service:8448/internal/v1/alarm/evaluations/telemetry
       TELEMETRY_ALARM_SERVER_NAME: alarm-service
-      TELEMETRY_RETENTION_CLICKHOUSE_USER: ${TELEMETRY_RETENTION_CLICKHOUSE_USER:-}
+      TELEMETRY_RETENTION_CLICKHOUSE_USER: ${TELEMETRY_RETENTION_CLICKHOUSE_USER:-telemetry_retention_writer}
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
@@ -486,6 +506,7 @@ services:
       args: { SERVICE_PACKAGE: ./cmd/metric-worker }
     image: ${METRIC_WORKER_IMAGE:-hvac/metric-worker:0.1.0-dev}
     environment:
+      <<: *default-env
       METRIC_JOB_CLAIM_BATCH: ${METRIC_JOB_CLAIM_BATCH:-}
       METRIC_JOB_CLAIM_INTERVAL: ${METRIC_JOB_CLAIM_INTERVAL:-}
       METRIC_JOB_LEASE_DURATION: ${METRIC_JOB_LEASE_DURATION:-}
@@ -529,6 +550,7 @@ services:
       args: { SERVICE_PACKAGE: ./services/forecast-service/cmd/forecast-service }
     image: ${FORECAST_SERVICE_IMAGE:-hvac/forecast-service:0.1.0-dev}
     environment:
+      <<: *default-env
       SSL_CERT_FILE: ${SSL_CERT_FILE:-}
       FORECAST_HTTP_ADDR: :19092
       FORECAST_DIAGNOSTICS_ADDR: :19099
@@ -542,7 +564,9 @@ services:
       FORECAST_CLICKHOUSE_TABLE: forecast_series
       FORECAST_CLICKHOUSE_USERNAME: forecast_service_writer
     volumes:
-      - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}:/run/hvac/pki:ro
+      - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}/ca.crt:/run/hvac/pki/ca.crt:ro
+      - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}/gateway/tls.crt:/run/hvac/pki/gateway/tls.crt:ro
+      - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}/forecast:/run/hvac/pki/forecast:ro
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
@@ -570,6 +594,7 @@ services:
       args: { SERVICE_PACKAGE: ./services/optimization-service/cmd/optimization-service }
     image: ${OPTIMIZATION_SERVICE_IMAGE:-hvac/optimization-service:0.1.0-dev}
     environment:
+      <<: *default-env
       SSL_CERT_FILE: ${SSL_CERT_FILE:-}
       OPTIMIZATION_HTTP_ADDR: :19093
       OPTIMIZATION_DIAGNOSTICS_ADDR: :19100
@@ -587,7 +612,9 @@ services:
       OPTIMIZATION_TLS_CA: /run/hvac/pki/ca.crt
       OPTIMIZATION_GATEWAY_DELEGATION_CERT: /run/hvac/pki/gateway/tls.crt
     volumes:
-      - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}:/run/hvac/pki:ro
+      - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}/ca.crt:/run/hvac/pki/ca.crt:ro
+      - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}/gateway/tls.crt:/run/hvac/pki/gateway/tls.crt:ro
+      - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}/optimization:/run/hvac/pki/optimization:ro
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
@@ -615,6 +642,7 @@ services:
       args: { SERVICE_PACKAGE: ./services/fdd-service/cmd/fdd-service }
     image: ${FDD_SERVICE_IMAGE:-hvac/fdd-service:0.1.0-dev}
     environment:
+      <<: *default-env
       SSL_CERT_FILE: ${SSL_CERT_FILE:-}
       FDD_HTTP_ADDR: :19094
       FDD_DIAGNOSTICS_ADDR: :19098
@@ -630,7 +658,9 @@ services:
       phase1-schema-preflight:
         condition: service_completed_successfully
     volumes:
-      - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}:/run/hvac/pki:ro
+      - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}/ca.crt:/run/hvac/pki/ca.crt:ro
+      - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}/gateway/tls.crt:/run/hvac/pki/gateway/tls.crt:ro
+      - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}/fdd:/run/hvac/pki/fdd:ro
     expose: ["19094"]
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19098/healthz"]
@@ -652,6 +682,7 @@ services:
       args: { SERVICE_PACKAGE: ./services/mv-service/cmd/mv-service }
     image: ${MV_SERVICE_IMAGE:-hvac/mv-service:0.1.0-dev}
     environment:
+      <<: *default-env
       SSL_CERT_FILE: ${SSL_CERT_FILE:-}
       MV_HTTP_ADDR: :19096
       MV_DIAGNOSTICS_ADDR: :19101
@@ -666,7 +697,9 @@ services:
       MV_TLS_CA: /run/hvac/pki/ca.crt
       MV_GATEWAY_DELEGATION_CERT: /run/hvac/pki/gateway/tls.crt
     volumes:
-      - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}:/run/hvac/pki:ro
+      - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}/ca.crt:/run/hvac/pki/ca.crt:ro
+      - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}/gateway/tls.crt:/run/hvac/pki/gateway/tls.crt:ro
+      - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}/mv:/run/hvac/pki/mv:ro
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
@@ -691,6 +724,7 @@ services:
       args: { SERVICE_PACKAGE: ./services/report-service/cmd/report-service }
     image: ${REPORT_SERVICE_IMAGE:-hvac/report-service:0.1.0-dev}
     environment:
+      <<: *default-env
       SSL_CERT_FILE: ${SSL_CERT_FILE:-}
       REPORT_HTTP_ADDR: :19097
       REPORT_DIAGNOSTICS_ADDR: :19102
@@ -704,7 +738,9 @@ services:
       # Reports are served only to the Gateway, with a context it signs (#613).
       REPORT_GATEWAY_DELEGATION_CERT: /run/hvac/pki/gateway/tls.crt
     volumes:
-      - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}:/run/hvac/pki:ro
+      - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}/ca.crt:/run/hvac/pki/ca.crt:ro
+      - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}/gateway/tls.crt:/run/hvac/pki/gateway/tls.crt:ro
+      - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}/report:/run/hvac/pki/report:ro
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
@@ -729,6 +765,7 @@ services:
       args: { SERVICE_PACKAGE: ./cmd/connectivity }
     image: ${CONNECTIVITY_IMAGE:-hvac/connectivity:0.1.0-dev}
     environment:
+      <<: *default-env
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       SSL_CERT_FILE: ${SSL_CERT_FILE:-}
       COMMAND_RUNTIME_IN_PROCESS_ENABLED: "true"
@@ -770,6 +807,7 @@ services:
     image: ${OPERATIONS_AGENT_IMAGE:-hvac/operations-agent-service:0.1.0-dev}
     profiles: ["intelligence"]
     environment:
+      TZ: ${TZ:-Asia/Shanghai}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       AGENT_LISTEN_PORT: "8451"
       AGENT_DIAGNOSTICS_PORT: "19095"
@@ -827,6 +865,7 @@ services:
       - -c
       - archive_command=test ! -f /var/lib/postgresql/wal-archive/%f && cp %p /var/lib/postgresql/wal-archive/%f
     environment:
+      TZ: ${TZ:-Asia/Shanghai}
       POSTGRES_DB: ${POSTGRES_DB:-hvac_s0}
       POSTGRES_USER: ${POSTGRES_ADMIN_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?POSTGRES_ADMIN_PASSWORD is required}
@@ -872,6 +911,8 @@ services:
     security_opt:
       - no-new-privileges:true
     networks: [data]
+    mem_limit: 256m
+    logging: *default-logging
 
   phase1-schema-preflight:
     build:
@@ -895,6 +936,8 @@ services:
     security_opt:
       - no-new-privileges:true
     networks: [data]
+    mem_limit: 128m
+    logging: *default-logging
 
   postgres-backup:
     image: postgres:16.4-bookworm
@@ -913,13 +956,18 @@ services:
       - ./backup/postgres-base-backup.sh:/usr/local/bin/postgres-base-backup:ro
       - ${POSTGRES_BASE_BACKUP_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/backups/postgres/base}:/backup
     entrypoint: ["/bin/bash", "/usr/local/bin/postgres-base-backup"]
+    security_opt:
+      - no-new-privileges:true
     networks: [data]
+    mem_limit: 512m
+    logging: *default-logging
 
   clickhouse:
     profiles: ["local-clickhouse"]
     image: clickhouse/clickhouse-server:26.3.39.7
     restart: unless-stopped
     environment:
+      TZ: ${TZ:-Asia/Shanghai}
       CLICKHOUSE_SERVER_MEMORY_USAGE: ${CLICKHOUSE_SERVER_MEMORY_USAGE:-3221225472}
     volumes:
       - ${CLICKHOUSE_DATA_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/data/clickhouse}:/var/lib/clickhouse
@@ -929,6 +977,7 @@ services:
       - ./clickhouse/system-logs.xml:/etc/clickhouse-server/config.d/system-logs.xml:ro
       - ./clickhouse/prometheus.xml:/etc/clickhouse-server/config.d/prometheus.xml:ro
       - ./clickhouse/query-log-profile.xml:/etc/clickhouse-server/users.d/query-log-profile.xml:ro
+      - ./clickhouse/default-security.xml:/etc/clickhouse-server/users.d/default-security.xml:ro
       - ../../../infra/telemetry/clickhouse/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "clickhouse-client --query 'SELECT 1'"]
@@ -950,6 +999,7 @@ services:
       clickhouse:
         condition: service_healthy
     environment:
+      TZ: ${TZ:-Asia/Shanghai}
       CUBEJS_DB_TYPE: clickhouse
       CUBEJS_DB_HOST: clickhouse
       CUBEJS_DB_PORT: 8123
@@ -983,12 +1033,18 @@ services:
     volumes:
       - ./backup/clickhouse-backup.sh:/usr/local/bin/clickhouse-backup:ro
     entrypoint: ["/bin/bash", "/usr/local/bin/clickhouse-backup"]
+    security_opt:
+      - no-new-privileges:true
     networks: [data]
+    mem_limit: 256m
+    logging: *default-logging
 
   redis:
     profiles: ["local-redis"]
     image: redis:7.4.2-alpine
     restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
     command: ["redis-server", "--appendonly", "no", "--save", "", "--maxmemory", "${REDIS_MAXMEMORY:-384mb}", "--maxmemory-policy", "noeviction"]
     volumes:
       - ${REDIS_DATA_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/data/redis}:/data
@@ -1007,6 +1063,8 @@ services:
     profiles: ["integration"]
     image: eclipse-mosquitto:2.1.2-alpine
     restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
     ports:
       - "${MQTT_TLS_PORT:-8883}:8883"
     volumes:
@@ -1026,6 +1084,7 @@ services:
     restart: unless-stopped
     command: ["/usr/local/bin/centrifugo", "--config", "/centrifugo/centrifugo.json"]
     environment:
+      TZ: ${TZ:-Asia/Shanghai}
       CENTRIFUGO_CLIENT_ALLOWED_ORIGINS: ${CENTRIFUGO_CLIENT_ALLOWED_ORIGINS:-}
       CENTRIFUGO_CLIENT_TOKEN_HMAC_SECRET_KEY: ${CENTRIFUGO_CLIENT_TOKEN_HMAC_SECRET_KEY:-}
       CENTRIFUGO_HTTP_API_KEY: ${CENTRIFUGO_HTTP_API_KEY:-}
@@ -1061,6 +1120,7 @@ services:
     volumes:
       - ./observability/otel-collector:/etc/otelcol-contrib/configs:ro
       - ${HOST_DOCKER_LOG_DIR:-/var/lib/docker/containers}:/var/lib/docker/containers:ro
+      - otel-collector-data:/var/lib/otelcol/file_storage
     expose: ["4317", "4318", "9464", "13133"]
     networks: [application, observability]
     cpus: ${OTEL_COLLECTOR_CPUS:-0.50}
@@ -1072,6 +1132,8 @@ services:
     profiles: ["observability-core", "observability-logs", "observability-full"]
     image: prom/prometheus:v2.54.1
     restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.retention.time=15d
@@ -1095,6 +1157,8 @@ services:
     profiles: ["observability-core", "observability-logs", "observability-full"]
     image: prom/alertmanager:v0.27.0
     restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
     entrypoint: ["/bin/sh", "/etc/alertmanager/render-and-run.sh"]
     command: ["--storage.path=/alertmanager"]
     volumes:
@@ -1135,6 +1199,8 @@ services:
     profiles: ["observability-logs", "observability-full"]
     image: ${LOKI_IMAGE:-grafana/loki:3.2.1}
     restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
     command: ["-config.file=/etc/loki/local-config.yaml"]
     volumes:
       - ./observability/loki.yaml:/etc/loki/local-config.yaml:ro
@@ -1151,6 +1217,8 @@ services:
     profiles: ["observability-full"]
     image: ${TEMPO_IMAGE:-grafana/tempo:2.6.1}
     restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
     command: ["-config.file=/etc/tempo.yaml"]
     volumes:
       - ./observability/tempo.yaml:/etc/tempo.yaml:ro
@@ -1167,6 +1235,7 @@ services:
     image: ${GRAFANA_IMAGE:-grafana/grafana:11.2.2}
     restart: unless-stopped
     environment:
+      TZ: ${TZ:-Asia/Shanghai}
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is required}
       GF_USERS_ALLOW_SIGN_UP: "false"
@@ -1238,8 +1307,11 @@ services:
     image: hvac/wecom-alert-adapter:0.1.0-dev
     restart: unless-stopped
     user: "65532:65532"
+    security_opt:
+      - no-new-privileges:true
     read_only: true
     environment:
+      TZ: ${TZ:-Asia/Shanghai}
       SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
     volumes:
       - ${PHASE1_RUNTIME_DIR:-./runtime}/alert-receiver:/etc/alert-receiver:ro
@@ -1282,4 +1354,5 @@ volumes:
   tempo-data: {}
   grafana-data: {}
   alertmanager-data: {}
+  otel-collector-data: {}
   connectivity-spool: {}

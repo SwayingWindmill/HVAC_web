@@ -432,6 +432,267 @@ export const findHandoffBudgetViolations = ({
     `docs/HANDOFF.md: ${bytes} bytes exceeds ${maxBytes}-byte single-read budget; keep only live server state, site constraints, and local environment deviations in docs/HANDOFF.md, move runbooks to docs/operations/, and encode recurring rules in checks (/correct)`,
   ]);
 
+const composePortScanRoots = Object.freeze(['infra/', 'deploy/', 'semantic/']);
+const composePortAllowedPublicBindings = new Map<string, ReadonlySet<string>>([
+  ['deploy/platform/phase1/compose.yaml', new Set(['${HTTPS_PORT:-443}:443', '${MQTT_TLS_PORT:-8883}:8883'])],
+]);
+
+type ComposePortMapping = {
+  line: number;
+  kind: 'short' | 'long';
+  spec: string;
+};
+
+const isComposePortPolicyTarget = (path: string): boolean =>
+  composePortScanRoots.some((prefix) => path.startsWith(prefix))
+  && /(?:^|\/).*compose[^/]*\.ya?ml$/u.test(path);
+
+const stripYamlComment = (line: string): string => {
+  let quote: '"' | "'" | null = null;
+  for (let index = 0; index < line.length; index += 1) {
+    const ch = line[index];
+    if (quote === "'") {
+      if (ch === "'" && line[index + 1] === "'") {
+        index += 1;
+      } else if (ch === "'") {
+        quote = null;
+      }
+      continue;
+    }
+    if (quote === '"') {
+      if (ch === '\\') {
+        index += 1;
+      } else if (ch === '"') {
+        quote = null;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (ch === '#' && (index === 0 || /\s/u.test(line[index - 1]))) {
+      return line.slice(0, index);
+    }
+  }
+  return line;
+};
+
+const unquoteYamlScalar = (raw: string): string => {
+  const trimmed = raw.trim();
+  if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    return trimmed.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+  }
+  if (trimmed.length >= 2 && trimmed.startsWith("'") && trimmed.endsWith("'")) {
+    return trimmed.slice(1, -1).replace(/''/g, "'");
+  }
+  return trimmed;
+};
+
+const splitInlineYamlList = (inner: string): string[] => {
+  const items: string[] = [];
+  let current = '';
+  let quote: '"' | "'" | null = null;
+  let braceDepth = 0;
+  for (let index = 0; index < inner.length; index += 1) {
+    const ch = inner[index];
+    if (quote === "'") {
+      current += ch;
+      if (ch === "'" && inner[index + 1] === "'") {
+        current += inner[index + 1];
+        index += 1;
+      } else if (ch === "'") {
+        quote = null;
+      }
+      continue;
+    }
+    if (quote === '"') {
+      current += ch;
+      if (ch === '\\' && index + 1 < inner.length) {
+        current += inner[index + 1];
+        index += 1;
+      } else if (ch === '"') {
+        quote = null;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      current += ch;
+    } else if (ch === '{') {
+      braceDepth += 1;
+      current += ch;
+    } else if (ch === '}') {
+      braceDepth = Math.max(0, braceDepth - 1);
+      current += ch;
+    } else if (ch === ',' && braceDepth === 0) {
+      if (current.trim()) items.push(current.trim());
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  if (current.trim()) items.push(current.trim());
+  return items;
+};
+
+const extractInlineObjectHostIp = (rawObject: string): string | null => {
+  const match = /\bhost_ip\s*:\s*([^,}\s]+)/u.exec(rawObject);
+  return match ? unquoteYamlScalar(match[1]) : null;
+};
+
+const isLoopbackPortBinding = (spec: string): boolean => {
+  if (!spec.startsWith('127.0.0.1:')) return false;
+  const remainder = spec.slice('127.0.0.1:'.length);
+  return remainder.includes(':');
+};
+
+const collectComposePortMappings = (content: string): ComposePortMapping[] => {
+  const lines = content.replace(/\r\n?/gu, '\n').split('\n');
+  const mappings: ComposePortMapping[] = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const cleaned = stripYamlComment(lines[index]);
+    const portsMatch = /^(\s*)ports:\s*(.*)$/u.exec(cleaned);
+    if (!portsMatch) continue;
+
+    const portsIndent = portsMatch[1].length;
+    const inlineValue = portsMatch[2].trim();
+    if (inlineValue.startsWith('[')) {
+      let combined = inlineValue;
+      let cursor = index;
+      while (!combined.includes(']') && cursor + 1 < lines.length) {
+        cursor += 1;
+        combined += ` ${stripYamlComment(lines[cursor]).trim()}`;
+      }
+      const closeIndex = combined.indexOf(']');
+      const inner = closeIndex === -1 ? combined.slice(1) : combined.slice(1, closeIndex);
+      for (const item of splitInlineYamlList(inner)) {
+        if (item.startsWith('{')) {
+          const hostIp = extractInlineObjectHostIp(item);
+          mappings.push({
+            line: index + 1,
+            kind: hostIp === '127.0.0.1' ? 'short' : 'long',
+            spec: hostIp === '127.0.0.1' ? '127.0.0.1::' : item,
+          });
+        } else {
+          mappings.push({ line: index + 1, kind: 'short', spec: unquoteYamlScalar(item) });
+        }
+      }
+      index = cursor;
+      continue;
+    }
+
+    if (inlineValue.length > 0) continue;
+
+    let listItemIndent: number | null = null;
+    let cursor = index + 1;
+    while (cursor < lines.length) {
+      const nextCleaned = stripYamlComment(lines[cursor]);
+      const nextTrimmed = nextCleaned.trim();
+      if (!nextTrimmed) {
+        cursor += 1;
+        continue;
+      }
+      const nextIndent = nextCleaned.length - nextCleaned.trimStart().length;
+      if (nextIndent < portsIndent || (nextIndent === portsIndent && !nextTrimmed.startsWith('-'))) {
+        break;
+      }
+      if (listItemIndent === null) {
+        if (!nextTrimmed.startsWith('-')) break;
+        listItemIndent = nextIndent;
+      }
+      if (nextIndent === listItemIndent && (nextTrimmed === '-' || /^-\s+/u.test(nextTrimmed))) {
+        const itemLine = cursor + 1;
+        const afterDash = nextTrimmed.slice(1).trim();
+        if (afterDash.startsWith('{')) {
+          const hostIp = extractInlineObjectHostIp(afterDash);
+          mappings.push({
+            line: itemLine,
+            kind: hostIp === '127.0.0.1' ? 'short' : 'long',
+            spec: hostIp === '127.0.0.1' ? '127.0.0.1::' : afterDash,
+          });
+          cursor += 1;
+          continue;
+        }
+        const keyValMatch = /^([A-Za-z0-9_-]+)\s*:\s*(.*)$/u.exec(afterDash);
+        if (afterDash && !keyValMatch) {
+          mappings.push({ line: itemLine, kind: 'short', spec: unquoteYamlScalar(afterDash) });
+          cursor += 1;
+          continue;
+        }
+        const fields = new Map<string, string>();
+        if (keyValMatch) {
+          fields.set(keyValMatch[1], unquoteYamlScalar(keyValMatch[2]));
+        }
+        let scalarFallback: string | null = null;
+        cursor += 1;
+        while (cursor < lines.length) {
+          const subCleaned = stripYamlComment(lines[cursor]);
+          const subTrimmed = subCleaned.trim();
+          if (!subTrimmed) {
+            cursor += 1;
+            continue;
+          }
+          const subIndent = subCleaned.length - subCleaned.trimStart().length;
+          if (subIndent <= listItemIndent) break;
+          const subKeyMatch = /^([A-Za-z0-9_-]+)\s*:\s*(.*)$/u.exec(subTrimmed);
+          if (subKeyMatch) {
+            fields.set(subKeyMatch[1], unquoteYamlScalar(subKeyMatch[2]));
+          } else if (fields.size === 0 && !scalarFallback) {
+            scalarFallback = unquoteYamlScalar(subTrimmed);
+          }
+          cursor += 1;
+        }
+        if (fields.size === 0 && scalarFallback !== null) {
+          mappings.push({ line: itemLine, kind: 'short', spec: scalarFallback });
+        } else {
+          const hostIp = fields.get('host_ip') ?? '';
+          if (hostIp === '127.0.0.1') {
+            mappings.push({ line: itemLine, kind: 'short', spec: '127.0.0.1::' });
+          } else {
+            const target = fields.get('target') ?? '<unset>';
+            mappings.push({
+              line: itemLine,
+              kind: 'long',
+              spec: `host_ip=${hostIp || '<unset>'} target=${target}`,
+            });
+          }
+        }
+        continue;
+      }
+      cursor += 1;
+    }
+    index = cursor - 1;
+  }
+
+  return mappings;
+};
+
+export const findComposePortExposureViolations = ({
+  root,
+  trackedFiles,
+}: {
+  root: string;
+  trackedFiles: readonly string[];
+}): string[] => {
+  const violations: string[] = [];
+  for (const rawPath of trackedFiles) {
+    const path = normalizePath(rawPath);
+    if (!isComposePortPolicyTarget(path)) continue;
+    const absPath = join(root, path);
+    if (!existsSync(absPath)) continue;
+    const allowedBindings = composePortAllowedPublicBindings.get(path);
+    const mappings = collectComposePortMappings(readFileSync(absPath, 'utf8'));
+    for (const mapping of mappings) {
+      if (allowedBindings?.has(mapping.spec)) continue;
+      if (mapping.kind === 'short' && isLoopbackPortBinding(mapping.spec)) continue;
+      violations.push(
+        `${path}:${mapping.line}: non-loopback Compose port binding "${mapping.spec}"; bind host ports with 127.0.0.1:<host>:<container>`,
+      );
+    }
+  }
+  return violations;
+};
+
 const resolveGitListFilesInvocation = (root: string) => ({
   gitExecutable: 'git',
   args: ['-C', root, 'ls-files', '-z'],
@@ -532,6 +793,7 @@ export const checkRepositoryGovernance = (root = repositoryRoot) => {
     ...findDebugMarkerViolations({ root, trackedFiles }),
     ...findSkillMirrorViolations({ root, trackedFiles }),
     ...findVerifyFeatureMapViolations({ root, trackedFiles }),
+    ...findComposePortExposureViolations({ root, trackedFiles }),
     ...collectJavascriptToolingViolations(root, trackedFiles),
     ...findPackageScriptViolations({
       scripts: packageJson.scripts ?? {},

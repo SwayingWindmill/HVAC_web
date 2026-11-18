@@ -5,7 +5,7 @@ services:
       POSTGRES_DB: hvac_s4
       POSTGRES_PASSWORD: postgres-local-only
     ports:
-      - "${S4_POSTGRES_HOST_PORT:-55434}:5432"
+      - "127.0.0.1:${S4_POSTGRES_HOST_PORT:-55434}:5432"
     volumes:
       - ../../modules/alarm/testdata/postgres/000_roles.sql:/docker-entrypoint-initdb.d/000_roles.sql:ro
       - ../../modules/alarm/migrations/001_s4_alarm_runtime.sql:/docker-entrypoint-initdb.d/001_s4_alarm_runtime.sql:ro

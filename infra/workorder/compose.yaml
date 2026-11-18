@@ -5,7 +5,7 @@ services:
       POSTGRES_DB: hvac_s5
       POSTGRES_PASSWORD: local-fixture-only
     ports:
-      - "${S5_POSTGRES_HOST_PORT:-55435}:5432"
+      - "127.0.0.1:${S5_POSTGRES_HOST_PORT:-55435}:5432"
     volumes:
       - ../../modules/workorder/testdata/postgres/000_roles.sql:/docker-entrypoint-initdb.d/000_roles.sql:ro
       - ../../modules/workorder/migrations/001_s5_work_order_runtime.sql:/docker-entrypoint-initdb.d/001_s5_work_order_runtime.sql:ro
