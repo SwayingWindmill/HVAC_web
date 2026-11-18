@@ -189,9 +189,18 @@ func (client *Client) execute(ctx context.Context, query string) ([]byte, error)
 		return nil, errors.New("ClickHouse history response exceeds 8 MiB")
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf("ClickHouse history query failed with status %d", response.StatusCode)
+		return nil, &clickHouseQueryError{statusCode: response.StatusCode, body: string(payload)}
 	}
 	return payload, nil
+}
+
+type clickHouseQueryError struct {
+	statusCode int
+	body       string
+}
+
+func (err *clickHouseQueryError) Error() string {
+	return fmt.Sprintf("ClickHouse history query failed with status %d", err.statusCode)
 }
 
 func (client *Client) buildResponse(query telemetryhistorymodel.DeviceHistoryQuery, payload []byte, snapshotAt time.Time, watermark *time.Time) (telemetryhistorymodel.DeviceHistoryResponse, error) {

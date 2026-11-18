@@ -123,7 +123,7 @@ func TestMinuteAndFiveMinutePeriodsAlignToSiteClockAndSettingGaugeSQL(t *testing
 	}
 
 	client := &Client{database: "telemetry_history", table: "observations"}
-	gaugeSQL := client.gaugeAggregateQuery(minuteQuery, minuteQuery.To)
+	gaugeSQL, _ := client.gaugeAggregateQueryForSnapshot(minuteQuery, minuteQuery.To, periods, false)
 	if !strings.Contains(gaugeSQL, "point_type IN ('TELEMETRY', 'SETTING')") {
 		t.Fatalf("gauge SQL should include numeric SETTING points:\n%s", gaugeSQL)
 	}
@@ -229,7 +229,6 @@ func TestGaugeAggregateQueryRoutingAndFallbackRules(t *testing.T) {
 		Keys: []string{"zone.temperature"}, Timezone: "Asia/Shanghai", QualityPolicy: telemetryhistorymodel.AggregateQualityValidOnly,
 	}
 
-	// MINUTE and FIVE_MINUTE aligned on 1m UTC boundaries route to numeric_gauge_1min_states.
 	for _, gran := range []telemetryhistorymodel.AggregateGranularity{
 		telemetryhistorymodel.AggregateGranularityMinute,
 		telemetryhistorymodel.AggregateGranularityFiveMinute,
@@ -242,7 +241,6 @@ func TestGaugeAggregateQueryRoutingAndFallbackRules(t *testing.T) {
 			"countIfMerge(rollup.valid_count)", "avgIfMerge(rollup.valid_avg)", "argMinIfMerge(rollup.valid_first)", "argMaxIfMerge(rollup.valid_last)")
 	}
 
-	// QUARTER_HOUR, HOUR, DAY, WEEK, MONTH aligned on 15m UTC boundaries route to numeric_gauge_15min_states.
 	for _, tc := range []struct {
 		gran   telemetryhistorymodel.AggregateGranularity
 		tz     string
@@ -266,7 +264,6 @@ func TestGaugeAggregateQueryRoutingAndFallbackRules(t *testing.T) {
 		assertRoutes(t, client, q, false, "telemetry_history.numeric_gauge_15min_states", tc.marker)
 	}
 
-	// Unaligned boundaries, concurrent writes, sub-minute offsets, and custom tables fall back to raw observations.
 	unalignedMin := base
 	unalignedMin.Granularity = telemetryhistorymodel.AggregateGranularityMinute
 	unalignedMin.From = time.Date(2026, 10, 11, 0, 1, 20, 0, time.UTC)
@@ -431,6 +428,103 @@ func TestQueryDeviceHistoryAggregateEndToEndRollupAndConcurrentFallback(t *testi
 		}
 		if len(queries) != 5 || !strings.Contains(queries[1], "FROM telemetry_history.numeric_gauge_15min_states") || !strings.Contains(queries[2], "FROM telemetry_history.observations") {
 			t.Fatalf("expected rollup then raw fallback sequence, got:\n%s", strings.Join(queries, "\n---\n"))
+		}
+	})
+
+	t.Run("falls back to raw observations when rollup table returns UNKNOWN_TABLE", func(t *testing.T) {
+		var mu sync.Mutex
+		var queries []string
+		type mockReply struct {
+			status int
+			body   string
+		}
+		responses := []mockReply{
+			{status: http.StatusOK, body: `{"snapshot_at":"2026-10-11T02:05:00.000Z","projection_watermark":"2026-10-11T02:04:00.000Z","has_concurrent_writes":0,"raw_gauge_included_count":4}` + "\n"},
+			{status: http.StatusNotFound, body: `Code: 60. DB::Exception: Table telemetry_history.numeric_gauge_15min_states does not exist. (UNKNOWN_TABLE)`},
+			{status: http.StatusOK, body: `{"telemetry_key":"zone.temperature","point_id":"` + historyPointID + `","point_revision":1,"point_type":"TELEMETRY","unit":"Cel","period_start":"2026-10-11T00:00:00.000Z","period_end":"2026-10-11T01:00:00.000Z","good_count":4,"partial_count":0,"estimated_count":0,"manual_count":0,"stale_count":0,"invalid_count":0,"total_count":4,"included_count":4,"average":21.5,"minimum":21.0,"maximum":22.0,"first":21.0,"last":22.0,"delta_sum":null,"delta_count":0,"reset_count":0,"rollover_count":0,"excluded_transition_count":0,"state_value_type":null,"state_last_value":null,"state_sample_count":0,"state_change_count":0,"state_values":[]}` + "\n"},
+			{status: http.StatusOK, body: ""},
+			{status: http.StatusOK, body: ""},
+		}
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			raw, err := io.ReadAll(request.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mu.Lock()
+			queries = append(queries, string(raw))
+			idx := len(queries) - 1
+			mu.Unlock()
+			writer.Header().Set("Content-Type", "application/x-ndjson")
+			writer.WriteHeader(responses[idx].status)
+			_, _ = writer.Write([]byte(responses[idx].body))
+		}))
+		defer server.Close()
+
+		client, err := NewClient(Config{BaseURL: server.URL, Database: "telemetry_history", Table: "observations", HTTPClient: server.Client()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		query := telemetryhistorymodel.DeviceHistoryAggregateQuery{
+			TenantID: historyTenantID, SiteID: historySiteID, DeviceID: historyDeviceID,
+			Keys: []string{"zone.temperature"}, Granularity: telemetryhistorymodel.AggregateGranularityHour,
+			Timezone: "UTC", QualityPolicy: telemetryhistorymodel.AggregateQualityValidOnly,
+			From: time.Date(2026, 10, 11, 0, 0, 0, 0, time.UTC), To: time.Date(2026, 10, 11, 1, 0, 0, 0, time.UTC),
+		}
+		resp, err := client.QueryDeviceHistoryAggregate(context.Background(), query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(resp.Buckets) != 1 || resp.Buckets[0].Gauge == nil || resp.Buckets[0].Gauge.Average != 21.5 {
+			t.Fatalf("unexpected fallback response=%#v", resp)
+		}
+		if len(queries) != 5 || !strings.Contains(queries[1], "FROM telemetry_history.numeric_gauge_15min_states") || !strings.Contains(queries[2], "FROM telemetry_history.observations") {
+			t.Fatalf("expected rollup UNKNOWN_TABLE fallback to raw observations, got:\n%s", strings.Join(queries, "\n---\n"))
+		}
+	})
+
+	t.Run("falls back to raw observations when raw_gauge_included_count exceeds rollup sum", func(t *testing.T) {
+		var mu sync.Mutex
+		var queries []string
+		responses := []string{
+			`{"snapshot_at":"2026-10-11T02:05:00.000Z","projection_watermark":"2026-10-11T02:04:00.000Z","has_concurrent_writes":0,"raw_gauge_included_count":4}` + "\n",
+			`{"telemetry_key":"zone.temperature","point_id":"` + historyPointID + `","point_revision":1,"point_type":"TELEMETRY","unit":"Cel","period_start":"2026-10-11T00:00:00.000Z","period_end":"2026-10-11T01:00:00.000Z","good_count":1,"partial_count":0,"estimated_count":0,"manual_count":0,"stale_count":0,"invalid_count":0,"total_count":1,"included_count":1,"average":20.0,"minimum":20.0,"maximum":20.0,"first":20.0,"last":20.0,"delta_sum":null,"delta_count":0,"reset_count":0,"rollover_count":0,"excluded_transition_count":0,"state_value_type":null,"state_last_value":null,"state_sample_count":0,"state_change_count":0,"state_values":[],"max_projected_at":"2026-10-11T02:04:00.000Z"}` + "\n",
+			`{"telemetry_key":"zone.temperature","point_id":"` + historyPointID + `","point_revision":1,"point_type":"TELEMETRY","unit":"Cel","period_start":"2026-10-11T00:00:00.000Z","period_end":"2026-10-11T01:00:00.000Z","good_count":4,"partial_count":0,"estimated_count":0,"manual_count":0,"stale_count":0,"invalid_count":0,"total_count":4,"included_count":4,"average":22.5,"minimum":20.0,"maximum":25.0,"first":20.0,"last":25.0,"delta_sum":null,"delta_count":0,"reset_count":0,"rollover_count":0,"excluded_transition_count":0,"state_value_type":null,"state_last_value":null,"state_sample_count":0,"state_change_count":0,"state_values":[]}` + "\n",
+			"",
+			"",
+		}
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			raw, err := io.ReadAll(request.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mu.Lock()
+			queries = append(queries, string(raw))
+			idx := len(queries) - 1
+			mu.Unlock()
+			writer.Header().Set("Content-Type", "application/x-ndjson")
+			_, _ = writer.Write([]byte(responses[idx]))
+		}))
+		defer server.Close()
+
+		client, err := NewClient(Config{BaseURL: server.URL, Database: "telemetry_history", Table: "observations", HTTPClient: server.Client()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		query := telemetryhistorymodel.DeviceHistoryAggregateQuery{
+			TenantID: historyTenantID, SiteID: historySiteID, DeviceID: historyDeviceID,
+			Keys: []string{"zone.temperature"}, Granularity: telemetryhistorymodel.AggregateGranularityHour,
+			Timezone: "UTC", QualityPolicy: telemetryhistorymodel.AggregateQualityValidOnly,
+			From: time.Date(2026, 10, 11, 0, 0, 0, 0, time.UTC), To: time.Date(2026, 10, 11, 1, 0, 0, 0, time.UTC),
+		}
+		resp, err := client.QueryDeviceHistoryAggregate(context.Background(), query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(resp.Buckets) != 1 || resp.Buckets[0].Gauge == nil || resp.Buckets[0].Gauge.SampleCount != 4 || resp.Buckets[0].Gauge.Average != 22.5 {
+			t.Fatalf("expected raw fallback with SampleCount=4, got %#v", resp)
+		}
+		if len(queries) != 5 || !strings.Contains(queries[2], "FROM telemetry_history.observations") {
+			t.Fatalf("expected rollup-count mismatch fallback to raw observations, got:\n%s", strings.Join(queries, "\n---\n"))
 		}
 	})
 }

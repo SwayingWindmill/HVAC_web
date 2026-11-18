@@ -404,21 +404,19 @@ func TestOptimizationInputReaderUsesLiveHotSnapshotAndFallbacksCleanly(t *testin
 			result: OptimizationLiveObservationsResult{
 				Observations: map[string]OptimizationLiveObservation{
 					"supply_water_temperature": makeLive("01990000-2910-7000-8000-000000000001", "supply_water_temperature", at.Add(-20*time.Second), at.Add(-19*time.Second), 6.5, "GOOD", "HEALTHY", []string{}, nil),
-					// Newer than query.At -> must fall back to ClickHouse for zone.t53.
-					"zone.t53": makeLive("01990000-2910-7000-8000-000000000002", "zone.t53", at.Add(2*time.Second), at.Add(3*time.Second), 29.9, "GOOD", "HEALTHY", []string{}, nil),
-					// zone.t54 missing -> must fall back to ClickHouse for zone.t54.
+					"zone.t53":                 makeLive("01990000-2910-7000-8000-000000000002", "zone.t53", at.Add(2*time.Second), at.Add(3*time.Second), 29.9, "GOOD", "HEALTHY", []string{}, nil),
 				},
 			},
 		}
 		reader, err := NewClickHouseInputReader(InputReaderConfig{
-			BaseURL: chServer.URL,
-			Energy:  energy,
-			Now:     func() time.Time { return at.Add(5 * time.Second).UTC() },
+			BaseURL:          chServer.URL,
+			Energy:           energy,
+			LiveObservations: liveStub,
+			Now:              func() time.Time { return at.Add(5 * time.Second).UTC() },
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		reader.WithLiveObservations(liveStub)
 		state, err := reader.ReadOptimizationState(t.Context(), baseQuery)
 		if err != nil {
 			t.Fatal(err)
@@ -474,7 +472,6 @@ func TestOptimizationInputReaderUsesLiveHotSnapshotAndFallbacksCleanly(t *testin
 			t.Fatalf("expected ReasonZoneTempMissing with 0 CH calls on ambiguity, got ok=%v reason=%q ch=%d err=%v", ok, reason, chQueries.Load(), err)
 		}
 
-		// HealthReasons PROBE_OFFSET blocks with ReasonInputsInvalid.
 		liveStub.result.AmbiguousKeys = nil
 		liveStub.result.Observations["zone.t53"] = makeLive("01990000-2910-7000-8000-000000000002", "zone.t53", at.Add(-20*time.Second), at.Add(-19*time.Second), 22.0, "GOOD", "SUSPECT", []string{}, []string{"PROBE_OFFSET"})
 		_, err = reader.ReadOptimizationState(t.Context(), baseQuery)
@@ -482,7 +479,6 @@ func TestOptimizationInputReaderUsesLiveHotSnapshotAndFallbacksCleanly(t *testin
 			t.Fatalf("expected ReasonInputsInvalid on PROBE_OFFSET, got ok=%v reason=%q ch=%d err=%v", ok, reason, chQueries.Load(), err)
 		}
 
-		// Non-GOOD quality on supply blocks with ReasonSupplyTempMissing without falling back to ClickHouse.
 		liveStub.result.Observations["supply_water_temperature"] = makeLive("01990000-2910-7000-8000-000000000001", "supply_water_temperature", at.Add(-20*time.Second), at.Add(-19*time.Second), 6.5, "STALE", "STALE", []string{"SOURCE_LAG_EXCEEDED"}, nil)
 		liveStub.result.Observations["zone.t53"] = makeLive("01990000-2910-7000-8000-000000000002", "zone.t53", at.Add(-20*time.Second), at.Add(-19*time.Second), 22.0, "GOOD", "HEALTHY", []string{}, nil)
 		_, err = reader.ReadOptimizationState(t.Context(), baseQuery)

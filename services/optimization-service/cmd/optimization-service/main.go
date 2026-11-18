@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -433,21 +434,33 @@ func waitBackground(wg *sync.WaitGroup, timeout time.Duration, logger *slog.Logg
 }
 
 func newTelemetryClients(tlsCert, tlsKey, tlsCA string) (*optimization.WorkloadTelemetryLiveClient, *optimization.WorkloadTelemetryHealthClient, error) {
-	telemetryURL := envOrDefault("OPTIMIZATION_TELEMETRY_URL", "https://telemetry-runtime-service:8446")
+	telemetryURL := strings.TrimRight(envOrDefault("OPTIMIZATION_TELEMETRY_URL", "https://telemetry-runtime-service:8446"), "/")
+	parsed, err := url.Parse(telemetryURL)
+	if err != nil || parsed.Hostname() == "" {
+		return nil, nil, fmt.Errorf("invalid OPTIMIZATION_TELEMETRY_URL %q", telemetryURL)
+	}
+	httpClient, err := workloadtls.NewHTTPClient(workloadtls.ClientConfig{
+		CertificateFiles: &workloadtls.CertificateFiles{
+			CertificatePath: tlsCert,
+			PrivateKeyPath:  tlsKey,
+		},
+		ServerCAPath: tlsCA,
+		ServerName:   parsed.Hostname(),
+		Timeout:      10 * time.Second,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("create telemetry mTLS client: %w", err)
+	}
 	liveClient, err := optimization.NewWorkloadTelemetryLiveClient(optimization.TelemetryLiveClientConfig{
-		CertificatePath: tlsCert,
-		PrivateKeyPath:  tlsKey,
-		CAPath:          tlsCA,
-		TelemetryURL:    telemetryURL,
+		TelemetryURL: telemetryURL,
+		HTTPClient:   httpClient,
 	})
 	if err != nil {
 		return nil, nil, err
 	}
 	healthClient, err := optimization.NewWorkloadTelemetryHealthClient(optimization.TelemetryHealthClientConfig{
-		CertificatePath: tlsCert,
-		PrivateKeyPath:  tlsKey,
-		CAPath:          tlsCA,
-		TelemetryURL:    telemetryURL,
+		TelemetryURL: telemetryURL,
+		HTTPClient:   httpClient,
 	})
 	if err != nil {
 		return nil, nil, err

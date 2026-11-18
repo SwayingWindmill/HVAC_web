@@ -105,6 +105,20 @@ func TestDeduplicateLatestUpdates(t *testing.T) {
 			t.Fatalf("got upserts=%d healthUpdates=%d, want 1/0", len(upserts), len(healthUpdates))
 		}
 	})
+
+	t.Run("subsequent older-sampled accepted op preserves newer health rejection", func(t *testing.T) {
+		ops := []latestUpdateOp{
+			testLatestOp(dev1, "zone.temperature", false, base.Add(10*time.Second), base.Add(10*time.Second), `500.0`, HealthBad, 0),
+			testLatestOp(dev1, "zone.temperature", true, base.Add(5*time.Second), base.Add(11*time.Second), `22.5`, HealthHealthy, 100),
+		}
+		upserts, healthUpdates := deduplicateLatestUpdates(ops)
+		if len(upserts) != 1 || len(healthUpdates) != 1 {
+			t.Fatalf("got upserts=%d healthUpdates=%d, want 1/1", len(upserts), len(healthUpdates))
+		}
+		if healthUpdates[0].decision.HealthStatus != HealthBad {
+			t.Fatalf("healthUpdates[0]=%+v, want BAD", healthUpdates[0])
+		}
+	})
 }
 
 func TestPersistBatchWritePlanLatestUpdatesUsesSingleUNNESTQueries(t *testing.T) {

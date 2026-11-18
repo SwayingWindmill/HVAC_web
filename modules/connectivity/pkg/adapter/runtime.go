@@ -1431,10 +1431,6 @@ func (runtime *Runtime) stopAllGatewayTimers() {
 	runtime.readyQueue = nil
 }
 
-func (runtime *Runtime) runGatewayTurn(ctx context.Context, turn gatewayTurn, activeEndSeq *int64) {
-	runtime.runGatewayTurnTracked(ctx, turn, activeEndSeq, nil)
-}
-
 func (runtime *Runtime) runGatewayTurnTracked(ctx context.Context, turn gatewayTurn, activeLiveEndSeq, activeReplayEndSeq *int64) {
 	batch := turn.pendingBatch
 	messages := turn.pendingMsgs

@@ -459,8 +459,16 @@ func (mb *gatewayMailbox) enqueueAt(received *paho.Publish, receivedAt time.Time
 	}
 	totalDepth := mb.live().itemCountLocked() + mb.replay.itemCountLocked()
 	totalCap := mb.memCap + mb.overflowMax
+	effectiveCap := totalCap
+	effectiveMaxBytes := mb.overflowMaxBytes
+	if isReplay && mb.overflowMax >= 16 {
+		effectiveCap -= max(1, mb.overflowMax/8)
+		if effectiveMaxBytes >= 1<<20 {
+			effectiveMaxBytes -= effectiveMaxBytes / 8
+		}
+	}
 	totalActiveBytes := mb.live().activeBytesLocked() + mb.replay.activeBytesLocked()
-	if totalDepth >= totalCap || (mb.overflowMaxBytes > 0 && totalActiveBytes+frameLen > mb.overflowMaxBytes) {
+	if totalDepth >= effectiveCap || (effectiveMaxBytes > 0 && totalActiveBytes+frameLen > effectiveMaxBytes) {
 		res := enqueueResult{
 			memDepth:      mb.memDepthLocked(),
 			overflowDepth: mb.overflowDepthLocked(),

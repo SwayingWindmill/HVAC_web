@@ -135,12 +135,12 @@ func TestReadPointFiltersGoodFiniteSamplesAndCompleteness(t *testing.T) {
 	for _, marker := range []string{
 		"avgIf(value_number, quality = 'GOOD' AND isFinite(value_number))",
 		"groupArrayIf((sampled_at, observation_id, assumeNotNull(value_number), toString((point_revision, ifNull(unit, '')))), quality = 'GOOD' AND isFinite(value_number))",
-		"argMinIf(value_number,sampled_at,quality = 'GOOD' AND isFinite(value_number)) AS first_value",
-		"argMaxIf(value_number,sampled_at,quality = 'GOOD' AND isFinite(value_number)) AS last_value",
+		"argMinIf(value_number,tuple(sampled_at,observation_id),quality = 'GOOD' AND isFinite(value_number)) AS first_value",
+		"argMaxIf(value_number,tuple(sampled_at,observation_id),quality = 'GOOD' AND isFinite(value_number)) AS last_value",
 		"minIf(sampled_at,quality = 'GOOD' AND isFinite(value_number))",
 		"maxIf(sampled_at,quality = 'GOOD' AND isFinite(value_number))",
 		"count() AS n",
-		"countIf(quality='GOOD') AS good",
+		"countIf(quality = 'GOOD' AND isFinite(value_number)) AS good",
 	} {
 		if !strings.Contains(sql, marker) {
 			t.Fatalf("ReadPoint SQL missing %q:\n%s", marker, sql)

@@ -12,9 +12,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
-	"github.com/quanlaihe/hvac-web/modules/telemetry/pkg/telemetryapi"
 )
 
 type stubLiveObservationReader struct {
@@ -267,7 +264,6 @@ func TestOptimizationLiveObservationsAutoDiscoveryCacheHitFallbackAndAmbiguity(t
 		t.Fatalf("expected PG read only for cache-missed pointZone53, got %+v", store.readPointCalls)
 	}
 
-	// Verify zone53Obs was backfilled into cache so second request triggers zero PG latest reads.
 	req2 := httptest.NewRequest(http.MethodPost, InternalOptimizationLiveObservationsPath, bytes.NewBufferString(`{"tenantId":"`+tenantA+`","siteId":"`+siteA+`","telemetryKeys":["supply_water_temperature","zone.t53"]}`))
 	req2.Header.Set("Content-Type", "application/json")
 	req2.TLS = verifiedTLSState("spiffe://hvac.local/custom-opt")
@@ -280,7 +276,6 @@ func TestOptimizationLiveObservationsAutoDiscoveryCacheHitFallbackAndAmbiguity(t
 		t.Fatalf("expected Redis backfill hit with no extra PG read, got %+v", store.readPointCalls)
 	}
 
-	// Point revision bump in PG invalidates older cached PointRevision and refreshes from PG.
 	store.resolved["supply_water_temperature"] = resolvedNumericSitePoint{
 		DeviceID: deviceA, PointID: pointSupply, TelemetryKey: "supply_water_temperature", PointRevision: 3,
 	}
@@ -305,7 +300,6 @@ func TestOptimizationLiveObservationsAutoDiscoveryCacheHitFallbackAndAmbiguity(t
 		t.Fatalf("expected refreshed revision 3 observation, got %+v", resp3.Observations["supply_water_temperature"])
 	}
 
-	// Redis read error must fall back cleanly to PG without failing the endpoint.
 	cache.getErr = errors.New("redis connection refused")
 	cache.putErr = errors.New("redis connection refused")
 	req4 := httptest.NewRequest(http.MethodPost, InternalOptimizationLiveObservationsPath, bytes.NewBufferString(`{"tenantId":"`+tenantA+`","siteId":"`+siteA+`","telemetryKeys":["supply_water_temperature"]}`))
@@ -317,7 +311,6 @@ func TestOptimizationLiveObservationsAutoDiscoveryCacheHitFallbackAndAmbiguity(t
 		t.Fatalf("expected 200 fallback when Redis fails, got %d body=%s", rec4.Code, rec4.Body.String())
 	}
 
-	// PG failure returns 503.
 	store.resolveErr = errors.New("postgres down")
 	req5 := httptest.NewRequest(http.MethodPost, InternalOptimizationLiveObservationsPath, bytes.NewBufferString(`{"tenantId":"`+tenantA+`","siteId":"`+siteA+`","telemetryKeys":["supply_water_temperature"]}`))
 	req5.Header.Set("Content-Type", "application/json")
@@ -337,7 +330,4 @@ func TestPostgresStoreLiveObservationNilGuards(t *testing.T) {
 	if _, err := nilStore.ReadLatestNumericObservations(t.Context(), tenantA, siteA, []string{deviceA}); err == nil {
 		t.Fatal("expected nil store error from ReadLatestNumericObservations")
 	}
-	// Ensure fakeSnapshotStore compiles cleanly with telemetryapi usage in other tests.
-	_ = telemetryauth.Target{}
-	_ = telemetryapi.DeviceObservationSnapshot{}
 }

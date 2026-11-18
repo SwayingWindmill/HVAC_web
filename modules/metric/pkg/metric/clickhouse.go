@@ -46,7 +46,11 @@ func (s *ClickHouseStore) execute(ctx context.Context, sql string) error {
 }
 
 func (s *ClickHouseStore) doSQL(ctx context.Context, method, sql string) ([]byte, error) {
-	u := *s.base
+	return doClickHouseHTTPQuery(ctx, s.base, s.user, s.password, s.client, method, sql, 1<<20, "metric ClickHouse query")
+}
+
+func doClickHouseHTTPQuery(ctx context.Context, base *url.URL, user, password string, client *http.Client, method, sql string, maxBodyBytes int64, label string) ([]byte, error) {
+	u := *base
 	q := u.Query()
 	q.Set("query", sql)
 	q.Set("date_time_output_format", "iso")
@@ -55,20 +59,20 @@ func (s *ClickHouseStore) doSQL(ctx context.Context, method, sql string) ([]byte
 	if err != nil {
 		return nil, err
 	}
-	if s.user != "" {
-		req.SetBasicAuth(s.user, s.password)
+	if user != "" {
+		req.SetBasicAuth(user, password)
 	}
-	resp, err := s.client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
 	if err != nil {
 		return nil, err
 	}
 	if resp.StatusCode/100 != 2 {
-		return nil, fmt.Errorf("metric ClickHouse query returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, fmt.Errorf("%s returned %d: %s", label, resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	return body, nil
 }
@@ -85,9 +89,9 @@ func aggregateExpr(name string) string {
 	case "MAX":
 		return "maxIf(value_number, " + qualityEligibleFilter + ")"
 	case "FIRST":
-		return "argMinIf(value_number, sampled_at, " + qualityEligibleFilter + ")"
+		return "argMinIf(value_number, tuple(sampled_at, observation_id), " + qualityEligibleFilter + ")"
 	case "LAST":
-		return "argMaxIf(value_number, sampled_at, " + qualityEligibleFilter + ")"
+		return "argMaxIf(value_number, tuple(sampled_at, observation_id), " + qualityEligibleFilter + ")"
 	default:
 		return "avgIf(value_number, " + qualityEligibleFilter + ")"
 	}
@@ -107,7 +111,7 @@ func (s *ClickHouseStore) ReadPoint(ctx context.Context, b Binding, pointID stri
 	case "HOUR", "DAY":
 		stepGuard = "segment = previous AND gap_ms <= 3600000"
 	}
-	sql := fmt.Sprintf(`WITH (SELECT argMax((1, assumeNotNull(value_number), toString((point_revision, ifNull(unit, ''))), toUnixTimestamp64Milli(sampled_at)), (sampled_at, observation_id)) FROM telemetry_history.observations WHERE %[2]s AND %[6]s AND sampled_at < parseDateTime64BestEffort(%[3]s)) AS anchor, arraySort(x -> (x.1, x.2), groupArrayIf((sampled_at, observation_id, assumeNotNull(value_number), toString((point_revision, ifNull(unit, '')))), %[6]s)) AS readings, arrayConcat(if(ifNull(anchor.1 = 1, 0), [assumeNotNull(anchor.2)], []), arrayMap(x -> x.3, readings)) AS ordered, arrayConcat(if(ifNull(anchor.1 = 1, 0), [assumeNotNull(anchor.3)], []), arrayMap(x -> x.4, readings)) AS segments, arrayConcat(if(ifNull(anchor.1 = 1, 0), [assumeNotNull(anchor.4)], []), arrayMap(x -> toUnixTimestamp64Milli(x.1), readings)) AS sampled_ms, arrayMap((d, segment, previous, gap_ms) -> if(%[5]s, d, 0), arrayDifference(ordered), segments, arrayPushFront(arrayPopBack(segments), ''), arrayDifference(sampled_ms)) AS steps SELECT %[1]s AS value, count() AS n, countIf(quality='GOOD') AS good, argMinIf(value_number,sampled_at,%[6]s) AS first_value, argMaxIf(value_number,sampled_at,%[6]s) AS last_value, dateDiff('millisecond',minIf(sampled_at,%[6]s),maxIf(sampled_at,%[6]s))/1000.0 AS duration_seconds, avgIf(value_number,%[6]s)*dateDiff('millisecond',minIf(sampled_at,%[6]s),maxIf(sampled_at,%[6]s))/3600000.0 AS integral, arraySum(arrayFilter(d -> d > 0, steps)) AS rise, length(arrayFilter(d -> d < 0, steps)) AS drops, arraySum(arrayFilter(d -> d < 0, steps)) AS drop_sum, arraySum(arrayFilter((v, d) -> d < 0, ordered, steps)) AS value_after_drops FROM telemetry_history.observations WHERE %[2]s AND sampled_at >= parseDateTime64BestEffort(%[3]s) AND sampled_at < parseDateTime64BestEffort(%[4]s) FORMAT TabSeparated`, aggregateExpr(b.Aggregation), scope, from, to, stepGuard, qualityEligibleFilter)
+	sql := fmt.Sprintf(`WITH (SELECT argMax((1, assumeNotNull(value_number), toString((point_revision, ifNull(unit, ''))), toUnixTimestamp64Milli(sampled_at)), (sampled_at, observation_id)) FROM telemetry_history.observations WHERE %[2]s AND %[6]s AND sampled_at < parseDateTime64BestEffort(%[3]s)) AS anchor, arraySort(x -> (x.1, x.2), groupArrayIf((sampled_at, observation_id, assumeNotNull(value_number), toString((point_revision, ifNull(unit, '')))), %[6]s)) AS readings, arrayConcat(if(ifNull(anchor.1 = 1, 0), [assumeNotNull(anchor.2)], []), arrayMap(x -> x.3, readings)) AS ordered, arrayConcat(if(ifNull(anchor.1 = 1, 0), [assumeNotNull(anchor.3)], []), arrayMap(x -> x.4, readings)) AS segments, arrayConcat(if(ifNull(anchor.1 = 1, 0), [assumeNotNull(anchor.4)], []), arrayMap(x -> toUnixTimestamp64Milli(x.1), readings)) AS sampled_ms, arrayMap((d, segment, previous, gap_ms) -> if(%[5]s, d, 0), arrayDifference(ordered), segments, arrayPushFront(arrayPopBack(segments), ''), arrayDifference(sampled_ms)) AS steps SELECT %[1]s AS value, count() AS n, countIf(%[6]s) AS good, argMinIf(value_number,tuple(sampled_at,observation_id),%[6]s) AS first_value, argMaxIf(value_number,tuple(sampled_at,observation_id),%[6]s) AS last_value, dateDiff('millisecond',minIf(sampled_at,%[6]s),maxIf(sampled_at,%[6]s))/1000.0 AS duration_seconds, avgIf(value_number,%[6]s)*dateDiff('millisecond',minIf(sampled_at,%[6]s),maxIf(sampled_at,%[6]s))/3600000.0 AS integral, arraySum(arrayFilter(d -> d > 0, steps)) AS rise, length(arrayFilter(d -> d < 0, steps)) AS drops, arraySum(arrayFilter(d -> d < 0, steps)) AS drop_sum, arraySum(arrayFilter((v, d) -> d < 0, ordered, steps)) AS value_after_drops FROM telemetry_history.observations WHERE %[2]s AND sampled_at >= parseDateTime64BestEffort(%[3]s) AND sampled_at < parseDateTime64BestEffort(%[4]s) FORMAT TabSeparated`, aggregateExpr(b.Aggregation), scope, from, to, stepGuard, qualityEligibleFilter)
 	body, err := s.query(ctx, sql)
 	if err != nil {
 		return Input{}, err

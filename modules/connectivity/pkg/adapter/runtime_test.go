@@ -1639,7 +1639,7 @@ func TestRuntimeCatalogMetricsOnlineGatewaysTraceLogsAndPacketHook(t *testing.T)
 	b2, _, _, _ := corruptMB.popBatch(1)
 	corruptMB.markConsumed(b2[0].endSeq)
 	var endSeq int64
-	runtime.runGatewayTurn(ctx, gatewayTurn{gatewayID: testGatewayB, mailbox: corruptMB}, &endSeq)
+	runtime.runGatewayTurnTracked(ctx, gatewayTurn{gatewayID: testGatewayB, mailbox: corruptMB}, &endSeq, nil)
 
 	finalBody := scrapeMetricsText(registry)
 	for _, want := range []string{
@@ -2363,7 +2363,6 @@ func TestRuntimeLiveMessagesJumpAheadOfReplayBacklogWithoutStarvingReplay(t *tes
 	acks := newAckLog()
 	acks.seen = make(chan string, 1100)
 
-	// Hold worker on live message 1 while queuing 1,000 replay messages followed by 10 live messages.
 	if err := runtime.enqueue(ctx, nil, testLivePublishAt(testGatewayA, 1, now.Add(-time.Second)), acks.ack(messageID(1))); err != nil {
 		t.Fatal(err)
 	}
@@ -2397,7 +2396,6 @@ func TestRuntimeLiveMessagesJumpAheadOfReplayBacklogWithoutStarvingReplay(t *tes
 		return len(telemetry.accepted())+len(telemetry.recordedEvents()) == 1+replayCount+liveBurstCount
 	}, "all live and replay messages processed without starvation")
 
-	// Live event + 9 live telemetry points must appear well ahead of the 1,000-item replay backlog.
 	accepted := telemetry.accepted()
 	livePositions := 0
 	for idx := 0; idx < 25 && idx < len(accepted); idx++ {
@@ -2455,7 +2453,6 @@ func TestRuntimeGracefulDrainTimeoutPreservesBothLiveAndReplaySpools(t *testing.
 	conn := broker.awaitConnection(t)
 	awaitReady(t, runtime, true)
 
-	// Hold worker on live message 1, then queue 1 replay and 1 live message into WAL spools.
 	conn.deliverGateway(t, testGatewayA, 1, 1, false)
 	<-entered
 	replayPkt := packets.NewControlPacket(packets.PUBLISH)

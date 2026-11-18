@@ -1503,7 +1503,7 @@ func deduplicateLatestUpdates(ops []latestUpdateOp) ([]latestUpdateOp, []latestU
 
 	healthKeys := make([]deviceKey, 0, len(healthWinners))
 	for key, healthWinner := range healthWinners {
-		if upsertWinner, hasUpsert := upsertWinners[key]; hasUpsert && upsertWinner.index > healthWinner.index {
+		if upsertWinner, hasUpsert := upsertWinners[key]; hasUpsert && upsertWinner.index > healthWinner.index && !upsertWinner.op.candidate.SampledAt.Before(healthWinner.op.candidate.SampledAt) {
 			continue
 		}
 		healthKeys = append(healthKeys, key)

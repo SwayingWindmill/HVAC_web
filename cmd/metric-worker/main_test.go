@@ -127,7 +127,6 @@ func TestRunBackfillDetectorLoopInitializesScansAndRedactsErrors(t *testing.T) {
 		t.Fatalf("missing enqueued log: %s", logs.String())
 	}
 
-	// Verify errors are logged strictly with redacted error_code without raw error detail.
 	var errLogs syncBuffer
 	errLogger := observability.NewJSONLogger(&errLogs, slog.LevelInfo)
 	errDetector := &fakeBackfillDetector{

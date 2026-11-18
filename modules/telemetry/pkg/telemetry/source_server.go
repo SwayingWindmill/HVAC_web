@@ -484,9 +484,9 @@ type siteLiveCacheScope struct {
 }
 
 type siteLiveCacheBatchAction struct {
-	put       *OptimizationLiveObservation
-	sampledAt time.Time
-	deleteID  string
+	put          *OptimizationLiveObservation
+	sampledAt    time.Time
+	invalidateID string
 }
 
 func (h *handler) populateSiteLiveCache(ctx context.Context, candidates []ObservationCandidate, receipts []ObservationReceipt) {
@@ -494,8 +494,8 @@ func (h *handler) populateSiteLiveCache(ctx context.Context, candidates []Observ
 		return
 	}
 	siteCache, hasSiteCache := h.latestCache.(SiteLiveCache)
-	siteDeleter, hasSiteDeleter := h.latestCache.(SiteLiveCacheDeleter)
-	if !hasSiteCache && !hasSiteDeleter {
+	siteInvalidator, hasSiteInvalidator := h.latestCache.(SiteLiveCacheInvalidator)
+	if !hasSiteCache && !hasSiteInvalidator {
 		return
 	}
 
@@ -557,6 +557,7 @@ func (h *handler) populateSiteLiveCache(ctx context.Context, candidates []Observ
 				PointRevision:   uint64(candidate.Point.PointRevision),
 				SampledAt:       sampledAt.Format(time.RFC3339Nano),
 				ReceivedAt:      candidate.ReceivedAt.UTC().Format(time.RFC3339Nano),
+				HealthAt:        sampledAt.Format(time.RFC3339Nano),
 				Value:           val,
 				Unit:            unit,
 				Quality:         string(receipt.Quality),
@@ -569,7 +570,7 @@ func (h *handler) populateSiteLiveCache(ctx context.Context, candidates []Observ
 			}
 			actions[pointID] = siteLiveCacheBatchAction{put: &obs, sampledAt: sampledAt}
 		case ObservationRejected:
-			if !hasSiteDeleter {
+			if !hasSiteInvalidator {
 				continue
 			}
 			if !slices.Contains(receipt.QualityReasons, QualityReasonOutOfRange) && !slices.Contains(receipt.QualityReasons, QualityReasonSourceUntrusted) {
@@ -580,27 +581,30 @@ func (h *handler) populateSiteLiveCache(ctx context.Context, candidates []Observ
 			if existing, hasExisting := actions[pointID]; hasExisting && existing.put != nil && sampledAt.Before(existing.sampledAt) {
 				continue
 			}
-			actions[pointID] = siteLiveCacheBatchAction{deleteID: pointID, sampledAt: sampledAt}
+			actions[pointID] = siteLiveCacheBatchAction{invalidateID: pointID, sampledAt: sampledAt}
 		}
 	}
 
 	for _, scope := range siteOrder {
 		actions := actionsBySite[scope]
 		var puts []OptimizationLiveObservation
-		var deletes []string
+		var invalidations []SiteLiveInvalidation
 		for _, pointID := range pointOrderBySite[scope] {
 			action := actions[pointID]
 			if action.put != nil {
 				puts = append(puts, *action.put)
-			} else if action.deleteID != "" {
-				deletes = append(deletes, action.deleteID)
+			} else if action.invalidateID != "" {
+				invalidations = append(invalidations, SiteLiveInvalidation{
+					PointID:   action.invalidateID,
+					SampledAt: action.sampledAt,
+				})
 			}
 		}
 		if hasSiteCache && len(puts) > 0 {
 			_ = siteCache.PutSiteLiveObservations(ctx, scope.tenantID, scope.siteID, puts)
 		}
-		if hasSiteDeleter && len(deletes) > 0 {
-			_ = siteDeleter.DeleteSiteLiveObservations(ctx, scope.tenantID, scope.siteID, deletes)
+		if hasSiteInvalidator && len(invalidations) > 0 {
+			_ = siteInvalidator.InvalidateSiteLiveObservations(ctx, scope.tenantID, scope.siteID, invalidations)
 		}
 	}
 }

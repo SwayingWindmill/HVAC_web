@@ -663,7 +663,6 @@ func TestSourceBatchPopulatesSiteLiveCacheAndInvalidatesOnReject(t *testing.T) {
 		t.Fatalf("unexpected cached pointSuspect: %+v", got[pointSuspect])
 	}
 
-	// Out-of-range rejection on pointTemp invalidates cached entry so PG BAD health is observed.
 	acceptor.receipts = []ObservationReceipt{{
 		ObservationID:    "018f2e00-9000-7000-8000-000000000005",
 		Status:           ObservationRejected,
@@ -686,7 +685,6 @@ func TestSourceBatchPopulatesSiteLiveCacheAndInvalidatesOnReject(t *testing.T) {
 		t.Fatalf("expected pointTemp evicted from cache on OUT_OF_RANGE rejection, got=%#v err=%v", afterReject, err)
 	}
 
-	// Redis write failure must not break ingest HTTP 200 response.
 	cache.putErr = errors.New("redis unavailable")
 	acceptor.receipts = []ObservationReceipt{{
 		ObservationID:    "018f2e00-9000-7000-8000-000000000006",

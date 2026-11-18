@@ -690,7 +690,6 @@ func TestEvaluateObservationRejectsPhysicalBoundsAndRegisterSentinels(t *testing
 		return c, f
 	}
 
-	// Register sentinel on bounded non-counter unit rejects as OUT_OF_RANGE + SENTINEL and records BAD health.
 	sentinelCand, sentinelFacts := makeCase("Cel", "TELEMETRY", `65535`)
 	sentinelDec := EvaluateObservation(sentinelCand, sentinelFacts, now)
 	assertObservationDecision(t, sentinelDec, ObservationRejected, QualityInvalid, []QualityReason{QualityReasonOutOfRange, QualityReasonSentinel}, true, false)
@@ -698,12 +697,10 @@ func TestEvaluateObservationRejectsPhysicalBoundsAndRegisterSentinels(t *testing
 		t.Fatalf("sentinel health=%#v", sentinelDec)
 	}
 
-	// Canonical evaluator must accept all returned QualityReason codes.
 	if _, err := canonicalQualityReasons(healthReasonCodes(sentinelDec.QualityReasons)); err != nil {
 		t.Fatalf("returned quality reasons rejected by canonical contract: %v", err)
 	}
 
-	// Physical envelope violations without policy min/max still reject.
 	for _, tc := range []struct {
 		unit, val string
 	}{
@@ -717,12 +714,10 @@ func TestEvaluateObservationRejectsPhysicalBoundsAndRegisterSentinels(t *testing
 		assertObservationDecision(t, dec, ObservationRejected, QualityInvalid, []QualityReason{QualityReasonOutOfRange}, true, false)
 	}
 
-	// Large valid chiller plant pressure in Pa must not false-positive as 16-bit sentinel.
 	paCand, paFacts := makeCase("Pa", "TELEMETRY", `32767`)
 	paDec := EvaluateObservation(paCand, paFacts, now)
 	assertObservationDecision(t, paDec, ObservationAccepted, QualityGood, nil, true, true)
 
-	// Historical replay also enforces physical bounds and 16-bit sentinels.
 	sentinelCand.SourcePath = SourcePathHistoryReplay
 	sentinelCand.SampledAt = now.Add(-48 * time.Hour)
 	histDec := EvaluateHistoricalObservation(sentinelCand, sentinelFacts, now)

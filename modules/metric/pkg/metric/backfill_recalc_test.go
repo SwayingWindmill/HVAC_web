@@ -159,7 +159,6 @@ func TestBackfillRecalcDetectorInitialWatermarkSkipsPreexistingAndAdvancesOverLi
 		t.Fatal(err)
 	}
 
-	// First pass initializes watermark at 100 without triggering on historical seq 50.
 	n, err := detector.DetectAndEnqueue(context.Background(), now)
 	if err != nil || n != 0 {
 		t.Fatalf("initial DetectAndEnqueue=(%d, %v), want (0, nil)", n, err)
@@ -168,7 +167,6 @@ func TestBackfillRecalcDetectorInitialWatermarkSkipsPreexistingAndAdvancesOverLi
 		t.Fatalf("watermark=(%d, %v), want (100, true)", wm, ok)
 	}
 
-	// Live-only rows advance maxSeq to 150 with 0 dirty buckets: watermark must still advance to 150.
 	source.maxSeq = 150
 	n, err = detector.DetectAndEnqueue(context.Background(), now)
 	if err != nil || n != 0 {
@@ -178,7 +176,6 @@ func TestBackfillRecalcDetectorInitialWatermarkSkipsPreexistingAndAdvancesOverLi
 		t.Fatalf("watermark after live rows=(%d, %v), want (150, true)", wm, ok)
 	}
 
-	// New backfill arrives at seq 155 -> triggers 1 HOUR recalc job.
 	source.maxSeq = 155
 	source.buckets = append(source.buckets, BackfillDirtyBucket{
 		MaxSeq: 155, TenantID: tenantID, SiteID: siteID, PointID: pointID, BucketStart: bucketTime,
@@ -250,7 +247,6 @@ func TestBackfillRecalcDetectorTimezoneAlignmentCoalescingAndFinalizationGate(t 
 		t.Fatalf("enqueued=%d (slice=%d), want 20", n, len(store.enqueued))
 	}
 
-	// Verify coalesced b-15m and b-hour picked up MaxSeq=18 across point1 (12) and point2 (18).
 	var found15m, foundHour bool
 	for _, cand := range store.enqueued {
 		if cand.BindingID == "b-15m" {
@@ -273,7 +269,6 @@ func TestBackfillRecalcDetectorTimezoneAlignmentCoalescingAndFinalizationGate(t 
 		t.Fatalf("missing b-15m (%v) or b-hour (%v)", found15m, foundHour)
 	}
 
-	// Once now advances past 2027-01-02 (all calendar periods closed), DAY/MONTH/QUARTER/YEAR all enqueue.
 	futureNow := time.Date(2027, 1, 2, 0, 0, 0, 0, time.UTC)
 	store.enqueued = nil
 	source.maxSeq = 30
@@ -350,7 +345,6 @@ func TestBackfillRecalcDetectorPaginationAndFailureSafety(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Enqueue failure must not advance watermark.
 	if _, err := detector.DetectAndEnqueue(context.Background(), now); err == nil {
 		t.Fatal("expected enqueue failure")
 	}
@@ -417,7 +411,16 @@ func TestExtractBoundPointIDsAndClickHouseBackfillSourceHTTP(t *testing.T) {
 	if buckets[0].MaxSeq != 42 || !buckets[0].BucketStart.Equal(time.Date(2026, 10, 12, 16, 0, 0, 0, time.UTC)) {
 		t.Fatalf("unexpected bucket: %+v", buckets[0])
 	}
-	if len(queries) != 2 || !strings.Contains(queries[1], "telemetry_history.observations") || !strings.Contains(queries[1], "dateDiff('second', sampled_at, projected_at) >= 600") {
+	if len(queries) != 2 || !strings.Contains(queries[1], "telemetry_history.observations AS obs") || !strings.Contains(queries[1], "dateDiff('second', obs.sampled_at, obs.projected_at) >= 600") || !strings.Contains(queries[1], "GROUP BY tenant_key, site_key, point_key, dirty_bucket") {
 		t.Fatalf("unexpected ClickHouse queries: %v", queries)
+	}
+	atSeqBuckets, err := src.ListBackfillDirtyBucketsAtSequence(context.Background(), 42, 600, &BackfillBucketCursor{
+		TenantID: "01910000-0000-7000-8000-000000000001", SiteID: "01910000-0000-7000-8000-000000000002", PointID: "01910000-0000-7000-8000-000000000000", BucketStart: time.Date(2026, 10, 12, 16, 0, 0, 0, time.UTC),
+	}, 2048)
+	if err != nil || len(atSeqBuckets) != 1 {
+		t.Fatalf("ListBackfillDirtyBucketsAtSequence=(%+v, %v)", atSeqBuckets, err)
+	}
+	if !strings.Contains(queries[2], "HAVING (tenant_key, site_key, point_key, dirty_bucket) >") {
+		t.Fatalf("ListBackfillDirtyBucketsAtSequence missing non-colliding HAVING alias:\n%s", queries[2])
 	}
 }

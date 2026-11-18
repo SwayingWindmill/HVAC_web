@@ -370,10 +370,8 @@ func (d *BackfillRecalcDetector) buildCandidates(ctx context.Context, buckets []
 			bStart := bucket.BucketStart
 			bEnd := bStart.Add(backfillBucketDuration)
 			for _, binding := range matched {
-				if binding.EffectiveFrom.After(bEnd) || (binding.EffectiveTo != nil && !binding.EffectiveTo.After(bStart)) {
-					continue
-				}
-				if binding.VersionFrom.After(bEnd) || (binding.VersionTo != nil && !binding.VersionTo.After(bStart)) {
+				if !windowOverlaps(binding.EffectiveFrom, binding.EffectiveTo, bStart, bEnd) ||
+					!windowOverlaps(binding.VersionFrom, binding.VersionTo, bStart, bEnd) {
 					continue
 				}
 				tz := strings.TrimSpace(binding.Timezone)
@@ -392,10 +390,8 @@ func (d *BackfillRecalcDetector) buildCandidates(ctx context.Context, buckets []
 
 				periods := alignedPeriodsForBucket(binding.Granularity, loc, bStart, bEnd)
 				for _, period := range periods {
-					if binding.EffectiveFrom.After(period.Start) || (binding.EffectiveTo != nil && !binding.EffectiveTo.After(period.Start)) {
-						continue
-					}
-					if binding.VersionFrom.After(period.Start) || (binding.VersionTo != nil && !binding.VersionTo.After(period.Start)) {
+					if !windowOverlaps(binding.EffectiveFrom, binding.EffectiveTo, period.Start, period.Start) ||
+						!windowOverlaps(binding.VersionFrom, binding.VersionTo, period.Start, period.Start) {
 						continue
 					}
 					if period.End.After(cutoff) {
@@ -469,13 +465,23 @@ func alignedPeriodsForBucket(granularity string, loc *time.Location, bucketStart
 		if endUTC.After(bucketStart) && startUTC.Before(bucketEnd) && endUTC.After(startUTC) {
 			periods = append(periods, Period{Start: startUTC, End: endUTC})
 		}
-		nextStart, nextEnd := nextPeriod(g, wStart, wEnd, loc)
+		nextStart, nextEnd := periodContaining(g, wEnd.In(loc), loc)
 		if !nextStart.After(wStart) || !nextEnd.After(nextStart) {
 			break
 		}
 		wStart, wEnd = nextStart, nextEnd
 	}
 	return periods
+}
+
+func windowOverlaps(from time.Time, to *time.Time, start, end time.Time) bool {
+	if from.After(end) {
+		return false
+	}
+	if to != nil && !to.After(start) {
+		return false
+	}
+	return true
 }
 
 func periodContaining(granularity string, local time.Time, loc *time.Location) (time.Time, time.Time) {
@@ -506,33 +512,6 @@ func periodContaining(granularity string, local time.Time, loc *time.Location) (
 		return start, start.AddDate(0, 3, 0)
 	case "YEAR":
 		start := time.Date(local.Year(), time.January, 1, 0, 0, 0, 0, loc)
-		return start, start.AddDate(1, 0, 0)
-	default:
-		return time.Time{}, time.Time{}
-	}
-}
-
-func nextPeriod(granularity string, prevStart, prevEnd time.Time, loc *time.Location) (time.Time, time.Time) {
-	switch granularity {
-	case "1MIN":
-		return prevEnd, prevEnd.Add(time.Minute)
-	case "5MIN":
-		return prevEnd, prevEnd.Add(5 * time.Minute)
-	case "15MIN":
-		return prevEnd, prevEnd.Add(15 * time.Minute)
-	case "HOUR":
-		return prevEnd, prevEnd.Add(time.Hour)
-	case "DAY":
-		start := time.Date(prevEnd.Year(), prevEnd.Month(), prevEnd.Day(), 0, 0, 0, 0, loc)
-		return start, start.AddDate(0, 0, 1)
-	case "MONTH":
-		start := time.Date(prevEnd.Year(), prevEnd.Month(), 1, 0, 0, 0, 0, loc)
-		return start, start.AddDate(0, 1, 0)
-	case "QUARTER":
-		start := time.Date(prevEnd.Year(), prevEnd.Month(), 1, 0, 0, 0, 0, loc)
-		return start, start.AddDate(0, 3, 0)
-	case "YEAR":
-		start := time.Date(prevEnd.Year(), time.January, 1, 0, 0, 0, 0, loc)
 		return start, start.AddDate(1, 0, 0)
 	default:
 		return time.Time{}, time.Time{}
@@ -731,7 +710,7 @@ WHERE NOT EXISTS (
   SELECT 1
   FROM core_registry.job_instances j
   WHERE j.job_type = 'METRIC_RECALC'
-    AND j.state IN ('PENDING','READY','CLAIMED','RUNNING','RETRY_WAIT')
+    AND j.state IN ('PENDING','READY','RETRY_WAIT')
     AND j.tenant_id = $2::uuid
     AND j.site_id = $3::uuid
     AND j.payload->>'bindingId' = $14
@@ -775,31 +754,7 @@ func NewClickHouseBackfillSource(baseURL, user, password string, client *http.Cl
 }
 
 func (s *ClickHouseBackfillSource) query(ctx context.Context, sql string) ([]byte, error) {
-	u := *s.base
-	q := u.Query()
-	q.Set("query", sql)
-	q.Set("date_time_output_format", "iso")
-	u.RawQuery = q.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-	if s.user != "" {
-		req.SetBasicAuth(s.user, s.password)
-	}
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode/100 != 2 {
-		return nil, fmt.Errorf("metric backfill ClickHouse query returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-	return body, nil
+	return doClickHouseHTTPQuery(ctx, s.base, s.user, s.password, s.client, http.MethodGet, sql, 4<<20, "metric backfill ClickHouse query")
 }
 
 // MaxHistorySequence returns the maximum observed history_sequence in telemetry_history.observations.
@@ -863,26 +818,8 @@ func (s *ClickHouseBackfillSource) ListBackfillDirtyBuckets(
 	minLagSeconds int64,
 	limit int,
 ) ([]BackfillDirtyBucket, error) {
-	if limit <= 0 {
-		limit = defaultBackfillPageLimit
-	}
-	sql := fmt.Sprintf(`SELECT
-  max(history_sequence) AS max_seq,
-  toString(assumeNotNull(tenant_id)) AS tenant_id,
-  toString(assumeNotNull(site_id)) AS site_id,
-  toString(assumeNotNull(point_id)) AS point_id,
-  toStartOfInterval(sampled_at, INTERVAL 15 MINUTE, 'UTC') AS dirty_bucket
-FROM telemetry_history.observations
-WHERE history_sequence > %d
-  AND history_sequence <= %d
-  AND acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER')
-  AND tenant_id IS NOT NULL AND site_id IS NOT NULL AND point_id IS NOT NULL
-  AND dateDiff('second', sampled_at, projected_at) >= %d
-GROUP BY tenant_id, site_id, point_id, dirty_bucket
-ORDER BY max_seq ASC
-LIMIT %d
-FORMAT JSONEachRow`, afterSeq, throughSeq, minLagSeconds, limit)
-	return s.queryDirtyBucketRows(ctx, sql)
+	where := fmt.Sprintf("obs.history_sequence > %d AND obs.history_sequence <= %d", afterSeq, throughSeq)
+	return s.listDirtyBuckets(ctx, where, minLagSeconds, "", "max_seq ASC", limit)
 }
 
 // ListBackfillDirtyBucketsAtSequence paginates dirty buckets within a single history_sequence.
@@ -893,34 +830,55 @@ func (s *ClickHouseBackfillSource) ListBackfillDirtyBucketsAtSequence(
 	afterKey *BackfillBucketCursor,
 	limit int,
 ) ([]BackfillDirtyBucket, error) {
-	if limit <= 0 {
-		limit = defaultBackfillPageLimit
-	}
+	where := fmt.Sprintf("obs.history_sequence = %d", seq)
 	having := ""
 	if afterKey != nil {
 		having = fmt.Sprintf(
-			"HAVING (tenant_id, site_id, point_id, dirty_bucket) > (%s, %s, %s, toStartOfInterval(parseDateTimeBestEffort(%s, 'UTC'), INTERVAL 15 MINUTE, 'UTC'))\n",
-			quoteStringSQL(afterKey.TenantID),
-			quoteStringSQL(afterKey.SiteID),
-			quoteStringSQL(afterKey.PointID),
-			quoteStringSQL(afterKey.BucketStart.UTC().Format(time.RFC3339)),
+			"HAVING (tenant_key, site_key, point_key, dirty_bucket) > (%s, %s, %s, toStartOfInterval(parseDateTimeBestEffort(%s, 'UTC'), INTERVAL 15 MINUTE, 'UTC'))\n",
+			quote(afterKey.TenantID),
+			quote(afterKey.SiteID),
+			quote(afterKey.PointID),
+			quote(afterKey.BucketStart.UTC().Format(time.RFC3339)),
 		)
 	}
+	return s.listDirtyBuckets(ctx, where, minLagSeconds, having, "tenant_key ASC, site_key ASC, point_key ASC, dirty_bucket ASC", limit)
+}
+
+func (s *ClickHouseBackfillSource) listDirtyBuckets(
+	ctx context.Context,
+	seqPredicate string,
+	minLagSeconds int64,
+	havingClause string,
+	orderByClause string,
+	limit int,
+) ([]BackfillDirtyBucket, error) {
+	if limit <= 0 {
+		limit = defaultBackfillPageLimit
+	}
 	sql := fmt.Sprintf(`SELECT
-  max(history_sequence) AS max_seq,
-  toString(assumeNotNull(tenant_id)) AS tenant_id,
-  toString(assumeNotNull(site_id)) AS site_id,
-  toString(assumeNotNull(point_id)) AS point_id,
-  toStartOfInterval(sampled_at, INTERVAL 15 MINUTE, 'UTC') AS dirty_bucket
-FROM telemetry_history.observations
-WHERE history_sequence = %d
-  AND acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER')
-  AND tenant_id IS NOT NULL AND site_id IS NOT NULL AND point_id IS NOT NULL
-  AND dateDiff('second', sampled_at, projected_at) >= %d
-GROUP BY tenant_id, site_id, point_id, dirty_bucket
-%sORDER BY tenant_id ASC, site_id ASC, point_id ASC, dirty_bucket ASC
+  max_seq,
+  tenant_key AS tenant_id,
+  site_key AS site_id,
+  point_key AS point_id,
+  dirty_bucket
+FROM (
+  SELECT
+    max(obs.history_sequence) AS max_seq,
+    toString(assumeNotNull(obs.tenant_id)) AS tenant_key,
+    toString(assumeNotNull(obs.site_id)) AS site_key,
+    toString(assumeNotNull(obs.point_id)) AS point_key,
+    toStartOfInterval(obs.sampled_at, INTERVAL 15 MINUTE, 'UTC') AS dirty_bucket
+  FROM telemetry_history.observations AS obs
+  WHERE %s
+    AND obs.acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER')
+    AND obs.tenant_id IS NOT NULL AND obs.site_id IS NOT NULL AND obs.point_id IS NOT NULL
+    AND dateDiff('second', obs.sampled_at, obs.projected_at) >= %d
+  GROUP BY tenant_key, site_key, point_key, dirty_bucket
+  %s
+)
+ORDER BY %s
 LIMIT %d
-FORMAT JSONEachRow`, seq, minLagSeconds, having, limit)
+FORMAT JSONEachRow`, seqPredicate, minLagSeconds, havingClause, orderByClause, limit)
 	return s.queryDirtyBucketRows(ctx, sql)
 }
 
@@ -964,8 +922,4 @@ func parseClickHouseBucketTime(value string) (time.Time, error) {
 		}
 	}
 	return time.Time{}, errors.New("unsupported ClickHouse timestamp format")
-}
-
-func quoteStringSQL(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 }

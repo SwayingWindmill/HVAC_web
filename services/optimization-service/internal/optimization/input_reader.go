@@ -73,27 +73,6 @@ func NewClickHouseInputReader(config InputReaderConfig) (*ClickHouseInputReader,
 	}, nil
 }
 
-func (reader *ClickHouseInputReader) WithLiveObservations(liveObservations TelemetryLiveObservationReader) *ClickHouseInputReader {
-	if reader != nil {
-		reader.liveObservations = liveObservations
-	}
-	return reader
-}
-
-func (reader *ClickHouseInputReader) WithNow(now func() time.Time) *ClickHouseInputReader {
-	if reader != nil {
-		reader.now = now
-	}
-	return reader
-}
-
-func (reader *ClickHouseInputReader) currentTime() time.Time {
-	if reader != nil && reader.now != nil {
-		return reader.now().UTC()
-	}
-	return time.Now().UTC()
-}
-
 func (reader *ClickHouseInputReader) ReadOptimizationState(ctx context.Context, query OptimizationStateQuery) (AuthoritativeState, error) {
 	if reader == nil || reader.baseURL == nil || reader.client == nil {
 		return AuthoritativeState{}, errors.New("optimization authoritative input reader is unavailable")
@@ -112,7 +91,7 @@ func (reader *ClickHouseInputReader) ReadOptimizationState(ctx context.Context, 
 		return AuthoritativeState{}, err
 	}
 	useLive, liveResult, liveAmbiguous := reader.readLiveObservationsBatch(ctx, query, zoneKeys)
-	supplyTemperature, err := reader.readStateTelemetry(ctx, query, query.SupplyTemperatureKey, ReasonSupplyTempMissing, useLive, liveResult, liveAmbiguous)
+	supplyTemperature, _, err := reader.readStateTelemetry(ctx, query, query.SupplyTemperatureKey, ReasonSupplyTempMissing, useLive, liveResult, liveAmbiguous)
 	if err != nil {
 		return AuthoritativeState{}, err
 	}
@@ -122,15 +101,17 @@ func (reader *ClickHouseInputReader) ReadOptimizationState(ctx context.Context, 
 	zoneTemperatures := make([]TelemetryEvidence, 0, len(zoneKeys))
 	var worstZone TelemetryEvidence
 	for idx, key := range zoneKeys {
-		zoneObs, zoneErr := reader.readStateTelemetry(ctx, query, key, ReasonZoneTempMissing, useLive, liveResult, liveAmbiguous)
+		zoneObs, fromLive, zoneErr := reader.readStateTelemetry(ctx, query, key, ReasonZoneTempMissing, useLive, liveResult, liveAmbiguous)
 		if zoneErr != nil {
 			return AuthoritativeState{}, zoneErr
 		}
-		if reason, unhealthy := telemetryHealthBlockReason(zoneObs.HealthStatus, zoneObs.QualityReasons); unhealthy {
-			return AuthoritativeState{}, unavailable(ReasonInputsInvalid, "authoritative telemetry %s is unhealthy (%s)", key, reason)
-		}
-		if validErr := validateTelemetryEvidence(zoneObs, key, query.At); validErr != nil {
-			return AuthoritativeState{}, unavailable(ReasonZoneTempMissing, "%v", validErr)
+		if !fromLive {
+			if reason, unhealthy := telemetryHealthBlockReason(zoneObs.HealthStatus, zoneObs.QualityReasons); unhealthy {
+				return AuthoritativeState{}, unavailable(ReasonInputsInvalid, "authoritative telemetry %s is unhealthy (%s)", key, reason)
+			}
+			if validErr := validateTelemetryEvidence(zoneObs, key, query.At); validErr != nil {
+				return AuthoritativeState{}, unavailable(ReasonZoneTempMissing, "%v", validErr)
+			}
 		}
 		zoneTemperatures = append(zoneTemperatures, zoneObs)
 		if idx == 0 || zoneObs.Value > worstZone.Value {
@@ -153,7 +134,7 @@ func (reader *ClickHouseInputReader) readLiveObservationsBatch(
 	if reader.liveObservations == nil {
 		return false, OptimizationLiveObservationsResult{}, nil
 	}
-	if reader.currentTime().Sub(query.At.UTC()) > DefaultPreparationMaxTelemetryAge {
+	if reader.now().UTC().Sub(query.At.UTC()) > DefaultPreparationMaxTelemetryAge {
 		return false, OptimizationLiveObservationsResult{}, nil
 	}
 	keys := make([]string, 0, 1+len(zoneKeys))
@@ -183,25 +164,26 @@ func (reader *ClickHouseInputReader) readStateTelemetry(
 	useLive bool,
 	liveResult OptimizationLiveObservationsResult,
 	liveAmbiguous map[string]struct{},
-) (TelemetryEvidence, error) {
+) (TelemetryEvidence, bool, error) {
 	if useLive {
 		if _, ambiguous := liveAmbiguous[telemetryKey]; ambiguous {
-			return TelemetryEvidence{}, unavailable(missing, "authoritative telemetry %s resolves to multiple Points", telemetryKey)
+			return TelemetryEvidence{}, false, unavailable(missing, "authoritative telemetry %s resolves to multiple Points", telemetryKey)
 		}
 		if liveObs, found := liveResult.Observations[telemetryKey]; found {
 			evidence, usable, err := convertLiveObservation(liveObs, telemetryKey, query.At)
 			if err != nil {
-				return TelemetryEvidence{}, err
+				return TelemetryEvidence{}, false, err
 			}
 			if usable {
 				if validErr := validateTelemetryEvidence(evidence, telemetryKey, query.At); validErr != nil {
-					return TelemetryEvidence{}, unavailable(missing, "%v", validErr)
+					return TelemetryEvidence{}, false, unavailable(missing, "%v", validErr)
 				}
-				return evidence, nil
+				return evidence, true, nil
 			}
 		}
 	}
-	return reader.readTelemetry(ctx, query, telemetryKey, missing)
+	evidence, err := reader.readTelemetry(ctx, query, telemetryKey, missing)
+	return evidence, false, err
 }
 
 func convertLiveObservation(obs OptimizationLiveObservation, expectedKey string, at time.Time) (TelemetryEvidence, bool, error) {
@@ -239,11 +221,10 @@ func convertLiveObservation(obs OptimizationLiveObservation, expectedKey string,
 		SourcePartition: obs.SourcePartition,
 		SourceOffset:    obs.SourceOffset,
 	}
-	if reason, unhealthy := telemetryHealthBlockReason(evidence.HealthStatus, evidence.QualityReasons); unhealthy {
-		return TelemetryEvidence{}, true, unavailable(ReasonInputsInvalid, "authoritative telemetry %s is unhealthy (%s)", expectedKey, reason)
-	}
-	if reason, unhealthy := telemetryHealthBlockReason(evidence.HealthStatus, obs.HealthReasons); unhealthy {
-		return TelemetryEvidence{}, true, unavailable(ReasonInputsInvalid, "authoritative telemetry %s is unhealthy (%s)", expectedKey, reason)
+	for _, reasonSet := range [][]string{evidence.QualityReasons, obs.HealthReasons} {
+		if reason, unhealthy := telemetryHealthBlockReason(evidence.HealthStatus, reasonSet); unhealthy {
+			return TelemetryEvidence{}, true, unavailable(ReasonInputsInvalid, "authoritative telemetry %s is unhealthy (%s)", expectedKey, reason)
+		}
 	}
 	return evidence, true, nil
 }

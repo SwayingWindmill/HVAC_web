@@ -15,19 +15,42 @@ const (
 	maximumOptimizationHealthScopeItems  = 256
 )
 
-func (h *handler) handleOptimizationPointHealth(writer http.ResponseWriter, request *http.Request) {
+func (h *handler) authenticateOptimizationServicePost(writer http.ResponseWriter, request *http.Request, untrustedDetail string) bool {
 	if request.Method != http.MethodPost {
 		writer.Header().Set("Allow", http.MethodPost)
 		writeProblem(writer, request, http.StatusMethodNotAllowed, "TELEMETRY_METHOD_NOT_ALLOWED", "This telemetry route only supports POST.", false)
-		return
+		return false
 	}
 	if hasForgedIdentityHeader(request.Header) {
 		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_FORGED_IDENTITY_HEADER", "Caller-supplied identity headers are not accepted.", false)
-		return
+		return false
 	}
 	peer, verified := verifiedPeerSPIFFE(request)
 	if !verified || peer == "" || peer != h.allowedOptimizationServiceSPIFFE {
-		writeProblem(writer, request, http.StatusUnauthorized, "TELEMETRY_WORKLOAD_IDENTITY_INVALID", "The calling workload identity is not trusted for optimization point health inspection.", false)
+		writeProblem(writer, request, http.StatusUnauthorized, "TELEMETRY_WORKLOAD_IDENTITY_INVALID", untrustedDetail, false)
+		return false
+	}
+	return true
+}
+
+func decodeOptimizationJSONRequest(writer http.ResponseWriter, request *http.Request, dst any, maxBytes int64, code, contentTypeDetail, malformedDetail string) bool {
+	mediaType, _, err := mime.ParseMediaType(strings.TrimSpace(request.Header.Get("Content-Type")))
+	if err != nil || mediaType != "application/json" {
+		writeProblem(writer, request, http.StatusBadRequest, code, contentTypeDetail, false)
+		return false
+	}
+	request.Body = http.MaxBytesReader(writer, request.Body, maxBytes)
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(dst); err != nil || ensureJSONEOF(decoder) != nil {
+		writeProblem(writer, request, http.StatusBadRequest, code, malformedDetail, false)
+		return false
+	}
+	return true
+}
+
+func (h *handler) handleOptimizationPointHealth(writer http.ResponseWriter, request *http.Request) {
+	if !h.authenticateOptimizationServicePost(writer, request, "The calling workload identity is not trusted for optimization point health inspection.") {
 		return
 	}
 	if h.pointHealthInspector == nil {
@@ -47,17 +70,16 @@ func (h *handler) handleOptimizationPointHealth(writer http.ResponseWriter, requ
 }
 
 func decodeOptimizationPointHealthRequest(writer http.ResponseWriter, request *http.Request) (OptimizationPointHealthRequest, bool) {
-	mediaType, _, err := mime.ParseMediaType(strings.TrimSpace(request.Header.Get("Content-Type")))
-	if err != nil || mediaType != "application/json" {
-		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_OPTIMIZATION_HEALTH_REQUEST_INVALID", "The optimization point health request must use application/json.", false)
-		return OptimizationPointHealthRequest{}, false
-	}
-	request.Body = http.MaxBytesReader(writer, request.Body, maximumOptimizationHealthRequestSize)
-	decoder := json.NewDecoder(request.Body)
-	decoder.DisallowUnknownFields()
 	var req OptimizationPointHealthRequest
-	if err := decoder.Decode(&req); err != nil || ensureJSONEOF(decoder) != nil {
-		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_OPTIMIZATION_HEALTH_REQUEST_INVALID", "The optimization point health request is malformed.", false)
+	if !decodeOptimizationJSONRequest(
+		writer,
+		request,
+		&req,
+		maximumOptimizationHealthRequestSize,
+		"TELEMETRY_OPTIMIZATION_HEALTH_REQUEST_INVALID",
+		"The optimization point health request must use application/json.",
+		"The optimization point health request is malformed.",
+	) {
 		return OptimizationPointHealthRequest{}, false
 	}
 	req.TenantID = strings.TrimSpace(req.TenantID)

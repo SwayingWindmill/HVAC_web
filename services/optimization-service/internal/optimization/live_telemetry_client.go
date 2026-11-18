@@ -1,19 +1,11 @@
 package optimization
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
-
-	"github.com/quanlaihe/hvac-web/libs/observability"
-	"github.com/quanlaihe/hvac-web/libs/workloadtls"
 )
 
 const InternalOptimizationLiveObservationsPath = "/internal/v1/telemetry/optimization/live-observations:read"
@@ -26,6 +18,7 @@ type OptimizationLiveObservation struct {
 	PointRevision   uint64   `json:"pointRevision"`
 	SampledAt       string   `json:"sampledAt"`
 	ReceivedAt      string   `json:"receivedAt"`
+	HealthAt        string   `json:"healthAt,omitempty"`
 	Value           float64  `json:"value"`
 	Unit            string   `json:"unit"`
 	Quality         string   `json:"quality"`
@@ -69,36 +62,18 @@ type optimizationLiveObservationsRequest struct {
 }
 
 func NewWorkloadTelemetryLiveClient(config TelemetryLiveClientConfig) (*WorkloadTelemetryLiveClient, error) {
-	baseURL := strings.TrimRight(strings.TrimSpace(config.TelemetryURL), "/")
-	if baseURL == "" {
-		return nil, errors.New("telemetry live client requires TelemetryURL")
-	}
-	parsed, err := url.Parse(baseURL)
-	if err != nil || parsed.Hostname() == "" {
-		return nil, fmt.Errorf("invalid TelemetryURL %q", baseURL)
-	}
-	httpClient := config.HTTPClient
-	if httpClient == nil {
-		serverName := strings.TrimSpace(config.ServerName)
-		if serverName == "" {
-			serverName = parsed.Hostname()
-		}
-		timeout := config.Timeout
-		if timeout <= 0 {
-			timeout = 10 * time.Second
-		}
-		httpClient, err = workloadtls.NewHTTPClient(workloadtls.ClientConfig{
-			CertificateFiles: &workloadtls.CertificateFiles{
-				CertificatePath: config.CertificatePath,
-				PrivateKeyPath:  config.PrivateKeyPath,
-			},
-			ServerCAPath: config.CAPath,
-			ServerName:   serverName,
-			Timeout:      timeout,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("create telemetry live mTLS client: %w", err)
-		}
+	baseURL, httpClient, err := resolveWorkloadTelemetryHTTPClient(
+		config.TelemetryURL,
+		config.CertificatePath,
+		config.PrivateKeyPath,
+		config.CAPath,
+		config.ServerName,
+		config.Timeout,
+		config.HTTPClient,
+		"telemetry live client",
+	)
+	if err != nil {
+		return nil, err
 	}
 	return &WorkloadTelemetryLiveClient{
 		baseURL:    baseURL,
@@ -122,42 +97,21 @@ func (client *WorkloadTelemetryLiveClient) ReadLiveObservations(ctx context.Cont
 		}, nil
 	}
 
-	payload, err := json.Marshal(optimizationLiveObservationsRequest{
-		TenantID:      tenant,
-		SiteID:        site,
-		TelemetryKeys: cleanKeys,
-	})
-	if err != nil {
-		return OptimizationLiveObservationsResult{}, err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, client.baseURL+InternalOptimizationLiveObservationsPath, bytes.NewReader(payload))
-	if err != nil {
-		return OptimizationLiveObservationsResult{}, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, application/problem+json")
-	observability.InjectHTTP(ctx, req.Header)
-
-	resp, err := client.httpClient.Do(req)
-	if err != nil {
-		return OptimizationLiveObservationsResult{}, fmt.Errorf("request telemetry live observations: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maximumOptimizationInputResponseBytes+1))
-	if err != nil {
-		return OptimizationLiveObservationsResult{}, fmt.Errorf("read telemetry live observations response: %w", err)
-	}
-	if int64(len(body)) > maximumOptimizationInputResponseBytes {
-		return OptimizationLiveObservationsResult{}, fmt.Errorf("telemetry live observations response exceeds %d MiB", maximumOptimizationInputResponseBytes>>20)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return OptimizationLiveObservationsResult{}, fmt.Errorf("telemetry live observations returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-
 	var result OptimizationLiveObservationsResult
-	if err := json.Unmarshal(body, &result); err != nil {
-		return OptimizationLiveObservationsResult{}, fmt.Errorf("decode telemetry live observations response: %w", err)
+	if err := postWorkloadTelemetryJSON(
+		ctx,
+		client.httpClient,
+		client.baseURL+InternalOptimizationLiveObservationsPath,
+		optimizationLiveObservationsRequest{
+			TenantID:      tenant,
+			SiteID:        site,
+			TelemetryKeys: cleanKeys,
+		},
+		&result,
+		maximumOptimizationInputResponseBytes,
+		"telemetry live observations",
+	); err != nil {
+		return OptimizationLiveObservationsResult{}, err
 	}
 	if result.Observations == nil {
 		result.Observations = map[string]OptimizationLiveObservation{}

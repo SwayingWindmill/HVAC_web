@@ -2,10 +2,8 @@ package telemetry
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"math"
-	"mime"
 	"net/http"
 	"slices"
 	"strings"
@@ -187,6 +185,12 @@ WHERE d.tenant_id = $1::uuid
   AND p.site_id = $2::uuid
   AND p.telemetry_key = ANY($3::text[])
   AND p.value_type = 'NUMBER'
+  AND EXISTS (
+    SELECT 1
+    FROM telemetry_runtime.latest_accepted_telemetry lat
+    WHERE lat.device_id = p.device_id
+      AND lat.telemetry_key = p.telemetry_key
+  )
 ORDER BY p.telemetry_key, p.updated_at DESC, p.point_id`, cleanTenant, cleanSite, cleanKeys)
 	if err != nil {
 		return nil, nil, err
@@ -289,6 +293,7 @@ SELECT
   COALESCE(lat.quality_reasons, '{}'),
   COALESCE(lat.health_status, ''),
   COALESCE(lat.health_reasons, '{}'),
+  COALESCE(lat.health_at, lat.sampled_at),
   so.observation_id::text,
   so.source_event_id::text,
   so.source_partition,
@@ -342,6 +347,7 @@ ORDER BY p.telemetry_key, p.point_id`, cleanTenant, cleanSite, cleanPointIDs)
 			qualityReasons  []string
 			healthStatus    string
 			healthReasons   []string
+			healthAt        time.Time
 			observationID   string
 			sourceEventID   string
 			sourcePartition string
@@ -350,7 +356,7 @@ ORDER BY p.telemetry_key, p.point_id`, cleanTenant, cleanSite, cleanPointIDs)
 		if scanErr := rows.Scan(
 			&deviceID, &pointID, &telemetryKey, &pointRevision,
 			&rawValue, &valueType, &unit, &sampledAt, &receivedAt,
-			&quality, &qualityReasons, &healthStatus, &healthReasons,
+			&quality, &qualityReasons, &healthStatus, &healthReasons, &healthAt,
 			&observationID, &sourceEventID, &sourcePartition, &sourceOffset,
 		); scanErr != nil {
 			rows.Close()
@@ -392,6 +398,7 @@ ORDER BY p.telemetry_key, p.point_id`, cleanTenant, cleanSite, cleanPointIDs)
 			PointRevision:   uint64(pointRevision),
 			SampledAt:       sampledAt.UTC().Format(time.RFC3339Nano),
 			ReceivedAt:      receivedAt.UTC().Format(time.RFC3339Nano),
+			HealthAt:        healthAt.UTC().Format(time.RFC3339Nano),
 			Value:           number,
 			Unit:            unit,
 			Quality:         quality,
@@ -416,18 +423,7 @@ ORDER BY p.telemetry_key, p.point_id`, cleanTenant, cleanSite, cleanPointIDs)
 }
 
 func (h *handler) handleOptimizationLiveObservations(writer http.ResponseWriter, request *http.Request) {
-	if request.Method != http.MethodPost {
-		writer.Header().Set("Allow", http.MethodPost)
-		writeProblem(writer, request, http.StatusMethodNotAllowed, "TELEMETRY_METHOD_NOT_ALLOWED", "This telemetry route only supports POST.", false)
-		return
-	}
-	if hasForgedIdentityHeader(request.Header) {
-		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_FORGED_IDENTITY_HEADER", "Caller-supplied identity headers are not accepted.", false)
-		return
-	}
-	peer, verified := verifiedPeerSPIFFE(request)
-	if !verified || peer == "" || peer != h.allowedOptimizationServiceSPIFFE {
-		writeProblem(writer, request, http.StatusUnauthorized, "TELEMETRY_WORKLOAD_IDENTITY_INVALID", "The calling workload identity is not trusted for optimization live observation reads.", false)
+	if !h.authenticateOptimizationServicePost(writer, request, "The calling workload identity is not trusted for optimization live observation reads.") {
 		return
 	}
 	if h.liveObservationReader == nil {
@@ -450,17 +446,16 @@ func (h *handler) handleOptimizationLiveObservations(writer http.ResponseWriter,
 }
 
 func decodeOptimizationLiveObservationsRequest(writer http.ResponseWriter, request *http.Request) (OptimizationLiveObservationsRequest, bool) {
-	mediaType, _, err := mime.ParseMediaType(strings.TrimSpace(request.Header.Get("Content-Type")))
-	if err != nil || mediaType != "application/json" {
-		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_LIVE_OBSERVATIONS_REQUEST_INVALID", "The optimization live observations request must use application/json.", false)
-		return OptimizationLiveObservationsRequest{}, false
-	}
-	request.Body = http.MaxBytesReader(writer, request.Body, maximumOptimizationLiveRequestSize)
-	decoder := json.NewDecoder(request.Body)
-	decoder.DisallowUnknownFields()
 	var req OptimizationLiveObservationsRequest
-	if err := decoder.Decode(&req); err != nil || ensureJSONEOF(decoder) != nil {
-		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_LIVE_OBSERVATIONS_REQUEST_INVALID", "The optimization live observations request is malformed.", false)
+	if !decodeOptimizationJSONRequest(
+		writer,
+		request,
+		&req,
+		maximumOptimizationLiveRequestSize,
+		"TELEMETRY_LIVE_OBSERVATIONS_REQUEST_INVALID",
+		"The optimization live observations request must use application/json.",
+		"The optimization live observations request is malformed.",
+	) {
 		return OptimizationLiveObservationsRequest{}, false
 	}
 	req.TenantID = strings.ToLower(strings.TrimSpace(req.TenantID))
@@ -473,21 +468,14 @@ func decodeOptimizationLiveObservationsRequest(writer http.ResponseWriter, reque
 		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_LIVE_OBSERVATIONS_REQUEST_INVALID", "The optimization live observations request exceeds maximum scope size.", false)
 		return OptimizationLiveObservationsRequest{}, false
 	}
-	seen := make(map[string]struct{}, len(req.TelemetryKeys))
-	cleanKeys := make([]string, 0, len(req.TelemetryKeys))
 	for _, raw := range req.TelemetryKeys {
 		clean := strings.TrimSpace(raw)
 		if clean == "" || len(clean) > 256 {
 			writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_LIVE_OBSERVATIONS_REQUEST_INVALID", "Every telemetryKey in optimization live observation requests must be non-empty.", false)
 			return OptimizationLiveObservationsRequest{}, false
 		}
-		if _, dup := seen[clean]; dup {
-			continue
-		}
-		seen[clean] = struct{}{}
-		cleanKeys = append(cleanKeys, clean)
 	}
-	req.TelemetryKeys = cleanKeys
+	req.TelemetryKeys = normalizeUniqueStrings(req.TelemetryKeys)
 	return req, true
 }
 

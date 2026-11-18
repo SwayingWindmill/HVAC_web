@@ -251,7 +251,6 @@ func TestGatewayMailboxDualLanePriorityAndStarvationGuard(t *testing.T) {
 
 	now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
 
-	// Enqueue 2,500 replay messages (explicit v2 replay, compact v1 replay, and stale lag > 10m).
 	const replayCount = 2500
 	for i := 1; i <= replayCount; i++ {
 		var pub *paho.Publish
@@ -278,17 +277,16 @@ func TestGatewayMailboxDualLanePriorityAndStarvationGuard(t *testing.T) {
 		t.Fatalf("expected live spool %s to stay absent until live enqueue, err=%v", liveSpool, err)
 	}
 
-	// Enqueue 20 live messages: event, status, exact 10m boundary telemetry, and fresh telemetry.
 	const liveCount = 20
 	for i := 1; i <= liveCount; i++ {
 		seq := replayCount + i
 		var pub *paho.Publish
-		switch {
-		case i == 1:
+		switch i {
+		case 1:
 			pub = &paho.Publish{Topic: eventTopic(testGatewayA), Payload: eventPayload(testGatewayA, messageID(seq), seq), QoS: 1}
-		case i == 2:
+		case 2:
 			pub = &paho.Publish{Topic: "hvac/v1/" + testGatewayA + "/up/status", Payload: []byte(`{"online":true}`), QoS: 1}
-		case i == 3:
+		case 3:
 			pub = testLivePublishAt(testGatewayA, seq, now.Add(-10*time.Minute))
 		default:
 			pub = testLivePublishAt(testGatewayA, seq, now.Add(-time.Second))
@@ -319,7 +317,6 @@ func TestGatewayMailboxDualLanePriorityAndStarvationGuard(t *testing.T) {
 	}
 	mb.markBatchConsumed(batch)
 
-	// Drain remaining replay messages.
 	drained := len(batch)
 	for drained < replayCount+liveCount {
 		more, _, _, popErrs := mb.popBatch(256)
@@ -362,7 +359,6 @@ func TestGatewayMailboxRecoversBothLiveAndReplaySpoolsOnRestart(t *testing.T) {
 			t.Fatalf("enqueue live %d failed: %+v %v", i, res, err)
 		}
 	}
-	// Consume first 2 live items before simulating abrupt restart.
 	first, _, _, errs := mb.popBatch(2)
 	if errs != 0 || len(first) != 2 {
 		t.Fatalf("first pop len=%d errs=%d", len(first), errs)
@@ -389,7 +385,6 @@ func TestGatewayMailboxRecoversBothLiveAndReplaySpoolsOnRestart(t *testing.T) {
 	if errs != 0 || len(batch) != 15 {
 		t.Fatalf("recovered pop len=%d errs=%d", len(batch), errs)
 	}
-	// Expect 8 live, 1 replay, 2 remaining live, 4 replay.
 	for i := 0; i < 8; i++ {
 		if batch[i].isReplay {
 			t.Fatalf("batch[%d] unexpectedly replay", i)
@@ -431,5 +426,28 @@ func TestGatewayMailboxSharedBoundsAcrossLiveAndReplay(t *testing.T) {
 	shedRes, err := mb.enqueue(publish(testGatewayA, 6))
 	if err != nil || !shedRes.shed {
 		t.Fatalf("expected 6th combined message to shed, got res=%+v err=%v", shedRes, err)
+	}
+}
+
+func TestGatewayMailboxReservesLiveHeadroomUnderReplayFlood(t *testing.T) {
+	dir := t.TempDir()
+	mb := newGatewayMailbox(testGatewayA, 2, 16, 4<<20, dir)
+	t.Cleanup(func() { mb.close(true) })
+
+	for i := 1; i <= 16; i++ {
+		res, err := mb.enqueue(testReplayPublish(testGatewayA, i, false))
+		if err != nil || res.shed {
+			t.Fatalf("replay %d within reserved quota failed: %+v %v", i, res, err)
+		}
+	}
+	shedReplay, err := mb.enqueue(testReplayPublish(testGatewayA, 17, false))
+	if err != nil || !shedReplay.shed {
+		t.Fatalf("expected 17th replay to shed while preserving live reserve, got %+v err=%v", shedReplay, err)
+	}
+	for i := 101; i <= 102; i++ {
+		res, err := mb.enqueue(publish(testGatewayA, i))
+		if err != nil || res.shed {
+			t.Fatalf("reserved live slot %d failed: %+v %v", i, res, err)
+		}
 	}
 }

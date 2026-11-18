@@ -86,8 +86,12 @@ func (cache *memoryLatestCache) PutSiteLiveObservations(_ context.Context, tenan
 		if err != nil {
 			return err
 		}
-		if existing, ok := points[entry.PointID]; ok && entry.SampledMs < existing.SampledMs {
-			continue
+		newEffMs := max(entry.SampledMs, entry.HealthMs)
+		if existing, ok := points[entry.PointID]; ok {
+			curEffMs := max(existing.SampledMs, existing.HealthMs)
+			if newEffMs < curEffMs || (!existing.Invalidated && entry.SampledMs < existing.SampledMs) {
+				continue
+			}
 		}
 		points[entry.PointID] = entry
 	}
@@ -111,14 +115,14 @@ func (cache *memoryLatestCache) GetSiteLiveObservations(_ context.Context, tenan
 	out := make(map[string]OptimizationLiveObservation, len(cleanIDs))
 	points := cache.sitePoints[cleanTenant+":"+cleanSite]
 	for _, id := range cleanIDs {
-		if entry, ok := points[id]; ok {
+		if entry, ok := points[id]; ok && !entry.Invalidated {
 			out[id] = entry.OptimizationLiveObservation
 		}
 	}
 	return out, nil
 }
 
-func (cache *memoryLatestCache) DeleteSiteLiveObservations(_ context.Context, tenantID, siteID string, pointIDs []string) error {
+func (cache *memoryLatestCache) InvalidateSiteLiveObservations(_ context.Context, tenantID, siteID string, items []SiteLiveInvalidation) error {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 	if cache.putErr != nil {
@@ -128,13 +132,38 @@ func (cache *memoryLatestCache) DeleteSiteLiveObservations(_ context.Context, te
 	if err != nil {
 		return err
 	}
-	cleanIDs, err := normalizeSitePointIDs(pointIDs)
-	if err != nil {
-		return err
+	if cache.sitePoints == nil {
+		cache.sitePoints = map[string]map[string]cachedSiteLiveObservation{}
 	}
-	points := cache.sitePoints[cleanTenant+":"+cleanSite]
-	for _, id := range cleanIDs {
-		delete(points, id)
+	scopeKey := cleanTenant + ":" + cleanSite
+	points := cache.sitePoints[scopeKey]
+	if points == nil {
+		points = map[string]cachedSiteLiveObservation{}
+		cache.sitePoints[scopeKey] = points
+	}
+	for _, item := range items {
+		cleanID := strings.ToLower(strings.TrimSpace(item.PointID))
+		if !uuidPattern.MatchString(cleanID) {
+			return errors.New("telemetry site live cache pointId must be a UUID")
+		}
+		if item.SampledAt.IsZero() {
+			return errors.New("telemetry site live invalidation sampledAt is required")
+		}
+		ms := item.SampledAt.UTC().UnixMilli()
+		if existing, ok := points[cleanID]; ok {
+			curEffMs := max(existing.SampledMs, existing.HealthMs)
+			if ms < curEffMs || (!existing.Invalidated && ms < existing.SampledMs) {
+				continue
+			}
+		}
+		points[cleanID] = cachedSiteLiveObservation{
+			SampledMs:   ms,
+			HealthMs:    ms,
+			Invalidated: true,
+			OptimizationLiveObservation: OptimizationLiveObservation{
+				PointID: cleanID,
+			},
+		}
 	}
 	return nil
 }
@@ -418,7 +447,6 @@ func TestRedisSitePointsCacheKeyNormalizationAndCommands(t *testing.T) {
 					case "EVALSHA":
 						_, _ = io.WriteString(c, "-NOSCRIPT No matching script. Please use EVAL.\r\n")
 					case "EVAL":
-						// EVAL <script> <numkeys=1> <key> <ttl_ms> [<field> <sampled_ms> <payload>]...
 						hashKey := args[3]
 						var applied int64
 						mu.Lock()
@@ -427,15 +455,19 @@ func TestRedisSitePointsCacheKeyNormalizationAndCommands(t *testing.T) {
 							h = map[string]string{}
 							hashes[hashKey] = h
 						}
-						for i := 5; i+2 < len(args); i += 3 {
+						for i := 5; i+3 < len(args); i += 4 {
 							field := args[i]
-							newMs, _ := strconv.ParseInt(args[i+1], 10, 64)
-							payload := args[i+2]
+							newSampledMs, _ := strconv.ParseInt(args[i+1], 10, 64)
+							newEffMs, _ := strconv.ParseInt(args[i+2], 10, 64)
+							payload := args[i+3]
 							shouldApply := true
 							if curRaw, ok := h[field]; ok {
 								var cur cachedSiteLiveObservation
-								if json.Unmarshal([]byte(curRaw), &cur) == nil && newMs < cur.SampledMs {
-									shouldApply = false
+								if json.Unmarshal([]byte(curRaw), &cur) == nil {
+									curEffMs := max(cur.SampledMs, cur.HealthMs)
+									if newEffMs < curEffMs || (!cur.Invalidated && newSampledMs < cur.SampledMs) {
+										shouldApply = false
+									}
 								}
 							}
 							if shouldApply {
@@ -515,7 +547,6 @@ func TestRedisSitePointsCacheKeyNormalizationAndCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Older timestamp must not roll back cached sample.
 	older := obs1
 	older.SampledAt = t1.Add(-30 * time.Second).Format(time.RFC3339Nano)
 	older.Value = 99.9
@@ -523,7 +554,6 @@ func TestRedisSitePointsCacheKeyNormalizationAndCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Equal timestamp overwrites safely (for example, healthStatus update).
 	sameTimeUpdated := obs1
 	sameTimeUpdated.HealthStatus = HealthBad
 	sameTimeUpdated.HealthReasons = []string{"OUT_OF_RANGE"}
@@ -542,12 +572,35 @@ func TestRedisSitePointsCacheKeyNormalizationAndCommands(t *testing.T) {
 		t.Fatalf("expected miss for pointB, got %#v", got[pointB])
 	}
 
-	if err := cache.DeleteSiteLiveObservations(t.Context(), tenantA, siteA, []string{pointA}); err != nil {
+	rejectAt := t1.Add(15 * time.Second)
+	if err := cache.InvalidateSiteLiveObservations(t.Context(), tenantA, siteA, []SiteLiveInvalidation{{PointID: pointA, SampledAt: rejectAt}}); err != nil {
 		t.Fatal(err)
 	}
-	afterDelete, err := cache.GetSiteLiveObservations(t.Context(), tenantA, siteA, []string{pointA})
-	if err != nil || len(afterDelete) != 0 {
-		t.Fatalf("expected empty after delete, got=%#v err=%v", afterDelete, err)
+	afterInvalidate, err := cache.GetSiteLiveObservations(t.Context(), tenantA, siteA, []string{pointA})
+	if err != nil || len(afterInvalidate) != 0 {
+		t.Fatalf("expected empty after invalidate, got=%#v err=%v", afterInvalidate, err)
+	}
+
+	staleBackfill := obs1
+	staleBackfill.HealthAt = t1.Add(time.Second).Format(time.RFC3339Nano)
+	if err := cache.PutSiteLiveObservations(t.Context(), tenantA, siteA, []OptimizationLiveObservation{staleBackfill}); err != nil {
+		t.Fatal(err)
+	}
+	stillInvalidated, err := cache.GetSiteLiveObservations(t.Context(), tenantA, siteA, []string{pointA})
+	if err != nil || len(stillInvalidated) != 0 {
+		t.Fatalf("stale backfill must not overwrite newer invalidation tombstone: %#v err=%v", stillInvalidated, err)
+	}
+
+	postRejectPG := obs1
+	postRejectPG.HealthStatus = HealthBad
+	postRejectPG.HealthReasons = []string{"OUT_OF_RANGE"}
+	postRejectPG.HealthAt = rejectAt.Format(time.RFC3339Nano)
+	if err := cache.PutSiteLiveObservations(t.Context(), tenantA, siteA, []OptimizationLiveObservation{postRejectPG}); err != nil {
+		t.Fatal(err)
+	}
+	afterPostRejectBackfill, err := cache.GetSiteLiveObservations(t.Context(), tenantA, siteA, []string{pointA})
+	if err != nil || len(afterPostRejectBackfill) != 1 || afterPostRejectBackfill[pointA].HealthStatus != HealthBad {
+		t.Fatalf("expected post-rejection PG read to replace tombstone, got=%#v err=%v", afterPostRejectBackfill, err)
 	}
 
 	mu.Lock()

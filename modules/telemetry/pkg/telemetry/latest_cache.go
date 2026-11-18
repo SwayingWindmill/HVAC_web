@@ -78,17 +78,21 @@ var redisSiteLiveCAS = redis.NewScript(`
 local key = KEYS[1]
 local ttl_ms = tonumber(ARGV[1]) or 0
 local updated = 0
-for i = 2, #ARGV, 3 do
+for i = 2, #ARGV, 4 do
   local field = ARGV[i]
   local new_sampled_ms = tonumber(ARGV[i + 1]) or 0
-  local payload = ARGV[i + 2]
+  local new_eff_ms = tonumber(ARGV[i + 2]) or new_sampled_ms
+  local payload = ARGV[i + 3]
   local cur_raw = redis.call('HGET', key, field)
   local apply = true
   if cur_raw then
     local ok, cur_obj = pcall(cjson.decode, cur_raw)
     if ok and type(cur_obj) == 'table' then
-      local cur_sampled_ms = tonumber(cur_obj['sampledMs'])
-      if cur_sampled_ms ~= nil and new_sampled_ms < cur_sampled_ms then
+      local cur_sampled_ms = tonumber(cur_obj['sampledMs']) or 0
+      local cur_health_ms = tonumber(cur_obj['healthMs']) or cur_sampled_ms
+      local cur_eff_ms = math.max(cur_sampled_ms, cur_health_ms)
+      local cur_inv = (cur_obj['invalidated'] == true)
+      if new_eff_ms < cur_eff_ms or (not cur_inv and new_sampled_ms < cur_sampled_ms) then
         apply = false
       end
     end
@@ -112,6 +116,7 @@ type OptimizationLiveObservation struct {
 	PointRevision   uint64   `json:"pointRevision"`
 	SampledAt       string   `json:"sampledAt"`
 	ReceivedAt      string   `json:"receivedAt"`
+	HealthAt        string   `json:"healthAt,omitempty"`
 	Value           float64  `json:"value"`
 	Unit            string   `json:"unit"`
 	Quality         string   `json:"quality"`
@@ -124,8 +129,15 @@ type OptimizationLiveObservation struct {
 }
 
 type cachedSiteLiveObservation struct {
-	SampledMs int64 `json:"sampledMs"`
+	SampledMs   int64 `json:"sampledMs"`
+	HealthMs    int64 `json:"healthMs,omitempty"`
+	Invalidated bool  `json:"invalidated,omitempty"`
 	OptimizationLiveObservation
+}
+
+type SiteLiveInvalidation struct {
+	PointID   string
+	SampledAt time.Time
 }
 
 type LatestCache interface {
@@ -142,9 +154,9 @@ type SiteLiveCache interface {
 	GetSiteLiveObservations(context.Context, string, string, []string) (map[string]OptimizationLiveObservation, error)
 }
 
-// SiteLiveCacheDeleter removes invalidated point entries from the hot site-point cache.
-type SiteLiveCacheDeleter interface {
-	DeleteSiteLiveObservations(context.Context, string, string, []string) error
+// SiteLiveCacheInvalidator records monotonicity-guarded invalidation tombstones on the hot site-point cache.
+type SiteLiveCacheInvalidator interface {
+	InvalidateSiteLiveObservations(context.Context, string, string, []SiteLiveInvalidation) error
 }
 
 type RedisLatestCacheConfig struct {
@@ -298,7 +310,14 @@ func (cache *RedisLatestCache) Get(ctx context.Context, tenantID, siteID, device
 	return snapshot, nil
 }
 
-func (cache *RedisLatestCache) PutSiteLiveObservations(ctx context.Context, tenantID, siteID string, observations []OptimizationLiveObservation) error {
+type preparedSiteLiveEntry struct {
+	field     string
+	sampledMs string
+	effMs     string
+	payload   string
+}
+
+func (cache *RedisLatestCache) runSiteLiveCAS(ctx context.Context, tenantID, siteID string, entries []preparedSiteLiveEntry) error {
 	if cache == nil || cache.client == nil {
 		return ErrLatestCacheUnavailable
 	}
@@ -306,15 +325,36 @@ func (cache *RedisLatestCache) PutSiteLiveObservations(ctx context.Context, tena
 	if err != nil {
 		return err
 	}
-	if len(observations) == 0 {
+	if len(entries) == 0 {
 		return nil
 	}
-	type preparedEntry struct {
-		field     string
-		sampledMs string
-		payload   string
+	hashKey := cache.sitePointsKey(cleanTenant, cleanSite)
+	ttlMs := strconv.FormatInt(defaultLatestCacheTTL.Milliseconds(), 10)
+	const chunkSize = 256
+	for start := 0; start < len(entries); start += chunkSize {
+		end := min(start+chunkSize, len(entries))
+		chunk := entries[start:end]
+		args := make([]any, 0, 1+len(chunk)*4)
+		args = append(args, ttlMs)
+		for _, item := range chunk {
+			args = append(args, item.field, item.sampledMs, item.effMs, item.payload)
+		}
+		if err := redisSiteLiveCAS.Run(ctx, cache.client, []string{hashKey}, args...).Err(); err != nil {
+			return fmt.Errorf("materialize telemetry site live observations: %w", err)
+		}
 	}
-	entries := make([]preparedEntry, 0, len(observations))
+	return nil
+}
+
+func (cache *RedisLatestCache) PutSiteLiveObservations(ctx context.Context, tenantID, siteID string, observations []OptimizationLiveObservation) error {
+	if cache == nil || cache.client == nil {
+		return ErrLatestCacheUnavailable
+	}
+	if len(observations) == 0 {
+		_, _, err := normalizeSiteLiveScope(tenantID, siteID)
+		return err
+	}
+	entries := make([]preparedSiteLiveEntry, 0, len(observations))
 	for _, obs := range observations {
 		entry, err := normalizeCachedSiteLiveObservation(obs)
 		if err != nil {
@@ -324,31 +364,14 @@ func (cache *RedisLatestCache) PutSiteLiveObservations(ctx context.Context, tena
 		if err != nil {
 			return fmt.Errorf("encode telemetry site live observation: %w", err)
 		}
-		entries = append(entries, preparedEntry{
+		entries = append(entries, preparedSiteLiveEntry{
 			field:     entry.PointID,
 			sampledMs: strconv.FormatInt(entry.SampledMs, 10),
+			effMs:     strconv.FormatInt(max(entry.SampledMs, entry.HealthMs), 10),
 			payload:   string(encoded),
 		})
 	}
-	hashKey := cache.sitePointsKey(cleanTenant, cleanSite)
-	ttlMs := strconv.FormatInt(defaultLatestCacheTTL.Milliseconds(), 10)
-	const chunkSize = 256
-	for start := 0; start < len(entries); start += chunkSize {
-		end := start + chunkSize
-		if end > len(entries) {
-			end = len(entries)
-		}
-		chunk := entries[start:end]
-		args := make([]any, 0, 1+len(chunk)*3)
-		args = append(args, ttlMs)
-		for _, item := range chunk {
-			args = append(args, item.field, item.sampledMs, item.payload)
-		}
-		if err := redisSiteLiveCAS.Run(ctx, cache.client, []string{hashKey}, args...).Err(); err != nil {
-			return fmt.Errorf("materialize telemetry site live observations: %w", err)
-		}
-	}
-	return nil
+	return cache.runSiteLiveCAS(ctx, tenantID, siteID, entries)
 }
 
 func (cache *RedisLatestCache) GetSiteLiveObservations(ctx context.Context, tenantID, siteID string, pointIDs []string) (map[string]OptimizationLiveObservation, error) {
@@ -391,6 +414,9 @@ func (cache *RedisLatestCache) GetSiteLiveObservations(ctx context.Context, tena
 		if err := json.Unmarshal(rawBytes, &decoded); err != nil {
 			continue
 		}
+		if decoded.Invalidated {
+			continue
+		}
 		if math.IsNaN(decoded.Value) || math.IsInf(decoded.Value, 0) {
 			continue
 		}
@@ -406,25 +432,51 @@ func (cache *RedisLatestCache) GetSiteLiveObservations(ctx context.Context, tena
 	return out, nil
 }
 
-func (cache *RedisLatestCache) DeleteSiteLiveObservations(ctx context.Context, tenantID, siteID string, pointIDs []string) error {
+func (cache *RedisLatestCache) InvalidateSiteLiveObservations(ctx context.Context, tenantID, siteID string, items []SiteLiveInvalidation) error {
 	if cache == nil || cache.client == nil {
 		return ErrLatestCacheUnavailable
 	}
-	cleanTenant, cleanSite, err := normalizeSiteLiveScope(tenantID, siteID)
-	if err != nil {
+	if len(items) == 0 {
+		_, _, err := normalizeSiteLiveScope(tenantID, siteID)
 		return err
 	}
-	cleanIDs, err := normalizeSitePointIDs(pointIDs)
-	if err != nil {
-		return err
+	entries := make([]preparedSiteLiveEntry, 0, len(items))
+	seen := make(map[string]int, len(items))
+	for _, item := range items {
+		cleanID := strings.ToLower(strings.TrimSpace(item.PointID))
+		if !uuidPattern.MatchString(cleanID) {
+			return errors.New("telemetry site live cache pointId must be a UUID")
+		}
+		if item.SampledAt.IsZero() {
+			return errors.New("telemetry site live invalidation sampledAt is required")
+		}
+		ms := item.SampledAt.UTC().UnixMilli()
+		tombstone := cachedSiteLiveObservation{
+			SampledMs:   ms,
+			HealthMs:    ms,
+			Invalidated: true,
+			OptimizationLiveObservation: OptimizationLiveObservation{
+				PointID: cleanID,
+			},
+		}
+		encoded, err := json.Marshal(tombstone)
+		if err != nil {
+			return fmt.Errorf("encode telemetry site live invalidation: %w", err)
+		}
+		prepared := preparedSiteLiveEntry{
+			field:     cleanID,
+			sampledMs: strconv.FormatInt(ms, 10),
+			effMs:     strconv.FormatInt(ms, 10),
+			payload:   string(encoded),
+		}
+		if idx, exists := seen[cleanID]; exists {
+			entries[idx] = prepared
+		} else {
+			seen[cleanID] = len(entries)
+			entries = append(entries, prepared)
+		}
 	}
-	if len(cleanIDs) == 0 {
-		return nil
-	}
-	if err := cache.client.HDel(ctx, cache.sitePointsKey(cleanTenant, cleanSite), cleanIDs...).Err(); err != nil {
-		return fmt.Errorf("delete telemetry site live observations: %w", err)
-	}
-	return nil
+	return cache.runSiteLiveCAS(ctx, tenantID, siteID, entries)
 }
 
 func (cache *RedisLatestCache) key(tenantID, siteID, deviceID telemetryapi.UUIDv7) string {
@@ -503,6 +555,16 @@ func normalizeCachedSiteLiveObservation(obs OptimizationLiveObservation) (cached
 	} else {
 		normalized.ReceivedAt = ""
 	}
+	sampledMs := sampledAt.UTC().UnixMilli()
+	healthMs := sampledMs
+	if rawHealth := strings.TrimSpace(obs.HealthAt); rawHealth != "" {
+		healthAt, err := time.Parse(time.RFC3339Nano, rawHealth)
+		if err != nil {
+			return cachedSiteLiveObservation{}, fmt.Errorf("telemetry site live observation healthAt is invalid: %w", err)
+		}
+		normalized.HealthAt = healthAt.UTC().Format(time.RFC3339Nano)
+		healthMs = healthAt.UTC().UnixMilli()
+	}
 	normalized.SourceEventID = strings.ToLower(strings.TrimSpace(obs.SourceEventID))
 	if normalized.QualityReasons == nil {
 		normalized.QualityReasons = []string{}
@@ -513,15 +575,16 @@ func normalizeCachedSiteLiveObservation(obs OptimizationLiveObservation) (cached
 		normalized.HealthReasons = slices.Clone(normalized.HealthReasons)
 	}
 	return cachedSiteLiveObservation{
-		SampledMs:                   sampledAt.UTC().UnixMilli(),
+		SampledMs:                   sampledMs,
+		HealthMs:                    healthMs,
 		OptimizationLiveObservation: normalized,
 	}, nil
 }
 
 var (
-	_ LatestCache          = (*RedisLatestCache)(nil)
-	_ SiteLiveCache        = (*RedisLatestCache)(nil)
-	_ SiteLiveCacheDeleter = (*RedisLatestCache)(nil)
+	_ LatestCache              = (*RedisLatestCache)(nil)
+	_ SiteLiveCache            = (*RedisLatestCache)(nil)
+	_ SiteLiveCacheInvalidator = (*RedisLatestCache)(nil)
 )
 
 func validateLatestCacheSnapshot(snapshot telemetryapi.DeviceObservationSnapshot) error {
