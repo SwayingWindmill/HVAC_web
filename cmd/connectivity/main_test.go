@@ -41,19 +41,33 @@ func TestUplinkBatchConfigFromEnv(t *testing.T) {
 	if err := defaults.Validate(); err != nil {
 		t.Fatalf("default uplinkConfig invalid: %v", err)
 	}
-	if defaults.BatchMaxMessages != adapter.DefaultBatchMaxMessages || defaults.BatchFlushWindow != 0 || defaults.WorkerCount != adapter.DefaultWorkerCount {
+	if defaults.BatchMaxMessages != adapter.DefaultBatchMaxMessages ||
+		defaults.BatchFlushWindow != adapter.DefaultBatchFlushWindow ||
+		defaults.AutoBackfillLagThreshold != adapter.DefaultAutoBackfillLagThreshold ||
+		defaults.WorkerCount != adapter.DefaultWorkerCount {
 		t.Fatalf("defaults=%#v", defaults)
 	}
 
 	t.Setenv("CONNECTIVITY_BATCH_MAX_MESSAGES", "512")
 	t.Setenv("CONNECTIVITY_BATCH_WINDOW", "250ms")
+	t.Setenv("CONNECTIVITY_AUTO_BACKFILL_LAG", "2m")
 	t.Setenv("CONNECTIVITY_UPLINK_WORKERS", "16")
 	valid := uplinkConfig()
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid bounded uplinkConfig failed: %v", err)
 	}
-	if valid.BatchMaxMessages != 512 || valid.BatchFlushWindow != 250*time.Millisecond || valid.WorkerCount != 16 {
+	if valid.BatchMaxMessages != 512 || valid.BatchFlushWindow != 250*time.Millisecond || valid.AutoBackfillLagThreshold != 2*time.Minute || valid.WorkerCount != 16 {
 		t.Fatalf("valid=%#v", valid)
+	}
+
+	t.Setenv("CONNECTIVITY_BATCH_WINDOW", "0s")
+	t.Setenv("CONNECTIVITY_AUTO_BACKFILL_LAG", "0s")
+	zeroOverrides := uplinkConfig()
+	if err := zeroOverrides.Validate(); err != nil {
+		t.Fatalf("zero duration overrides failed Validate: %v", err)
+	}
+	if zeroOverrides.BatchFlushWindow != 0 || zeroOverrides.AutoBackfillLagThreshold != 0 {
+		t.Fatalf("zeroOverrides=%#v", zeroOverrides)
 	}
 
 	for _, invalid := range []struct {
@@ -67,6 +81,8 @@ func TestUplinkBatchConfigFromEnv(t *testing.T) {
 		{"negative flush window", "CONNECTIVITY_BATCH_WINDOW", "-1ms"},
 		{"above max flush window", "CONNECTIVITY_BATCH_WINDOW", "1001ms"},
 		{"invalid flush window", "CONNECTIVITY_BATCH_WINDOW", "not-a-duration"},
+		{"negative auto backfill lag", "CONNECTIVITY_AUTO_BACKFILL_LAG", "-1s"},
+		{"invalid auto backfill lag", "CONNECTIVITY_AUTO_BACKFILL_LAG", "not-a-duration"},
 		{"zero uplink workers", "CONNECTIVITY_UPLINK_WORKERS", "0"},
 		{"above max uplink workers", "CONNECTIVITY_UPLINK_WORKERS", "1025"},
 		{"non-numeric uplink workers", "CONNECTIVITY_UPLINK_WORKERS", "abc"},
@@ -460,6 +476,14 @@ func TestOpenConcentratorAndSharedSessionLifecycle(t *testing.T) {
 	session, transport, err := openConcentratorAndSharedSession(context.Background(), mqttCfg, logger, observability.NewRegistry(), tap)
 	if err != nil {
 		t.Fatalf("openConcentratorAndSharedSession default failed: %v", err)
+	}
+	if sharedCfg := buildSharedUplinkSessionConfig(mqttCfg, logger, observability.NewRegistry()); sharedCfg.ReceiveMaximum != 256 {
+		t.Fatalf("default ReceiveMaximum=%d, want 256", sharedCfg.ReceiveMaximum)
+	}
+	customMQTTCfg := mqttCfg
+	customMQTTCfg.ReceiveMaximum = 64
+	if customCfg := buildSharedUplinkSessionConfig(customMQTTCfg, logger, observability.NewRegistry()); customCfg.ReceiveMaximum != 64 {
+		t.Fatalf("custom ReceiveMaximum=%d, want 64", customCfg.ReceiveMaximum)
 	}
 	if session == nil || transport == nil {
 		t.Fatalf("expected shared session and transport, got session=%v transport=%v", session, transport)

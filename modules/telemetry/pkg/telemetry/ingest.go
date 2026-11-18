@@ -111,6 +111,7 @@ type ObservationCandidate struct {
 	ReceivedAt         time.Time
 	Position           SourcePosition
 	TraceID            string
+	EdgeReplay         bool
 }
 
 type ResolvedDevice struct {
@@ -256,6 +257,9 @@ func EvaluateObservation(candidate ObservationCandidate, facts ObservationFacts,
 	return decision
 }
 
+// EvaluateHistoricalObservation evaluates HISTORY_REPLAY or buffered EdgeReplay samples for
+// historical persistence without mutating latest telemetry, presence, or snapshots, and never
+// degrades buffered readings to STALE due to source lag.
 func EvaluateHistoricalObservation(candidate ObservationCandidate, facts ObservationFacts, evaluatedAt time.Time) ObservationDecision {
 	if facts.EventAlreadySeen {
 		return terminalObservation(ObservationDuplicate, QualityInvalid, QualityReasonDuplicate, false)

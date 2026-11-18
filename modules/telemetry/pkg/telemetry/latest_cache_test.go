@@ -1,12 +1,21 @@
 package telemetry
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"fmt"
+	"io"
+	"net"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/modules/telemetry/pkg/telemetryapi"
+	"github.com/redis/go-redis/v9"
 )
 
 type memoryLatestCache struct {
@@ -154,4 +163,163 @@ func TestLatestCacheRelayBacksOffRedisFailure(t *testing.T) {
 	if !outbox.nextRetry.Equal(now.Add(time.Second)) {
 		t.Fatalf("next retry=%s", outbox.nextRetry)
 	}
+}
+
+func TestSnapshotMaxSampledMs(t *testing.T) {
+	base := time.Date(2026, 8, 13, 1, 0, 0, 0, time.UTC)
+	empty := realtimeTestSnapshot(base, 1)
+	empty.Values = []telemetryapi.TelemetryKeyState{
+		{Missing: &telemetryapi.TelemetryMissingState{Key: "zone.humidity", State: "MISSING", Freshness: "MISSING", MissingReason: "NEVER_OBSERVED"}},
+	}
+	if got := snapshotMaxSampledMs(empty); got != 0 {
+		t.Fatalf("snapshotMaxSampledMs(empty)=%d, want 0", got)
+	}
+
+	later := base.Add(45 * time.Second)
+	snap := realtimeTestSnapshot(base, 2)
+	secondVal := *snap.Values[0].Present
+	secondVal.Key = "chiller.power"
+	secondVal.SampledAt = telemetryapi.Instant(later.UTC().Format(time.RFC3339Nano))
+	snap.Values = append(snap.Values, telemetryapi.TelemetryKeyState{
+		Present: &secondVal,
+	})
+	if got := snapshotMaxSampledMs(snap); got != later.UnixMilli() {
+		t.Fatalf("snapshotMaxSampledMs=%d, want %d", got, later.UnixMilli())
+	}
+}
+
+func TestSnapshotKeysSignatureDetectsKeySetChanges(t *testing.T) {
+	base := time.Date(2026, 8, 13, 1, 0, 0, 0, time.UTC)
+	s1 := realtimeTestSnapshot(base, 1)
+	s2 := realtimeTestSnapshot(base.Add(time.Minute), 2)
+	s2.Values = append(s2.Values, telemetryapi.TelemetryKeyState{
+		Missing: &telemetryapi.TelemetryMissingState{Key: "zone.humidity", State: "MISSING", Freshness: "MISSING", MissingReason: "NEVER_OBSERVED"},
+	})
+	s2Reordered := realtimeTestSnapshot(base.Add(time.Minute), 3)
+	s2Reordered.Values = slices.Clone(s2.Values)
+	slices.Reverse(s2Reordered.Values)
+
+	if snapshotKeysSignature(s2) != snapshotKeysSignature(s2Reordered) {
+		t.Fatal("snapshotKeysSignature must be order-independent")
+	}
+	if snapshotKeysSignature(s1) == snapshotKeysSignature(s2) {
+		t.Fatal("snapshotKeysSignature failed to distinguish added/removed point key")
+	}
+}
+
+func TestRedisLatestCachePutIfNewerPassesSampledMsAndTTL(t *testing.T) {
+	var mu sync.Mutex
+	var evalArgs []string
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				reader := bufio.NewReader(c)
+				for {
+					args, err := readRESPArray(reader)
+					if err != nil {
+						return
+					}
+					cmd := strings.ToUpper(args[0])
+					switch cmd {
+					case "HELLO":
+						_, _ = io.WriteString(c, "-ERR unknown command 'HELLO'\r\n")
+					case "PING":
+						_, _ = io.WriteString(c, "+PONG\r\n")
+					case "EVALSHA":
+						_, _ = io.WriteString(c, "-NOSCRIPT No matching script. Please use EVAL.\r\n")
+					case "EVAL":
+						mu.Lock()
+						evalArgs = append([]string(nil), args...)
+						mu.Unlock()
+						_, _ = io.WriteString(c, ":1\r\n")
+					default:
+						_, _ = io.WriteString(c, "+OK\r\n")
+					}
+				}
+			}(conn)
+		}
+	}()
+
+	client := redis.NewClient(&redis.Options{
+		Addr:            ln.Addr().String(),
+		Protocol:        2,
+		DisableIdentity: true,
+	})
+	defer func() { _ = client.Close() }()
+	cache := &RedisLatestCache{client: client, keyPrefix: defaultLatestCacheKeyPrefix}
+
+	now := time.Date(2026, 8, 13, 1, 2, 3, 456000000, time.UTC)
+	snap := realtimeTestSnapshot(now, 9)
+	applied, err := cache.PutIfNewer(t.Context(), snap)
+	if err != nil || !applied {
+		t.Fatalf("PutIfNewer applied=%t err=%v", applied, err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	// EVAL <script> <numkeys=2> <key1> <key2> <rev> <tenant> <site> <device> <evaluatedAt> <json> <maxSampledMs> <ttlMs> <keysSig>
+	if len(evalArgs) != 14 {
+		t.Fatalf("unexpected EVAL argument count %d: %#v", len(evalArgs), evalArgs)
+	}
+	scriptText := evalArgs[1]
+	if !strings.Contains(scriptText, "cur_sampled_ms") || !strings.Contains(scriptText, "keys_sig") || !strings.Contains(scriptText, "PEXPIRE") {
+		t.Fatalf("redisLatestCAS missing anti-rollback, keys_sig, or PEXPIRE logic: %s", scriptText)
+	}
+	wantSampledMs := strconv.FormatInt(now.UnixMilli(), 10)
+	if evalArgs[11] != wantSampledMs {
+		t.Fatalf("ARGV[7] sampled_ms=%q, want %q", evalArgs[11], wantSampledMs)
+	}
+	wantTTLMs := strconv.FormatInt((7 * 24 * time.Hour).Milliseconds(), 10)
+	if evalArgs[12] != wantTTLMs {
+		t.Fatalf("ARGV[8] ttl_ms=%q, want %q", evalArgs[12], wantTTLMs)
+	}
+	if evalArgs[13] != snapshotKeysSignature(snap) {
+		t.Fatalf("ARGV[9] keys_sig=%q, want %q", evalArgs[13], snapshotKeysSignature(snap))
+	}
+}
+
+func readRESPArray(reader *bufio.Reader) ([]string, error) {
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return nil, err
+	}
+	if !strings.HasPrefix(line, "*") {
+		return nil, fmt.Errorf("unexpected RESP prefix: %q", line)
+	}
+	count, err := strconv.Atoi(strings.TrimSpace(line[1:]))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, count)
+	for i := 0; i < count; i++ {
+		hdr, err := reader.ReadString('\n')
+		if err != nil {
+			return nil, err
+		}
+		if !strings.HasPrefix(hdr, "$") {
+			return nil, fmt.Errorf("unexpected bulk header: %q", hdr)
+		}
+		length, err := strconv.Atoi(strings.TrimSpace(hdr[1:]))
+		if err != nil {
+			return nil, err
+		}
+		buf := make([]byte, length+2)
+		if _, err := io.ReadFull(reader, buf); err != nil {
+			return nil, err
+		}
+		out[i] = string(buf[:length])
+	}
+	return out, nil
 }

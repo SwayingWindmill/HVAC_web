@@ -60,6 +60,7 @@ type SharedSessionConfig struct {
 	TLS                           *TLSConfig
 	TLSConfig                     *tls.Config
 	KeepAlive                     uint16
+	ReceiveMaximum                uint16
 	CleanStartOnInitialConnection bool
 	SessionExpiryInterval         uint32
 	DialTimeout                   time.Duration
@@ -196,6 +197,16 @@ func NewSharedSession(ctx context.Context, cfg SharedSessionConfig) (*SharedSess
 		ReconnectBackoff:              reconnectBackoff,
 		ConnectUsername:               cfg.ConnectUsername,
 		ConnectPassword:               bytesClone(cfg.ConnectPassword),
+		ConnectPacketBuilder: func(cp *paho.Connect, _ *url.URL) (*paho.Connect, error) {
+			if cfg.ReceiveMaximum > 0 {
+				if cp.Properties == nil {
+					cp.Properties = &paho.ConnectProperties{}
+				}
+				rm := cfg.ReceiveMaximum
+				cp.Properties.ReceiveMaximum = &rm
+			}
+			return cp, nil
+		},
 		AttemptConnection: func(attemptCtx context.Context, _ autopaho.ClientConfig, server *url.URL) (net.Conn, error) {
 			conn, _, _, err := s.tracker.DialBrokerURL(attemptCtx, server, dialTimeout, tlsCfg, nil)
 			return conn, err

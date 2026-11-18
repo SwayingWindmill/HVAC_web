@@ -45,6 +45,7 @@ func main() {
 		Logger:        logger,
 	}
 	scanInterval := durationEnv("MAINTENANCE_SCAN_INTERVAL", 2*time.Second, time.Second, time.Minute)
+	auditInterval := durationEnv("MAINTENANCE_LIFECYCLE_AUDIT_INTERVAL", time.Minute, 5*time.Second, 24*time.Hour)
 
 	diagnostics := &http.Server{
 		Addr: envOr("MAINTENANCE_DIAGNOSTICS_ADDR", ":19093"), Handler: telemetry.DiagnosticsHandler(),
@@ -59,8 +60,8 @@ func main() {
 	}()
 
 	telemetry.MarkReady()
-	logger.Info("maintenance_service_started", "scan_interval", scanInterval.String(), "worker_id", workerID)
-	run(ctx, worker, scanInterval, telemetry, logger)
+	logger.Info("maintenance_service_started", "scan_interval", scanInterval.String(), "audit_interval", auditInterval.String(), "worker_id", workerID)
+	run(ctx, worker, store, scanInterval, auditInterval, telemetry, logger)
 	telemetry.MarkNotReady()
 
 	shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -74,17 +75,49 @@ func openStore(ctx context.Context) (*maintenance.Store, error) {
 	return maintenance.OpenStore(ctx, os.Getenv("MAINTENANCE_POSTGRES_DSN"))
 }
 
-func run(ctx context.Context, worker *maintenance.Worker, interval time.Duration, telemetry *observability.Runtime, logger *slog.Logger) {
+func run(ctx context.Context, worker *maintenance.Worker, store *maintenance.Store, interval, auditInterval time.Duration, telemetry *observability.Runtime, logger *slog.Logger) {
 	runCycle(ctx, worker, telemetry, logger)
+	runLifecycleAudit(ctx, store, telemetry, logger)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	auditTicker := time.NewTicker(auditInterval)
+	defer auditTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			runCycle(ctx, worker, telemetry, logger)
+		case <-auditTicker.C:
+			runLifecycleAudit(ctx, store, telemetry, logger)
 		}
+	}
+}
+
+func runLifecycleAudit(ctx context.Context, store *maintenance.Store, telemetry *observability.Runtime, logger *slog.Logger) {
+	if store == nil {
+		return
+	}
+	auditCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	summary, err := store.AuditLifecycleGovernance(auditCtx, time.Now().UTC())
+	if err != nil {
+		_ = telemetry.Metrics.AddCounter("maintenance_lifecycle_audit_error_total", "Maintenance lifecycle governance audit errors.", nil, 1)
+		logger.Warn("maintenance_lifecycle_audit_failed", "error_code", "MAINTENANCE_LIFECYCLE_AUDIT_FAILED")
+		return
+	}
+	_ = telemetry.Metrics.AddCounter("maintenance_lifecycle_audit_total", "Maintenance lifecycle governance audits.", nil, 1)
+	if summary.FindingsCount > 0 || summary.EventsResolved > 0 {
+		if summary.FindingsCount > 0 {
+			_ = telemetry.Metrics.AddCounter("maintenance_lifecycle_audit_findings_total", "Maintenance lifecycle governance findings recorded.", nil, float64(summary.FindingsCount))
+		}
+		logger.Info(
+			"maintenance_lifecycle_audit_completed",
+			"policies_checked", summary.PoliciesChecked,
+			"active_legal_holds", summary.ActiveLegalHolds,
+			"findings", summary.FindingsCount,
+			"resolved", summary.EventsResolved,
+		)
 	}
 }
 

@@ -530,3 +530,146 @@ func TestCollectBatchLockKeysAndEvaluateBatchCandidatesInMemory(t *testing.T) {
 		t.Fatalf("unexpected reeval plan: order=%v max=%v", plan.reevalDeviceOrder, plan.maxReceivedAtByDevice)
 	}
 }
+
+func TestEvaluateEdgeReplayObservationIsolatesSnapshotAndIgnoresSourceLag(t *testing.T) {
+	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
+	minVal, maxVal := -20.0, 50.0
+	maxStep := 1.0
+	unitCel := "Cel"
+	dev := ResolvedDevice{TenantID: ingestTenantA, SiteID: siteA, DeviceID: deviceA}
+	pt := ResolvedPoint{PointID: "018f2e00-3100-7000-8000-000000000001", PointType: "TELEMETRY", ValueType: "NUMBER", Unit: &unitCel, PointRevision: 1}
+	priorTime := now.Add(-time.Minute)
+	facts := ObservationFacts{
+		Device:          &dev,
+		Point:           &pt,
+		LatestSampledAt: &priorTime,
+		Previous:        &PriorNumeric{Value: 20.0, SampledAt: priorTime, UnchangedSince: now.Add(-10 * time.Hour)},
+		InputsUntrusted: true,
+		Policy: &ObservationPolicy{
+			Revision: 2, PresencePolicyRevision: 3, ValueType: "NUMBER", Unit: &unitCel,
+			MinimumNumber: &minVal, MaximumNumber: &maxVal,
+			MaxFutureClockSkew: 30 * time.Second, MaxSourceLag: time.Minute,
+			QualityChecks: &QualityChecks{
+				MaxStep:   &maxStep,
+				Sentinels: []float64{38.4},
+				Flatline:  time.Minute,
+				Inputs:    []PointRef{{DeviceID: deviceA, Key: "peer"}},
+			},
+		},
+	}
+
+	laggedCandidate := ObservationCandidate{
+		SourceID: sourceA, SourcePath: SourcePathPush, ExternalEntityType: "DEVICE", ExternalID: "dev-a",
+		Device: &dev, Point: &pt, TelemetryKey: "zone.temperature",
+		Value: json.RawMessage(`26.5`), ValueType: "NUMBER", Unit: &unitCel,
+		SampledAt: now.Add(-72 * time.Hour), ReceivedAt: now,
+		Position:   SourcePosition{Partition: "p0", Offset: 10, EventID: eventA},
+		EdgeReplay: true,
+	}
+	decision := EvaluateHistoricalObservation(laggedCandidate, facts, now)
+	if decision.Status != ObservationAccepted || decision.Quality != QualityGood || len(decision.QualityReasons) != 0 {
+		t.Fatalf("lagged edge replay degraded unexpectedly: %+v", decision)
+	}
+	if !decision.AdvancePosition || decision.ReplaceLatest || decision.ReevaluateSnapshot || decision.EmitPresenceSignal || decision.RecordHealth {
+		t.Fatalf("edge replay mutated snapshot/latest/presence flags: %+v", decision)
+	}
+
+	sentinelCandidate := laggedCandidate
+	sentinelCandidate.Value = json.RawMessage(`38.4`)
+	sentinelDecision := EvaluateHistoricalObservation(sentinelCandidate, facts, now)
+	if sentinelDecision.Status != ObservationAccepted || sentinelDecision.Quality != QualityPartial {
+		t.Fatalf("sentinel edge replay expected ACCEPTED/PARTIAL, got %+v", sentinelDecision)
+	}
+	if sentinelDecision.ReplaceLatest || sentinelDecision.ReevaluateSnapshot || sentinelDecision.EmitPresenceSignal {
+		t.Fatalf("sentinel edge replay mutated snapshot flags: %+v", sentinelDecision)
+	}
+
+	outOfRangeCandidate := laggedCandidate
+	outOfRangeCandidate.Value = json.RawMessage(`150.0`)
+	rejectedDecision := EvaluateHistoricalObservation(outOfRangeCandidate, facts, now)
+	if rejectedDecision.Status != ObservationRejected || rejectedDecision.Quality != QualityInvalid {
+		t.Fatalf("out-of-range edge replay expected REJECTED/INVALID, got %+v", rejectedDecision)
+	}
+}
+
+func TestEvaluateBatchCandidatesIsolatesEdgeReplay(t *testing.T) {
+	t0 := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
+	unitCel := "Cel"
+	dev := ResolvedDevice{TenantID: ingestTenantA, SiteID: siteA, DeviceID: deviceA}
+	ptReplay := ResolvedPoint{PointID: "018f2e00-3100-7000-8000-000000000001", PointType: "COUNTER", ValueType: "NUMBER", Unit: &unitCel, CounterDecreaseMode: stringPointer("RESET_TO_ZERO"), PointRevision: 1}
+	ptLive := ResolvedPoint{PointID: "018f2e00-3100-7000-8000-000000000001", PointType: "COUNTER", ValueType: "NUMBER", Unit: &unitCel, CounterDecreaseMode: stringPointer("RESET_TO_ZERO"), PointRevision: 2}
+
+	replayCandidate := ObservationCandidate{
+		SourceID: sourceA, SourcePath: SourcePathPush, ExternalEntityType: "DEVICE", ExternalID: "dev-a",
+		Device: &dev, Point: &ptReplay, TelemetryKey: "energy.total",
+		Value: json.RawMessage(`102.5`), ValueType: "NUMBER", Unit: &unitCel,
+		SampledAt: t0.Add(-48 * time.Hour), ReceivedAt: t0,
+		Position:   SourcePosition{Partition: "p0", Offset: 1, EventID: ingestEvent(1)},
+		EdgeReplay: true,
+	}
+	liveCandidate := ObservationCandidate{
+		SourceID: sourceA, SourcePath: SourcePathPush, ExternalEntityType: "DEVICE", ExternalID: "dev-a",
+		Device: &dev, Point: &ptLive, TelemetryKey: "energy.total",
+		Value: json.RawMessage(`205.0`), ValueType: "NUMBER", Unit: &unitCel,
+		SampledAt: t0, ReceivedAt: t0,
+		Position: SourcePosition{Partition: "p0", Offset: 2, EventID: ingestEvent(2)},
+	}
+
+	candidates := []ObservationCandidate{replayCandidate, liveCandidate}
+	state := &batchWorkingState{
+		seenEvents:    map[sourceEventKey]string{},
+		positions:     map[sourcePartitionKey]SourcePositionHead{},
+		knownDevices:  map[string]ResolvedDevice{deviceA: dev},
+		knownPoints:   map[deviceKey]ResolvedPoint{},
+		latestByPoint: map[deviceKey]latestPointState{},
+		policies: map[deviceKey]loadedPolicy{
+			{deviceID: deviceA, key: "energy.total"}: {
+				policy: ObservationPolicy{Revision: 1, PresencePolicyRevision: 1, ValueType: "NUMBER", Unit: &unitCel, MaxFutureClockSkew: 30 * time.Second, MaxSourceLag: time.Minute},
+			},
+		},
+	}
+	payloadSHAs := []string{strings.Repeat("a", 64), strings.Repeat("b", 64)}
+	receiptsOnlyReplay, planOnlyReplay, err := evaluateBatchCandidates([]ObservationCandidate{replayCandidate}, payloadSHAs[:1], state, EvaluateObservation, func(time.Time) (string, error) {
+		return ingestEvent(100), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receiptsOnlyReplay[0].Status != ObservationAccepted || receiptsOnlyReplay[0].Quality != QualityGood {
+		t.Fatalf("unexpected replay-only receipt: %#v", receiptsOnlyReplay)
+	}
+	if len(planOnlyReplay.devices) != 0 || len(planOnlyReplay.points) != 0 ||
+		len(planOnlyReplay.latestUpdates) != 0 || len(planOnlyReplay.presenceSignals) != 0 ||
+		len(planOnlyReplay.reevalDeviceOrder) != 0 {
+		t.Fatalf("pure edge replay batch mutated non-history tables: %+v", planOnlyReplay)
+	}
+	if len(planOnlyReplay.historyOutbox) != 1 || len(planOnlyReplay.observations) != 1 || len(planOnlyReplay.positions) != 1 {
+		t.Fatalf("pure edge replay batch missing history/observation/position rows: %+v", planOnlyReplay)
+	}
+	state.seenEvents = map[sourceEventKey]string{}
+	state.positions = map[sourcePartitionKey]SourcePositionHead{}
+
+	seq := 0
+	receipts, plan, err := evaluateBatchCandidates(candidates, payloadSHAs, state, EvaluateObservation, func(time.Time) (string, error) {
+		seq++
+		return ingestEvent(100 + seq), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipts[0].Status != ObservationAccepted || receipts[0].Quality != QualityGood || receipts[1].Status != ObservationAccepted {
+		t.Fatalf("unexpected receipts: %#v", receipts)
+	}
+	if len(plan.devices) != 1 {
+		t.Fatalf("expected only live candidate to touch devices, got %d", len(plan.devices))
+	}
+	if len(plan.points) != 1 || plan.points[0].point.PointRevision != 2 {
+		t.Fatalf("edge replay polluted points metadata: %#v", plan.points)
+	}
+	if len(plan.historyOutbox) != 2 || len(plan.observations) != 2 || len(plan.positions) != 1 {
+		t.Fatalf("unexpected outbox/observation/position counts: outbox=%d obs=%d pos=%d", len(plan.historyOutbox), len(plan.observations), len(plan.positions))
+	}
+	if len(plan.presenceSignals) != 1 || len(plan.latestUpdates) != 1 || len(plan.reevalDeviceOrder) != 1 {
+		t.Fatalf("edge replay mutated presence/latest/snapshot plans: presence=%d latest=%d reeval=%d", len(plan.presenceSignals), len(plan.latestUpdates), len(plan.reevalDeviceOrder))
+	}
+}

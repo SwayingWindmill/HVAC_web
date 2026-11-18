@@ -79,3 +79,61 @@ func TestRedisLatestCacheNeverRegressesBusinessRevision(t *testing.T) {
 		t.Fatalf("cached revision 3 mismatch: revision=%d value=%s", cached.BusinessRevision, cached.Values[0].Present.Value)
 	}
 }
+
+func TestRedisLatestCachePreventsEventTimeRollbackAndSetsTTL(t *testing.T) {
+	redisURL := os.Getenv("S2_TELEMETRY_LATEST_REDIS_TEST_URL")
+	if redisURL == "" {
+		t.Skip("S2_TELEMETRY_LATEST_REDIS_TEST_URL is not set")
+	}
+	cache, err := OpenRedisLatestCache(t.Context(), RedisLatestCacheConfig{
+		URL:       redisURL,
+		KeyPrefix: "hvac:test:latest:ttl:" + time.Now().UTC().Format("20060102T150405.000000000"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cache.Close() }()
+
+	baseTime := time.Date(2026, 8, 13, 2, 0, 0, 0, time.UTC)
+	newer := realtimeTestSnapshot(baseTime, 2)
+	applied, err := cache.PutIfNewer(t.Context(), newer)
+	if err != nil || !applied {
+		t.Fatalf("newer applied=%t err=%v", applied, err)
+	}
+
+	rolledBack := realtimeTestSnapshot(baseTime.Add(-10*time.Minute), 3)
+	rolledBack.Values[0].Present.Value = []byte(`11.1`)
+	applied, err = cache.PutIfNewer(t.Context(), rolledBack)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if applied {
+		t.Fatal("higher business revision with older SampledAt unexpectedly rolled back Redis Latest")
+	}
+
+	// If configuration removes a point whose timestamp was highest, the key set signature
+	// changes so the higher BusinessRevision must advance rather than pinning stale keys.
+	unconfigured := realtimeTestSnapshot(baseTime.Add(-10*time.Minute), 4)
+	unconfigured.Values[0].Present.Key = "zone.humidity"
+	applied, err = cache.PutIfNewer(t.Context(), unconfigured)
+	if err != nil || !applied {
+		t.Fatalf("key-set change higher revision rejected: applied=%t err=%v", applied, err)
+	}
+
+	cached, err := cache.GetForDevice(t.Context(), string(newer.TenantId), string(newer.DeviceId))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cached.BusinessRevision != 4 || cached.Values[0].Present.Key != "zone.humidity" {
+		t.Fatalf("cached snapshot did not advance on key-set change: rev=%d key=%s", cached.BusinessRevision, cached.Values[0].Present.Key)
+	}
+
+	dataTTL, err := cache.client.TTL(t.Context(), cache.key(newer.TenantId, newer.SiteId, newer.DeviceId)).Result()
+	if err != nil || dataTTL <= 6*24*time.Hour || dataTTL > 7*24*time.Hour {
+		t.Fatalf("unexpected data hash TTL=%v err=%v", dataTTL, err)
+	}
+	indexTTL, err := cache.client.TTL(t.Context(), cache.deviceSiteKey(newer.TenantId, newer.DeviceId)).Result()
+	if err != nil || indexTTL <= 6*24*time.Hour || indexTTL > 7*24*time.Hour {
+		t.Fatalf("unexpected index hash TTL=%v err=%v", indexTTL, err)
+	}
+}

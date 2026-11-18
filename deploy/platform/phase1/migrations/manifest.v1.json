@@ -150,7 +150,8 @@
         "infra/telemetry/postgres/init/012-measurement-uncertainty.sql",
         "infra/telemetry/postgres/init/013-schema-and-table-comments.sql",
         "infra/telemetry/postgres/init/mqtt-runtime-events.sql",
-        "infra/telemetry/postgres/init/alarm-evaluation-dead-letter.sql"
+        "infra/telemetry/postgres/init/alarm-evaluation-dead-letter.sql",
+        "infra/telemetry/postgres/init/telemetry-history-dead-letter-and-retention.sql"
       ]
     },
     {

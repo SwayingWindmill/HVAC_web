@@ -18,12 +18,17 @@ var (
 )
 
 const (
-	mqttKeepAliveSeconds     = 30
-	mqttSessionExpirySeconds = 24 * 60 * 60
-	mqttConnectTimeout       = 10 * time.Second
+	mqttKeepAliveSeconds      = 30
+	mqttSessionExpirySeconds  = 24 * 60 * 60
+	mqttConnectTimeout        = 10 * time.Second
+	mqttDefaultReceiveMaximum = uint16(256)
 	// DefaultBatchMaxMessages is the per-Gateway batch drain cap when BatchMaxMessages is 0.
 	DefaultBatchMaxMessages = 200
+	// DefaultBatchFlushWindow is the default per-Gateway batch coalescing window.
+	DefaultBatchFlushWindow = 100 * time.Millisecond
 	maxBatchFlushWindow     = time.Second
+	// DefaultAutoBackfillLagThreshold promotes stale live readings past this lag to replay.
+	DefaultAutoBackfillLagThreshold = 10 * time.Minute
 	// DefaultWorkerCount is the uplink worker pool size when WorkerCount is 0.
 	DefaultWorkerCount      = 32
 	maxWorkerCount          = 1024
@@ -45,17 +50,19 @@ type Config struct {
 	// OverflowMaxBytes bounds unconsumed WAL bytes per Gateway (<= 0 defaults to 32 MiB).
 	OverflowMaxBytes int64
 	// OverflowDir stores per-Gateway disk overflow spools; when empty, Runtime.Run
-	// creates a private temporary directory and removes it on shutdown.
-	OverflowDir      string
-	BatchMaxMessages int
-	BatchFlushWindow time.Duration
-	WorkerCount      int
+	// creates a private temporary directory and removes it on shutdown when drained.
+	OverflowDir              string
+	BatchMaxMessages         int
+	BatchFlushWindow         time.Duration
+	AutoBackfillLagThreshold time.Duration
+	WorkerCount              int
 }
 
 type MQTTConfig struct {
 	BrokerURL               string
 	ClientID                string
 	SharedSubscriptionGroup string
+	ReceiveMaximum          uint16
 	CAFile                  string
 	CertFile                string
 	KeyFile                 string
@@ -123,10 +130,21 @@ func (config Config) validate(requireMQTT bool) error {
 	if config.BatchFlushWindow < 0 || config.BatchFlushWindow > maxBatchFlushWindow {
 		return fmt.Errorf("batch flush window must be between 0 and %s", maxBatchFlushWindow)
 	}
+	if config.AutoBackfillLagThreshold < 0 {
+		return errors.New("auto backfill lag threshold must not be negative")
+	}
 	if config.WorkerCount < 0 || config.WorkerCount > maxWorkerCount {
 		return fmt.Errorf("worker count must be between 0 and %d", maxWorkerCount)
 	}
 	return nil
+}
+
+// EffectiveReceiveMaximum returns the bounded MQTT v5 Receive Maximum flow-control limit.
+func (config MQTTConfig) EffectiveReceiveMaximum() uint16 {
+	if config.ReceiveMaximum == 0 {
+		return mqttDefaultReceiveMaximum
+	}
+	return config.ReceiveMaximum
 }
 
 // SubscriptionTopicFilters returns the MQTT v5 subscription filters, adding the

@@ -170,6 +170,7 @@ COPY services/operations-agent-service/migrations/operations/003_schema_and_tabl
 COPY infra/connectivity/postgres/init/gateway-config-shadows.sql /opt/hvac/repo/infra/connectivity/postgres/init/gateway-config-shadows.sql
 COPY infra/registry/postgres/init/optimization-monitor-lease.sql /opt/hvac/repo/infra/registry/postgres/init/optimization-monitor-lease.sql
 COPY infra/telemetry/postgres/init/alarm-evaluation-dead-letter.sql /opt/hvac/repo/infra/telemetry/postgres/init/alarm-evaluation-dead-letter.sql
+COPY infra/telemetry/postgres/init/telemetry-history-dead-letter-and-retention.sql /opt/hvac/repo/infra/telemetry/postgres/init/telemetry-history-dead-letter-and-retention.sql
 COPY modules/command/migrations/control-alarm-outbox.sql /opt/hvac/repo/modules/command/migrations/control-alarm-outbox.sql
 COPY infra/connectivity/postgres/init/uplink-quarantine-diagnostics.sql /opt/hvac/repo/infra/connectivity/postgres/init/uplink-quarantine-diagnostics.sql
 COPY infra/registry/postgres/init/alarm-suppress-unassign-capabilities.sql /opt/hvac/repo/infra/registry/postgres/init/alarm-suppress-unassign-capabilities.sql

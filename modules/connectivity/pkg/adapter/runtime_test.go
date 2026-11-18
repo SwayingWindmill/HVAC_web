@@ -2065,8 +2065,6 @@ func TestRuntimeIngressRateLimitDropsExcessAcksWithoutBlockingOrDisconnectingHea
 		t.Fatal("async rate-limit quarantine never started")
 	}
 
-	// While Postgres quarantine write for Gateway A is blocked, Gateway B packets
-	// must be ACK'd and persisted on the same intact broker connection.
 	for i := 1; i <= 3; i++ {
 		conn.deliverGateway(t, testGatewayB, uint16(10+i), 100+i, false)
 	}
@@ -2110,4 +2108,224 @@ func TestRuntimeIngressRateLimitDropsExcessAcksWithoutBlockingOrDisconnectingHea
 			t.Fatalf("missing metric %q in:\n%s", want, metricsText)
 		}
 	}
+}
+
+func TestRuntimeEnqueueAcksExcessOnIngressRateLimit(t *testing.T) {
+	identities := newFakeIdentities()
+	telemetry := &fakeTelemetry{}
+	now := time.Date(2026, 11, 18, 10, 0, 0, 0, time.UTC)
+	processor, err := NewProcessor(identities, telemetry, WithGatewayRateLimit(1, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	processor.now = func() time.Time { return now }
+
+	runtime, err := NewRuntime(Config{
+		MQTT:             MQTTConfig{BrokerURL: "tls://localhost:8883", ClientID: "connectivity-test", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "mqtt.local"},
+		TelemetryRuntime: TelemetryRuntimeConfig{BaseURL: "https://telemetry.local", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "telemetry.local"},
+		QueueCapacity:    4,
+		OverflowDir:      t.TempDir(),
+	}, processor, slog.New(slog.NewTextHandler(io.Discard, nil)), observability.NewRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(func() { cancel(); runtime.workers.Wait(); runtime.quarantineWG.Wait(); runtime.closeMailboxes() })
+
+	var acked []uint16
+	ackFn := func(p *paho.Publish) error {
+		acked = append(acked, p.PacketID)
+		return nil
+	}
+	pub1 := publish(testGatewayA, 1)
+	pub1.PacketID = 1
+	if err := runtime.enqueue(ctx, nil, pub1, ackFn); err != nil {
+		t.Fatalf("burst message 1 failed: %v", err)
+	}
+	pub2 := publish(testGatewayA, 2)
+	pub2.PacketID = 2
+	if err := runtime.enqueue(ctx, nil, pub2, ackFn); err != nil {
+		t.Fatalf("expected rate-limited excess to ACK cleanly without disconnecting shared session, got %v", err)
+	}
+	if len(acked) != 2 || acked[0] != 1 || acked[1] != 2 {
+		t.Fatalf("acked=%v, want [1 2]", acked)
+	}
+	waitCondition(t, 2*time.Second, func() bool {
+		return len(telemetry.accepted()) == 1
+	}, "only non-rate-limited burst message persisted")
+}
+
+func TestRuntimePoisonPill400BatchSplitAdvancesWALAndQuarantinesBadMessage(t *testing.T) {
+	identities := newFakeIdentities()
+	telemetry := &fakeTelemetry{
+		release: make(chan struct{}),
+		entered: make(chan struct{}, 4),
+		failHook: func(_ int, batch []Observation) error {
+			for _, obs := range batch {
+				if obs.TelemetryKey == "poison_point" {
+					return &RequestInvalidError{Label: "S2 observation batch", StatusCode: http.StatusBadRequest}
+				}
+			}
+			return nil
+		},
+	}
+	overflowDir := t.TempDir()
+	runtime, err := NewRuntime(Config{
+		MQTT:             MQTTConfig{BrokerURL: "tls://localhost:8883", ClientID: "connectivity-test", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "mqtt.local"},
+		TelemetryRuntime: TelemetryRuntimeConfig{BaseURL: "https://telemetry.local", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "telemetry.local"},
+		QueueCapacity:    8,
+		OverflowDir:      overflowDir,
+	}, newTestProcessor(t, identities, telemetry), slog.New(slog.NewTextHandler(io.Discard, nil)), observability.NewRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(func() { cancel(); runtime.workers.Wait(); runtime.closeMailboxes() })
+	acks := newAckLog()
+
+	if err := runtime.enqueue(ctx, nil, publish(testGatewayA, 1), acks.ack(messageID(1))); err != nil {
+		t.Fatal(err)
+	}
+	<-telemetry.entered
+
+	poisonPub := &paho.Publish{
+		Topic:   telemetryTopic(testGatewayA),
+		Payload: telemetryPayload(testGatewayA, messageID(3), 3, "METER-01", "poison_point"),
+		QoS:     1,
+	}
+	if err := runtime.enqueue(ctx, nil, publish(testGatewayA, 2), acks.ack(messageID(2))); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.enqueue(ctx, nil, poisonPub, acks.ack(messageID(3))); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.enqueue(ctx, nil, publish(testGatewayA, 4), acks.ack(messageID(4))); err != nil {
+		t.Fatal(err)
+	}
+	for index := 1; index <= 4; index++ {
+		acks.await(t, messageID(index))
+	}
+
+	close(telemetry.release)
+	waitCondition(t, 2*time.Second, func() bool {
+		return len(telemetry.accepted()) == 3 && len(identities.snapshotQuarantines()) == 1
+	}, "valid messages persisted and 400 poison pill quarantined")
+
+	spoolPath := filepath.Join(overflowDir, safeGatewayFileName(testGatewayA))
+	waitCondition(t, 2*time.Second, func() bool {
+		stat, statErr := os.Stat(spoolPath)
+		return statErr == nil && stat.Size() == walHeaderSize
+	}, "WAL spool truncated after split batch consumed")
+}
+
+func TestRuntimeClosePreservesOwnedOverflowDirWhenUnconsumedAndCleansWhenDrained(t *testing.T) {
+	t.Run("removes auto overflow dir when drained", func(t *testing.T) {
+		telemetry := &fakeTelemetry{}
+		runtime, err := NewRuntime(Config{
+			MQTT:             MQTTConfig{BrokerURL: "tls://localhost:8883", ClientID: "connectivity-test", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "mqtt.local"},
+			TelemetryRuntime: TelemetryRuntimeConfig{BaseURL: "https://telemetry.local", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "telemetry.local"},
+			QueueCapacity:    4,
+		}, newTestProcessor(t, newFakeIdentities(), telemetry), slog.New(slog.NewTextHandler(io.Discard, nil)), observability.NewRegistry())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := runtime.prepareOverflowDir(); err != nil {
+			t.Fatal(err)
+		}
+		autoDir := runtime.overflowDir
+		t.Cleanup(func() { _ = os.RemoveAll(autoDir) })
+
+		ctx, cancel := context.WithCancel(t.Context())
+		acks := newAckLog()
+		if err := runtime.enqueue(ctx, nil, publish(testGatewayA, 1), acks.ack(messageID(1))); err != nil {
+			t.Fatal(err)
+		}
+		acks.await(t, messageID(1))
+		waitCondition(t, 2*time.Second, func() bool {
+			return len(telemetry.accepted()) == 1
+		}, "message drained before close")
+
+		cancel()
+		runtime.workers.Wait()
+		runtime.closeMailboxes()
+
+		if _, statErr := os.Stat(autoDir); !os.IsNotExist(statErr) {
+			t.Fatalf("expected drained auto overflow dir %s to be removed, stat err=%v", autoDir, statErr)
+		}
+	})
+
+	t.Run("preserves auto overflow dir and spools when unconsumed items remain", func(t *testing.T) {
+		broker := newFakeBroker(t)
+		telemetry := &fakeTelemetry{
+			release: make(chan struct{}),
+			entered: make(chan struct{}, 2),
+		}
+		runtime, err := NewRuntime(Config{
+			MQTT:             broker.mqtt,
+			TelemetryRuntime: TelemetryRuntimeConfig{BaseURL: "https://telemetry.local", CAFile: broker.mqtt.CAFile, CertFile: broker.mqtt.CertFile, KeyFile: broker.mqtt.KeyFile, ServerName: "telemetry.local"},
+			QueueCapacity:    1,
+		}, newTestProcessor(t, newFakeIdentities(), telemetry), slog.New(slog.NewTextHandler(io.Discard, nil)), observability.NewRegistry())
+		if err != nil {
+			t.Fatal(err)
+		}
+		runtime.drainTimeout = 50 * time.Millisecond
+
+		ctx, cancel := context.WithCancel(t.Context())
+		runErr := make(chan error, 1)
+		go func() { runErr <- runtime.Run(ctx) }()
+
+		conn := broker.awaitConnection(t)
+		awaitReady(t, runtime, true)
+
+		conn.deliverGateway(t, testGatewayA, 1, 1, false)
+		<-telemetry.entered
+		conn.deliverGateway(t, testGatewayA, 2, 2, false)
+		conn.deliverGateway(t, testGatewayA, 3, 3, false)
+		conn.awaitAcks(t, 1, 2, 3)
+
+		cancel()
+		select {
+		case err := <-runErr:
+			if err != nil {
+				t.Fatalf("Run returned error on bounded drain timeout: %v", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("Run exceeded drain timeout")
+		}
+
+		preservedDir := runtime.overflowDir
+		if preservedDir == "" {
+			t.Fatal("expected preserved overflow dir path when unconsumed items remain")
+		}
+		t.Cleanup(func() { _ = os.RemoveAll(preservedDir) })
+
+		spoolPath := filepath.Join(preservedDir, safeGatewayFileName(testGatewayA))
+		stat, statErr := os.Stat(spoolPath)
+		if statErr != nil || stat.Size() <= walHeaderSize {
+			t.Fatalf("expected preserved spool file with unconsumed items, stat=(%v, %v)", stat, statErr)
+		}
+		runtime.closeMailboxes()
+		if _, err := os.Stat(spoolPath); err != nil {
+			t.Fatalf("second idempotent closeMailboxes removed preserved spool %s: %v", spoolPath, err)
+		}
+
+		recoveredTelemetry := &fakeTelemetry{}
+		recoveredRuntime, err := NewRuntime(Config{
+			MQTT:             broker.mqtt,
+			TelemetryRuntime: TelemetryRuntimeConfig{BaseURL: "https://telemetry.local", CAFile: broker.mqtt.CAFile, CertFile: broker.mqtt.CertFile, KeyFile: broker.mqtt.KeyFile, ServerName: "telemetry.local"},
+			QueueCapacity:    4,
+			OverflowDir:      preservedDir,
+		}, newTestProcessor(t, newFakeIdentities(), recoveredTelemetry), slog.New(slog.NewTextHandler(io.Discard, nil)), observability.NewRegistry())
+		if err != nil {
+			t.Fatal(err)
+		}
+		recCtx, recCancel := context.WithCancel(t.Context())
+		t.Cleanup(func() { recCancel(); recoveredRuntime.workers.Wait(); recoveredRuntime.closeMailboxes() })
+		if err := recoveredRuntime.recoverOverflowMailboxes(recCtx); err != nil {
+			t.Fatalf("recoverOverflowMailboxes failed: %v", err)
+		}
+		waitCondition(t, 2*time.Second, func() bool {
+			return len(recoveredTelemetry.accepted()) == 3
+		}, "all 3 preserved unconsumed items recovered from auto overflow dir")
+	})
 }

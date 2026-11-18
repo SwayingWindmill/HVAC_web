@@ -2,9 +2,12 @@ package telemetry
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -17,24 +20,41 @@ var (
 	ErrLatestCacheUnavailable = errors.New("telemetry latest cache unavailable")
 )
 
-const defaultLatestCacheKeyPrefix = "hvac:v2:latest:device"
+const (
+	defaultLatestCacheKeyPrefix = "hvac:v2:latest:device"
+	defaultLatestCacheTTL       = 7 * 24 * time.Hour
+)
 
 var redisLatestCAS = redis.NewScript(`
-local current = redis.call('HGET', KEYS[1], 'revision')
 local incoming = ARGV[1]
+local new_sampled_ms = tonumber(ARGV[7]) or 0
+local ttl_ms = tonumber(ARGV[8]) or 0
+local new_keys_sig = ARGV[9] or ''
+local current = redis.call('HGET', KEYS[1], 'revision')
+if current then
+  if string.len(current) > string.len(incoming)
+    or (string.len(current) == string.len(incoming) and current > incoming) then
+    return 0
+  end
+end
+local cur_sampled_ms = tonumber(redis.call('HGET', KEYS[1], 'sampled_ms')) or 0
+local cur_keys_sig = redis.call('HGET', KEYS[1], 'keys_sig') or ''
+if cur_sampled_ms > 0 and new_sampled_ms > 0 and new_sampled_ms < cur_sampled_ms then
+  if cur_keys_sig == '' or new_keys_sig == '' or cur_keys_sig == new_keys_sig then
+    return 0
+  end
+end
 local indexRevision = redis.call('HGET', KEYS[2], 'revision')
 if not indexRevision
   or string.len(indexRevision) < string.len(incoming)
   or (string.len(indexRevision) == string.len(incoming) and indexRevision < incoming) then
   redis.call('HSET', KEYS[2], 'revision', incoming, 'site_id', ARGV[3])
+  if ttl_ms > 0 then
+    redis.call('PEXPIRE', KEYS[2], ttl_ms)
+  end
 end
-if current then
-  if string.len(current) > string.len(incoming) then
-    return 0
-  end
-  if string.len(current) == string.len(incoming) and current >= incoming then
-    return 0
-  end
+if current and string.len(current) == string.len(incoming) and current == incoming then
+  return 0
 end
 redis.call('HSET', KEYS[1],
   'revision', incoming,
@@ -42,7 +62,13 @@ redis.call('HSET', KEYS[1],
   'site_id', ARGV[3],
   'device_id', ARGV[4],
   'evaluated_at', ARGV[5],
-  'snapshot', ARGV[6])
+  'snapshot', ARGV[6],
+  'sampled_ms', ARGV[7],
+  'keys_sig', new_keys_sig)
+if ttl_ms > 0 then
+  redis.call('PEXPIRE', KEYS[1], ttl_ms)
+  redis.call('PEXPIRE', KEYS[2], ttl_ms)
+end
 return 1
 `)
 
@@ -111,6 +137,8 @@ func (cache *RedisLatestCache) PutIfNewer(ctx context.Context, snapshot telemetr
 	if err != nil {
 		return false, fmt.Errorf("encode telemetry latest snapshot: %w", err)
 	}
+	maxSampledMs := snapshotMaxSampledMs(snapshot)
+	keysSig := snapshotKeysSignature(snapshot)
 	result, err := redisLatestCAS.Run(ctx, cache.client, []string{
 		cache.key(snapshot.TenantId, snapshot.SiteId, snapshot.DeviceId),
 		cache.deviceSiteKey(snapshot.TenantId, snapshot.DeviceId),
@@ -118,11 +146,51 @@ func (cache *RedisLatestCache) PutIfNewer(ctx context.Context, snapshot telemetr
 		fmt.Sprintf("%d", snapshot.BusinessRevision),
 		string(snapshot.TenantId), string(snapshot.SiteId), string(snapshot.DeviceId),
 		string(snapshot.EvaluatedAt), string(encoded),
+		fmt.Sprintf("%d", maxSampledMs), fmt.Sprintf("%d", defaultLatestCacheTTL.Milliseconds()), keysSig,
 	).Int64()
 	if err != nil {
 		return false, fmt.Errorf("materialize telemetry latest snapshot: %w", err)
 	}
 	return result == 1, nil
+}
+
+func snapshotKeysSignature(snapshot telemetryapi.DeviceObservationSnapshot) string {
+	keys := make([]string, 0, len(snapshot.Values))
+	for _, value := range snapshot.Values {
+		switch {
+		case value.Present != nil:
+			keys = append(keys, string(value.Present.Key))
+		case value.Missing != nil:
+			keys = append(keys, string(value.Missing.Key))
+		}
+	}
+	slices.Sort(keys)
+	hasher := sha256.New()
+	for _, key := range keys {
+		hasher.Write([]byte(key))
+		hasher.Write([]byte{0})
+	}
+	var sum [sha256.Size]byte
+	hasher.Sum(sum[:0])
+	return hex.EncodeToString(sum[:8])
+}
+
+func snapshotMaxSampledMs(snapshot telemetryapi.DeviceObservationSnapshot) int64 {
+	var maxMs int64
+	for _, value := range snapshot.Values {
+		if value.Present == nil {
+			continue
+		}
+		sampledAt, err := time.Parse(time.RFC3339Nano, string(value.Present.SampledAt))
+		if err != nil {
+			continue
+		}
+		ms := sampledAt.UTC().UnixMilli()
+		if ms > maxMs {
+			maxMs = ms
+		}
+	}
+	return maxMs
 }
 
 func (cache *RedisLatestCache) GetForDevice(ctx context.Context, tenantID, deviceID string) (telemetryapi.DeviceObservationSnapshot, error) {

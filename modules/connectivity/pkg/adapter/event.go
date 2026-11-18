@@ -13,6 +13,20 @@ func sourcePartition(gatewayID, deviceID, pointCode string) string {
 	return "mqtt:" + strings.TrimSpace(gatewayID) + ":" + strings.TrimSpace(deviceID) + ":" + strings.TrimSpace(pointCode)
 }
 
+func replaySourcePartition(gatewayID, messageID, deviceID, pointCode string) string {
+	hasher := sha256.New()
+	for _, field := range [][]byte{
+		[]byte(strings.TrimSpace(messageID)), {0},
+		[]byte(strings.TrimSpace(deviceID)), {0},
+		[]byte(strings.TrimSpace(pointCode)),
+	} {
+		hasher.Write(field)
+	}
+	var digest [sha256.Size]byte
+	hasher.Sum(digest[:0])
+	return "mqtt-replay:" + strings.TrimSpace(gatewayID) + ":" + hex.EncodeToString(digest[:16])
+}
+
 func deterministicPointEventID(messageID string, deviceTimestamp int64, point EnvelopePoint, partition string) (string, error) {
 	if deviceTimestamp < 0 || deviceTimestamp >= 1<<48 {
 		return "", fmt.Errorf("point timestamp is outside UUIDv7 range")
