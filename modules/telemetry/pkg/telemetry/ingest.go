@@ -151,19 +151,20 @@ type PriorSample struct {
 }
 
 type ObservationFacts struct {
-	Device           *ResolvedDevice
-	DeviceConflict   bool
-	Point            *ResolvedPoint
-	Policy           *ObservationPolicy
-	CurrentPosition  *SourcePositionHead
-	EventAlreadySeen bool
-	LatestSampledAt  *time.Time
-	Previous         *PriorNumeric
-	PreviousSample   *PriorSample
-	Running          bool
-	RunningSince     *time.Time
-	InputsUntrusted  bool
-	Peers            map[string]PeerSample
+	Device            *ResolvedDevice
+	DeviceConflict    bool
+	Point             *ResolvedPoint
+	Policy            *ObservationPolicy
+	CurrentPosition   *SourcePositionHead
+	EventAlreadySeen  bool
+	SampleAlreadySeen bool
+	LatestSampledAt   *time.Time
+	Previous          *PriorNumeric
+	PreviousSample    *PriorSample
+	Running           bool
+	RunningSince      *time.Time
+	InputsUntrusted   bool
+	Peers             map[string]PeerSample
 }
 
 type ObservationDecision struct {
@@ -210,6 +211,9 @@ func EvaluateObservation(candidate ObservationCandidate, facts ObservationFacts,
 	decision, resolved := resolveObservationIdentity(facts)
 	if !resolved {
 		return decision
+	}
+	if facts.SampleAlreadySeen {
+		return duplicateSampleDecision(decision)
 	}
 	if facts.Policy == nil || facts.Policy.Revision < 1 {
 		decision.QuarantineReason = QuarantinePolicyNotConfigured
@@ -276,6 +280,9 @@ func EvaluateHistoricalObservation(candidate ObservationCandidate, facts Observa
 	decision, resolved := resolveObservationIdentity(facts)
 	if !resolved {
 		return decision
+	}
+	if facts.SampleAlreadySeen {
+		return duplicateSampleDecision(decision)
 	}
 	if facts.Policy == nil || facts.Policy.Revision < 1 {
 		decision.QuarantineReason = QuarantinePolicyNotConfigured
@@ -419,6 +426,20 @@ func recordPointHealth(decision *ObservationDecision, quality ObservationQuality
 
 func terminalObservation(status ObservationStatus, quality ObservationQuality, reason QualityReason, advance bool) ObservationDecision {
 	return ObservationDecision{Status: status, Quality: quality, QualityReasons: []QualityReason{reason}, AdvancePosition: advance}
+}
+
+func duplicateSampleDecision(resolved ObservationDecision) ObservationDecision {
+	return ObservationDecision{
+		TenantID:        resolved.TenantID,
+		SiteID:          resolved.SiteID,
+		DeviceID:        resolved.DeviceID,
+		PointID:         resolved.PointID,
+		SensorID:        resolved.SensorID,
+		Status:          ObservationDuplicate,
+		Quality:         QualityInvalid,
+		QualityReasons:  []QualityReason{QualityReasonDuplicate},
+		AdvancePosition: false,
+	}
 }
 
 // resolveObservationIdentity starts a quarantined decision for the resolved Device and

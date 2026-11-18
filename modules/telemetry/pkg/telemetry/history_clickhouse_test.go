@@ -464,3 +464,76 @@ func TestClickHouseHistorySinkGzipPrepareAndInsertPrepared(t *testing.T) {
 		t.Fatalf("retry changed token: %q != %q", retryToken, token)
 	}
 }
+
+func TestClickHouseHistorySinkFoldsDuplicatePointSampleWithinBatch(t *testing.T) {
+	var decodedRows []HistoryObservation
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		_, decoded := readClickHouseRequestBody(t, request)
+		decoder := json.NewDecoder(bytes.NewReader(decoded))
+		for {
+			var row HistoryObservation
+			if err := decoder.Decode(&row); err == io.EOF {
+				break
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			decodedRows = append(decodedRows, row)
+		}
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	sink, err := NewClickHouseHistorySink(ClickHouseHistoryConfig{
+		BaseURL: server.URL, Database: "telemetry_history", Table: "observations", HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tenantID := "018f2d00-0000-7000-8000-000000000001"
+	siteID := "018f2e00-1000-7000-8000-000000000001"
+	deviceID := "018f2e00-3000-7000-8000-000000000001"
+	pointID := "018f2e00-3100-7000-8000-000000000001"
+	pointType := "TELEMETRY"
+	rev := int64(1)
+	vType := "NUMBER"
+	v1, v2, v3 := 10.0, 20.0, 30.0
+	sampledAt := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
+
+	observations := []HistoryObservation{
+		{
+			ObservationID: "018f2e00-9100-7000-8000-000000000001", TenantID: &tenantID, SiteID: &siteID,
+			DeviceID: &deviceID, PointID: &pointID, SourceID: sourceA, SourceEventID: "018f2e00-6200-7000-8000-000000000001",
+			SourcePartition: "p-a", SourceOffset: 1, SourcePath: "PUSH", TelemetryKey: "chiller.power",
+			PointType: &pointType, PointRevision: &rev, ValueType: &vType, ValueNumber: &v1,
+			SampledAt: sampledAt, ReceivedAt: sampledAt.Add(time.Second), AcceptanceStatus: "ACCEPTED",
+			Quality: "GOOD", QualityReasons: []string{}, PayloadSHA256: strings.Repeat("a", 64),
+		},
+		{
+			ObservationID: "018f2e00-9100-7000-8000-000000000002", TenantID: &tenantID, SiteID: &siteID,
+			DeviceID: &deviceID, PointID: &pointID, SourceID: sourceA, SourceEventID: "018f2e00-6200-7000-8000-000000000002",
+			SourcePartition: "p-replay", SourceOffset: 2, SourcePath: "HISTORY_REPLAY", TelemetryKey: "chiller.power",
+			PointType: &pointType, PointRevision: &rev, ValueType: &vType, ValueNumber: &v2,
+			SampledAt: sampledAt, ReceivedAt: sampledAt.Add(2 * time.Second), AcceptanceStatus: "OUT_OF_ORDER",
+			Quality: "GOOD", QualityReasons: []string{"OUT_OF_ORDER"}, PayloadSHA256: strings.Repeat("b", 64),
+		},
+		{
+			ObservationID: "018f2e00-9100-7000-8000-000000000003", TenantID: &tenantID, SiteID: &siteID,
+			DeviceID: &deviceID, PointID: &pointID, SourceID: sourceA, SourceEventID: "018f2e00-6200-7000-8000-000000000003",
+			SourcePartition: "p-a", SourceOffset: 3, SourcePath: "PUSH", TelemetryKey: "chiller.power",
+			PointType: &pointType, PointRevision: &rev, ValueType: &vType, ValueNumber: &v3,
+			SampledAt: sampledAt.Add(time.Minute), ReceivedAt: sampledAt.Add(61 * time.Second), AcceptanceStatus: "ACCEPTED",
+			Quality: "GOOD", QualityReasons: []string{}, PayloadSHA256: strings.Repeat("c", 64),
+		},
+	}
+
+	if err := sink.InsertObservations(t.Context(), 5, observations); err != nil {
+		t.Fatal(err)
+	}
+	if len(decodedRows) != 2 {
+		t.Fatalf("expected 2 deduplicated observations, got %d (%+v)", len(decodedRows), decodedRows)
+	}
+	if decodedRows[0].ObservationID != "018f2e00-9100-7000-8000-000000000002" || decodedRows[1].ObservationID != "018f2e00-9100-7000-8000-000000000003" {
+		t.Fatalf("unexpected winning rows: %+v", decodedRows)
+	}
+}

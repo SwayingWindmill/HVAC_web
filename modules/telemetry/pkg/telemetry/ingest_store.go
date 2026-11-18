@@ -259,6 +259,16 @@ type deviceKey struct {
 	key      string
 }
 
+type pointSampleKey struct {
+	pointID            string
+	sampledAtUnixMicro int64
+}
+
+type pointSampleQueryArg struct {
+	pointID   string
+	sampledAt time.Time
+}
+
 type loadedPolicy struct {
 	policy             ObservationPolicy
 	freshWithinSeconds int
@@ -275,12 +285,13 @@ type latestPointState struct {
 }
 
 type batchWorkingState struct {
-	seenEvents    map[sourceEventKey]string
-	positions     map[sourcePartitionKey]SourcePositionHead
-	knownDevices  map[string]ResolvedDevice
-	knownPoints   map[deviceKey]ResolvedPoint
-	policies      map[deviceKey]loadedPolicy
-	latestByPoint map[deviceKey]latestPointState
+	seenEvents       map[sourceEventKey]string
+	seenPointSamples map[pointSampleKey]string
+	positions        map[sourcePartitionKey]SourcePositionHead
+	knownDevices     map[string]ResolvedDevice
+	knownPoints      map[deviceKey]ResolvedPoint
+	policies         map[deviceKey]loadedPolicy
+	latestByPoint    map[deviceKey]latestPointState
 }
 
 type deviceInsertRow struct {
@@ -397,16 +408,18 @@ FROM (
 }
 
 type batchPrefetchPlan struct {
-	cacheEpoch       uint64
-	eventSourceIDs   []string
-	eventIDs         []string
-	posSourceIDs     []string
-	posPartitions    []string
-	missDeviceIDs    []string
-	missReplayPoints []deviceKey
-	missPolicyPoints []deviceKey
-	allBatchPoints   []deviceKey
-	seenBatchPoints  map[deviceKey]struct{}
+	cacheEpoch            uint64
+	eventSourceIDs        []string
+	eventIDs              []string
+	posSourceIDs          []string
+	posPartitions         []string
+	missDeviceIDs         []string
+	missReplayPoints      []deviceKey
+	missPolicyPoints      []deviceKey
+	allBatchPoints        []deviceKey
+	seenBatchPoints       map[deviceKey]struct{}
+	knownPointSamples     []pointSampleQueryArg
+	checkedPointSampleSet map[pointSampleKey]struct{}
 }
 
 type fetchedPointFact struct {
@@ -439,12 +452,13 @@ func loadedPolicyFromCache(fp cachedFreshnessPolicy, pp cachedPresencePolicy) lo
 
 func planBatchPrefetch(cache *metadataCache, candidates []ObservationCandidate) (*batchWorkingState, batchPrefetchPlan) {
 	state := &batchWorkingState{
-		seenEvents:    make(map[sourceEventKey]string, len(candidates)),
-		positions:     make(map[sourcePartitionKey]SourcePositionHead, len(candidates)),
-		knownDevices:  make(map[string]ResolvedDevice, len(candidates)),
-		knownPoints:   make(map[deviceKey]ResolvedPoint),
-		policies:      make(map[deviceKey]loadedPolicy, len(candidates)),
-		latestByPoint: make(map[deviceKey]latestPointState, len(candidates)),
+		seenEvents:       make(map[sourceEventKey]string, len(candidates)),
+		seenPointSamples: make(map[pointSampleKey]string, len(candidates)),
+		positions:        make(map[sourcePartitionKey]SourcePositionHead, len(candidates)),
+		knownDevices:     make(map[string]ResolvedDevice, len(candidates)),
+		knownPoints:      make(map[deviceKey]ResolvedPoint),
+		policies:         make(map[deviceKey]loadedPolicy, len(candidates)),
+		latestByPoint:    make(map[deviceKey]latestPointState, len(candidates)),
 	}
 
 	seenEventPairs := make(map[sourceEventKey]struct{}, len(candidates))
@@ -524,14 +538,17 @@ func planBatchPrefetch(cache *metadataCache, candidates []ObservationCandidate) 
 		posPartitions[index] = part.partition
 	}
 
+	checkedSamples := make(map[pointSampleKey]struct{}, len(candidates))
 	plan := batchPrefetchPlan{
-		cacheEpoch:      cache.Epoch(),
-		eventSourceIDs:  eventSourceIDs,
-		eventIDs:        eventIDs,
-		posSourceIDs:    posSourceIDs,
-		posPartitions:   posPartitions,
-		allBatchPoints:  allBatchPoints,
-		seenBatchPoints: seenBatchPoints,
+		cacheEpoch:            cache.Epoch(),
+		eventSourceIDs:        eventSourceIDs,
+		eventIDs:              eventIDs,
+		posSourceIDs:          posSourceIDs,
+		posPartitions:         posPartitions,
+		allBatchPoints:        allBatchPoints,
+		seenBatchPoints:       seenBatchPoints,
+		checkedPointSampleSet: checkedSamples,
+		knownPointSamples:     collectUncheckedPointSamples(candidates, state, checkedSamples),
 	}
 
 	if cache == nil {
@@ -788,6 +805,9 @@ WHERE f.configured
 		batchDeviceIDs, batchKeys := splitDeviceKeys(plan.allBatchPoints)
 		queueLatestPointLookup(batch, batchDeviceIDs, batchKeys, state.latestByPoint)
 	}
+	if len(plan.knownPointSamples) > 0 {
+		queueAcceptedPointSampleLookup(batch, plan.knownPointSamples, state.seenPointSamples)
+	}
 
 	if err := tx.SendBatch(ctx, batch).Close(); err != nil {
 		return nil, fmt.Errorf("prefetch telemetry batch facts: %w", err)
@@ -796,16 +816,102 @@ WHERE f.configured
 	populatePrefetchCache(cache, plan.cacheEpoch, state, fetchedDevices, fetchedPoints, fetchedPolicies)
 
 	missingPeerKeys := collectMissingQualityPeers(state.policies, plan.seenBatchPoints)
-	if len(missingPeerKeys) > 0 {
-		peerDeviceIDs, peerKeys := splitDeviceKeys(missingPeerKeys)
-		peerBatch := &pgx.Batch{}
-		queueLatestPointLookup(peerBatch, peerDeviceIDs, peerKeys, state.latestByPoint)
-		if err := tx.SendBatch(ctx, peerBatch).Close(); err != nil {
-			return nil, fmt.Errorf("prefetch telemetry quality peer facts: %w", err)
+	remainingSamples := collectUncheckedPointSamples(candidates, state, plan.checkedPointSampleSet)
+	if len(missingPeerKeys) > 0 || len(remainingSamples) > 0 {
+		followUpBatch := &pgx.Batch{}
+		if len(missingPeerKeys) > 0 {
+			peerDeviceIDs, peerKeys := splitDeviceKeys(missingPeerKeys)
+			queueLatestPointLookup(followUpBatch, peerDeviceIDs, peerKeys, state.latestByPoint)
+		}
+		if len(remainingSamples) > 0 {
+			queueAcceptedPointSampleLookup(followUpBatch, remainingSamples, state.seenPointSamples)
+		}
+		if err := tx.SendBatch(ctx, followUpBatch).Close(); err != nil {
+			return nil, fmt.Errorf("prefetch telemetry follow-up facts: %w", err)
 		}
 	}
 
 	return state, nil
+}
+
+func newPointSampleKey(pointID string, sampledAt time.Time) pointSampleKey {
+	return pointSampleKey{
+		pointID:            strings.ToLower(strings.TrimSpace(pointID)),
+		sampledAtUnixMicro: sampledAt.UTC().Truncate(time.Microsecond).UnixMicro(),
+	}
+}
+
+func resolveCandidatePointID(candidate ObservationCandidate, state *batchWorkingState) string {
+	if candidate.SourcePath != SourcePathHistoryReplay {
+		if candidate.Point == nil {
+			return ""
+		}
+		return strings.ToLower(strings.TrimSpace(candidate.Point.PointID))
+	}
+	if state == nil {
+		return ""
+	}
+	if pt, ok := state.knownPoints[deviceKey{deviceID: candidate.ExternalID, key: candidate.TelemetryKey}]; ok {
+		return strings.ToLower(strings.TrimSpace(pt.PointID))
+	}
+	return ""
+}
+
+func collectUncheckedPointSamples(
+	candidates []ObservationCandidate,
+	state *batchWorkingState,
+	checked map[pointSampleKey]struct{},
+) []pointSampleQueryArg {
+	args := make([]pointSampleQueryArg, 0, len(candidates))
+	for _, candidate := range candidates {
+		pointID := resolveCandidatePointID(candidate, state)
+		if !uuidPattern.MatchString(pointID) {
+			continue
+		}
+		key := newPointSampleKey(pointID, candidate.SampledAt)
+		if _, alreadyChecked := checked[key]; alreadyChecked {
+			continue
+		}
+		checked[key] = struct{}{}
+		args = append(args, pointSampleQueryArg{
+			pointID:   pointID,
+			sampledAt: candidate.SampledAt.UTC().Truncate(time.Microsecond),
+		})
+	}
+	return args
+}
+
+func queueAcceptedPointSampleLookup(batch *pgx.Batch, args []pointSampleQueryArg, target map[pointSampleKey]string) {
+	if len(args) == 0 {
+		return
+	}
+	pointIDs := make([]string, len(args))
+	sampledAts := make([]time.Time, len(args))
+	for index, arg := range args {
+		pointIDs[index] = arg.pointID
+		sampledAts[index] = arg.sampledAt
+	}
+	batch.Queue(`
+SELECT DISTINCT ON (so.point_id, so.sampled_at)
+       so.point_id::text, so.sampled_at, so.observation_id::text
+FROM unnest($1::uuid[], $2::timestamptz[]) AS req(point_id, sampled_at)
+JOIN telemetry_runtime.source_observations so
+  ON so.point_id = req.point_id
+ AND so.sampled_at = req.sampled_at
+WHERE so.point_id IS NOT NULL
+  AND so.acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER')
+ORDER BY so.point_id, so.sampled_at, so.received_at DESC, so.observation_id ASC
+`, pointIDs, sampledAts).Query(func(rows pgx.Rows) error {
+		for rows.Next() {
+			var pointID, observationID string
+			var sampledAt time.Time
+			if err := rows.Scan(&pointID, &sampledAt, &observationID); err != nil {
+				return fmt.Errorf("scan existing telemetry point sample: %w", err)
+			}
+			target[newPointSampleKey(pointID, sampledAt)] = observationID
+		}
+		return rows.Err()
+	})
 }
 
 func queueLatestPointLookup(batch *pgx.Batch, deviceIDs, keys []string, target map[deviceKey]latestPointState) {
@@ -962,12 +1068,19 @@ func evaluateBatchCandidates(
 				decision:     decision,
 				payloadSHA:   payloadSHAs[index],
 			})
+			positionAdvanced := false
+			if facts.SampleAlreadySeen && (facts.CurrentPosition == nil || candidate.Position.Offset > facts.CurrentPosition.Offset) {
+				recordBatchPositionAdvance(candidate, state, plan, positionIndex)
+				positionAdvanced = true
+			}
 			receipts[index] = ObservationReceipt{
-				ObservationID:  existingID,
-				EvidenceID:     evidenceID,
-				Status:         decision.Status,
-				Quality:        decision.Quality,
-				QualityReasons: decision.QualityReasons,
+				ObservationID:    existingID,
+				EvidenceID:       evidenceID,
+				Status:           decision.Status,
+				Quality:          decision.Quality,
+				QualityReasons:   decision.QualityReasons,
+				DeviceID:         decision.DeviceID,
+				PositionAdvanced: positionAdvanced,
 			}
 			continue
 		}
@@ -1019,17 +1132,14 @@ func evaluateBatchCandidates(
 
 		recordInMemoryAndPlanIdentity(candidate, decision, state, plan, deviceIndex, pointIndex)
 
-		partKey := sourcePartitionKey{sourceID: candidate.SourceID, partition: candidate.Position.Partition}
 		state.seenEvents[sourceEventKey{sourceID: candidate.SourceID, eventID: candidate.Position.EventID}] = observationID
-		state.positions[partKey] = SourcePositionHead{Offset: candidate.Position.Offset, EventID: candidate.Position.EventID}
-		if posIdx, exists := positionIndex[partKey]; exists {
-			if candidate.Position.Offset > plan.positions[posIdx].candidate.Position.Offset {
-				plan.positions[posIdx] = sourcePositionUpsertRow{candidate: candidate}
+		if decision.PointID != "" && (decision.Status == ObservationAccepted || decision.Status == ObservationOutOfOrder) {
+			if state.seenPointSamples == nil {
+				state.seenPointSamples = make(map[pointSampleKey]string)
 			}
-		} else {
-			positionIndex[partKey] = len(plan.positions)
-			plan.positions = append(plan.positions, sourcePositionUpsertRow{candidate: candidate})
+			state.seenPointSamples[newPointSampleKey(decision.PointID, candidate.SampledAt)] = observationID
 		}
+		recordBatchPositionAdvance(candidate, state, plan, positionIndex)
 
 		plan.observations = append(plan.observations, sourceObservationInsertRow{
 			observationID: observationID,
@@ -1071,6 +1181,24 @@ func evaluateBatchCandidates(
 	return receipts, plan, nil
 }
 
+func recordBatchPositionAdvance(
+	candidate ObservationCandidate,
+	state *batchWorkingState,
+	plan *batchWritePlan,
+	positionIndex map[sourcePartitionKey]int,
+) {
+	partKey := sourcePartitionKey{sourceID: candidate.SourceID, partition: candidate.Position.Partition}
+	state.positions[partKey] = SourcePositionHead{Offset: candidate.Position.Offset, EventID: candidate.Position.EventID}
+	if posIdx, exists := positionIndex[partKey]; exists {
+		if candidate.Position.Offset > plan.positions[posIdx].candidate.Position.Offset {
+			plan.positions[posIdx] = sourcePositionUpsertRow{candidate: candidate}
+		}
+		return
+	}
+	positionIndex[partKey] = len(plan.positions)
+	plan.positions = append(plan.positions, sourcePositionUpsertRow{candidate: candidate})
+}
+
 func assembleObservationFacts(candidate ObservationCandidate, state *batchWorkingState) (ObservationFacts, string) {
 	facts := ObservationFacts{}
 	existingID, seen := state.seenEvents[sourceEventKey{sourceID: candidate.SourceID, eventID: candidate.Position.EventID}]
@@ -1106,6 +1234,13 @@ func assembleObservationFacts(candidate ObservationCandidate, state *batchWorkin
 
 	if facts.Device == nil || facts.DeviceConflict {
 		return facts, existingID
+	}
+	if !facts.EventAlreadySeen && facts.Point != nil && facts.Point.PointID != "" &&
+		(facts.CurrentPosition == nil || candidate.Position.Offset > facts.CurrentPosition.Offset) {
+		if sampleObsID, dupSample := state.seenPointSamples[newPointSampleKey(facts.Point.PointID, candidate.SampledAt)]; dupSample {
+			facts.SampleAlreadySeen = true
+			existingID = sampleObsID
+		}
 	}
 
 	deviceID := facts.Device.DeviceID

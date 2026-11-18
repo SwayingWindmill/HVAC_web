@@ -648,6 +648,7 @@ func TestEvaluateBatchCandidatesIsolatesEdgeReplay(t *testing.T) {
 	}
 	state.seenEvents = map[sourceEventKey]string{}
 	state.positions = map[sourcePartitionKey]SourcePositionHead{}
+	state.seenPointSamples = map[pointSampleKey]string{}
 
 	seq := 0
 	receipts, plan, err := evaluateBatchCandidates(candidates, payloadSHAs, state, EvaluateObservation, func(time.Time) (string, error) {
@@ -722,4 +723,53 @@ func TestEvaluateObservationRejectsPhysicalBoundsAndRegisterSentinels(t *testing
 	sentinelCand.SampledAt = now.Add(-48 * time.Hour)
 	histDec := EvaluateHistoricalObservation(sentinelCand, sentinelFacts, now)
 	assertObservationDecision(t, histDec, ObservationRejected, QualityInvalid, []QualityReason{QualityReasonOutOfRange, QualityReasonSentinel}, true, false)
+}
+
+func TestEvaluateObservationDeduplicatesAlreadyAcceptedSampleTimestamp(t *testing.T) {
+	now := time.Date(2026, 7, 24, 2, 0, 0, 0, time.UTC)
+	candidate := validObservationCandidate(now)
+	facts := validObservationFacts()
+	facts.SampleAlreadySeen = true
+
+	liveDec := EvaluateObservation(candidate, facts, now)
+	assertObservationDecision(t, liveDec, ObservationDuplicate, QualityInvalid, []QualityReason{QualityReasonDuplicate}, false, false)
+	if liveDec.ReevaluateSnapshot || liveDec.EmitPresenceSignal || liveDec.PointID == "" {
+		t.Fatalf("duplicate sample decision mutated snapshot/presence or omitted point: %#v", liveDec)
+	}
+
+	candidate.SourcePath = SourcePathHistoryReplay
+	candidate.SampledAt = now.Add(-2 * time.Hour)
+	histDec := EvaluateHistoricalObservation(candidate, facts, now)
+	assertObservationDecision(t, histDec, ObservationDuplicate, QualityInvalid, []QualityReason{QualityReasonDuplicate}, false, false)
+}
+
+func TestPlanBatchPrefetchNilCacheInitializesCheckedPointSamples(t *testing.T) {
+	now := time.Date(2026, 7, 24, 2, 0, 0, 0, time.UTC)
+	dev := ResolvedDevice{TenantID: ingestTenantA, SiteID: siteA, DeviceID: deviceA}
+	pt := ResolvedPoint{PointID: "018f2e00-3100-7000-8000-000000000001"}
+	cand := validObservationCandidate(now)
+	cand.Device = &dev
+	cand.Point = &pt
+
+	state, plan := planBatchPrefetch(nil, []ObservationCandidate{cand})
+	if plan.checkedPointSampleSet == nil {
+		t.Fatal("expected plan.checkedPointSampleSet to be initialized when metadataCache is nil")
+	}
+	if len(plan.knownPointSamples) != 1 {
+		t.Fatalf("expected 1 known point sample for live candidate, got %d", len(plan.knownPointSamples))
+	}
+
+	replayCand := cand
+	replayCand.SourcePath = SourcePathHistoryReplay
+	replayCand.ExternalID = deviceA
+	replayCand.Device = nil
+	replayCand.Point = nil
+	replayCand.SampledAt = now.Add(time.Minute)
+	state.knownPoints[deviceKey{deviceID: deviceA, key: replayCand.TelemetryKey}] = ResolvedPoint{
+		PointID: "018f2e00-3100-7000-8000-000000000002",
+	}
+	remaining := collectUncheckedPointSamples([]ObservationCandidate{cand, replayCand}, state, plan.checkedPointSampleSet)
+	if len(remaining) != 1 || remaining[0].pointID != "018f2e00-3100-7000-8000-000000000002" {
+		t.Fatalf("expected remaining follow-up point sample to resolve without nil map panic, got %+v", remaining)
+	}
 }

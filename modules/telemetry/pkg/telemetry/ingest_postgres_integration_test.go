@@ -1310,3 +1310,72 @@ VALUES ($1::uuid, $2, $3::jsonb, $4)`, siteA, pair.code, pairJSON, base.Add(time
 		}
 	}
 }
+
+func TestPostgresDeduplicatesRetransmittedPointSamplesAcrossPathsAndBatch(t *testing.T) {
+	runtimeURL, adminURL := postgresTestURLs(t)
+	ctx := t.Context()
+	admin, err := pgxpool.New(ctx, adminURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	cleanupBatchIntegrationState(t, admin)
+	defer cleanupBatchIntegrationState(t, admin)
+
+	base := time.Date(2026, 7, 16, 4, 0, 0, 0, time.UTC)
+	dev1 := batchDeviceID(12)
+	seedBatchIntegrationDevice(t, admin, dev1, base)
+	cel := "Cel"
+	seedBatchFreshnessPolicy(t, admin, dev1, "zone.temperature", "NUMBER", &cel, nil, nil, nil, base)
+
+	store, err := OpenPostgresStore(ctx, runtimeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	sampledAt := base.Add(10 * time.Second)
+	pointID := batchPointID(71)
+	liveA := batchCandidate(501, "tb-batch-test-sample-dedup-live", 1, dev1, pointID, "zone.temperature", json.RawMessage(`22.5`), "NUMBER", &cel, "TELEMETRY", sampledAt, sampledAt.Add(time.Second))
+	liveBInBatch := batchCandidate(502, "tb-batch-test-sample-dedup-live", 2, dev1, pointID, "zone.temperature", json.RawMessage(`22.5`), "NUMBER", &cel, "TELEMETRY", sampledAt, sampledAt.Add(2*time.Second))
+
+	receipts, err := store.AcceptObservationBatch(ctx, []ObservationCandidate{liveA, liveBInBatch})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(receipts) != 2 || receipts[0].Status != ObservationAccepted || receipts[1].Status != ObservationDuplicate || receipts[1].ObservationID != receipts[0].ObservationID || !receipts[1].PositionAdvanced {
+		t.Fatalf("same-batch sample dedup receipts=%#v", receipts)
+	}
+
+	replayCand := ObservationCandidate{
+		SourceID:           historicalReplaySourceID,
+		SourcePath:         SourcePathHistoryReplay,
+		ExternalEntityType: "DEVICE",
+		ExternalID:         dev1,
+		TelemetryKey:       "zone.temperature",
+		Value:              json.RawMessage(`22.5`),
+		ValueType:          "NUMBER",
+		Unit:               &cel,
+		SampledAt:          sampledAt,
+		ReceivedAt:         sampledAt.Add(time.Hour),
+		Position:           SourcePosition{Partition: "tb-batch-test-sample-dedup-replay", Offset: 1, EventID: batchEventID(503)},
+	}
+	replayReceipt, err := store.AcceptHistoricalObservation(ctx, replayCand)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayReceipt.Status != ObservationDuplicate || replayReceipt.ObservationID != receipts[0].ObservationID || !replayReceipt.PositionAdvanced {
+		t.Fatalf("cross-path replay sample dedup receipt=%#v want original ObservationID=%s", replayReceipt, receipts[0].ObservationID)
+	}
+
+	var obsCount, outboxCount, replayHeadOffset int
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM telemetry_runtime.source_observations WHERE point_id = $1::uuid`, pointID).Scan(&obsCount); err != nil || obsCount != 1 {
+		t.Fatalf("expected 1 accepted source_observation, got obsCount=%d err=%v", obsCount, err)
+	}
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM telemetry_runtime.telemetry_history_outbox WHERE payload ->> 'point_id' = $1`, pointID).Scan(&outboxCount); err != nil || outboxCount != 1 {
+		t.Fatalf("expected 1 history outbox row, got outboxCount=%d err=%v", outboxCount, err)
+	}
+	if err := admin.QueryRow(ctx, `SELECT source_offset FROM telemetry_runtime.source_positions WHERE source_id = $1 AND source_partition = 'tb-batch-test-sample-dedup-replay'`, historicalReplaySourceID).Scan(&replayHeadOffset); err != nil || replayHeadOffset != 1 {
+		t.Fatalf("expected replay source position to advance to 1, got %d err=%v", replayHeadOffset, err)
+	}
+}

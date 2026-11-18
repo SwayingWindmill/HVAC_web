@@ -1,12 +1,19 @@
 package metric
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -217,5 +224,122 @@ func TestNewClickHouseStoreInitializesTunedDefaultHTTPTransport(t *testing.T) {
 	}
 	if withCustom.client != custom {
 		t.Fatal("expected custom HTTP client to be preserved")
+	}
+}
+
+func TestInsertMetricAndInsertMetricsUseAsyncInsertAndDedupToken(t *testing.T) {
+	type capture struct {
+		query url.Values
+		enc   string
+		rows  int
+	}
+	var mu sync.Mutex
+	var captures []capture
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		raw, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded := raw
+		if request.Header.Get("Content-Encoding") == "gzip" {
+			gz, err := gzip.NewReader(bytes.NewReader(raw))
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded, err = io.ReadAll(gz)
+			_ = gz.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		lines := strings.Split(strings.TrimSpace(string(decoded)), "\n")
+		mu.Lock()
+		captures = append(captures, capture{
+			query: request.URL.Query(),
+			enc:   request.Header.Get("Content-Encoding"),
+			rows:  len(lines),
+		})
+		mu.Unlock()
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	store, err := NewClickHouseStore(server.URL, "metric_engine_writer", "[REDACTED_SECRET]", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2026, 11, 18, 0, 0, 0, 0, time.UTC)
+	makeResult := func(id string, val float64, pad string) Result {
+		return Result{
+			RunID:        "run-" + id,
+			ResultID:     id,
+			PeriodStart:  start,
+			PeriodEnd:    start.Add(time.Hour),
+			CalculatedAt: start.Add(time.Hour),
+			Value:        val,
+			Quality:      "GOOD",
+			Completeness: 1,
+			Revision:     1,
+			Inputs:       []Input{{Code: "x", Type: "POINT", Reference: pad, Value: val, Quality: "GOOD", Completeness: 1}},
+			Binding: Binding{
+				TenantID:        "018f4d00-0000-7000-8000-000000000001",
+				SiteID:          "018f4e00-1000-7000-8000-000000000001",
+				BindingID:       "018f4e00-1200-7000-8000-000000000001",
+				BindingVersion:  1,
+				MetricID:        "018f4e00-1300-7000-8000-000000000001",
+				MetricVersionID: "018f4e00-1400-7000-8000-000000000001",
+				MetricCode:      "hourly_energy",
+				MetricVersion:   1,
+				SubjectType:     "SITE",
+				SubjectID:       "018f4e00-1000-7000-8000-000000000001",
+				Granularity:     "HOUR",
+				Unit:            "kWh",
+			},
+		}
+	}
+
+	r1 := makeResult("018f4e00-2000-7000-8000-000000000001", 10.5, "p1")
+	if err := store.InsertMetric(context.Background(), r1); err != nil {
+		t.Fatal(err)
+	}
+
+	var many []Result
+	for i := range 20 {
+		many = append(many, makeResult(fmt.Sprintf("018f4e00-2000-7000-8000-%012d", i+1), float64(i+1), strings.Repeat("p", 200)))
+	}
+	if err := store.InsertMetrics(context.Background(), many); err != nil {
+		t.Fatal(err)
+	}
+	slices.Reverse(many)
+	if err := store.InsertMetrics(context.Background(), many); err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(captures) != 3 {
+		t.Fatalf("captures=%d, want 3", len(captures))
+	}
+	for i, capItem := range captures {
+		if capItem.query.Get("async_insert") != "1" ||
+			capItem.query.Get("wait_for_async_insert") != "1" ||
+			capItem.query.Get("async_insert_deduplicate") != "1" ||
+			len(capItem.query.Get("insert_deduplication_token")) != 64 {
+			t.Fatalf("capture[%d] missing async/dedup params: %v", i, capItem.query)
+		}
+	}
+	if captures[0].rows != 1 || captures[0].enc != "" {
+		t.Fatalf("single row capture unexpected: rows=%d enc=%q", captures[0].rows, captures[0].enc)
+	}
+	if captures[1].rows != 20 || captures[1].enc != "gzip" {
+		t.Fatalf("batch capture unexpected: rows=%d enc=%q", captures[1].rows, captures[1].enc)
+	}
+	if captures[1].query.Get("insert_deduplication_token") != captures[2].query.Get("insert_deduplication_token") {
+		t.Fatalf("token changed across row reorder: %s != %s",
+			captures[1].query.Get("insert_deduplication_token"),
+			captures[2].query.Get("insert_deduplication_token"))
+	}
+	if sha256.Size != 32 {
+		t.Fatal("unexpected sha256 size")
 	}
 }

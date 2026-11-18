@@ -63,10 +63,11 @@ func (f *fakeRegistry) ListStalePublications(context.Context, time.Time, int) ([
 }
 
 type fakeSeries struct {
-	inserted []Result
-	existing map[string]bool
-	byPoint  map[string]Input
-	errPoint map[string]error
+	inserted         []Result
+	insertBatchCalls [][]Result
+	existing         map[string]bool
+	byPoint          map[string]Input
+	errPoint         map[string]error
 }
 
 func (f *fakeSeries) ReadPoint(_ context.Context, _ Binding, pointID string, _, _ time.Time) (Input, error) {
@@ -97,6 +98,16 @@ func (f *fakeSeries) InsertMetric(_ context.Context, result Result) error {
 		f.existing = map[string]bool{}
 	}
 	f.existing[result.ResultID] = true
+	return nil
+}
+
+func (f *fakeSeries) InsertMetrics(_ context.Context, results []Result) error {
+	f.insertBatchCalls = append(f.insertBatchCalls, append([]Result(nil), results...))
+	for _, result := range results {
+		if err := f.InsertMetric(context.Background(), result); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -289,5 +300,26 @@ func TestSynthesizedMultiPointBindingSumsSubMetersAndMarksMissingSubMeterPartial
 	}
 	if partial.Value != 125 || partial.Quality != "ESTIMATED" || partial.Completeness != 0.75 {
 		t.Fatalf("partial result = (%v, %s, %v); want (125, ESTIMATED, 0.75)", partial.Value, partial.Quality, partial.Completeness)
+	}
+}
+
+func TestReconcileBatchesMissingFacts(t *testing.T) {
+	first := Result{RunID: "run-1", ResultID: "res-1", Revision: 1, Binding: Binding{TenantID: "tenant", SiteID: "site"}, Value: 10, Quality: "GOOD", Completeness: 1}
+	second := Result{RunID: "run-2", ResultID: "res-2", Revision: 2, Binding: Binding{TenantID: "tenant", SiteID: "site"}, Value: 20, Quality: "GOOD", Completeness: 1}
+	registry := &fakeRegistry{stale: []Result{first, second}}
+	series := &fakeSeries{existing: map[string]bool{}}
+	engine, err := New(registry, series, &fakeLatest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repaired, err := engine.Reconcile(context.Background(), time.Now().UTC(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repaired != 2 || len(registry.completed) != 2 {
+		t.Fatalf("repaired=%d completed=%d", repaired, len(registry.completed))
+	}
+	if len(series.insertBatchCalls) != 1 || len(series.insertBatchCalls[0]) != 2 {
+		t.Fatalf("expected 1 batched InsertMetrics call with 2 items, got %#v", series.insertBatchCalls)
 	}
 }

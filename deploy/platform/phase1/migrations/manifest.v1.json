@@ -156,7 +156,8 @@
         "infra/telemetry/postgres/init/mqtt-runtime-events.sql",
         "infra/telemetry/postgres/init/alarm-evaluation-dead-letter.sql",
         "infra/telemetry/postgres/init/telemetry-history-dead-letter-and-retention.sql",
-        "infra/telemetry/postgres/init/telemetry-runtime-unnest-and-indexes.sql"
+        "infra/telemetry/postgres/init/telemetry-runtime-unnest-and-indexes.sql",
+        "infra/telemetry/postgres/init/telemetry-accepted-point-sample-index.sql"
       ]
     },
     {

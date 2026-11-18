@@ -322,3 +322,110 @@ FORMAT TSVRaw
 		t.Fatalf("Historical Replay mutated Current: latest=%s/%d -> %s/%d snapshot=%d/%s -> %d/%s presence=%d -> %d", latestValue, latestRevision, afterLatestValue, afterLatestRevision, snapshotRevision, snapshotSHA, afterSnapshotRevision, afterSnapshotSHA, presenceSignals, afterPresenceSignals)
 	}
 }
+
+func TestPostgresOutboxDeduplicatesRetransmittedTimestampBeforeClickHouseMV(t *testing.T) {
+	runtimeURL, adminURL := postgresTestURLs(t)
+	historyURL := os.Getenv("S2_TELEMETRY_HISTORY_DATABASE_URL")
+	clickHouseURL := os.Getenv("S2_CLICKHOUSE_HTTP_URL")
+	if historyURL == "" || clickHouseURL == "" {
+		t.Skip("S2 ClickHouse history integration environment is not configured")
+	}
+	ctx := t.Context()
+	admin, err := pgxpool.New(ctx, adminURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	const livePartition = "tb-history-dedup-live"
+	const replayPartition = "tb-history-dedup-replay"
+	cleanup := func() {
+		for _, partition := range []string{livePartition, replayPartition} {
+			for _, statement := range []string{
+				`DELETE FROM telemetry_runtime.telemetry_history_outbox WHERE payload ->> 'source_partition' = $1`,
+				`DELETE FROM telemetry_runtime.source_delivery_evidence WHERE source_partition = $1`,
+				`DELETE FROM telemetry_runtime.source_observations WHERE source_partition = $1`,
+				`DELETE FROM telemetry_runtime.source_positions WHERE source_partition = $1`,
+			} {
+				if _, err := admin.Exec(ctx, statement, partition); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+	}
+	cleanup()
+	defer cleanup()
+
+	store, err := OpenPostgresStore(ctx, runtimeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	sampledAt := time.Date(2026, 7, 29, 10, 0, 5, 0, time.UTC)
+	live := ingestCandidate(
+		"018f2e00-9f00-7000-8000-000000000001", sourceA, livePartition, 1, SourcePathPush,
+		"mqtt-device-tenant-a-site-1", "zone.temperature", json.RawMessage(`22.25`), "NUMBER", "Cel",
+		sampledAt, sampledAt.Add(time.Second),
+	)
+	firstReceipt, err := store.AcceptObservation(ctx, live)
+	if err != nil || firstReceipt.Status != ObservationAccepted {
+		t.Fatalf("first live receipt=%#v err=%v", firstReceipt, err)
+	}
+
+	// Simulate reconnect replay with a brand-new EventID and HISTORY_REPLAY partition for the exact same timestamp.
+	replayedSameSample := ingestCandidate(
+		"018f2e00-9f00-7000-8000-000000000002", sourceA, replayPartition, 1, SourcePathHistoryReplay,
+		"mqtt-device-tenant-a-site-1", "zone.temperature", json.RawMessage(`22.25`), "NUMBER", "Cel",
+		sampledAt, sampledAt.Add(5*time.Minute),
+	)
+	dupReceipt, err := store.AcceptHistoricalObservation(ctx, replayedSameSample)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dupReceipt.Status != ObservationDuplicate || dupReceipt.ObservationID != firstReceipt.ObservationID {
+		t.Fatalf("expected duplicate pointing to %s, got %#v", firstReceipt.ObservationID, dupReceipt)
+	}
+
+	repository, err := OpenHistoryPostgresRepository(ctx, historyURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.Close()
+	sink, err := NewClickHouseHistorySink(ClickHouseHistoryConfig{
+		BaseURL: clickHouseURL, Database: "telemetry_history", Table: "observations",
+		Username: os.Getenv("S2_CLICKHOUSE_USERNAME"), Password: os.Getenv("S2_CLICKHOUSE_PASSWORD"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	relay, err := NewHistoryRelay(HistoryRelayConfig{
+		Repository: repository, Sink: sink, BatchSize: 16,
+		LeaseFor: 30 * time.Second, RetryAfter: time.Second,
+		Now: func() time.Time { return sampledAt.Add(6 * time.Minute) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		projected, err := relay.RelayOnce(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if projected == 0 {
+			break
+		}
+	}
+
+	if actual := clickHouseQuery(t, clickHouseURL, fmt.Sprintf(`
+SELECT sample_count, average_value
+FROM telemetry_history.numeric_hourly
+WHERE tenant_id = toUUID('%s')
+  AND site_id = toUUID('%s')
+  AND device_id = toUUID('%s')
+  AND telemetry_key = 'zone.temperature'
+  AND hour = toDateTime('2026-07-29 10:00:00', 'UTC')
+FORMAT TSVRaw
+`, tenantA, siteA, deviceA)); actual != "1\t22.25" {
+		t.Fatalf("expected numeric_hourly sample_count=1 after retransmission dedup, got %q", actual)
+	}
+}

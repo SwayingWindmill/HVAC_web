@@ -832,7 +832,18 @@ func newAnalyticsHTTPClient(caPath string) (*http.Client, error) {
 		}
 		tlsConfig.RootCAs = roots
 	}
-	return &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{TLSClientConfig: tlsConfig}}, nil
+	return &http.Client{
+		Timeout: 15 * time.Second,
+		Transport: &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			TLSClientConfig:       tlsConfig,
+			MaxIdleConns:          64,
+			MaxIdleConnsPerHost:   32,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: time.Second,
+		},
+	}, nil
 }
 
 func loadRealtimeService(store *telemetry.PostgresStore, certificate tls.Certificate, metrics *observability.Registry) (*telemetry.RealtimeService, context.Context, context.CancelFunc, error) {

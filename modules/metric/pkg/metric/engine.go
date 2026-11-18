@@ -107,6 +107,11 @@ type SeriesStore interface {
 	HasMetricResult(context.Context, string) (bool, error)
 }
 
+// BatchSeriesStore optionally persists multiple reconciled metric results in one ClickHouse block.
+type BatchSeriesStore interface {
+	InsertMetrics(context.Context, []Result) error
+}
+
 type Engine struct {
 	registry Registry
 	series   SeriesStore
@@ -264,21 +269,39 @@ func (e *Engine) ReconcileScope(ctx context.Context, tenantID, siteID string, st
 
 func (e *Engine) reconcileResults(ctx context.Context, stale []Result) (int, error) {
 	repaired := 0
+	missing := make([]Result, 0, len(stale))
+	completed := make([]Result, 0, len(stale))
 	for _, result := range stale {
 		exists, checkErr := e.series.HasMetricResult(ctx, result.ResultID)
 		if checkErr != nil {
 			return repaired, checkErr
 		}
 		if !exists {
-			if checkErr = e.series.InsertMetric(ctx, result); checkErr != nil {
+			missing = append(missing, result)
+			continue
+		}
+		loaded, checkErr := e.series.ReadMetricResult(ctx, result)
+		if checkErr != nil {
+			return repaired, checkErr
+		}
+		completed = append(completed, loaded)
+	}
+	if len(missing) > 0 {
+		if batchStore, ok := e.series.(BatchSeriesStore); ok {
+			if checkErr := batchStore.InsertMetrics(ctx, missing); checkErr != nil {
 				return repaired, checkErr
 			}
+			completed = append(completed, missing...)
 		} else {
-			result, checkErr = e.series.ReadMetricResult(ctx, result)
-			if checkErr != nil {
-				return repaired, checkErr
+			for _, item := range missing {
+				if checkErr := e.series.InsertMetric(ctx, item); checkErr != nil {
+					return repaired, checkErr
+				}
+				completed = append(completed, item)
 			}
 		}
+	}
+	for _, result := range completed {
 		if err := e.registry.CompletePublication(ctx, result, e.now().UTC()); err != nil {
 			return repaired, err
 		}

@@ -2,13 +2,16 @@ package metric
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -242,25 +245,87 @@ func (s *ClickHouseStore) DeleteMetricResult(ctx context.Context, tenantID, site
 }
 
 func (s *ClickHouseStore) InsertMetric(ctx context.Context, r Result) error {
-	provenance, _ := json.Marshal(map[string]any{"calculationRunId": r.RunID, "inputs": SortedInputs(r.Inputs)})
-	row := map[string]any{"result_id": r.ResultID, "tenant_id": r.Binding.TenantID, "site_id": r.Binding.SiteID, "subject_type": r.Binding.SubjectType, "subject_id": r.Binding.SubjectID, "metric_id": r.Binding.MetricID, "metric_version_id": r.Binding.MetricVersionID, "metric_code": r.Binding.MetricCode, "metric_version": r.Binding.MetricVersion, "metric_binding_id": r.Binding.BindingID, "binding_version": r.Binding.BindingVersion, "period_start": r.PeriodStart, "period_end": r.PeriodEnd, "calculated_at": r.CalculatedAt, "granularity": r.Binding.Granularity, "value_type": "NUMBER", "value_json": strconv.FormatFloat(r.Value, 'g', -1, 64), "value_number": r.Value, "unit": r.Binding.Unit, "quality": r.Quality, "completeness": r.Completeness, "calculation_run_id": r.RunID, "revision": r.Revision, "provenance": string(provenance)}
+	return s.InsertMetrics(ctx, []Result{r})
+}
+
+// InsertMetrics writes one or more metric results in a single async-insert block
+// with a deterministic SHA-256 deduplication token across retries.
+func (s *ClickHouseStore) InsertMetrics(ctx context.Context, results []Result) error {
+	if s == nil || s.base == nil || s.client == nil {
+		return errors.New("metric ClickHouse store is closed")
+	}
+	if len(results) == 0 {
+		return nil
+	}
+	ordered := slices.Clone(results)
+	slices.SortFunc(ordered, func(a, b Result) int {
+		return strings.Compare(a.ResultID, b.ResultID)
+	})
 	var body bytes.Buffer
 	enc := json.NewEncoder(&body)
 	enc.SetEscapeHTML(false)
-	if err := enc.Encode(row); err != nil {
-		return err
+	for _, r := range ordered {
+		provenance, err := json.Marshal(map[string]any{"calculationRunId": r.RunID, "inputs": SortedInputs(r.Inputs)})
+		if err != nil {
+			return fmt.Errorf("encode metric provenance: %w", err)
+		}
+		row := map[string]any{
+			"result_id": r.ResultID, "tenant_id": r.Binding.TenantID, "site_id": r.Binding.SiteID,
+			"subject_type": r.Binding.SubjectType, "subject_id": r.Binding.SubjectID,
+			"metric_id": r.Binding.MetricID, "metric_version_id": r.Binding.MetricVersionID,
+			"metric_code": r.Binding.MetricCode, "metric_version": r.Binding.MetricVersion,
+			"metric_binding_id": r.Binding.BindingID, "binding_version": r.Binding.BindingVersion,
+			"period_start": r.PeriodStart.UTC(), "period_end": r.PeriodEnd.UTC(), "calculated_at": r.CalculatedAt.UTC(),
+			"granularity": r.Binding.Granularity, "value_type": "NUMBER",
+			"value_json": strconv.FormatFloat(r.Value, 'g', -1, 64), "value_number": r.Value,
+			"unit": r.Binding.Unit, "quality": r.Quality, "completeness": r.Completeness,
+			"calculation_run_id": r.RunID, "revision": r.Revision, "provenance": string(provenance),
+		}
+		if err := enc.Encode(row); err != nil {
+			return err
+		}
 	}
+
+	raw := body.Bytes()
+	token := fmt.Sprintf("%x", sha256.Sum256(raw))
+	payload := raw
+	compressed := false
+	if len(ordered) > 1 && len(raw) >= 4096 {
+		var gzBuf bytes.Buffer
+		gz, err := gzip.NewWriterLevel(&gzBuf, gzip.BestSpeed)
+		if err != nil {
+			return fmt.Errorf("create gzip writer for metric batch: %w", err)
+		}
+		if _, err := gz.Write(raw); err != nil {
+			_ = gz.Close()
+			return fmt.Errorf("compress metric result batch: %w", err)
+		}
+		if err := gz.Close(); err != nil {
+			return fmt.Errorf("finalize compressed metric result batch: %w", err)
+		}
+		payload = gzBuf.Bytes()
+		compressed = true
+	}
+
 	u := *s.base
 	q := u.Query()
 	q.Set("database", "analytics")
 	q.Set("query", "INSERT INTO analytics.metric_result_facts FORMAT JSONEachRow")
 	q.Set("date_time_input_format", "best_effort")
+	q.Set("async_insert", "1")
+	q.Set("wait_for_async_insert", "1")
+	q.Set("async_insert_deduplicate", "1")
+	q.Set("insert_deduplication_token", token)
+	q.Set("wait_end_of_query", "1")
 	u.RawQuery = q.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), &body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(payload))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/x-ndjson")
+	if compressed {
+		req.Header.Set("Content-Encoding", "gzip")
+	}
 	if s.user != "" {
 		req.SetBasicAuth(s.user, s.password)
 	}
@@ -273,5 +338,6 @@ func (s *ClickHouseStore) InsertMetric(ctx context.Context, r Result) error {
 		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 		return fmt.Errorf("insert metric result returned %d: %s", resp.StatusCode, strings.TrimSpace(string(detail)))
 	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	return nil
 }
