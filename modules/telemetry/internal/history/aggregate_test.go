@@ -222,6 +222,23 @@ func TestGaugeAggregateQueryRoutingAndFallbackRules(t *testing.T) {
 				t.Fatalf("SQL missing %q:\n%s", marker, sql)
 			}
 		}
+		if usedRollup {
+			if strings.Contains(sql, "WITH ") {
+				t.Fatalf("rollup SQL must not use top-level WITH alias over rollup columns:\n%s", sql)
+			}
+			if !strings.Contains(sql, "GROUP BY rollup.telemetry_key, toString(rollup.point_id), rollup.point_revision, rollup.point_type,") {
+				t.Fatalf("rollup SQL must group by projected toString(rollup.point_id):\n%s", sql)
+			}
+		}
+	}
+
+	snapSQL := client.aggregateSnapshotQuery(telemetryhistorymodel.DeviceHistoryAggregateQuery{
+		TenantID: historyTenantID, SiteID: historySiteID, DeviceID: historyDeviceID,
+		Keys: []string{"zone.temperature"}, QualityPolicy: telemetryhistorymodel.AggregateQualityUsable,
+		From: time.Date(2026, 10, 11, 0, 0, 0, 0, time.UTC), To: time.Date(2026, 10, 11, 1, 0, 0, 0, time.UTC),
+	})
+	if !strings.Contains(snapSQL, "toInt64(countIf(") || !strings.Contains(snapSQL, "ifNull(isFinite(value_number), 0) = 1") {
+		t.Fatalf("snapshot SQL must normalize Nullable countIf predicates:\n%s", snapSQL)
 	}
 
 	base := telemetryhistorymodel.DeviceHistoryAggregateQuery{

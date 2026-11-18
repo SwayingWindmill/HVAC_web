@@ -380,7 +380,7 @@ SELECT
   formatDateTime(snapshot_cutoff, '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS snapshot_at,
   if(countIf(projected_at < snapshot_cutoff) = 0, CAST(NULL, 'Nullable(String)'), formatDateTime(maxIf(projected_at, projected_at < snapshot_cutoff), '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC')) AS projection_watermark,
   if(countIf(projected_at >= snapshot_cutoff) > 0, toUInt8(1), toUInt8(0)) AS has_concurrent_writes,
-  countIf(projected_at < snapshot_cutoff AND point_type IN ('TELEMETRY', 'SETTING') AND value_type = 'NUMBER' AND value_number IS NOT NULL AND isFinite(value_number) AND %s) AS raw_gauge_included_count
+  toInt64(countIf(projected_at < snapshot_cutoff AND ifNull(point_type, '') IN ('TELEMETRY', 'SETTING') AND ifNull(value_type, '') = 'NUMBER' AND value_number IS NOT NULL AND ifNull(isFinite(value_number), 0) = 1 AND %s)) AS raw_gauge_included_count
 FROM %s.%s
 WHERE tenant_id = toUUID('%s')
   AND site_id = toUUID('%s')
@@ -464,21 +464,21 @@ func rollupHasConcurrentWrites(rows []aggregateRow, snapshotAt time.Time) bool {
 }
 
 func (client *Client) rollupGaugeAggregateQuery(query telemetryhistorymodel.DeviceHistoryAggregateQuery, rollupTable string) string {
-	bucket, end := aggregateBucketExpressionsFor(query, "rollup.bucket", "period_bucket")
+	bucket, _ := aggregateBucketExpressionsFor(query, "rollup.bucket", "")
+	_, end := aggregateBucketExpressionsFor(query, "rollup.bucket", bucket)
 	prefix := "usable"
 	if query.QualityPolicy == telemetryhistorymodel.AggregateQualityValidOnly {
 		prefix = "valid"
 	}
 	fromUTC := query.From.UTC().Format("2006-01-02 15:04:05")
 	toUTC := query.To.UTC().Format("2006-01-02 15:04:05")
-	return fmt.Sprintf(`WITH %[1]s AS period_bucket
-SELECT
+	return fmt.Sprintf(`SELECT
   rollup.telemetry_key AS telemetry_key,
   toString(rollup.point_id) AS point_id,
   rollup.point_revision AS point_revision,
   rollup.point_type AS point_type,
   anyMerge(rollup.unit_state) AS unit,
-  formatDateTime(period_bucket, '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS period_start,
+  formatDateTime(%[1]s, '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS period_start,
   formatDateTime(%[2]s, '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS period_end,
   countIfMerge(rollup.good_count) AS good_count,
   countIfMerge(rollup.partial_count) AS partial_count,
@@ -512,8 +512,8 @@ WHERE rollup.tenant_id = toUUID('%[5]s')
   AND rollup.point_type IN ('TELEMETRY', 'SETTING')
   AND rollup.bucket >= toDateTime('%[9]s', 'UTC')
   AND rollup.bucket < toDateTime('%[10]s', 'UTC')
-GROUP BY rollup.telemetry_key, rollup.point_id, rollup.point_revision, rollup.point_type, period_bucket
-HAVING included_count > 0
+GROUP BY rollup.telemetry_key, toString(rollup.point_id), rollup.point_revision, rollup.point_type, %[1]s
+HAVING countIfMerge(rollup.%[3]s_count) > 0
 FORMAT JSONEachRow`, bucket, end, prefix, rollupTable, query.TenantID, query.SiteID, query.DeviceID, quotedKeys(query.Keys), fromUTC, toUTC)
 }
 
