@@ -63,8 +63,8 @@ async function waitForServices() {
   for (let attempt = 0; attempt < 360; attempt += 1) {
     try {
       const postgresReady = psql(`SELECT (to_regclass('telemetry_runtime.telemetry_history_outbox') IS NOT NULL)::text`);
-      const clickHouseReady = clickHouse(`SELECT count() FROM system.tables WHERE database = 'telemetry_history' AND name IN ('observations', 'numeric_hourly_states', 'numeric_hourly')`);
-      if (postgresReady === 'true' && clickHouseReady === '3') {
+      const ch = await fetch(`${clickHouseURL}/?user=telemetry_history&query=SELECT+count()+FROM+telemetry_history.numeric_gauge_15min_states`);
+      if (postgresReady === 'true' && ch.ok) {
         stableChecks += 1;
         if (stableChecks >= 3) return;
       } else stableChecks = 0;
