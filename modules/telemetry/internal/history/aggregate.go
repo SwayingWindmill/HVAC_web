@@ -464,8 +464,8 @@ func rollupHasConcurrentWrites(rows []aggregateRow, snapshotAt time.Time) bool {
 }
 
 func (client *Client) rollupGaugeAggregateQuery(query telemetryhistorymodel.DeviceHistoryAggregateQuery, rollupTable string) string {
-	bucket, _ := aggregateBucketExpressionsFor(query, "rollup.bucket", "")
-	_, end := aggregateBucketExpressionsFor(query, "rollup.bucket", bucket)
+	bucket, _ := aggregateBucketExpressionsFor(query, "gauge_rollup.bucket", "")
+	_, end := aggregateBucketExpressionsFor(query, "gauge_rollup.bucket", bucket)
 	prefix := "usable"
 	if query.QualityPolicy == telemetryhistorymodel.AggregateQualityValidOnly {
 		prefix = "valid"
@@ -473,26 +473,26 @@ func (client *Client) rollupGaugeAggregateQuery(query telemetryhistorymodel.Devi
 	fromUTC := query.From.UTC().Format("2006-01-02 15:04:05")
 	toUTC := query.To.UTC().Format("2006-01-02 15:04:05")
 	return fmt.Sprintf(`SELECT
-  rollup.telemetry_key AS telemetry_key,
-  toString(rollup.point_id) AS point_id,
-  rollup.point_revision AS point_revision,
-  rollup.point_type AS point_type,
-  anyMerge(rollup.unit_state) AS unit,
+  gauge_rollup.telemetry_key AS telemetry_key,
+  toString(gauge_rollup.point_id) AS point_id,
+  gauge_rollup.point_revision AS point_revision,
+  gauge_rollup.point_type AS point_type,
+  anyMerge(gauge_rollup.unit_state) AS unit,
   formatDateTime(%[1]s, '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS period_start,
   formatDateTime(%[2]s, '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS period_end,
-  countIfMerge(rollup.good_count) AS good_count,
-  countIfMerge(rollup.partial_count) AS partial_count,
-  countIfMerge(rollup.estimated_count) AS estimated_count,
-  countIfMerge(rollup.manual_count) AS manual_count,
-  countIfMerge(rollup.stale_count) AS stale_count,
-  countIfMerge(rollup.invalid_count) AS invalid_count,
-  countMerge(rollup.total_count) AS total_count,
-  countIfMerge(rollup.%[3]s_count) AS included_count,
-  avgIfMerge(rollup.%[3]s_avg) AS average,
-  minIfMerge(rollup.%[3]s_min) AS minimum,
-  maxIfMerge(rollup.%[3]s_max) AS maximum,
-  argMinIfMerge(rollup.%[3]s_first) AS first,
-  argMaxIfMerge(rollup.%[3]s_last) AS last,
+  countIfMerge(gauge_rollup.good_count) AS good_count,
+  countIfMerge(gauge_rollup.partial_count) AS partial_count,
+  countIfMerge(gauge_rollup.estimated_count) AS estimated_count,
+  countIfMerge(gauge_rollup.manual_count) AS manual_count,
+  countIfMerge(gauge_rollup.stale_count) AS stale_count,
+  countIfMerge(gauge_rollup.invalid_count) AS invalid_count,
+  countMerge(gauge_rollup.total_count) AS total_count,
+  countIfMerge(gauge_rollup.%[3]s_count) AS included_count,
+  avgIfMerge(gauge_rollup.%[3]s_avg) AS average,
+  minIfMerge(gauge_rollup.%[3]s_min) AS minimum,
+  maxIfMerge(gauge_rollup.%[3]s_max) AS maximum,
+  argMinIfMerge(gauge_rollup.%[3]s_first) AS first,
+  argMaxIfMerge(gauge_rollup.%[3]s_last) AS last,
   CAST(NULL, 'Nullable(Float64)') AS delta_sum,
   toInt64(0) AS delta_count,
   toInt64(0) AS reset_count,
@@ -503,17 +503,17 @@ func (client *Client) rollupGaugeAggregateQuery(query telemetryhistorymodel.Devi
   toInt64(0) AS state_sample_count,
   toInt64(0) AS state_change_count,
   CAST([], 'Array(String)') AS state_values,
-  formatDateTime(maxMerge(rollup.max_projected_at), '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS max_projected_at
-FROM %[4]s AS rollup
-WHERE rollup.tenant_id = toUUID('%[5]s')
-  AND rollup.site_id = toUUID('%[6]s')
-  AND rollup.device_id = toUUID('%[7]s')
-  AND rollup.telemetry_key IN (%[8]s)
-  AND rollup.point_type IN ('TELEMETRY', 'SETTING')
-  AND rollup.bucket >= toDateTime('%[9]s', 'UTC')
-  AND rollup.bucket < toDateTime('%[10]s', 'UTC')
-GROUP BY rollup.telemetry_key, toString(rollup.point_id), rollup.point_revision, rollup.point_type, %[1]s
-HAVING countIfMerge(rollup.%[3]s_count) > 0
+  formatDateTime(maxMerge(gauge_rollup.max_projected_at), '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS max_projected_at
+FROM %[4]s AS gauge_rollup
+WHERE gauge_rollup.tenant_id = toUUID('%[5]s')
+  AND gauge_rollup.site_id = toUUID('%[6]s')
+  AND gauge_rollup.device_id = toUUID('%[7]s')
+  AND gauge_rollup.telemetry_key IN (%[8]s)
+  AND gauge_rollup.point_type IN ('TELEMETRY', 'SETTING')
+  AND gauge_rollup.bucket >= toDateTime('%[9]s', 'UTC')
+  AND gauge_rollup.bucket < toDateTime('%[10]s', 'UTC')
+GROUP BY gauge_rollup.telemetry_key, toString(gauge_rollup.point_id), gauge_rollup.point_revision, gauge_rollup.point_type, %[1]s
+HAVING countIfMerge(gauge_rollup.%[3]s_count) > 0
 FORMAT JSONEachRow`, bucket, end, prefix, rollupTable, query.TenantID, query.SiteID, query.DeviceID, quotedKeys(query.Keys), fromUTC, toUTC)
 }
 

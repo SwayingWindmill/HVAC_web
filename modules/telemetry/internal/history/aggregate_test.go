@@ -226,8 +226,8 @@ func TestGaugeAggregateQueryRoutingAndFallbackRules(t *testing.T) {
 			if strings.Contains(sql, "WITH ") {
 				t.Fatalf("rollup SQL must not use top-level WITH alias over rollup columns:\n%s", sql)
 			}
-			if !strings.Contains(sql, "GROUP BY rollup.telemetry_key, toString(rollup.point_id), rollup.point_revision, rollup.point_type,") {
-				t.Fatalf("rollup SQL must group by projected toString(rollup.point_id):\n%s", sql)
+			if !strings.Contains(sql, "GROUP BY gauge_rollup.telemetry_key, toString(gauge_rollup.point_id), gauge_rollup.point_revision, gauge_rollup.point_type,") {
+				t.Fatalf("rollup SQL must group by projected toString(gauge_rollup.point_id):\n%s", sql)
 			}
 		}
 	}
@@ -255,7 +255,7 @@ func TestGaugeAggregateQueryRoutingAndFallbackRules(t *testing.T) {
 		q.From = time.Date(2026, 10, 11, 0, 1, 0, 0, time.UTC)
 		q.To = time.Date(2026, 10, 11, 0, 10, 0, 0, time.UTC)
 		assertRoutes(t, client, q, false, "telemetry_history.numeric_gauge_1min_states",
-			"countIfMerge(rollup.valid_count)", "avgIfMerge(rollup.valid_avg)", "argMinIfMerge(rollup.valid_first)", "argMaxIfMerge(rollup.valid_last)")
+			"countIfMerge(gauge_rollup.valid_count)", "avgIfMerge(gauge_rollup.valid_avg)", "argMinIfMerge(gauge_rollup.valid_first)", "argMaxIfMerge(gauge_rollup.valid_last)")
 	}
 
 	for _, tc := range []struct {
@@ -266,11 +266,11 @@ func TestGaugeAggregateQueryRoutingAndFallbackRules(t *testing.T) {
 		policy telemetryhistorymodel.AggregateQualityPolicy
 		marker string
 	}{
-		{telemetryhistorymodel.AggregateGranularityQuarterHour, "Asia/Kolkata", time.Date(2026, 10, 11, 0, 15, 0, 0, time.UTC), time.Date(2026, 10, 11, 1, 0, 0, 0, time.UTC), telemetryhistorymodel.AggregateQualityValidOnly, "avgIfMerge(rollup.valid_avg)"},
-		{telemetryhistorymodel.AggregateGranularityHour, "Asia/Kathmandu", time.Date(2026, 10, 11, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 11, 3, 0, 0, 0, time.UTC), telemetryhistorymodel.AggregateQualityUsable, "avgIfMerge(rollup.usable_avg)"},
-		{telemetryhistorymodel.AggregateGranularityDay, "America/New_York", time.Date(2026, 3, 8, 5, 0, 0, 0, time.UTC), time.Date(2026, 3, 9, 4, 0, 0, 0, time.UTC), telemetryhistorymodel.AggregateQualityValidOnly, "countIfMerge(rollup.valid_count)"},
-		{telemetryhistorymodel.AggregateGranularityWeek, "UTC", time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC), telemetryhistorymodel.AggregateQualityUsable, "countIfMerge(rollup.usable_count)"},
-		{telemetryhistorymodel.AggregateGranularityMonth, "Asia/Shanghai", time.Date(2026, 9, 30, 16, 0, 0, 0, time.UTC), time.Date(2026, 10, 31, 16, 0, 0, 0, time.UTC), telemetryhistorymodel.AggregateQualityValidOnly, "maxMerge(rollup.max_projected_at)"},
+		{telemetryhistorymodel.AggregateGranularityQuarterHour, "Asia/Kolkata", time.Date(2026, 10, 11, 0, 15, 0, 0, time.UTC), time.Date(2026, 10, 11, 1, 0, 0, 0, time.UTC), telemetryhistorymodel.AggregateQualityValidOnly, "avgIfMerge(gauge_rollup.valid_avg)"},
+		{telemetryhistorymodel.AggregateGranularityHour, "Asia/Kathmandu", time.Date(2026, 10, 11, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 11, 3, 0, 0, 0, time.UTC), telemetryhistorymodel.AggregateQualityUsable, "avgIfMerge(gauge_rollup.usable_avg)"},
+		{telemetryhistorymodel.AggregateGranularityDay, "America/New_York", time.Date(2026, 3, 8, 5, 0, 0, 0, time.UTC), time.Date(2026, 3, 9, 4, 0, 0, 0, time.UTC), telemetryhistorymodel.AggregateQualityValidOnly, "countIfMerge(gauge_rollup.valid_count)"},
+		{telemetryhistorymodel.AggregateGranularityWeek, "UTC", time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC), telemetryhistorymodel.AggregateQualityUsable, "countIfMerge(gauge_rollup.usable_count)"},
+		{telemetryhistorymodel.AggregateGranularityMonth, "Asia/Shanghai", time.Date(2026, 9, 30, 16, 0, 0, 0, time.UTC), time.Date(2026, 10, 31, 16, 0, 0, 0, time.UTC), telemetryhistorymodel.AggregateQualityValidOnly, "maxMerge(gauge_rollup.max_projected_at)"},
 	} {
 		q := base
 		q.Granularity = tc.gran
