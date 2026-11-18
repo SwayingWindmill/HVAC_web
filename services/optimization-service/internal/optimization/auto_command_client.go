@@ -130,13 +130,13 @@ func (client *WorkloadCommandClient) RequestCommandGrant(ctx context.Context, re
 }
 
 type autoCommandCurrentState struct {
-	EvaluationAvailability string  `json:"evaluationAvailability"`
-	Presence               string  `json:"presence"`
-	Readiness              string  `json:"readiness"`
-	Quality                string  `json:"quality"`
-	BusinessRevision       uint64  `json:"businessRevision"`
-	CurrentValue           float64 `json:"currentValue"`
-	ObservedAt             string  `json:"observedAt"`
+	EvaluationAvailability string   `json:"evaluationAvailability"`
+	Presence               string   `json:"presence"`
+	Readiness              string   `json:"readiness"`
+	Quality                string   `json:"quality"`
+	BusinessRevision       uint64   `json:"businessRevision"`
+	CurrentValue           *float64 `json:"currentValue,omitempty"`
+	ObservedAt             string   `json:"observedAt,omitempty"`
 }
 
 type autoCommandPayload struct {
@@ -148,11 +148,49 @@ type autoCommandPayload struct {
 	VerificationPointKey string                         `json:"verificationPointKey"`
 	IdempotencyKey       string                         `json:"idempotencyKey"`
 	IsRollback           bool                           `json:"isRollback"`
+	PreconditionMode     commandmodel.PreconditionMode  `json:"preconditionMode,omitempty"`
+	BypassReason         string                         `json:"bypassReason,omitempty"`
 	CommandGrant         string                         `json:"commandGrant"`
 	CurrentState         autoCommandCurrentState        `json:"currentState"`
 }
 
 func (client *WorkloadCommandClient) SubmitAutoCommand(ctx context.Context, grant string, input AutoControlDispatchInput) (string, error) {
+	if client == nil || client.gatewayClient == nil {
+		return "", errors.New("workload command client is not configured")
+	}
+	availability := strings.TrimSpace(input.EvaluationAvailability)
+	presence := strings.TrimSpace(input.Presence)
+	readiness := strings.TrimSpace(input.Readiness)
+	quality := strings.TrimSpace(input.Quality)
+	if !input.IsRollback {
+		if input.PreconditionMode == commandmodel.PreconditionEmergencyBypass {
+			return "", errors.New("automated command cannot use emergency precondition bypass")
+		}
+		if availability != "AVAILABLE" ||
+			presence != "ONLINE" ||
+			readiness != "CURRENT" ||
+			quality != "GOOD" ||
+			input.BusinessRevision == 0 ||
+			input.ObservedAt.IsZero() ||
+			input.CurrentValue == nil ||
+			!finite(*input.CurrentValue) {
+			return "", errors.New("automated command requires verified live telemetry current state")
+		}
+	} else if input.PreconditionMode == commandmodel.PreconditionEmergencyBypass && strings.TrimSpace(input.BypassReason) == "" {
+		return "", errors.New("emergency bypass rollback requires bypass reason")
+	}
+
+	var observedAt string
+	if !input.ObservedAt.IsZero() {
+		observedAt = input.ObservedAt.UTC().Format(time.RFC3339Nano)
+	}
+	var wirePreconditionMode commandmodel.PreconditionMode
+	var wireBypassReason string
+	if input.IsRollback && input.PreconditionMode == commandmodel.PreconditionEmergencyBypass {
+		wirePreconditionMode = commandmodel.PreconditionEmergencyBypass
+		wireBypassReason = strings.TrimSpace(input.BypassReason)
+	}
+
 	body := autoCommandPayload{
 		TenantID:             input.TenantID,
 		DeviceID:             input.DeviceID,
@@ -162,15 +200,17 @@ func (client *WorkloadCommandClient) SubmitAutoCommand(ctx context.Context, gran
 		VerificationPointKey: input.VerificationPointKey,
 		IdempotencyKey:       input.IdempotencyKey,
 		IsRollback:           input.IsRollback,
+		PreconditionMode:     wirePreconditionMode,
+		BypassReason:         wireBypassReason,
 		CommandGrant:         grant,
 		CurrentState: autoCommandCurrentState{
-			EvaluationAvailability: "AVAILABLE",
-			Presence:               "ONLINE",
-			Readiness:              "CURRENT",
-			Quality:                "GOOD",
+			EvaluationAvailability: availability,
+			Presence:               presence,
+			Readiness:              readiness,
+			Quality:                quality,
 			BusinessRevision:       input.BusinessRevision,
 			CurrentValue:           input.CurrentValue,
-			ObservedAt:             input.ObservedAt.UTC().Format(time.RFC3339Nano),
+			ObservedAt:             observedAt,
 		},
 	}
 	payload, err := json.Marshal(body)

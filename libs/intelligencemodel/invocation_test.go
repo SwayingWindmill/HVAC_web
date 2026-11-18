@@ -131,3 +131,123 @@ func jsonContains(payload, fragment string) bool {
 	}
 	return false
 }
+
+type slowProvider struct {
+	delay    time.Duration
+	response ProviderResponse
+}
+
+func (p *slowProvider) Invoke(ctx context.Context, _ ProviderRequest) (ProviderResponse, error) {
+	select {
+	case <-time.After(p.delay):
+		return p.response, nil
+	case <-ctx.Done():
+		return ProviderResponse{}, ctx.Err()
+	}
+}
+
+func TestInvokerEnforcesConfiguredTimeout(t *testing.T) {
+	provider := &slowProvider{
+		delay:    200 * time.Millisecond,
+		response: ProviderResponse{Body: json.RawMessage(`{"value":7.2}`)},
+	}
+	invoker, err := NewInvoker(provider, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invoker.WithTimeout(20 * time.Millisecond)
+	if invoker.ResilienceConfig().Timeout != 20*time.Millisecond {
+		t.Fatalf("unexpected timeout=%s", invoker.ResilienceConfig().Timeout)
+	}
+
+	var output struct {
+		Value float64 `json:"value"`
+	}
+	provenance, err := invoker.InvokeStructured(t.Context(), validInvocationRequest(), &output)
+	var failure *InvocationFailure
+	if !errors.As(err, &failure) || failure.Code != FailureProviderUnavailable || !failure.Retryable || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected timeout FailureProviderUnavailable, got failure=%#v err=%v", failure, err)
+	}
+	if provenance.Status != InvocationFailed || provenance.FailureCode != FailureProviderUnavailable {
+		t.Fatalf("unexpected provenance=%#v", provenance)
+	}
+}
+
+func TestInvokeStructuredWithFallbackRecordsFallbackAndPreservesGovernanceGates(t *testing.T) {
+	type forecastOut struct {
+		Value float64 `json:"value"`
+	}
+
+	t.Run("provider outage triggers bumpless fallback and records FALLBACK provenance", func(t *testing.T) {
+		provider := &fakeProvider{err: errors.New("upstream 503")}
+		cfg := DefaultResilientInvokeConfig()
+		cfg.Breaker = NewCircuitBreaker(CircuitBreakerConfig{FailureThreshold: 1, Cooldown: 30 * time.Second})
+		invoker, err := NewInvoker(provider, time.Now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		invoker.WithResilience(cfg)
+
+		val, prov, fbStatus, err := InvokeStructuredWithFallback(
+			t.Context(),
+			invoker,
+			validInvocationRequest(),
+			func(context.Context, error) (forecastOut, error) {
+				return forecastOut{Value: 750.0}, nil
+			},
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if val.Value != 750.0 || !fbStatus.FallbackUsed || fbStatus.Reason != FallbackReasonUpstreamError {
+			t.Fatalf("unexpected output/status: val=%+v status=%+v", val, fbStatus)
+		}
+		if prov.Status != InvocationFallback || prov.FallbackReason != FallbackReasonUpstreamError || prov.FailureCode != FailureProviderUnavailable {
+			t.Fatalf("unexpected provenance: %+v", prov)
+		}
+
+		// Second call short-circuits immediately with circuit_open.
+		_, prov2, fbStatus2, err2 := InvokeStructuredWithFallback(
+			t.Context(),
+			invoker,
+			validInvocationRequest(),
+			func(context.Context, error) (forecastOut, error) {
+				return forecastOut{Value: 750.0}, nil
+			},
+		)
+		if err2 != nil || !fbStatus2.FallbackUsed || fbStatus2.Reason != FallbackReasonCircuitOpen || prov2.FallbackReason != FallbackReasonCircuitOpen {
+			t.Fatalf("expected circuit_open fallback, got err=%v status=%+v prov=%+v", err2, fbStatus2, prov2)
+		}
+		if provider.calls != 1 {
+			t.Fatalf("provider.calls=%d, want 1", provider.calls)
+		}
+	})
+
+	t.Run("policy violation fails before resilience without triggering fallback or tripping breaker", func(t *testing.T) {
+		provider := &fakeProvider{response: ProviderResponse{Body: json.RawMessage(`{"value":812.5}`)}}
+		cfg := DefaultResilientInvokeConfig()
+		cfg.Breaker = NewCircuitBreaker(CircuitBreakerConfig{FailureThreshold: 1})
+		invoker, _ := NewInvoker(provider, time.Now)
+		invoker.WithResilience(cfg)
+
+		req := validInvocationRequest()
+		req.DataClasses = []string{"RAW_PERSONAL_DATA"}
+		fbCalled := false
+		_, prov, fbStatus, err := InvokeStructuredWithFallback(
+			t.Context(),
+			invoker,
+			req,
+			func(context.Context, error) (forecastOut, error) {
+				fbCalled = true
+				return forecastOut{Value: 1.0}, nil
+			},
+		)
+		var failure *InvocationFailure
+		if !errors.As(err, &failure) || failure.Code != FailureDataEgressDenied || fbCalled || fbStatus.FallbackUsed {
+			t.Fatalf("expected immediate egress failure without fallback, got err=%v fbCalled=%v status=%+v", err, fbCalled, fbStatus)
+		}
+		if prov.Status != InvocationFailed || prov.FailureCode != FailureDataEgressDenied || cfg.Breaker.State() != BreakerClosed {
+			t.Fatalf("unexpected provenance/breaker: prov=%+v state=%s", prov, cfg.Breaker.State())
+		}
+	})
+}

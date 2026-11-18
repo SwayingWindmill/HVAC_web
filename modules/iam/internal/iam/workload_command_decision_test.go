@@ -272,6 +272,24 @@ func TestIAMCommandWorkloadDecisionEnforcesAllSafetyGates(t *testing.T) {
 	if err != nil || decision.Allowed || decision.ReasonCode != commandauth.ReasonDenyControlLock {
 		t.Fatalf("expected asset control lock to block rollback, got %#v err=%v", decision, err)
 	}
+
+	// Active manual backoff pauses normal automated dispatch while permitting explicit rollback.
+	backoffUntil := now.Add(30 * time.Minute)
+	backoffFacts := validWorkloadBaseFacts(now)
+	backoffFacts.ActiveLease.ManualBackoffUntil = &backoffUntil
+	decision, err = evaluateWorkloadCommandAuthorization(t.Context(), &memoryCommandWorkloadStore{facts: backoffFacts}, now, "spiffe://hvac.local", defaultOptimizationCommandWorkload, baseReq)
+	if err != nil || decision.Allowed || decision.ReasonCode != commandauth.ReasonDenyAutoLease {
+		t.Fatalf("expected active manual backoff to block automated command, got %#v err=%v", decision, err)
+	}
+
+	// Safety rollback restoring lease-bounded setpoint succeeds even if live delta exceeds 3.0 C.
+	largeDeltaRollback := rollbackReq
+	driftedCurrent := 11.0
+	largeDeltaRollback.CurrentValue = &driftedCurrent
+	decision, err = evaluateWorkloadCommandAuthorization(t.Context(), &memoryCommandWorkloadStore{facts: rollbackFacts}, now, "spiffe://hvac.local", defaultOptimizationCommandWorkload, largeDeltaRollback)
+	if err != nil || !decision.Allowed || decision.ReasonCode != commandauth.ReasonAllowAutoLease || decision.MaximumRisk != commandmodel.RiskMedium {
+		t.Fatalf("expected large-delta rollback inside lease bounds to allow medium risk, got %#v err=%v", decision, err)
+	}
 }
 
 func TestIAMCommandWorkloadDecisionRejectsUnlistedWorkloadAndForgedHeaders(t *testing.T) {

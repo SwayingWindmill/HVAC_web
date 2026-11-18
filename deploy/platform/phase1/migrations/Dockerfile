@@ -179,6 +179,7 @@ COPY modules/command/migrations/command-priority-and-locks.sql /opt/hvac/repo/mo
 COPY modules/alarm/migrations/alarm-suppression-notification-events.sql /opt/hvac/repo/modules/alarm/migrations/alarm-suppression-notification-events.sql
 COPY modules/alarm/migrations/alarm-evaluation-slope-window.sql /opt/hvac/repo/modules/alarm/migrations/alarm-evaluation-slope-window.sql
 COPY infra/connectivity/postgres/init/gateway-shadow-drivers-and-autonomy.sql /opt/hvac/repo/infra/connectivity/postgres/init/gateway-shadow-drivers-and-autonomy.sql
+COPY infra/registry/postgres/init/optimization-safety-guardrails.sql /opt/hvac/repo/infra/registry/postgres/init/optimization-safety-guardrails.sql
 
 FROM postgres:16.4-bookworm
 

@@ -689,6 +689,7 @@ type armAutoControlLeasePublicRequest struct {
 	ExpiresAt           string   `json:"expiresAt,omitempty"`
 	AllowedCapabilities []string `json:"allowedCapabilities"`
 	MaxSetpointStepC    *float64 `json:"maxSetpointStepC,omitempty"`
+	DeadbandC           *float64 `json:"deadbandC,omitempty"`
 	SupplyTempMinC      float64  `json:"supplyTempMinC"`
 	SupplyTempMaxC      float64  `json:"supplyTempMaxC"`
 	ZoneTempMaxC        *float64 `json:"zoneTempMaxC,omitempty"`
@@ -697,6 +698,21 @@ type armAutoControlLeasePublicRequest struct {
 	Reason              string   `json:"reason"`
 	VerificationCode    string   `json:"verificationCode"`
 	ExpectedRevision    *int64   `json:"expectedRevision,omitempty"`
+}
+
+type armAutoControlLeaseCoreRequest struct {
+	ExpiresInHours      int                 `json:"expiresInHours,omitempty"`
+	ExpiresAt           string              `json:"expiresAt,omitempty"`
+	AllowedCapabilities []string            `json:"allowedCapabilities"`
+	MaxSetpointStepC    *float64            `json:"maxSetpointStepC,omitempty"`
+	DeadbandC           *float64            `json:"deadbandC,omitempty"`
+	SupplyTempMinC      float64             `json:"supplyTempMinC"`
+	SupplyTempMaxC      float64             `json:"supplyTempMaxC"`
+	ZoneTempMaxC        *float64            `json:"zoneTempMaxC,omitempty"`
+	MinRunningChillers  *int                `json:"minRunningChillers,omitempty"`
+	MaxCommandsPerHour  *int                `json:"maxCommandsPerHour,omitempty"`
+	Reason              string              `json:"reason"`
+	Meta                controlRegistryMeta `json:"meta"`
 }
 
 type revokeAutoControlLeasePublicRequest struct {
@@ -713,6 +729,10 @@ type optimizationAutoCommandRequest struct {
 	VerificationPointKey string                         `json:"verificationPointKey"`
 	IdempotencyKey       string                         `json:"idempotencyKey"`
 	IsRollback           bool                           `json:"isRollback,omitempty"`
+	PreconditionMode     commandmodel.PreconditionMode  `json:"preconditionMode,omitempty"`
+	BypassReason         string                         `json:"bypassReason,omitempty"`
+	PriorityTier         commandmodel.PriorityTier      `json:"priorityTier,omitempty"`
+	CommandSource        commandmodel.CommandSource     `json:"commandSource,omitempty"`
 	CurrentState         commandCurrentState            `json:"currentState"`
 	CommandGrant         string                         `json:"commandGrant"`
 }
@@ -829,18 +849,19 @@ func (h *handler) serveAutoControlLeaseArm(writer http.ResponseWriter, request *
 		h.writeCommandFailure(writer, request, *metaFailure)
 		return
 	}
-	payload := map[string]any{
-		"expiresInHours":      input.ExpiresInHours,
-		"expiresAt":           input.ExpiresAt,
-		"allowedCapabilities": input.AllowedCapabilities,
-		"maxSetpointStepC":    input.MaxSetpointStepC,
-		"supplyTempMinC":      input.SupplyTempMinC,
-		"supplyTempMaxC":      input.SupplyTempMaxC,
-		"zoneTempMaxC":        input.ZoneTempMaxC,
-		"minRunningChillers":  input.MinRunningChillers,
-		"maxCommandsPerHour":  input.MaxCommandsPerHour,
-		"reason":              reason,
-		"meta":                meta,
+	payload := armAutoControlLeaseCoreRequest{
+		ExpiresInHours:      input.ExpiresInHours,
+		ExpiresAt:           input.ExpiresAt,
+		AllowedCapabilities: input.AllowedCapabilities,
+		MaxSetpointStepC:    input.MaxSetpointStepC,
+		DeadbandC:           input.DeadbandC,
+		SupplyTempMinC:      input.SupplyTempMinC,
+		SupplyTempMaxC:      input.SupplyTempMaxC,
+		ZoneTempMaxC:        input.ZoneTempMaxC,
+		MinRunningChillers:  input.MinRunningChillers,
+		MaxCommandsPerHour:  input.MaxCommandsPerHour,
+		Reason:              reason,
+		Meta:                meta,
 	}
 	status, respRaw, callFailure := h.callCoreControlRegistry(request.Context(), http.MethodPut, "/internal/v1/registry/sites/"+url.PathEscape(route.siteID)+"/auto-control-lease", auth.coreGrant, payload, routeRevisionFromRequest(request))
 	if callFailure != nil {
@@ -939,17 +960,51 @@ func (h *handler) serveOptimizationAutoCommand(writer http.ResponseWriter, reque
 		writeProblem(writer, request, http.StatusBadRequest, "COMMAND_REQUEST_INVALID", "Command request invalid", "Rollback automated Commands must use an auto-rollback idempotency key.", false, nil)
 		return
 	}
+	precondMode := input.PreconditionMode
+	if precondMode == "" {
+		precondMode = commandmodel.PreconditionRequireCurrentState
+	}
+	var priorityTier commandmodel.PriorityTier
+	var commandSource commandmodel.CommandSource
+	if input.IsRollback {
+		if (input.PriorityTier != "" && input.PriorityTier != commandmodel.PriorityProtectionRule) ||
+			(input.CommandSource != "" && input.CommandSource != commandmodel.SourceProtectionRule) {
+			writeProblem(writer, request, http.StatusForbidden, "COMMAND_PRIORITY_ESCALATION_FORBIDDEN", "Command priority forbidden", "Rollback automated commands must use PROTECTION_RULE priority and source.", false, nil)
+			return
+		}
+		priorityTier = commandmodel.PriorityProtectionRule
+		commandSource = commandmodel.SourceProtectionRule
+	} else {
+		if (input.PriorityTier != "" && input.PriorityTier != commandmodel.PriorityAIOptimization) ||
+			(input.CommandSource != "" && input.CommandSource != commandmodel.SourceOptimization) {
+			writeProblem(writer, request, http.StatusForbidden, "COMMAND_PRIORITY_ESCALATION_FORBIDDEN", "Command priority forbidden", "Automated optimization commands cannot escalate priority tier or source.", false, nil)
+			return
+		}
+		priorityTier = commandmodel.PriorityAIOptimization
+		commandSource = commandmodel.SourceOptimization
+	}
 	if !input.IsRollback {
+		if precondMode == commandmodel.PreconditionEmergencyBypass {
+			writeProblem(writer, request, http.StatusBadRequest, "COMMAND_REQUEST_INVALID", "Command request invalid", "Normal automated optimization commands cannot use emergency precondition bypass.", false, nil)
+			return
+		}
 		if input.CurrentState.EvaluationAvailability != "AVAILABLE" || input.CurrentState.Presence != "ONLINE" ||
 			input.CurrentState.Readiness != "CURRENT" || input.CurrentState.Quality != "GOOD" {
 			writeProblem(writer, request, http.StatusConflict, "COMMAND_CURRENT_STATE_UNSAFE", "Current state unsafe", "Live telemetry current-state preconditions are incomplete or unhealthy.", false, nil)
 			return
 		}
+	} else if precondMode == commandmodel.PreconditionEmergencyBypass {
+		if strings.TrimSpace(input.BypassReason) == "" {
+			writeProblem(writer, request, http.StatusBadRequest, "COMMAND_REQUEST_INVALID", "Command request invalid", "Emergency precondition bypass rollback requires a non-empty bypassReason.", false, nil)
+			return
+		}
 	}
-	if input.CurrentState.BusinessRevision == 0 || input.CurrentState.ObservedAt.IsZero() ||
-		(profile.ParameterKey != "" && input.CurrentState.CurrentValue == nil) {
-		writeProblem(writer, request, http.StatusConflict, "COMMAND_CURRENT_STATE_UNSAFE", "Current state unsafe", "Live telemetry current-state evidence is incomplete.", false, nil)
-		return
+	if precondMode != commandmodel.PreconditionEmergencyBypass {
+		if input.CurrentState.BusinessRevision == 0 || input.CurrentState.ObservedAt.IsZero() ||
+			(profile.ParameterKey != "" && input.CurrentState.CurrentValue == nil) {
+			writeProblem(writer, request, http.StatusConflict, "COMMAND_CURRENT_STATE_UNSAFE", "Current state unsafe", "Live telemetry current-state evidence is incomplete.", false, nil)
+			return
+		}
 	}
 	claims, ok := parseOptimizationWorkloadCommandGrant(
 		input.CommandGrant, h.command.iamGrantIssuer, h.identity.config.ExecutingWorkloadSPIFFE,
@@ -970,6 +1025,10 @@ func (h *handler) serveOptimizationAutoCommand(writer http.ResponseWriter, reque
 		capability:           input.Capability,
 		parameters:           input.Parameters,
 		verificationPointKey: input.VerificationPointKey,
+		priorityTier:         priorityTier,
+		commandSource:        commandSource,
+		preconditionMode:     precondMode,
+		bypassReason:         strings.TrimSpace(input.BypassReason),
 		currentState:         input.CurrentState,
 		grant:                input.CommandGrant,
 	}

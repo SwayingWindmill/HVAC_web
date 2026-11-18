@@ -232,3 +232,250 @@ func TestEvaluateControlGatePreconditionsInterlocksAndStepUpOrdering(t *testing.
 		}
 	})
 }
+
+func TestEvaluateControlGatePreDispatchStepDeltaRisk(t *testing.T) {
+	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name     string
+		in       GateInput
+		wantCode string
+	}{
+		{
+			name: "blocks AI optimization setpoint delta exceeding maximumDelta",
+			in: GateInput{
+				Phase:         GatePhasePreDispatch,
+				CommandID:     "cmd-ai-over-delta",
+				DeviceID:      "dev-1",
+				Capability:    CapabilitySetChilledWaterTemperatureSetpoint,
+				ParameterKey:  ParameterSetpointC,
+				Parameters:    CommandParameters{ParameterSetpointC: 5.0},
+				SiteMode:      SiteControlModeRemoteAuto,
+				CommandSource: SourceOptimization,
+				PriorityTier:  PriorityAIOptimization,
+				TargetState:   safeNumObs(now, 10.0), // delta 5 > max 3
+			},
+			wantCode: "DISPATCH_SAFETY_PRE_DISPATCH_DELTA_EXCEEDED",
+		},
+		{
+			name: "blocks schedule frequency delta exceeding maximumDelta",
+			in: GateInput{
+				Phase:         GatePhasePreDispatch,
+				CommandID:     "cmd-sched-over-delta",
+				DeviceID:      "dev-1",
+				Capability:    CapabilitySetFrequency,
+				ParameterKey:  ParameterFrequencyHz,
+				Parameters:    CommandParameters{ParameterFrequencyHz: 30.0},
+				SiteMode:      SiteControlModeRemoteAuto,
+				CommandSource: SourceSchedule,
+				PriorityTier:  PrioritySchedule,
+				TargetState:   safeNumObs(now, 45.0), // delta 15 > max 10
+			},
+			wantCode: "DISPATCH_SAFETY_PRE_DISPATCH_DELTA_EXCEEDED",
+		},
+		{
+			name: "allows AI optimization delta within maximumDelta",
+			in: GateInput{
+				Phase:         GatePhasePreDispatch,
+				CommandID:     "cmd-ai-safe-delta",
+				DeviceID:      "dev-1",
+				Capability:    CapabilitySetChilledWaterTemperatureSetpoint,
+				ParameterKey:  ParameterSetpointC,
+				Parameters:    CommandParameters{ParameterSetpointC: 8.0},
+				SiteMode:      SiteControlModeRemoteAuto,
+				CommandSource: SourceOptimization,
+				PriorityTier:  PriorityAIOptimization,
+				TargetState:   safeNumObs(now, 10.0), // delta 2 <= max 3
+			},
+		},
+		{
+			name: "allows operator manual command at pre-dispatch even if live delta moved past maximumDelta",
+			in: GateInput{
+				Phase:         GatePhasePreDispatch,
+				CommandID:     "cmd-op-manual",
+				DeviceID:      "dev-1",
+				Capability:    CapabilitySetChilledWaterTemperatureSetpoint,
+				ParameterKey:  ParameterSetpointC,
+				Parameters:    CommandParameters{ParameterSetpointC: 5.0},
+				SiteMode:      SiteControlModeRemoteAuto,
+				CommandSource: SourceOperator,
+				PriorityTier:  PriorityManualOverride,
+				TargetState:   safeNumObs(now, 10.0),
+			},
+		},
+		{
+			name: "allows emergency bypass auto-rollback without pre-dispatch delta rejection",
+			in: GateInput{
+				Phase:            GatePhasePreDispatch,
+				CommandID:        "cmd-rollback-bypass",
+				DeviceID:         "dev-1",
+				Capability:       CapabilitySetChilledWaterTemperatureSetpoint,
+				ParameterKey:     ParameterSetpointC,
+				Parameters:       CommandParameters{ParameterSetpointC: 5.0},
+				SiteMode:         SiteControlModeRemoteAuto,
+				IdempotencyKey:   "auto-rollback:rec-1",
+				CommandSource:    SourceProtectionRule,
+				PriorityTier:     PriorityProtectionRule,
+				PreconditionMode: PreconditionEmergencyBypass,
+				BypassReason:     "revert failed AI change under degraded telemetry",
+				TargetState:      safeNumObs(now, 10.0),
+			},
+		},
+		{
+			name: "allows healthy-telemetry auto-rollback setpoint delta above maximumDelta",
+			in: GateInput{
+				Phase:            GatePhasePreDispatch,
+				CommandID:        "cmd-rollback-healthy",
+				DeviceID:         "dev-1",
+				Capability:       CapabilitySetChilledWaterTemperatureSetpoint,
+				ParameterKey:     ParameterSetpointC,
+				Parameters:       CommandParameters{ParameterSetpointC: 5.0},
+				SiteMode:         SiteControlModeRemoteAuto,
+				IdempotencyKey:   "auto-rollback:rec-healthy",
+				CommandSource:    SourceProtectionRule,
+				PriorityTier:     PriorityProtectionRule,
+				PreconditionMode: PreconditionRequireCurrentState,
+				TargetState:      safeNumObs(now, 10.0),
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, rejection := EvaluateControlGate(tc.in)
+			if tc.wantCode == "" {
+				if rejection != nil {
+					t.Fatalf("expected allow, got rejection=%+v", rejection)
+				}
+				return
+			}
+			if rejection == nil || rejection.Code != tc.wantCode {
+				t.Fatalf("got rejection=%+v, want code %s", rejection, tc.wantCode)
+			}
+			if !TerminalPreSendRejection(rejection.Code) {
+				t.Fatalf("expected %s to be a terminal pre-send rejection", rejection.Code)
+			}
+		})
+	}
+}
+
+func TestAutoRollbackEmergencyPreconditionBypassScope(t *testing.T) {
+	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+
+	t.Run("AllowsEmergencyPreconditionBypass only permits scoped auto-rollback setpoint", func(t *testing.T) {
+		if !AllowsEmergencyPreconditionBypass(
+			CapabilitySetChilledWaterTemperatureSetpoint,
+			PriorityProtectionRule,
+			SourceProtectionRule,
+			"auto-rollback:action-1",
+			"revert setpoint",
+		) {
+			t.Fatalf("expected scoped auto-rollback bypass to be allowed")
+		}
+		cases := []struct {
+			name string
+			cap  Capability
+			tier PriorityTier
+			src  CommandSource
+			idem string
+			rsn  string
+		}{
+			{"wrong capability", CapabilitySetFrequency, PriorityProtectionRule, SourceProtectionRule, "auto-rollback:1", "reason"},
+			{"wrong tier", CapabilitySetChilledWaterTemperatureSetpoint, PriorityAIOptimization, SourceProtectionRule, "auto-rollback:1", "reason"},
+			{"wrong source", CapabilitySetChilledWaterTemperatureSetpoint, PriorityProtectionRule, SourceOptimization, "auto-rollback:1", "reason"},
+			{"missing prefix", CapabilitySetChilledWaterTemperatureSetpoint, PriorityProtectionRule, SourceProtectionRule, "ai-action:1", "reason"},
+			{"blank reason", CapabilitySetChilledWaterTemperatureSetpoint, PriorityProtectionRule, SourceProtectionRule, "auto-rollback:1", "   "},
+		}
+		for _, tc := range cases {
+			if AllowsEmergencyPreconditionBypass(tc.cap, tc.tier, tc.src, tc.idem, tc.rsn) {
+				t.Fatalf("%s: expected bypass denied", tc.name)
+			}
+		}
+	})
+
+	t.Run("submit and pre-dispatch accept auto-rollback setpoint bypass even with nil/stale state", func(t *testing.T) {
+		submitDecision, submitRej := EvaluateControlGate(GateInput{
+			Phase:            GatePhaseSubmit,
+			CommandID:        "cmd-rb-1",
+			AssetID:          "asset-1",
+			DeviceID:         "dev-1",
+			Capability:       CapabilitySetChilledWaterTemperatureSetpoint,
+			ParameterKey:     ParameterSetpointC,
+			Parameters:       CommandParameters{ParameterSetpointC: 7.5},
+			SiteMode:         SiteControlModeRemoteAuto,
+			IdempotencyKey:   "auto-rollback:rec-42",
+			PriorityTier:     PriorityProtectionRule,
+			CommandSource:    SourceProtectionRule,
+			PreconditionMode: PreconditionEmergencyBypass,
+			BypassReason:     "auto-rollback degraded telemetry",
+			TargetState:      nil,
+			StepUpVerified:   true,
+		})
+		if submitRej != nil || submitDecision.PreconditionMode != PreconditionEmergencyBypass {
+			t.Fatalf("expected submit allow, got decision=%+v rejection=%+v", submitDecision, submitRej)
+		}
+
+		stale := safeNumObs(now, 9.0)
+		stale.Freshness = "STALE"
+		dispatchDecision, dispatchRej := EvaluateControlGate(GateInput{
+			Phase:            GatePhasePreDispatch,
+			CommandID:        "cmd-rb-1",
+			AssetID:          "asset-1",
+			DeviceID:         "dev-1",
+			Capability:       CapabilitySetChilledWaterTemperatureSetpoint,
+			ParameterKey:     ParameterSetpointC,
+			Parameters:       CommandParameters{ParameterSetpointC: 7.5},
+			SiteMode:         SiteControlModeRemoteAuto,
+			IdempotencyKey:   "auto-rollback:rec-42",
+			PriorityTier:     PriorityProtectionRule,
+			CommandSource:    SourceProtectionRule,
+			PreconditionMode: PreconditionEmergencyBypass,
+			BypassReason:     "auto-rollback degraded telemetry",
+			TargetState:      stale,
+		})
+		if dispatchRej != nil || dispatchDecision.EvidenceID != "emergency-precondition-bypass:cmd-rb-1" {
+			t.Fatalf("expected pre-dispatch bypass allow, got decision=%+v rejection=%+v", dispatchDecision, dispatchRej)
+		}
+	})
+
+	t.Run("submit and pre-dispatch reject non-rollback setpoint EMERGENCY_BYPASS", func(t *testing.T) {
+		_, submitRej := EvaluateControlGate(GateInput{
+			Phase:            GatePhaseSubmit,
+			CommandID:        "cmd-ai-bypass",
+			DeviceID:         "dev-1",
+			Capability:       CapabilitySetChilledWaterTemperatureSetpoint,
+			ParameterKey:     ParameterSetpointC,
+			Parameters:       CommandParameters{ParameterSetpointC: 7.5},
+			SiteMode:         SiteControlModeRemoteAuto,
+			IdempotencyKey:   "ai-opt-1",
+			PriorityTier:     PriorityAIOptimization,
+			CommandSource:    SourceOptimization,
+			PreconditionMode: PreconditionEmergencyBypass,
+			BypassReason:     "bypass attempt",
+		})
+		if submitRej == nil || submitRej.Code != "COMMAND_REQUEST_INVALID" {
+			t.Fatalf("expected COMMAND_REQUEST_INVALID on AI bypass, got %+v", submitRej)
+		}
+
+		stale := safeNumObs(now, 9.0)
+		stale.Freshness = "STALE"
+		_, dispatchRej := EvaluateControlGate(GateInput{
+			Phase:            GatePhasePreDispatch,
+			CommandID:        "cmd-ai-bypass",
+			DeviceID:         "dev-1",
+			Capability:       CapabilitySetChilledWaterTemperatureSetpoint,
+			ParameterKey:     ParameterSetpointC,
+			Parameters:       CommandParameters{ParameterSetpointC: 7.5},
+			SiteMode:         SiteControlModeRemoteAuto,
+			IdempotencyKey:   "ai-opt-1",
+			PriorityTier:     PriorityAIOptimization,
+			CommandSource:    SourceOptimization,
+			PreconditionMode: PreconditionEmergencyBypass,
+			BypassReason:     "bypass attempt",
+			TargetState:      stale,
+		})
+		if dispatchRej == nil || dispatchRej.Code != "DISPATCH_SAFETY_STATE_NOT_FRESH" {
+			t.Fatalf("expected DISPATCH_SAFETY_STATE_NOT_FRESH on AI stale state, got %+v", dispatchRej)
+		}
+	})
+}

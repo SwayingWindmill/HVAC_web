@@ -5,6 +5,7 @@ import (
 	"crypto"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
@@ -25,6 +26,10 @@ var (
 	controlWriteKeyPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 	lowerUUIDPattern       = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 )
+
+type DevicePriorityLocker interface {
+	AcquireDevicePriorityLock(ctx context.Context, lock commandmodel.DevicePriorityLock) (commandmodel.DevicePriorityLock, error)
+}
 
 type ControlAuthorityConfig struct {
 	Store                  HTTPAuthority
@@ -202,13 +207,19 @@ func (a *ControlAuthority) evaluatePreDispatch(
 		len(dctx.Interlocks) == 0
 	isStopCap := intent.Capability == commandmodel.CapabilityStop || intent.Capability == commandmodel.CapabilityStopUnitSequence
 	canBypassLiveErr := len(dctx.Interlocks) == 0 &&
-		((intent.PreconditionMode == commandmodel.PreconditionEmergencyBypass && profile.SupportsEmergencyBypass && strings.TrimSpace(intent.BypassReason) != "") ||
+		((intent.PreconditionMode == commandmodel.PreconditionEmergencyBypass &&
+			commandmodel.AllowsEmergencyPreconditionBypass(intent.Capability, intent.PriorityTier, intent.CommandSource, intent.IdempotencyKey, intent.BypassReason)) ||
 			(isStopCap && (actuation == "PULSE" || actuation == "ABORT_UNIT_SEQUENCE")))
+
+	feedbackKey := strings.TrimSpace(dctx.FeedbackPointKey)
+	if feedbackKey == "" {
+		feedbackKey = dispatchSafetyStateKey
+	}
 
 	var targetObs *commandmodel.LivePointObservation
 	var evidenceID string
 	if !isEmergencyDo {
-		obs, evID, err := a.live.ReadLivePoint(ctx, envelope.TenantID, envelope.SiteID, envelope.DeviceID, dispatchSafetyStateKey)
+		obs, evID, err := a.live.ReadLivePoint(ctx, envelope.TenantID, envelope.SiteID, envelope.DeviceID, feedbackKey)
 		if err != nil {
 			if !canBypassLiveErr {
 				return commandmodel.GateDecision{}, nil, "", err
@@ -240,11 +251,96 @@ func (a *ControlAuthority) evaluatePreDispatch(
 		ActiveMaintenanceWindow: mw,
 		PreconditionMode:        intent.PreconditionMode,
 		BypassReason:            intent.BypassReason,
+		IdempotencyKey:          intent.IdempotencyKey,
+		PriorityTier:            intent.PriorityTier,
+		CommandSource:           intent.CommandSource,
 		TargetState:             targetObs,
 		Interlocks:              dctx.Interlocks,
 		PeerStates:              peerObs,
 	})
-	return decision, rejection, evidenceID, nil
+	if rejection != nil {
+		return decision, rejection, evidenceID, nil
+	}
+	if !isEmergencyDo && a.live != nil {
+		if diagRejection := a.evaluatePreDispatchDiagnostics(ctx, envelope, intent, isStopCap); diagRejection != nil {
+			return decision, diagRejection, evidenceID, nil
+		}
+	}
+	return decision, nil, evidenceID, nil
+}
+
+func (a *ControlAuthority) evaluatePreDispatchDiagnostics(
+	ctx context.Context,
+	envelope commandmodel.DispatchEnvelope,
+	intent commandmodel.CommandIntent,
+	isStopCap bool,
+) *commandmodel.GateRejection {
+	if modeObs, _, err := a.live.ReadLivePoint(ctx, envelope.TenantID, envelope.SiteID, envelope.DeviceID, "local_remote_mode"); err == nil &&
+		isUsableDiagnosticObservation(modeObs) && isLocalManualModeValue(modeObs.ReportedValue) {
+		return &commandmodel.GateRejection{
+			HTTPStatus: http.StatusConflict,
+			Code:       "DISPATCH_SAFETY_LOCAL_MANUAL_MODE",
+			Title:      "Device in local manual mode",
+			Detail:     "Target device local_remote_mode indicates local manual control.",
+		}
+	}
+	if isStopCap || intent.Capability == commandmodel.CapabilityResetFault {
+		return nil
+	}
+	if faultObs, _, err := a.live.ReadLivePoint(ctx, envelope.TenantID, envelope.SiteID, envelope.DeviceID, "fault_code"); err == nil &&
+		isUsableDiagnosticObservation(faultObs) && isActiveFaultValue(faultObs.ReportedValue) {
+		return &commandmodel.GateRejection{
+			HTTPStatus: http.StatusConflict,
+			Code:       "DISPATCH_SAFETY_DEVICE_FAULT",
+			Title:      "Device fault active",
+			Detail:     "Target device reported an active fault_code.",
+		}
+	}
+	if alarmObs, _, err := a.live.ReadLivePoint(ctx, envelope.TenantID, envelope.SiteID, envelope.DeviceID, "alarm_active"); err == nil &&
+		isUsableDiagnosticObservation(alarmObs) && isActiveAlarmValue(alarmObs.ReportedValue) {
+		return &commandmodel.GateRejection{
+			HTTPStatus: http.StatusConflict,
+			Code:       "DISPATCH_SAFETY_DEVICE_FAULT",
+			Title:      "Device alarm active",
+			Detail:     "Target device reported alarm_active.",
+		}
+	}
+	return nil
+}
+
+func isUsableDiagnosticObservation(obs *commandmodel.LivePointObservation) bool {
+	if obs == nil || obs.Freshness != "FRESH" || obs.Quality != "GOOD" {
+		return false
+	}
+	if obs.EvaluationAvailability != "" && obs.EvaluationAvailability != "AVAILABLE" {
+		return false
+	}
+	if obs.Presence != "" && obs.Presence != "ONLINE" {
+		return false
+	}
+	if obs.Readiness != "" && obs.Readiness != "CURRENT" {
+		return false
+	}
+	return true
+}
+
+func isLocalManualModeValue(val commandmodel.ScalarValue) bool {
+	return commandmodel.DiagnosticPointIndicatesLocalManual("local_remote_mode", val.Boolean, val.Number, derefOptionalString(val.Text))
+}
+
+func isActiveFaultValue(val commandmodel.ScalarValue) bool {
+	return commandmodel.DiagnosticValueIndicatesActiveFault(val.Boolean, val.Number, derefOptionalString(val.Text))
+}
+
+func isActiveAlarmValue(val commandmodel.ScalarValue) bool {
+	return commandmodel.DiagnosticValueIndicatesActiveFault(val.Boolean, val.Number, derefOptionalString(val.Text))
+}
+
+func derefOptionalString(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 type resolvedCommandPointTarget struct {
@@ -319,6 +415,9 @@ func (a *ControlAuthority) SubmitOperatorCommand(
 		SiteMode:                commandmodel.SiteControlMode(controlState.ControlMode),
 		AssetLocks:              locks,
 		ActiveMaintenanceWindow: mw,
+		IdempotencyKey:          strings.TrimSpace(input.IdempotencyKey),
+		PriorityTier:            commandmodel.PriorityManualOverride,
+		CommandSource:           commandmodel.SourceOperator,
 		PreconditionMode:        commandmodel.PreconditionRequireCurrentState,
 		TargetState:             targetObs,
 		Interlocks:              target.interlocks,
@@ -347,6 +446,30 @@ func (a *ControlAuthority) SubmitOperatorCommand(
 	)
 	if err != nil {
 		return SubmitOperatorCommandOutput{}, err
+	}
+	if !submitted.Replayed {
+		if locker, ok := a.store.(DevicePriorityLocker); ok {
+			lockedBy := strings.TrimSpace(operator.Subject)
+			if lockedBy == "" {
+				lockedBy = submitted.Intent.PrincipalID
+			}
+			if _, lockErr := locker.AcquireDevicePriorityLock(ctx, commandmodel.DevicePriorityLock{
+				TenantID:       operator.TenantID,
+				SiteID:         asset.SiteID,
+				DeviceID:       target.device.ID,
+				LockedPriority: commandmodel.PriorityManualOverride,
+				CommandSource:  commandmodel.SourceOperator,
+				LockedBy:       lockedBy,
+				LockedUntil:    a.now().UTC().Add(2 * time.Hour),
+				Reason:         "operator manual command cooldown",
+			}); lockErr != nil && !errors.Is(lockErr, ErrDevicePriorityLocked) {
+				slog.WarnContext(ctx, "operator manual cooldown lock skipped",
+					"tenant_id", operator.TenantID,
+					"device_id", target.device.ID,
+					"error", "[REDACTED]",
+				)
+			}
+		}
 	}
 	return SubmitOperatorCommandOutput{
 		View:     commandView(submitted.Intent),

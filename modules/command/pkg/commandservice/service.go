@@ -181,6 +181,7 @@ func (s *Service) Submit(request commandmodel.SubmitRequest) (SubmitResult, erro
 	}
 
 	now := s.now().UTC()
+	preconditionMode, bypassReason := normalizedPrecondition(request)
 	risk, approvalPolicy, err := evaluateGovernance(request, now)
 	if err != nil {
 		return SubmitResult{}, err
@@ -213,7 +214,6 @@ func (s *Service) Submit(request commandmodel.SubmitRequest) (SubmitResult, erro
 	s.deviceSequence[request.DeviceID]++
 
 	capabilityRevision, _, _, _ := commandCapabilityProfile(request.Capability)
-	preconditionMode, bypassReason := normalizedPrecondition(request)
 	intent := &commandmodel.CommandIntent{
 		ID:                    commandID,
 		TenantID:              request.TenantID,
@@ -662,7 +662,7 @@ func validateAndHash(request commandmodel.SubmitRequest) (string, commandmodel.P
 	if !ok || !commandmodel.ParametersValid(request.Capability, request.Parameters) {
 		return "", "", "", ErrCapabilityDenied
 	}
-	preconditionMode, bypassReason, err := validatePrecondition(request, profile)
+	preconditionMode, bypassReason, err := validatePrecondition(request, priorityTier, commandSource)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -706,7 +706,11 @@ func validateAndHash(request commandmodel.SubmitRequest) (string, commandmodel.P
 	return hex.EncodeToString(digest[:]), priorityTier, commandSource, nil
 }
 
-func validatePrecondition(request commandmodel.SubmitRequest, profile commandmodel.CapabilityProfile) (commandmodel.PreconditionMode, string, error) {
+func validatePrecondition(
+	request commandmodel.SubmitRequest,
+	priorityTier commandmodel.PriorityTier,
+	commandSource commandmodel.CommandSource,
+) (commandmodel.PreconditionMode, string, error) {
 	mode := request.PreconditionMode
 	if mode == "" {
 		mode = commandmodel.PreconditionRequireCurrentState
@@ -716,7 +720,7 @@ func validatePrecondition(request commandmodel.SubmitRequest, profile commandmod
 	case commandmodel.PreconditionRequireCurrentState:
 		return mode, "", nil
 	case commandmodel.PreconditionEmergencyBypass:
-		if !profile.SupportsEmergencyBypass {
+		if !commandmodel.AllowsEmergencyPreconditionBypass(request.Capability, priorityTier, commandSource, request.IdempotencyKey, "reason-check") {
 			return "", "", ErrCapabilityDenied
 		}
 		if reason == "" {

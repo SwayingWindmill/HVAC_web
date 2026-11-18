@@ -8,8 +8,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 type stubPointHealthInspector struct {
@@ -219,4 +221,153 @@ func TestTelemetryHealthBlockReasonAndScopeHelpers(t *testing.T) {
 	if _, err := nilStore.InspectOptimizationPointHealth(context.Background(), OptimizationPointHealthRequest{TenantID: tenantA, SiteID: siteA}); err == nil {
 		t.Fatal("expected nil PostgresStore error")
 	}
+}
+
+func TestOptimizationPointHealthLivePointsSerializationAndDecoding(t *testing.T) {
+	sampledAt := time.Date(2026, 11, 18, 2, 0, 0, 0, time.UTC)
+	receivedAt := sampledAt.Add(2 * time.Second)
+	numVal := 7.25
+	boolVal := true
+
+	inspector := &stubPointHealthInspector{
+		result: OptimizationPointHealthResult{
+			Healthy: true,
+			LivePoints: []OptimizationLivePoint{
+				{
+					DeviceID:         deviceA,
+					TelemetryKey:     "btu_meter.supply_water_temperature",
+					NumericValue:     &numVal,
+					Unit:             "Cel",
+					Quality:          "GOOD",
+					Freshness:        "FRESH",
+					DevicePresence:   "ONLINE",
+					BusinessRevision: 14,
+					PointRevision:    3,
+					SampledAt:        &sampledAt,
+					ReceivedAt:       &receivedAt,
+				},
+				{
+					DeviceID:       deviceA,
+					TelemetryKey:   "chiller.run_state",
+					TextValue:      "RUNNING",
+					Quality:        "GOOD",
+					Freshness:      "FRESH",
+					DevicePresence: "ONLINE",
+				},
+				{
+					DeviceID:     deviceA,
+					TelemetryKey: "chiller.alarm_active",
+					BoolValue:    &boolVal,
+					Quality:      "GOOD",
+					Freshness:    "FRESH",
+				},
+			},
+		},
+	}
+
+	handler := NewHandler(ServerConfig{PointHealthInspector: inspector})
+	body := `{"tenantId":"` + tenantA + `","siteId":"` + siteA + `","deviceIds":["` + deviceA + `"],"telemetryKeys":["btu_meter.supply_water_temperature","chiller.run_state","chiller.alarm_active"]}`
+	req := httptest.NewRequest(http.MethodPost, InternalOptimizationPointHealthPath, bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.TLS = verifiedTLSState(DefaultOptimizationServiceSPIFFE)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var got OptimizationPointHealthResult
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.Healthy || len(got.LivePoints) != 3 {
+		t.Fatalf("unexpected result: %+v", got)
+	}
+	p0 := got.LivePoints[0]
+	if p0.NumericValue == nil || *p0.NumericValue != 7.25 || p0.Unit != "Cel" || p0.DevicePresence != "ONLINE" || p0.BusinessRevision != 14 || p0.PointRevision != 3 || p0.SampledAt == nil || !p0.SampledAt.Equal(sampledAt) {
+		t.Fatalf("unexpected numeric live point: %+v", p0)
+	}
+	if got.LivePoints[1].TextValue != "RUNNING" {
+		t.Fatalf("unexpected text live point: %+v", got.LivePoints[1])
+	}
+	if got.LivePoints[2].BoolValue == nil || !*got.LivePoints[2].BoolValue {
+		t.Fatalf("unexpected bool live point: %+v", got.LivePoints[2])
+	}
+
+	t.Run("decodeOptimizationLivePointValue handles typed and untyped jsonb", func(t *testing.T) {
+		var pt OptimizationLivePoint
+		decodeOptimizationLivePointValue([]byte(`23.5`), "NUMBER", &pt)
+		if pt.NumericValue == nil || *pt.NumericValue != 23.5 || pt.BoolValue != nil || pt.TextValue != "" {
+			t.Fatalf("NUMBER decode=%+v", pt)
+		}
+
+		pt = OptimizationLivePoint{}
+		decodeOptimizationLivePointValue([]byte(`false`), "BOOLEAN", &pt)
+		if pt.BoolValue == nil || *pt.BoolValue || pt.NumericValue != nil || pt.TextValue != "" {
+			t.Fatalf("BOOLEAN decode=%+v", pt)
+		}
+
+		pt = OptimizationLivePoint{}
+		decodeOptimizationLivePointValue([]byte(`"STANDBY"`), "STRING", &pt)
+		if pt.TextValue != "STANDBY" || pt.NumericValue != nil || pt.BoolValue != nil {
+			t.Fatalf("STRING decode=%+v", pt)
+		}
+
+		pt = OptimizationLivePoint{}
+		decodeOptimizationLivePointValue([]byte(`42`), "JSON", &pt)
+		if pt.NumericValue == nil || *pt.NumericValue != 42 {
+			t.Fatalf("JSON number decode=%+v", pt)
+		}
+
+		pt = OptimizationLivePoint{}
+		decodeOptimizationLivePointValue([]byte(`true`), "", &pt)
+		if pt.BoolValue == nil || !*pt.BoolValue {
+			t.Fatalf("untyped bool decode=%+v", pt)
+		}
+
+		pt = OptimizationLivePoint{}
+		decodeOptimizationLivePointValue([]byte(`"LOCAL"`), "", &pt)
+		if pt.TextValue != "LOCAL" {
+			t.Fatalf("untyped text decode=%+v", pt)
+		}
+
+		pt = OptimizationLivePoint{}
+		decodeOptimizationLivePointValue([]byte(`{"mode":"auto"}`), "JSON", &pt)
+		if pt.TextValue != `{"mode":"auto"}` {
+			t.Fatalf("JSON object decode=%+v", pt)
+		}
+
+		pt = OptimizationLivePoint{}
+		decodeOptimizationLivePointValue([]byte(`null`), "NUMBER", &pt)
+		if pt.NumericValue != nil || pt.BoolValue != nil || pt.TextValue != "" {
+			t.Fatalf("null decode=%+v", pt)
+		}
+	})
+
+	t.Run("buildOptimizationLivePointsQuery handles optional tables", func(t *testing.T) {
+		minimal := buildOptimizationLivePointsQuery(false, false, false, false)
+		for _, forbidden := range []string{"device_presence", "device_observation_snapshots", "telemetry_runtime.points", "lat.device_id = ANY"} {
+			if strings.Contains(minimal, forbidden) {
+				t.Fatalf("minimal query unexpectedly referenced %q:\n%s", forbidden, minimal)
+			}
+		}
+		if !strings.Contains(minimal, "''::text") || !strings.Contains(minimal, "0::bigint") {
+			t.Fatalf("minimal query missing fallback expressions:\n%s", minimal)
+		}
+
+		full := buildOptimizationLivePointsQuery(true, true, true, true)
+		for _, required := range []string{
+			"LEFT JOIN telemetry_runtime.device_presence dp",
+			"LEFT JOIN telemetry_runtime.device_observation_snapshots dos",
+			"LEFT JOIN telemetry_runtime.points p",
+			"COALESCE(dp.current_state, '')",
+			"COALESCE(dos.business_revision, lat.business_revision, 0)",
+			"COALESCE(p.point_revision, 0)",
+			"AND lat.device_id = ANY($4::uuid[])",
+		} {
+			if !strings.Contains(full, required) {
+				t.Fatalf("full query missing %q:\n%s", required, full)
+			}
+		}
+	})
 }

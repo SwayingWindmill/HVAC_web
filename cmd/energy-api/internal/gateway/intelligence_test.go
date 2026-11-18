@@ -202,8 +202,8 @@ func TestGatewayAutoControlLeaseRequiresTOTPAndSupportsRevokeAndMonitors(t *test
 				raw, _ := io.ReadAll(req.Body)
 				leaseMu.Lock()
 				defer leaseMu.Unlock()
-				armedState = json.RawMessage(`{"tenantId":"` + fixture.tenantID + `","siteId":"` + fixture.siteID + `","confirmationMode":"AUTO_WITH_LEASE","activeLease":{"id":"01990000-8800-7000-8000-000000000011","tenantId":"` + fixture.tenantID + `","siteId":"` + fixture.siteID + `","status":"ACTIVE","armedBy":"` + fixture.principalID + `","armedAt":"2026-07-26T15:00:00.000Z","expiresAt":"2026-07-26T23:00:00.000Z","allowedCapabilities":["SET_CHILLED_WATER_TEMPERATURE_SETPOINT"],"maxSetpointStepC":1,"supplyTempMinC":6,"supplyTempMaxC":12,"zoneTempMaxC":26,"minRunningChillers":1,"maxCommandsPerHour":2,"revision":1,"createdAt":"2026-07-26T15:00:00.000Z","updatedAt":"2026-07-26T15:00:00.000Z"},"latestLease":{"id":"01990000-8800-7000-8000-000000000011","tenantId":"` + fixture.tenantID + `","siteId":"` + fixture.siteID + `","status":"ACTIVE","armedBy":"` + fixture.principalID + `","armedAt":"2026-07-26T15:00:00.000Z","expiresAt":"2026-07-26T23:00:00.000Z","allowedCapabilities":["SET_CHILLED_WATER_TEMPERATURE_SETPOINT"],"maxSetpointStepC":1,"supplyTempMinC":6,"supplyTempMaxC":12,"zoneTempMaxC":26,"minRunningChillers":1,"maxCommandsPerHour":2,"revision":1,"createdAt":"2026-07-26T15:00:00.000Z","updatedAt":"2026-07-26T15:00:00.000Z"}}`)
-				if !strings.Contains(string(raw), `"SET_CHILLED_WATER_TEMPERATURE_SETPOINT"`) {
+				armedState = json.RawMessage(`{"tenantId":"` + fixture.tenantID + `","siteId":"` + fixture.siteID + `","confirmationMode":"AUTO_WITH_LEASE","activeLease":{"id":"01990000-8800-7000-8000-000000000011","tenantId":"` + fixture.tenantID + `","siteId":"` + fixture.siteID + `","status":"ACTIVE","armedBy":"` + fixture.principalID + `","armedAt":"2026-07-26T15:00:00.000Z","expiresAt":"2026-07-26T23:00:00.000Z","allowedCapabilities":["SET_CHILLED_WATER_TEMPERATURE_SETPOINT"],"maxSetpointStepC":1,"deadbandC":0.35,"supplyTempMinC":6,"supplyTempMaxC":12,"zoneTempMaxC":26,"minRunningChillers":1,"maxCommandsPerHour":2,"revision":1,"createdAt":"2026-07-26T15:00:00.000Z","updatedAt":"2026-07-26T15:00:00.000Z"},"latestLease":{"id":"01990000-8800-7000-8000-000000000011","tenantId":"` + fixture.tenantID + `","siteId":"` + fixture.siteID + `","status":"ACTIVE","armedBy":"` + fixture.principalID + `","armedAt":"2026-07-26T15:00:00.000Z","expiresAt":"2026-07-26T23:00:00.000Z","allowedCapabilities":["SET_CHILLED_WATER_TEMPERATURE_SETPOINT"],"maxSetpointStepC":1,"deadbandC":0.35,"supplyTempMinC":6,"supplyTempMaxC":12,"zoneTempMaxC":26,"minRunningChillers":1,"maxCommandsPerHour":2,"revision":1,"createdAt":"2026-07-26T15:00:00.000Z","updatedAt":"2026-07-26T15:00:00.000Z"}}`)
+				if !strings.Contains(string(raw), `"SET_CHILLED_WATER_TEMPERATURE_SETPOINT"`) || !strings.Contains(string(raw), `"deadbandC":0.35`) {
 					t.Fatalf("unexpected forwarded body: %s", string(raw))
 				}
 				return jsonHTTPResponse(http.StatusOK, string(armedState)), nil
@@ -239,12 +239,12 @@ func TestGatewayAutoControlLeaseRequiresTOTPAndSupportsRevokeAndMonitors(t *test
 	assertProblemCode(t, noTotpRec, http.StatusPreconditionRequired, "STEP_UP_REQUIRED")
 
 	// Valid TOTP + schedule.manage arms ACTIVE lease.
-	armReq := httptest.NewRequest(http.MethodPut, "/api/v1/sites/"+fixture.siteID+"/optimization/auto-control-lease", strings.NewReader(`{"expiresInHours":8,"allowedCapabilities":["SET_CHILLED_WATER_TEMPERATURE_SETPOINT"],"supplyTempMinC":6,"supplyTempMaxC":12,"reason":"启用自动优化","verificationCode":"123456"}`))
+	armReq := httptest.NewRequest(http.MethodPut, "/api/v1/sites/"+fixture.siteID+"/optimization/auto-control-lease", strings.NewReader(`{"expiresInHours":8,"allowedCapabilities":["SET_CHILLED_WATER_TEMPERATURE_SETPOINT"],"deadbandC":0.35,"supplyTempMinC":6,"supplyTempMaxC":12,"reason":"启用自动优化","verificationCode":"123456"}`))
 	fixture.authenticate(armReq, true)
 	armReq.Header.Set("Content-Type", "application/json")
 	armRec := httptest.NewRecorder()
 	fixture.handler.ServeHTTP(armRec, armReq)
-	if armRec.Code != http.StatusOK || !strings.Contains(armRec.Body.String(), `"AUTO_WITH_LEASE"`) {
+	if armRec.Code != http.StatusOK || !strings.Contains(armRec.Body.String(), `"AUTO_WITH_LEASE"`) || !strings.Contains(armRec.Body.String(), `"deadbandC":0.35`) {
 		t.Fatalf("PUT arm lease failed: %d %s", armRec.Code, armRec.Body.String())
 	}
 
@@ -385,6 +385,51 @@ func TestGatewayOptimizationAutoCommandRequiresWorkloadIdentityAndGrant(t *testi
 	if rollbackRec.Code != http.StatusAccepted {
 		t.Fatalf("rollback with stale telemetry status=%d want 202 body=%s", rollbackRec.Code, rollbackRec.Body.String())
 	}
+
+	// Normal optimization command cannot request EMERGENCY_BYPASS.
+	badBypass := `{"tenantId":"` + fixture.tenantID + `","deviceId":"` + fixture.deviceID + `","pointId":"` + fixture.commandPointID + `","capability":"SET_CHILLED_WATER_TEMPERATURE_SETPOINT","parameters":{"setpointC":8.0},"verificationPointKey":"chilled_water_supply_temp_sp","idempotencyKey":"auto-opt:01990000-8800-7000-8000-000000000101","preconditionMode":"EMERGENCY_BYPASS","bypassReason":"should fail","currentState":{"evaluationAvailability":"AVAILABLE","presence":"ONLINE","readiness":"CURRENT","quality":"GOOD","businessRevision":1,"currentValue":7.0,"observedAt":"2026-07-26T14:58:00Z"},"commandGrant":"` + grant + `"}`
+	badBypassReq := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+fixture.siteID+"/optimization/auto-commands", strings.NewReader(badBypass))
+	badBypassReq.Header.Set("Content-Type", "application/json")
+	badBypassReq.TLS = verifiedWorkloadTLSState(t, defaultOptimizationWorkloadID)
+	badBypassRec := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(badBypassRec, badBypassReq)
+	assertProblemCode(t, badBypassRec, http.StatusBadRequest, "COMMAND_REQUEST_INVALID")
+
+	// Safety rollback with EMERGENCY_BYPASS and zero businessRevision succeeds without fabricating healthy telemetry.
+	bypassRollback := `{"tenantId":"` + fixture.tenantID + `","deviceId":"` + fixture.deviceID + `","pointId":"` + fixture.commandPointID + `","capability":"SET_CHILLED_WATER_TEMPERATURE_SETPOINT","parameters":{"setpointC":7.0},"verificationPointKey":"chilled_water_supply_temp_sp","idempotencyKey":"auto-rollback:01990000-8800-7000-8000-000000000102","isRollback":true,"preconditionMode":"EMERGENCY_BYPASS","bypassReason":"automated_execution_monitor_rollback:telemetry_unhealthy_over_5m","currentState":{"evaluationAvailability":"UNAVAILABLE","presence":"OFFLINE","readiness":"STALE","quality":"BAD","businessRevision":0},"commandGrant":"` + grant + `"}`
+	bypassRollbackReq := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+fixture.siteID+"/optimization/auto-commands", strings.NewReader(bypassRollback))
+	bypassRollbackReq.Header.Set("Content-Type", "application/json")
+	bypassRollbackReq.TLS = verifiedWorkloadTLSState(t, defaultOptimizationWorkloadID)
+	bypassRollbackRec := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(bypassRollbackRec, bypassRollbackReq)
+	if bypassRollbackRec.Code != http.StatusAccepted {
+		t.Fatalf("emergency bypass rollback with zero revision status=%d want 202 body=%s", bypassRollbackRec.Code, bypassRollbackRec.Body.String())
+	}
+
+	// Priority escalation attempts on /optimization/auto-commands must be rejected.
+	escalatePayload := `{"tenantId":"` + fixture.tenantID + `","deviceId":"` + fixture.deviceID + `","pointId":"` + fixture.commandPointID + `","capability":"SET_CHILLED_WATER_TEMPERATURE_SETPOINT","parameters":{"setpointC":8.0},"verificationPointKey":"chilled_water_supply_temp_sp","idempotencyKey":"auto-opt:01990000-8800-7000-8000-000000000103","priorityTier":"SAFETY_INTERLOCK","commandSource":"SAFETY_INTERLOCK","currentState":{"evaluationAvailability":"AVAILABLE","presence":"ONLINE","readiness":"CURRENT","quality":"GOOD","businessRevision":1,"currentValue":7.0,"observedAt":"2026-07-26T14:58:00Z"},"commandGrant":"` + grant + `"}`
+	escalateReq := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+fixture.siteID+"/optimization/auto-commands", strings.NewReader(escalatePayload))
+	escalateReq.Header.Set("Content-Type", "application/json")
+	escalateReq.TLS = verifiedWorkloadTLSState(t, defaultOptimizationWorkloadID)
+	escalateRec := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(escalateRec, escalateReq)
+	assertProblemCode(t, escalateRec, http.StatusForbidden, "COMMAND_PRIORITY_ESCALATION_FORBIDDEN")
+
+	// Upstream 409 DEVICE_PRIORITY_LOCKED problem must be preserved rather than rewritten as idempotency conflict.
+	fixture.handler.command.httpClient = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.Method == http.MethodPost && req.URL.Path == internalCommandsPath {
+				return jsonHTTPResponse(http.StatusConflict, `{"code":"DEVICE_PRIORITY_LOCKED","title":"Device priority locked","detail":"Manual operator lock active.","retryable":false}`), nil
+			}
+			return jsonHTTPResponse(http.StatusNotFound, `{}`), nil
+		}),
+	}
+	lockedReq := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+fixture.siteID+"/optimization/auto-commands", strings.NewReader(payload))
+	lockedReq.Header.Set("Content-Type", "application/json")
+	lockedReq.TLS = verifiedWorkloadTLSState(t, defaultOptimizationWorkloadID)
+	lockedRec := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(lockedRec, lockedReq)
+	assertProblemCode(t, lockedRec, http.StatusConflict, "DEVICE_PRIORITY_LOCKED")
 }
 
 func jsonHTTPResponse(status int, body string) *http.Response {

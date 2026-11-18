@@ -1741,6 +1741,7 @@ export class Gateway {
       const supplyMin = Number(body?.supplyTempMinC);
       const supplyMax = Number(body?.supplyTempMaxC);
       const maxStep = Number(body?.maxSetpointStepC ?? 1.0);
+      const deadbandC = Number(body?.deadbandC ?? 0.2);
       const zoneMax = Number(body?.zoneTempMaxC ?? 26.0);
       const minChillers = Number(body?.minRunningChillers ?? 1);
       const maxPerHour = Number(body?.maxCommandsPerHour ?? 2);
@@ -1750,9 +1751,10 @@ export class Gateway {
       const valid =
         Number.isInteger(expiresInHours) && expiresInHours >= 1 && expiresInHours <= 24
         && allowedCaps.length >= 1
-        && Number.isFinite(supplyMin) && supplyMin >= 4 && supplyMin <= 20
+        && Number.isFinite(supplyMin) && supplyMin >= 5 && supplyMin <= 20
         && Number.isFinite(supplyMax) && supplyMax >= supplyMin && supplyMax <= 25
         && Number.isFinite(maxStep) && maxStep > 0 && maxStep <= 2
+        && Number.isFinite(deadbandC) && deadbandC >= 0.05 && deadbandC <= 2
         && Number.isFinite(zoneMax) && zoneMax >= 18 && zoneMax <= 32
         && Number.isInteger(minChillers) && minChillers >= 0
         && Number.isInteger(maxPerHour) && maxPerHour >= 1 && maxPerHour <= 6
@@ -1777,6 +1779,7 @@ export class Gateway {
         expiresAt,
         allowedCapabilities: allowedCaps,
         maxSetpointStepC: maxStep,
+        deadbandC,
         supplyTempMinC: supplyMin,
         supplyTempMaxC: supplyMax,
         zoneTempMaxC: zoneMax,

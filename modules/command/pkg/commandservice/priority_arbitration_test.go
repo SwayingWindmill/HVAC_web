@@ -10,9 +10,11 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/commandauth"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 )
 
@@ -453,5 +455,511 @@ func TestControlAuthorityEmergencyDoReleaseTagsSafetyInterlockPriority(t *testin
 	}
 	if intent.PriorityTier != commandmodel.PrioritySafetyInterlock || intent.CommandSource != commandmodel.SourceSafetyInterlock {
 		t.Fatalf("expected (SAFETY_INTERLOCK, SAFETY_INTERLOCK), got (%s, %s)", intent.PriorityTier, intent.CommandSource)
+	}
+}
+
+func completeTestDispatchForAuthority(
+	t *testing.T,
+	auth *ControlAuthority,
+	tenantID, siteID, deviceID string,
+	env commandmodel.DispatchEnvelope,
+	reported commandmodel.ScalarValue,
+	at time.Time,
+	rev uint64,
+) {
+	t.Helper()
+	ctx := context.Background()
+	if err := auth.ResolveDispatch(ctx, env, commandmodel.ConnectorResult{
+		Phase:        commandmodel.ConnectorAcknowledged,
+		Acknowledged: true,
+		EvidenceID:   "ack-" + env.CommandID,
+		EdgeExecution: &commandmodel.EdgeExecutionEvidence{
+			Requested:          reported,
+			Effective:          &reported,
+			Applied:            &reported,
+			WinnerControllerID: "edge",
+			Cycle:              1,
+		},
+	}); err != nil {
+		t.Fatalf("ResolveDispatch(%s) failed: %v", env.CommandID, err)
+	}
+	verEnv, err := auth.ClaimVerification(ctx, tenantID, "verifier-1", 30*time.Second)
+	if err != nil {
+		t.Fatalf("ClaimVerification(%s) failed: %v", env.CommandID, err)
+	}
+	if err := auth.ResolveVerification(ctx, verEnv, commandmodel.VerificationResult{
+		Outcome:    commandmodel.VerificationSucceeded,
+		EvidenceID: "verify-" + env.CommandID,
+		Reported: commandmodel.ReportedStateEvidence{
+			TenantID: tenantID, SiteID: siteID, DeviceID: deviceID,
+			EvaluationAvailability: "AVAILABLE", Presence: "ONLINE", Readiness: "CURRENT", Freshness: "FRESH", Quality: "GOOD",
+			BusinessRevision: rev, ObservedAt: at, ReportedValue: reported,
+		},
+	}); err != nil {
+		t.Fatalf("ResolveVerification(%s) failed: %v", env.CommandID, err)
+	}
+}
+
+func testAuthSnapshot(
+	now time.Time,
+	principalID, siteID, deviceID string,
+	capability commandmodel.Capability,
+	maxRisk commandmodel.RiskLevel,
+) commandmodel.AuthorizationSnapshot {
+	profile, _ := commandmodel.CapabilityProfileFor(capability)
+	return commandmodel.AuthorizationSnapshot{
+		GrantID:                     "grant-test",
+		PolicyRevision:              "command-policy-1",
+		Purpose:                     commandmodel.AuthorizationCommandSubmit,
+		PrincipalID:                 principalID,
+		TenantID:                    caTenantID,
+		SiteID:                      siteID,
+		DeviceID:                    deviceID,
+		Capability:                  capability,
+		MaximumRisk:                 maxRisk,
+		CapabilityRevision:          profile.Revision,
+		EmergencyRevocationRevision: 1,
+		IssuedAt:                    now.Add(-5 * time.Second),
+		ExpiresAt:                   now.Add(25 * time.Second),
+	}
+}
+
+func TestSubmitOperatorCommandInstallsTwoHourManualCooldownLock(t *testing.T) {
+	currentNow := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	ref, op := seedPlantHarness(t, currentNow)
+	h, err := NewControlAuthorityForTest(func() time.Time { return currentNow })
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.IAM.AllowedSites = ref.IAM.AllowedSites
+	h.Twin.Assets = ref.Twin.Assets
+	h.Twin.BoundDevices = ref.Twin.BoundDevices
+	h.Twin.Models = ref.Twin.Models
+	h.Live.Set(caChillerDev, "run_state", healthyTextObs(currentNow, "STOPPED", 11), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000001")
+	h.Live.Set(caPumpDev, "run_state", healthyTextObs(currentNow, "RUNNING", 12), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000002")
+	h.Live.Set(caChillerDev, "zone_temperature", healthyNumObs(currentNow, 23.0, 17), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000003")
+
+	op.StepUpTOTPVerified = true
+	submitted, err := h.Authority.SubmitOperatorCommand(context.Background(), op, SubmitOperatorCommandInput{
+		AssetID:        caChillerID,
+		CommandPointID: caStartPt,
+		IdempotencyKey: "op-manual-start-1",
+	})
+	if err != nil {
+		t.Fatalf("SubmitOperatorCommand failed: %v", err)
+	}
+	if submitted.View.Status == "" {
+		t.Fatalf("expected valid submitted view")
+	}
+
+	lock, err := h.Store.GetDevicePriorityLock(context.Background(), caTenantID, caChillerDev)
+	if err != nil {
+		t.Fatalf("GetDevicePriorityLock failed: %v", err)
+	}
+	wantUntil := currentNow.Add(2 * time.Hour)
+	if lock == nil || lock.LockedPriority != commandmodel.PriorityManualOverride ||
+		lock.CommandSource != commandmodel.SourceOperator ||
+		lock.LockedBy != op.Subject ||
+		lock.Reason != "operator manual command cooldown" ||
+		!lock.LockedUntil.Equal(wantUntil) {
+		t.Fatalf("unexpected manual cooldown lock: %+v (want LockedUntil=%s)", lock, wantUntil)
+	}
+
+	// Replaying the same idempotency key returns Replayed=true without failing.
+	replayed, err := h.Authority.SubmitOperatorCommand(context.Background(), op, SubmitOperatorCommandInput{
+		AssetID:        caChillerID,
+		CommandPointID: caStartPt,
+		IdempotencyKey: "op-manual-start-1",
+	})
+	if err != nil || !replayed.Replayed {
+		t.Fatalf("expected idempotent replay, got replayed=%+v err=%v", replayed, err)
+	}
+
+	// Complete operator command cleanly so active command alone wouldn't block; cooldown lock must still block AI until 2h elapses.
+	env, err := h.Authority.ClaimDispatch(context.Background(), caTenantID, "disp-1", 30*time.Second)
+	if err != nil {
+		t.Fatalf("ClaimDispatch operator command failed: %v", err)
+	}
+	completeTestDispatchForAuthority(t, h.Authority, caTenantID, caSiteID, caChillerDev, env, commandmodel.TextScalar("RUNNING"), currentNow.Add(time.Second), 12)
+
+	currentNow = currentNow.Add(119 * time.Minute)
+	aiBlocked := commandmodel.SubmitRequest{
+		TenantID:             caTenantID,
+		SiteID:               caSiteID,
+		DeviceID:             caChillerDev,
+		PointID:              caSetpointPt,
+		PrincipalID:          "optimizer-1",
+		IdempotencyKey:       "ai-cooldown-blocked",
+		Capability:           commandmodel.CapabilitySetTemperatureSetpoint,
+		Parameters:           commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 24.0},
+		VerificationPointKey: "zone_temperature",
+		PriorityTier:         commandmodel.PriorityAIOptimization,
+		CommandSource:        commandmodel.SourceOptimization,
+		CurrentState: commandmodel.CurrentStateEvidence{
+			EvaluationAvailability: "AVAILABLE",
+			Presence:               "ONLINE",
+			Readiness:              "CURRENT",
+			Quality:                "GOOD",
+			BusinessRevision:       17,
+			CurrentValue:           testFloat64Pointer(23.0),
+			ObservedAt:             currentNow,
+		},
+		Authorization: testAuthSnapshot(currentNow, "optimizer-1", caSiteID, caChillerDev, commandmodel.CapabilitySetTemperatureSetpoint, commandmodel.RiskHigh),
+	}
+	if _, err := h.Store.Submit(context.Background(), aiBlocked); !errors.Is(err, ErrDevicePriorityLocked) {
+		t.Fatalf("expected ErrDevicePriorityLocked at 1h59m, got %v", err)
+	}
+
+	// Another operator manual command remains permitted while manual lock holds and refreshes the 2h lock.
+	h.Live.Set(caChillerDev, "run_state", healthyTextObs(currentNow, "STOPPED", 18), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000021")
+	op.IssuedAt = currentNow
+	op.ExpiresAt = currentNow.Add(time.Minute)
+	if _, err := h.Authority.SubmitOperatorCommand(context.Background(), op, SubmitOperatorCommandInput{
+		AssetID:        caChillerID,
+		CommandPointID: caStartPt,
+		IdempotencyKey: "op-manual-start-2",
+	}); err != nil {
+		t.Fatalf("expected equal-priority operator command allowed during cooldown, got %v", err)
+	}
+	env2, err := h.Authority.ClaimDispatch(context.Background(), caTenantID, "disp-1", 30*time.Second)
+	if err != nil {
+		t.Fatalf("ClaimDispatch second operator command failed: %v", err)
+	}
+	completeTestDispatchForAuthority(t, h.Authority, caTenantID, caSiteID, caChillerDev, env2, commandmodel.TextScalar("RUNNING"), currentNow.Add(time.Second), 19)
+
+	// Advance past the 2h cooldown from the latest operator manual command.
+	currentNow = currentNow.Add(2*time.Hour + time.Second)
+	aiBlocked.CurrentState.ObservedAt = currentNow
+	aiBlocked.Authorization = testAuthSnapshot(currentNow, "optimizer-1", caSiteID, caChillerDev, commandmodel.CapabilitySetTemperatureSetpoint, commandmodel.RiskHigh)
+	if _, err := h.Store.Submit(context.Background(), aiBlocked); err != nil {
+		t.Fatalf("expected AI optimization allowed after 2h cooldown expires, got %v", err)
+	}
+}
+
+func TestControlAuthorityPreDispatchHardeningFeedbackDiagnosticsAndDelta(t *testing.T) {
+	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+
+	t.Run("uses dctx.FeedbackPointKey instead of hardcoded run_state", func(t *testing.T) {
+		h, op := seedPlantHarness(t, now)
+		op.StepUpTOTPVerified = true
+
+		// caSetpointPt uses feedbackPointKey="zone_temperature"; make run_state stale while zone_temperature is healthy.
+		staleRun := healthyTextObs(now, "STOPPED", 11)
+		staleRun.Freshness = "STALE"
+		h.Live.Set(caChillerDev, "run_state", staleRun, "s2:sha256:0000000000000000000000000000000000000000000000000000000000000031")
+
+		out, err := h.Authority.SubmitOperatorCommand(context.Background(), op, SubmitOperatorCommandInput{
+			AssetID:        caChillerID,
+			CommandPointID: caSetpointPt,
+			Parameters:     commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 24.0},
+			IdempotencyKey: "fb-key-healthy",
+		})
+		if err != nil {
+			t.Fatalf("submit failed: %v", err)
+		}
+		env, err := h.Authority.ClaimDispatch(context.Background(), caTenantID, "disp-1", 30*time.Second)
+		if err != nil || env.CommandID != out.View.CommandID {
+			t.Fatalf("expected ClaimDispatch to succeed via FeedbackPointKey=zone_temperature even with stale run_state, got env=%+v err=%v", env, err)
+		}
+		completeTestDispatchForAuthority(t, h.Authority, caTenantID, caSiteID, caChillerDev, env, commandmodel.NumberScalar(24.0), now.Add(time.Second), 18)
+
+		// Now flip: run_state healthy, zone_temperature stale -> ClaimDispatch must reject.
+		h.Live.Set(caChillerDev, "run_state", healthyTextObs(now, "STOPPED", 11), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000032")
+		h.Live.Set(caChillerDev, "zone_temperature", healthyNumObs(now, 24.0, 18), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000034")
+		out2, err := h.Authority.SubmitOperatorCommand(context.Background(), op, SubmitOperatorCommandInput{
+			AssetID:        caChillerID,
+			CommandPointID: caSetpointPt,
+			Parameters:     commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 24.5},
+			IdempotencyKey: "fb-key-stale",
+		})
+		if err != nil {
+			t.Fatalf("submit 2 failed: %v", err)
+		}
+		staleZone := healthyNumObs(now, 24.0, 18)
+		staleZone.Freshness = "STALE"
+		h.Live.Set(caChillerDev, "zone_temperature", staleZone, "s2:sha256:0000000000000000000000000000000000000000000000000000000000000033")
+
+		if _, err := h.Authority.ClaimDispatch(context.Background(), caTenantID, "disp-1", 30*time.Second); !errors.Is(err, ErrNoDispatchAvailable) {
+			t.Fatalf("expected ErrNoDispatchAvailable when zone_temperature stale, got %v", err)
+		}
+		got2, _ := h.Store.Get(context.Background(), caTenantID, out2.View.CommandID)
+		if got2.Status != commandmodel.IntentRejected {
+			t.Fatalf("expected out2 rejected when FeedbackPointKey stale, got %s", got2.Status)
+		}
+	})
+
+	t.Run("blocks active fault_code or alarm_active for non-stop commands and permits stop/reset_fault", func(t *testing.T) {
+		h, op := seedPlantHarness(t, now)
+		op.StepUpTOTPVerified = true
+		h.Live.Set(caChillerDev, "fault_code", healthyTextObs(now, "E04", 20), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000041")
+
+		startOut, err := h.Authority.SubmitOperatorCommand(context.Background(), op, SubmitOperatorCommandInput{
+			AssetID: caChillerID, CommandPointID: caStartPt, IdempotencyKey: "fault-blocks-start",
+		})
+		if err != nil {
+			t.Fatalf("submit start failed: %v", err)
+		}
+		if _, err := h.Authority.ClaimDispatch(context.Background(), caTenantID, "disp-1", 30*time.Second); !errors.Is(err, ErrNoDispatchAvailable) {
+			t.Fatalf("expected start blocked by fault_code, got %v", err)
+		}
+		gotStart, _ := h.Store.Get(context.Background(), caTenantID, startOut.View.CommandID)
+		if gotStart.Status != commandmodel.IntentRejected || !strings.Contains(gotStart.Transitions[len(gotStart.Transitions)-1].Reason, "DISPATCH_SAFETY_DEVICE_FAULT") {
+			t.Fatalf("expected DISPATCH_SAFETY_DEVICE_FAULT rejection, got status=%s transitions=%+v", gotStart.Status, gotStart.Transitions)
+		}
+
+		// STOP must remain allowed on a faulted device.
+		stopOut, err := h.Authority.SubmitOperatorCommand(context.Background(), op, SubmitOperatorCommandInput{
+			AssetID: caChillerID, CommandPointID: caStopPt, IdempotencyKey: "fault-allows-stop",
+		})
+		if err != nil {
+			t.Fatalf("submit stop failed: %v", err)
+		}
+		env, err := h.Authority.ClaimDispatch(context.Background(), caTenantID, "disp-1", 30*time.Second)
+		if err != nil || env.CommandID != stopOut.View.CommandID {
+			t.Fatalf("expected STOP permitted while faulted, got env=%+v err=%v", env, err)
+		}
+		completeTestDispatchForAuthority(t, h.Authority, caTenantID, caSiteID, caChillerDev, env, commandmodel.TextScalar("STOPPED"), now.Add(time.Second), 21)
+
+		// ResetFault must remain allowed cleanly inside evaluatePreDispatch.
+		resetOut, err := h.Store.Submit(context.Background(), commandmodel.SubmitRequest{
+			TenantID: caTenantID, SiteID: caSiteID, DeviceID: caChillerDev, PointID: caStartPt,
+			PrincipalID: op.Subject, IdempotencyKey: "fault-allows-reset",
+			Capability: commandmodel.CapabilityResetFault, VerificationPointKey: "fault_code",
+			PriorityTier: commandmodel.PriorityManualOverride, CommandSource: commandmodel.SourceOperator,
+			CurrentState: commandmodel.CurrentStateEvidence{
+				EvaluationAvailability: "AVAILABLE", Presence: "ONLINE", Readiness: "CURRENT",
+				Quality: "GOOD", BusinessRevision: 20, ObservedAt: now,
+			},
+			Authorization: testAuthSnapshot(now, op.Subject, caSiteID, caChillerDev, commandmodel.CapabilityResetFault, commandmodel.RiskLow),
+		})
+		if err != nil {
+			t.Fatalf("submit reset_fault failed: %v", err)
+		}
+		_, rej, _, evalErr := h.Authority.evaluatePreDispatch(context.Background(), commandmodel.DispatchEnvelope{
+			CommandID: resetOut.Intent.ID, TenantID: caTenantID, SiteID: caSiteID, DeviceID: caChillerDev, PointID: caStartPt,
+		}, resetOut.Intent, ControlDispatchContext{
+			TenantID: caTenantID, SiteID: caSiteID, DeviceID: caChillerDev, PointID: caStartPt,
+			AssetID: caChillerID, ControlMode: SiteControlModeRemoteAuto, FeedbackPointKey: "fault_code",
+		})
+		if evalErr != nil || rej != nil {
+			t.Fatalf("expected RESET_FAULT permitted on faulted device, got rej=%+v err=%v", rej, evalErr)
+		}
+		// On a clean chiller (outside STOP off-dwell cooldown), cleared fault_code ("0") + alarm_active = true still blocks START.
+		h2, op2 := seedPlantHarness(t, now)
+		op2.StepUpTOTPVerified = true
+		h2.Live.Set(caChillerDev, "fault_code", healthyTextObs(now, "0", 21), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000042")
+		h2.Live.Set(caChillerDev, "alarm_active", &commandmodel.LivePointObservation{
+			EvaluationAvailability: "AVAILABLE", Presence: "ONLINE", Readiness: "CURRENT",
+			Freshness: "FRESH", Quality: "GOOD", BusinessRevision: 22,
+			ReportedValue: commandmodel.BooleanScalar(true), ObservedAt: now,
+		}, "s2:sha256:0000000000000000000000000000000000000000000000000000000000000043")
+		alarmStart, err := h2.Authority.SubmitOperatorCommand(context.Background(), op2, SubmitOperatorCommandInput{
+			AssetID: caChillerID, CommandPointID: caStartPt, IdempotencyKey: "alarm-blocks-start",
+		})
+		if err != nil {
+			t.Fatalf("submit alarm start failed: %v", err)
+		}
+		if _, err := h2.Authority.ClaimDispatch(context.Background(), caTenantID, "disp-1", 30*time.Second); !errors.Is(err, ErrNoDispatchAvailable) {
+			t.Fatalf("expected alarm_active=true to block start, got %v", err)
+		}
+		gotAlarm, _ := h2.Store.Get(context.Background(), caTenantID, alarmStart.View.CommandID)
+		if gotAlarm.Status != commandmodel.IntentRejected {
+			t.Fatalf("expected alarmStart rejected, got %s", gotAlarm.Status)
+		}
+	})
+
+	t.Run("blocks local_remote_mode local/manual and ignores stale/absent optional diagnostics", func(t *testing.T) {
+		h, op := seedPlantHarness(t, now)
+		op.StepUpTOTPVerified = true
+
+		// Stale fault_code / erroring alarm_active / remote local_remote_mode should not block.
+		staleFault := healthyTextObs(now, "E99", 21)
+		staleFault.Freshness = "STALE"
+		h.Live.Set(caChillerDev, "fault_code", staleFault, "s2:sha256:0000000000000000000000000000000000000000000000000000000000000051")
+		h.Live.SetError(caChillerDev, "alarm_active", unavailableControlError("point unsupported"))
+		h.Live.Set(caChillerDev, "local_remote_mode", healthyTextObs(now, "REMOTE", 22), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000052")
+
+		okStart, err := h.Authority.SubmitOperatorCommand(context.Background(), op, SubmitOperatorCommandInput{
+			AssetID: caChillerID, CommandPointID: caStartPt, IdempotencyKey: "remote-ok-start",
+		})
+		if err != nil {
+			t.Fatalf("submit remote start failed: %v", err)
+		}
+		env, err := h.Authority.ClaimDispatch(context.Background(), caTenantID, "disp-1", 30*time.Second)
+		if err != nil || env.CommandID != okStart.View.CommandID {
+			t.Fatalf("expected remote mode + stale fault to dispatch, got env=%+v err=%v", env, err)
+		}
+		completeTestDispatchForAuthority(t, h.Authority, caTenantID, caSiteID, caChillerDev, env, commandmodel.TextScalar("RUNNING"), now.Add(time.Second), 23)
+
+		// LOCAL_MANUAL blocks dispatch with DISPATCH_SAFETY_LOCAL_MANUAL_MODE.
+		h.Live.Set(caChillerDev, "local_remote_mode", healthyTextObs(now, "LOCAL_MANUAL", 23), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000053")
+		localStart, err := h.Authority.SubmitOperatorCommand(context.Background(), op, SubmitOperatorCommandInput{
+			AssetID: caChillerID, CommandPointID: caStartPt, IdempotencyKey: "local-blocked-start",
+		})
+		if err != nil {
+			t.Fatalf("submit local start failed: %v", err)
+		}
+		if _, err := h.Authority.ClaimDispatch(context.Background(), caTenantID, "disp-1", 30*time.Second); !errors.Is(err, ErrNoDispatchAvailable) {
+			t.Fatalf("expected LOCAL_MANUAL to block dispatch, got %v", err)
+		}
+		gotLocal, _ := h.Store.Get(context.Background(), caTenantID, localStart.View.CommandID)
+		if gotLocal.Status != commandmodel.IntentRejected || !strings.Contains(gotLocal.Transitions[len(gotLocal.Transitions)-1].Reason, "DISPATCH_SAFETY_LOCAL_MANUAL_MODE") {
+			t.Fatalf("expected DISPATCH_SAFETY_LOCAL_MANUAL_MODE rejection, got status=%s transitions=%+v", gotLocal.Status, gotLocal.Transitions)
+		}
+	})
+
+	t.Run("blocks AI setpoint when live feedback drifts past maximumDelta before dispatch", func(t *testing.T) {
+		h, _ := seedPlantHarness(t, now)
+		h.Live.Set(caChillerDev, "chw_supply_temp_setpoint", healthyNumObs(now, 11.0, 25), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000061")
+
+		sub, err := h.Store.Submit(context.Background(), commandmodel.SubmitRequest{
+			TenantID: caTenantID, SiteID: caSiteID, DeviceID: caChillerDev, PointID: caSetpointPt,
+			PrincipalID: "optimizer-1", IdempotencyKey: "ai-delta-drift-1",
+			Capability:           commandmodel.CapabilitySetChilledWaterTemperatureSetpoint,
+			Parameters:           commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 9.0},
+			VerificationPointKey: "chw_supply_temp_setpoint",
+			PriorityTier:         commandmodel.PriorityAIOptimization,
+			CommandSource:        commandmodel.SourceOptimization,
+			CurrentState: commandmodel.CurrentStateEvidence{
+				EvaluationAvailability: "AVAILABLE", Presence: "ONLINE", Readiness: "CURRENT",
+				Quality: "GOOD", BusinessRevision: 25, CurrentValue: testFloat64Pointer(11.0), ObservedAt: now,
+			},
+			Authorization: testAuthSnapshot(now, "optimizer-1", caSiteID, caChillerDev, commandmodel.CapabilitySetChilledWaterTemperatureSetpoint, commandmodel.RiskHigh),
+		})
+		if err != nil {
+			t.Fatalf("submit AI setpoint failed: %v", err)
+		}
+
+		// Live setpoint drifts to 13.0 -> delta |9.0 - 13.0| = 4.0 > maximumDelta 3.0.
+		h.Live.Set(caChillerDev, "chw_supply_temp_setpoint", healthyNumObs(now, 13.0, 26), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000062")
+		_, rej, _, evalErr := h.Authority.evaluatePreDispatch(context.Background(), commandmodel.DispatchEnvelope{
+			CommandID: sub.Intent.ID, TenantID: caTenantID, SiteID: caSiteID, DeviceID: caChillerDev, PointID: caSetpointPt,
+			Parameters: cloneParameters(sub.Intent.Parameters),
+		}, sub.Intent, ControlDispatchContext{
+			TenantID: caTenantID, SiteID: caSiteID, DeviceID: caChillerDev, PointID: caSetpointPt,
+			AssetID: caChillerID, ControlMode: SiteControlModeRemoteAuto, FeedbackPointKey: "chw_supply_temp_setpoint",
+		})
+		if evalErr != nil || rej == nil || rej.Code != "DISPATCH_SAFETY_PRE_DISPATCH_DELTA_EXCEEDED" {
+			t.Fatalf("expected DISPATCH_SAFETY_PRE_DISPATCH_DELTA_EXCEEDED, got rej=%+v err=%v", rej, evalErr)
+		}
+	})
+}
+
+func TestAutoRollbackPreconditionBypassEndToEndHTTPServiceAndAuthority(t *testing.T) {
+	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	iamSigner := newECDSASigner(t)
+	gatewaySigner := newECDSASigner(t)
+	h, err := NewControlAuthorityForTest(func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.Twin.ControlStates[caSiteID] = SiteControlStateView{
+		TenantID: caTenantID, SiteID: caSiteID, ControlMode: SiteControlModeRemoteAuto,
+	}
+
+	handler := newCommandHTTPTestHandler(t, h.Store, iamSigner, gatewaySigner, now)
+	chwProfile, _ := commandmodel.CapabilityProfileFor(commandmodel.CapabilitySetChilledWaterTemperatureSetpoint)
+	grant, err := commandauth.SignGrant(iamSigner, commandauth.GrantClaims{
+		Issuer:                      "spiffe://hvac.local/iam-service",
+		Presenter:                   "spiffe://hvac.local/platform-gateway",
+		Audience:                    "command-service",
+		GrantID:                     "grant-rb-1",
+		Purpose:                     commandmodel.AuthorizationCommandSubmit,
+		PrincipalID:                 "optimization-service",
+		TenantID:                    caTenantID,
+		SiteID:                      caSiteID,
+		DeviceID:                    caChillerDev,
+		Capability:                  commandmodel.CapabilitySetChilledWaterTemperatureSetpoint,
+		MaximumRisk:                 commandmodel.RiskHigh,
+		CapabilityRevision:          chwProfile.Revision,
+		PolicyRevision:              "command-policy-1",
+		EmergencyRevocationRevision: 2,
+		WorkloadSPIFFE:              "spiffe://hvac.local/optimization-service",
+		LeaseID:                     "lease-rb-1",
+		IssuedAt:                    now.Unix(),
+		ExpiresAt:                   now.Add(25 * time.Second).Unix(),
+		TokenID:                     "grant-rb-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	postInternal := func(bodyStruct internalCreateCommandRequest) *httptest.ResponseRecorder {
+		raw, err := json.Marshal(bodyStruct)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequest(http.MethodPost, InternalCommandsPath, bytes.NewReader(raw))
+		req.Header.Set(commandGrantHeader, grant)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// 1. Valid auto-rollback PROTECTION_RULE setpoint bypass without CurrentValue/BusinessRevision is accepted over HTTP.
+	validReq := internalCreateCommandRequest{
+		TenantID:             caTenantID,
+		SiteID:               caSiteID,
+		DeviceID:             caChillerDev,
+		PointID:              caSetpointPt,
+		PrincipalID:          "optimization-service",
+		IdempotencyKey:       "auto-rollback:rec-77",
+		Capability:           commandmodel.CapabilitySetChilledWaterTemperatureSetpoint,
+		Parameters:           commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 8.5},
+		VerificationPointKey: "chw_supply_temp_setpoint",
+		PreconditionMode:     commandmodel.PreconditionEmergencyBypass,
+		BypassReason:         "revert optimization step after telemetry drop",
+		PriorityTier:         commandmodel.PriorityProtectionRule,
+		CommandSource:        commandmodel.SourceProtectionRule,
+	}
+	rec := postInternal(validReq)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202 Accepted for valid auto-rollback bypass, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var view CommandView
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+		t.Fatalf("decode view failed: %v", err)
+	}
+
+	// Simulate degraded telemetry in Live before ClaimDispatch -> ClaimDispatch must allow auto-rollback bypass!
+	stale := healthyNumObs(now, 10.0, 99)
+	stale.Freshness = "STALE"
+	h.Live.Set(caChillerDev, "run_state", stale, "s2:sha256:0000000000000000000000000000000000000000000000000000000000000071")
+	env, err := h.Authority.ClaimDispatch(context.Background(), caTenantID, "disp-1", 30*time.Second)
+	if err != nil || env.CommandID != view.CommandID {
+		t.Fatalf("expected ClaimDispatch to dispatch auto-rollback command under stale telemetry, got env=%+v err=%v", env, err)
+	}
+
+	// 2. Non-auto-rollback AI optimization attempt over HTTP is rejected cleanly with 400 Bad Request.
+	aiAttempt := validReq
+	aiAttempt.IdempotencyKey = "ai-opt:rec-78"
+	aiAttempt.PriorityTier = commandmodel.PriorityAIOptimization
+	aiAttempt.CommandSource = commandmodel.SourceOptimization
+	badAIRec := postInternal(aiAttempt)
+	if badAIRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request for non-rollback AI bypass, got %d body=%s", badAIRec.Code, badAIRec.Body.String())
+	}
+
+	// 3. Direct Service.Submit rejects AI/missing-prefix bypass with ErrCapabilityDenied and blank reason with ErrInvalidRequest.
+	svc := New(func() time.Time { return now })
+	svcReq := commandmodel.SubmitRequest{
+		TenantID: caTenantID, SiteID: caSiteID, DeviceID: caChillerDev, PointID: caSetpointPt,
+		PrincipalID: "optimization-service", IdempotencyKey: "auto-rollback:rec-79",
+		Capability:           commandmodel.CapabilitySetChilledWaterTemperatureSetpoint,
+		Parameters:           commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 8.5},
+		VerificationPointKey: "chw_supply_temp_setpoint",
+		PreconditionMode:     commandmodel.PreconditionEmergencyBypass,
+		BypassReason:         "   ",
+		PriorityTier:         commandmodel.PriorityProtectionRule,
+		CommandSource:        commandmodel.SourceProtectionRule,
+	}
+	if _, err := svc.Submit(svcReq); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("expected ErrInvalidRequest for blank auto-rollback reason, got %v", err)
+	}
+	svcReq.BypassReason = "revert"
+	svcReq.IdempotencyKey = "normal-protection-key"
+	if _, err := svc.Submit(svcReq); !errors.Is(err, ErrCapabilityDenied) {
+		t.Fatalf("expected ErrCapabilityDenied when idempotencyKey lacks auto-rollback: prefix, got %v", err)
 	}
 }
