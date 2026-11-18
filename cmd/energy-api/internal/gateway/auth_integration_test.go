@@ -12,6 +12,8 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -394,6 +396,10 @@ func newAuthHarnessWithNotification(t *testing.T, notification func(gatewayKey c
 }
 
 func buildAuthHarness(t *testing.T, factory func(clientSPIFFEID string) http.Handler, notification func(gatewayKey crypto.PublicKey) http.Handler, configure ...func(*gateway.IdentityConfig)) *authHarness {
+	return buildAuthHarnessWithGatewayConfig(t, factory, notification, nil, configure...)
+}
+
+func buildAuthHarnessWithGatewayConfig(t *testing.T, factory func(clientSPIFFEID string) http.Handler, notification func(gatewayKey crypto.PublicKey) http.Handler, configureGateway func(*gateway.Config), configure ...func(*gateway.IdentityConfig)) *authHarness {
 	t.Helper()
 	bundle, err := testpki.Generate("spiffe://hvac.local/iam-service", "spiffe://hvac.local/platform-gateway", time.Now().UTC())
 	if err != nil {
@@ -465,12 +471,16 @@ func buildAuthHarness(t *testing.T, factory func(clientSPIFFEID string) http.Han
 		t.Cleanup(notificationServer.Close)
 		notificationConfig = &gateway.NotificationConfig{BackendBaseURL: notificationServer.URL, BackendHTTPClient: notificationServer.Client()}
 	}
-	handler := gateway.NewHandler(gateway.Config{
+	gatewayCfg := gateway.Config{
 		Logger:       slog.New(slog.NewJSONHandler(&logs, nil)),
 		Build:        platformapi.BuildInfo{Service: "platform-gateway", Version: "test", Commit: "test", BuiltAt: "test"},
 		Identity:     identity,
 		Notification: notificationConfig,
-	})
+	}
+	if configureGateway != nil {
+		configureGateway(&gatewayCfg)
+	}
+	handler := gateway.NewHandler(gatewayCfg)
 	gatewayServer.Config.Handler = handler
 	gatewayServer.StartTLS()
 	t.Cleanup(gatewayServer.Close)
@@ -539,5 +549,199 @@ func assertProblemCode(t *testing.T, response *http.Response, expectedStatus int
 	}
 	if problem.Code != expectedCode {
 		t.Fatalf("problem code = %q, want %q; problem=%#v", problem.Code, expectedCode, problem)
+	}
+}
+
+type recordingSessionStore struct {
+	sessionstore.Store
+	touchCalls atomic.Int32
+}
+
+func (store *recordingSessionStore) TouchSession(ctx context.Context, sessionID string, at time.Time) (sessionstore.Session, error) {
+	store.touchCalls.Add(1)
+	return store.Store.TouchSession(ctx, sessionID, at)
+}
+
+func TestLogoutAndRevokeSessionTriggerTelemetryUnsubscribe(t *testing.T) {
+	type revokeEvent struct {
+		Path      string
+		TenantID  string `json:"tenantId"`
+		SessionID string `json:"sessionId"`
+		Reason    string `json:"reason"`
+	}
+	var mu sync.Mutex
+	var events []revokeEvent
+	var failTelemetry atomic.Bool
+
+	telemetryServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body revokeEvent
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		body.Path = request.URL.Path
+		mu.Lock()
+		events = append(events, body)
+		mu.Unlock()
+		if failTelemetry.Load() {
+			writer.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"schemaVersion":1,"revokedSubscriptions":1}`))
+	}))
+	t.Cleanup(telemetryServer.Close)
+
+	harness := buildAuthHarnessWithGatewayConfig(t, nil, nil, func(cfg *gateway.Config) {
+		cfg.Telemetry = &gateway.TelemetryConfig{
+			RuntimeBaseURL:    telemetryServer.URL,
+			RuntimeHTTPClient: telemetryServer.Client(),
+			RuntimeAudience:   "telemetry-runtime-service",
+			Timeout:           time.Second,
+		}
+	})
+
+	userClient := harness.browserClient(t)
+	userPrincipal, _ := loginAndReadPrincipal(t, userClient, harness.gatewayURL, "")
+
+	logout, _ := http.NewRequest(http.MethodPost, harness.gatewayURL+platformapi.LogoutPath, nil)
+	logout.Header.Set("Origin", harness.gatewayURL)
+	logout.Header.Set("X-CSRF-Token", userPrincipal.Session.CSRFToken)
+	logoutResp, err := userClient.Do(logout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logoutResp.Body.Close()
+	if logoutResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("logout status=%d", logoutResp.StatusCode)
+	}
+
+	user2Client := harness.browserClient(t)
+	user2Principal, _ := loginAndReadPrincipal(t, user2Client, harness.gatewayURL, "")
+	adminClient := harness.browserClient(t)
+	adminPrincipal, _ := loginAndReadPrincipal(t, adminClient, harness.gatewayURL, "admin")
+
+	failTelemetry.Store(true)
+	revokePath := strings.Replace(platformapi.RevokeSessionPathTemplate, "{sessionId}", url.PathEscape(user2Principal.Session.ID), 1)
+	revokeReq, _ := http.NewRequest(http.MethodPost, harness.gatewayURL+revokePath, nil)
+	revokeReq.Header.Set("Origin", harness.gatewayURL)
+	revokeReq.Header.Set("X-CSRF-Token", adminPrincipal.Session.CSRFToken)
+	revokeResp, err := adminClient.Do(revokeReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revokeResp.Body.Close()
+	if revokeResp.StatusCode != http.StatusOK {
+		t.Fatalf("revoke status=%d", revokeResp.StatusCode)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(events) != 2 {
+		t.Fatalf("expected 2 telemetry revoke events, got %#v", events)
+	}
+	if events[0].Path != "/internal/v1/telemetry/subscriptions:revoke" ||
+		events[0].TenantID != authFixtureTenantID ||
+		events[0].SessionID != userPrincipal.Session.ID ||
+		events[0].Reason != "SESSION_LOGGED_OUT" {
+		t.Fatalf("unexpected logout revoke event: %#v", events[0])
+	}
+	if events[1].Path != "/internal/v1/telemetry/subscriptions:revoke" ||
+		events[1].TenantID != authFixtureTenantID ||
+		events[1].SessionID != user2Principal.Session.ID ||
+		events[1].Reason != "SESSION_REVOKED" {
+		t.Fatalf("unexpected admin revoke event: %#v", events[1])
+	}
+}
+
+func TestTouchSessionThrottledWithinOneMinute(t *testing.T) {
+	var mu sync.Mutex
+	now := time.Now().UTC()
+	currentNow := func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return now
+	}
+	advance := func(d time.Duration) {
+		mu.Lock()
+		now = now.Add(d)
+		mu.Unlock()
+	}
+
+	recordingStore := &recordingSessionStore{Store: sessionstore.NewMemoryStore()}
+	harness := buildAuthHarnessWithGatewayConfig(t, func(clientSPIFFEID string) http.Handler {
+		return iamserver.NewHandler(iamserver.Config{
+			AllowedWorkloadSPIFFE: clientSPIFFEID,
+			Audience:              "iam-service",
+			Now:                   currentNow,
+			PrincipalCapabilityResolver: fixedPrincipalCapabilityResolver{authorization: identitycontext.EffectiveAuthorization{
+				CapabilitySetVersion: identitycontext.CapabilitySetVersion,
+				PolicyRevision:       "registry-read:test",
+				Capabilities: []identitycontext.Capability{
+					identitycontext.CapabilitySiteRead,
+					identitycontext.CapabilityDeviceRead,
+				},
+			}},
+		})
+	}, nil, func(cfg *gateway.Config) {
+		cfg.Now = currentNow
+	}, func(cfg *gateway.IdentityConfig) {
+		cfg.SessionStore = recordingStore
+	})
+
+	client := harness.browserClient(t)
+	principal, _ := loginAndReadPrincipal(t, client, harness.gatewayURL, "")
+
+	callWithActivity := func(active bool) {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodGet, harness.gatewayURL+platformapi.GetCurrentPrincipalPath, nil)
+		if active {
+			req.Header.Set("X-HVAC-User-Activity", "1")
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status=%d", resp.StatusCode)
+		}
+	}
+
+	advance(30 * time.Second)
+	callWithActivity(true)
+	if got := recordingStore.touchCalls.Load(); got != 0 {
+		t.Fatalf("expected 0 TouchSession calls at +30s, got %d", got)
+	}
+
+	advance(29 * time.Second)
+	callWithActivity(true)
+	if got := recordingStore.touchCalls.Load(); got != 0 {
+		t.Fatalf("expected 0 TouchSession calls at +59s, got %d", got)
+	}
+
+	advance(time.Second)
+	callWithActivity(true)
+	if got := recordingStore.touchCalls.Load(); got != 1 {
+		t.Fatalf("expected 1 TouchSession call at +60s, got %d", got)
+	}
+
+	stored, err := recordingStore.GetSession(context.Background(), principal.Session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stored.LastActivityAt.Equal(currentNow().UTC()) {
+		t.Fatalf("LastActivityAt=%s, want %s", stored.LastActivityAt, currentNow().UTC())
+	}
+
+	advance(30 * time.Second)
+	callWithActivity(true)
+	if got := recordingStore.touchCalls.Load(); got != 1 {
+		t.Fatalf("expected TouchSession throttled for 1m after last touch, got %d", got)
+	}
+
+	advance(90 * time.Second)
+	callWithActivity(false)
+	if got := recordingStore.touchCalls.Load(); got != 1 {
+		t.Fatalf("expected no TouchSession without activity header, got %d", got)
 	}
 }

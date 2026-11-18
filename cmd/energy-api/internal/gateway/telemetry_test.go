@@ -869,3 +869,69 @@ func TestTelemetryGatewayNotApplicableDisplayStateContract(t *testing.T) {
 		})
 	}
 }
+
+func TestTelemetryGatewayBatchAllowsPerItemUnavailableFailure(t *testing.T) {
+	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
+	fixture := newTelemetryGatewayFixture(t, "")
+	fixture.runtimeHTTPClient.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path != internalTelemetryBatchPath {
+			t.Fatalf("unexpected runtime path %s", request.URL.Path)
+		}
+		return telemetryJSONResponse(http.StatusOK, s2telemetryapi.BatchGetObservationSnapshotsResponse{
+			SchemaVersion: 1,
+			Items: []s2telemetryapi.BatchObservationResult{
+				{
+					Success: &s2telemetryapi.BatchObservationSuccess{
+						RequestId: "healthy",
+						DeviceId:  telemetryTestDeviceOne,
+						Status:    "OK",
+						Snapshot:  telemetrySnapshot(telemetryTestDeviceOne, []string{"temperature"}, now),
+					},
+				},
+				{
+					Failure: &s2telemetryapi.BatchObservationFailure{
+						RequestId: "incomplete",
+						DeviceId:  telemetryTestDeviceTwo,
+						Status:    "ERROR",
+						Problem: s2telemetryapi.ProblemDetails{
+							Type:      "https://api.quanlaihe.com/problems/telemetry-runtime-unavailable",
+							Title:     "Service Unavailable",
+							Status:    http.StatusServiceUnavailable,
+							Detail:    "The authoritative telemetry runtime is temporarily unavailable.",
+							Instance:  internalTelemetryBatchPath,
+							Code:      "TELEMETRY_RUNTIME_UNAVAILABLE",
+							TraceId:   strings.Repeat("a", 32),
+							Retryable: true,
+						},
+					},
+				},
+			},
+		}), nil
+	})
+
+	body, _ := json.Marshal(s2telemetryapi.BatchGetObservationSnapshotsRequest{
+		Requests: []s2telemetryapi.ObservationSnapshotTarget{
+			{RequestId: "healthy", DeviceId: telemetryTestDeviceOne, Keys: []s2telemetryapi.TelemetryKey{"temperature"}},
+			{RequestId: "incomplete", DeviceId: telemetryTestDeviceTwo, Keys: []s2telemetryapi.TelemetryKey{"new_key"}},
+		},
+	})
+	request := httptest.NewRequest(http.MethodPost, s2telemetryapi.BatchGetDeviceObservationSnapshotsPath, bytes.NewReader(body))
+	fixture.authenticate(request)
+	request.Header.Set("Origin", "https://web.example.test")
+	request.Header.Set("X-CSRF-Token", telemetryTestCSRF)
+	recorder := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK with partial item problem, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var output s2telemetryapi.BatchGetObservationSnapshotsResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&output); err != nil {
+		t.Fatal(err)
+	}
+	if len(output.Items) != 2 || output.Items[0].Success == nil || output.Items[1].Failure == nil {
+		t.Fatalf("unexpected partial batch output: %#v", output.Items)
+	}
+	if output.Items[1].Failure.Problem.Status != http.StatusServiceUnavailable || output.Items[1].Failure.Problem.Code != "TELEMETRY_RUNTIME_UNAVAILABLE" || !output.Items[1].Failure.Problem.Retryable {
+		t.Fatalf("unexpected item failure problem: %#v", output.Items[1].Failure.Problem)
+	}
+}

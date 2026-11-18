@@ -61,6 +61,19 @@ func (cache *memoryLatestCache) GetForDevice(_ context.Context, tenantID, device
 	return cache.snapshot, nil
 }
 
+func (cache *memoryLatestCache) BatchGetForDevices(_ context.Context, tenantID string, deviceIDs []string) (map[string]telemetryapi.DeviceObservationSnapshot, error) {
+	if cache.getErr != nil {
+		return nil, cache.getErr
+	}
+	result := make(map[string]telemetryapi.DeviceObservationSnapshot, len(deviceIDs))
+	for _, deviceID := range deviceIDs {
+		if cache.snapshot.BusinessRevision != 0 && string(cache.snapshot.TenantId) == tenantID && string(cache.snapshot.DeviceId) == deviceID {
+			result[deviceID] = cache.snapshot
+		}
+	}
+	return result, nil
+}
+
 func (cache *memoryLatestCache) Close() error { return nil }
 
 func (cache *memoryLatestCache) Ping(context.Context) error { return nil }
@@ -695,6 +708,149 @@ func TestMemoryLatestCacheSitePointsCAS(t *testing.T) {
 	got, err = cache.GetSiteLiveObservations(t.Context(), tenantA, siteA, []string{pointID})
 	if err != nil || got[pointID].HealthStatus != HealthSuspect {
 		t.Fatalf("expected equal-timestamp health overwrite, got=%#v err=%v", got, err)
+	}
+}
+
+func TestRedisLatestCacheBatchGetForDevicesPipelinedPasses(t *testing.T) {
+	now := time.Date(2026, 8, 13, 2, 0, 0, 0, time.UTC)
+	snap1 := realtimeTestSnapshot(now, 10)
+	snap2 := realtimeTestSnapshot(now.Add(time.Minute), 11)
+	snap2.DeviceId = realtimeTestDevice2
+	snap3 := realtimeTestSnapshot(now.Add(2*time.Minute), 12)
+	snap3Device := "018f2e00-3000-7000-8000-000000000099"
+	snap3.DeviceId = telemetryapi.UUIDv7(snap3Device)
+	missDevice := "018f2e00-3000-7000-8000-000000000088"
+
+	snap1JSON, err := json.Marshal(snap1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var mu sync.Mutex
+	var recordedCommands [][]string
+	var failNextHGet bool
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	siteIndex := map[string]string{
+		defaultLatestCacheKeyPrefix + ":index:" + string(snap1.TenantId) + ":" + string(snap1.DeviceId): string(snap1.SiteId),
+		defaultLatestCacheKeyPrefix + ":index:" + string(snap2.TenantId) + ":" + string(snap2.DeviceId): string(snap2.SiteId),
+	}
+	snapshotValues := map[string]string{
+		defaultLatestCacheKeyPrefix + ":" + string(snap1.TenantId) + ":" + string(snap1.SiteId) + ":" + string(snap1.DeviceId): string(snap1JSON),
+		defaultLatestCacheKeyPrefix + ":" + string(snap2.TenantId) + ":" + string(snap2.SiteId) + ":" + string(snap2.DeviceId): "{corrupt-json",
+	}
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				reader := bufio.NewReader(c)
+				for {
+					args, err := readRESPArray(reader)
+					if err != nil {
+						return
+					}
+					cmd := strings.ToUpper(args[0])
+					switch cmd {
+					case "HELLO":
+						_, _ = io.WriteString(c, "-ERR unknown command 'HELLO'\r\n")
+					case "PING":
+						_, _ = io.WriteString(c, "+PONG\r\n")
+					case "HGET":
+						mu.Lock()
+						fail := failNextHGet
+						recordedCommands = append(recordedCommands, append([]string(nil), args...))
+						mu.Unlock()
+						if fail {
+							_, _ = io.WriteString(c, "-ERR simulated redis error\r\n")
+							continue
+						}
+						key, field := args[1], args[2]
+						var value string
+						var ok bool
+						switch field {
+						case "site_id":
+							value, ok = siteIndex[key]
+						case "snapshot":
+							value, ok = snapshotValues[key]
+						}
+						if !ok {
+							_, _ = io.WriteString(c, "$-1\r\n")
+						} else {
+							_, _ = io.WriteString(c, fmt.Sprintf("$%d\r\n%s\r\n", len(value), value))
+						}
+					default:
+						_, _ = io.WriteString(c, "+OK\r\n")
+					}
+				}
+			}(conn)
+		}
+	}()
+
+	client := redis.NewClient(&redis.Options{
+		Addr:            ln.Addr().String(),
+		Protocol:        2,
+		DisableIdentity: true,
+	})
+	defer func() { _ = client.Close() }()
+	cache := &RedisLatestCache{client: client, keyPrefix: defaultLatestCacheKeyPrefix}
+
+	emptyResult, err := cache.BatchGetForDevices(t.Context(), string(snap1.TenantId), nil)
+	if err != nil || len(emptyResult) != 0 {
+		t.Fatalf("empty batch got=%v err=%v", emptyResult, err)
+	}
+	mu.Lock()
+	emptyCommandCount := len(recordedCommands)
+	mu.Unlock()
+	if emptyCommandCount != 0 {
+		t.Fatalf("empty batch issued %d redis commands", emptyCommandCount)
+	}
+
+	got, err := cache.BatchGetForDevices(t.Context(), string(snap1.TenantId), []string{
+		string(snap1.DeviceId),
+		missDevice,
+		string(snap1.DeviceId),
+		string(snap2.DeviceId),
+	})
+	if err != nil {
+		t.Fatalf("BatchGetForDevices failed: %v", err)
+	}
+	if len(got) != 1 || got[string(snap1.DeviceId)].BusinessRevision != 10 {
+		t.Fatalf("unexpected BatchGetForDevices result: %#v", got)
+	}
+	if _, hasCorrupt := got[string(snap2.DeviceId)]; hasCorrupt {
+		t.Fatalf("corrupt cache snapshot should be omitted for postgres fallback: %#v", got)
+	}
+
+	mu.Lock()
+	commands := append([][]string(nil), recordedCommands...)
+	failNextHGet = true
+	mu.Unlock()
+	if len(commands) != 5 {
+		t.Fatalf("expected 5 pipelined HGET commands across 2 passes, got %d: %#v", len(commands), commands)
+	}
+	for i := 0; i < 3; i++ {
+		if commands[i][2] != "site_id" {
+			t.Fatalf("pass 1 command %d expected field site_id, got %#v", i, commands[i])
+		}
+	}
+	for i := 3; i < 5; i++ {
+		if commands[i][2] != "snapshot" {
+			t.Fatalf("pass 2 command %d expected field snapshot, got %#v", i, commands[i])
+		}
+	}
+
+	if _, err := cache.BatchGetForDevices(t.Context(), string(snap1.TenantId), []string{string(snap1.DeviceId)}); !errors.Is(err, ErrLatestCacheUnavailable) {
+		t.Fatalf("expected ErrLatestCacheUnavailable on Redis error, got %v", err)
 	}
 }
 

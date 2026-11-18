@@ -19,6 +19,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
+	"github.com/quanlaihe/hvac-web/services/identity-service/pkg/identityadmin"
 )
 
 const sessionCookieName = "__Host-hvac_session"
@@ -57,12 +58,13 @@ type IdentityConfig struct {
 }
 
 type identityController struct {
-	config   IdentityConfig
-	now      func() time.Time
-	vault    cipher.AEAD
-	protocol oidcProtocol
-	states   LoginStateStore
-	store    sessionstore.Store
+	config           IdentityConfig
+	now              func() time.Time
+	vault            cipher.AEAD
+	protocol         oidcProtocol
+	states           LoginStateStore
+	store            sessionstore.Store
+	onSessionRevoked func(context.Context, string, string, string)
 }
 
 type loginState struct {
@@ -369,6 +371,7 @@ func (h *handler) Logout(writer http.ResponseWriter, request *http.Request, para
 		h.identity.writeSessionMutationError(writer, request, err)
 		return
 	}
+	h.revokeTelemetrySessionSubscriptions(request.Context(), session.TenantID, session.ID, "SESSION_LOGGED_OUT")
 	writer.Header().Set("X-Audit-Message-ID", revoked.LastAuditMessageID)
 	writer.Header().Set("Location", providerLogoutURL)
 	http.SetCookie(writer, &http.Cookie{Name: sessionCookieName, Value: "", Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, MaxAge: -1, Expires: time.Unix(1, 0)})
@@ -412,6 +415,7 @@ func (h *handler) RevokeSession(writer http.ResponseWriter, request *http.Reques
 		h.identity.writeSessionMutationError(writer, request, err)
 		return
 	}
+	h.revokeTelemetrySessionSubscriptions(request.Context(), target.TenantID, target.ID, "SESSION_REVOKED")
 	writer.Header().Set("X-Audit-Message-ID", target.LastAuditMessageID)
 	writeJSON(writer, http.StatusOK, platformapi.SessionRevocationResponse{SessionID: target.ID, RevokedAt: target.RevokedAt.UTC().Format(time.RFC3339), ObjectiveMS: int(h.identity.config.RevocationObjective.Milliseconds()), AuditMessageID: target.LastAuditMessageID})
 }
@@ -443,7 +447,7 @@ func (h *handler) identitySession(request *http.Request) (bffSession, *identityF
 		failure := identityFailure{401, "SESSION_INVALID", "Session invalid", "The BFF Session is expired, revoked, idle, or unknown.", false}
 		return bffSession{}, &failure
 	}
-	if request.Header.Get(userActivityHeaderName) == "1" {
+	if request.Header.Get(userActivityHeaderName) == "1" && !stored.LastActivityAt.Add(time.Minute).After(now) {
 		touched, err := h.identity.store.TouchSession(request.Context(), stored.ID, now)
 		if errors.Is(err, sessionstore.ErrSessionNotFound) || errors.Is(err, sessionstore.ErrSessionRevoked) {
 			failure := identityFailure{401, "SESSION_INVALID", "Session invalid", "The BFF Session is expired, revoked, idle, or unknown.", false}
@@ -747,11 +751,39 @@ func (controller *identityController) decryptBytes(ciphertext []byte) ([]byte, e
 }
 
 func (controller *identityController) fetchPrincipal(ctx context.Context, session bffSession) (identitycontext.InternalPrincipalResponse, *identityFailure) {
+	now := controller.now()
+	if controller.config.UserDirectory != nil && controller.config.OIDCIssuer != "" &&
+		strings.TrimRight(session.Principal.Issuer, "/") == strings.TrimRight(controller.config.OIDCIssuer, "/") {
+		accounts, err := controller.config.UserDirectory.UsersByID(ctx, []string{session.Principal.Subject})
+		if err != nil {
+			if !errors.Is(err, identityadmin.ErrUserNotFound) {
+				failure := identityFailure{503, "USER_DIRECTORY_UNAVAILABLE", "Identity directory unavailable", "The identity directory could not verify the account status.", true}
+				return identitycontext.InternalPrincipalResponse{}, &failure
+			}
+		} else {
+			for _, account := range accounts {
+				if account.ID != session.Principal.Subject {
+					continue
+				}
+				if account.Status != "ACTIVE" || (account.LockedUntil != nil && account.LockedUntil.After(now)) {
+					_, revokeErr := controller.store.RevokeSession(ctx, session.ID, controller.mutationContextForContext(ctx, "SESSION_REVOKED"))
+					if revokeErr != nil && !errors.Is(revokeErr, sessionstore.ErrSessionRevoked) && !errors.Is(revokeErr, sessionstore.ErrSessionNotFound) {
+						failure := identityFailure{503, "SESSION_STORE_UNAVAILABLE", "Session unavailable", "The durable Session store could not revoke the session.", true}
+						return identitycontext.InternalPrincipalResponse{}, &failure
+					}
+					if revokeErr == nil && controller.onSessionRevoked != nil {
+						controller.onSessionRevoked(ctx, session.TenantID, session.ID, "ACCOUNT_UNAVAILABLE")
+					}
+					failure := identityFailure{401, "SESSION_INVALID", "Session invalid", "The BFF Session is expired, revoked, or unknown.", false}
+					return identitycontext.InternalPrincipalResponse{}, &failure
+				}
+			}
+		}
+	}
 	ctx, span := observability.Start(ctx, "http.iam.current_principal", observability.SpanKindClient, map[string]any{
 		"http.request.method": http.MethodPost, "server.service": "iam-service", "rpc.operation": "principal.current",
 	})
 	defer span.End()
-	now := controller.now()
 	expiry := now.Add(controller.config.DelegationTTL)
 	if expiry.After(session.ExpiresAt) {
 		expiry = session.ExpiresAt
@@ -792,13 +824,17 @@ func (controller *identityController) fetchPrincipal(ctx context.Context, sessio
 }
 
 func (controller *identityController) mutationContext(request *http.Request, action string) sessionstore.MutationContext {
+	return controller.mutationContextForContext(request.Context(), action)
+}
+
+func (controller *identityController) mutationContextForContext(ctx context.Context, action string) sessionstore.MutationContext {
 	return sessionstore.MutationContext{
 		Action:            action,
 		Result:            "SUCCEEDED",
 		PolicyRevision:    controller.config.PolicyRevision,
-		CorrelationID:     requestIDFromContext(request.Context()),
-		TraceID:           traceIDFromContext(request.Context()),
-		Traceparent:       observability.Traceparent(request.Context()),
+		CorrelationID:     requestIDFromContext(ctx),
+		TraceID:           traceIDFromContext(ctx),
+		Traceparent:       observability.Traceparent(ctx),
 		ExecutingService:  "platform-gateway",
 		ExecutingSPIFFEID: controller.config.ExecutingWorkloadSPIFFE,
 		OccurredAt:        controller.now().UTC(),

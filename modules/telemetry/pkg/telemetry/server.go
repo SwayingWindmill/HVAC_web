@@ -375,24 +375,89 @@ func (h *handler) handleBatch(writer http.ResponseWriter, request *http.Request)
 	if !ok {
 		return
 	}
+	uniqueDeviceIDs := make([]string, 0, len(targets))
+	seenDevices := make(map[string]struct{}, len(targets))
+	for _, target := range targets {
+		if _, ok := seenDevices[target.DeviceID]; !ok {
+			seenDevices[target.DeviceID] = struct{}{}
+			uniqueDeviceIDs = append(uniqueDeviceIDs, target.DeviceID)
+		}
+	}
+	var cached map[string]telemetryapi.DeviceObservationSnapshot
+	if h.latestCache != nil {
+		var cacheErr error
+		cached, cacheErr = h.latestCache.BatchGetForDevices(request.Context(), access.TenantID, uniqueDeviceIDs)
+		if cacheErr != nil {
+			if request.Context().Err() != nil || (!errors.Is(cacheErr, ErrLatestCacheMiss) && !errors.Is(cacheErr, ErrLatestCacheUnavailable)) {
+				writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_RUNTIME_UNAVAILABLE", "The authoritative telemetry runtime is temporarily unavailable.", true)
+				return
+			}
+			cached = nil
+		}
+	}
+
+	type fallbackSnapshot struct {
+		snapshot telemetryapi.DeviceObservationSnapshot
+		err      error
+	}
+	fallback := make(map[string]fallbackSnapshot)
+	infraFailures := 0
+	now := h.now().UTC()
 	response := telemetryapi.BatchGetObservationSnapshotsResponse{SchemaVersion: 1, Items: make([]telemetryapi.BatchObservationResult, 0, len(input.Requests))}
 	for index, item := range input.Requests {
-		snapshot, err := h.readLatestSnapshot(request.Context(), access, targets[index])
-		if errors.Is(err, ErrSnapshotNotFound) {
+		if request.Context().Err() != nil {
+			writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_RUNTIME_UNAVAILABLE", "The authoritative telemetry runtime is temporarily unavailable.", true)
+			return
+		}
+		target := targets[index]
+		var snapshot telemetryapi.DeviceObservationSnapshot
+		var err error
+		if cachedSnap, ok := cached[target.DeviceID]; ok {
+			snapshot = cachedSnap
+		} else if fb, ok := fallback[target.DeviceID]; ok {
+			snapshot, err = fb.snapshot, fb.err
+		} else {
+			if h.store == nil {
+				err = errors.New("telemetry store is unavailable")
+			} else {
+				snapshot, err = h.store.LatestSnapshot(request.Context(), access.TenantID, target.DeviceID)
+			}
+			fallback[target.DeviceID] = fallbackSnapshot{snapshot: snapshot, err: err}
+		}
+		if err == nil {
+			snapshot, err = projectLatestSnapshot(snapshot, target.Keys, now)
+		}
+		switch {
+		case err == nil:
+			h.metrics.observeSnapshot(snapshot)
+			response.Items = append(response.Items, telemetryapi.BatchObservationResult{Success: &telemetryapi.BatchObservationSuccess{
+				RequestId: item.RequestId, DeviceId: item.DeviceId, Status: "OK", Snapshot: snapshot,
+			}})
+		case errors.Is(err, ErrSnapshotNotFound):
 			response.Items = append(response.Items, telemetryapi.BatchObservationResult{Failure: &telemetryapi.BatchObservationFailure{
 				RequestId: item.RequestId, DeviceId: item.DeviceId, Status: "ERROR",
 				Problem: problemDetails(request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "The requested telemetry resource was not found.", false),
 			}})
-			continue
+		case errors.Is(err, ErrSnapshotIncomplete):
+			response.Items = append(response.Items, telemetryapi.BatchObservationResult{Failure: &telemetryapi.BatchObservationFailure{
+				RequestId: item.RequestId, DeviceId: item.DeviceId, Status: "ERROR",
+				Problem: problemDetails(request, http.StatusServiceUnavailable, "TELEMETRY_RUNTIME_UNAVAILABLE", "The authoritative telemetry runtime is temporarily unavailable.", true),
+			}})
+		default:
+			if request.Context().Err() != nil {
+				writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_RUNTIME_UNAVAILABLE", "The authoritative telemetry runtime is temporarily unavailable.", true)
+				return
+			}
+			infraFailures++
+			response.Items = append(response.Items, telemetryapi.BatchObservationResult{Failure: &telemetryapi.BatchObservationFailure{
+				RequestId: item.RequestId, DeviceId: item.DeviceId, Status: "ERROR",
+				Problem: problemDetails(request, http.StatusServiceUnavailable, "TELEMETRY_RUNTIME_UNAVAILABLE", "The authoritative telemetry runtime is temporarily unavailable.", true),
+			}})
 		}
-		if err != nil {
-			writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_RUNTIME_UNAVAILABLE", "The authoritative telemetry runtime is temporarily unavailable.", true)
-			return
-		}
-		h.metrics.observeSnapshot(snapshot)
-		response.Items = append(response.Items, telemetryapi.BatchObservationResult{Success: &telemetryapi.BatchObservationSuccess{
-			RequestId: item.RequestId, DeviceId: item.DeviceId, Status: "OK", Snapshot: snapshot,
-		}})
+	}
+	if infraFailures == len(input.Requests) {
+		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_RUNTIME_UNAVAILABLE", "The authoritative telemetry runtime is temporarily unavailable.", true)
+		return
 	}
 	writeJSON(writer, http.StatusOK, response)
 }
@@ -411,7 +476,11 @@ func (h *handler) readLatestSnapshot(ctx context.Context, access AccessContext, 
 	if err != nil {
 		return telemetryapi.DeviceObservationSnapshot{}, err
 	}
-	if len(target.Keys) == 0 {
+	return projectLatestSnapshot(snapshot, target.Keys, h.now().UTC())
+}
+
+func projectLatestSnapshot(snapshot telemetryapi.DeviceObservationSnapshot, requestedKeys []string, now time.Time) (telemetryapi.DeviceObservationSnapshot, error) {
+	if len(requestedKeys) == 0 {
 		snapshot.Values = []telemetryapi.TelemetryKeyState{}
 		snapshot.TelemetryReadiness = telemetryapi.TelemetryReadinessNotApplicable
 		return snapshot, nil
@@ -427,8 +496,8 @@ func (h *handler) readLatestSnapshot(ctx context.Context, access AccessContext, 
 			return telemetryapi.DeviceObservationSnapshot{}, ErrSnapshotIncomplete
 		}
 	}
-	values := make([]telemetryapi.TelemetryKeyState, 0, len(target.Keys))
-	for _, key := range target.Keys {
+	values := make([]telemetryapi.TelemetryKeyState, 0, len(requestedKeys))
+	for _, key := range requestedKeys {
 		state, ok := selected[key]
 		if !ok {
 			return telemetryapi.DeviceObservationSnapshot{}, ErrSnapshotIncomplete
@@ -436,7 +505,7 @@ func (h *handler) readLatestSnapshot(ctx context.Context, access AccessContext, 
 		values = append(values, state)
 	}
 	snapshot.Values = values
-	return RefreshSnapshotAt(snapshot, h.now().UTC()), nil
+	return RefreshSnapshotAt(snapshot, now), nil
 }
 
 func (h *handler) handleSubscriptionBootstrap(writer http.ResponseWriter, request *http.Request) {
@@ -683,6 +752,8 @@ func (h *handler) handleCentrifugoSubscribe(writer http.ResponseWriter, request 
 type subscriptionRevokeRequest struct {
 	PrincipalID string `json:"principalId"`
 	DeviceID    string `json:"deviceId"`
+	TenantID    string `json:"tenantId"`
+	SessionID   string `json:"sessionId"`
 	Reason      string `json:"reason"`
 	OccurredAt  string `json:"occurredAt"`
 }
@@ -698,7 +769,9 @@ func (h *handler) handleSubscriptionRevoke(writer http.ResponseWriter, request *
 		return
 	}
 	peer, verified := verifiedPeerSPIFFE(request)
-	if !verified || h.allowedIAMSPIFFE == "" || peer != h.allowedIAMSPIFFE || h.realtime == nil {
+	allowedIAM := h.allowedIAMSPIFFE != "" && peer == h.allowedIAMSPIFFE
+	allowedGateway := h.allowedGatewaySPIFFE != "" && peer == h.allowedGatewaySPIFFE
+	if !verified || (!allowedIAM && !allowedGateway) || h.realtime == nil {
 		writeProblem(writer, request, http.StatusUnauthorized, "TELEMETRY_WORKLOAD_IDENTITY_INVALID", "The calling workload identity is not trusted.", false)
 		return
 	}
@@ -707,9 +780,18 @@ func (h *handler) handleSubscriptionRevoke(writer http.ResponseWriter, request *
 	decoder := json.NewDecoder(request.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&input); err != nil || ensureJSONEOF(decoder) != nil ||
-		(input.PrincipalID == "" && input.DeviceID == "") || (input.PrincipalID != "" && !uuidV7Pattern.MatchString(input.PrincipalID)) ||
-		(input.DeviceID != "" && !uuidV7Pattern.MatchString(input.DeviceID)) || strings.TrimSpace(input.Reason) == "" || len(input.Reason) > 128 {
+		(input.TenantID == "") != (input.SessionID == "") ||
+		(input.PrincipalID == "" && input.DeviceID == "" && input.SessionID == "") ||
+		(input.PrincipalID != "" && !uuidV7Pattern.MatchString(input.PrincipalID)) ||
+		(input.DeviceID != "" && !uuidV7Pattern.MatchString(input.DeviceID)) ||
+		(input.TenantID != "" && !uuidV7Pattern.MatchString(input.TenantID)) ||
+		(input.SessionID != "" && (strings.TrimSpace(input.SessionID) == "" || len(input.SessionID) > 512)) ||
+		strings.TrimSpace(input.Reason) == "" || len(input.Reason) > 128 {
 		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_REVOCATION_INVALID", "The telemetry revocation request is invalid.", false)
+		return
+	}
+	if !allowedIAM && (input.PrincipalID != "" || input.DeviceID != "" || input.TenantID == "" || input.SessionID == "") {
+		writeProblem(writer, request, http.StatusUnauthorized, "TELEMETRY_WORKLOAD_IDENTITY_INVALID", "The calling workload identity is not trusted.", false)
 		return
 	}
 	occurredAt, err := time.Parse(time.RFC3339Nano, input.OccurredAt)
@@ -717,7 +799,12 @@ func (h *handler) handleSubscriptionRevoke(writer http.ResponseWriter, request *
 		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_REVOCATION_INVALID", "The telemetry revocation request is invalid.", false)
 		return
 	}
-	revoked, err := h.realtime.Revoke(request.Context(), input.PrincipalID, input.DeviceID, occurredAt)
+	revoked, err := h.realtime.RevokeMatching(request.Context(), SubscriptionRevocationFilter{
+		PrincipalID: input.PrincipalID,
+		DeviceID:    input.DeviceID,
+		TenantID:    input.TenantID,
+		SessionID:   input.SessionID,
+	}, occurredAt)
 	if err != nil {
 		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_REVOCATION_UNAVAILABLE", "Telemetry revocation is temporarily unavailable.", true)
 		return

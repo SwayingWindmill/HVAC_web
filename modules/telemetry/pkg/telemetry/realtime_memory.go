@@ -216,15 +216,22 @@ func (repository *MemoryRealtimeRepository) MarkPublicationPublished(_ context.C
 	return nil
 }
 
-func (repository *MemoryRealtimeRepository) RevokeSubscriptions(_ context.Context, principalID, deviceID string, authorizedBefore, now time.Time) ([]RealtimeSubscription, error) {
+func (repository *MemoryRealtimeRepository) RevokeSubscriptions(_ context.Context, filter SubscriptionRevocationFilter, authorizedBefore, now time.Time) ([]RealtimeSubscription, error) {
 	repository.mu.Lock()
 	defer repository.mu.Unlock()
 	if repository.FailSave != nil {
 		return nil, repository.FailSave
 	}
+	if !filter.valid() {
+		return nil, ErrSubscriptionConflict
+	}
 	result := make([]RealtimeSubscription, 0)
 	for id, subscription := range repository.subscriptions {
-		if (principalID == "" || subscription.PrincipalID == principalID) && (deviceID == "" || subscription.DeviceID == deviceID) && subscription.Status == SubscriptionActive && !subscription.UpdatedAt.After(authorizedBefore) {
+		if (filter.PrincipalID == "" || subscription.PrincipalID == filter.PrincipalID) &&
+			(filter.DeviceID == "" || subscription.DeviceID == filter.DeviceID) &&
+			(filter.TenantID == "" || subscription.TenantID == filter.TenantID) &&
+			(filter.SessionID == "" || subscription.SessionID == filter.SessionID) &&
+			subscription.Status == SubscriptionActive && !subscription.UpdatedAt.After(authorizedBefore) {
 			copy := cloneSubscription(subscription)
 			result = append(result, copy)
 			subscription.Status = SubscriptionRevoked

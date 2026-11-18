@@ -109,6 +109,20 @@ type PendingPublication struct {
 	ChangedKeys      []string
 }
 
+type SubscriptionRevocationFilter struct {
+	PrincipalID string
+	DeviceID    string
+	TenantID    string
+	SessionID   string
+}
+
+func (filter SubscriptionRevocationFilter) valid() bool {
+	if (filter.TenantID == "") != (filter.SessionID == "") {
+		return false
+	}
+	return filter.PrincipalID != "" || filter.DeviceID != "" || filter.SessionID != ""
+}
+
 type RealtimeRepository interface {
 	SaveSubscriptions(context.Context, []RealtimeSubscription) error
 	ActiveSubscription(context.Context, string, time.Time) (RealtimeSubscription, error)
@@ -119,9 +133,9 @@ type RealtimeRepository interface {
 	CurrentBusinessRevision(context.Context, string) (int64, error)
 	ClaimPendingPublications(context.Context, string, int, time.Time, time.Duration) ([]PendingPublication, error)
 	MarkPublicationPublished(context.Context, string, string, time.Time) error
-	// RevokeSubscriptions revokes active subscriptions of the principal and/or device
+	// RevokeSubscriptions revokes active subscriptions matching filter
 	// that were last authorized at or before authorizedBefore.
-	RevokeSubscriptions(ctx context.Context, principalID, deviceID string, authorizedBefore, now time.Time) ([]RealtimeSubscription, error)
+	RevokeSubscriptions(ctx context.Context, filter SubscriptionRevocationFilter, authorizedBefore, now time.Time) ([]RealtimeSubscription, error)
 }
 
 type RealtimeTransport interface {
@@ -570,17 +584,30 @@ func (service *RealtimeService) RelayOnce(ctx context.Context, limit int) (int, 
 // Revoke ends the subscriptions an IAM change at authorizedBefore invalidates and
 // unsubscribes their channels. Subscriptions authorized after the change stand.
 func (service *RealtimeService) Revoke(ctx context.Context, principalID, deviceID string, authorizedBefore time.Time) (int, error) {
+	return service.RevokeMatching(ctx, SubscriptionRevocationFilter{PrincipalID: principalID, DeviceID: deviceID}, authorizedBefore)
+}
+
+// RevokeMatching ends the active subscriptions matching filter that were last authorized
+// at or before authorizedBefore and unsubscribes their channels.
+func (service *RealtimeService) RevokeMatching(ctx context.Context, filter SubscriptionRevocationFilter, authorizedBefore time.Time) (int, error) {
 	if service == nil || service.repository == nil || service.transport == nil {
 		return 0, ErrRealtimeUnavailable
 	}
-	revoked, err := service.repository.RevokeSubscriptions(ctx, principalID, deviceID, authorizedBefore.UTC(), service.now().UTC())
+	if !filter.valid() {
+		return 0, ErrSubscriptionConflict
+	}
+	revoked, err := service.repository.RevokeSubscriptions(ctx, filter, authorizedBefore.UTC(), service.now().UTC())
 	if err != nil {
 		return 0, normalizeRealtimeRepositoryError(err)
 	}
+	var unsubscribeErr error
 	for _, subscription := range revoked {
-		if err := service.transport.Unsubscribe(ctx, subscription.PrincipalID, subscription.Channel); err != nil {
-			return len(revoked), ErrRealtimeUnavailable
+		if err := service.transport.Unsubscribe(ctx, subscription.PrincipalID, subscription.Channel); err != nil && unsubscribeErr == nil {
+			unsubscribeErr = ErrRealtimeUnavailable
 		}
+	}
+	if unsubscribeErr != nil {
+		return len(revoked), unsubscribeErr
 	}
 	return len(revoked), nil
 }

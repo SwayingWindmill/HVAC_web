@@ -48,9 +48,21 @@ func TestPostgresSessionMutationCommitsStateAuditAndOutboxAtomically(t *testing.
 		t.Fatalf("session did not survive restart: %#v", reloaded)
 	}
 
+	touchedAt := now.Add(2 * time.Minute)
+	touched, err := store.TouchSession(context.Background(), created.ID, touchedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !touched.LastActivityAt.Equal(touchedAt) || touched.ID != created.ID || touched.AggregateVersion != created.AggregateVersion {
+		t.Fatalf("unexpected touched session: %#v", touched)
+	}
+
 	revoked, err := store.RevokeSession(context.Background(), created.ID, fixtureMutation(now.Add(time.Second), "SESSION_REVOKED"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if _, err := store.TouchSession(context.Background(), created.ID, touchedAt.Add(time.Minute)); !errors.Is(err, sessionstore.ErrSessionNotFound) {
+		t.Fatalf("touching revoked session returned %v, want ErrSessionNotFound", err)
 	}
 	if revoked.AggregateVersion != 2 || revoked.LastAuditMessageID != "audit-revoke-01" || revoked.RevokedAt == nil {
 		t.Fatalf("unexpected revoked session: %#v", revoked)
