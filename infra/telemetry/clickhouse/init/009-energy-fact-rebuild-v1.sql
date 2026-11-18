@@ -19,7 +19,8 @@ CREATE TABLE IF NOT EXISTS analytics.energy_rebuild_runs (
 ENGINE = MergeTree
 PARTITION BY toYYYYMM(recorded_at)
 ORDER BY (tenant_id, site_id, run_id, recorded_at, event_id)
-SETTINGS index_granularity = 8192;
+SETTINGS index_granularity = 8192,
+         non_replicated_deduplication_window = 10000;
 
 -- One row per logical fact (tenant, site, meter binding, current observation): its highest
 -- (fact_revision, projected_at, fact_id). period_end is the current observation's sample time, so it

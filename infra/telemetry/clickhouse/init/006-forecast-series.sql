@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS analytics.forecast_series (
   forecast_for DateTime64(3, 'UTC'),
   horizon_minutes UInt32,
   value Float64,
-  unit String,
+  unit LowCardinality(String),
   lower_bound Nullable(Float64),
   upper_bound Nullable(Float64),
   quantile Nullable(Float64),
@@ -40,7 +40,8 @@ ORDER BY (
   forecast_for,
   forecast_id
 )
-SETTINGS index_granularity = 8192;
+SETTINGS index_granularity = 8192,
+         non_replicated_deduplication_window = 10000;
 
 CREATE USER IF NOT EXISTS forecast_service_reader IDENTIFIED WITH no_password;
 CREATE USER IF NOT EXISTS forecast_service_writer IDENTIFIED WITH no_password;

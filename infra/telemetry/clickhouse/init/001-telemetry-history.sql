@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS telemetry_history.observations (
   point_revision Nullable(UInt64),
   counter_decrease_mode LowCardinality(Nullable(String)),
   counter_rollover_modulus Nullable(Float64),
-  value_type Nullable(String),
+  value_type LowCardinality(Nullable(String)),
   unit Nullable(String),
   value_json Nullable(String),
   value_number Nullable(Float64),

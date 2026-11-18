@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS analytics.energy_interval_facts (
   source_previous_observation_id UUID,
   source_current_observation_id UUID,
   source_event_id UUID,
-  source_partition String,
+  source_partition LowCardinality(String),
   source_offset UInt64,
   dataset_revision UInt64,
   data_watermark DateTime64(3, 'UTC'),

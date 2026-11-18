@@ -39,9 +39,24 @@ func NewClickHouseEvidence(baseURL, username, password string, client *http.Clie
 		return nil, errors.New("FDD ClickHouse reader username is required")
 	}
 	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
+		client = newDefaultFDDClickHouseHTTPClient(10 * time.Second)
 	}
 	return &ClickHouseEvidence{baseURL: parsed, username: strings.TrimSpace(username), password: password, client: client}, nil
+}
+
+func newDefaultFDDClickHouseHTTPClient(timeout time.Duration) *http.Client {
+	var transport *http.Transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok && base != nil {
+		transport = base.Clone()
+	} else {
+		transport = &http.Transport{}
+	}
+	transport.MaxIdleConns = 64
+	transport.MaxIdleConnsPerHost = 32
+	transport.IdleConnTimeout = 90 * time.Second
+	transport.TLSHandshakeTimeout = 10 * time.Second
+	transport.ExpectContinueTimeout = time.Second
+	return &http.Client{Timeout: timeout, Transport: transport}
 }
 
 // WindowSamples reads each device's last authoritative observation of each key per minute: either
@@ -198,6 +213,7 @@ func (evidence *ClickHouseEvidence) query(ctx context.Context, sql string) ([]by
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(response.Body, maximumEvidenceResponseBytes+1))
+	_, _ = io.Copy(io.Discard, response.Body)
 	if err != nil {
 		return nil, err
 	}

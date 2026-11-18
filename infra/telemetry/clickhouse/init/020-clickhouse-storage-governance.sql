@@ -113,5 +113,22 @@ GRANT SELECT, ALTER DELETE ON telemetry_history.numeric_gauge_1min_states TO tel
 GRANT SELECT, ALTER DELETE ON telemetry_history.numeric_gauge_15min_states TO telemetry_retention_writer;
 GRANT SELECT, ALTER DELETE ON analytics.energy_interval_facts TO telemetry_retention_writer;
 GRANT SELECT, ALTER DELETE ON analytics.energy_hourly_states TO telemetry_retention_writer;
+GRANT SELECT, ALTER DELETE ON analytics.forecast_series TO telemetry_retention_writer;
+GRANT SELECT, ALTER DELETE ON analytics.optimization_evaluations TO telemetry_retention_writer;
+GRANT SELECT, ALTER DELETE ON analytics.energy_rebuild_runs TO telemetry_retention_writer;
 GRANT SELECT ON system.parts TO telemetry_retention_writer;
 GRANT SELECT ON system.mutations TO telemetry_retention_writer;
+
+ALTER TABLE telemetry_history.observations
+  MODIFY COLUMN value_type LowCardinality(Nullable(String));
+ALTER TABLE analytics.energy_interval_facts
+  MODIFY COLUMN source_partition LowCardinality(String);
+ALTER TABLE analytics.forecast_series
+  MODIFY COLUMN unit LowCardinality(String);
+
+ALTER TABLE analytics.forecast_series
+  MODIFY SETTING non_replicated_deduplication_window = 10000;
+ALTER TABLE analytics.optimization_evaluations
+  MODIFY SETTING non_replicated_deduplication_window = 10000;
+ALTER TABLE analytics.energy_rebuild_runs
+  MODIFY SETTING non_replicated_deduplication_window = 10000;

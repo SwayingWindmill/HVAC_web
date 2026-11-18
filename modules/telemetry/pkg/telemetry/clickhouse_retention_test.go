@@ -79,13 +79,13 @@ func TestClickHouseRetentionPrunerTieredDefaultsAndLegalHolds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.SubmittedTables) != 5 {
+	if len(result.SubmittedTables) != 8 {
 		t.Fatalf("submitted tables=%v", result.SubmittedTables)
 	}
 
 	mutex.Lock()
 	defer mutex.Unlock()
-	if len(calls) != 5 {
+	if len(calls) != 8 {
 		t.Fatalf("call count=%d", len(calls))
 	}
 
@@ -114,6 +114,18 @@ func TestClickHouseRetentionPrunerTieredDefaultsAndLegalHolds(t *testing.T) {
 		{
 			sqlPrefix:   "ALTER TABLE analytics.energy_hourly_states DELETE WHERE hour < {cutoff:DateTime64(3, 'UTC')}",
 			expectedCut: now.Add(-1825 * 24 * time.Hour).Format("2006-01-02 15:04:05.000"),
+		},
+		{
+			sqlPrefix:   "ALTER TABLE analytics.forecast_series DELETE WHERE forecast_for < {cutoff:DateTime64(3, 'UTC')}",
+			expectedCut: now.Add(-365 * 24 * time.Hour).Format("2006-01-02 15:04:05.000"),
+		},
+		{
+			sqlPrefix:   "ALTER TABLE analytics.optimization_evaluations DELETE WHERE generated_at < {cutoff:DateTime64(3, 'UTC')}",
+			expectedCut: now.Add(-365 * 24 * time.Hour).Format("2006-01-02 15:04:05.000"),
+		},
+		{
+			sqlPrefix:   "ALTER TABLE analytics.energy_rebuild_runs DELETE WHERE recorded_at < {cutoff:DateTime64(3, 'UTC')}",
+			expectedCut: now.Add(-365 * 24 * time.Hour).Format("2006-01-02 15:04:05.000"),
 		},
 	}
 
@@ -146,6 +158,15 @@ func TestClickHouseRetentionPrunerRejectsErrorsAndHTTPFailures(t *testing.T) {
 	}
 	if _, err := NewClickHouseRetentionPruner(ClickHouseRetentionConfig{BaseURL: "http://localhost:8123", ObservationsRetention: -time.Hour}); err == nil {
 		t.Fatal("accepted negative retention")
+	}
+	for _, cfg := range []ClickHouseRetentionConfig{
+		{BaseURL: "http://localhost:8123", ForecastSeriesRetention: -time.Hour},
+		{BaseURL: "http://localhost:8123", OptimizationEvaluationsRetention: -time.Hour},
+		{BaseURL: "http://localhost:8123", EnergyRebuildRunsRetention: -time.Hour},
+	} {
+		if _, err := NewClickHouseRetentionPruner(cfg); err == nil {
+			t.Fatalf("accepted negative retention in %+v", cfg)
+		}
 	}
 	if _, err := NewClickHouseRetentionPruner(ClickHouseRetentionConfig{
 		BaseURL:    "http://localhost:8123",
@@ -336,15 +357,15 @@ func TestClickHouseRetentionPrunerExportsArchiveBeforeDeletesAndPropagatesLegalH
 	if !slices.Equal(result.ArchivedTables, wantArchived) {
 		t.Fatalf("ArchivedTables=%v want %v", result.ArchivedTables, wantArchived)
 	}
-	if len(result.SubmittedTables) != 5 {
-		t.Fatalf("SubmittedTables=%v want 5 tables", result.SubmittedTables)
+	if len(result.SubmittedTables) != 8 {
+		t.Fatalf("SubmittedTables=%v want 8 tables", result.SubmittedTables)
 	}
 
 	mu.Lock()
 	gotOps := slices.Clone(ops)
 	mu.Unlock()
-	if len(gotOps) != 7 {
-		t.Fatalf("expected 2 exports + 5 deletes = 7 ops, got %v", gotOps)
+	if len(gotOps) != 10 {
+		t.Fatalf("expected 2 exports + 8 deletes = 10 ops, got %v", gotOps)
 	}
 	if gotOps[0] != "EXPORT:telemetry_history.observations" || gotOps[1] != "EXPORT:analytics.energy_interval_facts" {
 		t.Fatalf("exports must execute before all deletes, got %v", gotOps)
@@ -551,15 +572,15 @@ func TestClickHouseRetentionPrunerGovernsMutationsExistenceAndCooldown(t *testin
 		t.Fatal(err)
 	}
 
-	// Pass 1: observations has active mutation (no existence check); other 4 tables have no rows (recorded cooldown).
+	// Pass 1: observations has active mutation (no existence check); other 7 tables have no rows (recorded cooldown).
 	if _, err := pruner.Prune(t.Context(), now); err != nil {
 		t.Fatal(err)
 	}
-	if existsChecks != 4 || deleteCalls != 0 {
-		t.Fatalf("pass 1 existsChecks=%d deleteCalls=%d want 4, 0", existsChecks, deleteCalls)
+	if existsChecks != 7 || deleteCalls != 0 {
+		t.Fatalf("pass 1 existsChecks=%d deleteCalls=%d want 7, 0", existsChecks, deleteCalls)
 	}
 
-	// Pass 2 (+1h): active mutation clears and observations now has tail rows; cooldown still blocks other 4 tables.
+	// Pass 2 (+1h): active mutation clears and observations now has tail rows; cooldown still blocks other 7 tables.
 	activeMutations.Store(0)
 	obsHasRows.Store(true)
 	res2, err := pruner.Prune(t.Context(), now.Add(time.Hour))
@@ -569,16 +590,16 @@ func TestClickHouseRetentionPrunerGovernsMutationsExistenceAndCooldown(t *testin
 	if !slices.Equal(res2.SubmittedTables, []string{"telemetry_history.observations"}) {
 		t.Fatalf("pass 2 SubmittedTables=%v", res2.SubmittedTables)
 	}
-	if existsChecks != 5 || deleteCalls != 1 {
-		t.Fatalf("pass 2 existsChecks=%d deleteCalls=%d want 5, 1", existsChecks, deleteCalls)
+	if existsChecks != 8 || deleteCalls != 1 {
+		t.Fatalf("pass 2 existsChecks=%d deleteCalls=%d want 8, 1", existsChecks, deleteCalls)
 	}
 
-	// Pass 3 (+12h): all 5 tables remain inside the 24h cooldown window.
+	// Pass 3 (+12h): all 8 tables remain inside the 24h cooldown window.
 	if _, err := pruner.Prune(t.Context(), now.Add(12*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if existsChecks != 5 || deleteCalls != 1 {
-		t.Fatalf("pass 3 existsChecks=%d deleteCalls=%d want 5, 1", existsChecks, deleteCalls)
+	if existsChecks != 8 || deleteCalls != 1 {
+		t.Fatalf("pass 3 existsChecks=%d deleteCalls=%d want 8, 1", existsChecks, deleteCalls)
 	}
 
 	// Pass 4 (+25h): cooldown elapsed for all tables.

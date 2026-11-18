@@ -36,7 +36,7 @@ func NewClickHouseHistoryReader(config HistoryConfig) (*ClickHouseHistoryReader,
 	}
 	client := config.HTTPClient
 	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
+		client = newDefaultForecastClickHouseHTTPClient(10*time.Second, false)
 	}
 	return &ClickHouseHistoryReader{baseURL: parsed, username: strings.TrimSpace(config.Username), password: config.Password, client: client}, nil
 }
@@ -94,6 +94,7 @@ FORMAT JSONEachRow`, query.TenantID, query.SiteID, query.SubjectType, query.Subj
 	}
 	defer response.Body.Close()
 	payload, err := io.ReadAll(io.LimitReader(response.Body, maximumForecastHistoryResponseBytes+1))
+	_, _ = io.Copy(io.Discard, response.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read authoritative Forecast metric history: %w", err)
 	}

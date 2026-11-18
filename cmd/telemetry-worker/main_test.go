@@ -575,7 +575,7 @@ func TestLoadClickHouseRetentionPrunerArchiveEnvWiring(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Prune failed: %v", err)
 		}
-		if len(res.ArchivedTables) != 2 || len(res.SubmittedTables) != 5 {
+		if len(res.ArchivedTables) != 2 || len(res.SubmittedTables) != 8 {
 			t.Fatalf("unexpected result: %+v", res)
 		}
 		entries, err := os.ReadDir(archiveDir)
@@ -587,7 +587,7 @@ func TestLoadClickHouseRetentionPrunerArchiveEnvWiring(t *testing.T) {
 		}
 		mu.Lock()
 		defer mu.Unlock()
-		if len(ops) != 7 || ops[0] != "SELECT" || ops[1] != "SELECT" {
+		if len(ops) != 10 || ops[0] != "SELECT" || ops[1] != "SELECT" {
 			t.Fatalf("unexpected query order: %v", ops)
 		}
 	})
