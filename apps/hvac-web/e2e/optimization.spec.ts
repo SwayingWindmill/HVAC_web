@@ -630,3 +630,126 @@ test('auto-control P0 guardrails enforce 5.0 C floor, show manual backoff notice
   await expect(leasePanel).toContainText('5.0 至 12.0 °C');
   await expect(leasePanel).toContainText('调节死区 0.35 °C');
 });
+
+test('auto-control shadow execution mode arms, persists across update, renders SHADOW_RECORDED and setpoint_tracking_deviation cleanly', async ({ page, gateway }) => {
+  await page.goto(`/energy-analysis/optimization?site=${SITE_ID}`);
+
+  const leasePanel = page.getByRole('region', { name: '自动控制租约' });
+  await leasePanel.getByRole('button', { name: '开启自动控制租约…' }).click();
+
+  const armDialog = page.getByRole('dialog', { name: '开启限时自动控制租约' });
+  await expect(armDialog.getByRole('radio', { name: /闭环自动控制/ })).toBeChecked();
+  await armDialog.getByRole('radio', { name: /影子跟跑（只记录不下发）/ }).check();
+  await expect(armDialog.getByRole('radio', { name: /影子跟跑（只记录不下发）/ })).toBeChecked();
+
+  await armDialog.getByLabel('原因').fill('白班开启影子跟跑对比护栏表现');
+  await armDialog.getByRole('textbox', { name: '动态口令' }).fill('123456');
+  await armDialog.getByRole('button', { name: '确认开启租约' }).click();
+
+  await expect(page.getByText('已开启影子跟跑租约')).toBeVisible();
+  await expect(leasePanel).toContainText('影子跟跑中');
+  await expect(leasePanel).toContainText('影子跟跑');
+  await expect(leasePanel).toContainText('当前租约处于影子跟跑模式：每周期执行完整物理护栏校验，仅记录推荐与限幅对照轨迹，不下发设备指令。');
+
+  const armWrite = gateway.writes.find((write) => write.method === 'PUT' && write.path.endsWith('/optimization/auto-control-lease'));
+  expect(armWrite?.body?.executionMode).toBe('SHADOW');
+
+  // Reopen via 调整租约… and confirm SHADOW mode prefills and persists with updated deadband.
+  await leasePanel.getByRole('button', { name: '调整租约…' }).click();
+  const editDialog = page.getByRole('dialog', { name: '调整自动控制租约边界' });
+  await expect(editDialog.getByRole('radio', { name: /影子跟跑（只记录不下发）/ })).toBeChecked();
+  await editDialog.getByLabel('调节死区').fill('0.4');
+  await editDialog.getByLabel('原因').fill('调整影子跟跑死区参数');
+  await editDialog.getByRole('textbox', { name: '动态口令' }).fill('654321');
+  await editDialog.getByRole('button', { name: '确认更新租约' }).click();
+
+  await expect(page.getByText('已更新影子跟跑租约')).toBeVisible();
+  await expect(leasePanel).toContainText('影子跟跑中');
+  await expect(leasePanel).toContainText('调节死区 0.4 °C');
+
+  // Seed SHADOW_RECORDED (with decisionId & traceId) and TRIPPED_ROLLED_BACK (with setpoint_tracking_deviation).
+  const now = Date.now();
+  const decisionId = '01990000-8800-7000-8000-000000000501';
+  const traceId = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
+  gateway.optimizationExecutionMonitors = [
+    {
+      id: '01990000-8800-7000-8000-000000000511',
+      tenantId: principal.context.tenantId,
+      siteId: SITE_ID,
+      leaseId: gateway.autoControlLeaseState.activeLease.id,
+      recommendationId: '01a12bdc-97d7-7e50-bc97-f14cb86800ba',
+      commandIntentId: null,
+      deviceId: '018f3e00-4000-7000-8000-000000000001',
+      targetCapability: 'SET_CHILLED_WATER_TEMPERATURE_SETPOINT',
+      baselineSupplyTempC: 7.1,
+      appliedSupplyTempC: 8.1,
+      restoreSupplyTempC: 7.1,
+      zoneTempMaxC: 26.0,
+      supplyTempMinC: 6.0,
+      supplyTempMaxC: 12.0,
+      rawRecommendedValue: 8.6,
+      clampedValue: 8.1,
+      guardrailVerdict: 'CLAMPED',
+      executionMode: 'SHADOW',
+      decisionId,
+      traceId,
+      startedAt: new Date(now - 12 * 60_000).toISOString(),
+      windowEndsAt: new Date(now + 18 * 60_000).toISOString(),
+      status: 'SHADOW_RECORDED',
+      createdAt: new Date(now - 12 * 60_000).toISOString(),
+      updatedAt: new Date(now - 12 * 60_000).toISOString(),
+    },
+    {
+      id: '01990000-8800-7000-8000-000000000512',
+      tenantId: principal.context.tenantId,
+      siteId: SITE_ID,
+      leaseId: gateway.autoControlLeaseState.activeLease.id,
+      recommendationId: '01a12bdc-97d7-7e50-bc97-f14cb86800be',
+      commandIntentId: '01990000-8800-7000-8000-000000000521',
+      deviceId: '018f3e00-4000-7000-8000-000000000001',
+      targetCapability: 'SET_CHILLED_WATER_TEMPERATURE_SETPOINT',
+      baselineSupplyTempC: 7.5,
+      appliedSupplyTempC: 8.5,
+      restoreSupplyTempC: 7.5,
+      zoneTempMaxC: 26.0,
+      supplyTempMinC: 6.0,
+      supplyTempMaxC: 12.0,
+      executionMode: 'CLOSED_LOOP',
+      startedAt: new Date(now - 45 * 60_000).toISOString(),
+      windowEndsAt: new Date(now - 15 * 60_000).toISOString(),
+      status: 'TRIPPED_ROLLED_BACK',
+      tripReason: 'setpoint_tracking_deviation',
+      rollbackCommandIntentId: '01990000-8800-7000-8000-000000000522',
+      createdAt: new Date(now - 45 * 60_000).toISOString(),
+      updatedAt: new Date(now - 20 * 60_000).toISOString(),
+    },
+  ];
+  await page.reload();
+
+  const monitorsTable = page.getByRole('table', { name: '30 分钟执行监护' });
+  await expect(monitorsTable).toContainText('影子跟跑记录');
+  await expect(monitorsTable).toContainText('影子');
+  await expect(monitorsTable).toContainText('影子模式仅记录推荐轨迹，不下发设备');
+  await expect(monitorsTable).toContainText('已记录决策轨迹');
+  await expect(monitorsTable.getByText('已记录决策轨迹')).toHaveAttribute('title', `决策编号：${decisionId} · 链路追踪：${traceId}`);
+  await expect(monitorsTable).not.toContainText(decisionId);
+  await expect(monitorsTable).not.toContainText(traceId);
+  await expect(monitorsTable).not.toContainText('SHADOW_RECORDED');
+
+  await expect(monitorsTable).toContainText('已自动回退');
+  await expect(monitorsTable).toContainText('闭环');
+  await expect(monitorsTable).toContainText('设定值超时未收敛，已自动回退并退出租约');
+  await expect(monitorsTable).not.toContainText('setpoint_tracking_deviation');
+
+  // Switch back to CLOSED_LOOP via 调整租约… and confirm header returns to 限时自动控制租约生效中.
+  await leasePanel.getByRole('button', { name: '调整租约…' }).click();
+  const switchDialog = page.getByRole('dialog', { name: '调整自动控制租约边界' });
+  await switchDialog.getByRole('radio', { name: /闭环自动控制/ }).check();
+  await switchDialog.getByLabel('原因').fill('影子验证完成，切换回闭环自动控制');
+  await switchDialog.getByRole('textbox', { name: '动态口令' }).fill('123456');
+  await switchDialog.getByRole('button', { name: '确认更新租约' }).click();
+
+  await expect(page.getByText('已更新限时自动控制租约')).toBeVisible();
+  await expect(leasePanel).toContainText('限时自动控制租约生效中');
+  await expect(leasePanel).toContainText('闭环下发');
+});

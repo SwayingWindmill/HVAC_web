@@ -1738,6 +1738,7 @@ export class Gateway {
         return refuse(428, 'STEP_UP_REQUIRED', 'Arming an automatic control lease requires a 6-digit verificationCode.');
       }
       const expiresInHours = Number(body?.expiresInHours ?? 0);
+      const executionMode = body?.executionMode ?? 'CLOSED_LOOP';
       const supplyMin = Number(body?.supplyTempMinC);
       const supplyMax = Number(body?.supplyTempMaxC);
       const maxStep = Number(body?.maxSetpointStepC ?? 1.0);
@@ -1749,7 +1750,8 @@ export class Gateway {
       const reason = String(body?.reason ?? '').trim();
 
       const valid =
-        Number.isInteger(expiresInHours) && expiresInHours >= 1 && expiresInHours <= 24
+        (executionMode === 'CLOSED_LOOP' || executionMode === 'SHADOW')
+        && Number.isInteger(expiresInHours) && expiresInHours >= 1 && expiresInHours <= 24
         && allowedCaps.length >= 1
         && Number.isFinite(supplyMin) && supplyMin >= 5 && supplyMin <= 20
         && Number.isFinite(supplyMax) && supplyMax >= supplyMin && supplyMax <= 25
@@ -1774,6 +1776,7 @@ export class Gateway {
         tenantId: principal.context.tenantId,
         siteId: SITE_ID,
         status: 'ACTIVE',
+        executionMode,
         armedBy: activePrincipal.principalId,
         armedAt: now,
         expiresAt,
@@ -1785,7 +1788,7 @@ export class Gateway {
         zoneTempMaxC: zoneMax,
         minRunningChillers: minChillers,
         maxCommandsPerHour: maxPerHour,
-        revision: 1,
+        revision: currentActive ? Number(currentActive.revision) + 1 : 1,
         createdAt: now,
         updatedAt: now,
       };

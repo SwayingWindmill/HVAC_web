@@ -1,4 +1,5 @@
 import { queryOptions } from '@tanstack/react-query';
+import { z } from 'zod';
 import {
   failureStatus,
   gatewayPath,
@@ -8,27 +9,50 @@ import {
   type StepUpFailureReason,
 } from '@/api/gateway-client';
 import {
-  armAutoControlLeaseRequestSchema,
+  armAutoControlLeaseRequestSchema as baseArmAutoControlLeaseRequestSchema,
+  autoControlLeaseSchema as baseAutoControlLeaseSchema,
   intelligencePaths,
-  optimizationExecutionMonitorListSchema,
+  optimizationExecutionMonitorListSchema as baseOptimizationExecutionMonitorListSchema,
+  optimizationExecutionMonitorSchema as baseOptimizationExecutionMonitorSchema,
   revokeAutoControlLeaseRequestSchema,
-  siteAutoControlLeaseStateSchema,
-  type ArmAutoControlLeaseRequest,
-  type AutoControlLease,
-  type OptimizationExecutionMonitor,
-  type OptimizationExecutionMonitorList,
+  siteAutoControlLeaseStateSchema as baseSiteAutoControlLeaseStateSchema,
+  uuidV7Schema,
   type RevokeAutoControlLeaseRequest,
-  type SiteAutoControlLeaseState,
 } from '@/api/generated/platformGateway.gen';
 
-export type {
-  ArmAutoControlLeaseRequest,
-  AutoControlLease,
-  OptimizationExecutionMonitor,
-  OptimizationExecutionMonitorList,
-  RevokeAutoControlLeaseRequest,
-  SiteAutoControlLeaseState,
-};
+const autoControlExecutionModeSchema = z.enum(['CLOSED_LOOP', 'SHADOW']);
+
+// Extend strict generated schemas with P1 fields until contracts:generate regenerates platformGateway.gen.ts.
+const autoControlLeaseSchema = baseAutoControlLeaseSchema.extend({
+  executionMode: autoControlExecutionModeSchema.optional(),
+});
+
+const siteAutoControlLeaseStateSchema = baseSiteAutoControlLeaseStateSchema.extend({
+  activeLease: autoControlLeaseSchema.nullable(),
+  latestLease: autoControlLeaseSchema.nullable(),
+});
+
+const armAutoControlLeaseRequestSchema = baseArmAutoControlLeaseRequestSchema.extend({
+  executionMode: autoControlExecutionModeSchema.optional(),
+});
+
+const optimizationExecutionMonitorSchema = baseOptimizationExecutionMonitorSchema.extend({
+  executionMode: autoControlExecutionModeSchema.optional(),
+  decisionId: uuidV7Schema.nullable().optional(),
+  traceId: z.string().regex(/^[0-9a-f]{32}$/).optional(),
+});
+
+const optimizationExecutionMonitorListSchema = baseOptimizationExecutionMonitorListSchema.extend({
+  items: z.array(optimizationExecutionMonitorSchema),
+});
+
+export type AutoControlExecutionMode = z.infer<typeof autoControlExecutionModeSchema>;
+export type ArmAutoControlLeaseRequest = z.infer<typeof armAutoControlLeaseRequestSchema>;
+export type AutoControlLease = z.infer<typeof autoControlLeaseSchema>;
+export type OptimizationExecutionMonitor = z.infer<typeof optimizationExecutionMonitorSchema>;
+export type OptimizationExecutionMonitorList = z.infer<typeof optimizationExecutionMonitorListSchema>;
+export type SiteAutoControlLeaseState = z.infer<typeof siteAutoControlLeaseStateSchema>;
+export type { RevokeAutoControlLeaseRequest };
 
 const AUTO_CONTROL_ERROR_MESSAGE: Readonly<Record<string, string>> = {
   STEP_UP_REQUIRED: '开启限时自动控制租约需要先完成两步验证。',

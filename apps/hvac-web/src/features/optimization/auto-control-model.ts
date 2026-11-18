@@ -3,7 +3,86 @@ import type {
   AutoControlLease,
   AutoControlLeaseStatus,
   ExecutionMonitorStatus,
+  OptimizationExecutionMonitor,
 } from '../../api/generated/platformGateway.gen.ts';
+
+export type AutoControlExecutionMode = 'CLOSED_LOOP' | 'SHADOW';
+
+export const AUTO_CONTROL_EXECUTION_MODES = ['CLOSED_LOOP', 'SHADOW'] as const;
+
+export type AutoControlLeaseWithExecutionMode = AutoControlLease & {
+  readonly executionMode?: AutoControlExecutionMode;
+};
+
+export type ArmAutoControlLeaseRequestWithExecutionMode = ArmAutoControlLeaseRequest & {
+  readonly executionMode?: AutoControlExecutionMode;
+};
+
+export const EXECUTION_MODE_PRESENTATION: Readonly<Record<
+  AutoControlExecutionMode,
+  {
+    readonly optionTitle: string;
+    readonly optionDescription: string;
+    readonly tileLabel: string;
+    readonly monitorBadge: string;
+  }
+>> = {
+  CLOSED_LOOP: {
+    optionTitle: '闭环自动控制',
+    optionDescription: '按护栏校验通过后直接向网关下发控制设定点，并持续 30 分钟巡检与异常回退。',
+    tileLabel: '闭环下发',
+    monitorBadge: '闭环',
+  },
+  SHADOW: {
+    optionTitle: '影子跟跑（只记录不下发）',
+    optionDescription: '完整执行实时遥测与物理护栏计算并留痕对比，在最后一跳拦截，绝不下发设备指令。',
+    tileLabel: '影子跟跑',
+    monitorBadge: '影子',
+  },
+};
+
+export function resolveAutoControlExecutionMode(
+  source: { readonly executionMode?: AutoControlExecutionMode } | null | undefined,
+): AutoControlExecutionMode {
+  return source?.executionMode === 'SHADOW' ? 'SHADOW' : 'CLOSED_LOOP';
+}
+
+export function formatAutoControlExecutionMode(mode: AutoControlExecutionMode): string {
+  return EXECUTION_MODE_PRESENTATION[mode].tileLabel;
+}
+
+export function resolveMonitorExecutionMode(
+  monitor: Pick<OptimizationExecutionMonitor, 'status'> & { readonly executionMode?: AutoControlExecutionMode },
+): AutoControlExecutionMode {
+  if (monitor.executionMode === 'SHADOW' || monitor.status === 'SHADOW_RECORDED') {
+    return 'SHADOW';
+  }
+  return 'CLOSED_LOOP';
+}
+
+export function formatMonitorExecutionMode(mode: AutoControlExecutionMode): string {
+  return EXECUTION_MODE_PRESENTATION[mode].monitorBadge;
+}
+
+export interface MonitorDecisionTracePresentation {
+  readonly label: string;
+  readonly title: string;
+}
+
+export function formatMonitorDecisionTrace(
+  monitor: { readonly decisionId?: string | null; readonly traceId?: string },
+): MonitorDecisionTracePresentation | null {
+  const decisionId = monitor.decisionId?.trim() ?? '';
+  const traceId = monitor.traceId?.trim() ?? '';
+  if (!decisionId && !traceId) return null;
+  const parts: string[] = [];
+  if (decisionId) parts.push(`决策编号：${decisionId}`);
+  if (traceId) parts.push(`链路追踪：${traceId}`);
+  return {
+    label: '已记录决策轨迹',
+    title: parts.join(' · '),
+  };
+}
 
 export const AUTO_CONTROL_CAPABILITY_LABELS: Readonly<Record<string, string>> = {
   SET_CHILLED_WATER_TEMPERATURE_SETPOINT: '调整冷冻水供水温度设定',
@@ -53,7 +132,7 @@ export const MONITOR_STATUS_PRESENTATION: Readonly<Record<
   TRIPPED: { label: '已触发保护退出', tone: 'destructive' },
   TRIPPED_ROLLED_BACK: { label: '已自动回退', tone: 'warning' },
   ROLLBACK_FAILED: { label: '回退失败退出', tone: 'destructive' },
-  SHADOW_RECORDED: { label: '影子记录', tone: 'in-progress' },
+  SHADOW_RECORDED: { label: '影子跟跑记录', tone: 'in-progress' },
   SUBMIT_FAILED: { label: '下发失败', tone: 'destructive' },
   MANUAL_OVERRIDE: { label: '人工接管退出', tone: 'warning' },
 };
@@ -77,6 +156,7 @@ const EXACT_TRIP_REASONS: Readonly<Record<string, string>> = {
   manual_override_backoff: '检测到人工干预设定值，AI 自动调节已进入退避保护窗口',
   cabinet_setpoint_manual_override: '检测到人工干预设定值，AI 自动调节已进入退避保护窗口',
   within_deadband: '目标差值在调节死区内，跳过下发以保护设备动作寿命',
+  setpoint_tracking_deviation: '设定值超时未收敛，已自动回退并退出租约',
 };
 
 const GUARDRAIL_VERDICT_LABELS: Readonly<Record<string, string>> = {
@@ -204,6 +284,7 @@ export function resolveActiveLeaseBackoff(
 }
 
 export interface ArmLeaseFormValues {
+  readonly executionMode: AutoControlExecutionMode;
   readonly expiresInHours: string;
   readonly supplyTempMinC: string;
   readonly supplyTempMaxC: string;
@@ -229,14 +310,16 @@ export type ArmLeaseNumericField =
 
 export type ArmLeaseFieldName =
   | ArmLeaseNumericField
+  | 'executionMode'
   | 'allowedCapabilities'
   | 'reason'
   | 'verificationCode';
 
 export type ArmLeaseFieldErrors = Partial<Record<ArmLeaseFieldName, string>>;
 
-export function initialArmLeaseValues(seed?: AutoControlLease | null): ArmLeaseFormValues {
+export function initialArmLeaseValues(seed?: AutoControlLeaseWithExecutionMode | null): ArmLeaseFormValues {
   return {
+    executionMode: resolveAutoControlExecutionMode(seed),
     expiresInHours: '8',
     supplyTempMinC: seed ? String(seed.supplyTempMinC) : '6.0',
     supplyTempMaxC: seed ? String(seed.supplyTempMaxC) : '12.0',
@@ -337,7 +420,7 @@ export function buildArmLeasePayload(
   values: ArmLeaseFormValues,
   expectedRevision?: number,
 ):
-  | { readonly ok: true; readonly payload: ArmAutoControlLeaseRequest }
+  | { readonly ok: true; readonly payload: ArmAutoControlLeaseRequestWithExecutionMode }
   | { readonly ok: false; readonly errors: ArmLeaseFieldErrors } {
   const errors = validateArmLeaseForm(values, { includeSubmitOnly: true });
   if (Object.keys(errors).length > 0) {
@@ -346,6 +429,7 @@ export function buildArmLeasePayload(
   return {
     ok: true,
     payload: {
+      executionMode: values.executionMode,
       expiresInHours: Number(values.expiresInHours.trim()),
       allowedCapabilities: [...values.allowedCapabilities],
       maxSetpointStepC: Number(values.maxSetpointStepC.trim()),
