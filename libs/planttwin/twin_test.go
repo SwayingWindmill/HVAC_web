@@ -191,3 +191,43 @@ func TestSiteTwinPointResolutionPriorityAndSubjectLookups(t *testing.T) {
 		t.Fatalf("unexpected SiteTwin.EvaluateSchedule result: %+v err=%v", ev, err)
 	}
 }
+
+func TestSiteTwinWaterLoopAndParallelBranches(t *testing.T) {
+	twin, err := NewSiteTwin(SiteTwin{
+		Scope:    SiteScope{TenantID: testTenantID, SiteID: testSiteID},
+		Timezone: "Asia/Shanghai",
+		Units: []PlantUnit{
+			{AssetID: chillerBID, AssetCode: "chiller-b", AssetType: AssetTypeChiller, WaterLoop: WaterLoopChilledWater, BranchCode: "CH-B"},
+			{AssetID: chwp2ID, AssetCode: "chwp-2", AssetType: AssetTypeChilledWaterPump, WaterLoop: WaterLoopChilledWater, BranchCode: "CH-B"},
+			{AssetID: chillerAID, AssetCode: "chiller-a", AssetType: AssetTypeChiller, WaterLoop: WaterLoopChilledWater, BranchCode: "CH-A"},
+			{AssetID: chwp1ID, AssetCode: "chwp-1", AssetType: AssetTypeChilledWaterPump, WaterLoop: WaterLoopChilledWater, BranchCode: "CH-A"},
+			{AssetID: cwp1ID, AssetCode: "cwp-1", AssetType: AssetTypeCoolingWaterPump, WaterLoop: WaterLoopCondenserWater, BranchCode: "CW-A"},
+			{AssetID: chwLoopID, AssetCode: "chw-loop", AssetType: AssetTypeChilledWaterLoop, WaterLoop: WaterLoopChilledWater},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewSiteTwin failed: %v", err)
+	}
+
+	chwUnits := twin.UnitsByLoop(WaterLoopChilledWater)
+	if len(chwUnits) != 5 {
+		t.Fatalf("expected 5 CHILLED_WATER units, got %d", len(chwUnits))
+	}
+	branches := twin.ParallelBranches()
+	if len(branches) != 3 {
+		t.Fatalf("expected 3 branches, got %d (%+v)", len(branches), branches)
+	}
+	if branches[0].WaterLoop != WaterLoopChilledWater || branches[0].BranchCode != "CH-A" || len(branches[0].Units) != 2 {
+		t.Fatalf("unexpected first branch: %+v", branches[0])
+	}
+	if branches[2].WaterLoop != WaterLoopCondenserWater || branches[2].BranchCode != "CW-A" || len(branches[2].Units) != 1 {
+		t.Fatalf("unexpected third branch: %+v", branches[2])
+	}
+
+	if _, err := NewSiteTwin(SiteTwin{
+		Scope: SiteScope{TenantID: testTenantID, SiteID: testSiteID},
+		Units: []PlantUnit{{AssetID: chillerAID, AssetCode: "chiller-a", AssetType: AssetTypeChiller, WaterLoop: WaterLoop("STEAM")}},
+	}); !errors.Is(err, ErrInvalidTopology) {
+		t.Fatalf("expected ErrInvalidTopology on invalid WaterLoop, got %v", err)
+	}
+}

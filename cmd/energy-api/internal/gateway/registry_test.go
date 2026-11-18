@@ -96,6 +96,54 @@ func TestGatewayRegistryAcceptsCurrentSiteAssetModel(t *testing.T) {
 	if _, err := canonicalRegistrySuccess(registryauth.ActionAssetModelRead, registryTestSiteID, raw); err != nil {
 		t.Fatalf("current Site Asset Model rejected: %v", err)
 	}
+
+	waterLoop := "CHILLED_WATER"
+	branchCode := "CH-A"
+	valveID := "018f1e00-3000-7000-8000-000000000091"
+	hdrID := "018f1e00-3000-7000-8000-000000000092"
+	now := "2026-11-18T08:00:00.000Z"
+	hydraulicModel := platformapi.SiteAssetModel{
+		SchemaVersion: 2, TenantID: registryTestTenantID, SiteID: registryTestSiteID,
+		Spaces: []platformapi.Space{},
+		Assets: []platformapi.Asset{
+			{
+				ID: registryTestAssetID, TenantID: registryTestTenantID, SiteID: registryTestSiteID,
+				Code: "chiller-a", DisplayName: "1#冷机", AssetType: "CHILLER", Status: "ACTIVE",
+				Revision: 1, CreatedAt: now, UpdatedAt: now, WaterLoop: &waterLoop, BranchCode: &branchCode,
+			},
+			{
+				ID: valveID, TenantID: registryTestTenantID, SiteID: registryTestSiteID,
+				Code: "mv-chw-a", DisplayName: "A支路电动阀", AssetType: "MOTORIZED_VALVE", Status: "ACTIVE",
+				Revision: 1, CreatedAt: now, UpdatedAt: now, WaterLoop: &waterLoop, BranchCode: &branchCode,
+			},
+			{
+				ID: hdrID, TenantID: registryTestTenantID, SiteID: registryTestSiteID,
+				Code: "chw-header", DisplayName: "冷冻水总管", AssetType: "CHILLED_WATER_LOOP", Status: "ACTIVE",
+				Revision: 1, CreatedAt: now, UpdatedAt: now,
+			},
+		},
+		Devices: []platformapi.Device{}, Sensors: []platformapi.Sensor{}, TelemetryPoints: []platformapi.TelemetryPoint{},
+		Relationships: []platformapi.AssetRelationship{
+			{
+				ID: "018f1e00-7000-7000-8000-000000000091", TenantID: registryTestTenantID, SiteID: registryTestSiteID,
+				FromType: "ASSET", FromID: valveID, ToType: "ASSET", ToID: registryTestAssetID,
+				Role: "ISOLATES", Status: "ACTIVE", ValidFrom: now, ValidTo: nil, Revision: 1, CreatedAt: now, UpdatedAt: now,
+			},
+			{
+				ID: "018f1e00-7000-7000-8000-000000000092", TenantID: registryTestTenantID, SiteID: registryTestSiteID,
+				FromType: "ASSET", FromID: registryTestAssetID, ToType: "ASSET", ToID: hdrID,
+				Role: "FEEDS_HEADER", Status: "ACTIVE", ValidFrom: now, ValidTo: nil, Revision: 1, CreatedAt: now, UpdatedAt: now,
+			},
+		},
+		Counts: platformapi.AssetModelCounts{Assets: 3},
+	}
+	hydraulicRaw, err := json.Marshal(hydraulicModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := canonicalRegistrySuccess(registryauth.ActionAssetModelRead, registryTestSiteID, hydraulicRaw); err != nil {
+		t.Fatalf("hydraulic Site Asset Model rejected: %v", err)
+	}
 }
 
 func TestGatewayRegistryAcceptsOnlyTheRequestedSitesTariff(t *testing.T) {

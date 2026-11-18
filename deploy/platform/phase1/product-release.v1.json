@@ -17,7 +17,7 @@
     },
     "httpContract": {
       "path": "contracts/http/platform-gateway.openapi.yaml",
-      "sha256": "9a549a3f1377823082a6329b0ecc8d21bcff9e6ebb6763e84fe43171d285be83"
+      "sha256": "5b14c31460981e98512a1f4d312a7895ac035b51f7effd0cbf5ee63cc7aa5b8b"
     },
     "edgeReplicationContract": {
       "path": "contracts/mqtt/edge-replication-envelope.v1.schema.json",
@@ -26,7 +26,7 @@
   },
   "schemaContract": {
     "migrationManifest": "deploy/platform/phase1/migrations/manifest.v1.json",
-    "migrationManifestSha256": "5d3139cff3bf432587fae8ca691abc394a8f080027b14104aefe11b2b4950b38",
+    "migrationManifestSha256": "f3fcbc9a6ef727f0135f87a1d8dc7da701042724099f06190fa583ecd5fb9d6e",
     "compatibilityMode": "exact-product-and-manifest",
     "skipAllowed": false,
     "requiredDatabases": [

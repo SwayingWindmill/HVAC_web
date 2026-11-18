@@ -35,14 +35,12 @@ func NewPostgresLoader(db TxBeginner) (*PostgresLoader, error) {
 	return &PostgresLoader{db: db}, nil
 }
 
-// LoadSiteTwin queries all 10 ADR 0016 plant twin views inside one ReadCommitted
-// read-only transaction and builds the SiteTwin and its HydraulicGraph.
-func (l *PostgresLoader) LoadSiteTwin(ctx context.Context, scope SiteScope, at time.Time) (SiteTwin, error) {
+func (l *PostgresLoader) beginScopedReadTx(ctx context.Context, scope SiteScope, at time.Time) (pgx.Tx, SiteScope, time.Time, error) {
 	if l == nil || l.db == nil {
-		return SiteTwin{}, errors.New("planttwin postgres loader is uninitialized")
+		return nil, SiteScope{}, time.Time{}, errors.New("planttwin postgres loader is uninitialized")
 	}
 	if err := scope.Validate(); err != nil {
-		return SiteTwin{}, err
+		return nil, SiteScope{}, time.Time{}, err
 	}
 	normScope := scope.normalized()
 	evalAt := at.UTC()
@@ -55,16 +53,26 @@ func (l *PostgresLoader) LoadSiteTwin(ctx context.Context, scope SiteScope, at t
 		AccessMode: pgx.ReadOnly,
 	})
 	if err != nil {
-		return SiteTwin{}, fmt.Errorf("begin planttwin read tx: %w", err)
+		return nil, SiteScope{}, time.Time{}, fmt.Errorf("begin planttwin read tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
 	if _, err := tx.Exec(ctx,
 		`SELECT set_config('app.tenant_id', $1, true), set_config('app.authorized_site_ids', $2, true)`,
 		normScope.TenantID, "{"+normScope.SiteID+"}",
 	); err != nil {
-		return SiteTwin{}, fmt.Errorf("set planttwin RLS scope: %w", err)
+		_ = tx.Rollback(ctx)
+		return nil, SiteScope{}, time.Time{}, fmt.Errorf("set planttwin RLS scope: %w", err)
 	}
+	return tx, normScope, evalAt, nil
+}
+
+// LoadSiteTwin queries all 10 ADR 0016 plant twin views inside one ReadCommitted
+// read-only transaction and builds the SiteTwin and its HydraulicGraph.
+func (l *PostgresLoader) LoadSiteTwin(ctx context.Context, scope SiteScope, at time.Time) (SiteTwin, error) {
+	tx, normScope, evalAt, err := l.beginScopedReadTx(ctx, scope, at)
+	if err != nil {
+		return SiteTwin{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	twin := SiteTwin{
 		Scope:    normScope,
@@ -140,7 +148,8 @@ type assetLockRecord struct {
 func loadTwinUnits(ctx context.Context, tx pgx.Tx, scope SiteScope) ([]PlantUnit, error) {
 	rows, err := tx.Query(ctx, `
 SELECT asset_id::text, asset_code, asset_name, asset_type,
-       rated_power_kw, rated_capacity_kw, COALESCE(feeder_auxiliary_power_kw, 0)
+       rated_power_kw, rated_capacity_kw, COALESCE(feeder_auxiliary_power_kw, 0),
+       COALESCE(water_loop, ''), COALESCE(branch_code, '')
 FROM core_registry.plant_twin_units_v1
 WHERE tenant_id = $1::uuid AND site_id = $2::uuid
 ORDER BY asset_code, asset_id`, scope.TenantID, scope.SiteID)
@@ -152,12 +161,22 @@ ORDER BY asset_code, asset_id`, scope.TenantID, scope.SiteID)
 	var units []PlantUnit
 	for rows.Next() {
 		var u PlantUnit
+		var rawLoop string
 		if err := rows.Scan(
 			&u.AssetID, &u.AssetCode, &u.AssetName, &u.AssetType,
 			&u.RatedPowerKW, &u.RatedCapacityKW, &u.FeederAuxiliaryPowerKW,
+			&rawLoop, &u.BranchCode,
 		); err != nil {
 			return nil, fmt.Errorf("scan plant_twin_units_v1: %w", err)
 		}
+		if cleanLoop := strings.TrimSpace(rawLoop); cleanLoop != "" {
+			parsedLoop, loopErr := ParseWaterLoop(cleanLoop)
+			if loopErr != nil {
+				return nil, fmt.Errorf("plant_twin_units_v1 asset %s: %w", u.AssetID, loopErr)
+			}
+			u.WaterLoop = parsedLoop
+		}
+		u.BranchCode = strings.TrimSpace(u.BranchCode)
 		u.LockMode = LockModeUnlocked
 		units = append(units, u)
 	}
@@ -399,6 +418,76 @@ ORDER BY start_date, exception_id`, scope.TenantID, scope.SiteID)
 	}
 
 	return sched, nil
+}
+
+// PlantAssetRelationship describes an active asset relationship enriched with loop and branch metadata.
+type PlantAssetRelationship struct {
+	RelationshipID   string     `json:"relationshipId"`
+	FromAssetID      string     `json:"fromAssetId"`
+	FromAssetCode    string     `json:"fromAssetCode"`
+	FromAssetName    string     `json:"fromAssetName"`
+	FromAssetType    string     `json:"fromAssetType"`
+	FromWaterLoop    WaterLoop  `json:"fromWaterLoop,omitempty"`
+	FromBranchCode   string     `json:"fromBranchCode,omitempty"`
+	ToAssetID        string     `json:"toAssetId"`
+	ToAssetCode      string     `json:"toAssetCode"`
+	ToAssetName      string     `json:"toAssetName"`
+	ToAssetType      string     `json:"toAssetType"`
+	ToWaterLoop      WaterLoop  `json:"toWaterLoop,omitempty"`
+	ToBranchCode     string     `json:"toBranchCode,omitempty"`
+	RelationshipRole string     `json:"relationshipRole"`
+	ValidFrom        time.Time  `json:"validFrom"`
+	ValidTo          *time.Time `json:"validTo,omitempty"`
+}
+
+// LoadAssetRelationships queries core_registry.plant_twin_asset_relationships_v1 inside a scoped read transaction.
+func (l *PostgresLoader) LoadAssetRelationships(ctx context.Context, scope SiteScope, evalAt time.Time) ([]PlantAssetRelationship, error) {
+	tx, normScope, resolvedAt, err := l.beginScopedReadTx(ctx, scope, evalAt)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	rows, err := tx.Query(ctx, `
+SELECT relationship_id::text,
+       from_asset_id::text, from_asset_code, from_asset_name, from_asset_type,
+       COALESCE(from_water_loop, ''), COALESCE(from_branch_code, ''),
+       to_asset_id::text, to_asset_code, to_asset_name, to_asset_type,
+       COALESCE(to_water_loop, ''), COALESCE(to_branch_code, ''),
+       relationship_role, valid_from, valid_to
+FROM core_registry.plant_twin_asset_relationships_v1
+WHERE tenant_id = $1::uuid AND site_id = $2::uuid
+  AND valid_from <= $3 AND (valid_to IS NULL OR valid_to > $3)
+ORDER BY relationship_role, from_asset_code, to_asset_code, relationship_id`, normScope.TenantID, normScope.SiteID, resolvedAt)
+	if err != nil {
+		return nil, fmt.Errorf("load plant_twin_asset_relationships_v1: %w", err)
+	}
+	defer rows.Close()
+
+	var items []PlantAssetRelationship
+	for rows.Next() {
+		var item PlantAssetRelationship
+		var fromLoop, toLoop string
+		if err := rows.Scan(
+			&item.RelationshipID,
+			&item.FromAssetID, &item.FromAssetCode, &item.FromAssetName, &item.FromAssetType,
+			&fromLoop, &item.FromBranchCode,
+			&item.ToAssetID, &item.ToAssetCode, &item.ToAssetName, &item.ToAssetType,
+			&toLoop, &item.ToBranchCode,
+			&item.RelationshipRole, &item.ValidFrom, &item.ValidTo,
+		); err != nil {
+			return nil, fmt.Errorf("scan plant_twin_asset_relationships_v1: %w", err)
+		}
+		item.FromWaterLoop = WaterLoop(strings.TrimSpace(fromLoop))
+		item.ToWaterLoop = WaterLoop(strings.TrimSpace(toLoop))
+		item.FromBranchCode = strings.TrimSpace(item.FromBranchCode)
+		item.ToBranchCode = strings.TrimSpace(item.ToBranchCode)
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate plant_twin_asset_relationships_v1: %w", err)
+	}
+	return items, nil
 }
 
 type flexibleDate string

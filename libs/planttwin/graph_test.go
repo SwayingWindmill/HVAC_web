@@ -135,7 +135,57 @@ func TestHydraulicGraphTraversalsLoopsAndPeerIsolation(t *testing.T) {
 		t.Fatal("expected HasExplicitTopology false when no SERVES edges exist")
 	}
 	var nilGraph *HydraulicGraph
-	if nilGraph.HasExplicitTopology() || nilGraph.Upstream(chillerAID) != nil || nilGraph.PeersByAssetType(chillerAID, AssetTypeChiller) != nil {
+	if nilGraph.HasExplicitTopology() || nilGraph.HasHydraulicTopology() || nilGraph.Upstream(chillerAID) != nil || nilGraph.PeersByAssetType(chillerAID, AssetTypeChiller) != nil || nilGraph.Isolates(chillerAID) != nil || nilGraph.HeaderFeeders(chwLoopID) != nil {
 		t.Fatal("expected nil HydraulicGraph methods to be safe no-ops")
+	}
+}
+
+func TestHydraulicGraphIsolatesAndFeedsHeader(t *testing.T) {
+	valve1ID := "019a0000-3000-7000-8000-000000000091"
+	hdrID := "019a0000-3000-7000-8000-000000000092"
+	units := []PlantUnit{
+		{AssetID: chillerAID, AssetCode: "chiller-a", AssetType: AssetTypeChiller, WaterLoop: WaterLoopChilledWater, BranchCode: "CH-A"},
+		{AssetID: chwp1ID, AssetCode: "chwp-1", AssetType: AssetTypeChilledWaterPump, WaterLoop: WaterLoopChilledWater, BranchCode: "CH-A"},
+		{AssetID: valve1ID, AssetCode: "mv-chw-a", AssetType: AssetTypeMotorizedValve, WaterLoop: WaterLoopChilledWater, BranchCode: "CH-A"},
+		{AssetID: hdrID, AssetCode: "chw-header", AssetType: AssetTypeChilledWaterLoop, WaterLoop: WaterLoopChilledWater},
+	}
+	edges := []HydraulicEdge{
+		{FromAssetID: valve1ID, ToAssetID: chillerAID, RelationshipRole: RelationshipIsolates},
+		{FromAssetID: valve1ID, ToAssetID: chwp1ID, RelationshipRole: RelationshipIsolates},
+		{FromAssetID: chillerAID, ToAssetID: hdrID, RelationshipRole: RelationshipFeedsHeader},
+	}
+	g, err := NewHydraulicGraph(units, edges)
+	if err != nil {
+		t.Fatalf("NewHydraulicGraph with ISOLATES/FEEDS_HEADER failed: %v", err)
+	}
+	if g.HasExplicitTopology() {
+		t.Fatal("expected HasExplicitTopology false without SERVES edges")
+	}
+	if !g.HasHydraulicTopology() {
+		t.Fatal("expected HasHydraulicTopology true with ISOLATES/FEEDS_HEADER edges")
+	}
+	if got := g.Isolates(valve1ID); len(got) != 2 || got[0] != chillerAID || got[1] != chwp1ID {
+		t.Fatalf("Isolates = %v, want [%s, %s]", got, chillerAID, chwp1ID)
+	}
+	if got := g.IsolatedBy(chillerAID); len(got) != 1 || got[0] != valve1ID {
+		t.Fatalf("IsolatedBy = %v, want [%s]", got, valve1ID)
+	}
+	if got := g.HeaderFeeders(hdrID); len(got) != 1 || got[0] != chillerAID {
+		t.Fatalf("HeaderFeeders = %v, want [%s]", got, chillerAID)
+	}
+	if got := g.CoolingLoopsForChiller(chillerAID); len(got) != 1 || got[0] != hdrID {
+		t.Fatalf("CoolingLoopsForChiller via FEEDS_HEADER = %v, want [%s]", got, hdrID)
+	}
+
+	// Self-loop ISOLATES must fail.
+	if _, err := NewHydraulicGraph(units, []HydraulicEdge{{FromAssetID: valve1ID, ToAssetID: valve1ID, RelationshipRole: RelationshipIsolates}}); !errors.Is(err, ErrHydraulicCycle) {
+		t.Fatalf("expected ErrHydraulicCycle on self-loop ISOLATES, got %v", err)
+	}
+	// Cycle combining SERVES and FEEDS_HEADER must fail.
+	if _, err := NewHydraulicGraph(units, []HydraulicEdge{
+		{FromAssetID: chillerAID, ToAssetID: hdrID, RelationshipRole: RelationshipFeedsHeader},
+		{FromAssetID: hdrID, ToAssetID: chillerAID, RelationshipRole: RelationshipServes},
+	}); !errors.Is(err, ErrHydraulicCycle) {
+		t.Fatalf("expected ErrHydraulicCycle on SERVES+FEEDS_HEADER cycle, got %v", err)
 	}
 }

@@ -5191,6 +5191,18 @@
           },
           "tags": {
             "$ref": "#/components/schemas/TagMap"
+          },
+          "waterLoop": {
+            "oneOf": [
+              { "type": "string", "enum": ["CHILLED_WATER", "CONDENSER_WATER", "COOLING_TOWER_LOOP"] },
+              { "type": "null" }
+            ]
+          },
+          "branchCode": {
+            "oneOf": [
+              { "type": "string", "minLength": 1, "maxLength": 64 },
+              { "type": "null" }
+            ]
           }
         }
       },
@@ -5672,7 +5684,7 @@
           "fromId": { "$ref": "#/components/schemas/UUIDv7" },
           "toType": { "type": "string", "enum": ["SITE", "SPACE", "ASSET", "DEVICE", "SENSOR", "POINT"] },
           "toId": { "$ref": "#/components/schemas/UUIDv7" },
-          "role": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "role": { "type": "string", "minLength": 1, "maxLength": 128, "description": "Canonical hydraulic relationship role (SERVES, ISOLATES, FEEDS_HEADER) or derived topology edge role." },
           "status": { "type": "string", "enum": ["ACTIVE", "INACTIVE", "RETIRED"] },
           "validFrom": { "$ref": "#/components/schemas/Instant" },
           "validTo": { "oneOf": [{ "$ref": "#/components/schemas/Instant" }, { "type": "null" }] },

@@ -1,11 +1,14 @@
 package planttwin
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestSemanticRolesCatalogAndParsing(t *testing.T) {
 	all := AllSemanticRoles()
-	if len(all) != 11 {
-		t.Fatalf("expected 11 canonical semantic roles, got %d", len(all))
+	if len(all) != 17 {
+		t.Fatalf("expected 17 canonical semantic roles, got %d", len(all))
 	}
 	seen := make(map[SemanticRole]bool, len(all))
 	for _, role := range all {
@@ -41,7 +44,43 @@ func TestSemanticRolesCatalogAndParsing(t *testing.T) {
 		t.Fatal("expected ParseSemanticRole(\"CO2_LEVEL\") to return error")
 	}
 
-	if RelationshipServes != "SERVES" || BindingDescribes != "DESCRIBES" || BindingControls != "CONTROLS" || BindingMeters != "METERS" {
-		t.Fatal("unexpected relationship or binding constant value")
+	if RelationshipServes != "SERVES" || RelationshipIsolates != "ISOLATES" || RelationshipFeedsHeader != "FEEDS_HEADER" {
+		t.Fatal("unexpected hydraulic relationship constant value")
+	}
+	if BindingDescribes != "DESCRIBES" || BindingControls != "CONTROLS" || BindingMeters != "METERS" {
+		t.Fatal("unexpected binding constant value")
+	}
+
+	loops := AllWaterLoops()
+	if len(loops) != 3 {
+		t.Fatalf("expected 3 water loops, got %d", len(loops))
+	}
+	for _, loop := range loops {
+		if !loop.IsValid() {
+			t.Fatalf("expected loop %q to be valid", loop)
+		}
+		parsed, err := ParseWaterLoop(" " + strings.ToLower(string(loop)) + " ")
+		if err != nil || parsed != loop {
+			t.Fatalf("ParseWaterLoop(%q) = (%q, %v), want %q", loop, parsed, err, loop)
+		}
+	}
+	if _, err := ParseWaterLoop("STEAM_LOOP"); err == nil {
+		t.Fatal("expected ParseWaterLoop(\"STEAM_LOOP\") to fail")
+	}
+
+	relRoles := AllRelationshipRoles()
+	if len(relRoles) != 3 {
+		t.Fatalf("expected 3 relationship roles, got %d", len(relRoles))
+	}
+	for _, relRole := range relRoles {
+		if !IsValidRelationshipRole(relRole) {
+			t.Fatalf("expected relationship role %q valid", relRole)
+		}
+		if parsed, err := ParseRelationshipRole(" " + relRole + " "); err != nil || parsed != relRole {
+			t.Fatalf("ParseRelationshipRole(%q) = (%q, %v)", relRole, parsed, err)
+		}
+	}
+	if _, err := ParseRelationshipRole("POWERED_BY"); err == nil {
+		t.Fatal("expected ParseRelationshipRole(\"POWERED_BY\") to fail")
 	}
 }

@@ -187,6 +187,7 @@ COPY infra/registry/postgres/init/iam-expired-binding-revocation.sql /opt/hvac/r
 COPY infra/telemetry/postgres/init/telemetry-runtime-unnest-and-indexes.sql /opt/hvac/repo/infra/telemetry/postgres/init/telemetry-runtime-unnest-and-indexes.sql
 COPY infra/telemetry/postgres/init/telemetry-accepted-point-sample-index.sql /opt/hvac/repo/infra/telemetry/postgres/init/telemetry-accepted-point-sample-index.sql
 COPY infra/durability/postgres/init/operations-domain-audit-ledger.sql /opt/hvac/repo/infra/durability/postgres/init/operations-domain-audit-ledger.sql
+COPY infra/registry/postgres/init/hydraulic-loop-topology.sql /opt/hvac/repo/infra/registry/postgres/init/hydraulic-loop-topology.sql
 
 FROM postgres:16.4-bookworm
 

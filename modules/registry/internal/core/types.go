@@ -50,6 +50,8 @@ type Asset struct {
 	RatedPower    *float64          `json:"ratedPower,omitempty"`
 	RatedCapacity *float64          `json:"ratedCapacity,omitempty"`
 	Tags          map[string]string `json:"tags,omitempty"`
+	WaterLoop     *string           `json:"waterLoop,omitempty"`
+	BranchCode    *string           `json:"branchCode,omitempty"`
 }
 
 type Device struct {

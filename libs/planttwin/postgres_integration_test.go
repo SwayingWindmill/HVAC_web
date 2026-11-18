@@ -38,6 +38,7 @@ func TestPostgresLoaderRealDatabase(t *testing.T) {
 		chillerID  = "0199f000-3000-7000-8000-000000000001"
 		chwpID     = "0199f000-3000-7000-8000-000000000002"
 		loopID     = "0199f000-3000-7000-8000-000000000003"
+		valveID    = "0199f000-3000-7000-8000-000000000004"
 		pPowerID   = "0199f000-5000-7000-8000-000000000001"
 		pTempID    = "0199f000-5000-7000-8000-000000000002"
 		pSupplyID  = "0199f000-5000-7000-8000-000000000003"
@@ -67,19 +68,22 @@ ON CONFLICT (id) DO NOTHING`,
 			args: []any{tenantID, otherTen, siteID, otherSite},
 		},
 		{
-			sql: `INSERT INTO core_registry.assets (id, tenant_id, site_id, code, display_name, asset_type, status, rated_capacity, rated_power, nameplate, revision, created_at, updated_at)
-VALUES ($3::uuid, $1::uuid, $2::uuid, 'chiller-1', '1# 主机', 'CHILLER', 'ACTIVE', 572, 127.5, '{"feederAuxiliaryPowerKw":18}'::jsonb, 1, now(), now()),
-       ($4::uuid, $1::uuid, $2::uuid, 'chwp-1', '1# 冷冻水泵', 'CHILLED_WATER_PUMP', 'ACTIVE', NULL, NULL, '{"unconfirmed":["ratedPowerKw","feederAuxiliaryPowerKw"],"feederAuxiliaryPowerKw":15}'::jsonb, 1, now(), now()),
-       ($5::uuid, $1::uuid, $2::uuid, 'chw-loop', '冷冻水环路', 'CHILLED_WATER_LOOP', 'ACTIVE', NULL, NULL, NULL, 1, now(), now())
+			sql: `INSERT INTO core_registry.assets (id, tenant_id, site_id, code, display_name, asset_type, status, rated_capacity, rated_power, nameplate, water_loop, branch_code, revision, created_at, updated_at)
+VALUES ($3::uuid, $1::uuid, $2::uuid, 'chiller-1', '1# 主机', 'CHILLER', 'ACTIVE', 572, 127.5, '{"feederAuxiliaryPowerKw":18}'::jsonb, 'CHILLED_WATER', 'CH-A', 1, now(), now()),
+       ($4::uuid, $1::uuid, $2::uuid, 'chwp-1', '1# 冷冻水泵', 'CHILLED_WATER_PUMP', 'ACTIVE', NULL, NULL, '{"unconfirmed":["ratedPowerKw","feederAuxiliaryPowerKw"],"feederAuxiliaryPowerKw":15}'::jsonb, 'CHILLED_WATER', 'CH-A', 1, now(), now()),
+       ($5::uuid, $1::uuid, $2::uuid, 'chw-loop', '冷冻水环路', 'CHILLED_WATER_LOOP', 'ACTIVE', NULL, NULL, NULL, 'CHILLED_WATER', NULL, 1, now(), now()),
+       ($6::uuid, $1::uuid, $2::uuid, 'mv-chw-a', 'A支路电动隔离阀', 'MOTORIZED_VALVE', 'ACTIVE', NULL, NULL, NULL, 'CHILLED_WATER', 'CH-A', 1, now(), now())
 ON CONFLICT (id) DO NOTHING`,
-			args: []any{tenantID, siteID, chillerID, chwpID, loopID},
+			args: []any{tenantID, siteID, chillerID, chwpID, loopID, valveID},
 		},
 		{
 			sql: `INSERT INTO core_registry.asset_relationships (id, tenant_id, site_id, from_asset_id, to_asset_id, relationship_role, status, valid_from, valid_to, created_at, updated_at, revision)
-VALUES ('0199f000-6600-7000-8000-000000000001'::uuid, $1::uuid, $2::uuid, $4::uuid, $3::uuid, 'SERVES', 'ACTIVE', $6::timestamptz, NULL, now(), now(), 1),
-       ('0199f000-6600-7000-8000-000000000002'::uuid, $1::uuid, $2::uuid, $3::uuid, $5::uuid, 'SERVES', 'ACTIVE', $6::timestamptz, NULL, now(), now(), 1)
+VALUES ('0199f000-6600-7000-8000-000000000001'::uuid, $1::uuid, $2::uuid, $4::uuid, $3::uuid, 'SERVES', 'ACTIVE', $7::timestamptz, NULL, now(), now(), 1),
+       ('0199f000-6600-7000-8000-000000000002'::uuid, $1::uuid, $2::uuid, $3::uuid, $5::uuid, 'SERVES', 'ACTIVE', $7::timestamptz, NULL, now(), now(), 1),
+       ('0199f000-6600-7000-8000-000000000003'::uuid, $1::uuid, $2::uuid, $6::uuid, $3::uuid, 'ISOLATES', 'ACTIVE', $7::timestamptz, NULL, now(), now(), 1),
+       ('0199f000-6600-7000-8000-000000000004'::uuid, $1::uuid, $2::uuid, $3::uuid, $5::uuid, 'FEEDS_HEADER', 'ACTIVE', $7::timestamptz, NULL, now(), now(), 1)
 ON CONFLICT (id) DO NOTHING`,
-			args: []any{tenantID, siteID, chillerID, chwpID, loopID, validStart},
+			args: []any{tenantID, siteID, chillerID, chwpID, loopID, valveID, validStart},
 		},
 		{
 			sql: `INSERT INTO core_registry.devices (id, tenant_id, site_id, code, display_name, device_type, status, revision, created_at, updated_at)
@@ -198,8 +202,18 @@ ON CONFLICT (id) DO NOTHING`,
 			}
 
 			chiller, ok := twin.UnitByID(chillerID)
-			if !ok || chiller.FeederAuxiliaryPowerKW != 18 || chiller.RatedPowerKW == nil || *chiller.RatedPowerKW != 127.5 {
+			if !ok || chiller.FeederAuxiliaryPowerKW != 18 || chiller.RatedPowerKW == nil || *chiller.RatedPowerKW != 127.5 || chiller.WaterLoop != WaterLoopChilledWater || chiller.BranchCode != "CH-A" {
 				t.Fatalf("unexpected chiller unit: %+v ok=%v", chiller, ok)
+			}
+			rels, err := loader.LoadAssetRelationships(ctx, SiteScope{TenantID: tenantID, SiteID: siteID}, evalAt)
+			if err != nil {
+				t.Fatalf("LoadAssetRelationships: %v", err)
+			}
+			if len(rels) != 4 {
+				t.Fatalf("expected 4 relationships in plant_twin_asset_relationships_v1, got %d (%+v)", len(rels), rels)
+			}
+			if valves := twin.Graph.IsolatedBy(chillerID); len(valves) != 1 || valves[0] != valveID {
+				t.Fatalf("expected valve isolating chiller, got %v", valves)
 			}
 			chwp, ok := twin.UnitByID(chwpID)
 			if !ok || chwp.FeederAuxiliaryPowerKW != 0 {

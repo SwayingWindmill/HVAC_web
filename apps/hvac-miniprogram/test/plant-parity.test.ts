@@ -49,4 +49,198 @@ for (const [day, recorded] of [['a normal day', snapshots], ['a bad day', badDay
     web.groups.map((group) => [group.category, group.devices.map((device) => device.deviceId)]));
   assert.deepEqual([phone.onlineCount, phone.latestSampleAt, phone.plantCop, phone.totalPower?.display, phone.coolingCapacity?.display],
     [web.onlineCount, web.latestSampleAt, web.plantCop, web.totalPower?.display, web.coolingCapacity?.display]);
+  assert.deepEqual(phone.branches, []);
+  assert.deepEqual(web.branches, []);
+});
+
+test('the web and mini program group chilled and condenser parallel branches, inferred ISOLATES valves, and DP readings identically', () => {
+  const clonedModel = structuredClone(assetModel);
+  const clonedSnapshots = structuredClone(snapshots);
+  const ts = recordedAt.toISOString();
+
+  const chillerAsset = clonedModel.assets.find((asset: { assetType: string }) => asset.assetType === 'CHILLER');
+  const chwpAsset = clonedModel.assets.find((asset: { assetType: string }) => asset.assetType === 'CHILLED_WATER_PUMP');
+  const cwpAsset = clonedModel.assets.find((asset: { assetType: string }) => asset.assetType === 'COOLING_WATER_PUMP');
+  const btuDevice = clonedModel.devices.find((device: { deviceType: string }) => device.deviceType === 'BTU_METER');
+  const firstPoint = clonedModel.telemetryPoints[0];
+  const firstSnap = clonedSnapshots.items.find((item: { status: string }) => item.status === 'OK').snapshot;
+
+  chillerAsset.waterLoop = 'CHILLED_WATER';
+  chillerAsset.branchCode = 'CH-A';
+  chwpAsset.waterLoop = 'CHILLED_WATER';
+  chwpAsset.branchCode = 'CH-A';
+  cwpAsset.waterLoop = 'CONDENSER_WATER';
+  cwpAsset.branchCode = 'CW-A';
+
+  const valveAssetId = '018f3e00-3000-7000-8000-000000000091';
+  const valveDeviceId = '018f3e00-4000-7000-8000-000000000091';
+  const dpAssetId = '018f3e00-3000-7000-8000-000000000092';
+  const dpDeviceId = '018f3e00-4000-7000-8000-000000000092';
+
+  // Omit branchCode on the valve so both web and mini program verify ISOLATES branch inference.
+  clonedModel.assets.push(
+    {
+      ...chillerAsset,
+      id: valveAssetId,
+      code: 'mv-chw-a',
+      displayName: 'CH-A 支路电动阀',
+      assetType: 'MOTORIZED_VALVE',
+      waterLoop: null,
+      branchCode: null,
+    },
+    {
+      ...chillerAsset,
+      id: dpAssetId,
+      code: 'chw-dp-01',
+      displayName: '冷冻总管压差传感器',
+      assetType: 'DIFFERENTIAL_PRESSURE_SENSOR',
+      waterLoop: 'CHILLED_WATER',
+      branchCode: null,
+    },
+  );
+  clonedModel.devices.push(
+    { ...btuDevice, id: valveDeviceId, code: 'mv-chw-a-ctrl', displayName: 'CH-A 支路电动阀', deviceType: 'MOTORIZED_VALVE' },
+    { ...btuDevice, id: dpDeviceId, code: 'chw-dp-01', displayName: '冷冻总管压差传感器', deviceType: 'DIFFERENTIAL_PRESSURE_SENSOR' },
+  );
+  clonedModel.relationships.push(
+    {
+      id: '018f3e00-6400-7000-8000-000000000091',
+      tenantId: chillerAsset.tenantId,
+      siteId: chillerAsset.siteId,
+      fromType: 'DEVICE',
+      fromId: valveDeviceId,
+      toType: 'ASSET',
+      toId: valveAssetId,
+      role: 'PRIMARY_CONTROLLER',
+      status: 'ACTIVE',
+      validFrom: ts,
+      validTo: null,
+      revision: 1,
+      createdAt: ts,
+      updatedAt: ts,
+    },
+    {
+      id: '018f3e00-6400-7000-8000-000000000092',
+      tenantId: chillerAsset.tenantId,
+      siteId: chillerAsset.siteId,
+      fromType: 'DEVICE',
+      fromId: dpDeviceId,
+      toType: 'ASSET',
+      toId: dpAssetId,
+      role: 'MEASURES',
+      status: 'ACTIVE',
+      validFrom: ts,
+      validTo: null,
+      revision: 1,
+      createdAt: ts,
+      updatedAt: ts,
+    },
+    {
+      id: '018f3e00-6600-7000-8000-000000000093',
+      tenantId: chillerAsset.tenantId,
+      siteId: chillerAsset.siteId,
+      fromType: 'ASSET',
+      fromId: valveAssetId,
+      toType: 'ASSET',
+      toId: chillerAsset.id,
+      role: 'ISOLATES',
+      status: 'ACTIVE',
+      validFrom: ts,
+      validTo: null,
+      revision: 1,
+      createdAt: ts,
+      updatedAt: ts,
+    },
+  );
+  clonedModel.telemetryPoints.push(
+    {
+      ...firstPoint,
+      id: '018f3e00-5000-7000-8000-000000000091',
+      reportingDeviceId: valveDeviceId,
+      pointCode: 'valve_open_state',
+      sourceKey: 'valve.open_state',
+      displayName: '阀门状态',
+      pointType: 'STATE',
+      valueType: 'STRING',
+      unit: null,
+      writable: false,
+      status: 'ACTIVE',
+    },
+    {
+      ...firstPoint,
+      id: '018f3e00-5000-7000-8000-000000000092',
+      reportingDeviceId: valveDeviceId,
+      pointCode: 'valve_position',
+      sourceKey: 'valve.position_feedback',
+      displayName: '阀门开度反馈',
+      pointType: 'TELEMETRY',
+      valueType: 'NUMBER',
+      unit: '%',
+      writable: false,
+      status: 'ACTIVE',
+    },
+    {
+      ...firstPoint,
+      id: '018f3e00-5000-7000-8000-000000000093',
+      reportingDeviceId: dpDeviceId,
+      pointCode: 'header_dp',
+      sourceKey: 'dp_sensor.differential_pressure',
+      displayName: '总管压差',
+      pointType: 'TELEMETRY',
+      valueType: 'NUMBER',
+      unit: 'kPa',
+      writable: false,
+      status: 'ACTIVE',
+    },
+  );
+  const sampleVal = firstSnap.values[0];
+  clonedSnapshots.items.push(
+    {
+      requestId: 'req-valve',
+      deviceId: valveDeviceId,
+      status: 'OK',
+      snapshot: {
+        ...firstSnap,
+        deviceId: valveDeviceId,
+        values: [
+          { ...sampleVal, key: 'valve_open_state', value: 'OPEN', valueType: 'STRING', unit: null },
+          { ...sampleVal, key: 'valve_position', value: 100, valueType: 'NUMBER', unit: '%' },
+        ],
+      },
+    },
+    {
+      requestId: 'req-dp',
+      deviceId: dpDeviceId,
+      status: 'OK',
+      snapshot: {
+        ...firstSnap,
+        deviceId: dpDeviceId,
+        values: [
+          { ...sampleVal, key: 'header_dp', value: 84.5, valueType: 'NUMBER', unit: 'kPa' },
+        ],
+      },
+    },
+  );
+
+  const byDeviceId = new Map(clonedSnapshots.items.map((item: { deviceId: string; status: string; snapshot: unknown; problem: unknown }) => [
+    item.deviceId, item.status === 'OK' ? { status: 'ok', snapshot: item.snapshot } : { status: 'error', problem: item.problem },
+  ]));
+  const web = buildPlantView(buildAssetsRows({ assetModel: clonedModel, snapshots: byDeviceId as never, now }), clonedModel);
+  const phone = buildPlant(clonedModel, clonedSnapshots, now);
+
+  assert.deepEqual(phone.loopBranches, web.loopBranches);
+  assert.deepEqual(web.loopBranches, { CHILLED_WATER: 1, CONDENSER_WATER: 1 });
+  const branchShape = (branch: { key: string; waterLoop: string | null; loopLabel: string; branchCode: string; equipmentCount: number; runningCount: number; hasAlert: boolean; devices: readonly { deviceId: string; waterLoop: string | null; branchCode: string | null }[] }) => ({
+    key: branch.key,
+    waterLoop: branch.waterLoop,
+    loopLabel: branch.loopLabel,
+    branchCode: branch.branchCode,
+    equipmentCount: branch.equipmentCount,
+    runningCount: branch.runningCount,
+    hasAlert: branch.hasAlert,
+    devices: branch.devices.map((d) => [d.deviceId, d.waterLoop, d.branchCode]),
+  });
+  assert.deepEqual(phone.branches.map(branchShape), web.branches.map(branchShape));
+  assert.equal(web.branches[0].devices.length, 3);
+  assert.equal(web.branches[0].devices[2].deviceId, valveDeviceId);
 });

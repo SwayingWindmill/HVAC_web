@@ -297,7 +297,7 @@ const schemaRequirements = {
     'recordHash', 'recordedAt',
   ]],
   Site: [['id', 'tenantId', 'code', 'displayName', 'timezone', 'status', 'revision', 'createdAt', 'updatedAt', 'floorAreaM2', 'climateZone']],
-  Asset: [['id', 'tenantId', 'siteId', 'code', 'displayName', 'assetType', 'status', 'revision', 'createdAt', 'updatedAt'], ['ratedPower', 'ratedCapacity', 'tags']],
+  Asset: [['id', 'tenantId', 'siteId', 'code', 'displayName', 'assetType', 'status', 'revision', 'createdAt', 'updatedAt'], ['ratedPower', 'ratedCapacity', 'tags', 'waterLoop', 'branchCode']],
   Device: [['id', 'tenantId', 'siteId', 'code', 'displayName', 'deviceType', 'status', 'revision', 'createdAt', 'updatedAt'], ['tags']],
   Template: [['id', 'tenantId', 'templateKey', 'templateKind', 'createdAt'], ['latestRevisionId', 'latestRevisionNumber', 'releasedAt']],
   TemplateCollection: [['items', 'nextCursor', 'hasMore']],

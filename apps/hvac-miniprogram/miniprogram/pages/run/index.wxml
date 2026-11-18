@@ -59,6 +59,31 @@
         </view>
       </view>
     </view>
+
+    <view wx:if="{{realtime.branches.length}}" class="card" aria-label="水力并联支路">
+      <view class="card-pad card-title titled loops-title"><image class="title-icon" src="/assets/icon/repeat.svg" aria-hidden="true" /><text>水力并联支路</text></view>
+      <view wx:for="{{realtime.branches}}" wx:for-item="branch" wx:key="key" class="branch">
+        <view class="branch-head">
+          <view class="branch-title-row">
+            <text class="branch-code">支路 {{branch.branchCode}}</text>
+            <text class="badge badge-neutral">{{branch.loopLabel}}</text>
+          </view>
+          <view class="branch-summary-row">
+            <text wx:if="{{branch.hasAlert}}" class="badge badge-warning">需关注</text>
+            <text class="caption">{{branch.summary}}</text>
+          </view>
+        </view>
+        <view class="branch-devices">
+          <view wx:for="{{branch.devices}}" wx:key="deviceId" class="branch-device" data-id="{{item.deviceId}}" bindtap="openDevice" aria-role="link">
+            <view class="branch-device-line">
+              <text class="branch-device-name">{{item.name}}</text>
+              <text class="badge badge-{{item.status.tone}}">{{item.status.label}}</text>
+            </view>
+            <text wx:if="{{item.metrics}}" class="caption">{{item.metrics}}</text>
+          </view>
+        </view>
+      </view>
+    </view>
   </block>
 
   <block wx:else>

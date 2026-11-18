@@ -50,6 +50,7 @@ const POINTS: Readonly<Record<string, TelemetryPointDefinition>> = Object.freeze
 
   point('chwp.run_state', '运行状态'),
   point('chwp.frequency', '运行频率', 'Hz', 1),
+  point('chwp.frequency_command', '频率设定指令', 'Hz', 1),
   point('chwp.speed', '转速', '%', 1),
   point('chwp.flow_rate', '冷冻水流量', 'm3/h'),
   point('chwp.power', '水泵功率', 'kW'),
@@ -58,11 +59,23 @@ const POINTS: Readonly<Record<string, TelemetryPointDefinition>> = Object.freeze
 
   point('cwp.run_state', '运行状态'),
   point('cwp.frequency', '运行频率', 'Hz', 1),
+  point('cwp.frequency_command', '频率设定指令', 'Hz', 1),
   point('cwp.speed', '转速', '%', 1),
   point('cwp.flow_rate', '冷却水流量', 'm3/h'),
   point('cwp.power', '水泵功率', 'kW'),
   point('cwp.energy', '累计电量', 'kWh'),
   point('cwp.fault_code', '故障代码'),
+
+  point('valve.open_state', '阀门状态'),
+  point('valve.position_feedback', '阀门开度反馈', '%', 1),
+  point('valve.command', '阀门开关指令'),
+
+  point('vfd.frequency_feedback', '变频运行频率', 'Hz', 1),
+  point('vfd.frequency_command', '变频频率设定', 'Hz', 1),
+
+  point('header.differential_pressure', '总管压差', 'kPa', 1),
+  point('dp_sensor.differential_pressure', '总管压差', 'kPa', 1),
+  point('branch.flow_rate', '支路流量', 'm3/h'),
 
   point('cooling_tower.run_state', '运行状态'),
   point('cooling_tower.fan_speed', '风机转速', '%', 1),
@@ -109,6 +122,10 @@ const STATE_LABELS: Readonly<Record<string, string>> = {
   STOPPED: '停机',
   STANDBY: '待机',
   FAULT: '故障',
+  OPEN: '全开',
+  CLOSED: '关闭',
+  OPENING: '正在开启',
+  CLOSING: '正在关闭',
 };
 
 export function formatTelemetryDisplayValue(value: unknown, precision = 3): string {

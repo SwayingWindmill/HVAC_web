@@ -9,6 +9,11 @@
 
 #### 新增与架构演进
 
+- 支持暖通水力环路与并联支路拓扑孪生（`libs/planttwin`、`modules/registry`、`contracts/`、`apps/hvac-web`、`apps/hvac-miniprogram` 与迁移 `hydraulic-loop-topology.sql`）：
+  - **数据库与孪生只读视图扩展**：在 `core_registry.assets` 新增可空字段 `water_loop`（`CHILLED_WATER` / `CONDENSER_WATER` / `COOLING_TOWER_LOOP`）与 `branch_code`（并联支路编码），扩展 `asset_relationships.relationship_role` 至 `SERVES`、`ISOLATES` 与 `FEEDS_HEADER`，扩展 `point_subject_bindings.semantic_role` 至 17 个语义角色（新增阀门反馈/指令、变频频率反馈/指令、总管压差及支路流量），更新 `plant_twin_units_v1` 并新增 `plant_twin_asset_relationships_v1` 安全屏障视图。
+  - **接口契约与孪生查询增强**：`GET /api/v1/sites/{siteId}/asset-model` 返回资产 `waterLoop`、`branchCode` 与水力拓扑关系（旧站点缺省兼容 `null`/省略）；`libs/planttwin` 新增 `UnitsByLoop`、`ParallelBranches` 与隔离阀/汇入总管关系查询。
+  - **Web「实时运行」与微信小程序「运行」同步支持并联支路**：水系统表格展示各环路并联支路计数与总管压差，新增「水力并联支路」分组面板将同支路冷机、水泵、电动隔离阀与流量/压差读数聚合展示，未配置支路的旧站点平滑回退至既有设备分类分组。
+
 - 支持单账号跨组织会话切换与临时运维角色到期自动断流（`libs/identitycontext`、`libs/sessionstore`、`modules/iam`、`cmd/energy-api`、`contracts/`、`apps/hvac-web`、`apps/hvac-miniprogram` 与迁移 `iam-expired-binding-revocation.sql`）：
   - **单账号跨组织会话切换**：扩展 `IAM` 当前主体查询返回有效期内的全部所属组织列表（`availableTenants`），新增 `POST /api/v1/auth/session/tenant` 与 `sessionstore.SwitchTenant` 会话租户切换通道，非所属组织一律以 `403 TENANT_SWITCH_FORBIDDEN` 拒绝并保留原会话，浏览器请求严格校验同源与 `X-CSRF-Token`，切换成功后立即撤销旧组织的实时遥测订阅并刷新主体与站点视图。
   - **临时维护角色有效期与自然到期实时断流**：`IAM` 与网关成员管理接口及 Web「用户与角色」管理界面支持配置可选未来过期时间 `validTo`（界面默认「长期有效」，提供预设与自定义时间选择并在列表展示「长期」或本地到期时间）；新增数据库函数 `iam.sweep_expired_telemetry_revocations`，在遥测撤权轮询时扫描自然过期的组织成员关系与角色绑定，自动写入撤销事实以中断临时维护人员的实时订阅流。

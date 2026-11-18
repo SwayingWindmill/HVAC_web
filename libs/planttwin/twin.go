@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -59,15 +60,24 @@ func normalizeID(raw string) string {
 
 // PlantUnit describes one active physical plant asset and its control lock state.
 type PlantUnit struct {
-	AssetID                string   `json:"assetId"`
-	AssetCode              string   `json:"assetCode"`
-	AssetName              string   `json:"assetName"`
-	AssetType              string   `json:"assetType"`
-	RatedPowerKW           *float64 `json:"ratedPowerKw,omitempty"`
-	RatedCapacityKW        *float64 `json:"ratedCapacityKw,omitempty"`
-	FeederAuxiliaryPowerKW float64  `json:"feederAuxiliaryPowerKw,omitempty"`
-	LockMode               string   `json:"lockMode"`
-	LockReason             string   `json:"lockReason,omitempty"`
+	AssetID                string    `json:"assetId"`
+	AssetCode              string    `json:"assetCode"`
+	AssetName              string    `json:"assetName"`
+	AssetType              string    `json:"assetType"`
+	RatedPowerKW           *float64  `json:"ratedPowerKw,omitempty"`
+	RatedCapacityKW        *float64  `json:"ratedCapacityKw,omitempty"`
+	FeederAuxiliaryPowerKW float64   `json:"feederAuxiliaryPowerKw,omitempty"`
+	WaterLoop              WaterLoop `json:"waterLoop,omitempty"`
+	BranchCode             string    `json:"branchCode,omitempty"`
+	LockMode               string    `json:"lockMode"`
+	LockReason             string    `json:"lockReason,omitempty"`
+}
+
+// BranchGroup groups plant units assigned to the same hydraulic water loop and parallel branch.
+type BranchGroup struct {
+	WaterLoop  WaterLoop   `json:"waterLoop,omitempty"`
+	BranchCode string      `json:"branchCode"`
+	Units      []PlantUnit `json:"units"`
 }
 
 // TwinDevice describes one active gateway or field device endpoint in the site.
@@ -172,6 +182,16 @@ func NewSiteTwin(twin SiteTwin) (SiteTwin, error) {
 		if strings.TrimSpace(cloned.Units[i].LockMode) == "" {
 			cloned.Units[i].LockMode = LockModeUnlocked
 		}
+		if rawLoop := strings.TrimSpace(string(cloned.Units[i].WaterLoop)); rawLoop != "" {
+			parsedLoop, loopErr := ParseWaterLoop(rawLoop)
+			if loopErr != nil {
+				return SiteTwin{}, fmt.Errorf("%w: unit %s %v", ErrInvalidTopology, cloned.Units[i].AssetCode, loopErr)
+			}
+			cloned.Units[i].WaterLoop = parsedLoop
+		} else {
+			cloned.Units[i].WaterLoop = ""
+		}
+		cloned.Units[i].BranchCode = strings.TrimSpace(cloned.Units[i].BranchCode)
 	}
 	for i := range cloned.PointBindings {
 		cloned.PointBindings[i].IsCopied = effectiveIsCopied(cloned.PointBindings[i])
@@ -231,6 +251,67 @@ func (t SiteTwin) UnitsByType(assetTypes ...string) []PlantUnit {
 		out = append(out, clonePlantUnit(u))
 	}
 	sortPlantUnits(out)
+	return out
+}
+
+// UnitsByLoop returns active units assigned to the given water loop, sorted deterministically.
+func (t SiteTwin) UnitsByLoop(loop WaterLoop) []PlantUnit {
+	parsed, err := ParseWaterLoop(string(loop))
+	if err != nil {
+		return nil
+	}
+	var out []PlantUnit
+	for _, u := range t.Units {
+		if strings.EqualFold(strings.TrimSpace(string(u.WaterLoop)), string(parsed)) {
+			out = append(out, clonePlantUnit(u))
+		}
+	}
+	sortPlantUnits(out)
+	return out
+}
+
+// ParallelBranches groups units that share a non-empty BranchCode (scoped by WaterLoop when configured).
+func (t SiteTwin) ParallelBranches() []BranchGroup {
+	type branchKey struct {
+		loop   WaterLoop
+		branch string
+	}
+	grouped := make(map[branchKey][]PlantUnit)
+	for _, u := range t.Units {
+		branch := strings.TrimSpace(u.BranchCode)
+		if branch == "" {
+			continue
+		}
+		loop := WaterLoop(strings.ToUpper(strings.TrimSpace(string(u.WaterLoop))))
+		key := branchKey{loop: loop, branch: branch}
+		cloned := clonePlantUnit(u)
+		cloned.WaterLoop = loop
+		cloned.BranchCode = branch
+		grouped[key] = append(grouped[key], cloned)
+	}
+	if len(grouped) == 0 {
+		return nil
+	}
+	keys := make([]branchKey, 0, len(grouped))
+	for k := range grouped {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].loop != keys[j].loop {
+			return keys[i].loop < keys[j].loop
+		}
+		return keys[i].branch < keys[j].branch
+	})
+	out := make([]BranchGroup, 0, len(keys))
+	for _, k := range keys {
+		units := grouped[k]
+		sortPlantUnits(units)
+		out = append(out, BranchGroup{
+			WaterLoop:  k.loop,
+			BranchCode: k.branch,
+			Units:      units,
+		})
+	}
 	return out
 }
 

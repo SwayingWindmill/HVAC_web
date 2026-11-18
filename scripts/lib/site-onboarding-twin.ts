@@ -12,11 +12,18 @@ export const SEMANTIC_ROLES = [
   'COOLING_LOAD',
   'WATER_FLOW',
   'ZONE_TEMP',
+  'VALVE_FEEDBACK',
+  'VALVE_COMMAND',
+  'VFD_FREQUENCY',
+  'VFD_FREQUENCY_COMMAND',
+  'HEADER_DIFF_PRESSURE',
+  'BRANCH_FLOW',
 ] as const;
 
 const SEMANTIC_ROLE_SET = new Set<string>(SEMANTIC_ROLES);
+const COMMAND_SEMANTIC_ROLE_SET = new Set<string>(['VALVE_COMMAND', 'VFD_FREQUENCY_COMMAND']);
 
-export const ASSET_RELATIONSHIP_ROLES = ['SERVES'] as const;
+export const ASSET_RELATIONSHIP_ROLES = ['SERVES', 'ISOLATES', 'FEEDS_HEADER'] as const;
 const ASSET_RELATIONSHIP_ROLE_SET = new Set<string>(ASSET_RELATIONSHIP_ROLES);
 
 // How a rerun moves an existing point_subject_bindings row to the point's status (EXCLUDED.status).
@@ -145,7 +152,7 @@ export function validatePlantTwinFields(
       if (point.semanticRole != null) {
         if (typeof point.semanticRole !== 'string' || !SEMANTIC_ROLE_SET.has(point.semanticRole)) {
           problems.push(`${device.code}/${point.code}: unknown semanticRole ${String(point.semanticRole)}`);
-        } else if (point.pointType === 'COMMAND') {
+        } else if (point.pointType === 'COMMAND' && !COMMAND_SEMANTIC_ROLE_SET.has(point.semanticRole)) {
           problems.push(`${device.code}/${point.code}: COMMAND point cannot declare semanticRole`);
         }
       }
@@ -177,9 +184,11 @@ export function validatePlantTwinFields(
         const key = `${fromAsset.id}|${toAsset.id}|${rel.role}`;
         if (seenEdges.has(key)) problems.push(`${label}: duplicate edge ${fromAsset.code} -> ${toAsset.code} (${rel.role})`);
         seenEdges.add(key);
-        const targets = adjacency.get(fromAsset.id) ?? [];
-        targets.push(toAsset.id);
-        adjacency.set(fromAsset.id, targets);
+        if (rel.role === 'SERVES' || rel.role === 'FEEDS_HEADER') {
+          const targets = adjacency.get(fromAsset.id) ?? [];
+          targets.push(toAsset.id);
+          adjacency.set(fromAsset.id, targets);
+        }
       }
     }
   }
