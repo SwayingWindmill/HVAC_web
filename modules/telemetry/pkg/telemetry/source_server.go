@@ -6,8 +6,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"math"
 	"mime"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -156,6 +158,7 @@ func (h *handler) handleSourceObservationBatch(writer http.ResponseWriter, reque
 		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_SOURCE_UNAVAILABLE", "The telemetry source acceptance path is temporarily unavailable.", true)
 		return
 	}
+	h.populateSiteLiveCache(request.Context(), candidates, receipts)
 	dependency := sourceDependency(peer)
 	for index, receipt := range receipts {
 		sourceOutcome, sourceReason := "success", "none"
@@ -473,4 +476,131 @@ func decodeSourceRequestWithLimit(writer http.ResponseWriter, request *http.Requ
 		return false
 	}
 	return true
+}
+
+type siteLiveCacheScope struct {
+	tenantID string
+	siteID   string
+}
+
+type siteLiveCacheBatchAction struct {
+	put       *OptimizationLiveObservation
+	sampledAt time.Time
+	deleteID  string
+}
+
+func (h *handler) populateSiteLiveCache(ctx context.Context, candidates []ObservationCandidate, receipts []ObservationReceipt) {
+	if h == nil || h.latestCache == nil {
+		return
+	}
+	siteCache, hasSiteCache := h.latestCache.(SiteLiveCache)
+	siteDeleter, hasSiteDeleter := h.latestCache.(SiteLiveCacheDeleter)
+	if !hasSiteCache && !hasSiteDeleter {
+		return
+	}
+
+	var siteOrder []siteLiveCacheScope
+	actionsBySite := make(map[siteLiveCacheScope]map[string]siteLiveCacheBatchAction)
+	pointOrderBySite := make(map[siteLiveCacheScope][]string)
+	ensureScope := func(scope siteLiveCacheScope, pointID string) map[string]siteLiveCacheBatchAction {
+		actions, exists := actionsBySite[scope]
+		if !exists {
+			siteOrder = append(siteOrder, scope)
+			actions = make(map[string]siteLiveCacheBatchAction)
+			actionsBySite[scope] = actions
+		}
+		if _, seenPoint := actions[pointID]; !seenPoint {
+			pointOrderBySite[scope] = append(pointOrderBySite[scope], pointID)
+		}
+		return actions
+	}
+
+	for index, candidate := range candidates {
+		if candidate.EdgeReplay || candidate.SourcePath == SourcePathHistoryReplay || candidate.Device == nil || candidate.Point == nil {
+			continue
+		}
+		pointID := strings.ToLower(strings.TrimSpace(candidate.Point.PointID))
+		if pointID == "" {
+			continue
+		}
+		receipt := receipts[index]
+		scope := siteLiveCacheScope{
+			tenantID: strings.ToLower(strings.TrimSpace(candidate.Device.TenantID)),
+			siteID:   strings.ToLower(strings.TrimSpace(candidate.Device.SiteID)),
+		}
+		switch receipt.Status {
+		case ObservationAccepted:
+			if !hasSiteCache || candidate.ValueType != "NUMBER" || candidate.Point.PointRevision < 1 || candidate.Position.Offset < 0 {
+				continue
+			}
+			kind, val, ok := observationValueType(candidate.Value)
+			if !ok || kind != "NUMBER" || math.IsNaN(val) || math.IsInf(val, 0) {
+				continue
+			}
+			actions := ensureScope(scope, pointID)
+			sampledAt := candidate.SampledAt.UTC()
+			if existing, hasExisting := actions[pointID]; hasExisting && existing.put != nil && existing.sampledAt.After(sampledAt) {
+				continue
+			}
+			unit := ""
+			if candidate.Unit != nil {
+				unit = *candidate.Unit
+			} else if candidate.Point.Unit != nil {
+				unit = *candidate.Point.Unit
+			}
+			health := HealthFor(receipt.Quality, receipt.QualityReasons)
+			obs := OptimizationLiveObservation{
+				ObservationID:   strings.ToLower(strings.TrimSpace(receipt.ObservationID)),
+				DeviceID:        strings.ToLower(strings.TrimSpace(candidate.Device.DeviceID)),
+				PointID:         pointID,
+				TelemetryKey:    candidate.TelemetryKey,
+				PointRevision:   uint64(candidate.Point.PointRevision),
+				SampledAt:       sampledAt.Format(time.RFC3339Nano),
+				ReceivedAt:      candidate.ReceivedAt.UTC().Format(time.RFC3339Nano),
+				Value:           val,
+				Unit:            unit,
+				Quality:         string(receipt.Quality),
+				QualityReasons:  qualityReasonStrings(receipt.QualityReasons),
+				HealthStatus:    health.Status,
+				HealthReasons:   qualityReasonStrings(health.Reasons),
+				SourceEventID:   strings.ToLower(strings.TrimSpace(candidate.Position.EventID)),
+				SourcePartition: candidate.Position.Partition,
+				SourceOffset:    uint64(candidate.Position.Offset),
+			}
+			actions[pointID] = siteLiveCacheBatchAction{put: &obs, sampledAt: sampledAt}
+		case ObservationRejected:
+			if !hasSiteDeleter {
+				continue
+			}
+			if !slices.Contains(receipt.QualityReasons, QualityReasonOutOfRange) && !slices.Contains(receipt.QualityReasons, QualityReasonSourceUntrusted) {
+				continue
+			}
+			actions := ensureScope(scope, pointID)
+			sampledAt := candidate.SampledAt.UTC()
+			if existing, hasExisting := actions[pointID]; hasExisting && existing.put != nil && sampledAt.Before(existing.sampledAt) {
+				continue
+			}
+			actions[pointID] = siteLiveCacheBatchAction{deleteID: pointID, sampledAt: sampledAt}
+		}
+	}
+
+	for _, scope := range siteOrder {
+		actions := actionsBySite[scope]
+		var puts []OptimizationLiveObservation
+		var deletes []string
+		for _, pointID := range pointOrderBySite[scope] {
+			action := actions[pointID]
+			if action.put != nil {
+				puts = append(puts, *action.put)
+			} else if action.deleteID != "" {
+				deletes = append(deletes, action.deleteID)
+			}
+		}
+		if hasSiteCache && len(puts) > 0 {
+			_ = siteCache.PutSiteLiveObservations(ctx, scope.tenantID, scope.siteID, puts)
+		}
+		if hasSiteDeleter && len(deletes) > 0 {
+			_ = siteDeleter.DeleteSiteLiveObservations(ctx, scope.tenantID, scope.siteID, deletes)
+		}
+	}
 }
