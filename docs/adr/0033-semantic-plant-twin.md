@@ -30,5 +30,14 @@
 
 ## 后果
 
-- 现有 `point_code` 与 `source_metadata.interlocks` 仍可在未完成标注的测试路径中平滑兼容；接入新真实站点时，只需在站点接入清单中声明 `semanticRole` 和 `assetRelationships`（需保证水力 `SERVES` 图无环）。
+- 现有 `point_code` 与 `source_metadata.interlocks` 仍可在未完成标注的测试路径中平滑兼容；接入新真实站点时，只需在站点接入清单中声明 `semanticRole` 和 `assetRelationships`（需保证水力 `SERVES` 与 `FEEDS_HEADER` 图无环）。
 - 后续扩展新的语义角色或资产关系角色时，必须通过新增 PostgreSQL 迁移扩展 `CHECK` 约束、同步 `GLOSSARY.md` 与站点清单校验集合。
+
+## 增补：暖通水力环路与并联支路拓扑（2026-11-18）
+
+通过不可变增量迁移 `infra/registry/postgres/init/hydraulic-loop-topology.sql` 扩展冷站水力环路与并联支路模型：
+
+1. **环路与支路归属列**：在 `core_registry.assets` 新增可空字段 `water_loop`（`CHILLED_WATER`、`CONDENSER_WATER` 或 `COOLING_TOWER_LOOP`）与 `branch_code`（并联支路编码），并在 `core_registry.plant_twin_units_v1` 末尾追加这两列；未配置的旧站点返回 `NULL`，HTTP `GET /api/v1/sites/{siteId}/asset-model` 省略或返回 `null`，保持向后兼容。
+2. **扩展拓扑关系与语义角色**：`core_registry.asset_relationships.relationship_role` 扩展支持 `SERVES`、`ISOLATES`（隔离阀切断并联支路或设备）和 `FEEDS_HEADER`（支路或设备汇入水系统总管）；`core_registry.point_subject_bindings.semantic_role` 扩展至 17 个枚举，新增 `VALVE_FEEDBACK`、`VALVE_COMMAND`、`VFD_FREQUENCY`、`VFD_FREQUENCY_COMMAND`、`HEADER_DIFF_PRESSURE` 和 `BRANCH_FLOW`。
+3. **跨模块水力关系视图**：新增安全屏障视图 `core_registry.plant_twin_asset_relationships_v1`，在一条查询中同时暴露起点与终点资产编码、类型及各自的 `water_loop` 与 `branch_code`。
+4. **运行视图与孪生查询**：`libs/planttwin` 提供 `UnitsByLoop`、`ParallelBranches` 以及 `HydraulicGraph.Isolates` / `IsolatedBy` / `FeedsHeader` / `HeaderFeeders`；Web「实时运行」与微信小程序「运行」按冷冻水/冷却水环路及 `branch_code` 聚合展示并联支路，未配置支路编码的站点退回设备分类分组。

@@ -852,10 +852,16 @@ test('semanticRole and assetRelationships validate, compile idempotently, and de
       }
     }
   }
-  for (const role of SEMANTIC_ROLES) {
+  const baseRoles = [
+    'ACTIVE_POWER', 'RUN_STATE', 'CHW_LEAVING_TEMP', 'CHW_ENTERING_TEMP',
+    'CW_LEAVING_TEMP', 'CW_ENTERING_TEMP', 'SUPPLY_WATER_TEMP', 'RETURN_WATER_TEMP',
+    'COOLING_LOAD', 'WATER_FLOW', 'ZONE_TEMP',
+  ];
+  for (const role of baseRoles) {
     assert.ok(annotatedRoles.has(role), `songyaxuan.site.json missing semanticRole ${role}`);
   }
-  assert.deepEqual([...ASSET_RELATIONSHIP_ROLES], ['SERVES']);
+  assert.equal(SEMANTIC_ROLES.length, 17);
+  assert.deepEqual([...ASSET_RELATIONSHIP_ROLES], ['SERVES', 'ISOLATES', 'FEEDS_HEADER']);
 
   const { registry } = buildOnboardingSql(songyaxuan);
   assert.match(registry, /UPDATE core_registry\.asset_relationships\nSET status = 'RETIRED'/);
@@ -905,4 +911,32 @@ test('semanticRole and assetRelationships validate, compile idempotently, and de
   const driftPlan = planOnboarding(songyaxuan, driftedState);
   assert.equal(driftPlan.find((item) => item.item.startsWith('语义角色 '))?.status, 'differs');
   assert.equal(driftPlan.find((item) => item.item.startsWith('资产水力关系 '))?.status, 'missing');
+
+  const extended = copy(songyaxuan);
+  extended.assets.push(
+    { id: '01a14000-3000-7000-8000-000000000021', code: 'mv-chw-a' },
+  );
+  const firstDev = extended.devices[0];
+  firstDev.points.push(
+    { code: 'valve_fb', pointType: 'STATE', valueType: 'STRING', semanticRole: 'VALVE_FEEDBACK' },
+    { code: 'vfd_hz', pointType: 'TELEMETRY', valueType: 'NUMBER', unit: 'Hz', semanticRole: 'VFD_FREQUENCY' },
+    { code: 'vfd_hz_cmd', pointType: 'SETTING', valueType: 'NUMBER', unit: 'Hz', writable: true, semanticRole: 'VFD_FREQUENCY_COMMAND' },
+    { code: 'hdr_dp', pointType: 'TELEMETRY', valueType: 'NUMBER', unit: 'kPa', semanticRole: 'HEADER_DIFF_PRESSURE' },
+    { code: 'br_flow', pointType: 'TELEMETRY', valueType: 'NUMBER', unit: 'm3/h', semanticRole: 'BRANCH_FLOW' },
+  );
+  const ctrlDev = extended.devices.find((device) => device.code === 'ctrl-chiller-a');
+  const templateCmd = ctrlDev?.points.find((point) => point.pointType === 'COMMAND');
+  if (!ctrlDev || !templateCmd) throw new Error('ctrl-chiller-a COMMAND point missing');
+  ctrlDev.points.push({
+    ...structuredClone(templateCmd),
+    code: 'valve_cmd',
+    asset: '01a14000-3000-7000-8000-000000000021',
+    semanticRole: 'VALVE_COMMAND',
+  });
+  extended.assetRelationships = [
+    ...(extended.assetRelationships ?? []),
+    { from: 'mv-chw-a', to: 'chiller-a', role: 'ISOLATES' },
+    { from: 'chiller-a', to: 'chilled-water-loop', role: 'FEEDS_HEADER' },
+  ];
+  assert.deepEqual(checkSiteFile(extended, songyaxuanAlarmRules), []);
 });

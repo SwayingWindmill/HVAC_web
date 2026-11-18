@@ -530,6 +530,7 @@ export const tagMapSchema = z.record(
   z.string().regex(/^[a-z0-9][a-z0-9._/-]{0,63}$/),
   z.string().trim().min(1).max(256),
 ).refine((value) => Object.keys(value).length <= 64, 'at most 64 tags are allowed');
+export const waterLoopSchema = z.enum(['CHILLED_WATER', 'CONDENSER_WATER', 'COOLING_TOWER_LOOP']);
 export const assetSchema = z.object({
   id: uuidV7Schema,
   tenantId: uuidV7Schema,
@@ -544,6 +545,8 @@ export const assetSchema = z.object({
   ratedPower: z.number().min(0).optional(),
   ratedCapacity: z.number().min(0).optional(),
   tags: tagMapSchema.optional(),
+  waterLoop: waterLoopSchema.nullable().optional(),
+  branchCode: z.string().min(1).max(64).nullable().optional(),
 }).strict();
 export const deviceSchema = z.object({
   id: uuidV7Schema,

@@ -337,3 +337,93 @@ test('indoor loop presents hall and banquet room temperatures and preserves mV/d
   assert.equal(indoor.headline, '24.1 °C');
   assert.equal(indoor.detail, '宴会厅 25.4 °C');
 });
+
+test('实时运行与设备页在配置水力环路和并联支路后按支路分组并保留同支路阀门和压差读数', () => {
+  const clonedModel = structuredClone(assetModel);
+  const clonedSnapshots = structuredClone(snapshots);
+  const ts = now.toISOString();
+
+  const chillerAsset = clonedModel.assets.find((asset: { assetType: string }) => asset.assetType === 'CHILLER');
+  const chwpAsset = clonedModel.assets.find((asset: { assetType: string }) => asset.assetType === 'CHILLED_WATER_PUMP');
+  const firstPoint = clonedModel.telemetryPoints[0];
+  const btuDevice = clonedModel.devices.find((device: { deviceType: string }) => device.deviceType === 'BTU_METER');
+  const firstSnap = clonedSnapshots.items.find((item: { status: string }) => item.status === 'OK').snapshot;
+
+  chillerAsset.waterLoop = 'CHILLED_WATER';
+  chillerAsset.branchCode = 'CH-A';
+  chwpAsset.waterLoop = 'CHILLED_WATER';
+  chwpAsset.branchCode = 'CH-A';
+
+  const valveAssetId = '018f3e00-3000-7000-8000-000000000091';
+  const valveDeviceId = '018f3e00-4000-7000-8000-000000000091';
+  const dpAssetId = '018f3e00-3000-7000-8000-000000000092';
+  const dpDeviceId = '018f3e00-4000-7000-8000-000000000092';
+
+  clonedModel.assets.push(
+    { ...chillerAsset, id: valveAssetId, code: 'mv-chw-a', displayName: 'CH-A 电动隔离阀', assetType: 'MOTORIZED_VALVE', waterLoop: 'CHILLED_WATER', branchCode: 'CH-A' },
+    { ...chillerAsset, id: dpAssetId, code: 'chw-dp-01', displayName: '冷冻总管压差传感器', assetType: 'DIFFERENTIAL_PRESSURE_SENSOR', waterLoop: 'CHILLED_WATER', branchCode: null },
+  );
+  clonedModel.devices.push(
+    { ...btuDevice, id: valveDeviceId, code: 'mv-chw-a-ctrl', displayName: 'CH-A 电动隔离阀', deviceType: 'MOTORIZED_VALVE' },
+    { ...btuDevice, id: dpDeviceId, code: 'chw-dp-01', displayName: '冷冻总管压差传感器', deviceType: 'DIFFERENTIAL_PRESSURE_SENSOR' },
+  );
+  clonedModel.relationships.push(
+    {
+      id: '018f3e00-6400-7000-8000-000000000091', tenantId: chillerAsset.tenantId, siteId: chillerAsset.siteId,
+      fromType: 'DEVICE', fromId: valveDeviceId, toType: 'ASSET', toId: valveAssetId,
+      role: 'PRIMARY_CONTROLLER', status: 'ACTIVE', validFrom: ts, validTo: null, revision: 1, createdAt: ts, updatedAt: ts,
+    },
+    {
+      id: '018f3e00-6400-7000-8000-000000000092', tenantId: chillerAsset.tenantId, siteId: chillerAsset.siteId,
+      fromType: 'DEVICE', fromId: dpDeviceId, toType: 'ASSET', toId: dpAssetId,
+      role: 'MEASURES', status: 'ACTIVE', validFrom: ts, validTo: null, revision: 1, createdAt: ts, updatedAt: ts,
+    },
+  );
+  clonedModel.telemetryPoints.push(
+    { ...firstPoint, id: '018f3e00-5000-7000-8000-000000000091', reportingDeviceId: valveDeviceId, pointCode: 'valve_open_state', sourceKey: 'valve.open_state', displayName: '阀门状态', pointType: 'STATE', valueType: 'STRING', unit: null, writable: false, status: 'ACTIVE' },
+    { ...firstPoint, id: '018f3e00-5000-7000-8000-000000000092', reportingDeviceId: valveDeviceId, pointCode: 'valve_position', sourceKey: 'valve.position_feedback', displayName: '阀门开度反馈', pointType: 'TELEMETRY', valueType: 'NUMBER', unit: '%', writable: false, status: 'ACTIVE' },
+    { ...firstPoint, id: '018f3e00-5000-7000-8000-000000000093', reportingDeviceId: dpDeviceId, pointCode: 'header_dp', sourceKey: 'dp_sensor.differential_pressure', displayName: '总管压差', pointType: 'TELEMETRY', valueType: 'NUMBER', unit: 'kPa', writable: false, status: 'ACTIVE' },
+  );
+  const sampleVal = firstSnap.values[0];
+  clonedSnapshots.items.push(
+    {
+      requestId: 'req-valve',
+      deviceId: valveDeviceId,
+      status: 'OK',
+      snapshot: {
+        ...firstSnap,
+        deviceId: valveDeviceId,
+        values: [
+          { ...sampleVal, key: 'valve_open_state', value: 'OPEN', valueType: 'STRING', unit: null },
+          { ...sampleVal, key: 'valve_position', value: 100, valueType: 'NUMBER', unit: '%' },
+        ],
+      },
+    },
+    {
+      requestId: 'req-dp',
+      deviceId: dpDeviceId,
+      status: 'OK',
+      snapshot: {
+        ...firstSnap,
+        deviceId: dpDeviceId,
+        values: [{ ...sampleVal, key: 'header_dp', value: 84.5, valueType: 'NUMBER', unit: 'kPa' }],
+      },
+    },
+  );
+
+  const built = buildPlant(clonedModel, clonedSnapshots, now);
+  const rt = presentRealtime(built);
+  const chwLoop = rt.loops.find((loop) => loop.name === '冷冻水');
+  assert.ok(chwLoop);
+  assert.match(chwLoop.detail, /压差 84\.5 kPa/);
+  assert.match(chwLoop.detail, /1 条并联支路/);
+  assert.equal(rt.branches.length, 1);
+  assert.equal(rt.branches[0].branchCode, 'CH-A');
+  assert.equal(rt.branches[0].loopLabel, '冷冻水环路');
+  assert.equal(rt.branches[0].devices.length, 3);
+  assert.deepEqual(rt.branches[0].devices[2].status, { label: '全开', tone: 'running' });
+
+  const grouped = presentDevices(built, 'all');
+  assert.equal(grouped.groups[0].title, '冷冻水环路 · 支路 CH-A');
+  assert.equal(grouped.groups[0].devices.length, 3);
+});

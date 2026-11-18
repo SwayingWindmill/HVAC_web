@@ -114,7 +114,7 @@ func TestPostgresLoaderQueriesAllViewsAndMapsResult(t *testing.T) {
 		t.Fatalf("unexpected site metadata: %+v", twin)
 	}
 	chillerA, ok := twin.UnitByID(chillerAID)
-	if !ok || chillerA.LockMode != LockModeManualLock || chillerA.LockReason != "检修锁定" || *chillerA.RatedPowerKW != 127.5 {
+	if !ok || chillerA.LockMode != LockModeManualLock || chillerA.LockReason != "检修锁定" || *chillerA.RatedPowerKW != 127.5 || chillerA.WaterLoop != WaterLoopChilledWater || chillerA.BranchCode != "BRANCH-A" {
 		t.Fatalf("unexpected chiller-a unit/lock: %+v ok=%v", chillerA, ok)
 	}
 	chwp1, ok := twin.UnitByID(chwp1ID)
@@ -135,6 +135,17 @@ func TestPostgresLoaderQueriesAllViewsAndMapsResult(t *testing.T) {
 	}
 	if len(twin.Schedule.Exceptions) != 1 || twin.Schedule.Exceptions[0].StartDate != "2026-11-20" || len(twin.Schedule.Exceptions[0].ReplacementSlots) != 1 {
 		t.Fatalf("unexpected schedule exceptions: %+v", twin.Schedule.Exceptions)
+	}
+
+	rels, err := loader.LoadAssetRelationships(context.Background(), SiteScope{TenantID: testTenantID, SiteID: testSiteID}, at)
+	if err != nil {
+		t.Fatalf("LoadAssetRelationships error: %v", err)
+	}
+	if !tx.sawView("core_registry.plant_twin_asset_relationships_v1") {
+		t.Fatalf("expected query against plant_twin_asset_relationships_v1, seen=%v", tx.queriedSQL)
+	}
+	if len(rels) != 1 || rels[0].RelationshipRole != RelationshipIsolates || rels[0].FromWaterLoop != WaterLoopChilledWater || rels[0].ToBranchCode != "BRANCH-A" {
+		t.Fatalf("unexpected LoadAssetRelationships result: %+v", rels)
 	}
 }
 
@@ -223,9 +234,9 @@ func (tx *fakePlantTwinTx) Query(_ context.Context, sql string, args ...any) (pg
 	switch {
 	case strings.Contains(sql, "plant_twin_units_v1"):
 		return newFakeRows([][]any{
-			{chillerAID, "chiller-a", "A 机组", AssetTypeChiller, floatPtr(127.5), floatPtr(572.0), 30.0},
-			{chwp1ID, "chwp-1", "1#冷冻泵", AssetTypeChilledWaterPump, floatPtr(22.0), (*float64)(nil), 0.0},
-			{chwLoopID, "chw-loop", "冷冻水总管", AssetTypeChilledWaterLoop, (*float64)(nil), (*float64)(nil), 0.0},
+			{chillerAID, "chiller-a", "A 机组", AssetTypeChiller, floatPtr(127.5), floatPtr(572.0), 30.0, string(WaterLoopChilledWater), "BRANCH-A"},
+			{chwp1ID, "chwp-1", "1#冷冻泵", AssetTypeChilledWaterPump, floatPtr(22.0), (*float64)(nil), 0.0, string(WaterLoopChilledWater), "BRANCH-A"},
+			{chwLoopID, "chw-loop", "冷冻水总管", AssetTypeChilledWaterLoop, (*float64)(nil), (*float64)(nil), 0.0, string(WaterLoopChilledWater), ""},
 		}), nil
 	case strings.Contains(sql, "plant_twin_asset_locks_v1"):
 		return newFakeRows([][]any{
@@ -252,6 +263,17 @@ func (tx *fakePlantTwinTx) Query(_ context.Context, sql string, args ...any) (pg
 		return newFakeRows([][]any{
 			{chwp1ID, chillerAID, RelationshipServes},
 			{chillerAID, chwLoopID, RelationshipServes},
+		}), nil
+	case strings.Contains(sql, "plant_twin_asset_relationships_v1"):
+		return newFakeRows([][]any{
+			{
+				"rel-1",
+				"019a0000-3000-7000-8000-000000000091", "mv-chw-a", "A支路电动阀", AssetTypeMotorizedValve,
+				string(WaterLoopChilledWater), "BRANCH-A",
+				chillerAID, "chiller-a", "A 机组", AssetTypeChiller,
+				string(WaterLoopChilledWater), "BRANCH-A",
+				RelationshipIsolates, time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC), (*time.Time)(nil),
+			},
 		}), nil
 	case strings.Contains(sql, "plant_twin_schedule_slots_v1"):
 		return newFakeRows([][]any{

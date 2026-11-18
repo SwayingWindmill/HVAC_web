@@ -3,7 +3,7 @@
 
 import { grouped } from './format';
 import { siteClock, type DayPoint } from './today';
-import { CATEGORY_LABELS, EQUIPMENT_CATEGORIES, isRunning, plantReading, type Plant, type PlantCategory, type PlantDevice, type PlantReading } from './plant';
+import { CATEGORY_LABELS, EQUIPMENT_CATEGORIES, isRunning, loopDifferentialPressure, plantReading, type ParallelBranch, type Plant, type PlantCategory, type PlantDevice, type PlantReading, type WaterLoopKind } from './plant';
 
 export type StatusTone = 'running' | 'stopped' | 'fault' | 'offline' | 'neutral';
 
@@ -32,7 +32,7 @@ function figure(reading: PlantReading): string {
 }
 
 const ICON_BY_UNIT: Readonly<Record<string, string>> = {
-  kW: 'zap', kWh: 'zap', '°C': 'thermometer', 'm³/h': 'waves-horizontal', Hz: 'activity', '%': 'percent', '%RH': 'droplet',
+  kW: 'zap', kWh: 'zap', '°C': 'thermometer', 'm³/h': 'waves-horizontal', Hz: 'activity', '%': 'percent', '%RH': 'droplet', kPa: 'gauge', bar: 'gauge',
 };
 
 /**
@@ -138,6 +138,7 @@ function metric(label: string, reading: PlantReading | null, decimals?: number):
 // The same loops the web's 水系统与室内外环境 table lists; a loop shows once its lead reading has come in.
 const LOOPS: readonly {
   readonly name: string;
+  readonly waterLoop?: WaterLoopKind;
   /** Its lucide icon in assets/icon. */
   readonly icon: string;
   readonly lead: string;
@@ -146,6 +147,7 @@ const LOOPS: readonly {
 }[] = [
   {
     name: '冷冻水',
+    waterLoop: 'CHILLED_WATER',
     icon: 'snowflake',
     lead: 'btu_meter.temperature_difference',
     headline: [['供', 'btu_meter.supply_water_temperature'], ['回', 'btu_meter.return_water_temperature']],
@@ -153,6 +155,7 @@ const LOOPS: readonly {
   },
   {
     name: '冷却水',
+    waterLoop: 'CONDENSER_WATER',
     icon: 'droplets',
     lead: 'cooling_tower.approach_temperature',
     headline: [['出塔', 'cooling_tower.leaving_water_temperature'], ['进塔', 'cooling_tower.entering_water_temperature']],
@@ -176,14 +179,79 @@ const received = (plant: Plant, key: string) => {
 
 function loops(plant: Plant) {
   return LOOPS.filter((loop) => received(plant, loop.lead) !== null).map((loop) => {
-    const readings = [...loop.headline, ...loop.detail].map(([, key]) => received(plant, key)).filter((reading) => reading !== null);
+    const dpReading = loop.waterLoop ? loopDifferentialPressure(plant, loop.waterLoop) : null;
+    const validDp = dpReading && !neverRead(dpReading) ? dpReading : null;
+    const branchCount = loop.waterLoop ? (plant.loopBranches[loop.waterLoop] ?? 0) : 0;
+    const readings = [
+      ...[...loop.headline, ...loop.detail].map(([, key]) => received(plant, key)).filter((reading) => reading !== null),
+      ...(validDp ? [validDp] : []),
+    ];
     const line = (keys: typeof loop.headline) => keys
       .map(([label, key]) => ({ label, reading: received(plant, key) }))
       .filter((entry) => entry.reading !== null)
       .map((entry) => `${entry.label ? `${entry.label} ` : ''}${withUnit(entry.reading!)}`)
       .join(' · ');
-    return { name: loop.name, icon: loop.icon, headline: line(loop.headline) || '—', detail: line(loop.detail), late: readings.some((reading) => !reading.current) };
+    const detailParts = [
+      line(loop.detail),
+      validDp ? `压差 ${withUnit(validDp)}` : '',
+      branchCount > 0 ? `${branchCount} 条并联支路` : '',
+    ].filter(Boolean);
+    return { name: loop.name, icon: loop.icon, headline: line(loop.headline) || '—', detail: detailParts.join(' · '), late: readings.some((reading) => !reading.current) };
   });
+}
+
+const BRANCH_DEVICE_KEYS: readonly string[] = [
+  'chiller.leaving_chilled_water_temperature',
+  'chiller.compressor_load',
+  'chiller.power',
+  'chwp.frequency',
+  'cwp.frequency',
+  'vfd.frequency_feedback',
+  'chwp.flow_rate',
+  'cwp.flow_rate',
+  'chwp.power',
+  'cwp.power',
+  'cooling_tower.fan_speed',
+  'cooling_tower.leaving_water_temperature',
+  'valve.open_state',
+  'valve.position_feedback',
+  'dp_sensor.differential_pressure',
+  'header.differential_pressure',
+  'branch.flow_rate',
+  'btu_meter.flow_rate',
+  'hvac_meter.active_power',
+];
+
+function presentBranchDevice(device: PlantDevice) {
+  const valveState = device.reading('valve.open_state');
+  const status = valveState && !neverRead(valveState) && valveState.display !== '—' && device.connection !== 'OFFLINE'
+    ? { label: valveState.display, tone: (valveState.display === '全开' ? 'running' : 'neutral') as StatusTone }
+    : deviceStatus(device);
+  const metrics = BRANCH_DEVICE_KEYS
+    .map((key) => device.reading(key))
+    .filter((reading): reading is PlantReading => reading !== null && !neverRead(reading))
+    .slice(0, 3)
+    .map((reading) => `${reading.label} ${withUnit(reading)}`)
+    .join(' · ');
+  return {
+    deviceId: device.deviceId,
+    name: device.name,
+    status,
+    metrics,
+  };
+}
+
+function presentBranches(branches: readonly ParallelBranch[]) {
+  return branches.map((branch) => ({
+    key: branch.key,
+    loopLabel: branch.loopLabel,
+    branchCode: branch.branchCode,
+    summary: branch.equipmentCount > 0
+      ? `${branch.runningCount} / ${branch.equipmentCount} 台运行`
+      : `${branch.devices.length} 台设备`,
+    hasAlert: branch.hasAlert,
+    devices: branch.devices.map(presentBranchDevice),
+  }));
 }
 
 export function presentRealtime(plant: Plant) {
@@ -201,6 +269,7 @@ export function presentRealtime(plant: Plant) {
     ],
     copNote: copNote(plant),
     loops: loops(plant),
+    branches: presentBranches(plant.branches),
   };
 }
 
@@ -338,13 +407,13 @@ export const needsAttention = (device: PlantDevice) => device.connection === 'OF
 // The reading a row leads with: a machine's power (a pump without a power reading, its flow), else the first of its role's key readings (the web's KEY_READINGS).
 const LEAD_KEYS: Readonly<Record<PlantCategory, readonly string[]>> = {
   CHILLER: ['chiller.power'],
-  CHILLED_WATER_PUMP: ['chwp.power', 'chwp.flow_rate'],
-  COOLING_WATER_PUMP: ['cwp.power', 'cwp.flow_rate'],
+  CHILLED_WATER_PUMP: ['chwp.power', 'chwp.flow_rate', 'chwp.frequency'],
+  COOLING_WATER_PUMP: ['cwp.power', 'cwp.flow_rate', 'cwp.frequency'],
   COOLING_TOWER: ['cooling_tower.power'],
-  METER: ['hvac_meter.active_power', 'btu_meter.instant_cooling_capacity', 'btu_meter.flow_rate'],
+  METER: ['hvac_meter.active_power', 'btu_meter.instant_cooling_capacity', 'btu_meter.flow_rate', 'dp_sensor.differential_pressure', 'header.differential_pressure', 'branch.flow_rate'],
   WEATHER: ['weather.ambient_dry_bulb_temperature'],
   ZONE: ['zone.temperature', 'zone.banquet_temperature'],
-  ACQUISITION: [],
+  ACQUISITION: ['valve.open_state', 'valve.position_feedback', 'vfd.frequency_feedback'],
   OTHER: [],
 };
 
@@ -354,6 +423,8 @@ const DETAIL_KEYS: Partial<Record<PlantCategory, readonly string[]>> = {
   CHILLED_WATER_PUMP: ['chwp.flow_rate', 'chwp.frequency'],
   COOLING_WATER_PUMP: ['cwp.flow_rate', 'cwp.frequency'],
   COOLING_TOWER: ['cooling_tower.leaving_water_temperature', 'cooling_tower.fan_speed'],
+  ACQUISITION: ['valve.position_feedback', 'vfd.frequency_feedback'],
+  METER: ['branch.flow_rate', 'dp_sensor.differential_pressure'],
 };
 
 /** A point the device has never reported (or reported only rejected values for). */
@@ -369,8 +440,8 @@ function leadReading(device: PlantDevice): PlantReading | null {
 }
 
 function deviceRow(device: PlantDevice) {
-  const hasRole = LEAD_KEYS[device.category].length > 0;
   const lead = leadReading(device);
+  const hasRole = lead !== null || LEAD_KEYS[device.category].filter((key) => !key.startsWith('valve.') && !key.startsWith('vfd.')).length > 0;
   // A device without a role has no one reading to lead with, so its row counts its readings instead.
   const facts = hasRole
     ? (DETAIL_KEYS[device.category] ?? [])
@@ -385,12 +456,13 @@ function deviceRow(device: PlantDevice) {
   // A meter or sensor never runs: an online one needs no label, only trouble does. One that never
   // reported says only 没有读数, without 在线 or a dash beside it.
   const silent = device.latestSampleAt === null;
+  const showValue = hasRole && !silent;
   return {
     deviceId: device.deviceId,
     name: device.name,
     status: (silent || !EQUIPMENT_CATEGORIES.has(device.category)) && status.label === '在线' ? null : status,
-    value: hasRole && !silent ? (lead === null ? '—' : figure(lead)) : '',
-    unit: lead?.unit ?? '',
+    value: showValue ? (lead === null ? '—' : figure(lead)) : '',
+    unit: showValue ? (lead?.unit ?? '') : '',
     detail: [...facts, ...notes].join(' · '),
   };
 }
@@ -404,17 +476,51 @@ const FILTERS: readonly { readonly key: DeviceFilter; readonly label: string; re
   { key: 'attention', label: '需关注', keeps: needsAttention },
 ];
 
-/** The device list under a filter; the page shows its own note for a Site without devices. */
+/** The device list under a filter; falls back to category grouping when no parallel branches are configured. */
 export function presentDevices(plant: Plant, filter: DeviceFilter) {
   const { keeps, label } = FILTERS.find((each) => each.key === filter)!;
   const devices = listed(plant);
-  const equipmentDevices = devices.filter((device) => EQUIPMENT_CATEGORIES.has(device.category));
-  const others = devices.filter((device) => !EQUIPMENT_CATEGORIES.has(device.category));
-  const offline = others.filter((device) => device.connection === 'OFFLINE').length;
-  const groups = [
-    { title: '冷站主设备', caption: `${equipmentDevices.length} 台 · ${equipmentDevices.filter(isRunning).length} 台运行`, devices: equipmentDevices },
-    { title: '计量和环境', caption: `${others.length} 台 · ${offline === 0 ? '全部在线' : `${offline} 台离线`}`, devices: others },
-  ]
+  const rawGroups: { readonly title: string; readonly caption: string; readonly devices: readonly PlantDevice[] }[] = [];
+  if (plant.branches.length > 0) {
+    const branchedIds = new Set<string>();
+    for (const branch of plant.branches) {
+      for (const device of branch.devices) branchedIds.add(device.deviceId);
+      const caption = branch.equipmentCount > 0
+        ? `${branch.devices.length} 台 · ${branch.runningCount} 台运行`
+        : `${branch.devices.length} 台设备`;
+      rawGroups.push({
+        title: `${branch.loopLabel} · 支路 ${branch.branchCode}`,
+        caption,
+        devices: branch.devices,
+      });
+    }
+    const unbranchedEquip = devices.filter((device) => !branchedIds.has(device.deviceId) && EQUIPMENT_CATEGORIES.has(device.category));
+    const unbranchedOthers = devices.filter((device) => !branchedIds.has(device.deviceId) && !EQUIPMENT_CATEGORIES.has(device.category));
+    if (unbranchedEquip.length > 0) {
+      rawGroups.push({
+        title: '冷站主设备',
+        caption: `${unbranchedEquip.length} 台 · ${unbranchedEquip.filter(isRunning).length} 台运行`,
+        devices: unbranchedEquip,
+      });
+    }
+    if (unbranchedOthers.length > 0) {
+      const offline = unbranchedOthers.filter((device) => device.connection === 'OFFLINE').length;
+      rawGroups.push({
+        title: '计量和环境',
+        caption: `${unbranchedOthers.length} 台 · ${offline === 0 ? '全部在线' : `${offline} 台离线`}`,
+        devices: unbranchedOthers,
+      });
+    }
+  } else {
+    const equipmentDevices = devices.filter((device) => EQUIPMENT_CATEGORIES.has(device.category));
+    const others = devices.filter((device) => !EQUIPMENT_CATEGORIES.has(device.category));
+    const offline = others.filter((device) => device.connection === 'OFFLINE').length;
+    rawGroups.push(
+      { title: '冷站主设备', caption: `${equipmentDevices.length} 台 · ${equipmentDevices.filter(isRunning).length} 台运行`, devices: equipmentDevices },
+      { title: '计量和环境', caption: `${others.length} 台 · ${offline === 0 ? '全部在线' : `${offline} 台离线`}`, devices: others },
+    );
+  }
+  const groups = rawGroups
     .map((group) => ({ ...group, devices: group.devices.filter(keeps).map(deviceRow) }))
     .filter((group) => group.devices.length > 0);
   return {

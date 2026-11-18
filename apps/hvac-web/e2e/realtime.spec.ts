@@ -216,3 +216,98 @@ test('displays banquet indoor temperature and wireless concentrator telemetry wi
     await page.screenshot({ path: process.env.PR1_LANE10_SCREENSHOT, fullPage: true });
   }
 });
+
+test('displays hydraulic loops and parallel branch equipment without horizontal overflow at 1440x900', async ({ page, gateway }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const nowIso = new Date().toISOString();
+  const baseAsset = gateway.assetModel.assets.find((asset: { assetType: string }) => asset.assetType === 'CHILLER');
+  const chwpAsset = gateway.assetModel.assets.find((asset: { assetType: string }) => asset.assetType === 'CHILLED_WATER_PUMP');
+  const cwpAsset = gateway.assetModel.assets.find((asset: { assetType: string }) => asset.assetType === 'COOLING_WATER_PUMP');
+  const baseDevice = gateway.assetModel.devices.find((device: { deviceType: string }) => device.deviceType === 'PUMP_CONTROLLER');
+  const basePoint = gateway.assetModel.telemetryPoints[0];
+  const baseSnap = gateway.snapshots.items.find((item: { status: string }) => item.status === 'OK')?.snapshot;
+  expect(baseAsset && chwpAsset && cwpAsset && baseDevice && basePoint && baseSnap).toBeTruthy();
+
+  const valveAssetId = '018f3e00-3000-7000-8000-000000000091';
+  const valveDeviceId = '018f3e00-4000-7000-8000-000000000091';
+  const dpAssetId = '018f3e00-3000-7000-8000-000000000092';
+  const dpDeviceId = '018f3e00-4000-7000-8000-000000000092';
+
+  const nextAssets = gateway.assetModel.assets.map((asset: { id: string }) => {
+    if (asset.id === baseAsset.id || asset.id === chwpAsset.id) return { ...asset, waterLoop: 'CHILLED_WATER', branchCode: 'CH-A' };
+    if (asset.id === cwpAsset.id) return { ...asset, waterLoop: 'CONDENSER_WATER', branchCode: 'CW-A' };
+    return asset;
+  });
+  nextAssets.push(
+    { ...baseAsset, id: valveAssetId, code: 'mv-chw-a', displayName: 'CH-A 电动隔离阀', assetType: 'MOTORIZED_VALVE', waterLoop: 'CHILLED_WATER', branchCode: 'CH-A' },
+    { ...baseAsset, id: dpAssetId, code: 'chw-dp-01', displayName: '冷冻总管压差传感器', assetType: 'DIFFERENTIAL_PRESSURE_SENSOR', waterLoop: 'CHILLED_WATER', branchCode: null },
+  );
+
+  const nextDevices = [
+    ...gateway.assetModel.devices,
+    { ...baseDevice, id: valveDeviceId, code: 'mv-chw-a', displayName: 'CH-A 电动隔离阀', deviceType: 'MOTORIZED_VALVE' },
+    { ...baseDevice, id: dpDeviceId, code: 'chw-dp-01', displayName: '冷冻总管压差传感器', deviceType: 'DIFFERENTIAL_PRESSURE_SENSOR' },
+  ];
+  const nextPoints = [
+    ...gateway.assetModel.telemetryPoints,
+    { ...basePoint, id: '018f3e00-5000-7000-8000-000000000091', reportingDeviceId: valveDeviceId, pointCode: 'valve_open_state', sourceKey: 'valve.open_state', displayName: '阀门状态', pointType: 'STATE', valueType: 'STRING', unit: null, writable: false, status: 'ACTIVE' },
+    { ...basePoint, id: '018f3e00-5000-7000-8000-000000000092', reportingDeviceId: valveDeviceId, pointCode: 'valve_position', sourceKey: 'valve.position_feedback', displayName: '阀门开度反馈', pointType: 'TELEMETRY', valueType: 'NUMBER', unit: '%', writable: false, status: 'ACTIVE' },
+    { ...basePoint, id: '018f3e00-5000-7000-8000-000000000093', reportingDeviceId: dpDeviceId, pointCode: 'header_dp', sourceKey: 'dp_sensor.differential_pressure', displayName: '总管压差', pointType: 'TELEMETRY', valueType: 'NUMBER', unit: 'kPa', writable: false, status: 'ACTIVE' },
+  ];
+  const nextRelationships = [
+    ...gateway.assetModel.relationships,
+    { id: '018f3e00-6400-7000-8000-000000000091', tenantId: baseAsset.tenantId, siteId: baseAsset.siteId, fromType: 'DEVICE', fromId: valveDeviceId, toType: 'ASSET', toId: valveAssetId, role: 'PRIMARY_CONTROLLER', status: 'ACTIVE', validFrom: nowIso, validTo: null, revision: 1, createdAt: nowIso, updatedAt: nowIso },
+    { id: '018f3e00-6400-7000-8000-000000000092', tenantId: baseAsset.tenantId, siteId: baseAsset.siteId, fromType: 'DEVICE', fromId: dpDeviceId, toType: 'ASSET', toId: dpAssetId, role: 'MEASURES', status: 'ACTIVE', validFrom: nowIso, validTo: null, revision: 1, createdAt: nowIso, updatedAt: nowIso },
+    { id: '018f3e00-6600-7000-8000-000000000093', tenantId: baseAsset.tenantId, siteId: baseAsset.siteId, fromType: 'ASSET', fromId: valveAssetId, toType: 'ASSET', toId: baseAsset.id, role: 'ISOLATES', status: 'ACTIVE', validFrom: nowIso, validTo: null, revision: 1, createdAt: nowIso, updatedAt: nowIso },
+  ];
+
+  gateway.assetModel = {
+    ...gateway.assetModel,
+    assets: nextAssets,
+    devices: nextDevices,
+    telemetryPoints: nextPoints,
+    relationships: nextRelationships,
+    counts: { ...gateway.assetModel.counts, assets: nextAssets.length, deviceEndpoints: nextDevices.length, points: nextPoints.length },
+  };
+  const sampleValue = baseSnap.values[0];
+  gateway.snapshots.items.push(
+    {
+      requestId: 'e2e-valve',
+      deviceId: valveDeviceId,
+      status: 'OK',
+      snapshot: {
+        ...baseSnap,
+        deviceId: valveDeviceId,
+        values: [
+          { ...sampleValue, key: 'valve_open_state', value: 'OPEN', valueType: 'STRING', unit: null },
+          { ...sampleValue, key: 'valve_position', value: 100, valueType: 'NUMBER', unit: '%' },
+        ],
+      },
+    },
+    {
+      requestId: 'e2e-dp',
+      deviceId: dpDeviceId,
+      status: 'OK',
+      snapshot: {
+        ...baseSnap,
+        deviceId: dpDeviceId,
+        values: [{ ...sampleValue, key: 'header_dp', value: 86.4, valueType: 'NUMBER', unit: 'kPa' }],
+      },
+    },
+  );
+
+  await page.goto(`/operations/realtime?site=${SITE_ID}`);
+  const loops = page.getByRole('table', { name: '水系统与室内外环境' });
+  await expect(loops.getByRole('row', { name: /冷冻水/ })).toContainText('1 条并联支路');
+  await expect(loops.getByRole('row', { name: /冷冻水/ })).toContainText('86.4');
+
+  const branches = page.getByRole('region', { name: '水力并联支路' });
+  await expect(branches).toBeVisible();
+  await expect(branches).toContainText('支路 CH-A');
+  await expect(branches).toContainText('冷冻水环路');
+  await expect(branches).toContainText('CH-A 电动隔离阀');
+  await expect(branches).toContainText('全开');
+  await expect(branches).toContainText('支路 CW-A');
+  await expect(branches).toContainText('冷却水环路');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});

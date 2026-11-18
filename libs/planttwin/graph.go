@@ -12,23 +12,32 @@ var (
 	ErrInvalidTopology = errors.New("invalid hydraulic edge")
 )
 
-// HydraulicGraph stores directed SERVES relationships among plant units and loops.
+// HydraulicGraph stores directed SERVES, ISOLATES, and FEEDS_HEADER relationships among plant units and loops.
 type HydraulicGraph struct {
-	unitsByKey map[string]PlantUnit
-	idByKey    map[string]string
-	downstream map[string][]string
-	upstream   map[string][]string
-	edgeCount  int
+	unitsByKey    map[string]PlantUnit
+	idByKey       map[string]string
+	downstream    map[string][]string
+	upstream      map[string][]string
+	isolates      map[string][]string
+	isolatedBy    map[string][]string
+	feedsHeader   map[string][]string
+	headerFeeders map[string][]string
+	edgeCount     int
+	hydraulicCnt  int
 }
 
-// NewHydraulicGraph validates SERVES edges for self-loops and cycles and builds
-// deterministic upstream and downstream adjacency indices.
+// NewHydraulicGraph validates hydraulic edges for self-loops and flow cycles and builds
+// deterministic adjacency indices for SERVES, ISOLATES, and FEEDS_HEADER relationships.
 func NewHydraulicGraph(units []PlantUnit, edges []HydraulicEdge) (*HydraulicGraph, error) {
 	g := &HydraulicGraph{
-		unitsByKey: make(map[string]PlantUnit, len(units)),
-		idByKey:    make(map[string]string, len(units)),
-		downstream: make(map[string][]string),
-		upstream:   make(map[string][]string),
+		unitsByKey:    make(map[string]PlantUnit, len(units)),
+		idByKey:       make(map[string]string, len(units)),
+		downstream:    make(map[string][]string),
+		upstream:      make(map[string][]string),
+		isolates:      make(map[string][]string),
+		isolatedBy:    make(map[string][]string),
+		feedsHeader:   make(map[string][]string),
+		headerFeeders: make(map[string][]string),
 	}
 	for _, u := range units {
 		key := normalizeID(u.AssetID)
@@ -42,7 +51,7 @@ func NewHydraulicGraph(units []PlantUnit, edges []HydraulicEdge) (*HydraulicGrap
 	seenEdge := make(map[string]struct{}, len(edges))
 	for _, edge := range edges {
 		role := strings.ToUpper(strings.TrimSpace(edge.RelationshipRole))
-		if role != RelationshipServes {
+		if !IsValidRelationshipRole(role) {
 			continue
 		}
 		fromRaw := strings.TrimSpace(edge.FromAssetID)
@@ -50,10 +59,10 @@ func NewHydraulicGraph(units []PlantUnit, edges []HydraulicEdge) (*HydraulicGrap
 		fromKey := normalizeID(fromRaw)
 		toKey := normalizeID(toRaw)
 		if fromKey == "" || toKey == "" {
-			return nil, fmt.Errorf("%w: empty asset ID in SERVES edge", ErrInvalidTopology)
+			return nil, fmt.Errorf("%w: empty asset ID in %s edge", ErrInvalidTopology, role)
 		}
 		if fromKey == toKey {
-			return nil, fmt.Errorf("%w: self-loop on asset %s", ErrHydraulicCycle, fromRaw)
+			return nil, fmt.Errorf("%w: self-loop on asset %s (%s)", ErrHydraulicCycle, fromRaw, role)
 		}
 		if _, exists := g.idByKey[fromKey]; !exists {
 			g.idByKey[fromKey] = fromRaw
@@ -61,23 +70,31 @@ func NewHydraulicGraph(units []PlantUnit, edges []HydraulicEdge) (*HydraulicGrap
 		if _, exists := g.idByKey[toKey]; !exists {
 			g.idByKey[toKey] = toRaw
 		}
-		dedupKey := fromKey + "\x00" + toKey
+		dedupKey := role + "\x00" + fromKey + "\x00" + toKey
 		if _, dup := seenEdge[dedupKey]; dup {
 			continue
 		}
 		seenEdge[dedupKey] = struct{}{}
-		g.downstream[fromKey] = append(g.downstream[fromKey], toKey)
-		g.upstream[toKey] = append(g.upstream[toKey], fromKey)
-		g.edgeCount++
+		g.hydraulicCnt++
+		switch role {
+		case RelationshipServes:
+			g.downstream[fromKey] = append(g.downstream[fromKey], toKey)
+			g.upstream[toKey] = append(g.upstream[toKey], fromKey)
+			g.edgeCount++
+		case RelationshipIsolates:
+			g.isolates[fromKey] = append(g.isolates[fromKey], toKey)
+			g.isolatedBy[toKey] = append(g.isolatedBy[toKey], fromKey)
+		case RelationshipFeedsHeader:
+			g.feedsHeader[fromKey] = append(g.feedsHeader[fromKey], toKey)
+			g.headerFeeders[toKey] = append(g.headerFeeders[toKey], fromKey)
+		}
 	}
 
-	for key, list := range g.downstream {
-		sort.Strings(list)
-		g.downstream[key] = list
-	}
-	for key, list := range g.upstream {
-		sort.Strings(list)
-		g.upstream[key] = list
+	for _, adj := range []map[string][]string{g.downstream, g.upstream, g.isolates, g.isolatedBy, g.feedsHeader, g.headerFeeders} {
+		for key, list := range adj {
+			sort.Strings(list)
+			adj[key] = list
+		}
 	}
 
 	if err := g.detectCycles(); err != nil {
@@ -87,8 +104,17 @@ func NewHydraulicGraph(units []PlantUnit, edges []HydraulicEdge) (*HydraulicGrap
 }
 
 func (g *HydraulicGraph) detectCycles() error {
-	keys := make([]string, 0, len(g.downstream))
-	for k := range g.downstream {
+	flowAdj := make(map[string][]string, len(g.downstream)+len(g.feedsHeader))
+	for k, list := range g.downstream {
+		flowAdj[k] = append([]string(nil), list...)
+	}
+	for k, list := range g.feedsHeader {
+		flowAdj[k] = append(flowAdj[k], list...)
+		sort.Strings(flowAdj[k])
+	}
+
+	keys := make([]string, 0, len(flowAdj))
+	for k := range flowAdj {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
@@ -97,7 +123,7 @@ func (g *HydraulicGraph) detectCycles() error {
 	var visit func(node string) error
 	visit = func(node string) error {
 		state[node] = 1
-		for _, next := range g.downstream[node] {
+		for _, next := range flowAdj[node] {
 			switch state[next] {
 			case 1:
 				return fmt.Errorf("%w: %s -> %s", ErrHydraulicCycle, g.displayID(node), g.displayID(next))
@@ -131,6 +157,58 @@ func (g *HydraulicGraph) displayID(key string) string {
 // HasExplicitTopology reports whether any SERVES edge is registered.
 func (g *HydraulicGraph) HasExplicitTopology() bool {
 	return g != nil && g.edgeCount > 0
+}
+
+// HasHydraulicTopology reports whether any SERVES, ISOLATES, or FEEDS_HEADER edge is registered.
+func (g *HydraulicGraph) HasHydraulicTopology() bool {
+	return g != nil && g.hydraulicCnt > 0
+}
+
+// Isolates returns asset IDs directly isolated by valveAssetID (valveAssetID -ISOLATES-> Y).
+func (g *HydraulicGraph) Isolates(valveAssetID string) []string {
+	if g == nil {
+		return nil
+	}
+	return g.copyAdjList(g.isolates, valveAssetID)
+}
+
+// IsolatedBy returns isolation valve asset IDs that isolate assetID (valve -ISOLATES-> assetID).
+func (g *HydraulicGraph) IsolatedBy(assetID string) []string {
+	if g == nil {
+		return nil
+	}
+	return g.copyAdjList(g.isolatedBy, assetID)
+}
+
+// FeedsHeader returns header/loop asset IDs fed directly by assetID (assetID -FEEDS_HEADER-> header).
+func (g *HydraulicGraph) FeedsHeader(assetID string) []string {
+	if g == nil {
+		return nil
+	}
+	return g.copyAdjList(g.feedsHeader, assetID)
+}
+
+// HeaderFeeders returns asset IDs that directly feed headerAssetID (X -FEEDS_HEADER-> headerAssetID).
+func (g *HydraulicGraph) HeaderFeeders(headerAssetID string) []string {
+	if g == nil {
+		return nil
+	}
+	return g.copyAdjList(g.headerFeeders, headerAssetID)
+}
+
+func (g *HydraulicGraph) copyAdjList(adj map[string][]string, assetID string) []string {
+	if g == nil {
+		return nil
+	}
+	keys := adj[normalizeID(assetID)]
+	if len(keys) == 0 {
+		return nil
+	}
+	out := make([]string, len(keys))
+	for i, k := range keys {
+		out[i] = g.displayID(k)
+	}
+	return out
 }
 
 // Upstream returns asset IDs X that directly SERVES assetID (X -> assetID).
@@ -214,10 +292,25 @@ func (g *HydraulicGraph) CoolingLoopsForChiller(chillerAssetID string) []string 
 	if g == nil {
 		return nil
 	}
-	downstream := g.ReachableDownstream(chillerAssetID)
+	seen := make(map[string]struct{})
+	var candidates []string
+	for _, id := range g.ReachableDownstream(chillerAssetID) {
+		key := normalizeID(id)
+		if _, dup := seen[key]; !dup {
+			seen[key] = struct{}{}
+			candidates = append(candidates, id)
+		}
+	}
+	for _, id := range g.FeedsHeader(chillerAssetID) {
+		key := normalizeID(id)
+		if _, dup := seen[key]; !dup {
+			seen[key] = struct{}{}
+			candidates = append(candidates, id)
+		}
+	}
 	var specific []string
 	var generic []string
-	for _, id := range downstream {
+	for _, id := range candidates {
 		u, ok := g.unitsByKey[normalizeID(id)]
 		if !ok {
 			continue

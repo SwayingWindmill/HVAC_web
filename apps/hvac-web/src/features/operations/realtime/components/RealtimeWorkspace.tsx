@@ -25,11 +25,11 @@ import { DataGapBanner } from '@/features/data-gaps/DataGapBanner';
 import { dataGapsKeys } from '@/features/data-gaps/query';
 import { formatCompactTime, formatDecimal } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
-import { coolingUncertaintyText, copUncertaintyText, equipmentStatus, plantReading, probeOffsetText, type PlantView } from '../plant-model';
+import { coolingUncertaintyText, copUncertaintyText, equipmentStatus, loopDifferentialPressure, plantReading, probeOffsetText, type ParallelBranch, type PlantDevice, type PlantReading, type PlantView, type WaterLoopKind } from '../plant-model';
 import { useRealtimePlant } from '../use-realtime-plant';
 import { usePlantHistory } from '../use-plant-history';
 import { copSeries, COOLING_KEY, hourAgo, POWER_KEY } from '../plant-trend';
-import { formatClock, LiveIndicator, LowConfidenceBadge, ReadingMetric, ReadingValue } from '../device-presentation';
+import { deviceStatus, formatClock, LiveIndicator, LowConfidenceBadge, ReadingMetric, ReadingValue } from '../device-presentation';
 import { buildTimeSlots, fillGaugeSlots, fillScalarSlots } from '../../trends/timeline';
 
 const pageRoute = getRouteApi('/_app/_site/operations/realtime');
@@ -312,15 +312,124 @@ function RecentEvents({ plant, siteId, myId, timeZone, assetModel }: {
 
 const LOOPS: readonly {
   readonly name: string;
+  readonly waterLoop?: WaterLoopKind;
   readonly tone: string;
   readonly main: readonly [string, string];
   readonly others: readonly (readonly [string, string])[];
 }[] = [
-  { name: '冷冻水', tone: 'bg-chart-1', main: ['温差', 'btu_meter.temperature_difference'], others: [['供', 'btu_meter.supply_water_temperature'], ['回', 'btu_meter.return_water_temperature'], ['流量', 'btu_meter.flow_rate']] },
-  { name: '冷却水', tone: 'bg-chart-2', main: ['与湿球差', 'cooling_tower.approach_temperature'], others: [['出塔', 'cooling_tower.leaving_water_temperature'], ['进塔', 'cooling_tower.entering_water_temperature'], ['流量', 'cwp.flow_rate']] },
+  { name: '冷冻水', waterLoop: 'CHILLED_WATER', tone: 'bg-chart-1', main: ['温差', 'btu_meter.temperature_difference'], others: [['供', 'btu_meter.supply_water_temperature'], ['回', 'btu_meter.return_water_temperature'], ['流量', 'btu_meter.flow_rate']] },
+  { name: '冷却水', waterLoop: 'CONDENSER_WATER', tone: 'bg-chart-2', main: ['与湿球差', 'cooling_tower.approach_temperature'], others: [['出塔', 'cooling_tower.leaving_water_temperature'], ['进塔', 'cooling_tower.entering_water_temperature'], ['流量', 'cwp.flow_rate']] },
   { name: '室内', tone: 'bg-subtle-foreground', main: ['温度', 'zone.temperature'], others: [['宴会厅', 'zone.banquet_temperature']] },
   { name: '室外', tone: 'bg-subtle-foreground', main: ['干球', 'weather.ambient_dry_bulb_temperature'], others: [['湿球', 'weather.ambient_wet_bulb_temperature'], ['相对湿度', 'weather.relative_humidity']] },
 ];
+
+const BRANCH_DEVICE_KEYS: readonly string[] = [
+  'chiller.leaving_chilled_water_temperature',
+  'chiller.compressor_load',
+  'chiller.power',
+  'chwp.frequency',
+  'cwp.frequency',
+  'vfd.frequency_feedback',
+  'chwp.flow_rate',
+  'cwp.flow_rate',
+  'chwp.power',
+  'cwp.power',
+  'cooling_tower.fan_speed',
+  'cooling_tower.leaving_water_temperature',
+  'valve.open_state',
+  'valve.position_feedback',
+  'dp_sensor.differential_pressure',
+  'header.differential_pressure',
+  'branch.flow_rate',
+  'btu_meter.flow_rate',
+  'hvac_meter.active_power',
+];
+
+function branchDeviceReadings(device: PlantDevice): readonly PlantReading[] {
+  const picked: PlantReading[] = [];
+  for (const key of BRANCH_DEVICE_KEYS) {
+    const reading = device.reading(key);
+    if (reading) picked.push(reading);
+    if (picked.length >= 3) break;
+  }
+  return picked;
+}
+
+function branchDeviceBadge(device: PlantDevice): { readonly toneClass: string; readonly label: string } {
+  const valveState = device.reading('valve.open_state');
+  if (valveState && valveState.state === 'PRESENT' && device.connection !== 'OFFLINE') {
+    const open = valveState.display === '全开';
+    return {
+      toneClass: open ? 'bg-success-soft text-success-text' : 'bg-muted text-muted-foreground',
+      label: valveState.display,
+    };
+  }
+  const status = deviceStatus(device);
+  const toneClass = status.tone === 'running' || status.tone === 'success'
+    ? 'bg-success-soft text-success-text'
+    : status.tone === 'alarm'
+      ? 'bg-destructive-soft text-destructive-text'
+      : 'bg-muted text-muted-foreground';
+  return { toneClass, label: status.label };
+}
+
+function ParallelBranchCard({ branch }: { readonly branch: ParallelBranch }) {
+  const dotTone = branch.waterLoop === 'CONDENSER_WATER' ? 'bg-chart-2' : 'bg-chart-1';
+  const summary = branch.equipmentCount > 0
+    ? `${branch.runningCount} / ${branch.equipmentCount} 台运行`
+    : `${branch.devices.length} 台设备`;
+  return (
+    <div className="flex flex-col gap-2.5 rounded-lg border border-divider bg-card p-3.5">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <i className={cn('h-[3px] w-2.5 shrink-0 rounded-full', dotTone)} aria-hidden="true" />
+          <span className="truncate text-sm font-semibold">{`支路 ${branch.branchCode}`}</span>
+          <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px] font-medium text-secondary-foreground">{branch.loopLabel}</span>
+        </div>
+        <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground tabular-nums">
+          {branch.hasAlert ? <span className="rounded bg-warning-soft px-1.5 py-0.5 text-[11px] font-medium text-warning-text">需关注</span> : null}
+          <span>{summary}</span>
+        </div>
+      </div>
+      <div className="flex flex-col divide-y divide-divider">
+        {branch.devices.map((device) => {
+          const badge = branchDeviceBadge(device);
+          const readings = branchDeviceReadings(device);
+          return (
+            <div key={device.deviceId} className="flex items-center justify-between gap-3 py-2 first:pt-0.5 last:pb-0">
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="truncate text-xs font-medium">{device.name}</span>
+                <span className={cn('shrink-0 rounded px-1.5 py-0.5 text-[11px] leading-4 font-medium', badge.toneClass)}>{badge.label}</span>
+              </div>
+              <div className="flex shrink-0 flex-wrap items-center justify-end gap-x-3 gap-y-0.5 text-xs">
+                {readings.length === 0 ? <span className="text-muted-foreground">—</span> : readings.map((reading) => (
+                  <span key={reading.label} className="whitespace-nowrap">
+                    <span className="text-muted-foreground">{reading.label} </span>
+                    <ReadingValue reading={reading} />
+                  </span>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ParallelBranchesPanel({ plant }: { readonly plant: PlantView }) {
+  if (plant.branches.length === 0) return null;
+  return (
+    <Panel role="region" aria-label="水力并联支路">
+      <PanelHeader title="水力并联支路" action={<span className="text-xs text-muted-foreground tabular-nums">{plant.branches.length} 条支路</span>} />
+      <div className="grid grid-cols-1 gap-3 p-4 @4xl/main:grid-cols-2">
+        {plant.branches.map((branch) => (
+          <ParallelBranchCard key={branch.key} branch={branch} />
+        ))}
+      </div>
+    </Panel>
+  );
+}
 
 /** The two water loops and the air they serve, each led by the reading an operator checks first. */
 function LoopsTable({ plant, timeZone }: { readonly plant: PlantView; readonly timeZone: string }) {
@@ -344,6 +453,12 @@ function LoopsTable({ plant, timeZone }: { readonly plant: PlantView; readonly t
           const stale = reading ? !reading.current : false;
           const recorded = history.series.get(loop.main[1]) ?? [];
           const values = fillGaugeSlots(slots, recorded).map((slot) => slot.average);
+          const loopDp = loop.waterLoop ? loopDifferentialPressure(plant, loop.waterLoop) : null;
+          const branchCount = loop.waterLoop ? (plant.loopBranches[loop.waterLoop] ?? 0) : 0;
+          const extraOthers: readonly (readonly [string, PlantReading | null])[] = [
+            ...loop.others.map(([label, key]) => [label, plantReading(plant, key)] as const),
+            ...(loopDp ? [['压差', loopDp] as const] : []),
+          ];
           return (
             <div role="row" key={loop.name} className="contents text-sm">
               <span role="cell" className="flex h-[42px] items-center gap-2 border-b border-divider px-4 font-semibold">
@@ -355,8 +470,9 @@ function LoopsTable({ plant, timeZone }: { readonly plant: PlantView; readonly t
                 <span className="text-[15px] font-semibold"><ReadingValue reading={reading} /></span>
               </span>
               <span role="cell" className={cn('flex h-[42px] min-w-0 items-center gap-1 truncate border-b border-divider px-4 text-xs', stale ? 'text-muted-foreground' : 'text-secondary-foreground')}>
-                {loop.others.length === 0 ? '—' : loop.others.map(([label, key], index) => (
-                  <span key={key} className="whitespace-nowrap">{index > 0 ? ' · ' : ''}{label} <ReadingValue reading={plantReading(plant, key)} /></span>
+                {branchCount > 0 ? <span className="mr-1.5 shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px] font-medium text-secondary-foreground tabular-nums">{branchCount} 条并联支路</span> : null}
+                {extraOthers.length === 0 ? '—' : extraOthers.map(([label, itemReading], index) => (
+                  <span key={label} className="whitespace-nowrap">{index > 0 ? ' · ' : ''}{label} <ReadingValue reading={itemReading} /></span>
                 ))}
               </span>
               <span role="cell" className="flex h-[42px] items-center border-b border-divider px-4">
@@ -451,6 +567,7 @@ export function RealtimeWorkspace() {
             <RecentEvents plant={plant} siteId={site.id} myId={principal.principalId} timeZone={site.timezone} assetModel={registry.data?.assetModel} />
           </div>
           <LoopsTable plant={plant} timeZone={site.timezone} />
+          <ParallelBranchesPanel plant={plant} />
         </>
       ) : null}
     </Main>

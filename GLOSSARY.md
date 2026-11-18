@@ -484,19 +484,49 @@ IAM 每次判断允许后签发的短时凭据，只对一次具体的读或写�
 
 ### 语义角色（Semantic Role）
 
-点位对其测量对象承担的物理职责分类（共 11 个固定枚举：`ACTIVE_POWER`、`RUN_STATE`、`CHW_LEAVING_TEMP`、`CHW_ENTERING_TEMP`、`CW_LEAVING_TEMP`、`CW_ENTERING_TEMP`、`SUPPLY_WATER_TEMP`、`RETURN_WATER_TEMP`、`COOLING_LOAD`、`WATER_FLOW`、`ZONE_TEMP`），写在 `core_registry.point_subject_bindings.semantic_role`。让诊断和优化按「测的是什么物理量」找点位，不再要求不同站点用完全相同的点位代码（ADR 0033）。
+点位对其测量或控制对象承担的物理职责分类（共 17 个固定枚举：`ACTIVE_POWER`、`RUN_STATE`、`CHW_LEAVING_TEMP`、`CHW_ENTERING_TEMP`、`CW_LEAVING_TEMP`、`CW_ENTERING_TEMP`、`SUPPLY_WATER_TEMP`、`RETURN_WATER_TEMP`、`COOLING_LOAD`、`WATER_FLOW`、`ZONE_TEMP`、`VALVE_FEEDBACK`、`VALVE_COMMAND`、`VFD_FREQUENCY`、`VFD_FREQUENCY_COMMAND`、`HEADER_DIFF_PRESSURE`、`BRANCH_FLOW`），写在 `core_registry.point_subject_bindings.semantic_role`。让诊断、优化与运行展示按「测的是什么物理量」找点位，不再要求不同站点用完全相同的点位代码（ADR 0033）。
 
 不要说：点位标签、别名映射
 
 ### 水力连接（Hydraulic Connection）
 
-冷站资产之间显式登记的有向水路服务关系（例如 1 号冷冻泵服务于 A 机组、A 机组服务于冷冻水总管，`SERVES`），保存在 `core_registry.asset_relationships`。控制安全联锁与节能停机判断直接读取这条显式关系，不再只靠解析控制器命令元数据猜拓扑。
+冷站资产之间显式登记的有向水路与阀门关系，保存在 `core_registry.asset_relationships`，支持三种角色：`SERVES`（供给/服务下游设备，例如 1 号冷冻泵服务于 A 机组）、`ISOLATES`（支路隔离阀或电动阀切断对应并联支路或机组）与 `FEEDS_HEADER`（机组或并联支路汇入水系统总管）。控制安全联锁与拓扑展示直接读取这条显式关系，不再只靠解析控制器命令元数据猜拓扑。
 
 不要说：联锁拓扑、软连接
 
+### 冷冻水环路（Chilled Water Loop）
+
+冷机蒸发器、冷冻水泵、冷冻水支路阀门及冷冻水供回水总管构成的水循环（`water_loop = 'CHILLED_WATER'`），把冷量从冷机送到末端空调箱和风机盘管。
+
+不要说：二次侧冷媒、冷站主回路
+
+### 冷却水环路（Condenser Water Loop）
+
+冷机冷凝器、冷却水泵与冷却塔之间循环散热的水路（`water_loop = 'CONDENSER_WATER'`；独立冷却塔外循环可标为 `COOLING_TOWER_LOOP`），把冷机排出的热量带到冷却塔散向室外空气。
+
+不要说：热排环路、散热水侧
+
+### 并联支路（Parallel Branch）
+
+同一水力环路中并列接入供回水总管的独立设备通路（用资产上的 `branch_code` 标识，例如 `CH-A` 支路串联 A 冷机、1#冷冻泵、支路电动隔离阀和支路流量计）。投运一台冷机时通常联动开启同一支路上的水泵并打开对应隔离阀。
+
+不要说：分支集群、水路槽位
+
+### 支路隔离阀（Branch Isolation Valve）
+
+装在某条并联支路上、随对应冷机或水泵启停而打开或关闭的电动阀（资产类型 `MOTORIZED_VALVE` 或 `ISOLATION_VALVE`），通过 `ISOLATES` 关系指向被隔离设备，并可绑定 `VALVE_FEEDBACK`（开关到位/开度反馈）和 `VALVE_COMMAND`（开关指令）点位。
+
+不要说：旁通阀、末端风阀
+
+### 压差测点（Differential Pressure Point）
+
+装在冷冻水或冷却水供回水总管之间用于衡量管网阻力和变频泵调节依据的压力传感器（资产类型 `DIFFERENTIAL_PRESSURE_SENSOR`，点位语义角色 `HEADER_DIFF_PRESSURE`）。
+
+不要说：泵头压力、水阻探头
+
 ### 设备群孪生（Plant Twin）
 
-平台在每次诊断或优化计算前从只读端口视图（`core_registry.plant_twin_*_v1`）拼出的站点只读运行图谱：包含站点控制模式、资产台账与铭牌、资产锁定、活动设备、点位语义角色、水力连接、周运行计划和已批准例外安排（ADR 0033）。
+平台在每次诊断或优化计算前从只读端口视图（`core_registry.plant_twin_*_v1`，含水力资产关系视图 `plant_twin_asset_relationships_v1`）拼出的站点只读运行图谱：包含站点控制模式、资产名称与铭牌（及可选的 `water_loop`、`branch_code`）、资产锁定、活动设备、点位语义角色、水力连接、周运行计划和已批准例外安排（ADR 0033）。
 
 不要说：冷站影子、静态档案快照
 

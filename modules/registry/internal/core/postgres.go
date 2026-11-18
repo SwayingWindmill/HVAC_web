@@ -661,7 +661,7 @@ func scanSite(row rowScanner) (Site, error) {
 }
 
 // assetColumns are what scanAsset reads, in its order.
-const assetColumns = `id::text, tenant_id::text, site_id::text, code, display_name, asset_type, status, revision, created_at, updated_at, rated_power, rated_capacity, tags`
+const assetColumns = `id::text, tenant_id::text, site_id::text, code, display_name, asset_type, status, revision, created_at, updated_at, rated_power, rated_capacity, tags, water_loop, branch_code`
 
 // deviceColumns are what scanDevice reads, in its order.
 const deviceColumns = `id::text, tenant_id::text, site_id::text, code, display_name, device_type, status, revision, created_at, updated_at, tags`
@@ -671,7 +671,7 @@ func scanAsset(row rowScanner) (Asset, error) {
 	var createdAt time.Time
 	var updatedAt time.Time
 	var tagsRaw []byte
-	if err := row.Scan(&item.ID, &item.TenantID, &item.SiteID, &item.Code, &item.DisplayName, &item.AssetType, &item.Status, &item.Revision, &createdAt, &updatedAt, &item.RatedPower, &item.RatedCapacity, &tagsRaw); err != nil {
+	if err := row.Scan(&item.ID, &item.TenantID, &item.SiteID, &item.Code, &item.DisplayName, &item.AssetType, &item.Status, &item.Revision, &createdAt, &updatedAt, &item.RatedPower, &item.RatedCapacity, &tagsRaw, &item.WaterLoop, &item.BranchCode); err != nil {
 		return Asset{}, err
 	}
 	tags, err := unmarshalTags(tagsRaw)

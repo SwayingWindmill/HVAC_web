@@ -59,7 +59,7 @@ export function useRealtimePlant() {
     () => assets.rows.map((row) => projectAssetsRealtimeRow(row, realtime.states.get(row.device.id) ?? null).row),
     [assets.rows, realtime.states],
   );
-  const plant = useMemo(() => buildPlantView(rows), [rows]);
+  const plant = useMemo(() => buildPlantView(rows, assets.registry.data?.assetModel), [assets.registry.data?.assetModel, rows]);
 
   const liveCount = [...realtime.states.values()].filter((state) => state.status === 'live').length;
   const mode: PlantLiveMode = realtime.phase === 'active' && liveCount > 0
