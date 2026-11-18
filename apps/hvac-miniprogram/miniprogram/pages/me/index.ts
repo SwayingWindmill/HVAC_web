@@ -120,6 +120,7 @@ Page({
       // A Session the platform already ended cannot be ended again.
     }
     signOutLocally();
+    clearPlantCache();
     wx.reLaunch({ url: '/pages/login/index' });
   },
 });
