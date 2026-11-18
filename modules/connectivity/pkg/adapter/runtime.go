@@ -302,7 +302,7 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 		return runtime.runWithSharedSession(ctx, runContext, runCancel, workerContext, workerCancel, heartbeatCancel, &heartbeatWG, &drained)
 	}
 
-	receiveMaximum := runtime.config.MQTT.effectiveReceiveMaximum()
+	receiveMaximum := runtime.config.MQTT.EffectiveReceiveMaximum()
 	clientConfig := autopaho.ClientConfig{
 		ServerUrls:                    []*url.URL{brokerURL},
 		TlsCfg:                        tlsConfig,
@@ -1018,10 +1018,10 @@ func (runtime *Runtime) enqueue(ctx context.Context, connectionClosed <-chan str
 			if quarantineUplink != nil {
 				runtime.recordRateLimitQuarantineAsync(ctx, *quarantineUplink)
 			}
-			// Leave the publish unacknowledged and drop the connection so the broker keeps
-			// QoS 1 messages in its session rather than discarding offline backlog.
-			runtime.closeCurrentConnection()
-			return fmt.Errorf("MQTT gateway %s ingress rate limited", gatewayID)
+			// ACK and isolate the rate-limited burst so one gateway never disconnects healthy
+			// neighbors or concentrator RPC traffic sharing the same MQTT session.
+			runtime.ack(gatewayID, received, ack)
+			return nil
 		}
 	}
 
@@ -1034,7 +1034,7 @@ func (runtime *Runtime) enqueue(ctx context.Context, connectionClosed <-chan str
 		runtime.closeCurrentConnection()
 		return err
 	}
-	result, enqueueErr := mailbox.enqueue(received)
+	result, enqueueErr := mailbox.enqueueAt(received, runtime.now().UTC())
 
 	runtime.queuesMu.Lock()
 	state.enqueuers--
@@ -1187,8 +1187,6 @@ func (runtime *Runtime) closeMailboxes() {
 		runtime.ownedOverflowDir = false
 	} else if runtime.ownedOverflowDir && hasUnconsumed {
 		preservedOwnedDir = runtime.overflowDir
-		// Clear ownership once preserved so idempotent second closeMailboxes calls
-		// in Run's defer cannot wipe out the retained spool directory.
 		runtime.ownedOverflowDir = false
 	}
 	runtime.queuesMu.Unlock()
@@ -1456,7 +1454,11 @@ func (runtime *Runtime) runGatewayTurn(ctx context.Context, turn gatewayTurn, ac
 		}
 		messages = make([]UplinkMessage, len(batch))
 		for index, item := range batch {
-			messages[index] = UplinkMessage{Topic: item.packet.Topic, Payload: item.packet.Payload}
+			receivedAt := item.receivedAt
+			if receivedAt.IsZero() {
+				receivedAt = runtime.now().UTC()
+			}
+			messages[index] = UplinkMessage{Topic: item.packet.Topic, Payload: item.packet.Payload, ReceivedAt: receivedAt}
 		}
 	}
 

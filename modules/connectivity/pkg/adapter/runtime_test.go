@@ -2007,7 +2007,7 @@ func (b *blockingQuarantineIdentities) QuarantineUplink(ctx context.Context, qua
 	return b.fakeIdentities.QuarantineUplink(ctx, quarantine)
 }
 
-func TestRuntimeIngressRateLimitWithholdsPubackAndPreservesBrokerBacklog(t *testing.T) {
+func TestRuntimeIngressRateLimitDropsExcessAcksWithoutBlockingOrDisconnectingHealthyGateway(t *testing.T) {
 	broker := newFakeBroker(t)
 	identities := &blockingQuarantineIdentities{
 		fakeIdentities: newFakeIdentities(),
@@ -2020,17 +2020,12 @@ func TestRuntimeIngressRateLimitWithholdsPubackAndPreservesBrokerBacklog(t *test
 	}
 
 	telemetry := &fakeTelemetry{}
-	var nowMu sync.Mutex
-	curNow := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+	frozenNow := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
 	processor, err := NewProcessor(identities, telemetry, WithGatewayRateLimit(1, 3))
 	if err != nil {
 		t.Fatal(err)
 	}
-	processor.now = func() time.Time {
-		nowMu.Lock()
-		defer nowMu.Unlock()
-		return curNow
-	}
+	processor.now = func() time.Time { return frozenNow }
 
 	runtime, err := NewRuntime(Config{
 		MQTT:             broker.mqtt,
@@ -2041,7 +2036,6 @@ func TestRuntimeIngressRateLimitWithholdsPubackAndPreservesBrokerBacklog(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime.reconnectBackoff = func(int) time.Duration { return 25 * time.Millisecond }
 	t.Cleanup(runtime.closeMailboxes)
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -2057,25 +2051,13 @@ func TestRuntimeIngressRateLimitWithholdsPubackAndPreservesBrokerBacklog(t *test
 		}
 	})
 
-	conn1 := broker.awaitConnection(t)
+	conn := broker.awaitConnection(t)
 	awaitReady(t, runtime, true)
 
-	// Burst of 3 passes rate limit and receives PUBACKs.
-	for i := 1; i <= 3; i++ {
-		conn1.deliverGateway(t, testGatewayA, uint16(i), i, false)
+	for i := 1; i <= 10; i++ {
+		conn.deliverGateway(t, testGatewayA, uint16(i), i, false)
 	}
-	conn1.awaitAcks(t, 1, 2, 3)
-
-	// Packet 4 exceeds rate limit: must NOT receive PUBACK and must close the connection
-	// so the broker preserves offline cache for redelivery.
-	conn1.deliverGateway(t, testGatewayA, 4, 4, false)
-	conn1.awaitDisconnect(t, 3*time.Second)
-
-	select {
-	case unexpectedAck := <-conn1.acks:
-		t.Fatalf("rate-limited packet unexpectedly received PUBACK %d", unexpectedAck)
-	default:
-	}
+	conn.awaitAcks(t, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
 
 	select {
 	case <-identities.started:
@@ -2083,26 +2065,28 @@ func TestRuntimeIngressRateLimitWithholdsPubackAndPreservesBrokerBacklog(t *test
 		t.Fatal("async rate-limit quarantine never started")
 	}
 
-	// Runtime reconnects cleanly; while Gateway A's Postgres quarantine write is blocked,
-	// healthy Gateway B packets are accepted and ACKed on the new connection.
-	conn2 := broker.awaitConnection(t)
-	awaitReady(t, runtime, true)
-
 	for i := 1; i <= 3; i++ {
-		conn2.deliverGateway(t, testGatewayB, uint16(10+i), 100+i, false)
+		conn.deliverGateway(t, testGatewayB, uint16(10+i), 100+i, false)
 	}
-	conn2.awaitAcks(t, 11, 12, 13)
-
-	// Advance clock by 1s to refill 1 token and redeliver packet 4 from broker cache.
-	nowMu.Lock()
-	curNow = curNow.Add(time.Second)
-	nowMu.Unlock()
-	conn2.deliverGateway(t, testGatewayA, 4, 4, true)
-	conn2.awaitAcks(t, 4)
+	conn.awaitAcks(t, 11, 12, 13)
 
 	waitCondition(t, 3*time.Second, func() bool {
-		return len(telemetry.accepted()) == 7
-	}, "3 burst + 1 redelivered Gateway A + 3 Gateway B messages persisted")
+		return len(telemetry.accepted()) == 6
+	}, "3 burst Gateway A + 3 healthy Gateway B messages persisted while quarantine blocked")
+
+	select {
+	case <-conn.disconnected:
+		t.Fatal("broker connection closed during gateway A rate-limit flood")
+	default:
+	}
+	select {
+	case <-broker.conns:
+		t.Fatal("runtime opened unexpected reconnect during gateway A rate-limit flood")
+	default:
+	}
+	if !runtime.Ready() {
+		t.Fatal("runtime.Ready() turned false during gateway A rate-limit flood")
+	}
 
 	unblockQuarantine()
 	waitCondition(t, 3*time.Second, func() bool {
@@ -2116,9 +2100,9 @@ func TestRuntimeIngressRateLimitWithholdsPubackAndPreservesBrokerBacklog(t *test
 
 	metricsText := scrapeMetricsText(runtime.metrics)
 	for _, want := range []string{
-		`hvac_mqtt_messages_received_total{outcome="queued"} 7`,
-		`hvac_mqtt_messages_received_total{outcome="dropped"} 1`,
-		`hvac_mqtt_gateway_rate_limited_total{message_type="telemetry"} 1`,
+		`hvac_mqtt_messages_received_total{outcome="queued"} 6`,
+		`hvac_mqtt_messages_received_total{outcome="dropped"} 7`,
+		`hvac_mqtt_gateway_rate_limited_total{message_type="telemetry"} 7`,
 	} {
 		if !strings.Contains(metricsText, want) {
 			t.Fatalf("missing metric %q in:\n%s", want, metricsText)
@@ -2126,7 +2110,7 @@ func TestRuntimeIngressRateLimitWithholdsPubackAndPreservesBrokerBacklog(t *test
 	}
 }
 
-func TestRuntimeEnqueueWithholdsAckOnIngressRateLimit(t *testing.T) {
+func TestRuntimeEnqueueAcksExcessOnIngressRateLimit(t *testing.T) {
 	identities := newFakeIdentities()
 	telemetry := &fakeTelemetry{}
 	now := time.Date(2026, 11, 18, 10, 0, 0, 0, time.UTC)
@@ -2160,12 +2144,15 @@ func TestRuntimeEnqueueWithholdsAckOnIngressRateLimit(t *testing.T) {
 	}
 	pub2 := publish(testGatewayA, 2)
 	pub2.PacketID = 2
-	if err := runtime.enqueue(ctx, nil, pub2, ackFn); err == nil {
-		t.Fatal("expected rate-limited enqueue to return error")
+	if err := runtime.enqueue(ctx, nil, pub2, ackFn); err != nil {
+		t.Fatalf("expected rate-limited excess to ACK cleanly without disconnecting shared session, got %v", err)
 	}
-	if len(acked) != 1 || acked[0] != 1 {
-		t.Fatalf("acked=%v, want only [1] (rate-limited message 2 must not be acked)", acked)
+	if len(acked) != 2 || acked[0] != 1 || acked[1] != 2 {
+		t.Fatalf("acked=%v, want [1 2]", acked)
 	}
+	waitCondition(t, 2*time.Second, func() bool {
+		return len(telemetry.accepted()) == 1
+	}, "only non-rate-limited burst message persisted")
 }
 
 func TestRuntimePoisonPill400BatchSplitAdvancesWALAndQuarantinesBadMessage(t *testing.T) {
@@ -2317,8 +2304,11 @@ func TestRuntimeClosePreservesOwnedOverflowDirWhenUnconsumedAndCleansWhenDrained
 		if statErr != nil || stat.Size() <= walHeaderSize {
 			t.Fatalf("expected preserved spool file with unconsumed items, stat=(%v, %v)", stat, statErr)
 		}
+		runtime.closeMailboxes()
+		if _, err := os.Stat(spoolPath); err != nil {
+			t.Fatalf("second idempotent closeMailboxes removed preserved spool %s: %v", spoolPath, err)
+		}
 
-		// Recover preserved auto-overflow spool in a restarted Runtime.
 		recoveredTelemetry := &fakeTelemetry{}
 		recoveredRuntime, err := NewRuntime(Config{
 			MQTT:             broker.mqtt,

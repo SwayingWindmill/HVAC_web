@@ -103,16 +103,15 @@ func (s *Store) AuditLifecycleGovernance(ctx context.Context, now time.Time) (Li
 		activeKeys = append(activeKeys, finding.DedupKey)
 	}
 
-	// Resolve prior lifecycle-audit events once their policy inconsistency or hold conflict clears.
 	tag, err := tx.Exec(ctx, `UPDATE core_registry.maintenance_events
 SET status = 'RESOLVED',
     resolved_at = GREATEST(detected_at, $1),
     updated_at = GREATEST(created_at, $1)
 WHERE source_type = $2
-  AND dedup_key LIKE 'lifecycle-audit:%'
+  AND dedup_key LIKE $3
   AND status <> 'RESOLVED'
-  AND NOT (dedup_key = ANY(COALESCE($3::text[], ARRAY[]::text[])))`,
-		auditTime, lifecycleAuditSourceType, activeKeys)
+  AND NOT (dedup_key = ANY($4::text[]))`,
+		auditTime, lifecycleAuditSourceType, lifecycleAuditDedupPref+"%", activeKeys)
 	if err != nil {
 		return LifecycleAuditSummary{}, err
 	}

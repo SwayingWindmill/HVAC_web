@@ -55,7 +55,7 @@ func shutdownTelemetryWorker(cfg telemetryWorkerShutdown) {
 	}
 	httpTimeout := cfg.HTTPTimeout
 	if httpTimeout <= 0 {
-		httpTimeout = 10 * time.Second
+		httpTimeout = 8 * time.Second
 	}
 	if cfg.Diagnostics != nil || cfg.Server != nil {
 		httpCtx, cancelHTTP := context.WithTimeout(context.Background(), httpTimeout)
@@ -78,7 +78,7 @@ func shutdownTelemetryWorker(cfg telemetryWorkerShutdown) {
 	}
 	workerTimeout := cfg.WorkerTimeout
 	if workerTimeout <= 0 {
-		workerTimeout = 10 * time.Second
+		workerTimeout = 8 * time.Second
 	}
 	if !waitWorkersBounded(cfg.WorkersWG, workerTimeout) && cfg.Logger != nil {
 		cfg.Logger.Warn("telemetry_worker_shutdown_timed_out", "error_code", "TELEMETRY_WORKER_SHUTDOWN_TIMEOUT")
@@ -86,7 +86,7 @@ func shutdownTelemetryWorker(cfg telemetryWorkerShutdown) {
 	if cfg.DrainRelays != nil {
 		drainTimeout := cfg.DrainTimeout
 		if drainTimeout <= 0 {
-			drainTimeout = 10 * time.Second
+			drainTimeout = 8 * time.Second
 		}
 		drainCtx, cancelDrain := context.WithTimeout(context.Background(), drainTimeout)
 		cfg.DrainRelays(drainCtx)
@@ -165,9 +165,9 @@ func runTelemetryWorker() int {
 				}
 			}
 		},
-		HTTPTimeout:      10 * time.Second,
-		WorkerTimeout:    10 * time.Second,
-		DrainTimeout:     10 * time.Second,
+		HTTPTimeout:      8 * time.Second,
+		WorkerTimeout:    8 * time.Second,
+		DrainTimeout:     8 * time.Second,
 		TelemetryTimeout: 2 * time.Second,
 	}
 	var shutdownOnce sync.Once
@@ -879,7 +879,8 @@ func runRuntimeRetention(ctx context.Context, store *telemetry.PostgresStore, lo
 				"mqtt_runtime_events", pruned.MQTTRuntimeEvents,
 				"ingest_quarantines", pruned.IngestQuarantines,
 				"recovery_cursors", pruned.RecoveryCursors,
-				"subscriptions", pruned.Subscriptions)
+				"subscriptions", pruned.Subscriptions,
+				"replay_positions", pruned.ReplayPositions)
 		}
 		select {
 		case <-ctx.Done():
@@ -904,25 +905,45 @@ type telemetryRelayDrainTargets struct {
 	History     telemetryHistoryRelayDrainer
 }
 
+const (
+	shutdownDrainBatchLimit = 64
+	shutdownDrainMaxPasses  = 8
+)
+
+func drainBatchRelay(ctx context.Context, drainer telemetryRelayBatchDrainer, eventName, errorCode string, logger *slog.Logger) {
+	if drainer == nil {
+		return
+	}
+	for pass := 0; pass < shutdownDrainMaxPasses && ctx.Err() == nil; pass++ {
+		published, err := drainer.RelayOnce(ctx, shutdownDrainBatchLimit)
+		if err != nil {
+			if logger != nil {
+				logger.Warn(eventName, "error_code", errorCode)
+			}
+			return
+		}
+		if published < shutdownDrainBatchLimit {
+			return
+		}
+	}
+}
+
 func drainTelemetryRelays(ctx context.Context, targets telemetryRelayDrainTargets, logger *slog.Logger) {
-	if targets.LatestCache != nil {
-		if _, err := targets.LatestCache.RelayOnce(ctx, 64); err != nil && logger != nil {
-			logger.Warn("telemetry_latest_cache_shutdown_drain_failed", "error_code", "TELEMETRY_LATEST_CACHE_DRAIN_FAILED")
-		}
-	}
-	if targets.Realtime != nil {
-		if _, err := targets.Realtime.RelayOnce(ctx, 64); err != nil && logger != nil {
-			logger.Warn("telemetry_realtime_shutdown_drain_failed", "error_code", "TELEMETRY_REALTIME_DRAIN_FAILED")
-		}
-	}
-	if targets.Alarm != nil {
-		if _, err := targets.Alarm.RelayOnce(ctx, 64); err != nil && logger != nil {
-			logger.Warn("telemetry_alarm_shutdown_drain_failed", "error_code", "TELEMETRY_ALARM_DRAIN_FAILED")
-		}
-	}
+	drainBatchRelay(ctx, targets.LatestCache, "telemetry_latest_cache_shutdown_drain_failed", "TELEMETRY_LATEST_CACHE_DRAIN_FAILED", logger)
+	drainBatchRelay(ctx, targets.Realtime, "telemetry_realtime_shutdown_drain_failed", "TELEMETRY_REALTIME_DRAIN_FAILED", logger)
+	drainBatchRelay(ctx, targets.Alarm, "telemetry_alarm_shutdown_drain_failed", "TELEMETRY_ALARM_DRAIN_FAILED", logger)
 	if targets.History != nil {
-		if _, err := targets.History.RelayOnce(ctx); err != nil && logger != nil {
-			logger.Warn("telemetry_history_shutdown_drain_failed", "error_code", "TELEMETRY_HISTORY_DRAIN_FAILED")
+		for pass := 0; pass < shutdownDrainMaxPasses && ctx.Err() == nil; pass++ {
+			published, err := targets.History.RelayOnce(ctx)
+			if err != nil {
+				if logger != nil {
+					logger.Warn("telemetry_history_shutdown_drain_failed", "error_code", "TELEMETRY_HISTORY_DRAIN_FAILED")
+				}
+				return
+			}
+			if published == 0 {
+				return
+			}
 		}
 	}
 }

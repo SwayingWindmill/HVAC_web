@@ -1,9 +1,7 @@
 package adapter
 
 import (
-	"sync"
 	"testing"
-	"time"
 )
 
 func TestGatewaySessionTrackerFencesDelayedLWTAndSupersededSessions(t *testing.T) {
@@ -163,99 +161,5 @@ func TestGatewaySessionTrackerTelemetryRecencyAndLegacyCompatibility(t *testing.
 	tracker.ObserveTelemetry("gw-c", "sc1", 3000)
 	if _, ok := tracker.Snapshot(testGatewayA); ok {
 		t.Fatal("expected oldest gateway to be evicted when capacity=2 exceeded")
-	}
-}
-
-func TestGatewaySessionTrackerReplayOffsetsAndLiveEpochs(t *testing.T) {
-	t.Parallel()
-
-	tracker := NewGatewaySessionTracker()
-	t0 := time.Date(2026, 11, 18, 10, 0, 0, 0, time.UTC)
-
-	// First replay reading takes sampledAt microseconds.
-	off1 := tracker.NextReplayOffset(testGatewayA, "METER-01", "active_power", t0)
-	if off1 != t0.UnixMicro() {
-		t.Fatalf("off1=%d, want %d", off1, t0.UnixMicro())
-	}
-	// Duplicate or older timestamp must still strictly increase per point.
-	off2 := tracker.NextReplayOffset(testGatewayA, "METER-01", "active_power", t0)
-	if off2 != off1+1 {
-		t.Fatalf("duplicate timestamp off2=%d, want %d", off2, off1+1)
-	}
-	off3 := tracker.NextReplayOffset(testGatewayA, "METER-01", "active_power", t0.Add(-5*time.Minute))
-	if off3 != off2+1 {
-		t.Fatalf("older timestamp off3=%d, want %d", off3, off2+1)
-	}
-	// Separate point code keeps its own independent offset sequence.
-	otherPoint := tracker.NextReplayOffset(testGatewayA, "METER-01", "reactive_power", t0)
-	if otherPoint != t0.UnixMicro() {
-		t.Fatalf("otherPoint=%d, want %d", otherPoint, t0.UnixMicro())
-	}
-	// Sub-epoch or zero timestamp clamps to at least 1.
-	epochZero := tracker.NextReplayOffset(testGatewayA, "METER-01", "zero_ts", time.Unix(0, 0).UTC())
-	if epochZero != 1 {
-		t.Fatalf("epochZero=%d, want 1", epochZero)
-	}
-
-	// Live telemetry epoch starts at 0 and stays 0 while sequences do not regress.
-	if got := tracker.LiveTelemetryEpoch(testGatewayA, 10, t0); got != 0 {
-		t.Fatalf("initial epoch=%d, want 0", got)
-	}
-	if got := tracker.LiveTelemetryEpoch(testGatewayA, 10, t0); got != 0 {
-		t.Fatalf("duplicate seq epoch=%d, want 0", got)
-	}
-	if got := tracker.LiveTelemetryEpoch(testGatewayA, 25, t0); got != 0 {
-		t.Fatalf("advancing seq epoch=%d, want 0", got)
-	}
-	// Regression (e.g. gateway rebooted back to seq=1) allocates a new epoch.
-	epoch1 := tracker.LiveTelemetryEpoch(testGatewayA, 1, t0.Add(time.Second))
-	if epoch1 != t0.Add(time.Second).UnixMilli() {
-		t.Fatalf("epoch1=%d, want %d", epoch1, t0.Add(time.Second).UnixMilli())
-	}
-	// Subsequent monotonic increments stay in epoch1.
-	if got := tracker.LiveTelemetryEpoch(testGatewayA, 2, t0.Add(2*time.Second)); got != epoch1 {
-		t.Fatalf("post-reboot advancing seq epoch=%d, want %d", got, epoch1)
-	}
-	// Second reboot within the same millisecond still strictly increments epoch.
-	epoch2 := tracker.LiveTelemetryEpoch(testGatewayA, 1, t0.Add(time.Second))
-	if epoch2 != epoch1+1 {
-		t.Fatalf("same-ms second reboot epoch2=%d, want %d", epoch2, epoch1+1)
-	}
-	// Other gateway remains at epoch 0.
-	if got := tracker.LiveTelemetryEpoch(testGatewayB, 1, t0); got != 0 {
-		t.Fatalf("gateway B epoch=%d, want 0", got)
-	}
-}
-
-func TestGatewaySessionTrackerConcurrentReplayOffsetsAndEpochs(t *testing.T) {
-	t.Parallel()
-
-	tracker := NewGatewaySessionTracker()
-	t0 := time.Date(2026, 11, 18, 10, 0, 0, 0, time.UTC)
-
-	const workers = 8
-	const perWorker = 100
-	results := make(chan int64, workers*perWorker)
-	var wg sync.WaitGroup
-	for w := 0; w < workers; w++ {
-		wg.Add(1)
-		go func(worker int) {
-			defer wg.Done()
-			for i := 0; i < perWorker; i++ {
-				off := tracker.NextReplayOffset(testGatewayA, "METER-01", "active_power", t0)
-				results <- off
-				_ = tracker.LiveTelemetryEpoch(testGatewayA, int64(i%5), t0.Add(time.Duration(worker)*time.Millisecond))
-			}
-		}(w)
-	}
-	wg.Wait()
-	close(results)
-
-	seen := make(map[int64]struct{}, workers*perWorker)
-	for off := range results {
-		if _, dup := seen[off]; dup {
-			t.Fatalf("duplicate concurrent replay offset %d", off)
-		}
-		seen[off] = struct{}{}
 	}
 }

@@ -24,7 +24,7 @@ const (
 	mqttDefaultReceiveMaximum = uint16(256)
 	// DefaultBatchMaxMessages is the per-Gateway batch drain cap when BatchMaxMessages is 0.
 	DefaultBatchMaxMessages = 200
-	// DefaultBatchFlushWindow is the default coalescing window used by cmd/connectivity.
+	// DefaultBatchFlushWindow is the default per-Gateway batch coalescing window.
 	DefaultBatchFlushWindow = 100 * time.Millisecond
 	maxBatchFlushWindow     = time.Second
 	// DefaultAutoBackfillLagThreshold promotes stale live readings past this lag to replay.
@@ -139,7 +139,8 @@ func (config Config) validate(requireMQTT bool) error {
 	return nil
 }
 
-func (config MQTTConfig) effectiveReceiveMaximum() uint16 {
+// EffectiveReceiveMaximum returns the bounded MQTT v5 Receive Maximum flow-control limit.
+func (config MQTTConfig) EffectiveReceiveMaximum() uint16 {
 	if config.ReceiveMaximum == 0 {
 		return mqttDefaultReceiveMaximum
 	}

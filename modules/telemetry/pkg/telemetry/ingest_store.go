@@ -737,7 +737,7 @@ func evaluateBatchCandidates(
 		facts, existingID := assembleObservationFacts(candidate, state)
 		candidateEvaluator := evaluate
 		if candidate.EdgeReplay && candidate.SourcePath != SourcePathHistoryReplay {
-			candidateEvaluator = EvaluateEdgeReplayObservation
+			candidateEvaluator = EvaluateHistoricalObservation
 		}
 		decision := candidateEvaluator(candidate, facts, candidate.ReceivedAt)
 

@@ -271,7 +271,7 @@ func TestHistoryRelayDeadLettersSinglePoisonRowAndTransientRemainder(t *testing.
 		LeaseID: "018f2e00-9000-7000-8000-000000000299", MaxAttempts: 2, Observations: obs,
 	}}
 	call := 0
-	splitRelay, _ := NewHistoryRelay(HistoryRelayConfig{
+	splitRelay, err := NewHistoryRelay(HistoryRelayConfig{
 		Repository: splitRepo,
 		Sink: &selectiveHistorySink{fn: func(rows []HistoryObservation) error {
 			call++
@@ -279,7 +279,7 @@ func TestHistoryRelayDeadLettersSinglePoisonRowAndTransientRemainder(t *testing.
 			case 1:
 				return fmt.Errorf("%w: initial poison", ErrHistoryBatchPermanent)
 			case 2:
-				return nil // left half [0,1] succeeds
+				return nil
 			default:
 				return errors.New("503 ClickHouse restarted")
 			}
@@ -287,6 +287,9 @@ func TestHistoryRelayDeadLettersSinglePoisonRowAndTransientRemainder(t *testing.
 		BatchSize: 16, LeaseFor: 30 * time.Second, RetryAfter: 5 * time.Second,
 		Now: func() time.Time { return now },
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	published, err = splitRelay.RelayOnce(t.Context())
 	if err == nil || published != 2 {
 		t.Fatalf("partial transient split published=%d err=%v", published, err)
@@ -307,13 +310,13 @@ func TestHistoryRelayDeadLettersExhaustedBatchAtMaxAttempts(t *testing.T) {
 	}
 	repo := &historyRepositoryStub{batch: HistoryBatch{
 		LeaseID:      "018f2e00-9000-7000-8000-000000000399",
-		MaxAttempts:  defaultMaxHistoryAttempts,
+		MaxAttempts:  16,
 		Observations: obs,
 	}}
 	relay, err := NewHistoryRelay(HistoryRelayConfig{
 		Repository: repo,
 		Sink:       &historySinkStub{err: errors.New("ClickHouse history insert returned 500")},
-		BatchSize:  16, LeaseFor: 30 * time.Second, RetryAfter: 5 * time.Second,
+		BatchSize:  16, LeaseFor: 30 * time.Second, RetryAfter: 5 * time.Second, MaxAttempts: 16,
 		Now: func() time.Time { return now },
 	})
 	if err != nil {
@@ -342,33 +345,91 @@ func TestValidateClaimedHistoryRow(t *testing.T) {
 		QualityReasons:  []string{},
 		PayloadSHA256:   strings.Repeat("a", 64),
 	}
-	encoded, digest, err := encodeHistoryObservation(validObs)
+	encoded, _, err := encodeHistoryObservation(validObs)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	got, size, code := validateClaimedHistoryRow(validObs.ObservationID, encoded, digest)
+	got, size, code := validateClaimedHistoryRow(validObs.ObservationID, encoded)
 	if code != "" || size != len(encoded)+1 || got.ObservationID != validObs.ObservationID {
 		t.Fatalf("valid row rejected: code=%q size=%d", code, size)
 	}
 
-	if _, _, code := validateClaimedHistoryRow(validObs.ObservationID, []byte(`{invalid`), digest); code != historyPayloadInvalidCode {
+	negZeroPayload := strings.Replace(string(encoded), `"source_offset":0`, `"source_offset":0`, 1)
+	negZeroObs := validObs
+	zero := 0.0
+	negZeroObs.ValueNumber = &zero
+	negZeroEncoded, _, err := encodeHistoryObservation(negZeroObs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, code := validateClaimedHistoryRow(negZeroObs.ObservationID, []byte(negZeroPayload[:0]+strings.Replace(string(negZeroEncoded), `"value_number":0`, `"value_number":-0.0`, 1))); code != "" {
+		t.Fatalf("IEEE-754 -0.0 normalized JSONB row failed validation: code=%q", code)
+	}
+
+	if _, _, code := validateClaimedHistoryRow(validObs.ObservationID, []byte(`{invalid`)); code != historyPayloadInvalidCode {
 		t.Fatalf("corrupt JSON code=%q, want %q", code, historyPayloadInvalidCode)
 	}
-	if _, _, code := validateClaimedHistoryRow(validObs.ObservationID, encoded, strings.Repeat("b", 64)); code != historyPayloadInvalidCode {
-		t.Fatalf("bad digest code=%q, want %q", code, historyPayloadInvalidCode)
-	}
-	if _, _, code := validateClaimedHistoryRow("018f2e00-9000-7000-8000-000000000499", encoded, digest); code != historyPayloadInvalidCode {
+	if _, _, code := validateClaimedHistoryRow("018f2e00-9000-7000-8000-000000000499", encoded); code != historyPayloadInvalidCode {
 		t.Fatalf("mismatched observation ID code=%q, want %q", code, historyPayloadInvalidCode)
+	}
+
+	invalidScopeObs := validObs
+	invalidScopeObs.AcceptanceStatus = string(ObservationAccepted)
+	invalidScopePayload, _, err := encodeHistoryObservation(invalidScopeObs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, code := validateClaimedHistoryRow(invalidScopeObs.ObservationID, invalidScopePayload); code != historyPayloadInvalidCode {
+		t.Fatalf("invalid accepted scope code=%q, want %q", code, historyPayloadInvalidCode)
 	}
 
 	oversized := validObs
 	oversized.ValueString = stringPointer(strings.Repeat("z", maxHistoryBatchBytes))
-	oversizedPayload, oversizedDigest, err := encodeHistoryObservation(oversized)
+	oversizedPayload, _, err := encodeHistoryObservation(oversized)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, code := validateClaimedHistoryRow(oversized.ObservationID, oversizedPayload, oversizedDigest); code != historyRowTooLargeCode {
+	if _, _, code := validateClaimedHistoryRow(oversized.ObservationID, oversizedPayload); code != historyRowTooLargeCode {
 		t.Fatalf("oversized row code=%q, want %q", code, historyRowTooLargeCode)
 	}
+}
+
+func TestHistoryRelaySettlesLeaseWithUncancelledContextWhenCancelledDuringInsert(t *testing.T) {
+	now := time.Date(2026, 7, 29, 8, 15, 0, 0, time.UTC)
+	obs := []HistoryObservation{{ObservationID: "018f2e00-9000-7000-8000-000000000501"}}
+	ctx, cancel := context.WithCancel(t.Context())
+	repo := &contextCheckingHistoryRepo{batch: HistoryBatch{
+		LeaseID: "018f2e00-9000-7000-8000-000000000599", MaxAttempts: 1, Observations: obs,
+	}}
+	sink := &selectiveHistorySink{fn: func(_ []HistoryObservation) error {
+		cancel()
+		return context.Canceled
+	}}
+	relay, err := NewHistoryRelay(HistoryRelayConfig{
+		Repository: repo, Sink: sink, BatchSize: 16, LeaseFor: 30 * time.Second, RetryAfter: 5 * time.Second, MaxAttempts: 1,
+		Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := relay.RelayOnce(ctx); err == nil {
+		t.Fatal("expected RelayOnce error on cancelled sink")
+	}
+	if !repo.retrySawActiveCtx || !repo.retryAt.Equal(now) {
+		t.Fatalf("expected immediate retry with active settleCtx at %s, got activeCtx=%t retryAt=%s", now, repo.retrySawActiveCtx, repo.retryAt)
+	}
+	if len(repo.deadEvents) != 0 {
+		t.Fatalf("cancelled shutdown insert must not dead-letter batch, dead=%v", repo.deadEvents)
+	}
+}
+
+type contextCheckingHistoryRepo struct {
+	historyRepositoryStub
+	retrySawActiveCtx bool
+}
+
+func (r *contextCheckingHistoryRepo) RetryHistoryBatch(ctx context.Context, leaseID string, retryAt time.Time, errorCode string) error {
+	r.retrySawActiveCtx = ctx.Err() == nil
+	return r.historyRepositoryStub.RetryHistoryBatch(ctx, leaseID, retryAt, errorCode)
 }

@@ -40,14 +40,20 @@ func TestDeterministicPointEventIDRejectsOutOfRangeTimestamps(t *testing.T) {
 	}
 }
 
-func TestSourcePartitionsDecoupleReplayAndLiveEpochs(t *testing.T) {
-	if got := liveSourcePartition(" gw-1 ", 0, " ch-1 ", " temp "); got != "mqtt:gw-1:ch-1:temp" {
-		t.Fatalf("epoch 0 liveSourcePartition=%q", got)
+func TestSourcePartitionsDecoupleReplayMessages(t *testing.T) {
+	if got := sourcePartition(" gw-1 ", " ch-1 ", " temp "); got != "mqtt:gw-1:ch-1:temp" {
+		t.Fatalf("sourcePartition=%q", got)
 	}
-	if got := liveSourcePartition("gw-1", 1730000000123, "ch-1", "temp"); got != "mqtt:gw-1:e1730000000123:ch-1:temp" {
-		t.Fatalf("epoch > 0 liveSourcePartition=%q", got)
+	r1 := replaySourcePartition(" gw-1 ", " msg-1 ", " ch-1 ", " temp ")
+	r2 := replaySourcePartition(" gw-1 ", " msg-1 ", " ch-1 ", " temp ")
+	r3 := replaySourcePartition(" gw-1 ", " msg-2 ", " ch-1 ", " temp ")
+	if r1 != r2 {
+		t.Fatalf("non-deterministic replaySourcePartition: %q != %q", r1, r2)
 	}
-	if got := replaySourcePartition(" gw-1 ", " ch-1 ", " temp "); got != "mqtt-replay:gw-1:ch-1:temp" {
-		t.Fatalf("replaySourcePartition=%q", got)
+	if r1 == r3 {
+		t.Fatalf("distinct replay messages collided on partition %q", r1)
+	}
+	if len(r1) > 256 || len(r1) <= len("mqtt-replay:gw-1:") {
+		t.Fatalf("unexpected replaySourcePartition length=%d (%q)", len(r1), r1)
 	}
 }

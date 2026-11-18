@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/eclipse/paho.golang/paho"
 )
@@ -29,8 +30,9 @@ const (
 var errSpoolFrameCorrupt = errors.New("gateway spool frame is corrupt")
 
 type queuedPublish struct {
-	packet *paho.Publish
-	endSeq int64
+	packet     *paho.Publish
+	endSeq     int64
+	receivedAt time.Time
 }
 
 type overflowEntry struct {
@@ -41,6 +43,7 @@ type overflowEntry struct {
 	logicalStart int64
 	frameLen     int64
 	endSeq       int64
+	receivedAt   time.Time
 }
 
 type enqueueResult struct {
@@ -258,10 +261,19 @@ func encodeWALFrame(topic string, payload []byte) ([]byte, error) {
 	return frame, nil
 }
 
-// enqueue appends a message to the per-Gateway WAL spool without blocking on the worker.
+func (mb *gatewayMailbox) enqueue(received *paho.Publish) (enqueueResult, error) {
+	return mb.enqueueAt(received, time.Now().UTC())
+}
+
+// enqueueAt appends a message to the per-Gateway WAL spool without blocking on the worker.
 // When count or byte limits are reached, shed=true is returned so the caller closes the
 // connection without ACK and lets the broker redeliver later.
-func (mb *gatewayMailbox) enqueue(received *paho.Publish) (enqueueResult, error) {
+func (mb *gatewayMailbox) enqueueAt(received *paho.Publish, receivedAt time.Time) (enqueueResult, error) {
+	if receivedAt.IsZero() {
+		receivedAt = time.Now().UTC()
+	} else {
+		receivedAt = receivedAt.UTC()
+	}
 	frame, err := encodeWALFrame(received.Topic, received.Payload)
 	if err != nil {
 		return enqueueResult{}, err
@@ -303,7 +315,7 @@ func (mb *gatewayMailbox) enqueue(received *paho.Publish) (enqueueResult, error)
 	if mb.overflowLenLocked() == 0 && mb.promoting == 0 && mb.memCount < mb.memCap {
 		packet := *received
 		packet.Payload = append([]byte(nil), received.Payload...)
-		mb.pushMemLocked(queuedPublish{packet: &packet, endSeq: logicalEnd})
+		mb.pushMemLocked(queuedPublish{packet: &packet, endSeq: logicalEnd, receivedAt: receivedAt})
 	} else {
 		mb.overflow = append(mb.overflow, overflowEntry{
 			topic:        received.Topic,
@@ -313,6 +325,7 @@ func (mb *gatewayMailbox) enqueue(received *paho.Publish) (enqueueResult, error)
 			logicalStart: logicalStart,
 			frameLen:     frameLen,
 			endSeq:       logicalEnd,
+			receivedAt:   receivedAt,
 		})
 	}
 	res := enqueueResult{
@@ -552,7 +565,8 @@ func readSpooledPublish(file *os.File, physOffset int64, entry overflowEntry) (q
 			Retain:   entry.retain,
 			PacketID: entry.packetID,
 		},
-		endSeq: entry.endSeq,
+		endSeq:     entry.endSeq,
+		receivedAt: entry.receivedAt,
 	}, nil
 }
 

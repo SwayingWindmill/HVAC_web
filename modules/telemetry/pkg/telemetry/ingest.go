@@ -257,20 +257,10 @@ func EvaluateObservation(candidate ObservationCandidate, facts ObservationFacts,
 	return decision
 }
 
-// EvaluateHistoricalObservation evaluates a HISTORY_REPLAY sample for historical persistence
-// without mutating latest telemetry, presence, or snapshots.
+// EvaluateHistoricalObservation evaluates HISTORY_REPLAY or buffered EdgeReplay samples for
+// historical persistence without mutating latest telemetry, presence, or snapshots, and never
+// degrades buffered readings to STALE due to source lag.
 func EvaluateHistoricalObservation(candidate ObservationCandidate, facts ObservationFacts, evaluatedAt time.Time) ObservationDecision {
-	return evaluateWithoutSnapshotMutation(candidate, facts, evaluatedAt)
-}
-
-// EvaluateEdgeReplayObservation evaluates buffered edge-replay samples using envelope validation and
-// stateless physical quality checks without mutating latest telemetry, presence, or snapshots, and
-// never degrades buffered readings to STALE due to source lag.
-func EvaluateEdgeReplayObservation(candidate ObservationCandidate, facts ObservationFacts, evaluatedAt time.Time) ObservationDecision {
-	return evaluateWithoutSnapshotMutation(candidate, facts, evaluatedAt)
-}
-
-func evaluateWithoutSnapshotMutation(candidate ObservationCandidate, facts ObservationFacts, evaluatedAt time.Time) ObservationDecision {
 	if facts.EventAlreadySeen {
 		return terminalObservation(ObservationDuplicate, QualityInvalid, QualityReasonDuplicate, false)
 	}

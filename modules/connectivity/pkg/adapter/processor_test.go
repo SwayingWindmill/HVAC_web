@@ -729,10 +729,11 @@ func telemetryPayloadWithTimestamps(gatewayID, messageID string, sequence int, r
 		messageID, gatewayID, deviceTS, sequence, replay, sourceKey, deviceTS, pointCode))
 }
 
-func TestProcessorEdgeReplayAutoBackfillAndRebootEpochDecoupling(t *testing.T) {
+func TestProcessorEdgeReplayAutoBackfillAndRetryStability(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 11, 18, 10, 0, 0, 0, time.UTC)
+	curNow := now
 	telemetry := &fakeTelemetry{}
 	processor, err := NewProcessor(
 		newFakeIdentities(),
@@ -742,82 +743,69 @@ func TestProcessorEdgeReplayAutoBackfillAndRebootEpochDecoupling(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	processor.now = func() time.Time { return now }
+	processor.now = func() time.Time { return curNow }
 
-	// Fresh live message (5m lag <= 10m): EdgeReplay=false, epoch 0 partition.
-	res1, err := processor.Process(context.Background(), telemetryTopic(testGatewayA),
+	liveRes, err := processor.Process(context.Background(), telemetryTopic(testGatewayA),
 		telemetryPayloadWithTimestamps(testGatewayA, messageID(1), 10, false, now.Add(-5*time.Minute).UnixMilli(), "METER-01", "active_power"))
-	if err != nil || res1.Accepted != 1 {
-		t.Fatalf("msg 1 failed: res=%+v err=%v", res1, err)
+	if err != nil || liveRes.Accepted != 1 {
+		t.Fatalf("msg 1 failed: res=%+v err=%v", liveRes, err)
 	}
-	// Exact boundary lag (10m == 10m): strictly > threshold is required, stays live.
-	res2, err := processor.Process(context.Background(), telemetryTopic(testGatewayA),
-		telemetryPayloadWithTimestamps(testGatewayA, messageID(2), 11, false, now.Add(-10*time.Minute).UnixMilli(), "METER-01", "active_power"))
-	if err != nil || res2.Accepted != 1 {
-		t.Fatalf("msg 2 failed: res=%+v err=%v", res2, err)
+	boundarySampledAt := now.Add(-10 * time.Minute)
+	boundaryRes, err := processor.Process(context.Background(), telemetryTopic(testGatewayA),
+		telemetryPayloadWithTimestamps(testGatewayA, messageID(2), 11, false, boundarySampledAt.UnixMilli(), "METER-01", "active_power"))
+	if err != nil || boundaryRes.Accepted != 1 {
+		t.Fatalf("msg 2 failed: res=%+v err=%v", boundaryRes, err)
 	}
-	// Stale non-replay reading (10m+1ms lag > 10m) with regressed seq=3 promotes to
-	// EdgeReplay without bumping live epoch.
 	staleTS := now.Add(-10*time.Minute - time.Millisecond)
-	res3, err := processor.Process(context.Background(), telemetryTopic(testGatewayA),
+	staleRes, err := processor.Process(context.Background(), telemetryTopic(testGatewayA),
 		telemetryPayloadWithTimestamps(testGatewayA, messageID(3), 3, false, staleTS.UnixMilli(), "METER-01", "active_power"))
-	if err != nil || res3.Accepted != 1 {
-		t.Fatalf("msg 3 failed: res=%+v err=%v", res3, err)
+	if err != nil || staleRes.Accepted != 1 {
+		t.Fatalf("msg 3 failed: res=%+v err=%v", staleRes, err)
 	}
-	// Explicit replay=true with fresh timestamp and low seq=1 keeps live epoch untouched.
 	freshReplayTS := now.Add(-1 * time.Second)
-	res4, err := processor.Process(context.Background(), telemetryTopic(testGatewayA),
+	replayRes, err := processor.Process(context.Background(), telemetryTopic(testGatewayA),
 		telemetryPayloadWithTimestamps(testGatewayA, messageID(4), 1, true, freshReplayTS.UnixMilli(), "METER-01", "active_power"))
-	if err != nil || res4.Accepted != 1 {
-		t.Fatalf("msg 4 failed: res=%+v err=%v", res4, err)
+	if err != nil || replayRes.Accepted != 1 {
+		t.Fatalf("msg 4 failed: res=%+v err=%v", replayRes, err)
 	}
-	// Next live reading seq=12 stays on epoch 0 because prior replays did not reset live sequence.
-	res5, err := processor.Process(context.Background(), telemetryTopic(testGatewayA),
-		telemetryPayloadWithTimestamps(testGatewayA, messageID(5), 12, false, now.UnixMilli(), "METER-01", "active_power"))
-	if err != nil || res5.Accepted != 1 {
-		t.Fatalf("msg 5 failed: res=%+v err=%v", res5, err)
-	}
-	// Gateway reboots and sends live seq=1 (< 12): allocates new monotonic epoch partition.
-	res6, err := processor.Process(context.Background(), telemetryTopic(testGatewayA),
-		telemetryPayloadWithTimestamps(testGatewayA, messageID(6), 1, false, now.UnixMilli(), "METER-01", "active_power"))
-	if err != nil || res6.Accepted != 1 {
-		t.Fatalf("msg 6 failed: res=%+v err=%v", res6, err)
-	}
-	// Subsequent live reading seq=2 stays on the new epoch partition.
-	res7, err := processor.Process(context.Background(), telemetryTopic(testGatewayA),
-		telemetryPayloadWithTimestamps(testGatewayA, messageID(7), 2, false, now.UnixMilli(), "METER-01", "active_power"))
-	if err != nil || res7.Accepted != 1 {
-		t.Fatalf("msg 7 failed: res=%+v err=%v", res7, err)
+
+	// Retry of message(2) stamped at ingress `now` keeps live classification and EventID
+	// even if wall clock advances past the 10m backfill lag threshold.
+	curNow = now.Add(time.Minute)
+	retryOutcomes, err := processor.ProcessPrefix(context.Background(), []UplinkMessage{{
+		Topic:      telemetryTopic(testGatewayA),
+		Payload:    telemetryPayloadWithTimestamps(testGatewayA, messageID(2), 11, false, boundarySampledAt.UnixMilli(), "METER-01", "active_power"),
+		ReceivedAt: now,
+	}})
+	if err != nil || len(retryOutcomes) != 1 || retryOutcomes[0].Result.Accepted != 1 {
+		t.Fatalf("retry outcomes=%+v err=%v", retryOutcomes, err)
 	}
 
 	obs := telemetry.accepted()
-	if len(obs) != 7 {
-		t.Fatalf("accepted=%d, want 7", len(obs))
+	if len(obs) != 5 {
+		t.Fatalf("accepted=%d, want 5", len(obs))
 	}
-	liveBasePartition := "mqtt:" + testGatewayA + ":METER-01:active_power"
-	replayPartition := "mqtt-replay:" + testGatewayA + ":METER-01:active_power"
-	wantEpochPartition := fmt.Sprintf("mqtt:%s:e%d:METER-01:active_power", testGatewayA, now.UnixMilli())
+	livePartition := sourcePartition(testGatewayA, "METER-01", "active_power")
+	staleReplayPartition := replaySourcePartition(testGatewayA, messageID(3), "METER-01", "active_power")
+	explicitReplayPartition := replaySourcePartition(testGatewayA, messageID(4), "METER-01", "active_power")
 
-	if obs[0].EdgeReplay || obs[0].SourcePosition.Partition != liveBasePartition || obs[0].SourcePosition.Offset != 10 {
+	if obs[0].EdgeReplay || obs[0].SourcePosition.Partition != livePartition || obs[0].SourcePosition.Offset != 10 {
 		t.Fatalf("obs[0]=%+v", obs[0])
 	}
-	if obs[1].EdgeReplay || obs[1].SourcePosition.Partition != liveBasePartition || obs[1].SourcePosition.Offset != 11 {
+	if obs[1].EdgeReplay || obs[1].SourcePosition.Partition != livePartition || obs[1].SourcePosition.Offset != 11 {
 		t.Fatalf("obs[1]=%+v", obs[1])
 	}
-	if !obs[2].EdgeReplay || obs[2].SourcePosition.Partition != replayPartition || obs[2].SourcePosition.Offset != staleTS.UnixMicro() {
+	if !obs[2].EdgeReplay || obs[2].SourcePosition.Partition != staleReplayPartition || obs[2].SourcePosition.Offset != staleTS.UnixMicro() {
 		t.Fatalf("obs[2]=%+v", obs[2])
 	}
-	if !obs[3].EdgeReplay || obs[3].SourcePosition.Partition != replayPartition || obs[3].SourcePosition.Offset != freshReplayTS.UnixMicro() {
+	if !obs[3].EdgeReplay || obs[3].SourcePosition.Partition != explicitReplayPartition || obs[3].SourcePosition.Offset != freshReplayTS.UnixMicro() {
 		t.Fatalf("obs[3]=%+v", obs[3])
 	}
-	if obs[4].EdgeReplay || obs[4].SourcePosition.Partition != liveBasePartition || obs[4].SourcePosition.Offset != 12 {
-		t.Fatalf("obs[4]=%+v", obs[4])
+	if obs[2].SourcePosition.Partition == obs[3].SourcePosition.Partition {
+		t.Fatalf("distinct replay messages shared partition %q", obs[2].SourcePosition.Partition)
 	}
-	if obs[5].EdgeReplay || obs[5].SourcePosition.Partition != wantEpochPartition || obs[5].SourcePosition.Offset != 1 {
-		t.Fatalf("obs[5]=%+v, want partition=%s offset=1", obs[5], wantEpochPartition)
-	}
-	if obs[6].EdgeReplay || obs[6].SourcePosition.Partition != wantEpochPartition || obs[6].SourcePosition.Offset != 2 {
-		t.Fatalf("obs[6]=%+v, want partition=%s offset=2", obs[6], wantEpochPartition)
+	if obs[4].EdgeReplay || obs[4].SourcePosition.Partition != livePartition || obs[4].SourcePosition.EventID != obs[1].SourcePosition.EventID {
+		t.Fatalf("retry flipped live classification or EventID: initial=%+v retry=%+v", obs[1], obs[4])
 	}
 }
 
@@ -940,6 +928,59 @@ func TestProcessorPoisonPill400BatchSplitAndQuarantine(t *testing.T) {
 		quarantines := identities.snapshotQuarantines()
 		if len(quarantines) != 1 || quarantines[0].ReasonCode != QuarantineMessageInvalid {
 			t.Fatalf("quarantines=%+v, want 1 MESSAGE_INVALID", quarantines)
+		}
+	})
+
+	t.Run("skips already-committed chunk prefix on 400 fallback", func(t *testing.T) {
+		identities := newFakeIdentities()
+		var sent []string
+		telemetry := &fakeTelemetry{
+			failHook: func(_ int, batch []Observation) error {
+				for _, obs := range batch {
+					sent = append(sent, obs.TelemetryKey)
+					if obs.TelemetryKey == "poison_point" {
+						return &RequestInvalidError{Label: "S2 observation batch", StatusCode: http.StatusBadRequest}
+					}
+				}
+				return nil
+			},
+		}
+		processor := newTestProcessor(t, identities, telemetry)
+
+		// '<' expands 6x (\u003c) in Go's default json.Marshal while raw payload stays well
+		// under MaxObservationBatchBytes (3 MiB), forcing splitObservationBatchChunks into 2 chunks.
+		msg1Val := strings.Repeat("<", 400000)
+		msg1Payload := []byte(fmt.Sprintf(
+			`{"schemaVersion":"2.0","messageId":%q,"gatewayId":%q,"timestamp":1760000000000,"sequence":1,"payload":{"devices":[{"deviceId":"METER-01","deviceTimestamp":1760000000000,"points":[{"code":"active_power","value":%q,"quality":0}]}]}}`,
+			messageID(1), testGatewayA, msg1Val,
+		))
+		msg2Val := strings.Repeat("<", 300000)
+		msg2Payload := []byte(fmt.Sprintf(
+			`{"schemaVersion":"2.0","messageId":%q,"gatewayId":%q,"timestamp":1760000001000,"sequence":2,"payload":{"devices":[{"deviceId":"METER-01","deviceTimestamp":1760000001000,"points":[{"code":"poison_point","value":%q,"quality":0}]}]}}`,
+			messageID(2), testGatewayA, msg2Val,
+		))
+
+		outcomes, err := processor.ProcessPrefix(context.Background(), []UplinkMessage{
+			{Topic: telemetryTopic(testGatewayA), Payload: msg1Payload},
+			{Topic: telemetryTopic(testGatewayA), Payload: msg2Payload},
+		})
+		if err != nil {
+			t.Fatalf("ProcessPrefix error: %v", err)
+		}
+		if len(outcomes) != 2 || outcomes[0].Err != nil || outcomes[0].Result.Accepted != 1 || !isPermanentMessageError(outcomes[1].Err) {
+			t.Fatalf("outcomes=%+v, want msg1 accepted=1 and msg2 quarantined", outcomes)
+		}
+		if len(telemetry.accepted()) != 1 {
+			t.Fatalf("accepted=%d, want 1", len(telemetry.accepted()))
+		}
+		activeCount := 0
+		for _, k := range sent {
+			if k == "active_power" {
+				activeCount++
+			}
+		}
+		if activeCount != 1 {
+			t.Fatalf("committed chunk active_power sent %d times, want 1 (sent=%v)", activeCount, sent)
 		}
 	})
 }

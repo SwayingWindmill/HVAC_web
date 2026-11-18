@@ -9,8 +9,13 @@ func TestRuntimeRetentionSQLCoversExtendedLifecycleTablesAndSafetyGuards(t *test
 	if !strings.Contains(pruneDeadHistoryEventsSQL, "dead_lettered_at < $1") || !strings.Contains(pruneDeadHistoryEventsSQL, "delivery_state = 'DEAD'") {
 		t.Fatalf("unexpected dead history prune SQL: %s", pruneDeadHistoryEventsSQL)
 	}
-	if !strings.Contains(pruneDeadPublicationsSQL, "delivery_state = 'DEAD'") || !strings.Contains(pruneDeadPublicationsSQL, "alarm_dead_lettered_at < $1") {
+	if !strings.Contains(pruneDeadPublicationsSQL, "delivery_state = 'DEAD'") ||
+		!strings.Contains(pruneDeadPublicationsSQL, "latest_cache_state IN ('NOT_APPLICABLE', 'MATERIALIZED')") ||
+		!strings.Contains(pruneDeadPublicationsSQL, "alarm_dead_lettered_at < $1") {
 		t.Fatalf("unexpected dead publication prune SQL: %s", pruneDeadPublicationsSQL)
+	}
+	if !strings.Contains(pruneReplaySourcePositionsSQL, "mqtt-replay:%") || !strings.Contains(pruneReplaySourcePositionsSQL, "updated_at < $1") {
+		t.Fatalf("unexpected replay source_positions prune SQL: %s", pruneReplaySourcePositionsSQL)
 	}
 	if !strings.Contains(pruneMQTTRuntimeEventsSQL, "mqtt_runtime_events") || !strings.Contains(pruneMQTTRuntimeEventsSQL, "received_at < $1") {
 		t.Fatalf("unexpected mqtt_runtime_events prune SQL: %s", pruneMQTTRuntimeEventsSQL)

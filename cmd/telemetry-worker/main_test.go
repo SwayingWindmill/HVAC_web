@@ -323,8 +323,9 @@ func (s *stubBatchDrainer) RelayOnce(ctx context.Context, limit int) (int, error
 }
 
 type stubHistoryDrainer struct {
-	record func(string)
-	err    error
+	record    func(string)
+	remaining int
+	err       error
 }
 
 func (s *stubHistoryDrainer) RelayOnce(ctx context.Context) (int, error) {
@@ -332,7 +333,14 @@ func (s *stubHistoryDrainer) RelayOnce(ctx context.Context) (int, error) {
 		return 0, errors.New("unexpected drain context")
 	}
 	s.record("history")
-	return 1, s.err
+	if s.err != nil {
+		return 0, s.err
+	}
+	if s.remaining > 0 {
+		s.remaining--
+		return 1, nil
+	}
+	return 0, nil
 }
 
 func TestDrainTelemetryRelaysResilientAndOrdered(t *testing.T) {
@@ -345,10 +353,10 @@ func TestDrainTelemetryRelaysResilientAndOrdered(t *testing.T) {
 		LatestCache: &stubBatchDrainer{name: "latest_cache", record: record, err: errors.New("redis glitch")},
 		Realtime:    &stubBatchDrainer{name: "realtime", record: record},
 		Alarm:       &stubBatchDrainer{name: "alarm", record: record},
-		History:     &stubHistoryDrainer{record: record},
+		History:     &stubHistoryDrainer{record: record, remaining: 1},
 	}, logger)
 
-	want := []string{"latest_cache", "realtime", "alarm", "history"}
+	want := []string{"latest_cache", "realtime", "alarm", "history", "history"}
 	if !slices.Equal(called, want) {
 		t.Fatalf("drain called=%v, want %v", called, want)
 	}

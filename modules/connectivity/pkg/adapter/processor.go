@@ -91,8 +91,9 @@ func (bindings ResolvedBindings) Point(deviceID, pointCode string) *ResolvedPoin
 
 // UplinkMessage is one raw MQTT publish waiting to be processed in FIFO order.
 type UplinkMessage struct {
-	Topic   string
-	Payload []byte
+	Topic      string
+	Payload    []byte
+	ReceivedAt time.Time
 }
 
 // ProcessingOutcome is the per-message outcome of ProcessPrefix. When Err is a permanent
@@ -496,10 +497,10 @@ func (processor *Processor) processTelemetryBatch(ctx context.Context, gateway G
 		return nil, fmt.Errorf("resolve MQTT bindings: %w", err)
 	}
 	attachResolvedBindings(observations, gateway, bindings)
-	receipts, err := processor.sendObservationBatchChunks(ctx, observations)
+	receipts, committedObs, err := processor.sendObservationBatchChunks(ctx, observations)
 	if err != nil {
 		if errors.Is(err, ErrTelemetryRequestInvalid) {
-			return processor.isolateInvalidTelemetryBatch(ctx, gateway, firstQuarantine, observations, bounds, decodedFrames, messages, span, err)
+			return processor.isolateInvalidTelemetryBatch(ctx, gateway, firstQuarantine, observations, bounds, decodedFrames, messages, receipts, committedObs, span, err)
 		}
 		if span != nil {
 			span.SetStatus("error", "accept observation batch failed")
@@ -531,6 +532,16 @@ func (processor *Processor) processTelemetryBatch(ctx context.Context, gateway G
 	return outcomes, nil
 }
 
+func abortInvalidBatchIsolation(outcomes []ProcessingOutcome, span *observability.Span, reason string, err error) ([]ProcessingOutcome, error) {
+	if len(outcomes) > 0 {
+		return outcomes, nil
+	}
+	if span != nil {
+		span.SetStatus("error", reason)
+	}
+	return nil, err
+}
+
 func (processor *Processor) isolateInvalidTelemetryBatch(
 	ctx context.Context,
 	gateway Gateway,
@@ -539,10 +550,12 @@ func (processor *Processor) isolateInvalidTelemetryBatch(
 	bounds []telemetryMessageBounds,
 	decodedFrames []DecodedTelemetry,
 	messages []UplinkMessage,
+	committedReceipts []ObservationReceipt,
+	committedObs int,
 	span *observability.Span,
 	batchErr error,
 ) ([]ProcessingOutcome, error) {
-	if len(bounds) == 1 {
+	if len(bounds) == 1 && committedObs == 0 {
 		if span != nil {
 			span.SetStatus("error", "telemetry observation batch rejected")
 		}
@@ -551,20 +564,28 @@ func (processor *Processor) isolateInvalidTelemetryBatch(
 
 	outcomes := make([]ProcessingOutcome, 0, len(bounds))
 	sessions := processor.sessions()
-	anySucceeded := false
+	anySucceeded := committedObs > 0
 	for index, bound := range bounds {
-		msgObs := observations[bound.start:bound.end]
-		msgReceipts, msgErr := processor.sendObservationBatchChunks(ctx, msgObs)
+		var msgReceipts []ObservationReceipt
+		var msgErr error
+		switch {
+		case bound.end <= committedObs:
+			msgReceipts = committedReceipts[bound.start:bound.end]
+		case bound.start < committedObs:
+			tailReceipts, _, tailErr := processor.sendObservationBatchChunks(ctx, observations[committedObs:bound.end])
+			if tailErr == nil {
+				msgReceipts = make([]ObservationReceipt, 0, bound.end-bound.start)
+				msgReceipts = append(msgReceipts, committedReceipts[bound.start:committedObs]...)
+				msgReceipts = append(msgReceipts, tailReceipts...)
+			}
+			msgErr = tailErr
+		default:
+			msgReceipts, _, msgErr = processor.sendObservationBatchChunks(ctx, observations[bound.start:bound.end])
+		}
 		if msgErr == nil {
 			result, resErr := buildProcessingResult(bound.messageID, bound.traceID, bound.replay, msgReceipts)
 			if resErr != nil {
-				if len(outcomes) > 0 {
-					return outcomes, nil
-				}
-				if span != nil {
-					span.SetStatus("error", "build processing result failed")
-				}
-				return nil, resErr
+				return abortInvalidBatchIsolation(outcomes, span, "build processing result failed", resErr)
 			}
 			outcomes = append(outcomes, ProcessingOutcome{Result: result})
 			anySucceeded = true
@@ -584,24 +605,12 @@ func (processor *Processor) isolateInvalidTelemetryBatch(
 			}
 			qErr := processor.quarantine(ctx, msgQuarantine, QuarantineMessageInvalid, msgErr)
 			if !isPermanentMessageError(qErr) {
-				if len(outcomes) > 0 {
-					return outcomes, nil
-				}
-				if span != nil {
-					span.SetStatus("error", "quarantine invalid message failed")
-				}
-				return nil, qErr
+				return abortInvalidBatchIsolation(outcomes, span, "quarantine invalid message failed", qErr)
 			}
 			outcomes = append(outcomes, ProcessingOutcome{Err: qErr})
 			continue
 		}
-		if len(outcomes) > 0 {
-			return outcomes, nil
-		}
-		if span != nil {
-			span.SetStatus("error", "accept observation batch failed")
-		}
-		return nil, msgErr
+		return abortInvalidBatchIsolation(outcomes, span, "accept observation batch failed", msgErr)
 	}
 	if span != nil {
 		if anySucceeded {
@@ -618,9 +627,12 @@ const estimatedObservationEnvelopeOverheadBytes = 768
 func (processor *Processor) coalesceTelemetryBatch(ctx context.Context, gateway Gateway, firstDecoded DecodedTelemetry, messages []UplinkMessage) ([]Observation, []telemetryMessageBounds, []DecodedTelemetry, error) {
 	firstEnvelope := firstDecoded.Envelope
 	rootTraceID := normalizeTraceID(firstEnvelope.TraceID)
-	receivedAt := processor.now().UTC()
-	sessions := processor.sessions()
-	firstObs, err := buildEnvelopeObservations(gateway.ID, firstEnvelope, rootTraceID, sessions, processor.autoBackfillLag, receivedAt)
+	fallbackReceivedAt := processor.now().UTC()
+	firstReceivedAt := messages[0].ReceivedAt.UTC()
+	if messages[0].ReceivedAt.IsZero() {
+		firstReceivedAt = fallbackReceivedAt
+	}
+	firstObs, err := buildEnvelopeObservations(gateway.ID, firstEnvelope, rootTraceID, processor.autoBackfillLag, firstReceivedAt)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -661,7 +673,11 @@ func (processor *Processor) coalesceTelemetryBatch(ctx context.Context, gateway 
 		if msgTraceID == "" {
 			msgTraceID = rootTraceID
 		}
-		msgObs, err := buildEnvelopeObservations(gateway.ID, envelope, msgTraceID, sessions, processor.autoBackfillLag, receivedAt)
+		msgReceivedAt := messages[index].ReceivedAt.UTC()
+		if messages[index].ReceivedAt.IsZero() {
+			msgReceivedAt = fallbackReceivedAt
+		}
+		msgObs, err := buildEnvelopeObservations(gateway.ID, envelope, msgTraceID, processor.autoBackfillLag, msgReceivedAt)
 		if err != nil {
 			break
 		}
@@ -692,47 +708,27 @@ func buildEnvelopeObservations(
 	gatewayID string,
 	envelope TelemetryEnvelope,
 	traceID string,
-	sessions *GatewaySessionTracker,
 	autoBackfillLag time.Duration,
 	receivedAt time.Time,
 ) ([]Observation, error) {
 	traceID = normalizeTraceID(traceID)
 	observations := make([]Observation, 0, envelopePointCount(envelope))
-	liveEpoch := int64(0)
-	liveEpochResolved := false
 	for _, device := range envelope.Payload.Devices {
 		sourceKey := strings.TrimSpace(device.DeviceID)
 		sampledAtTime := time.UnixMilli(device.DeviceTimestamp).UTC()
 		sampledAt := sampledAtTime.Format(time.RFC3339Nano)
 		edgeReplay := envelope.Replay || (autoBackfillLag > 0 && receivedAt.Sub(sampledAtTime) > autoBackfillLag)
 
-		var epoch int64
-		if !edgeReplay {
-			if !liveEpochResolved {
-				if sessions != nil {
-					liveEpoch = sessions.LiveTelemetryEpoch(gatewayID, int64(envelope.Sequence), receivedAt)
-				}
-				liveEpochResolved = true
-			}
-			epoch = liveEpoch
-		}
-
 		for _, point := range device.Points {
 			pointCode := strings.TrimSpace(point.Code)
-			var partition string
-			var offset int64
+			basePartition := sourcePartition(gatewayID, sourceKey, pointCode)
+			partition := basePartition
+			offset := int64(envelope.Sequence)
 			if edgeReplay {
-				partition = replaySourcePartition(gatewayID, sourceKey, pointCode)
-				if sessions != nil {
-					offset = sessions.NextReplayOffset(gatewayID, sourceKey, pointCode, sampledAtTime)
-				} else {
-					offset = max(sampledAtTime.UnixMicro(), 1)
-				}
-			} else {
-				partition = liveSourcePartition(gatewayID, epoch, sourceKey, pointCode)
-				offset = int64(envelope.Sequence)
+				partition = replaySourcePartition(gatewayID, envelope.MessageID, sourceKey, pointCode)
+				offset = max(sampledAtTime.UnixMicro(), 0)
 			}
-			eventID, err := deterministicPointEventID(envelope.MessageID, device.DeviceTimestamp, point, partition)
+			eventID, err := deterministicPointEventID(envelope.MessageID, device.DeviceTimestamp, point, basePartition)
 			if err != nil {
 				return nil, err
 			}
@@ -816,23 +812,25 @@ func splitObservationBatchChunks(observations []Observation, maxCount, maxBytes 
 	return chunks, nil
 }
 
-func (processor *Processor) sendObservationBatchChunks(ctx context.Context, observations []Observation) ([]ObservationReceipt, error) {
+func (processor *Processor) sendObservationBatchChunks(ctx context.Context, observations []Observation) ([]ObservationReceipt, int, error) {
 	chunks, err := splitObservationBatchChunks(observations, MaxObservationBatchSize, MaxObservationBatchBytes)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	receipts := make([]ObservationReceipt, 0, len(observations))
+	committed := 0
 	for _, chunk := range chunks {
 		chunkReceipts, err := processor.runtime.AcceptObservationBatch(ctx, chunk)
 		if err != nil {
-			return nil, fmt.Errorf("accept MQTT observation batch: %w", err)
+			return receipts, committed, fmt.Errorf("accept MQTT observation batch: %w", err)
 		}
 		if len(chunkReceipts) != len(chunk) {
-			return nil, fmt.Errorf("unexpected Telemetry receipt count %d for batch size %d", len(chunkReceipts), len(chunk))
+			return receipts, committed, fmt.Errorf("unexpected Telemetry receipt count %d for batch size %d", len(chunkReceipts), len(chunk))
 		}
 		receipts = append(receipts, chunkReceipts...)
+		committed += len(chunk)
 	}
-	return receipts, nil
+	return receipts, committed, nil
 }
 
 func buildProcessingResult(messageID, traceID string, replay bool, receipts []ObservationReceipt) (ProcessingResult, error) {

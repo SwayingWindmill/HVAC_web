@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -187,6 +188,25 @@ func TestSnapshotMaxSampledMs(t *testing.T) {
 	}
 }
 
+func TestSnapshotKeysSignatureDetectsKeySetChanges(t *testing.T) {
+	base := time.Date(2026, 8, 13, 1, 0, 0, 0, time.UTC)
+	s1 := realtimeTestSnapshot(base, 1)
+	s2 := realtimeTestSnapshot(base.Add(time.Minute), 2)
+	s2.Values = append(s2.Values, telemetryapi.TelemetryKeyState{
+		Missing: &telemetryapi.TelemetryMissingState{Key: "zone.humidity", State: "MISSING", Freshness: "MISSING", MissingReason: "NEVER_OBSERVED"},
+	})
+	s2Reordered := realtimeTestSnapshot(base.Add(time.Minute), 3)
+	s2Reordered.Values = slices.Clone(s2.Values)
+	slices.Reverse(s2Reordered.Values)
+
+	if snapshotKeysSignature(s2) != snapshotKeysSignature(s2Reordered) {
+		t.Fatal("snapshotKeysSignature must be order-independent")
+	}
+	if snapshotKeysSignature(s1) == snapshotKeysSignature(s2) {
+		t.Fatal("snapshotKeysSignature failed to distinguish added/removed point key")
+	}
+}
+
 func TestRedisLatestCachePutIfNewerPassesSampledMsAndTTL(t *testing.T) {
 	var mu sync.Mutex
 	var evalArgs []string
@@ -249,13 +269,13 @@ func TestRedisLatestCachePutIfNewerPassesSampledMsAndTTL(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	// EVAL <script> <numkeys=2> <key1> <key2> <rev> <tenant> <site> <device> <evaluatedAt> <json> <maxSampledMs> <ttlMs>
-	if len(evalArgs) != 13 {
+	// EVAL <script> <numkeys=2> <key1> <key2> <rev> <tenant> <site> <device> <evaluatedAt> <json> <maxSampledMs> <ttlMs> <keysSig>
+	if len(evalArgs) != 14 {
 		t.Fatalf("unexpected EVAL argument count %d: %#v", len(evalArgs), evalArgs)
 	}
 	scriptText := evalArgs[1]
-	if !strings.Contains(scriptText, "cur_sampled_ms") || !strings.Contains(scriptText, "PEXPIRE") {
-		t.Fatalf("redisLatestCAS missing anti-rollback or PEXPIRE logic: %s", scriptText)
+	if !strings.Contains(scriptText, "cur_sampled_ms") || !strings.Contains(scriptText, "keys_sig") || !strings.Contains(scriptText, "PEXPIRE") {
+		t.Fatalf("redisLatestCAS missing anti-rollback, keys_sig, or PEXPIRE logic: %s", scriptText)
 	}
 	wantSampledMs := strconv.FormatInt(now.UnixMilli(), 10)
 	if evalArgs[11] != wantSampledMs {
@@ -264,6 +284,9 @@ func TestRedisLatestCachePutIfNewerPassesSampledMsAndTTL(t *testing.T) {
 	wantTTLMs := strconv.FormatInt((7 * 24 * time.Hour).Milliseconds(), 10)
 	if evalArgs[12] != wantTTLMs {
 		t.Fatalf("ARGV[8] ttl_ms=%q, want %q", evalArgs[12], wantTTLMs)
+	}
+	if evalArgs[13] != snapshotKeysSignature(snap) {
+		t.Fatalf("ARGV[9] keys_sig=%q, want %q", evalArgs[13], snapshotKeysSignature(snap))
 	}
 }
 

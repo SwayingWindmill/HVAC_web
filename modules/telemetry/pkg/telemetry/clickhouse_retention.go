@@ -210,10 +210,9 @@ func (pruner *ClickHouseRetentionPruner) Prune(ctx context.Context, now time.Tim
 		return ClickHouseRetentionResult{}, errors.New("ClickHouse retention pruner is closed")
 	}
 	if now.IsZero() {
-		now = time.Now().UTC()
-	} else {
-		now = now.UTC()
+		now = time.Now()
 	}
+	now = now.UTC()
 	var result ClickHouseRetentionResult
 	for _, target := range pruner.targets {
 		cutoff := now.Add(-target.retention)

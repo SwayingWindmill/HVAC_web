@@ -566,7 +566,7 @@ func TestEvaluateEdgeReplayObservationIsolatesSnapshotAndIgnoresSourceLag(t *tes
 		Position:   SourcePosition{Partition: "p0", Offset: 10, EventID: eventA},
 		EdgeReplay: true,
 	}
-	decision := EvaluateEdgeReplayObservation(laggedCandidate, facts, now)
+	decision := EvaluateHistoricalObservation(laggedCandidate, facts, now)
 	if decision.Status != ObservationAccepted || decision.Quality != QualityGood || len(decision.QualityReasons) != 0 {
 		t.Fatalf("lagged edge replay degraded unexpectedly: %+v", decision)
 	}
@@ -576,7 +576,7 @@ func TestEvaluateEdgeReplayObservationIsolatesSnapshotAndIgnoresSourceLag(t *tes
 
 	sentinelCandidate := laggedCandidate
 	sentinelCandidate.Value = json.RawMessage(`38.4`)
-	sentinelDecision := EvaluateEdgeReplayObservation(sentinelCandidate, facts, now)
+	sentinelDecision := EvaluateHistoricalObservation(sentinelCandidate, facts, now)
 	if sentinelDecision.Status != ObservationAccepted || sentinelDecision.Quality != QualityPartial {
 		t.Fatalf("sentinel edge replay expected ACCEPTED/PARTIAL, got %+v", sentinelDecision)
 	}
@@ -586,7 +586,7 @@ func TestEvaluateEdgeReplayObservationIsolatesSnapshotAndIgnoresSourceLag(t *tes
 
 	outOfRangeCandidate := laggedCandidate
 	outOfRangeCandidate.Value = json.RawMessage(`150.0`)
-	rejectedDecision := EvaluateEdgeReplayObservation(outOfRangeCandidate, facts, now)
+	rejectedDecision := EvaluateHistoricalObservation(outOfRangeCandidate, facts, now)
 	if rejectedDecision.Status != ObservationRejected || rejectedDecision.Quality != QualityInvalid {
 		t.Fatalf("out-of-range edge replay expected REJECTED/INVALID, got %+v", rejectedDecision)
 	}

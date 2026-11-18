@@ -33,12 +33,12 @@ func TestConfigValidateBatchOptions(t *testing.T) {
 	if err := maxValid.Validate(); err != nil {
 		t.Fatalf("max valid config failed Validate: %v", err)
 	}
-	if got := defaultCfg.MQTT.effectiveReceiveMaximum(); got != mqttDefaultReceiveMaximum {
-		t.Fatalf("effectiveReceiveMaximum()=%d, want %d", got, mqttDefaultReceiveMaximum)
+	if got := defaultCfg.MQTT.EffectiveReceiveMaximum(); got != mqttDefaultReceiveMaximum {
+		t.Fatalf("EffectiveReceiveMaximum()=%d, want %d", got, mqttDefaultReceiveMaximum)
 	}
 	customRM := MQTTConfig{ReceiveMaximum: 64}
-	if got := customRM.effectiveReceiveMaximum(); got != 64 {
-		t.Fatalf("custom effectiveReceiveMaximum()=%d, want 64", got)
+	if got := customRM.EffectiveReceiveMaximum(); got != 64 {
+		t.Fatalf("custom EffectiveReceiveMaximum()=%d, want 64", got)
 	}
 
 	for _, test := range []struct {

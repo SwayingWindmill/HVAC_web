@@ -30,6 +30,7 @@ type PrunedRuntimeHistory struct {
 	IngestQuarantines  int64
 	RecoveryCursors    int64
 	Subscriptions      int64
+	ReplayPositions    int64
 }
 
 const (
@@ -62,11 +63,15 @@ DELETE FROM telemetry_runtime.telemetry_publication_outbox
 WHERE event_id IN (
   SELECT event_id
   FROM telemetry_runtime.telemetry_publication_outbox
-  WHERE (delivery_state = 'DEAD' AND created_at < $1)
-     OR (delivery_state IN ('PUBLISHED', 'DEAD')
-         AND latest_cache_state IN ('NOT_APPLICABLE', 'MATERIALIZED')
-         AND alarm_delivery_state = 'DEAD_LETTER'
-         AND alarm_dead_lettered_at < $1)
+  WHERE latest_cache_state IN ('NOT_APPLICABLE', 'MATERIALIZED')
+    AND (
+      (delivery_state = 'DEAD'
+       AND created_at < $1
+       AND (alarm_delivery_state IS NULL OR alarm_delivery_state IN ('PUBLISHED', 'DEAD_LETTER')))
+      OR (delivery_state IN ('PUBLISHED', 'DEAD')
+          AND alarm_delivery_state = 'DEAD_LETTER'
+          AND alarm_dead_lettered_at < $1)
+    )
   LIMIT $2
 )`
 	pruneHistoryEventsSQL = `
@@ -111,7 +116,6 @@ WHERE quarantine_id IN (
   SELECT quarantine_id
   FROM telemetry_runtime.ingest_quarantine
   WHERE detected_at < $1
-    AND (resolved_at IS NOT NULL OR detected_at < $1)
   LIMIT $2
 )`
 	pruneRecoveryCursorsSQL = `
@@ -136,6 +140,15 @@ WHERE subscription_id IN (
       SELECT 1 FROM telemetry_runtime.telemetry_publication_outbox AS pub
       WHERE pub.subscription_id = sub.subscription_id
     )
+  LIMIT $2
+)`
+	pruneReplaySourcePositionsSQL = `
+DELETE FROM telemetry_runtime.source_positions
+WHERE (source_id, source_partition) IN (
+  SELECT source_id, source_partition
+  FROM telemetry_runtime.source_positions
+  WHERE source_partition LIKE 'mqtt-replay:%'
+    AND updated_at < $1
   LIMIT $2
 )`
 )
@@ -166,6 +179,7 @@ func (store *PostgresStore) PruneRuntimeHistory(ctx context.Context, now time.Ti
 		{label: "ingest quarantines", query: pruneIngestQuarantinesSQL, cutoff: sourceCutoff, target: &pruned.IngestQuarantines},
 		{label: "recovery cursors", query: pruneRecoveryCursorsSQL, cutoff: cutoff, target: &pruned.RecoveryCursors},
 		{label: "subscriptions", query: pruneSubscriptionsSQL, cutoff: cutoff, target: &pruned.Subscriptions},
+		{label: "replay source positions", query: pruneReplaySourcePositionsSQL, cutoff: sourceCutoff, target: &pruned.ReplayPositions},
 	}
 	for _, step := range steps {
 		deleted, err := store.pruneInBatches(ctx, step.query, step.cutoff)

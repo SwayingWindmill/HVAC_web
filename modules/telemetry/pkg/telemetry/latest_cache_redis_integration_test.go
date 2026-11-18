@@ -111,12 +111,21 @@ func TestRedisLatestCachePreventsEventTimeRollbackAndSetsTTL(t *testing.T) {
 		t.Fatal("higher business revision with older SampledAt unexpectedly rolled back Redis Latest")
 	}
 
+	// If configuration removes a point whose timestamp was highest, the key set signature
+	// changes so the higher BusinessRevision must advance rather than pinning stale keys.
+	unconfigured := realtimeTestSnapshot(baseTime.Add(-10*time.Minute), 4)
+	unconfigured.Values[0].Present.Key = "zone.humidity"
+	applied, err = cache.PutIfNewer(t.Context(), unconfigured)
+	if err != nil || !applied {
+		t.Fatalf("key-set change higher revision rejected: applied=%t err=%v", applied, err)
+	}
+
 	cached, err := cache.GetForDevice(t.Context(), string(newer.TenantId), string(newer.DeviceId))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cached.BusinessRevision != 2 || string(cached.Values[0].Present.Value) != "21.5" {
-		t.Fatalf("cached snapshot unexpectedly rolled back: rev=%d val=%s", cached.BusinessRevision, cached.Values[0].Present.Value)
+	if cached.BusinessRevision != 4 || cached.Values[0].Present.Key != "zone.humidity" {
+		t.Fatalf("cached snapshot did not advance on key-set change: rev=%d key=%s", cached.BusinessRevision, cached.Values[0].Present.Key)
 	}
 
 	dataTTL, err := cache.client.TTL(t.Context(), cache.key(newer.TenantId, newer.SiteId, newer.DeviceId)).Result()

@@ -211,7 +211,7 @@ func TestHistoryMicrobatchOutlastsClickHouseOutage(t *testing.T) {
 	sink := &outageSink{failures: 50}
 	relay, err := NewHistoryRelay(HistoryRelayConfig{
 		Repository: repo, Sink: sink, BatchSize: 4, LeaseFor: 30 * time.Second, RetryAfter: 5 * time.Second,
-		MaxAttempts: -1, Now: func() time.Time { return now },
+		Now: func() time.Time { return now },
 	})
 	if err != nil {
 		t.Fatal(err)

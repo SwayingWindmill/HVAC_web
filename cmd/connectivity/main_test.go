@@ -477,6 +477,14 @@ func TestOpenConcentratorAndSharedSessionLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openConcentratorAndSharedSession default failed: %v", err)
 	}
+	if sharedCfg := buildSharedUplinkSessionConfig(mqttCfg, logger, observability.NewRegistry()); sharedCfg.ReceiveMaximum != 256 {
+		t.Fatalf("default ReceiveMaximum=%d, want 256", sharedCfg.ReceiveMaximum)
+	}
+	customMQTTCfg := mqttCfg
+	customMQTTCfg.ReceiveMaximum = 64
+	if customCfg := buildSharedUplinkSessionConfig(customMQTTCfg, logger, observability.NewRegistry()); customCfg.ReceiveMaximum != 64 {
+		t.Fatalf("custom ReceiveMaximum=%d, want 64", customCfg.ReceiveMaximum)
+	}
 	if session == nil || transport == nil {
 		t.Fatalf("expected shared session and transport, got session=%v transport=%v", session, transport)
 	}

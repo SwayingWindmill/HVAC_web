@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 )
 
@@ -14,15 +13,18 @@ func sourcePartition(gatewayID, deviceID, pointCode string) string {
 	return "mqtt:" + strings.TrimSpace(gatewayID) + ":" + strings.TrimSpace(deviceID) + ":" + strings.TrimSpace(pointCode)
 }
 
-func liveSourcePartition(gatewayID string, epoch int64, deviceID, pointCode string) string {
-	if epoch > 0 {
-		return "mqtt:" + strings.TrimSpace(gatewayID) + ":e" + strconv.FormatInt(epoch, 10) + ":" + strings.TrimSpace(deviceID) + ":" + strings.TrimSpace(pointCode)
+func replaySourcePartition(gatewayID, messageID, deviceID, pointCode string) string {
+	hasher := sha256.New()
+	for _, field := range [][]byte{
+		[]byte(strings.TrimSpace(messageID)), {0},
+		[]byte(strings.TrimSpace(deviceID)), {0},
+		[]byte(strings.TrimSpace(pointCode)),
+	} {
+		hasher.Write(field)
 	}
-	return sourcePartition(gatewayID, deviceID, pointCode)
-}
-
-func replaySourcePartition(gatewayID, deviceID, pointCode string) string {
-	return "mqtt-replay:" + strings.TrimSpace(gatewayID) + ":" + strings.TrimSpace(deviceID) + ":" + strings.TrimSpace(pointCode)
+	var digest [sha256.Size]byte
+	hasher.Sum(digest[:0])
+	return "mqtt-replay:" + strings.TrimSpace(gatewayID) + ":" + hex.EncodeToString(digest[:16])
 }
 
 func deterministicPointEventID(messageID string, deviceTimestamp int64, point EnvelopePoint, partition string) (string, error) {

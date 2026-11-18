@@ -191,19 +191,19 @@ FOR UPDATE
 	} else if err != nil {
 		return HistoryBatch{}, fmt.Errorf("inspect telemetry history batch: %w", err)
 	}
-	if (state == "IN_FLIGHT" && leasedUntil.After(now.UTC())) || (!newBatch && state == "PENDING" && availableAt.After(now.UTC())) {
+	if (state == "IN_FLIGHT" && leasedUntil != nil && leasedUntil.After(now.UTC())) || (!newBatch && state == "PENDING" && availableAt.After(now.UTC())) {
 		if commitErr := tx.Commit(ctx); commitErr != nil {
 			return HistoryBatch{}, fmt.Errorf("commit busy telemetry history claim: %w", commitErr)
 		}
 		return HistoryBatch{}, nil
 	}
-	query := `SELECT event_id::text, payload, outbox_payload_sha256, attempts
+	query := `SELECT event_id::text, payload, attempts
 FROM telemetry_runtime.telemetry_history_outbox
 WHERE batch_id = $1::uuid AND delivery_state IN ('PENDING','IN_FLIGHT')
 ORDER BY event_id FOR UPDATE`
 	args := []any{batchID}
 	if newBatch {
-		query = `SELECT event_id::text, payload, outbox_payload_sha256, attempts
+		query = `SELECT event_id::text, payload, attempts
 FROM telemetry_runtime.telemetry_history_outbox
 WHERE batch_id IS NULL AND delivery_state = 'PENDING' AND available_at <= $1
 ORDER BY available_at, event_id LIMIT $2 FOR UPDATE SKIP LOCKED`
@@ -219,24 +219,20 @@ ORDER BY available_at, event_id LIMIT $2 FOR UPDATE SKIP LOCKED`
 	batchBytes := 0
 	maxAttempts := 0
 	for rows.Next() {
-		var eventID, expectedDigest string
+		var eventID string
 		var payload []byte
 		var attempts int
-		if err := rows.Scan(&eventID, &payload, &expectedDigest, &attempts); err != nil {
+		if err := rows.Scan(&eventID, &payload, &attempts); err != nil {
 			rows.Close()
 			return HistoryBatch{}, fmt.Errorf("scan telemetry history row: %w", err)
 		}
-		observation, rowBytes, failureCode := validateClaimedHistoryRow(eventID, payload, expectedDigest)
+		observation, rowBytes, failureCode := validateClaimedHistoryRow(eventID, payload)
 		if failureCode != "" {
 			invalidByCode[failureCode] = append(invalidByCode[failureCode], eventID)
 			continue
 		}
-		if batchBytes+rowBytes > maxHistoryBatchBytes {
-			if len(observations) > 0 {
-				break
-			}
-			rows.Close()
-			return HistoryBatch{}, errors.New("telemetry history persisted batch exceeds 8 MiB")
+		if len(observations) > 0 && batchBytes+rowBytes > maxHistoryBatchBytes {
+			break
 		}
 		batchBytes += rowBytes
 		observations = append(observations, observation)
@@ -285,13 +281,16 @@ WHERE event_id = ANY($4::uuid[])`, batchID, leaseID, now.UTC().Add(leaseFor), ev
 	return HistoryBatch{LeaseID: leaseID, BatchID: batchID, Sequence: sequence, MaxAttempts: maxAttempts, Observations: observations}, nil
 }
 
-func validateClaimedHistoryRow(eventID string, payload []byte, expectedDigest string) (HistoryObservation, int, string) {
+func validateClaimedHistoryRow(eventID string, payload []byte) (HistoryObservation, int, string) {
 	var observation HistoryObservation
 	if err := json.Unmarshal(payload, &observation); err != nil {
 		return HistoryObservation{}, 0, historyPayloadInvalidCode
 	}
-	encoded, actualDigest, err := encodeHistoryObservation(observation)
-	if err != nil || observation.ObservationID != eventID || actualDigest != expectedDigest {
+	if observation.ObservationID != eventID || validateHistoryObservation(observation) != nil {
+		return HistoryObservation{}, 0, historyPayloadInvalidCode
+	}
+	encoded, _, err := encodeHistoryObservation(observation)
+	if err != nil {
 		return HistoryObservation{}, 0, historyPayloadInvalidCode
 	}
 	rowBytes := len(encoded) + 1
