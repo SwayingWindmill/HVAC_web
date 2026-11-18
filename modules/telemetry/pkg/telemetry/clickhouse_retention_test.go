@@ -62,13 +62,13 @@ func TestClickHouseRetentionPrunerTieredDefaultsAndLegalHolds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.SubmittedTables) != 6 {
+	if len(result.SubmittedTables) != 8 {
 		t.Fatalf("submitted tables=%v", result.SubmittedTables)
 	}
 
 	mutex.Lock()
 	defer mutex.Unlock()
-	if len(calls) != 6 {
+	if len(calls) != 8 {
 		t.Fatalf("call count=%d", len(calls))
 	}
 
@@ -88,6 +88,14 @@ func TestClickHouseRetentionPrunerTieredDefaultsAndLegalHolds(t *testing.T) {
 		},
 		{
 			sqlPrefix:   "ALTER TABLE telemetry_history.numeric_15min_states DELETE WHERE bucket < {cutoff:DateTime('UTC')}",
+			expectedCut: now.Add(-1825 * 24 * time.Hour).Format("2006-01-02 15:04:05"),
+		},
+		{
+			sqlPrefix:   "ALTER TABLE telemetry_history.numeric_gauge_1min_states DELETE WHERE bucket < {cutoff:DateTime('UTC')}",
+			expectedCut: now.Add(-365 * 24 * time.Hour).Format("2006-01-02 15:04:05"),
+		},
+		{
+			sqlPrefix:   "ALTER TABLE telemetry_history.numeric_gauge_15min_states DELETE WHERE bucket < {cutoff:DateTime('UTC')}",
 			expectedCut: now.Add(-1825 * 24 * time.Hour).Format("2006-01-02 15:04:05"),
 		},
 		{

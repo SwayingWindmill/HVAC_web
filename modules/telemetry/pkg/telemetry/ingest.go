@@ -218,7 +218,7 @@ func EvaluateObservation(candidate ObservationCandidate, facts ObservationFacts,
 	decision.PolicyRevision = facts.Policy.Revision
 	decision.PresencePolicyRevision = facts.Policy.PresencePolicyRevision
 
-	reasons, rejected := validateObservation(candidate, *facts.Policy, evaluatedAt)
+	reasons, rejected := validateObservation(candidate, *facts.Policy, decision.PointType, evaluatedAt)
 	reasons = append(reasons, assessCandidateQuality(candidate, facts, true)...)
 	reasons = canonicalIngestReasons(reasons)
 	decision.QualityReasons = reasons
@@ -284,7 +284,7 @@ func EvaluateHistoricalObservation(candidate ObservationCandidate, facts Observa
 	decision.PolicyRevision = facts.Policy.Revision
 	decision.PresencePolicyRevision = facts.Policy.PresencePolicyRevision
 
-	reasons, rejected := validateObservation(candidate, *facts.Policy, evaluatedAt)
+	reasons, rejected := validateObservation(candidate, *facts.Policy, decision.PointType, evaluatedAt)
 	reasons = append(reasons, assessCandidateQuality(candidate, facts, false)...)
 	reasons = slices.DeleteFunc(reasons, func(reason QualityReason) bool { return reason == QualityReasonSourceLagExceeded })
 	reasons = canonicalIngestReasons(reasons)
@@ -455,7 +455,7 @@ func resolveObservationIdentity(facts ObservationFacts) (ObservationDecision, bo
 	return decision, true
 }
 
-func validateObservation(candidate ObservationCandidate, policy ObservationPolicy, evaluatedAt time.Time) ([]QualityReason, bool) {
+func validateObservation(candidate ObservationCandidate, policy ObservationPolicy, pointType string, evaluatedAt time.Time) ([]QualityReason, bool) {
 	reasons := make([]QualityReason, 0, 5)
 	rejected := false
 	if candidate.WireQuality != 0 {
@@ -475,6 +475,14 @@ func validateObservation(candidate ObservationCandidate, policy ObservationPolic
 	if validValue && actualType == "NUMBER" {
 		if policy.MinimumNumber != nil && number < *policy.MinimumNumber || policy.MaximumNumber != nil && number > *policy.MaximumNumber {
 			reasons = append(reasons, QualityReasonOutOfRange)
+			rejected = true
+		}
+		unit := candidate.Unit
+		if unit == nil {
+			unit = policy.Unit
+		}
+		if physicalReasons := ValidatePhysicalBounds(number, unit, pointType); len(physicalReasons) > 0 {
+			reasons = append(reasons, physicalReasons...)
 			rejected = true
 		}
 	}

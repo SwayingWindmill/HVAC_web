@@ -594,15 +594,15 @@ func TestEvaluateEdgeReplayObservationIsolatesSnapshotAndIgnoresSourceLag(t *tes
 
 func TestEvaluateBatchCandidatesIsolatesEdgeReplay(t *testing.T) {
 	t0 := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
-	unitCel := "Cel"
+	unitKWh := "kWh"
 	dev := ResolvedDevice{TenantID: ingestTenantA, SiteID: siteA, DeviceID: deviceA}
-	ptReplay := ResolvedPoint{PointID: "018f2e00-3100-7000-8000-000000000001", PointType: "COUNTER", ValueType: "NUMBER", Unit: &unitCel, CounterDecreaseMode: stringPointer("RESET_TO_ZERO"), PointRevision: 1}
-	ptLive := ResolvedPoint{PointID: "018f2e00-3100-7000-8000-000000000001", PointType: "COUNTER", ValueType: "NUMBER", Unit: &unitCel, CounterDecreaseMode: stringPointer("RESET_TO_ZERO"), PointRevision: 2}
+	ptReplay := ResolvedPoint{PointID: "018f2e00-3100-7000-8000-000000000001", PointType: "COUNTER", ValueType: "NUMBER", Unit: &unitKWh, CounterDecreaseMode: stringPointer("RESET_TO_ZERO"), PointRevision: 1}
+	ptLive := ResolvedPoint{PointID: "018f2e00-3100-7000-8000-000000000001", PointType: "COUNTER", ValueType: "NUMBER", Unit: &unitKWh, CounterDecreaseMode: stringPointer("RESET_TO_ZERO"), PointRevision: 2}
 
 	replayCandidate := ObservationCandidate{
 		SourceID: sourceA, SourcePath: SourcePathPush, ExternalEntityType: "DEVICE", ExternalID: "dev-a",
 		Device: &dev, Point: &ptReplay, TelemetryKey: "energy.total",
-		Value: json.RawMessage(`102.5`), ValueType: "NUMBER", Unit: &unitCel,
+		Value: json.RawMessage(`102.5`), ValueType: "NUMBER", Unit: &unitKWh,
 		SampledAt: t0.Add(-48 * time.Hour), ReceivedAt: t0,
 		Position:   SourcePosition{Partition: "p0", Offset: 1, EventID: ingestEvent(1)},
 		EdgeReplay: true,
@@ -610,7 +610,7 @@ func TestEvaluateBatchCandidatesIsolatesEdgeReplay(t *testing.T) {
 	liveCandidate := ObservationCandidate{
 		SourceID: sourceA, SourcePath: SourcePathPush, ExternalEntityType: "DEVICE", ExternalID: "dev-a",
 		Device: &dev, Point: &ptLive, TelemetryKey: "energy.total",
-		Value: json.RawMessage(`205.0`), ValueType: "NUMBER", Unit: &unitCel,
+		Value: json.RawMessage(`205.0`), ValueType: "NUMBER", Unit: &unitKWh,
 		SampledAt: t0, ReceivedAt: t0,
 		Position: SourcePosition{Partition: "p0", Offset: 2, EventID: ingestEvent(2)},
 	}
@@ -624,7 +624,7 @@ func TestEvaluateBatchCandidatesIsolatesEdgeReplay(t *testing.T) {
 		latestByPoint: map[deviceKey]latestPointState{},
 		policies: map[deviceKey]loadedPolicy{
 			{deviceID: deviceA, key: "energy.total"}: {
-				policy: ObservationPolicy{Revision: 1, PresencePolicyRevision: 1, ValueType: "NUMBER", Unit: &unitCel, MaxFutureClockSkew: 30 * time.Second, MaxSourceLag: time.Minute},
+				policy: ObservationPolicy{Revision: 1, PresencePolicyRevision: 1, ValueType: "NUMBER", Unit: &unitKWh, MaxFutureClockSkew: 30 * time.Second, MaxSourceLag: time.Minute},
 			},
 		},
 	}
@@ -672,4 +672,59 @@ func TestEvaluateBatchCandidatesIsolatesEdgeReplay(t *testing.T) {
 	if len(plan.presenceSignals) != 1 || len(plan.latestUpdates) != 1 || len(plan.reevalDeviceOrder) != 1 {
 		t.Fatalf("edge replay mutated presence/latest/snapshot plans: presence=%d latest=%d reeval=%d", len(plan.presenceSignals), len(plan.latestUpdates), len(plan.reevalDeviceOrder))
 	}
+}
+
+func TestEvaluateObservationRejectsPhysicalBoundsAndRegisterSentinels(t *testing.T) {
+	now := time.Date(2026, 7, 24, 2, 0, 0, 0, time.UTC)
+
+	makeCase := func(unit, pointType, rawVal string) (ObservationCandidate, ObservationFacts) {
+		c := validObservationCandidate(now)
+		c.Unit = &unit
+		c.Value = json.RawMessage(rawVal)
+		f := validObservationFacts()
+		f.Point.PointType = pointType
+		f.Point.Unit = &unit
+		f.Policy.Unit = &unit
+		f.Policy.MinimumNumber = nil
+		f.Policy.MaximumNumber = nil
+		return c, f
+	}
+
+	// Register sentinel on bounded non-counter unit rejects as OUT_OF_RANGE + SENTINEL and records BAD health.
+	sentinelCand, sentinelFacts := makeCase("Cel", "TELEMETRY", `65535`)
+	sentinelDec := EvaluateObservation(sentinelCand, sentinelFacts, now)
+	assertObservationDecision(t, sentinelDec, ObservationRejected, QualityInvalid, []QualityReason{QualityReasonOutOfRange, QualityReasonSentinel}, true, false)
+	if !sentinelDec.RecordHealth || sentinelDec.HealthStatus != HealthBad || sentinelDec.HealthScore != 0 {
+		t.Fatalf("sentinel health=%#v", sentinelDec)
+	}
+
+	// Canonical evaluator must accept all returned QualityReason codes.
+	if _, err := canonicalQualityReasons(healthReasonCodes(sentinelDec.QualityReasons)); err != nil {
+		t.Fatalf("returned quality reasons rejected by canonical contract: %v", err)
+	}
+
+	// Physical envelope violations without policy min/max still reject.
+	for _, tc := range []struct {
+		unit, val string
+	}{
+		{"%RH", `-5`},
+		{"Hz", `150`},
+		{"L/s", `35000`},
+		{"Cel", `250`},
+	} {
+		cand, facts := makeCase(tc.unit, "TELEMETRY", tc.val)
+		dec := EvaluateObservation(cand, facts, now)
+		assertObservationDecision(t, dec, ObservationRejected, QualityInvalid, []QualityReason{QualityReasonOutOfRange}, true, false)
+	}
+
+	// Large valid chiller plant pressure in Pa must not false-positive as 16-bit sentinel.
+	paCand, paFacts := makeCase("Pa", "TELEMETRY", `32767`)
+	paDec := EvaluateObservation(paCand, paFacts, now)
+	assertObservationDecision(t, paDec, ObservationAccepted, QualityGood, nil, true, true)
+
+	// Historical replay also enforces physical bounds and 16-bit sentinels.
+	sentinelCand.SourcePath = SourcePathHistoryReplay
+	sentinelCand.SampledAt = now.Add(-48 * time.Hour)
+	histDec := EvaluateHistoricalObservation(sentinelCand, sentinelFacts, now)
+	assertObservationDecision(t, histDec, ObservationRejected, QualityInvalid, []QualityReason{QualityReasonOutOfRange, QualityReasonSentinel}, true, false)
 }

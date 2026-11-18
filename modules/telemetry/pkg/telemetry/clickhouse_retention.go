@@ -168,6 +168,22 @@ func NewClickHouseRetentionPruner(config ClickHouseRetentionConfig) (*ClickHouse
 			},
 			{
 				database:   historyDB,
+				table:      "numeric_gauge_1min_states",
+				timeColumn: "bucket",
+				paramType:  "DateTime('UTC')",
+				timeLayout: "2006-01-02 15:04:05",
+				retention:  numeric1MinRetention,
+			},
+			{
+				database:   historyDB,
+				table:      "numeric_gauge_15min_states",
+				timeColumn: "bucket",
+				paramType:  "DateTime('UTC')",
+				timeLayout: "2006-01-02 15:04:05",
+				retention:  numeric15MinRetention,
+			},
+			{
+				database:   historyDB,
 				table:      "numeric_hourly_states",
 				timeColumn: "hour",
 				paramType:  "DateTime('UTC')",

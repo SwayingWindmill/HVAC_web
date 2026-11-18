@@ -46,11 +46,13 @@ type aggregateRow struct {
 	StateSamples   int64    `json:"state_sample_count"`
 	StateChanges   int64    `json:"state_change_count"`
 	StateValues    []string `json:"state_values"`
+	MaxProjectedAt *string  `json:"max_projected_at,omitempty"`
 }
 
 type aggregateSnapshotRow struct {
 	SnapshotAt          string  `json:"snapshot_at"`
 	ProjectionWatermark *string `json:"projection_watermark"`
+	HasConcurrentWrites uint8   `json:"has_concurrent_writes"`
 }
 
 type calendarPeriod struct {
@@ -73,17 +75,33 @@ func (client *Client) QueryDeviceHistoryAggregate(ctx context.Context, query tel
 	if len(periods) > canonical.Granularity.MaxBucketsPerKey() {
 		return telemetryhistorymodel.DeviceHistoryAggregateResponse{}, errors.New("history aggregate query exceeds bucket limit")
 	}
-	snapshotAt, watermark, err := client.aggregateSnapshot(ctx, canonical)
+	snapshotAt, watermark, hasConcurrentWrites, err := client.aggregateSnapshot(ctx, canonical)
 	if err != nil {
 		return telemetryhistorymodel.DeviceHistoryAggregateResponse{}, err
 	}
-	queries := []string{
-		client.gaugeAggregateQuery(canonical, snapshotAt),
+	gaugeSQL, usedRollup := client.gaugeAggregateQueryForSnapshot(canonical, snapshotAt, periods, hasConcurrentWrites)
+	gaugePayload, err := client.execute(ctx, gaugeSQL)
+	if err != nil {
+		return telemetryhistorymodel.DeviceHistoryAggregateResponse{}, err
+	}
+	rows, err := decodeAggregateRows(gaugePayload)
+	if err != nil {
+		return telemetryhistorymodel.DeviceHistoryAggregateResponse{}, err
+	}
+	if usedRollup && rollupHasConcurrentWrites(rows, snapshotAt) {
+		rawPayload, err := client.execute(ctx, client.rawGaugeAggregateQuery(canonical, snapshotAt))
+		if err != nil {
+			return telemetryhistorymodel.DeviceHistoryAggregateResponse{}, err
+		}
+		rows, err = decodeAggregateRows(rawPayload)
+		if err != nil {
+			return telemetryhistorymodel.DeviceHistoryAggregateResponse{}, err
+		}
+	}
+	for _, sql := range []string{
 		client.counterAggregateQuery(canonical, snapshotAt),
 		client.stateAggregateQuery(canonical, snapshotAt),
-	}
-	rows := make([]aggregateRow, 0)
-	for _, sql := range queries {
+	} {
 		payload, err := client.execute(ctx, sql)
 		if err != nil {
 			return telemetryhistorymodel.DeviceHistoryAggregateResponse{}, err
@@ -140,29 +158,29 @@ func (client *Client) QueryDeviceHistoryAggregate(ctx context.Context, query tel
 	return response, nil
 }
 
-func (client *Client) aggregateSnapshot(ctx context.Context, query telemetryhistorymodel.DeviceHistoryAggregateQuery) (time.Time, *time.Time, error) {
+func (client *Client) aggregateSnapshot(ctx context.Context, query telemetryhistorymodel.DeviceHistoryAggregateQuery) (time.Time, *time.Time, bool, error) {
 	payload, err := client.execute(ctx, client.aggregateSnapshotQuery(query))
 	if err != nil {
-		return time.Time{}, nil, err
+		return time.Time{}, nil, false, err
 	}
 	var row aggregateSnapshotRow
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	if err := decoder.Decode(&row); err != nil {
-		return time.Time{}, nil, fmt.Errorf("decode ClickHouse aggregate snapshot: %w", err)
+		return time.Time{}, nil, false, fmt.Errorf("decode ClickHouse aggregate snapshot: %w", err)
 	}
 	snapshotAt, err := parseClickHouseTime(row.SnapshotAt)
 	if err != nil {
-		return time.Time{}, nil, fmt.Errorf("decode ClickHouse aggregate snapshot time: %w", err)
+		return time.Time{}, nil, false, fmt.Errorf("decode ClickHouse aggregate snapshot time: %w", err)
 	}
 	var watermark *time.Time
 	if row.ProjectionWatermark != nil && strings.TrimSpace(*row.ProjectionWatermark) != "" {
 		parsed, err := parseClickHouseTime(*row.ProjectionWatermark)
 		if err != nil {
-			return time.Time{}, nil, fmt.Errorf("decode ClickHouse aggregate projection watermark: %w", err)
+			return time.Time{}, nil, false, fmt.Errorf("decode ClickHouse aggregate projection watermark: %w", err)
 		}
 		watermark = &parsed
 	}
-	return snapshotAt, watermark, nil
+	return snapshotAt, watermark, row.HasConcurrentWrites != 0, nil
 }
 
 func decodeAggregateRows(payload []byte) ([]aggregateRow, error) {
@@ -322,7 +340,8 @@ func (client *Client) aggregateSnapshotQuery(query telemetryhistorymodel.DeviceH
 	return fmt.Sprintf(`WITH now64(3) AS snapshot_cutoff
 SELECT
   formatDateTime(snapshot_cutoff, '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS snapshot_at,
-  if(count() = 0, CAST(NULL, 'Nullable(String)'), formatDateTime(max(projected_at), '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC')) AS projection_watermark
+  if(countIf(projected_at < snapshot_cutoff) = 0, CAST(NULL, 'Nullable(String)'), formatDateTime(maxIf(projected_at, projected_at < snapshot_cutoff), '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC')) AS projection_watermark,
+  if(countIf(projected_at >= snapshot_cutoff) > 0, toUInt8(1), toUInt8(0)) AS has_concurrent_writes
 FROM %s.%s
 WHERE tenant_id = toUUID('%s')
   AND site_id = toUUID('%s')
@@ -330,7 +349,6 @@ WHERE tenant_id = toUUID('%s')
   AND telemetry_key IN (%s)
   AND sampled_at >= parseDateTime64BestEffort('%s', 3, 'UTC')
   AND sampled_at < parseDateTime64BestEffort('%s', 3, 'UTC')
-  AND projected_at < snapshot_cutoff
   AND acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER')
   AND point_id IS NOT NULL AND point_revision IS NOT NULL
   AND point_type IN ('TELEMETRY', 'COUNTER', 'STATE', 'SETTING')
@@ -338,6 +356,138 @@ FORMAT JSONEachRow`, client.database, client.table, query.TenantID, query.SiteID
 }
 
 func (client *Client) gaugeAggregateQuery(query telemetryhistorymodel.DeviceHistoryAggregateQuery, snapshotAt time.Time) string {
+	periods, err := buildCalendarPeriods(query)
+	if err != nil {
+		return client.rawGaugeAggregateQuery(query, snapshotAt)
+	}
+	sql, _ := client.gaugeAggregateQueryForSnapshot(query, snapshotAt, periods, false)
+	return sql
+}
+
+func (client *Client) gaugeAggregateQueryForSnapshot(query telemetryhistorymodel.DeviceHistoryAggregateQuery, snapshotAt time.Time, periods []calendarPeriod, hasConcurrentWrites bool) (string, bool) {
+	if rollupTable, ok := client.gaugeRollupTable(query, periods, hasConcurrentWrites); ok {
+		return client.rollupGaugeAggregateQuery(query, rollupTable), true
+	}
+	return client.rawGaugeAggregateQuery(query, snapshotAt), false
+}
+
+func (client *Client) gaugeRollupTable(query telemetryhistorymodel.DeviceHistoryAggregateQuery, periods []calendarPeriod, hasConcurrentWrites bool) (string, bool) {
+	if client == nil || client.database != "telemetry_history" || client.table != "observations" || hasConcurrentWrites {
+		return "", false
+	}
+	var step time.Duration
+	var table string
+	switch query.Granularity {
+	case telemetryhistorymodel.AggregateGranularityMinute, telemetryhistorymodel.AggregateGranularityFiveMinute:
+		step = time.Minute
+		table = "telemetry_history.numeric_gauge_1min_states"
+	case telemetryhistorymodel.AggregateGranularityQuarterHour,
+		telemetryhistorymodel.AggregateGranularityHour,
+		telemetryhistorymodel.AggregateGranularityDay,
+		telemetryhistorymodel.AggregateGranularityWeek,
+		telemetryhistorymodel.AggregateGranularityMonth:
+		step = 15 * time.Minute
+		table = "telemetry_history.numeric_gauge_15min_states"
+	default:
+		return "", false
+	}
+	location, err := time.LoadLocation(query.Timezone)
+	if err != nil {
+		return "", false
+	}
+	if !alignedToStepAndTimezone(query.From, location, step) || !alignedToStepAndTimezone(query.To, location, step) {
+		return "", false
+	}
+	for _, period := range periods {
+		if !alignedToStepAndTimezone(period.Start, location, step) || !alignedToStepAndTimezone(period.End, location, step) {
+			return "", false
+		}
+	}
+	return table, true
+}
+
+func alignedToStepAndTimezone(ts time.Time, location *time.Location, step time.Duration) bool {
+	utc := ts.UTC()
+	if utc.Nanosecond() != 0 || utc.Second() != 0 {
+		return false
+	}
+	stepMinutes := int(step / time.Minute)
+	if stepMinutes <= 0 || utc.Minute()%stepMinutes != 0 {
+		return false
+	}
+	_, offsetSeconds := utc.In(location).Zone()
+	stepSeconds := int(step / time.Second)
+	return offsetSeconds%stepSeconds == 0
+}
+
+func rollupHasConcurrentWrites(rows []aggregateRow, snapshotAt time.Time) bool {
+	for _, row := range rows {
+		if row.MaxProjectedAt == nil || strings.TrimSpace(*row.MaxProjectedAt) == "" {
+			continue
+		}
+		parsed, err := parseClickHouseTime(*row.MaxProjectedAt)
+		if err != nil || !parsed.Before(snapshotAt) {
+			return true
+		}
+	}
+	return false
+}
+
+func (client *Client) rollupGaugeAggregateQuery(query telemetryhistorymodel.DeviceHistoryAggregateQuery, rollupTable string) string {
+	bucket, end := aggregateBucketExpressionsFor(query, "rollup.bucket", "period_bucket")
+	prefix := "usable"
+	if query.QualityPolicy == telemetryhistorymodel.AggregateQualityValidOnly {
+		prefix = "valid"
+	}
+	fromUTC := query.From.UTC().Format("2006-01-02 15:04:05")
+	toUTC := query.To.UTC().Format("2006-01-02 15:04:05")
+	return fmt.Sprintf(`WITH %[1]s AS period_bucket
+SELECT
+  rollup.telemetry_key AS telemetry_key,
+  toString(rollup.point_id) AS point_id,
+  rollup.point_revision AS point_revision,
+  rollup.point_type AS point_type,
+  anyMerge(rollup.unit_state) AS unit,
+  formatDateTime(period_bucket, '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS period_start,
+  formatDateTime(%[2]s, '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS period_end,
+  countIfMerge(rollup.good_count) AS good_count,
+  countIfMerge(rollup.partial_count) AS partial_count,
+  countIfMerge(rollup.estimated_count) AS estimated_count,
+  countIfMerge(rollup.manual_count) AS manual_count,
+  countIfMerge(rollup.stale_count) AS stale_count,
+  countIfMerge(rollup.invalid_count) AS invalid_count,
+  countMerge(rollup.total_count) AS total_count,
+  countIfMerge(rollup.%[3]s_count) AS included_count,
+  avgIfMerge(rollup.%[3]s_avg) AS average,
+  minIfMerge(rollup.%[3]s_min) AS minimum,
+  maxIfMerge(rollup.%[3]s_max) AS maximum,
+  argMinIfMerge(rollup.%[3]s_first) AS first,
+  argMaxIfMerge(rollup.%[3]s_last) AS last,
+  CAST(NULL, 'Nullable(Float64)') AS delta_sum,
+  toInt64(0) AS delta_count,
+  toInt64(0) AS reset_count,
+  toInt64(0) AS rollover_count,
+  toInt64(0) AS excluded_transition_count,
+  CAST(NULL, 'Nullable(String)') AS state_value_type,
+  CAST(NULL, 'Nullable(String)') AS state_last_value,
+  toInt64(0) AS state_sample_count,
+  toInt64(0) AS state_change_count,
+  CAST([], 'Array(String)') AS state_values,
+  formatDateTime(maxMerge(rollup.max_projected_at), '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS max_projected_at
+FROM %[4]s AS rollup
+WHERE rollup.tenant_id = toUUID('%[5]s')
+  AND rollup.site_id = toUUID('%[6]s')
+  AND rollup.device_id = toUUID('%[7]s')
+  AND rollup.telemetry_key IN (%[8]s)
+  AND rollup.point_type IN ('TELEMETRY', 'SETTING')
+  AND rollup.bucket >= toDateTime('%[9]s', 'UTC')
+  AND rollup.bucket < toDateTime('%[10]s', 'UTC')
+GROUP BY rollup.telemetry_key, rollup.point_id, rollup.point_revision, rollup.point_type, period_bucket
+HAVING included_count > 0
+FORMAT JSONEachRow`, bucket, end, prefix, rollupTable, query.TenantID, query.SiteID, query.DeviceID, quotedKeys(query.Keys), fromUTC, toUTC)
+}
+
+func (client *Client) rawGaugeAggregateQuery(query telemetryhistorymodel.DeviceHistoryAggregateQuery, snapshotAt time.Time) string {
 	bucket, end := aggregateBucketExpressions(query)
 	included := aggregateQualityPredicate(query.QualityPolicy, "quality")
 	return fmt.Sprintf(`WITH %s AS bucket
@@ -530,23 +680,27 @@ FORMAT JSONEachRow`, client.database, client.table, query.TenantID, query.SiteID
 }
 
 func aggregateBucketExpressions(query telemetryhistorymodel.DeviceHistoryAggregateQuery) (string, string) {
+	return aggregateBucketExpressionsFor(query, "sampled_at", "bucket")
+}
+
+func aggregateBucketExpressionsFor(query telemetryhistorymodel.DeviceHistoryAggregateQuery, sourceColumn, bucketAlias string) (string, string) {
 	switch query.Granularity {
 	case telemetryhistorymodel.AggregateGranularityMinute:
-		return fmt.Sprintf("toStartOfInterval(sampled_at, INTERVAL 1 MINUTE, '%s')", query.Timezone), "addMinutes(bucket, 1)"
+		return fmt.Sprintf("toStartOfInterval(%s, INTERVAL 1 MINUTE, '%s')", sourceColumn, query.Timezone), fmt.Sprintf("addMinutes(%s, 1)", bucketAlias)
 	case telemetryhistorymodel.AggregateGranularityFiveMinute:
-		return fmt.Sprintf("toStartOfInterval(sampled_at, INTERVAL 5 MINUTE, '%s')", query.Timezone), "addMinutes(bucket, 5)"
+		return fmt.Sprintf("toStartOfInterval(%s, INTERVAL 5 MINUTE, '%s')", sourceColumn, query.Timezone), fmt.Sprintf("addMinutes(%s, 5)", bucketAlias)
 	case telemetryhistorymodel.AggregateGranularityQuarterHour:
-		return fmt.Sprintf("toStartOfInterval(sampled_at, INTERVAL 15 MINUTE, '%s')", query.Timezone), "addMinutes(bucket, 15)"
+		return fmt.Sprintf("toStartOfInterval(%s, INTERVAL 15 MINUTE, '%s')", sourceColumn, query.Timezone), fmt.Sprintf("addMinutes(%s, 15)", bucketAlias)
 	case telemetryhistorymodel.AggregateGranularityHour:
-		return fmt.Sprintf("toStartOfHour(sampled_at, '%s')", query.Timezone), "addHours(bucket, 1)"
+		return fmt.Sprintf("toStartOfHour(%s, '%s')", sourceColumn, query.Timezone), fmt.Sprintf("addHours(%s, 1)", bucketAlias)
 	case telemetryhistorymodel.AggregateGranularityDay:
-		return fmt.Sprintf("toStartOfDay(sampled_at, '%s')", query.Timezone), "addDays(bucket, 1)"
+		return fmt.Sprintf("toStartOfDay(%s, '%s')", sourceColumn, query.Timezone), fmt.Sprintf("addDays(%s, 1)", bucketAlias)
 	case telemetryhistorymodel.AggregateGranularityWeek:
-		return fmt.Sprintf("toStartOfWeek(sampled_at, 1, '%s')", query.Timezone), "addWeeks(bucket, 1)"
+		return fmt.Sprintf("toStartOfWeek(%s, 1, '%s')", sourceColumn, query.Timezone), fmt.Sprintf("addWeeks(%s, 1)", bucketAlias)
 	case telemetryhistorymodel.AggregateGranularityMonth:
-		return fmt.Sprintf("toStartOfMonth(sampled_at, '%s')", query.Timezone), "addMonths(bucket, 1)"
+		return fmt.Sprintf("toStartOfMonth(%s, '%s')", sourceColumn, query.Timezone), fmt.Sprintf("addMonths(%s, 1)", bucketAlias)
 	default:
-		return "sampled_at", "sampled_at"
+		return sourceColumn, sourceColumn
 	}
 }
 
