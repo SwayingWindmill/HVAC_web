@@ -136,6 +136,9 @@ type MQTTPublisher struct {
 	snapshotInterval        time.Duration
 	lastFullSnapshotAt      time.Time
 	lastPointStates         map[string]lastEmittedPointState
+	Deadband                float64
+	DeadbandMaxSilence      time.Duration
+	deadbandFilter          *edgecontrol.DeadbandFilter
 }
 
 func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewayConfig, edgeRuntime *EdgeControlRuntime, metrics *observability.Registry) (*MQTTPublisher, error) {
@@ -710,6 +713,34 @@ func (publisher *MQTTPublisher) SnapshotInterval() time.Duration {
 	return publisher.snapshotInterval
 }
 
+// SetDeadband configures optional analog deadband and max-silence heartbeat filtering.
+func (publisher *MQTTPublisher) SetDeadband(deadband float64, maxSilence time.Duration) {
+	if publisher == nil {
+		return
+	}
+	publisher.snapshotMu.Lock()
+	publisher.Deadband = deadband
+	publisher.DeadbandMaxSilence = maxSilence
+	publisher.deadbandFilter = nil
+	publisher.syncDeadbandFilterLocked()
+	publisher.snapshotMu.Unlock()
+}
+
+func (publisher *MQTTPublisher) syncDeadbandFilterLocked() *edgecontrol.DeadbandFilter {
+	if publisher == nil || math.IsNaN(publisher.Deadband) || math.IsInf(publisher.Deadband, 0) || publisher.Deadband <= 0 {
+		if publisher != nil {
+			publisher.deadbandFilter = nil
+		}
+		return nil
+	}
+	if publisher.deadbandFilter == nil ||
+		publisher.deadbandFilter.Deadband != publisher.Deadband ||
+		publisher.deadbandFilter.MaxSilence != publisher.DeadbandMaxSilence {
+		publisher.deadbandFilter = edgecontrol.NewDeadbandFilter(publisher.Deadband, publisher.DeadbandMaxSilence)
+	}
+	return publisher.deadbandFilter
+}
+
 func (publisher *MQTTPublisher) registerShadowDriverPoints(cfg GatewayModbusDriverConfig) {
 	if publisher == nil {
 		return
@@ -763,6 +794,9 @@ func (publisher *MQTTPublisher) registerShadowDriverPoints(cfg GatewayModbusDriv
 		publisher.snapshotMu.Lock()
 		for _, key := range removedKeys {
 			delete(publisher.lastPointStates, key)
+			if publisher.deadbandFilter != nil {
+				publisher.deadbandFilter.Forget(key)
+			}
 		}
 		publisher.snapshotMu.Unlock()
 	}
@@ -789,6 +823,9 @@ func (publisher *MQTTPublisher) unregisterShadowDriverPoints(deviceKey string) {
 		publisher.snapshotMu.Lock()
 		for _, key := range removedKeys {
 			delete(publisher.lastPointStates, key)
+			if publisher.deadbandFilter != nil {
+				publisher.deadbandFilter.Forget(key)
+			}
 		}
 		publisher.snapshotMu.Unlock()
 	}
@@ -869,9 +906,11 @@ func (publisher *MQTTPublisher) buildEnvelopeWithObservations(measurements []Mea
 	for k, v := range publisher.lastPointStates {
 		snapshotCopy[k] = v
 	}
+	deadbandFilter := publisher.syncDeadbandFilterLocked()
 	publisher.snapshotMu.Unlock()
 
 	updatedPointStates := make(map[string]lastEmittedPointState, len(measurements))
+	var emittedDeadbandSamples []edgecontrol.DeadbandSample
 	for _, measurement := range measurements {
 		refKey := pointReference(measurement.DeviceID, measurement.TelemetryKey)
 		point, ok := publisher.lookupPoint(measurement.DeviceID, measurement.TelemetryKey)
@@ -888,11 +927,27 @@ func (publisher *MQTTPublisher) buildEnvelopeWithObservations(measurements []Mea
 			quality = 1
 		}
 
-		deadband := telemetryDeadband(point, publisher.configShadow.deadbandFor(measurement.DeviceID, strings.TrimSpace(point.PointCode)))
-		prevState, hasPrev := snapshotCopy[refKey]
-		changed := !hasPrev || prevState.quality != quality || telemetryValueChanged(prevState.value, measurement.Value, deadband)
-		if !fullSnapshotDue && !changed {
-			continue
+		deadbandSample := edgecontrol.DeadbandSample{
+			Key:        refKey,
+			PointType:  point.PointType,
+			ValueType:  point.ValueType,
+			Value:      measurement.Value,
+			Quality:    edgecontrol.Quality(strings.ToUpper(strings.TrimSpace(measurement.Quality))),
+			ObservedAt: measurement.ObservedAt,
+		}
+		if !fullSnapshotDue {
+			if deadbandFilter != nil {
+				if !deadbandFilter.Check(deadbandSample) {
+					continue
+				}
+			} else {
+				deadband := telemetryDeadband(point, publisher.configShadow.deadbandFor(measurement.DeviceID, strings.TrimSpace(point.PointCode)))
+				prevState, hasPrev := snapshotCopy[refKey]
+				changed := !hasPrev || prevState.quality != quality || telemetryValueChanged(prevState.value, measurement.Value, deadband)
+				if !changed {
+					continue
+				}
+			}
 		}
 
 		var targets []shadowEmitTarget
@@ -926,6 +981,9 @@ func (publisher *MQTTPublisher) buildEnvelopeWithObservations(measurements []Mea
 		}
 		if len(targets) > 0 {
 			updatedPointStates[refKey] = lastEmittedPointState{value: measurement.Value, quality: quality}
+			if deadbandFilter != nil {
+				emittedDeadbandSamples = append(emittedDeadbandSamples, deadbandSample)
+			}
 			channelCode := strings.TrimSpace(point.PointCode)
 			if channelCode == "" {
 				channelCode = measurement.TelemetryKey
@@ -956,6 +1014,11 @@ func (publisher *MQTTPublisher) buildEnvelopeWithObservations(measurements []Mea
 	}
 	for k, v := range updatedPointStates {
 		publisher.lastPointStates[k] = v
+	}
+	if deadbandFilter != nil {
+		for _, sample := range emittedDeadbandSamples {
+			deadbandFilter.MarkEmitted(sample)
+		}
 	}
 	if fullSnapshotDue {
 		publisher.lastFullSnapshotAt = batchObservedAt

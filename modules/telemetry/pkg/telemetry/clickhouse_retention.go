@@ -30,6 +30,12 @@ type ClickHouseLegalHoldScope struct {
 	SiteID   string
 }
 
+// ColdArchiveExportRunner exports expiring rows for archiveable raw ClickHouse tables
+// before retention deletion mutations execute.
+type ColdArchiveExportRunner interface {
+	ExportBeforePrune(ctx context.Context, req ColdArchiveExportRequest) (ColdArchiveExportResult, error)
+}
+
 // ClickHouseRetentionConfig configures tiered ClickHouse TTL pruning via ALTER TABLE ... DELETE.
 type ClickHouseRetentionConfig struct {
 	BaseURL                 string
@@ -45,6 +51,8 @@ type ClickHouseRetentionConfig struct {
 	EnergyIntervalRetention time.Duration
 	EnergyHourlyRetention   time.Duration
 	LegalHolds              []ClickHouseLegalHoldScope
+	ArchiveExporter         ColdArchiveExportRunner
+	ArchiveRequired         bool
 }
 
 type clickHouseRetentionTarget struct {
@@ -55,29 +63,57 @@ type clickHouseRetentionTarget struct {
 	timeLayout    string
 	retention     time.Duration
 	nullableScope bool
+	archiveable   bool
 }
 
 // ClickHouseRetentionPruner issues parameterized ALTER TABLE ... DELETE mutations across tiered
 // telemetry_history and analytics tables while respecting configured legal-hold scopes.
 type ClickHouseRetentionPruner struct {
-	baseURL    *url.URL
-	username   string
-	password   string
-	httpClient *http.Client
-	targets    []clickHouseRetentionTarget
-	legalHolds []ClickHouseLegalHoldScope
+	baseURL         *url.URL
+	username        string
+	password        string
+	httpClient      *http.Client
+	targets         []clickHouseRetentionTarget
+	legalHolds      []ClickHouseLegalHoldScope
+	archiveExporter ColdArchiveExportRunner
+	archiveRequired bool
 }
 
 // ClickHouseRetentionResult records how many table delete mutations were submitted in a pass.
 type ClickHouseRetentionResult struct {
 	SubmittedTables []string
+	ArchivedTables  []string
+}
+
+func validateClickHouseBaseURL(raw, label string) (*url.URL, error) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed == nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil ||
+		(parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return nil, fmt.Errorf("%s base URL must be an HTTP(S) origin without user info", label)
+	}
+	return parsed, nil
+}
+
+func normalizeClickHouseLegalHolds(raw []ClickHouseLegalHoldScope) ([]ClickHouseLegalHoldScope, error) {
+	holds := make([]ClickHouseLegalHoldScope, 0, len(raw))
+	for _, hold := range raw {
+		tenantID := strings.ToLower(strings.TrimSpace(hold.TenantID))
+		siteID := strings.ToLower(strings.TrimSpace(hold.SiteID))
+		if !uuidPattern.MatchString(tenantID) {
+			return nil, errors.New("ClickHouse legal hold tenantId must be a valid UUID")
+		}
+		if siteID != "" && !uuidPattern.MatchString(siteID) {
+			return nil, errors.New("ClickHouse legal hold siteId must be a valid UUID")
+		}
+		holds = append(holds, ClickHouseLegalHoldScope{TenantID: tenantID, SiteID: siteID})
+	}
+	return holds, nil
 }
 
 func NewClickHouseRetentionPruner(config ClickHouseRetentionConfig) (*ClickHouseRetentionPruner, error) {
-	parsed, err := url.Parse(strings.TrimSpace(config.BaseURL))
-	if err != nil || parsed == nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil ||
-		(parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return nil, errors.New("ClickHouse retention base URL must be an HTTP(S) origin without user info")
+	parsed, err := validateClickHouseBaseURL(config.BaseURL, "ClickHouse retention")
+	if err != nil {
+		return nil, err
 	}
 	historyDB := strings.TrimSpace(config.HistoryDatabase)
 	if historyDB == "" {
@@ -116,17 +152,9 @@ func NewClickHouseRetentionPruner(config ClickHouseRetentionConfig) (*ClickHouse
 		return nil, err
 	}
 
-	holds := make([]ClickHouseLegalHoldScope, 0, len(config.LegalHolds))
-	for _, hold := range config.LegalHolds {
-		tenantID := strings.ToLower(strings.TrimSpace(hold.TenantID))
-		siteID := strings.ToLower(strings.TrimSpace(hold.SiteID))
-		if !uuidPattern.MatchString(tenantID) {
-			return nil, errors.New("ClickHouse legal hold tenantId must be a valid UUID")
-		}
-		if siteID != "" && !uuidPattern.MatchString(siteID) {
-			return nil, errors.New("ClickHouse legal hold siteId must be a valid UUID")
-		}
-		holds = append(holds, ClickHouseLegalHoldScope{TenantID: tenantID, SiteID: siteID})
+	holds, err := normalizeClickHouseLegalHolds(config.LegalHolds)
+	if err != nil {
+		return nil, err
 	}
 
 	client := config.HTTPClient
@@ -135,11 +163,13 @@ func NewClickHouseRetentionPruner(config ClickHouseRetentionConfig) (*ClickHouse
 	}
 
 	return &ClickHouseRetentionPruner{
-		baseURL:    parsed,
-		username:   config.Username,
-		password:   config.Password,
-		httpClient: client,
-		legalHolds: holds,
+		baseURL:         parsed,
+		username:        config.Username,
+		password:        config.Password,
+		httpClient:      client,
+		legalHolds:      holds,
+		archiveExporter: config.ArchiveExporter,
+		archiveRequired: config.ArchiveRequired,
 		targets: []clickHouseRetentionTarget{
 			{
 				database:      historyDB,
@@ -149,6 +179,7 @@ func NewClickHouseRetentionPruner(config ClickHouseRetentionConfig) (*ClickHouse
 				timeLayout:    "2006-01-02 15:04:05.000",
 				retention:     observationsRetention,
 				nullableScope: true,
+				archiveable:   true,
 			},
 			{
 				database:   historyDB,
@@ -191,12 +222,13 @@ func NewClickHouseRetentionPruner(config ClickHouseRetentionConfig) (*ClickHouse
 				retention:  numericHourlyRetention,
 			},
 			{
-				database:   analyticsDB,
-				table:      "energy_interval_facts",
-				timeColumn: "period_end",
-				paramType:  "DateTime64(3, 'UTC')",
-				timeLayout: "2006-01-02 15:04:05.000",
-				retention:  energyIntervalRetention,
+				database:    analyticsDB,
+				table:       "energy_interval_facts",
+				timeColumn:  "period_end",
+				paramType:   "DateTime64(3, 'UTC')",
+				timeLayout:  "2006-01-02 15:04:05.000",
+				retention:   energyIntervalRetention,
+				archiveable: true,
 			},
 			{
 				database:   analyticsDB,
@@ -220,7 +252,8 @@ func resolveRetentionDuration(configured, defaultValue time.Duration, label stri
 	return configured, nil
 }
 
-// Prune submits ALTER TABLE ... DELETE mutations for each configured ClickHouse table at now.
+// Prune exports archiveable raw tables when configured and then submits ALTER TABLE ... DELETE
+// mutations for each configured ClickHouse table at now.
 func (pruner *ClickHouseRetentionPruner) Prune(ctx context.Context, now time.Time) (ClickHouseRetentionResult, error) {
 	if pruner == nil || pruner.baseURL == nil || pruner.httpClient == nil {
 		return ClickHouseRetentionResult{}, errors.New("ClickHouse retention pruner is closed")
@@ -230,6 +263,30 @@ func (pruner *ClickHouseRetentionPruner) Prune(ctx context.Context, now time.Tim
 	}
 	now = now.UTC()
 	var result ClickHouseRetentionResult
+
+	// Export all archiveable raw tables before issuing any delete mutation so failures fail closed.
+	for _, target := range pruner.targets {
+		if !target.archiveable {
+			continue
+		}
+		if pruner.archiveRequired && pruner.archiveExporter == nil {
+			return ClickHouseRetentionResult{}, fmt.Errorf("ClickHouse cold archive exporter is required before pruning %s.%s", target.database, target.table)
+		}
+		if pruner.archiveExporter == nil {
+			continue
+		}
+		cutoff := now.Add(-target.retention)
+		if _, err := pruner.archiveExporter.ExportBeforePrune(ctx, ColdArchiveExportRequest{
+			Database:   target.database,
+			Table:      target.table,
+			Cutoff:     cutoff,
+			LegalHolds: pruner.legalHolds,
+		}); err != nil {
+			return ClickHouseRetentionResult{}, fmt.Errorf("ClickHouse cold archive export failed for %s.%s: %w", target.database, target.table, err)
+		}
+		result.ArchivedTables = append(result.ArchivedTables, target.database+"."+target.table)
+	}
+
 	for _, target := range pruner.targets {
 		cutoff := now.Add(-target.retention)
 		sql, params := buildClickHouseRetentionDelete(target, cutoff, pruner.legalHolds)
@@ -241,34 +298,38 @@ func (pruner *ClickHouseRetentionPruner) Prune(ctx context.Context, now time.Tim
 	return result, nil
 }
 
-func buildClickHouseRetentionDelete(target clickHouseRetentionTarget, cutoff time.Time, holds []ClickHouseLegalHoldScope) (string, url.Values) {
+func buildClickHouseRetentionWhereClause(timeColumn, paramType, timeLayout string, nullableScope bool, cutoff time.Time, holds []ClickHouseLegalHoldScope) (string, url.Values) {
 	params := url.Values{
-		"wait_end_of_query": {"1"},
-		"param_cutoff":      {cutoff.UTC().Format(target.timeLayout)},
+		"param_cutoff": {cutoff.UTC().Format(timeLayout)},
 	}
-	var sql strings.Builder
-	fmt.Fprintf(&sql, "ALTER TABLE %s.%s DELETE WHERE %s < {cutoff:%s}",
-		target.database, target.table, target.timeColumn, target.paramType)
+	var where strings.Builder
+	fmt.Fprintf(&where, "%s < {cutoff:%s}", timeColumn, paramType)
 	for index, hold := range holds {
 		tenantParam := fmt.Sprintf("hold_tenant_%d", index)
 		params.Set("param_"+tenantParam, hold.TenantID)
 		if hold.SiteID == "" {
-			if target.nullableScope {
-				fmt.Fprintf(&sql, " AND (tenant_id IS NULL OR tenant_id != {%s:UUID})", tenantParam)
+			if nullableScope {
+				fmt.Fprintf(&where, " AND (tenant_id IS NULL OR tenant_id != {%s:UUID})", tenantParam)
 			} else {
-				fmt.Fprintf(&sql, " AND tenant_id != {%s:UUID}", tenantParam)
+				fmt.Fprintf(&where, " AND tenant_id != {%s:UUID}", tenantParam)
 			}
 			continue
 		}
 		siteParam := fmt.Sprintf("hold_site_%d", index)
 		params.Set("param_"+siteParam, hold.SiteID)
-		if target.nullableScope {
-			fmt.Fprintf(&sql, " AND (tenant_id IS NULL OR site_id IS NULL OR tenant_id != {%s:UUID} OR site_id != {%s:UUID})", tenantParam, siteParam)
+		if nullableScope {
+			fmt.Fprintf(&where, " AND (tenant_id IS NULL OR site_id IS NULL OR tenant_id != {%s:UUID} OR site_id != {%s:UUID})", tenantParam, siteParam)
 		} else {
-			fmt.Fprintf(&sql, " AND (tenant_id != {%s:UUID} OR site_id != {%s:UUID})", tenantParam, siteParam)
+			fmt.Fprintf(&where, " AND (tenant_id != {%s:UUID} OR site_id != {%s:UUID})", tenantParam, siteParam)
 		}
 	}
-	return sql.String(), params
+	return where.String(), params
+}
+
+func buildClickHouseRetentionDelete(target clickHouseRetentionTarget, cutoff time.Time, holds []ClickHouseLegalHoldScope) (string, url.Values) {
+	where, params := buildClickHouseRetentionWhereClause(target.timeColumn, target.paramType, target.timeLayout, target.nullableScope, cutoff, holds)
+	params.Set("wait_end_of_query", "1")
+	return fmt.Sprintf("ALTER TABLE %s.%s DELETE WHERE %s", target.database, target.table, where), params
 }
 
 func (pruner *ClickHouseRetentionPruner) execDelete(ctx context.Context, qualifiedTable, sql string, params url.Values) error {

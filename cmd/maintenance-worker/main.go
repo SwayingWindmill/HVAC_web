@@ -46,6 +46,7 @@ func main() {
 	}
 	scanInterval := durationEnv("MAINTENANCE_SCAN_INTERVAL", 2*time.Second, time.Second, time.Minute)
 	auditInterval := durationEnv("MAINTENANCE_LIFECYCLE_AUDIT_INTERVAL", time.Minute, 5*time.Second, 24*time.Hour)
+	coldArchiveDir := strings.TrimSpace(os.Getenv("MAINTENANCE_COLD_ARCHIVE_DIR"))
 
 	diagnostics := &http.Server{
 		Addr: envOr("MAINTENANCE_DIAGNOSTICS_ADDR", ":19093"), Handler: telemetry.DiagnosticsHandler(),
@@ -60,8 +61,8 @@ func main() {
 	}()
 
 	telemetry.MarkReady()
-	logger.Info("maintenance_service_started", "scan_interval", scanInterval.String(), "audit_interval", auditInterval.String(), "worker_id", workerID)
-	run(ctx, worker, store, scanInterval, auditInterval, telemetry, logger)
+	logger.Info("maintenance_service_started", "scan_interval", scanInterval.String(), "audit_interval", auditInterval.String(), "worker_id", workerID, "cold_archive_audit_enabled", coldArchiveDir != "")
+	run(ctx, worker, store, coldArchiveDir, scanInterval, auditInterval, telemetry, logger)
 	telemetry.MarkNotReady()
 
 	shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -75,9 +76,13 @@ func openStore(ctx context.Context) (*maintenance.Store, error) {
 	return maintenance.OpenStore(ctx, os.Getenv("MAINTENANCE_POSTGRES_DSN"))
 }
 
-func run(ctx context.Context, worker *maintenance.Worker, store *maintenance.Store, interval, auditInterval time.Duration, telemetry *observability.Runtime, logger *slog.Logger) {
+type lifecycleAuditor interface {
+	AuditLifecycleGovernance(ctx context.Context, now time.Time) (maintenance.LifecycleAuditSummary, error)
+}
+
+func run(ctx context.Context, worker *maintenance.Worker, store *maintenance.Store, coldArchiveDir string, interval, auditInterval time.Duration, telemetry *observability.Runtime, logger *slog.Logger) {
 	runCycle(ctx, worker, telemetry, logger)
-	runLifecycleAudit(ctx, store, telemetry, logger)
+	runLifecycleAudit(ctx, store, coldArchiveDir, telemetry, logger)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	auditTicker := time.NewTicker(auditInterval)
@@ -89,35 +94,89 @@ func run(ctx context.Context, worker *maintenance.Worker, store *maintenance.Sto
 		case <-ticker.C:
 			runCycle(ctx, worker, telemetry, logger)
 		case <-auditTicker.C:
-			runLifecycleAudit(ctx, store, telemetry, logger)
+			runLifecycleAudit(ctx, store, coldArchiveDir, telemetry, logger)
 		}
 	}
 }
 
-func runLifecycleAudit(ctx context.Context, store *maintenance.Store, telemetry *observability.Runtime, logger *slog.Logger) {
-	if store == nil {
+func runLifecycleAudit(ctx context.Context, store lifecycleAuditor, coldArchiveDir string, telemetry *observability.Runtime, logger *slog.Logger) {
+	archiveDir := strings.TrimSpace(coldArchiveDir)
+	if store == nil && archiveDir == "" {
 		return
 	}
-	auditCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	var metrics *observability.Registry
+	if telemetry != nil {
+		metrics = telemetry.Metrics
+	}
+	auditCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	summary, err := store.AuditLifecycleGovernance(auditCtx, time.Now().UTC())
-	if err != nil {
-		_ = telemetry.Metrics.AddCounter("maintenance_lifecycle_audit_error_total", "Maintenance lifecycle governance audit errors.", nil, 1)
-		logger.Warn("maintenance_lifecycle_audit_failed", "error_code", "MAINTENANCE_LIFECYCLE_AUDIT_FAILED")
-		return
-	}
-	_ = telemetry.Metrics.AddCounter("maintenance_lifecycle_audit_total", "Maintenance lifecycle governance audits.", nil, 1)
-	if summary.FindingsCount > 0 || summary.EventsResolved > 0 {
-		if summary.FindingsCount > 0 {
-			_ = telemetry.Metrics.AddCounter("maintenance_lifecycle_audit_findings_total", "Maintenance lifecycle governance findings recorded.", nil, float64(summary.FindingsCount))
+	now := time.Now().UTC()
+
+	if store != nil {
+		summary, err := store.AuditLifecycleGovernance(auditCtx, now)
+		if err != nil {
+			if metrics != nil {
+				_ = metrics.AddCounter("maintenance_lifecycle_audit_error_total", "Maintenance lifecycle governance audit errors.", nil, 1)
+			}
+			if logger != nil {
+				logger.Warn("maintenance_lifecycle_audit_failed", "error_code", "MAINTENANCE_LIFECYCLE_AUDIT_FAILED")
+			}
+		} else {
+			if metrics != nil {
+				_ = metrics.AddCounter("maintenance_lifecycle_audit_total", "Maintenance lifecycle governance audits.", nil, 1)
+				if summary.FindingsCount > 0 {
+					_ = metrics.AddCounter("maintenance_lifecycle_audit_findings_total", "Maintenance lifecycle governance findings recorded.", nil, float64(summary.FindingsCount))
+				}
+			}
+			if (summary.FindingsCount > 0 || summary.EventsResolved > 0) && logger != nil {
+				logger.Info(
+					"maintenance_lifecycle_audit_completed",
+					"policies_checked", summary.PoliciesChecked,
+					"active_legal_holds", summary.ActiveLegalHolds,
+					"findings", summary.FindingsCount,
+					"resolved", summary.EventsResolved,
+				)
+			}
 		}
-		logger.Info(
-			"maintenance_lifecycle_audit_completed",
-			"policies_checked", summary.PoliciesChecked,
-			"active_legal_holds", summary.ActiveLegalHolds,
-			"findings", summary.FindingsCount,
-			"resolved", summary.EventsResolved,
-		)
+	}
+
+	if archiveDir != "" {
+		report, archiveErr := maintenance.VerifyColdArchiveDirectory(auditCtx, archiveDir, now)
+		if archiveErr != nil {
+			if metrics != nil {
+				_ = metrics.AddCounter("maintenance_cold_archive_audit_error_total", "Maintenance cold archive integrity audit errors.", nil, 1)
+			}
+			if logger != nil {
+				logger.Warn("maintenance_cold_archive_audit_failed", "error_code", "MAINTENANCE_COLD_ARCHIVE_AUDIT_FAILED")
+			}
+			return
+		}
+		if metrics != nil {
+			_ = metrics.AddCounter("maintenance_cold_archive_audit_total", "Maintenance cold archive integrity audits.", nil, 1)
+			if !report.Healthy() {
+				_ = metrics.AddCounter("maintenance_cold_archive_audit_findings_total", "Maintenance cold archive integrity findings detected.", nil, float64(len(report.Findings)))
+			}
+		}
+		if !report.Healthy() && logger != nil {
+			logger.Warn(
+				"maintenance_cold_archive_integrity_findings",
+				"error_code", "MAINTENANCE_COLD_ARCHIVE_INTEGRITY_FINDINGS",
+				"manifests_checked", report.ManifestsChecked,
+				"verified_count", report.VerifiedCount,
+				"temp_files_scanned", report.TempFilesScanned,
+				"stale_temp_count", report.StaleTempCount,
+				"corrupt_count", report.CorruptCount,
+				"missing_count", report.MissingCount,
+				"findings", len(report.Findings),
+			)
+		} else if report.ManifestsChecked > 0 && logger != nil {
+			logger.Info(
+				"maintenance_cold_archive_audit_completed",
+				"manifests_checked", report.ManifestsChecked,
+				"verified_count", report.VerifiedCount,
+				"temp_files_scanned", report.TempFilesScanned,
+			)
+		}
 	}
 }
 

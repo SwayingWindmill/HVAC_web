@@ -258,7 +258,7 @@ func runTelemetryWorker() int {
 		})
 	}
 
-	historyRepository, historyRelay, historyContext, historyCancel, err := loadHistoryProjection()
+	historyRepository, historyRelay, historySettings, historyContext, historyCancel, err := loadHistoryProjection()
 	if err != nil {
 		logger.Error("telemetry_history_projection_configuration_invalid", "error_code", "TELEMETRY_HISTORY_PROJECTION_CONFIGURATION_INVALID")
 		return 1
@@ -269,7 +269,7 @@ func runTelemetryWorker() int {
 	if historyCancel != nil {
 		workerCancels = append(workerCancels, historyCancel)
 		runSupervised(historyContext, &workersWG, observabilityRuntime, logger, "telemetry.history_projection", func() {
-			runHistoryProjection(historyContext, historyRelay, logger)
+			runHistoryProjection(historyContext, historyRelay, historySettings, logger)
 		})
 	}
 
@@ -553,15 +553,59 @@ func runLatestCacheRelay(ctx context.Context, relay *telemetry.LatestCacheRelay,
 	}
 }
 
-func loadHistoryProjection() (*telemetry.HistoryPostgresRepository, *telemetry.HistoryRelay, context.Context, context.CancelFunc, error) {
+type historyProjectionSettings struct {
+	BatchSize    int
+	LeaseFor     time.Duration
+	RetryAfter   time.Duration
+	PollInterval time.Duration
+	// PipelineDepth validates TELEMETRY_HISTORY_PIPELINE_DEPTH (default 2, valid 1..4)
+	// without referencing fields owned by P2-A on telemetry.HistoryRelayConfig.
+	PipelineDepth int
+}
+
+func parseHistoryProjectionSettings(lookup func(string) string) (historyProjectionSettings, error) {
+	batchSize, err := parseBoundedIntEnv(lookup, "TELEMETRY_HISTORY_BATCH_SIZE", 4096, 1, 4096)
+	if err != nil {
+		return historyProjectionSettings{}, err
+	}
+	leaseFor, err := parseBoundedDurationEnv(lookup, "TELEMETRY_HISTORY_LEASE_DURATION", 30*time.Second, time.Second, 10*time.Minute)
+	if err != nil {
+		return historyProjectionSettings{}, err
+	}
+	retryAfter, err := parseBoundedDurationEnv(lookup, "TELEMETRY_HISTORY_RETRY_DELAY", 5*time.Second, time.Second, time.Hour)
+	if err != nil {
+		return historyProjectionSettings{}, err
+	}
+	pollInterval, err := parseBoundedDurationEnv(lookup, "TELEMETRY_HISTORY_POLL_INTERVAL", 5*time.Second, 25*time.Millisecond, time.Minute)
+	if err != nil {
+		return historyProjectionSettings{}, err
+	}
+	pipelineDepth, err := parseBoundedIntEnv(lookup, "TELEMETRY_HISTORY_PIPELINE_DEPTH", 2, 1, 4)
+	if err != nil {
+		return historyProjectionSettings{}, err
+	}
+	return historyProjectionSettings{
+		BatchSize:     batchSize,
+		LeaseFor:      leaseFor,
+		RetryAfter:    retryAfter,
+		PollInterval:  pollInterval,
+		PipelineDepth: pipelineDepth,
+	}, nil
+}
+
+func loadHistoryProjection() (*telemetry.HistoryPostgresRepository, *telemetry.HistoryRelay, historyProjectionSettings, context.Context, context.CancelFunc, error) {
 	if !strings.EqualFold(strings.TrimSpace(os.Getenv("TELEMETRY_HISTORY_PROJECTION_ENABLED")), "true") {
-		return nil, nil, context.Background(), nil, nil
+		return nil, nil, historyProjectionSettings{}, context.Background(), nil, nil
+	}
+	settings, err := parseHistoryProjectionSettings(os.Getenv)
+	if err != nil {
+		return nil, nil, historyProjectionSettings{}, nil, nil, err
 	}
 	openContext, cancelOpen := context.WithTimeout(context.Background(), 5*time.Second)
 	repository, err := telemetry.OpenHistoryPostgresRepository(openContext, requiredEnv("TELEMETRY_HISTORY_DATABASE_URL"))
 	cancelOpen()
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, historyProjectionSettings{}, nil, nil, err
 	}
 	sink, err := telemetry.NewClickHouseHistorySink(telemetry.ClickHouseHistoryConfig{
 		BaseURL:  requiredEnv("TELEMETRY_CLICKHOUSE_HTTP_URL"),
@@ -572,30 +616,34 @@ func loadHistoryProjection() (*telemetry.HistoryPostgresRepository, *telemetry.H
 	})
 	if err != nil {
 		repository.Close()
-		return nil, nil, nil, nil, err
+		return nil, nil, historyProjectionSettings{}, nil, nil, err
 	}
 	relay, err := telemetry.NewHistoryRelay(telemetry.HistoryRelayConfig{
 		Repository: repository,
 		Sink:       sink,
-		BatchSize:  integerEnv("TELEMETRY_HISTORY_BATCH_SIZE", 4096, 1, 4096),
-		LeaseFor:   durationEnv("TELEMETRY_HISTORY_LEASE_DURATION", 30*time.Second, time.Second, 10*time.Minute),
-		RetryAfter: durationEnv("TELEMETRY_HISTORY_RETRY_DELAY", 5*time.Second, time.Second, time.Hour),
+		BatchSize:  settings.BatchSize,
+		LeaseFor:   settings.LeaseFor,
+		RetryAfter: settings.RetryAfter,
+		// PipelineDepth: settings.PipelineDepth,
 	})
 	if err != nil {
 		repository.Close()
-		return nil, nil, nil, nil, err
+		return nil, nil, historyProjectionSettings{}, nil, nil, err
 	}
 	relayContext, relayCancel := context.WithCancel(context.Background())
-	return repository, relay, relayContext, relayCancel, nil
+	return repository, relay, settings, relayContext, relayCancel, nil
 }
 
-func runHistoryProjection(ctx context.Context, relay *telemetry.HistoryRelay, logger *slog.Logger) {
+func runHistoryProjection(ctx context.Context, relay *telemetry.HistoryRelay, settings historyProjectionSettings, logger *slog.Logger) {
 	if relay == nil {
 		return
 	}
-	pollInterval := durationEnv("TELEMETRY_HISTORY_POLL_INTERVAL", 5*time.Second, 25*time.Millisecond, time.Minute)
+	pollInterval := settings.PollInterval
+	if pollInterval <= 0 {
+		pollInterval = 5 * time.Second
+	}
 	lastFailureLog := time.Time{}
-	logger.Info("telemetry_history_projection_started", "poll_interval", pollInterval.String())
+	logger.Info("telemetry_history_projection_started", "poll_interval", pollInterval.String(), "pipeline_depth", settings.PipelineDepth)
 	relay.Run(ctx, pollInterval, func(published int, err error) {
 		if err != nil {
 			if time.Since(lastFailureLog) >= time.Second {
@@ -955,29 +1003,56 @@ func drainTelemetryRelays(ctx context.Context, targets telemetryRelayDrainTarget
 }
 
 func loadClickHouseRetentionPruner() (*telemetry.ClickHouseRetentionPruner, context.Context, context.CancelFunc, error) {
-	username := strings.TrimSpace(os.Getenv("TELEMETRY_RETENTION_CLICKHOUSE_USER"))
+	return loadClickHouseRetentionPrunerFromEnv(os.Getenv)
+}
+
+func loadClickHouseRetentionPrunerFromEnv(lookup func(string) string) (*telemetry.ClickHouseRetentionPruner, context.Context, context.CancelFunc, error) {
+	username := strings.TrimSpace(lookup("TELEMETRY_RETENTION_CLICKHOUSE_USER"))
 	if username == "" {
 		return nil, context.Background(), nil, nil
 	}
-	baseURL := envOr("TELEMETRY_RETENTION_CLICKHOUSE_HTTP_URL", strings.TrimSpace(os.Getenv("TELEMETRY_CLICKHOUSE_HTTP_URL")))
+	baseURL := envOrLookup(lookup, "TELEMETRY_RETENTION_CLICKHOUSE_HTTP_URL", strings.TrimSpace(lookup("TELEMETRY_CLICKHOUSE_HTTP_URL")))
 	if baseURL == "" {
 		return nil, nil, nil, errors.New("TELEMETRY_CLICKHOUSE_HTTP_URL is required when ClickHouse retention is enabled")
 	}
-	password := os.Getenv("TELEMETRY_RETENTION_CLICKHOUSE_PASSWORD")
+	password := lookup("TELEMETRY_RETENTION_CLICKHOUSE_PASSWORD")
 	if password == "" {
-		password = os.Getenv("TELEMETRY_CLICKHOUSE_PASSWORD")
+		password = lookup("TELEMETRY_CLICKHOUSE_PASSWORD")
 	}
-	legalHolds, err := parseClickHouseLegalHolds(os.Getenv("TELEMETRY_RETENTION_LEGAL_HOLDS"))
+	legalHolds, err := parseClickHouseLegalHolds(lookup("TELEMETRY_RETENTION_LEGAL_HOLDS"))
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	archiveRequired, err := parseBoolEnv(lookup, "TELEMETRY_RETENTION_ARCHIVE_REQUIRED", false)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	archiveDir := strings.TrimSpace(lookup("TELEMETRY_COLD_ARCHIVE_DIR"))
+	if archiveRequired && archiveDir == "" {
+		return nil, nil, nil, errors.New("TELEMETRY_COLD_ARCHIVE_DIR is required when TELEMETRY_RETENTION_ARCHIVE_REQUIRED is enabled")
+	}
+	var archiveRunner telemetry.ColdArchiveExportRunner
+	if archiveDir != "" {
+		exporter, err := telemetry.NewColdArchiveExporter(telemetry.ColdArchiveConfig{
+			BaseURL:    baseURL,
+			Username:   username,
+			Password:   password,
+			ArchiveDir: archiveDir,
+		})
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		archiveRunner = exporter
+	}
 	pruner, err := telemetry.NewClickHouseRetentionPruner(telemetry.ClickHouseRetentionConfig{
 		BaseURL:           baseURL,
-		HistoryDatabase:   envOr("TELEMETRY_CLICKHOUSE_DATABASE", "telemetry_history"),
-		AnalyticsDatabase: envOr("ANALYTICS_CLICKHOUSE_DATABASE", "analytics"),
+		HistoryDatabase:   envOrLookup(lookup, "TELEMETRY_CLICKHOUSE_DATABASE", "telemetry_history"),
+		AnalyticsDatabase: envOrLookup(lookup, "ANALYTICS_CLICKHOUSE_DATABASE", "analytics"),
 		Username:          username,
 		Password:          password,
 		LegalHolds:        legalHolds,
+		ArchiveExporter:   archiveRunner,
+		ArchiveRequired:   archiveRequired,
 	})
 	if err != nil {
 		return nil, nil, nil, err
@@ -1032,7 +1107,11 @@ func runClickHouseRetention(ctx context.Context, pruner clickHouseRetentionExecu
 			}
 		case len(result.SubmittedTables) > 0:
 			if logger != nil {
-				logger.Info("telemetry_clickhouse_retention_submitted", "table_count", len(result.SubmittedTables))
+				logger.Info(
+					"telemetry_clickhouse_retention_submitted",
+					"table_count", len(result.SubmittedTables),
+					"archived_table_count", len(result.ArchivedTables),
+				)
 			}
 		}
 		select {
@@ -1268,7 +1347,11 @@ func telemetryLimitPolicy() *limitpolicy.Policy {
 }
 
 func envOr(name, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+	return envOrLookup(os.Getenv, name, fallback)
+}
+
+func envOrLookup(lookup func(string) string, name, fallback string) string {
+	if value := strings.TrimSpace(lookup(name)); value != "" {
 		return value
 	}
 	return fallback
@@ -1342,6 +1425,42 @@ func parsePositiveDurationEnv(lookup func(string) string, name string) (time.Dur
 		return 0, false, errors.New(name + " is invalid")
 	}
 	return parsed, true, nil
+}
+
+func parseBoolEnv(lookup func(string) string, name string, fallback bool) (bool, error) {
+	raw := strings.TrimSpace(lookup(name))
+	if raw == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, errors.New(name + " is invalid")
+	}
+	return parsed, nil
+}
+
+func parseBoundedIntEnv(lookup func(string) string, name string, fallback, minimum, maximum int) (int, error) {
+	raw := strings.TrimSpace(lookup(name))
+	if raw == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.Atoi(raw)
+	if err != nil || parsed < minimum || parsed > maximum {
+		return 0, errors.New(name + " is invalid")
+	}
+	return parsed, nil
+}
+
+func parseBoundedDurationEnv(lookup func(string) string, name string, fallback, minimum, maximum time.Duration) (time.Duration, error) {
+	raw := strings.TrimSpace(lookup(name))
+	if raw == "" {
+		return fallback, nil
+	}
+	parsed, err := time.ParseDuration(raw)
+	if err != nil || parsed < minimum || parsed > maximum {
+		return 0, errors.New(name + " is invalid")
+	}
+	return parsed, nil
 }
 
 func parseTelemetryPostgresPoolConfig(lookup func(string) string) (telemetry.PostgresPoolConfig, error) {
