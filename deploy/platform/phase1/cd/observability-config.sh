@@ -109,7 +109,7 @@ validate_alertmanager() {
   local secrets="$3"
   local obs="$stage/deploy/platform/phase1/observability"
   local args=(
-    docker run --rm --pull never --network none --user "$(id -u):$(id -g)" --entrypoint /bin/sh
+    docker run --rm --pull never --network none --user "$(id -u):$(id -g)" --group-add 65532 --entrypoint /bin/sh
     -v "$obs/alertmanager.yaml:/etc/alertmanager/unconfigured.yml:ro"
     -v "$obs/render-alertmanager-config.sh:/etc/alertmanager/render-alertmanager-config.sh:ro"
   )

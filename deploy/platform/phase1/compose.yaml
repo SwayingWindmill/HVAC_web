@@ -865,6 +865,8 @@ services:
       - archive_timeout=60s
       - -c
       - archive_command=test ! -f /var/lib/postgresql/wal-archive/%f && cp %p /var/lib/postgresql/wal-archive/%f
+      - -c
+      - timezone=UTC
     environment:
       TZ: ${TZ:-Asia/Shanghai}
       POSTGRES_DB: ${POSTGRES_DB:-hvac_s0}
@@ -934,6 +936,8 @@ services:
       PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD:?POSTGRES_ADMIN_PASSWORD is required}
       PHASE1_PRODUCT_VERSION: ${PHASE1_PRODUCT_VERSION:-0.1.0}
     read_only: true
+    tmpfs:
+      - /tmp
     security_opt:
       - no-new-privileges:true
     networks: [data]
@@ -1031,12 +1035,15 @@ services:
     depends_on:
       clickhouse:
         condition: service_healthy
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      CLICKHOUSE_HOST: 127.0.0.1
     volumes:
       - ./backup/clickhouse-backup.sh:/usr/local/bin/clickhouse-backup:ro
     entrypoint: ["/bin/bash", "/usr/local/bin/clickhouse-backup"]
     security_opt:
       - no-new-privileges:true
-    networks: [data]
+    network_mode: "service:clickhouse"
     mem_limit: 256m
     logging: *default-logging
 
@@ -1064,7 +1071,6 @@ services:
     profiles: ["integration"]
     image: eclipse-mosquitto:2.1.2-alpine
     restart: unless-stopped
-    group_add: ["65532"]
     environment:
       TZ: ${TZ:-Asia/Shanghai}
     ports:

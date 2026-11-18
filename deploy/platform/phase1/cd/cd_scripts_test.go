@@ -1386,6 +1386,7 @@ func TestDeployScriptProtectsRuntimeSecretsAndDropsDeadKeygen(t *testing.T) {
 		"db-role-credentials",
 		"alert-receiver",
 		"alarm-delivery",
+		"mqtt-pki",
 		"observability/textfile",
 	}
 	for _, dir := range dirs {
@@ -1416,6 +1417,8 @@ func TestDeployScriptProtectsRuntimeSecretsAndDropsDeadKeygen(t *testing.T) {
 		"alert-receiver/smtp-password",
 		"alert-receiver/wecom-webhook-url",
 		"alarm-delivery/alarm-send-token",
+		"alarm-delivery/recipients.json",
+		"mqtt-pki/mqtt-broker-key.pem",
 		"observability/textfile/backup.prom",
 	}
 	for _, rel := range seedFiles {
@@ -1464,6 +1467,7 @@ func TestDeployScriptProtectsRuntimeSecretsAndDropsDeadKeygen(t *testing.T) {
 		"db-role-credentials",
 		"alert-receiver",
 		"alarm-delivery",
+		"mqtt-pki",
 	} {
 		assertPerm(sensitiveDir, func(m os.FileMode) bool { return m == 0o750 }, "0750")
 	}
@@ -1497,15 +1501,23 @@ func TestDeployScriptProtectsRuntimeSecretsAndDropsDeadKeygen(t *testing.T) {
 		"alert-receiver/smtp-password",
 		"alert-receiver/wecom-webhook-url",
 		"alarm-delivery/alarm-send-token",
+		"alarm-delivery/recipients.json",
+		"mqtt-pki/mqtt-broker-key.pem",
 	} {
 		assertPerm(workloadSecret, func(m os.FileMode) bool { return m == 0o640 || m == 0o600 }, "0640 or 0600 (not world-readable)")
 	}
 	assertPerm("data/otel-collector", func(m os.FileMode) bool { return m == 0o750 }, "0750")
+	assertPerm("backups/clickhouse", func(m os.FileMode) bool { return m == 0o750 }, "0750")
+	assertPerm("backups/postgres/base", func(m os.FileMode) bool { return m == 0o750 }, "0750")
+	assertPerm("backups/postgres/wal", func(m os.FileMode) bool { return m == 0o750 }, "0750")
 
 	calls := string(mustRead(t, log))
 	for _, wantOwnership := range []string{
 		"chown -R 65532:65532",
 		"chown -R 0:65532",
+		"chown -R 1883:65532 /runtime/mqtt-pki",
+		"chown -R 101:101 /runtime/backups/clickhouse",
+		"chown -R 999:999 /runtime/backups/postgres",
 		"chown -R 10001:10001 /runtime/data/otel-collector",
 	} {
 		if !strings.Contains(calls, wantOwnership) {

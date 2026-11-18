@@ -114,7 +114,9 @@ func TestObservabilityCheckValidatesAlertmanagerWithTheReceiverFiles(t *testing.
 	if err != nil {
 		t.Fatalf("check: %v\n%s", err, output)
 	}
-	if !strings.Contains(docker, "-v /srv/runtime/alert-receiver:/etc/alertmanager/secrets:ro") || !strings.Contains(docker, "amtool check-config") {
+	if !strings.Contains(docker, "-v /srv/runtime/alert-receiver:/etc/alertmanager/secrets:ro") ||
+		!strings.Contains(docker, "--group-add 65532") ||
+		!strings.Contains(docker, "amtool check-config") {
 		t.Fatalf("alertmanager was not rendered and checked with the receiver files:\n%s", docker)
 	}
 }

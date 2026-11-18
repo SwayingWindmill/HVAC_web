@@ -24,7 +24,15 @@ if (( wal_age_seconds > rpo_target_seconds )); then
   exit 1
 fi
 
-latest_base="$(find "${base_dir}" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -nr | head -n 1 | cut -d' ' -f2- || true)"
+latest_base=""
+while IFS= read -r line; do
+  base_path="${line#* }"
+  base_name="$(basename "${base_path}")"
+  if [[ "${base_name}" =~ ^[0-9]{8}T[0-9]{6}Z$ ]]; then
+    latest_base="${base_path}"
+    break
+  fi
+done < <(find "${base_dir}" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -nr)
 [[ -n "${latest_base}" ]] || { echo "No PostgreSQL base backup directory was found" >&2; exit 1; }
 [[ -r "${latest_base}/SHA256SUMS" ]] || { echo "Latest PostgreSQL base backup has no SHA256SUMS: ${latest_base}" >&2; exit 1; }
 (

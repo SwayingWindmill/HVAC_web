@@ -1,6 +1,7 @@
 <clickhouse>
     <!-- Bound ClickHouse internal allocation and mark cache below the container memory limit;
-         uncompressed cache stays off so OS page cache handles hot reads without extra heap pressure. -->
+         keep SQL session/evaluation timezone pinned to UTC while container logs follow TZ. -->
+    <timezone>UTC</timezone>
     <max_server_memory_usage from_env="CLICKHOUSE_SERVER_MEMORY_USAGE"/>
     <mark_cache_size>268435456</mark_cache_size>
     <uncompressed_cache_size>0</uncompressed_cache_size>

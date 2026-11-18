@@ -533,6 +533,18 @@ test('repository governance blocks non-loopback Compose port mappings outside ex
         '',
       ].join('\n'),
     );
+    writeFileSync(
+      join(composeSandbox, 'deploy/platform/phase1/wsl.override.yaml'),
+      [
+        'services:',
+        '  postgres:',
+        '    ports: ["5432:5432"]',
+        '  web:',
+        '    ports:',
+        '      - 8080:80',
+        '',
+      ].join('\n'),
+    );
 
     const violations = findComposePortExposureViolations({
       root: composeSandbox,
@@ -541,14 +553,17 @@ test('repository governance blocks non-loopback Compose port mappings outside ex
         'infra/telemetry/compose.yaml',
         'deploy/platform/phase1/compose.yaml',
         'deploy/platform/phase1/owner-split.compose.yaml',
+        'deploy/platform/phase1/wsl.override.yaml',
       ],
     });
-    assert.equal(violations.length, 5);
+    assert.equal(violations.length, 7);
     assert.ok(violations.some((v) => v.includes('infra/alarm/compose.yaml:4:')));
     assert.ok(violations.some((v) => v.includes('0.0.0.0:5432:5432')));
     assert.ok(violations.some((v) => v.includes('8123:8123')));
     assert.ok(violations.some((v) => v.includes('host_ip=<unset> target=6379')));
     assert.ok(violations.some((v) => v.includes('deploy/platform/phase1/owner-split.compose.yaml:4:')));
+    assert.ok(violations.some((v) => v.includes('deploy/platform/phase1/wsl.override.yaml:3:')));
+    assert.ok(violations.some((v) => v.includes('deploy/platform/phase1/wsl.override.yaml:6:') && v.includes('"8080:80"')));
   } finally {
     rmSync(composeSandbox, { recursive: true, force: true });
   }

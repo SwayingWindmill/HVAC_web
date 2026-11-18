@@ -45,12 +45,15 @@ node scripts/issue-workload-identities.mjs
 
 step permissions
 chmod 700 "$R"
-mkdir -p "$R/backups/postgres/base" "$R/backups/clickhouse" "$R/alarm-delivery" "$R/data/otel-collector"
+mkdir -p "$R/backups/postgres/base" "$R/backups/postgres/wal" "$R/backups/clickhouse" "$R/alarm-delivery" "$R/data/otel-collector"
 chmod 750 "$R/data/otel-collector"
-# Non-root containers run under UID 65532 (Go services), supplementary group 65532 (alertmanager/mqtt/centrifugo/operations-agent), or UID 10001 (otel-collector).
+# Non-root containers run under UID 65532 (Go services), supplementary group 65532 (alertmanager/centrifugo/operations-agent), UID 1883 (mosquitto), UID 101 (clickhouse), UID 999 (postgres), or UID 10001 (otel-collector).
 docker run --rm --user 0 --entrypoint sh -v "$R:/runtime" postgres:16.4-bookworm -c '
   for d in identity iam gateway-ca; do [ -d "/runtime/$d" ] && chown -R 65532:65532 "/runtime/$d"; done
-  for d in internal-pki mqtt-pki alert-receiver alarm-delivery secrets; do [ -d "/runtime/$d" ] && chown -R 0:65532 "/runtime/$d"; done
+  for d in internal-pki alert-receiver alarm-delivery secrets; do [ -d "/runtime/$d" ] && chown -R 0:65532 "/runtime/$d"; done
+  [ -d /runtime/mqtt-pki ] && chown -R 1883:65532 /runtime/mqtt-pki
+  chown -R 101:101 /runtime/backups/clickhouse
+  chown -R 999:999 /runtime/backups/postgres
   chown -R 10001:10001 /runtime/data/otel-collector
 '
 # Postgres requires 0700 on PGDATA; keep data/ untouched and restrict secret/PKI dirs to 0750.
@@ -81,7 +84,7 @@ find "$R" -mindepth 1 -type f ! -path "$R/data/*" ! -path "$R/backups/*" \
   \( -name 'tls.key' -o -name 'signing-key.pem' -o -name 'mfa-encryption.key' \
     -o -name '*-key.pem' -o -name '*.key' -o -name '*secret*' -o -name '*token*' \
     -o -name '*password*' -o -name '*webhook*' -o -name '*credentials*' \
-    -o -name '*.dsn' -o -name '*.env' \) \
+    -o -name 'recipients.json' -o -name '*.dsn' -o -name '*.env' \) \
   -exec chmod 640 {} +
 find "$R" -mindepth 1 -type f ! -path "$R/data/*" \
   \( -name 'ca.key' -o -name 'ca.srl' -o -name 'roles.sql' -o -name 'local-admin.credentials' \) \

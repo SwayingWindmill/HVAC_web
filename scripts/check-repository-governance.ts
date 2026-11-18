@@ -445,7 +445,7 @@ type ComposePortMapping = {
 
 const isComposePortPolicyTarget = (path: string): boolean =>
   composePortScanRoots.some((prefix) => path.startsWith(prefix))
-  && /(?:^|\/).*compose[^/]*\.ya?ml$/u.test(path);
+  && /(?:^|\/).*(?:compose|override)[^/]*\.ya?ml$/u.test(path);
 
 const stripYamlComment = (line: string): string => {
   let quote: '"' | "'" | null = null;
@@ -613,7 +613,7 @@ const collectComposePortMappings = (content: string): ComposePortMapping[] => {
           cursor += 1;
           continue;
         }
-        const keyValMatch = /^([A-Za-z0-9_-]+)\s*:\s*(.*)$/u.exec(afterDash);
+        const keyValMatch = /^([A-Za-z0-9_-]+)(?::\s+(.*)|:\s*)$/u.exec(afterDash);
         if (afterDash && !keyValMatch) {
           mappings.push({ line: itemLine, kind: 'short', spec: unquoteYamlScalar(afterDash) });
           cursor += 1;
