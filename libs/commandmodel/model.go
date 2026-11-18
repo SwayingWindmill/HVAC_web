@@ -577,6 +577,7 @@ type VerificationEnvelope struct {
 	SiteID                   string
 	DeviceID                 string
 	PointID                  string
+	TraceID                  string `json:"traceId,omitempty"`
 	Capability               Capability
 	CapabilityRevision       string
 	Parameters               CommandParameters

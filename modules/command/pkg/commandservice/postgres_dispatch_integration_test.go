@@ -293,6 +293,9 @@ func acknowledgeAndVerifyPostgres(t *testing.T, store *PostgresStore, admin *pgx
 	if err != nil {
 		t.Fatal(err)
 	}
+	if verification.TraceID != dispatch.TraceID {
+		t.Fatalf("verification.TraceID=%q want %q", verification.TraceID, dispatch.TraceID)
+	}
 	*now = now.Add(time.Second)
 	if err := store.ResolveVerification(ctx, verification, commandmodel.VerificationResult{
 		Outcome:    commandmodel.VerificationSucceeded,

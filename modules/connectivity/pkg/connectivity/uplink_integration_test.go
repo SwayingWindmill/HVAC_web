@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -46,9 +47,9 @@ func TestUplinkResolvesEveryGatewayThroughTheRegistryReadPort(t *testing.T) {
 		unknown       = "0192f000-2000-7000-8000-0000000000ff"
 	)
 	cleanup := func() {
+		_, _ = admin.Exec(ctx, `TRUNCATE TABLE connectivity.gateway_concentrator_audit, connectivity.gateway_credential_audit`)
+		_, _ = admin.Exec(ctx, `DELETE FROM connectivity.command_reply_correlations WHERE gateway_id IN ($1::uuid, $2::uuid)`, gatewayA, gatewayB)
 		for _, statement := range []string{
-			`DELETE FROM connectivity.gateway_concentrator_audit WHERE gateway_id IN ($1::uuid,$2::uuid)`,
-			`DELETE FROM connectivity.gateway_credential_audit WHERE gateway_id IN ($1::uuid,$2::uuid)`,
 			`DELETE FROM connectivity.gateway_enrollments WHERE gateway_id IN ($1::uuid,$2::uuid)`,
 			`DELETE FROM connectivity.uplink_quarantine WHERE gateway_id IN ($1, $2, $3)`,
 			`DELETE FROM connectivity.gateway_credentials WHERE gateway_id IN ($1::uuid, $2::uuid)`,
@@ -191,6 +192,53 @@ func TestUplinkResolvesEveryGatewayThroughTheRegistryReadPort(t *testing.T) {
 	}
 	if _, err := store.ResolveCommandRoute(ctx, commandTo(tenantB, siteB, meterA, commandA)); !errors.Is(err, commandmodel.ErrCommandRouteNotFound) {
 		t.Fatalf("Tenant B routed Tenant A's Device err=%v", err)
+	}
+
+	const (
+		traceCmdID     = "0192f000-7000-7000-8000-000000000001"
+		traceAttemptID = "0192f000-7100-7000-8000-000000000001"
+		wantTraceID    = "4bf92f3577b34da6a3ce929d0e0e4736"
+	)
+	corrInput := commandmodel.CommandCorrelation{
+		Envelope: commandmodel.DispatchEnvelope{
+			CommandID: traceCmdID, AttemptID: traceAttemptID, TenantID: tenantA,
+			SiteID: siteA, DeviceID: meterA, PointID: commandA, TraceID: " 4BF92F3577B34DA6A3CE929D0E0E4736 ",
+			Capability: commandmodel.CapabilityStart, PayloadHash: strings.Repeat("c", 64),
+			ExecutionFence: 1, LeaseOwner: "dispatcher-pg-trace", LeaseUntil: now.Add(time.Minute),
+		},
+		GatewayID: gatewayA, ExternalDeviceID: "METER-01",
+		MappingRevision: "map-v1", BindingRevision: "bind-v1",
+		ProviderEndpoint: "hvac/v1/" + gatewayA + "/down/command", ProviderMethod: "start",
+		RequestSHA256: strings.Repeat("d", 64), PreparedAt: now, State: commandmodel.CorrelationPrepared,
+	}
+	preparedCorr, err := store.PrepareCommandCorrelation(ctx, corrInput)
+	if err != nil {
+		t.Fatalf("PrepareCommandCorrelation failed: %v", err)
+	}
+	if preparedCorr.Envelope.TraceID != wantTraceID {
+		t.Fatalf("prepared TraceID=%q want %q", preparedCorr.Envelope.TraceID, wantTraceID)
+	}
+	mismatchedTrace := corrInput
+	mismatchedTrace.Envelope.TraceID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	if _, err := store.PrepareCommandCorrelation(ctx, mismatchedTrace); !errors.Is(err, ErrCorrelationMismatch) {
+		t.Fatalf("expected ErrCorrelationMismatch on trace_id mismatch, got %v", err)
+	}
+	loadedCorr, err := store.LoadCommandCorrelation(ctx, tenantA, traceAttemptID, 1)
+	if err != nil || loadedCorr.Envelope.TraceID != wantTraceID {
+		t.Fatalf("LoadCommandCorrelation TraceID=%q err=%v", loadedCorr.Envelope.TraceID, err)
+	}
+	if err := store.ArmCommandCorrelation(ctx, tenantA, traceAttemptID, 1, now); err != nil {
+		t.Fatalf("ArmCommandCorrelation failed: %v", err)
+	}
+	if _, err := store.RecordCommandReply(ctx, tenantA, gatewayA, traceCmdID, 1, strings.Repeat("e", 64), "FAILED", now, "DEVICE_OFFLINE", nil, now); err != nil {
+		t.Fatalf("RecordCommandReply failed: %v", err)
+	}
+	recoveredCorrs, err := store.RecoverCommandReplies(ctx, tenantA, 10)
+	if err != nil || len(recoveredCorrs) != 1 || recoveredCorrs[0].Envelope.TraceID != wantTraceID {
+		t.Fatalf("RecoverCommandReplies=%+v err=%v", recoveredCorrs, err)
+	}
+	if err := store.MarkCommandCorrelationResolved(ctx, tenantA, traceAttemptID, 1, now); err != nil {
+		t.Fatalf("MarkCommandCorrelationResolved failed: %v", err)
 	}
 
 	caPEM, keyPEM := credentialTestCA(t, now)

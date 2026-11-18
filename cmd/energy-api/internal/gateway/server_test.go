@@ -211,6 +211,52 @@ func TestStructuredLogsExcludeCredentialsCookiesAndBodies(t *testing.T) {
 	}
 }
 
+func TestStructuredLogsNormalizeCommandRoutes(t *testing.T) {
+	const rawCommandID = "018f3e00-7777-7000-8000-000000000099"
+	var logs bytes.Buffer
+	h := newTestHandler(&logs)
+
+	testCases := []struct {
+		name     string
+		method   string
+		path     string
+		wantPath string
+	}{
+		{name: "collection", method: http.MethodGet, path: "/api/v1/commands", wantPath: "/api/v1/commands"},
+		{name: "item", method: http.MethodGet, path: "/api/v1/commands/" + rawCommandID, wantPath: "/api/v1/commands/{commandId}"},
+		{name: "approval", method: http.MethodPost, path: "/api/v1/commands/" + rawCommandID + "/approve", wantPath: "/api/v1/commands/{commandId}/approve"},
+		{name: "reconciliation", method: http.MethodPost, path: "/api/v1/commands/" + rawCommandID + "/reconcile", wantPath: "/api/v1/commands/{commandId}/reconcile"},
+		{name: "cancel", method: http.MethodPost, path: "/api/v1/commands/" + rawCommandID + "/cancel", wantPath: "/api/v1/commands/{commandId}/cancel"},
+		{name: "unknown sub-path", method: http.MethodGet, path: "/api/v1/commands/" + rawCommandID + "/unknown", wantPath: "unmatched"},
+		{name: "trailing slash", method: http.MethodGet, path: "/api/v1/commands/", wantPath: "unmatched"},
+		{name: "empty id approve", method: http.MethodPost, path: "/api/v1/commands//approve", wantPath: "unmatched"},
+		{name: "nested sub-path", method: http.MethodPost, path: "/api/v1/commands/" + rawCommandID + "/extra/approve", wantPath: "unmatched"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			logs.Reset()
+			req := httptest.NewRequest(tc.method, tc.path, nil)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			logOutput := logs.String()
+			if strings.Contains(logOutput, rawCommandID) {
+				t.Fatalf("structured log leaked raw command ID: %s", logOutput)
+			}
+			var entry struct {
+				Path string `json:"path"`
+			}
+			if err := json.Unmarshal(logs.Bytes(), &entry); err != nil {
+				t.Fatalf("decode structured log: %v (%s)", err, logOutput)
+			}
+			if entry.Path != tc.wantPath {
+				t.Fatalf("logged path = %q, want %q", entry.Path, tc.wantPath)
+			}
+		})
+	}
+}
+
 func newTestHandler(logOutput io.Writer) http.Handler {
 	return gateway.NewHandler(gateway.Config{
 		Logger: slog.New(slog.NewJSONHandler(logOutput, nil)),

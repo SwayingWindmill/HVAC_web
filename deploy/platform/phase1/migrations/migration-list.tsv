@@ -109,6 +109,7 @@ hvac_s1|infra/registry/postgres/init/optimization-governance-flywheel.sql
 hvac_s1|infra/registry/postgres/init/metric-backfill-recalc-job-grants.sql
 hvac_s1|infra/registry/postgres/init/iam-expired-binding-revocation.sql
 hvac_s1|infra/registry/postgres/init/hydraulic-loop-topology.sql
+hvac_s1|infra/connectivity/postgres/init/command-correlation-trace-and-audit-immutability.sql
 hvac_s2|infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql
 hvac_s2|infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql
 hvac_s2|infra/telemetry/postgres/init/003-s2-telemetry-ingest.sql
@@ -143,6 +144,7 @@ hvac_s3|modules/command/migrations/command-template-capability-sync.sql
 hvac_s3|modules/command/migrations/command_intent_trace_context.sql
 hvac_s3|modules/command/migrations/control-alarm-outbox.sql
 hvac_s3|modules/command/migrations/command-priority-and-locks.sql
+hvac_s3|modules/command/migrations/command-audit-immutability.sql
 hvac_s4|modules/alarm/migrations/001_s4_alarm_runtime.sql
 hvac_s4|modules/alarm/migrations/002_s4_alarm_lifecycle.sql
 hvac_s4|modules/alarm/migrations/003_s4_tenant_scope.sql

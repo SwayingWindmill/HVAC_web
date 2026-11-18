@@ -31,7 +31,8 @@ func TestConfigShadowPostgresRLSConcurrencyAndDrift(t *testing.T) {
 	const actorA = "0194f000-4000-7000-8000-000000000011"
 
 	cleanup := func() {
-		for _, table := range []string{"gateway_reported_configs", "gateway_desired_configs", "gateway_concentrator_audit", "gateway_credential_audit", "gateway_enrollments", "gateway_credentials"} {
+		_, _ = admin.Exec(ctx, "TRUNCATE TABLE connectivity.gateway_concentrator_audit, connectivity.gateway_credential_audit")
+		for _, table := range []string{"gateway_reported_configs", "gateway_desired_configs", "gateway_enrollments", "gateway_credentials"} {
 			_, _ = admin.Exec(ctx, "DELETE FROM connectivity."+table+" WHERE gateway_id = $1::uuid", gatewayA)
 		}
 		_, _ = admin.Exec(ctx, "DELETE FROM core_registry.devices WHERE id = $1::uuid", gatewayA)

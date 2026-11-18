@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/services/notification-service/pkg/notificationservice"
 )
 
@@ -74,6 +75,7 @@ func (h *handler) callWeChatReminders(request *http.Request, session bffSession,
 	if body != nil {
 		outbound.Header.Set("Content-Type", "application/json")
 	}
+	observability.InjectHTTP(request.Context(), outbound.Header)
 	response, err := h.notification.httpClient.Do(outbound)
 	if err != nil {
 		return 0, nil, err

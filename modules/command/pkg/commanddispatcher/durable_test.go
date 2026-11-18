@@ -1,12 +1,16 @@
 package commanddispatcher
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/modules/command/pkg/commandservice"
 )
 
@@ -329,4 +333,60 @@ func TestDurableDispatcherStaleFenceFinalizesOnlyReplyBackedResults(t *testing.T
 			t.Fatalf("expected ErrStaleFence without finalizer, got %v", err)
 		}
 	})
+}
+
+type traceRecordingDispatchStore struct {
+	envelope        commandmodel.DispatchEnvelope
+	resolvedTraceID string
+}
+
+func (s *traceRecordingDispatchStore) ClaimDispatch(_ context.Context, _, _ string, _ time.Duration) (commandmodel.DispatchEnvelope, error) {
+	return s.envelope, nil
+}
+
+func (s *traceRecordingDispatchStore) ResolveDispatch(ctx context.Context, _ commandmodel.DispatchEnvelope, _ commandmodel.ConnectorResult) error {
+	s.resolvedTraceID = observability.TraceID(ctx)
+	return nil
+}
+
+type traceRecordingConnector struct {
+	executeTraceID  string
+	finalizeTraceID string
+}
+
+func (c *traceRecordingConnector) Execute(ctx context.Context, _ commandmodel.DispatchEnvelope) (commandmodel.ConnectorResult, error) {
+	c.executeTraceID = observability.TraceID(ctx)
+	return commandmodel.ConnectorResult{Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true}, nil
+}
+
+func (c *traceRecordingConnector) FinalizeDispatch(ctx context.Context, _ commandmodel.DispatchEnvelope, _ commandmodel.ConnectorResult) error {
+	c.finalizeTraceID = observability.TraceID(ctx)
+	return nil
+}
+
+func TestDurableDispatcherPropagatesTraceContextAndLogs(t *testing.T) {
+	const wantTrace = "4bf92f3577b34da6a3ce929d0e0e4736"
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(observability.NewJSONLogger(&logs, slog.LevelInfo))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	store := &traceRecordingDispatchStore{
+		envelope: commandmodel.DispatchEnvelope{
+			CommandID: "cmd-trace-1", AttemptID: "att-trace-1", TenantID: "org-1",
+			ExecutionFence: 1, TraceID: "4BF92F3577B34DA6A3CE929D0E0E4736",
+		},
+	}
+	conn := &traceRecordingConnector{}
+	d := NewDurable(store, conn, "replica-a", 30*time.Second)
+	if err := d.RunOnce(context.Background(), "org-1"); err != nil {
+		t.Fatalf("RunOnce failed: %v", err)
+	}
+	if conn.executeTraceID != wantTrace || store.resolvedTraceID != wantTrace || conn.finalizeTraceID != wantTrace {
+		t.Fatalf("trace mismatch execute=%q resolve=%q finalize=%q want=%q", conn.executeTraceID, store.resolvedTraceID, conn.finalizeTraceID, wantTrace)
+	}
+	logOutput := logs.String()
+	if !strings.Contains(logOutput, `"command_id":"cmd-trace-1"`) || !strings.Contains(logOutput, `"trace_id":"`+wantTrace+`"`) {
+		t.Fatalf("missing structured command_id/trace_id in logs:\n%s", logOutput)
+	}
 }

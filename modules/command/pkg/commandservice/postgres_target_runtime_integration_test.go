@@ -82,6 +82,15 @@ WHERE attempt_id = $1::uuid AND execution_fence = $2
 		t.Fatalf("idempotent prepare: %v", err)
 	}
 
+	assertPostgresAuditMutationBlocked(t, ctx, admin,
+		`DELETE FROM command_runtime.connector_evidence WHERE attempt_id = $1::uuid AND execution_fence = $2`,
+		envelope.AttemptID, envelope.ExecutionFence,
+	)
+	assertPostgresAuditMutationBlocked(t, ctx, admin,
+		`UPDATE command_runtime.connector_evidence SET payload_hash = 'tampered', completed_at = now() WHERE attempt_id = $1::uuid AND execution_fence = $2`,
+		envelope.AttemptID, envelope.ExecutionFence,
+	)
+
 	completed := commandmodel.CompletedConnectorEvidence{
 		PreparedConnectorEvidence: prepared,
 		RequestWritten:            true, ConnectorPhase: commandmodel.ConnectorRequestCommitted,
@@ -112,6 +121,14 @@ WHERE attempt_id = $1::uuid AND execution_fence = $2
 	if count != 1 {
 		t.Fatalf("connector evidence rows=%d", count)
 	}
+	assertPostgresAuditMutationBlocked(t, ctx, admin,
+		`UPDATE command_runtime.connector_evidence SET failure_code = 'TAMPERED' WHERE attempt_id = $1::uuid AND execution_fence = $2`,
+		envelope.AttemptID, envelope.ExecutionFence,
+	)
+	assertPostgresAuditMutationBlocked(t, ctx, admin,
+		`DELETE FROM command_runtime.connector_evidence WHERE attempt_id = $1::uuid AND execution_fence = $2`,
+		envelope.AttemptID, envelope.ExecutionFence,
+	)
 }
 
 func TestPostgresCommandGrantUseSurvivesReplicaAndRestartBoundaries(t *testing.T) {
@@ -155,4 +172,12 @@ func TestPostgresCommandGrantUseSurvivesReplicaAndRestartBoundaries(t *testing.T
 	if !status.Replayed {
 		t.Fatalf("expected replay after store restart, got %#v", status)
 	}
+	assertPostgresAuditMutationBlocked(t, ctx, admin,
+		`UPDATE command_runtime.command_grant_uses SET policy_revision = 'tampered' WHERE token_id = $1`,
+		claims.TokenID,
+	)
+	assertPostgresAuditMutationBlocked(t, ctx, admin,
+		`DELETE FROM command_runtime.command_grant_uses WHERE token_id = $1`,
+		claims.TokenID,
+	)
 }

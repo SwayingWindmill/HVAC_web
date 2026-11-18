@@ -1499,3 +1499,30 @@ func TestControlFailureQueueRecoversPanicsAndDrainsOnClose(t *testing.T) {
 		t.Fatalf("expected Service.Close to drain %q after panic recovery, got %v", secondID, svcSeen)
 	}
 }
+
+func TestPrepareVerificationPreservesNormalizedTraceID(t *testing.T) {
+	clock := fixedClock()
+	service := New(clock)
+	req := validRequest()
+	req.TraceID = " 4BF92F3577B34DA6A3CE929D0E0E4736 "
+	submitted, err := service.Submit(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatch, err := service.PrepareDispatch(submitted.Intent.ID, "dispatcher-a", clock().Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ResolveDispatch(dispatch, commandmodel.ConnectorResult{
+		Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EvidenceID: "provider-ack-trace", EdgeExecution: testEdgeExecution(24),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	verification, err := service.PrepareVerification(submitted.Intent.ID, "verifier-a", clock().Add(30*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "4bf92f3577b34da6a3ce929d0e0e4736"; verification.TraceID != want {
+		t.Fatalf("verification.TraceID=%q want %q", verification.TraceID, want)
+	}
+}

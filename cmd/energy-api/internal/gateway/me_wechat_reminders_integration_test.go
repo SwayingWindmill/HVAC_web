@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/services/notification-service/pkg/notificationservice"
 )
 
@@ -143,4 +144,41 @@ func TestMiniProgramAddsWeChatRemindersForTheSignedInPerson(t *testing.T) {
 	}
 	defer refused.Body.Close()
 	assertProblemCode(t, refused, http.StatusForbidden, "WECHAT_MINI_PROGRAM_ONLY")
+}
+
+func TestWeChatRemindersPropagatesTraceparent(t *testing.T) {
+	const wantTraceID = "4bf92f3577b34da6a3ce929d0e0e4736"
+	var gotTraceparent string
+	reminders := &memoryReminders{counts: map[notificationservice.WeChatPerson]int{}, daily: map[notificationservice.WeChatPerson]notificationservice.WeChatReminders{}}
+	harness := newAuthHarnessWithNotification(t, func(gatewayKey crypto.PublicKey) http.Handler {
+		inner, err := notificationservice.NewHTTPHandler(notificationservice.HTTPConfig{Reminders: reminders, GatewayPublicKey: gatewayKey})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			gotTraceparent = request.Header.Get("traceparent")
+			inner.ServeHTTP(writer, request)
+		})
+	})
+	client := &http.Client{Transport: harness.transport}
+	token := decodeAppSession(t, postAppJSON(t, client, harness.gatewayURL+"/api/v1/auth/app/sessions", map[string]string{"username": "fixture", "password": "correct-password"}), http.StatusCreated).SessionToken
+
+	req, err := http.NewRequest(http.MethodGet, harness.gatewayURL+meWeChatRemindersPath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("traceparent", "00-"+wantTraceID+"-00f067aa0ba902b7-01")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	parsed, ok := observability.ParseTraceparent(gotTraceparent, "")
+	if !ok || parsed.TraceID != wantTraceID {
+		t.Fatalf("notification traceparent=%q (ok=%t), want traceId=%s", gotTraceparent, ok, wantTraceID)
+	}
 }

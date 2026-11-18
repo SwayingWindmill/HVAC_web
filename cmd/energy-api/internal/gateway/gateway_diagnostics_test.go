@@ -14,6 +14,7 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 )
@@ -30,6 +31,7 @@ type diagnosticsGatewayFixture struct {
 	lastUpstreamRawQuery    string
 	lastUpstreamContentType string
 	lastUpstreamBody        string
+	lastUpstreamTraceparent string
 	lastAuthAction          registryauth.Action
 }
 
@@ -92,6 +94,7 @@ func newDiagnosticsGatewayFixture(t *testing.T) *diagnosticsGatewayFixture {
 			fix.lastUpstreamPath = request.URL.Path
 			fix.lastUpstreamRawQuery = request.URL.RawQuery
 			fix.lastUpstreamContentType = request.Header.Get("Content-Type")
+			fix.lastUpstreamTraceparent = request.Header.Get("traceparent")
 			if request.Header.Get("X-Delegation-Grant") == "" {
 				t.Fatal("missing X-Delegation-Grant")
 			}
@@ -290,5 +293,22 @@ func TestGatewayDiagnosticsRateLimitAndSafeLogPath(t *testing.T) {
 		if got := safeLogPath(path); got != want {
 			t.Fatalf("safeLogPath(%q) = %q, want %q", path, got, want)
 		}
+	}
+}
+
+func TestGatewayDiagnosticsPropagatesTraceparent(t *testing.T) {
+	fix := newDiagnosticsGatewayFixture(t)
+	const wantTraceID = "4bf92f3577b34da6a3ce929d0e0e4736"
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/gateways/"+fix.gatewayID+"/quarantine?limit=15", nil)
+	fix.authenticate(req, false)
+	req.Header.Set("traceparent", "00-"+wantTraceID+"-00f067aa0ba902b7-01")
+	rec := httptest.NewRecorder()
+	fix.handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	parsed, ok := observability.ParseTraceparent(fix.lastUpstreamTraceparent, "")
+	if !ok || parsed.TraceID != wantTraceID {
+		t.Fatalf("connectivity traceparent=%q (ok=%t), want traceId=%s", fix.lastUpstreamTraceparent, ok, wantTraceID)
 	}
 }

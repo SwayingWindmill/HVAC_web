@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 )
@@ -113,6 +114,7 @@ func (h *handler) serveGatewayConfigShadow(w http.ResponseWriter, r *http.Reques
 		upstreamReq.Header.Set("Content-Type", "application/json")
 	}
 	upstreamReq.Header.Set("X-Delegation-Grant", auth.coreGrant)
+	observability.InjectHTTP(r.Context(), upstreamReq.Header)
 
 	response, err := h.connectivity.HTTPClient.Do(upstreamReq)
 	if err != nil {

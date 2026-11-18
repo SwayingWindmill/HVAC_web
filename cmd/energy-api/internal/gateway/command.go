@@ -212,6 +212,27 @@ func matchPublicCommandRoute(path string) (commandRouteKind, string, bool) {
 	return kind, raw, true
 }
 
+func matchCommandPathTemplate(path string) (string, bool) {
+	kind, _, matches := matchPublicCommandRoute(path)
+	if !matches {
+		return "", false
+	}
+	switch kind {
+	case commandRouteCollection:
+		return "/api/v1/commands", true
+	case commandRouteItem:
+		return "/api/v1/commands/{commandId}", true
+	case commandRouteApproval:
+		return "/api/v1/commands/{commandId}/approve", true
+	case commandRouteReconciliation:
+		return "/api/v1/commands/{commandId}/reconcile", true
+	case commandRouteCancel:
+		return "/api/v1/commands/{commandId}/cancel", true
+	default:
+		return "", false
+	}
+}
+
 func dispatchCommandRoute(h *handler, writer http.ResponseWriter, request *http.Request, kind commandRouteKind, commandID string) {
 	if h.command == nil {
 		writeProblem(writer, request, http.StatusServiceUnavailable, "COMMAND_UNAVAILABLE", "Command unavailable", "The Command API is not configured.", true, nil)
