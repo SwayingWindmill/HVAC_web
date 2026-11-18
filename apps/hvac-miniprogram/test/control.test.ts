@@ -13,6 +13,7 @@ import {
   normalizeTotpCode,
   parseDeviceControlTargets,
   presentCommandStatus,
+  reconcileActiveCommandStatus,
   startCommandPolling,
   type CommandRecord,
   type SiteControlState,
@@ -535,4 +536,49 @@ test('non-blocking polling transitions 202 QUEUED -> SUCCEEDED and cancels clean
   });
   assert.equal(unknownPresented.active, false);
   assert.match(unknownPresented.detail, /现场确认/);
+});
+
+test('reconcileActiveCommandStatus settles stale active command banners after onHide or polling timeout', () => {
+  const activeBanner = presentCommandStatus({
+    commandId: 'cmd-pending',
+    siteId: 'site-1',
+    deviceId: 'dev-chiller-1',
+    pointId: 'pt-cmd-stop',
+    capability: 'STOP',
+    status: 'DISPATCHING',
+    parameters: {},
+    createdAt: '2026-11-18T10:00:00Z',
+    updatedAt: '2026-11-18T10:00:01Z',
+  });
+  assert.equal(activeBanner.active, true);
+
+  // 1. If openStatus is still active, preserve live openStatus.
+  const stillOpen = reconcileActiveCommandStatus(activeBanner, activeBanner, []);
+  assert.equal(stillOpen?.active, true);
+  assert.equal(stillOpen?.status, 'DISPATCHING');
+
+  // 2. When backend settled the command while page was hidden or polling timed out, transition to terminal state.
+  const settledInHistory = reconcileActiveCommandStatus(activeBanner, null, [{
+    commandId: 'cmd-pending',
+    siteId: 'site-1',
+    deviceId: 'dev-chiller-1',
+    pointId: 'pt-cmd-stop',
+    capability: 'STOP',
+    status: 'SUCCEEDED',
+    parameters: {},
+    createdAt: '2026-11-18T10:00:00Z',
+    updatedAt: '2026-11-18T10:00:05Z',
+  }]);
+  assert.equal(settledInHistory?.active, false);
+  assert.equal(settledInHistory?.status, 'SUCCEEDED');
+  assert.equal(settledInHistory?.label, '已执行');
+
+  // 3. Even if the command fell out of the recent command slice, mark active: false so the banner stays dismissible.
+  const missingFromSlice = reconcileActiveCommandStatus(activeBanner, null, []);
+  assert.equal(missingFromSlice?.active, false);
+  assert.equal(missingFromSlice?.label, '状态已更新');
+
+  // 4. Dismissed or already settled banners remain untouched.
+  assert.equal(reconcileActiveCommandStatus(null, null, []), null);
+  assert.deepEqual(reconcileActiveCommandStatus(settledInHistory, null, []), settledInHistory);
 });

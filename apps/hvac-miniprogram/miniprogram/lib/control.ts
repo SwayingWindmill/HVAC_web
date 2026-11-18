@@ -335,6 +335,28 @@ export function isCommandActive(status: CommandStatus): boolean {
   return ACTIVE_COMMAND_STATUSES.has(status);
 }
 
+/**
+ * Reconciles a previously active command banner during a non-polling refresh (for example after
+ * onHide or polling timeout) so settled commands never remain stuck with `active: true`.
+ */
+export function reconcileActiveCommandStatus(
+  previousStatus: PresentedCommandStatus | null,
+  openStatus: PresentedCommandStatus | null,
+  refreshedCommands: readonly CommandRecord[],
+): PresentedCommandStatus | null {
+  if (openStatus !== null) return openStatus;
+  if (previousStatus === null || !previousStatus.active) return previousStatus;
+  const matched = refreshedCommands.find((item) => item.commandId === previousStatus.commandId);
+  if (matched) return presentCommandStatus(matched);
+  return {
+    ...previousStatus,
+    label: '状态已更新',
+    tone: 'neutral',
+    active: false,
+    detail: '该指令已离开当前进行队列，请核对设备实时读数或下拉刷新。',
+  };
+}
+
 export function newIdempotencyKey(prefix = 'mpcmd'): string {
   const stamp = Date.now().toString(36);
   const randA = Math.floor(Math.random() * 0xffffffff).toString(36).padStart(7, '0');

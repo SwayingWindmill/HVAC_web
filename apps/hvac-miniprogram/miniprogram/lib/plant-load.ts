@@ -18,7 +18,7 @@ import {
   type PlantDevice,
   type SnapshotsResponse,
 } from './plant';
-import { gateway } from './platform';
+import { gateway, registerSignOutHandler, sessionToken } from './platform';
 import type { Site } from './site';
 
 export type { RawAssetRelationshipRecord, RawSiteAssetModel, RawTelemetryPointRecord } from './asset-model-cache';
@@ -57,12 +57,15 @@ const wxAssetModelStorage: AssetModelStorage = {
 const assetModelStore = createAssetModelStore({
   client: gateway,
   storage: wxAssetModelStorage,
+  sessionToken,
 });
 
 export function clearPlantCache(): void {
   clearAssetModelCache();
   assetModelStore.clear();
 }
+
+registerSignOutHandler(clearPlantCache);
 
 /** Reads the Site's asset model including control metadata, backed by per-tenant/site ETag cache. */
 export function loadSiteAssetModel(site: Pick<Site, 'id' | 'tenantId'>, fresh = false): Promise<RawSiteAssetModel> {

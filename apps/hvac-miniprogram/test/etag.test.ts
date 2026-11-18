@@ -174,3 +174,65 @@ test('asset model ETag cache isolates tenants, purges on clear(), and scrubs ent
   assert.equal(store.peekCachedEtag('tenant-a', 'shared-site-1'), null);
   assert.equal(storage.backing.size, 0);
 });
+
+test('401 sign-out on another endpoint and session token changes purge same-tenant memory and storage caches', async () => {
+  const sent: TransportRequest[] = [];
+  const session = memorySession('token-admin');
+  const storage = memoryStorage();
+  let returnUnauthorizedOnCommands = false;
+  let returnForbiddenForDowngradedUser = false;
+
+  let store!: ReturnType<typeof createAssetModelStore>;
+  const gateway = createGateway({
+    origin: 'https://hvac.example.test',
+    chunked: noStreams,
+    session,
+    onSignedOut: () => {
+      clearAssetModelCache();
+      store.clear();
+    },
+    transport: async (request) => {
+      sent.push(request);
+      if (returnUnauthorizedOnCommands && request.url.endsWith('/api/v1/commands')) {
+        return { statusCode: 401, data: { code: 'SESSION_INVALID' } };
+      }
+      if (returnForbiddenForDowngradedUser) {
+        return { statusCode: 404, data: { code: 'RESOURCE_NOT_FOUND' } };
+      }
+      return { statusCode: 200, data: sampleModel('管理员视图设备'), header: { ETag: '"admin-etag"' } };
+    },
+  });
+
+  store = createAssetModelStore({
+    client: gateway,
+    storage,
+    sessionToken: () => session.get(),
+  });
+
+  // 1. Admin populates same-tenant asset-model memory + storage cache.
+  const cached = await store.read('same-tenant', 'site-1', false);
+  assert.equal(cached.assets[0].displayName, '管理员视图设备');
+  assert.equal(store.peekCachedEtag('same-tenant', 'site-1'), '"admin-etag"');
+
+  // 2. A 401 on an unrelated endpoint triggers onSignedOut, clearing same-tenant cache immediately.
+  returnUnauthorizedOnCommands = true;
+  await assert.rejects(gateway.get('/api/v1/commands'), { status: 401, code: 'SESSION_INVALID' });
+  assert.equal(store.peekCachedEtag('same-tenant', 'site-1'), null);
+  assert.equal(storage.backing.size, 0);
+
+  // 3. Downgraded user signs in under the SAME tenantId: must NOT reuse stale memory cache and must fail closed on 404.
+  returnUnauthorizedOnCommands = false;
+  returnForbiddenForDowngradedUser = true;
+  session.set('token-downgraded');
+  await assert.rejects(store.read('same-tenant', 'site-1', false), { status: 404 });
+  assert.equal(sent[sent.length - 1].header['If-None-Match'], undefined);
+
+  // 4. Even if session token changes directly without clear(), store detects token mismatch and refuses stale memory.
+  returnForbiddenForDowngradedUser = false;
+  await store.read('same-tenant', 'site-1', false);
+  const callsBeforeTokenSwap = sent.length;
+  session.set('token-another-user');
+  await store.read('same-tenant', 'site-1', false);
+  assert.equal(sent.length, callsBeforeTokenSwap + 1);
+  assert.equal(sent[sent.length - 1].header['If-None-Match'], undefined);
+});

@@ -13,6 +13,7 @@ import {
   normalizeTotpCode,
   parseDeviceControlTargets,
   presentCommandStatus,
+  reconcileActiveCommandStatus,
   startCommandPolling,
   type ActionButtonView,
   type CommandRecord,
@@ -45,6 +46,8 @@ const submitMutex = createCommandSubmitMutex();
 
 // The device this page shows, kept out of setData along with active timers and unsent drafts.
 let deviceId = '';
+let isVisible = false;
+let pageGeneration = 0;
 let currentSiteRef: Site | null = null;
 let currentDeviceRef: PlantDevice | null = null;
 let currentTargets: DeviceControlTarget[] = [];
@@ -106,23 +109,33 @@ Page({
   },
 
   onLoad(query: Record<string, string | undefined>) {
+    pageGeneration += 1;
+    isVisible = true;
+    stopCommandPolling();
+    currentSiteRef = null;
+    currentDeviceRef = null;
+    currentTargets = [];
     deviceId = query.id ?? '';
     draftValues = {};
     inputDraftText = {};
   },
 
   onShow() {
+    isVisible = true;
     if (!requireSession()) return;
     this.refresh();
     refresher.start(() => this.refresh());
   },
 
   onHide() {
+    isVisible = false;
     refresher.stop();
     stopCommandPolling();
   },
 
   onUnload() {
+    isVisible = false;
+    pageGeneration += 1;
     refresher.stop();
     stopCommandPolling();
     currentTargets = [];
@@ -136,13 +149,14 @@ Page({
   },
 
   async refresh({ rereadEquipment = false } = {}) {
+    const generation = pageGeneration;
     try {
       const site = await currentSite(rereadEquipment);
+      if (generation !== pageGeneration) return;
       if (site === null) {
         this.setData({ loading: false, failed: '这个账号还看不到任何站点，请管理员在网页「系统管理」里分配站点。' });
         return;
       }
-      currentSiteRef = site;
       const now = new Date();
       const [device, dayStart, modelResult, principalResult, controlStateResult, commandsResult] = await Promise.all([
         loadPlantDevice(site, deviceId, rereadEquipment),
@@ -152,11 +166,11 @@ Page({
         Promise.allSettled([fetchSiteControlState(gateway, site.id)]),
         Promise.allSettled([fetchSiteCommands(gateway, site.id, 50)]),
       ]);
+      if (generation !== pageGeneration) return;
       if (device === null) {
         this.setData({ loading: false, failed: '这台设备已不在站点的设备清单里。' });
         return;
       }
-      currentDeviceRef = device;
 
       const rawModel = modelResult[0].status === 'fulfilled' ? modelResult[0].value : null;
       const principal = principalResult[0].status === 'fulfilled' ? principalResult[0].value : null;
@@ -164,7 +178,6 @@ Page({
       const commands: readonly CommandRecord[] = commandsResult[0].status === 'fulfilled' ? commandsResult[0].value : [];
 
       const targets = rawModel !== null ? parseDeviceControlTargets(rawModel, deviceId, now) : [];
-      currentTargets = targets;
       const hasControllablePoints = targets.length > 0;
       const canControl = hasControllablePoints && canSubmitCommands(principal);
 
@@ -178,11 +191,13 @@ Page({
       if (canControl && targets.some((target) => target.actions.some((action) => action.interlocks.length > 0))) {
         try {
           const plant = await loadPlant(site, false);
+          if (generation !== pageGeneration) return;
           for (const peer of plant.devices) {
             runStateByDeviceId.set(peer.deviceId, peer.connection === 'OFFLINE' ? 'OFFLINE' : peer.runState);
             nameByDeviceId.set(peer.deviceId, peer.name);
           }
         } catch {
+          if (generation !== pageGeneration) return;
           // Interlocks keep conservative fail-closed evaluation when peer run states are unavailable.
         }
       }
@@ -211,6 +226,10 @@ Page({
       });
 
       const { today, note } = await loadToday(site, dayStart[0], now);
+      if (generation !== pageGeneration) return;
+      currentSiteRef = site;
+      currentDeviceRef = device;
+      currentTargets = targets;
       wx.setNavigationBarTitle({ title: device.name });
       this.setData({
         loading: false,
@@ -221,9 +240,12 @@ Page({
         canControl,
         controlTargets,
         settingInputs: buildSettingDraftTextMap(controlTargets),
-        ...(activePolling === null && openStatus !== null ? { commandStatus: openStatus } : {}),
+        ...(activePolling === null
+          ? { commandStatus: reconcileActiveCommandStatus(this.data.commandStatus, openStatus, commands) }
+          : {}),
       });
     } catch {
+      if (generation !== pageGeneration) return;
       this.setData({ loading: false, failed: '这台设备的读数暂时读不到，下拉刷新再试。' });
     }
   },
@@ -421,10 +443,13 @@ Page({
       return;
     }
 
+    const generation = pageGeneration;
     await submitMutex.run(async () => {
+      if (generation !== pageGeneration) return;
       this.setData({ submitting: true, submitError: '', showMfaHint: false });
       try {
         const command = await dispatchControlCommand(gateway, intent, code || undefined);
+        if (generation !== pageGeneration) return;
         const presented = presentCommandStatus(command);
         this.setData({
           submitting: false,
@@ -439,36 +464,45 @@ Page({
 
         stopCommandPolling();
         if (presented.active) {
-          activePolling = startCommandPolling({
-            client: gateway,
-            commandId: command.commandId,
-            onUpdate: (_latest, nextPresented) => {
-              this.setData({ commandStatus: nextPresented, pollingNote: '' });
-              if (!nextPresented.active) {
+          if (generation === pageGeneration && isVisible) {
+            activePolling = startCommandPolling({
+              client: gateway,
+              commandId: command.commandId,
+              onUpdate: (_latest, nextPresented) => {
+                if (generation !== pageGeneration) {
+                  stopCommandPolling();
+                  return;
+                }
+                this.setData({ commandStatus: nextPresented, pollingNote: '' });
+                if (!nextPresented.active) {
+                  stopCommandPolling();
+                  delete draftValues[intent.pointId];
+                  delete inputDraftText[intent.pointId];
+                  this.refresh();
+                }
+              },
+              onTimeout: () => {
                 stopCommandPolling();
-                delete draftValues[intent.pointId];
-                delete inputDraftText[intent.pointId];
+                if (generation !== pageGeneration) return;
+                this.setData({
+                  pollingNote: '指令已提交处理中，请稍后下拉刷新确认最终现场反馈。',
+                });
                 this.refresh();
-              }
-            },
-            onTimeout: () => {
-              stopCommandPolling();
-              this.setData({
-                pollingNote: '指令已提交处理中，请稍后下拉刷新确认最终现场反馈。',
-              });
-              this.refresh();
-            },
-            onError: (message) => {
-              stopCommandPolling();
-              this.setData({ pollingNote: message });
-            },
-          });
+              },
+              onError: (message) => {
+                stopCommandPolling();
+                if (generation !== pageGeneration) return;
+                this.setData({ pollingNote: message });
+              },
+            });
+          }
         } else {
           delete draftValues[intent.pointId];
           delete inputDraftText[intent.pointId];
           this.refresh();
         }
       } catch (error) {
+        if (generation !== pageGeneration) return;
         const mapped = mapCommandSubmitError(error, CODE_PATTERN.test(code));
         const nextIntent = mapped.kind === 'step-up' && !intent.requiresTotp
           ? { ...intent, requiresTotp: true }

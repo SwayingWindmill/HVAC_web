@@ -58,6 +58,20 @@ const chunked: ChunkedTransport = (request) => {
 };
 
 let signingOut = false;
+const signedOutHandlers: (() => void)[] = [];
+
+/** Registers a local cache cleanup to run whenever a 401 or manual sign-out ends the Session. */
+export function registerSignOutHandler(handler: () => void): void {
+  if (!signedOutHandlers.includes(handler)) {
+    signedOutHandlers.push(handler);
+  }
+}
+
+function runSignOutHandlers(): void {
+  for (const handler of signedOutHandlers) {
+    handler();
+  }
+}
 
 export const gateway = createGateway({
   origin: GATEWAY_ORIGIN,
@@ -65,6 +79,7 @@ export const gateway = createGateway({
   chunked,
   session,
   onSignedOut: () => {
+    runSignOutHandlers();
     // Several requests can fail together when a Session ends; go to the sign-in page once.
     if (signingOut) return;
     signingOut = true;
@@ -72,7 +87,10 @@ export const gateway = createGateway({
   },
 });
 
-export const signOutLocally = () => session.clear();
+export const signOutLocally = () => {
+  session.clear();
+  runSignOutHandlers();
+};
 
 /** The Session in use, so what was read under it is not reused under another. */
 export const sessionToken = () => session.get();

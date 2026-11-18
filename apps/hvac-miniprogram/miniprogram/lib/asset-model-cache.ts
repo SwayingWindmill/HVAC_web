@@ -60,6 +60,7 @@ export interface AssetModelStorage {
 interface CachedAssetModelEntry {
   readonly tenantId: string;
   readonly siteId: string;
+  readonly sessionToken: string | null;
   readonly etag: string | null;
   readonly model: RawSiteAssetModel;
 }
@@ -79,6 +80,9 @@ const isCachedAssetModelEntry = (
   if (!isRecord(value)) return false;
   if (value.tenantId !== tenantId || value.siteId !== siteId) return false;
   if (typeof value.etag !== 'string' || value.etag.length === 0) return false;
+  if (value.sessionToken !== undefined && value.sessionToken !== null && typeof value.sessionToken !== 'string') {
+    return false;
+  }
   return isRecord(value.model)
     && Array.isArray(value.model.assets)
     && Array.isArray(value.model.devices)
@@ -89,11 +93,13 @@ const isCachedAssetModelEntry = (
 export function createAssetModelStore(options: {
   readonly client: Pick<Gateway, 'getConditional'>;
   readonly storage: AssetModelStorage;
+  readonly sessionToken?: () => string | null;
 }) {
-  const { client, storage } = options;
+  const { client, storage, sessionToken } = options;
   const memory = new Map<string, CachedAssetModelEntry>();
   const inFlight = new Map<string, Promise<RawSiteAssetModel>>();
 
+  const currentSession = (): string | null => sessionToken?.() ?? null;
   const entryKey = (tenantId: string, siteId: string) => `${tenantId}:${siteId}`;
   const storageKey = (tenantId: string, siteId: string) => `${ASSET_MODEL_STORAGE_PREFIX}${tenantId}:${siteId}`;
 
@@ -122,7 +128,9 @@ export function createAssetModelStore(options: {
 
   const readStoredEntry = (tenantId: string, siteId: string): CachedAssetModelEntry | null => {
     const raw = storage.get(storageKey(tenantId, siteId));
-    return isCachedAssetModelEntry(raw, tenantId, siteId) ? raw : null;
+    if (!isCachedAssetModelEntry(raw, tenantId, siteId)) return null;
+    if (sessionToken && (raw.sessionToken ?? null) !== currentSession()) return null;
+    return raw;
   };
 
   const dropEntry = (tenantId: string, siteId: string) => {
@@ -133,7 +141,7 @@ export function createAssetModelStore(options: {
   };
 
   const storeEntry = (tenantId: string, siteId: string, etag: string | null, model: RawSiteAssetModel) => {
-    const entry: CachedAssetModelEntry = { tenantId, siteId, etag, model };
+    const entry: CachedAssetModelEntry = { tenantId, siteId, sessionToken: currentSession(), etag, model };
     memory.set(entryKey(tenantId, siteId), entry);
     const sKey = storageKey(tenantId, siteId);
     if (etag !== null && etag.length > 0) {
@@ -147,7 +155,10 @@ export function createAssetModelStore(options: {
 
   const fetchWithRevalidation = async (tenantId: string, siteId: string): Promise<RawSiteAssetModel> => {
     const key = entryKey(tenantId, siteId);
-    const baseline = memory.get(key) ?? readStoredEntry(tenantId, siteId);
+    const activeSession = currentSession();
+    const mem = memory.get(key);
+    const baseline = (mem && (!sessionToken || mem.sessionToken === activeSession) ? mem : null)
+      ?? readStoredEntry(tenantId, siteId);
     const ifNoneMatch = baseline?.etag ?? null;
     const path = `/api/v1/sites/${encodeURIComponent(siteId)}/asset-model`;
 
@@ -181,9 +192,15 @@ export function createAssetModelStore(options: {
 
   const read = (tenantId: string, siteId: string, fresh = false): Promise<RawSiteAssetModel> => {
     const key = entryKey(tenantId, siteId);
+    const activeSession = currentSession();
     if (!fresh) {
       const mem = memory.get(key);
-      if (mem !== undefined) return Promise.resolve(mem.model);
+      if (mem !== undefined) {
+        if (!sessionToken || mem.sessionToken === activeSession) {
+          return Promise.resolve(mem.model);
+        }
+        dropEntry(tenantId, siteId);
+      }
     }
     const flightKey = `${key}:${fresh ? '1' : '0'}`;
     const existing = inFlight.get(flightKey);
