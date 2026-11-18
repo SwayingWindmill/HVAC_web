@@ -3181,6 +3181,26 @@
           "default": { "$ref": "#/components/responses/Problem" }
         }
       }
+    },
+    "/api/v1/sites/{siteId}/optimization/governance-summary": {
+      "get": {
+        "operationId": "getSiteOptimizationGovernanceSummary",
+        "summary": "Read optimization canary solver binding, control mode tick counts, bivariate COP comparison, and negative sample flywheel summary for a Site",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "optimization-service",
+        "x-public-ingress": "platform-gateway",
+        "parameters": [
+          { "$ref": "#/components/parameters/SiteId" },
+          { "name": "windowDays", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 365 } }
+        ],
+        "responses": {
+          "200": { "description": "Optimization governance and M&V flywheel summary for the Site.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OptimizationGovernanceSummary" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
     }
   },
   "components": {
@@ -6263,6 +6283,96 @@
           "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
           "siteId": { "$ref": "#/components/schemas/UUIDv7" },
           "items": { "type": "array", "items": { "$ref": "#/components/schemas/OptimizationExecutionMonitor" } }
+        }
+      },
+      "OptimizationActiveSolver": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["servingRef", "source", "loopKey", "deploymentRevisionId"],
+        "properties": {
+          "servingRef": { "type": "string" },
+          "source": { "type": "string", "enum": ["DEFAULT", "DEPLOYMENT_BINDING", "SITE_LOOP_CANARY"] },
+          "loopKey": { "type": "string" },
+          "deploymentRevisionId": { "oneOf": [{ "$ref": "#/components/schemas/UUIDv7" }, { "type": "null" }] }
+        }
+      },
+      "OptimizationTickCounts": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["aiClosedLoop", "aiShadow", "ruleBaseline", "manualOverride"],
+        "properties": {
+          "aiClosedLoop": { "type": "integer", "minimum": 0 },
+          "aiShadow": { "type": "integer", "minimum": 0 },
+          "ruleBaseline": { "type": "integer", "minimum": 0 },
+          "manualOverride": { "type": "integer", "minimum": 0 }
+        }
+      },
+      "OptimizationCopComparison": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "matchedBinCount",
+          "matchedAiSamples",
+          "matchedBaselineSamples",
+          "weightedBaselineCOP",
+          "weightedAiCOP",
+          "weightedCopUpliftPct",
+          "totalEstimatedSavedKWh",
+          "cells"
+        ],
+        "properties": {
+          "matchedBinCount": { "type": "integer", "minimum": 0 },
+          "matchedAiSamples": { "type": "integer", "minimum": 0 },
+          "matchedBaselineSamples": { "type": "integer", "minimum": 0 },
+          "weightedBaselineCOP": { "oneOf": [{ "type": "number" }, { "type": "null" }] },
+          "weightedAiCOP": { "oneOf": [{ "type": "number" }, { "type": "null" }] },
+          "weightedCopUpliftPct": { "oneOf": [{ "type": "number" }, { "type": "null" }] },
+          "totalEstimatedSavedKWh": { "type": "number" },
+          "cells": { "type": "array", "items": { "type": "object" } }
+        }
+      },
+      "OptimizationFlywheelSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "totalSamples",
+          "guardrailClamped",
+          "guardrailVetoed",
+          "manualOverride",
+          "monitorTripped",
+          "trackingDeviation"
+        ],
+        "properties": {
+          "totalSamples": { "type": "integer", "minimum": 0 },
+          "guardrailClamped": { "type": "integer", "minimum": 0 },
+          "guardrailVetoed": { "type": "integer", "minimum": 0 },
+          "manualOverride": { "type": "integer", "minimum": 0 },
+          "monitorTripped": { "type": "integer", "minimum": 0 },
+          "trackingDeviation": { "type": "integer", "minimum": 0 }
+        }
+      },
+      "OptimizationGovernanceSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tenantId",
+          "siteId",
+          "windowDays",
+          "generatedAt",
+          "activeSolver",
+          "tickCounts",
+          "copComparison",
+          "flywheel"
+        ],
+        "properties": {
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "windowDays": { "type": "integer", "minimum": 1 },
+          "generatedAt": { "type": "string", "format": "date-time" },
+          "activeSolver": { "$ref": "#/components/schemas/OptimizationActiveSolver" },
+          "tickCounts": { "$ref": "#/components/schemas/OptimizationTickCounts" },
+          "copComparison": { "$ref": "#/components/schemas/OptimizationCopComparison" },
+          "flywheel": { "$ref": "#/components/schemas/OptimizationFlywheelSummary" }
         }
       },
       "FieldError": {

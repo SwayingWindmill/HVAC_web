@@ -181,6 +181,7 @@ COPY modules/alarm/migrations/alarm-evaluation-slope-window.sql /opt/hvac/repo/m
 COPY infra/connectivity/postgres/init/gateway-shadow-drivers-and-autonomy.sql /opt/hvac/repo/infra/connectivity/postgres/init/gateway-shadow-drivers-and-autonomy.sql
 COPY infra/registry/postgres/init/optimization-safety-guardrails.sql /opt/hvac/repo/infra/registry/postgres/init/optimization-safety-guardrails.sql
 COPY infra/registry/postgres/init/optimization-shadow-and-trace.sql /opt/hvac/repo/infra/registry/postgres/init/optimization-shadow-and-trace.sql
+COPY infra/registry/postgres/init/optimization-governance-flywheel.sql /opt/hvac/repo/infra/registry/postgres/init/optimization-governance-flywheel.sql
 
 FROM postgres:16.4-bookworm
 

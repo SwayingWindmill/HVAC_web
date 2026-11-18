@@ -89,6 +89,7 @@ services:
       - ../connectivity/postgres/init/gateway-shadow-drivers-and-autonomy.sql:/docker-entrypoint-initdb.d/730.sql:ro
       - ./postgres/init/optimization-safety-guardrails.sql:/docker-entrypoint-initdb.d/740.sql:ro
       - ./postgres/init/optimization-shadow-and-trace.sql:/docker-entrypoint-initdb.d/750.sql:ro
+      - ./postgres/init/optimization-governance-flywheel.sql:/docker-entrypoint-initdb.d/760.sql:ro
     ports:
       - "127.0.0.1:${S1_POSTGRES_HOST_PORT:-55432}:5432"
     healthcheck:

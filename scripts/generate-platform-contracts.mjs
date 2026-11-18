@@ -188,6 +188,7 @@ const expectedOperations = {
   armSiteAutoControlLease: ['put', `${site}/optimization/auto-control-lease`],
   revokeSiteAutoControlLease: ['post', `${site}/optimization/auto-control-lease/revoke`],
   listSiteOptimizationExecutionMonitors: ['get', `${site}/optimization/execution-monitors`],
+  getSiteOptimizationGovernanceSummary: ['get', `${opt}/governance-summary`],
 };
 const operations = {};
 for (const [operationId, [method, subPath]] of Object.entries(expectedOperations)) {
@@ -256,6 +257,7 @@ const expectedSuccessSchemas = {
   armSiteAutoControlLease: 'SiteAutoControlLeaseState',
   revokeSiteAutoControlLease: 'SiteAutoControlLeaseState',
   listSiteOptimizationExecutionMonitors: 'OptimizationExecutionMonitorList',
+  getSiteOptimizationGovernanceSummary: 'OptimizationGovernanceSummary',
 };
 for (const [operationId, schemaName] of Object.entries(expectedSuccessSchemas)) {
   invariant(schemaRef(operations[operationId].operation, '200') === `#/components/schemas/${schemaName}`, `${operationId} success schema is unsupported`);
@@ -339,6 +341,11 @@ const schemaRequirements = {
     ['baselineSupplyTempC', 'appliedSupplyTempC', 'restoreSupplyTempC', 'supplyTempMinC', 'rawRecommendedValue', 'clampedValue', 'guardrailVerdict', 'guardrailTrace', 'executionMode', 'decisionId', 'traceId', 'lastCheckedAt', 'telemetryUnhealthySince', 'tripReason', 'rollbackCommandIntentId'],
   ],
   OptimizationExecutionMonitorList: [['tenantId', 'siteId', 'items']],
+  OptimizationActiveSolver: [['servingRef', 'source', 'loopKey', 'deploymentRevisionId']],
+  OptimizationTickCounts: [['aiClosedLoop', 'aiShadow', 'ruleBaseline', 'manualOverride']],
+  OptimizationCopComparison: [['matchedBinCount', 'matchedAiSamples', 'matchedBaselineSamples', 'weightedBaselineCOP', 'weightedAiCOP', 'weightedCopUpliftPct', 'totalEstimatedSavedKWh', 'cells']],
+  OptimizationFlywheelSummary: [['totalSamples', 'guardrailClamped', 'guardrailVetoed', 'manualOverride', 'monitorTripped', 'trackingDeviation']],
+  OptimizationGovernanceSummary: [['tenantId', 'siteId', 'windowDays', 'generatedAt', 'activeSolver', 'tickCounts', 'copComparison', 'flywheel']],
   GatewayCredentialRecord: [['id', 'gatewayId', 'fingerprintSha256', 'status', 'validFrom', 'validUntil', 'createdAt'], ['serialNumber', 'revokedAt', 'revocationReason']],
   GatewayCredentialList: [['items']],
   GatewayCertificateRevokeRequest: [[], ['reason']],
@@ -536,6 +543,7 @@ const replacements = {
   __SITE_AUTO_CONTROL_LEASE_PATH__: operations.getSiteAutoControlLease.path,
   __SITE_AUTO_CONTROL_LEASE_REVOKE_PATH__: operations.revokeSiteAutoControlLease.path,
   __SITE_OPTIMIZATION_EXECUTION_MONITORS_PATH__: operations.listSiteOptimizationExecutionMonitors.path,
+  __SITE_OPTIMIZATION_GOVERNANCE_SUMMARY_PATH__: operations.getSiteOptimizationGovernanceSummary.path,
 };
 
 function render(template) {
