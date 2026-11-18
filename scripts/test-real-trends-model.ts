@@ -194,6 +194,30 @@ test('resolveTrendWindow selects auto granularities and clamps illegal >720-buck
   assert.ok(!sevenDays.allowedGranularities.includes('FIVE_MINUTE'));
   assert.equal(sevenDays.compareLabel, '对比上周同时段');
   assert.equal(sevenDays.fromMs - sevenDays.compareFromMs, 7 * 86_400_000);
+
+  const customCases = [
+    { from: '2026-10-12T00:00:00.000Z', to: '2026-10-12T06:00:00.000Z', want: 'MINUTE', slots: 360 },
+    { from: '2026-10-12T00:00:00.000Z', to: '2026-10-12T06:01:00.000Z', want: 'FIVE_MINUTE', slots: 73 },
+    { from: '2026-10-12T00:00:00.000Z', to: '2026-10-13T00:00:00.000Z', want: 'FIVE_MINUTE', slots: 288 },
+    { from: '2026-10-10T00:00:00.000Z', to: '2026-10-12T00:00:00.000Z', want: 'QUARTER_HOUR', slots: 192 },
+    { from: '2026-10-05T00:00:00.000Z', to: '2026-10-12T00:00:00.000Z', want: 'HOUR', slots: 168 },
+    { from: '2026-09-27T00:00:00.000Z', to: '2026-10-12T00:00:00.000Z', want: 'HOUR', slots: 360 },
+    { from: '2026-09-25T16:00:00.000Z', to: '2026-10-11T16:00:00.000Z', want: 'DAY', slots: 16 },
+    { from: '2026-09-11T16:00:00.000Z', to: '2026-10-11T16:00:00.000Z', want: 'DAY', slots: 30 },
+    { from: '2026-09-12T00:00:00.000Z', to: '2026-10-12T00:00:00.000Z', want: 'DAY', slots: 31 },
+  ] as const;
+  for (const tc of customCases) {
+    const resolved = resolveTrendWindow({
+      window: 'custom',
+      from: tc.from,
+      to: tc.to,
+      now: afternoon,
+      timezone,
+    });
+    assert.equal(resolved.granularity, tc.want);
+    assert.equal(resolved.slots.length, tc.slots);
+    assert.ok(resolved.slots.length <= 360);
+  }
 });
 
 test('buildTrendViewModel splits units into lanes, aligns compare series, preserves outage nulls, and computes stats', () => {

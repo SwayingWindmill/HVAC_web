@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -21,8 +22,12 @@ const (
 )
 
 func TestClickHouseHistoryClientPreservesTypedSameTimestampFactsAndStableCursorSnapshot(t *testing.T) {
+	type recordedQuery struct {
+		sql    string
+		params url.Values
+	}
 	var mu sync.Mutex
-	queries := make([]string, 0, 3)
+	queries := make([]recordedQuery, 0, 3)
 	responses := []string{
 		`{"snapshot_at":"2026-08-19T01:10:00.000Z","projection_watermark":"2026-08-19T01:09:00.000Z"}
 `,
@@ -37,7 +42,7 @@ func TestClickHouseHistoryClientPreservesTypedSameTimestampFactsAndStableCursorS
 			t.Fatal(err)
 		}
 		mu.Lock()
-		queries = append(queries, string(payload))
+		queries = append(queries, recordedQuery{sql: string(payload), params: request.URL.Query()})
 		index := len(queries) - 1
 		mu.Unlock()
 		if index >= len(responses) {
@@ -81,22 +86,79 @@ func TestClickHouseHistoryClientPreservesTypedSameTimestampFactsAndStableCursorS
 	if len(queries) != 3 {
 		t.Fatalf("queries=%d", len(queries))
 	}
-	if !strings.Contains(queries[0], "max(projected_at)") || strings.Contains(queries[0], "max(sampled_at)") {
-		t.Fatalf("snapshot query does not use projector watermark:\n%s", queries[0])
+	if !strings.Contains(queries[0].sql, "max(projected_at)") || strings.Contains(queries[0].sql, "max(sampled_at)") {
+		t.Fatalf("snapshot query does not use projector watermark:\n%s", queries[0].sql)
 	}
 	for _, marker := range []string{
+		"tenant_id = toUUID({tenant_id:UUID})",
+		"site_id = toUUID({site_id:UUID})",
+		"device_id = toUUID({device_id:UUID})",
+		"telemetry_key IN {keys:Array(String)}",
 		"acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER')",
 		"value_type IN ('NUMBER', 'STRING', 'BOOLEAN', 'JSON')",
 		"ORDER BY telemetry_key, history_source.sampled_at, toString(observation_id)",
-		"LIMIT 3",
-		"projected_at < parseDateTime64BestEffort('2026-08-19T01:10:00.000Z'",
+		"LIMIT {limit:UInt64}",
+		"projected_at < parseDateTime64BestEffort({snapshot_ts:String}, 3, 'UTC')",
 	} {
-		if !strings.Contains(queries[1], marker) {
-			t.Fatalf("first page query missing %q:\n%s", marker, queries[1])
+		if !strings.Contains(queries[1].sql, marker) {
+			t.Fatalf("first page query missing %q:\n%s", marker, queries[1].sql)
 		}
 	}
-	if !strings.Contains(queries[2], "toString(observation_id) > '018f2e00-5000-7000-8000-000000000002'") || strings.Contains(queries[2], "now64(3)") {
-		t.Fatalf("cursor page did not reuse fixed snapshot/keyset:\n%s", queries[2])
+	for _, forbidden := range []string{
+		historyTenantID,
+		historySiteID,
+		historyDeviceID,
+		"zone.mode",
+		"2026-08-19T01:00:00.000Z",
+		"2026-08-19T02:00:00.000Z",
+		"2026-08-19T01:10:00.000Z",
+	} {
+		if strings.Contains(queries[0].sql, forbidden) || strings.Contains(queries[1].sql, forbidden) || strings.Contains(queries[2].sql, forbidden) {
+			t.Fatalf("raw parameter %q leaked into SQL", forbidden)
+		}
+	}
+	if queries[1].params.Get("param_tenant_id") != historyTenantID ||
+		queries[1].params.Get("param_site_id") != historySiteID ||
+		queries[1].params.Get("param_device_id") != historyDeviceID ||
+		queries[1].params.Get("param_keys") != "['zone.mode']" ||
+		queries[1].params.Get("param_from_ts") != "2026-08-19T01:00:00.000Z" ||
+		queries[1].params.Get("param_to_ts") != "2026-08-19T02:00:00.000Z" ||
+		queries[1].params.Get("param_snapshot_ts") != "2026-08-19T01:10:00.000Z" ||
+		queries[1].params.Get("param_limit") != "3" {
+		t.Fatalf("unexpected page 1 query params: %#v", queries[1].params)
+	}
+	if !strings.Contains(queries[2].sql, "toString(observation_id) > {cursor_observation_id:String}") ||
+		strings.Contains(queries[2].sql, "018f2e00-5000-7000-8000-000000000002") ||
+		strings.Contains(queries[2].sql, "now64(3)") {
+		t.Fatalf("cursor page did not reuse fixed parameterized snapshot/keyset:\n%s", queries[2].sql)
+	}
+	if queries[2].params.Get("param_cursor_key") != "zone.mode" ||
+		queries[2].params.Get("param_cursor_sampled_at") != "2026-08-19T01:00:00.000Z" ||
+		queries[2].params.Get("param_cursor_observation_id") != "018f2e00-5000-7000-8000-000000000002" {
+		t.Fatalf("unexpected cursor params: %#v", queries[2].params)
+	}
+}
+
+func TestNewClientRejectsInvalidIdentifiersAndURLs(t *testing.T) {
+	badConfigs := []Config{
+		{BaseURL: "http://127.0.0.1:8123", Database: "", Table: "observations"},
+		{BaseURL: "http://127.0.0.1:8123", Database: "telemetry_history; DROP TABLE observations", Table: "observations"},
+		{BaseURL: "http://127.0.0.1:8123", Database: "telemetry-history", Table: "observations"},
+		{BaseURL: "http://127.0.0.1:8123", Database: "1db", Table: "observations"},
+		{BaseURL: "http://127.0.0.1:8123", Database: "telemetry_history", Table: "obs.bad"},
+		{BaseURL: "http://127.0.0.1:8123/query", Database: "telemetry_history", Table: "observations"},
+		{BaseURL: "http://user:pass@127.0.0.1:8123", Database: "telemetry_history", Table: "observations"},
+	}
+	for _, cfg := range badConfigs {
+		if _, err := NewClient(cfg); err == nil {
+			t.Fatalf("expected NewClient to reject config %+v", cfg)
+		}
+	}
+	if _, err := NewClient(Config{BaseURL: "http://127.0.0.1:8123", Database: "_telemetry_2", Table: "observations_v1"}); err != nil {
+		t.Fatalf("expected valid identifiers to succeed: %v", err)
+	}
+	if got := clickHouseStringArray([]string{"b'2", `a\1`}); got != `['a\\1','b\'2']` {
+		t.Fatalf("clickHouseStringArray() = %q", got)
 	}
 }
 

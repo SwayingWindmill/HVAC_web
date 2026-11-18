@@ -74,6 +74,9 @@ func (h *handler) QueryDeviceHistoryAggregate(writer http.ResponseWriter, reques
 	if !ok {
 		return
 	}
+	if !h.allowRateLimitedTenant(writer, request, limitpolicy.DimensionExpensiveQuery, caller.tenantID) {
+		return
+	}
 	selection, failure := historyAggregateSelection(input)
 	if failure != nil {
 		h.writeTelemetryFailure(writer, request, *failure)

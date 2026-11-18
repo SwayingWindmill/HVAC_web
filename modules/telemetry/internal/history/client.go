@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,7 +23,7 @@ import (
 const maximumResponseBodySize = int64(8 << 20)
 
 var (
-	identifierPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
+	identifierPattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]{0,127}$`)
 	uuidV7Pattern     = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 )
 
@@ -132,7 +133,8 @@ func (client *Client) QueryDeviceHistory(ctx context.Context, query telemetryhis
 	if err != nil {
 		return telemetryhistorymodel.DeviceHistoryResponse{}, err
 	}
-	payload, err := client.execute(ctx, client.pointsQuery(canonical, snapshotAt, cursor))
+	sql, params := client.pointsQuery(canonical, snapshotAt, cursor)
+	payload, err := client.execute(ctx, sql, params)
 	if err != nil {
 		return telemetryhistorymodel.DeviceHistoryResponse{}, err
 	}
@@ -159,7 +161,8 @@ func (client *Client) resolveSnapshot(ctx context.Context, query telemetryhistor
 		}
 		return cursor, snapshotAt, watermark, nil
 	}
-	payload, err := client.execute(ctx, client.snapshotQuery(query))
+	sql, params := client.snapshotQuery(query)
+	payload, err := client.execute(ctx, sql, params)
 	if err != nil {
 		return nil, time.Time{}, nil, err
 	}
@@ -183,8 +186,12 @@ func (client *Client) resolveSnapshot(ctx context.Context, query telemetryhistor
 	return nil, snapshotAt, watermark, nil
 }
 
-func (client *Client) execute(ctx context.Context, query string) ([]byte, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.endpoint.String(), strings.NewReader(query))
+func (client *Client) execute(ctx context.Context, sql string, params url.Values) ([]byte, error) {
+	endpoint := *client.endpoint
+	if len(params) > 0 {
+		endpoint.RawQuery = params.Encode()
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), strings.NewReader(sql))
 	if err != nil {
 		return nil, fmt.Errorf("create ClickHouse history request: %w", err)
 	}
@@ -291,37 +298,54 @@ func decodePointRow(row pointRow) (telemetryhistorymodel.DeviceHistoryObservatio
 	}, nil
 }
 
-func (client *Client) snapshotQuery(query telemetryhistorymodel.DeviceHistoryQuery) string {
-	return fmt.Sprintf(`WITH now64(3) AS snapshot_cutoff
+func baseHistoryParams(tenantID, siteID, deviceID string, keys []string, from, to time.Time) url.Values {
+	return url.Values{
+		"param_tenant_id": {tenantID},
+		"param_site_id":   {siteID},
+		"param_device_id": {deviceID},
+		"param_keys":      {clickHouseStringArray(keys)},
+		"param_from_ts":   {formatClickHouseTime(from)},
+		"param_to_ts":     {formatClickHouseTime(to)},
+	}
+}
+
+func (client *Client) snapshotQuery(query telemetryhistorymodel.DeviceHistoryQuery) (string, url.Values) {
+	sql := fmt.Sprintf(`WITH now64(3) AS snapshot_cutoff
 SELECT
   formatDateTime(snapshot_cutoff, '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS snapshot_at,
   if(count() = 0, CAST(NULL, 'Nullable(String)'), formatDateTime(max(projected_at), '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC')) AS projection_watermark
 FROM %s.%s
-WHERE tenant_id = toUUID('%s')
-  AND site_id = toUUID('%s')
-  AND device_id = toUUID('%s')
-  AND telemetry_key IN (%s)
-  AND sampled_at >= parseDateTime64BestEffort('%s', 3, 'UTC')
-  AND sampled_at < parseDateTime64BestEffort('%s', 3, 'UTC')
+WHERE tenant_id = toUUID({tenant_id:UUID})
+  AND site_id = toUUID({site_id:UUID})
+  AND device_id = toUUID({device_id:UUID})
+  AND telemetry_key IN {keys:Array(String)}
+  AND sampled_at >= parseDateTime64BestEffort({from_ts:String}, 3, 'UTC')
+  AND sampled_at < parseDateTime64BestEffort({to_ts:String}, 3, 'UTC')
   AND projected_at < snapshot_cutoff
   AND acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER')
   AND point_id IS NOT NULL
   AND point_revision IS NOT NULL
   AND value_type IN ('NUMBER', 'STRING', 'BOOLEAN', 'JSON')
   AND value_json IS NOT NULL
-FORMAT JSONEachRow`, client.database, client.table, query.TenantID, query.SiteID, query.DeviceID, quotedKeys(query.Keys), formatClickHouseTime(query.From), formatClickHouseTime(query.To))
+FORMAT JSONEachRow`, client.database, client.table)
+	return sql, baseHistoryParams(query.TenantID, query.SiteID, query.DeviceID, query.Keys, query.From, query.To)
 }
 
-func (client *Client) pointsQuery(query telemetryhistorymodel.DeviceHistoryQuery, snapshotAt time.Time, cursor *historyCursor) string {
+func (client *Client) pointsQuery(query telemetryhistorymodel.DeviceHistoryQuery, snapshotAt time.Time, cursor *historyCursor) (string, url.Values) {
+	params := baseHistoryParams(query.TenantID, query.SiteID, query.DeviceID, query.Keys, query.From, query.To)
+	params.Set("param_snapshot_ts", formatClickHouseTime(snapshotAt))
+	params.Set("param_limit", strconv.Itoa(query.PageSize+1))
 	cursorPredicate := ""
 	if cursor != nil {
-		cursorPredicate = fmt.Sprintf(`
-  AND (telemetry_key > '%s'
-    OR (telemetry_key = '%s' AND history_source.sampled_at > parseDateTime64BestEffort('%s', 3, 'UTC'))
-    OR (telemetry_key = '%s' AND history_source.sampled_at = parseDateTime64BestEffort('%s', 3, 'UTC') AND toString(observation_id) > '%s'))`,
-			cursor.LastTelemetryKey, cursor.LastTelemetryKey, cursor.LastSampledAt, cursor.LastTelemetryKey, cursor.LastSampledAt, cursor.LastObservationID)
+		params.Set("param_cursor_key", cursor.LastTelemetryKey)
+		params.Set("param_cursor_sampled_at", cursor.LastSampledAt)
+		params.Set("param_cursor_observation_id", cursor.LastObservationID)
+		cursorPredicate = `
+  AND (telemetry_key > {cursor_key:String}
+    OR (telemetry_key = {cursor_key:String} AND history_source.sampled_at > parseDateTime64BestEffort({cursor_sampled_at:String}, 3, 'UTC'))
+    OR (telemetry_key = {cursor_key:String} AND history_source.sampled_at = parseDateTime64BestEffort({cursor_sampled_at:String}, 3, 'UTC') AND toString(observation_id) > {cursor_observation_id:String}))`
 	}
-	return fmt.Sprintf(`SELECT
+	sql := fmt.Sprintf(`SELECT
   toString(observation_id) AS observation_id,
   toString(assumeNotNull(point_id)) AS point_id,
   if(sensor_id IS NULL, CAST(NULL, 'Nullable(String)'), toString(sensor_id)) AS sensor_id,
@@ -340,13 +364,13 @@ func (client *Client) pointsQuery(query telemetryhistorymodel.DeviceHistoryQuery
   source_partition,
   source_offset
 FROM %s.%s AS history_source
-WHERE tenant_id = toUUID('%s')
-  AND site_id = toUUID('%s')
-  AND device_id = toUUID('%s')
-  AND telemetry_key IN (%s)
-  AND history_source.sampled_at >= parseDateTime64BestEffort('%s', 3, 'UTC')
-  AND history_source.sampled_at < parseDateTime64BestEffort('%s', 3, 'UTC')
-  AND projected_at < parseDateTime64BestEffort('%s', 3, 'UTC')
+WHERE tenant_id = toUUID({tenant_id:UUID})
+  AND site_id = toUUID({site_id:UUID})
+  AND device_id = toUUID({device_id:UUID})
+  AND telemetry_key IN {keys:Array(String)}
+  AND history_source.sampled_at >= parseDateTime64BestEffort({from_ts:String}, 3, 'UTC')
+  AND history_source.sampled_at < parseDateTime64BestEffort({to_ts:String}, 3, 'UTC')
+  AND projected_at < parseDateTime64BestEffort({snapshot_ts:String}, 3, 'UTC')
   AND acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER')
   AND point_id IS NOT NULL
   AND point_type IS NOT NULL
@@ -354,8 +378,9 @@ WHERE tenant_id = toUUID('%s')
   AND value_type IN ('NUMBER', 'STRING', 'BOOLEAN', 'JSON')
   AND value_json IS NOT NULL%s
 ORDER BY telemetry_key, history_source.sampled_at, toString(observation_id)
-LIMIT %d
-FORMAT JSONEachRow`, client.database, client.table, query.TenantID, query.SiteID, query.DeviceID, quotedKeys(query.Keys), formatClickHouseTime(query.From), formatClickHouseTime(query.To), formatClickHouseTime(snapshotAt), cursorPredicate, query.PageSize+1)
+LIMIT {limit:UInt64}
+FORMAT JSONEachRow`, client.database, client.table, cursorPredicate)
+	return sql, params
 }
 
 func encodeCursor(query telemetryhistorymodel.DeviceHistoryQuery, snapshotAt time.Time, watermark *time.Time, last telemetryhistorymodel.DeviceHistoryObservation) (string, error) {
@@ -437,14 +462,15 @@ func telemetryKeyInQuery(key string, keys []string) bool {
 	return false
 }
 
-func quotedKeys(keys []string) string {
-	ordered := append([]string(nil), keys...)
+func clickHouseStringArray(values []string) string {
+	ordered := append([]string(nil), values...)
 	sort.Strings(ordered)
+	replacer := strings.NewReplacer(`\`, `\\`, `'`, `\'`)
 	quoted := make([]string, len(ordered))
-	for index, key := range ordered {
-		quoted[index] = "'" + key + "'"
+	for index, value := range ordered {
+		quoted[index] = "'" + replacer.Replace(value) + "'"
 	}
-	return strings.Join(quoted, ",")
+	return "[" + strings.Join(quoted, ",") + "]"
 }
 
 func formatClickHouseTime(value time.Time) string {
