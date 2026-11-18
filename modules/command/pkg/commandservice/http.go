@@ -561,9 +561,13 @@ func validInternalCreate(input internalCreateCommandRequest) bool {
 	}
 	switch mode {
 	case commandmodel.PreconditionEmergencyBypass:
-		if !profile.SupportsEmergencyBypass || strings.TrimSpace(input.BypassReason) == "" {
-			return false
-		}
+		return commandmodel.AllowsEmergencyPreconditionBypass(
+			input.Capability,
+			input.PriorityTier,
+			input.CommandSource,
+			input.IdempotencyKey,
+			input.BypassReason,
+		)
 	case commandmodel.PreconditionRequireCurrentState:
 		if input.CurrentState.BusinessRevision == 0 || input.CurrentState.ObservedAt.IsZero() {
 			return false

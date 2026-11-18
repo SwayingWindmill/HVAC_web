@@ -71,6 +71,7 @@ type LivePointObservation struct {
 // pre-dispatch safety evaluator.
 type GateInput struct {
 	CommandID               string
+	IdempotencyKey          string
 	Phase                   GatePhase
 	AssetID                 string
 	DeviceID                string
@@ -80,6 +81,8 @@ type GateInput struct {
 	ActuationMode           string
 	AllowEmergencyDoRelease bool
 	Parameters              CommandParameters
+	PriorityTier            PriorityTier
+	CommandSource           CommandSource
 	SiteMode                SiteControlMode
 	AssetLocks              []ControlLockSnapshot
 	ActiveMaintenanceWindow *MaintenanceWindowSnapshot
@@ -208,16 +211,53 @@ func evaluateThreeTierLocks(in GateInput, phase GatePhase) *GateRejection {
 	return nil
 }
 
+// AllowsEmergencyPreconditionBypass reports whether a command satisfies the capability
+// emergency-bypass contract or the scoped protection-rule auto-rollback bypass rule.
+func AllowsEmergencyPreconditionBypass(
+	capability Capability,
+	priorityTier PriorityTier,
+	commandSource CommandSource,
+	idempotencyKey string,
+	bypassReason string,
+) bool {
+	if strings.TrimSpace(bypassReason) == "" {
+		return false
+	}
+	if profile, ok := CapabilityProfileFor(capability); ok && profile.SupportsEmergencyBypass {
+		return true
+	}
+	return priorityTier == PriorityProtectionRule &&
+		commandSource == SourceProtectionRule &&
+		capability == CapabilitySetChilledWaterTemperatureSetpoint &&
+		strings.HasPrefix(idempotencyKey, "auto-rollback:")
+}
+
+func isAutomatedWorkloadWithoutOverride(in GateInput, precond PreconditionMode) bool {
+	if precond == PreconditionEmergencyBypass || in.PriorityTier == PrioritySafetyInterlock || in.CommandSource == SourceSafetyInterlock {
+		return false
+	}
+	if in.CommandSource == SourceOperator || in.PriorityTier == PriorityManualOverride {
+		return false
+	}
+	if in.CommandSource == SourceProtectionRule && in.PriorityTier == PriorityProtectionRule && strings.HasPrefix(in.IdempotencyKey, "auto-rollback:") {
+		return false
+	}
+	if in.CommandSource == SourceOptimization || in.CommandSource == SourceSchedule || in.CommandSource == SourceProtectionRule {
+		return true
+	}
+	return in.PriorityTier == PriorityAIOptimization || in.PriorityTier == PrioritySchedule || in.PriorityTier == PriorityProtectionRule
+}
+
 func evaluateSubmitGate(in GateInput, profile CapabilityProfile, precond PreconditionMode) (GateDecision, *GateRejection) {
 	reason := strings.TrimSpace(in.BypassReason)
 	switch precond {
 	case PreconditionEmergencyBypass:
-		if !profile.SupportsEmergencyBypass || reason == "" {
+		if !AllowsEmergencyPreconditionBypass(in.Capability, in.PriorityTier, in.CommandSource, in.IdempotencyKey, reason) {
 			return GateDecision{}, &GateRejection{
 				HTTPStatus: http.StatusBadRequest,
 				Code:       "COMMAND_REQUEST_INVALID",
 				Title:      "Command request invalid",
-				Detail:     "Emergency telemetry precondition bypass is only allowed on shutdown capabilities with an explicit reason.",
+				Detail:     "Emergency telemetry precondition bypass is only allowed on shutdown capabilities or protection-rule auto-rollback with an explicit reason.",
 			}
 		}
 	case PreconditionRequireCurrentState:
@@ -238,7 +278,13 @@ func evaluateSubmitGate(in GateInput, profile CapabilityProfile, precond Precond
 	}
 	risk, _, ok := EvaluateRiskLevel(in.Capability, in.Parameters, currentVal)
 	if !ok {
-		return GateDecision{}, rejectInvalidParameters(GatePhaseSubmit)
+		if precond == PreconditionEmergencyBypass &&
+			AllowsEmergencyPreconditionBypass(in.Capability, in.PriorityTier, in.CommandSource, in.IdempotencyKey, reason) &&
+			currentVal == nil {
+			risk = profile.BaseRisk
+		} else {
+			return GateDecision{}, rejectInvalidParameters(GatePhaseSubmit)
+		}
 	}
 	stepUpRequired := (risk == RiskHigh || risk == RiskCritical || in.RequireStepUp) && !in.StepUpVerified
 	return GateDecision{
@@ -259,7 +305,9 @@ func evaluatePreDispatchGate(in GateInput, profile CapabilityProfile, precond Pr
 	}
 
 	if failureCode := preDispatchStateFailureCode(in.TargetState); failureCode != "" {
-		if precond == PreconditionEmergencyBypass && profile.SupportsEmergencyBypass && strings.TrimSpace(in.BypassReason) != "" && len(in.Interlocks) == 0 {
+		if precond == PreconditionEmergencyBypass &&
+			AllowsEmergencyPreconditionBypass(in.Capability, in.PriorityTier, in.CommandSource, in.IdempotencyKey, in.BypassReason) &&
+			len(in.Interlocks) == 0 {
 			return GateDecision{
 				PreconditionMode: PreconditionEmergencyBypass,
 				BypassReason:     strings.TrimSpace(in.BypassReason),
@@ -285,10 +333,25 @@ func evaluatePreDispatchGate(in GateInput, profile CapabilityProfile, precond Pr
 		}
 	}
 
+	var decisionRisk RiskLevel
+	if in.TargetState != nil && in.TargetState.CurrentValue != nil && profile.ParameterKey != "" {
+		risk, _, ok := EvaluateRiskLevel(in.Capability, in.Parameters, in.TargetState.CurrentValue)
+		if !ok && profile.MaximumDelta > 0 && isAutomatedWorkloadWithoutOverride(in, precond) {
+			return GateDecision{}, &GateRejection{
+				HTTPStatus: http.StatusConflict,
+				Code:       "DISPATCH_SAFETY_PRE_DISPATCH_DELTA_EXCEEDED",
+				Title:      "Pre-dispatch delta exceeded",
+				Detail:     "Target parameter delta exceeds capability maximumDelta for automated command at pre-dispatch (PRE_DISPATCH_DELTA_EXCEEDED).",
+			}
+		}
+		decisionRisk = risk
+	}
+
 	if rejection := evaluatePeerInterlocks(in, GatePhasePreDispatch); rejection != nil {
 		return GateDecision{}, rejection
 	}
 	return GateDecision{
+		Risk:             decisionRisk,
 		PreconditionMode: precond,
 		BypassReason:     strings.TrimSpace(in.BypassReason),
 	}, nil

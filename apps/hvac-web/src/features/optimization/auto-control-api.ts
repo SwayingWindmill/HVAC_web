@@ -14,6 +14,7 @@ import {
   revokeAutoControlLeaseRequestSchema,
   siteAutoControlLeaseStateSchema,
   type ArmAutoControlLeaseRequest,
+  type AutoControlLease,
   type OptimizationExecutionMonitor,
   type OptimizationExecutionMonitorList,
   type RevokeAutoControlLeaseRequest,
@@ -22,6 +23,7 @@ import {
 
 export type {
   ArmAutoControlLeaseRequest,
+  AutoControlLease,
   OptimizationExecutionMonitor,
   OptimizationExecutionMonitorList,
   RevokeAutoControlLeaseRequest,

@@ -16,7 +16,9 @@ import {
   buildArmLeasePayload,
   formatAutoControlCapability,
   formatAutoControlTripReason,
+  formatGuardrailVerdict,
   initialArmLeaseValues,
+  resolveActiveLeaseBackoff,
   validateArmLeaseForm,
 } from '../apps/hvac-web/src/features/optimization/auto-control-model.ts';
 import { stagingReason, stagingView } from '../apps/hvac-web/src/features/optimization/staging-model.ts';
@@ -348,9 +350,36 @@ test('formatAutoControlTripReason translates backend trip reasons cleanly withou
     '冷机运行功率超过额定 90%（385.0 kW > 0.90 × 400.0 kW）',
   );
   assert.equal(formatAutoControlTripReason('superseded by new operator lease'), '已被操作员重新开通的新租约替换');
+  assert.equal(formatAutoControlTripReason('supply_temperature_below_min'), '供水温度低于防冻下限，已触发保护退回');
+  assert.equal(
+    formatAutoControlTripReason('supply_temperature_below_min (4.60C < 5.00C)'),
+    '供水温度低于防冻下限，已触发保护退回（4.60 °C < 5.00 °C）',
+  );
+  assert.equal(formatAutoControlTripReason('stale_or_bad_telemetry'), '实时传感器数据过期或质量异常，已暂停自动调节');
+  assert.equal(
+    formatAutoControlTripReason('device_fault_or_local_manual'),
+    '设备存在故障报警或处于现场就地手动，自动调节已锁定',
+  );
+  assert.equal(
+    formatAutoControlTripReason('cabinet_local_manual'),
+    '设备存在故障报警或处于现场就地手动，自动调节已锁定',
+  );
+  assert.equal(
+    formatAutoControlTripReason('manual_override_backoff'),
+    '检测到人工干预设定值，AI 自动调节已进入退避保护窗口',
+  );
+  assert.equal(
+    formatAutoControlTripReason('cabinet_setpoint_manual_override'),
+    '检测到人工干预设定值，AI 自动调节已进入退避保护窗口',
+  );
+  assert.equal(formatAutoControlTripReason('within_deadband'), '目标差值在调节死区内，跳过下发以保护设备动作寿命');
   assert.equal(formatAutoControlTripReason('夜间巡检，暂时撤回自动租约'), '夜间巡检，暂时撤回自动租约');
   assert.equal(formatAutoControlTripReason('some_unknown_internal_code'), '触发安全边界保护退出');
   assert.equal(formatAutoControlCapability('SET_CHILLED_WATER_TEMPERATURE_SETPOINT'), '调整冷冻水供水温度设定');
+  assert.equal(formatGuardrailVerdict('CLAMPED'), '已按安全边界限幅');
+  assert.equal(formatGuardrailVerdict('ALLOWED'), '护栏校验通过');
+  assert.equal(formatGuardrailVerdict('within_deadband'), '处于调节死区内，已跳过下发');
+  assert.equal(formatGuardrailVerdict(undefined), null);
 });
 
 test('arm lease form validation matches auto_control_lease.go bounds', () => {
@@ -363,9 +392,22 @@ test('arm lease form validation matches auto_control_lease.go bounds', () => {
   assert.equal(built.ok, true);
   if (built.ok) {
     assert.equal(built.payload.expiresInHours, 8);
+    assert.equal(built.payload.deadbandC, 0.2);
     assert.equal(built.payload.supplyTempMinC, 6);
     assert.equal(built.payload.supplyTempMaxC, 12);
     assert.equal(built.payload.maxCommandsPerHour, 2);
+  }
+
+  const belowMin = validateArmLeaseForm({ ...valid, supplyTempMinC: '4.5' }, { includeSubmitOnly: true });
+  assert.equal(belowMin.supplyTempMinC, '供水温度下限需在 5.0 至 20.0 °C 之间');
+
+  const badDeadband = validateArmLeaseForm({ ...valid, deadbandC: '0.02' }, { includeSubmitOnly: true });
+  assert.equal(badDeadband.deadbandC, '调节死区需在 0.05 至 2.0 °C 之间');
+
+  const exactMin = buildArmLeasePayload({ ...valid, supplyTempMinC: '5.0' }, 0);
+  assert.equal(exactMin.ok, true);
+  if (exactMin.ok) {
+    assert.equal(exactMin.payload.supplyTempMinC, 5);
   }
 
   const invalid = validateArmLeaseForm({
@@ -390,4 +432,36 @@ test('arm lease form validation matches auto_control_lease.go bounds', () => {
   assert.ok(invalid.allowedCapabilities);
   assert.ok(invalid.reason);
   assert.ok(invalid.verificationCode);
+});
+
+test('resolveActiveLeaseBackoff detects active future backoff and suppresses expired backoff', () => {
+  const nowMs = Date.parse('2026-11-18T02:00:00Z');
+  assert.equal(resolveActiveLeaseBackoff({}, nowMs), null);
+  assert.equal(
+    resolveActiveLeaseBackoff({
+      manualBackoffUntil: '2026-11-18T01:59:00Z',
+      manualBackoffReason: 'manual_override_backoff',
+    }, nowMs),
+    null,
+  );
+  assert.deepEqual(
+    resolveActiveLeaseBackoff({
+      manualBackoffUntil: '2026-11-18T02:30:00Z',
+      manualBackoffReason: 'manual_override_backoff',
+    }, nowMs),
+    {
+      until: '2026-11-18T02:30:00Z',
+      reasonText: '检测到人工干预设定值，AI 自动调节已进入退避保护窗口',
+    },
+  );
+  assert.deepEqual(
+    resolveActiveLeaseBackoff({
+      manualBackoffUntil: null,
+      manualBackoffReason: 'cabinet_setpoint_manual_override',
+    }, nowMs),
+    {
+      until: null,
+      reasonText: '检测到人工干预设定值，AI 自动调节已进入退避保护窗口',
+    },
+  );
 });

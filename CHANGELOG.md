@@ -9,6 +9,11 @@
 
 #### 新增与架构演进
 
+- 完成 Go 端 AI 自动调控物理安全护栏与推理韧性升级 P0（`libs/commandmodel`、`libs/intelligencemodel`、`modules/telemetry`、`modules/registry`、`modules/iam`、`modules/command`、`cmd/energy-api`、`services/optimization-service`、`contracts/`、`apps/hvac-web` 与迁移 `optimization-safety-guardrails.sql`）：
+  - **纯 Go 确定性物理安全护栏与推理降级**：在 `libs/commandmodel/guardrails.go` 与 `diagnostics.go` 实现八段确定性护栏链（点位 90 秒新鲜度与防未来时间戳校验、故障报警与就地/手自动极性一票否决、人工退避拦截、水路与启停间隔互锁、`>= 5.0 °C` 冷冻水防冻硬下限钳位、单步爬坡限幅以及调节死区过滤）；`libs/intelligencemodel/resilience.go` 新增三态熔断器、协程池舱壁并发限制与 3 秒默认超时无扰降级。
+  - **全链路实时点位取数与控制权仲裁闭环**：扩展 `modules/telemetry` 与 `optimization-service` 从 `telemetry_runtime` 直接读取实时传感器数值、质量与版本修订替代 15 分钟滞后快照，并彻底清除下游伪造 `GOOD`/`1`；操作员下发手动指令及现场手调水泵/主机设定值或切入就地手动时自动施加 2 小时人工退避锁；通过站点事务锁 + `PENDING_SUBMIT` 原子预占与崩溃超时回收消除并发超频与进程中断裂脑；监控窗口新增供水防冻下限及设备故障保护回退，且 `auto-rollback:` 合规通道可在断采/大幅漂移工况下执行 `EMERGENCY_BYPASS` 回退同时拦截非回退越权提权。
+  - **OpenAPI 契约与自动控制界面同步**：收紧供水温度设定下限至 `5.0 °C`、新增租约「调节死区」编辑边界、可空指令标识（`PENDING_SUBMIT`/`SHADOW_RECORDED`/`SUBMIT_FAILED`）与护栏限幅/退避提示文案并更新生成契约。
+
 - 完成设备接入与边缘自治 P2 改造（`libs/mqttclient`、`libs/edgecontrol`、`modules/connectivity`、`modules/registry`、`modules/command`、`cmd/connectivity`、`tools/eg8200-simulator`、`apps/hvac-web` 与迁移 `gateway-shadow-drivers-and-autonomy.sql`）：
   - **南向传输统一、多版本编解码与会话防呆**：抽出共享包 `libs/mqttclient`（TLS 1.3 双向认证、代数隔离连接跟踪、SUBACK 重试、`$share` 过滤与单连接多路由 `SharedSession`），使接入主服务与集中器通道复用同一长连接；`adapter` 新增可插拔编解码注册表（兼容标准 `2.0` 与紧凑批量 `1.0`）、基于会话 ID / 序号 / 时间戳的网关在线状态防抖器（拦截延迟遗嘱覆写新连接）以及解包前置的每网关令牌桶限流（超限写入 `RATE_LIMITED` 隔离并带 5 秒冷却抑噪，上报指标 `hvac_mqtt_gateway_rate_limited_total`）。
   - **声明式 Modbus 驱动与影子热加载**：扩展 `connectivity.gateway_desired_configs` / `gateway_reported_configs` 与 OpenAPI / Zod 契约支持 `driverConfigs`（FC3/FC4 相邻合并读取、优先级分频轮询、故障线性退避、FC6/FC16 编码写与字字节序）和 `autonomyPolicy`（局部保留 / 置空清除的三态局部更新与乱序漂移对比），同时支持 `DEVICE` 模板附加可选 `modbusDriver` 描述；边缘运行时与模拟器在收到配置影子变更后无需重启即可热替换驱动与自治参数。

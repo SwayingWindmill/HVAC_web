@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -16,9 +17,15 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/intelligencemodel"
 )
 
+func strPtr(v string) *string { return &v }
+
 type fakePointHealthChecker struct {
-	mu  sync.Mutex
-	err error
+	mu          sync.Mutex
+	err         error
+	snapshot    *OptimizationPointHealthSnapshot
+	livePoints  []TelemetryLivePoint
+	lastDevices []string
+	lastKeys    []string
 }
 
 func (checker *fakePointHealthChecker) setErr(err error) {
@@ -27,28 +34,54 @@ func (checker *fakePointHealthChecker) setErr(err error) {
 	checker.err = err
 }
 
-func (checker *fakePointHealthChecker) CheckTelemetryPointHealth(context.Context, string, string, []string, []string) error {
+func (checker *fakePointHealthChecker) setLivePoints(points []TelemetryLivePoint) {
 	checker.mu.Lock()
 	defer checker.mu.Unlock()
-	return checker.err
+	checker.livePoints = append([]TelemetryLivePoint(nil), points...)
 }
 
-type fakeAutoControlStore struct {
-	mu               sync.Mutex
-	lease            *AutoControlLeaseRecord
-	leaseErr         error
-	siteCtx          AutoControlSiteContext
-	siteCtxErr       error
-	claimHook        func(claimOwner string)
-	dispatchedRecs   []Recommendation
-	monitors         []OptimizationExecutionMonitorRecord
-	claimCalls       int
-	releaseCalls     int
-	heartbeatCalls   int
-	unhealthyCalls   int
-	verifiedCalls    int
-	trippedRecords   []tripRecordCall
-	recordMonitorSeq int
+func (checker *fakePointHealthChecker) CheckTelemetryPointHealth(ctx context.Context, tenantID, siteID string, deviceIDs, telemetryKeys []string) error {
+	snapshot, err := checker.InspectTelemetryPointHealth(ctx, tenantID, siteID, deviceIDs, telemetryKeys)
+	if err != nil {
+		return err
+	}
+	if !snapshot.Healthy {
+		return unhealthyPointHealthError(snapshot)
+	}
+	return nil
+}
+
+func (checker *fakePointHealthChecker) InspectTelemetryPointHealth(_ context.Context, _, _ string, deviceIDs, telemetryKeys []string) (OptimizationPointHealthSnapshot, error) {
+	checker.mu.Lock()
+	defer checker.mu.Unlock()
+	checker.lastDevices = append([]string(nil), deviceIDs...)
+	checker.lastKeys = append([]string(nil), telemetryKeys...)
+	if checker.err != nil {
+		return OptimizationPointHealthSnapshot{
+			Healthy:    false,
+			LivePoints: append([]TelemetryLivePoint(nil), checker.livePoints...),
+		}, checker.err
+	}
+	if checker.snapshot != nil {
+		snap := *checker.snapshot
+		snap.LivePoints = append([]TelemetryLivePoint(nil), checker.snapshot.LivePoints...)
+		if len(snap.LivePoints) == 0 && len(checker.livePoints) > 0 {
+			snap.LivePoints = append([]TelemetryLivePoint(nil), checker.livePoints...)
+		}
+		return snap, nil
+	}
+	return OptimizationPointHealthSnapshot{
+		Healthy:    true,
+		LivePoints: append([]TelemetryLivePoint(nil), checker.livePoints...),
+	}, nil
+}
+
+type manualOverrideRecordCall struct {
+	MonitorID    string
+	ClaimOwner   string
+	Reason       string
+	BackoffUntil time.Time
+	CheckedAt    time.Time
 }
 
 type tripRecordCall struct {
@@ -60,10 +93,34 @@ type tripRecordCall struct {
 	TrippedAt               time.Time
 }
 
+type fakeAutoControlStore struct {
+	mu                    sync.Mutex
+	lease                 *AutoControlLeaseRecord
+	leaseErr              error
+	siteCtx               AutoControlSiteContext
+	siteCtxErr            error
+	claimHook             func(claimOwner string)
+	dispatchedRecs        []Recommendation
+	monitors              []OptimizationExecutionMonitorRecord
+	claimCalls            int
+	releaseCalls          int
+	heartbeatCalls        int
+	unhealthyCalls        int
+	verifiedCalls         int
+	submitFailedCalls     int
+	trippedRecords        []tripRecordCall
+	manualOverrideRecords []manualOverrideRecordCall
+	recordMonitorSeq      int
+}
+
 func (store *fakeAutoControlStore) ActiveAutoControlLease(context.Context, string, string, time.Time) (*AutoControlLeaseRecord, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	return store.lease, store.leaseErr
+	if store.lease == nil {
+		return nil, store.leaseErr
+	}
+	leaseCopy := *store.lease
+	return &leaseCopy, store.leaseErr
 }
 
 func (store *fakeAutoControlStore) LoadAutoControlSiteContext(context.Context, string, string, string, time.Time) (AutoControlSiteContext, error) {
@@ -72,43 +129,126 @@ func (store *fakeAutoControlStore) LoadAutoControlSiteContext(context.Context, s
 	return store.siteCtx, store.siteCtxErr
 }
 
-func (store *fakeAutoControlStore) RecordAutomatedDispatch(
-	_ context.Context,
-	recommendation Recommendation,
-	leaseID string,
-	target SetpointCommandTarget,
-	commandIntentID string,
-	baselineSupplyC, appliedSupplyC, restoreSupplyC, zoneMaxC, supplyMaxC float64,
-	at time.Time,
-) (OptimizationExecutionMonitorRecord, error) {
+func (store *fakeAutoControlStore) PreRegisterAutomatedDispatch(_ context.Context, reg AutomatedDispatchRegistration) (PreRegisterDispatchResult, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	store.dispatchedRecs = append(store.dispatchedRecs, recommendation)
+	nowUTC := reg.At.UTC()
+	if store.lease == nil || store.lease.Status != "ACTIVE" || !store.lease.ExpiresAt.After(nowUTC) {
+		return PreRegisterDispatchResult{SkipReason: "MANUAL_CONFIRM"}, nil
+	}
+	if store.lease.ManualBackoffUntil != nil && store.lease.ManualBackoffUntil.UTC().After(nowUTC) {
+		return PreRegisterDispatchResult{SkipReason: "MANUAL_BACKOFF_ACTIVE"}, nil
+	}
+	for _, rec := range store.dispatchedRecs {
+		if rec.ID == reg.Recommendation.ID {
+			return PreRegisterDispatchResult{SkipReason: "ALREADY_DISPATCHED"}, nil
+		}
+	}
+	recentCount := 0
+	hourAgo := nowUTC.Add(-time.Hour)
+	for _, mon := range store.monitors {
+		if mon.TenantID != reg.Recommendation.TenantID || mon.SiteID != reg.Recommendation.SiteID {
+			continue
+		}
+		if mon.Status == ExecutionMonitorPendingSubmit || mon.Status == ExecutionMonitorObserving {
+			return PreRegisterDispatchResult{SkipReason: "ACTIVE_MONITOR_EXISTS"}, nil
+		}
+		if !mon.StartedAt.Before(hourAgo) {
+			switch mon.Status {
+			case ExecutionMonitorPendingSubmit,
+				ExecutionMonitorObserving,
+				ExecutionMonitorVerified,
+				ExecutionMonitorTrippedRolledBack,
+				ExecutionMonitorRollbackFailed,
+				ExecutionMonitorManualOverride:
+				recentCount++
+			}
+		}
+	}
+	if recentCount >= store.lease.MaxCommandsPerHour {
+		return PreRegisterDispatchResult{SkipReason: "RATE_LIMIT_REACHED"}, nil
+	}
+
 	store.recordMonitorSeq++
 	monitorID := "01990000-9900-7000-8000-000000000001"
 	if store.recordMonitorSeq > 1 {
 		monitorID = "01990000-9900-7000-8000-000000000002"
 	}
+	baseline := reg.BaselineSupplyC
+	applied := reg.AppliedSupplyC
+	restore := reg.RestoreSupplyC
+	rawRec := reg.RawRecommendedC
+	var clampedCopy *float64
+	if reg.ClampedC != nil {
+		v := *reg.ClampedC
+		clampedCopy = &v
+	}
 	mon := OptimizationExecutionMonitorRecord{
 		ID:                  monitorID,
-		TenantID:            recommendation.TenantID,
-		SiteID:              recommendation.SiteID,
-		LeaseID:             leaseID,
-		RecommendationID:    recommendation.ID,
-		CommandIntentID:     commandIntentID,
-		DeviceID:            target.DeviceID,
+		TenantID:            reg.Recommendation.TenantID,
+		SiteID:              reg.Recommendation.SiteID,
+		LeaseID:             reg.LeaseID,
+		RecommendationID:    reg.Recommendation.ID,
+		DeviceID:            reg.Target.DeviceID,
 		TargetCapability:    string(commandmodel.CapabilitySetChilledWaterTemperatureSetpoint),
-		BaselineSupplyTempC: &baselineSupplyC,
-		AppliedSupplyTempC:  &appliedSupplyC,
-		RestoreSupplyTempC:  &restoreSupplyC,
-		ZoneTempMaxC:        zoneMaxC,
-		SupplyTempMaxC:      supplyMaxC,
-		StartedAt:           at.UTC(),
-		WindowEndsAt:        at.UTC().Add(DefaultExecutionMonitorWindow),
-		Status:              ExecutionMonitorObserving,
+		BaselineSupplyTempC: &baseline,
+		AppliedSupplyTempC:  &applied,
+		RestoreSupplyTempC:  &restore,
+		ZoneTempMaxC:        reg.ZoneMaxC,
+		SupplyTempMinC:      reg.SupplyMinC,
+		SupplyTempMaxC:      reg.SupplyMaxC,
+		RawRecommendedValue: &rawRec,
+		ClampedValue:        clampedCopy,
+		GuardrailVerdict:    reg.GuardrailVerdict,
+		GuardrailTrace:      append(json.RawMessage(nil), reg.GuardrailTrace...),
+		StartedAt:           nowUTC,
+		WindowEndsAt:        nowUTC.Add(DefaultExecutionMonitorWindow),
+		LastCheckedAt:       &nowUTC,
+		Status:              ExecutionMonitorPendingSubmit,
 	}
 	store.monitors = append(store.monitors, mon)
-	return mon, nil
+	return PreRegisterDispatchResult{Monitor: mon}, nil
+}
+
+func (store *fakeAutoControlStore) ActivateAutomatedDispatch(_ context.Context, recommendation Recommendation, monitorID, commandIntentID string, at time.Time) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	nowUTC := at.UTC()
+	for idx := range store.monitors {
+		if store.monitors[idx].ID != monitorID {
+			continue
+		}
+		if store.monitors[idx].Status != ExecutionMonitorPendingSubmit {
+			return errors.New("pending monitor already transitioned")
+		}
+		store.monitors[idx].Status = ExecutionMonitorObserving
+		store.monitors[idx].CommandIntentID = commandIntentID
+		store.monitors[idx].LastCheckedAt = &nowUTC
+		store.dispatchedRecs = append(store.dispatchedRecs, recommendation)
+		return nil
+	}
+	return errors.New("pending monitor not found")
+}
+
+func (store *fakeAutoControlStore) MarkAutomatedDispatchFailed(_ context.Context, _, _, monitorID, errorSummary string, at time.Time) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.submitFailedCalls++
+	nowUTC := at.UTC()
+	for idx := range store.monitors {
+		if store.monitors[idx].ID != monitorID {
+			continue
+		}
+		if store.monitors[idx].Status != ExecutionMonitorPendingSubmit {
+			return errors.New("pending monitor already transitioned")
+		}
+		summary := truncateSummary(strings.TrimSpace(errorSummary), 500)
+		store.monitors[idx].Status = ExecutionMonitorSubmitFailed
+		store.monitors[idx].TripReason = &summary
+		store.monitors[idx].LastCheckedAt = &nowUTC
+		return nil
+	}
+	return errors.New("pending monitor not found")
 }
 
 func (store *fakeAutoControlStore) ClaimObservingExecutionMonitors(_ context.Context, claimOwner string, leaseDuration time.Duration, now time.Time, limit int) ([]OptimizationExecutionMonitorRecord, error) {
@@ -239,6 +379,41 @@ func (store *fakeAutoControlStore) CompleteMonitorVerified(_ context.Context, mo
 	return ErrExecutionMonitorClaimLost
 }
 
+func (store *fakeAutoControlStore) MarkMonitorManualOverride(_ context.Context, monitor OptimizationExecutionMonitorRecord, claimOwner, reason string, backoffUntil, checkedAt time.Time) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	for idx := range store.monitors {
+		if store.monitors[idx].ID != monitor.ID {
+			continue
+		}
+		if !matchesClaimOwnership(store.monitors[idx], claimOwner) {
+			return ErrExecutionMonitorClaimLost
+		}
+		b := backoffUntil.UTC()
+		c := checkedAt.UTC()
+		store.manualOverrideRecords = append(store.manualOverrideRecords, manualOverrideRecordCall{
+			MonitorID:    monitor.ID,
+			ClaimOwner:   claimOwner,
+			Reason:       reason,
+			BackoffUntil: b,
+			CheckedAt:    c,
+		})
+		if store.lease != nil && store.lease.Status == "ACTIVE" {
+			store.lease.ManualBackoffUntil = &b
+			store.lease.ManualBackoffReason = reason
+			store.lease.Revision++
+		}
+		r := reason
+		store.monitors[idx].Status = ExecutionMonitorManualOverride
+		store.monitors[idx].TripReason = &r
+		store.monitors[idx].LastCheckedAt = &c
+		store.monitors[idx].ClaimOwner = nil
+		store.monitors[idx].ClaimUntil = nil
+		return nil
+	}
+	return ErrExecutionMonitorClaimLost
+}
+
 func (store *fakeAutoControlStore) TripMonitorAndLease(_ context.Context, monitor OptimizationExecutionMonitorRecord, claimOwner, newStatus, tripReason string, rollbackCommandIntentID *string, trippedAt time.Time) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -291,6 +466,7 @@ type fakeDispatcher struct {
 	commandID    string
 	grantErr     error
 	submitErr    error
+	submitHook   func(ctx context.Context, input AutoControlDispatchInput)
 }
 
 func (disp *fakeDispatcher) RequestCommandGrant(_ context.Context, req commandauth.WorkloadDecisionRequest) (string, commandauth.Decision, error) {
@@ -300,11 +476,17 @@ func (disp *fakeDispatcher) RequestCommandGrant(_ context.Context, req commandau
 	return disp.grant, disp.decision, disp.grantErr
 }
 
-func (disp *fakeDispatcher) SubmitAutoCommand(_ context.Context, _ string, input AutoControlDispatchInput) (string, error) {
+func (disp *fakeDispatcher) SubmitAutoCommand(ctx context.Context, _ string, input AutoControlDispatchInput) (string, error) {
 	disp.mu.Lock()
-	defer disp.mu.Unlock()
+	hook := disp.submitHook
 	disp.submitInputs = append(disp.submitInputs, input)
-	return disp.commandID, disp.submitErr
+	cmdID := disp.commandID
+	submitErr := disp.submitErr
+	disp.mu.Unlock()
+	if hook != nil {
+		hook(ctx, input)
+	}
+	return cmdID, submitErr
 }
 
 func testAutoLease(now time.Time) *AutoControlLeaseRecord {
@@ -323,6 +505,7 @@ func testAutoLease(now time.Time) *AutoControlLeaseRecord {
 		ZoneTempMaxC:        26.0,
 		MinRunningChillers:  1,
 		MaxCommandsPerHour:  2,
+		DeadbandC:           0.2,
 		Revision:            1,
 	}
 }
@@ -330,6 +513,7 @@ func testAutoLease(now time.Time) *AutoControlLeaseRecord {
 func testAutoSiteCtx() AutoControlSiteContext {
 	return AutoControlSiteContext{
 		SiteControlMode: SiteControlModeRemoteAuto,
+		DeviceIDs:       []string{"01990000-6000-7000-8000-000000000001"},
 		InputMapping: InputMapping{
 			SupplyTemperatureKey: "supply_water_temperature",
 			ZoneTemperatureKeys:  []string{"zone_temperature_a"},
@@ -344,6 +528,99 @@ func testAutoSiteCtx() AutoControlSiteContext {
 		},
 		Topology: StagingTopology{SiteControlMode: SiteControlModeRemoteAuto},
 	}
+}
+
+func testLivePoints(now time.Time, supplyC, setpointC, zoneC float64) []TelemetryLivePoint {
+	devID := "01990000-6000-7000-8000-000000000001"
+	sampledAt := now.Add(-15 * time.Second).UTC()
+	receivedAt := now.Add(-14 * time.Second).UTC()
+	return []TelemetryLivePoint{
+		{
+			DeviceID:         devID,
+			TelemetryKey:     "supply_water_temperature",
+			NumericValue:     float64Ptr(supplyC),
+			Unit:             "Cel",
+			Quality:          "GOOD",
+			Freshness:        "FRESH",
+			DevicePresence:   "ONLINE",
+			BusinessRevision: 101,
+			PointRevision:    42,
+			SampledAt:        sampledAt,
+			ReceivedAt:       receivedAt,
+		},
+		{
+			DeviceID:         devID,
+			TelemetryKey:     "chilled_water_supply_temp_sp",
+			NumericValue:     float64Ptr(setpointC),
+			Unit:             "Cel",
+			Quality:          "GOOD",
+			Freshness:        "FRESH",
+			DevicePresence:   "ONLINE",
+			BusinessRevision: 202,
+			PointRevision:    43,
+			SampledAt:        sampledAt,
+			ReceivedAt:       receivedAt,
+		},
+		{
+			DeviceID:         devID,
+			TelemetryKey:     "zone_temperature_a",
+			NumericValue:     float64Ptr(zoneC),
+			Unit:             "Cel",
+			Quality:          "GOOD",
+			Freshness:        "FRESH",
+			DevicePresence:   "ONLINE",
+			BusinessRevision: 303,
+			PointRevision:    12,
+			SampledAt:        sampledAt,
+			ReceivedAt:       receivedAt,
+		},
+		{
+			DeviceID:         devID,
+			TelemetryKey:     "fault_code",
+			TextValue:        strPtr("0"),
+			Quality:          "GOOD",
+			Freshness:        "FRESH",
+			DevicePresence:   "ONLINE",
+			BusinessRevision: 404,
+			PointRevision:    13,
+			SampledAt:        sampledAt,
+			ReceivedAt:       receivedAt,
+		},
+		{
+			DeviceID:         devID,
+			TelemetryKey:     "local_remote_mode",
+			TextValue:        strPtr("REMOTE"),
+			Quality:          "GOOD",
+			Freshness:        "FRESH",
+			DevicePresence:   "ONLINE",
+			BusinessRevision: 505,
+			PointRevision:    14,
+			SampledAt:        sampledAt,
+			ReceivedAt:       receivedAt,
+		},
+		{
+			DeviceID:         devID,
+			TelemetryKey:     "chiller_run_state",
+			TextValue:        strPtr("RUNNING"),
+			Quality:          "GOOD",
+			Freshness:        "FRESH",
+			DevicePresence:   "ONLINE",
+			BusinessRevision: 606,
+			PointRevision:    15,
+			SampledAt:        sampledAt,
+			ReceivedAt:       receivedAt,
+		},
+	}
+}
+
+func mutateLivePoint(points []TelemetryLivePoint, key string, fn func(*TelemetryLivePoint)) []TelemetryLivePoint {
+	out := append([]TelemetryLivePoint(nil), points...)
+	for idx := range out {
+		if out[idx].TelemetryKey == key {
+			fn(&out[idx])
+		}
+	}
+	return out
 }
 
 func testLiveObservation(now time.Time, supplyC, zoneC float64) AutoControlLiveObservation {
@@ -406,7 +683,7 @@ func TestAutoControllerTryDispatchPreconditionsAndHappyPath(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		ctrl.WithPointHealth(&fakePointHealthChecker{})
+		ctrl.WithPointHealth(&fakePointHealthChecker{livePoints: testLivePoints(now, 7.2, 7.0, 23.0)})
 		out, err := ctrl.TryDispatch(context.Background(), testAutoRecommendation(now.Add(-5*time.Minute)), now)
 		if err != nil {
 			t.Fatal(err)
@@ -421,6 +698,7 @@ func TestAutoControllerTryDispatchPreconditionsAndHappyPath(t *testing.T) {
 		mutateRec  func(*Recommendation)
 		mutateCtx  func(*AutoControlSiteContext)
 		mutateObs  func(*AutoControlLiveObservation)
+		mutatePts  func([]TelemetryLivePoint) []TelemetryLivePoint
 		healthErr  error
 		wantReason string
 	}{
@@ -434,8 +712,10 @@ func TestAutoControllerTryDispatchPreconditionsAndHappyPath(t *testing.T) {
 		},
 		{
 			name: "supply drift above 0.5C rejected",
-			mutateObs: func(obs *AutoControlLiveObservation) {
-				obs.SupplyTemp.Value = 7.6
+			mutatePts: func(pts []TelemetryLivePoint) []TelemetryLivePoint {
+				return mutateLivePoint(pts, "supply_water_temperature", func(pt *TelemetryLivePoint) {
+					pt.NumericValue = float64Ptr(7.6)
+				})
 			},
 			wantReason: "SUPPLY_TEMP_DRIFT_EXCEEDED",
 		},
@@ -452,6 +732,13 @@ func TestAutoControllerTryDispatchPreconditionsAndHappyPath(t *testing.T) {
 				ctx.RecentAutoCountHour = 2
 			},
 			wantReason: "RATE_LIMIT_REACHED",
+		},
+		{
+			name: "active monitor exists rejected",
+			mutateCtx: func(ctx *AutoControlSiteContext) {
+				ctx.HasActiveMonitor = true
+			},
+			wantReason: "ACTIVE_MONITOR_EXISTS",
 		},
 		{
 			name: "asset lock rejected",
@@ -472,6 +759,24 @@ func TestAutoControllerTryDispatchPreconditionsAndHappyPath(t *testing.T) {
 			healthErr:  errors.New("PROBE_OFFSET"),
 			wantReason: "TELEMETRY_UNHEALTHY",
 		},
+		{
+			name: "zero pointRevision fails closed",
+			mutatePts: func(pts []TelemetryLivePoint) []TelemetryLivePoint {
+				return mutateLivePoint(pts, "chilled_water_supply_temp_sp", func(pt *TelemetryLivePoint) {
+					pt.PointRevision = 0
+				})
+			},
+			wantReason: "TELEMETRY_REVALIDATION_FAILED",
+		},
+		{
+			name: "zero businessRevision fails closed",
+			mutatePts: func(pts []TelemetryLivePoint) []TelemetryLivePoint {
+				return mutateLivePoint(pts, "chilled_water_supply_temp_sp", func(pt *TelemetryLivePoint) {
+					pt.BusinessRevision = 0
+				})
+			},
+			wantReason: "TELEMETRY_REVALIDATION_FAILED",
+		},
 	}
 
 	for _, tc := range cases {
@@ -479,6 +784,7 @@ func TestAutoControllerTryDispatchPreconditionsAndHappyPath(t *testing.T) {
 			rec := testAutoRecommendation(now.Add(-5 * time.Minute))
 			siteCtx := testAutoSiteCtx()
 			obs := testLiveObservation(now, 7.2, 23.0)
+			pts := testLivePoints(now, 7.2, 7.0, 23.0)
 			if tc.mutateRec != nil {
 				tc.mutateRec(&rec)
 			}
@@ -487,6 +793,9 @@ func TestAutoControllerTryDispatchPreconditionsAndHappyPath(t *testing.T) {
 			}
 			if tc.mutateObs != nil {
 				tc.mutateObs(&obs)
+			}
+			if tc.mutatePts != nil {
+				pts = tc.mutatePts(pts)
 			}
 			store := &fakeAutoControlStore{
 				lease:   testAutoLease(now),
@@ -497,7 +806,7 @@ func TestAutoControllerTryDispatchPreconditionsAndHappyPath(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			ctrl.WithPointHealth(&fakePointHealthChecker{err: tc.healthErr})
+			ctrl.WithPointHealth(&fakePointHealthChecker{err: tc.healthErr, livePoints: pts})
 			out, err := ctrl.TryDispatch(context.Background(), rec, now)
 			if err != nil {
 				t.Fatal(err)
@@ -511,32 +820,51 @@ func TestAutoControllerTryDispatchPreconditionsAndHappyPath(t *testing.T) {
 		})
 	}
 
-	t.Run("happy path revalidates, approves, dispatches auto-opt and starts 30m monitor", func(t *testing.T) {
+	t.Run("happy path uses real live telemetry, pre-registers PENDING_SUBMIT, submits and activates OBSERVING monitor", func(t *testing.T) {
 		store := &fakeAutoControlStore{
 			lease:   testAutoLease(now),
 			siteCtx: testAutoSiteCtx(),
 		}
+		pts := testLivePoints(now, 7.2, 7.0, 23.5)
 		obs := testLiveObservation(now, 7.2, 23.5)
+		var observedPendingBeforeSubmit bool
 		disp := &fakeDispatcher{
 			decision:  commandauth.Decision{Allowed: true, ReasonCode: commandauth.ReasonAllowAutoLease},
 			grant:     "header.sig",
 			commandID: "01990000-7700-7000-8000-000000000099",
+			submitHook: func(context.Context, AutoControlDispatchInput) {
+				store.mu.Lock()
+				defer store.mu.Unlock()
+				if len(store.monitors) == 1 && store.monitors[0].Status == ExecutionMonitorPendingSubmit && store.monitors[0].CommandIntentID == "" {
+					observedPendingBeforeSubmit = true
+				}
+			},
 		}
 		ctrl, err := NewAutoController(store, &fakeTelemetryReader{obs: obs}, disp, func() time.Time { return now }, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		ctrl.WithPointHealth(&fakePointHealthChecker{})
+		ctrl.WithPointHealth(&fakePointHealthChecker{livePoints: pts})
 		rec := testAutoRecommendation(now.Add(-5 * time.Minute))
 		out, err := ctrl.TryDispatch(context.Background(), rec, now)
 		if err != nil {
 			t.Fatal(err)
 		}
+		if !observedPendingBeforeSubmit {
+			t.Fatal("expected PENDING_SUBMIT monitor row with empty commandIntentID before HTTP SubmitAutoCommand")
+		}
 		if !out.Dispatched || out.CommandIntentID != disp.commandID || out.MonitorID == "" {
 			t.Fatalf("expected dispatch outcome, got %+v", out)
 		}
-		if len(disp.submitInputs) != 1 || disp.submitInputs[0].IdempotencyKey != "auto-opt:"+rec.ID || disp.submitInputs[0].IsRollback {
-			t.Fatalf("unexpected command submit payload: %+v", disp.submitInputs)
+		if len(disp.submitInputs) != 1 {
+			t.Fatalf("expected 1 submitted command, got %d", len(disp.submitInputs))
+		}
+		sub := disp.submitInputs[0]
+		if sub.IdempotencyKey != "auto-opt:"+rec.ID || sub.IsRollback ||
+			sub.BusinessRevision != 202 || sub.Quality != "GOOD" || sub.Presence != "ONLINE" ||
+			sub.Readiness != "CURRENT" || sub.EvaluationAvailability != "AVAILABLE" ||
+			sub.CurrentValue == nil || *sub.CurrentValue != 7.0 || !sub.ObservedAt.Equal(now.Add(-15*time.Second)) {
+			t.Fatalf("unexpected real-telemetry command submit payload: %+v", sub)
 		}
 		if len(store.dispatchedRecs) != 1 || store.dispatchedRecs[0].Approval != intelligencemodel.RecommendationApproved || store.dispatchedRecs[0].Revalidation == nil {
 			t.Fatalf("expected revalidated APPROVED recommendation, got %+v", store.dispatchedRecs)
@@ -544,8 +872,312 @@ func TestAutoControllerTryDispatchPreconditionsAndHappyPath(t *testing.T) {
 		if err := store.dispatchedRecs[0].CanCreateCommand(now); err != nil {
 			t.Fatalf("recorded recommendation failed CanCreateCommand: %v", err)
 		}
-		if len(store.monitors) != 1 || store.monitors[0].WindowEndsAt.Sub(store.monitors[0].StartedAt) != DefaultExecutionMonitorWindow {
+		if len(store.monitors) != 1 || store.monitors[0].Status != ExecutionMonitorObserving ||
+			store.monitors[0].CommandIntentID != disp.commandID ||
+			store.monitors[0].SupplyTempMinC != 6.0 ||
+			store.monitors[0].WindowEndsAt.Sub(store.monitors[0].StartedAt) != DefaultExecutionMonitorWindow {
 			t.Fatalf("expected 30m OBSERVING monitor, got %+v", store.monitors)
+		}
+	})
+}
+
+func TestAutoControllerSafetyGuardrails(t *testing.T) {
+	now := time.Date(2026, 11, 16, 4, 0, 0, 0, time.UTC)
+
+	t.Run("clamps proposed setpoint below 5.0C up to hard floor 5.0C and records raw and clamped values", func(t *testing.T) {
+		lease := testAutoLease(now)
+		lease.SupplyTempMinC = 4.0
+		lease.MaxSetpointStepC = 2.0
+		store := &fakeAutoControlStore{lease: lease, siteCtx: testAutoSiteCtx()}
+		pts := testLivePoints(now, 6.2, 6.0, 24.0)
+		disp := &fakeDispatcher{
+			decision:  commandauth.Decision{Allowed: true, ReasonCode: commandauth.ReasonAllowAutoLease},
+			grant:     "header.sig",
+			commandID: "01990000-7700-7000-8000-000000000101",
+		}
+		ctrl, err := NewAutoController(store, &fakeTelemetryReader{}, disp, func() time.Time { return now }, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctrl.WithPointHealth(&fakePointHealthChecker{livePoints: pts})
+
+		rec := testAutoRecommendation(now.Add(-5 * time.Minute))
+		rec.Baseline.SupplyTempC = 6.0
+		rec.Candidate.SupplyTempC = 4.2
+		out, err := ctrl.TryDispatch(context.Background(), rec, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !out.Dispatched || len(disp.submitInputs) != 1 {
+			t.Fatalf("expected clamped dispatch, got outcome=%+v submits=%d", out, len(disp.submitInputs))
+		}
+		if got := disp.submitInputs[0].Parameters[commandmodel.ParameterSetpointC]; got != 5.0 {
+			t.Fatalf("dispatched setpoint=%v, want 5.0", got)
+		}
+		mon := store.monitors[0]
+		if mon.SupplyTempMinC != 5.0 ||
+			mon.RawRecommendedValue == nil || *mon.RawRecommendedValue != 4.2 ||
+			mon.ClampedValue == nil || *mon.ClampedValue != 5.0 ||
+			mon.AppliedSupplyTempC == nil || *mon.AppliedSupplyTempC != 5.0 ||
+			mon.GuardrailVerdict != string(commandmodel.GuardrailVerdictClamped) ||
+			len(mon.GuardrailTrace) == 0 {
+			t.Fatalf("unexpected clamped monitor metadata: %+v", mon)
+		}
+	})
+
+	t.Run("clamps setpoint exceeding max step slew limit", func(t *testing.T) {
+		lease := testAutoLease(now)
+		lease.MaxSetpointStepC = 1.5
+		store := &fakeAutoControlStore{lease: lease, siteCtx: testAutoSiteCtx()}
+		pts := testLivePoints(now, 7.1, 7.0, 23.0)
+		disp := &fakeDispatcher{
+			decision:  commandauth.Decision{Allowed: true, ReasonCode: commandauth.ReasonAllowAutoLease},
+			grant:     "header.sig",
+			commandID: "01990000-7700-7000-8000-000000000102",
+		}
+		ctrl, err := NewAutoController(store, &fakeTelemetryReader{}, disp, func() time.Time { return now }, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctrl.WithPointHealth(&fakePointHealthChecker{livePoints: pts})
+
+		rec := testAutoRecommendation(now.Add(-5 * time.Minute))
+		rec.Candidate.SupplyTempC = 10.0
+		out, err := ctrl.TryDispatch(context.Background(), rec, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !out.Dispatched || len(disp.submitInputs) != 1 {
+			t.Fatalf("expected slew-clamped dispatch, got outcome=%+v", out)
+		}
+		if got := disp.submitInputs[0].Parameters[commandmodel.ParameterSetpointC]; got != 8.5 {
+			t.Fatalf("slew-clamped setpoint=%v, want 8.5", got)
+		}
+		mon := store.monitors[0]
+		if mon.RawRecommendedValue == nil || *mon.RawRecommendedValue != 10.0 ||
+			mon.ClampedValue == nil || *mon.ClampedValue != 8.5 ||
+			mon.GuardrailVerdict != string(commandmodel.GuardrailVerdictClamped) {
+			t.Fatalf("unexpected slew-clamped monitor metadata: %+v", mon)
+		}
+	})
+
+	t.Run("skips cleanly within deadband without error or command", func(t *testing.T) {
+		lease := testAutoLease(now)
+		lease.DeadbandC = 0.2
+		store := &fakeAutoControlStore{lease: lease, siteCtx: testAutoSiteCtx()}
+		pts := testLivePoints(now, 7.0, 7.0, 23.0)
+		disp := &fakeDispatcher{}
+		ctrl, err := NewAutoController(store, &fakeTelemetryReader{}, disp, func() time.Time { return now }, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctrl.WithPointHealth(&fakePointHealthChecker{livePoints: pts})
+
+		rec := testAutoRecommendation(now.Add(-5 * time.Minute))
+		rec.Candidate.SupplyTempC = 7.1
+		out, err := ctrl.TryDispatch(context.Background(), rec, now)
+		if err != nil {
+			t.Fatalf("deadband skip must not return error: %v", err)
+		}
+		if out.Dispatched || out.SkipReason == "" || len(disp.submitInputs) != 0 || len(store.monitors) != 0 {
+			t.Fatalf("expected clean deadband skip, got out=%+v submits=%d monitors=%d", out, len(disp.submitInputs), len(store.monitors))
+		}
+	})
+
+	t.Run("vetoes stale telemetry over 90 seconds", func(t *testing.T) {
+		store := &fakeAutoControlStore{lease: testAutoLease(now), siteCtx: testAutoSiteCtx()}
+		pts := mutateLivePoint(testLivePoints(now, 7.1, 7.0, 23.0), "supply_water_temperature", func(pt *TelemetryLivePoint) {
+			pt.SampledAt = now.Add(-120 * time.Second)
+		})
+		disp := &fakeDispatcher{}
+		ctrl, err := NewAutoController(store, &fakeTelemetryReader{}, disp, func() time.Time { return now }, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctrl.WithPointHealth(&fakePointHealthChecker{livePoints: pts})
+
+		out, err := ctrl.TryDispatch(context.Background(), testAutoRecommendation(now.Add(-5*time.Minute)), now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out.Dispatched || out.SkipReason == "" || len(disp.submitInputs) != 0 {
+			t.Fatalf("expected stale telemetry veto, got %+v", out)
+		}
+	})
+
+	t.Run("vetoes active fault code, cabinet local manual, and device offline", func(t *testing.T) {
+		vetoCases := []struct {
+			name      string
+			mutatePts func([]TelemetryLivePoint) []TelemetryLivePoint
+		}{
+			{
+				name: "active fault_code string",
+				mutatePts: func(pts []TelemetryLivePoint) []TelemetryLivePoint {
+					return mutateLivePoint(pts, "fault_code", func(pt *TelemetryLivePoint) {
+						pt.TextValue = strPtr("16")
+					})
+				},
+			},
+			{
+				name: "cabinet local_remote_mode LOCAL",
+				mutatePts: func(pts []TelemetryLivePoint) []TelemetryLivePoint {
+					return mutateLivePoint(pts, "local_remote_mode", func(pt *TelemetryLivePoint) {
+						pt.TextValue = strPtr("LOCAL")
+					})
+				},
+			},
+			{
+				name: "device offline",
+				mutatePts: func(pts []TelemetryLivePoint) []TelemetryLivePoint {
+					return mutateLivePoint(pts, "chilled_water_supply_temp_sp", func(pt *TelemetryLivePoint) {
+						pt.DevicePresence = "OFFLINE"
+					})
+				},
+			},
+		}
+
+		for _, tc := range vetoCases {
+			t.Run(tc.name, func(t *testing.T) {
+				store := &fakeAutoControlStore{lease: testAutoLease(now), siteCtx: testAutoSiteCtx()}
+				pts := tc.mutatePts(testLivePoints(now, 7.1, 7.0, 23.0))
+				disp := &fakeDispatcher{}
+				ctrl, err := NewAutoController(store, &fakeTelemetryReader{}, disp, func() time.Time { return now }, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				ctrl.WithPointHealth(&fakePointHealthChecker{livePoints: pts})
+
+				out, err := ctrl.TryDispatch(context.Background(), testAutoRecommendation(now.Add(-5*time.Minute)), now)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if out.Dispatched || out.SkipReason == "" || len(disp.submitInputs) != 0 {
+					t.Fatalf("expected veto for %s, got %+v", tc.name, out)
+				}
+			})
+		}
+	})
+
+	t.Run("vetoes dispatch while manual_backoff_until is active and resumes after expiry", func(t *testing.T) {
+		backoffUntil := now.Add(2 * time.Hour)
+		lease := testAutoLease(now)
+		lease.ManualBackoffUntil = &backoffUntil
+		lease.ManualBackoffReason = "cabinet_setpoint_manual_override"
+
+		store := &fakeAutoControlStore{lease: lease, siteCtx: testAutoSiteCtx()}
+		disp := &fakeDispatcher{
+			decision:  commandauth.Decision{Allowed: true, ReasonCode: commandauth.ReasonAllowAutoLease},
+			grant:     "header.sig",
+			commandID: "01990000-7700-7000-8000-000000000103",
+		}
+		ctrl, err := NewAutoController(store, &fakeTelemetryReader{}, disp, func() time.Time { return now }, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctrl.WithPointHealth(&fakePointHealthChecker{livePoints: testLivePoints(now, 7.1, 7.0, 23.0)})
+
+		out, err := ctrl.TryDispatch(context.Background(), testAutoRecommendation(now.Add(-5*time.Minute)), now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out.Dispatched || out.SkipReason == "" || len(disp.submitInputs) != 0 {
+			t.Fatalf("expected manual backoff veto, got %+v", out)
+		}
+
+		afterBackoff := backoffUntil.Add(time.Minute)
+		lease.ExpiresAt = afterBackoff.Add(2 * time.Hour)
+		ctrl.WithPointHealth(&fakePointHealthChecker{livePoints: testLivePoints(afterBackoff, 7.1, 7.0, 23.0)})
+		recAfter := testAutoRecommendation(afterBackoff.Add(-5 * time.Minute))
+		outAfter, err := ctrl.TryDispatch(context.Background(), recAfter, afterBackoff)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !outAfter.Dispatched {
+			t.Fatalf("expected dispatch after manual backoff expiry, got %+v", outAfter)
+		}
+	})
+
+	t.Run("split-brain submit failure marks monitor SUBMIT_FAILED instead of leaving PENDING_SUBMIT wedged", func(t *testing.T) {
+		store := &fakeAutoControlStore{lease: testAutoLease(now), siteCtx: testAutoSiteCtx()}
+		disp := &fakeDispatcher{
+			decision:  commandauth.Decision{Allowed: true, ReasonCode: commandauth.ReasonAllowAutoLease},
+			grant:     "header.sig",
+			submitErr: context.DeadlineExceeded,
+		}
+		ctrl, err := NewAutoController(store, &fakeTelemetryReader{}, disp, func() time.Time { return now }, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctrl.WithPointHealth(&fakePointHealthChecker{livePoints: testLivePoints(now, 7.1, 7.0, 23.0)})
+
+		expiredCtx, cancel := context.WithCancel(context.Background())
+		disp.submitHook = func(context.Context, AutoControlDispatchInput) {
+			cancel()
+		}
+
+		out, err := ctrl.TryDispatch(expiredCtx, testAutoRecommendation(now.Add(-5*time.Minute)), now)
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("expected submit deadline error, got %v", err)
+		}
+		if out.Dispatched || out.MonitorID == "" {
+			t.Fatalf("unexpected outcome on submit failure: %+v", out)
+		}
+		if store.submitFailedCalls != 1 || len(store.monitors) != 1 ||
+			store.monitors[0].Status != ExecutionMonitorSubmitFailed ||
+			store.monitors[0].CommandIntentID != "" ||
+			store.monitors[0].TripReason == nil || *store.monitors[0].TripReason == "" ||
+			len(store.dispatchedRecs) != 0 {
+			t.Fatalf("expected monitor transitioned to SUBMIT_FAILED without approving rec, got monitors=%+v recs=%d", store.monitors, len(store.dispatchedRecs))
+		}
+	})
+
+	t.Run("concurrent TryDispatch prevents hourly rate-limit bypass", func(t *testing.T) {
+		lease := testAutoLease(now)
+		lease.MaxCommandsPerHour = 1
+		store := &fakeAutoControlStore{lease: lease, siteCtx: testAutoSiteCtx()}
+		disp := &fakeDispatcher{
+			decision:  commandauth.Decision{Allowed: true, ReasonCode: commandauth.ReasonAllowAutoLease},
+			grant:     "header.sig",
+			commandID: "01990000-7700-7000-8000-000000000104",
+		}
+		ctrl, err := NewAutoController(store, &fakeTelemetryReader{}, disp, func() time.Time { return now }, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctrl.WithPointHealth(&fakePointHealthChecker{livePoints: testLivePoints(now, 7.1, 7.0, 23.0)})
+
+		rec1 := testAutoRecommendation(now.Add(-5 * time.Minute))
+		rec2 := testAutoRecommendation(now.Add(-5 * time.Minute))
+		rec2.ID = "01990000-2000-7000-8000-000000000002"
+
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		outcomes := make([]AutoDispatchOutcome, 2)
+		errs := make([]error, 2)
+		for idx, rec := range []Recommendation{rec1, rec2} {
+			wg.Add(1)
+			go func(i int, r Recommendation) {
+				defer wg.Done()
+				<-start
+				outcomes[i], errs[i] = ctrl.TryDispatch(context.Background(), r, now)
+			}(idx, rec)
+		}
+		close(start)
+		wg.Wait()
+
+		for i, runErr := range errs {
+			if runErr != nil {
+				t.Fatalf("goroutine %d err=%v", i, runErr)
+			}
+		}
+		dispatchedCount := 0
+		for _, out := range outcomes {
+			if out.Dispatched {
+				dispatchedCount++
+			}
+		}
+		if dispatchedCount != 1 || len(disp.submitInputs) != 1 {
+			t.Fatalf("expected exactly 1 concurrent dispatch, outcomes=%+v submits=%d", outcomes, len(disp.submitInputs))
 		}
 	})
 }
@@ -569,24 +1201,26 @@ func TestAutoControllerRunMonitorPass(t *testing.T) {
 				AppliedSupplyTempC: &applied,
 				RestoreSupplyTempC: &restore,
 				ZoneTempMaxC:       26.0,
+				SupplyTempMinC:     6.0,
 				SupplyTempMaxC:     12.0,
 				StartedAt:          base,
 				WindowEndsAt:       base.Add(30 * time.Minute),
 				Status:             ExecutionMonitorObserving,
 			}},
 		}
-		obs := testLiveObservation(base.Add(30*time.Minute), 8.0, 24.0)
+		checkAt := base.Add(30 * time.Minute)
+		obs := testLiveObservation(checkAt, 8.0, 24.0)
 		disp := &fakeDispatcher{}
 		ctrl, err := NewAutoController(store, &fakeTelemetryReader{obs: obs}, disp, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		ctrl.WithPointHealth(&fakePointHealthChecker{})
-		summary, err := ctrl.RunMonitorPass(context.Background(), base.Add(30*time.Minute))
+		ctrl.WithPointHealth(&fakePointHealthChecker{livePoints: testLivePoints(checkAt, 8.0, 8.0, 24.0)})
+		summary, err := ctrl.RunMonitorPass(context.Background(), checkAt)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if summary.Verified != 1 || summary.RolledBack != 0 || store.monitors[0].Status != "VERIFIED" || store.lease.Status != "ACTIVE" {
+		if summary.Verified != 1 || summary.RolledBack != 0 || store.monitors[0].Status != ExecutionMonitorVerified || store.lease.Status != "ACTIVE" {
 			t.Fatalf("unexpected verify summary=%+v monitor=%+v lease=%+v", summary, store.monitors[0], store.lease)
 		}
 	})
@@ -598,6 +1232,7 @@ func TestAutoControllerRunMonitorPass(t *testing.T) {
 		powerTrip  *ChillerPowerViolation
 		wantPrefix string
 	}{
+		{name: "supply below min freeze protection triggers rollback and trip", supplyC: 5.5, zoneC: 24.0, wantPrefix: "supply_temperature_below_min"},
 		{name: "zone over limit triggers rollback and trip", supplyC: 8.0, zoneC: 26.4, wantPrefix: "zone_temperature_exceeded_max"},
 		{name: "supply over limit triggers rollback and trip", supplyC: 12.4, zoneC: 24.0, wantPrefix: "supply_temperature_exceeded_max"},
 		{name: "chiller power over 90pct triggers rollback and trip", supplyC: 8.0, zoneC: 24.0, powerTrip: &ChillerPowerViolation{AssetCode: "chiller-a", PowerKW: 120, RatedPowerKW: 127.5}, wantPrefix: "chiller_power_exceeded_90pct"},
@@ -621,13 +1256,15 @@ func TestAutoControllerRunMonitorPass(t *testing.T) {
 					AppliedSupplyTempC: &applied,
 					RestoreSupplyTempC: &restore,
 					ZoneTempMaxC:       26.0,
+					SupplyTempMinC:     6.0,
 					SupplyTempMaxC:     12.0,
 					StartedAt:          base,
 					WindowEndsAt:       base.Add(30 * time.Minute),
 					Status:             ExecutionMonitorObserving,
 				}},
 			}
-			obs := testLiveObservation(base.Add(10*time.Minute), tc.supplyC, tc.zoneC)
+			checkAt := base.Add(10 * time.Minute)
+			obs := testLiveObservation(checkAt, tc.supplyC, tc.zoneC)
 			obs.ChillerPowerTrip = tc.powerTrip
 			disp := &fakeDispatcher{
 				decision:  commandauth.Decision{Allowed: true, ReasonCode: commandauth.ReasonAllowAutoLease},
@@ -638,13 +1275,13 @@ func TestAutoControllerRunMonitorPass(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			ctrl.WithPointHealth(&fakePointHealthChecker{})
-			summary, err := ctrl.RunMonitorPass(context.Background(), base.Add(10*time.Minute))
+			ctrl.WithPointHealth(&fakePointHealthChecker{livePoints: testLivePoints(checkAt, tc.supplyC, applied, tc.zoneC)})
+			summary, err := ctrl.RunMonitorPass(context.Background(), checkAt)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if summary.RolledBack != 1 || store.lease.Status != "TRIPPED" {
-				t.Fatalf("expected rollback and tripped lease, summary=%+v lease=%+v", summary, store.lease)
+			if summary.RolledBack != 1 || store.lease.Status != "TRIPPED" || store.monitors[0].Status != ExecutionMonitorTrippedRolledBack {
+				t.Fatalf("expected rollback and tripped lease, summary=%+v lease=%+v mon=%+v", summary, store.lease, store.monitors[0])
 			}
 			if len(disp.submitInputs) != 1 || !disp.submitInputs[0].IsRollback || disp.submitInputs[0].IdempotencyKey != "auto-rollback:"+monID {
 				t.Fatalf("unexpected rollback submit payload: %+v", disp.submitInputs)
@@ -658,7 +1295,7 @@ func TestAutoControllerRunMonitorPass(t *testing.T) {
 		})
 	}
 
-	t.Run("telemetry unhealthy over 5m trips and sends rollback while transient <=5m clears on recovery", func(t *testing.T) {
+	t.Run("telemetry unhealthy over 5m trips and sends emergency bypass rollback with real degraded telemetry", func(t *testing.T) {
 		applied := 8.0
 		restore := 7.0
 		monID := "01990000-9900-7000-8000-000000000010"
@@ -675,13 +1312,20 @@ func TestAutoControllerRunMonitorPass(t *testing.T) {
 				AppliedSupplyTempC: &applied,
 				RestoreSupplyTempC: &restore,
 				ZoneTempMaxC:       26.0,
+				SupplyTempMinC:     6.0,
 				SupplyTempMaxC:     12.0,
 				StartedAt:          base,
 				WindowEndsAt:       base.Add(30 * time.Minute),
 				Status:             ExecutionMonitorObserving,
 			}},
 		}
-		healthChecker := &fakePointHealthChecker{err: errors.New("OFFLINE")}
+		degradedPts := mutateLivePoint(testLivePoints(base, 8.0, 8.0, 24.0), "chilled_water_supply_temp_sp", func(pt *TelemetryLivePoint) {
+			pt.DevicePresence = "OFFLINE"
+			pt.Quality = "BAD"
+			pt.Freshness = "STALE"
+			pt.BusinessRevision = 0
+		})
+		healthChecker := &fakePointHealthChecker{err: errors.New("OFFLINE"), livePoints: degradedPts}
 		reader := &fakeTelemetryReader{obs: testLiveObservation(base, 8.0, 24.0)}
 		disp := &fakeDispatcher{
 			decision:  commandauth.Decision{Allowed: true, ReasonCode: commandauth.ReasonAllowAutoLease},
@@ -704,6 +1348,7 @@ func TestAutoControllerRunMonitorPass(t *testing.T) {
 
 		// T+4m: telemetry recovers -> clears TelemetryUnhealthySince.
 		healthChecker.setErr(nil)
+		healthChecker.setLivePoints(testLivePoints(base.Add(4*time.Minute), 8.0, 8.0, 24.0))
 		if _, err := ctrl.RunMonitorPass(context.Background(), base.Add(4*time.Minute)); err != nil {
 			t.Fatal(err)
 		}
@@ -711,8 +1356,9 @@ func TestAutoControllerRunMonitorPass(t *testing.T) {
 			t.Fatalf("expected unhealthy marker cleared on recovery: %+v", store.monitors[0])
 		}
 
-		// T+5m then T+11m: unhealthy for >5m triggers rollback + trip.
+		// T+5m then T+11m: unhealthy for >5m triggers rollback + trip with EMERGENCY_BYPASS and real telemetry.
 		healthChecker.setErr(errors.New("OFFLINE"))
+		healthChecker.setLivePoints(degradedPts)
 		if _, err := ctrl.RunMonitorPass(context.Background(), base.Add(5*time.Minute)); err != nil {
 			t.Fatal(err)
 		}
@@ -722,6 +1368,12 @@ func TestAutoControllerRunMonitorPass(t *testing.T) {
 		}
 		if summary.RolledBack != 1 || store.lease.Status != "TRIPPED" || len(disp.submitInputs) != 1 || !disp.submitInputs[0].IsRollback {
 			t.Fatalf("expected rollback on >5m unhealthy telemetry, summary=%+v disp=%+v", summary, disp.submitInputs)
+		}
+		sub := disp.submitInputs[0]
+		if sub.PreconditionMode != commandmodel.PreconditionEmergencyBypass ||
+			sub.BypassReason != "automated_execution_monitor_rollback:telemetry_unhealthy_over_5m" ||
+			sub.Quality == "GOOD" || sub.Presence == "ONLINE" || sub.BusinessRevision != 0 {
+			t.Fatalf("rollback must pass real degraded telemetry with EMERGENCY_BYPASS without fabricating GOOD/1: %+v", sub)
 		}
 	})
 
@@ -742,14 +1394,15 @@ func TestAutoControllerRunMonitorPass(t *testing.T) {
 				AppliedSupplyTempC: &applied,
 				RestoreSupplyTempC: &restore,
 				ZoneTempMaxC:       26.0,
+				SupplyTempMinC:     6.0,
 				SupplyTempMaxC:     11.0,
 				StartedAt:          base,
 				WindowEndsAt:       base.Add(30 * time.Minute),
 				Status:             ExecutionMonitorObserving,
 			}},
 		}
-		// Physical supply water drifted to 11.4 C (>3.0C above RestoreSupplyTempC 7.0 C).
-		obs := testLiveObservation(base.Add(8*time.Minute), 11.4, 24.0)
+		checkAt := base.Add(8 * time.Minute)
+		obs := testLiveObservation(checkAt, 11.4, 24.0)
 		disp := &fakeDispatcher{
 			decision:  commandauth.Decision{Allowed: true, ReasonCode: commandauth.ReasonAllowAutoLease},
 			grant:     "rollback.sig",
@@ -759,8 +1412,8 @@ func TestAutoControllerRunMonitorPass(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		ctrl.WithPointHealth(&fakePointHealthChecker{})
-		summary, err := ctrl.RunMonitorPass(context.Background(), base.Add(8*time.Minute))
+		ctrl.WithPointHealth(&fakePointHealthChecker{livePoints: testLivePoints(checkAt, 11.4, applied, 24.0)})
+		summary, err := ctrl.RunMonitorPass(context.Background(), checkAt)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -770,8 +1423,86 @@ func TestAutoControllerRunMonitorPass(t *testing.T) {
 		if *disp.grantReqs[0].CurrentValue != applied {
 			t.Fatalf("expected rollback currentValue anchored to applied setpoint %v, got %v", applied, *disp.grantReqs[0].CurrentValue)
 		}
-		if len(disp.submitInputs) != 1 || disp.submitInputs[0].CurrentValue != applied || disp.submitInputs[0].Parameters[commandmodel.ParameterSetpointC] != restore {
+		if len(disp.submitInputs) != 1 || disp.submitInputs[0].CurrentValue == nil || *disp.submitInputs[0].CurrentValue != applied || disp.submitInputs[0].Parameters[commandmodel.ParameterSetpointC] != restore {
 			t.Fatalf("unexpected rollback command submit payload: %+v", disp.submitInputs)
+		}
+	})
+
+	t.Run("cabinet manual setpoint tamper sets 2h manual_backoff_until and marks MANUAL_OVERRIDE without rollback", func(t *testing.T) {
+		applied := 8.0
+		restore := 7.0
+		monID := "01990000-9900-7000-8000-000000000015"
+		newMonitor := func() OptimizationExecutionMonitorRecord {
+			return OptimizationExecutionMonitorRecord{
+				ID:                 monID,
+				TenantID:           "01990000-3000-7000-8000-000000000001",
+				SiteID:             "01990000-5000-7000-8000-000000000001",
+				LeaseID:            "01990000-8800-7000-8000-000000000011",
+				DeviceID:           "01990000-6000-7000-8000-000000000001",
+				TargetCapability:   string(commandmodel.CapabilitySetChilledWaterTemperatureSetpoint),
+				AppliedSupplyTempC: &applied,
+				RestoreSupplyTempC: &restore,
+				ZoneTempMaxC:       26.0,
+				SupplyTempMinC:     6.0,
+				SupplyTempMaxC:     12.0,
+				StartedAt:          base,
+				WindowEndsAt:       base.Add(30 * time.Minute),
+				Status:             ExecutionMonitorObserving,
+			}
+		}
+
+		// Subcase 1: setpoint still equals RestoreSupplyTempC (7.0) -> not tamper, normal heartbeat.
+		check1 := base.Add(2 * time.Minute)
+		store1 := &fakeAutoControlStore{
+			lease:    testAutoLease(base),
+			siteCtx:  testAutoSiteCtx(),
+			monitors: []OptimizationExecutionMonitorRecord{newMonitor()},
+		}
+		disp1 := &fakeDispatcher{}
+		ctrl1, err := NewAutoController(store1, &fakeTelemetryReader{}, disp1, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctrl1.WithPointHealth(&fakePointHealthChecker{livePoints: testLivePoints(check1, 7.5, restore, 24.0)})
+		summary1, err := ctrl1.RunMonitorPass(context.Background(), check1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if summary1.ManualOverrides != 0 || store1.heartbeatCalls != 1 || store1.monitors[0].Status != ExecutionMonitorObserving {
+			t.Fatalf("setpoint equal to restore should not trigger manual override: summary=%+v mon=%+v", summary1, store1.monitors[0])
+		}
+
+		// Subcase 2: setpoint manually overridden on cabinet to 9.5 (>0.35C from 8.0 and != 7.0) -> MANUAL_OVERRIDE + 2h backoff, no rollback!
+		check2 := base.Add(5 * time.Minute)
+		store2 := &fakeAutoControlStore{
+			lease:    testAutoLease(base),
+			siteCtx:  testAutoSiteCtx(),
+			monitors: []OptimizationExecutionMonitorRecord{newMonitor()},
+		}
+		disp2 := &fakeDispatcher{}
+		ctrl2, err := NewAutoController(store2, &fakeTelemetryReader{}, disp2, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctrl2.WithPointHealth(&fakePointHealthChecker{livePoints: testLivePoints(check2, 8.0, 9.5, 24.0)})
+		summary2, err := ctrl2.RunMonitorPass(context.Background(), check2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if summary2.ManualOverrides != 1 || summary2.RolledBack != 0 || summary2.Tripped != 0 {
+			t.Fatalf("unexpected summary on cabinet manual tamper: %+v", summary2)
+		}
+		if len(disp2.submitInputs) != 0 {
+			t.Fatalf("expected NO rollback command when cabinet operator overrides setpoint, got %+v", disp2.submitInputs)
+		}
+		if store2.monitors[0].Status != ExecutionMonitorManualOverride ||
+			store2.monitors[0].TripReason == nil || *store2.monitors[0].TripReason != "cabinet_setpoint_manual_override" {
+			t.Fatalf("unexpected monitor state after manual override: %+v", store2.monitors[0])
+		}
+		if store2.lease.Status != "ACTIVE" ||
+			store2.lease.ManualBackoffUntil == nil || !store2.lease.ManualBackoffUntil.Equal(check2.Add(2*time.Hour)) ||
+			store2.lease.ManualBackoffReason != "cabinet_setpoint_manual_override" {
+			t.Fatalf("expected active lease 2h backoff, got lease=%+v", store2.lease)
 		}
 	})
 }
@@ -789,10 +1520,16 @@ func TestWorkloadCommandClientHTTP(t *testing.T) {
 	}))
 	defer iamSrv.Close()
 
+	var capturedBodies [][]byte
 	gwSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/sites/01990000-5000-7000-8000-000000000001/optimization/auto-commands" {
 			t.Fatalf("unexpected gateway path %s", r.URL.Path)
 		}
+		raw, readErr := io.ReadAll(r.Body)
+		if readErr != nil {
+			t.Fatalf("read gateway request body: %v", readErr)
+		}
+		capturedBodies = append(capturedBodies, raw)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
 		_, _ = w.Write([]byte(`{"commandId":"01990000-7700-7000-8000-000000000333"}`))
@@ -817,7 +1554,9 @@ func TestWorkloadCommandClientHTTP(t *testing.T) {
 	if err != nil || !decision.Allowed || grant != "signed.grant" {
 		t.Fatalf("RequestCommandGrant failed: grant=%q dec=%+v err=%v", grant, decision, err)
 	}
-	cmdID, err := client.SubmitAutoCommand(context.Background(), grant, AutoControlDispatchInput{
+
+	// Normal command with fabricated/missing state must fail closed.
+	_, err = client.SubmitAutoCommand(context.Background(), grant, AutoControlDispatchInput{
 		TenantID:             "01990000-3000-7000-8000-000000000001",
 		SiteID:               "01990000-5000-7000-8000-000000000001",
 		DeviceID:             "01990000-6000-7000-8000-000000000001",
@@ -826,12 +1565,195 @@ func TestWorkloadCommandClientHTTP(t *testing.T) {
 		Parameters:           commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 8.0},
 		VerificationPointKey: "chilled_water_supply_temp_sp",
 		IdempotencyKey:       "auto-opt:01990000-2000-7000-8000-000000000001",
-		CurrentValue:         7.0,
-		BusinessRevision:     1,
+		CurrentValue:         float64Ptr(7.0),
+		BusinessRevision:     0,
 		ObservedAt:           time.Date(2026, 11, 16, 4, 0, 0, 0, time.UTC),
+	})
+	if err == nil {
+		t.Fatal("expected SubmitAutoCommand without verified live telemetry fields to fail closed")
+	}
+
+	// Normal command must never use emergency bypass.
+	_, err = client.SubmitAutoCommand(context.Background(), grant, AutoControlDispatchInput{
+		TenantID:               "01990000-3000-7000-8000-000000000001",
+		SiteID:                 "01990000-5000-7000-8000-000000000001",
+		DeviceID:               "01990000-6000-7000-8000-000000000001",
+		PointID:                "01990000-7000-7000-8000-000000000001",
+		Capability:             commandmodel.CapabilitySetChilledWaterTemperatureSetpoint,
+		Parameters:             commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 8.0},
+		VerificationPointKey:   "chilled_water_supply_temp_sp",
+		IdempotencyKey:         "auto-opt:01990000-2000-7000-8000-000000000001",
+		PreconditionMode:       commandmodel.PreconditionEmergencyBypass,
+		BypassReason:           "should_be_rejected",
+		EvaluationAvailability: "AVAILABLE",
+		Presence:               "ONLINE",
+		Readiness:              "CURRENT",
+		Quality:                "GOOD",
+		CurrentValue:           float64Ptr(7.0),
+		BusinessRevision:       42,
+		ObservedAt:             time.Date(2026, 11, 16, 4, 0, 0, 0, time.UTC),
+	})
+	if err == nil {
+		t.Fatal("expected normal SubmitAutoCommand with emergency bypass to fail closed")
+	}
+
+	cmdID, err := client.SubmitAutoCommand(context.Background(), grant, AutoControlDispatchInput{
+		TenantID:               "01990000-3000-7000-8000-000000000001",
+		SiteID:                 "01990000-5000-7000-8000-000000000001",
+		DeviceID:               "01990000-6000-7000-8000-000000000001",
+		PointID:                "01990000-7000-7000-8000-000000000001",
+		Capability:             commandmodel.CapabilitySetChilledWaterTemperatureSetpoint,
+		Parameters:             commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 8.0},
+		VerificationPointKey:   "chilled_water_supply_temp_sp",
+		IdempotencyKey:         "auto-opt:01990000-2000-7000-8000-000000000001",
+		PreconditionMode:       commandmodel.PreconditionRequireCurrentState,
+		EvaluationAvailability: "AVAILABLE",
+		Presence:               "ONLINE",
+		Readiness:              "CURRENT",
+		Quality:                "GOOD",
+		CurrentValue:           float64Ptr(7.0),
+		BusinessRevision:       42,
+		ObservedAt:             time.Date(2026, 11, 16, 4, 0, 0, 0, time.UTC),
 	})
 	if err != nil || cmdID != "01990000-7700-7000-8000-000000000333" {
 		t.Fatalf("SubmitAutoCommand failed: cmdID=%q err=%v", cmdID, err)
+	}
+
+	// Rollback with offline/bad telemetry sends real telemetry + EMERGENCY_BYPASS without fabricating GOOD/1.
+	_, err = client.SubmitAutoCommand(context.Background(), grant, AutoControlDispatchInput{
+		TenantID:               "01990000-3000-7000-8000-000000000001",
+		SiteID:                 "01990000-5000-7000-8000-000000000001",
+		DeviceID:               "01990000-6000-7000-8000-000000000001",
+		PointID:                "01990000-7000-7000-8000-000000000001",
+		Capability:             commandmodel.CapabilitySetChilledWaterTemperatureSetpoint,
+		Parameters:             commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 7.0},
+		VerificationPointKey:   "chilled_water_supply_temp_sp",
+		IdempotencyKey:         "auto-rollback:01990000-9900-7000-8000-000000000010",
+		IsRollback:             true,
+		PreconditionMode:       commandmodel.PreconditionEmergencyBypass,
+		BypassReason:           "automated_execution_monitor_rollback:telemetry_unhealthy_over_5m",
+		EvaluationAvailability: "UNAVAILABLE",
+		Presence:               "OFFLINE",
+		Readiness:              "DEGRADED",
+		Quality:                "BAD",
+		CurrentValue:           nil,
+		BusinessRevision:       0,
+	})
+	if err != nil {
+		t.Fatalf("SubmitAutoCommand rollback failed: %v", err)
+	}
+	if len(capturedBodies) != 2 {
+		t.Fatalf("expected 2 captured HTTP payloads, got %d", len(capturedBodies))
+	}
+	if strings.Contains(string(capturedBodies[0]), "preconditionMode") || strings.Contains(string(capturedBodies[0]), "bypassReason") {
+		t.Fatalf("normal command payload should omit default preconditionMode/bypassReason on wire, got %s", string(capturedBodies[0]))
+	}
+	var rollbackPayload autoCommandPayload
+	if err := json.Unmarshal(capturedBodies[1], &rollbackPayload); err != nil {
+		t.Fatal(err)
+	}
+	if rollbackPayload.PreconditionMode != commandmodel.PreconditionEmergencyBypass ||
+		rollbackPayload.BypassReason != "automated_execution_monitor_rollback:telemetry_unhealthy_over_5m" ||
+		rollbackPayload.CurrentState.Quality != "BAD" ||
+		rollbackPayload.CurrentState.Presence != "OFFLINE" ||
+		rollbackPayload.CurrentState.BusinessRevision != 0 {
+		t.Fatalf("unexpected rollback HTTP payload: %+v", rollbackPayload)
+	}
+}
+
+func TestInspectTelemetryPointHealthDecodesLivePoints(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+  "healthy": true,
+  "livePoints": [
+    {
+      "deviceId": "01990000-6000-7000-8000-000000000001",
+      "telemetryKey": "chilled_water_supply_temp",
+      "numericValue": 7.2,
+      "unit": "Cel",
+      "quality": "GOOD",
+      "freshness": "FRESH",
+      "devicePresence": "ONLINE",
+      "businessRevision": 88,
+      "pointRevision": 9,
+      "sampledAt": "2026-11-16T03:59:45Z",
+      "receivedAt": "2026-11-16T03:59:46Z"
+    },
+    {
+      "deviceId": "01990000-6000-7000-8000-000000000001",
+      "telemetryKey": "fault_code",
+      "boolValue": false,
+      "textValue": "",
+      "quality": "GOOD",
+      "freshness": "FRESH",
+      "devicePresence": "ONLINE",
+      "businessRevision": 89,
+      "pointRevision": 10,
+      "sampledAt": "",
+      "receivedAt": null
+    }
+  ]
+}`))
+	}))
+	defer srv.Close()
+
+	client, err := NewWorkloadTelemetryHealthClient(TelemetryHealthClientConfig{
+		TelemetryURL: srv.URL,
+		HTTPClient:   srv.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := client.InspectTelemetryPointHealth(
+		context.Background(),
+		"01990000-3000-7000-8000-000000000001",
+		"01990000-5000-7000-8000-000000000001",
+		[]string{"01990000-6000-7000-8000-000000000001"},
+		[]string{"chilled_water_supply_temp", "fault_code"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snap.Healthy || len(snap.LivePoints) != 2 {
+		t.Fatalf("unexpected snapshot: %+v", snap)
+	}
+	if snap.LivePoints[0].NumericValue == nil || *snap.LivePoints[0].NumericValue != 7.2 ||
+		snap.LivePoints[0].BusinessRevision != 88 || snap.LivePoints[0].PointRevision != 9 ||
+		snap.LivePoints[0].SampledAt.IsZero() {
+		t.Fatalf("unexpected decoded live point[0]: %+v", snap.LivePoints[0])
+	}
+	if snap.LivePoints[1].BoolValue == nil || *snap.LivePoints[1].BoolValue || !snap.LivePoints[1].SampledAt.IsZero() || !snap.LivePoints[1].ReceivedAt.IsZero() {
+		t.Fatalf("unexpected decoded live point[1]: %+v", snap.LivePoints[1])
+	}
+}
+
+func TestExtractAutoControlLiveStateCanonicalKeysAndFlags(t *testing.T) {
+	now := time.Date(2026, 11, 16, 4, 0, 0, 0, time.UTC)
+	siteCtx := AutoControlSiteContext{
+		InputMapping: InputMapping{
+			SupplyTemperatureKey: "chilled_water_supply_temp",
+			ZoneTemperatureKeys:  []string{"zone_temp"},
+		},
+		SetpointTarget: &SetpointCommandTarget{
+			DeviceID:         "01990000-6000-7000-8000-000000000001",
+			FeedbackPointKey: "supply_temp_setpoint",
+		},
+	}
+	sampled := now.Add(-10 * time.Second)
+	pts := []TelemetryLivePoint{
+		{DeviceID: "01990000-6000-7000-8000-000000000001", TelemetryKey: "chilled_water_supply_temp", NumericValue: float64Ptr(7.1), Quality: "GOOD", Freshness: "FRESH", DevicePresence: "ONLINE", BusinessRevision: 10, PointRevision: 2, SampledAt: sampled},
+		{DeviceID: "01990000-6000-7000-8000-000000000001", TelemetryKey: "supply_temp_setpoint", NumericValue: float64Ptr(7.0), Quality: "GOOD", Freshness: "FRESH", DevicePresence: "ONLINE", BusinessRevision: 11, PointRevision: 3, SampledAt: sampled},
+		{DeviceID: "01990000-6000-7000-8000-000000000002", TelemetryKey: "zone_temp", NumericValue: float64Ptr(23.2), Quality: "GOOD", Freshness: "FRESH", DevicePresence: "ONLINE", BusinessRevision: 12, PointRevision: 4, SampledAt: sampled},
+		{DeviceID: "01990000-6000-7000-8000-000000000001", TelemetryKey: "fault_code", BoolValue: boolPtr(true), Quality: "GOOD", Freshness: "FRESH", DevicePresence: "ONLINE", BusinessRevision: 13, PointRevision: 5, SampledAt: sampled},
+		{DeviceID: "01990000-6000-7000-8000-000000000001", TelemetryKey: "local_remote_mode", TextValue: strPtr("MANUAL"), Quality: "GOOD", Freshness: "FRESH", DevicePresence: "ONLINE", BusinessRevision: 14, PointRevision: 6, SampledAt: sampled},
+		{DeviceID: "01990000-6000-7000-8000-000000000001", TelemetryKey: "chiller_run_state", TextValue: strPtr("RUNNING"), Quality: "GOOD", Freshness: "FRESH", DevicePresence: "ONLINE", BusinessRevision: 15, PointRevision: 7, SampledAt: sampled},
+	}
+
+	state := extractAutoControlLiveState(pts, siteCtx, "01990000-6000-7000-8000-000000000001", now)
+	if state.SupplyTemp == nil || state.Setpoint == nil || len(state.ZoneTemps) != 1 ||
+		!state.DeviceFaultActive || !state.CabinetLocalManual || state.DeviceOffline || state.RunningChillers != 1 {
+		t.Fatalf("unexpected extracted live state: %+v", state)
 	}
 }
 
@@ -877,13 +1799,15 @@ func TestAutoControllerMultiReplicaMonitorClaimPreventsDuplicateRollback(t *test
 			AppliedSupplyTempC: &applied,
 			RestoreSupplyTempC: &restore,
 			ZoneTempMaxC:       26.0,
+			SupplyTempMinC:     6.0,
 			SupplyTempMaxC:     12.0,
 			StartedAt:          base,
 			WindowEndsAt:       base.Add(30 * time.Minute),
 			Status:             ExecutionMonitorObserving,
 		}},
 	}
-	obs := testLiveObservation(base.Add(10*time.Minute), 8.0, 26.8)
+	checkAt := base.Add(10 * time.Minute)
+	obs := testLiveObservation(checkAt, 8.0, 26.8)
 	disp := &fakeDispatcher{
 		decision:  commandauth.Decision{Allowed: true, ReasonCode: commandauth.ReasonAllowAutoLease},
 		grant:     "rollback.sig",
@@ -894,13 +1818,13 @@ func TestAutoControllerMultiReplicaMonitorClaimPreventsDuplicateRollback(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctrlA.WithPointHealth(&fakePointHealthChecker{}).WithWorkerID("replica-a").WithLeaseDuration(45 * time.Second)
+	ctrlA.WithPointHealth(&fakePointHealthChecker{livePoints: testLivePoints(checkAt, 8.0, applied, 26.8)}).WithWorkerID("replica-a").WithLeaseDuration(45 * time.Second)
 
 	ctrlB, err := NewAutoController(store, &fakeTelemetryReader{obs: obs}, disp, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctrlB.WithPointHealth(&fakePointHealthChecker{}).WithWorkerID("replica-b").WithLeaseDuration(45 * time.Second)
+	ctrlB.WithPointHealth(&fakePointHealthChecker{livePoints: testLivePoints(checkAt, 8.0, applied, 26.8)}).WithWorkerID("replica-b").WithLeaseDuration(45 * time.Second)
 
 	start := make(chan struct{})
 	var wg sync.WaitGroup
@@ -911,7 +1835,7 @@ func TestAutoControllerMultiReplicaMonitorClaimPreventsDuplicateRollback(t *test
 		go func(i int, c *AutoController) {
 			defer wg.Done()
 			<-start
-			summaries[i], errs[i] = c.RunMonitorPass(context.Background(), base.Add(10*time.Minute))
+			summaries[i], errs[i] = c.RunMonitorPass(context.Background(), checkAt)
 		}(idx, ctrl)
 	}
 	close(start)
@@ -955,6 +1879,7 @@ func TestAutoControllerLeaseExpiryTakeoverFencesStaleReplicaAndReleasesOnError(t
 			AppliedSupplyTempC: &applied,
 			RestoreSupplyTempC: &restore,
 			ZoneTempMaxC:       26.0,
+			SupplyTempMinC:     6.0,
 			SupplyTempMaxC:     12.0,
 			StartedAt:          base,
 			WindowEndsAt:       base.Add(30 * time.Minute),
@@ -966,12 +1891,10 @@ func TestAutoControllerLeaseExpiryTakeoverFencesStaleReplicaAndReleasesOnError(t
 	if err != nil || len(claimedA) != 1 {
 		t.Fatalf("replica-a claim failed: len=%d err=%v", len(claimedA), err)
 	}
-	// Before 45s lease expires, replica-b cannot claim the monitor.
 	claimedB, err := store.ClaimObservingExecutionMonitors(context.Background(), "replica-b", 45*time.Second, base.Add(90*time.Second), 10)
 	if err != nil || len(claimedB) != 0 {
 		t.Fatalf("replica-b claimed active lease unexpectedly: len=%d err=%v", len(claimedB), err)
 	}
-	// Once lease expires at base+1m45s, replica-b takes over.
 	claimedB, err = store.ClaimObservingExecutionMonitors(context.Background(), "replica-b", 45*time.Second, base.Add(2*time.Minute), 10)
 	if err != nil || len(claimedB) != 1 || claimedB[0].ClaimOwner == nil || *claimedB[0].ClaimOwner != "replica-b" {
 		t.Fatalf("replica-b takeover failed: claimed=%+v err=%v", claimedB, err)
@@ -986,8 +1909,11 @@ func TestAutoControllerLeaseExpiryTakeoverFencesStaleReplicaAndReleasesOnError(t
 	if err := store.CompleteMonitorVerified(context.Background(), monID, tenantID, siteID, "replica-a", base.Add(30*time.Minute)); !errors.Is(err, ErrExecutionMonitorClaimLost) {
 		t.Fatalf("expected ErrExecutionMonitorClaimLost on stale verify, got %v", err)
 	}
-	if err := store.TripMonitorAndLease(context.Background(), claimedA[0], "replica-a", ExecutionMonitorTripped, "stale_trip", nil, base.Add(2*time.Minute)); !errors.Is(err, ErrExecutionMonitorClaimLost) {
+	if err := store.TripMonitorAndLease(context.Background(), claimedA[0], "replica-a", ExecutionMonitorRollbackFailed, "stale_trip", nil, base.Add(2*time.Minute)); !errors.Is(err, ErrExecutionMonitorClaimLost) {
 		t.Fatalf("expected ErrExecutionMonitorClaimLost on stale trip, got %v", err)
+	}
+	if err := store.MarkMonitorManualOverride(context.Background(), claimedA[0], "replica-a", "cabinet_setpoint_manual_override", base.Add(2*time.Hour), base.Add(2*time.Minute)); !errors.Is(err, ErrExecutionMonitorClaimLost) {
+		t.Fatalf("expected ErrExecutionMonitorClaimLost on stale manual override, got %v", err)
 	}
 	if err := store.ReleaseMonitorClaim(context.Background(), monID, tenantID, siteID, "replica-a", base.Add(2*time.Minute)); !errors.Is(err, ErrExecutionMonitorClaimLost) {
 		t.Fatalf("expected ErrExecutionMonitorClaimLost on stale release, got %v", err)
@@ -1002,15 +1928,13 @@ func TestAutoControllerLeaseExpiryTakeoverFencesStaleReplicaAndReleasesOnError(t
 	if store.monitors[0].ClaimOwner != nil || store.monitors[0].ClaimUntil != nil {
 		t.Fatalf("expected claim cleared after healthy heartbeat, got %+v", store.monitors[0])
 	}
-	// Stale replica-a remains fenced out even after replica-b clears ClaimOwner back to NULL.
-	if err := store.TripMonitorAndLease(context.Background(), claimedA[0], "replica-a", ExecutionMonitorTripped, "late_slow_replica_trip", nil, base.Add(2*time.Minute)); !errors.Is(err, ErrExecutionMonitorClaimLost) {
+	if err := store.TripMonitorAndLease(context.Background(), claimedA[0], "replica-a", ExecutionMonitorRollbackFailed, "late_slow_replica_trip", nil, base.Add(2*time.Minute)); !errors.Is(err, ErrExecutionMonitorClaimLost) {
 		t.Fatalf("expected ErrExecutionMonitorClaimLost after claim cleared, got %v", err)
 	}
 	if err := store.CompleteMonitorVerified(context.Background(), monID, tenantID, siteID, "replica-a", base.Add(30*time.Minute)); !errors.Is(err, ErrExecutionMonitorClaimLost) {
 		t.Fatalf("expected ErrExecutionMonitorClaimLost on stale verify after claim cleared, got %v", err)
 	}
 
-	// Early exit on site context load error releases claim immediately for next pass.
 	store.siteCtxErr = errors.New("db hiccup")
 	beforeReleases := store.releaseCalls
 	ctrl, err := NewAutoController(store, &fakeTelemetryReader{}, &fakeDispatcher{}, nil, nil)
@@ -1042,6 +1966,7 @@ func TestAutoControllerContextCancelReleasesClaimWithoutMarkingUnhealthy(t *test
 			DeviceID:                "01990000-6000-7000-8000-000000000001",
 			TargetCapability:        string(commandmodel.CapabilitySetChilledWaterTemperatureSetpoint),
 			ZoneTempMaxC:            26.0,
+			SupplyTempMinC:          6.0,
 			SupplyTempMaxC:          12.0,
 			StartedAt:               base.Add(-15 * time.Minute),
 			WindowEndsAt:            base.Add(15 * time.Minute),
@@ -1072,4 +1997,94 @@ type cancellingPointHealthChecker struct {
 func (checker *cancellingPointHealthChecker) CheckTelemetryPointHealth(context.Context, string, string, []string, []string) error {
 	checker.cancel()
 	return context.Canceled
+}
+
+func (checker *cancellingPointHealthChecker) InspectTelemetryPointHealth(context.Context, string, string, []string, []string) (OptimizationPointHealthSnapshot, error) {
+	checker.cancel()
+	return OptimizationPointHealthSnapshot{}, context.Canceled
+}
+
+func TestAutoControlCrossDeviceTelemetryIsolationAndMonitorSafetyTrips(t *testing.T) {
+	base := time.Date(2026, 11, 16, 4, 0, 0, 0, time.UTC)
+
+	t.Run("secondary device stale point does not veto primary target and setpoints never cross-borrow", func(t *testing.T) {
+		siteCtx := testAutoSiteCtx()
+		primaryDev := "01990000-6000-7000-8000-000000000001"
+		secondaryDev := "01990000-6000-7000-8000-000000000099"
+		zoneDev := "01990000-6000-7000-8000-000000000002"
+		points := []TelemetryLivePoint{
+			{DeviceID: primaryDev, TelemetryKey: "chilled_water_supply_temp", NumericValue: float64Ptr(7.0), Quality: "GOOD", Freshness: "FRESH", DevicePresence: "ONLINE", BusinessRevision: 10, PointRevision: 2, SampledAt: base},
+			// Secondary chiller has stale supply_temp_setpoint AND local mode; primary has no setpoint yet.
+			{DeviceID: secondaryDev, TelemetryKey: "supply_temp_setpoint", NumericValue: float64Ptr(10.0), Quality: "GOOD", Freshness: "STALE", DevicePresence: "ONLINE", BusinessRevision: 9, PointRevision: 1, SampledAt: base.Add(-10 * time.Minute)},
+			{DeviceID: zoneDev, TelemetryKey: "zone_temp", NumericValue: float64Ptr(23.5), Quality: "GOOD", Freshness: "FRESH", DevicePresence: "ONLINE", BusinessRevision: 11, PointRevision: 3, SampledAt: base},
+		}
+		liveState := extractAutoControlLiveState(points, siteCtx, primaryDev, base)
+		if liveState.Setpoint != nil {
+			t.Fatalf("expected nil Setpoint on primary device without cross-device borrow, got %+v", liveState.Setpoint)
+		}
+		samples := buildGuardrailPointSamples(siteCtx, points, liveState)
+		for _, sample := range samples {
+			if !sample.Present && sample.Key == "supply_temp_setpoint" {
+				// Expected missing sample for missing target setpoint
+				continue
+			}
+			if sample.SampledAt.Before(base.Add(-2*time.Minute)) && sample.Present {
+				t.Fatalf("unexpected secondary stale sample leaked into primary guardrail check: %+v", sample)
+			}
+		}
+	})
+
+	t.Run("RunMonitorPass records MANUAL_OVERRIDE on cabinet local_remote_mode=false and trips on active fault", func(t *testing.T) {
+		monID := "01990000-9900-7000-8000-000000000051"
+		devID := "01990000-6000-7000-8000-000000000001"
+		pts := testLivePoints(base, 7.0, 7.6, 23.0)
+		for i := range pts {
+			if pts[i].TelemetryKey == "local_remote_mode" {
+				pts[i].TextValue = nil
+				pts[i].BoolValue = boolPtr(false)
+			}
+		}
+		store := &fakeAutoControlStore{
+			lease:   testAutoLease(base),
+			siteCtx: testAutoSiteCtx(),
+			monitors: []OptimizationExecutionMonitorRecord{{
+				ID: monID, TenantID: "01990000-3000-7000-8000-000000000001", SiteID: "01990000-5000-7000-8000-000000000001",
+				LeaseID: "01990000-8800-7000-8000-000000000011", DeviceID: devID,
+				TargetCapability:   string(commandmodel.CapabilitySetChilledWaterTemperatureSetpoint),
+				AppliedSupplyTempC: float64Ptr(7.6), RestoreSupplyTempC: float64Ptr(7.0),
+				ZoneTempMaxC: 26.0, SupplyTempMinC: 5.0, SupplyTempMaxC: 12.0,
+				StartedAt: base.Add(-5 * time.Minute), WindowEndsAt: base.Add(25 * time.Minute), Status: ExecutionMonitorObserving,
+			}},
+		}
+		ctrl, err := NewAutoController(store, &fakeTelemetryReader{}, &fakeDispatcher{}, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctrl.WithPointHealth(&fakePointHealthChecker{livePoints: pts})
+		summary, err := ctrl.RunMonitorPass(context.Background(), base)
+		if err != nil || summary.ManualOverrides != 1 || store.monitors[0].Status != ExecutionMonitorManualOverride {
+			t.Fatalf("expected MANUAL_OVERRIDE on cabinet local mode, got summary=%+v mon=%+v err=%v", summary, store.monitors[0], err)
+		}
+
+		// Fault during observation trips and triggers rollback.
+		faultPts := testLivePoints(base, 7.0, 7.6, 23.0)
+		for i := range faultPts {
+			if faultPts[i].TelemetryKey == "fault_code" {
+				faultPts[i].TextValue = strPtr("E12")
+			}
+		}
+		store.monitors[0].Status = ExecutionMonitorObserving
+		store.monitors[0].TripReason = nil
+		store.trippedRecords = nil
+		disp := &fakeDispatcher{decision: commandauth.Decision{Allowed: true}, grant: "g-rollback", commandID: "01990000-7700-7000-8000-000000000888"}
+		ctrl2, err := NewAutoController(store, &fakeTelemetryReader{}, disp, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctrl2.WithPointHealth(&fakePointHealthChecker{livePoints: faultPts})
+		summary2, err := ctrl2.RunMonitorPass(context.Background(), base)
+		if err != nil || summary2.RolledBack != 1 || len(store.trippedRecords) != 1 || store.trippedRecords[0].TripReason != "device_fault_active" {
+			t.Fatalf("expected fault trip+rollback, got summary=%+v trips=%+v err=%v", summary2, store.trippedRecords, err)
+		}
+	})
 }

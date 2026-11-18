@@ -32,6 +32,7 @@ type AutoControlLeaseFacts struct {
 	SupplyTempMinC      float64
 	SupplyTempMaxC      float64
 	MaxCommandsPerHour  int
+	ManualBackoffUntil  *time.Time
 }
 
 type CommandWorkloadAuthorizationFacts struct {
@@ -152,6 +153,10 @@ func evaluateWorkloadCommandAuthorization(
 		decision.ReasonCode = commandauth.ReasonDenyAutoLease
 		decision.Detail = "site auto-control lease has expired"
 		return decision, nil
+	} else if lease.ManualBackoffUntil != nil && !lease.ManualBackoffUntil.Before(nowUTC) {
+		decision.ReasonCode = commandauth.ReasonDenyAutoLease
+		decision.Detail = "site auto-control lease is paused in manual override backoff window"
+		return decision, nil
 	}
 	if !slices.Contains(lease.AllowedCapabilities, string(request.Capability)) {
 		decision.ReasonCode = commandauth.ReasonDenyCapability
@@ -196,9 +201,13 @@ func evaluateWorkloadCommandAuthorization(
 
 	riskLevel, _, ok := commandmodel.EvaluateRiskLevel(request.Capability, request.Parameters, request.CurrentValue)
 	if !ok {
-		decision.ReasonCode = commandauth.ReasonDenyAutoLease
-		decision.Detail = "capability parameters violate command safety risk bounds"
-		return decision, nil
+		if request.IsRollback && request.Capability == commandmodel.CapabilitySetChilledWaterTemperatureSetpoint {
+			riskLevel = commandmodel.RiskMedium
+		} else {
+			decision.ReasonCode = commandauth.ReasonDenyAutoLease
+			decision.Detail = "capability parameters violate command safety risk bounds"
+			return decision, nil
+		}
 	}
 	decision.Allowed = true
 	decision.MaximumRisk = riskLevel

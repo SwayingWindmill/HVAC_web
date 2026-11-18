@@ -100,7 +100,8 @@ SELECT EXISTS (
 		if lookup.IsRollback {
 			err = transaction.QueryRow(ctx, `
 SELECT l.id::text, l.armed_by::text, l.expires_at, l.allowed_capabilities,
-       l.max_setpoint_step_c, l.supply_temp_min_c, l.supply_temp_max_c, l.max_commands_per_hour
+       l.max_setpoint_step_c, l.supply_temp_min_c, l.supply_temp_max_c, l.max_commands_per_hour,
+       l.manual_backoff_until
 FROM core_registry.optimization_execution_monitors_v1 AS m
 JOIN core_registry.site_auto_control_leases_v1 AS l
   ON l.tenant_id = m.tenant_id AND l.site_id = m.site_id AND l.id = m.lease_id
@@ -114,6 +115,7 @@ LIMIT 1
 `, lookup.TenantID, lookup.SiteID, lookup.DeviceID, lookup.RequestedSetpoint).Scan(
 				&lease.ID, &lease.ArmedBy, &lease.ExpiresAt, &lease.AllowedCapabilities,
 				&lease.MaxSetpointStepC, &lease.SupplyTempMinC, &lease.SupplyTempMaxC, &lease.MaxCommandsPerHour,
+				&lease.ManualBackoffUntil,
 			)
 			if err == nil {
 				result.MatchingObservingRollback = true
@@ -121,7 +123,8 @@ LIMIT 1
 		} else {
 			err = transaction.QueryRow(ctx, `
 SELECT id::text, armed_by::text, expires_at, allowed_capabilities,
-       max_setpoint_step_c, supply_temp_min_c, supply_temp_max_c, max_commands_per_hour
+       max_setpoint_step_c, supply_temp_min_c, supply_temp_max_c, max_commands_per_hour,
+       manual_backoff_until
 FROM core_registry.site_auto_control_leases_v1
 WHERE tenant_id = $1::uuid AND site_id = $2::uuid
   AND status = 'ACTIVE' AND expires_at > $3
@@ -130,6 +133,7 @@ LIMIT 1
 `, lookup.TenantID, lookup.SiteID, lookup.Now).Scan(
 				&lease.ID, &lease.ArmedBy, &lease.ExpiresAt, &lease.AllowedCapabilities,
 				&lease.MaxSetpointStepC, &lease.SupplyTempMinC, &lease.SupplyTempMaxC, &lease.MaxCommandsPerHour,
+				&lease.ManualBackoffUntil,
 			)
 		}
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
@@ -147,6 +151,7 @@ LIMIT 1
 SELECT count(*)::int
 FROM core_registry.optimization_execution_monitors_v1
 WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND started_at >= $3
+  AND status IN ('PENDING_SUBMIT', 'OBSERVING', 'VERIFIED', 'ROLLED_BACK', 'TRIPPED', 'TRIPPED_ROLLED_BACK', 'ROLLBACK_FAILED', 'MANUAL_OVERRIDE')
 `, lookup.TenantID, lookup.SiteID, windowStart).Scan(&result.RecentAutoCommandsLastHour); err != nil {
 			return fmt.Errorf("count recent automated Commands: %w", err)
 		}

@@ -87,6 +87,7 @@ services:
       - ../connectivity/postgres/init/uplink-quarantine-diagnostics.sql:/docker-entrypoint-initdb.d/710.sql:ro
       - ./postgres/init/alarm-suppress-unassign-capabilities.sql:/docker-entrypoint-initdb.d/720.sql:ro
       - ../connectivity/postgres/init/gateway-shadow-drivers-and-autonomy.sql:/docker-entrypoint-initdb.d/730.sql:ro
+      - ./postgres/init/optimization-safety-guardrails.sql:/docker-entrypoint-initdb.d/740.sql:ro
     ports:
       - "127.0.0.1:${S1_POSTGRES_HOST_PORT:-55432}:5432"
     healthcheck:

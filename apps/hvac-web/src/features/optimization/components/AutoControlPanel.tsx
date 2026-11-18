@@ -1,10 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import type { ColumnDef } from '@tanstack/react-table';
-import { ShieldCheck, ShieldOff } from 'lucide-react';
+import { ShieldCheck, ShieldOff, TriangleAlert } from 'lucide-react';
 import { useId, useMemo, useState, type KeyboardEvent } from 'react';
 import { toast } from 'sonner';
-import type { OptimizationExecutionMonitor, SiteAutoControlLeaseState } from '@/api/generated/platformGateway.gen';
 import { DataTableBlock } from '@/blocks/data-table';
 import { Panel, PanelHeader } from '@/blocks/panel';
 import { StatusBadge } from '@/components/common/StatusBadge';
@@ -28,6 +27,7 @@ import { CodeField } from '@/features/control/components/CommandConfirmation';
 import { ReasonField } from '@/features/control/components/ControlBoundary';
 import { stepUpErrorPresentation, type StepUpErrorPresentation } from '@/features/control/control-errors';
 import { useDataTable } from '@/hooks/use-data-table';
+import { useNow } from '@/hooks/use-now';
 import { formatCompactTime, formatDecimal, formatTime } from '@/lib/operator-format';
 import {
   armSiteAutoControlLease,
@@ -36,14 +36,18 @@ import {
   revokeSiteAutoControlLease,
   siteAutoControlLeaseQuery,
   siteExecutionMonitorsQuery,
+  type OptimizationExecutionMonitor,
+  type SiteAutoControlLeaseState,
 } from '../auto-control-api';
 import {
   buildArmLeasePayload,
   formatAutoControlCapability,
   formatAutoControlTripReason,
+  formatGuardrailVerdict,
   initialArmLeaseValues,
   LEASE_STATUS_PRESENTATION,
   MONITOR_STATUS_PRESENTATION,
+  resolveActiveLeaseBackoff,
   SELECTABLE_LEASE_CAPABILITIES,
   validateArmLeaseForm,
   type ArmLeaseFieldErrors,
@@ -79,6 +83,8 @@ function NumericField({
   label,
   unit,
   hint,
+  min,
+  placeholder,
   value,
   error,
   step = 'any',
@@ -89,6 +95,8 @@ function NumericField({
   readonly label: string;
   readonly unit?: string;
   readonly hint?: string;
+  readonly min?: number;
+  readonly placeholder?: string;
   readonly value: string;
   readonly error: string | undefined;
   readonly step?: string;
@@ -105,6 +113,8 @@ function NumericField({
         id={id}
         type="number"
         inputMode="decimal"
+        min={min}
+        placeholder={placeholder}
         step={step}
         value={value}
         aria-invalid={error !== undefined}
@@ -251,6 +261,7 @@ function ArmLeaseForm({
         supplyTempMinC: true,
         supplyTempMaxC: true,
         maxSetpointStepC: true,
+        deadbandC: true,
         zoneTempMaxC: true,
         minRunningChillers: true,
         maxCommandsPerHour: true,
@@ -270,6 +281,7 @@ function ArmLeaseForm({
 
   return (
     <form
+      noValidate
       className="flex flex-col gap-3"
       onSubmit={(event) => {
         event.preventDefault();
@@ -307,7 +319,9 @@ function ArmLeaseForm({
         <NumericField
           id={`${baseId}-supply-min`}
           label="供水温度下限"
-          unit="°C (4.0 至 20.0)"
+          unit="°C (5.0 至 20.0)"
+          min={5}
+          placeholder="5.0"
           step="0.1"
           value={values.supplyTempMinC}
           error={fieldErrors.supplyTempMinC}
@@ -318,6 +332,7 @@ function ArmLeaseForm({
           id={`${baseId}-supply-max`}
           label="供水温度上限"
           unit="°C (不高于 25.0)"
+          min={5}
           step="0.1"
           value={values.supplyTempMaxC}
           error={fieldErrors.supplyTempMaxC}
@@ -333,6 +348,18 @@ function ArmLeaseForm({
           error={fieldErrors.maxSetpointStepC}
           onChange={(next) => updateField('maxSetpointStepC', next)}
           onBlur={() => handleBlur('maxSetpointStepC')}
+        />
+        <NumericField
+          id={`${baseId}-deadband`}
+          label="调节死区"
+          unit="°C (0.05 至 2.0)"
+          min={0.05}
+          placeholder="0.2"
+          step="0.05"
+          value={values.deadbandC}
+          error={fieldErrors.deadbandC}
+          onChange={(next) => updateField('deadbandC', next)}
+          onBlur={() => handleBlur('deadbandC')}
         />
         <NumericField
           id={`${baseId}-zone-max`}
@@ -562,6 +589,7 @@ export function AutoControlPanel({
 }) {
   const [armOpen, setArmOpen] = useState(false);
   const [revokeOpen, setRevokeOpen] = useState(false);
+  const now = useNow(30_000);
 
   const leaseQuery = useQuery({
     ...siteAutoControlLeaseQuery(siteId),
@@ -588,23 +616,64 @@ export function AutoControlPanel({
     {
       id: 'temperatures',
       header: '供水温度变化',
-      cell: ({ row }) => (
-        <div className="flex flex-col gap-0.5 text-xs tabular-nums">
-          <span className="font-medium text-foreground">
-            {formatTempC(row.original.baselineSupplyTempC)} → {formatTempC(row.original.appliedSupplyTempC)}
-          </span>
-          <span className="text-muted-foreground">
-            回退目标 {formatTempC(row.original.restoreSupplyTempC)}
-          </span>
-        </div>
-      ),
+      cell: ({ row }) => {
+        const {
+          baselineSupplyTempC,
+          appliedSupplyTempC,
+          restoreSupplyTempC,
+          rawRecommendedValue,
+          clampedValue,
+        } = row.original;
+        const rawVal = typeof rawRecommendedValue === 'number' ? rawRecommendedValue : undefined;
+        const clampedVal = typeof clampedValue === 'number' ? clampedValue : undefined;
+        const hasClampedDiff =
+          rawVal !== undefined
+          && clampedVal !== undefined
+          && Math.abs(rawVal - clampedVal) >= 0.05;
+        const showClampedOnly =
+          !hasClampedDiff
+          && clampedVal !== undefined
+          && (appliedSupplyTempC === undefined || Math.abs(clampedVal - appliedSupplyTempC) >= 0.05);
+        const showRawOnly =
+          !hasClampedDiff
+          && !showClampedOnly
+          && rawVal !== undefined
+          && (appliedSupplyTempC === undefined || Math.abs(rawVal - appliedSupplyTempC) >= 0.05);
+        return (
+          <div className="flex flex-col gap-0.5 text-xs tabular-nums">
+            <span className="font-medium text-foreground">
+              {formatTempC(baselineSupplyTempC)} → {formatTempC(appliedSupplyTempC)}
+            </span>
+            <span className="text-muted-foreground">
+              回退目标 {formatTempC(restoreSupplyTempC)}
+            </span>
+            {hasClampedDiff ? (
+              <span className="text-warning-text">
+                原建议 {formatDecimal(rawVal, 1)} °C，限幅为 {formatDecimal(clampedVal, 1)} °C
+              </span>
+            ) : showClampedOnly ? (
+              <span className="text-muted-foreground">
+                限幅目标 {formatDecimal(clampedVal, 1)} °C
+              </span>
+            ) : showRawOnly ? (
+              <span className="text-muted-foreground">
+                原始建议 {formatDecimal(rawVal, 1)} °C
+              </span>
+            ) : null}
+          </div>
+        );
+      },
     },
     {
       id: 'limits',
-      header: '租约安全上限',
+      header: '租约安全边界',
       cell: ({ row }) => (
         <span className="text-xs text-muted-foreground tabular-nums">
-          供水 ≤ {formatDecimal(row.original.supplyTempMaxC, 1)} °C · 室内 ≤ {formatDecimal(row.original.zoneTempMaxC, 1)} °C
+          {row.original.supplyTempMinC !== undefined
+            ? `供水 ${formatDecimal(row.original.supplyTempMinC, 1)} 至 ${formatDecimal(row.original.supplyTempMaxC, 1)} °C`
+            : `供水 ≤ ${formatDecimal(row.original.supplyTempMaxC, 1)} °C`}
+          {' · '}
+          室内 ≤ {formatDecimal(row.original.zoneTempMaxC, 1)} °C
         </span>
       ),
     },
@@ -620,26 +689,35 @@ export function AutoControlPanel({
       id: 'reason',
       header: '巡检与退出原因',
       cell: ({ row }) => {
-        if (row.original.tripReason) {
-          return (
-            <span className="text-xs text-destructive-text">
-              {formatAutoControlTripReason(row.original.tripReason)}
-            </span>
-          );
-        }
-        if (row.original.status === 'OBSERVING') {
-          return (
-            <span className="text-xs text-muted-foreground">
-              {row.original.lastCheckedAt
-                ? `最近巡检 ${formatCompactTime(row.original.lastCheckedAt, timeZone)}`
-                : '等待首次巡检'}
-            </span>
-          );
-        }
-        if (row.original.status === 'VERIFIED') {
-          return <span className="text-xs text-muted-foreground">30 分钟内温度与功率均在安全范围内</span>;
-        }
-        return <span className="text-xs text-muted-foreground">已记录回退执行</span>;
+        const verdictLabel = formatGuardrailVerdict(row.original.guardrailVerdict);
+        const primary = row.original.tripReason ? (
+          <span className="text-xs text-destructive-text">
+            {formatAutoControlTripReason(row.original.tripReason)}
+          </span>
+        ) : row.original.status === 'PENDING_SUBMIT' ? (
+          <span className="text-xs text-muted-foreground">等待写入控制指令</span>
+        ) : row.original.status === 'SHADOW_RECORDED' ? (
+          <span className="text-xs text-muted-foreground">影子模式仅记录推荐轨迹，不下发设备</span>
+        ) : row.original.status === 'OBSERVING' ? (
+          <span className="text-xs text-muted-foreground">
+            {row.original.lastCheckedAt
+              ? `最近巡检 ${formatCompactTime(row.original.lastCheckedAt, timeZone)}`
+              : '等待首次巡检'}
+          </span>
+        ) : row.original.status === 'VERIFIED' ? (
+          <span className="text-xs text-muted-foreground">30 分钟内温度与功率均在安全范围内</span>
+        ) : row.original.status === 'MANUAL_OVERRIDE' ? (
+          <span className="text-xs text-warning-text">检测到现场或人工调参，AI 进入退避保护</span>
+        ) : (
+          <span className="text-xs text-muted-foreground">已记录保护处置结果</span>
+        );
+        if (!verdictLabel) return primary;
+        return (
+          <div className="flex flex-col gap-0.5">
+            {primary}
+            <span className="text-xs text-muted-foreground">护栏：{verdictLabel}</span>
+          </div>
+        );
       },
     },
     {
@@ -647,13 +725,17 @@ export function AutoControlPanel({
       header: '关联指令',
       cell: ({ row }) => (
         <div className="flex flex-col items-end gap-1">
-          <Link
-            to="/operations/control"
-            search={{ site: siteId, inspect: row.original.commandIntentId }}
-            className="text-xs font-medium text-primary hover:underline"
-          >
-            查看下发指令 ›
-          </Link>
+          {row.original.commandIntentId ? (
+            <Link
+              to="/operations/control"
+              search={{ site: siteId, inspect: row.original.commandIntentId }}
+              className="text-xs font-medium text-primary hover:underline"
+            >
+              查看下发指令 ›
+            </Link>
+          ) : (
+            <span className="text-xs text-muted-foreground">无下行指令</span>
+          )}
           {row.original.rollbackCommandIntentId ? (
             <Link
               to="/operations/control"
@@ -682,6 +764,11 @@ export function AutoControlPanel({
   const isAuto = leaseState?.confirmationMode === 'AUTO_WITH_LEASE' && leaseState.activeLease !== null;
   const activeLease = leaseState?.activeLease ?? null;
   const latestLease = leaseState?.latestLease ?? null;
+  const backoff = isAuto && activeLease ? resolveActiveLeaseBackoff(activeLease, now) : null;
+  const deadbandDigits = activeLease?.deadbandC !== undefined
+    && Math.abs(activeLease.deadbandC * 10 - Math.round(activeLease.deadbandC * 10)) > 0.001
+    ? 2
+    : 1;
 
   return (
     <div className="flex w-full min-w-0 flex-col gap-4">
@@ -753,6 +840,20 @@ export function AutoControlPanel({
           </div>
         ) : isAuto && activeLease ? (
           <div className="flex flex-col gap-3 px-5 py-4">
+            {backoff ? (
+              <Alert role="status" className="border-warning/40 bg-warning-soft text-warning-text">
+                <TriangleAlert className="size-4" aria-hidden="true" />
+                <AlertTitle>AI 自动调节退避保护中</AlertTitle>
+                <AlertDescription className="text-warning-text">
+                  {[
+                    backoff.reasonText ?? '检测到人工干预设定值，当前暂停自动下发调温指令',
+                    backoff.until ? `退避至 ${formatTime(backoff.until, timeZone)}` : null,
+                  ]
+                    .filter(Boolean)
+                    .join('；')}
+                </AlertDescription>
+              </Alert>
+            ) : null}
             <dl className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3 lg:grid-cols-6">
               <LeaseBoundTile
                 label="供水温度范围"
@@ -781,7 +882,11 @@ export function AutoControlPanel({
             </dl>
             <p className="border-t border-divider pt-2.5 text-xs text-muted-foreground">
               授权时段 <span className="font-mono">{formatTime(activeLease.armedAt, timeZone)}</span> 至{' '}
-              <span className="font-mono">{formatTime(activeLease.expiresAt, timeZone)}</span>；每次自动下发前会再次复核实时温度、冷机负荷与联锁状态，并在之后持续监护 30 分钟。
+              <span className="font-mono">{formatTime(activeLease.expiresAt, timeZone)}</span>
+              {activeLease.deadbandC !== undefined
+                ? `；调节死区 ${formatDecimal(activeLease.deadbandC, deadbandDigits)} °C`
+                : null}
+              ；每次自动下发前会再次复核实时温度、冷机负荷与联锁状态，并在之后持续监护 30 分钟。
             </p>
           </div>
         ) : (

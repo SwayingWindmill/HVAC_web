@@ -78,6 +78,9 @@ type InvocationRequest struct {
 type Invoker struct {
 	provider Provider
 	now      func() time.Time
+	timeout  time.Duration
+	breaker  *CircuitBreaker
+	bulkhead *Bulkhead
 }
 
 func NewInvoker(provider Provider, now func() time.Time) (*Invoker, error) {
@@ -87,58 +90,217 @@ func NewInvoker(provider Provider, now func() time.Time) (*Invoker, error) {
 	if now == nil {
 		now = time.Now
 	}
-	return &Invoker{provider: provider, now: now}, nil
+	return &Invoker{
+		provider: provider,
+		now:      now,
+		timeout:  DefaultInferenceCallTimeout,
+	}, nil
+}
+
+// WithTimeout configures the per-call provider timeout enforced by Invoker.
+// Non-positive durations keep the current timeout (default DefaultInferenceCallTimeout).
+func (invoker *Invoker) WithTimeout(timeout time.Duration) *Invoker {
+	if invoker != nil && timeout > 0 {
+		invoker.timeout = timeout
+	}
+	return invoker
+}
+
+// WithResilience attaches circuit breaker, bulkhead, and optional timeout settings to Invoker.
+func (invoker *Invoker) WithResilience(cfg ResilientInvokeConfig) *Invoker {
+	if invoker == nil {
+		return nil
+	}
+	if cfg.Timeout > 0 {
+		invoker.timeout = cfg.Timeout
+	}
+	invoker.breaker = cfg.Breaker
+	invoker.bulkhead = cfg.Bulkhead
+	return invoker
+}
+
+// ResilienceConfig returns the effective resilient invocation settings for Invoker.
+func (invoker *Invoker) ResilienceConfig() ResilientInvokeConfig {
+	if invoker == nil {
+		return ResilientInvokeConfig{Timeout: DefaultInferenceCallTimeout}
+	}
+	timeout := invoker.timeout
+	if timeout <= 0 {
+		timeout = DefaultInferenceCallTimeout
+	}
+	return ResilientInvokeConfig{
+		Timeout:  timeout,
+		Breaker:  invoker.breaker,
+		Bulkhead: invoker.bulkhead,
+	}
 }
 
 func (invoker *Invoker) InvokeStructured(ctx context.Context, request InvocationRequest, output any) (InvocationProvenance, error) {
-	startedAt := invoker.now().UTC()
-	provenance := InvocationProvenance{
-		ID: request.ID, TenantID: request.TenantID, SiteID: request.SiteID, UseCase: request.UseCase,
-		DeploymentRevisionID: request.Deployment.ID, InputSnapshotID: request.InputSnapshotID,
-		EvidenceIDs: append([]string(nil), request.EvidenceIDs...), OutputSchemaVersion: request.Deployment.OutputSchemaVersion,
-		Status: InvocationFailed, CreatedAt: startedAt,
+	if invoker == nil || invoker.provider == nil {
+		return InvocationProvenance{Status: InvocationFailed, FailureCode: FailureProviderUnavailable}, &InvocationFailure{
+			Code: FailureProviderUnavailable, Retryable: false, Cause: errors.New("model invoker is not initialized"),
+		}
 	}
-	digest := sha256.Sum256(request.Input)
-	provenance.InputDigest = hex.EncodeToString(digest[:])
+	provenance := newInvocationProvenance(request, invoker.now().UTC())
 	if failure := validateInvocationRequest(request); failure != nil {
 		provenance.FailureCode = failure.Code
 		return provenance, failure
 	}
-	response, err := invoker.provider.Invoke(ctx, ProviderRequest{
-		ModelID: request.Model.ModelID, CredentialRef: request.Model.CredentialRef,
-		Input: append(json.RawMessage(nil), request.Input...), OutputSchemaName: request.OutputSchemaName,
+
+	providerReq := buildProviderRequest(request)
+	response, _, err := executeResilient(ctx, invoker.ResilienceConfig(), func(callCtx context.Context) (ProviderResponse, error) {
+		return invoker.provider.Invoke(callCtx, providerReq)
 	})
 	if err != nil {
 		failure := &InvocationFailure{Code: FailureProviderUnavailable, Retryable: true, Cause: err}
 		provenance.FailureCode = failure.Code
 		return provenance, failure
 	}
-	provenance.ProviderRequestID = strings.TrimSpace(response.RequestID)
-	provenance.TokenUsage = response.TokenUsage
-	provenance.CostMicros = response.CostMicros
-	provenance.LatencyMillis = response.Latency.Milliseconds()
-	if request.BudgetMicros > 0 && response.CostMicros > request.BudgetMicros {
-		failure := &InvocationFailure{Code: FailureBudgetExceeded, Retryable: false, Cause: fmt.Errorf("provider cost %d exceeds budget %d", response.CostMicros, request.BudgetMicros)}
-		provenance.FailureCode = failure.Code
-		return provenance, failure
-	}
-	if output == nil {
-		failure := &InvocationFailure{Code: FailureOutputSchemaInvalid, Retryable: false, Cause: errors.New("structured output destination is required")}
-		provenance.FailureCode = failure.Code
-		return provenance, failure
-	}
-	decoder := json.NewDecoder(bytes.NewReader(response.Body))
-	decoder.DisallowUnknownFields()
-	if err = decoder.Decode(output); err != nil || ensureJSONEOF(decoder) != nil {
-		if err == nil {
-			err = errors.New("structured output contains trailing JSON")
-		}
-		failure := &InvocationFailure{Code: FailureOutputSchemaInvalid, Retryable: false, Cause: err}
+	if failure := applyProviderResponseAndDecode(request, response, output, &provenance); failure != nil {
 		provenance.FailureCode = failure.Code
 		return provenance, failure
 	}
 	provenance.Status = InvocationSucceeded
 	return provenance, nil
+}
+
+type structuredCallOutcome[T any] struct {
+	value      T
+	provenance InvocationProvenance
+}
+
+// InvokeStructuredWithFallback runs a structured model invocation through InvokeWithBumplessFallback
+// using invoker's timeout, breaker, and bulkhead configuration, recording FALLBACK provenance when
+// the fallback handler supplies the replacement output.
+func InvokeStructuredWithFallback[T any](
+	ctx context.Context,
+	invoker *Invoker,
+	request InvocationRequest,
+	fallback func(context.Context, error) (T, error),
+) (T, InvocationProvenance, InvocationFallbackStatus, error) {
+	var zero T
+	if invoker == nil || invoker.provider == nil {
+		failure := &InvocationFailure{Code: FailureProviderUnavailable, Retryable: false, Cause: errors.New("model invoker is not initialized")}
+		return zero, InvocationProvenance{Status: InvocationFailed, FailureCode: FailureProviderUnavailable}, InvocationFallbackStatus{}, failure
+	}
+	provenance := newInvocationProvenance(request, invoker.now().UTC())
+	if failure := validateInvocationRequest(request); failure != nil {
+		provenance.FailureCode = failure.Code
+		return zero, provenance, InvocationFallbackStatus{}, failure
+	}
+
+	providerReq := buildProviderRequest(request)
+	var wrappedFallback func(context.Context, error) (structuredCallOutcome[T], error)
+	if fallback != nil {
+		wrappedFallback = func(fbCtx context.Context, cause error) (structuredCallOutcome[T], error) {
+			fbVal, fbErr := fallback(fbCtx, cause)
+			fbProv := provenance
+			fbProv.FailureCode = failureCodeForFallbackCause(cause)
+			return structuredCallOutcome[T]{value: fbVal, provenance: fbProv}, fbErr
+		}
+	}
+
+	outcome, fbStatus, err := InvokeWithBumplessFallback(
+		ctx,
+		invoker.ResilienceConfig(),
+		func(callCtx context.Context) (structuredCallOutcome[T], error) {
+			response, invokeErr := invoker.provider.Invoke(callCtx, providerReq)
+			if invokeErr != nil {
+				return structuredCallOutcome[T]{}, &InvocationFailure{Code: FailureProviderUnavailable, Retryable: true, Cause: invokeErr}
+			}
+			var decoded T
+			localProv := provenance
+			if failure := applyProviderResponseAndDecode(request, response, &decoded, &localProv); failure != nil {
+				return structuredCallOutcome[T]{}, failure
+			}
+			localProv.Status = InvocationSucceeded
+			return structuredCallOutcome[T]{value: decoded, provenance: localProv}, nil
+		},
+		wrappedFallback,
+	)
+	if err != nil {
+		outProv := outcome.provenance
+		if outProv.ID == "" && outProv.InputDigest == "" {
+			outProv = provenance
+		}
+		outProv.Status = InvocationFailed
+		if outProv.FailureCode == "" {
+			outProv.FailureCode = failureCodeForFallbackCause(err)
+		}
+		outProv.FallbackReason = fbStatus.Reason
+		return outcome.value, outProv, fbStatus, err
+	}
+	if fbStatus.FallbackUsed {
+		fbProv := outcome.provenance
+		fbProv.Status = InvocationFallback
+		fbProv.FallbackReason = fbStatus.Reason
+		return outcome.value, fbProv, fbStatus, nil
+	}
+	return outcome.value, outcome.provenance, fbStatus, nil
+}
+
+func newInvocationProvenance(request InvocationRequest, startedAt time.Time) InvocationProvenance {
+	digest := sha256.Sum256(request.Input)
+	return InvocationProvenance{
+		ID:                   request.ID,
+		TenantID:             request.TenantID,
+		SiteID:               request.SiteID,
+		UseCase:              request.UseCase,
+		DeploymentRevisionID: request.Deployment.ID,
+		InputSnapshotID:      request.InputSnapshotID,
+		EvidenceIDs:          append([]string(nil), request.EvidenceIDs...),
+		OutputSchemaVersion:  request.Deployment.OutputSchemaVersion,
+		Status:               InvocationFailed,
+		InputDigest:          hex.EncodeToString(digest[:]),
+		CreatedAt:            startedAt,
+	}
+}
+
+func buildProviderRequest(request InvocationRequest) ProviderRequest {
+	return ProviderRequest{
+		ModelID:          request.Model.ModelID,
+		CredentialRef:    request.Model.CredentialRef,
+		Input:            append(json.RawMessage(nil), request.Input...),
+		OutputSchemaName: request.OutputSchemaName,
+	}
+}
+
+func applyProviderResponseAndDecode(request InvocationRequest, response ProviderResponse, output any, provenance *InvocationProvenance) *InvocationFailure {
+	provenance.ProviderRequestID = strings.TrimSpace(response.RequestID)
+	provenance.TokenUsage = response.TokenUsage
+	provenance.CostMicros = response.CostMicros
+	provenance.LatencyMillis = response.Latency.Milliseconds()
+	if request.BudgetMicros > 0 && response.CostMicros > request.BudgetMicros {
+		return &InvocationFailure{
+			Code:      FailureBudgetExceeded,
+			Retryable: false,
+			Cause:     fmt.Errorf("provider cost %d exceeds budget %d", response.CostMicros, request.BudgetMicros),
+		}
+	}
+	if output == nil {
+		return &InvocationFailure{
+			Code:      FailureOutputSchemaInvalid,
+			Retryable: false,
+			Cause:     errors.New("structured output destination is required"),
+		}
+	}
+	decoder := json.NewDecoder(bytes.NewReader(response.Body))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(output); err != nil || ensureJSONEOF(decoder) != nil {
+		if err == nil {
+			err = errors.New("structured output contains trailing JSON")
+		}
+		return &InvocationFailure{Code: FailureOutputSchemaInvalid, Retryable: false, Cause: err}
+	}
+	return nil
+}
+
+func failureCodeForFallbackCause(err error) string {
+	var failure *InvocationFailure
+	if errors.As(err, &failure) && failure.Code != "" {
+		return failure.Code
+	}
+	return FailureProviderUnavailable
 }
 
 func validateInvocationRequest(request InvocationRequest) *InvocationFailure {

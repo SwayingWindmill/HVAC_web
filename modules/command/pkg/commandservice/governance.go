@@ -19,15 +19,42 @@ var (
 func evaluateGovernance(request commandmodel.SubmitRequest, now time.Time) (commandmodel.RiskSnapshot, commandmodel.ApprovalPolicy, error) {
 	level, reasons, ok := commandmodel.EvaluateRiskLevel(request.Capability, request.Parameters, request.CurrentState.CurrentValue)
 	if !ok {
+		priorityTier, commandSource, err := commandmodel.ResolveCommandPriority(request)
+		preconditionMode, bypassReason := normalizedPrecondition(request)
+		if err == nil &&
+			((preconditionMode == commandmodel.PreconditionEmergencyBypass &&
+				request.CurrentState.CurrentValue == nil &&
+				commandmodel.AllowsEmergencyPreconditionBypass(request.Capability, priorityTier, commandSource, request.IdempotencyKey, bypassReason)) ||
+				(priorityTier == commandmodel.PriorityProtectionRule &&
+					commandSource == commandmodel.SourceProtectionRule &&
+					request.Capability == commandmodel.CapabilitySetChilledWaterTemperatureSetpoint &&
+					strings.HasPrefix(request.IdempotencyKey, "auto-rollback:"))) {
+			return evaluateBypassFallbackGovernance(request, now)
+		}
 		return commandmodel.RiskSnapshot{}, "", ErrCapabilityDenied
 	}
-	risk := commandmodel.RiskSnapshot{
+	return finalizeRiskGovernance(request, commandmodel.RiskSnapshot{
 		Level:        level,
 		RuleRevision: riskRuleRevision,
 		Reasons:      reasons,
 		EvaluatedAt:  now,
-	}
+	}, now)
+}
 
+func evaluateBypassFallbackGovernance(request commandmodel.SubmitRequest, now time.Time) (commandmodel.RiskSnapshot, commandmodel.ApprovalPolicy, error) {
+	profile, ok := commandmodel.CapabilityProfileFor(request.Capability)
+	if !ok {
+		return commandmodel.RiskSnapshot{}, "", ErrCapabilityDenied
+	}
+	return finalizeRiskGovernance(request, commandmodel.RiskSnapshot{
+		Level:        profile.BaseRisk,
+		RuleRevision: riskRuleRevision,
+		Reasons:      []string{"EMERGENCY_PRECONDITION_BYPASS"},
+		EvaluatedAt:  now,
+	}, now)
+}
+
+func finalizeRiskGovernance(request commandmodel.SubmitRequest, risk commandmodel.RiskSnapshot, now time.Time) (commandmodel.RiskSnapshot, commandmodel.ApprovalPolicy, error) {
 	if err := validateAuthorizationSnapshot(request, risk.Level, now); err != nil {
 		return commandmodel.RiskSnapshot{}, "", err
 	}

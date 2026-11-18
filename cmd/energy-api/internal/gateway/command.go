@@ -84,6 +84,10 @@ type preparedCommand struct {
 	capability           commandmodel.Capability
 	parameters           commandmodel.CommandParameters
 	verificationPointKey string
+	priorityTier         commandmodel.PriorityTier
+	commandSource        commandmodel.CommandSource
+	preconditionMode     commandmodel.PreconditionMode
+	bypassReason         string
 	currentState         commandCurrentState
 	grant                string
 }
@@ -98,6 +102,10 @@ type internalCommandCreate struct {
 	Capability           commandmodel.Capability        `json:"capability"`
 	Parameters           commandmodel.CommandParameters `json:"parameters"`
 	VerificationPointKey string                         `json:"verificationPointKey"`
+	PriorityTier         commandmodel.PriorityTier      `json:"priorityTier,omitempty"`
+	CommandSource        commandmodel.CommandSource     `json:"commandSource,omitempty"`
+	PreconditionMode     commandmodel.PreconditionMode  `json:"preconditionMode,omitempty"`
+	BypassReason         string                         `json:"bypassReason,omitempty"`
 	CurrentState         commandCurrentState            `json:"currentState"`
 }
 
@@ -914,6 +922,10 @@ func (h *handler) executeCommandCreate(ctx context.Context, prepared preparedCom
 		Capability:           prepared.capability,
 		Parameters:           cloneCommandParameters(prepared.parameters),
 		VerificationPointKey: prepared.verificationPointKey,
+		PriorityTier:         prepared.priorityTier,
+		CommandSource:        prepared.commandSource,
+		PreconditionMode:     prepared.preconditionMode,
+		BypassReason:         prepared.bypassReason,
 		CurrentState:         prepared.currentState,
 	})
 	if err != nil {
@@ -944,6 +956,22 @@ func (h *handler) executeCommandCreate(ctx context.Context, prepared preparedCom
 		return commandView{}, 0, "", &failure
 	}
 	if response.StatusCode != http.StatusAccepted {
+		var upstream platformapi.ProblemDetails
+		if json.Unmarshal(rawBody, &upstream) == nil && strings.TrimSpace(upstream.Code) != "" {
+			title := upstream.Title
+			if title == "" {
+				title = http.StatusText(response.StatusCode)
+			}
+			failure := commandFailure{
+				status:    response.StatusCode,
+				code:      upstream.Code,
+				title:     title,
+				detail:    upstream.Detail,
+				reason:    upstream.Reason,
+				retryable: upstream.Retryable,
+			}
+			return commandView{}, 0, "", &failure
+		}
 		failure := commandBackendFailure(response.StatusCode)
 		return commandView{}, 0, "", &failure
 	}

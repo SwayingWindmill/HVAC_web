@@ -509,3 +509,124 @@ test('auto-control lease lifecycle validates bounds, handles MFA_NOT_CONFIGURED,
   await expect(leasePanel.getByRole('button', { name: '开启自动控制租约…' })).toHaveCount(0);
   await expect(leasePanel).toContainText('只读，需运行排班管理权限才能授权');
 });
+
+test('auto-control P0 guardrails enforce 5.0 C floor, show manual backoff notice, and translate clamped monitor fields', async ({ page, gateway }) => {
+  const now = Date.now();
+  const activeLease = {
+    id: '01990000-8800-7000-8000-000000000099',
+    tenantId: principal.context.tenantId,
+    siteId: SITE_ID,
+    status: 'ACTIVE',
+    armedBy: principal.principalId,
+    armedAt: new Date(now - 600_000).toISOString(),
+    expiresAt: new Date(now + 4 * 3_600_000).toISOString(),
+    allowedCapabilities: ['SET_CHILLED_WATER_TEMPERATURE_SETPOINT'],
+    maxSetpointStepC: 1.0,
+    supplyTempMinC: 5.0,
+    supplyTempMaxC: 12.0,
+    zoneTempMaxC: 26.0,
+    minRunningChillers: 1,
+    maxCommandsPerHour: 2,
+    deadbandC: 0.3,
+    manualBackoffUntil: new Date(now + 30 * 60_000).toISOString(),
+    manualBackoffReason: 'manual_override_backoff',
+    revision: 1,
+    createdAt: new Date(now - 600_000).toISOString(),
+    updatedAt: new Date(now - 60_000).toISOString(),
+  };
+  gateway.autoControlLeaseState = {
+    tenantId: principal.context.tenantId,
+    siteId: SITE_ID,
+    confirmationMode: 'AUTO_WITH_LEASE',
+    activeLease,
+    latestLease: activeLease,
+  };
+  gateway.optimizationExecutionMonitors = [
+    {
+      id: '01990000-8800-7000-8000-000000000301',
+      tenantId: principal.context.tenantId,
+      siteId: SITE_ID,
+      leaseId: activeLease.id,
+      recommendationId: '01a12bdc-97d7-7e50-bc97-f14cb86800bc',
+      commandIntentId: '01990000-8800-7000-8000-000000000401',
+      deviceId: '018f3e00-4000-7000-8000-000000000001',
+      targetCapability: 'SET_CHILLED_WATER_TEMPERATURE_SETPOINT',
+      baselineSupplyTempC: 6.0,
+      appliedSupplyTempC: 5.0,
+      restoreSupplyTempC: 6.0,
+      supplyTempMinC: 5.0,
+      zoneTempMaxC: 26.0,
+      supplyTempMaxC: 12.0,
+      rawRecommendedValue: 4.5,
+      clampedValue: 5.0,
+      guardrailVerdict: 'CLAMPED',
+      startedAt: new Date(now - 10 * 60_000).toISOString(),
+      windowEndsAt: new Date(now + 20 * 60_000).toISOString(),
+      status: 'OBSERVING',
+      createdAt: new Date(now - 10 * 60_000).toISOString(),
+      updatedAt: new Date(now - 60_000).toISOString(),
+    },
+    {
+      id: '01990000-8800-7000-8000-000000000302',
+      tenantId: principal.context.tenantId,
+      siteId: SITE_ID,
+      leaseId: activeLease.id,
+      recommendationId: '01a12bdc-97d7-7e50-bc97-f14cb86800bd',
+      commandIntentId: null,
+      deviceId: '018f3e00-4000-7000-8000-000000000001',
+      targetCapability: 'SET_CHILLED_WATER_TEMPERATURE_SETPOINT',
+      baselineSupplyTempC: 6.5,
+      appliedSupplyTempC: 5.5,
+      restoreSupplyTempC: 6.5,
+      supplyTempMinC: 5.0,
+      zoneTempMaxC: 26.0,
+      supplyTempMaxC: 12.0,
+      guardrailVerdict: 'VETOED',
+      startedAt: new Date(now - 25 * 60_000).toISOString(),
+      windowEndsAt: new Date(now + 5 * 60_000).toISOString(),
+      status: 'MANUAL_OVERRIDE',
+      tripReason: 'cabinet_setpoint_manual_override',
+      createdAt: new Date(now - 25 * 60_000).toISOString(),
+      updatedAt: new Date(now - 20 * 60_000).toISOString(),
+    },
+  ];
+
+  await page.goto(`/energy-analysis/optimization?site=${SITE_ID}`);
+
+  const leasePanel = page.getByRole('region', { name: '自动控制租约' });
+  const backoffStatus = leasePanel.getByRole('status').filter({ hasText: 'AI 自动调节退避保护中' });
+  await expect(backoffStatus).toBeVisible();
+  await expect(backoffStatus).toContainText('检测到人工干预设定值，AI 自动调节已进入退避保护窗口');
+  await expect(backoffStatus).toContainText('退避至');
+  await expect(backoffStatus).not.toContainText('manual_override_backoff');
+  await expect(leasePanel).toContainText('调节死区 0.3 °C');
+
+  const monitorsTable = page.getByRole('table', { name: '30 分钟执行监护' });
+  await expect(monitorsTable).toContainText('供水 5.0 至 12.0 °C');
+  await expect(monitorsTable).toContainText('原建议 4.5 °C，限幅为 5.0 °C');
+  await expect(monitorsTable).toContainText('护栏：已按安全边界限幅');
+  await expect(monitorsTable).toContainText('人工接管退出');
+  await expect(monitorsTable).toContainText('无下行指令');
+  await expect(monitorsTable).not.toContainText('CLAMPED');
+  await expect(monitorsTable).not.toContainText('VETOED');
+
+  await leasePanel.getByRole('button', { name: '调整租约…' }).click();
+  const dialog = page.getByRole('dialog', { name: '调整自动控制租约边界' });
+  const deadbandInput = dialog.getByLabel('调节死区');
+  await expect(deadbandInput).toHaveValue('0.3');
+  await deadbandInput.fill('0.35');
+  const minInput = dialog.getByLabel('供水温度下限');
+  await expect(minInput).toHaveAttribute('min', '5');
+  await expect(minInput).toHaveAttribute('placeholder', '5.0');
+  await minInput.fill('4.5');
+  await minInput.blur();
+  await expect(dialog).toContainText('供水温度下限需在 5.0 至 20.0 °C 之间');
+
+  await minInput.fill('5.0');
+  await dialog.getByLabel('原因').fill('验证 5.0 °C 防冻下限可保存');
+  await dialog.getByRole('textbox', { name: '动态口令' }).fill('654321');
+  await dialog.getByRole('button', { name: '确认更新租约' }).click();
+  await expect(page.getByText('已更新限时自动控制租约')).toBeVisible();
+  await expect(leasePanel).toContainText('5.0 至 12.0 °C');
+  await expect(leasePanel).toContainText('调节死区 0.35 °C');
+});

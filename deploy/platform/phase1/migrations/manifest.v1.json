@@ -126,7 +126,8 @@
         "infra/connectivity/postgres/init/uplink-quarantine-diagnostics.sql",
         "infra/registry/postgres/init/alarm-suppress-unassign-capabilities.sql",
         "services/notification-service/migrations/alarm-delivery-suppression-cooldown.sql",
-        "infra/connectivity/postgres/init/gateway-shadow-drivers-and-autonomy.sql"
+        "infra/connectivity/postgres/init/gateway-shadow-drivers-and-autonomy.sql",
+        "infra/registry/postgres/init/optimization-safety-guardrails.sql"
       ]
     },
     {
