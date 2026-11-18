@@ -84,6 +84,47 @@ type PostgresStore struct {
 	twinLoader planttwin.Loader
 }
 
+// ParsePostgresPoolConfig builds a pgxpool configuration with bounded pool sizing and keep-alive health checks.
+func ParsePostgresPoolConfig(dsn string) (*pgxpool.Config, error) {
+	if strings.TrimSpace(dsn) == "" {
+		return nil, errors.New("optimization postgres dsn is required")
+	}
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("parse optimization postgres dsn: %w", err)
+	}
+	cfg.MaxConns = 16
+	cfg.MinConns = 1
+	cfg.MaxConnLifetime = 30 * time.Minute
+	cfg.MaxConnIdleTime = 5 * time.Minute
+	cfg.HealthCheckPeriod = 30 * time.Second
+	return cfg, nil
+}
+
+// OpenPostgres connects to PostgreSQL using bounded pool defaults and verifies connectivity immediately.
+func OpenPostgres(ctx context.Context, dsn string) (*PostgresStore, error) {
+	cfg, err := ParsePostgresPoolConfig(dsn)
+	if err != nil {
+		return nil, err
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("open optimization postgres pool: %w", err)
+	}
+	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := pool.Ping(pingCtx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("ping optimization postgres pool: %w", err)
+	}
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		pool.Close()
+		return nil, err
+	}
+	return store, nil
+}
+
 func NewPostgresStore(pool *pgxpool.Pool) (*PostgresStore, error) {
 	if pool == nil {
 		return nil, errors.New("optimization postgres pool is required")
@@ -93,6 +134,29 @@ func NewPostgresStore(pool *pgxpool.Pool) (*PostgresStore, error) {
 		return nil, err
 	}
 	return &PostgresStore{pool: pool, twinLoader: twinLoader}, nil
+}
+
+// Close closes the underlying PostgreSQL pool if present.
+func (store *PostgresStore) Close() {
+	if store != nil && store.pool != nil {
+		store.pool.Close()
+	}
+}
+
+// Ping verifies PostgreSQL connectivity for readiness probes.
+func (store *PostgresStore) Ping(ctx context.Context) error {
+	if store == nil || store.pool == nil {
+		return errors.New("optimization postgres store is not initialized")
+	}
+	return store.pool.Ping(ctx)
+}
+
+// Pool exposes the underlying pgx pool for companion stores sharing the service pool.
+func (store *PostgresStore) Pool() *pgxpool.Pool {
+	if store == nil {
+		return nil
+	}
+	return store.pool
 }
 
 func (store *PostgresStore) LoadSiteTwin(ctx context.Context, scope planttwin.SiteScope, at time.Time) (planttwin.SiteTwin, error) {

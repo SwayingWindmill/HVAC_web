@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -51,11 +52,58 @@ type PublicationStore interface {
 
 type PostgresStore struct{ pool *pgxpool.Pool }
 
+// ParsePostgresPoolConfig parses dsn and applies explicit pgxpool connection bounds.
+func ParsePostgresPoolConfig(dsn string) (*pgxpool.Config, error) {
+	if strings.TrimSpace(dsn) == "" {
+		return nil, errors.New("forecast postgres DSN is required")
+	}
+	config, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("parse forecast postgres DSN: %w", err)
+	}
+	config.MaxConns = 16
+	config.MinConns = 1
+	config.MaxConnLifetime = 30 * time.Minute
+	config.MaxConnIdleTime = 5 * time.Minute
+	config.HealthCheckPeriod = 30 * time.Second
+	return config, nil
+}
+
+// OpenPostgres opens a pooled PostgreSQL store and verifies initial connectivity.
+func OpenPostgres(ctx context.Context, dsn string) (*PostgresStore, error) {
+	config, err := ParsePostgresPoolConfig(dsn)
+	if err != nil {
+		return nil, err
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		return nil, fmt.Errorf("open forecast postgres pool: %w", err)
+	}
+	if err = pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("ping forecast postgres: %w", err)
+	}
+	return NewPostgresStore(pool)
+}
+
 func NewPostgresStore(pool *pgxpool.Pool) (*PostgresStore, error) {
 	if pool == nil {
 		return nil, errors.New("forecast postgres pool is required")
 	}
 	return &PostgresStore{pool: pool}, nil
+}
+
+func (store *PostgresStore) Close() {
+	if store != nil && store.pool != nil {
+		store.pool.Close()
+	}
+}
+
+func (store *PostgresStore) Ping(ctx context.Context) error {
+	if store == nil || store.pool == nil {
+		return errors.New("forecast postgres store is unavailable")
+	}
+	return store.pool.Ping(ctx)
 }
 
 func forecastScope(ctx context.Context, tx pgx.Tx, tenantID, siteID string) error {

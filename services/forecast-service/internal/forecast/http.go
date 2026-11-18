@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
 // Forecast serves only the Gateway, with a context it signed for the Site (#612). Before, any
@@ -18,6 +19,7 @@ const (
 	ReadAction             = "forecast:read"
 	Audience               = "forecast-service"
 	DefaultGatewaySPIFFEID = "spiffe://hvac.local/platform-gateway"
+	diagnosticsServiceName = "forecast-service"
 )
 
 type AuthConfig struct {
@@ -53,15 +55,39 @@ func NewHTTPHandler(service *Service, auth AuthConfig) (http.Handler, error) {
 
 // HealthHandler answers the container health check on the plain diagnostics port.
 func HealthHandler() http.Handler {
+	return NewDiagnosticsHandler(nil)
+}
+
+// NewDiagnosticsHandler serves /healthz, /health/startup, /health/live, /health/ready,
+// /diagnostics, and /metrics, preserving hvac_service_up{service="forecast-service"} 1.
+func NewDiagnosticsHandler(runtime *observability.Runtime) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		_, _ = writer.Write([]byte(`{"status":"ok"}`))
 	})
-	mux.HandleFunc("GET /metrics", func(writer http.ResponseWriter, _ *http.Request) {
-		writer.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-		_, _ = writer.Write([]byte("# HELP hvac_service_up 1 when this diagnostics server is serving.\n# TYPE hvac_service_up gauge\nhvac_service_up{service=\"forecast-service\"} 1\n"))
-	})
+	if runtime == nil {
+		registry := observability.NewRegistry()
+		_ = registry.SetGauge("hvac_service_up", "1 when this diagnostics server is serving.", map[string]string{"service": diagnosticsServiceName}, 1)
+		mux.Handle("GET /metrics", registry.Handler())
+		mux.HandleFunc("GET /health/startup", func(writer http.ResponseWriter, _ *http.Request) {
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`{"status":"started","service":"` + diagnosticsServiceName + `"}`))
+		})
+		mux.HandleFunc("GET /health/live", func(writer http.ResponseWriter, _ *http.Request) {
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`{"status":"live","service":"` + diagnosticsServiceName + `"}`))
+		})
+		mux.HandleFunc("GET /health/ready", func(writer http.ResponseWriter, _ *http.Request) {
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`{"status":"ready","service":"` + diagnosticsServiceName + `"}`))
+		})
+		return mux
+	}
+	if runtime.Metrics != nil {
+		_ = runtime.Metrics.SetGauge("hvac_service_up", "1 when this diagnostics server is serving.", map[string]string{"service": diagnosticsServiceName}, 1)
+	}
+	mux.Handle("/", runtime.DiagnosticsHandler())
 	return mux
 }
 

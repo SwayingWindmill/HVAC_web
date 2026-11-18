@@ -18,20 +18,14 @@ type ClickHouseStore struct {
 	client         *http.Client
 }
 
-func NewClickHouseStore(baseURL, user, password string, client *http.Client) (*ClickHouseStore, error) {
-	u, err := url.Parse(baseURL)
-	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-		return nil, errors.New("settlement ClickHouse URL must be absolute http/https")
-	}
-	if client == nil {
-		client = newDefaultSettlementClickHouseHTTPClient(15 * time.Second)
-	}
-	return &ClickHouseStore{base: u, user: user, password: password, client: client}, nil
-}
+const maximumMetricFactsResponseBytes = int64(8 << 20)
 
-func newDefaultSettlementClickHouseHTTPClient(timeout time.Duration) *http.Client {
+func newDefaultClickHouseHTTPClient(timeout time.Duration) *http.Client {
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
 	var transport *http.Transport
-	if base, ok := http.DefaultTransport.(*http.Transport); ok && base != nil {
+	if base, ok := http.DefaultTransport.(*http.Transport); ok {
 		transport = base.Clone()
 	} else {
 		transport = &http.Transport{}
@@ -40,8 +34,68 @@ func newDefaultSettlementClickHouseHTTPClient(timeout time.Duration) *http.Clien
 	transport.MaxIdleConnsPerHost = 32
 	transport.IdleConnTimeout = 90 * time.Second
 	transport.TLSHandshakeTimeout = 10 * time.Second
-	transport.ExpectContinueTimeout = time.Second
-	return &http.Client{Timeout: timeout, Transport: transport}
+	transport.ExpectContinueTimeout = 1 * time.Second
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
+
+func drainAndClose(body io.ReadCloser) {
+	if body == nil {
+		return
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(body, 64<<10))
+	_ = body.Close()
+}
+
+func NewClickHouseStore(baseURL, user, password string, client *http.Client) (*ClickHouseStore, error) {
+	u, err := url.Parse(baseURL)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return nil, errors.New("settlement ClickHouse URL must be absolute http/https")
+	}
+	if client == nil {
+		client = newDefaultClickHouseHTTPClient(15 * time.Second)
+	}
+	return &ClickHouseStore{base: u, user: user, password: password, client: client}, nil
+}
+
+// Ping verifies ClickHouse connectivity with a lightweight SELECT 1 query.
+func (s *ClickHouseStore) Ping(ctx context.Context) error {
+	if s == nil || s.client == nil || s.base == nil {
+		return errors.New("settlement ClickHouse store is not initialized")
+	}
+	endpoint := *s.base
+	query := endpoint.Query()
+	query.Set("query", "SELECT 1")
+	endpoint.RawQuery = query.Encode()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return fmt.Errorf("build settlement ClickHouse ping request: %w", err)
+	}
+	if s.user != "" {
+		request.SetBasicAuth(s.user, s.password)
+	}
+	response, err := s.client.Do(request)
+	if err != nil {
+		return fmt.Errorf("ping settlement ClickHouse: %w", err)
+	}
+	defer drainAndClose(response.Body)
+	if response.StatusCode/100 != 2 {
+		detail, _ := io.ReadAll(io.LimitReader(response.Body, 2048))
+		return fmt.Errorf("ping settlement ClickHouse returned %d: %s", response.StatusCode, strings.TrimSpace(string(detail)))
+	}
+	return nil
+}
+
+// CloseIdleConnections releases idle HTTP keep-alive connections held by this store.
+func (s *ClickHouseStore) CloseIdleConnections() {
+	if s != nil && s.client != nil {
+		s.client.CloseIdleConnections()
+	}
 }
 
 func sqlQuote(value string) string { return "'" + strings.ReplaceAll(value, "'", "''") + "'" }
@@ -82,11 +136,13 @@ FORMAT TabSeparated`, sqlQuote(period.TenantID), sqlQuote(period.SiteID), string
 	if err != nil {
 		return nil, err
 	}
-	defer response.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(response.Body, 8<<20))
-	_, _ = io.Copy(io.Discard, response.Body)
+	defer drainAndClose(response.Body)
+	body, err := io.ReadAll(io.LimitReader(response.Body, maximumMetricFactsResponseBytes+1))
 	if err != nil {
 		return nil, err
+	}
+	if int64(len(body)) > maximumMetricFactsResponseBytes {
+		return nil, fmt.Errorf("settlement ClickHouse response exceeds %d MiB", maximumMetricFactsResponseBytes>>20)
 	}
 	if response.StatusCode/100 != 2 {
 		return nil, fmt.Errorf("settlement ClickHouse query returned %d: %s", response.StatusCode, strings.TrimSpace(string(body)))

@@ -8,8 +8,10 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"io"
 	"log/slog"
 	"math/big"
 	"net"
@@ -375,4 +377,316 @@ func TestNewTelemetryClientsUsesEnvAndMTLS(t *testing.T) {
 	if _, _, err := newTelemetryClients(certPath, keyPath, caPath); err == nil {
 		t.Fatal("expected invalid OPTIMIZATION_TELEMETRY_URL error")
 	}
+}
+
+type stubOptimizationQueue struct {
+	mu              sync.Mutex
+	renewFn         func(context.Context, schedulerjob.Job, time.Duration, time.Time) (bool, error)
+	failCalls       int
+	completeCalls   int
+	lastFailCode    string
+	lastFailRetry   bool
+	lastFailCtxErr  error
+	lastCompleteErr error
+}
+
+func (q *stubOptimizationQueue) Claim(context.Context, string, int, time.Duration, time.Time) ([]schedulerjob.Job, error) {
+	return nil, nil
+}
+
+func (q *stubOptimizationQueue) Start(context.Context, schedulerjob.Job, time.Duration, time.Time) (bool, error) {
+	return true, nil
+}
+
+func (q *stubOptimizationQueue) Renew(ctx context.Context, job schedulerjob.Job, leaseDuration time.Duration, now time.Time) (bool, error) {
+	if q.renewFn != nil {
+		return q.renewFn(ctx, job, leaseDuration, now)
+	}
+	return false, nil
+}
+
+func (q *stubOptimizationQueue) Complete(ctx context.Context, _ schedulerjob.Job, _ any, _ time.Time) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.completeCalls++
+	q.lastCompleteErr = ctx.Err()
+	return nil
+}
+
+func (q *stubOptimizationQueue) Fail(ctx context.Context, _ schedulerjob.Job, errorCode string, _ error, retryable bool, _ time.Time) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.failCalls++
+	q.lastFailCode = errorCode
+	q.lastFailRetry = retryable
+	q.lastFailCtxErr = ctx.Err()
+	return nil
+}
+
+type stubOptimizationInputStore struct {
+	stubSiteCycleLocker
+	loadFn func(context.Context, string, string, optimization.SchedulerOptimizationReference) (optimization.Request, error)
+}
+
+func (s *stubOptimizationInputStore) LoadOptimizationRequest(ctx context.Context, tenantID, siteID string, ref optimization.SchedulerOptimizationReference) (optimization.Request, error) {
+	if s.loadFn != nil {
+		return s.loadFn(ctx, tenantID, siteID, ref)
+	}
+	return optimization.Request{OptimizationRunID: ref.OptimizationRunID}, nil
+}
+
+type stubOptimizationRunner struct {
+	fn func(context.Context, optimization.Request) (optimization.Recommendation, error)
+}
+
+func (r stubOptimizationRunner) Optimize(ctx context.Context, req optimization.Request) (optimization.Recommendation, error) {
+	return r.fn(ctx, req)
+}
+
+type stubOptimizationPreparer struct {
+	fn func(context.Context, optimization.PreparationRequest) (optimization.PreparedOptimization, error)
+}
+
+func (p stubOptimizationPreparer) Prepare(ctx context.Context, req optimization.PreparationRequest) (optimization.PreparedOptimization, error) {
+	return p.fn(ctx, req)
+}
+
+type stubAutoDispatcher struct {
+	fn func(context.Context, optimization.Recommendation, time.Time) (optimization.AutoDispatchOutcome, error)
+}
+
+func (d stubAutoDispatcher) TryDispatch(ctx context.Context, rec optimization.Recommendation, now time.Time) (optimization.AutoDispatchOutcome, error) {
+	return d.fn(ctx, rec, now)
+}
+
+func validOptimizationJob(timeoutSeconds int) schedulerjob.Job {
+	const (
+		jobID      = "01990000-1111-7000-8000-000000000001"
+		tenantID   = "01990000-3000-7000-8000-000000000001"
+		siteID     = "01990000-5000-7000-8000-000000000001"
+		snapshotID = "01990000-2222-7000-8000-000000000001"
+	)
+	payload, _ := json.Marshal(optimization.SchedulerOptimizationReference{
+		OptimizationRunID: jobID,
+		InputSnapshotID:   snapshotID,
+	})
+	return schedulerjob.Job{
+		JobID:          jobID,
+		JobType:        optimization.RunJobType,
+		TenantID:       tenantID,
+		SiteID:         siteID,
+		Payload:        payload,
+		TimeoutSeconds: timeoutSeconds,
+		AttemptNo:      1,
+		MaxAttempts:    3,
+	}
+}
+
+func TestExecuteOptimizationJobDecouplesSIGTERMAndBoundsDispatchGrace(t *testing.T) {
+	t.Run("SIGTERM during Optimize marks retryable=true and never operator canceled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		queue := &stubOptimizationQueue{}
+		store := &stubOptimizationInputStore{}
+		runner := stubOptimizationRunner{fn: func(jobCtx context.Context, _ optimization.Request) (optimization.Recommendation, error) {
+			cancel()
+			<-jobCtx.Done()
+			return optimization.Recommendation{}, jobCtx.Err()
+		}}
+		dispatcher := stubAutoDispatcher{fn: func(context.Context, optimization.Recommendation, time.Time) (optimization.AutoDispatchOutcome, error) {
+			t.Fatal("TryDispatch should not run when Optimize failed")
+			return optimization.AutoDispatchOutcome{}, nil
+		}}
+
+		executeOptimizationJob(ctx, queue, store, runner, dispatcher, validOptimizationJob(30), time.Minute, 10*time.Millisecond, nil, nil)
+
+		if queue.failCalls != 1 {
+			t.Fatalf("failCalls = %d, want 1", queue.failCalls)
+		}
+		if queue.lastFailCode == "OPTIMIZATION_CANCELED_BY_OPERATOR" {
+			t.Fatal("SIGTERM must not mark OPTIMIZATION_CANCELED_BY_OPERATOR")
+		}
+		if !queue.lastFailRetry {
+			t.Fatal("SIGTERM interruption must mark retryable=true")
+		}
+		if queue.lastFailCtxErr != nil {
+			t.Fatalf("finalization context must use WithoutCancel, got err=%v", queue.lastFailCtxErr)
+		}
+	})
+
+	t.Run("operator cancelRequested marks OPTIMIZATION_CANCELED_BY_OPERATOR and retryable=false", func(t *testing.T) {
+		queue := &stubOptimizationQueue{
+			renewFn: func(context.Context, schedulerjob.Job, time.Duration, time.Time) (bool, error) {
+				return true, nil
+			},
+		}
+		store := &stubOptimizationInputStore{}
+		runner := stubOptimizationRunner{fn: func(jobCtx context.Context, _ optimization.Request) (optimization.Recommendation, error) {
+			<-jobCtx.Done()
+			return optimization.Recommendation{}, jobCtx.Err()
+		}}
+		dispatcher := stubAutoDispatcher{fn: func(context.Context, optimization.Recommendation, time.Time) (optimization.AutoDispatchOutcome, error) {
+			return optimization.AutoDispatchOutcome{}, nil
+		}}
+
+		executeOptimizationJob(context.Background(), queue, store, runner, dispatcher, validOptimizationJob(30), time.Minute, 5*time.Millisecond, nil, nil)
+
+		if queue.failCalls != 1 {
+			t.Fatalf("failCalls = %d, want 1", queue.failCalls)
+		}
+		if queue.lastFailCode != "OPTIMIZATION_CANCELED_BY_OPERATOR" {
+			t.Fatalf("errorCode = %q, want OPTIMIZATION_CANCELED_BY_OPERATOR", queue.lastFailCode)
+		}
+		if queue.lastFailRetry {
+			t.Fatal("operator cancellation must mark retryable=false")
+		}
+	})
+
+	t.Run("transient lease renew failure keeps retryable=true", func(t *testing.T) {
+		queue := &stubOptimizationQueue{
+			renewFn: func(context.Context, schedulerjob.Job, time.Duration, time.Time) (bool, error) {
+				return false, errors.New("temporary pg blip")
+			},
+		}
+		store := &stubOptimizationInputStore{}
+		runner := stubOptimizationRunner{fn: func(jobCtx context.Context, _ optimization.Request) (optimization.Recommendation, error) {
+			<-jobCtx.Done()
+			return optimization.Recommendation{}, jobCtx.Err()
+		}}
+		dispatcher := stubAutoDispatcher{fn: func(context.Context, optimization.Recommendation, time.Time) (optimization.AutoDispatchOutcome, error) {
+			return optimization.AutoDispatchOutcome{}, nil
+		}}
+
+		executeOptimizationJob(context.Background(), queue, store, runner, dispatcher, validOptimizationJob(30), time.Minute, 5*time.Millisecond, nil, nil)
+
+		if queue.failCalls != 1 || !queue.lastFailRetry || queue.lastFailCode == "OPTIMIZATION_CANCELED_BY_OPERATOR" {
+			t.Fatalf("unexpected fail state: calls=%d retry=%t code=%q", queue.failCalls, queue.lastFailRetry, queue.lastFailCode)
+		}
+	})
+
+	t.Run("SIGTERM after Optimize succeeds finishes TryDispatch and Complete with WithoutCancel", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		queue := &stubOptimizationQueue{}
+		store := &stubOptimizationInputStore{}
+		runner := stubOptimizationRunner{fn: func(context.Context, optimization.Request) (optimization.Recommendation, error) {
+			cancel()
+			return optimization.Recommendation{ID: "01990000-4444-7000-8000-000000000001"}, nil
+		}}
+
+		var dispatchCtxErr error
+		var hasDeadline bool
+		var remaining time.Duration
+		dispatcher := stubAutoDispatcher{fn: func(dCtx context.Context, _ optimization.Recommendation, _ time.Time) (optimization.AutoDispatchOutcome, error) {
+			dispatchCtxErr = dCtx.Err()
+			var deadline time.Time
+			deadline, hasDeadline = dCtx.Deadline()
+			remaining = time.Until(deadline)
+			return optimization.AutoDispatchOutcome{Dispatched: true}, nil
+		}}
+
+		executeOptimizationJob(ctx, queue, store, runner, dispatcher, validOptimizationJob(30), time.Minute, 10*time.Millisecond, nil, nil)
+
+		if dispatchCtxErr != nil {
+			t.Fatalf("TryDispatch context was already canceled on SIGTERM: %v", dispatchCtxErr)
+		}
+		if !hasDeadline || remaining <= 0 || remaining > 6*time.Second {
+			t.Fatalf("TryDispatch deadline should be bounded ~5s window, got hasDeadline=%v remaining=%s", hasDeadline, remaining)
+		}
+		if queue.completeCalls != 1 || queue.lastCompleteErr != nil {
+			t.Fatalf("expected queue.Complete to succeed after SIGTERM, completeCalls=%d completeErr=%v", queue.completeCalls, queue.lastCompleteErr)
+		}
+	})
+}
+
+func TestDispatchContextWithShutdownGraceBoundsMidDispatchSIGTERM(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	dispatchCtx, dispatchCancel := dispatchContextWithShutdownGrace(ctx, 20*time.Second, 60*time.Millisecond)
+	defer dispatchCancel()
+
+	cancel()
+	select {
+	case <-dispatchCtx.Done():
+		t.Fatal("dispatchCtx should remain alive during shutdown grace window")
+	case <-time.After(15 * time.Millisecond):
+	}
+	select {
+	case <-dispatchCtx.Done():
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("dispatchCtx did not expire within bounded shutdown grace window")
+	}
+}
+
+func TestPrepareScheduledOptimizationSIGTERMIsRetryable(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	queue := &stubOptimizationQueue{}
+	preparer := stubOptimizationPreparer{fn: func(prepCtx context.Context, _ optimization.PreparationRequest) (optimization.PreparedOptimization, error) {
+		cancel()
+		<-prepCtx.Done()
+		return optimization.PreparedOptimization{}, prepCtx.Err()
+	}}
+	job := schedulerjob.Job{
+		JobID:          "01990000-1111-7000-8000-000000000003",
+		JobType:        optimization.RunJobType,
+		TriggerType:    "SCHEDULE",
+		ScheduleID:     "01990000-6666-7000-8000-000000000001",
+		TenantID:       "01990000-3000-7000-8000-000000000001",
+		SiteID:         "01990000-5000-7000-8000-000000000001",
+		TimeoutSeconds: 30,
+	}
+
+	prepareScheduledOptimization(ctx, queue, preparer, job, time.Minute, nil)
+	if queue.failCalls != 1 || !queue.lastFailRetry {
+		t.Fatalf("expected retryable=true when scheduled preparation interrupted by SIGTERM, got failCalls=%d retry=%t", queue.failCalls, queue.lastFailRetry)
+	}
+}
+
+func TestStartServerShutdownSignalsDoneAfterInFlightHTTP(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	srv := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			close(started)
+			<-release
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("ok"))
+		}),
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_ = srv.Serve(ln)
+	}()
+
+	reqErrCh := make(chan error, 1)
+	go func() {
+		resp, reqErr := http.Get("http://" + ln.Addr().String() + "/slow")
+		if reqErr == nil {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+		}
+		reqErrCh <- reqErr
+	}()
+	<-started
+
+	shutdownDone, shutdownErr := startServerShutdown(2*time.Second, nil, nil, "optimization.shutdown", srv)
+	select {
+	case <-shutdownDone:
+		t.Fatal("shutdownDone closed before in-flight HTTP request completed")
+	case <-time.After(30 * time.Millisecond):
+	}
+	close(release)
+	<-shutdownDone
+	if err := shutdownErr(); err != nil {
+		t.Fatalf("shutdown returned error: %v", err)
+	}
+	if err := <-reqErrCh; err != nil {
+		t.Fatalf("in-flight HTTP request failed: %v", err)
+	}
+	waitBackground(&wg, time.Second, nil)
 }

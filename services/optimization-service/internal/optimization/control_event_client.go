@@ -112,12 +112,7 @@ func NewHTTPControlEventPublisher(config ControlEventClientConfig) (*HTTPControl
 				return nil, fmt.Errorf("create alarm control-event mTLS client: %w", err)
 			}
 		} else {
-			httpClient = &http.Client{
-				Timeout: timeout,
-				CheckRedirect: func(*http.Request, []*http.Request) error {
-					return http.ErrUseLastResponse
-				},
-			}
+			httpClient = newPooledHTTPClient(timeout, true)
 		}
 	}
 
@@ -169,7 +164,7 @@ func (publisher *HTTPControlEventPublisher) PublishControlEvent(ctx context.Cont
 	if err != nil {
 		return fmt.Errorf("post control event to alarm-service: %w", err)
 	}
-	defer resp.Body.Close()
+	defer drainAndClose(resp.Body)
 	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	if readErr != nil {
 		return fmt.Errorf("read control event response: %w", readErr)
