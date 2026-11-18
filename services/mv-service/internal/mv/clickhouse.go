@@ -37,9 +37,24 @@ func NewClickHouseHours(baseURL, username, password string, client *http.Client)
 		return nil, errors.New("M&V ClickHouse URL must be an HTTP(S) origin")
 	}
 	if client == nil {
-		client = &http.Client{Timeout: 15 * time.Second}
+		client = newDefaultMVClickHouseHTTPClient(15 * time.Second)
 	}
 	return &ClickHouseHours{baseURL: parsed, username: strings.TrimSpace(username), password: password, client: client}, nil
+}
+
+func newDefaultMVClickHouseHTTPClient(timeout time.Duration) *http.Client {
+	var transport *http.Transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok && base != nil {
+		transport = base.Clone()
+	} else {
+		transport = &http.Transport{}
+	}
+	transport.MaxIdleConns = 64
+	transport.MaxIdleConnsPerHost = 32
+	transport.IdleConnTimeout = 90 * time.Second
+	transport.TLSHandshakeTimeout = 10 * time.Second
+	transport.ExpectContinueTimeout = time.Second
+	return &http.Client{Timeout: timeout, Transport: transport}
 }
 
 // series is one hourly Metric a sample is made of: what it is to the sample, and whose it is.
@@ -133,6 +148,7 @@ func (reader *ClickHouseHours) query(ctx context.Context, sql string) ([]byte, e
 	}
 	defer response.Body.Close()
 	payload, err := io.ReadAll(io.LimitReader(response.Body, maximumHourlyBytes+1))
+	_, _ = io.Copy(io.Discard, response.Body)
 	if err != nil {
 		return nil, err
 	}

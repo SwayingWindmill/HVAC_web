@@ -3,6 +3,7 @@ package optimization
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,28 +27,51 @@ type ClickHouseSink struct {
 	client   *http.Client
 }
 
+func newDefaultOptimizationClickHouseHTTPClient(timeout time.Duration) *http.Client {
+	var transport *http.Transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok && base != nil {
+		transport = base.Clone()
+	} else {
+		transport = &http.Transport{}
+	}
+	transport.MaxIdleConns = 64
+	transport.MaxIdleConnsPerHost = 32
+	transport.IdleConnTimeout = 90 * time.Second
+	transport.TLSHandshakeTimeout = 10 * time.Second
+	transport.ExpectContinueTimeout = time.Second
+	return &http.Client{Timeout: timeout, Transport: transport}
+}
+
 func NewClickHouseSink(baseURL, username, password string, client *http.Client) (*ClickHouseSink, error) {
 	parsed, err := url.Parse(strings.TrimSpace(baseURL))
 	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 		return nil, errors.New("optimization ClickHouse URL must be absolute http/https")
 	}
 	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
+		client = newDefaultOptimizationClickHouseHTTPClient(10 * time.Second)
 	}
 	return &ClickHouseSink{baseURL: parsed, username: username, password: password, client: client}, nil
 }
 
 func (sink *ClickHouseSink) InsertEvaluation(ctx context.Context, evaluation Evaluation) error {
+	evaluation.GeneratedAt = evaluation.GeneratedAt.UTC()
 	var body bytes.Buffer
-	if err := json.NewEncoder(&body).Encode(evaluation); err != nil {
+	encoder := json.NewEncoder(&body)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(evaluation); err != nil {
 		return err
 	}
+	token := fmt.Sprintf("%x", sha256.Sum256(body.Bytes()))
 	endpoint := *sink.baseURL
 	query := endpoint.Query()
 	query.Set("query", "INSERT INTO analytics.optimization_evaluations FORMAT JSONEachRow")
 	query.Set("date_time_input_format", "best_effort")
 	query.Set("async_insert", "1")
 	query.Set("wait_for_async_insert", "1")
+	query.Set("async_insert_deduplicate", "1")
+	query.Set("insert_deduplicate", "1")
+	query.Set("insert_deduplication_token", token)
+	query.Set("wait_end_of_query", "1")
 	endpoint.RawQuery = query.Encode()
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), &body)
 	if err != nil {
@@ -64,8 +88,10 @@ func (sink *ClickHouseSink) InsertEvaluation(ctx context.Context, evaluation Eva
 	defer response.Body.Close()
 	if response.StatusCode/100 != 2 {
 		detail, _ := io.ReadAll(io.LimitReader(response.Body, 2048))
+		_, _ = io.Copy(io.Discard, response.Body)
 		return fmt.Errorf("insert optimization evaluation returned %d: %s", response.StatusCode, strings.TrimSpace(string(detail)))
 	}
+	_, _ = io.Copy(io.Discard, response.Body)
 	return nil
 }
 
@@ -118,6 +144,7 @@ func (sink *ClickHouseSink) HasEvaluation(ctx context.Context, evaluation Evalua
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(response.Body, 4096))
+	_, _ = io.Copy(io.Discard, response.Body)
 	if err != nil {
 		return false, err
 	}

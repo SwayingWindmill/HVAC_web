@@ -27,7 +27,7 @@ ALTER TABLE analytics.energy_interval_facts
 ALTER TABLE analytics.energy_interval_facts
   ADD COLUMN IF NOT EXISTS source_event_id UUID DEFAULT toUUID('00000000-0000-0000-0000-000000000000') AFTER source_current_observation_id;
 ALTER TABLE analytics.energy_interval_facts
-  ADD COLUMN IF NOT EXISTS source_partition String DEFAULT '' AFTER source_event_id;
+  ADD COLUMN IF NOT EXISTS source_partition LowCardinality(String) DEFAULT '' AFTER source_event_id;
 ALTER TABLE analytics.energy_interval_facts
   ADD COLUMN IF NOT EXISTS fact_revision UInt64 DEFAULT 0 AFTER projected_at;
 ALTER TABLE analytics.energy_interval_facts

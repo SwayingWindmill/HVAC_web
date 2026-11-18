@@ -3,12 +3,14 @@ package forecast
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -37,6 +39,30 @@ type ClickHouseSink struct {
 	client         *http.Client
 }
 
+func newDefaultForecastClickHouseHTTPClient(timeout time.Duration, disableRedirects bool) *http.Client {
+	var transport *http.Transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok && base != nil {
+		transport = base.Clone()
+	} else {
+		transport = &http.Transport{}
+	}
+	transport.MaxIdleConns = 64
+	transport.MaxIdleConnsPerHost = 32
+	transport.IdleConnTimeout = 90 * time.Second
+	transport.TLSHandshakeTimeout = 10 * time.Second
+	transport.ExpectContinueTimeout = time.Second
+	client := &http.Client{
+		Timeout:   timeout,
+		Transport: transport,
+	}
+	if disableRedirects {
+		client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+	}
+	return client
+}
+
 func NewClickHouseSink(config ClickHouseConfig) (*ClickHouseSink, error) {
 	parsed, err := url.Parse(config.BaseURL)
 	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
@@ -55,12 +81,7 @@ func NewClickHouseSink(config ClickHouseConfig) (*ClickHouseSink, error) {
 	}
 	client := config.HTTPClient
 	if client == nil {
-		client = &http.Client{
-			Timeout: 10 * time.Second,
-			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
-		}
+		client = newDefaultForecastClickHouseHTTPClient(10*time.Second, true)
 	}
 	return &ClickHouseSink{baseURL: parsed, database: database, table: table, username: config.Username, password: config.Password, readerUsername: config.ReaderUsername, readerPassword: config.ReaderPassword, client: client}, nil
 }
@@ -69,20 +90,36 @@ func (sink *ClickHouseSink) InsertForecastPoints(ctx context.Context, points []P
 	if len(points) == 0 {
 		return errors.New("forecast result batch cannot be empty")
 	}
+	ordered := slices.Clone(points)
+	for i := range ordered {
+		ordered[i].ForecastOrigin = ordered[i].ForecastOrigin.UTC()
+		ordered[i].ForecastFor = ordered[i].ForecastFor.UTC()
+		ordered[i].GeneratedAt = ordered[i].GeneratedAt.UTC()
+		if ordered[i].Quality != "VALID" && ordered[i].Quality != "DEGRADED" && ordered[i].Quality != "FALLBACK" && ordered[i].Quality != "INVALID" {
+			return errors.New("forecast result quality is invalid")
+		}
+		if !ordered[i].ForecastFor.After(ordered[i].ForecastOrigin) {
+			return errors.New("forecast_for must be after forecast_origin")
+		}
+	}
+	slices.SortFunc(ordered, func(a, b Point) int {
+		if !a.ForecastFor.Equal(b.ForecastFor) {
+			if a.ForecastFor.Before(b.ForecastFor) {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(a.ForecastID, b.ForecastID)
+	})
 	var body bytes.Buffer
 	encoder := json.NewEncoder(&body)
 	encoder.SetEscapeHTML(false)
-	for _, point := range points {
-		if point.Quality != "VALID" && point.Quality != "DEGRADED" && point.Quality != "FALLBACK" && point.Quality != "INVALID" {
-			return errors.New("forecast result quality is invalid")
-		}
-		if !point.ForecastFor.After(point.ForecastOrigin) {
-			return errors.New("forecast_for must be after forecast_origin")
-		}
+	for _, point := range ordered {
 		if err := encoder.Encode(point); err != nil {
 			return fmt.Errorf("encode forecast result: %w", err)
 		}
 	}
+	token := fmt.Sprintf("%x", sha256.Sum256(body.Bytes()))
 	endpoint := *sink.baseURL
 	query := endpoint.Query()
 	query.Set("database", sink.database)
@@ -90,6 +127,10 @@ func (sink *ClickHouseSink) InsertForecastPoints(ctx context.Context, points []P
 	query.Set("date_time_input_format", "best_effort")
 	query.Set("async_insert", "1")
 	query.Set("wait_for_async_insert", "1")
+	query.Set("async_insert_deduplicate", "1")
+	query.Set("insert_deduplicate", "1")
+	query.Set("insert_deduplication_token", token)
+	query.Set("wait_end_of_query", "1")
 	endpoint.RawQuery = query.Encode()
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), &body)
 	if err != nil {
@@ -106,8 +147,10 @@ func (sink *ClickHouseSink) InsertForecastPoints(ctx context.Context, points []P
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		detail, _ := io.ReadAll(io.LimitReader(response.Body, 2048))
+		_, _ = io.Copy(io.Discard, response.Body)
 		return fmt.Errorf("insert forecast ClickHouse result returned %d: %s", response.StatusCode, strings.TrimSpace(string(detail)))
 	}
+	_, _ = io.Copy(io.Discard, response.Body)
 	return nil
 }
 
@@ -183,6 +226,7 @@ func (sink *ClickHouseSink) ReadForecastJob(ctx context.Context, scope ForecastJ
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		detail, _ := io.ReadAll(io.LimitReader(response.Body, 2048))
+		_, _ = io.Copy(io.Discard, response.Body)
 		return nil, fmt.Errorf("query forecast ClickHouse result returned %d: %s", response.StatusCode, strings.TrimSpace(string(detail)))
 	}
 	decoder := json.NewDecoder(response.Body)
@@ -197,6 +241,7 @@ func (sink *ClickHouseSink) ReadForecastJob(ctx context.Context, scope ForecastJ
 		}
 		points = append(points, point)
 	}
+	_, _ = io.Copy(io.Discard, response.Body)
 	return points, nil
 }
 
@@ -226,6 +271,7 @@ func (sink *ClickHouseSink) HasForecastJob(ctx context.Context, scope ForecastJo
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(response.Body, 4096))
+	_, _ = io.Copy(io.Discard, response.Body)
 	if err != nil {
 		return false, err
 	}

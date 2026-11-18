@@ -469,6 +469,7 @@ func (reader *Reader) query(ctx context.Context, operation, sql string, paramete
 	}
 	defer response.Body.Close()
 	payload, err := io.ReadAll(io.LimitReader(response.Body, maximumResponseBodySize+1))
+	_, _ = io.Copy(io.Discard, response.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read ClickHouse analytics %s response: %w", operation, err)
 	}
@@ -528,6 +529,7 @@ func (writer *Writer) insert(ctx context.Context, operation string, settings url
 	}
 	defer response.Body.Close()
 	payload, err := io.ReadAll(io.LimitReader(response.Body, 8<<10))
+	_, _ = io.Copy(io.Discard, response.Body)
 	if err != nil {
 		return fmt.Errorf("read ClickHouse analytics %s response: %w", operation, err)
 	}
@@ -585,6 +587,15 @@ func (writer *Writer) AppendRebuildEvent(ctx context.Context, event energy.Rebui
 	if err := event.ValidateForPersistence(); err != nil {
 		return err
 	}
+	event.RecordedAt = event.RecordedAt.UTC()
+	if event.WindowStart != nil {
+		t := event.WindowStart.UTC()
+		event.WindowStart = &t
+	}
+	if event.WindowEnd != nil {
+		t := event.WindowEnd.UTC()
+		event.WindowEnd = &t
+	}
 	body, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("encode energy rebuild event: %w", err)
@@ -596,6 +607,8 @@ func (writer *Writer) AppendRebuildEvent(ctx context.Context, event energy.Rebui
 		"insert_deduplication_token": {hex.EncodeToString(digest[:])},
 		"async_insert":               {"1"},
 		"wait_for_async_insert":      {"1"},
+		"async_insert_deduplicate":   {"1"},
+		"insert_deduplicate":         {"1"},
 		"wait_end_of_query":          {"1"},
 	}, append(body, '\n'))
 }

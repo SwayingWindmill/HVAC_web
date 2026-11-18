@@ -53,7 +53,7 @@ func NewClickHouseInputReader(config InputReaderConfig) (*ClickHouseInputReader,
 	}
 	client := config.HTTPClient
 	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
+		client = newDefaultOptimizationClickHouseHTTPClient(10 * time.Second)
 	}
 	if config.Energy == nil {
 		return nil, errors.New("optimization input reader requires the Energy Series reader")
@@ -446,6 +446,7 @@ func (reader *ClickHouseInputReader) queryLimited(ctx context.Context, sql strin
 	}
 	defer response.Body.Close()
 	payload, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
+	_, _ = io.Copy(io.Discard, response.Body)
 	if err != nil {
 		return nil, err
 	}

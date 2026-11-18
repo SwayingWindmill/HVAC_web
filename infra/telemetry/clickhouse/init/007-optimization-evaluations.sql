@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS analytics.optimization_evaluations (
 ENGINE = MergeTree
 PARTITION BY toYYYYMM(generated_at)
 ORDER BY (tenant_id, site_id, optimization_run_id, evaluation_id)
-SETTINGS index_granularity = 8192;
+SETTINGS index_granularity = 8192,
+         non_replicated_deduplication_window = 10000;
 
 CREATE USER IF NOT EXISTS optimization_service_reader IDENTIFIED WITH no_password;
 CREATE USER IF NOT EXISTS optimization_service_writer IDENTIFIED WITH no_password;

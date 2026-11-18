@@ -4,9 +4,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // The writer account may only insert forecasts (least privilege); reading a published forecast
@@ -109,5 +111,61 @@ func TestForecastClickHouseLookupsIncludeLeadingPrimaryKeyPredicates(t *testing.
 				t.Fatalf("query %d missing %q:\n%s", i, marker, sql)
 			}
 		}
+	}
+}
+
+func TestForecastClickHouseDeterministicDeduplicationAndPooledTransport(t *testing.T) {
+	defaultSink, err := NewClickHouseSink(ClickHouseConfig{
+		BaseURL:  "http://127.0.0.1:8123",
+		Username: "forecast_service_writer",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport, ok := defaultSink.client.Transport.(*http.Transport)
+	if !ok || transport == nil || transport.MaxIdleConnsPerHost != 32 || transport.MaxIdleConns != 64 {
+		t.Fatalf("expected pooled default transport, got %#v", defaultSink.client.Transport)
+	}
+
+	var queries []string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		queries = append(queries, request.URL.RawQuery)
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	sink, err := NewClickHouseSink(ClickHouseConfig{
+		BaseURL:    server.URL,
+		Username:   "forecast_service_writer",
+		HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := validRequest()
+	points, err := BaselineEngine{}.Generate(t.Context(), request, request.ForecastOrigin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.InsertForecastPoints(t.Context(), points); err != nil {
+		t.Fatal(err)
+	}
+
+	plus8 := time.FixedZone("UTC+8", 8*3600)
+	reordered := slices.Clone(points)
+	slices.Reverse(reordered)
+	for i := range reordered {
+		reordered[i].ForecastOrigin = reordered[i].ForecastOrigin.In(plus8)
+		reordered[i].ForecastFor = reordered[i].ForecastFor.In(plus8)
+		reordered[i].GeneratedAt = reordered[i].GeneratedAt.In(plus8)
+	}
+	if err := sink.InsertForecastPoints(t.Context(), reordered); err != nil {
+		t.Fatal(err)
+	}
+	if len(queries) != 2 || queries[0] != queries[1] {
+		t.Fatalf("expected identical dedup query params on retry, got %v", queries)
+	}
+	if !strings.Contains(queries[0], "async_insert_deduplicate=1") || !strings.Contains(queries[0], "insert_deduplication_token=") {
+		t.Fatalf("missing dedup query parameters: %s", queries[0])
 	}
 }

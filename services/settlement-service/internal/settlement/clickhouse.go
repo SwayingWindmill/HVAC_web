@@ -24,9 +24,24 @@ func NewClickHouseStore(baseURL, user, password string, client *http.Client) (*C
 		return nil, errors.New("settlement ClickHouse URL must be absolute http/https")
 	}
 	if client == nil {
-		client = &http.Client{Timeout: 15 * time.Second}
+		client = newDefaultSettlementClickHouseHTTPClient(15 * time.Second)
 	}
 	return &ClickHouseStore{base: u, user: user, password: password, client: client}, nil
+}
+
+func newDefaultSettlementClickHouseHTTPClient(timeout time.Duration) *http.Client {
+	var transport *http.Transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok && base != nil {
+		transport = base.Clone()
+	} else {
+		transport = &http.Transport{}
+	}
+	transport.MaxIdleConns = 64
+	transport.MaxIdleConnsPerHost = 32
+	transport.IdleConnTimeout = 90 * time.Second
+	transport.TLSHandshakeTimeout = 10 * time.Second
+	transport.ExpectContinueTimeout = time.Second
+	return &http.Client{Timeout: timeout, Transport: transport}
 }
 
 func sqlQuote(value string) string { return "'" + strings.ReplaceAll(value, "'", "''") + "'" }
@@ -69,6 +84,7 @@ FORMAT TabSeparated`, sqlQuote(period.TenantID), sqlQuote(period.SiteID), string
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(response.Body, 8<<20))
+	_, _ = io.Copy(io.Discard, response.Body)
 	if err != nil {
 		return nil, err
 	}

@@ -15,13 +15,16 @@ import (
 )
 
 const (
-	DefaultClickHouseObservationsRetention   = 180 * 24 * time.Hour
-	DefaultClickHouseNumeric1MinRetention    = 365 * 24 * time.Hour
-	DefaultClickHouseNumeric15MinRetention   = 1825 * 24 * time.Hour
-	DefaultClickHouseNumericHourlyRetention  = 1825 * 24 * time.Hour
-	DefaultClickHouseEnergyIntervalRetention = 1825 * 24 * time.Hour
-	DefaultClickHouseEnergyHourlyRetention   = 1825 * 24 * time.Hour
-	DefaultClickHouseRetentionDeleteCooldown = 24 * time.Hour
+	DefaultClickHouseObservationsRetention            = 180 * 24 * time.Hour
+	DefaultClickHouseNumeric1MinRetention             = 365 * 24 * time.Hour
+	DefaultClickHouseNumeric15MinRetention            = 1825 * 24 * time.Hour
+	DefaultClickHouseNumericHourlyRetention           = 1825 * 24 * time.Hour
+	DefaultClickHouseEnergyIntervalRetention          = 1825 * 24 * time.Hour
+	DefaultClickHouseEnergyHourlyRetention            = 1825 * 24 * time.Hour
+	DefaultClickHouseForecastSeriesRetention          = 365 * 24 * time.Hour
+	DefaultClickHouseOptimizationEvaluationsRetention = 365 * 24 * time.Hour
+	DefaultClickHouseEnergyRebuildRunsRetention       = 365 * 24 * time.Hour
+	DefaultClickHouseRetentionDeleteCooldown          = 24 * time.Hour
 
 	defaultClickHouseHistoryDatabase   = "telemetry_history"
 	defaultClickHouseAnalyticsDatabase = "analytics"
@@ -45,23 +48,26 @@ type ColdArchiveExportRunner interface {
 // ClickHouseRetentionConfig configures tiered ClickHouse retention pruning via whole-partition
 // drops and governed ALTER TABLE ... DELETE tail mutations.
 type ClickHouseRetentionConfig struct {
-	BaseURL                 string
-	HistoryDatabase         string
-	AnalyticsDatabase       string
-	Username                string
-	Password                string
-	HTTPClient              *http.Client
-	ObservationsRetention   time.Duration
-	Numeric1MinRetention    time.Duration
-	Numeric15MinRetention   time.Duration
-	NumericHourlyRetention  time.Duration
-	EnergyIntervalRetention time.Duration
-	EnergyHourlyRetention   time.Duration
-	DeleteCooldown          time.Duration
-	LegalHolds              []ClickHouseLegalHoldScope
-	ArchiveExporter         ColdArchiveExportRunner
-	ArchiveRequired         bool
-	Metrics                 *PipelineMetrics
+	BaseURL                          string
+	HistoryDatabase                  string
+	AnalyticsDatabase                string
+	Username                         string
+	Password                         string
+	HTTPClient                       *http.Client
+	ObservationsRetention            time.Duration
+	Numeric1MinRetention             time.Duration
+	Numeric15MinRetention            time.Duration
+	NumericHourlyRetention           time.Duration
+	EnergyIntervalRetention          time.Duration
+	EnergyHourlyRetention            time.Duration
+	ForecastSeriesRetention          time.Duration
+	OptimizationEvaluationsRetention time.Duration
+	EnergyRebuildRunsRetention       time.Duration
+	DeleteCooldown                   time.Duration
+	LegalHolds                       []ClickHouseLegalHoldScope
+	ArchiveExporter                  ColdArchiveExportRunner
+	ArchiveRequired                  bool
+	Metrics                          *PipelineMetrics
 }
 
 type clickHouseRetentionTarget struct {
@@ -166,6 +172,18 @@ func NewClickHouseRetentionPruner(config ClickHouseRetentionConfig) (*ClickHouse
 	if err != nil {
 		return nil, err
 	}
+	forecastSeriesRetention, err := resolveRetentionDuration(config.ForecastSeriesRetention, DefaultClickHouseForecastSeriesRetention, "forecast_series")
+	if err != nil {
+		return nil, err
+	}
+	optimizationEvaluationsRetention, err := resolveRetentionDuration(config.OptimizationEvaluationsRetention, DefaultClickHouseOptimizationEvaluationsRetention, "optimization_evaluations")
+	if err != nil {
+		return nil, err
+	}
+	energyRebuildRunsRetention, err := resolveRetentionDuration(config.EnergyRebuildRunsRetention, DefaultClickHouseEnergyRebuildRunsRetention, "energy_rebuild_runs")
+	if err != nil {
+		return nil, err
+	}
 
 	if config.DeleteCooldown < 0 {
 		return nil, errors.New("ClickHouse retention delete cooldown must be non-negative")
@@ -239,6 +257,30 @@ func NewClickHouseRetentionPruner(config ClickHouseRetentionConfig) (*ClickHouse
 				paramType:  "DateTime64(3, 'UTC')",
 				timeLayout: "2006-01-02 15:04:05.000",
 				retention:  energyHourlyRetention,
+			},
+			{
+				database:   analyticsDB,
+				table:      "forecast_series",
+				timeColumn: "forecast_for",
+				paramType:  "DateTime64(3, 'UTC')",
+				timeLayout: "2006-01-02 15:04:05.000",
+				retention:  forecastSeriesRetention,
+			},
+			{
+				database:   analyticsDB,
+				table:      "optimization_evaluations",
+				timeColumn: "generated_at",
+				paramType:  "DateTime64(3, 'UTC')",
+				timeLayout: "2006-01-02 15:04:05.000",
+				retention:  optimizationEvaluationsRetention,
+			},
+			{
+				database:   analyticsDB,
+				table:      "energy_rebuild_runs",
+				timeColumn: "recorded_at",
+				paramType:  "DateTime64(3, 'UTC')",
+				timeLayout: "2006-01-02 15:04:05.000",
+				retention:  energyRebuildRunsRetention,
 			},
 		},
 	}, nil

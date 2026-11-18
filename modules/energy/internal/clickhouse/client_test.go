@@ -246,6 +246,54 @@ func TestWriterAdvanceCheckpointEnablesAsyncInsertAndPooledTransport(t *testing.
 	}
 }
 
+func TestWriterAppendsRebuildEventWithDeduplication(t *testing.T) {
+	var seenQueries []url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		seenQueries = append(seenQueries, request.URL.Query())
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	sink, err := NewWriter(WriterConfig{
+		BaseURL: server.URL, Database: "analytics", Table: "energy_interval_facts",
+		Username: "analytics_projector_writer", HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorded := time.Date(2026, 8, 12, 10, 0, 0, 0, time.UTC)
+	event := energy.RebuildEvent{
+		EventID:    "01990000-2a00-7000-8000-000000000901",
+		RunID:      "01990000-2a00-7000-8000-000000000900",
+		TenantID:   "018f4d00-0000-7000-8000-000000000001",
+		SiteID:     "018f4e00-1000-7000-8000-000000000001",
+		ScopeType:  energy.RebuildScopeTransitionCorrections,
+		ReasonCode: energy.RebuildReasonLateArrival,
+		TriggerRef: "seq:10",
+		EventType:  energy.RebuildEventRunStarted,
+		Detail:     "started",
+		RecordedAt: recorded,
+	}
+	if err := sink.AppendRebuildEvent(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	event.RecordedAt = recorded.In(time.FixedZone("UTC+8", 8*3600))
+	if err := sink.AppendRebuildEvent(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	if len(seenQueries) != 2 {
+		t.Fatalf("expected 2 requests, got %d", len(seenQueries))
+	}
+	tok0 := seenQueries[0].Get("insert_deduplication_token")
+	tok1 := seenQueries[1].Get("insert_deduplication_token")
+	if len(tok0) != 64 || tok0 != tok1 {
+		t.Fatalf("expected matching 64-hex dedup tokens, got %q vs %q", tok0, tok1)
+	}
+	if seenQueries[0].Get("async_insert_deduplicate") != "1" || seenQueries[0].Get("insert_deduplicate") != "1" {
+		t.Fatalf("missing dedup params: %v", seenQueries[0])
+	}
+}
+
 func validDelta() energy.CounterDelta {
 	delta := 2.75
 	return energy.CounterDelta{
