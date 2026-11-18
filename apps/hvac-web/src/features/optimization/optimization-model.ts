@@ -744,3 +744,273 @@ export function parseShadowEvaluation(
     fit,
   };
 }
+
+export type GovernanceSolverSource = 'DEFAULT' | 'DEPLOYMENT_BINDING' | 'SITE_LOOP_CANARY';
+
+export interface PublishedGovernanceCopCell {
+  readonly wetBulbMinC: number;
+  readonly wetBulbMaxC: number;
+  readonly coolingLoadMinKW: number;
+  readonly coolingLoadMaxKW: number;
+  readonly baselineSamples: number;
+  readonly aiSamples: number;
+  readonly baselineCOP: number;
+  readonly aiCOP: number;
+  readonly copUpliftPct: number;
+  readonly estimatedSavedKWh: number;
+}
+
+export interface PublishedOptimizationGovernanceSummary {
+  readonly tenantId: string;
+  readonly siteId: string;
+  readonly windowDays: number;
+  readonly generatedAt: string;
+  readonly activeSolver: {
+    readonly servingRef: string;
+    readonly source: GovernanceSolverSource;
+    readonly loopKey: string;
+    readonly deploymentRevisionId: string | null;
+  };
+  readonly tickCounts: {
+    readonly aiClosedLoop: number;
+    readonly aiShadow: number;
+    readonly ruleBaseline: number;
+    readonly manualOverride: number;
+  };
+  readonly copComparison: {
+    readonly matchedBinCount: number;
+    readonly matchedAiSamples: number;
+    readonly matchedBaselineSamples: number;
+    readonly weightedBaselineCOP: number | null;
+    readonly weightedAiCOP: number | null;
+    readonly weightedCopUpliftPct: number | null;
+    readonly totalEstimatedSavedKWh: number;
+    readonly cells: readonly PublishedGovernanceCopCell[];
+  };
+  readonly flywheel: {
+    readonly totalSamples: number;
+    readonly guardrailClamped: number;
+    readonly guardrailVetoed: number;
+    readonly manualOverride: number;
+    readonly monitorTripped: number;
+    readonly trackingDeviation: number;
+  };
+}
+
+export interface GovernanceCopCellRow {
+  readonly key: string;
+  readonly wetBulbMinC: number;
+  readonly wetBulbMaxC: number;
+  readonly coolingLoadMinKW: number;
+  readonly coolingLoadMaxKW: number;
+  readonly wetBulbRangeLabel: string;
+  readonly coolingLoadRangeLabel: string;
+  readonly baselineSamples: number;
+  readonly aiSamples: number;
+  readonly samplesPairLabel: string;
+  readonly baselineCOP: number;
+  readonly baselineCOPLabel: string;
+  readonly aiCOP: number;
+  readonly aiCOPLabel: string;
+  readonly copUpliftPct: number;
+  readonly copUpliftLabel: string;
+  readonly estimatedSavedKWh: number;
+  readonly estimatedSavedLabel: string;
+}
+
+export interface GovernanceFlywheelItem {
+  readonly key:
+    | 'guardrailClamped'
+    | 'guardrailVetoed'
+    | 'manualOverride'
+    | 'trackingDeviation'
+    | 'monitorTripped';
+  readonly label: string;
+  readonly count: number;
+}
+
+export interface OptimizationGovernanceSummary {
+  readonly windowDays: number;
+  readonly generatedAt: string;
+  readonly activeSolver: {
+    readonly solverLabel: string;
+    readonly source: GovernanceSolverSource;
+    readonly sourceLabel: string;
+    readonly loopLabel: string;
+    readonly hasDeploymentBinding: boolean;
+  };
+  readonly tickCounts: {
+    readonly aiClosedLoop: number;
+    readonly aiShadow: number;
+    readonly ruleBaseline: number;
+    readonly manualOverride: number;
+    readonly totalTicks: number;
+  };
+  readonly copComparison: {
+    readonly matchedBinCount: number;
+    readonly matchedAiSamples: number;
+    readonly matchedBaselineSamples: number;
+    readonly weightedBaselineCOP: number | null;
+    readonly weightedBaselineCOPLabel: string;
+    readonly weightedAiCOP: number | null;
+    readonly weightedAiCOPLabel: string;
+    readonly weightedCopUpliftPct: number | null;
+    readonly weightedCopUpliftLabel: string;
+    readonly totalEstimatedSavedKWh: number;
+    readonly totalEstimatedSavedLabel: string;
+    readonly cells: readonly GovernanceCopCellRow[];
+  };
+  readonly flywheel: {
+    readonly totalSamples: number;
+    readonly items: readonly GovernanceFlywheelItem[];
+  };
+}
+
+const SOLVER_REF_LABELS: Readonly<Record<string, string>> = {
+  'builtin://hvac-recommendation-v1': '内置稳态寻优策略',
+  'hvac-recommendation-v1': '内置稳态寻优策略',
+  'builtin://chiller-cop-model': '冷机 COP 拟合策略',
+  'chiller-cop-model': '冷机 COP 拟合策略',
+};
+
+const LOOP_KEY_LABELS: Readonly<Record<string, string>> = {
+  chilled_water_supply_temp: '冷冻水供水温度回路',
+  chilled_water_supply_reset: '冷冻水供水温度回路',
+  chilled_water_supply: '冷冻水供水温度回路',
+  supply_temp: '冷冻水供水温度回路',
+  condenser_water_reset: '冷却水温度回路',
+  chiller_staging: '冷机台数控制回路',
+  default: '默认控制回路',
+};
+
+/** Maps internal solver references (builtin:// or http(s)://) to operator-facing Chinese labels. */
+export function formatSolverRef(servingRef: string): string {
+  const trimmed = servingRef.trim();
+  const normalized = trimmed.toLowerCase();
+  const exact = SOLVER_REF_LABELS[normalized];
+  if (exact) return exact;
+  if (normalized.startsWith('http://') || normalized.startsWith('https://')) {
+    return '外部协同寻优服务';
+  }
+  if (normalized.startsWith('builtin://')) {
+    return '内置优化策略';
+  }
+  return '默认优化策略';
+}
+
+export function formatSolverSource(source: GovernanceSolverSource): string {
+  switch (source) {
+    case 'DEFAULT':
+      return '默认基线';
+    case 'DEPLOYMENT_BINDING':
+      return '站点部署绑定';
+    case 'SITE_LOOP_CANARY':
+      return '回路灰度策略';
+    default: {
+      const _exhaustive: never = source;
+      return _exhaustive;
+    }
+  }
+}
+
+/** Maps internal snake_case loop identifiers to operator Chinese without leaking raw keys. */
+export function formatLoopKey(loopKey: string): string {
+  const trimmed = loopKey.trim();
+  if (!trimmed) return '默认控制回路';
+  const normalized = trimmed.toLowerCase();
+  const mapped = LOOP_KEY_LABELS[normalized];
+  if (mapped) return mapped;
+  if (/[\u4e00-\u9fff]/.test(trimmed)) return trimmed;
+  return '指定控制回路';
+}
+
+export function formatCopUpliftPct(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return '—';
+  return `${formatSigned(value, 1)}%`;
+}
+
+export function formatSavedKWh(value: number): string {
+  return `${formatDecimal(value, 1)} kWh`;
+}
+
+export function formatWetBulbBin(minC: number, maxC: number): string {
+  return `${formatDecimal(minC, 1)} 至 ${formatDecimal(maxC, 1)} °C`;
+}
+
+export function formatCoolingLoadBin(minKW: number, maxKW: number): string {
+  return `${formatDecimal(minKW, 0)} 至 ${formatDecimal(maxKW, 0)} kW`;
+}
+
+export function parseOptimizationGovernanceSummary(
+  published: PublishedOptimizationGovernanceSummary,
+): OptimizationGovernanceSummary {
+  const { activeSolver, tickCounts, copComparison, flywheel } = published;
+  const totalTicks =
+    tickCounts.aiClosedLoop
+    + tickCounts.aiShadow
+    + tickCounts.ruleBaseline
+    + tickCounts.manualOverride;
+
+  const cells: GovernanceCopCellRow[] = copComparison.cells.map((cell) => ({
+    key: `${cell.wetBulbMinC}-${cell.wetBulbMaxC}-${cell.coolingLoadMinKW}-${cell.coolingLoadMaxKW}`,
+    wetBulbMinC: cell.wetBulbMinC,
+    wetBulbMaxC: cell.wetBulbMaxC,
+    coolingLoadMinKW: cell.coolingLoadMinKW,
+    coolingLoadMaxKW: cell.coolingLoadMaxKW,
+    wetBulbRangeLabel: formatWetBulbBin(cell.wetBulbMinC, cell.wetBulbMaxC),
+    coolingLoadRangeLabel: formatCoolingLoadBin(cell.coolingLoadMinKW, cell.coolingLoadMaxKW),
+    baselineSamples: cell.baselineSamples,
+    aiSamples: cell.aiSamples,
+    samplesPairLabel: `${cell.aiSamples} / ${cell.baselineSamples}`,
+    baselineCOP: cell.baselineCOP,
+    baselineCOPLabel: formatDecimal(cell.baselineCOP, 2),
+    aiCOP: cell.aiCOP,
+    aiCOPLabel: formatDecimal(cell.aiCOP, 2),
+    copUpliftPct: cell.copUpliftPct,
+    copUpliftLabel: formatCopUpliftPct(cell.copUpliftPct),
+    estimatedSavedKWh: cell.estimatedSavedKWh,
+    estimatedSavedLabel: formatSavedKWh(cell.estimatedSavedKWh),
+  }));
+
+  return {
+    windowDays: published.windowDays,
+    generatedAt: published.generatedAt,
+    activeSolver: {
+      solverLabel: formatSolverRef(activeSolver.servingRef),
+      source: activeSolver.source,
+      sourceLabel: formatSolverSource(activeSolver.source),
+      loopLabel: formatLoopKey(activeSolver.loopKey),
+      hasDeploymentBinding: Boolean(activeSolver.deploymentRevisionId?.trim()),
+    },
+    tickCounts: {
+      ...tickCounts,
+      totalTicks,
+    },
+    copComparison: {
+      matchedBinCount: copComparison.matchedBinCount,
+      matchedAiSamples: copComparison.matchedAiSamples,
+      matchedBaselineSamples: copComparison.matchedBaselineSamples,
+      weightedBaselineCOP: copComparison.weightedBaselineCOP,
+      weightedBaselineCOPLabel:
+        copComparison.weightedBaselineCOP !== null ? formatDecimal(copComparison.weightedBaselineCOP, 2) : '—',
+      weightedAiCOP: copComparison.weightedAiCOP,
+      weightedAiCOPLabel:
+        copComparison.weightedAiCOP !== null ? formatDecimal(copComparison.weightedAiCOP, 2) : '—',
+      weightedCopUpliftPct: copComparison.weightedCopUpliftPct,
+      weightedCopUpliftLabel: formatCopUpliftPct(copComparison.weightedCopUpliftPct),
+      totalEstimatedSavedKWh: copComparison.totalEstimatedSavedKWh,
+      totalEstimatedSavedLabel: formatSavedKWh(copComparison.totalEstimatedSavedKWh),
+      cells,
+    },
+    flywheel: {
+      totalSamples: flywheel.totalSamples,
+      items: [
+        { key: 'guardrailClamped', label: '护栏限幅修正', count: flywheel.guardrailClamped },
+        { key: 'guardrailVetoed', label: '物理安全拦截', count: flywheel.guardrailVetoed },
+        { key: 'manualOverride', label: '人工接管覆写', count: flywheel.manualOverride },
+        { key: 'trackingDeviation', label: '跟踪偏差回退', count: flywheel.trackingDeviation },
+        { key: 'monitorTripped', label: '监控越界回退', count: flywheel.monitorTripped },
+      ],
+    },
+  };
+}

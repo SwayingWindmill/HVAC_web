@@ -5,10 +5,19 @@ import {
   buildOptimizationWorkOrderDraft,
   buildReadinessSummary,
   findActiveRecommendationWorkOrder,
+  formatCoolingLoadBin,
+  formatCopUpliftPct,
+  formatLoopKey,
+  formatSavedKWh,
+  formatSolverRef,
+  formatSolverSource,
+  formatWetBulbBin,
   isUnscheduledReady,
+  parseOptimizationGovernanceSummary,
   parseRecommendation,
   parseShadowEvaluation,
   preparationReadinessReasons,
+  type PublishedOptimizationGovernanceSummary,
   type PublishedRecommendation,
   type PublishedShadowEvaluation,
 } from '../apps/hvac-web/src/features/optimization/optimization-model.ts';
@@ -532,4 +541,129 @@ test('executionMode defaults to CLOSED_LOOP, supports SHADOW payload & prefill, 
       title: '决策编号：01990000-8800-7000-8000-000000000501 · 链路追踪：a1b2c3d4e5f60718293a4b5c6d7e8f90',
     },
   );
+});
+
+test('governance summary helpers map solver routing, M&V COP bins, and flywheel labels without leaking internal tokens', () => {
+  assert.equal(formatSolverRef('builtin://hvac-recommendation-v1'), '内置稳态寻优策略');
+  assert.equal(formatSolverRef('builtin://chiller-cop-model'), '冷机 COP 拟合策略');
+  assert.equal(formatSolverRef('https://solver.internal.example/v2/recommend'), '外部协同寻优服务');
+  assert.equal(formatSolverRef('http://localhost:8090/solve'), '外部协同寻优服务');
+  assert.equal(formatSolverRef('builtin://experimental-v2'), '内置优化策略');
+
+  assert.equal(formatSolverSource('DEFAULT'), '默认基线');
+  assert.equal(formatSolverSource('DEPLOYMENT_BINDING'), '站点部署绑定');
+  assert.equal(formatSolverSource('SITE_LOOP_CANARY'), '回路灰度策略');
+
+  assert.equal(formatLoopKey('chilled_water_supply_temp'), '冷冻水供水温度回路');
+  assert.equal(formatLoopKey('unknown_internal_loop_key'), '指定控制回路');
+
+  assert.equal(formatCopUpliftPct(8.3), '+8.3%');
+  assert.equal(formatCopUpliftPct(-2.14), '−2.1%');
+  assert.equal(formatCopUpliftPct(0), '0.0%');
+  assert.equal(formatCopUpliftPct(null), '—');
+  assert.equal(formatSavedKWh(14.8), '14.8 kWh');
+  assert.equal(formatWetBulbBin(22, 24), '22.0 至 24.0 °C');
+  assert.equal(formatCoolingLoadBin(400, 600), '400 至 600 kW');
+
+  const populated: PublishedOptimizationGovernanceSummary = {
+    tenantId: '018f3d00-0000-7000-8000-000000000001',
+    siteId: '018f3e00-1000-7000-8000-000000000001',
+    windowDays: 14,
+    generatedAt: '2026-11-18T06:00:00Z',
+    activeSolver: {
+      servingRef: 'builtin://chiller-cop-model',
+      source: 'SITE_LOOP_CANARY',
+      loopKey: 'chilled_water_supply_temp',
+      deploymentRevisionId: '01910000-0000-7000-8000-00000000000b',
+    },
+    tickCounts: {
+      aiClosedLoop: 28,
+      aiShadow: 12,
+      ruleBaseline: 34,
+      manualOverride: 3,
+    },
+    copComparison: {
+      matchedBinCount: 2,
+      matchedAiSamples: 20,
+      matchedBaselineSamples: 26,
+      weightedBaselineCOP: 4.42,
+      weightedAiCOP: 4.79,
+      weightedCopUpliftPct: 8.3,
+      totalEstimatedSavedKWh: 14.8,
+      cells: [
+        {
+          wetBulbMinC: 22.0,
+          wetBulbMaxC: 24.0,
+          coolingLoadMinKW: 400,
+          coolingLoadMaxKW: 600,
+          baselineSamples: 24,
+          aiSamples: 18,
+          baselineCOP: 4.42,
+          aiCOP: 4.79,
+          copUpliftPct: 8.3,
+          estimatedSavedKWh: 14.8,
+        },
+      ],
+    },
+    flywheel: {
+      totalSamples: 9,
+      guardrailClamped: 3,
+      guardrailVetoed: 2,
+      manualOverride: 1,
+      monitorTripped: 1,
+      trackingDeviation: 2,
+    },
+  };
+
+  const view = parseOptimizationGovernanceSummary(populated);
+  assert.equal(view.activeSolver.solverLabel, '冷机 COP 拟合策略');
+  assert.equal(view.activeSolver.sourceLabel, '回路灰度策略');
+  assert.equal(view.activeSolver.loopLabel, '冷冻水供水温度回路');
+  assert.equal(view.activeSolver.hasDeploymentBinding, true);
+  assert.equal(view.tickCounts.totalTicks, 77);
+  assert.equal(view.copComparison.weightedCopUpliftLabel, '+8.3%');
+  assert.equal(view.copComparison.totalEstimatedSavedLabel, '14.8 kWh');
+  assert.equal(view.copComparison.cells[0]?.wetBulbRangeLabel, '22.0 至 24.0 °C');
+  assert.equal(view.copComparison.cells[0]?.coolingLoadRangeLabel, '400 至 600 kW');
+  assert.equal(view.copComparison.cells[0]?.samplesPairLabel, '18 / 24');
+  assert.deepEqual(
+    view.flywheel.items.map((item) => [item.label, item.count]),
+    [
+      ['护栏限幅修正', 3],
+      ['物理安全拦截', 2],
+      ['人工接管覆写', 1],
+      ['跟踪偏差回退', 2],
+      ['监控越界回退', 1],
+    ],
+  );
+  const serialized = JSON.stringify(view);
+  assert.equal(serialized.includes('builtin://'), false);
+  assert.equal(serialized.includes('01910000-0000-7000-8000-00000000000b'), false);
+
+  const empty = parseOptimizationGovernanceSummary({
+    ...populated,
+    activeSolver: {
+      servingRef: 'https://optimizer.example/run',
+      source: 'DEFAULT',
+      loopKey: 'default',
+      deploymentRevisionId: null,
+    },
+    copComparison: {
+      matchedBinCount: 0,
+      matchedAiSamples: 0,
+      matchedBaselineSamples: 0,
+      weightedBaselineCOP: null,
+      weightedAiCOP: null,
+      weightedCopUpliftPct: null,
+      totalEstimatedSavedKWh: 0,
+      cells: [],
+    },
+  });
+  assert.equal(empty.activeSolver.solverLabel, '外部协同寻优服务');
+  assert.equal(empty.activeSolver.sourceLabel, '默认基线');
+  assert.equal(empty.activeSolver.hasDeploymentBinding, false);
+  assert.equal(empty.copComparison.weightedBaselineCOPLabel, '—');
+  assert.equal(empty.copComparison.weightedAiCOPLabel, '—');
+  assert.equal(empty.copComparison.weightedCopUpliftLabel, '—');
+  assert.equal(empty.copComparison.cells.length, 0);
 });

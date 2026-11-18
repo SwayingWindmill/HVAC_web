@@ -11,9 +11,12 @@ import { listWorkOrders, type WorkOrderList } from '@/api/work-orders';
 import { workOrderKeys } from '@/features/work-orders/work-order-queries';
 import {
   optimizationRecommendationSourceRef,
+  parseOptimizationGovernanceSummary,
   parseRecommendation,
+  type OptimizationGovernanceSummary,
   type OptimizationRecommendation,
   type PreparationOutcome,
+  type PublishedOptimizationGovernanceSummary,
   type PublishedRecommendation,
   type PublishedShadowEvaluation,
 } from './optimization-model';
@@ -156,10 +159,63 @@ const publishedShadowEvaluationSchema: z.ZodType<PublishedShadowEvaluation> = z.
 
 const optimizationRunResponseSchema = z.object({ optimizationRunId: z.string() });
 
+const governanceCopCellSchema = z.object({
+  wetBulbMinC: z.number(),
+  wetBulbMaxC: z.number(),
+  coolingLoadMinKW: z.number(),
+  coolingLoadMaxKW: z.number(),
+  baselineSamples: z.number(),
+  aiSamples: z.number(),
+  baselineCOP: z.number(),
+  aiCOP: z.number(),
+  copUpliftPct: z.number(),
+  estimatedSavedKWh: z.number(),
+});
+
+const publishedGovernanceSummarySchema: z.ZodType<PublishedOptimizationGovernanceSummary, unknown> = z.object({
+  tenantId: z.string(),
+  siteId: z.string(),
+  windowDays: z.number(),
+  generatedAt: z.string(),
+  activeSolver: z.object({
+    servingRef: z.string(),
+    source: z.enum(['DEFAULT', 'DEPLOYMENT_BINDING', 'SITE_LOOP_CANARY']),
+    loopKey: z.string(),
+    deploymentRevisionId: z.string().nullish().transform((value) => value ?? null),
+  }),
+  tickCounts: z.object({
+    aiClosedLoop: z.number(),
+    aiShadow: z.number(),
+    ruleBaseline: z.number(),
+    manualOverride: z.number(),
+  }),
+  copComparison: z.object({
+    matchedBinCount: z.number(),
+    matchedAiSamples: z.number(),
+    matchedBaselineSamples: z.number(),
+    weightedBaselineCOP: z.number().nullish().transform((value) => value ?? null),
+    weightedAiCOP: z.number().nullish().transform((value) => value ?? null),
+    weightedCopUpliftPct: z.number().nullish().transform((value) => value ?? null),
+    totalEstimatedSavedKWh: z.number(),
+    cells: z.array(governanceCopCellSchema).nullish().transform((value) => value ?? []),
+  }),
+  flywheel: z.object({
+    totalSamples: z.number(),
+    guardrailClamped: z.number(),
+    guardrailVetoed: z.number(),
+    manualOverride: z.number(),
+    monitorTripped: z.number(),
+    trackingDeviation: z.number(),
+  }),
+});
+
+const SITE_OPTIMIZATION_GOVERNANCE_SUMMARY_PATH = '/api/v1/sites/{siteId}/optimization/governance-summary';
+
 export const optimizationKeys = {
   latest: (siteId: string) => ['optimization', siteId, 'latest'] as const,
   preparation: (siteId: string) => ['optimization', siteId, 'preparation'] as const,
   shadow: (siteId: string, runId: string | null) => ['optimization', siteId, 'shadow', runId] as const,
+  governanceSummary: (siteId: string) => ['optimization', siteId, 'governance-summary'] as const,
   staging: (siteId: string) => ['optimization', siteId, 'staging'] as const,
 };
 
@@ -220,6 +276,25 @@ export function latestShadowEvaluationQuery(siteId: string, runId: string | null
       { unavailable: UNAVAILABLE },
     ),
     enabled,
+    retry: false,
+  });
+}
+
+/** 14-day solver routing, weather/load-normalized COP M&V comparison, and guardrail negative-sample flywheel summary. */
+export function siteOptimizationGovernanceSummaryQuery(siteId: string, enabled: boolean) {
+  return queryOptions({
+    queryKey: optimizationKeys.governanceSummary(siteId),
+    queryFn: async ({ signal }): Promise<OptimizationGovernanceSummary | null> => publishedValueOf(
+      await gatewayRequest(
+        gatewayPath(SITE_OPTIMIZATION_GOVERNANCE_SUMMARY_PATH, { siteId }),
+        {
+          signal,
+          parse: (payload) => parseOptimizationGovernanceSummary(publishedGovernanceSummarySchema.parse(payload)),
+        },
+      ),
+      { unavailable: UNAVAILABLE },
+    ),
+    enabled: Boolean(siteId) && enabled,
     retry: false,
   });
 }

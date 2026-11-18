@@ -753,3 +753,140 @@ test('auto-control shadow execution mode arms, persists across update, renders S
   await expect(leasePanel).toContainText('限时自动控制租约生效中');
   await expect(leasePanel).toContainText('闭环下发');
 });
+
+test('governance summary lazy-loads on analysis tab without recommendation, shows canary badge, COP bins, and flywheel breakdown', async ({ page, gateway }) => {
+  gateway.optimization = null;
+  gateway.optimizationGovernanceSummary = {
+    tenantId: principal.context.tenantId,
+    siteId: SITE_ID,
+    windowDays: 14,
+    generatedAt: '2026-11-18T06:00:00Z',
+    activeSolver: {
+      servingRef: 'builtin://chiller-cop-model',
+      source: 'SITE_LOOP_CANARY',
+      loopKey: 'chilled_water_supply_temp',
+      deploymentRevisionId: '01910000-0000-7000-8000-00000000000b',
+    },
+    tickCounts: {
+      aiClosedLoop: 32,
+      aiShadow: 18,
+      ruleBaseline: 40,
+      manualOverride: 4,
+    },
+    copComparison: {
+      matchedBinCount: 2,
+      matchedAiSamples: 22,
+      matchedBaselineSamples: 29,
+      weightedBaselineCOP: 4.42,
+      weightedAiCOP: 4.79,
+      weightedCopUpliftPct: 8.3,
+      totalEstimatedSavedKWh: 14.8,
+      cells: [
+        {
+          wetBulbMinC: 22.0,
+          wetBulbMaxC: 24.0,
+          coolingLoadMinKW: 400,
+          coolingLoadMaxKW: 600,
+          baselineSamples: 24,
+          aiSamples: 18,
+          baselineCOP: 4.42,
+          aiCOP: 4.79,
+          copUpliftPct: 8.3,
+          estimatedSavedKWh: 14.8,
+        },
+        {
+          wetBulbMinC: 24.0,
+          wetBulbMaxC: 26.0,
+          coolingLoadMinKW: 600,
+          coolingLoadMaxKW: 800,
+          baselineSamples: 5,
+          aiSamples: 4,
+          baselineCOP: 4.15,
+          aiCOP: 4.41,
+          copUpliftPct: 6.3,
+          estimatedSavedKWh: 5.4,
+        },
+      ],
+    },
+    flywheel: {
+      totalSamples: 9,
+      guardrailClamped: 3,
+      guardrailVetoed: 2,
+      manualOverride: 1,
+      monitorTripped: 1,
+      trackingDeviation: 2,
+    },
+  };
+
+  await page.goto(`/energy-analysis/optimization?site=${SITE_ID}`);
+  await expect(page.getByText('还没有优化建议')).toBeVisible();
+  expect(gateway.governanceReads).toBe(0);
+
+  await page.getByRole('tab', { name: '模型与负荷分析' }).click();
+  await expect.poll(() => gateway.governanceReads).toBe(1);
+
+  const analysisPanel = page.getByRole('tabpanel', { name: '模型与负荷分析' });
+  const govPanel = analysisPanel.getByRole('region', { name: '策略路由与运行治理' });
+  await expect(govPanel).toBeVisible();
+  await expect(govPanel).toContainText('回路灰度策略');
+  await expect(govPanel).toContainText('冷机 COP 拟合策略');
+  await expect(govPanel).toContainText('冷冻水供水温度回路');
+  await expect(govPanel).toContainText('+8.3%');
+  await expect(govPanel).toContainText('14.8 kWh');
+  await expect(govPanel).not.toContainText('SITE_LOOP_CANARY');
+  await expect(govPanel).not.toContainText('builtin://chiller-cop-model');
+  await expect(govPanel).not.toContainText('01910000-0000-7000-8000-00000000000b');
+
+  const tickRegion = govPanel.getByRole('region', { name: '近 14 天运行周期分布' });
+  await expect(tickRegion).toContainText('AI 闭环周期');
+  await expect(tickRegion).toContainText('32');
+  await expect(tickRegion).toContainText('AI 影子跟跑');
+  await expect(tickRegion).toContainText('18');
+  await expect(tickRegion).toContainText('规则基准周期');
+  await expect(tickRegion).toContainText('40');
+  await expect(tickRegion).toContainText('人工接管周期');
+  await expect(tickRegion).toContainText('4');
+
+  const flywheelRegion = govPanel.getByRole('region', { name: '安全护栏负样本飞轮' });
+  await expect(flywheelRegion).toContainText('负样本 9');
+  await expect(flywheelRegion).toContainText('护栏限幅修正');
+  await expect(flywheelRegion).toContainText('物理安全拦截');
+  await expect(flywheelRegion).toContainText('人工接管覆写');
+  await expect(flywheelRegion).toContainText('跟踪偏差回退');
+  await expect(flywheelRegion).toContainText('监控越界回退');
+
+  const copTable = govPanel.getByRole('table', { name: '同湿球与冷负荷分箱 COP 对照' });
+  await expect(copTable).toContainText('22.0 至 24.0 °C');
+  await expect(copTable).toContainText('400 至 600 kW');
+  await expect(copTable).toContainText('4.42');
+  await expect(copTable).toContainText('4.79');
+  await expect(copTable).toContainText('18 / 24');
+  await expect(copTable).toContainText('24.0 至 26.0 °C');
+
+  // Empty matched bins render calm empty state while keeping solver routing visible.
+  gateway.optimizationGovernanceSummary = {
+    ...gateway.optimizationGovernanceSummary,
+    activeSolver: {
+      servingRef: 'https://external-optimizer.example/solve',
+      source: 'DEPLOYMENT_BINDING',
+      loopKey: 'chilled_water_supply_temp',
+      deploymentRevisionId: null,
+    },
+    copComparison: {
+      matchedBinCount: 0,
+      matchedAiSamples: 0,
+      matchedBaselineSamples: 0,
+      weightedBaselineCOP: null,
+      weightedAiCOP: null,
+      weightedCopUpliftPct: null,
+      totalEstimatedSavedKWh: 0,
+      cells: [],
+    },
+  };
+  await page.reload();
+  const reloadedGov = page.getByRole('region', { name: '策略路由与运行治理' });
+  await expect(reloadedGov).toContainText('站点部署绑定');
+  await expect(reloadedGov).toContainText('外部协同寻优服务');
+  await expect(reloadedGov).not.toContainText('https://external-optimizer.example/solve');
+  await expect(reloadedGov).toContainText('尚无满足同湿球与同冷负荷分箱条件的对照周期，积累闭环与基准周期后将自动展示。');
+});
