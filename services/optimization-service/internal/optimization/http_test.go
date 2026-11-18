@@ -466,14 +466,15 @@ func TestOptimizationServesGovernanceSummaryWithRBACAndWindowParams(t *testing.T
 		},
 		samples: []NegativeSampleRecord{
 			{
-				ID:               "ns-1",
-				TenantID:         testTenant,
-				SiteID:           testSite,
-				ReasonCode:       NegativeSampleGuardrailClamped,
-				Detail:           "clamped step",
-				SolverServingRef: ChillerCOPBuiltinSolverRef,
-				GuardrailVerdict: "CLAMPED",
-				CreatedAt:        fixture.now.Add(-2 * time.Hour),
+				ID:                    "ns-1",
+				TenantID:              testTenant,
+				SiteID:                testSite,
+				SampleKind:            NegativeSampleGuardrailClamped,
+				ReasonCode:            "step_rate_limit",
+				SolverServingRef:      ChillerCOPBuiltinSolverRef,
+				RawRecommendedValue:   ptr(10.5),
+				AppliedOrClampedValue: ptr(8.5),
+				OccurredAt:            fixture.now.Add(-2 * time.Hour),
 			},
 		},
 	}
@@ -507,13 +508,13 @@ func TestOptimizationServesGovernanceSummaryWithRBACAndWindowParams(t *testing.T
 	if err := json.Unmarshal(okResp.Body.Bytes(), &summary); err != nil {
 		t.Fatal(err)
 	}
-	if summary.WindowDays != DefaultGovernanceWindowDays || summary.TickCounts.Total != 3 || summary.TickCounts.AIShadow != 1 {
+	if summary.WindowDays != DefaultGovernanceWindowDays || summary.TickCounts != (GovernanceTickCounts{AIClosedLoop: 1, AIShadow: 1, RuleBaseline: 1}) {
 		t.Fatalf("unexpected default window summary: %+v", summary)
 	}
 	if summary.ActiveSolver.ServingRef != ChillerCOPBuiltinSolverRef || summary.ActiveSolver.DeploymentRevisionID == nil || *summary.ActiveSolver.DeploymentRevisionID != revID {
 		t.Fatalf("unexpected activeSolver: %+v", summary.ActiveSolver)
 	}
-	if summary.COPComparison.MatchedCells != 1 || summary.Flywheel.TotalNegativeSamples != 1 || summary.Flywheel.ByReason.GuardrailClamped != 1 {
+	if summary.COPComparison.MatchedBinCount != 1 || summary.Flywheel.TotalSamples != 1 || summary.Flywheel.GuardrailClamped != 1 {
 		t.Fatalf("unexpected COP/flywheel metrics: cop=%+v fw=%+v", summary.COPComparison, summary.Flywheel)
 	}
 
@@ -526,7 +527,7 @@ func TestOptimizationServesGovernanceSummaryWithRBACAndWindowParams(t *testing.T
 	if err := json.Unmarshal(winResp.Body.Bytes(), &sevenDay); err != nil {
 		t.Fatal(err)
 	}
-	if sevenDay.WindowDays != 7 || sevenDay.TickCounts.Total != 2 || sevenDay.TickCounts.AIShadow != 0 {
+	if sevenDay.WindowDays != 7 || sevenDay.TickCounts != (GovernanceTickCounts{AIClosedLoop: 1, RuleBaseline: 1}) {
 		t.Fatalf("unexpected 7-day summary: %+v", sevenDay)
 	}
 

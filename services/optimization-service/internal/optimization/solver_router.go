@@ -116,22 +116,23 @@ LIMIT 1
 	}
 	if err == nil {
 		sanitized := sanitizeServingRef(deploymentRef)
-		if sanitized != "" && sanitized != DefaultBuiltinSolverRef {
-			if err = tx.Commit(ctx); err != nil {
-				return ActiveSolverSelection{}, err
-			}
-			revCopy := strings.TrimSpace(revisionID)
-			var revPtr *string
-			if revCopy != "" {
-				revPtr = &revCopy
-			}
-			return ActiveSolverSelection{
-				ServingRef:           sanitized,
-				Source:               SolverSourceDeploymentBinding,
-				LoopKey:              effectiveLoop,
-				DeploymentRevisionID: revPtr,
-			}, nil
+		if sanitized == "" {
+			sanitized = DefaultBuiltinSolverRef
 		}
+		if err = tx.Commit(ctx); err != nil {
+			return ActiveSolverSelection{}, err
+		}
+		revCopy := strings.TrimSpace(revisionID)
+		var revPtr *string
+		if revCopy != "" {
+			revPtr = &revCopy
+		}
+		return ActiveSolverSelection{
+			ServingRef:           sanitized,
+			Source:               SolverSourceDeploymentBinding,
+			LoopKey:              effectiveLoop,
+			DeploymentRevisionID: revPtr,
+		}, nil
 	}
 
 	if err = tx.Commit(ctx); err != nil {
@@ -528,6 +529,13 @@ func decodeRemoteRecommendation(body []byte, request Request, at time.Time) (Rec
 		CostSavingPerDay:      request.Baseline.DailyCost - candidate.DailyCost,
 	}
 	if raw.ExpectedImpact != nil {
+		if !finite(raw.ExpectedImpact.EnergySavingKWhPerDay) || !finite(raw.ExpectedImpact.CostSavingPerDay) {
+			return Recommendation{}, errors.New("remote solver expectedImpact contains non-finite value")
+		}
+		if math.Abs(raw.ExpectedImpact.EnergySavingKWhPerDay-expectedImpact.EnergySavingKWhPerDay) > 1.0 ||
+			math.Abs(raw.ExpectedImpact.CostSavingPerDay-expectedImpact.CostSavingPerDay) > 1.0 {
+			return Recommendation{}, errors.New("remote solver expectedImpact inconsistent with candidate delta")
+		}
 		expectedImpact = *raw.ExpectedImpact
 	}
 
@@ -551,7 +559,23 @@ func decodeRemoteRecommendation(body []byte, request Request, at time.Time) (Rec
 	}
 	risk := intelligencemodel.RecommendationRisk{Level: riskLevel, ComfortMarginC: zoneMarginC}
 	if raw.Risk != nil && strings.TrimSpace(raw.Risk.Level) != "" && finite(raw.Risk.ComfortMarginC) {
-		risk = *raw.Risk
+		normalizedLevel := strings.ToUpper(strings.TrimSpace(raw.Risk.Level))
+		switch normalizedLevel {
+		case "LOW", "MEDIUM", "HIGH":
+		default:
+			return Recommendation{}, fmt.Errorf("remote solver risk.level %q is invalid", raw.Risk.Level)
+		}
+		if riskLevel == "MEDIUM" && normalizedLevel == "LOW" {
+			normalizedLevel = "MEDIUM"
+		}
+		margin := raw.Risk.ComfortMarginC
+		if margin > zoneMarginC {
+			margin = zoneMarginC
+		}
+		risk = intelligencemodel.RecommendationRisk{
+			Level:          normalizedLevel,
+			ComfortMarginC: margin,
+		}
 	}
 
 	rollbackPlan := standardRollbackPlan(request.Baseline.SupplyTempC)

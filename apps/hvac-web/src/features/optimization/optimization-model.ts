@@ -867,13 +867,14 @@ export interface OptimizationGovernanceSummary {
 }
 
 const SOLVER_REF_LABELS: Readonly<Record<string, string>> = {
-  'builtin://hvac-recommendation-v1': '内置稳态寻优策略',
-  'hvac-recommendation-v1': '内置稳态寻优策略',
+  'builtin://hvac-recommendation-v1': '内置稳态优化策略',
+  'hvac-recommendation-v1': '内置稳态优化策略',
   'builtin://chiller-cop-model': '冷机 COP 拟合策略',
   'chiller-cop-model': '冷机 COP 拟合策略',
 };
 
 const LOOP_KEY_LABELS: Readonly<Record<string, string>> = {
+  plant: '全冷站主回路',
   chilled_water_supply_temp: '冷冻水供水温度回路',
   chilled_water_supply_reset: '冷冻水供水温度回路',
   chilled_water_supply: '冷冻水供水温度回路',
@@ -890,7 +891,7 @@ export function formatSolverRef(servingRef: string): string {
   const exact = SOLVER_REF_LABELS[normalized];
   if (exact) return exact;
   if (normalized.startsWith('http://') || normalized.startsWith('https://')) {
-    return '外部协同寻优服务';
+    return '外部协同优化服务';
   }
   if (normalized.startsWith('builtin://')) {
     return '内置优化策略';
@@ -999,7 +1000,8 @@ export function parseOptimizationGovernanceSummary(
       weightedCopUpliftPct: copComparison.weightedCopUpliftPct,
       weightedCopUpliftLabel: formatCopUpliftPct(copComparison.weightedCopUpliftPct),
       totalEstimatedSavedKWh: copComparison.totalEstimatedSavedKWh,
-      totalEstimatedSavedLabel: formatSavedKWh(copComparison.totalEstimatedSavedKWh),
+      totalEstimatedSavedLabel:
+        copComparison.matchedBinCount > 0 ? formatSavedKWh(copComparison.totalEstimatedSavedKWh) : '—',
       cells,
     },
     flywheel: {

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { gatewayPath, gatewayRequest, publishedValueOf, valueOf, type GatewayProblem } from '@/api/gateway-client';
 import {
   intelligencePaths,
+  optimizationCopCellSchema,
   optimizationPreparationSchema,
   stagingEvaluationSchema,
   type StagingEvaluation,
@@ -159,19 +160,6 @@ const publishedShadowEvaluationSchema: z.ZodType<PublishedShadowEvaluation> = z.
 
 const optimizationRunResponseSchema = z.object({ optimizationRunId: z.string() });
 
-const governanceCopCellSchema = z.object({
-  wetBulbMinC: z.number(),
-  wetBulbMaxC: z.number(),
-  coolingLoadMinKW: z.number(),
-  coolingLoadMaxKW: z.number(),
-  baselineSamples: z.number(),
-  aiSamples: z.number(),
-  baselineCOP: z.number(),
-  aiCOP: z.number(),
-  copUpliftPct: z.number(),
-  estimatedSavedKWh: z.number(),
-});
-
 const publishedGovernanceSummarySchema: z.ZodType<PublishedOptimizationGovernanceSummary, unknown> = z.object({
   tenantId: z.string(),
   siteId: z.string(),
@@ -197,7 +185,7 @@ const publishedGovernanceSummarySchema: z.ZodType<PublishedOptimizationGovernanc
     weightedAiCOP: z.number().nullish().transform((value) => value ?? null),
     weightedCopUpliftPct: z.number().nullish().transform((value) => value ?? null),
     totalEstimatedSavedKWh: z.number(),
-    cells: z.array(governanceCopCellSchema).nullish().transform((value) => value ?? []),
+    cells: z.array(optimizationCopCellSchema).nullish().transform((value) => value ?? []),
   }),
   flywheel: z.object({
     totalSamples: z.number(),
@@ -208,8 +196,6 @@ const publishedGovernanceSummarySchema: z.ZodType<PublishedOptimizationGovernanc
     trackingDeviation: z.number(),
   }),
 });
-
-const SITE_OPTIMIZATION_GOVERNANCE_SUMMARY_PATH = '/api/v1/sites/{siteId}/optimization/governance-summary';
 
 export const optimizationKeys = {
   latest: (siteId: string) => ['optimization', siteId, 'latest'] as const,
@@ -286,7 +272,7 @@ export function siteOptimizationGovernanceSummaryQuery(siteId: string, enabled: 
     queryKey: optimizationKeys.governanceSummary(siteId),
     queryFn: async ({ signal }): Promise<OptimizationGovernanceSummary | null> => publishedValueOf(
       await gatewayRequest(
-        gatewayPath(SITE_OPTIMIZATION_GOVERNANCE_SUMMARY_PATH, { siteId }),
+        gatewayPath(intelligencePaths.siteOptimizationGovernanceSummary, { siteId }),
         {
           signal,
           parse: (payload) => parseOptimizationGovernanceSummary(publishedGovernanceSummarySchema.parse(payload)),

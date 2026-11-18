@@ -297,6 +297,12 @@ func TestRoutingSolverAdapterRemoteHTTPTracingProvenanceAndFallbacks(t *testing.
 			case 3:
 				// Violates SupplyTempMinC (6.0) in validRequest().
 				_, _ = w.Write([]byte(`{"supplyTempC":4.5}`))
+			case 4:
+				// Invalid risk level outside {LOW, MEDIUM, HIGH}.
+				_, _ = w.Write([]byte(`{"supplyTempC":7.5,"risk":{"level":"EXTREME","comfortMarginC":1.0}}`))
+			case 5:
+				// Fabricated expectedImpact far diverging from baseline - candidate delta.
+				_, _ = w.Write([]byte(`{"supplyTempC":7.5,"expectedImpact":{"energySavingKwhPerDay":99999,"costSavingPerDay":99999}}`))
 			}
 		}))
 		defer server.Close()
@@ -343,8 +349,8 @@ func TestRoutingSolverAdapterRemoteHTTPTracingProvenanceAndFallbacks(t *testing.
 			t.Fatalf("expected open circuit breaker to skip HTTP dial, hits %d -> %d", hitsBeforeOpen, hits.Load())
 		}
 
-		// Timeout, unknown field JSON, and out-of-bounds candidate each fall back cleanly.
-		for _, testMode := range []int32{1, 2, 3} {
+		// Timeout, unknown field JSON, constraint violation, invalid risk level, and fabricated impact each fall back cleanly.
+		for _, testMode := range []int32{1, 2, 3, 4, 5} {
 			mode.Store(testMode)
 			fresh := NewRoutingSolverAdapter(RoutingSolverConfig{
 				Resolver: &stubActiveSolverResolver{

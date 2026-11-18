@@ -55,7 +55,7 @@ func (store *memoryFlywheelStore) ListNegativeSamples(_ context.Context, tenantI
 		if sample.TenantID != tenantID || sample.SiteID != siteID {
 			continue
 		}
-		if sample.CreatedAt.Before(from) || sample.CreatedAt.After(to) {
+		if sample.OccurredAt.Before(from) || sample.OccurredAt.After(to) {
 			continue
 		}
 		out = append(out, sample)
@@ -132,14 +132,14 @@ func TestAutoControllerTryDispatchControlTicksAndNegativeSamples(t *testing.T) {
 			t.Fatalf("ticks=%d samples=%d", len(fw.ticks), len(fw.samples))
 		}
 		tick := fw.ticks[0]
-		if tick.ControlMode != ControlModeAIClosedLoop || tick.SolverServingRef != "https://ml.internal:8443/v1/solve" {
+		if tick.ControlMode != ControlModeAIClosedLoop || tick.SolverServingRef != "https://ml.internal:8443/v1/solve" || tick.LoopKey != DefaultSolverLoopKey {
 			t.Fatalf("tick mode/ref mismatch: %+v", tick)
 		}
-		if tick.MonitorID == nil || *tick.MonitorID != out.MonitorID || tick.DecisionID != out.DecisionID || tick.TraceID != out.TraceID {
+		if tick.RecommendationID == nil || *tick.RecommendationID != rec.ID || tick.DecisionID != out.DecisionID {
 			t.Fatalf("tick correlation mismatch: %+v", tick)
 		}
-		if tick.AppliedSupplyTempC == nil || *tick.AppliedSupplyTempC != 8.0 || tick.BaselineSupplyTempC == nil || *tick.BaselineSupplyTempC != 7.0 {
-			t.Fatalf("tick temps mismatch: base=%v applied=%v", tick.BaselineSupplyTempC, tick.AppliedSupplyTempC)
+		if tick.RecommendedSupplyTempC == nil || *tick.RecommendedSupplyTempC != 8.0 || tick.AppliedSupplyTempC == nil || *tick.AppliedSupplyTempC != 8.0 {
+			t.Fatalf("tick setpoints mismatch: rec=%v applied=%v", tick.RecommendedSupplyTempC, tick.AppliedSupplyTempC)
 		}
 		snap := tick.FeatureSnapshot
 		if snap.OutdoorWetBulbC == nil || *snap.OutdoorWetBulbC != 24.5 ||
@@ -233,7 +233,7 @@ func TestAutoControllerTryDispatchControlTicksAndNegativeSamples(t *testing.T) {
 		if len(fw.ticks) != 2 || fw.ticks[1].ControlMode != ControlModeManualOverride || !fw.ticks[1].FeatureSnapshot.CabinetLocalManual {
 			t.Fatalf("expected MANUAL_OVERRIDE tick with CabinetLocalManual=true, got %+v", fw.ticks[1])
 		}
-		if len(fw.samples) != 1 || fw.samples[0].ReasonCode != NegativeSampleGuardrailVetoed {
+		if len(fw.samples) != 1 || fw.samples[0].SampleKind != NegativeSampleGuardrailVetoed || fw.samples[0].ReasonCode != "device_fault_or_local_manual" {
 			t.Fatalf("expected GUARDRAIL_VETOED sample, got %+v", fw.samples)
 		}
 
@@ -248,7 +248,7 @@ func TestAutoControllerTryDispatchControlTicksAndNegativeSamples(t *testing.T) {
 		if len(fw.ticks) != 3 || fw.ticks[2].ControlMode != ControlModeManualOverride {
 			t.Fatalf("expected MANUAL_OVERRIDE tick on backoff, got %+v", fw.ticks[2])
 		}
-		if len(fw.samples) != 2 || fw.samples[1].ReasonCode != NegativeSampleGuardrailVetoed {
+		if len(fw.samples) != 2 || fw.samples[1].SampleKind != NegativeSampleGuardrailVetoed || fw.samples[1].ReasonCode != "manual_override_backoff" {
 			t.Fatalf("expected GUARDRAIL_VETOED sample on backoff, got %+v", fw.samples[1])
 		}
 	})
@@ -270,12 +270,15 @@ func TestAutoControllerTryDispatchControlTicksAndNegativeSamples(t *testing.T) {
 		if err != nil || !out.Dispatched {
 			t.Fatalf("expected clamped dispatch to proceed, out=%+v err=%v", out, err)
 		}
-		if len(fw.samples) != 1 || fw.samples[0].ReasonCode != NegativeSampleGuardrailClamped {
+		if len(fw.samples) != 1 || fw.samples[0].SampleKind != NegativeSampleGuardrailClamped {
 			t.Fatalf("expected GUARDRAIL_CLAMPED sample, got %+v", fw.samples)
 		}
 		s1 := fw.samples[0]
 		if s1.MonitorID == nil || *s1.MonitorID != out.MonitorID || s1.DecisionID != out.DecisionID || s1.TraceID != out.TraceID {
 			t.Fatalf("clamped sample correlation mismatch: %+v", s1)
+		}
+		if s1.RawRecommendedValue == nil || *s1.RawRecommendedValue != 10.5 || s1.AppliedOrClampedValue == nil || *s1.AppliedOrClampedValue != 8.5 {
+			t.Fatalf("clamped sample values mismatch: raw=%v clamped=%v", s1.RawRecommendedValue, s1.AppliedOrClampedValue)
 		}
 		if s1.SolverServingRef != "https://canary.internal:8443/solve" || len(s1.GuardrailTrace) == 0 || string(s1.GuardrailTrace) == "[]" {
 			t.Fatalf("clamped sample missing solver or guardrail trace: %+v", s1)
@@ -293,7 +296,7 @@ func TestAutoControllerTryDispatchControlTicksAndNegativeSamples(t *testing.T) {
 		if len(fw.ticks) != 2 || fw.ticks[1].ControlMode != ControlModeRuleBaseline {
 			t.Fatalf("expected RULE_BASELINE tick on device fault, got %+v", fw.ticks[1])
 		}
-		if len(fw.samples) != 2 || fw.samples[1].ReasonCode != NegativeSampleGuardrailVetoed || !fw.samples[1].FeatureSnapshot.DeviceFaultActive {
+		if len(fw.samples) != 2 || fw.samples[1].SampleKind != NegativeSampleGuardrailVetoed || !fw.samples[1].FeatureSnapshot.DeviceFaultActive {
 			t.Fatalf("expected GUARDRAIL_VETOED sample with DeviceFaultActive=true, got %+v", fw.samples[1])
 		}
 	})
@@ -330,7 +333,7 @@ func TestAutoControllerRunMonitorPassNegativeSamples(t *testing.T) {
 		}
 	}
 
-	runCase := func(t *testing.T, mon OptimizationExecutionMonitorRecord, points []TelemetryLivePoint, wantReason string) NegativeSampleRecord {
+	runCase := func(t *testing.T, mon OptimizationExecutionMonitorRecord, points []TelemetryLivePoint, wantKind string) NegativeSampleRecord {
 		t.Helper()
 		fw := &memoryFlywheelStore{}
 		store := &fakeAutoControlStore{
@@ -360,8 +363,8 @@ func TestAutoControllerRunMonitorPassNegativeSamples(t *testing.T) {
 		if _, err := ctrl.RunMonitorPass(t.Context(), now); err != nil {
 			t.Fatal(err)
 		}
-		if len(fw.samples) != 1 || fw.samples[0].ReasonCode != wantReason {
-			t.Fatalf("expected negative sample %s, got %+v", wantReason, fw.samples)
+		if len(fw.samples) != 1 || fw.samples[0].SampleKind != wantKind {
+			t.Fatalf("expected negative sample %s, got %+v", wantKind, fw.samples)
 		}
 		sample := fw.samples[0]
 		if sample.DecisionID != mon.DecisionID || sample.TraceID != mon.TraceID || sample.SolverServingRef != "https://ml.internal:8443/v1/solve" {
@@ -377,8 +380,8 @@ func TestAutoControllerRunMonitorPassNegativeSamples(t *testing.T) {
 		mon := newMonitor("01990000-3333-7000-8000-000000000001", now.Add(-5*time.Minute), 8.0)
 		// Applied=8.0, Restore=7.0, Live=6.5 -> tamper (>0.35C from applied, not equal to restore).
 		sample := runCase(t, mon, testLivePoints(now, 8.0, 6.5, 23.0), NegativeSampleManualOverride)
-		if sample.Detail != "cabinet_setpoint_manual_override" {
-			t.Fatalf("detail=%q", sample.Detail)
+		if sample.ReasonCode != "cabinet_setpoint_manual_override" {
+			t.Fatalf("reasonCode=%q", sample.ReasonCode)
 		}
 	})
 
@@ -394,8 +397,8 @@ func TestAutoControllerRunMonitorPassNegativeSamples(t *testing.T) {
 	t.Run("MONITOR_TRIPPED on zone limit violation", func(t *testing.T) {
 		mon := newMonitor("01990000-3333-7000-8000-000000000003", now.Add(-5*time.Minute), 8.0)
 		sample := runCase(t, mon, testLivePoints(now, 8.0, 8.0, 26.8), NegativeSampleMonitorTripped)
-		if sample.Detail == "" {
-			t.Fatal("expected non-empty detail for tripped monitor")
+		if sample.ReasonCode == "" {
+			t.Fatal("expected non-empty reasonCode for tripped monitor")
 		}
 	})
 }
@@ -407,7 +410,7 @@ func TestServiceGovernanceSummaryBivariateCOPAndFlywheel(t *testing.T) {
 
 	fw := &memoryFlywheelStore{
 		ticks: []ControlTickRecord{
-			// Bin (24..26 C, 600..800 kW): baseline COP 4.0, AI COP 4.4 -> +0.4 (+10%)
+			// Bin (24..26 C, 600..800 kW): baseline COP 4.0, AI COP 4.4 -> +10%, saved 8.25 kWh
 			{
 				ID:          "t1",
 				TenantID:    tenantID,
@@ -444,7 +447,7 @@ func TestServiceGovernanceSummaryBivariateCOPAndFlywheel(t *testing.T) {
 				},
 				TickAt: now.Add(-12 * time.Hour),
 			},
-			// Unmatched bin (26..28 C, 800..1000 kW): baseline only
+			// Unmatched bin (26..28 C, 800..1000 kW): excluded from matched bivariate cells
 			{
 				ID:          "t4",
 				TenantID:    tenantID,
@@ -463,11 +466,11 @@ func TestServiceGovernanceSummaryBivariateCOPAndFlywheel(t *testing.T) {
 			{ID: "old", TenantID: tenantID, SiteID: siteID, ControlMode: ControlModeRuleBaseline, TickAt: now.AddDate(0, 0, -20)},
 		},
 		samples: []NegativeSampleRecord{
-			{ID: "s1", TenantID: tenantID, SiteID: siteID, ReasonCode: NegativeSampleGuardrailClamped, CreatedAt: now.Add(-5 * time.Hour)},
-			{ID: "s2", TenantID: tenantID, SiteID: siteID, ReasonCode: NegativeSampleGuardrailVetoed, CreatedAt: now.Add(-4 * time.Hour)},
-			{ID: "s3", TenantID: tenantID, SiteID: siteID, ReasonCode: NegativeSampleManualOverride, CreatedAt: now.Add(-3 * time.Hour)},
-			{ID: "s4", TenantID: tenantID, SiteID: siteID, ReasonCode: NegativeSampleTrackingDeviation, CreatedAt: now.Add(-2 * time.Hour)},
-			{ID: "s5", TenantID: tenantID, SiteID: siteID, ReasonCode: NegativeSampleMonitorTripped, CreatedAt: now.Add(-1 * time.Hour)},
+			{ID: "s1", TenantID: tenantID, SiteID: siteID, SampleKind: NegativeSampleGuardrailClamped, OccurredAt: now.Add(-5 * time.Hour)},
+			{ID: "s2", TenantID: tenantID, SiteID: siteID, SampleKind: NegativeSampleGuardrailVetoed, OccurredAt: now.Add(-4 * time.Hour)},
+			{ID: "s3", TenantID: tenantID, SiteID: siteID, SampleKind: NegativeSampleManualOverride, OccurredAt: now.Add(-3 * time.Hour)},
+			{ID: "s4", TenantID: tenantID, SiteID: siteID, SampleKind: NegativeSampleTrackingDeviation, OccurredAt: now.Add(-2 * time.Hour)},
+			{ID: "s5", TenantID: tenantID, SiteID: siteID, SampleKind: NegativeSampleMonitorTripped, OccurredAt: now.Add(-1 * time.Hour)},
 		},
 	}
 
@@ -493,28 +496,55 @@ func TestServiceGovernanceSummaryBivariateCOPAndFlywheel(t *testing.T) {
 	if summary.ActiveSolver.ServingRef != "https://ml.internal:8443/v1/solve" || summary.ActiveSolver.Source != SolverSourceSiteLoopCanary {
 		t.Fatalf("activeSolver=%+v", summary.ActiveSolver)
 	}
-	if summary.TickCounts != (GovernanceTickCounts{Total: 6, AIClosedLoop: 2, AIShadow: 1, RuleBaseline: 2, ManualOverride: 1}) {
+	if summary.TickCounts != (GovernanceTickCounts{AIClosedLoop: 2, AIShadow: 1, RuleBaseline: 2, ManualOverride: 1}) {
 		t.Fatalf("tickCounts=%+v", summary.TickCounts)
 	}
 	cop := summary.COPComparison
-	if cop.WetBulbBinSizeC != 2.0 || cop.LoadBinSizeKW != 200.0 || cop.TotalCells != 2 || cop.MatchedCells != 1 {
+	if cop.MatchedBinCount != 1 || cop.MatchedBaselineSamples != 1 || cop.MatchedAISamples != 2 {
 		t.Fatalf("copComparison bins mismatch: %+v", cop)
 	}
-	if cop.WeightedCOPGain == nil || math.Abs(*cop.WeightedCOPGain-0.4) > 1e-4 {
-		t.Fatalf("weightedCOPGain=%v, want 0.4", cop.WeightedCOPGain)
+	if cop.WeightedBaselineCOP == nil || math.Abs(*cop.WeightedBaselineCOP-4.0) > 1e-4 {
+		t.Fatalf("weightedBaselineCOP=%v, want 4.0", cop.WeightedBaselineCOP)
 	}
-	if cop.WeightedGainPct == nil || math.Abs(*cop.WeightedGainPct-10.0) > 1e-2 {
-		t.Fatalf("weightedGainPct=%v, want 10.0", cop.WeightedGainPct)
+	if cop.WeightedAICOP == nil || math.Abs(*cop.WeightedAICOP-4.4) > 1e-4 {
+		t.Fatalf("weightedAICOP=%v, want 4.4", cop.WeightedAICOP)
 	}
-	if !cop.Cells[0].Matched || cop.Cells[0].WetBulbMinC != 24.0 || cop.Cells[0].LoadMinKW != 600.0 || cop.Cells[1].Matched {
+	if cop.WeightedCOPUpliftPct == nil || math.Abs(*cop.WeightedCOPUpliftPct-10.0) > 1e-2 {
+		t.Fatalf("weightedCopUpliftPct=%v, want 10.0", cop.WeightedCOPUpliftPct)
+	}
+	if math.Abs(cop.TotalEstimatedSavedKWh-8.25) > 1e-4 {
+		t.Fatalf("totalEstimatedSavedKWh=%v, want 8.25", cop.TotalEstimatedSavedKWh)
+	}
+	if len(cop.Cells) != 1 || cop.Cells[0].WetBulbMinC != 24.0 || cop.Cells[0].CoolingLoadMinKW != 600.0 {
 		t.Fatalf("cells mismatch: %+v", cop.Cells)
 	}
-	if summary.Flywheel.TotalNegativeSamples != 5 ||
-		summary.Flywheel.ByReason != (GovernanceFlywheelCounts{GuardrailClamped: 1, GuardrailVetoed: 1, ManualOverride: 1, TrackingDeviation: 1, MonitorTripped: 1}) {
+	if summary.Flywheel != (GovernanceFlywheelSummary{
+		TotalSamples:      5,
+		GuardrailClamped:  1,
+		GuardrailVetoed:   1,
+		ManualOverride:    1,
+		MonitorTripped:    1,
+		TrackingDeviation: 1,
+	}) {
 		t.Fatalf("flywheel summary mismatch: %+v", summary.Flywheel)
 	}
-	if len(summary.Flywheel.RecentSamples) != 5 || summary.Flywheel.RecentSamples[0].ID != "s5" {
-		t.Fatalf("expected descending recent samples starting with s5, got %+v", summary.Flywheel.RecentSamples)
+
+	// Verify serialized JSON exactly matches OpenAPI additionalProperties:false schema (including deploymentRevisionId:null).
+	payload, err := json.Marshal(summary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	activeSolverMap, _ := decoded["activeSolver"].(map[string]any)
+	if _, hasRev := activeSolverMap["deploymentRevisionId"]; !hasRev {
+		t.Fatalf("activeSolver missing nullable deploymentRevisionId: %s", string(payload))
+	}
+	tickCountsMap, _ := decoded["tickCounts"].(map[string]any)
+	if _, hasExtra := tickCountsMap["total"]; hasExtra {
+		t.Fatalf("tickCounts must not emit extra 'total' field: %s", string(payload))
 	}
 
 	// Non-visible site returns ErrOptimizationNotFound.

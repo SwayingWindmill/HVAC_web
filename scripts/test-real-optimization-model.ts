@@ -544,16 +544,17 @@ test('executionMode defaults to CLOSED_LOOP, supports SHADOW payload & prefill, 
 });
 
 test('governance summary helpers map solver routing, M&V COP bins, and flywheel labels without leaking internal tokens', () => {
-  assert.equal(formatSolverRef('builtin://hvac-recommendation-v1'), '内置稳态寻优策略');
+  assert.equal(formatSolverRef('builtin://hvac-recommendation-v1'), '内置稳态优化策略');
   assert.equal(formatSolverRef('builtin://chiller-cop-model'), '冷机 COP 拟合策略');
-  assert.equal(formatSolverRef('https://solver.internal.example/v2/recommend'), '外部协同寻优服务');
-  assert.equal(formatSolverRef('http://localhost:8090/solve'), '外部协同寻优服务');
+  assert.equal(formatSolverRef('https://solver.internal.example/v2/recommend'), '外部协同优化服务');
+  assert.equal(formatSolverRef('http://localhost:8090/solve'), '外部协同优化服务');
   assert.equal(formatSolverRef('builtin://experimental-v2'), '内置优化策略');
 
   assert.equal(formatSolverSource('DEFAULT'), '默认基线');
   assert.equal(formatSolverSource('DEPLOYMENT_BINDING'), '站点部署绑定');
   assert.equal(formatSolverSource('SITE_LOOP_CANARY'), '回路灰度策略');
 
+  assert.equal(formatLoopKey('PLANT'), '全冷站主回路');
   assert.equal(formatLoopKey('chilled_water_supply_temp'), '冷冻水供水温度回路');
   assert.equal(formatLoopKey('unknown_internal_loop_key'), '指定控制回路');
 
@@ -659,11 +660,12 @@ test('governance summary helpers map solver routing, M&V COP bins, and flywheel 
       cells: [],
     },
   });
-  assert.equal(empty.activeSolver.solverLabel, '外部协同寻优服务');
+  assert.equal(empty.activeSolver.solverLabel, '外部协同优化服务');
   assert.equal(empty.activeSolver.sourceLabel, '默认基线');
   assert.equal(empty.activeSolver.hasDeploymentBinding, false);
   assert.equal(empty.copComparison.weightedBaselineCOPLabel, '—');
   assert.equal(empty.copComparison.weightedAiCOPLabel, '—');
   assert.equal(empty.copComparison.weightedCopUpliftLabel, '—');
+  assert.equal(empty.copComparison.totalEstimatedSavedLabel, '—');
   assert.equal(empty.copComparison.cells.length, 0);
 });

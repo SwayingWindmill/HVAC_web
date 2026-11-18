@@ -7,11 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 	"github.com/quanlaihe/hvac-web/libs/intelligencemodel"
 )
@@ -28,11 +28,8 @@ const (
 	NegativeSampleTrackingDeviation = "TRACKING_DEVIATION"
 	NegativeSampleMonitorTripped    = "MONITOR_TRIPPED"
 
-	DefaultGovernanceWindowDays         = 14
-	MaxGovernanceWindowDays             = 365
-	BivariateWetBulbBinWidthC           = 2.0
-	BivariateLoadBinWidthKW             = 200.0
-	defaultGovernanceRecentSamplesLimit = 20
+	DefaultGovernanceWindowDays = 14
+	MaxGovernanceWindowDays     = 365
 )
 
 // OptimizationFeatureSnapshot captures the typed physical plant state and active guardrail bounds
@@ -52,41 +49,44 @@ type OptimizationFeatureSnapshot struct {
 	SupplyTempMaxC     float64  `json:"supplyTempMaxC"`
 }
 
-// ControlTickRecord records a single AutoController evaluation cycle mode and plant observation.
+// ControlTickRecord records a single AutoController evaluation cycle mode and plant observation
+// aligned with core_registry.optimization_control_ticks.
 type ControlTickRecord struct {
-	ID                  string
-	TenantID            string
-	SiteID              string
-	ControlMode         string
-	SkipReason          string
-	SolverServingRef    string
-	RecommendationID    *string
-	MonitorID           *string
-	DecisionID          string
-	TraceID             string
-	BaselineSupplyTempC *float64
-	AppliedSupplyTempC  *float64
-	FeatureSnapshot     OptimizationFeatureSnapshot
-	TickAt              time.Time
+	ID                     string
+	TenantID               string
+	SiteID                 string
+	OptimizationRunID      *string
+	RecommendationID       *string
+	DecisionID             string
+	ControlMode            string
+	LoopKey                string
+	SolverServingRef       string
+	DeploymentRevisionID   *string
+	BaselineSupplyTempC    *float64
+	RecommendedSupplyTempC *float64
+	AppliedSupplyTempC     *float64
+	FeatureSnapshot        OptimizationFeatureSnapshot
+	TickAt                 time.Time
 }
 
 // NegativeSampleRecord captures a clamped, vetoed, manual-override, deviation, or tripped event
-// for model quality feedback and offline retraining.
+// aligned with core_registry.optimization_negative_samples.
 type NegativeSampleRecord struct {
-	ID               string
-	TenantID         string
-	SiteID           string
-	ReasonCode       string
-	Detail           string
-	RecommendationID *string
-	MonitorID        *string
-	DecisionID       string
-	TraceID          string
-	SolverServingRef string
-	GuardrailVerdict string
-	GuardrailTrace   json.RawMessage
-	FeatureSnapshot  OptimizationFeatureSnapshot
-	CreatedAt        time.Time
+	ID                    string
+	TenantID              string
+	SiteID                string
+	RecommendationID      *string
+	MonitorID             *string
+	DecisionID            string
+	TraceID               string
+	SampleKind            string
+	ReasonCode            string
+	SolverServingRef      string
+	RawRecommendedValue   *float64
+	AppliedOrClampedValue *float64
+	GuardrailTrace        json.RawMessage
+	FeatureSnapshot       OptimizationFeatureSnapshot
+	OccurredAt            time.Time
 }
 
 // GovernanceFlywheelStore persists and queries control-mode ticks and flywheel negative samples.
@@ -104,82 +104,32 @@ type SiteVisibilityChecker interface {
 
 // GovernanceTickCounts summarizes control mode ticks over the evaluation window.
 type GovernanceTickCounts struct {
-	Total          int `json:"total"`
 	AIClosedLoop   int `json:"aiClosedLoop"`
 	AIShadow       int `json:"aiShadow"`
 	RuleBaseline   int `json:"ruleBaseline"`
 	ManualOverride int `json:"manualOverride"`
 }
 
-// BivariateCOPCell compares baseline vs AI closed-loop COP inside one (wet-bulb, cooling-load) bin.
-type BivariateCOPCell struct {
-	WetBulbMinC     float64  `json:"wetBulbMinC"`
-	WetBulbMaxC     float64  `json:"wetBulbMaxC"`
-	LoadMinKW       float64  `json:"loadMinKW"`
-	LoadMaxKW       float64  `json:"loadMaxKW"`
-	BaselineSamples int      `json:"baselineSamples"`
-	BaselineMeanCOP *float64 `json:"baselineMeanCOP"`
-	AISamples       int      `json:"aiSamples"`
-	AIMeanCOP       *float64 `json:"aiMeanCOP"`
-	DeltaCOP        *float64 `json:"deltaCOP"`
-	RelativeGainPct *float64 `json:"relativeGainPct"`
-	Matched         bool     `json:"matched"`
-}
-
-// GovernanceCOPComparison summarizes bivariate wet-bulb × cooling-load COP M&V cells.
-type GovernanceCOPComparison struct {
-	WetBulbBinSizeC float64            `json:"wetBulbBinSizeC"`
-	LoadBinSizeKW   float64            `json:"loadBinSizeKW"`
-	TotalCells      int                `json:"totalCells"`
-	MatchedCells    int                `json:"matchedCells"`
-	BaselineSamples int                `json:"baselineSamples"`
-	AISamples       int                `json:"aiSamples"`
-	BaselineMeanCOP *float64           `json:"baselineMeanCOP"`
-	AIMeanCOP       *float64           `json:"aiMeanCOP"`
-	WeightedCOPGain *float64           `json:"weightedCOPGain"`
-	WeightedGainPct *float64           `json:"weightedGainPct"`
-	Cells           []BivariateCOPCell `json:"cells"`
-}
-
-// GovernanceFlywheelCounts breaks down negative flywheel samples by trigger category.
-type GovernanceFlywheelCounts struct {
+// GovernanceFlywheelSummary summarizes negative-sample counts across flywheel categories.
+type GovernanceFlywheelSummary struct {
+	TotalSamples      int `json:"totalSamples"`
 	GuardrailClamped  int `json:"guardrailClamped"`
 	GuardrailVetoed   int `json:"guardrailVetoed"`
 	ManualOverride    int `json:"manualOverride"`
-	TrackingDeviation int `json:"trackingDeviation"`
 	MonitorTripped    int `json:"monitorTripped"`
-}
-
-// GovernanceFlywheelSample is a sanitized negative sample entry surfaced in GovernanceSummary.
-type GovernanceFlywheelSample struct {
-	ID               string                      `json:"id"`
-	ReasonCode       string                      `json:"reasonCode"`
-	Detail           string                      `json:"detail,omitempty"`
-	DecisionID       string                      `json:"decisionId,omitempty"`
-	TraceID          string                      `json:"traceId,omitempty"`
-	SolverServingRef string                      `json:"solverServingRef"`
-	GuardrailVerdict string                      `json:"guardrailVerdict,omitempty"`
-	FeatureSnapshot  OptimizationFeatureSnapshot `json:"featureSnapshot"`
-	CreatedAt        time.Time                   `json:"createdAt"`
-}
-
-// GovernanceFlywheelSummary aggregates negative-sample counts and recent samples for a site.
-type GovernanceFlywheelSummary struct {
-	TotalNegativeSamples int                        `json:"totalNegativeSamples"`
-	ByReason             GovernanceFlywheelCounts   `json:"byReason"`
-	RecentSamples        []GovernanceFlywheelSample `json:"recentSamples"`
+	TrackingDeviation int `json:"trackingDeviation"`
 }
 
 // GovernanceSummary is the site-level AI governance, routing, bivariate M&V COP, and flywheel response.
 type GovernanceSummary struct {
-	TenantID      string                    `json:"tenantId"`
-	SiteID        string                    `json:"siteId"`
-	WindowDays    int                       `json:"windowDays"`
-	GeneratedAt   time.Time                 `json:"generatedAt"`
-	ActiveSolver  ActiveSolverSelection     `json:"activeSolver"`
-	TickCounts    GovernanceTickCounts      `json:"tickCounts"`
-	COPComparison GovernanceCOPComparison   `json:"copComparison"`
-	Flywheel      GovernanceFlywheelSummary `json:"flywheel"`
+	TenantID      string                             `json:"tenantId"`
+	SiteID        string                             `json:"siteId"`
+	WindowDays    int                                `json:"windowDays"`
+	GeneratedAt   time.Time                          `json:"generatedAt"`
+	ActiveSolver  ActiveSolverSelection              `json:"activeSolver"`
+	TickCounts    GovernanceTickCounts               `json:"tickCounts"`
+	COPComparison analyticsmodel.BivariateCOPSummary `json:"copComparison"`
+	Flywheel      GovernanceFlywheelSummary          `json:"flywheel"`
 }
 
 // CheckSiteVisible reports whether siteID exists within tenantID under RLS.
@@ -235,29 +185,33 @@ func (store *PostgresStore) RecordControlTick(ctx context.Context, tick ControlT
 			return err
 		}
 		id = generated
-	} else if !uuidPattern.MatchString(id) {
-		return errors.New("control tick id is invalid")
+	} else if !isUUIDv7(id) {
+		return errors.New("control tick id must be UUIDv7")
+	}
+	runID, err := optionalUUIDPtr(tick.OptimizationRunID)
+	if err != nil {
+		return fmt.Errorf("control tick optimizationRunId: %w", err)
 	}
 	recID, err := optionalUUIDPtr(tick.RecommendationID)
 	if err != nil {
 		return fmt.Errorf("control tick recommendationId: %w", err)
 	}
-	monID, err := optionalUUIDPtr(tick.MonitorID)
-	if err != nil {
-		return fmt.Errorf("control tick monitorId: %w", err)
-	}
 	decisionIDPtr, err := optionalUUIDStringPtr(tick.DecisionID)
 	if err != nil {
 		return fmt.Errorf("control tick decisionId: %w", err)
 	}
-	traceID := intelligencemodel.NormalizeTraceID32(tick.TraceID)
+	deploymentRevID, err := optionalUUIDPtr(tick.DeploymentRevisionID)
+	if err != nil {
+		return fmt.Errorf("control tick deploymentRevisionId: %w", err)
+	}
+	loopKey := normalizeSolverLoopKey(tick.LoopKey)
 	servingRef := sanitizeServingRef(tick.SolverServingRef)
 	if servingRef == "" {
 		servingRef = DefaultBuiltinSolverRef
 	}
-	snapshotBytes := encodeOptimizationJSON(tick.FeatureSnapshot)
-	if len(snapshotBytes) == 0 || string(snapshotBytes) == "null" {
-		snapshotBytes = []byte("{}")
+	supplyTempC := finiteFloatPtr(tick.FeatureSnapshot.SupplyTempC)
+	if supplyTempC == nil {
+		supplyTempC = finiteFloatPtr(tick.BaselineSupplyTempC)
 	}
 
 	tx, err := store.pool.Begin(ctx)
@@ -271,26 +225,28 @@ func (store *PostgresStore) RecordControlTick(ctx context.Context, tick ControlT
 
 	if _, err = tx.Exec(ctx, `
 INSERT INTO core_registry.optimization_control_ticks (
-  id, tenant_id, site_id, control_mode, skip_reason, solver_serving_ref,
-  recommendation_id, monitor_id, decision_id, trace_id,
-  baseline_supply_temp_c, applied_supply_temp_c,
+  id, tenant_id, site_id, optimization_run_id, recommendation_id, decision_id,
+  control_mode, loop_key, solver_serving_ref, deployment_revision_id,
   outdoor_wet_bulb_c, cooling_load_kw, chiller_power_kw, observed_cop,
-  feature_snapshot, tick_at, created_at
+  supply_temp_c, recommended_supply_temp_c, applied_supply_temp_c,
+  recorded_at, created_at
 ) VALUES (
-  $1::uuid, $2::uuid, $3::uuid, $4, $5, $6,
-  $7::uuid, $8::uuid, $9::uuid, $10,
-  $11, $12,
-  $13, $14, $15, $16,
-  $17::jsonb, $18, $18
+  $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6::uuid,
+  $7, $8, $9, $10::uuid,
+  $11, $12, $13, $14,
+  $15, $16, $17,
+  $18, $18
 )`,
-		id, tenant, site, mode, cleanStringPtr(tick.SkipReason), servingRef,
-		recID, monID, decisionIDPtr, traceID,
-		finiteFloatPtr(tick.BaselineSupplyTempC), finiteFloatPtr(tick.AppliedSupplyTempC),
+		id, tenant, site, runID, recID, decisionIDPtr,
+		mode, loopKey, servingRef, deploymentRevID,
 		finiteFloatPtr(tick.FeatureSnapshot.OutdoorWetBulbC),
 		finiteFloatPtr(tick.FeatureSnapshot.CoolingLoadKW),
 		finiteFloatPtr(tick.FeatureSnapshot.ChillerPowerKW),
 		finiteFloatPtr(tick.FeatureSnapshot.ObservedCOP),
-		snapshotBytes, tickAt,
+		supplyTempC,
+		finiteFloatPtr(tick.RecommendedSupplyTempC),
+		finiteFloatPtr(tick.AppliedSupplyTempC),
+		tickAt,
 	); err != nil {
 		return fmt.Errorf("insert optimization control tick: %w", err)
 	}
@@ -307,23 +263,27 @@ func (store *PostgresStore) RecordNegativeSample(ctx context.Context, sample Neg
 	if !uuidPattern.MatchString(tenant) || !uuidPattern.MatchString(site) {
 		return errors.New("negative sample scope is invalid")
 	}
-	reasonCode := normalizeNegativeSampleReason(sample.ReasonCode)
-	if reasonCode == "" {
-		return fmt.Errorf("negative sample reasonCode %q is invalid", sample.ReasonCode)
+	sampleKind := resolveNegativeSampleKind(sample)
+	if sampleKind == "" {
+		return fmt.Errorf("negative sample kind/reason (%q/%q) is invalid", sample.SampleKind, sample.ReasonCode)
 	}
-	createdAt := sample.CreatedAt.UTC()
-	if createdAt.IsZero() {
-		createdAt = time.Now().UTC()
+	reasonCode := strings.TrimSpace(sample.ReasonCode)
+	if reasonCode == "" {
+		reasonCode = sampleKind
+	}
+	occurredAt := sample.OccurredAt.UTC()
+	if occurredAt.IsZero() {
+		occurredAt = time.Now().UTC()
 	}
 	id := strings.TrimSpace(sample.ID)
 	if id == "" {
-		generated, err := optimizationUUIDv7(createdAt)
+		generated, err := optimizationUUIDv7(occurredAt)
 		if err != nil {
 			return err
 		}
 		id = generated
-	} else if !uuidPattern.MatchString(id) {
-		return errors.New("negative sample id is invalid")
+	} else if !isUUIDv7(id) {
+		return errors.New("negative sample id must be UUIDv7")
 	}
 	recID, err := optionalUUIDPtr(sample.RecommendationID)
 	if err != nil {
@@ -345,6 +305,8 @@ func (store *PostgresStore) RecordNegativeSample(ctx context.Context, sample Neg
 	traceBytes := bytes.TrimSpace(sample.GuardrailTrace)
 	if len(traceBytes) == 0 || string(traceBytes) == "null" {
 		traceBytes = []byte("[]")
+	} else if traceBytes[0] != '[' || !json.Valid(traceBytes) {
+		return errors.New("negative sample guardrailTrace must be a valid JSON array")
 	}
 	snapshotBytes := encodeOptimizationJSON(sample.FeatureSnapshot)
 	if len(snapshotBytes) == 0 || string(snapshotBytes) == "null" {
@@ -362,20 +324,21 @@ func (store *PostgresStore) RecordNegativeSample(ctx context.Context, sample Neg
 
 	if _, err = tx.Exec(ctx, `
 INSERT INTO core_registry.optimization_negative_samples (
-  id, tenant_id, site_id, reason_code, detail,
-  recommendation_id, monitor_id, decision_id, trace_id,
-  solver_serving_ref, guardrail_verdict, guardrail_trace,
-  feature_snapshot, created_at
+  id, tenant_id, site_id, recommendation_id, monitor_id, decision_id, trace_id,
+  sample_kind, reason_code, solver_serving_ref,
+  raw_recommended_value, applied_or_clamped_value,
+  feature_snapshot, guardrail_trace, occurred_at, created_at
 ) VALUES (
-  $1::uuid, $2::uuid, $3::uuid, $4, $5,
-  $6::uuid, $7::uuid, $8::uuid, $9,
-  $10, $11, $12::jsonb,
-  $13::jsonb, $14
+  $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6::uuid, $7,
+  $8, $9, $10,
+  $11, $12,
+  $13::jsonb, $14::jsonb, $15, $15
 )`,
-		id, tenant, site, reasonCode, cleanStringPtr(sample.Detail),
-		recID, monID, decisionIDPtr, traceID,
-		servingRef, cleanStringPtr(sample.GuardrailVerdict), traceBytes,
-		snapshotBytes, createdAt,
+		id, tenant, site, recID, monID, decisionIDPtr, traceID,
+		sampleKind, reasonCode, servingRef,
+		finiteFloatPtr(sample.RawRecommendedValue),
+		finiteFloatPtr(sample.AppliedOrClampedValue),
+		snapshotBytes, traceBytes, occurredAt,
 	); err != nil {
 		return fmt.Errorf("insert optimization negative sample: %w", err)
 	}
@@ -402,20 +365,21 @@ func (store *PostgresStore) ListControlTicks(ctx context.Context, tenantID, site
 	}
 
 	rows, err := tx.Query(ctx, `
-SELECT id::text, tenant_id::text, site_id::text, control_mode,
-       COALESCE(skip_reason, ''), COALESCE(solver_serving_ref, ''),
+SELECT id::text, tenant_id::text, site_id::text,
+       CASE WHEN optimization_run_id IS NULL THEN NULL ELSE optimization_run_id::text END,
        CASE WHEN recommendation_id IS NULL THEN NULL ELSE recommendation_id::text END,
-       CASE WHEN monitor_id IS NULL THEN NULL ELSE monitor_id::text END,
-       COALESCE(decision_id::text, ''), COALESCE(trace_id, ''),
-       baseline_supply_temp_c, applied_supply_temp_c,
+       COALESCE(decision_id::text, ''),
+       control_mode, COALESCE(loop_key, 'PLANT'), COALESCE(solver_serving_ref, ''),
+       CASE WHEN deployment_revision_id IS NULL THEN NULL ELSE deployment_revision_id::text END,
        outdoor_wet_bulb_c, cooling_load_kw, chiller_power_kw, observed_cop,
-       feature_snapshot, tick_at
+       supply_temp_c, recommended_supply_temp_c, applied_supply_temp_c,
+       recorded_at
 FROM core_registry.optimization_control_ticks
 WHERE tenant_id = $1::uuid
   AND site_id = $2::uuid
-  AND tick_at >= $3
-  AND tick_at <= $4
-ORDER BY tick_at DESC, id DESC
+  AND recorded_at >= $3
+  AND recorded_at <= $4
+ORDER BY recorded_at DESC, id DESC
 `, tenant, site, from.UTC(), to.UTC())
 	if err != nil {
 		return nil, fmt.Errorf("query optimization control ticks: %w", err)
@@ -425,36 +389,23 @@ ORDER BY tick_at DESC, id DESC
 	ticks := []ControlTickRecord{}
 	for rows.Next() {
 		var item ControlTickRecord
-		var wetBulb, coolingLoad, chillerPower, observedCOP *float64
-		var snapshotBytes []byte
+		var wetBulb, coolingLoad, chillerPower, observedCOP, supplyTempC *float64
 		if scanErr := rows.Scan(
-			&item.ID, &item.TenantID, &item.SiteID, &item.ControlMode,
-			&item.SkipReason, &item.SolverServingRef,
-			&item.RecommendationID, &item.MonitorID,
-			&item.DecisionID, &item.TraceID,
-			&item.BaselineSupplyTempC, &item.AppliedSupplyTempC,
+			&item.ID, &item.TenantID, &item.SiteID,
+			&item.OptimizationRunID, &item.RecommendationID, &item.DecisionID,
+			&item.ControlMode, &item.LoopKey, &item.SolverServingRef, &item.DeploymentRevisionID,
 			&wetBulb, &coolingLoad, &chillerPower, &observedCOP,
-			&snapshotBytes, &item.TickAt,
+			&supplyTempC, &item.RecommendedSupplyTempC, &item.AppliedSupplyTempC,
+			&item.TickAt,
 		); scanErr != nil {
 			return nil, scanErr
 		}
-		if len(snapshotBytes) > 0 && string(snapshotBytes) != "null" {
-			if unmarshalErr := json.Unmarshal(snapshotBytes, &item.FeatureSnapshot); unmarshalErr != nil {
-				return nil, fmt.Errorf("decode control tick feature snapshot: %w", unmarshalErr)
-			}
-		}
-		if item.FeatureSnapshot.OutdoorWetBulbC == nil && wetBulb != nil {
-			item.FeatureSnapshot.OutdoorWetBulbC = wetBulb
-		}
-		if item.FeatureSnapshot.CoolingLoadKW == nil && coolingLoad != nil {
-			item.FeatureSnapshot.CoolingLoadKW = coolingLoad
-		}
-		if item.FeatureSnapshot.ChillerPowerKW == nil && chillerPower != nil {
-			item.FeatureSnapshot.ChillerPowerKW = chillerPower
-		}
-		if item.FeatureSnapshot.ObservedCOP == nil && observedCOP != nil {
-			item.FeatureSnapshot.ObservedCOP = observedCOP
-		}
+		item.FeatureSnapshot.OutdoorWetBulbC = wetBulb
+		item.FeatureSnapshot.CoolingLoadKW = coolingLoad
+		item.FeatureSnapshot.ChillerPowerKW = chillerPower
+		item.FeatureSnapshot.ObservedCOP = observedCOP
+		item.FeatureSnapshot.SupplyTempC = supplyTempC
+		item.BaselineSupplyTempC = supplyTempC
 		item.TickAt = item.TickAt.UTC()
 		ticks = append(ticks, item)
 	}
@@ -487,18 +438,19 @@ func (store *PostgresStore) ListNegativeSamples(ctx context.Context, tenantID, s
 	}
 
 	query := `
-SELECT id::text, tenant_id::text, site_id::text, reason_code, COALESCE(detail, ''),
+SELECT id::text, tenant_id::text, site_id::text,
        CASE WHEN recommendation_id IS NULL THEN NULL ELSE recommendation_id::text END,
        CASE WHEN monitor_id IS NULL THEN NULL ELSE monitor_id::text END,
        COALESCE(decision_id::text, ''), COALESCE(trace_id, ''),
-       COALESCE(solver_serving_ref, ''), COALESCE(guardrail_verdict, ''),
-       guardrail_trace, feature_snapshot, created_at
+       sample_kind, COALESCE(reason_code, ''), COALESCE(solver_serving_ref, ''),
+       raw_recommended_value, applied_or_clamped_value,
+       feature_snapshot, guardrail_trace, occurred_at
 FROM core_registry.optimization_negative_samples
 WHERE tenant_id = $1::uuid
   AND site_id = $2::uuid
-  AND created_at >= $3
-  AND created_at <= $4
-ORDER BY created_at DESC, id DESC`
+  AND occurred_at >= $3
+  AND occurred_at <= $4
+ORDER BY occurred_at DESC, id DESC`
 	var rows pgx.Rows
 	if limit > 0 {
 		query += "\nLIMIT $5"
@@ -516,11 +468,12 @@ ORDER BY created_at DESC, id DESC`
 		var item NegativeSampleRecord
 		var snapshotBytes []byte
 		if scanErr := rows.Scan(
-			&item.ID, &item.TenantID, &item.SiteID, &item.ReasonCode, &item.Detail,
+			&item.ID, &item.TenantID, &item.SiteID,
 			&item.RecommendationID, &item.MonitorID,
 			&item.DecisionID, &item.TraceID,
-			&item.SolverServingRef, &item.GuardrailVerdict,
-			&item.GuardrailTrace, &snapshotBytes, &item.CreatedAt,
+			&item.SampleKind, &item.ReasonCode, &item.SolverServingRef,
+			&item.RawRecommendedValue, &item.AppliedOrClampedValue,
+			&snapshotBytes, &item.GuardrailTrace, &item.OccurredAt,
 		); scanErr != nil {
 			return nil, scanErr
 		}
@@ -529,7 +482,7 @@ ORDER BY created_at DESC, id DESC`
 				return nil, fmt.Errorf("decode negative sample feature snapshot: %w", unmarshalErr)
 			}
 		}
-		item.CreatedAt = item.CreatedAt.UTC()
+		item.OccurredAt = item.OccurredAt.UTC()
 		samples = append(samples, item)
 	}
 	if err = rows.Err(); err != nil {
@@ -617,7 +570,6 @@ func buildGovernanceSummary(
 ) GovernanceSummary {
 	var tickCounts GovernanceTickCounts
 	for _, tick := range ticks {
-		tickCounts.Total++
 		switch normalizeControlTickMode(tick.ControlMode) {
 		case ControlModeAIClosedLoop:
 			tickCounts.AIClosedLoop++
@@ -645,132 +597,28 @@ func buildGovernanceSummary(
 	}
 }
 
-type bivariateBinKey struct {
-	wbIdx   int
-	loadIdx int
-}
-
-type bivariateBinAccumulator struct {
-	wbIdx       int
-	loadIdx     int
-	baselineSum float64
-	baselineCnt int
-	aiSum       float64
-	aiCnt       int
-}
-
-func evaluateBivariateCOPComparison(ticks []ControlTickRecord) GovernanceCOPComparison {
-	bins := make(map[bivariateBinKey]*bivariateBinAccumulator)
-	var totalBaselineSum, totalAISum float64
-	var totalBaselineCnt, totalAICnt int
-
+func evaluateBivariateCOPComparison(ticks []ControlTickRecord) analyticsmodel.BivariateCOPSummary {
+	samples := make([]analyticsmodel.ControlTickSample, 0, len(ticks))
 	for _, tick := range ticks {
 		mode := normalizeControlTickMode(tick.ControlMode)
-		if mode != ControlModeRuleBaseline && mode != ControlModeAIClosedLoop {
+		if mode == "" {
 			continue
 		}
-		wb := tick.FeatureSnapshot.OutdoorWetBulbC
-		load := tick.FeatureSnapshot.CoolingLoadKW
-		if wb == nil || !finite(*wb) || load == nil || !finitePositive(*load) {
-			continue
+		cop, hasCOP := tickObservedCOP(tick.FeatureSnapshot)
+		var copPtr *float64
+		if hasCOP {
+			c := cop
+			copPtr = &c
 		}
-		cop, ok := tickObservedCOP(tick.FeatureSnapshot)
-		if !ok {
-			continue
-		}
-		wbIdx := int(math.Floor(*wb / BivariateWetBulbBinWidthC))
-		loadIdx := int(math.Floor(*load / BivariateLoadBinWidthKW))
-		key := bivariateBinKey{wbIdx: wbIdx, loadIdx: loadIdx}
-		acc := bins[key]
-		if acc == nil {
-			acc = &bivariateBinAccumulator{wbIdx: wbIdx, loadIdx: loadIdx}
-			bins[key] = acc
-		}
-		if mode == ControlModeRuleBaseline {
-			acc.baselineSum += cop
-			acc.baselineCnt++
-			totalBaselineSum += cop
-			totalBaselineCnt++
-		} else {
-			acc.aiSum += cop
-			acc.aiCnt++
-			totalAISum += cop
-			totalAICnt++
-		}
+		samples = append(samples, analyticsmodel.ControlTickSample{
+			Mode:            analyticsmodel.ControlTickMode(mode),
+			OutdoorWetBulbC: tick.FeatureSnapshot.OutdoorWetBulbC,
+			CoolingLoadKW:   tick.FeatureSnapshot.CoolingLoadKW,
+			ChillerPowerKW:  tick.FeatureSnapshot.ChillerPowerKW,
+			ObservedCOP:     copPtr,
+		})
 	}
-
-	cells := make([]BivariateCOPCell, 0, len(bins))
-	matchedCells := 0
-	var matchedDeltaWeightedSum, matchedBaselineWeightedSum float64
-	var matchedAIWeight int
-
-	for _, acc := range bins {
-		wbMin := round(float64(acc.wbIdx)*BivariateWetBulbBinWidthC, 4)
-		wbMax := round(wbMin+BivariateWetBulbBinWidthC, 4)
-		loadMin := round(float64(acc.loadIdx)*BivariateLoadBinWidthKW, 4)
-		loadMax := round(loadMin+BivariateLoadBinWidthKW, 4)
-		cell := BivariateCOPCell{
-			WetBulbMinC:     wbMin,
-			WetBulbMaxC:     wbMax,
-			LoadMinKW:       loadMin,
-			LoadMaxKW:       loadMax,
-			BaselineSamples: acc.baselineCnt,
-			AISamples:       acc.aiCnt,
-		}
-		var baseMean, aiMean float64
-		if acc.baselineCnt > 0 {
-			baseMean = acc.baselineSum / float64(acc.baselineCnt)
-			cell.BaselineMeanCOP = ptr(round(baseMean, 4))
-		}
-		if acc.aiCnt > 0 {
-			aiMean = acc.aiSum / float64(acc.aiCnt)
-			cell.AIMeanCOP = ptr(round(aiMean, 4))
-		}
-		if acc.baselineCnt > 0 && acc.aiCnt > 0 {
-			cell.Matched = true
-			matchedCells++
-			delta := aiMean - baseMean
-			cell.DeltaCOP = ptr(round(delta, 4))
-			if baseMean > 0 {
-				cell.RelativeGainPct = ptr(round(delta/baseMean*100.0, 2))
-			}
-			matchedDeltaWeightedSum += delta * float64(acc.aiCnt)
-			matchedBaselineWeightedSum += baseMean * float64(acc.aiCnt)
-			matchedAIWeight += acc.aiCnt
-		}
-		cells = append(cells, cell)
-	}
-
-	sort.Slice(cells, func(i, j int) bool {
-		if cells[i].WetBulbMinC != cells[j].WetBulbMinC {
-			return cells[i].WetBulbMinC < cells[j].WetBulbMinC
-		}
-		return cells[i].LoadMinKW < cells[j].LoadMinKW
-	})
-
-	out := GovernanceCOPComparison{
-		WetBulbBinSizeC: BivariateWetBulbBinWidthC,
-		LoadBinSizeKW:   BivariateLoadBinWidthKW,
-		TotalCells:      len(cells),
-		MatchedCells:    matchedCells,
-		BaselineSamples: totalBaselineCnt,
-		AISamples:       totalAICnt,
-		Cells:           cells,
-	}
-	if totalBaselineCnt > 0 {
-		out.BaselineMeanCOP = ptr(round(totalBaselineSum/float64(totalBaselineCnt), 4))
-	}
-	if totalAICnt > 0 {
-		out.AIMeanCOP = ptr(round(totalAISum/float64(totalAICnt), 4))
-	}
-	if matchedAIWeight > 0 {
-		weightedGain := matchedDeltaWeightedSum / float64(matchedAIWeight)
-		out.WeightedCOPGain = ptr(round(weightedGain, 4))
-		if matchedBaselineWeightedSum > 0 {
-			out.WeightedGainPct = ptr(round(matchedDeltaWeightedSum/matchedBaselineWeightedSum*100.0, 2))
-		}
-	}
-	return out
+	return analyticsmodel.EvaluateBivariateCOP(samples, analyticsmodel.BivariateBinConfig{})
 }
 
 func tickObservedCOP(snap OptimizationFeatureSnapshot) (float64, bool) {
@@ -788,54 +636,27 @@ func tickObservedCOP(snap OptimizationFeatureSnapshot) (float64, bool) {
 }
 
 func summarizeNegativeSamples(samples []NegativeSampleRecord) GovernanceFlywheelSummary {
-	sorted := append([]NegativeSampleRecord(nil), samples...)
-	sort.Slice(sorted, func(i, j int) bool {
-		if !sorted[i].CreatedAt.Equal(sorted[j].CreatedAt) {
-			return sorted[i].CreatedAt.After(sorted[j].CreatedAt)
-		}
-		return sorted[i].ID > sorted[j].ID
-	})
-
-	var counts GovernanceFlywheelCounts
-	for _, sample := range sorted {
-		switch normalizeNegativeSampleReason(sample.ReasonCode) {
+	var summary GovernanceFlywheelSummary
+	for _, sample := range samples {
+		switch resolveNegativeSampleKind(sample) {
 		case NegativeSampleGuardrailClamped:
-			counts.GuardrailClamped++
+			summary.TotalSamples++
+			summary.GuardrailClamped++
 		case NegativeSampleGuardrailVetoed:
-			counts.GuardrailVetoed++
+			summary.TotalSamples++
+			summary.GuardrailVetoed++
 		case NegativeSampleManualOverride:
-			counts.ManualOverride++
+			summary.TotalSamples++
+			summary.ManualOverride++
 		case NegativeSampleTrackingDeviation:
-			counts.TrackingDeviation++
+			summary.TotalSamples++
+			summary.TrackingDeviation++
 		case NegativeSampleMonitorTripped:
-			counts.MonitorTripped++
+			summary.TotalSamples++
+			summary.MonitorTripped++
 		}
 	}
-
-	recentLimit := defaultGovernanceRecentSamplesLimit
-	if len(sorted) < recentLimit {
-		recentLimit = len(sorted)
-	}
-	recent := make([]GovernanceFlywheelSample, 0, recentLimit)
-	for _, sample := range sorted[:recentLimit] {
-		recent = append(recent, GovernanceFlywheelSample{
-			ID:               sample.ID,
-			ReasonCode:       normalizeNegativeSampleReason(sample.ReasonCode),
-			Detail:           sample.Detail,
-			DecisionID:       sample.DecisionID,
-			TraceID:          sample.TraceID,
-			SolverServingRef: sample.SolverServingRef,
-			GuardrailVerdict: sample.GuardrailVerdict,
-			FeatureSnapshot:  sample.FeatureSnapshot,
-			CreatedAt:        sample.CreatedAt.UTC(),
-		})
-	}
-
-	return GovernanceFlywheelSummary{
-		TotalNegativeSamples: len(sorted),
-		ByReason:             counts,
-		RecentSamples:        recent,
-	}
+	return summary
 }
 
 func normalizeControlTickMode(raw string) string {
@@ -853,7 +674,14 @@ func normalizeControlTickMode(raw string) string {
 	}
 }
 
-func normalizeNegativeSampleReason(raw string) string {
+func resolveNegativeSampleKind(sample NegativeSampleRecord) string {
+	if kind := normalizeNegativeSampleKind(sample.SampleKind); kind != "" {
+		return kind
+	}
+	return normalizeNegativeSampleKind(sample.ReasonCode)
+}
+
+func normalizeNegativeSampleKind(raw string) string {
 	switch strings.ToUpper(strings.TrimSpace(raw)) {
 	case NegativeSampleGuardrailClamped:
 		return NegativeSampleGuardrailClamped
@@ -919,13 +747,18 @@ func flywheelWriteContext(ctx context.Context) (context.Context, context.CancelF
 	return context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 }
 
-func (controller *AutoController) resolveActiveServingRef(ctx context.Context, tenantID, siteID string, at time.Time) string {
+func (controller *AutoController) resolveActiveSolver(ctx context.Context, tenantID, siteID string, at time.Time) ActiveSolverSelection {
+	fallback := ActiveSolverSelection{
+		ServingRef: DefaultBuiltinSolverRef,
+		Source:     SolverSourceDefault,
+		LoopKey:    DefaultSolverLoopKey,
+	}
 	if controller == nil {
-		return DefaultBuiltinSolverRef
+		return fallback
 	}
 	resolver := controller.effectiveSolverResolver()
 	if resolver == nil {
-		return DefaultBuiltinSolverRef
+		return fallback
 	}
 	resolveCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
@@ -934,12 +767,15 @@ func (controller *AutoController) resolveActiveServingRef(ctx context.Context, t
 		if ctx.Err() == nil {
 			controller.logf("resolve active solver serving ref failed (site=%s): %v", siteID, err)
 		}
-		return DefaultBuiltinSolverRef
+		return fallback
 	}
+	selection.LoopKey = normalizeSolverLoopKey(selection.LoopKey)
 	if clean := sanitizeServingRef(selection.ServingRef); clean != "" {
-		return clean
+		selection.ServingRef = clean
+	} else {
+		selection.ServingRef = DefaultBuiltinSolverRef
 	}
-	return DefaultBuiltinSolverRef
+	return selection
 }
 
 func (state *dispatchFlywheelState) enrichTelemetryBestEffort(ctx context.Context, controller *AutoController) {
@@ -1160,7 +996,7 @@ func (controller *AutoController) recordDispatchFlywheel(
 
 	state.enrichTelemetryBestEffort(ctx, controller)
 	controlMode := classifyDispatchControlMode(state, skipReason, dispatched, shadowRecorded)
-	servingRef := controller.resolveActiveServingRef(ctx, state.recommendation.TenantID, state.recommendation.SiteID, state.now)
+	solverSel := controller.resolveActiveSolver(ctx, state.recommendation.TenantID, state.recommendation.SiteID, state.now)
 	snapshot := buildOptimizationFeatureSnapshot(state.liveState, state.liveObs, state.lease, state.siteCtx, nil)
 
 	baselineSupplyC := finiteFloatPtr(state.baselineSupplyC)
@@ -1168,13 +1004,26 @@ func (controller *AutoController) recordDispatchFlywheel(
 		v := state.recommendation.Baseline.SupplyTempC
 		baselineSupplyC = &v
 	}
-	if baselineSupplyC == nil {
-		baselineSupplyC = finiteFloatPtr(snapshot.SupplyTempC)
+	if baselineSupplyC != nil && snapshot.SupplyTempC == nil {
+		snapshot.SupplyTempC = baselineSupplyC
+	}
+
+	var recommendedSupplyC *float64
+	if finite(state.recommendation.Candidate.SupplyTempC) && state.recommendation.Candidate.SupplyTempC != 0 {
+		v := state.recommendation.Candidate.SupplyTempC
+		recommendedSupplyC = &v
 	}
 
 	var appliedSupplyC *float64
 	if dispatched || shadowRecorded {
 		appliedSupplyC = finiteFloatPtr(state.appliedSupplyC)
+	}
+
+	depRevID := solverSel.DeploymentRevisionID
+	if depRevID == nil {
+		if parsed, err := optionalUUIDStringPtr(state.recommendation.DeploymentRevision); err == nil {
+			depRevID = parsed
+		}
 	}
 
 	recID := cleanStringPtr(state.recommendation.ID)
@@ -1184,19 +1033,19 @@ func (controller *AutoController) recordDispatchFlywheel(
 	defer cancel()
 
 	if err := flywheel.RecordControlTick(writeCtx, ControlTickRecord{
-		TenantID:            state.recommendation.TenantID,
-		SiteID:              state.recommendation.SiteID,
-		ControlMode:         controlMode,
-		SkipReason:          strings.TrimSpace(skipReason),
-		SolverServingRef:    servingRef,
-		RecommendationID:    recID,
-		MonitorID:           monID,
-		DecisionID:          state.decisionID,
-		TraceID:             state.traceID,
-		BaselineSupplyTempC: baselineSupplyC,
-		AppliedSupplyTempC:  appliedSupplyC,
-		FeatureSnapshot:     snapshot,
-		TickAt:              state.now,
+		TenantID:               state.recommendation.TenantID,
+		SiteID:                 state.recommendation.SiteID,
+		RecommendationID:       recID,
+		DecisionID:             state.decisionID,
+		ControlMode:            controlMode,
+		LoopKey:                solverSel.LoopKey,
+		SolverServingRef:       solverSel.ServingRef,
+		DeploymentRevisionID:   depRevID,
+		BaselineSupplyTempC:    baselineSupplyC,
+		RecommendedSupplyTempC: recommendedSupplyC,
+		AppliedSupplyTempC:     appliedSupplyC,
+		FeatureSnapshot:        snapshot,
+		TickAt:                 state.now,
 	}); err != nil {
 		controller.logf("record optimization control tick failed (site=%s mode=%s): %v", state.recommendation.SiteID, controlMode, err)
 	}
@@ -1204,18 +1053,26 @@ func (controller *AutoController) recordDispatchFlywheel(
 	if state.guardrail == nil {
 		return
 	}
-	var negReason string
-	var negDetail string
+	var sampleKind string
+	var appliedOrClampedVal *float64
 	switch {
 	case state.guardrail.Verdict == commandmodel.GuardrailVerdictClamped:
-		negReason = NegativeSampleGuardrailClamped
-		negDetail = strings.TrimSpace(fmt.Sprintf("raw=%.2fC clamped=%.2fC %s", state.guardrail.RawValue, state.guardrail.AdjustedValue, state.guardrail.Detail))
+		sampleKind = NegativeSampleGuardrailClamped
+		if finite(state.guardrail.AdjustedValue) && state.guardrail.AdjustedValue != 0 {
+			v := state.guardrail.AdjustedValue
+			appliedOrClampedVal = &v
+		}
 	case state.guardrail.Verdict == commandmodel.GuardrailVerdictVetoed ||
 		(!state.guardrail.Allowed && state.guardrail.Verdict != commandmodel.GuardrailVerdictDeadbandSkip):
-		negReason = NegativeSampleGuardrailVetoed
-		negDetail = firstNonEmptyString(state.guardrail.Detail, state.guardrail.ReasonCode, skipReason)
+		sampleKind = NegativeSampleGuardrailVetoed
 	default:
 		return
+	}
+
+	rawRecommendedVal := recommendedSupplyC
+	if finite(state.guardrail.RawValue) && state.guardrail.RawValue != 0 {
+		v := state.guardrail.RawValue
+		rawRecommendedVal = &v
 	}
 
 	traceBytes := bytes.TrimSpace(state.guardrailTrace)
@@ -1226,22 +1083,24 @@ func (controller *AutoController) recordDispatchFlywheel(
 		traceBytes = []byte("[]")
 	}
 
+	reasonCode := firstNonEmptyString(state.guardrail.ReasonCode, skipReason, sampleKind)
 	if err := flywheel.RecordNegativeSample(writeCtx, NegativeSampleRecord{
-		TenantID:         state.recommendation.TenantID,
-		SiteID:           state.recommendation.SiteID,
-		ReasonCode:       negReason,
-		Detail:           negDetail,
-		RecommendationID: recID,
-		MonitorID:        monID,
-		DecisionID:       state.decisionID,
-		TraceID:          state.traceID,
-		SolverServingRef: servingRef,
-		GuardrailVerdict: string(state.guardrail.Verdict),
-		GuardrailTrace:   traceBytes,
-		FeatureSnapshot:  snapshot,
-		CreatedAt:        state.now,
+		TenantID:              state.recommendation.TenantID,
+		SiteID:                state.recommendation.SiteID,
+		RecommendationID:      recID,
+		MonitorID:             monID,
+		DecisionID:            state.decisionID,
+		TraceID:               state.traceID,
+		SampleKind:            sampleKind,
+		ReasonCode:            reasonCode,
+		SolverServingRef:      solverSel.ServingRef,
+		RawRecommendedValue:   rawRecommendedVal,
+		AppliedOrClampedValue: appliedOrClampedVal,
+		GuardrailTrace:        traceBytes,
+		FeatureSnapshot:       snapshot,
+		OccurredAt:            state.now,
 	}); err != nil {
-		controller.logf("record guardrail negative sample failed (site=%s reason=%s): %v", state.recommendation.SiteID, negReason, err)
+		controller.logf("record guardrail negative sample failed (site=%s kind=%s): %v", state.recommendation.SiteID, sampleKind, err)
 	}
 }
 
@@ -1252,8 +1111,8 @@ func (controller *AutoController) recordMonitorNegativeSample(
 	liveState *autoControlLiveState,
 	liveObs *AutoControlLiveObservation,
 	telemetryHealthy bool,
+	sampleKind string,
 	reasonCode string,
-	detail string,
 	now time.Time,
 ) {
 	if controller == nil {
@@ -1272,7 +1131,7 @@ func (controller *AutoController) recordMonitorNegativeSample(
 		cancel()
 	}
 
-	servingRef := controller.resolveActiveServingRef(ctx, monitor.TenantID, monitor.SiteID, now)
+	solverSel := controller.resolveActiveSolver(ctx, monitor.TenantID, monitor.SiteID, now)
 	snapshot := buildOptimizationFeatureSnapshot(liveState, liveObs, nil, &siteCtx, &monitor)
 
 	traceBytes := bytes.TrimSpace(monitor.GuardrailTrace)
@@ -1280,24 +1139,31 @@ func (controller *AutoController) recordMonitorNegativeSample(
 		traceBytes = []byte("[]")
 	}
 
+	normalizedKind := normalizeNegativeSampleKind(sampleKind)
+	if normalizedKind == "" {
+		normalizedKind = NegativeSampleMonitorTripped
+	}
+	effectiveReason := firstNonEmptyString(reasonCode, normalizedKind)
+
 	writeCtx, cancel := flywheelWriteContext(ctx)
 	defer cancel()
 
 	if err := flywheel.RecordNegativeSample(writeCtx, NegativeSampleRecord{
-		TenantID:         monitor.TenantID,
-		SiteID:           monitor.SiteID,
-		ReasonCode:       reasonCode,
-		Detail:           strings.TrimSpace(detail),
-		RecommendationID: cleanStringPtr(monitor.RecommendationID),
-		MonitorID:        cleanStringPtr(monitor.ID),
-		DecisionID:       monitor.DecisionID,
-		TraceID:          monitor.TraceID,
-		SolverServingRef: servingRef,
-		GuardrailVerdict: monitor.GuardrailVerdict,
-		GuardrailTrace:   traceBytes,
-		FeatureSnapshot:  snapshot,
-		CreatedAt:        now.UTC(),
+		TenantID:              monitor.TenantID,
+		SiteID:                monitor.SiteID,
+		RecommendationID:      cleanStringPtr(monitor.RecommendationID),
+		MonitorID:             cleanStringPtr(monitor.ID),
+		DecisionID:            monitor.DecisionID,
+		TraceID:               monitor.TraceID,
+		SampleKind:            normalizedKind,
+		ReasonCode:            effectiveReason,
+		SolverServingRef:      solverSel.ServingRef,
+		RawRecommendedValue:   finiteFloatPtr(monitor.RawRecommendedValue),
+		AppliedOrClampedValue: finiteFloatPtr(monitor.AppliedSupplyTempC),
+		GuardrailTrace:        traceBytes,
+		FeatureSnapshot:       snapshot,
+		OccurredAt:            now.UTC(),
 	}); err != nil {
-		controller.logf("record monitor negative sample failed (monitor=%s reason=%s): %v", monitor.ID, reasonCode, err)
+		controller.logf("record monitor negative sample failed (monitor=%s kind=%s): %v", monitor.ID, normalizedKind, err)
 	}
 }

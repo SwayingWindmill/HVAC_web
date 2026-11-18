@@ -6307,6 +6307,34 @@
           "manualOverride": { "type": "integer", "minimum": 0 }
         }
       },
+      "OptimizationCopCell": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "wetBulbMinC",
+          "wetBulbMaxC",
+          "coolingLoadMinKW",
+          "coolingLoadMaxKW",
+          "baselineSamples",
+          "aiSamples",
+          "baselineCOP",
+          "aiCOP",
+          "copUpliftPct",
+          "estimatedSavedKWh"
+        ],
+        "properties": {
+          "wetBulbMinC": { "type": "number" },
+          "wetBulbMaxC": { "type": "number" },
+          "coolingLoadMinKW": { "type": "number" },
+          "coolingLoadMaxKW": { "type": "number" },
+          "baselineSamples": { "type": "integer", "minimum": 0 },
+          "aiSamples": { "type": "integer", "minimum": 0 },
+          "baselineCOP": { "type": "number" },
+          "aiCOP": { "type": "number" },
+          "copUpliftPct": { "type": "number" },
+          "estimatedSavedKWh": { "type": "number" }
+        }
+      },
       "OptimizationCopComparison": {
         "type": "object",
         "additionalProperties": false,
@@ -6328,7 +6356,7 @@
           "weightedAiCOP": { "oneOf": [{ "type": "number" }, { "type": "null" }] },
           "weightedCopUpliftPct": { "oneOf": [{ "type": "number" }, { "type": "null" }] },
           "totalEstimatedSavedKWh": { "type": "number" },
-          "cells": { "type": "array", "items": { "type": "object" } }
+          "cells": { "type": "array", "items": { "$ref": "#/components/schemas/OptimizationCopCell" } }
         }
       },
       "OptimizationFlywheelSummary": {
@@ -6367,7 +6395,7 @@
         "properties": {
           "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
           "siteId": { "$ref": "#/components/schemas/UUIDv7" },
-          "windowDays": { "type": "integer", "minimum": 1 },
+          "windowDays": { "type": "integer", "minimum": 1, "maximum": 365 },
           "generatedAt": { "type": "string", "format": "date-time" },
           "activeSolver": { "$ref": "#/components/schemas/OptimizationActiveSolver" },
           "tickCounts": { "$ref": "#/components/schemas/OptimizationTickCounts" },

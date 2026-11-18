@@ -16,6 +16,11 @@
 
 #### 新增与架构演进
 
+- 完成 Go 端 AI 调控多版本灰度路由、气象负荷双变量 COP M&V 与负样本飞轮 P2（`libs/analyticsmodel`、`services/mv-service`、`services/optimization-service`、`cmd/energy-api`、`contracts/`、`apps/hvac-web` 与迁移 `optimization-governance-flywheel.sql`）：
+  - **动态灰度求解路由与韧性降级**：在 `ai_model_definitions` 新增 `serving_ref` 并在 `core_registry.optimization_canary_bindings` 支持按站点与控制回路灰度绑定内置或外部 HTTP 求解器（复用三态熔断器、舱壁并发限流与 3 秒默认超时无扰退回内置 `HVACRecommendationSolver`）。
+  - **气象×冷负荷双变量分箱 M&V**：在 `libs/analyticsmodel/bivariate_cop.go` 实现室外湿球温度（`2 °C`）与制冷负荷（`200 kW`）同条件分箱对比，在 `optimization_control_ticks` 持续按 `AI_CLOSED_LOOP`/`AI_SHADOW`/`RULE_BASELINE`/`MANUAL_OVERRIDE` 打标记录工况与实测 COP，并在 `mv-service` 补充按控制模式分箱的节能核算方法。
+  - **负样本飞轮与治理面板**：自动沉淀护栏限幅/拦截、人工覆写、设定值跟踪偏离与监控熔断样本至 `optimization_negative_samples`（含特征快照与护栏轨迹），打通 `GET /api/v1/sites/{siteId}/optimization/governance-summary` 网关与前端「优化分析」治理看板（活跃求解器、分箱 COP 对照、周期分布与负样本分布）。
+
 - 完成 Go 端 AI 调控影子试运行、多副本防重入与端到端追踪告警闭环 P1（`libs/intelligencemodel`、`modules/registry`、`modules/iam`、`modules/alarm`、`services/optimization-service`、`cmd/energy-api`、`contracts/`、`apps/hvac-web` 与迁移 `optimization-shadow-and-trace.sql`）：
   - **影子跟跑（`SHADOW`）与 IAM 双重防线**：租约与执行监控新增 `executionMode`（`CLOSED_LOOP` / `SHADOW`）；开启 `SHADOW` 时，优化控制周期照常执行实时点位新鲜度检查与物理护栏评估，在最后一跳拦截仅写入 `SHADOW_RECORDED` 对照记录而绝不下发网关指令，且 IAM 授权侧同样对非回退 `SHADOW` 租约无条件拦截兜底。
   - **多副本站点防重入与全链路决策追踪**：为优化执行作业接入 PostgreSQL 站点级非阻塞咨询锁防止多副本同站点周期踩踏；在推理、护栏、执行监控与下行命令之间贯通 UUIDv7 `decision_id` 与 W3C `trace_id`（`traceparent`）传播链。

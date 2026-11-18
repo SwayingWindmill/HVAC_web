@@ -886,7 +886,7 @@ test('governance summary lazy-loads on analysis tab without recommendation, show
   await page.reload();
   const reloadedGov = page.getByRole('region', { name: '策略路由与运行治理' });
   await expect(reloadedGov).toContainText('站点部署绑定');
-  await expect(reloadedGov).toContainText('外部协同寻优服务');
+  await expect(reloadedGov).toContainText('外部协同优化服务');
   await expect(reloadedGov).not.toContainText('https://external-optimizer.example/solve');
   await expect(reloadedGov).toContainText('尚无满足同湿球与同冷负荷分箱条件的对照周期，积累闭环与基准周期后将自动展示。');
 });

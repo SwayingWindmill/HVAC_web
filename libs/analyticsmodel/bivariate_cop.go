@@ -63,11 +63,11 @@ type BivariateCOPCell struct {
 // savings across all matched bivariate operating bins.
 type BivariateCOPSummary struct {
 	MatchedBinCount        int                `json:"matchedBinCount"`
-	MatchedAISamples       int                `json:"matchedAISamples"`
+	MatchedAISamples       int                `json:"matchedAiSamples"`
 	MatchedBaselineSamples int                `json:"matchedBaselineSamples"`
 	WeightedBaselineCOP    *float64           `json:"weightedBaselineCOP"`
-	WeightedAICOP          *float64           `json:"weightedAICOP"`
-	WeightedCOPUpliftPct   *float64           `json:"weightedCOPUpliftPct"`
+	WeightedAICOP          *float64           `json:"weightedAiCOP"`
+	WeightedCOPUpliftPct   *float64           `json:"weightedCopUpliftPct"`
 	TotalEstimatedSavedKWh float64            `json:"totalEstimatedSavedKWh"`
 	Cells                  []BivariateCOPCell `json:"cells"`
 }
