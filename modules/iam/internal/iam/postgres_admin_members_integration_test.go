@@ -136,4 +136,30 @@ VALUES ('018f1e00-2200-7000-8000-000000000071', $1::uuid, $2::uuid, $3::uuid, 'A
 	}); !errors.Is(err, iam.ErrAdminSelfLockout) {
 		t.Fatalf("revoking one's own admin Role = %v", err)
 	}
+
+	validTo := time.Now().UTC().Add(2 * time.Hour).Truncate(time.Millisecond)
+	pastTo := time.Now().UTC().Add(-time.Minute)
+	if _, err := store.ApplyMutation(ctx, actor, iam.AdminMutationRequest{
+		Operation: "role-binding.upsert", PrincipalID: created.ResourceID, RoleTemplateID: viewerRoleTemplateID,
+		Status: "ACTIVE", ValidTo: &pastTo,
+	}); err == nil {
+		t.Fatal("accepted past validTo on role-binding.upsert")
+	}
+	if _, err := store.ApplyMutation(ctx, actor, iam.AdminMutationRequest{
+		Operation: "role-binding.upsert", PrincipalID: created.ResourceID, RoleTemplateID: viewerRoleTemplateID,
+		SiteID: adminTestSiteID, Status: "ACTIVE", ExpectedRevision: 1, ValidTo: &validTo,
+	}); err != nil {
+		t.Fatalf("assigning role with validTo: %v", err)
+	}
+	directory, err = store.ListMembers(ctx, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, candidate := range directory.Members {
+		if candidate.PrincipalID == created.ResourceID {
+			if candidate.Assignments[0].ValidTo == nil || *candidate.Assignments[0].ValidTo != validTo.UTC().Format("2006-01-02T15:04:05.000Z") {
+				t.Fatalf("assignment ValidTo = %#v, want %s", candidate.Assignments[0].ValidTo, validTo)
+			}
+		}
+	}
 }

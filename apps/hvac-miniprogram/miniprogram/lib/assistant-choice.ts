@@ -22,3 +22,8 @@ export const takePendingQuestion = () => {
   pending = null;
   return question;
 };
+
+export function clearAssistantChoice(): void {
+  chosen = undefined;
+  pending = null;
+}

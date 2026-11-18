@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -81,6 +82,7 @@ type Store interface {
 	CreateSession(context.Context, Session, MutationContext) (Session, error)
 	GetSession(context.Context, string) (Session, error)
 	TouchSession(context.Context, string, time.Time) (Session, error)
+	SwitchTenant(context.Context, string, string, MutationContext) (Session, error)
 	RevokeSession(context.Context, string, MutationContext) (Session, error)
 	// ActiveSessionIDs lists the unrevoked Sessions of one person, so disabling them can end each.
 	ActiveSessionIDs(ctx context.Context, issuer, subject string) ([]string, error)
@@ -171,8 +173,25 @@ func (store *MemoryStore) ActiveSessionIDs(_ context.Context, issuer, subject st
 	return ids, nil
 }
 
+func (store *MemoryStore) SwitchTenant(ctx context.Context, sessionID, tenantID string, mutation MutationContext) (Session, error) {
+	trimmedTenantID := strings.TrimSpace(tenantID)
+	if trimmedTenantID == "" {
+		return Session{}, errors.New("tenant id is required")
+	}
+	return store.mutateSession(ctx, "session.switch_tenant", sessionID, mutation, "ACTIVE", func(session *Session) {
+		session.TenantID = trimmedTenantID
+	})
+}
+
 func (store *MemoryStore) RevokeSession(ctx context.Context, sessionID string, mutation MutationContext) (Session, error) {
-	_, span := observability.Start(ctx, "sessionstore.memory.revoke", observability.SpanKindInternal, map[string]any{"db.system": "memory", "db.operation": "session.revoke"})
+	return store.mutateSession(ctx, "session.revoke", sessionID, mutation, "REVOKED", func(session *Session) {
+		revokedAt := mutation.OccurredAt.UTC()
+		session.RevokedAt = &revokedAt
+	})
+}
+
+func (store *MemoryStore) mutateSession(ctx context.Context, operation, sessionID string, mutation MutationContext, state string, apply func(*Session)) (Session, error) {
+	_, span := observability.Start(ctx, "sessionstore.memory."+strings.TrimPrefix(operation, "session."), observability.SpanKindInternal, map[string]any{"db.system": "memory", "db.operation": operation})
 	defer span.End()
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -184,15 +203,14 @@ func (store *MemoryStore) RevokeSession(ctx context.Context, sessionID string, m
 		return Session{}, ErrSessionRevoked
 	}
 	messageID := store.ids()
-	revokedAt := mutation.OccurredAt
 	if mutation.CausationID == "" {
 		mutation.CausationID = session.LastAuditMessageID
 	}
-	session.RevokedAt = &revokedAt
+	apply(&session)
 	session.AggregateVersion++
 	session.LastAuditMessageID = messageID
-	session.UpdatedAt = revokedAt
-	event, _, err := buildEvent(session, mutation, messageID, "REVOKED")
+	session.UpdatedAt = mutation.OccurredAt.UTC()
+	event, _, err := buildEvent(session, mutation, messageID, state)
 	if err != nil {
 		return Session{}, err
 	}

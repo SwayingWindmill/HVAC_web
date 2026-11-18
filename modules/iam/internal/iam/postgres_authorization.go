@@ -105,24 +105,31 @@ ORDER BY id
 
 func loadTenantMemberships(ctx context.Context, transaction pgx.Tx) ([]TenantMembership, error) {
 	rows, err := transaction.Query(ctx, `
-SELECT tenant_id::text, status, valid_from, valid_to
-FROM iam.tenant_memberships
-ORDER BY tenant_id
+SELECT m.tenant_id::text, COALESCE(t.code, ''), COALESCE(t.display_name, ''), COALESCE(t.status, ''),
+       m.status, m.valid_from, m.valid_to
+FROM iam.tenant_memberships m
+LEFT JOIN iam.tenants t ON t.id = m.tenant_id
+ORDER BY COALESCE(t.display_name, ''), m.tenant_id
 `)
 	if err != nil {
-		return nil, fmt.Errorf("query IAM organization memberships: %w", err)
+		return nil, fmt.Errorf("query IAM tenant memberships: %w", err)
 	}
 	defer rows.Close()
 	memberships := []TenantMembership{}
 	for rows.Next() {
 		var membership TenantMembership
-		if err := rows.Scan(&membership.TenantID, &membership.Status, &membership.ValidFrom, &membership.ValidTo); err != nil {
-			return nil, fmt.Errorf("scan IAM organization membership: %w", err)
+		var tenantStatus string
+		if err := rows.Scan(
+			&membership.TenantID, &membership.TenantCode, &membership.TenantDisplayName, &tenantStatus,
+			&membership.Status, &membership.ValidFrom, &membership.ValidTo,
+		); err != nil {
+			return nil, fmt.Errorf("scan IAM tenant membership: %w", err)
 		}
+		membership.TenantStatus = FactStatus(tenantStatus)
 		memberships = append(memberships, membership)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate IAM organization memberships: %w", err)
+		return nil, fmt.Errorf("iterate IAM tenant memberships: %w", err)
 	}
 	return memberships, nil
 }

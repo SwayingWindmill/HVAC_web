@@ -29,10 +29,13 @@ type PrincipalRecord struct {
 }
 
 type TenantMembership struct {
-	TenantID  string
-	Status    FactStatus
-	ValidFrom time.Time
-	ValidTo   *time.Time
+	TenantID          string
+	TenantCode        string
+	TenantDisplayName string
+	TenantStatus      FactStatus
+	Status            FactStatus
+	ValidFrom         time.Time
+	ValidTo           *time.Time
 }
 
 // AuthorizationFacts is everything IAM knows about one Principal's access in one Tenant,
@@ -196,6 +199,9 @@ func tenantMembershipState(memberships []TenantMembership, tenantID string, now 
 		}
 		if membership.Status == FactStatusRevoked {
 			revoked = true
+		}
+		if membership.TenantStatus != "" && membership.TenantStatus != FactStatusActive {
+			continue
 		}
 		if membership.Status == FactStatusActive && factEffective(membership.ValidFrom, membership.ValidTo, now) {
 			return true, revoked

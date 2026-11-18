@@ -51,6 +51,56 @@ func TestPostgresTelemetryRevocationPoll(t *testing.T) {
 	}
 }
 
+func TestPostgresTelemetryRevocationSweepEmitsExpiredRoleBindingOnce(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	store, err := iam.OpenPostgresTelemetryGrantStore(ctx, requiredIAMPostgresEnv(t, "S2_IAM_GRANT_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	admin, err := pgxpool.New(ctx, requiredIAMPostgresEnv(t, "S1_ADMIN_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+
+	var before int64
+	if err := admin.QueryRow(ctx, `SELECT COALESCE(max(sequence), 0) FROM iam.telemetry_revocation_facts`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE iam.role_bindings SET valid_to = now() - interval '1 minute', revision = revision + 1, updated_at = clock_timestamp() WHERE id = $1::uuid`, postgresDelegatedSiteBindingID); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if _, err := admin.Exec(context.Background(), `UPDATE iam.role_bindings SET valid_to = NULL, revision = revision + 1, updated_at = clock_timestamp() WHERE id = $1::uuid`, postgresDelegatedSiteBindingID); err != nil {
+			t.Error(err)
+		}
+	}()
+	factsAfterChange, err := store.PollRevocations(ctx, postgresTenantAID, before, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiredCount := 0
+	var lastSeq int64
+	for _, fact := range factsAfterChange {
+		lastSeq = fact.Sequence
+		if fact.ReasonCode == "ROLE_BINDING_EXPIRED" && fact.SourceID == postgresDelegatedSiteBindingID {
+			expiredCount++
+		}
+	}
+	if expiredCount != 1 {
+		t.Fatalf("expected 1 ROLE_BINDING_EXPIRED fact, got %d (%#v)", expiredCount, factsAfterChange)
+	}
+	secondPoll, err := store.PollRevocations(ctx, postgresTenantAID, lastSeq, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(secondPoll) != 0 {
+		t.Fatalf("expected no duplicate expiry revocations, got %#v", secondPoll)
+	}
+}
+
 func TestPostgresTelemetryGrantSingleUse(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

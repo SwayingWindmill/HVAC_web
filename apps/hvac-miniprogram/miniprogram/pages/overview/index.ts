@@ -55,7 +55,11 @@ Page({
 
   async readDaily() {
     const site = await currentSite().catch(() => null);
-    if (site !== null) this.setData({ daily: await readDailyReminders(gateway, site, siteName), dailySiteId: site.id });
+    if (site === null) {
+      this.setData({ daily: null, dailySiteId: '' });
+      return;
+    }
+    this.setData({ daily: await readDailyReminders(gateway, site, siteName), dailySiteId: site.id });
   },
 
   async addDaily() {
@@ -79,7 +83,7 @@ Page({
     try {
       const site = await currentSite(rereadSites);
       if (site === null) {
-        this.setData({ loading: false, noSite: true });
+        this.setData({ loading: false, noSite: true, siteName: '', updatedAt: '', view: null, plant: { failed: false, now: null }, charts: null });
         return;
       }
       const { inputs, plant, waiting, charts } = await loadOverview({ gateway, loadPlant }, site, new Date());

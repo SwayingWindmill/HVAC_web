@@ -22,6 +22,7 @@ const (
 	BeginLoginPath                        = "__LOGIN_PATH__"
 	CompleteLoginPath                     = "__CALLBACK_PATH__"
 	GetCurrentPrincipalPath               = "__PRINCIPAL_PATH__"
+	SwitchTenantPath                      = "__SWITCH_TENANT_PATH__"
 	LogoutPath                            = "__LOGOUT_PATH__"
 	RevokeSessionPathTemplate             = "__REVOKE_PATH__"
 	GetSessionAuditEventPathTemplate      = "__AUDIT_PATH__"
@@ -152,12 +153,23 @@ type SessionView struct {
 	LastAuditMessageID    string `json:"lastAuditMessageId"`
 }
 
+type TenantMembershipSummary struct {
+	TenantID    string `json:"tenantId"`
+	Code        string `json:"code"`
+	DisplayName string `json:"displayName"`
+}
+
+type SwitchTenantRequest struct {
+	TenantID string `json:"tenantId"`
+}
+
 type CurrentPrincipalResponse struct {
-	PrincipalID   string                 `json:"principalId"`
-	Principal     UserPrincipal          `json:"principal"`
-	Context       PrincipalContext       `json:"context"`
-	Authorization EffectiveAuthorization `json:"authorization"`
-	Session       SessionView            `json:"session"`
+	PrincipalID      string                    `json:"principalId"`
+	Principal        UserPrincipal             `json:"principal"`
+	Context          PrincipalContext          `json:"context"`
+	Authorization    EffectiveAuthorization    `json:"authorization"`
+	Session          SessionView               `json:"session"`
+	AvailableTenants []TenantMembershipSummary `json:"availableTenants"`
 }
 
 type SessionRevocationResponse struct {
@@ -575,6 +587,14 @@ func (c *Client) GetPlatformStatus(ctx context.Context) (*Response[PlatformStatu
 
 func (c *Client) GetCurrentPrincipal(ctx context.Context) (*Response[CurrentPrincipalResponse], error) {
 	return doJSON[CurrentPrincipalResponse](ctx, c.httpClient, http.MethodGet, c.baseURL+GetCurrentPrincipalPath, "", nil)
+}
+
+func (c *Client) SwitchActiveTenant(ctx context.Context, tenantID, csrfToken string) (*Response[CurrentPrincipalResponse], error) {
+	body, err := json.Marshal(SwitchTenantRequest{TenantID: tenantID})
+	if err != nil {
+		return nil, err
+	}
+	return doJSON[CurrentPrincipalResponse](ctx, c.httpClient, http.MethodPost, c.baseURL+SwitchTenantPath, csrfToken, body)
 }
 
 func (c *Client) Logout(ctx context.Context, csrfToken string) (*Response[struct{}], error) {

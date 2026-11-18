@@ -7,6 +7,13 @@
 
 ### 2026-11-18
 
+#### 新增与架构演进
+
+- 支持单账号跨组织会话切换与临时运维角色到期自动断流（`libs/identitycontext`、`libs/sessionstore`、`modules/iam`、`cmd/energy-api`、`contracts/`、`apps/hvac-web`、`apps/hvac-miniprogram` 与迁移 `iam-expired-binding-revocation.sql`）：
+  - **单账号跨组织会话切换**：扩展 `IAM` 当前主体查询返回有效期内的全部所属组织列表（`availableTenants`），新增 `POST /api/v1/auth/session/tenant` 与 `sessionstore.SwitchTenant` 会话租户切换通道，非所属组织一律以 `403 TENANT_SWITCH_FORBIDDEN` 拒绝并保留原会话，浏览器请求严格校验同源与 `X-CSRF-Token`，切换成功后立即撤销旧组织的实时遥测订阅并刷新主体与站点视图。
+  - **临时维护角色有效期与自然到期实时断流**：`IAM` 与网关成员管理接口及 Web「用户与角色」管理界面支持配置可选未来过期时间 `validTo`（界面默认「长期有效」，提供预设与自定义时间选择并在列表展示「长期」或本地到期时间）；新增数据库函数 `iam.sweep_expired_telemetry_revocations`，在遥测撤权轮询时扫描自然过期的组织成员关系与角色绑定，自动写入撤销事实以中断临时维护人员的实时订阅流。
+  - **Web 与微信小程序多组织界面同步**：Web 顶栏与微信小程序「我的」页面在账号归属多个组织时展示当前组织切换入口（单组织账号保持界面不变，不展示任何内部标识符），切换时自动清除 `?site=` 与 `?inspect=` 查询参数及站点/主机缓存并重新加载目标组织数据。
+
 #### 优化与扩展
 
 - 完成实时遥测管道与冷热分级存储 P2 规模化、归档合规与可观测性闭环（`libs/edgecontrol`、`modules/connectivity`、`modules/telemetry`、`modules/metric`、`modules/maintenance`、`cmd/telemetry-worker`、`cmd/maintenance-worker`、`tools/eg8200-simulator`、`infra/observability/` 与 `docs/`）：

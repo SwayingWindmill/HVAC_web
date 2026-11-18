@@ -131,7 +131,8 @@
         "infra/registry/postgres/init/optimization-safety-guardrails.sql",
         "infra/registry/postgres/init/optimization-shadow-and-trace.sql",
         "infra/registry/postgres/init/optimization-governance-flywheel.sql",
-        "infra/registry/postgres/init/metric-backfill-recalc-job-grants.sql"
+        "infra/registry/postgres/init/metric-backfill-recalc-job-grants.sql",
+        "infra/registry/postgres/init/iam-expired-binding-revocation.sql"
       ]
     },
     {

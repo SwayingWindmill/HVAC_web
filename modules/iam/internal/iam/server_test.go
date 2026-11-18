@@ -799,3 +799,82 @@ func TestIAMResolvesTenantPrincipalNamesWithoutAdminCapability(t *testing.T) {
 	harness.handler.ServeHTTP(denied, harness.request(t, iam.PrincipalNamesPath, strings.NewReader(string(body)), wrongAction, harness.gatewaySigner))
 	assertIAMProblem(t, denied, http.StatusForbidden, "IAM_DELEGATION_REJECTED")
 }
+
+func TestIAMCurrentPrincipalListsOnlyEffectiveActiveTenants(t *testing.T) {
+	harness := newIAMHarnessWithConfig(t, func(config *iam.Config) {
+		expiredAt := harnessTime().Add(-time.Second)
+		futureEnd := harnessTime().Add(time.Hour)
+		futureStart := harnessTime().Add(time.Minute)
+		config.AuthorizationStore = fixedAuthorizationStore{facts: iam.AuthorizationFacts{
+			Found: true,
+			Principal: iam.PrincipalRecord{
+				ID:            iam.S1FixtureOwnerAPrincipalID,
+				SubjectIssuer: fixtureSubjectIssuer,
+				Subject:       "fixture-user",
+				DisplayName:   "Multi-Tenant Engineer",
+				Status:        iam.FactStatusActive,
+			},
+			Memberships: []iam.TenantMembership{
+				{
+					TenantID:          iam.S1FixtureTenantBID,
+					TenantCode:        "plant-beta",
+					TenantDisplayName: "Beta 冷站",
+					TenantStatus:      iam.FactStatusActive,
+					Status:            iam.FactStatusActive,
+					ValidFrom:         harnessTime().Add(-time.Hour),
+					ValidTo:           &futureEnd,
+				},
+				{
+					TenantID:          iam.S1FixtureTenantAID,
+					TenantCode:        "plant-alpha",
+					TenantDisplayName: "Alpha 冷站",
+					TenantStatus:      iam.FactStatusActive,
+					Status:            iam.FactStatusActive,
+					ValidFrom:         harnessTime().Add(-time.Hour),
+				},
+				{
+					TenantID:          "018f1d00-0000-7000-8000-000000000003",
+					TenantCode:        "expired",
+					TenantDisplayName: "已过期租户",
+					TenantStatus:      iam.FactStatusActive,
+					Status:            iam.FactStatusActive,
+					ValidFrom:         harnessTime().Add(-2 * time.Hour),
+					ValidTo:           &expiredAt,
+				},
+				{
+					TenantID:          "018f1d00-0000-7000-8000-000000000004",
+					TenantCode:        "suspended",
+					TenantDisplayName: "停用租户",
+					TenantStatus:      iam.FactStatusSuspended,
+					Status:            iam.FactStatusActive,
+					ValidFrom:         harnessTime().Add(-time.Hour),
+				},
+				{
+					TenantID:          "018f1d00-0000-7000-8000-000000000005",
+					TenantCode:        "future",
+					TenantDisplayName: "未生效租户",
+					TenantStatus:      iam.FactStatusActive,
+					Status:            iam.FactStatusActive,
+					ValidFrom:         futureStart,
+				},
+			},
+		}}
+	})
+	request := harness.request(t, iam.CurrentPrincipalPath, nil, validIAMClaims(harness.now, "fixture-user", "principal:read"), harness.gatewaySigner)
+	recorder := httptest.NewRecorder()
+	harness.handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", recorder.Code, recorder.Body.String())
+	}
+	var principal identitycontext.InternalPrincipalResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&principal); err != nil {
+		t.Fatal(err)
+	}
+	if len(principal.AvailableTenants) != 2 {
+		t.Fatalf("availableTenants = %#v, want 2 active effective tenants", principal.AvailableTenants)
+	}
+	if principal.AvailableTenants[0].TenantID != iam.S1FixtureTenantAID || principal.AvailableTenants[0].Code != "plant-alpha" ||
+		principal.AvailableTenants[1].TenantID != iam.S1FixtureTenantBID || principal.AvailableTenants[1].Code != "plant-beta" {
+		t.Fatalf("availableTenants = %#v", principal.AvailableTenants)
+	}
+}

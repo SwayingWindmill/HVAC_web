@@ -10,6 +10,8 @@ import { ControlModeChip } from '@/features/control/components/ControlModeChip';
 import { BrandMark } from '@/components/brand-mark';
 import { cn } from '@/lib/utils';
 
+import { TenantSwitcher } from '@/components/layout/TenantSwitcher';
+
 interface AppHeaderProps {
   /** The Site the operator works in; the bell counts its alarms happening now that nobody acknowledged. */
   readonly siteId?: string;
@@ -60,6 +62,7 @@ export function AppHeader({
         >
           <BrandMark className="size-7" />
         </a>
+        <TenantSwitcher />
         <span className="mx-0.5 text-xl font-light text-border" aria-hidden="true">/</span>
         <ScopeSwitcher />
         {siteId ? <ControlModeChip siteId={siteId} /> : null}

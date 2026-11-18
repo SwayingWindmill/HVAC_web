@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 57,
+  "registryRevision": 58,
   "routes": [
     {"method": "GET", "path": "/api/v1/sites/{siteId}/data-gaps", "owner": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
     {"method": "GET", "path": "/api/v1/iam/members", "owner": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "principal"]},
@@ -105,6 +105,20 @@
       "allowedScopeDimensions": [
         "tenant",
         "principal"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/session/tenant",
+      "owner": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "principal",
+        "tenant"
       ]
     },
     {

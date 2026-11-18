@@ -1,7 +1,7 @@
 import { answerQuestion, askInSession, assistantErrorText, followSession, listSessions, startSession, stopRun } from '../../lib/agent';
 import type { AgentSessionEvent, AgentSessionSnapshot } from '../../lib/agent-types';
 import { presentConversation, presentHistory } from '../../lib/assistant';
-import { chooseConversation, chosenConversation, takePendingQuestion } from '../../lib/assistant-choice';
+import { chooseConversation, chosenConversation, clearAssistantChoice, takePendingQuestion } from '../../lib/assistant-choice';
 import { loadConversations } from '../../lib/conversations';
 import { gateway, requireSession } from '../../lib/platform';
 import { currentSite, type Site } from '../../lib/site';
@@ -93,12 +93,17 @@ Page({
     try {
       const visible = await currentSite(rereadSites);
       if (visible === null) {
-        this.setData({ loading: false, noSite: true });
+        halt();
+        site = null;
+        todayStart = null;
+        sessions = [];
+        clearAssistantChoice();
+        this.setData({ loading: false, noSite: true, siteName: '', recent: [], hasMore: false, conversation: null });
         return;
       }
       if (site !== null && site.id !== visible.id) {
         halt();
-        chooseConversation(null);
+        if (chosenConversation() !== undefined) chooseConversation(null);
       }
       site = visible;
       const loaded = await loadConversations(visible);

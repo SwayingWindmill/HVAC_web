@@ -38,7 +38,7 @@ func NewS1FixtureAuthorizationStore(subjectIssuer string) AuthorizationStore {
 		{
 			Principal:     PrincipalRecord{ID: S1FixtureOwnerAPrincipalID, SubjectIssuer: subjectIssuer, Subject: "fixture-user", DisplayName: "Owner A", Status: FactStatusActive},
 			TenantSiteIDs: []string{S1FixtureOwnerASite1ID, S1FixtureOwnerASite2ID},
-			Memberships:   []TenantMembership{{TenantID: S1FixtureTenantAID, Status: FactStatusActive}},
+			Memberships:   []TenantMembership{{TenantID: S1FixtureTenantAID, TenantCode: "fixture-tenant-a", TenantDisplayName: "Tenant A", TenantStatus: FactStatusActive, Status: FactStatusActive}},
 			Assignments: []RoleAssignment{
 				{TenantID: S1FixtureTenantAID, RoleKey: "owner", Status: FactStatusActive, Capabilities: []string{
 					string(registryauth.ActionRegistryRead),
@@ -52,7 +52,7 @@ func NewS1FixtureAuthorizationStore(subjectIssuer string) AuthorizationStore {
 		{
 			Principal:     PrincipalRecord{ID: S1FixtureDelegatedID, SubjectIssuer: subjectIssuer, Subject: "fixture-delegated-user", DisplayName: "Delegated User", Status: FactStatusActive},
 			TenantSiteIDs: []string{S1FixtureOwnerASite1ID, S1FixtureOwnerASite2ID},
-			Memberships:   []TenantMembership{{TenantID: S1FixtureTenantAID, Status: FactStatusActive}},
+			Memberships:   []TenantMembership{{TenantID: S1FixtureTenantAID, TenantCode: "fixture-tenant-a", TenantDisplayName: "Tenant A", TenantStatus: FactStatusActive, Status: FactStatusActive}},
 			Assignments: []RoleAssignment{
 				{TenantID: S1FixtureTenantAID, SiteID: S1FixtureOwnerASite1ID, RoleKey: "viewer", Status: FactStatusActive, Capabilities: []string{string(registryauth.ActionRegistryRead)}},
 			},
@@ -60,7 +60,7 @@ func NewS1FixtureAuthorizationStore(subjectIssuer string) AuthorizationStore {
 		{
 			Principal:     PrincipalRecord{ID: S1FixtureDeniedID, SubjectIssuer: subjectIssuer, Subject: "fixture-denied-user", DisplayName: "Denied User", Status: FactStatusActive},
 			TenantSiteIDs: []string{S1FixtureOwnerASite1ID, S1FixtureOwnerASite2ID},
-			Memberships:   []TenantMembership{{TenantID: S1FixtureTenantAID, Status: FactStatusActive}},
+			Memberships:   []TenantMembership{{TenantID: S1FixtureTenantAID, TenantCode: "fixture-tenant-a", TenantDisplayName: "Tenant A", TenantStatus: FactStatusActive, Status: FactStatusActive}},
 			Assignments: []RoleAssignment{
 				{TenantID: S1FixtureTenantAID, RoleKey: "viewer", Status: FactStatusActive, Capabilities: []string{string(registryauth.ActionRegistryRead)}},
 			},
@@ -68,7 +68,7 @@ func NewS1FixtureAuthorizationStore(subjectIssuer string) AuthorizationStore {
 		},
 		{
 			Principal:   PrincipalRecord{ID: S1FixtureNoAccessID, SubjectIssuer: subjectIssuer, Subject: "fixture-no-access-user", DisplayName: "No Access User", Status: FactStatusActive},
-			Memberships: []TenantMembership{{TenantID: S1FixtureTenantAID, Status: FactStatusActive}},
+			Memberships: []TenantMembership{{TenantID: S1FixtureTenantAID, TenantCode: "fixture-tenant-a", TenantDisplayName: "Tenant A", TenantStatus: FactStatusActive, Status: FactStatusActive}},
 		},
 		{
 			Principal:   PrincipalRecord{ID: S1FixtureRevokedMemberID, SubjectIssuer: subjectIssuer, Subject: "fixture-revoked-user", DisplayName: "Revoked User", Status: FactStatusActive},

@@ -69,7 +69,8 @@ Page({
     try {
       const site = await currentSite(rereadEquipment);
       if (site === null) {
-        this.setData({ loading: false, noSite: true });
+        plant = null;
+        this.setData({ loading: false, noSite: true, siteName: '', updatedAt: '', realtime: null, devices: null, deviceCount: 0, chart: null, chartNote: '' });
         return;
       }
       const now = new Date();

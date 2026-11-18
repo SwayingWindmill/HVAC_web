@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -532,6 +533,7 @@ func (h *handler) handleCurrentPrincipal(ctx context.Context, writer http.Respon
 		return http.StatusServiceUnavailable
 	}
 	roles := effectivePrincipalRoles(roleFacts, claims.TenantID, h.now())
+	tenants := availableTenants(roleFacts, h.now())
 	response := identitycontext.InternalPrincipalResponse{
 		PrincipalID: roleFacts.Principal.ID,
 		Principal: identitycontext.UserPrincipal{
@@ -558,10 +560,55 @@ func (h *handler) handleCurrentPrincipal(ctx context.Context, writer http.Respon
 			PolicyRevision:      claims.PolicyRevision,
 			DelegationExpiresAt: time.Unix(claims.ExpiresAt, 0).UTC().Format(time.RFC3339),
 		},
-		Authorization: authorization,
+		Authorization:    authorization,
+		AvailableTenants: tenants,
 	}
 	writeJSON(writer, http.StatusOK, response)
 	return http.StatusOK
+}
+
+func availableTenants(facts AuthorizationFacts, now time.Time) []identitycontext.TenantMembershipSummary {
+	if !facts.Found || facts.Principal.Status != FactStatusActive {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	tenants := make([]identitycontext.TenantMembershipSummary, 0, len(facts.Memberships))
+	for _, membership := range facts.Memberships {
+		tenantID := strings.TrimSpace(membership.TenantID)
+		if tenantID == "" || membership.Status != FactStatusActive || !factEffective(membership.ValidFrom, membership.ValidTo, now) {
+			continue
+		}
+		if membership.TenantStatus != "" && membership.TenantStatus != FactStatusActive {
+			continue
+		}
+		if _, duplicate := seen[tenantID]; duplicate {
+			continue
+		}
+		seen[tenantID] = struct{}{}
+		code := strings.TrimSpace(membership.TenantCode)
+		displayName := strings.TrimSpace(membership.TenantDisplayName)
+		if displayName == "" {
+			displayName = code
+		}
+		if displayName == "" {
+			displayName = tenantID
+		}
+		tenants = append(tenants, identitycontext.TenantMembershipSummary{
+			TenantID:    tenantID,
+			Code:        code,
+			DisplayName: displayName,
+		})
+	}
+	sort.Slice(tenants, func(i, j int) bool {
+		if tenants[i].DisplayName != tenants[j].DisplayName {
+			return tenants[i].DisplayName < tenants[j].DisplayName
+		}
+		if tenants[i].Code != tenants[j].Code {
+			return tenants[i].Code < tenants[j].Code
+		}
+		return tenants[i].TenantID < tenants[j].TenantID
+	})
+	return tenants
 }
 
 func effectivePrincipalRoles(facts AuthorizationFacts, tenantID string, now time.Time) []string {

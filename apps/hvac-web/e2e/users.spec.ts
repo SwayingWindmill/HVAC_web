@@ -105,3 +105,105 @@ test('users who can submit high-risk commands without two-factor verification sh
   await expect(supervisorRow).toContainText('已停用');
   await expect(supervisorRow).not.toContainText('提交不了高风险指令');
 });
+
+test('an administrator assigns a temporary maintenance role with validTo and sees plain-Chinese expiry', async ({ page, gateway }) => {
+  await signInAsAdministrator(page);
+  await page.goto('/system?tab=users');
+  const users = page.getByRole('table', { name: '用户与角色' });
+
+  await users.getByRole('button', { name: '周敏 的操作' }).click();
+  await page.getByRole('menuitem', { name: '角色与站点' }).click();
+
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('combobox', { name: '角色' }).click();
+  await page.getByRole('option', { name: '运维主管' }).click();
+  await dialog.getByRole('combobox', { name: '站点' }).click();
+  await page.getByRole('option', { name: '中央机房' }).click();
+
+  await dialog.getByRole('combobox', { name: '授权有效期' }).click();
+  await page.getByRole('option', { name: '自定义到期时间' }).click();
+  await dialog.getByLabel('自定义到期时间').fill('2020-01-01T10:00');
+  await dialog.getByRole('button', { name: '添加角色' }).click();
+  await expect(dialog).toContainText('到期时间必须晚于当前时间。');
+
+  await dialog.getByRole('combobox', { name: '授权有效期' }).click();
+  await page.getByRole('option', { name: '临时 4 小时' }).click();
+  await dialog.getByRole('button', { name: '添加角色' }).click();
+
+  const zhouMinMember = gateway.members.find((member) => member.username === 'zhou.min');
+  const tempAssignment = zhouMinMember?.assignments.find((item: { roleKey: string; validTo?: string }) => item.roleKey === 'site-manager');
+  expect(typeof tempAssignment?.validTo).toBe('string');
+  expect(Date.parse(String(tempAssignment?.validTo))).toBeGreaterThan(Date.now());
+
+  await expect(dialog).toContainText('运维主管');
+  await expect(dialog).toContainText('至 ');
+  await expect(dialog).not.toContainText(String(tempAssignment?.validTo));
+  await page.keyboard.press('Escape');
+
+  const zhouMinRow = users.getByRole('row', { name: /周敏/ });
+  await expect(zhouMinRow).toContainText('运维人员中央机房长期');
+  await expect(zhouMinRow).toContainText('运维主管中央机房至 ');
+});
+
+test('multi-tenant switcher switches organizations, clears site/inspect params, and hides for single-tenant users', async ({ page, gateway }) => {
+  const adminPrincipal = {
+    ...principal,
+    principal: { ...principal.principal, roles: ['admin'] },
+    authorization: { ...principal.authorization, capabilities: [...principal.authorization.capabilities, 'iam.admin'] },
+  };
+  gateway.principalOverride = adminPrincipal;
+  await page.goto('/system?tab=users');
+  await expect(page.getByRole('button', { name: '切换所属组织' })).toHaveCount(0);
+
+  const tenantA = String(principal.context.tenantId);
+  const tenantB = '018f3d00-0000-7000-8000-000000000002';
+  const siteB = '018f3e00-1000-7000-8000-000000000099';
+  const availableTenants = [
+    { tenantId: tenantA, code: 'songyaxuan', displayName: '松雅轩' },
+    { tenantId: tenantB, code: 'lugu-plant', displayName: '麓谷冷站' },
+  ];
+  gateway.principalOverride = { ...adminPrincipal, availableTenants };
+  gateway.tenantPrincipals.set(tenantB, {
+    ...adminPrincipal,
+    context: { ...adminPrincipal.context, tenantId: tenantB },
+    availableTenants,
+  });
+  gateway.tenantSites.set(tenantB, [
+    {
+      id: siteB,
+      tenantId: tenantB,
+      code: 'lugu-central',
+      displayName: '麓谷一号冷站',
+      timezone: 'Asia/Shanghai',
+      status: 'ACTIVE',
+      revision: 1,
+      createdAt: '2026-09-28T07:11:40.006Z',
+      updatedAt: '2026-09-29T08:51:35.732Z',
+      floorAreaM2: 18000,
+      climateZone: 'HOT_SUMMER_COLD_WINTER',
+    },
+  ]);
+
+  await page.goto(`/system?tab=users&site=${SITE_ID}&inspect=chiller-1`);
+  const switcher = page.getByRole('button', { name: '切换所属组织' });
+  await expect(switcher).toContainText('松雅轩');
+  await expect(switcher).not.toContainText(tenantA);
+
+  await switcher.click();
+  const menu = page.getByRole('menu');
+  await expect(menu).toContainText('松雅轩');
+  await expect(menu).toContainText('songyaxuan');
+  await expect(menu).toContainText('麓谷冷站');
+  await expect(menu).toContainText('lugu-plant');
+  await expect(menu).not.toContainText(tenantA);
+  await expect(menu).not.toContainText(tenantB);
+
+  await page.getByRole('menuitem', { name: /麓谷冷站/ }).click();
+
+  await expect.poll(() => gateway.tenantSwitchRequests.slice()).toEqual([tenantB]);
+  await expect(switcher).toContainText('麓谷冷站');
+  await expect(page).toHaveURL(/\/system\?tab=users$/u);
+  await expect(page.getByRole('link', { name: '总览', exact: true })).toHaveAttribute('href', '/overview');
+  await page.locator('header').getByRole('combobox').click();
+  await expect(page.getByText('麓谷一号冷站')).toBeVisible();
+});

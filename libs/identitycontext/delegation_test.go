@@ -200,3 +200,44 @@ func validClaims(now time.Time) identitycontext.DelegationClaims {
 		SessionID: "session-01", IssuedAt: now.Unix(), ExpiresAt: now.Add(30 * time.Second).Unix(), TokenID: "grant-01",
 	}
 }
+
+func TestInternalPrincipalResponseValidatesAvailableTenants(t *testing.T) {
+	valid := identitycontext.InternalPrincipalResponse{
+		PrincipalID: "018f3e00-2000-7000-8000-000000000001",
+		Principal: identitycontext.UserPrincipal{
+			Subject: "operator-1",
+			Issuer:  "https://issuer.example.test",
+		},
+		Context: identitycontext.PrincipalContext{
+			TenantID:       "018f3d00-0000-7000-8000-000000000001",
+			PolicyRevision: "policy-v1",
+		},
+		Authorization: identitycontext.EffectiveAuthorization{
+			CapabilitySetVersion: identitycontext.CapabilitySetVersion,
+			PolicyRevision:       "capability-v7:ok",
+			Capabilities:         []identitycontext.Capability{identitycontext.CapabilitySiteRead},
+		},
+		AvailableTenants: []identitycontext.TenantMembershipSummary{
+			{TenantID: "018f3d00-0000-7000-8000-000000000001", Code: "tenant-a", DisplayName: "租户 A"},
+			{TenantID: "018f3d00-0000-7000-8000-000000000002", Code: "tenant-b", DisplayName: "租户 B"},
+		},
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid principal response rejected: %v", err)
+	}
+
+	missingName := valid
+	missingName.AvailableTenants = []identitycontext.TenantMembershipSummary{{TenantID: "018f3d00-0000-7000-8000-000000000001", Code: "tenant-a"}}
+	if err := missingName.Validate(); err == nil {
+		t.Fatal("accepted tenant summary with empty displayName")
+	}
+
+	duplicate := valid
+	duplicate.AvailableTenants = []identitycontext.TenantMembershipSummary{
+		{TenantID: "018f3d00-0000-7000-8000-000000000001", Code: "tenant-a", DisplayName: "租户 A"},
+		{TenantID: "018f3d00-0000-7000-8000-000000000001", Code: "tenant-a", DisplayName: "租户 A"},
+	}
+	if err := duplicate.Validate(); err == nil {
+		t.Fatal("accepted duplicate availableTenants")
+	}
+}

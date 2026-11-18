@@ -8,6 +8,12 @@
   </view>
 
   <view class="card">
+    <picker wx:if="{{canSwitchTenant}}" mode="selector" range="{{tenants}}" range-key="displayName" value="{{tenantIndex}}" bindchange="switchTenant" disabled="{{switchingTenant}}">
+      <view class="row" aria-role="button" aria-label="切换所属组织">
+        <view class="titled"><text>当前组织</text></view>
+        <view class="row-side"><text class="value">{{tenantName}}</text><image class="chev" src="/assets/icon/chevron-right.svg" aria-hidden="true" /></view>
+      </view>
+    </picker>
     <view class="row" bindtap="openSites" aria-role="button" aria-label="切换站点">
       <view class="titled"><image class="title-icon" src="/assets/icon/map-pin.svg" aria-hidden="true" /><text>当前站点</text></view>
       <text class="muted">{{siteName}} ›</text>

@@ -27,6 +27,11 @@ export const rememberedSiteId = () => (wx.getStorageSync(SITE_KEY) as string) ||
 
 export const rememberSite = (siteId: string) => wx.setStorageSync(SITE_KEY, siteId);
 
+export function clearSites(): void {
+  known = null;
+  wx.removeStorageSync(SITE_KEY);
+}
+
 /** The list read for this Session; `fresh` reads it again (a pull-down refresh). */
 const visibleSites = async (fresh: boolean) => (!fresh && known !== null && known.session === sessionToken() ? known.sites : listSites());
 

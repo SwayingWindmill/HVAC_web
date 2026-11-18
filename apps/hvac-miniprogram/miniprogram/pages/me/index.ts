@@ -1,9 +1,17 @@
+import { clearAssistantChoice } from '../../lib/assistant-choice';
 import { gateway, requireSession, signOutLocally, weChatLogin } from '../../lib/platform';
-import { currentSite } from '../../lib/site';
+import { clearPlantCache } from '../../lib/plant-load';
+import { clearSites, currentSite } from '../../lib/site';
 import { selectTab } from '../../lib/tab';
+import {
+  readTenantState,
+  switchActiveTenant,
+  type PrincipalTenantResponse,
+  type TenantMembership,
+} from '../../lib/tenant';
 import { bindWeChat, readWeChat, removeWeChat, type WeChatRow } from '../../lib/wechat';
 
-interface Principal {
+interface Principal extends PrincipalTenantResponse {
   readonly principal: { readonly displayName: string; readonly email: string };
 }
 
@@ -12,6 +20,12 @@ Page({
     name: '',
     email: '',
     siteName: '',
+    tenants: [] as readonly TenantMembership[],
+    activeTenantId: null as string | null,
+    tenantName: '',
+    tenantIndex: 0,
+    canSwitchTenant: false,
+    switchingTenant: false,
     wechat: { value: '', action: null, hint: '' } as WeChatRow,
     changingWeChat: false,
     signingOut: false,
@@ -21,12 +35,59 @@ Page({
     if (!requireSession()) return;
     selectTab(this);
     const [principal, site] = await Promise.allSettled([gateway.get<Principal>('/api/v1/principal'), currentSite()]);
+    const tenantState = principal.status === 'fulfilled'
+      ? readTenantState(principal.value)
+      : { activeTenantId: null, activeTenantName: '', activeIndex: 0, tenants: [], canSwitch: false };
     this.setData({
       wechat: await readWeChat(gateway),
       name: principal.status === 'fulfilled' ? principal.value.principal.displayName : '—',
       email: principal.status === 'fulfilled' ? principal.value.principal.email : '',
       siteName: site.status === 'fulfilled' && site.value !== null ? site.value.displayName : '—',
+      tenants: tenantState.tenants,
+      activeTenantId: tenantState.activeTenantId,
+      tenantName: tenantState.activeTenantName,
+      tenantIndex: tenantState.activeIndex,
+      canSwitchTenant: tenantState.canSwitch,
     });
+  },
+
+  async switchTenant(event: WechatMiniprogram.PickerChange) {
+    if (this.data.switchingTenant) return;
+    const index = Number(event.detail.value);
+    const target = this.data.tenants[index];
+    if (!target || target.tenantId === this.data.activeTenantId) return;
+
+    this.setData({ switchingTenant: true });
+    const result = await switchActiveTenant(gateway, target.tenantId, () => {
+      clearSites();
+      clearPlantCache();
+      clearAssistantChoice();
+    });
+    if (!result.switched || !result.state) {
+      this.setData({ switchingTenant: false });
+      wx.showToast({ title: result.message, icon: 'none' });
+      return;
+    }
+
+    let siteName = '—';
+    let siteFailed = false;
+    try {
+      const nextSite = await currentSite(true);
+      siteName = nextSite !== null ? nextSite.displayName : '暂无可用站点';
+    } catch {
+      siteFailed = true;
+    }
+
+    this.setData({
+      switchingTenant: false,
+      tenants: result.state.tenants,
+      activeTenantId: result.state.activeTenantId,
+      tenantName: result.state.activeTenantName,
+      tenantIndex: result.state.activeIndex,
+      canSwitchTenant: result.state.canSwitch,
+      siteName,
+    });
+    wx.showToast({ title: siteFailed ? '组织已切换，但站点加载失败' : result.message, icon: 'none' });
   },
 
   openSites() {

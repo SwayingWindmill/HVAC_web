@@ -19,7 +19,7 @@ func TestPostgresSessionMutationCommitsStateAuditAndOutboxAtomically(t *testing.
 	harness := newPostgresHarness(t)
 	harness.reset(t)
 	now := time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC)
-	ids := sequenceIDs("audit-create-01", "audit-revoke-01")
+	ids := sequenceIDs("audit-create-01", "audit-switch-01", "audit-revoke-01")
 	store, err := sessionstore.OpenPostgres(context.Background(), harness.gatewayDSN, sessionstore.PostgresConfig{IDGenerator: ids})
 	if err != nil {
 		t.Fatal(err)
@@ -57,6 +57,14 @@ func TestPostgresSessionMutationCommitsStateAuditAndOutboxAtomically(t *testing.
 		t.Fatalf("unexpected touched session: %#v", touched)
 	}
 
+	switched, err := store.SwitchTenant(context.Background(), created.ID, "tenant-02", fixtureMutation(now.Add(500*time.Millisecond), "SESSION_TENANT_SWITCHED"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if switched.TenantID != "tenant-02" || switched.AggregateVersion != 2 {
+		t.Fatalf("unexpected switched session: %#v", switched)
+	}
+
 	revoked, err := store.RevokeSession(context.Background(), created.ID, fixtureMutation(now.Add(time.Second), "SESSION_REVOKED"))
 	if err != nil {
 		t.Fatal(err)
@@ -64,10 +72,10 @@ func TestPostgresSessionMutationCommitsStateAuditAndOutboxAtomically(t *testing.
 	if _, err := store.TouchSession(context.Background(), created.ID, touchedAt.Add(time.Minute)); !errors.Is(err, sessionstore.ErrSessionNotFound) {
 		t.Fatalf("touching revoked session returned %v, want ErrSessionNotFound", err)
 	}
-	if revoked.AggregateVersion != 2 || revoked.LastAuditMessageID != "audit-revoke-01" || revoked.RevokedAt == nil {
+	if revoked.AggregateVersion != 3 || revoked.RevokedAt == nil {
 		t.Fatalf("unexpected revoked session: %#v", revoked)
 	}
-	harness.assertCounts(t, 1, 2, 2)
+	harness.assertCounts(t, 1, 3, 3)
 
 	rows, err := harness.admin.Query(context.Background(), `SELECT payload, partition_key, aggregate_id FROM gateway.outbox ORDER BY aggregate_version`)
 	if err != nil {

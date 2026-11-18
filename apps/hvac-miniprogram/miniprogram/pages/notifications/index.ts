@@ -48,7 +48,8 @@ Page({
     try {
       const site = await currentSite(rereadSites);
       if (site === null) {
-        this.setData({ loading: false, noSite: true });
+        read = null;
+        this.setData({ loading: false, noSite: true, siteName: '', feed: null, partial: false });
         return;
       }
       const [active, cleared, todayStart] = await Promise.all([

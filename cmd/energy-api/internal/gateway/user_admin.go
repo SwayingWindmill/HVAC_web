@@ -40,9 +40,10 @@ type UserDirectory interface {
 }
 
 type memberAssignment struct {
-	BindingID string `json:"bindingId"`
-	RoleKey   string `json:"roleKey"`
-	SiteID    string `json:"siteId,omitempty"`
+	BindingID string  `json:"bindingId"`
+	RoleKey   string  `json:"roleKey"`
+	SiteID    string  `json:"siteId,omitempty"`
+	ValidTo   *string `json:"validTo,omitempty"`
 }
 
 type memberView struct {
@@ -69,8 +70,9 @@ type membersResponse struct {
 }
 
 type assignmentInput struct {
-	RoleKey string `json:"roleKey"`
-	SiteID  string `json:"siteId,omitempty"`
+	RoleKey string  `json:"roleKey"`
+	SiteID  string  `json:"siteId,omitempty"`
+	ValidTo *string `json:"validTo,omitempty"`
 }
 
 type createMemberRequest struct {
@@ -218,8 +220,8 @@ func (h *handler) listMembers(writer http.ResponseWriter, request *http.Request,
 			view.LastLoginAt = &value
 		}
 		for _, assignment := range member.Assignments {
-			if assignment.Status == "ACTIVE" {
-				view.Assignments = append(view.Assignments, memberAssignment{BindingID: assignment.BindingID, RoleKey: assignment.RoleKey, SiteID: assignment.SiteID})
+			if assignment.Status == "ACTIVE" && assignmentActive(assignment.ValidTo, now) {
+				view.Assignments = append(view.Assignments, memberAssignment{BindingID: assignment.BindingID, RoleKey: assignment.RoleKey, SiteID: assignment.SiteID, ValidTo: assignment.ValidTo})
 			}
 		}
 		response.Members = append(response.Members, view)
@@ -241,6 +243,7 @@ func (h *handler) createMember(writer http.ResponseWriter, request *http.Request
 		writeIdentityFailure(writer, request, identityFailure{400, "USER_ADMIN_REQUEST_INVALID", "Request invalid", "A new user needs at least one role.", false})
 		return
 	}
+	now := h.now().UTC()
 	assignments := make([]iamserver.AdminAssignment, len(input.Assignments))
 	roleKeys := make([]string, len(input.Assignments))
 	for index, item := range input.Assignments {
@@ -251,7 +254,13 @@ func (h *handler) createMember(writer http.ResponseWriter, request *http.Request
 			writeIdentityFailure(writer, request, identityFailure{400, "USER_ADMIN_REQUEST_INVALID", "Role invalid", "The role or its scope is not valid.", false})
 			return
 		}
-		assignments[index] = iamserver.AdminAssignment{RoleTemplateID: role.RoleTemplateID, SiteID: item.SiteID}
+		validTo, valid := parseFutureAssignmentValidTo(item.ValidTo, now)
+		if !valid {
+			h.emitIAMAdminAudit(request, admin.session, "username:"+strings.TrimSpace(input.Username), targetLabel, "IAM_MEMBER_CREATED", auditOutcomeRejected, map[string]any{"reasonCode": "USER_ADMIN_REQUEST_INVALID"})
+			writeIdentityFailure(writer, request, identityFailure{400, "USER_ADMIN_REQUEST_INVALID", "Expiry invalid", "The role assignment expiry must be a valid future timestamp.", false})
+			return
+		}
+		assignments[index] = iamserver.AdminAssignment{RoleTemplateID: role.RoleTemplateID, SiteID: item.SiteID, ValidTo: validTo}
 		roleKeys[index] = item.RoleKey
 	}
 	account, err := h.identity.config.UserDirectory.CreateUser(request.Context(), identityadmin.NewUser{
@@ -479,9 +488,15 @@ func (h *handler) assignMemberRole(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	role, ok := roleNamed(admin.directory, input.RoleKey)
-	if !ok {
+	if !ok || (role.TenantScoped && input.SiteID != "") {
 		h.emitIAMAdminAudit(request, admin.session, "principal:"+member.PrincipalID, targetLabel, "IAM_ROLE_ASSIGNED", auditOutcomeRejected, map[string]any{"roleKey": input.RoleKey, "reasonCode": "USER_ADMIN_REQUEST_INVALID"})
-		writeIdentityFailure(writer, request, identityFailure{400, "USER_ADMIN_REQUEST_INVALID", "Role invalid", "The role is not valid.", false})
+		writeIdentityFailure(writer, request, identityFailure{400, "USER_ADMIN_REQUEST_INVALID", "Role invalid", "The role or its scope is not valid.", false})
+		return
+	}
+	validTo, valid := parseFutureAssignmentValidTo(input.ValidTo, h.now().UTC())
+	if !valid {
+		h.emitIAMAdminAudit(request, admin.session, "principal:"+member.PrincipalID, targetLabel, "IAM_ROLE_ASSIGNED", auditOutcomeRejected, map[string]any{"roleKey": input.RoleKey, "reasonCode": "USER_ADMIN_REQUEST_INVALID"})
+		writeIdentityFailure(writer, request, identityFailure{400, "USER_ADMIN_REQUEST_INVALID", "Expiry invalid", "The role assignment expiry must be a valid future timestamp.", false})
 		return
 	}
 	// Re-assigning a revoked Role reactivates its row, which carries the revision to check.
@@ -493,7 +508,7 @@ func (h *handler) assignMemberRole(writer http.ResponseWriter, request *http.Req
 	}
 	iamStatus, code, ok := h.callIAMAdminWithOutcome(writer, request, admin.session, internalIAMAdminMutationPath, iamserver.AdminMutationRequest{
 		Operation: "role-binding.upsert", PrincipalID: member.PrincipalID, RoleTemplateID: role.RoleTemplateID,
-		SiteID: input.SiteID, Status: "ACTIVE", ExpectedRevision: expectedRevision,
+		SiteID: input.SiteID, Status: "ACTIVE", ExpectedRevision: expectedRevision, ValidTo: validTo,
 	}, nil)
 	if !ok {
 		h.emitDomainAudit(request.Context(), request, admin.session, domainAuditInput{
@@ -502,7 +517,7 @@ func (h *handler) assignMemberRole(writer http.ResponseWriter, request *http.Req
 			TargetLabel:   targetLabel,
 			Action:        "IAM_ROLE_ASSIGNED",
 			Outcome:       auditOutcomeForStatus(iamStatus),
-			ChangeSummary: map[string]any{"roleKey": input.RoleKey, "hasSiteScope": input.SiteID != "", "reasonCode": code},
+			ChangeSummary: map[string]any{"roleKey": input.RoleKey, "hasSiteScope": input.SiteID != "", "hasValidTo": validTo != nil, "reasonCode": code},
 		})
 		return
 	}
@@ -512,9 +527,36 @@ func (h *handler) assignMemberRole(writer http.ResponseWriter, request *http.Req
 		TargetLabel:   targetLabel,
 		Action:        "IAM_ROLE_ASSIGNED",
 		Outcome:       auditOutcomeSucceeded,
-		ChangeSummary: map[string]any{"roleKey": input.RoleKey, "hasSiteScope": input.SiteID != ""},
+		ChangeSummary: map[string]any{"roleKey": input.RoleKey, "hasSiteScope": input.SiteID != "", "hasValidTo": validTo != nil},
 	})
 	writer.WriteHeader(http.StatusNoContent)
+}
+
+func parseFutureAssignmentValidTo(raw *string, now time.Time) (*time.Time, bool) {
+	if raw == nil {
+		return nil, true
+	}
+	trimmed := strings.TrimSpace(*raw)
+	if trimmed == "" {
+		return nil, false
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, trimmed)
+	if err != nil {
+		return nil, false
+	}
+	utc := parsed.UTC()
+	if !utc.After(now.UTC()) {
+		return nil, false
+	}
+	return &utc, true
+}
+
+func assignmentActive(validTo *string, now time.Time) bool {
+	if validTo == nil {
+		return true
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, *validTo)
+	return err == nil && parsed.After(now)
 }
 
 func (h *handler) revokeMemberRole(writer http.ResponseWriter, request *http.Request, admin userAdminRequest, member iamserver.AdminMember, bindingID string) {

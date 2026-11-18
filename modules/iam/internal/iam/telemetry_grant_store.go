@@ -124,13 +124,17 @@ func (store *PostgresTelemetryGrantStore) PollRevocations(ctx context.Context, t
 	if limit <= 0 || limit > 500 {
 		return nil, errors.New("telemetry revocation poll limit is invalid")
 	}
-	transaction, err := store.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	transaction, err := store.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("begin Telemetry revocation poll: %w", err)
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
 	if err := setTelemetryGrantContext(ctx, transaction, tenantID); err != nil {
 		return nil, err
+	}
+	var swept int
+	if err := transaction.QueryRow(ctx, `SELECT iam.sweep_expired_telemetry_revocations($1::uuid, clock_timestamp())`, tenantID).Scan(&swept); err != nil {
+		return nil, fmt.Errorf("sweep expired Telemetry authorizations: %w", err)
 	}
 	rows, err := transaction.Query(ctx, `
 SELECT sequence, principal_id::text, tenant_id::text, source_type,

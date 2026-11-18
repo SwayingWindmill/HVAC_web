@@ -84,6 +84,24 @@ export interface ShellSnapshot {
   logout?: ShellLogoutView;
 }
 
+function clearTenantSwitchSearchParams(target: string, origin: string): string {
+  const url = new URL(target, origin);
+  url.searchParams.delete('site');
+  url.searchParams.delete('inspect');
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
+export type TenantSwitchOutcome =
+  | { state: 'switched'; target: string }
+  | { state: 'unchanged' }
+  | { state: 'rejected'; code: string; message: string }
+  | { state: 'ignored'; reason: string };
+
+export interface SwitchTenantOptions {
+  readonly currentHref?: string;
+  readonly onSwitched?: () => void;
+}
+
 export interface ShellRuntime {
   current(): ShellSnapshot;
   subscribe(listener: (snapshot: ShellSnapshot) => void): () => void;
@@ -99,6 +117,7 @@ export interface ShellRuntime {
   releaseRealtimeStatus(source: string): void;
   requestSiteNavigation(target: string): Promise<SiteNavigationOutcome>;
   handlePolicyRevision(policyRevision: string): Promise<'unchanged' | 'reloaded' | 'failed'>;
+  switchTenant(tenantId: string, options?: SwitchTenantOptions): Promise<TenantSwitchOutcome>;
   logout(): Promise<LogoutOutcome>;
   purge(reason: string, beginLogin?: boolean): void;
   dispose(): void;
@@ -117,7 +136,9 @@ export interface ShellRuntimeEnvironment {
 type ShellRuntimeClient = Pick<
   PlatformGatewayClient,
   'getCurrentPrincipal' | 'getPlatformStatus' | 'listSites' | 'loginUrl' | 'logout'
->;
+> & {
+  readonly switchActiveTenant?: PlatformGatewayClient['switchActiveTenant'];
+};
 
 const MAX_TIMER_DELAY_MS = 2_147_000_000;
 const USER_ACTIVITY_SYNC_INTERVAL_MS = 60_000;
@@ -578,7 +599,7 @@ class BrowserShellRuntime implements ShellRuntime {
   }
 
   private startProtectedPurge(
-    reason: 'SESSION_LOSS' | 'LOGOUT' | 'DISPOSE',
+    reason: 'SESSION_LOSS' | 'LOGOUT' | 'POLICY_CHANGE' | 'DISPOSE',
   ): Promise<ProtectedScopePurgeOutcome> {
     const current = this.protectedScope.current();
     if (
@@ -635,6 +656,75 @@ class BrowserShellRuntime implements ShellRuntime {
     void this.startProtectedPurge('LOGOUT');
     this.sequence += 1;
     this.enterLoginRequired(reason, false);
+  }
+
+  async switchTenant(tenantId: string, options: SwitchTenantOptions = {}): Promise<TenantSwitchOutcome> {
+    if (this.snapshot.state !== 'READY' || !this.protectedPrincipal) {
+      return { state: 'ignored', reason: 'UNAUTHENTICATED' };
+    }
+    const previousPrincipal = this.protectedPrincipal;
+    if (tenantId === previousPrincipal.context.tenantId) {
+      return { state: 'unchanged' };
+    }
+    const switchActiveTenant = this.client.switchActiveTenant;
+    if (!switchActiveTenant) {
+      return { state: 'rejected', code: 'TENANT_SWITCH_UNSUPPORTED', message: '当前环境不支持切换组织。' };
+    }
+
+    try {
+      const response = await switchActiveTenant(tenantId, previousPrincipal.session.csrfToken);
+      const nextPrincipal = response.data;
+      if (this.snapshot.state !== 'READY' || this.protectedPrincipal !== previousPrincipal) {
+        return { state: 'ignored', reason: 'SUPERSEDED' };
+      }
+
+      const sequence = ++this.sequence;
+      this.bootstrapController?.abort();
+      const controller = new AbortController();
+      this.bootstrapController = controller;
+      this.protectedPrincipal = nextPrincipal;
+
+      await this.startProtectedPurge('POLICY_CHANGE');
+      options.onSwitched?.();
+
+      const target = clearTenantSwitchSearchParams(options.currentHref ?? this.returnTo, this.environment.origin);
+      this.returnTo = target;
+      this.realtimeSources.clear();
+      const canListSites = nextPrincipal.authorization.capabilities.includes('site.list');
+      this.publish({
+        state: 'READY',
+        principal: nextPrincipal,
+        platform: { state: 'checking' },
+        sites: canListSites ? { state: 'checking' } : { state: 'forbidden' },
+        siteTransition: undefined,
+        realtime: createIdleRealtimeStatus(),
+        logout: { status: 'idle' },
+      });
+
+      this.configureIdleTracking(nextPrincipal.session.idleTimeoutMs);
+      const tasks: Promise<void>[] = [
+        this.loadPlatformAvailability(sequence, nextPrincipal, controller),
+      ];
+      if (canListSites) {
+        tasks.push(this.loadAuthorizedSites(sequence, nextPrincipal, controller));
+      }
+      await Promise.all(tasks);
+      if (this.isCurrent(sequence) && !controller.signal.aborted) {
+        this.environment.navigate(target);
+      }
+      return { state: 'switched', target };
+    } catch (error: unknown) {
+      const problem = problemFrom(error);
+      if (problem && classifyBootstrapProblem(problem) === 'LOGIN_REQUIRED') {
+        this.enterLoginRequired(problem.code, true);
+        return { state: 'rejected', code: problem.code, message: '登录状态已失效，请重新登录。' };
+      }
+      return {
+        state: 'rejected',
+        code: problem?.code ?? 'TENANT_SWITCH_FAILED',
+        message: '切换组织失败，请稍后重试。',
+      };
+    }
   }
 
   private async loadPlatformAvailability(
