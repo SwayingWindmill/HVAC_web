@@ -1,14 +1,21 @@
 package telemetry
 
 import (
+	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
 type recordedClickHouseRetentionCall struct {
@@ -169,5 +176,250 @@ func TestClickHouseRetentionPrunerRejectsErrorsAndHTTPFailures(t *testing.T) {
 	}
 	if _, err := pruner.Prune(t.Context(), time.Date(2026, 11, 18, 0, 0, 0, 0, time.UTC)); err == nil || !strings.Contains(err.Error(), "403") {
 		t.Fatalf("expected HTTP 403 error, got %v", err)
+	}
+}
+
+type stubColdArchiveRunner struct {
+	mu       sync.Mutex
+	requests []ColdArchiveExportRequest
+	failOn   string
+	err      error
+}
+
+func (s *stubColdArchiveRunner) ExportBeforePrune(_ context.Context, req ColdArchiveExportRequest) (ColdArchiveExportResult, error) {
+	s.mu.Lock()
+	s.requests = append(s.requests, req)
+	s.mu.Unlock()
+	if s.failOn != "" && req.Database+"."+req.Table == s.failOn {
+		return ColdArchiveExportResult{}, s.err
+	}
+	return ColdArchiveExportResult{
+		Manifest: ColdArchiveManifest{
+			SchemaVersion: 1,
+			Database:      req.Database,
+			Table:         req.Table,
+			CutoffUTC:     req.Cutoff,
+		},
+	}, nil
+}
+
+func TestClickHouseRetentionPrunerArchiveRequiredFailClosed(t *testing.T) {
+	var deleteCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		deleteCalls.Add(1)
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	pruner, err := NewClickHouseRetentionPruner(ClickHouseRetentionConfig{
+		BaseURL:         server.URL,
+		HTTPClient:      server.Client(),
+		ArchiveRequired: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pruner.Prune(t.Context(), time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)); err == nil || !strings.Contains(err.Error(), "archive exporter is required") {
+		t.Fatalf("expected fail-closed archive required error, got %v", err)
+	}
+	if deleteCalls.Load() != 0 {
+		t.Fatalf("expected 0 delete calls when archive exporter missing, got %d", deleteCalls.Load())
+	}
+}
+
+func TestClickHouseRetentionPrunerArchiveErrorAbortsBeforeAnyDelete(t *testing.T) {
+	var deleteCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		deleteCalls.Add(1)
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	runner := &stubColdArchiveRunner{
+		failOn: "analytics.energy_interval_facts",
+		err:    errors.New("disk full"),
+	}
+	pruner, err := NewClickHouseRetentionPruner(ClickHouseRetentionConfig{
+		BaseURL:         server.URL,
+		HTTPClient:      server.Client(),
+		ArchiveExporter: runner,
+		ArchiveRequired: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pruner.Prune(t.Context(), time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)); err == nil || !strings.Contains(err.Error(), "disk full") {
+		t.Fatalf("expected archive error, got %v", err)
+	}
+	if deleteCalls.Load() != 0 {
+		t.Fatalf("expected 0 ALTER TABLE DELETE calls when second archive fails, got %d", deleteCalls.Load())
+	}
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	if len(runner.requests) != 2 {
+		t.Fatalf("expected export attempted for both raw tables before abort, got %d", len(runner.requests))
+	}
+}
+
+func TestClickHouseRetentionPrunerExportsArchiveBeforeDeletesAndPropagatesLegalHolds(t *testing.T) {
+	now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	holdTenant := "018f2d00-0000-7000-8000-000000000001"
+	holdSiteTenant := "018f2d00-0000-7000-8000-000000000002"
+	holdSite := "018f2e00-1000-7000-8000-000000000009"
+
+	var mu sync.Mutex
+	var ops []string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		sql := string(body)
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case strings.HasPrefix(sql, "SELECT "):
+			if strings.Contains(sql, "FROM telemetry_history.observations") {
+				ops = append(ops, "EXPORT:telemetry_history.observations")
+				_, _ = io.WriteString(writer, `{"observation_id":"018f2e00-9100-7000-8000-000000000010"}`+"\n")
+				return
+			}
+			if strings.Contains(sql, "FROM analytics.energy_interval_facts") {
+				ops = append(ops, "EXPORT:analytics.energy_interval_facts")
+				_, _ = io.WriteString(writer, `{"fact_id":"018f2e00-9200-7000-8000-000000000010"}`+"\n")
+				return
+			}
+		case strings.HasPrefix(sql, "ALTER TABLE "):
+			table := strings.TrimPrefix(sql, "ALTER TABLE ")
+			if idx := strings.Index(table, " "); idx > 0 {
+				table = table[:idx]
+			}
+			ops = append(ops, "DELETE:"+table)
+			writer.WriteHeader(http.StatusOK)
+			return
+		}
+		http.Error(writer, "unexpected sql", http.StatusBadRequest)
+	}))
+	defer server.Close()
+
+	archiveDir := t.TempDir()
+	exporter, err := NewColdArchiveExporter(ColdArchiveConfig{
+		BaseURL:    server.URL,
+		ArchiveDir: archiveDir,
+		HTTPClient: server.Client(),
+		Now:        func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pruner, err := NewClickHouseRetentionPruner(ClickHouseRetentionConfig{
+		BaseURL:         server.URL,
+		HTTPClient:      server.Client(),
+		ArchiveExporter: exporter,
+		ArchiveRequired: true,
+		LegalHolds: []ClickHouseLegalHoldScope{
+			{TenantID: holdTenant},
+			{TenantID: holdSiteTenant, SiteID: holdSite},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := pruner.Prune(t.Context(), now)
+	if err != nil {
+		t.Fatalf("Prune failed: %v", err)
+	}
+	wantArchived := []string{"telemetry_history.observations", "analytics.energy_interval_facts"}
+	if !slices.Equal(result.ArchivedTables, wantArchived) {
+		t.Fatalf("ArchivedTables=%v want %v", result.ArchivedTables, wantArchived)
+	}
+	if len(result.SubmittedTables) != 8 {
+		t.Fatalf("SubmittedTables=%v want 8 tables", result.SubmittedTables)
+	}
+
+	mu.Lock()
+	gotOps := slices.Clone(ops)
+	mu.Unlock()
+	if len(gotOps) != 10 {
+		t.Fatalf("expected 2 exports + 8 deletes = 10 ops, got %v", gotOps)
+	}
+	if gotOps[0] != "EXPORT:telemetry_history.observations" || gotOps[1] != "EXPORT:analytics.energy_interval_facts" {
+		t.Fatalf("exports must execute before all deletes, got %v", gotOps)
+	}
+	for _, op := range gotOps[2:] {
+		if !strings.HasPrefix(op, "DELETE:") {
+			t.Fatalf("unexpected operation order: %v", gotOps)
+		}
+	}
+
+	entries, err := os.ReadDir(archiveDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 4 {
+		t.Fatalf("expected 2 .jsonl.gz + 2 .manifest.json files, got %d", len(entries))
+	}
+}
+
+func TestClickHouseRetentionPrunerRecordsColdArchiveRunMetrics(t *testing.T) {
+	now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	registry := observability.NewRegistry()
+	metrics := NewPipelineMetrics(registry)
+
+	failPruner, err := NewClickHouseRetentionPruner(ClickHouseRetentionConfig{
+		BaseURL:         "http://127.0.0.1:8123",
+		HTTPClient:      &http.Client{},
+		ArchiveRequired: true,
+		Metrics:         metrics,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := failPruner.Prune(t.Context(), now); err == nil {
+		t.Fatal("expected missing exporter failure")
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		if strings.HasPrefix(string(body), "SELECT ") {
+			_, _ = io.WriteString(writer, "")
+			return
+		}
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	exporter, err := NewColdArchiveExporter(ColdArchiveConfig{
+		BaseURL:    server.URL,
+		ArchiveDir: t.TempDir(),
+		HTTPClient: server.Client(),
+		Now:        func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	okPruner, err := NewClickHouseRetentionPruner(ClickHouseRetentionConfig{
+		BaseURL:         server.URL,
+		HTTPClient:      server.Client(),
+		ArchiveExporter: exporter,
+		ArchiveRequired: true,
+		Metrics:         metrics,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := okPruner.Prune(t.Context(), now); err != nil {
+		t.Fatalf("okPruner.Prune failed: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	registry.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := rec.Body.String()
+	for _, needle := range []string{
+		`hvac_s2_cold_archive_runs_total{outcome="failed"} 1`,
+		`hvac_s2_cold_archive_runs_total{outcome="succeeded"} 2`,
+	} {
+		if !strings.Contains(body, needle) {
+			t.Fatalf("missing %q in /metrics output:\n%s", needle, body)
+		}
 	}
 }

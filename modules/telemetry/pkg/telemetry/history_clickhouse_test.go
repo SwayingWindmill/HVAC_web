@@ -2,7 +2,10 @@ package telemetry
 
 import (
 	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,14 +18,39 @@ import (
 	"time"
 )
 
+func readClickHouseRequestBody(t *testing.T, r *http.Request) ([]byte, []byte) {
+	t.Helper()
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Header.Get("Content-Encoding") != "gzip" {
+		return raw, raw
+	}
+	reader, err := gzip.NewReader(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("open gzip request body: %v", err)
+	}
+	defer reader.Close()
+	decoded, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("gunzip request body: %v", err)
+	}
+	return raw, decoded
+}
+
 func TestClickHouseHistorySinkRetryPreservesPayloadAndToken(t *testing.T) {
+	var rawBodies [][]byte
 	var bodies [][]byte
+	var encodings []string
 	var tokens []string
 	var mutex sync.Mutex
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
+		raw, decoded := readClickHouseRequestBody(t, r)
 		mutex.Lock()
-		bodies = append(bodies, body)
+		rawBodies = append(rawBodies, raw)
+		bodies = append(bodies, decoded)
+		encodings = append(encodings, r.Header.Get("Content-Encoding"))
 		tokens = append(tokens, r.URL.Query().Get("insert_deduplication_token"))
 		mutex.Unlock()
 		w.WriteHeader(http.StatusNoContent)
@@ -45,7 +73,16 @@ func TestClickHouseHistorySinkRetryPreservesPayloadAndToken(t *testing.T) {
 	}
 	mutex.Lock()
 	sameRetry := bytes.Equal(bodies[0], bodies[1]) && tokens[0] == tokens[1]
+	expectedToken := fmt.Sprintf("%x", sha256.Sum256(bodies[0]))
+	sameTokenHash := tokens[0] == expectedToken
+	bothGzipped := encodings[0] == "gzip" && encodings[1] == "gzip" && !bytes.Equal(rawBodies[0], bodies[0])
 	mutex.Unlock()
+	if !bothGzipped {
+		t.Fatalf("expected gzip Content-Encoding and compressed body, encodings=%v", encodings)
+	}
+	if !sameTokenHash {
+		t.Fatalf("dedup token=%q want sha256(uncompressed)=%q", tokens[0], expectedToken)
+	}
 	if !sameRetry {
 		t.Fatal("retry payload/token changed with RETURNING order")
 	}
@@ -88,13 +125,14 @@ func TestClickHouseHistorySinkWritesStableMicrobatch(t *testing.T) {
 			http.Error(writer, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		if request.Method != http.MethodPost || request.Header.Get("Content-Type") != "application/x-ndjson" {
+		if request.Method != http.MethodPost || request.Header.Get("Content-Type") != "application/x-ndjson" || request.Header.Get("Content-Encoding") != "gzip" {
 			http.Error(writer, "invalid request", http.StatusBadRequest)
 			return
 		}
+		_, decoded := readClickHouseRequestBody(t, request)
 		mutex.Lock()
 		requestCount++
-		decoder := json.NewDecoder(request.Body)
+		decoder := json.NewDecoder(bytes.NewReader(decoded))
 		for {
 			var row HistoryObservation
 			if err := decoder.Decode(&row); err == io.EOF {
@@ -287,5 +325,142 @@ func TestClickHouseHistorySinkClassifiesPermanentVsTransientFailures(t *testing.
 	}})
 	if !IsPermanentHistoryError(validationErr) {
 		t.Fatalf("expected row validation failure to satisfy IsPermanentHistoryError, got %v", validationErr)
+	}
+}
+
+func TestNewClickHouseHistorySinkDefaultHTTPTransport(t *testing.T) {
+	sink, err := NewClickHouseHistorySink(ClickHouseHistoryConfig{
+		BaseURL:  "http://127.0.0.1:8123",
+		Database: "telemetry_history",
+		Table:    "observations",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sink.httpClient == nil {
+		t.Fatal("expected default HTTPClient to be initialized")
+	}
+	if sink.httpClient.Timeout != 10*time.Second {
+		t.Fatalf("Timeout=%s, want 10s", sink.httpClient.Timeout)
+	}
+	transport, ok := sink.httpClient.Transport.(*http.Transport)
+	if !ok || transport == nil {
+		t.Fatalf("Transport=%T, want *http.Transport", sink.httpClient.Transport)
+	}
+	if transport.MaxIdleConns != 64 ||
+		transport.MaxIdleConnsPerHost != 32 ||
+		transport.IdleConnTimeout != 90*time.Second ||
+		transport.TLSHandshakeTimeout != 10*time.Second ||
+		transport.ExpectContinueTimeout != time.Second {
+		t.Fatalf("unexpected transport tuning: MaxIdleConns=%d MaxIdleConnsPerHost=%d IdleConnTimeout=%s TLSHandshakeTimeout=%s ExpectContinueTimeout=%s",
+			transport.MaxIdleConns, transport.MaxIdleConnsPerHost, transport.IdleConnTimeout, transport.TLSHandshakeTimeout, transport.ExpectContinueTimeout)
+	}
+}
+
+func TestClickHouseHistorySinkGzipPrepareAndInsertPrepared(t *testing.T) {
+	var mu sync.Mutex
+	var seenEncoding, seenContentType, seenToken string
+	var seenCompressed, seenUncompressed []byte
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		compressed, uncompressed := readClickHouseRequestBody(t, r)
+		mu.Lock()
+		seenEncoding = r.Header.Get("Content-Encoding")
+		seenContentType = r.Header.Get("Content-Type")
+		seenToken = r.URL.Query().Get("insert_deduplication_token")
+		seenCompressed = compressed
+		seenUncompressed = uncompressed
+		mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	sink, err := NewClickHouseHistorySink(ClickHouseHistoryConfig{
+		BaseURL: server.URL, Database: "telemetry_history", Table: "observations", HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rows := make([]HistoryObservation, 16)
+	for i := range rows {
+		rows[i] = HistoryObservation{
+			ObservationID:    fmt.Sprintf("018f2e00-9100-7000-8000-%012d", i+1),
+			SourceID:         sourceA,
+			SourceEventID:    fmt.Sprintf("018f2e00-6200-7000-8000-%012d", i+1),
+			SourcePartition:  "tb-a",
+			SourceOffset:     int64(i + 1),
+			SourcePath:       "POLL",
+			TelemetryKey:     "chiller.power",
+			SampledAt:        time.Date(2026, 7, 29, 8, 0, i, 0, time.UTC),
+			ReceivedAt:       time.Date(2026, 7, 29, 8, 0, i+1, 0, time.UTC),
+			AcceptanceStatus: "REJECTED",
+			Quality:          "INVALID",
+			QualityReasons:   []string{"OUT_OF_RANGE"},
+			PayloadSHA256:    strings.Repeat("a", 64),
+		}
+	}
+
+	compressed, token, err := sink.PrepareObservations(7, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(compressed) == 0 || len(token) != 64 {
+		t.Fatalf("unexpected prepared batch len=%d token=%q", len(compressed), token)
+	}
+	if err := sink.InsertPrepared(t.Context(), compressed, token); err != nil {
+		t.Fatal(err)
+	}
+	if requests.Load() != 1 {
+		t.Fatalf("requests=%d, want 1", requests.Load())
+	}
+	mu.Lock()
+	gotEncoding := seenEncoding
+	gotContentType := seenContentType
+	gotToken := seenToken
+	gotCompressed := slices.Clone(seenCompressed)
+	gotUncompressed := slices.Clone(seenUncompressed)
+	mu.Unlock()
+	if gotEncoding != "gzip" || gotContentType != "application/x-ndjson" {
+		t.Fatalf("headers encoding=%q contentType=%q", gotEncoding, gotContentType)
+	}
+	if gotToken != token {
+		t.Fatalf("query token=%q, want %q", gotToken, token)
+	}
+	wantToken := fmt.Sprintf("%x", sha256.Sum256(gotUncompressed))
+	if gotToken != wantToken {
+		t.Fatalf("token %q != sha256(uncompressed) %q", gotToken, wantToken)
+	}
+	if len(gotCompressed) >= len(gotUncompressed) {
+		t.Fatalf("expected gzip compression to shrink 16-row NDJSON (%d >= %d)", len(gotCompressed), len(gotUncompressed))
+	}
+	dec := json.NewDecoder(bytes.NewReader(gotUncompressed))
+	count := 0
+	for {
+		var row HistoryObservation
+		if err := dec.Decode(&row); err == io.EOF {
+			break
+		} else if err != nil {
+			t.Fatalf("gunzipped NDJSON invalid: %v", err)
+		}
+		if row.HistorySequence != 7 {
+			t.Fatalf("HistorySequence=%d, want 7", row.HistorySequence)
+		}
+		count++
+	}
+	if count != len(rows) {
+		t.Fatalf("decoded rows=%d, want %d", count, len(rows))
+	}
+
+	// Retry sends identical token and valid gzipped NDJSON.
+	if err := sink.InsertPrepared(t.Context(), compressed, token); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	retryToken := seenToken
+	mu.Unlock()
+	if retryToken != token {
+		t.Fatalf("retry changed token: %q != %q", retryToken, token)
 	}
 }

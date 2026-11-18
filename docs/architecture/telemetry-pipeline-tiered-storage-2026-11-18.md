@@ -1,0 +1,51 @@
+# 遥测采集管线高并发抗压、乱序隔离与冷热分层存储架构评审（2026-11-18）
+
+现场站点网关（例如松雅轩的 Node-RED 网关和模拟冷站）断网重连时会一口气补发成千上万条历史读数，同时正常运行时每分钟上报的读数如果每次都逐条写库、反复覆盖未变化的当前值、或把异常温度和死区噪声直接压给存储，就会把 PostgreSQL、ClickHouse 和实时推送通道一起拖慢。围绕这个问题单阶段交付（对应 `#888`、`#891`、`#892`、`#895`），本文对照四个外部项目的一手源码和官方设计约束，记录从边缘采集、云端接入、PostgreSQL 热状态、ClickHouse 历史与预聚合到冷归档清理的采纳、改造与拒绝决定。
+
+## 一、参考项目与外部基线
+
+| 项目 | 核对版本 | 固定来源 / 位置 | 许可证与借鉴边界 |
+| --- | --- | --- | --- |
+| ThingsBoard | `v4.4` | commit `6d46786579c8b29caf5102f95ddb133674bed68b`（见 `docs/architecture/references/thingsboard-v4.4.md`） | 主体 BUSL-1.1，只做设计对照，不复制代码 |
+| OpenEMS | `2026.9.0` | commit `14f0ded`（见 `docs/architecture/references/openems-2026.9.0.md`） | EPL-2.0，只做周期变化上送与补传对照，不复制代码 |
+| LF Edge eKuiper | `v2.0.0` | 规则流式算子基线（见 `docs/architecture/rule-engine-orchestration-source-review-2026-11-17.md`） | Apache-2.0，只借鉴边缘有界状态变化与死区过滤思路 |
+| Vector / ClickHouse MergeTree | ClickHouse `MergeTree` 与 `AggregatingMergeTree` | 批式写入去重、`AggregatingMergeTree` 物化汇总与 HTTP 长连接池最佳实践 | 仅按官方存储语义设计与参数化配置 |
+
+---
+
+## 二、外部项目读到的做法与局限
+
+1. **ThingsBoard `v4.4`**：
+   - 把设备当前值和历史表分开存，`SqlLatestInsertTsRepository.java` 用 `WHERE ts_kv_latest.ts <= ?` 保证乱序历史不把当前值覆写成旧数，并给时序写入设置批量聚合（`sql.ts.batch_size=10000`、`batch_max_delay=100ms`）。
+   - 局限在于：单机默认队列 `DefaultInMemoryStorage` 是纯内存 `ConcurrentHashMap`/`LinkedBlockingQueue`，进程崩溃会丢掉已经回过 MQTT PUBACK 的数据；扩展时要拉起 Kafka + ZooKeeper + Cassandra + EDQS 整套集群；普通 PostgreSQL 分区保留期走逐行 `DELETE`，对大表开销很高。
+2. **OpenEMS `2026.9.0`**：
+   - `SendChannelValuesWorker` 平时只发值有变化的通道，每 5 分钟发一次全量快照保底；断网期间把 `UNABLE_TO_SEND` 记进本地时序库，重连后由 `ResendHistoricDataWorker` 读出并推进 `LAST_SUCCESSFUL_RESEND` 游标。
+   - 局限在于：补传只能补 5 分钟聚合均值（`timedata.adoc`），丢失了冷站故障回溯需要的原始采样细节。
+3. **LF Edge eKuiper `v2.0.0`**：
+   - 在边缘侧维护有界窗口状态，按变化门槛决定是否向下游发送事件，避免把稳态小幅传感器抖动原封不动打上云端链路。
+4. **Vector 与 ClickHouse `MergeTree`**：
+   - ClickHouse 每次 `INSERT` 都会生成一个或多个 part（碰到物化视图还会成倍放大），高频碎小写入会快速撑爆内存和后台合并线程；生产写入应当尽量合批（配合 `insert_deduplication_token` 保证重试幂等）、开启 HTTP 请求体压缩并复用长连接，而过期数据删除之前必须先做可校验归档，避免误删不可恢复。
+
+---
+
+## 三、采纳、改造与拒绝决定
+
+| 主题 | 采纳与改造决定 | 拒绝的做法 | 落地位置与现状 |
+| --- | --- | --- | --- |
+| 1. 采样时间与离线补传隔离 | 严格区分 `SampledAt`（采样时间）和 `ReceivedAt`（收到时间）。接入端 `isReplayUplink` 识别显式 `"replay": true` 或采样滞后超过阈值 `autoBackfillLag` 的滞后报文，送入独立 `replay` 通道并打上 `EdgeReplay: true`；遥测侧对其改走 `EvaluateHistoricalObservation`，跳过去重对比今日同伴点位的跨点质量检查与平线卡住判定，并使用 `mqtt-replay:<gateway>` 独立来源位置分区（7 天自动清理）。迟到电表或关键点位入库后，由 `BackfillRecalcDetector` 增量扫描受影响的 15 分钟 UTC 桶并入队去重的 `METRIC_RECALC` 计算任务；小时与日增量查询加 `gap_ms <= 3600000` 保护，防止断网恢复把跨多小时用电差算进恢复那一小时。例如网关离线 3 小时后重连补发 10:00 的 `18.5 ℃`，只会写入 10:00 的 ClickHouse 历史表并触发对应指标重算，绝不会把 13:00 的当前页面温度改回 `18.5 ℃`。 | 拒绝 ThingsBoard 单靠当前时间或写库顺序混排历史，也拒绝 MyEMS 水位线只进不退导致迟到数据永远无法重算，以及 OpenEMS 只补传 5 分钟聚合值丢掉原始读数精度。 | **已实现**：`modules/connectivity/pkg/adapter/gateway_mailbox.go`、`modules/telemetry/pkg/telemetry/ingest_store.go`、`modules/telemetry/pkg/telemetry/quality.go`、`modules/telemetry/pkg/telemetry/retention.go`、`modules/metric/pkg/metric/backfill_recalc.go`、`modules/metric/pkg/metric/clickhouse.go`；**已补指标**：`hvac_s2_replay_observations_total`（`modules/telemetry/pkg/telemetry/metrics.go`）。 |
+| 2. 单调递增保护的热态缓存 | 设备当前快照（`hvac:v2:latest:device:...`）与站点数值热缓存（`hvac:v2:latest:site-points:...`）写入 Redis 时全部经过 Lua CAS 脚本：`redisLatestCAS` 校验 `business_revision` 只增不减且同键集合下 `sampled_ms` 不倒退；`redisSiteLiveCAS` 按 `max(sampledMs, healthMs)` 做单调门卫并支持墓碑失效（`Invalidated`）。Redis 重启或失联时由 `RebuildLatestCache` 从 PostgreSQL `device_observation_snapshots` 重建，读取失败直接回退查 PostgreSQL。同时在 PostgreSQL 侧给 `persistDevicePresenceSQL`、`persistLatestEvaluationSQL`、`persistSnapshotSQL`、`upsertLatestObservationsBatchSQL`、`updatePointHealthBatchSQL` 全部加上 `IS DISTINCT FROM` 守卫，只要值、质量、健康与版本号没真变就不写新元组，大幅削减磁盘写放大与 WAL 增长。 | 拒绝无版本校验直接 `HSET` 覆盖写（并发与重试必定造成当前值回退闪跳），也拒绝把 Redis 当成事实来源。 | **已实现**：`modules/telemetry/pkg/telemetry/latest_cache.go`、`modules/telemetry/pkg/telemetry/latest_cache_postgres.go`、`modules/telemetry/pkg/telemetry/store.go`、`modules/telemetry/pkg/telemetry/ingest_store.go`、`modules/telemetry/pkg/telemetry/optimization_live_observations.go`；**已补指标**：`hvac_s2_latest_cache_updates_total{outcome}`（取值限 `applied`、`stale_skipped`、`invalidated`、`error`）。 |
+| 3. `UNNEST` 批量入库与 64 分片元数据缓存 | 遥测入库 `ingest_store.go` 在单个事务内按 `collectBatchLockKeys` 排序后一次性通过 `unnest($1::text[])` 拿齐全部事务建议锁（防止多批并发死锁），随后通过 `pgx.Batch` + `unnest` 批量预取已见事件、来源位置、设备、点位与最新读数，写回前用 `deduplicateLatestUpdates` 把同批内同一 `(device_id, telemetry_key)` 折叠成最终状态（防止 PostgreSQL `ON CONFLICT DO UPDATE` 触发 `SQLSTATE 21000`），再用 `upsertLatestObservationsBatchSQL` 和 `updatePointHealthBatchSQL` 一次 `unnest` 批量落盘，同时将默认连接池调整为 `MaxConns=24` / `MinConns=4`（`DefaultPostgresPoolConfig`）并按当前池连接数动态给足事务重试预算。在遥测热路径 `metadataCache`（按 FNV-1a 哈希切分为 64 分片、单分片上限 256 条、30 秒 TTL、按失效 epoch 防旧回填）与接入服务 `uplink_cache.go`（正结果 `30s` / 负结果 `5s` / 凭证 `15s` TTL、`singleflight` 防并发击穿与按网关 epoch 失效）中分别提供分段缓存，消除大量网关同时上报时的单一全局锁排队，并在注册表同步或点位更新 commits 前于持锁窗口内失效。 | 拒绝循环逐条发单行 `INSERT`/`UPDATE`（512 点一批放大成千次网络往返），也拒绝把多网关热路径元数据缓存在单把全局互斥锁上。 | **已实现**：`modules/telemetry/pkg/telemetry/ingest_store.go`、`modules/telemetry/pkg/telemetry/store.go`、`modules/telemetry/pkg/telemetry/metadata_cache.go`、`modules/telemetry/pkg/telemetry/registry_sync.go`、`modules/connectivity/pkg/connectivity/uplink_cache.go`。 |
+| 4. 双优先级网关邮箱与边缘模拟量死区过滤 | 接入端 `gatewayMailbox` 为每台站点网关维护独立的 `live`（`<gateway>.spool`）和 `replay`（`<gateway>-replay.spool`）双通道 CRC32 校验本地 WAL 文件与受控内存环形缓冲。`popBatch` 总是优先排出实时事件、状态变化和实时读数，但在连续排出 `liveBurstLimit = 8` 条实时消息后强制插队排出 1 条 `replay` 消息（例如实时突发 20 条时按「8 实时 + 1 回放 + 8 实时 + 1 回放 + 4 实时」排出，既保实时低延迟又防回放饥饿）；内存加磁盘满时返回 `shed=true` 且不发 MQTT ACK，让 Broker 按 QoS 1 留存重投。边缘采集侧由独立算子 `edgecontrol.DeadbandFilter`（配合开关量/状态点变化检测与点位级 `deadband` 阈值）在模拟量波动不超过死区且质量未变时不发高频噪声，并在 `MaxSilence` 心跳间隔或周期性全量刷新到期时兜底上送。 | 拒绝 ThingsBoard 易失内存队列（宕机丢数据），拒绝单通道混排让离线补传堵死实时告警与控制读回，也拒绝把稳态微弱抖动全量无过滤推上云端。 | **已实现**：`modules/connectivity/pkg/adapter/gateway_mailbox.go`、`modules/connectivity/pkg/adapter/runtime.go`、`libs/edgecontrol/deadband.go`、`tools/eg8200-simulator/internal/simulator/mqtt_publisher.go`；**已补指标**：`hvac_mqtt_replay_queue_depth`。 |
+| 5. 两阶段保序 `HistoryRelay` 与复用 gzip 写入器 | 写入 ClickHouse 历史表采用两阶段保序提交流程：第一阶段 `ClaimPipelinedHistoryBatch` 用 `pg_advisory_xact_lock` 串行认领一批（最多 4096 行或 8 MiB），分配全局单调递增的 `History Sequence` 并标记 `IN_FLIGHT` 租约（只跳过当前波次自有租约，遇到其他副本遗留租约立即等待避免越序）；第二阶段 `ClickHouseHistorySink` 按 `ObservationID` 排序、通过 `sync.Pool` 复用的 `gzip.Writer` 压缩 `JSONEachRow` 并生成未压缩负载 SHA-256 `insert_deduplication_token` 写入 ClickHouse，成功后标记 `PUBLISHED`；遇到可恢复故障保持同批原序重试，遇到确定性结构或校验错误（`ErrHistoryBatchPermanent`）通过 `flushWithBinarySplit` 二分拆分，把单条坏行记为 `CLICKHOUSE_POISON_ROW` 移入 `DEAD` 死信列而不阻断好数据继续落盘，超出最大重试次数则记 `CLICKHOUSE_MAX_ATTEMPTS_EXCEEDED` 移入 `DEAD`。 | 拒绝并发乱序抢批导致 `History Sequence` 出现空洞或重复，拒绝遇到单条坏行就卡死整条历史写入或整批静默丢弃，也拒绝每条读数单独小包写入 ClickHouse。 | **已实现**：`modules/telemetry/pkg/telemetry/history.go`、`modules/telemetry/pkg/telemetry/history_postgres.go`、`modules/telemetry/pkg/telemetry/history_clickhouse.go`、`cmd/telemetry-worker/main.go`；**已补指标、告警与手册**：`hvac_s2_history_outbox_depth{state}`、`hvac_s2_history_flush_duration_seconds`、`hvac_s2_history_rows_projected_total`、`S2HistoryOutboxBacklogHigh`、`S2HistoryDeadLetterDetected`、`docs/operations/alerts.md`。 |
+| 6. 物理硬限边界、质量过滤预聚合与 HTTP 连接池调优 | `ValidatePhysicalBounds` 在质量评估前用硬物理极限（如温度 `[-80, 300] °C`、湿度 `[0, 100] %`、功率 `[-50000, 200000] kW`）和 16 位 Modbus 寄存器故障码（`65535`、`32767`、`-32768`）拦截物理上不可能的值，同时放开狭窄工艺边界，让例如 `2.8 °C` 的过冷冷冻水正常以 `GOOD` 落库并交给防冻过程告警处理。ClickHouse 端通过 `018-quality-filtered-rollups.sql` 建立基于 `AggregatingMergeTree` 的 1 分钟和 15 分钟物化汇总表，写入时把只含 `GOOD` 的 `valid_*` 状态和含 `GOOD/PARTIAL/ESTIMATED/MANUAL` 的 `usable_*` 状态分开预聚合；趋势查询先核对快照水位与并发新写，有并发写入或缺少汇总表时自动回退查原始表。ClickHouse HTTP 客户端统一配置长连接池（`MaxIdleConns=64`、`MaxIdleConnsPerHost=32`、`IdleConnTimeout=90s`）消除短连接握手和端口耗尽。 | 拒绝 MyEMS 把工艺期待范围当成拒收门槛或把缺数/坏值写成 `0`，也拒绝在汇总表里把坏值混入均值导致读数失真，或每轮请求新建 HTTP 短连接。 | **已实现**：`modules/telemetry/pkg/telemetry/quality.go`、`infra/telemetry/clickhouse/init/018-quality-filtered-rollups.sql`、`modules/telemetry/internal/history/aggregate.go`、`modules/telemetry/internal/history/client.go`、`modules/telemetry/pkg/telemetry/history_clickhouse.go`、`modules/metric/pkg/metric/clickhouse.go`。 |
+| 7. 先验证归档再删数据的冷归档与校验 | ClickHouse 分层保留期清理 `ClickHouseRetentionPruner` 对原始 `observations` 默认保留 180 天、1 分钟汇总表 365 天、15 分钟与小时表 1825 天，执行参数化 `ALTER TABLE ... DELETE WHERE ...` 前自动跳过租户或站点级法定保留范围（`ClickHouseLegalHoldScope`）。对象存储治理（`009g-object-storage-governance-v2.sql`）严格把 `BACKUP`（灾备恢复）和 `ARCHIVE`（冷归档）拆成独立用途与独立台账（`backup_manifests` / `archive_manifests`）；指标清理执行器 `LifecycleExecutor` 在 `ArchiveRequired=true` 时找不到已校验归档清单直接返回 `ErrArchiveEvidenceRequired` 阻断删除，`ColdArchiveExporter` 导出 `.jsonl.gz` 与 `.manifest.json` 核验失败时阻断 ClickHouse 删数并记录 `hvac_s2_cold_archive_runs_total{outcome}`，`maintenance-worker` 周期性执行 `VerifyColdArchiveDirectory` 核验归档目录与清单摘要。 | 拒绝未验证归档清单就先删源数据，也拒绝拿数据库备份文件顶替合规冷归档（违反 `ARCHIVE_BACKUP_SEPARATION`）。 | **已实现**：`modules/telemetry/pkg/telemetry/clickhouse_retention.go`、`modules/telemetry/pkg/telemetry/cold_archive.go`、`modules/metric/pkg/metric/lifecycle.go`、`modules/maintenance/pkg/maintenance/archive_governance.go`、`modules/maintenance/pkg/maintenance/lifecycle_audit.go`、`cmd/telemetry-worker/main.go`、`cmd/maintenance-worker/main.go`、`infra/registry/postgres/init/009g-object-storage-governance-v2.sql`；**已补指标**：`hvac_s2_cold_archive_runs_total{outcome}`。 |
+
+---
+
+## 四、可观测性与值班闭环
+
+为让上述限流、排队、死信、热缓存命中与冷归档动作在上线后可以直接看数定位，本轮同步补齐监控、看板、告警和中文值班手册：
+
+1. **接入队列与回放积压**：`modules/connectivity/pkg/adapter/runtime.go` 新增 `hvac_mqtt_replay_queue_depth`（并登记进 `deploy/observability/phase1-metric-catalog.v1.json`，无高基数标签），与 `hvac_mqtt_processing_queue_depth` 一起反映各站点网关当前压在内存与本地 WAL 里的回放条数。
+2. **历史写盘与死信监控**：`modules/telemetry/pkg/telemetry/metrics.go` 提供 `PipelineMetrics`，记录 `hvac_s2_history_outbox_depth{state}`（`pending`、`publishing`、`dead_letter`）、`hvac_s2_history_flush_duration_seconds`、`hvac_s2_history_rows_projected_total`、`hvac_s2_replay_observations_total`、`hvac_s2_latest_cache_updates_total{outcome}` 和 `hvac_s2_cold_archive_runs_total{outcome}`。
+3. **告警、面板与手册联动**：`infra/observability/alerts/s2-telemetry.yaml` 新增 `S2HistoryOutboxBacklogHigh`（待发队列连续 5 分钟超过 10000 条）和 `S2HistoryDeadLetterDetected`（出现任何进入 `dead_letter` 的历史读数），链接到 `docs/operations/alerts.md` 对应处理步骤；`infra/observability/dashboards/s2-telemetry.json` 新增第 11 到 14 号面板展示上述四组指标，所有比率均不使用 `clamp_min` 抬高分母。

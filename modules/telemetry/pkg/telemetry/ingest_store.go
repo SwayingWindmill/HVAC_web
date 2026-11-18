@@ -171,7 +171,21 @@ func (store *PostgresStore) acceptObservationBatch(ctx context.Context, candidat
 	}
 	for attempt := 0; attempt < store.retryAttempts(); attempt++ {
 		receipts, err := store.acceptObservationBatchOnce(ctx, normalized, payloadSHAs, evaluate)
-		if err == nil || !retryableTelemetryTransaction(err) {
+		if err == nil {
+			if store.pipelineMetrics != nil {
+				replayCount := 0
+				for _, candidate := range normalized {
+					if candidate.SourcePath == SourcePathHistoryReplay || candidate.EdgeReplay {
+						replayCount++
+					}
+				}
+				if replayCount > 0 {
+					store.pipelineMetrics.AddReplayObservations(replayCount)
+				}
+			}
+			return receipts, nil
+		}
+		if !retryableTelemetryTransaction(err) {
 			return receipts, err
 		}
 	}
@@ -193,7 +207,7 @@ func (store *PostgresStore) acceptObservationBatchOnce(ctx context.Context, cand
 	if err := acquireBatchAdvisoryLocks(ctx, tx, collectBatchLockKeys(candidates)); err != nil {
 		return nil, err
 	}
-	state, err := prefetchBatchFacts(ctx, tx, candidates)
+	state, err := store.prefetchBatchFacts(ctx, tx, candidates)
 	if err != nil {
 		return nil, err
 	}
@@ -212,6 +226,11 @@ func (store *PostgresStore) acceptObservationBatchOnce(ctx context.Context, cand
 		for _, receiptIndex := range plan.reevalReceiptIndices[deviceID] {
 			receipts[receiptIndex].BusinessRevision = int64(commit.Snapshot.BusinessRevision)
 			receipts[receiptIndex].StateChanged = commit.StateChanged
+		}
+	}
+	if store.metadataCache != nil {
+		for _, pt := range plan.points {
+			store.metadataCache.InvalidatePoint(pt.device.TenantID, pt.device.SiteID, pt.device.DeviceID, pt.key)
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -377,7 +396,48 @@ FROM (
 	return nil
 }
 
-func prefetchBatchFacts(ctx context.Context, tx pgx.Tx, candidates []ObservationCandidate) (*batchWorkingState, error) {
+type batchPrefetchPlan struct {
+	cacheEpoch       uint64
+	eventSourceIDs   []string
+	eventIDs         []string
+	posSourceIDs     []string
+	posPartitions    []string
+	missDeviceIDs    []string
+	missReplayPoints []deviceKey
+	missPolicyPoints []deviceKey
+	allBatchPoints   []deviceKey
+	seenBatchPoints  map[deviceKey]struct{}
+}
+
+type fetchedPointFact struct {
+	key   deviceKey
+	point ResolvedPoint
+}
+
+type fetchedPolicyFact struct {
+	key       deviceKey
+	freshness cachedFreshnessPolicy
+	presence  cachedPresencePolicy
+}
+
+func loadedPolicyFromCache(fp cachedFreshnessPolicy, pp cachedPresencePolicy) loadedPolicy {
+	return loadedPolicy{
+		policy: ObservationPolicy{
+			Revision:               fp.Revision,
+			PresencePolicyRevision: pp.Revision,
+			ValueType:              fp.ValueType,
+			Unit:                   cloneString(fp.Unit),
+			MinimumNumber:          clonePtr(fp.MinimumNumber),
+			MaximumNumber:          clonePtr(fp.MaximumNumber),
+			MaxFutureClockSkew:     pp.MaxFutureClockSkew,
+			MaxSourceLag:           pp.MaxSourceLag,
+			QualityChecks:          cloneQualityChecks(fp.QualityChecks),
+		},
+		freshWithinSeconds: fp.FreshWithinSeconds,
+	}
+}
+
+func planBatchPrefetch(cache *metadataCache, candidates []ObservationCandidate) (*batchWorkingState, batchPrefetchPlan) {
 	state := &batchWorkingState{
 		seenEvents:    make(map[sourceEventKey]string, len(candidates)),
 		positions:     make(map[sourcePartitionKey]SourcePositionHead, len(candidates)),
@@ -396,14 +456,14 @@ func prefetchBatchFacts(ctx context.Context, tx pgx.Tx, candidates []Observation
 
 	seenDevices := make(map[string]struct{}, len(candidates))
 	deviceIDs := make([]string, 0, len(candidates))
+	deviceHints := make(map[string]ResolvedDevice, len(candidates))
+	ambiguousHints := make(map[string]bool)
 
 	seenReplayPoints := make(map[deviceKey]struct{})
-	replayPointDeviceIDs := make([]string, 0)
-	replayPointKeys := make([]string, 0)
+	replayPoints := make([]deviceKey, 0)
 
 	seenBatchPoints := make(map[deviceKey]struct{}, len(candidates))
-	batchPointDeviceIDs := make([]string, 0, len(candidates))
-	batchPointKeys := make([]string, 0, len(candidates))
+	allBatchPoints := make([]deviceKey, 0, len(candidates))
 
 	for _, candidate := range candidates {
 		evKey := sourceEventKey{sourceID: candidate.SourceID, eventID: candidate.Position.EventID}
@@ -430,18 +490,24 @@ func prefetchBatchFacts(ctx context.Context, tx pgx.Tx, candidates []Observation
 			seenDevices[targetDeviceID] = struct{}{}
 			deviceIDs = append(deviceIDs, targetDeviceID)
 		}
+		if candidate.SourcePath != SourcePathHistoryReplay && candidate.Device != nil {
+			hint := *candidate.Device
+			if existing, ok := deviceHints[targetDeviceID]; ok && existing != hint {
+				ambiguousHints[targetDeviceID] = true
+			} else {
+				deviceHints[targetDeviceID] = hint
+			}
+		}
 		ptKey := deviceKey{deviceID: targetDeviceID, key: candidate.TelemetryKey}
 		if candidate.SourcePath == SourcePathHistoryReplay {
 			if _, ok := seenReplayPoints[ptKey]; !ok {
 				seenReplayPoints[ptKey] = struct{}{}
-				replayPointDeviceIDs = append(replayPointDeviceIDs, ptKey.deviceID)
-				replayPointKeys = append(replayPointKeys, ptKey.key)
+				replayPoints = append(replayPoints, ptKey)
 			}
 		}
 		if _, ok := seenBatchPoints[ptKey]; !ok {
 			seenBatchPoints[ptKey] = struct{}{}
-			batchPointDeviceIDs = append(batchPointDeviceIDs, ptKey.deviceID)
-			batchPointKeys = append(batchPointKeys, ptKey.key)
+			allBatchPoints = append(allBatchPoints, ptKey)
 		}
 	}
 
@@ -458,13 +524,129 @@ func prefetchBatchFacts(ctx context.Context, tx pgx.Tx, candidates []Observation
 		posPartitions[index] = part.partition
 	}
 
+	plan := batchPrefetchPlan{
+		cacheEpoch:      cache.Epoch(),
+		eventSourceIDs:  eventSourceIDs,
+		eventIDs:        eventIDs,
+		posSourceIDs:    posSourceIDs,
+		posPartitions:   posPartitions,
+		allBatchPoints:  allBatchPoints,
+		seenBatchPoints: seenBatchPoints,
+	}
+
+	if cache == nil {
+		plan.missDeviceIDs = deviceIDs
+		plan.missReplayPoints = replayPoints
+		plan.missPolicyPoints = allBatchPoints
+		return state, plan
+	}
+
+	plan.missDeviceIDs = make([]string, 0, len(deviceIDs))
+	for _, devID := range deviceIDs {
+		if hint, ok := deviceHints[devID]; ok && !ambiguousHints[devID] {
+			if cachedDev, hit := cache.GetDevice(hint.TenantID, hint.SiteID, devID); hit {
+				state.knownDevices[devID] = cachedDev
+				continue
+			}
+		} else if tID, sID, ok := cache.LookupDeviceScope(devID); ok {
+			if cachedDev, hit := cache.GetDevice(tID, sID, devID); hit {
+				state.knownDevices[devID] = cachedDev
+				continue
+			}
+		}
+		plan.missDeviceIDs = append(plan.missDeviceIDs, devID)
+	}
+
+	resolveScope := func(devID string) (string, string, bool) {
+		if known, ok := state.knownDevices[devID]; ok {
+			return known.TenantID, known.SiteID, true
+		}
+		if hint, ok := deviceHints[devID]; ok && !ambiguousHints[devID] {
+			return hint.TenantID, hint.SiteID, true
+		}
+		return "", "", false
+	}
+
+	plan.missReplayPoints = make([]deviceKey, 0, len(replayPoints))
+	for _, ptKey := range replayPoints {
+		if tID, sID, ok := resolveScope(ptKey.deviceID); ok {
+			if cachedPt, hit := cache.GetPoint(tID, sID, ptKey.deviceID, ptKey.key); hit {
+				state.knownPoints[ptKey] = cachedPt
+				continue
+			}
+		}
+		plan.missReplayPoints = append(plan.missReplayPoints, ptKey)
+	}
+
+	plan.missPolicyPoints = make([]deviceKey, 0, len(allBatchPoints))
+	for _, ptKey := range allBatchPoints {
+		if tID, sID, ok := resolveScope(ptKey.deviceID); ok {
+			fp, fpHit := cache.GetFreshnessPolicy(tID, sID, ptKey.deviceID, ptKey.key)
+			pp, ppHit := cache.GetPresencePolicy(tID, sID, ptKey.deviceID)
+			if fpHit && ppHit {
+				if fp.Configured {
+					state.policies[ptKey] = loadedPolicyFromCache(fp, pp)
+				}
+				continue
+			}
+		}
+		plan.missPolicyPoints = append(plan.missPolicyPoints, ptKey)
+	}
+
+	return state, plan
+}
+
+func populatePrefetchCache(
+	cache *metadataCache,
+	epoch uint64,
+	state *batchWorkingState,
+	fetchedDevices []ResolvedDevice,
+	fetchedPoints []fetchedPointFact,
+	fetchedPolicies []fetchedPolicyFact,
+) {
+	if cache == nil || state == nil {
+		return
+	}
+	for _, dev := range fetchedDevices {
+		cache.PutDeviceIfEpoch(dev, epoch)
+	}
+	for _, item := range fetchedPoints {
+		if dev, ok := state.knownDevices[item.key.deviceID]; ok {
+			cache.PutPointIfEpoch(dev.TenantID, dev.SiteID, item.key.deviceID, item.key.key, item.point, epoch)
+		}
+	}
+	for _, item := range fetchedPolicies {
+		if dev, ok := state.knownDevices[item.key.deviceID]; ok {
+			cache.PutFreshnessPolicyIfEpoch(dev.TenantID, dev.SiteID, item.key.deviceID, item.key.key, item.freshness, epoch)
+			cache.PutPresencePolicyIfEpoch(dev.TenantID, dev.SiteID, item.key.deviceID, item.presence, epoch)
+		}
+	}
+}
+
+func splitDeviceKeys(keys []deviceKey) ([]string, []string) {
+	deviceIDs := make([]string, len(keys))
+	telemetryKeys := make([]string, len(keys))
+	for index, item := range keys {
+		deviceIDs[index] = item.deviceID
+		telemetryKeys[index] = item.key
+	}
+	return deviceIDs, telemetryKeys
+}
+
+func (store *PostgresStore) prefetchBatchFacts(ctx context.Context, tx pgx.Tx, candidates []ObservationCandidate) (*batchWorkingState, error) {
+	var cache *metadataCache
+	if store != nil {
+		cache = store.metadataCache
+	}
+	state, plan := planBatchPrefetch(cache, candidates)
+
 	batch := &pgx.Batch{}
 	batch.Queue(`
 SELECT so.source_id, so.source_event_id::text, so.observation_id::text
 FROM telemetry_runtime.source_observations so
 JOIN unnest($1::text[], $2::uuid[]) AS req(source_id, source_event_id)
   ON so.source_id = req.source_id AND so.source_event_id = req.source_event_id
-`, eventSourceIDs, eventIDs).Query(func(rows pgx.Rows) error {
+`, plan.eventSourceIDs, plan.eventIDs).Query(func(rows pgx.Rows) error {
 		for rows.Next() {
 			var sourceID, eventID, observationID string
 			if err := rows.Scan(&sourceID, &eventID, &observationID); err != nil {
@@ -482,7 +664,7 @@ JOIN unnest($1::text[], $2::text[]) AS req(source_id, source_partition)
   ON sp.source_id = req.source_id AND sp.source_partition = req.source_partition
 ORDER BY sp.source_id, sp.source_partition
 FOR UPDATE OF sp
-`, posSourceIDs, posPartitions).Query(func(rows pgx.Rows) error {
+`, plan.posSourceIDs, plan.posPartitions).Query(func(rows pgx.Rows) error {
 		for rows.Next() {
 			var sourceID, partition string
 			var head SourcePositionHead
@@ -494,31 +676,35 @@ FOR UPDATE OF sp
 		return rows.Err()
 	})
 
-	if len(deviceIDs) > 0 {
+	var fetchedDevices []ResolvedDevice
+	if len(plan.missDeviceIDs) > 0 {
 		batch.Queue(`
 SELECT tenant_id::text, site_id::text, device_id::text
 FROM telemetry_runtime.devices
 WHERE device_id = ANY($1::uuid[])
-`, deviceIDs).Query(func(rows pgx.Rows) error {
+`, plan.missDeviceIDs).Query(func(rows pgx.Rows) error {
 			for rows.Next() {
 				var known ResolvedDevice
 				if err := rows.Scan(&known.TenantID, &known.SiteID, &known.DeviceID); err != nil {
 					return fmt.Errorf("scan telemetry Device identity: %w", err)
 				}
 				state.knownDevices[known.DeviceID] = known
+				fetchedDevices = append(fetchedDevices, known)
 			}
 			return rows.Err()
 		})
 	}
 
-	if len(replayPointDeviceIDs) > 0 {
+	var fetchedPoints []fetchedPointFact
+	if len(plan.missReplayPoints) > 0 {
+		replayDeviceIDs, replayKeys := splitDeviceKeys(plan.missReplayPoints)
 		batch.Queue(`
 SELECT p.device_id::text, p.telemetry_key, p.point_id::text, p.sensor_id::text, p.point_type,
        p.value_type, p.unit, p.counter_decrease_mode, p.counter_rollover_modulus, p.point_revision
 FROM telemetry_runtime.points p
 JOIN unnest($1::uuid[], $2::text[]) AS req(device_id, telemetry_key)
   ON p.device_id = req.device_id AND p.telemetry_key = req.telemetry_key
-`, replayPointDeviceIDs, replayPointKeys).Query(func(rows pgx.Rows) error {
+`, replayDeviceIDs, replayKeys).Query(func(rows pgx.Rows) error {
 			for rows.Next() {
 				var deviceID, key string
 				var point ResolvedPoint
@@ -528,13 +714,17 @@ JOIN unnest($1::uuid[], $2::text[]) AS req(device_id, telemetry_key)
 				); err != nil {
 					return fmt.Errorf("scan telemetry Point identity: %w", err)
 				}
-				state.knownPoints[deviceKey{deviceID: deviceID, key: key}] = point
+				ptKey := deviceKey{deviceID: deviceID, key: key}
+				state.knownPoints[ptKey] = point
+				fetchedPoints = append(fetchedPoints, fetchedPointFact{key: ptKey, point: point})
 			}
 			return rows.Err()
 		})
 	}
 
-	if len(batchPointDeviceIDs) > 0 {
+	var fetchedPolicies []fetchedPolicyFact
+	if len(plan.missPolicyPoints) > 0 {
+		policyDeviceIDs, policyKeys := splitDeviceKeys(plan.missPolicyPoints)
 		batch.Queue(`
 SELECT f.device_id::text, f.telemetry_key,
        f.policy_revision, p.policy_revision, f.value_type, f.expected_unit,
@@ -546,7 +736,7 @@ JOIN telemetry_runtime.presence_policies p USING (device_id)
 JOIN unnest($1::uuid[], $2::text[]) AS req(device_id, telemetry_key)
   ON f.device_id = req.device_id AND f.telemetry_key = req.telemetry_key
 WHERE f.configured
-`, batchPointDeviceIDs, batchPointKeys).Query(func(rows pgx.Rows) error {
+`, policyDeviceIDs, policyKeys).Query(func(rows pgx.Rows) error {
 			for rows.Next() {
 				var deviceID, key string
 				var policy ObservationPolicy
@@ -566,29 +756,48 @@ WHERE f.configured
 					return fmt.Errorf("parse telemetry point quality checks: %w", err)
 				}
 				policy.QualityChecks = parsed
-				state.policies[deviceKey{deviceID: deviceID, key: key}] = loadedPolicy{
+				ptKey := deviceKey{deviceID: deviceID, key: key}
+				state.policies[ptKey] = loadedPolicy{
 					policy:             policy,
 					freshWithinSeconds: freshWithinSeconds,
 				}
+				fetchedPolicies = append(fetchedPolicies, fetchedPolicyFact{
+					key: ptKey,
+					freshness: cachedFreshnessPolicy{
+						Revision:           policy.Revision,
+						FreshWithinSeconds: freshWithinSeconds,
+						Configured:         true,
+						ValueType:          policy.ValueType,
+						Unit:               policy.Unit,
+						MinimumNumber:      policy.MinimumNumber,
+						MaximumNumber:      policy.MaximumNumber,
+						QualityChecks:      policy.QualityChecks,
+					},
+					presence: cachedPresencePolicy{
+						Revision:           policy.PresencePolicyRevision,
+						MaxFutureClockSkew: policy.MaxFutureClockSkew,
+						MaxSourceLag:       policy.MaxSourceLag,
+					},
+				})
 			}
 			return rows.Err()
 		})
+	}
 
-		queueLatestPointLookup(batch, batchPointDeviceIDs, batchPointKeys, state.latestByPoint)
+	if len(plan.allBatchPoints) > 0 {
+		batchDeviceIDs, batchKeys := splitDeviceKeys(plan.allBatchPoints)
+		queueLatestPointLookup(batch, batchDeviceIDs, batchKeys, state.latestByPoint)
 	}
 
 	if err := tx.SendBatch(ctx, batch).Close(); err != nil {
 		return nil, fmt.Errorf("prefetch telemetry batch facts: %w", err)
 	}
 
-	missingPeerKeys := collectMissingQualityPeers(state.policies, seenBatchPoints)
+	populatePrefetchCache(cache, plan.cacheEpoch, state, fetchedDevices, fetchedPoints, fetchedPolicies)
+
+	missingPeerKeys := collectMissingQualityPeers(state.policies, plan.seenBatchPoints)
 	if len(missingPeerKeys) > 0 {
-		peerDeviceIDs := make([]string, len(missingPeerKeys))
-		peerKeys := make([]string, len(missingPeerKeys))
-		for index, peer := range missingPeerKeys {
-			peerDeviceIDs[index] = peer.deviceID
-			peerKeys[index] = peer.key
-		}
+		peerDeviceIDs, peerKeys := splitDeviceKeys(missingPeerKeys)
 		peerBatch := &pgx.Batch{}
 		queueLatestPointLookup(peerBatch, peerDeviceIDs, peerKeys, state.latestByPoint)
 		if err := tx.SendBatch(ctx, peerBatch).Close(); err != nil {

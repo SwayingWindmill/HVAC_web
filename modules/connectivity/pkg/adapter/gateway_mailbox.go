@@ -192,6 +192,15 @@ func (mb *gatewayMailbox) depth() (memDepth, overflowDepth int) {
 	return mb.memDepthLocked(), mb.overflowDepthLocked()
 }
 
+func (mb *gatewayMailbox) replayDepth() int {
+	if mb == nil {
+		return 0
+	}
+	mb.mu.Lock()
+	defer mb.mu.Unlock()
+	return mb.replay.itemCountLocked()
+}
+
 func (mb *gatewayMailbox) signalLocked() {
 	select {
 	case mb.notify <- struct{}{}:

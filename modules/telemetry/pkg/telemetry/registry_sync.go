@@ -426,6 +426,9 @@ WHERE device_id = $1::uuid AND telemetry_key = $2 AND configured IS DISTINCT FRO
 		}
 	}
 
+	if store.metadataCache != nil {
+		store.metadataCache.InvalidateSiteDevices(tenantID, siteID, lockedIDs)
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return RegistrySyncResult{}, fmt.Errorf("commit registry sync: %w", err)
 	}

@@ -42,6 +42,7 @@
     {"name":"hvac_mqtt_values_total","type":"counter","labels":["outcome"],"seriesBudget":8},
     {"name":"hvac_mqtt_gateway_rate_limited_total","type":"counter","labels":["message_type"],"seriesBudget":8},
     {"name":"hvac_mqtt_processing_queue_depth","type":"gauge","labels":[],"seriesBudget":1},
+    {"name":"hvac_mqtt_replay_queue_depth","type":"gauge","labels":[],"seriesBudget":1},
     {"name":"hvac_mqtt_processing_queue_capacity","type":"gauge","labels":[],"seriesBudget":1},
     {"name":"hvac_mqtt_online_gateways","type":"gauge","labels":[],"seriesBudget":1},
     {"name":"hvac_mqtt_active_tunnels","type":"gauge","labels":[],"seriesBudget":1},

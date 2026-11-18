@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -60,7 +62,7 @@ func NewClickHouseHistorySink(config ClickHouseHistoryConfig) (*ClickHouseHistor
 	}
 	client := config.HTTPClient
 	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
+		client = newDefaultClickHouseHistoryHTTPClient(10 * time.Second)
 	}
 	return &ClickHouseHistorySink{
 		baseURL: parsed, database: config.Database, table: config.Table,
@@ -68,18 +70,65 @@ func NewClickHouseHistorySink(config ClickHouseHistoryConfig) (*ClickHouseHistor
 	}, nil
 }
 
-func (sink *ClickHouseHistorySink) InsertObservations(ctx context.Context, sequence uint64, observations []HistoryObservation) error {
-	if sink == nil || sink.baseURL == nil || sink.httpClient == nil {
-		return errors.New("ClickHouse history sink is closed")
+func newDefaultClickHouseHistoryHTTPClient(timeout time.Duration) *http.Client {
+	var transport *http.Transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok && base != nil {
+		transport = base.Clone()
+	} else {
+		transport = &http.Transport{}
+	}
+	transport.MaxIdleConns = 64
+	transport.MaxIdleConnsPerHost = 32
+	transport.IdleConnTimeout = 90 * time.Second
+	transport.TLSHandshakeTimeout = 10 * time.Second
+	transport.ExpectContinueTimeout = 1 * time.Second
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: transport,
+	}
+}
+
+var historyGzipWriterPool = sync.Pool{
+	New: func() any {
+		writer, _ := gzip.NewWriterLevel(io.Discard, gzip.BestSpeed)
+		return writer
+	},
+}
+
+func compressHistoryGzip(raw []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	writer, _ := historyGzipWriterPool.Get().(*gzip.Writer)
+	if writer == nil {
+		writer, _ = gzip.NewWriterLevel(io.Discard, gzip.BestSpeed)
+	}
+	defer func() {
+		writer.Reset(io.Discard)
+		historyGzipWriterPool.Put(writer)
+	}()
+	writer.Reset(&buf)
+	if _, err := writer.Write(raw); err != nil {
+		return nil, fmt.Errorf("compress ClickHouse history batch: %w", err)
+	}
+	if err := writer.Close(); err != nil {
+		return nil, fmt.Errorf("finalize compressed ClickHouse history batch: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
+// PrepareObservations deterministically orders, validates, encodes, hashes, and gzip-compresses
+// one history batch so the deduplication token stays invariant across retries.
+func (sink *ClickHouseHistorySink) PrepareObservations(sequence uint64, observations []HistoryObservation) ([]byte, string, error) {
+	if sink == nil {
+		return nil, "", errors.New("ClickHouse history sink is closed")
 	}
 	if len(observations) == 0 {
-		return nil
+		return nil, "", nil
 	}
 	if len(observations) > 4096 {
-		return errors.New("ClickHouse history insert batch exceeds 4096 observations")
+		return nil, "", errors.New("ClickHouse history insert batch exceeds 4096 observations")
 	}
 	if sequence == 0 {
-		return errors.New("ClickHouse history insert requires the batch History Sequence")
+		return nil, "", errors.New("ClickHouse history insert requires the batch History Sequence")
 	}
 	// PostgreSQL UPDATE RETURNING has no order guarantee. Retries must produce
 	// identical rows, order and block boundaries, including after a worker restart.
@@ -89,19 +138,53 @@ func (sink *ClickHouseHistorySink) InsertObservations(ctx context.Context, seque
 	for _, observation := range observations {
 		observation.HistorySequence = sequence
 		if err := validateHistoryObservation(observation); err != nil {
-			return err
+			return nil, "", err
 		}
 		body, err := json.Marshal(observation)
 		if err != nil {
-			return fmt.Errorf("%w: encode ClickHouse history observation %s: %w", ErrHistoryBatchPermanent, observation.ObservationID, err)
+			return nil, "", fmt.Errorf("%w: encode ClickHouse history observation %s: %w", ErrHistoryBatchPermanent, observation.ObservationID, err)
 		}
 		if encoded.Len()+len(body)+1 > maxHistoryBatchBytes {
-			return fmt.Errorf("%w: ClickHouse history insert exceeds 8 MiB", ErrHistoryBatchPermanent)
+			return nil, "", fmt.Errorf("%w: ClickHouse history insert exceeds 8 MiB", ErrHistoryBatchPermanent)
 		}
 		encoded.Write(body)
 		encoded.WriteByte('\n')
 	}
-	return sink.insertBatch(ctx, encoded.Bytes())
+	raw := encoded.Bytes()
+	token := fmt.Sprintf("%x", sha256.Sum256(raw))
+	compressed, err := compressHistoryGzip(raw)
+	if err != nil {
+		return nil, "", err
+	}
+	return compressed, token, nil
+}
+
+// InsertPrepared uploads a pre-encoded gzipped NDJSON batch produced by PrepareObservations.
+func (sink *ClickHouseHistorySink) InsertPrepared(ctx context.Context, compressed []byte, token string) error {
+	if sink == nil || sink.baseURL == nil || sink.httpClient == nil {
+		return errors.New("ClickHouse history sink is closed")
+	}
+	if len(compressed) == 0 {
+		return nil
+	}
+	if !clickHousePayloadDigestPattern.MatchString(token) {
+		return errors.New("ClickHouse history deduplication token is invalid")
+	}
+	return sink.insertBatch(ctx, compressed, token)
+}
+
+func (sink *ClickHouseHistorySink) InsertObservations(ctx context.Context, sequence uint64, observations []HistoryObservation) error {
+	if sink == nil || sink.baseURL == nil || sink.httpClient == nil {
+		return errors.New("ClickHouse history sink is closed")
+	}
+	if len(observations) == 0 {
+		return nil
+	}
+	compressed, token, err := sink.PrepareObservations(sequence, observations)
+	if err != nil {
+		return err
+	}
+	return sink.InsertPrepared(ctx, compressed, token)
 }
 
 func validateHistoryObservation(observation HistoryObservation) error {
@@ -146,8 +229,7 @@ func validateHistoryObservation(observation HistoryObservation) error {
 	return nil
 }
 
-func (sink *ClickHouseHistorySink) insertBatch(ctx context.Context, body []byte) error {
-	token := fmt.Sprintf("%x", sha256.Sum256(body))
+func (sink *ClickHouseHistorySink) insertBatch(ctx context.Context, compressed []byte, token string) error {
 	endpoint := *sink.baseURL
 	query := endpoint.Query()
 	query.Set("query", "INSERT INTO "+sink.database+"."+sink.table+" FORMAT JSONEachRow")
@@ -164,11 +246,12 @@ func (sink *ClickHouseHistorySink) insertBatch(ctx context.Context, body []byte)
 
 	query.Set("wait_end_of_query", "1")
 	endpoint.RawQuery = query.Encode()
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(compressed))
 	if err != nil {
 		return fmt.Errorf("create ClickHouse history request: %w", err)
 	}
 	request.Header.Set("Content-Type", "application/x-ndjson")
+	request.Header.Set("Content-Encoding", "gzip")
 	if sink.username != "" {
 		request.SetBasicAuth(sink.username, sink.password)
 	}
@@ -197,4 +280,7 @@ func (sink *ClickHouseHistorySink) insertBatch(ctx context.Context, body []byte)
 	return nil
 }
 
-var _ HistorySink = (*ClickHouseHistorySink)(nil)
+var (
+	_ HistorySink         = (*ClickHouseHistorySink)(nil)
+	_ PreparedHistorySink = (*ClickHouseHistorySink)(nil)
+)

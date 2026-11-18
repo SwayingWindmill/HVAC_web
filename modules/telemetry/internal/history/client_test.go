@@ -115,6 +115,49 @@ func TestHistoryCursorRejectsScopeDrift(t *testing.T) {
 	}
 }
 
+func TestNewClientInitializesTunedDefaultHTTPTransport(t *testing.T) {
+	client, err := NewClient(Config{
+		BaseURL:  "http://127.0.0.1:8123",
+		Database: "telemetry_history",
+		Table:    "observations",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.httpClient == nil {
+		t.Fatal("expected default HTTPClient to be initialized")
+	}
+	if client.httpClient.Timeout != 8*time.Second {
+		t.Fatalf("Timeout=%s, want 8s", client.httpClient.Timeout)
+	}
+	transport, ok := client.httpClient.Transport.(*http.Transport)
+	if !ok || transport == nil {
+		t.Fatalf("Transport=%T, want *http.Transport", client.httpClient.Transport)
+	}
+	if transport.MaxIdleConns != 64 ||
+		transport.MaxIdleConnsPerHost != 32 ||
+		transport.IdleConnTimeout != 90*time.Second ||
+		transport.TLSHandshakeTimeout != 10*time.Second ||
+		transport.ExpectContinueTimeout != time.Second {
+		t.Fatalf("unexpected transport tuning: MaxIdleConns=%d MaxIdleConnsPerHost=%d IdleConnTimeout=%s TLSHandshakeTimeout=%s ExpectContinueTimeout=%s",
+			transport.MaxIdleConns, transport.MaxIdleConnsPerHost, transport.IdleConnTimeout, transport.TLSHandshakeTimeout, transport.ExpectContinueTimeout)
+	}
+
+	custom := &http.Client{Timeout: 3 * time.Second}
+	withCustom, err := NewClient(Config{
+		BaseURL:    "http://127.0.0.1:8123",
+		Database:   "telemetry_history",
+		Table:      "observations",
+		HTTPClient: custom,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withCustom.httpClient != custom {
+		t.Fatal("expected custom HTTPClient to be preserved")
+	}
+}
+
 func pointRowJSON(observationID, acceptance, valueType, valueJSON, sampledAt string) string {
 	return `{"observation_id":"` + observationID + `","point_id":"` + historyPointID + `","sensor_id":null,"telemetry_key":"zone.mode","point_type":"STATE","point_revision":7,"sampled_at":"` + sampledAt + `","received_at":"2026-08-19T01:05:00.000Z","acceptance_status":"` + acceptance + `","value_type":"` + valueType + `","value_json":"` + valueJSON + `","unit":null,"quality":"GOOD","quality_reasons":[],"source_event_id":"` + observationID + `","source_partition":"mqtt:gateway:device:zone.mode","source_offset":42}
 `

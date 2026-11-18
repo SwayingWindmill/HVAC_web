@@ -94,12 +94,30 @@ func NewClient(config Config) (*Client, error) {
 	}
 	client := config.HTTPClient
 	if client == nil {
-		client = &http.Client{Timeout: 8 * time.Second}
+		client = newDefaultClickHouseHTTPClient(8 * time.Second)
 	}
 	return &Client{
 		endpoint: endpoint, database: config.Database, table: config.Table,
 		username: strings.TrimSpace(config.Username), password: config.Password, httpClient: client,
 	}, nil
+}
+
+func newDefaultClickHouseHTTPClient(timeout time.Duration) *http.Client {
+	var transport *http.Transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok && base != nil {
+		transport = base.Clone()
+	} else {
+		transport = &http.Transport{}
+	}
+	transport.MaxIdleConns = 64
+	transport.MaxIdleConnsPerHost = 32
+	transport.IdleConnTimeout = 90 * time.Second
+	transport.TLSHandshakeTimeout = 10 * time.Second
+	transport.ExpectContinueTimeout = 1 * time.Second
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: transport,
+	}
 }
 
 func (client *Client) QueryDeviceHistory(ctx context.Context, query telemetryhistorymodel.DeviceHistoryQuery) (telemetryhistorymodel.DeviceHistoryResponse, error) {

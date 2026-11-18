@@ -532,3 +532,119 @@ func TestMQTTPublisherShadowChannelsUnsyncedRetryAndCursorPreservation(t *testin
 		t.Fatalf("expected already-flushed t1/t2 aux_supply_temp_c skipped by Drain without duplicate replay, got %d", replayedDuplicateSupplyCount)
 	}
 }
+
+func TestMQTTPublisherAnalogDeadbandAndMaxSilenceFilter(t *testing.T) {
+	t.Parallel()
+
+	publisher := &MQTTPublisher{
+		gatewayID: "0193f000-2000-7000-8000-000000000003",
+		pointByKey: map[string]PointConfig{
+			pointReference("CHILLER-01", "chw_temp"): {
+				DeviceID:     "CHILLER-01",
+				TelemetryKey: "chw_temp",
+				PointCode:    "chw_temp_c",
+				PointType:    "TELEMETRY",
+				ValueType:    "NUMBER",
+				Unit:         "degC",
+			},
+			pointReference("CHILLER-01", "cond_pressure"): {
+				DeviceID:       "CHILLER-01",
+				TelemetryKey:   "cond_pressure",
+				PointCode:      "cond_pressure_kpa",
+				PointType:      "TELEMETRY",
+				ValueType:      "NUMBER",
+				Unit:           "kPa",
+				SourceMetadata: map[string]any{"deadband": 2.0},
+			},
+			pointReference("CHILLER-01", "run_state"): {
+				DeviceID:     "CHILLER-01",
+				TelemetryKey: "run_state",
+				PointCode:    "run_state",
+				PointType:    "STATE",
+				ValueType:    "STRING",
+			},
+			pointReference("METER-01", "total_kwh"): {
+				DeviceID:     "METER-01",
+				TelemetryKey: "total_kwh",
+				PointCode:    "total_kwh",
+				PointType:    "COUNTER",
+				ValueType:    "NUMBER",
+				Unit:         "kWh",
+			},
+		},
+		snapshotInterval:   300 * time.Second,
+		lastPointStates:    map[string]lastEmittedPointState{},
+		Deadband:           0.5,
+		DeadbandMaxSilence: 60 * time.Second,
+	}
+
+	t0 := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+
+	env0, err := publisher.buildEnvelope([]Measurement{
+		{DeviceID: "CHILLER-01", TelemetryKey: "chw_temp", Value: 7.0, Quality: "GOOD", ObservedAt: t0, Sequence: 1},
+		{DeviceID: "CHILLER-01", TelemetryKey: "cond_pressure", Value: 10.0, Quality: "GOOD", ObservedAt: t0, Sequence: 2},
+		{DeviceID: "CHILLER-01", TelemetryKey: "run_state", Value: "RUNNING", Quality: "GOOD", ObservedAt: t0, Sequence: 3},
+		{DeviceID: "METER-01", TelemetryKey: "total_kwh", Value: 100.0, Quality: "GOOD", ObservedAt: t0, Sequence: 4},
+	})
+	if err != nil {
+		t.Fatalf("t0 buildEnvelope error = %v", err)
+	}
+	if len(env0.Payload.Devices) != 2 {
+		t.Fatalf("expected 2 devices at t0, got %+v", env0.Payload.Devices)
+	}
+
+	env10, err := publisher.buildEnvelope([]Measurement{
+		{DeviceID: "CHILLER-01", TelemetryKey: "chw_temp", Value: 7.2, Quality: "GOOD", ObservedAt: t0.Add(10 * time.Second), Sequence: 5},
+		{DeviceID: "CHILLER-01", TelemetryKey: "cond_pressure", Value: 11.2, Quality: "GOOD", ObservedAt: t0.Add(10 * time.Second), Sequence: 6},
+		{DeviceID: "CHILLER-01", TelemetryKey: "run_state", Value: "RUNNING", Quality: "GOOD", ObservedAt: t0.Add(10 * time.Second), Sequence: 7},
+		{DeviceID: "METER-01", TelemetryKey: "total_kwh", Value: 100.2, Quality: "GOOD", ObservedAt: t0.Add(10 * time.Second), Sequence: 8},
+	})
+	if err != nil {
+		t.Fatalf("t0+10s buildEnvelope error = %v", err)
+	}
+	if len(env10.Payload.Devices) != 1 || env10.Payload.Devices[0].DeviceID != "METER-01" {
+		t.Fatalf("expected only COUNTER device at t0+10s (unchanged STATE and per-point deadband suppressed), got %+v", env10.Payload.Devices)
+	}
+
+	env15, err := publisher.buildEnvelope([]Measurement{
+		{DeviceID: "CHILLER-01", TelemetryKey: "cond_pressure", Value: 12.1, Quality: "GOOD", ObservedAt: t0.Add(15 * time.Second), Sequence: 9},
+		{DeviceID: "CHILLER-01", TelemetryKey: "run_state", Value: "STOPPED", Quality: "GOOD", ObservedAt: t0.Add(15 * time.Second), Sequence: 10},
+	})
+	if err != nil {
+		t.Fatalf("t0+15s buildEnvelope error = %v", err)
+	}
+	if len(env15.Payload.Devices) != 1 || len(env15.Payload.Devices[0].Points) != 2 {
+		t.Fatalf("expected STATE change and >2.0 cond_pressure change at t0+15s, got %+v", env15.Payload.Devices)
+	}
+
+	env60, err := publisher.buildEnvelope([]Measurement{
+		{DeviceID: "CHILLER-01", TelemetryKey: "chw_temp", Value: 7.0, Quality: "GOOD", ObservedAt: t0.Add(60 * time.Second), Sequence: 5},
+	})
+	if err != nil {
+		t.Fatalf("t0+60s buildEnvelope error = %v", err)
+	}
+	if len(env60.Payload.Devices) != 1 || env60.Payload.Devices[0].Points[0].Code != "chw_temp_c" {
+		t.Fatalf("expected MaxSilence heartbeat for chw_temp_c at t0+60s, got %+v", env60.Payload.Devices)
+	}
+
+	env70, err := publisher.buildEnvelope([]Measurement{
+		{DeviceID: "CHILLER-01", TelemetryKey: "chw_temp", Value: 7.0, Quality: "BAD", ObservedAt: t0.Add(70 * time.Second), Sequence: 6},
+	})
+	if err != nil {
+		t.Fatalf("t0+70s buildEnvelope error = %v", err)
+	}
+	if len(env70.Payload.Devices) != 1 || env70.Payload.Devices[0].Points[0].Quality != 1 {
+		t.Fatalf("expected non-GOOD quality emission at t0+70s, got %+v", env70.Payload.Devices)
+	}
+
+	publisher.SetDeadband(0, 0)
+	env80, err := publisher.buildEnvelope([]Measurement{
+		{DeviceID: "CHILLER-01", TelemetryKey: "chw_temp", Value: 7.1, Quality: "GOOD", ObservedAt: t0.Add(80 * time.Second), Sequence: 7},
+	})
+	if err != nil {
+		t.Fatalf("t0+80s buildEnvelope error = %v", err)
+	}
+	if len(env80.Payload.Devices) != 1 {
+		t.Fatalf("expected emission after disabling deadband filter, got %+v", env80.Payload.Devices)
+	}
+}

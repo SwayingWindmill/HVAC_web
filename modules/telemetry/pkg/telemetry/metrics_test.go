@@ -103,3 +103,83 @@ func TestInstrumentRealtimeTransportRecordsSuccessAndFailure(t *testing.T) {
 		t.Fatalf("metric output leaked raw transport identifiers: %s", body)
 	}
 }
+
+func TestPipelineMetricsRecordBoundedSeriesAndScrape(t *testing.T) {
+	var nilPipeline *PipelineMetrics
+	nilPipeline.SetHistoryOutboxDepths(1, 2, 3)
+	nilPipeline.ObserveHistoryFlushDuration(time.Second)
+	nilPipeline.AddHistoryRowsProjected(5)
+	nilPipeline.AddReplayObservations(2)
+	nilPipeline.AddLatestCacheUpdates(LatestCacheOutcomeApplied, 1)
+	nilPipeline.ObserveColdArchiveRun(ColdArchiveOutcomeSucceeded)
+
+	if NewPipelineMetrics(nil) != nil {
+		t.Fatal("expected NewPipelineMetrics(nil) to return nil")
+	}
+
+	registry := observability.NewRegistry()
+	pipeline := NewPipelineMetrics(registry)
+	pipeline.SetHistoryOutboxDepths(12, 4, 1)
+	pipeline.SetHistoryOutboxDepth("IN_FLIGHT", 3)
+	pipeline.SetHistoryOutboxDepth("DEAD", 2)
+	pipeline.SetHistoryOutboxDepth("unbounded_state", 99)
+	pipeline.ObserveHistoryFlushDuration(-5 * time.Millisecond)
+	pipeline.ObserveHistoryFlushDuration(150 * time.Millisecond)
+	pipeline.AddHistoryRowsProjected(0)
+	pipeline.AddHistoryRowsProjected(256)
+	pipeline.AddReplayObservations(42)
+	pipeline.AddLatestCacheUpdates(LatestCacheOutcomeApplied, 10)
+	pipeline.AddLatestCacheUpdates(LatestCacheOutcomeStaleSkipped, 3)
+	pipeline.AddLatestCacheUpdates(LatestCacheOutcomeInvalidated, 2)
+	pipeline.AddLatestCacheUpdates(LatestCacheOutcomeError, 1)
+	pipeline.AddLatestCacheUpdates("unbounded_outcome", 99)
+	pipeline.ObserveColdArchiveRun(ColdArchiveOutcomeSucceeded)
+	pipeline.ObserveColdArchiveRun(ColdArchiveOutcomeFailed)
+	pipeline.ObserveColdArchiveRun("unbounded_archive")
+
+	pipeline.SetHistoryOutboxDepths(15, 1, 2)
+	pipeline.ObserveHistoryFlushDuration(25 * time.Millisecond)
+	pipeline.AddHistoryRowsProjected(4)
+	pipeline.AddReplayObservations(8)
+	pipeline.AddLatestCacheUpdates(LatestCacheOutcomeApplied, 5)
+	pipeline.ObserveColdArchiveRun(ColdArchiveOutcomeSucceeded)
+
+	recorder := httptest.NewRecorder()
+	registry.Handler().ServeHTTP(recorder, httptest.NewRequest("GET", "/metrics", nil))
+	body := recorder.Body.String()
+
+	for _, want := range []string{
+		`hvac_s2_history_outbox_depth{state="pending"} 15`,
+		`hvac_s2_history_outbox_depth{state="publishing"} 1`,
+		`hvac_s2_history_outbox_depth{state="dead_letter"} 2`,
+		`hvac_s2_history_flush_duration_seconds_count 3`,
+		`hvac_s2_history_rows_projected_total 260`,
+		`hvac_s2_replay_observations_total 50`,
+		`hvac_s2_latest_cache_updates_total{outcome="applied"} 15`,
+		`hvac_s2_latest_cache_updates_total{outcome="stale_skipped"} 3`,
+		`hvac_s2_latest_cache_updates_total{outcome="invalidated"} 2`,
+		`hvac_s2_latest_cache_updates_total{outcome="error"} 1`,
+		`hvac_s2_cold_archive_runs_total{outcome="succeeded"} 2`,
+		`hvac_s2_cold_archive_runs_total{outcome="failed"} 1`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("missing %q in /metrics output:\n%s", want, body)
+		}
+	}
+	for _, unexpected := range []string{"unbounded_state", "unbounded_outcome", "unbounded_archive", "device_id", "site_id"} {
+		if strings.Contains(body, unexpected) {
+			t.Fatalf("unexpected unbounded label %q leaked in /metrics output:\n%s", unexpected, body)
+		}
+	}
+
+	cardinality := registry.SeriesCardinality()
+	if cardinality["hvac_s2_history_outbox_depth"] != 3 {
+		t.Fatalf("hvac_s2_history_outbox_depth cardinality=%d, want 3", cardinality["hvac_s2_history_outbox_depth"])
+	}
+	if cardinality["hvac_s2_latest_cache_updates_total"] != 4 {
+		t.Fatalf("hvac_s2_latest_cache_updates_total cardinality=%d, want 4", cardinality["hvac_s2_latest_cache_updates_total"])
+	}
+	if cardinality["hvac_s2_cold_archive_runs_total"] != 2 {
+		t.Fatalf("hvac_s2_cold_archive_runs_total cardinality=%d, want 2", cardinality["hvac_s2_cold_archive_runs_total"])
+	}
+}

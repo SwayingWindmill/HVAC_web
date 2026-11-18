@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -480,4 +483,135 @@ func TestParseTelemetryPostgresPoolConfig(t *testing.T) {
 			})
 		}
 	})
+}
+
+func TestLoadClickHouseRetentionPrunerArchiveEnvWiring(t *testing.T) {
+	lookupFrom := func(values map[string]string) func(string) string {
+		return func(key string) string { return values[key] }
+	}
+
+	t.Run("disabled when retention user unset", func(t *testing.T) {
+		pruner, _, cancel, err := loadClickHouseRetentionPrunerFromEnv(lookupFrom(map[string]string{}))
+		if err != nil || pruner != nil || cancel != nil {
+			t.Fatalf("expected disabled pruner, got pruner=%v cancel=%v err=%v", pruner, cancel, err)
+		}
+	})
+
+	t.Run("rejects archive required without archive dir", func(t *testing.T) {
+		_, _, _, err := loadClickHouseRetentionPrunerFromEnv(lookupFrom(map[string]string{
+			"TELEMETRY_RETENTION_CLICKHOUSE_USER":  "telemetry_retention_writer",
+			"TELEMETRY_CLICKHOUSE_HTTP_URL":        "http://127.0.0.1:8123",
+			"TELEMETRY_RETENTION_ARCHIVE_REQUIRED": "true",
+		}))
+		if err == nil || !strings.Contains(err.Error(), "TELEMETRY_COLD_ARCHIVE_DIR") {
+			t.Fatalf("expected missing archive dir error, got %v", err)
+		}
+	})
+
+	t.Run("rejects invalid archive required bool", func(t *testing.T) {
+		_, _, _, err := loadClickHouseRetentionPrunerFromEnv(lookupFrom(map[string]string{
+			"TELEMETRY_RETENTION_CLICKHOUSE_USER":  "telemetry_retention_writer",
+			"TELEMETRY_CLICKHOUSE_HTTP_URL":        "http://127.0.0.1:8123",
+			"TELEMETRY_RETENTION_ARCHIVE_REQUIRED": "maybe",
+		}))
+		if err == nil || !strings.Contains(err.Error(), "TELEMETRY_RETENTION_ARCHIVE_REQUIRED") {
+			t.Fatalf("expected bool parse error, got %v", err)
+		}
+	})
+
+	t.Run("rejects unsafe archive dir", func(t *testing.T) {
+		_, _, _, err := loadClickHouseRetentionPrunerFromEnv(lookupFrom(map[string]string{
+			"TELEMETRY_RETENTION_CLICKHOUSE_USER":  "telemetry_retention_writer",
+			"TELEMETRY_CLICKHOUSE_HTTP_URL":        "http://127.0.0.1:8123",
+			"TELEMETRY_COLD_ARCHIVE_DIR":           "../escape",
+			"TELEMETRY_RETENTION_ARCHIVE_REQUIRED": "true",
+		}))
+		if err == nil {
+			t.Fatal("expected unsafe archive dir error")
+		}
+	})
+
+	t.Run("wires cold archive exporter and runs pre-prune export", func(t *testing.T) {
+		var ops []string
+		var mu sync.Mutex
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			body, _ := io.ReadAll(request.Body)
+			sql := string(body)
+			mu.Lock()
+			if strings.HasPrefix(sql, "SELECT ") {
+				ops = append(ops, "SELECT")
+			} else if strings.HasPrefix(sql, "ALTER TABLE ") {
+				ops = append(ops, "DELETE")
+			}
+			mu.Unlock()
+			writer.WriteHeader(http.StatusOK)
+		}))
+		defer server.Close()
+
+		archiveDir := t.TempDir()
+		pruner, _, cancel, err := loadClickHouseRetentionPrunerFromEnv(lookupFrom(map[string]string{
+			"TELEMETRY_RETENTION_CLICKHOUSE_USER":  "telemetry_retention_writer",
+			"TELEMETRY_CLICKHOUSE_HTTP_URL":        server.URL,
+			"TELEMETRY_COLD_ARCHIVE_DIR":           archiveDir,
+			"TELEMETRY_RETENTION_ARCHIVE_REQUIRED": "true",
+		}))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		defer cancel()
+
+		res, err := pruner.Prune(t.Context(), time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC))
+		if err != nil {
+			t.Fatalf("Prune failed: %v", err)
+		}
+		if len(res.ArchivedTables) != 2 || len(res.SubmittedTables) != 8 {
+			t.Fatalf("unexpected result: %+v", res)
+		}
+		entries, err := os.ReadDir(archiveDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 4 {
+			t.Fatalf("expected 4 archive files, got %d", len(entries))
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if len(ops) != 10 || ops[0] != "SELECT" || ops[1] != "SELECT" {
+			t.Fatalf("unexpected query order: %v", ops)
+		}
+	})
+}
+
+func TestParseHistoryProjectionSettingsPipelineDepth(t *testing.T) {
+	lookupFrom := func(values map[string]string) func(string) string {
+		return func(key string) string { return values[key] }
+	}
+
+	defaults, err := parseHistoryProjectionSettings(lookupFrom(map[string]string{}))
+	if err != nil {
+		t.Fatalf("defaults error: %v", err)
+	}
+	if defaults.PipelineDepth != 2 {
+		t.Fatalf("default PipelineDepth=%d want 2", defaults.PipelineDepth)
+	}
+
+	for _, valid := range []string{"1", "2", "3", "4"} {
+		cfg, err := parseHistoryProjectionSettings(lookupFrom(map[string]string{
+			"TELEMETRY_HISTORY_PIPELINE_DEPTH": valid,
+		}))
+		if err != nil {
+			t.Fatalf("valid depth %s error: %v", valid, err)
+		}
+		if cfg.PipelineDepth < 1 || cfg.PipelineDepth > 4 {
+			t.Fatalf("unexpected depth %d", cfg.PipelineDepth)
+		}
+	}
+
+	for _, invalid := range []string{"0", "-1", "5", "abc"} {
+		if _, err := parseHistoryProjectionSettings(lookupFrom(map[string]string{
+			"TELEMETRY_HISTORY_PIPELINE_DEPTH": invalid,
+		})); err == nil {
+			t.Fatalf("expected error for TELEMETRY_HISTORY_PIPELINE_DEPTH=%q", invalid)
+		}
+	}
 }

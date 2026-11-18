@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -67,31 +68,53 @@ type HistoryRepository interface {
 	RetryHistoryBatch(context.Context, string, time.Time, string) error
 }
 
+// PipelinedHistoryRepository optionally lets HistoryRelay prefetch and release ordered
+// batches across a bounded in-flight pipeline.
+type PipelinedHistoryRepository interface {
+	ClaimPipelinedHistoryBatch(ctx context.Context, maxEvents int, now time.Time, leaseFor time.Duration, activeLeaseIDs []string, maxInFlight int) (HistoryBatch, error)
+	ReleaseHistoryBatchLease(ctx context.Context, leaseID string, now time.Time) error
+}
+
 type HistorySink interface {
 	InsertObservations(context.Context, uint64, []HistoryObservation) error
 }
 
+// PreparedHistorySink optionally splits deterministic encoding/compression from ClickHouse HTTP upload.
+type PreparedHistorySink interface {
+	PrepareObservations(sequence uint64, observations []HistoryObservation) (compressed []byte, token string, err error)
+	InsertPrepared(ctx context.Context, compressed []byte, token string) error
+}
+
+// HistoryOutboxDepthProvider optionally exposes current outbox row counts by delivery state.
+type HistoryOutboxDepthProvider interface {
+	HistoryOutboxDepths(ctx context.Context) (pending, publishing, deadLetter int, err error)
+}
+
 type HistoryRelayConfig struct {
-	Repository  HistoryRepository
-	Sink        HistorySink
-	BatchSize   int
-	LeaseFor    time.Duration
-	RetryAfter  time.Duration
-	MaxAttempts int
-	Now         func() time.Time
+	Repository    HistoryRepository
+	Sink          HistorySink
+	BatchSize     int
+	LeaseFor      time.Duration
+	RetryAfter    time.Duration
+	MaxAttempts   int
+	PipelineDepth int
+	Metrics       *PipelineMetrics
+	Now           func() time.Time
 }
 
 // HistoryRelay retries transient failures in History Sequence order (indefinitely when MaxAttempts == 0,
 // or up to MaxAttempts when positive) so duplicates are avoided, and binary-splits permanent failures
 // to quarantine poison pills.
 type HistoryRelay struct {
-	repository  HistoryRepository
-	sink        HistorySink
-	batchSize   int
-	leaseFor    time.Duration
-	retryAfter  time.Duration
-	maxAttempts int
-	now         func() time.Time
+	repository    HistoryRepository
+	sink          HistorySink
+	batchSize     int
+	leaseFor      time.Duration
+	retryAfter    time.Duration
+	maxAttempts   int
+	pipelineDepth int
+	metrics       *PipelineMetrics
+	now           func() time.Time
 }
 
 func NewHistoryRelay(config HistoryRelayConfig) (*HistoryRelay, error) {
@@ -113,10 +136,41 @@ func NewHistoryRelay(config HistoryRelayConfig) (*HistoryRelay, error) {
 	if config.Now == nil {
 		config.Now = time.Now
 	}
+	pipelineDepth := config.PipelineDepth
+	if pipelineDepth <= 0 {
+		pipelineDepth = 2
+	} else if pipelineDepth > 4 {
+		pipelineDepth = 4
+	}
 	return &HistoryRelay{
 		repository: config.Repository, sink: config.Sink, batchSize: config.BatchSize,
-		leaseFor: config.LeaseFor, retryAfter: config.RetryAfter, maxAttempts: config.MaxAttempts, now: config.Now,
+		leaseFor: config.LeaseFor, retryAfter: config.RetryAfter, maxAttempts: config.MaxAttempts,
+		pipelineDepth: pipelineDepth, metrics: config.Metrics, now: config.Now,
 	}, nil
+}
+
+type preparedHistoryBatch struct {
+	batch      HistoryBatch
+	compressed []byte
+	token      string
+	prepared   bool
+	claimErr   error
+	prepErr    error
+}
+
+func (relay *HistoryRelay) prepareBatch(batch HistoryBatch) preparedHistoryBatch {
+	item := preparedHistoryBatch{batch: batch}
+	if preparedSink, ok := relay.sink.(PreparedHistorySink); ok {
+		compressed, token, prepErr := preparedSink.PrepareObservations(batch.Sequence, batch.Observations)
+		if prepErr != nil {
+			item.prepErr = prepErr
+		} else {
+			item.compressed = compressed
+			item.token = token
+			item.prepared = true
+		}
+	}
+	return item
 }
 
 func (relay *HistoryRelay) RelayOnce(ctx context.Context) (int, error) {
@@ -129,15 +183,50 @@ func (relay *HistoryRelay) RelayOnce(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("claim telemetry history batch: %w", err)
 	}
 	if len(batch.Observations) == 0 {
+		relay.refreshOutboxDepths(ctx)
 		return 0, nil
 	}
+	published, execErr := relay.executePreparedHistoryBatch(ctx, relay.prepareBatch(batch))
+	relay.refreshOutboxDepths(ctx)
+	return published, execErr
+}
+
+func (relay *HistoryRelay) refreshOutboxDepths(ctx context.Context) {
+	if relay == nil || relay.metrics == nil {
+		return
+	}
+	provider, ok := relay.repository.(HistoryOutboxDepthProvider)
+	if !ok {
+		return
+	}
+	depthCtx, cancel := historySettleContext(ctx)
+	defer cancel()
+	pending, publishing, deadLetter, err := provider.HistoryOutboxDepths(depthCtx)
+	if err == nil {
+		relay.metrics.SetHistoryOutboxDepths(pending, publishing, deadLetter)
+	}
+}
+
+func (relay *HistoryRelay) executePreparedHistoryBatch(ctx context.Context, item preparedHistoryBatch) (int, error) {
+	batch := item.batch
 	if batch.LeaseID == "" {
 		return 0, errors.New("claimed telemetry history batch has no lease ID")
 	}
-	if err := relay.sink.InsertObservations(ctx, batch.Sequence, batch.Observations); err != nil {
-		if IsPermanentHistoryError(err) {
-			return relay.handlePermanentBatchFailure(ctx, batch, err)
+	start := time.Now()
+	err := item.prepErr
+	if err == nil {
+		if item.prepared {
+			preparedSink := relay.sink.(PreparedHistorySink)
+			err = preparedSink.InsertPrepared(ctx, item.compressed, item.token)
+		} else {
+			err = relay.sink.InsertObservations(ctx, batch.Sequence, batch.Observations)
 		}
+	}
+	if err != nil {
+		if IsPermanentHistoryError(err) {
+			return relay.handlePermanentBatchFailure(ctx, batch, err, start)
+		}
+		relay.metrics.ObserveHistoryFlushDuration(time.Since(start))
 		if relay.maxAttempts > 0 && batch.MaxAttempts >= relay.maxAttempts && ctx.Err() == nil {
 			settleCtx, cancelSettle := historySettleContext(ctx)
 			dlErr := relay.repository.DeadLetterHistoryEvents(settleCtx, batch.LeaseID, historyObservationIDs(batch.Observations), historyMaxAttemptsFailureCode, relay.now().UTC())
@@ -165,6 +254,8 @@ func (relay *HistoryRelay) RelayOnce(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("mark telemetry history batch published: %w", err)
 	}
+	relay.metrics.ObserveHistoryFlushDuration(time.Since(start))
+	relay.metrics.AddHistoryRowsProjected(len(batch.Observations))
 	return len(batch.Observations), nil
 }
 
@@ -175,7 +266,7 @@ func historySettleContext(ctx context.Context) (context.Context, context.CancelF
 	return context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 }
 
-func (relay *HistoryRelay) handlePermanentBatchFailure(ctx context.Context, batch HistoryBatch, batchErr error) (int, error) {
+func (relay *HistoryRelay) handlePermanentBatchFailure(ctx context.Context, batch HistoryBatch, batchErr error, start time.Time) (int, error) {
 	var publishedIDs, deadIDs []string
 	var transientErr error
 	if len(batch.Observations) == 1 {
@@ -235,6 +326,10 @@ func (relay *HistoryRelay) handlePermanentBatchFailure(ctx context.Context, batc
 			persistErrs = append(persistErrs, fmt.Errorf("insert telemetry history during split: %w", transientErr))
 		}
 	}
+	relay.metrics.ObserveHistoryFlushDuration(time.Since(start))
+	if len(publishedIDs) > 0 {
+		relay.metrics.AddHistoryRowsProjected(len(publishedIDs))
+	}
 	if len(persistErrs) > 0 {
 		return len(publishedIDs), errors.Join(append([]error{fmt.Errorf("insert telemetry history: %w", batchErr)}, persistErrs...)...)
 	}
@@ -289,19 +384,62 @@ func remainingHistoryIDs(rows []HistoryObservation, publishedIDs, deadIDs []stri
 	return remaining
 }
 
+// RelayPending drains all currently available batches in strict batch_sequence order,
+// overlapping Stage 1 claim/prepare of subsequent batches with Stage 2 ClickHouse/PostgreSQL commits
+// when PipelineDepth > 1 and the repository implements PipelinedHistoryRepository.
+func (relay *HistoryRelay) RelayPending(ctx context.Context) (int, error) {
+	if relay == nil {
+		return 0, errors.New("history relay is nil")
+	}
+	if relay.pipelineDepth > 1 {
+		if pipelinedRepo, ok := relay.repository.(PipelinedHistoryRepository); ok {
+			total, _, err := relay.runPipelinedWave(ctx, pipelinedRepo, false, nil)
+			relay.refreshOutboxDepths(ctx)
+			return total, err
+		}
+	}
+	total := 0
+	for ctx.Err() == nil {
+		published, err := relay.RelayOnce(ctx)
+		total += published
+		if err != nil {
+			return total, err
+		}
+		if published == 0 {
+			return total, nil
+		}
+	}
+	return total, ctx.Err()
+}
+
 // Run drains a backlog (full batches) immediately; otherwise it waits the poll interval
 // so a trickle of observations is written as one insert per interval. Every insert is a
 // ClickHouse part, multiplied by the rollup views, and tiny frequent parts exhaust
 // ClickHouse memory. The shared loop keeps the combined worker and standalone projector
 // consistent.
 func (relay *HistoryRelay) Run(ctx context.Context, idleInterval time.Duration, report func(int, error)) {
+	pipelinedRepo, canPipeline := relay.repository.(PipelinedHistoryRepository)
+	usePipeline := relay.pipelineDepth > 1 && canPipeline
 	for ctx.Err() == nil {
-		passContext, cancel := context.WithTimeout(ctx, min(15*time.Second, relay.leaseFor/2))
-		published, err := relay.RelayOnce(passContext)
-		cancel()
-		report(published, err)
-		if err == nil && published == relay.batchSize {
-			continue
+		if usePipeline {
+			_, cont, _ := relay.runPipelinedWave(ctx, pipelinedRepo, true, report)
+			relay.refreshOutboxDepths(ctx)
+			if cont && ctx.Err() == nil {
+				continue
+			}
+		} else {
+			passContext, cancel := context.WithTimeout(ctx, min(15*time.Second, relay.leaseFor/2))
+			published, err := relay.RelayOnce(passContext)
+			cancel()
+			if report != nil {
+				report(published, err)
+			}
+			if err == nil && published == relay.batchSize {
+				continue
+			}
+		}
+		if ctx.Err() != nil {
+			return
 		}
 		timer := time.NewTimer(idleInterval)
 		select {
@@ -311,4 +449,161 @@ func (relay *HistoryRelay) Run(ctx context.Context, idleInterval time.Duration, 
 		case <-timer.C:
 		}
 	}
+}
+
+func (relay *HistoryRelay) runPipelinedWave(
+	ctx context.Context,
+	pipelinedRepo PipelinedHistoryRepository,
+	fullBatchOnly bool,
+	report func(int, error),
+) (int, bool, error) {
+	depth := relay.pipelineDepth
+	stepTimeout := min(15*time.Second, max(200*time.Millisecond, relay.leaseFor/time.Duration(depth+1)))
+
+	stage1Ctx, cancelStage1 := context.WithCancel(ctx)
+	defer cancelStage1()
+
+	var leaseMu sync.Mutex
+	activeLeases := make(map[string]struct{}, depth)
+	snapshotActiveLeases := func() []string {
+		leaseMu.Lock()
+		defer leaseMu.Unlock()
+		out := make([]string, 0, len(activeLeases))
+		for id := range activeLeases {
+			out = append(out, id)
+		}
+		return out
+	}
+	addActiveLease := func(leaseID string) {
+		if leaseID == "" {
+			return
+		}
+		leaseMu.Lock()
+		activeLeases[leaseID] = struct{}{}
+		leaseMu.Unlock()
+	}
+	removeActiveLease := func(leaseID string) {
+		if leaseID == "" {
+			return
+		}
+		leaseMu.Lock()
+		delete(activeLeases, leaseID)
+		leaseMu.Unlock()
+	}
+
+	slots := make(chan struct{}, depth)
+	readyCh := make(chan preparedHistoryBatch, depth+1)
+	stage1Done := make(chan struct{})
+
+	go func() {
+		defer close(stage1Done)
+		defer close(readyCh)
+		for {
+			select {
+			case <-stage1Ctx.Done():
+				return
+			case slots <- struct{}{}:
+			}
+			if stage1Ctx.Err() != nil {
+				<-slots
+				return
+			}
+			claimCtx, cancelClaim := context.WithTimeout(stage1Ctx, stepTimeout)
+			batch, claimErr := pipelinedRepo.ClaimPipelinedHistoryBatch(
+				claimCtx,
+				relay.batchSize,
+				relay.now().UTC(),
+				relay.leaseFor,
+				snapshotActiveLeases(),
+				depth,
+			)
+			cancelClaim()
+			if claimErr != nil {
+				<-slots
+				readyCh <- preparedHistoryBatch{claimErr: fmt.Errorf("claim telemetry history batch: %w", claimErr)}
+				return
+			}
+			if len(batch.Observations) == 0 {
+				<-slots
+				readyCh <- preparedHistoryBatch{}
+				return
+			}
+			addActiveLease(batch.LeaseID)
+			item := relay.prepareBatch(batch)
+			readyCh <- item
+			if fullBatchOnly && len(batch.Observations) < relay.batchSize {
+				return
+			}
+		}
+	}()
+
+	releaseLeftovers := func(extra []preparedHistoryBatch) error {
+		cancelStage1()
+		var releaseErrs []error
+		releaseOne := func(item preparedHistoryBatch) {
+			if len(item.batch.Observations) == 0 {
+				return
+			}
+			defer removeActiveLease(item.batch.LeaseID)
+			if item.batch.LeaseID == "" {
+				return
+			}
+			settleCtx, cancelSettle := historySettleContext(ctx)
+			relErr := pipelinedRepo.ReleaseHistoryBatchLease(settleCtx, item.batch.LeaseID, relay.now().UTC())
+			cancelSettle()
+			if relErr != nil {
+				releaseErrs = append(releaseErrs, fmt.Errorf("release unused telemetry history batch lease: %w", relErr))
+			}
+		}
+		for _, item := range extra {
+			releaseOne(item)
+		}
+		for leftover := range readyCh {
+			releaseOne(leftover)
+		}
+		<-stage1Done
+		return errors.Join(releaseErrs...)
+	}
+
+	totalPublished := 0
+	batchesProcessed := 0
+	lastFull := false
+	for item := range readyCh {
+		if item.claimErr != nil {
+			if report != nil {
+				report(0, item.claimErr)
+			}
+			relErr := releaseLeftovers(nil)
+			return totalPublished, false, errors.Join(item.claimErr, relErr)
+		}
+		if len(item.batch.Observations) == 0 {
+			if (batchesProcessed == 0 || lastFull) && report != nil {
+				report(0, nil)
+			}
+			relErr := releaseLeftovers(nil)
+			return totalPublished, false, relErr
+		}
+		if ctx.Err() != nil {
+			relErr := releaseLeftovers([]preparedHistoryBatch{item})
+			return totalPublished, false, errors.Join(ctx.Err(), relErr)
+		}
+
+		stage2Ctx, cancelStage2 := context.WithTimeout(ctx, stepTimeout)
+		published, execErr := relay.executePreparedHistoryBatch(stage2Ctx, item)
+		cancelStage2()
+		removeActiveLease(item.batch.LeaseID)
+		batchesProcessed++
+		totalPublished += published
+		if report != nil {
+			report(published, execErr)
+		}
+		if execErr != nil {
+			relErr := releaseLeftovers(nil)
+			return totalPublished, false, errors.Join(execErr, relErr)
+		}
+		<-slots
+		lastFull = published == relay.batchSize
+	}
+	<-stage1Done
+	return totalPublished, lastFull, nil
 }
