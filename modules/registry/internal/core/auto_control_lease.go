@@ -24,6 +24,9 @@ const (
 	ConfirmationModeManual        = "MANUAL_CONFIRM"
 	ConfirmationModeAutoWithLease = "AUTO_WITH_LEASE"
 
+	ExecutionModeShadow     = "SHADOW"
+	ExecutionModeClosedLoop = "CLOSED_LOOP"
+
 	ExecutionMonitorPendingSubmit     = "PENDING_SUBMIT"
 	ExecutionMonitorObserving         = "OBSERVING"
 	ExecutionMonitorVerified          = "VERIFIED"
@@ -73,6 +76,7 @@ type AutoControlLease struct {
 	ZoneTempMaxC        float64  `json:"zoneTempMaxC"`
 	MinRunningChillers  int      `json:"minRunningChillers"`
 	MaxCommandsPerHour  int      `json:"maxCommandsPerHour"`
+	ExecutionMode       string   `json:"executionMode"`
 	TripReason          *string  `json:"tripReason,omitempty"`
 	ManualBackoffUntil  *string  `json:"manualBackoffUntil,omitempty"`
 	ManualBackoffReason string   `json:"manualBackoffReason,omitempty"`
@@ -101,6 +105,7 @@ type ArmAutoControlLeaseMutation struct {
 	ZoneTempMaxC        *float64     `json:"zoneTempMaxC,omitempty"`
 	MinRunningChillers  *int         `json:"minRunningChillers,omitempty"`
 	MaxCommandsPerHour  *int         `json:"maxCommandsPerHour,omitempty"`
+	ExecutionMode       string       `json:"executionMode,omitempty"`
 	Reason              string       `json:"reason,omitempty"`
 	Meta                MutationMeta `json:"meta"`
 }
@@ -130,6 +135,9 @@ type OptimizationExecutionMonitor struct {
 	ClampedValue            *float64        `json:"clampedValue,omitempty"`
 	GuardrailVerdict        string          `json:"guardrailVerdict,omitempty"`
 	GuardrailTrace          json.RawMessage `json:"guardrailTrace,omitempty"`
+	ExecutionMode           string          `json:"executionMode"`
+	DecisionID              *string         `json:"decisionId,omitempty"`
+	TraceID                 string          `json:"traceId,omitempty"`
 	StartedAt               string          `json:"startedAt"`
 	WindowEndsAt            string          `json:"windowEndsAt"`
 	LastCheckedAt           *string         `json:"lastCheckedAt,omitempty"`
@@ -148,15 +156,16 @@ type OptimizationExecutionMonitorList struct {
 }
 
 type normalizedAutoControlLeaseValues struct {
-	expiresAt    time.Time
-	capabilities []string
-	maxStep      float64
-	deadbandC    float64
-	supplyMin    float64
-	supplyMax    float64
-	zoneMax      float64
-	minChillers  int
-	maxPerHour   int
+	expiresAt     time.Time
+	capabilities  []string
+	maxStep       float64
+	deadbandC     float64
+	supplyMin     float64
+	supplyMax     float64
+	zoneMax       float64
+	minChillers   int
+	maxPerHour    int
+	executionMode string
 }
 
 func (input ArmAutoControlLeaseMutation) normalizedValues(now time.Time) (normalizedAutoControlLeaseValues, error) {
@@ -240,16 +249,26 @@ func (input ArmAutoControlLeaseMutation) normalizedValues(now time.Time) (normal
 	if zoneMax < 18.0 || zoneMax > 32.0 || minChillers < 0 || maxPerHour < 1 || maxPerHour > 6 {
 		return normalizedAutoControlLeaseValues{}, ErrInvalidMutation
 	}
+	executionMode := input.ExecutionMode
+	if executionMode == "" {
+		executionMode = ExecutionModeClosedLoop
+	}
+	switch executionMode {
+	case ExecutionModeShadow, ExecutionModeClosedLoop:
+	default:
+		return normalizedAutoControlLeaseValues{}, ErrInvalidMutation
+	}
 	return normalizedAutoControlLeaseValues{
-		expiresAt:    expiresAt,
-		capabilities: capabilities,
-		maxStep:      maxStep,
-		deadbandC:    deadbandC,
-		supplyMin:    supplyMin,
-		supplyMax:    supplyMax,
-		zoneMax:      zoneMax,
-		minChillers:  minChillers,
-		maxPerHour:   maxPerHour,
+		expiresAt:     expiresAt,
+		capabilities:  capabilities,
+		maxStep:       maxStep,
+		deadbandC:     deadbandC,
+		supplyMin:     supplyMin,
+		supplyMax:     supplyMax,
+		zoneMax:       zoneMax,
+		minChillers:   minChillers,
+		maxPerHour:    maxPerHour,
+		executionMode: executionMode,
 	}, nil
 }
 
@@ -310,7 +329,7 @@ WHERE id = $1::uuid AND NOT (id = ANY($2::uuid[]))
 const autoControlLeaseSelectColumns = `
 id::text, tenant_id::text, site_id::text, status, armed_by::text, armed_at, expires_at,
 allowed_capabilities, max_setpoint_step_c, deadband_c, supply_temp_min_c, supply_temp_max_c,
-zone_temp_max_c, min_running_chillers, max_commands_per_hour, trip_reason,
+zone_temp_max_c, min_running_chillers, max_commands_per_hour, execution_mode, trip_reason,
 manual_backoff_until, manual_backoff_reason, revision, created_at, updated_at`
 
 func scanAutoControlLeaseRow(row pgx.Row) (AutoControlLease, time.Time, error) {
@@ -320,7 +339,7 @@ func scanAutoControlLeaseRow(row pgx.Row) (AutoControlLease, time.Time, error) {
 	if err := row.Scan(
 		&lease.ID, &lease.TenantID, &lease.SiteID, &lease.Status, &lease.ArmedBy, &armedAt, &expiresAt,
 		&lease.AllowedCapabilities, &lease.MaxSetpointStepC, &lease.DeadbandC, &lease.SupplyTempMinC, &lease.SupplyTempMaxC,
-		&lease.ZoneTempMaxC, &lease.MinRunningChillers, &lease.MaxCommandsPerHour, &lease.TripReason,
+		&lease.ZoneTempMaxC, &lease.MinRunningChillers, &lease.MaxCommandsPerHour, &lease.ExecutionMode, &lease.TripReason,
 		&manualBackoffUntil, &lease.ManualBackoffReason, &lease.Revision, &createdAt, &updatedAt,
 	); err != nil {
 		return AutoControlLease{}, time.Time{}, err
@@ -434,15 +453,15 @@ WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND id = $3::uuid
 INSERT INTO core_registry.site_auto_control_leases (
   id, tenant_id, site_id, status, armed_by, armed_at, expires_at,
   allowed_capabilities, max_setpoint_step_c, deadband_c, supply_temp_min_c, supply_temp_max_c,
-  zone_temp_max_c, min_running_chillers, max_commands_per_hour, trip_reason,
+  zone_temp_max_c, min_running_chillers, max_commands_per_hour, execution_mode, trip_reason,
   revision, created_at, updated_at
 ) VALUES (
   $1::uuid, $2::uuid, $3::uuid, 'ACTIVE', $4::uuid, $5, $6,
   $7, $8, $9, $10, $11,
-  $12, $13, $14, NULL,
+  $12, $13, $14, $15, NULL,
   1, $5, $5
 )`, leaseID, claims.TenantID, input.SiteID, claims.PrincipalID, now, values.expiresAt,
-			values.capabilities, values.maxStep, values.deadbandC, values.supplyMin, values.supplyMax, values.zoneMax, values.minChillers, values.maxPerHour); err != nil {
+			values.capabilities, values.maxStep, values.deadbandC, values.supplyMin, values.supplyMax, values.zoneMax, values.minChillers, values.maxPerHour, values.executionMode); err != nil {
 			return mutationRecord[SiteAutoControlLeaseState]{}, fmt.Errorf("insert auto control lease: %w", err)
 		}
 
@@ -462,6 +481,7 @@ INSERT INTO core_registry.site_auto_control_leases (
 			ZoneTempMaxC:        values.zoneMax,
 			MinRunningChillers:  values.minChillers,
 			MaxCommandsPerHour:  values.maxPerHour,
+			ExecutionMode:       values.executionMode,
 			Revision:            1,
 			CreatedAt:           formatInstant(now),
 			UpdatedAt:           formatInstant(now),
@@ -491,6 +511,7 @@ INSERT INTO core_registry.site_auto_control_leases (
 				"expiresAt":           lease.ExpiresAt,
 				"allowedCapabilities": values.capabilities,
 				"deadbandC":           values.deadbandC,
+				"executionMode":       values.executionMode,
 				"reason":              reason,
 				"revision":            int64(1),
 			},
@@ -609,6 +630,9 @@ SELECT id::text, tenant_id::text, site_id::text, lease_id::text, recommendation_
        baseline_supply_temp_c, applied_supply_temp_c, restore_supply_temp_c,
        supply_temp_min_c, zone_temp_max_c, supply_temp_max_c,
        raw_recommended_value, clamped_value, guardrail_verdict, guardrail_trace,
+       execution_mode,
+       CASE WHEN decision_id IS NULL THEN NULL ELSE decision_id::text END,
+       trace_id,
        started_at, window_ends_at, last_checked_at, telemetry_unhealthy_since, status, trip_reason,
        CASE WHEN rollback_command_intent_id IS NULL THEN NULL ELSE rollback_command_intent_id::text END,
        created_at, updated_at
@@ -634,6 +658,7 @@ LIMIT 50
 				&item.BaselineSupplyTempC, &item.AppliedSupplyTempC, &item.RestoreSupplyTempC,
 				&item.SupplyTempMinC, &item.ZoneTempMaxC, &item.SupplyTempMaxC,
 				&item.RawRecommendedValue, &item.ClampedValue, &item.GuardrailVerdict, &guardrailTrace,
+				&item.ExecutionMode, &item.DecisionID, &item.TraceID,
 				&startedAt, &windowEndsAt, &lastCheckedAt, &unhealthySince, &item.Status, &item.TripReason,
 				&item.RollbackCommandIntentID, &createdAt, &updatedAt,
 			); err != nil {

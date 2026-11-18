@@ -695,6 +695,7 @@ type armAutoControlLeasePublicRequest struct {
 	ZoneTempMaxC        *float64 `json:"zoneTempMaxC,omitempty"`
 	MinRunningChillers  *int     `json:"minRunningChillers,omitempty"`
 	MaxCommandsPerHour  *int     `json:"maxCommandsPerHour,omitempty"`
+	ExecutionMode       string   `json:"executionMode,omitempty"`
 	Reason              string   `json:"reason"`
 	VerificationCode    string   `json:"verificationCode"`
 	ExpectedRevision    *int64   `json:"expectedRevision,omitempty"`
@@ -711,6 +712,7 @@ type armAutoControlLeaseCoreRequest struct {
 	ZoneTempMaxC        *float64            `json:"zoneTempMaxC,omitempty"`
 	MinRunningChillers  *int                `json:"minRunningChillers,omitempty"`
 	MaxCommandsPerHour  *int                `json:"maxCommandsPerHour,omitempty"`
+	ExecutionMode       string              `json:"executionMode,omitempty"`
 	Reason              string              `json:"reason"`
 	Meta                controlRegistryMeta `json:"meta"`
 }
@@ -860,6 +862,7 @@ func (h *handler) serveAutoControlLeaseArm(writer http.ResponseWriter, request *
 		ZoneTempMaxC:        input.ZoneTempMaxC,
 		MinRunningChillers:  input.MinRunningChillers,
 		MaxCommandsPerHour:  input.MaxCommandsPerHour,
+		ExecutionMode:       input.ExecutionMode,
 		Reason:              reason,
 		Meta:                meta,
 	}
@@ -1032,7 +1035,20 @@ func (h *handler) serveOptimizationAutoCommand(writer http.ResponseWriter, reque
 		currentState:         input.CurrentState,
 		grant:                input.CommandGrant,
 	}
-	view, status, location, cmdFailure := h.executeCommandCreate(request.Context(), prepared)
+	ctx := request.Context()
+	if observability.Traceparent(ctx) == "" {
+		if rawTP := strings.TrimSpace(request.Header.Get("traceparent")); rawTP != "" {
+			var tracer *observability.Tracer
+			if h.observability != nil {
+				tracer = h.observability.Tracer
+			}
+			if tracer == nil {
+				tracer = observability.NewTracer(serviceName, nil)
+			}
+			ctx = observability.ContextWithRemoteParent(ctx, tracer, rawTP, request.Header.Get("tracestate"))
+		}
+	}
+	view, status, location, cmdFailure := h.executeCommandCreate(ctx, prepared)
 	if cmdFailure != nil {
 		h.writeCommandFailure(writer, request, *cmdFailure)
 		return
