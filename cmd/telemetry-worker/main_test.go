@@ -404,3 +404,80 @@ func TestRunClickHouseRetentionAndLegalHolds(t *testing.T) {
 		t.Fatalf("expected retention submission log, got %s", logs.String())
 	}
 }
+
+func TestParseTelemetryPostgresPoolConfig(t *testing.T) {
+	lookupFrom := func(values map[string]string) func(string) string {
+		return func(key string) string {
+			return values[key]
+		}
+	}
+
+	t.Run("defaults when env vars unset", func(t *testing.T) {
+		cfg, err := parseTelemetryPostgresPoolConfig(lookupFrom(map[string]string{}))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg != telemetry.DefaultPostgresPoolConfig() {
+			t.Fatalf("got=%+v, want=%+v", cfg, telemetry.DefaultPostgresPoolConfig())
+		}
+	})
+
+	t.Run("overrides all five env vars", func(t *testing.T) {
+		cfg, err := parseTelemetryPostgresPoolConfig(lookupFrom(map[string]string{
+			"TELEMETRY_POSTGRES_MAX_CONNS":           "40",
+			"TELEMETRY_POSTGRES_MIN_CONNS":           "8",
+			"TELEMETRY_POSTGRES_MAX_CONN_LIFETIME":   "45m",
+			"TELEMETRY_POSTGRES_MAX_CONN_IDLE_TIME":  "10m",
+			"TELEMETRY_POSTGRES_HEALTH_CHECK_PERIOD": "15s",
+		}))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := telemetry.PostgresPoolConfig{
+			MaxConns:          40,
+			MinConns:          8,
+			MaxConnLifetime:   45 * time.Minute,
+			MaxConnIdleTime:   10 * time.Minute,
+			HealthCheckPeriod: 15 * time.Second,
+		}
+		if cfg != want {
+			t.Fatalf("got=%+v, want=%+v", cfg, want)
+		}
+	})
+
+	t.Run("small max conns clamps default min conns", func(t *testing.T) {
+		cfg, err := parseTelemetryPostgresPoolConfig(lookupFrom(map[string]string{
+			"TELEMETRY_POSTGRES_MAX_CONNS": "2",
+		}))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.MaxConns != 2 || cfg.MinConns != 2 {
+			t.Fatalf("MaxConns=%d MinConns=%d, want 2/2", cfg.MaxConns, cfg.MinConns)
+		}
+	})
+
+	t.Run("rejects invalid values", func(t *testing.T) {
+		invalidCases := []struct {
+			name   string
+			values map[string]string
+		}{
+			{name: "zero max conns", values: map[string]string{"TELEMETRY_POSTGRES_MAX_CONNS": "0"}},
+			{name: "negative max conns", values: map[string]string{"TELEMETRY_POSTGRES_MAX_CONNS": "-1"}},
+			{name: "non-numeric max conns", values: map[string]string{"TELEMETRY_POSTGRES_MAX_CONNS": "abc"}},
+			{name: "overflow max conns", values: map[string]string{"TELEMETRY_POSTGRES_MAX_CONNS": "999999999999"}},
+			{name: "zero min conns", values: map[string]string{"TELEMETRY_POSTGRES_MIN_CONNS": "0"}},
+			{name: "min exceeds max", values: map[string]string{"TELEMETRY_POSTGRES_MAX_CONNS": "4", "TELEMETRY_POSTGRES_MIN_CONNS": "6"}},
+			{name: "zero max conn lifetime", values: map[string]string{"TELEMETRY_POSTGRES_MAX_CONN_LIFETIME": "0s"}},
+			{name: "negative max conn idle time", values: map[string]string{"TELEMETRY_POSTGRES_MAX_CONN_IDLE_TIME": "-5s"}},
+			{name: "invalid health check period", values: map[string]string{"TELEMETRY_POSTGRES_HEALTH_CHECK_PERIOD": "not-a-duration"}},
+		}
+		for _, tc := range invalidCases {
+			t.Run(tc.name, func(t *testing.T) {
+				if _, err := parseTelemetryPostgresPoolConfig(lookupFrom(tc.values)); err == nil {
+					t.Fatalf("expected error for %v", tc.values)
+				}
+			})
+		}
+	})
+}

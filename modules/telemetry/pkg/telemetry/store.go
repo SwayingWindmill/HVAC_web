@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -44,7 +46,69 @@ type PostgresStore struct {
 	newEventID EventIDGenerator
 }
 
-func OpenPostgresStore(ctx context.Context, databaseURL string) (*PostgresStore, error) {
+// PostgresPoolConfig tunes pgxpool connection limits and lifetimes for the telemetry runtime store.
+type PostgresPoolConfig struct {
+	MaxConns          int32
+	MinConns          int32
+	MaxConnLifetime   time.Duration
+	MaxConnIdleTime   time.Duration
+	HealthCheckPeriod time.Duration
+}
+
+// DefaultPostgresPoolConfig returns the default pgxpool settings for the telemetry runtime store.
+func DefaultPostgresPoolConfig() PostgresPoolConfig {
+	return PostgresPoolConfig{
+		MaxConns:          24,
+		MinConns:          4,
+		MaxConnLifetime:   30 * time.Minute,
+		MaxConnIdleTime:   5 * time.Minute,
+		HealthCheckPeriod: 30 * time.Second,
+	}
+}
+
+func normalizePostgresPoolConfig(poolConfig PostgresPoolConfig) (PostgresPoolConfig, error) {
+	if poolConfig.MaxConns < 0 {
+		return PostgresPoolConfig{}, errors.New("telemetry postgres maxConns must not be negative")
+	}
+	if poolConfig.MinConns < 0 {
+		return PostgresPoolConfig{}, errors.New("telemetry postgres minConns must not be negative")
+	}
+	if poolConfig.MaxConnLifetime < 0 {
+		return PostgresPoolConfig{}, errors.New("telemetry postgres maxConnLifetime must not be negative")
+	}
+	if poolConfig.MaxConnIdleTime < 0 {
+		return PostgresPoolConfig{}, errors.New("telemetry postgres maxConnIdleTime must not be negative")
+	}
+	if poolConfig.HealthCheckPeriod < 0 {
+		return PostgresPoolConfig{}, errors.New("telemetry postgres healthCheckPeriod must not be negative")
+	}
+	defaults := DefaultPostgresPoolConfig()
+	if poolConfig.MaxConns == 0 {
+		poolConfig.MaxConns = defaults.MaxConns
+	}
+	if poolConfig.MinConns == 0 {
+		poolConfig.MinConns = min(defaults.MinConns, poolConfig.MaxConns)
+	}
+	if poolConfig.MinConns > poolConfig.MaxConns {
+		return PostgresPoolConfig{}, errors.New("telemetry postgres minConns must not exceed maxConns")
+	}
+	if poolConfig.MaxConnLifetime == 0 {
+		poolConfig.MaxConnLifetime = defaults.MaxConnLifetime
+	}
+	if poolConfig.MaxConnIdleTime == 0 {
+		poolConfig.MaxConnIdleTime = defaults.MaxConnIdleTime
+	}
+	if poolConfig.HealthCheckPeriod == 0 {
+		poolConfig.HealthCheckPeriod = defaults.HealthCheckPeriod
+	}
+	return poolConfig, nil
+}
+
+func buildTelemetryPgxPoolConfig(databaseURL string, poolConfig PostgresPoolConfig) (*pgxpool.Config, error) {
+	normalized, err := normalizePostgresPoolConfig(poolConfig)
+	if err != nil {
+		return nil, err
+	}
 	config, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse telemetry runtime database URL: %w", err)
@@ -52,12 +116,27 @@ func OpenPostgresStore(ctx context.Context, databaseURL string) (*PostgresStore,
 	if config.ConnConfig.User != "s2_telemetry_service" {
 		return nil, errors.New("telemetry runtime database identity must be s2_telemetry_service")
 	}
-	config.MaxConns = 16
-	config.MinConns = 1
-	config.MaxConnLifetime = 30 * time.Minute
+	config.MaxConns = normalized.MaxConns
+	config.MinConns = normalized.MinConns
+	config.MaxConnLifetime = normalized.MaxConnLifetime
+	config.MaxConnIdleTime = normalized.MaxConnIdleTime
+	config.HealthCheckPeriod = normalized.HealthCheckPeriod
 	config.AfterConnect = func(ctx context.Context, connection *pgx.Conn) error {
 		_, err := connection.Exec(ctx, `SET ROLE s2_telemetry_runtime`)
 		return err
+	}
+	return config, nil
+}
+
+func OpenPostgresStore(ctx context.Context, databaseURL string) (*PostgresStore, error) {
+	return OpenPostgresStoreWithConfig(ctx, databaseURL, DefaultPostgresPoolConfig())
+}
+
+// OpenPostgresStoreWithConfig opens a PostgresStore with explicit pgxpool tuning.
+func OpenPostgresStoreWithConfig(ctx context.Context, databaseURL string, poolConfig PostgresPoolConfig) (*PostgresStore, error) {
+	config, err := buildTelemetryPgxPoolConfig(databaseURL, poolConfig)
+	if err != nil {
+		return nil, err
 	}
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
@@ -411,14 +490,8 @@ ORDER BY telemetry_key
 	return facts, nil
 }
 
-func persistCurrentState(ctx context.Context, tx pgx.Tx, evaluation CanonicalEvaluation, evaluatedAt time.Time) error {
-	snapshot := evaluation.Snapshot
-	presence := snapshot.Presence
-	lastKnown, err := nullableJSON(presence.LastKnown)
-	if err != nil {
-		return fmt.Errorf("encode last-known presence: %w", err)
-	}
-	_, err = tx.Exec(ctx, `
+const (
+	persistDevicePresenceSQL = `
 INSERT INTO telemetry_runtime.device_presence (
   device_id, business_revision, applicability, current_state, last_seen_at,
   evaluated_at, policy_revision, last_known, updated_at
@@ -432,31 +505,39 @@ ON CONFLICT (device_id) DO UPDATE SET
   policy_revision = EXCLUDED.policy_revision,
   last_known = EXCLUDED.last_known,
   updated_at = EXCLUDED.updated_at
-`, string(snapshot.DeviceId), int64(snapshot.BusinessRevision), string(presence.Applicability), nullablePresence(presence.CurrentState), nullableInstant(presence.LastSeenAt), evaluatedAt, nullablePolicyRevision(presence.PolicyRevision), lastKnown)
-	if err != nil {
-		return fmt.Errorf("persist current telemetry presence: %w", err)
-	}
+WHERE (
+  telemetry_runtime.device_presence.business_revision,
+  telemetry_runtime.device_presence.applicability,
+  telemetry_runtime.device_presence.current_state,
+  telemetry_runtime.device_presence.last_seen_at,
+  telemetry_runtime.device_presence.evaluated_at,
+  telemetry_runtime.device_presence.policy_revision,
+  telemetry_runtime.device_presence.last_known
+) IS DISTINCT FROM (
+  EXCLUDED.business_revision,
+  EXCLUDED.applicability,
+  EXCLUDED.current_state,
+  EXCLUDED.last_seen_at,
+  EXCLUDED.evaluated_at,
+  EXCLUDED.policy_revision,
+  EXCLUDED.last_known
+)
+`
 
-	for _, value := range snapshot.Values {
-		if value.Present == nil {
-			continue
-		}
-		_, err := tx.Exec(ctx, `
-UPDATE telemetry_runtime.latest_accepted_telemetry
-SET business_revision = $3, freshness = $4, policy_revision = $5, updated_at = $6
-WHERE device_id = $1::uuid AND telemetry_key = $2
-`, string(snapshot.DeviceId), string(value.Present.Key), int64(snapshot.BusinessRevision), value.Present.Freshness, int64(value.Present.PolicyRevision), evaluatedAt)
-		if err != nil {
-			return fmt.Errorf("persist latest telemetry evaluation: %w", err)
-		}
-	}
+	persistLatestEvaluationSQL = `
+UPDATE telemetry_runtime.latest_accepted_telemetry AS lat
+SET business_revision = $2,
+    freshness = upd.freshness,
+    policy_revision = upd.policy_revision,
+    updated_at = $3
+FROM unnest($4::text[], $5::text[], $6::bigint[]) AS upd(telemetry_key, freshness, policy_revision)
+WHERE lat.device_id = $1::uuid
+  AND lat.telemetry_key = upd.telemetry_key
+  AND (lat.business_revision, lat.freshness, lat.policy_revision)
+    IS DISTINCT FROM ($2, upd.freshness, upd.policy_revision)
+`
 
-	snapshotJSON, err := json.Marshal(snapshot)
-	if err != nil {
-		return fmt.Errorf("encode current telemetry snapshot: %w", err)
-	}
-	snapshotHash := sha256.Sum256(snapshotJSON)
-	_, err = tx.Exec(ctx, `
+	persistSnapshotSQL = `
 INSERT INTO telemetry_runtime.device_observation_snapshots (
   device_id, business_revision, evaluated_at, evaluation_availability,
   availability_reasons, telemetry_readiness, display_state, snapshot,
@@ -473,7 +554,127 @@ ON CONFLICT (device_id) DO UPDATE SET
   snapshot_sha256 = EXCLUDED.snapshot_sha256,
   state_sha256 = EXCLUDED.state_sha256,
   updated_at = EXCLUDED.updated_at
-`, string(snapshot.DeviceId), int64(snapshot.BusinessRevision), evaluatedAt, string(snapshot.EvaluationAvailability), availabilityStrings(snapshot.AvailabilityReasons), string(snapshot.TelemetryReadiness), nullableDisplay(snapshot.DisplayState), snapshotJSON, hex.EncodeToString(snapshotHash[:]), evaluation.StateDigest)
+WHERE (
+  telemetry_runtime.device_observation_snapshots.business_revision,
+  telemetry_runtime.device_observation_snapshots.evaluated_at,
+  telemetry_runtime.device_observation_snapshots.evaluation_availability,
+  telemetry_runtime.device_observation_snapshots.availability_reasons,
+  telemetry_runtime.device_observation_snapshots.telemetry_readiness,
+  telemetry_runtime.device_observation_snapshots.display_state,
+  telemetry_runtime.device_observation_snapshots.snapshot_sha256,
+  telemetry_runtime.device_observation_snapshots.state_sha256
+) IS DISTINCT FROM (
+  EXCLUDED.business_revision,
+  EXCLUDED.evaluated_at,
+  EXCLUDED.evaluation_availability,
+  EXCLUDED.availability_reasons,
+  EXCLUDED.telemetry_readiness,
+  EXCLUDED.display_state,
+  EXCLUDED.snapshot_sha256,
+  EXCLUDED.state_sha256
+)
+`
+)
+
+type latestEvaluationUpdate struct {
+	key            string
+	freshness      string
+	policyRevision int64
+}
+
+func collectLatestEvaluationUpdates(values []telemetryapi.TelemetryKeyState) ([]string, []string, []int64) {
+	byKey := make(map[string]latestEvaluationUpdate, len(values))
+	for _, value := range values {
+		if value.Present == nil {
+			continue
+		}
+		key := string(value.Present.Key)
+		byKey[key] = latestEvaluationUpdate{
+			key:            key,
+			freshness:      value.Present.Freshness,
+			policyRevision: int64(value.Present.PolicyRevision),
+		}
+	}
+	if len(byKey) == 0 {
+		return nil, nil, nil
+	}
+	ordered := make([]latestEvaluationUpdate, 0, len(byKey))
+	for _, item := range byKey {
+		ordered = append(ordered, item)
+	}
+	slices.SortFunc(ordered, func(left, right latestEvaluationUpdate) int {
+		return strings.Compare(left.key, right.key)
+	})
+	keys := make([]string, len(ordered))
+	freshness := make([]string, len(ordered))
+	policyRevisions := make([]int64, len(ordered))
+	for index, item := range ordered {
+		keys[index] = item.key
+		freshness[index] = item.freshness
+		policyRevisions[index] = item.policyRevision
+	}
+	return keys, freshness, policyRevisions
+}
+
+func persistCurrentState(ctx context.Context, tx pgx.Tx, evaluation CanonicalEvaluation, evaluatedAt time.Time) error {
+	snapshot := evaluation.Snapshot
+	presence := snapshot.Presence
+	lastKnown, err := nullableJSON(presence.LastKnown)
+	if err != nil {
+		return fmt.Errorf("encode last-known presence: %w", err)
+	}
+	_, err = tx.Exec(
+		ctx,
+		persistDevicePresenceSQL,
+		string(snapshot.DeviceId),
+		int64(snapshot.BusinessRevision),
+		string(presence.Applicability),
+		nullablePresence(presence.CurrentState),
+		nullableInstant(presence.LastSeenAt),
+		evaluatedAt,
+		nullablePolicyRevision(presence.PolicyRevision),
+		lastKnown,
+	)
+	if err != nil {
+		return fmt.Errorf("persist current telemetry presence: %w", err)
+	}
+
+	presentKeys, presentFreshness, presentPolicyRevisions := collectLatestEvaluationUpdates(snapshot.Values)
+	if len(presentKeys) > 0 {
+		_, err = tx.Exec(
+			ctx,
+			persistLatestEvaluationSQL,
+			string(snapshot.DeviceId),
+			int64(snapshot.BusinessRevision),
+			evaluatedAt,
+			presentKeys,
+			presentFreshness,
+			presentPolicyRevisions,
+		)
+		if err != nil {
+			return fmt.Errorf("persist latest telemetry evaluation: %w", err)
+		}
+	}
+
+	snapshotJSON, err := json.Marshal(snapshot)
+	if err != nil {
+		return fmt.Errorf("encode current telemetry snapshot: %w", err)
+	}
+	snapshotHash := sha256.Sum256(snapshotJSON)
+	_, err = tx.Exec(
+		ctx,
+		persistSnapshotSQL,
+		string(snapshot.DeviceId),
+		int64(snapshot.BusinessRevision),
+		evaluatedAt,
+		string(snapshot.EvaluationAvailability),
+		availabilityStrings(snapshot.AvailabilityReasons),
+		string(snapshot.TelemetryReadiness),
+		nullableDisplay(snapshot.DisplayState),
+		snapshotJSON,
+		hex.EncodeToString(snapshotHash[:]),
+		evaluation.StateDigest,
+	)
 	if err != nil {
 		return fmt.Errorf("persist current telemetry snapshot: %w", err)
 	}
