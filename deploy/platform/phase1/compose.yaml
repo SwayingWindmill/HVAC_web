@@ -451,6 +451,7 @@ services:
       TELEMETRY_ALARM_EVALUATION_ENABLED: "true"
       TELEMETRY_ALARM_EVALUATION_URL: https://alarm-service:8448/internal/v1/alarm/evaluations/telemetry
       TELEMETRY_ALARM_SERVER_NAME: alarm-service
+      TELEMETRY_RETENTION_CLICKHOUSE_USER: ${TELEMETRY_RETENTION_CLICKHOUSE_USER:-telemetry_retention_writer}
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
@@ -461,6 +462,7 @@ services:
         condition: service_healthy
         required: false
     expose: ["8446", "19086"]
+    stop_grace_period: 30s
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19086/health/ready"]
       interval: 10s
@@ -729,6 +731,7 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       SSL_CERT_FILE: ${SSL_CERT_FILE:-}
       COMMAND_RUNTIME_IN_PROCESS_ENABLED: "true"
+      CONNECTIVITY_BATCH_WINDOW: ${CONNECTIVITY_BATCH_WINDOW:-100ms}
       CONNECTIVITY_DATABASE_URL: ${CONNECTIVITY_DATABASE_URL:-}
       CONNECTIVITY_OVERFLOW_DIR: ${CONNECTIVITY_OVERFLOW_DIR:-/var/lib/hvac/connectivity-spool}
       GATEWAY_BROKER_URL: ${GATEWAY_BROKER_URL:-tls://localhost:8883}
@@ -740,6 +743,7 @@ services:
       phase1-schema-preflight:
         condition: service_completed_successfully
     expose: ["19094", "8448"]
+    stop_grace_period: 30s
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19094/health/ready"]
       interval: 10s
@@ -984,7 +988,7 @@ services:
     profiles: ["local-redis"]
     image: redis:7.4.2-alpine
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "no", "--save", "", "--maxmemory-policy", "noeviction"]
+    command: ["redis-server", "--appendonly", "no", "--save", "", "--maxmemory", "${REDIS_MAXMEMORY:-384mb}", "--maxmemory-policy", "noeviction"]
     volumes:
       - ${REDIS_DATA_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/data/redis}:/data
     healthcheck:
