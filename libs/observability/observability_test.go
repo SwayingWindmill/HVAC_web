@@ -419,10 +419,10 @@ func TestAsyncExporterRecoversFromDelegatePanicAndContinues(t *testing.T) {
 	var logs syncBuffer
 	delegate := &panicOnceExporter{}
 	runtime := NewRuntime(RuntimeConfig{
-		Service:  "gateway",
-		Exporter: delegate,
+		Service:   "gateway",
+		Exporter:  delegate,
 		QueueSize: 8,
-		Logger:   NewJSONLogger(&logs, slog.LevelInfo),
+		Logger:    NewJSONLogger(&logs, slog.LevelInfo),
 	})
 
 	_ = runtime.async.Export(context.Background(), []SpanData{{Service: "gateway", Name: "first"}})

@@ -20,14 +20,14 @@ import (
 )
 
 type fakeForecastQueue struct {
-	mu               sync.Mutex
-	renewFn          func(context.Context, schedulerjob.Job, time.Duration, time.Time) (bool, error)
-	failCalls        int
-	completeCalls    int
-	lastFailCode     string
-	lastFailRetry    bool
-	lastFinalizeErr  error
-	lastCompleteErr  error
+	mu              sync.Mutex
+	renewFn         func(context.Context, schedulerjob.Job, time.Duration, time.Time) (bool, error)
+	failCalls       int
+	completeCalls   int
+	lastFailCode    string
+	lastFailRetry   bool
+	lastFinalizeErr error
+	lastCompleteErr error
 }
 
 func (f *fakeForecastQueue) Claim(context.Context, string, int, time.Duration, time.Time) ([]schedulerjob.Job, error) {

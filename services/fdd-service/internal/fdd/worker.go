@@ -12,9 +12,9 @@ import (
 
 // An evaluation is one ClickHouse read and one Postgres write; a minute's lease covers it.
 const (
-	evaluationLease       = time.Minute
-	finalizeTimeout       = 5 * time.Second
-	defaultJobTimeout     = time.Minute
+	evaluationLease   = time.Minute
+	finalizeTimeout   = 5 * time.Second
+	defaultJobTimeout = time.Minute
 )
 
 type evaluationJobQueue interface {
