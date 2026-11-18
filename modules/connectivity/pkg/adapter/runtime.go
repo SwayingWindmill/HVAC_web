@@ -898,11 +898,12 @@ func (runtime *Runtime) runWorkerLoop(ctx context.Context) {
 		func() {
 			var currentGateway string
 			var currentMailbox *gatewayMailbox
-			var currentEndSeq int64
+			var currentLiveEndSeq int64
+			var currentReplayEndSeq int64
 			defer observability.Recover(runtime.logger, runtime.metrics, "connectivity.uplink_worker", func(any) {
 				panicked = true
 				if currentGateway != "" {
-					runtime.finishGatewayPanic(ctx, currentGateway, currentMailbox, currentEndSeq)
+					runtime.finishGatewayPanic(ctx, currentGateway, currentMailbox, currentLiveEndSeq, currentReplayEndSeq)
 				}
 			})
 			for ctx.Err() == nil {
@@ -912,11 +913,13 @@ func (runtime *Runtime) runWorkerLoop(ctx context.Context) {
 				}
 				currentGateway = turn.gatewayID
 				currentMailbox = turn.mailbox
-				currentEndSeq = 0
-				runtime.runGatewayTurn(ctx, turn, &currentEndSeq)
+				currentLiveEndSeq = 0
+				currentReplayEndSeq = 0
+				runtime.runGatewayTurnTracked(ctx, turn, &currentLiveEndSeq, &currentReplayEndSeq)
 				currentGateway = ""
 				currentMailbox = nil
-				currentEndSeq = 0
+				currentLiveEndSeq = 0
+				currentReplayEndSeq = 0
 			}
 		}()
 		if !panicked {
@@ -1093,11 +1096,13 @@ func (runtime *Runtime) recoverOverflowMailboxes(workerCtx context.Context) erro
 		return fmt.Errorf("recover MQTT overflow spools: %w", err)
 	}
 	now := runtime.now()
+	autoBackfillLag := runtime.effectiveAutoBackfillLag()
 	for gatewayID, mb := range recovered {
 		if _, ok := runtime.states[gatewayID]; ok {
 			mb.close(false)
 			continue
 		}
+		mb.autoBackfillLag = autoBackfillLag
 		state := &gatewayMailboxState{
 			mailbox:    mb,
 			lastActive: now,
@@ -1131,13 +1136,21 @@ func (runtime *Runtime) ensureOverflowDirLocked() error {
 	return nil
 }
 
-func mailboxHasUnconsumed(mb *gatewayMailbox) bool {
-	if mb == nil {
-		return false
+func (runtime *Runtime) effectiveAutoBackfillLag() time.Duration {
+	if runtime.processor != nil && runtime.processor.autoBackfillLagSet {
+		return runtime.processor.autoBackfillLag
 	}
-	mb.mu.Lock()
-	defer mb.mu.Unlock()
-	return mb.memCount+mb.promoting+mb.overflowLenLocked() > 0 || mb.activeBytesLocked() > 0
+	if runtime.config.AutoBackfillLagThreshold > 0 {
+		return runtime.config.AutoBackfillLagThreshold
+	}
+	if runtime.processor != nil && runtime.processor.autoBackfillLag > 0 {
+		return runtime.processor.autoBackfillLag
+	}
+	return 0
+}
+
+func mailboxHasUnconsumed(mb *gatewayMailbox) bool {
+	return mb.hasUnconsumed()
 }
 
 func (runtime *Runtime) closeMailboxes() {
@@ -1250,6 +1263,7 @@ func (runtime *Runtime) acquireGatewayMailbox(gatewayID string) (*gatewayMailbox
 		runtime.config.effectiveOverflowMaxBytes(),
 		runtime.overflowDir,
 	)
+	mailbox.autoBackfillLag = runtime.effectiveAutoBackfillLag()
 	state := &gatewayMailboxState{
 		mailbox:    mailbox,
 		enqueuers:  1,
@@ -1418,6 +1432,10 @@ func (runtime *Runtime) stopAllGatewayTimers() {
 }
 
 func (runtime *Runtime) runGatewayTurn(ctx context.Context, turn gatewayTurn, activeEndSeq *int64) {
+	runtime.runGatewayTurnTracked(ctx, turn, activeEndSeq, nil)
+}
+
+func (runtime *Runtime) runGatewayTurnTracked(ctx context.Context, turn gatewayTurn, activeLiveEndSeq, activeReplayEndSeq *int64) {
 	batch := turn.pendingBatch
 	messages := turn.pendingMsgs
 	attempt := turn.attempt
@@ -1463,11 +1481,11 @@ func (runtime *Runtime) runGatewayTurn(ctx context.Context, turn gatewayTurn, ac
 	}
 
 	for len(batch) > 0 {
-		*activeEndSeq = batch[len(batch)-1].endSeq
+		updateActiveEndSeqs(batch, activeLiveEndSeq, activeReplayEndSeq)
 		currentAttempt := attempt + 1
 		consumed, delay, err := runtime.processPrefix(ctx, turn.gatewayID, batch, messages, currentAttempt)
 		if consumed > 0 && turn.mailbox != nil {
-			turn.mailbox.markConsumed(batch[consumed-1].endSeq)
+			turn.mailbox.markBatchConsumed(batch[:consumed])
 			memDepth, overflowDepth := turn.mailbox.depth()
 			runtime.recordQueueDepth(turn.gatewayID, memDepth+overflowDepth)
 			runtime.recordOverflowDepth(turn.gatewayID, overflowDepth)
@@ -1485,8 +1503,30 @@ func (runtime *Runtime) runGatewayTurn(ctx context.Context, turn gatewayTurn, ac
 		messages = messages[consumed:]
 		attempt = 0
 	}
-	*activeEndSeq = 0
+	setOptionalSeq(activeLiveEndSeq, 0)
+	setOptionalSeq(activeReplayEndSeq, 0)
 	runtime.finishGatewaySuccess(ctx, turn.gatewayID)
+}
+
+func updateActiveEndSeqs(batch []queuedPublish, liveTarget, replayTarget *int64) {
+	var liveEnd, replayEnd int64
+	for _, item := range batch {
+		if item.isReplay {
+			if item.endSeq > replayEnd {
+				replayEnd = item.endSeq
+			}
+		} else if item.endSeq > liveEnd {
+			liveEnd = item.endSeq
+		}
+	}
+	setOptionalSeq(liveTarget, liveEnd)
+	setOptionalSeq(replayTarget, replayEnd)
+}
+
+func setOptionalSeq(target *int64, val int64) {
+	if target != nil {
+		*target = val
+	}
 }
 
 func (runtime *Runtime) finishGatewaySuccess(ctx context.Context, gatewayID string) {
@@ -1523,10 +1563,10 @@ func (runtime *Runtime) finishGatewayCancelled(gatewayID string) {
 	runtime.notifyDrain()
 }
 
-func (runtime *Runtime) finishGatewayPanic(ctx context.Context, gatewayID string, mailbox *gatewayMailbox, endSeq int64) {
+func (runtime *Runtime) finishGatewayPanic(ctx context.Context, gatewayID string, mailbox *gatewayMailbox, liveEndSeq, replayEndSeq int64) {
 	runtime.recordProcessingFailure(errors.New("MQTT uplink worker panicked"))
-	if mailbox != nil && endSeq > 0 {
-		mailbox.markConsumed(endSeq)
+	if mailbox != nil && (liveEndSeq > 0 || replayEndSeq > 0) {
+		mailbox.markLaneConsumed(liveEndSeq, replayEndSeq)
 		memDepth, overflowDepth := mailbox.depth()
 		runtime.recordQueueDepth(gatewayID, memDepth+overflowDepth)
 		runtime.recordOverflowDepth(gatewayID, overflowDepth)
