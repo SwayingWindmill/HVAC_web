@@ -258,6 +258,9 @@ function replayForecast(forecast: Json, now: string): Json {
 
 export class Gateway {
   principalOverride: Json | null = null;
+  readonly tenantPrincipals = new Map<string, Json>();
+  readonly tenantSites = new Map<string, Json[]>();
+  readonly tenantSwitchRequests: string[] = [];
   assetModel: Json = fixture<Json>('asset-model.json');
   readonly alarms = fixture<Json[]>('alarms.json');
   readonly alarmEvaluations: Record<string, Json[]> = {};
@@ -1086,7 +1089,29 @@ export class Gateway {
       return { status: 204, body: undefined };
     }
     if (body!.roleKey === 'admin' && body!.siteId) return refuse(400, 'USER_ADMIN_REQUEST_INVALID');
-    member.assignments.push({ bindingId: this.nextUserAdminId('2200'), roleKey: body!.roleKey, ...(body!.siteId ? { siteId: body!.siteId } : {}) });
+    if (body?.validTo !== undefined) {
+      if (typeof body.validTo !== 'string' || !Number.isFinite(Date.parse(body.validTo)) || Date.parse(body.validTo) <= Date.now()) {
+        return {
+          status: 400,
+          body: {
+            type: 'about:blank',
+            title: 'Invalid role assignment request',
+            status: 400,
+            detail: 'validTo must be a future RFC3339 timestamp.',
+            instance: path,
+            code: 'USER_ADMIN_REQUEST_INVALID',
+            traceId: '0'.repeat(32),
+            retryable: false,
+          },
+        };
+      }
+    }
+    member.assignments.push({
+      bindingId: this.nextUserAdminId('2200'),
+      roleKey: body!.roleKey,
+      ...(body!.siteId ? { siteId: body!.siteId } : {}),
+      ...(body?.validTo ? { validTo: body.validTo } : {}),
+    });
     return { status: 204, body: undefined };
   }
 
@@ -1274,6 +1299,52 @@ export class Gateway {
   private respond(method: string, path: string, query: URLSearchParams, body: Json | null, csrfToken?: string): { status?: number; body: unknown } | undefined {
     const now = new Date().toISOString();
     if (method === 'GET' && path === '/api/v1/principal') return { body: this.principalOverride ?? principal };
+    if (method === 'POST' && path === '/api/v1/auth/session/tenant') {
+      const activePrincipal = this.principalOverride ?? principal;
+      const expectedCsrf = activePrincipal.session?.csrfToken ?? principal.session.csrfToken;
+      if (csrfToken !== expectedCsrf) {
+        return {
+          status: 403,
+          body: {
+            type: 'about:blank',
+            title: 'CSRF validation failed',
+            status: 403,
+            detail: 'CSRF token mismatch.',
+            instance: path,
+            code: 'CSRF_TOKEN_INVALID',
+            traceId: '0'.repeat(32),
+            retryable: false,
+          },
+        };
+      }
+      const targetTenantId = typeof body?.tenantId === 'string' ? body.tenantId : '';
+      this.tenantSwitchRequests.push(targetTenantId);
+      const available = Array.isArray(activePrincipal.availableTenants) ? activePrincipal.availableTenants : [];
+      const targetTenant = available.find((item: Json) => item.tenantId === targetTenantId);
+      if (!targetTenant) {
+        return {
+          status: 403,
+          body: {
+            type: 'about:blank',
+            title: 'Tenant switch forbidden',
+            status: 403,
+            detail: 'Principal does not hold an active membership for target tenant.',
+            instance: path,
+            code: 'TENANT_SWITCH_FORBIDDEN',
+            traceId: '0'.repeat(32),
+            retryable: false,
+          },
+        };
+      }
+      const customPrincipal = this.tenantPrincipals.get(targetTenantId);
+      const nextPrincipal = customPrincipal
+        ? { ...customPrincipal, availableTenants: available }
+        : { ...activePrincipal, context: { ...activePrincipal.context, tenantId: targetTenantId } };
+      this.principalOverride = nextPrincipal;
+      const nextSites = this.tenantSites.get(targetTenantId);
+      if (nextSites) this.sites = [...nextSites];
+      return { body: nextPrincipal };
+    }
     if (method === 'GET' && path === '/api/v1/platform/status') return { body: fixture('platform-status.json') };
     if (method === 'POST' && path === '/api/v1/audit/search') {
       const activePrincipal = this.principalOverride ?? principal;

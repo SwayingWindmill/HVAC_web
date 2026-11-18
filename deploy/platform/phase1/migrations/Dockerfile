@@ -183,6 +183,7 @@ COPY infra/registry/postgres/init/optimization-safety-guardrails.sql /opt/hvac/r
 COPY infra/registry/postgres/init/optimization-shadow-and-trace.sql /opt/hvac/repo/infra/registry/postgres/init/optimization-shadow-and-trace.sql
 COPY infra/registry/postgres/init/optimization-governance-flywheel.sql /opt/hvac/repo/infra/registry/postgres/init/optimization-governance-flywheel.sql
 COPY infra/registry/postgres/init/metric-backfill-recalc-job-grants.sql /opt/hvac/repo/infra/registry/postgres/init/metric-backfill-recalc-job-grants.sql
+COPY infra/registry/postgres/init/iam-expired-binding-revocation.sql /opt/hvac/repo/infra/registry/postgres/init/iam-expired-binding-revocation.sql
 COPY infra/telemetry/postgres/init/telemetry-runtime-unnest-and-indexes.sql /opt/hvac/repo/infra/telemetry/postgres/init/telemetry-runtime-unnest-and-indexes.sql
 COPY infra/telemetry/postgres/init/telemetry-accepted-point-sample-index.sql /opt/hvac/repo/infra/telemetry/postgres/init/telemetry-accepted-point-sample-index.sql
 COPY infra/durability/postgres/init/operations-domain-audit-ledger.sql /opt/hvac/repo/infra/durability/postgres/init/operations-domain-audit-ledger.sql

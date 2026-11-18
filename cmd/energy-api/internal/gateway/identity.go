@@ -348,7 +348,78 @@ func (h *handler) GetCurrentPrincipal(writer http.ResponseWriter, request *http.
 		writeIdentityFailure(writer, request, *failure)
 		return
 	}
-	writeJSON(writer, http.StatusOK, platformapi.CurrentPrincipalResponse{PrincipalID: principal.PrincipalID, Principal: toPublicUser(principal.Principal), Context: toPublicContext(principal.Context), Authorization: toPublicAuthorization(principal.Authorization), Session: platformapi.SessionView{ID: session.ID, ExpiresAt: session.ExpiresAt.UTC().Format(time.RFC3339), IdleTimeoutMS: int(h.identity.config.IdleTTL.Milliseconds()), CSRFToken: session.CSRFToken, RevocationObjectiveMS: int(h.identity.config.RevocationObjective.Milliseconds()), LastAuditMessageID: session.LastAuditMessageID}})
+	writeJSON(writer, http.StatusOK, h.publicPrincipalResponse(session, principal))
+}
+
+func (h *handler) SwitchTenant(writer http.ResponseWriter, request *http.Request) {
+	session, failure := h.identitySession(request)
+	if failure != nil {
+		writeIdentityFailure(writer, request, *failure)
+		return
+	}
+	if failure := h.identity.validateStateChange(request, session, request.Header.Get("X-CSRF-Token")); failure != nil {
+		writeIdentityFailure(writer, request, *failure)
+		return
+	}
+	request.Body = http.MaxBytesReader(writer, request.Body, 4<<10)
+	var input platformapi.SwitchTenantRequest
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil || ensureJSONEOF(decoder) != nil || !isLowerUUIDv7(input.TenantID) {
+		writeIdentityFailure(writer, request, identityFailure{400, "TENANT_SWITCH_REQUEST_INVALID", "Tenant switch invalid", "The request must identify one active tenant.", false})
+		return
+	}
+	currentPrincipal, failure := h.identity.fetchPrincipal(request.Context(), session)
+	if failure != nil {
+		writeIdentityFailure(writer, request, *failure)
+		return
+	}
+	authorized := false
+	for _, tenant := range currentPrincipal.AvailableTenants {
+		if tenant.TenantID == input.TenantID {
+			authorized = true
+			break
+		}
+	}
+	if !authorized {
+		writeIdentityFailure(writer, request, identityFailure{403, "TENANT_SWITCH_FORBIDDEN", "Tenant switch forbidden", "The authenticated account is not an active member of the requested tenant.", false})
+		return
+	}
+	priorTenantID := session.TenantID
+	updatedSession, err := h.identity.store.SwitchTenant(request.Context(), session.ID, input.TenantID, h.identity.mutationContext(request, "SESSION_TENANT_SWITCHED"))
+	if err != nil {
+		h.identity.writeSessionMutationError(writer, request, err)
+		return
+	}
+	session.Session = updatedSession
+	if priorTenantID != "" && priorTenantID != input.TenantID {
+		h.revokeTelemetrySessionSubscriptions(request.Context(), priorTenantID, session.ID, "SESSION_TENANT_SWITCHED")
+	}
+	switchedPrincipal, failure := h.identity.fetchPrincipal(request.Context(), session)
+	if failure != nil {
+		writeIdentityFailure(writer, request, *failure)
+		return
+	}
+	writer.Header().Set("X-Audit-Message-ID", updatedSession.LastAuditMessageID)
+	writeJSON(writer, http.StatusOK, h.publicPrincipalResponse(session, switchedPrincipal))
+}
+
+func (h *handler) publicPrincipalResponse(session bffSession, principal identitycontext.InternalPrincipalResponse) platformapi.CurrentPrincipalResponse {
+	return platformapi.CurrentPrincipalResponse{
+		PrincipalID:   principal.PrincipalID,
+		Principal:     toPublicUser(principal.Principal),
+		Context:       toPublicContext(principal.Context),
+		Authorization: toPublicAuthorization(principal.Authorization),
+		Session: platformapi.SessionView{
+			ID:                    session.ID,
+			ExpiresAt:             session.ExpiresAt.UTC().Format(time.RFC3339),
+			IdleTimeoutMS:         int(h.identity.config.IdleTTL.Milliseconds()),
+			CSRFToken:             session.CSRFToken,
+			RevocationObjectiveMS: int(h.identity.config.RevocationObjective.Milliseconds()),
+			LastAuditMessageID:    session.LastAuditMessageID,
+		},
+		AvailableTenants: toPublicTenants(principal.AvailableTenants),
+	}
 }
 
 func (h *handler) Logout(writer http.ResponseWriter, request *http.Request, params platformapi.LogoutParams) {
@@ -911,4 +982,15 @@ func toPublicAuthorization(value identitycontext.EffectiveAuthorization) platfor
 		capabilities[index] = platformapi.Capability(capability)
 	}
 	return platformapi.EffectiveAuthorization{CapabilitySetVersion: value.CapabilitySetVersion, PolicyRevision: value.PolicyRevision, Capabilities: capabilities}
+}
+func toPublicTenants(tenants []identitycontext.TenantMembershipSummary) []platformapi.TenantMembershipSummary {
+	result := make([]platformapi.TenantMembershipSummary, len(tenants))
+	for index, tenant := range tenants {
+		result[index] = platformapi.TenantMembershipSummary{
+			TenantID:    tenant.TenantID,
+			Code:        tenant.Code,
+			DisplayName: tenant.DisplayName,
+		}
+	}
+	return result
 }

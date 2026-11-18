@@ -362,6 +362,14 @@ func applyRoleBinding(ctx context.Context, tx pgx.Tx, tenantID string, request A
 	if request.ValidFrom.IsZero() {
 		validFrom = now.UTC()
 	}
+	var validTo *time.Time
+	if request.ValidTo != nil {
+		utc := request.ValidTo.UTC()
+		if !utc.After(validFrom) {
+			return "", 0, errors.New("role binding mutation is invalid: validTo must be in the future")
+		}
+		validTo = &utc
+	}
 	var id string
 	var revision int64
 	err := tx.QueryRow(ctx, `SELECT id::text,revision FROM iam.role_bindings WHERE tenant_id=$1::uuid AND principal_id=$2::uuid AND role_template_id=$3::uuid AND site_id IS NOT DISTINCT FROM NULLIF($4,'')::uuid FOR UPDATE`, tenantID, request.PrincipalID, request.RoleTemplateID, request.SiteID).Scan(&id, &revision)
@@ -373,7 +381,7 @@ func applyRoleBinding(ctx context.Context, tx pgx.Tx, tenantID string, request A
 		if err != nil {
 			return "", 0, err
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO iam.role_bindings (id,tenant_id,principal_id,role_template_id,site_id,status,valid_from,valid_to,revision,created_at,updated_at) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,NULLIF($5,'')::uuid,$6,$7,$8,1,$9,$9)`, id, tenantID, request.PrincipalID, request.RoleTemplateID, request.SiteID, request.Status, validFrom, request.ValidTo, now.UTC())
+		_, err = tx.Exec(ctx, `INSERT INTO iam.role_bindings (id,tenant_id,principal_id,role_template_id,site_id,status,valid_from,valid_to,revision,created_at,updated_at) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,NULLIF($5,'')::uuid,$6,$7,$8,1,$9,$9)`, id, tenantID, request.PrincipalID, request.RoleTemplateID, request.SiteID, request.Status, validFrom, validTo, now.UTC())
 		return id, 1, err
 	}
 	if err != nil {
@@ -383,7 +391,7 @@ func applyRoleBinding(ctx context.Context, tx pgx.Tx, tenantID string, request A
 		return "", 0, ErrAdminRevisionConflict
 	}
 	revision++
-	_, err = tx.Exec(ctx, `UPDATE iam.role_bindings SET status=$3,valid_from=$4,valid_to=$5,revision=$6,updated_at=$7 WHERE id=$1::uuid AND tenant_id=$2::uuid`, id, tenantID, request.Status, validFrom, request.ValidTo, revision, now.UTC())
+	_, err = tx.Exec(ctx, `UPDATE iam.role_bindings SET status=$3,valid_from=$4,valid_to=$5,revision=$6,updated_at=$7 WHERE id=$1::uuid AND tenant_id=$2::uuid`, id, tenantID, request.Status, validFrom, validTo, revision, now.UTC())
 	return id, revision, err
 }
 

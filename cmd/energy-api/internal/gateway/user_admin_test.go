@@ -488,3 +488,32 @@ func TestDirectDirectoryDisableOrLockRevokesSessionAndRejects(t *testing.T) {
 		t.Fatalf("expected ErrUserNotFound guard to keep unseeded test session valid, got %d", okResp.StatusCode)
 	}
 }
+
+func TestUserAdminSupportsFutureValidToAndRejectsPastOrMalformedExpiry(t *testing.T) {
+	harness, fakeIAM, _ := newUserAdminHarness(t)
+	admin := harness.browserClient(t)
+	principal, _ := loginAndReadPrincipal(t, admin, harness.gatewayURL, "admin")
+
+	past := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)
+	pastResp := postAsUser(t, admin, harness, principal.Session.CSRFToken, "/api/v1/iam/members/"+userAdminMemberID+"/assignments",
+		`{"roleKey":"operator","siteId":"`+userAdminSiteID+`","validTo":"`+past+`"}`)
+	assertProblemCode(t, pastResp, http.StatusBadRequest, "USER_ADMIN_REQUEST_INVALID")
+	pastResp.Body.Close()
+
+	malformedResp := postAsUser(t, admin, harness, principal.Session.CSRFToken, "/api/v1/iam/members/"+userAdminMemberID+"/assignments",
+		`{"roleKey":"operator","siteId":"`+userAdminSiteID+`","validTo":"not-a-timestamp"}`)
+	assertProblemCode(t, malformedResp, http.StatusBadRequest, "USER_ADMIN_REQUEST_INVALID")
+	malformedResp.Body.Close()
+
+	future := time.Now().UTC().Add(4 * time.Hour).Truncate(time.Second).Format(time.RFC3339)
+	okResp := postAsUser(t, admin, harness, principal.Session.CSRFToken, "/api/v1/iam/members/"+userAdminMemberID+"/assignments",
+		`{"roleKey":"operator","siteId":"`+userAdminSiteID+`","validTo":"`+future+`"}`)
+	okResp.Body.Close()
+	if okResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("assign temporary role status = %d, want 204", okResp.StatusCode)
+	}
+	mutation := fakeIAM.lastMutation(t)
+	if mutation["validTo"] == nil {
+		t.Fatalf("expected validTo forwarded to IAM mutation: %#v", mutation)
+	}
+}

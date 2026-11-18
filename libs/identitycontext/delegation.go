@@ -60,11 +60,18 @@ type PrincipalContext struct {
 	DelegationExpiresAt       string           `json:"delegationExpiresAt"`
 }
 
+type TenantMembershipSummary struct {
+	TenantID    string `json:"tenantId"`
+	Code        string `json:"code"`
+	DisplayName string `json:"displayName"`
+}
+
 type InternalPrincipalResponse struct {
-	PrincipalID   string                 `json:"principalId"`
-	Principal     UserPrincipal          `json:"principal"`
-	Context       PrincipalContext       `json:"context"`
-	Authorization EffectiveAuthorization `json:"authorization"`
+	PrincipalID      string                    `json:"principalId"`
+	Principal        UserPrincipal             `json:"principal"`
+	Context          PrincipalContext          `json:"context"`
+	Authorization    EffectiveAuthorization    `json:"authorization"`
+	AvailableTenants []TenantMembershipSummary `json:"availableTenants,omitempty"`
 }
 
 type tenantContextKey struct{}
@@ -88,6 +95,17 @@ func (response InternalPrincipalResponse) Validate() error {
 	}
 	if strings.TrimSpace(response.Context.TenantID) == "" || strings.TrimSpace(response.Context.PolicyRevision) == "" {
 		return errors.New("principal context is incomplete")
+	}
+	seenTenants := make(map[string]struct{}, len(response.AvailableTenants))
+	for _, tenant := range response.AvailableTenants {
+		tenantID := strings.TrimSpace(tenant.TenantID)
+		if tenantID == "" || strings.TrimSpace(tenant.DisplayName) == "" {
+			return errors.New("available tenant summary is incomplete")
+		}
+		if _, duplicate := seenTenants[tenantID]; duplicate {
+			return errors.New("available tenants must not repeat")
+		}
+		seenTenants[tenantID] = struct{}{}
 	}
 	return response.Authorization.Validate()
 }

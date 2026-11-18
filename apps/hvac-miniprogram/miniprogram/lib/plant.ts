@@ -396,6 +396,10 @@ type ReadClient = Pick<Gateway, 'get'>;
 
 let cachedModel: { readonly siteId: string; readonly client: ReadClient; readonly model: AssetModel } | null = null;
 
+export function clearAssetModelCache(): void {
+  cachedModel = null;
+}
+
 export async function readAssetModel(client: ReadClient, siteId: string, fresh: boolean): Promise<AssetModel> {
   if (!fresh && cachedModel?.siteId === siteId && cachedModel.client === client) return cachedModel.model;
   const model = await client.get<AssetModel>(`/api/v1/sites/${siteId}/asset-model`);

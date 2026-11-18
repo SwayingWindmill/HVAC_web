@@ -22,13 +22,58 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { PASSWORD_HINT } from '@/features/account/password';
 import { ROLE_SUMMARIES, roleLabel } from '@/lib/role-labels';
 import { userAdminApi, userAdminErrorMessage, userAdminKey, userAdminQuery } from './user-admin-api';
-import { resolveMemberTwoFactorDisplay } from './user-admin-model';
+import {
+  ASSIGNMENT_VALIDITY_OPTIONS,
+  type AssignmentValidityPreset,
+  defaultCustomValidToInput,
+  formatAssignmentValidity,
+  resolveAssignmentValidTo,
+  resolveMemberTwoFactorDisplay,
+} from './user-admin-model';
 
 interface SiteOption { readonly id: string; readonly displayName: string }
 interface RoleScope { roleKey: BuiltInRoleKey | ''; siteId: string }
 
 const ALL_SITES = 'all';
 const EMPTY_SCOPE: RoleScope = { roleKey: '', siteId: ALL_SITES };
+
+function useRoleScopeValidity() {
+  const [preset, setPreset] = useState<AssignmentValidityPreset>('permanent');
+  const [customValidTo, setCustomValidTo] = useState('');
+  const [error, setError] = useState<string | undefined>(undefined);
+
+  const onPresetChange = (nextPreset: AssignmentValidityPreset) => {
+    setPreset(nextPreset);
+    setError(undefined);
+    if (nextPreset === 'custom' && !customValidTo) {
+      setCustomValidTo(defaultCustomValidToInput());
+    }
+  };
+
+  const onCustomValidToChange = (nextValue: string) => {
+    setCustomValidTo(nextValue);
+    setError(undefined);
+  };
+
+  const resolve = (): { readonly ok: true; readonly validTo?: string } | { readonly ok: false } => {
+    const result = resolveAssignmentValidTo(preset, customValidTo);
+    if (result.error) {
+      setError(result.error);
+      return { ok: false };
+    }
+    return { ok: true, validTo: result.validTo };
+  };
+
+  const reset = () => {
+    setPreset('permanent');
+    setCustomValidTo('');
+    setError(undefined);
+  };
+
+  return { preset, customValidTo, error, onPresetChange, onCustomValidToChange, resolve, reset };
+}
+
+type RoleScopeValidity = ReturnType<typeof useRoleScopeValidity>;
 
 const clock = (value: string) => new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value));
 const scopeOf = (siteId: string) => (siteId === ALL_SITES ? {} : { siteId });
@@ -124,12 +169,18 @@ export function UserAdministration({ csrfToken, sites }: { readonly csrfToken: s
                   <TableCell>
                     {member.assignments.length === 0 ? <span className="text-muted-foreground">没有角色，登录后看不到任何数据</span> : (
                       <span className="flex flex-wrap gap-1.5">
-                        {member.assignments.map((assignment) => (
-                          <span key={assignment.bindingId} className="inline-flex h-6 items-center rounded-md border px-2 text-xs">
-                            <span className="font-medium">{roleLabel(assignment.roleKey)}</span>
-                            <span className="ml-1.5 text-muted-foreground">{siteName(assignment.siteId)}</span>
-                          </span>
-                        ))}
+                        {member.assignments.map((assignment) => {
+                          const validity = formatAssignmentValidity(assignment.validTo);
+                          return (
+                            <span key={assignment.bindingId} className="inline-flex h-6 items-center rounded-md border px-2 text-xs">
+                              <span className="font-medium">{roleLabel(assignment.roleKey)}</span>
+                              <span className="ml-1.5 text-muted-foreground">{siteName(assignment.siteId)}</span>
+                              <span className={validity.temporary ? 'ml-1.5 rounded bg-muted px-1 text-[11px] font-medium text-foreground' : 'ml-1.5 text-muted-foreground'}>
+                                {validity.label}
+                              </span>
+                            </span>
+                          );
+                        })}
                       </span>
                     )}
                   </TableCell>
@@ -185,10 +236,20 @@ export function UserAdministration({ csrfToken, sites }: { readonly csrfToken: s
 }
 
 /** A Role and where it applies; a Role with Tenant-scoped capabilities always covers every Site. */
-function RoleScopeFields({ roleKey, siteId, roleError, onRoleChange, onSiteChange, roles, sites }: {
+function RoleScopeFields({
+  roleKey,
+  siteId,
+  roleError,
+  validity,
+  onRoleChange,
+  onSiteChange,
+  roles,
+  sites,
+}: {
   readonly roleKey: string;
   readonly siteId: string;
   readonly roleError?: string;
+  readonly validity: RoleScopeValidity;
   readonly onRoleChange: (value: string) => void;
   readonly onSiteChange: (value: string) => void;
   readonly roles: readonly UserAdminRole[];
@@ -196,34 +257,66 @@ function RoleScopeFields({ roleKey, siteId, roleError, onRoleChange, onSiteChang
 }) {
   const tenantScoped = roles.find((role) => role.roleKey === roleKey)?.tenantScoped ?? false;
   return (
-    <div className="grid grid-cols-2 gap-3">
+    <div className="flex flex-col gap-3">
+      <div className="grid grid-cols-2 gap-3">
+        <Field>
+          <FieldLabel>角色</FieldLabel>
+          <Select value={roleKey} onValueChange={onRoleChange}>
+            <SelectTrigger aria-label="角色" aria-invalid={Boolean(roleError) || undefined}><SelectValue placeholder="选择角色" /></SelectTrigger>
+            <SelectContent>{roles.map((role) => <SelectItem key={role.roleKey} value={role.roleKey}>{roleLabel(role.roleKey)}</SelectItem>)}</SelectContent>
+          </Select>
+          {roleError ? <FieldDescription className="text-destructive-text">{roleError}</FieldDescription> : null}
+        </Field>
+        <Field>
+          <FieldLabel>站点</FieldLabel>
+          <Select value={tenantScoped ? ALL_SITES : siteId} onValueChange={onSiteChange} disabled={tenantScoped}>
+            <SelectTrigger aria-label="站点"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL_SITES}>全部站点</SelectItem>
+              {sites.map((site) => <SelectItem key={site.id} value={site.id}>{site.displayName}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </Field>
+      </div>
       <Field>
-        <FieldLabel>角色</FieldLabel>
-        <Select value={roleKey} onValueChange={onRoleChange}>
-          <SelectTrigger aria-label="角色" aria-invalid={Boolean(roleError) || undefined}><SelectValue placeholder="选择角色" /></SelectTrigger>
-          <SelectContent>{roles.map((role) => <SelectItem key={role.roleKey} value={role.roleKey}>{roleLabel(role.roleKey)}</SelectItem>)}</SelectContent>
-        </Select>
-        {roleError ? <FieldDescription className="text-destructive-text">{roleError}</FieldDescription> : null}
-      </Field>
-      <Field>
-        <FieldLabel>站点</FieldLabel>
-        <Select value={tenantScoped ? ALL_SITES : siteId} onValueChange={onSiteChange} disabled={tenantScoped}>
-          <SelectTrigger aria-label="站点"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value={ALL_SITES}>全部站点</SelectItem>
-            {sites.map((site) => <SelectItem key={site.id} value={site.id}>{site.displayName}</SelectItem>)}
-          </SelectContent>
-        </Select>
+        <FieldLabel>授权有效期</FieldLabel>
+        <div className={validity.preset === 'custom' ? 'grid grid-cols-2 gap-3' : undefined}>
+          <Select
+            value={validity.preset}
+            onValueChange={(value) => {
+              const option = ASSIGNMENT_VALIDITY_OPTIONS.find((item) => item.value === value);
+              if (option) validity.onPresetChange(option.value);
+            }}
+          >
+            <SelectTrigger aria-label="授权有效期"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {ASSIGNMENT_VALIDITY_OPTIONS.map((option) => (
+                <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {validity.preset === 'custom' ? (
+            <Input
+              type="datetime-local"
+              aria-label="自定义到期时间"
+              aria-invalid={Boolean(validity.error) || undefined}
+              value={validity.customValidTo}
+              onChange={(event) => validity.onCustomValidToChange(event.target.value)}
+            />
+          ) : null}
+        </div>
+        {validity.error ? <FieldDescription className="text-destructive-text">{validity.error}</FieldDescription> : null}
       </Field>
     </div>
   );
 }
 
-const assignmentOf = (scope: RoleScope, roles: readonly UserAdminRole[]) => {
+const assignmentOf = (scope: RoleScope, roles: readonly UserAdminRole[], validTo?: string) => {
   if (scope.roleKey === '') throw new Error('请选择角色');
   return {
     roleKey: scope.roleKey,
     ...(roles.find((role) => role.roleKey === scope.roleKey)?.tenantScoped ? {} : scopeOf(scope.siteId)),
+    ...(validTo ? { validTo } : {}),
   };
 };
 
@@ -239,22 +332,29 @@ function CreateUserDialog({ open, onOpenChange, csrfToken, roles, sites, onDone 
 }) {
   const empty: CreateForm = { displayName: '', username: '', email: '', password: '', ...EMPTY_SCOPE };
   const form = useForm<CreateForm>({ defaultValues: empty });
+  const validity = useRoleScopeValidity();
   const create = useMutation({
-    mutationFn: (values: CreateForm) => userAdminApi.create(csrfToken, {
+    mutationFn: ({ values, validTo }: { values: CreateForm; validTo?: string }) => userAdminApi.create(csrfToken, {
       displayName: values.displayName, username: values.username, email: values.email, password: values.password,
-      assignments: [assignmentOf(values, roles)],
+      assignments: [assignmentOf(values, roles, validTo)],
     }),
-    onSuccess: (_, values) => { toast.success(`已创建 ${values.displayName}，请把用户名和密码告诉对方`); close(); onDone(); },
+    onSuccess: (_, { values }) => { toast.success(`已创建 ${values.displayName}，请把用户名和密码告诉对方`); close(); onDone(); },
   });
   function close() {
     form.reset(empty);
+    validity.reset();
     create.reset();
     onOpenChange(false);
   }
+  const submitCreate = form.handleSubmit((values) => {
+    const resolved = validity.resolve();
+    if (!resolved.ok) return;
+    create.mutate({ values, validTo: resolved.validTo });
+  });
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next) close(); }}>
       <DialogContent className="sm:max-w-[480px]">
-        <form onSubmit={form.handleSubmit((values) => create.mutate(values))} className="flex flex-col gap-5">
+        <form onSubmit={submitCreate} className="flex flex-col gap-5">
           <DialogHeader>
             <DialogTitle>新建用户</DialogTitle>
             <DialogDescription>由你设定登录密码，创建后告诉对方；对方登录后可以在右上角菜单里改成自己的密码。</DialogDescription>
@@ -283,6 +383,7 @@ function CreateUserDialog({ open, onOpenChange, csrfToken, roles, sites, onDone 
                       roleKey={roleField.value}
                       siteId={siteField.value}
                       roleError={fieldState.error?.message}
+                      validity={validity}
                       onRoleChange={roleField.onChange}
                       onSiteChange={siteField.onChange}
                       roles={roles}
@@ -314,34 +415,47 @@ function RolesDialog({ member, onClose, csrfToken, roles, sites, siteName, onDon
   readonly onDone: () => void;
 }) {
   const form = useForm<RoleScope>({ defaultValues: EMPTY_SCOPE });
+  const validity = useRoleScopeValidity();
   const assign = useMutation({
-    mutationFn: (values: RoleScope) => userAdminApi.assign(csrfToken, member!.principalId, assignmentOf(values, roles)),
-    onSuccess: () => { form.reset(EMPTY_SCOPE); onDone(); },
+    mutationFn: ({ values, validTo }: { values: RoleScope; validTo?: string }) =>
+      userAdminApi.assign(csrfToken, member!.principalId, assignmentOf(values, roles, validTo)),
+    onSuccess: () => { form.reset(EMPTY_SCOPE); validity.reset(); onDone(); },
   });
   const revoke = useMutation({
     mutationFn: (bindingId: string) => userAdminApi.revoke(csrfToken, member!.principalId, bindingId),
     onSuccess: onDone,
   });
   const error = assign.error ?? revoke.error;
+  const submitAssign = form.handleSubmit((values) => {
+    const resolved = validity.resolve();
+    if (!resolved.ok) return;
+    assign.mutate({ values, validTo: resolved.validTo });
+  });
   return (
-    <Dialog open={Boolean(member)} onOpenChange={(open) => { if (!open) { form.reset(EMPTY_SCOPE); assign.reset(); revoke.reset(); onClose(); } }}>
+    <Dialog open={Boolean(member)} onOpenChange={(open) => { if (!open) { form.reset(EMPTY_SCOPE); validity.reset(); assign.reset(); revoke.reset(); onClose(); } }}>
       <DialogContent className="sm:max-w-[520px]">
         <DialogHeader>
           <DialogTitle>{member?.displayName} 的角色与站点</DialogTitle>
           <DialogDescription>改动立即生效：对方下一次操作时就按新的权限判断。</DialogDescription>
         </DialogHeader>
         <ul className="flex flex-col divide-y divide-divider rounded-lg border">
-          {member?.assignments.length ? member.assignments.map((assignment) => (
-            <li key={assignment.bindingId} className="flex items-center gap-3 px-4 py-2.5">
-              <span className="text-sm font-medium">{roleLabel(assignment.roleKey)}</span>
-              <span className="text-sm text-muted-foreground">{siteName(assignment.siteId)}</span>
-              <Button variant="ghost" size="sm" className="ml-auto text-muted-foreground" disabled={revoke.isPending} onClick={() => revoke.mutate(assignment.bindingId)}>
-                <X data-icon="inline-start" />撤销
-              </Button>
-            </li>
-          )) : <li className="px-4 py-3 text-sm text-muted-foreground">还没有角色，登录后看不到任何数据</li>}
+          {member?.assignments.length ? member.assignments.map((assignment) => {
+            const formatted = formatAssignmentValidity(assignment.validTo);
+            return (
+              <li key={assignment.bindingId} className="flex items-center gap-3 px-4 py-2.5">
+                <span className="text-sm font-medium">{roleLabel(assignment.roleKey)}</span>
+                <span className="text-sm text-muted-foreground">{siteName(assignment.siteId)}</span>
+                <span className={formatted.temporary ? 'rounded bg-muted px-1.5 py-0.5 text-xs font-medium text-foreground' : 'text-xs text-muted-foreground'}>
+                  {formatted.label}
+                </span>
+                <Button variant="ghost" size="sm" className="ml-auto text-muted-foreground" disabled={revoke.isPending} onClick={() => revoke.mutate(assignment.bindingId)}>
+                  <X data-icon="inline-start" />撤销
+                </Button>
+              </li>
+            );
+          }) : <li className="px-4 py-3 text-sm text-muted-foreground">还没有角色，登录后看不到任何数据</li>}
         </ul>
-        <form onSubmit={form.handleSubmit((values) => assign.mutate(values))} className="flex flex-col gap-3 rounded-lg bg-muted/40 p-4">
+        <form onSubmit={submitAssign} className="flex flex-col gap-3 rounded-lg bg-muted/40 p-4">
           <Controller
             control={form.control}
             name="roleKey"
@@ -355,6 +469,7 @@ function RolesDialog({ member, onClose, csrfToken, roles, sites, siteName, onDon
                     roleKey={roleField.value}
                     siteId={siteField.value}
                     roleError={fieldState.error?.message}
+                    validity={validity}
                     onRoleChange={roleField.onChange}
                     onSiteChange={siteField.onChange}
                     roles={roles}

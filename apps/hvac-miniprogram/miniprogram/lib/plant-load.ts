@@ -3,6 +3,7 @@
 
 import {
   buildPlant,
+  clearAssetModelCache,
   deviceName,
   fetchPlantDevice,
   readAssetModel,
@@ -14,6 +15,9 @@ import {
 import { gateway } from './platform';
 import type { Site } from './site';
 
+export function clearPlantCache(): void {
+  clearAssetModelCache();
+}
 /** The plant now; `fresh` also re-reads the registered equipment (a pull-down refresh). */
 export async function loadPlant(site: Site, fresh = false): Promise<Plant> {
   const model = await readAssetModel(gateway, site.id, fresh);

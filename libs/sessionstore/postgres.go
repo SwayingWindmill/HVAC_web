@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -165,8 +166,55 @@ func (store *PostgresStore) ActiveSessionIDs(ctx context.Context, issuer, subjec
 	return ids, rows.Err()
 }
 
+func (store *PostgresStore) SwitchTenant(ctx context.Context, sessionID, tenantID string, mutation MutationContext) (Session, error) {
+	trimmedTenantID := strings.TrimSpace(tenantID)
+	if trimmedTenantID == "" {
+		return Session{}, errors.New("tenant id is required")
+	}
+	return store.mutateSession(
+		ctx,
+		"session.switch_tenant",
+		sessionID,
+		mutation,
+		"ACTIVE",
+		func(session *Session) {
+			session.TenantID = trimmedTenantID
+		},
+		`UPDATE gateway.sessions SET tenant_id = $2, aggregate_version = $3, last_audit_message_id = $4, updated_at = $5 WHERE session_id = $1 AND revoked_at IS NULL`,
+		func(session Session) []any {
+			return []any{session.ID, session.TenantID, session.AggregateVersion, session.LastAuditMessageID, session.UpdatedAt}
+		},
+	)
+}
+
 func (store *PostgresStore) RevokeSession(ctx context.Context, sessionID string, mutation MutationContext) (Session, error) {
-	ctx, span := observability.Start(ctx, "postgres.session.transaction", observability.SpanKindClient, map[string]any{"db.system": "postgresql", "db.operation": "session.revoke"})
+	return store.mutateSession(
+		ctx,
+		"session.revoke",
+		sessionID,
+		mutation,
+		"REVOKED",
+		func(session *Session) {
+			revokedAt := mutation.OccurredAt.UTC()
+			session.RevokedAt = &revokedAt
+		},
+		`UPDATE gateway.sessions SET revoked_at = $2, aggregate_version = $3, last_audit_message_id = $4, updated_at = $2 WHERE session_id = $1 AND revoked_at IS NULL`,
+		func(session Session) []any {
+			return []any{session.ID, *session.RevokedAt, session.AggregateVersion, session.LastAuditMessageID}
+		},
+	)
+}
+
+func (store *PostgresStore) mutateSession(
+	ctx context.Context,
+	operation, sessionID string,
+	mutation MutationContext,
+	state string,
+	apply func(*Session),
+	updateSQL string,
+	updateArgs func(Session) []any,
+) (Session, error) {
+	ctx, span := observability.Start(ctx, "postgres.session.transaction", observability.SpanKindClient, map[string]any{"db.system": "postgresql", "db.operation": operation})
 	defer span.End()
 	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
@@ -185,21 +233,17 @@ func (store *PostgresStore) RevokeSession(ctx context.Context, sessionID string,
 		mutation.CausationID = session.LastAuditMessageID
 	}
 	messageID := store.ids()
-	revokedAt := mutation.OccurredAt.UTC()
-	session.RevokedAt = &revokedAt
+	updatedAt := mutation.OccurredAt.UTC()
+	apply(&session)
 	session.AggregateVersion++
 	session.LastAuditMessageID = messageID
-	session.UpdatedAt = revokedAt
-	event, payload, err := buildEvent(session, mutation, messageID, "REVOKED")
+	session.UpdatedAt = updatedAt
+	event, payload, err := buildEvent(session, mutation, messageID, state)
 	if err != nil {
 		return Session{}, err
 	}
 
-	command, err := tx.Exec(ctx, `
-		UPDATE gateway.sessions
-		SET revoked_at = $2, aggregate_version = $3, last_audit_message_id = $4, updated_at = $2
-		WHERE session_id = $1 AND revoked_at IS NULL
-	`, session.ID, revokedAt, session.AggregateVersion, messageID)
+	command, err := tx.Exec(ctx, updateSQL, updateArgs(session)...)
 	if err != nil {
 		return Session{}, err
 	}

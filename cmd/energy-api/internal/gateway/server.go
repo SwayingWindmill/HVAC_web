@@ -350,6 +350,12 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 		h.GetCurrentPrincipal(writer, request)
+	case platformapi.SwitchTenantPath:
+		if request.Method != http.MethodPost {
+			writeMethodNotAllowedFor(writer, request, http.MethodPost)
+			return
+		}
+		h.SwitchTenant(writer, request)
 	case publicAuditSearchPath:
 		if request.Method != http.MethodPost {
 			writeMethodNotAllowedFor(writer, request, http.MethodPost)
@@ -732,7 +738,7 @@ func writeProblemWithReason(
 
 func safeLogPath(path string) string {
 	switch path {
-	case platformapi.GetHealthPath, platformapi.GetVersionPath, platformapi.GetPlatformStatusPath, platformapi.BeginLoginPath, platformapi.CompleteLoginPath, platformapi.GetCurrentPrincipalPath, platformapi.LogoutPath, InternalOperationsToolAuthorizationPath:
+	case platformapi.GetHealthPath, platformapi.GetVersionPath, platformapi.GetPlatformStatusPath, platformapi.BeginLoginPath, platformapi.CompleteLoginPath, platformapi.GetCurrentPrincipalPath, platformapi.SwitchTenantPath, platformapi.LogoutPath, InternalOperationsToolAuthorizationPath:
 		return path
 	default:
 		for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPatch} {

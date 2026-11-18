@@ -16,8 +16,9 @@ var ErrAdminSelfLockout = errors.New("IAM admin change would remove the actor's 
 
 // AdminAssignment names a Role to assign, across the whole Tenant (SiteID "") or on one Site.
 type AdminAssignment struct {
-	RoleTemplateID string `json:"roleTemplateId"`
-	SiteID         string `json:"siteId,omitempty"`
+	RoleTemplateID string     `json:"roleTemplateId"`
+	SiteID         string     `json:"siteId,omitempty"`
+	ValidTo        *time.Time `json:"validTo,omitempty"`
 }
 
 // AdminDirectory is what 系统管理 → 用户与角色 shows: the assignable built-in Roles and every
@@ -49,12 +50,13 @@ type AdminMember struct {
 }
 
 type AdminMemberAssignment struct {
-	BindingID      string `json:"bindingId"`
-	RoleTemplateID string `json:"roleTemplateId"`
-	RoleKey        string `json:"roleKey"`
-	SiteID         string `json:"siteId,omitempty"`
-	Status         string `json:"status"`
-	Revision       int64  `json:"revision"`
+	BindingID      string  `json:"bindingId"`
+	RoleTemplateID string  `json:"roleTemplateId"`
+	RoleKey        string  `json:"roleKey"`
+	SiteID         string  `json:"siteId,omitempty"`
+	Status         string  `json:"status"`
+	ValidTo        *string `json:"validTo,omitempty"`
+	Revision       int64   `json:"revision"`
 }
 
 func (store *PostgresAdminStore) ListMembers(ctx context.Context, actor AdminActor) (AdminDirectory, error) {
@@ -113,7 +115,7 @@ ORDER BY principal.display_name, principal.id
 
 	rows, err = tx.Query(ctx, `
 SELECT binding.id::text, binding.principal_id::text, template.id::text, template.role_key, COALESCE(binding.site_id::text, ''),
-       binding.status, binding.revision
+       binding.status, binding.valid_to, binding.revision
 FROM iam.role_bindings binding
 JOIN iam.role_templates template ON template.id = binding.role_template_id
 WHERE binding.tenant_id = $1::uuid
@@ -125,10 +127,15 @@ ORDER BY binding.site_id NULLS FIRST, template.role_key
 	for rows.Next() {
 		var assignment AdminMemberAssignment
 		var principalID string
+		var validTo *time.Time
 		if err := rows.Scan(&assignment.BindingID, &principalID, &assignment.RoleTemplateID, &assignment.RoleKey, &assignment.SiteID,
-			&assignment.Status, &assignment.Revision); err != nil {
+			&assignment.Status, &validTo, &assignment.Revision); err != nil {
 			rows.Close()
 			return AdminDirectory{}, err
+		}
+		if validTo != nil {
+			formatted := formatInstant(*validTo)
+			assignment.ValidTo = &formatted
 		}
 		if position, ok := index[principalID]; ok {
 			directory.Members[position].Assignments = append(directory.Members[position].Assignments, assignment)
@@ -189,7 +196,7 @@ func applyMemberCreate(ctx context.Context, tx pgx.Tx, tenantID string, request 
 	}
 	for _, assignment := range request.Assignments {
 		if _, _, err := applyRoleBinding(ctx, tx, tenantID, AdminMutationRequest{
-			PrincipalID: principalID, RoleTemplateID: assignment.RoleTemplateID, SiteID: assignment.SiteID, Status: "ACTIVE",
+			PrincipalID: principalID, RoleTemplateID: assignment.RoleTemplateID, SiteID: assignment.SiteID, Status: "ACTIVE", ValidTo: assignment.ValidTo,
 		}, now); err != nil {
 			return "", 0, err
 		}

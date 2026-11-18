@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/tls"
 	"encoding/json"
 	"log/slog"
@@ -744,4 +746,195 @@ func TestTouchSessionThrottledWithinOneMinute(t *testing.T) {
 	if got := recordingStore.touchCalls.Load(); got != 1 {
 		t.Fatalf("expected no TouchSession without activity header, got %d", got)
 	}
+}
+
+func TestSwitchActiveTenantValidatesMembershipCSRFAndRevokesTelemetry(t *testing.T) {
+	const tenantB = "018f3d00-0000-7000-8000-000000000002"
+	const nonMemberTenant = "018f3d00-0000-7000-8000-000000000099"
+	now := time.Now().UTC()
+
+	var revokedMu sync.Mutex
+	var revokedEvents []struct {
+		TenantID  string `json:"tenantId"`
+		SessionID string `json:"sessionId"`
+		Reason    string `json:"reason"`
+	}
+	telemetryServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/internal/v1/telemetry/subscriptions:revoke" {
+			http.NotFound(writer, request)
+			return
+		}
+		var event struct {
+			TenantID  string `json:"tenantId"`
+			SessionID string `json:"sessionId"`
+			Reason    string `json:"reason"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&event); err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+		revokedMu.Lock()
+		revokedEvents = append(revokedEvents, event)
+		revokedMu.Unlock()
+		writer.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(telemetryServer.Close)
+
+	store := sessionstore.NewMemoryStore()
+	harness := buildAuthHarnessWithGatewayConfig(t, func(_ string) http.Handler {
+		return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			claims, err := identitycontext.VerifyDelegation(request.TLS.PeerCertificates[0].PublicKey, request.Header.Get("X-Delegation-Grant"))
+			if err != nil {
+				t.Fatalf("verify delegation: %v", err)
+			}
+			roles := []string{"operator"}
+			caps := []identitycontext.Capability{identitycontext.CapabilitySiteList, identitycontext.CapabilitySiteRead}
+			if claims.TenantID == tenantB {
+				roles = []string{"admin"}
+				caps = append(caps, identitycontext.CapabilityIAMAdmin)
+			}
+			user := identitycontext.UserPrincipal{
+				Subject: claims.Subject, Issuer: claims.SubjectIssuer, DisplayName: claims.DisplayName, Email: claims.Email, Roles: roles,
+			}
+			writer.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(writer).Encode(identitycontext.InternalPrincipalResponse{
+				PrincipalID: "018f3e00-2000-7000-8000-000000000001",
+				Principal:   user,
+				Context: identitycontext.PrincipalContext{
+					InitiatingPrincipal:       user,
+					ExecutingServicePrincipal: identitycontext.ServicePrincipal{Service: "platform-gateway", SPIFFEID: claims.ExecutingService},
+					TenantID:                  claims.TenantID,
+					Audience:                  claims.Audience,
+					PolicyRevision:            claims.PolicyRevision,
+					DelegationExpiresAt:       time.Unix(claims.ExpiresAt, 0).UTC().Format(time.RFC3339),
+				},
+				Authorization: identitycontext.EffectiveAuthorization{
+					CapabilitySetVersion: identitycontext.CapabilitySetVersion,
+					PolicyRevision:       "capability-v7:test-" + claims.TenantID,
+					Capabilities:         caps,
+				},
+				AvailableTenants: []identitycontext.TenantMembershipSummary{
+					{TenantID: authFixtureTenantID, Code: "alpha", DisplayName: "松雅轩"},
+					{TenantID: tenantB, Code: "beta", DisplayName: "星沙冷站"},
+				},
+			})
+		})
+	}, nil, func(cfg *gateway.Config) {
+		cfg.Telemetry = &gateway.TelemetryConfig{
+			RuntimeBaseURL: telemetryServer.URL, RuntimeHTTPClient: telemetryServer.Client(),
+			RuntimeAudience: "telemetry-runtime-service", Timeout: time.Second,
+		}
+	}, func(cfg *gateway.IdentityConfig) {
+		cfg.SessionStore = store
+	})
+
+	browser := harness.browserClient(t)
+	initial, _ := loginAndReadPrincipal(t, browser, harness.gatewayURL, "")
+	if len(initial.AvailableTenants) != 2 {
+		t.Fatalf("availableTenants = %#v, want 2", initial.AvailableTenants)
+	}
+
+	postSwitch := func(client *http.Client, origin, csrf, body string) *http.Response {
+		req, _ := http.NewRequest(http.MethodPost, harness.gatewayURL+platformapi.SwitchTenantPath, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		if csrf != "" {
+			req.Header.Set("X-CSRF-Token", csrf)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+
+	missingCSRF := postSwitch(browser, harness.gatewayURL, "", `{"tenantId":"`+tenantB+`"}`)
+	assertProblemCode(t, missingCSRF, http.StatusForbidden, "CSRF_TOKEN_INVALID")
+	missingCSRF.Body.Close()
+
+	forbiddenTenant := postSwitch(browser, harness.gatewayURL, initial.Session.CSRFToken, `{"tenantId":"`+nonMemberTenant+`"}`)
+	assertProblemCode(t, forbiddenTenant, http.StatusForbidden, "TENANT_SWITCH_FORBIDDEN")
+	forbiddenTenant.Body.Close()
+
+	badField := postSwitch(browser, harness.gatewayURL, initial.Session.CSRFToken, `{"tenantId":"`+tenantB+`","extra":true}`)
+	assertProblemCode(t, badField, http.StatusBadRequest, "TENANT_SWITCH_REQUEST_INVALID")
+	badField.Body.Close()
+
+	storedBefore, err := store.GetSession(context.Background(), initial.Session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storedBefore.TenantID != authFixtureTenantID {
+		t.Fatalf("rejected switch mutated session tenant to %q", storedBefore.TenantID)
+	}
+
+	okResp := postSwitch(browser, harness.gatewayURL, initial.Session.CSRFToken, `{"tenantId":"`+tenantB+`"}`)
+	defer okResp.Body.Close()
+	if okResp.StatusCode != http.StatusOK {
+		t.Fatalf("switch status = %d", okResp.StatusCode)
+	}
+	var switched platformapi.CurrentPrincipalResponse
+	if err := json.NewDecoder(okResp.Body).Decode(&switched); err != nil {
+		t.Fatal(err)
+	}
+	if switched.Context.TenantID != tenantB || !containsCapability(switched.Authorization.Capabilities, platformapi.CapabilityIAMAdmin) {
+		t.Fatalf("switched principal = %#v", switched)
+	}
+
+	revokedMu.Lock()
+	defer revokedMu.Unlock()
+	if len(revokedEvents) != 1 || revokedEvents[0].TenantID != authFixtureTenantID || revokedEvents[0].SessionID != initial.Session.ID || revokedEvents[0].Reason != "SESSION_TENANT_SWITCHED" {
+		t.Fatalf("telemetry revocation events = %#v", revokedEvents)
+	}
+
+	t.Run("mini-program bearer switches tenant without CSRF", func(t *testing.T) {
+		appSessionToken := "app-switch-session-token"
+		block, err := aes.NewCipher(bytes.Repeat([]byte{0x42}, 32))
+		if err != nil {
+			t.Fatal(err)
+		}
+		gcm, err := cipher.NewGCM(block)
+		if err != nil {
+			t.Fatal(err)
+		}
+		nonce := make([]byte, gcm.NonceSize())
+		ciphertext := gcm.Seal(nonce, nonce, []byte("csrf-secret"), nil)
+		if _, err := store.CreateSession(context.Background(), sessionstore.Session{
+			ID: appSessionToken, Client: sessionstore.ClientMiniProgram,
+			Principal: identitycontext.UserPrincipal{Subject: "fixture-user", Issuer: "https://issuer.example.test", DisplayName: "App Engineer", Email: "app@example.test"},
+			TenantID:  authFixtureTenantID, CSRFTokenCiphertext: ciphertext,
+			AuthenticationACR: "urn:hvac:loa:1", AuthenticationAMR: []string{"pwd"}, AuthenticationTime: now, ExpiresAt: now.Add(time.Hour),
+		}, sessionstore.MutationContext{
+			Action: "SESSION_CREATED", Result: "SUCCEEDED", PolicyRevision: "policy-v1",
+			CorrelationID: "req-app", TraceID: strings.Repeat("a", 32), Traceparent: "00-" + strings.Repeat("a", 32) + "-" + strings.Repeat("b", 16) + "-01",
+			ExecutingService: "platform-gateway", ExecutingSPIFFEID: "spiffe://hvac.local/platform-gateway", OccurredAt: now,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		appReq, err := http.NewRequest(http.MethodPost, harness.gatewayURL+platformapi.SwitchTenantPath, strings.NewReader(`{"tenantId":"`+tenantB+`"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		appReq.Header.Set("Content-Type", "application/json")
+		appReq.Header.Set("Authorization", "Bearer "+appSessionToken)
+		appResp, err := harness.gatewayServer.Client().Do(appReq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer appResp.Body.Close()
+		if appResp.StatusCode != http.StatusOK {
+			t.Fatalf("mini program switch status = %d", appResp.StatusCode)
+		}
+	})
+}
+
+func containsCapability(values []platformapi.Capability, target platformapi.Capability) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
