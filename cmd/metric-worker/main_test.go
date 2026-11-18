@@ -95,7 +95,7 @@ func TestRunBackfillDetectorLoopInitializesScansAndRedactsErrors(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if detector.detectCalls.Load() >= 2 {
+		if detector.detectCalls.Load() >= 2 && strings.Contains(logs.String(), `"msg":"metric_backfill_recalc_enqueued"`) {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
@@ -141,7 +141,10 @@ func TestRunBackfillDetectorLoopInitializesScansAndRedactsErrors(t *testing.T) {
 	}()
 	errDeadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(errDeadline) {
-		if errDetector.detectCalls.Load() >= 1 {
+		out := errLogs.String()
+		if errDetector.detectCalls.Load() >= 1 &&
+			strings.Contains(out, `"error_code":"METRIC_BACKFILL_WATERMARK_INIT_FAILED"`) &&
+			strings.Contains(out, `"error_code":"METRIC_BACKFILL_SCAN_FAILED"`) {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
