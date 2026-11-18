@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -17,28 +19,58 @@ import (
 )
 
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
 	observabilityRuntime := observability.NewRuntime(observability.RuntimeConfig{
 		Service: "telemetry-history-projector", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
 		QueueSize: 512, ExportTimeout: 500 * time.Millisecond,
 	})
-	defer func() {
-		shutdownContext, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		_ = observabilityRuntime.Shutdown(shutdownContext)
-	}()
 	logger := observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
+	var (
+		repository      *telemetry.HistoryPostgresRepository
+		diagnostics     *http.Server
+		diagnosticsDone chan struct{}
+		shutdownOnce    sync.Once
+	)
+	runShutdown := func() {
+		shutdownOnce.Do(func() {
+			var deps historyProjectorShutdownDeps
+			if diagnostics != nil {
+				deps.markNotReady = observabilityRuntime.MarkNotReady
+				deps.shutdownDiag = diagnostics.Shutdown
+				deps.diagnosticsDone = diagnosticsDone
+			}
+			deps.shutdownTelemetry = observabilityRuntime.Shutdown
+			if repository != nil {
+				deps.closeRepository = repository.Close
+			}
+			shutdownHistoryProjector(deps)
+		})
+	}
+	defer runShutdown()
 
+	databaseURL, err := requiredEnv("TELEMETRY_HISTORY_DATABASE_URL")
+	if err != nil {
+		logEnvError(logger, "telemetry_history_repository_open_failed", "TELEMETRY_HISTORY_REPOSITORY_OPEN_FAILED", err)
+		return 1
+	}
 	openContext, cancelOpen := context.WithTimeout(context.Background(), 5*time.Second)
-	repository, err := telemetry.OpenHistoryPostgresRepository(openContext, requiredEnv("TELEMETRY_HISTORY_DATABASE_URL"))
+	repository, err = telemetry.OpenHistoryPostgresRepository(openContext, databaseURL)
 	cancelOpen()
 	if err != nil {
 		logger.Error("telemetry_history_repository_open_failed", "error_code", "TELEMETRY_HISTORY_REPOSITORY_OPEN_FAILED")
-		os.Exit(1)
+		return 1
 	}
-	defer repository.Close()
 
+	clickhouseURL, err := requiredEnv("TELEMETRY_CLICKHOUSE_HTTP_URL")
+	if err != nil {
+		logEnvError(logger, "telemetry_clickhouse_configuration_invalid", "TELEMETRY_CLICKHOUSE_CONFIGURATION_INVALID", err)
+		return 1
+	}
 	sink, err := telemetry.NewClickHouseHistorySink(telemetry.ClickHouseHistoryConfig{
-		BaseURL:  requiredEnv("TELEMETRY_CLICKHOUSE_HTTP_URL"),
+		BaseURL:  clickhouseURL,
 		Database: envOr("TELEMETRY_CLICKHOUSE_DATABASE", "telemetry_history"),
 		Table:    envOr("TELEMETRY_CLICKHOUSE_TABLE", "observations"),
 		Username: strings.TrimSpace(os.Getenv("TELEMETRY_CLICKHOUSE_USERNAME")),
@@ -46,27 +78,46 @@ func main() {
 	})
 	if err != nil {
 		logger.Error("telemetry_clickhouse_configuration_invalid", "error_code", "TELEMETRY_CLICKHOUSE_CONFIGURATION_INVALID")
-		os.Exit(1)
+		return 1
 	}
-	pollInterval := durationEnv("TELEMETRY_HISTORY_POLL_INTERVAL", 5*time.Second, 25*time.Millisecond, time.Minute)
+	pollInterval, err := durationEnv("TELEMETRY_HISTORY_POLL_INTERVAL", 5*time.Second, 25*time.Millisecond, time.Minute)
+	if err != nil {
+		logEnvError(logger, "telemetry_history_relay_configuration_invalid", "TELEMETRY_HISTORY_RELAY_CONFIGURATION_INVALID", err)
+		return 1
+	}
+	batchSize, err := integerEnv("TELEMETRY_HISTORY_BATCH_SIZE", 4096, 1, 32768)
+	if err != nil {
+		logEnvError(logger, "telemetry_history_relay_configuration_invalid", "TELEMETRY_HISTORY_RELAY_CONFIGURATION_INVALID", err)
+		return 1
+	}
+	leaseFor, err := durationEnv("TELEMETRY_HISTORY_LEASE_DURATION", 30*time.Second, time.Second, 10*time.Minute)
+	if err != nil {
+		logEnvError(logger, "telemetry_history_relay_configuration_invalid", "TELEMETRY_HISTORY_RELAY_CONFIGURATION_INVALID", err)
+		return 1
+	}
+	retryAfter, err := durationEnv("TELEMETRY_HISTORY_RETRY_DELAY", 5*time.Second, time.Second, time.Hour)
+	if err != nil {
+		logEnvError(logger, "telemetry_history_relay_configuration_invalid", "TELEMETRY_HISTORY_RELAY_CONFIGURATION_INVALID", err)
+		return 1
+	}
 	relay, err := telemetry.NewHistoryRelay(telemetry.HistoryRelayConfig{
 		Repository: repository,
 		Sink:       sink,
-		BatchSize:  integerEnv("TELEMETRY_HISTORY_BATCH_SIZE", 4096, 1, 32768),
-		LeaseFor:   durationEnv("TELEMETRY_HISTORY_LEASE_DURATION", 30*time.Second, time.Second, 10*time.Minute),
-		RetryAfter: durationEnv("TELEMETRY_HISTORY_RETRY_DELAY", 5*time.Second, time.Second, time.Hour),
+		BatchSize:  batchSize,
+		LeaseFor:   leaseFor,
+		RetryAfter: retryAfter,
 	})
 	if err != nil {
 		logger.Error("telemetry_history_relay_configuration_invalid", "error_code", "TELEMETRY_HISTORY_RELAY_CONFIGURATION_INVALID")
-		os.Exit(1)
+		return 1
 	}
 
-	diagnostics := &http.Server{
+	diagnostics = &http.Server{
 		Addr:              envOr("TELEMETRY_HISTORY_DIAGNOSTICS_ADDR", "127.0.0.1:19087"),
 		Handler:           observabilityRuntime.DiagnosticsHandler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	diagnosticsDone := make(chan struct{})
+	diagnosticsDone = make(chan struct{})
 	go func() {
 		defer close(diagnosticsDone)
 		defer observability.Recover(logger, observabilityRuntime.Metrics, "telemetry_history_projector.diagnostics")
@@ -93,15 +144,44 @@ func main() {
 			logger.Debug("telemetry_history_batch_projected", "observation_count", published)
 		}
 	})
-	observabilityRuntime.MarkNotReady()
-	shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	_ = diagnostics.Shutdown(shutdownContext)
-	select {
-	case <-diagnosticsDone:
-	case <-shutdownContext.Done():
-	}
-	shutdownCancel()
+	runShutdown()
 	logger.Info("telemetry_history_projector_stopped")
+	return 0
+}
+
+type historyProjectorShutdownDeps struct {
+	markNotReady      func()
+	shutdownDiag      func(context.Context) error
+	diagnosticsDone   <-chan struct{}
+	shutdownTelemetry func(context.Context) error
+	closeRepository   func()
+}
+
+func shutdownHistoryProjector(deps historyProjectorShutdownDeps) {
+	if deps.markNotReady != nil {
+		deps.markNotReady()
+	}
+	if deps.shutdownDiag != nil || deps.diagnosticsDone != nil {
+		diagCtx, diagCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if deps.shutdownDiag != nil {
+			_ = deps.shutdownDiag(diagCtx)
+		}
+		if deps.diagnosticsDone != nil {
+			select {
+			case <-deps.diagnosticsDone:
+			case <-diagCtx.Done():
+			}
+		}
+		diagCancel()
+	}
+	if deps.shutdownTelemetry != nil {
+		telemetryCtx, telemetryCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_ = deps.shutdownTelemetry(telemetryCtx)
+		telemetryCancel()
+	}
+	if deps.closeRepository != nil {
+		deps.closeRepository()
+	}
 }
 
 func envOr(name, fallback string) string {
@@ -111,37 +191,43 @@ func envOr(name, fallback string) string {
 	return fallback
 }
 
-func requiredEnv(name string) string {
-	value := strings.TrimSpace(os.Getenv(name))
-	if value == "" {
-		_, _ = os.Stderr.WriteString(name + " is required\n")
-		os.Exit(1)
+func logEnvError(logger *slog.Logger, msg, code string, err error) {
+	if err != nil {
+		_, _ = os.Stderr.WriteString(err.Error() + "\n")
 	}
-	return value
+	if logger != nil {
+		logger.Error(msg, "error_code", code)
+	}
 }
 
-func integerEnv(name string, fallback, minimum, maximum int) int {
+func requiredEnv(name string) (string, error) {
 	value := strings.TrimSpace(os.Getenv(name))
 	if value == "" {
-		return fallback
+		return "", fmt.Errorf("%s is required", name)
+	}
+	return value, nil
+}
+
+func integerEnv(name string, fallback, minimum, maximum int) (int, error) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback, nil
 	}
 	parsed, err := strconv.Atoi(value)
 	if err != nil || parsed < minimum || parsed > maximum {
-		_, _ = os.Stderr.WriteString(name + " is invalid\n")
-		os.Exit(1)
+		return 0, fmt.Errorf("%s is invalid", name)
 	}
-	return parsed
+	return parsed, nil
 }
 
-func durationEnv(name string, fallback, minimum, maximum time.Duration) time.Duration {
+func durationEnv(name string, fallback, minimum, maximum time.Duration) (time.Duration, error) {
 	value := strings.TrimSpace(os.Getenv(name))
 	if value == "" {
-		return fallback
+		return fallback, nil
 	}
 	parsed, err := time.ParseDuration(value)
 	if err != nil || parsed < minimum || parsed > maximum {
-		_, _ = os.Stderr.WriteString(name + " is invalid\n")
-		os.Exit(1)
+		return 0, fmt.Errorf("%s is invalid", name)
 	}
-	return parsed
+	return parsed, nil
 }

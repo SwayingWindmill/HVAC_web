@@ -1035,7 +1035,10 @@ func (c *httpDownstreamClient) postJSON(ctx context.Context, path string, payloa
 	if err != nil {
 		return err
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+		_ = resp.Body.Close()
+	}()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("downstream %s returned status %d: %s", path, resp.StatusCode, strings.TrimSpace(string(body)))

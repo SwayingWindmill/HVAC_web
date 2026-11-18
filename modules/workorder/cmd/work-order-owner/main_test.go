@@ -94,3 +94,13 @@ func TestShutdownWorkOrderOwnerReverseOrder(t *testing.T) {
 		t.Fatalf("shutdown order = %s, want %s", got, want)
 	}
 }
+
+func TestWorkOrderOwnerRequiredEnvAndRunFailure(t *testing.T) {
+	t.Setenv("WORK_ORDER_TLS_CERT", "")
+	if _, err := requiredEnv("WORK_ORDER_TLS_CERT"); err == nil {
+		t.Fatal("expected error for missing WORK_ORDER_TLS_CERT")
+	}
+	if code := run(); code != 1 {
+		t.Fatalf("run() = %d, want 1 when WORK_ORDER_TLS_CERT is missing", code)
+	}
+}

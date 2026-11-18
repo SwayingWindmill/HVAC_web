@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -116,5 +118,49 @@ func TestCommandControlFailureNotifierConfigurationAndHTTPDelivery(t *testing.T)
 	})
 	if cfg.ControlFailureNotifier == nil {
 		t.Fatal("expected runtimeHTTPConfig to forward ControlFailureNotifier")
+	}
+}
+
+func TestCommandControlFailureSenderDrainsBodyForKeepAlive(t *testing.T) {
+	t.Setenv("COMMAND_TLS_CERT", "")
+	if code := run(); code != 1 {
+		t.Fatalf("run() = %d, want 1 when COMMAND_TLS_CERT is missing", code)
+	}
+	t.Setenv("COMMAND_EMERGENCY_REVOCATION_REVISION", "not-a-uint")
+	if _, err := parseUint64Env("COMMAND_EMERGENCY_REVOCATION_REVISION"); err == nil {
+		t.Fatal("expected error for invalid uint64 env")
+	}
+
+	var newConns atomic.Int32
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"status":"accepted","padding":"` + strings.Repeat("a", 1024) + `"}`))
+	}))
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			newConns.Add(1)
+		}
+	}
+	server.Start()
+	defer server.Close()
+
+	sender := newHTTPControlFailureSender(server.URL+"/internal/v1/alarms/control-events", server.Client(), nil)
+	event := commandservice.ControlFailureEvent{
+		Kind:       "OUTCOME_UNKNOWN",
+		TenantID:   "018f3d00-0000-7000-8000-000000000001",
+		SiteID:     "018f3e00-1000-7000-8000-000000000001",
+		CommandID:  "018f3e00-9999-7000-8000-000000000001",
+		Capability: commandmodel.CapabilityStart,
+		OccurredAt: time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC),
+	}
+	if err := sender(context.Background(), event); err != nil {
+		t.Fatalf("first send err = %v", err)
+	}
+	if err := sender(context.Background(), event); err != nil {
+		t.Fatalf("second send err = %v", err)
+	}
+	if got := newConns.Load(); got != 1 {
+		t.Fatalf("new connections = %d, want 1 (keep-alive connection reused after draining response body)", got)
 	}
 }

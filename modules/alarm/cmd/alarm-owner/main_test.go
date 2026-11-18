@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"net/http"
@@ -51,5 +52,52 @@ func TestBuildAlarmOwnerRouterWiresControlEventsEndpoint(t *testing.T) {
 	}
 	if got := alarmObservabilityRoute(httptest.NewRequest(http.MethodPost, alarmservice.InternalControlEventsPath, nil)); got != "alarms.publish_control_event" {
 		t.Fatalf("route=%q want alarms.publish_control_event", got)
+	}
+}
+
+func TestAlarmOwnerShutdownOrderAndRequiredEnv(t *testing.T) {
+	t.Setenv("ALARM_TLS_CERT", "")
+	if _, err := requiredEnv("ALARM_TLS_CERT"); err == nil {
+		t.Fatal("expected error for missing ALARM_TLS_CERT")
+	}
+	if code := run(); code != 1 {
+		t.Fatalf("run() = %d, want 1 when ALARM_TLS_CERT is missing", code)
+	}
+
+	t.Setenv("ALARM_TLS_CERT", "  /tmp/alarm.crt  ")
+	val, err := requiredEnv("ALARM_TLS_CERT")
+	if err != nil || val != "/tmp/alarm.crt" {
+		t.Fatalf("requiredEnv() = %q, %v", val, err)
+	}
+
+	var order []string
+	diagDone := make(chan struct{})
+	scheduledDone := make(chan struct{})
+
+	shutdownAlarmOwnerHTTP(alarmOwnerHTTPShutdownDeps{
+		markNotReady:   func() { order = append(order, "mark_not_ready") },
+		shutdownServer: func(context.Context) error { order = append(order, "server_shutdown"); return nil },
+		shutdownDiag: func(context.Context) error {
+			order = append(order, "diagnostics_shutdown")
+			close(diagDone)
+			return nil
+		},
+		diagnosticsDone: diagDone,
+	})
+	drainAlarmOwnerWorkers(alarmOwnerWorkerDrainDeps{
+		cancelScheduled: func() {
+			order = append(order, "cancel_scheduled")
+			close(scheduledDone)
+		},
+		scheduledDone: scheduledDone,
+		shutdownTelemetry: func(context.Context) error {
+			order = append(order, "telemetry_shutdown")
+			return nil
+		},
+	})
+
+	want := "mark_not_ready,server_shutdown,diagnostics_shutdown,cancel_scheduled,telemetry_shutdown"
+	if got := strings.Join(order, ","); got != want {
+		t.Fatalf("shutdown order = %s, want %s", got, want)
 	}
 }

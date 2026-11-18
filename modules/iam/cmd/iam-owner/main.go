@@ -6,12 +6,14 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -20,40 +22,77 @@ import (
 )
 
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
 	telemetry := observability.NewRuntime(observability.RuntimeConfig{
 		Service: "iam-service", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond,
 	})
 	logger := observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
+	var telemetryShutdownOnce sync.Once
+	shutdownTelemetry := func(ctx context.Context) error {
+		var shutdownErr error
+		telemetryShutdownOnce.Do(func() {
+			shutdownErr = telemetry.Shutdown(ctx)
+		})
+		return shutdownErr
+	}
+	var closers []func()
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = shutdownTelemetry(ctx)
+		cancel()
+		for i := len(closers) - 1; i >= 0; i-- {
+			closers[i]()
+		}
+	}()
+
 	address := envOr("IAM_SERVICE_ADDR", "127.0.0.1:18444")
-	certificate, err := tls.LoadX509KeyPair(requiredEnv("IAM_TLS_CERT"), requiredEnv("IAM_TLS_KEY"))
+	tlsCertPath, err := requiredEnv("IAM_TLS_CERT")
+	if err != nil {
+		logEnvError(logger, "iam_tls_identity_load_failed", "IAM_TLS_IDENTITY_LOAD_FAILED", err)
+		return 1
+	}
+	tlsKeyPath, err := requiredEnv("IAM_TLS_KEY")
+	if err != nil {
+		logEnvError(logger, "iam_tls_identity_load_failed", "IAM_TLS_IDENTITY_LOAD_FAILED", err)
+		return 1
+	}
+	certificate, err := tls.LoadX509KeyPair(tlsCertPath, tlsKeyPath)
 	if err != nil {
 		logger.Error("iam_tls_identity_load_failed", "error", err)
-		os.Exit(1)
+		return 1
 	}
 	iamCertificate, err := x509.ParseCertificate(certificate.Certificate[0])
 	if err != nil {
 		logger.Error("iam_tls_certificate_parse_failed", "error_code", "IAM_TLS_CERTIFICATE_PARSE_FAILED")
-		os.Exit(1)
+		return 1
 	}
 	iamSPIFFEID, err := certificateSPIFFEID(iamCertificate)
 	if err != nil {
 		logger.Error("iam_tls_spiffe_identity_invalid", "error_code", "IAM_TLS_SPIFFE_IDENTITY_INVALID")
-		os.Exit(1)
+		return 1
 	}
 	registryGrantSigner, ok := certificate.PrivateKey.(crypto.Signer)
 	if !ok {
 		logger.Error("iam_registry_grant_signer_invalid", "error_code", "IAM_REGISTRY_GRANT_SIGNER_INVALID")
-		os.Exit(1)
+		return 1
 	}
-	caPEM, err := os.ReadFile(requiredEnv("IAM_CLIENT_CA"))
+	clientCAPath, err := requiredEnv("IAM_CLIENT_CA")
+	if err != nil {
+		logEnvError(logger, "iam_client_ca_load_failed", "IAM_CLIENT_CA_LOAD_FAILED", err)
+		return 1
+	}
+	caPEM, err := os.ReadFile(clientCAPath)
 	if err != nil {
 		logger.Error("iam_client_ca_load_failed", "error", err)
-		os.Exit(1)
+		return 1
 	}
 	clientCAs := x509.NewCertPool()
 	if !clientCAs.AppendCertsFromPEM(caPEM) {
 		logger.Error("iam_client_ca_invalid")
-		os.Exit(1)
+		return 1
 	}
 
 	policyRevision := envOr("IAM_POLICY_REVISION", "policy-unconfigured")
@@ -72,7 +111,7 @@ func main() {
 	telemetryFixtureEnabled := envEnabled("IAM_S2_AUTHORIZATION_FIXTURE")
 	if databaseURL != "" && (fixtureEnabled || telemetryFixtureEnabled) {
 		logger.Error("iam_authorization_store_configuration_conflict", "error_code", "IAM_AUTHORIZATION_STORE_CONFIGURATION_CONFLICT")
-		os.Exit(1)
+		return 1
 	}
 	if databaseURL != "" {
 		openContext, cancelOpen := context.WithTimeout(context.Background(), 5*time.Second)
@@ -80,16 +119,26 @@ func main() {
 		cancelOpen()
 		if err != nil {
 			logger.Error("iam_authorization_store_open_failed", "error_code", "IAM_AUTHORIZATION_STORE_OPEN_FAILED")
-			os.Exit(1)
+			return 1
 		}
-		defer postgresStore.Close()
+		closers = append(closers, postgresStore.Close)
 		authorizationStore = postgresStore
-		commandRevocationRevision, err := strconv.ParseUint(requiredEnv("COMMAND_EMERGENCY_REVOCATION_REVISION"), 10, 64)
+		revocationRevisionRaw, err := requiredEnv("COMMAND_EMERGENCY_REVOCATION_REVISION")
+		if err != nil {
+			logEnvError(logger, "iam_command_revocation_revision_invalid", "IAM_COMMAND_REVOCATION_REVISION_INVALID", err)
+			return 1
+		}
+		commandRevocationRevision, err := strconv.ParseUint(revocationRevisionRaw, 10, 64)
 		if err != nil {
 			logger.Error("iam_command_revocation_revision_invalid")
-			os.Exit(1)
+			return 1
 		}
-		commandAuthorizationStore = postgresStore.CommandAuthorization(requiredEnv("COMMAND_POLICY_REVISION"), commandRevocationRevision)
+		commandPolicyRevision, err := requiredEnv("COMMAND_POLICY_REVISION")
+		if err != nil {
+			logEnvError(logger, "iam_command_policy_revision_invalid", "IAM_COMMAND_POLICY_REVISION_INVALID", err)
+			return 1
+		}
+		commandAuthorizationStore = postgresStore.CommandAuthorization(commandPolicyRevision, commandRevocationRevision)
 		telemetryAuthorizationStore = postgresStore
 		alarmAuthorizationStore = postgresStore
 		alarmAuditSink = postgresStore
@@ -99,14 +148,22 @@ func main() {
 		policyRevision = "database-managed"
 		logger.Info("iam_postgres_authorization_store_enabled")
 	} else if fixtureEnabled {
-		subjectIssuer := requiredEnv("IAM_EXTERNAL_SUBJECT_ISSUER")
+		subjectIssuer, err := requiredEnv("IAM_EXTERNAL_SUBJECT_ISSUER")
+		if err != nil {
+			logEnvError(logger, "iam_external_subject_issuer_invalid", "IAM_EXTERNAL_SUBJECT_ISSUER_INVALID", err)
+			return 1
+		}
 		authorizationStore = iam.NewS1FixtureAuthorizationStore(subjectIssuer)
 		policyRevision = iam.S1FixturePolicyRevision
 		grantStatusStore = iam.StaticRegistryGrantStatusStore{PolicyRevision: policyRevision}
 		logger.Warn("iam_s1_authorization_fixture_enabled", "policy_revision", policyRevision)
 	}
 	if telemetryFixtureEnabled {
-		subjectIssuer := requiredEnv("IAM_EXTERNAL_SUBJECT_ISSUER")
+		subjectIssuer, err := requiredEnv("IAM_EXTERNAL_SUBJECT_ISSUER")
+		if err != nil {
+			logEnvError(logger, "iam_external_subject_issuer_invalid", "IAM_EXTERNAL_SUBJECT_ISSUER_INVALID", err)
+			return 1
+		}
 		telemetryAuthorizationStore = iam.NewS2FixtureTelemetryAuthorizationStore(subjectIssuer)
 		logger.Warn("iam_s2_authorization_fixture_enabled", "policy_revision", iam.S2FixturePolicyRevision)
 	}
@@ -118,9 +175,9 @@ func main() {
 		cancelOpen()
 		if err != nil {
 			logger.Error("iam_admin_store_open_failed", "error_code", "IAM_ADMIN_STORE_OPEN_FAILED")
-			os.Exit(1)
+			return 1
 		}
-		defer postgresAdminStore.Close()
+		closers = append(closers, postgresAdminStore.Close)
 		adminStore = postgresAdminStore
 		logger.Info("iam_postgres_admin_store_enabled")
 	}
@@ -132,9 +189,9 @@ func main() {
 		cancelOpen()
 		if err != nil {
 			logger.Error("iam_telemetry_grant_store_open_failed", "error_code", "IAM_TELEMETRY_GRANT_STORE_OPEN_FAILED")
-			os.Exit(1)
+			return 1
 		}
-		defer postgresGrantStore.Close()
+		closers = append(closers, postgresGrantStore.Close)
 		telemetryGrantStore = postgresGrantStore
 		logger.Info("iam_telemetry_grant_store_enabled")
 	}
@@ -215,29 +272,22 @@ func main() {
 		case <-diagnosticsDone:
 		case <-ctx.Done():
 		}
-		_ = telemetry.Shutdown(ctx)
+		_ = shutdownTelemetry(ctx)
 	}()
 
 	telemetry.MarkReady()
 	logger.Info("iam_started", "service", "iam-service", "address", address, "policy_revision", policyRevision)
+	exitCode := 0
 	if err := server.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("iam_stopped_unexpectedly", "error", err)
-		stopSignals()
-		<-shutdownDone
-		if closer, ok := authorizationStore.(interface{ Close() }); ok {
-			closer.Close()
-		}
-		if closer, ok := adminStore.(interface{ Close() }); ok {
-			closer.Close()
-		}
-		if closer, ok := telemetryGrantStore.(interface{ Close() }); ok {
-			closer.Close()
-		}
-		os.Exit(1)
+		exitCode = 1
 	}
 	stopSignals()
 	<-shutdownDone
-	logger.Info("iam_stopped", "service", "iam-service")
+	if exitCode == 0 {
+		logger.Info("iam_stopped", "service", "iam-service")
+	}
+	return exitCode
 }
 
 func certificateSPIFFEID(certificate *x509.Certificate) (string, error) {
@@ -267,11 +317,19 @@ func envOr(name, fallback string) string {
 	return fallback
 }
 
-func requiredEnv(name string) string {
-	value := os.Getenv(name)
-	if value == "" {
-		_, _ = os.Stderr.WriteString(name + " is required\n")
-		os.Exit(1)
+func logEnvError(logger *slog.Logger, msg, code string, err error) {
+	if err != nil {
+		_, _ = os.Stderr.WriteString(err.Error() + "\n")
 	}
-	return value
+	if logger != nil {
+		logger.Error(msg, "error_code", code)
+	}
+}
+
+func requiredEnv(name string) (string, error) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return "", fmt.Errorf("%s is required", name)
+	}
+	return value, nil
 }

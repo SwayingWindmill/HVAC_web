@@ -173,7 +173,10 @@ func (client *Client) load(ctx context.Context, token string, query cubeQuery) (
 	if err != nil {
 		return loadResponse{}, fmt.Errorf("call Cube: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
+		_ = response.Body.Close()
+	}()
 	payload, err := io.ReadAll(io.LimitReader(response.Body, maximumCubeResponseSize+1))
 	if err != nil {
 		return loadResponse{}, fmt.Errorf("read Cube response: %w", err)

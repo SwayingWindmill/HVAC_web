@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -22,48 +23,104 @@ import (
 )
 
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
 	logger := observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
 	telemetry := observability.NewRuntime(observability.RuntimeConfig{
 		Service: "platform-core-service", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond,
 	})
-	certificate, err := tls.LoadX509KeyPair(requiredEnv("CORE_TLS_CERT"), requiredEnv("CORE_TLS_KEY"))
+	var telemetryShutdownOnce sync.Once
+	shutdownTelemetry := func(ctx context.Context) error {
+		var shutdownErr error
+		telemetryShutdownOnce.Do(func() {
+			shutdownErr = telemetry.Shutdown(ctx)
+		})
+		return shutdownErr
+	}
+	var store *core.PostgresStore
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = shutdownTelemetry(ctx)
+		cancel()
+		if store != nil {
+			store.Close()
+		}
+	}()
+
+	tlsCertPath, err := requiredEnv("CORE_TLS_CERT")
+	if err != nil {
+		logEnvError(logger, "core_tls_identity_load_failed", "CORE_TLS_IDENTITY_LOAD_FAILED", err)
+		return 1
+	}
+	tlsKeyPath, err := requiredEnv("CORE_TLS_KEY")
+	if err != nil {
+		logEnvError(logger, "core_tls_identity_load_failed", "CORE_TLS_IDENTITY_LOAD_FAILED", err)
+		return 1
+	}
+	certificate, err := tls.LoadX509KeyPair(tlsCertPath, tlsKeyPath)
 	if err != nil {
 		logger.Error("core_tls_identity_load_failed", "error_code", "CORE_TLS_IDENTITY_LOAD_FAILED")
-		os.Exit(1)
+		return 1
 	}
-	clientCAs, err := loadCertPool(requiredEnv("CORE_CLIENT_CA"))
+	clientCAPath, err := requiredEnv("CORE_CLIENT_CA")
+	if err != nil {
+		logEnvError(logger, "core_client_ca_invalid", "CORE_CLIENT_CA_INVALID", err)
+		return 1
+	}
+	clientCAs, err := loadCertPool(clientCAPath)
 	if err != nil {
 		logger.Error("core_client_ca_invalid", "error_code", "CORE_CLIENT_CA_INVALID")
-		os.Exit(1)
+		return 1
 	}
-	iamCAs, err := loadCertPool(requiredEnv("CORE_IAM_CA"))
+	iamCAPath, err := requiredEnv("CORE_IAM_CA")
+	if err != nil {
+		logEnvError(logger, "core_iam_ca_invalid", "CORE_IAM_CA_INVALID", err)
+		return 1
+	}
+	iamCAs, err := loadCertPool(iamCAPath)
 	if err != nil {
 		logger.Error("core_iam_ca_invalid", "error_code", "CORE_IAM_CA_INVALID")
-		os.Exit(1)
+		return 1
 	}
-	iamGrantPublicKey, err := loadCertificatePublicKey(requiredEnv("CORE_IAM_GRANT_CERT"))
+	iamGrantCertPath, err := requiredEnv("CORE_IAM_GRANT_CERT")
+	if err != nil {
+		logEnvError(logger, "core_iam_grant_certificate_invalid", "CORE_IAM_GRANT_CERTIFICATE_INVALID", err)
+		return 1
+	}
+	iamGrantPublicKey, err := loadCertificatePublicKey(iamGrantCertPath)
 	if err != nil {
 		logger.Error("core_iam_grant_certificate_invalid", "error_code", "CORE_IAM_GRANT_CERTIFICATE_INVALID")
-		os.Exit(1)
+		return 1
 	}
-	cursorKey, err := base64.RawURLEncoding.DecodeString(requiredEnv("CORE_CURSOR_HMAC_KEY"))
+	cursorKeyEncoded, err := requiredEnv("CORE_CURSOR_HMAC_KEY")
+	if err != nil {
+		logEnvError(logger, "core_cursor_key_invalid", "CORE_CURSOR_KEY_INVALID", err)
+		return 1
+	}
+	cursorKey, err := base64.RawURLEncoding.DecodeString(cursorKeyEncoded)
 	if err != nil {
 		logger.Error("core_cursor_key_invalid", "error_code", "CORE_CURSOR_KEY_INVALID")
-		os.Exit(1)
+		return 1
 	}
 	cursorCodec, err := core.NewCursorCodec(cursorKey)
 	if err != nil {
 		logger.Error("core_cursor_key_invalid", "error_code", "CORE_CURSOR_KEY_INVALID")
-		os.Exit(1)
+		return 1
+	}
+	databaseURL, err := requiredEnv("CORE_DATABASE_URL")
+	if err != nil {
+		logEnvError(logger, "core_registry_store_open_failed", "CORE_REGISTRY_STORE_OPEN_FAILED", err)
+		return 1
 	}
 	openContext, cancelOpen := context.WithTimeout(context.Background(), 5*time.Second)
-	store, err := core.OpenPostgresStore(openContext, requiredEnv("CORE_DATABASE_URL"))
+	store, err = core.OpenPostgresStore(openContext, databaseURL)
 	cancelOpen()
 	if err != nil {
 		logger.Error("core_registry_store_open_failed", "error_code", "CORE_REGISTRY_STORE_OPEN_FAILED")
-		os.Exit(1)
+		return 1
 	}
-	defer store.Close()
 
 	iamClient := &http.Client{
 		Timeout: 5 * time.Second,
@@ -73,10 +130,23 @@ func main() {
 			Certificates: []tls.Certificate{certificate},
 		}),
 	}
-	grantStatus, err := core.NewHTTPGrantStatusProvider(requiredEnv("CORE_IAM_ENDPOINT"), iamClient)
+	iamEndpoint, err := requiredEnv("CORE_IAM_ENDPOINT")
+	if err != nil {
+		logEnvError(logger, "core_iam_status_client_invalid", "CORE_IAM_STATUS_CLIENT_INVALID", err)
+		return 1
+	}
+	grantStatus, err := core.NewHTTPGrantStatusProvider(iamEndpoint, iamClient)
 	if err != nil {
 		logger.Error("core_iam_status_client_invalid", "error_code", "CORE_IAM_STATUS_CLIENT_INVALID")
-		os.Exit(1)
+		return 1
+	}
+
+	relayCtx, cancelRelay := context.WithCancel(context.Background())
+	defer cancelRelay()
+	relay, relayErr := startOptionalOutboxRelay(relayCtx, store, certificate, iamCAs, logger)
+	if relayErr != nil {
+		logger.Error("core_outbox_relay_config_invalid", "error", relayErr.Error())
+		return 1
 	}
 
 	server := &http.Server{
@@ -123,13 +193,8 @@ func main() {
 		}
 	}()
 
-	relayCtx, cancelRelay := context.WithCancel(context.Background())
-	defer cancelRelay()
 	relayDone := make(chan struct{})
-	if relay, relayErr := startOptionalOutboxRelay(relayCtx, store, certificate, iamCAs, logger); relayErr != nil {
-		logger.Error("core_outbox_relay_config_invalid", "error", relayErr.Error())
-		os.Exit(1)
-	} else if relay != nil {
+	if relay != nil {
 		go func() {
 			defer close(relayDone)
 			defer observability.Recover(logger, telemetry.Metrics, "registry_owner.outbox_relay")
@@ -160,21 +225,22 @@ func main() {
 		case <-diagnosticsDone:
 		case <-ctx.Done():
 		}
-		_ = telemetry.Shutdown(ctx)
+		_ = shutdownTelemetry(ctx)
 	}()
 
 	telemetry.MarkReady()
 	logger.Info("core_started", "service", "platform-core-service", "address", server.Addr)
+	exitCode := 0
 	if err := server.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("core_stopped_unexpectedly", "error_code", "CORE_SERVE_FAILED")
-		stopSignals()
-		<-shutdownDone
-		store.Close()
-		os.Exit(1)
+		exitCode = 1
 	}
 	stopSignals()
 	<-shutdownDone
-	logger.Info("core_stopped", "service", "platform-core-service")
+	if exitCode == 0 {
+		logger.Info("core_stopped", "service", "platform-core-service")
+	}
+	return exitCode
 }
 
 func newRegistryHTTPTransport(tlsConfig *tls.Config) *http.Transport {
@@ -302,11 +368,19 @@ func envOr(name, fallback string) string {
 	return fallback
 }
 
-func requiredEnv(name string) string {
+func logEnvError(logger *slog.Logger, msg, code string, err error) {
+	if err != nil {
+		_, _ = os.Stderr.WriteString(err.Error() + "\n")
+	}
+	if logger != nil {
+		logger.Error(msg, "error_code", code)
+	}
+}
+
+func requiredEnv(name string) (string, error) {
 	value := strings.TrimSpace(os.Getenv(name))
 	if value == "" {
-		_, _ = os.Stderr.WriteString(name + " is required\n")
-		os.Exit(1)
+		return "", fmt.Errorf("%s is required", name)
 	}
-	return value
+	return value, nil
 }
