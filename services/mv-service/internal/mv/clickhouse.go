@@ -31,20 +31,12 @@ type ClickHouseHours struct {
 	client   *http.Client
 }
 
-func NewClickHouseHours(baseURL, username, password string, client *http.Client) (*ClickHouseHours, error) {
-	parsed, err := url.Parse(strings.TrimSpace(baseURL))
-	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil {
-		return nil, errors.New("M&V ClickHouse URL must be an HTTP(S) origin")
+func newDefaultClickHouseHTTPClient(timeout time.Duration) *http.Client {
+	if timeout <= 0 {
+		timeout = 15 * time.Second
 	}
-	if client == nil {
-		client = newDefaultMVClickHouseHTTPClient(15 * time.Second)
-	}
-	return &ClickHouseHours{baseURL: parsed, username: strings.TrimSpace(username), password: password, client: client}, nil
-}
-
-func newDefaultMVClickHouseHTTPClient(timeout time.Duration) *http.Client {
 	var transport *http.Transport
-	if base, ok := http.DefaultTransport.(*http.Transport); ok && base != nil {
+	if base, ok := http.DefaultTransport.(*http.Transport); ok {
 		transport = base.Clone()
 	} else {
 		transport = &http.Transport{}
@@ -53,8 +45,68 @@ func newDefaultMVClickHouseHTTPClient(timeout time.Duration) *http.Client {
 	transport.MaxIdleConnsPerHost = 32
 	transport.IdleConnTimeout = 90 * time.Second
 	transport.TLSHandshakeTimeout = 10 * time.Second
-	transport.ExpectContinueTimeout = time.Second
-	return &http.Client{Timeout: timeout, Transport: transport}
+	transport.ExpectContinueTimeout = 1 * time.Second
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
+
+func drainAndClose(body io.ReadCloser) {
+	if body == nil {
+		return
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(body, 64<<10))
+	_ = body.Close()
+}
+
+func NewClickHouseHours(baseURL, username, password string, client *http.Client) (*ClickHouseHours, error) {
+	parsed, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil {
+		return nil, errors.New("M&V ClickHouse URL must be an HTTP(S) origin")
+	}
+	if client == nil {
+		client = newDefaultClickHouseHTTPClient(15 * time.Second)
+	}
+	return &ClickHouseHours{baseURL: parsed, username: strings.TrimSpace(username), password: password, client: client}, nil
+}
+
+// Ping verifies ClickHouse reader connectivity via a lightweight SELECT 1 query.
+func (reader *ClickHouseHours) Ping(ctx context.Context) error {
+	if reader == nil || reader.client == nil || reader.baseURL == nil {
+		return errors.New("M&V ClickHouse reader is not initialized")
+	}
+	endpoint := *reader.baseURL
+	query := endpoint.Query()
+	query.Set("query", "SELECT 1")
+	endpoint.RawQuery = query.Encode()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return fmt.Errorf("build M&V ClickHouse ping request: %w", err)
+	}
+	if reader.username != "" {
+		request.SetBasicAuth(reader.username, reader.password)
+	}
+	response, err := reader.client.Do(request)
+	if err != nil {
+		return fmt.Errorf("ping M&V ClickHouse: %w", err)
+	}
+	defer drainAndClose(response.Body)
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		detail, _ := io.ReadAll(io.LimitReader(response.Body, 2048))
+		return fmt.Errorf("ping M&V ClickHouse returned %d: %s", response.StatusCode, strings.TrimSpace(string(detail)))
+	}
+	return nil
+}
+
+// CloseIdleConnections releases idle HTTP keep-alive connections held by this client.
+func (reader *ClickHouseHours) CloseIdleConnections() {
+	if reader != nil && reader.client != nil {
+		reader.client.CloseIdleConnections()
+	}
 }
 
 // series is one hourly Metric a sample is made of: what it is to the sample, and whose it is.
@@ -146,9 +198,8 @@ func (reader *ClickHouseHours) query(ctx context.Context, sql string) ([]byte, e
 	if err != nil {
 		return nil, err
 	}
-	defer response.Body.Close()
+	defer drainAndClose(response.Body)
 	payload, err := io.ReadAll(io.LimitReader(response.Body, maximumHourlyBytes+1))
-	_, _ = io.Copy(io.Discard, response.Body)
 	if err != nil {
 		return nil, err
 	}

@@ -43,6 +43,7 @@ func OpenRedisLoginStateStore(ctx context.Context, config RedisLoginStateStoreCo
 		return nil, fmt.Errorf("parse OIDC state Redis URL: %w", err)
 	}
 	options.ClientName = "platform-gateway-oidc-state"
+	applyLoginStateRedisBounds(options)
 	client := redis.NewClient(options)
 	if err := client.Ping(ctx).Err(); err != nil {
 		_ = client.Close()
@@ -60,6 +61,35 @@ func (store *RedisLoginStateStore) Close() error {
 		return nil
 	}
 	return store.client.Close()
+}
+
+func applyLoginStateRedisBounds(options *redis.Options) {
+	if options == nil {
+		return
+	}
+	if options.DialTimeout <= 0 || options.DialTimeout > 5*time.Second {
+		options.DialTimeout = 3 * time.Second
+	}
+	if options.ReadTimeout <= 0 || options.ReadTimeout > 5*time.Second {
+		options.ReadTimeout = 2 * time.Second
+	}
+	if options.WriteTimeout <= 0 || options.WriteTimeout > 5*time.Second {
+		options.WriteTimeout = 2 * time.Second
+	}
+	if options.PoolTimeout <= 0 || options.PoolTimeout > 5*time.Second {
+		options.PoolTimeout = 3 * time.Second
+	}
+	if options.PoolSize < 4 {
+		options.PoolSize = 16
+	} else if options.PoolSize > 32 {
+		options.PoolSize = 32
+	}
+	if options.MinIdleConns < 2 {
+		options.MinIdleConns = 2
+	}
+	if options.MinIdleConns > options.PoolSize {
+		options.MinIdleConns = options.PoolSize
+	}
 }
 
 func (store *RedisLoginStateStore) Ping(ctx context.Context) error {

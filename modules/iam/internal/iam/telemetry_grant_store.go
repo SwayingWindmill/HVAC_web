@@ -43,6 +43,7 @@ func OpenPostgresTelemetryGrantStore(ctx context.Context, databaseURL string) (*
 	config.ConnConfig.RuntimeParams["application_name"] = "iam-telemetry-grant-runtime"
 	config.ConnConfig.RuntimeParams["statement_timeout"] = "5s"
 	config.ConnConfig.RuntimeParams["lock_timeout"] = "1s"
+	configureIAMPool(config, 8)
 	config.AfterConnect = func(ctx context.Context, connection *pgx.Conn) error {
 		var role string
 		if err := connection.QueryRow(ctx, `SELECT current_user`).Scan(&role); err != nil {

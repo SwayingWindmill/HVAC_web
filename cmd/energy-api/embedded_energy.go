@@ -38,6 +38,25 @@ type embeddedEnergyServices struct {
 	servers    []*http.Server
 	telemetry  []*observability.Runtime
 	closeFuncs []func()
+	cancelBg   context.CancelFunc
+	httpWG     sync.WaitGroup
+	bgWG       sync.WaitGroup
+	serveErr   chan error
+}
+
+func launchEmbeddedWorker(wg *sync.WaitGroup, fn func()) {
+	if fn == nil {
+		return
+	}
+	if wg == nil {
+		go fn()
+		return
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		fn()
+	}()
 }
 
 var embeddedOwnerNames = []string{"iam", "audit", "core", "telemetry-query", "alarm", "notification", "work-order", "command"}
@@ -104,9 +123,15 @@ func startEmbeddedEnergyServices(ctx context.Context, logger *slog.Logger) (*emb
 	if err != nil {
 		return nil, err
 	}
-	services := &embeddedEnergyServices{}
+	serviceCtx, cancelServices := context.WithCancel(ctx)
+	services := &embeddedEnergyServices{
+		cancelBg: cancelServices,
+		serveErr: make(chan error, len(owners)),
+	}
 	alarmStoreRef := &embeddedAlarmStoreRef{}
 	fail := func(err error) (*embeddedEnergyServices, error) {
+		cancelServices()
+		services.bgWG.Wait()
 		services.Close()
 		return nil, err
 	}
@@ -114,7 +139,7 @@ func startEmbeddedEnergyServices(ctx context.Context, logger *slog.Logger) (*emb
 	for _, owner := range owners {
 		switch owner {
 		case "iam":
-			server, telemetry, closeOwner, configureErr := newEmbeddedIAMServer(ctx, logger)
+			server, telemetry, closeOwner, configureErr := newEmbeddedIAMServer(serviceCtx, logger)
 			if configureErr != nil {
 				return fail(fmt.Errorf("configure embedded IAM: %w", configureErr))
 			}
@@ -122,7 +147,7 @@ func startEmbeddedEnergyServices(ctx context.Context, logger *slog.Logger) (*emb
 			services.telemetry = append(services.telemetry, telemetry)
 			services.closeFuncs = append(services.closeFuncs, closeOwner)
 		case "audit":
-			server, telemetry, closeOwner, configureErr := newEmbeddedAuditServer(ctx, logger)
+			server, telemetry, closeOwner, configureErr := newEmbeddedAuditServer(serviceCtx, logger, &services.bgWG)
 			if configureErr != nil {
 				return fail(fmt.Errorf("configure embedded Audit: %w", configureErr))
 			}
@@ -130,7 +155,7 @@ func startEmbeddedEnergyServices(ctx context.Context, logger *slog.Logger) (*emb
 			services.telemetry = append(services.telemetry, telemetry)
 			services.closeFuncs = append(services.closeFuncs, closeOwner)
 		case "core":
-			server, telemetry, closeOwner, configureErr := newEmbeddedCoreServer(ctx, logger)
+			server, telemetry, closeOwner, configureErr := newEmbeddedCoreServer(serviceCtx, logger, &services.bgWG)
 			if configureErr != nil {
 				return fail(fmt.Errorf("configure embedded Core: %w", configureErr))
 			}
@@ -145,7 +170,7 @@ func startEmbeddedEnergyServices(ctx context.Context, logger *slog.Logger) (*emb
 			services.servers = append(services.servers, server)
 			services.telemetry = append(services.telemetry, telemetry)
 		case "alarm":
-			server, telemetry, closeOwner, configureErr := newEmbeddedAlarmServer(ctx, logger, alarmStoreRef)
+			server, telemetry, closeOwner, configureErr := newEmbeddedAlarmServer(serviceCtx, logger, alarmStoreRef, &services.bgWG)
 			if configureErr != nil {
 				return fail(fmt.Errorf("configure embedded Alarm: %w", configureErr))
 			}
@@ -153,7 +178,7 @@ func startEmbeddedEnergyServices(ctx context.Context, logger *slog.Logger) (*emb
 			services.telemetry = append(services.telemetry, telemetry)
 			services.closeFuncs = append(services.closeFuncs, closeOwner)
 		case "notification":
-			server, telemetry, closeOwner, configureErr := newEmbeddedNotificationServer(ctx, logger)
+			server, telemetry, closeOwner, configureErr := newEmbeddedNotificationServer(serviceCtx, logger, &services.bgWG)
 			if configureErr != nil {
 				return fail(fmt.Errorf("configure embedded Notification: %w", configureErr))
 			}
@@ -161,14 +186,14 @@ func startEmbeddedEnergyServices(ctx context.Context, logger *slog.Logger) (*emb
 			services.telemetry = append(services.telemetry, telemetry)
 			services.closeFuncs = append(services.closeFuncs, closeOwner)
 		case "work-order":
-			server, closeOwner, configureErr := newEmbeddedWorkOrderServer(ctx, logger)
+			server, closeOwner, configureErr := newEmbeddedWorkOrderServer(serviceCtx, logger)
 			if configureErr != nil {
 				return fail(fmt.Errorf("configure embedded Work Order: %w", configureErr))
 			}
 			services.servers = append(services.servers, server)
 			services.closeFuncs = append(services.closeFuncs, closeOwner)
 		case "command":
-			server, telemetry, closeOwner, configureErr := newEmbeddedCommandServer(ctx, logger, alarmStoreRef)
+			server, telemetry, closeOwner, configureErr := newEmbeddedCommandServer(serviceCtx, logger, alarmStoreRef, &services.bgWG)
 			if configureErr != nil {
 				return fail(fmt.Errorf("configure embedded Command: %w", configureErr))
 			}
@@ -183,10 +208,21 @@ func startEmbeddedEnergyServices(ctx context.Context, logger *slog.Logger) (*emb
 	}
 	for _, server := range services.servers {
 		server := server
+		services.httpWG.Add(1)
 		go func() {
+			defer services.httpWG.Done()
+			defer observability.Recover(logger, nil, "energy_api.embedded_server", func(any) {
+				select {
+				case services.serveErr <- fmt.Errorf("embedded service %s panicked", server.Addr):
+				default:
+				}
+			})
 			if err := server.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				logger.Error("energy_api_embedded_service_stopped", "address", server.Addr, "error_code", "ENERGY_API_EMBEDDED_SERVICE_STOPPED")
-				os.Exit(1)
+				logger.Error("energy_api_embedded_service_stopped", "address", server.Addr, "error_code", "ENERGY_API_EMBEDDED_SERVICE_STOPPED", "cause", err.Error())
+				select {
+				case services.serveErr <- fmt.Errorf("embedded service %s: %w", server.Addr, err):
+				default:
+				}
 			}
 		}()
 	}
@@ -194,32 +230,84 @@ func startEmbeddedEnergyServices(ctx context.Context, logger *slog.Logger) (*emb
 	return services, nil
 }
 
-func (services *embeddedEnergyServices) Shutdown(ctx context.Context) {
+func (services *embeddedEnergyServices) ServeErr() <-chan error {
+	if services == nil {
+		return nil
+	}
+	return services.serveErr
+}
+
+func (services *embeddedEnergyServices) MarkNotReady() {
 	if services == nil {
 		return
 	}
 	for _, runtime := range services.telemetry {
 		runtime.MarkNotReady()
 	}
+}
+
+func (services *embeddedEnergyServices) ShutdownHTTP(ctx context.Context) {
+	if services == nil {
+		return
+	}
+	var wg sync.WaitGroup
 	for _, server := range services.servers {
-		_ = server.Shutdown(ctx)
+		srv := server
+		if srv == nil {
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := srv.Shutdown(ctx); err != nil {
+				_ = srv.Close()
+			}
+		}()
+	}
+	wg.Wait()
+	services.httpWG.Wait()
+}
+
+func (services *embeddedEnergyServices) WaitBackground() {
+	if services == nil {
+		return
+	}
+	if services.cancelBg != nil {
+		services.cancelBg()
+	}
+	services.bgWG.Wait()
+}
+
+func (services *embeddedEnergyServices) ShutdownTelemetry(ctx context.Context) {
+	if services == nil {
+		return
 	}
 	for _, runtime := range services.telemetry {
 		_ = runtime.Shutdown(ctx)
 	}
 }
 
+func (services *embeddedEnergyServices) Shutdown(ctx context.Context) {
+	if services == nil {
+		return
+	}
+	services.MarkNotReady()
+	services.ShutdownHTTP(ctx)
+	services.ShutdownTelemetry(ctx)
+}
+
 func (services *embeddedEnergyServices) Close() {
 	if services == nil {
 		return
 	}
+	services.WaitBackground()
 	for i := len(services.closeFuncs) - 1; i >= 0; i-- {
 		services.closeFuncs[i]()
 	}
 	services.closeFuncs = nil
 }
 
-func newEmbeddedAuditServer(ctx context.Context, logger *slog.Logger) (*http.Server, *observability.Runtime, func(), error) {
+func newEmbeddedAuditServer(ctx context.Context, logger *slog.Logger, bgWG *sync.WaitGroup) (*http.Server, *observability.Runtime, func(), error) {
 	certificate, err := tls.LoadX509KeyPair(energyRequiredEnv("AUDIT_TLS_CERT"), energyRequiredEnv("AUDIT_TLS_KEY"))
 	if err != nil {
 		return nil, nil, func() {}, err
@@ -242,7 +330,7 @@ func newEmbeddedAuditServer(ctx context.Context, logger *slog.Logger) (*http.Ser
 		return nil, nil, func() {}, err
 	}
 	telemetry := observability.NewRuntime(observability.RuntimeConfig{
-		Service: "energy-api-audit", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond,
+		Service: "energy-api-audit", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond, Logger: logger,
 	})
 	handler := auditserver.NewHandler(auditserver.Config{
 		Store: store, OperationsWriter: store, DomainWriter: store,
@@ -258,7 +346,10 @@ func newEmbeddedAuditServer(ctx context.Context, logger *slog.Logger) (*http.Ser
 		},
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second,
 	}
-	go runEmbeddedAuditOutboxRelay(ctx, outbox, store, telemetry, logger)
+	launchEmbeddedWorker(bgWG, func() {
+		defer observability.Recover(logger, telemetry.Metrics, "audit.outbox_relay")
+		runEmbeddedAuditOutboxRelay(ctx, outbox, store, telemetry, logger)
+	})
 	closeAll := func() {
 		outbox.Close()
 		store.Close()
@@ -369,7 +460,9 @@ func newEmbeddedIAMServer(ctx context.Context, logger *slog.Logger) (*http.Serve
 		postgresGrantStore, openErr := iamserver.OpenPostgresTelemetryGrantStore(openContext, grantDatabaseURL)
 		cancelOpen()
 		if openErr != nil {
-			store.Close()
+			for _, closeStore := range closeFuncs {
+				closeStore()
+			}
 			return nil, nil, func() {}, openErr
 		}
 		telemetryGrantStore = postgresGrantStore
@@ -377,7 +470,7 @@ func newEmbeddedIAMServer(ctx context.Context, logger *slog.Logger) (*http.Serve
 	}
 
 	telemetry := observability.NewRuntime(observability.RuntimeConfig{
-		Service: "energy-api-iam", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond,
+		Service: "energy-api-iam", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond, Logger: logger,
 	})
 	commandRevocationRevision, err := strconv.ParseUint(energyRequiredEnv("COMMAND_EMERGENCY_REVOCATION_REVISION"), 10, 64)
 	if err != nil {
@@ -450,7 +543,7 @@ func newEmbeddedIAMServer(ctx context.Context, logger *slog.Logger) (*http.Serve
 	return server, telemetry, closeAll, nil
 }
 
-func newEmbeddedCoreServer(ctx context.Context, logger *slog.Logger) (*http.Server, *observability.Runtime, func(), error) {
+func newEmbeddedCoreServer(ctx context.Context, logger *slog.Logger, bgWG *sync.WaitGroup) (*http.Server, *observability.Runtime, func(), error) {
 	certificate, err := tls.LoadX509KeyPair(energyRequiredEnv("CORE_TLS_CERT"), energyRequiredEnv("CORE_TLS_KEY"))
 	if err != nil {
 		return nil, nil, func() {}, err
@@ -483,9 +576,9 @@ func newEmbeddedCoreServer(ctx context.Context, logger *slog.Logger) (*http.Serv
 	}
 	iamClient := &http.Client{
 		Timeout: 5 * time.Second,
-		Transport: &http.Transport{TLSClientConfig: &tls.Config{
+		Transport: cloneDefaultTransportWithTLS(&tls.Config{
 			MinVersion: tls.VersionTLS13, RootCAs: iamRoots, Certificates: []tls.Certificate{certificate}, ServerName: envOr("CORE_IAM_SERVER_NAME", "iam-service"),
-		}},
+		}),
 	}
 	grantStatus, err := coreservice.NewHTTPGrantStatusProvider(energyRequiredEnv("CORE_IAM_ENDPOINT"), iamClient)
 	if err != nil {
@@ -493,7 +586,7 @@ func newEmbeddedCoreServer(ctx context.Context, logger *slog.Logger) (*http.Serv
 		return nil, nil, func() {}, err
 	}
 	telemetry := observability.NewRuntime(observability.RuntimeConfig{
-		Service: "energy-api-core", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond,
+		Service: "energy-api-core", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond, Logger: logger,
 	})
 	server := &http.Server{
 		Addr: envOr("CORE_SERVICE_ADDR", "127.0.0.1:18445"),
@@ -520,7 +613,10 @@ func newEmbeddedCoreServer(ctx context.Context, logger *slog.Logger) (*http.Serv
 		store.Close()
 		return nil, nil, func() {}, relayErr
 	} else if relay != nil {
-		go relay.Run(ctx)
+		launchEmbeddedWorker(bgWG, func() {
+			defer observability.Recover(logger, telemetry.Metrics, "core.outbox_relay")
+			relay.Run(ctx)
+		})
 	}
 	return server, telemetry, store.Close, nil
 }
@@ -568,12 +664,12 @@ func buildEmbeddedCoreOutboxRelayConfig(cert tls.Certificate, defaultRoots, fall
 			CheckRedirect: func(*http.Request, []*http.Request) error {
 				return http.ErrUseLastResponse
 			},
-			Transport: &http.Transport{TLSClientConfig: &tls.Config{
+			Transport: cloneDefaultTransportWithTLS(&tls.Config{
 				MinVersion:   tls.VersionTLS13,
 				RootCAs:      pool,
 				Certificates: []tls.Certificate{cert},
 				ServerName:   serverName,
-			}},
+			}),
 		}, nil
 	}
 	var telClient, connClient, cmdClient *http.Client
@@ -609,7 +705,7 @@ func buildEmbeddedCoreOutboxRelayConfig(cert tls.Certificate, defaultRoots, fall
 	}, true, nil
 }
 
-func newEmbeddedCommandServer(ctx context.Context, logger *slog.Logger, alarmRef *embeddedAlarmStoreRef) (*http.Server, *observability.Runtime, func(), error) {
+func newEmbeddedCommandServer(ctx context.Context, logger *slog.Logger, alarmRef *embeddedAlarmStoreRef, bgWG *sync.WaitGroup) (*http.Server, *observability.Runtime, func(), error) {
 	certPath := energyRequiredEnv("COMMAND_TLS_CERT")
 	keyPath := energyRequiredEnv("COMMAND_TLS_KEY")
 	clientCAPath := energyRequiredEnv("COMMAND_CLIENT_CA")
@@ -722,7 +818,7 @@ func newEmbeddedCommandServer(ctx context.Context, logger *slog.Logger, alarmRef
 		return nil, nil, func() {}, err
 	}
 	telemetry := observability.NewRuntime(observability.RuntimeConfig{
-		Service: "energy-api-command", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 2048, ExportTimeout: 500 * time.Millisecond,
+		Service: "energy-api-command", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 2048, ExportTimeout: 500 * time.Millisecond, Logger: logger,
 	})
 	runtimeHandler, err := commandservice.NewRuntimeHTTPHandler(embeddedCommandRuntimeConfig(authority, telemetry.Metrics, nil))
 	if err != nil {
@@ -751,10 +847,11 @@ func newEmbeddedCommandServer(ctx context.Context, logger *slog.Logger, alarmRef
 		}
 		store.SetControlAlarmOutboxWakeup(alarmRelay.Notify)
 		relayWG.Add(1)
-		go func() {
+		launchEmbeddedWorker(bgWG, func() {
 			defer relayWG.Done()
+			defer observability.Recover(logger, telemetry.Metrics, "command.alarm_relay")
 			alarmRelay.Run(relayCtx)
-		}()
+		})
 	}
 	handler := newEmbeddedCommandHandler(gatewaySPIFFE, operatorHandler, commandHandler, runtimeHandler, telemetry)
 	server := &http.Server{
@@ -842,14 +939,12 @@ func buildEmbeddedCommandControlFailureSender(alarmRef *embeddedAlarmStoreRef, c
 					CheckRedirect: func(*http.Request, []*http.Request) error {
 						return http.ErrUseLastResponse
 					},
-					Transport: &http.Transport{
-						TLSClientConfig: &tls.Config{
-							MinVersion:   tls.VersionTLS13,
-							RootCAs:      roots,
-							Certificates: []tls.Certificate{*clientCert},
-							ServerName:   envOr("ALARM_SERVICE_SERVER_NAME", "localhost"),
-						},
-					},
+					Transport: cloneDefaultTransportWithTLS(&tls.Config{
+						MinVersion:   tls.VersionTLS13,
+						RootCAs:      roots,
+						Certificates: []tls.Certificate{*clientCert},
+						ServerName:   envOr("ALARM_SERVICE_SERVER_NAME", "localhost"),
+					}),
 				}
 			}
 		}
@@ -916,7 +1011,7 @@ func buildEmbeddedCommandControlFailureSender(alarmRef *embeddedAlarmStoreRef, c
 			}
 			return &commandservice.ControlAlarmDeliveryError{Code: "CONTROL_ALARM_HTTP_FAILED"}
 		}
-		_ = resp.Body.Close()
+		drainAndCloseBody(resp.Body)
 		if resp.StatusCode >= http.StatusMultipleChoices {
 			if logger != nil {
 				logger.Warn("embedded_command_control_alarm_rejected", "error_code", "CONTROL_ALARM_HTTP_REJECTED", "status", resp.StatusCode, "command_id", event.CommandID, "event_kind", event.Kind)
@@ -927,7 +1022,7 @@ func buildEmbeddedCommandControlFailureSender(alarmRef *embeddedAlarmStoreRef, c
 	}
 }
 
-func newEmbeddedAlarmServer(ctx context.Context, logger *slog.Logger, alarmRef *embeddedAlarmStoreRef) (*http.Server, *observability.Runtime, func(), error) {
+func newEmbeddedAlarmServer(ctx context.Context, logger *slog.Logger, alarmRef *embeddedAlarmStoreRef, bgWG *sync.WaitGroup) (*http.Server, *observability.Runtime, func(), error) {
 	certificate, err := tls.LoadX509KeyPair(energyRequiredEnv("ALARM_TLS_CERT"), energyRequiredEnv("ALARM_TLS_KEY"))
 	if err != nil {
 		return nil, nil, func() {}, err
@@ -972,7 +1067,7 @@ func newEmbeddedAlarmServer(ctx context.Context, logger *slog.Logger, alarmRef *
 	alarmRef.setStore(store)
 	telemetrySPIFFE := envOr("ALARM_TELEMETRY_SPIFFE", "spiffe://hvac.local/telemetry-runtime-service")
 	telemetry := observability.NewRuntime(observability.RuntimeConfig{
-		Service: "energy-api-alarm", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond,
+		Service: "energy-api-alarm", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond, Logger: logger,
 	})
 	router, err := alarmservice.NewOwnerRouter(alarmservice.OwnerRouterConfig{
 		GatewaySPIFFE:        gatewaySPIFFE,
@@ -987,8 +1082,12 @@ func newEmbeddedAlarmServer(ctx context.Context, logger *slog.Logger, alarmRef *
 		store.Close()
 		return nil, nil, func() {}, err
 	}
+	evalCtx, cancelEval := context.WithCancel(ctx)
 	// A Site that stops reporting sends no telemetry to evaluate; only the scheduled pass notices it (#615).
-	alarmservice.RunScheduledEvaluations(ctx, store, logger)
+	scheduledDone := alarmservice.StartScheduledEvaluations(evalCtx, store, logger)
+	launchEmbeddedWorker(bgWG, func() {
+		<-scheduledDone
+	})
 	server := &http.Server{
 		Addr: envOr("ALARM_SERVICE_ADDR", ":8448"), Handler: router,
 		TLSConfig: &tls.Config{
@@ -996,8 +1095,13 @@ func newEmbeddedAlarmServer(ctx context.Context, logger *slog.Logger, alarmRef *
 		},
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second,
 	}
+	closeOwner := func() {
+		cancelEval()
+		<-scheduledDone
+		store.Close()
+	}
 	logger.Info("energy_api_alarm_configured", "address", server.Addr)
-	return server, telemetry, store.Close, nil
+	return server, telemetry, closeOwner, nil
 }
 
 func newEmbeddedWorkOrderServer(ctx context.Context, logger *slog.Logger) (*http.Server, func(), error) {
@@ -1106,7 +1210,7 @@ func newEmbeddedQueryServer(logger *slog.Logger) (*http.Server, *observability.R
 		return nil, nil, err
 	}
 	telemetry := observability.NewRuntime(observability.RuntimeConfig{
-		Service: "energy-api-query", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond,
+		Service: "energy-api-query", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond, Logger: logger,
 	})
 	server := &http.Server{
 		Addr: envOr("QUERY_SERVICE_ADDR", "127.0.0.1:18447"),
@@ -1143,7 +1247,7 @@ func embeddedQueryHTTPClient(caPath string) (*http.Client, error) {
 		}
 		tlsConfig.RootCAs = roots
 	}
-	return &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{TLSClientConfig: tlsConfig}}, nil
+	return &http.Client{Timeout: 15 * time.Second, Transport: cloneDefaultTransportWithTLS(tlsConfig)}, nil
 }
 
 func embeddedLoadValueFile(path string, maximumBytes int64) (string, error) {

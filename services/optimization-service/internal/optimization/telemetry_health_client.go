@@ -283,7 +283,7 @@ func postWorkloadTelemetryJSON(
 	if err != nil {
 		return fmt.Errorf("request %s: %w", label, err)
 	}
-	defer resp.Body.Close()
+	defer drainAndClose(resp.Body)
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {

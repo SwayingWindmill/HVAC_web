@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -397,5 +398,51 @@ func verifyArchiveFileMatchesManifest(t *testing.T, archivePath, manifestPath, w
 	}
 	if string(decompressed) != wantContent {
 		t.Fatalf("decompressed content=%q want %q", string(decompressed), wantContent)
+	}
+}
+
+func TestColdArchiveExporterPingAndGzipSelectStream(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, pass, ok := r.BasicAuth()
+		if !ok || user != "archive_user" || pass != "archive_pass" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.URL.Query().Get("enable_http_compression") != "1" || r.Header.Get("Accept-Encoding") != "gzip" {
+			t.Fatalf("expected gzip negotiation, query=%v accept=%q", r.URL.Query(), r.Header.Get("Accept-Encoding"))
+		}
+		w.Header().Set("Content-Encoding", "gzip")
+		gz := gzip.NewWriter(w)
+		if r.URL.Query().Get("query") == "SELECT 1" {
+			_, _ = io.WriteString(gz, "1\n")
+		} else {
+			_, _ = io.WriteString(gz, `{"observation_id":"018f2e00-9100-7000-8000-000000000001"}`+"\n")
+		}
+		_ = gz.Close()
+	}))
+	defer server.Close()
+
+	exporter, err := NewColdArchiveExporter(ColdArchiveConfig{
+		BaseURL:    server.URL,
+		ArchiveDir: t.TempDir(),
+		Username:   "archive_user",
+		Password:   "archive_pass",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := exporter.Ping(context.Background()); err != nil {
+		t.Fatalf("Ping failed: %v", err)
+	}
+	res, err := exporter.ExportBeforePrune(context.Background(), ColdArchiveExportRequest{
+		Database: "telemetry_history",
+		Table:    "observations",
+		Cutoff:   time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("ExportBeforePrune with gzip stream failed: %v", err)
+	}
+	if res.Manifest.RowCount != 1 {
+		t.Fatalf("RowCount=%d, want 1", res.Manifest.RowCount)
 	}
 }

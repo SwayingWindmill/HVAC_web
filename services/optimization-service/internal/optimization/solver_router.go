@@ -289,12 +289,7 @@ func newSafeRemoteSolverHTTPClient(timeout time.Duration) *http.Client {
 	if timeout <= 0 {
 		timeout = defaultRemoteSolverTimeout
 	}
-	return &http.Client{
-		Timeout: timeout,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
+	return newPooledHTTPClient(timeout, true)
 }
 
 func (adapter *RoutingSolverAdapter) ensureDefaults() {
@@ -462,7 +457,7 @@ func (adapter *RoutingSolverAdapter) invokeRemoteHTTP(ctx context.Context, endpo
 	if err != nil {
 		return Recommendation{}, fmt.Errorf("remote solver HTTP call failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer drainAndClose(resp.Body)
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maximumRemoteSolverResponseBytes+1))
 	if err != nil {

@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -52,16 +55,28 @@ type AsyncExporter struct {
 	failed   atomic.Uint64
 	mu       sync.Mutex
 	lastErr  string
+	logger   *slog.Logger
+	metrics  *Registry
 }
 
 func NewAsyncExporter(delegate Exporter, queueSize int) *AsyncExporter {
+	return newAsyncExporter(delegate, queueSize, nil, nil)
+}
+
+func newAsyncExporter(delegate Exporter, queueSize int, logger *slog.Logger, metrics *Registry) *AsyncExporter {
 	if delegate == nil {
 		delegate = NopExporter{}
 	}
 	if queueSize <= 0 {
 		queueSize = 256
 	}
-	exporter := &AsyncExporter{delegate: delegate, queue: make(chan []SpanData, queueSize), done: make(chan struct{})}
+	exporter := &AsyncExporter{
+		delegate: delegate,
+		queue:    make(chan []SpanData, queueSize),
+		done:     make(chan struct{}),
+		logger:   logger,
+		metrics:  metrics,
+	}
 	go exporter.run()
 	return exporter
 }
@@ -98,16 +113,26 @@ func (exporter *AsyncExporter) LastErrorCode() string {
 
 func (exporter *AsyncExporter) run() {
 	defer close(exporter.done)
+	defer Recover(exporter.logger, exporter.metrics, "observability.async_exporter")
 	for spans := range exporter.queue {
-		ctx, cancel := context.WithTimeout(context.Background(), 750*time.Millisecond)
-		err := exporter.delegate.Export(ctx, spans)
-		cancel()
-		if err != nil {
-			exporter.failed.Add(uint64(len(spans)))
-			exporter.mu.Lock()
-			exporter.lastErr = "OTEL_EXPORT_FAILED"
-			exporter.mu.Unlock()
-		}
+		exporter.exportBatch(spans)
+	}
+}
+
+func (exporter *AsyncExporter) exportBatch(spans []SpanData) {
+	defer Recover(exporter.logger, exporter.metrics, "observability.async_exporter", func(any) {
+		exporter.failed.Add(uint64(len(spans)))
+		exporter.mu.Lock()
+		exporter.lastErr = "OTEL_EXPORT_PANIC"
+		exporter.mu.Unlock()
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 750*time.Millisecond)
+	defer cancel()
+	if err := exporter.delegate.Export(ctx, spans); err != nil {
+		exporter.failed.Add(uint64(len(spans)))
+		exporter.mu.Lock()
+		exporter.lastErr = "OTEL_EXPORT_FAILED"
+		exporter.mu.Unlock()
 	}
 }
 
@@ -124,7 +149,29 @@ func NewOTLPHTTPExporter(endpoint string, timeout time.Duration) *OTLPHTTPExport
 	if endpoint != "" && !strings.HasSuffix(endpoint, "/v1/traces") {
 		endpoint += "/v1/traces"
 	}
-	return &OTLPHTTPExporter{endpoint: endpoint, client: &http.Client{Timeout: timeout}}
+	transport := cloneDefaultTransport()
+	return &OTLPHTTPExporter{
+		endpoint: endpoint,
+		client:   &http.Client{Timeout: timeout, Transport: transport},
+	}
+}
+
+func cloneDefaultTransport() *http.Transport {
+	var transport *http.Transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok {
+		transport = base.Clone()
+	} else {
+		transport = &http.Transport{}
+	}
+	transport.DialContext = (&net.Dialer{
+		Timeout:   5 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext
+	transport.TLSHandshakeTimeout = 5 * time.Second
+	transport.IdleConnTimeout = 90 * time.Second
+	transport.MaxIdleConns = 100
+	transport.MaxIdleConnsPerHost = 16
+	return transport
 }
 
 func (exporter *OTLPHTTPExporter) Export(ctx context.Context, spans []SpanData) error {
@@ -144,7 +191,10 @@ func (exporter *OTLPHTTPExporter) Export(ctx context.Context, spans []SpanData) 
 	if err != nil {
 		return err
 	}
-	defer response.Body.Close()
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
+		_ = response.Body.Close()
+	}()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return errors.New("OTEL_EXPORT_REJECTED")
 	}

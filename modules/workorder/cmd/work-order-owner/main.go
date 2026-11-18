@@ -6,11 +6,13 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -20,46 +22,106 @@ import (
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	os.Exit(run())
+}
+
+func run() int {
+	logger := observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
+	telemetry := observability.NewRuntime(observability.RuntimeConfig{
+		Service: "work-order-service", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond,
+	})
+	var telemetryShutdownOnce sync.Once
+	shutdownTelemetry := func(ctx context.Context) error {
+		var shutdownErr error
+		telemetryShutdownOnce.Do(func() {
+			shutdownErr = telemetry.Shutdown(ctx)
+		})
+		return shutdownErr
+	}
+	var store *workorderservice.PostgresStore
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = shutdownTelemetry(ctx)
+		cancel()
+		if store != nil {
+			store.Close()
+		}
+	}()
+
+	certPath, err := requiredEnv("WORK_ORDER_TLS_CERT")
+	if err != nil {
+		logEnvError(logger, "work_order_tls_configuration_invalid", "WORK_ORDER_TLS_CONFIGURATION_INVALID", err)
+		return 1
+	}
+	keyPath, err := requiredEnv("WORK_ORDER_TLS_KEY")
+	if err != nil {
+		logEnvError(logger, "work_order_tls_configuration_invalid", "WORK_ORDER_TLS_CONFIGURATION_INVALID", err)
+		return 1
+	}
+	clientCAPath, err := requiredEnv("WORK_ORDER_CLIENT_CA")
+	if err != nil {
+		logEnvError(logger, "work_order_tls_configuration_invalid", "WORK_ORDER_TLS_CONFIGURATION_INVALID", err)
+		return 1
+	}
 	serverTLSConfig, err := workloadtls.NewServerTLSConfig(workloadtls.ServerConfig{
 		CertificateFiles: workloadtls.CertificateFiles{
-			CertificatePath: requiredEnv("WORK_ORDER_TLS_CERT"),
-			PrivateKeyPath:  requiredEnv("WORK_ORDER_TLS_KEY"),
+			CertificatePath: certPath,
+			PrivateKeyPath:  keyPath,
 		},
-		ClientCAPath: requiredEnv("WORK_ORDER_CLIENT_CA"),
+		ClientCAPath: clientCAPath,
 	})
 	if err != nil {
 		logger.Error("work_order_tls_configuration_invalid", "error_code", "WORK_ORDER_TLS_CONFIGURATION_INVALID")
-		os.Exit(1)
+		return 1
 	}
-	gatewayPublicKey, err := loadCertificatePublicKey(requiredEnv("WORK_ORDER_GATEWAY_DELEGATION_CERT"))
+	delegationCertPath, err := requiredEnv("WORK_ORDER_GATEWAY_DELEGATION_CERT")
+	if err != nil {
+		logEnvError(logger, "work_order_gateway_key_load_failed", "WORK_ORDER_GATEWAY_KEY_LOAD_FAILED", err)
+		return 1
+	}
+	gatewayPublicKey, err := loadCertificatePublicKey(delegationCertPath)
 	if err != nil {
 		logger.Error("work_order_gateway_key_load_failed", "error_code", "WORK_ORDER_GATEWAY_KEY_LOAD_FAILED")
-		os.Exit(1)
+		return 1
 	}
-	databaseURL, err := loadRequiredValueFile(requiredEnv("WORK_ORDER_DATABASE_URL_FILE"), 64<<10)
+	databaseURLFile, err := requiredEnv("WORK_ORDER_DATABASE_URL_FILE")
+	if err != nil {
+		logEnvError(logger, "work_order_database_reference_invalid", "WORK_ORDER_DATABASE_REFERENCE_INVALID", err)
+		return 1
+	}
+	databaseURL, err := loadRequiredValueFile(databaseURLFile, 64<<10)
 	if err != nil {
 		logger.Error("work_order_database_reference_invalid", "error_code", "WORK_ORDER_DATABASE_REFERENCE_INVALID")
-		os.Exit(1)
+		return 1
 	}
-	mutationDatabaseURL, err := loadRequiredValueFile(requiredEnv("WORK_ORDER_MUTATION_DATABASE_URL_FILE"), 64<<10)
+	mutationDatabaseURLFile, err := requiredEnv("WORK_ORDER_MUTATION_DATABASE_URL_FILE")
+	if err != nil {
+		logEnvError(logger, "work_order_mutation_database_reference_invalid", "WORK_ORDER_MUTATION_DATABASE_REFERENCE_INVALID", err)
+		return 1
+	}
+	mutationDatabaseURL, err := loadRequiredValueFile(mutationDatabaseURLFile, 64<<10)
 	if err != nil {
 		logger.Error("work_order_mutation_database_reference_invalid", "error_code", "WORK_ORDER_MUTATION_DATABASE_REFERENCE_INVALID")
-		os.Exit(1)
+		return 1
 	}
-	cursorSecret, err := loadRequiredValueFile(requiredEnv("WORK_ORDER_CURSOR_SECRET_FILE"), 4<<10)
+	cursorSecretFile, err := requiredEnv("WORK_ORDER_CURSOR_SECRET_FILE")
+	if err != nil {
+		logEnvError(logger, "work_order_cursor_secret_invalid", "WORK_ORDER_CURSOR_SECRET_INVALID", err)
+		return 1
+	}
+	cursorSecret, err := loadRequiredValueFile(cursorSecretFile, 4<<10)
 	if err != nil || len(cursorSecret) < 32 {
 		logger.Error("work_order_cursor_secret_invalid", "error_code", "WORK_ORDER_CURSOR_SECRET_INVALID")
-		os.Exit(1)
+		return 1
 	}
 	openContext, cancelOpen := context.WithTimeout(context.Background(), 10*time.Second)
-	store, err := workorderservice.OpenPostgresStoreWithMutations(openContext, databaseURL, mutationDatabaseURL, []byte(cursorSecret))
+	store, err = workorderservice.OpenPostgresStoreWithMutations(openContext, databaseURL, mutationDatabaseURL, []byte(cursorSecret))
 	cancelOpen()
 	if err != nil {
 		logger.Error("work_order_database_open_failed", "error_code", "WORK_ORDER_DATABASE_OPEN_FAILED")
-		os.Exit(1)
+		return 1
 	}
-	defer store.Close()
+	telemetry.SetDependencies(observability.Dependency{Name: "postgres", Required: true, Check: store.Ping})
 	gatewaySPIFFE := envOr("WORK_ORDER_GATEWAY_SPIFFE", workorderservice.DefaultGatewaySPIFFEID)
 	handler, err := workorderservice.NewHTTPHandler(workorderservice.HTTPConfig{
 		Store: store, GatewayPublicKey: gatewayPublicKey, GatewaySPIFFEID: gatewaySPIFFE,
@@ -67,7 +129,7 @@ func main() {
 	})
 	if err != nil {
 		logger.Error("work_order_http_configuration_invalid", "error_code", "WORK_ORDER_HTTP_CONFIGURATION_INVALID")
-		os.Exit(1)
+		return 1
 	}
 	router, err := workorderservice.NewOwnerRouter(workorderservice.OwnerRouterConfig{
 		GatewaySPIFFE: gatewaySPIFFE,
@@ -76,27 +138,93 @@ func main() {
 	})
 	if err != nil {
 		logger.Error("work_order_owner_router_configuration_invalid", "error_code", "WORK_ORDER_OWNER_ROUTER_CONFIGURATION_INVALID")
-		os.Exit(1)
+		return 1
 	}
 	server := &http.Server{
-		Addr: envOr("WORK_ORDER_SERVICE_ADDR", ":8449"), Handler: router, TLSConfig: serverTLSConfig,
+		Addr: envOr("WORK_ORDER_SERVICE_ADDR", ":8449"), Handler: observability.InstrumentHTTP(router, telemetry, observability.HTTPInstrumentationConfig{
+			Namespace: "hvac_work_order", Service: "work-order-service", SpanName: "http.work_order.request",
+		}), TLSConfig: serverTLSConfig,
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second,
 	}
-	shutdown := make(chan os.Signal, 1)
-	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
+	diagnostics := newWorkOrderDiagnosticsServer(envOr("WORK_ORDER_DIAGNOSTICS_ADDR", ":19089"), telemetry)
+	diagnosticsDone := make(chan struct{})
 	go func() {
-		defer observability.Recover(logger, nil, "work_order_owner.shutdown")
-		<-shutdown
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		_ = server.Shutdown(ctx)
+		defer close(diagnosticsDone)
+		defer observability.Recover(logger, telemetry.Metrics, "work_order_owner.diagnostics")
+		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("work_order_diagnostics_failed", "error_code", "DIAGNOSTICS_SERVE_FAILED")
+		}
 	}()
-	logger.Info("work_order_service_started", "address", server.Addr, "mode", "internal-read-only")
+
+	signalCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignals()
+	shutdownDone := make(chan struct{})
+	go func() {
+		defer close(shutdownDone)
+		defer observability.Recover(logger, telemetry.Metrics, "work_order_owner.shutdown")
+		<-signalCtx.Done()
+		shutdownWorkOrderOwner(workOrderShutdownDeps{
+			markNotReady:      telemetry.MarkNotReady,
+			shutdownServer:    server.Shutdown,
+			shutdownDiag:      diagnostics.Shutdown,
+			diagnosticsDone:   diagnosticsDone,
+			shutdownTelemetry: shutdownTelemetry,
+		})
+	}()
+	telemetry.MarkReady()
+	logger.Info("work_order_service_started", "address", server.Addr, "diagnostics_address", diagnostics.Addr, "mode", "internal-read-only")
+	exitCode := 0
 	if err := server.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("work_order_service_stopped_unexpectedly", "error_code", "WORK_ORDER_SERVE_FAILED")
-		os.Exit(1)
+		exitCode = 1
 	}
-	logger.Info("work_order_service_stopped")
+	stopSignals()
+	<-shutdownDone
+	if exitCode == 0 {
+		logger.Info("work_order_service_stopped")
+	}
+	return exitCode
+}
+
+func newWorkOrderDiagnosticsServer(addr string, telemetry *observability.Runtime) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           telemetry.DiagnosticsHandler(),
+		ReadHeaderTimeout: 2 * time.Second,
+		ReadTimeout:       3 * time.Second,
+		WriteTimeout:      3 * time.Second,
+	}
+}
+
+type workOrderShutdownDeps struct {
+	markNotReady      func()
+	shutdownServer    func(context.Context) error
+	shutdownDiag      func(context.Context) error
+	diagnosticsDone   <-chan struct{}
+	shutdownTelemetry func(context.Context) error
+}
+
+func shutdownWorkOrderOwner(deps workOrderShutdownDeps) {
+	if deps.markNotReady != nil {
+		deps.markNotReady()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if deps.shutdownServer != nil {
+		_ = deps.shutdownServer(ctx)
+	}
+	if deps.shutdownDiag != nil {
+		_ = deps.shutdownDiag(ctx)
+	}
+	if deps.diagnosticsDone != nil {
+		select {
+		case <-deps.diagnosticsDone:
+		case <-ctx.Done():
+		}
+	}
+	if deps.shutdownTelemetry != nil {
+		_ = deps.shutdownTelemetry(ctx)
+	}
 }
 
 func loadCertificatePublicKey(path string) (crypto.PublicKey, error) {
@@ -142,11 +270,19 @@ func envOr(name, fallback string) string {
 	return fallback
 }
 
-func requiredEnv(name string) string {
+func logEnvError(logger *slog.Logger, msg, code string, err error) {
+	if err != nil {
+		_, _ = os.Stderr.WriteString(err.Error() + "\n")
+	}
+	if logger != nil {
+		logger.Error(msg, "error_code", code)
+	}
+}
+
+func requiredEnv(name string) (string, error) {
 	value := strings.TrimSpace(os.Getenv(name))
 	if value == "" {
-		_, _ = os.Stderr.WriteString(name + " is required\n")
-		os.Exit(1)
+		return "", fmt.Errorf("%s is required", name)
 	}
-	return value
+	return value, nil
 }

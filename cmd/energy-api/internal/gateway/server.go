@@ -157,11 +157,20 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 
 	recorder := &statusRecorder{ResponseWriter: writer, status: http.StatusOK}
 	defer func() {
-		if recovered := recover(); recovered != nil {
-			writeProblem(recorder, request, http.StatusInternalServerError, "INTERNAL_ERROR", "Internal server error", "The request could not be completed.", true, nil)
+		recovered := recover()
+		recoveredErr, isErr := recovered.(error)
+		aborted := isErr && errors.Is(recoveredErr, http.ErrAbortHandler)
+		if recovered != nil && !aborted {
+			observability.RecordHTTPPanic(h.logger, h.observability.Metrics, serviceName)
+			if !recorder.wroteHeader {
+				writeProblem(recorder, request, http.StatusInternalServerError, "INTERNAL_ERROR", "Internal server error", "The request could not be completed.", true, nil)
+			}
 		}
 		result := "ok"
-		if recorder.status >= http.StatusBadRequest {
+		if aborted {
+			result = "error"
+			span.SetStatus("error", "aborted")
+		} else if recorder.status >= http.StatusBadRequest {
 			result = "error"
 			span.SetStatus("error", http.StatusText(recorder.status))
 		} else {
@@ -182,6 +191,9 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			"request_id", requestID,
 			"trace_id", traceID,
 		)
+		if aborted {
+			panic(http.ErrAbortHandler)
+		}
 	}()
 
 	h.route(recorder, request)
@@ -872,4 +884,14 @@ func (recorder *statusRecorder) Write(body []byte) (int, error) {
 		recorder.WriteHeader(http.StatusOK)
 	}
 	return recorder.ResponseWriter.Write(body)
+}
+
+const maxDrainBodyBytes = 64 << 10
+
+func drainAndCloseBody(body io.ReadCloser) {
+	if body == nil {
+		return
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(body, maxDrainBodyBytes))
+	_ = body.Close()
 }

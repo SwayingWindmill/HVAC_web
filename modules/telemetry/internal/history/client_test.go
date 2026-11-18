@@ -1,6 +1,7 @@
 package history
 
 import (
+	"compress/gzip"
 	"context"
 	"io"
 	"net/http"
@@ -196,13 +197,16 @@ func TestNewClientInitializesTunedDefaultHTTPTransport(t *testing.T) {
 	if !ok || transport == nil {
 		t.Fatalf("Transport=%T, want *http.Transport", client.httpClient.Transport)
 	}
-	if transport.MaxIdleConns != 64 ||
-		transport.MaxIdleConnsPerHost != 32 ||
+	if transport.MaxConnsPerHost != 16 ||
+		transport.MaxIdleConns != 64 ||
+		transport.MaxIdleConnsPerHost != 16 ||
 		transport.IdleConnTimeout != 90*time.Second ||
 		transport.TLSHandshakeTimeout != 10*time.Second ||
-		transport.ExpectContinueTimeout != time.Second {
-		t.Fatalf("unexpected transport tuning: MaxIdleConns=%d MaxIdleConnsPerHost=%d IdleConnTimeout=%s TLSHandshakeTimeout=%s ExpectContinueTimeout=%s",
-			transport.MaxIdleConns, transport.MaxIdleConnsPerHost, transport.IdleConnTimeout, transport.TLSHandshakeTimeout, transport.ExpectContinueTimeout)
+		transport.ResponseHeaderTimeout != 30*time.Second ||
+		transport.ExpectContinueTimeout != time.Second ||
+		transport.DialContext == nil {
+		t.Fatalf("unexpected transport tuning: MaxConnsPerHost=%d MaxIdleConns=%d MaxIdleConnsPerHost=%d IdleConnTimeout=%s TLSHandshakeTimeout=%s ResponseHeaderTimeout=%s ExpectContinueTimeout=%s DialContext=%v",
+			transport.MaxConnsPerHost, transport.MaxIdleConns, transport.MaxIdleConnsPerHost, transport.IdleConnTimeout, transport.TLSHandshakeTimeout, transport.ResponseHeaderTimeout, transport.ExpectContinueTimeout, transport.DialContext != nil)
 	}
 
 	custom := &http.Client{Timeout: 3 * time.Second}
@@ -223,4 +227,68 @@ func TestNewClientInitializesTunedDefaultHTTPTransport(t *testing.T) {
 func pointRowJSON(observationID, acceptance, valueType, valueJSON, sampledAt string) string {
 	return `{"observation_id":"` + observationID + `","point_id":"` + historyPointID + `","sensor_id":null,"telemetry_key":"zone.mode","point_type":"STATE","point_revision":7,"sampled_at":"` + sampledAt + `","received_at":"2026-08-19T01:05:00.000Z","acceptance_status":"` + acceptance + `","value_type":"` + valueType + `","value_json":"` + valueJSON + `","unit":null,"quality":"GOOD","quality_reasons":[],"source_event_id":"` + observationID + `","source_partition":"mqtt:gateway:device:zone.mode","source_offset":42}
 `
+}
+
+func TestClickHouseHistoryClientPingAndGzipSelectDecompression(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, pass, ok := r.BasicAuth()
+		if !ok || user != "hist_user" || pass != "hist_pass" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.Header.Get("Accept-Encoding") != "gzip" {
+			t.Fatalf("expected Accept-Encoding: gzip, got %q", r.Header.Get("Accept-Encoding"))
+		}
+		if r.URL.Query().Get("enable_http_compression") != "1" {
+			t.Fatalf("expected enable_http_compression=1, got %v", r.URL.Query())
+		}
+		w.Header().Set("Content-Encoding", "gzip")
+		gz := gzip.NewWriter(w)
+		if r.URL.Query().Get("query") == "SELECT 1" {
+			_, _ = io.WriteString(gz, "1\n")
+			_ = gz.Close()
+			return
+		}
+		sqlBytes, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sql := string(sqlBytes)
+		if strings.Contains(sql, "snapshot_cutoff") {
+			_, _ = io.WriteString(gz, `{"snapshot_at":"2026-08-19T01:10:00.000Z","projection_watermark":null}`+"\n")
+		} else {
+			_, _ = io.WriteString(gz, pointRowJSON("018f2e00-5000-7000-8000-000000000001", "ACCEPTED", "STRING", `\"COOL\"`, "2026-08-19T01:00:00.000Z"))
+		}
+		_ = gz.Close()
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		BaseURL:  server.URL,
+		Database: "telemetry_history",
+		Table:    "observations",
+		Username: "hist_user",
+		Password: "hist_pass",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Ping(context.Background()); err != nil {
+		t.Fatalf("Ping failed: %v", err)
+	}
+	resp, err := client.QueryDeviceHistory(context.Background(), telemetryhistorymodel.DeviceHistoryQuery{
+		TenantID: historyTenantID,
+		SiteID:   historySiteID,
+		DeviceID: historyDeviceID,
+		Keys:     []string{"zone.mode"},
+		From:     time.Date(2026, 8, 19, 0, 0, 0, 0, time.UTC),
+		To:       time.Date(2026, 8, 19, 2, 0, 0, 0, time.UTC),
+		PageSize: 10,
+	})
+	if err != nil {
+		t.Fatalf("QueryDeviceHistory failed: %v", err)
+	}
+	if len(resp.Observations) != 1 || resp.Observations[0].ObservationID != "018f2e00-5000-7000-8000-000000000001" {
+		t.Fatalf("unexpected gzip response observations: %+v", resp.Observations)
+	}
 }

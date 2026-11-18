@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
 const maxMVRequestBytes = int64(64 << 10)
@@ -72,15 +73,36 @@ func NewHTTPHandler(service *Service, auth AuthConfig) (http.Handler, error) {
 
 // HealthHandler answers the container health check on the plain diagnostics port.
 func HealthHandler() http.Handler {
+	return NewDiagnosticsHandler(nil)
+}
+
+// NewDiagnosticsHandler serves /healthz, /metrics (preserving hvac_service_up), and runtime readiness probes.
+func NewDiagnosticsHandler(runtime *observability.Runtime) http.Handler {
+	metrics := observability.NewRegistry()
+	var runtimeHandler http.Handler
+	if runtime != nil {
+		if runtime.Metrics != nil {
+			metrics = runtime.Metrics
+		}
+		runtimeHandler = runtime.DiagnosticsHandler()
+	}
+	_ = metrics.SetGauge(
+		"hvac_service_up",
+		"1 when this diagnostics server is serving.",
+		map[string]string{"service": "mv-service"},
+		1,
+	)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		_, _ = writer.Write([]byte(`{"status":"ok"}`))
 	})
-	mux.HandleFunc("GET /metrics", func(writer http.ResponseWriter, _ *http.Request) {
-		writer.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-		_, _ = writer.Write([]byte("# HELP hvac_service_up 1 when this diagnostics server is serving.\n# TYPE hvac_service_up gauge\nhvac_service_up{service=\"mv-service\"} 1\n"))
-	})
+	if runtimeHandler != nil {
+		mux.Handle("/", runtimeHandler)
+	} else {
+		mux.Handle("GET /metrics", metrics.Handler())
+	}
 	return mux
 }
 

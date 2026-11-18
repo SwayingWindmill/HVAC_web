@@ -36,9 +36,22 @@ func NewClickHouseHistoryReader(config HistoryConfig) (*ClickHouseHistoryReader,
 	}
 	client := config.HTTPClient
 	if client == nil {
-		client = newDefaultForecastClickHouseHTTPClient(10*time.Second, false)
+		client = newDefaultClickHouseHTTPClient(10 * time.Second)
 	}
 	return &ClickHouseHistoryReader{baseURL: parsed, username: strings.TrimSpace(config.Username), password: config.Password, client: client}, nil
+}
+
+func (reader *ClickHouseHistoryReader) CloseIdleConnections() {
+	if reader != nil && reader.client != nil {
+		reader.client.CloseIdleConnections()
+	}
+}
+
+func (reader *ClickHouseHistoryReader) Ping(ctx context.Context) error {
+	if reader == nil || reader.baseURL == nil || reader.client == nil {
+		return errors.New("forecast history reader is unavailable")
+	}
+	return pingClickHouseHTTP(ctx, reader.baseURL, reader.username, reader.password, reader.client, "forecast ClickHouse history")
 }
 
 func (reader *ClickHouseHistoryReader) ReadMetricSeries(ctx context.Context, query MetricHistoryQuery) ([]MetricFact, error) {
@@ -92,9 +105,8 @@ FORMAT JSONEachRow`, query.TenantID, query.SiteID, query.SubjectType, query.Subj
 	if err != nil {
 		return nil, fmt.Errorf("query authoritative Forecast metric history: %w", err)
 	}
-	defer response.Body.Close()
+	defer drainAndClose(response.Body)
 	payload, err := io.ReadAll(io.LimitReader(response.Body, maximumForecastHistoryResponseBytes+1))
-	_, _ = io.Copy(io.Discard, response.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read authoritative Forecast metric history: %w", err)
 	}

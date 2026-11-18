@@ -75,7 +75,7 @@ func (standardOIDCProtocol) Discover(ctx context.Context, client *http.Client, i
 	if err != nil {
 		return oidcDiscovery{}, newOIDCProtocolError(err, capture)
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	if response.StatusCode != http.StatusOK {
 		return oidcDiscovery{}, newOIDCProtocolError(fmt.Errorf("OIDC discovery returned HTTP %d", response.StatusCode), capture)
 	}
@@ -141,7 +141,7 @@ func (standardOIDCProtocol) ExchangeCode(ctx context.Context, client *http.Clien
 	if err != nil {
 		return oidcTokenResponse{}, newOIDCProtocolError(err, capture)
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	var payload oidcTokenResponse
 	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
 		return oidcTokenResponse{}, newOIDCProtocolError(fmt.Errorf("decode OIDC token response: %w", err), capture)
@@ -166,7 +166,7 @@ func (standardOIDCProtocol) VerifyIDToken(ctx context.Context, client *http.Clie
 	if err != nil {
 		return newOIDCProtocolError(err, capture)
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	if response.StatusCode != http.StatusOK {
 		return newOIDCProtocolError(fmt.Errorf("OIDC JWKS endpoint returned HTTP %d", response.StatusCode), capture)
 	}
@@ -238,7 +238,7 @@ func (transport boundedOIDCTransport) RoundTrip(request *http.Request) (*http.Re
 		transport.capture.StatusCode = response.StatusCode
 	}
 	body, readErr := io.ReadAll(io.LimitReader(response.Body, maximumOIDCResponseSize+1))
-	_ = response.Body.Close()
+	drainAndCloseBody(response.Body)
 	if readErr != nil {
 		return nil, readErr
 	}

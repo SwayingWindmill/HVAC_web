@@ -256,7 +256,7 @@ func (controller *identityController) backchannel(request *http.Request, method,
 	if err != nil {
 		return 0, nil, err
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	reply, err := io.ReadAll(io.LimitReader(response.Body, 16<<10))
 	if err != nil {
 		return 0, nil, err

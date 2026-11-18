@@ -619,10 +619,12 @@ func (connector *Connector) drainReplyWorkers(ctx context.Context) {
 	if !started {
 		return
 	}
+	logger, metrics := connector.recoveryDeps()
 	done := make(chan struct{})
 	go func() {
+		defer close(done)
+		defer observability.Recover(logger, metrics, "command.mqtt_reply_drain_wait")
 		connector.replyWG.Wait()
-		close(done)
 	}()
 	select {
 	case <-done:

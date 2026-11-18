@@ -5,7 +5,7 @@ import (
 	"crypto"
 	"encoding/json"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
 // report-service serves only the Gateway, with a context it signed to read the Site after deciding
@@ -31,9 +32,13 @@ type AuthConfig struct {
 	GatewayPublicKey crypto.PublicKey
 	GatewaySPIFFE    string
 	Now              func() time.Time
+	Logger           *slog.Logger
 }
 
-type HTTPHandler struct{ service *Service }
+type HTTPHandler struct {
+	service *Service
+	logger  *slog.Logger
+}
 
 func NewHTTPHandler(service *Service, auth AuthConfig) (http.Handler, error) {
 	if service == nil {
@@ -43,6 +48,10 @@ func NewHTTPHandler(service *Service, auth AuthConfig) (http.Handler, error) {
 	verifier := identitycontext.SiteContextVerifier{PublicKey: auth.GatewayPublicKey, Issuer: gateway, Audience: Audience, Header: ContextHeader, Now: auth.Now}
 	if err := verifier.Validate(); err != nil {
 		return nil, err
+	}
+	logger := auth.Logger
+	if logger == nil {
+		logger = slog.Default()
 	}
 	read := func(next http.HandlerFunc) http.HandlerFunc {
 		return func(writer http.ResponseWriter, request *http.Request) {
@@ -58,7 +67,7 @@ func NewHTTPHandler(service *Service, auth AuthConfig) (http.Handler, error) {
 			next(writer, request.WithContext(context.WithValue(request.Context(), siteKey{}, site)))
 		}
 	}
-	handler := &HTTPHandler{service: service}
+	handler := &HTTPHandler{service: service, logger: logger}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/sites/{siteId}/reports/monthly/{month}", read(handler.month))
 	mux.HandleFunc("GET /v1/sites/{siteId}/reports/monthly", read(handler.year))
@@ -67,15 +76,36 @@ func NewHTTPHandler(service *Service, auth AuthConfig) (http.Handler, error) {
 
 // HealthHandler answers the container health check on the plain diagnostics port.
 func HealthHandler() http.Handler {
+	return NewDiagnosticsHandler(nil)
+}
+
+// NewDiagnosticsHandler serves /healthz, /metrics (preserving hvac_service_up), and runtime readiness probes.
+func NewDiagnosticsHandler(runtime *observability.Runtime) http.Handler {
+	metrics := observability.NewRegistry()
+	var runtimeHandler http.Handler
+	if runtime != nil {
+		if runtime.Metrics != nil {
+			metrics = runtime.Metrics
+		}
+		runtimeHandler = runtime.DiagnosticsHandler()
+	}
+	_ = metrics.SetGauge(
+		"hvac_service_up",
+		"1 when this diagnostics server is serving.",
+		map[string]string{"service": Audience},
+		1,
+	)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		_, _ = writer.Write([]byte(`{"status":"ok"}`))
 	})
-	mux.HandleFunc("GET /metrics", func(writer http.ResponseWriter, _ *http.Request) {
-		writer.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-		_, _ = writer.Write([]byte("# HELP hvac_service_up 1 when this diagnostics server is serving.\n# TYPE hvac_service_up gauge\nhvac_service_up{service=\"report-service\"} 1\n"))
-	})
+	if runtimeHandler != nil {
+		mux.Handle("/", runtimeHandler)
+	} else {
+		mux.Handle("GET /metrics", metrics.Handler())
+	}
 	return mux
 }
 
@@ -99,7 +129,7 @@ func (handler *HTTPHandler) month(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	if err != nil {
-		log.Printf("read report snapshot: %v", err)
+		handler.logger.Warn("report_snapshot_read_failed", "error_code", "REPORT_UNAVAILABLE", "month", month, "error", err)
 		writeProblem(writer, http.StatusServiceUnavailable, "REPORT_UNAVAILABLE")
 		return
 	}
@@ -115,7 +145,7 @@ func (handler *HTTPHandler) year(writer http.ResponseWriter, request *http.Reque
 	}
 	snapshots, err := handler.service.Year(request.Context(), site.TenantID, site.SiteID, year)
 	if err != nil {
-		log.Printf("read report snapshots: %v", err)
+		handler.logger.Warn("report_year_read_failed", "error_code", "REPORT_UNAVAILABLE", "year", year, "error", err)
 		writeProblem(writer, http.StatusServiceUnavailable, "REPORT_UNAVAILABLE")
 		return
 	}

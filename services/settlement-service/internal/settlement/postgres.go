@@ -14,11 +14,67 @@ import (
 
 type PostgresStore struct{ pool *pgxpool.Pool }
 
+// ParsePostgresPoolConfig builds a pgxpool configuration with bounded pool sizing and health checks.
+func ParsePostgresPoolConfig(dsn string) (*pgxpool.Config, error) {
+	if strings.TrimSpace(dsn) == "" {
+		return nil, errors.New("settlement postgres dsn is required")
+	}
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("parse settlement postgres dsn: %w", err)
+	}
+	cfg.MaxConns = 4
+	cfg.MinConns = 1
+	cfg.MaxConnLifetime = 30 * time.Minute
+	cfg.MaxConnIdleTime = 5 * time.Minute
+	cfg.HealthCheckPeriod = 30 * time.Second
+	return cfg, nil
+}
+
+// OpenPostgres connects to PostgreSQL with bounded pool limits and verifies connectivity.
+func OpenPostgres(ctx context.Context, dsn string) (*PostgresStore, error) {
+	cfg, err := ParsePostgresPoolConfig(dsn)
+	if err != nil {
+		return nil, err
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("open settlement postgres pool: %w", err)
+	}
+	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := pool.Ping(pingCtx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("ping settlement postgres pool: %w", err)
+	}
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		pool.Close()
+		return nil, err
+	}
+	return store, nil
+}
+
 func NewPostgresStore(pool *pgxpool.Pool) (*PostgresStore, error) {
 	if pool == nil {
 		return nil, errors.New("settlement postgres pool is required")
 	}
 	return &PostgresStore{pool: pool}, nil
+}
+
+// Close closes the underlying PostgreSQL connection pool if present.
+func (s *PostgresStore) Close() {
+	if s != nil && s.pool != nil {
+		s.pool.Close()
+	}
+}
+
+// Ping verifies PostgreSQL connectivity.
+func (s *PostgresStore) Ping(ctx context.Context) error {
+	if s == nil || s.pool == nil {
+		return errors.New("settlement postgres store is not initialized")
+	}
+	return s.pool.Ping(ctx)
 }
 
 func setScope(ctx context.Context, tx pgx.Tx, tenantID, siteID string) error {

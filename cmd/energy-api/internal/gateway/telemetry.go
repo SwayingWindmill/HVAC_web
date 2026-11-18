@@ -106,7 +106,7 @@ func newTelemetryController(config *TelemetryConfig) *telemetryController {
 	resolved := *config
 	resolved.RuntimeBaseURL = strings.TrimRight(strings.TrimSpace(resolved.RuntimeBaseURL), "/")
 	if resolved.RuntimeHTTPClient == nil {
-		resolved.RuntimeHTTPClient = &http.Client{}
+		resolved.RuntimeHTTPClient = &http.Client{Timeout: 10 * time.Second}
 	}
 	if resolved.RuntimeAudience == "" {
 		resolved.RuntimeAudience = "telemetry-runtime-service"
@@ -474,7 +474,7 @@ func (h *handler) authorizeTelemetryForPresenter(ctx context.Context, publicRequ
 		failure := telemetryAuthorizationUnavailable("IAM authorization is temporarily unavailable.")
 		return telemetryAuthorization{}, &failure
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	if response.StatusCode != http.StatusOK {
 		failure := telemetryAuthorizationUnavailable("IAM did not return a valid Telemetry authorization decision.")
 		return telemetryAuthorization{}, &failure
@@ -636,7 +636,7 @@ func (h *handler) revokeTelemetrySessionSubscriptions(ctx context.Context, tenan
 		}
 		return
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
 	if response.StatusCode != http.StatusOK {
 		if h.logger != nil {
@@ -699,7 +699,7 @@ func (h *handler) executeTelemetryRuntimeWithContext(ctx context.Context, public
 		failure := telemetryUnavailable("Telemetry Runtime is temporarily unavailable.")
 		return nil, &failure
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	raw, err := readBoundedBody(response.Body, h.telemetry.maxResponseBytes)
 	if err != nil {
 		outcome = "unavailable"

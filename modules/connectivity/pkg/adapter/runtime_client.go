@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -210,17 +211,27 @@ func newMTLSHTTPClient(config TelemetryRuntimeConfig) (*http.Client, error) {
 	if !rootCAs.AppendCertsFromPEM(caContent) {
 		return nil, errors.New("telemetry runtime CA is invalid")
 	}
-	transport := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		TLSClientConfig: &tls.Config{
-			MinVersion:   tls.VersionTLS13,
-			RootCAs:      rootCAs,
-			Certificates: []tls.Certificate{certificate},
-			ServerName:   strings.TrimSpace(config.ServerName),
-		},
-		DisableCompression: true,
-		ForceAttemptHTTP2:  false,
+	var transport *http.Transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok && base != nil {
+		transport = base.Clone()
+	} else {
+		transport = &http.Transport{}
 	}
+	transport.Proxy = http.ProxyFromEnvironment
+	transport.DialContext = (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext
+	transport.TLSClientConfig = &tls.Config{
+		MinVersion:   tls.VersionTLS13,
+		RootCAs:      rootCAs,
+		Certificates: []tls.Certificate{certificate},
+		ServerName:   strings.TrimSpace(config.ServerName),
+	}
+	transport.DisableCompression = true
+	transport.ForceAttemptHTTP2 = false
+	transport.MaxConnsPerHost = 32
+	transport.MaxIdleConns = 64
+	transport.MaxIdleConnsPerHost = 16
+	transport.IdleConnTimeout = 90 * time.Second
+	transport.ResponseHeaderTimeout = 15 * time.Second
 	return &http.Client{
 		Timeout:   15 * time.Second,
 		Transport: transport,

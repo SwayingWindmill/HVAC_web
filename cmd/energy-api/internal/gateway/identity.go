@@ -874,7 +874,7 @@ func (controller *identityController) fetchPrincipal(ctx context.Context, sessio
 		failure := identityFailure{503, "IAM_UNAVAILABLE", "IAM unavailable", "The private IAM service could not be reached.", true}
 		return identitycontext.InternalPrincipalResponse{}, &failure
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	if response.StatusCode != http.StatusOK {
 		failure := identityFailure{403, "IAM_IDENTITY_REJECTED", "Identity rejected", "IAM rejected the authenticated identity context.", false}
 		return identitycontext.InternalPrincipalResponse{}, &failure

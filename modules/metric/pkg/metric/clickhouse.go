@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"slices"
@@ -41,10 +42,16 @@ func newDefaultClickHouseHTTPClient(timeout time.Duration) *http.Client {
 	} else {
 		transport = &http.Transport{}
 	}
+	transport.DialContext = (&net.Dialer{
+		Timeout:   5 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext
+	transport.MaxConnsPerHost = 16
 	transport.MaxIdleConns = 64
-	transport.MaxIdleConnsPerHost = 32
+	transport.MaxIdleConnsPerHost = 16
 	transport.IdleConnTimeout = 90 * time.Second
 	transport.TLSHandshakeTimeout = 10 * time.Second
+	transport.ResponseHeaderTimeout = 30 * time.Second
 	transport.ExpectContinueTimeout = 1 * time.Second
 	return &http.Client{
 		Timeout:   timeout,
@@ -70,15 +77,27 @@ func (s *ClickHouseStore) doSQL(ctx context.Context, method, sql string) ([]byte
 	return doClickHouseHTTPQuery(ctx, s.base, s.user, s.password, s.client, method, sql, 1<<20, "metric ClickHouse query")
 }
 
+func isClickHouseSelectQuery(sql string) bool {
+	upper := strings.ToUpper(strings.TrimSpace(sql))
+	return strings.HasPrefix(upper, "SELECT") || strings.HasPrefix(upper, "WITH")
+}
+
 func doClickHouseHTTPQuery(ctx context.Context, base *url.URL, user, password string, client *http.Client, method, sql string, maxBodyBytes int64, label string) ([]byte, error) {
 	u := *base
 	q := u.Query()
 	q.Set("query", sql)
 	q.Set("date_time_output_format", "iso")
+	selectQuery := method == http.MethodGet || isClickHouseSelectQuery(sql)
+	if selectQuery {
+		q.Set("enable_http_compression", "1")
+	}
 	u.RawQuery = q.Encode()
 	req, err := http.NewRequestWithContext(ctx, method, u.String(), nil)
 	if err != nil {
 		return nil, err
+	}
+	if selectQuery {
+		req.Header.Set("Accept-Encoding", "gzip")
 	}
 	if user != "" {
 		req.SetBasicAuth(user, password)
@@ -88,7 +107,22 @@ func doClickHouseHTTPQuery(ctx context.Context, base *url.URL, user, password st
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	const maxDrainBytes = 4096
+	bodyReader := io.Reader(io.LimitReader(resp.Body, maxBodyBytes))
+	if strings.EqualFold(strings.TrimSpace(resp.Header.Get("Content-Encoding")), "gzip") {
+		gz, gzErr := gzip.NewReader(bodyReader)
+		if gzErr != nil {
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxDrainBytes))
+			if resp.StatusCode/100 != 2 {
+				return nil, fmt.Errorf("%s returned %d", label, resp.StatusCode)
+			}
+			return nil, fmt.Errorf("%s gzip decode: %w", label, gzErr)
+		}
+		defer gz.Close()
+		bodyReader = io.LimitReader(gz, maxBodyBytes)
+	}
+	body, err := io.ReadAll(bodyReader)
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxDrainBytes))
 	if err != nil {
 		return nil, err
 	}

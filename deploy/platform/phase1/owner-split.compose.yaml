@@ -190,6 +190,12 @@ services:
     environment:
       <<: *owner-env
       WORK_ORDER_SERVICE_ADDR: :8449
-    expose: ["8449"]
+      WORK_ORDER_DIAGNOSTICS_ADDR: :19089
+    expose: ["8449", "19089"]
+    healthcheck:
+      test: ["CMD", "/healthcheck", "http://127.0.0.1:19089/health/ready"]
+      interval: 10s
+      timeout: 4s
+      retries: 12
     cpus: ${WORK_ORDER_OWNER_CPUS:-0.20}
     mem_limit: ${WORK_ORDER_OWNER_MEMORY_LIMIT:-384m}

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -177,7 +178,7 @@ func NewOutboxRelay(store *PostgresStore, config OutboxRelayConfig) (*OutboxRela
 	if telemetryClient == nil && strings.TrimSpace(config.TelemetryBaseURL) != "" {
 		httpClient := config.TelemetryHTTPClient
 		if httpClient == nil {
-			httpClient = &http.Client{Timeout: 10 * time.Second}
+			httpClient = newDefaultOutboxHTTPClient(10 * time.Second)
 		}
 		telemetryClient = &httpDownstreamClient{baseURL: strings.TrimRight(strings.TrimSpace(config.TelemetryBaseURL), "/"), client: httpClient}
 	}
@@ -185,7 +186,7 @@ func NewOutboxRelay(store *PostgresStore, config OutboxRelayConfig) (*OutboxRela
 	if connectivityClient == nil && strings.TrimSpace(config.ConnectivityBaseURL) != "" {
 		httpClient := config.ConnectivityHTTPClient
 		if httpClient == nil {
-			httpClient = &http.Client{Timeout: 10 * time.Second}
+			httpClient = newDefaultOutboxHTTPClient(10 * time.Second)
 		}
 		connectivityClient = &httpDownstreamClient{baseURL: strings.TrimRight(strings.TrimSpace(config.ConnectivityBaseURL), "/"), client: httpClient}
 	}
@@ -193,7 +194,7 @@ func NewOutboxRelay(store *PostgresStore, config OutboxRelayConfig) (*OutboxRela
 	if commandClient == nil && strings.TrimSpace(config.CommandBaseURL) != "" {
 		httpClient := config.CommandHTTPClient
 		if httpClient == nil {
-			httpClient = &http.Client{Timeout: 10 * time.Second}
+			httpClient = newDefaultOutboxHTTPClient(10 * time.Second)
 		}
 		commandClient = &httpDownstreamClient{baseURL: strings.TrimRight(strings.TrimSpace(config.CommandBaseURL), "/"), client: httpClient}
 	}
@@ -1034,7 +1035,10 @@ func (c *httpDownstreamClient) postJSON(ctx context.Context, path string, payloa
 	if err != nil {
 		return err
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+		_ = resp.Body.Close()
+	}()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("downstream %s returned status %d: %s", path, resp.StatusCode, strings.TrimSpace(string(body)))
@@ -1084,4 +1088,20 @@ func payloadString(payload map[string]any, key string) string {
 		return ""
 	}
 	return strings.TrimSpace(s)
+}
+
+func newDefaultOutboxHTTPClient(timeout time.Duration) *http.Client {
+	var transport *http.Transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok && base != nil {
+		transport = base.Clone()
+	} else {
+		transport = &http.Transport{}
+	}
+	transport.DialContext = (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext
+	transport.MaxConnsPerHost = 16
+	transport.MaxIdleConns = 64
+	transport.MaxIdleConnsPerHost = 16
+	transport.IdleConnTimeout = 90 * time.Second
+	transport.ResponseHeaderTimeout = 15 * time.Second
+	return &http.Client{Timeout: timeout, Transport: transport}
 }

@@ -3,6 +3,7 @@ package observability
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -48,6 +49,31 @@ func TestRecoverCatchesDirectDeferPanicAndRedactsError(t *testing.T) {
 	logOutput := buffer.String()
 	if strings.Contains(logOutput, "secret-connection-string") || !strings.Contains(logOutput, `"error":"[REDACTED]"`) || !strings.Contains(logOutput, `"component":"test.worker"`) {
 		t.Fatalf("unexpected panic log output: %s", logOutput)
+	}
+	lines := strings.Split(strings.TrimSpace(logOutput), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("expected single-line JSON log, got %d lines: %s", len(lines), logOutput)
+	}
+	var entry struct {
+		Stack []stackFrame `json:"stack"`
+	}
+	if err := json.Unmarshal([]byte(lines[0]), &entry); err != nil {
+		t.Fatalf("unmarshal single-line panic JSON: %v", err)
+	}
+	if len(entry.Stack) == 0 || len(entry.Stack) > maxPanicStackFrames {
+		t.Fatalf("expected 1..%d stack frames, got %d", maxPanicStackFrames, len(entry.Stack))
+	}
+	foundFrame := false
+	for _, frame := range entry.Stack {
+		if frame.Function == "" || frame.File == "" || frame.Line <= 0 {
+			t.Fatalf("incomplete stack frame: %+v", frame)
+		}
+		if strings.Contains(frame.Function, "TestRecoverCatchesDirectDeferPanicAndRedactsError") {
+			foundFrame = true
+		}
+	}
+	if !foundFrame {
+		t.Fatalf("expected panicking test frame in structured stack: %+v", entry.Stack)
 	}
 	prom := httptest.NewRecorder()
 	registry.Handler().ServeHTTP(prom, httptest.NewRequest(http.MethodGet, "/metrics", nil))

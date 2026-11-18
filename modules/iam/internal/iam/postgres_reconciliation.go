@@ -34,6 +34,7 @@ func OpenPostgresReconciliationStore(ctx context.Context, databaseURL string) (*
 	config.ConnConfig.RuntimeParams["statement_timeout"] = "10s"
 	config.ConnConfig.RuntimeParams["lock_timeout"] = "2s"
 	config.ConnConfig.RuntimeParams["idle_in_transaction_session_timeout"] = "10s"
+	configureIAMPool(config, 4)
 	config.AfterConnect = func(ctx context.Context, connection *pgx.Conn) error {
 		var role string
 		if err := connection.QueryRow(ctx, `SELECT current_user`).Scan(&role); err != nil {

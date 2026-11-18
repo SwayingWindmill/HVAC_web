@@ -351,7 +351,7 @@ func (a *httpAlarmAdapter) ResolveScope(ctx context.Context, tenantID, alarmID s
 		failure := alarmUnavailable("Alarm ownership resolution is temporarily unavailable.")
 		return alarmScope{}, &failure
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	body, err := readBoundedBody(response.Body, a.maxResponseBytes)
 	if err != nil {
 		failure := alarmUnavailable("Alarm ownership resolution returned an unreadable response.")
@@ -471,7 +471,7 @@ func (a *httpAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Requ
 		failure := alarmUnavailable("Alarm Service is temporarily unavailable.")
 		return nil, 0, &failure
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	if response.StatusCode < 200 || response.StatusCode > 599 {
 		failure := alarmUnavailable("Alarm Service returned an invalid status.")
 		return nil, 0, &failure
@@ -1077,7 +1077,7 @@ func (h *handler) decideAlarm(ctx context.Context, caller ownerCaller, action st
 		failure := alarmUnavailable("IAM Alarm authorization is temporarily unavailable.")
 		return ownerDecision{}, &failure
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	if response.StatusCode != http.StatusOK {
 		failure := alarmUnavailable("IAM did not return a valid Alarm authorization decision.")
 		return ownerDecision{}, &failure

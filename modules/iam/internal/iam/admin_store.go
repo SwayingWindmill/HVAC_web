@@ -81,6 +81,7 @@ func OpenPostgresAdminStore(ctx context.Context, databaseURL string) (*PostgresA
 	config.ConnConfig.RuntimeParams["statement_timeout"] = "5s"
 	config.ConnConfig.RuntimeParams["lock_timeout"] = "1s"
 	config.ConnConfig.RuntimeParams["idle_in_transaction_session_timeout"] = "5s"
+	configureIAMPool(config, 8)
 	config.AfterConnect = func(ctx context.Context, connection *pgx.Conn) error {
 		var role string
 		if err := connection.QueryRow(ctx, `SELECT current_user`).Scan(&role); err != nil {

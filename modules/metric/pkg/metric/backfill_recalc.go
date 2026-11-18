@@ -748,7 +748,7 @@ func NewClickHouseBackfillSource(baseURL, user, password string, client *http.Cl
 		return nil, errors.New("metric ClickHouse URL must be absolute http/https")
 	}
 	if client == nil {
-		client = &http.Client{Timeout: 15 * time.Second}
+		client = newDefaultClickHouseHTTPClient(15 * time.Second)
 	}
 	return &ClickHouseBackfillSource{base: u, user: user, password: password, client: client}, nil
 }

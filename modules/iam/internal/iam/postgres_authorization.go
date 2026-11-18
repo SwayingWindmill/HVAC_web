@@ -31,6 +31,7 @@ func OpenPostgresAuthorizationStore(ctx context.Context, databaseURL string) (*P
 	config.ConnConfig.RuntimeParams["statement_timeout"] = "5s"
 	config.ConnConfig.RuntimeParams["lock_timeout"] = "1s"
 	config.ConnConfig.RuntimeParams["idle_in_transaction_session_timeout"] = "5s"
+	configureIAMPool(config, 16)
 	config.AfterConnect = func(ctx context.Context, connection *pgx.Conn) error {
 		var role string
 		if err := connection.QueryRow(ctx, `SELECT current_user`).Scan(&role); err != nil {
@@ -50,6 +51,17 @@ func OpenPostgresAuthorizationStore(ctx context.Context, databaseURL string) (*P
 		return nil, fmt.Errorf("ping IAM authorization store: %w", err)
 	}
 	return &PostgresAuthorizationStore{pool: pool}, nil
+}
+
+func configureIAMPool(config *pgxpool.Config, maxConns int32) {
+	if config == nil {
+		return
+	}
+	config.MaxConns = maxConns
+	config.MinConns = 1
+	config.MaxConnLifetime = 30 * time.Minute
+	config.MaxConnIdleTime = 5 * time.Minute
+	config.HealthCheckPeriod = 30 * time.Second
 }
 
 func (store *PostgresAuthorizationStore) Close() {

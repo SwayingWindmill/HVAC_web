@@ -27,7 +27,10 @@ type ClickHouseSink struct {
 	client   *http.Client
 }
 
-func newDefaultOptimizationClickHouseHTTPClient(timeout time.Duration) *http.Client {
+func newPooledHTTPClient(timeout time.Duration, disableRedirects bool) *http.Client {
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
 	var transport *http.Transport
 	if base, ok := http.DefaultTransport.(*http.Transport); ok && base != nil {
 		transport = base.Clone()
@@ -38,8 +41,52 @@ func newDefaultOptimizationClickHouseHTTPClient(timeout time.Duration) *http.Cli
 	transport.MaxIdleConnsPerHost = 32
 	transport.IdleConnTimeout = 90 * time.Second
 	transport.TLSHandshakeTimeout = 10 * time.Second
-	transport.ExpectContinueTimeout = time.Second
-	return &http.Client{Timeout: timeout, Transport: transport}
+	transport.ExpectContinueTimeout = 1 * time.Second
+	client := &http.Client{
+		Timeout:   timeout,
+		Transport: transport,
+	}
+	if disableRedirects {
+		client.CheckRedirect = func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+	}
+	return client
+}
+
+func drainAndClose(body io.ReadCloser) {
+	if body == nil {
+		return
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(body, 64<<10))
+	_ = body.Close()
+}
+
+func pingClickHouseHTTP(ctx context.Context, client *http.Client, baseURL *url.URL, username, password, label string) error {
+	if client == nil || baseURL == nil {
+		return fmt.Errorf("%s client is not initialized", label)
+	}
+	endpoint := *baseURL
+	query := endpoint.Query()
+	query.Set("query", "SELECT 1")
+	endpoint.RawQuery = query.Encode()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return fmt.Errorf("build %s ping request: %w", label, err)
+	}
+	if username != "" {
+		request.SetBasicAuth(username, password)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return fmt.Errorf("ping %s: %w", label, err)
+	}
+	defer drainAndClose(response.Body)
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		detail, _ := io.ReadAll(io.LimitReader(response.Body, 2048))
+		return fmt.Errorf("ping %s returned %d: %s", label, response.StatusCode, strings.TrimSpace(string(detail)))
+	}
+	return nil
 }
 
 func NewClickHouseSink(baseURL, username, password string, client *http.Client) (*ClickHouseSink, error) {
@@ -48,9 +95,24 @@ func NewClickHouseSink(baseURL, username, password string, client *http.Client) 
 		return nil, errors.New("optimization ClickHouse URL must be absolute http/https")
 	}
 	if client == nil {
-		client = newDefaultOptimizationClickHouseHTTPClient(10 * time.Second)
+		client = newPooledHTTPClient(10*time.Second, true)
 	}
 	return &ClickHouseSink{baseURL: parsed, username: username, password: password, client: client}, nil
+}
+
+// Ping executes a lightweight SELECT 1 query against ClickHouse for readiness checks.
+func (sink *ClickHouseSink) Ping(ctx context.Context) error {
+	if sink == nil {
+		return errors.New("optimization ClickHouse sink is not initialized")
+	}
+	return pingClickHouseHTTP(ctx, sink.client, sink.baseURL, sink.username, sink.password, "optimization ClickHouse")
+}
+
+// CloseIdleConnections releases idle HTTP keep-alive connections held by this sink.
+func (sink *ClickHouseSink) CloseIdleConnections() {
+	if sink != nil && sink.client != nil {
+		sink.client.CloseIdleConnections()
+	}
 }
 
 func (sink *ClickHouseSink) InsertEvaluation(ctx context.Context, evaluation Evaluation) error {
@@ -85,13 +147,11 @@ func (sink *ClickHouseSink) InsertEvaluation(ctx context.Context, evaluation Eva
 	if err != nil {
 		return fmt.Errorf("insert optimization evaluation: %w", err)
 	}
-	defer response.Body.Close()
+	defer drainAndClose(response.Body)
 	if response.StatusCode/100 != 2 {
 		detail, _ := io.ReadAll(io.LimitReader(response.Body, 2048))
-		_, _ = io.Copy(io.Discard, response.Body)
 		return fmt.Errorf("insert optimization evaluation returned %d: %s", response.StatusCode, strings.TrimSpace(string(detail)))
 	}
-	_, _ = io.Copy(io.Discard, response.Body)
 	return nil
 }
 
@@ -142,9 +202,8 @@ func (sink *ClickHouseSink) HasEvaluation(ctx context.Context, evaluation Evalua
 	if err != nil {
 		return false, err
 	}
-	defer response.Body.Close()
+	defer drainAndClose(response.Body)
 	body, err := io.ReadAll(io.LimitReader(response.Body, 4096))
-	_, _ = io.Copy(io.Discard, response.Body)
 	if err != nil {
 		return false, err
 	}

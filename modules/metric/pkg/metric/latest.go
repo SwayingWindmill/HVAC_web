@@ -42,6 +42,27 @@ func NewRedisLatestStore(rawURL string, ttl time.Duration) (*RedisLatestStore, e
 	if err != nil {
 		return nil, fmt.Errorf("parse metric Redis URL: %w", err)
 	}
+	if options.DialTimeout <= 0 {
+		options.DialTimeout = 5 * time.Second
+	}
+	if options.ReadTimeout <= 0 {
+		options.ReadTimeout = 3 * time.Second
+	}
+	if options.WriteTimeout <= 0 {
+		options.WriteTimeout = 3 * time.Second
+	}
+	if options.PoolTimeout <= 0 {
+		options.PoolTimeout = 4 * time.Second
+	}
+	if options.PoolSize <= 0 || options.PoolSize > 16 {
+		options.PoolSize = 16
+	}
+	if options.MinIdleConns <= 0 || options.MinIdleConns > options.PoolSize {
+		options.MinIdleConns = 2
+	}
+	if options.ConnMaxIdleTime <= 0 {
+		options.ConnMaxIdleTime = 5 * time.Minute
+	}
 	client := redis.NewClient(options)
 	return &RedisLatestStore{client: client, ttl: ttl}, nil
 }

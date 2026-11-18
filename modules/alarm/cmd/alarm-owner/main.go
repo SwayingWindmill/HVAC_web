@@ -6,11 +6,13 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -20,39 +22,85 @@ import (
 )
 
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
 	logger := observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
 	telemetry := observability.NewRuntime(observability.RuntimeConfig{
 		Service: "alarm-service", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond,
 	})
+	var telemetryShutdownOnce sync.Once
+	shutdownTelemetry := func(ctx context.Context) error {
+		var shutdownErr error
+		telemetryShutdownOnce.Do(func() {
+			shutdownErr = telemetry.Shutdown(ctx)
+		})
+		return shutdownErr
+	}
+	var store *alarmservice.PostgresStore
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = shutdownTelemetry(ctx)
+		cancel()
+		if store != nil {
+			store.Close()
+		}
+	}()
+
+	certPath, err := requiredEnv("ALARM_TLS_CERT")
+	if err != nil {
+		logEnvError(logger, "alarm_tls_configuration_invalid", "ALARM_TLS_CONFIGURATION_INVALID", err)
+		return 1
+	}
+	keyPath, err := requiredEnv("ALARM_TLS_KEY")
+	if err != nil {
+		logEnvError(logger, "alarm_tls_configuration_invalid", "ALARM_TLS_CONFIGURATION_INVALID", err)
+		return 1
+	}
+	clientCAPath, err := requiredEnv("ALARM_CLIENT_CA")
+	if err != nil {
+		logEnvError(logger, "alarm_tls_configuration_invalid", "ALARM_TLS_CONFIGURATION_INVALID", err)
+		return 1
+	}
 	serverTLSConfig, err := workloadtls.NewServerTLSConfig(workloadtls.ServerConfig{
 		CertificateFiles: workloadtls.CertificateFiles{
-			CertificatePath: requiredEnv("ALARM_TLS_CERT"),
-			PrivateKeyPath:  requiredEnv("ALARM_TLS_KEY"),
+			CertificatePath: certPath,
+			PrivateKeyPath:  keyPath,
 		},
-		ClientCAPath: requiredEnv("ALARM_CLIENT_CA"),
+		ClientCAPath: clientCAPath,
 	})
 	if err != nil {
 		logger.Error("alarm_tls_configuration_invalid", "error_code", "ALARM_TLS_CONFIGURATION_INVALID")
-		os.Exit(1)
+		return 1
 	}
-	gatewayPublicKey, err := loadCertificatePublicKey(requiredEnv("ALARM_GATEWAY_DELEGATION_CERT"))
+	delegationCertPath, err := requiredEnv("ALARM_GATEWAY_DELEGATION_CERT")
+	if err != nil {
+		logEnvError(logger, "alarm_gateway_key_load_failed", "ALARM_GATEWAY_KEY_LOAD_FAILED", err)
+		return 1
+	}
+	gatewayPublicKey, err := loadCertificatePublicKey(delegationCertPath)
 	if err != nil {
 		logger.Error("alarm_gateway_key_load_failed", "error_code", "ALARM_GATEWAY_KEY_LOAD_FAILED")
-		os.Exit(1)
+		return 1
 	}
-	databaseURL, err := loadRequiredValueFile(requiredEnv("ALARM_DATABASE_URL_FILE"), 64<<10)
+	databaseURLFile, err := requiredEnv("ALARM_DATABASE_URL_FILE")
+	if err != nil {
+		logEnvError(logger, "alarm_database_reference_invalid", "ALARM_DATABASE_REFERENCE_INVALID", err)
+		return 1
+	}
+	databaseURL, err := loadRequiredValueFile(databaseURLFile, 64<<10)
 	if err != nil {
 		logger.Error("alarm_database_reference_invalid", "error_code", "ALARM_DATABASE_REFERENCE_INVALID")
-		os.Exit(1)
+		return 1
 	}
 	openContext, cancelOpen := context.WithTimeout(context.Background(), 10*time.Second)
-	store, err := alarmservice.OpenPostgresStore(openContext, databaseURL)
+	store, err = alarmservice.OpenPostgresStore(openContext, databaseURL)
 	cancelOpen()
 	if err != nil {
 		logger.Error("alarm_database_open_failed", "error_code", "ALARM_DATABASE_OPEN_FAILED")
-		os.Exit(1)
+		return 1
 	}
-	defer store.Close()
 	gatewaySPIFFE := envOr("ALARM_GATEWAY_SPIFFE", alarmservice.DefaultGatewaySPIFFEID)
 	handler, err := alarmservice.NewHTTPHandler(alarmservice.HTTPConfig{
 		Store: store, Rules: store, GatewayPublicKey: gatewayPublicKey, GatewaySPIFFEID: gatewaySPIFFE,
@@ -60,17 +108,17 @@ func main() {
 	})
 	if err != nil {
 		logger.Error("alarm_http_configuration_invalid", "error_code", "ALARM_HTTP_CONFIGURATION_INVALID")
-		os.Exit(1)
+		return 1
 	}
 	telemetryEvaluationHandler, err := alarmservice.NewTelemetryEvaluationHandler(store)
 	if err != nil {
 		logger.Error("alarm_telemetry_evaluation_configuration_invalid", "error_code", "ALARM_TELEMETRY_EVALUATION_CONFIGURATION_INVALID")
-		os.Exit(1)
+		return 1
 	}
 	router, err := buildAlarmOwnerRouter(store, gatewaySPIFFE, handler, telemetryEvaluationHandler)
 	if err != nil {
 		logger.Error("alarm_owner_router_configuration_invalid", "error_code", "ALARM_OWNER_ROUTER_CONFIGURATION_INVALID")
-		os.Exit(1)
+		return 1
 	}
 	instrumentedRouter := observability.InstrumentHTTP(router, telemetry, observability.HTTPInstrumentationConfig{
 		Namespace: "hvac_alarm", Service: "alarm-service", SpanName: "http.alarm.request", Route: alarmObservabilityRoute,
@@ -83,35 +131,101 @@ func main() {
 		Addr: envOr("ALARM_DIAGNOSTICS_ADDR", ":19088"), Handler: telemetry.DiagnosticsHandler(),
 		ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second,
 	}
+	diagnosticsDone := make(chan struct{})
 	go func() {
+		defer close(diagnosticsDone)
 		defer observability.Recover(logger, telemetry.Metrics, "alarm_owner.diagnostics")
 		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("alarm_diagnostics_failed", "error_code", "DIAGNOSTICS_SERVE_FAILED")
 		}
 	}()
-	scheduled, stopScheduled := context.WithCancel(context.Background())
-	alarmservice.RunScheduledEvaluations(scheduled, store, logger)
+	scheduledCtx, cancelScheduled := context.WithCancel(context.Background())
+	defer cancelScheduled()
+	scheduledDone := alarmservice.StartScheduledEvaluations(scheduledCtx, store, logger)
 
-	shutdown := make(chan os.Signal, 1)
-	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
+	signalCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignals()
+
+	shutdownDone := make(chan struct{})
 	go func() {
+		defer close(shutdownDone)
 		defer observability.Recover(logger, telemetry.Metrics, "alarm_owner.shutdown")
-		<-shutdown
-		stopScheduled()
-		telemetry.MarkNotReady()
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		_ = server.Shutdown(ctx)
-		_ = diagnostics.Shutdown(ctx)
-		_ = telemetry.Shutdown(ctx)
+		<-signalCtx.Done()
+		shutdownAlarmOwnerHTTP(alarmOwnerHTTPShutdownDeps{
+			markNotReady:    telemetry.MarkNotReady,
+			shutdownServer:  server.Shutdown,
+			shutdownDiag:    diagnostics.Shutdown,
+			diagnosticsDone: diagnosticsDone,
+		})
 	}()
 	telemetry.MarkReady()
 	logger.Info("alarm_service_started", "address", server.Addr, "mode", "alarm-lifecycle")
+	exitCode := 0
 	if err := server.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("alarm_service_stopped_unexpectedly", "error_code", "ALARM_SERVE_FAILED")
-		os.Exit(1)
+		exitCode = 1
 	}
-	logger.Info("alarm_service_stopped")
+	stopSignals()
+	<-shutdownDone
+	drainAlarmOwnerWorkers(alarmOwnerWorkerDrainDeps{
+		cancelScheduled:   cancelScheduled,
+		scheduledDone:     scheduledDone,
+		shutdownTelemetry: shutdownTelemetry,
+	})
+	if exitCode == 0 {
+		logger.Info("alarm_service_stopped")
+	}
+	return exitCode
+}
+
+type alarmOwnerHTTPShutdownDeps struct {
+	markNotReady    func()
+	shutdownServer  func(context.Context) error
+	shutdownDiag    func(context.Context) error
+	diagnosticsDone <-chan struct{}
+}
+
+func shutdownAlarmOwnerHTTP(deps alarmOwnerHTTPShutdownDeps) {
+	if deps.markNotReady != nil {
+		deps.markNotReady()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if deps.shutdownServer != nil {
+		_ = deps.shutdownServer(ctx)
+	}
+	if deps.shutdownDiag != nil {
+		_ = deps.shutdownDiag(ctx)
+	}
+	if deps.diagnosticsDone != nil {
+		select {
+		case <-deps.diagnosticsDone:
+		case <-ctx.Done():
+		}
+	}
+}
+
+type alarmOwnerWorkerDrainDeps struct {
+	cancelScheduled   func()
+	scheduledDone     <-chan struct{}
+	shutdownTelemetry func(context.Context) error
+}
+
+func drainAlarmOwnerWorkers(deps alarmOwnerWorkerDrainDeps) {
+	if deps.cancelScheduled != nil {
+		deps.cancelScheduled()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if deps.scheduledDone != nil {
+		select {
+		case <-deps.scheduledDone:
+		case <-ctx.Done():
+		}
+	}
+	if deps.shutdownTelemetry != nil {
+		_ = deps.shutdownTelemetry(ctx)
+	}
 }
 
 func alarmObservabilityRoute(request *http.Request) string {
@@ -213,11 +327,19 @@ func envOr(name, fallback string) string {
 	return fallback
 }
 
-func requiredEnv(name string) string {
+func logEnvError(logger *slog.Logger, msg, code string, err error) {
+	if err != nil {
+		_, _ = os.Stderr.WriteString(err.Error() + "\n")
+	}
+	if logger != nil {
+		logger.Error(msg, "error_code", code)
+	}
+}
+
+func requiredEnv(name string) (string, error) {
 	value := strings.TrimSpace(os.Getenv(name))
 	if value == "" {
-		_, _ = os.Stderr.WriteString(name + " is required\n")
-		os.Exit(1)
+		return "", fmt.Errorf("%s is required", name)
 	}
-	return value
+	return value, nil
 }

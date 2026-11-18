@@ -166,7 +166,7 @@ func (h *handler) serveGatewayCredentials(w http.ResponseWriter, r *http.Request
 		writeProblem(w, r, 503, "CONNECTIVITY_UNAVAILABLE", "Gateway credentials unavailable", "Connectivity could not be reached.", true, nil)
 		return true
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	body, err := readBoundedBody(response.Body, 64<<10)
 	if err != nil {
 		if r.Method == http.MethodPost {

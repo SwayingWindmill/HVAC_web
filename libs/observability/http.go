@@ -28,19 +28,34 @@ type httpInstrumentation struct {
 
 type instrumentationResponseWriter struct {
 	http.ResponseWriter
-	status int
+	status      int
+	wroteHeader bool
+}
+
+func (writer *instrumentationResponseWriter) Unwrap() http.ResponseWriter {
+	return writer.ResponseWriter
+}
+
+func (writer *instrumentationResponseWriter) Flush() {
+	if flusher, ok := writer.ResponseWriter.(http.Flusher); ok {
+		if !writer.wroteHeader {
+			writer.WriteHeader(http.StatusOK)
+		}
+		flusher.Flush()
+	}
 }
 
 func (writer *instrumentationResponseWriter) WriteHeader(status int) {
-	if writer.status != 0 {
+	if writer.wroteHeader {
 		return
 	}
 	writer.status = status
+	writer.wroteHeader = true
 	writer.ResponseWriter.WriteHeader(status)
 }
 
 func (writer *instrumentationResponseWriter) Write(body []byte) (int, error) {
-	if writer.status == 0 {
+	if !writer.wroteHeader {
 		writer.WriteHeader(http.StatusOK)
 	}
 	return writer.ResponseWriter.Write(body)
@@ -86,19 +101,43 @@ func (instrumentation *httpInstrumentation) ServeHTTP(writer http.ResponseWriter
 	})
 	started := time.Now()
 	captured := &instrumentationResponseWriter{ResponseWriter: writer}
+	finishSpanAndMetrics := func(status int, errText string) {
+		if status == 0 {
+			status = http.StatusOK
+		}
+		statusClass := strconv.Itoa(status/100) + "xx"
+		resultLabels := map[string]string{"service": instrumentation.config.Service, "method": method, "route": route, "status_class": statusClass}
+		_ = instrumentation.runtime.Metrics.AddCounter(instrumentation.metricBase+"_requests_total", "HTTP requests by bounded route and status class.", resultLabels, 1)
+		_ = instrumentation.runtime.Metrics.ObserveHistogram(instrumentation.metricBase+"_request_duration_seconds", "HTTP request duration by bounded route and status class.", resultLabels, time.Since(started).Seconds(), nil)
+		span.SetAttributes(map[string]any{"http.status_code": status, "http.status_class": statusClass})
+		if errText != "" {
+			span.SetStatus("error", errText)
+		} else if status >= http.StatusInternalServerError {
+			span.SetStatus("error", statusClass)
+		} else {
+			span.SetStatus("ok", "")
+		}
+		span.End()
+	}
+	defer func() {
+		recovered := recover()
+		if recovered == http.ErrAbortHandler {
+			status := captured.status
+			if status == 0 {
+				status = http.StatusInternalServerError
+			}
+			finishSpanAndMetrics(status, "aborted")
+			panic(http.ErrAbortHandler)
+		}
+		errText := ""
+		if recovered != nil {
+			recordPanic(instrumentation.runtime.logger, instrumentation.runtime.Metrics, instrumentation.config.Service, "http_handler_panicked", "HTTP_HANDLER_PANIC_RECOVERED", 3)
+			if !captured.wroteHeader {
+				captured.WriteHeader(http.StatusInternalServerError)
+			}
+			errText = "panic"
+		}
+		finishSpanAndMetrics(captured.status, errText)
+	}()
 	instrumentation.handler.ServeHTTP(captured, request.WithContext(ctx))
-	if captured.status == 0 {
-		captured.status = http.StatusOK
-	}
-	statusClass := strconv.Itoa(captured.status/100) + "xx"
-	resultLabels := map[string]string{"service": instrumentation.config.Service, "method": method, "route": route, "status_class": statusClass}
-	_ = instrumentation.runtime.Metrics.AddCounter(instrumentation.metricBase+"_requests_total", "HTTP requests by bounded route and status class.", resultLabels, 1)
-	_ = instrumentation.runtime.Metrics.ObserveHistogram(instrumentation.metricBase+"_request_duration_seconds", "HTTP request duration by bounded route and status class.", resultLabels, time.Since(started).Seconds(), nil)
-	span.SetAttributes(map[string]any{"http.status_code": captured.status, "http.status_class": statusClass})
-	if captured.status >= http.StatusInternalServerError {
-		span.SetStatus("error", statusClass)
-	} else {
-		span.SetStatus("ok", "")
-	}
-	span.End()
 }

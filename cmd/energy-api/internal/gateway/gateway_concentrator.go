@@ -149,7 +149,7 @@ func (h *handler) serveGatewayConcentrator(w http.ResponseWriter, r *http.Reques
 		writeProblem(w, r, http.StatusServiceUnavailable, "CONNECTIVITY_UNAVAILABLE", "Concentrator control unavailable", "Connectivity could not be reached.", true, nil)
 		return true
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 
 	body, err := readBoundedBody(response.Body, 256<<10)
 	if err != nil {

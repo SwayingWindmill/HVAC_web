@@ -5,9 +5,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -507,5 +510,43 @@ func TestClientIncludesCrossGapInMonthlyBuckets(t *testing.T) {
 	}
 	if response.CrossGap == nil || response.CrossGap.EnergyKWh != 100 {
 		t.Fatalf("crossGap = %#v", response.CrossGap)
+	}
+}
+
+func TestClientDrainsModeratelyOversizedResponseForKeepAlive(t *testing.T) {
+	var requests atomic.Int32
+	var newConns atomic.Int32
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		_, _ = io.Copy(io.Discard, request.Body)
+		writer.Header().Set("Content-Type", "application/json")
+		if requests.Add(1) == 1 {
+			_, _ = writer.Write([]byte(strings.Repeat("x", int(maximumCubeResponseSize+1024))))
+			return
+		}
+		_, _ = writer.Write([]byte(`{"data":[]}`))
+	}))
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			newConns.Add(1)
+		}
+	}
+	server.Start()
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		BaseURL: server.URL, DatasetRevision: "energy:v1", TokenFactory: fixedTokenFactory{}, HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := buildSeriesQuery(validCubeEnergyQuery(), time.UTC)
+	if _, err := client.load(context.Background(), "cube-token", query); err == nil || !strings.Contains(err.Error(), "response budget") {
+		t.Fatalf("first load() error = %v, want response budget error", err)
+	}
+	if _, err := client.load(context.Background(), "cube-token", query); err != nil {
+		t.Fatalf("second load() error = %v", err)
+	}
+	if got := newConns.Load(); got != 1 {
+		t.Fatalf("new connections = %d, want 1 (keep-alive connection reused after draining oversized response)", got)
 	}
 }

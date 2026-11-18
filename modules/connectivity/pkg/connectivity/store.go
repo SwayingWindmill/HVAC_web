@@ -90,6 +90,18 @@ func openConfig(databaseURL string) (*pgxpool.Config, error) {
 		return nil, err
 	}
 	config.MaxConns = maxConns
+	if config.MinConns <= 0 {
+		config.MinConns = min(int32(2), maxConns)
+	}
+	if config.MaxConnLifetime <= 0 {
+		config.MaxConnLifetime = 30 * time.Minute
+	}
+	if config.MaxConnIdleTime <= 0 {
+		config.MaxConnIdleTime = 5 * time.Minute
+	}
+	if config.HealthCheckPeriod <= 0 {
+		config.HealthCheckPeriod = 30 * time.Second
+	}
 	return config, nil
 }
 
@@ -138,6 +150,13 @@ func (store *Store) Close() {
 	if store != nil && store.pool != nil {
 		store.pool.Close()
 	}
+}
+
+func (store *Store) Ping(ctx context.Context) error {
+	if store == nil || store.pool == nil {
+		return errors.New("connectivity PostgreSQL pool is unavailable")
+	}
+	return store.pool.Ping(ctx)
 }
 
 func (store *Store) PrepareCommandCorrelation(ctx context.Context, correlation commandmodel.CommandCorrelation) (commandmodel.CommandCorrelation, error) {

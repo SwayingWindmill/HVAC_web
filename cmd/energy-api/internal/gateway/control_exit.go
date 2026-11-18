@@ -598,7 +598,7 @@ func (h *handler) callCoreControlRegistry(ctx context.Context, method, internalP
 		failure := commandUnavailable("Core Registry is temporarily unavailable.")
 		return 0, nil, &failure
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	raw, err := readBoundedBody(response.Body, h.registry.maxResponseBytes)
 	if err != nil {
 		failure := commandUnavailable("Core Registry response exceeded the supported size.")
@@ -763,7 +763,7 @@ func (h *handler) lookupTenantPrincipalNames(ctx context.Context, session bffSes
 	if err != nil {
 		return nil
 	}
-	defer resp.Body.Close()
+	defer drainAndCloseBody(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return nil
 	}

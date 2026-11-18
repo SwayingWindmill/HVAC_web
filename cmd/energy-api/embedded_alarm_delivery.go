@@ -48,7 +48,11 @@ func newAlarmDeliveryDispatcher(logger *slog.Logger, scheduler *notificationserv
 		Scheduler: scheduler, Routing: routing, Recipients: recipients, Mode: mode, Logger: logger,
 		Sender: notificationservice.HTTPDeliverySender{
 			URL: sendURL, TokenFile: tokenFile,
-			Client: &http.Client{Timeout: 25 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
+			Client: &http.Client{
+				Timeout:       25 * time.Second,
+				Transport:     cloneDefaultTransportWithTLS(nil),
+				CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+			},
 		},
 		ConsoleURL: strings.TrimRight(envOr("ALARM_DELIVERY_CONSOLE_URL", os.Getenv("PLATFORM_PUBLIC_ORIGIN")), "/"),
 	}, nil

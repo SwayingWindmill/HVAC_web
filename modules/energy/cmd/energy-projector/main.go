@@ -5,12 +5,15 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -21,23 +24,39 @@ import (
 )
 
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
 	logger := observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
 	telemetry := observability.NewRuntime(observability.RuntimeConfig{
 		Service: "analytics-read-model-projector", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
 		QueueSize: 512, ExportTimeout: 500 * time.Millisecond,
 	})
+	var telemetryShutdownOnce sync.Once
+	shutdownTelemetry := func(ctx context.Context) error {
+		var shutdownErr error
+		telemetryShutdownOnce.Do(func() {
+			shutdownErr = telemetry.Shutdown(ctx)
+		})
+		return shutdownErr
+	}
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		_ = telemetry.Shutdown(ctx)
+		_ = shutdownTelemetry(ctx)
 	}()
 
 	httpClient, err := newClickHouseHTTPClient(strings.TrimSpace(os.Getenv("ANALYTICS_CLICKHOUSE_CA")))
 	if err != nil {
 		logger.Error("analytics_clickhouse_ca_invalid", "error_code", "ANALYTICS_CLICKHOUSE_CA_INVALID")
-		os.Exit(1)
+		return 1
 	}
-	baseURL := requiredEnv("ANALYTICS_CLICKHOUSE_HTTP_URL")
+	baseURL, err := requiredEnv("ANALYTICS_CLICKHOUSE_HTTP_URL")
+	if err != nil {
+		logEnvError(logger, "analytics_clickhouse_configuration_invalid", "ANALYTICS_CLICKHOUSE_CONFIGURATION_INVALID", err)
+		return 1
+	}
 	reader, err := clickhouseclient.NewReader(clickhouseclient.ReaderConfig{
 		BaseURL:           baseURL,
 		SourceDatabase:    envOr("ANALYTICS_SOURCE_DATABASE", "telemetry_history"),
@@ -49,7 +68,7 @@ func main() {
 	})
 	if err != nil {
 		logger.Error("analytics_clickhouse_reader_invalid", "error_code", "ANALYTICS_CLICKHOUSE_READER_INVALID")
-		os.Exit(1)
+		return 1
 	}
 	writer, err := clickhouseclient.NewWriter(clickhouseclient.WriterConfig{
 		BaseURL:    baseURL,
@@ -61,49 +80,90 @@ func main() {
 	})
 	if err != nil {
 		logger.Error("analytics_clickhouse_writer_invalid", "error_code", "ANALYTICS_CLICKHOUSE_WRITER_INVALID")
-		os.Exit(1)
+		return 1
 	}
-	internalClient, err := newInternalHTTPClient(requiredEnv("ANALYTICS_INTERNAL_CA"), requiredEnv("ANALYTICS_INTERNAL_TLS_CERT"), requiredEnv("ANALYTICS_INTERNAL_TLS_KEY"))
+	internalCA, err := requiredEnv("ANALYTICS_INTERNAL_CA")
+	if err != nil {
+		logEnvError(logger, "analytics_internal_client_invalid", "ANALYTICS_INTERNAL_CLIENT_INVALID", err)
+		return 1
+	}
+	internalCert, err := requiredEnv("ANALYTICS_INTERNAL_TLS_CERT")
+	if err != nil {
+		logEnvError(logger, "analytics_internal_client_invalid", "ANALYTICS_INTERNAL_CLIENT_INVALID", err)
+		return 1
+	}
+	internalKey, err := requiredEnv("ANALYTICS_INTERNAL_TLS_KEY")
+	if err != nil {
+		logEnvError(logger, "analytics_internal_client_invalid", "ANALYTICS_INTERNAL_CLIENT_INVALID", err)
+		return 1
+	}
+	internalClient, err := newInternalHTTPClient(internalCA, internalCert, internalKey)
 	if err != nil {
 		logger.Error("analytics_internal_client_invalid", "error_code", "ANALYTICS_INTERNAL_CLIENT_INVALID")
-		os.Exit(1)
+		return 1
+	}
+	coreRegistryURL, err := requiredEnv("ANALYTICS_CORE_REGISTRY_URL")
+	if err != nil {
+		logEnvError(logger, "analytics_core_registry_url_invalid", "ANALYTICS_CORE_REGISTRY_URL_INVALID", err)
+		return 1
+	}
+	iamURL, err := requiredEnv("ANALYTICS_IAM_URL")
+	if err != nil {
+		logEnvError(logger, "analytics_iam_url_invalid", "ANALYTICS_IAM_URL_INVALID", err)
+		return 1
 	}
 	registryConfig := analyticsprojector.RegistryClientConfig{
-		BaseURL: requiredEnv("ANALYTICS_CORE_REGISTRY_URL"), IAMURL: requiredEnv("ANALYTICS_IAM_URL"), HTTPClient: internalClient,
+		BaseURL: coreRegistryURL, IAMURL: iamURL, HTTPClient: internalClient,
 	}
 	bindingResolver, err := analyticsprojector.NewBindingResolver(registryConfig)
 	if err != nil {
 		logger.Error("analytics_core_binding_resolver_invalid", "error_code", "ANALYTICS_CORE_BINDING_RESOLVER_INVALID")
-		os.Exit(1)
+		return 1
 	}
 	submeterSources, err := analyticsprojector.NewTotalSubmeterSource(registryConfig)
 	if err != nil {
 		logger.Error("analytics_core_submeter_source_invalid", "error_code", "ANALYTICS_CORE_SUBMETER_SOURCE_INVALID")
-		os.Exit(1)
+		return 1
 	}
 	totalSubmeters, err := analyticsprojector.NewTotalSubmeterProjector(analyticsprojector.TotalSubmeterProjectorConfig{
 		Reader: reader, Writer: writer, Sources: submeterSources,
 	})
 	if err != nil {
 		logger.Error("analytics_submeter_projector_invalid", "error_code", "ANALYTICS_SUBMETER_PROJECTOR_INVALID")
-		os.Exit(1)
+		return 1
+	}
+	batchSize, err := integerEnv("ANALYTICS_PROJECTOR_BATCH_SIZE", 256, 1, 4096)
+	if err != nil {
+		logEnvError(logger, "analytics_projector_configuration_invalid", "ANALYTICS_PROJECTOR_CONFIGURATION_INVALID", err)
+		return 1
 	}
 	projector, err := energy.NewProjector(energy.ProjectorConfig{
 		CounterSource: reader, BindingResolver: bindingResolver, FactSink: writer, RebuildEvents: writer,
-		BatchSize: integerEnv("ANALYTICS_PROJECTOR_BATCH_SIZE", 256, 1, 4096),
+		BatchSize: batchSize,
 	})
 	if err != nil {
 		logger.Error("analytics_projector_configuration_invalid", "error_code", "ANALYTICS_PROJECTOR_CONFIGURATION_INVALID")
-		os.Exit(1)
+		return 1
 	}
-	pollInterval := durationEnv("ANALYTICS_PROJECTOR_POLL_INTERVAL", 500*time.Millisecond, 25*time.Millisecond, time.Minute)
+	pollInterval, err := durationEnv("ANALYTICS_PROJECTOR_POLL_INTERVAL", 500*time.Millisecond, 25*time.Millisecond, time.Minute)
+	if err != nil {
+		logEnvError(logger, "analytics_projector_configuration_invalid", "ANALYTICS_PROJECTOR_CONFIGURATION_INVALID", err)
+		return 1
+	}
+	submeterInterval, err := durationEnv("ANALYTICS_TOTAL_SUBMETER_INTERVAL", 5*time.Minute, 10*time.Second, time.Hour)
+	if err != nil {
+		logEnvError(logger, "analytics_projector_configuration_invalid", "ANALYTICS_PROJECTOR_CONFIGURATION_INVALID", err)
+		return 1
+	}
 
 	diagnostics := &http.Server{
 		Addr:              envOr("ANALYTICS_PROJECTOR_DIAGNOSTICS_ADDR", "127.0.0.1:19089"),
 		Handler:           telemetry.DiagnosticsHandler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	diagnosticsDone := make(chan struct{})
 	go func() {
+		defer close(diagnosticsDone)
 		defer observability.Recover(logger, telemetry.Metrics, "energy_projector.diagnostics")
 		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("analytics_projector_diagnostics_failed", "error_code", "ANALYTICS_PROJECTOR_DIAGNOSTICS_SERVE_FAILED")
@@ -113,9 +173,11 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	logger.Info("analytics_read_model_projector_started", "poll_interval", pollInterval.String())
+	submeterDone := make(chan struct{})
 	go func() {
+		defer close(submeterDone)
 		defer observability.Recover(logger, telemetry.Metrics, "energy_projector.submeter_sync_loop")
-		submeterTicker := time.NewTicker(durationEnv("ANALYTICS_TOTAL_SUBMETER_INTERVAL", 5*time.Minute, 10*time.Second, time.Hour))
+		submeterTicker := time.NewTicker(submeterInterval)
 		defer submeterTicker.Stop()
 		for {
 			syncSubmetersOnce(ctx, totalSubmeters, telemetry, logger)
@@ -133,12 +195,15 @@ func main() {
 	for {
 		select {
 		case <-ctx.Done():
-			telemetry.MarkNotReady()
-			shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			_ = diagnostics.Shutdown(shutdownContext)
-			shutdownCancel()
+			shutdownEnergyProjector(energyProjectorShutdownDeps{
+				markNotReady:      telemetry.MarkNotReady,
+				submeterDone:      submeterDone,
+				shutdownDiag:      diagnostics.Shutdown,
+				diagnosticsDone:   diagnosticsDone,
+				shutdownTelemetry: shutdownTelemetry,
+			})
 			logger.Info("analytics_read_model_projector_stopped")
-			return
+			return 0
 		case <-ticker.C:
 			projectionContext, span := telemetry.Tracer.Start(ctx, "analytics.energy_interval.project", observability.SpanKindInternal, map[string]any{
 				"db.system":       "clickhouse",
@@ -163,9 +228,49 @@ func main() {
 			span.End()
 			if projected > 0 {
 				_ = telemetry.Metrics.AddCounter("hvac_analytics_energy_intervals_projected_total", "Projected additive energy intervals.", map[string]string{"model": "energy_interval_facts"}, float64(projected))
-				logger.Info("analytics_energy_intervals_projected", "interval_count", projected)
+				logger.Debug("analytics_energy_intervals_projected", "interval_count", projected)
 			}
 		}
+	}
+}
+
+type energyProjectorShutdownDeps struct {
+	markNotReady      func()
+	submeterDone      <-chan struct{}
+	shutdownDiag      func(context.Context) error
+	diagnosticsDone   <-chan struct{}
+	shutdownTelemetry func(context.Context) error
+}
+
+func shutdownEnergyProjector(deps energyProjectorShutdownDeps) {
+	if deps.markNotReady != nil {
+		deps.markNotReady()
+	}
+	if deps.submeterDone != nil {
+		submeterCtx, submeterCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		select {
+		case <-deps.submeterDone:
+		case <-submeterCtx.Done():
+		}
+		submeterCancel()
+	}
+	if deps.shutdownDiag != nil || deps.diagnosticsDone != nil {
+		diagCtx, diagCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if deps.shutdownDiag != nil {
+			_ = deps.shutdownDiag(diagCtx)
+		}
+		if deps.diagnosticsDone != nil {
+			select {
+			case <-deps.diagnosticsDone:
+			case <-diagCtx.Done():
+			}
+		}
+		diagCancel()
+	}
+	if deps.shutdownTelemetry != nil {
+		telemetryCtx, telemetryCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_ = deps.shutdownTelemetry(telemetryCtx)
+		telemetryCancel()
 	}
 }
 
@@ -192,7 +297,7 @@ func newClickHouseHTTPClient(caPath string) (*http.Client, error) {
 		}
 		tlsConfig.RootCAs = pool
 	}
-	return &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{TLSClientConfig: tlsConfig}}, nil
+	return &http.Client{Timeout: 15 * time.Second, Transport: newClonedProjectorTransport(tlsConfig, false, 30*time.Second)}, nil
 }
 
 func newInternalHTTPClient(caPath, certPath, keyPath string) (*http.Client, error) {
@@ -207,12 +312,27 @@ func newInternalHTTPClient(caPath, certPath, keyPath string) (*http.Client, erro
 	return &http.Client{
 		Timeout:       10 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		Transport: &http.Transport{
-			Proxy:              http.ProxyFromEnvironment,
-			TLSClientConfig:    &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: roots, Certificates: []tls.Certificate{certificate}},
-			DisableCompression: true,
-		},
+		Transport:     newClonedProjectorTransport(&tls.Config{MinVersion: tls.VersionTLS13, RootCAs: roots, Certificates: []tls.Certificate{certificate}}, true, 15*time.Second),
 	}, nil
+}
+
+func newClonedProjectorTransport(tlsConfig *tls.Config, disableCompression bool, responseHeaderTimeout time.Duration) *http.Transport {
+	var transport *http.Transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok && base != nil {
+		transport = base.Clone()
+	} else {
+		transport = &http.Transport{}
+	}
+	transport.Proxy = http.ProxyFromEnvironment
+	transport.DialContext = (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext
+	transport.TLSClientConfig = tlsConfig
+	transport.DisableCompression = disableCompression
+	transport.MaxConnsPerHost = 16
+	transport.MaxIdleConns = 64
+	transport.MaxIdleConnsPerHost = 16
+	transport.IdleConnTimeout = 90 * time.Second
+	transport.ResponseHeaderTimeout = responseHeaderTimeout
+	return transport
 }
 
 func loadCertPool(path string) (*x509.CertPool, error) {
@@ -234,37 +354,43 @@ func envOr(name, fallback string) string {
 	return fallback
 }
 
-func requiredEnv(name string) string {
-	value := strings.TrimSpace(os.Getenv(name))
-	if value == "" {
-		_, _ = os.Stderr.WriteString(name + " is required\n")
-		os.Exit(1)
+func logEnvError(logger *slog.Logger, msg, code string, err error) {
+	if err != nil {
+		_, _ = os.Stderr.WriteString(err.Error() + "\n")
 	}
-	return value
+	if logger != nil {
+		logger.Error(msg, "error_code", code)
+	}
 }
 
-func integerEnv(name string, fallback, minimum, maximum int) int {
+func requiredEnv(name string) (string, error) {
 	value := strings.TrimSpace(os.Getenv(name))
 	if value == "" {
-		return fallback
+		return "", fmt.Errorf("%s is required", name)
+	}
+	return value, nil
+}
+
+func integerEnv(name string, fallback, minimum, maximum int) (int, error) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback, nil
 	}
 	parsed, err := strconv.Atoi(value)
 	if err != nil || parsed < minimum || parsed > maximum {
-		_, _ = os.Stderr.WriteString(name + " is invalid\n")
-		os.Exit(1)
+		return 0, fmt.Errorf("%s is invalid", name)
 	}
-	return parsed
+	return parsed, nil
 }
 
-func durationEnv(name string, fallback, minimum, maximum time.Duration) time.Duration {
+func durationEnv(name string, fallback, minimum, maximum time.Duration) (time.Duration, error) {
 	value := strings.TrimSpace(os.Getenv(name))
 	if value == "" {
-		return fallback
+		return fallback, nil
 	}
 	parsed, err := time.ParseDuration(value)
 	if err != nil || parsed < minimum || parsed > maximum {
-		_, _ = os.Stderr.WriteString(name + " is invalid\n")
-		os.Exit(1)
+		return 0, fmt.Errorf("%s is invalid", name)
 	}
-	return parsed
+	return parsed, nil
 }

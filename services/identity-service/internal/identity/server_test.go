@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -69,5 +70,15 @@ func TestSignInLocationCarriesOnlyTheChallengeStepAndCode(t *testing.T) {
 	query := location.Query()
 	if location.Path != "/sign-in" || query.Get("login_challenge") != "chal" || query.Get("step") != "totp" || query.Get("error") != "totp_invalid" || len(query) != 3 {
 		t.Fatalf("sign-in location = %s", location)
+	}
+}
+
+func TestStorePingUnavailableDoesNotPanic(t *testing.T) {
+	var nilStore *Store
+	if err := nilStore.Ping(context.Background()); err == nil {
+		t.Fatal("expected error for nil store")
+	}
+	if err := (&Store{}).Ping(context.Background()); err == nil {
+		t.Fatal("expected error for store with nil pool")
 	}
 }

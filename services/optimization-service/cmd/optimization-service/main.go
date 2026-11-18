@@ -17,7 +17,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/quanlaihe/hvac-web/libs/energyseries"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/intelligencemodel"
@@ -28,10 +27,42 @@ import (
 )
 
 const (
-	defaultShutdownTimeout    = 10 * time.Second
-	defaultPanicRestartDelay  = time.Second
-	defaultFinalizeJobTimeout = 5 * time.Second
+	defaultShutdownTimeout         = 10 * time.Second
+	defaultBackgroundDrainTimeout  = 12 * time.Second
+	defaultPanicRestartDelay       = time.Second
+	defaultFinalizeJobTimeout      = 5 * time.Second
+	defaultDispatchTimeout         = 20 * time.Second
+	defaultDispatchShutdownGrace   = 5 * time.Second
+	defaultJobTimeoutFallback      = 5 * time.Minute
+	defaultTelemetryShutdownPeriod = 5 * time.Second
 )
+
+var errOperatorCanceled = errors.New("optimization job canceled by operator")
+
+type optimizationJobQueue interface {
+	Claim(context.Context, string, int, time.Duration, time.Time) ([]schedulerjob.Job, error)
+	Start(context.Context, schedulerjob.Job, time.Duration, time.Time) (bool, error)
+	Renew(context.Context, schedulerjob.Job, time.Duration, time.Time) (bool, error)
+	Complete(context.Context, schedulerjob.Job, any, time.Time) error
+	Fail(context.Context, schedulerjob.Job, string, error, bool, time.Time) error
+}
+
+type optimizationInputLoader interface {
+	optimization.SiteCycleLock
+	LoadOptimizationRequest(context.Context, string, string, optimization.SchedulerOptimizationReference) (optimization.Request, error)
+}
+
+type optimizationRunner interface {
+	Optimize(context.Context, optimization.Request) (optimization.Recommendation, error)
+}
+
+type optimizationPreparer interface {
+	Prepare(context.Context, optimization.PreparationRequest) (optimization.PreparedOptimization, error)
+}
+
+type autoDispatcher interface {
+	TryDispatch(context.Context, optimization.Recommendation, time.Time) (optimization.AutoDispatchOutcome, error)
+}
 
 type monitorPassRunner interface {
 	RunMonitorPass(context.Context, time.Time) (optimization.MonitorPassSummary, error)
@@ -42,36 +73,59 @@ type stalePublicationReconciler interface {
 }
 
 func main() {
-	logger := observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
-	if err := run(logger); err != nil {
-		logger.Error("optimization_service_failed", "error_code", "OPTIMIZATION_SERVICE_FAILED", "error", err)
-		os.Exit(1)
-	}
+	os.Exit(run())
 }
 
-func run(logger *slog.Logger) error {
+func run() int {
+	logger := observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
+	slog.SetDefault(logger)
+	if err := runService(logger); err != nil {
+		logger.Error("optimization_service_failed", "error_code", "OPTIMIZATION_SERVICE_FAILED", "error", err)
+		return 1
+	}
+	return 0
+}
+
+func runService(logger *slog.Logger) error {
 	if logger == nil {
 		logger = observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+	var closers []func()
+	defer func() {
+		for i := len(closers) - 1; i >= 0; i-- {
+			closers[i]()
+		}
+	}()
 
-	metrics := observability.NewRegistry()
+	sigCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignals()
+
+	telemetry := observability.NewRuntime(observability.RuntimeConfig{
+		Service:      "optimization-service",
+		OTLPEndpoint: strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")),
+	})
+	metrics := telemetry.Metrics
+	var telemetryShutdownOnce sync.Once
+	shutdownTelemetry := func() {
+		telemetryShutdownOnce.Do(func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), defaultTelemetryShutdownPeriod)
+			defer cancel()
+			_ = telemetry.Shutdown(shutdownCtx)
+		})
+	}
+	// Defer telemetry shutdown after pool closers are registered above so LIFO flushes telemetry first and closes pools last.
+	defer shutdownTelemetry()
 
 	dsn, err := requiredEnv("OPTIMIZATION_POSTGRES_DSN")
 	if err != nil {
 		return err
 	}
-	pool, err := pgxpool.New(ctx, dsn)
+	publication, err := optimization.OpenPostgres(sigCtx, dsn)
 	if err != nil {
 		return err
 	}
-	defer pool.Close()
+	closers = append(closers, publication.Close)
 
-	publication, err := optimization.NewPostgresStore(pool)
-	if err != nil {
-		return err
-	}
 	clickhouseURL, err := requiredEnv("OPTIMIZATION_CLICKHOUSE_HTTP_URL")
 	if err != nil {
 		return err
@@ -84,6 +138,7 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	closers = append(closers, evaluations.CloseIdleConnections)
 	tlsCert, err := requiredEnv("OPTIMIZATION_TLS_CERT")
 	if err != nil {
 		return err
@@ -127,6 +182,12 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	closers = append(closers, inputs.CloseIdleConnections)
+
+	telemetry.SetDependencies(
+		observability.Dependency{Name: "postgres", Required: true, Check: publication.Ping},
+		observability.Dependency{Name: "clickhouse", Required: true, Check: inputs.Ping},
+	)
 	preparer, err := optimization.NewPreparer(publication, inputs, time.Now)
 	if err != nil {
 		return err
@@ -252,15 +313,17 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	var wg sync.WaitGroup
-	runSupervised(ctx, &wg, logger, metrics, "optimization.worker", defaultPanicRestartDelay, func() {
-		runOptimizationWorker(ctx, queue, publication, service, preparer, autoController, workerID, claimInterval, claimBatch, leaseDuration, leaseRenew, logger, metrics)
+	workerCtx, cancelWorkers := context.WithCancel(context.Background())
+	defer cancelWorkers()
+	var bgWG sync.WaitGroup
+	runSupervised(workerCtx, &bgWG, logger, metrics, "optimization.worker", defaultPanicRestartDelay, func() {
+		runOptimizationWorker(workerCtx, queue, publication, service, preparer, autoController, workerID, claimInterval, claimBatch, leaseDuration, leaseRenew, logger, metrics)
 	})
-	runSupervised(ctx, &wg, logger, metrics, "optimization.execution_monitor", defaultPanicRestartDelay, func() {
-		runMonitorLoop(ctx, optimization.DefaultMonitorTickInterval, autoController, logger)
+	runSupervised(workerCtx, &bgWG, logger, metrics, "optimization.execution_monitor", defaultPanicRestartDelay, func() {
+		runMonitorLoop(workerCtx, optimization.DefaultMonitorTickInterval, autoController, logger)
 	})
-	runSupervised(ctx, &wg, logger, metrics, "optimization.reconcile", defaultPanicRestartDelay, func() {
-		runReconcileLoop(ctx, 30*time.Second, service, logger)
+	runSupervised(workerCtx, &bgWG, logger, metrics, "optimization.reconcile", defaultPanicRestartDelay, func() {
+		runReconcileLoop(workerCtx, 30*time.Second, service, logger)
 	})
 
 	server := &http.Server{
@@ -274,14 +337,17 @@ func run(logger *slog.Logger) error {
 	}
 	// The container health check has no client certificate, so it asks a plain port that answers nothing else.
 	diagnostics := &http.Server{
-		Addr: envOrDefault("OPTIMIZATION_DIAGNOSTICS_ADDR", ":19100"), Handler: optimization.HealthHandler(),
+		Addr: envOrDefault("OPTIMIZATION_DIAGNOSTICS_ADDR", ":19100"), Handler: optimization.NewDiagnosticsHandler(telemetry),
 		ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second,
 	}
 
+	telemetry.MarkReady()
+
 	serveErr := make(chan error, 2)
-	wg.Add(1)
+	var httpWG sync.WaitGroup
+	httpWG.Add(1)
 	go func() {
-		defer wg.Done()
+		defer httpWG.Done()
 		defer observability.Recover(logger, metrics, "optimization.diagnostics_server", func(any) {
 			select {
 			case serveErr <- errors.New("diagnostics server panicked"):
@@ -292,16 +358,16 @@ func run(logger *slog.Logger) error {
 			serveErr <- fmt.Errorf("diagnostics server: %w", err)
 		}
 	}()
-	wg.Add(1)
+	httpWG.Add(1)
 	go func() {
-		defer wg.Done()
+		defer httpWG.Done()
 		defer observability.Recover(logger, metrics, "optimization.http_server", func(any) {
 			select {
 			case serveErr <- errors.New("http server panicked"):
 			default:
 			}
 		})
-		logger.Info("optimization_service_started", "address", server.Addr)
+		logger.Info("optimization_service_started", "address", server.Addr, "diagnostics_address", diagnostics.Addr)
 		if err := server.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serveErr <- fmt.Errorf("http server: %w", err)
 		}
@@ -309,22 +375,56 @@ func run(logger *slog.Logger) error {
 
 	var runErr error
 	select {
-	case <-ctx.Done():
+	case <-sigCtx.Done():
 		logger.Info("optimization_service_shutting_down")
 	case err := <-serveErr:
 		runErr = err
-		stop()
+		stopSignals()
 	}
 
-	if shutdownErr := shutdownServers(defaultShutdownTimeout, server, diagnostics); shutdownErr != nil {
+	if shutdownErr := shutdownServiceRuntime(logger, telemetry, defaultShutdownTimeout, defaultBackgroundDrainTimeout, "optimization.shutdown", &httpWG, cancelWorkers, &bgWG, shutdownTelemetry, server, diagnostics); shutdownErr != nil {
 		logger.Warn("optimization_server_shutdown_failed", "error_code", "OPTIMIZATION_SHUTDOWN_FAILED", "error", shutdownErr)
 		if runErr == nil {
 			runErr = shutdownErr
 		}
 	}
-	waitBackground(&wg, defaultShutdownTimeout, logger)
 	logger.Info("optimization_service_stopped")
 	return runErr
+}
+
+func shutdownServiceRuntime(
+	logger *slog.Logger,
+	telemetry *observability.Runtime,
+	shutdownTimeout time.Duration,
+	drainTimeout time.Duration,
+	component string,
+	httpWG *sync.WaitGroup,
+	cancelWorkers context.CancelFunc,
+	bgWG *sync.WaitGroup,
+	shutdownTelemetry func(),
+	servers ...*http.Server,
+) error {
+	var metrics *observability.Registry
+	if telemetry != nil {
+		telemetry.MarkNotReady()
+		metrics = telemetry.Metrics
+	}
+	shutdownDone, shutdownResult := startServerShutdown(shutdownTimeout, logger, metrics, component, servers...)
+	<-shutdownDone
+	shutdownErr := shutdownResult()
+	if httpWG != nil {
+		waitBackground(httpWG, shutdownTimeout, logger)
+	}
+	if cancelWorkers != nil {
+		cancelWorkers()
+	}
+	if bgWG != nil {
+		waitBackground(bgWG, drainTimeout, logger)
+	}
+	if shutdownTelemetry != nil {
+		shutdownTelemetry()
+	}
+	return shutdownErr
 }
 
 func runSupervised(ctx context.Context, wg *sync.WaitGroup, logger *slog.Logger, metrics *observability.Registry, component string, restartDelay time.Duration, fn func()) {
@@ -401,18 +501,61 @@ func runReconcileLoop(ctx context.Context, interval time.Duration, reconciler st
 	}
 }
 
+func startServerShutdown(timeout time.Duration, logger *slog.Logger, metrics *observability.Registry, component string, servers ...*http.Server) (<-chan struct{}, func() error) {
+	shutdownDone := make(chan struct{})
+	var (
+		mu       sync.Mutex
+		firstErr error
+	)
+	go func() {
+		defer close(shutdownDone)
+		defer observability.Recover(logger, metrics, component, func(r any) {
+			mu.Lock()
+			if firstErr == nil {
+				firstErr = fmt.Errorf("shutdown panicked: %v", r)
+			}
+			mu.Unlock()
+		})
+		if err := shutdownServers(timeout, servers...); err != nil {
+			mu.Lock()
+			if firstErr == nil {
+				firstErr = err
+			}
+			mu.Unlock()
+		}
+	}()
+	return shutdownDone, func() error {
+		mu.Lock()
+		defer mu.Unlock()
+		return firstErr
+	}
+}
+
 func shutdownServers(timeout time.Duration, servers ...*http.Server) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	var firstErr error
+	var (
+		mu       sync.Mutex
+		firstErr error
+		wg       sync.WaitGroup
+	)
 	for _, srv := range servers {
 		if srv == nil {
 			continue
 		}
-		if err := srv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) && firstErr == nil {
-			firstErr = err
-		}
+		wg.Add(1)
+		go func(server *http.Server) {
+			defer wg.Done()
+			if err := server.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				mu.Unlock()
+			}
+		}(srv)
 	}
+	wg.Wait()
 	return firstErr
 }
 
@@ -483,7 +626,7 @@ func requiredEnv(name string) (string, error) {
 	return value, nil
 }
 
-func runOptimizationWorker(ctx context.Context, queue *schedulerjob.Queue, store *optimization.PostgresStore, service *optimization.Service, preparer *optimization.Preparer, autoController *optimization.AutoController, workerID string, claimInterval time.Duration, claimBatch int, leaseDuration, leaseRenew time.Duration, logger *slog.Logger, metrics *observability.Registry) {
+func runOptimizationWorker(ctx context.Context, queue optimizationJobQueue, store optimizationInputLoader, service optimizationRunner, preparer optimizationPreparer, autoController autoDispatcher, workerID string, claimInterval time.Duration, claimBatch int, leaseDuration, leaseRenew time.Duration, logger *slog.Logger, metrics *observability.Registry) {
 	if ctx.Err() != nil {
 		return
 	}
@@ -500,7 +643,7 @@ func runOptimizationWorker(ctx context.Context, queue *schedulerjob.Queue, store
 	}
 }
 
-func claimAndRunOptimizationJobs(ctx context.Context, queue *schedulerjob.Queue, store *optimization.PostgresStore, service *optimization.Service, preparer *optimization.Preparer, autoController *optimization.AutoController, workerID string, claimBatch int, leaseDuration, leaseRenew time.Duration, logger *slog.Logger, metrics *observability.Registry) {
+func claimAndRunOptimizationJobs(ctx context.Context, queue optimizationJobQueue, store optimizationInputLoader, service optimizationRunner, preparer optimizationPreparer, autoController autoDispatcher, workerID string, claimBatch int, leaseDuration, leaseRenew time.Duration, logger *slog.Logger, metrics *observability.Registry) {
 	if ctx.Err() != nil {
 		return
 	}
@@ -583,10 +726,10 @@ func acquireSiteCycleLockForJob(
 // prepareScheduledOptimization turns a Site's schedule firing into a prepared run on its current
 // state; the run's own job then executes like an operator's. A firing that cannot prepare fails
 // without retry: the next hour's firing reads the Site again.
-func prepareScheduledOptimization(ctx context.Context, queue *schedulerjob.Queue, preparer *optimization.Preparer, job schedulerjob.Job, leaseDuration time.Duration, logger *slog.Logger) {
+func prepareScheduledOptimization(ctx context.Context, queue optimizationJobQueue, preparer optimizationPreparer, job schedulerjob.Job, leaseDuration time.Duration, logger *slog.Logger) {
 	started, err := queue.Start(ctx, job, leaseDuration, time.Now().UTC())
 	if err != nil {
-		if logger != nil {
+		if ctx.Err() == nil && logger != nil {
 			logger.Warn("optimization_schedule_start_failed", "error_code", "OPTIMIZATION_SCHEDULE_START_FAILED", "job_id", job.JobID, "error", err)
 		}
 		return
@@ -604,12 +747,17 @@ func prepareScheduledOptimization(ctx context.Context, queue *schedulerjob.Queue
 		}
 		return
 	}
-	jobCtx, cancel := context.WithTimeout(ctx, time.Duration(job.TimeoutSeconds)*time.Second)
+	timeout := time.Duration(job.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = defaultJobTimeoutFallback
+	}
+	jobCtx, cancel := context.WithTimeout(ctx, timeout)
 	prepared, err := preparer.Prepare(jobCtx, request)
 	cancel()
 	if err != nil {
+		retryable := ctx.Err() != nil
 		finalizeCtx, finalizeCancel := context.WithTimeout(context.WithoutCancel(ctx), defaultFinalizeJobTimeout)
-		failErr := queue.Fail(finalizeCtx, job, optimization.PreparationFailureCode(err), err, false, time.Now().UTC())
+		failErr := queue.Fail(finalizeCtx, job, optimization.PreparationFailureCode(err), err, retryable, time.Now().UTC())
 		finalizeCancel()
 		if failErr != nil && logger != nil {
 			logger.Warn("optimization_schedule_fail_finalize_failed", "error_code", "OPTIMIZATION_JOB_FINALIZE_FAILED", "job_id", job.JobID, "error", failErr)
@@ -628,10 +776,40 @@ func prepareScheduledOptimization(ctx context.Context, queue *schedulerjob.Queue
 	}
 }
 
-func executeOptimizationJob(ctx context.Context, queue *schedulerjob.Queue, store *optimization.PostgresStore, service *optimization.Service, autoController *optimization.AutoController, job schedulerjob.Job, leaseDuration, leaseRenew time.Duration, logger *slog.Logger, metrics *observability.Registry) {
+func dispatchContextWithShutdownGrace(ctx context.Context, normalTimeout, shutdownGrace time.Duration) (context.Context, context.CancelFunc) {
+	if ctx.Err() != nil {
+		return context.WithTimeout(context.WithoutCancel(ctx), shutdownGrace)
+	}
+	dispatchCtx, cancelDispatch := context.WithTimeout(context.WithoutCancel(ctx), normalTimeout)
+	var (
+		mu         sync.Mutex
+		graceTimer *time.Timer
+		closed     bool
+	)
+	stopAfter := context.AfterFunc(ctx, func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if closed {
+			return
+		}
+		graceTimer = time.AfterFunc(shutdownGrace, cancelDispatch)
+	})
+	return dispatchCtx, func() {
+		stopAfter()
+		mu.Lock()
+		closed = true
+		if graceTimer != nil {
+			graceTimer.Stop()
+		}
+		mu.Unlock()
+		cancelDispatch()
+	}
+}
+
+func executeOptimizationJob(ctx context.Context, queue optimizationJobQueue, store optimizationInputLoader, service optimizationRunner, autoController autoDispatcher, job schedulerjob.Job, leaseDuration, leaseRenew time.Duration, logger *slog.Logger, metrics *observability.Registry) {
 	started, err := queue.Start(ctx, job, leaseDuration, time.Now().UTC())
 	if err != nil {
-		if logger != nil {
+		if ctx.Err() == nil && logger != nil {
 			logger.Warn("optimization_job_start_failed", "error_code", "OPTIMIZATION_JOB_START_FAILED", "job_id", job.JobID, "error", err)
 		}
 		return
@@ -649,12 +827,20 @@ func executeOptimizationJob(ctx context.Context, queue *schedulerjob.Queue, stor
 		}
 		return
 	}
-	jobCtx, cancelJob := context.WithTimeout(ctx, time.Duration(job.TimeoutSeconds)*time.Second)
-	defer cancelJob()
+	timeout := time.Duration(job.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = defaultJobTimeoutFallback
+	}
+	timeoutCtx, cancelTimeout := context.WithTimeout(ctx, timeout)
+	defer cancelTimeout()
+	jobCtx, cancelJob := context.WithCancelCause(timeoutCtx)
+	defer cancelJob(nil)
+
 	request, loadErr := store.LoadOptimizationRequest(jobCtx, job.TenantID, job.SiteID, reference)
 	if loadErr != nil {
+		retryable := ctx.Err() != nil
 		finalizeCtx, finalizeCancel := context.WithTimeout(context.WithoutCancel(ctx), defaultFinalizeJobTimeout)
-		failErr := queue.Fail(finalizeCtx, job, "OPTIMIZATION_INPUT_LOAD_FAILED", loadErr, false, time.Now().UTC())
+		failErr := queue.Fail(finalizeCtx, job, "OPTIMIZATION_INPUT_LOAD_FAILED", loadErr, retryable, time.Now().UTC())
 		finalizeCancel()
 		if failErr != nil && logger != nil {
 			logger.Warn("optimization_job_fail_finalize_failed", "error_code", "OPTIMIZATION_JOB_FINALIZE_FAILED", "job_id", job.JobID, "error", failErr)
@@ -672,7 +858,7 @@ func executeOptimizationJob(ctx context.Context, queue *schedulerjob.Queue, stor
 	go func() {
 		defer close(leaseDone)
 		defer observability.Recover(logger, metrics, "optimization.lease_renewer", func(any) {
-			cancelJob()
+			cancelJob(nil)
 		})
 		ticker := time.NewTicker(leaseRenew)
 		defer ticker.Stop()
@@ -686,8 +872,12 @@ func executeOptimizationJob(ctx context.Context, queue *schedulerjob.Queue, stor
 				renewCtx, renewCancel := context.WithTimeout(ctx, 5*time.Second)
 				cancelRequested, renewErr := queue.Renew(renewCtx, job, leaseDuration, time.Now().UTC())
 				renewCancel()
-				if renewErr != nil || cancelRequested {
-					cancelJob()
+				if cancelRequested {
+					cancelJob(errOperatorCanceled)
+					return
+				}
+				if renewErr != nil {
+					cancelJob(renewErr)
 					return
 				}
 			}
@@ -697,9 +887,13 @@ func executeOptimizationJob(ctx context.Context, queue *schedulerjob.Queue, stor
 	close(leaseStop)
 	<-leaseDone
 	if executionErr != nil {
-		retryable := !errors.Is(executionErr, context.Canceled)
+		// Strictly decouple OS shutdown (SIGTERM -> ctx.Err() != nil -> retryable=true) from operator cancelRequested.
+		operatorCanceled := errors.Is(context.Cause(jobCtx), errOperatorCanceled) && ctx.Err() == nil
+		retryable := !operatorCanceled
 		errorCode := "OPTIMIZATION_EXECUTION_FAILED"
-		if errors.Is(executionErr, context.DeadlineExceeded) {
+		if operatorCanceled {
+			errorCode = "OPTIMIZATION_CANCELED_BY_OPERATOR"
+		} else if errors.Is(executionErr, context.DeadlineExceeded) && ctx.Err() == nil {
 			errorCode = "TIMEOUT"
 		}
 		finalizeCtx, finalizeCancel := context.WithTimeout(context.WithoutCancel(ctx), defaultFinalizeJobTimeout)
@@ -710,7 +904,7 @@ func executeOptimizationJob(ctx context.Context, queue *schedulerjob.Queue, stor
 		}
 		return
 	}
-	dispatchCtx, dispatchCancel := context.WithTimeout(ctx, 20*time.Second)
+	dispatchCtx, dispatchCancel := dispatchContextWithShutdownGrace(ctx, defaultDispatchTimeout, defaultDispatchShutdownGrace)
 	dispatchOutcome, dispatchErr := autoController.TryDispatch(dispatchCtx, recommendation, time.Now().UTC())
 	dispatchCancel()
 	if dispatchErr != nil && logger != nil {
