@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/observability"
@@ -25,7 +26,7 @@ const (
 	notificationStableWindow  = 30 * time.Second
 )
 
-func newEmbeddedNotificationServer(ctx context.Context, logger *slog.Logger) (*http.Server, *observability.Runtime, func(), error) {
+func newEmbeddedNotificationServer(ctx context.Context, logger *slog.Logger, bgWG *sync.WaitGroup) (*http.Server, *observability.Runtime, func(), error) {
 	certificate, err := tls.LoadX509KeyPair(energyRequiredEnv("NOTIFICATION_TLS_CERT"), energyRequiredEnv("NOTIFICATION_TLS_KEY"))
 	if err != nil {
 		return nil, nil, func() {}, err
@@ -94,7 +95,7 @@ func newEmbeddedNotificationServer(ctx context.Context, logger *slog.Logger) (*h
 		return nil, nil, func() {}, err
 	}
 	telemetry := observability.NewRuntime(observability.RuntimeConfig{
-		Service: "energy-api-notification", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond,
+		Service: "energy-api-notification", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond, Logger: logger,
 	})
 	telemetry.SetDependencies(observability.Dependency{Name: "postgres", Required: true, Check: store.Ping})
 	router := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -111,11 +112,17 @@ func newEmbeddedNotificationServer(ctx context.Context, logger *slog.Logger) (*h
 		},
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second,
 	}
-	go runAlarmNotificationRelay(ctx, logger, telemetry.Metrics, relay, store)
-	go runWeChatReminders(ctx, logger, telemetry.Metrics, reminders)
+	launchEmbeddedWorker(bgWG, func() {
+		runAlarmNotificationRelay(ctx, logger, telemetry.Metrics, relay, store)
+	})
+	launchEmbeddedWorker(bgWG, func() {
+		runWeChatReminders(ctx, logger, telemetry.Metrics, reminders)
+	})
 	if delivery != nil {
-		go runSupervisedNotificationLoop(ctx, logger, telemetry.Metrics, "notification.alarm_delivery", func() {
-			runAlarmDelivery(ctx, logger, delivery)
+		launchEmbeddedWorker(bgWG, func() {
+			runSupervisedNotificationLoop(ctx, logger, telemetry.Metrics, "notification.alarm_delivery", func() {
+				runAlarmDelivery(ctx, logger, delivery)
+			})
 		})
 	}
 	closeAll := func() {

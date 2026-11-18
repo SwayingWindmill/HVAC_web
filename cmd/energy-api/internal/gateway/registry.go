@@ -100,7 +100,7 @@ func newRegistryController(config *RegistryConfig) *registryController {
 	resolved := *config
 	resolved.CoreBaseURL = strings.TrimRight(strings.TrimSpace(resolved.CoreBaseURL), "/")
 	if resolved.CoreHTTPClient == nil {
-		resolved.CoreHTTPClient = &http.Client{}
+		resolved.CoreHTTPClient = &http.Client{Timeout: 10 * time.Second}
 	}
 	if resolved.CoreTimeout <= 0 {
 		resolved.CoreTimeout = defaultRegistryTimeout
@@ -352,7 +352,7 @@ func (h *handler) authorizeRegistryForPresenter(
 	if err != nil {
 		return registryAuthorization{}, &registryAuthorizationFailure{http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "IAM authorization is temporarily unavailable.", true}
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	if response.StatusCode != http.StatusOK {
 		status := http.StatusServiceUnavailable
 		retryable := true
@@ -458,7 +458,7 @@ func (h *handler) executeCoreRegistry(ctx context.Context, route publicRegistryR
 		}
 		return unavailableRegistryResult(ownershipregistry.OwnerCore, http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE")
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	return h.decodeRegistryBackendResponse(ownershipregistry.OwnerCore, response, route)
 }
 

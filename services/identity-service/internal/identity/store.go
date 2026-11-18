@@ -87,7 +87,11 @@ type CreatedUser struct {
 }
 
 func OpenStore(ctx context.Context, databaseURL string) (*Store, error) {
-	pool, err := pgxpool.New(ctx, strings.TrimSpace(databaseURL))
+	poolConfig, err := boundedPoolConfig(databaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("open identity database: %w", err)
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		return nil, fmt.Errorf("open identity database: %w", err)
 	}
@@ -98,6 +102,33 @@ func OpenStore(ctx context.Context, databaseURL string) (*Store, error) {
 	return &Store{pool: pool, dummyHash: dummyPasswordHash()}, nil
 }
 
+func boundedPoolConfig(databaseURL string) (*pgxpool.Config, error) {
+	poolConfig, err := pgxpool.ParseConfig(strings.TrimSpace(databaseURL))
+	if err != nil {
+		return nil, err
+	}
+	if poolConfig.MaxConns < 4 {
+		poolConfig.MaxConns = 4
+	} else if poolConfig.MaxConns > 16 {
+		poolConfig.MaxConns = 16
+	}
+	if poolConfig.MinConns < 1 {
+		poolConfig.MinConns = 1
+	} else if poolConfig.MinConns > poolConfig.MaxConns {
+		poolConfig.MinConns = poolConfig.MaxConns
+	}
+	if poolConfig.MaxConnLifetime <= 0 || poolConfig.MaxConnLifetime > 30*time.Minute {
+		poolConfig.MaxConnLifetime = 30 * time.Minute
+	}
+	if poolConfig.MaxConnIdleTime <= 0 || poolConfig.MaxConnIdleTime > 5*time.Minute {
+		poolConfig.MaxConnIdleTime = 5 * time.Minute
+	}
+	if poolConfig.HealthCheckPeriod <= 0 || poolConfig.HealthCheckPeriod > 30*time.Second {
+		poolConfig.HealthCheckPeriod = 30 * time.Second
+	}
+	return poolConfig, nil
+}
+
 func (store *Store) Close() {
 	if store != nil && store.pool != nil {
 		store.pool.Close()
@@ -106,6 +137,14 @@ func (store *Store) Close() {
 
 func (store *Store) Ping(ctx context.Context) error {
 	return store.pool.Ping(ctx)
+}
+
+func (store *Store) CurrentUser(ctx context.Context) (string, error) {
+	var role string
+	if err := store.pool.QueryRow(ctx, `SELECT current_user`).Scan(&role); err != nil {
+		return "", err
+	}
+	return role, nil
 }
 
 func (store *Store) VerifyProductSchema(ctx context.Context, expectedVersion string) error {

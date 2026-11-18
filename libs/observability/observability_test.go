@@ -3,10 +3,14 @@ package observability
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -157,7 +161,9 @@ func TestReadinessStaysServingWhenOptionalDependencyFails(t *testing.T) {
 }
 
 func TestReadinessRequiredDependencyFailureNamesTheDependency(t *testing.T) {
-	runtime := NewRuntime(RuntimeConfig{Service: "gateway", QueueSize: 1})
+	var logs syncBuffer
+	logger := NewJSONLogger(&logs, slog.LevelInfo)
+	runtime := NewRuntime(RuntimeConfig{Service: "gateway", QueueSize: 1, Logger: logger})
 	runtime.SetDependencies(
 		Dependency{Name: "postgres-session", Required: true, Check: func(context.Context) error { return errors.New("database unavailable") }},
 		Dependency{Name: "redis", Required: false, Check: func(context.Context) error { return nil }},
@@ -171,8 +177,15 @@ func TestReadinessRequiredDependencyFailureNamesTheDependency(t *testing.T) {
 		t.Fatalf("required dependency failure status = %d", response.Code)
 	}
 	body := response.Body.String()
-	if !strings.Contains(body, `"name":"postgres-session"`) || !strings.Contains(body, `"error":"database unavailable"`) {
-		t.Fatalf("not-ready response missing failing dependency: %s", body)
+	if !strings.Contains(body, `"name":"postgres-session"`) || !strings.Contains(body, `"error":"[REDACTED]"`) {
+		t.Fatalf("not-ready response missing failing dependency or redaction: %s", body)
+	}
+	if strings.Contains(body, "database unavailable") {
+		t.Fatalf("readiness response leaked raw error: %s", body)
+	}
+	logOutput := logs.String()
+	if !strings.Contains(logOutput, `"level":"WARN"`) || !strings.Contains(logOutput, `"postgres-session"`) || !strings.Contains(logOutput, "database unavailable") {
+		t.Fatalf("expected logger.Warn with dependency error details, got: %s", logOutput)
 	}
 }
 
@@ -260,3 +273,220 @@ func (exporter blockingExporter) Export(ctx context.Context, _ []SpanData) error
 	}
 }
 func (blockingExporter) Shutdown(context.Context) error { return nil }
+
+func TestDiagnosticsHealthzEndpoint(t *testing.T) {
+	runtime := NewRuntime(RuntimeConfig{Service: "gateway", QueueSize: 1})
+	rec := httptest.NewRecorder()
+	runtime.DiagnosticsHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if rec.Code != http.StatusOK || rec.Body.String() != "ok\n" {
+		t.Fatalf("/healthz = (%d, %q), want (200, \"ok\\n\")", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDiagnosticsPprofGatedByEnvAndLoopbackOnly(t *testing.T) {
+	t.Setenv("ENABLE_DIAGNOSTICS_PPROF", "")
+	runtime := NewRuntime(RuntimeConfig{Service: "gateway", QueueSize: 1})
+	disabledHandler := runtime.DiagnosticsHandler()
+	disabledRec := httptest.NewRecorder()
+	disabledReq := httptest.NewRequest(http.MethodGet, "/debug/pprof/", nil)
+	disabledReq.RemoteAddr = "127.0.0.1:41000"
+	disabledHandler.ServeHTTP(disabledRec, disabledReq)
+	if disabledRec.Code != http.StatusNotFound {
+		t.Fatalf("disabled pprof status = %d, want 404", disabledRec.Code)
+	}
+
+	t.Setenv("ENABLE_DIAGNOSTICS_PPROF", "true")
+	enabledHandler := runtime.DiagnosticsHandler()
+
+	for _, addr := range []string{"127.0.0.1:41000", "[::1]:41000", "[::ffff:127.0.0.1]:41000"} {
+		for _, path := range []string{"/debug/pprof/", "/debug/pprof/cmdline", "/debug/pprof/symbol"} {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			req.RemoteAddr = addr
+			enabledHandler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("loopback %s %s status = %d, want 200", addr, path, rec.Code)
+			}
+		}
+	}
+
+	for _, addr := range []string{"192.0.2.1:1234", "10.0.0.5:8080", "invalid-addr", ""} {
+		for _, path := range []string{"/debug/pprof/", "/debug/pprof/cmdline", "/debug/pprof/profile", "/debug/pprof/symbol", "/debug/pprof/trace"} {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			req.RemoteAddr = addr
+			req.Header.Set("X-Forwarded-For", "127.0.0.1")
+			enabledHandler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("non-loopback %q %s status = %d, want 403", addr, path, rec.Code)
+			}
+		}
+	}
+}
+
+func TestSetDependenciesConcurrentWithReadinessProbes(t *testing.T) {
+	runtime := NewRuntime(RuntimeConfig{Service: "gateway", QueueSize: 1, Logger: NewJSONLogger(io.Discard, slog.LevelError)})
+	runtime.MarkReady()
+	handler := runtime.DiagnosticsHandler()
+
+	var wg sync.WaitGroup
+	for i := range 8 {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+			for j := range 25 {
+				if (worker+j)%2 == 0 {
+					runtime.SetDependencies(
+						Dependency{Name: "postgres", Required: true, Check: func(context.Context) error { return nil }},
+						Dependency{Name: "redis", Required: false, Check: func(context.Context) error { return nil }},
+					)
+				} else {
+					rec := httptest.NewRecorder()
+					handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health/ready", nil))
+					if rec.Code != http.StatusOK {
+						t.Errorf("concurrent /health/ready status = %d", rec.Code)
+					}
+				}
+			}
+		}(i)
+	}
+	wg.Wait()
+}
+
+func TestLoggerRedactsExtendedSensitiveFields(t *testing.T) {
+	buffer := &bytes.Buffer{}
+	logger := NewJSONLogger(buffer, slog.LevelInfo)
+	logger.Info(
+		"sensitive_fields_test",
+		"password", "val-password",
+		"secret", "val-secret",
+		"token", "val-token",
+		"dsn", "val-dsn",
+		"authorization", "val-auth",
+		"cookie", "val-cookie",
+		"api_key", "val-apikey",
+		"api-key", "val-apikey-dash",
+		"private_key", "val-privkey",
+		"credential", "val-cred",
+		"safe_field", "kept-value",
+	)
+	output := buffer.String()
+	for _, secretVal := range []string{
+		"val-password", "val-secret", "val-token", "val-dsn", "val-auth",
+		"val-cookie", "val-apikey", "val-apikey-dash", "val-privkey", "val-cred",
+	} {
+		if strings.Contains(output, secretVal) {
+			t.Fatalf("log leaked sensitive value %q: %s", secretVal, output)
+		}
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(buffer.Bytes(), &parsed); err != nil {
+		t.Fatalf("expected valid single-line JSON log, got err=%v: %s", err, output)
+	}
+	for _, key := range []string{"password", "secret", "token", "dsn", "authorization", "cookie", "api_key", "api-key", "private_key", "credential"} {
+		if parsed[key] != "[REDACTED]" {
+			t.Fatalf("field %q = %v, want [REDACTED]", key, parsed[key])
+		}
+	}
+	if parsed["safe_field"] != "kept-value" {
+		t.Fatalf("safe_field = %v, want kept-value", parsed["safe_field"])
+	}
+}
+
+type panicOnceExporter struct {
+	mu       sync.Mutex
+	calls    int
+	exported []SpanData
+}
+
+func (e *panicOnceExporter) Export(_ context.Context, spans []SpanData) error {
+	e.mu.Lock()
+	e.calls++
+	call := e.calls
+	e.mu.Unlock()
+	if call == 1 {
+		panic("exporter-secret-boom")
+	}
+	e.mu.Lock()
+	e.exported = append(e.exported, spans...)
+	e.mu.Unlock()
+	return nil
+}
+
+func (*panicOnceExporter) Shutdown(context.Context) error { return nil }
+
+func TestAsyncExporterRecoversFromDelegatePanicAndContinues(t *testing.T) {
+	var logs syncBuffer
+	delegate := &panicOnceExporter{}
+	runtime := NewRuntime(RuntimeConfig{
+		Service:  "gateway",
+		Exporter: delegate,
+		QueueSize: 8,
+		Logger:   NewJSONLogger(&logs, slog.LevelInfo),
+	})
+
+	_ = runtime.async.Export(context.Background(), []SpanData{{Service: "gateway", Name: "first"}})
+	_ = runtime.async.Export(context.Background(), []SpanData{{Service: "gateway", Name: "second"}})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := runtime.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.FailedExports() != 1 {
+		t.Fatalf("FailedExports = %d, want 1", runtime.FailedExports())
+	}
+	delegate.mu.Lock()
+	exportedCount := len(delegate.exported)
+	delegate.mu.Unlock()
+	if exportedCount != 1 {
+		t.Fatalf("exported spans after panic = %d, want 1", exportedCount)
+	}
+	logOutput := logs.String()
+	if strings.Contains(logOutput, "exporter-secret-boom") {
+		t.Fatalf("panic payload leaked into log: %s", logOutput)
+	}
+	prom := httptest.NewRecorder()
+	runtime.Metrics.Handler().ServeHTTP(prom, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if !strings.Contains(prom.Body.String(), "hvac_goroutine_panics_total 1") {
+		t.Fatalf("metrics missing panic counter: %s", prom.Body.String())
+	}
+}
+
+type trackingReadCloser struct {
+	reader  io.Reader
+	drained bool
+	closed  bool
+}
+
+func (t *trackingReadCloser) Read(p []byte) (int, error) {
+	n, err := t.reader.Read(p)
+	if err == io.EOF {
+		t.drained = true
+	}
+	return n, err
+}
+
+func (t *trackingReadCloser) Close() error {
+	t.closed = true
+	return nil
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestOTLPHTTPExporterDrainsResponseBodyBeforeClose(t *testing.T) {
+	body := &trackingReadCloser{reader: strings.NewReader(`{"partialSuccess":{}}`)}
+	exporter := NewOTLPHTTPExporter("http://otel-collector.test:4318", time.Second)
+	exporter.client.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusInternalServerError, Body: body, Header: make(http.Header)}, nil
+	})
+	err := exporter.Export(context.Background(), []SpanData{{Service: "gateway", Name: "span"}})
+	if err == nil {
+		t.Fatal("expected error for 500 OTLP response")
+	}
+	if !body.drained || !body.closed {
+		t.Fatalf("expected response body drained (%v) and closed (%v)", body.drained, body.closed)
+	}
+}

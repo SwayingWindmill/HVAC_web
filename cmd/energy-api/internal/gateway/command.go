@@ -791,7 +791,7 @@ func (h *handler) callOperatorCommandBackend(
 		failure := commandUnavailable("Command Service is temporarily unavailable.")
 		return 0, nil, &failure
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 
 	if maxResponseBytes <= 0 {
 		maxResponseBytes = h.command.maxResponseBytes
@@ -1162,7 +1162,7 @@ func (h *handler) executeCommandCreate(ctx context.Context, request *http.Reques
 		failure := commandUnavailable("Command Service is temporarily unavailable.")
 		return commandView{}, 0, "", &failure
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	rawBody, err := readBoundedBody(response.Body, h.command.maxResponseBytes)
 	if err != nil {
 		failure := commandUnavailable("Command Service response exceeded size limit.")

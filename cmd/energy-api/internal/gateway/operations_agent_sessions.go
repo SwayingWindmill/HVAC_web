@@ -1050,13 +1050,21 @@ func (h *handler) proxyAgentSession(writer http.ResponseWriter, request *http.Re
 		writeProblem(writer, request, http.StatusBadGateway, "OPERATIONS_AGENT_BAD_GATEWAY", "Operations Agent unavailable", "The Operations Agent did not complete the Agent Session request.", true, nil)
 		return
 	}
-	defer response.Body.Close()
+	isSSEStream := false
+	defer func() {
+		if isSSEStream {
+			_ = response.Body.Close()
+			return
+		}
+		drainAndCloseBody(response.Body)
+	}()
 	contentType := strings.ToLower(response.Header.Get("Content-Type"))
 	if route.kind == "STREAM" && response.StatusCode >= 200 && response.StatusCode < 300 {
 		if !strings.HasPrefix(contentType, "text/event-stream") {
 			writeProblem(writer, request, http.StatusBadGateway, "OPERATIONS_AGENT_CONTRACT_FAILED", "Operations Agent contract failed", "The Operations Agent returned an invalid Agent event stream.", true, nil)
 			return
 		}
+		isSSEStream = true
 		result, err := forwardAgentSessionEventStreamWithConfig(
 			ctx,
 			cancel,

@@ -61,7 +61,7 @@ func newAnalyticsController(config *AnalyticsConfig) *analyticsController {
 	resolved := *config
 	resolved.QueryBaseURL = strings.TrimRight(strings.TrimSpace(resolved.QueryBaseURL), "/")
 	if resolved.QueryHTTPClient == nil {
-		resolved.QueryHTTPClient = &http.Client{}
+		resolved.QueryHTTPClient = &http.Client{Timeout: defaultAnalyticsTimeout}
 	}
 	if resolved.QueryAudience == "" {
 		resolved.QueryAudience = "telemetry-query-service"
@@ -264,7 +264,7 @@ func (h *handler) authorizeAnalyticsForPresenter(
 		failure := analyticsUnavailable("IAM Analytics authorization is temporarily unavailable.")
 		return "", &failure
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	if response.StatusCode != http.StatusOK {
 		if response.StatusCode >= http.StatusInternalServerError {
 			failure := analyticsUnavailable("IAM Analytics authorization is temporarily unavailable.")
@@ -352,7 +352,7 @@ func (h *handler) executeAnalyticsQuery(ctx context.Context, publicRequest *http
 		failure := analyticsUnavailable("Telemetry Query Service is temporarily unavailable.")
 		return nil, &failure
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	raw, err := readBoundedBody(response.Body, h.analytics.maxResponseBytes)
 	if err != nil {
 		failure := analyticsFailure{http.StatusBadGateway, "ANALYTICS_RESPONSE_INVALID", "Analytics response invalid", "Telemetry Query Service returned an oversized or unreadable response.", true}

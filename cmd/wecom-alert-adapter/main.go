@@ -5,18 +5,28 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
+	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 )
 
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
 	health := flag.Bool("healthcheck", false, "exit 0 when /healthz on this address answers")
 	addr := flag.String("addr", envOr("WECOM_ADAPTER_ADDR", ":9095"), "listen address")
 	urlFile := flag.String("webhook-url-file", envOr("WECOM_WEBHOOK_URL_FILE", "/etc/alert-receiver/wecom-webhook-url"), "file containing the WeCom robot webhook URL")
@@ -24,21 +34,132 @@ func main() {
 	recipientsFile := flag.String("recipients-file", envOr("ALARM_DELIVERY_RECIPIENTS_FILE", "/etc/alarm-delivery/recipients.json"), "file listing allowed alarm delivery recipients")
 	receiverDir := flag.String("receiver-dir", envOr("ALERT_RECEIVER_DIR", "/etc/alert-receiver"), "directory with smtp.env, smtp-password, wecom-app.env and wecom-app-secret")
 	flag.Parse()
+
+	logger := newJSONLogger(os.Stdout, slog.LevelInfo)
 	if *health {
-		os.Exit(healthcheck(*addr))
+		return healthcheck(*addr, logger)
 	}
-	client := &http.Client{Timeout: 8 * time.Second, CheckRedirect: refuseRedirect}
+
+	client := newBoundedHTTPClient(8*time.Second, refuseRedirect)
+	send := newSender(*sendTokenFile, *recipientsFile, *receiverDir, *urlFile, client)
+	send.logger = logger
 	server := &http.Server{
 		Addr:              *addr,
-		Handler:           newHandler(*urlFile, client, newSender(*sendTokenFile, *recipientsFile, *receiverDir, *urlFile, client)),
+		Handler:           newHandlerWithLogger(*urlFile, client, send, logger),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
-	log.Printf("wecom alert adapter listening on %s", *addr)
-	if err := server.ListenAndServe(); err != nil {
-		log.Fatal(err)
+
+	sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	if err := serveWithGracefulShutdown(sigCtx, server, logger, 10*time.Second); err != nil {
+		return 1
 	}
+	return 0
+}
+
+func serveWithGracefulShutdown(ctx context.Context, server *http.Server, logger *slog.Logger, shutdownTimeout time.Duration) error {
+	if logger == nil {
+		logger = newJSONLogger(os.Stdout, slog.LevelInfo)
+	}
+	serveErr := make(chan error, 1)
+	var httpWG sync.WaitGroup
+	httpWG.Add(1)
+	go func() {
+		defer httpWG.Done()
+		logger.Info("wecom_alert_adapter_listening", "address", server.Addr)
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serveErr <- err
+		}
+	}()
+
+	var runErr error
+	select {
+	case <-ctx.Done():
+		logger.Info("wecom_alert_adapter_shutting_down")
+	case err := <-serveErr:
+		logger.Error("wecom_alert_adapter_stopped_unexpectedly", "error_code", "WECOM_ADAPTER_SERVE_FAILED", "cause", err.Error())
+		runErr = err
+	}
+
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancelShutdown()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		logger.Warn("wecom_alert_adapter_shutdown_failed", "error_code", "WECOM_ADAPTER_SHUTDOWN_FAILED", "cause", err.Error())
+		_ = server.Close()
+	}
+	httpWG.Wait()
+	logger.Info("wecom_alert_adapter_stopped")
+	return runErr
+}
+
+func newJSONLogger(writer io.Writer, level slog.Level) *slog.Logger {
+	return slog.New(slog.NewJSONHandler(writer, &slog.HandlerOptions{
+		Level:       level,
+		ReplaceAttr: redactLogAttribute,
+	}))
+}
+
+func redactLogAttribute(_ []string, attribute slog.Attr) slog.Attr {
+	key := strings.ReplaceAll(strings.ToLower(attribute.Key), "-", "_")
+	for _, fragment := range []string{
+		"authorization",
+		"cookie",
+		"token",
+		"grant",
+		"secret",
+		"password",
+		"body",
+		"connection_string",
+		"database_url",
+		"dsn",
+		"api_key",
+		"apikey",
+		"private_key",
+		"privatekey",
+		"credential",
+	} {
+		if strings.Contains(key, fragment) {
+			return slog.String(attribute.Key, "[REDACTED]")
+		}
+	}
+	if key == "error" {
+		return slog.String(attribute.Key, "[REDACTED]")
+	}
+	return attribute
+}
+
+func newBoundedHTTPClient(timeout time.Duration, checkRedirect func(*http.Request, []*http.Request) error) *http.Client {
+	var transport *http.Transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok {
+		transport = base.Clone()
+	} else {
+		transport = &http.Transport{}
+	}
+	transport.DialContext = (&net.Dialer{
+		Timeout:   5 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext
+	transport.TLSHandshakeTimeout = 5 * time.Second
+	transport.IdleConnTimeout = 90 * time.Second
+	transport.MaxIdleConns = 100
+	transport.MaxIdleConnsPerHost = 16
+	return &http.Client{
+		Timeout:       timeout,
+		Transport:     transport,
+		CheckRedirect: checkRedirect,
+	}
+}
+
+func drainAndCloseBody(body io.ReadCloser) {
+	if body == nil {
+		return
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(body, 64<<10))
+	_ = body.Close()
 }
 
 func envOr(name, fallback string) string {
@@ -52,49 +173,71 @@ func refuseRedirect(*http.Request, []*http.Request) error {
 	return http.ErrUseLastResponse
 }
 
-func healthcheck(addr string) int {
+func healthcheck(addr string, logger *slog.Logger) int {
+	if logger == nil {
+		logger = newJSONLogger(os.Stdout, slog.LevelInfo)
+	}
 	host := addr
 	if strings.HasPrefix(addr, ":") {
 		host = "127.0.0.1" + addr
 	}
-	client := &http.Client{Timeout: 2 * time.Second}
+	client := newBoundedHTTPClient(2*time.Second, refuseRedirect)
 	response, err := client.Get("http://" + host + "/healthz")
 	if err != nil {
-		log.Printf("healthcheck: %v", err)
+		logger.Error("wecom_healthcheck_failed", "error_code", "WECOM_HEALTHCHECK_FAILED", "cause", err.Error())
 		return 1
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	if response.StatusCode != http.StatusOK {
-		log.Printf("healthcheck status %d", response.StatusCode)
+		logger.Error("wecom_healthcheck_bad_status", "error_code", "WECOM_HEALTHCHECK_STATUS", "status", response.StatusCode)
 		return 1
 	}
 	return 0
 }
 
 func newHandler(urlFile string, client *http.Client, send *sender) http.Handler {
+	var logger *slog.Logger
+	if send != nil {
+		logger = send.logger
+	}
+	return newHandlerWithLogger(urlFile, client, send, logger)
+}
+
+func newHandlerWithLogger(urlFile string, client *http.Client, send *sender, logger *slog.Logger) http.Handler {
+	if logger == nil {
+		logger = newJSONLogger(os.Stdout, slog.LevelInfo)
+	}
 	mux := http.NewServeMux()
 	if send != nil {
 		mux.HandleFunc("POST /send", send.serve)
 	}
 	mux.HandleFunc("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		writer.WriteHeader(http.StatusOK)
 		_, _ = writer.Write([]byte("ok\n"))
 	})
 	mux.HandleFunc("POST /alertmanager", func(writer http.ResponseWriter, request *http.Request) {
-		deliver(writer, request, urlFile, client)
+		deliverWithLogger(writer, request, urlFile, client, logger)
 	})
 	return mux
 }
 
 func deliver(writer http.ResponseWriter, request *http.Request, urlFile string, client *http.Client) {
+	deliverWithLogger(writer, request, urlFile, client, newJSONLogger(os.Stdout, slog.LevelInfo))
+}
+
+func deliverWithLogger(writer http.ResponseWriter, request *http.Request, urlFile string, client *http.Client, logger *slog.Logger) {
+	if logger == nil {
+		logger = newJSONLogger(os.Stdout, slog.LevelInfo)
+	}
 	webhookURL, err := readWebhookURL(urlFile)
 	if err != nil {
-		log.Printf("wecom webhook file: %v", err)
+		logger.Error("wecom_webhook_file_invalid", "error_code", "WECOM_WEBHOOK_FILE_INVALID", "cause", err.Error())
 		http.Error(writer, "wecom webhook file is invalid", http.StatusInternalServerError)
 		return
 	}
 	if webhookURL == "" {
-		log.Printf("dropped alertmanager webhook: wecom receiver is not configured")
+		logger.Info("alertmanager_webhook_dropped", "reason", "wecom_receiver_not_configured")
 		writer.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -124,14 +267,14 @@ func deliver(writer http.ResponseWriter, request *http.Request, urlFile string, 
 	outbound.Header.Set("Content-Type", "application/json")
 	response, err := client.Do(outbound)
 	if err != nil {
-		log.Printf("wecom post failed")
+		logger.Warn("wecom_post_failed", "error_code", "WECOM_POST_FAILED")
 		http.Error(writer, "wecom unreachable", http.StatusBadGateway)
 		return
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	reply, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		log.Printf("wecom http status %d", response.StatusCode)
+		logger.Warn("wecom_http_error", "error_code", "WECOM_HTTP_STATUS", "status", response.StatusCode)
 		http.Error(writer, "wecom rejected the post", http.StatusBadGateway)
 		return
 	}
@@ -139,7 +282,7 @@ func deliver(writer http.ResponseWriter, request *http.Request, urlFile string, 
 		ErrCode int `json:"errcode"`
 	}
 	if json.Unmarshal(reply, &parsed) == nil && parsed.ErrCode != 0 {
-		log.Printf("wecom errcode %d", parsed.ErrCode)
+		logger.Warn("wecom_errcode_rejected", "error_code", "WECOM_ERRCODE", "wecom_errcode", parsed.ErrCode)
 		http.Error(writer, "wecom rejected the message", http.StatusBadGateway)
 		return
 	}

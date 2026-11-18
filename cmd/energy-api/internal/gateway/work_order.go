@@ -376,7 +376,7 @@ func (a *httpWorkOrderAdapter) ExecuteRead(ctx context.Context, publicRequest *h
 		failure := workOrderUnavailable("Work Order Service is temporarily unavailable.")
 		return nil, 0, &failure
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	if response.StatusCode < 200 || response.StatusCode > 599 {
 		failure := workOrderUnavailable("Work Order Service returned an invalid status.")
 		return nil, 0, &failure
@@ -412,7 +412,7 @@ func (a *httpWorkOrderAdapter) ExecuteMutation(ctx context.Context, publicReques
 		failure := workOrderUnavailable("Work Order Service is temporarily unavailable.")
 		return nil, 0, false, &failure
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	body, err := readBoundedBody(response.Body, a.maxResponseBytes)
 	if err != nil {
 		failure := workOrderUnavailable("Work Order Service returned an oversized or unreadable response.")
@@ -448,7 +448,7 @@ func (a *httpWorkOrderAdapter) ExecuteLifecyclePrecondition(ctx context.Context,
 		failure := workOrderUnavailable("Work Order Service is temporarily unavailable.")
 		return workordermodel.WorkOrder{}, &failure
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	body, err := readBoundedBody(response.Body, a.maxResponseBytes)
 	if err != nil {
 		failure := workOrderUnavailable("Work Order Service returned an unreadable precondition response.")
@@ -487,7 +487,7 @@ func (a *httpWorkOrderAdapter) ExecuteLifecycle(ctx context.Context, publicReque
 		failure := workOrderUnavailable("Work Order Service is temporarily unavailable.")
 		return nil, 0, false, &failure
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	body, err := readBoundedBody(response.Body, a.maxResponseBytes)
 	if err != nil {
 		failure := workOrderUnavailable("Work Order Service returned an oversized or unreadable response.")
@@ -840,7 +840,7 @@ func (h *handler) authorizeWorkOrder(request *http.Request, session bffSession, 
 		failure := workOrderUnavailable("IAM Work Order authorization is temporarily unavailable.")
 		return workorderauth.Decision{}, &failure
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	if response.StatusCode != http.StatusOK {
 		failure := workOrderUnavailable("IAM did not return a valid Work Order authorization decision.")
 		return workorderauth.Decision{}, &failure

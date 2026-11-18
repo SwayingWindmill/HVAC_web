@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -86,7 +87,39 @@ func LoadWeChat(appID, secretFile, state string) (*WeChat, error) {
 	if strings.TrimSpace(string(secret)) == "" {
 		return nil, errors.New("the WeChat AppSecret file is empty")
 	}
-	return &WeChat{AppID: appID, Secret: strings.TrimSpace(string(secret)), BaseURL: WeChatAPIBase, Client: &http.Client{Timeout: 5 * time.Second}, State: state}, nil
+	return &WeChat{AppID: appID, Secret: strings.TrimSpace(string(secret)), BaseURL: WeChatAPIBase, Client: newWeChatHTTPClient(), State: state}, nil
+}
+
+func newWeChatHTTPClient() *http.Client {
+	var transport *http.Transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok {
+		transport = base.Clone()
+	} else {
+		transport = &http.Transport{}
+	}
+	transport.DialContext = (&net.Dialer{
+		Timeout:   5 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext
+	transport.TLSHandshakeTimeout = 5 * time.Second
+	transport.IdleConnTimeout = 90 * time.Second
+	transport.MaxIdleConns = 100
+	transport.MaxIdleConnsPerHost = 16
+	return &http.Client{
+		Timeout:   5 * time.Second,
+		Transport: transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
+
+func drainAndCloseBody(body io.ReadCloser) {
+	if body == nil {
+		return
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(body, 64<<10))
+	_ = body.Close()
 }
 
 // OpenID trades a code from wx.login for the person's OpenID (code2Session). The session key
@@ -104,7 +137,7 @@ func (weChat *WeChat) OpenID(ctx context.Context, code string) (string, error) {
 	if err != nil {
 		return "", ErrWeChatUnavailable
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	var answer struct {
 		OpenID  string `json:"openid"`
 		ErrCode int    `json:"errcode"`

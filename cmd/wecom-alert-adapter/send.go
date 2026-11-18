@@ -18,7 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/mail"
@@ -51,6 +51,7 @@ type sender struct {
 	receiverDir    string
 	urlFile        string
 	client         *http.Client
+	logger         *slog.Logger
 	// dialSMTP opens the connection to the mail server; tests replace it.
 	dialSMTP func(ctx context.Context, host, port string) (net.Conn, error)
 	now      func() time.Time
@@ -58,6 +59,13 @@ type sender struct {
 	mu         sync.Mutex
 	wecomToken string
 	wecomUntil time.Time
+}
+
+func (s *sender) log() *slog.Logger {
+	if s.logger != nil {
+		return s.logger
+	}
+	return newJSONLogger(os.Stdout, slog.LevelInfo)
 }
 
 var (
@@ -78,7 +86,7 @@ func newSender(tokenFile, recipientsFile, receiverDir, urlFile string, client *h
 func (s *sender) serve(writer http.ResponseWriter, request *http.Request) {
 	token, err := os.ReadFile(s.tokenFile)
 	if err != nil || strings.TrimSpace(string(token)) == "" {
-		log.Printf("send: alarm send token is not configured")
+		s.log().Warn("alarm_send_token_missing", "error_code", "ALARM_SEND_TOKEN_MISSING")
 		http.Error(writer, "send is not configured", http.StatusServiceUnavailable)
 		return
 	}
@@ -109,16 +117,16 @@ func (s *sender) serve(writer http.ResponseWriter, request *http.Request) {
 	}
 	switch {
 	case err == nil:
-		log.Printf("send %s %s: ok dryRun=%t", message.Channel, key, message.DryRun)
+		s.log().Info("alarm_send_succeeded", "channel", message.Channel, "key", key, "dry_run", message.DryRun)
 		writer.WriteHeader(http.StatusNoContent)
 	case errors.Is(err, errNotConfigured):
-		log.Printf("send %s %s: %v", message.Channel, key, err)
+		s.log().Warn("alarm_send_unconfigured", "channel", message.Channel, "key", key, "error_code", "ALARM_CHANNEL_UNCONFIGURED", "cause", err.Error())
 		http.Error(writer, "channel not configured", http.StatusNotImplemented)
 	case errors.Is(err, errRejected):
-		log.Printf("send %s %s: %v", message.Channel, key, err)
+		s.log().Warn("alarm_send_rejected", "channel", message.Channel, "key", key, "error_code", "ALARM_RECIPIENT_REJECTED", "cause", err.Error())
 		http.Error(writer, "recipient rejected", http.StatusUnprocessableEntity)
 	default:
-		log.Printf("send %s %s: failed: %v", message.Channel, key, err)
+		s.log().Error("alarm_send_failed", "channel", message.Channel, "key", key, "error_code", "ALARM_SEND_FAILED", "cause", err.Error())
 		http.Error(writer, "upstream failed", http.StatusBadGateway)
 	}
 }
@@ -385,7 +393,7 @@ func (s *sender) wecomAccessToken(ctx context.Context, base, corpID, secret stri
 	if err != nil {
 		return "", errors.New("WeCom gettoken unreachable")
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	var reply struct {
 		ErrCode     int    `json:"errcode"`
 		AccessToken string `json:"access_token"`
@@ -439,7 +447,7 @@ func (s *sender) postJSON(ctx context.Context, target string, payload []byte, in
 	if err != nil {
 		return errors.New("WeCom unreachable")
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return fmt.Errorf("WeCom http status %d", response.StatusCode)
 	}
