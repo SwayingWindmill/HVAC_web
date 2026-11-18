@@ -232,6 +232,12 @@ test('模板版本 persists template catalog, structured DEVICE activation build
   const assignmentsTable = page.getByRole('table', { name: '站点已应用模板' });
   await expect(assignmentsTable).toContainText('CHILLER-01');
   await expect(assignmentsTable).toContainText('chiller-v2-std · 第 1 版');
+  expect(
+    gateway.writes.find((write) => write.method === 'POST' && write.path === '/api/v1/templates/revisions')?.csrfToken,
+  ).toBe('e2e-csrf-token');
+  expect(
+    gateway.writes.find((write) => write.method === 'POST' && write.path === '/api/v1/templates/assignments')?.csrfToken,
+  ).toBe('e2e-csrf-token');
   await page.screenshot({ path: p1Shot('p1-templates-light.png') });
 
   // Reload page to verify persistent catalog and persistent site assignment history.
@@ -299,6 +305,9 @@ test('资源与绑定 supports tag CRUD, spatial subtree filter, tag filter, and
   await editDialog.getByRole('button', { name: '保存' }).click();
   await expect(editDialog).toHaveCount(0);
   await expect(chillerRow).toContainText('vendor:carrier');
+  expect(
+    gateway.writes.find((write) => write.method === 'PATCH' && write.path.includes('/devices/'))?.csrfToken,
+  ).toBe('e2e-csrf-token');
 
   // Filter by key:value tag and verify non-matching rows disappear.
   await page.getByRole('textbox', { name: '按标签筛选' }).fill('vendor:carrier');

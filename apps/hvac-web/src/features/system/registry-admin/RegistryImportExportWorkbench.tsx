@@ -19,6 +19,7 @@ interface Props {
   site: Site;
   model: SiteAssetModel;
   capabilities: ReadonlySet<Capability>;
+  csrfToken: string;
   onDirtyChange: (dirty: boolean) => void;
   onRefresh: () => Promise<void>;
 }
@@ -42,7 +43,7 @@ function planStatusLabel(status: string): string {
   return '需处理';
 }
 
-export function RegistryImportExportWorkbench({ site, model, capabilities, onDirtyChange, onRefresh }: Props) {
+export function RegistryImportExportWorkbench({ site, model, capabilities, csrfToken, onDirtyChange, onRefresh }: Props) {
   const [source, setSource] = useState(EXAMPLE_IMPORT);
   const [dirty, setDirty] = useState(false);
   const [plan, setPlan] = useState<ImportPlan | null>(null);
@@ -59,7 +60,7 @@ export function RegistryImportExportWorkbench({ site, model, capabilities, onDir
     setCommitMessage(null);
     try {
       const parsed = importPlanRequestSchema.parse(JSON.parse(source));
-      const nextPlan = await registryAdminApi.planImport(site.id, parsed);
+      const nextPlan = await registryAdminApi.planImport(site.id, parsed, csrfToken);
       setPlan(nextPlan);
       setDirty(false);
     } catch (reason) {
@@ -77,7 +78,7 @@ export function RegistryImportExportWorkbench({ site, model, capabilities, onDir
       const result = await registryAdminApi.commitImport(site.id, {
         plan,
         meta: makeRegistryMutationMeta(0, '提交已复核的登记导入计划', newRegistryIdempotencyKey('registry-import-commit')),
-      });
+      }, csrfToken);
       const committed = result.results.filter((row) => row.status === 'COMMITTED').length;
       setCommitMessage(`导入完成，共提交 ${committed} 条登记记录。`);
       setPlan(null);

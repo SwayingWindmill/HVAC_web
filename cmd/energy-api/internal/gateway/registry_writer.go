@@ -29,6 +29,14 @@ func (h *handler) serveRegistryMutation(writer http.ResponseWriter, request *htt
 		}
 		session = resolved
 	}
+	if h.identity == nil {
+		writeIdentityFailure(writer, request, identityFailure{503, "IDENTITY_NOT_CONFIGURED", "Identity unavailable", "Identity is not configured for this Gateway.", true})
+		return
+	}
+	if stateFailure := h.identity.validateStateChange(request, session, request.Header.Get("X-CSRF-Token")); stateFailure != nil {
+		writeIdentityFailure(writer, request, *stateFailure)
+		return
+	}
 	authorization, failure := h.authorizeRegistry(request.Context(), session, route.action)
 	if failure != nil {
 		if failure.status == http.StatusForbidden || failure.status == http.StatusNotFound {

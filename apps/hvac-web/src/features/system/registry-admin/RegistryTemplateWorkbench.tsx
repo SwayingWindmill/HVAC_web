@@ -68,6 +68,7 @@ interface Props {
   site: Site;
   model: SiteAssetModel;
   capabilities: ReadonlySet<Capability>;
+  csrfToken: string;
   onDirtyChange: (dirty: boolean) => void;
   onRefresh: () => Promise<void>;
 }
@@ -130,7 +131,7 @@ function formatTimestamp(value: string): string {
   return ASSIGNMENT_TIME.format(ms);
 }
 
-export function RegistryTemplateWorkbench({ site, model, capabilities, onDirtyChange, onRefresh }: Props) {
+export function RegistryTemplateWorkbench({ site, model, capabilities, csrfToken, onDirtyChange, onRefresh }: Props) {
   const queryClient = useQueryClient();
   const structuredGroupId = useId();
   const [payloadMode, setPayloadMode] = useState<PayloadEditorMode>('structured');
@@ -322,7 +323,7 @@ export function RegistryTemplateWorkbench({ site, model, capabilities, onDirtyCh
         payload,
         releaseReferences: refsResult.releaseReferences,
         meta: makeRegistryMutationMeta(0, releaseDraft.reason.trim(), newRegistryIdempotencyKey('template-release')),
-      });
+      }, csrfToken);
 
       setLocalRevisions((current) => ({ ...current, [released.id]: released }));
       queryClient.setQueryData(registryTemplateKeys.revision(released.id), released);
@@ -363,7 +364,7 @@ export function RegistryTemplateWorkbench({ site, model, capabilities, onDirtyCh
         templateRevisionId: assignmentDraft.templateRevisionId,
         effectiveAt: new Date().toISOString(),
         meta: makeRegistryMutationMeta(0, assignmentDraft.reason.trim(), newRegistryIdempotencyKey('template-assignment')),
-      });
+      }, csrfToken);
       setAssignmentDraft((current) => ({ ...current, targetId: '', reason: '' }));
       setAssignmentDirty(false);
       await Promise.all([
