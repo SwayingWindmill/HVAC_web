@@ -185,3 +185,37 @@ func TestDeleteMetricResultSubmitsAsyncMutation(t *testing.T) {
 		t.Fatalf("DeleteMetricResult must not set mutations_sync: %s", query)
 	}
 }
+
+func TestNewClickHouseStoreInitializesTunedDefaultHTTPTransport(t *testing.T) {
+	store, err := NewClickHouseStore("http://127.0.0.1:8123", "", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.client == nil {
+		t.Fatal("expected default HTTP client to be initialized")
+	}
+	if store.client.Timeout != 15*time.Second {
+		t.Fatalf("Timeout=%s, want 15s", store.client.Timeout)
+	}
+	transport, ok := store.client.Transport.(*http.Transport)
+	if !ok || transport == nil {
+		t.Fatalf("Transport=%T, want *http.Transport", store.client.Transport)
+	}
+	if transport.MaxIdleConns != 64 ||
+		transport.MaxIdleConnsPerHost != 32 ||
+		transport.IdleConnTimeout != 90*time.Second ||
+		transport.TLSHandshakeTimeout != 10*time.Second ||
+		transport.ExpectContinueTimeout != time.Second {
+		t.Fatalf("unexpected transport tuning: MaxIdleConns=%d MaxIdleConnsPerHost=%d IdleConnTimeout=%s TLSHandshakeTimeout=%s ExpectContinueTimeout=%s",
+			transport.MaxIdleConns, transport.MaxIdleConnsPerHost, transport.IdleConnTimeout, transport.TLSHandshakeTimeout, transport.ExpectContinueTimeout)
+	}
+
+	custom := &http.Client{Timeout: 4 * time.Second}
+	withCustom, err := NewClickHouseStore("http://127.0.0.1:8123", "", "", custom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withCustom.client != custom {
+		t.Fatal("expected custom HTTP client to be preserved")
+	}
+}

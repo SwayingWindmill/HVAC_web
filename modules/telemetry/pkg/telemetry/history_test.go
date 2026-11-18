@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -432,4 +434,593 @@ type contextCheckingHistoryRepo struct {
 func (r *contextCheckingHistoryRepo) RetryHistoryBatch(ctx context.Context, leaseID string, retryAt time.Time, errorCode string) error {
 	r.retrySawActiveCtx = ctx.Err() == nil
 	return r.historyRepositoryStub.RetryHistoryBatch(ctx, leaseID, retryAt, errorCode)
+}
+
+func TestHistoryRelayConfigPipelineDepthDefaultsAndClamping(t *testing.T) {
+	base := HistoryRelayConfig{
+		Repository: &historyRepositoryStub{},
+		Sink:       &historySinkStub{},
+		BatchSize:  16,
+		LeaseFor:   30 * time.Second,
+		RetryAfter: time.Second,
+	}
+	cases := []struct {
+		in   int
+		want int
+	}{
+		{in: -3, want: 2},
+		{in: 0, want: 2},
+		{in: 1, want: 1},
+		{in: 2, want: 2},
+		{in: 3, want: 3},
+		{in: 4, want: 4},
+		{in: 9, want: 4},
+	}
+	for _, tc := range cases {
+		cfg := base
+		cfg.PipelineDepth = tc.in
+		relay, err := NewHistoryRelay(cfg)
+		if err != nil {
+			t.Fatalf("PipelineDepth=%d err=%v", tc.in, err)
+		}
+		if relay.pipelineDepth != tc.want {
+			t.Fatalf("PipelineDepth=%d got=%d, want %d", tc.in, relay.pipelineDepth, tc.want)
+		}
+	}
+}
+
+type fakePipelinedBatch struct {
+	batch       HistoryBatch
+	state       string // PENDING, IN_FLIGHT, PUBLISHED, DEAD
+	availableAt time.Time
+	attempts    int
+	errorCode   string
+}
+
+type fakePipelinedHistoryRepo struct {
+	mu                sync.Mutex
+	batches           []*fakePipelinedBatch
+	nextLeaseSeq      int
+	activeInFlight    int
+	maxObservedFlight int
+	inFlightLimitHit  bool
+	releasedBatchIDs  []string
+	releaseActiveCtx  []bool
+	retriedLeaseIDs   []string
+	publishedSeqs     []uint64
+	markPublishErr    map[uint64]error
+	claimHook         func(batch HistoryBatch)
+}
+
+func newFakePipelinedHistoryRepo(batches []HistoryBatch) *fakePipelinedHistoryRepo {
+	items := make([]*fakePipelinedBatch, len(batches))
+	for i, b := range batches {
+		items[i] = &fakePipelinedBatch{
+			batch: b,
+			state: "PENDING",
+		}
+	}
+	return &fakePipelinedHistoryRepo{
+		batches:        items,
+		markPublishErr: make(map[uint64]error),
+	}
+}
+
+func (r *fakePipelinedHistoryRepo) ClaimHistoryBatch(ctx context.Context, maxEvents int, now time.Time, leaseFor time.Duration) (HistoryBatch, error) {
+	return r.ClaimPipelinedHistoryBatch(ctx, maxEvents, now, leaseFor, 1)
+}
+
+func (r *fakePipelinedHistoryRepo) ClaimPipelinedHistoryBatch(_ context.Context, _ int, now time.Time, _ time.Duration, maxInFlight int) (HistoryBatch, error) {
+	r.mu.Lock()
+	if r.activeInFlight >= maxInFlight {
+		r.inFlightLimitHit = true
+		r.mu.Unlock()
+		return HistoryBatch{}, nil
+	}
+	var claimed HistoryBatch
+	for _, item := range r.batches {
+		if item.state == "IN_FLIGHT" || item.state == "PUBLISHED" || item.state == "DEAD" {
+			continue
+		}
+		if item.availableAt.After(now) {
+			r.mu.Unlock()
+			return HistoryBatch{}, nil
+		}
+		r.nextLeaseSeq++
+		item.state = "IN_FLIGHT"
+		item.attempts++
+		item.batch.LeaseID = fmt.Sprintf("018f2e00-9000-7000-8000-%012d", r.nextLeaseSeq)
+		item.batch.MaxAttempts = item.attempts
+		r.activeInFlight++
+		if r.activeInFlight > r.maxObservedFlight {
+			r.maxObservedFlight = r.activeInFlight
+		}
+		claimed = item.batch
+		break
+	}
+	hook := r.claimHook
+	r.mu.Unlock()
+	if len(claimed.Observations) > 0 && hook != nil {
+		hook(claimed)
+	}
+	return claimed, nil
+}
+
+func (r *fakePipelinedHistoryRepo) ReleaseHistoryBatchLease(ctx context.Context, batchID string, now time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.releaseActiveCtx = append(r.releaseActiveCtx, ctx.Err() == nil)
+	for _, item := range r.batches {
+		if (item.batch.BatchID == batchID || item.batch.LeaseID == batchID) && item.state == "IN_FLIGHT" {
+			item.state = "PENDING"
+			item.availableAt = now
+			item.errorCode = ""
+			if item.attempts > 0 {
+				item.attempts--
+			}
+			item.batch.LeaseID = ""
+			r.activeInFlight--
+			r.releasedBatchIDs = append(r.releasedBatchIDs, batchID)
+			return nil
+		}
+	}
+	return errors.New("telemetry history lease was not found")
+}
+
+func (r *fakePipelinedHistoryRepo) MarkHistoryBatchPublished(_ context.Context, leaseID string, _ time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, item := range r.batches {
+		if item.batch.LeaseID == leaseID && item.state == "IN_FLIGHT" {
+			if err := r.markPublishErr[item.batch.Sequence]; err != nil {
+				delete(r.markPublishErr, item.batch.Sequence)
+				return err
+			}
+			item.state = "PUBLISHED"
+			item.batch.LeaseID = ""
+			r.activeInFlight--
+			r.publishedSeqs = append(r.publishedSeqs, item.batch.Sequence)
+			return nil
+		}
+	}
+	return errors.New("telemetry history lease was not found")
+}
+
+func (r *fakePipelinedHistoryRepo) MarkHistoryEventsPublished(_ context.Context, leaseID string, eventIDs []string, _ time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, item := range r.batches {
+		if item.batch.LeaseID == leaseID && item.state == "IN_FLIGHT" {
+			keep := make([]HistoryObservation, 0, len(item.batch.Observations))
+			done := make(map[string]struct{}, len(eventIDs))
+			for _, id := range eventIDs {
+				done[id] = struct{}{}
+			}
+			for _, obs := range item.batch.Observations {
+				if _, ok := done[obs.ObservationID]; !ok {
+					keep = append(keep, obs)
+				}
+			}
+			item.batch.Observations = keep
+			if len(keep) == 0 {
+				item.state = "PUBLISHED"
+				item.batch.LeaseID = ""
+				r.activeInFlight--
+				r.publishedSeqs = append(r.publishedSeqs, item.batch.Sequence)
+			}
+			return nil
+		}
+	}
+	return errors.New("telemetry history lease was not found")
+}
+
+func (r *fakePipelinedHistoryRepo) DeadLetterHistoryEvents(_ context.Context, leaseID string, eventIDs []string, errorCode string, _ time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, item := range r.batches {
+		if item.batch.LeaseID == leaseID && item.state == "IN_FLIGHT" {
+			dead := make(map[string]struct{}, len(eventIDs))
+			for _, id := range eventIDs {
+				dead[id] = struct{}{}
+			}
+			keep := make([]HistoryObservation, 0, len(item.batch.Observations))
+			for _, obs := range item.batch.Observations {
+				if _, ok := dead[obs.ObservationID]; !ok {
+					keep = append(keep, obs)
+				}
+			}
+			item.batch.Observations = keep
+			item.errorCode = errorCode
+			if len(keep) == 0 {
+				item.state = "DEAD"
+				item.batch.LeaseID = ""
+				r.activeInFlight--
+			}
+			return nil
+		}
+	}
+	return errors.New("telemetry history lease was not found")
+}
+
+func (r *fakePipelinedHistoryRepo) RetryHistoryBatch(_ context.Context, leaseID string, retryAt time.Time, errorCode string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, item := range r.batches {
+		if item.batch.LeaseID == leaseID && item.state == "IN_FLIGHT" {
+			item.state = "PENDING"
+			item.availableAt = retryAt
+			item.errorCode = errorCode
+			item.batch.LeaseID = ""
+			r.activeInFlight--
+			r.retriedLeaseIDs = append(r.retriedLeaseIDs, leaseID)
+			return nil
+		}
+	}
+	return errors.New("telemetry history lease was not found")
+}
+
+type fakePreparedHistorySink struct {
+	mu                sync.Mutex
+	prepareSeqs       []uint64
+	insertTokens      []string
+	activeInserts     int32
+	maxActiveInserts  int32
+	prepareHook       func(sequence uint64)
+	insertHook        func(token string) error
+	insertObsFallback []uint64
+}
+
+func (s *fakePreparedHistorySink) PrepareObservations(sequence uint64, observations []HistoryObservation) ([]byte, string, error) {
+	s.mu.Lock()
+	s.prepareSeqs = append(s.prepareSeqs, sequence)
+	hook := s.prepareHook
+	s.mu.Unlock()
+	if hook != nil {
+		hook(sequence)
+	}
+	token := fmt.Sprintf("seq:%04d:%d", sequence, len(observations))
+	return []byte(token), token, nil
+}
+
+func (s *fakePreparedHistorySink) InsertPrepared(_ context.Context, compressed []byte, token string) error {
+	cur := atomic.AddInt32(&s.activeInserts, 1)
+	for {
+		prev := atomic.LoadInt32(&s.maxActiveInserts)
+		if cur <= prev || atomic.CompareAndSwapInt32(&s.maxActiveInserts, prev, cur) {
+			break
+		}
+	}
+	defer atomic.AddInt32(&s.activeInserts, -1)
+	if string(compressed) != token {
+		return fmt.Errorf("prepared payload %q != token %q", string(compressed), token)
+	}
+	s.mu.Lock()
+	s.insertTokens = append(s.insertTokens, token)
+	hook := s.insertHook
+	s.mu.Unlock()
+	if hook != nil {
+		return hook(token)
+	}
+	return nil
+}
+
+func (s *fakePreparedHistorySink) InsertObservations(_ context.Context, sequence uint64, _ []HistoryObservation) error {
+	s.mu.Lock()
+	s.insertObsFallback = append(s.insertObsFallback, sequence)
+	s.mu.Unlock()
+	return nil
+}
+
+func makeFakeBatch(seq uint64, count int) HistoryBatch {
+	obs := make([]HistoryObservation, count)
+	for i := range count {
+		obs[i] = HistoryObservation{ObservationID: fmt.Sprintf("018f2e00-90%02d-7000-8000-%012d", seq, i+1)}
+	}
+	return HistoryBatch{
+		BatchID:      fmt.Sprintf("018f2e00-80%02d-7000-8000-000000000001", seq),
+		Sequence:     seq,
+		Observations: obs,
+	}
+}
+
+func TestHistoryRelayPipelineStrictSequenceOrderAndPreparedReuse(t *testing.T) {
+	now := time.Date(2026, 7, 29, 9, 0, 0, 0, time.UTC)
+	batches := []HistoryBatch{makeFakeBatch(1, 2), makeFakeBatch(2, 2), makeFakeBatch(3, 1)}
+	repo := newFakePipelinedHistoryRepo(batches)
+
+	batch1Inserting := make(chan struct{})
+	batch2Prepared := make(chan struct{})
+	sink := &fakePreparedHistorySink{}
+	sink.prepareHook = func(sequence uint64) {
+		if sequence == 2 {
+			close(batch2Prepared)
+		}
+	}
+	sink.insertHook = func(token string) error {
+		if strings.HasPrefix(token, "seq:0001:") {
+			close(batch1Inserting)
+			select {
+			case <-batch2Prepared:
+			case <-time.After(2 * time.Second):
+				return errors.New("stage 1 did not prefetch/prepare batch 2 while batch 1 inserted")
+			}
+		}
+		if strings.HasPrefix(token, "seq:0002:") {
+			repo.mu.Lock()
+			published := slices.Clone(repo.publishedSeqs)
+			repo.mu.Unlock()
+			if len(published) != 1 || published[0] != 1 {
+				return fmt.Errorf("batch 2 inserted before batch 1 committed in Postgres: published=%v", published)
+			}
+		}
+		return nil
+	}
+
+	relay, err := NewHistoryRelay(HistoryRelayConfig{
+		Repository:    repo,
+		Sink:          sink,
+		BatchSize:     4,
+		LeaseFor:      30 * time.Second,
+		RetryAfter:    5 * time.Second,
+		PipelineDepth: 2,
+		Now:           func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	published, err := relay.RelayPending(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if published != 5 {
+		t.Fatalf("published=%d, want 5", published)
+	}
+	<-batch1Inserting
+	if len(sink.insertObsFallback) != 0 {
+		t.Fatalf("expected PreparedHistorySink path, got fallback InsertObservations: %v", sink.insertObsFallback)
+	}
+	wantTokens := []string{"seq:0001:2", "seq:0002:2", "seq:0003:1"}
+	if !slices.Equal(sink.insertTokens, wantTokens) {
+		t.Fatalf("insertTokens=%v, want %v", sink.insertTokens, wantTokens)
+	}
+	if !slices.Equal(repo.publishedSeqs, []uint64{1, 2, 3}) {
+		t.Fatalf("publishedSeqs=%v, want [1 2 3]", repo.publishedSeqs)
+	}
+	if repo.maxObservedFlight > 2 || repo.activeInFlight != 0 {
+		t.Fatalf("in-flight max=%d active=%d", repo.maxObservedFlight, repo.activeInFlight)
+	}
+}
+
+func TestHistoryRelayPipelineReleasesPrefetchedLeaseOnStage2Failure(t *testing.T) {
+	clock := time.Date(2026, 7, 29, 9, 5, 0, 0, time.UTC)
+	batches := []HistoryBatch{makeFakeBatch(1, 2), makeFakeBatch(2, 2)}
+	repo := newFakePipelinedHistoryRepo(batches)
+
+	batch2Prepared := make(chan struct{})
+	failBatch1 := true
+	sink := &fakePreparedHistorySink{}
+	sink.prepareHook = func(sequence uint64) {
+		if sequence == 2 && failBatch1 {
+			select {
+			case <-batch2Prepared:
+			default:
+				close(batch2Prepared)
+			}
+		}
+	}
+	sink.insertHook = func(token string) error {
+		if strings.HasPrefix(token, "seq:0001:") && failBatch1 {
+			<-batch2Prepared
+			return errors.New("503 ClickHouse temporarily unavailable")
+		}
+		return nil
+	}
+
+	relay, err := NewHistoryRelay(HistoryRelayConfig{
+		Repository:    repo,
+		Sink:          sink,
+		BatchSize:     4,
+		LeaseFor:      30 * time.Second,
+		RetryAfter:    5 * time.Second,
+		PipelineDepth: 2,
+		Now:           func() time.Time { return clock },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := relay.RelayPending(t.Context()); err == nil {
+		t.Fatal("expected RelayPending error when batch 1 insert failed")
+	}
+
+	repo.mu.Lock()
+	released := slices.Clone(repo.releasedBatchIDs)
+	b1State := repo.batches[0].state
+	b1Available := repo.batches[0].availableAt
+	b2State := repo.batches[1].state
+	b2Attempts := repo.batches[1].attempts
+	b2Available := repo.batches[1].availableAt
+	active := repo.activeInFlight
+	repo.mu.Unlock()
+
+	if !slices.Equal(released, []string{batches[1].BatchID}) {
+		t.Fatalf("releasedBatchIDs=%v, want [%s]", released, batches[1].BatchID)
+	}
+	if b1State != "PENDING" || !b1Available.Equal(clock.Add(5*time.Second)) {
+		t.Fatalf("batch 1 state=%s available=%s", b1State, b1Available)
+	}
+	if b2State != "PENDING" || b2Attempts != 0 || !b2Available.Equal(clock) {
+		t.Fatalf("batch 2 lease release polluted backoff: state=%s attempts=%d available=%s", b2State, b2Attempts, b2Available)
+	}
+	if active != 0 {
+		t.Fatalf("leaked activeInFlight=%d", active)
+	}
+	if !slices.Equal(sink.insertTokens, []string{"seq:0001:2"}) {
+		t.Fatalf("batch 2 must never reach ClickHouse when batch 1 fails: tokens=%v", sink.insertTokens)
+	}
+
+	// Before retryAt expires, batch 2 must NOT overtake blocked batch 1.
+	clock = clock.Add(2 * time.Second)
+	failBatch1 = false
+	earlyPublished, err := relay.RelayPending(t.Context())
+	if err != nil || earlyPublished != 0 {
+		t.Fatalf("batch 2 overtook blocked batch 1: published=%d err=%v", earlyPublished, err)
+	}
+
+	// Once retryAt passes, batch 1 commits before batch 2.
+	clock = clock.Add(4 * time.Second)
+	published, err := relay.RelayPending(t.Context())
+	if err != nil || published != 4 {
+		t.Fatalf("recovery RelayPending published=%d err=%v", published, err)
+	}
+	if !slices.Equal(repo.publishedSeqs, []uint64{1, 2}) {
+		t.Fatalf("publishedSeqs=%v, want [1 2]", repo.publishedSeqs)
+	}
+
+	// Also verify context cancellation during Stage 2 releases prefetched batch 2 with active settle context.
+	ctx2, cancel2 := context.WithCancel(t.Context())
+	batches2 := []HistoryBatch{makeFakeBatch(10, 1), makeFakeBatch(11, 1)}
+	repo2 := newFakePipelinedHistoryRepo(batches2)
+	b2Prefetched := make(chan struct{})
+	sink2 := &fakePreparedHistorySink{}
+	sink2.prepareHook = func(seq uint64) {
+		if seq == 11 {
+			close(b2Prefetched)
+		}
+	}
+	sink2.insertHook = func(token string) error {
+		if strings.HasPrefix(token, "seq:0010:") {
+			<-b2Prefetched
+			cancel2()
+			return context.Canceled
+		}
+		return nil
+	}
+	relay2, err := NewHistoryRelay(HistoryRelayConfig{
+		Repository: repo2, Sink: sink2, BatchSize: 4, LeaseFor: 30 * time.Second, RetryAfter: 5 * time.Second, PipelineDepth: 2,
+		Now: func() time.Time { return clock },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := relay2.RelayPending(ctx2); err == nil {
+		t.Fatal("expected error on cancelled context")
+	}
+	if len(repo2.releasedBatchIDs) != 1 || repo2.releasedBatchIDs[0] != batches2[1].BatchID {
+		t.Fatalf("cancelled pipeline did not release prefetched batch: %v", repo2.releasedBatchIDs)
+	}
+	if len(repo2.releaseActiveCtx) != 1 || !repo2.releaseActiveCtx[0] {
+		t.Fatalf("expected release to use uncanceled settle context: %v", repo2.releaseActiveCtx)
+	}
+	if repo2.activeInFlight != 0 {
+		t.Fatalf("leaked activeInFlight after cancel: %d", repo2.activeInFlight)
+	}
+}
+
+func TestHistoryRelayPipelineMaxInFlightBoundUnderConcurrency(t *testing.T) {
+	now := time.Date(2026, 7, 29, 9, 10, 0, 0, time.UTC)
+	for _, depth := range []int{2, 3, 4} {
+		batches := make([]HistoryBatch, 20)
+		for i := range batches {
+			batches[i] = makeFakeBatch(uint64(i+1), 2)
+		}
+		repo := newFakePipelinedHistoryRepo(batches)
+		repo.claimHook = func(_ HistoryBatch) {
+			time.Sleep(100 * time.Microsecond)
+		}
+		sink := &fakePreparedHistorySink{
+			prepareHook: func(_ uint64) {
+				time.Sleep(100 * time.Microsecond)
+			},
+			insertHook: func(_ string) error {
+				time.Sleep(200 * time.Microsecond)
+				return nil
+			},
+		}
+		relay, err := NewHistoryRelay(HistoryRelayConfig{
+			Repository:    repo,
+			Sink:          sink,
+			BatchSize:     4,
+			LeaseFor:      30 * time.Second,
+			RetryAfter:    time.Second,
+			PipelineDepth: depth,
+			Now:           func() time.Time { return now },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		published, err := relay.RelayPending(t.Context())
+		if err != nil {
+			t.Fatalf("depth=%d err=%v", depth, err)
+		}
+		if published != 40 {
+			t.Fatalf("depth=%d published=%d, want 40", depth, published)
+		}
+		if repo.maxObservedFlight > depth {
+			t.Fatalf("depth=%d maxObservedFlight=%d exceeded limit", depth, repo.maxObservedFlight)
+		}
+		if repo.inFlightLimitHit {
+			t.Fatalf("depth=%d Stage 1 attempted claim beyond maxInFlight", depth)
+		}
+		if repo.activeInFlight != 0 {
+			t.Fatalf("depth=%d activeInFlight=%d after drain", depth, repo.activeInFlight)
+		}
+		if atomic.LoadInt32(&sink.maxActiveInserts) > 1 {
+			t.Fatalf("depth=%d concurrent ClickHouse inserts=%d, want <= 1", depth, sink.maxActiveInserts)
+		}
+		for i, seq := range repo.publishedSeqs {
+			if seq != uint64(i+1) {
+				t.Fatalf("depth=%d out-of-order publishedSeqs=%v", depth, repo.publishedSeqs)
+			}
+		}
+	}
+}
+
+func TestHistoryRelayRunWithPipelinedRepositoryPartialVsBacklog(t *testing.T) {
+	now := time.Date(2026, 7, 29, 9, 20, 0, 0, time.UTC)
+	// Backlog of [2, 2, 1] with BatchSize=2 drains all 3 batches immediately, then sleeps after partial batch 1.
+	batches := []HistoryBatch{makeFakeBatch(1, 2), makeFakeBatch(2, 2), makeFakeBatch(3, 1)}
+	repo := newFakePipelinedHistoryRepo(batches)
+	sink := &fakePreparedHistorySink{}
+	relay, err := NewHistoryRelay(HistoryRelayConfig{
+		Repository:    repo,
+		Sink:          sink,
+		BatchSize:     2,
+		LeaseFor:      30 * time.Second,
+		RetryAfter:    time.Second,
+		PipelineDepth: 2,
+		Now:           func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 250*time.Millisecond)
+	defer cancel()
+	var counts []int
+	relay.Run(ctx, time.Hour, func(published int, err error) {
+		if err != nil {
+			t.Fatalf("unexpected Run error: %v", err)
+		}
+		counts = append(counts, published)
+	})
+	if !slices.Equal(counts, []int{2, 2, 1}) {
+		t.Fatalf("Run reported=%v, want [2 2 1]", counts)
+	}
+}
+
+func TestHistoryPostgresRepositoryClosedValidation(t *testing.T) {
+	var nilRepo *HistoryPostgresRepository
+	now := time.Date(2026, 7, 29, 9, 30, 0, 0, time.UTC)
+	if _, err := nilRepo.ClaimPipelinedHistoryBatch(t.Context(), 10, now, 30*time.Second, 2); err == nil {
+		t.Fatal("expected error for nil repository")
+	}
+	if err := nilRepo.ReleaseHistoryBatchLease(t.Context(), "018f2e00-8000-7000-8000-000000000001", now); err == nil {
+		t.Fatal("expected error for nil repository release")
+	}
+	emptyRepo := NewHistoryPostgresRepository(nil, nil)
+	if _, err := emptyRepo.ClaimPipelinedHistoryBatch(t.Context(), 10, now, 30*time.Second, 0); err == nil {
+		t.Fatal("expected error for invalid maxInFlight / nil pool")
+	}
+	if err := emptyRepo.ReleaseHistoryBatchLease(t.Context(), "", now); err == nil {
+		t.Fatal("expected error for empty batchID / nil pool")
+	}
 }

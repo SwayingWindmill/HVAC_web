@@ -26,9 +26,27 @@ func NewClickHouseStore(baseURL, user, password string, client *http.Client) (*C
 		return nil, errors.New("metric ClickHouse URL must be absolute http/https")
 	}
 	if client == nil {
-		client = &http.Client{Timeout: 15 * time.Second}
+		client = newDefaultClickHouseHTTPClient(15 * time.Second)
 	}
 	return &ClickHouseStore{base: u, user: user, password: password, client: client}, nil
+}
+
+func newDefaultClickHouseHTTPClient(timeout time.Duration) *http.Client {
+	var transport *http.Transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok && base != nil {
+		transport = base.Clone()
+	} else {
+		transport = &http.Transport{}
+	}
+	transport.MaxIdleConns = 64
+	transport.MaxIdleConnsPerHost = 32
+	transport.IdleConnTimeout = 90 * time.Second
+	transport.TLSHandshakeTimeout = 10 * time.Second
+	transport.ExpectContinueTimeout = 1 * time.Second
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: transport,
+	}
 }
 
 func (s *ClickHouseStore) Ping(ctx context.Context) error {

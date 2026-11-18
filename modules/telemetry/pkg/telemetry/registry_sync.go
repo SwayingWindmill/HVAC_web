@@ -429,6 +429,9 @@ WHERE device_id = $1::uuid AND telemetry_key = $2 AND configured IS DISTINCT FRO
 	if err := tx.Commit(ctx); err != nil {
 		return RegistrySyncResult{}, fmt.Errorf("commit registry sync: %w", err)
 	}
+	if store.metadataCache != nil {
+		store.metadataCache.InvalidateSite(tenantID, siteID)
+	}
 	return RegistrySyncResult{
 		SyncedDevices: len(request.Devices),
 		RetiredPoints: len(request.RetiredPoints),

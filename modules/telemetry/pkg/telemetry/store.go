@@ -42,8 +42,9 @@ var (
 type EventIDGenerator func(time.Time) (string, error)
 
 type PostgresStore struct {
-	pool       *pgxpool.Pool
-	newEventID EventIDGenerator
+	pool          *pgxpool.Pool
+	newEventID    EventIDGenerator
+	metadataCache *metadataCache
 }
 
 // PostgresPoolConfig tunes pgxpool connection limits and lifetimes for the telemetry runtime store.
@@ -146,14 +147,14 @@ func OpenPostgresStoreWithConfig(ctx context.Context, databaseURL string, poolCo
 		pool.Close()
 		return nil, fmt.Errorf("ping telemetry runtime database: %w", err)
 	}
-	return &PostgresStore{pool: pool, newEventID: newUUIDv7}, nil
+	return &PostgresStore{pool: pool, newEventID: newUUIDv7, metadataCache: newMetadataCache()}, nil
 }
 
 func NewPostgresStore(pool *pgxpool.Pool, generator EventIDGenerator) *PostgresStore {
 	if generator == nil {
 		generator = newUUIDv7
 	}
-	return &PostgresStore{pool: pool, newEventID: generator}
+	return &PostgresStore{pool: pool, newEventID: generator, metadataCache: newMetadataCache()}
 }
 
 func (store *PostgresStore) Close() {
