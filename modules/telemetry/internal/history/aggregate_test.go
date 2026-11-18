@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -46,11 +47,23 @@ func TestCounterAggregateQueryKeepsResetRolloverRevisionAndQualitySemantics(t *t
 		Keys: []string{"energy_total"}, From: time.Date(2026, 8, 19, 0, 0, 0, 0, time.UTC), To: time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC),
 		Granularity: telemetryhistorymodel.AggregateGranularityDay, Timezone: "Asia/Singapore", QualityPolicy: telemetryhistorymodel.AggregateQualityUsable,
 	}
-	sql := client.counterAggregateQuery(query, query.To)
-	for _, marker := range []string{"RESET_TO_ZERO", "ROLLOVER", "REVISION_BOUNDARY", "UNIT_BOUNDARY", "previous_quality", "OUT_OF_ORDER", "point_revision"} {
+	sql, params := client.counterAggregateQuery(query, query.To)
+	for _, marker := range []string{
+		"RESET_TO_ZERO", "ROLLOVER", "REVISION_BOUNDARY", "UNIT_BOUNDARY", "previous_quality", "OUT_OF_ORDER", "point_revision",
+		"toUUID({tenant_id:UUID})", "telemetry_key IN {keys:Array(String)}", "toStartOfDay(sampled_at, {timezone:String})",
+		"parseDateTime64BestEffort({from_ts:String}, 3, 'UTC')", "parseDateTime64BestEffort({to_ts:String}, 3, 'UTC')", "parseDateTime64BestEffort({snapshot_ts:String}, 3, 'UTC')",
+	} {
 		if !strings.Contains(sql, marker) {
 			t.Fatalf("counter SQL missing %s:\n%s", marker, sql)
 		}
+	}
+	for _, forbidden := range []string{historyTenantID, historySiteID, historyDeviceID, "energy_total", "Asia/Singapore", "2026-08-19T00:00:00.000Z", "2026-08-20T00:00:00.000Z"} {
+		if strings.Contains(sql, forbidden) {
+			t.Fatalf("counter SQL leaked interpolated value %q:\n%s", forbidden, sql)
+		}
+	}
+	if params.Get("param_tenant_id") != historyTenantID || params.Get("param_keys") != "['energy_total']" || params.Get("param_timezone") != "Asia/Singapore" {
+		t.Fatalf("counter params = %#v", params)
 	}
 	if !strings.Contains(sql, "quality IN ('GOOD', 'PARTIAL', 'ESTIMATED', 'MANUAL')") {
 		t.Fatalf("usable quality policy missing:\n%s", sql)
@@ -80,7 +93,7 @@ func TestQuarterHourPeriodsFollowTheSiteClock(t *testing.T) {
 		}
 	}
 	bucket, next := aggregateBucketExpressions(query)
-	if bucket != "toStartOfInterval(sampled_at, INTERVAL 15 MINUTE, 'Asia/Kolkata')" || next != "addMinutes(bucket, 15)" {
+	if bucket != "toStartOfInterval(sampled_at, INTERVAL 15 MINUTE, {timezone:String})" || next != "addMinutes(bucket, 15)" {
 		t.Fatalf("bucket=%s next=%s", bucket, next)
 	}
 }
@@ -102,7 +115,7 @@ func TestMinuteAndFiveMinutePeriodsAlignToSiteClockAndSettingGaugeSQL(t *testing
 		t.Fatalf("minute periods=%#v", periods)
 	}
 	minuteBucket, minuteNext := aggregateBucketExpressions(minuteQuery)
-	if minuteBucket != "toStartOfInterval(sampled_at, INTERVAL 1 MINUTE, 'Asia/Kolkata')" || minuteNext != "addMinutes(bucket, 1)" {
+	if minuteBucket != "toStartOfInterval(sampled_at, INTERVAL 1 MINUTE, {timezone:String})" || minuteNext != "addMinutes(bucket, 1)" {
 		t.Fatalf("minute bucket=%s next=%s", minuteBucket, minuteNext)
 	}
 
@@ -118,18 +131,26 @@ func TestMinuteAndFiveMinutePeriodsAlignToSiteClockAndSettingGaugeSQL(t *testing
 		t.Fatalf("five-minute periods=%#v", fivePeriods)
 	}
 	fiveBucket, fiveNext := aggregateBucketExpressions(fiveMinuteQuery)
-	if fiveBucket != "toStartOfInterval(sampled_at, INTERVAL 5 MINUTE, 'Asia/Kolkata')" || fiveNext != "addMinutes(bucket, 5)" {
+	if fiveBucket != "toStartOfInterval(sampled_at, INTERVAL 5 MINUTE, {timezone:String})" || fiveNext != "addMinutes(bucket, 5)" {
 		t.Fatalf("five-minute bucket=%s next=%s", fiveBucket, fiveNext)
 	}
 
 	client := &Client{database: "telemetry_history", table: "observations"}
-	gaugeSQL, _ := client.gaugeAggregateQueryForSnapshot(minuteQuery, minuteQuery.To, periods, false)
-	if !strings.Contains(gaugeSQL, "point_type IN ('TELEMETRY', 'SETTING')") {
-		t.Fatalf("gauge SQL should include numeric SETTING points:\n%s", gaugeSQL)
+	gaugeSQL, gaugeParams, usedRollup := client.gaugeAggregateQueryForSnapshot(minuteQuery, minuteQuery.To, periods, false)
+	if usedRollup || !strings.Contains(gaugeSQL, "point_type IN ('TELEMETRY', 'SETTING')") || !strings.Contains(gaugeSQL, "telemetry_key IN {keys:Array(String)}") {
+		t.Fatalf("gauge SQL should include numeric SETTING points and key placeholder (usedRollup=%v):\n%s", usedRollup, gaugeSQL)
 	}
-	snapshotSQL := client.aggregateSnapshotQuery(minuteQuery)
-	if !strings.Contains(snapshotSQL, "'SETTING'") {
-		t.Fatalf("snapshot SQL should include SETTING points:\n%s", snapshotSQL)
+	for _, forbidden := range []string{"Asia/Kolkata", "chiller.leaving_chilled_water_temperature_setpoint", historyTenantID} {
+		if strings.Contains(gaugeSQL, forbidden) {
+			t.Fatalf("gauge SQL leaked interpolated value %q", forbidden)
+		}
+	}
+	if gaugeParams.Get("param_timezone") != "Asia/Kolkata" || gaugeParams.Get("param_keys") != "['chiller.leaving_chilled_water_temperature_setpoint']" {
+		t.Fatalf("gauge params = %#v", gaugeParams)
+	}
+	snapshotSQL, snapshotParams := client.aggregateSnapshotQuery(minuteQuery)
+	if !strings.Contains(snapshotSQL, "'SETTING'") || strings.Contains(snapshotSQL, historyTenantID) || snapshotParams.Get("param_tenant_id") != historyTenantID {
+		t.Fatalf("snapshot SQL should parameterize identifiers and include SETTING points:\n%s", snapshotSQL)
 	}
 
 	val := 7.0
@@ -166,12 +187,20 @@ func TestStateAggregateQueryIncludesTelemetryAndSettingDiscreteValuesAndDecodesS
 		To:   time.Date(2026, 10, 11, 0, 5, 0, 0, time.UTC),
 	}
 	client := &Client{database: "telemetry_history", table: "observations"}
-	sql := client.stateAggregateQuery(query, query.To)
+	sql, params := client.stateAggregateQuery(query, query.To)
 	if !strings.Contains(sql, "point_type IN ('TELEMETRY', 'SETTING') AND value_type IN ('STRING', 'BOOLEAN', 'JSON')") {
 		t.Fatalf("state SQL must include non-numeric TELEMETRY/SETTING points without duplicating numeric gauges:\n%s", sql)
 	}
 	if !strings.Contains(sql, "assumeNotNull(point_type) AS point_type") {
 		t.Fatalf("state SQL must preserve original point_type:\n%s", sql)
+	}
+	for _, forbidden := range []string{"Asia/Shanghai", "chiller.run_state", historyTenantID, "2026-10-11T00:00:00.000Z"} {
+		if strings.Contains(sql, forbidden) {
+			t.Fatalf("state SQL leaked interpolated value %q", forbidden)
+		}
+	}
+	if params.Get("param_timezone") != "Asia/Shanghai" || params.Get("param_keys") != "['chiller.run_state']" {
+		t.Fatalf("state params = %#v", params)
 	}
 
 	valueType := "STRING"
@@ -210,7 +239,7 @@ func TestGaugeAggregateQueryRoutingAndFallbackRules(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		sql, usedRollup := c.gaugeAggregateQueryForSnapshot(q, snap, periods, concurrent)
+		sql, params, usedRollup := c.gaugeAggregateQueryForSnapshot(q, snap, periods, concurrent)
 		if !strings.Contains(sql, "FROM "+wantTable) {
 			t.Fatalf("granularity=%s tz=%s from=%s to=%s concurrent=%v: expected table %s, got SQL:\n%s", q.Granularity, q.Timezone, q.From, q.To, concurrent, wantTable, sql)
 		}
@@ -222,6 +251,31 @@ func TestGaugeAggregateQueryRoutingAndFallbackRules(t *testing.T) {
 				t.Fatalf("SQL missing %q:\n%s", marker, sql)
 			}
 		}
+		forbidden := []string{
+			q.TenantID,
+			q.SiteID,
+			q.DeviceID,
+			q.Keys[0],
+			formatClickHouseTime(q.From),
+			formatClickHouseTime(q.To),
+			q.From.UTC().Format("2006-01-02 15:04:05"),
+			q.To.UTC().Format("2006-01-02 15:04:05"),
+		}
+		if q.Timezone != "UTC" {
+			forbidden = append(forbidden, q.Timezone)
+		}
+		for _, raw := range forbidden {
+			if strings.Contains(sql, raw) {
+				t.Fatalf("gauge SQL leaked interpolated value %q:\n%s", raw, sql)
+			}
+		}
+		if params.Get("param_tenant_id") != q.TenantID ||
+			params.Get("param_site_id") != q.SiteID ||
+			params.Get("param_device_id") != q.DeviceID ||
+			params.Get("param_keys") != clickHouseStringArray(q.Keys) ||
+			params.Get("param_timezone") != q.Timezone {
+			t.Fatalf("unexpected gauge params: %#v", params)
+		}
 		if usedRollup {
 			if strings.Contains(sql, "WITH ") {
 				t.Fatalf("rollup SQL must not use top-level WITH alias over rollup columns:\n%s", sql)
@@ -229,16 +283,24 @@ func TestGaugeAggregateQueryRoutingAndFallbackRules(t *testing.T) {
 			if !strings.Contains(sql, "GROUP BY gauge_rollup.telemetry_key, toString(gauge_rollup.point_id), gauge_rollup.point_revision, gauge_rollup.point_type,") {
 				t.Fatalf("rollup SQL must group by projected toString(gauge_rollup.point_id):\n%s", sql)
 			}
+			if !strings.Contains(sql, "gauge_rollup.bucket >= toDateTime({from_utc:String}, 'UTC')") ||
+				params.Get("param_from_utc") != q.From.UTC().Format("2006-01-02 15:04:05") ||
+				params.Get("param_to_utc") != q.To.UTC().Format("2006-01-02 15:04:05") {
+				t.Fatalf("rollup SQL/params missing UTC bounds: params=%#v\n%s", params, sql)
+			}
 		}
 	}
 
-	snapSQL := client.aggregateSnapshotQuery(telemetryhistorymodel.DeviceHistoryAggregateQuery{
+	snapSQL, snapParams := client.aggregateSnapshotQuery(telemetryhistorymodel.DeviceHistoryAggregateQuery{
 		TenantID: historyTenantID, SiteID: historySiteID, DeviceID: historyDeviceID,
 		Keys: []string{"zone.temperature"}, QualityPolicy: telemetryhistorymodel.AggregateQualityUsable,
 		From: time.Date(2026, 10, 11, 0, 0, 0, 0, time.UTC), To: time.Date(2026, 10, 11, 1, 0, 0, 0, time.UTC),
 	})
 	if !strings.Contains(snapSQL, "toInt64(countIf(") || !strings.Contains(snapSQL, "ifNull(isFinite(value_number), 0) = 1") {
 		t.Fatalf("snapshot SQL must normalize Nullable countIf predicates:\n%s", snapSQL)
+	}
+	if strings.Contains(snapSQL, historyTenantID) || strings.Contains(snapSQL, "zone.temperature") || snapParams.Get("param_tenant_id") != historyTenantID {
+		t.Fatalf("snapshot SQL must parameterize scope values: params=%#v\n%s", snapParams, snapSQL)
 	}
 
 	base := telemetryhistorymodel.DeviceHistoryAggregateQuery{
@@ -312,6 +374,7 @@ func TestQueryDeviceHistoryAggregateEndToEndRollupAndConcurrentFallback(t *testi
 	t.Run("routes aligned query to numeric_gauge_15min_states", func(t *testing.T) {
 		var mu sync.Mutex
 		var queries []string
+		var paramsList []url.Values
 		responses := []string{
 			`{"snapshot_at":"2026-10-11T02:05:00.000Z","projection_watermark":"2026-10-11T02:04:00.000Z","has_concurrent_writes":0}` + "\n",
 			`{"telemetry_key":"zone.temperature","point_id":"` + historyPointID + `","point_revision":1,"point_type":"TELEMETRY","unit":"Cel","period_start":"2026-10-11T00:00:00.000Z","period_end":"2026-10-11T01:00:00.000Z","good_count":4,"partial_count":0,"estimated_count":0,"manual_count":0,"stale_count":1,"invalid_count":1,"total_count":6,"included_count":4,"average":22.5,"minimum":21.0,"maximum":24.0,"first":21.0,"last":24.0,"delta_sum":null,"delta_count":0,"reset_count":0,"rollover_count":0,"excluded_transition_count":0,"state_value_type":null,"state_last_value":null,"state_sample_count":0,"state_change_count":0,"state_values":[],"max_projected_at":"2026-10-11T02:04:00.000Z"}` + "\n",
@@ -325,6 +388,7 @@ func TestQueryDeviceHistoryAggregateEndToEndRollupAndConcurrentFallback(t *testi
 			}
 			mu.Lock()
 			queries = append(queries, string(raw))
+			paramsList = append(paramsList, request.URL.Query())
 			idx := len(queries) - 1
 			mu.Unlock()
 			writer.Header().Set("Content-Type", "application/x-ndjson")
@@ -351,6 +415,13 @@ func TestQueryDeviceHistoryAggregateEndToEndRollupAndConcurrentFallback(t *testi
 		}
 		if len(queries) != 4 || !strings.Contains(queries[1], "FROM telemetry_history.numeric_gauge_15min_states") {
 			t.Fatalf("expected 4 queries with rollup gauge query, got %d:\n%s", len(queries), strings.Join(queries, "\n---\n"))
+		}
+		if strings.Contains(queries[1], historyTenantID) ||
+			paramsList[1].Get("param_tenant_id") != historyTenantID ||
+			paramsList[1].Get("param_from_utc") != "2026-10-11 00:00:00" ||
+			paramsList[1].Get("param_to_utc") != "2026-10-11 01:00:00" ||
+			paramsList[1].Get("param_timezone") != "UTC" {
+			t.Fatalf("rollup request did not send parameterized URL args cleanly: params=%#v\n%s", paramsList[1], queries[1])
 		}
 		if !strings.Contains(queries[0], "has_concurrent_writes") {
 			t.Fatalf("snapshot query missing has_concurrent_writes:\n%s", queries[0])

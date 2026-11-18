@@ -237,3 +237,42 @@ func TestTelemetryAndSettingDiscreteStateBucketsAreAccepted(t *testing.T) {
 		t.Fatalf("TELEMETRY/SETTING with STRING/BOOLEAN state result should be valid: %v", err)
 	}
 }
+
+func TestRecommendViewportGranularityCapsBucketsPerKey(t *testing.T) {
+	from := time.Date(2026, 8, 19, 0, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name      string
+		from      time.Time
+		to        time.Time
+		maxBucket int
+		want      AggregateGranularity
+	}{
+		{name: "zero_or_empty_range", from: from, to: from, maxBucket: 0, want: AggregateGranularityMinute},
+		{name: "1h_default", from: from, to: from.Add(time.Hour), maxBucket: 0, want: AggregateGranularityMinute},
+		{name: "6h_boundary", from: from, to: from.Add(6 * time.Hour), maxBucket: 360, want: AggregateGranularityMinute},
+		{name: "6h1m_steps_to_five_minute", from: from, to: from.Add(6*time.Hour + time.Minute), maxBucket: 360, want: AggregateGranularityFiveMinute},
+		{name: "24h_five_minute_288", from: from, to: from.Add(24 * time.Hour), maxBucket: -5, want: AggregateGranularityFiveMinute},
+		{name: "30h_boundary", from: from, to: from.Add(30 * time.Hour), maxBucket: 360, want: AggregateGranularityFiveMinute},
+		{name: "30h5m_steps_to_quarter_hour", from: from, to: from.Add(30*time.Hour + 5*time.Minute), maxBucket: 360, want: AggregateGranularityQuarterHour},
+		{name: "90h_boundary", from: from, to: from.Add(90 * time.Hour), maxBucket: 360, want: AggregateGranularityQuarterHour},
+		{name: "90h15m_steps_to_hour", from: from, to: from.Add(90*time.Hour + 15*time.Minute), maxBucket: 360, want: AggregateGranularityHour},
+		{name: "7d_hour_168", from: from, to: from.Add(7 * 24 * time.Hour), maxBucket: 360, want: AggregateGranularityHour},
+		{name: "15d_boundary", from: from, to: from.Add(15 * 24 * time.Hour), maxBucket: 360, want: AggregateGranularityHour},
+		{name: "15d1h_steps_to_day", from: from, to: from.Add(15*24*time.Hour + time.Hour), maxBucket: 360, want: AggregateGranularityDay},
+		{name: "30d_day_30", from: from, to: from.Add(30 * 24 * time.Hour), maxBucket: 360, want: AggregateGranularityDay},
+		{name: "360d_boundary", from: from, to: from.Add(360 * 24 * time.Hour), maxBucket: 360, want: AggregateGranularityDay},
+		{name: "361d_steps_to_week", from: from, to: from.Add(361 * 24 * time.Hour), maxBucket: 360, want: AggregateGranularityWeek},
+		{name: "35y_falls_back_to_month", from: from, to: from.AddDate(35, 0, 0), maxBucket: 360, want: AggregateGranularityMonth},
+		{name: "custom_small_budget_24_for_24h", from: from, to: from.Add(24 * time.Hour), maxBucket: 24, want: AggregateGranularityHour},
+		{name: "unaligned_6h_span_counts_361_minutes", from: from.Add(30 * time.Second), to: from.Add(6*time.Hour + 30*time.Second), maxBucket: 360, want: AggregateGranularityFiveMinute},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := RecommendViewportGranularity(tc.from, tc.to, tc.maxBucket)
+			if got != tc.want {
+				t.Fatalf("RecommendViewportGranularity() = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}

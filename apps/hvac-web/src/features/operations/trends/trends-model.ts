@@ -9,6 +9,7 @@ import { buildTimeSlots, type TimeSlot, type TrendGranularity } from './timeline
 
 export const MAX_TREND_POINTS = 8;
 export const MAX_TREND_BUCKETS_PER_POINT = 720;
+export const DEFAULT_VIEWPORT_MAX_BUCKETS_PER_POINT = 360;
 const MAX_SERIES_PER_LANE = 4;
 
 export type TrendWindowPreset = '1h' | '6h' | 'today' | '7d' | 'custom';
@@ -605,20 +606,28 @@ function snapHour(ms: number): number {
   return Math.floor(ms / HOUR_MS) * HOUR_MS;
 }
 
-function autoGranularityForSpan(window: TrendWindowPreset, spanMs: number): TrendGranularity {
+function autoGranularityForPreset(window: Exclude<TrendWindowPreset, 'custom'>, spanMs: number): TrendGranularity {
   if (window === '1h') return 'MINUTE';
   if (window === '6h') return 'FIVE_MINUTE';
   if (window === '7d') return 'HOUR';
-  if (window === 'today') {
-    if (spanMs <= 2 * HOUR_MS) return 'MINUTE';
-    if (spanMs <= 8 * HOUR_MS) return 'FIVE_MINUTE';
-    return 'QUARTER_HOUR';
-  }
   if (spanMs <= 2 * HOUR_MS) return 'MINUTE';
-  if (spanMs <= 12 * HOUR_MS) return 'FIVE_MINUTE';
-  if (spanMs <= 48 * HOUR_MS) return 'QUARTER_HOUR';
-  if (spanMs <= 30 * DAY_MS) return 'HOUR';
-  return 'DAY';
+  if (spanMs <= 8 * HOUR_MS) return 'FIVE_MINUTE';
+  return 'QUARTER_HOUR';
+}
+
+export function recommendViewportGranularity(
+  allowedGranularities: readonly TrendGranularity[],
+  slotCounts: ReadonlyMap<TrendGranularity, number>,
+  maxBucketsPerKey: number = DEFAULT_VIEWPORT_MAX_BUCKETS_PER_POINT,
+): TrendGranularity {
+  const cap = maxBucketsPerKey > 0 ? maxBucketsPerKey : DEFAULT_VIEWPORT_MAX_BUCKETS_PER_POINT;
+  for (const candidate of allowedGranularities) {
+    const count = slotCounts.get(candidate);
+    if (count !== undefined && count <= cap) {
+      return candidate;
+    }
+  }
+  return allowedGranularities[allowedGranularities.length - 1] ?? 'DAY';
 }
 
 export function resolveTrendWindow(input: {
@@ -665,6 +674,7 @@ export function resolveTrendWindow(input: {
     fromMs = toMs - 6 * HOUR_MS;
   }
 
+  const slotCounts = new Map<TrendGranularity, number>();
   const allowedGranularities = ALL_GRANULARITIES.filter((candidate) => {
     const count = buildTimeSlots({
       fromMs,
@@ -672,17 +682,27 @@ export function resolveTrendWindow(input: {
       granularity: candidate,
       timeZone: input.timezone,
     }).length;
+    slotCounts.set(candidate, count);
     return count >= 1 && count <= MAX_TREND_BUCKETS_PER_POINT;
   });
 
-  const preferred =
-    input.granularity && input.granularity !== 'auto'
+  let granularity: TrendGranularity;
+  if (input.granularity && input.granularity !== 'auto') {
+    granularity = allowedGranularities.includes(input.granularity)
       ? input.granularity
-      : autoGranularityForSpan(preset, toMs - fromMs);
-
-  const granularity = allowedGranularities.includes(preferred)
-    ? preferred
-    : (allowedGranularities[0] ?? 'DAY');
+      : (allowedGranularities[0] ?? 'DAY');
+  } else if (preset === 'custom') {
+    granularity = recommendViewportGranularity(allowedGranularities, slotCounts);
+  } else {
+    const presetGranularity = autoGranularityForPreset(preset, toMs - fromMs);
+    const presetCount = slotCounts.get(presetGranularity);
+    granularity =
+      allowedGranularities.includes(presetGranularity) &&
+      presetCount !== undefined &&
+      presetCount <= DEFAULT_VIEWPORT_MAX_BUCKETS_PER_POINT
+        ? presetGranularity
+        : recommendViewportGranularity(allowedGranularities, slotCounts);
+  }
 
   const slots = buildTimeSlots({
     fromMs,

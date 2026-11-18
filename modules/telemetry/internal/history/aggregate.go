@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -81,10 +82,10 @@ func (client *Client) QueryDeviceHistoryAggregate(ctx context.Context, query tel
 	if err != nil {
 		return telemetryhistorymodel.DeviceHistoryAggregateResponse{}, err
 	}
-	gaugeSQL, usedRollup := client.gaugeAggregateQueryForSnapshot(canonical, snapshotAt, periods, hasConcurrentWrites)
+	gaugeSQL, gaugeParams, usedRollup := client.gaugeAggregateQueryForSnapshot(canonical, snapshotAt, periods, hasConcurrentWrites)
 	var rows []aggregateRow
 	needRawFallback := false
-	gaugePayload, err := client.execute(ctx, gaugeSQL)
+	gaugePayload, err := client.execute(ctx, gaugeSQL, gaugeParams)
 	if err != nil {
 		if !usedRollup || !isRollupTableUnavailable(err) {
 			return telemetryhistorymodel.DeviceHistoryAggregateResponse{}, err
@@ -101,7 +102,8 @@ func (client *Client) QueryDeviceHistoryAggregate(ctx context.Context, query tel
 		}
 	}
 	if needRawFallback {
-		rawPayload, rawErr := client.execute(ctx, client.rawGaugeAggregateQuery(canonical, snapshotAt))
+		rawSQL, rawParams := client.rawGaugeAggregateQuery(canonical, snapshotAt)
+		rawPayload, rawErr := client.execute(ctx, rawSQL, rawParams)
 		if rawErr != nil {
 			return telemetryhistorymodel.DeviceHistoryAggregateResponse{}, rawErr
 		}
@@ -110,11 +112,17 @@ func (client *Client) QueryDeviceHistoryAggregate(ctx context.Context, query tel
 			return telemetryhistorymodel.DeviceHistoryAggregateResponse{}, err
 		}
 	}
-	for _, sql := range []string{
-		client.counterAggregateQuery(canonical, snapshotAt),
-		client.stateAggregateQuery(canonical, snapshotAt),
+	type clickHouseQuery struct {
+		sql    string
+		params url.Values
+	}
+	counterSQL, counterParams := client.counterAggregateQuery(canonical, snapshotAt)
+	stateSQL, stateParams := client.stateAggregateQuery(canonical, snapshotAt)
+	for _, item := range []clickHouseQuery{
+		{sql: counterSQL, params: counterParams},
+		{sql: stateSQL, params: stateParams},
 	} {
-		payload, err := client.execute(ctx, sql)
+		payload, err := client.execute(ctx, item.sql, item.params)
 		if err != nil {
 			return telemetryhistorymodel.DeviceHistoryAggregateResponse{}, err
 		}
@@ -171,7 +179,8 @@ func (client *Client) QueryDeviceHistoryAggregate(ctx context.Context, query tel
 }
 
 func (client *Client) aggregateSnapshot(ctx context.Context, query telemetryhistorymodel.DeviceHistoryAggregateQuery) (time.Time, *time.Time, bool, *int64, error) {
-	payload, err := client.execute(ctx, client.aggregateSnapshotQuery(query))
+	sql, params := client.aggregateSnapshotQuery(query)
+	payload, err := client.execute(ctx, sql, params)
 	if err != nil {
 		return time.Time{}, nil, false, nil, err
 	}
@@ -373,32 +382,42 @@ func buildCalendarPeriods(query telemetryhistorymodel.DeviceHistoryAggregateQuer
 	return periods, nil
 }
 
-func (client *Client) aggregateSnapshotQuery(query telemetryhistorymodel.DeviceHistoryAggregateQuery) string {
+func aggregateParams(query telemetryhistorymodel.DeviceHistoryAggregateQuery, snapshotAt time.Time) url.Values {
+	params := baseHistoryParams(query.TenantID, query.SiteID, query.DeviceID, query.Keys, query.From, query.To)
+	params.Set("param_snapshot_ts", formatClickHouseTime(snapshotAt))
+	params.Set("param_timezone", query.Timezone)
+	return params
+}
+
+func (client *Client) aggregateSnapshotQuery(query telemetryhistorymodel.DeviceHistoryAggregateQuery) (string, url.Values) {
 	included := aggregateQualityPredicate(query.QualityPolicy, "quality")
-	return fmt.Sprintf(`WITH now64(3) AS snapshot_cutoff
+	sql := fmt.Sprintf(`WITH now64(3) AS snapshot_cutoff
 SELECT
   formatDateTime(snapshot_cutoff, '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS snapshot_at,
   if(countIf(projected_at < snapshot_cutoff) = 0, CAST(NULL, 'Nullable(String)'), formatDateTime(maxIf(projected_at, projected_at < snapshot_cutoff), '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC')) AS projection_watermark,
   if(countIf(projected_at >= snapshot_cutoff) > 0, toUInt8(1), toUInt8(0)) AS has_concurrent_writes,
   toInt64(countIf(projected_at < snapshot_cutoff AND ifNull(point_type, '') IN ('TELEMETRY', 'SETTING') AND ifNull(value_type, '') = 'NUMBER' AND value_number IS NOT NULL AND ifNull(isFinite(value_number), 0) = 1 AND %s)) AS raw_gauge_included_count
 FROM %s.%s
-WHERE tenant_id = toUUID('%s')
-  AND site_id = toUUID('%s')
-  AND device_id = toUUID('%s')
-  AND telemetry_key IN (%s)
-  AND sampled_at >= parseDateTime64BestEffort('%s', 3, 'UTC')
-  AND sampled_at < parseDateTime64BestEffort('%s', 3, 'UTC')
+WHERE tenant_id = toUUID({tenant_id:UUID})
+  AND site_id = toUUID({site_id:UUID})
+  AND device_id = toUUID({device_id:UUID})
+  AND telemetry_key IN {keys:Array(String)}
+  AND sampled_at >= parseDateTime64BestEffort({from_ts:String}, 3, 'UTC')
+  AND sampled_at < parseDateTime64BestEffort({to_ts:String}, 3, 'UTC')
   AND acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER')
   AND point_id IS NOT NULL AND point_revision IS NOT NULL
   AND point_type IN ('TELEMETRY', 'COUNTER', 'STATE', 'SETTING')
-FORMAT JSONEachRow`, included, client.database, client.table, query.TenantID, query.SiteID, query.DeviceID, quotedKeys(query.Keys), formatClickHouseTime(query.From), formatClickHouseTime(query.To))
+FORMAT JSONEachRow`, included, client.database, client.table)
+	return sql, baseHistoryParams(query.TenantID, query.SiteID, query.DeviceID, query.Keys, query.From, query.To)
 }
 
-func (client *Client) gaugeAggregateQueryForSnapshot(query telemetryhistorymodel.DeviceHistoryAggregateQuery, snapshotAt time.Time, periods []calendarPeriod, hasConcurrentWrites bool) (string, bool) {
+func (client *Client) gaugeAggregateQueryForSnapshot(query telemetryhistorymodel.DeviceHistoryAggregateQuery, snapshotAt time.Time, periods []calendarPeriod, hasConcurrentWrites bool) (string, url.Values, bool) {
 	if rollupTable, ok := client.gaugeRollupTable(query, periods, hasConcurrentWrites); ok {
-		return client.rollupGaugeAggregateQuery(query, rollupTable), true
+		sql, params := client.rollupGaugeAggregateQuery(query, rollupTable)
+		return sql, params, true
 	}
-	return client.rawGaugeAggregateQuery(query, snapshotAt), false
+	sql, params := client.rawGaugeAggregateQuery(query, snapshotAt)
+	return sql, params, false
 }
 
 func (client *Client) gaugeRollupTable(query telemetryhistorymodel.DeviceHistoryAggregateQuery, periods []calendarPeriod, hasConcurrentWrites bool) (string, bool) {
@@ -463,16 +482,14 @@ func rollupHasConcurrentWrites(rows []aggregateRow, snapshotAt time.Time) bool {
 	return false
 }
 
-func (client *Client) rollupGaugeAggregateQuery(query telemetryhistorymodel.DeviceHistoryAggregateQuery, rollupTable string) string {
+func (client *Client) rollupGaugeAggregateQuery(query telemetryhistorymodel.DeviceHistoryAggregateQuery, rollupTable string) (string, url.Values) {
 	bucket, _ := aggregateBucketExpressionsFor(query, "gauge_rollup.bucket", "")
 	_, end := aggregateBucketExpressionsFor(query, "gauge_rollup.bucket", bucket)
 	prefix := "usable"
 	if query.QualityPolicy == telemetryhistorymodel.AggregateQualityValidOnly {
 		prefix = "valid"
 	}
-	fromUTC := query.From.UTC().Format("2006-01-02 15:04:05")
-	toUTC := query.To.UTC().Format("2006-01-02 15:04:05")
-	return fmt.Sprintf(`SELECT
+	sql := fmt.Sprintf(`SELECT
   gauge_rollup.telemetry_key AS telemetry_key,
   toString(gauge_rollup.point_id) AS point_id,
   gauge_rollup.point_revision AS point_revision,
@@ -505,22 +522,27 @@ func (client *Client) rollupGaugeAggregateQuery(query telemetryhistorymodel.Devi
   CAST([], 'Array(String)') AS state_values,
   formatDateTime(maxMerge(gauge_rollup.max_projected_at), '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS max_projected_at
 FROM %[4]s AS gauge_rollup
-WHERE gauge_rollup.tenant_id = toUUID('%[5]s')
-  AND gauge_rollup.site_id = toUUID('%[6]s')
-  AND gauge_rollup.device_id = toUUID('%[7]s')
-  AND gauge_rollup.telemetry_key IN (%[8]s)
+WHERE gauge_rollup.tenant_id = toUUID({tenant_id:UUID})
+  AND gauge_rollup.site_id = toUUID({site_id:UUID})
+  AND gauge_rollup.device_id = toUUID({device_id:UUID})
+  AND gauge_rollup.telemetry_key IN {keys:Array(String)}
   AND gauge_rollup.point_type IN ('TELEMETRY', 'SETTING')
-  AND gauge_rollup.bucket >= toDateTime('%[9]s', 'UTC')
-  AND gauge_rollup.bucket < toDateTime('%[10]s', 'UTC')
+  AND gauge_rollup.bucket >= toDateTime({from_utc:String}, 'UTC')
+  AND gauge_rollup.bucket < toDateTime({to_utc:String}, 'UTC')
 GROUP BY gauge_rollup.telemetry_key, toString(gauge_rollup.point_id), gauge_rollup.point_revision, gauge_rollup.point_type, %[1]s
 HAVING countIfMerge(gauge_rollup.%[3]s_count) > 0
-FORMAT JSONEachRow`, bucket, end, prefix, rollupTable, query.TenantID, query.SiteID, query.DeviceID, quotedKeys(query.Keys), fromUTC, toUTC)
+FORMAT JSONEachRow`, bucket, end, prefix, rollupTable)
+	params := baseHistoryParams(query.TenantID, query.SiteID, query.DeviceID, query.Keys, query.From, query.To)
+	params.Set("param_timezone", query.Timezone)
+	params.Set("param_from_utc", query.From.UTC().Format("2006-01-02 15:04:05"))
+	params.Set("param_to_utc", query.To.UTC().Format("2006-01-02 15:04:05"))
+	return sql, params
 }
 
-func (client *Client) rawGaugeAggregateQuery(query telemetryhistorymodel.DeviceHistoryAggregateQuery, snapshotAt time.Time) string {
+func (client *Client) rawGaugeAggregateQuery(query telemetryhistorymodel.DeviceHistoryAggregateQuery, snapshotAt time.Time) (string, url.Values) {
 	bucket, end := aggregateBucketExpressions(query)
 	included := aggregateQualityPredicate(query.QualityPolicy, "quality")
-	return fmt.Sprintf(`WITH %s AS bucket
+	sql := fmt.Sprintf(`WITH %s AS bucket
 SELECT
   telemetry_key,
   toString(assumeNotNull(point_id)) AS point_id,
@@ -553,24 +575,24 @@ SELECT
   toInt64(0) AS state_change_count,
   CAST([], 'Array(String)') AS state_values
 FROM %s.%s
-WHERE tenant_id = toUUID('%s') AND site_id = toUUID('%s') AND device_id = toUUID('%s')
-  AND telemetry_key IN (%s)
-  AND sampled_at >= parseDateTime64BestEffort('%s', 3, 'UTC') AND sampled_at < parseDateTime64BestEffort('%s', 3, 'UTC')
-  AND projected_at < parseDateTime64BestEffort('%s', 3, 'UTC')
+WHERE tenant_id = toUUID({tenant_id:UUID}) AND site_id = toUUID({site_id:UUID}) AND device_id = toUUID({device_id:UUID})
+  AND telemetry_key IN {keys:Array(String)}
+  AND sampled_at >= parseDateTime64BestEffort({from_ts:String}, 3, 'UTC') AND sampled_at < parseDateTime64BestEffort({to_ts:String}, 3, 'UTC')
+  AND projected_at < parseDateTime64BestEffort({snapshot_ts:String}, 3, 'UTC')
   AND acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER') AND point_type IN ('TELEMETRY', 'SETTING')
   AND point_id IS NOT NULL AND point_revision IS NOT NULL AND value_type = 'NUMBER' AND value_number IS NOT NULL AND isFinite(value_number)
 GROUP BY telemetry_key, point_id, point_revision, point_type, bucket
 HAVING included_count > 0
-FORMAT JSONEachRow`, bucket, end, included, included, included, included, included, included,
-		client.database, client.table, query.TenantID, query.SiteID, query.DeviceID, quotedKeys(query.Keys), formatClickHouseTime(query.From), formatClickHouseTime(query.To), formatClickHouseTime(snapshotAt))
+FORMAT JSONEachRow`, bucket, end, included, included, included, included, included, included, client.database, client.table)
+	return sql, aggregateParams(query, snapshotAt)
 }
 
-func (client *Client) counterAggregateQuery(query telemetryhistorymodel.DeviceHistoryAggregateQuery, snapshotAt time.Time) string {
+func (client *Client) counterAggregateQuery(query telemetryhistorymodel.DeviceHistoryAggregateQuery, snapshotAt time.Time) (string, url.Values) {
 	bucket, end := aggregateBucketExpressions(query)
 	currentIncluded := aggregateQualityPredicate(query.QualityPolicy, "quality")
 	previousIncluded := aggregateQualityPredicate(query.QualityPolicy, "previous_quality")
 	transitionIncluded := "(" + currentIncluded + " AND " + previousIncluded + ")"
-	return fmt.Sprintf(`WITH ordered AS (
+	sql := fmt.Sprintf(`WITH ordered AS (
   SELECT *,
     lagInFrame(value_number) OVER point_window AS previous_value,
     lagInFrame(point_revision) OVER point_window AS previous_point_revision,
@@ -578,10 +600,10 @@ func (client *Client) counterAggregateQuery(query telemetryhistorymodel.DeviceHi
     lagInFrame(quality) OVER point_window AS previous_quality,
     max(value_number) OVER revision_window AS previous_max_value
   FROM %s.%s
-  WHERE tenant_id = toUUID('%s') AND site_id = toUUID('%s') AND device_id = toUUID('%s')
-    AND telemetry_key IN (%s)
-    AND sampled_at < parseDateTime64BestEffort('%s', 3, 'UTC')
-    AND projected_at < parseDateTime64BestEffort('%s', 3, 'UTC')
+  WHERE tenant_id = toUUID({tenant_id:UUID}) AND site_id = toUUID({site_id:UUID}) AND device_id = toUUID({device_id:UUID})
+    AND telemetry_key IN {keys:Array(String)}
+    AND sampled_at < parseDateTime64BestEffort({to_ts:String}, 3, 'UTC')
+    AND projected_at < parseDateTime64BestEffort({snapshot_ts:String}, 3, 'UTC')
     AND acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER') AND point_type = 'COUNTER'
     AND point_id IS NOT NULL AND point_revision IS NOT NULL AND value_type = 'NUMBER' AND value_number IS NOT NULL AND isFinite(value_number)
   WINDOW point_window AS (PARTITION BY tenant_id, site_id, point_id ORDER BY sampled_at, observation_id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),
@@ -613,7 +635,7 @@ func (client *Client) counterAggregateQuery(query telemetryhistorymodel.DeviceHi
 ), scoped AS (
   SELECT *, %s AS bucket
   FROM deltas
-  WHERE sampled_at >= parseDateTime64BestEffort('%s', 3, 'UTC')
+  WHERE sampled_at >= parseDateTime64BestEffort({from_ts:String}, 3, 'UTC')
 )
 SELECT
   telemetry_key,
@@ -649,20 +671,21 @@ SELECT
 FROM scoped
 GROUP BY telemetry_key, point_id, point_revision, bucket
 HAVING included_count > 0
-FORMAT JSONEachRow`, client.database, client.table, query.TenantID, query.SiteID, query.DeviceID, quotedKeys(query.Keys), formatClickHouseTime(query.To), formatClickHouseTime(snapshotAt), bucket, formatClickHouseTime(query.From), end,
+FORMAT JSONEachRow`, client.database, client.table, bucket, end,
 		currentIncluded, transitionIncluded, transitionIncluded, transitionIncluded, transitionIncluded, transitionIncluded)
+	return sql, aggregateParams(query, snapshotAt)
 }
 
-func (client *Client) stateAggregateQuery(query telemetryhistorymodel.DeviceHistoryAggregateQuery, snapshotAt time.Time) string {
+func (client *Client) stateAggregateQuery(query telemetryhistorymodel.DeviceHistoryAggregateQuery, snapshotAt time.Time) (string, url.Values) {
 	bucket, end := aggregateBucketExpressions(query)
 	included := aggregateQualityPredicate(query.QualityPolicy, "quality")
-	return fmt.Sprintf(`WITH ordered AS (
+	sql := fmt.Sprintf(`WITH ordered AS (
   SELECT *, lagInFrame(value_json) OVER point_window AS previous_value_json
   FROM %s.%s
-  WHERE tenant_id = toUUID('%s') AND site_id = toUUID('%s') AND device_id = toUUID('%s')
-    AND telemetry_key IN (%s)
-    AND sampled_at < parseDateTime64BestEffort('%s', 3, 'UTC')
-    AND projected_at < parseDateTime64BestEffort('%s', 3, 'UTC')
+  WHERE tenant_id = toUUID({tenant_id:UUID}) AND site_id = toUUID({site_id:UUID}) AND device_id = toUUID({device_id:UUID})
+    AND telemetry_key IN {keys:Array(String)}
+    AND sampled_at < parseDateTime64BestEffort({to_ts:String}, 3, 'UTC')
+    AND projected_at < parseDateTime64BestEffort({snapshot_ts:String}, 3, 'UTC')
     AND acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER')
     AND ((point_type = 'STATE' AND value_type IN ('STRING', 'BOOLEAN', 'JSON', 'NUMBER')) OR (point_type IN ('TELEMETRY', 'SETTING') AND value_type IN ('STRING', 'BOOLEAN', 'JSON')))
     AND point_id IS NOT NULL AND point_revision IS NOT NULL AND value_json IS NOT NULL
@@ -670,7 +693,7 @@ func (client *Client) stateAggregateQuery(query telemetryhistorymodel.DeviceHist
 ), scoped AS (
   SELECT *, %s AS bucket
   FROM ordered
-  WHERE sampled_at >= parseDateTime64BestEffort('%s', 3, 'UTC')
+  WHERE sampled_at >= parseDateTime64BestEffort({from_ts:String}, 3, 'UTC')
 )
 SELECT
   telemetry_key,
@@ -706,7 +729,8 @@ SELECT
 FROM scoped
 GROUP BY telemetry_key, point_id, point_revision, point_type, bucket
 HAVING included_count > 0
-FORMAT JSONEachRow`, client.database, client.table, query.TenantID, query.SiteID, query.DeviceID, quotedKeys(query.Keys), formatClickHouseTime(query.To), formatClickHouseTime(snapshotAt), bucket, formatClickHouseTime(query.From), end, included, included, included, included, included, included)
+FORMAT JSONEachRow`, client.database, client.table, bucket, end, included, included, included, included, included, included)
+	return sql, aggregateParams(query, snapshotAt)
 }
 
 func aggregateBucketExpressions(query telemetryhistorymodel.DeviceHistoryAggregateQuery) (string, string) {
@@ -716,19 +740,19 @@ func aggregateBucketExpressions(query telemetryhistorymodel.DeviceHistoryAggrega
 func aggregateBucketExpressionsFor(query telemetryhistorymodel.DeviceHistoryAggregateQuery, sourceColumn, bucketAlias string) (string, string) {
 	switch query.Granularity {
 	case telemetryhistorymodel.AggregateGranularityMinute:
-		return fmt.Sprintf("toStartOfInterval(%s, INTERVAL 1 MINUTE, '%s')", sourceColumn, query.Timezone), fmt.Sprintf("addMinutes(%s, 1)", bucketAlias)
+		return fmt.Sprintf("toStartOfInterval(%s, INTERVAL 1 MINUTE, {timezone:String})", sourceColumn), fmt.Sprintf("addMinutes(%s, 1)", bucketAlias)
 	case telemetryhistorymodel.AggregateGranularityFiveMinute:
-		return fmt.Sprintf("toStartOfInterval(%s, INTERVAL 5 MINUTE, '%s')", sourceColumn, query.Timezone), fmt.Sprintf("addMinutes(%s, 5)", bucketAlias)
+		return fmt.Sprintf("toStartOfInterval(%s, INTERVAL 5 MINUTE, {timezone:String})", sourceColumn), fmt.Sprintf("addMinutes(%s, 5)", bucketAlias)
 	case telemetryhistorymodel.AggregateGranularityQuarterHour:
-		return fmt.Sprintf("toStartOfInterval(%s, INTERVAL 15 MINUTE, '%s')", sourceColumn, query.Timezone), fmt.Sprintf("addMinutes(%s, 15)", bucketAlias)
+		return fmt.Sprintf("toStartOfInterval(%s, INTERVAL 15 MINUTE, {timezone:String})", sourceColumn), fmt.Sprintf("addMinutes(%s, 15)", bucketAlias)
 	case telemetryhistorymodel.AggregateGranularityHour:
-		return fmt.Sprintf("toStartOfHour(%s, '%s')", sourceColumn, query.Timezone), fmt.Sprintf("addHours(%s, 1)", bucketAlias)
+		return fmt.Sprintf("toStartOfHour(%s, {timezone:String})", sourceColumn), fmt.Sprintf("addHours(%s, 1)", bucketAlias)
 	case telemetryhistorymodel.AggregateGranularityDay:
-		return fmt.Sprintf("toStartOfDay(%s, '%s')", sourceColumn, query.Timezone), fmt.Sprintf("addDays(%s, 1)", bucketAlias)
+		return fmt.Sprintf("toStartOfDay(%s, {timezone:String})", sourceColumn), fmt.Sprintf("addDays(%s, 1)", bucketAlias)
 	case telemetryhistorymodel.AggregateGranularityWeek:
-		return fmt.Sprintf("toStartOfWeek(%s, 1, '%s')", sourceColumn, query.Timezone), fmt.Sprintf("addWeeks(%s, 1)", bucketAlias)
+		return fmt.Sprintf("toStartOfWeek(%s, 1, {timezone:String})", sourceColumn), fmt.Sprintf("addWeeks(%s, 1)", bucketAlias)
 	case telemetryhistorymodel.AggregateGranularityMonth:
-		return fmt.Sprintf("toStartOfMonth(%s, '%s')", sourceColumn, query.Timezone), fmt.Sprintf("addMonths(%s, 1)", bucketAlias)
+		return fmt.Sprintf("toStartOfMonth(%s, {timezone:String})", sourceColumn), fmt.Sprintf("addMonths(%s, 1)", bucketAlias)
 	default:
 		return sourceColumn, sourceColumn
 	}

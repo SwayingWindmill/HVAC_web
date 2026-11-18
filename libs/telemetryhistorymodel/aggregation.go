@@ -17,6 +17,7 @@ const (
 	MaximumFineAggregateBucketsPerKey = 720
 	MaximumAggregateBucketsPerKey     = 1000
 	MaximumAggregateBuckets           = 5760
+	DefaultViewportMaxBucketsPerKey   = 360
 )
 
 type AggregateGranularity string
@@ -146,9 +147,49 @@ func validateAggregateSelection(deviceID string, keys []string, from, to time.Ti
 
 func exceedsAggregateBucketLimit(from, to time.Time, granularity AggregateGranularity, keyCount int, location *time.Location) bool {
 	limit := granularity.MaxBucketsPerKey()
+	if keyCount > 0 {
+		if totalLimit := MaximumAggregateBuckets / keyCount; totalLimit < limit {
+			limit = totalLimit
+		}
+	}
+	count, ok := countCalendarBuckets(from, to, granularity, location, limit)
+	return !ok || count > limit
+}
+
+func RecommendViewportGranularity(from, to time.Time, maxBucketsPerKey int) AggregateGranularity {
+	if maxBucketsPerKey <= 0 {
+		maxBucketsPerKey = DefaultViewportMaxBucketsPerKey
+	}
+	if from.IsZero() || to.IsZero() || !from.Before(to) {
+		return AggregateGranularityMinute
+	}
+	location := from.Location()
+	if location == nil {
+		location = time.UTC
+	}
+	fromLocal := from.In(location)
+	toLocal := to.In(location)
+	for _, candidate := range []AggregateGranularity{
+		AggregateGranularityMinute,
+		AggregateGranularityFiveMinute,
+		AggregateGranularityQuarterHour,
+		AggregateGranularityHour,
+		AggregateGranularityDay,
+		AggregateGranularityWeek,
+		AggregateGranularityMonth,
+	} {
+		count, ok := countCalendarBuckets(fromLocal, toLocal, candidate, location, maxBucketsPerKey)
+		if ok && count <= maxBucketsPerKey {
+			return candidate
+		}
+	}
+	return AggregateGranularityMonth
+}
+
+func countCalendarBuckets(from, to time.Time, granularity AggregateGranularity, location *time.Location, limit int) (int, bool) {
 	cursor, ok := AlignCalendarCursor(from.In(location), granularity, location)
 	if !ok {
-		return true
+		return 0, false
 	}
 	toLocal := to.In(location)
 	count := 0
@@ -156,13 +197,13 @@ func exceedsAggregateBucketLimit(from, to time.Time, granularity AggregateGranul
 		next := StepCalendarCursor(cursor, granularity)
 		if next.UTC().After(from) && cursor.UTC().Before(to) {
 			count++
-			if count > limit || count*keyCount > MaximumAggregateBuckets {
-				return true
+			if limit > 0 && count > limit {
+				return count, true
 			}
 		}
 		cursor = next
 	}
-	return false
+	return count, true
 }
 
 func AlignCalendarCursor(startLocal time.Time, granularity AggregateGranularity, location *time.Location) (time.Time, bool) {

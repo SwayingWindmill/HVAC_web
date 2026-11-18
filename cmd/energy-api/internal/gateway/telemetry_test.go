@@ -25,6 +25,7 @@ import (
 
 	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/s2telemetryapi"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
 	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
@@ -193,6 +194,49 @@ func TestTelemetryGatewayDeviceHistoryAggregateMinuteBucketLimitAndAuthGuard(t *
 	fixture.handler.ServeHTTP(unauthRecorder, unauth)
 	if unauthRecorder.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401 for unauthenticated aggregate call, got %d body=%s", unauthRecorder.Code, unauthRecorder.Body.String())
+	}
+}
+
+func TestTelemetryGatewayDeviceHistoryAggregateRateLimit(t *testing.T) {
+	fixture := newTelemetryGatewayFixture(t, "")
+	fixture.handler.rateLimiter = limitpolicy.NewLimiter(limitpolicy.NewMemoryCounter(1000), &limitpolicy.Policy{
+		Version: 1,
+		Limits: []limitpolicy.Limit{
+			{Dimension: limitpolicy.DimensionRest, Window: time.Minute, Burst: 100},
+			{Dimension: limitpolicy.DimensionExpensiveQuery, Window: time.Minute, Burst: 1},
+		},
+	})
+	input := s2telemetryapi.DeviceHistoryAggregateRequest{
+		DeviceId: telemetryTestDeviceOne, Keys: []s2telemetryapi.TelemetryKey{"temperature"},
+		From: s2telemetryapi.HistoryInstant("2026-07-24T00:00:00Z"), To: s2telemetryapi.HistoryInstant("2026-07-25T00:00:00Z"),
+		Granularity: s2telemetryapi.DeviceHistoryAggregateGranularityDay, Timezone: "Asia/Singapore", QualityPolicy: s2telemetryapi.DeviceHistoryAggregateQualityPolicyValidOnly,
+	}
+	body, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newRequest := func() *http.Request {
+		request := httptest.NewRequest(http.MethodPost, s2telemetryapi.QueryDeviceHistoryAggregatePath, bytes.NewReader(body))
+		fixture.authenticate(request)
+		request.Header.Set("Origin", "https://web.example.test")
+		request.Header.Set("X-CSRF-Token", telemetryTestCSRF)
+		return request.WithContext(context.WithValue(request.Context(), routeDecisionContextKey, ownershipregistry.Decision{
+			RegistryRevision: 12,
+			SelectedOwner:    ownershipregistry.OwnerAnalyticsQuery,
+		}))
+	}
+
+	first := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(first, newRequest())
+	if first.Code != http.StatusOK {
+		t.Fatalf("first aggregate status=%d body=%s", first.Code, first.Body.String())
+	}
+
+	second := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(second, newRequest())
+	assertTelemetryProblem(t, second, http.StatusTooManyRequests, "RATE_LIMIT_EXCEEDED")
+	if fixture.iamCalls.Load() != 1 || fixture.queryCalls.Load() != 1 {
+		t.Fatalf("rate-limited aggregate request reached upstreams: IAM=%d query=%d", fixture.iamCalls.Load(), fixture.queryCalls.Load())
 	}
 }
 
