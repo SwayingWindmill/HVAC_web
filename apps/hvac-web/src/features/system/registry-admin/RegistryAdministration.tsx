@@ -33,12 +33,13 @@ import { confirmDiscardRegistryDraft } from './confirmDiscard';
 
 interface Props {
   capabilities: readonly Capability[];
+  csrfToken: string;
   registerUnsavedDraft: RegisterUnsavedDraft;
 }
 
 type RegistryTab = 'resources' | 'templates' | 'import-export';
 
-export function RegistryAdministration({ capabilities: capabilityList, registerUnsavedDraft }: Props) {
+export function RegistryAdministration({ capabilities: capabilityList, csrfToken, registerUnsavedDraft }: Props) {
   const capabilities = useMemo(() => new Set(capabilityList), [capabilityList]);
   const sitesQuery = useRegistrySites(capabilities.has('site.list'));
   const sites = flattenRegistryPages(sitesQuery.data);
@@ -93,7 +94,7 @@ export function RegistryAdministration({ capabilities: capabilityList, registerU
         timezone: createDraft.timezone.trim(),
         status: 'ACTIVE',
         meta: makeRegistryMutationMeta(0, createDraft.reason.trim(), newRegistryIdempotencyKey('site-create')),
-      });
+      }, csrfToken);
       await sitesQuery.refetch();
       setDirty(false);
       setCreateDraft({ code: '', displayName: '', timezone: 'Asia/Shanghai', reason: '创建首个站点' });
@@ -173,9 +174,9 @@ export function RegistryAdministration({ capabilities: capabilityList, registerU
         ) : <div className="grid min-h-32 place-items-center rounded-md border border-dashed p-6 text-sm text-muted-foreground">当前没有可管理站点，或登记服务暂时不可用。</div>
       ) : (
         <div>
-          {activeTab === 'resources' ? <RegistryResourceWorkbench site={site} sites={sites} model={model} capabilities={capabilities} onDirtyChange={setDirty} onRefresh={refresh} onSiteCreated={(siteId) => setSelectedSiteId(siteId)} /> : null}
-          {activeTab === 'templates' ? <RegistryTemplateWorkbench site={site} model={model} capabilities={capabilities} onDirtyChange={setDirty} onRefresh={refresh} /> : null}
-          {activeTab === 'import-export' ? <RegistryImportExportWorkbench site={site} model={model} capabilities={capabilities} onDirtyChange={setDirty} onRefresh={refresh} /> : null}
+          {activeTab === 'resources' ? <RegistryResourceWorkbench site={site} sites={sites} model={model} capabilities={capabilities} csrfToken={csrfToken} onDirtyChange={setDirty} onRefresh={refresh} onSiteCreated={(siteId) => setSelectedSiteId(siteId)} /> : null}
+          {activeTab === 'templates' ? <RegistryTemplateWorkbench site={site} model={model} capabilities={capabilities} csrfToken={csrfToken} onDirtyChange={setDirty} onRefresh={refresh} /> : null}
+          {activeTab === 'import-export' ? <RegistryImportExportWorkbench site={site} model={model} capabilities={capabilities} csrfToken={csrfToken} onDirtyChange={setDirty} onRefresh={refresh} /> : null}
         </div>
       )}
     </div>

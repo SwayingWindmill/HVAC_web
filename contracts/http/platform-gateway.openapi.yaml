@@ -1574,6 +1574,7 @@
         "x-architecture-status": "ACTIVE",
         "x-shape-status": "READY",
         "x-shape-source": "contracts/http/s05-registry-writer.openapi.json",
+        "parameters": [{ "$ref": "#/components/parameters/CsrfToken" }],
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "./s05-registry-writer.openapi.json#/components/schemas/SiteMutation" } } } },
         "responses": {
           "201": { "description": "Created Site.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Site" } } } },
@@ -1641,7 +1642,7 @@
         "summary": "Update a Site using Expected Revision",
         "x-architecture-status": "ACTIVE",
         "x-shape-source": "contracts/http/s05-registry-writer.openapi.json",
-        "parameters": [{ "$ref": "#/components/parameters/SiteId" }],
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/CsrfToken" }],
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "./s05-registry-writer.openapi.json#/components/schemas/SiteMutation" } } } },
         "responses": { "200": { "description": "Updated Site.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Site" } } } }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
@@ -1756,7 +1757,7 @@
         "summary": "Create a governed Asset in one Site",
         "x-architecture-status": "ACTIVE",
         "x-shape-source": "contracts/http/s05-registry-writer.openapi.json",
-        "parameters": [{ "$ref": "#/components/parameters/SiteId" }],
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/CsrfToken" }],
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "./s05-registry-writer.openapi.json#/components/schemas/AssetMutation" } } } },
         "responses": { "201": { "description": "Created Asset.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Asset" } } } }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
@@ -1926,7 +1927,7 @@
         "summary": "Create a governed Device in one Site",
         "x-architecture-status": "ACTIVE",
         "x-shape-source": "contracts/http/s05-registry-writer.openapi.json",
-        "parameters": [{ "$ref": "#/components/parameters/SiteId" }],
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/CsrfToken" }],
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "./s05-registry-writer.openapi.json#/components/schemas/DeviceMutation" } } } },
         "responses": { "201": { "description": "Created Device.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Device" } } } }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
@@ -2122,7 +2123,7 @@
     "/api/v1/sites/{siteId}/spaces": {
       "post": {
         "operationId": "createSiteSpace", "summary": "Create a governed Space", "x-architecture-status": "ACTIVE", "x-shape-source": "contracts/http/s05-registry-writer.openapi.json",
-        "parameters": [{ "$ref": "#/components/parameters/SiteId" }],
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/CsrfToken" }],
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "./s05-registry-writer.openapi.json#/components/schemas/SpaceMutation" } } } },
         "responses": { "201": { "description": "Created Space.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Space" } } } }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
@@ -2130,7 +2131,7 @@
     "/api/v1/sites/{siteId}/spaces/{spaceId}": {
       "patch": {
         "operationId": "updateSiteSpace", "summary": "Update a Space using Expected Revision", "x-architecture-status": "ACTIVE", "x-shape-source": "contracts/http/s05-registry-writer.openapi.json",
-        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "name": "spaceId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } }],
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "name": "spaceId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } }, { "$ref": "#/components/parameters/CsrfToken" }],
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "./s05-registry-writer.openapi.json#/components/schemas/SpaceMutation" } } } },
         "responses": { "200": { "description": "Updated Space.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Space" } } } }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
@@ -2138,7 +2139,7 @@
     "/api/v1/sites/{siteId}/assets/{assetId}": {
       "patch": {
         "operationId": "updateSiteAsset", "summary": "Update an Asset using Expected Revision", "x-architecture-status": "ACTIVE", "x-shape-source": "contracts/http/s05-registry-writer.openapi.json",
-        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/AssetId" }],
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/AssetId" }, { "$ref": "#/components/parameters/CsrfToken" }],
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "./s05-registry-writer.openapi.json#/components/schemas/AssetMutation" } } } },
         "responses": { "200": { "description": "Updated Asset.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Asset" } } } }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
@@ -2146,7 +2147,7 @@
     "/api/v1/sites/{siteId}/devices/{deviceId}": {
       "patch": {
         "operationId": "updateSiteDevice", "summary": "Update a Device using Expected Revision", "x-architecture-status": "ACTIVE", "x-shape-source": "contracts/http/s05-registry-writer.openapi.json",
-        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/DeviceId" }],
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/DeviceId" }, { "$ref": "#/components/parameters/CsrfToken" }],
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "./s05-registry-writer.openapi.json#/components/schemas/DeviceMutation" } } } },
         "responses": { "200": { "description": "Updated Device.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Device" } } } }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
@@ -2154,7 +2155,7 @@
     "/api/v1/sites/{siteId}/sensors": {
       "post": {
         "operationId": "createSiteSensor", "summary": "Create an independently traceable PhysicalSensor", "x-architecture-status": "ACTIVE", "x-shape-source": "contracts/http/s05-registry-writer.openapi.json",
-        "parameters": [{ "$ref": "#/components/parameters/SiteId" }],
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/CsrfToken" }],
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "./s05-registry-writer.openapi.json#/components/schemas/SensorMutation" } } } },
         "responses": { "201": { "description": "Created Sensor.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Sensor" } } } }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
@@ -2162,7 +2163,7 @@
     "/api/v1/sites/{siteId}/sensors/{sensorId}": {
       "patch": {
         "operationId": "updateSiteSensor", "summary": "Update a PhysicalSensor using Expected Revision", "x-architecture-status": "ACTIVE", "x-shape-source": "contracts/http/s05-registry-writer.openapi.json",
-        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "name": "sensorId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } }],
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "name": "sensorId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } }, { "$ref": "#/components/parameters/CsrfToken" }],
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "./s05-registry-writer.openapi.json#/components/schemas/SensorMutation" } } } },
         "responses": { "200": { "description": "Updated Sensor.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Sensor" } } } }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
@@ -2170,7 +2171,7 @@
     "/api/v1/sites/{siteId}/points": {
       "post": {
         "operationId": "createSitePoint", "summary": "Create a canonical Registry Point", "x-architecture-status": "ACTIVE", "x-shape-source": "contracts/http/s05-registry-writer.openapi.json",
-        "parameters": [{ "$ref": "#/components/parameters/SiteId" }],
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/CsrfToken" }],
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "./s05-registry-writer.openapi.json#/components/schemas/PointMutation" } } } },
         "responses": { "201": { "description": "Created Point.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TelemetryPoint" } } } }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
@@ -2178,7 +2179,7 @@
     "/api/v1/sites/{siteId}/points/{pointId}": {
       "patch": {
         "operationId": "updateSitePoint", "summary": "Update a Point using Expected Revision", "x-architecture-status": "ACTIVE", "x-shape-source": "contracts/http/s05-registry-writer.openapi.json",
-        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "name": "pointId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } }],
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "name": "pointId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } }, { "$ref": "#/components/parameters/CsrfToken" }],
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "./s05-registry-writer.openapi.json#/components/schemas/PointMutation" } } } },
         "responses": { "200": { "description": "Updated Point.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TelemetryPoint" } } } }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
@@ -2186,7 +2187,7 @@
     "/api/v1/sites/{siteId}/bindings/rebind": {
       "post": {
         "operationId": "rebindRegistryResource", "summary": "Close the current typed binding interval and establish the next binding", "x-architecture-status": "ACTIVE", "x-shape-source": "contracts/http/s05-registry-writer.openapi.json",
-        "parameters": [{ "$ref": "#/components/parameters/SiteId" }],
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/CsrfToken" }],
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "./s05-registry-writer.openapi.json#/components/schemas/RebindRequest" } } } },
         "responses": { "201": { "description": "New binding interval.", "content": { "application/json": { "schema": { "$ref": "./s05-registry-writer.openapi.json#/components/schemas/BindingMutationResult" } } } }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
@@ -2259,6 +2260,7 @@
     "/api/v1/templates/revisions": {
       "post": {
         "operationId": "releaseRegistryTemplateRevision", "summary": "Publish a new immutable TemplateRevision with exact Release References", "x-architecture-status": "ACTIVE", "x-shape-source": "contracts/http/s05-registry-writer.openapi.json",
+        "parameters": [{ "$ref": "#/components/parameters/CsrfToken" }],
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "./s05-registry-writer.openapi.json#/components/schemas/ReleaseTemplateRequest" } } } },
         "responses": { "201": { "description": "Released immutable TemplateRevision.", "content": { "application/json": { "schema": { "$ref": "./s05-registry-writer.openapi.json#/components/schemas/TemplateRevision" } } } }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
@@ -2266,6 +2268,7 @@
     "/api/v1/templates/assignments": {
       "post": {
         "operationId": "assignRegistryTemplateRevision", "summary": "Assign an exact released TemplateRevision; rollback is another assignment", "x-architecture-status": "ACTIVE", "x-shape-source": "contracts/http/s05-registry-writer.openapi.json",
+        "parameters": [{ "$ref": "#/components/parameters/CsrfToken" }],
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "./s05-registry-writer.openapi.json#/components/schemas/AssignTemplateRequest" } } } },
         "responses": { "201": { "description": "New Template assignment interval.", "content": { "application/json": { "schema": { "$ref": "./s05-registry-writer.openapi.json#/components/schemas/TemplateAssignment" } } } }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
@@ -2273,7 +2276,7 @@
     "/api/v1/sites/{siteId}/imports/dry-run": {
       "post": {
         "operationId": "planRegistryImport", "summary": "Resolve External IDs and produce a deterministic row-level Registry import plan without mutation", "x-architecture-status": "ACTIVE", "x-shape-source": "contracts/http/s05-registry-writer.openapi.json",
-        "parameters": [{ "$ref": "#/components/parameters/SiteId" }],
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/CsrfToken" }],
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "./s05-registry-writer.openapi.json#/components/schemas/ImportPlanRequest" } } } },
         "responses": { "200": { "description": "Registry import plan.", "content": { "application/json": { "schema": { "$ref": "./s05-registry-writer.openapi.json#/components/schemas/ImportPlan" } } } }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
@@ -2281,7 +2284,7 @@
     "/api/v1/sites/{siteId}/imports/commit": {
       "post": {
         "operationId": "commitRegistryImport", "summary": "Atomically commit a previously validated Registry import plan", "x-architecture-status": "ACTIVE", "x-shape-source": "contracts/http/s05-registry-writer.openapi.json",
-        "parameters": [{ "$ref": "#/components/parameters/SiteId" }],
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/CsrfToken" }],
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "./s05-registry-writer.openapi.json#/components/schemas/ImportCommitRequest" } } } },
         "responses": { "201": { "description": "Committed Registry import.", "content": { "application/json": { "schema": { "$ref": "./s05-registry-writer.openapi.json#/components/schemas/ImportCommitResult" } } } }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
@@ -2289,7 +2292,7 @@
     "/api/v1/sites/{siteId}/retire": {
       "post": {
         "operationId": "beginRegistryRetirement", "summary": "Start a dependency-aware Registry retirement saga; hard delete is never exposed", "x-architecture-status": "ACTIVE", "x-shape-source": "contracts/http/s05-registry-writer.openapi.json",
-        "parameters": [{ "$ref": "#/components/parameters/SiteId" }],
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/CsrfToken" }],
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "./s05-registry-writer.openapi.json#/components/schemas/RetireRequest" } } } },
         "responses": { "201": { "description": "Retirement saga entry.", "content": { "application/json": { "schema": { "$ref": "./s05-registry-writer.openapi.json#/components/schemas/RetirementResult" } } } }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }

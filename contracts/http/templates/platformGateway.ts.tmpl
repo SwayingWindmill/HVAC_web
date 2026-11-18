@@ -1736,6 +1736,12 @@ export function createPlatformGatewayClient(baseUrl = '') {
     });
   };
 
+  const withCsrf = (csrfToken: string, init?: RequestInit): RequestInit => {
+    const headers = new Headers(init?.headers);
+    headers.set('X-CSRF-Token', csrfToken);
+    return { ...init, headers };
+  };
+
   return {
     getGatewayCredential: (gatewayId: string, init?: RequestInit) => request(
       `/api/v1/gateways/${encodeURIComponent(gatewayId)}/credential`, gatewayCredentialStatusSchema, { ...init, method: 'GET' },
@@ -1936,57 +1942,59 @@ export function createPlatformGatewayClient(baseUrl = '') {
     listDevicePoints: (deviceId: string, params: RegistryListParams = {}, init?: RequestInit) => request(
       listPath('__DEVICE_POINTS_PATH__'.replace('{deviceId}', encodeURIComponent(deviceId)), params), telemetryPointCollectionSchema, { ...init, method: 'GET' },
     ),
-    createSite: (body: SiteMutation, init?: RequestInit) => mutation('__SITES_PATH__', 'POST', body, siteMutationSchema, siteSchema, init),
-    updateSite: (siteId: string, body: SiteMutation, init?: RequestInit) => mutation(
-      '__SITE_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), 'PATCH', body, siteMutationSchema, siteSchema, init,
+    createSite: (body: SiteMutation, csrfToken: string, init?: RequestInit) => mutation(
+      '__SITES_PATH__', 'POST', body, siteMutationSchema, siteSchema, withCsrf(csrfToken, init),
     ),
-    createSiteSpace: (siteId: string, body: SpaceMutation, init?: RequestInit) => mutation(
-      '__SITE_SPACES_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), 'POST', body, spaceMutationSchema, spaceSchema, init,
+    updateSite: (siteId: string, body: SiteMutation, csrfToken: string, init?: RequestInit) => mutation(
+      '__SITE_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), 'PATCH', body, siteMutationSchema, siteSchema, withCsrf(csrfToken, init),
     ),
-    updateSiteSpace: (siteId: string, spaceId: string, body: SpaceMutation, init?: RequestInit) => mutation(
-      '__SITE_SPACE_PATH__'.replace('{siteId}', encodeURIComponent(siteId)).replace('{spaceId}', encodeURIComponent(spaceId)), 'PATCH', body, spaceMutationSchema, spaceSchema, init,
+    createSiteSpace: (siteId: string, body: SpaceMutation, csrfToken: string, init?: RequestInit) => mutation(
+      '__SITE_SPACES_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), 'POST', body, spaceMutationSchema, spaceSchema, withCsrf(csrfToken, init),
     ),
-    createSiteAsset: (siteId: string, body: AssetMutation, init?: RequestInit) => mutation(
-      '__SITE_ASSET_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), 'POST', body, assetMutationSchema, assetSchema, init,
+    updateSiteSpace: (siteId: string, spaceId: string, body: SpaceMutation, csrfToken: string, init?: RequestInit) => mutation(
+      '__SITE_SPACE_PATH__'.replace('{siteId}', encodeURIComponent(siteId)).replace('{spaceId}', encodeURIComponent(spaceId)), 'PATCH', body, spaceMutationSchema, spaceSchema, withCsrf(csrfToken, init),
     ),
-    updateSiteAsset: (siteId: string, assetId: string, body: AssetMutation, init?: RequestInit) => mutation(
-      '__SITE_ASSET_DETAIL_PATH__'.replace('{siteId}', encodeURIComponent(siteId)).replace('{assetId}', encodeURIComponent(assetId)), 'PATCH', body, assetMutationSchema, assetSchema, init,
+    createSiteAsset: (siteId: string, body: AssetMutation, csrfToken: string, init?: RequestInit) => mutation(
+      '__SITE_ASSET_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), 'POST', body, assetMutationSchema, assetSchema, withCsrf(csrfToken, init),
     ),
-    createSiteDevice: (siteId: string, body: DeviceMutation, init?: RequestInit) => mutation(
-      '__SITE_DEVICES_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), 'POST', body, deviceMutationSchema, deviceSchema, init,
+    updateSiteAsset: (siteId: string, assetId: string, body: AssetMutation, csrfToken: string, init?: RequestInit) => mutation(
+      '__SITE_ASSET_DETAIL_PATH__'.replace('{siteId}', encodeURIComponent(siteId)).replace('{assetId}', encodeURIComponent(assetId)), 'PATCH', body, assetMutationSchema, assetSchema, withCsrf(csrfToken, init),
     ),
-    updateSiteDevice: (siteId: string, deviceId: string, body: DeviceMutation, init?: RequestInit) => mutation(
-      '__SITE_DEVICE_DETAIL_PATH__'.replace('{siteId}', encodeURIComponent(siteId)).replace('{deviceId}', encodeURIComponent(deviceId)), 'PATCH', body, deviceMutationSchema, deviceSchema, init,
+    createSiteDevice: (siteId: string, body: DeviceMutation, csrfToken: string, init?: RequestInit) => mutation(
+      '__SITE_DEVICES_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), 'POST', body, deviceMutationSchema, deviceSchema, withCsrf(csrfToken, init),
     ),
-    createSiteSensor: (siteId: string, body: SensorMutation, init?: RequestInit) => mutation(
-      '__SITE_SENSORS_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), 'POST', body, sensorMutationSchema, sensorSchema, init,
+    updateSiteDevice: (siteId: string, deviceId: string, body: DeviceMutation, csrfToken: string, init?: RequestInit) => mutation(
+      '__SITE_DEVICE_DETAIL_PATH__'.replace('{siteId}', encodeURIComponent(siteId)).replace('{deviceId}', encodeURIComponent(deviceId)), 'PATCH', body, deviceMutationSchema, deviceSchema, withCsrf(csrfToken, init),
     ),
-    updateSiteSensor: (siteId: string, sensorId: string, body: SensorMutation, init?: RequestInit) => mutation(
-      '__SITE_SENSOR_PATH__'.replace('{siteId}', encodeURIComponent(siteId)).replace('{sensorId}', encodeURIComponent(sensorId)), 'PATCH', body, sensorMutationSchema, sensorSchema, init,
+    createSiteSensor: (siteId: string, body: SensorMutation, csrfToken: string, init?: RequestInit) => mutation(
+      '__SITE_SENSORS_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), 'POST', body, sensorMutationSchema, sensorSchema, withCsrf(csrfToken, init),
     ),
-    createSitePoint: (siteId: string, body: PointMutation, init?: RequestInit) => mutation(
-      '__SITE_POINTS_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), 'POST', body, pointMutationSchema, telemetryPointSchema, init,
+    updateSiteSensor: (siteId: string, sensorId: string, body: SensorMutation, csrfToken: string, init?: RequestInit) => mutation(
+      '__SITE_SENSOR_PATH__'.replace('{siteId}', encodeURIComponent(siteId)).replace('{sensorId}', encodeURIComponent(sensorId)), 'PATCH', body, sensorMutationSchema, sensorSchema, withCsrf(csrfToken, init),
     ),
-    updateSitePoint: (siteId: string, pointId: string, body: PointMutation, init?: RequestInit) => mutation(
-      '__SITE_POINT_PATH__'.replace('{siteId}', encodeURIComponent(siteId)).replace('{pointId}', encodeURIComponent(pointId)), 'PATCH', body, pointMutationSchema, telemetryPointSchema, init,
+    createSitePoint: (siteId: string, body: PointMutation, csrfToken: string, init?: RequestInit) => mutation(
+      '__SITE_POINTS_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), 'POST', body, pointMutationSchema, telemetryPointSchema, withCsrf(csrfToken, init),
     ),
-    rebindRegistryResource: (siteId: string, body: RebindRequest, init?: RequestInit) => mutation(
-      '__SITE_REBIND_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), 'POST', body, rebindRequestSchema, bindingMutationResultSchema, init,
+    updateSitePoint: (siteId: string, pointId: string, body: PointMutation, csrfToken: string, init?: RequestInit) => mutation(
+      '__SITE_POINT_PATH__'.replace('{siteId}', encodeURIComponent(siteId)).replace('{pointId}', encodeURIComponent(pointId)), 'PATCH', body, pointMutationSchema, telemetryPointSchema, withCsrf(csrfToken, init),
     ),
-    releaseRegistryTemplateRevision: (body: ReleaseTemplateRequest, init?: RequestInit) => mutation(
-      '__TEMPLATE_REVISIONS_PATH__', 'POST', body, releaseTemplateRequestSchema, templateRevisionSchema, init,
+    rebindRegistryResource: (siteId: string, body: RebindRequest, csrfToken: string, init?: RequestInit) => mutation(
+      '__SITE_REBIND_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), 'POST', body, rebindRequestSchema, bindingMutationResultSchema, withCsrf(csrfToken, init),
     ),
-    assignRegistryTemplateRevision: (body: AssignTemplateRequest, init?: RequestInit) => mutation(
-      '__TEMPLATE_ASSIGNMENTS_PATH__', 'POST', body, assignTemplateRequestSchema, templateAssignmentSchema, init,
+    releaseRegistryTemplateRevision: (body: ReleaseTemplateRequest, csrfToken: string, init?: RequestInit) => mutation(
+      '__TEMPLATE_REVISIONS_PATH__', 'POST', body, releaseTemplateRequestSchema, templateRevisionSchema, withCsrf(csrfToken, init),
     ),
-    planRegistryImport: (siteId: string, body: ImportPlanRequest, init?: RequestInit) => mutation(
-      '__SITE_IMPORT_DRY_RUN_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), 'POST', body, importPlanRequestSchema, importPlanSchema, init,
+    assignRegistryTemplateRevision: (body: AssignTemplateRequest, csrfToken: string, init?: RequestInit) => mutation(
+      '__TEMPLATE_ASSIGNMENTS_PATH__', 'POST', body, assignTemplateRequestSchema, templateAssignmentSchema, withCsrf(csrfToken, init),
     ),
-    commitRegistryImport: (siteId: string, body: ImportCommitRequest, init?: RequestInit) => mutation(
-      '__SITE_IMPORT_COMMIT_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), 'POST', body, importCommitRequestSchema, importCommitResultSchema, init,
+    planRegistryImport: (siteId: string, body: ImportPlanRequest, csrfToken: string, init?: RequestInit) => mutation(
+      '__SITE_IMPORT_DRY_RUN_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), 'POST', body, importPlanRequestSchema, importPlanSchema, withCsrf(csrfToken, init),
     ),
-    beginRegistryRetirement: (siteId: string, body: RetireRequest, init?: RequestInit) => mutation(
-      '__SITE_RETIRE_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), 'POST', body, retireRequestSchema, retirementResultSchema, init,
+    commitRegistryImport: (siteId: string, body: ImportCommitRequest, csrfToken: string, init?: RequestInit) => mutation(
+      '__SITE_IMPORT_COMMIT_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), 'POST', body, importCommitRequestSchema, importCommitResultSchema, withCsrf(csrfToken, init),
+    ),
+    beginRegistryRetirement: (siteId: string, body: RetireRequest, csrfToken: string, init?: RequestInit) => mutation(
+      '__SITE_RETIRE_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), 'POST', body, retireRequestSchema, retirementResultSchema, withCsrf(csrfToken, init),
     ),
     getSiteOperatingSchedule: (siteId: string, init?: RequestInit) => request(
       '__SITE_OPERATING_SCHEDULE_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), operatingScheduleSchema, { ...init, method: 'GET' },

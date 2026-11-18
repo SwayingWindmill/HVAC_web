@@ -1304,7 +1304,7 @@ export class Gateway {
     if (userAdmin) return userAdmin;
     if (method === 'GET' && path === '/api/v1/sites') return { body: { items: this.sites, hasMore: false, nextCursor: null } };
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}`) return { body: this.sites.find((item) => item.id === SITE_ID) ?? this.sites[0] };
-    const registryP1Reply = this.registryP1(method, path, query, body, now);
+    const registryP1Reply = this.registryP1(method, path, query, body, csrfToken, now);
     if (registryP1Reply) return registryP1Reply;
     const shadowReply = this.gatewayConfigShadow(method, path, body, csrfToken, now);
     if (shadowReply) return shadowReply;
@@ -2596,12 +2596,17 @@ export class Gateway {
     path: string,
     query: URLSearchParams,
     body: Json | null,
+    csrfToken: string | undefined,
     now: string,
   ): { status?: number; body: unknown } | undefined {
     const refuse = (status: number, code: string, detail: string) => ({
       status,
       body: { type: 'about:blank', title: detail, status, detail, instance: path, code, traceId: '0'.repeat(32), retryable: false },
     });
+    const expectedCsrfToken = this.principalOverride?.session?.csrfToken ?? principal.session.csrfToken;
+    const requireCsrf = () => (csrfToken && csrfToken === expectedCsrfToken
+      ? undefined
+      : refuse(403, 'CSRF_TOKEN_INVALID', 'CSRF token required.'));
 
     if (method === 'GET' && path === '/api/v1/templates') {
       const kind = query.get('templateKind');
@@ -2633,6 +2638,8 @@ export class Gateway {
     }
 
     if (method === 'POST' && path === '/api/v1/templates/revisions') {
+      const denied = requireCsrf();
+      if (denied) return denied;
       const existing = this.templateRevisions.filter((item) => item.templateKey === body?.templateKey);
       const templateId = existing[0]?.templateId ?? this.nextUuidV7('7000');
       const revisionNumber = existing.reduce((max, item) => Math.max(max, item.revisionNumber), 0) + 1;
@@ -2667,6 +2674,8 @@ export class Gateway {
     }
 
     if (method === 'POST' && path === '/api/v1/templates/assignments') {
+      const denied = requireCsrf();
+      if (denied) return denied;
       const rev = this.templateRevisions.find((item) => item.id === body?.templateRevisionId);
       if (!rev) return refuse(404, 'RESOURCE_NOT_FOUND', 'Template revision not found');
       for (const prev of this.templateAssignments) {
@@ -2749,6 +2758,8 @@ export class Gateway {
         return { body: { items: this.filterRegistryItems(list, query, 'ASSET'), hasMore: false, nextCursor: null } };
       }
       if (method === 'POST' && !assetId) {
+        const denied = requireCsrf();
+        if (denied) return denied;
         const created: Json = {
           id: this.nextUuidV7('7400'),
           tenantId: this.assetModel.tenantId,
@@ -2771,6 +2782,8 @@ export class Gateway {
         return { status: 201, body: created };
       }
       if (method === 'PATCH' && assetId) {
+        const denied = requireCsrf();
+        if (denied) return denied;
         const updateTarget = (list: Json[]) => {
           const idx = list.findIndex((item) => item.id === assetId);
           if (idx < 0) return null;
@@ -2811,6 +2824,8 @@ export class Gateway {
         return { body: { items: this.filterRegistryItems(list, query, 'DEVICE'), hasMore: false, nextCursor: null } };
       }
       if (method === 'POST' && !deviceId) {
+        const denied = requireCsrf();
+        if (denied) return denied;
         const created: Json = {
           id: this.nextUuidV7('7500'),
           tenantId: this.assetModel.tenantId,
@@ -2833,6 +2848,8 @@ export class Gateway {
         return { status: 201, body: created };
       }
       if (method === 'PATCH' && deviceId) {
+        const denied = requireCsrf();
+        if (denied) return denied;
         const updateTarget = (list: Json[]) => {
           const idx = list.findIndex((item) => item.id === deviceId);
           if (idx < 0) return null;

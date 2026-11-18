@@ -70,6 +70,7 @@ interface Props {
   sites: readonly Site[];
   model: SiteAssetModel;
   capabilities: ReadonlySet<Capability>;
+  csrfToken: string;
   onDirtyChange: (dirty: boolean) => void;
   onRefresh: () => Promise<void>;
   onSiteCreated: (siteId: string) => void;
@@ -448,7 +449,7 @@ function selectOptionsForBinding(kind: RebindKind, model: SiteAssetModel, site: 
   return { sources: points, targets };
 }
 
-export function RegistryResourceWorkbench({ site, sites, model, capabilities, onDirtyChange, onRefresh, onSiteCreated }: Props) {
+export function RegistryResourceWorkbench({ site, sites, model, capabilities, csrfToken, onDirtyChange, onRefresh, onSiteCreated }: Props) {
   const queryClient = useQueryClient();
   const [resourceType, setResourceType] = useState<RegistryAdminResourceType>('SPACE');
   const [allSites, setAllSites] = useState(false);
@@ -685,12 +686,14 @@ export function RegistryResourceWorkbench({ site, sites, model, capabilities, on
           code: editDraft.code.trim(), displayName: editDraft.displayName.trim(), timezone: editDraft.timezone.trim(), status: editDraft.status,
           floorAreaM2: area === '' ? undefined : Number(area), climateZone: editDraft.climateZone || undefined, meta,
         };
-        const saved = editTarget.entity ? await registryAdminApi.updateSite(editTarget.entity.id, body) : await registryAdminApi.createSite(body);
+        const saved = editTarget.entity
+          ? await registryAdminApi.updateSite(editTarget.entity.id, body, csrfToken)
+          : await registryAdminApi.createSite(body, csrfToken);
         createdSiteId = editTarget.entity ? null : saved.id;
       } else if (editTarget.type === 'SPACE') {
         const body = { parentSpaceId: editDraft.parentSpaceId || undefined, code: editDraft.code.trim(), displayName: editDraft.displayName.trim(), spaceType: editDraft.spaceType, status: editDraft.status, meta };
-        if (editTarget.entity) await registryAdminApi.updateSpace(site.id, editTarget.entity.id, body);
-        else await registryAdminApi.createSpace(site.id, body);
+        if (editTarget.entity) await registryAdminApi.updateSpace(site.id, editTarget.entity.id, body, csrfToken);
+        else await registryAdminApi.createSpace(site.id, body, csrfToken);
       } else if (editTarget.type === 'ASSET') {
         const body = {
           code: editDraft.code.trim(),
@@ -700,8 +703,8 @@ export function RegistryResourceWorkbench({ site, sites, model, capabilities, on
           tags: validatedTags ?? {},
           meta,
         };
-        if (editTarget.entity) await registryAdminApi.updateAsset(targetSiteId, editTarget.entity.id, body);
-        else await registryAdminApi.createAsset(site.id, body);
+        if (editTarget.entity) await registryAdminApi.updateAsset(targetSiteId, editTarget.entity.id, body, csrfToken);
+        else await registryAdminApi.createAsset(site.id, body, csrfToken);
       } else if (editTarget.type === 'DEVICE') {
         const body = {
           code: editDraft.code.trim(),
@@ -711,8 +714,8 @@ export function RegistryResourceWorkbench({ site, sites, model, capabilities, on
           tags: validatedTags ?? {},
           meta,
         };
-        if (editTarget.entity) await registryAdminApi.updateDevice(targetSiteId, editTarget.entity.id, body);
-        else await registryAdminApi.createDevice(site.id, body);
+        if (editTarget.entity) await registryAdminApi.updateDevice(targetSiteId, editTarget.entity.id, body, csrfToken);
+        else await registryAdminApi.createDevice(site.id, body, csrfToken);
       } else {
         const body = {
           reportingDeviceId: editDraft.reportingDeviceId,
@@ -733,8 +736,8 @@ export function RegistryResourceWorkbench({ site, sites, model, capabilities, on
           status: editDraft.status,
           meta,
         };
-        if (editTarget.entity) await registryAdminApi.updatePoint(site.id, editTarget.entity.id, body);
-        else await registryAdminApi.createPoint(site.id, body);
+        if (editTarget.entity) await registryAdminApi.updatePoint(site.id, editTarget.entity.id, body, csrfToken);
+        else await registryAdminApi.createPoint(site.id, body, csrfToken);
       }
       setResultMessage(editTarget.entity ? RESOURCE_COPY[editTarget.type].updatedMessage : RESOURCE_COPY[editTarget.type].createdMessage);
       setEditTarget(null);
@@ -758,7 +761,7 @@ export function RegistryResourceWorkbench({ site, sites, model, capabilities, on
         resourceType: retireTarget.type,
         resourceId: retireTarget.id,
         meta: makeRegistryMutationMeta(retireTarget.revision, retireReason.trim(), newRegistryIdempotencyKey('registry-retire')),
-      });
+      }, csrfToken);
       setResultMessage(result.status === 'COMPLETED'
         ? RESOURCE_COPY[retireTarget.type].retiredMessage
         : `被 ${result.dependencyCount} 个活动关联项占用，暂时无法${RESOURCE_COPY[retireTarget.type].retireAction}，原有登记保持不变。`);
@@ -810,7 +813,7 @@ export function RegistryResourceWorkbench({ site, sites, model, capabilities, on
         role: rebindDraft.role,
         effectiveAt: new Date().toISOString(),
         meta: makeRegistryMutationMeta(0, rebindDraft.reason.trim(), newRegistryIdempotencyKey('registry-rebind')),
-      });
+      }, csrfToken);
       setResultMessage('归属已调整：旧的归属到此结束，新的归属从现在生效。');
       setRebindOpen(false);
       setRebindDirty(false);

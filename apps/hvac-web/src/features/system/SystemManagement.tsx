@@ -272,7 +272,7 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: { readonly 
     { key: 'overview', label: '系统概览', children: overview },
     { key: 'users', label: '用户与角色', children: users },
     { key: 'site', label: '站点与组织', children: siteTab },
-    { key: 'registry', label: '设备与点位登记', children: <RegistryAdministration capabilities={capabilities} registerUnsavedDraft={registerUnsavedDraft} /> },
+    { key: 'registry', label: '设备与点位登记', children: <RegistryAdministration capabilities={capabilities} csrfToken={principal.session.csrfToken} registerUnsavedDraft={registerUnsavedDraft} /> },
     { key: 'audit', label: '操作记录', children: <AuditLog viewer={auditViewer} canRead={capabilities.includes('audit.read')} active={activeTab === 'audit'} /> },
     { key: 'assistant', label: 'AI 助手', children: <AssistantUsage sites={sites} canRead={capabilities.includes('audit.read')} active={activeTab === 'assistant'} /> },
   ] as const;

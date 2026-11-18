@@ -172,7 +172,7 @@ export function GatewaysTab({
     defaultValues: { code: '', displayName: '', reason: '' },
   });
   const registration = useMutation({
-    mutationFn: (values: Registration) => gatewayCredentialApi.register(siteId!, values),
+    mutationFn: (values: Registration) => gatewayCredentialApi.register(siteId!, values, csrfToken),
     onSuccess: async (device) => {
       await queryClient.invalidateQueries({ queryKey: ['registry', 'sites', siteId, 'devices'] });
       setRegistering(false);
