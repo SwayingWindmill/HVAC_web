@@ -66,6 +66,7 @@ type sourceObservationRequest struct {
 	SampledAt          string                 `json:"sampledAt"`
 	SourcePosition     sourcePositionRequest  `json:"sourcePosition"`
 	TraceID            string                 `json:"traceId,omitempty"`
+	EdgeReplay         bool                   `json:"edgeReplay,omitempty"`
 }
 
 type resolvedDeviceRequest struct {
@@ -297,7 +298,8 @@ func normalizeSourceObservation(input sourceObservationRequest, receivedAt time.
 			Offset:    input.SourcePosition.Offset,
 			EventID:   strings.TrimSpace(input.SourcePosition.EventID),
 		},
-		TraceID: traceID,
+		TraceID:    traceID,
+		EdgeReplay: input.EdgeReplay,
 	}
 	if device := input.Device; device != nil {
 		candidate.Device = &ResolvedDevice{

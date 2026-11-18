@@ -248,4 +248,44 @@ func TestClickHouseHistorySinkRejectsFailedInsert(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "403") {
 		t.Fatalf("err=%v", err)
 	}
+	if IsPermanentHistoryError(err) {
+		t.Fatalf("expected HTTP 403 error not to be classified as permanent batch rejection: %v", err)
+	}
+}
+
+func TestClickHouseHistorySinkClassifiesPermanentVsTransientFailures(t *testing.T) {
+	statusCode := http.StatusBadRequest
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		http.Error(writer, "cannot parse input", statusCode)
+	}))
+	defer server.Close()
+	sink, err := NewClickHouseHistorySink(ClickHouseHistoryConfig{
+		BaseURL: server.URL, Database: "telemetry_history", Table: "observations", HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	valid := []HistoryObservation{{
+		ObservationID: "018f2e00-9100-7000-8000-000000000005",
+		PayloadSHA256: strings.Repeat("d", 64),
+	}}
+	badReqErr := sink.InsertObservations(t.Context(), 1, valid)
+	if !IsPermanentHistoryError(badReqErr) {
+		t.Fatalf("expected HTTP 400 to satisfy IsPermanentHistoryError, got %v", badReqErr)
+	}
+
+	statusCode = http.StatusServiceUnavailable
+	transientErr := sink.InsertObservations(t.Context(), 1, valid)
+	if transientErr == nil || IsPermanentHistoryError(transientErr) {
+		t.Fatalf("expected HTTP 503 not to be permanent, got %v", transientErr)
+	}
+
+	validationErr := sink.InsertObservations(t.Context(), 1, []HistoryObservation{{
+		ObservationID: "bad-id",
+		PayloadSHA256: strings.Repeat("d", 64),
+	}})
+	if !IsPermanentHistoryError(validationErr) {
+		t.Fatalf("expected row validation failure to satisfy IsPermanentHistoryError, got %v", validationErr)
+	}
 }

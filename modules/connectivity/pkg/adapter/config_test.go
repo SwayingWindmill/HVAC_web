@@ -28,9 +28,17 @@ func TestConfigValidateBatchOptions(t *testing.T) {
 	maxValid := base()
 	maxValid.BatchMaxMessages = MaxObservationBatchSize
 	maxValid.BatchFlushWindow = time.Second
+	maxValid.AutoBackfillLagThreshold = 15 * time.Minute
 	maxValid.WorkerCount = maxWorkerCount
 	if err := maxValid.Validate(); err != nil {
 		t.Fatalf("max valid config failed Validate: %v", err)
+	}
+	if got := defaultCfg.MQTT.EffectiveReceiveMaximum(); got != mqttDefaultReceiveMaximum {
+		t.Fatalf("EffectiveReceiveMaximum()=%d, want %d", got, mqttDefaultReceiveMaximum)
+	}
+	customRM := MQTTConfig{ReceiveMaximum: 64}
+	if got := customRM.EffectiveReceiveMaximum(); got != 64 {
+		t.Fatalf("custom EffectiveReceiveMaximum()=%d, want 64", got)
 	}
 
 	for _, test := range []struct {
@@ -41,6 +49,7 @@ func TestConfigValidateBatchOptions(t *testing.T) {
 		{"batch max above 512", func(c *Config) { c.BatchMaxMessages = MaxObservationBatchSize + 1 }},
 		{"negative flush window", func(c *Config) { c.BatchFlushWindow = -time.Millisecond }},
 		{"flush window above 1s", func(c *Config) { c.BatchFlushWindow = time.Second + time.Millisecond }},
+		{"negative auto backfill lag", func(c *Config) { c.AutoBackfillLagThreshold = -time.Millisecond }},
 		{"negative worker count", func(c *Config) { c.WorkerCount = -1 }},
 		{"worker count above 1024", func(c *Config) { c.WorkerCount = maxWorkerCount + 1 }},
 	} {

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/observability"
+	"github.com/quanlaihe/hvac-web/modules/telemetry/pkg/telemetry"
 )
 
 type stubPresenceSweeper struct {
@@ -235,5 +236,171 @@ func TestShutdownTelemetryWorkerBoundedWorkerWait(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), `"TELEMETRY_WORKER_SHUTDOWN_TIMEOUT"`) {
 		t.Fatalf("expected timeout warning log, got: %s", logs.String())
+	}
+}
+
+func TestShutdownTelemetryWorkerDrainRelaysAndAnalyticsOrder(t *testing.T) {
+	obsRuntime := observability.NewRuntime(observability.RuntimeConfig{
+		Service: "telemetry-runtime-4phase-test", QueueSize: 4, ExportTimeout: 100 * time.Millisecond,
+	})
+	obsRuntime.MarkReady()
+	logger := observability.NewJSONLogger(&bytes.Buffer{}, slog.LevelInfo)
+
+	var eventsMu sync.Mutex
+	var events []string
+	record := func(ev string) {
+		eventsMu.Lock()
+		events = append(events, ev)
+		eventsMu.Unlock()
+	}
+
+	var workersWG, analyticsWG sync.WaitGroup
+	workerCtx, workerCancel := context.WithCancel(context.Background())
+	analyticsCtx, analyticsCancel := context.WithCancel(context.Background())
+
+	workerStarted := make(chan struct{})
+	runSupervised(workerCtx, &workersWG, obsRuntime, logger, "telemetry.poll", func() {
+		close(workerStarted)
+		<-workerCtx.Done()
+		record("poll_stopped")
+	})
+	analyticsStarted := make(chan struct{})
+	runSupervised(analyticsCtx, &analyticsWG, obsRuntime, logger, "telemetry.analytics", func() {
+		close(analyticsStarted)
+		<-analyticsCtx.Done()
+		record("analytics_stopped")
+	})
+	<-workerStarted
+	<-analyticsStarted
+
+	shutdownTelemetryWorker(telemetryWorkerShutdown{
+		Observability: obsRuntime,
+		Logger:        logger,
+		CancelWorkers: workerCancel,
+		WorkersWG:     &workersWG,
+		DrainRelays: func(drainCtx context.Context) {
+			if drainCtx.Err() != nil {
+				t.Error("expected active drainCtx")
+			}
+			if _, hasDeadline := drainCtx.Deadline(); !hasDeadline {
+				t.Error("expected bounded deadline on drainCtx")
+			}
+			if analyticsCtx.Err() != nil {
+				t.Error("analytics projector cancelled before relay drain completed")
+			}
+			record("drain_relays")
+		},
+		CancelAnalytics:  analyticsCancel,
+		AnalyticsWG:      &analyticsWG,
+		WorkerTimeout:    time.Second,
+		DrainTimeout:     time.Second,
+		TelemetryTimeout: time.Second,
+		CloseHistory:     func() { record("close_history") },
+		CloseStore:       func() { record("close_store") },
+	})
+
+	eventsMu.Lock()
+	got := slices.Clone(events)
+	eventsMu.Unlock()
+	want := []string{"poll_stopped", "drain_relays", "analytics_stopped", "close_history", "close_store"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("shutdown event order=%v, want %v", got, want)
+	}
+}
+
+type stubBatchDrainer struct {
+	name   string
+	record func(string)
+	err    error
+}
+
+func (s *stubBatchDrainer) RelayOnce(ctx context.Context, limit int) (int, error) {
+	if ctx.Err() != nil || limit != 64 {
+		return 0, errors.New("unexpected drain arguments")
+	}
+	s.record(s.name)
+	return 1, s.err
+}
+
+type stubHistoryDrainer struct {
+	record    func(string)
+	remaining int
+	err       error
+}
+
+func (s *stubHistoryDrainer) RelayOnce(ctx context.Context) (int, error) {
+	if ctx.Err() != nil {
+		return 0, errors.New("unexpected drain context")
+	}
+	s.record("history")
+	if s.err != nil {
+		return 0, s.err
+	}
+	if s.remaining > 0 {
+		s.remaining--
+		return 1, nil
+	}
+	return 0, nil
+}
+
+func TestDrainTelemetryRelaysResilientAndOrdered(t *testing.T) {
+	var called []string
+	var logs bytes.Buffer
+	logger := observability.NewJSONLogger(&logs, slog.LevelInfo)
+	record := func(name string) { called = append(called, name) }
+
+	drainTelemetryRelays(t.Context(), telemetryRelayDrainTargets{
+		LatestCache: &stubBatchDrainer{name: "latest_cache", record: record, err: errors.New("redis glitch")},
+		Realtime:    &stubBatchDrainer{name: "realtime", record: record},
+		Alarm:       &stubBatchDrainer{name: "alarm", record: record},
+		History:     &stubHistoryDrainer{record: record, remaining: 1},
+	}, logger)
+
+	want := []string{"latest_cache", "realtime", "alarm", "history", "history"}
+	if !slices.Equal(called, want) {
+		t.Fatalf("drain called=%v, want %v", called, want)
+	}
+	if !strings.Contains(logs.String(), `"TELEMETRY_LATEST_CACHE_DRAIN_FAILED"`) {
+		t.Fatalf("expected drain failure warning in logs: %s", logs.String())
+	}
+}
+
+type stubClickHouseRetentionExecutor struct {
+	calls atomic.Int32
+	onRun func()
+}
+
+func (s *stubClickHouseRetentionExecutor) Prune(ctx context.Context, _ time.Time) (telemetry.ClickHouseRetentionResult, error) {
+	if _, ok := ctx.Deadline(); !ok {
+		return telemetry.ClickHouseRetentionResult{}, errors.New("missing prune timeout")
+	}
+	s.calls.Add(1)
+	if s.onRun != nil {
+		s.onRun()
+	}
+	return telemetry.ClickHouseRetentionResult{SubmittedTables: []string{"telemetry_history.observations"}}, nil
+}
+
+func TestRunClickHouseRetentionAndLegalHolds(t *testing.T) {
+	holds, err := parseClickHouseLegalHolds(" 018f2d00-0000-7000-8000-000000000001 , 018f2d00-0000-7000-8000-000000000002:018f2e00-1000-7000-8000-000000000009 ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(holds) != 2 || holds[0].SiteID != "" || holds[1].SiteID != "018f2e00-1000-7000-8000-000000000009" {
+		t.Fatalf("unexpected parsed legal holds: %#v", holds)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var logs bytes.Buffer
+	logger := observability.NewJSONLogger(&logs, slog.LevelInfo)
+	exec := &stubClickHouseRetentionExecutor{onRun: cancel}
+	runClickHouseRetention(ctx, exec, time.Minute, logger)
+
+	if exec.calls.Load() != 1 {
+		t.Fatalf("calls=%d, want 1", exec.calls.Load())
+	}
+	if !strings.Contains(logs.String(), `"telemetry_clickhouse_retention_submitted"`) {
+		t.Fatalf("expected retention submission log, got %s", logs.String())
 	}
 }

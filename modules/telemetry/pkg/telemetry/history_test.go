@@ -3,6 +3,9 @@ package telemetry
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -83,6 +86,10 @@ type historyRepositoryStub struct {
 	claimErr         error
 	publishedLeaseID string
 	publishedAt      time.Time
+	publishedEvents  []string
+	deadEvents       []string
+	deadLetterCode   string
+	deadLetteredAt   time.Time
 	failedLeaseID    string
 	retryAt          time.Time
 	errorCode        string
@@ -143,6 +150,21 @@ func (repository *historyRepositoryStub) MarkHistoryBatchPublished(_ context.Con
 	return nil
 }
 
+func (repository *historyRepositoryStub) MarkHistoryEventsPublished(_ context.Context, leaseID string, eventIDs []string, publishedAt time.Time) error {
+	repository.publishedLeaseID = leaseID
+	repository.publishedAt = publishedAt
+	repository.publishedEvents = append(repository.publishedEvents, eventIDs...)
+	return nil
+}
+
+func (repository *historyRepositoryStub) DeadLetterHistoryEvents(_ context.Context, leaseID string, eventIDs []string, errorCode string, deadLetteredAt time.Time) error {
+	repository.failedLeaseID = leaseID
+	repository.deadEvents = append(repository.deadEvents, eventIDs...)
+	repository.deadLetterCode = errorCode
+	repository.deadLetteredAt = deadLetteredAt
+	return nil
+}
+
 func (repository *historyRepositoryStub) RetryHistoryBatch(_ context.Context, leaseID string, retryAt time.Time, errorCode string) error {
 	repository.failedLeaseID = leaseID
 	repository.retryAt = retryAt
@@ -158,4 +180,256 @@ type historySinkStub struct {
 func (sink *historySinkStub) InsertObservations(_ context.Context, _ uint64, observations []HistoryObservation) error {
 	sink.inserted = append([]HistoryObservation(nil), observations...)
 	return sink.err
+}
+
+type selectiveHistorySink struct {
+	fn func([]HistoryObservation) error
+}
+
+func (sink *selectiveHistorySink) InsertObservations(_ context.Context, _ uint64, observations []HistoryObservation) error {
+	return sink.fn(observations)
+}
+
+func TestHistoryRelayBinarySplitsPermanentBatchAndDeadLettersPoisonPill(t *testing.T) {
+	now := time.Date(2026, 7, 29, 8, 0, 0, 0, time.UTC)
+	obs := []HistoryObservation{
+		{ObservationID: "018f2e00-9000-7000-8000-000000000001"},
+		{ObservationID: "018f2e00-9000-7000-8000-000000000002"},
+		{ObservationID: "018f2e00-9000-7000-8000-000000000003"},
+		{ObservationID: "018f2e00-9000-7000-8000-000000000004"},
+	}
+	poisonID := obs[1].ObservationID
+	repository := &historyRepositoryStub{batch: HistoryBatch{
+		LeaseID:      "018f2e00-9000-7000-8000-000000000099",
+		Sequence:     42,
+		MaxAttempts:  1,
+		Observations: obs,
+	}}
+	sink := &selectiveHistorySink{fn: func(rows []HistoryObservation) error {
+		for _, row := range rows {
+			if row.ObservationID == poisonID {
+				return fmt.Errorf("%w: poison row %s", ErrHistoryBatchPermanent, poisonID)
+			}
+		}
+		return nil
+	}}
+	relay, err := NewHistoryRelay(HistoryRelayConfig{
+		Repository: repository, Sink: sink, BatchSize: 16, LeaseFor: 30 * time.Second, RetryAfter: 5 * time.Second,
+		Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	published, err := relay.RelayOnce(t.Context())
+	if err != nil {
+		t.Fatalf("expected poison pill split to recover cleanly, got %v", err)
+	}
+	if published != 3 {
+		t.Fatalf("published=%d, want 3", published)
+	}
+	wantPublished := []string{obs[0].ObservationID, obs[2].ObservationID, obs[3].ObservationID}
+	if !slices.Equal(repository.publishedEvents, wantPublished) {
+		t.Fatalf("publishedEvents=%v, want %v", repository.publishedEvents, wantPublished)
+	}
+	if !slices.Equal(repository.deadEvents, []string{poisonID}) || repository.deadLetterCode != historyPoisonRowFailureCode || !repository.deadLetteredAt.Equal(now) {
+		t.Fatalf("deadEvents=%v code=%q at=%s", repository.deadEvents, repository.deadLetterCode, repository.deadLetteredAt)
+	}
+}
+
+func TestHistoryRelayDeadLettersSinglePoisonRowAndTransientRemainder(t *testing.T) {
+	now := time.Date(2026, 7, 29, 8, 5, 0, 0, time.UTC)
+	singleRepo := &historyRepositoryStub{batch: HistoryBatch{
+		LeaseID:      "018f2e00-9000-7000-8000-000000000101",
+		Observations: []HistoryObservation{{ObservationID: "018f2e00-9000-7000-8000-000000000102"}},
+	}}
+	singleRelay, err := NewHistoryRelay(HistoryRelayConfig{
+		Repository: singleRepo,
+		Sink:       &historySinkStub{err: fmt.Errorf("%w: bad json", ErrHistoryBatchPermanent)},
+		BatchSize:  16, LeaseFor: 30 * time.Second, RetryAfter: 5 * time.Second,
+		Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	published, err := singleRelay.RelayOnce(t.Context())
+	if err != nil || published != 0 {
+		t.Fatalf("single poison row published=%d err=%v", published, err)
+	}
+	if !slices.Equal(singleRepo.deadEvents, []string{"018f2e00-9000-7000-8000-000000000102"}) {
+		t.Fatalf("single poison deadEvents=%v", singleRepo.deadEvents)
+	}
+
+	// Partial transient failure during split must publish confirmed left half and retry remaining right half.
+	obs := []HistoryObservation{
+		{ObservationID: "018f2e00-9000-7000-8000-000000000201"},
+		{ObservationID: "018f2e00-9000-7000-8000-000000000202"},
+		{ObservationID: "018f2e00-9000-7000-8000-000000000203"},
+		{ObservationID: "018f2e00-9000-7000-8000-000000000204"},
+	}
+	splitRepo := &historyRepositoryStub{batch: HistoryBatch{
+		LeaseID: "018f2e00-9000-7000-8000-000000000299", MaxAttempts: 2, Observations: obs,
+	}}
+	call := 0
+	splitRelay, err := NewHistoryRelay(HistoryRelayConfig{
+		Repository: splitRepo,
+		Sink: &selectiveHistorySink{fn: func(rows []HistoryObservation) error {
+			call++
+			switch call {
+			case 1:
+				return fmt.Errorf("%w: initial poison", ErrHistoryBatchPermanent)
+			case 2:
+				return nil
+			default:
+				return errors.New("503 ClickHouse restarted")
+			}
+		}},
+		BatchSize: 16, LeaseFor: 30 * time.Second, RetryAfter: 5 * time.Second,
+		Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	published, err = splitRelay.RelayOnce(t.Context())
+	if err == nil || published != 2 {
+		t.Fatalf("partial transient split published=%d err=%v", published, err)
+	}
+	if !slices.Equal(splitRepo.publishedEvents, []string{obs[0].ObservationID, obs[1].ObservationID}) {
+		t.Fatalf("left half not persisted: %v", splitRepo.publishedEvents)
+	}
+	if len(splitRepo.deadEvents) != 0 || splitRepo.errorCode != historyInsertFailureCode {
+		t.Fatalf("transient right half mishandled: dead=%v code=%q", splitRepo.deadEvents, splitRepo.errorCode)
+	}
+}
+
+func TestHistoryRelayDeadLettersExhaustedBatchAtMaxAttempts(t *testing.T) {
+	now := time.Date(2026, 7, 29, 8, 10, 0, 0, time.UTC)
+	obs := []HistoryObservation{
+		{ObservationID: "018f2e00-9000-7000-8000-000000000301"},
+		{ObservationID: "018f2e00-9000-7000-8000-000000000302"},
+	}
+	repo := &historyRepositoryStub{batch: HistoryBatch{
+		LeaseID:      "018f2e00-9000-7000-8000-000000000399",
+		MaxAttempts:  16,
+		Observations: obs,
+	}}
+	relay, err := NewHistoryRelay(HistoryRelayConfig{
+		Repository: repo,
+		Sink:       &historySinkStub{err: errors.New("ClickHouse history insert returned 500")},
+		BatchSize:  16, LeaseFor: 30 * time.Second, RetryAfter: 5 * time.Second, MaxAttempts: 16,
+		Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	published, err := relay.RelayOnce(t.Context())
+	if err == nil || published != 0 {
+		t.Fatalf("published=%d err=%v", published, err)
+	}
+	if !slices.Equal(repo.deadEvents, []string{obs[0].ObservationID, obs[1].ObservationID}) || repo.deadLetterCode != historyMaxAttemptsFailureCode {
+		t.Fatalf("exhausted batch not dead-lettered cleanly: dead=%v code=%q", repo.deadEvents, repo.deadLetterCode)
+	}
+}
+
+func TestValidateClaimedHistoryRow(t *testing.T) {
+	validObs := HistoryObservation{
+		ObservationID:   "018f2e00-9000-7000-8000-000000000401",
+		SourceID:        "source-a",
+		SourceEventID:   "018f2e00-9000-7000-8000-000000000402",
+		SourcePartition: "p0",
+		SourcePath:      "MQTT",
+		TelemetryKey:    "zone.temperature",
+		SampledAt:       time.Date(2026, 7, 29, 8, 0, 0, 0, time.UTC),
+		ReceivedAt:      time.Date(2026, 7, 29, 8, 0, 1, 0, time.UTC),
+		Quality:         "GOOD",
+		QualityReasons:  []string{},
+		PayloadSHA256:   strings.Repeat("a", 64),
+	}
+	encoded, _, err := encodeHistoryObservation(validObs)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, size, code := validateClaimedHistoryRow(validObs.ObservationID, encoded)
+	if code != "" || size != len(encoded)+1 || got.ObservationID != validObs.ObservationID {
+		t.Fatalf("valid row rejected: code=%q size=%d", code, size)
+	}
+
+	negZeroPayload := strings.Replace(string(encoded), `"source_offset":0`, `"source_offset":0`, 1)
+	negZeroObs := validObs
+	zero := 0.0
+	negZeroObs.ValueNumber = &zero
+	negZeroEncoded, _, err := encodeHistoryObservation(negZeroObs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, code := validateClaimedHistoryRow(negZeroObs.ObservationID, []byte(negZeroPayload[:0]+strings.Replace(string(negZeroEncoded), `"value_number":0`, `"value_number":-0.0`, 1))); code != "" {
+		t.Fatalf("IEEE-754 -0.0 normalized JSONB row failed validation: code=%q", code)
+	}
+
+	if _, _, code := validateClaimedHistoryRow(validObs.ObservationID, []byte(`{invalid`)); code != historyPayloadInvalidCode {
+		t.Fatalf("corrupt JSON code=%q, want %q", code, historyPayloadInvalidCode)
+	}
+	if _, _, code := validateClaimedHistoryRow("018f2e00-9000-7000-8000-000000000499", encoded); code != historyPayloadInvalidCode {
+		t.Fatalf("mismatched observation ID code=%q, want %q", code, historyPayloadInvalidCode)
+	}
+
+	invalidScopeObs := validObs
+	invalidScopeObs.AcceptanceStatus = string(ObservationAccepted)
+	invalidScopePayload, _, err := encodeHistoryObservation(invalidScopeObs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, code := validateClaimedHistoryRow(invalidScopeObs.ObservationID, invalidScopePayload); code != historyPayloadInvalidCode {
+		t.Fatalf("invalid accepted scope code=%q, want %q", code, historyPayloadInvalidCode)
+	}
+
+	oversized := validObs
+	oversized.ValueString = stringPointer(strings.Repeat("z", maxHistoryBatchBytes))
+	oversizedPayload, _, err := encodeHistoryObservation(oversized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, code := validateClaimedHistoryRow(oversized.ObservationID, oversizedPayload); code != historyRowTooLargeCode {
+		t.Fatalf("oversized row code=%q, want %q", code, historyRowTooLargeCode)
+	}
+}
+
+func TestHistoryRelaySettlesLeaseWithUncancelledContextWhenCancelledDuringInsert(t *testing.T) {
+	now := time.Date(2026, 7, 29, 8, 15, 0, 0, time.UTC)
+	obs := []HistoryObservation{{ObservationID: "018f2e00-9000-7000-8000-000000000501"}}
+	ctx, cancel := context.WithCancel(t.Context())
+	repo := &contextCheckingHistoryRepo{batch: HistoryBatch{
+		LeaseID: "018f2e00-9000-7000-8000-000000000599", MaxAttempts: 1, Observations: obs,
+	}}
+	sink := &selectiveHistorySink{fn: func(_ []HistoryObservation) error {
+		cancel()
+		return context.Canceled
+	}}
+	relay, err := NewHistoryRelay(HistoryRelayConfig{
+		Repository: repo, Sink: sink, BatchSize: 16, LeaseFor: 30 * time.Second, RetryAfter: 5 * time.Second, MaxAttempts: 1,
+		Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := relay.RelayOnce(ctx); err == nil {
+		t.Fatal("expected RelayOnce error on cancelled sink")
+	}
+	if !repo.retrySawActiveCtx || !repo.retryAt.Equal(now) {
+		t.Fatalf("expected immediate retry with active settleCtx at %s, got activeCtx=%t retryAt=%s", now, repo.retrySawActiveCtx, repo.retryAt)
+	}
+	if len(repo.deadEvents) != 0 {
+		t.Fatalf("cancelled shutdown insert must not dead-letter batch, dead=%v", repo.deadEvents)
+	}
+}
+
+type contextCheckingHistoryRepo struct {
+	historyRepositoryStub
+	retrySawActiveCtx bool
+}
+
+func (r *contextCheckingHistoryRepo) RetryHistoryBatch(ctx context.Context, leaseID string, retryAt time.Time, errorCode string) error {
+	r.retrySawActiveCtx = ctx.Err() == nil
+	return r.historyRepositoryStub.RetryHistoryBatch(ctx, leaseID, retryAt, errorCode)
 }

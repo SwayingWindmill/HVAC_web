@@ -7,6 +7,13 @@
 
 ### 2026-11-18
 
+#### 修复与加固
+
+- 完成实时遥测管道与冷热分级存储 P0 安全边界与稳定性加固（`modules/connectivity`、`modules/telemetry`、`modules/maintenance`、`cmd/connectivity`、`cmd/telemetry-worker`、`cmd/maintenance-worker`、`deploy/platform/phase1/compose.yaml` 与迁移 `telemetry-history-dead-letter-and-retention.sql`、`017-retention-cleanup-grants.sql`）：
+  - **断网补传隔离与快照防回滚**：接入层识别 `replay: true` 或超过滞后阈值（默认 `10m`）的历史报文并固化入队接收时刻，为补传报文分配基于消息的确定性 `mqtt-replay:` 分区（避免重启重置或重试串分），不覆写最新状态快照；`EvaluateHistoricalObservation` 兼顾边缘续传路径仅归档不触发实时推送、在线态更新或阈值告警；Redis 热缓存 Lua 脚本在版本校验与点位配置集合比对下通过 `sampled_ms` 阻止陈旧样本回滚最新工况，并设置 7 天 TTL。
+  - **背压保护、毒丸隔离与停机排空**：`SharedSession` 透传 `ReceiveMaximum` 接收上限且单网关限流不误断共享连接；入库 `400` 失败按已提交分片跳过重发并逐条隔离，`HistoryRelay` 使用独立超时上下文结算租约、遇到 ClickHouse 永久错误执行二分拆分并把毒丸与失效/超大记录转入 `DEAD` 状态；调整默认攒批窗口为 `100ms` 并在停机时保护未耗尽溢写目录，优先停收再多轮排空中继并延长 `stop_grace_period` 至 `45s`。
+  - **双库过期清理与生命周期审计**：PostgreSQL 补齐死信发布/历史发件箱、MQTT 运行证据、解析隔离、恢复游标、订阅与超过 7 天的 `mqtt-replay:%` 源位点清理策略及部分索引；ClickHouse 支持按环境变量开启分表滚动清理并跳过依法保全租户/站点，且在 `maintenance-worker` 新增生命周期策略与保全冲突定期审计任务。
+
 #### 新增与架构演进
 
 - 完成 Go 端 AI 自动调控物理安全护栏与推理韧性升级 P0（`libs/commandmodel`、`libs/intelligencemodel`、`modules/telemetry`、`modules/registry`、`modules/iam`、`modules/command`、`cmd/energy-api`、`services/optimization-service`、`contracts/`、`apps/hvac-web` 与迁移 `optimization-safety-guardrails.sql`）：

@@ -21,7 +21,10 @@ import (
 
 const maxTelemetryRetryAfter = 5 * time.Minute
 
-var ErrTelemetryRateLimited = errors.New("telemetry runtime rate limited")
+var (
+	ErrTelemetryRateLimited    = errors.New("telemetry runtime rate limited")
+	ErrTelemetryRequestInvalid = errors.New("telemetry runtime request invalid")
+)
 
 type RateLimitedError struct {
 	Label      string
@@ -40,6 +43,25 @@ func (err *RateLimitedError) Error() string {
 
 func (err *RateLimitedError) Unwrap() error {
 	return ErrTelemetryRateLimited
+}
+
+type RequestInvalidError struct {
+	Label      string
+	StatusCode int
+}
+
+func (err *RequestInvalidError) Error() string {
+	if err == nil {
+		return ErrTelemetryRequestInvalid.Error()
+	}
+	if err.StatusCode > 0 {
+		return fmt.Sprintf("%s returned %d", err.Label, err.StatusCode)
+	}
+	return ErrTelemetryRequestInvalid.Error()
+}
+
+func (err *RequestInvalidError) Unwrap() error {
+	return ErrTelemetryRequestInvalid
 }
 
 const (
@@ -68,6 +90,7 @@ type Observation struct {
 	Unit               *string         `json:"unit"`
 	WireQuality        uint8           `json:"wireQuality"`
 	SampledAt          string          `json:"sampledAt"`
+	EdgeReplay         bool            `json:"edgeReplay,omitempty"`
 	SourcePosition     SourcePosition  `json:"sourcePosition"`
 	TraceID            string          `json:"traceId,omitempty"`
 }
@@ -304,6 +327,12 @@ func (client *TelemetryRuntimeClient) postJSON(ctx context.Context, path, label 
 		return nil, &RateLimitedError{
 			Label:      label,
 			RetryAfter: parseRetryAfter(response.Header.Get("Retry-After"), time.Now()),
+		}
+	}
+	if response.StatusCode == http.StatusBadRequest {
+		return nil, &RequestInvalidError{
+			Label:      label,
+			StatusCode: response.StatusCode,
 		}
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {

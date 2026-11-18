@@ -111,6 +111,7 @@ func main() {
 		adapter.WithProcessorTracer(telemetry.Tracer),
 		adapter.WithProcessorMetrics(telemetry.Metrics),
 		adapter.WithGatewayRateLimit(rateLimitMPS, rateLimitBurst),
+		adapter.WithAutoBackfillLagThreshold(config.AutoBackfillLagThreshold),
 		adapter.WithProcessorPacketHook(tap.Record),
 		adapter.WithGatewayPresenceHook(presence.SetOnline),
 		adapter.WithGatewayConnectHook(func(_ context.Context, gatewayID string) {
@@ -258,13 +259,14 @@ func uplinkConfig() adapter.Config {
 			CAFile:  ca, CertFile: identityCert, KeyFile: identityKey,
 			ServerName: envOr("CONNECTIVITY_TELEMETRY_SERVER_NAME", "telemetry-runtime-service"),
 		},
-		QueueCapacity:       queueCapacity(),
-		OverflowMaxMessages: overflowMaxMessages(),
-		OverflowMaxBytes:    overflowMaxBytes(),
-		OverflowDir:         strings.TrimSpace(os.Getenv("CONNECTIVITY_OVERFLOW_DIR")),
-		BatchMaxMessages:    batchMaxMessages(),
-		BatchFlushWindow:    batchFlushWindow(),
-		WorkerCount:         uplinkWorkers(),
+		QueueCapacity:            queueCapacity(),
+		OverflowMaxMessages:      overflowMaxMessages(),
+		OverflowMaxBytes:         overflowMaxBytes(),
+		OverflowDir:              strings.TrimSpace(os.Getenv("CONNECTIVITY_OVERFLOW_DIR")),
+		BatchMaxMessages:         batchMaxMessages(),
+		BatchFlushWindow:         batchFlushWindow(),
+		AutoBackfillLagThreshold: autoBackfillLagThreshold(),
+		WorkerCount:              uplinkWorkers(),
 	}
 }
 
@@ -323,11 +325,19 @@ func batchMaxMessages() int {
 }
 
 func batchFlushWindow() time.Duration {
-	window, err := time.ParseDuration(envOr("CONNECTIVITY_BATCH_WINDOW", "0s"))
+	window, err := time.ParseDuration(envOr("CONNECTIVITY_BATCH_WINDOW", adapter.DefaultBatchFlushWindow.String()))
 	if err != nil {
 		return -1
 	}
 	return window
+}
+
+func autoBackfillLagThreshold() time.Duration {
+	threshold, err := time.ParseDuration(envOr("CONNECTIVITY_AUTO_BACKFILL_LAG", adapter.DefaultAutoBackfillLagThreshold.String()))
+	if err != nil {
+		return -1
+	}
+	return threshold
 }
 
 func uplinkWorkers() int {
@@ -564,6 +574,7 @@ func buildSharedUplinkSessionConfig(cfg adapter.MQTTConfig, logger *slog.Logger,
 			ServerName:     cfg.ServerName,
 		},
 		KeepAlive:                     30,
+		ReceiveMaximum:                cfg.EffectiveReceiveMaximum(),
 		CleanStartOnInitialConnection: false,
 		SessionExpiryInterval:         24 * 60 * 60,
 		DialTimeout:                   10 * time.Second,

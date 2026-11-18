@@ -348,8 +348,50 @@ func TestTelemetryRuntimeClientMaps429AndParsesRetryAfter(t *testing.T) {
 	statusCode = http.StatusServiceUnavailable
 	retryAfterHeader = "3"
 	_, err = client.AcceptObservationBatch(context.Background(), obs)
-	if errors.Is(err, ErrTelemetryRateLimited) || err == nil {
-		t.Fatalf("503 should not map to ErrTelemetryRateLimited, got %v", err)
+	if errors.Is(err, ErrTelemetryRateLimited) || errors.Is(err, ErrTelemetryRequestInvalid) || err == nil {
+		t.Fatalf("503 should not map to ErrTelemetryRateLimited or ErrTelemetryRequestInvalid, got %v", err)
+	}
+
+	statusCode = http.StatusBadRequest
+	retryAfterHeader = ""
+	_, err = client.AcceptObservationBatch(context.Background(), obs)
+	if !errors.Is(err, ErrTelemetryRequestInvalid) || errors.Is(err, ErrTelemetryRateLimited) {
+		t.Fatalf("400 err=%v, want ErrTelemetryRequestInvalid and not ErrTelemetryRateLimited", err)
+	}
+	var reqInvalid *RequestInvalidError
+	if !errors.As(err, &reqInvalid) || reqInvalid.StatusCode != http.StatusBadRequest || reqInvalid.Label != "S2 observation batch" {
+		t.Fatalf("reqInvalid=%#v, want StatusCode=400 Label='S2 observation batch'", reqInvalid)
+	}
+}
+
+func TestObservationEdgeReplayJSONSerialization(t *testing.T) {
+	liveObs := Observation{
+		SourceID:           testGatewayA,
+		SourcePath:         "PUSH",
+		ExternalEntityType: "DEVICE",
+		ExternalID:         "METER-01",
+		TelemetryKey:       "active_power",
+		Value:              10.5,
+		ValueType:          "NUMBER",
+		SampledAt:          "2026-11-18T10:00:00Z",
+		SourcePosition:     SourcePosition{Partition: "mqtt:" + testGatewayA + ":METER-01:active_power", Offset: 1, EventID: testMessageID},
+	}
+	liveJSON, err := json.Marshal(liveObs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(liveJSON), "edgeReplay") {
+		t.Fatalf("expected edgeReplay omitted when false, got %s", liveJSON)
+	}
+
+	replayObs := liveObs
+	replayObs.EdgeReplay = true
+	replayJSON, err := json.Marshal(replayObs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(replayJSON), `"edgeReplay":true`) {
+		t.Fatalf("expected edgeReplay=true in JSON, got %s", replayJSON)
 	}
 }
 
