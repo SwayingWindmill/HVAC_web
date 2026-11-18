@@ -135,7 +135,20 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 	preparer.WithPointHealth(telemetryHealthClient)
-	service, err := optimization.NewDefaultService(publication, evaluations, time.Now)
+	allowedSolverHosts := optimization.ParseAllowedSolverHosts(os.Getenv("OPTIMIZATION_ALLOWED_SOLVER_HOSTS"))
+	solverRouter := optimization.NewRoutingSolverAdapter(optimization.RoutingSolverConfig{
+		Resolver:     publication,
+		Baseline:     optimization.HVACRecommendationSolver{},
+		COPModel:     &optimization.COPModelSolver{History: inputs, Staging: inputs, StagingCatalog: publication},
+		AllowedHosts: allowedSolverHosts,
+		Timeout:      intelligencemodel.DefaultInferenceCallTimeout,
+		Breaker:      intelligencemodel.NewCircuitBreaker(intelligencemodel.CircuitBreakerConfig{}),
+		Bulkhead:     intelligencemodel.NewBulkhead(intelligencemodel.DefaultBulkheadMaxConcurrent),
+		Logf: func(format string, _ ...any) {
+			logger.Warn("optimization_solver_router_notice", "event", strings.SplitN(format, ":", 2)[0])
+		},
+	})
+	service, err := optimization.NewService(solverRouter, publication, evaluations, time.Now)
 	if err != nil {
 		return err
 	}

@@ -145,6 +145,9 @@ type AutoControlLiveObservation struct {
 	RunningChillers  int
 	ChillersHealthy  bool
 	ChillerPowerTrip *ChillerPowerViolation
+	OutdoorWetBulbC  *float64
+	CoolingLoadKW    *float64
+	ChillerPowerKW   *float64
 }
 
 type AutoControlDispatchInput struct {
@@ -243,15 +246,17 @@ type MonitorPassSummary struct {
 }
 
 type AutoController struct {
-	store         AutoControlStore
-	telemetry     AutoControlTelemetryReader
-	dispatcher    WorkloadCommandDispatcher
-	pointHealth   TelemetryPointHealthChecker
-	controlEvents ControlEventPublisher
-	clock         Clock
-	logf          func(string, ...any)
-	workerID      string
-	leaseDuration time.Duration
+	store          AutoControlStore
+	telemetry      AutoControlTelemetryReader
+	dispatcher     WorkloadCommandDispatcher
+	pointHealth    TelemetryPointHealthChecker
+	controlEvents  ControlEventPublisher
+	flywheelStore  GovernanceFlywheelStore
+	solverResolver ActiveSolverResolver
+	clock          Clock
+	logf           func(string, ...any)
+	workerID       string
+	leaseDuration  time.Duration
 }
 
 func (controller *AutoController) WithPointHealth(checker TelemetryPointHealthChecker) *AutoController {
@@ -262,6 +267,42 @@ func (controller *AutoController) WithPointHealth(checker TelemetryPointHealthCh
 func (controller *AutoController) WithControlEvents(publisher ControlEventPublisher) *AutoController {
 	controller.controlEvents = publisher
 	return controller
+}
+
+func (controller *AutoController) WithFlywheelStore(store GovernanceFlywheelStore) *AutoController {
+	controller.flywheelStore = store
+	return controller
+}
+
+func (controller *AutoController) WithSolverResolver(resolver ActiveSolverResolver) *AutoController {
+	controller.solverResolver = resolver
+	return controller
+}
+
+func (controller *AutoController) effectiveFlywheelStore() GovernanceFlywheelStore {
+	if controller == nil {
+		return nil
+	}
+	if controller.flywheelStore != nil {
+		return controller.flywheelStore
+	}
+	if store, ok := controller.store.(GovernanceFlywheelStore); ok {
+		return store
+	}
+	return nil
+}
+
+func (controller *AutoController) effectiveSolverResolver() ActiveSolverResolver {
+	if controller == nil {
+		return nil
+	}
+	if controller.solverResolver != nil {
+		return controller.solverResolver
+	}
+	if resolver, ok := controller.store.(ActiveSolverResolver); ok {
+		return resolver
+	}
+	return nil
 }
 
 func (controller *AutoController) WithWorkerID(workerID string) *AutoController {
@@ -320,7 +361,7 @@ func NewAutoController(
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
-	return &AutoController{
+	ctrl := &AutoController{
 		store:         store,
 		telemetry:     telemetry,
 		dispatcher:    dispatcher,
@@ -328,7 +369,14 @@ func NewAutoController(
 		logf:          logf,
 		workerID:      defaultAutoControlWorkerID(),
 		leaseDuration: DefaultExecutionMonitorClaimLease,
-	}, nil
+	}
+	if fw, ok := store.(GovernanceFlywheelStore); ok {
+		ctrl.flywheelStore = fw
+	}
+	if sr, ok := store.(ActiveSolverResolver); ok {
+		ctrl.solverResolver = sr
+	}
+	return ctrl, nil
 }
 
 // TryDispatch evaluates Layer 3 and Layer 4 preconditions after an optimization recommendation is
@@ -346,7 +394,14 @@ func (controller *AutoController) TryDispatch(ctx context.Context, recommendatio
 	if err != nil {
 		return AutoDispatchOutcome{}, err
 	}
+	fwState := dispatchFlywheelState{
+		recommendation: recommendation,
+		decisionID:     decisionID,
+		traceID:        traceID,
+		now:            now,
+	}
 	skipOutcome := func(mode, reason string) AutoDispatchOutcome {
+		controller.recordDispatchFlywheel(ctx, &fwState, mode, reason, false, false)
 		return AutoDispatchOutcome{
 			ExecutionMode: mode,
 			SkipReason:    reason,
@@ -356,7 +411,11 @@ func (controller *AutoController) TryDispatch(ctx context.Context, recommendatio
 	}
 
 	if recommendation.CommandIntentID != "" {
-		return skipOutcome("", "ALREADY_DISPATCHED"), nil
+		return AutoDispatchOutcome{
+			SkipReason: "ALREADY_DISPATCHED",
+			DecisionID: decisionID,
+			TraceID:    traceID,
+		}, nil
 	}
 	if recommendation.Approval == intelligencemodel.RecommendationRejected {
 		return skipOutcome("", "RECOMMENDATION_REJECTED"), nil
@@ -369,6 +428,7 @@ func (controller *AutoController) TryDispatch(ctx context.Context, recommendatio
 	if lease == nil || lease.Status != "ACTIVE" || !lease.ExpiresAt.After(now) {
 		return skipOutcome("", "MANUAL_CONFIRM"), nil
 	}
+	fwState.lease = lease
 	executionMode := normalizeExecutionMode(lease.ExecutionMode)
 
 	validUntil := recommendation.EffectiveValidUntil()
@@ -388,6 +448,7 @@ func (controller *AutoController) TryDispatch(ctx context.Context, recommendatio
 	if !finite(baselineSupplyC) || baselineSupplyC == 0 {
 		return skipOutcome(executionMode, "BASELINE_SUPPLY_TEMP_MISSING"), nil
 	}
+	fwState.baselineSupplyC = float64Ptr(baselineSupplyC)
 	restoreSupplyC := baselineSupplyC
 	if recommendation.RollbackPlan.RestoreSupplyTempC != nil && finite(*recommendation.RollbackPlan.RestoreSupplyTempC) {
 		restoreSupplyC = *recommendation.RollbackPlan.RestoreSupplyTempC
@@ -397,6 +458,8 @@ func (controller *AutoController) TryDispatch(ctx context.Context, recommendatio
 	if err != nil {
 		return AutoDispatchOutcome{ExecutionMode: executionMode, DecisionID: decisionID, TraceID: traceID}, err
 	}
+	siteCtxCopy := siteCtx
+	fwState.siteCtx = &siteCtxCopy
 	if executionMode == ExecutionModeClosedLoop {
 		if siteCtx.HasActiveMonitor {
 			return skipOutcome(executionMode, "ACTIVE_MONITOR_EXISTS"), nil
@@ -428,11 +491,11 @@ func (controller *AutoController) TryDispatch(ctx context.Context, recommendatio
 		}
 		return skipOutcome(executionMode, "TELEMETRY_UNHEALTHY"), nil
 	}
+	liveState := extractAutoControlLiveState(healthSnapshot.LivePoints, siteCtx, siteCtx.SetpointTarget.DeviceID, now)
+	fwState.liveState = &liveState
 	if !healthSnapshot.Healthy {
 		return skipOutcome(executionMode, "TELEMETRY_UNHEALTHY"), nil
 	}
-
-	liveState := extractAutoControlLiveState(healthSnapshot.LivePoints, siteCtx, siteCtx.SetpointTarget.DeviceID, now)
 
 	var currentSetpointPtr *float64
 	if liveState.Setpoint != nil && liveState.Setpoint.NumericValue != nil && finite(*liveState.Setpoint.NumericValue) {
@@ -470,6 +533,13 @@ func (controller *AutoController) TryDispatch(ctx context.Context, recommendatio
 		DeviceOffline:        liveState.DeviceOffline,
 		HydraulicInterlockOK: boolPtr(hydraulicInterlockOK),
 	})
+	guardrailCopy := guardrailResult
+	fwState.guardrail = &guardrailCopy
+	traceBytes := encodeOptimizationJSON(guardrailResult.Trace)
+	if len(traceBytes) == 0 || string(traceBytes) == "null" {
+		traceBytes = []byte("[]")
+	}
+	fwState.guardrailTrace = traceBytes
 
 	switch guardrailResult.Verdict {
 	case commandmodel.GuardrailVerdictDeadbandSkip:
@@ -521,6 +591,8 @@ func (controller *AutoController) TryDispatch(ctx context.Context, recommendatio
 		if obsErr != nil {
 			return AutoDispatchOutcome{ExecutionMode: executionMode, DecisionID: decisionID, TraceID: traceID}, obsErr
 		}
+		obsCopy := obs
+		fwState.liveObs = &obsCopy
 		if obs.ChillerPowerTrip != nil {
 			return skipOutcome(executionMode, "CHILLER_POWER_RATIO_EXCEEDED"), nil
 		}
@@ -568,11 +640,6 @@ func (controller *AutoController) TryDispatch(ctx context.Context, recommendatio
 		return skipOutcome(executionMode, "CAPABILITY_UNSUPPORTED"), nil
 	}
 
-	traceBytes := encodeOptimizationJSON(guardrailResult.Trace)
-	if len(traceBytes) == 0 || string(traceBytes) == "null" {
-		traceBytes = []byte("[]")
-	}
-
 	dispatchReg := AutomatedDispatchRegistration{
 		Recommendation:   recommendation,
 		LeaseID:          lease.ID,
@@ -601,6 +668,9 @@ func (controller *AutoController) TryDispatch(ctx context.Context, recommendatio
 		if shadowResult.SkipReason != "" {
 			return skipOutcome(ExecutionModeShadow, shadowResult.SkipReason), nil
 		}
+		fwState.monitorID = shadowResult.Monitor.ID
+		fwState.appliedSupplyC = float64Ptr(dispatchedSupplyC)
+		controller.recordDispatchFlywheel(ctx, &fwState, ExecutionModeShadow, "", false, true)
 		controller.logf("optimization shadow-mode recorded recommendation=%s site=%s monitor=%s decision=%s trace=%s targetC=%.2f",
 			recommendation.ID, recommendation.SiteID, shadowResult.Monitor.ID, decisionID, traceID, dispatchedSupplyC)
 		return AutoDispatchOutcome{
@@ -680,6 +750,8 @@ func (controller *AutoController) TryDispatch(ctx context.Context, recommendatio
 			controller.logf("monitor %s mark submit failed error: %v", monitor.ID, markErr)
 		}
 		failCancel()
+		fwState.monitorID = monitor.ID
+		controller.recordDispatchFlywheel(ctx, &fwState, executionMode, "SUBMIT_FAILED", false, false)
 		return AutoDispatchOutcome{
 			ExecutionMode: executionMode,
 			MonitorID:     monitor.ID,
@@ -699,6 +771,9 @@ func (controller *AutoController) TryDispatch(ctx context.Context, recommendatio
 			TraceID:         traceID,
 		}, err
 	}
+	fwState.monitorID = monitor.ID
+	fwState.appliedSupplyC = float64Ptr(dispatchedSupplyC)
+	controller.recordDispatchFlywheel(ctx, &fwState, ExecutionModeClosedLoop, "", true, false)
 	controller.logf("optimization auto-control dispatched recommendation=%s site=%s command=%s monitor=%s decision=%s trace=%s targetC=%.2f",
 		recommendation.ID, recommendation.SiteID, commandIntentID, monitor.ID, decisionID, traceID, dispatchedSupplyC)
 	return AutoDispatchOutcome{
@@ -817,6 +892,7 @@ func (controller *AutoController) processClaimedMonitor(
 			}
 			return
 		}
+		controller.recordMonitorNegativeSample(ctx, monitor, siteCtx, &liveState, nil, telemetryHealthy, NegativeSampleManualOverride, manualOverrideReason, now)
 		summary.ManualOverrides++
 		return
 	}
@@ -835,6 +911,7 @@ func (controller *AutoController) processClaimedMonitor(
 	}
 
 	var chillerPowerTrip *ChillerPowerViolation
+	var liveObs *AutoControlLiveObservation
 	if telemetryHealthy && controller.telemetry != nil {
 		obs, obsErr := controller.telemetry.ReadLiveAutoControlObservation(ctx, monitor.TenantID, monitor.SiteID, siteCtx.InputMapping, siteCtx.Topology, now)
 		if obsErr != nil && ctx.Err() != nil {
@@ -842,6 +919,8 @@ func (controller *AutoController) processClaimedMonitor(
 			return
 		}
 		if obsErr == nil {
+			obsCopy := obs
+			liveObs = &obsCopy
 			chillerPowerTrip = obs.ChillerPowerTrip
 		}
 	}
@@ -860,6 +939,7 @@ func (controller *AutoController) processClaimedMonitor(
 				}
 				return
 			}
+			controller.recordMonitorNegativeSample(ctx, monitor, siteCtx, &liveState, liveObs, telemetryHealthy, NegativeSampleMonitorTripped, "telemetry_unhealthy_over_5m", now)
 			if rolledBack {
 				summary.RolledBack++
 			} else {
@@ -876,12 +956,12 @@ func (controller *AutoController) processClaimedMonitor(
 		return
 	}
 
-	liveObs := buildMonitorLiveObservation(liveState, chillerPowerTrip)
+	liveObsSummary := buildMonitorLiveObservation(liveState, chillerPowerTrip)
 	tripReason := ""
 	tripDetail := ""
 	if liveState.DeviceFaultActive {
 		tripReason = "device_fault_active"
-	} else if reason := monitorViolationReason(monitor, liveObs); reason != "" {
+	} else if reason := monitorViolationReason(monitor, liveObsSummary); reason != "" {
 		tripReason = reason
 	} else {
 		tripReason, tripDetail = checkSetpointTrackingDeviation(monitor, liveState, siteCtx, now)
@@ -895,6 +975,15 @@ func (controller *AutoController) processClaimedMonitor(
 			}
 			return
 		}
+		negReason := NegativeSampleMonitorTripped
+		negDetail := tripReason
+		if tripReason == "setpoint_tracking_deviation" {
+			negReason = NegativeSampleTrackingDeviation
+			negDetail = firstNonEmptyString(tripDetail, tripReason)
+		} else if strings.TrimSpace(tripDetail) != "" {
+			negDetail = tripReason + ": " + strings.TrimSpace(tripDetail)
+		}
+		controller.recordMonitorNegativeSample(ctx, monitor, siteCtx, &liveState, liveObs, telemetryHealthy, negReason, negDetail, now)
 		if rolledBack {
 			summary.RolledBack++
 		} else {

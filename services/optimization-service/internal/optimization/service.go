@@ -142,13 +142,16 @@ func standardVerificationPlan() intelligencemodel.RecommendationVerificationPlan
 type Clock func() time.Time
 
 type Service struct {
-	solver       SolverAdapter
-	publication  EvaluationPublicationStore
-	evaluations  EvaluationSink
-	clock        Clock
-	shadow       *shadowSolver
-	shadowReader ShadowEvaluationReader
-	staging      *StagingEvaluator
+	solver         SolverAdapter
+	publication    EvaluationPublicationStore
+	evaluations    EvaluationSink
+	clock          Clock
+	shadow         *shadowSolver
+	shadowReader   ShadowEvaluationReader
+	staging        *StagingEvaluator
+	solverResolver ActiveSolverResolver
+	flywheelStore  GovernanceFlywheelStore
+	siteVisibility SiteVisibilityChecker
 }
 
 var ErrShadowEvaluationNotFound = errors.New("optimization shadow evaluation not found")
@@ -253,6 +256,67 @@ func (service *Service) WithStaging(evaluator *StagingEvaluator) *Service {
 	return service
 }
 
+func (service *Service) WithSolver(solver SolverAdapter) *Service {
+	if solver != nil {
+		service.solver = solver
+	}
+	return service
+}
+
+func (service *Service) WithSolverResolver(resolver ActiveSolverResolver) *Service {
+	service.solverResolver = resolver
+	return service
+}
+
+func (service *Service) WithGovernanceFlywheel(store GovernanceFlywheelStore) *Service {
+	service.flywheelStore = store
+	return service
+}
+
+func (service *Service) WithSiteVisibility(checker SiteVisibilityChecker) *Service {
+	service.siteVisibility = checker
+	return service
+}
+
+func (service *Service) effectiveSolverResolver() ActiveSolverResolver {
+	if service == nil {
+		return nil
+	}
+	if service.solverResolver != nil {
+		return service.solverResolver
+	}
+	if resolver, ok := service.publication.(ActiveSolverResolver); ok {
+		return resolver
+	}
+	return nil
+}
+
+func (service *Service) effectiveFlywheelStore() GovernanceFlywheelStore {
+	if service == nil {
+		return nil
+	}
+	if service.flywheelStore != nil {
+		return service.flywheelStore
+	}
+	if flywheel, ok := service.publication.(GovernanceFlywheelStore); ok {
+		return flywheel
+	}
+	return nil
+}
+
+func (service *Service) effectiveSiteVisibilityChecker() SiteVisibilityChecker {
+	if service == nil {
+		return nil
+	}
+	if service.siteVisibility != nil {
+		return service.siteVisibility
+	}
+	if checker, ok := service.publication.(SiteVisibilityChecker); ok {
+		return checker
+	}
+	return nil
+}
+
 // ShadowSolver is a solver run beside the published one: it only records what it would have
 // recommended and never publishes a Recommendation.
 type ShadowSolver interface {
@@ -326,7 +390,17 @@ func NewService(solver SolverAdapter, publication EvaluationPublicationStore, ev
 	if clock == nil {
 		clock = time.Now
 	}
-	return &Service{solver: solver, publication: publication, evaluations: evaluations, clock: clock}, nil
+	service := &Service{solver: solver, publication: publication, evaluations: evaluations, clock: clock}
+	if resolver, ok := publication.(ActiveSolverResolver); ok {
+		service.solverResolver = resolver
+	}
+	if flywheel, ok := publication.(GovernanceFlywheelStore); ok {
+		service.flywheelStore = flywheel
+	}
+	if checker, ok := publication.(SiteVisibilityChecker); ok {
+		service.siteVisibility = checker
+	}
+	return service, nil
 }
 
 func NewDefaultService(publication EvaluationPublicationStore, evaluations EvaluationSink, clock Clock) (*Service, error) {

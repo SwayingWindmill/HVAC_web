@@ -1053,34 +1053,96 @@ func (reader *ClickHouseInputReader) ReadLiveAutoControlObservation(ctx context.
 	})
 	if snapErr != nil {
 		result.ChillersHealthy = false
-		return result, nil
-	}
-	for _, chiller := range stagingSnap.Chillers {
-		state, _ := resolveChillerRunState(chiller, atUTC, stagingPolicy)
-		running := state == "RUNNING"
-		if !running && chiller.Power != nil && chiller.Power.Quality == "GOOD" &&
-			atUTC.Sub(chiller.Power.SampledAt.UTC()) <= DefaultAutoControlMaxPointAge &&
-			chiller.Power.Value > stagingPolicy.ChillerRunningPowerKW {
-			running = true
+	} else {
+		if stagingSnap.PlantCoolingLoad != nil &&
+			strings.EqualFold(strings.TrimSpace(stagingSnap.PlantCoolingLoad.Quality), "GOOD") &&
+			atUTC.Sub(stagingSnap.PlantCoolingLoad.SampledAt.UTC()) <= DefaultAutoControlMaxPointAge &&
+			finite(stagingSnap.PlantCoolingLoad.Value) &&
+			stagingSnap.PlantCoolingLoad.Value >= 0 {
+			loadVal := stagingSnap.PlantCoolingLoad.Value
+			result.CoolingLoadKW = &loadVal
 		}
-		if !running {
-			continue
-		}
-		result.RunningChillers++
-		if chiller.RatedPowerKW > 0 {
-			if chiller.Power == nil || chiller.Power.Quality != "GOOD" || atUTC.Sub(chiller.Power.SampledAt.UTC()) > DefaultAutoControlMaxPointAge {
-				result.ChillersHealthy = false
+		chillerPowerSum := 0.0
+		hasChillerPower := false
+		for _, chiller := range stagingSnap.Chillers {
+			state, _ := resolveChillerRunState(chiller, atUTC, stagingPolicy)
+			running := state == "RUNNING"
+			if !running && chiller.Power != nil && chiller.Power.Quality == "GOOD" &&
+				atUTC.Sub(chiller.Power.SampledAt.UTC()) <= DefaultAutoControlMaxPointAge &&
+				chiller.Power.Value > stagingPolicy.ChillerRunningPowerKW {
+				running = true
+			}
+			if !running {
 				continue
 			}
-			if chiller.Power.Value > DefaultChillerPowerRatioLimit*chiller.RatedPowerKW {
-				result.ChillerPowerTrip = &ChillerPowerViolation{
-					AssetID:      chiller.AssetID,
-					AssetCode:    chiller.AssetCode,
-					PowerKW:      chiller.Power.Value,
-					RatedPowerKW: chiller.RatedPowerKW,
+			result.RunningChillers++
+			if chiller.Power != nil &&
+				strings.EqualFold(strings.TrimSpace(chiller.Power.Quality), "GOOD") &&
+				atUTC.Sub(chiller.Power.SampledAt.UTC()) <= DefaultAutoControlMaxPointAge &&
+				finite(chiller.Power.Value) &&
+				chiller.Power.Value >= 0 {
+				chillerPowerSum += chiller.Power.Value
+				hasChillerPower = true
+			}
+			if chiller.RatedPowerKW > 0 {
+				if chiller.Power == nil || chiller.Power.Quality != "GOOD" || atUTC.Sub(chiller.Power.SampledAt.UTC()) > DefaultAutoControlMaxPointAge {
+					result.ChillersHealthy = false
+					continue
+				}
+				if chiller.Power.Value > DefaultChillerPowerRatioLimit*chiller.RatedPowerKW {
+					result.ChillerPowerTrip = &ChillerPowerViolation{
+						AssetID:      chiller.AssetID,
+						AssetCode:    chiller.AssetCode,
+						PowerKW:      chiller.Power.Value,
+						RatedPowerKW: chiller.RatedPowerKW,
+					}
 				}
 			}
 		}
+		if hasChillerPower {
+			result.ChillerPowerKW = &chillerPowerSum
+		}
 	}
+	result.OutdoorWetBulbC = reader.readOptionalWetBulb(ctx, tenantID, siteID, atUTC)
 	return result, nil
+}
+
+func (reader *ClickHouseInputReader) readOptionalWetBulb(ctx context.Context, tenantID, siteID string, atUTC time.Time) *float64 {
+	if !uuidPattern.MatchString(strings.TrimSpace(tenantID)) || !uuidPattern.MatchString(strings.TrimSpace(siteID)) {
+		return nil
+	}
+	earliest := atUTC.Add(-DefaultPreparationMaxTelemetryAge)
+	sql := fmt.Sprintf(`SELECT assumeNotNull(value_number) AS value
+FROM telemetry_history.observations
+WHERE tenant_id = toUUID('%s')
+  AND site_id = toUUID('%s')
+  AND telemetry_key IN ('outdoor_wet_bulb','weather.ambient_wet_bulb_temperature','ambient_wet_bulb_temperature','cooling_tower.ambient_wet_bulb_temperature')
+  AND sampled_at >= parseDateTime64BestEffort('%s',3,'UTC')
+  AND sampled_at <= parseDateTime64BestEffort('%s',3,'UTC')
+  AND received_at <= parseDateTime64BestEffort('%s',3,'UTC')
+  AND acceptance_status IN ('ACCEPTED','OUT_OF_ORDER')
+  AND quality = 'GOOD'
+  AND value_number IS NOT NULL
+  AND isFinite(value_number)
+ORDER BY CASE telemetry_key
+  WHEN 'outdoor_wet_bulb' THEN 0
+  WHEN 'weather.ambient_wet_bulb_temperature' THEN 1
+  WHEN 'ambient_wet_bulb_temperature' THEN 2
+  ELSE 3
+END, sampled_at DESC, received_at DESC
+LIMIT 1
+FORMAT JSONEachRow`,
+		clickHouseString(tenantID), clickHouseString(siteID),
+		formatOptimizationTime(earliest), formatOptimizationTime(atUTC), formatOptimizationTime(atUTC))
+	payload, err := reader.query(ctx, sql)
+	if err != nil || len(bytes.TrimSpace(payload)) == 0 {
+		return nil
+	}
+	var row struct {
+		Value float64 `json:"value"`
+	}
+	if err := json.NewDecoder(bytes.NewReader(bytes.TrimSpace(payload))).Decode(&row); err != nil || !finite(row.Value) {
+		return nil
+	}
+	return &row.Value
 }
