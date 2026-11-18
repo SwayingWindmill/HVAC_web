@@ -103,3 +103,85 @@ func TestReadPointGuardsHourlyAndDailyStepsAgainstCrossGapJumps(t *testing.T) {
 		t.Fatalf("MONTH counter query must keep cross-gap steps inside monthly total:\n%s", queries[2])
 	}
 }
+
+func TestReadPointFiltersGoodFiniteSamplesAndCompleteness(t *testing.T) {
+	var seenQueries []string
+	responses := []string{
+		"12.5\t4\t3\t10\t15\t1800\t6.25\t5\t0\t0\t0\n",
+		"0\t3\t0\t\\N\t\\N\t0\t\\N\t0\t0\t0\t0\n",
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		query := request.URL.Query().Get("query")
+		seenQueries = append(seenQueries, query)
+		idx := len(seenQueries) - 1
+		_, _ = writer.Write([]byte(responses[idx]))
+	}))
+	defer server.Close()
+
+	store, err := NewClickHouseStore(server.URL, "", "", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2026, 11, 18, 0, 0, 0, 0, time.UTC)
+
+	input, err := store.ReadPoint(context.Background(), Binding{TenantID: "t", SiteID: "s", Aggregation: "AVG"}, "p", start, start.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("mixed quality ReadPoint failed: %v", err)
+	}
+	if input.Quality != "PARTIAL" || math.Abs(input.Completeness-0.75) > 1e-9 || input.Count != 4 || input.Value != 12.5 {
+		t.Fatalf("unexpected mixed input=%+v", input)
+	}
+	sql := seenQueries[0]
+	for _, marker := range []string{
+		"avgIf(value_number, quality = 'GOOD' AND isFinite(value_number))",
+		"groupArrayIf((sampled_at, observation_id, assumeNotNull(value_number), toString((point_revision, ifNull(unit, '')))), quality = 'GOOD' AND isFinite(value_number))",
+		"argMinIf(value_number,tuple(sampled_at,observation_id),quality = 'GOOD' AND isFinite(value_number)) AS first_value",
+		"argMaxIf(value_number,tuple(sampled_at,observation_id),quality = 'GOOD' AND isFinite(value_number)) AS last_value",
+		"minIf(sampled_at,quality = 'GOOD' AND isFinite(value_number))",
+		"maxIf(sampled_at,quality = 'GOOD' AND isFinite(value_number))",
+		"count() AS n",
+		"countIf(quality = 'GOOD' AND isFinite(value_number)) AS good",
+	} {
+		if !strings.Contains(sql, marker) {
+			t.Fatalf("ReadPoint SQL missing %q:\n%s", marker, sql)
+		}
+	}
+	anchorSQL := sql[:strings.Index(sql, "AS anchor")]
+	if !strings.Contains(anchorSQL, "quality = 'GOOD' AND isFinite(value_number)") {
+		t.Fatalf("anchor subquery missing quality filter:\n%s", anchorSQL)
+	}
+
+	if _, err := store.ReadPoint(context.Background(), Binding{TenantID: "t", SiteID: "s", Aggregation: "SUM"}, "p", start, start.Add(time.Hour)); err == nil || !strings.Contains(err.Error(), "no numeric observations") {
+		t.Fatalf("all-invalid SUM window must reject with no numeric observations, got err=%v", err)
+	}
+	if !strings.Contains(seenQueries[1], "sumIf(value_number, quality = 'GOOD' AND isFinite(value_number))") {
+		t.Fatalf("SUM aggregation missing sumIf filter:\n%s", seenQueries[1])
+	}
+}
+
+func TestDeleteMetricResultSubmitsAsyncMutation(t *testing.T) {
+	var method, query string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		method = request.Method
+		query = request.URL.Query().Get("query")
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	store, err := NewClickHouseStore(server.URL, "", "", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteMetricResult(context.Background(), "t1", "s1", "r1"); err != nil {
+		t.Fatalf("DeleteMetricResult failed: %v", err)
+	}
+	if method != http.MethodPost {
+		t.Fatalf("expected POST, got %s", method)
+	}
+	if !strings.HasPrefix(query, "ALTER TABLE analytics.metric_result_facts DELETE WHERE ") {
+		t.Fatalf("unexpected delete SQL: %s", query)
+	}
+	if strings.Contains(strings.ToLower(query), "mutations_sync") {
+		t.Fatalf("DeleteMetricResult must not set mutations_sync: %s", query)
+	}
+}

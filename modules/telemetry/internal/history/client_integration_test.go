@@ -2,6 +2,7 @@ package history
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"os"
 	"strings"
@@ -10,6 +11,15 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/telemetryhistorymodel"
 )
+
+func fatalClickHouseQueryErr(t *testing.T, err error) {
+	t.Helper()
+	var chErr *clickHouseQueryError
+	if errors.As(err, &chErr) {
+		t.Fatalf("%v: %s", err, strings.TrimSpace(chErr.body))
+	}
+	t.Fatal(err)
+}
 
 func integrationClient(t *testing.T) *Client {
 	t.Helper()
@@ -44,7 +54,7 @@ func TestClickHouseHistoryClientQueriesTypedProjection(t *testing.T) {
 	}
 	response, err := client.QueryDeviceHistory(context.Background(), query)
 	if err != nil {
-		t.Fatal(err)
+		fatalClickHouseQueryErr(t, err)
 	}
 	if err := response.ValidateFor(query); err != nil {
 		t.Fatal(err)
@@ -71,7 +81,7 @@ func TestClickHouseHistoryClientAggregatesHourly(t *testing.T) {
 	}
 	response, err := client.QueryDeviceHistoryAggregate(context.Background(), query)
 	if err != nil {
-		t.Fatal(err)
+		fatalClickHouseQueryErr(t, err)
 	}
 	if err := response.ValidateFor(query); err != nil {
 		t.Fatal(err)

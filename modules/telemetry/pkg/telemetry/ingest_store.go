@@ -169,7 +169,7 @@ func (store *PostgresStore) acceptObservationBatch(ctx context.Context, candidat
 		normalized[index] = candidate
 		payloadSHAs[index] = payloadSHA
 	}
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := 0; attempt < store.retryAttempts(); attempt++ {
 		receipts, err := store.acceptObservationBatchOnce(ctx, normalized, payloadSHAs, evaluate)
 		if err == nil || !retryableTelemetryTransaction(err) {
 			return receipts, err
@@ -1089,6 +1089,17 @@ func updateLatestWorkingState(candidate ObservationCandidate, decision Observati
 }
 
 func persistBatchWritePlan(ctx context.Context, tx pgx.Tx, plan *batchWritePlan, receipts []ObservationReceipt) error {
+	batch := buildBatchWritePlan(plan, receipts)
+	if batch.Len() == 0 {
+		return nil
+	}
+	if err := tx.SendBatch(ctx, batch).Close(); err != nil {
+		return fmt.Errorf("persist telemetry observation batch: %w", err)
+	}
+	return nil
+}
+
+func buildBatchWritePlan(plan *batchWritePlan, receipts []ObservationReceipt) *pgx.Batch {
 	batch := &pgx.Batch{}
 
 	queueMultiRowInsert(
@@ -1250,13 +1261,9 @@ WHERE telemetry_runtime.source_positions.source_offset < EXCLUDED.source_offset`
 		},
 	)
 
-	for _, updateOp := range plan.latestUpdates {
-		if updateOp.replaceLatest {
-			queueUpsertLatestObservation(batch, updateOp.candidate, updateOp.decision)
-		} else {
-			queueUpdatePointHealth(batch, updateOp.candidate, updateOp.decision)
-		}
-	}
+	upserts, healthUpdates := deduplicateLatestUpdates(plan.latestUpdates)
+	queueUpsertLatestObservationsBatch(batch, upserts)
+	queueUpdatePointHealthBatch(batch, healthUpdates)
 
 	queueMultiRowInsert(
 		batch,
@@ -1283,13 +1290,7 @@ WHERE telemetry_runtime.source_positions.source_offset < EXCLUDED.source_offset`
 		queueSourceDeliveryEvidence(batch, evidence, &receipts[evidence.receiptIndex].EvidenceID)
 	}
 
-	if batch.Len() == 0 {
-		return nil
-	}
-	if err := tx.SendBatch(ctx, batch).Close(); err != nil {
-		return fmt.Errorf("persist telemetry observation batch: %w", err)
-	}
-	return nil
+	return batch
 }
 
 func queueMultiRowInsert(
@@ -1340,17 +1341,43 @@ RETURNING evidence_id::text
 	})
 }
 
-func queueUpsertLatestObservation(batch *pgx.Batch, candidate ObservationCandidate, decision ObservationDecision) {
-	var unchanged any
-	if !decision.UnchangedSince.IsZero() {
-		unchanged = decision.UnchangedSince.UTC()
-	}
-	batch.Queue(`
-INSERT INTO telemetry_runtime.latest_accepted_telemetry (
+const (
+	upsertLatestObservationsBatchSQL = `
+INSERT INTO telemetry_runtime.latest_accepted_telemetry AS lat (
   device_id, telemetry_key, business_revision, value, value_type, unit, sampled_at,
   received_at, freshness, quality, quality_reasons, policy_revision, updated_at,
   unchanged_since, health_status, health_score, health_reasons, health_at, measurement
-) VALUES ($1::uuid, $2, 1, $3::jsonb, $4, $5, $6, $7, 'FRESH', $8, $9, $10, $7, $11, $12, $13, $14, $7, $15::jsonb)
+)
+SELECT
+  u.device_id,
+  u.telemetry_key,
+  1,
+  u.value::jsonb,
+  u.value_type,
+  u.unit,
+  u.sampled_at,
+  u.received_at,
+  'FRESH',
+  u.quality,
+  COALESCE(ARRAY(SELECT jsonb_array_elements_text(u.quality_reasons::jsonb)), '{}'::text[]),
+  u.policy_revision,
+  u.received_at,
+  u.unchanged_since,
+  u.health_status,
+  u.health_score,
+  COALESCE(ARRAY(SELECT jsonb_array_elements_text(u.health_reasons::jsonb)), '{}'::text[]),
+  u.received_at,
+  u.measurement::jsonb
+FROM unnest(
+  $1::uuid[], $2::text[], $3::text[], $4::text[], $5::text[],
+  $6::timestamptz[], $7::timestamptz[], $8::text[], $9::text[], $10::bigint[],
+  $11::timestamptz[], $12::text[], $13::smallint[], $14::text[], $15::text[]
+) AS u(
+  device_id, telemetry_key, value, value_type, unit,
+  sampled_at, received_at, quality, quality_reasons, policy_revision,
+  unchanged_since, health_status, health_score, health_reasons, measurement
+)
+ORDER BY u.device_id, u.telemetry_key
 ON CONFLICT (device_id, telemetry_key) DO UPDATE SET
   value = EXCLUDED.value,
   value_type = EXCLUDED.value_type,
@@ -1367,21 +1394,226 @@ ON CONFLICT (device_id, telemetry_key) DO UPDATE SET
   health_reasons = EXCLUDED.health_reasons,
   health_at = EXCLUDED.health_at,
   measurement = EXCLUDED.measurement
-WHERE telemetry_runtime.latest_accepted_telemetry.sampled_at <= EXCLUDED.sampled_at
-`, decision.DeviceID, candidate.TelemetryKey, []byte(candidate.Value), candidate.ValueType, candidate.Unit,
-		candidate.SampledAt, candidate.ReceivedAt, string(decision.Quality), qualityReasonStrings(decision.QualityReasons), decision.PolicyRevision,
-		unchanged, decision.HealthStatus, decision.HealthScore, qualityReasonStrings(decision.HealthReasons), measurementArg(decision.Measurement))
+WHERE lat.sampled_at <= EXCLUDED.sampled_at
+  AND (
+    lat.value,
+    lat.value_type,
+    lat.unit,
+    lat.sampled_at,
+    lat.received_at,
+    lat.quality,
+    lat.quality_reasons,
+    lat.policy_revision,
+    lat.unchanged_since,
+    lat.health_status,
+    lat.health_score,
+    lat.health_reasons,
+    lat.measurement
+  ) IS DISTINCT FROM (
+    EXCLUDED.value,
+    EXCLUDED.value_type,
+    EXCLUDED.unit,
+    EXCLUDED.sampled_at,
+    EXCLUDED.received_at,
+    EXCLUDED.quality,
+    EXCLUDED.quality_reasons,
+    EXCLUDED.policy_revision,
+    EXCLUDED.unchanged_since,
+    EXCLUDED.health_status,
+    EXCLUDED.health_score,
+    EXCLUDED.health_reasons,
+    EXCLUDED.measurement
+  )
+`
+
+	updatePointHealthBatchSQL = `
+UPDATE telemetry_runtime.latest_accepted_telemetry AS lat
+SET health_status = upd.health_status,
+    health_score = upd.health_score,
+    health_reasons = upd.health_reasons,
+    health_at = upd.health_at
+FROM (
+  SELECT
+    u.device_id,
+    u.telemetry_key,
+    u.health_status,
+    u.health_score,
+    COALESCE(ARRAY(SELECT jsonb_array_elements_text(u.health_reasons::jsonb)), '{}'::text[]) AS health_reasons,
+    u.health_at
+  FROM unnest($1::uuid[], $2::text[], $3::text[], $4::smallint[], $5::text[], $6::timestamptz[])
+    AS u(device_id, telemetry_key, health_status, health_score, health_reasons, health_at)
+) AS upd
+WHERE lat.device_id = upd.device_id
+  AND lat.telemetry_key = upd.telemetry_key
+  AND (lat.health_at IS NULL OR lat.health_at <= upd.health_at)
+  AND (
+    lat.health_status,
+    lat.health_score,
+    lat.health_reasons,
+    lat.health_at
+  ) IS DISTINCT FROM (
+    upd.health_status,
+    upd.health_score,
+    upd.health_reasons,
+    upd.health_at
+  )
+`
+)
+
+type indexedLatestUpdate struct {
+	index int
+	op    latestUpdateOp
 }
 
-// queueUpdatePointHealth records a range rejection against the point without replacing
-// the last trusted value. The displayed number stays; its health becomes BAD.
-func queueUpdatePointHealth(batch *pgx.Batch, candidate ObservationCandidate, decision ObservationDecision) {
-	batch.Queue(`
-UPDATE telemetry_runtime.latest_accepted_telemetry
-SET health_status = $3, health_score = $4, health_reasons = $5, health_at = $6
-WHERE device_id = $1::uuid AND telemetry_key = $2
-  AND (health_at IS NULL OR health_at <= $6)
-`, decision.DeviceID, candidate.TelemetryKey, decision.HealthStatus, decision.HealthScore, qualityReasonStrings(decision.HealthReasons), candidate.SampledAt.UTC())
+// deduplicateLatestUpdates collapses repeated (device_id, telemetry_key) updates in a batch
+// so PostgreSQL ON CONFLICT DO UPDATE never affects the same target row twice (SQLSTATE 21000).
+// When a later replaceLatest=true entry supersedes an earlier health-only entry for the same
+// key, the earlier health-only entry is omitted to match sequential loop semantics.
+func deduplicateLatestUpdates(ops []latestUpdateOp) ([]latestUpdateOp, []latestUpdateOp) {
+	if len(ops) == 0 {
+		return nil, nil
+	}
+	upsertWinners := make(map[deviceKey]indexedLatestUpdate)
+	healthWinners := make(map[deviceKey]indexedLatestUpdate)
+
+	for index, op := range ops {
+		key := deviceKey{deviceID: op.decision.DeviceID, key: op.candidate.TelemetryKey}
+		if op.replaceLatest {
+			existing, seen := upsertWinners[key]
+			if !seen || !op.candidate.SampledAt.Before(existing.op.candidate.SampledAt) {
+				upsertWinners[key] = indexedLatestUpdate{index: index, op: op}
+			}
+			continue
+		}
+		existing, seen := healthWinners[key]
+		if !seen || !op.candidate.SampledAt.Before(existing.op.candidate.SampledAt) {
+			healthWinners[key] = indexedLatestUpdate{index: index, op: op}
+		}
+	}
+
+	upsertKeys := make([]deviceKey, 0, len(upsertWinners))
+	for key := range upsertWinners {
+		upsertKeys = append(upsertKeys, key)
+	}
+	slices.SortFunc(upsertKeys, compareDeviceKeys)
+	upserts := make([]latestUpdateOp, len(upsertKeys))
+	for index, key := range upsertKeys {
+		upserts[index] = upsertWinners[key].op
+	}
+
+	healthKeys := make([]deviceKey, 0, len(healthWinners))
+	for key, healthWinner := range healthWinners {
+		if upsertWinner, hasUpsert := upsertWinners[key]; hasUpsert && upsertWinner.index > healthWinner.index && !upsertWinner.op.candidate.SampledAt.Before(healthWinner.op.candidate.SampledAt) {
+			continue
+		}
+		healthKeys = append(healthKeys, key)
+	}
+	slices.SortFunc(healthKeys, compareDeviceKeys)
+	healthUpdates := make([]latestUpdateOp, len(healthKeys))
+	for index, key := range healthKeys {
+		healthUpdates[index] = healthWinners[key].op
+	}
+
+	return upserts, healthUpdates
+}
+
+func queueUpsertLatestObservationsBatch(batch *pgx.Batch, ops []latestUpdateOp) {
+	if len(ops) == 0 {
+		return
+	}
+	deviceIDs := make([]string, len(ops))
+	keys := make([]string, len(ops))
+	values := make([]string, len(ops))
+	valueTypes := make([]string, len(ops))
+	units := make([]*string, len(ops))
+	sampledAts := make([]time.Time, len(ops))
+	receivedAts := make([]time.Time, len(ops))
+	qualities := make([]string, len(ops))
+	qualityReasons := make([]string, len(ops))
+	policyRevisions := make([]int64, len(ops))
+	unchangedSinces := make([]*time.Time, len(ops))
+	healthStatuses := make([]*string, len(ops))
+	healthScores := make([]int16, len(ops))
+	healthReasons := make([]string, len(ops))
+	measurements := make([]*string, len(ops))
+
+	for index, op := range ops {
+		deviceIDs[index] = op.decision.DeviceID
+		keys[index] = op.candidate.TelemetryKey
+		values[index] = string(op.candidate.Value)
+		valueTypes[index] = op.candidate.ValueType
+		units[index] = cloneString(op.candidate.Unit)
+		sampledAts[index] = op.candidate.SampledAt.UTC()
+		receivedAts[index] = op.candidate.ReceivedAt.UTC()
+		qualities[index] = string(op.decision.Quality)
+		qualityReasons[index] = encodeTextArrayJSON(qualityReasonStrings(op.decision.QualityReasons))
+		policyRevisions[index] = op.decision.PolicyRevision
+		if !op.decision.UnchangedSince.IsZero() {
+			unchanged := op.decision.UnchangedSince.UTC()
+			unchangedSinces[index] = &unchanged
+		}
+		healthStatuses[index] = nullableStringPtr(op.decision.HealthStatus)
+		healthScores[index] = int16(op.decision.HealthScore)
+		healthReasons[index] = encodeTextArrayJSON(qualityReasonStrings(op.decision.HealthReasons))
+		if len(op.decision.Measurement) > 0 {
+			encoded := string(op.decision.Measurement)
+			measurements[index] = &encoded
+		}
+	}
+
+	batch.Queue(
+		upsertLatestObservationsBatchSQL,
+		deviceIDs, keys, values, valueTypes, units,
+		sampledAts, receivedAts, qualities, qualityReasons, policyRevisions,
+		unchangedSinces, healthStatuses, healthScores, healthReasons, measurements,
+	)
+}
+
+// queueUpdatePointHealthBatch records range rejections against points without replacing
+// their last trusted values. The displayed number stays; its health becomes BAD.
+func queueUpdatePointHealthBatch(batch *pgx.Batch, ops []latestUpdateOp) {
+	if len(ops) == 0 {
+		return
+	}
+	deviceIDs := make([]string, len(ops))
+	keys := make([]string, len(ops))
+	healthStatuses := make([]*string, len(ops))
+	healthScores := make([]int16, len(ops))
+	healthReasons := make([]string, len(ops))
+	healthAts := make([]time.Time, len(ops))
+
+	for index, op := range ops {
+		deviceIDs[index] = op.decision.DeviceID
+		keys[index] = op.candidate.TelemetryKey
+		healthStatuses[index] = nullableStringPtr(op.decision.HealthStatus)
+		healthScores[index] = int16(op.decision.HealthScore)
+		healthReasons[index] = encodeTextArrayJSON(qualityReasonStrings(op.decision.HealthReasons))
+		healthAts[index] = op.candidate.SampledAt.UTC()
+	}
+
+	batch.Queue(
+		updatePointHealthBatchSQL,
+		deviceIDs, keys, healthStatuses, healthScores, healthReasons, healthAts,
+	)
+}
+
+func encodeTextArrayJSON(values []string) string {
+	if len(values) == 0 {
+		return "[]"
+	}
+	encoded, err := json.Marshal(values)
+	if err != nil {
+		return "[]"
+	}
+	return string(encoded)
+}
+
+func nullableStringPtr(value string) *string {
+	if value == "" {
+		return nil
+	}
+	copied := value
+	return &copied
 }
 
 func validateObservationCandidate(candidate ObservationCandidate) error {
@@ -1421,13 +1653,6 @@ func validateObservationCandidate(candidate ObservationCandidate) error {
 func numericJSON(raw []byte) (float64, bool) {
 	kind, number, ok := observationValueType(raw)
 	return number, ok && kind == "NUMBER"
-}
-
-func measurementArg(raw []byte) any {
-	if len(raw) == 0 {
-		return nil
-	}
-	return raw
 }
 
 func nullableStringArg(value string) any {
@@ -1521,6 +1746,22 @@ func qualityReasonStrings(values []QualityReason) []string {
 		result[index] = string(value)
 	}
 	return result
+}
+
+func (store *PostgresStore) retryAttempts() int {
+	if store == nil || store.pool == nil {
+		return 3
+	}
+	var minConns int32
+	if cfg := store.pool.Config(); cfg != nil {
+		minConns = cfg.MinConns
+	}
+	return retryBudgetAttempts(store.pool.Stat().TotalConns(), minConns)
+}
+
+func retryBudgetAttempts(totalConns, minConns int32) int {
+	attempts := max(int32(3), max(totalConns, minConns)+2)
+	return int(min(attempts, 32))
 }
 
 func retryableTelemetryTransaction(err error) bool {

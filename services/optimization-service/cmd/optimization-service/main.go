@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -112,20 +113,16 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	inputs, err := optimization.NewClickHouseInputReader(optimization.InputReaderConfig{
-		BaseURL:  clickhouseURL,
-		Username: envOrDefault("OPTIMIZATION_CLICKHOUSE_READER_USERNAME", "optimization_service_reader"),
-		Password: os.Getenv("OPTIMIZATION_CLICKHOUSE_READER_PASSWORD"),
-		Energy:   energy,
-	})
+	telemetryLiveClient, telemetryHealthClient, err := newTelemetryClients(tlsCert, tlsKey, tlsCA)
 	if err != nil {
 		return err
 	}
-	telemetryHealthClient, err := optimization.NewWorkloadTelemetryHealthClient(optimization.TelemetryHealthClientConfig{
-		CertificatePath: tlsCert,
-		PrivateKeyPath:  tlsKey,
-		CAPath:          tlsCA,
-		TelemetryURL:    envOrDefault("OPTIMIZATION_TELEMETRY_URL", "https://telemetry-runtime-service:8446"),
+	inputs, err := optimization.NewClickHouseInputReader(optimization.InputReaderConfig{
+		BaseURL:          clickhouseURL,
+		Username:         envOrDefault("OPTIMIZATION_CLICKHOUSE_READER_USERNAME", "optimization_service_reader"),
+		Password:         os.Getenv("OPTIMIZATION_CLICKHOUSE_READER_PASSWORD"),
+		Energy:           energy,
+		LiveObservations: telemetryLiveClient,
 	})
 	if err != nil {
 		return err
@@ -434,6 +431,41 @@ func waitBackground(wg *sync.WaitGroup, timeout time.Duration, logger *slog.Logg
 			logger.Warn("optimization_background_shutdown_timeout", "error_code", "OPTIMIZATION_SHUTDOWN_TIMEOUT")
 		}
 	}
+}
+
+func newTelemetryClients(tlsCert, tlsKey, tlsCA string) (*optimization.WorkloadTelemetryLiveClient, *optimization.WorkloadTelemetryHealthClient, error) {
+	telemetryURL := strings.TrimRight(envOrDefault("OPTIMIZATION_TELEMETRY_URL", "https://telemetry-runtime-service:8446"), "/")
+	parsed, err := url.Parse(telemetryURL)
+	if err != nil || parsed.Hostname() == "" {
+		return nil, nil, fmt.Errorf("invalid OPTIMIZATION_TELEMETRY_URL %q", telemetryURL)
+	}
+	httpClient, err := workloadtls.NewHTTPClient(workloadtls.ClientConfig{
+		CertificateFiles: &workloadtls.CertificateFiles{
+			CertificatePath: tlsCert,
+			PrivateKeyPath:  tlsKey,
+		},
+		ServerCAPath: tlsCA,
+		ServerName:   parsed.Hostname(),
+		Timeout:      10 * time.Second,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("create telemetry mTLS client: %w", err)
+	}
+	liveClient, err := optimization.NewWorkloadTelemetryLiveClient(optimization.TelemetryLiveClientConfig{
+		TelemetryURL: telemetryURL,
+		HTTPClient:   httpClient,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	healthClient, err := optimization.NewWorkloadTelemetryHealthClient(optimization.TelemetryHealthClientConfig{
+		TelemetryURL: telemetryURL,
+		HTTPClient:   httpClient,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return liveClient, healthClient, nil
 }
 
 func envOrDefault(name, fallback string) string {

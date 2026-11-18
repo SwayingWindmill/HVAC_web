@@ -3,6 +3,7 @@ package adapter
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"hash/crc32"
 	"io"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eclipse/paho.golang/paho"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
@@ -214,4 +216,238 @@ func TestRuntimeRecoversSpoolMailboxesOnRestart(t *testing.T) {
 		stat, err := os.Stat(spoolPath)
 		return err == nil && stat.Size() == walHeaderSize
 	}, "recovered spool truncated back to header after drain")
+}
+
+func testReplayPublish(gatewayID string, index int, compact bool) *paho.Publish {
+	msgID := messageID(index)
+	if compact {
+		return &paho.Publish{
+			Topic:   telemetryTopic(gatewayID),
+			Payload: []byte(fmt.Sprintf(`{"v":"1.0","gw":%q,"seq":%d,"ts":1786352400000,"replay":true,"devs":{"METER-01":{"pts":{"active_power":12.5}}}}`, gatewayID, index)),
+			QoS:     1,
+		}
+	}
+	return &paho.Publish{
+		Topic:   telemetryTopic(gatewayID),
+		Payload: []byte(fmt.Sprintf(`{"schemaVersion":"2.0","messageId":%q,"gatewayId":%q,"timestamp":1786352400000,"sequence":%d,"replay":true,"payload":{"devices":[{"deviceId":"METER-01","deviceTimestamp":1786352399000,"points":[{"code":"active_power","value":126.4,"quality":0,"unit":"kW"}]}]}}`, msgID, gatewayID, index)),
+		QoS:     1,
+	}
+}
+
+func testLivePublishAt(gatewayID string, index int, sampledAt time.Time) *paho.Publish {
+	ts := sampledAt.UTC().UnixMilli()
+	return &paho.Publish{
+		Topic:   telemetryTopic(gatewayID),
+		Payload: []byte(fmt.Sprintf(`{"schemaVersion":"2.0","messageId":%q,"gatewayId":%q,"timestamp":%d,"sequence":%d,"replay":false,"payload":{"devices":[{"deviceId":"METER-01","deviceTimestamp":%d,"points":[{"code":"active_power","value":126.4,"quality":0,"unit":"kW"}]}]}}`, messageID(index), gatewayID, ts, index, ts)),
+		QoS:     1,
+	}
+}
+
+func TestGatewayMailboxDualLanePriorityAndStarvationGuard(t *testing.T) {
+	dir := t.TempDir()
+	mb := newGatewayMailbox(testGatewayA, 4, 4096, 32<<20, dir)
+	mb.autoBackfillLag = 10 * time.Minute
+	t.Cleanup(func() { mb.close(true) })
+
+	now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+
+	const replayCount = 2500
+	for i := 1; i <= replayCount; i++ {
+		var pub *paho.Publish
+		switch {
+		case i%10 == 0:
+			pub = testLivePublishAt(testGatewayA, i, now.Add(-10*time.Minute-time.Second))
+		case i%5 == 0:
+			pub = testReplayPublish(testGatewayA, i, true)
+		default:
+			pub = testReplayPublish(testGatewayA, i, false)
+		}
+		res, err := mb.enqueueAt(pub, now)
+		if err != nil || res.shed {
+			t.Fatalf("replay enqueue %d unexpected res=%+v err=%v", i, res, err)
+		}
+	}
+
+	replaySpool := filepath.Join(dir, safeGatewayReplayFileName(testGatewayA))
+	liveSpool := filepath.Join(dir, safeGatewayFileName(testGatewayA))
+	if _, err := os.Stat(replaySpool); err != nil {
+		t.Fatalf("expected replay spool %s to exist: %v", replaySpool, err)
+	}
+	if _, err := os.Stat(liveSpool); !os.IsNotExist(err) {
+		t.Fatalf("expected live spool %s to stay absent until live enqueue, err=%v", liveSpool, err)
+	}
+
+	const liveCount = 20
+	for i := 1; i <= liveCount; i++ {
+		seq := replayCount + i
+		var pub *paho.Publish
+		switch i {
+		case 1:
+			pub = &paho.Publish{Topic: eventTopic(testGatewayA), Payload: eventPayload(testGatewayA, messageID(seq), seq), QoS: 1}
+		case 2:
+			pub = &paho.Publish{Topic: "hvac/v1/" + testGatewayA + "/up/status", Payload: []byte(`{"online":true}`), QoS: 1}
+		case 3:
+			pub = testLivePublishAt(testGatewayA, seq, now.Add(-10*time.Minute))
+		default:
+			pub = testLivePublishAt(testGatewayA, seq, now.Add(-time.Second))
+		}
+		res, err := mb.enqueueAt(pub, now)
+		if err != nil || res.shed {
+			t.Fatalf("live enqueue %d unexpected res=%+v err=%v", i, res, err)
+		}
+		if res.memDepth > mb.memCap {
+			t.Fatalf("combined memDepth=%d exceeded memCap=%d", res.memDepth, mb.memCap)
+		}
+	}
+	if _, err := os.Stat(liveSpool); err != nil {
+		t.Fatalf("expected live spool %s to exist after live enqueue: %v", liveSpool, err)
+	}
+
+	// Pop the first 25 items and verify exact fairness schedule:
+	// 8 live, 1 replay, 8 live, 1 replay, 4 live, then replay resumes.
+	batch, _, _, errs := mb.popBatch(25)
+	if errs != 0 || len(batch) != 25 {
+		t.Fatalf("popBatch(25) len=%d errs=%d, want 25 and 0", len(batch), errs)
+	}
+	wantReplayAt := map[int]bool{8: true, 17: true, 22: true, 23: true, 24: true}
+	for idx, item := range batch {
+		if item.isReplay != wantReplayAt[idx] {
+			t.Fatalf("batch[%d].isReplay=%v, want %v (topic=%s)", idx, item.isReplay, wantReplayAt[idx], item.packet.Topic)
+		}
+	}
+	mb.markBatchConsumed(batch)
+
+	drained := len(batch)
+	for drained < replayCount+liveCount {
+		more, _, _, popErrs := mb.popBatch(256)
+		if popErrs != 0 {
+			t.Fatalf("unexpected pop read errors: %d", popErrs)
+		}
+		if len(more) == 0 {
+			break
+		}
+		for _, item := range more {
+			if !item.isReplay {
+				t.Fatalf("unexpected live item after all live items drained")
+			}
+		}
+		mb.markBatchConsumed(more)
+		drained += len(more)
+	}
+	if drained != replayCount+liveCount {
+		t.Fatalf("drained=%d, want %d", drained, replayCount+liveCount)
+	}
+
+	for _, p := range []string{liveSpool, replaySpool} {
+		stat, err := os.Stat(p)
+		if err != nil || stat.Size() != walHeaderSize {
+			t.Fatalf("spool %s size=%v err=%v, want %d", p, stat, err, walHeaderSize)
+		}
+	}
+}
+
+func TestGatewayMailboxRecoversBothLiveAndReplaySpoolsOnRestart(t *testing.T) {
+	dir := t.TempDir()
+	mb := newGatewayMailbox(testGatewayA, 4, 128, 32<<20, dir)
+	for i := 1; i <= 30; i++ {
+		if res, err := mb.enqueue(testReplayPublish(testGatewayA, i, false)); err != nil || res.shed {
+			t.Fatalf("enqueue replay %d failed: %+v %v", i, res, err)
+		}
+	}
+	for i := 101; i <= 112; i++ {
+		if res, err := mb.enqueue(publish(testGatewayA, i)); err != nil || res.shed {
+			t.Fatalf("enqueue live %d failed: %+v %v", i, res, err)
+		}
+	}
+	first, _, _, errs := mb.popBatch(2)
+	if errs != 0 || len(first) != 2 {
+		t.Fatalf("first pop len=%d errs=%d", len(first), errs)
+	}
+	mb.markBatchConsumed(first)
+	mb.close(false)
+
+	recovered, count, err := recoverSpoolMailboxes(dir, 4, 128, 32<<20)
+	if err != nil {
+		t.Fatalf("recoverSpoolMailboxes: %v", err)
+	}
+	if count != 40 || len(recovered) != 1 {
+		t.Fatalf("recovered count=%d gateways=%d, want 40 and 1", count, len(recovered))
+	}
+	recMB := recovered[testGatewayA]
+	t.Cleanup(func() { recMB.close(true) })
+
+	memD, ovfD := recMB.depth()
+	if memD > 4 || memD+ovfD != 40 {
+		t.Fatalf("recovered depth=(mem=%d, ovf=%d), want mem<=4 and total=40", memD, ovfD)
+	}
+
+	batch, _, _, errs := recMB.popBatch(15)
+	if errs != 0 || len(batch) != 15 {
+		t.Fatalf("recovered pop len=%d errs=%d", len(batch), errs)
+	}
+	for i := 0; i < 8; i++ {
+		if batch[i].isReplay {
+			t.Fatalf("batch[%d] unexpectedly replay", i)
+		}
+	}
+	if !batch[8].isReplay {
+		t.Fatalf("batch[8] expected starvation-guard replay")
+	}
+	if batch[9].isReplay || batch[10].isReplay {
+		t.Fatalf("batch[9..10] expected remaining live items")
+	}
+	for i := 11; i < 15; i++ {
+		if !batch[i].isReplay {
+			t.Fatalf("batch[%d] expected replay", i)
+		}
+	}
+}
+
+func TestGatewayMailboxSharedBoundsAcrossLiveAndReplay(t *testing.T) {
+	dir := t.TempDir()
+	mb := newGatewayMailbox(testGatewayA, 2, 3, 1<<20, dir)
+	t.Cleanup(func() { mb.close(true) })
+
+	for i := 1; i <= 3; i++ {
+		res, err := mb.enqueue(testReplayPublish(testGatewayA, i, false))
+		if err != nil || res.shed {
+			t.Fatalf("replay %d failed: %+v %v", i, res, err)
+		}
+	}
+	for i := 4; i <= 5; i++ {
+		res, err := mb.enqueue(publish(testGatewayA, i))
+		if err != nil || res.shed {
+			t.Fatalf("live %d failed: %+v %v", i, res, err)
+		}
+		if res.memDepth > 2 {
+			t.Fatalf("memDepth=%d exceeded cap 2", res.memDepth)
+		}
+	}
+	shedRes, err := mb.enqueue(publish(testGatewayA, 6))
+	if err != nil || !shedRes.shed {
+		t.Fatalf("expected 6th combined message to shed, got res=%+v err=%v", shedRes, err)
+	}
+}
+
+func TestGatewayMailboxReservesLiveHeadroomUnderReplayFlood(t *testing.T) {
+	dir := t.TempDir()
+	mb := newGatewayMailbox(testGatewayA, 2, 16, 4<<20, dir)
+	t.Cleanup(func() { mb.close(true) })
+
+	for i := 1; i <= 16; i++ {
+		res, err := mb.enqueue(testReplayPublish(testGatewayA, i, false))
+		if err != nil || res.shed {
+			t.Fatalf("replay %d within reserved quota failed: %+v %v", i, res, err)
+		}
+	}
+	shedReplay, err := mb.enqueue(testReplayPublish(testGatewayA, 17, false))
+	if err != nil || !shedReplay.shed {
+		t.Fatalf("expected 17th replay to shed while preserving live reserve, got %+v err=%v", shedReplay, err)
+	}
+	for i := 101; i <= 102; i++ {
+		res, err := mb.enqueue(publish(testGatewayA, i))
+		if err != nil || res.shed {
+			t.Fatalf("reserved live slot %d failed: %+v %v", i, res, err)
+		}
+	}
 }

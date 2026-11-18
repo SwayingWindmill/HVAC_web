@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -574,5 +575,131 @@ func TestSourceRequestMapsEdgeReplayFlag(t *testing.T) {
 	}
 	if obsAcceptor.candidates[1].EdgeReplay {
 		t.Fatal("expected edgeReplay=false when omitted on second candidate")
+	}
+}
+
+func TestSourceBatchPopulatesSiteLiveCacheAndInvalidatesOnReject(t *testing.T) {
+	now := time.Date(2026, 11, 18, 4, 15, 0, 0, time.UTC)
+	pointTemp := "018f2e00-3100-7000-8000-000000000001"
+	pointSuspect := "018f2e00-3100-7000-8000-000000000002"
+	pointEdge := "018f2e00-3100-7000-8000-000000000003"
+	pointText := "018f2e00-3100-7000-8000-000000000004"
+
+	cache := &memoryLatestCache{}
+	acceptor := &fakeObservationAcceptor{
+		receipts: []ObservationReceipt{
+			{
+				ObservationID:    "018f2e00-9000-7000-8000-000000000001",
+				Status:           ObservationAccepted,
+				Quality:          QualityGood,
+				QualityReasons:   []QualityReason{},
+				DeviceID:         deviceA,
+				PositionAdvanced: true,
+			},
+			{
+				ObservationID:    "018f2e00-9000-7000-8000-000000000002",
+				Status:           ObservationAccepted,
+				Quality:          QualityPartial,
+				QualityReasons:   []QualityReason{QualityReasonSpike},
+				DeviceID:         deviceA,
+				PositionAdvanced: true,
+			},
+			{
+				ObservationID:    "018f2e00-9000-7000-8000-000000000003",
+				Status:           ObservationAccepted,
+				Quality:          QualityGood,
+				QualityReasons:   []QualityReason{},
+				DeviceID:         deviceA,
+				PositionAdvanced: true,
+			},
+			{
+				ObservationID:    "018f2e00-9000-7000-8000-000000000004",
+				Status:           ObservationAccepted,
+				Quality:          QualityGood,
+				QualityReasons:   []QualityReason{},
+				DeviceID:         deviceA,
+				PositionAdvanced: true,
+			},
+		},
+	}
+	handler := NewHandler(ServerConfig{
+		ObservationAcceptor: acceptor,
+		LatestCache:         cache,
+		AllowedSourceSPIFFE: mqttSourceSPIFFE,
+		Now:                 func() time.Time { return now },
+	})
+
+	pointJSON := func(pointID, valueType, unit string) string {
+		return `"device":{"tenantId":"` + ingestTenantA + `","siteId":"` + siteA + `","deviceId":"` + deviceA + `"},` +
+			`"point":{"pointId":"` + pointID + `","sensorId":null,"pointType":"TELEMETRY","valueType":"` + valueType + `","unit":` + unit + `,"counterDecreaseMode":null,"counterRolloverModulus":null,"pointRevision":3}`
+	}
+
+	body := `{"observations":[` +
+		`{"sourceId":"` + sourceA + `","sourcePath":"PUSH","externalEntityType":"DEVICE","externalId":"CHILLER-01",` + pointJSON(pointTemp, "NUMBER", `"Cel"`) + `,"telemetryKey":"supply_water_temperature","value":6.5,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-11-18T04:14:55Z","sourcePosition":{"partition":"p0","offset":1,"eventId":"018f2e00-8000-7000-8000-000000000001"}},` +
+		`{"sourceId":"` + sourceA + `","sourcePath":"PUSH","externalEntityType":"DEVICE","externalId":"CHILLER-01",` + pointJSON(pointSuspect, "NUMBER", `"Cel"`) + `,"telemetryKey":"zone.t53","value":45.2,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-11-18T04:14:56Z","sourcePosition":{"partition":"p0","offset":2,"eventId":"018f2e00-8000-7000-8000-000000000002"}},` +
+		`{"sourceId":"` + sourceA + `","sourcePath":"PUSH","externalEntityType":"DEVICE","externalId":"CHILLER-01",` + pointJSON(pointEdge, "NUMBER", `"Cel"`) + `,"telemetryKey":"zone.edge","value":22.0,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-11-18T04:10:00Z","sourcePosition":{"partition":"p0","offset":3,"eventId":"018f2e00-8000-7000-8000-000000000003"},"edgeReplay":true},` +
+		`{"sourceId":"` + sourceA + `","sourcePath":"PUSH","externalEntityType":"DEVICE","externalId":"CHILLER-01",` + pointJSON(pointText, "STRING", `null`) + `,"telemetryKey":"chiller.mode","value":"COOL","valueType":"STRING","unit":null,"sampledAt":"2026-11-18T04:14:57Z","sourcePosition":{"partition":"p0","offset":4,"eventId":"018f2e00-8000-7000-8000-000000000004"}}` +
+		`]}`
+	req := httptest.NewRequest(http.MethodPost, InternalSourceObservationBatchPath, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.TLS = verifiedTLSState(mqttSourceSPIFFE)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	got, err := cache.GetSiteLiveObservations(t.Context(), ingestTenantA, siteA, []string{pointTemp, pointSuspect, pointEdge, pointText})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected only 2 live numeric observations cached, got %#v", got)
+	}
+	if got[pointTemp].HealthStatus != HealthHealthy || got[pointTemp].Value != 6.5 || got[pointTemp].Quality != "GOOD" || got[pointTemp].SourceOffset != 1 {
+		t.Fatalf("unexpected cached pointTemp: %+v", got[pointTemp])
+	}
+	if got[pointSuspect].HealthStatus != HealthSuspect || !slices.Equal(got[pointSuspect].HealthReasons, []string{"SPIKE"}) || got[pointSuspect].Quality != "PARTIAL" {
+		t.Fatalf("unexpected cached pointSuspect: %+v", got[pointSuspect])
+	}
+
+	acceptor.receipts = []ObservationReceipt{{
+		ObservationID:    "018f2e00-9000-7000-8000-000000000005",
+		Status:           ObservationRejected,
+		Quality:          QualityInvalid,
+		QualityReasons:   []QualityReason{QualityReasonOutOfRange},
+		DeviceID:         deviceA,
+		PositionAdvanced: true,
+	}}
+	rejectBody := `{"observations":[{"sourceId":"` + sourceA + `","sourcePath":"PUSH","externalEntityType":"DEVICE","externalId":"CHILLER-01",` + pointJSON(pointTemp, "NUMBER", `"Cel"`) + `,"telemetryKey":"supply_water_temperature","value":250.0,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-11-18T04:15:00Z","sourcePosition":{"partition":"p0","offset":5,"eventId":"018f2e00-8000-7000-8000-000000000005"}}]}`
+	rejectReq := httptest.NewRequest(http.MethodPost, InternalSourceObservationBatchPath, strings.NewReader(rejectBody))
+	rejectReq.Header.Set("Content-Type", "application/json")
+	rejectReq.TLS = verifiedTLSState(mqttSourceSPIFFE)
+	rejectRec := httptest.NewRecorder()
+	handler.ServeHTTP(rejectRec, rejectReq)
+	if rejectRec.Code != http.StatusOK {
+		t.Fatalf("reject status=%d body=%s", rejectRec.Code, rejectRec.Body.String())
+	}
+	afterReject, err := cache.GetSiteLiveObservations(t.Context(), ingestTenantA, siteA, []string{pointTemp})
+	if err != nil || len(afterReject) != 0 {
+		t.Fatalf("expected pointTemp evicted from cache on OUT_OF_RANGE rejection, got=%#v err=%v", afterReject, err)
+	}
+
+	cache.putErr = errors.New("redis unavailable")
+	acceptor.receipts = []ObservationReceipt{{
+		ObservationID:    "018f2e00-9000-7000-8000-000000000006",
+		Status:           ObservationAccepted,
+		Quality:          QualityGood,
+		QualityReasons:   []QualityReason{},
+		DeviceID:         deviceA,
+		PositionAdvanced: true,
+	}}
+	okReq := httptest.NewRequest(http.MethodPost, InternalSourceObservationBatchPath, strings.NewReader(`{"observations":[{"sourceId":"`+sourceA+`","sourcePath":"PUSH","externalEntityType":"DEVICE","externalId":"CHILLER-01",`+pointJSON(pointTemp, "NUMBER", `"Cel"`)+`,"telemetryKey":"supply_water_temperature","value":6.8,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-11-18T04:15:05Z","sourcePosition":{"partition":"p0","offset":6,"eventId":"018f2e00-8000-7000-8000-000000000006"}}]}`))
+	okReq.Header.Set("Content-Type", "application/json")
+	okReq.TLS = verifiedTLSState(mqttSourceSPIFFE)
+	okRec := httptest.NewRecorder()
+	handler.ServeHTTP(okRec, okReq)
+	if okRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 even when Redis write fails, got %d body=%s", okRec.Code, okRec.Body.String())
 	}
 }

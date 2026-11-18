@@ -40,11 +40,12 @@ type metricJobPayload struct {
 }
 
 type runtime struct {
-	store     *metric.PostgresStore
-	series    *metric.ClickHouseStore
-	engine    *metric.Engine
-	lifecycle *metric.LifecycleExecutor
-	latest    *metric.RedisLatestStore
+	store          *metric.PostgresStore
+	series         *metric.ClickHouseStore
+	engine         *metric.Engine
+	lifecycle      *metric.LifecycleExecutor
+	latest         *metric.RedisLatestStore
+	backfillSource metric.BackfillObservationSource
 }
 
 func main() {
@@ -81,6 +82,7 @@ func main() {
 	leaseDuration := durationEnv("METRIC_JOB_LEASE_DURATION", 60*time.Second, 10*time.Second, 30*time.Minute)
 	leaseRenew := durationEnv("METRIC_JOB_LEASE_RENEW_INTERVAL", leaseDuration/3, time.Second, leaseDuration/2)
 	finalizationDelay := durationEnv("METRIC_WORKER_FINALIZATION_DELAY", 5*time.Minute, 0, 24*time.Hour)
+	backfillScanInterval := durationEnv("METRIC_BACKFILL_SCAN_INTERVAL", 30*time.Second, 0, 24*time.Hour)
 
 	diagnostics := &http.Server{
 		Addr: envOr("METRIC_DIAGNOSTICS_ADDR", ":19090"), Handler: telemetry.DiagnosticsHandler(),
@@ -94,10 +96,27 @@ func main() {
 		}
 	}()
 
+	var detectorWG sync.WaitGroup
+	if backfillScanInterval > 0 {
+		detector, detErr := metric.NewBackfillRecalcDetector(runtime.store, runtime.backfillSource, metric.BackfillRecalcConfig{
+			FinalizationDelay: finalizationDelay,
+		})
+		if detErr != nil {
+			logger.Error("metric_worker_configuration_invalid", "error_code", "METRIC_WORKER_CONFIGURATION_INVALID")
+			os.Exit(1)
+		}
+		detectorWG.Add(1)
+		go func() {
+			defer detectorWG.Done()
+			runBackfillDetectorLoop(ctx, detector, backfillScanInterval, telemetry, logger)
+		}()
+	}
+
 	telemetry.MarkReady()
-	logger.Info("metric_worker_started", "worker_id", workerID, "claim_interval", claimInterval.String(), "claim_batch", claimBatch, "lease_duration", leaseDuration.String(), "finalization_delay", finalizationDelay.String())
+	logger.Info("metric_worker_started", "worker_id", workerID, "claim_interval", claimInterval.String(), "claim_batch", claimBatch, "lease_duration", leaseDuration.String(), "finalization_delay", finalizationDelay.String(), "backfill_scan_interval", backfillScanInterval.String())
 	runWorker(ctx, runtime, workerID, claimInterval, claimBatch, leaseDuration, leaseRenew, finalizationDelay, telemetry, logger)
 	telemetry.MarkNotReady()
+	detectorWG.Wait()
 
 	shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
@@ -130,7 +149,15 @@ func openRuntime(ctx context.Context) (*runtime, error) {
 		pool.Close()
 		return nil, err
 	}
-	series, err := metric.NewClickHouseStore(requiredEnv("METRIC_CLICKHOUSE_URL"), os.Getenv("METRIC_CLICKHOUSE_USER"), os.Getenv("METRIC_CLICKHOUSE_PASSWORD"), nil)
+	clickhouseURL := requiredEnv("METRIC_CLICKHOUSE_URL")
+	clickhouseUser := os.Getenv("METRIC_CLICKHOUSE_USER")
+	clickhousePassword := os.Getenv("METRIC_CLICKHOUSE_PASSWORD")
+	series, err := metric.NewClickHouseStore(clickhouseURL, clickhouseUser, clickhousePassword, nil)
+	if err != nil {
+		store.Close()
+		return nil, err
+	}
+	backfillSource, err := metric.NewClickHouseBackfillSource(clickhouseURL, clickhouseUser, clickhousePassword, nil)
 	if err != nil {
 		store.Close()
 		return nil, err
@@ -152,7 +179,7 @@ func openRuntime(ctx context.Context) (*runtime, error) {
 		store.Close()
 		return nil, err
 	}
-	return &runtime{store: store, series: series, engine: engine, lifecycle: lifecycle, latest: latest}, nil
+	return &runtime{store: store, series: series, engine: engine, lifecycle: lifecycle, latest: latest, backfillSource: backfillSource}, nil
 }
 
 func (runtime *runtime) Ping(ctx context.Context) error {
@@ -174,6 +201,74 @@ func (runtime *runtime) Close() {
 	}
 	if runtime.store != nil {
 		runtime.store.Close()
+	}
+}
+
+type backfillDetector interface {
+	InitializeWatermark(context.Context) error
+	DetectAndEnqueue(context.Context, time.Time) (int, error)
+}
+
+func runBackfillDetectorLoop(
+	ctx context.Context,
+	detector backfillDetector,
+	scanInterval time.Duration,
+	telemetry *observability.Runtime,
+	logger *slog.Logger,
+) {
+	if detector == nil || scanInterval <= 0 {
+		return
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	defer observability.Recover(logger, runtimeMetrics(telemetry), "metric_worker.backfill_detector")
+
+	initCtx, initCancel := context.WithTimeout(ctx, 10*time.Second)
+	initErr := detector.InitializeWatermark(initCtx)
+	initCancel()
+	if initErr != nil && ctx.Err() == nil {
+		recordBackfillScanMetric(telemetry, "error", 0)
+		logger.Warn("metric_backfill_watermark_init_failed", "error_code", "METRIC_BACKFILL_WATERMARK_INIT_FAILED")
+	}
+
+	ticker := time.NewTicker(scanInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			scanBackfillOnce(ctx, detector, telemetry, logger)
+		}
+	}
+}
+
+func scanBackfillOnce(ctx context.Context, detector backfillDetector, telemetry *observability.Runtime, logger *slog.Logger) {
+	scanCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	enqueued, err := detector.DetectAndEnqueue(scanCtx, time.Now().UTC())
+	cancel()
+	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		recordBackfillScanMetric(telemetry, "error", 0)
+		logger.Warn("metric_backfill_scan_failed", "error_code", "METRIC_BACKFILL_SCAN_FAILED")
+		return
+	}
+	recordBackfillScanMetric(telemetry, "success", enqueued)
+	if enqueued > 0 {
+		logger.Info("metric_backfill_recalc_enqueued", "enqueued", enqueued)
+	}
+}
+
+func recordBackfillScanMetric(telemetry *observability.Runtime, outcome string, enqueued int) {
+	if telemetry == nil || telemetry.Metrics == nil {
+		return
+	}
+	_ = telemetry.Metrics.AddCounter("hvac_metric_backfill_scans_total", "Metric backfill recalc detector scans.", map[string]string{"outcome": outcome}, 1)
+	if enqueued > 0 {
+		_ = telemetry.Metrics.AddCounter("hvac_metric_backfill_recalc_enqueued_total", "METRIC_RECALC jobs enqueued by automatic backfill detection.", nil, float64(enqueued))
 	}
 }
 
@@ -510,13 +605,21 @@ func envOr(name, fallback string) string {
 	return fallback
 }
 
-func durationEnv(name string, fallback, minimum, maximum time.Duration) time.Duration {
-	value := strings.TrimSpace(os.Getenv(name))
+func parseDurationValue(raw string, fallback, minimum, maximum time.Duration) (time.Duration, error) {
+	value := strings.TrimSpace(raw)
 	if value == "" {
-		return fallback
+		return fallback, nil
 	}
 	parsed, err := time.ParseDuration(value)
 	if err != nil || parsed < minimum || parsed > maximum {
+		return 0, errors.New("duration value is invalid")
+	}
+	return parsed, nil
+}
+
+func durationEnv(name string, fallback, minimum, maximum time.Duration) time.Duration {
+	parsed, err := parseDurationValue(os.Getenv(name), fallback, minimum, maximum)
+	if err != nil {
 		_, _ = os.Stderr.WriteString(name + " is invalid\n")
 		os.Exit(1)
 	}

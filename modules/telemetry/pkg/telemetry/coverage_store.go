@@ -43,7 +43,7 @@ func (store *PostgresStore) ReportSourceCoverage(ctx context.Context, report Sou
 	if err != nil {
 		return err
 	}
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := 0; attempt < store.retryAttempts(); attempt++ {
 		err := store.reportSourceCoverageOnce(ctx, normalized)
 		if err == nil || !retryableTelemetryTransaction(err) {
 			return err

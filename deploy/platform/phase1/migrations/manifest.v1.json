@@ -129,7 +129,8 @@
         "infra/connectivity/postgres/init/gateway-shadow-drivers-and-autonomy.sql",
         "infra/registry/postgres/init/optimization-safety-guardrails.sql",
         "infra/registry/postgres/init/optimization-shadow-and-trace.sql",
-        "infra/registry/postgres/init/optimization-governance-flywheel.sql"
+        "infra/registry/postgres/init/optimization-governance-flywheel.sql",
+        "infra/registry/postgres/init/metric-backfill-recalc-job-grants.sql"
       ]
     },
     {
@@ -154,7 +155,8 @@
         "infra/telemetry/postgres/init/013-schema-and-table-comments.sql",
         "infra/telemetry/postgres/init/mqtt-runtime-events.sql",
         "infra/telemetry/postgres/init/alarm-evaluation-dead-letter.sql",
-        "infra/telemetry/postgres/init/telemetry-history-dead-letter-and-retention.sql"
+        "infra/telemetry/postgres/init/telemetry-history-dead-letter-and-retention.sql",
+        "infra/telemetry/postgres/init/telemetry-runtime-unnest-and-indexes.sql"
       ]
     },
     {

@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -72,12 +74,89 @@ end
 return 1
 `)
 
+var redisSiteLiveCAS = redis.NewScript(`
+local key = KEYS[1]
+local ttl_ms = tonumber(ARGV[1]) or 0
+local updated = 0
+for i = 2, #ARGV, 4 do
+  local field = ARGV[i]
+  local new_sampled_ms = tonumber(ARGV[i + 1]) or 0
+  local new_eff_ms = tonumber(ARGV[i + 2]) or new_sampled_ms
+  local payload = ARGV[i + 3]
+  local cur_raw = redis.call('HGET', key, field)
+  local apply = true
+  if cur_raw then
+    local ok, cur_obj = pcall(cjson.decode, cur_raw)
+    if ok and type(cur_obj) == 'table' then
+      local cur_sampled_ms = tonumber(cur_obj['sampledMs']) or 0
+      local cur_health_ms = tonumber(cur_obj['healthMs']) or cur_sampled_ms
+      local cur_eff_ms = math.max(cur_sampled_ms, cur_health_ms)
+      local cur_inv = (cur_obj['invalidated'] == true)
+      if new_eff_ms < cur_eff_ms or (not cur_inv and new_sampled_ms < cur_sampled_ms) then
+        apply = false
+      end
+    end
+  end
+  if apply then
+    redis.call('HSET', key, field, payload)
+    updated = updated + 1
+  end
+end
+if updated > 0 and ttl_ms > 0 then
+  redis.call('PEXPIRE', key, ttl_ms)
+end
+return updated
+`)
+
+type OptimizationLiveObservation struct {
+	ObservationID   string   `json:"observationId"`
+	DeviceID        string   `json:"deviceId"`
+	PointID         string   `json:"pointId"`
+	TelemetryKey    string   `json:"telemetryKey"`
+	PointRevision   uint64   `json:"pointRevision"`
+	SampledAt       string   `json:"sampledAt"`
+	ReceivedAt      string   `json:"receivedAt"`
+	HealthAt        string   `json:"healthAt,omitempty"`
+	Value           float64  `json:"value"`
+	Unit            string   `json:"unit"`
+	Quality         string   `json:"quality"`
+	QualityReasons  []string `json:"qualityReasons"`
+	HealthStatus    string   `json:"healthStatus,omitempty"`
+	HealthReasons   []string `json:"healthReasons,omitempty"`
+	SourceEventID   string   `json:"sourceEventId"`
+	SourcePartition string   `json:"sourcePartition"`
+	SourceOffset    uint64   `json:"sourceOffset"`
+}
+
+type cachedSiteLiveObservation struct {
+	SampledMs   int64 `json:"sampledMs"`
+	HealthMs    int64 `json:"healthMs,omitempty"`
+	Invalidated bool  `json:"invalidated,omitempty"`
+	OptimizationLiveObservation
+}
+
+type SiteLiveInvalidation struct {
+	PointID   string
+	SampledAt time.Time
+}
+
 type LatestCache interface {
 	PutIfNewer(context.Context, telemetryapi.DeviceObservationSnapshot) (bool, error)
 	Get(context.Context, string, string, string) (telemetryapi.DeviceObservationSnapshot, error)
 	GetForDevice(context.Context, string, string) (telemetryapi.DeviceObservationSnapshot, error)
 	Ping(context.Context) error
 	Close() error
+}
+
+// SiteLiveCache stores the hot per-site latest numeric point observations keyed by pointId.
+type SiteLiveCache interface {
+	PutSiteLiveObservations(context.Context, string, string, []OptimizationLiveObservation) error
+	GetSiteLiveObservations(context.Context, string, string, []string) (map[string]OptimizationLiveObservation, error)
+}
+
+// SiteLiveCacheInvalidator records monotonicity-guarded invalidation tombstones on the hot site-point cache.
+type SiteLiveCacheInvalidator interface {
+	InvalidateSiteLiveObservations(context.Context, string, string, []SiteLiveInvalidation) error
 }
 
 type RedisLatestCacheConfig struct {
@@ -231,6 +310,175 @@ func (cache *RedisLatestCache) Get(ctx context.Context, tenantID, siteID, device
 	return snapshot, nil
 }
 
+type preparedSiteLiveEntry struct {
+	field     string
+	sampledMs string
+	effMs     string
+	payload   string
+}
+
+func (cache *RedisLatestCache) runSiteLiveCAS(ctx context.Context, tenantID, siteID string, entries []preparedSiteLiveEntry) error {
+	if cache == nil || cache.client == nil {
+		return ErrLatestCacheUnavailable
+	}
+	cleanTenant, cleanSite, err := normalizeSiteLiveScope(tenantID, siteID)
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	hashKey := cache.sitePointsKey(cleanTenant, cleanSite)
+	ttlMs := strconv.FormatInt(defaultLatestCacheTTL.Milliseconds(), 10)
+	const chunkSize = 256
+	for start := 0; start < len(entries); start += chunkSize {
+		end := min(start+chunkSize, len(entries))
+		chunk := entries[start:end]
+		args := make([]any, 0, 1+len(chunk)*4)
+		args = append(args, ttlMs)
+		for _, item := range chunk {
+			args = append(args, item.field, item.sampledMs, item.effMs, item.payload)
+		}
+		if err := redisSiteLiveCAS.Run(ctx, cache.client, []string{hashKey}, args...).Err(); err != nil {
+			return fmt.Errorf("materialize telemetry site live observations: %w", err)
+		}
+	}
+	return nil
+}
+
+func (cache *RedisLatestCache) PutSiteLiveObservations(ctx context.Context, tenantID, siteID string, observations []OptimizationLiveObservation) error {
+	if cache == nil || cache.client == nil {
+		return ErrLatestCacheUnavailable
+	}
+	if len(observations) == 0 {
+		_, _, err := normalizeSiteLiveScope(tenantID, siteID)
+		return err
+	}
+	entries := make([]preparedSiteLiveEntry, 0, len(observations))
+	for _, obs := range observations {
+		entry, err := normalizeCachedSiteLiveObservation(obs)
+		if err != nil {
+			return err
+		}
+		encoded, err := json.Marshal(entry)
+		if err != nil {
+			return fmt.Errorf("encode telemetry site live observation: %w", err)
+		}
+		entries = append(entries, preparedSiteLiveEntry{
+			field:     entry.PointID,
+			sampledMs: strconv.FormatInt(entry.SampledMs, 10),
+			effMs:     strconv.FormatInt(max(entry.SampledMs, entry.HealthMs), 10),
+			payload:   string(encoded),
+		})
+	}
+	return cache.runSiteLiveCAS(ctx, tenantID, siteID, entries)
+}
+
+func (cache *RedisLatestCache) GetSiteLiveObservations(ctx context.Context, tenantID, siteID string, pointIDs []string) (map[string]OptimizationLiveObservation, error) {
+	if cache == nil || cache.client == nil {
+		return nil, ErrLatestCacheUnavailable
+	}
+	cleanTenant, cleanSite, err := normalizeSiteLiveScope(tenantID, siteID)
+	if err != nil {
+		return nil, err
+	}
+	cleanIDs, err := normalizeSitePointIDs(pointIDs)
+	if err != nil {
+		return nil, err
+	}
+	if len(cleanIDs) == 0 {
+		return map[string]OptimizationLiveObservation{}, nil
+	}
+	values, err := cache.client.HMGet(ctx, cache.sitePointsKey(cleanTenant, cleanSite), cleanIDs...).Result()
+	if err != nil {
+		return nil, fmt.Errorf("read telemetry site live observations: %w", err)
+	}
+	out := make(map[string]OptimizationLiveObservation, len(cleanIDs))
+	for index, rawVal := range values {
+		if rawVal == nil || index >= len(cleanIDs) {
+			continue
+		}
+		var rawBytes []byte
+		switch typed := rawVal.(type) {
+		case string:
+			rawBytes = []byte(typed)
+		case []byte:
+			rawBytes = typed
+		default:
+			continue
+		}
+		if len(rawBytes) == 0 {
+			continue
+		}
+		var decoded cachedSiteLiveObservation
+		if err := json.Unmarshal(rawBytes, &decoded); err != nil {
+			continue
+		}
+		if decoded.Invalidated {
+			continue
+		}
+		if math.IsNaN(decoded.Value) || math.IsInf(decoded.Value, 0) {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(decoded.PointID), cleanIDs[index]) {
+			continue
+		}
+		decoded.PointID = cleanIDs[index]
+		if decoded.QualityReasons == nil {
+			decoded.QualityReasons = []string{}
+		}
+		out[cleanIDs[index]] = decoded.OptimizationLiveObservation
+	}
+	return out, nil
+}
+
+func (cache *RedisLatestCache) InvalidateSiteLiveObservations(ctx context.Context, tenantID, siteID string, items []SiteLiveInvalidation) error {
+	if cache == nil || cache.client == nil {
+		return ErrLatestCacheUnavailable
+	}
+	if len(items) == 0 {
+		_, _, err := normalizeSiteLiveScope(tenantID, siteID)
+		return err
+	}
+	entries := make([]preparedSiteLiveEntry, 0, len(items))
+	seen := make(map[string]int, len(items))
+	for _, item := range items {
+		cleanID := strings.ToLower(strings.TrimSpace(item.PointID))
+		if !uuidPattern.MatchString(cleanID) {
+			return errors.New("telemetry site live cache pointId must be a UUID")
+		}
+		if item.SampledAt.IsZero() {
+			return errors.New("telemetry site live invalidation sampledAt is required")
+		}
+		ms := item.SampledAt.UTC().UnixMilli()
+		tombstone := cachedSiteLiveObservation{
+			SampledMs:   ms,
+			HealthMs:    ms,
+			Invalidated: true,
+			OptimizationLiveObservation: OptimizationLiveObservation{
+				PointID: cleanID,
+			},
+		}
+		encoded, err := json.Marshal(tombstone)
+		if err != nil {
+			return fmt.Errorf("encode telemetry site live invalidation: %w", err)
+		}
+		prepared := preparedSiteLiveEntry{
+			field:     cleanID,
+			sampledMs: strconv.FormatInt(ms, 10),
+			effMs:     strconv.FormatInt(ms, 10),
+			payload:   string(encoded),
+		}
+		if idx, exists := seen[cleanID]; exists {
+			entries[idx] = prepared
+		} else {
+			seen[cleanID] = len(entries)
+			entries = append(entries, prepared)
+		}
+	}
+	return cache.runSiteLiveCAS(ctx, tenantID, siteID, entries)
+}
+
 func (cache *RedisLatestCache) key(tenantID, siteID, deviceID telemetryapi.UUIDv7) string {
 	return fmt.Sprintf("%s:%s:%s:%s", cache.keyPrefix, tenantID, siteID, deviceID)
 }
@@ -238,6 +486,106 @@ func (cache *RedisLatestCache) key(tenantID, siteID, deviceID telemetryapi.UUIDv
 func (cache *RedisLatestCache) deviceSiteKey(tenantID, deviceID telemetryapi.UUIDv7) string {
 	return fmt.Sprintf("%s:index:%s:%s", cache.keyPrefix, tenantID, deviceID)
 }
+
+func (cache *RedisLatestCache) sitePointsKey(tenantID, siteID string) string {
+	prefix := strings.TrimSuffix(strings.TrimSpace(cache.keyPrefix), ":")
+	if prefix == "" {
+		prefix = defaultLatestCacheKeyPrefix
+	}
+	prefix = strings.TrimSuffix(prefix, ":device")
+	if prefix == "" {
+		prefix = "hvac:v2:latest"
+	}
+	return fmt.Sprintf("%s:site-points:%s:%s", prefix, tenantID, siteID)
+}
+
+func normalizeSiteLiveScope(tenantID, siteID string) (string, string, error) {
+	cleanTenant := strings.ToLower(strings.TrimSpace(tenantID))
+	cleanSite := strings.ToLower(strings.TrimSpace(siteID))
+	if !uuidPattern.MatchString(cleanTenant) || !uuidPattern.MatchString(cleanSite) {
+		return "", "", errors.New("telemetry site live cache tenantId and siteId must be UUIDs")
+	}
+	return cleanTenant, cleanSite, nil
+}
+
+func normalizeSitePointIDs(pointIDs []string) ([]string, error) {
+	seen := make(map[string]struct{}, len(pointIDs))
+	out := make([]string, 0, len(pointIDs))
+	for _, raw := range pointIDs {
+		clean := strings.ToLower(strings.TrimSpace(raw))
+		if clean == "" {
+			continue
+		}
+		if !uuidPattern.MatchString(clean) {
+			return nil, errors.New("telemetry site live cache pointId must be a UUID")
+		}
+		if _, exists := seen[clean]; exists {
+			continue
+		}
+		seen[clean] = struct{}{}
+		out = append(out, clean)
+	}
+	return out, nil
+}
+
+func normalizeCachedSiteLiveObservation(obs OptimizationLiveObservation) (cachedSiteLiveObservation, error) {
+	pointID := strings.ToLower(strings.TrimSpace(obs.PointID))
+	if !uuidPattern.MatchString(pointID) {
+		return cachedSiteLiveObservation{}, errors.New("telemetry site live observation pointId must be a UUID")
+	}
+	if math.IsNaN(obs.Value) || math.IsInf(obs.Value, 0) {
+		return cachedSiteLiveObservation{}, errors.New("telemetry site live observation value must be finite")
+	}
+	sampledAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(obs.SampledAt))
+	if err != nil {
+		return cachedSiteLiveObservation{}, fmt.Errorf("telemetry site live observation sampledAt is invalid: %w", err)
+	}
+	normalized := obs
+	normalized.ObservationID = strings.ToLower(strings.TrimSpace(obs.ObservationID))
+	normalized.DeviceID = strings.ToLower(strings.TrimSpace(obs.DeviceID))
+	normalized.PointID = pointID
+	normalized.TelemetryKey = strings.TrimSpace(obs.TelemetryKey)
+	normalized.SampledAt = sampledAt.UTC().Format(time.RFC3339Nano)
+	if rawReceived := strings.TrimSpace(obs.ReceivedAt); rawReceived != "" {
+		receivedAt, err := time.Parse(time.RFC3339Nano, rawReceived)
+		if err != nil {
+			return cachedSiteLiveObservation{}, fmt.Errorf("telemetry site live observation receivedAt is invalid: %w", err)
+		}
+		normalized.ReceivedAt = receivedAt.UTC().Format(time.RFC3339Nano)
+	} else {
+		normalized.ReceivedAt = ""
+	}
+	sampledMs := sampledAt.UTC().UnixMilli()
+	healthMs := sampledMs
+	if rawHealth := strings.TrimSpace(obs.HealthAt); rawHealth != "" {
+		healthAt, err := time.Parse(time.RFC3339Nano, rawHealth)
+		if err != nil {
+			return cachedSiteLiveObservation{}, fmt.Errorf("telemetry site live observation healthAt is invalid: %w", err)
+		}
+		normalized.HealthAt = healthAt.UTC().Format(time.RFC3339Nano)
+		healthMs = healthAt.UTC().UnixMilli()
+	}
+	normalized.SourceEventID = strings.ToLower(strings.TrimSpace(obs.SourceEventID))
+	if normalized.QualityReasons == nil {
+		normalized.QualityReasons = []string{}
+	} else {
+		normalized.QualityReasons = slices.Clone(normalized.QualityReasons)
+	}
+	if len(normalized.HealthReasons) > 0 {
+		normalized.HealthReasons = slices.Clone(normalized.HealthReasons)
+	}
+	return cachedSiteLiveObservation{
+		SampledMs:                   sampledMs,
+		HealthMs:                    healthMs,
+		OptimizationLiveObservation: normalized,
+	}, nil
+}
+
+var (
+	_ LatestCache              = (*RedisLatestCache)(nil)
+	_ SiteLiveCache            = (*RedisLatestCache)(nil)
+	_ SiteLiveCacheInvalidator = (*RedisLatestCache)(nil)
+)
 
 func validateLatestCacheSnapshot(snapshot telemetryapi.DeviceObservationSnapshot) error {
 	if snapshot.SchemaVersion != 1 || snapshot.BusinessRevision < 1 {

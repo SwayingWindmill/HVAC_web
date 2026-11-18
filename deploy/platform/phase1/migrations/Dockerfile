@@ -182,6 +182,8 @@ COPY infra/connectivity/postgres/init/gateway-shadow-drivers-and-autonomy.sql /o
 COPY infra/registry/postgres/init/optimization-safety-guardrails.sql /opt/hvac/repo/infra/registry/postgres/init/optimization-safety-guardrails.sql
 COPY infra/registry/postgres/init/optimization-shadow-and-trace.sql /opt/hvac/repo/infra/registry/postgres/init/optimization-shadow-and-trace.sql
 COPY infra/registry/postgres/init/optimization-governance-flywheel.sql /opt/hvac/repo/infra/registry/postgres/init/optimization-governance-flywheel.sql
+COPY infra/registry/postgres/init/metric-backfill-recalc-job-grants.sql /opt/hvac/repo/infra/registry/postgres/init/metric-backfill-recalc-job-grants.sql
+COPY infra/telemetry/postgres/init/telemetry-runtime-unnest-and-indexes.sql /opt/hvac/repo/infra/telemetry/postgres/init/telemetry-runtime-unnest-and-indexes.sql
 
 FROM postgres:16.4-bookworm
 

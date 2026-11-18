@@ -141,36 +141,18 @@ type optimizationPointHealthResponse struct {
 }
 
 func NewWorkloadTelemetryHealthClient(config TelemetryHealthClientConfig) (*WorkloadTelemetryHealthClient, error) {
-	baseURL := strings.TrimRight(strings.TrimSpace(config.TelemetryURL), "/")
-	if baseURL == "" {
-		return nil, errors.New("telemetry health client requires TelemetryURL")
-	}
-	parsed, err := url.Parse(baseURL)
-	if err != nil || parsed.Hostname() == "" {
-		return nil, fmt.Errorf("invalid TelemetryURL %q", baseURL)
-	}
-	httpClient := config.HTTPClient
-	if httpClient == nil {
-		serverName := strings.TrimSpace(config.ServerName)
-		if serverName == "" {
-			serverName = parsed.Hostname()
-		}
-		timeout := config.Timeout
-		if timeout <= 0 {
-			timeout = 10 * time.Second
-		}
-		httpClient, err = workloadtls.NewHTTPClient(workloadtls.ClientConfig{
-			CertificateFiles: &workloadtls.CertificateFiles{
-				CertificatePath: config.CertificatePath,
-				PrivateKeyPath:  config.PrivateKeyPath,
-			},
-			ServerCAPath: config.CAPath,
-			ServerName:   serverName,
-			Timeout:      timeout,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("create telemetry health mTLS client: %w", err)
-		}
+	baseURL, httpClient, err := resolveWorkloadTelemetryHTTPClient(
+		config.TelemetryURL,
+		config.CertificatePath,
+		config.PrivateKeyPath,
+		config.CAPath,
+		config.ServerName,
+		config.Timeout,
+		config.HTTPClient,
+		"telemetry health client",
+	)
+	if err != nil {
+		return nil, err
 	}
 	return &WorkloadTelemetryHealthClient{
 		baseURL:    baseURL,
@@ -206,40 +188,22 @@ func (client *WorkloadTelemetryHealthClient) InspectTelemetryPointHealth(ctx con
 	}
 	cleanDevices := normalizeTelemetryStrings(deviceIDs, true)
 
-	payload, err := json.Marshal(optimizationPointHealthRequest{
-		TenantID:      tenant,
-		SiteID:        site,
-		DeviceIDs:     cleanDevices,
-		TelemetryKeys: cleanKeys,
-	})
-	if err != nil {
-		return OptimizationPointHealthSnapshot{}, err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, client.baseURL+InternalOptimizationPointHealthPath, bytes.NewReader(payload))
-	if err != nil {
-		return OptimizationPointHealthSnapshot{}, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, application/problem+json")
-	observability.InjectHTTP(ctx, req.Header)
-
-	resp, err := client.httpClient.Do(req)
-	if err != nil {
-		return OptimizationPointHealthSnapshot{}, fmt.Errorf("request telemetry point health: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 512<<10))
-	if err != nil {
-		return OptimizationPointHealthSnapshot{}, fmt.Errorf("read telemetry point health response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return OptimizationPointHealthSnapshot{}, fmt.Errorf("telemetry point health returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-
 	var result optimizationPointHealthResponse
-	if err := json.Unmarshal(body, &result); err != nil {
-		return OptimizationPointHealthSnapshot{}, fmt.Errorf("decode telemetry point health response: %w", err)
+	if err := postWorkloadTelemetryJSON(
+		ctx,
+		client.httpClient,
+		client.baseURL+InternalOptimizationPointHealthPath,
+		optimizationPointHealthRequest{
+			TenantID:      tenant,
+			SiteID:        site,
+			DeviceIDs:     cleanDevices,
+			TelemetryKeys: cleanKeys,
+		},
+		&result,
+		512<<10,
+		"telemetry point health",
+	); err != nil {
+		return OptimizationPointHealthSnapshot{}, err
 	}
 	return OptimizationPointHealthSnapshot(result), nil
 }
@@ -252,6 +216,89 @@ func unhealthyPointHealthError(snapshot OptimizationPointHealthSnapshot) error {
 		return unavailable(ReasonInputsInvalid, "point %s telemetry health (%s) suppresses optimization", key, snapshot.BlockReason)
 	}
 	return unavailable(ReasonInputsInvalid, "telemetry point health check suppressed optimization")
+}
+
+func resolveWorkloadTelemetryHTTPClient(
+	telemetryURL, certificatePath, privateKeyPath, caPath, serverName string,
+	timeout time.Duration,
+	existing *http.Client,
+	clientLabel string,
+) (string, *http.Client, error) {
+	baseURL := strings.TrimRight(strings.TrimSpace(telemetryURL), "/")
+	if baseURL == "" {
+		return "", nil, fmt.Errorf("%s requires TelemetryURL", clientLabel)
+	}
+	parsed, err := url.Parse(baseURL)
+	if err != nil || parsed.Hostname() == "" {
+		return "", nil, fmt.Errorf("invalid TelemetryURL %q", baseURL)
+	}
+	httpClient := existing
+	if httpClient == nil {
+		tlsServerName := strings.TrimSpace(serverName)
+		if tlsServerName == "" {
+			tlsServerName = parsed.Hostname()
+		}
+		effectiveTimeout := timeout
+		if effectiveTimeout <= 0 {
+			effectiveTimeout = 10 * time.Second
+		}
+		httpClient, err = workloadtls.NewHTTPClient(workloadtls.ClientConfig{
+			CertificateFiles: &workloadtls.CertificateFiles{
+				CertificatePath: certificatePath,
+				PrivateKeyPath:  privateKeyPath,
+			},
+			ServerCAPath: caPath,
+			ServerName:   tlsServerName,
+			Timeout:      effectiveTimeout,
+		})
+		if err != nil {
+			return "", nil, fmt.Errorf("create %s mTLS client: %w", clientLabel, err)
+		}
+	}
+	return baseURL, httpClient, nil
+}
+
+func postWorkloadTelemetryJSON(
+	ctx context.Context,
+	httpClient *http.Client,
+	endpoint string,
+	requestBody any,
+	responseTarget any,
+	maxResponseBytes int64,
+	label string,
+) error {
+	payload, err := json.Marshal(requestBody)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, application/problem+json")
+	observability.InjectHTTP(ctx, req.Header)
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("request %s: %w", label, err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+	if err != nil {
+		return fmt.Errorf("read %s response: %w", label, err)
+	}
+	if int64(len(body)) > maxResponseBytes {
+		return fmt.Errorf("%s response exceeds %d bytes", label, maxResponseBytes)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("%s returned %d: %s", label, resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	if err := json.Unmarshal(body, responseTarget); err != nil {
+		return fmt.Errorf("decode %s response: %w", label, err)
+	}
+	return nil
 }
 
 func normalizeTelemetryStrings(values []string, uuidOnly bool) []string {

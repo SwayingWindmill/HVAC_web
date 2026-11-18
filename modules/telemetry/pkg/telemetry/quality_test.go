@@ -500,3 +500,85 @@ func TestFlatlineSuppressedBySentinelSourceUntrustedAndStabilizeWindow(t *testin
 		t.Fatal("future peer beyond StaleAfter must not be treated as fresh for outbox replay")
 	}
 }
+
+func TestValidatePhysicalBoundsEnvelopesAndRegisterSentinels(t *testing.T) {
+	strPtr := func(s string) *string { return &s }
+
+	for _, bad := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		if got := ValidatePhysicalBounds(bad, nil, "TELEMETRY"); !sameReasons(got, QualityReasonOutOfRange) {
+			t.Fatalf("non-finite %v = %v", bad, got)
+		}
+	}
+	if got := ValidatePhysicalBounds(100, nil, "TELEMETRY"); len(got) != 0 {
+		t.Fatalf("nil unit finite = %v", got)
+	}
+	if got := ValidatePhysicalBounds(100, strPtr("   "), "TELEMETRY"); len(got) != 0 {
+		t.Fatalf("blank unit finite = %v", got)
+	}
+
+	validCases := []struct {
+		unit      string
+		pointType string
+		values    []float64
+	}{
+		{"Cel", "TELEMETRY", []float64{-60, 0, 23.5, 176.8, 200}},
+		{" degC ", "TELEMETRY", []float64{-60, 200}},
+		{"°C", "TELEMETRY", []float64{-60, 200}},
+		{"℃", "TELEMETRY", []float64{-60, 200}},
+		{"%", "TELEMETRY", []float64{0, 50, 100}},
+		{"%RH", "TELEMETRY", []float64{0, 55.5, 100}},
+		{"Hz", "TELEMETRY", []float64{0, 50, 120}},
+		{"Pa", "TELEMETRY", []float64{-101325, 0, 32767, 65535, 10000000}},
+		{"kPa", "TELEMETRY", []float64{-101.325, 0, 10000}},
+		{"MPa", "TELEMETRY", []float64{-0.101325, 0, 10}},
+		{"bar", "TELEMETRY", []float64{-1.01325, 0, 100}},
+		{"m3/h", "TELEMETRY", []float64{0, 32767, 100000}},
+		{"m³/h", "TELEMETRY", []float64{0, 100000}},
+		{"L/s", "TELEMETRY", []float64{0, 30000}},
+		{"kW", "TELEMETRY", []float64{-50000, 0, 32767, 200000}},
+		{"kWh", "COUNTER", []float64{0, 65535, 1e12}},
+		{"MWh", "COUNTER", []float64{0, 32767, 1e12}},
+	}
+	for _, tc := range validCases {
+		for _, v := range tc.values {
+			if got := ValidatePhysicalBounds(v, strPtr(tc.unit), tc.pointType); len(got) != 0 {
+				t.Fatalf("expected valid (%v %q, %s), got %v", v, tc.unit, tc.pointType, got)
+			}
+		}
+	}
+
+	outOfRangeOnly := []struct {
+		unit      string
+		pointType string
+		values    []float64
+	}{
+		{"Cel", "TELEMETRY", []float64{-60.01, 200.01, 500}},
+		{"degC", "SETTING", []float64{-61, 201}},
+		{"%RH", "TELEMETRY", []float64{-0.1, 100.1}},
+		{"Hz", "TELEMETRY", []float64{-1, 120.1}},
+		{"Pa", "TELEMETRY", []float64{-101326, 10000001}},
+		{"kPa", "TELEMETRY", []float64{-102, 10001}},
+		{"MPa", "TELEMETRY", []float64{-0.2, 10.1}},
+		{"bar", "TELEMETRY", []float64{-1.1, 100.1}},
+		{"m3/h", "TELEMETRY", []float64{-1, 100001}},
+		{"L/s", "TELEMETRY", []float64{-1, 30001, 65535}},
+		{"kW", "TELEMETRY", []float64{-50001, 200001}},
+		{"kWh", "COUNTER", []float64{-0.1, 1.0001e12}},
+		{"Cel", "COUNTER", []float64{65535}},
+	}
+	for _, tc := range outOfRangeOnly {
+		for _, v := range tc.values {
+			if got := ValidatePhysicalBounds(v, strPtr(tc.unit), tc.pointType); !sameReasons(got, QualityReasonOutOfRange) {
+				t.Fatalf("expected OUT_OF_RANGE for (%v %q, %s), got %v", v, tc.unit, tc.pointType, got)
+			}
+		}
+	}
+
+	for _, unit := range []string{"Cel", " degC ", "°C", "℃", "%", "%RH", "Hz", "bar", "MPa"} {
+		for _, sentinel := range []float64{65535, 32767, 32767.00005, -32768} {
+			if got := ValidatePhysicalBounds(sentinel, strPtr(unit), "TELEMETRY"); !sameReasons(got, QualityReasonOutOfRange, QualityReasonSentinel) {
+				t.Fatalf("expected OUT_OF_RANGE+SENTINEL for (%v %q), got %v", sentinel, unit, got)
+			}
+		}
+	}
+}

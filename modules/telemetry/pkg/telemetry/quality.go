@@ -159,6 +159,80 @@ type PointHealth struct {
 	Reasons []QualityReason
 }
 
+type physicalBounds struct {
+	min float64
+	max float64
+}
+
+var physicalUnitEnvelopes = map[string]physicalBounds{
+	"Cel":  {min: -60, max: 200},
+	"degC": {min: -60, max: 200},
+	"°C":   {min: -60, max: 200},
+	"℃":    {min: -60, max: 200},
+	"%":    {min: 0, max: 100},
+	"%RH":  {min: 0, max: 100},
+	"Hz":   {min: 0, max: 120},
+	"Pa":   {min: -101325, max: 10000000},
+	"kPa":  {min: -101.325, max: 10000},
+	"MPa":  {min: -0.101325, max: 10},
+	"bar":  {min: -1.01325, max: 100},
+	"m3/h": {min: 0, max: 100000},
+	"m³/h": {min: 0, max: 100000},
+	"L/s":  {min: 0, max: 30000},
+	"kW":   {min: -50000, max: 200000},
+	"kWh":  {min: 0, max: 1e12},
+	"MWh":  {min: 0, max: 1e12},
+}
+
+var registerSentinelUnits = map[string]struct{}{
+	"Cel":  {},
+	"degC": {},
+	"°C":   {},
+	"℃":    {},
+	"%":    {},
+	"%RH":  {},
+	"Hz":   {},
+	"bar":  {},
+	"MPa":  {},
+}
+
+var registerErrorSentinels = [3]float64{65535, 32767, -32768}
+
+// ValidatePhysicalBounds rejects non-finite numbers, values outside hard physical unit
+// envelopes, and 16-bit Modbus register overflow/error sentinels on bounded non-counter units.
+func ValidatePhysicalBounds(value float64, unit *string, pointType string) []QualityReason {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return []QualityReason{QualityReasonOutOfRange}
+	}
+	if unit == nil {
+		return nil
+	}
+	normalized := strings.TrimSpace(*unit)
+	if normalized == "" {
+		return nil
+	}
+	var reasons []QualityReason
+	if bounds, ok := physicalUnitEnvelopes[normalized]; ok {
+		if value < bounds.min || value > bounds.max {
+			reasons = append(reasons, QualityReasonOutOfRange)
+		}
+	}
+	if strings.ToUpper(strings.TrimSpace(pointType)) != "COUNTER" {
+		if _, checkSentinel := registerSentinelUnits[normalized]; checkSentinel {
+			for _, sentinel := range registerErrorSentinels {
+				if nearlyEqual(value, sentinel) {
+					if !containsReason(reasons, QualityReasonOutOfRange) {
+						reasons = append(reasons, QualityReasonOutOfRange)
+					}
+					reasons = append(reasons, QualityReasonSentinel)
+					break
+				}
+			}
+		}
+	}
+	return reasons
+}
+
 // AssessPointQuality reports suspect reasons for one numeric sample.
 // Range rejection stays in validateObservation. Counters only inherit an
 // untrusted input (a derived cooling total); they are not judged for spikes.

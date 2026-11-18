@@ -21,14 +21,15 @@ import (
 )
 
 const (
-	InternalDeviceSnapshotPrefix          = "/internal/v1/devices/"
-	InternalBatchSnapshotPath             = "/internal/v1/telemetry/observation-snapshots:batchGet"
-	InternalRecoveryCheckpointResolvePath = "/internal/v1/telemetry/recovery-cursors:resolve"
-	InternalCommandReportedStatePath      = "/internal/v1/commands/reported-state"
-	InternalOptimizationPointHealthPath   = "/internal/v1/telemetry/optimization/point-health:check"
-	telemetryContextGrantHeader           = "X-Telemetry-Context-Grant"
-	telemetryCheckpointResolveAction      = "telemetry:checkpoint:resolve"
-	maximumSnapshotRequestSize            = 256 << 10
+	InternalDeviceSnapshotPrefix             = "/internal/v1/devices/"
+	InternalBatchSnapshotPath                = "/internal/v1/telemetry/observation-snapshots:batchGet"
+	InternalRecoveryCheckpointResolvePath    = "/internal/v1/telemetry/recovery-cursors:resolve"
+	InternalCommandReportedStatePath         = "/internal/v1/commands/reported-state"
+	InternalOptimizationPointHealthPath      = "/internal/v1/telemetry/optimization/point-health:check"
+	InternalOptimizationLiveObservationsPath = "/internal/v1/telemetry/optimization/live-observations:read"
+	telemetryContextGrantHeader              = "X-Telemetry-Context-Grant"
+	telemetryCheckpointResolveAction         = "telemetry:checkpoint:resolve"
+	maximumSnapshotRequestSize               = 256 << 10
 )
 
 var (
@@ -69,6 +70,7 @@ type ServerConfig struct {
 	AllowedRegistrySyncSPIFFEs       []string
 	RegistrySyncer                   RegistrySyncer
 	PointHealthInspector             PointHealthInspector
+	LiveObservationReader            OptimizationLiveObservationReader
 	Metrics                          *observability.Registry
 	Tracer                           *observability.Tracer
 	Now                              func() time.Time
@@ -99,6 +101,7 @@ type handler struct {
 	allowedRegistrySyncSPIFFEs       map[string]struct{}
 	registrySyncer                   RegistrySyncer
 	pointHealthInspector             PointHealthInspector
+	liveObservationReader            OptimizationLiveObservationReader
 	metrics                          *s2Metrics
 	tracer                           *observability.Tracer
 	now                              func() time.Time
@@ -145,6 +148,15 @@ func NewHandler(config ServerConfig) http.Handler {
 			pointHealthInspector = candidate
 		}
 	}
+	liveObservationReader := config.LiveObservationReader
+	if liveObservationReader == nil {
+		if pgStore, ok := config.Store.(LiveObservationPostgresStore); ok {
+			if typedPG, isPG := pgStore.(*PostgresStore); !isPG || typedPG != nil {
+				siteCache, _ := config.LatestCache.(SiteLiveCache)
+				liveObservationReader = newPostgresLiveObservationReader(pgStore, siteCache)
+			}
+		}
+	}
 	allowedOptimizationServiceSPIFFE := strings.TrimSpace(config.AllowedOptimizationServiceSPIFFE)
 	if allowedOptimizationServiceSPIFFE == "" {
 		allowedOptimizationServiceSPIFFE = DefaultOptimizationServiceSPIFFE
@@ -183,6 +195,7 @@ func NewHandler(config ServerConfig) http.Handler {
 		allowedRegistrySyncSPIFFEs:       allowedRegistrySyncSPIFFEs,
 		registrySyncer:                   registrySyncer,
 		pointHealthInspector:             pointHealthInspector,
+		liveObservationReader:            liveObservationReader,
 		metrics:                          newS2Metrics(config.Metrics, now),
 		tracer:                           tracer,
 		now:                              now,
@@ -257,6 +270,10 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	if request.URL.Path == InternalOptimizationPointHealthPath {
 		h.handleOptimizationPointHealth(writer, request)
+		return
+	}
+	if request.URL.Path == InternalOptimizationLiveObservationsPath {
+		h.handleOptimizationLiveObservations(writer, request)
 		return
 	}
 	if request.URL.Path == InternalBatchSnapshotPath {

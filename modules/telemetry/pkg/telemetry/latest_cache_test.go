@@ -3,6 +3,7 @@ package telemetry
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -19,9 +20,11 @@ import (
 )
 
 type memoryLatestCache struct {
-	snapshot telemetryapi.DeviceObservationSnapshot
-	putErr   error
-	getErr   error
+	mu         sync.Mutex
+	snapshot   telemetryapi.DeviceObservationSnapshot
+	sitePoints map[string]map[string]cachedSiteLiveObservation
+	putErr     error
+	getErr     error
 }
 
 func (cache *memoryLatestCache) PutIfNewer(_ context.Context, snapshot telemetryapi.DeviceObservationSnapshot) (bool, error) {
@@ -58,6 +61,112 @@ func (cache *memoryLatestCache) GetForDevice(_ context.Context, tenantID, device
 func (cache *memoryLatestCache) Close() error { return nil }
 
 func (cache *memoryLatestCache) Ping(context.Context) error { return nil }
+
+func (cache *memoryLatestCache) PutSiteLiveObservations(_ context.Context, tenantID, siteID string, observations []OptimizationLiveObservation) error {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if cache.putErr != nil {
+		return cache.putErr
+	}
+	cleanTenant, cleanSite, err := normalizeSiteLiveScope(tenantID, siteID)
+	if err != nil {
+		return err
+	}
+	if cache.sitePoints == nil {
+		cache.sitePoints = map[string]map[string]cachedSiteLiveObservation{}
+	}
+	scopeKey := cleanTenant + ":" + cleanSite
+	points := cache.sitePoints[scopeKey]
+	if points == nil {
+		points = map[string]cachedSiteLiveObservation{}
+		cache.sitePoints[scopeKey] = points
+	}
+	for _, obs := range observations {
+		entry, err := normalizeCachedSiteLiveObservation(obs)
+		if err != nil {
+			return err
+		}
+		newEffMs := max(entry.SampledMs, entry.HealthMs)
+		if existing, ok := points[entry.PointID]; ok {
+			curEffMs := max(existing.SampledMs, existing.HealthMs)
+			if newEffMs < curEffMs || (!existing.Invalidated && entry.SampledMs < existing.SampledMs) {
+				continue
+			}
+		}
+		points[entry.PointID] = entry
+	}
+	return nil
+}
+
+func (cache *memoryLatestCache) GetSiteLiveObservations(_ context.Context, tenantID, siteID string, pointIDs []string) (map[string]OptimizationLiveObservation, error) {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if cache.getErr != nil {
+		return nil, cache.getErr
+	}
+	cleanTenant, cleanSite, err := normalizeSiteLiveScope(tenantID, siteID)
+	if err != nil {
+		return nil, err
+	}
+	cleanIDs, err := normalizeSitePointIDs(pointIDs)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]OptimizationLiveObservation, len(cleanIDs))
+	points := cache.sitePoints[cleanTenant+":"+cleanSite]
+	for _, id := range cleanIDs {
+		if entry, ok := points[id]; ok && !entry.Invalidated {
+			out[id] = entry.OptimizationLiveObservation
+		}
+	}
+	return out, nil
+}
+
+func (cache *memoryLatestCache) InvalidateSiteLiveObservations(_ context.Context, tenantID, siteID string, items []SiteLiveInvalidation) error {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if cache.putErr != nil {
+		return cache.putErr
+	}
+	cleanTenant, cleanSite, err := normalizeSiteLiveScope(tenantID, siteID)
+	if err != nil {
+		return err
+	}
+	if cache.sitePoints == nil {
+		cache.sitePoints = map[string]map[string]cachedSiteLiveObservation{}
+	}
+	scopeKey := cleanTenant + ":" + cleanSite
+	points := cache.sitePoints[scopeKey]
+	if points == nil {
+		points = map[string]cachedSiteLiveObservation{}
+		cache.sitePoints[scopeKey] = points
+	}
+	for _, item := range items {
+		cleanID := strings.ToLower(strings.TrimSpace(item.PointID))
+		if !uuidPattern.MatchString(cleanID) {
+			return errors.New("telemetry site live cache pointId must be a UUID")
+		}
+		if item.SampledAt.IsZero() {
+			return errors.New("telemetry site live invalidation sampledAt is required")
+		}
+		ms := item.SampledAt.UTC().UnixMilli()
+		if existing, ok := points[cleanID]; ok {
+			curEffMs := max(existing.SampledMs, existing.HealthMs)
+			if ms < curEffMs || (!existing.Invalidated && ms < existing.SampledMs) {
+				continue
+			}
+		}
+		points[cleanID] = cachedSiteLiveObservation{
+			SampledMs:   ms,
+			HealthMs:    ms,
+			Invalidated: true,
+			OptimizationLiveObservation: OptimizationLiveObservation{
+				PointID: cleanID,
+			},
+		}
+	}
+	return nil
+}
 
 type memoryLatestRebuildSource struct {
 	snapshots []telemetryapi.DeviceObservationSnapshot
@@ -287,6 +396,280 @@ func TestRedisLatestCachePutIfNewerPassesSampledMsAndTTL(t *testing.T) {
 	}
 	if evalArgs[13] != snapshotKeysSignature(snap) {
 		t.Fatalf("ARGV[9] keys_sig=%q, want %q", evalArgs[13], snapshotKeysSignature(snap))
+	}
+}
+
+func TestRedisSitePointsCacheKeyNormalizationAndCommands(t *testing.T) {
+	defaultCache := &RedisLatestCache{keyPrefix: defaultLatestCacheKeyPrefix}
+	wantDefaultKey := "hvac:v2:latest:site-points:" + tenantA + ":" + siteA
+	if got := defaultCache.sitePointsKey(tenantA, siteA); got != wantDefaultKey {
+		t.Fatalf("default sitePointsKey=%q, want %q", got, wantDefaultKey)
+	}
+	customCache := &RedisLatestCache{keyPrefix: "hvac:test:latest"}
+	wantCustomKey := "hvac:test:latest:site-points:" + tenantA + ":" + siteA
+	if got := customCache.sitePointsKey(tenantA, siteA); got != wantCustomKey {
+		t.Fatalf("custom sitePointsKey=%q, want %q", got, wantCustomKey)
+	}
+
+	var mu sync.Mutex
+	hashes := map[string]map[string]string{}
+	var commands [][]string
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				reader := bufio.NewReader(c)
+				for {
+					args, err := readRESPArray(reader)
+					if err != nil {
+						return
+					}
+					cmd := strings.ToUpper(args[0])
+					mu.Lock()
+					commands = append(commands, append([]string(nil), args...))
+					mu.Unlock()
+					switch cmd {
+					case "HELLO":
+						_, _ = io.WriteString(c, "-ERR unknown command 'HELLO'\r\n")
+					case "PING":
+						_, _ = io.WriteString(c, "+PONG\r\n")
+					case "EVALSHA":
+						_, _ = io.WriteString(c, "-NOSCRIPT No matching script. Please use EVAL.\r\n")
+					case "EVAL":
+						hashKey := args[3]
+						var applied int64
+						mu.Lock()
+						h := hashes[hashKey]
+						if h == nil {
+							h = map[string]string{}
+							hashes[hashKey] = h
+						}
+						for i := 5; i+3 < len(args); i += 4 {
+							field := args[i]
+							newSampledMs, _ := strconv.ParseInt(args[i+1], 10, 64)
+							newEffMs, _ := strconv.ParseInt(args[i+2], 10, 64)
+							payload := args[i+3]
+							shouldApply := true
+							if curRaw, ok := h[field]; ok {
+								var cur cachedSiteLiveObservation
+								if json.Unmarshal([]byte(curRaw), &cur) == nil {
+									curEffMs := max(cur.SampledMs, cur.HealthMs)
+									if newEffMs < curEffMs || (!cur.Invalidated && newSampledMs < cur.SampledMs) {
+										shouldApply = false
+									}
+								}
+							}
+							if shouldApply {
+								h[field] = payload
+								applied++
+							}
+						}
+						mu.Unlock()
+						_, _ = fmt.Fprintf(c, ":%d\r\n", applied)
+					case "HMGET":
+						hashKey := args[1]
+						fields := args[2:]
+						mu.Lock()
+						h := hashes[hashKey]
+						var resp strings.Builder
+						fmt.Fprintf(&resp, "*%d\r\n", len(fields))
+						for _, f := range fields {
+							val, ok := h[f]
+							if !ok {
+								resp.WriteString("$-1\r\n")
+								continue
+							}
+							fmt.Fprintf(&resp, "$%d\r\n%s\r\n", len(val), val)
+						}
+						mu.Unlock()
+						_, _ = io.WriteString(c, resp.String())
+					case "HDEL":
+						hashKey := args[1]
+						var removed int64
+						mu.Lock()
+						h := hashes[hashKey]
+						for _, f := range args[2:] {
+							if _, ok := h[f]; ok {
+								delete(h, f)
+								removed++
+							}
+						}
+						mu.Unlock()
+						_, _ = fmt.Fprintf(c, ":%d\r\n", removed)
+					default:
+						_, _ = io.WriteString(c, "+OK\r\n")
+					}
+				}
+			}(conn)
+		}
+	}()
+
+	client := redis.NewClient(&redis.Options{
+		Addr:            ln.Addr().String(),
+		Protocol:        2,
+		DisableIdentity: true,
+	})
+	defer func() { _ = client.Close() }()
+	cache := &RedisLatestCache{client: client, keyPrefix: defaultLatestCacheKeyPrefix}
+
+	pointA := "018f2e00-3100-7000-8000-000000000001"
+	pointB := "018f2e00-3100-7000-8000-000000000002"
+	t1 := time.Date(2026, 11, 18, 1, 0, 0, 0, time.UTC)
+	obs1 := OptimizationLiveObservation{
+		ObservationID:   "018f2e00-8000-7000-8000-000000000001",
+		DeviceID:        deviceA,
+		PointID:         pointA,
+		TelemetryKey:    "supply_water_temperature",
+		PointRevision:   3,
+		SampledAt:       t1.Format(time.RFC3339Nano),
+		ReceivedAt:      t1.Add(time.Second).Format(time.RFC3339Nano),
+		Value:           6.8,
+		Unit:            "Cel",
+		Quality:         "GOOD",
+		QualityReasons:  []string{},
+		HealthStatus:    HealthHealthy,
+		SourceEventID:   "018f2e00-8000-7000-8000-000000000011",
+		SourcePartition: "p0",
+		SourceOffset:    10,
+	}
+	if err := cache.PutSiteLiveObservations(t.Context(), tenantA, siteA, []OptimizationLiveObservation{obs1}); err != nil {
+		t.Fatal(err)
+	}
+
+	older := obs1
+	older.SampledAt = t1.Add(-30 * time.Second).Format(time.RFC3339Nano)
+	older.Value = 99.9
+	if err := cache.PutSiteLiveObservations(t.Context(), tenantA, siteA, []OptimizationLiveObservation{older}); err != nil {
+		t.Fatal(err)
+	}
+
+	sameTimeUpdated := obs1
+	sameTimeUpdated.HealthStatus = HealthBad
+	sameTimeUpdated.HealthReasons = []string{"OUT_OF_RANGE"}
+	if err := cache.PutSiteLiveObservations(t.Context(), tenantA, siteA, []OptimizationLiveObservation{sameTimeUpdated}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := cache.GetSiteLiveObservations(t.Context(), tenantA, siteA, []string{pointA, pointB})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[pointA].Value != 6.8 || got[pointA].HealthStatus != HealthBad || !slices.Equal(got[pointA].HealthReasons, []string{"OUT_OF_RANGE"}) {
+		t.Fatalf("unexpected GetSiteLiveObservations result: %#v", got)
+	}
+	if _, exists := got[pointB]; exists {
+		t.Fatalf("expected miss for pointB, got %#v", got[pointB])
+	}
+
+	rejectAt := t1.Add(15 * time.Second)
+	if err := cache.InvalidateSiteLiveObservations(t.Context(), tenantA, siteA, []SiteLiveInvalidation{{PointID: pointA, SampledAt: rejectAt}}); err != nil {
+		t.Fatal(err)
+	}
+	afterInvalidate, err := cache.GetSiteLiveObservations(t.Context(), tenantA, siteA, []string{pointA})
+	if err != nil || len(afterInvalidate) != 0 {
+		t.Fatalf("expected empty after invalidate, got=%#v err=%v", afterInvalidate, err)
+	}
+
+	staleBackfill := obs1
+	staleBackfill.HealthAt = t1.Add(time.Second).Format(time.RFC3339Nano)
+	if err := cache.PutSiteLiveObservations(t.Context(), tenantA, siteA, []OptimizationLiveObservation{staleBackfill}); err != nil {
+		t.Fatal(err)
+	}
+	stillInvalidated, err := cache.GetSiteLiveObservations(t.Context(), tenantA, siteA, []string{pointA})
+	if err != nil || len(stillInvalidated) != 0 {
+		t.Fatalf("stale backfill must not overwrite newer invalidation tombstone: %#v err=%v", stillInvalidated, err)
+	}
+
+	postRejectPG := obs1
+	postRejectPG.HealthStatus = HealthBad
+	postRejectPG.HealthReasons = []string{"OUT_OF_RANGE"}
+	postRejectPG.HealthAt = rejectAt.Format(time.RFC3339Nano)
+	if err := cache.PutSiteLiveObservations(t.Context(), tenantA, siteA, []OptimizationLiveObservation{postRejectPG}); err != nil {
+		t.Fatal(err)
+	}
+	afterPostRejectBackfill, err := cache.GetSiteLiveObservations(t.Context(), tenantA, siteA, []string{pointA})
+	if err != nil || len(afterPostRejectBackfill) != 1 || afterPostRejectBackfill[pointA].HealthStatus != HealthBad {
+		t.Fatalf("expected post-rejection PG read to replace tombstone, got=%#v err=%v", afterPostRejectBackfill, err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	var sawEval bool
+	for _, cmd := range commands {
+		if strings.ToUpper(cmd[0]) == "EVAL" {
+			sawEval = true
+			if cmd[3] != wantDefaultKey {
+				t.Fatalf("EVAL hash key=%q, want %q", cmd[3], wantDefaultKey)
+			}
+			if !strings.Contains(cmd[1], "new_sampled_ms < cur_sampled_ms") || !strings.Contains(cmd[1], "PEXPIRE") || !strings.Contains(cmd[1], "cjson.decode") {
+				t.Fatalf("unexpected Lua CAS script: %s", cmd[1])
+			}
+			wantTTL := strconv.FormatInt(defaultLatestCacheTTL.Milliseconds(), 10)
+			if cmd[4] != wantTTL {
+				t.Fatalf("EVAL ttl=%q, want %q", cmd[4], wantTTL)
+			}
+			break
+		}
+	}
+	if !sawEval {
+		t.Fatal("expected EVAL command for PutSiteLiveObservations")
+	}
+}
+
+func TestMemoryLatestCacheSitePointsCAS(t *testing.T) {
+	cache := &memoryLatestCache{}
+	pointID := "018f2e00-3100-7000-8000-000000000001"
+	t1 := time.Date(2026, 11, 18, 2, 0, 0, 0, time.UTC)
+	obs := OptimizationLiveObservation{
+		ObservationID:   "018f2e00-8000-7000-8000-000000000001",
+		DeviceID:        deviceA,
+		PointID:         pointID,
+		TelemetryKey:    "zone.temperature",
+		PointRevision:   2,
+		SampledAt:       t1.Format(time.RFC3339Nano),
+		ReceivedAt:      t1.Add(time.Second).Format(time.RFC3339Nano),
+		Value:           22.5,
+		Unit:            "Cel",
+		Quality:         "GOOD",
+		QualityReasons:  []string{},
+		HealthStatus:    HealthHealthy,
+		SourceEventID:   "018f2e00-8000-7000-8000-000000000011",
+		SourcePartition: "p0",
+		SourceOffset:    1,
+	}
+	if err := cache.PutSiteLiveObservations(t.Context(), tenantA, siteA, []OptimizationLiveObservation{obs}); err != nil {
+		t.Fatal(err)
+	}
+	older := obs
+	older.SampledAt = t1.Add(-time.Minute).Format(time.RFC3339Nano)
+	older.Value = 19.0
+	if err := cache.PutSiteLiveObservations(t.Context(), tenantA, siteA, []OptimizationLiveObservation{older}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := cache.GetSiteLiveObservations(t.Context(), tenantA, siteA, []string{pointID})
+	if err != nil || got[pointID].Value != 22.5 {
+		t.Fatalf("expected 22.5 without rollback, got=%#v err=%v", got, err)
+	}
+	same := obs
+	same.HealthStatus = HealthSuspect
+	same.HealthReasons = []string{"SPIKE"}
+	if err := cache.PutSiteLiveObservations(t.Context(), tenantA, siteA, []OptimizationLiveObservation{same}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = cache.GetSiteLiveObservations(t.Context(), tenantA, siteA, []string{pointID})
+	if err != nil || got[pointID].HealthStatus != HealthSuspect {
+		t.Fatalf("expected equal-timestamp health overwrite, got=%#v err=%v", got, err)
 	}
 }
 

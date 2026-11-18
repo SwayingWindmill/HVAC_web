@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -24,21 +25,25 @@ type EnergySeries interface {
 }
 
 type InputReaderConfig struct {
-	BaseURL    string
-	Username   string
-	Password   string
-	HTTPClient *http.Client
-	Energy     EnergySeries
+	BaseURL          string
+	Username         string
+	Password         string
+	HTTPClient       *http.Client
+	Energy           EnergySeries
+	LiveObservations TelemetryLiveObservationReader
+	Now              func() time.Time
 }
 
 // ClickHouseInputReader reads the plant's latest temperatures from Telemetry History and the
 // priced day from the query service.
 type ClickHouseInputReader struct {
-	baseURL  *url.URL
-	username string
-	password string
-	client   *http.Client
-	energy   EnergySeries
+	baseURL          *url.URL
+	username         string
+	password         string
+	client           *http.Client
+	energy           EnergySeries
+	liveObservations TelemetryLiveObservationReader
+	now              func() time.Time
 }
 
 func NewClickHouseInputReader(config InputReaderConfig) (*ClickHouseInputReader, error) {
@@ -53,7 +58,19 @@ func NewClickHouseInputReader(config InputReaderConfig) (*ClickHouseInputReader,
 	if config.Energy == nil {
 		return nil, errors.New("optimization input reader requires the Energy Series reader")
 	}
-	return &ClickHouseInputReader{baseURL: parsed, username: strings.TrimSpace(config.Username), password: config.Password, client: client, energy: config.Energy}, nil
+	now := config.Now
+	if now == nil {
+		now = time.Now
+	}
+	return &ClickHouseInputReader{
+		baseURL:          parsed,
+		username:         strings.TrimSpace(config.Username),
+		password:         config.Password,
+		client:           client,
+		energy:           config.Energy,
+		liveObservations: config.LiveObservations,
+		now:              now,
+	}, nil
 }
 
 func (reader *ClickHouseInputReader) ReadOptimizationState(ctx context.Context, query OptimizationStateQuery) (AuthoritativeState, error) {
@@ -73,7 +90,8 @@ func (reader *ClickHouseInputReader) ReadOptimizationState(ctx context.Context, 
 	if err != nil {
 		return AuthoritativeState{}, err
 	}
-	supplyTemperature, err := reader.readTelemetry(ctx, query, query.SupplyTemperatureKey, ReasonSupplyTempMissing)
+	useLive, liveResult, liveAmbiguous := reader.readLiveObservationsBatch(ctx, query, zoneKeys)
+	supplyTemperature, _, err := reader.readStateTelemetry(ctx, query, query.SupplyTemperatureKey, ReasonSupplyTempMissing, useLive, liveResult, liveAmbiguous)
 	if err != nil {
 		return AuthoritativeState{}, err
 	}
@@ -83,15 +101,17 @@ func (reader *ClickHouseInputReader) ReadOptimizationState(ctx context.Context, 
 	zoneTemperatures := make([]TelemetryEvidence, 0, len(zoneKeys))
 	var worstZone TelemetryEvidence
 	for idx, key := range zoneKeys {
-		zoneObs, zoneErr := reader.readTelemetry(ctx, query, key, ReasonZoneTempMissing)
+		zoneObs, fromLive, zoneErr := reader.readStateTelemetry(ctx, query, key, ReasonZoneTempMissing, useLive, liveResult, liveAmbiguous)
 		if zoneErr != nil {
 			return AuthoritativeState{}, zoneErr
 		}
-		if reason, unhealthy := telemetryHealthBlockReason(zoneObs.HealthStatus, zoneObs.QualityReasons); unhealthy {
-			return AuthoritativeState{}, unavailable(ReasonInputsInvalid, "authoritative telemetry %s is unhealthy (%s)", key, reason)
-		}
-		if validErr := validateTelemetryEvidence(zoneObs, key, query.At); validErr != nil {
-			return AuthoritativeState{}, unavailable(ReasonZoneTempMissing, "%v", validErr)
+		if !fromLive {
+			if reason, unhealthy := telemetryHealthBlockReason(zoneObs.HealthStatus, zoneObs.QualityReasons); unhealthy {
+				return AuthoritativeState{}, unavailable(ReasonInputsInvalid, "authoritative telemetry %s is unhealthy (%s)", key, reason)
+			}
+			if validErr := validateTelemetryEvidence(zoneObs, key, query.At); validErr != nil {
+				return AuthoritativeState{}, unavailable(ReasonZoneTempMissing, "%v", validErr)
+			}
 		}
 		zoneTemperatures = append(zoneTemperatures, zoneObs)
 		if idx == 0 || zoneObs.Value > worstZone.Value {
@@ -104,6 +124,109 @@ func (reader *ClickHouseInputReader) ReadOptimizationState(ctx context.Context, 
 		ZoneTemperature:   worstZone,
 		ZoneTemperatures:  zoneTemperatures,
 	}, nil
+}
+
+func (reader *ClickHouseInputReader) readLiveObservationsBatch(
+	ctx context.Context,
+	query OptimizationStateQuery,
+	zoneKeys []string,
+) (bool, OptimizationLiveObservationsResult, map[string]struct{}) {
+	if reader.liveObservations == nil {
+		return false, OptimizationLiveObservationsResult{}, nil
+	}
+	if reader.now().UTC().Sub(query.At.UTC()) > DefaultPreparationMaxTelemetryAge {
+		return false, OptimizationLiveObservationsResult{}, nil
+	}
+	keys := make([]string, 0, 1+len(zoneKeys))
+	keys = append(keys, query.SupplyTemperatureKey)
+	keys = append(keys, zoneKeys...)
+	liveResult, err := reader.liveObservations.ReadLiveObservations(ctx, query.TenantID, query.SiteID, keys)
+	if err != nil {
+		return false, OptimizationLiveObservationsResult{}, nil
+	}
+	var ambiguous map[string]struct{}
+	if len(liveResult.AmbiguousKeys) > 0 {
+		ambiguous = make(map[string]struct{}, len(liveResult.AmbiguousKeys))
+		for _, raw := range liveResult.AmbiguousKeys {
+			if clean := strings.TrimSpace(raw); clean != "" {
+				ambiguous[clean] = struct{}{}
+			}
+		}
+	}
+	return true, liveResult, ambiguous
+}
+
+func (reader *ClickHouseInputReader) readStateTelemetry(
+	ctx context.Context,
+	query OptimizationStateQuery,
+	telemetryKey string,
+	missing PreparationReason,
+	useLive bool,
+	liveResult OptimizationLiveObservationsResult,
+	liveAmbiguous map[string]struct{},
+) (TelemetryEvidence, bool, error) {
+	if useLive {
+		if _, ambiguous := liveAmbiguous[telemetryKey]; ambiguous {
+			return TelemetryEvidence{}, false, unavailable(missing, "authoritative telemetry %s resolves to multiple Points", telemetryKey)
+		}
+		if liveObs, found := liveResult.Observations[telemetryKey]; found {
+			evidence, usable, err := convertLiveObservation(liveObs, telemetryKey, query.At)
+			if err != nil {
+				return TelemetryEvidence{}, false, err
+			}
+			if usable {
+				if validErr := validateTelemetryEvidence(evidence, telemetryKey, query.At); validErr != nil {
+					return TelemetryEvidence{}, false, unavailable(missing, "%v", validErr)
+				}
+				return evidence, true, nil
+			}
+		}
+	}
+	evidence, err := reader.readTelemetry(ctx, query, telemetryKey, missing)
+	return evidence, false, err
+}
+
+func convertLiveObservation(obs OptimizationLiveObservation, expectedKey string, at time.Time) (TelemetryEvidence, bool, error) {
+	sampledAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(obs.SampledAt))
+	if err != nil {
+		return TelemetryEvidence{}, false, nil
+	}
+	receivedAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(obs.ReceivedAt))
+	if err != nil {
+		return TelemetryEvidence{}, false, nil
+	}
+	if !finite(obs.Value) {
+		return TelemetryEvidence{}, false, nil
+	}
+	sampledUTC := sampledAt.UTC()
+	receivedUTC := receivedAt.UTC()
+	atUTC := at.UTC()
+	if sampledUTC.After(atUTC) || receivedUTC.After(atUTC) {
+		return TelemetryEvidence{}, false, nil
+	}
+	evidence := TelemetryEvidence{
+		ObservationID:   obs.ObservationID,
+		DeviceID:        obs.DeviceID,
+		PointID:         obs.PointID,
+		TelemetryKey:    obs.TelemetryKey,
+		PointRevision:   obs.PointRevision,
+		SampledAt:       sampledUTC,
+		ReceivedAt:      receivedUTC,
+		Value:           obs.Value,
+		Unit:            obs.Unit,
+		Quality:         obs.Quality,
+		QualityReasons:  slices.Clone(obs.QualityReasons),
+		HealthStatus:    obs.HealthStatus,
+		SourceEventID:   obs.SourceEventID,
+		SourcePartition: obs.SourcePartition,
+		SourceOffset:    obs.SourceOffset,
+	}
+	for _, reasonSet := range [][]string{evidence.QualityReasons, obs.HealthReasons} {
+		if reason, unhealthy := telemetryHealthBlockReason(evidence.HealthStatus, reasonSet); unhealthy {
+			return TelemetryEvidence{}, true, unavailable(ReasonInputsInvalid, "authoritative telemetry %s is unhealthy (%s)", expectedKey, reason)
+		}
+	}
+	return evidence, true, nil
 }
 
 // pricedDays is how far back a fully priced day is looked for.

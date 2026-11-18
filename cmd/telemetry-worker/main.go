@@ -199,8 +199,14 @@ func runTelemetryWorker() int {
 		return 1
 	}
 
+	poolConfig, err := parseTelemetryPostgresPoolConfig(os.Getenv)
+	if err != nil {
+		logger.Error("telemetry_store_pool_config_invalid", "error_code", "TELEMETRY_STORE_POOL_CONFIG_INVALID")
+		return 1
+	}
+
 	openContext, cancelOpen := context.WithTimeout(context.Background(), 5*time.Second)
-	store, err := telemetry.OpenPostgresStore(openContext, requiredEnv("TELEMETRY_DATABASE_URL"))
+	store, err := telemetry.OpenPostgresStoreWithConfig(openContext, requiredEnv("TELEMETRY_DATABASE_URL"), poolConfig)
 	cancelOpen()
 	if err != nil {
 		logger.Error("telemetry_store_open_failed", "error_code", "TELEMETRY_STORE_OPEN_FAILED")
@@ -1312,4 +1318,65 @@ func durationEnv(name string, fallback, minimum, maximum time.Duration) time.Dur
 		os.Exit(1)
 	}
 	return parsed
+}
+
+func parsePositiveInt32Env(lookup func(string) string, name string) (int32, bool, error) {
+	raw := strings.TrimSpace(lookup(name))
+	if raw == "" {
+		return 0, false, nil
+	}
+	parsed, err := strconv.ParseInt(raw, 10, 32)
+	if err != nil || parsed < 1 {
+		return 0, false, errors.New(name + " is invalid")
+	}
+	return int32(parsed), true, nil
+}
+
+func parsePositiveDurationEnv(lookup func(string) string, name string) (time.Duration, bool, error) {
+	raw := strings.TrimSpace(lookup(name))
+	if raw == "" {
+		return 0, false, nil
+	}
+	parsed, err := time.ParseDuration(raw)
+	if err != nil || parsed <= 0 {
+		return 0, false, errors.New(name + " is invalid")
+	}
+	return parsed, true, nil
+}
+
+func parseTelemetryPostgresPoolConfig(lookup func(string) string) (telemetry.PostgresPoolConfig, error) {
+	cfg := telemetry.DefaultPostgresPoolConfig()
+	if maxConns, ok, err := parsePositiveInt32Env(lookup, "TELEMETRY_POSTGRES_MAX_CONNS"); err != nil {
+		return telemetry.PostgresPoolConfig{}, err
+	} else if ok {
+		cfg.MaxConns = maxConns
+	}
+	minConns, minSet, err := parsePositiveInt32Env(lookup, "TELEMETRY_POSTGRES_MIN_CONNS")
+	if err != nil {
+		return telemetry.PostgresPoolConfig{}, err
+	}
+	if minSet {
+		cfg.MinConns = minConns
+	} else if cfg.MinConns > cfg.MaxConns {
+		cfg.MinConns = cfg.MaxConns
+	}
+	if cfg.MinConns > cfg.MaxConns {
+		return telemetry.PostgresPoolConfig{}, errors.New("TELEMETRY_POSTGRES_MIN_CONNS exceeds TELEMETRY_POSTGRES_MAX_CONNS")
+	}
+	if lifetime, ok, err := parsePositiveDurationEnv(lookup, "TELEMETRY_POSTGRES_MAX_CONN_LIFETIME"); err != nil {
+		return telemetry.PostgresPoolConfig{}, err
+	} else if ok {
+		cfg.MaxConnLifetime = lifetime
+	}
+	if idleTime, ok, err := parsePositiveDurationEnv(lookup, "TELEMETRY_POSTGRES_MAX_CONN_IDLE_TIME"); err != nil {
+		return telemetry.PostgresPoolConfig{}, err
+	} else if ok {
+		cfg.MaxConnIdleTime = idleTime
+	}
+	if healthPeriod, ok, err := parsePositiveDurationEnv(lookup, "TELEMETRY_POSTGRES_HEALTH_CHECK_PERIOD"); err != nil {
+		return telemetry.PostgresPoolConfig{}, err
+	} else if ok {
+		cfg.HealthCheckPeriod = healthPeriod
+	}
+	return cfg, nil
 }

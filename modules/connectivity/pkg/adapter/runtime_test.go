@@ -1639,7 +1639,7 @@ func TestRuntimeCatalogMetricsOnlineGatewaysTraceLogsAndPacketHook(t *testing.T)
 	b2, _, _, _ := corruptMB.popBatch(1)
 	corruptMB.markConsumed(b2[0].endSeq)
 	var endSeq int64
-	runtime.runGatewayTurn(ctx, gatewayTurn{gatewayID: testGatewayB, mailbox: corruptMB}, &endSeq)
+	runtime.runGatewayTurnTracked(ctx, gatewayTurn{gatewayID: testGatewayB, mailbox: corruptMB}, &endSeq, nil)
 
 	finalBody := scrapeMetricsText(registry)
 	for _, want := range []string{
@@ -2328,4 +2328,176 @@ func TestRuntimeClosePreservesOwnedOverflowDirWhenUnconsumedAndCleansWhenDrained
 			return len(recoveredTelemetry.accepted()) == 3
 		}, "all 3 preserved unconsumed items recovered from auto overflow dir")
 	})
+}
+
+func TestRuntimeLiveMessagesJumpAheadOfReplayBacklogWithoutStarvingReplay(t *testing.T) {
+	now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	telemetry := &fakeTelemetry{
+		release: make(chan struct{}),
+		entered: make(chan struct{}, 4),
+	}
+	overflowDir := t.TempDir()
+	processor, err := NewProcessor(newFakeIdentities(), telemetry, WithAutoBackfillLagThreshold(10*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	processor.now = func() time.Time { return now }
+
+	runtime, err := NewRuntime(Config{
+		MQTT:                     MQTTConfig{BrokerURL: "tls://localhost:8883", ClientID: "connectivity-priority-test", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "mqtt.local"},
+		TelemetryRuntime:         TelemetryRuntimeConfig{BaseURL: "https://telemetry.local", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "telemetry.local"},
+		QueueCapacity:            4,
+		OverflowMaxMessages:      4096,
+		OverflowDir:              overflowDir,
+		BatchMaxMessages:         16,
+		AutoBackfillLagThreshold: 10 * time.Minute,
+		WorkerCount:              1,
+	}, processor, slog.New(slog.NewTextHandler(io.Discard, nil)), observability.NewRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.now = func() time.Time { return now }
+	runtime.retryDelay = func(int) time.Duration { return 5 * time.Millisecond }
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(func() { cancel(); runtime.workers.Wait(); runtime.closeMailboxes() })
+	acks := newAckLog()
+	acks.seen = make(chan string, 1100)
+
+	if err := runtime.enqueue(ctx, nil, testLivePublishAt(testGatewayA, 1, now.Add(-time.Second)), acks.ack(messageID(1))); err != nil {
+		t.Fatal(err)
+	}
+	<-telemetry.entered
+
+	const replayCount = 1000
+	for i := 2; i <= replayCount+1; i++ {
+		pub := testReplayPublish(testGatewayA, i, false)
+		if i%4 == 0 {
+			pub = testLivePublishAt(testGatewayA, i, now.Add(-15*time.Minute))
+		}
+		if err := runtime.enqueue(ctx, nil, pub, acks.ack(messageID(i))); err != nil {
+			t.Fatalf("enqueue replay %d: %v", i, err)
+		}
+	}
+
+	const liveBurstCount = 10
+	for i := 1; i <= liveBurstCount; i++ {
+		seq := replayCount + 1 + i
+		pub := testLivePublishAt(testGatewayA, seq, now.Add(-time.Second))
+		if i == 1 {
+			pub = &paho.Publish{Topic: eventTopic(testGatewayA), Payload: eventPayload(testGatewayA, messageID(seq), seq), QoS: 1}
+		}
+		if err := runtime.enqueue(ctx, nil, pub, acks.ack(messageID(seq))); err != nil {
+			t.Fatalf("enqueue live %d: %v", i, err)
+		}
+	}
+
+	close(telemetry.release)
+	waitCondition(t, 10*time.Second, func() bool {
+		return len(telemetry.accepted())+len(telemetry.recordedEvents()) == 1+replayCount+liveBurstCount
+	}, "all live and replay messages processed without starvation")
+
+	accepted := telemetry.accepted()
+	livePositions := 0
+	for idx := 0; idx < 25 && idx < len(accepted); idx++ {
+		if !accepted[idx].EdgeReplay {
+			livePositions++
+		}
+	}
+	if livePositions != 10 {
+		t.Fatalf("expected initial live + 9 live telemetry items in first 25 observations, got %d", livePositions)
+	}
+	events := telemetry.recordedEvents()
+	if len(events) != 1 || events[0].MessageID != messageID(replayCount+2) {
+		t.Fatalf("unexpected events=%+v", events)
+	}
+
+	for _, spoolPath := range []string{
+		filepath.Join(overflowDir, safeGatewayFileName(testGatewayA)),
+		filepath.Join(overflowDir, safeGatewayReplayFileName(testGatewayA)),
+	} {
+		waitCondition(t, 2*time.Second, func() bool {
+			stat, err := os.Stat(spoolPath)
+			return err == nil && stat.Size() == walHeaderSize
+		}, "spool truncated to header after drain: "+filepath.Base(spoolPath))
+	}
+}
+
+func TestRuntimeGracefulDrainTimeoutPreservesBothLiveAndReplaySpools(t *testing.T) {
+	broker := newFakeBroker(t)
+	entered := make(chan struct{}, 2)
+	telemetry := &fakeTelemetry{
+		release: make(chan struct{}),
+		entered: entered,
+	}
+	overflowDir := t.TempDir()
+	runtime, err := NewRuntime(
+		Config{
+			MQTT:             broker.mqtt,
+			TelemetryRuntime: TelemetryRuntimeConfig{BaseURL: "https://telemetry.local", CAFile: broker.mqtt.CAFile, CertFile: broker.mqtt.CertFile, KeyFile: broker.mqtt.KeyFile, ServerName: "telemetry.local"},
+			QueueCapacity:    2,
+			OverflowDir:      overflowDir,
+		},
+		newTestProcessor(t, newFakeIdentities(), telemetry),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		observability.NewRegistry(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.drainTimeout = 80 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(t.Context())
+	runErr := make(chan error, 1)
+	go func() { runErr <- runtime.Run(ctx) }()
+
+	conn := broker.awaitConnection(t)
+	awaitReady(t, runtime, true)
+
+	conn.deliverGateway(t, testGatewayA, 1, 1, false)
+	<-entered
+	replayPkt := packets.NewControlPacket(packets.PUBLISH)
+	rep := replayPkt.Content.(*packets.Publish)
+	rep.Topic = telemetryTopic(testGatewayA)
+	rep.Payload = testReplayPublish(testGatewayA, 2, false).Payload
+	rep.QoS = 1
+	rep.PacketID = 2
+	if err := conn.write(replayPkt); err != nil {
+		t.Fatal(err)
+	}
+	conn.deliverGateway(t, testGatewayA, 3, 3, false)
+	conn.awaitAcks(t, 1, 2, 3)
+
+	cancel()
+	select {
+	case err := <-runErr:
+		if err != nil {
+			t.Fatalf("Run returned error after drain timeout: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run exceeded bounded drain timeout")
+	}
+
+	recoveredTelemetry := &fakeTelemetry{}
+	recoveredRuntime, err := NewRuntime(
+		Config{
+			MQTT:             broker.mqtt,
+			TelemetryRuntime: TelemetryRuntimeConfig{BaseURL: "https://telemetry.local", CAFile: broker.mqtt.CAFile, CertFile: broker.mqtt.CertFile, KeyFile: broker.mqtt.KeyFile, ServerName: "telemetry.local"},
+			QueueCapacity:    4,
+			OverflowDir:      overflowDir,
+		},
+		newTestProcessor(t, newFakeIdentities(), recoveredTelemetry),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		observability.NewRegistry(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recCtx, recCancel := context.WithCancel(t.Context())
+	t.Cleanup(func() { recCancel(); recoveredRuntime.workers.Wait(); recoveredRuntime.closeMailboxes() })
+	if err := recoveredRuntime.recoverOverflowMailboxes(recCtx); err != nil {
+		t.Fatalf("recoverOverflowMailboxes failed: %v", err)
+	}
+	waitCondition(t, 3*time.Second, func() bool {
+		return len(recoveredTelemetry.accepted()) == 3
+	}, "all 3 preserved live and replay messages recovered on restart")
 }

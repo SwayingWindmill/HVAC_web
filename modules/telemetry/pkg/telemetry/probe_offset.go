@@ -134,7 +134,7 @@ ORDER BY site_id, pair_code
 }
 
 func (store *PostgresStore) sweepOneProbePair(ctx context.Context, pair configuredProbePair, evaluatedAt time.Time) (bool, error) {
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := 0; attempt < store.retryAttempts(); attempt++ {
 		created, err := store.sweepOneProbePairOnce(ctx, pair, evaluatedAt)
 		if err == nil || !retryableTelemetryTransaction(err) {
 			return created, err
