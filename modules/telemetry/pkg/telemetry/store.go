@@ -42,9 +42,17 @@ var (
 type EventIDGenerator func(time.Time) (string, error)
 
 type PostgresStore struct {
-	pool          *pgxpool.Pool
-	newEventID    EventIDGenerator
-	metadataCache *metadataCache
+	pool            *pgxpool.Pool
+	newEventID      EventIDGenerator
+	metadataCache   *metadataCache
+	pipelineMetrics *PipelineMetrics
+}
+
+// SetPipelineMetrics attaches bounded Prometheus pipeline counters to the store.
+func (store *PostgresStore) SetPipelineMetrics(metrics *PipelineMetrics) {
+	if store != nil {
+		store.pipelineMetrics = metrics
+	}
 }
 
 // PostgresPoolConfig tunes pgxpool connection limits and lifetimes for the telemetry runtime store.

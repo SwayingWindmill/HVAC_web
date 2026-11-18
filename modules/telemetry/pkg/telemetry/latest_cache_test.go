@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strconv"
 	"strings"
@@ -15,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/modules/telemetry/pkg/telemetryapi"
 	"github.com/redis/go-redis/v9"
 )
@@ -367,7 +370,9 @@ func TestRedisLatestCachePutIfNewerPassesSampledMsAndTTL(t *testing.T) {
 		DisableIdentity: true,
 	})
 	defer func() { _ = client.Close() }()
+	registry := observability.NewRegistry()
 	cache := &RedisLatestCache{client: client, keyPrefix: defaultLatestCacheKeyPrefix}
+	cache.SetPipelineMetrics(NewPipelineMetrics(registry))
 
 	now := time.Date(2026, 8, 13, 1, 2, 3, 456000000, time.UTC)
 	snap := realtimeTestSnapshot(now, 9)
@@ -396,6 +401,11 @@ func TestRedisLatestCachePutIfNewerPassesSampledMsAndTTL(t *testing.T) {
 	}
 	if evalArgs[13] != snapshotKeysSignature(snap) {
 		t.Fatalf("ARGV[9] keys_sig=%q, want %q", evalArgs[13], snapshotKeysSignature(snap))
+	}
+	rec := httptest.NewRecorder()
+	registry.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if !strings.Contains(rec.Body.String(), `hvac_s2_latest_cache_updates_total{outcome="applied"} 1`) {
+		t.Fatalf("missing PutIfNewer applied metric:\n%s", rec.Body.String())
 	}
 }
 
@@ -521,7 +531,9 @@ func TestRedisSitePointsCacheKeyNormalizationAndCommands(t *testing.T) {
 		DisableIdentity: true,
 	})
 	defer func() { _ = client.Close() }()
+	registry := observability.NewRegistry()
 	cache := &RedisLatestCache{client: client, keyPrefix: defaultLatestCacheKeyPrefix}
+	cache.SetPipelineMetrics(NewPipelineMetrics(registry))
 
 	pointA := "018f2e00-3100-7000-8000-000000000001"
 	pointB := "018f2e00-3100-7000-8000-000000000002"
@@ -601,6 +613,19 @@ func TestRedisSitePointsCacheKeyNormalizationAndCommands(t *testing.T) {
 	afterPostRejectBackfill, err := cache.GetSiteLiveObservations(t.Context(), tenantA, siteA, []string{pointA})
 	if err != nil || len(afterPostRejectBackfill) != 1 || afterPostRejectBackfill[pointA].HealthStatus != HealthBad {
 		t.Fatalf("expected post-rejection PG read to replace tombstone, got=%#v err=%v", afterPostRejectBackfill, err)
+	}
+
+	rec := httptest.NewRecorder()
+	registry.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	metricsBody := rec.Body.String()
+	for _, needle := range []string{
+		`hvac_s2_latest_cache_updates_total{outcome="applied"} 3`,
+		`hvac_s2_latest_cache_updates_total{outcome="stale_skipped"} 2`,
+		`hvac_s2_latest_cache_updates_total{outcome="invalidated"} 1`,
+	} {
+		if !strings.Contains(metricsBody, needle) {
+			t.Fatalf("missing %q in /metrics output:\n%s", needle, metricsBody)
+		}
 	}
 
 	mu.Lock()

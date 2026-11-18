@@ -496,7 +496,24 @@ func copyStringPointer(value *string) *string {
 	return stringPointer(*value)
 }
 
+func (repository *HistoryPostgresRepository) HistoryOutboxDepths(ctx context.Context) (pending, publishing, deadLetter int, err error) {
+	if repository == nil || repository.pool == nil {
+		return 0, 0, 0, errors.New("telemetry history repository is closed")
+	}
+	err = repository.pool.QueryRow(ctx, `
+SELECT
+  (SELECT count(*)::int FROM telemetry_runtime.telemetry_history_outbox WHERE delivery_state = 'PENDING'),
+  (SELECT count(*)::int FROM telemetry_runtime.telemetry_history_outbox WHERE delivery_state = 'IN_FLIGHT'),
+  (SELECT count(*)::int FROM telemetry_runtime.telemetry_history_outbox WHERE delivery_state = 'DEAD')
+`).Scan(&pending, &publishing, &deadLetter)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("query telemetry history outbox depths: %w", err)
+	}
+	return pending, publishing, deadLetter, nil
+}
+
 var (
 	_ HistoryRepository          = (*HistoryPostgresRepository)(nil)
 	_ PipelinedHistoryRepository = (*HistoryPostgresRepository)(nil)
+	_ HistoryOutboxDepthProvider = (*HistoryPostgresRepository)(nil)
 )

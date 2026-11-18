@@ -162,11 +162,20 @@ type SiteLiveCacheInvalidator interface {
 type RedisLatestCacheConfig struct {
 	URL       string
 	KeyPrefix string
+	Metrics   *PipelineMetrics
 }
 
 type RedisLatestCache struct {
 	client    *redis.Client
 	keyPrefix string
+	metrics   *PipelineMetrics
+}
+
+// SetPipelineMetrics attaches bounded Prometheus pipeline counters to the Redis latest cache.
+func (cache *RedisLatestCache) SetPipelineMetrics(metrics *PipelineMetrics) {
+	if cache != nil {
+		cache.metrics = metrics
+	}
 }
 
 func OpenRedisLatestCache(ctx context.Context, config RedisLatestCacheConfig) (*RedisLatestCache, error) {
@@ -188,7 +197,7 @@ func OpenRedisLatestCache(ctx context.Context, config RedisLatestCacheConfig) (*
 	if prefix == "" {
 		prefix = defaultLatestCacheKeyPrefix
 	}
-	return &RedisLatestCache{client: client, keyPrefix: strings.TrimSuffix(prefix, ":")}, nil
+	return &RedisLatestCache{client: client, keyPrefix: strings.TrimSuffix(prefix, ":"), metrics: config.Metrics}, nil
 }
 
 func (cache *RedisLatestCache) Close() error {
@@ -228,9 +237,15 @@ func (cache *RedisLatestCache) PutIfNewer(ctx context.Context, snapshot telemetr
 		fmt.Sprintf("%d", maxSampledMs), fmt.Sprintf("%d", defaultLatestCacheTTL.Milliseconds()), keysSig,
 	).Int64()
 	if err != nil {
+		cache.metrics.AddLatestCacheUpdates(LatestCacheOutcomeError, 1)
 		return false, fmt.Errorf("materialize telemetry latest snapshot: %w", err)
 	}
-	return result == 1, nil
+	if result == 1 {
+		cache.metrics.AddLatestCacheUpdates(LatestCacheOutcomeApplied, 1)
+		return true, nil
+	}
+	cache.metrics.AddLatestCacheUpdates(LatestCacheOutcomeStaleSkipped, 1)
+	return false, nil
 }
 
 func snapshotKeysSignature(snapshot telemetryapi.DeviceObservationSnapshot) string {
@@ -317,7 +332,7 @@ type preparedSiteLiveEntry struct {
 	payload   string
 }
 
-func (cache *RedisLatestCache) runSiteLiveCAS(ctx context.Context, tenantID, siteID string, entries []preparedSiteLiveEntry) error {
+func (cache *RedisLatestCache) runSiteLiveCAS(ctx context.Context, tenantID, siteID string, entries []preparedSiteLiveEntry, appliedOutcome string) error {
 	if cache == nil || cache.client == nil {
 		return ErrLatestCacheUnavailable
 	}
@@ -339,8 +354,17 @@ func (cache *RedisLatestCache) runSiteLiveCAS(ctx context.Context, tenantID, sit
 		for _, item := range chunk {
 			args = append(args, item.field, item.sampledMs, item.effMs, item.payload)
 		}
-		if err := redisSiteLiveCAS.Run(ctx, cache.client, []string{hashKey}, args...).Err(); err != nil {
-			return fmt.Errorf("materialize telemetry site live observations: %w", err)
+		applied, runErr := redisSiteLiveCAS.Run(ctx, cache.client, []string{hashKey}, args...).Int64()
+		if runErr != nil {
+			cache.metrics.AddLatestCacheUpdates(LatestCacheOutcomeError, len(entries)-start)
+			return fmt.Errorf("materialize telemetry site live observations: %w", runErr)
+		}
+		updated := max(0, min(len(chunk), int(applied)))
+		if updated > 0 {
+			cache.metrics.AddLatestCacheUpdates(appliedOutcome, updated)
+		}
+		if skipped := len(chunk) - updated; skipped > 0 {
+			cache.metrics.AddLatestCacheUpdates(LatestCacheOutcomeStaleSkipped, skipped)
 		}
 	}
 	return nil
@@ -371,7 +395,7 @@ func (cache *RedisLatestCache) PutSiteLiveObservations(ctx context.Context, tena
 			payload:   string(encoded),
 		})
 	}
-	return cache.runSiteLiveCAS(ctx, tenantID, siteID, entries)
+	return cache.runSiteLiveCAS(ctx, tenantID, siteID, entries, LatestCacheOutcomeApplied)
 }
 
 func (cache *RedisLatestCache) GetSiteLiveObservations(ctx context.Context, tenantID, siteID string, pointIDs []string) (map[string]OptimizationLiveObservation, error) {
@@ -476,7 +500,7 @@ func (cache *RedisLatestCache) InvalidateSiteLiveObservations(ctx context.Contex
 			entries = append(entries, prepared)
 		}
 	}
-	return cache.runSiteLiveCAS(ctx, tenantID, siteID, entries)
+	return cache.runSiteLiveCAS(ctx, tenantID, siteID, entries, LatestCacheOutcomeInvalidated)
 }
 
 func (cache *RedisLatestCache) key(tenantID, siteID, deviceID telemetryapi.UUIDv7) string {

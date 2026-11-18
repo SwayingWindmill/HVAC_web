@@ -171,7 +171,21 @@ func (store *PostgresStore) acceptObservationBatch(ctx context.Context, candidat
 	}
 	for attempt := 0; attempt < store.retryAttempts(); attempt++ {
 		receipts, err := store.acceptObservationBatchOnce(ctx, normalized, payloadSHAs, evaluate)
-		if err == nil || !retryableTelemetryTransaction(err) {
+		if err == nil {
+			if store.pipelineMetrics != nil {
+				replayCount := 0
+				for _, candidate := range normalized {
+					if candidate.SourcePath == SourcePathHistoryReplay || candidate.EdgeReplay {
+						replayCount++
+					}
+				}
+				if replayCount > 0 {
+					store.pipelineMetrics.AddReplayObservations(replayCount)
+				}
+			}
+			return receipts, nil
+		}
+		if !retryableTelemetryTransaction(err) {
 			return receipts, err
 		}
 	}

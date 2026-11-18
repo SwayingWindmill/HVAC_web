@@ -84,6 +84,11 @@ type PreparedHistorySink interface {
 	InsertPrepared(ctx context.Context, compressed []byte, token string) error
 }
 
+// HistoryOutboxDepthProvider optionally exposes current outbox row counts by delivery state.
+type HistoryOutboxDepthProvider interface {
+	HistoryOutboxDepths(ctx context.Context) (pending, publishing, deadLetter int, err error)
+}
+
 type HistoryRelayConfig struct {
 	Repository    HistoryRepository
 	Sink          HistorySink
@@ -92,6 +97,7 @@ type HistoryRelayConfig struct {
 	RetryAfter    time.Duration
 	MaxAttempts   int
 	PipelineDepth int
+	Metrics       *PipelineMetrics
 	Now           func() time.Time
 }
 
@@ -106,6 +112,7 @@ type HistoryRelay struct {
 	retryAfter    time.Duration
 	maxAttempts   int
 	pipelineDepth int
+	metrics       *PipelineMetrics
 	now           func() time.Time
 }
 
@@ -137,7 +144,7 @@ func NewHistoryRelay(config HistoryRelayConfig) (*HistoryRelay, error) {
 	return &HistoryRelay{
 		repository: config.Repository, sink: config.Sink, batchSize: config.BatchSize,
 		leaseFor: config.LeaseFor, retryAfter: config.RetryAfter, maxAttempts: config.MaxAttempts,
-		pipelineDepth: pipelineDepth, now: config.Now,
+		pipelineDepth: pipelineDepth, metrics: config.Metrics, now: config.Now,
 	}, nil
 }
 
@@ -175,9 +182,28 @@ func (relay *HistoryRelay) RelayOnce(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("claim telemetry history batch: %w", err)
 	}
 	if len(batch.Observations) == 0 {
+		relay.refreshOutboxDepths(ctx)
 		return 0, nil
 	}
-	return relay.executePreparedHistoryBatch(ctx, relay.prepareBatch(batch))
+	published, execErr := relay.executePreparedHistoryBatch(ctx, relay.prepareBatch(batch))
+	relay.refreshOutboxDepths(ctx)
+	return published, execErr
+}
+
+func (relay *HistoryRelay) refreshOutboxDepths(ctx context.Context) {
+	if relay == nil || relay.metrics == nil {
+		return
+	}
+	provider, ok := relay.repository.(HistoryOutboxDepthProvider)
+	if !ok {
+		return
+	}
+	depthCtx, cancel := historySettleContext(ctx)
+	defer cancel()
+	pending, publishing, deadLetter, err := provider.HistoryOutboxDepths(depthCtx)
+	if err == nil {
+		relay.metrics.SetHistoryOutboxDepths(pending, publishing, deadLetter)
+	}
 }
 
 func (relay *HistoryRelay) executePreparedHistoryBatch(ctx context.Context, item preparedHistoryBatch) (int, error) {
@@ -185,6 +211,7 @@ func (relay *HistoryRelay) executePreparedHistoryBatch(ctx context.Context, item
 	if batch.LeaseID == "" {
 		return 0, errors.New("claimed telemetry history batch has no lease ID")
 	}
+	start := time.Now()
 	err := item.prepErr
 	if err == nil {
 		if item.prepared {
@@ -196,8 +223,9 @@ func (relay *HistoryRelay) executePreparedHistoryBatch(ctx context.Context, item
 	}
 	if err != nil {
 		if IsPermanentHistoryError(err) {
-			return relay.handlePermanentBatchFailure(ctx, batch, err)
+			return relay.handlePermanentBatchFailure(ctx, batch, err, start)
 		}
+		relay.metrics.ObserveHistoryFlushDuration(time.Since(start))
 		if relay.maxAttempts > 0 && batch.MaxAttempts >= relay.maxAttempts && ctx.Err() == nil {
 			settleCtx, cancelSettle := historySettleContext(ctx)
 			dlErr := relay.repository.DeadLetterHistoryEvents(settleCtx, batch.LeaseID, historyObservationIDs(batch.Observations), historyMaxAttemptsFailureCode, relay.now().UTC())
@@ -225,6 +253,8 @@ func (relay *HistoryRelay) executePreparedHistoryBatch(ctx context.Context, item
 	if err != nil {
 		return 0, fmt.Errorf("mark telemetry history batch published: %w", err)
 	}
+	relay.metrics.ObserveHistoryFlushDuration(time.Since(start))
+	relay.metrics.AddHistoryRowsProjected(len(batch.Observations))
 	return len(batch.Observations), nil
 }
 
@@ -235,7 +265,7 @@ func historySettleContext(ctx context.Context) (context.Context, context.CancelF
 	return context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 }
 
-func (relay *HistoryRelay) handlePermanentBatchFailure(ctx context.Context, batch HistoryBatch, batchErr error) (int, error) {
+func (relay *HistoryRelay) handlePermanentBatchFailure(ctx context.Context, batch HistoryBatch, batchErr error, start time.Time) (int, error) {
 	var publishedIDs, deadIDs []string
 	var transientErr error
 	if len(batch.Observations) == 1 {
@@ -294,6 +324,10 @@ func (relay *HistoryRelay) handlePermanentBatchFailure(ctx context.Context, batc
 			}
 			persistErrs = append(persistErrs, fmt.Errorf("insert telemetry history during split: %w", transientErr))
 		}
+	}
+	relay.metrics.ObserveHistoryFlushDuration(time.Since(start))
+	if len(publishedIDs) > 0 {
+		relay.metrics.AddHistoryRowsProjected(len(publishedIDs))
 	}
 	if len(persistErrs) > 0 {
 		return len(publishedIDs), errors.Join(append([]error{fmt.Errorf("insert telemetry history: %w", batchErr)}, persistErrs...)...)
@@ -359,6 +393,7 @@ func (relay *HistoryRelay) RelayPending(ctx context.Context) (int, error) {
 	if relay.pipelineDepth > 1 {
 		if pipelinedRepo, ok := relay.repository.(PipelinedHistoryRepository); ok {
 			total, _, err := relay.runPipelinedWave(ctx, pipelinedRepo, false, nil)
+			relay.refreshOutboxDepths(ctx)
 			return total, err
 		}
 	}
@@ -387,6 +422,7 @@ func (relay *HistoryRelay) Run(ctx context.Context, idleInterval time.Duration, 
 	for ctx.Err() == nil {
 		if usePipeline {
 			_, cont, _ := relay.runPipelinedWave(ctx, pipelinedRepo, true, report)
+			relay.refreshOutboxDepths(ctx)
 			if cont && ctx.Err() == nil {
 				continue
 			}

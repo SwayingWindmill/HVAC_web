@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
 type recordedClickHouseRetentionCall struct {
@@ -355,5 +357,69 @@ func TestClickHouseRetentionPrunerExportsArchiveBeforeDeletesAndPropagatesLegalH
 	}
 	if len(entries) != 4 {
 		t.Fatalf("expected 2 .jsonl.gz + 2 .manifest.json files, got %d", len(entries))
+	}
+}
+
+func TestClickHouseRetentionPrunerRecordsColdArchiveRunMetrics(t *testing.T) {
+	now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	registry := observability.NewRegistry()
+	metrics := NewPipelineMetrics(registry)
+
+	failPruner, err := NewClickHouseRetentionPruner(ClickHouseRetentionConfig{
+		BaseURL:         "http://127.0.0.1:8123",
+		HTTPClient:      &http.Client{},
+		ArchiveRequired: true,
+		Metrics:         metrics,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := failPruner.Prune(t.Context(), now); err == nil {
+		t.Fatal("expected missing exporter failure")
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		if strings.HasPrefix(string(body), "SELECT ") {
+			_, _ = io.WriteString(writer, "")
+			return
+		}
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	exporter, err := NewColdArchiveExporter(ColdArchiveConfig{
+		BaseURL:    server.URL,
+		ArchiveDir: t.TempDir(),
+		HTTPClient: server.Client(),
+		Now:        func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	okPruner, err := NewClickHouseRetentionPruner(ClickHouseRetentionConfig{
+		BaseURL:         server.URL,
+		HTTPClient:      server.Client(),
+		ArchiveExporter: exporter,
+		ArchiveRequired: true,
+		Metrics:         metrics,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := okPruner.Prune(t.Context(), now); err != nil {
+		t.Fatalf("okPruner.Prune failed: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	registry.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := rec.Body.String()
+	for _, needle := range []string{
+		`hvac_s2_cold_archive_runs_total{outcome="failed"} 1`,
+		`hvac_s2_cold_archive_runs_total{outcome="succeeded"} 2`,
+	} {
+		if !strings.Contains(body, needle) {
+			t.Fatalf("missing %q in /metrics output:\n%s", needle, body)
+		}
 	}
 }

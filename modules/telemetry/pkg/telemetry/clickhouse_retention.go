@@ -53,6 +53,7 @@ type ClickHouseRetentionConfig struct {
 	LegalHolds              []ClickHouseLegalHoldScope
 	ArchiveExporter         ColdArchiveExportRunner
 	ArchiveRequired         bool
+	Metrics                 *PipelineMetrics
 }
 
 type clickHouseRetentionTarget struct {
@@ -77,6 +78,7 @@ type ClickHouseRetentionPruner struct {
 	legalHolds      []ClickHouseLegalHoldScope
 	archiveExporter ColdArchiveExportRunner
 	archiveRequired bool
+	metrics         *PipelineMetrics
 }
 
 // ClickHouseRetentionResult records how many table delete mutations were submitted in a pass.
@@ -170,6 +172,7 @@ func NewClickHouseRetentionPruner(config ClickHouseRetentionConfig) (*ClickHouse
 		legalHolds:      holds,
 		archiveExporter: config.ArchiveExporter,
 		archiveRequired: config.ArchiveRequired,
+		metrics:         config.Metrics,
 		targets: []clickHouseRetentionTarget{
 			{
 				database:      historyDB,
@@ -270,6 +273,7 @@ func (pruner *ClickHouseRetentionPruner) Prune(ctx context.Context, now time.Tim
 			continue
 		}
 		if pruner.archiveRequired && pruner.archiveExporter == nil {
+			pruner.metrics.ObserveColdArchiveRun(ColdArchiveOutcomeFailed)
 			return ClickHouseRetentionResult{}, fmt.Errorf("ClickHouse cold archive exporter is required before pruning %s.%s", target.database, target.table)
 		}
 		if pruner.archiveExporter == nil {
@@ -282,8 +286,10 @@ func (pruner *ClickHouseRetentionPruner) Prune(ctx context.Context, now time.Tim
 			Cutoff:     cutoff,
 			LegalHolds: pruner.legalHolds,
 		}); err != nil {
+			pruner.metrics.ObserveColdArchiveRun(ColdArchiveOutcomeFailed)
 			return ClickHouseRetentionResult{}, fmt.Errorf("ClickHouse cold archive export failed for %s.%s: %w", target.database, target.table, err)
 		}
+		pruner.metrics.ObserveColdArchiveRun(ColdArchiveOutcomeSucceeded)
 		result.ArchivedTables = append(result.ArchivedTables, target.database+"."+target.table)
 	}
 

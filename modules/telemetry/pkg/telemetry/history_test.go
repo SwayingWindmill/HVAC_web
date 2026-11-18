@@ -4,12 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
 func TestHistoryRelayPublishesClaimedObservations(t *testing.T) {
@@ -1022,5 +1026,62 @@ func TestHistoryPostgresRepositoryClosedValidation(t *testing.T) {
 	}
 	if err := emptyRepo.ReleaseHistoryBatchLease(t.Context(), "", now); err == nil {
 		t.Fatal("expected error for empty batchID / nil pool")
+	}
+}
+
+type fakeDepthPipelinedRepo struct {
+	*fakePipelinedHistoryRepo
+	pending, publishing, dead int
+}
+
+func (r *fakeDepthPipelinedRepo) HistoryOutboxDepths(_ context.Context) (int, int, int, error) {
+	return r.pending, r.publishing, r.dead, nil
+}
+
+func TestHistoryRelayRecordsPipelineMetricsAndOutboxDepths(t *testing.T) {
+	now := time.Date(2026, 7, 29, 9, 45, 0, 0, time.UTC)
+	registry := observability.NewRegistry()
+	metrics := NewPipelineMetrics(registry)
+	inner := newFakePipelinedHistoryRepo([]HistoryBatch{
+		makeFakeBatch(1, 2),
+		makeFakeBatch(2, 2),
+	})
+	repo := &fakeDepthPipelinedRepo{
+		fakePipelinedHistoryRepo: inner,
+		pending:                  4,
+		publishing:               1,
+		dead:                     2,
+	}
+	sink := &fakePreparedHistorySink{}
+	relay, err := NewHistoryRelay(HistoryRelayConfig{
+		Repository:    repo,
+		Sink:          sink,
+		BatchSize:     2,
+		LeaseFor:      30 * time.Second,
+		RetryAfter:    time.Second,
+		PipelineDepth: 2,
+		Metrics:       metrics,
+		Now:           func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	published, err := relay.RelayPending(t.Context())
+	if err != nil || published != 4 {
+		t.Fatalf("RelayPending=(%d, %v), want (4, nil)", published, err)
+	}
+	rec := httptest.NewRecorder()
+	registry.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := rec.Body.String()
+	for _, needle := range []string{
+		`hvac_s2_history_rows_projected_total 4`,
+		`hvac_s2_history_flush_duration_seconds_count 2`,
+		`hvac_s2_history_outbox_depth{state="pending"} 4`,
+		`hvac_s2_history_outbox_depth{state="publishing"} 1`,
+		`hvac_s2_history_outbox_depth{state="dead_letter"} 2`,
+	} {
+		if !strings.Contains(body, needle) {
+			t.Fatalf("missing %q in /metrics output:\n%s", needle, body)
+		}
 	}
 }

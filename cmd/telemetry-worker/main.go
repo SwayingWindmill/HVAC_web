@@ -213,6 +213,8 @@ func runTelemetryWorker() int {
 		return 1
 	}
 	shutdownCfg.CloseStore = store.Close
+	pipelineMetrics := telemetry.NewPipelineMetrics(observabilityRuntime.Metrics)
+	store.SetPipelineMetrics(pipelineMetrics)
 	retentionContext, retentionCancel := context.WithCancel(context.Background())
 	workerCancels = append(workerCancels, retentionCancel)
 	runSupervised(retentionContext, &workersWG, observabilityRuntime, logger, "telemetry.runtime_retention", func() {
@@ -224,7 +226,7 @@ func runTelemetryWorker() int {
 	runSupervised(retentionContext, &workersWG, observabilityRuntime, logger, "telemetry.probe_offset_sweep", func() {
 		runProbeOffsetSweep(retentionContext, store, 5*time.Second, logger)
 	})
-	clickHousePruner, clickHouseRetentionCtx, clickHouseRetentionCancel, err := loadClickHouseRetentionPruner()
+	clickHousePruner, clickHouseRetentionCtx, clickHouseRetentionCancel, err := loadClickHouseRetentionPruner(pipelineMetrics)
 	if err != nil {
 		logger.Error("telemetry_clickhouse_retention_configuration_invalid", "error_code", "TELEMETRY_CLICKHOUSE_RETENTION_CONFIGURATION_INVALID")
 		return 1
@@ -237,7 +239,7 @@ func runTelemetryWorker() int {
 		})
 	}
 
-	latestCache, latestRelay, latestContext, latestCancel, err := loadLatestCache(store)
+	latestCache, latestRelay, latestContext, latestCancel, err := loadLatestCache(store, pipelineMetrics)
 	if err != nil {
 		logger.Warn("telemetry_latest_cache_projection_unavailable", "error_code", "TELEMETRY_LATEST_CACHE_PROJECTION_UNAVAILABLE")
 		latestCache, latestRelay, latestContext, latestCancel = nil, nil, context.Background(), nil
@@ -258,7 +260,7 @@ func runTelemetryWorker() int {
 		})
 	}
 
-	historyRepository, historyRelay, historySettings, historyContext, historyCancel, err := loadHistoryProjection()
+	historyRepository, historyRelay, historySettings, historyContext, historyCancel, err := loadHistoryProjection(pipelineMetrics)
 	if err != nil {
 		logger.Error("telemetry_history_projection_configuration_invalid", "error_code", "TELEMETRY_HISTORY_PROJECTION_CONFIGURATION_INVALID")
 		return 1
@@ -493,7 +495,7 @@ func runSupervised(ctx context.Context, wg *sync.WaitGroup, runtime *observabili
 	})
 }
 
-func loadLatestCache(store *telemetry.PostgresStore) (telemetry.LatestCache, *telemetry.LatestCacheRelay, context.Context, context.CancelFunc, error) {
+func loadLatestCache(store *telemetry.PostgresStore, metrics *telemetry.PipelineMetrics) (telemetry.LatestCache, *telemetry.LatestCacheRelay, context.Context, context.CancelFunc, error) {
 	if !strings.EqualFold(strings.TrimSpace(os.Getenv("TELEMETRY_LATEST_CACHE_ENABLED")), "true") {
 		return nil, nil, context.Background(), nil, nil
 	}
@@ -505,6 +507,7 @@ func loadLatestCache(store *telemetry.PostgresStore) (telemetry.LatestCache, *te
 	cache, err := telemetry.OpenRedisLatestCache(openContext, telemetry.RedisLatestCacheConfig{
 		URL:       redisURL,
 		KeyPrefix: strings.TrimSpace(os.Getenv("TELEMETRY_LATEST_CACHE_KEY_PREFIX")),
+		Metrics:   metrics,
 	})
 	cancelOpen()
 	if err != nil {
@@ -554,12 +557,10 @@ func runLatestCacheRelay(ctx context.Context, relay *telemetry.LatestCacheRelay,
 }
 
 type historyProjectionSettings struct {
-	BatchSize    int
-	LeaseFor     time.Duration
-	RetryAfter   time.Duration
-	PollInterval time.Duration
-	// PipelineDepth validates TELEMETRY_HISTORY_PIPELINE_DEPTH (default 2, valid 1..4)
-	// without referencing fields owned by P2-A on telemetry.HistoryRelayConfig.
+	BatchSize     int
+	LeaseFor      time.Duration
+	RetryAfter    time.Duration
+	PollInterval  time.Duration
 	PipelineDepth int
 }
 
@@ -593,7 +594,7 @@ func parseHistoryProjectionSettings(lookup func(string) string) (historyProjecti
 	}, nil
 }
 
-func loadHistoryProjection() (*telemetry.HistoryPostgresRepository, *telemetry.HistoryRelay, historyProjectionSettings, context.Context, context.CancelFunc, error) {
+func loadHistoryProjection(metrics *telemetry.PipelineMetrics) (*telemetry.HistoryPostgresRepository, *telemetry.HistoryRelay, historyProjectionSettings, context.Context, context.CancelFunc, error) {
 	if !strings.EqualFold(strings.TrimSpace(os.Getenv("TELEMETRY_HISTORY_PROJECTION_ENABLED")), "true") {
 		return nil, nil, historyProjectionSettings{}, context.Background(), nil, nil
 	}
@@ -619,12 +620,13 @@ func loadHistoryProjection() (*telemetry.HistoryPostgresRepository, *telemetry.H
 		return nil, nil, historyProjectionSettings{}, nil, nil, err
 	}
 	relay, err := telemetry.NewHistoryRelay(telemetry.HistoryRelayConfig{
-		Repository: repository,
-		Sink:       sink,
-		BatchSize:  settings.BatchSize,
-		LeaseFor:   settings.LeaseFor,
-		RetryAfter: settings.RetryAfter,
-		// PipelineDepth: settings.PipelineDepth,
+		Repository:    repository,
+		Sink:          sink,
+		BatchSize:     settings.BatchSize,
+		LeaseFor:      settings.LeaseFor,
+		RetryAfter:    settings.RetryAfter,
+		PipelineDepth: settings.PipelineDepth,
+		Metrics:       metrics,
 	})
 	if err != nil {
 		repository.Close()
@@ -1002,11 +1004,15 @@ func drainTelemetryRelays(ctx context.Context, targets telemetryRelayDrainTarget
 	}
 }
 
-func loadClickHouseRetentionPruner() (*telemetry.ClickHouseRetentionPruner, context.Context, context.CancelFunc, error) {
-	return loadClickHouseRetentionPrunerFromEnv(os.Getenv)
+func loadClickHouseRetentionPruner(metrics *telemetry.PipelineMetrics) (*telemetry.ClickHouseRetentionPruner, context.Context, context.CancelFunc, error) {
+	return loadClickHouseRetentionPrunerFromEnvWithMetrics(os.Getenv, metrics)
 }
 
 func loadClickHouseRetentionPrunerFromEnv(lookup func(string) string) (*telemetry.ClickHouseRetentionPruner, context.Context, context.CancelFunc, error) {
+	return loadClickHouseRetentionPrunerFromEnvWithMetrics(lookup, nil)
+}
+
+func loadClickHouseRetentionPrunerFromEnvWithMetrics(lookup func(string) string, metrics *telemetry.PipelineMetrics) (*telemetry.ClickHouseRetentionPruner, context.Context, context.CancelFunc, error) {
 	username := strings.TrimSpace(lookup("TELEMETRY_RETENTION_CLICKHOUSE_USER"))
 	if username == "" {
 		return nil, context.Background(), nil, nil
@@ -1053,6 +1059,7 @@ func loadClickHouseRetentionPrunerFromEnv(lookup func(string) string) (*telemetr
 		LegalHolds:        legalHolds,
 		ArchiveExporter:   archiveRunner,
 		ArchiveRequired:   archiveRequired,
+		Metrics:           metrics,
 	})
 	if err != nil {
 		return nil, nil, nil, err
