@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/observability"
+	"github.com/quanlaihe/hvac-web/libs/schedulerjob"
 	"github.com/quanlaihe/hvac-web/services/optimization-service/internal/optimization"
 )
 
@@ -159,4 +160,135 @@ func TestShutdownServersAndWaitBackground(t *testing.T) {
 		t.Fatalf("unexpected server error: %v", err)
 	default:
 	}
+}
+
+type recordedJobFail struct {
+	jobID     string
+	errorCode string
+	retryable bool
+	errMsg    string
+}
+
+type stubJobFinalizer struct {
+	mu    sync.Mutex
+	fails []recordedJobFail
+}
+
+func (s *stubJobFinalizer) Fail(_ context.Context, job schedulerjob.Job, errorCode string, executionErr error, retryable bool, _ time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	msg := ""
+	if executionErr != nil {
+		msg = executionErr.Error()
+	}
+	s.fails = append(s.fails, recordedJobFail{
+		jobID:     job.JobID,
+		errorCode: errorCode,
+		retryable: retryable,
+		errMsg:    msg,
+	})
+	return nil
+}
+
+type stubSiteCycleLocker struct {
+	mu           sync.Mutex
+	heldSites    map[string]bool
+	forceErr     error
+	releaseCount atomic.Int32
+}
+
+func (l *stubSiteCycleLocker) AcquireSiteCycleLock(_ context.Context, tenantID, siteID string) (func(), bool, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.forceErr != nil {
+		return nil, false, l.forceErr
+	}
+	if l.heldSites == nil {
+		l.heldSites = make(map[string]bool)
+	}
+	key := tenantID + ":" + siteID
+	if l.heldSites[key] {
+		return nil, false, nil
+	}
+	l.heldSites[key] = true
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			l.mu.Lock()
+			delete(l.heldSites, key)
+			l.mu.Unlock()
+			l.releaseCount.Add(1)
+		})
+	}, true, nil
+}
+
+func TestAcquireSiteCycleLockForJobContentionAndRelease(t *testing.T) {
+	job1 := schedulerjob.Job{
+		JobID:      "01990000-1111-7000-8000-000000000001",
+		TenantID:   "01990000-3000-7000-8000-000000000001",
+		SiteID:     "01990000-5000-7000-8000-000000000001",
+		ScheduleID: "",
+	}
+	job2 := schedulerjob.Job{
+		JobID:      "01990000-1111-7000-8000-000000000002",
+		TenantID:   job1.TenantID,
+		SiteID:     job1.SiteID,
+		ScheduleID: "",
+	}
+
+	t.Run("concurrent replicas with empty schedule_id serialize cleanly", func(t *testing.T) {
+		locker := &stubSiteCycleLocker{}
+		queue := &stubJobFinalizer{}
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		lockedFlags := make([]bool, 2)
+		releases := make([]func(), 2)
+
+		for idx, job := range []schedulerjob.Job{job1, job2} {
+			wg.Add(1)
+			go func(i int, j schedulerjob.Job) {
+				defer wg.Done()
+				<-start
+				releases[i], lockedFlags[i] = acquireSiteCycleLockForJob(context.Background(), queue, locker, j, nil)
+			}(idx, job)
+		}
+		close(start)
+		wg.Wait()
+
+		wins := 0
+		for i, locked := range lockedFlags {
+			if locked {
+				wins++
+				releases[i]()
+			}
+		}
+		if wins != 1 {
+			t.Fatalf("expected exactly 1 replica to acquire site lock, got wins=%d", wins)
+		}
+		if len(queue.fails) != 1 || queue.fails[0].errorCode != "OPTIMIZATION_SITE_CYCLE_ACTIVE" || !queue.fails[0].retryable {
+			t.Fatalf("expected retryable OPTIMIZATION_SITE_CYCLE_ACTIVE fail for losing replica, got %+v", queue.fails)
+		}
+		if locker.releaseCount.Load() != 1 {
+			t.Fatalf("expected winner release count=1, got %d", locker.releaseCount.Load())
+		}
+
+		// After release, another cycle on the same site can acquire cleanly.
+		rel, locked := acquireSiteCycleLockForJob(context.Background(), queue, locker, job2, nil)
+		if !locked || rel == nil {
+			t.Fatal("expected site lock re-acquisition after release")
+		}
+		rel()
+	})
+
+	t.Run("lock acquisition error fails job as retryable", func(t *testing.T) {
+		locker := &stubSiteCycleLocker{forceErr: errors.New("pg pool closed")}
+		queue := &stubJobFinalizer{}
+		rel, locked := acquireSiteCycleLockForJob(context.Background(), queue, locker, job1, nil)
+		if locked || rel != nil {
+			t.Fatalf("expected locked=false on error, got locked=%v relNonNil=%t", locked, rel != nil)
+		}
+		if len(queue.fails) != 1 || queue.fails[0].errorCode != "OPTIMIZATION_SITE_LOCK_FAILED" || !queue.fails[0].retryable {
+			t.Fatalf("expected retryable OPTIMIZATION_SITE_LOCK_FAILED, got %+v", queue.fails)
+		}
+	})
 }

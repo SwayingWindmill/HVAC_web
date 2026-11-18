@@ -32,7 +32,8 @@ func (store *PostgresStore) ActiveAutoControlLease(ctx context.Context, tenantID
 SELECT id::text, tenant_id::text, site_id::text, status, armed_by::text, armed_at, expires_at,
        allowed_capabilities, max_setpoint_step_c, supply_temp_min_c, supply_temp_max_c,
        zone_temp_max_c, min_running_chillers, max_commands_per_hour,
-       deadband_c, manual_backoff_until, manual_backoff_reason, revision
+       deadband_c, manual_backoff_until, manual_backoff_reason, revision,
+       COALESCE(execution_mode, 'CLOSED_LOOP')
 FROM core_registry.site_auto_control_leases
 WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND status = 'ACTIVE' AND expires_at > $3
 ORDER BY armed_at DESC, id DESC
@@ -42,6 +43,7 @@ LIMIT 1
 		&lease.AllowedCapabilities, &lease.MaxSetpointStepC, &lease.SupplyTempMinC, &lease.SupplyTempMaxC,
 		&lease.ZoneTempMaxC, &lease.MinRunningChillers, &lease.MaxCommandsPerHour,
 		&lease.DeadbandC, &lease.ManualBackoffUntil, &lease.ManualBackoffReason, &lease.Revision,
+		&lease.ExecutionMode,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -49,6 +51,7 @@ LIMIT 1
 	if err != nil {
 		return nil, fmt.Errorf("load active site auto control lease: %w", err)
 	}
+	lease.ExecutionMode = normalizeExecutionMode(lease.ExecutionMode)
 	if err = tx.Commit(ctx); err != nil {
 		return nil, err
 	}
@@ -122,6 +125,21 @@ LIMIT 1
 		}
 	}
 
+	var leaseExecutionMode string
+	var leaseDeadbandC float64
+	err = tx.QueryRow(ctx, `
+SELECT COALESCE(execution_mode, 'CLOSED_LOOP'), COALESCE(deadband_c, 0)
+FROM core_registry.site_auto_control_leases
+WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND status = 'ACTIVE' AND expires_at > $3
+ORDER BY armed_at DESC, id DESC
+LIMIT 1
+`, tenantID, siteID, at.UTC()).Scan(&leaseExecutionMode, &leaseDeadbandC)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return AutoControlSiteContext{}, fmt.Errorf("load active lease execution mode: %w", err)
+	}
+	result.ExecutionMode = normalizeExecutionMode(leaseExecutionMode)
+	result.LeaseDeadbandC = leaseDeadbandC
+
 	if err = tx.QueryRow(ctx, `
 SELECT count(*)::int
 FROM core_registry.optimization_execution_monitors
@@ -131,6 +149,17 @@ WHERE tenant_id = $1::uuid
   AND status IN ('PENDING_SUBMIT', 'OBSERVING', 'VERIFIED', 'ROLLED_BACK', 'TRIPPED', 'TRIPPED_ROLLED_BACK', 'ROLLBACK_FAILED', 'MANUAL_OVERRIDE')
 `, tenantID, siteID, at.UTC().Add(-time.Hour)).Scan(&result.RecentAutoCountHour); err != nil {
 		return AutoControlSiteContext{}, fmt.Errorf("count recent optimization monitors: %w", err)
+	}
+
+	if err = tx.QueryRow(ctx, `
+SELECT count(*)::int
+FROM core_registry.optimization_execution_monitors
+WHERE tenant_id = $1::uuid
+  AND site_id = $2::uuid
+  AND started_at >= $3
+  AND status = 'SHADOW_RECORDED'
+`, tenantID, siteID, at.UTC().Add(-time.Hour)).Scan(&result.RecentShadowCountHour); err != nil {
+		return AutoControlSiteContext{}, fmt.Errorf("count recent shadow optimization monitors: %w", err)
 	}
 
 	stalePendingCutoff := at.UTC().Add(-DefaultPendingSubmitStaleAge)
@@ -201,6 +230,16 @@ LIMIT 2
 // PreRegisterAutomatedDispatch atomically reserves a PENDING_SUBMIT monitor row under a site advisory lock
 // before any outbound HTTP command is sent, closing crash split-brain and concurrent rate-limit bypasses.
 func (store *PostgresStore) PreRegisterAutomatedDispatch(ctx context.Context, reg AutomatedDispatchRegistration) (PreRegisterDispatchResult, error) {
+	return store.recordExecutionMonitor(ctx, reg, false)
+}
+
+// RecordShadowMonitor persists a SHADOW_RECORDED guardrail evaluation trace under a site advisory lock
+// without reserving or dispatching a live closed-loop command.
+func (store *PostgresStore) RecordShadowMonitor(ctx context.Context, reg AutomatedDispatchRegistration) (PreRegisterDispatchResult, error) {
+	return store.recordExecutionMonitor(ctx, reg, true)
+}
+
+func (store *PostgresStore) recordExecutionMonitor(ctx context.Context, reg AutomatedDispatchRegistration, shadow bool) (PreRegisterDispatchResult, error) {
 	if store == nil || store.pool == nil {
 		return PreRegisterDispatchResult{}, errors.New("optimization postgres store is unavailable")
 	}
@@ -214,6 +253,15 @@ func (store *PostgresStore) PreRegisterAutomatedDispatch(ctx context.Context, re
 		!uuidPattern.MatchString(reg.Target.DeviceID) {
 		return PreRegisterDispatchResult{}, errors.New("automated dispatch registration scope is invalid")
 	}
+	cleanDecisionID := strings.TrimSpace(reg.DecisionID)
+	var decisionIDPtr *string
+	if cleanDecisionID != "" {
+		if !uuidPattern.MatchString(cleanDecisionID) {
+			return PreRegisterDispatchResult{}, errors.New("automated dispatch decisionId is invalid")
+		}
+		decisionIDPtr = &cleanDecisionID
+	}
+	cleanTraceID := strings.TrimSpace(reg.TraceID)
 	nowUTC := reg.At.UTC()
 	traceBytes := bytes.TrimSpace(reg.GuardrailTrace)
 	if len(traceBytes) == 0 || string(traceBytes) == "null" {
@@ -236,8 +284,9 @@ func (store *PostgresStore) PreRegisterAutomatedDispatch(ctx context.Context, re
 
 	var maxCommandsPerHour int
 	var manualBackoffUntil *time.Time
+	var dbExecutionMode string
 	err = tx.QueryRow(ctx, `
-SELECT max_commands_per_hour, manual_backoff_until
+SELECT max_commands_per_hour, manual_backoff_until, COALESCE(execution_mode, 'CLOSED_LOOP')
 FROM core_registry.site_auto_control_leases
 WHERE tenant_id = $1::uuid
   AND site_id = $2::uuid
@@ -245,7 +294,7 @@ WHERE tenant_id = $1::uuid
   AND status = 'ACTIVE'
   AND expires_at > $4
 FOR UPDATE
-`, reg.Recommendation.TenantID, reg.Recommendation.SiteID, reg.LeaseID, nowUTC).Scan(&maxCommandsPerHour, &manualBackoffUntil)
+`, reg.Recommendation.TenantID, reg.Recommendation.SiteID, reg.LeaseID, nowUTC).Scan(&maxCommandsPerHour, &manualBackoffUntil, &dbExecutionMode)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return PreRegisterDispatchResult{SkipReason: "MANUAL_CONFIRM"}, nil
 	}
@@ -254,6 +303,9 @@ FOR UPDATE
 	}
 	if manualBackoffUntil != nil && manualBackoffUntil.UTC().After(nowUTC) {
 		return PreRegisterDispatchResult{SkipReason: "MANUAL_BACKOFF_ACTIVE"}, nil
+	}
+	if !shadow && normalizeExecutionMode(dbExecutionMode) == ExecutionModeShadow {
+		return PreRegisterDispatchResult{SkipReason: "SHADOW_MODE_ACTIVE"}, nil
 	}
 
 	var approvalState string
@@ -277,8 +329,24 @@ FOR UPDATE
 		return PreRegisterDispatchResult{SkipReason: "RECOMMENDATION_REJECTED"}, nil
 	}
 
-	stalePendingCutoff := nowUTC.Add(-DefaultPendingSubmitStaleAge)
-	if _, err = tx.Exec(ctx, `
+	if shadow {
+		var recentShadowCount int
+		if err = tx.QueryRow(ctx, `
+SELECT count(*)::int
+FROM core_registry.optimization_execution_monitors
+WHERE tenant_id = $1::uuid
+  AND site_id = $2::uuid
+  AND started_at >= $3
+  AND status = 'SHADOW_RECORDED'
+`, reg.Recommendation.TenantID, reg.Recommendation.SiteID, nowUTC.Add(-time.Hour)).Scan(&recentShadowCount); err != nil {
+			return PreRegisterDispatchResult{}, fmt.Errorf("enforce hourly shadow rate limit: %w", err)
+		}
+		if recentShadowCount >= DefaultShadowMaxPerHour {
+			return PreRegisterDispatchResult{SkipReason: "SHADOW_RATE_LIMIT_REACHED"}, nil
+		}
+	} else {
+		stalePendingCutoff := nowUTC.Add(-DefaultPendingSubmitStaleAge)
+		if _, err = tx.Exec(ctx, `
 UPDATE core_registry.optimization_execution_monitors
 SET status = 'SUBMIT_FAILED',
     trip_reason = 'pending_submit_stale_timeout',
@@ -288,25 +356,25 @@ WHERE tenant_id = $1::uuid
   AND status = 'PENDING_SUBMIT'
   AND started_at < $4
 `, reg.Recommendation.TenantID, reg.Recommendation.SiteID, nowUTC, stalePendingCutoff); err != nil {
-		return PreRegisterDispatchResult{}, fmt.Errorf("sweep stale pending execution monitors: %w", err)
-	}
+			return PreRegisterDispatchResult{}, fmt.Errorf("sweep stale pending execution monitors: %w", err)
+		}
 
-	var activeMonitorCount int
-	if err = tx.QueryRow(ctx, `
+		var activeMonitorCount int
+		if err = tx.QueryRow(ctx, `
 SELECT count(*)::int
 FROM core_registry.optimization_execution_monitors
 WHERE tenant_id = $1::uuid
   AND site_id = $2::uuid
   AND status IN ('PENDING_SUBMIT', 'OBSERVING')
 `, reg.Recommendation.TenantID, reg.Recommendation.SiteID).Scan(&activeMonitorCount); err != nil {
-		return PreRegisterDispatchResult{}, fmt.Errorf("check active execution monitors: %w", err)
-	}
-	if activeMonitorCount > 0 {
-		return PreRegisterDispatchResult{SkipReason: "ACTIVE_MONITOR_EXISTS"}, nil
-	}
+			return PreRegisterDispatchResult{}, fmt.Errorf("check active execution monitors: %w", err)
+		}
+		if activeMonitorCount > 0 {
+			return PreRegisterDispatchResult{SkipReason: "ACTIVE_MONITOR_EXISTS"}, nil
+		}
 
-	var recentCount int
-	if err = tx.QueryRow(ctx, `
+		var recentCount int
+		if err = tx.QueryRow(ctx, `
 SELECT count(*)::int
 FROM core_registry.optimization_execution_monitors
 WHERE tenant_id = $1::uuid
@@ -314,15 +382,22 @@ WHERE tenant_id = $1::uuid
   AND started_at >= $3
   AND status IN ('PENDING_SUBMIT', 'OBSERVING', 'VERIFIED', 'ROLLED_BACK', 'TRIPPED', 'TRIPPED_ROLLED_BACK', 'ROLLBACK_FAILED', 'MANUAL_OVERRIDE')
 `, reg.Recommendation.TenantID, reg.Recommendation.SiteID, nowUTC.Add(-time.Hour)).Scan(&recentCount); err != nil {
-		return PreRegisterDispatchResult{}, fmt.Errorf("enforce hourly auto-control rate limit: %w", err)
-	}
-	if recentCount >= maxCommandsPerHour {
-		return PreRegisterDispatchResult{SkipReason: "RATE_LIMIT_REACHED"}, nil
+			return PreRegisterDispatchResult{}, fmt.Errorf("enforce hourly auto-control rate limit: %w", err)
+		}
+		if recentCount >= maxCommandsPerHour {
+			return PreRegisterDispatchResult{SkipReason: "RATE_LIMIT_REACHED"}, nil
+		}
 	}
 
 	monitorID, err := optimizationUUIDv7(nowUTC)
 	if err != nil {
 		return PreRegisterDispatchResult{}, err
+	}
+	status := ExecutionMonitorPendingSubmit
+	executionMode := ExecutionModeClosedLoop
+	if shadow {
+		status = ExecutionMonitorShadowRecorded
+		executionMode = ExecutionModeShadow
 	}
 	windowEndsAt := nowUTC.Add(DefaultExecutionMonitorWindow)
 	supplyMinC := math.Max(DefaultSupplyTempHardFloorC, reg.SupplyMinC)
@@ -332,22 +407,25 @@ INSERT INTO core_registry.optimization_execution_monitors (
   device_id, target_capability, baseline_supply_temp_c, applied_supply_temp_c,
   restore_supply_temp_c, zone_temp_max_c, supply_temp_min_c, supply_temp_max_c,
   raw_recommended_value, clamped_value, guardrail_verdict, guardrail_trace,
-  started_at, window_ends_at, last_checked_at, status, created_at, updated_at
+  started_at, window_ends_at, last_checked_at, status,
+  execution_mode, decision_id, trace_id, created_at, updated_at
 ) VALUES (
   $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, NULL,
   $6::uuid, $7, $8, $9,
   $10, $11, $12, $13,
   $14, $15, $16, $17::jsonb,
-  $18, $19, $18, 'PENDING_SUBMIT', $18, $18
+  $18, $19, $18, $20,
+  $21, $22::uuid, $23, $18, $18
 )`,
 		monitorID, reg.Recommendation.TenantID, reg.Recommendation.SiteID, reg.LeaseID, reg.Recommendation.ID,
 		reg.Target.DeviceID, string(commandmodel.CapabilitySetChilledWaterTemperatureSetpoint),
 		reg.BaselineSupplyC, reg.AppliedSupplyC,
 		reg.RestoreSupplyC, reg.ZoneMaxC, supplyMinC, reg.SupplyMaxC,
 		reg.RawRecommendedC, reg.ClampedC, reg.GuardrailVerdict, traceBytes,
-		nowUTC, windowEndsAt,
+		nowUTC, windowEndsAt, status,
+		executionMode, decisionIDPtr, cleanTraceID,
 	); err != nil {
-		return PreRegisterDispatchResult{}, fmt.Errorf("insert pending optimization execution monitor: %w", err)
+		return PreRegisterDispatchResult{}, fmt.Errorf("insert optimization execution monitor (%s): %w", status, err)
 	}
 
 	if err = tx.Commit(ctx); err != nil {
@@ -376,7 +454,10 @@ INSERT INTO core_registry.optimization_execution_monitors (
 			StartedAt:           nowUTC,
 			WindowEndsAt:        windowEndsAt,
 			LastCheckedAt:       &nowUTC,
-			Status:              ExecutionMonitorPendingSubmit,
+			Status:              status,
+			ExecutionMode:       executionMode,
+			DecisionID:          cleanDecisionID,
+			TraceID:             cleanTraceID,
 		},
 	}, nil
 }
@@ -502,6 +583,7 @@ func truncateSummary(raw string, maxRunes int) string {
 
 func scanExecutionMonitorRow(row pgx.Row) (OptimizationExecutionMonitorRecord, error) {
 	var item OptimizationExecutionMonitorRecord
+	var decisionID *string
 	err := row.Scan(
 		&item.ID, &item.TenantID, &item.SiteID, &item.LeaseID, &item.RecommendationID,
 		&item.CommandIntentID, &item.DeviceID, &item.TargetCapability,
@@ -511,8 +593,16 @@ func scanExecutionMonitorRow(row pgx.Row) (OptimizationExecutionMonitorRecord, e
 		&item.StartedAt, &item.WindowEndsAt,
 		&item.LastCheckedAt, &item.TelemetryUnhealthySince, &item.Status, &item.TripReason,
 		&item.RollbackCommandIntentID, &item.ClaimOwner, &item.ClaimUntil,
+		&item.ExecutionMode, &decisionID, &item.TraceID,
 	)
-	return item, err
+	if err != nil {
+		return OptimizationExecutionMonitorRecord{}, err
+	}
+	if decisionID != nil {
+		item.DecisionID = *decisionID
+	}
+	item.ExecutionMode = normalizeExecutionMode(item.ExecutionMode)
+	return item, nil
 }
 
 // ClaimObservingExecutionMonitors atomically leases up to limit OBSERVING monitors using SKIP LOCKED
@@ -546,7 +636,10 @@ SELECT m.id::text, m.tenant_id::text, m.site_id::text, m.lease_id::text, m.recom
        m.started_at, m.window_ends_at,
        m.last_checked_at, m.telemetry_unhealthy_since, m.status, m.trip_reason,
        CASE WHEN m.rollback_command_intent_id IS NULL THEN NULL ELSE m.rollback_command_intent_id::text END,
-       m.claim_owner, m.claim_until
+       m.claim_owner, m.claim_until,
+       COALESCE(m.execution_mode, 'CLOSED_LOOP'),
+       CASE WHEN m.decision_id IS NULL THEN NULL ELSE m.decision_id::text END,
+       COALESCE(m.trace_id, '')
 FROM core_registry.claim_observing_execution_monitors($1, $2, $3, $4) AS m
 `, owner, claimUntil, nowUTC, limit)
 	if err != nil {

@@ -206,7 +206,24 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	autoController.WithPointHealth(telemetryHealthClient).WithWorkerID(workerID).WithLeaseDuration(monitorLeaseDuration)
+	var controlEvents optimization.ControlEventPublisher
+	if alarmURL := strings.TrimSpace(envOrDefault("OPTIMIZATION_ALARM_URL", "https://alarm-service:8448")); alarmURL != "" &&
+		!strings.EqualFold(alarmURL, "OFF") && !strings.EqualFold(alarmURL, "DISABLED") {
+		publisher, pubErr := optimization.NewHTTPControlEventPublisher(optimization.ControlEventClientConfig{
+			CertificatePath: tlsCert,
+			PrivateKeyPath:  tlsKey,
+			CAPath:          tlsCA,
+			AlarmURL:        alarmURL,
+			ServerName:      strings.TrimSpace(os.Getenv("OPTIMIZATION_ALARM_SERVER_NAME")),
+			Timeout:         3 * time.Second,
+		})
+		if pubErr != nil {
+			logger.Warn("optimization_control_alarm_publisher_disabled", "error_code", "OPTIMIZATION_ALARM_CLIENT_DISABLED", "error", pubErr)
+		} else {
+			controlEvents = publisher
+		}
+	}
+	autoController.WithPointHealth(telemetryHealthClient).WithControlEvents(controlEvents).WithWorkerID(workerID).WithLeaseDuration(monitorLeaseDuration)
 
 	claimInterval, err := durationEnv("OPTIMIZATION_CLAIM_INTERVAL", 5*time.Second)
 	if err != nil {
@@ -473,9 +490,49 @@ type optimizationJobOutput struct {
 	RecommendationID       string                                   `json:"recommendationId"`
 	ApprovalState          intelligencemodel.RecommendationApproval `json:"approvalState"`
 	AutoDispatched         bool                                     `json:"autoDispatched"`
+	ShadowRecorded         bool                                     `json:"shadowRecorded,omitempty"`
+	ExecutionMode          string                                   `json:"executionMode,omitempty"`
 	AutoDispatchSkipReason string                                   `json:"autoDispatchSkipReason,omitempty"`
 	CommandIntentID        string                                   `json:"commandIntentId,omitempty"`
 	MonitorID              string                                   `json:"monitorId,omitempty"`
+	DecisionID             string                                   `json:"decisionId,omitempty"`
+	TraceID                string                                   `json:"traceId,omitempty"`
+}
+
+type jobFailureFinalizer interface {
+	Fail(context.Context, schedulerjob.Job, string, error, bool, time.Time) error
+}
+
+func acquireSiteCycleLockForJob(
+	ctx context.Context,
+	queue jobFailureFinalizer,
+	locker optimization.SiteCycleLock,
+	job schedulerjob.Job,
+	logger *slog.Logger,
+) (func(), bool) {
+	if locker == nil {
+		return func() {}, true
+	}
+	release, acquired, err := locker.AcquireSiteCycleLock(ctx, job.TenantID, job.SiteID)
+	if err != nil {
+		finalizeCtx, finalizeCancel := context.WithTimeout(context.WithoutCancel(ctx), defaultFinalizeJobTimeout)
+		failErr := queue.Fail(finalizeCtx, job, "OPTIMIZATION_SITE_LOCK_FAILED", err, true, time.Now().UTC())
+		finalizeCancel()
+		if failErr != nil && logger != nil {
+			logger.Warn("optimization_job_fail_finalize_failed", "error_code", "OPTIMIZATION_JOB_FINALIZE_FAILED", "job_id", job.JobID, "error", failErr)
+		}
+		return nil, false
+	}
+	if !acquired {
+		finalizeCtx, finalizeCancel := context.WithTimeout(context.WithoutCancel(ctx), defaultFinalizeJobTimeout)
+		failErr := queue.Fail(finalizeCtx, job, "OPTIMIZATION_SITE_CYCLE_ACTIVE", errors.New("another optimization cycle is active for site"), true, time.Now().UTC())
+		finalizeCancel()
+		if failErr != nil && logger != nil {
+			logger.Warn("optimization_job_fail_finalize_failed", "error_code", "OPTIMIZATION_JOB_FINALIZE_FAILED", "job_id", job.JobID, "error", failErr)
+		}
+		return nil, false
+	}
+	return release, true
 }
 
 // prepareScheduledOptimization turns a Site's schedule firing into a prepared run on its current
@@ -559,6 +616,12 @@ func executeOptimizationJob(ctx context.Context, queue *schedulerjob.Queue, stor
 		}
 		return
 	}
+	releaseSiteLock, locked := acquireSiteCycleLockForJob(jobCtx, queue, store, job, logger)
+	if !locked {
+		return
+	}
+	defer releaseSiteLock()
+
 	leaseStop := make(chan struct{})
 	leaseDone := make(chan struct{})
 	go func() {
@@ -617,9 +680,13 @@ func executeOptimizationJob(ctx context.Context, queue *schedulerjob.Queue, stor
 		RecommendationID:       recommendation.ID,
 		ApprovalState:          approvalState,
 		AutoDispatched:         dispatchOutcome.Dispatched,
+		ShadowRecorded:         dispatchOutcome.ShadowRecorded,
+		ExecutionMode:          dispatchOutcome.ExecutionMode,
 		AutoDispatchSkipReason: dispatchOutcome.SkipReason,
 		CommandIntentID:        dispatchOutcome.CommandIntentID,
 		MonitorID:              dispatchOutcome.MonitorID,
+		DecisionID:             dispatchOutcome.DecisionID,
+		TraceID:                dispatchOutcome.TraceID,
 	}
 	finalizeCtx, finalizeCancel := context.WithTimeout(context.WithoutCancel(ctx), defaultFinalizeJobTimeout)
 	err = queue.Complete(finalizeCtx, job, output, time.Now().UTC())
