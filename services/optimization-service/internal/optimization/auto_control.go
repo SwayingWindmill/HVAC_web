@@ -16,6 +16,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/commandauth"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 	"github.com/quanlaihe/hvac-web/libs/intelligencemodel"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
 const (
@@ -32,6 +33,12 @@ const (
 	DefaultCabinetTamperThresholdC     = 0.35
 	DefaultCabinetTamperMatchEpsilonC  = 0.01
 	DefaultCabinetManualBackoffWindow  = 2 * time.Hour
+	DefaultSetpointConvergenceGrace    = 10 * time.Minute
+	MaxSetpointDeviationC              = 0.3
+	DefaultShadowMaxPerHour            = 12
+
+	ExecutionModeClosedLoop = "CLOSED_LOOP"
+	ExecutionModeShadow     = "SHADOW"
 
 	ExecutionMonitorPendingSubmit     = "PENDING_SUBMIT"
 	ExecutionMonitorObserving         = "OBSERVING"
@@ -63,6 +70,7 @@ type AutoControlLeaseRecord struct {
 	DeadbandC           float64
 	ManualBackoffUntil  *time.Time
 	ManualBackoffReason string
+	ExecutionMode       string
 	Revision            int64
 }
 
@@ -94,6 +102,9 @@ type OptimizationExecutionMonitorRecord struct {
 	RollbackCommandIntentID *string
 	ClaimOwner              *string
 	ClaimUntil              *time.Time
+	ExecutionMode           string
+	DecisionID              string
+	TraceID                 string
 }
 
 type SetpointCommandTarget struct {
@@ -107,13 +118,16 @@ type SetpointCommandTarget struct {
 }
 
 type AutoControlSiteContext struct {
-	SiteControlMode     string
-	InputMapping        InputMapping
-	DeviceIDs           []string
-	SetpointTarget      *SetpointCommandTarget
-	Topology            StagingTopology
-	RecentAutoCountHour int
-	HasActiveMonitor    bool
+	SiteControlMode       string
+	ExecutionMode         string
+	LeaseDeadbandC        float64
+	InputMapping          InputMapping
+	DeviceIDs             []string
+	SetpointTarget        *SetpointCommandTarget
+	Topology              StagingTopology
+	RecentAutoCountHour   int
+	RecentShadowCountHour int
+	HasActiveMonitor      bool
 }
 
 type ChillerPowerViolation struct {
@@ -152,7 +166,12 @@ type AutoControlDispatchInput struct {
 	CurrentValue           *float64
 	BusinessRevision       uint64
 	ObservedAt             time.Time
+	DecisionID             string
+	TraceID                string
 }
+
+// AutomatedCommandRequest aliases AutoControlDispatchInput for callers using command-request terminology.
+type AutomatedCommandRequest = AutoControlDispatchInput
 
 type AutomatedDispatchRegistration struct {
 	Recommendation   Recommendation
@@ -168,6 +187,9 @@ type AutomatedDispatchRegistration struct {
 	ClampedC         *float64
 	GuardrailVerdict string
 	GuardrailTrace   json.RawMessage
+	ExecutionMode    string
+	DecisionID       string
+	TraceID          string
 	At               time.Time
 }
 
@@ -185,6 +207,7 @@ type AutoControlStore interface {
 	ActiveAutoControlLease(ctx context.Context, tenantID, siteID string, at time.Time) (*AutoControlLeaseRecord, error)
 	LoadAutoControlSiteContext(ctx context.Context, tenantID, siteID, inputSnapshotID string, at time.Time) (AutoControlSiteContext, error)
 	PreRegisterAutomatedDispatch(ctx context.Context, reg AutomatedDispatchRegistration) (PreRegisterDispatchResult, error)
+	RecordShadowMonitor(ctx context.Context, reg AutomatedDispatchRegistration) (PreRegisterDispatchResult, error)
 	ActivateAutomatedDispatch(ctx context.Context, recommendation Recommendation, monitorID, commandIntentID string, at time.Time) error
 	MarkAutomatedDispatchFailed(ctx context.Context, tenantID, siteID, monitorID, errorSummary string, at time.Time) error
 	ClaimObservingExecutionMonitors(ctx context.Context, claimOwner string, leaseDuration time.Duration, now time.Time, limit int) ([]OptimizationExecutionMonitorRecord, error)
@@ -202,9 +225,13 @@ type AutoControlTelemetryReader interface {
 
 type AutoDispatchOutcome struct {
 	Dispatched      bool
+	ShadowRecorded  bool
+	ExecutionMode   string
 	SkipReason      string
 	CommandIntentID string
 	MonitorID       string
+	DecisionID      string
+	TraceID         string
 }
 
 type MonitorPassSummary struct {
@@ -220,6 +247,7 @@ type AutoController struct {
 	telemetry     AutoControlTelemetryReader
 	dispatcher    WorkloadCommandDispatcher
 	pointHealth   TelemetryPointHealthChecker
+	controlEvents ControlEventPublisher
 	clock         Clock
 	logf          func(string, ...any)
 	workerID      string
@@ -228,6 +256,11 @@ type AutoController struct {
 
 func (controller *AutoController) WithPointHealth(checker TelemetryPointHealthChecker) *AutoController {
 	controller.pointHealth = checker
+	return controller
+}
+
+func (controller *AutoController) WithControlEvents(publisher ControlEventPublisher) *AutoController {
+	controller.controlEvents = publisher
 	return controller
 }
 
@@ -309,37 +342,51 @@ func (controller *AutoController) TryDispatch(ctx context.Context, recommendatio
 	} else {
 		now = now.UTC()
 	}
+	ctx, decisionID, traceID, err := ensureDecisionAndTraceContext(ctx, now)
+	if err != nil {
+		return AutoDispatchOutcome{}, err
+	}
+	skipOutcome := func(mode, reason string) AutoDispatchOutcome {
+		return AutoDispatchOutcome{
+			ExecutionMode: mode,
+			SkipReason:    reason,
+			DecisionID:    decisionID,
+			TraceID:       traceID,
+		}
+	}
+
 	if recommendation.CommandIntentID != "" {
-		return AutoDispatchOutcome{SkipReason: "ALREADY_DISPATCHED"}, nil
+		return skipOutcome("", "ALREADY_DISPATCHED"), nil
 	}
 	if recommendation.Approval == intelligencemodel.RecommendationRejected {
-		return AutoDispatchOutcome{SkipReason: "RECOMMENDATION_REJECTED"}, nil
+		return skipOutcome("", "RECOMMENDATION_REJECTED"), nil
 	}
 
 	lease, err := controller.store.ActiveAutoControlLease(ctx, recommendation.TenantID, recommendation.SiteID, now)
 	if err != nil {
-		return AutoDispatchOutcome{}, err
+		return AutoDispatchOutcome{DecisionID: decisionID, TraceID: traceID}, err
 	}
 	if lease == nil || lease.Status != "ACTIVE" || !lease.ExpiresAt.After(now) {
-		return AutoDispatchOutcome{SkipReason: "MANUAL_CONFIRM"}, nil
+		return skipOutcome("", "MANUAL_CONFIRM"), nil
 	}
+	executionMode := normalizeExecutionMode(lease.ExecutionMode)
 
 	validUntil := recommendation.EffectiveValidUntil()
 	if validUntil.IsZero() || !validUntil.After(now) {
-		return AutoDispatchOutcome{SkipReason: "RECOMMENDATION_EXPIRED"}, nil
+		return skipOutcome(executionMode, "RECOMMENDATION_EXPIRED"), nil
 	}
 
 	targetCapability := commandmodel.CapabilitySetChilledWaterTemperatureSetpoint
 	if !slices.Contains(lease.AllowedCapabilities, string(targetCapability)) {
-		return AutoDispatchOutcome{SkipReason: "CAPABILITY_NOT_LEASED"}, nil
+		return skipOutcome(executionMode, "CAPABILITY_NOT_LEASED"), nil
 	}
 	candidateSupplyC := recommendation.Candidate.SupplyTempC
 	if !finite(candidateSupplyC) || candidateSupplyC == 0 {
-		return AutoDispatchOutcome{SkipReason: "CANDIDATE_SUPPLY_TEMP_MISSING"}, nil
+		return skipOutcome(executionMode, "CANDIDATE_SUPPLY_TEMP_MISSING"), nil
 	}
 	baselineSupplyC := recommendation.Baseline.SupplyTempC
 	if !finite(baselineSupplyC) || baselineSupplyC == 0 {
-		return AutoDispatchOutcome{SkipReason: "BASELINE_SUPPLY_TEMP_MISSING"}, nil
+		return skipOutcome(executionMode, "BASELINE_SUPPLY_TEMP_MISSING"), nil
 	}
 	restoreSupplyC := baselineSupplyC
 	if recommendation.RollbackPlan.RestoreSupplyTempC != nil && finite(*recommendation.RollbackPlan.RestoreSupplyTempC) {
@@ -348,37 +395,41 @@ func (controller *AutoController) TryDispatch(ctx context.Context, recommendatio
 
 	siteCtx, err := controller.store.LoadAutoControlSiteContext(ctx, recommendation.TenantID, recommendation.SiteID, recommendation.InputSnapshotID, now)
 	if err != nil {
-		return AutoDispatchOutcome{}, err
+		return AutoDispatchOutcome{ExecutionMode: executionMode, DecisionID: decisionID, TraceID: traceID}, err
 	}
-	if siteCtx.HasActiveMonitor {
-		return AutoDispatchOutcome{SkipReason: "ACTIVE_MONITOR_EXISTS"}, nil
-	}
-	if siteCtx.RecentAutoCountHour >= lease.MaxCommandsPerHour {
-		return AutoDispatchOutcome{SkipReason: "RATE_LIMIT_REACHED"}, nil
+	if executionMode == ExecutionModeClosedLoop {
+		if siteCtx.HasActiveMonitor {
+			return skipOutcome(executionMode, "ACTIVE_MONITOR_EXISTS"), nil
+		}
+		if siteCtx.RecentAutoCountHour >= lease.MaxCommandsPerHour {
+			return skipOutcome(executionMode, "RATE_LIMIT_REACHED"), nil
+		}
+	} else if siteCtx.RecentShadowCountHour >= DefaultShadowMaxPerHour {
+		return skipOutcome(executionMode, "SHADOW_RATE_LIMIT_REACHED"), nil
 	}
 	if siteCtx.SiteControlMode != "" && siteCtx.SiteControlMode != SiteControlModeRemoteAuto {
-		return AutoDispatchOutcome{SkipReason: "SITE_CONTROL_EXIT_ACTIVE"}, nil
+		return skipOutcome(executionMode, "SITE_CONTROL_EXIT_ACTIVE"), nil
 	}
 	if siteCtx.SetpointTarget == nil || siteCtx.SetpointTarget.AssetLocked || hasAnyAssetLock(siteCtx.Topology.AssetControlLocks) {
-		return AutoDispatchOutcome{SkipReason: "ASSET_CONTROL_LOCKED"}, nil
+		return skipOutcome(executionMode, "ASSET_CONTROL_LOCKED"), nil
 	}
 	if strings.TrimSpace(siteCtx.InputMapping.SupplyTemperatureKey) == "" || len(siteCtx.InputMapping.effectiveZoneKeys()) == 0 {
-		return AutoDispatchOutcome{SkipReason: "INPUT_MAPPING_INCOMPLETE"}, nil
+		return skipOutcome(executionMode, "INPUT_MAPPING_INCOMPLETE"), nil
 	}
 
 	if controller.pointHealth == nil {
-		return AutoDispatchOutcome{SkipReason: "TELEMETRY_UNHEALTHY"}, nil
+		return skipOutcome(executionMode, "TELEMETRY_UNHEALTHY"), nil
 	}
 	deviceIDs, allKeys := autoControlHealthScope(siteCtx, siteCtx.SetpointTarget.DeviceID)
 	healthSnapshot, err := controller.pointHealth.InspectTelemetryPointHealth(ctx, recommendation.TenantID, recommendation.SiteID, deviceIDs, allKeys)
 	if err != nil {
 		if ctx.Err() != nil {
-			return AutoDispatchOutcome{}, ctx.Err()
+			return AutoDispatchOutcome{ExecutionMode: executionMode, DecisionID: decisionID, TraceID: traceID}, ctx.Err()
 		}
-		return AutoDispatchOutcome{SkipReason: "TELEMETRY_UNHEALTHY"}, nil
+		return skipOutcome(executionMode, "TELEMETRY_UNHEALTHY"), nil
 	}
 	if !healthSnapshot.Healthy {
-		return AutoDispatchOutcome{SkipReason: "TELEMETRY_UNHEALTHY"}, nil
+		return skipOutcome(executionMode, "TELEMETRY_UNHEALTHY"), nil
 	}
 
 	liveState := extractAutoControlLiveState(healthSnapshot.LivePoints, siteCtx, siteCtx.SetpointTarget.DeviceID, now)
@@ -422,25 +473,25 @@ func (controller *AutoController) TryDispatch(ctx context.Context, recommendatio
 
 	switch guardrailResult.Verdict {
 	case commandmodel.GuardrailVerdictDeadbandSkip:
-		return AutoDispatchOutcome{SkipReason: skipReasonOrDefault(guardrailResult.ReasonCode, "DEADBAND_SKIP")}, nil
+		return skipOutcome(executionMode, skipReasonOrDefault(guardrailResult.ReasonCode, "DEADBAND_SKIP")), nil
 	case commandmodel.GuardrailVerdictVetoed:
-		return AutoDispatchOutcome{SkipReason: skipReasonOrDefault(guardrailResult.ReasonCode, "GUARDRAIL_VETOED")}, nil
+		return skipOutcome(executionMode, skipReasonOrDefault(guardrailResult.ReasonCode, "GUARDRAIL_VETOED")), nil
 	}
 	if !guardrailResult.Allowed {
-		return AutoDispatchOutcome{SkipReason: skipReasonOrDefault(guardrailResult.ReasonCode, "GUARDRAIL_VETOED")}, nil
+		return skipOutcome(executionMode, skipReasonOrDefault(guardrailResult.ReasonCode, "GUARDRAIL_VETOED")), nil
 	}
 
 	// Fail closed on any missing/stale/non-GOOD/non-ONLINE/non-positive-revision live telemetry point.
 	if liveState.SupplyTemp == nil || !isLivePointDispatchable(*liveState.SupplyTemp, now, DefaultAutoControlMaxPointAge) {
-		return AutoDispatchOutcome{SkipReason: "TELEMETRY_REVALIDATION_FAILED"}, nil
+		return skipOutcome(executionMode, "TELEMETRY_REVALIDATION_FAILED"), nil
 	}
 	zoneKeys := siteCtx.InputMapping.effectiveZoneKeys()
 	if len(liveState.ZoneTemps) != len(zoneKeys) {
-		return AutoDispatchOutcome{SkipReason: "TELEMETRY_REVALIDATION_FAILED"}, nil
+		return skipOutcome(executionMode, "TELEMETRY_REVALIDATION_FAILED"), nil
 	}
 	for _, zonePt := range liveState.ZoneTemps {
 		if !isLivePointDispatchable(zonePt, now, DefaultAutoControlMaxPointAge) {
-			return AutoDispatchOutcome{SkipReason: "TELEMETRY_REVALIDATION_FAILED"}, nil
+			return skipOutcome(executionMode, "TELEMETRY_REVALIDATION_FAILED"), nil
 		}
 	}
 
@@ -449,29 +500,29 @@ func (controller *AutoController) TryDispatch(ctx context.Context, recommendatio
 		targetPt = liveState.SupplyTemp
 	}
 	if targetPt == nil || !isLivePointDispatchable(*targetPt, now, DefaultAutoControlMaxPointAge) {
-		return AutoDispatchOutcome{SkipReason: "TELEMETRY_REVALIDATION_FAILED"}, nil
+		return skipOutcome(executionMode, "TELEMETRY_REVALIDATION_FAILED"), nil
 	}
 
 	supplyValue := *liveState.SupplyTemp.NumericValue
 	if math.Abs(supplyValue-baselineSupplyC) > DefaultSupplyRevalidationDriftMaxC+1e-9 {
-		return AutoDispatchOutcome{SkipReason: "SUPPLY_TEMP_DRIFT_EXCEEDED"}, nil
+		return skipOutcome(executionMode, "SUPPLY_TEMP_DRIFT_EXCEEDED"), nil
 	}
 	for _, zonePt := range liveState.ZoneTemps {
 		if *zonePt.NumericValue > lease.ZoneTempMaxC {
-			return AutoDispatchOutcome{SkipReason: "ZONE_TEMP_LIMIT_EXCEEDED"}, nil
+			return skipOutcome(executionMode, "ZONE_TEMP_LIMIT_EXCEEDED"), nil
 		}
 	}
 	if liveState.RunningChillers < lease.MinRunningChillers {
-		return AutoDispatchOutcome{SkipReason: "MIN_RUNNING_CHILLERS_NOT_MET"}, nil
+		return skipOutcome(executionMode, "MIN_RUNNING_CHILLERS_NOT_MET"), nil
 	}
 
 	if controller.telemetry != nil {
 		obs, obsErr := controller.telemetry.ReadLiveAutoControlObservation(ctx, recommendation.TenantID, recommendation.SiteID, siteCtx.InputMapping, siteCtx.Topology, now)
 		if obsErr != nil {
-			return AutoDispatchOutcome{}, obsErr
+			return AutoDispatchOutcome{ExecutionMode: executionMode, DecisionID: decisionID, TraceID: traceID}, obsErr
 		}
 		if obs.ChillerPowerTrip != nil {
-			return AutoDispatchOutcome{SkipReason: "CHILLER_POWER_RATIO_EXCEEDED"}, nil
+			return skipOutcome(executionMode, "CHILLER_POWER_RATIO_EXCEEDED"), nil
 		}
 	}
 
@@ -479,7 +530,7 @@ func (controller *AutoController) TryDispatch(ctx context.Context, recommendatio
 	var clampedValue *float64
 	if guardrailResult.Verdict == commandmodel.GuardrailVerdictClamped {
 		if !finite(guardrailResult.AdjustedValue) || guardrailResult.AdjustedValue == 0 {
-			return AutoDispatchOutcome{SkipReason: "GUARDRAIL_INVALID_ADJUSTMENT"}, nil
+			return skipOutcome(executionMode, "GUARDRAIL_INVALID_ADJUSTMENT"), nil
 		}
 		dispatchedSupplyC = guardrailResult.AdjustedValue
 		clampedCopy := dispatchedSupplyC
@@ -488,7 +539,7 @@ func (controller *AutoController) TryDispatch(ctx context.Context, recommendatio
 		dispatchedSupplyC = guardrailResult.AdjustedValue
 	}
 	if dispatchedSupplyC < DefaultSupplyTempHardFloorC || dispatchedSupplyC > lease.SupplyTempMaxC {
-		return AutoDispatchOutcome{SkipReason: "TARGET_OUTSIDE_LEASE_BOUNDS"}, nil
+		return skipOutcome(executionMode, "TARGET_OUTSIDE_LEASE_BOUNDS"), nil
 	}
 
 	revalidationAt := now
@@ -509,13 +560,59 @@ func (controller *AutoController) TryDispatch(ctx context.Context, recommendatio
 		ExpiresAt:   expiresRevalidationAt,
 	}
 	if err := recommendation.CanCreateCommand(now); err != nil {
-		return AutoDispatchOutcome{SkipReason: "REVALIDATION_GATE_REJECTED"}, nil
+		return skipOutcome(executionMode, "REVALIDATION_GATE_REJECTED"), nil
 	}
 
 	profile, ok := commandmodel.CapabilityProfileFor(targetCapability)
 	if !ok {
-		return AutoDispatchOutcome{SkipReason: "CAPABILITY_UNSUPPORTED"}, nil
+		return skipOutcome(executionMode, "CAPABILITY_UNSUPPORTED"), nil
 	}
+
+	traceBytes := encodeOptimizationJSON(guardrailResult.Trace)
+	if len(traceBytes) == 0 || string(traceBytes) == "null" {
+		traceBytes = []byte("[]")
+	}
+
+	dispatchReg := AutomatedDispatchRegistration{
+		Recommendation:   recommendation,
+		LeaseID:          lease.ID,
+		Target:           *siteCtx.SetpointTarget,
+		BaselineSupplyC:  baselineSupplyC,
+		AppliedSupplyC:   dispatchedSupplyC,
+		RestoreSupplyC:   restoreSupplyC,
+		ZoneMaxC:         lease.ZoneTempMaxC,
+		SupplyMinC:       hardMin,
+		SupplyMaxC:       lease.SupplyTempMaxC,
+		RawRecommendedC:  candidateSupplyC,
+		ClampedC:         clampedValue,
+		GuardrailVerdict: string(guardrailResult.Verdict),
+		GuardrailTrace:   traceBytes,
+		ExecutionMode:    executionMode,
+		DecisionID:       decisionID,
+		TraceID:          traceID,
+		At:               now,
+	}
+
+	if executionMode == ExecutionModeShadow {
+		shadowResult, shadowErr := controller.store.RecordShadowMonitor(ctx, dispatchReg)
+		if shadowErr != nil {
+			return AutoDispatchOutcome{ExecutionMode: ExecutionModeShadow, DecisionID: decisionID, TraceID: traceID}, shadowErr
+		}
+		if shadowResult.SkipReason != "" {
+			return skipOutcome(ExecutionModeShadow, shadowResult.SkipReason), nil
+		}
+		controller.logf("optimization shadow-mode recorded recommendation=%s site=%s monitor=%s decision=%s trace=%s targetC=%.2f",
+			recommendation.ID, recommendation.SiteID, shadowResult.Monitor.ID, decisionID, traceID, dispatchedSupplyC)
+		return AutoDispatchOutcome{
+			Dispatched:     false,
+			ShadowRecorded: true,
+			ExecutionMode:  ExecutionModeShadow,
+			MonitorID:      shadowResult.Monitor.ID,
+			DecisionID:     decisionID,
+			TraceID:        traceID,
+		}, nil
+	}
+
 	currentVal := *targetPt.NumericValue
 	params := commandmodel.CommandParameters{commandmodel.ParameterSetpointC: dispatchedSupplyC}
 	grantReq := commandauth.WorkloadDecisionRequest{
@@ -531,38 +628,18 @@ func (controller *AutoController) TryDispatch(ctx context.Context, recommendatio
 	}
 	grant, decision, err := controller.dispatcher.RequestCommandGrant(ctx, grantReq)
 	if err != nil {
-		return AutoDispatchOutcome{}, err
+		return AutoDispatchOutcome{ExecutionMode: executionMode, DecisionID: decisionID, TraceID: traceID}, err
 	}
 	if !decision.Allowed || grant == "" {
-		return AutoDispatchOutcome{SkipReason: "IAM_DENIED:" + string(decision.ReasonCode)}, nil
+		return skipOutcome(executionMode, "IAM_DENIED:"+string(decision.ReasonCode)), nil
 	}
 
-	traceBytes := encodeOptimizationJSON(guardrailResult.Trace)
-	if len(traceBytes) == 0 || string(traceBytes) == "null" {
-		traceBytes = []byte("[]")
-	}
-
-	regResult, err := controller.store.PreRegisterAutomatedDispatch(ctx, AutomatedDispatchRegistration{
-		Recommendation:   recommendation,
-		LeaseID:          lease.ID,
-		Target:           *siteCtx.SetpointTarget,
-		BaselineSupplyC:  baselineSupplyC,
-		AppliedSupplyC:   dispatchedSupplyC,
-		RestoreSupplyC:   restoreSupplyC,
-		ZoneMaxC:         lease.ZoneTempMaxC,
-		SupplyMinC:       hardMin,
-		SupplyMaxC:       lease.SupplyTempMaxC,
-		RawRecommendedC:  candidateSupplyC,
-		ClampedC:         clampedValue,
-		GuardrailVerdict: string(guardrailResult.Verdict),
-		GuardrailTrace:   traceBytes,
-		At:               now,
-	})
+	regResult, err := controller.store.PreRegisterAutomatedDispatch(ctx, dispatchReg)
 	if err != nil {
-		return AutoDispatchOutcome{}, err
+		return AutoDispatchOutcome{ExecutionMode: executionMode, DecisionID: decisionID, TraceID: traceID}, err
 	}
 	if regResult.SkipReason != "" {
-		return AutoDispatchOutcome{SkipReason: regResult.SkipReason}, nil
+		return skipOutcome(executionMode, regResult.SkipReason), nil
 	}
 	monitor := regResult.Monitor
 
@@ -590,6 +667,8 @@ func (controller *AutoController) TryDispatch(ctx context.Context, recommendatio
 		CurrentValue:           float64Ptr(currentVal),
 		BusinessRevision:       uint64(targetPt.BusinessRevision),
 		ObservedAt:             targetPt.SampledAt.UTC(),
+		DecisionID:             decisionID,
+		TraceID:                traceID,
 	})
 	if submitErr != nil || strings.TrimSpace(commandIntentID) == "" {
 		errToRecord := submitErr
@@ -601,20 +680,34 @@ func (controller *AutoController) TryDispatch(ctx context.Context, recommendatio
 			controller.logf("monitor %s mark submit failed error: %v", monitor.ID, markErr)
 		}
 		failCancel()
-		return AutoDispatchOutcome{MonitorID: monitor.ID}, errToRecord
+		return AutoDispatchOutcome{
+			ExecutionMode: executionMode,
+			MonitorID:     monitor.ID,
+			DecisionID:    decisionID,
+			TraceID:       traceID,
+		}, errToRecord
 	}
 
 	activateCtx, activateCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer activateCancel()
 	if err := controller.store.ActivateAutomatedDispatch(activateCtx, recommendation, monitor.ID, commandIntentID, now); err != nil {
-		return AutoDispatchOutcome{CommandIntentID: commandIntentID, MonitorID: monitor.ID}, err
+		return AutoDispatchOutcome{
+			ExecutionMode:   executionMode,
+			CommandIntentID: commandIntentID,
+			MonitorID:       monitor.ID,
+			DecisionID:      decisionID,
+			TraceID:         traceID,
+		}, err
 	}
-	controller.logf("optimization auto-control dispatched recommendation=%s site=%s command=%s monitor=%s targetC=%.2f",
-		recommendation.ID, recommendation.SiteID, commandIntentID, monitor.ID, dispatchedSupplyC)
+	controller.logf("optimization auto-control dispatched recommendation=%s site=%s command=%s monitor=%s decision=%s trace=%s targetC=%.2f",
+		recommendation.ID, recommendation.SiteID, commandIntentID, monitor.ID, decisionID, traceID, dispatchedSupplyC)
 	return AutoDispatchOutcome{
 		Dispatched:      true,
+		ExecutionMode:   ExecutionModeClosedLoop,
 		CommandIntentID: commandIntentID,
 		MonitorID:       monitor.ID,
+		DecisionID:      decisionID,
+		TraceID:         traceID,
 	}, nil
 }
 
@@ -673,6 +766,11 @@ func (controller *AutoController) processClaimedMonitor(
 	now time.Time,
 	summary *MonitorPassSummary,
 ) {
+	ctx, traceID := ensureMonitorTraceContext(ctx, monitor.TraceID)
+	if strings.TrimSpace(monitor.TraceID) == "" {
+		monitor.TraceID = traceID
+	}
+
 	siteCtx, ctxErr := controller.store.LoadAutoControlSiteContext(ctx, monitor.TenantID, monitor.SiteID, "", now)
 	if ctxErr != nil {
 		controller.logf("monitor %s site context error: %v", monitor.ID, ctxErr)
@@ -754,7 +852,7 @@ func (controller *AutoController) processClaimedMonitor(
 			unhealthySince = monitor.TelemetryUnhealthySince.UTC()
 		}
 		if monitor.TelemetryUnhealthySince != nil && now.Sub(unhealthySince) > DefaultMonitorTelemetryUnhealthy {
-			rolledBack, tripErr := controller.tripAndRollback(ctx, monitor, workerID, siteCtx, liveState, false, "telemetry_unhealthy_over_5m", now)
+			rolledBack, tripErr := controller.tripAndRollback(ctx, monitor, workerID, siteCtx, liveState, false, "telemetry_unhealthy_over_5m", "", now)
 			if tripErr != nil {
 				if !errors.Is(tripErr, ErrExecutionMonitorClaimLost) {
 					controller.logf("monitor %s trip on telemetry failure error: %v", monitor.ID, tripErr)
@@ -780,13 +878,16 @@ func (controller *AutoController) processClaimedMonitor(
 
 	liveObs := buildMonitorLiveObservation(liveState, chillerPowerTrip)
 	tripReason := ""
+	tripDetail := ""
 	if liveState.DeviceFaultActive {
 		tripReason = "device_fault_active"
+	} else if reason := monitorViolationReason(monitor, liveObs); reason != "" {
+		tripReason = reason
 	} else {
-		tripReason = monitorViolationReason(monitor, liveObs)
+		tripReason, tripDetail = checkSetpointTrackingDeviation(monitor, liveState, siteCtx, now)
 	}
 	if tripReason != "" {
-		rolledBack, tripErr := controller.tripAndRollback(ctx, monitor, workerID, siteCtx, liveState, true, tripReason, now)
+		rolledBack, tripErr := controller.tripAndRollback(ctx, monitor, workerID, siteCtx, liveState, true, tripReason, tripDetail, now)
 		if tripErr != nil {
 			if !errors.Is(tripErr, ErrExecutionMonitorClaimLost) {
 				controller.logf("monitor %s trip on boundary violation failed: %v", monitor.ID, tripErr)
@@ -907,17 +1008,29 @@ func (controller *AutoController) tripAndRollback(
 	liveState autoControlLiveState,
 	telemetryHealthy bool,
 	tripReason string,
+	tripDetail string,
 	now time.Time,
 ) (bool, error) {
 	var rollbackID *string
 	finalStatus := ExecutionMonitorRollbackFailed
+	rollbackFailureReason := ""
 
-	if monitor.RestoreSupplyTempC != nil && siteCtx.SetpointTarget != nil &&
-		(siteCtx.SiteControlMode == "" || siteCtx.SiteControlMode == SiteControlModeRemoteAuto) &&
-		!siteCtx.SetpointTarget.AssetLocked {
+	switch {
+	case monitor.RestoreSupplyTempC == nil:
+		rollbackFailureReason = "restore_supply_temp_missing"
+	case siteCtx.SetpointTarget == nil:
+		rollbackFailureReason = "setpoint_target_missing"
+	case siteCtx.SiteControlMode != "" && siteCtx.SiteControlMode != SiteControlModeRemoteAuto:
+		rollbackFailureReason = "site_control_mode_" + siteCtx.SiteControlMode
+	case siteCtx.SetpointTarget.AssetLocked:
+		rollbackFailureReason = "asset_control_locked"
+	default:
 		restoreTemp := *monitor.RestoreSupplyTempC
 		targetCapability := commandmodel.Capability(monitor.TargetCapability)
-		if profile, ok := commandmodel.CapabilityProfileFor(targetCapability); ok {
+		profile, ok := commandmodel.CapabilityProfileFor(targetCapability)
+		if !ok {
+			rollbackFailureReason = "capability_unsupported"
+		} else {
 			var currentValPtr *float64
 			if monitor.AppliedSupplyTempC != nil && finite(*monitor.AppliedSupplyTempC) {
 				v := *monitor.AppliedSupplyTempC
@@ -972,7 +1085,12 @@ func (controller *AutoController) tripAndRollback(
 				CurrentValue:       currentValPtr,
 				IsRollback:         true,
 			})
-			if err == nil && decision.Allowed && grant != "" {
+			if err != nil {
+				rollbackFailureReason = err.Error()
+				controller.logf("monitor %s rollback grant failed: %v", monitor.ID, err)
+			} else if !decision.Allowed || grant == "" {
+				rollbackFailureReason = "IAM_DENIED:" + string(decision.ReasonCode)
+			} else {
 				verificationKey := strings.TrimSpace(siteCtx.SetpointTarget.FeedbackPointKey)
 				if verificationKey == "" {
 					verificationKey = siteCtx.InputMapping.SupplyTemperatureKey
@@ -999,21 +1117,253 @@ func (controller *AutoController) tripAndRollback(
 					CurrentValue:           currentValPtr,
 					BusinessRevision:       businessRevision,
 					ObservedAt:             observedAt,
+					DecisionID:             monitor.DecisionID,
+					TraceID:                monitor.TraceID,
 				})
 				if submitErr == nil && submittedID != "" {
 					rollbackID = &submittedID
 					finalStatus = ExecutionMonitorTrippedRolledBack
 				} else if submitErr != nil {
+					rollbackFailureReason = submitErr.Error()
 					controller.logf("monitor %s rollback command submit failed: %v", monitor.ID, submitErr)
+				} else {
+					rollbackFailureReason = "gateway_empty_command_id"
 				}
-			} else if err != nil {
-				controller.logf("monitor %s rollback grant failed: %v", monitor.ID, err)
 			}
 		}
 	}
 
 	if err := controller.store.TripMonitorAndLease(ctx, monitor, claimOwner, finalStatus, tripReason, rollbackID, now); err != nil {
+		if !errors.Is(err, ErrExecutionMonitorClaimLost) && finalStatus == ExecutionMonitorRollbackFailed {
+			controller.publishRollbackFailedAlarm(ctx, monitor, tripReason, rollbackFailureReason+"; persist_error="+err.Error(), now)
+		}
 		return false, err
 	}
+	if tripReason == "setpoint_tracking_deviation" {
+		controller.publishTrackingDeviationAlarm(ctx, monitor, tripDetail, now)
+	}
+	if finalStatus == ExecutionMonitorRollbackFailed {
+		controller.publishRollbackFailedAlarm(ctx, monitor, tripReason, rollbackFailureReason, now)
+	}
 	return finalStatus == ExecutionMonitorTrippedRolledBack, nil
+}
+
+func checkSetpointTrackingDeviation(
+	monitor OptimizationExecutionMonitorRecord,
+	liveState autoControlLiveState,
+	siteCtx AutoControlSiteContext,
+	now time.Time,
+) (string, string) {
+	if monitor.Status == ExecutionMonitorManualOverride || liveState.CabinetLocalManual {
+		return "", ""
+	}
+	if monitor.AppliedSupplyTempC == nil || !finite(*monitor.AppliedSupplyTempC) {
+		return "", ""
+	}
+	if now.UTC().Sub(monitor.StartedAt.UTC()) < DefaultSetpointConvergenceGrace {
+		return "", ""
+	}
+	if liveState.Setpoint == nil || !isLivePointHealthyForTamper(*liveState.Setpoint, now, DefaultAutoControlMaxPointAge) {
+		return "", ""
+	}
+	fbVal := *liveState.Setpoint.NumericValue
+	threshold := math.Max(MaxSetpointDeviationC, siteCtx.LeaseDeadbandC)
+	deviation := math.Abs(fbVal - *monitor.AppliedSupplyTempC)
+	if deviation <= threshold+1e-9 {
+		return "", ""
+	}
+	detail := fmt.Sprintf("applied_setpoint=%.2fC feedback_setpoint=%.2fC deviation=%.2fC threshold=%.2fC",
+		*monitor.AppliedSupplyTempC, fbVal, deviation, threshold)
+	return "setpoint_tracking_deviation", detail
+}
+
+func (controller *AutoController) publishTrackingDeviationAlarm(
+	ctx context.Context,
+	monitor OptimizationExecutionMonitorRecord,
+	detail string,
+	now time.Time,
+) {
+	controller.publishControlEvent(ctx, buildMonitorControlEvent(
+		monitor,
+		controller.effectiveWorkerID(),
+		ControlEventSetpointTrackingDeviation,
+		ControlEventSetpointTrackingDeviation,
+		"MAJOR",
+		"设定点跟踪偏差过大并触发自动回滚",
+		fmt.Sprintf("自动优化指令执行 %s 后目标设定点仍未收敛（%s），已触发保护回滚并熔断站点自动控制租约。", DefaultSetpointConvergenceGrace, detail),
+		detail,
+		now,
+	))
+}
+
+func (controller *AutoController) publishRollbackFailedAlarm(
+	ctx context.Context,
+	monitor OptimizationExecutionMonitorRecord,
+	tripReason string,
+	failureReason string,
+	now time.Time,
+) {
+	detail := strings.TrimSpace(tripReason)
+	if cleanFailure := strings.TrimSpace(failureReason); cleanFailure != "" {
+		if detail != "" {
+			detail += "; "
+		}
+		detail += "rollback_error=" + cleanFailure
+	}
+	controller.publishControlEvent(ctx, buildMonitorControlEvent(
+		monitor,
+		controller.effectiveWorkerID(),
+		ControlEventAutoControlRollbackFailed,
+		ControlEventAutoControlRollbackFailed,
+		"CRITICAL",
+		"自动控制回滚下发失败",
+		fmt.Sprintf("执行监控 %s 触发安全熔断（%s）后未能完成自动回滚恢复，请立即人工核查现场设定点与控制权状态。", monitor.ID, detail),
+		detail,
+		now,
+	))
+}
+
+func buildMonitorControlEvent(
+	monitor OptimizationExecutionMonitorRecord,
+	actorID string,
+	eventKind string,
+	reasonCode string,
+	severity string,
+	title string,
+	summary string,
+	detail string,
+	now time.Time,
+) ControlEvent {
+	commandID := strings.TrimSpace(monitor.CommandIntentID)
+	if commandID == "" {
+		commandID = monitor.ID
+	}
+	correlationID := strings.TrimSpace(monitor.DecisionID)
+	if correlationID == "" {
+		correlationID = strings.TrimSpace(monitor.TraceID)
+	}
+	if correlationID == "" {
+		correlationID = monitor.ID
+	}
+	var deviceID *string
+	if trimmed := strings.TrimSpace(monitor.DeviceID); trimmed != "" {
+		deviceID = &trimmed
+	}
+	return ControlEvent{
+		SchemaVersion: 1,
+		TenantID:      monitor.TenantID,
+		SiteID:        monitor.SiteID,
+		DeviceID:      deviceID,
+		CommandID:     commandID,
+		EventKind:     eventKind,
+		Capability:    monitor.TargetCapability,
+		Title:         title,
+		Summary:       summary,
+		Severity:      severity,
+		ReasonCode:    reasonCode,
+		Detail:        detail,
+		OccurredAt:    now.UTC().Format(time.RFC3339Nano),
+		ActorType:     "OPTIMIZATION_RUNTIME",
+		ActorID:       actorID,
+		CorrelationID: correlationID,
+	}
+}
+
+func (controller *AutoController) publishControlEvent(ctx context.Context, event ControlEvent) {
+	if controller == nil || controller.controlEvents == nil {
+		return
+	}
+	pubCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultControlEventTimeout)
+	defer cancel()
+	if err := controller.controlEvents.PublishControlEvent(pubCtx, event); err != nil {
+		controller.logf("monitor %s control alarm publish failed (%s): %v", event.CommandID, event.EventKind, err)
+	}
+}
+
+func normalizeExecutionMode(raw string) string {
+	if strings.EqualFold(strings.TrimSpace(raw), ExecutionModeShadow) {
+		return ExecutionModeShadow
+	}
+	return ExecutionModeClosedLoop
+}
+
+func ensureDecisionAndTraceContext(ctx context.Context, now time.Time) (context.Context, string, string, error) {
+	decisionID, err := optimizationUUIDv7(now)
+	if err != nil {
+		return ctx, "", "", fmt.Errorf("generate decision id: %w", err)
+	}
+	spanCtx := observability.SpanContextFromContext(ctx)
+	if spanCtx.Valid() {
+		return ctx, decisionID, spanCtx.TraceID, nil
+	}
+	traceID := randomNonZeroHexID(16)
+	spanID := randomNonZeroHexID(8)
+	traceparent := fmt.Sprintf("00-%s-%s-01", traceID, spanID)
+	tracer := observability.NewTracer("optimization-service", nil)
+	return observability.ContextWithRemoteParent(ctx, tracer, traceparent, ""), decisionID, traceID, nil
+}
+
+func ensureMonitorTraceContext(ctx context.Context, monitorTraceID string) (context.Context, string) {
+	if clean := normalizeTraceID(monitorTraceID); clean != "" {
+		if spanCtx := observability.SpanContextFromContext(ctx); spanCtx.Valid() && spanCtx.TraceID == clean {
+			return ctx, clean
+		}
+		traceparent := fmt.Sprintf("00-%s-%s-01", clean, randomNonZeroHexID(8))
+		tracer := observability.NewTracer("optimization-service", nil)
+		return observability.ContextWithRemoteParent(ctx, tracer, traceparent, ""), clean
+	}
+	if spanCtx := observability.SpanContextFromContext(ctx); spanCtx.Valid() {
+		return ctx, spanCtx.TraceID
+	}
+	traceID := randomNonZeroHexID(16)
+	traceparent := fmt.Sprintf("00-%s-%s-01", traceID, randomNonZeroHexID(8))
+	tracer := observability.NewTracer("optimization-service", nil)
+	return observability.ContextWithRemoteParent(ctx, tracer, traceparent, ""), traceID
+}
+
+func normalizeTraceID(raw string) string {
+	trimmed := strings.ToLower(strings.TrimSpace(raw))
+	if len(trimmed) != 32 {
+		return ""
+	}
+	allZero := true
+	for i := 0; i < len(trimmed); i++ {
+		ch := trimmed[i]
+		isHex := (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f')
+		if !isHex {
+			return ""
+		}
+		if ch != '0' {
+			allZero = false
+		}
+	}
+	if allZero {
+		return ""
+	}
+	return trimmed
+}
+
+func randomNonZeroHexID(byteLen int) string {
+	buf := make([]byte, byteLen)
+	for {
+		if _, err := rand.Read(buf); err != nil {
+			// Fallback to timestamp entropy if CSPRNG fails unexpectedly.
+			now := uint64(time.Now().UnixNano())
+			for idx := range buf {
+				buf[idx] = byte(now >> ((idx % 8) * 8))
+			}
+			buf[0] |= 0x01
+			return hex.EncodeToString(buf)
+		}
+		nonZero := false
+		for _, b := range buf {
+			if b != 0 {
+				nonZero = true
+				break
+			}
+		}
+		if nonZero {
+			return hex.EncodeToString(buf)
+		}
+	}
 }

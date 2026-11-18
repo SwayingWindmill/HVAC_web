@@ -13,6 +13,7 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/commandauth"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
 	"github.com/quanlaihe/hvac-web/libs/workordermodel"
 )
@@ -430,6 +431,136 @@ func TestGatewayOptimizationAutoCommandRequiresWorkloadIdentityAndGrant(t *testi
 	lockedRec := httptest.NewRecorder()
 	fixture.handler.ServeHTTP(lockedRec, lockedReq)
 	assertProblemCode(t, lockedRec, http.StatusConflict, "DEVICE_PRIORITY_LOCKED")
+}
+
+func TestGatewayAutoControlLeaseForwardsShadowExecutionMode(t *testing.T) {
+	fixture := newCommandGatewayFixture(t)
+	now := fixture.handler.now().UTC()
+	snapshot, err := ownershipregistry.Parse(readRepositoryFile(t, "contracts", "ownership", "route-ownership.v1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.handler.routeManager = ownershipregistry.NewManager(snapshot, ownershipregistry.NewMemoryAuditSink(), func() time.Time { return now })
+
+	var forwardedBody string
+	fixture.handler.registry.coreHTTPClient = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			switch {
+			case req.Method == http.MethodGet && strings.HasSuffix(req.URL.Path, "/auto-control-lease"):
+				return jsonHTTPResponse(http.StatusOK, `{"tenantId":"`+fixture.tenantID+`","siteId":"`+fixture.siteID+`","confirmationMode":"MANUAL_CONFIRM","activeLease":null,"latestLease":null}`), nil
+			case req.Method == http.MethodPut && strings.HasSuffix(req.URL.Path, "/auto-control-lease"):
+				raw, _ := io.ReadAll(req.Body)
+				forwardedBody = string(raw)
+				resp := `{"tenantId":"` + fixture.tenantID + `","siteId":"` + fixture.siteID + `","confirmationMode":"AUTO_WITH_LEASE","activeLease":{"id":"01990000-8800-7000-8000-000000000012","tenantId":"` + fixture.tenantID + `","siteId":"` + fixture.siteID + `","status":"ACTIVE","armedBy":"` + fixture.principalID + `","armedAt":"2026-07-26T15:00:00.000Z","expiresAt":"2026-07-26T23:00:00.000Z","allowedCapabilities":["SET_CHILLED_WATER_TEMPERATURE_SETPOINT"],"maxSetpointStepC":1,"deadbandC":0.2,"supplyTempMinC":6,"supplyTempMaxC":12,"zoneTempMaxC":26,"minRunningChillers":1,"maxCommandsPerHour":2,"executionMode":"SHADOW","revision":1,"createdAt":"2026-07-26T15:00:00.000Z","updatedAt":"2026-07-26T15:00:00.000Z"},"latestLease":{"id":"01990000-8800-7000-8000-000000000012","tenantId":"` + fixture.tenantID + `","siteId":"` + fixture.siteID + `","status":"ACTIVE","armedBy":"` + fixture.principalID + `","armedAt":"2026-07-26T15:00:00.000Z","expiresAt":"2026-07-26T23:00:00.000Z","allowedCapabilities":["SET_CHILLED_WATER_TEMPERATURE_SETPOINT"],"maxSetpointStepC":1,"deadbandC":0.2,"supplyTempMinC":6,"supplyTempMaxC":12,"zoneTempMaxC":26,"minRunningChillers":1,"maxCommandsPerHour":2,"executionMode":"SHADOW","revision":1,"createdAt":"2026-07-26T15:00:00.000Z","updatedAt":"2026-07-26T15:00:00.000Z"}}`
+				return jsonHTTPResponse(http.StatusOK, resp), nil
+			default:
+				return jsonHTTPResponse(http.StatusNotFound, `{}`), nil
+			}
+		}),
+	}
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/sites/"+fixture.siteID+"/optimization/auto-control-lease", strings.NewReader(`{"expiresInHours":8,"allowedCapabilities":["SET_CHILLED_WATER_TEMPERATURE_SETPOINT"],"supplyTempMinC":6,"supplyTempMaxC":12,"executionMode":"SHADOW","reason":"开启影子推演","verificationCode":"123456"}`))
+	fixture.authenticate(req, true)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT shadow lease status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(forwardedBody, `"executionMode":"SHADOW"`) {
+		t.Fatalf("expected executionMode SHADOW forwarded to core registry, got %s", forwardedBody)
+	}
+	if !strings.Contains(rec.Body.String(), `"executionMode":"SHADOW"`) {
+		t.Fatalf("expected executionMode SHADOW in gateway response, got %s", rec.Body.String())
+	}
+}
+
+func TestGatewayOptimizationAutoCommandPropagatesTraceparent(t *testing.T) {
+	fixture := newCommandGatewayFixture(t)
+	now := fixture.handler.now().UTC()
+	snapshot, err := ownershipregistry.Parse(readRepositoryFile(t, "contracts", "ownership", "route-ownership.v1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.handler.routeManager = ownershipregistry.NewManager(snapshot, ownershipregistry.NewMemoryAuditSink(), func() time.Time { return now })
+
+	grant, err := commandauth.SignGrant(fixture.iamSigner, commandauth.GrantClaims{
+		Issuer:             "spiffe://hvac.local/iam-service",
+		Presenter:          "spiffe://hvac.local/platform-gateway",
+		Audience:           "command-service",
+		GrantID:            "grant-auto-trace-1",
+		Purpose:            commandmodel.AuthorizationCommandSubmit,
+		PrincipalID:        fixture.principalID,
+		TenantID:           fixture.tenantID,
+		SiteID:             fixture.siteID,
+		DeviceID:           fixture.deviceID,
+		Capability:         commandmodel.CapabilitySetChilledWaterTemperatureSetpoint,
+		MaximumRisk:        commandmodel.RiskLow,
+		CapabilityRevision: "capability:set-chilled-water-temperature-setpoint:v1",
+		PolicyRevision:     "command-policy-1",
+		IssuedAt:           now.Unix(),
+		ExpiresAt:          now.Add(25 * time.Second).Unix(),
+		TokenID:            "tok-auto-trace-1",
+		Transitive:         false,
+		WorkloadSPIFFE:     defaultOptimizationWorkloadID,
+		LeaseID:            "01990000-8800-7000-8000-000000000011",
+		ArmedBy:            fixture.principalID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const wantTraceID = "4bf92f3577b34da6a3ce929d0e0e4736"
+	const incomingTraceparent = "00-" + wantTraceID + "-00f067aa0ba902b7-01"
+	payload := `{"tenantId":"` + fixture.tenantID + `","deviceId":"` + fixture.deviceID + `","pointId":"` + fixture.commandPointID + `","capability":"SET_CHILLED_WATER_TEMPERATURE_SETPOINT","parameters":{"setpointC":8.0},"verificationPointKey":"chilled_water_supply_temp_sp","idempotencyKey":"auto-opt:01990000-8800-7000-8000-000000000201","currentState":{"evaluationAvailability":"AVAILABLE","presence":"ONLINE","readiness":"CURRENT","quality":"GOOD","businessRevision":1,"currentValue":7.0,"observedAt":"2026-07-26T14:58:00Z"},"commandGrant":"` + grant + `"}`
+
+	var gotTraceparents []string
+	fixture.commandCapability = commandmodel.CapabilitySetChilledWaterTemperatureSetpoint
+	fixture.handler.command.httpClient = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.Method == http.MethodPost && req.URL.Path == internalCommandsPath {
+				gotTraceparents = append(gotTraceparents, req.Header.Get("traceparent"))
+				return jsonHTTPResponse(http.StatusAccepted, `{"schemaVersion":1,"commandId":"`+fixture.commandID+`","tenantId":"`+fixture.tenantID+`","siteId":"`+fixture.siteID+`","deviceId":"`+fixture.deviceID+`","pointId":"`+fixture.commandPointID+`","capability":"SET_CHILLED_WATER_TEMPERATURE_SETPOINT","capabilityRevision":"capability:set-chilled-water-temperature-setpoint:v1","status":"QUEUED","risk":"LOW","approvalPolicy":"NONE","approvalCount":0,"requiredApprovalCount":0,"parameters":{"setpointC":8},"deviceCommandSequence":1,"version":1,"snapshotRevision":1,"transitions":[{"toStatus":"QUEUED","reason":"SUBMITTED","actorType":"WORKLOAD","occurredAt":"2026-07-26T15:00:00Z","version":1}],"createdAt":"2026-07-26T15:00:00Z","updatedAt":"2026-07-26T15:00:00Z"}`), nil
+			}
+			return jsonHTTPResponse(http.StatusNotFound, `{}`), nil
+		}),
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+fixture.siteID+"/optimization/auto-commands", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("traceparent", incomingTraceparent)
+	req.TLS = verifiedWorkloadTLSState(t, defaultOptimizationWorkloadID)
+	rec := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("auto-command with traceparent status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(gotTraceparents) != 1 {
+		t.Fatalf("expected 1 upstream command request, got %d", len(gotTraceparents))
+	}
+	parsed, ok := observability.ParseTraceparent(gotTraceparents[0], "")
+	if !ok || parsed.TraceID != wantTraceID {
+		t.Fatalf("upstream traceparent=%q (ok=%t), want traceId=%s", gotTraceparents[0], ok, wantTraceID)
+	}
+
+	// Direct handler invocation without ServeHTTP span extraction still forwards valid traceparent header.
+	directReq := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+fixture.siteID+"/optimization/auto-commands", strings.NewReader(payload))
+	directReq.Header.Set("Content-Type", "application/json")
+	directReq.Header.Set("traceparent", incomingTraceparent)
+	directReq.TLS = verifiedWorkloadTLSState(t, defaultOptimizationWorkloadID)
+	directRec := httptest.NewRecorder()
+	fixture.handler.serveOptimizationAutoCommand(directRec, directReq, publicIntelligenceRoute{
+		owner:  ownershipregistry.OwnerCommand,
+		siteID: fixture.siteID,
+		target: "optimization-auto-command",
+		method: http.MethodPost,
+	})
+	if directRec.Code != http.StatusAccepted {
+		t.Fatalf("direct auto-command with traceparent status=%d body=%s", directRec.Code, directRec.Body.String())
+	}
+	if len(gotTraceparents) != 2 || gotTraceparents[1] != incomingTraceparent {
+		t.Fatalf("expected direct traceparent %q forwarded verbatim, got %v", incomingTraceparent, gotTraceparents)
+	}
 }
 
 func jsonHTTPResponse(status int, body string) *http.Response {

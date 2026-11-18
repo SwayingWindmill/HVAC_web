@@ -5,10 +5,12 @@ import { ShieldCheck, ShieldOff, TriangleAlert } from 'lucide-react';
 import { useId, useMemo, useState, type KeyboardEvent } from 'react';
 import { toast } from 'sonner';
 import { DataTableBlock } from '@/blocks/data-table';
+import { FactTile } from '@/blocks/fact-list';
 import { Panel, PanelHeader } from '@/blocks/panel';
 import { StatusBadge } from '@/components/common/StatusBadge';
 import { DataTable, type DataTableFeatures } from '@/components/data-table';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
@@ -21,6 +23,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Spinner } from '@/components/ui/spinner';
 import { CodeField } from '@/features/control/components/CommandConfirmation';
@@ -40,14 +43,21 @@ import {
   type SiteAutoControlLeaseState,
 } from '../auto-control-api';
 import {
+  AUTO_CONTROL_EXECUTION_MODES,
   buildArmLeasePayload,
+  EXECUTION_MODE_PRESENTATION,
   formatAutoControlCapability,
+  formatAutoControlExecutionMode,
   formatAutoControlTripReason,
   formatGuardrailVerdict,
+  formatMonitorDecisionTrace,
+  formatMonitorExecutionMode,
   initialArmLeaseValues,
   LEASE_STATUS_PRESENTATION,
   MONITOR_STATUS_PRESENTATION,
   resolveActiveLeaseBackoff,
+  resolveAutoControlExecutionMode,
+  resolveMonitorExecutionMode,
   SELECTABLE_LEASE_CAPABILITIES,
   validateArmLeaseForm,
   type ArmLeaseFieldErrors,
@@ -63,19 +73,6 @@ function guardImeEnter(event: KeyboardEvent<HTMLInputElement>) {
 
 function formatTempC(value: number | undefined): string {
   return value === undefined ? '暂无' : `${formatDecimal(value, 1)} °C`;
-}
-
-function LeaseBoundTile({ label, value, spanAll = false }: {
-  readonly label: string;
-  readonly value: string;
-  readonly spanAll?: boolean;
-}) {
-  return (
-    <div className={spanAll ? 'col-span-full flex flex-col gap-0.5' : 'flex flex-col gap-0.5'}>
-      <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className="text-sm font-semibold text-foreground tabular-nums">{value}</dd>
-    </div>
-  );
 }
 
 function NumericField({
@@ -197,11 +194,16 @@ function ArmLeaseForm({
   const mutation = useMutation({
     mutationFn: (payload: Parameters<typeof armSiteAutoControlLease>[1]) =>
       armSiteAutoControlLease(siteId, payload, csrfToken),
-    onSuccess: (next) => {
+    onSuccess: (next, submitted) => {
       queryClient.setQueryData(autoControlKeys.lease(siteId), next);
       void queryClient.invalidateQueries({ queryKey: autoControlKeys.lease(siteId) });
       void queryClient.invalidateQueries({ queryKey: autoControlKeys.monitors(siteId) });
-      toast.success(isUpdate ? '已更新限时自动控制租约' : '已开启限时自动控制租约');
+      const armedMode = resolveAutoControlExecutionMode(next.activeLease ?? { executionMode: submitted.executionMode });
+      toast.success(
+        armedMode === 'SHADOW'
+          ? (isUpdate ? '已更新影子跟跑租约' : '已开启影子跟跑租约')
+          : (isUpdate ? '已更新限时自动控制租约' : '已开启限时自动控制租约'),
+      );
       onClose();
     },
     onError: (error) => {
@@ -291,9 +293,41 @@ function ArmLeaseForm({
       <DialogHeader className="gap-1">
         <DialogTitle>{isUpdate ? '调整自动控制租约边界' : '开启限时自动控制租约'}</DialogTitle>
         <DialogDescription>
-          租约有效期内，满足实时安全复核的优化建议将自动下发并持续 30 分钟监护；越界或断采超过 5 分钟会立即回退并退出租约。
+          租约有效期内，满足实时安全复核的优化建议将按所选运行模式执行；闭环模式自动下发并持续 30 分钟监护，影子模式仅校验与留痕对比。
         </DialogDescription>
       </DialogHeader>
+
+      <fieldset className="flex flex-col gap-1.5">
+        <legend className="text-xs font-medium text-foreground">运行模式</legend>
+        <RadioGroup
+          value={values.executionMode}
+          onValueChange={(next) => {
+            if (next === 'CLOSED_LOOP' || next === 'SHADOW') {
+              updateField('executionMode', next);
+            }
+          }}
+          aria-label="运行模式"
+          className="grid-cols-1 gap-2 sm:grid-cols-2"
+        >
+          {AUTO_CONTROL_EXECUTION_MODES.map((mode) => {
+            const option = EXECUTION_MODE_PRESENTATION[mode];
+            const itemId = `${baseId}-mode-${mode}`;
+            return (
+              <Label
+                key={mode}
+                htmlFor={itemId}
+                className="grid cursor-pointer grid-cols-[16px_minmax(0,1fr)] items-start gap-x-2.5 gap-y-1 rounded-lg border border-border px-3 py-2.5 font-normal transition-colors hover:border-input-hover has-[[data-state=checked]]:border-primary has-[[data-state=checked]]:bg-primary-soft"
+              >
+                <RadioGroupItem id={itemId} value={mode} className="mt-0.5" />
+                <span className="text-xs font-semibold text-foreground">{option.optionTitle}</span>
+                <span className="col-start-2 text-xs leading-relaxed text-secondary-foreground">
+                  {option.optionDescription}
+                </span>
+              </Label>
+            );
+          })}
+        </RadioGroup>
+      </fieldset>
 
       <div className="grid grid-cols-1 gap-x-3 gap-y-2 sm:grid-cols-2">
         <NumericField
@@ -540,7 +574,8 @@ function RevokeLeaseForm({
       </DialogHeader>
 
       <div className="rounded-lg border border-divider bg-muted px-3.5 py-2.5 text-xs text-secondary-foreground">
-        当前租约有效期至 <span className="font-mono font-medium text-foreground">{formatTime(activeLease.expiresAt, timeZone)}</span>，
+        当前{resolveAutoControlExecutionMode(activeLease) === 'SHADOW' ? '影子跟跑' : '自动控制'}租约有效期至{' '}
+        <span className="font-mono font-medium text-foreground">{formatTime(activeLease.expiresAt, timeZone)}</span>，
         供水范围 {formatDecimal(activeLease.supplyTempMinC, 1)} 至 {formatDecimal(activeLease.supplyTempMaxC, 1)} °C。
       </div>
 
@@ -682,7 +717,15 @@ export function AutoControlPanel({
       header: '监护状态',
       cell: ({ row }) => {
         const presentation = MONITOR_STATUS_PRESENTATION[row.original.status];
-        return <StatusBadge tone={presentation.tone} label={presentation.label} />;
+        const mode = resolveMonitorExecutionMode(row.original);
+        return (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <StatusBadge tone={presentation.tone} label={presentation.label} />
+            <Badge variant={mode === 'SHADOW' ? 'default' : 'secondary'}>
+              {formatMonitorExecutionMode(mode)}
+            </Badge>
+          </div>
+        );
       },
     },
     {
@@ -690,6 +733,7 @@ export function AutoControlPanel({
       header: '巡检与退出原因',
       cell: ({ row }) => {
         const verdictLabel = formatGuardrailVerdict(row.original.guardrailVerdict);
+        const traceInfo = formatMonitorDecisionTrace(row.original);
         const primary = row.original.tripReason ? (
           <span className="text-xs text-destructive-text">
             {formatAutoControlTripReason(row.original.tripReason)}
@@ -711,11 +755,18 @@ export function AutoControlPanel({
         ) : (
           <span className="text-xs text-muted-foreground">已记录保护处置结果</span>
         );
-        if (!verdictLabel) return primary;
+        if (!verdictLabel && !traceInfo) return primary;
         return (
           <div className="flex flex-col gap-0.5">
             {primary}
-            <span className="text-xs text-muted-foreground">护栏：{verdictLabel}</span>
+            {verdictLabel ? (
+              <span className="text-xs text-muted-foreground">护栏：{verdictLabel}</span>
+            ) : null}
+            {traceInfo ? (
+              <span className="text-xs text-muted-foreground" title={traceInfo.title}>
+                {traceInfo.label}
+              </span>
+            ) : null}
           </div>
         );
       },
@@ -764,6 +815,8 @@ export function AutoControlPanel({
   const isAuto = leaseState?.confirmationMode === 'AUTO_WITH_LEASE' && leaseState.activeLease !== null;
   const activeLease = leaseState?.activeLease ?? null;
   const latestLease = leaseState?.latestLease ?? null;
+  const leaseExecutionMode = resolveAutoControlExecutionMode(activeLease);
+  const isShadowLease = isAuto && leaseExecutionMode === 'SHADOW';
   const backoff = isAuto && activeLease ? resolveActiveLeaseBackoff(activeLease, now) : null;
   const deadbandDigits = activeLease?.deadbandC !== undefined
     && Math.abs(activeLease.deadbandC * 10 - Math.round(activeLease.deadbandC * 10)) > 0.001
@@ -778,7 +831,10 @@ export function AutoControlPanel({
           title={(
             <span className="flex items-center gap-1.5">
               {isAuto ? (
-                <ShieldCheck className="size-4 text-success" aria-hidden="true" />
+                <ShieldCheck
+                  className={isShadowLease ? 'size-4 text-primary' : 'size-4 text-success'}
+                  aria-hidden="true"
+                />
               ) : (
                 <ShieldOff className="size-4 text-muted-foreground" aria-hidden="true" />
               )}
@@ -788,8 +844,8 @@ export function AutoControlPanel({
           badge={
             leaseState ? (
               <StatusBadge
-                tone={isAuto ? 'success' : 'neutral'}
-                label={isAuto ? '限时自动控制租约生效中' : '人工确认下发'}
+                tone={isShadowLease ? 'info' : isAuto ? 'success' : 'neutral'}
+                label={isShadowLease ? '影子跟跑中' : isAuto ? '限时自动控制租约生效中' : '人工确认下发'}
               />
             ) : undefined
           }
@@ -854,40 +910,73 @@ export function AutoControlPanel({
                 </AlertDescription>
               </Alert>
             ) : null}
-            <dl className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3 lg:grid-cols-6">
-              <LeaseBoundTile
+            <dl className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3 lg:grid-cols-4">
+              <FactTile
+                label="运行模式"
+                valueClassName={
+                  isShadowLease
+                    ? 'text-sm font-semibold text-primary'
+                    : 'text-sm font-semibold text-foreground'
+                }
+              >
+                {formatAutoControlExecutionMode(leaseExecutionMode)}
+              </FactTile>
+              <FactTile
                 label="供水温度范围"
-                value={`${formatDecimal(activeLease.supplyTempMinC, 1)} 至 ${formatDecimal(activeLease.supplyTempMaxC, 1)} °C`}
-              />
-              <LeaseBoundTile
+                valueClassName="text-sm font-semibold text-foreground"
+              >
+                {`${formatDecimal(activeLease.supplyTempMinC, 1)} 至 ${formatDecimal(activeLease.supplyTempMaxC, 1)} °C`}
+              </FactTile>
+              <FactTile
                 label="单次最大步长"
-                value={`≤ ${formatDecimal(activeLease.maxSetpointStepC, 1)} °C`}
-              />
-              <LeaseBoundTile
+                valueClassName="text-sm font-semibold text-foreground"
+              >
+                {`≤ ${formatDecimal(activeLease.maxSetpointStepC, 1)} °C`}
+              </FactTile>
+              <FactTile
                 label="室内温度上限"
-                value={`≤ ${formatDecimal(activeLease.zoneTempMaxC, 1)} °C`}
-              />
-              <LeaseBoundTile
+                valueClassName="text-sm font-semibold text-foreground"
+              >
+                {`≤ ${formatDecimal(activeLease.zoneTempMaxC, 1)} °C`}
+              </FactTile>
+              <FactTile
                 label="最少运行冷机"
-                value={`${activeLease.minRunningChillers} 台`}
-              />
-              <LeaseBoundTile
+                valueClassName="text-sm font-semibold text-foreground"
+              >
+                {`${activeLease.minRunningChillers} 台`}
+              </FactTile>
+              <FactTile
                 label="每小时指令上限"
-                value={`${activeLease.maxCommandsPerHour} 次`}
-              />
-              <LeaseBoundTile
-                label="允许能力"
-                value={activeLease.allowedCapabilities.map(formatAutoControlCapability).join('、')}
-              />
+                valueClassName="text-sm font-semibold text-foreground"
+              >
+                {`${activeLease.maxCommandsPerHour} 次`}
+              </FactTile>
+              <div className="col-span-2 sm:col-span-3 lg:col-span-2">
+                <FactTile
+                  label="允许能力"
+                  valueClassName="text-sm font-semibold text-foreground"
+                >
+                  {activeLease.allowedCapabilities.map(formatAutoControlCapability).join('、')}
+                </FactTile>
+              </div>
             </dl>
-            <p className="border-t border-divider pt-2.5 text-xs text-muted-foreground">
-              授权时段 <span className="font-mono">{formatTime(activeLease.armedAt, timeZone)}</span> 至{' '}
-              <span className="font-mono">{formatTime(activeLease.expiresAt, timeZone)}</span>
-              {activeLease.deadbandC !== undefined
-                ? `；调节死区 ${formatDecimal(activeLease.deadbandC, deadbandDigits)} °C`
-                : null}
-              ；每次自动下发前会再次复核实时温度、冷机负荷与联锁状态，并在之后持续监护 30 分钟。
-            </p>
+            <div className="flex flex-col gap-1 border-t border-divider pt-2.5 text-xs text-muted-foreground">
+              <p>
+                授权时段 <span className="font-mono">{formatTime(activeLease.armedAt, timeZone)}</span> 至{' '}
+                <span className="font-mono">{formatTime(activeLease.expiresAt, timeZone)}</span>
+                {activeLease.deadbandC !== undefined
+                  ? `；调节死区 ${formatDecimal(activeLease.deadbandC, deadbandDigits)} °C`
+                  : null}
+                {isShadowLease
+                  ? null
+                  : '；每次自动下发前会再次复核实时温度、冷机负荷与联锁状态，并在之后持续监护 30 分钟。'}
+              </p>
+              {isShadowLease ? (
+                <p className="font-medium text-primary">
+                  当前租约处于影子跟跑模式：每周期执行完整物理护栏校验，仅记录推荐与限幅对照轨迹，不下发设备指令。
+                </p>
+              ) : null}
+            </div>
           </div>
         ) : (
           <div className="flex flex-col gap-3 px-5 py-4">
@@ -900,6 +989,11 @@ export function AutoControlPanel({
                   tone={LEASE_STATUS_PRESENTATION[latestLease.status].tone}
                   label={`上次租约：${LEASE_STATUS_PRESENTATION[latestLease.status].label}`}
                 />
+                {latestLease.executionMode ? (
+                  <Badge variant={latestLease.executionMode === 'SHADOW' ? 'default' : 'secondary'}>
+                    {formatAutoControlExecutionMode(latestLease.executionMode)}
+                  </Badge>
+                ) : null}
                 <span className="font-mono text-muted-foreground">
                   {formatTime(latestLease.updatedAt, timeZone)}
                 </span>

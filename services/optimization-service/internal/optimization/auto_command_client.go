@@ -14,6 +14,7 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/commandauth"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/workloadtls"
 )
 
@@ -110,6 +111,7 @@ func (client *WorkloadCommandClient) RequestCommandGrant(ctx context.Context, re
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json, application/problem+json")
+	observability.InjectHTTP(ctx, httpReq.Header)
 	resp, err := client.iamClient.Do(httpReq)
 	if err != nil {
 		return "", commandauth.Decision{}, fmt.Errorf("request IAM workload command decision: %w", err)
@@ -224,6 +226,7 @@ func (client *WorkloadCommandClient) SubmitAutoCommand(ctx context.Context, gran
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json, application/problem+json")
+	applyTraceparentHeader(ctx, httpReq.Header, input.TraceID)
 	resp, err := client.gatewayClient.Do(httpReq)
 	if err != nil {
 		return "", fmt.Errorf("submit auto optimization command: %w", err)
@@ -243,4 +246,24 @@ func (client *WorkloadCommandClient) SubmitAutoCommand(ctx context.Context, gran
 		return "", errors.New("gateway auto-command returned invalid commandId")
 	}
 	return accepted.CommandID, nil
+}
+
+func applyTraceparentHeader(ctx context.Context, header http.Header, explicitTraceID string) {
+	observability.InjectHTTP(ctx, header)
+	cleanTraceID := normalizeTraceID(explicitTraceID)
+	existing := strings.TrimSpace(header.Get("traceparent"))
+	if existing != "" {
+		if cleanTraceID == "" {
+			return
+		}
+		if parsed, ok := observability.ParseTraceparent(existing, ""); ok && parsed.TraceID == cleanTraceID {
+			return
+		}
+	}
+	traceID := cleanTraceID
+	if traceID == "" {
+		traceID = randomNonZeroHexID(16)
+	}
+	spanID := randomNonZeroHexID(8)
+	header.Set("traceparent", fmt.Sprintf("00-%s-%s-01", traceID, spanID))
 }

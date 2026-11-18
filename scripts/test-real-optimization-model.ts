@@ -15,10 +15,16 @@ import {
 import {
   buildArmLeasePayload,
   formatAutoControlCapability,
+  formatAutoControlExecutionMode,
   formatAutoControlTripReason,
   formatGuardrailVerdict,
+  formatMonitorDecisionTrace,
+  formatMonitorExecutionMode,
   initialArmLeaseValues,
+  MONITOR_STATUS_PRESENTATION,
   resolveActiveLeaseBackoff,
+  resolveAutoControlExecutionMode,
+  resolveMonitorExecutionMode,
   validateArmLeaseForm,
 } from '../apps/hvac-web/src/features/optimization/auto-control-model.ts';
 import { stagingReason, stagingView } from '../apps/hvac-web/src/features/optimization/staging-model.ts';
@@ -373,6 +379,7 @@ test('formatAutoControlTripReason translates backend trip reasons cleanly withou
     '检测到人工干预设定值，AI 自动调节已进入退避保护窗口',
   );
   assert.equal(formatAutoControlTripReason('within_deadband'), '目标差值在调节死区内，跳过下发以保护设备动作寿命');
+  assert.equal(formatAutoControlTripReason('setpoint_tracking_deviation'), '设定值超时未收敛，已自动回退并退出租约');
   assert.equal(formatAutoControlTripReason('夜间巡检，暂时撤回自动租约'), '夜间巡检，暂时撤回自动租约');
   assert.equal(formatAutoControlTripReason('some_unknown_internal_code'), '触发安全边界保护退出');
   assert.equal(formatAutoControlCapability('SET_CHILLED_WATER_TEMPERATURE_SETPOINT'), '调整冷冻水供水温度设定');
@@ -462,6 +469,67 @@ test('resolveActiveLeaseBackoff detects active future backoff and suppresses exp
     {
       until: null,
       reasonText: '检测到人工干预设定值，AI 自动调节已进入退避保护窗口',
+    },
+  );
+});
+
+test('executionMode defaults to CLOSED_LOOP, supports SHADOW payload & prefill, and formats SHADOW_RECORDED & decision trace cleanly', () => {
+  const defaults = initialArmLeaseValues();
+  assert.equal(defaults.executionMode, 'CLOSED_LOOP');
+  assert.equal(resolveAutoControlExecutionMode(null), 'CLOSED_LOOP');
+  assert.equal(formatAutoControlExecutionMode('CLOSED_LOOP'), '闭环下发');
+  assert.equal(formatAutoControlExecutionMode('SHADOW'), '影子跟跑');
+
+  const shadowSeed = initialArmLeaseValues({
+    id: '01990000-8800-7000-8000-000000000010',
+    tenantId: '018f3d00-0000-7000-8000-000000000001',
+    siteId: '018f3e00-1000-7000-8000-000000000001',
+    status: 'ACTIVE',
+    executionMode: 'SHADOW',
+    armedBy: '018f3e00-2000-7000-8000-000000000001',
+    armedAt: '2026-11-18T00:00:00Z',
+    expiresAt: '2026-11-18T08:00:00Z',
+    allowedCapabilities: ['SET_CHILLED_WATER_TEMPERATURE_SETPOINT'],
+    maxSetpointStepC: 1.0,
+    supplyTempMinC: 6.0,
+    supplyTempMaxC: 12.0,
+    zoneTempMaxC: 26.0,
+    minRunningChillers: 1,
+    maxCommandsPerHour: 2,
+    deadbandC: 0.2,
+    revision: 1,
+    createdAt: '2026-11-18T00:00:00Z',
+    updatedAt: '2026-11-18T00:00:00Z',
+  });
+  assert.equal(shadowSeed.executionMode, 'SHADOW');
+
+  const shadowBuilt = buildArmLeasePayload({
+    ...defaults,
+    executionMode: 'SHADOW',
+    reason: '白天先跑影子对比，不下发设备',
+    verificationCode: '123456',
+  }, 0);
+  assert.equal(shadowBuilt.ok, true);
+  if (shadowBuilt.ok) {
+    assert.equal(shadowBuilt.payload.executionMode, 'SHADOW');
+  }
+
+  assert.equal(MONITOR_STATUS_PRESENTATION.SHADOW_RECORDED.label, '影子跟跑记录');
+  assert.equal(resolveMonitorExecutionMode({ status: 'SHADOW_RECORDED' }), 'SHADOW');
+  assert.equal(resolveMonitorExecutionMode({ status: 'OBSERVING', executionMode: 'SHADOW' }), 'SHADOW');
+  assert.equal(resolveMonitorExecutionMode({ status: 'VERIFIED', executionMode: 'CLOSED_LOOP' }), 'CLOSED_LOOP');
+  assert.equal(formatMonitorExecutionMode('SHADOW'), '影子');
+  assert.equal(formatMonitorExecutionMode('CLOSED_LOOP'), '闭环');
+
+  assert.equal(formatMonitorDecisionTrace({}), null);
+  assert.deepEqual(
+    formatMonitorDecisionTrace({
+      decisionId: '01990000-8800-7000-8000-000000000501',
+      traceId: 'a1b2c3d4e5f60718293a4b5c6d7e8f90',
+    }),
+    {
+      label: '已记录决策轨迹',
+      title: '决策编号：01990000-8800-7000-8000-000000000501 · 链路追踪：a1b2c3d4e5f60718293a4b5c6d7e8f90',
     },
   );
 });

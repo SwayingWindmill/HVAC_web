@@ -15,6 +15,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/commandauth"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 	"github.com/quanlaihe/hvac-web/libs/intelligencemodel"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
 func strPtr(v string) *string { return &v }
@@ -130,6 +131,14 @@ func (store *fakeAutoControlStore) LoadAutoControlSiteContext(context.Context, s
 }
 
 func (store *fakeAutoControlStore) PreRegisterAutomatedDispatch(_ context.Context, reg AutomatedDispatchRegistration) (PreRegisterDispatchResult, error) {
+	return store.recordFakeMonitor(reg, false)
+}
+
+func (store *fakeAutoControlStore) RecordShadowMonitor(_ context.Context, reg AutomatedDispatchRegistration) (PreRegisterDispatchResult, error) {
+	return store.recordFakeMonitor(reg, true)
+}
+
+func (store *fakeAutoControlStore) recordFakeMonitor(reg AutomatedDispatchRegistration, shadow bool) (PreRegisterDispatchResult, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	nowUTC := reg.At.UTC()
@@ -139,18 +148,22 @@ func (store *fakeAutoControlStore) PreRegisterAutomatedDispatch(_ context.Contex
 	if store.lease.ManualBackoffUntil != nil && store.lease.ManualBackoffUntil.UTC().After(nowUTC) {
 		return PreRegisterDispatchResult{SkipReason: "MANUAL_BACKOFF_ACTIVE"}, nil
 	}
+	if !shadow && normalizeExecutionMode(store.lease.ExecutionMode) == ExecutionModeShadow {
+		return PreRegisterDispatchResult{SkipReason: "SHADOW_MODE_ACTIVE"}, nil
+	}
 	for _, rec := range store.dispatchedRecs {
 		if rec.ID == reg.Recommendation.ID {
 			return PreRegisterDispatchResult{SkipReason: "ALREADY_DISPATCHED"}, nil
 		}
 	}
 	recentCount := 0
+	recentShadowCount := 0
 	hourAgo := nowUTC.Add(-time.Hour)
 	for _, mon := range store.monitors {
 		if mon.TenantID != reg.Recommendation.TenantID || mon.SiteID != reg.Recommendation.SiteID {
 			continue
 		}
-		if mon.Status == ExecutionMonitorPendingSubmit || mon.Status == ExecutionMonitorObserving {
+		if !shadow && (mon.Status == ExecutionMonitorPendingSubmit || mon.Status == ExecutionMonitorObserving) {
 			return PreRegisterDispatchResult{SkipReason: "ACTIVE_MONITOR_EXISTS"}, nil
 		}
 		if !mon.StartedAt.Before(hourAgo) {
@@ -162,17 +175,23 @@ func (store *fakeAutoControlStore) PreRegisterAutomatedDispatch(_ context.Contex
 				ExecutionMonitorRollbackFailed,
 				ExecutionMonitorManualOverride:
 				recentCount++
+			case ExecutionMonitorShadowRecorded:
+				recentShadowCount++
 			}
 		}
 	}
-	if recentCount >= store.lease.MaxCommandsPerHour {
+	if shadow {
+		if recentShadowCount >= DefaultShadowMaxPerHour {
+			return PreRegisterDispatchResult{SkipReason: "SHADOW_RATE_LIMIT_REACHED"}, nil
+		}
+	} else if recentCount >= store.lease.MaxCommandsPerHour {
 		return PreRegisterDispatchResult{SkipReason: "RATE_LIMIT_REACHED"}, nil
 	}
 
 	store.recordMonitorSeq++
-	monitorID := "01990000-9900-7000-8000-000000000001"
-	if store.recordMonitorSeq > 1 {
-		monitorID = "01990000-9900-7000-8000-000000000002"
+	monitorID, idErr := optimizationUUIDv7(nowUTC.Add(time.Duration(store.recordMonitorSeq) * time.Millisecond))
+	if idErr != nil {
+		return PreRegisterDispatchResult{}, idErr
 	}
 	baseline := reg.BaselineSupplyC
 	applied := reg.AppliedSupplyC
@@ -182,6 +201,12 @@ func (store *fakeAutoControlStore) PreRegisterAutomatedDispatch(_ context.Contex
 	if reg.ClampedC != nil {
 		v := *reg.ClampedC
 		clampedCopy = &v
+	}
+	status := ExecutionMonitorPendingSubmit
+	executionMode := ExecutionModeClosedLoop
+	if shadow {
+		status = ExecutionMonitorShadowRecorded
+		executionMode = ExecutionModeShadow
 	}
 	mon := OptimizationExecutionMonitorRecord{
 		ID:                  monitorID,
@@ -204,7 +229,10 @@ func (store *fakeAutoControlStore) PreRegisterAutomatedDispatch(_ context.Contex
 		StartedAt:           nowUTC,
 		WindowEndsAt:        nowUTC.Add(DefaultExecutionMonitorWindow),
 		LastCheckedAt:       &nowUTC,
-		Status:              ExecutionMonitorPendingSubmit,
+		Status:              status,
+		ExecutionMode:       executionMode,
+		DecisionID:          reg.DecisionID,
+		TraceID:             reg.TraceID,
 	}
 	store.monitors = append(store.monitors, mon)
 	return PreRegisterDispatchResult{Monitor: mon}, nil
@@ -458,15 +486,16 @@ func (reader *fakeTelemetryReader) ReadLiveAutoControlObservation(context.Contex
 }
 
 type fakeDispatcher struct {
-	mu           sync.Mutex
-	grantReqs    []commandauth.WorkloadDecisionRequest
-	submitInputs []AutoControlDispatchInput
-	decision     commandauth.Decision
-	grant        string
-	commandID    string
-	grantErr     error
-	submitErr    error
-	submitHook   func(ctx context.Context, input AutoControlDispatchInput)
+	mu                 sync.Mutex
+	grantReqs          []commandauth.WorkloadDecisionRequest
+	submitInputs       []AutoControlDispatchInput
+	submitTraceparents []string
+	decision           commandauth.Decision
+	grant              string
+	commandID          string
+	grantErr           error
+	submitErr          error
+	submitHook         func(ctx context.Context, input AutoControlDispatchInput)
 }
 
 func (disp *fakeDispatcher) RequestCommandGrant(_ context.Context, req commandauth.WorkloadDecisionRequest) (string, commandauth.Decision, error) {
@@ -480,6 +509,7 @@ func (disp *fakeDispatcher) SubmitAutoCommand(ctx context.Context, _ string, inp
 	disp.mu.Lock()
 	hook := disp.submitHook
 	disp.submitInputs = append(disp.submitInputs, input)
+	disp.submitTraceparents = append(disp.submitTraceparents, observability.Traceparent(ctx))
 	cmdID := disp.commandID
 	submitErr := disp.submitErr
 	disp.mu.Unlock()
@@ -487,6 +517,19 @@ func (disp *fakeDispatcher) SubmitAutoCommand(ctx context.Context, _ string, inp
 		hook(ctx, input)
 	}
 	return cmdID, submitErr
+}
+
+type fakeControlEventPublisher struct {
+	mu     sync.Mutex
+	events []ControlEvent
+	err    error
+}
+
+func (p *fakeControlEventPublisher) PublishControlEvent(_ context.Context, event ControlEvent) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.events = append(p.events, event)
+	return p.err
 }
 
 func testAutoLease(now time.Time) *AutoControlLeaseRecord {
@@ -1521,6 +1564,7 @@ func TestWorkloadCommandClientHTTP(t *testing.T) {
 	defer iamSrv.Close()
 
 	var capturedBodies [][]byte
+	var capturedTraceparents []string
 	gwSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/sites/01990000-5000-7000-8000-000000000001/optimization/auto-commands" {
 			t.Fatalf("unexpected gateway path %s", r.URL.Path)
@@ -1530,6 +1574,7 @@ func TestWorkloadCommandClientHTTP(t *testing.T) {
 			t.Fatalf("read gateway request body: %v", readErr)
 		}
 		capturedBodies = append(capturedBodies, raw)
+		capturedTraceparents = append(capturedTraceparents, r.Header.Get("traceparent"))
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
 		_, _ = w.Write([]byte(`{"commandId":"01990000-7700-7000-8000-000000000333"}`))
@@ -1597,6 +1642,7 @@ func TestWorkloadCommandClientHTTP(t *testing.T) {
 		t.Fatal("expected normal SubmitAutoCommand with emergency bypass to fail closed")
 	}
 
+	traceIDNormal := "0123456789abcdef0123456789abcdef"
 	cmdID, err := client.SubmitAutoCommand(context.Background(), grant, AutoControlDispatchInput{
 		TenantID:               "01990000-3000-7000-8000-000000000001",
 		SiteID:                 "01990000-5000-7000-8000-000000000001",
@@ -1614,12 +1660,14 @@ func TestWorkloadCommandClientHTTP(t *testing.T) {
 		CurrentValue:           float64Ptr(7.0),
 		BusinessRevision:       42,
 		ObservedAt:             time.Date(2026, 11, 16, 4, 0, 0, 0, time.UTC),
+		TraceID:                traceIDNormal,
 	})
 	if err != nil || cmdID != "01990000-7700-7000-8000-000000000333" {
 		t.Fatalf("SubmitAutoCommand failed: cmdID=%q err=%v", cmdID, err)
 	}
 
 	// Rollback with offline/bad telemetry sends real telemetry + EMERGENCY_BYPASS without fabricating GOOD/1.
+	traceIDRollback := "fedcba9876543210fedcba9876543210"
 	_, err = client.SubmitAutoCommand(context.Background(), grant, AutoControlDispatchInput{
 		TenantID:               "01990000-3000-7000-8000-000000000001",
 		SiteID:                 "01990000-5000-7000-8000-000000000001",
@@ -1638,12 +1686,19 @@ func TestWorkloadCommandClientHTTP(t *testing.T) {
 		Quality:                "BAD",
 		CurrentValue:           nil,
 		BusinessRevision:       0,
+		TraceID:                traceIDRollback,
 	})
 	if err != nil {
 		t.Fatalf("SubmitAutoCommand rollback failed: %v", err)
 	}
-	if len(capturedBodies) != 2 {
-		t.Fatalf("expected 2 captured HTTP payloads, got %d", len(capturedBodies))
+	if len(capturedBodies) != 2 || len(capturedTraceparents) != 2 {
+		t.Fatalf("expected 2 captured HTTP payloads, got bodies=%d traceparents=%d", len(capturedBodies), len(capturedTraceparents))
+	}
+	if sc0, ok0 := observability.ParseTraceparent(capturedTraceparents[0], ""); !ok0 || sc0.TraceID != traceIDNormal {
+		t.Fatalf("normal command traceparent=%q want traceID=%s", capturedTraceparents[0], traceIDNormal)
+	}
+	if sc1, ok1 := observability.ParseTraceparent(capturedTraceparents[1], ""); !ok1 || sc1.TraceID != traceIDRollback {
+		t.Fatalf("rollback command traceparent=%q want traceID=%s", capturedTraceparents[1], traceIDRollback)
 	}
 	if strings.Contains(string(capturedBodies[0]), "preconditionMode") || strings.Contains(string(capturedBodies[0]), "bypassReason") {
 		t.Fatalf("normal command payload should omit default preconditionMode/bypassReason on wire, got %s", string(capturedBodies[0]))
@@ -2087,4 +2142,421 @@ func TestAutoControlCrossDeviceTelemetryIsolationAndMonitorSafetyTrips(t *testin
 			t.Fatalf("expected fault trip+rollback, got summary=%+v trips=%+v err=%v", summary2, store.trippedRecords, err)
 		}
 	})
+}
+
+func TestAutoControllerShadowModeLastMileInterceptionAndTracePropagation(t *testing.T) {
+	now := time.Date(2026, 11, 16, 4, 0, 0, 0, time.UTC)
+
+	t.Run("SHADOW lease runs identical guardrails and clamps without calling commandClient", func(t *testing.T) {
+		lease := testAutoLease(now)
+		lease.ExecutionMode = ExecutionModeShadow
+		lease.SupplyTempMinC = 4.0
+		lease.MaxSetpointStepC = 2.0
+		siteCtx := testAutoSiteCtx()
+		siteCtx.HasActiveMonitor = true // must NOT block shadow evaluation
+		siteCtx.RecentAutoCountHour = lease.MaxCommandsPerHour
+
+		store := &fakeAutoControlStore{lease: lease, siteCtx: siteCtx}
+		disp := &fakeDispatcher{} // zero grant/command configured: must NEVER be invoked
+		ctrl, err := NewAutoController(store, &fakeTelemetryReader{obs: testLiveObservation(now, 6.2, 23.5)}, disp, func() time.Time { return now }, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctrl.WithPointHealth(&fakePointHealthChecker{livePoints: testLivePoints(now, 6.2, 6.0, 23.5)})
+
+		rec := testAutoRecommendation(now.Add(-5 * time.Minute))
+		rec.Baseline.SupplyTempC = 6.0
+		rec.Candidate.SupplyTempC = 4.2 // clamped to hard floor 5.0
+
+		incomingTrace := "00-11112222333344445555666677778888-9999aaaabbbbcccc-01"
+		ctx := observability.ContextWithRemoteParent(context.Background(), observability.NewTracer("test", nil), incomingTrace, "")
+
+		out, err := ctrl.TryDispatch(ctx, rec, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out.Dispatched || !out.ShadowRecorded || out.ExecutionMode != ExecutionModeShadow || out.MonitorID == "" {
+			t.Fatalf("expected shadow recorded outcome without dispatch, got %+v", out)
+		}
+		if !uuidPattern.MatchString(out.DecisionID) {
+			t.Fatalf("expected valid UUIDv7 DecisionID, got %q", out.DecisionID)
+		}
+		if out.TraceID != "11112222333344445555666677778888" {
+			t.Fatalf("expected preserved incoming TraceID, got %q", out.TraceID)
+		}
+		if len(disp.grantReqs) != 0 || len(disp.submitInputs) != 0 {
+			t.Fatalf("SHADOW mode must NEVER call commandClient, got grants=%d submits=%d", len(disp.grantReqs), len(disp.submitInputs))
+		}
+		if len(store.dispatchedRecs) != 0 {
+			t.Fatalf("SHADOW mode must not approve recommendation, got %+v", store.dispatchedRecs)
+		}
+		if len(store.monitors) != 1 {
+			t.Fatalf("expected 1 shadow monitor row, got %d", len(store.monitors))
+		}
+		mon := store.monitors[0]
+		if mon.Status != ExecutionMonitorShadowRecorded ||
+			mon.ExecutionMode != ExecutionModeShadow ||
+			mon.CommandIntentID != "" ||
+			mon.DecisionID != out.DecisionID ||
+			mon.TraceID != out.TraceID ||
+			mon.RawRecommendedValue == nil || *mon.RawRecommendedValue != 4.2 ||
+			mon.ClampedValue == nil || *mon.ClampedValue != 5.0 ||
+			mon.GuardrailVerdict != string(commandmodel.GuardrailVerdictClamped) ||
+			len(mon.GuardrailTrace) == 0 {
+			t.Fatalf("unexpected SHADOW_RECORDED monitor row: %+v", mon)
+		}
+
+		// Subsequent CLOSED_LOOP dispatch is neither blocked by nor quota-starved by SHADOW_RECORDED monitors.
+		store.lease.ExecutionMode = ExecutionModeClosedLoop
+		siteCtxClosed := testAutoSiteCtx()
+		siteCtxClosed.RecentAutoCountHour = 0
+		store.siteCtx = siteCtxClosed
+		dispClosed := &fakeDispatcher{
+			decision:  commandauth.Decision{Allowed: true, ReasonCode: commandauth.ReasonAllowAutoLease},
+			grant:     "closed.grant",
+			commandID: "01990000-7700-7000-8000-000000000901",
+		}
+		ctrlClosed, err := NewAutoController(store, &fakeTelemetryReader{obs: testLiveObservation(now, 6.2, 23.5)}, dispClosed, func() time.Time { return now }, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctrlClosed.WithPointHealth(&fakePointHealthChecker{livePoints: testLivePoints(now, 6.2, 6.0, 23.5)})
+
+		recClosed := testAutoRecommendation(now.Add(-4 * time.Minute))
+		recClosed.ID = "01990000-2000-7000-8000-000000000009"
+		recClosed.Baseline.SupplyTempC = 6.0
+		recClosed.Candidate.SupplyTempC = 7.2
+		outClosed, err := ctrlClosed.TryDispatch(context.Background(), recClosed, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !outClosed.Dispatched || outClosed.ShadowRecorded || outClosed.ExecutionMode != ExecutionModeClosedLoop {
+			t.Fatalf("expected closed-loop dispatch after shadow run, got %+v", outClosed)
+		}
+		if !uuidPattern.MatchString(outClosed.DecisionID) || normalizeTraceID(outClosed.TraceID) == "" {
+			t.Fatalf("expected generated DecisionID and 32-hex TraceID, got decision=%q trace=%q", outClosed.DecisionID, outClosed.TraceID)
+		}
+		if len(dispClosed.submitInputs) != 1 ||
+			dispClosed.submitInputs[0].DecisionID != outClosed.DecisionID ||
+			dispClosed.submitInputs[0].TraceID != outClosed.TraceID {
+			t.Fatalf("expected DecisionID/TraceID propagated into dispatch input, got %+v vs %+v", dispClosed.submitInputs, outClosed)
+		}
+		if parsed, ok := observability.ParseTraceparent(dispClosed.submitTraceparents[0], ""); !ok || parsed.TraceID != outClosed.TraceID {
+			t.Fatalf("expected W3C traceparent propagated to SubmitAutoCommand, got %q", dispClosed.submitTraceparents[0])
+		}
+	})
+
+	t.Run("SHADOW lease vetoes unsafe telemetry identically to CLOSED_LOOP", func(t *testing.T) {
+		lease := testAutoLease(now)
+		lease.ExecutionMode = ExecutionModeShadow
+		store := &fakeAutoControlStore{lease: lease, siteCtx: testAutoSiteCtx()}
+		disp := &fakeDispatcher{}
+		ctrl, err := NewAutoController(store, &fakeTelemetryReader{}, disp, func() time.Time { return now }, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pts := mutateLivePoint(testLivePoints(now, 7.1, 7.0, 23.0), "fault_code", func(pt *TelemetryLivePoint) {
+			pt.TextValue = strPtr("E99")
+		})
+		ctrl.WithPointHealth(&fakePointHealthChecker{livePoints: pts})
+
+		out, err := ctrl.TryDispatch(context.Background(), testAutoRecommendation(now.Add(-5*time.Minute)), now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out.Dispatched || out.ShadowRecorded || out.SkipReason == "" || len(store.monitors) != 0 {
+			t.Fatalf("expected guardrail veto in SHADOW mode without monitor row, got out=%+v monitors=%d", out, len(store.monitors))
+		}
+		if !uuidPattern.MatchString(out.DecisionID) || normalizeTraceID(out.TraceID) == "" {
+			t.Fatalf("expected DecisionID and TraceID on skip outcome, got %+v", out)
+		}
+	})
+
+	t.Run("SHADOW rate limit caps at 12 per hour independently", func(t *testing.T) {
+		lease := testAutoLease(now)
+		lease.ExecutionMode = ExecutionModeShadow
+		siteCtx := testAutoSiteCtx()
+		siteCtx.RecentShadowCountHour = DefaultShadowMaxPerHour
+		store := &fakeAutoControlStore{lease: lease, siteCtx: siteCtx}
+		ctrl, err := NewAutoController(store, &fakeTelemetryReader{}, &fakeDispatcher{}, func() time.Time { return now }, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctrl.WithPointHealth(&fakePointHealthChecker{livePoints: testLivePoints(now, 7.1, 7.0, 23.0)})
+		out, err := ctrl.TryDispatch(context.Background(), testAutoRecommendation(now.Add(-5*time.Minute)), now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out.Dispatched || out.ShadowRecorded || out.SkipReason != "SHADOW_RATE_LIMIT_REACHED" {
+			t.Fatalf("expected SHADOW_RATE_LIMIT_REACHED, got %+v", out)
+		}
+	})
+}
+
+func TestAutoControllerTrackingDeviationAndRollbackAlarmLinkage(t *testing.T) {
+	base := time.Date(2026, 11, 16, 4, 0, 0, 0, time.UTC)
+
+	t.Run("grace period under 10m does not trip on restore setpoint; >=10m trips and publishes SETPOINT_TRACKING_DEVIATION", func(t *testing.T) {
+		applied := 8.0
+		restore := 7.0
+		monID := "01990000-9900-7000-8000-000000000061"
+		cmdID := "01990000-7700-7000-8000-000000000661"
+		decisionID := "01990000-aaaa-7000-8000-000000000661"
+		traceID := "abcdef0123456789abcdef0123456789"
+		store := &fakeAutoControlStore{
+			lease:   testAutoLease(base),
+			siteCtx: testAutoSiteCtx(),
+			monitors: []OptimizationExecutionMonitorRecord{{
+				ID:                 monID,
+				TenantID:           "01990000-3000-7000-8000-000000000001",
+				SiteID:             "01990000-5000-7000-8000-000000000001",
+				LeaseID:            "01990000-8800-7000-8000-000000000011",
+				CommandIntentID:    cmdID,
+				DeviceID:           "01990000-6000-7000-8000-000000000001",
+				TargetCapability:   string(commandmodel.CapabilitySetChilledWaterTemperatureSetpoint),
+				AppliedSupplyTempC: &applied,
+				RestoreSupplyTempC: &restore,
+				ZoneTempMaxC:       26.0,
+				SupplyTempMinC:     5.0,
+				SupplyTempMaxC:     12.0,
+				StartedAt:          base,
+				WindowEndsAt:       base.Add(30 * time.Minute),
+				Status:             ExecutionMonitorObserving,
+				DecisionID:         decisionID,
+				TraceID:            traceID,
+			}},
+		}
+		events := &fakeControlEventPublisher{}
+		disp := &fakeDispatcher{
+			decision:  commandauth.Decision{Allowed: true, ReasonCode: commandauth.ReasonAllowAutoLease},
+			grant:     "rollback.sig",
+			commandID: "01990000-7700-7000-8000-000000000777",
+		}
+		health := &fakePointHealthChecker{livePoints: testLivePoints(base.Add(9*time.Minute), 7.5, restore, 23.0)}
+		ctrl, err := NewAutoController(store, &fakeTelemetryReader{obs: testLiveObservation(base, 7.5, 23.0)}, disp, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctrl.WithPointHealth(health).WithControlEvents(events)
+
+		// T+9m (< 10m grace): still at restore setpoint 7.0 -> heartbeat only, no trip or alarm.
+		summary9, err := ctrl.RunMonitorPass(context.Background(), base.Add(9*time.Minute))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if summary9.RolledBack != 0 || summary9.Tripped != 0 || len(events.events) != 0 || store.monitors[0].Status != ExecutionMonitorObserving {
+			t.Fatalf("expected no trip before 10m grace, summary=%+v events=%+v", summary9, events.events)
+		}
+
+		// T+10m: setpoint exactly at 8.3 (0.3C boundary) -> must NOT falsely trip due to float rounding.
+		check10 := base.Add(10 * time.Minute)
+		health.setLivePoints(testLivePoints(check10, 8.0, 8.3, 23.0))
+		summaryBoundary, err := ctrl.RunMonitorPass(context.Background(), check10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if summaryBoundary.RolledBack != 0 || len(events.events) != 0 {
+			t.Fatalf("expected 0.3C exact boundary not to trip, summary=%+v events=%+v", summaryBoundary, events.events)
+		}
+
+		// T+12m: setpoint still stuck at restore 7.0 (deviation 1.0C > 0.3C) -> trip + rollback + alarm!
+		check12 := base.Add(12 * time.Minute)
+		health.setLivePoints(testLivePoints(check12, 7.5, restore, 23.0))
+		summary12, err := ctrl.RunMonitorPass(context.Background(), check12)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if summary12.RolledBack != 1 || store.monitors[0].Status != ExecutionMonitorTrippedRolledBack ||
+			len(store.trippedRecords) != 1 || store.trippedRecords[0].TripReason != "setpoint_tracking_deviation" {
+			t.Fatalf("expected setpoint_tracking_deviation trip+rollback, summary=%+v trips=%+v", summary12, store.trippedRecords)
+		}
+		if parsed, ok := observability.ParseTraceparent(disp.submitTraceparents[0], ""); !ok || parsed.TraceID != traceID {
+			t.Fatalf("expected rollback HTTP traceparent carrying monitor TraceID %s, got %q", traceID, disp.submitTraceparents[0])
+		}
+		if len(events.events) != 1 {
+			t.Fatalf("expected 1 tracking deviation alarm event, got %+v", events.events)
+		}
+		ev := events.events[0]
+		if ev.EventKind != ControlEventSetpointTrackingDeviation ||
+			ev.CommandID != cmdID ||
+			ev.DeviceID == nil || *ev.DeviceID != store.monitors[0].DeviceID ||
+			ev.Capability != store.monitors[0].TargetCapability ||
+			ev.ReasonCode != ControlEventSetpointTrackingDeviation ||
+			ev.CorrelationID != decisionID {
+			t.Fatalf("unexpected tracking deviation alarm payload: %+v", ev)
+		}
+	})
+
+	t.Run("AUTO_CONTROL_ROLLBACK_FAILED published on rollback failure alongside SETPOINT_TRACKING_DEVIATION", func(t *testing.T) {
+		applied := 8.0
+		restore := 7.0
+		monID := "01990000-9900-7000-8000-000000000062"
+		decisionID := "01990000-aaaa-7000-8000-000000000662"
+		store := &fakeAutoControlStore{
+			lease:   testAutoLease(base),
+			siteCtx: testAutoSiteCtx(),
+			monitors: []OptimizationExecutionMonitorRecord{{
+				ID:                 monID,
+				TenantID:           "01990000-3000-7000-8000-000000000001",
+				SiteID:             "01990000-5000-7000-8000-000000000001",
+				LeaseID:            "01990000-8800-7000-8000-000000000011",
+				CommandIntentID:    "", // verifies fallback to monitor.ID
+				DeviceID:           "01990000-6000-7000-8000-000000000001",
+				TargetCapability:   string(commandmodel.CapabilitySetChilledWaterTemperatureSetpoint),
+				AppliedSupplyTempC: &applied,
+				RestoreSupplyTempC: &restore,
+				ZoneTempMaxC:       26.0,
+				SupplyTempMinC:     5.0,
+				SupplyTempMaxC:     12.0,
+				StartedAt:          base,
+				WindowEndsAt:       base.Add(30 * time.Minute),
+				Status:             ExecutionMonitorObserving,
+				DecisionID:         decisionID,
+			}},
+		}
+		events := &fakeControlEventPublisher{}
+		disp := &fakeDispatcher{
+			decision:  commandauth.Decision{Allowed: true, ReasonCode: commandauth.ReasonAllowAutoLease},
+			grant:     "rollback.sig",
+			submitErr: errors.New("gateway timeout"),
+		}
+		checkAt := base.Add(15 * time.Minute)
+		// Drift 0.32C (>0.3C deviation, <=0.35C tamper threshold) triggers setpoint_tracking_deviation rather than MANUAL_OVERRIDE.
+		ctrl, err := NewAutoController(store, &fakeTelemetryReader{obs: testLiveObservation(checkAt, 8.0, 23.0)}, disp, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctrl.WithPointHealth(&fakePointHealthChecker{livePoints: testLivePoints(checkAt, 8.0, 8.32, 23.0)}).WithControlEvents(events)
+
+		summary, err := ctrl.RunMonitorPass(context.Background(), checkAt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if summary.Tripped != 1 || summary.RolledBack != 0 || store.monitors[0].Status != ExecutionMonitorRollbackFailed {
+			t.Fatalf("expected ROLLBACK_FAILED trip, summary=%+v mon=%+v", summary, store.monitors[0])
+		}
+		if len(events.events) != 2 {
+			t.Fatalf("expected 2 alarm events (SETPOINT_TRACKING_DEVIATION + AUTO_CONTROL_ROLLBACK_FAILED), got %+v", events.events)
+		}
+		if events.events[0].EventKind != ControlEventSetpointTrackingDeviation ||
+			events.events[0].CommandID != monID ||
+			events.events[0].CorrelationID != decisionID {
+			t.Fatalf("unexpected first alarm event: %+v", events.events[0])
+		}
+		if events.events[1].EventKind != ControlEventAutoControlRollbackFailed ||
+			events.events[1].CommandID != monID ||
+			events.events[1].Severity != "CRITICAL" ||
+			events.events[1].CorrelationID != decisionID ||
+			!strings.Contains(events.events[1].Detail, "gateway timeout") {
+			t.Fatalf("unexpected rollback failed alarm event: %+v", events.events[1])
+		}
+	})
+
+	t.Run("MANUAL_OVERRIDE after 10m suppresses setpoint_tracking_deviation alarm", func(t *testing.T) {
+		applied := 8.0
+		restore := 7.0
+		store := &fakeAutoControlStore{
+			lease:   testAutoLease(base),
+			siteCtx: testAutoSiteCtx(),
+			monitors: []OptimizationExecutionMonitorRecord{{
+				ID:                 "01990000-9900-7000-8000-000000000063",
+				TenantID:           "01990000-3000-7000-8000-000000000001",
+				SiteID:             "01990000-5000-7000-8000-000000000001",
+				LeaseID:            "01990000-8800-7000-8000-000000000011",
+				DeviceID:           "01990000-6000-7000-8000-000000000001",
+				TargetCapability:   string(commandmodel.CapabilitySetChilledWaterTemperatureSetpoint),
+				AppliedSupplyTempC: &applied,
+				RestoreSupplyTempC: &restore,
+				ZoneTempMaxC:       26.0,
+				SupplyTempMinC:     5.0,
+				SupplyTempMaxC:     12.0,
+				StartedAt:          base,
+				WindowEndsAt:       base.Add(30 * time.Minute),
+				Status:             ExecutionMonitorObserving,
+			}},
+		}
+		events := &fakeControlEventPublisher{}
+		checkAt := base.Add(15 * time.Minute)
+		ctrl, err := NewAutoController(store, &fakeTelemetryReader{}, &fakeDispatcher{}, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctrl.WithPointHealth(&fakePointHealthChecker{livePoints: testLivePoints(checkAt, 8.0, 9.5, 23.0)}).WithControlEvents(events)
+
+		summary, err := ctrl.RunMonitorPass(context.Background(), checkAt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if summary.ManualOverrides != 1 || store.monitors[0].Status != ExecutionMonitorManualOverride || len(events.events) != 0 {
+			t.Fatalf("expected MANUAL_OVERRIDE without tracking alarm, summary=%+v mon=%+v events=%+v", summary, store.monitors[0], events.events)
+		}
+	})
+}
+
+func TestHTTPControlEventPublisher(t *testing.T) {
+	var receivedHeader string
+	var receivedBody []byte
+	statusCode := http.StatusCreated
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != InternalControlEventsPath {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		receivedHeader = r.Header.Get("traceparent")
+		var err error
+		receivedBody, err = io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.WriteHeader(statusCode)
+		_, _ = w.Write([]byte(`{"alarmId":"01990000-bbbb-7000-8000-000000000001"}`))
+	}))
+	defer srv.Close()
+
+	pub, err := NewHTTPControlEventPublisher(ControlEventClientConfig{
+		AlarmURL:   srv.URL,
+		HTTPClient: srv.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	traceparent := "00-0123456789abcdef0123456789abcdef-1111222233334444-01"
+	ctx := observability.ContextWithRemoteParent(context.Background(), observability.NewTracer("test", nil), traceparent, "")
+	devID := "01990000-6000-7000-8000-000000000001"
+	err = pub.PublishControlEvent(ctx, ControlEvent{
+		SchemaVersion: 1,
+		TenantID:      "01990000-3000-7000-8000-000000000001",
+		SiteID:        "01990000-5000-7000-8000-000000000001",
+		DeviceID:      &devID,
+		CommandID:     "01990000-7700-7000-8000-000000000001",
+		EventKind:     ControlEventAutoControlRollbackFailed,
+		Capability:    string(commandmodel.CapabilitySetChilledWaterTemperatureSetpoint),
+		ReasonCode:    ControlEventAutoControlRollbackFailed,
+		CorrelationID: "01990000-aaaa-7000-8000-000000000001",
+	})
+	if err != nil {
+		t.Fatalf("PublishControlEvent failed: %v", err)
+	}
+	if receivedHeader != traceparent {
+		t.Fatalf("traceparent=%q want %q", receivedHeader, traceparent)
+	}
+	var decoded ControlEvent
+	dec := json.NewDecoder(strings.NewReader(string(receivedBody)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&decoded); err != nil {
+		t.Fatalf("decode published ControlEvent failed: %v body=%s", err, string(receivedBody))
+	}
+	if decoded.SchemaVersion != 1 || decoded.EventKind != ControlEventAutoControlRollbackFailed || decoded.OccurredAt == "" {
+		t.Fatalf("unexpected decoded payload: %+v", decoded)
+	}
+
+	statusCode = http.StatusInternalServerError
+	if err := pub.PublishControlEvent(context.Background(), ControlEvent{
+		TenantID:  "01990000-3000-7000-8000-000000000001",
+		SiteID:    "01990000-5000-7000-8000-000000000001",
+		CommandID: "01990000-7700-7000-8000-000000000001",
+		EventKind: ControlEventSetpointTrackingDeviation,
+	}); err == nil {
+		t.Fatal("expected error on 500 response from alarm service")
+	}
 }

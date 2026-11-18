@@ -101,7 +101,7 @@ SELECT EXISTS (
 			err = transaction.QueryRow(ctx, `
 SELECT l.id::text, l.armed_by::text, l.expires_at, l.allowed_capabilities,
        l.max_setpoint_step_c, l.supply_temp_min_c, l.supply_temp_max_c, l.max_commands_per_hour,
-       l.manual_backoff_until
+       l.manual_backoff_until, l.execution_mode
 FROM core_registry.optimization_execution_monitors_v1 AS m
 JOIN core_registry.site_auto_control_leases_v1 AS l
   ON l.tenant_id = m.tenant_id AND l.site_id = m.site_id AND l.id = m.lease_id
@@ -115,25 +115,25 @@ LIMIT 1
 `, lookup.TenantID, lookup.SiteID, lookup.DeviceID, lookup.RequestedSetpoint).Scan(
 				&lease.ID, &lease.ArmedBy, &lease.ExpiresAt, &lease.AllowedCapabilities,
 				&lease.MaxSetpointStepC, &lease.SupplyTempMinC, &lease.SupplyTempMaxC, &lease.MaxCommandsPerHour,
-				&lease.ManualBackoffUntil,
+				&lease.ManualBackoffUntil, &lease.ExecutionMode,
 			)
 			if err == nil {
 				result.MatchingObservingRollback = true
 			}
 		} else {
 			err = transaction.QueryRow(ctx, `
-SELECT id::text, armed_by::text, expires_at, allowed_capabilities,
-       max_setpoint_step_c, supply_temp_min_c, supply_temp_max_c, max_commands_per_hour,
-       manual_backoff_until
-FROM core_registry.site_auto_control_leases_v1
-WHERE tenant_id = $1::uuid AND site_id = $2::uuid
-  AND status = 'ACTIVE' AND expires_at > $3
-ORDER BY armed_at DESC, id DESC
+SELECT l.id::text, l.armed_by::text, l.expires_at, l.allowed_capabilities,
+       l.max_setpoint_step_c, l.supply_temp_min_c, l.supply_temp_max_c, l.max_commands_per_hour,
+       l.manual_backoff_until, l.execution_mode
+FROM core_registry.site_auto_control_leases_v1 AS l
+WHERE l.tenant_id = $1::uuid AND l.site_id = $2::uuid
+  AND l.status = 'ACTIVE' AND l.expires_at > $3
+ORDER BY l.armed_at DESC, l.id DESC
 LIMIT 1
 `, lookup.TenantID, lookup.SiteID, lookup.Now).Scan(
 				&lease.ID, &lease.ArmedBy, &lease.ExpiresAt, &lease.AllowedCapabilities,
 				&lease.MaxSetpointStepC, &lease.SupplyTempMinC, &lease.SupplyTempMaxC, &lease.MaxCommandsPerHour,
-				&lease.ManualBackoffUntil,
+				&lease.ManualBackoffUntil, &lease.ExecutionMode,
 			)
 		}
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {

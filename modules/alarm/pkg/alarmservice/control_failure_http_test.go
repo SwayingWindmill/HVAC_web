@@ -128,10 +128,13 @@ func TestOwnerRouterRestrictsControlEventsBySPIFFE(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	router, err := NewOwnerRouter(OwnerRouterConfig{
-		GatewaySPIFFE:        "spiffe://hvac.local/platform-gateway",
-		TelemetrySPIFFE:      "spiffe://hvac.local/telemetry-runtime-service",
-		ReaderSPIFFE:         "spiffe://hvac.local/operations-agent-service",
-		ControlEventsSPIFFEs: []string{"spiffe://hvac.local/command-service"},
+		GatewaySPIFFE:   "spiffe://hvac.local/platform-gateway",
+		TelemetrySPIFFE: "spiffe://hvac.local/telemetry-runtime-service",
+		ReaderSPIFFE:    "spiffe://hvac.local/operations-agent-service",
+		ControlEventsSPIFFEs: []string{
+			"spiffe://hvac.local/command-service",
+			"spiffe://hvac.local/optimization-service",
+		},
 		GatewayHandler:       gatewayHandler,
 		TelemetryHandler:     telemetryHandler,
 		ControlEventsHandler: controlHandler,
@@ -162,6 +165,10 @@ func TestOwnerRouterRestrictsControlEventsBySPIFFE(t *testing.T) {
 	if rec := makeTLSRequest(http.MethodPost, InternalControlEventsPath, validEvent, "spiffe://hvac.local/command-service"); rec.Code != http.StatusOK {
 		t.Fatalf("command-service recurrence status=%d want 200 body=%s", rec.Code, rec.Body.String())
 	}
+	optimizationEvent := `{"schemaVersion":1,"tenantId":"` + controlTestTenantID + `","siteId":"` + controlTestSiteID + `","deviceId":"` + controlTestDeviceID + `","commandId":"0195b5c0-0000-7000-8000-000000000006","eventKind":"SETPOINT_TRACKING_DEVIATION","capability":"SET_CHILLED_WATER_TEMPERATURE_SETPOINT","reasonCode":"TRACKING_DEVIATION","detail":"supply temp stayed at 9.2C vs 8.0C","occurredAt":"2026-11-18T03:05:00Z"}`
+	if rec := makeTLSRequest(http.MethodPost, InternalControlEventsPath, optimizationEvent, "spiffe://hvac.local/optimization-service"); rec.Code != http.StatusCreated {
+		t.Fatalf("optimization-service control event status=%d want 201 body=%s", rec.Code, rec.Body.String())
+	}
 	if rec := makeTLSRequest(http.MethodPost, InternalControlEventsPath, validEvent, "spiffe://hvac.local/telemetry-runtime-service"); rec.Code != http.StatusForbidden {
 		t.Fatalf("telemetry workload should be forbidden, got %d", rec.Code)
 	}
@@ -170,6 +177,106 @@ func TestOwnerRouterRestrictsControlEventsBySPIFFE(t *testing.T) {
 	}
 	if rec := makeTLSRequest(http.MethodGet, InternalSiteAlarmsPrefix+controlTestSiteID+"/alarms", "", "spiffe://hvac.local/command-service"); rec.Code != http.StatusForbidden {
 		t.Fatalf("command-service should not access general alarm routes, got %d", rec.Code)
+	}
+	if rec := makeTLSRequest(http.MethodGet, InternalSiteAlarmsPrefix+controlTestSiteID+"/alarms", "", "spiffe://hvac.local/optimization-service"); rec.Code != http.StatusForbidden {
+		t.Fatalf("optimization-service should not access general alarm routes, got %d", rec.Code)
+	}
+}
+
+func TestControlFailureHandlerPublishesOptimizationControlEvents(t *testing.T) {
+	store, err := NewMemoryStore(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := NewControlFailureHandler(store)
+	if err != nil {
+		t.Fatalf("NewControlFailureHandler: %v", err)
+	}
+
+	cases := []struct {
+		name            string
+		commandID       string
+		eventKind       string
+		wantAlarmType   string
+		wantSeverity    alarmmodel.Severity
+		wantTitle       string
+		wantSummaryFrag string
+	}{
+		{
+			name:            "setpoint tracking deviation",
+			commandID:       "0195b5c0-0000-7000-8000-000000000011",
+			eventKind:       ControlEventSetpointTrackingDeviation,
+			wantAlarmType:   "SETPOINT_TRACKING_DEVIATION",
+			wantSeverity:    alarmmodel.SeverityMajor,
+			wantTitle:       "设定值下发后未收敛",
+			wantSummaryFrag: "自动控制指令下发后在收敛窗口内未达到目标设定值",
+		},
+		{
+			name:            "auto control rollback failed",
+			commandID:       "0195b5c0-0000-7000-8000-000000000012",
+			eventKind:       ControlEventAutoRollbackFailed,
+			wantAlarmType:   "AUTO_CONTROL_ROLLBACK_FAILED",
+			wantSeverity:    alarmmodel.SeverityCritical,
+			wantTitle:       "自动控制异常回退失败",
+			wantSummaryFrag: "自动控制进入异常触发条件但回退恢复指令未能确认成功",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := ControlEventRequest{
+				SchemaVersion: 1,
+				TenantID:      controlTestTenantID,
+				SiteID:        controlTestSiteID,
+				DeviceID:      strPtr(controlTestDeviceID),
+				CommandID:     tc.commandID,
+				EventKind:     tc.eventKind,
+				Capability:    "SET_CHILLED_WATER_TEMPERATURE_SETPOINT",
+				ReasonCode:    tc.eventKind,
+				Detail:        "target=8.0C live=9.4C",
+				OccurredAt:    "2026-11-18T04:00:00Z",
+				ActorType:     "WORKLOAD",
+				ActorID:       "spiffe://hvac.local/optimization-service",
+			}
+			body, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec1 := httptest.NewRecorder()
+			handler.ServeHTTP(rec1, httptest.NewRequest(http.MethodPost, InternalControlEventsPath, strings.NewReader(string(body))))
+			if rec1.Code != http.StatusCreated {
+				t.Fatalf("status=%d want 201 body=%s", rec1.Code, rec1.Body.String())
+			}
+			var created alarmmodel.Alarm
+			if err := json.Unmarshal(rec1.Body.Bytes(), &created); err != nil {
+				t.Fatal(err)
+			}
+			if created.AlarmType != tc.wantAlarmType ||
+				created.CurrentSeverity != tc.wantSeverity ||
+				created.Title != tc.wantTitle ||
+				created.SourceReference != "control-failure:"+tc.eventKind+":"+tc.commandID ||
+				created.OccurrenceCount != 1 {
+				t.Fatalf("unexpected alarm: %#v", created)
+			}
+			if !strings.Contains(created.Summary, tc.wantSummaryFrag) || !strings.Contains(created.Summary, "target=8.0C live=9.4C") {
+				t.Fatalf("unexpected summary %q", created.Summary)
+			}
+
+			payload.OccurredAt = "2026-11-18T04:01:00Z"
+			body2, _ := json.Marshal(payload)
+			rec2 := httptest.NewRecorder()
+			handler.ServeHTTP(rec2, httptest.NewRequest(http.MethodPost, InternalControlEventsPath, strings.NewReader(string(body2))))
+			if rec2.Code != http.StatusOK {
+				t.Fatalf("recurrence status=%d want 200 body=%s", rec2.Code, rec2.Body.String())
+			}
+			var updated alarmmodel.Alarm
+			if err := json.Unmarshal(rec2.Body.Bytes(), &updated); err != nil {
+				t.Fatal(err)
+			}
+			if updated.AlarmID != created.AlarmID || updated.OccurrenceCount != 2 {
+				t.Fatalf("expected idempotent recurrence, got %#v vs %#v", updated, created)
+			}
+		})
 	}
 }
 

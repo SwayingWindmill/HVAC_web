@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"math"
 	"net/http"
 	"strings"
@@ -105,6 +106,7 @@ func (backend *memoryAutoLeaseBackend) ArmSiteAutoControlLease(_ context.Context
 		ZoneTempMaxC:        values.zoneMax,
 		MinRunningChillers:  values.minChillers,
 		MaxCommandsPerHour:  values.maxPerHour,
+		ExecutionMode:       values.executionMode,
 		Revision:            1,
 		CreatedAt:           formatInstant(now),
 		UpdatedAt:           formatInstant(now),
@@ -187,6 +189,25 @@ func TestAutoControlLeaseValidationBounds(t *testing.T) {
 	}
 	if vals.deadbandC != 0.2 {
 		t.Fatalf("expected default deadbandC=0.2, got %v", vals.deadbandC)
+	}
+	if vals.executionMode != ExecutionModeClosedLoop {
+		t.Fatalf("expected default executionMode=%s, got %q", ExecutionModeClosedLoop, vals.executionMode)
+	}
+
+	for _, okMode := range []string{ExecutionModeShadow, ExecutionModeClosedLoop} {
+		withMode := valid
+		withMode.ExecutionMode = okMode
+		got, err := withMode.normalizedValues(now)
+		if err != nil || got.executionMode != okMode {
+			t.Fatalf("expected executionMode=%s accepted, got %+v err=%v", okMode, got, err)
+		}
+	}
+	for _, badMode := range []string{"AUTO", "shadow", "   ", "DRY_RUN"} {
+		withBadMode := valid
+		withBadMode.ExecutionMode = badMode
+		if _, err := withBadMode.normalizedValues(now); !errors.Is(err, ErrInvalidMutation) {
+			t.Fatalf("expected executionMode=%q to be rejected with ErrInvalidMutation, got %v", badMode, err)
+		}
 	}
 
 	minSupplyAccepted := valid
@@ -297,18 +318,32 @@ func TestAutoControlLeaseAndMonitorsHTTPLifecycle(t *testing.T) {
 	if err := json.NewDecoder(armedResp.Body).Decode(&armed); err != nil {
 		t.Fatal(err)
 	}
-	if armed.ConfirmationMode != ConfirmationModeAutoWithLease || armed.ActiveLease == nil || armed.ActiveLease.Status != AutoControlLeaseActive || armed.ActiveLease.DeadbandC != 0.2 {
-		t.Fatalf("expected ACTIVE lease with deadbandC=0.2, got %#v", armed)
+	if armed.ConfirmationMode != ConfirmationModeAutoWithLease || armed.ActiveLease == nil || armed.ActiveLease.Status != AutoControlLeaseActive || armed.ActiveLease.DeadbandC != 0.2 || armed.ActiveLease.ExecutionMode != ExecutionModeClosedLoop {
+		t.Fatalf("expected ACTIVE CLOSED_LOOP lease with deadbandC=0.2, got %#v", armed)
 	}
 
-	// Re-arm with explicit deadbandC=0.35 and verify manualBackoff fields surface on GET.
+	// Reject invalid executionMode over HTTP.
+	badModeResp := client.do(t, http.MethodPut, RegistryPathPrefix+"sites/"+testSiteA1+"/auto-control-lease", manageClaims, "工程师", map[string]any{
+		"expiresInHours":      8,
+		"allowedCapabilities": []string{"SET_CHILLED_WATER_TEMPERATURE_SETPOINT"},
+		"supplyTempMinC":      6.0,
+		"supplyTempMaxC":      12.0,
+		"executionMode":       "DRY_RUN",
+		"meta":                map[string]any{"expectedRevision": armed.ActiveLease.Revision, "idempotencyKey": "lease-arm-bad-mode", "reason": "非法执行模式"},
+	})
+	if badModeResp.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid executionMode, got %d body=%s", badModeResp.Code, badModeResp.Body.String())
+	}
+
+	// Re-arm with explicit deadbandC=0.35 and executionMode=SHADOW, and verify manualBackoff fields surface on GET.
 	rearmResp := client.do(t, http.MethodPut, RegistryPathPrefix+"sites/"+testSiteA1+"/auto-control-lease", manageClaims, "工程师", map[string]any{
 		"expiresInHours":      8,
 		"allowedCapabilities": []string{"SET_CHILLED_WATER_TEMPERATURE_SETPOINT"},
 		"deadbandC":           0.35,
 		"supplyTempMinC":      5.0,
 		"supplyTempMaxC":      12.0,
-		"meta":                map[string]any{"expectedRevision": armed.ActiveLease.Revision, "idempotencyKey": "lease-arm-ok-2", "reason": "调整死区"},
+		"executionMode":       ExecutionModeShadow,
+		"meta":                map[string]any{"expectedRevision": armed.ActiveLease.Revision, "idempotencyKey": "lease-arm-ok-2", "reason": "调整死区并切换影子模式"},
 	})
 	if rearmResp.Code != http.StatusOK {
 		t.Fatalf("PUT re-arm lease status=%d body=%s", rearmResp.Code, rearmResp.Body.String())
@@ -317,8 +352,8 @@ func TestAutoControlLeaseAndMonitorsHTTPLifecycle(t *testing.T) {
 	if err := json.NewDecoder(rearmResp.Body).Decode(&rearmed); err != nil {
 		t.Fatal(err)
 	}
-	if rearmed.ActiveLease == nil || rearmed.ActiveLease.DeadbandC != 0.35 || rearmed.ActiveLease.SupplyTempMinC != 5.0 {
-		t.Fatalf("expected deadbandC=0.35 and supplyTempMinC=5.0, got %#v", rearmed)
+	if rearmed.ActiveLease == nil || rearmed.ActiveLease.DeadbandC != 0.35 || rearmed.ActiveLease.SupplyTempMinC != 5.0 || rearmed.ActiveLease.ExecutionMode != ExecutionModeShadow {
+		t.Fatalf("expected deadbandC=0.35, supplyTempMinC=5.0, executionMode=SHADOW, got %#v", rearmed)
 	}
 
 	backoffUntil := formatInstant(now.Add(30 * time.Minute))
@@ -354,6 +389,8 @@ func TestAutoControlLeaseAndMonitorsHTTPLifecycle(t *testing.T) {
 
 	// List execution monitors returns both command-backed and nullable-command-intent guardrail shadow items.
 	intentID := "01990000-8800-7000-8000-000000000003"
+	decisionID := "01990000-8800-7000-8000-000000000099"
+	traceID := "4bf92f3577b34da6a3ce929d0e0e4736"
 	rawRec := 4.2
 	clamped := 5.0
 	backend.monitors[testSiteA1] = []OptimizationExecutionMonitor{
@@ -365,6 +402,7 @@ func TestAutoControlLeaseAndMonitorsHTTPLifecycle(t *testing.T) {
 			SupplyTempMinC: 5.0, ZoneTempMaxC: 26.0, SupplyTempMaxC: 12.0,
 			RawRecommendedValue: &rawRec, ClampedValue: &clamped, GuardrailVerdict: "CLAMPED",
 			GuardrailTrace: json.RawMessage(`[{"rule":"supply_min","action":"CLAMP","from":4.2,"to":5.0}]`),
+			ExecutionMode:  ExecutionModeClosedLoop,
 			StartedAt:      formatInstant(now), WindowEndsAt: formatInstant(now.Add(30 * time.Minute)),
 			CreatedAt: formatInstant(now), UpdatedAt: formatInstant(now),
 		},
@@ -376,7 +414,8 @@ func TestAutoControlLeaseAndMonitorsHTTPLifecycle(t *testing.T) {
 			SupplyTempMinC: 5.0, ZoneTempMaxC: 26.0, SupplyTempMaxC: 12.0,
 			RawRecommendedValue: &rawRec, GuardrailVerdict: "DEADBAND_SKIPPED",
 			GuardrailTrace: json.RawMessage(`[{"rule":"deadband","action":"SKIP"}]`),
-			StartedAt:      formatInstant(now), WindowEndsAt: formatInstant(now.Add(30 * time.Minute)),
+			ExecutionMode:  ExecutionModeShadow, DecisionID: &decisionID, TraceID: traceID,
+			StartedAt: formatInstant(now), WindowEndsAt: formatInstant(now.Add(30 * time.Minute)),
 			CreatedAt: formatInstant(now), UpdatedAt: formatInstant(now),
 		},
 	}
@@ -393,7 +432,51 @@ func TestAutoControlLeaseAndMonitorsHTTPLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(monList.Items) != 2 || monList.Items[0].Status != ExecutionMonitorVerified || monList.Items[0].CommandIntentID == nil ||
-		monList.Items[1].Status != ExecutionMonitorShadowRecorded || monList.Items[1].CommandIntentID != nil || monList.Items[1].GuardrailVerdict != "DEADBAND_SKIPPED" {
+		monList.Items[0].ExecutionMode != ExecutionModeClosedLoop ||
+		monList.Items[1].Status != ExecutionMonitorShadowRecorded || monList.Items[1].CommandIntentID != nil || monList.Items[1].GuardrailVerdict != "DEADBAND_SKIPPED" ||
+		monList.Items[1].ExecutionMode != ExecutionModeShadow || monList.Items[1].DecisionID == nil || *monList.Items[1].DecisionID != decisionID || monList.Items[1].TraceID != traceID {
 		t.Fatalf("unexpected monitors list: %#v", monList)
+	}
+}
+
+func TestOptimizationExecutionMonitorJSONSerialization(t *testing.T) {
+	now := time.Date(2026, 11, 18, 4, 0, 0, 0, time.UTC)
+	decisionID := "01990000-8800-7000-8000-000000000099"
+	traceID := "4bf92f3577b34da6a3ce929d0e0e4736"
+
+	withTrace := OptimizationExecutionMonitor{
+		ID: "01990000-8800-7000-8000-000000000010", TenantID: testTenantA, SiteID: testSiteA1,
+		LeaseID: "01990000-8800-7000-8000-000000000011", RecommendationID: "01990000-8800-7000-8000-000000000012",
+		DeviceID: "01990000-8800-7000-8000-000000000013", TargetCapability: "SET_CHILLED_WATER_TEMPERATURE_SETPOINT",
+		SupplyTempMinC: 5.0, ZoneTempMaxC: 26.0, SupplyTempMaxC: 12.0,
+		ExecutionMode: ExecutionModeShadow, DecisionID: &decisionID, TraceID: traceID,
+		StartedAt: formatInstant(now), WindowEndsAt: formatInstant(now.Add(30 * time.Minute)),
+		Status: ExecutionMonitorShadowRecorded, CreatedAt: formatInstant(now), UpdatedAt: formatInstant(now),
+	}
+	rawWithTrace, err := json.Marshal(withTrace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedWithTrace := string(rawWithTrace)
+	for _, needle := range []string{`"executionMode":"SHADOW"`, `"decisionId":"` + decisionID + `"`, `"traceId":"` + traceID + `"`} {
+		if !strings.Contains(encodedWithTrace, needle) {
+			t.Fatalf("expected %s in serialized monitor JSON: %s", needle, encodedWithTrace)
+		}
+	}
+
+	withoutTrace := withTrace
+	withoutTrace.ExecutionMode = ExecutionModeClosedLoop
+	withoutTrace.DecisionID = nil
+	withoutTrace.TraceID = ""
+	rawWithoutTrace, err := json.Marshal(withoutTrace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedWithoutTrace := string(rawWithoutTrace)
+	if !strings.Contains(encodedWithoutTrace, `"executionMode":"CLOSED_LOOP"`) {
+		t.Fatalf("expected executionMode CLOSED_LOOP in serialized monitor JSON: %s", encodedWithoutTrace)
+	}
+	if strings.Contains(encodedWithoutTrace, `"decisionId"`) || strings.Contains(encodedWithoutTrace, `"traceId"`) {
+		t.Fatalf("expected nil decisionId and empty traceId to be omitted, got %s", encodedWithoutTrace)
 	}
 }

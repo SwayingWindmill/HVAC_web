@@ -322,3 +322,143 @@ func TestIAMCommandWorkloadDecisionRejectsUnlistedWorkloadAndForgedHeaders(t *te
 		t.Fatalf("forged header status=%d want 400", forgedRec.Code)
 	}
 }
+
+func TestIAMCommandWorkloadDecisionShadowModeBlocksDispatchButAllowsRollback(t *testing.T) {
+	now := time.Date(2026, 11, 18, 5, 0, 0, 0, time.UTC)
+	signer, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := 7.0
+	baseReq := commandauth.WorkloadDecisionRequest{
+		TenantID:           S1FixtureTenantAID,
+		SiteID:             S1FixtureOwnerASite1ID,
+		DeviceID:           "01990000-3000-7000-8000-0000000000c1",
+		Capability:         commandmodel.CapabilitySetChilledWaterTemperatureSetpoint,
+		CapabilityRevision: "capability:set-chilled-water-temperature-setpoint:v1",
+		Purpose:            commandmodel.AuthorizationCommandSubmit,
+		Parameters:         commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 8.0},
+		CurrentValue:       &current,
+	}
+
+	for _, mode := range []string{"SHADOW", " shadow "} {
+		t.Run("non-rollback denied for "+mode, func(t *testing.T) {
+			facts := validWorkloadBaseFacts(now)
+			facts.ActiveLease.ExecutionMode = mode
+			decision, evalErr := evaluateWorkloadCommandAuthorization(t.Context(), &memoryCommandWorkloadStore{facts: facts}, now, "spiffe://hvac.local", defaultOptimizationCommandWorkload, baseReq)
+			if evalErr != nil {
+				t.Fatal(evalErr)
+			}
+			if decision.Allowed || decision.ReasonCode != commandauth.ReasonDenyAutoLease || decision.Detail != "shadow_mode_lease_blocks_closed_loop_dispatch" {
+				t.Fatalf("expected SHADOW deny, got %#v", decision)
+			}
+		})
+	}
+
+	for _, mode := range []string{"", "CLOSED_LOOP", " closed_loop "} {
+		t.Run("non-rollback allowed for "+mode, func(t *testing.T) {
+			facts := validWorkloadBaseFacts(now)
+			facts.ActiveLease.ExecutionMode = mode
+			decision, evalErr := evaluateWorkloadCommandAuthorization(t.Context(), &memoryCommandWorkloadStore{facts: facts}, now, "spiffe://hvac.local", defaultOptimizationCommandWorkload, baseReq)
+			if evalErr != nil {
+				t.Fatal(evalErr)
+			}
+			if !decision.Allowed || decision.ReasonCode != commandauth.ReasonAllowAutoLease {
+				t.Fatalf("expected CLOSED_LOOP allow, got %#v", decision)
+			}
+		})
+	}
+
+	t.Run("unsupported execution mode fails closed", func(t *testing.T) {
+		facts := validWorkloadBaseFacts(now)
+		facts.ActiveLease.ExecutionMode = "DRY_RUN_UNKNOWN"
+		decision, evalErr := evaluateWorkloadCommandAuthorization(t.Context(), &memoryCommandWorkloadStore{facts: facts}, now, "spiffe://hvac.local", defaultOptimizationCommandWorkload, baseReq)
+		if evalErr != nil {
+			t.Fatal(evalErr)
+		}
+		if decision.Allowed || decision.ReasonCode != commandauth.ReasonDenyAutoLease {
+			t.Fatalf("expected unsupported mode deny, got %#v", decision)
+		}
+	})
+
+	t.Run("rollback of OBSERVING monitor succeeds even when lease is SHADOW", func(t *testing.T) {
+		facts := validWorkloadBaseFacts(now)
+		facts.ActiveLease.ExecutionMode = "SHADOW"
+		facts.MatchingObservingRollback = true
+		rollbackReq := baseReq
+		rollbackReq.IsRollback = true
+		rollbackReq.Parameters = commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 7.0}
+		applied := 8.0
+		rollbackReq.CurrentValue = &applied
+
+		decision, evalErr := evaluateWorkloadCommandAuthorization(t.Context(), &memoryCommandWorkloadStore{facts: facts}, now, "spiffe://hvac.local", defaultOptimizationCommandWorkload, rollbackReq)
+		if evalErr != nil || !decision.Allowed || decision.ReasonCode != commandauth.ReasonAllowAutoLease {
+			t.Fatalf("expected rollback under SHADOW lease with OBSERVING monitor to allow, got %#v err=%v", decision, evalErr)
+		}
+	})
+
+	t.Run("rollback without matching OBSERVING monitor denied under SHADOW", func(t *testing.T) {
+		facts := validWorkloadBaseFacts(now)
+		facts.ActiveLease.ExecutionMode = "SHADOW"
+		facts.MatchingObservingRollback = false
+		rollbackReq := baseReq
+		rollbackReq.IsRollback = true
+
+		decision, evalErr := evaluateWorkloadCommandAuthorization(t.Context(), &memoryCommandWorkloadStore{facts: facts}, now, "spiffe://hvac.local", defaultOptimizationCommandWorkload, rollbackReq)
+		if evalErr != nil || decision.Allowed || decision.ReasonCode != commandauth.ReasonDenyAutoLease {
+			t.Fatalf("expected unmatched rollback under SHADOW lease to deny, got %#v err=%v", decision, evalErr)
+		}
+	})
+
+	t.Run("HTTP endpoint blocks SHADOW dispatch and signs grant for SHADOW rollback", func(t *testing.T) {
+		shadowFacts := validWorkloadBaseFacts(now)
+		shadowFacts.ActiveLease.ExecutionMode = "SHADOW"
+		shadowFacts.MatchingObservingRollback = true
+		store := &memoryCommandWorkloadStore{facts: shadowFacts}
+		h := NewHandler(Config{
+			Now:                               func() time.Time { return now },
+			CommandWorkloadAuthorizationStore: store,
+			CommandGrantSigner:                signer,
+			CommandGrantIssuer:                "spiffe://hvac.local/iam-service",
+			CommandGrantAudience:              "command-service",
+			NewCommandGrantID:                 func() string { return "grant-shadow-rollback-1" },
+		})
+
+		dispatchBody, _ := json.Marshal(baseReq)
+		dispatchHTTP := httptest.NewRequest(http.MethodPost, CommandWorkloadDecisionPath, bytes.NewReader(dispatchBody))
+		dispatchHTTP.TLS = workloadCertTLSState(t, defaultOptimizationCommandWorkload)
+		dispatchRec := httptest.NewRecorder()
+		h.ServeHTTP(dispatchRec, dispatchHTTP)
+		if dispatchRec.Code != http.StatusOK {
+			t.Fatalf("dispatch status=%d body=%s", dispatchRec.Code, dispatchRec.Body.String())
+		}
+		var dispatchOut commandauth.DecisionResponse
+		if err := json.NewDecoder(dispatchRec.Body).Decode(&dispatchOut); err != nil {
+			t.Fatal(err)
+		}
+		if dispatchOut.Decision.Allowed || dispatchOut.Decision.ReasonCode != commandauth.ReasonDenyAutoLease || dispatchOut.Decision.Detail != "shadow_mode_lease_blocks_closed_loop_dispatch" || dispatchOut.DelegationGrant != "" {
+			t.Fatalf("expected SHADOW HTTP dispatch deny without grant, got %#v", dispatchOut)
+		}
+
+		rbReq := baseReq
+		rbReq.IsRollback = true
+		rbReq.Parameters = commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 7.0}
+		applied := 8.0
+		rbReq.CurrentValue = &applied
+		rbBody, _ := json.Marshal(rbReq)
+		rbHTTP := httptest.NewRequest(http.MethodPost, CommandWorkloadDecisionPath, bytes.NewReader(rbBody))
+		rbHTTP.TLS = workloadCertTLSState(t, defaultOptimizationCommandWorkload)
+		rbRec := httptest.NewRecorder()
+		h.ServeHTTP(rbRec, rbHTTP)
+		if rbRec.Code != http.StatusOK {
+			t.Fatalf("rollback status=%d body=%s", rbRec.Code, rbRec.Body.String())
+		}
+		var rbOut commandauth.DecisionResponse
+		if err := json.NewDecoder(rbRec.Body).Decode(&rbOut); err != nil {
+			t.Fatal(err)
+		}
+		if !rbOut.Decision.Allowed || rbOut.Decision.ReasonCode != commandauth.ReasonAllowAutoLease || rbOut.DelegationGrant == "" {
+			t.Fatalf("expected SHADOW HTTP rollback grant, got %#v", rbOut)
+		}
+	})
+}

@@ -17,11 +17,13 @@ import (
 const (
 	InternalControlEventsPath = "/internal/v1/alarms/control-events"
 
-	ControlEventOutcomeUnknown         = "OUTCOME_UNKNOWN"
-	ControlEventPulsePowerUnconfirmed  = "PULSE_DELIVERED_POWER_UNCONFIRMED"
-	ControlEventEmergencyDORelease     = "EMERGENCY_DO_RELEASE"
-	controlFailureRuleRevision         = "control-safety-v1"
-	maximumControlEventRequestBodySize = int64(256 << 10)
+	ControlEventOutcomeUnknown            = "OUTCOME_UNKNOWN"
+	ControlEventPulsePowerUnconfirmed     = "PULSE_DELIVERED_POWER_UNCONFIRMED"
+	ControlEventEmergencyDORelease        = "EMERGENCY_DO_RELEASE"
+	ControlEventSetpointTrackingDeviation = "SETPOINT_TRACKING_DEVIATION"
+	ControlEventAutoRollbackFailed        = "AUTO_CONTROL_ROLLBACK_FAILED"
+	controlFailureRuleRevision            = "control-safety-v1"
+	maximumControlEventRequestBodySize    = int64(256 << 10)
 )
 
 var ErrControlEventInvalid = errors.New("control failure event payload is invalid")
@@ -209,6 +211,10 @@ func describeControlEvent(kind, commandID, capability, reasonCode, detail, actor
 			actorNote = "，操作人 " + actorID
 		}
 		return "EMERGENCY_DO_RELEASE", alarmmodel.SeverityCritical, "已触发全站紧急断电释放", fmt.Sprintf("已下发 EMERGENCY_DO_RELEASE 全站输出清零指令%s，请立即确认现场冷站与配电安全状态（%s）。", actorNote, diagnostic)
+	case ControlEventSetpointTrackingDeviation:
+		return "SETPOINT_TRACKING_DEVIATION", alarmmodel.SeverityMajor, "设定值下发后未收敛", fmt.Sprintf("自动控制指令下发后在收敛窗口内未达到目标设定值，可能受本地限幅、只读锁或执行机构响应异常影响，系统已触发回退检查（%s）。", diagnostic)
+	case ControlEventAutoRollbackFailed:
+		return "AUTO_CONTROL_ROLLBACK_FAILED", alarmmodel.SeverityCritical, "自动控制异常回退失败", fmt.Sprintf("自动控制进入异常触发条件但回退恢复指令未能确认成功，请值班人员立即核查冷站设定值与现场控制状态（%s）。", diagnostic)
 	default:
 		return "CONTROL_FAILURE_" + kind, alarmmodel.SeverityMajor, "控制链路异常告警", fmt.Sprintf("控制安全模块报告异常事件 %s（%s）。", kind, diagnostic)
 	}

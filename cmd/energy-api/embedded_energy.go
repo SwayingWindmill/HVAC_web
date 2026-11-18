@@ -975,13 +975,10 @@ func newEmbeddedAlarmServer(ctx context.Context, logger *slog.Logger, alarmRef *
 		Service: "energy-api-alarm", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond,
 	})
 	router, err := alarmservice.NewOwnerRouter(alarmservice.OwnerRouterConfig{
-		GatewaySPIFFE:   gatewaySPIFFE,
-		TelemetrySPIFFE: telemetrySPIFFE,
-		ReaderSPIFFE:    envOr("ALARM_OPERATIONS_AGENT_SPIFFE", "spiffe://hvac.local/operations-agent-service"),
-		ControlEventsSPIFFEs: []string{
-			envOr("ALARM_COMMAND_SPIFFE", "spiffe://hvac.local/command-service"),
-			envOr("ALARM_CONNECTIVITY_SPIFFE", "spiffe://hvac.local/connectivity-service"),
-		},
+		GatewaySPIFFE:        gatewaySPIFFE,
+		TelemetrySPIFFE:      telemetrySPIFFE,
+		ReaderSPIFFE:         envOr("ALARM_OPERATIONS_AGENT_SPIFFE", "spiffe://hvac.local/operations-agent-service"),
+		ControlEventsSPIFFEs: embeddedAlarmControlEventsSPIFFEs(),
 		GatewayHandler:       handler,
 		TelemetryHandler:     telemetryEvaluationHandler,
 		ControlEventsHandler: controlEventsHandler,
@@ -1215,6 +1212,14 @@ func embeddedCertificatePublicKey(path string) (crypto.PublicKey, error) {
 		return nil, err
 	}
 	return certificate.PublicKey, nil
+}
+
+func embeddedAlarmControlEventsSPIFFEs() []string {
+	return []string{
+		envOr("ALARM_COMMAND_SPIFFE", "spiffe://hvac.local/command-service"),
+		envOr("ALARM_CONNECTIVITY_SPIFFE", "spiffe://hvac.local/connectivity-service"),
+		envOr("ALARM_OPTIMIZATION_SPIFFE", "spiffe://hvac.local/optimization-service"),
+	}
 }
 
 func energyRequiredEnv(name string) string {
