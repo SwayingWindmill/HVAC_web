@@ -2,14 +2,17 @@ package adapter
 
 import (
 	"encoding/json"
+	"math"
 	"slices"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
 	defaultMaxTrackedSessions     = 65536
 	maxSupersededSessionsPerEntry = 16
+	maxReplayOffsetsPerGateway    = 65536
 )
 
 // SessionTransition describes a gateway online/offline lifecycle event or status update.
@@ -31,6 +34,9 @@ type GatewaySessionSnapshot struct {
 	HasSequence       bool
 	LastEventTime     int64
 	LastTelemetryTime int64
+	LiveEpoch         int64
+	LastLiveSequence  int64
+	HasLiveSequence   bool
 	Online            bool
 	HasTransition     bool
 }
@@ -43,6 +49,10 @@ type gatewaySessionState struct {
 	lastEventTime        int64
 	lastTelemetryTime    int64
 	lastTelemetrySession string
+	lastLiveSeq          int64
+	hasLiveSeq           bool
+	liveEpoch            int64
+	replayOffsets        boundedTouchMap[*int64]
 	online               bool
 	hasTransition        bool
 	superseded           []string
@@ -293,6 +303,63 @@ func (t *GatewaySessionTracker) ObserveTelemetry(gatewayID, sessionID string, ev
 	cur.lastTelemetrySession = sid
 }
 
+// NextReplayOffset returns a strictly monotonic offset per (gatewayID, deviceID,
+// pointCode) so edge replays and auto-backfills never collide or drop as out-of-order.
+func (t *GatewaySessionTracker) NextReplayOffset(gatewayID, deviceID, pointCode string, sampledAt time.Time) int64 {
+	candidate := sampledAt.UTC().UnixMicro()
+	gw := strings.TrimSpace(gatewayID)
+	if t == nil || gw == "" {
+		return max(candidate, 1)
+	}
+	key := PointBindingKey(strings.TrimSpace(deviceID), strings.TrimSpace(pointCode))
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	cur := t.getOrCreateLocked(gw)
+	if cur.replayOffsets.maxEntries == 0 {
+		cur.replayOffsets = newBoundedTouchMap[*int64](maxReplayOffsetsPerGateway)
+	}
+	slot := cur.replayOffsets.getOrCreate(key, func() *int64 {
+		return new(int64)
+	})
+	nextMin := int64(1)
+	if *slot > 0 {
+		if *slot < math.MaxInt64 {
+			nextMin = *slot + 1
+		} else {
+			nextMin = math.MaxInt64
+		}
+	}
+	next := max(candidate, nextMin)
+	*slot = next
+	return next
+}
+
+// LiveTelemetryEpoch starts at 0 and allocates a strictly higher epoch whenever a
+// non-replay gateway sequence regresses across a reconnect or reboot.
+func (t *GatewaySessionTracker) LiveTelemetryEpoch(gatewayID string, seq int64, now time.Time) int64 {
+	gw := strings.TrimSpace(gatewayID)
+	if t == nil || gw == "" {
+		return 0
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	cur := t.getOrCreateLocked(gw)
+	if !cur.hasLiveSeq {
+		cur.hasLiveSeq = true
+		cur.lastLiveSeq = seq
+		return cur.liveEpoch
+	}
+	if seq < cur.lastLiveSeq {
+		cur.liveEpoch = max(now.UTC().UnixMilli(), cur.liveEpoch+1)
+	}
+	cur.lastLiveSeq = seq
+	return cur.liveEpoch
+}
+
 // Snapshot returns the current tracked state for gatewayID, if any.
 func (t *GatewaySessionTracker) Snapshot(gatewayID string) (GatewaySessionSnapshot, bool) {
 	if t == nil {
@@ -313,6 +380,9 @@ func (t *GatewaySessionTracker) Snapshot(gatewayID string) (GatewaySessionSnapsh
 		HasSequence:       cur.hasSequence,
 		LastEventTime:     cur.lastEventTime,
 		LastTelemetryTime: cur.lastTelemetryTime,
+		LiveEpoch:         cur.liveEpoch,
+		LastLiveSequence:  cur.lastLiveSeq,
+		HasLiveSequence:   cur.hasLiveSeq,
 		Online:            cur.online,
 		HasTransition:     cur.hasTransition,
 	}, true

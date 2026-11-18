@@ -212,6 +212,9 @@ func NewRuntime(config Config, processor *Processor, logger *slog.Logger, metric
 	if runtime.processor != nil && runtime.processor.metrics == nil {
 		runtime.processor.metrics = runtime.metrics
 	}
+	if runtime.processor != nil && !runtime.processor.autoBackfillLagSet && config.AutoBackfillLagThreshold > 0 {
+		runtime.processor.autoBackfillLag = config.AutoBackfillLagThreshold
+	}
 	runtime.refreshQueueCapacityMetric()
 	runtime.recordProcessingQueueDepth(0)
 	runtime.refreshOnlineGateways()
@@ -299,6 +302,7 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 		return runtime.runWithSharedSession(ctx, runContext, runCancel, workerContext, workerCancel, heartbeatCancel, &heartbeatWG, &drained)
 	}
 
+	receiveMaximum := runtime.config.MQTT.effectiveReceiveMaximum()
 	clientConfig := autopaho.ClientConfig{
 		ServerUrls:                    []*url.URL{brokerURL},
 		TlsCfg:                        tlsConfig,
@@ -307,6 +311,14 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 		SessionExpiryInterval:         mqttSessionExpirySeconds,
 		ConnectTimeout:                mqttConnectTimeout,
 		ReconnectBackoff:              runtime.reconnectBackoff,
+		ConnectPacketBuilder: func(cp *paho.Connect, _ *url.URL) (*paho.Connect, error) {
+			if cp.Properties == nil {
+				cp.Properties = &paho.ConnectProperties{}
+			}
+			rm := receiveMaximum
+			cp.Properties.ReceiveMaximum = &rm
+			return cp, nil
+		},
 		AttemptConnection: func(attemptContext context.Context, _ autopaho.ClientConfig, server *url.URL) (net.Conn, error) {
 			return runtime.dial(attemptContext, tlsConfig, server)
 		},
@@ -1006,8 +1018,10 @@ func (runtime *Runtime) enqueue(ctx context.Context, connectionClosed <-chan str
 			if quarantineUplink != nil {
 				runtime.recordRateLimitQuarantineAsync(ctx, *quarantineUplink)
 			}
-			runtime.ack(gatewayID, received, ack)
-			return nil
+			// Leave the publish unacknowledged and drop the connection so the broker keeps
+			// QoS 1 messages in its session rather than discarding offline backlog.
+			runtime.closeCurrentConnection()
+			return fmt.Errorf("MQTT gateway %s ingress rate limited", gatewayID)
 		}
 	}
 
@@ -1117,11 +1131,21 @@ func (runtime *Runtime) ensureOverflowDirLocked() error {
 	return nil
 }
 
+func mailboxHasUnconsumed(mb *gatewayMailbox) bool {
+	if mb == nil {
+		return false
+	}
+	mb.mu.Lock()
+	defer mb.mu.Unlock()
+	return mb.memCount+mb.promoting+mb.overflowLenLocked() > 0 || mb.activeBytesLocked() > 0
+}
+
 func (runtime *Runtime) closeMailboxes() {
 	runtime.queuesMu.Lock()
 	removedIDs := make([]string, 0, len(runtime.queues))
 	seenRemoved := make(map[string]struct{}, len(runtime.queues)+len(runtime.states))
 	mailboxes := make([]*gatewayMailbox, 0, len(runtime.queues))
+	hasPendingBatch := false
 	for gatewayID, mailbox := range runtime.queues {
 		seenRemoved[gatewayID] = struct{}{}
 		removedIDs = append(removedIDs, gatewayID)
@@ -1132,6 +1156,9 @@ func (runtime *Runtime) closeMailboxes() {
 		if _, ok := seenRemoved[gatewayID]; !ok {
 			seenRemoved[gatewayID] = struct{}{}
 			removedIDs = append(removedIDs, gatewayID)
+		}
+		if len(state.pendingBatch) > 0 {
+			hasPendingBatch = true
 		}
 		if state.idleTimer != nil {
 			state.idleTimer.Stop()
@@ -1144,11 +1171,24 @@ func (runtime *Runtime) closeMailboxes() {
 		delete(runtime.states, gatewayID)
 	}
 	runtime.readyQueue = nil
-	removeFiles := runtime.ownedOverflowDir
+	hasUnconsumed := hasPendingBatch
+	for _, mailbox := range mailboxes {
+		if mailboxHasUnconsumed(mailbox) {
+			hasUnconsumed = true
+			break
+		}
+	}
+	removeFiles := runtime.ownedOverflowDir && !hasUnconsumed
 	ownedDir := ""
-	if runtime.ownedOverflowDir {
+	preservedOwnedDir := ""
+	if removeFiles {
 		ownedDir = runtime.overflowDir
 		runtime.overflowDir = ""
+		runtime.ownedOverflowDir = false
+	} else if runtime.ownedOverflowDir && hasUnconsumed {
+		preservedOwnedDir = runtime.overflowDir
+		// Clear ownership once preserved so idempotent second closeMailboxes calls
+		// in Run's defer cannot wipe out the retained spool directory.
 		runtime.ownedOverflowDir = false
 	}
 	runtime.queuesMu.Unlock()
@@ -1164,6 +1204,8 @@ func (runtime *Runtime) closeMailboxes() {
 	}
 	if ownedDir != "" {
 		_ = os.RemoveAll(ownedDir)
+	} else if preservedOwnedDir != "" && runtime.logger != nil {
+		runtime.logger.Warn("mqtt_uplink_overflow_preserved", "overflow_dir", preservedOwnedDir)
 	}
 }
 

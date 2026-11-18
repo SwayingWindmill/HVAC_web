@@ -39,3 +39,15 @@ func TestDeterministicPointEventIDRejectsOutOfRangeTimestamps(t *testing.T) {
 		}
 	}
 }
+
+func TestSourcePartitionsDecoupleReplayAndLiveEpochs(t *testing.T) {
+	if got := liveSourcePartition(" gw-1 ", 0, " ch-1 ", " temp "); got != "mqtt:gw-1:ch-1:temp" {
+		t.Fatalf("epoch 0 liveSourcePartition=%q", got)
+	}
+	if got := liveSourcePartition("gw-1", 1730000000123, "ch-1", "temp"); got != "mqtt:gw-1:e1730000000123:ch-1:temp" {
+		t.Fatalf("epoch > 0 liveSourcePartition=%q", got)
+	}
+	if got := replaySourcePartition(" gw-1 ", " ch-1 ", " temp "); got != "mqtt-replay:gw-1:ch-1:temp" {
+		t.Fatalf("replaySourcePartition=%q", got)
+	}
+}

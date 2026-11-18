@@ -160,6 +160,17 @@ func WithProcessorMetrics(metrics *observability.Registry) ProcessorOption {
 	}
 }
 
+// WithAutoBackfillLagThreshold promotes non-replay readings older than threshold to replay.
+func WithAutoBackfillLagThreshold(threshold time.Duration) ProcessorOption {
+	return func(processor *Processor) {
+		if threshold < 0 {
+			threshold = 0
+		}
+		processor.autoBackfillLag = threshold
+		processor.autoBackfillLagSet = true
+	}
+}
+
 type Processor struct {
 	identities         IdentityResolver
 	runtime            RuntimeClient
@@ -168,6 +179,8 @@ type Processor struct {
 	codecs             *CodecRegistry
 	sessionTracker     *GatewaySessionTracker
 	rateLimiter        *GatewayRateLimiter
+	autoBackfillLag    time.Duration
+	autoBackfillLagSet bool
 	now                func() time.Time
 	onGatewayConnected func(context.Context, string)
 	onGatewayPresence  func(string, bool)
@@ -382,7 +395,12 @@ func (processor *Processor) ProcessPrefix(ctx context.Context, messages []Uplink
 			return nil, err
 		}
 		if processor.onGatewayPresence != nil {
-			processor.onGatewayPresence(gateway.ID, true)
+			for _, outcome := range outcomes {
+				if outcome.Err == nil {
+					processor.onGatewayPresence(gateway.ID, true)
+					break
+				}
+			}
 		}
 		return outcomes, nil
 	case MessageTypeStatus:
@@ -402,6 +420,9 @@ func (processor *Processor) ProcessPrefix(ctx context.Context, messages []Uplink
 		}
 		result, err := processor.processEvent(ctx, gateway, first.Topic, first.Payload, envelope)
 		if err != nil {
+			if errors.Is(err, ErrTelemetryRequestInvalid) {
+				return processor.quarantinedOutcome(ctx, quarantine, QuarantineMessageInvalid, err)
+			}
 			return nil, err
 		}
 		return []ProcessingOutcome{{Result: result}}, nil
@@ -477,6 +498,9 @@ func (processor *Processor) processTelemetryBatch(ctx context.Context, gateway G
 	attachResolvedBindings(observations, gateway, bindings)
 	receipts, err := processor.sendObservationBatchChunks(ctx, observations)
 	if err != nil {
+		if errors.Is(err, ErrTelemetryRequestInvalid) {
+			return processor.isolateInvalidTelemetryBatch(ctx, gateway, firstQuarantine, observations, bounds, decodedFrames, messages, span, err)
+		}
 		if span != nil {
 			span.SetStatus("error", "accept observation batch failed")
 		}
@@ -507,12 +531,96 @@ func (processor *Processor) processTelemetryBatch(ctx context.Context, gateway G
 	return outcomes, nil
 }
 
+func (processor *Processor) isolateInvalidTelemetryBatch(
+	ctx context.Context,
+	gateway Gateway,
+	firstQuarantine UplinkQuarantine,
+	observations []Observation,
+	bounds []telemetryMessageBounds,
+	decodedFrames []DecodedTelemetry,
+	messages []UplinkMessage,
+	span *observability.Span,
+	batchErr error,
+) ([]ProcessingOutcome, error) {
+	if len(bounds) == 1 {
+		if span != nil {
+			span.SetStatus("error", "telemetry observation batch rejected")
+		}
+		return processor.quarantinedOutcome(ctx, firstQuarantine, QuarantineMessageInvalid, batchErr)
+	}
+
+	outcomes := make([]ProcessingOutcome, 0, len(bounds))
+	sessions := processor.sessions()
+	anySucceeded := false
+	for index, bound := range bounds {
+		msgObs := observations[bound.start:bound.end]
+		msgReceipts, msgErr := processor.sendObservationBatchChunks(ctx, msgObs)
+		if msgErr == nil {
+			result, resErr := buildProcessingResult(bound.messageID, bound.traceID, bound.replay, msgReceipts)
+			if resErr != nil {
+				if len(outcomes) > 0 {
+					return outcomes, nil
+				}
+				if span != nil {
+					span.SetStatus("error", "build processing result failed")
+				}
+				return nil, resErr
+			}
+			outcomes = append(outcomes, ProcessingOutcome{Result: result})
+			anySucceeded = true
+			if sessions != nil {
+				sessions.ObserveTelemetry(gateway.ID, decodedFrames[index].SessionID, decodedFrames[index].Envelope.Timestamp)
+			}
+			processor.recordPacket("UPLINK", "TELEMETRY", gateway.ID, messages[index].Topic, bound.traceID, messages[index].Payload)
+			continue
+		}
+		if errors.Is(msgErr, ErrTelemetryRequestInvalid) {
+			msgQuarantine := UplinkQuarantine{
+				TenantID:   gateway.TenantID,
+				GatewayID:  gateway.ID,
+				Topic:      messages[index].Topic,
+				Payload:    messages[index].Payload,
+				ReceivedAt: firstQuarantine.ReceivedAt,
+			}
+			qErr := processor.quarantine(ctx, msgQuarantine, QuarantineMessageInvalid, msgErr)
+			if !isPermanentMessageError(qErr) {
+				if len(outcomes) > 0 {
+					return outcomes, nil
+				}
+				if span != nil {
+					span.SetStatus("error", "quarantine invalid message failed")
+				}
+				return nil, qErr
+			}
+			outcomes = append(outcomes, ProcessingOutcome{Err: qErr})
+			continue
+		}
+		if len(outcomes) > 0 {
+			return outcomes, nil
+		}
+		if span != nil {
+			span.SetStatus("error", "accept observation batch failed")
+		}
+		return nil, msgErr
+	}
+	if span != nil {
+		if anySucceeded {
+			span.SetStatus("ok", "")
+		} else {
+			span.SetStatus("error", "telemetry observation batch rejected")
+		}
+	}
+	return outcomes, nil
+}
+
 const estimatedObservationEnvelopeOverheadBytes = 768
 
 func (processor *Processor) coalesceTelemetryBatch(ctx context.Context, gateway Gateway, firstDecoded DecodedTelemetry, messages []UplinkMessage) ([]Observation, []telemetryMessageBounds, []DecodedTelemetry, error) {
 	firstEnvelope := firstDecoded.Envelope
 	rootTraceID := normalizeTraceID(firstEnvelope.TraceID)
-	firstObs, err := buildEnvelopeObservations(gateway.ID, firstEnvelope, rootTraceID)
+	receivedAt := processor.now().UTC()
+	sessions := processor.sessions()
+	firstObs, err := buildEnvelopeObservations(gateway.ID, firstEnvelope, rootTraceID, sessions, processor.autoBackfillLag, receivedAt)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -553,7 +661,7 @@ func (processor *Processor) coalesceTelemetryBatch(ctx context.Context, gateway 
 		if msgTraceID == "" {
 			msgTraceID = rootTraceID
 		}
-		msgObs, err := buildEnvelopeObservations(gateway.ID, envelope, msgTraceID)
+		msgObs, err := buildEnvelopeObservations(gateway.ID, envelope, msgTraceID, sessions, processor.autoBackfillLag, receivedAt)
 		if err != nil {
 			break
 		}
@@ -580,15 +688,50 @@ func envelopePointCount(envelope TelemetryEnvelope) int {
 	return total
 }
 
-func buildEnvelopeObservations(gatewayID string, envelope TelemetryEnvelope, traceID string) ([]Observation, error) {
+func buildEnvelopeObservations(
+	gatewayID string,
+	envelope TelemetryEnvelope,
+	traceID string,
+	sessions *GatewaySessionTracker,
+	autoBackfillLag time.Duration,
+	receivedAt time.Time,
+) ([]Observation, error) {
 	traceID = normalizeTraceID(traceID)
 	observations := make([]Observation, 0, envelopePointCount(envelope))
+	liveEpoch := int64(0)
+	liveEpochResolved := false
 	for _, device := range envelope.Payload.Devices {
 		sourceKey := strings.TrimSpace(device.DeviceID)
-		sampledAt := unixMillisRFC3339(device.DeviceTimestamp)
+		sampledAtTime := time.UnixMilli(device.DeviceTimestamp).UTC()
+		sampledAt := sampledAtTime.Format(time.RFC3339Nano)
+		edgeReplay := envelope.Replay || (autoBackfillLag > 0 && receivedAt.Sub(sampledAtTime) > autoBackfillLag)
+
+		var epoch int64
+		if !edgeReplay {
+			if !liveEpochResolved {
+				if sessions != nil {
+					liveEpoch = sessions.LiveTelemetryEpoch(gatewayID, int64(envelope.Sequence), receivedAt)
+				}
+				liveEpochResolved = true
+			}
+			epoch = liveEpoch
+		}
+
 		for _, point := range device.Points {
 			pointCode := strings.TrimSpace(point.Code)
-			partition := sourcePartition(gatewayID, sourceKey, pointCode)
+			var partition string
+			var offset int64
+			if edgeReplay {
+				partition = replaySourcePartition(gatewayID, sourceKey, pointCode)
+				if sessions != nil {
+					offset = sessions.NextReplayOffset(gatewayID, sourceKey, pointCode, sampledAtTime)
+				} else {
+					offset = max(sampledAtTime.UnixMicro(), 1)
+				}
+			} else {
+				partition = liveSourcePartition(gatewayID, epoch, sourceKey, pointCode)
+				offset = int64(envelope.Sequence)
+			}
 			eventID, err := deterministicPointEventID(envelope.MessageID, device.DeviceTimestamp, point, partition)
 			if err != nil {
 				return nil, err
@@ -608,7 +751,8 @@ func buildEnvelopeObservations(gatewayID string, envelope TelemetryEnvelope, tra
 				Unit:               point.Unit,
 				WireQuality:        point.Quality,
 				SampledAt:          sampledAt,
-				SourcePosition:     SourcePosition{Partition: partition, Offset: int64(envelope.Sequence), EventID: eventID},
+				EdgeReplay:         edgeReplay,
+				SourcePosition:     SourcePosition{Partition: partition, Offset: offset, EventID: eventID},
 				TraceID:            traceID,
 			})
 		}

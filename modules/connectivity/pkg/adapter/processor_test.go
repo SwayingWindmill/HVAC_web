@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/quanlaihe/hvac-web/libs/observability"
@@ -720,4 +722,233 @@ func TestProcessorCompactV1BatchAndStatusLifecycleFencing(t *testing.T) {
 			t.Fatalf("presence[%d]=%v, want %v", i, presenceEvents[i], wantPresence[i])
 		}
 	}
+}
+
+func telemetryPayloadWithTimestamps(gatewayID, messageID string, sequence int, replay bool, deviceTS int64, sourceKey, pointCode string) []byte {
+	return []byte(fmt.Sprintf(`{"schemaVersion":"2.0","messageId":%q,"gatewayId":%q,"timestamp":%d,"sequence":%d,"replay":%t,"payload":{"devices":[{"deviceId":%q,"deviceTimestamp":%d,"points":[{"code":%q,"value":126.4,"quality":0,"unit":"kW"}]}]}}`,
+		messageID, gatewayID, deviceTS, sequence, replay, sourceKey, deviceTS, pointCode))
+}
+
+func TestProcessorEdgeReplayAutoBackfillAndRebootEpochDecoupling(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 11, 18, 10, 0, 0, 0, time.UTC)
+	telemetry := &fakeTelemetry{}
+	processor, err := NewProcessor(
+		newFakeIdentities(),
+		telemetry,
+		WithAutoBackfillLagThreshold(10*time.Minute),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	processor.now = func() time.Time { return now }
+
+	// Fresh live message (5m lag <= 10m): EdgeReplay=false, epoch 0 partition.
+	res1, err := processor.Process(context.Background(), telemetryTopic(testGatewayA),
+		telemetryPayloadWithTimestamps(testGatewayA, messageID(1), 10, false, now.Add(-5*time.Minute).UnixMilli(), "METER-01", "active_power"))
+	if err != nil || res1.Accepted != 1 {
+		t.Fatalf("msg 1 failed: res=%+v err=%v", res1, err)
+	}
+	// Exact boundary lag (10m == 10m): strictly > threshold is required, stays live.
+	res2, err := processor.Process(context.Background(), telemetryTopic(testGatewayA),
+		telemetryPayloadWithTimestamps(testGatewayA, messageID(2), 11, false, now.Add(-10*time.Minute).UnixMilli(), "METER-01", "active_power"))
+	if err != nil || res2.Accepted != 1 {
+		t.Fatalf("msg 2 failed: res=%+v err=%v", res2, err)
+	}
+	// Stale non-replay reading (10m+1ms lag > 10m) with regressed seq=3 promotes to
+	// EdgeReplay without bumping live epoch.
+	staleTS := now.Add(-10*time.Minute - time.Millisecond)
+	res3, err := processor.Process(context.Background(), telemetryTopic(testGatewayA),
+		telemetryPayloadWithTimestamps(testGatewayA, messageID(3), 3, false, staleTS.UnixMilli(), "METER-01", "active_power"))
+	if err != nil || res3.Accepted != 1 {
+		t.Fatalf("msg 3 failed: res=%+v err=%v", res3, err)
+	}
+	// Explicit replay=true with fresh timestamp and low seq=1 keeps live epoch untouched.
+	freshReplayTS := now.Add(-1 * time.Second)
+	res4, err := processor.Process(context.Background(), telemetryTopic(testGatewayA),
+		telemetryPayloadWithTimestamps(testGatewayA, messageID(4), 1, true, freshReplayTS.UnixMilli(), "METER-01", "active_power"))
+	if err != nil || res4.Accepted != 1 {
+		t.Fatalf("msg 4 failed: res=%+v err=%v", res4, err)
+	}
+	// Next live reading seq=12 stays on epoch 0 because prior replays did not reset live sequence.
+	res5, err := processor.Process(context.Background(), telemetryTopic(testGatewayA),
+		telemetryPayloadWithTimestamps(testGatewayA, messageID(5), 12, false, now.UnixMilli(), "METER-01", "active_power"))
+	if err != nil || res5.Accepted != 1 {
+		t.Fatalf("msg 5 failed: res=%+v err=%v", res5, err)
+	}
+	// Gateway reboots and sends live seq=1 (< 12): allocates new monotonic epoch partition.
+	res6, err := processor.Process(context.Background(), telemetryTopic(testGatewayA),
+		telemetryPayloadWithTimestamps(testGatewayA, messageID(6), 1, false, now.UnixMilli(), "METER-01", "active_power"))
+	if err != nil || res6.Accepted != 1 {
+		t.Fatalf("msg 6 failed: res=%+v err=%v", res6, err)
+	}
+	// Subsequent live reading seq=2 stays on the new epoch partition.
+	res7, err := processor.Process(context.Background(), telemetryTopic(testGatewayA),
+		telemetryPayloadWithTimestamps(testGatewayA, messageID(7), 2, false, now.UnixMilli(), "METER-01", "active_power"))
+	if err != nil || res7.Accepted != 1 {
+		t.Fatalf("msg 7 failed: res=%+v err=%v", res7, err)
+	}
+
+	obs := telemetry.accepted()
+	if len(obs) != 7 {
+		t.Fatalf("accepted=%d, want 7", len(obs))
+	}
+	liveBasePartition := "mqtt:" + testGatewayA + ":METER-01:active_power"
+	replayPartition := "mqtt-replay:" + testGatewayA + ":METER-01:active_power"
+	wantEpochPartition := fmt.Sprintf("mqtt:%s:e%d:METER-01:active_power", testGatewayA, now.UnixMilli())
+
+	if obs[0].EdgeReplay || obs[0].SourcePosition.Partition != liveBasePartition || obs[0].SourcePosition.Offset != 10 {
+		t.Fatalf("obs[0]=%+v", obs[0])
+	}
+	if obs[1].EdgeReplay || obs[1].SourcePosition.Partition != liveBasePartition || obs[1].SourcePosition.Offset != 11 {
+		t.Fatalf("obs[1]=%+v", obs[1])
+	}
+	if !obs[2].EdgeReplay || obs[2].SourcePosition.Partition != replayPartition || obs[2].SourcePosition.Offset != staleTS.UnixMicro() {
+		t.Fatalf("obs[2]=%+v", obs[2])
+	}
+	if !obs[3].EdgeReplay || obs[3].SourcePosition.Partition != replayPartition || obs[3].SourcePosition.Offset != freshReplayTS.UnixMicro() {
+		t.Fatalf("obs[3]=%+v", obs[3])
+	}
+	if obs[4].EdgeReplay || obs[4].SourcePosition.Partition != liveBasePartition || obs[4].SourcePosition.Offset != 12 {
+		t.Fatalf("obs[4]=%+v", obs[4])
+	}
+	if obs[5].EdgeReplay || obs[5].SourcePosition.Partition != wantEpochPartition || obs[5].SourcePosition.Offset != 1 {
+		t.Fatalf("obs[5]=%+v, want partition=%s offset=1", obs[5], wantEpochPartition)
+	}
+	if obs[6].EdgeReplay || obs[6].SourcePosition.Partition != wantEpochPartition || obs[6].SourcePosition.Offset != 2 {
+		t.Fatalf("obs[6]=%+v, want partition=%s offset=2", obs[6], wantEpochPartition)
+	}
+}
+
+func TestProcessorPoisonPill400BatchSplitAndQuarantine(t *testing.T) {
+	t.Parallel()
+
+	t.Run("coalesced batch isolates 400 poison pill and commits valid neighbors", func(t *testing.T) {
+		identities := newFakeIdentities()
+		telemetry := &fakeTelemetry{
+			failHook: func(_ int, batch []Observation) error {
+				for _, obs := range batch {
+					if obs.TelemetryKey == "poison_point" {
+						return &RequestInvalidError{Label: "S2 observation batch", StatusCode: http.StatusBadRequest}
+					}
+				}
+				return nil
+			},
+		}
+		processor := newTestProcessor(t, identities, telemetry)
+
+		messages := []UplinkMessage{
+			{Topic: telemetryTopic(testGatewayA), Payload: telemetryPayload(testGatewayA, messageID(1), 1, "METER-01", "active_power")},
+			{Topic: telemetryTopic(testGatewayA), Payload: telemetryPayload(testGatewayA, messageID(2), 2, "METER-01", "poison_point")},
+			{Topic: telemetryTopic(testGatewayA), Payload: telemetryPayload(testGatewayA, messageID(3), 3, "METER-01", "reactive_power")},
+		}
+		outcomes, err := processor.ProcessPrefix(context.Background(), messages)
+		if err != nil {
+			t.Fatalf("ProcessPrefix error: %v", err)
+		}
+		if len(outcomes) != 3 {
+			t.Fatalf("outcomes=%d, want 3", len(outcomes))
+		}
+		if outcomes[0].Err != nil || outcomes[0].Result.Accepted != 1 || outcomes[0].Result.MessageID != messageID(1) {
+			t.Fatalf("outcome[0]=%+v", outcomes[0])
+		}
+		if !isPermanentMessageError(outcomes[1].Err) {
+			t.Fatalf("outcome[1].Err=%v, want permanent quarantine error", outcomes[1].Err)
+		}
+		if outcomes[2].Err != nil || outcomes[2].Result.Accepted != 1 || outcomes[2].Result.MessageID != messageID(3) {
+			t.Fatalf("outcome[2]=%+v", outcomes[2])
+		}
+		quarantines := identities.snapshotQuarantines()
+		if len(quarantines) != 1 || quarantines[0].ReasonCode != QuarantineMessageInvalid || !strings.Contains(string(quarantines[0].Payload), "poison_point") {
+			t.Fatalf("quarantines=%+v, want 1 MESSAGE_INVALID for poison_point", quarantines)
+		}
+		accepted := telemetry.accepted()
+		if len(accepted) != 2 || accepted[0].TelemetryKey != "active_power" || accepted[1].TelemetryKey != "reactive_power" {
+			t.Fatalf("accepted=%+v, want active_power and reactive_power", accepted)
+		}
+	})
+
+	t.Run("single message 400 quarantines without duplicate HTTP call", func(t *testing.T) {
+		identities := newFakeIdentities()
+		var calls int
+		telemetry := &fakeTelemetry{
+			failHook: func(_ int, _ []Observation) error {
+				calls++
+				return &RequestInvalidError{Label: "S2 observation batch", StatusCode: http.StatusBadRequest}
+			},
+		}
+		processor := newTestProcessor(t, identities, telemetry)
+		outcomes, err := processor.ProcessPrefix(context.Background(), []UplinkMessage{
+			{Topic: telemetryTopic(testGatewayA), Payload: telemetryPayload(testGatewayA, messageID(1), 1, "METER-01", "poison_point")},
+		})
+		if err != nil {
+			t.Fatalf("ProcessPrefix error: %v", err)
+		}
+		if len(outcomes) != 1 || !isPermanentMessageError(outcomes[0].Err) {
+			t.Fatalf("outcomes=%+v, want 1 permanent error", outcomes)
+		}
+		if calls != 1 {
+			t.Fatalf("AcceptObservationBatch calls=%d, want 1", calls)
+		}
+		if len(identities.snapshotQuarantines()) != 1 {
+			t.Fatalf("quarantines=%d, want 1", len(identities.snapshotQuarantines()))
+		}
+	})
+
+	t.Run("transient 503 mid-fallback preserves already-handled prefix", func(t *testing.T) {
+		identities := newFakeIdentities()
+		telemetry := &fakeTelemetry{
+			failHook: func(_ int, batch []Observation) error {
+				for _, obs := range batch {
+					if obs.TelemetryKey == "poison_point" {
+						return &RequestInvalidError{Label: "S2 observation batch", StatusCode: http.StatusBadRequest}
+					}
+					if obs.TelemetryKey == "transient_point" {
+						return errors.New("503 unavailable")
+					}
+				}
+				return nil
+			},
+		}
+		processor := newTestProcessor(t, identities, telemetry)
+		messages := []UplinkMessage{
+			{Topic: telemetryTopic(testGatewayA), Payload: telemetryPayload(testGatewayA, messageID(1), 1, "METER-01", "active_power")},
+			{Topic: telemetryTopic(testGatewayA), Payload: telemetryPayload(testGatewayA, messageID(2), 2, "METER-01", "poison_point")},
+			{Topic: telemetryTopic(testGatewayA), Payload: telemetryPayload(testGatewayA, messageID(3), 3, "METER-01", "transient_point")},
+		}
+		outcomes, err := processor.ProcessPrefix(context.Background(), messages)
+		if err != nil {
+			t.Fatalf("expected handled prefix outcomes without error, got err=%v", err)
+		}
+		if len(outcomes) != 2 || outcomes[0].Err != nil || !isPermanentMessageError(outcomes[1].Err) {
+			t.Fatalf("outcomes=%+v, want 2 outcomes [ok, permanent]", outcomes)
+		}
+		if len(telemetry.accepted()) != 1 || len(identities.snapshotQuarantines()) != 1 {
+			t.Fatalf("accepted=%d quarantines=%d, want 1 and 1", len(telemetry.accepted()), len(identities.snapshotQuarantines()))
+		}
+	})
+
+	t.Run("event 400 quarantines as MESSAGE_INVALID", func(t *testing.T) {
+		identities := newFakeIdentities()
+		telemetry := &eventErrorTelemetry{fakeTelemetry: &fakeTelemetry{}, err: &RequestInvalidError{Label: "MQTT evidence", StatusCode: http.StatusBadRequest}}
+		processor := newTestProcessor(t, identities, telemetry)
+		_, err := processor.Process(context.Background(), eventTopic(testGatewayA), eventPayload(testGatewayA, messageID(1), 1))
+		if !isPermanentMessageError(err) {
+			t.Fatalf("err=%v, want permanent quarantine error", err)
+		}
+		quarantines := identities.snapshotQuarantines()
+		if len(quarantines) != 1 || quarantines[0].ReasonCode != QuarantineMessageInvalid {
+			t.Fatalf("quarantines=%+v, want 1 MESSAGE_INVALID", quarantines)
+		}
+	})
+}
+
+type eventErrorTelemetry struct {
+	*fakeTelemetry
+	err error
+}
+
+func (e *eventErrorTelemetry) AcceptRuntimeEvent(_ context.Context, _ RuntimeEventEvidence) error {
+	return e.err
 }
