@@ -1500,6 +1500,18 @@ func TestDeployScriptProtectsRuntimeSecretsAndDropsDeadKeygen(t *testing.T) {
 	} {
 		assertPerm(workloadSecret, func(m os.FileMode) bool { return m == 0o640 || m == 0o600 }, "0640 or 0600 (not world-readable)")
 	}
+	assertPerm("data/otel-collector", func(m os.FileMode) bool { return m == 0o750 }, "0750")
+
+	calls := string(mustRead(t, log))
+	for _, wantOwnership := range []string{
+		"chown -R 65532:65532",
+		"chown -R 0:65532",
+		"chown -R 10001:10001 /runtime/data/otel-collector",
+	} {
+		if !strings.Contains(calls, wantOwnership) {
+			t.Fatalf("deploy.sh missing ownership hardening %q in:\n%s", wantOwnership, calls)
+		}
+	}
 }
 
 // seedContent gives a seeded image a filesystem and a `docker image inspect` config.

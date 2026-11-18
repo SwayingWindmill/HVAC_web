@@ -795,6 +795,7 @@ services:
 
   operations-agent-service:
     restart: unless-stopped
+    group_add: ["65532"]
     security_opt:
       - no-new-privileges:true
     read_only: true
@@ -1063,6 +1064,7 @@ services:
     profiles: ["integration"]
     image: eclipse-mosquitto:2.1.2-alpine
     restart: unless-stopped
+    group_add: ["65532"]
     environment:
       TZ: ${TZ:-Asia/Shanghai}
     ports:
@@ -1082,6 +1084,7 @@ services:
   centrifugo:
     image: centrifugo/centrifugo:v6.8.1
     restart: unless-stopped
+    group_add: ["65532"]
     command: ["/usr/local/bin/centrifugo", "--config", "/centrifugo/centrifugo.json"]
     environment:
       TZ: ${TZ:-Asia/Shanghai}
@@ -1116,11 +1119,13 @@ services:
     profiles: ["observability-logs", "observability-full"]
     image: otel/opentelemetry-collector-contrib:0.111.0
     restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
     command: ["--config=/etc/otelcol-contrib/configs/${PHASE1_OBSERVABILITY_CONFIG:-logs}.yaml"]
     volumes:
       - ./observability/otel-collector:/etc/otelcol-contrib/configs:ro
       - ${HOST_DOCKER_LOG_DIR:-/var/lib/docker/containers}:/var/lib/docker/containers:ro
-      - otel-collector-data:/var/lib/otelcol/file_storage
+      - ${OTEL_COLLECTOR_DATA_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/data/otel-collector}:/var/lib/otelcol/file_storage
     expose: ["4317", "4318", "9464", "13133"]
     networks: [application, observability]
     cpus: ${OTEL_COLLECTOR_CPUS:-0.50}
@@ -1157,6 +1162,7 @@ services:
     profiles: ["observability-core", "observability-logs", "observability-full"]
     image: prom/alertmanager:v0.27.0
     restart: unless-stopped
+    group_add: ["65532"]
     environment:
       TZ: ${TZ:-Asia/Shanghai}
     entrypoint: ["/bin/sh", "/etc/alertmanager/render-and-run.sh"]
@@ -1354,5 +1360,4 @@ volumes:
   tempo-data: {}
   grafana-data: {}
   alertmanager-data: {}
-  otel-collector-data: {}
   connectivity-spool: {}

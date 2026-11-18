@@ -36,7 +36,7 @@ export PLATFORM_PUBLIC_ORIGIN=https://hvac.swayingwindmill.online
 R=$PHASE1_RUNTIME_DIR
 L="node scripts/phase1-wsl-compose.mjs"
 step() { echo "== $* $(date -Is)"; }
-service_dir() { mkdir -p "$1"; docker run --rm --user 0 --entrypoint chown -v "$1:/data" postgres:16.4-bookworm 65532:65532 /data; }
+service_dir() { mkdir -p "$1"; docker run --rm --user 0 --entrypoint chown -v "$1:/data" postgres:16.4-bookworm -R "${2:-65532:65532}" /data; }
 
 step "release ${HVAC_WEB_BUILD_ID}"
 
@@ -45,9 +45,14 @@ node scripts/issue-workload-identities.mjs
 
 step permissions
 chmod 700 "$R"
-mkdir -p "$R/backups/postgres/base" "$R/backups/clickhouse" "$R/alarm-delivery"
-service_dir "$R/identity"
-service_dir "$R/iam"
+mkdir -p "$R/backups/postgres/base" "$R/backups/clickhouse" "$R/alarm-delivery" "$R/data/otel-collector"
+chmod 750 "$R/data/otel-collector"
+# Non-root containers run under UID 65532 (Go services), supplementary group 65532 (alertmanager/mqtt/centrifugo/operations-agent), or UID 10001 (otel-collector).
+docker run --rm --user 0 --entrypoint sh -v "$R:/runtime" postgres:16.4-bookworm -c '
+  for d in identity iam gateway-ca; do [ -d "/runtime/$d" ] && chown -R 65532:65532 "/runtime/$d"; done
+  for d in internal-pki mqtt-pki alert-receiver alarm-delivery secrets; do [ -d "/runtime/$d" ] && chown -R 0:65532 "/runtime/$d"; done
+  chown -R 10001:10001 /runtime/data/otel-collector
+'
 # Postgres requires 0700 on PGDATA; keep data/ untouched and restrict secret/PKI dirs to 0750.
 find "$R" -mindepth 1 -type d \
   ! \( -path "$R/data" -o -path "$R/data/*" \
