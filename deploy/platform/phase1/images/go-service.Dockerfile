@@ -22,6 +22,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -buildvcs=false -ldflags="-s -w"
 
 FROM ${GO_RUNTIME_IMAGE}
 WORKDIR /
+COPY --from=build /usr/share/zoneinfo /usr/share/zoneinfo
 COPY --from=build --chown=65532:65532 /out/service /service
 COPY --from=build --chown=65532:65532 /out/healthcheck /healthcheck
 COPY --from=build --chown=65532:65532 /out/spool /var/lib/hvac/connectivity-spool

@@ -1,10 +1,16 @@
 # 从备份恢复
 
-夜间备份是 `hvac-backup.timer`（每天 03:30，上海时间），脚本是 `deploy/platform/phase1/backup/run-scheduled-backups.sh`。PostgreSQL 用 `pg_basebackup`（tar、gzip、带一份 WAL），ClickHouse 用 `BACKUP DATABASE telemetry_history, DATABASE analytics` 写到磁盘 `phase1_backups`。每种默认留最新 7 份。
+夜间备份是 `hvac-backup.timer`（每天 03:30，上海时间），脚本是 `deploy/platform/phase1/backup/run-scheduled-backups.sh`。PostgreSQL 用 `pg_basebackup`（tar、gzip、带一份 WAL），ClickHouse 用 `BACKUP DATABASE telemetry_history, DATABASE analytics` 写到磁盘 `phase1_backups`。每种默认按 `YYYYMMDDTHHMMSSZ` 目录名保留最新 `BACKUP_KEEP` 份（默认 7 份），只清理符合时间戳格式的目录，不会误删其他文件。
 
-备份和数据库现在在同一块盘上。它能对付误删和库文件损坏，不能对付整块盘一起坏掉。整机换盘要等备份拷到别的机器之后才做得到，那一步还没做。
+如果只跑本地目录且没有配置异地同步，备份和数据库就在同一台机器上：能对付误删和库文件损坏，不能对付整台服务器或整块盘一起坏掉。要做到整机换盘后还能恢复，需要在环境文件里配置 `BACKUP_OFFSITE_SYNC_CMD`（或在主机挂独立的异地存储）。
 
 恢复会覆盖现有数据。先停写入，再动手。
+
+## 备份清理、异地同步与就绪检查
+
+1. **PostgreSQL WAL 归档清理**：删掉旧的 PostgreSQL 基础备份后，`run-scheduled-backups.sh` 会找留下来最老的那份基础备份，从它的 `backup_manifest` 或 `base.tar.gz` 里的 `backup_label`（找不到时再回退匹配 `POSTGRES_WAL_ARCHIVE_DIR` 里最老的 `.backup` 文件）拿到起始 WAL 编号，然后在 `postgres` 容器内执行 `pg_archivecleanup /var/lib/postgresql/wal-archive <起始WAL编号或.backup文件名>`，清掉比它更早的 WAL 段。例如 `BACKUP_KEEP=7` 时，第 8 天删掉第 1 天的基础备份，第 1 天之前的 WAL 段会一并清理，既防止归档目录无限膨胀，又保证留下的 7 份基础备份都能继续做时间点恢复。
+2. **异地同步钩子（`BACKUP_OFFSITE_SYNC_CMD`）**：`run-scheduled-backups.sh` 支持可选环境变量 `BACKUP_OFFSITE_SYNC_CMD`。默认留空不执行；配置后（例如通过 `rsync` 或 `rclone` 把备份和 WAL 目录推到异地机器或对象存储），脚本会在本地备份与过期清理完成后执行 `bash -c "${BACKUP_OFFSITE_SYNC_CMD}"`，只有命令返回 0 才会把当前 Unix 时间戳写入运行目录的 `observability/offsite-backup.success`，命令失败则直接报错退出，不会误写成功标记。
+3. **恢复就绪检查（`verify-recovery-readiness.sh`）**：运行 `deploy/platform/phase1/backup/verify-recovery-readiness.sh` 时，先检查 `POSTGRES_WAL_ARCHIVE_DIR` 最新归档的 WAL 距今不超过 `POSTGRES_RPO_TARGET_SECONDS`（默认 `300` 秒，即 5 分钟），并核对最新 PostgreSQL 基础备份里的 `SHA256SUMS`。当环境变量 `CLICKHOUSE_BACKUP_DIR` 非空时，还会检查该目录下最新的 `YYYYMMDDTHHMMSSZ` 备份目录存在、里面至少包含一个备份文件、且距今不超过 `CLICKHOUSE_RPO_TARGET_SECONDS`（默认 `90000` 秒，即 25 小时，对应每天一次备份加 1 小时缓冲）。
 
 ## 恢复前
 

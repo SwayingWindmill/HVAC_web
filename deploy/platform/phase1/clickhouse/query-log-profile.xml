@@ -2,10 +2,14 @@
     <!-- Every query used to write two query_log rows: QueryStart and QueryFinish (or an exception).
          The finish row has everything the start row has plus duration, rows and errors, so start rows
          are dropped. Exceptions, including ones raised before a query starts, are still logged.
-         SQL-created users have no settings profile of their own and take these from default. -->
+         SQL-created users have no settings profile of their own and take these from default.
+         Cap per-query memory at 1 GiB and spill GROUP BY/ORDER BY at 512 MiB so one heavy scan cannot OOM the server. -->
     <profiles>
         <default>
             <log_queries_min_type>QUERY_FINISH</log_queries_min_type>
+            <max_memory_usage>1073741824</max_memory_usage>
+            <max_bytes_before_external_group_by>536870912</max_bytes_before_external_group_by>
+            <max_bytes_before_external_sort>536870912</max_bytes_before_external_sort>
         </default>
     </profiles>
 </clickhouse>

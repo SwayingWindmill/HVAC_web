@@ -25,9 +25,17 @@ schema_config:
         prefix: index_
         period: 24h
 
+# Loki 3.x uses compactor retention with TSDB; table_manager retention is a no-op here.
+compactor:
+  working_directory: /loki/compactor
+  compaction_interval: 10m
+  retention_enabled: true
+  retention_delete_delay: 2h
+  retention_delete_worker_count: 50
+  delete_request_store: filesystem
+
 limits_config:
   retention_period: 336h
-
-table_manager:
-  retention_deletes_enabled: true
-  retention_period: 336h
+  ingestion_rate_mb: 8
+  ingestion_burst_size_mb: 16
+  max_line_size: 256KB

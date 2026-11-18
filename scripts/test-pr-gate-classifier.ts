@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import {
+  findComposePortExposureViolations,
   findDebugMarkerViolations,
   findHandoffBudgetViolations,
   findRequiredGuardrailFileViolations,
@@ -441,4 +442,129 @@ test('repository governance enforces 1:1 skill parity, required hook files, and 
     ['c.go', 'd.go'],
   ]);
   assert.deepEqual(splitArgsByLength([]), []);
+});
+
+test('repository governance blocks non-loopback Compose port mappings outside exempted phase1 public listeners', () => {
+  const composeSandbox = mkdtempSync(join(tmpdir(), 'hvac-compose-ports-'));
+  try {
+    mkdirSync(join(composeSandbox, 'infra/alarm'), { recursive: true });
+    mkdirSync(join(composeSandbox, 'infra/telemetry'), { recursive: true });
+    mkdirSync(join(composeSandbox, 'deploy/platform/phase1'), { recursive: true });
+    mkdirSync(join(composeSandbox, 'semantic/cube'), { recursive: true });
+
+    writeFileSync(
+      join(composeSandbox, 'infra/alarm/compose.yaml'),
+      [
+        'services:',
+        '  postgres:',
+        '    ports:',
+        '      - "127.0.0.1:${S4_POSTGRES_HOST_PORT:-55434}:5432"',
+        '',
+      ].join('\n'),
+    );
+    writeFileSync(
+      join(composeSandbox, 'deploy/platform/phase1/compose.yaml'),
+      [
+        'services:',
+        '  nginx:',
+        '    ports:',
+        '      - "${HTTPS_PORT:-443}:443"',
+        '  mqtt-broker:',
+        '    ports:',
+        '      - "${MQTT_TLS_PORT:-8883}:8883"',
+        '',
+      ].join('\n'),
+    );
+    writeFileSync(
+      join(composeSandbox, 'semantic/cube/compose.yaml'),
+      [
+        'services:',
+        '  cube:',
+        '    ports: ["127.0.0.1:${CUBE_HOST_PORT:-4000}:4000"]',
+        '',
+      ].join('\n'),
+    );
+
+    assert.deepEqual(
+      findComposePortExposureViolations({
+        root: composeSandbox,
+        trackedFiles: [
+          'infra/alarm/compose.yaml',
+          'deploy/platform/phase1/compose.yaml',
+          'semantic/cube/compose.yaml',
+        ],
+      }),
+      [],
+    );
+
+    writeFileSync(
+      join(composeSandbox, 'infra/alarm/compose.yaml'),
+      [
+        'services:',
+        '  postgres:',
+        '    ports:',
+        '      - "${S4_POSTGRES_HOST_PORT:-55434}:5432"',
+        '',
+      ].join('\n'),
+    );
+    writeFileSync(
+      join(composeSandbox, 'infra/telemetry/compose.yaml'),
+      [
+        'services:',
+        '  pg:',
+        '    ports:',
+        '      - "0.0.0.0:5432:5432"',
+        '  ch:',
+        '    ports: ["8123:8123"]',
+        '  long:',
+        '    ports:',
+        '      - target: 6379',
+        '        published: 6379',
+        '',
+      ].join('\n'),
+    );
+    writeFileSync(
+      join(composeSandbox, 'deploy/platform/phase1/owner-split.compose.yaml'),
+      [
+        'services:',
+        '  iam-owner:',
+        '    ports:',
+        '      - "${HTTPS_PORT:-443}:443"',
+        '',
+      ].join('\n'),
+    );
+    writeFileSync(
+      join(composeSandbox, 'deploy/platform/phase1/wsl.override.yaml'),
+      [
+        'services:',
+        '  postgres:',
+        '    ports: ["5432:5432"]',
+        '  web:',
+        '    ports:',
+        '      - 8080:80',
+        '',
+      ].join('\n'),
+    );
+
+    const violations = findComposePortExposureViolations({
+      root: composeSandbox,
+      trackedFiles: [
+        'infra/alarm/compose.yaml',
+        'infra/telemetry/compose.yaml',
+        'deploy/platform/phase1/compose.yaml',
+        'deploy/platform/phase1/owner-split.compose.yaml',
+        'deploy/platform/phase1/wsl.override.yaml',
+      ],
+    });
+    assert.equal(violations.length, 7);
+    assert.ok(violations.some((v) => v.includes('infra/alarm/compose.yaml:4:')));
+    assert.ok(violations.some((v) => v.includes('0.0.0.0:5432:5432')));
+    assert.ok(violations.some((v) => v.includes('8123:8123')));
+    assert.ok(violations.some((v) => v.includes('host_ip=<unset> target=6379')));
+    assert.ok(violations.some((v) => v.includes('deploy/platform/phase1/owner-split.compose.yaml:4:')));
+    assert.ok(violations.some((v) => v.includes('deploy/platform/phase1/wsl.override.yaml:3:')));
+    assert.ok(violations.some((v) => v.includes('deploy/platform/phase1/wsl.override.yaml:6:') && v.includes('"8080:80"')));
+  } finally {
+    rmSync(composeSandbox, { recursive: true, force: true });
+  }
 });

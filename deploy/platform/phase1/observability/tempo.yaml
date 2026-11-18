@@ -18,4 +18,11 @@ storage:
 
 compactor:
   compaction:
-    block_retention: 336h
+    block_retention: 168h
+
+overrides:
+  defaults:
+    ingestion:
+      max_traces_per_user: 10000
+    global:
+      max_bytes_per_trace: 5000000

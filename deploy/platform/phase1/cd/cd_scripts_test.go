@@ -1367,6 +1367,165 @@ func TestReleaseShipsAndRunsTheRepositoryDeployScript(t *testing.T) {
 	}
 }
 
+func TestDeployScriptProtectsRuntimeSecretsAndDropsDeadKeygen(t *testing.T) {
+	scriptBody := string(mustRead(t, "deploy.sh"))
+	if strings.Contains(scriptBody, "iam-api-credential-keygen") || strings.Contains(scriptBody, "api-credential.pepper") {
+		t.Fatal("deploy.sh still references removed iam-api-credential-keygen")
+	}
+
+	revision := "0123456789abcdef0123456789abcdef01234567"
+	platform, bin, log := deployFixture(t, revision)
+	runtime := filepath.Join(platform, "deploy", "platform", "phase1", "runtime", "server")
+
+	dirs := []string{
+		"identity",
+		"iam",
+		"gateway-ca",
+		"internal-pki",
+		"internal-pki/forecast",
+		"db-role-credentials",
+		"alert-receiver",
+		"alarm-delivery",
+		"mqtt-pki",
+		"observability/textfile",
+	}
+	for _, dir := range dirs {
+		full := filepath.Join(runtime, dir)
+		if err := os.MkdirAll(full, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(full, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	seedFiles := []string{
+		"internal-pki/ca.crt",
+		"internal-pki/ca.key",
+		"internal-pki/ca.srl",
+		"internal-pki/forecast/tls.crt",
+		"internal-pki/forecast/tls.key",
+		"gateway-ca/trusted-client-ca.pem",
+		"gateway-ca/ca.key",
+		"gateway-ca/connectivity.crt",
+		"identity/signing-key.pem",
+		"identity/mfa-encryption.key",
+		"identity/wechat-miniprogram-appsecret",
+		"db-role-credentials/roles.sql",
+		"local-admin.credentials",
+		"alert-receiver/smtp.env",
+		"alert-receiver/smtp-password",
+		"alert-receiver/wecom-webhook-url",
+		"alarm-delivery/alarm-send-token",
+		"alarm-delivery/recipients.json",
+		"mqtt-pki/mqtt-broker-key.pem",
+		"observability/textfile/backup.prom",
+	}
+	for _, rel := range seedFiles {
+		full := filepath.Join(runtime, rel)
+		if err := os.WriteFile(full, []byte("fixture\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(full, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cmd := exec.Command("bash", "deploy.sh")
+	cmd.Env = commandEnv(bin, "HVAC_PLATFORM_DIR="+platform, "CALLS_LOG="+log)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("deploy.sh: %v\n%s", err, output)
+	}
+
+	assertPerm := func(rel string, check func(os.FileMode) bool, desc string) {
+		t.Helper()
+		info, statErr := os.Stat(filepath.Join(runtime, rel))
+		if statErr != nil {
+			t.Fatalf("stat %s: %v", rel, statErr)
+		}
+		perm := info.Mode().Perm()
+		if !check(perm) {
+			t.Fatalf("%s mode = %#o, want %s", rel, perm, desc)
+		}
+	}
+
+	info, err := os.Stat(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o700 {
+		t.Fatalf("runtime root mode = %#o, want 0700", perm)
+	}
+
+	for _, sensitiveDir := range []string{
+		"identity",
+		"iam",
+		"gateway-ca",
+		"internal-pki",
+		"internal-pki/forecast",
+		"db-role-credentials",
+		"alert-receiver",
+		"alarm-delivery",
+		"mqtt-pki",
+	} {
+		assertPerm(sensitiveDir, func(m os.FileMode) bool { return m == 0o750 }, "0750")
+	}
+
+	for _, publicCert := range []string{
+		"internal-pki/ca.crt",
+		"internal-pki/forecast/tls.crt",
+		"gateway-ca/trusted-client-ca.pem",
+		"gateway-ca/connectivity.crt",
+		"observability/textfile/backup.prom",
+	} {
+		assertPerm(publicCert, func(m os.FileMode) bool { return m == 0o644 }, "0644")
+	}
+
+	for _, hostOnly := range []string{
+		"internal-pki/ca.key",
+		"internal-pki/ca.srl",
+		"gateway-ca/ca.key",
+		"db-role-credentials/roles.sql",
+		"local-admin.credentials",
+	} {
+		assertPerm(hostOnly, func(m os.FileMode) bool { return m == 0o600 }, "0600")
+	}
+
+	for _, workloadSecret := range []string{
+		"internal-pki/forecast/tls.key",
+		"identity/signing-key.pem",
+		"identity/mfa-encryption.key",
+		"identity/wechat-miniprogram-appsecret",
+		"alert-receiver/smtp.env",
+		"alert-receiver/smtp-password",
+		"alert-receiver/wecom-webhook-url",
+		"alarm-delivery/alarm-send-token",
+		"alarm-delivery/recipients.json",
+		"mqtt-pki/mqtt-broker-key.pem",
+	} {
+		assertPerm(workloadSecret, func(m os.FileMode) bool { return m == 0o640 || m == 0o600 }, "0640 or 0600 (not world-readable)")
+	}
+	assertPerm("data/otel-collector", func(m os.FileMode) bool { return m == 0o750 }, "0750")
+	assertPerm("backups/clickhouse", func(m os.FileMode) bool { return m == 0o750 }, "0750")
+	assertPerm("backups/postgres/base", func(m os.FileMode) bool { return m == 0o750 }, "0750")
+	assertPerm("backups/postgres/wal", func(m os.FileMode) bool { return m == 0o750 }, "0750")
+
+	calls := string(mustRead(t, log))
+	for _, wantOwnership := range []string{
+		"chown -R 65532:65532",
+		"chown -R 0:65532",
+		"chown -R 1883:65532 /runtime/mqtt-pki",
+		"chown -R 101:101 /runtime/backups/clickhouse",
+		"chown -R 999:999 /runtime/backups/postgres",
+		"chown -R 10001:10001 /runtime/data/otel-collector",
+	} {
+		if !strings.Contains(calls, wantOwnership) {
+			t.Fatalf("deploy.sh missing ownership hardening %q in:\n%s", wantOwnership, calls)
+		}
+	}
+}
+
 // seedContent gives a seeded image a filesystem and a `docker image inspect` config.
 func seedContent(t *testing.T, store, id string, files map[string]string, config string) {
 	t.Helper()

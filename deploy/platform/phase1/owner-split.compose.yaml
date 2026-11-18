@@ -1,8 +1,13 @@
+x-owner-env: &owner-env
+  TZ: ${TZ:-Asia/Shanghai}
+
 x-owner-service: &owner-service
   profiles: ["owner-split"]
   restart: unless-stopped
   env_file:
     - ${PHASE1_ENV_FILE:?PHASE1_ENV_FILE is required}
+  environment:
+    <<: *owner-env
   depends_on:
     phase1-schema-preflight:
       condition: service_completed_successfully
@@ -52,6 +57,7 @@ services:
       args: { SERVICE_PACKAGE: ./modules/iam/cmd/iam-owner }
     image: ${IAM_SERVICE_IMAGE:-hvac/iam-service:0.1.0-dev}
     environment:
+      <<: *owner-env
       IAM_SERVICE_ADDR: :8444
       IAM_DIAGNOSTICS_ADDR: :19083
     expose: ["8444", "19083"]
@@ -74,6 +80,7 @@ services:
         }
     image: ${CORE_SERVICE_IMAGE:-hvac/platform-core-service:0.1.0-dev}
     environment:
+      <<: *owner-env
       CORE_SERVICE_ADDR: :18445
       CORE_DIAGNOSTICS_ADDR: :19084
       CORE_IAM_ENDPOINT: https://iam-owner:8444
@@ -112,6 +119,7 @@ services:
         }
     image: ${TELEMETRY_QUERY_SERVICE_IMAGE:-hvac/telemetry-query-service:0.1.0-dev}
     environment:
+      <<: *owner-env
       QUERY_SERVICE_ADDR: :18447
       QUERY_DIAGNOSTICS_ADDR: :19088
     expose: ["18447", "19088"]
@@ -131,6 +139,7 @@ services:
       args: { SERVICE_PACKAGE: ./modules/command/cmd/command-owner }
     image: ${COMMAND_SERVICE_IMAGE:-hvac/command-service:0.1.0-dev}
     environment:
+      <<: *owner-env
       COMMAND_SERVICE_ADDR: :8447
       COMMAND_DIAGNOSTICS_ADDR: :19087
       IAM_URL: https://iam-owner:8444
@@ -156,6 +165,7 @@ services:
       args: { SERVICE_PACKAGE: ./modules/alarm/cmd/alarm-owner }
     image: ${ALARM_SERVICE_IMAGE:-hvac/alarm-service:0.1.0-dev}
     environment:
+      <<: *owner-env
       ALARM_SERVICE_ADDR: :8448
       ALARM_DIAGNOSTICS_ADDR: :19088
     expose: ["8448", "19088"]
@@ -178,6 +188,7 @@ services:
         }
     image: ${WORK_ORDER_SERVICE_IMAGE:-hvac/work-order-service:0.1.0-dev}
     environment:
+      <<: *owner-env
       WORK_ORDER_SERVICE_ADDR: :8449
     expose: ["8449"]
     cpus: ${WORK_ORDER_OWNER_CPUS:-0.20}

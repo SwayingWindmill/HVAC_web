@@ -36,7 +36,7 @@ export PLATFORM_PUBLIC_ORIGIN=https://hvac.swayingwindmill.online
 R=$PHASE1_RUNTIME_DIR
 L="node scripts/phase1-wsl-compose.mjs"
 step() { echo "== $* $(date -Is)"; }
-service_dir() { mkdir -p "$1"; docker run --rm --user 0 --entrypoint chown -v "$1:/data" postgres:16.4-bookworm 65532:65532 /data; }
+service_dir() { mkdir -p "$1"; docker run --rm --user 0 --entrypoint chown -v "$1:/data" postgres:16.4-bookworm -R "${2:-65532:65532}" /data; }
 
 step "release ${HVAC_WEB_BUILD_ID}"
 
@@ -45,11 +45,50 @@ node scripts/issue-workload-identities.mjs
 
 step permissions
 chmod 700 "$R"
-find "$R" -mindepth 1 -type d -exec chmod 755 {} +
-find "$R" -mindepth 1 -type f -exec chmod 644 {} +
-mkdir -p "$R/backups/postgres/base" "$R/backups/clickhouse" "$R/alarm-delivery"
-service_dir "$R/identity"
-service_dir "$R/iam"
+mkdir -p "$R/backups/postgres/base" "$R/backups/postgres/wal" "$R/backups/clickhouse" "$R/alarm-delivery" "$R/data/otel-collector"
+chmod 750 "$R/data/otel-collector"
+# Non-root containers run under UID 65532 (Go services), supplementary group 65532 (alertmanager/centrifugo/operations-agent), UID 1883 (mosquitto), UID 101 (clickhouse), UID 999 (postgres), or UID 10001 (otel-collector).
+docker run --rm --user 0 --entrypoint sh -v "$R:/runtime" postgres:16.4-bookworm -c '
+  for d in identity iam gateway-ca; do [ -d "/runtime/$d" ] && chown -R 65532:65532 "/runtime/$d"; done
+  for d in internal-pki alert-receiver alarm-delivery secrets; do [ -d "/runtime/$d" ] && chown -R 0:65532 "/runtime/$d"; done
+  [ -d /runtime/mqtt-pki ] && chown -R 1883:65532 /runtime/mqtt-pki
+  chown -R 101:101 /runtime/backups/clickhouse
+  chown -R 999:999 /runtime/backups/postgres
+  chown -R 10001:10001 /runtime/data/otel-collector
+'
+# Postgres requires 0700 on PGDATA; keep data/ untouched and restrict secret/PKI dirs to 0750.
+find "$R" -mindepth 1 -type d \
+  ! \( -path "$R/data" -o -path "$R/data/*" \
+    -o -path "$R/backups" -o -path "$R/backups/*" \
+    -o -path "$R/identity" -o -path "$R/identity/*" \
+    -o -path "$R/iam" -o -path "$R/iam/*" \
+    -o -path "$R/gateway-ca" -o -path "$R/gateway-ca/*" \
+    -o -path "$R/internal-pki" -o -path "$R/internal-pki/*" \
+    -o -path "$R/db-role-credentials" -o -path "$R/db-role-credentials/*" \
+    -o -path "$R/alert-receiver" -o -path "$R/alert-receiver/*" \
+    -o -path "$R/alarm-delivery" -o -path "$R/alarm-delivery/*" \
+    -o -path "$R/mqtt-pki" -o -path "$R/mqtt-pki/*" \
+    -o -path "$R/tls" -o -path "$R/tls/*" \
+    -o -path "$R/secrets" -o -path "$R/secrets/*" \) \
+  -exec chmod 755 {} +
+for sensitive_dir in identity iam gateway-ca internal-pki db-role-credentials alert-receiver alarm-delivery mqtt-pki tls secrets backups; do
+  if [ -d "$R/$sensitive_dir" ]; then
+    find "$R/$sensitive_dir" -type d -exec chmod 750 {} +
+  fi
+done
+# Only public certificates stay world-readable (0644); CA and workload secrets stay locked down.
+find "$R" -mindepth 1 -type f ! -path "$R/data/*" ! -path "$R/backups/*" \
+  \( -name '*.crt' -o -name 'trusted-client-ca.pem' -o -name '*.pub' \) \
+  -exec chmod 644 {} +
+find "$R" -mindepth 1 -type f ! -path "$R/data/*" ! -path "$R/backups/*" \
+  \( -name 'tls.key' -o -name 'signing-key.pem' -o -name 'mfa-encryption.key' \
+    -o -name '*-key.pem' -o -name '*.key' -o -name '*secret*' -o -name '*token*' \
+    -o -name '*password*' -o -name '*webhook*' -o -name '*credentials*' \
+    -o -name 'recipients.json' -o -name '*.dsn' -o -name '*.env' \) \
+  -exec chmod 640 {} +
+find "$R" -mindepth 1 -type f ! -path "$R/data/*" \
+  \( -name 'ca.key' -o -name 'ca.srl' -o -name 'roles.sql' -o -name 'local-admin.credentials' \) \
+  -exec chmod 600 {} +
 
 step roles
 node scripts/local-environment.mjs roles
@@ -60,9 +99,9 @@ $L --profile migration run --rm phase1-migrator
 step keys
 [ -f "$R/identity/signing-key.pem" ] || $L run --rm identity-keygen
 [ -f "$R/identity/mfa-encryption.key" ] || $L run --rm identity-mfa-keygen
-[ -f "$R/iam/api-credential.pepper" ] || $L run --rm iam-api-credential-keygen
 if [ ! -f "$R/gateway-ca/connectivity.crt" ]; then
   service_dir "$R/gateway-ca"
+  chmod 750 "$R/gateway-ca"
   $L run --rm --no-deps -v "$R/gateway-ca:/run/hvac/provisioning:rw" -e GATEWAY_CA_DIR=/run/hvac/provisioning connectivity --initialize-gateway-ca
 fi
 
