@@ -3,9 +3,33 @@
 // overview shows it, then what needs handling (#664). Savings stay on top even before there are
 // any: the card says why there are none yet, and the recommendation below it the same.
 
+import { activeAlarms } from './alarm-api';
+import { waitingCount } from './alarms';
 import { changeBadge, grouped, type ChangeBadge } from './format';
-import type { NoSavingsReason, SavingsCard } from './savings';
-import type { EnergySummary } from './today';
+import { GatewayError, type Gateway } from './gateway';
+import type { Plant } from './plant';
+import { hourlyCop, hourlyElectricity, presentPlantNow } from './run';
+import {
+  EMPTY_SAVINGS_TOTALS,
+  loadSavingsMeasures,
+  loadSavingsSummary,
+  savingsCard,
+  type NoSavingsReason,
+  type SavingsCard,
+  type SavingsTotals,
+} from './savings';
+import {
+  compareWithYesterday,
+  fetchRecentDays,
+  fetchRecentHours,
+  hasRecentHourlyReading,
+  siteDayBounds,
+  splitHourlyWindow,
+  summarize,
+  todayStart,
+  type EnergySummary,
+  type SiteScope,
+} from './today';
 
 type Loaded<T> = ({ readonly status: 'ok' } & T) | { readonly status: 'error' };
 
@@ -121,5 +145,131 @@ export function presentOverview(inputs: OverviewInputs) {
     recommendation: presentRecommendation(inputs.recommendation),
     energy: presentEnergy(inputs.energy),
     alarms: presentAlarms(inputs.alarms),
+  };
+}
+
+export interface OverviewCharts {
+  readonly electricity: ReturnType<typeof hourlyElectricity>;
+  readonly cop: ReturnType<typeof hourlyCop>;
+}
+
+export interface OverviewDeps<S extends SiteScope = SiteScope> {
+  readonly gateway: Gateway;
+  readonly loadPlant: (site: S) => Promise<Plant>;
+}
+
+async function loadRecommendation(client: Pick<Gateway, 'get'>, siteId: string): Promise<OverviewInputs['recommendation']> {
+  try {
+    return { status: 'ok', latest: await client.get<Recommendation>(`/api/v1/sites/${siteId}/optimization/recommendations/latest`) };
+  } catch (error) {
+    // No recommendation published yet.
+    if (error instanceof GatewayError && error.status === 404) return { status: 'ok', latest: null };
+    throw error;
+  }
+}
+
+const settled = <T>(result: PromiseSettledResult<T>, failed: T): T => (result.status === 'fulfilled' ? result.value : failed);
+
+type ResolvedStart =
+  | { readonly status: 'ok'; readonly start: string | null; readonly yesterdayStart?: string }
+  | { readonly status: 'error' };
+
+async function resolveStart(
+  gateway: Gateway,
+  site: SiteScope,
+  now: Date,
+  electricityHours: readonly import('./today').HourPoint[],
+  localBounds: ReturnType<typeof siteDayBounds>,
+): Promise<ResolvedStart> {
+  if (localBounds !== null) {
+    return {
+      status: 'ok',
+      start: hasRecentHourlyReading(electricityHours, localBounds, now) ? localBounds.todayStart : null,
+      yesterdayStart: localBounds.yesterdayStart,
+    };
+  }
+  // Fallback when the phone runtime lacks Intl timeZone support for a DST or unmapped zone.
+  try {
+    const days = await fetchRecentDays(gateway, site, now);
+    return { status: 'ok', start: todayStart(days, now) };
+  } catch {
+    return { status: 'error' };
+  }
+}
+
+/** Loads overview owners concurrently and derives today's energy and savings from 72h hourly series. */
+export async function loadOverview<S extends SiteScope>(deps: OverviewDeps<S>, site: S, now: Date = new Date()) {
+  const electricityPromise = fetchRecentHours(deps.gateway, site, 'electricity', now);
+  const coolingPromise = fetchRecentHours(deps.gateway, site, 'cooling', now);
+  const measuresPromise = loadSavingsMeasures(deps.gateway, site.id);
+  const recommendationPromise = loadRecommendation(deps.gateway, site.id);
+  const alarmsPromise = activeAlarms(deps.gateway, site.id);
+  const plantPromise = deps.loadPlant(site);
+
+  const localBounds = siteDayBounds(now, site.timezone);
+
+  const resolvedStartPromise: Promise<ResolvedStart> = electricityPromise.then(
+    (electricityHours) => resolveStart(deps.gateway, site, now, electricityHours, localBounds),
+    () => ({ status: 'error' as const }),
+  );
+
+  const totalsPromise: Promise<SavingsTotals> = resolvedStartPromise.then((resolved) => {
+    if (resolved.status !== 'ok' || resolved.start === null) return EMPTY_SAVINGS_TOTALS;
+    return loadSavingsSummary(deps.gateway, site.id, resolved.start);
+  });
+
+  const [electricityResult, coolingResult, resolvedStart, totalsResult, measuresResult, recommendation, alarms, plant] =
+    await Promise.allSettled([
+      electricityPromise,
+      coolingPromise,
+      resolvedStartPromise,
+      totalsPromise,
+      measuresPromise,
+      recommendationPromise,
+      alarmsPromise,
+      plantPromise,
+    ]);
+
+  let energy: OverviewInputs['energy'] = { status: 'error' };
+  let charts: OverviewCharts | null = null;
+
+  const startInfo = resolvedStart.status === 'fulfilled' ? resolvedStart.value : { status: 'error' as const };
+  if (electricityResult.status === 'fulfilled' && startInfo.status === 'ok') {
+    if (startInfo.start === null) {
+      energy = { status: 'empty' };
+    } else if (coolingResult.status === 'fulfilled') {
+      const { start, yesterdayStart } = startInfo;
+      const elec = splitHourlyWindow(electricityResult.value, start, now, yesterdayStart);
+      const cool = splitHourlyWindow(coolingResult.value, start, now, yesterdayStart);
+      const today = summarize(elec.today, cool.today);
+      const yesterday = summarize(elec.yesterday, cool.yesterday);
+      energy = { status: 'ok', today, change: compareWithYesterday(today, yesterday) };
+      charts = {
+        electricity: hourlyElectricity(elec.today, elec.yesterday, start, now, yesterdayStart),
+        cop: hourlyCop(elec.today, cool.today, start, now),
+      };
+    }
+  }
+
+  const savings: OverviewInputs['savings'] = totalsResult.status === 'fulfilled' && measuresResult.status === 'fulfilled'
+    ? { status: 'ok', card: savingsCard(totalsResult.value, measuresResult.value) }
+    : { status: 'error' };
+
+  const inputs: OverviewInputs = {
+    savings,
+    recommendation: settled<OverviewInputs['recommendation']>(recommendation, { status: 'error' }),
+    energy,
+    alarms: alarms.status === 'fulfilled'
+      ? { status: 'ok', active: alarms.value.alarms.length, complete: alarms.value.complete, waiting: waitingCount(alarms.value.alarms) }
+      : { status: 'error' },
+  };
+  const waiting = inputs.alarms.status === 'ok' ? inputs.alarms.waiting : null;
+  return {
+    inputs,
+    waiting,
+    charts,
+    plant: plant.status === 'fulfilled'
+      ? { failed: false, now: presentPlantNow(plant.value) }
+      : { failed: true, now: null },
   };
 }

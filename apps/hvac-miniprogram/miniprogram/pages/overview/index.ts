@@ -1,100 +1,13 @@
-import { GatewayError } from '../../lib/gateway';
 import { askWeChat, gateway, requireSession } from '../../lib/platform';
 import { addDailyReminder, readDailyReminders, type ReminderRow } from '../../lib/reminders';
-import { currentSite, siteById, type Site } from '../../lib/site';
-import { energySeries, recentDays } from '../../lib/energy';
+import { currentSite, siteById } from '../../lib/site';
 import { loadPlant } from '../../lib/plant-load';
 import { whileShown } from '../../lib/refresh';
-import { hourlyCop, hourlyElectricity, presentPlantNow } from '../../lib/run';
-import { compareWithYesterday, sameHoursWindows, summarize, todayStart } from '../../lib/today';
-import { monthToDate, savingsCard, type Measure, type SavingsTotals } from '../../lib/savings';
-import { presentOverview, type OverviewInputs, type Recommendation } from '../../lib/overview';
-import { activeAlarms } from '../../lib/alarm-api';
-import { waitingCount } from '../../lib/alarms';
+import { presentPlantNow } from '../../lib/run';
+import { loadOverview, presentOverview, type OverviewCharts } from '../../lib/overview';
 import { selectTab, showAttention } from '../../lib/tab';
 
 const refresher = whileShown(60_000);
-
-/** Today's electricity by the hour against yesterday's, and today's efficiency by the hour. */
-interface Charts {
-  readonly electricity: ReturnType<typeof hourlyElectricity>;
-  readonly cop: ReturnType<typeof hourlyCop>;
-}
-
-type Energy = { readonly energy: OverviewInputs['energy']; readonly charts: Charts | null };
-
-/**
- * Today against yesterday up to the same time of day, read the way the web overview reads it; the
- * same hourly readings draw the charts, so they need no request of their own.
- */
-async function loadEnergy(site: Site, start: string, now: Date): Promise<Energy> {
-  const windows = sameHoursWindows(start, now);
-  const [todayElectricity, todayCooling, yesterdayElectricity, yesterdayCooling] = await Promise.all([
-    energySeries(site, 'electricity', 'hour', windows.today),
-    energySeries(site, 'cooling', 'hour', windows.today),
-    energySeries(site, 'electricity', 'hour', windows.yesterday),
-    energySeries(site, 'cooling', 'hour', windows.yesterday),
-  ]);
-  const today = summarize(todayElectricity, todayCooling);
-  return {
-    energy: { status: 'ok', today, change: compareWithYesterday(today, summarize(yesterdayElectricity, yesterdayCooling)) },
-    charts: { electricity: hourlyElectricity(todayElectricity, yesterdayElectricity, start, now), cop: hourlyCop(todayElectricity, todayCooling, start, now) },
-  };
-}
-
-const NOTHING_SAVED: SavingsTotals = { days: 0, avoidedKWh: 0, avoidedCost: 0, plantKWh: 0 };
-
-/** This month's savings; without a Site day to date the month, the measures alone say why there is none. */
-async function loadSavings(site: Site, start: string | null): Promise<OverviewInputs['savings']> {
-  const month = start === null ? null : monthToDate(start);
-  const [totals, measures] = await Promise.all([
-    month === null ? NOTHING_SAVED
-      : gateway.get<{ totals: SavingsTotals }>(`/api/v1/sites/${site.id}/savings/summary?from=${month.from}&to=${month.to}`).then((summary) => summary.totals),
-    gateway.get<{ items: Measure[] }>(`/api/v1/sites/${site.id}/savings/measures`),
-  ]);
-  return { status: 'ok', card: savingsCard(totals, measures.items) };
-}
-
-async function loadRecommendation(site: Site): Promise<OverviewInputs['recommendation']> {
-  try {
-    return { status: 'ok', latest: await gateway.get<Recommendation>(`/api/v1/sites/${site.id}/optimization/recommendations/latest`) };
-  } catch (error) {
-    // No recommendation published yet.
-    if (error instanceof GatewayError && error.status === 404) return { status: 'ok', latest: null };
-    throw error;
-  }
-}
-
-const settled = <T>(result: PromiseSettledResult<T>, failed: T): T => (result.status === 'fulfilled' ? result.value : failed);
-
-async function load(site: Site) {
-  const now = new Date();
-  const [days, recommendation, alarms, plant] = await Promise.allSettled([
-    recentDays(site, now),
-    loadRecommendation(site),
-    // Read as the 通知 page reads them, so both show the same count.
-    activeAlarms(gateway, site.id),
-    loadPlant(site),
-  ]);
-  // Where today began at the Site, as the Energy owner cut the day; it dates today and this month.
-  // No electricity reading in the last two days leaves no day to compare.
-  const start = days.status === 'fulfilled' ? todayStart(days.value, now) : null;
-  const [energy, savings] = await Promise.allSettled([
-    start === null ? Promise.resolve<Energy>({ energy: days.status === 'fulfilled' ? { status: 'empty' } : { status: 'error' }, charts: null }) : loadEnergy(site, start, now),
-    loadSavings(site, start),
-  ]);
-  const inputs: OverviewInputs = {
-    savings: settled<OverviewInputs['savings']>(savings, { status: 'error' }),
-    recommendation: settled<OverviewInputs['recommendation']>(recommendation, { status: 'error' }),
-    energy: energy.status === 'fulfilled' ? energy.value.energy : { status: 'error' },
-    alarms: alarms.status === 'fulfilled' ? { status: 'ok', active: alarms.value.alarms.length, complete: alarms.value.complete, waiting: waitingCount(alarms.value.alarms) } : { status: 'error' },
-  };
-  // The 通知 tab counts the alarms happening with no one on them; a failed read leaves the last count.
-  const waiting = inputs.alarms.status === 'ok' ? inputs.alarms.waiting : null;
-  // The plant card stays off a Site without registered devices, and says so when it cannot be read.
-  const charts = energy.status === 'fulfilled' ? energy.value.charts : null;
-  return { inputs, waiting, charts, plant: plant.status === 'fulfilled' ? { failed: false, now: presentPlantNow(plant.value) } : { failed: true, now: null } };
-}
 
 const siteName = async (id: string) => (await siteById(id))?.displayName ?? null;
 
@@ -109,7 +22,7 @@ Page({
     failed: false,
     view: null as ReturnType<typeof presentOverview> | null,
     plant: { failed: false, now: null } as { failed: boolean; now: ReturnType<typeof presentPlantNow> },
-    charts: null as Charts | null,
+    charts: null as OverviewCharts | null,
     daily: null as ReminderRow | null,
     /** The Site 多收一天 adds a morning for: read with the row, so the tap opens WeChat's dialog at once. */
     dailySiteId: '',
@@ -169,7 +82,7 @@ Page({
         this.setData({ loading: false, noSite: true });
         return;
       }
-      const { inputs, plant, waiting, charts } = await load(site);
+      const { inputs, plant, waiting, charts } = await loadOverview({ gateway, loadPlant }, site, new Date());
       if (waiting !== null) showAttention(this, waiting);
       this.setData({ siteName: site.displayName, updatedAt: clock(new Date()), loading: false, noSite: false, failed: false, view: presentOverview(inputs), plant, charts });
     } catch {

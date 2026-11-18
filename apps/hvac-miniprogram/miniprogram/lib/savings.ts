@@ -1,8 +1,12 @@
 // The overview's first card: what the Site saved this month, from the savings verification owner
 // (mv-service), the same figures as the web overview's 节能 panel (#664).
 
+import type { Gateway } from './gateway';
+
 const DAY_MS = 86_400_000;
 const pad = (value: number) => String(value).padStart(2, '0');
+
+export const EMPTY_SAVINGS_TOTALS: SavingsTotals = { days: 0, avoidedKWh: 0, avoidedCost: 0, plantKWh: 0 };
 
 /**
  * The month so far as Site-local dates, read from the start of today's Site day as the Energy
@@ -19,6 +23,15 @@ export function monthToDate(todayStart: string): { readonly from: string; readon
   const month = pad(local.getUTCMonth() + 1);
   return { from: `${year}-${month}-01`, to: `${year}-${month}-${pad(local.getUTCDate())}` };
 }
+
+export const loadSavingsMeasures = (client: Pick<Gateway, 'get'>, siteId: string) =>
+  client.get<{ items: Measure[] }>(`/api/v1/sites/${siteId}/savings/measures`).then((response) => response.items);
+
+export const loadSavingsSummary = (client: Pick<Gateway, 'get'>, siteId: string, start: string) => {
+  const month = monthToDate(start);
+  return client.get<{ totals: SavingsTotals }>(`/api/v1/sites/${siteId}/savings/summary?from=${month.from}&to=${month.to}`)
+    .then((summary) => summary.totals);
+};
 
 export interface SavingsTotals {
   readonly days: number;
