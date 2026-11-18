@@ -7,6 +7,14 @@
 
 ### 2026-11-18
 
+#### 优化与扩展
+
+- 完成实时遥测管道与冷热分级存储 P1 吞吐与数据质量升级（`modules/connectivity`、`modules/telemetry`、`modules/metric`、`services/optimization-service`、`cmd/telemetry-worker`、`cmd/metric-worker` 与迁移 `telemetry-runtime-unnest-and-indexes.sql`、`metric-backfill-recalc-job-grants.sql`、`018-quality-filtered-rollups.sql`）：
+  - **PostgreSQL 批量 `UNNEST` 更新与连接池治理**：将 `persistCurrentState` 与入库写入计划中的逐条 `latest_accepted_telemetry` 循环读写合并为去重后的 `UNNEST` 批语句并附加 `IS DISTINCT FROM` 防死元组条件，为主高频表配置 `fillfactor = 80` 与 `REJECTED` 部分索引，同时开放 `TELEMETRY_POSTGRES_*` 连接池参数配置。
+  - **AI 控制近实时读取热点缓存**：遥测服务新增 mTLS 接口 `POST /internal/v1/telemetry/optimization/live-observations:read` 及 Redis 站点点位哈希缓存（Lua 时间戳单调 CAS，PG 兜底回填），`optimization-service` 近实时准备优先消费热快照并在超时或缺失时平滑回退 ClickHouse。
+  - **双优先级接入邮箱与补传自动重算**：`gatewayMailbox` 拆分为 `live` 与 `replay.spool` 双通道并以 8:1 有界防饿死调度保障实时优先；`metric-worker` 新增 ClickHouse `history_sequence` 补传扫描器，按站点时区对齐后自动幂等投递 `METRIC_RECALC` 作业。
+  - **物理硬边界清洗与质量预聚合路由**：遥测校验增加按物理单位硬包络与 16 位寄存器溢出哨兵（`65535`/`32767`/`-32768`）拦截；修复 `metric/clickhouse` 聚合仅纳入 `quality = 'GOOD'` 有限值并移除同步 `mutations_sync=1` 删除；新增 ClickHouse 质量分层物化视图 `numeric_gauge_1min_states`/`15min_states`，历史趋势查询在对齐窗口与无并发写入时自动命中预聚合。
+
 #### 修复与加固
 
 - 完成实时遥测管道与冷热分级存储 P0 安全边界与稳定性加固（`modules/connectivity`、`modules/telemetry`、`modules/maintenance`、`cmd/connectivity`、`cmd/telemetry-worker`、`cmd/maintenance-worker`、`deploy/platform/phase1/compose.yaml` 与迁移 `telemetry-history-dead-letter-and-retention.sql`、`017-retention-cleanup-grants.sql`）：
