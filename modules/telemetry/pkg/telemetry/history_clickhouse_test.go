@@ -3,6 +3,7 @@ package telemetry
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -347,13 +348,48 @@ func TestNewClickHouseHistorySinkDefaultHTTPTransport(t *testing.T) {
 	if !ok || transport == nil {
 		t.Fatalf("Transport=%T, want *http.Transport", sink.httpClient.Transport)
 	}
-	if transport.MaxIdleConns != 64 ||
-		transport.MaxIdleConnsPerHost != 32 ||
+	if transport.MaxConnsPerHost != 16 ||
+		transport.MaxIdleConns != 64 ||
+		transport.MaxIdleConnsPerHost != 16 ||
 		transport.IdleConnTimeout != 90*time.Second ||
 		transport.TLSHandshakeTimeout != 10*time.Second ||
-		transport.ExpectContinueTimeout != time.Second {
-		t.Fatalf("unexpected transport tuning: MaxIdleConns=%d MaxIdleConnsPerHost=%d IdleConnTimeout=%s TLSHandshakeTimeout=%s ExpectContinueTimeout=%s",
-			transport.MaxIdleConns, transport.MaxIdleConnsPerHost, transport.IdleConnTimeout, transport.TLSHandshakeTimeout, transport.ExpectContinueTimeout)
+		transport.ResponseHeaderTimeout != 30*time.Second ||
+		transport.ExpectContinueTimeout != time.Second ||
+		transport.DialContext == nil {
+		t.Fatalf("unexpected transport tuning: MaxConnsPerHost=%d MaxIdleConns=%d MaxIdleConnsPerHost=%d IdleConnTimeout=%s TLSHandshakeTimeout=%s ResponseHeaderTimeout=%s ExpectContinueTimeout=%s DialContext=%v",
+			transport.MaxConnsPerHost, transport.MaxIdleConns, transport.MaxIdleConnsPerHost, transport.IdleConnTimeout, transport.TLSHandshakeTimeout, transport.ResponseHeaderTimeout, transport.ExpectContinueTimeout, transport.DialContext != nil)
+	}
+}
+
+func TestClickHouseHistorySinkPing(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, pass, ok := r.BasicAuth()
+		if !ok || user != "ch_user" || pass != "ch_pass" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.URL.Query().Get("query") != "SELECT 1" || r.URL.Query().Get("enable_http_compression") != "1" {
+			t.Fatalf("unexpected query params: %v", r.URL.Query())
+		}
+		if r.Header.Get("Accept-Encoding") != "gzip" {
+			t.Fatalf("expected Accept-Encoding: gzip, got %q", r.Header.Get("Accept-Encoding"))
+		}
+		w.Header().Set("Content-Encoding", "gzip")
+		gz := gzip.NewWriter(w)
+		_, _ = io.WriteString(gz, "1\n")
+		_ = gz.Close()
+	}))
+	defer server.Close()
+
+	sink, err := NewClickHouseHistorySink(ClickHouseHistoryConfig{
+		BaseURL: server.URL, Database: "telemetry_history", Table: "observations",
+		Username: "ch_user", Password: "ch_pass",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.Ping(context.Background()); err != nil {
+		t.Fatalf("Ping failed: %v", err)
 	}
 }
 

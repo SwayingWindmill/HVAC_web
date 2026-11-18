@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -87,7 +88,7 @@ func NewClient(config Config) (*Client, error) {
 	parsed.Fragment = ""
 	client := config.HTTPClient
 	if client == nil {
-		client = &http.Client{Timeout: 15 * time.Second}
+		client = newDefaultCubeHTTPClient(15 * time.Second)
 	}
 	return &Client{
 		endpoint: parsed, datasetRevision: config.DatasetRevision, tokenFactory: config.TokenFactory, httpClient: client,
@@ -802,6 +803,22 @@ func scalarInt(raw json.RawMessage) (int64, error) {
 		return 0, err
 	}
 	return strconv.ParseInt(value, 10, 64)
+}
+
+func newDefaultCubeHTTPClient(timeout time.Duration) *http.Client {
+	var transport *http.Transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok && base != nil {
+		transport = base.Clone()
+	} else {
+		transport = &http.Transport{}
+	}
+	transport.DialContext = (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext
+	transport.MaxConnsPerHost = 16
+	transport.MaxIdleConns = 64
+	transport.MaxIdleConnsPerHost = 16
+	transport.IdleConnTimeout = 90 * time.Second
+	transport.ResponseHeaderTimeout = 15 * time.Second
+	return &http.Client{Timeout: timeout, Transport: transport}
 }
 
 var _ analytics.EnergySeriesEngine = (*Client)(nil)

@@ -222,6 +222,7 @@ func newMQTTTransport(ctx context.Context, cfg TransportConfig, reconnectBackoff
 		go func() {
 			defer transport.subWG.Done()
 			defer subCancel()
+			defer observability.Recover(transport.logger, transport.metrics, "concentrator.mqtt_subscribe")
 			transport.subscribeWithRetry(subCtx, manager, connection, gen)
 		}()
 	}

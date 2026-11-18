@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -66,11 +67,11 @@ func main() {
 
 	iamClient := &http.Client{
 		Timeout: 5 * time.Second,
-		Transport: &http.Transport{TLSClientConfig: &tls.Config{
+		Transport: newRegistryHTTPTransport(&tls.Config{
 			MinVersion:   tls.VersionTLS13,
 			RootCAs:      iamCAs,
 			Certificates: []tls.Certificate{certificate},
-		}},
+		}),
 	}
 	grantStatus, err := core.NewHTTPGrantStatusProvider(requiredEnv("CORE_IAM_ENDPOINT"), iamClient)
 	if err != nil {
@@ -113,7 +114,9 @@ func main() {
 		Addr: envOr("CORE_DIAGNOSTICS_ADDR", "127.0.0.1:19084"), Handler: telemetry.DiagnosticsHandler(),
 		ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second,
 	}
+	diagnosticsDone := make(chan struct{})
 	go func() {
+		defer close(diagnosticsDone)
 		defer observability.Recover(logger, telemetry.Metrics, "registry_owner.diagnostics")
 		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("core_diagnostics_failed", "error_code", "DIAGNOSTICS_SERVE_FAILED")
@@ -122,27 +125,41 @@ func main() {
 
 	relayCtx, cancelRelay := context.WithCancel(context.Background())
 	defer cancelRelay()
+	relayDone := make(chan struct{})
 	if relay, relayErr := startOptionalOutboxRelay(relayCtx, store, certificate, iamCAs, logger); relayErr != nil {
 		logger.Error("core_outbox_relay_config_invalid", "error", relayErr.Error())
 		os.Exit(1)
 	} else if relay != nil {
 		go func() {
+			defer close(relayDone)
 			defer observability.Recover(logger, telemetry.Metrics, "registry_owner.outbox_relay")
 			relay.Run(relayCtx)
 		}()
+	} else {
+		close(relayDone)
 	}
 
-	shutdown := make(chan os.Signal, 1)
-	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
+	signalCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignals()
+	shutdownDone := make(chan struct{})
 	go func() {
+		defer close(shutdownDone)
 		defer observability.Recover(logger, telemetry.Metrics, "registry_owner.shutdown")
-		<-shutdown
-		cancelRelay()
+		<-signalCtx.Done()
 		telemetry.MarkNotReady()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = server.Shutdown(ctx)
+		cancelRelay()
+		select {
+		case <-relayDone:
+		case <-ctx.Done():
+		}
 		_ = diagnostics.Shutdown(ctx)
+		select {
+		case <-diagnosticsDone:
+		case <-ctx.Done():
+		}
 		_ = telemetry.Shutdown(ctx)
 	}()
 
@@ -150,9 +167,31 @@ func main() {
 	logger.Info("core_started", "service", "platform-core-service", "address", server.Addr)
 	if err := server.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("core_stopped_unexpectedly", "error_code", "CORE_SERVE_FAILED")
+		stopSignals()
+		<-shutdownDone
+		store.Close()
 		os.Exit(1)
 	}
+	stopSignals()
+	<-shutdownDone
 	logger.Info("core_stopped", "service", "platform-core-service")
+}
+
+func newRegistryHTTPTransport(tlsConfig *tls.Config) *http.Transport {
+	var transport *http.Transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok && base != nil {
+		transport = base.Clone()
+	} else {
+		transport = &http.Transport{}
+	}
+	transport.DialContext = (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext
+	transport.MaxConnsPerHost = 16
+	transport.MaxIdleConns = 64
+	transport.MaxIdleConnsPerHost = 16
+	transport.IdleConnTimeout = 90 * time.Second
+	transport.ResponseHeaderTimeout = 15 * time.Second
+	transport.TLSClientConfig = tlsConfig
+	return transport
 }
 
 func loadCertPool(path string) (*x509.CertPool, error) {
@@ -214,12 +253,12 @@ func startOptionalOutboxRelay(ctx context.Context, store *core.PostgresStore, ce
 			CheckRedirect: func(*http.Request, []*http.Request) error {
 				return http.ErrUseLastResponse
 			},
-			Transport: &http.Transport{TLSClientConfig: &tls.Config{
+			Transport: newRegistryHTTPTransport(&tls.Config{
 				MinVersion:   tls.VersionTLS13,
 				RootCAs:      roots,
 				Certificates: []tls.Certificate{cert},
 				ServerName:   serverName,
-			}},
+			}),
 		}, nil
 	}
 	var telClient, connClient, cmdClient *http.Client

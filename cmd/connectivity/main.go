@@ -87,6 +87,11 @@ func main() {
 		os.Exit(1)
 	}
 	defer connectivityStore.Close()
+	telemetry.SetDependencies(observability.Dependency{
+		Name:     "postgres-connectivity",
+		Required: true,
+		Check:    connectivityStore.Ping,
+	})
 	mqttSession, concentratorTransport, err := openConcentratorAndSharedSession(drainRootCtx, config.MQTT, logger, telemetry.Metrics, tap)
 	if err != nil {
 		logger.Error("connectivity_concentrator_mqtt_unavailable", "error_code", "CONCENTRATOR_MQTT_UNAVAILABLE", "error", err.Error())
@@ -155,8 +160,10 @@ func main() {
 	}
 	telemetry.MarkReady()
 	diagnostics := diagnosticsServer(*diagnosticsAddress, runtime, telemetry, &shuttingDown)
-	diagnosticsErr := make(chan error, 1)
+	diagnosticsErr := make(chan error, 2)
+	credentialsDone := make(chan struct{})
 	go func() {
+		defer close(credentialsDone)
 		defer observability.Recover(logger, telemetry.Metrics, "connectivity.credential_server", func(any) {
 			select {
 			case diagnosticsErr <- errors.New("credential server panicked"):
@@ -167,7 +174,9 @@ func main() {
 			diagnosticsErr <- err
 		}
 	}()
+	diagnosticsDone := make(chan struct{})
 	go func() {
+		defer close(diagnosticsDone)
 		defer observability.Recover(logger, telemetry.Metrics, "connectivity.diagnostics_server", func(any) {
 			select {
 			case diagnosticsErr <- errors.New("diagnostics server panicked"):
@@ -206,38 +215,135 @@ func main() {
 	case diagnosticsRunErr := <-diagnosticsErr:
 		logger.Error("mqtt_telemetry_adapter_diagnostics_failed", "error", diagnosticsRunErr.Error())
 	}
-	shuttingDown.Store(true)
-	telemetry.MarkNotReady()
-	ingressCancel()
+	shutdownConnectivityRuntime(connectivityShutdownDeps{
+		markShuttingDown: func() {
+			shuttingDown.Store(true)
+			telemetry.MarkNotReady()
+		},
+		shutdownCredentials: func(ctx context.Context) error {
+			return credentials.Shutdown(ctx)
+		},
+		credentialsDone: credentialsDone,
+		closeTunnelHub:  tunnelHub.Close,
+		cancelIngress:   ingressCancel,
+		cancelDrainRoot: drainRootCancel,
+		runtimeDone:     runtimeDone,
+		commandsDone:    commandsDone,
+		waitCommands: func(ctx context.Context) error {
+			if commands == nil {
+				return nil
+			}
+			return commands.Wait(ctx)
+		},
+		retentionDone:   retentionDone,
+		flushQuarantine: connectivityStore.FlushQuarantineBursts,
+		closeConcentrator: func(ctx context.Context) error {
+			return concentratorTransport.Close(ctx)
+		},
+		closeMQTTSession: func(ctx context.Context) error {
+			if mqttSession == nil {
+				return nil
+			}
+			return mqttSession.Close(ctx)
+		},
+		closeCommands: func(ctx context.Context) error {
+			if commands == nil {
+				return nil
+			}
+			return commands.Close(ctx)
+		},
+		shutdownDiagnostics: func(ctx context.Context) error {
+			return diagnostics.Shutdown(ctx)
+		},
+		diagnosticsDone:   diagnosticsDone,
+		shutdownTelemetry: telemetry.Shutdown,
+		closeStore:        connectivityStore.Close,
+	})
+	logger.Info("mqtt_telemetry_adapter_stopped")
+}
 
-	drainCtx, drainCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	stopDrain := context.AfterFunc(drainCtx, drainRootCancel)
-	awaitSignal(drainCtx, runtimeDone)
-	awaitSignal(drainCtx, commandsDone)
-	if commands != nil {
-		_ = commands.Wait(drainCtx)
+type connectivityShutdownDeps struct {
+	markShuttingDown    func()
+	shutdownCredentials func(context.Context) error
+	credentialsDone     <-chan struct{}
+	closeTunnelHub      func()
+	cancelIngress       func()
+	cancelDrainRoot     func()
+	runtimeDone         <-chan struct{}
+	commandsDone        <-chan struct{}
+	waitCommands        func(context.Context) error
+	retentionDone       <-chan struct{}
+	flushQuarantine     func(context.Context) error
+	closeConcentrator   func(context.Context) error
+	closeMQTTSession    func(context.Context) error
+	closeCommands       func(context.Context) error
+	shutdownDiagnostics func(context.Context) error
+	diagnosticsDone     <-chan struct{}
+	shutdownTelemetry   func(context.Context) error
+	closeStore          func()
+}
+
+func shutdownConnectivityRuntime(deps connectivityShutdownDeps) {
+	if deps.markShuttingDown != nil {
+		deps.markShuttingDown()
 	}
-	awaitSignal(drainCtx, retentionDone)
-	_ = connectivityStore.FlushQuarantineBursts(drainCtx)
-	stopDrain()
-	drainRootCancel()
+
+	credShutdownCtx, credShutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if deps.shutdownCredentials != nil {
+		_ = deps.shutdownCredentials(credShutdownCtx)
+	}
+	awaitSignal(credShutdownCtx, deps.credentialsDone)
+	credShutdownCancel()
+	if deps.closeTunnelHub != nil {
+		deps.closeTunnelHub()
+	}
+
+	if deps.cancelIngress != nil {
+		deps.cancelIngress()
+	}
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	var stopDrain func() bool
+	if deps.cancelDrainRoot != nil {
+		stopDrain = context.AfterFunc(drainCtx, deps.cancelDrainRoot)
+	}
+	awaitSignal(drainCtx, deps.runtimeDone)
+	awaitSignal(drainCtx, deps.commandsDone)
+	if deps.waitCommands != nil {
+		_ = deps.waitCommands(drainCtx)
+	}
+	awaitSignal(drainCtx, deps.retentionDone)
+	if deps.flushQuarantine != nil {
+		_ = deps.flushQuarantine(drainCtx)
+	}
+	if stopDrain != nil {
+		stopDrain()
+	}
+	if deps.cancelDrainRoot != nil {
+		deps.cancelDrainRoot()
+	}
 	drainCancel()
 
 	shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
-	_ = diagnostics.Shutdown(shutdownContext)
-	tunnelHub.Close()
-	_ = credentials.Shutdown(shutdownContext)
-	_ = concentratorTransport.Close(shutdownContext)
-	if mqttSession != nil {
-		_ = mqttSession.Close(shutdownContext)
+	if deps.closeConcentrator != nil {
+		_ = deps.closeConcentrator(shutdownContext)
 	}
-	if commands != nil {
-		_ = commands.Close(shutdownContext)
+	if deps.closeMQTTSession != nil {
+		_ = deps.closeMQTTSession(shutdownContext)
 	}
-	_ = telemetry.Shutdown(shutdownContext)
-	connectivityStore.Close()
-	logger.Info("mqtt_telemetry_adapter_stopped")
+	if deps.closeCommands != nil {
+		_ = deps.closeCommands(shutdownContext)
+	}
+	if deps.shutdownDiagnostics != nil {
+		_ = deps.shutdownDiagnostics(shutdownContext)
+	}
+	awaitSignal(shutdownContext, deps.diagnosticsDone)
+	if deps.shutdownTelemetry != nil {
+		_ = deps.shutdownTelemetry(shutdownContext)
+	}
+	if deps.closeStore != nil {
+		deps.closeStore()
+	}
 }
 
 // uplinkConfig reads the uplink settings; the defaults are the in-container paths of

@@ -20,7 +20,10 @@ import (
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	logger := observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
+	telemetry := observability.NewRuntime(observability.RuntimeConfig{
+		Service: "work-order-service", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond,
+	})
 	serverTLSConfig, err := workloadtls.NewServerTLSConfig(workloadtls.ServerConfig{
 		CertificateFiles: workloadtls.CertificateFiles{
 			CertificatePath: requiredEnv("WORK_ORDER_TLS_CERT"),
@@ -60,6 +63,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer store.Close()
+	telemetry.SetDependencies(observability.Dependency{Name: "postgres", Required: true, Check: store.Ping})
 	gatewaySPIFFE := envOr("WORK_ORDER_GATEWAY_SPIFFE", workorderservice.DefaultGatewaySPIFFEID)
 	handler, err := workorderservice.NewHTTPHandler(workorderservice.HTTPConfig{
 		Store: store, GatewayPublicKey: gatewayPublicKey, GatewaySPIFFEID: gatewaySPIFFE,
@@ -79,24 +83,89 @@ func main() {
 		os.Exit(1)
 	}
 	server := &http.Server{
-		Addr: envOr("WORK_ORDER_SERVICE_ADDR", ":8449"), Handler: router, TLSConfig: serverTLSConfig,
+		Addr: envOr("WORK_ORDER_SERVICE_ADDR", ":8449"), Handler: observability.InstrumentHTTP(router, telemetry, observability.HTTPInstrumentationConfig{
+			Namespace: "hvac_work_order", Service: "work-order-service", SpanName: "http.work_order.request",
+		}), TLSConfig: serverTLSConfig,
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second,
 	}
-	shutdown := make(chan os.Signal, 1)
-	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
+	diagnostics := newWorkOrderDiagnosticsServer(envOr("WORK_ORDER_DIAGNOSTICS_ADDR", ":19089"), telemetry)
+	diagnosticsDone := make(chan struct{})
 	go func() {
-		defer observability.Recover(logger, nil, "work_order_owner.shutdown")
-		<-shutdown
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		_ = server.Shutdown(ctx)
+		defer close(diagnosticsDone)
+		defer observability.Recover(logger, telemetry.Metrics, "work_order_owner.diagnostics")
+		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("work_order_diagnostics_failed", "error_code", "DIAGNOSTICS_SERVE_FAILED")
+		}
 	}()
-	logger.Info("work_order_service_started", "address", server.Addr, "mode", "internal-read-only")
+
+	signalCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignals()
+	shutdownDone := make(chan struct{})
+	go func() {
+		defer close(shutdownDone)
+		defer observability.Recover(logger, telemetry.Metrics, "work_order_owner.shutdown")
+		<-signalCtx.Done()
+		shutdownWorkOrderOwner(workOrderShutdownDeps{
+			markNotReady:      telemetry.MarkNotReady,
+			shutdownServer:    server.Shutdown,
+			shutdownDiag:      diagnostics.Shutdown,
+			diagnosticsDone:   diagnosticsDone,
+			shutdownTelemetry: telemetry.Shutdown,
+		})
+	}()
+	telemetry.MarkReady()
+	logger.Info("work_order_service_started", "address", server.Addr, "diagnostics_address", diagnostics.Addr, "mode", "internal-read-only")
 	if err := server.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("work_order_service_stopped_unexpectedly", "error_code", "WORK_ORDER_SERVE_FAILED")
+		stopSignals()
+		<-shutdownDone
+		store.Close()
 		os.Exit(1)
 	}
+	stopSignals()
+	<-shutdownDone
 	logger.Info("work_order_service_stopped")
+}
+
+func newWorkOrderDiagnosticsServer(addr string, telemetry *observability.Runtime) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           telemetry.DiagnosticsHandler(),
+		ReadHeaderTimeout: 2 * time.Second,
+		ReadTimeout:       3 * time.Second,
+		WriteTimeout:      3 * time.Second,
+	}
+}
+
+type workOrderShutdownDeps struct {
+	markNotReady      func()
+	shutdownServer    func(context.Context) error
+	shutdownDiag      func(context.Context) error
+	diagnosticsDone   <-chan struct{}
+	shutdownTelemetry func(context.Context) error
+}
+
+func shutdownWorkOrderOwner(deps workOrderShutdownDeps) {
+	if deps.markNotReady != nil {
+		deps.markNotReady()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if deps.shutdownServer != nil {
+		_ = deps.shutdownServer(ctx)
+	}
+	if deps.shutdownDiag != nil {
+		_ = deps.shutdownDiag(ctx)
+	}
+	if deps.diagnosticsDone != nil {
+		select {
+		case <-deps.diagnosticsDone:
+		case <-ctx.Done():
+		}
+	}
+	if deps.shutdownTelemetry != nil {
+		_ = deps.shutdownTelemetry(ctx)
+	}
 }
 
 func loadCertificatePublicKey(path string) (crypto.PublicKey, error) {

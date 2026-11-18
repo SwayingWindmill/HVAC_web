@@ -83,34 +83,49 @@ func main() {
 		Addr: envOr("ALARM_DIAGNOSTICS_ADDR", ":19088"), Handler: telemetry.DiagnosticsHandler(),
 		ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second,
 	}
+	diagnosticsDone := make(chan struct{})
 	go func() {
+		defer close(diagnosticsDone)
 		defer observability.Recover(logger, telemetry.Metrics, "alarm_owner.diagnostics")
 		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("alarm_diagnostics_failed", "error_code", "DIAGNOSTICS_SERVE_FAILED")
 		}
 	}()
-	scheduled, stopScheduled := context.WithCancel(context.Background())
-	alarmservice.RunScheduledEvaluations(scheduled, store, logger)
+	scheduled, stopScheduled := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stopScheduled()
+	scheduledDone := alarmservice.StartScheduledEvaluations(scheduled, store, logger)
 
-	shutdown := make(chan os.Signal, 1)
-	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
+	shutdownDone := make(chan struct{})
 	go func() {
+		defer close(shutdownDone)
 		defer observability.Recover(logger, telemetry.Metrics, "alarm_owner.shutdown")
-		<-shutdown
-		stopScheduled()
+		<-scheduled.Done()
 		telemetry.MarkNotReady()
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		_ = server.Shutdown(ctx)
+		select {
+		case <-scheduledDone:
+		case <-ctx.Done():
+		}
 		_ = diagnostics.Shutdown(ctx)
+		select {
+		case <-diagnosticsDone:
+		case <-ctx.Done():
+		}
 		_ = telemetry.Shutdown(ctx)
 	}()
 	telemetry.MarkReady()
 	logger.Info("alarm_service_started", "address", server.Addr, "mode", "alarm-lifecycle")
 	if err := server.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("alarm_service_stopped_unexpectedly", "error_code", "ALARM_SERVE_FAILED")
+		stopScheduled()
+		<-shutdownDone
+		store.Close()
 		os.Exit(1)
 	}
+	stopScheduled()
+	<-shutdownDone
 	logger.Info("alarm_service_stopped")
 }
 

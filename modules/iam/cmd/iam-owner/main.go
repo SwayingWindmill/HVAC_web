@@ -190,23 +190,31 @@ func main() {
 		Addr: envOr("IAM_DIAGNOSTICS_ADDR", "127.0.0.1:19083"), Handler: telemetry.DiagnosticsHandler(),
 		ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second,
 	}
+	diagnosticsDone := make(chan struct{})
 	go func() {
+		defer close(diagnosticsDone)
 		defer observability.Recover(logger, telemetry.Metrics, "iam_owner.diagnostics")
 		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("iam_diagnostics_failed", "error_code", "DIAGNOSTICS_SERVE_FAILED")
 		}
 	}()
 
-	shutdown := make(chan os.Signal, 1)
-	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
+	signalCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignals()
+	shutdownDone := make(chan struct{})
 	go func() {
+		defer close(shutdownDone)
 		defer observability.Recover(logger, telemetry.Metrics, "iam_owner.shutdown")
-		<-shutdown
+		<-signalCtx.Done()
 		telemetry.MarkNotReady()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = server.Shutdown(ctx)
 		_ = diagnostics.Shutdown(ctx)
+		select {
+		case <-diagnosticsDone:
+		case <-ctx.Done():
+		}
 		_ = telemetry.Shutdown(ctx)
 	}()
 
@@ -214,8 +222,21 @@ func main() {
 	logger.Info("iam_started", "service", "iam-service", "address", address, "policy_revision", policyRevision)
 	if err := server.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("iam_stopped_unexpectedly", "error", err)
+		stopSignals()
+		<-shutdownDone
+		if closer, ok := authorizationStore.(interface{ Close() }); ok {
+			closer.Close()
+		}
+		if closer, ok := adminStore.(interface{ Close() }); ok {
+			closer.Close()
+		}
+		if closer, ok := telemetryGrantStore.(interface{ Close() }); ok {
+			closer.Close()
+		}
 		os.Exit(1)
 	}
+	stopSignals()
+	<-shutdownDone
 	logger.Info("iam_stopped", "service", "iam-service")
 }
 

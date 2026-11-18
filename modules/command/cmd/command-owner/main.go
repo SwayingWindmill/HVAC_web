@@ -211,7 +211,10 @@ func main() {
 		Addr: envOr("COMMAND_DIAGNOSTICS_ADDR", ":19087"), Handler: telemetry.DiagnosticsHandler(),
 		ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second,
 	}
+	diagnosticsDone := make(chan struct{})
 	go func() {
+		defer close(diagnosticsDone)
+		defer observability.Recover(logger, telemetry.Metrics, "command_owner.diagnostics")
 		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("command_diagnostics_failed", "error_code", "DIAGNOSTICS_SERVE_FAILED")
 		}
@@ -219,28 +222,33 @@ func main() {
 
 	relayCtx, cancelRelay := context.WithCancel(context.Background())
 	var relayWg sync.WaitGroup
-	defer func() {
-		cancelRelay()
-		relayWg.Wait()
-	}()
 	if alarmRelay != nil {
 		relayWg.Add(1)
 		go func() {
 			defer relayWg.Done()
+			defer observability.Recover(logger, telemetry.Metrics, "command_owner.alarm_relay")
 			alarmRelay.Run(relayCtx)
 		}()
 	}
 
-	shutdown := make(chan os.Signal, 1)
-	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
+	signalCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignals()
+	shutdownDone := make(chan struct{})
 	go func() {
-		<-shutdown
-		cancelRelay()
+		defer close(shutdownDone)
+		defer observability.Recover(logger, telemetry.Metrics, "command_owner.shutdown")
+		<-signalCtx.Done()
 		telemetry.MarkNotReady()
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		_ = server.Shutdown(ctx)
+		cancelRelay()
+		relayWg.Wait()
 		_ = diagnostics.Shutdown(ctx)
+		select {
+		case <-diagnosticsDone:
+		case <-ctx.Done():
+		}
 		_ = telemetry.Shutdown(ctx)
 	}()
 
@@ -248,13 +256,17 @@ func main() {
 	logger.Info("command_service_started", "address", server.Addr, "policy_revision", policyRevision)
 	if err := server.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("command_service_stopped_unexpectedly", "error_code", "COMMAND_SERVE_FAILED")
-		cancelRelay()
-		relayWg.Wait()
+		stopSignals()
+		<-shutdownDone
+		if closer, ok := runtimeHandler.(interface{ Close() }); ok {
+			closer.Close()
+		}
+		authority.Close()
 		store.Close()
 		os.Exit(1)
 	}
-	cancelRelay()
-	relayWg.Wait()
+	stopSignals()
+	<-shutdownDone
 	logger.Info("command_service_stopped")
 }
 

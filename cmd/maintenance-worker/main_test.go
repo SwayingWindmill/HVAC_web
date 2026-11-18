@@ -135,3 +135,29 @@ func TestRunLifecycleAuditWithColdArchiveVerification(t *testing.T) {
 		}
 	})
 }
+
+func TestLoadWorkerSettingsValidation(t *testing.T) {
+	t.Run("defaults without error", func(t *testing.T) {
+		settings, err := loadWorkerSettings()
+		if err != nil {
+			t.Fatalf("loadWorkerSettings() error = %v", err)
+		}
+		if settings.batch != 10 || settings.leaseDuration != 30*time.Second || settings.scanInterval != 2*time.Second || settings.auditInterval != time.Minute {
+			t.Fatalf("unexpected defaults: %+v", settings)
+		}
+	})
+
+	t.Run("invalid integer returns error without panic", func(t *testing.T) {
+		t.Setenv("MAINTENANCE_CLAIM_BATCH", "not-a-number")
+		if _, err := loadWorkerSettings(); err == nil {
+			t.Fatal("expected error for invalid MAINTENANCE_CLAIM_BATCH")
+		}
+	})
+
+	t.Run("out of bounds duration returns error without panic", func(t *testing.T) {
+		t.Setenv("MAINTENANCE_SCAN_INTERVAL", "10ms")
+		if _, err := loadWorkerSettings(); err == nil {
+			t.Fatal("expected error for out-of-range MAINTENANCE_SCAN_INTERVAL")
+		}
+	})
+}

@@ -60,6 +60,8 @@ func openWorkOrderPool(ctx context.Context, databaseURL, expectedUser string) (*
 	config.MaxConns = 16
 	config.MinConns = 1
 	config.MaxConnLifetime = 30 * time.Minute
+	config.MaxConnIdleTime = 5 * time.Minute
+	config.HealthCheckPeriod = 30 * time.Second
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		return nil, fmt.Errorf("open Work Order database: %w", err)
@@ -81,6 +83,19 @@ func (store *PostgresStore) Close() {
 	if store.mutationPool != nil {
 		store.mutationPool.Close()
 	}
+}
+
+func (store *PostgresStore) Ping(ctx context.Context) error {
+	if store == nil || store.readPool == nil {
+		return ErrUnavailable
+	}
+	if err := store.readPool.Ping(ctx); err != nil {
+		return err
+	}
+	if store.mutationPool != nil {
+		return store.mutationPool.Ping(ctx)
+	}
+	return nil
 }
 
 func (store *PostgresStore) List(ctx context.Context, tenantID, siteID string, filter Filter) (workordermodel.ListResponse, error) {

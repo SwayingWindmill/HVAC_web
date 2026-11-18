@@ -66,7 +66,9 @@ func main() {
 		Handler:           observabilityRuntime.DiagnosticsHandler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	diagnosticsDone := make(chan struct{})
 	go func() {
+		defer close(diagnosticsDone)
 		defer observability.Recover(logger, observabilityRuntime.Metrics, "telemetry_history_projector.diagnostics")
 		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("telemetry_history_diagnostics_stopped_unexpectedly", "error_code", "TELEMETRY_HISTORY_DIAGNOSTICS_SERVE_FAILED")
@@ -88,12 +90,16 @@ func main() {
 			return
 		}
 		if published > 0 {
-			logger.Info("telemetry_history_batch_projected", "observation_count", published)
+			logger.Debug("telemetry_history_batch_projected", "observation_count", published)
 		}
 	})
 	observabilityRuntime.MarkNotReady()
 	shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	_ = diagnostics.Shutdown(shutdownContext)
+	select {
+	case <-diagnosticsDone:
+	case <-shutdownContext.Done():
+	}
 	shutdownCancel()
 	logger.Info("telemetry_history_projector_stopped")
 }

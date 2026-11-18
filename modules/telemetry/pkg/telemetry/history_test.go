@@ -1270,3 +1270,31 @@ func TestHistoryRelayBacksOffTooManyPartsWithoutSplitting(t *testing.T) {
 		t.Fatalf("retryAt=%s code=%q, want +2s and %q", repo.retryAt, repo.errorCode, historyTooManyPartsFailureCode)
 	}
 }
+
+type panickingClaimHistoryRepo struct {
+	fakePipelinedHistoryRepo
+}
+
+func (p *panickingClaimHistoryRepo) ClaimPipelinedHistoryBatch(context.Context, int, time.Time, time.Duration, []string, int) (HistoryBatch, error) {
+	panic("history stage1 boom")
+}
+
+func TestHistoryRelayPipelineRecoversStage1Panic(t *testing.T) {
+	repo := &panickingClaimHistoryRepo{fakePipelinedHistoryRepo: *newFakePipelinedHistoryRepo(nil)}
+	sink := &fakePreparedHistorySink{}
+	relay, err := NewHistoryRelay(HistoryRelayConfig{
+		Repository:    repo,
+		Sink:          sink,
+		BatchSize:     4,
+		LeaseFor:      30 * time.Second,
+		RetryAfter:    time.Second,
+		PipelineDepth: 2,
+		Now:           time.Now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := relay.RelayPending(t.Context()); err == nil {
+		t.Fatal("expected RelayPending error when stage 1 panics")
+	}
+}

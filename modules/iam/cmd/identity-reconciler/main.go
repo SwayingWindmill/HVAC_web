@@ -149,7 +149,16 @@ func decodeCommand(input io.Reader) (command, error) {
 }
 
 func readDirectoryUser(ctx context.Context, databaseURL, userID string) (directoryUser, error) {
-	pool, err := pgxpool.New(ctx, strings.TrimSpace(databaseURL))
+	poolConfig, err := pgxpool.ParseConfig(strings.TrimSpace(databaseURL))
+	if err != nil {
+		return directoryUser{}, fmt.Errorf("parse identity directory configuration: %w", err)
+	}
+	poolConfig.MaxConns = 2
+	poolConfig.MinConns = 1
+	poolConfig.MaxConnLifetime = 30 * time.Minute
+	poolConfig.MaxConnIdleTime = 5 * time.Minute
+	poolConfig.HealthCheckPeriod = 30 * time.Second
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		return directoryUser{}, fmt.Errorf("open identity directory: %w", err)
 	}

@@ -50,6 +50,8 @@ func OpenPostgresStore(ctx context.Context, databaseURL string) (*PostgresStore,
 	config.MaxConns = 16
 	config.MinConns = 1
 	config.MaxConnLifetime = 30 * time.Minute
+	config.MaxConnIdleTime = 5 * time.Minute
+	config.HealthCheckPeriod = 30 * time.Second
 	config.AfterConnect = func(ctx context.Context, connection *pgx.Conn) error {
 		_, err := connection.Exec(ctx, `SET ROLE s3_command_runtime`)
 		return err

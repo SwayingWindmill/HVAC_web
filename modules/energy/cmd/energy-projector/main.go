@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -103,7 +104,9 @@ func main() {
 		Handler:           telemetry.DiagnosticsHandler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	diagnosticsDone := make(chan struct{})
 	go func() {
+		defer close(diagnosticsDone)
 		defer observability.Recover(logger, telemetry.Metrics, "energy_projector.diagnostics")
 		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("analytics_projector_diagnostics_failed", "error_code", "ANALYTICS_PROJECTOR_DIAGNOSTICS_SERVE_FAILED")
@@ -113,7 +116,9 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	logger.Info("analytics_read_model_projector_started", "poll_interval", pollInterval.String())
+	submeterDone := make(chan struct{})
 	go func() {
+		defer close(submeterDone)
 		defer observability.Recover(logger, telemetry.Metrics, "energy_projector.submeter_sync_loop")
 		submeterTicker := time.NewTicker(durationEnv("ANALYTICS_TOTAL_SUBMETER_INTERVAL", 5*time.Minute, 10*time.Second, time.Hour))
 		defer submeterTicker.Stop()
@@ -135,7 +140,15 @@ func main() {
 		case <-ctx.Done():
 			telemetry.MarkNotReady()
 			shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			select {
+			case <-submeterDone:
+			case <-shutdownContext.Done():
+			}
 			_ = diagnostics.Shutdown(shutdownContext)
+			select {
+			case <-diagnosticsDone:
+			case <-shutdownContext.Done():
+			}
 			shutdownCancel()
 			logger.Info("analytics_read_model_projector_stopped")
 			return
@@ -163,7 +176,7 @@ func main() {
 			span.End()
 			if projected > 0 {
 				_ = telemetry.Metrics.AddCounter("hvac_analytics_energy_intervals_projected_total", "Projected additive energy intervals.", map[string]string{"model": "energy_interval_facts"}, float64(projected))
-				logger.Info("analytics_energy_intervals_projected", "interval_count", projected)
+				logger.Debug("analytics_energy_intervals_projected", "interval_count", projected)
 			}
 		}
 	}
@@ -192,7 +205,7 @@ func newClickHouseHTTPClient(caPath string) (*http.Client, error) {
 		}
 		tlsConfig.RootCAs = pool
 	}
-	return &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{TLSClientConfig: tlsConfig}}, nil
+	return &http.Client{Timeout: 15 * time.Second, Transport: newClonedProjectorTransport(tlsConfig, false, 30*time.Second)}, nil
 }
 
 func newInternalHTTPClient(caPath, certPath, keyPath string) (*http.Client, error) {
@@ -207,12 +220,27 @@ func newInternalHTTPClient(caPath, certPath, keyPath string) (*http.Client, erro
 	return &http.Client{
 		Timeout:       10 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		Transport: &http.Transport{
-			Proxy:              http.ProxyFromEnvironment,
-			TLSClientConfig:    &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: roots, Certificates: []tls.Certificate{certificate}},
-			DisableCompression: true,
-		},
+		Transport:     newClonedProjectorTransport(&tls.Config{MinVersion: tls.VersionTLS13, RootCAs: roots, Certificates: []tls.Certificate{certificate}}, true, 15*time.Second),
 	}, nil
+}
+
+func newClonedProjectorTransport(tlsConfig *tls.Config, disableCompression bool, responseHeaderTimeout time.Duration) *http.Transport {
+	var transport *http.Transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok && base != nil {
+		transport = base.Clone()
+	} else {
+		transport = &http.Transport{}
+	}
+	transport.Proxy = http.ProxyFromEnvironment
+	transport.DialContext = (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext
+	transport.TLSClientConfig = tlsConfig
+	transport.DisableCompression = disableCompression
+	transport.MaxConnsPerHost = 16
+	transport.MaxIdleConns = 64
+	transport.MaxIdleConnsPerHost = 16
+	transport.IdleConnTimeout = 90 * time.Second
+	transport.ResponseHeaderTimeout = responseHeaderTimeout
+	return transport
 }
 
 func loadCertPool(path string) (*x509.CertPool, error) {

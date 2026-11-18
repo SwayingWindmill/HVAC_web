@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"io"
 	"log/slog"
@@ -642,5 +643,52 @@ func TestParseHistoryProjectionSettingsPipelineDepth(t *testing.T) {
 		"TELEMETRY_HISTORY_BATCH_SIZE": "32769",
 	})); err == nil {
 		t.Fatal("expected error for TELEMETRY_HISTORY_BATCH_SIZE=32769")
+	}
+}
+
+type stubProbeOffsetSweeper struct {
+	calls atomic.Int32
+	done  chan struct{}
+}
+
+func (s *stubProbeOffsetSweeper) SweepProbeOffsets(context.Context, time.Time) (int, error) {
+	if s.calls.Add(1) == 1 && s.done != nil {
+		close(s.done)
+	}
+	return 3, nil
+}
+
+func TestClonedHTTPTransportAndProbeSweepDebugLogging(t *testing.T) {
+	transport := newClonedTelemetryHTTPTransport(&tls.Config{MinVersion: tls.VersionTLS13}, true, false, 12*time.Second)
+	if transport.MaxConnsPerHost != 16 || transport.MaxIdleConns != 64 || transport.MaxIdleConnsPerHost != 16 ||
+		transport.IdleConnTimeout != 90*time.Second || transport.ResponseHeaderTimeout != 12*time.Second ||
+		transport.DialContext == nil || !transport.DisableCompression || transport.TLSClientConfig == nil {
+		t.Fatalf("unexpected cloned transport config: %#v", transport)
+	}
+
+	var infoBuf bytes.Buffer
+	infoCtx, cancelInfo := context.WithCancel(t.Context())
+	doneInfo := make(chan struct{})
+	go func() {
+		runProbeOffsetSweep(infoCtx, &stubProbeOffsetSweeper{done: doneInfo}, 10*time.Millisecond, observability.NewJSONLogger(&infoBuf, slog.LevelInfo))
+	}()
+	<-doneInfo
+	cancelInfo()
+	time.Sleep(15 * time.Millisecond)
+	if strings.Contains(infoBuf.String(), "telemetry_probe_offsets_estimated") {
+		t.Fatalf("expected telemetry_probe_offsets_estimated suppressed at Info level, got: %s", infoBuf.String())
+	}
+
+	var debugBuf bytes.Buffer
+	debugCtx, cancelDebug := context.WithCancel(t.Context())
+	doneDebug := make(chan struct{})
+	go func() {
+		runProbeOffsetSweep(debugCtx, &stubProbeOffsetSweeper{done: doneDebug}, 10*time.Millisecond, observability.NewJSONLogger(&debugBuf, slog.LevelDebug))
+	}()
+	<-doneDebug
+	cancelDebug()
+	time.Sleep(15 * time.Millisecond)
+	if !strings.Contains(debugBuf.String(), "telemetry_probe_offsets_estimated") {
+		t.Fatalf("expected telemetry_probe_offsets_estimated at Debug level, got: %s", debugBuf.String())
 	}
 }

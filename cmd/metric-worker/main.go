@@ -108,6 +108,7 @@ func main() {
 		detectorWG.Add(1)
 		go func() {
 			defer detectorWG.Done()
+			defer observability.Recover(logger, telemetry.Metrics, "metric_worker.backfill_detector")
 			runBackfillDetectorLoop(ctx, detector, backfillScanInterval, telemetry, logger)
 		}()
 	}
@@ -136,6 +137,8 @@ func openRuntime(ctx context.Context) (*runtime, error) {
 	config.MaxConns = 8
 	config.MinConns = 1
 	config.MaxConnLifetime = 30 * time.Minute
+	config.MaxConnIdleTime = 5 * time.Minute
+	config.HealthCheckPeriod = 30 * time.Second
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		return nil, err

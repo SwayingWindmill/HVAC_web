@@ -24,9 +24,15 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	config, err := loadWorkerSettings()
+	if err != nil {
+		logger.Error("maintenance_configuration_invalid", "error_code", "MAINTENANCE_CONFIGURATION_INVALID", "error", err.Error())
+		os.Exit(1)
+	}
+
 	store, err := openStore(ctx)
 	if err != nil {
-		logger.Error("maintenance_configuration_invalid", "error_code", "MAINTENANCE_CONFIGURATION_INVALID")
+		logger.Error("maintenance_configuration_invalid", "error_code", "MAINTENANCE_CONFIGURATION_INVALID", "error", err.Error())
 		os.Exit(1)
 	}
 	defer store.Close()
@@ -40,12 +46,12 @@ func main() {
 	worker := &maintenance.Worker{
 		Store:         store,
 		WorkerID:      workerID,
-		Batch:         integerEnv("MAINTENANCE_CLAIM_BATCH", 10, 1, 100),
-		LeaseDuration: durationEnv("MAINTENANCE_LEASE_DURATION", 30*time.Second, 5*time.Second, 10*time.Minute),
+		Batch:         config.batch,
+		LeaseDuration: config.leaseDuration,
 		Logger:        logger,
 	}
-	scanInterval := durationEnv("MAINTENANCE_SCAN_INTERVAL", 2*time.Second, time.Second, time.Minute)
-	auditInterval := durationEnv("MAINTENANCE_LIFECYCLE_AUDIT_INTERVAL", time.Minute, 5*time.Second, 24*time.Hour)
+	scanInterval := config.scanInterval
+	auditInterval := config.auditInterval
 	coldArchiveDir := strings.TrimSpace(os.Getenv("MAINTENANCE_COLD_ARCHIVE_DIR"))
 
 	diagnostics := &http.Server{
@@ -205,26 +211,58 @@ func envOr(name, fallback string) string {
 	return fallback
 }
 
-func durationEnv(name string, fallback, minimum, maximum time.Duration) time.Duration {
+type workerSettings struct {
+	batch         int
+	leaseDuration time.Duration
+	scanInterval  time.Duration
+	auditInterval time.Duration
+}
+
+func loadWorkerSettings() (workerSettings, error) {
+	batch, err := integerEnv("MAINTENANCE_CLAIM_BATCH", 10, 1, 100)
+	if err != nil {
+		return workerSettings{}, err
+	}
+	leaseDuration, err := durationEnv("MAINTENANCE_LEASE_DURATION", 30*time.Second, 5*time.Second, 10*time.Minute)
+	if err != nil {
+		return workerSettings{}, err
+	}
+	scanInterval, err := durationEnv("MAINTENANCE_SCAN_INTERVAL", 2*time.Second, time.Second, time.Minute)
+	if err != nil {
+		return workerSettings{}, err
+	}
+	auditInterval, err := durationEnv("MAINTENANCE_LIFECYCLE_AUDIT_INTERVAL", time.Minute, 5*time.Second, 24*time.Hour)
+	if err != nil {
+		return workerSettings{}, err
+	}
+	return workerSettings{
+		batch:         batch,
+		leaseDuration: leaseDuration,
+		scanInterval:  scanInterval,
+		auditInterval: auditInterval,
+	}, nil
+}
+
+func durationEnv(name string, fallback, minimum, maximum time.Duration) (time.Duration, error) {
 	value := strings.TrimSpace(os.Getenv(name))
 	if value == "" {
-		return fallback
+		return fallback, nil
 	}
 	parsed, err := time.ParseDuration(value)
 	if err != nil || parsed < minimum || parsed > maximum {
-		panic("invalid duration environment variable: " + name)
+		return 0, errors.New("invalid duration environment variable: " + name)
 	}
-	return parsed
+	return parsed, nil
 }
 
-func integerEnv(name string, fallback, minimum, maximum int) int {
+func integerEnv(name string, fallback, minimum, maximum int) (int, error) {
 	value := strings.TrimSpace(os.Getenv(name))
 	if value == "" {
-		return fallback
+		return fallback, nil
 	}
 	parsed, err := strconv.Atoi(value)
 	if err != nil || parsed < minimum || parsed > maximum {
-		panic("invalid integer environment variable: " + name)
+		return 0, errors.New("invalid integer environment variable: " + name)
 	}
-	return parsed
+	return parsed, nil
 }

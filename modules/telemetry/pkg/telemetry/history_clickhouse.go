@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -96,15 +97,84 @@ func newDefaultClickHouseHistoryHTTPClient(timeout time.Duration) *http.Client {
 	} else {
 		transport = &http.Transport{}
 	}
+	transport.DialContext = (&net.Dialer{
+		Timeout:   5 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext
+	transport.MaxConnsPerHost = 16
 	transport.MaxIdleConns = 64
-	transport.MaxIdleConnsPerHost = 32
+	transport.MaxIdleConnsPerHost = 16
 	transport.IdleConnTimeout = 90 * time.Second
 	transport.TLSHandshakeTimeout = 10 * time.Second
+	transport.ResponseHeaderTimeout = 30 * time.Second
 	transport.ExpectContinueTimeout = 1 * time.Second
 	return &http.Client{
 		Timeout:   timeout,
 		Transport: transport,
 	}
+}
+
+func (sink *ClickHouseHistorySink) Ping(ctx context.Context) error {
+	if sink == nil || sink.baseURL == nil || sink.httpClient == nil {
+		return errors.New("ClickHouse history sink is closed")
+	}
+	return pingClickHouseHTTP(ctx, sink.baseURL, sink.username, sink.password, sink.httpClient, "ClickHouse history ping")
+}
+
+func pingClickHouseHTTP(ctx context.Context, baseURL *url.URL, username, password string, client *http.Client, label string) error {
+	endpoint := *baseURL
+	q := endpoint.Query()
+	q.Set("query", "SELECT 1")
+	q.Set("enable_http_compression", "1")
+	endpoint.RawQuery = q.Encode()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return fmt.Errorf("create %s request: %w", label, err)
+	}
+	request.Header.Set("Accept-Encoding", "gzip")
+	if username != "" {
+		request.SetBasicAuth(username, password)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return fmt.Errorf("%s: %w", label, err)
+	}
+	body, readErr := readBoundedClickHouseResponse(response, 8<<10, label)
+	closeErr := response.Body.Close()
+	if readErr != nil {
+		return readErr
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close %s response: %w", label, closeErr)
+	}
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		message := strings.TrimSpace(string(body))
+		if len(message) > 512 {
+			message = message[:512]
+		}
+		return fmt.Errorf("%s returned %d: %s", label, response.StatusCode, message)
+	}
+	return nil
+}
+
+func readBoundedClickHouseResponse(response *http.Response, maxBytes int64, label string) ([]byte, error) {
+	const maxDrainBytes = 4096
+	reader := io.Reader(io.LimitReader(response.Body, maxBytes))
+	if strings.EqualFold(strings.TrimSpace(response.Header.Get("Content-Encoding")), "gzip") {
+		gz, err := gzip.NewReader(reader)
+		if err != nil {
+			_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxDrainBytes))
+			return nil, fmt.Errorf("decode %s gzip response: %w", label, err)
+		}
+		defer gz.Close()
+		reader = io.LimitReader(gz, maxBytes)
+	}
+	body, err := io.ReadAll(reader)
+	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxDrainBytes))
+	if err != nil {
+		return nil, fmt.Errorf("read %s response: %w", label, err)
+	}
+	return body, nil
 }
 
 var historyGzipWriterPool = sync.Pool{
@@ -325,7 +395,7 @@ func (sink *ClickHouseHistorySink) insertBatch(ctx context.Context, compressed [
 		return fmt.Errorf("insert ClickHouse history batch %s: %w", token, err)
 	}
 	responseBody, readErr := io.ReadAll(io.LimitReader(response.Body, 8<<10))
-	_, _ = io.Copy(io.Discard, response.Body)
+	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
 	closeErr := response.Body.Close()
 	if readErr != nil {
 		return fmt.Errorf("read ClickHouse history response for %s: %w", token, readErr)

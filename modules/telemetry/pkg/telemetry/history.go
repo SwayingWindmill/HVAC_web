@@ -4,8 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
 const (
@@ -505,10 +509,18 @@ func (relay *HistoryRelay) runPipelinedWave(
 	slots := make(chan struct{}, depth)
 	readyCh := make(chan preparedHistoryBatch, depth+1)
 	stage1Done := make(chan struct{})
+	var stage1Panicked atomic.Bool
 
 	go func() {
 		defer close(stage1Done)
 		defer close(readyCh)
+		defer observability.Recover(slog.Default(), nil, "telemetry.history_pipeline_stage1", func(any) {
+			stage1Panicked.Store(true)
+			select {
+			case readyCh <- preparedHistoryBatch{claimErr: errors.New("telemetry history pipeline panicked")}:
+			default:
+			}
+		})
 		for {
 			select {
 			case <-stage1Ctx.Done():
@@ -616,5 +628,12 @@ func (relay *HistoryRelay) runPipelinedWave(
 		lastFull = published == relay.batchSize
 	}
 	<-stage1Done
+	if stage1Panicked.Load() {
+		panicErr := errors.New("telemetry history pipeline panicked")
+		if report != nil {
+			report(0, panicErr)
+		}
+		return totalPublished, false, panicErr
+	}
 	return totalPublished, lastFull, nil
 }

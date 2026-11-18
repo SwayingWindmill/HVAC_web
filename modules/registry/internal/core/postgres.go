@@ -56,6 +56,11 @@ func OpenPostgresStore(ctx context.Context, databaseURL string) (*PostgresStore,
 	if err != nil {
 		return nil, fmt.Errorf("parse Core database configuration: %w", err)
 	}
+	config.MaxConns = 16
+	config.MinConns = 1
+	config.MaxConnLifetime = 30 * time.Minute
+	config.MaxConnIdleTime = 5 * time.Minute
+	config.HealthCheckPeriod = 30 * time.Second
 	config.ConnConfig.RuntimeParams["application_name"] = "platform-core-service"
 	config.ConnConfig.RuntimeParams["default_transaction_read_only"] = "on"
 	config.ConnConfig.RuntimeParams["statement_timeout"] = "5s"

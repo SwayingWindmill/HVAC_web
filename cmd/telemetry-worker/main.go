@@ -7,6 +7,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -59,6 +60,10 @@ func shutdownTelemetryWorker(cfg telemetryWorkerShutdown) {
 	}
 	if cfg.Diagnostics != nil || cfg.Server != nil {
 		httpCtx, cancelHTTP := context.WithTimeout(context.Background(), httpTimeout)
+		var metrics *observability.Registry
+		if cfg.Observability != nil {
+			metrics = cfg.Observability.Metrics
+		}
 		var httpWG sync.WaitGroup
 		for _, srv := range []*http.Server{cfg.Diagnostics, cfg.Server} {
 			if srv == nil {
@@ -67,6 +72,7 @@ func shutdownTelemetryWorker(cfg telemetryWorkerShutdown) {
 			httpWG.Add(1)
 			go func(s *http.Server) {
 				defer httpWG.Done()
+				defer observability.Recover(cfg.Logger, metrics, "telemetry_worker.http_shutdown")
 				_ = s.Shutdown(httpCtx)
 			}(srv)
 		}
@@ -128,6 +134,7 @@ func waitWorkersBounded(wg *sync.WaitGroup, timeout time.Duration) bool {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		defer observability.Recover(slog.Default(), nil, "telemetry_worker.wait_workers")
 		wg.Wait()
 	}()
 	if timeout <= 0 {
@@ -252,18 +259,22 @@ func runTelemetryWorker() int {
 		dependencies = append(dependencies, observability.Dependency{Name: "redis-latest-cache", Required: false, Check: latestCache.Ping})
 		shutdownCfg.CloseLatestCache = func() { _ = latestCache.Close() }
 	}
+	historyRepository, historySink, historyRelay, historySettings, historyContext, historyCancel, err := loadHistoryProjection(pipelineMetrics)
+	if err != nil {
+		logger.Error("telemetry_history_projection_configuration_invalid", "error_code", "TELEMETRY_HISTORY_PROJECTION_CONFIGURATION_INVALID")
+		return 1
+	}
+	if historySink != nil {
+		dependencies = append(dependencies, observability.Dependency{Name: "clickhouse", Required: true, Check: historySink.Ping})
+	} else if clickHousePruner != nil {
+		dependencies = append(dependencies, observability.Dependency{Name: "clickhouse", Required: true, Check: clickHousePruner.Ping})
+	}
 	observabilityRuntime.SetDependencies(dependencies...)
 	if latestCancel != nil {
 		workerCancels = append(workerCancels, latestCancel)
 		runSupervised(latestContext, &workersWG, observabilityRuntime, logger, "telemetry.latest_cache_relay", func() {
 			runLatestCacheRelay(latestContext, latestRelay, logger)
 		})
-	}
-
-	historyRepository, historyRelay, historySettings, historyContext, historyCancel, err := loadHistoryProjection(pipelineMetrics)
-	if err != nil {
-		logger.Error("telemetry_history_projection_configuration_invalid", "error_code", "TELEMETRY_HISTORY_PROJECTION_CONFIGURATION_INVALID")
-		return 1
 	}
 	if historyRepository != nil {
 		shutdownCfg.CloseHistory = historyRepository.Close
@@ -295,14 +306,9 @@ func runTelemetryWorker() int {
 
 	iamClient := &http.Client{
 		Timeout: 5 * time.Second,
-		Transport: &http.Transport{
-			Proxy: http.ProxyFromEnvironment,
-			TLSClientConfig: &tls.Config{
-				MinVersion: tls.VersionTLS13, RootCAs: iamCAs, Certificates: []tls.Certificate{certificate},
-			},
-			DisableCompression: true,
-			ForceAttemptHTTP2:  false,
-		},
+		Transport: newClonedTelemetryHTTPTransport(&tls.Config{
+			MinVersion: tls.VersionTLS13, RootCAs: iamCAs, Certificates: []tls.Certificate{certificate},
+		}, true, false, 10*time.Second),
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	authorizer, err := telemetry.NewHTTPGrantAuthorizer(
@@ -550,7 +556,7 @@ func runLatestCacheRelay(ctx context.Context, relay *telemetry.LatestCacheRelay,
 				continue
 			}
 			if materialized > 0 {
-				logger.Info("telemetry_latest_cache_relay_batch_materialized", "materialized_count", materialized)
+				logger.Debug("telemetry_latest_cache_relay_batch_materialized", "materialized_count", materialized)
 			}
 		}
 	}
@@ -594,19 +600,19 @@ func parseHistoryProjectionSettings(lookup func(string) string) (historyProjecti
 	}, nil
 }
 
-func loadHistoryProjection(metrics *telemetry.PipelineMetrics) (*telemetry.HistoryPostgresRepository, *telemetry.HistoryRelay, historyProjectionSettings, context.Context, context.CancelFunc, error) {
+func loadHistoryProjection(metrics *telemetry.PipelineMetrics) (*telemetry.HistoryPostgresRepository, *telemetry.ClickHouseHistorySink, *telemetry.HistoryRelay, historyProjectionSettings, context.Context, context.CancelFunc, error) {
 	if !strings.EqualFold(strings.TrimSpace(os.Getenv("TELEMETRY_HISTORY_PROJECTION_ENABLED")), "true") {
-		return nil, nil, historyProjectionSettings{}, context.Background(), nil, nil
+		return nil, nil, nil, historyProjectionSettings{}, context.Background(), nil, nil
 	}
 	settings, err := parseHistoryProjectionSettings(os.Getenv)
 	if err != nil {
-		return nil, nil, historyProjectionSettings{}, nil, nil, err
+		return nil, nil, nil, historyProjectionSettings{}, nil, nil, err
 	}
 	openContext, cancelOpen := context.WithTimeout(context.Background(), 5*time.Second)
 	repository, err := telemetry.OpenHistoryPostgresRepository(openContext, requiredEnv("TELEMETRY_HISTORY_DATABASE_URL"))
 	cancelOpen()
 	if err != nil {
-		return nil, nil, historyProjectionSettings{}, nil, nil, err
+		return nil, nil, nil, historyProjectionSettings{}, nil, nil, err
 	}
 	sink, err := telemetry.NewClickHouseHistorySink(telemetry.ClickHouseHistoryConfig{
 		BaseURL:  requiredEnv("TELEMETRY_CLICKHOUSE_HTTP_URL"),
@@ -617,7 +623,7 @@ func loadHistoryProjection(metrics *telemetry.PipelineMetrics) (*telemetry.Histo
 	})
 	if err != nil {
 		repository.Close()
-		return nil, nil, historyProjectionSettings{}, nil, nil, err
+		return nil, nil, nil, historyProjectionSettings{}, nil, nil, err
 	}
 	relay, err := telemetry.NewHistoryRelay(telemetry.HistoryRelayConfig{
 		Repository:    repository,
@@ -630,10 +636,10 @@ func loadHistoryProjection(metrics *telemetry.PipelineMetrics) (*telemetry.Histo
 	})
 	if err != nil {
 		repository.Close()
-		return nil, nil, historyProjectionSettings{}, nil, nil, err
+		return nil, nil, nil, historyProjectionSettings{}, nil, nil, err
 	}
 	relayContext, relayCancel := context.WithCancel(context.Background())
-	return repository, relay, settings, relayContext, relayCancel, nil
+	return repository, sink, relay, settings, relayContext, relayCancel, nil
 }
 
 func runHistoryProjection(ctx context.Context, relay *telemetry.HistoryRelay, settings historyProjectionSettings, logger *slog.Logger) {
@@ -655,7 +661,7 @@ func runHistoryProjection(ctx context.Context, relay *telemetry.HistoryRelay, se
 			return
 		}
 		if published > 0 {
-			logger.Info("telemetry_history_batch_projected", "observation_count", published)
+			logger.Debug("telemetry_history_batch_projected", "observation_count", published)
 		}
 	})
 }
@@ -699,11 +705,7 @@ func loadAnalyticsProjection(certificate tls.Certificate) (*analyticsprojector.P
 	internalClient := &http.Client{
 		Timeout:       10 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		Transport: &http.Transport{
-			Proxy:              http.ProxyFromEnvironment,
-			TLSClientConfig:    &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: internalRoots, Certificates: []tls.Certificate{certificate}},
-			DisableCompression: true,
-		},
+		Transport:     newClonedTelemetryHTTPTransport(&tls.Config{MinVersion: tls.VersionTLS13, RootCAs: internalRoots, Certificates: []tls.Certificate{certificate}}, true, true, 15*time.Second),
 	}
 	registryConfig := analyticsprojector.RegistryClientConfig{
 		BaseURL: requiredEnv("ANALYTICS_CORE_REGISTRY_URL"), IAMURL: requiredEnv("ANALYTICS_IAM_URL"), HTTPClient: internalClient,
@@ -772,7 +774,7 @@ func runAnalyticsProjection(ctx context.Context, projector *analyticsprojector.P
 			span.End()
 			if projected > 0 {
 				_ = runtime.Metrics.AddCounter("hvac_analytics_energy_intervals_projected_total", "Projected additive energy intervals.", map[string]string{"model": "energy_interval_facts"}, float64(projected))
-				logger.Info("analytics_energy_intervals_projected", "interval_count", projected)
+				logger.Debug("analytics_energy_intervals_projected", "interval_count", projected)
 			}
 		}
 	}
@@ -833,16 +835,8 @@ func newAnalyticsHTTPClient(caPath string) (*http.Client, error) {
 		tlsConfig.RootCAs = roots
 	}
 	return &http.Client{
-		Timeout: 15 * time.Second,
-		Transport: &http.Transport{
-			Proxy:                 http.ProxyFromEnvironment,
-			TLSClientConfig:       tlsConfig,
-			MaxIdleConns:          64,
-			MaxIdleConnsPerHost:   32,
-			IdleConnTimeout:       90 * time.Second,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ExpectContinueTimeout: time.Second,
-		},
+		Timeout:   15 * time.Second,
+		Transport: newClonedTelemetryHTTPTransport(tlsConfig, false, true, 30*time.Second),
 	}, nil
 }
 
@@ -854,17 +848,12 @@ func loadRealtimeService(store *telemetry.PostgresStore, certificate tls.Certifi
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	transport := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		TLSClientConfig: &tls.Config{
-			MinVersion:   tls.VersionTLS13,
-			RootCAs:      centrifugoCAs,
-			Certificates: []tls.Certificate{certificate},
-			ServerName:   strings.TrimSpace(os.Getenv("TELEMETRY_CENTRIFUGO_SERVER_NAME")),
-		},
-		DisableCompression: true,
-		ForceAttemptHTTP2:  false,
-	}
+	transport := newClonedTelemetryHTTPTransport(&tls.Config{
+		MinVersion:   tls.VersionTLS13,
+		RootCAs:      centrifugoCAs,
+		Certificates: []tls.Certificate{certificate},
+		ServerName:   strings.TrimSpace(os.Getenv("TELEMETRY_CENTRIFUGO_SERVER_NAME")),
+	}, true, false, 15*time.Second)
 	centrifugo, err := telemetry.NewCentrifugoTransport(telemetry.CentrifugoTransportConfig{
 		BaseURL:    requiredEnv("TELEMETRY_CENTRIFUGO_API_URL"),
 		APIKey:     requiredEnv("TELEMETRY_CENTRIFUGO_API_KEY"),
@@ -919,7 +908,7 @@ func runRealtimeRelay(ctx context.Context, service *telemetry.RealtimeService, l
 				continue
 			}
 			if published > 0 {
-				logger.Info("telemetry_realtime_relay_batch_published", "publication_count", published)
+				logger.Debug("telemetry_realtime_relay_batch_published", "publication_count", published)
 			}
 		}
 	}
@@ -1200,7 +1189,7 @@ func runProbeOffsetSweep(ctx context.Context, sweeper probeOffsetSweeper, interv
 			case err != nil && ctx.Err() == nil:
 				logger.Warn("telemetry_probe_offset_sweep_failed", "error_code", "TELEMETRY_PROBE_OFFSET_SWEEP_FAILED")
 			case estimated > 0:
-				logger.Info("telemetry_probe_offsets_estimated", "estimate_count", estimated)
+				logger.Debug("telemetry_probe_offsets_estimated", "estimate_count", estimated)
 			}
 		}
 	}
@@ -1243,15 +1232,10 @@ func loadAlarmEvaluationRelay(store *telemetry.PostgresStore, certificate tls.Ce
 	client := &http.Client{
 		Timeout:       deliveryTimeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		Transport: &http.Transport{
-			Proxy: http.ProxyFromEnvironment,
-			TLSClientConfig: &tls.Config{
-				MinVersion: tls.VersionTLS13, RootCAs: alarmCAs, Certificates: []tls.Certificate{certificate},
-				ServerName: strings.TrimSpace(os.Getenv("TELEMETRY_ALARM_SERVER_NAME")),
-			},
-			DisableCompression: true,
-			ForceAttemptHTTP2:  false,
-		},
+		Transport: newClonedTelemetryHTTPTransport(&tls.Config{
+			MinVersion: tls.VersionTLS13, RootCAs: alarmCAs, Certificates: []tls.Certificate{certificate},
+			ServerName: strings.TrimSpace(os.Getenv("TELEMETRY_ALARM_SERVER_NAME")),
+		}, true, false, deliveryTimeout),
 	}
 	transport, err := telemetry.NewHTTPAlarmEvaluationTransport(telemetry.HTTPAlarmEvaluationTransportConfig{
 		Endpoint: requiredEnv("TELEMETRY_ALARM_EVALUATION_URL"), HTTPClient: client,
@@ -1305,7 +1289,7 @@ func runAlarmEvaluationRelay(ctx context.Context, relay *telemetry.AlarmEvaluati
 				continue
 			}
 			if delivered > 0 {
-				logger.Info("telemetry_alarm_evaluation_batch_delivered", "publication_count", delivered)
+				logger.Debug("telemetry_alarm_evaluation_batch_delivered", "publication_count", delivered)
 			}
 		}
 	}
@@ -1350,8 +1334,56 @@ func loadTelemetryRateLimiter() (*limitpolicy.Limiter, func(), error) {
 	if err != nil {
 		return nil, func() {}, err
 	}
+	if options.DialTimeout <= 0 {
+		options.DialTimeout = 5 * time.Second
+	}
+	if options.ReadTimeout <= 0 {
+		options.ReadTimeout = 3 * time.Second
+	}
+	if options.WriteTimeout <= 0 {
+		options.WriteTimeout = 3 * time.Second
+	}
+	if options.PoolTimeout <= 0 {
+		options.PoolTimeout = 4 * time.Second
+	}
+	if options.PoolSize <= 0 || options.PoolSize > 16 {
+		options.PoolSize = 16
+	}
+	if options.MinIdleConns <= 0 || options.MinIdleConns > options.PoolSize {
+		options.MinIdleConns = 2
+	}
+	if options.ConnMaxIdleTime <= 0 {
+		options.ConnMaxIdleTime = 5 * time.Minute
+	}
 	client := redis.NewClient(options)
 	return limitpolicy.NewLimiter(limitpolicy.NewRedisCounter(client, "hvac:telemetry:limit"), telemetryLimitPolicy()), func() { _ = client.Close() }, nil
+}
+
+func newClonedTelemetryHTTPTransport(tlsConfig *tls.Config, disableCompression, allowHTTP2 bool, responseHeaderTimeout time.Duration) *http.Transport {
+	var transport *http.Transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok && base != nil {
+		transport = base.Clone()
+	} else {
+		transport = &http.Transport{}
+	}
+	transport.Proxy = http.ProxyFromEnvironment
+	transport.DialContext = (&net.Dialer{
+		Timeout:   5 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext
+	transport.TLSClientConfig = tlsConfig
+	transport.DisableCompression = disableCompression
+	if !allowHTTP2 {
+		transport.ForceAttemptHTTP2 = false
+	}
+	transport.MaxConnsPerHost = 16
+	transport.MaxIdleConns = 64
+	transport.MaxIdleConnsPerHost = 16
+	transport.IdleConnTimeout = 90 * time.Second
+	transport.TLSHandshakeTimeout = 10 * time.Second
+	transport.ResponseHeaderTimeout = responseHeaderTimeout
+	transport.ExpectContinueTimeout = time.Second
+	return transport
 }
 
 // telemetryLimitPolicy keeps telemetry ingest fail-open: Redis loss must not drop source observations.

@@ -505,3 +505,65 @@ func TestOpenConcentratorAndSharedSessionLifecycle(t *testing.T) {
 	_ = legacyTransport.Close(closeCtx2)
 	closeCancel2()
 }
+
+func TestShutdownConnectivityRuntimeOrder(t *testing.T) {
+	var order []string
+	credentialsDone := make(chan struct{})
+	runtimeDone := make(chan struct{})
+	commandsDone := make(chan struct{})
+	retentionDone := make(chan struct{})
+	diagnosticsDone := make(chan struct{})
+
+	shutdownConnectivityRuntime(connectivityShutdownDeps{
+		markShuttingDown: func() { order = append(order, "mark_not_ready") },
+		shutdownCredentials: func(context.Context) error {
+			order = append(order, "credentials_shutdown")
+			close(credentialsDone)
+			return nil
+		},
+		credentialsDone: credentialsDone,
+		closeTunnelHub:  func() { order = append(order, "tunnel_close") },
+		cancelIngress: func() {
+			order = append(order, "cancel_ingress")
+			close(runtimeDone)
+			close(commandsDone)
+			close(retentionDone)
+		},
+		cancelDrainRoot:   func() { order = append(order, "cancel_drain_root") },
+		runtimeDone:       runtimeDone,
+		commandsDone:      commandsDone,
+		waitCommands:      func(context.Context) error { order = append(order, "commands_wait"); return nil },
+		retentionDone:     retentionDone,
+		flushQuarantine:   func(context.Context) error { order = append(order, "flush_quarantine"); return nil },
+		closeConcentrator: func(context.Context) error { order = append(order, "concentrator_close"); return nil },
+		closeMQTTSession:  func(context.Context) error { order = append(order, "mqtt_close"); return nil },
+		closeCommands:     func(context.Context) error { order = append(order, "commands_close"); return nil },
+		shutdownDiagnostics: func(context.Context) error {
+			order = append(order, "diagnostics_shutdown")
+			close(diagnosticsDone)
+			return nil
+		},
+		diagnosticsDone:   diagnosticsDone,
+		shutdownTelemetry: func(context.Context) error { order = append(order, "telemetry_shutdown"); return nil },
+		closeStore:        func() { order = append(order, "store_close") },
+	})
+
+	want := []string{
+		"mark_not_ready",
+		"credentials_shutdown",
+		"tunnel_close",
+		"cancel_ingress",
+		"commands_wait",
+		"flush_quarantine",
+		"cancel_drain_root",
+		"concentrator_close",
+		"mqtt_close",
+		"commands_close",
+		"diagnostics_shutdown",
+		"telemetry_shutdown",
+		"store_close",
+	}
+	if strings.Join(order, ",") != strings.Join(want, ",") {
+		t.Fatalf("shutdown order = %v, want %v", order, want)
+	}
+}
