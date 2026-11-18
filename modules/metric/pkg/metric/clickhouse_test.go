@@ -446,7 +446,7 @@ func TestClickHouseStorePingAndSelectGzipDecompression(t *testing.T) {
 	if err := store.Ping(context.Background()); err != nil {
 		t.Fatalf("Ping failed: %v", err)
 	}
-	found, err := store.HasMetricResult(context.Background(), "018f2e00-9100-7000-8000-000000000001")
+	found, err := store.HasMetricResult(context.Background(), Result{ResultID: "018f2e00-9100-7000-8000-000000000001"})
 	if err != nil {
 		t.Fatalf("HasMetricResult failed: %v", err)
 	}
