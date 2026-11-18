@@ -169,7 +169,7 @@ func (store *PostgresStore) acceptObservationBatch(ctx context.Context, candidat
 		normalized[index] = candidate
 		payloadSHAs[index] = payloadSHA
 	}
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := 0; attempt < store.retryAttempts(); attempt++ {
 		receipts, err := store.acceptObservationBatchOnce(ctx, normalized, payloadSHAs, evaluate)
 		if err == nil || !retryableTelemetryTransaction(err) {
 			return receipts, err
@@ -1746,6 +1746,22 @@ func qualityReasonStrings(values []QualityReason) []string {
 		result[index] = string(value)
 	}
 	return result
+}
+
+func (store *PostgresStore) retryAttempts() int {
+	if store == nil || store.pool == nil {
+		return 3
+	}
+	var minConns int32
+	if cfg := store.pool.Config(); cfg != nil {
+		minConns = cfg.MinConns
+	}
+	return retryBudgetAttempts(store.pool.Stat().TotalConns(), minConns)
+}
+
+func retryBudgetAttempts(totalConns, minConns int32) int {
+	attempts := max(int32(3), max(totalConns, minConns)+2)
+	return int(min(attempts, 32))
 }
 
 func retryableTelemetryTransaction(err error) bool {

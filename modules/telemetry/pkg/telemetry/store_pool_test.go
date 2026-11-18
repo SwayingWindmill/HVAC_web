@@ -164,3 +164,23 @@ func TestPersistCurrentStateSQLStructure(t *testing.T) {
 		t.Fatalf("persistSnapshotSQL missing IS DISTINCT FROM / snapshot_sha256 / evaluated_at: %s", persistSnapshotSQL)
 	}
 }
+
+func TestPostgresStoreRetryAttempts(t *testing.T) {
+	var nilStore *PostgresStore
+	if got := nilStore.retryAttempts(); got != 3 {
+		t.Fatalf("nil store retryAttempts=%d, want 3", got)
+	}
+	if got := (&PostgresStore{}).retryAttempts(); got != 3 {
+		t.Fatalf("poolless store retryAttempts=%d, want 3", got)
+	}
+	defaults := DefaultPostgresPoolConfig()
+	if got := retryBudgetAttempts(defaults.MinConns, defaults.MinConns); got <= int(defaults.MinConns) {
+		t.Fatalf("retryBudgetAttempts(%d, %d)=%d must exceed MinConns", defaults.MinConns, defaults.MinConns, got)
+	}
+	if got := retryBudgetAttempts(10, defaults.MinConns); got != 12 {
+		t.Fatalf("retryBudgetAttempts(10, 4)=%d, want 12", got)
+	}
+	if got := retryBudgetAttempts(64, defaults.MinConns); got != 32 {
+		t.Fatalf("retryBudgetAttempts(64, 4)=%d, want capped 32", got)
+	}
+}

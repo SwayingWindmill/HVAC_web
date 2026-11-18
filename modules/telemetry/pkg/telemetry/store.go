@@ -177,7 +177,7 @@ func (store *PostgresStore) EvaluateAndRead(ctx context.Context, target telemetr
 		return SnapshotCommit{}, fmt.Errorf("validate telemetry snapshot target: %w", err)
 	}
 	// Retried like ingest: a transient database failure must not fail a reported-state read.
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := 0; attempt < store.retryAttempts(); attempt++ {
 		commit, err := store.evaluateAndReadOnce(ctx, target, evaluatedAt)
 		if err == nil || !retryableTelemetryTransaction(err) {
 			return commit, err
