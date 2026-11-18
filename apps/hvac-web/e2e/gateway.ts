@@ -301,6 +301,57 @@ export class Gateway {
   /** The Chiller COP Model's latest read-only shadow evaluation; null when no SHADOW row exists. */
   optimizationShadow: Json | null = null;
   shadowReads = 0;
+  /** 14-day solver routing, normalized COP comparison, and guardrail negative-sample flywheel summary. */
+  optimizationGovernanceSummary: Json | null = {
+    tenantId: principal.context.tenantId,
+    siteId: SITE_ID,
+    windowDays: 14,
+    generatedAt: '2026-10-11T16:47:21Z',
+    activeSolver: {
+      servingRef: 'builtin://hvac-recommendation-v1',
+      source: 'DEFAULT',
+      loopKey: 'chilled_water_supply_temp',
+      deploymentRevisionId: null,
+    },
+    tickCounts: {
+      aiClosedLoop: 24,
+      aiShadow: 16,
+      ruleBaseline: 30,
+      manualOverride: 2,
+    },
+    copComparison: {
+      matchedBinCount: 1,
+      matchedAiSamples: 18,
+      matchedBaselineSamples: 24,
+      weightedBaselineCOP: 4.42,
+      weightedAiCOP: 4.79,
+      weightedCopUpliftPct: 8.3,
+      totalEstimatedSavedKWh: 14.8,
+      cells: [
+        {
+          wetBulbMinC: 22.0,
+          wetBulbMaxC: 24.0,
+          coolingLoadMinKW: 400,
+          coolingLoadMaxKW: 600,
+          baselineSamples: 24,
+          aiSamples: 18,
+          baselineCOP: 4.42,
+          aiCOP: 4.79,
+          copUpliftPct: 8.3,
+          estimatedSavedKWh: 14.8,
+        },
+      ],
+    },
+    flywheel: {
+      totalSamples: 5,
+      guardrailClamped: 2,
+      guardrailVetoed: 1,
+      manualOverride: 1,
+      monitorTripped: 1,
+      trackingDeviation: 0,
+    },
+  };
+  governanceReads = 0;
   /** IAM refuses Energy Analytics for the Site, as it does for a Site outside the principal's analytics grant. */
   analyticsDenied = false;
   /** IAM refuses Alarm listing for the Site. */
@@ -1360,6 +1411,12 @@ export class Gateway {
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/optimization/shadow-evaluations/latest`) {
       this.shadowReads += 1;
       return this.optimizationShadow ? { body: this.optimizationShadow } : { status: 404, body: { status: 404, code: 'RESOURCE_NOT_FOUND', title: 'Resource not found' } };
+    }
+    if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/optimization/governance-summary`) {
+      this.governanceReads += 1;
+      return this.optimizationGovernanceSummary
+        ? { body: this.optimizationGovernanceSummary }
+        : { status: 404, body: { status: 404, code: 'RESOURCE_NOT_FOUND', title: 'Resource not found' } };
     }
     if (method === 'POST' && path === '/api/v1/optimization/runs') {
       if (!this.nextRecommendation) return { status: 502, body: fixture('optimization-run-declined.json') };

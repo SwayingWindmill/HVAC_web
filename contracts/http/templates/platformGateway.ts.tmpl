@@ -383,6 +383,7 @@ export const intelligencePaths = {
   autoControlLease: '__SITE_AUTO_CONTROL_LEASE_PATH__',
   autoControlLeaseRevoke: '__SITE_AUTO_CONTROL_LEASE_REVOKE_PATH__',
   siteOptimizationExecutionMonitors: '__SITE_OPTIMIZATION_EXECUTION_MONITORS_PATH__',
+  siteOptimizationGovernanceSummary: '__SITE_OPTIMIZATION_GOVERNANCE_SUMMARY_PATH__',
 } as const;
 
 export const buildInfoSchema = z.object({
@@ -1468,6 +1469,66 @@ export const optimizationExecutionMonitorListSchema = z.object({
   items: z.array(optimizationExecutionMonitorSchema),
 }).strict();
 
+export const optimizationActiveSolverSourceSchema = z.enum(['DEFAULT', 'DEPLOYMENT_BINDING', 'SITE_LOOP_CANARY']);
+
+export const optimizationActiveSolverSchema = z.object({
+  servingRef: z.string(),
+  source: optimizationActiveSolverSourceSchema,
+  loopKey: z.string(),
+  deploymentRevisionId: uuidV7Schema.nullable(),
+}).strict();
+
+export const optimizationTickCountsSchema = z.object({
+  aiClosedLoop: z.number().int().nonnegative(),
+  aiShadow: z.number().int().nonnegative(),
+  ruleBaseline: z.number().int().nonnegative(),
+  manualOverride: z.number().int().nonnegative(),
+}).strict();
+
+export const optimizationCopCellSchema = z.object({
+  wetBulbMinC: z.number(),
+  wetBulbMaxC: z.number(),
+  coolingLoadMinKW: z.number(),
+  coolingLoadMaxKW: z.number(),
+  baselineSamples: z.number().int().nonnegative(),
+  aiSamples: z.number().int().nonnegative(),
+  baselineCOP: z.number(),
+  aiCOP: z.number(),
+  copUpliftPct: z.number(),
+  estimatedSavedKWh: z.number(),
+}).strict();
+
+export const optimizationCopComparisonSchema = z.object({
+  matchedBinCount: z.number().int().nonnegative(),
+  matchedAiSamples: z.number().int().nonnegative(),
+  matchedBaselineSamples: z.number().int().nonnegative(),
+  weightedBaselineCOP: z.number().nullable(),
+  weightedAiCOP: z.number().nullable(),
+  weightedCopUpliftPct: z.number().nullable(),
+  totalEstimatedSavedKWh: z.number(),
+  cells: z.array(optimizationCopCellSchema),
+}).strict();
+
+export const optimizationFlywheelSummarySchema = z.object({
+  totalSamples: z.number().int().nonnegative(),
+  guardrailClamped: z.number().int().nonnegative(),
+  guardrailVetoed: z.number().int().nonnegative(),
+  manualOverride: z.number().int().nonnegative(),
+  monitorTripped: z.number().int().nonnegative(),
+  trackingDeviation: z.number().int().nonnegative(),
+}).strict();
+
+export const optimizationGovernanceSummarySchema = z.object({
+  tenantId: uuidV7Schema,
+  siteId: uuidV7Schema,
+  windowDays: z.number().int().min(1).max(365),
+  generatedAt: z.string().datetime({ offset: true }),
+  activeSolver: optimizationActiveSolverSchema,
+  tickCounts: optimizationTickCountsSchema,
+  copComparison: optimizationCopComparisonSchema,
+  flywheel: optimizationFlywheelSummarySchema,
+}).strict();
+
 export const fieldErrorSchema = z.object({ field: z.string(), message: z.string() }).strict();
 export const registryProblemCodes = [
   'RESOURCE_NOT_FOUND', 'CURSOR_INVALID', 'REGISTRY_UNAVAILABLE', 'REGISTRY_TIMEOUT', 'MAPPING_INVALID', 'MAPPING_QUARANTINED',
@@ -1593,6 +1654,12 @@ export type RevokeAutoControlLeaseRequest = z.infer<typeof revokeAutoControlLeas
 export type ExecutionMonitorStatus = z.infer<typeof executionMonitorStatusSchema>;
 export type OptimizationExecutionMonitor = z.infer<typeof optimizationExecutionMonitorSchema>;
 export type OptimizationExecutionMonitorList = z.infer<typeof optimizationExecutionMonitorListSchema>;
+export type OptimizationActiveSolverSource = z.infer<typeof optimizationActiveSolverSourceSchema>;
+export type OptimizationActiveSolver = z.infer<typeof optimizationActiveSolverSchema>;
+export type OptimizationTickCounts = z.infer<typeof optimizationTickCountsSchema>;
+export type OptimizationCopComparison = z.infer<typeof optimizationCopComparisonSchema>;
+export type OptimizationFlywheelSummary = z.infer<typeof optimizationFlywheelSummarySchema>;
+export type OptimizationGovernanceSummary = z.infer<typeof optimizationGovernanceSummarySchema>;
 export type StepUpFailureReason = z.infer<typeof stepUpFailureReasonSchema>;
 export type ProblemDetails = z.infer<typeof problemDetailsSchema>;
 export type RegistryListParams = { limit?: number; cursor?: string };
@@ -2069,5 +2136,11 @@ export function createPlatformGatewayClient(baseUrl = '') {
       optimizationExecutionMonitorListSchema,
       { ...init, method: 'GET' },
     ),
+    getSiteOptimizationGovernanceSummary: (siteId: string, params: { windowDays?: number } = {}, init?: RequestInit) => {
+      const basePath = '__SITE_OPTIMIZATION_GOVERNANCE_SUMMARY_PATH__'.replace('{siteId}', encodeURIComponent(siteId));
+      const query = new URLSearchParams();
+      if (params.windowDays !== undefined) query.set('windowDays', String(params.windowDays));
+      return request(`${basePath}${query.size ? `?${query.toString()}` : ''}`, optimizationGovernanceSummarySchema, { ...init, method: 'GET' });
+    },
   };
 }

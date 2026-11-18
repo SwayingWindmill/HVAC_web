@@ -423,3 +423,127 @@ func TestOptimizationServesLatestShadowEvaluationWithoutExecutableRecommendation
 		t.Fatalf("shadow failure broke recommendations/latest: %d", status)
 	}
 }
+
+func (store *oneTenantRecommendations) CheckSiteVisible(_ context.Context, tenantID, siteID string) (bool, error) {
+	return tenantID == testTenant && (siteID == testSite || siteID == testUnscheduledSite || siteID == testReadySite), nil
+}
+
+func TestOptimizationServesGovernanceSummaryWithRBACAndWindowParams(t *testing.T) {
+	fixture := newOptimizationFixture(t)
+	fw := &memoryFlywheelStore{
+		ticks: []ControlTickRecord{
+			{
+				ID:          "t-base-recent",
+				TenantID:    testTenant,
+				SiteID:      testSite,
+				ControlMode: ControlModeRuleBaseline,
+				FeatureSnapshot: OptimizationFeatureSnapshot{
+					OutdoorWetBulbC: ptr(24.2),
+					CoolingLoadKW:   ptr(700.0),
+					ChillerPowerKW:  ptr(175.0),
+				},
+				TickAt: fixture.now.Add(-24 * time.Hour),
+			},
+			{
+				ID:          "t-ai-recent",
+				TenantID:    testTenant,
+				SiteID:      testSite,
+				ControlMode: ControlModeAIClosedLoop,
+				FeatureSnapshot: OptimizationFeatureSnapshot{
+					OutdoorWetBulbC: ptr(24.8),
+					CoolingLoadKW:   ptr(770.0),
+					ChillerPowerKW:  ptr(175.0),
+				},
+				TickAt: fixture.now.Add(-12 * time.Hour),
+			},
+			{
+				ID:          "t-shadow-10d",
+				TenantID:    testTenant,
+				SiteID:      testSite,
+				ControlMode: ControlModeAIShadow,
+				TickAt:      fixture.now.Add(-10 * 24 * time.Hour),
+			},
+		},
+		samples: []NegativeSampleRecord{
+			{
+				ID:                    "ns-1",
+				TenantID:              testTenant,
+				SiteID:                testSite,
+				SampleKind:            NegativeSampleGuardrailClamped,
+				ReasonCode:            "step_rate_limit",
+				SolverServingRef:      ChillerCOPBuiltinSolverRef,
+				RawRecommendedValue:   ptr(10.5),
+				AppliedOrClampedValue: ptr(8.5),
+				OccurredAt:            fixture.now.Add(-2 * time.Hour),
+			},
+		},
+	}
+	revID := "01990000-1960-7000-8000-000000000099"
+	fixture.service.WithGovernanceFlywheel(fw).WithSolverResolver(&stubActiveSolverResolver{
+		selection: ActiveSolverSelection{
+			ServingRef:           ChillerCOPBuiltinSolverRef,
+			Source:               SolverSourceDeploymentBinding,
+			LoopKey:              DefaultSolverLoopKey,
+			DeploymentRevisionID: &revID,
+		},
+	})
+
+	basePath := "/v1/sites/" + testSite + "/optimization/governance-summary"
+	okResp := fixture.call(t, http.MethodGet, basePath, "", testGatewaySPIFFE, testGatewaySPIFFE, ReadAction, testTenant, testSite)
+	if okResp.Code != http.StatusOK {
+		t.Fatalf("governance-summary status=%d body=%s", okResp.Code, okResp.Body.String())
+	}
+
+	var rawKeys map[string]any
+	if err := json.Unmarshal(okResp.Body.Bytes(), &rawKeys); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"tenantId", "siteId", "windowDays", "generatedAt", "activeSolver", "tickCounts", "copComparison", "flywheel"} {
+		if _, exists := rawKeys[key]; !exists {
+			t.Fatalf("missing expected JSON key %q in governance summary: %s", key, okResp.Body.String())
+		}
+	}
+
+	var summary GovernanceSummary
+	if err := json.Unmarshal(okResp.Body.Bytes(), &summary); err != nil {
+		t.Fatal(err)
+	}
+	if summary.WindowDays != DefaultGovernanceWindowDays || summary.TickCounts != (GovernanceTickCounts{AIClosedLoop: 1, AIShadow: 1, RuleBaseline: 1}) {
+		t.Fatalf("unexpected default window summary: %+v", summary)
+	}
+	if summary.ActiveSolver.ServingRef != ChillerCOPBuiltinSolverRef || summary.ActiveSolver.DeploymentRevisionID == nil || *summary.ActiveSolver.DeploymentRevisionID != revID {
+		t.Fatalf("unexpected activeSolver: %+v", summary.ActiveSolver)
+	}
+	if summary.COPComparison.MatchedBinCount != 1 || summary.Flywheel.TotalSamples != 1 || summary.Flywheel.GuardrailClamped != 1 {
+		t.Fatalf("unexpected COP/flywheel metrics: cop=%+v fw=%+v", summary.COPComparison, summary.Flywheel)
+	}
+
+	// Custom windowDays=7 excludes the 10-day-old shadow tick.
+	winResp := fixture.call(t, http.MethodGet, basePath+"?windowDays=7", "", testGatewaySPIFFE, testGatewaySPIFFE, ReadAction, testTenant, testSite)
+	if winResp.Code != http.StatusOK {
+		t.Fatalf("windowDays=7 status=%d body=%s", winResp.Code, winResp.Body.String())
+	}
+	var sevenDay GovernanceSummary
+	if err := json.Unmarshal(winResp.Body.Bytes(), &sevenDay); err != nil {
+		t.Fatal(err)
+	}
+	if sevenDay.WindowDays != 7 || sevenDay.TickCounts != (GovernanceTickCounts{AIClosedLoop: 1, RuleBaseline: 1}) {
+		t.Fatalf("unexpected 7-day summary: %+v", sevenDay)
+	}
+
+	// RBAC and query validation gates.
+	if status := fixture.call(t, http.MethodGet, basePath, "", testGatewaySPIFFE, testGatewaySPIFFE, ReadAction, testOtherTenant, testSite).Code; status != http.StatusNotFound {
+		t.Fatalf("wrong tenant status=%d, want 404", status)
+	}
+	if status := fixture.call(t, http.MethodGet, basePath, "", testGatewaySPIFFE, testGatewaySPIFFE, ReadAction, testTenant, testOtherSite).Code; status != http.StatusForbidden {
+		t.Fatalf("wrong site grant status=%d, want 403", status)
+	}
+	if status := fixture.call(t, http.MethodGet, basePath, "", testGatewaySPIFFE, testGatewaySPIFFE, WriteAction, testTenant, testSite).Code; status != http.StatusForbidden {
+		t.Fatalf("write action on read route status=%d, want 403", status)
+	}
+	for _, invalidQuery := range []string{"?windowDays=0", "?windowDays=abc", "?windowDays=999"} {
+		if status := fixture.call(t, http.MethodGet, basePath+invalidQuery, "", testGatewaySPIFFE, testGatewaySPIFFE, ReadAction, testTenant, testSite).Code; status != http.StatusBadRequest {
+			t.Fatalf("query %s status=%d, want 400", invalidQuery, status)
+		}
+	}
+}

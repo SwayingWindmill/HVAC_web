@@ -35,6 +35,7 @@ func TestPublicIntelligenceRoutesHaveSingleDomainOwners(t *testing.T) {
 		{http.MethodGet, "/api/v1/sites/" + siteID + "/optimization/preparations/latest", ownershipregistry.OwnerOptimization, siteID},
 		{http.MethodGet, "/api/v1/sites/" + siteID + "/optimization/shadow-evaluations/latest", ownershipregistry.OwnerOptimization, siteID},
 		{http.MethodGet, "/api/v1/sites/" + siteID + "/optimization/staging-recommendations/latest", ownershipregistry.OwnerOptimization, siteID},
+		{http.MethodGet, "/api/v1/sites/" + siteID + "/optimization/governance-summary", ownershipregistry.OwnerOptimization, siteID},
 		{http.MethodGet, "/api/v1/sites/" + siteID + "/optimization/auto-control-lease", ownershipregistry.OwnerCore, siteID},
 		{http.MethodPut, "/api/v1/sites/" + siteID + "/optimization/auto-control-lease", ownershipregistry.OwnerCore, siteID},
 		{http.MethodPost, "/api/v1/sites/" + siteID + "/optimization/auto-control-lease/revoke", ownershipregistry.OwnerCore, siteID},
@@ -92,6 +93,7 @@ func TestIntelligenceRoutesRejectWrongMethods(t *testing.T) {
 		"/api/v1/sites/" + siteID + "/fdd/findings",
 		"/api/v1/sites/" + siteID + "/optimization/shadow-evaluations/latest",
 		"/api/v1/sites/" + siteID + "/optimization/staging-recommendations/latest",
+		"/api/v1/sites/" + siteID + "/optimization/governance-summary",
 	} {
 		if _, ok := matchPublicIntelligenceRoute(http.MethodPost, path); ok {
 			t.Fatalf("POST unexpectedly matched read-only Intelligence route %s", path)
@@ -156,6 +158,7 @@ func TestIntelligenceReadWithoutConfiguredOwnerIsAMissingRoute(t *testing.T) {
 		{"optimization staging", func(w http.ResponseWriter, r *http.Request, s bffSession, route publicIntelligenceRoute) {
 			h.serveLatestOptimizationRead(w, r, s, route, "staging-recommendations")
 		}, publicIntelligenceRoute{siteID: siteID}},
+		{"optimization governance", h.serveOptimizationGovernanceSummaryRead, publicIntelligenceRoute{siteID: siteID}},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
@@ -560,6 +563,53 @@ func TestGatewayOptimizationAutoCommandPropagatesTraceparent(t *testing.T) {
 	}
 	if len(gotTraceparents) != 2 || gotTraceparents[1] != incomingTraceparent {
 		t.Fatalf("expected direct traceparent %q forwarded verbatim, got %v", incomingTraceparent, gotTraceparents)
+	}
+}
+
+func TestGatewayOptimizationGovernanceSummaryForwardsSignedContext(t *testing.T) {
+	fixture := newOperationsGatewayFixture(t, 30)
+	controller := fixture.handler.(*handler)
+	snapshot, err := ownershipregistry.Parse(readRepositoryFile(t, "contracts", "ownership", "route-ownership.v1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller.routeManager = ownershipregistry.NewManager(snapshot, ownershipregistry.NewMemoryAuditSink(), func() time.Time { return fixture.now })
+
+	const summaryPayload = `{"tenantId":"018f3d00-0000-7000-8000-000000000001","siteId":"018f3e00-2000-7000-8000-000000000001","windowDays":14,"generatedAt":"2026-07-31T08:00:00Z","activeSolver":{"servingRef":"builtin://hvac-recommendation-v1","source":"DEFAULT","loopKey":"PLANT","deploymentRevisionId":null},"tickCounts":{"aiClosedLoop":12,"aiShadow":8,"ruleBaseline":20,"manualOverride":1},"copComparison":{"matchedBinCount":4,"matchedAiSamples":12,"matchedBaselineSamples":16,"weightedBaselineCOP":4.2,"weightedAiCOP":4.62,"weightedCopUpliftPct":10.0,"totalEstimatedSavedKWh":185.4,"cells":[]},"flywheel":{"totalSamples":3,"guardrailClamped":2,"guardrailVetoed":0,"manualOverride":1,"monitorTripped":0,"trackingDeviation":0}}`
+	controller.intelligence.ownerHTTPClient = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			fixture.lastOwner.Store(req)
+			return jsonHTTPResponse(http.StatusOK, summaryPayload), nil
+		}),
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sites/"+fixture.siteID+"/optimization/governance-summary?windowDays=14", nil)
+	fixture.authenticate(req, false)
+	rec := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET governance-summary status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"weightedCopUpliftPct":10.0`) {
+		t.Fatalf("unexpected response body: %s", rec.Body.String())
+	}
+	requireOwnerContext(t, fixture, "X-Optimization-Context", "optimization-service", optimizationReadAction)
+	upstream := fixture.lastOwner.Load()
+	wantPath := "/v1/sites/" + fixture.siteID + "/optimization/governance-summary"
+	if upstream.Method != http.MethodGet || upstream.URL.Path != wantPath || upstream.URL.RawQuery != "windowDays=14" {
+		t.Fatalf("upstream request = %s %s?%s, want GET %s?windowDays=14", upstream.Method, upstream.URL.Path, upstream.URL.RawQuery, wantPath)
+	}
+
+	// Unauthorized site read fails closed as 404 RESOURCE_NOT_FOUND without calling optimization-service.
+	fixture.lastOwner.Store(nil)
+	fixture.denySite.Store(true)
+	deniedReq := httptest.NewRequest(http.MethodGet, "/api/v1/sites/"+fixture.siteID+"/optimization/governance-summary", nil)
+	fixture.authenticate(deniedReq, false)
+	deniedRec := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(deniedRec, deniedReq)
+	assertProblemCode(t, deniedRec, http.StatusNotFound, "RESOURCE_NOT_FOUND")
+	if fixture.lastOwner.Load() != nil {
+		t.Fatal("optimization-service must not be called when site read authorization fails")
 	}
 }
 

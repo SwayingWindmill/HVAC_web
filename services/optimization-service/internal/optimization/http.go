@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -50,6 +51,7 @@ func NewHTTPHandler(service *Service, preparer *Preparer, auth AuthConfig) (http
 	mux.HandleFunc("GET /v1/sites/{siteId}/optimization/preparations/latest", handler.guard(ReadAction, handler.handleLatestPreparation))
 	mux.HandleFunc("GET /v1/sites/{siteId}/optimization/shadow-evaluations/latest", handler.guard(ReadAction, handler.handleLatestShadowEvaluation))
 	mux.HandleFunc("GET /v1/sites/{siteId}/optimization/staging-recommendations/latest", handler.guard(ReadAction, handler.handleLatestStagingEvaluation))
+	mux.HandleFunc("GET /v1/sites/{siteId}/optimization/governance-summary", handler.guard(ReadAction, handler.handleGovernanceSummary))
 	return mux, nil
 }
 
@@ -129,6 +131,29 @@ func (handler *HTTPHandler) handleLatestStagingEvaluation(writer http.ResponseWr
 	result, err := handler.service.LatestStagingEvaluation(request.Context(), site.TenantID, site.SiteID)
 	if errors.Is(err, ErrStagingEvaluationNotFound) {
 		writeJSONError(writer, http.StatusNotFound, "optimization_staging_not_found")
+		return
+	}
+	if err != nil {
+		writeJSONError(writer, http.StatusBadGateway, "optimization_unavailable")
+		return
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(writer).Encode(result)
+}
+
+func (handler *HTTPHandler) handleGovernanceSummary(writer http.ResponseWriter, request *http.Request, site identitycontext.SiteContext) {
+	windowDays := DefaultGovernanceWindowDays
+	if rawWindow := strings.TrimSpace(request.URL.Query().Get("windowDays")); rawWindow != "" {
+		parsed, err := strconv.Atoi(rawWindow)
+		if err != nil || parsed <= 0 || parsed > MaxGovernanceWindowDays {
+			writeJSONError(writer, http.StatusBadRequest, "invalid_request")
+			return
+		}
+		windowDays = parsed
+	}
+	result, err := handler.service.GovernanceSummary(request.Context(), site.TenantID, site.SiteID, windowDays)
+	if errors.Is(err, ErrOptimizationNotFound) {
+		writeJSONError(writer, http.StatusNotFound, "optimization_not_found")
 		return
 	}
 	if err != nil {

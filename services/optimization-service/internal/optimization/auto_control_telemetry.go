@@ -17,6 +17,9 @@ type autoControlLiveState struct {
 	CabinetLocalManual bool
 	DeviceOffline      bool
 	RunningChillers    int
+	OutdoorWetBulbC    *float64
+	CoolingLoadKW      *float64
+	ChillerPowerKW     *float64
 }
 
 func autoControlHealthScope(siteCtx AutoControlSiteContext, targetDeviceID string) ([]string, []string) {
@@ -185,7 +188,90 @@ func extractAutoControlLiveState(points []TelemetryLivePoint, siteCtx AutoContro
 		}
 	}
 	state.RunningChillers = len(runningSeen)
+	state.OutdoorWetBulbC = extractOptionalLiveNumeric(points, now, DefaultPreparationMaxTelemetryAge,
+		"outdoor_wet_bulb", "weather.ambient_wet_bulb_temperature", "ambient_wet_bulb_temperature", "cooling_tower.ambient_wet_bulb_temperature")
+	state.CoolingLoadKW = extractOptionalLiveNumeric(points, now, DefaultAutoControlMaxPointAge,
+		"instant_cooling_capacity", "btu_meter.instant_cooling_capacity", "plant_cooling_load", "cooling_load")
+	state.ChillerPowerKW = extractChillerPowerSumKW(points, siteCtx, targetDeviceID, now)
 	return state
+}
+
+func extractOptionalLiveNumeric(points []TelemetryLivePoint, now time.Time, maxAge time.Duration, candidateKeys ...string) *float64 {
+	pt := findSitePointByKeys(points, "", candidateKeys...)
+	if pt == nil || !isLivePointOptionalMetricHealthy(*pt, now, maxAge) {
+		return nil
+	}
+	v := *pt.NumericValue
+	return &v
+}
+
+func extractChillerPowerSumKW(points []TelemetryLivePoint, siteCtx AutoControlSiteContext, targetDeviceID string, now time.Time) *float64 {
+	total := 0.0
+	hasPower := false
+	seen := make(map[string]struct{})
+	for _, pt := range points {
+		if !isChillerPowerPoint(pt, siteCtx, targetDeviceID) {
+			continue
+		}
+		if !isLivePointOptionalMetricHealthy(pt, now, DefaultAutoControlMaxPointAge) {
+			continue
+		}
+		if *pt.NumericValue < 0 {
+			continue
+		}
+		devID := strings.ToLower(strings.TrimSpace(pt.DeviceID))
+		if devID == "" {
+			devID = strings.ToLower(strings.TrimSpace(pt.TelemetryKey))
+		}
+		if _, exists := seen[devID]; exists {
+			continue
+		}
+		seen[devID] = struct{}{}
+		total += *pt.NumericValue
+		hasPower = true
+	}
+	if !hasPower {
+		return nil
+	}
+	return &total
+}
+
+func isChillerPowerPoint(pt TelemetryLivePoint, siteCtx AutoControlSiteContext, targetDeviceID string) bool {
+	keyLower := strings.ToLower(strings.TrimSpace(pt.TelemetryKey))
+	switch {
+	case keyLower == "power_total" || strings.HasSuffix(keyLower, ".power_total") || keyLower == "chiller_power_kw":
+	case keyLower == "active_power" || strings.HasSuffix(keyLower, ".active_power"):
+		if len(siteCtx.Topology.Chillers) > 0 && !isSiteChillerDevice(siteCtx, pt.DeviceID) {
+			return false
+		}
+	default:
+		return false
+	}
+	if len(siteCtx.Topology.Chillers) > 0 {
+		return isSiteChillerDevice(siteCtx, pt.DeviceID)
+	}
+	return targetDeviceID == "" || pt.DeviceID == "" || pt.DeviceID == targetDeviceID || strings.HasPrefix(keyLower, "chiller")
+}
+
+func isLivePointOptionalMetricHealthy(pt TelemetryLivePoint, now time.Time, maxAge time.Duration) bool {
+	if pt.NumericValue == nil || !finite(*pt.NumericValue) {
+		return false
+	}
+	if pt.Quality != "" && !strings.EqualFold(strings.TrimSpace(pt.Quality), "GOOD") {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(pt.Freshness), "STALE") || strings.EqualFold(strings.TrimSpace(pt.Freshness), "MISSING") {
+		return false
+	}
+	if isLivePointPresenceOffline(pt.DevicePresence) {
+		return false
+	}
+	if !pt.SampledAt.IsZero() {
+		if pt.SampledAt.UTC().After(now.UTC().Add(5*time.Second)) || now.UTC().Sub(pt.SampledAt.UTC()) > maxAge {
+			return false
+		}
+	}
+	return true
 }
 
 func buildGuardrailPointSamples(siteCtx AutoControlSiteContext, points []TelemetryLivePoint, liveState autoControlLiveState) []commandmodel.GuardrailPointSample {

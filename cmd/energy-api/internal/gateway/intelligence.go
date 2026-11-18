@@ -153,6 +153,9 @@ func matchPublicIntelligenceRoute(method, path string) (publicIntelligenceRoute,
 	if siteID, ok := matchSinglePathParameter(path, "/api/v1/sites/{siteId}/optimization/staging-recommendations/latest", "{siteId}"); ok {
 		return publicIntelligenceRoute{owner: ownershipregistry.OwnerOptimization, siteID: siteID, target: "optimization-staging", method: http.MethodGet, publicPath: "/api/v1/sites/{siteId}/optimization/staging-recommendations/latest"}, method == http.MethodGet
 	}
+	if siteID, ok := matchSinglePathParameter(path, "/api/v1/sites/{siteId}/optimization/governance-summary", "{siteId}"); ok {
+		return publicIntelligenceRoute{owner: ownershipregistry.OwnerOptimization, siteID: siteID, target: "optimization-governance", method: http.MethodGet, publicPath: "/api/v1/sites/{siteId}/optimization/governance-summary"}, method == http.MethodGet
+	}
 	if siteID, ok := matchSinglePathParameter(path, "/api/v1/sites/{siteId}/optimization/auto-control-lease", "{siteId}"); ok {
 		switch method {
 		case http.MethodGet:
@@ -270,6 +273,10 @@ func dispatchIntelligenceRoute(h *handler, writer http.ResponseWriter, request *
 	}
 	if route.target == "optimization-staging" {
 		h.serveLatestOptimizationRead(writer, request, session, route, "staging-recommendations")
+		return
+	}
+	if route.target == "optimization-governance" {
+		h.serveOptimizationGovernanceSummaryRead(writer, request, session, route)
 		return
 	}
 	h.createOptimizationRun(writer, request, session)
@@ -532,6 +539,31 @@ func (h *handler) serveLatestOptimizationRead(writer http.ResponseWriter, reques
 		return
 	}
 	internalPath := "/v1/sites/" + url.PathEscape(route.siteID) + "/optimization/" + resource + "/latest"
+	raw, status, err := h.executeOwner(request, session, optimizationOwner, h.intelligence.optimizationBaseURL, route.siteID, optimizationReadAction, http.MethodGet, internalPath, nil)
+	h.writeIntelligenceResult(writer, request, raw, status, err)
+}
+
+func (h *handler) serveOptimizationGovernanceSummaryRead(writer http.ResponseWriter, request *http.Request, session bffSession, route publicIntelligenceRoute) {
+	if h.intelligence.optimizationBaseURL == "" {
+		writeRouteWithoutOwner(writer, request)
+		return
+	}
+	if !isLowerUUIDv7(route.siteID) {
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Optimization governance summary was not found.", false, nil)
+		return
+	}
+	allowedSites, ok := h.authorizeIntelligenceSitesWithWriter(writer, request, session)
+	if !ok {
+		return
+	}
+	if _, allowed := allowedSites[route.siteID]; !allowed {
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Optimization governance summary was not found.", false, nil)
+		return
+	}
+	internalPath := "/v1/sites/" + url.PathEscape(route.siteID) + "/optimization/governance-summary"
+	if rawQuery := strings.TrimSpace(request.URL.RawQuery); rawQuery != "" {
+		internalPath += "?" + rawQuery
+	}
 	raw, status, err := h.executeOwner(request, session, optimizationOwner, h.intelligence.optimizationBaseURL, route.siteID, optimizationReadAction, http.MethodGet, internalPath, nil)
 	h.writeIntelligenceResult(writer, request, raw, status, err)
 }
