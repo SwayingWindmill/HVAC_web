@@ -6,6 +6,8 @@ import (
 	"math"
 	"testing"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
 )
 
 const (
@@ -483,4 +485,101 @@ func TestHoursArePricedAtTheirOwnRateAndDaysSplitOnTheSiteClock(t *testing.T) {
 	if day.Day != "2026-10-17" || day.Hours != 24 || math.Abs(day.AvoidedCost-169) > 1e-6 {
 		t.Fatalf("day = %+v", day)
 	}
+}
+
+type stubTickSource struct {
+	samples []analyticsmodel.ControlTickSample
+	err     error
+	gotFrom time.Time
+	gotTo   time.Time
+}
+
+func (source *stubTickSource) ControlTickSamples(_ context.Context, _, _ string, from, to time.Time) ([]analyticsmodel.ControlTickSample, error) {
+	source.gotFrom = from
+	source.gotTo = to
+	if source.err != nil {
+		return nil, source.err
+	}
+	return source.samples, nil
+}
+
+type storeWithTicks struct {
+	*memoryStore
+	ticks ControlTickSource
+}
+
+func (store storeWithTicks) ControlTickSamples(ctx context.Context, tenantID, siteID string, from, to time.Time) ([]analyticsmodel.ControlTickSample, error) {
+	return store.ticks.ControlTickSamples(ctx, tenantID, siteID, from, to)
+}
+
+func mvFloatPtr(v float64) *float64 { return &v }
+
+func TestEvaluateControlModeCOPComparison(t *testing.T) {
+	from := time.Date(2026, 10, 15, 0, 0, 0, 0, shanghai)
+	to := time.Date(2026, 10, 16, 0, 0, 0, 0, shanghai)
+
+	t.Run("evaluates matched bins via attached ControlTickSource and normalizes UTC window", func(t *testing.T) {
+		ticks := &stubTickSource{
+			samples: []analyticsmodel.ControlTickSample{
+				{Mode: analyticsmodel.ModeRuleBaseline, OutdoorWetBulbC: mvFloatPtr(24.5), CoolingLoadKW: mvFloatPtr(500), ObservedCOP: mvFloatPtr(4.0)},
+				{Mode: analyticsmodel.ModeAIClosedLoop, OutdoorWetBulbC: mvFloatPtr(24.5), CoolingLoadKW: mvFloatPtr(500), ObservedCOP: mvFloatPtr(4.4)},
+				// AI_SHADOW and unmatched cool-weather ticks must not affect the closed-loop comparison.
+				{Mode: analyticsmodel.ModeAIShadow, OutdoorWetBulbC: mvFloatPtr(24.5), CoolingLoadKW: mvFloatPtr(500), ObservedCOP: mvFloatPtr(6.5)},
+				{Mode: analyticsmodel.ModeRuleBaseline, OutdoorWetBulbC: mvFloatPtr(18.5), CoolingLoadKW: mvFloatPtr(300), ObservedCOP: mvFloatPtr(6.0)},
+			},
+		}
+		service := newTestService(t, newMemoryStore(), plantHistory{}).WithControlTickSource(ticks)
+		summary, err := service.EvaluateControlModeCOPComparison(t.Context(), testTenant, testSite, from, to)
+		if err != nil {
+			t.Fatalf("EvaluateControlModeCOPComparison() error = %v", err)
+		}
+		if !ticks.gotFrom.Equal(from.UTC()) || !ticks.gotTo.Equal(to.UTC()) {
+			t.Fatalf("queried window = [%v, %v), want UTC [%v, %v)", ticks.gotFrom, ticks.gotTo, from.UTC(), to.UTC())
+		}
+		if summary.MatchedBinCount != 1 || summary.MatchedAISamples != 1 || summary.MatchedBaselineSamples != 1 {
+			t.Fatalf("unexpected summary = %+v", summary)
+		}
+		if summary.WeightedCOPUpliftPct == nil || math.Abs(*summary.WeightedCOPUpliftPct-10.0) > 1e-4 {
+			t.Fatalf("WeightedCOPUpliftPct = %v, want 10.0", summary.WeightedCOPUpliftPct)
+		}
+	})
+
+	t.Run("auto-wires store implementing ControlTickSource", func(t *testing.T) {
+		ticks := &stubTickSource{
+			samples: []analyticsmodel.ControlTickSample{
+				{Mode: analyticsmodel.ModeManualOverride, OutdoorWetBulbC: mvFloatPtr(26.2), CoolingLoadKW: mvFloatPtr(600), ObservedCOP: mvFloatPtr(3.5)},
+				{Mode: analyticsmodel.ModeAIClosedLoop, OutdoorWetBulbC: mvFloatPtr(26.8), CoolingLoadKW: mvFloatPtr(650), ChillerPowerKW: mvFloatPtr(162.5)},
+			},
+		}
+		service := newTestService(t, storeWithTicks{memoryStore: newMemoryStore(), ticks: ticks}, plantHistory{})
+		summary, err := service.EvaluateControlModeCOPComparison(t.Context(), testTenant, testSite, from, to)
+		if err != nil {
+			t.Fatalf("EvaluateControlModeCOPComparison() error = %v", err)
+		}
+		if summary.MatchedBinCount != 1 || summary.Cells[0].BaselineCOP != 3.5 || summary.Cells[0].AICOP != 4.0 {
+			t.Fatalf("unexpected auto-wired summary = %+v", summary)
+		}
+	})
+
+	t.Run("rejects invalid scope, invalid time range, missing source, and propagates read errors", func(t *testing.T) {
+		service := newTestService(t, newMemoryStore(), plantHistory{})
+		if _, err := service.EvaluateControlModeCOPComparison(t.Context(), "bad-tenant", testSite, from, to); !errors.Is(err, ErrInvalidMeasure) {
+			t.Fatalf("invalid tenant error = %v, want ErrInvalidMeasure", err)
+		}
+		if _, err := service.EvaluateControlModeCOPComparison(t.Context(), testTenant, testSite, to, from); !errors.Is(err, ErrInvalidMeasure) {
+			t.Fatalf("reversed range error = %v, want ErrInvalidMeasure", err)
+		}
+		if _, err := service.EvaluateControlModeCOPComparison(t.Context(), testTenant, testSite, time.Time{}, to); !errors.Is(err, ErrInvalidMeasure) {
+			t.Fatalf("zero from error = %v, want ErrInvalidMeasure", err)
+		}
+		if _, err := service.EvaluateControlModeCOPComparison(t.Context(), testTenant, testSite, from, to); err == nil {
+			t.Fatal("expected error when control tick source is not configured")
+		}
+
+		wantErr := errors.New("db unavailable")
+		service.WithControlTickSource(&stubTickSource{err: wantErr})
+		if _, err := service.EvaluateControlModeCOPComparison(t.Context(), testTenant, testSite, from, to); !errors.Is(err, wantErr) {
+			t.Fatalf("source error = %v, want %v", err, wantErr)
+		}
+	})
 }

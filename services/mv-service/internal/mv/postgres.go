@@ -9,12 +9,15 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
 	"github.com/quanlaihe/hvac-web/libs/schedulerjob"
 )
 
 // PostgresStore keeps measures and verified days in core_registry as mv_runtime, scoped by
 // Tenant and Site row security; it also reads the Site's clock.
 type PostgresStore struct{ pool *pgxpool.Pool }
+
+var _ ControlTickSource = (*PostgresStore)(nil)
 
 func OpenPostgres(ctx context.Context, dsn string) (*PostgresStore, error) {
 	config, err := pgxpool.ParseConfig(dsn)
@@ -229,4 +232,40 @@ func (store *PostgresStore) SiteClock(ctx context.Context, tenantID, siteID stri
 		return err
 	})
 	return clock, err
+}
+
+// ControlTickSamples reads recorded optimization control ticks for a Site in [from, to).
+func (store *PostgresStore) ControlTickSamples(ctx context.Context, tenantID, siteID string, from, to time.Time) ([]analyticsmodel.ControlTickSample, error) {
+	from, to = from.UTC(), to.UTC()
+	if from.IsZero() || to.IsZero() || !from.Before(to) {
+		return nil, fmt.Errorf("%w: the comparison period must have a valid start before end", ErrInvalidMeasure)
+	}
+	samples := []analyticsmodel.ControlTickSample{}
+	err := store.scoped(ctx, tenantID, siteID, true, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT control_mode, outdoor_wet_bulb_c, cooling_load_kw, chiller_power_kw, observed_cop
+FROM core_registry.optimization_control_ticks
+WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND recorded_at >= $3 AND recorded_at < $4
+ORDER BY recorded_at ASC`, tenantID, siteID, from, to)
+		if err != nil {
+			return fmt.Errorf("read control tick samples: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var mode string
+			sample := analyticsmodel.ControlTickSample{DurationHours: 0.25}
+			if err := rows.Scan(
+				&mode,
+				&sample.OutdoorWetBulbC,
+				&sample.CoolingLoadKW,
+				&sample.ChillerPowerKW,
+				&sample.ObservedCOP,
+			); err != nil {
+				return fmt.Errorf("scan control tick sample: %w", err)
+			}
+			sample.Mode = analyticsmodel.ControlTickMode(mode)
+			samples = append(samples, sample)
+		}
+		return rows.Err()
+	})
+	return samples, err
 }

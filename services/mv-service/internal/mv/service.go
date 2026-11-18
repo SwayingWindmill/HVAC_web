@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
 )
 
 // DefaultBaselineDays is how far before implementation the baseline period reaches by default.
@@ -113,11 +115,17 @@ type RateSource interface {
 	HourlyRates(ctx context.Context, tenantID, siteID string, location *time.Location, from, to time.Time) (func(time.Time) (float64, bool), error)
 }
 
+// ControlTickSource reads recorded optimization control ticks for a Site in [from, to).
+type ControlTickSource interface {
+	ControlTickSamples(ctx context.Context, tenantID, siteID string, from, to time.Time) ([]analyticsmodel.ControlTickSample, error)
+}
+
 type Service struct {
 	store   Store
 	history HourlySource
 	clocks  ClockSource
 	rates   RateSource
+	ticks   ControlTickSource
 	now     func() time.Time
 	newID   func(time.Time) (string, error)
 }
@@ -126,7 +134,17 @@ func NewService(store Store, history HourlySource, clocks ClockSource, rates Rat
 	if store == nil || history == nil || clocks == nil || rates == nil || now == nil || newID == nil {
 		return nil, errors.New("savings verification needs a store, an hourly source, a Site clock source, a rate source, a time source and an id source")
 	}
-	return &Service{store: store, history: history, clocks: clocks, rates: rates, now: now, newID: newID}, nil
+	var ticks ControlTickSource
+	if source, ok := store.(ControlTickSource); ok {
+		ticks = source
+	}
+	return &Service{store: store, history: history, clocks: clocks, rates: rates, ticks: ticks, now: now, newID: newID}, nil
+}
+
+// WithControlTickSource attaches a ControlTickSource for evaluating control-mode COP comparisons.
+func (service *Service) WithControlTickSource(source ControlTickSource) *Service {
+	service.ticks = source
+	return service
 }
 
 type MeasureInput struct {
@@ -477,4 +495,30 @@ func (service *Service) Savings(ctx context.Context, tenantID, siteID, from, to 
 		}
 	}
 	return totalOf(days), nil
+}
+
+// EvaluateControlModeCOPComparison evaluates AI closed-loop COP uplift against baseline operation
+// within matched (outdoor wet-bulb, cooling load) bins over [from, to).
+func (service *Service) EvaluateControlModeCOPComparison(ctx context.Context, tenantID, siteID string, from, to time.Time) (analyticsmodel.BivariateCOPSummary, error) {
+	if !uuidPattern.MatchString(tenantID) || !uuidPattern.MatchString(siteID) {
+		return analyticsmodel.BivariateCOPSummary{}, fmt.Errorf("%w: tenant and site must be UUIDs", ErrInvalidMeasure)
+	}
+	from, to = from.UTC(), to.UTC()
+	if from.IsZero() || to.IsZero() || !from.Before(to) {
+		return analyticsmodel.BivariateCOPSummary{}, fmt.Errorf("%w: the comparison period must have a valid start before end", ErrInvalidMeasure)
+	}
+	ticks := service.ticks
+	if ticks == nil {
+		if source, ok := service.store.(ControlTickSource); ok {
+			ticks = source
+		}
+	}
+	if ticks == nil {
+		return analyticsmodel.BivariateCOPSummary{}, errors.New("control tick source is not configured")
+	}
+	samples, err := ticks.ControlTickSamples(ctx, tenantID, siteID, from, to)
+	if err != nil {
+		return analyticsmodel.BivariateCOPSummary{}, fmt.Errorf("read control tick samples: %w", err)
+	}
+	return analyticsmodel.EvaluateBivariateCOP(samples, analyticsmodel.BivariateBinConfig{}), nil
 }
