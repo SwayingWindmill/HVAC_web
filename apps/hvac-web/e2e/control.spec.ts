@@ -45,12 +45,12 @@ test('stopping a pump asks for the one-time code and a site check, and approving
   await confirm.getByRole('checkbox', { name: '我已和现场确认可以停' }).check();
   await submit.click();
 
-  const submitted = gateway.writes.find((write) => write.path === '/api/v1/commands');
-  expect(submitted?.body).toMatchObject({ parameters: {}, verificationCode: '123456' });
   const log = page.getByRole('list', { name: '指令记录' });
   const stop = log.getByRole('listitem').filter({ hasText: '停止冷冻水泵' });
   await expect(stop).toContainText('待审批 · 高风险 · 需一人审批 · 0/1');
   await expect(page.getByRole('group', { name: 'CHWP-01' })).toContainText('待审批');
+  const submitted = gateway.writes.find((write) => write.path === '/api/v1/commands');
+  expect(submitted?.body).toMatchObject({ parameters: {}, verificationCode: '123456' });
 
   // The session has no fresh two-step sign-in: the approval is refused and the page offers to verify.
   await stop.getByRole('button', { name: '批准' }).click();

@@ -141,6 +141,7 @@ test('toggling 叠加告警 and 叠加控制指令 renders event rail, collapses
   await expect(woDialog).toBeVisible();
   await expect(woDialog.getByLabel('说明')).toHaveValue(/趋势时段：[\s\S]*排查点位：/);
   await woDialog.getByRole('button', { name: '创建工单' }).click();
+  await expect(woDialog).toBeHidden();
 
   const createWrite = gateway.writes.find((w) => w.method === 'POST' && w.path.endsWith('/work-orders'));
   expect(createWrite?.body).toMatchObject({

@@ -151,9 +151,7 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
-      - env:
-          PLAYWRIGHT_WORKERS: "4"
-        run: node --experimental-strip-types scripts/run-pr-gate.ts --gate=unit --profiles="web"
+      - run: node --experimental-strip-types scripts/run-pr-gate.ts --gate=unit --profiles="web"
 
   unit_domain_run:
     name: internal / affected domain-unit
