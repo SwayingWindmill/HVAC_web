@@ -1,29 +1,86 @@
 import type { SiteTariff, TariffPeriod } from '../../api/generated/platformGateway.gen';
+import { isOneOf } from '../../lib/typed.ts';
 import { wallTime, type EnergyCost } from '../energy-analysis/consumption/model.ts';
 
 // The Site's Tariff periods, and the costs the Energy analytics owner priced at them. Settlement
 // stays the authority on the bill; the demand charge is still estimated here from the published rates.
 
-export type PeriodCode = TariffPeriod['periodCode'];
+export type PeriodCode = TariffPeriod['periodCode'] | 'DEEP_VALLEY';
 
-export const PERIOD_LABEL: Record<PeriodCode, string> = { SUPER_PEAK: '尖峰', PEAK: '峰', FLAT: '平', VALLEY: '谷' };
-const PERIOD_ORDER: readonly PeriodCode[] = ['SUPER_PEAK', 'PEAK', 'FLAT', 'VALLEY'];
+export type SiteTariffPeriod = Omit<TariffPeriod, 'periodCode'> & {
+  readonly periodCode: PeriodCode;
+};
+
+export type SiteTariffWithCalendar = Omit<SiteTariff, 'periods'> & {
+  readonly periods: readonly SiteTariffPeriod[];
+  readonly holidayDates?: Readonly<Record<string, string>>;
+};
+
+export type CostPeriod = Omit<EnergyCost['periods'][number], 'periodCode'> & {
+  readonly periodCode: PeriodCode;
+};
+
+export type CostInput = Omit<EnergyCost, 'periods'> & {
+  readonly periods: readonly CostPeriod[];
+};
+
+export const PERIOD_LABEL: Record<PeriodCode, string> = {
+  SUPER_PEAK: '尖峰',
+  PEAK: '峰',
+  FLAT: '平',
+  VALLEY: '谷',
+  DEEP_VALLEY: '深谷',
+};
+export const PERIOD_ORDER = [
+  'SUPER_PEAK',
+  'PEAK',
+  'FLAT',
+  'VALLEY',
+  'DEEP_VALLEY',
+] as const satisfies readonly PeriodCode[];
+
+const DAY_TYPES = [
+  'WEEKDAY',
+  'WEEKEND',
+  'HOLIDAY',
+  'SPECIAL_DAY',
+] as const satisfies readonly TariffPeriod['dayType'][];
+
 const byPeriodOrder = (left: PeriodCode, right: PeriodCode) => PERIOD_ORDER.indexOf(left) - PERIOD_ORDER.indexOf(right);
 
-/** Holidays and special days price as their weekday until Tariffs carry a calendar. */
-function dayType(local: { year: number; month: number; day: number }): TariffPeriod['dayType'] {
+function localDateKey(local: { year: number; month: number; day: number }): string {
+  return `${local.year}-${String(local.month).padStart(2, '0')}-${String(local.day).padStart(2, '0')}`;
+}
+
+function defaultDayType(local: { year: number; month: number; day: number }): TariffPeriod['dayType'] {
   const weekday = new Date(Date.UTC(local.year, local.month - 1, local.day)).getUTCDay();
   return weekday === 0 || weekday === 6 ? 'WEEKEND' : 'WEEKDAY';
 }
 
+function sortPeriodsByMinute(periods: readonly SiteTariffPeriod[]): SiteTariffPeriod[] {
+  return [...periods].sort((left, right) => left.startMinute - right.startMinute);
+}
+
 /** The periods pricing the Site-local day an instant falls on, in clock order. */
-export function daySchedule(tariff: SiteTariff, instant: Date, timeZone: string): TariffPeriod[] {
-  const type = dayType(wallTime(instant, timeZone));
-  return tariff.periods.filter((period) => period.dayType === type).sort((left, right) => left.startMinute - right.startMinute);
+export function daySchedule(tariff: SiteTariffWithCalendar, instant: Date, timeZone: string): SiteTariffPeriod[] {
+  const local = wallTime(instant, timeZone);
+  const configured = tariff.holidayDates?.[localDateKey(local)];
+  const resolvedType: TariffPeriod['dayType'] = isOneOf(DAY_TYPES, configured) ? configured : defaultDayType(local);
+
+  const primary = sortPeriodsByMinute(tariff.periods.filter((period) => period.dayType === resolvedType));
+  if (primary.length > 0) return primary;
+
+  if (resolvedType === 'HOLIDAY' || resolvedType === 'SPECIAL_DAY') {
+    const weekend = sortPeriodsByMinute(tariff.periods.filter((period) => period.dayType === 'WEEKEND'));
+    if (weekend.length > 0) return weekend;
+    return sortPeriodsByMinute(tariff.periods.filter((period) => period.dayType === 'WEEKDAY'));
+  }
+
+  return [];
 }
 
 /** The period pricing an instant on the Site's clock; null where no period covers it. */
-export function periodAt(tariff: SiteTariff, instant: Date, timeZone: string): TariffPeriod | null {
+export function periodAt(tariff: SiteTariffWithCalendar, instant: Date, timeZone: string): SiteTariffPeriod | null {
   const local = wallTime(instant, timeZone);
   const minute = local.hour * 60 + local.minute;
   return daySchedule(tariff, instant, timeZone).find((period) => period.startMinute <= minute && minute < period.endMinute) ?? null;
@@ -49,7 +106,7 @@ export interface TouCost {
  * The energy charge the Energy analytics owner priced for these buckets, peak periods first.
  * Electricity it did not price counts as unpriced, never as free.
  */
-export function sumCosts(buckets: readonly { readonly electricityKWh: number | null; readonly cost: EnergyCost | null }[]): TouCost {
+export function sumCosts(buckets: readonly { readonly electricityKWh: number | null; readonly cost: CostInput | null }[]): TouCost {
   const usage = new Map<PeriodCode, { energyKWh: number; cost: number }>();
   let energyKWh = 0;
   let total = 0;
@@ -77,7 +134,7 @@ export function sumCosts(buckets: readonly { readonly electricityKWh: number | n
 }
 
 /** The clock ranges a period covers on the Site-local day of an instant, e.g. 08:00–11:00、18:00–21:00. */
-export function periodRanges(tariff: SiteTariff, instant: Date, timeZone: string): Map<PeriodCode, string> {
+export function periodRanges(tariff: SiteTariffWithCalendar, instant: Date, timeZone: string): Map<PeriodCode, string> {
   const clock = (minute: number) => `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
   const ranges = new Map<PeriodCode, string[]>();
   for (const period of daySchedule(tariff, instant, timeZone)) {
@@ -87,7 +144,7 @@ export function periodRanges(tariff: SiteTariff, instant: Date, timeZone: string
 }
 
 /** Each bucket's energy charge by its label; a bucket none of whose electricity was priced has none. */
-export function costsByLabel(rows: readonly { readonly label: string; readonly electricityKWh: number | null; readonly cost: EnergyCost | null }[]): Map<string, number> {
+export function costsByLabel(rows: readonly { readonly label: string; readonly electricityKWh: number | null; readonly cost: CostInput | null }[]): Map<string, number> {
   return new Map(rows.flatMap((row) => {
     const cost = sumCosts([row]);
     return cost.energyKWh > cost.unpricedKWh ? [[row.label, cost.total] as const] : [];
@@ -108,7 +165,7 @@ export interface DemandCharge {
  */
 export function demandCharges(
   quarterHours: readonly { start: string; demandKW: number; complete: boolean }[],
-  tariff: SiteTariff,
+  tariff: SiteTariffWithCalendar,
   timeZone: string,
   cycleStart: Date,
 ): DemandCharge[] {

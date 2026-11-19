@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  accountingRecalcJobSchema,
+  describeAccountingRecalcError,
+} from '../apps/hvac-web/src/api/accounting-recalc.ts';
+import { GatewayRequestError } from '../apps/hvac-web/src/api/gateway-client.ts';
+import {
   PlatformApiError,
   type EnergySeriesResponse,
   type MonthlyElectricityBudget,
@@ -9,13 +14,20 @@ import {
 import {
   billingMonthOptions,
   computeUtilityBillTotalPayable,
+  defaultRecalcMonthRange,
   describeBillingApiError,
+  formatRecalcWindowLabel,
+  formatTouBreakdownSummary,
+  hasTouBreakdownValues,
   normalizeBillingMonth,
   reconcileUtilityBill,
   resolveBillingMonthWindow,
   resolveReadingDateWindow,
   summarizeMonthlyBudgetProgress,
+  validateRecalculateWindow,
+  type BillingElectricitySeriesInput,
 } from '../apps/hvac-web/src/features/billing/billing-model.ts';
+import type { CostPeriod } from '../apps/hvac-web/src/features/tariff/tariff-model.ts';
 
 const SITE_ID = '018f3e00-1000-7000-8000-000000000001';
 const TENANT_ID = '018f3d00-0000-7000-8000-000000000001';
@@ -209,6 +221,7 @@ test('summarizeMonthlyBudgetProgress computes cumulative cost, month-end project
       ['PEAK', 45_000],
       ['FLAT', 27_000],
       ['VALLEY', 9_000],
+      ['DEEP_VALLEY', 0],
     ],
   );
 });
@@ -443,4 +456,163 @@ test('cross-gap electricity counts in monthly budget totals, TOU breakdown, and 
   assert.equal(reconciliation.plantEnergyKwh, 12_000); // 10,000 + 2,000 cross-gap
   assert.equal(reconciliation.plantEstimatedEnergyCostCny, 9_600);
   assert.equal(reconciliation.energyVarianceKwh, 500);
+});
+
+test('5-tier DEEP_VALLEY TOU breakdown formatting and budget shares include deep valley', () => {
+  const now = new Date('2026-10-15T16:00:00.000Z');
+  const deepValleyPeriods: readonly CostPeriod[] = [
+    { periodCode: 'SUPER_PEAK', energyKWh: 100, amountCNY: 150 },
+    { periodCode: 'PEAK', energyKWh: 300, amountCNY: 360 },
+    { periodCode: 'FLAT', energyKWh: 250, amountCNY: 180 },
+    { periodCode: 'VALLEY', energyKWh: 200, amountCNY: 64 },
+    { periodCode: 'DEEP_VALLEY', energyKWh: 150, amountCNY: 27 },
+  ];
+  const fiveTierSeries: BillingElectricitySeriesInput = {
+    schemaVersion: 1,
+    points: [
+      {
+        periodStart: '2026-09-30T16:00:00.000Z',
+        periodEnd: '2026-10-01T16:00:00.000Z',
+        energyKWh: 1_000,
+        cost: {
+          amountCNY: 781,
+          unpricedKWh: 0,
+          periods: [...deepValleyPeriods],
+        },
+      },
+    ],
+    metadata: {
+      requestedGranularity: 'day',
+      actualGranularity: 'day',
+      dataWatermark: '2026-10-15T16:00:00.000Z',
+      aggregateWatermark: '2026-10-15T16:00:00.000Z',
+      datasetRevision: 'local-development-v1:1',
+      partial: false,
+      qualitySummary: { valid: 96, suspect: 0, invalid: 0 },
+    },
+  };
+
+  const progress = summarizeMonthlyBudgetProgress({
+    electricity: fiveTierSeries,
+    billingMonth: '2026-10',
+    budget: makeBudget(10_000, '2026-10'),
+    now,
+    timeZone: TIMEZONE,
+  });
+  assert.deepEqual(
+    progress.touPeriods.map((item) => [item.code, item.label, item.energyKWh, item.costCny]),
+    [
+      ['SUPER_PEAK', '尖峰', 100, 150],
+      ['PEAK', '峰', 300, 360],
+      ['FLAT', '平', 250, 180],
+      ['VALLEY', '谷', 200, 64],
+      ['DEEP_VALLEY', '深谷', 150, 27],
+    ],
+  );
+
+  assert.equal(hasTouBreakdownValues(undefined), false);
+  assert.equal(hasTouBreakdownValues({ deepValleyKwh: 1200 }), true);
+  assert.equal(
+    formatTouBreakdownSummary({
+      sharpKwh: 100,
+      peakKwh: 300,
+      flatKwh: 250,
+      valleyKwh: 200,
+      deepValleyKwh: 150.5,
+    }),
+    '票面分时电量（kWh）：尖峰 100.00 · 峰 300.00 · 平 250.00 · 谷 200.00 · 深谷 150.50',
+  );
+  assert.equal(formatTouBreakdownSummary({}), null);
+});
+
+test('recalculation window validation, defaults, label formatting, and gateway error mapping', () => {
+  const valid = validateRecalculateWindow('2026-10-01', '2026-10-15', TIMEZONE, {
+    maxDate: '2026-10-16',
+  });
+  assert.equal(valid.ok, true);
+  if (valid.ok) {
+    assert.equal(valid.window.dayCount, 15);
+    assert.equal(valid.window.from.toISOString(), '2026-09-30T16:00:00.000Z');
+    assert.equal(valid.window.to.toISOString(), '2026-10-15T16:00:00.000Z');
+  }
+
+  const invalidOrder = validateRecalculateWindow('2026-10-20', '2026-10-15', TIMEZONE);
+  assert.equal(invalidOrder.ok, false);
+  if (!invalidOrder.ok) assert.equal(invalidOrder.field, 'toDate');
+
+  const futureEnd = validateRecalculateWindow('2026-10-01', '2026-10-18', TIMEZONE, {
+    maxDate: '2026-10-16',
+  });
+  assert.equal(futureEnd.ok, false);
+  if (!futureEnd.ok) assert.ok(futureEnd.message.includes('晚于'));
+
+  const tooLong = validateRecalculateWindow('2025-01-01', '2026-12-31', TIMEZONE);
+  assert.equal(tooLong.ok, false);
+  if (!tooLong.ok) assert.ok(tooLong.message.includes('366'));
+
+  // Default ranges for past, current, and future billing months on site clock
+  const now = new Date('2026-10-16T04:00:00.000Z'); // 2026-10-16 12:00 CST
+  assert.deepEqual(defaultRecalcMonthRange('2026-09', now, TIMEZONE), {
+    fromDate: '2026-09-01',
+    toDate: '2026-09-30',
+  });
+  assert.deepEqual(defaultRecalcMonthRange('2026-10', now, TIMEZONE), {
+    fromDate: '2026-10-01',
+    toDate: '2026-10-16',
+  });
+  assert.deepEqual(defaultRecalcMonthRange('2026-11', now, TIMEZONE), {
+    fromDate: '2026-10-16',
+    toDate: '2026-10-16',
+  });
+
+  // Half-open UTC midnight windows render as inclusive local dates
+  assert.equal(
+    formatRecalcWindowLabel('2026-09-30T16:00:00.000Z', '2026-10-15T16:00:00.000Z', TIMEZONE),
+    '2026-10-01 至 2026-10-15',
+  );
+  assert.equal(
+    formatRecalcWindowLabel('2026-09-30T16:00:00.000Z', '2026-10-01T16:00:00.000Z', TIMEZONE),
+    '2026-10-01',
+  );
+
+  // Recalc job schema & gateway error mapping
+  const parsedJob = accountingRecalcJobSchema.parse({
+    id: '01990000-1000-7000-8000-000000000001',
+    tenantId: TENANT_ID,
+    siteId: SITE_ID,
+    granularity: 'ALL',
+    windowStart: '2026-09-30T16:00:00.000Z',
+    windowEnd: '2026-10-15T16:00:00.000Z',
+    status: 'PENDING',
+    availableAt: '2026-10-16T04:00:00.000Z',
+    requestedBy: '018f3e00-2000-7000-8000-000000000001',
+    requestedByDisplay: '值班工程师',
+    reason: '更新深谷电价后重算',
+    source: 'MANUAL',
+    attemptCount: 0,
+    lastError: '',
+    createdAt: '2026-10-16T04:00:00.000Z',
+    updatedAt: '2026-10-16T04:00:00.000Z',
+    finishedAt: null,
+  });
+  assert.equal(parsedJob.status, 'PENDING');
+
+  const forbiddenMsg = describeAccountingRecalcError(
+    new GatewayRequestError(
+      {
+        kind: 'refused',
+        problem: { status: 403, code: 'BILLING_MANAGE_FORBIDDEN', detail: 'forbidden' },
+      },
+      'raw',
+    ),
+    'fallback',
+  );
+  assert.ok(forbiddenMsg.includes('权限'));
+  assert.ok(!forbiddenMsg.includes('forbidden'));
+
+  const routeMissingMsg = describeAccountingRecalcError(
+    new GatewayRequestError({ kind: 'routeMissing', status: 404 }, 'raw'),
+    'fallback',
+  );
+  assert.equal(routeMissingMsg, '此功能尚未在服务器上启用');
 });

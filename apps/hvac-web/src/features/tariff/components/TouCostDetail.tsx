@@ -1,14 +1,21 @@
-import type { SiteTariff } from '@/api/generated/platformGateway.gen';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { formatDecimal } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import { PERIOD_COLOR } from '../period-presentation';
-import { daySchedule, PERIOD_LABEL, periodRanges, type PeriodCode, type TouCost } from '../tariff-model';
+import {
+  daySchedule,
+  PERIOD_LABEL,
+  PERIOD_ORDER,
+  periodRanges,
+  type PeriodCode,
+  type SiteTariffWithCalendar,
+  type TouCost,
+} from '../tariff-model';
 
 const clock = (minute: number) => `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
 
 /** Today's periods as a 24-hour band, with the time now marked. */
-function TariffDayBand({ tariff, timeZone, now, className }: { readonly tariff: SiteTariff; readonly timeZone: string; readonly now: Date; readonly className?: string }) {
+function TariffDayBand({ tariff, timeZone, now, className }: { readonly tariff: SiteTariffWithCalendar; readonly timeZone: string; readonly now: Date; readonly className?: string }) {
   const schedule = daySchedule(tariff, now, timeZone);
   const local = new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(now).split(':').map(Number);
   const minuteNow = local[0] * 60 + local[1];
@@ -17,7 +24,7 @@ function TariffDayBand({ tariff, timeZone, now, className }: { readonly tariff: 
       <div className="relative flex h-3 overflow-hidden rounded-sm bg-muted">
         {schedule.map((period) => (
           <div
-            key={`${period.startMinute}`}
+            key={`${period.periodCode}-${period.startMinute}`}
             title={`${PERIOD_LABEL[period.periodCode]} ${clock(period.startMinute)}–${clock(period.endMinute)} · ${formatDecimal(period.energyRatePerKWh, 2)} 元/kWh`}
             className="absolute inset-y-0 border-r border-background/70"
             style={{ left: `${(period.startMinute / 1440) * 100}%`, width: `${((period.endMinute - period.startMinute) / 1440) * 100}%`, background: PERIOD_COLOR[period.periodCode] }}
@@ -33,7 +40,7 @@ function TariffDayBand({ tariff, timeZone, now, className }: { readonly tariff: 
 }
 
 /** Each period's energy rate on the day of an instant, falling back to any day that has it. */
-function ratesOn(tariff: SiteTariff, now: Date, timeZone: string): Map<PeriodCode, number> {
+function ratesOn(tariff: SiteTariffWithCalendar, now: Date, timeZone: string): Map<PeriodCode, number> {
   const rates = new Map<PeriodCode, number>();
   for (const period of [...daySchedule(tariff, now, timeZone), ...tariff.periods]) {
     if (!rates.has(period.periodCode)) rates.set(period.periodCode, period.energyRatePerKWh);
@@ -46,13 +53,14 @@ function ratesOn(tariff: SiteTariff, now: Date, timeZone: string): Map<PeriodCod
  * period, beside today's periods. An estimate at published rates; the bill is Settlement's.
  */
 export function TouCostDetail({ tariff, cost, timeZone }: {
-  readonly tariff: SiteTariff;
+  readonly tariff: SiteTariffWithCalendar;
   readonly cost: TouCost;
   readonly timeZone: string;
 }) {
   const now = new Date();
   const rates = ratesOn(tariff, now, timeZone);
   const ranges = periodRanges(tariff, now, timeZone);
+  const legendCodes = PERIOD_ORDER.filter((code) => rates.has(code));
   const share = (energy: number) => (cost.energyKWh > 0 ? energy / cost.energyKWh : 0);
   return (
     <div role="region" aria-label="分时电费">
@@ -61,7 +69,7 @@ export function TouCostDetail({ tariff, cost, timeZone }: {
           <span className="text-xs text-muted-foreground">今日电价时段</span>
           <TariffDayBand tariff={tariff} timeZone={timeZone} now={now} />
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
-            {[...rates.keys()].map((code) => (
+            {legendCodes.map((code) => (
               <span key={code} className="flex items-center gap-1.5">
                 <span className="size-2 rounded-[2px]" style={{ background: PERIOD_COLOR[code] }} aria-hidden="true" />
                 {PERIOD_LABEL[code]}

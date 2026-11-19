@@ -8,7 +8,7 @@ import { SEVERITY_LABELS, SEVERITY_ORDER } from '@/features/alarms/alarm-present
 import { ruleFor } from '@/features/diagnostics/diagnostics-model';
 import { costBasis, siteSavingsRate } from '@/features/savings/savings-model';
 import { PERIOD_COLOR } from '@/features/tariff/period-presentation';
-import { PERIOD_LABEL, type DemandCharge, type PeriodCode } from '@/features/tariff/tariff-model';
+import { PERIOD_LABEL, PERIOD_ORDER, type DemandCharge } from '@/features/tariff/tariff-model';
 import { formatDecimal } from '@/lib/operator-format';
 import { isOneOf } from '@/lib/typed';
 import { cn } from '@/lib/utils';
@@ -142,8 +142,6 @@ export interface PeriodLine {
   readonly rate: number;
 }
 
-const PERIOD_CODES = ['SUPER_PEAK', 'PEAK', 'FLAT', 'VALLEY'] as const satisfies readonly PeriodCode[];
-
 const headCell = 'h-9 bg-muted px-3 text-xs font-medium whitespace-nowrap text-muted-foreground';
 const bodyCell = 'border-b border-divider px-3 py-2.5';
 
@@ -181,7 +179,7 @@ export function CostTable({ periods, charges, chargesNote, energyKWh }: {
       </thead>
       <tbody className="tabular-nums">
         {periods.map((period) => {
-          const knownCode = isOneOf(PERIOD_CODES, period.code) ? period.code : null;
+          const knownCode = isOneOf(PERIOD_ORDER, period.code) ? period.code : null;
           const color = knownCode ? PERIOD_COLOR[knownCode] : 'var(--muted-foreground)';
           const label = knownCode ? PERIOD_LABEL[knownCode] : period.code;
           return (
