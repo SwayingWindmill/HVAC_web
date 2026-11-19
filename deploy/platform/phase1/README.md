@@ -65,7 +65,7 @@ PHASE1_REDIS_MODE=external       -> 不起 Redis 容器；各服务用各自配�
 ```
 
 - 外部 PostgreSQL：把 `PHASE1_POSTGRES_HOST` 指向外部地址，并更新环境文件里每个应用的连接串。表结构预检（`phase1-schema-preflight`）照样必须先通过。
-- 外部 ClickHouse：`PHASE1_CLICKHOUSE_HTTP_URL` 设成受保护的外部 HTTP(S) 地址，Compose 会把它传给能耗查询、历史和能耗计算、指标、预测和优化。上线前在外部建好 `telemetry_history`、`analytics` 表结构和同样最小权限的账号。仓库里本机 ClickHouse 的初始化 SQL 用的是无密码的内部账号，不能原样用在网络可达的外部部署上，外部账号的密码放在部署密钥里。
+- 外部 ClickHouse：`PHASE1_CLICKHOUSE_HTTP_URL` 设成受保护的外部 HTTP(S) 地址，Compose 会把它传给能耗查询、历史和能耗计算、指标、预测和优化；同时配置原生 TCP 启动预检参数 `PHASE1_CLICKHOUSE_HOST`、`PHASE1_CLICKHOUSE_TCP_PORT`（需要 TLS 时设 `PHASE1_CLICKHOUSE_SECURE=true`）、`PHASE1_CLICKHOUSE_PREFLIGHT_USER`（如 `phase1_schema_reader`）与 `PHASE1_CLICKHOUSE_PREFLIGHT_PASSWORD`，让 `phase1-clickhouse-schema-preflight` 在服务启动前核对 `phase1_deployment.product_schema` 版本与清单哈希。上线前在外部建好 `telemetry_history`、`analytics`、`phase1_deployment` 表结构和同样最小权限的账号，并参照 `clickhouse-migrations/clickhouse-role-credentials.sql.example` 在部署密钥中配置密码。仓库里本机 ClickHouse 的初始化 SQL 用的是无密码的内部账号，不能原样用在网络可达的外部部署上，外部账号的密码放在部署密钥里。
 - 外部 Redis：保持一个 Redis，但保留原来的逻辑分隔：DB 0 / 前缀给实时推送和可重建的最新值，DB 1 给短时的 OIDC 登录状态，DB 2 给共享的限流计数。配置 `CENTRIFUGO_ENGINE_REDIS_ADDRESS`、`TELEMETRY_LATEST_CACHE_REDIS_URL`、`METRIC_REDIS_URL`、`OIDC_STATE_REDIS_URL`、`LIMIT_POLICY_REDIS_URL`。这一步不引入 Redis 哨兵或集群，也不算高可用。
 
 任何一个数据服务放到外部时，启动程序会给这个部署的 `data` 网络开出站。三个都在本机时，`data` 只在内部。放到外部只是换了位置和故障范围，不是高可用。
@@ -148,6 +148,22 @@ PHASE1_ENV_FILE=deploy/platform/phase1/environments/production.runtime.env \
 
 测试数据、种子数据、旧系统迁移和只用于本机的身份初始化都不在正式的迁移清单里。`npm run deployment:phase1:migration:test` 在一个隔离的新 PostgreSQL 上把迁移跑两遍（证明能重复执行），校验迁移哈希、强制行级隔离和数据库连接权限，并确认指令下发程序没有数据库角色。
 
+### ClickHouse 版本化迁移与启动前校验
+
+本机 ClickHouse 不再只靠空卷首次启动时跑一次 `/docker-entrypoint-initdb.d` 初始化目录，而是改用显式的版本化迁移与启动前核验：
+
+- `phase1-clickhouse-migrator`：通过共享 `clickhouse` 容器网络命名空间走本机回环（`127.0.0.1:9000`）运行 `deploy/platform/phase1/clickhouse-migrations/run-clickhouse-migrations.sh`，按清单顺序执行 SQL，并把每条迁移的执行状态和文件 SHA-256 哈希记录在 `phase1_deployment.schema_migrations`；如果发现上一轮留下未收尾的 `APPLYING` 状态或文件被修改过（哈希漂移），会立即停下要求人工恢复，不跳过也不覆写。完成后把当前产品版本号与迁移清单摘要写入 `phase1_deployment.product_schema`。
+- `phase1-clickhouse-schema-preflight`：服务启动前使用最小权限只读账号 `phase1_schema_reader` 运行 `deploy/platform/phase1/clickhouse-migrations/verify-clickhouse-schema.sh`，核对产品版本与迁移清单摘要完全一致才放行启动。
+- 无密码 `default` 账号已通过 `clickhouse/default-security.xml` 锁在容器回环地址（`127.0.0.1`、`::1`），同网段里的其他容器无法免密使用 `default` 查询或删库。
+
+验证 ClickHouse 迁移、权限隔离和备份恢复闭环，可运行隔离演练命令：
+
+```bash
+npm run deployment:phase1:clickhouse:restore:test
+```
+
+演练脚本 `scripts/run-phase1-clickhouse-restore-test.ts` 会拉起临时 Docker 网桥和独立 ClickHouse 容器，依次验证全量迁移、幂等重跑、`APPLYING` 状态和 SHA-256 漂移拦截、跨容器 `default` 拒访、`phase1_schema_reader` 版本校验、写入样本行并调用 `backup/clickhouse-backup.sh` 备份、删除 `telemetry_history` 与 `analytics` 两库后执行 `RESTORE` 还原，并核对恢复后的全部表、视图、物化视图与样本行数完全一致，报告输出至 `out/phase1-clickhouse-restore/report.json`。
+
 ## 身份初始化
 
 身份初始化是迁移之后运维人员明确执行的一步，不是服务启动时顺便做的，也从不把租户、站点、角色这些授权写进身份服务。
@@ -175,7 +191,7 @@ docker compose -f deploy/platform/phase1/compose.yaml --profile local-postgres -
 docker compose -f deploy/platform/phase1/compose.yaml --profile local-clickhouse --profile backup run --rm clickhouse-backup
 ```
 
-恢复目标由《SE-OPS-009 V1.0》给出，`recovery/` 里有机器可读的目标、整台服务器的恢复步骤和演练记录格式。配好备份不等于达到目标：每个正式部署都要用真实的备份做一次带时间记录的灾难恢复演练。
+恢复目标由《SE-OPS-009 V1.0》给出，`recovery/` 里有机器可读的目标、整台服务器的恢复步骤和演练记录格式。隔离容器的备份恢复自证可执行 `npm run acceptance:phase1:restore`（PostgreSQL）和 `npm run deployment:phase1:clickhouse:restore:test`（ClickHouse）；配好备份不等于达到目标：每个正式部署都要用真实的备份做一次带时间记录的灾难恢复演练。
 
 ## 定时任务
 

@@ -568,3 +568,30 @@ test('repository governance blocks non-loopback Compose port mappings outside ex
     rmSync(composeSandbox, { recursive: true, force: true });
   }
 });
+
+test('ClickHouse migration governance, restore drill, and observability alerts classify without unknown fallback', () => {
+  const chMigration = runClassification(['deploy/platform/phase1/clickhouse-migrations/run-clickhouse-migrations.sh']);
+  assert.equal(chMigration.broad, true);
+  assert.equal(chMigration.unknown, false);
+  assert.ok(chMigration.contractProfiles.includes('core'));
+  assert.ok(chMigration.integrationProfiles.includes('platform'));
+  assert.ok(chMigration.integrationProfiles.includes('analytics'));
+
+  const chCheck = runClassification(['scripts/check-clickhouse-migrations.ts']);
+  assert.equal(chCheck.unknown, false);
+  assert.ok(chCheck.contractProfiles.includes('core'));
+
+  const chRestore = runClassification(['scripts/run-phase1-clickhouse-restore-test.ts']);
+  assert.equal(chRestore.unknown, false);
+  assert.deepEqual(chRestore.unitProfiles, ['platform']);
+  assert.deepEqual(chRestore.integrationProfiles, ['platform']);
+
+  const obs = runClassification(['infra/observability/alerts/platform-dependencies.yaml']);
+  assert.equal(obs.unknown, false);
+  assert.deepEqual(obs.contractProfiles, ['core']);
+
+  const coreContracts = runPlan('contracts', ['core']).commands;
+  assert.ok(coreContracts.includes('npm run migrations:clickhouse:check'));
+  const platformIntegration = runPlan('integration', ['platform']).commands;
+  assert.ok(platformIntegration.includes('npm run deployment:phase1:clickhouse:restore:test'));
+});

@@ -65,7 +65,6 @@ services:
   clickhouse:
     volumes:
       - phase1_wsl_clickhouse_data:/var/lib/clickhouse
-      - ../../../infra/telemetry/clickhouse/init:/docker-entrypoint-initdb.d:ro
       - ${PHASE1_RUNTIME_DIR:-./runtime}/backups/clickhouse:/backups
 
   redis:

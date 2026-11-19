@@ -56,12 +56,18 @@
       "operations-agent-service"
     ],
     "requiredStartupOneShot": [
-      "phase1-schema-preflight"
+      "phase1-schema-preflight",
+      "phase1-clickhouse-schema-preflight"
     ],
     "operatorOneShot": [
       {
         "service": "phase1-migrator",
         "profile": "migration"
+      },
+      {
+        "service": "phase1-clickhouse-migrator",
+        "profile": "clickhouse-migration",
+        "purpose": "Explicit versioned ClickHouse schema and access migration runner"
       },
       {
         "service": "identity-keygen",

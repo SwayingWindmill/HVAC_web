@@ -58,17 +58,69 @@ CREATE TABLE IF NOT EXISTS phase1_deployment.product_schema (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 REVOKE ALL ON phase1_deployment.schema_migrations, phase1_deployment.product_schema FROM PUBLIC;
+DO $$
+DECLARE
+  role_name text;
+  schema_reader_roles text[] := ARRAY[
+    's0_migrator',
+    'gateway_runtime',
+    'gateway_relay_runtime',
+    'audit_consumer_runtime',
+    'audit_query_runtime',
+    'identity_runtime',
+    'identity_admin',
+    'identity_directory_reader',
+    's1_iam_migrator',
+    's1_iam_runtime',
+    's1_iam_admin',
+    's1_iam_reconciler',
+    's1_core_service',
+    'metric_engine_runtime',
+    'scheduler_runtime',
+    'maintenance_runtime',
+    'settlement_runtime',
+    'forecast_runtime',
+    'optimization_runtime',
+    'fdd_runtime',
+    'mv_runtime',
+    'report_runtime',
+    'connectivity_runtime',
+    's2_iam_grant_runtime',
+    's2_telemetry_migrator_service',
+    's2_telemetry_service',
+    's2_telemetry_gateway',
+    's2_telemetry_iam',
+    's2_telemetry_relay_service',
+    's2_telemetry_history_service',
+    's3_command_migrator_service',
+    's3_command_service',
+    's4_alarm_service',
+    's5_work_order_service',
+    's5_work_order_mutation_service',
+    's16_notification_service',
+    'operations_agent_operations_runtime',
+    's2_telemetry_runtime',
+    's2_telemetry_history',
+    's3_command_runtime',
+    's4_alarm_runtime',
+    's4_alarm_notification_relay',
+    's16_notification_scheduler'
+  ];
+BEGIN
+  FOREACH role_name IN ARRAY schema_reader_roles LOOP
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = role_name) THEN
+      EXECUTE format('GRANT USAGE ON SCHEMA phase1_deployment TO %I', role_name);
+      EXECUTE format('GRANT SELECT ON phase1_deployment.product_schema TO %I', role_name);
+    END IF;
+  END LOOP;
+END
+$$;
 SQL
 }
 
 for database in "${databases[@]}"; do
   ensure_tracking_tables "${database}"
 done
-
-psql --no-psqlrc --set=ON_ERROR_STOP=1 --dbname=hvac_identity <<'SQL'
-GRANT USAGE ON SCHEMA phase1_deployment TO identity_runtime;
-GRANT SELECT ON phase1_deployment.product_schema TO identity_runtime;
-SQL
 
 while IFS='|' read -r database relative_path; do
   [[ -n "${database}" && -n "${relative_path}" ]] || continue

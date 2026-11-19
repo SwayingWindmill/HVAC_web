@@ -505,6 +505,11 @@ func loadIdentityConfig(ctx context.Context) (*gateway.IdentityConfig, *tls.Cert
 			closeStore()
 			return nil, nil, func() {}, errors.New("durable Session store is unavailable")
 		}
+		if err := postgresStore.VerifyProductSchema(ctx); err != nil {
+			postgresStore.Close()
+			closeStore()
+			return nil, nil, func() {}, fmt.Errorf("durable Session store schema incompatible: %w", err)
+		}
 		store = postgresStore
 		sessionStorePing = postgresStore.Ping
 		closeStore = func() {
@@ -538,6 +543,11 @@ func loadIdentityConfig(ctx context.Context) (*gateway.IdentityConfig, *tls.Cert
 		if err != nil {
 			closeStore()
 			return nil, nil, func() {}, errors.New("identity directory for user administration is unavailable")
+		}
+		if err := directory.VerifyProductSchema(ctx); err != nil {
+			directory.Close()
+			closeStore()
+			return nil, nil, func() {}, fmt.Errorf("identity directory schema incompatible: %w", err)
 		}
 		userDirectory = directory
 		closeSessions := closeStore

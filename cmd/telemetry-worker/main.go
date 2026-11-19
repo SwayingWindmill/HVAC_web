@@ -268,6 +268,13 @@ func runTelemetryWorker() int {
 		return 1
 	}
 	shutdownCfg.CloseStore = store.Close
+	verifyContext, cancelVerify := context.WithTimeout(context.Background(), 5*time.Second)
+	err = store.VerifyProductSchema(verifyContext)
+	cancelVerify()
+	if err != nil {
+		logger.Error("telemetry_schema_compatibility_invalid", "error_code", "SCHEMA_COMPATIBILITY_INVALID", "cause", err.Error())
+		return 1
+	}
 	pipelineMetrics := telemetry.NewPipelineMetrics(observabilityRuntime.Metrics)
 	store.SetPipelineMetrics(pipelineMetrics)
 	coordinationLocker, closeCoordination, err := loadTelemetryCoordinationLocks(os.Getenv)
@@ -325,7 +332,12 @@ func runTelemetryWorker() int {
 	}
 	historyRepository, historySink, historyRelay, historySettings, historyContext, historyCancel, err := loadHistoryProjection(pipelineMetrics)
 	if err != nil {
-		logger.Error("telemetry_history_projection_configuration_invalid", "error_code", "TELEMETRY_HISTORY_PROJECTION_CONFIGURATION_INVALID")
+		var schemaErr schemaCompatibilityError
+		if errors.As(err, &schemaErr) {
+			logger.Error("telemetry_history_schema_compatibility_invalid", "error_code", "SCHEMA_COMPATIBILITY_INVALID", "cause", schemaErr.Error())
+		} else {
+			logger.Error("telemetry_history_projection_configuration_invalid", "error_code", "TELEMETRY_HISTORY_PROJECTION_CONFIGURATION_INVALID")
+		}
 		return 1
 	}
 	if historySink != nil {
@@ -706,6 +718,13 @@ func loadHistoryProjection(metrics *telemetry.PipelineMetrics) (*telemetry.Histo
 	cancelOpen()
 	if err != nil {
 		return nil, nil, nil, historyProjectionSettings{}, nil, nil, err
+	}
+	verifyContext, cancelVerify := context.WithTimeout(context.Background(), 5*time.Second)
+	err = repository.VerifyProductSchema(verifyContext)
+	cancelVerify()
+	if err != nil {
+		repository.Close()
+		return nil, nil, nil, historyProjectionSettings{}, nil, nil, schemaCompatibilityError{err: err}
 	}
 	clickHouseURL, err := requiredEnv("TELEMETRY_CLICKHOUSE_HTTP_URL")
 	if err != nil {
@@ -1996,4 +2015,16 @@ func waitUntilTimer(ctx context.Context, target time.Time) bool {
 	case <-timer.C:
 		return true
 	}
+}
+
+type schemaCompatibilityError struct {
+	err error
+}
+
+func (e schemaCompatibilityError) Error() string {
+	return e.err.Error()
+}
+
+func (e schemaCompatibilityError) Unwrap() error {
+	return e.err
 }
