@@ -170,3 +170,70 @@ test("a measure verified on a machine's sub-meter fits that machine against plan
   await expect(sheet).toContainText('节电率27.1%');
   await expect(sheet.getByRole('table', { name: '每日节电' }).getByRole('row')).toHaveCount(7);
 });
+
+test('a bivariate cooling + wet-bulb measure shows R² fit check, bivariate equation, and condition anchors', async ({ page }) => {
+  const base = JSON.parse(readFileSync(new URL('./fixtures/savings-measure-verified.json', import.meta.url), 'utf8'));
+  const bivariateMeasure = {
+    ...base,
+    id: '01a13485-8ca3-7a8a-9467-c2506b049999',
+    name: '冷却水与湿球联动优化',
+    baseline: {
+      ...base.baseline,
+      model: {
+        modelKind: 'BIVARIATE_COOLING_WET_BULB',
+        interceptKWh: 82.4,
+        slope: 0.168,
+        wetBulbSlope: 2.45,
+        rSquared: 0.942,
+        meanWetBulbC: 24.5,
+        cvRmse: 0.08,
+        nmbe: -0.002,
+      },
+    },
+    days: base.days.slice(0, 2).map((day: Record<string, unknown>, index: number) => ({
+      ...day,
+      meanWetBulbC: index === 0 ? 23.2 : 23.8,
+      meanDryBulbC: index === 0 ? 27.5 : 28.4,
+      meanLoadRatio: index === 0 ? 0.62 : 0.68,
+      aiClosedLoopShare: index === 0 ? 0.8 : 0.85,
+    })),
+  };
+  const { days: _days, ...bivariateSummary } = bivariateMeasure;
+
+  await page.route(`**/api/v1/sites/${SITE_ID}/savings/**`, async (route) => {
+    const request = route.request();
+    if (request.method() !== 'GET') return route.fallback();
+    const url = new URL(request.url());
+    if (url.pathname === `/api/v1/sites/${SITE_ID}/savings/measures`) {
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [bivariateSummary] }) });
+    }
+    if (url.pathname === `/api/v1/sites/${SITE_ID}/savings/summary`) {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ from: url.searchParams.get('from'), to: url.searchParams.get('to'), totals: bivariateMeasure.totals }),
+      });
+    }
+    if (url.pathname === `/api/v1/sites/${SITE_ID}/savings/measures/${bivariateMeasure.id}`) {
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(bivariateMeasure) });
+    }
+    return route.fallback();
+  });
+
+  await page.goto(`/energy-analysis/savings?site=${SITE_ID}&inspect=${bivariateMeasure.id}`);
+
+  const sheet = page.getByRole('dialog');
+  await expect(sheet).toContainText('冷负荷 + 室外湿球双变量');
+  await expect(sheet).toContainText('用电 = 82.4 + 0.168 × 冷站供冷量 + 2.450 × 室外湿球温度');
+  await expect(sheet).toContainText('基线平均湿球 24.5 °C');
+  const checks = sheet.getByRole('table', { name: '对比基线的检验' });
+  await expect(checks.getByRole('row').filter({ hasText: '决定系数 R²' })).toContainText('0.942');
+
+  const days = sheet.getByRole('table', { name: '每日节电' });
+  await expect(days).toContainText('室外湿球');
+  await expect(days).toContainText('负荷率');
+  await expect(days).toContainText('AI 闭环占比');
+  await expect(days.getByRole('row').filter({ hasText: '2026-10-01' })).toContainText('23.8 °C');
+  await expect(days.getByRole('row').filter({ hasText: '2026-10-01' })).toContainText('68%');
+  await expect(days.getByRole('row').filter({ hasText: '2026-10-01' })).toContainText('85%');
+});

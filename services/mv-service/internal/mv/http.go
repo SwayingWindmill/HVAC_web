@@ -126,22 +126,30 @@ type baselineView struct {
 }
 
 type modelView struct {
-	InterceptKWh float64 `json:"interceptKWh"`
-	Slope        float64 `json:"slope"`
-	CVRMSE       float64 `json:"cvRmse"`
-	NMBE         float64 `json:"nmbe"`
+	ModelKind    string   `json:"modelKind,omitempty"`
+	InterceptKWh float64  `json:"interceptKWh"`
+	Slope        float64  `json:"slope"`
+	WetBulbSlope *float64 `json:"wetBulbSlope,omitempty"`
+	RSquared     *float64 `json:"rSquared,omitempty"`
+	MeanWetBulbC *float64 `json:"meanWetBulbC,omitempty"`
+	CVRMSE       float64  `json:"cvRmse"`
+	NMBE         float64  `json:"nmbe"`
 }
 
 type dayView struct {
-	Day                 string  `json:"day"`
-	ExpectedHours       int     `json:"expectedHours"`
-	Hours               int     `json:"hours"`
-	UnpricedHours       int     `json:"unpricedHours"`
-	AdjustedBaselineKWh float64 `json:"adjustedBaselineKWh"`
-	ActualKWh           float64 `json:"actualKWh"`
-	AvoidedKWh          float64 `json:"avoidedKWh"`
-	AvoidedCost         float64 `json:"avoidedCost"`
-	PlantKWh            float64 `json:"plantKWh"`
+	Day                 string   `json:"day"`
+	ExpectedHours       int      `json:"expectedHours"`
+	Hours               int      `json:"hours"`
+	UnpricedHours       int      `json:"unpricedHours"`
+	AdjustedBaselineKWh float64  `json:"adjustedBaselineKWh"`
+	ActualKWh           float64  `json:"actualKWh"`
+	AvoidedKWh          float64  `json:"avoidedKWh"`
+	AvoidedCost         float64  `json:"avoidedCost"`
+	PlantKWh            float64  `json:"plantKWh"`
+	MeanWetBulbC        *float64 `json:"meanWetBulbC,omitempty"`
+	MeanDryBulbC        *float64 `json:"meanDryBulbC,omitempty"`
+	MeanLoadRatio       *float64 `json:"meanLoadRatio,omitempty"`
+	AIClosedLoopShare   *float64 `json:"aiClosedLoopShare,omitempty"`
 }
 
 type totalsView struct {
@@ -194,7 +202,20 @@ func viewOf(verified VerifiedMeasure, withDays bool) measureView {
 			Trusted: baseline.Trusted, Reason: baseline.Reason,
 		}
 		if baseline.Fitted() {
-			view.Baseline.Model = &modelView{InterceptKWh: baseline.Intercept, Slope: baseline.Slope, CVRMSE: baseline.CVRMSE, NMBE: baseline.NMBE}
+			modelKind := baseline.ModelKind
+			if modelKind == "" {
+				modelKind = ModelKindUnivariateCooling
+			}
+			view.Baseline.Model = &modelView{
+				ModelKind:    modelKind,
+				InterceptKWh: baseline.Intercept,
+				Slope:        baseline.Slope,
+				WetBulbSlope: baseline.WetBulbSlope,
+				RSquared:     baseline.RSquared,
+				MeanWetBulbC: baseline.MeanWetBulbC,
+				CVRMSE:       baseline.CVRMSE,
+				NMBE:         baseline.NMBE,
+			}
 		}
 	}
 	if withDays {
@@ -203,6 +224,7 @@ func viewOf(verified VerifiedMeasure, withDays bool) measureView {
 			view.Days = append(view.Days, dayView{
 				Day: result.Day, ExpectedHours: result.ExpectedHours, Hours: result.Hours, UnpricedHours: result.UnpricedHours,
 				AdjustedBaselineKWh: result.AdjustedBaselineKWh, ActualKWh: result.ActualKWh, AvoidedKWh: result.AvoidedKWh, AvoidedCost: result.AvoidedCost, PlantKWh: result.PlantKWh,
+				MeanWetBulbC: result.MeanWetBulbC, MeanDryBulbC: result.MeanDryBulbC, MeanLoadRatio: result.MeanLoadRatio, AIClosedLoopShare: result.AIClosedLoopShare,
 			})
 		}
 	}

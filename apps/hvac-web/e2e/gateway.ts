@@ -391,6 +391,8 @@ export class Gateway {
   fddOperatingMinutes: number | null = null;
   /** The Site's energy conservation measures as the M&V owner keeps them, newest first. */
   readonly measures: Json[] = [];
+  /** Optional fitted baseline override used when tests exercise implement/refit with bivariate models. */
+  savingsBaselineOverride: Json | null = null;
   /** The Site's weekly Operating Schedule and Operating Exceptions as the Registry owner keeps them. */
   operatingSchedule: Json = {
     id: null,
@@ -1113,7 +1115,7 @@ export class Gateway {
       if (measure.status !== 'PLANNED') return refuse(409, 'SAVINGS_MEASURE_STATE_CONFLICT');
       const sharesBoundary = (other: Json) => other.boundaryDeviceId === null || measure.boundaryDeviceId === null || other.boundaryDeviceId === measure.boundaryDeviceId;
       if (this.measures.some((other) => other.status === 'IMPLEMENTED' && sharesBoundary(other))) return refuse(409, 'SAVINGS_REPORTING_OVERLAP');
-      const recorded = fixture<Json>('savings-measure.json').baseline;
+      const recorded = this.savingsBaselineOverride ?? fixture<Json>('savings-measure.json').baseline;
       Object.assign(measure, {
         status: 'IMPLEMENTED', implementedAt: body?.implementedAt, updatedAt: now,
         baseline: { ...recorded, from: new Date(Date.parse(body?.implementedAt) - 14 * DAY_MS).toISOString(), to: body?.implementedAt },
@@ -1122,7 +1124,13 @@ export class Gateway {
       if (measure.status !== 'IMPLEMENTED') return refuse(409, 'SAVINGS_MEASURE_STATE_CONFLICT');
       Object.assign(measure, { status: 'ENDED', endedAt: body?.endedAt, updatedAt: now });
     } else {
-      return measure.days.length > 0 ? refuse(409, 'SAVINGS_BASELINE_LOCKED') : undefined;
+      if (measure.days.length > 0) return refuse(409, 'SAVINGS_BASELINE_LOCKED');
+      if (measure.status !== 'IMPLEMENTED' || measure.baseline?.trusted) return refuse(409, 'SAVINGS_MEASURE_STATE_CONFLICT');
+      if (!this.savingsBaselineOverride) return undefined;
+      Object.assign(measure, {
+        updatedAt: now,
+        baseline: { ...this.savingsBaselineOverride, from: body?.from, to: body?.to },
+      });
     }
     return { body: measure };
   }
@@ -1316,6 +1324,83 @@ export class Gateway {
     }
     if (asset) this.extraCrossSiteAssets.push(asset);
     if (device) this.extraCrossSiteDevices.push(device);
+  }
+
+  /** Seeds a verified bivariate wet-bulb savings measure with daily weather/load/AI condition anchors. */
+  seedBivariateSavingsMeasure(overrides: Partial<Json> = {}): Json {
+    const base = fixture<Json>('savings-measure-verified.json');
+    const anchorsByDay: readonly Json[] = [
+      { meanWetBulbC: 24.1, meanDryBulbC: 28.9, meanLoadRatio: 0.68, aiClosedLoopShare: 0.67 },
+      { meanWetBulbC: 24.6, meanDryBulbC: 29.4, meanLoadRatio: 0.71, aiClosedLoopShare: 0.75 },
+      { meanWetBulbC: 23.8, meanDryBulbC: 28.2, meanLoadRatio: 0.64, aiClosedLoopShare: 0.83 },
+      { meanWetBulbC: 25.0, meanDryBulbC: 30.1, meanLoadRatio: 0.76, aiClosedLoopShare: 0.79 },
+      { meanWetBulbC: 24.3, meanDryBulbC: 29.0, meanLoadRatio: 0.69, aiClosedLoopShare: 0.88 },
+      { meanWetBulbC: 23.5, meanDryBulbC: 27.9, meanLoadRatio: 0.62, aiClosedLoopShare: 0.92 },
+    ];
+    const days = (overrides.days as Json[] | undefined) ?? (base.days as Json[]).map((day, idx) => ({
+      ...day,
+      ...(anchorsByDay[idx % anchorsByDay.length] ?? {}),
+    }));
+    const baseline = overrides.baseline ?? {
+      ...base.baseline,
+      model: {
+        ...base.baseline.model,
+        modelKind: 'BIVARIATE_COOLING_WET_BULB',
+        interceptKWh: 42.5,
+        slope: 0.162,
+        wetBulbSlope: 4.85,
+        rSquared: 0.942,
+        meanWetBulbC: 23.4,
+        cvRmse: 0.048,
+        nmbe: 0.002,
+      },
+    };
+    const seeded: Json = {
+      ...base,
+      ...overrides,
+      baseline,
+      days,
+      totals: overrides.totals ?? totalsOf(days),
+    };
+    this.measures.unshift(seeded);
+    return seeded;
+  }
+
+  /** Seeds a closed-month report snapshot enriched with P2 layered efficiency, meter balance, and condition anchors. */
+  seedP2ReportSnapshot(month = '2026-09', reportOverrides: Partial<Json> = {}): Json {
+    const base = fixture<Json>('report-snapshot-2026-09.json');
+    const report: Json = {
+      ...base.report,
+      month,
+      layeredEfficiency: {
+        plantCOP: 4.18,
+        chillerCOP: 5.62,
+        chilledPumpWTF: 32.4,
+        coolingPumpWTF: 28.9,
+        towerPowerShare: 0.084,
+      },
+      meterBalance: {
+        siteKWh: base.report.electricityKWh,
+        submeterSumKWh: 71842.15,
+        diffKWh: Number((base.report.electricityKWh - 71842.15).toFixed(6)),
+        imbalanceRatio: Number(((base.report.electricityKWh - 71842.15) / base.report.electricityKWh).toFixed(6)),
+        status: 'BALANCED',
+      },
+      conditionAnchors: {
+        meanWetBulbC: 23.6,
+        meanDryBulbC: 28.4,
+        meanLoadRatio: 0.64,
+        aiClosedLoopShare: 0.72,
+      },
+      ...reportOverrides,
+    };
+    const stored: Json = {
+      ...base,
+      month,
+      report,
+    };
+    this.reportSnapshots = [...this.reportSnapshots.filter((entry) => entry.month !== month), stored];
+    return stored;
   }
 
   private getOrInitConfigShadow(gatewayId: string): Json {
