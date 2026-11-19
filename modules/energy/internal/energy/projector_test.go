@@ -477,3 +477,103 @@ func TestProjectorRebuildDirtyWindowStitchesBoundariesIdempotently(t *testing.T)
 		t.Fatalf("unexpected T_end+1 stitched successor fact: %+v", sink.facts[1])
 	}
 }
+
+type fakeDirtyWindowEnqueuer struct {
+	requests []DirtyWindowEnqueueRequest
+}
+
+func (f *fakeDirtyWindowEnqueuer) EnqueueDirtyWindow(_ context.Context, req DirtyWindowEnqueueRequest) error {
+	f.requests = append(f.requests, req)
+	return nil
+}
+
+func TestProjectorAppliesHistoricalRatioVersionsAndEnqueuesDirtyWindowForPastHours(t *testing.T) {
+	janStart := time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC)
+	boundary := time.Date(2026, 7, 29, 13, 0, 0, 0, time.UTC)
+
+	binding := validBinding()
+	binding.RatioVersions = []RatioVersion{
+		{
+			ID:                   "ratio-old",
+			CTRatio:              20,
+			PTRatio:              1,
+			MeterMultiplier:      1,
+			RatioApplicationMode: RatioAppModePlatform,
+			ReadingUnit:          UnitKWh,
+			EffectiveFrom:        janStart,
+			EffectiveTo:          &boundary,
+			Status:               RatioStatusReleased,
+		},
+		{
+			ID:                   "ratio-new",
+			CTRatio:              40,
+			PTRatio:              1,
+			MeterMultiplier:      1,
+			RatioApplicationMode: RatioAppModePlatform,
+			ReadingUnit:          UnitMWh,
+			EffectiveFrom:        boundary,
+			Status:               RatioStatusReleased,
+		},
+	}
+
+	rawPre := 2.0
+	deltaPre := validDelta()
+	deltaPre.CurrentObservationID = "018f4e00-3000-7000-8000-000000000091"
+	deltaPre.PreviousSampledAt = time.Date(2026, 7, 29, 12, 50, 0, 0, time.UTC)
+	deltaPre.CurrentSampledAt = boundary
+	deltaPre.DeltaValue = &rawPre
+
+	rawPost := 0.5
+	deltaPost := validDelta()
+	deltaPost.CurrentObservationID = "018f4e00-3000-7000-8000-000000000092"
+	deltaPost.PreviousObservationID = deltaPre.CurrentObservationID
+	deltaPost.PreviousSampledAt = boundary
+	deltaPost.CurrentSampledAt = time.Date(2026, 7, 29, 15, 5, 0, 0, time.UTC)
+	deltaPost.DeltaValue = &rawPost
+
+	source := &fakeSource{
+		deltas: []CounterDelta{deltaPre, deltaPost},
+	}
+	sink := &fakeSink{}
+	enqueuer := &fakeDirtyWindowEnqueuer{}
+	now := time.Date(2026, 7, 29, 15, 10, 0, 0, time.UTC)
+
+	projector, err := NewProjector(ProjectorConfig{
+		CounterSource:       source,
+		BindingResolver:     &fakeResolver{resolution: binding},
+		FactSink:            sink,
+		RebuildEvents:       sink,
+		DirtyWindowEnqueuer: enqueuer,
+		DirtyWindowDelay:    45 * time.Second,
+		BatchSize:           16,
+		Now:                 func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := projector.ProjectOnce(context.Background())
+	if err != nil {
+		t.Fatalf("ProjectOnce() error = %v", err)
+	}
+	if n != 2 || len(sink.facts) != 2 {
+		t.Fatalf("expected 2 projected facts, got %d / %d", n, len(sink.facts))
+	}
+	// Pre-boundary interval uses old CT=20 * kWh -> 2.0 * 20 = 40 kWh.
+	if sink.facts[0].EnergyKWh != 40.0 {
+		t.Fatalf("pre-boundary EnergyKWh = %v, want 40.0", sink.facts[0].EnergyKWh)
+	}
+	// Post-boundary interval uses new CT=40 * MWh (1000) -> 0.5 * 40 * 1000 = 20000 kWh.
+	if sink.facts[1].EnergyKWh != 20000.0 {
+		t.Fatalf("post-boundary EnergyKWh = %v, want 20000.0", sink.facts[1].EnergyKWh)
+	}
+	// Only the pre-boundary fact landed in a past closed hour (12:00-13:00 < current 15:00); post-boundary is current hour.
+	if len(enqueuer.requests) != 1 {
+		t.Fatalf("expected 1 coalesced dirty window request, got %d (%+v)", len(enqueuer.requests), enqueuer.requests)
+	}
+	req := enqueuer.requests[0]
+	wantStart := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+	wantEnd := time.Date(2026, 7, 29, 13, 0, 0, 0, time.UTC)
+	if !req.WindowStart.Equal(wantStart) || !req.WindowEnd.Equal(wantEnd) || !req.AvailableAt.Equal(now.Add(45*time.Second)) {
+		t.Fatalf("unexpected dirty window request: %+v", req)
+	}
+}

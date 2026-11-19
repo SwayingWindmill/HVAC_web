@@ -83,6 +83,25 @@ FORMAT JSONEachRow`, reader.analyticsDatabase), url.Values{"param_tenant": {site
 	return energy.PriceWindowSync{PricedSite: site, Generation: generation, TimelineDigest: row.TimelineDigest, CoveredTo: coveredTo}, true, nil
 }
 
+type priceWindowInsertRow struct {
+	TenantID         string  `json:"tenant_id"`
+	SiteID           string  `json:"site_id"`
+	Generation       uint64  `json:"generation"`
+	WindowStart      string  `json:"window_start"`
+	WindowEnd        string  `json:"window_end"`
+	PeriodCode       string  `json:"period_code"`
+	EnergyRatePerKWh float64 `json:"energy_rate_per_kwh"`
+	TariffVersionID  string  `json:"tariff_version_id"`
+}
+
+type priceWindowSyncInsertRow struct {
+	TenantID       string `json:"tenant_id"`
+	SiteID         string `json:"site_id"`
+	Generation     uint64 `json:"generation"`
+	TimelineDigest string `json:"timeline_digest"`
+	CoveredTo      string `json:"covered_to"`
+}
+
 func (writer *Writer) WritePriceWindows(ctx context.Context, sync energy.PriceWindowSync, windows []tariffmodel.Window) error {
 	if len(windows) == 0 {
 		return nil
@@ -90,10 +109,15 @@ func (writer *Writer) WritePriceWindows(ctx context.Context, sync energy.PriceWi
 	var body bytes.Buffer
 	encoder := json.NewEncoder(&body)
 	for _, window := range windows {
-		if err := encoder.Encode(map[string]any{
-			"tenant_id": sync.TenantID, "site_id": sync.SiteID, "generation": sync.Generation,
-			"window_start": clickHouseTime(window.Start), "window_end": clickHouseTime(window.End),
-			"period_code": window.PeriodCode, "energy_rate_per_kwh": window.EnergyRatePerKWh, "tariff_version_id": window.VersionID,
+		if err := encoder.Encode(priceWindowInsertRow{
+			TenantID:         sync.TenantID,
+			SiteID:           sync.SiteID,
+			Generation:       sync.Generation,
+			WindowStart:      clickHouseTime(window.Start),
+			WindowEnd:        clickHouseTime(window.End),
+			PeriodCode:       window.PeriodCode,
+			EnergyRatePerKWh: window.EnergyRatePerKWh,
+			TariffVersionID:  window.VersionID,
 		}); err != nil {
 			return fmt.Errorf("encode price window: %w", err)
 		}
@@ -105,9 +129,12 @@ func (writer *Writer) WritePriceWindows(ctx context.Context, sync energy.PriceWi
 }
 
 func (writer *Writer) RecordPriceWindowSync(ctx context.Context, sync energy.PriceWindowSync) error {
-	body, err := json.Marshal(map[string]any{
-		"tenant_id": sync.TenantID, "site_id": sync.SiteID, "generation": sync.Generation,
-		"timeline_digest": sync.TimelineDigest, "covered_to": clickHouseTime(sync.CoveredTo),
+	body, err := json.Marshal(priceWindowSyncInsertRow{
+		TenantID:       sync.TenantID,
+		SiteID:         sync.SiteID,
+		Generation:     sync.Generation,
+		TimelineDigest: sync.TimelineDigest,
+		CoveredTo:      clickHouseTime(sync.CoveredTo),
 	})
 	if err != nil {
 		return fmt.Errorf("encode price window sync: %w", err)
@@ -118,12 +145,9 @@ func (writer *Writer) RecordPriceWindowSync(ctx context.Context, sync energy.Pri
 	}, append(body, '\n'))
 }
 
-// DropPriceWindowsBefore deletes the generations the sync replaced; they are no longer visible.
-func (writer *Writer) DropPriceWindowsBefore(ctx context.Context, sync energy.PriceWindowSync) error {
-	return writer.insert(ctx, "price window delete", url.Values{
-		"query":        {"ALTER TABLE " + writer.database + ".tariff_price_windows DELETE WHERE tenant_id = {tenant:UUID} AND site_id = {site:UUID} AND generation < {generation:UInt64}"},
-		"param_tenant": {sync.TenantID}, "param_site": {sync.SiteID}, "param_generation": {strconv.FormatUint(sync.Generation, 10)},
-	}, nil)
+// DropPriceWindowsBefore is a zero-mutation append-only no-op; visible views select max(generation).
+func (writer *Writer) DropPriceWindowsBefore(_ context.Context, _ energy.PriceWindowSync) error {
+	return nil
 }
 
 var (

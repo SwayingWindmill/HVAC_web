@@ -51,6 +51,24 @@ FORMAT JSONEachRow`, reader.analyticsDatabase), url.Values{"param_tenant": {site
 	}, true, nil
 }
 
+type totalSubmeterInsertRow struct {
+	TenantID   string `json:"tenant_id"`
+	SiteID     string `json:"site_id"`
+	Generation uint64 `json:"generation"`
+	PointID    string `json:"point_id"`
+	DeviceID   string `json:"device_id"`
+	MeterName  string `json:"meter_name"`
+	Ordinal    uint32 `json:"ordinal"`
+}
+
+type totalSubmeterSyncInsertRow struct {
+	TenantID      string `json:"tenant_id"`
+	SiteID        string `json:"site_id"`
+	Generation    uint64 `json:"generation"`
+	Synthesized   uint8  `json:"synthesized"`
+	SourcesDigest string `json:"sources_digest"`
+}
+
 func (writer *Writer) WriteTotalSubmeters(ctx context.Context, sync energy.TotalSubmeterSync, subMeters []energy.TotalSubMeter) error {
 	if len(subMeters) == 0 {
 		return nil
@@ -61,14 +79,14 @@ func (writer *Writer) WriteTotalSubmeters(ctx context.Context, sync energy.Total
 		if subMeter.Ordinal < 0 {
 			return fmt.Errorf("submeter ordinal %d must be non-negative", subMeter.Ordinal)
 		}
-		if err := encoder.Encode(map[string]any{
-			"tenant_id":  sync.TenantID,
-			"site_id":    sync.SiteID,
-			"generation": sync.Generation,
-			"point_id":   subMeter.PointID,
-			"device_id":  subMeter.DeviceID,
-			"meter_name": subMeter.MeterName,
-			"ordinal":    uint32(subMeter.Ordinal),
+		if err := encoder.Encode(totalSubmeterInsertRow{
+			TenantID:   sync.TenantID,
+			SiteID:     sync.SiteID,
+			Generation: sync.Generation,
+			PointID:    subMeter.PointID,
+			DeviceID:   subMeter.DeviceID,
+			MeterName:  subMeter.MeterName,
+			Ordinal:    uint32(subMeter.Ordinal),
 		}); err != nil {
 			return fmt.Errorf("encode total submeter: %w", err)
 		}
@@ -84,12 +102,12 @@ func (writer *Writer) RecordTotalSubmeterSync(ctx context.Context, sync energy.T
 	if sync.Synthesized {
 		synthesized = 1
 	}
-	body, err := json.Marshal(map[string]any{
-		"tenant_id":      sync.TenantID,
-		"site_id":        sync.SiteID,
-		"generation":     sync.Generation,
-		"synthesized":    synthesized,
-		"sources_digest": sync.SourcesDigest,
+	body, err := json.Marshal(totalSubmeterSyncInsertRow{
+		TenantID:      sync.TenantID,
+		SiteID:        sync.SiteID,
+		Generation:    sync.Generation,
+		Synthesized:   synthesized,
+		SourcesDigest: sync.SourcesDigest,
 	})
 	if err != nil {
 		return fmt.Errorf("encode total submeter sync: %w", err)
@@ -100,13 +118,9 @@ func (writer *Writer) RecordTotalSubmeterSync(ctx context.Context, sync energy.T
 	}, append(body, '\n'))
 }
 
-func (writer *Writer) DropTotalSubmetersBefore(ctx context.Context, sync energy.TotalSubmeterSync) error {
-	return writer.insert(ctx, "total submeter delete", url.Values{
-		"query":            {"ALTER TABLE " + writer.database + ".site_total_submeters DELETE WHERE tenant_id = {tenant:UUID} AND site_id = {site:UUID} AND generation < {generation:UInt64}"},
-		"param_tenant":     {sync.TenantID},
-		"param_site":       {sync.SiteID},
-		"param_generation": {strconv.FormatUint(sync.Generation, 10)},
-	}, nil)
+// DropTotalSubmetersBefore is a zero-mutation append-only no-op; visible views select max(generation).
+func (writer *Writer) DropTotalSubmetersBefore(_ context.Context, _ energy.TotalSubmeterSync) error {
+	return nil
 }
 
 var (

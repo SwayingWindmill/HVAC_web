@@ -7,13 +7,15 @@ import (
 )
 
 type fakeSubmeterStore struct {
-	sites   []PricedSite
-	syncs   map[string]TotalSubmeterSync
-	rows    map[uint64][]TotalSubMeter
-	dropped []uint64
+	sites     []PricedSite
+	sinceSeen time.Time
+	syncs     map[string]TotalSubmeterSync
+	rows      map[uint64][]TotalSubMeter
+	dropped   []uint64
 }
 
-func (store *fakeSubmeterStore) SubmeterSites(context.Context, time.Time) ([]PricedSite, error) {
+func (store *fakeSubmeterStore) SubmeterSites(_ context.Context, since time.Time) ([]PricedSite, error) {
+	store.sinceSeen = since
 	return store.sites, nil
 }
 
@@ -77,6 +79,10 @@ func TestTotalSubmeterProjectorSwapsGenerationsAndSkipsUnchanged(t *testing.T) {
 
 	if err := projector.SyncOnce(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+	wantLookback := 30 * 24 * time.Hour
+	if got := now.Sub(store.sinceSeen); got != wantLookback {
+		t.Fatalf("SubmeterSites lookback = %s, want %s (>48h)", got, wantLookback)
 	}
 	firstSync := store.syncs[site.SiteID]
 	if !firstSync.Synthesized || len(store.rows[firstSync.Generation]) != 2 || len(store.dropped) != 1 {

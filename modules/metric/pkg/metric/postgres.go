@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -575,6 +576,281 @@ ON CONFLICT (watermark_key) DO UPDATE SET
 		return fmt.Errorf("save metric backfill watermark: %w", err)
 	}
 	return tx.Commit(ctx)
+}
+
+// ListStalePublicationScopes lists distinct tenant/site pairs with orphaned PERSISTING metric publications.
+func (s *PostgresStore) ListStalePublicationScopes(ctx context.Context, staleBefore time.Time, limit int) ([]TenantSiteScope, error) {
+	if s == nil || s.pool == nil {
+		return nil, errors.New("metric postgres store is unavailable")
+	}
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+	rows, err := s.pool.Query(ctx, `SELECT DISTINCT p.tenant_id::text, p.site_id::text
+FROM core_registry.cross_store_publications p
+WHERE p.producer = 'METRIC'
+  AND p.status = 'PERSISTING'
+  AND p.updated_at < $1
+ORDER BY p.tenant_id::text, p.site_id::text
+LIMIT $2`, staleBefore.UTC(), limit)
+	if err != nil {
+		return nil, fmt.Errorf("list stale metric publication scopes: %w", err)
+	}
+	defer rows.Close()
+
+	var scopes []TenantSiteScope
+	for rows.Next() {
+		var item TenantSiteScope
+		if err := rows.Scan(&item.TenantID, &item.SiteID); err != nil {
+			return nil, fmt.Errorf("scan stale publication scope: %w", err)
+		}
+		scopes = append(scopes, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return scopes, nil
+}
+
+// EnqueueDirtyWindow persists a debounced recalculation dirty window scoped to tenant and site.
+func (s *PostgresStore) EnqueueDirtyWindow(ctx context.Context, req DirtyWindowRecord) (DirtyWindowRecord, error) {
+	if s == nil || s.pool == nil {
+		return DirtyWindowRecord{}, errors.New("metric postgres store is unavailable")
+	}
+	now := req.CreatedAt.UTC()
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	id := strings.TrimSpace(req.ID)
+	if id == "" {
+		generated, err := uuidv7(now)
+		if err != nil {
+			return DirtyWindowRecord{}, err
+		}
+		id = generated
+	}
+	availableAt := req.AvailableAt.UTC()
+	if availableAt.IsZero() {
+		availableAt = now
+	}
+	granularity := strings.ToUpper(strings.TrimSpace(req.Granularity))
+	if granularity == "" {
+		granularity = "HOUR"
+	}
+	source := strings.ToUpper(strings.TrimSpace(req.Source))
+	if source == "" {
+		source = "BACKFILL"
+	}
+	requestedBy := strings.TrimSpace(req.RequestedBy)
+	if requestedBy == "" {
+		generated, err := uuidv7(now)
+		if err != nil {
+			return DirtyWindowRecord{}, err
+		}
+		requestedBy = generated
+	}
+	reason := truncateRunes(req.Reason, 1000)
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return DirtyWindowRecord{}, err
+	}
+	defer tx.Rollback(ctx)
+	if err = scope(ctx, tx, req.TenantID, req.SiteID); err != nil {
+		return DirtyWindowRecord{}, err
+	}
+
+	var stored DirtyWindowRecord
+	err = tx.QueryRow(ctx, `INSERT INTO core_registry.energy_recalc_dirty_windows (
+  id, tenant_id, site_id, granularity, window_start, window_end, status,
+  available_at, requested_by, requested_by_display, reason, source,
+  attempt_count, last_error, created_at, updated_at, finished_at
+) VALUES (
+  $1::uuid, $2::uuid, $3::uuid, $4, $5, $6, 'PENDING',
+  $7, $8::uuid, $9, $10, $11,
+  0, '', $12, $12, NULL
+)
+RETURNING
+  id::text, tenant_id::text, site_id::text, granularity, window_start, window_end,
+  status, available_at, requested_by::text, requested_by_display, reason, source,
+  attempt_count, last_error, created_at, updated_at, finished_at`,
+		id, req.TenantID, req.SiteID, granularity, req.WindowStart.UTC(), req.WindowEnd.UTC(),
+		availableAt, requestedBy, req.RequestedByDisplay, reason, source, now,
+	).Scan(
+		&stored.ID, &stored.TenantID, &stored.SiteID, &stored.Granularity,
+		&stored.WindowStart, &stored.WindowEnd, &stored.Status, &stored.AvailableAt,
+		&stored.RequestedBy, &stored.RequestedByDisplay, &stored.Reason, &stored.Source,
+		&stored.AttemptCount, &stored.LastError, &stored.CreatedAt, &stored.UpdatedAt, &stored.FinishedAt,
+	)
+	if err != nil {
+		return DirtyWindowRecord{}, fmt.Errorf("enqueue energy recalc dirty window: %w", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return DirtyWindowRecord{}, err
+	}
+	return normalizeDirtyWindowTimes(stored), nil
+}
+
+// ClaimDueDirtyWindows atomically claims up to limit due PENDING dirty windows using SKIP LOCKED.
+func (s *PostgresStore) ClaimDueDirtyWindows(ctx context.Context, now time.Time, limit int) ([]DirtyWindowRecord, error) {
+	if s == nil || s.pool == nil {
+		return nil, errors.New("metric postgres store is unavailable")
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 64
+	}
+	nowUTC := now.UTC()
+	if nowUTC.IsZero() {
+		nowUTC = time.Now().UTC()
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `SELECT set_config('app.tenant_id', '', true), set_config('app.authorized_site_ids', '', true)`); err != nil {
+		return nil, err
+	}
+
+	rows, err := tx.Query(ctx, `WITH claimed AS (
+  SELECT id
+  FROM core_registry.energy_recalc_dirty_windows
+  WHERE status = 'PENDING'
+    AND available_at <= $1
+  ORDER BY available_at ASC, created_at ASC, id ASC
+  LIMIT $2
+  FOR UPDATE SKIP LOCKED
+)
+UPDATE core_registry.energy_recalc_dirty_windows AS w
+SET status = 'RUNNING',
+    updated_at = GREATEST($1, w.created_at)
+FROM claimed
+WHERE w.id = claimed.id
+RETURNING
+  w.id::text, w.tenant_id::text, w.site_id::text, w.granularity, w.window_start, w.window_end,
+  w.status, w.available_at, w.requested_by::text, w.requested_by_display, w.reason, w.source,
+  w.attempt_count, w.last_error, w.created_at, w.updated_at, w.finished_at`, nowUTC, limit)
+	if err != nil {
+		return nil, fmt.Errorf("claim due energy recalc dirty windows: %w", err)
+	}
+	defer rows.Close()
+
+	var claimed []DirtyWindowRecord
+	for rows.Next() {
+		var rec DirtyWindowRecord
+		if scanErr := rows.Scan(
+			&rec.ID, &rec.TenantID, &rec.SiteID, &rec.Granularity,
+			&rec.WindowStart, &rec.WindowEnd, &rec.Status, &rec.AvailableAt,
+			&rec.RequestedBy, &rec.RequestedByDisplay, &rec.Reason, &rec.Source,
+			&rec.AttemptCount, &rec.LastError, &rec.CreatedAt, &rec.UpdatedAt, &rec.FinishedAt,
+		); scanErr != nil {
+			return nil, fmt.Errorf("scan claimed dirty window: %w", scanErr)
+		}
+		claimed = append(claimed, normalizeDirtyWindowTimes(rec))
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+
+	if err = tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	sort.Slice(claimed, func(i, j int) bool {
+		if !claimed[i].AvailableAt.Equal(claimed[j].AvailableAt) {
+			return claimed[i].AvailableAt.Before(claimed[j].AvailableAt)
+		}
+		if !claimed[i].CreatedAt.Equal(claimed[j].CreatedAt) {
+			return claimed[i].CreatedAt.Before(claimed[j].CreatedAt)
+		}
+		return claimed[i].ID < claimed[j].ID
+	})
+	return claimed, nil
+}
+
+// CompleteDirtyWindow marks a RUNNING dirty window SUCCEEDED under tenant/site RLS scope.
+func (s *PostgresStore) CompleteDirtyWindow(ctx context.Context, tenantID, siteID, windowID string, now time.Time) error {
+	if s == nil || s.pool == nil {
+		return errors.New("metric postgres store is unavailable")
+	}
+	nowUTC := now.UTC()
+	if nowUTC.IsZero() {
+		nowUTC = time.Now().UTC()
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = scope(ctx, tx, tenantID, siteID); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `UPDATE core_registry.energy_recalc_dirty_windows
+SET status = 'SUCCEEDED',
+    last_error = '',
+    updated_at = GREATEST($4, created_at),
+    finished_at = GREATEST($4, created_at)
+WHERE tenant_id = $1::uuid
+  AND site_id = $2::uuid
+  AND id = $3::uuid
+  AND status = 'RUNNING'`, tenantID, siteID, windowID, nowUTC)
+	if err != nil {
+		return fmt.Errorf("complete dirty window %s: %w", windowID, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("dirty window %s is not in RUNNING state", windowID)
+	}
+	return tx.Commit(ctx)
+}
+
+// FailDirtyWindow marks a RUNNING dirty window FAILED, increments attempt_count, and records last_error.
+func (s *PostgresStore) FailDirtyWindow(ctx context.Context, tenantID, siteID, windowID, lastError string, now time.Time) error {
+	if s == nil || s.pool == nil {
+		return errors.New("metric postgres store is unavailable")
+	}
+	nowUTC := now.UTC()
+	if nowUTC.IsZero() {
+		nowUTC = time.Now().UTC()
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = scope(ctx, tx, tenantID, siteID); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `UPDATE core_registry.energy_recalc_dirty_windows
+SET status = 'FAILED',
+    attempt_count = attempt_count + 1,
+    last_error = $4,
+    updated_at = GREATEST($5, created_at),
+    finished_at = GREATEST($5, created_at)
+WHERE tenant_id = $1::uuid
+  AND site_id = $2::uuid
+  AND id = $3::uuid
+  AND status = 'RUNNING'`, tenantID, siteID, windowID, truncateRunes(lastError, 1000), nowUTC)
+	if err != nil {
+		return fmt.Errorf("fail dirty window %s: %w", windowID, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("dirty window %s is not in RUNNING state", windowID)
+	}
+	return tx.Commit(ctx)
+}
+
+func normalizeDirtyWindowTimes(rec DirtyWindowRecord) DirtyWindowRecord {
+	rec.WindowStart = rec.WindowStart.UTC()
+	rec.WindowEnd = rec.WindowEnd.UTC()
+	rec.AvailableAt = rec.AvailableAt.UTC()
+	rec.CreatedAt = rec.CreatedAt.UTC()
+	rec.UpdatedAt = rec.UpdatedAt.UTC()
+	if rec.FinishedAt != nil {
+		t := rec.FinishedAt.UTC()
+		rec.FinishedAt = &t
+	}
+	return rec
 }
 
 var _ pgconn.CommandTag

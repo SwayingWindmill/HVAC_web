@@ -81,25 +81,27 @@ type siteBindingCacheEntry struct {
 }
 
 type bindingItem struct {
-	Status            string     `json:"status,omitempty"`
-	TenantID          string     `json:"tenantId"`
-	SiteID            string     `json:"siteId"`
-	MeterID           string     `json:"meterId"`
-	MeterBindingID    string     `json:"meterBindingId"`
-	TopologyVersionID string     `json:"topologyVersionId"`
-	BindingVersion    int64      `json:"bindingVersion"`
-	BindingRevision   int64      `json:"revision"`
-	EnergyTypeID      string     `json:"energyTypeId"`
-	EnergyType        string     `json:"energyType"`
-	MeterRole         string     `json:"meterRole"`
-	Direction         string     `json:"direction"`
-	AccountingScope   string     `json:"accountingScope"`
-	LoadDeviceID      string     `json:"loadDeviceId"`
-	DeviceID          string     `json:"deviceId"`
-	PointID           string     `json:"pointId"`
-	PointType         string     `json:"pointType"`
-	EffectiveFrom     time.Time  `json:"effectiveFrom"`
-	EffectiveTo       *time.Time `json:"effectiveTo"`
+	Status            string                `json:"status,omitempty"`
+	TenantID          string                `json:"tenantId"`
+	SiteID            string                `json:"siteId"`
+	MeterID           string                `json:"meterId"`
+	MeterBindingID    string                `json:"meterBindingId"`
+	TopologyVersionID string                `json:"topologyVersionId"`
+	BindingVersion    int64                 `json:"bindingVersion"`
+	BindingRevision   int64                 `json:"revision"`
+	EnergyTypeID      string                `json:"energyTypeId"`
+	EnergyType        string                `json:"energyType"`
+	MeterRole         string                `json:"meterRole"`
+	Direction         string                `json:"direction"`
+	AccountingScope   string                `json:"accountingScope"`
+	LoadDeviceID      string                `json:"loadDeviceId"`
+	DeviceID          string                `json:"deviceId"`
+	PointID           string                `json:"pointId"`
+	PointType         string                `json:"pointType"`
+	ReadingUnit       string                `json:"readingUnit,omitempty"`
+	RatioVersions     []energy.RatioVersion `json:"ratioVersions,omitempty"`
+	EffectiveFrom     time.Time             `json:"effectiveFrom"`
+	EffectiveTo       *time.Time            `json:"effectiveTo"`
 }
 
 type siteMeterBindingsResponse struct {
@@ -248,6 +250,8 @@ func (resolver *Resolver) fetchSiteBindings(ctx context.Context, tenantID, siteI
 			DeviceID:          item.DeviceID,
 			PointID:           item.PointID,
 			PointType:         item.PointType,
+			ReadingUnit:       item.ReadingUnit,
+			RatioVersions:     normalizeRatioVersions(item.RatioVersions),
 			EffectiveFrom:     item.EffectiveFrom.UTC(),
 			EffectiveTo:       utcPtr(item.EffectiveTo),
 		})
@@ -256,6 +260,19 @@ func (resolver *Resolver) fetchSiteBindings(ctx context.Context, tenantID, siteI
 		fetchedAt: fetchedAt,
 		byPoint:   byPoint,
 	}, nil
+}
+
+func normalizeRatioVersions(versions []energy.RatioVersion) []energy.RatioVersion {
+	if len(versions) == 0 {
+		return nil
+	}
+	out := make([]energy.RatioVersion, len(versions))
+	for i, version := range versions {
+		version.EffectiveFrom = version.EffectiveFrom.UTC()
+		version.EffectiveTo = utcPtr(version.EffectiveTo)
+		out[i] = version
+	}
+	return out
 }
 
 func utcPtr(value *time.Time) *time.Time {

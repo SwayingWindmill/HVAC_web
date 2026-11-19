@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/observability"
+	"github.com/quanlaihe/hvac-web/modules/metric/pkg/metric"
 )
 
 type syncBuffer struct {
@@ -314,5 +315,75 @@ func TestMetricWorkerEnvHelpersReturnErrors(t *testing.T) {
 	t.Setenv("TEST_METRIC_INT_BAD", "0")
 	if _, err := integerEnv("TEST_METRIC_INT_BAD", 5, 1, 100); err == nil {
 		t.Fatal("expected error for out-of-range integerEnv")
+	}
+	t.Setenv("RECONCILE_INTERVAL", "2m")
+	if got, err := reconcileIntervalEnv(); err != nil || got != 2*time.Minute {
+		t.Fatalf("reconcileIntervalEnv() = %v, %v; want 2m", got, err)
+	}
+}
+
+type fakeDirtyRunner struct {
+	calls atomic.Int32
+	stats metric.RecalcBatchStats
+	err   error
+}
+
+func (f *fakeDirtyRunner) ProcessOnce(context.Context) (metric.RecalcBatchStats, error) {
+	f.calls.Add(1)
+	return f.stats, f.err
+}
+
+type fakeScopeListerAndReconciler struct {
+	scopes []metric.TenantSiteScope
+	calls  atomic.Int32
+}
+
+func (f *fakeScopeListerAndReconciler) ListStalePublicationScopes(context.Context, time.Time, int) ([]metric.TenantSiteScope, error) {
+	return f.scopes, nil
+}
+
+func (f *fakeScopeListerAndReconciler) ReconcileScope(context.Context, string, string, time.Time, int) (int, error) {
+	f.calls.Add(1)
+	return 1, nil
+}
+
+func TestDirtyRecalcAndReconcileLoopsCancelCleanly(t *testing.T) {
+	telemetry := observability.NewRuntime(observability.RuntimeConfig{Service: "metric-worker-test"})
+	var logs syncBuffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+
+	runner := &fakeDirtyRunner{stats: metric.RecalcBatchStats{Claimed: 1, CoalescedSpan: 1, ExecutedRuns: 2, Succeeded: 1}}
+	reconciler := &fakeScopeListerAndReconciler{scopes: []metric.TenantSiteScope{{TenantID: "t1", SiteID: "s1"}}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		runDirtyRecalcLoop(ctx, runner, 5*time.Millisecond, telemetry, logger)
+	}()
+	go func() {
+		defer wg.Done()
+		runPublicationReconcileLoop(ctx, reconciler, reconciler, 5*time.Millisecond, time.Minute, telemetry, logger)
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for (runner.calls.Load() == 0 || reconciler.calls.Load() == 0) && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		wg.Wait()
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("background recalc/reconcile loops did not exit on cancel")
+	}
+	if runner.calls.Load() == 0 || reconciler.calls.Load() == 0 {
+		t.Fatalf("expected both loops to run at least once: dirty=%d reconcile=%d", runner.calls.Load(), reconciler.calls.Load())
 	}
 }
