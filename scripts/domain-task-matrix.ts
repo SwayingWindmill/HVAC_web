@@ -43,6 +43,7 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
       npmRun('deployment:phase1:check'),
       npmRun('migrations:freeze:check'),
       npmRun('migrations:conventions:check'),
+      npmRun('migrations:clickhouse:check'),
       npmRun('acceptance:phase1:check'),
       npmRun('architecture:phase1:check'),
       npmRun('backend:architecture:check'),
@@ -127,7 +128,7 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
     ]),
   }),
   integration: Object.freeze({
-    platform: Object.freeze([npmRun('test:durable-postgres'), npmRun('test:identity-postgres'), npmRun('test:notification-postgres'), npmRun('deployment:phase1:migration:test')]),
+    platform: Object.freeze([npmRun('test:durable-postgres'), npmRun('test:identity-postgres'), npmRun('test:notification-postgres'), npmRun('deployment:phase1:migration:test'), npmRun('deployment:phase1:clickhouse:restore:test')]),
     registry: Object.freeze([nodeRun('scripts/run-s1-registry-postgres-tests.mjs')]),
     telemetry: Object.freeze([
       nodeRun('scripts/run-s2-telemetry-postgres-tests.mjs'),

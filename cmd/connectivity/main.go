@@ -126,6 +126,10 @@ func run() int {
 		return 1
 	}
 	addCloser(connectivityStore.Close)
+	if err := connectivityStore.VerifyProductSchema(sigCtx); err != nil {
+		logger.Error("connectivity_schema_compatibility_invalid", "error_code", "SCHEMA_COMPATIBILITY_INVALID", "cause", err.Error())
+		return 1
+	}
 	telemetry.SetDependencies(observability.Dependency{
 		Name:     "postgres-connectivity",
 		Required: true,

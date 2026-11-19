@@ -18,13 +18,23 @@ PostgreSQL 在外部时，备份由那边负责。只有外部数据库允许 `p
 
 ## ClickHouse
 
-`PHASE1_CLICKHOUSE_MODE=local` 时，ClickHouse 在 `CLICKHOUSE_BACKUP_DIR` 有一个单机的原生备份盘：
+`PHASE1_CLICKHOUSE_MODE=local` 时，ClickHouse 已切换为显式 `phase1-clickhouse-migrator` 版本化迁移与 `phase1-clickhouse-schema-preflight` 启动前校验（不再靠初始化目录在空卷时裸跑一次），并在 `CLICKHOUSE_BACKUP_DIR` 配有一份单机原生备份盘：
 
 ```bash
 docker compose -f deploy/platform/phase1/compose.yaml --profile local-clickhouse --profile backup run --rm clickhouse-backup
 ```
 
+由于 `clickhouse/default-security.xml` 已把无密码 `default` 账号限制为只能从本机回环（`127.0.0.1`、`::1`）登录，`clickhouse-backup` 与 `phase1-clickhouse-migrator` 都需要共享 `clickhouse` 网络命名空间走回环执行；同网段其他容器（包括启动前校验 `phase1-clickhouse-schema-preflight` 使用的 `phase1_schema_reader`）不能直接用 `default` 连库。
+
 正式环境要把 `CLICKHOUSE_BACKUP_DIR` 放在受保护的备份存储上，不放在 ClickHouse 数据卷上。ClickHouse 在外部时，备份和恢复由那边或托管服务负责，应用主机不模拟。
+
+要端到端验证 ClickHouse 版本化迁移、权限隔离、备份和删库恢复流程，可运行：
+
+```bash
+npm run deployment:phase1:clickhouse:restore:test
+```
+
+该演练（`scripts/run-phase1-clickhouse-restore-test.ts`）会在隔离的 Docker 网络与容器中落地全量表、视图、物化视图和最小权限账号，验证幂等重跑、`APPLYING` 状态与 SHA-256 篡改阻断、同网段其他容器访问 `default` 被拒、`phase1_schema_reader` 版本核验，写入测试数据并用 `clickhouse-backup.sh` 备份，随后删除 `telemetry_history` 与 `analytics` 两库并执行 `RESTORE DATABASE ... FROM Disk('phase1_backups', ...)`，核对恢复后库表结构与样本行数完全一致，并输出结构化报告到 `out/phase1-clickhouse-restore/report.json`。
 
 ## 定时
 
@@ -53,7 +63,7 @@ sudo systemctl daemon-reload && sudo systemctl enable --now hvac-backup.timer
 - PostgreSQL 基础备份：每天。
 - PostgreSQL WAL 归档：持续，归档超时由部署配置限定。
 - ClickHouse 备份：每天在主要的写入时段之后，或者按站点的数据量定。
-- 恢复测试：定期、必须做。现有的「删除 + 恢复」测试可以单独跑来证明软件没问题，但它不是自动的发布检查，也不能代替在预发或类正式环境里用真实备份做的恢复。
+- 恢复测试：定期、必须做。`npm run acceptance:phase1:restore`（PostgreSQL）和 `npm run deployment:phase1:clickhouse:restore:test`（ClickHouse）可以单独跑来证明当前迁移、备份和恢复脚本没问题，但它们不是自动替代品，不能代替在预发或类正式环境里用真实备份做的带时间记录的恢复演练。
 
 ## 恢复目标和检查
 

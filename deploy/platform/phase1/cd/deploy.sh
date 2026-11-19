@@ -95,6 +95,23 @@ node scripts/local-environment.mjs roles
 
 step migrate
 $L --profile migration run --rm phase1-migrator
+clickhouse_mode="${PHASE1_CLICKHOUSE_MODE:-}"
+if [[ -z "$clickhouse_mode" && -r "$PHASE1_ENV_FILE" ]]; then
+  clickhouse_mode="$(awk -F= '/^PHASE1_CLICKHOUSE_MODE=/{v=$2; gsub(/["'\''\r[:space:]]/, "", v); val=v} END{print val}' "$PHASE1_ENV_FILE")"
+fi
+clickhouse_mode="${clickhouse_mode:-local}"
+case "$clickhouse_mode" in
+  local)
+    $L --profile clickhouse-migration run --rm phase1-clickhouse-migrator
+    ;;
+  external)
+    echo "skipping local ClickHouse migrator (PHASE1_CLICKHOUSE_MODE=external)"
+    ;;
+  *)
+    echo "error: unknown PHASE1_CLICKHOUSE_MODE: '${clickhouse_mode}'" >&2
+    exit 1
+    ;;
+esac
 
 step keys
 [ -f "$R/identity/signing-key.pem" ] || $L run --rm identity-keygen

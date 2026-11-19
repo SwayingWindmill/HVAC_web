@@ -73,6 +73,10 @@ func run() int {
 		closeStoreOnce.Do(store.Close)
 	}
 	closers = append(closers, closeStore)
+	if err := store.VerifyProductSchema(sigCtx); err != nil {
+		logger.Error("scheduler_schema_compatibility_invalid", "error_code", "SCHEMA_COMPATIBILITY_INVALID", "cause", err.Error())
+		return 1
+	}
 	telemetry.SetDependencies(observability.Dependency{Name: "postgres", Required: true, Check: store.Ping})
 
 	diagnostics := &http.Server{
