@@ -5,6 +5,15 @@
 
 ## 未发布
 
+### 2026-11-19
+
+#### 修复与工程防线
+
+- 修复 Web 壳层首屏启动竞态并落地 PR/CI 加速与静态防线（`apps/hvac-web`、`deploy/platform/phase1/migrations`、`infra/registry`、`scripts/`、`.github/workflows/`）：
+  - **Web 站点发现就绪后再挂载路由**：`AppRuntimeHost` 在登录态成立后等待站点列表检查完成再触发路由校验与挂载，消除慢网场景下首次加载报 `RouteAccessError: SITE_DISCOVERY_UNAVAILABLE` 的间歇报错。
+  - **Phase 1 迁移唯一事实源**：以 `deploy/platform/phase1/migrations/manifest.v1.json` 为唯一事实源自动生成 `migration-list.tsv`、分段镜像 `Dockerfile` 与 `infra/registry/compose.yaml`（并补回遗漏的 `metric-backfill-recalc-job-grants.sql` 挂载）。
+  - **PR CI 提速与工程门禁**：并行拆解 `unit` 门禁（Go 静态与漏洞、Web E2E 4 并发、分域 Go `-race` 测试）、启用 Go 编译与工具缓存并复用 Runner 系统 Chrome；新增 ClickHouse SQL 方言检查（`clickhouse:sql:check`）、Go 测试 `time.Sleep` 与并发日志无保护 `bytes.Buffer` 检查，以及本地预检 `npm run preflight`。
+
 ### 2026-11-18
 
 #### 新增与架构演进

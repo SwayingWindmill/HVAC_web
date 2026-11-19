@@ -25,6 +25,8 @@
 
 ```bash
 npm run check                                            # 仓库静态门禁与构建检查
+npm run preflight                                        # 提交/推送前一键预检（支持 --dry-run / --skip-e2e）
+npm run migrations:sync                                  # 由 manifest.v1.json 同步生成 migration-list.tsv、Dockerfile 与 compose.yaml
 npm run domain:run -- --domain=<域>                      # 按改动域跑门禁（见 scripts/domain-task-matrix.ts）
 npm run verify:doctor                                    # 检查 WSL Node、Linux Chromium 与验证端口（5190/5194/8443）
 npm run verify:live -- --slug=<标识> --route=<路径>     # Tier-2 实库网页 1440px 截图与错误门禁（无 8443 时返回退出码 2）
@@ -76,17 +78,17 @@ npm run deployment:phase1:check                          # 改了 Compose 或迁
 
 | 规则 | 由什么自动守住 |
 | --- | --- |
-| 脚本严格类型检查、遗留 JS 数量与字节上限（`102`，禁止 `.agents/` 新增 JS）、`.agents/skills` 与 `.claude/skills` 逐字节镜像一致、`verify/features` 全覆盖与四段结构、禁止跟踪 `.audit/` 与代码残留 `[DEBUG-*]`、`docs/HANDOFF.md` 单次读取上限（`<= 28 KiB`） | `npm run typecheck:scripts` 与 `npm run repo:check`（`tsconfig.scripts.json`、`scripts/check-repository-governance.ts`） |
+| 脚本严格类型检查、遗留 JS 数量与字节上限（`102`，禁止 `.agents/` 新增 JS）、`.agents/skills` 与 `.claude/skills` 逐字节镜像一致、`verify/features` 全覆盖与四段结构、禁止跟踪 `.audit/` 与代码残留 `[DEBUG-*]`、`docs/HANDOFF.md` 单次读取上限（`<= 28 KiB`）、Go 测试 `time.Sleep` 棘轮与并发日志无保护 `bytes.Buffer` 拦截 | `npm run typecheck:scripts` 与 `npm run repo:check`（`tsconfig.scripts.json`、`scripts/check-repository-governance.ts`、`scripts/check-go-test-hygiene.ts`） |
 | 破坏性 Git 命令、打印运行密钥与未授权生产发布/重置本地库拦截 | `.agents/hooks.json` + `.claude/settings.json`（`scripts/hooks/pre-tool-guard.ts`，由 `npm run pr:gates:test` 测试） |
 | 页面组合语法（`DataTableBlock`、禁止 `<main>`、`FactTile` 禁用 `className`、禁 `<Button variant="secondary">`）、`DESIGN.md` §1 禁用文案、feature/route 禁裸 `fetch`/`WebSocket`、禁 `components/ui/` 外 `"use client"` / `@ts-ignore` / `eslint-disable` / `console.log` / `JSON.parse(JSON.stringify(...))`、`as unknown as` 清零与非 `const` `as` 棘轮（`scripts/web-as-cast-baseline.json` `43`）、`routeTree.gen.ts` 新鲜度、`Enter` 输入法防误触、`color-scheme` 与浅/深双主题 WCAG 对比度 | `npm run design:check`（`scripts/check-design-system.ts`）与 `scripts/test-real-design-tokens.ts` |
 | 权限目录与内置角色展示同 IAM 契约严格一致 | `npm -w @hvac/web run typecheck` 与 `npm run web:principal:contract`（`scripts/test-rms-principal-capability-contract.mjs`） |
-| 网关路由负责方、数据表负责方、冻结迁移与表命名及中文 `COMMENT ON` 全覆盖 | `npm run ownership:check`、`npm run migrations:freeze:check`、`npm run migrations:conventions:check` |
+| 网关路由负责方、数据表负责方、迁移清单唯一事实源（`manifest.v1.json` 同步 `migration-list.tsv`/`Dockerfile`/`compose.yaml`）、冻结迁移、表命名及中文 `COMMENT ON`、ClickHouse SQL 方言（别名遮蔽 / 保留字 / `fmt.Sprintf` 占位符） | `npm run ownership:check`、`npm run migrations:sync:check`、`npm run migrations:freeze:check`、`npm run migrations:conventions:check`、`npm run clickhouse:sql:check` |
 | 控制指令授权、执行围栏、MQTT 提交点、超时核验、设备冻结与回执恢复队列不变量 | `npm run command:formal`（`modules/command/pkg/commandformal` + `.agents/skills/command-safety/SKILL.md`） |
 
 ## 网页和数据库
 
 - **改网页**前读 `apps/hvac-web/README.md`「约定」（技术栈、状态归属、组件、只显示真实数据、1440px 真实数据验收）和 `DESIGN.md`。
-- **改表结构**前读 `deploy/platform/phase1/README.md`「数据库和迁移」：新增迁移要登记到三个文件；迁移已经冻结，登记过的迁移不能再改，改表结构只能新增迁移。
+- **改表结构**前读 `deploy/platform/phase1/README.md`「数据库和迁移」：新增迁移只需登记到 `manifest.v1.json` 并运行 `npm run migrations:sync` 自动生成 `migration-list.tsv`、`migrations/Dockerfile` 与 `infra/registry/compose.yaml`；迁移已经冻结，登记过的迁移不能再改，改表结构只能新增迁移。
 
 ## 写文档
 
