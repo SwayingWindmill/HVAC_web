@@ -184,8 +184,27 @@ for (const file of files) {
   });
   match(file.startsWith('.github/workflows/'), () => selectBroad(file, 'workflow behavior changed'));
   match(file.startsWith('deploy/platform/phase1/migrations/'), () => {
-    selectBroad(file, 'Phase 1 migration set changed');
+    add(contractProfiles, ['core']);
     add(integrationProfiles, ['platform']);
+    addReason(file, 'Phase 1 migration set changed');
+  });
+  match(file.startsWith('deploy/platform/phase1/cd/'), () => {
+    selectPlatform(file, 'Phase 1 CD script or test changed');
+  });
+  match(
+    file.startsWith('deploy/platform/phase1/')
+      && !file.startsWith('deploy/platform/phase1/migrations/')
+      && !file.startsWith('deploy/platform/phase1/cd/'),
+    () => {
+      add(contractProfiles, ['core']);
+      if (file.includes('compose') || file.includes('postgres') || file.includes('backup') || file.includes('clickhouse')) {
+        add(integrationProfiles, ['platform']);
+      }
+      addReason(file, 'Phase 1 deployment config changed');
+    },
+  );
+  match(file.startsWith('tools/promo-video/'), () => {
+    addReason(file, 'standalone promo-video tooling changed');
   });
   if (phase1Migrations.has(file)) {
     add(integrationProfiles, ['platform']);
@@ -257,6 +276,7 @@ for (const file of files) {
     selectRegistry(file, 'site onboarding manifest changed');
     selectTelemetry(file, 'site onboarding manifest changed');
     selectCommand(file, 'site onboarding manifest changed');
+    selectAlarm(file, 'site onboarding manifest changed');
   });
   match(file.startsWith('libs/alarmauth/') || file.startsWith('libs/alarmmodel/') || file.startsWith('modules/alarm/') || file.startsWith('infra/alarm/'), () => selectAlarm(file, 'Alarm capability changed', { integration: true }));
   match(file.startsWith('libs/workorderauth/') || file.startsWith('libs/workordermodel/') || file.startsWith('modules/workorder/') || file.startsWith('infra/workorder/'), () => selectWorkOrder(file, 'Work Order capability changed', { integration: true }));
@@ -353,6 +373,12 @@ for (const file of files) {
   }
 }
 
+const unitProfileList = sorted(unitProfiles);
+const unitGoLint = unitProfiles.has('go');
+const unitWeb = unitProfiles.has('web');
+const unitDomainProfiles = unitProfileList.filter((profile) => profile !== 'go' && profile !== 'web');
+const unitDomain = unitDomainProfiles.length > 0;
+
 const classification = {
   schemaVersion: 1,
   changedFiles: sorted(files),
@@ -360,10 +386,14 @@ const classification = {
   unknown,
   contracts: contractProfiles.size > 0,
   units: unitProfiles.size > 0,
+  unitGoLint,
+  unitWeb,
+  unitDomain,
   integrations: integrationProfiles.size > 0,
   browsers: browserProfiles.size > 0,
   contractProfiles: sorted(contractProfiles),
-  unitProfiles: sorted(unitProfiles),
+  unitProfiles: unitProfileList,
+  unitDomainProfiles,
   integrationProfiles: sorted(integrationProfiles),
   browserProfiles: sorted(browserProfiles),
   reasons,
@@ -377,10 +407,14 @@ if (process.env.GITHUB_OUTPUT) {
   const outputs = [
     `contracts=${classification.contracts}`,
     `units=${classification.units}`,
+    `unit_go_lint=${classification.unitGoLint}`,
+    `unit_web=${classification.unitWeb}`,
+    `unit_domain=${classification.unitDomain}`,
     `integrations=${classification.integrations}`,
     `browsers=${classification.browsers}`,
     `contract_profiles=${classification.contractProfiles.join(',')}`,
     `unit_profiles=${classification.unitProfiles.join(',')}`,
+    `unit_domain_profiles=${classification.unitDomainProfiles.join(',')}`,
     `integration_profiles=${classification.integrationProfiles.join(',')}`,
     `browser_profiles=${classification.browserProfiles.join(',')}`,
   ];

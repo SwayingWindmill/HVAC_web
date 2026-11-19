@@ -2,6 +2,8 @@ import { existsSync } from 'node:fs';
 import { chromium, defineConfig } from '@playwright/test';
 
 const port = Number(process.env.PLAYWRIGHT_PORT || 5190);
+const parsedWorkers = Number(process.env.PLAYWRIGHT_WORKERS);
+const workers = Number.isInteger(parsedWorkers) && parsedWorkers > 0 ? parsedWorkers : undefined;
 
 // Playwright's Chromium when installed, otherwise the system Chrome the CI runners ship.
 const executablePath = [process.env.BROWSER_BINARY, chromium.executablePath(), '/usr/bin/google-chrome-stable', '/usr/bin/chromium']
@@ -12,6 +14,7 @@ const executablePath = [process.env.BROWSER_BINARY, chromium.executablePath(), '
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: true,
+  workers,
   forbidOnly: Boolean(process.env.CI),
   reporter: process.env.CI ? 'line' : 'list',
   // The first loads of each worker fetch the lazy route chunks.

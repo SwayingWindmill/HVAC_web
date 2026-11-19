@@ -14,8 +14,8 @@ concurrency:
 
 env:
   NODE_OPTIONS: --max-old-space-size=4096
-  GOMAXPROCS: 2
-  GOFLAGS: -p=1
+  GOMAXPROCS: 4
+  GOFLAGS: -p=2
 
 jobs:
   classify:
@@ -24,9 +24,13 @@ jobs:
     outputs:
       contracts: ${{ steps.classify.outputs.contracts }}
       units: ${{ steps.classify.outputs.units }}
+      unit_go_lint: ${{ steps.classify.outputs.unit_go_lint }}
+      unit_web: ${{ steps.classify.outputs.unit_web }}
+      unit_domain: ${{ steps.classify.outputs.unit_domain }}
       integrations: ${{ steps.classify.outputs.integrations }}
       contract_profiles: ${{ steps.classify.outputs.contract_profiles }}
       unit_profiles: ${{ steps.classify.outputs.unit_profiles }}
+      unit_domain_profiles: ${{ steps.classify.outputs.unit_domain_profiles }}
       integration_profiles: ${{ steps.classify.outputs.integration_profiles }}
     steps:
       - uses: actions/checkout@v7
@@ -99,13 +103,12 @@ jobs:
           test "$CLASSIFY_RESULT" = "success"
           test "$EXECUTION_RESULT" = "success" || test "$EXECUTION_RESULT" = "skipped"
 
-  unit_run:
-    name: internal / affected unit
+  unit_go_lint_run:
+    name: internal / affected go-lint
     needs: classify
-    if: ${{ needs.classify.result == 'success' && needs.classify.outputs.units == 'true' }}
+    if: ${{ needs.classify.result == 'success' && needs.classify.outputs.unit_go_lint == 'true' }}
     runs-on: ubuntu-24.04
-    # The go profile lints and vulnerability-scans all Go modules on top of the domain tests.
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -123,26 +126,84 @@ jobs:
           node-version: "22.22.0"
           cache: npm
           cache-dependency-path: package-lock.json
+      - name: Export Go build and tool caches
+        run: |
+          echo "GOCACHE=$(go env GOCACHE)" >> "$GITHUB_ENV"
+          echo "HVAC_GO_TOOLS_DIR=$HOME/.cache/hvac-go-tools" >> "$GITHUB_ENV"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/hvac-go-tools
+          key: hvac-go-tools-${{ runner.os }}-${{ hashFiles('go.work', 'scripts/run-go-lint.mjs', 'scripts/run-go-vulnerability-scan.mjs') }}
+      - run: npm ci
+      - run: node --experimental-strip-types scripts/run-pr-gate.ts --gate=unit --profiles="go"
+
+  unit_web_run:
+    name: internal / affected web-unit
+    needs: classify
+    if: ${{ needs.classify.result == 'success' && needs.classify.outputs.unit_web == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22.22.0"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - env:
+          PLAYWRIGHT_WORKERS: "4"
+        run: node --experimental-strip-types scripts/run-pr-gate.ts --gate=unit --profiles="web"
+
+  unit_domain_run:
+    name: internal / affected domain-unit
+    needs: classify
+    if: ${{ needs.classify.result == 'success' && needs.classify.outputs.unit_domain == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.4"
+          cache-dependency-path: |
+            go.mod
+            go.sum
+            go.work.sum
+            cmd/*/go.mod
+            libs/*/go.mod
+            tools/*/go.mod
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22.22.0"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Export Go build cache
+        run: echo "GOCACHE=$(go env GOCACHE)" >> "$GITHUB_ENV"
       - run: npm ci
       # Every Go test in the unit gate runs with the race detector (needs cgo; the runner image has gcc).
-      # -p=1 repeats the workflow-wide GOFLAGS, which a step-level GOFLAGS replaces rather than extends.
+      # -p=2 repeats the workflow-wide GOFLAGS, which a step-level GOFLAGS replaces rather than extends.
       - env:
-          GOFLAGS: -p=1 -race
-        run: node --experimental-strip-types scripts/run-pr-gate.ts --gate=unit --profiles="${{ needs.classify.outputs.unit_profiles }}"
+          GOFLAGS: -p=2 -race
+        run: node --experimental-strip-types scripts/run-pr-gate.ts --gate=unit --profiles="${{ needs.classify.outputs.unit_domain_profiles }}"
 
   unit:
     name: pr / affected-unit
-    needs: [classify, unit_run]
+    needs: [classify, unit_go_lint_run, unit_web_run, unit_domain_run]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     steps:
       - name: Aggregate unit result
         env:
           CLASSIFY_RESULT: ${{ needs.classify.result }}
-          EXECUTION_RESULT: ${{ needs.unit_run.result }}
+          GO_LINT_RESULT: ${{ needs.unit_go_lint_run.result }}
+          WEB_RESULT: ${{ needs.unit_web_run.result }}
+          DOMAIN_RESULT: ${{ needs.unit_domain_run.result }}
         run: |
           test "$CLASSIFY_RESULT" = "success"
-          test "$EXECUTION_RESULT" = "success" || test "$EXECUTION_RESULT" = "skipped"
+          test "$GO_LINT_RESULT" = "success" || test "$GO_LINT_RESULT" = "skipped"
+          test "$WEB_RESULT" = "success" || test "$WEB_RESULT" = "skipped"
+          test "$DOMAIN_RESULT" = "success" || test "$DOMAIN_RESULT" = "skipped"
 
   integration_run:
     name: internal / affected integration
@@ -167,6 +228,8 @@ jobs:
           node-version: "22.22.0"
           cache: npm
           cache-dependency-path: package-lock.json
+      - name: Export Go build cache
+        run: echo "GOCACHE=$(go env GOCACHE)" >> "$GITHUB_ENV"
       - run: npm ci
       - run: node --experimental-strip-types scripts/run-pr-gate.ts --gate=integration --profiles="${{ needs.classify.outputs.integration_profiles }}"
 

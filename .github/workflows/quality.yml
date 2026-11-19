@@ -26,7 +26,16 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: "1.27.4"
-          cache: false
+          cache: true
+          cache-dependency-path: |
+            go.mod
+            go.sum
+            go.work.sum
+            cmd/*/go.mod
+            libs/*/go.mod
+            tools/*/go.mod
+      - name: Export Go build cache
+        run: echo "GOCACHE=$(go env GOCACHE)" >> "$GITHUB_ENV"
       - uses: actions/setup-node@v7
         with:
           node-version: "22.22.0"
@@ -48,5 +57,13 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
+      - name: Ensure Chromium or system Chrome is available
+        run: |
+          if [ -x /usr/bin/google-chrome-stable ]; then
+            /usr/bin/google-chrome-stable --version
+          elif [ -x /usr/bin/chromium ]; then
+            /usr/bin/chromium --version
+          else
+            npx playwright install --with-deps chromium
+          fi
       - run: npm run web:e2e -- e2e/sign-in.spec.ts e2e/alarms.spec.ts e2e/realtime.spec.ts

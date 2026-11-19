@@ -29,10 +29,20 @@ interface GatePlan {
 
 interface WorkflowDocument {
   jobs: {
-    unit_run: {
+    unit_domain_run: {
       steps: Array<{
         run?: string;
         env?: Record<string, string>;
+      }>;
+    };
+  };
+}
+
+interface QualityWorkflowDocument {
+  jobs: {
+    'web-smoke': {
+      steps: Array<{
+        run?: string;
       }>;
     };
   };
@@ -119,6 +129,7 @@ test('static gate has one canonical repository check chain', () => {
     'npm run design:check',
     'npm run lint',
     'npm run build',
+    'npm run miniprogram:check',
   ]);
 });
 
@@ -126,11 +137,16 @@ test('Go code checks run as the go unit profile: lint and vulnerability scan of 
   assert.deepEqual(labels(resolveGateCommands('unit', ['go'])), ['npm run go:lint', 'npm run security:go-vuln']);
 });
 
-test('the unit gate runs every Go test with the race detector', () => {
+test('the unit gate runs every Go test with the race detector and smoke reuses system Chrome', () => {
   const workflow = yaml.load(readFileSync('.github/workflows/pr-gates.yml', 'utf8')) as WorkflowDocument;
-  const unitStep = workflow.jobs.unit_run.steps.find((step) => step.run?.includes('scripts/run-pr-gate.ts --gate=unit'));
-  assert.ok(unitStep, 'unit gate step');
+  const unitStep = workflow.jobs.unit_domain_run.steps.find((step) => step.run?.includes('scripts/run-pr-gate.ts --gate=unit'));
+  assert.ok(unitStep, 'unit domain gate step');
   assert.ok(String(unitStep.env?.GOFLAGS ?? '').split(/\s+/u).includes('-race'), `GOFLAGS=${unitStep.env?.GOFLAGS}`);
+
+  const quality = yaml.load(readFileSync('.github/workflows/quality.yml', 'utf8')) as QualityWorkflowDocument;
+  const chromeStep = quality.jobs['web-smoke'].steps.find((step) => step.run?.includes('playwright install'));
+  assert.ok(chromeStep, 'web-smoke browser guard step');
+  assert.ok(chromeStep.run?.includes('/usr/bin/google-chrome-stable'), 'web-smoke must reuse system Chrome before running playwright install');
 });
 
 test('profile-set CLI expansion matches the matrix', () => {
