@@ -3,6 +3,8 @@ package metric
 import (
 	"context"
 	"errors"
+	"math"
+	"strings"
 	"testing"
 	"time"
 )
@@ -321,5 +323,110 @@ func TestReconcileBatchesMissingFacts(t *testing.T) {
 	}
 	if len(series.insertBatchCalls) != 1 || len(series.insertBatchCalls[0]) != 2 {
 		t.Fatalf("expected 1 batched InsertMetrics call with 2 items, got %#v", series.insertBatchCalls)
+	}
+}
+
+func TestCounterDeltaHandlesAllDecreaseModesAndGuardsBogusJumps(t *testing.T) {
+	resetToZero := Binding{SourceDefinition: map[string]any{
+		"counter": map[string]any{"decreaseMode": "RESET_TO_ZERO", "maxPowerKw": 200.0},
+	}}
+	got, err := counterDelta(resetToZero, Input{Rise: 12, Drops: 1, DropSum: -100, ValueAfterDrops: 5, DurationSeconds: 3600})
+	if err != nil || math.Abs(got-17) > 1e-9 {
+		t.Fatalf("RESET_TO_ZERO delta = %v err=%v, want 17", got, err)
+	}
+
+	// Bogus jump exceeding maxPowerKw * elapsedHours under RESET_TO_ZERO must fail.
+	if _, err := counterDelta(resetToZero, Input{Rise: 10, Drops: 1, ValueAfterDrops: 5000, DurationSeconds: 60}); err == nil {
+		t.Fatal("expected oversized jump under RESET_TO_ZERO to fail")
+	}
+
+	rollover := Binding{SourceDefinition: map[string]any{
+		"counter": map[string]any{"decreaseMode": "ROLLOVER", "rolloverModulus": 1000.0},
+	}}
+	if got, err := counterDelta(rollover, Input{Rise: 20, Drops: 1, DropSum: -985, ValueAfterDrops: 5}); err != nil || math.Abs(got-35) > 1e-9 {
+		t.Fatalf("ROLLOVER delta = %v err=%v, want 35", got, err)
+	}
+	if _, err := counterDelta(rollover, Input{Rise: 20, Drops: 1, DropSum: -1500, ValueAfterDrops: 5}); err == nil {
+		t.Fatal("expected rollover drop exceeding rolloverModulus to fail")
+	}
+
+	replacement := Binding{SourceDefinition: map[string]any{
+		"counter": map[string]any{"decreaseMode": "METER_REPLACEMENT", "replacementCarry": 12.5},
+	}}
+	if got, err := counterDelta(replacement, Input{Rise: 8, Drops: 1, DropSum: -500, ValueAfterDrops: 4}); err != nil || math.Abs(got-24.5) > 1e-9 {
+		t.Fatalf("METER_REPLACEMENT delta = %v err=%v, want 24.5", got, err)
+	}
+
+	invalidMode := Binding{SourceDefinition: map[string]any{
+		"counter": map[string]any{"decreaseMode": "INVALID"},
+	}}
+	if got, err := counterDelta(invalidMode, Input{Rise: 12.5, Drops: 0}); err != nil || math.Abs(got-12.5) > 1e-9 {
+		t.Fatalf("INVALID mode with 0 drops = %v err=%v, want 12.5", got, err)
+	}
+	if _, err := counterDelta(invalidMode, Input{Rise: 10, Drops: 1, DropSum: -40, ValueAfterDrops: 20}); err == nil {
+		t.Fatal("expected INVALID mode with uncleaned drop to reject")
+	}
+	if _, err := counterDelta(resetToZero, Input{Rise: math.NaN()}); err == nil {
+		t.Fatal("expected NaN counter rise to fail")
+	}
+}
+
+func TestThermalAndCOPGuardrailsAndEnergyWeightedAggregation(t *testing.T) {
+	copBinding := Binding{MetricCode: "plant_cop", Aggregation: "AVG", CalculationMethod: "COP"}
+
+	// Energy-weighted COP uses time-integrated energy (Integral) rather than unweighted rate ratio.
+	got, err := calculate(copBinding, []Input{
+		{Code: "cooling", Value: 500, Integral: 250, DurationSeconds: 1800},
+		{Code: "power", Value: 100, Integral: 100, DurationSeconds: 3600},
+	})
+	if err != nil || math.Abs(got-2.5) > 1e-9 {
+		t.Fatalf("energy-weighted COP = %v err=%v, want 2.5", got, err)
+	}
+
+	// Standby low power (2 kW < 5 kW deadband) with residual cooling must be rejected.
+	if _, err := calculate(copBinding, []Input{
+		{Code: "cooling", Value: 15},
+		{Code: "power", Value: 2},
+	}); err == nil || !strings.Contains(err.Error(), "standby") {
+		t.Fatalf("expected standby deadband rejection, got err=%v", err)
+	}
+
+	// Residual delta-T (0.3 K < 0.5 K) and negative delta-T (-1.5 K) must be rejected.
+	if _, err := calculate(copBinding, []Input{
+		{Code: "cooling", Value: 400},
+		{Code: "power", Value: 100},
+		{Code: "delta_t", Value: 0.3},
+	}); err == nil || !strings.Contains(err.Error(), "deadband") {
+		t.Fatalf("expected residual delta-T rejection, got err=%v", err)
+	}
+	if _, err := calculate(copBinding, []Input{
+		{Code: "cooling", Value: 400},
+		{Code: "power", Value: 100},
+		{Code: "return_temp", Value: 10.0},
+		{Code: "supply_temp", Value: 11.5},
+	}); err == nil || !strings.Contains(err.Error(), "negative") {
+		t.Fatalf("expected negative delta-T rejection, got err=%v", err)
+	}
+
+	// Div-by-zero, NaN/Inf, out-of-range COP, and unweighted arithmetic mean of COP must be rejected.
+	if _, err := calculate(copBinding, []Input{{Code: "cooling", Value: 400}, {Code: "power", Value: 0}}); err == nil {
+		t.Fatal("expected div-by-zero power rejection")
+	}
+	if _, err := calculate(copBinding, []Input{{Code: "cooling", Value: math.NaN()}, {Code: "power", Value: 100}}); err == nil {
+		t.Fatal("expected NaN rejection")
+	}
+	if _, err := calculate(copBinding, []Input{{Code: "cooling", Value: 2000}, {Code: "power", Value: 100}}); err == nil {
+		t.Fatal("expected COP=20 outside physical bounds [0.5, 12] rejection")
+	}
+	if _, err := calculate(Binding{MetricCode: "plant_cop", CalculationMethod: "AVG"}, []Input{{Code: "c1", Value: 3.0}, {Code: "c2", Value: 5.0}}); err == nil {
+		t.Fatal("expected arithmetic mean of instantaneous COP to be rejected")
+	}
+
+	// Generic RATIO without COP semantics still works on arbitrary finite inputs.
+	if ratio, err := calculate(Binding{MetricCode: "custom_ratio", CalculationMethod: "RATIO"}, []Input{{Code: "a", Value: 10}, {Code: "b", Value: 2}}); err != nil || math.Abs(ratio-5.0) > 1e-9 {
+		t.Fatalf("generic RATIO = %v err=%v", ratio, err)
+	}
+	if _, err := calculate(Binding{MetricCode: "expr_nan", CalculationMethod: "EXPRESSION", SourceDefinition: map[string]any{"expression": "a * b"}}, []Input{{Code: "a", Value: math.Inf(1)}, {Code: "b", Value: 0}}); err == nil {
+		t.Fatal("expected Inf*0 -> NaN expression rejection")
 	}
 }

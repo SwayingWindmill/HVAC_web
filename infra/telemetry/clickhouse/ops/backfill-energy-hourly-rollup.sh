@@ -29,7 +29,7 @@ query() { "${client[@]}" --query "$1" < /dev/null; }
 zero="toUUID('00000000-0000-0000-0000-000000000000')"
 # One line per (Tenant, Site, month) that has visible facts, oldest month first.
 batches="$(query "
-  SELECT DISTINCT toString(tenant_id), toString(site_id), toString(toStartOfMonth(period_end))
+  SELECT DISTINCT toString(tenant_id), toString(site_id), toString(toStartOfMonth(addMilliseconds(period_end, -1)))
   FROM analytics.energy_interval_facts
   ORDER BY 3, 1, 2
   FORMAT TSVRaw")"
@@ -39,10 +39,10 @@ if [[ "$mode" == "--verify" ]]; then
   drift="$(query "
     WITH
       facts AS (
-        SELECT tenant_id, site_id, toStartOfMonth(period_end) AS month,
+        SELECT tenant_id, site_id, toStartOfMonth(addMilliseconds(period_end, -1)) AS month,
           sum(energy_kwh) AS energy_kwh, toInt64(count()) AS intervals
         FROM analytics.energy_interval_facts_visible
-        WHERE dateDiff('millisecond', period_start, period_end) <= 3600000
+        WHERE period_end > period_start AND dateDiff('millisecond', period_start, period_end) <= 3600000
         GROUP BY tenant_id, site_id, month
       ),
       rollup AS (
@@ -85,13 +85,14 @@ while IFS=$'\t' read -r tenant site month; do
   query "
     INSERT INTO analytics.energy_hourly_states
     SETTINGS insert_deduplication_token = 'energy-hourly-backfill:$tenant:$site:$month'
-    SELECT tenant_id, site_id, point_id, toStartOfHour(period_end) AS hour,
+    SELECT tenant_id, site_id, point_id, toStartOfHour(addMilliseconds(period_end, -1)) AS hour,
       accounting_scope, energy_type, quality, ifNull(load_device_id, $zero) AS load_device_id,
       sum(energy_kwh), toInt64(count()), max(data_watermark), max(dataset_revision)
     FROM analytics.energy_interval_facts_visible
     WHERE $scope
-      AND period_end >= toDateTime64('$month 00:00:00', 3, 'UTC')
-      AND period_end < toDateTime64('$month 00:00:00', 3, 'UTC') + INTERVAL 1 MONTH
+      AND addMilliseconds(period_end, -1) >= toDateTime64('$month 00:00:00', 3, 'UTC')
+      AND addMilliseconds(period_end, -1) < toDateTime64('$month 00:00:00', 3, 'UTC') + INTERVAL 1 MONTH
+      AND period_end > period_start
       AND dateDiff('millisecond', period_start, period_end) <= 3600000
     GROUP BY tenant_id, site_id, point_id, hour, accounting_scope, energy_type, quality, load_device_id"
   echo "filled $tenant $site $month"
