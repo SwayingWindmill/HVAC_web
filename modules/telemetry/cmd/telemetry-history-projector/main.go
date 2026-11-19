@@ -30,6 +30,7 @@ func run() int {
 	logger := observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
 	var (
 		repository      *telemetry.HistoryPostgresRepository
+		sink            telemetry.HistorySinkCloser
 		diagnostics     *http.Server
 		diagnosticsDone chan struct{}
 		shutdownOnce    sync.Once
@@ -43,6 +44,9 @@ func run() int {
 				deps.diagnosticsDone = diagnosticsDone
 			}
 			deps.shutdownTelemetry = observabilityRuntime.Shutdown
+			if sink != nil {
+				deps.closeSink = func() { _ = sink.Close() }
+			}
 			if repository != nil {
 				deps.closeRepository = repository.Close
 			}
@@ -64,20 +68,9 @@ func run() int {
 		return 1
 	}
 
-	clickhouseURL, err := requiredEnv("TELEMETRY_CLICKHOUSE_HTTP_URL")
+	sink, err = telemetry.OpenClickHouseHistorySinkFromLookup(os.Getenv, "")
 	if err != nil {
 		logEnvError(logger, "telemetry_clickhouse_configuration_invalid", "TELEMETRY_CLICKHOUSE_CONFIGURATION_INVALID", err)
-		return 1
-	}
-	sink, err := telemetry.NewClickHouseHistorySink(telemetry.ClickHouseHistoryConfig{
-		BaseURL:  clickhouseURL,
-		Database: envOr("TELEMETRY_CLICKHOUSE_DATABASE", "telemetry_history"),
-		Table:    envOr("TELEMETRY_CLICKHOUSE_TABLE", "observations"),
-		Username: strings.TrimSpace(os.Getenv("TELEMETRY_CLICKHOUSE_USERNAME")),
-		Password: os.Getenv("TELEMETRY_CLICKHOUSE_PASSWORD"),
-	})
-	if err != nil {
-		logger.Error("telemetry_clickhouse_configuration_invalid", "error_code", "TELEMETRY_CLICKHOUSE_CONFIGURATION_INVALID")
 		return 1
 	}
 	pollInterval, err := durationEnv("TELEMETRY_HISTORY_POLL_INTERVAL", 5*time.Second, 25*time.Millisecond, time.Minute)
@@ -154,6 +147,7 @@ type historyProjectorShutdownDeps struct {
 	shutdownDiag      func(context.Context) error
 	diagnosticsDone   <-chan struct{}
 	shutdownTelemetry func(context.Context) error
+	closeSink         func()
 	closeRepository   func()
 }
 
@@ -178,6 +172,9 @@ func shutdownHistoryProjector(deps historyProjectorShutdownDeps) {
 		telemetryCtx, telemetryCancel := context.WithTimeout(context.Background(), 2*time.Second)
 		_ = deps.shutdownTelemetry(telemetryCtx)
 		telemetryCancel()
+	}
+	if deps.closeSink != nil {
+		deps.closeSink()
 	}
 	if deps.closeRepository != nil {
 		deps.closeRepository()

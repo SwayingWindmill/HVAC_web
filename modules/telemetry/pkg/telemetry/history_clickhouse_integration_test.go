@@ -429,3 +429,141 @@ FORMAT TSVRaw
 		t.Fatalf("expected numeric_hourly sample_count=1 after retransmission dedup, got %q", actual)
 	}
 }
+
+func TestPostgresOutboxProjectsClickHouseNativePrepareBatchDeduplicatesRetry(t *testing.T) {
+	runtimeURL, adminURL := postgresTestURLs(t)
+	historyURL := os.Getenv("S2_TELEMETRY_HISTORY_DATABASE_URL")
+	clickHouseURL := os.Getenv("S2_CLICKHOUSE_HTTP_URL")
+	clickHouseNativeAddr := os.Getenv("S2_CLICKHOUSE_NATIVE_ADDR")
+	if historyURL == "" || clickHouseURL == "" || clickHouseNativeAddr == "" {
+		t.Skip("S2 ClickHouse native history integration environment is not configured")
+	}
+	ctx := t.Context()
+	admin, err := pgxpool.New(ctx, adminURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	resetIngestState(t, admin)
+	const partition = "tb-history-clickhouse-native-integration"
+	for _, statement := range []string{
+		`DELETE FROM telemetry_runtime.telemetry_history_outbox WHERE payload ->> 'source_partition' = $1`,
+		`DELETE FROM telemetry_runtime.source_delivery_evidence WHERE source_partition = $1`,
+		`DELETE FROM telemetry_runtime.source_observations WHERE source_partition = $1`,
+		`DELETE FROM telemetry_runtime.source_positions WHERE source_partition = $1`,
+	} {
+		if _, err := admin.Exec(ctx, statement, partition); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	store, err := OpenPostgresStore(ctx, runtimeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	baselineAt := time.Date(2026, 7, 29, 10, 59, 55, 0, time.UTC)
+	if _, err := store.EvaluateAndRead(ctx, telemetryauth.Target{DeviceID: deviceA}, baselineAt); err != nil {
+		t.Fatal(err)
+	}
+	observedAt := time.Date(2026, 7, 29, 11, 0, 2, 0, time.UTC)
+	candidate := ingestCandidate(
+		"018f2e00-9310-7000-8000-000000000001", sourceA, partition, 1, SourcePathPoll,
+		"mqtt-device-tenant-a-site-1", "zone.temperature", json.RawMessage(`23.5`), "NUMBER", "Cel",
+		observedAt.Add(-2*time.Second), observedAt,
+	)
+	receipt, err := store.AcceptObservation(ctx, candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Status != ObservationAccepted {
+		t.Fatalf("receipt=%#v", receipt)
+	}
+
+	repository, err := OpenHistoryPostgresRepository(ctx, historyURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.Close()
+	sink, err := NewClickHouseNativeHistorySink(ClickHouseNativeHistoryConfig{
+		Addr: clickHouseNativeAddr, Database: "telemetry_history", Table: "observations",
+		Username: os.Getenv("S2_CLICKHOUSE_USERNAME"), Password: os.Getenv("S2_CLICKHOUSE_PASSWORD"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sink.Close() }()
+	if err := sink.Ping(ctx); err != nil {
+		t.Fatalf("native sink ping failed: %v", err)
+	}
+	clock := observedAt.Add(time.Second)
+	relay, err := NewHistoryRelay(HistoryRelayConfig{
+		Repository: repository, Sink: sink, BatchSize: 16,
+		LeaseFor: 30 * time.Second, RetryAfter: time.Second,
+		Now: func() time.Time { return clock },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := repository.ClaimHistoryBatch(ctx, 16, clock, 30*time.Second)
+	if err != nil || len(batch.Observations) != 1 || batch.Sequence == 0 {
+		t.Fatalf("claim=%+v err=%v", batch, err)
+	}
+	if err := sink.InsertObservations(ctx, batch.Sequence, batch.Observations); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate crash before PG acknowledgement, then verify retry over Native TCP deduplicates.
+	assertClickHouseObservation(t, clickHouseURL, candidate.Position.EventID, "1\t23.5\tACCEPTED\tGOOD")
+	hourlyQuery := fmt.Sprintf(`
+SELECT sample_count, average_value, minimum_value, maximum_value
+FROM telemetry_history.numeric_hourly
+WHERE tenant_id = toUUID('%s')
+  AND site_id = toUUID('%s')
+  AND device_id = toUUID('%s')
+  AND telemetry_key = 'zone.temperature'
+  AND hour = toDateTime('2026-07-29 11:00:00', 'UTC')
+FORMAT TSVRaw
+`, tenantA, siteA, deviceA)
+	if actual := clickHouseQuery(t, clickHouseURL, hourlyQuery); actual != "1\t23.5\t23.5\t23.5" {
+		t.Fatalf("native initial hourly=%q expected=%q", actual, "1\t23.5\t23.5\t23.5")
+	}
+
+	clock = clock.Add(31 * time.Second)
+	if projected, err := relay.RelayOnce(ctx); err != nil || projected != 1 {
+		t.Fatalf("native retry projection=%d err=%v", projected, err)
+	}
+	assertClickHouseObservation(t, clickHouseURL, candidate.Position.EventID, "1\t23.5\tACCEPTED\tGOOD")
+	if actual := clickHouseQuery(t, clickHouseURL, hourlyQuery); actual != "1\t23.5\t23.5\t23.5" {
+		t.Fatalf("native retry hourly=%q expected=%q", actual, "1\t23.5\t23.5\t23.5")
+	}
+	assertClickHouseHistorySequence(t, clickHouseURL, candidate.Position.EventID, batch.Sequence)
+
+	next := ingestCandidate(
+		"018f2e00-9310-7000-8000-000000000003", sourceA, partition, 2, SourcePathPoll,
+		"mqtt-device-tenant-a-site-1", "zone.temperature", json.RawMessage(`24`), "NUMBER", "Cel",
+		observedAt.Add(time.Hour-time.Second), observedAt.Add(time.Hour),
+	)
+	if _, err := store.AcceptObservation(ctx, next); err != nil {
+		t.Fatal(err)
+	}
+	clock = clock.Add(time.Hour)
+	if projected, err := relay.RelayOnce(ctx); err != nil || projected != 1 {
+		t.Fatalf("native next projection=%d err=%v", projected, err)
+	}
+	if sequence := clickHouseHistorySequence(t, clickHouseURL, next.Position.EventID); sequence <= batch.Sequence {
+		t.Fatalf("later batch History Sequence=%d, want above %d", sequence, batch.Sequence)
+	}
+
+	var state string
+	var attempts int
+	if err := admin.QueryRow(ctx, `
+SELECT delivery_state, attempts
+FROM telemetry_runtime.telemetry_history_outbox
+WHERE event_id = $1::uuid
+`, receipt.ObservationID).Scan(&state, &attempts); err != nil {
+		t.Fatal(err)
+	}
+	if state != "PUBLISHED" || attempts != 2 {
+		t.Fatalf("native history outbox state=%s attempts=%d", state, attempts)
+	}
+}

@@ -390,7 +390,7 @@ func openRuntime(ctx context.Context) (*runtime, error) {
 		store.Close()
 		return nil, err
 	}
-	lifecycle, err := metric.NewLifecycleExecutor(store, series)
+	lifecycle, err := metric.NewLifecycleExecutor(store)
 	if err != nil {
 		_ = latest.Close()
 		store.Close()

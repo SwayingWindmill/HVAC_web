@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -106,20 +107,37 @@ func (s *ClickHouseStore) ReadMetricFacts(ctx context.Context, period Period, bi
 	}
 	bindingByID := make(map[string]MetricBinding, len(bindings))
 	ids := make([]string, 0, len(bindings))
+	seenMetricIDs := make(map[string]struct{}, len(bindings))
+	metricIDLiterals := make([]string, 0, len(bindings))
+	allBindingsHaveMetricID := true
 	for _, binding := range bindings {
 		bindingByID[binding.MetricBindingID] = binding
 		ids = append(ids, "toUUID("+sqlQuote(binding.MetricBindingID)+")")
+		trimmedMetricID := strings.TrimSpace(binding.MetricID)
+		if trimmedMetricID == "" {
+			allBindingsHaveMetricID = false
+			continue
+		}
+		if _, seen := seenMetricIDs[trimmedMetricID]; !seen {
+			seenMetricIDs[trimmedMetricID] = struct{}{}
+			metricIDLiterals = append(metricIDLiterals, "toUUID("+sqlQuote(trimmedMetricID)+")")
+		}
+	}
+	metricFilterSQL := ""
+	if allBindingsHaveMetricID && len(metricIDLiterals) > 0 {
+		sort.Strings(metricIDLiterals)
+		metricFilterSQL = "\n  AND metric_id IN (" + strings.Join(metricIDLiterals, ",") + ")"
 	}
 	sql := fmt.Sprintf(`SELECT result_id,metric_binding_id,metric_version_id,metric_code,period_start,period_end,value_number,quality,completeness,revision,calculated_at
 FROM analytics.metric_result_facts
-WHERE tenant_id=toUUID(%s) AND site_id=toUUID(%s)
+WHERE tenant_id=toUUID(%s) AND site_id=toUUID(%s)%s
   AND metric_binding_id IN (%s)
   AND period_start >= parseDateTime64BestEffort(%s)
   AND period_end <= parseDateTime64BestEffort(%s)
   AND value_number IS NOT NULL
 ORDER BY metric_binding_id,period_start,period_end,revision DESC,calculated_at DESC
 LIMIT 1 BY metric_binding_id,period_start,period_end
-FORMAT TabSeparated`, sqlQuote(period.TenantID), sqlQuote(period.SiteID), strings.Join(ids, ","), sqlQuote(period.Start.UTC().Format(time.RFC3339Nano)), sqlQuote(period.End.UTC().Format(time.RFC3339Nano)))
+FORMAT TabSeparated`, sqlQuote(period.TenantID), sqlQuote(period.SiteID), metricFilterSQL, strings.Join(ids, ","), sqlQuote(period.Start.UTC().Format(time.RFC3339Nano)), sqlQuote(period.End.UTC().Format(time.RFC3339Nano)))
 	u := *s.base
 	query := u.Query()
 	query.Set("query", sql)
