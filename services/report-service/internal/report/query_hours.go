@@ -29,12 +29,16 @@ func (reader *QueryHours) Hours(ctx context.Context, tenantID, siteID string, lo
 		}
 		return hour
 	}
+	timezone := "UTC"
+	if location != nil {
+		timezone = location.String()
+	}
 	var electricityCrossGap *analyticsmodel.EnergyCrossGap
 	var coolingCrossGapKWh float64
 	for _, energyType := range []analyticsmodel.EnergyType{analyticsmodel.EnergyTypeElectricity, analyticsmodel.EnergyTypeCooling} {
 		query := analyticsmodel.EnergySeriesQuery{
 			TenantID: tenantID, SiteID: siteID, EnergyType: energyType, Granularity: analyticsmodel.GranularityHour,
-			Timezone: location.String(), From: from, To: to, QualityPolicy: analyticsmodel.QualityPolicyValidOnly,
+			Timezone: timezone, From: from, To: to, QualityPolicy: analyticsmodel.QualityPolicyValidOnly,
 		}
 		series, err := reader.series.Series(ctx, query)
 		if err != nil {
@@ -59,9 +63,57 @@ func (reader *QueryHours) Hours(ctx context.Context, tenantID, siteID string, lo
 		hours = append(hours, *hour)
 	}
 	sort.Slice(hours, func(left, right int) bool { return hours[left].Start.Before(hours[right].Start) })
-	return MonthEnergy{
+
+	result := MonthEnergy{
 		Hours:               hours,
 		ElectricityCrossGap: electricityCrossGap,
 		CoolingCrossGapKWh:  coolingCrossGapKWh,
-	}, nil
+	}
+	// Enrichment diagnostics are optional; snapshot generation succeeds even if the route
+	// fails or returns empty sections for sites without P2 instrumentation.
+	if reader.series != nil {
+		enrichment, err := reader.series.ReportEnrichment(ctx, analyticsmodel.EnergySeriesQuery{
+			TenantID:      tenantID,
+			SiteID:        siteID,
+			EnergyType:    analyticsmodel.EnergyTypeElectricity,
+			Granularity:   analyticsmodel.GranularityHour,
+			Timezone:      timezone,
+			From:          from,
+			To:            to,
+			QualityPolicy: analyticsmodel.QualityPolicyValidOnly,
+		})
+		if err == nil {
+			mapEnrichment(&result, enrichment)
+		}
+	}
+	return result, nil
+}
+
+func mapEnrichment(target *MonthEnergy, enrichment analyticsmodel.ReportEnrichmentResponse) {
+	if enrichment.LayeredEfficiency != nil && enrichment.LayeredEfficiency.HasMetrics() {
+		target.LayeredEfficiency = &LayeredEfficiencySnapshot{
+			PlantCOP:        enrichment.LayeredEfficiency.PlantCOP,
+			ChillerCOP:      enrichment.LayeredEfficiency.ChillerCOP,
+			ChilledPumpWTF:  enrichment.LayeredEfficiency.ChilledPumpWTF,
+			CoolingPumpWTF:  enrichment.LayeredEfficiency.CoolingPumpWTF,
+			TowerPowerShare: enrichment.LayeredEfficiency.TowerPowerShare,
+		}
+	}
+	if enrichment.MeterBalance != nil {
+		target.MeterBalance = &MeterBalanceSnapshot{
+			SiteKWh:        enrichment.MeterBalance.SiteKWh,
+			SubmeterSumKWh: enrichment.MeterBalance.SubmeterSumKWh,
+			DiffKWh:        enrichment.MeterBalance.DiffKWh,
+			ImbalanceRatio: enrichment.MeterBalance.ImbalanceRatio,
+			Status:         string(enrichment.MeterBalance.Status),
+		}
+	}
+	if enrichment.ConditionAnchors != nil && enrichment.ConditionAnchors.HasValues() {
+		target.ConditionAnchors = &ConditionAnchorsSnapshot{
+			MeanWetBulbC:      enrichment.ConditionAnchors.MeanWetBulbC,
+			MeanDryBulbC:      enrichment.ConditionAnchors.MeanDryBulbC,
+			MeanLoadRatio:     enrichment.ConditionAnchors.MeanLoadRatio,
+			AIClosedLoopShare: enrichment.ConditionAnchors.AIClosedLoopShare,
+		}
+	}
 }

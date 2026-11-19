@@ -21,3 +21,4 @@ clickhouse|infra/telemetry/clickhouse/init/020-clickhouse-storage-governance.sql
 clickhouse|infra/telemetry/clickhouse/init/021-energy-accounting-p0.sql
 clickhouse|infra/telemetry/clickhouse/init/022-energy-hourly-v2-decimal.sql
 clickhouse|infra/telemetry/clickhouse/init/023-meter-balance-and-layered-efficiency.sql
+clickhouse|infra/telemetry/clickhouse/init/024-energy-runtime-wiring.sql

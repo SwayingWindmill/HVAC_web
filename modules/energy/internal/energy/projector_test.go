@@ -577,3 +577,250 @@ func TestProjectorAppliesHistoricalRatioVersionsAndEnqueuesDirtyWindowForPastHou
 		t.Fatalf("unexpected dirty window request: %+v", req)
 	}
 }
+
+type fakeHourlyV2Sink struct {
+	rows  []HourlyFactV2
+	calls int
+	err   error
+}
+
+func (f *fakeHourlyV2Sink) InsertHourlyFactsV2(_ context.Context, rows []HourlyFactV2) error {
+	f.calls++
+	if f.err != nil {
+		return f.err
+	}
+	f.rows = append(f.rows, rows...)
+	return nil
+}
+
+type fakeLoadProfileSource struct {
+	profiles   map[string][]HourlyLoadWeight
+	calls      int
+	queriedIDs []string
+	gotFrom    time.Time
+	gotTo      time.Time
+	err        error
+}
+
+func (f *fakeLoadProfileSource) HourlyPowerProfile(_ context.Context, _, _, deviceID string, from, to time.Time) ([]HourlyLoadWeight, error) {
+	f.calls++
+	f.queriedIDs = append(f.queriedIDs, deviceID)
+	f.gotFrom = from
+	f.gotTo = to
+	if f.err != nil {
+		return nil, f.err
+	}
+	return append([]HourlyLoadWeight(nil), f.profiles[deviceID]...), nil
+}
+
+func TestProjectorWritesHourlyV2DecimalAndCrossGapAllocations(t *testing.T) {
+	now := time.Date(2026, 10, 12, 16, 5, 0, 0, time.UTC)
+	binding := validBinding()
+
+	// Two regular <=1h intervals in the same Option A hour (12:00 UTC), including exact boundary at 13:00:00Z.
+	d1Val := 0.100001
+	d1 := validDelta()
+	d1.CurrentObservationID = "018f4e00-3000-7000-8000-000000000101"
+	d1.PreviousSampledAt = time.Date(2026, 10, 12, 12, 10, 0, 0, time.UTC)
+	d1.CurrentSampledAt = time.Date(2026, 10, 12, 12, 25, 0, 0, time.UTC)
+	d1.DeltaValue = &d1Val
+
+	d2Val := 0.200002
+	d2 := validDelta()
+	d2.CurrentObservationID = "018f4e00-3000-7000-8000-000000000102"
+	d2.PreviousObservationID = d1.CurrentObservationID
+	d2.PreviousSampledAt = d1.CurrentSampledAt
+	d2.CurrentSampledAt = time.Date(2026, 10, 12, 13, 0, 0, 0, time.UTC) // Option A: 13:00-1ms => 12:00Z
+	d2.DeltaValue = &d2Val
+
+	// Cross-gap (>1h) valid interval across 13:00Z..16:00Z (3 hours), load-weighted 1:2:3.
+	gapVal := 60.0
+	dGap := validDelta()
+	dGap.CurrentObservationID = "018f4e00-3000-7000-8000-000000000103"
+	dGap.PreviousObservationID = d2.CurrentObservationID
+	dGap.PreviousSampledAt = time.Date(2026, 10, 12, 13, 0, 0, 0, time.UTC)
+	dGap.CurrentSampledAt = time.Date(2026, 10, 12, 16, 0, 0, 0, time.UTC)
+	dGap.DeltaValue = &gapVal
+
+	h13 := time.Date(2026, 10, 12, 13, 0, 0, 0, time.UTC)
+	h14 := h13.Add(time.Hour)
+	h15 := h13.Add(2 * time.Hour)
+
+	v2Sink := &fakeHourlyV2Sink{}
+	loadSource := &fakeLoadProfileSource{
+		profiles: map[string][]HourlyLoadWeight{
+			testDeviceID: {
+				{HourStart: h13, Weight: 100, Source: "active_power"},
+				{HourStart: h14, Weight: 200, Source: "active_power"},
+				{HourStart: h15, Weight: 300, Source: "active_power"},
+			},
+		},
+	}
+	factSink := &fakeSink{}
+	projector, err := NewProjector(ProjectorConfig{
+		CounterSource:     &fakeSource{deltas: []CounterDelta{d1, d2, dGap}},
+		BindingResolver:   &fakeResolver{resolution: binding},
+		FactSink:          factSink,
+		HourlyV2Sink:      v2Sink,
+		LoadProfileSource: loadSource,
+		RebuildEvents:     factSink,
+		BatchSize:         16,
+		Now:               func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	projected, err := projector.ProjectOnce(context.Background())
+	if err != nil {
+		t.Fatalf("ProjectOnce failed: %v", err)
+	}
+	if projected != 3 || len(factSink.advanced) != 1 || v2Sink.calls != 1 {
+		t.Fatalf("projected=%d advanced=%d v2Calls=%d", projected, len(factSink.advanced), v2Sink.calls)
+	}
+	if !loadSource.gotFrom.Equal(h13) || !loadSource.gotTo.Equal(h15.Add(time.Hour)) {
+		t.Fatalf("load profile window = [%v, %v), want [%v, %v)", loadSource.gotFrom, loadSource.gotTo, h13, h15.Add(time.Hour))
+	}
+
+	// Expect 4 v2 rows: 12:00 VALID (0.300003, count=2), plus 13:00/14:00/15:00 SUSPECT (10, 20, 30).
+	if len(v2Sink.rows) != 4 {
+		t.Fatalf("expected 4 v2 rows, got %d: %+v", len(v2Sink.rows), v2Sink.rows)
+	}
+	wantCalcVersion := uint64(now.UnixMilli())
+	byHour := make(map[time.Time]HourlyFactV2, len(v2Sink.rows))
+	for _, row := range v2Sink.rows {
+		if row.CalcVersion != wantCalcVersion {
+			t.Fatalf("row calc_version = %d, want %d", row.CalcVersion, wantCalcVersion)
+		}
+		byHour[row.Hour] = row
+	}
+	r12 := byHour[time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC)]
+	if r12.Quality != FactQualityValid || r12.EnergyKWh != 0.300003 || r12.IntervalCount != 2 {
+		t.Fatalf("unexpected 12:00 regular v2 row: %+v", r12)
+	}
+	if r13 := byHour[h13]; r13.Quality != FactQualitySuspect || r13.EnergyKWh != 10.0 || r13.IntervalCount != 1 {
+		t.Fatalf("unexpected 13:00 split v2 row: %+v", r13)
+	}
+	if r14 := byHour[h14]; r14.Quality != FactQualitySuspect || r14.EnergyKWh != 20.0 || r14.IntervalCount != 1 {
+		t.Fatalf("unexpected 14:00 split v2 row: %+v", r14)
+	}
+	if r15 := byHour[h15]; r15.Quality != FactQualitySuspect || r15.EnergyKWh != 30.0 || r15.IntervalCount != 1 {
+		t.Fatalf("unexpected 15:00 split v2 row: %+v", r15)
+	}
+}
+
+func TestProjectorCrossGapToleratesLoadProfileFailureAndPropagatesV2SinkError(t *testing.T) {
+	now := time.Date(2026, 10, 12, 16, 0, 0, 0, time.UTC)
+	binding := validBinding()
+	gapVal := 30.0
+	dGap := validDelta()
+	dGap.PreviousSampledAt = time.Date(2026, 10, 12, 13, 0, 0, 0, time.UTC)
+	dGap.CurrentSampledAt = time.Date(2026, 10, 12, 16, 0, 0, 0, time.UTC)
+	dGap.DeltaValue = &gapVal
+
+	// LoadProfileSource error falls back uniformly without failing ProjectOnce.
+	v2Sink := &fakeHourlyV2Sink{}
+	factSink := &fakeSink{}
+	projector, err := NewProjector(ProjectorConfig{
+		CounterSource:     &fakeSource{deltas: []CounterDelta{dGap}},
+		BindingResolver:   &fakeResolver{resolution: binding},
+		FactSink:          factSink,
+		HourlyV2Sink:      v2Sink,
+		LoadProfileSource: &fakeLoadProfileSource{err: errors.New("clickhouse timeout")},
+		RebuildEvents:     factSink,
+		BatchSize:         10,
+		Now:               func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projected, err := projector.ProjectOnce(context.Background())
+	if err != nil || projected != 1 || len(factSink.advanced) != 1 {
+		t.Fatalf("expected uniform fallback to succeed, projected=%d err=%v advanced=%d", projected, err, len(factSink.advanced))
+	}
+	if len(v2Sink.rows) != 3 {
+		t.Fatalf("expected 3 uniform split rows, got %d", len(v2Sink.rows))
+	}
+	for _, row := range v2Sink.rows {
+		if row.EnergyKWh != 10.0 || row.Quality != FactQualitySuspect {
+			t.Fatalf("unexpected uniform fallback row: %+v", row)
+		}
+	}
+
+	// HourlyV2Sink failure must block checkpoint advance.
+	failingV2 := &fakeHourlyV2Sink{err: errors.New("v2 insert failed")}
+	factSink2 := &fakeSink{}
+	projectorFail, err := NewProjector(ProjectorConfig{
+		CounterSource:   &fakeSource{deltas: []CounterDelta{dGap}},
+		BindingResolver: &fakeResolver{resolution: binding},
+		FactSink:        factSink2,
+		HourlyV2Sink:    failingV2,
+		RebuildEvents:   factSink2,
+		BatchSize:       10,
+		Now:             func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := projectorFail.ProjectOnce(context.Background()); err == nil || len(factSink2.advanced) != 0 {
+		t.Fatalf("expected ProjectOnce to fail without advancing checkpoint, err=%v advanced=%v", err, factSink2.advanced)
+	}
+}
+
+func TestProjectorRebuildDirtyWindowWritesHourlyV2(t *testing.T) {
+	now := time.Date(2026, 10, 12, 16, 10, 0, 0, time.UTC)
+	binding := validBinding()
+	binding.AccountingScope = AccountingScopeBranch
+	binding.LoadDeviceID = "018f4e00-2000-7000-8000-000000000099"
+
+	deltaVal := 18.0
+	delta := validDelta()
+	delta.PreviousSampledAt = time.Date(2026, 10, 12, 13, 0, 0, 0, time.UTC)
+	delta.CurrentSampledAt = time.Date(2026, 10, 12, 15, 0, 0, 0, time.UTC)
+	delta.DeltaValue = &deltaVal
+
+	h13 := time.Date(2026, 10, 12, 13, 0, 0, 0, time.UTC)
+	h14 := h13.Add(time.Hour)
+
+	v2Sink := &fakeHourlyV2Sink{}
+	loadSource := &fakeLoadProfileSource{
+		profiles: map[string][]HourlyLoadWeight{
+			// Reporting device empty -> falls back to LoadDeviceID!
+			binding.LoadDeviceID: {
+				{HourStart: h13, Weight: 1, Source: "active_power"},
+				{HourStart: h14, Weight: 2, Source: "active_power"},
+			},
+		},
+	}
+	factSink := &fakeSink{}
+	projector, err := NewProjector(ProjectorConfig{
+		CounterSource:     &fakeSource{windowDeltas: []CounterDelta{delta}},
+		BindingResolver:   &fakeResolver{resolution: binding},
+		FactSink:          factSink,
+		HourlyV2Sink:      v2Sink,
+		LoadProfileSource: loadSource,
+		RebuildEvents:     factSink,
+		BatchSize:         10,
+		Now:               func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rebuilt, err := projector.RebuildDirtyWindow(context.Background(), DirtyWindow{
+		TenantID: testTenantID,
+		SiteID:   testSiteID,
+		PointIDs: []string{testPointID},
+		Start:    h13,
+		End:      h14.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("RebuildDirtyWindow failed: %v", err)
+	}
+	if rebuilt != 1 || len(factSink.advanced) != 0 || len(v2Sink.rows) != 2 {
+		t.Fatalf("rebuilt=%d advanced=%d v2Rows=%d", rebuilt, len(factSink.advanced), len(v2Sink.rows))
+	}
+	if v2Sink.rows[0].LoadDeviceID != binding.LoadDeviceID || v2Sink.rows[0].EnergyKWh != 6.0 || v2Sink.rows[1].EnergyKWh != 12.0 {
+		t.Fatalf("unexpected rebuild v2 rows: %+v", v2Sink.rows)
+	}
+}

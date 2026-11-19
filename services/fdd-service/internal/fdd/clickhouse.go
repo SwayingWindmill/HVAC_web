@@ -203,6 +203,50 @@ FORMAT JSONEachRow`, tenantID, siteID, from.UTC().Format(time.RFC3339Nano), to.U
 	return decodeMeterBalanceHours(body)
 }
 
+// ListRecentMeterBalanceSites lists distinct Tenant/Site scopes with hourly meter-balance rows in [from, to).
+func (evidence *ClickHouseEvidence) ListRecentMeterBalanceSites(ctx context.Context, from, to time.Time) ([]SiteRuleScope, error) {
+	if evidence == nil || evidence.client == nil || evidence.baseURL == nil {
+		return nil, errors.New("FDD ClickHouse reader is not initialized")
+	}
+	if from.IsZero() || to.IsZero() || !to.After(from) {
+		return nil, errors.New("FDD meter balance window is invalid")
+	}
+	sql := fmt.Sprintf(`SELECT DISTINCT toString(b.tenant_id) AS tenant_id, toString(b.site_id) AS site_id
+FROM analytics.site_meter_balance_hourly AS b
+WHERE b.hour >= parseDateTime64BestEffort('%s',3,'UTC')
+  AND b.hour < parseDateTime64BestEffort('%s',3,'UTC')
+ORDER BY tenant_id ASC, site_id ASC
+LIMIT 1000
+FORMAT JSONEachRow`, from.UTC().Format(time.RFC3339Nano), to.UTC().Format(time.RFC3339Nano))
+	body, err := evidence.query(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
+	return decodeSiteRuleScopes(body)
+}
+
+func decodeSiteRuleScopes(body []byte) ([]SiteRuleScope, error) {
+	sites := []SiteRuleScope{}
+	scanner := bufio.NewScanner(bytes.NewReader(body))
+	for scanner.Scan() {
+		if len(bytes.TrimSpace(scanner.Bytes())) == 0 {
+			continue
+		}
+		var row struct {
+			TenantID string `json:"tenant_id"`
+			SiteID   string `json:"site_id"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &row); err != nil {
+			return nil, fmt.Errorf("decode FDD meter balance site: %w", err)
+		}
+		if !uuidPattern.MatchString(row.TenantID) || !uuidPattern.MatchString(row.SiteID) {
+			return nil, errors.New("decode FDD meter balance site: tenant_id and site_id must be UUIDs")
+		}
+		sites = append(sites, SiteRuleScope{TenantID: row.TenantID, SiteID: row.SiteID})
+	}
+	return sites, scanner.Err()
+}
+
 type clickhouseUint64 uint64
 
 func (u *clickhouseUint64) UnmarshalJSON(data []byte) error {

@@ -183,6 +183,58 @@
           "description": "尖峰、峰、平或谷；没有电价的电量显示为未计价。"
         }
       ]
+    },
+    {
+      "name": "site_meter_balance",
+      "title": "站点主分表平衡",
+      "description": "站点总表与设备分表逐小时用电量对比与平衡状态，用来回答「总表和分表差多少、有没有漏计或多计」。",
+      "measures": [
+        {
+          "name": "site_kwh",
+          "title": "站点总表用电量",
+          "description": "站点物理总表在所选时段内的有效用电量之和，单位 kWh。"
+        },
+        {
+          "name": "submeter_sum_kwh",
+          "title": "分表用电量之和",
+          "description": "各设备分表在所选时段内的有效用电量之和，单位 kWh。"
+        },
+        {
+          "name": "diff_kwh",
+          "title": "主分表电量差额",
+          "description": "站点总表用电量减去各分表用电量之和的差额，单位 kWh；正值表示有未分表覆盖的用电，负值表示分表之和大于总表。"
+        }
+      ],
+      "dimensions": [
+        {
+          "name": "imbalance_status",
+          "title": "平衡状态",
+          "description": "总表与分表用电量对比的状态分类，例如平衡、存在未计量缺口、分表之和大于总表或缺少总表。"
+        }
+      ]
+    },
+    {
+      "name": "thermal_cop_asof",
+      "title": "瞬时能效审计",
+      "description": "按时间最邻近对齐瞬时制冷功率与用电功率，用来核查运行时的瞬时功率与能效（COP）表现。",
+      "measures": [
+        {
+          "name": "thermal_kw",
+          "title": "平均制冷功率",
+          "description": "所选时段内对齐样本的平均瞬时制冷功率，单位 kW。"
+        },
+        {
+          "name": "electrical_kw",
+          "title": "平均用电功率",
+          "description": "所选时段内对齐样本的平均瞬时用电功率，单位 kW。"
+        },
+        {
+          "name": "asof_cop",
+          "title": "对齐瞬时能效",
+          "description": "有效对齐样本的制冷总功率除以用电总功率得到的能效比（COP）；没有有效对齐样本时为空。"
+        }
+      ],
+      "dimensions": []
     }
   ]
 }

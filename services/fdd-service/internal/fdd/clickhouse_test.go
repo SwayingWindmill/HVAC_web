@@ -1,10 +1,12 @@
 package fdd
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -115,5 +117,79 @@ func TestClickHouseEvidenceReadsExplicitSplitPointBindings(t *testing.T) {
 	query.Points = []PointRef{{DeviceID: tempDev, Key: "bad'key"}}
 	if _, err := evidence.WindowSamples(t.Context(), query); err == nil {
 		t.Fatal("invalid telemetry key reached ClickHouse query")
+	}
+}
+
+func TestClickHouseEvidenceListRecentMeterBalanceSites(t *testing.T) {
+	var capturedSQL string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		capturedSQL = string(body)
+		if user, _, ok := request.BasicAuth(); !ok || user != "fdd_service_reader" {
+			t.Errorf("reader account=%q ok=%t", user, ok)
+		}
+		_, _ = writer.Write([]byte(strings.Join([]string{
+			`{"tenant_id":"01990000-3000-7000-8000-000000000001","site_id":"01990000-5000-7000-8000-000000000001"}`,
+			`{"tenant_id":"01990000-3000-7000-8000-000000000002","site_id":"01990000-5000-7000-8000-000000000009"}`,
+		}, "\n") + "\n"))
+	}))
+	defer server.Close()
+
+	evidence, err := NewClickHouseEvidence(server.URL, "fdd_service_reader", "", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	from := time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC)
+	to := from.Add(24 * time.Hour)
+
+	sites, err := evidence.ListRecentMeterBalanceSites(t.Context(), from, to)
+	if err != nil {
+		t.Fatalf("ListRecentMeterBalanceSites failed: %v", err)
+	}
+	want := []SiteRuleScope{
+		{TenantID: "01990000-3000-7000-8000-000000000001", SiteID: "01990000-5000-7000-8000-000000000001"},
+		{TenantID: "01990000-3000-7000-8000-000000000002", SiteID: "01990000-5000-7000-8000-000000000009"},
+	}
+	if !reflect.DeepEqual(sites, want) {
+		t.Fatalf("sites=%#v want=%#v", sites, want)
+	}
+	for _, needle := range []string{
+		"SELECT DISTINCT toString(b.tenant_id) AS tenant_id, toString(b.site_id) AS site_id",
+		"FROM analytics.site_meter_balance_hourly AS b",
+		"parseDateTime64BestEffort('2026-10-16T00:00:00Z',3,'UTC')",
+		"parseDateTime64BestEffort('2026-10-17T00:00:00Z',3,'UTC')",
+		"ORDER BY tenant_id ASC, site_id ASC",
+		"LIMIT 1000",
+		"FORMAT JSONEachRow",
+	} {
+		if !strings.Contains(capturedSQL, needle) {
+			t.Fatalf("missing SQL fragment %q in:\n%s", needle, capturedSQL)
+		}
+	}
+}
+
+func TestClickHouseEvidenceListRecentMeterBalanceSitesValidationAndErrors(t *testing.T) {
+	from := time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC)
+	to := from.Add(time.Hour)
+
+	var nilEvidence *ClickHouseEvidence
+	if _, err := nilEvidence.ListRecentMeterBalanceSites(context.Background(), from, to); err == nil {
+		t.Fatal("expected error on nil ClickHouseEvidence")
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte(`{"tenant_id":"not-a-uuid","site_id":"01990000-5000-7000-8000-000000000001"}` + "\n"))
+	}))
+	defer server.Close()
+
+	evidence, err := NewClickHouseEvidence(server.URL, "fdd_service_reader", "", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := evidence.ListRecentMeterBalanceSites(t.Context(), to, from); err == nil {
+		t.Fatal("expected error when to <= from")
+	}
+	if _, err := evidence.ListRecentMeterBalanceSites(t.Context(), from, to); err == nil {
+		t.Fatal("expected error for invalid UUID in ClickHouse response")
 	}
 }

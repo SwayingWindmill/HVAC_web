@@ -1,10 +1,16 @@
 package core
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -115,6 +121,98 @@ func (backend *memoryAccountingRecalcBackend) RequestAccountingRecalculation(_ c
 		RequestedByDisplay: display,
 		Reason:             normalized.reason,
 		Source:             AccountingRecalcSourceManual,
+		AttemptCount:       0,
+		LastError:          "",
+		CreatedAt:          formatInstant(now),
+		UpdatedAt:          formatInstant(now),
+		FinishedAt:         nil,
+	}
+	backend.jobs[normalized.siteID] = append(backend.jobs[normalized.siteID], job)
+	return job, nil
+}
+
+func (backend *memoryAccountingRecalcBackend) EnqueueInternalDirtyWindow(_ context.Context, claims registryauth.GrantClaims, input InternalDirtyWindowRequest) (AccountingRecalcJob, error) {
+	if len(claims.Actions) != 1 || !registryauth.ActionAllows(claims.Actions[0], registryauth.ActionMeterBindingResolve) {
+		return AccountingRecalcJob{}, ErrMutationForbidden
+	}
+	if !validUUIDv7(claims.PrincipalID) || !validUUIDv7(claims.TenantID) {
+		return AccountingRecalcJob{}, ErrInvalidMutation
+	}
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	backend.seq++
+	now := time.Date(2026, 10, 12, 8, 0, backend.seq, 0, time.UTC)
+	normalized, err := input.normalize(claims.PrincipalID, now)
+	if err != nil {
+		return AccountingRecalcJob{}, err
+	}
+	if normalized.tenantID != claims.TenantID {
+		return AccountingRecalcJob{}, ErrInvalidMutation
+	}
+	if !registryauth.ScopeAllows(claims, normalized.siteID) || !backend.siteVisible(claims, normalized.siteID) {
+		return AccountingRecalcJob{}, ErrNotFound
+	}
+
+	existing := backend.jobs[normalized.siteID]
+	matchIdx := -1
+	for idx, candidate := range existing {
+		if candidate.TenantID != normalized.tenantID ||
+			candidate.SiteID != normalized.siteID ||
+			candidate.Granularity != normalized.granularity ||
+			candidate.Source != normalized.source ||
+			candidate.Status != AccountingRecalcStatusPending {
+			continue
+		}
+		candStart, parseStartErr := time.Parse("2006-01-02T15:04:05.000Z", candidate.WindowStart)
+		candEnd, parseEndErr := time.Parse("2006-01-02T15:04:05.000Z", candidate.WindowEnd)
+		if parseStartErr != nil || parseEndErr != nil {
+			continue
+		}
+		if !candStart.After(normalized.windowEnd) && !candEnd.Before(normalized.windowStart) {
+			if matchIdx == -1 ||
+				candidate.CreatedAt < existing[matchIdx].CreatedAt ||
+				(candidate.CreatedAt == existing[matchIdx].CreatedAt && candidate.ID < existing[matchIdx].ID) {
+				matchIdx = idx
+			}
+		}
+	}
+	if matchIdx >= 0 {
+		matched := existing[matchIdx]
+		candStart, _ := time.Parse("2006-01-02T15:04:05.000Z", matched.WindowStart)
+		candEnd, _ := time.Parse("2006-01-02T15:04:05.000Z", matched.WindowEnd)
+		candAvailable, _ := time.Parse("2006-01-02T15:04:05.000Z", matched.AvailableAt)
+		if normalized.windowStart.Before(candStart) {
+			candStart = normalized.windowStart
+		}
+		if normalized.windowEnd.After(candEnd) {
+			candEnd = normalized.windowEnd
+		}
+		if normalized.availableAt.After(candAvailable) {
+			candAvailable = normalized.availableAt
+		}
+		matched.WindowStart = formatInstant(candStart)
+		matched.WindowEnd = formatInstant(candEnd)
+		matched.AvailableAt = formatInstant(candAvailable)
+		matched.UpdatedAt = formatInstant(now)
+		existing[matchIdx] = matched
+		backend.jobs[normalized.siteID] = existing
+		return matched, nil
+	}
+
+	jobID := fmt.Sprintf("01990000-9400-7000-8000-%012d", backend.seq)
+	job := AccountingRecalcJob{
+		ID:                 jobID,
+		TenantID:           normalized.tenantID,
+		SiteID:             normalized.siteID,
+		Granularity:        normalized.granularity,
+		WindowStart:        formatInstant(normalized.windowStart),
+		WindowEnd:          formatInstant(normalized.windowEnd),
+		Status:             AccountingRecalcStatusPending,
+		AvailableAt:        formatInstant(normalized.availableAt),
+		RequestedBy:        normalized.requestedBy,
+		RequestedByDisplay: normalized.requestedByDisplay,
+		Reason:             normalized.reason,
+		Source:             normalized.source,
 		AttemptCount:       0,
 		LastError:          "",
 		CreatedAt:          formatInstant(now),
@@ -278,5 +376,284 @@ func TestCoreHTTPAcceptsBillingOrSavingsManageAndListsAccountingRecalcJobs(t *te
 	}
 	if len(list.Items) != 1 || list.Items[0].Granularity != "ALL" || list.Items[0].RequestedByDisplay != "节能李工" {
 		t.Fatalf("unexpected listed jobs: %#v", list.Items)
+	}
+}
+
+func TestInternalDirtyWindowRequestValidation(t *testing.T) {
+	baseStart := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	baseEnd := baseStart.Add(6 * time.Hour)
+	validBase := InternalDirtyWindowRequest{
+		TenantID:    testTenantA,
+		SiteID:      testSiteA1,
+		Granularity: AccountingRecalcGranularityHour,
+		WindowStart: baseStart,
+		WindowEnd:   baseEnd,
+		Reason:      "  补录历史电表读数触发重算  ",
+		Source:      AccountingRecalcSourceBackfill,
+	}
+	if err := validBase.Validate(); err != nil {
+		t.Fatalf("valid dirty window request rejected: %v", err)
+	}
+
+	for _, gran := range []string{AccountingRecalcGranularityHour, AccountingRecalcGranularityDay, AccountingRecalcGranularityMonth, AccountingRecalcGranularityAll} {
+		for _, src := range []string{AccountingRecalcSourceBackfill, AccountingRecalcSourceTariffChange, AccountingRecalcSourceRatioChange} {
+			req := validBase
+			req.Granularity = gran
+			req.Source = src
+			if err := req.Validate(); err != nil {
+				t.Fatalf("valid (%s, %s) rejected: %v", gran, src, err)
+			}
+		}
+	}
+
+	exact90 := validBase
+	exact90.WindowEnd = baseStart.Add(90 * 24 * time.Hour)
+	if err := exact90.Validate(); err != nil {
+		t.Fatalf("exact 90-day span rejected: %v", err)
+	}
+
+	exact1000Runes := validBase
+	exact1000Runes.Reason = strings.Repeat("电", 1000)
+	if err := exact1000Runes.Validate(); err != nil {
+		t.Fatalf("1000-rune UTF-8 reason rejected: %v", err)
+	}
+
+	invalidCases := []struct {
+		name  string
+		build func() InternalDirtyWindowRequest
+	}{
+		{"invalid tenantId", func() InternalDirtyWindowRequest { r := validBase; r.TenantID = "bad-tenant"; return r }},
+		{"invalid siteId", func() InternalDirtyWindowRequest { r := validBase; r.SiteID = "bad-site"; return r }},
+		{"invalid requestedBy", func() InternalDirtyWindowRequest { r := validBase; r.RequestedBy = "bad-principal"; return r }},
+		{"empty granularity", func() InternalDirtyWindowRequest { r := validBase; r.Granularity = ""; return r }},
+		{"bad granularity", func() InternalDirtyWindowRequest { r := validBase; r.Granularity = "MINUTE"; return r }},
+		{"zero windowStart", func() InternalDirtyWindowRequest { r := validBase; r.WindowStart = time.Time{}; return r }},
+		{"zero windowEnd", func() InternalDirtyWindowRequest { r := validBase; r.WindowEnd = time.Time{}; return r }},
+		{"equal window bounds", func() InternalDirtyWindowRequest { r := validBase; r.WindowEnd = baseStart; return r }},
+		{"inverted window bounds", func() InternalDirtyWindowRequest { r := validBase; r.WindowEnd = baseStart.Add(-time.Hour); return r }},
+		{"span over 90 days", func() InternalDirtyWindowRequest {
+			r := validBase
+			r.WindowEnd = baseStart.Add(90*24*time.Hour + time.Second)
+			return r
+		}},
+		{"empty source", func() InternalDirtyWindowRequest { r := validBase; r.Source = ""; return r }},
+		{"manual source forbidden on internal endpoint", func() InternalDirtyWindowRequest { r := validBase; r.Source = AccountingRecalcSourceManual; return r }},
+		{"blank reason", func() InternalDirtyWindowRequest { r := validBase; r.Reason = "   "; return r }},
+		{"reason over 1000 runes", func() InternalDirtyWindowRequest { r := validBase; r.Reason = strings.Repeat("电", 1001); return r }},
+	}
+	for _, tc := range invalidCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.build().Validate(); err == nil {
+				t.Fatalf("%s unexpectedly passed validation", tc.name)
+			}
+		})
+	}
+}
+
+func TestPostgresStoreEnqueueInternalDirtyWindowGuards(t *testing.T) {
+	var store *PostgresStore
+	claims := testGrantClaims(registryauth.ActionMeterBindingResolve)
+	baseReq := InternalDirtyWindowRequest{
+		TenantID:    testTenantA,
+		SiteID:      testSiteA1,
+		Granularity: AccountingRecalcGranularityHour,
+		WindowStart: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC),
+		WindowEnd:   time.Date(2026, 10, 1, 2, 0, 0, 0, time.UTC),
+		Reason:      "backfill guard check",
+		Source:      AccountingRecalcSourceBackfill,
+	}
+
+	if _, err := store.EnqueueInternalDirtyWindow(context.Background(), testGrantClaims(registryauth.ActionSiteRead), baseReq); !errors.Is(err, ErrMutationForbidden) {
+		t.Fatalf("wrong action err=%v, want ErrMutationForbidden", err)
+	}
+	mismatchedTenant := baseReq
+	mismatchedTenant.TenantID = "018f1d00-0000-7000-8000-000000000099"
+	if _, err := store.EnqueueInternalDirtyWindow(context.Background(), claims, mismatchedTenant); !errors.Is(err, ErrInvalidMutation) {
+		t.Fatalf("mismatched tenant err=%v, want ErrInvalidMutation", err)
+	}
+	outOfScope := baseReq
+	outOfScope.SiteID = testSiteA2
+	if _, err := store.EnqueueInternalDirtyWindow(context.Background(), claims, outOfScope); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("out of scope site err=%v, want ErrNotFound", err)
+	}
+}
+
+func TestCoreHTTPInternalDirtyWindowEnqueueAndDebounce(t *testing.T) {
+	backend := newMemoryAccountingRecalcBackend()
+	client := newScheduleHTTPClientWithInterfaces(t, backend, backend)
+	path := RegistryPathPrefix + "sites/" + testSiteA1 + "/accounting/dirty-windows"
+
+	resolveClaims := testGrantClaims(registryauth.ActionMeterBindingResolve)
+	readClaims := testGrantClaims(registryauth.ActionSiteRead)
+	billingClaims := testGrantClaims(registryauth.ActionBillingManage)
+
+	for _, deniedClaims := range []registryauth.GrantClaims{readClaims, billingClaims} {
+		resp := client.do(t, http.MethodPost, path, deniedClaims, "", map[string]any{
+			"granularity": "HOUR",
+			"windowStart": "2026-10-10T01:00:00Z",
+			"windowEnd":   "2026-10-10T02:00:00Z",
+			"reason":      "unauthorized attempt",
+			"source":      "BACKFILL",
+		})
+		if resp.Code != http.StatusForbidden {
+			t.Fatalf("action %v POST dirty-windows status=%d, want 403; body=%s", deniedClaims.Actions, resp.Code, resp.Body.String())
+		}
+	}
+
+	if resp := client.do(t, http.MethodPost, path+"?foo=bar", resolveClaims, "", map[string]any{
+		"granularity": "HOUR",
+		"windowStart": "2026-10-10T01:00:00Z",
+		"windowEnd":   "2026-10-10T02:00:00Z",
+		"reason":      "query forbidden",
+		"source":      "BACKFILL",
+	}); resp.Code != http.StatusBadRequest {
+		t.Fatalf("query param POST dirty-windows status=%d, want 400; body=%s", resp.Code, resp.Body.String())
+	}
+
+	if resp := client.do(t, http.MethodPost, path, resolveClaims, "", map[string]any{
+		"granularity": "HOUR",
+		"windowStart": "2026-10-10T01:00:00Z",
+		"windowEnd":   "2026-10-10T02:00:00Z",
+		"reason":      "unknown field test",
+		"source":      "BACKFILL",
+		"extra":       123,
+	}); resp.Code != http.StatusBadRequest {
+		t.Fatalf("unknown field POST dirty-windows status=%d, want 400; body=%s", resp.Code, resp.Body.String())
+	}
+
+	// Trailing JSON payload is rejected strictly.
+	trailingClaims := resolveClaims
+	trailingClaims.IssuedAt = client.now.Unix()
+	trailingClaims.ExpiresAt = client.now.Add(20 * time.Second).Unix()
+	trailingClaims.Presenter = testPresenter
+	grant, err := registryauth.SignGrant(client.signer, trailingClaims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trailingReq := httptest.NewRequest(http.MethodPost, path, bytes.NewBufferString(`{"granularity":"HOUR","windowStart":"2026-10-10T01:00:00Z","windowEnd":"2026-10-10T02:00:00Z","reason":"trailing","source":"BACKFILL"}{"extra":true}`))
+	trailingReq.Header.Set("Content-Type", "application/json")
+	trailingReq.Header.Set("X-Delegation-Grant", grant)
+	peerURI, _ := url.Parse(testPresenter)
+	peer := &x509.Certificate{URIs: []*url.URL{peerURI}}
+	trailingReq.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{peer}, VerifiedChains: [][]*x509.Certificate{{peer}}}
+	trailingRec := httptest.NewRecorder()
+	client.handler.ServeHTTP(trailingRec, trailingReq)
+	if trailingRec.Code != http.StatusBadRequest {
+		t.Fatalf("trailing JSON POST dirty-windows status=%d, want 400; body=%s", trailingRec.Code, trailingRec.Body.String())
+	}
+
+	if resp := client.do(t, http.MethodPost, path, resolveClaims, "", map[string]any{
+		"tenantId":    "018f1d00-0000-7000-8000-000000000099",
+		"granularity": "HOUR",
+		"windowStart": "2026-10-10T01:00:00Z",
+		"windowEnd":   "2026-10-10T02:00:00Z",
+		"reason":      "tenant mismatch",
+		"source":      "BACKFILL",
+	}); resp.Code != http.StatusBadRequest {
+		t.Fatalf("mismatched tenantId status=%d, want 400; body=%s", resp.Code, resp.Body.String())
+	}
+
+	if resp := client.do(t, http.MethodPost, path, resolveClaims, "", map[string]any{
+		"siteId":      testSiteA2,
+		"granularity": "HOUR",
+		"windowStart": "2026-10-10T01:00:00Z",
+		"windowEnd":   "2026-10-10T02:00:00Z",
+		"reason":      "site mismatch",
+		"source":      "BACKFILL",
+	}); resp.Code != http.StatusBadRequest {
+		t.Fatalf("mismatched siteId status=%d, want 400; body=%s", resp.Code, resp.Body.String())
+	}
+
+	if resp := client.do(t, http.MethodPost, RegistryPathPrefix+"sites/"+testSiteA2+"/accounting/dirty-windows", resolveClaims, "", map[string]any{
+		"granularity": "HOUR",
+		"windowStart": "2026-10-10T01:00:00Z",
+		"windowEnd":   "2026-10-10T02:00:00Z",
+		"reason":      "out of scope site",
+		"source":      "BACKFILL",
+	}); resp.Code != http.StatusNotFound {
+		t.Fatalf("out of scope site status=%d, want 404; body=%s", resp.Code, resp.Body.String())
+	}
+
+	// First BACKFILL HOUR request (with explicit tenantId/siteId/availableAt/requestedBy).
+	customActor := "018f1e00-2000-7000-8000-000000000099"
+	firstResp := client.do(t, http.MethodPost, path, resolveClaims, "", map[string]any{
+		"tenantId":           testTenantA,
+		"siteId":             testSiteA1,
+		"granularity":        "HOUR",
+		"windowStart":        "2026-10-10T02:00:00Z",
+		"windowEnd":          "2026-10-10T04:00:00Z",
+		"availableAt":        "2026-10-12T08:01:00Z",
+		"requestedBy":        customActor,
+		"requestedByDisplay": "energy-projector",
+		"reason":             "backfill batch 1",
+		"source":             "BACKFILL",
+	})
+	if firstResp.Code != http.StatusAccepted {
+		t.Fatalf("first POST dirty-windows status=%d, want 202; body=%s", firstResp.Code, firstResp.Body.String())
+	}
+	var job1 AccountingRecalcJob
+	if err := json.NewDecoder(firstResp.Body).Decode(&job1); err != nil {
+		t.Fatal(err)
+	}
+	if job1.Status != AccountingRecalcStatusPending || job1.Source != AccountingRecalcSourceBackfill ||
+		job1.RequestedBy != customActor || job1.RequestedByDisplay != "energy-projector" ||
+		job1.WindowStart != "2026-10-10T02:00:00.000Z" || job1.WindowEnd != "2026-10-10T04:00:00.000Z" ||
+		job1.AvailableAt != "2026-10-12T08:01:00.000Z" {
+		t.Fatalf("unexpected job1: %#v", job1)
+	}
+
+	// Overlapping / extending BACKFILL HOUR request merges into job1.
+	secondResp := client.do(t, http.MethodPost, path, resolveClaims, "", map[string]any{
+		"granularity": "HOUR",
+		"windowStart": "2026-10-10T01:00:00Z",
+		"windowEnd":   "2026-10-10T05:00:00Z",
+		"availableAt": "2026-10-12T08:02:00Z",
+		"reason":      "backfill batch 2",
+		"source":      "BACKFILL",
+	})
+	if secondResp.Code != http.StatusAccepted {
+		t.Fatalf("second POST dirty-windows status=%d, want 202; body=%s", secondResp.Code, secondResp.Body.String())
+	}
+	var job2 AccountingRecalcJob
+	if err := json.NewDecoder(secondResp.Body).Decode(&job2); err != nil {
+		t.Fatal(err)
+	}
+	if job2.ID != job1.ID ||
+		job2.WindowStart != "2026-10-10T01:00:00.000Z" ||
+		job2.WindowEnd != "2026-10-10T05:00:00.000Z" ||
+		job2.AvailableAt != "2026-10-12T08:02:00.000Z" {
+		t.Fatalf("expected debounced merge into job1=%s, got %#v", job1.ID, job2)
+	}
+
+	// Different source (RATIO_CHANGE) creates a separate job and falls back requestedBy to claims.PrincipalID.
+	ratioResp := client.do(t, http.MethodPost, path, resolveClaims, "", map[string]any{
+		"granularity": "HOUR",
+		"windowStart": "2026-10-10T02:00:00Z",
+		"windowEnd":   "2026-10-10T03:00:00Z",
+		"reason":      "ratio revision released",
+		"source":      "RATIO_CHANGE",
+	})
+	if ratioResp.Code != http.StatusAccepted {
+		t.Fatalf("RATIO_CHANGE POST dirty-windows status=%d, want 202; body=%s", ratioResp.Code, ratioResp.Body.String())
+	}
+	var job3 AccountingRecalcJob
+	if err := json.NewDecoder(ratioResp.Body).Decode(&job3); err != nil {
+		t.Fatal(err)
+	}
+	if job3.ID == job1.ID || job3.Source != AccountingRecalcSourceRatioChange ||
+		job3.RequestedBy != testPrincipal || job3.RequestedByDisplay != testPrincipal {
+		t.Fatalf("unexpected RATIO_CHANGE job3: %#v", job3)
+	}
+
+	listResp := client.do(t, http.MethodGet, RegistryPathPrefix+"sites/"+testSiteA1+"/accounting/recalculate-jobs", readClaims, "", nil)
+	if listResp.Code != http.StatusOK {
+		t.Fatalf("GET recalculate-jobs status=%d, want 200; body=%s", listResp.Code, listResp.Body.String())
+	}
+	var listed AccountingRecalcJobList
+	if err := json.NewDecoder(listResp.Body).Decode(&listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Items) != 2 {
+		t.Fatalf("expected 2 dirty-window jobs after debounce merge, got %d (%#v)", len(listed.Items), listed.Items)
 	}
 }

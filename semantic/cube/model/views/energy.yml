@@ -83,3 +83,36 @@ views:
       - group: analytics_reader
         member_level:
           includes: "*"
+
+  - name: site_meter_balance
+    title: 站点主分表平衡
+    description: 站点总表与设备分表逐小时用电量对比与平衡状态，用来回答「总表和分表差多少、有没有漏计或多计」。
+    cubes:
+      - join_path: site_meter_balance_facts
+        includes:
+          - site_kwh
+          - submeter_sum_kwh
+          - diff_kwh
+          - site_id
+          - imbalance_status
+          - period_end
+    access_policy:
+      - group: analytics_reader
+        member_level:
+          includes: "*"
+
+  - name: thermal_cop_asof
+    title: 瞬时能效审计
+    description: 按时间最邻近对齐瞬时制冷功率与用电功率，用来核查运行时的瞬时功率与能效（COP）表现。
+    cubes:
+      - join_path: thermal_cop_asof_facts
+        includes:
+          - thermal_kw
+          - electrical_kw
+          - asof_cop
+          - site_id
+          - period_end
+    access_policy:
+      - group: analytics_reader
+        member_level:
+          includes: "*"
