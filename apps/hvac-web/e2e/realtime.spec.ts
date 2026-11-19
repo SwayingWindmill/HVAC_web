@@ -8,7 +8,7 @@ test.beforeEach(({ page }) => {
   consoleErrors = [];
   pageErrors = [];
   page.on('console', (message) => {
-    if (message.type() === 'error' && !message.text().startsWith('RouteAccessError: SITE_DISCOVERY_UNAVAILABLE')) {
+    if (message.type() === 'error') {
       consoleErrors.push(message.text());
     }
   });
@@ -310,4 +310,17 @@ test('displays hydraulic loops and parallel branch equipment without horizontal 
   await expect(branches).toContainText('支路 CW-A');
   await expect(branches).toContainText('冷却水环路');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
+test('delayed site discovery waits before mounting router without throwing SITE_DISCOVERY_UNAVAILABLE', async ({ page }) => {
+  await page.route('**/api/v1/sites*', async (route) => {
+    await new Promise<void>((resolveDelay) => {
+      setTimeout(resolveDelay, 250);
+    });
+    await route.fallback();
+  });
+
+  await page.goto(`/operations/realtime?site=${SITE_ID}`);
+  await expect(page.getByRole('region', { name: '冷站运行' })).toBeVisible();
+  await expect(page.getByRole('link', { name: /主要设备/ })).toBeVisible();
 });
