@@ -27,6 +27,7 @@ import { formatDecimal, formatTime } from "@/lib/operator-format";
 import { isOneOf } from "@/lib/typed";
 import { cn } from "@/lib/utils";
 import {
+  copUnavailableText,
   ENERGY_PERIODS,
   explainQuestion,
   periodWindow,
@@ -35,6 +36,7 @@ import {
   wallTime,
   type BucketComparison,
   type EnergyPeriod,
+  type EnergySummary,
   type Granularity,
 } from "../model";
 import { useEnergyComparison } from "../query";
@@ -57,24 +59,28 @@ const GRANULARITY_COPY: Readonly<Record<Granularity, {
   readonly detailTitle: string;
   readonly peakLabel: string;
   readonly averageLabel: string;
+  readonly incompleteScope: string;
   readonly crossGapNote: string;
 }>> = {
   hour: {
     detailTitle: "逐时明细",
     peakLabel: "用电最高时段",
     averageLabel: "每小时平均",
+    incompleteScope: "所选时段内部分小时",
     crossGapNote: "期间内另有跨缺口恢复电量已计入上方总量与分时电费，不摊入逐时明细",
   },
   day: {
     detailTitle: "每日明细",
     peakLabel: "最高用电日",
     averageLabel: "日均用电",
+    incompleteScope: "所选时段内部分日期",
     crossGapNote: "期间内另有跨缺口恢复电量已计入上方总量与分时电费，不摊入每日明细",
   },
   month: {
     detailTitle: "每月明细",
     peakLabel: "最高用电月",
     averageLabel: "月均用电",
+    incompleteScope: "所选时段内部分月份",
     crossGapNote: "",
   },
 };
@@ -213,6 +219,7 @@ export function ConsumptionWorkspace() {
         </Panel>
       ) : (
         <>
+          <IncompleteTelemetryNotice summary={comparison.current} />
           <PeriodChart comparison={comparison} pricing={pricing} previousLabel={previousLabel} metric={metric} onMetricChange={(next) => setSearch({ metric: next })} timeZone={site.timezone} />
           <EnergyDestination result={destination} previousLabel={previousLabel} />
           <Panel aria-label="能耗明细">
@@ -254,6 +261,28 @@ interface Pricing {
   readonly codes: readonly PeriodCode[];
 }
 
+function IncompleteTelemetryNotice({ summary }: { readonly summary: EnergySummary }) {
+  if (summary.missingMeters.length === 0 && summary.incompleteBuckets === 0) return null;
+  const scope = GRANULARITY_COPY[summary.granularity].incompleteScope;
+  const detail = summary.missingMeters.length > 0
+    ? `${scope}缺少 ${summary.missingMeters.join("、")} 读数`
+    : `${scope}有 ${summary.incompleteBuckets} 个时段读数不完整`;
+  return (
+    <div
+      role="status"
+      aria-label="计量不完整提示"
+      data-testid="consumption-incomplete-notice"
+      className="flex flex-wrap items-center gap-2 rounded-lg border border-warning-soft bg-warning-soft/45 px-4 py-2.5 text-xs text-foreground"
+    >
+      <Badge variant="warning">▲ 不完整</Badge>
+      <span className="font-medium text-warning-text">{detail}</span>
+      <span className="text-muted-foreground">
+        空调用电未包含缺失设备，综合能效可能偏高，对比时请留意。
+      </span>
+    </div>
+  );
+}
+
 function PeriodChart({ comparison, pricing, previousLabel, metric, onMetricChange, timeZone }: {
   readonly comparison: NonNullable<ReturnType<typeof useEnergyComparison>["data"]>;
   readonly pricing: Pricing | null;
@@ -274,8 +303,8 @@ function PeriodChart({ comparison, pricing, previousLabel, metric, onMetricChang
   const scale = Math.max(current.electricityKWh ?? 0, current.coolingKWh ?? 0);
   const electricity = energy(current.electricityKWh, scale);
   const cooling = energy(current.coolingKWh, scale);
-  const before = (value: number | null, digits = 1, unit = "") => `${previousLabel} ${value === null ? "—" : `${formatDecimal(value, digits)}${unit}`}`;
-  const previousEnergy = (value: number | null) => { const shown = energy(value, scale); return `${previousLabel} ${shown.value ?? "—"}${shown.value ? ` ${shown.unit}` : ""}`; };
+  const beforeCop = (value: number | null) => `${previousLabel} ${value === null ? "--" : formatDecimal(value, 2)}`;
+  const previousEnergy = (value: number | null) => { const shown = energy(value, scale); return `${previousLabel} ${shown.value ?? "--"}${shown.value ? ` ${shown.unit}` : ""}`; };
 
   // The running bucket holds partial values: drawn hatched apart from the complete ones.
   const split = (bucket: BucketComparison, key: string, value: number | null) =>
@@ -284,7 +313,7 @@ function PeriodChart({ comparison, pricing, previousLabel, metric, onMetricChang
     label: bucket.label,
     previousElectricityKWh: bucket.previousElectricityKWh,
     previousCoolingKWh: bucket.previousCoolingKWh,
-    previousCop: bucket.previousCop,
+    previousCop: bucket.previousCop === null ? null : Number(bucket.previousCop.toFixed(2)),
     previousCost: pricing?.previousByLabel.get(bucket.label)?.total ?? null,
     ...split(bucket, "electricityKWh", bucket.electricityKWh),
     ...split(bucket, "coolingKWh", bucket.coolingKWh),
@@ -292,14 +321,53 @@ function PeriodChart({ comparison, pricing, previousLabel, metric, onMetricChang
     ...split(bucket, "cost", pricing?.byLabel.get(bucket.label)?.total ?? null),
   }));
 
+  const hasMissingTelemetry = current.missingMeters.length > 0 || current.incompleteBuckets > 0;
+  const electricityCaption = current.missingMeters.length > 0
+    ? (
+      <span
+        className="inline-flex items-center gap-1 text-warning-text"
+        title={`不完整，缺 ${current.missingMeters.join("、")}`}
+      >
+        <TriangleAlert className="size-3 shrink-0" aria-hidden="true" />
+        不完整，缺 {current.missingMeters.join("、")}
+      </span>
+    )
+    : current.incompleteBuckets > 0
+      ? (
+        <span className="inline-flex items-center gap-1 text-warning-text">
+          <TriangleAlert className="size-3 shrink-0" aria-hidden="true" />
+          部分时段电表不完整
+        </span>
+      )
+      : previousEnergy(previous.electricityKWh);
+
+  const copCaption = current.cop === null
+    ? copUnavailableText(current.copUnavailableReason, current.missingMeters)
+    : current.missingMeters.length > 0
+      ? (
+        <span
+          className="inline-flex items-center gap-1 text-warning-text"
+          title={`缺 ${current.missingMeters.join("、")}，综合能效可能偏高`}
+        >
+          <TriangleAlert className="size-3 shrink-0" aria-hidden="true" />
+          缺 {current.missingMeters.join("、")}，能效可能偏高
+        </span>
+      )
+      : hasMissingTelemetry
+        ? (
+          <span className="inline-flex items-center gap-1 text-warning-text">
+            <TriangleAlert className="size-3 shrink-0" aria-hidden="true" />
+            部分时段不完整，能效可能偏高
+          </span>
+        )
+        : beforeCop(previous.cop);
+
   const metrics: MetricTab<ConsumptionMetric>[] = [
     {
       key: "electricityKWh", label: "空调用电", compareKey: "previousElectricityKWh", partialKey: "electricityKWhPartial",
       value: electricity.value, unit: electricity.unit, fractionDigits: 1, invertDelta: true,
       delta: relativeChange(current.electricityKWh, previous.electricityKWh),
-      caption: current.missingMeters.length > 0
-        ? `不完整，缺 ${current.missingMeters.join("、")}`
-        : previousEnergy(previous.electricityKWh),
+      caption: electricityCaption,
     },
     {
       key: "coolingKWh", label: "供冷量", compareKey: "previousCoolingKWh", partialKey: "coolingKWhPartial",
@@ -307,9 +375,13 @@ function PeriodChart({ comparison, pricing, previousLabel, metric, onMetricChang
       delta: relativeChange(current.coolingKWh, previous.coolingKWh), caption: previousEnergy(previous.coolingKWh),
     },
     {
-      key: "cop", label: "综合能效", compareKey: "previousCop", partialKey: "copPartial", info: "供冷量 ÷ 空调用电。温差相对探头误差过小的时段，供冷量标成部分，不参加计算。",
-      value: current.cop === null ? null : formatDecimal(current.cop, 2), unit: "COP", fractionDigits: 2,
-      delta: relativeChange(current.cop, previous.cop), caption: before(previous.cop, 2),
+      key: "cop", label: "综合能效", compareKey: "previousCop", partialKey: "copPartial",
+      info: "期间总供冷量 ÷ 期间总空调用电（按有配对读数的时段合计）。冷机待机、低负荷、温差不确定度过大或读数超出合理范围时不计算。",
+      value: current.cop === null ? "--" : formatDecimal(current.cop, 2),
+      ...(current.cop === null ? {} : { unit: "COP" }),
+      fractionDigits: 2,
+      delta: relativeChange(current.cop, previous.cop),
+      caption: copCaption,
     },
     ...(pricing ? [{
       key: "cost", label: "估算电费", compareKey: "previousCost", partialKey: "costPartial", info: "按站点电价估算，正式电费以结算为准",
@@ -444,8 +516,10 @@ function DetailTable({ comparison, pricing, previousLabel, timeZone }: {
                   <span className="flex items-center gap-2">
                     <span className="font-medium">{row.label}</span>
                     {!row.complete ? <Badge>进行中</Badge> : null}
-                    {row.missingMeters.length > 0 ? (
-                      <Badge variant="warning">▲ 不完整，缺 {row.missingMeters.join("、")}</Badge>
+                    {row.incomplete || row.missingMeters.length > 0 ? (
+                      <Badge variant="warning">
+                        {row.missingMeters.length > 0 ? `▲ 不完整，缺 ${row.missingMeters.join("、")}` : "▲ 数据不完整"}
+                      </Badge>
                     ) : null}
                     {row.complete && row.electricityKWh !== null ? (
                       <Button
@@ -469,7 +543,7 @@ function DetailTable({ comparison, pricing, previousLabel, timeZone }: {
                   return <TableCell key={code} className={cn("text-right", !used && "text-muted-foreground")}>{used ? number(used, 0) : dash}</TableCell>;
                 })}
                 <TableCell className="text-right">{number(row.coolingKWh)}</TableCell>
-                <TableCell className="pr-5 text-right">{number(row.cop, 2)}</TableCell>
+                <TableCell className="pr-5 text-right">{row.cop === null ? <span className="text-muted-foreground">--</span> : number(row.cop, 2)}</TableCell>
               </TableRow>
             );
           })}

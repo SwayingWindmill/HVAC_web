@@ -216,3 +216,131 @@ test('synthesized incomplete hours preserve partial sum and missing meters, whil
   assert.equal(monthly.rows[0].crossGapElectricityKWh, 640);
   assert.equal(summaryCostBuckets(monthly).length, 1);
 });
+
+test('summary COP is energy-weighted across unbalanced load intervals, never arithmetic mean of point COPs', () => {
+  // Low-load hour: 100 kWh elec, 600 kWh cooling (COP = 6.0)
+  // High-load hour: 900 kWh elec, 2700 kWh cooling (COP = 3.0)
+  // Naive mean = (6.0 + 3.0) / 2 = 4.50; energy-weighted COP = 3300 / 1000 = 3.30.
+  const summary = summarizeEnergy(
+    series([['2026-10-10T01:00:00Z', 100], ['2026-10-10T02:00:00Z', 900]]),
+    series([['2026-10-10T01:00:00Z', 600], ['2026-10-10T02:00:00Z', 2700]]),
+    'hour',
+    'Asia/Shanghai',
+  );
+  assert.deepEqual(summary.rows.map((row) => row.cop), [6, 3]);
+  assert.equal(summary.cop, 3.3);
+  assert.equal(summary.copUnavailableReason, null);
+  assert.notEqual(summary.cop, 4.5);
+
+  // Standby hour (200 kWh elec? no, 50 kWh standby elec, 0 cooling) yields null row COP (no 0.00)
+  // while weighing its electricity into the period plant COP.
+  const mixed = summarizeEnergy(
+    series([['2026-10-10T01:00:00Z', 50], ['2026-10-10T02:00:00Z', 200]]),
+    series([['2026-10-10T01:00:00Z', 0], ['2026-10-10T02:00:00Z', 800]]),
+    'hour',
+    'Asia/Shanghai',
+  );
+  assert.equal(mixed.rows[0].cop, null);
+  assert.equal(mixed.rows[1].cop, 4);
+  assert.equal(mixed.cop, 800 / 250);
+});
+
+test('standby, negligible load, invalid inputs, and implausible outliers return null COP with clear reasons', async () => {
+  const { copUnavailableText, evaluatePlantCop, sanitizeReportedCop } = await import(
+    '../apps/hvac-web/src/features/energy-analysis/consumption/model.ts'
+  );
+
+  // Standby: electricity drawn with zero cooling
+  const standby = summarizeEnergy(
+    series([['2026-10-10T01:00:00Z', 24], ['2026-10-10T02:00:00Z', 18]]),
+    series([['2026-10-10T01:00:00Z', 0], ['2026-10-10T02:00:00Z', 0]]),
+    'hour',
+    'Asia/Shanghai',
+  );
+  assert.equal(standby.rows[0].cop, null);
+  assert.equal(standby.cop, null);
+  assert.equal(standby.copUnavailableReason, 'standby');
+  assert.equal(copUnavailableText(standby.copUnavailableReason).includes('—'), false);
+
+  // Negligible sub-1 kWh trickle even if ratio looks plausible (0.4 / 0.1 = 4.0)
+  assert.deepEqual(evaluatePlantCop(0.4, 0.1), { cop: null, unavailableReason: 'standby' });
+
+  // Missing denominator / zero electricity with positive cooling
+  assert.deepEqual(evaluatePlantCop(50, 0), { cop: null, unavailableReason: 'out-of-range' });
+
+  // Bogus outlier COP = 85.4 (e.g. missing chiller meter or residual cooling drift)
+  const outlier = summarizeEnergy(
+    series([['2026-10-10T01:00:00Z', 10]]),
+    series([['2026-10-10T01:00:00Z', 854]]),
+    'hour',
+    'Asia/Shanghai',
+  );
+  assert.equal(outlier.rows[0].cop, null);
+  assert.equal(outlier.cop, null);
+  assert.equal(outlier.copUnavailableReason, 'out-of-range');
+
+  // Below lower chiller bound (< 1)
+  assert.deepEqual(evaluatePlantCop(50, 100), { cop: null, unavailableReason: 'standby' });
+
+  // Non-finite or negative values
+  assert.deepEqual(evaluatePlantCop(Number.NaN, 100), { cop: null, unavailableReason: 'no-data' });
+  assert.deepEqual(evaluatePlantCop(100, Number.POSITIVE_INFINITY), { cop: null, unavailableReason: 'no-data' });
+  assert.deepEqual(evaluatePlantCop(-10, 100), { cop: null, unavailableReason: 'out-of-range' });
+
+  // Archived snapshot COP sanitizer rejects 0, 85.4, NaN, and standby while preserving valid COP
+  assert.equal(sanitizeReportedCop(0, 0, 500).cop, null);
+  assert.equal(sanitizeReportedCop(85.4, 854, 10).cop, null);
+  assert.equal(sanitizeReportedCop(Number.NaN, 400, 100).cop, null);
+  assert.equal(sanitizeReportedCop(2.88, 209458.9, 72696.8).cop, 2.88);
+
+  // Out-of-range explanation names missing sub-meters when present
+  assert.match(copUnavailableText('out-of-range', ['D 机组电表']), /D 机组电表/);
+});
+
+test('incomplete telemetry and missingMeters propagate cleanly across day and month granularities', async () => {
+  const { comparePeriods } = await import('../apps/hvac-web/src/features/energy-analysis/consumption/model.ts');
+
+  const dayElec = {
+    schemaVersion: 1,
+    points: [
+      { periodStart: '2026-10-08T16:00:00Z', periodEnd: '2026-10-09T16:00:00Z', energyKWh: 420, incomplete: true, missingMeters: ['D 机组电表'] },
+      { periodStart: '2026-10-09T16:00:00Z', periodEnd: '2026-10-10T16:00:00Z', energyKWh: 900 },
+    ],
+    metadata: { requestedGranularity: 'day', actualGranularity: 'day', datasetRevision: 'r', partial: true, qualitySummary: { valid: 2, suspect: 0, invalid: 0 } },
+  };
+  const dayCool = series([['2026-10-08T16:00:00Z', 2400], ['2026-10-09T16:00:00Z', 3000]]);
+  const daily = summarizeEnergy(dayElec, dayCool, 'day', 'Asia/Shanghai');
+  assert.equal(daily.incompleteBuckets, 1);
+  assert.deepEqual(daily.missingMeters, ['D 机组电表']);
+  assert.equal(daily.rows[0].incomplete, true);
+  assert.equal(daily.rows[1].incomplete, false);
+
+  const compared = comparePeriods(daily, summarizeEnergy(series([]), series([]), 'day', 'Asia/Shanghai'), {
+    from: new Date('2026-10-08T16:00:00Z'),
+    previousFrom: new Date('2026-10-01T16:00:00Z'),
+    now: new Date('2026-10-10T16:00:00Z'),
+    timeZone: 'Asia/Shanghai',
+  });
+  assert.equal(compared[0].incomplete, true);
+  assert.deepEqual(compared[0].missingMeters, ['D 机组电表']);
+  assert.equal(compared[1].incomplete, false);
+
+  const monthElec = {
+    schemaVersion: 1,
+    points: [
+      { periodStart: '2026-09-30T16:00:00Z', periodEnd: '2026-10-31T16:00:00Z', energyKWh: 10_000, incomplete: true, missingMeters: ['2号电表（D机组）'] },
+    ],
+    metadata: { requestedGranularity: 'month', actualGranularity: 'month', datasetRevision: 'r', partial: true, qualitySummary: { valid: 1, suspect: 0, invalid: 0 } },
+  };
+  const monthCool = {
+    schemaVersion: 1,
+    points: [
+      { periodStart: '2026-09-30T16:00:00Z', periodEnd: '2026-10-31T16:00:00Z', energyKWh: 35_000, incomplete: true },
+    ],
+    metadata: { requestedGranularity: 'month', actualGranularity: 'month', datasetRevision: 'r', partial: true, qualitySummary: { valid: 1, suspect: 0, invalid: 0 } },
+  };
+  const monthly = summarizeEnergy(monthElec, monthCool, 'month', 'Asia/Shanghai');
+  assert.equal(monthly.incompleteBuckets, 1);
+  assert.deepEqual(monthly.missingMeters, ['2号电表（D机组）']);
+  assert.equal(monthly.cop, 3.5);
+});
