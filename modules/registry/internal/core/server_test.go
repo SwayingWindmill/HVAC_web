@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -284,6 +285,162 @@ func TestServerListsSiteMeterBindingsWithinPrivateCoreRoute(t *testing.T) {
 	rejectedQuery := harness.serve(t, http.MethodGet, path+"?deviceId="+url.QueryEscape(testDeviceA1), testGrantClaims(registryauth.ActionMeterBindingResolve), nil)
 	if rejectedQuery.Code != http.StatusBadRequest {
 		t.Fatalf("unexpected query status = %d; body=%s", rejectedQuery.Code, rejectedQuery.Body.String())
+	}
+}
+
+func TestServerSerializesMeterBindingReadingUnitAndRatioVersions(t *testing.T) {
+	now := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
+	effectiveFrom := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	effectiveTo := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	store := &fakeRegistryStore{siteBindings: SiteMeterBindings{
+		SiteID: testSiteA1,
+		Items: []MeterBindingResolution{
+			{
+				TenantID:          testTenantA,
+				SiteID:            testSiteA1,
+				MeterID:           testBindingA1,
+				MeterBindingID:    testBindingA1,
+				TopologyVersionID: "01990000-1300-7000-8000-000000000001",
+				BindingVersion:    2,
+				BindingRevision:   3,
+				EnergyTypeID:      "01990000-0000-7000-8000-000000000001",
+				EnergyType:        "electricity",
+				MeterRole:         "PRIMARY",
+				Direction:         "IMPORT",
+				DeviceID:          testDeviceA1,
+				PointID:           "01990000-1340-7000-8000-000000000001",
+				PointType:         "COUNTER",
+				ReadingUnit:       "MWh",
+				RatioVersions: []MeterRatioVersionSummary{{
+					ID:                   "01990000-1350-7000-8000-000000000001",
+					TenantID:             testTenantA,
+					SiteID:               testSiteA1,
+					MeterBindingID:       testBindingA1,
+					PointID:              "01990000-1340-7000-8000-000000000001",
+					CTRatio:              20,
+					PTRatio:              1.5,
+					MeterMultiplier:      2,
+					RatioApplicationMode: "PLATFORM_APPLIED",
+					ReadingUnit:          "kWh",
+					EffectiveFrom:        effectiveFrom,
+					EffectiveTo:          &effectiveTo,
+					Status:               "RELEASED",
+					Revision:             1,
+				}},
+				EffectiveFrom: effectiveFrom,
+			},
+		},
+	}}
+	harness := newCoreHarness(t, now, store, StaticGrantStatusProvider{PolicyRevision: testPolicy})
+	response := harness.serve(t, http.MethodGet, RegistryPathPrefix+"sites/"+testSiteA1+"/meter-bindings", testGrantClaims(registryauth.ActionMeterBindingResolve), nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", response.Code, response.Body.String())
+	}
+	var decoded struct {
+		SiteID string `json:"siteId"`
+		Items  []struct {
+			ReadingUnit   string                     `json:"readingUnit"`
+			RatioVersions []MeterRatioVersionSummary `json:"ratioVersions"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Items) != 1 || decoded.Items[0].ReadingUnit != "MWh" || len(decoded.Items[0].RatioVersions) != 1 {
+		t.Fatalf("unexpected decoded meter bindings: %s", response.Body.String())
+	}
+	gotRatio := decoded.Items[0].RatioVersions[0]
+	if gotRatio.CTRatio != 20 || gotRatio.PTRatio != 1.5 || gotRatio.MeterMultiplier != 2 ||
+		gotRatio.RatioApplicationMode != "PLATFORM_APPLIED" || gotRatio.ReadingUnit != "kWh" ||
+		gotRatio.Status != "RELEASED" || gotRatio.Revision != 1 ||
+		!gotRatio.EffectiveFrom.Equal(effectiveFrom) || gotRatio.EffectiveTo == nil || !gotRatio.EffectiveTo.Equal(effectiveTo) {
+		t.Fatalf("unexpected decoded ratio version: %#v", gotRatio)
+	}
+}
+
+func TestAttachMeterRatioVersionsMatchesByPointOrBindingFallbackAndNormalizesUTC(t *testing.T) {
+	offsetPlus8 := time.FixedZone("CST", 8*3600)
+	t1 := time.Date(2026, 1, 1, 8, 0, 0, 0, offsetPlus8)
+	t2 := time.Date(2026, 2, 1, 8, 0, 0, 0, offsetPlus8)
+	t3 := time.Date(2026, 3, 1, 8, 0, 0, 0, offsetPlus8)
+
+	items := []MeterBindingResolution{
+		{MeterBindingID: "binding-1", PointID: "point-1"},
+		{MeterBindingID: "binding-2", PointID: "point-2"},
+		{MeterBindingID: "binding-3", PointID: "point-3"},
+	}
+	ratios := []MeterRatioVersionSummary{
+		// Deliberately out of order & non-UTC to verify sorting and UTC normalization.
+		{ID: "rv-p1-rev2", PointID: "point-1", MeterBindingID: "binding-1", CTRatio: 40, PTRatio: 1, MeterMultiplier: 1, ReadingUnit: "kWh", EffectiveFrom: t2, EffectiveTo: &t3, Status: "RELEASED", Revision: 2},
+		{ID: "rv-p1-rev1", PointID: "point-1", MeterBindingID: "binding-1", CTRatio: 20, PTRatio: 1, MeterMultiplier: 1, ReadingUnit: "kWh", EffectiveFrom: t1, EffectiveTo: &t2, Status: "RELEASED", Revision: 1},
+		// Binding fallback when point_id is empty.
+		{ID: "rv-b2-fallback", MeterBindingID: "binding-2", CTRatio: 10, PTRatio: 1, MeterMultiplier: 1, ReadingUnit: "Wh", EffectiveFrom: t1, Status: "RELEASED", Revision: 1},
+		// Unmatched point/binding must not attach anywhere.
+		{ID: "rv-other", PointID: "point-999", MeterBindingID: "binding-999", CTRatio: 99, PTRatio: 1, MeterMultiplier: 1, ReadingUnit: "kWh", EffectiveFrom: t1, Status: "RELEASED", Revision: 1},
+	}
+
+	attachMeterRatioVersions(items, ratios)
+
+	if len(items[0].RatioVersions) != 2 {
+		t.Fatalf("items[0] ratios=%#v, want 2", items[0].RatioVersions)
+	}
+	if items[0].RatioVersions[0].ID != "rv-p1-rev1" || items[0].RatioVersions[1].ID != "rv-p1-rev2" {
+		t.Fatalf("items[0] ratios out of order: %#v", items[0].RatioVersions)
+	}
+	if items[0].RatioVersions[0].EffectiveFrom.Location() != time.UTC ||
+		items[0].RatioVersions[0].EffectiveTo == nil ||
+		items[0].RatioVersions[0].EffectiveTo.Location() != time.UTC ||
+		!items[0].RatioVersions[0].EffectiveFrom.Equal(t1.UTC()) {
+		t.Fatalf("items[0] times not normalized to UTC: %#v", items[0].RatioVersions[0])
+	}
+	if len(items[1].RatioVersions) != 1 || items[1].RatioVersions[0].ID != "rv-b2-fallback" {
+		t.Fatalf("items[1] binding fallback failed: %#v", items[1].RatioVersions)
+	}
+	if items[2].RatioVersions != nil {
+		t.Fatalf("items[2] should have nil RatioVersions, got %#v", items[2].RatioVersions)
+	}
+	if !reflect.DeepEqual([]string{items[0].RatioVersions[0].ID, items[0].RatioVersions[1].ID}, []string{"rv-p1-rev1", "rv-p1-rev2"}) {
+		t.Fatalf("unexpected ratio IDs")
+	}
+}
+
+func TestServerRejectsInternalDirtyWindowWhenWriterNotConfigured(t *testing.T) {
+	now := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
+	harness := newCoreHarness(t, now, &fakeRegistryStore{}, StaticGrantStatusProvider{PolicyRevision: testPolicy})
+
+	claims := testGrantClaims(registryauth.ActionMeterBindingResolve)
+	claims.IssuedAt = now.Unix()
+	claims.ExpiresAt = now.Add(20 * time.Second).Unix()
+	claims.Presenter = testPresenter
+	grant, err := registryauth.SignGrant(harness.signer, claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, RegistryPathPrefix+"sites/"+testSiteA1+"/accounting/dirty-windows", strings.NewReader(`{"granularity":"HOUR","windowStart":"2026-07-21T00:00:00Z","windowEnd":"2026-07-21T01:00:00Z","reason":"backfill","source":"BACKFILL"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Delegation-Grant", grant)
+	peerURI, _ := url.Parse(testPresenter)
+	peer := &x509.Certificate{URIs: []*url.URL{peerURI}}
+	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{peer}, VerifiedChains: [][]*x509.Certificate{{peer}}}
+
+	rec := httptest.NewRecorder()
+	harness.handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), `"code":"REGISTRY_WRITER_UNAVAILABLE"`) {
+		t.Fatalf("status=%d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Writer that satisfies RegistryWriter without InternalDirtyWindowWriter also returns 503 cleanly.
+	backend := newMemoryScheduleBackend()
+	client := newScheduleHTTPClient(t, backend)
+	resp := client.do(t, http.MethodPost, RegistryPathPrefix+"sites/"+testSiteA1+"/accounting/dirty-windows", testGrantClaims(registryauth.ActionMeterBindingResolve), "", map[string]any{
+		"granularity": "HOUR",
+		"windowStart": "2026-07-21T00:00:00Z",
+		"windowEnd":   "2026-07-21T01:00:00Z",
+		"reason":      "backfill",
+		"source":      "BACKFILL",
+	})
+	if resp.Code != http.StatusServiceUnavailable || !strings.Contains(resp.Body.String(), `"code":"REGISTRY_WRITER_UNAVAILABLE"`) {
+		t.Fatalf("non-implementing writer status=%d, body=%s", resp.Code, resp.Body.String())
 	}
 }
 
