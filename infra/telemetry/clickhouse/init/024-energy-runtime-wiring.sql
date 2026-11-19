@@ -1,7 +1,7 @@
 -- Runtime wiring for v2 hourly energy facts, layered efficiency / meter balance diagnostics,
--- and condition anchor readers across analytics, telemetry query, and Cube identities.
+-- DEFINER-scoped active power & operating condition views, and reader grants across analytics,
+-- telemetry query, and Cube identities.
 
-GRANT SELECT ON telemetry_history.observations TO analytics_projector_reader;
 GRANT SELECT ON analytics.energy_hourly TO analytics_projector_reader;
 GRANT SELECT ON analytics.energy_hourly_v2 TO analytics_projector_reader;
 GRANT SELECT ON analytics.site_condition_anchors_hourly_latest TO analytics_projector_reader;
@@ -16,6 +16,108 @@ GRANT SELECT ON analytics.energy_interval_facts_visible TO telemetry_query_histo
 GRANT SELECT ON analytics.site_total_submeters_visible TO telemetry_query_history_reader;
 
 GRANT SELECT ON analytics.site_condition_anchors_hourly_latest TO cube_analytics_reader;
+
+CREATE OR REPLACE VIEW analytics.hourly_active_power_profile
+DEFINER = CURRENT_USER
+SQL SECURITY DEFINER AS
+SELECT
+  profile.profile_tenant_id AS tenant_id,
+  profile.profile_site_id AS site_id,
+  profile.profile_device_id AS device_id,
+  profile.profile_hour_utc AS hour_utc,
+  profile.profile_mean_kw AS mean_kw,
+  profile.profile_sample_count AS sample_count
+FROM (
+  SELECT
+    assumeNotNull(raw.tenant_id) AS profile_tenant_id,
+    assumeNotNull(raw.site_id) AS profile_site_id,
+    assumeNotNull(raw.device_id) AS profile_device_id,
+    toDateTime(toStartOfHour(raw.sampled_at), 'UTC') AS profile_hour_utc,
+    toFloat64(avg(assumeNotNull(raw.value_number))) AS profile_mean_kw,
+    toUInt64(count()) AS profile_sample_count
+  FROM telemetry_history.observations AS raw
+  WHERE raw.acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER')
+    AND raw.quality IN ('GOOD', 'INTERPOLATED', 'AGGREGATED')
+    AND raw.tenant_id IS NOT NULL
+    AND raw.site_id IS NOT NULL
+    AND raw.device_id IS NOT NULL
+    AND raw.value_number IS NOT NULL
+    AND isFinite(raw.value_number)
+    AND raw.value_number > 0
+    AND raw.telemetry_key IN (
+      'hvac_meter.active_power',
+      'plant.active_power',
+      'active_power',
+      'power_kw',
+      'chiller.power'
+    )
+  GROUP BY
+    profile_tenant_id,
+    profile_site_id,
+    profile_device_id,
+    profile_hour_utc
+) AS profile;
+
+CREATE OR REPLACE VIEW analytics.operating_condition_observations
+DEFINER = CURRENT_USER
+SQL SECURITY DEFINER AS
+SELECT
+  cond.cond_tenant_id AS tenant_id,
+  cond.cond_site_id AS site_id,
+  cond.cond_device_id AS device_id,
+  cond.cond_telemetry_key AS telemetry_key,
+  cond.cond_sampled_at AS sampled_at,
+  cond.cond_hour_utc AS hour_utc,
+  cond.cond_value_number AS value_number,
+  cond.cond_value_text AS value_text
+FROM (
+  SELECT
+    assumeNotNull(raw.tenant_id) AS cond_tenant_id,
+    assumeNotNull(raw.site_id) AS cond_site_id,
+    assumeNotNull(raw.device_id) AS cond_device_id,
+    raw.telemetry_key AS cond_telemetry_key,
+    raw.sampled_at AS cond_sampled_at,
+    toDateTime(toStartOfHour(raw.sampled_at), 'UTC') AS cond_hour_utc,
+    raw.value_number AS cond_value_number,
+    coalesce(
+      raw.value_string,
+      if(
+        raw.value_boolean IS NOT NULL,
+        toNullable(if(assumeNotNull(raw.value_boolean) != 0, 'true', 'false')),
+        CAST(NULL, 'Nullable(String)')
+      ),
+      raw.value_json
+    ) AS cond_value_text
+  FROM telemetry_history.observations AS raw
+  WHERE raw.acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER')
+    AND raw.quality IN ('GOOD', 'INTERPOLATED', 'AGGREGATED')
+    AND raw.tenant_id IS NOT NULL
+    AND raw.site_id IS NOT NULL
+    AND raw.device_id IS NOT NULL
+    AND raw.telemetry_key IN (
+      'outdoor_wet_bulb_temp',
+      'weather.wet_bulb_temp',
+      'ambient.wet_bulb_temp',
+      'wet_bulb_temp',
+      'outdoor_dry_bulb_temp',
+      'weather.dry_bulb_temp',
+      'ambient.dry_bulb_temp',
+      'dry_bulb_temp',
+      'ambient_temp',
+      'outdoor_temp',
+      'plant.control_mode',
+      'ai.control_mode',
+      'control_mode',
+      'ai_closed_loop',
+      'ai_enabled',
+      'plant.ai_enabled',
+      'chilled_water.rated_capacity_kw',
+      'plant.rated_capacity_kw'
+    )
+) AS cond;
+
+GRANT SELECT ON analytics.hourly_active_power_profile TO analytics_projector_reader;
+GRANT SELECT ON analytics.operating_condition_observations TO analytics_projector_reader;
 
 CREATE OR REPLACE VIEW analytics.energy_hourly_effective
 DEFINER = CURRENT_USER
