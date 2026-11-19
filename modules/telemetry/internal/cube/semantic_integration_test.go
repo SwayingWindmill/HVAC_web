@@ -12,10 +12,11 @@ import (
 	"github.com/quanlaihe/hvac-web/modules/telemetry/internal/analytics"
 )
 
-// One question, several measures of a view: run-analytics-cube-tests.mjs has projected the Site's
-// electricity (2 kWh in each of the 12:00 and 13:00 buckets) and cooling at four times it, so each
-// hour reads 2 kWh, 8 kWh and a COP of 4. Another Site's query reads none of it. The answer is
-// incomplete while the data (to 13:05) falls short of the range or a bucket has no rows.
+// One question, several measures of a view: run-analytics-cube-tests.mjs projects the Site's
+// Option A half-open intervals ((12:55, 12:58]: 2 kWh, (12:58, 13:00]: 1 kWh -> 3 kWh in 12:00;
+// (13:00, 13:05]: 1 kWh -> 1 kWh in 13:00) and cooling at four times it, so 12:00 reads 3 kWh,
+// 12 kWh, COP 4 and 13:00 reads 1 kWh, 4 kWh, COP 4. Another Site's query reads none of it.
+// The answer is incomplete while the data (to 13:05) falls short of the range or a bucket has no rows.
 func TestCubeAnswersAMultiMeasureSemanticQueryForTheQueriedSite(t *testing.T) {
 	cubeURL := strings.TrimSpace(os.Getenv("ANALYTICS_CUBE_TEST_URL"))
 	if cubeURL == "" {
@@ -50,8 +51,8 @@ func TestCubeAnswersAMultiMeasureSemanticQueryForTheQueriedSite(t *testing.T) {
 		{Name: "cop", Title: "综合能效", Kind: analyticsmodel.SemanticColumnMeasure},
 	}
 	wantRows := [][]any{
-		{"2026-07-29T12:00:00Z", 2.0, 8.0, 4.0},
-		{"2026-07-29T13:00:00Z", 2.0, 8.0, 4.0},
+		{"2026-07-29T12:00:00Z", 3.0, 12.0, 4.0},
+		{"2026-07-29T13:00:00Z", 1.0, 4.0, 4.0},
 	}
 	if !reflect.DeepEqual(response.Columns, wantColumns) || !reflect.DeepEqual(response.Rows, wantRows) {
 		t.Fatalf("columns = %+v\nrows = %+v", response.Columns, response.Rows)
