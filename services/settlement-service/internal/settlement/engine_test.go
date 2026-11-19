@@ -368,6 +368,184 @@ func TestCalculatePeriodRejectsImplicitTimezoneTariffGapOverlapAndNonFiniteFact(
 	})
 }
 
+func TestCalculatePeriodSupportsFiveTierTOUDeepValleyAndHolidayCalendar(t *testing.T) {
+	shanghai := shanghaiLocation(t)
+	// 2026-10-01 Thursday (HOLIDAY), 2026-10-02 Friday (SPECIAL_DAY), 2026-10-03 Saturday (WEEKDAY override), 2026-10-04 Sunday (normal WEEKEND).
+	start := time.Date(2026, 10, 1, 0, 0, 0, 0, shanghai)
+	end := start.AddDate(0, 0, 4)
+
+	repo := &fakeRepo{
+		period: Period{
+			TenantID: "t", SiteID: "s", ID: "p-holiday", BoundaryID: "b",
+			Timezone: "Asia/Shanghai", Status: "OPEN", Start: start.UTC(), End: end.UTC(),
+		},
+		bindings: []MetricBinding{
+			{MetricBindingID: "energy-auto", MetricVersionID: "energy-v1", MetricCode: "energy", Role: "ENERGY"},
+			{MetricBindingID: "demand-max", MetricVersionID: "demand-v1", MetricCode: "demand", Role: "DEMAND"},
+		},
+		tariff: Tariff{
+			ID: "tariff-5tier", VersionID: "v1", Version: 1, Currency: "CNY", Timezone: "Asia/Shanghai",
+			EffectiveFrom: start.UTC(),
+			Holidays: map[string]string{
+				"2026-10-01": "HOLIDAY",
+				"2026-10-02": "SPECIAL_DAY",
+				"2026-10-03": "WEEKDAY",
+			},
+			Periods: []TariffPeriod{
+				// WEEKDAY 5-tier TOU
+				{Code: "DEEP_VALLEY", DayType: "WEEKDAY", StartMinute: 0, EndMinute: 240, EnergyRate: 0.15},
+				{Code: "VALLEY", DayType: "WEEKDAY", StartMinute: 240, EndMinute: 480, EnergyRate: 0.30},
+				{Code: "FLAT", DayType: "WEEKDAY", StartMinute: 480, EndMinute: 660, EnergyRate: 0.70},
+				{Code: "PEAK", DayType: "WEEKDAY", StartMinute: 660, EndMinute: 840, EnergyRate: 1.10, DemandRate: 30},
+				{Code: "SUPER_PEAK", DayType: "WEEKDAY", StartMinute: 840, EndMinute: 1440, EnergyRate: 1.45, DemandRate: 40},
+				// WEEKEND fallback for SPECIAL_DAY (no SPECIAL_DAY periods defined)
+				{Code: "VALLEY", DayType: "WEEKEND", StartMinute: 0, EndMinute: 1440, EnergyRate: 0.35},
+				// Explicit HOLIDAY periods
+				{Code: "DEEP_VALLEY", DayType: "HOLIDAY", StartMinute: 0, EndMinute: 1440, EnergyRate: 0.12},
+			},
+		},
+	}
+
+	facts := &fakeFacts{facts: []Fact{
+		// Oct 1 10:00+08 (HOLIDAY -> DEEP_VALLEY @ 0.12): 100 kWh -> 12.00 CNY
+		{
+			ID: "f-holiday", MetricBindingID: "energy-auto", MetricVersionID: "energy-v1", MetricCode: "energy", Role: "ENERGY",
+			Start: time.Date(2026, 10, 1, 10, 0, 0, 0, shanghai).UTC(), End: time.Date(2026, 10, 1, 11, 0, 0, 0, shanghai).UTC(),
+			CalculatedAt: end.UTC(), Value: 100, Revision: 1, Quality: "GOOD", Completeness: 1,
+		},
+		// Oct 2 10:00+08 (SPECIAL_DAY with no SPECIAL_DAY periods -> falls back to WEEKEND VALLEY @ 0.35): 40 kWh -> 14.00 CNY
+		{
+			ID: "f-special-fallback", MetricBindingID: "energy-auto", MetricVersionID: "energy-v1", MetricCode: "energy", Role: "ENERGY",
+			Start: time.Date(2026, 10, 2, 10, 0, 0, 0, shanghai).UTC(), End: time.Date(2026, 10, 2, 11, 0, 0, 0, shanghai).UTC(),
+			CalculatedAt: end.UTC(), Value: 40, Revision: 1, Quality: "GOOD", Completeness: 1,
+		},
+		// Oct 3 Saturday 01:00+08 (WEEKDAY override -> DEEP_VALLEY @ 0.15): 50 kWh -> 7.50 CNY
+		{
+			ID: "f-sat-deep-valley", MetricBindingID: "energy-auto", MetricVersionID: "energy-v1", MetricCode: "energy", Role: "ENERGY",
+			Start: time.Date(2026, 10, 3, 1, 0, 0, 0, shanghai).UTC(), End: time.Date(2026, 10, 3, 2, 0, 0, 0, shanghai).UTC(),
+			CalculatedAt: end.UTC(), Value: 50, Revision: 1, Quality: "GOOD", Completeness: 1,
+		},
+		// Oct 3 Saturday 15:00+08 (WEEKDAY override -> SUPER_PEAK @ 1.45): 20 kWh -> 29.00 CNY
+		{
+			ID: "f-sat-super-peak", MetricBindingID: "energy-auto", MetricVersionID: "energy-v1", MetricCode: "energy", Role: "ENERGY",
+			Start: time.Date(2026, 10, 3, 15, 0, 0, 0, shanghai).UTC(), End: time.Date(2026, 10, 3, 16, 0, 0, 0, shanghai).UTC(),
+			CalculatedAt: end.UTC(), Value: 20, Revision: 1, Quality: "GOOD", Completeness: 1,
+		},
+		// Demand on Oct 3 15:00+08 (SUPER_PEAK demand @ 40): 10 kW -> 400.00 CNY
+		{
+			ID: "f-sat-demand", MetricBindingID: "demand-max", MetricVersionID: "demand-v1", MetricCode: "demand", Role: "DEMAND",
+			Start: time.Date(2026, 10, 3, 15, 0, 0, 0, shanghai).UTC(), End: time.Date(2026, 10, 3, 16, 0, 0, 0, shanghai).UTC(),
+			CalculatedAt: end.UTC(), Value: 10, Revision: 1, Quality: "GOOD", Completeness: 1,
+		},
+	}}
+
+	engine, err := New(repo, facts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine.now = func() time.Time { return end.Add(time.Hour).UTC() }
+
+	got, err := engine.CalculatePeriod(context.Background(), "t", "s", "p-holiday")
+	if err != nil {
+		t.Fatalf("CalculatePeriod: %v", err)
+	}
+	calc := got.Calculation
+	if calc.EnergyBreakdown["DEEP_VALLEY"] != 150 || calc.EnergyCost["DEEP_VALLEY"] != 19.5 {
+		t.Fatalf("DEEP_VALLEY = (%v kWh, %v CNY), want (150, 19.5)", calc.EnergyBreakdown["DEEP_VALLEY"], calc.EnergyCost["DEEP_VALLEY"])
+	}
+	if calc.EnergyBreakdown["VALLEY"] != 40 || calc.EnergyCost["VALLEY"] != 14 {
+		t.Fatalf("VALLEY = (%v kWh, %v CNY), want (40, 14)", calc.EnergyBreakdown["VALLEY"], calc.EnergyCost["VALLEY"])
+	}
+	if calc.EnergyBreakdown["SUPER_PEAK"] != 20 || calc.EnergyCost["SUPER_PEAK"] != 29 {
+		t.Fatalf("SUPER_PEAK = (%v kWh, %v CNY), want (20, 29)", calc.EnergyBreakdown["SUPER_PEAK"], calc.EnergyCost["SUPER_PEAK"])
+	}
+	if calc.DemandCost["SUPER_PEAK"] != 400 {
+		t.Fatalf("SUPER_PEAK demand cost = %v, want 400", calc.DemandCost["SUPER_PEAK"])
+	}
+	// Total: 19.50 + 14.00 + 29.00 + 400.00 = 462.50
+	if calc.TotalCost != 462.5 {
+		t.Fatalf("TotalCost = %v, want 462.5", calc.TotalCost)
+	}
+}
+
+func TestCalculatePeriodFixedPointEliminatesFloatDriftAndRoundsHalfUp(t *testing.T) {
+	shanghai := shanghaiLocation(t)
+	start := time.Date(2026, 8, 3, 0, 0, 0, 0, shanghai)
+	end := start.Add(24 * time.Hour)
+
+	repo := &fakeRepo{
+		period: Period{
+			TenantID: "t", SiteID: "s", ID: "p-fp", BoundaryID: "b",
+			Timezone: "Asia/Shanghai", Status: "OPEN", Start: start.UTC(), End: end.UTC(),
+		},
+		bindings: []MetricBinding{
+			{MetricBindingID: "energy-binding", MetricVersionID: "energy-v1", MetricCode: "energy", Role: "ENERGY"},
+			{MetricBindingID: "demand-binding", MetricVersionID: "demand-v1", MetricCode: "demand", Role: "DEMAND"},
+		},
+		tariff: Tariff{
+			VersionID: "tariff-fp", Currency: "CNY", Timezone: "Asia/Shanghai",
+			Periods: []TariffPeriod{
+				// 0.015 * 0.1 kWh/interval = 0.0015 CNY per interval; 100 intervals = 0.15 CNY exact.
+				// Also 1.005 CNY subtotal rounds half-up to 1.01 CNY.
+				{Code: "DEEP_VALLEY", DayType: "WEEKDAY", StartMinute: 0, EndMinute: 240, EnergyRate: 0.1},
+				{Code: "FLAT", DayType: "WEEKDAY", StartMinute: 240, EndMinute: 1440, EnergyRate: 0.5, DemandRate: 1},
+			},
+		},
+	}
+
+	facts := make([]Fact, 0, 102)
+	// 100 tiny intervals of 0.1 kWh + 0.2 kWh alternating at rate 0.1 CNY/kWh = 15.0 kWh * 0.1 = 1.50 CNY exact.
+	for i := 0; i < 100; i++ {
+		val := 0.1
+		if i%2 == 1 {
+			val = 0.2
+		}
+		t0 := start.Add(time.Duration(i) * time.Minute).UTC()
+		facts = append(facts, Fact{
+			ID: "e-tiny", MetricBindingID: "energy-binding", MetricVersionID: "energy-v1", MetricCode: "energy", Role: "ENERGY",
+			Start: t0, End: t0.Add(time.Minute), CalculatedAt: end.UTC(), Value: val, Revision: 1, Quality: "GOOD", Completeness: 1,
+		})
+	}
+	// FLAT: 2.01 kWh * 0.5 = 1.005 CNY -> half-up rounds subtotal to 1.01 CNY.
+	facts = append(facts, Fact{
+		ID: "e-halfup", MetricBindingID: "energy-binding", MetricVersionID: "energy-v1", MetricCode: "energy", Role: "ENERGY",
+		Start: start.Add(5 * time.Hour).UTC(), End: start.Add(6 * time.Hour).UTC(), CalculatedAt: end.UTC(), Value: 2.01, Revision: 1, Quality: "GOOD", Completeness: 1,
+	})
+	// DEMAND: 10.005 kW * 1 = 10.005 CNY -> half-up rounds subtotal to 10.01 CNY.
+	facts = append(facts, Fact{
+		ID: "d-halfup", MetricBindingID: "demand-binding", MetricVersionID: "demand-v1", MetricCode: "demand", Role: "DEMAND",
+		Start: start.Add(5 * time.Hour).UTC(), End: start.Add(6 * time.Hour).UTC(), CalculatedAt: end.UTC(), Value: 10.005, Revision: 1, Quality: "GOOD", Completeness: 1,
+	})
+
+	engine, err := New(repo, &fakeFacts{facts: facts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine.now = func() time.Time { return end.Add(time.Hour).UTC() }
+
+	got, err := engine.CalculatePeriod(context.Background(), "t", "s", "p-fp")
+	if err != nil {
+		t.Fatalf("CalculatePeriod: %v", err)
+	}
+	calc := got.Calculation
+	if calc.EnergyBreakdown["DEEP_VALLEY"] != 15 {
+		t.Fatalf("DEEP_VALLEY energy = %v, want exact 15", calc.EnergyBreakdown["DEEP_VALLEY"])
+	}
+	if calc.EnergyCost["DEEP_VALLEY"] != 1.5 {
+		t.Fatalf("DEEP_VALLEY cost = %v, want exact 1.5", calc.EnergyCost["DEEP_VALLEY"])
+	}
+	if calc.EnergyCost["FLAT"] != 1.01 {
+		t.Fatalf("FLAT energy cost = %v, want 1.01 (half-up from 1.005)", calc.EnergyCost["FLAT"])
+	}
+	if calc.DemandCost["FLAT"] != 10.01 {
+		t.Fatalf("FLAT demand cost = %v, want 10.01 (half-up from 10.005)", calc.DemandCost["FLAT"])
+	}
+	// Total: 1.50 + 1.01 + 10.01 = 12.52
+	if calc.TotalCost != 12.52 {
+		t.Fatalf("TotalCost = %v, want 12.52", calc.TotalCost)
+	}
+}
+
 func ptrTime(value time.Time) *time.Time {
 	return &value
 }

@@ -24,8 +24,9 @@ type ImportTariffVersion struct {
 // ImportTariffs is the Site's import Tariff timeline before an instant, oldest first, on its
 // first grid connection by boundary code, as Settlement and M&V price it.
 type ImportTariffs struct {
-	SiteID   string                `json:"siteId"`
-	Versions []ImportTariffVersion `json:"versions"`
+	SiteID       string                `json:"siteId"`
+	Versions     []ImportTariffVersion `json:"versions"`
+	HolidayDates map[string]string     `json:"holidayDates,omitempty"`
 }
 
 func (store *PostgresStore) ListImportTariffs(ctx context.Context, claims registryauth.GrantClaims, siteID string, before time.Time) (ImportTariffs, error) {
@@ -86,6 +87,13 @@ ORDER BY boundary.boundary_code, 3
 			if timeline.Versions[index].Periods, err = queryTariffPeriods(ctx, transaction, timeline.Versions[index].VersionID); err != nil {
 				return err
 			}
+		}
+		holidays, err := querySiteHolidayDates(ctx, transaction, siteID, claims.DeniedSiteIDs)
+		if err != nil {
+			return err
+		}
+		if len(holidays) > 0 {
+			timeline.HolidayDates = holidays
 		}
 		return nil
 	})

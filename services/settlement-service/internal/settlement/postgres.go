@@ -199,6 +199,13 @@ ORDER BY tp.tariff_version_id,tp.day_type,tp.ordinal`, tenantID, siteID, version
 		Periods:       versions[0].Periods,
 		Versions:      versions,
 	}
+	holidays, err := loadSiteCalendarHolidays(ctx, tx, tenantID, siteID)
+	if err != nil {
+		return Period{}, nil, Tariff{}, err
+	}
+	if len(holidays) > 0 {
+		tariff.Holidays = holidays
+	}
 
 	metricRows, err := tx.Query(ctx, `SELECT smb.id::text,smb.metric_binding_id::text,mb.metric_version_id::text,m.metric_code,smb.metric_role,coalesce(smb.tariff_period_code,'')
 FROM core_registry.settlement_metric_bindings smb
@@ -294,7 +301,67 @@ func nullableTime(value time.Time) any {
 	return value.UTC()
 }
 
-func upsertCurrentProjection(ctx context.Context, tx pgx.Tx, snapshot Snapshot, cost map[string]any) error {
+func loadSiteCalendarHolidays(ctx context.Context, tx pgx.Tx, tenantID, siteID string) (map[string]string, error) {
+	var hasTable bool
+	if err := tx.QueryRow(ctx, `SELECT to_regclass('core_registry.site_calendar_holidays') IS NOT NULL`).Scan(&hasTable); err != nil {
+		return nil, fmt.Errorf("check site calendar holidays table: %w", err)
+	}
+	if !hasTable {
+		return nil, nil
+	}
+	rows, err := tx.Query(ctx, `SELECT to_char(holiday_date,'YYYY-MM-DD'),day_type
+FROM core_registry.site_calendar_holidays
+WHERE tenant_id=$1::uuid AND site_id=$2::uuid
+ORDER BY holiday_date`, tenantID, siteID)
+	if err != nil {
+		return nil, fmt.Errorf("load site calendar holidays: %w", err)
+	}
+	defer rows.Close()
+	holidays := map[string]string{}
+	for rows.Next() {
+		var dateKey, dayType string
+		if err = rows.Scan(&dateKey, &dayType); err != nil {
+			return nil, err
+		}
+		if dateKey != "" && dayType != "" {
+			holidays[dateKey] = dayType
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(holidays) == 0 {
+		return nil, nil
+	}
+	return holidays, nil
+}
+
+type settlementDemandPayload struct {
+	KWByPeriod map[string]float64 `json:"kwByPeriod"`
+}
+
+type settlementCostPayload struct {
+	Currency       string             `json:"currency"`
+	EnergyByPeriod map[string]float64 `json:"energyByPeriod"`
+	DemandByPeriod map[string]float64 `json:"demandByPeriod"`
+	Total          float64            `json:"total"`
+}
+
+type tariffVersionRefPayloadItem struct {
+	TariffVersionID string `json:"tariffVersionId"`
+}
+
+type candidateImpactPayload struct {
+	RecalculatedTotalCost float64 `json:"recalculatedTotalCost"`
+	Currency              string  `json:"currency"`
+}
+
+type candidateEvidencePayload struct {
+	BaseSnapshotID string      `json:"baseSnapshotId"`
+	Recalculated   Calculation `json:"recalculated"`
+}
+
+func upsertCurrentProjection(ctx context.Context, tx pgx.Tx, snapshot Snapshot, cost settlementCostPayload) error {
 	calc := snapshot.Calculation
 	_, err := tx.Exec(ctx, `INSERT INTO core_registry.settlement_current_projection(
  tenant_id,site_id,settlement_period_id,snapshot_id,dataset_revision,settlement_revision_no,
@@ -334,8 +401,8 @@ func (s *PostgresStore) InsertSnapshot(ctx context.Context, snapshot Snapshot) e
 	}
 	calc := snapshot.Calculation
 	tariffs := tariffVersionRefPayload(calc)
-	demand := map[string]any{"kwByPeriod": calc.DemandKW}
-	cost := map[string]any{"currency": calc.Currency, "energyByPeriod": calc.EnergyCost, "demandByPeriod": calc.DemandCost, "total": calc.TotalCost}
+	demand := settlementDemandPayload{KWByPeriod: calc.DemandKW}
+	cost := settlementCostPayload{Currency: calc.Currency, EnergyByPeriod: calc.EnergyCost, DemandByPeriod: calc.DemandCost, Total: calc.TotalCost}
 	_, err = tx.Exec(ctx, `INSERT INTO core_registry.settlement_snapshots(
 id,tenant_id,site_id,settlement_period_id,boundary_id,revision_no,previous_snapshot_id,settlement_revision_id,
 meter_binding_refs,metric_version_refs,tariff_version_refs,source_reading_refs,energy_breakdown,demand,cost,quality,completeness,created_at,
@@ -353,9 +420,9 @@ VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6,$7::uuid,$8::uuid,$9::jso
 	return tx.Commit(ctx)
 }
 
-func tariffVersionRefPayload(calc Calculation) []map[string]any {
+func tariffVersionRefPayload(calc Calculation) []tariffVersionRefPayloadItem {
 	seen := map[string]struct{}{}
-	refs := make([]map[string]any, 0, len(calc.TariffVersionRefs)+1)
+	refs := make([]tariffVersionRefPayloadItem, 0, len(calc.TariffVersionRefs)+1)
 	appendRef := func(id string) {
 		id = strings.TrimSpace(id)
 		if id == "" {
@@ -365,7 +432,7 @@ func tariffVersionRefPayload(calc Calculation) []map[string]any {
 			return
 		}
 		seen[id] = struct{}{}
-		refs = append(refs, map[string]any{"tariffVersionId": id})
+		refs = append(refs, tariffVersionRefPayloadItem{TariffVersionID: id})
 	}
 	for _, id := range calc.TariffVersionRefs {
 		appendRef(id)
@@ -404,31 +471,24 @@ func scanSnapshot(row scanner) (Snapshot, error) {
 		snapshot.Calculation.SourceWatermark = sourceWatermark.UTC()
 	}
 	_ = json.Unmarshal(energy, &snapshot.Calculation.EnergyBreakdown)
-	var tariffRefs []map[string]any
+	var tariffRefs []tariffVersionRefPayloadItem
 	_ = json.Unmarshal(tariffs, &tariffRefs)
 	for _, ref := range tariffRefs {
-		if id, _ := ref["tariffVersionId"].(string); id != "" {
+		if ref.TariffVersionID != "" {
 			if snapshot.Calculation.TariffVersionID == "" {
-				snapshot.Calculation.TariffVersionID = id
+				snapshot.Calculation.TariffVersionID = ref.TariffVersionID
 			}
-			snapshot.Calculation.TariffVersionRefs = append(snapshot.Calculation.TariffVersionRefs, id)
+			snapshot.Calculation.TariffVersionRefs = append(snapshot.Calculation.TariffVersionRefs, ref.TariffVersionID)
 		}
 	}
-	var demandValue struct {
-		KW map[string]float64 `json:"kwByPeriod"`
-	}
+	var demandValue settlementDemandPayload
 	_ = json.Unmarshal(demand, &demandValue)
-	snapshot.Calculation.DemandKW = demandValue.KW
-	var costValue struct {
-		Currency string             `json:"currency"`
-		Energy   map[string]float64 `json:"energyByPeriod"`
-		Demand   map[string]float64 `json:"demandByPeriod"`
-		Total    float64            `json:"total"`
-	}
+	snapshot.Calculation.DemandKW = demandValue.KWByPeriod
+	var costValue settlementCostPayload
 	_ = json.Unmarshal(cost, &costValue)
 	snapshot.Calculation.Currency = costValue.Currency
-	snapshot.Calculation.EnergyCost = costValue.Energy
-	snapshot.Calculation.DemandCost = costValue.Demand
+	snapshot.Calculation.EnergyCost = costValue.EnergyByPeriod
+	snapshot.Calculation.DemandCost = costValue.DemandByPeriod
 	snapshot.Calculation.TotalCost = costValue.Total
 	return snapshot, nil
 }
@@ -480,8 +540,8 @@ LIMIT 1`, candidate.TenantID, candidate.SiteID, candidate.PeriodID, candidate.Ba
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return "", err
 	}
-	impact := map[string]any{"recalculatedTotalCost": candidate.Calculation.TotalCost, "currency": candidate.Calculation.Currency}
-	evidence := map[string]any{"baseSnapshotId": candidate.BaseSnapshotID, "recalculated": candidate.Calculation}
+	impact := candidateImpactPayload{RecalculatedTotalCost: candidate.Calculation.TotalCost, Currency: candidate.Calculation.Currency}
+	evidence := candidateEvidencePayload{BaseSnapshotID: candidate.BaseSnapshotID, Recalculated: candidate.Calculation}
 	_, err = tx.Exec(ctx, `INSERT INTO core_registry.settlement_change_candidates(
  id,tenant_id,site_id,settlement_period_id,reason_code,impact_summary,evidence,status,detected_at,revision,created_at,updated_at,
  base_snapshot_id,calculation_digest)
@@ -567,8 +627,8 @@ func (s *PostgresStore) ApplyRevision(ctx context.Context, candidate Candidate, 
 	}
 	calc := next.Calculation
 	tariffs := tariffVersionRefPayload(calc)
-	demand := map[string]any{"kwByPeriod": calc.DemandKW}
-	cost := map[string]any{"currency": calc.Currency, "energyByPeriod": calc.EnergyCost, "demandByPeriod": calc.DemandCost, "total": calc.TotalCost}
+	demand := settlementDemandPayload{KWByPeriod: calc.DemandKW}
+	cost := settlementCostPayload{Currency: calc.Currency, EnergyByPeriod: calc.EnergyCost, DemandByPeriod: calc.DemandCost, Total: calc.TotalCost}
 	_, err = tx.Exec(ctx, `INSERT INTO core_registry.settlement_snapshots(
 id,tenant_id,site_id,settlement_period_id,boundary_id,revision_no,previous_snapshot_id,settlement_revision_id,meter_binding_refs,metric_version_refs,tariff_version_refs,source_reading_refs,energy_breakdown,demand,cost,quality,completeness,created_at,
 source_metric_revisions,source_watermark,missing_metric_binding_refs,dataset_revision)

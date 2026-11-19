@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/quanlaihe/hvac-web/libs/fixedpoint"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 )
 
@@ -102,10 +103,11 @@ func (input MonthlyElectricityBudgetMutation) Validate() error {
 }
 
 type UtilityBillTouBreakdown struct {
-	SharpKwh  *float64 `json:"sharpKwh,omitempty"`
-	PeakKwh   *float64 `json:"peakKwh,omitempty"`
-	FlatKwh   *float64 `json:"flatKwh,omitempty"`
-	ValleyKwh *float64 `json:"valleyKwh,omitempty"`
+	SharpKwh      *float64 `json:"sharpKwh,omitempty"`
+	PeakKwh       *float64 `json:"peakKwh,omitempty"`
+	FlatKwh       *float64 `json:"flatKwh,omitempty"`
+	ValleyKwh     *float64 `json:"valleyKwh,omitempty"`
+	DeepValleyKwh *float64 `json:"deepValleyKwh,omitempty"`
 }
 
 type UtilityBill struct {
@@ -217,23 +219,29 @@ func (input UtilityBillMutation) Validate() error {
 		return ErrInvalidMutation
 	}
 	if input.TouBreakdown != nil {
-		for _, val := range []*float64{input.TouBreakdown.SharpKwh, input.TouBreakdown.PeakKwh, input.TouBreakdown.FlatKwh, input.TouBreakdown.ValleyKwh} {
+		for _, val := range []*float64{
+			input.TouBreakdown.SharpKwh,
+			input.TouBreakdown.PeakKwh,
+			input.TouBreakdown.FlatKwh,
+			input.TouBreakdown.ValleyKwh,
+			input.TouBreakdown.DeepValleyKwh,
+		} {
 			if val != nil && !validFiniteRange(*val, 0, maxEnergyKwh) {
 				return ErrInvalidMutation
 			}
 		}
 	}
-	energyCents, ok := validMoneyCents(input.EnergyChargeCny, false)
+	energyDec, ok := validMoneyDecimal(input.EnergyChargeCny, false)
 	if !ok {
 		return ErrInvalidMutation
 	}
-	basicCents, ok := validMoneyCents(input.BasicChargeCny, false)
+	basicDec, ok := validMoneyDecimal(input.BasicChargeCny, false)
 	if !ok {
 		return ErrInvalidMutation
 	}
 	switch input.BasicChargeMode {
 	case BasicChargeModeNone:
-		if input.BasicChargeQuantity != nil || basicCents != 0 {
+		if input.BasicChargeQuantity != nil || basicDec != 0 {
 			return ErrInvalidMutation
 		}
 	case BasicChargeModeTransformerCapacityKVA, BasicChargeModeMaxDemandKW:
@@ -253,19 +261,20 @@ func (input UtilityBillMutation) Validate() error {
 			return ErrInvalidMutation
 		}
 	}
-	pfCents, ok := validMoneyCents(input.PowerFactorAdjustmentCny, true)
+	pfDec, ok := validMoneyDecimal(input.PowerFactorAdjustmentCny, true)
 	if !ok {
 		return ErrInvalidMutation
 	}
-	otherCents, ok := validMoneyCents(input.OtherChargesCny, true)
+	otherDec, ok := validMoneyDecimal(input.OtherChargesCny, true)
 	if !ok {
 		return ErrInvalidMutation
 	}
-	totalCents, ok := validMoneyCents(input.TotalPayableCny, false)
+	totalDec, ok := validMoneyDecimal(input.TotalPayableCny, false)
 	if !ok {
 		return ErrInvalidMutation
 	}
-	if energyCents+basicCents+pfCents+otherCents != totalCents {
+	payableSum, err := fixedpoint.Sum([]fixedpoint.Decimal6{energyDec, basicDec, pfDec, otherDec})
+	if err != nil || payableSum.RoundHalfUp(2) != totalDec {
 		return ErrInvalidMutation
 	}
 	if input.ChillerShareOverrideRatio != nil {
@@ -305,33 +314,56 @@ func validFiniteRange(value, minValue, maxValue float64) bool {
 }
 
 func validMoneyCents(value float64, allowNegative bool) (int64, bool) {
+	rounded, ok := validMoneyDecimal(value, allowNegative)
+	if !ok {
+		return 0, false
+	}
+	return rounded.Cents(), true
+}
+
+func validMoneyDecimal(value float64, allowNegative bool) (fixedpoint.Decimal6, bool) {
 	if math.IsNaN(value) || math.IsInf(value, 0) || math.Abs(value) > maxMoneyAmountCny {
 		return 0, false
 	}
 	if !allowNegative && value < 0 {
 		return 0, false
 	}
-	scaled := value * 100
-	rounded := math.Round(scaled)
-	if math.Abs(scaled-rounded) > 1e-4 {
+	dec, err := fixedpoint.FromFloat64(value)
+	if err != nil {
 		return 0, false
 	}
-	return int64(rounded), true
+	rounded := dec.RoundHalfUp(2)
+	diff := dec - rounded
+	if diff < 0 {
+		diff = -diff
+	}
+	if diff > 100 {
+		return 0, false
+	}
+	return rounded, true
 }
 
 func roundCents(value float64) float64 {
-	return math.Round(value*100) / 100
+	dec, err := fixedpoint.FromFloat64(value)
+	if err != nil {
+		return math.Round(value*100) / 100
+	}
+	return dec.RoundHalfUp(2).Float64()
 }
 
 func formatNumericCents(value float64) string {
-	return fmt.Sprintf("%.2f", roundCents(value))
+	dec, err := fixedpoint.FromFloat64(value)
+	if err != nil {
+		return fmt.Sprintf("%.2f", math.Round(value*100)/100)
+	}
+	return dec.FormatFixed(2)
 }
 
 func normalizeTouBreakdown(input *UtilityBillTouBreakdown) *UtilityBillTouBreakdown {
 	if input == nil {
 		return nil
 	}
-	if input.SharpKwh == nil && input.PeakKwh == nil && input.FlatKwh == nil && input.ValleyKwh == nil {
+	if input.SharpKwh == nil && input.PeakKwh == nil && input.FlatKwh == nil && input.ValleyKwh == nil && input.DeepValleyKwh == nil {
 		return nil
 	}
 	copyBreakdown := *input
@@ -399,11 +431,11 @@ LIMIT 120
 			); err != nil {
 				return fmt.Errorf("scan monthly electricity budget: %w", err)
 			}
-			parsedAmount, err := strconv.ParseFloat(amountText, 64)
+			parsedAmount, err := parseMoneyField(amountText)
 			if err != nil {
 				return fmt.Errorf("parse monthly electricity budget amount: %w", err)
 			}
-			item.BudgetAmountCny = roundCents(parsedAmount)
+			item.BudgetAmountCny = parsedAmount
 			item.CreatedAt = formatInstant(createdAt)
 			item.UpdatedAt = formatInstant(updatedAt)
 			list.Items = append(list.Items, item)
@@ -670,11 +702,11 @@ func scanUtilityBill(row rowScanner) (UtilityBill, error) {
 }
 
 func parseMoneyField(raw string) (float64, error) {
-	val, err := strconv.ParseFloat(raw, 64)
+	dec, err := fixedpoint.Parse(raw)
 	if err != nil {
 		return 0, fmt.Errorf("parse numeric money field %q: %w", raw, err)
 	}
-	return roundCents(val), nil
+	return dec.RoundHalfUp(2).Float64(), nil
 }
 
 func (store *PostgresStore) SaveUtilityBill(ctx context.Context, claims registryauth.GrantClaims, input UtilityBillMutation) (UtilityBill, bool, error) {
