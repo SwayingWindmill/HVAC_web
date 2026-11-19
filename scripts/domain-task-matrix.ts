@@ -38,6 +38,7 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
     core: Object.freeze([
       npmRun('contracts:check'),
       npmRun('migrations:sync:check'),
+      npmRun('clickhouse:sql:check'),
       npmRun('operations-agent:contracts:check'),
       npmRun('semantic:catalog:check'),
       npmRun('ownership:check'),

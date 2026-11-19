@@ -348,7 +348,8 @@ for (const file of files) {
         lower.includes('production-rollout') ||
         lower.includes('migration-freeze') ||
         lower.includes('migration-conventions') ||
-        lower.includes('sync-phase1-migrations'),
+        lower.includes('sync-phase1-migrations') ||
+        lower.includes('clickhouse-sql'),
       () => add(contractProfiles, ['core']),
     );
     if (!scriptMatched) {
