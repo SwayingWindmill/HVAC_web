@@ -36,6 +36,29 @@ async function alarmsSince(siteId: string, from: Date, signal: AbortSignal): Pro
 
 const ARCHIVE_UNAVAILABLE = { unavailable: '报告存档暂不可用' };
 
+const reportLayeredEfficiencySchema = z.object({
+  plantCOP: z.number().nullish(),
+  chillerCOP: z.number().nullish(),
+  chilledPumpWTF: z.number().nullish(),
+  coolingPumpWTF: z.number().nullish(),
+  towerPowerShare: z.number().nullish(),
+});
+
+const reportMeterBalanceSchema = z.object({
+  status: z.string().nullish(),
+  siteKWh: z.number().nullish(),
+  submeterSumKWh: z.number().nullish(),
+  diffKWh: z.number().nullish(),
+  imbalanceRatio: z.number().nullish(),
+});
+
+const reportConditionAnchorsSchema = z.object({
+  meanWetBulbC: z.number().nullish(),
+  meanDryBulbC: z.number().nullish(),
+  meanLoadRatio: z.number().nullish(),
+  aiClosedLoopShare: z.number().nullish(),
+});
+
 const storedReportSchema: z.ZodType<StoredReport> = z.object({
   id: z.string(),
   month: z.string(),
@@ -80,6 +103,9 @@ const storedReportSchema: z.ZodType<StoredReport> = z.object({
       unpricedHours: z.number(),
       plantKWh: z.number(),
     }),
+    layeredEfficiency: reportLayeredEfficiencySchema.nullish().transform((value) => value ?? undefined),
+    meterBalance: reportMeterBalanceSchema.nullish().transform((value) => value ?? undefined),
+    conditionAnchors: reportConditionAnchorsSchema.nullish().transform((value) => value ?? undefined),
   }),
 });
 

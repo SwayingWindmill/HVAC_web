@@ -54,3 +54,53 @@ func TestHourlySamplesReadTheBoundaryAndThePlantInTheWindow(t *testing.T) {
 		t.Fatal("a malformed tenant reached ClickHouse")
 	}
 }
+
+func TestHourlySamplesJoinConditionAnchorsAndAllowNulls(t *testing.T) {
+	var sql string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		sql = string(body)
+		_, _ = writer.Write([]byte(`{"period_start":"2026-10-11T16:00:00Z","energy_kwh":210,"cooling_kwh":740,"plant_kwh":210,"outdoor_wet_bulb_c":24.5,"outdoor_dry_bulb_c":29.8,"plant_load_ratio":0.68,"ai_closed_loop_share":0.75}` + "\n" +
+			`{"period_start":"2026-10-11T17:00:00Z","energy_kwh":95,"cooling_kwh":300,"plant_kwh":95,"outdoor_wet_bulb_c":null,"outdoor_dry_bulb_c":null,"plant_load_ratio":null,"ai_closed_loop_share":null}` + "\n"))
+	}))
+	defer server.Close()
+
+	reader, err := NewClickHouseHours(server.URL, "mv_service_reader", "", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	from := time.Date(2026, 10, 11, 16, 0, 0, 0, time.UTC)
+	samples, err := reader.HourlySamples(t.Context(), testTenant, testSite, nil, from, from.Add(2*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(samples) != 2 {
+		t.Fatalf("samples len = %d, want 2", len(samples))
+	}
+	if samples[0].OutdoorWetBulbC == nil || *samples[0].OutdoorWetBulbC != 24.5 ||
+		samples[0].OutdoorDryBulbC == nil || *samples[0].OutdoorDryBulbC != 29.8 ||
+		samples[0].PlantLoadRatio == nil || *samples[0].PlantLoadRatio != 0.68 ||
+		samples[0].AIClosedLoopShare == nil || *samples[0].AIClosedLoopShare != 0.75 {
+		t.Fatalf("first sample anchors = %+v", samples[0])
+	}
+	if samples[1].OutdoorWetBulbC != nil || samples[1].OutdoorDryBulbC != nil ||
+		samples[1].PlantLoadRatio != nil || samples[1].AIClosedLoopShare != nil {
+		t.Fatalf("second sample anchors = %+v, want all nil", samples[1])
+	}
+	for _, want := range []string{
+		"WITH metrics_hourly AS",
+		"HAVING count()=2",
+		"LEFT JOIN",
+		"analytics.site_condition_anchors_hourly_latest",
+		"ON metrics_hourly.period_start = cond.hour",
+		"outdoor_wet_bulb_c",
+		"outdoor_dry_bulb_c",
+		"plant_load_ratio",
+		"ai_closed_loop_share",
+		"SETTINGS join_use_nulls = 1",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("query lacks %q:\n%s", want, sql)
+		}
+	}
+}

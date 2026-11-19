@@ -24,7 +24,20 @@ import {
   alarmSummary, findingSummary, recentMonths, reportWindow, snapshotDays, snapshotPeak, workOrderSummary,
   type ReportWindow, type StoredReport,
 } from '../report-model';
-import { CostTable, EnergyTrend, energyText, Figure, FigureGrid, monthLabel, NOT_ARCHIVED, OperationsGrid, ReportSheet, SavingsGrid, Section } from './ReportParts';
+import {
+  CostTable,
+  EfficiencyAndAnchorsSection,
+  EnergyTrend,
+  energyText,
+  Figure,
+  FigureGrid,
+  monthLabel,
+  NOT_ARCHIVED,
+  OperationsGrid,
+  ReportSheet,
+  SavingsGrid,
+  Section,
+} from './ReportParts';
 import { YearlyReport } from './YearlyReport';
 
 const siteRoute = getRouteApi('/_app/_site');
@@ -234,6 +247,11 @@ function ArchivedMonthlyReport({ stored, span }: { readonly stored: StoredReport
           </p>
         ) : null}
         <EnergyTrend rows={trendRows} />
+        <EfficiencyAndAnchorsSection
+          layeredEfficiency={report.layeredEfficiency}
+          meterBalance={report.meterBalance}
+          conditionAnchors={report.conditionAnchors}
+        />
       </Section>
 
       <Section index={3} title="电费构成" description="分时电度电费取自存档；需量电费按当前记录与电价现算，正式电费以结算为准">

@@ -98,19 +98,26 @@ func (store *PostgresStore) scoped(ctx context.Context, tenantID, siteID string,
 
 const measureColumns = `id::text, tenant_id::text, site_id::text, name, kind, description, evidence, evidence_command_id::text, boundary_device_id::text, planned_at, implemented_at, ended_at,
 investment_cny, expected_annual_kwh, status, baseline_from, baseline_to, baseline_intercept_kwh, baseline_slope, baseline_samples,
-baseline_expected_hours, baseline_cv_rmse, baseline_nmbe, baseline_trusted, baseline_reason, created_by::text, updated_by::text, created_at, updated_at`
+baseline_expected_hours, baseline_cv_rmse, baseline_nmbe, baseline_trusted, baseline_reason,
+baseline_model_kind, baseline_wet_bulb_slope, baseline_r_squared, baseline_mean_wet_bulb_c,
+created_by::text, updated_by::text, created_at, updated_at`
+
+const dailyColumns = `measure_id::text, to_char(day, 'YYYY-MM-DD'), expected_hours, hours, unpriced_hours,
+adjusted_baseline_kwh, actual_kwh, avoided_kwh, avoided_cost, plant_kwh,
+mean_wet_bulb_c, mean_dry_bulb_c, mean_load_ratio, ai_closed_loop_share, verified_at`
 
 func scanMeasure(row pgx.Row) (Measure, error) {
 	var measure Measure
-	var kind, status string
+	var kind, status, modelKind string
 	var from, to *time.Time
-	var intercept, slope, cvrmse, nmbe *float64
+	var intercept, slope, cvrmse, nmbe, wetBulbSlope, rSquared, meanWetBulbC *float64
 	var samples, expected *int
 	var trusted *bool
 	var reason string
 	err := row.Scan(&measure.ID, &measure.TenantID, &measure.SiteID, &measure.Name, &kind, &measure.Description, &measure.Evidence, &measure.EvidenceCommandID,
 		&measure.BoundaryDeviceID, &measure.PlannedAt, &measure.ImplementedAt, &measure.EndedAt, &measure.InvestmentCNY, &measure.ExpectedAnnualKWh, &status,
 		&from, &to, &intercept, &slope, &samples, &expected, &cvrmse, &nmbe, &trusted, &reason,
+		&modelKind, &wetBulbSlope, &rSquared, &meanWetBulbC,
 		&measure.CreatedBy, &measure.UpdatedBy, &measure.CreatedAt, &measure.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Measure{}, ErrMeasureNotFound
@@ -120,9 +127,13 @@ func scanMeasure(row pgx.Row) (Measure, error) {
 	}
 	measure.Kind, measure.Status = Kind(kind), Status(status)
 	if trusted != nil {
+		if modelKind == "" {
+			modelKind = ModelKindUnivariateCooling
+		}
 		measure.Baseline = &Baseline{
-			From: *from, To: *to, Intercept: *intercept, Slope: *slope, Samples: *samples, ExpectedHours: *expected,
-			CVRMSE: *cvrmse, NMBE: *nmbe, Trusted: *trusted, Reason: reason,
+			From: *from, To: *to, ModelKind: modelKind, Intercept: *intercept, Slope: *slope,
+			WetBulbSlope: wetBulbSlope, RSquared: rSquared, MeanWetBulbC: meanWetBulbC,
+			Samples: *samples, ExpectedHours: *expected, CVRMSE: *cvrmse, NMBE: *nmbe, Trusted: *trusted, Reason: reason,
 		}
 	}
 	return measure, nil
@@ -131,10 +142,15 @@ func scanMeasure(row pgx.Row) (Measure, error) {
 // baselineArgs flattens a measure's baseline into its nullable columns.
 func baselineArgs(baseline *Baseline) []any {
 	if baseline == nil {
-		return []any{nil, nil, nil, nil, nil, nil, nil, nil, nil, ""}
+		return []any{nil, nil, nil, nil, nil, nil, nil, nil, nil, "", ModelKindUnivariateCooling, nil, nil, nil}
+	}
+	modelKind := baseline.ModelKind
+	if modelKind == "" {
+		modelKind = ModelKindUnivariateCooling
 	}
 	return []any{baseline.From, baseline.To, baseline.Intercept, baseline.Slope, baseline.Samples, baseline.ExpectedHours,
-		baseline.CVRMSE, baseline.NMBE, baseline.Trusted, baseline.Reason}
+		baseline.CVRMSE, baseline.NMBE, baseline.Trusted, baseline.Reason,
+		modelKind, baseline.WetBulbSlope, baseline.RSquared, baseline.MeanWetBulbC}
 }
 
 func overlapError(err error) error {
@@ -166,7 +182,8 @@ func (store *PostgresStore) UpdateMeasure(ctx context.Context, measure Measure) 
 		tag, err := tx.Exec(ctx, `UPDATE core_registry.savings_measures SET
 implemented_at=$4, ended_at=$5, status=$6, updated_by=$7::uuid, updated_at=$8,
 baseline_from=$9, baseline_to=$10, baseline_intercept_kwh=$11, baseline_slope=$12, baseline_samples=$13, baseline_expected_hours=$14,
-baseline_cv_rmse=$15, baseline_nmbe=$16, baseline_trusted=$17, baseline_reason=$18
+baseline_cv_rmse=$15, baseline_nmbe=$16, baseline_trusted=$17, baseline_reason=$18,
+baseline_model_kind=$19, baseline_wet_bulb_slope=$20, baseline_r_squared=$21, baseline_mean_wet_bulb_c=$22
 WHERE tenant_id=$2::uuid AND site_id=$3::uuid AND id=$1::uuid`, args...)
 		if err != nil {
 			return overlapError(fmt.Errorf("update savings measure: %w", err))
@@ -216,8 +233,9 @@ WHERE tenant_id=$1::uuid AND site_id=$2::uuid ORDER BY planned_at DESC, id DESC 
 func (store *PostgresStore) InsertDailyResult(ctx context.Context, result DailyResult) error {
 	return store.scoped(ctx, result.TenantID, result.SiteID, false, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `INSERT INTO core_registry.savings_daily_results(tenant_id, site_id, measure_id, day, expected_hours, hours, unpriced_hours,
-adjusted_baseline_kwh, actual_kwh, avoided_kwh, avoided_cost, plant_kwh, verified_at)
-VALUES ($1::uuid,$2::uuid,$3::uuid,$4::date,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+adjusted_baseline_kwh, actual_kwh, avoided_kwh, avoided_cost, plant_kwh,
+mean_wet_bulb_c, mean_dry_bulb_c, mean_load_ratio, ai_closed_loop_share, verified_at)
+VALUES ($1::uuid,$2::uuid,$3::uuid,$4::date,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
 ON CONFLICT (tenant_id, site_id, measure_id, day) DO UPDATE SET
 expected_hours = EXCLUDED.expected_hours,
 hours = EXCLUDED.hours,
@@ -227,9 +245,14 @@ actual_kwh = EXCLUDED.actual_kwh,
 avoided_kwh = EXCLUDED.avoided_kwh,
 avoided_cost = EXCLUDED.avoided_cost,
 plant_kwh = EXCLUDED.plant_kwh,
+mean_wet_bulb_c = EXCLUDED.mean_wet_bulb_c,
+mean_dry_bulb_c = EXCLUDED.mean_dry_bulb_c,
+mean_load_ratio = EXCLUDED.mean_load_ratio,
+ai_closed_loop_share = EXCLUDED.ai_closed_loop_share,
 verified_at = EXCLUDED.verified_at`,
 			result.TenantID, result.SiteID, result.MeasureID, result.Day, result.ExpectedHours, result.Hours, result.UnpricedHours,
-			result.AdjustedBaselineKWh, result.ActualKWh, result.AvoidedKWh, result.AvoidedCost, result.PlantKWh, result.VerifiedAt)
+			result.AdjustedBaselineKWh, result.ActualKWh, result.AvoidedKWh, result.AvoidedCost, result.PlantKWh,
+			result.MeanWetBulbC, result.MeanDryBulbC, result.MeanLoadRatio, result.AIClosedLoopShare, result.VerifiedAt)
 		if err != nil {
 			return fmt.Errorf("upsert savings day: %w", err)
 		}
@@ -240,8 +263,7 @@ verified_at = EXCLUDED.verified_at`,
 func (store *PostgresStore) DailyResults(ctx context.Context, tenantID, siteID, measureID string) ([]DailyResult, error) {
 	results := []DailyResult{}
 	err := store.scoped(ctx, tenantID, siteID, true, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT measure_id::text, to_char(day, 'YYYY-MM-DD'), expected_hours, hours, unpriced_hours,
-adjusted_baseline_kwh, actual_kwh, avoided_kwh, avoided_cost, plant_kwh, verified_at
+		rows, err := tx.Query(ctx, `SELECT `+dailyColumns+`
 FROM core_registry.savings_daily_results WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND measure_id=$3::uuid ORDER BY day`, tenantID, siteID, measureID)
 		if err != nil {
 			return err
@@ -250,7 +272,8 @@ FROM core_registry.savings_daily_results WHERE tenant_id=$1::uuid AND site_id=$2
 		for rows.Next() {
 			result := DailyResult{TenantID: tenantID, SiteID: siteID}
 			if err := rows.Scan(&result.MeasureID, &result.Day, &result.ExpectedHours, &result.Hours, &result.UnpricedHours,
-				&result.AdjustedBaselineKWh, &result.ActualKWh, &result.AvoidedKWh, &result.AvoidedCost, &result.PlantKWh, &result.VerifiedAt); err != nil {
+				&result.AdjustedBaselineKWh, &result.ActualKWh, &result.AvoidedKWh, &result.AvoidedCost, &result.PlantKWh,
+				&result.MeanWetBulbC, &result.MeanDryBulbC, &result.MeanLoadRatio, &result.AIClosedLoopShare, &result.VerifiedAt); err != nil {
 				return err
 			}
 			results = append(results, result)

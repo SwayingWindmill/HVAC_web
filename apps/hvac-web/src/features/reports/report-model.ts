@@ -93,6 +93,29 @@ export function findingSummary(findings: readonly Pick<Finding, 'evaluationTo' |
   };
 }
 
+export interface ReportLayeredEfficiency {
+  readonly plantCOP?: number | null;
+  readonly chillerCOP?: number | null;
+  readonly chilledPumpWTF?: number | null;
+  readonly coolingPumpWTF?: number | null;
+  readonly towerPowerShare?: number | null;
+}
+
+export interface ReportMeterBalance {
+  readonly status?: string | null;
+  readonly siteKWh?: number | null;
+  readonly submeterSumKWh?: number | null;
+  readonly diffKWh?: number | null;
+  readonly imbalanceRatio?: number | null;
+}
+
+export interface ReportConditionAnchors {
+  readonly meanWetBulbC?: number | null;
+  readonly meanDryBulbC?: number | null;
+  readonly meanLoadRatio?: number | null;
+  readonly aiClosedLoopShare?: number | null;
+}
+
 export interface ReportSnapshot {
   readonly schemaVersion: 1;
   readonly month: string;
@@ -112,6 +135,9 @@ export interface ReportSnapshot {
   readonly findings: { readonly count: number; readonly byType: readonly { readonly findingType: string; readonly count: number }[] };
   /** Every measure's verified days; days and the plant's electricity count each day once. */
   readonly savings: { readonly days: number; readonly adjustedBaselineKWh: number; readonly avoidedKWh: number; readonly avoidedCost: number; readonly unpricedHours: number; readonly plantKWh: number };
+  readonly layeredEfficiency?: ReportLayeredEfficiency;
+  readonly meterBalance?: ReportMeterBalance;
+  readonly conditionAnchors?: ReportConditionAnchors;
 }
 
 /** One kept version of a month's snapshot. */

@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 import { FactTile } from '@/blocks/fact-list';
 import { InfoTip } from '@/components/info-tip';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from '@/components/ui/chart';
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from '@/components/ui/sheet';
@@ -72,17 +73,30 @@ function BaselineSection({ measure, timeZone }: { readonly measure: Measure; rea
           ))}
         </TableBody>
       </Table>
-      <p className="text-xs text-muted-foreground">
-        对比基线期 <span className="font-mono">{formatTime(baseline.from, timeZone)} – {formatTime(baseline.to, timeZone)}</span>
+      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
         {baseline.model ? (
-          <>
-            ，逐时
-            <span className="mx-1 font-medium text-foreground tabular-nums">
-              {measure.boundaryDeviceId === null ? '用电' : '设备用电'} = {formatDecimal(baseline.model.interceptKWh, 1)} + {formatDecimal(baseline.model.slope, 3)} × 冷站供冷量
-            </span>
-          </>
-        ) : '，数据不足，未拟合模型'}
-      </p>
+          <Badge variant="secondary">
+            {baseline.model.modelKind === 'BIVARIATE_COOLING_WET_BULB' ? '冷负荷 + 室外湿球双变量' : '冷负荷单变量'}
+          </Badge>
+        ) : null}
+        <p>
+          对比基线期 <span className="font-mono">{formatTime(baseline.from, timeZone)} – {formatTime(baseline.to, timeZone)}</span>
+          {baseline.model ? (
+            <>
+              ，逐时
+              <span className="mx-1 font-medium text-foreground tabular-nums">
+                {measure.boundaryDeviceId === null ? '用电' : '设备用电'} = {formatDecimal(baseline.model.interceptKWh, 1)} + {formatDecimal(baseline.model.slope, 3)} × 冷站供冷量
+                {baseline.model.wetBulbSlope != null ? (
+                  <> {baseline.model.wetBulbSlope >= 0 ? '+' : '-'} {formatDecimal(Math.abs(baseline.model.wetBulbSlope), 3)} × 室外湿球温度</>
+                ) : null}
+              </span>
+              {baseline.model.meanWetBulbC != null ? (
+                <span>（基线平均湿球 {formatDecimal(baseline.model.meanWetBulbC, 1)} °C）</span>
+              ) : null}
+            </>
+          ) : '，数据不足，未拟合模型'}
+        </p>
+      </div>
     </div>
   );
 }
@@ -98,6 +112,9 @@ function VerifiedDays({ measure }: { readonly measure: Measure }) {
       </p>
     );
   }
+  const hasConditionAnchors = rows.some(
+    (row) => row.meanWetBulbC != null || row.meanLoadRatio != null || row.aiClosedLoopShare != null,
+  );
   return (
     <div className="flex flex-col gap-3">
       <ChartContainer config={dayConfig} className="aspect-auto h-[180px] w-full" aria-label="每日节电量">
@@ -120,6 +137,13 @@ function VerifiedDays({ measure }: { readonly measure: Measure }) {
             <TableHead className="text-right">实际</TableHead>
             <TableHead className="text-right">节电</TableHead>
             <TableHead className="text-right">完整度</TableHead>
+            {hasConditionAnchors ? (
+              <>
+                <TableHead className="text-right">室外湿球</TableHead>
+                <TableHead className="text-right">负荷率</TableHead>
+                <TableHead className="text-right">AI 闭环占比</TableHead>
+              </>
+            ) : null}
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -130,6 +154,19 @@ function VerifiedDays({ measure }: { readonly measure: Measure }) {
               <TableCell className="text-right tabular-nums">{formatDecimal(row.actual, 0)}</TableCell>
               <TableCell className={cn('text-right font-semibold tabular-nums', row.avoided < 0 && 'text-destructive-text')}>{formatDecimal(row.avoided, 0)}</TableCell>
               <TableCell className={cn('text-right tabular-nums', row.coverage < 0.9 && 'text-warning-text')}>{formatDecimal(row.coverage * 100, 0)}%</TableCell>
+              {hasConditionAnchors ? (
+                <>
+                  <TableCell className="text-right tabular-nums">
+                    {row.meanWetBulbC != null ? `${formatDecimal(row.meanWetBulbC, 1)} °C` : '--'}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {row.meanLoadRatio != null ? `${formatDecimal(row.meanLoadRatio * 100, 0)}%` : '--'}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {row.aiClosedLoopShare != null ? `${formatDecimal(row.aiClosedLoopShare * 100, 0)}%` : '--'}
+                  </TableCell>
+                </>
+              ) : null}
             </TableRow>
           ))}
         </TableBody>
@@ -227,7 +264,7 @@ export function MeasureSheet({ measureId, names, canManage, onClose }: {
 
   return (
     <Sheet open={Boolean(measureId)} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <SheetContent className="overflow-y-auto data-[side=right]:sm:max-w-[600px]">
+      <SheetContent className="overflow-y-auto data-[side=right]:sm:max-w-[640px]">
         {detail.isPending ? (
           <div className="flex flex-col gap-4 p-6"><Skeleton className="h-8 w-2/3" /><Skeleton className="h-64" /></div>
         ) : detail.isError || !measure ? (

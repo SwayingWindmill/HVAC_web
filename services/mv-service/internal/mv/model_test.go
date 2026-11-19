@@ -118,3 +118,140 @@ func TestMissingAndUnpricedHoursAreCountedNotFilled(t *testing.T) {
 		t.Fatalf("a plant on its baseline avoided %v kWh", result.AvoidedKWh)
 	}
 }
+
+func TestBivariateBaselineFitsCoolingAndWetBulbAndAdjustsReporting(t *testing.T) {
+	from := time.Date(2026, 7, 1, 0, 0, 0, 0, shanghai)
+	coolings := dayOfCooling(4)
+	samples := make([]HourSample, len(coolings))
+	for i, cooling := range coolings {
+		// Wet-bulb varies independently across diurnal and multi-day cycles.
+		twb := 22.0 + 3.2*math.Sin(float64(i)*0.27) + 1.4*math.Cos(float64(i)*0.11)
+		tdry := twb + 4.5
+		loadRatio := cooling / 1000.0
+		aiShare := 0.5
+		if i%2 == 0 {
+			aiShare = 1.0
+		}
+		energy := 30 + 0.18*cooling + 4.5*twb + 0.5*math.Sin(float64(i))
+		samples[i] = HourSample{
+			Start:             from.Add(time.Duration(i) * time.Hour),
+			CoolingKWh:        cooling,
+			EnergyKWh:         energy,
+			PlantKWh:          energy,
+			OutdoorWetBulbC:   floatPtr(twb),
+			OutdoorDryBulbC:   floatPtr(tdry),
+			PlantLoadRatio:    floatPtr(loadRatio),
+			AIClosedLoopShare: floatPtr(aiShare),
+		}
+	}
+
+	baseline := FitBaseline(samples, from, from.Add(96*time.Hour))
+	if !baseline.Trusted || baseline.ModelKind != ModelKindBivariateWetBulb {
+		t.Fatalf("baseline = %+v, want trusted %s", baseline, ModelKindBivariateWetBulb)
+	}
+	if math.Abs(baseline.Intercept-30) > 2.0 || math.Abs(baseline.Slope-0.18) > 0.005 {
+		t.Fatalf("coefficients = %v + %v·cooling, want ~30 + 0.18·cooling", baseline.Intercept, baseline.Slope)
+	}
+	if baseline.WetBulbSlope == nil || math.Abs(*baseline.WetBulbSlope-4.5) > 0.1 {
+		t.Fatalf("WetBulbSlope = %v, want ~4.5", baseline.WetBulbSlope)
+	}
+	if baseline.MeanWetBulbC == nil || math.Abs(*baseline.MeanWetBulbC-22.0) > 1.0 {
+		t.Fatalf("MeanWetBulbC = %v, want ~22.0", baseline.MeanWetBulbC)
+	}
+	if baseline.RSquared == nil || *baseline.RSquared < 0.99 {
+		t.Fatalf("RSquared = %v, want > 0.99", baseline.RSquared)
+	}
+
+	// Missing runtime wet-bulb uses MeanWetBulbC to preserve energy balance.
+	withMean := baseline.PredictWithCondition(600, nil)
+	explicitMean := baseline.PredictWithCondition(600, baseline.MeanWetBulbC)
+	if math.Abs(withMean-explicitMean) > 1e-9 {
+		t.Fatalf("PredictWithCondition(nil) = %v, want %v", withMean, explicitMean)
+	}
+
+	// Reporting day is hotter (+4 °C wet-bulb) and uses 15% less energy than weather-adjusted baseline.
+	day := time.Date(2026, 7, 10, 0, 0, 0, 0, shanghai)
+	dayCoolings := dayOfCooling(1)
+	daySamples := make([]HourSample, len(dayCoolings))
+	for i, cooling := range dayCoolings {
+		twb := 26.0 + 0.5*float64(i%4)
+		tdry := twb + 5.0
+		lr := cooling / 1000.0
+		ai := 0.75
+		expected := baseline.PredictWithCondition(cooling, &twb)
+		sample := HourSample{
+			Start:             day.Add(time.Duration(i) * time.Hour),
+			CoolingKWh:        cooling,
+			EnergyKWh:         0.85 * expected,
+			PlantKWh:          0.85 * expected,
+			OutdoorWetBulbC:   floatPtr(twb),
+			OutdoorDryBulbC:   floatPtr(tdry),
+			PlantLoadRatio:    floatPtr(lr),
+			AIClosedLoopShare: floatPtr(ai),
+		}
+		// Inject a NaN on hour 0 dry-bulb to verify daily anchor arithmetic means ignore non-finite values.
+		if i == 0 {
+			sample.OutdoorDryBulbC = floatPtr(math.NaN())
+		}
+		daySamples[i] = sample
+	}
+	result := VerifyDay(baseline, daySamples, day, day.Add(24*time.Hour), day.Add(-48*time.Hour), func(time.Time) (float64, bool) { return 1.0, true })
+	if result.Hours != 24 || math.Abs(result.AvoidedKWh/result.AdjustedBaselineKWh-0.15) > 1e-9 {
+		t.Fatalf("VerifyDay bivariate result = %+v", result)
+	}
+	if result.MeanWetBulbC == nil || math.Abs(*result.MeanWetBulbC-26.75) > 1e-9 {
+		t.Fatalf("MeanWetBulbC = %v, want 26.75", result.MeanWetBulbC)
+	}
+	if result.MeanDryBulbC == nil || math.Abs(*result.MeanDryBulbC-(26.75+5.0)) > 0.05 {
+		t.Fatalf("MeanDryBulbC = %v", result.MeanDryBulbC)
+	}
+	if result.MeanLoadRatio == nil || result.AIClosedLoopShare == nil || math.Abs(*result.AIClosedLoopShare-0.75) > 1e-9 {
+		t.Fatalf("anchors = load:%v ai:%v", result.MeanLoadRatio, result.AIClosedLoopShare)
+	}
+}
+
+func TestBivariateFallbackWhenWetBulbMissingLowVarianceOrCollinear(t *testing.T) {
+	from := time.Date(2026, 7, 1, 0, 0, 0, 0, shanghai)
+	coolings := dayOfCooling(4)
+
+	t.Run("low wet-bulb coverage (<90%) falls back to univariate", func(t *testing.T) {
+		samples := hours(from, coolings, func(_ int, cooling float64) float64 { return 25 + 0.22*cooling })
+		for i := range samples {
+			if i < 80 { // 80/96 = 83.3% < 90%
+				samples[i].OutdoorWetBulbC = floatPtr(20 + 3*math.Sin(float64(i)))
+			}
+		}
+		baseline := FitBaseline(samples, from, from.Add(96*time.Hour))
+		if !baseline.Trusted || baseline.ModelKind != ModelKindUnivariateCooling || baseline.WetBulbSlope != nil || baseline.MeanWetBulbC != nil {
+			t.Fatalf("expected univariate fallback, got %+v", baseline)
+		}
+		if baseline.RSquared == nil || *baseline.RSquared < 0.99 {
+			t.Fatalf("expected univariate RSquared, got %v", baseline.RSquared)
+		}
+	})
+
+	t.Run("flat wet-bulb variance (stt/n <= 0.25) falls back to univariate", func(t *testing.T) {
+		samples := hours(from, coolings, func(_ int, cooling float64) float64 { return 25 + 0.22*cooling })
+		for i := range samples {
+			samples[i].OutdoorWetBulbC = floatPtr(24.0 + 0.1*math.Sin(float64(i)))
+		}
+		baseline := FitBaseline(samples, from, from.Add(96*time.Hour))
+		if !baseline.Trusted || baseline.ModelKind != ModelKindUnivariateCooling || baseline.WetBulbSlope != nil {
+			t.Fatalf("expected univariate fallback on flat wet-bulb, got %+v", baseline)
+		}
+	})
+
+	t.Run("exact collinearity with cooling falls back without singular blowup", func(t *testing.T) {
+		samples := hours(from, coolings, func(_ int, cooling float64) float64 { return 25 + 0.22*cooling })
+		for i := range samples {
+			samples[i].OutdoorWetBulbC = floatPtr(18.0 + 0.01*samples[i].CoolingKWh)
+		}
+		baseline := FitBaseline(samples, from, from.Add(96*time.Hour))
+		if !baseline.Trusted || baseline.ModelKind != ModelKindUnivariateCooling || baseline.WetBulbSlope != nil {
+			t.Fatalf("expected univariate fallback on collinearity, got %+v", baseline)
+		}
+		if math.Abs(baseline.Slope-0.22) > 1e-6 || math.Abs(baseline.Intercept-25) > 1e-4 {
+			t.Fatalf("collinear fallback polluted coefficients: %+v", baseline)
+		}
+	})
+}

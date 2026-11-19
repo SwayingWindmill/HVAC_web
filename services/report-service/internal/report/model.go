@@ -34,12 +34,42 @@ type Hour struct {
 	Cost           *analyticsmodel.EnergyCost
 }
 
-// MonthEnergy holds a month's hourly energy alongside any > 1h cross-gap energy recovered in it (#798).
+// MonthEnergy holds a month's hourly energy alongside any > 1h cross-gap energy recovered in it (#798)
+// and optional P2 efficiency, meter-balance, and operating-condition summaries.
 type MonthEnergy struct {
 	Hours               []Hour
 	ElectricityCrossGap *analyticsmodel.EnergyCrossGap
 	CoolingCrossGapKWh  float64
 	Partial             bool
+	LayeredEfficiency   *LayeredEfficiencySnapshot
+	MeterBalance        *MeterBalanceSnapshot
+	ConditionAnchors    *ConditionAnchorsSnapshot
+}
+
+// LayeredEfficiencySnapshot captures plant-to-subsystem monthly energy efficiency indicators.
+type LayeredEfficiencySnapshot struct {
+	PlantCOP        *float64 `json:"plantCOP,omitempty"`
+	ChillerCOP      *float64 `json:"chillerCOP,omitempty"`
+	ChilledPumpWTF  *float64 `json:"chilledPumpWTF,omitempty"`
+	CoolingPumpWTF  *float64 `json:"coolingPumpWTF,omitempty"`
+	TowerPowerShare *float64 `json:"towerPowerShare,omitempty"`
+}
+
+// MeterBalanceSnapshot captures the monthly total-meter vs sub-meter reconciliation check.
+type MeterBalanceSnapshot struct {
+	SiteKWh        float64  `json:"siteKWh"`
+	SubmeterSumKWh float64  `json:"submeterSumKWh"`
+	DiffKWh        float64  `json:"diffKWh"`
+	ImbalanceRatio *float64 `json:"imbalanceRatio,omitempty"`
+	Status         string   `json:"status"`
+}
+
+// ConditionAnchorsSnapshot summarizes monthly outdoor weather, load, and AI control anchors.
+type ConditionAnchorsSnapshot struct {
+	MeanWetBulbC      *float64 `json:"meanWetBulbC,omitempty"`
+	MeanDryBulbC      *float64 `json:"meanDryBulbC,omitempty"`
+	MeanLoadRatio     *float64 `json:"meanLoadRatio,omitempty"`
+	AIClosedLoopShare *float64 `json:"aiClosedLoopShare,omitempty"`
 }
 
 // Why a snapshot has or lacks an energy cost: every kWh priced, none of it priced (no Tariff in
@@ -113,14 +143,17 @@ type Snapshot struct {
 	COP *float64 `json:"cop"`
 	// EnergyCostCNY is the month's electricity as the query service priced it at the time-of-use
 	// energy rates; nil unless every kWh was priced. Demand charges are not in it.
-	EnergyCostCNY    *float64      `json:"energyCostCNY"`
-	EnergyCostStatus string        `json:"energyCostStatus"`
-	TariffPeriods    []PeriodTotal `json:"tariffPeriods"`
-	Days             []Day         `json:"days"`
-	Findings         Findings      `json:"findings"`
-	Savings          Savings       `json:"savings"`
-	Incomplete       bool          `json:"incomplete,omitempty"`
-	MissingMeters    []string      `json:"missingMeters,omitempty"`
+	EnergyCostCNY     *float64                   `json:"energyCostCNY"`
+	EnergyCostStatus  string                     `json:"energyCostStatus"`
+	TariffPeriods     []PeriodTotal              `json:"tariffPeriods"`
+	Days              []Day                      `json:"days"`
+	Findings          Findings                   `json:"findings"`
+	Savings           Savings                    `json:"savings"`
+	Incomplete        bool                       `json:"incomplete,omitempty"`
+	MissingMeters     []string                   `json:"missingMeters,omitempty"`
+	LayeredEfficiency *LayeredEfficiencySnapshot `json:"layeredEfficiency,omitempty"`
+	MeterBalance      *MeterBalanceSnapshot      `json:"meterBalance,omitempty"`
+	ConditionAnchors  *ConditionAnchorsSnapshot  `json:"conditionAnchors,omitempty"`
 }
 
 // MonthBounds is a YYYY-MM month on the Site's calendar: its first instant, the next month's first
@@ -321,6 +354,9 @@ func Build(month string, location *time.Location, energy MonthEnergy, savings []
 	sort.SliceStable(snapshot.Findings.ByType, func(left, right int) bool {
 		return snapshot.Findings.ByType[left].Count > snapshot.Findings.ByType[right].Count
 	})
+	snapshot.LayeredEfficiency = sanitizeLayeredEfficiency(energy.LayeredEfficiency)
+	snapshot.MeterBalance = sanitizeMeterBalance(energy.MeterBalance)
+	snapshot.ConditionAnchors = sanitizeConditionAnchors(energy.ConditionAnchors)
 	return snapshot, nil
 }
 
@@ -345,8 +381,72 @@ func reportCOP(coolingKWh, electricityKWh float64) *float64 {
 	return &value
 }
 
+func isFinite(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0)
+}
+
 func isFiniteNonNegative(value float64) bool {
-	return !math.IsNaN(value) && !math.IsInf(value, 0) && value >= 0
+	return isFinite(value) && value >= 0
+}
+
+func sanitizeFloatPtr(value *float64) *float64 {
+	if value == nil || !isFinite(*value) {
+		return nil
+	}
+	v := *value
+	return &v
+}
+
+func sanitizeLayeredEfficiency(src *LayeredEfficiencySnapshot) *LayeredEfficiencySnapshot {
+	if src == nil {
+		return nil
+	}
+	sanitized := &LayeredEfficiencySnapshot{
+		PlantCOP:        sanitizeFloatPtr(src.PlantCOP),
+		ChillerCOP:      sanitizeFloatPtr(src.ChillerCOP),
+		ChilledPumpWTF:  sanitizeFloatPtr(src.ChilledPumpWTF),
+		CoolingPumpWTF:  sanitizeFloatPtr(src.CoolingPumpWTF),
+		TowerPowerShare: sanitizeFloatPtr(src.TowerPowerShare),
+	}
+	if sanitized.PlantCOP == nil && sanitized.ChillerCOP == nil && sanitized.ChilledPumpWTF == nil &&
+		sanitized.CoolingPumpWTF == nil && sanitized.TowerPowerShare == nil {
+		return nil
+	}
+	return sanitized
+}
+
+func sanitizeMeterBalance(src *MeterBalanceSnapshot) *MeterBalanceSnapshot {
+	if src == nil || !isFinite(src.SiteKWh) || !isFinite(src.SubmeterSumKWh) {
+		return nil
+	}
+	diff := src.DiffKWh
+	if !isFinite(diff) {
+		diff = src.SiteKWh - src.SubmeterSumKWh
+	}
+	return &MeterBalanceSnapshot{
+		SiteKWh:        src.SiteKWh,
+		SubmeterSumKWh: src.SubmeterSumKWh,
+		DiffKWh:        diff,
+		ImbalanceRatio: sanitizeFloatPtr(src.ImbalanceRatio),
+		Status:         strings.TrimSpace(src.Status),
+	}
+}
+
+func sanitizeConditionAnchors(src *ConditionAnchorsSnapshot) *ConditionAnchorsSnapshot {
+	if src == nil {
+		return nil
+	}
+	sanitized := &ConditionAnchorsSnapshot{
+		MeanWetBulbC:      sanitizeFloatPtr(src.MeanWetBulbC),
+		MeanDryBulbC:      sanitizeFloatPtr(src.MeanDryBulbC),
+		MeanLoadRatio:     sanitizeFloatPtr(src.MeanLoadRatio),
+		AIClosedLoopShare: sanitizeFloatPtr(src.AIClosedLoopShare),
+	}
+	if sanitized.MeanWetBulbC == nil && sanitized.MeanDryBulbC == nil &&
+		sanitized.MeanLoadRatio == nil && sanitized.AIClosedLoopShare == nil {
+		return nil
+	}
+	return sanitized
 }
 
 func validEnergyCost(cost *analyticsmodel.EnergyCost) bool {

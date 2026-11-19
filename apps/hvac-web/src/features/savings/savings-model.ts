@@ -6,11 +6,16 @@ import { wallTime } from '../energy-analysis/consumption/model.ts';
 
 export type MeasureKind = 'SETPOINT_RESET' | 'CONTROL_SEQUENCE' | 'EQUIPMENT_RETROFIT' | 'OPERATING_SCHEDULE' | 'OTHER';
 export type MeasureStatus = 'PLANNED' | 'IMPLEMENTED' | 'ENDED';
+export type BaselineModelKind = 'UNIVARIATE_COOLING' | 'BIVARIATE_COOLING_WET_BULB';
 
-/** The fitted line energy = interceptKWh + slope × cooling, with how well it fits. */
+/** The fitted line energy = interceptKWh + slope × cooling (+ wetBulbSlope × wetBulb), with how well it fits. */
 export interface BaselineModel {
+  readonly modelKind?: BaselineModelKind;
   readonly interceptKWh: number;
   readonly slope: number;
+  readonly wetBulbSlope?: number | null;
+  readonly rSquared?: number | null;
+  readonly meanWetBulbC?: number | null;
   readonly cvRmse: number;
   readonly nmbe: number;
 }
@@ -58,6 +63,10 @@ export interface VerifiedDay {
   readonly avoidedKWh: number;
   readonly avoidedCost: number;
   readonly plantKWh: number;
+  readonly meanWetBulbC?: number | null;
+  readonly meanDryBulbC?: number | null;
+  readonly meanLoadRatio?: number | null;
+  readonly aiClosedLoopShare?: number | null;
 }
 
 export interface Measure {
@@ -101,7 +110,7 @@ export const KIND_LABEL: Record<MeasureKind, string> = {
 export const STATUS_LABEL: Record<MeasureStatus, string> = { PLANNED: '计划中', IMPLEMENTED: '已实施', ENDED: '已结束' };
 
 // ASHRAE Guideline 14 for hourly models, and the data a baseline needs before it is fitted.
-export const LIMITS = { cvRmse: 0.3, nmbe: 0.1, minimumHours: 72, minimumCoverage: 0.9 } as const;
+export const LIMITS = { cvRmse: 0.3, nmbe: 0.1, minimumHours: 72, minimumCoverage: 0.9, rSquared: 0.75 } as const;
 
 export interface FitCheck {
   readonly label: string;
@@ -113,11 +122,11 @@ export interface FitCheck {
 
 const percent = (value: number, digits = 1) => `${(value * 100).toFixed(digits)}%`;
 
-/** The three checks a frozen baseline is judged by, in the order an engineer reads them. */
+/** The checks a frozen baseline is judged by, in the order an engineer reads them. */
 export function fitChecks(baseline: Pick<Baseline, 'samples' | 'expectedHours' | 'model'>): readonly FitCheck[] {
   const coverage = baseline.expectedHours > 0 ? baseline.samples / baseline.expectedHours : 0;
   const model = baseline.model;
-  return [
+  const checks: FitCheck[] = [
     {
       label: '数据完整度',
       value: `${baseline.samples} / ${baseline.expectedHours}（${percent(coverage, 0)}）`,
@@ -133,6 +142,15 @@ export function fitChecks(baseline: Pick<Baseline, 'samples' | 'expectedHours' |
       pass: model ? Math.abs(model.nmbe) <= LIMITS.nmbe : null,
     },
   ];
+  if (model?.rSquared != null && Number.isFinite(model.rSquared)) {
+    checks.push({
+      label: '决定系数 R²',
+      value: model.rSquared.toFixed(3),
+      limit: `≥ ${LIMITS.rSquared.toFixed(2)}`,
+      pass: model.rSquared >= LIMITS.rSquared,
+    });
+  }
+  return checks;
 }
 
 export type MeasureAction = 'implement' | 'refit' | 'end';
@@ -156,6 +174,10 @@ export interface DayRow {
   readonly actual: number;
   readonly avoided: number;
   readonly coverage: number;
+  readonly meanWetBulbC?: number | null;
+  readonly meanDryBulbC?: number | null;
+  readonly meanLoadRatio?: number | null;
+  readonly aiClosedLoopShare?: number | null;
 }
 
 /** Verified days oldest first, as the chart and the day table read them. */
@@ -167,6 +189,10 @@ export function dayRows(days: readonly VerifiedDay[]): readonly DayRow[] {
     actual: day.actualKWh,
     avoided: day.avoidedKWh,
     coverage: day.expectedHours > 0 ? day.hours / day.expectedHours : 0,
+    meanWetBulbC: day.meanWetBulbC ?? null,
+    meanDryBulbC: day.meanDryBulbC ?? null,
+    meanLoadRatio: day.meanLoadRatio ?? null,
+    aiClosedLoopShare: day.aiClosedLoopShare ?? null,
   }));
 }
 

@@ -8,10 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -168,6 +170,110 @@ FORMAT JSONEachRow`, latest, query.TenantID, query.SiteID, scope,
 		return nil, err
 	}
 	return decodeSamples(body)
+}
+
+// MeterBalanceHours reads hourly main-vs-submeter balance rows for a Site window from ClickHouse.
+func (evidence *ClickHouseEvidence) MeterBalanceHours(ctx context.Context, tenantID, siteID string, from, to time.Time) ([]MeterBalanceHour, error) {
+	if evidence == nil || evidence.client == nil || evidence.baseURL == nil {
+		return nil, errors.New("FDD ClickHouse reader is not initialized")
+	}
+	if !uuidPattern.MatchString(tenantID) || !uuidPattern.MatchString(siteID) {
+		return nil, errors.New("FDD meter balance scope must be UUIDs")
+	}
+	if from.IsZero() || to.IsZero() || !to.After(from) {
+		return nil, errors.New("FDD meter balance window is invalid")
+	}
+	sql := fmt.Sprintf(`SELECT
+ formatDateTime(b.hour,'%%Y-%%m-%%dT%%H:%%i:%%SZ','UTC') AS hour_utc,
+ b.site_kwh AS site_kwh,
+ b.submeter_sum_kwh AS submeter_sum_kwh,
+ b.diff_kwh AS diff_kwh,
+ b.imbalance_ratio AS imbalance_ratio,
+ b.submeter_count AS submeter_count,
+ b.imbalance_status AS imbalance_status
+FROM analytics.site_meter_balance_hourly AS b
+WHERE b.tenant_id=toUUID('%s') AND b.site_id=toUUID('%s')
+  AND b.hour >= parseDateTime64BestEffort('%s',3,'UTC') AND b.hour < parseDateTime64BestEffort('%s',3,'UTC')
+ORDER BY b.hour ASC
+FORMAT JSONEachRow`, tenantID, siteID, from.UTC().Format(time.RFC3339Nano), to.UTC().Format(time.RFC3339Nano))
+	body, err := evidence.query(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
+	return decodeMeterBalanceHours(body)
+}
+
+type clickhouseUint64 uint64
+
+func (u *clickhouseUint64) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		*u = 0
+		return nil
+	}
+	if trimmed[0] == '"' {
+		var raw string
+		if err := json.Unmarshal(trimmed, &raw); err != nil {
+			return err
+		}
+		if raw == "" {
+			*u = 0
+			return nil
+		}
+		parsed, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			return err
+		}
+		*u = clickhouseUint64(parsed)
+		return nil
+	}
+	var parsed uint64
+	if err := json.Unmarshal(trimmed, &parsed); err != nil {
+		return err
+	}
+	*u = clickhouseUint64(parsed)
+	return nil
+}
+
+func decodeMeterBalanceHours(body []byte) ([]MeterBalanceHour, error) {
+	hours := []MeterBalanceHour{}
+	scanner := bufio.NewScanner(bytes.NewReader(body))
+	for scanner.Scan() {
+		if len(bytes.TrimSpace(scanner.Bytes())) == 0 {
+			continue
+		}
+		var row struct {
+			Hour            string           `json:"hour_utc"`
+			SiteKWh         float64          `json:"site_kwh"`
+			SubmeterSumKWh  float64          `json:"submeter_sum_kwh"`
+			DiffKWh         float64          `json:"diff_kwh"`
+			ImbalanceRatio  *float64         `json:"imbalance_ratio"`
+			SubmeterCount   clickhouseUint64 `json:"submeter_count"`
+			ImbalanceStatus string           `json:"imbalance_status"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &row); err != nil {
+			return nil, fmt.Errorf("decode FDD meter balance: %w", err)
+		}
+		hour, err := time.Parse(time.RFC3339Nano, row.Hour)
+		if err != nil {
+			return nil, fmt.Errorf("decode FDD meter balance time: %w", err)
+		}
+		var ratio *float64
+		if row.ImbalanceRatio != nil && !math.IsNaN(*row.ImbalanceRatio) && !math.IsInf(*row.ImbalanceRatio, 0) {
+			val := *row.ImbalanceRatio
+			ratio = &val
+		}
+		hours = append(hours, MeterBalanceHour{
+			Hour:            hour.UTC(),
+			SiteKWh:         row.SiteKWh,
+			SubmeterSumKWh:  row.SubmeterSumKWh,
+			DiffKWh:         row.DiffKWh,
+			ImbalanceRatio:  ratio,
+			SubmeterCount:   uint64(row.SubmeterCount),
+			ImbalanceStatus: row.ImbalanceStatus,
+		})
+	}
+	return hours, scanner.Err()
 }
 
 // decodeSamples reads WindowSamples' JSONEachRow rows; replay fixtures are the same rows.

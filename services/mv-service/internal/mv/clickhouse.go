@@ -122,7 +122,8 @@ func samplesSeries(siteID string, boundaryDeviceID *string) []series {
 	return all
 }
 
-// hourlySQL takes each hour's latest revision of every series and keeps hours where all are good.
+// hourlySQL takes each hour's latest revision of every series, keeps hours where all are good,
+// and left-joins optional hourly condition anchors for bivariate M&V modeling.
 func hourlySQL(tenantID, siteID string, boundaryDeviceID *string, from, to time.Time) string {
 	all := samplesSeries(siteID, boundaryDeviceID)
 	keys := make([]string, 0, len(all)*2+1)
@@ -137,26 +138,45 @@ func hourlySQL(tenantID, siteID string, boundaryDeviceID *string, from, to time.
 	if boundaryDeviceID != nil {
 		energy = "device"
 	}
-	return fmt.Sprintf(`SELECT
- formatDateTime(period_start,'%%Y-%%m-%%dT%%H:%%i:%%SZ','UTC') AS period_start,
- sumIf(value, key='%[3]s') AS energy_kwh,
- sumIf(value, key='cooling') AS cooling_kwh,
- sumIf(value, key='plant') AS plant_kwh
-FROM (
- SELECT multiIf(%[4]s) AS key, period_start,
-  argMax(assumeNotNull(value_number), (revision, calculated_at)) AS value,
-  argMax(quality, (revision, calculated_at)) AS quality
- FROM analytics.metric_result_facts
- WHERE tenant_id=toUUID('%[1]s') AND site_id=toUUID('%[2]s') AND (%[5]s)
-   AND period_start >= parseDateTime64BestEffort('%[6]s',3,'UTC') AND period_start < parseDateTime64BestEffort('%[7]s',3,'UTC')
-   AND period_end - period_start = 3600
-   AND value_type='NUMBER' AND value_number IS NOT NULL
- GROUP BY key, period_start
+	return fmt.Sprintf(`WITH metrics_hourly AS (
+ SELECT
+  period_start,
+  sumIf(value, key='%[3]s') AS energy_kwh,
+  sumIf(value, key='cooling') AS cooling_kwh,
+  sumIf(value, key='plant') AS plant_kwh
+ FROM (
+  SELECT multiIf(%[4]s) AS key, period_start,
+   argMax(assumeNotNull(value_number), (revision, calculated_at)) AS value,
+   argMax(quality, (revision, calculated_at)) AS quality
+  FROM analytics.metric_result_facts
+  WHERE tenant_id=toUUID('%[1]s') AND site_id=toUUID('%[2]s') AND (%[5]s)
+    AND period_start >= parseDateTime64BestEffort('%[6]s',3,'UTC') AND period_start < parseDateTime64BestEffort('%[7]s',3,'UTC')
+    AND period_end - period_start = 3600
+    AND value_type='NUMBER' AND value_number IS NOT NULL
+  GROUP BY key, period_start
+ )
+ WHERE quality='GOOD'
+ GROUP BY period_start
+ HAVING count()=%[8]d
 )
-WHERE quality='GOOD'
-GROUP BY period_start
-HAVING count()=%[8]d
-ORDER BY period_start
+SELECT
+ formatDateTime(metrics_hourly.period_start,'%%Y-%%m-%%dT%%H:%%i:%%SZ','UTC') AS period_start,
+ metrics_hourly.energy_kwh AS energy_kwh,
+ metrics_hourly.cooling_kwh AS cooling_kwh,
+ metrics_hourly.plant_kwh AS plant_kwh,
+ cond.outdoor_wet_bulb_c AS outdoor_wet_bulb_c,
+ cond.outdoor_dry_bulb_c AS outdoor_dry_bulb_c,
+ cond.plant_load_ratio AS plant_load_ratio,
+ cond.ai_closed_loop_share AS ai_closed_loop_share
+FROM metrics_hourly
+LEFT JOIN (
+ SELECT hour, outdoor_wet_bulb_c, outdoor_dry_bulb_c, plant_load_ratio, ai_closed_loop_share
+ FROM analytics.site_condition_anchors_hourly_latest
+ WHERE tenant_id=toUUID('%[1]s') AND site_id=toUUID('%[2]s')
+   AND hour >= parseDateTime64BestEffort('%[6]s',3,'UTC') AND hour < parseDateTime64BestEffort('%[7]s',3,'UTC')
+) AS cond ON metrics_hourly.period_start = cond.hour
+ORDER BY metrics_hourly.period_start
+SETTINGS join_use_nulls = 1
 FORMAT JSONEachRow`, tenantID, siteID, energy, strings.Join(keys, ","), strings.Join(matches, " OR "),
 		from.UTC().Format(time.RFC3339), to.UTC().Format(time.RFC3339), len(all))
 }
@@ -217,10 +237,14 @@ func decodeHours(payload []byte) ([]HourSample, error) {
 	samples := []HourSample{}
 	for {
 		var row struct {
-			PeriodStart string  `json:"period_start"`
-			EnergyKWh   float64 `json:"energy_kwh"`
-			CoolingKWh  float64 `json:"cooling_kwh"`
-			PlantKWh    float64 `json:"plant_kwh"`
+			PeriodStart       string   `json:"period_start"`
+			EnergyKWh         float64  `json:"energy_kwh"`
+			CoolingKWh        float64  `json:"cooling_kwh"`
+			PlantKWh          float64  `json:"plant_kwh"`
+			OutdoorWetBulbC   *float64 `json:"outdoor_wet_bulb_c"`
+			OutdoorDryBulbC   *float64 `json:"outdoor_dry_bulb_c"`
+			PlantLoadRatio    *float64 `json:"plant_load_ratio"`
+			AIClosedLoopShare *float64 `json:"ai_closed_loop_share"`
 		}
 		if err := decoder.Decode(&row); errors.Is(err, io.EOF) {
 			return samples, nil
@@ -231,6 +255,15 @@ func decodeHours(payload []byte) ([]HourSample, error) {
 		if err != nil {
 			return nil, err
 		}
-		samples = append(samples, HourSample{Start: start, EnergyKWh: row.EnergyKWh, CoolingKWh: row.CoolingKWh, PlantKWh: row.PlantKWh})
+		samples = append(samples, HourSample{
+			Start:             start,
+			EnergyKWh:         row.EnergyKWh,
+			CoolingKWh:        row.CoolingKWh,
+			PlantKWh:          row.PlantKWh,
+			OutdoorWetBulbC:   sanitizeFloatPtr(row.OutdoorWetBulbC),
+			OutdoorDryBulbC:   sanitizeFloatPtr(row.OutdoorDryBulbC),
+			PlantLoadRatio:    sanitizeFloatPtr(row.PlantLoadRatio),
+			AIClosedLoopShare: sanitizeFloatPtr(row.AIClosedLoopShare),
+		})
 	}
 }

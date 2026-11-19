@@ -224,3 +224,49 @@ func TestAMeasureCitesTheExecutedCommandItCameFrom(t *testing.T) {
 		t.Fatalf("a measure without a command = %v", plain["evidenceCommandId"])
 	}
 }
+
+func TestBivariateModelAndConditionAnchorsOverHTTP(t *testing.T) {
+	implemented := time.Date(2026, 10, 15, 9, 0, 0, 0, shanghai)
+	store := newMemoryStore()
+	service := newTestService(t, store, bivariatePlantHistory{changedAt: implemented, factor: 0.85, wetBulbShift: 2.0})
+	handler := newTestHandler(t, service)
+	base := "/v1/sites/" + testSite + "/savings/measures"
+
+	status, created := call(t, handler, http.MethodPost, base, `{"name":"湿球双变量控制","kind":"CONTROL_SEQUENCE","plannedAt":"2026-10-15T09:00:00+08:00"}`)
+	if status != http.StatusCreated {
+		t.Fatalf("register = %d %v", status, created)
+	}
+	id := created["id"].(string)
+
+	status, measure := call(t, handler, http.MethodPost, base+"/"+id+"/implement", `{"implementedAt":"2026-10-15T09:00:00+08:00"}`)
+	if status != http.StatusOK {
+		t.Fatalf("implement = %d %v", status, measure)
+	}
+	baseline, _ := measure["baseline"].(map[string]any)
+	model, _ := baseline["model"].(map[string]any)
+	if model["modelKind"] != ModelKindBivariateWetBulb {
+		t.Fatalf("modelKind = %v, want %s (%v)", model["modelKind"], ModelKindBivariateWetBulb, model)
+	}
+	if model["wetBulbSlope"] == nil || model["rSquared"] == nil || model["meanWetBulbC"] == nil {
+		t.Fatalf("missing bivariate fields in modelView: %v", model)
+	}
+
+	stored, _ := store.Measure(t.Context(), testTenant, testSite, id)
+	if err := service.VerifyDay(t.Context(), stored, time.Date(2026, 10, 17, 0, 0, 0, 0, shanghai)); err != nil {
+		t.Fatal(err)
+	}
+	status, detail := call(t, handler, http.MethodGet, base+"/"+id, "")
+	if status != http.StatusOK {
+		t.Fatalf("detail = %d %v", status, detail)
+	}
+	days, _ := detail["days"].([]any)
+	if len(days) != 1 {
+		t.Fatalf("days = %v", days)
+	}
+	day0 := days[0].(map[string]any)
+	for _, key := range []string{"meanWetBulbC", "meanDryBulbC", "meanLoadRatio", "aiClosedLoopShare"} {
+		if day0[key] == nil {
+			t.Fatalf("dayView missing %q: %v", key, day0)
+		}
+	}
+}

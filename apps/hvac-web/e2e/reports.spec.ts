@@ -55,3 +55,54 @@ test('the year lists each month from its snapshot or the live series', async ({ 
   await expect(months.getByRole('row', { name: /^9 月/ })).toContainText('已存档72.70 MWh209.46 MWh2.8860,259 元16 / 30 天');
   await expect(months.getByRole('row', { name: /^1 月/ })).toContainText('无数据');
 });
+
+test('an archived snapshot with P2 layered efficiency and condition anchors displays them cleanly', async ({ page, gateway }) => {
+  const septemberWithP2 = {
+    ...september,
+    report: {
+      ...september.report,
+      layeredEfficiency: {
+        plantCOP: 2.88,
+        chillerCOP: 4.92,
+        chilledPumpWTF: 24.6,
+        coolingPumpWTF: 21.8,
+        towerPowerShare: 0.052,
+      },
+      meterBalance: {
+        status: 'BALANCED',
+        siteKWh: 72696.83,
+        submeterSumKWh: 71120.4,
+        diffKWh: 1576.43,
+        imbalanceRatio: 0.0217,
+      },
+      conditionAnchors: {
+        meanWetBulbC: 24.3,
+        meanDryBulbC: 28.9,
+        meanLoadRatio: 0.642,
+        aiClosedLoopShare: 0.785,
+      },
+    },
+  };
+  gateway.reportSnapshots = [septemberWithP2];
+  await page.goto(`/reports?site=${SITE_ID}&month=2026-09`);
+
+  const report = page.getByRole('article', { name: /能源报告/ });
+  const anchors = report.getByLabel('能效分层与运行条件');
+  await expect(anchors).toBeVisible();
+  await expect(anchors).toContainText('冷机 COP');
+  await expect(anchors).toContainText('4.92');
+  await expect(anchors).toContainText('冷冻泵 WTF');
+  await expect(anchors).toContainText('24.6');
+  await expect(anchors).toContainText('冷却泵 WTF');
+  await expect(anchors).toContainText('21.8');
+  await expect(anchors).toContainText('冷却塔占比');
+  await expect(anchors).toContainText('5.2%');
+  await expect(anchors).toContainText('平均湿球温度');
+  await expect(anchors).toContainText('24.3');
+  await expect(anchors).toContainText('平均负荷率');
+  await expect(anchors).toContainText('64.2%');
+  await expect(anchors).toContainText('AI 闭环运行时长占比');
+  await expect(anchors).toContainText('78.5%');
+  await expect(anchors).toContainText('主配电平衡差额');
+  await expect(anchors).toContainText('+1,576.4 kWh');
+});

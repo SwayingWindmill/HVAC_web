@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { Bar, CartesianGrid, Cell, ComposedChart, Line, XAxis, YAxis } from 'recharts';
 import { InfoTip } from '@/components/info-tip';
+import { Badge } from '@/components/ui/badge';
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from '@/components/ui/chart';
 import { DeltaBadge } from '@/components/ui/delta-badge';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -12,7 +13,12 @@ import { PERIOD_LABEL, PERIOD_ORDER, type DemandCharge } from '@/features/tariff
 import { formatDecimal } from '@/lib/operator-format';
 import { isOneOf } from '@/lib/typed';
 import { cn } from '@/lib/utils';
-import type { AlarmSummary } from '../report-model';
+import type {
+  AlarmSummary,
+  ReportConditionAnchors,
+  ReportLayeredEfficiency,
+  ReportMeterBalance,
+} from '../report-model';
 
 // The pieces a monthly or yearly report is laid out from, whichever source its figures come from.
 
@@ -300,6 +306,179 @@ export function OperationsGrid({ alarms, orders, findings, findingsUnavailable, 
           </>
         ) : findingsUnavailable ? <p className="col-span-3 text-sm text-muted-foreground">诊断结论暂时读不到</p> : <Skeleton className="col-span-3 h-12" />}
       </OperationsGroup>
+    </div>
+  );
+}
+
+const REPORT_BALANCE_BADGE: Readonly<Record<string, { label: string; variant: 'success' | 'warning' | 'destructive' | 'outline'; className: string }>> = {
+  BALANCED: { label: '● 平衡', variant: 'success', className: 'text-success-text' },
+  UNMETERED_GAP: { label: '■ 未计量差额偏大', variant: 'warning', className: 'text-warning-text' },
+  SUBMETER_EXCEEDS_MAIN: { label: '▲ 设备合计高于主计量', variant: 'destructive', className: 'text-destructive-text' },
+  NO_MAIN_METER: { label: '○ 暂无冷站主计量', variant: 'outline', className: 'text-muted-foreground' },
+  SYNTHESIZED: { label: '○ 合成总计量', variant: 'outline', className: 'text-muted-foreground' },
+};
+
+const isFiniteNum = (value: number | null | undefined): value is number =>
+  value !== null && value !== undefined && Number.isFinite(value);
+
+function formatReportEnergy(value: number): string {
+  return Math.abs(value) >= 10_000
+    ? `${formatDecimal(value / 1000, 2)} MWh`
+    : `${formatDecimal(value, 1)} kWh`;
+}
+
+function formatSignedDiff(value: number): string {
+  const zeroed = Math.abs(value) < 0.05 ? 0 : value;
+  return `${zeroed > 0 ? '+' : ''}${formatReportEnergy(zeroed)}`;
+}
+
+function formatSignedRatio(ratio: number): string {
+  const pct = ratio * 100;
+  const zeroed = Math.abs(pct) < 0.05 ? 0 : pct;
+  return `${zeroed > 0 ? '+' : ''}${formatDecimal(zeroed, 1)}%`;
+}
+
+/**
+ * Renders available layered efficiency, main-vs-submeter balance, and operating condition anchors
+ * cleanly inside a report section; returns null when none are present.
+ */
+export function EfficiencyAndAnchorsSection({
+  layeredEfficiency,
+  meterBalance,
+  conditionAnchors,
+}: {
+  readonly layeredEfficiency?: ReportLayeredEfficiency;
+  readonly meterBalance?: ReportMeterBalance;
+  readonly conditionAnchors?: ReportConditionAnchors;
+}) {
+  const figures: { key: string; label: string; value: string; unit?: string; note: string }[] = [];
+
+  if (isFiniteNum(layeredEfficiency?.chillerCOP)) {
+    figures.push({
+      key: 'chillerCOP',
+      label: '冷机 COP',
+      value: formatDecimal(layeredEfficiency.chillerCOP, 2),
+      unit: 'COP',
+      note: '供冷量 ÷ 冷水机组用电',
+    });
+  }
+  if (isFiniteNum(layeredEfficiency?.chilledPumpWTF)) {
+    figures.push({
+      key: 'chilledPumpWTF',
+      label: '冷冻泵 WTF',
+      value: formatDecimal(layeredEfficiency.chilledPumpWTF, 1),
+      note: '供冷量 ÷ 冷冻水泵用电',
+    });
+  }
+  if (isFiniteNum(layeredEfficiency?.coolingPumpWTF)) {
+    figures.push({
+      key: 'coolingPumpWTF',
+      label: '冷却泵 WTF',
+      value: formatDecimal(layeredEfficiency.coolingPumpWTF, 1),
+      note: '供冷量 ÷ 冷却水泵用电',
+    });
+  }
+  if (isFiniteNum(layeredEfficiency?.towerPowerShare)) {
+    figures.push({
+      key: 'towerPowerShare',
+      label: '冷却塔占比',
+      value: formatDecimal(layeredEfficiency.towerPowerShare * 100, 1),
+      unit: '%',
+      note: '冷却塔用电 ÷ 整站空调用电',
+    });
+  }
+  if (isFiniteNum(conditionAnchors?.meanWetBulbC)) {
+    figures.push({
+      key: 'meanWetBulbC',
+      label: '平均湿球温度',
+      value: formatDecimal(conditionAnchors.meanWetBulbC, 1),
+      unit: '°C',
+      note: isFiniteNum(conditionAnchors.meanDryBulbC)
+        ? `平均干球 ${formatDecimal(conditionAnchors.meanDryBulbC, 1)} °C`
+        : '室外运行条件',
+    });
+  } else if (isFiniteNum(conditionAnchors?.meanDryBulbC)) {
+    figures.push({
+      key: 'meanDryBulbC',
+      label: '平均干球温度',
+      value: formatDecimal(conditionAnchors.meanDryBulbC, 1),
+      unit: '°C',
+      note: '室外运行条件',
+    });
+  }
+  if (isFiniteNum(conditionAnchors?.meanLoadRatio)) {
+    figures.push({
+      key: 'meanLoadRatio',
+      label: '平均负荷率',
+      value: formatDecimal(conditionAnchors.meanLoadRatio * 100, 1),
+      unit: '%',
+      note: '运行期间平均冷负荷率',
+    });
+  }
+  if (isFiniteNum(conditionAnchors?.aiClosedLoopShare)) {
+    figures.push({
+      key: 'aiClosedLoopShare',
+      label: 'AI 闭环运行时长占比',
+      value: formatDecimal(conditionAnchors.aiClosedLoopShare * 100, 1),
+      unit: '%',
+      note: 'AI 闭环控制时段占比',
+    });
+  }
+
+  const hasMeterBalance = Boolean(
+    meterBalance && (
+      isFiniteNum(meterBalance.diffKWh)
+      || isFiniteNum(meterBalance.siteKWh)
+      || isFiniteNum(meterBalance.submeterSumKWh)
+    ),
+  );
+
+  if (figures.length === 0 && !hasMeterBalance) return null;
+
+  const balanceStatus = meterBalance?.status ?? 'NO_MAIN_METER';
+  const balanceMeta = REPORT_BALANCE_BADGE[balanceStatus] ?? REPORT_BALANCE_BADGE.NO_MAIN_METER;
+
+  return (
+    <div aria-label="能效分层与运行条件" className="flex flex-col gap-4 border-t border-divider pt-5">
+      {figures.length > 0 ? (
+        <FigureGrid>
+          {figures.map((item) => (
+            <Figure
+              key={item.key}
+              label={item.label}
+              value={item.value}
+              unit={item.unit}
+              note={item.note}
+            />
+          ))}
+        </FigureGrid>
+      ) : null}
+      {hasMeterBalance && meterBalance ? (
+        <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 rounded-lg border border-divider bg-muted/25 px-4 py-2.5 text-xs text-muted-foreground tabular-nums">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+            <Badge variant={balanceMeta.variant}>{balanceMeta.label}</Badge>
+            <span>
+              主配电平衡差额{' '}
+              <strong className={cn('font-medium', balanceMeta.className)}>
+                {isFiniteNum(meterBalance.diffKWh) ? formatSignedDiff(meterBalance.diffKWh) : '--'}
+                {isFiniteNum(meterBalance.imbalanceRatio) ? `（${formatSignedRatio(meterBalance.imbalanceRatio)}）` : ''}
+              </strong>
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+            {isFiniteNum(meterBalance.siteKWh) ? (
+              <span>
+                冷站主计量 <strong className="font-medium text-foreground">{formatReportEnergy(meterBalance.siteKWh)}</strong>
+              </span>
+            ) : null}
+            {isFiniteNum(meterBalance.submeterSumKWh) ? (
+              <span>
+                设备计量合计 <strong className="font-medium text-foreground">{formatReportEnergy(meterBalance.submeterSumKWh)}</strong>
+              </span>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
