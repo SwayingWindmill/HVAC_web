@@ -73,6 +73,17 @@ test('the same page splits the plant\'s electricity by machine from each one\'s 
   await expect(flow).toContainText('空调总用电 3,649 kWh · 设备电表合计 3,601 kWh');
   await expect(flow.getByRole('region', { name: '能流' })).toContainText('未单独计量');
 
+  const layered = page.getByRole('region', { name: '系统能效分层与计量校核' });
+  await expect(layered).toBeVisible();
+  await expect(layered).toContainText('冷站综合 COP');
+  await expect(layered).toContainText('冷机 COP');
+  await expect(layered).toContainText('冷冻泵输送系数 WTF');
+  await expect(layered).toContainText('冷却泵输送系数 WTF');
+  await expect(layered).toContainText('冷却塔电耗占比');
+  await expect(layered).toContainText('● 平衡');
+  await expect(layered).toContainText('冷站主计量 3,649.2 kWh');
+  await expect(layered).toContainText('设备计量合计 3,601.3 kWh');
+
   const machines = flow.getByRole('table', { name: '设备用电' }).getByRole('row');
   await expect(machines.nth(1)).toContainText('CHILLER-01冷水机组1,852');
   await expect(machines.nth(1)).toContainText('50.7%');
@@ -100,6 +111,10 @@ test('a machine without a sub-meter is shown unmetered and its energy stays unal
   const machines = page.getByRole('table', { name: '设备用电' }).getByRole('row');
   await expect(machines.filter({ hasText: 'CT-01' })).toContainText('没有电表，用电计入未单独计量');
   await expect(machines.last()).toContainText('总电表减各设备电表224');
+
+  const layered = page.getByRole('region', { name: '系统能效分层与计量校核' });
+  await expect(layered).toContainText('■ 未计量差额偏大');
+  await expect(layered).toContainText('冷却塔电耗占比--');
 });
 
 test('without a Tariff on its grid import, the Site energy is not priced', async ({ page, gateway }) => {

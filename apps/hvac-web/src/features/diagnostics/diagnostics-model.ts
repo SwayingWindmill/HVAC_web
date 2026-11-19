@@ -42,7 +42,26 @@ export const LOW_DELTA_T: DiagnosticRule = {
   actions: ['降低冷冻水泵频率，使温差回到 5 K 附近', '检查旁通阀与末端水阀的开度', '确认冷量表供回水温度传感器读数'],
 };
 
-export const RULES: readonly DiagnosticRule[] = [LOW_DELTA_T];
+export const METER_IMBALANCE_RULE: DiagnosticRule = {
+  findingType: 'METER_IMBALANCE',
+  title: '主计量与设备计量差额偏大',
+  watches: '冷站主计量与各设备计量之和的偏差率',
+  designValue: 5,
+  unit: '%',
+  meaning: '冷站主计量与各设备计量合计之间的差额超出允许偏差，可能存在未单独计量的支路用电、电表互感器倍率配置偏差或设备电表通信中断。',
+  causes: [
+    '冷站内有风机、辅助水泵或控制柜等未接设备电表的用电回路',
+    '冷站主计量或设备电表的电流电压互感器倍率设置与现场不一致',
+    '部分设备电表掉线、读数冻结或回传延迟导致统计区间缺少读数',
+  ],
+  actions: [
+    '前往能耗分析页面核对冷站主计量与各设备计量合计的差额走势',
+    '核实冷站主计量和各设备电表的互感器倍率及在线状态',
+    '排查是否新增了未接电表的用电设备或辅助支路',
+  ],
+};
+
+export const RULES: readonly DiagnosticRule[] = [LOW_DELTA_T, METER_IMBALANCE_RULE];
 
 /**
  * When the plant counts as operating for the rule (spec docs/specs/fdd-rule-definition.md): FDD

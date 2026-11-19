@@ -5,6 +5,26 @@
 
 ## 未发布
 
+### 2026-11-19
+
+#### 新增与架构演进
+
+- 完成能源统计与电费结算体系 P2 扩展（分层能效、主配电平衡诊断、按冷负荷分摊跨缺口与双变量对比基线，覆盖 `libs/analyticsmodel`、`modules/energy`、`services/fdd-service`、`services/mv-service`、`services/report-service`、`apps/hvac-web`、`scripts/` 与迁移 `023-meter-balance-and-layered-efficiency.sql`、`mv-bivariate-weather-anchors.sql`）：
+  - **主配电平衡校验、分层能效模型与偏差诊断**：在 ClickHouse 新增 `site_meter_balance_hourly` 等平衡视图（`023-meter-balance-and-layered-efficiency.sql`）并在 `libs/analyticsmodel/layered_efficiency.go` 与前端 `layered-efficiency.ts` / `LayeredEfficiencyStrip.tsx` 实现冷站综合 COP、冷机 COP、冷冻泵与冷却泵输送系数 WTF、冷却塔电耗占比及主计量与设备计量平衡状态校验；`fdd-service` 与网页端 `diagnostics-model.ts` 新增 `METER_IMBALANCE`（「主计量与设备计量差额偏大」，默认偏差阈值 `5%`）规则。
+  - **跨缺口电量分摊与运行条件归档**：在 `modules/energy` 新增按冷负荷加权分摊跨缺口电量（`cross_gap_allocator.go`）与室外温湿度/负荷/控制模式条件归档（`condition_archiver.go`、`condition_anchors.go`）。
+  - **冷负荷 × 室外湿球双变量对比基线与报告快照扩展**：`services/mv-service` 与迁移 `mv-bivariate-weather-anchors.sql` 支持 `BIVARIATE_COOLING_WET_BULB` 双变量回归与每日运行条件锚点，`services/report-service` 为月结快照新增 `layeredEfficiency`、`meterBalance` 与 `conditionAnchors`；网页端 `MeasureSheet.tsx`、`ReportParts.tsx` 与 `ReportWorkspace.tsx` 同步展示双变量拟合公式、决定系数 `R²`、每日运行条件及报告能效分层与运行条件区块，并补齐模型单测与 Playwright E2E 回归验证。
+
+- 完成能源统计与电费结算体系 P1 五档分时电价、定点精度与防抖重算闭环（PR `#917`，覆盖 `libs/fixedpoint`、`libs/tariffmodel`、`modules/energy`、`modules/metric`、`modules/registry`、`cmd/energy-api`、`cmd/metric-worker`、`contracts/`、`apps/hvac-web` 与迁移 `energy-tou-holidays-and-recalc.sql`、`022-energy-hourly-v2-decimal.sql`）：
+  - **六位小数定点精度与倍率历史视图**：新增 `libs/fixedpoint/decimal.go` 统一电量、倍率与电费定点运算，建立 ClickHouse `energy_hourly_v2` 定点汇总表及 CT/PT 互感器倍率历史 ASOF 关联查询视图。
+  - **五档分时电价与节假日日历**：分时电价扩展支持 `DEEP_VALLEY`（深谷）时段与站点节假日日历模型，平台网关契约及网页端「分时电费」「电费账单」「报告」「运行计划」页面同步区分展示五档时段。
+  - **防抖自动重算与手动重算入口**：`metric-worker` 接入电价、倍率与点位映射变更防抖重算队列；平台网关与网页端「电费统计」新增按权限控制的手动重算弹窗与任务进度查看面板。
+
+#### 修复与加固
+
+- 完成能源统计与电费结算体系 P0 读数清洗、时间归属、能效护栏与补采重算加固（PR `#916`，覆盖 `modules/telemetry`、`modules/energy`、`modules/metric`、`libs/analyticsmodel`、`services/mv-service`、`services/optimization-service`、`services/report-service`、`services/settlement-service`、`semantic/cube/`、`cmd/telemetry-worker`、`cmd/metric-worker`、`apps/hvac-web` 与迁移 `metric-backfill-watermarks-and-reverify.sql`、`021-energy-accounting-p0.sql`）：
+  - **累计表读数校验与 Option A 区间对齐**：强化累计电表/冷量表跳变与回退清洗，统一 ClickHouse 与 Cube 按半开区间 `(period_start, period_end]` 归属时段能量并支持按跨时段多版本生效分时电价结算电费，持久化补算水位线以支持幂等回补重算。
+  - **综合能效物理护栏与残缺电表提示**：在 Go 后端与网页端统一采用按能量加权的 `SUM(cooling) / SUM(electricity)` 口径计算综合能效，隔离冷机待机、极低负荷与超出物理范围的异常比值，并在部分设备电表缺失读数时标记不完整提示。
+
 ### 2026-11-18
 
 #### 新增与架构演进

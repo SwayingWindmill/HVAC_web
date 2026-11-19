@@ -47,6 +47,7 @@ import {
   type Granularity,
 } from "../model";
 import { useEnergyComparison } from "../query";
+import { LayeredEfficiencyStrip } from "./LayeredEfficiencyStrip";
 
 const siteRoute = getRouteApi("/_app/_site");
 
@@ -227,6 +228,11 @@ export function ConsumptionWorkspace() {
         <>
           <IncompleteTelemetryNotice summary={comparison.current} />
           <PeriodChart comparison={comparison} pricing={pricing} previousLabel={previousLabel} metric={metric} onMetricChange={(next) => setSearch({ metric: next })} timeZone={site.timezone} />
+          <LayeredEfficiencyStrip
+            summary={comparison.current}
+            breakdown={destination.query.data}
+            isPending={destination.registry.isPending || (destination.machines !== null && destination.machines.length > 0 && destination.query.isPending)}
+          />
           <EnergyDestination result={destination} previousLabel={previousLabel} />
           <Panel aria-label="能耗明细">
             <Tabs value={view} onValueChange={(value) => { if (isOneOf(CONSUMPTION_VIEWS, value)) setSearch({ view: value }); }} className="gap-0">
