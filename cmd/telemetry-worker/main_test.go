@@ -710,7 +710,7 @@ func TestClonedHTTPTransportAndProbeSweepDebugLogging(t *testing.T) {
 	exitedInfo := make(chan struct{})
 	go func() {
 		defer close(exitedInfo)
-		runProbeOffsetSweep(infoCtx, &stubProbeOffsetSweeper{done: doneInfo}, 10*time.Millisecond, observability.NewJSONLogger(&infoBuf, slog.LevelInfo))
+		runProbeOffsetSweepCoordinated(infoCtx, &stubProbeOffsetSweeper{done: doneInfo}, 10*time.Millisecond, nil, observability.NewJSONLogger(&infoBuf, slog.LevelInfo))
 	}()
 	<-doneInfo
 	cancelInfo()
@@ -725,7 +725,7 @@ func TestClonedHTTPTransportAndProbeSweepDebugLogging(t *testing.T) {
 	exitedDebug := make(chan struct{})
 	go func() {
 		defer close(exitedDebug)
-		runProbeOffsetSweep(debugCtx, &stubProbeOffsetSweeper{done: doneDebug}, 10*time.Millisecond, observability.NewJSONLogger(&debugBuf, slog.LevelDebug))
+		runProbeOffsetSweepCoordinated(debugCtx, &stubProbeOffsetSweeper{done: doneDebug}, 10*time.Millisecond, nil, observability.NewJSONLogger(&debugBuf, slog.LevelDebug))
 	}()
 	<-doneDebug
 	cancelDebug()

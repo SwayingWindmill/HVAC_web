@@ -515,14 +515,7 @@ func TestClientIncludesCrossGapInMonthlyBuckets(t *testing.T) {
 	}
 }
 
-			if response.Metadata.Partial != testCase.wantPartial || !response.Metadata.Synthesized {
-				t.Fatalf("metadata = %#v", response.Metadata)
-			}
-		})
-	}
-}
-
-func TestClientDrainsModeratelyOversizedResponseForKeepAlive(t *testing.T) {
+func TestClientMapsIncompleteSynthesizedDaysAndMonths(t *testing.T) {
 	location, _ := time.LoadLocation("Asia/Shanghai")
 
 	for _, testCase := range []struct {

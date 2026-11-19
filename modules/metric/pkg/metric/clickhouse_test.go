@@ -410,11 +410,6 @@ func TestInsertMetricAndInsertMetricsUseAsyncInsertAndDedupToken(t *testing.T) {
 	}
 }
 
-	if !strings.Contains(capturedSQL, "sampled_at") {
-		t.Fatalf("unexpected query: %s", capturedSQL)
-	}
-}
-
 func TestReadPointEnforcesExplicitUTCAndCounterAnomalyCleaningSQL(t *testing.T) {
 	var capturedSQL string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

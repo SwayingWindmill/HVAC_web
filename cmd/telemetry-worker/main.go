@@ -276,7 +276,11 @@ func runTelemetryWorker() int {
 		return 1
 	}
 	shutdownCfg.CloseCoordination = closeCoordination
-	settlingBuffer := durationEnv("TELEMETRY_SCHEDULE_WATERMARK_BUFFER", 30*time.Second, 0, 10*time.Minute)
+	settlingBuffer, err := durationEnv("TELEMETRY_SCHEDULE_WATERMARK_BUFFER", 30*time.Second, 0, 10*time.Minute)
+	if err != nil {
+		logger.Error("telemetry_coordination_config_invalid", "error_code", "TELEMETRY_COORDINATION_CONFIG_INVALID")
+		return 1
+	}
 	retentionContext, retentionCancel := context.WithCancel(context.Background())
 	workerCancels = append(workerCancels, retentionCancel)
 	runSupervised(retentionContext, &workersWG, observabilityRuntime, logger, "telemetry.runtime_retention", func() {
