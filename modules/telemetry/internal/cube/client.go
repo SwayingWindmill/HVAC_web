@@ -277,7 +277,7 @@ func qualitySuffix(policy analyticsmodel.QualityPolicy) string {
 	return "valid"
 }
 
-var tariffPeriodOrder = map[string]int{"SUPER_PEAK": 0, "PEAK": 1, "FLAT": 2, "VALLEY": 3}
+var tariffPeriodOrder = map[string]int{"SUPER_PEAK": 0, "PEAK": 1, "FLAT": 2, "VALLEY": 3, "DEEP_VALLEY": 4}
 
 // attachCosts gives every electricity point its cost, peak periods first, and prices any cross-gap
 // electricity across the window. A point no cost row reaches had no energy under the quality policy

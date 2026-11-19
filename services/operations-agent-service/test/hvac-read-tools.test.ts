@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { AgentToolError } from '../dist/agent/index.js';
 import { OwnerReadError } from '../dist/application/index.js';
-import { createHvacReadTools, createRunSiteSnapshot, createSiteDescriber } from '../dist/tools/index.js';
+import { createEnergyAnalyticsOwnerReader, createHvacReadTools, createRunSiteSnapshot, createSiteDescriber } from '../dist/tools/index.js';
 
 const tenantId = 'tenant-1';
 const siteId = 'site-1';
@@ -754,14 +754,14 @@ test('Tariff periods read as the pages show them, energy no Tariff covers as unp
         { name: 'tariff_period', title: '电价时段', kind: 'dimension' },
         { name: 'cost_valid_cny', title: '电费', kind: 'measure' },
       ],
-      rows: [['2026-10-15T07:00:00Z', 'SUPER_PEAK', 12], ['2026-10-15T07:00:00Z', 'VALLEY', 3], ['2026-10-15T07:00:00Z', '', null]],
+      rows: [['2026-10-15T07:00:00Z', 'SUPER_PEAK', 12], ['2026-10-15T07:00:00Z', 'VALLEY', 3], ['2026-10-15T07:00:00Z', 'DEEP_VALLEY', 1.5], ['2026-10-15T07:00:00Z', '', null]],
       metadata: { datasetRevision: 'semantic:1', partial: false },
     }),
   });
   const result = await execute(byName(harness.tools, 'energy_semantic_query'), {
     measures: ['site_energy_cost.cost_valid_cny'], dimensions: ['site_energy_cost.tariff_period'], granularity: 'day', startDate: '2026-10-15', endDate: '2026-10-15',
   });
-  assert.deepEqual(result.rows.map((row) => row['电价时段']), ['尖峰', '谷', '未计价']);
+  assert.deepEqual(result.rows.map((row) => row['电价时段']), ['尖峰', '谷', '深谷', '未计价']);
   // Only energy is charted (#640).
   assert.equal(byName(harness.tools, 'energy_semantic_query').chart(result), null);
 });
@@ -1205,4 +1205,70 @@ test('energy_compare_periods draws no chart when it could not compare the period
   const comparison = await execute(tool, { baselineStartDate: '2026-10-08', baselineEndDate: '2026-10-08', currentStartDate: '2026-10-15', currentEndDate: '2026-10-15' });
   assert.equal(comparison.comparison.status, '数据不完整，不能比较');
   assert.equal(tool.chart(comparison), null);
+});
+
+test('energy analytics owner reader accepts DEEP_VALLEY periodCode in 5-tier TOU costs', async () => {
+  const readerTenantId = '0198a36e-4c9d-7b5a-8f2d-4c5e6f708192';
+  const readerSiteId = '0198a36e-4c9d-7b5a-8f2d-4c5e6f708193';
+  const from = '2026-10-15T16:00:00.000Z';
+  const to = '2026-10-16T16:00:00.000Z';
+  const reader = createEnergyAnalyticsOwnerReader({
+    baseUrl: 'https://telemetry-query.internal',
+    fetchImplementation: async () => new Response(JSON.stringify({
+      schemaVersion: 1,
+      points: [{
+        periodStart: from,
+        periodEnd: to,
+        energyKWh: 200,
+        cost: {
+          amountCNY: 100,
+          unpricedKWh: 0,
+          periods: [
+            { periodCode: 'SUPER_PEAK', energyKWh: 40, amountCNY: 50 },
+            { periodCode: 'DEEP_VALLEY', energyKWh: 160, amountCNY: 50 },
+          ],
+        },
+      }],
+      metadata: {
+        requestedGranularity: 'day',
+        actualGranularity: 'day',
+        dataWatermark: to,
+        aggregateWatermark: to,
+        datasetRevision: 'energy-daily:v2',
+        partial: false,
+        qualitySummary: { valid: 96, suspect: 0, invalid: 0 },
+      },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+  });
+
+  const result = await reader.read({
+    context: {
+      sessionId: 'session-deep-valley',
+      runId: 'run-deep-valley',
+      scope: { tenantId: readerTenantId, siteId: readerSiteId, assetId: null, deviceId: null },
+      correlationId: 'corr-deep-valley',
+      authorization: {
+        decision: 'ALLOW',
+        decisionId: 'dec-deep-valley',
+        delegationGrant: 'grant-deep-valley',
+        traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01',
+      },
+    },
+    request: {
+      requestId: 'read-deep-valley-1',
+      tool: 'analytics.getEnergySeries',
+      input: {
+        tenantId: readerTenantId,
+        siteId: readerSiteId,
+        energyType: 'electricity',
+        granularity: 'day',
+        timezone: 'Asia/Shanghai',
+        from,
+        to,
+        qualityPolicy: 'VALID_ONLY',
+      },
+    },
+  });
+
+  assert.equal(result.payload.points[0].cost?.periods[1].periodCode, 'DEEP_VALLEY');
 });

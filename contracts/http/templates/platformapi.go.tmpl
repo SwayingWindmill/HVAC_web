@@ -450,13 +450,14 @@ type SiteAssetModel struct {
 }
 
 type SiteTariff struct {
-	SiteID        string         `json:"siteId"`
-	DisplayName   string         `json:"displayName"`
-	Version       int64          `json:"version"`
-	EffectiveFrom string         `json:"effectiveFrom"`
-	Timezone      string         `json:"timezone"`
-	Currency      string         `json:"currency"`
-	Periods       []TariffPeriod `json:"periods"`
+	SiteID        string            `json:"siteId"`
+	DisplayName   string            `json:"displayName"`
+	Version       int64             `json:"version"`
+	EffectiveFrom string            `json:"effectiveFrom"`
+	Timezone      string            `json:"timezone"`
+	Currency      string            `json:"currency"`
+	Periods       []TariffPeriod    `json:"periods"`
+	HolidayDates  map[string]string `json:"holidayDates,omitempty"`
 }
 
 type TariffPeriod struct {

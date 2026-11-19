@@ -191,7 +191,7 @@ components:
       additionalProperties: false
       required: [periodCode, energyKWh, amountCNY]
       properties:
-        periodCode: { type: string, enum: [SUPER_PEAK, PEAK, FLAT, VALLEY] }
+        periodCode: { type: string, enum: [SUPER_PEAK, PEAK, FLAT, VALLEY, DEEP_VALLEY] }
         energyKWh: { type: number, format: double, minimum: 0 }
         amountCNY: { type: number, format: double, minimum: 0 }
     QualitySummary:

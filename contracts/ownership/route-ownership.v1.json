@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 58,
+  "registryRevision": 59,
   "routes": [
     {"method": "GET", "path": "/api/v1/sites/{siteId}/data-gaps", "owner": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
     {"method": "GET", "path": "/api/v1/iam/members", "owner": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "principal"]},
@@ -1944,6 +1944,38 @@
     {
       "method": "POST",
       "path": "/api/v1/sites/{siteId}/utility-bills/{billId}/confirm",
+      "owner": "platform-core-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sites/{siteId}/accounting/recalculate",
+      "owner": "platform-core-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sites/{siteId}/accounting/recalculate-jobs",
       "owner": "platform-core-service",
       "publicIngress": "platform-gateway",
       "revision": 1,

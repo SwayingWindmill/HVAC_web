@@ -37,7 +37,7 @@ const pointKeys = ['periodStart', 'periodEnd', 'energyKWh'] as const;
 const pricedPointKeys = [...pointKeys, 'cost'] as const;
 const costKeys = ['amountCNY', 'unpricedKWh', 'periods'] as const;
 const periodCostKeys = ['periodCode', 'energyKWh', 'amountCNY'] as const;
-const periodCodes = new Set(['SUPER_PEAK', 'PEAK', 'FLAT', 'VALLEY']);
+const periodCodes = new Set(['SUPER_PEAK', 'PEAK', 'FLAT', 'VALLEY', 'DEEP_VALLEY']);
 const qualityKeys = ['valid', 'suspect', 'invalid'] as const;
 const metadataRequiredKeys = [
   'requestedGranularity',

@@ -384,6 +384,66 @@ func (server *server) handleAuthorized(writer http.ResponseWriter, request *http
 		writeJSON(writer, http.StatusOK, list)
 		return http.StatusOK
 	}
+	if route.resource == "accounting-recalculate-jobs" {
+		query := request.URL.Query()
+		for name, values := range query {
+			if name != "limit" || len(values) != 1 {
+				writeProblem(writer, request, http.StatusBadRequest, "REGISTRY_QUERY_INVALID", "The accounting recalculation jobs query is invalid.", false)
+				return http.StatusBadRequest
+			}
+		}
+		limit := 0
+		if rawLimit := query.Get("limit"); rawLimit != "" {
+			parsedLimit, err := strconv.Atoi(rawLimit)
+			if err != nil || parsedLimit < 1 || parsedLimit > maxAccountingRecalcJobsLimit {
+				writeProblem(writer, request, http.StatusBadRequest, "REGISTRY_QUERY_INVALID", "The accounting recalculation jobs limit is invalid.", false)
+				return http.StatusBadRequest
+			}
+			limit = parsedLimit
+		}
+		reader, ok := server.store.(AccountingRecalcStore)
+		if !ok {
+			writeProblem(writer, request, http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "The Core Registry accounting recalculation store is not configured.", true)
+			return http.StatusServiceUnavailable
+		}
+		list, err := reader.ListAccountingRecalcJobs(request.Context(), claims, route.parentID, limit)
+		if err != nil {
+			return server.writeStoreError(writer, request, err)
+		}
+		writeJSON(writer, http.StatusOK, list)
+		return http.StatusOK
+	}
+	if route.resource == "accounting-recalculate" {
+		if request.URL.RawQuery != "" {
+			writeProblem(writer, request, http.StatusBadRequest, "REGISTRY_MUTATION_INVALID", "Registry mutation routes do not accept query parameters.", false)
+			return http.StatusBadRequest
+		}
+		if server.writer == nil {
+			writeProblem(writer, request, http.StatusServiceUnavailable, "REGISTRY_WRITER_UNAVAILABLE", "The Registry writer is not configured.", true)
+			return http.StatusServiceUnavailable
+		}
+		recalcWriter, ok := server.writer.(AccountingRecalcWriter)
+		if !ok {
+			writeProblem(writer, request, http.StatusServiceUnavailable, "REGISTRY_WRITER_UNAVAILABLE", "The Registry accounting recalculation writer is not configured.", true)
+			return http.StatusServiceUnavailable
+		}
+		var input AccountingRecalculateRequest
+		if !decodeRegistryMutation(writer, request, &input) {
+			return http.StatusBadRequest
+		}
+		input.SiteID = route.parentID
+		input.ActorDisplayName = request.Header.Get("X-Actor-Display-Name")
+		job, err := recalcWriter.RequestAccountingRecalculation(request.Context(), claims, input)
+		if err != nil {
+			if errors.Is(err, ErrMutationForbidden) {
+				writeProblem(writer, request, http.StatusForbidden, "ACCOUNTING_RECALC_FORBIDDEN", "The authenticated Principal is not allowed to trigger accounting recalculation on this Site.", false)
+				return http.StatusForbidden
+			}
+			return server.writeMutationError(writer, request, err)
+		}
+		writeJSON(writer, http.StatusAccepted, job)
+		return http.StatusAccepted
+	}
 	if route.write {
 		return server.handleAuthorizedWrite(writer, request, route, claims)
 	}
@@ -566,6 +626,17 @@ func requiredCoreActionForRoute(route registryRoute, claims registryauth.GrantCl
 		return registryauth.ActionAssetModelRead
 	}
 	switch route.resource {
+	case "accounting-recalculate":
+		for _, candidate := range []registryauth.Action{
+			registryauth.ActionBillingManage,
+			registryauth.ActionSavingsManage,
+		} {
+			for _, granted := range claims.Actions {
+				if registryauth.ActionAllows(granted, candidate) {
+					return candidate
+				}
+			}
+		}
 	case "templates", "template-revision", "site-template-assignments":
 		for _, candidate := range []registryauth.Action{
 			registryauth.ActionTemplateManage,
@@ -970,6 +1041,10 @@ func parseRegistryRoute(method, path string) (registryRoute, bool) {
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/utility-bills/{billId}", resource: "utility-bill-write", parentID: segments[1], id: segments[3], action: registryauth.ActionBillingManage, write: true}, true
 	case method == http.MethodPost && len(segments) == 5 && segments[0] == "sites" && segments[2] == "utility-bills" && segments[4] == "confirm":
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/utility-bills/{billId}/confirm", resource: "utility-bill-confirm", parentID: segments[1], id: segments[3], action: registryauth.ActionBillingManage, write: true}, true
+	case method == http.MethodPost && len(segments) == 4 && segments[0] == "sites" && segments[2] == "accounting" && segments[3] == "recalculate":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/accounting/recalculate", resource: "accounting-recalculate", parentID: segments[1], action: registryauth.ActionBillingManage, write: true}, true
+	case method == http.MethodGet && len(segments) == 4 && segments[0] == "sites" && segments[2] == "accounting" && segments[3] == "recalculate-jobs":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/accounting/recalculate-jobs", resource: "accounting-recalculate-jobs", parentID: segments[1], action: registryauth.ActionSiteRead}, true
 	case method == http.MethodGet && len(segments) == 3 && segments[0] == "sites" && segments[2] == "control-state":
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/control-state", resource: "site-control-state", parentID: segments[1], action: registryauth.ActionSiteRead}, true
 	case method == http.MethodPut && len(segments) == 3 && segments[0] == "sites" && segments[2] == "control-mode":

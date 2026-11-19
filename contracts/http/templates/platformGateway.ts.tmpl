@@ -479,7 +479,7 @@ export const energySeriesQuerySchema = z.object({
 const energyCostSchema = z.object({
   amountCNY: z.number().min(0), unpricedKWh: z.number().min(0),
   periods: z.array(z.object({
-    periodCode: z.enum(['SUPER_PEAK', 'PEAK', 'FLAT', 'VALLEY']), energyKWh: z.number().min(0), amountCNY: z.number().min(0),
+    periodCode: z.enum(['SUPER_PEAK', 'PEAK', 'FLAT', 'VALLEY', 'DEEP_VALLEY']), energyKWh: z.number().min(0), amountCNY: z.number().min(0),
   }).strict()),
 }).strict();
 const energySeriesPointSchema = z.object({
@@ -665,7 +665,7 @@ export const siteAssetModelSchema = z.object({
   counts: assetModelCountsSchema,
 }).strict();
 export const tariffPeriodSchema = z.object({
-  periodCode: z.enum(['SUPER_PEAK', 'PEAK', 'FLAT', 'VALLEY']),
+  periodCode: z.enum(['SUPER_PEAK', 'PEAK', 'FLAT', 'VALLEY', 'DEEP_VALLEY']),
   dayType: z.enum(['WEEKDAY', 'WEEKEND', 'HOLIDAY', 'SPECIAL_DAY']),
   startMinute: z.number().int().min(0).max(1439),
   endMinute: z.number().int().min(1).max(1440),
@@ -680,6 +680,7 @@ export const siteTariffSchema = z.object({
   timezone: z.string().min(1),
   currency: z.string().regex(/^[A-Z]{3}$/),
   periods: z.array(tariffPeriodSchema),
+  holidayDates: z.record(z.string(), z.string()).optional(),
 }).strict();
 
 // The alarm rules a Site evaluates now (#693). Each condition names its reading by device and point.
@@ -1135,6 +1136,7 @@ export const utilityBillTouBreakdownSchema = z.object({
   peakKwh: z.number().nonnegative().optional(),
   flatKwh: z.number().nonnegative().optional(),
   valleyKwh: z.number().nonnegative().optional(),
+  deepValleyKwh: z.number().nonnegative().optional(),
 }).strict();
 
 export const utilityBillSchema = z.object({
@@ -1201,6 +1203,41 @@ export const utilityBillMutationSchema = z.object({
 export const confirmUtilityBillRequestSchema = z.object({
   note: z.string().max(1000).optional(),
   meta: mutationMetaSchema,
+}).strict();
+
+export const accountingRecalcGranularitySchema = z.enum(['HOUR', 'DAY', 'MONTH', 'ALL']);
+export const accountingRecalcStatusSchema = z.enum(['PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED']);
+export const accountingRecalcSourceSchema = z.enum(['BACKFILL', 'MANUAL', 'TARIFF_CHANGE', 'RATIO_CHANGE']);
+
+export const accountingRecalculateRequestSchema = z.object({
+  fromDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  toDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  granularity: accountingRecalcGranularitySchema.optional(),
+  reason: z.string().trim().min(1).max(1000),
+}).strict();
+
+export const accountingRecalcJobSchema = z.object({
+  id: uuidV7Schema,
+  tenantId: uuidV7Schema,
+  siteId: uuidV7Schema,
+  granularity: accountingRecalcGranularitySchema,
+  windowStart: instantSchema,
+  windowEnd: instantSchema,
+  status: accountingRecalcStatusSchema,
+  availableAt: instantSchema,
+  requestedBy: uuidV7Schema,
+  requestedByDisplay: z.string(),
+  reason: z.string().max(1000),
+  source: accountingRecalcSourceSchema,
+  attemptCount: z.number().int().nonnegative(),
+  lastError: z.string(),
+  createdAt: instantSchema,
+  updatedAt: instantSchema,
+  finishedAt: instantSchema.nullable(),
+}).strict();
+
+export const accountingRecalcJobListSchema = z.object({
+  items: z.array(accountingRecalcJobSchema),
 }).strict();
 
 export const siteDataGapSchema = z.object({
@@ -1638,6 +1675,13 @@ export type UtilityBillList = z.infer<typeof utilityBillListSchema>;
 export type UtilityBillMutation = z.infer<typeof utilityBillMutationSchema>;
 export type ConfirmUtilityBillRequest = z.infer<typeof confirmUtilityBillRequestSchema>;
 export type UtilityBillsParams = { billingMonth?: string; meterScope?: UtilityBillMeterScope; status?: UtilityBillStatus };
+export type AccountingRecalcGranularity = z.infer<typeof accountingRecalcGranularitySchema>;
+export type AccountingRecalcStatus = z.infer<typeof accountingRecalcStatusSchema>;
+export type AccountingRecalcSource = z.infer<typeof accountingRecalcSourceSchema>;
+export type AccountingRecalculateRequest = z.infer<typeof accountingRecalculateRequestSchema>;
+export type AccountingRecalcJob = z.infer<typeof accountingRecalcJobSchema>;
+export type AccountingRecalcJobList = z.infer<typeof accountingRecalcJobListSchema>;
+export type AccountingRecalcJobsParams = { limit?: number };
 export type SiteDataGap = z.infer<typeof siteDataGapSchema>;
 export type SiteDataGapList = z.infer<typeof siteDataGapListSchema>;
 export type SiteControlMode = z.infer<typeof siteControlModeSchema>;
@@ -2101,6 +2145,20 @@ export function createPlatformGatewayClient(baseUrl = '') {
       utilityBillSchema,
       { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), 'X-CSRF-Token': csrfToken } },
     ),
+    recalculateSiteAccounting: (siteId: string, body: AccountingRecalculateRequest, csrfToken: string, init?: RequestInit) => mutation(
+      '__SITE_ACCOUNTING_RECALCULATE_PATH__'.replace('{siteId}', encodeURIComponent(siteId)),
+      'POST',
+      body,
+      accountingRecalculateRequestSchema,
+      accountingRecalcJobSchema,
+      { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), 'X-CSRF-Token': csrfToken } },
+    ),
+    listSiteAccountingRecalcJobs: (siteId: string, params: AccountingRecalcJobsParams = {}, init?: RequestInit) => {
+      const basePath = '__SITE_ACCOUNTING_RECALC_JOBS_PATH__'.replace('{siteId}', encodeURIComponent(siteId));
+      const query = new URLSearchParams();
+      if (params.limit !== undefined) query.set('limit', String(params.limit));
+      return request(`${basePath}${query.size ? `?${query.toString()}` : ''}`, accountingRecalcJobListSchema, { ...init, method: 'GET' });
+    },
     listSiteDataGaps: (siteId: string, init?: RequestInit) => request(
       '__SITE_DATA_GAPS_PATH__'.replace('{siteId}', encodeURIComponent(siteId)),
       siteDataGapListSchema,

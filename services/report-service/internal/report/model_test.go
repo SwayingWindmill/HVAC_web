@@ -261,3 +261,38 @@ func TestReportCOPUsesEnergyWeightedSumAndHandlesStandbyMissingInvalidAndIncompl
 		}
 	})
 }
+
+func TestFiveTierTariffPeriodsIncludingDeepValleyAreTotalledAndSorted(t *testing.T) {
+	start := time.Date(2026, 9, 14, 0, 0, 0, 0, shanghai)
+	hours := []Hour{
+		{
+			Start: start, ElectricityKWh: 100, CoolingKWh: 400, HasElectricity: true,
+			Cost: &analyticsmodel.EnergyCost{
+				AmountCNY: 115,
+				Periods: []analyticsmodel.PeriodCost{
+					{PeriodCode: "DEEP_VALLEY", EnergyKWh: 20, AmountCNY: 4},
+					{PeriodCode: "VALLEY", EnergyKWh: 20, AmountCNY: 8},
+					{PeriodCode: "FLAT", EnergyKWh: 20, AmountCNY: 15},
+					{PeriodCode: "PEAK", EnergyKWh: 20, AmountCNY: 28},
+					{PeriodCode: "SUPER_PEAK", EnergyKWh: 20, AmountCNY: 60},
+				},
+			},
+		},
+	}
+	snapshot, err := Build("2026-09", shanghai, MonthEnergy{Hours: hours}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"SUPER_PEAK", "PEAK", "FLAT", "VALLEY", "DEEP_VALLEY"}
+	if len(snapshot.TariffPeriods) != len(want) {
+		t.Fatalf("tariff periods len = %d, want %d (%#v)", len(snapshot.TariffPeriods), len(want), snapshot.TariffPeriods)
+	}
+	for idx, code := range want {
+		if snapshot.TariffPeriods[idx].Code != code {
+			t.Fatalf("tariff periods[%d] = %q, want %q", idx, snapshot.TariffPeriods[idx].Code, code)
+		}
+	}
+	if !near(snapshot.TariffPeriods[4].CostCNY, 4) || !near(snapshot.TariffPeriods[4].ElectricityKWh, 20) {
+		t.Fatalf("deep valley totals = %#v", snapshot.TariffPeriods[4])
+	}
+}

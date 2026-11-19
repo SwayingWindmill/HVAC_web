@@ -666,3 +666,54 @@ func TestClientDrainsModeratelyOversizedResponseForKeepAlive(t *testing.T) {
 		t.Fatalf("new connections = %d, want 1 (keep-alive connection reused after draining oversized response)", got)
 	}
 }
+
+func TestClientSortsFiveTierTariffPeriodsWithDeepValleyLast(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var decoded loadRequest
+		if err := json.NewDecoder(request.Body).Decode(&decoded); err != nil {
+			t.Fatal(err)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasPrefix(decoded.Query.Measures[0], costView+"."):
+			_, _ = writer.Write([]byte(`{"data":[
+				{"site_energy_cost.period_end.day":"2026-07-01T00:00:00.000","site_energy_cost.tariff_period":"DEEP_VALLEY","site_energy_cost.cost_valid_cny":"10","site_energy_cost.priced_valid_kwh":"50","site_energy_cost.unpriced_valid_kwh":"0","site_energy_cost.cross_gap_cost_valid_cny":"2","site_energy_cost.cross_gap_priced_valid_kwh":"10","site_energy_cost.cross_gap_unpriced_valid_kwh":"0"},
+				{"site_energy_cost.period_end.day":"2026-07-01T00:00:00.000","site_energy_cost.tariff_period":"VALLEY","site_energy_cost.cost_valid_cny":"15","site_energy_cost.priced_valid_kwh":"40","site_energy_cost.unpriced_valid_kwh":"0","site_energy_cost.cross_gap_cost_valid_cny":"0","site_energy_cost.cross_gap_priced_valid_kwh":"0","site_energy_cost.cross_gap_unpriced_valid_kwh":"0"},
+				{"site_energy_cost.period_end.day":"2026-07-01T00:00:00.000","site_energy_cost.tariff_period":"FLAT","site_energy_cost.cost_valid_cny":"20","site_energy_cost.priced_valid_kwh":"30","site_energy_cost.unpriced_valid_kwh":"0","site_energy_cost.cross_gap_cost_valid_cny":"0","site_energy_cost.cross_gap_priced_valid_kwh":"0","site_energy_cost.cross_gap_unpriced_valid_kwh":"0"},
+				{"site_energy_cost.period_end.day":"2026-07-01T00:00:00.000","site_energy_cost.tariff_period":"PEAK","site_energy_cost.cost_valid_cny":"30","site_energy_cost.priced_valid_kwh":"25","site_energy_cost.unpriced_valid_kwh":"0","site_energy_cost.cross_gap_cost_valid_cny":"0","site_energy_cost.cross_gap_priced_valid_kwh":"0","site_energy_cost.cross_gap_unpriced_valid_kwh":"0"},
+				{"site_energy_cost.period_end.day":"2026-07-01T00:00:00.000","site_energy_cost.tariff_period":"SUPER_PEAK","site_energy_cost.cost_valid_cny":"40","site_energy_cost.priced_valid_kwh":"20","site_energy_cost.unpriced_valid_kwh":"0","site_energy_cost.cross_gap_cost_valid_cny":"8","site_energy_cost.cross_gap_priced_valid_kwh":"4","site_energy_cost.cross_gap_unpriced_valid_kwh":"0"}
+			]}`))
+		case decoded.Query.Measures[0] == "site_energy.max_data_watermark":
+			_, _ = writer.Write([]byte(`{"data":[{"site_energy.max_data_watermark":"2026-07-04T00:00:00.000Z","site_energy.max_dataset_revision":"1","site_energy.synthesized_total":"0"}]}`))
+		default:
+			_, _ = writer.Write([]byte(`{"data":[
+				{"site_energy.period_end.day":"2026-07-01T00:00:00.000","site_energy.energy_valid_kwh":"165","site_energy.cross_gap_valid_kwh":"14","site_energy.valid_count":"24","site_energy.suspect_count":"0","site_energy.invalid_count":"0"}
+			]}`))
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{BaseURL: server.URL, DatasetRevision: "energy-daily:v1", TokenFactory: fixedTokenFactory{}, HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.QueryEnergySeries(context.Background(), analytics.CallerContext{PrincipalID: "user-1", PolicyRevision: "policy-1"}, validCubeEnergyQuery())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Points) != 1 || response.Points[0].Cost == nil {
+		t.Fatalf("points = %#v", response.Points)
+	}
+	gotOrder := make([]string, 0, len(response.Points[0].Cost.Periods))
+	for _, period := range response.Points[0].Cost.Periods {
+		gotOrder = append(gotOrder, period.PeriodCode)
+	}
+	wantOrder := []string{"SUPER_PEAK", "PEAK", "FLAT", "VALLEY", "DEEP_VALLEY"}
+	if strings.Join(gotOrder, ",") != strings.Join(wantOrder, ",") {
+		t.Fatalf("point period order = %v, want %v", gotOrder, wantOrder)
+	}
+	if response.CrossGap == nil || response.CrossGap.Cost == nil || len(response.CrossGap.Cost.Periods) != 2 ||
+		response.CrossGap.Cost.Periods[0].PeriodCode != "SUPER_PEAK" || response.CrossGap.Cost.Periods[1].PeriodCode != "DEEP_VALLEY" {
+		t.Fatalf("crossGap cost periods = %#v", response.CrossGap)
+	}
+}
