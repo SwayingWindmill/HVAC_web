@@ -7,13 +7,16 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/url"
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
+	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 )
 
 const AlarmPolicySchemaVersion = 1
@@ -172,6 +175,192 @@ type SiteSchedule struct {
 	Windows  []ScheduleWindow `json:"windows"`
 }
 
+type DependencyGateMode string
+
+const (
+	DependencyGateNone      DependencyGateMode = "NONE"
+	DependencyGateAllActive DependencyGateMode = "ALL_ACTIVE"
+	DependencyGateAnyActive DependencyGateMode = "ANY_ACTIVE"
+)
+
+const MaxActionsPerRule = 4
+
+type RuleActionKind string
+
+const (
+	RuleActionWebhook           RuleActionKind = "WEBHOOK"
+	RuleActionWorkOrder         RuleActionKind = "WORK_ORDER"
+	RuleActionProtectionCommand RuleActionKind = "PROTECTION_COMMAND"
+)
+
+type ActionTriggerOn string
+
+const (
+	ActionTriggerRaise ActionTriggerOn = "RAISE"
+	ActionTriggerClear ActionTriggerOn = "CLEAR"
+	ActionTriggerBoth  ActionTriggerOn = "BOTH"
+)
+
+var actionSecretRefPattern = regexp.MustCompile(`^[a-zA-Z0-9._:-]{1,128}$`)
+
+type RuleAction struct {
+	Kind              RuleActionKind     `json:"kind"`
+	TriggerOn         ActionTriggerOn    `json:"triggerOn,omitempty"`
+	WebhookURL        string             `json:"webhookUrl,omitempty"`
+	SecretRef         string             `json:"secretRef,omitempty"`
+	WorkOrderPriority string             `json:"workOrderPriority,omitempty"`
+	WorkOrderTitle    string             `json:"workOrderTitle,omitempty"`
+	TargetDeviceID    string             `json:"targetDeviceId,omitempty"`
+	TargetPointCode   string             `json:"targetPointCode,omitempty"`
+	Capability        string             `json:"capability,omitempty"`
+	Parameters        map[string]float64 `json:"parameters,omitempty"`
+}
+
+func (action RuleAction) EffectiveTriggerOn() ActionTriggerOn {
+	if action.TriggerOn == "" {
+		return ActionTriggerRaise
+	}
+	return action.TriggerOn
+}
+
+func (action RuleAction) MatchesEffect(effect EvaluationEffect) bool {
+	trigger := action.EffectiveTriggerOn()
+	switch effect {
+	case EvaluationEffectPublish:
+		return trigger == ActionTriggerRaise || trigger == ActionTriggerBoth
+	case EvaluationEffectClear:
+		return trigger == ActionTriggerClear || trigger == ActionTriggerBoth
+	default:
+		return false
+	}
+}
+
+func (action RuleAction) Clone() RuleAction {
+	cloned := action
+	if action.Parameters != nil {
+		cloned.Parameters = make(map[string]float64, len(action.Parameters))
+		for key, value := range action.Parameters {
+			cloned.Parameters[key] = value
+		}
+	}
+	return cloned
+}
+
+func (action RuleAction) SanitizedTargetRef() string {
+	switch action.Kind {
+	case RuleActionWebhook:
+		parsed, err := url.Parse(action.WebhookURL)
+		if err != nil || parsed.Hostname() == "" {
+			return "https://invalid"
+		}
+		target := parsed.Scheme + "://" + parsed.Host + parsed.EscapedPath()
+		if len(target) > 256 {
+			return target[:256]
+		}
+		return target
+	case RuleActionWorkOrder:
+		target := action.WorkOrderPriority + ":" + strings.TrimSpace(action.WorkOrderTitle)
+		if len(target) > 256 {
+			return target[:256]
+		}
+		return target
+	case RuleActionProtectionCommand:
+		target := action.TargetDeviceID + ":" + action.Capability
+		if action.TargetPointCode != "" {
+			target = action.TargetDeviceID + "/" + action.TargetPointCode + ":" + action.Capability
+		}
+		if len(target) > 256 {
+			return target[:256]
+		}
+		return target
+	default:
+		return string(action.Kind)
+	}
+}
+
+func (action RuleAction) Summary() string {
+	switch action.Kind {
+	case RuleActionWebhook:
+		return fmt.Sprintf("webhook %s (%s)", action.SanitizedTargetRef(), action.EffectiveTriggerOn())
+	case RuleActionWorkOrder:
+		return fmt.Sprintf("work order [%s] %s (%s)", action.WorkOrderPriority, strings.TrimSpace(action.WorkOrderTitle), action.EffectiveTriggerOn())
+	case RuleActionProtectionCommand:
+		if action.TargetPointCode != "" {
+			return fmt.Sprintf("protection command %s on %s/%s (%s)", action.Capability, action.TargetDeviceID, action.TargetPointCode, action.EffectiveTriggerOn())
+		}
+		return fmt.Sprintf("protection command %s on %s (%s)", action.Capability, action.TargetDeviceID, action.EffectiveTriggerOn())
+	default:
+		return string(action.Kind)
+	}
+}
+
+func (action RuleAction) Validate() error {
+	switch action.TriggerOn {
+	case "", ActionTriggerRaise, ActionTriggerClear, ActionTriggerBoth:
+	default:
+		return errors.New("alarm policy action triggerOn is invalid")
+	}
+	switch action.Kind {
+	case RuleActionWebhook:
+		if action.WorkOrderPriority != "" || action.WorkOrderTitle != "" || action.TargetDeviceID != "" || action.TargetPointCode != "" || action.Capability != "" || len(action.Parameters) > 0 {
+			return errors.New("webhook alarm action contains unsupported fields")
+		}
+		if len(action.WebhookURL) == 0 || len(action.WebhookURL) > 512 || strings.TrimSpace(action.WebhookURL) != action.WebhookURL || !strings.HasPrefix(action.WebhookURL, "https://") {
+			return errors.New("alarm action webhookUrl must use https and be at most 512 chars")
+		}
+		parsed, err := url.Parse(action.WebhookURL)
+		if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil {
+			return errors.New("alarm action webhookUrl is invalid")
+		}
+		if port := parsed.Port(); port != "" {
+			num, err := strconv.Atoi(port)
+			if err != nil || num < 1 || num > 65535 {
+				return errors.New("alarm action webhookUrl port is invalid")
+			}
+		}
+		if action.SecretRef != "" && !actionSecretRefPattern.MatchString(action.SecretRef) {
+			return errors.New("alarm action secretRef is invalid")
+		}
+		return nil
+	case RuleActionWorkOrder:
+		if action.WebhookURL != "" || action.SecretRef != "" || action.TargetDeviceID != "" || action.TargetPointCode != "" || action.Capability != "" || len(action.Parameters) > 0 {
+			return errors.New("work order alarm action contains unsupported fields")
+		}
+		if !validRuleWorkOrderPriority(action.WorkOrderPriority) {
+			return errors.New("alarm action workOrderPriority is invalid")
+		}
+		if !boundedText(action.WorkOrderTitle, 200) {
+			return errors.New("alarm action workOrderTitle is invalid")
+		}
+		return nil
+	case RuleActionProtectionCommand:
+		if action.WebhookURL != "" || action.SecretRef != "" || action.WorkOrderPriority != "" || action.WorkOrderTitle != "" {
+			return errors.New("protection command alarm action contains unsupported fields")
+		}
+		if !alarmmodel.IsUUIDv7(action.TargetDeviceID) {
+			return errors.New("alarm action targetDeviceId is invalid")
+		}
+		if action.TargetPointCode != "" && !validRulePointCode(action.TargetPointCode) {
+			return errors.New("alarm action targetPointCode is invalid")
+		}
+		capability := commandmodel.Capability(action.Capability)
+		if _, ok := commandmodel.CapabilityProfileFor(capability); !ok {
+			return errors.New("alarm action capability is unsupported")
+		}
+		for key, value := range action.Parameters {
+			if !boundedText(key, 64) || math.IsNaN(value) || math.IsInf(value, 0) {
+				return errors.New("alarm action parameter is invalid")
+			}
+		}
+		if !commandmodel.ParametersValid(capability, commandmodel.CommandParameters(action.Parameters)) {
+			return errors.New("alarm action parameters do not satisfy capability profile")
+		}
+		return nil
+	default:
+		return errors.New("alarm policy action kind is invalid")
+	}
+}
+
 type AlarmPolicyRevision struct {
 	SchemaVersion    int                     `json:"schemaVersion"`
 	PolicyID         string                  `json:"policyId"`
@@ -188,6 +377,8 @@ type AlarmPolicyRevision struct {
 	TemplateKey      string                  `json:"templateKey,omitempty"`
 	OverriddenFields []string                `json:"overriddenFields,omitempty"`
 	DependsOnRuleIDs []string                `json:"dependsOnRuleIds,omitempty"`
+	DependencyGate   DependencyGateMode      `json:"dependencyGate,omitempty"`
+	Actions          []RuleAction            `json:"actions,omitempty"`
 	QualityPolicy    EvaluationQualityPolicy `json:"qualityPolicy"`
 	FreshnessSeconds int64                   `json:"freshnessSeconds"`
 	TriggerMode      TriggerMode             `json:"triggerMode"`
@@ -236,17 +427,18 @@ func BooleanInput(key string, value bool, quality, observedAt string) InputFact 
 }
 
 type EvaluationSnapshot struct {
-	TenantID      string               `json:"tenantId"`
-	SiteID        string               `json:"siteId"`
-	SubjectType   string               `json:"subjectType"`
-	SubjectID     string               `json:"subjectId"`
-	DeviceID      *string              `json:"deviceId,omitempty"`
-	EventID       *string              `json:"eventId,omitempty"`
-	PointID       *string              `json:"pointId,omitempty"`
-	InputRevision string               `json:"inputRevision"`
-	AsOf          string               `json:"asOf"`
-	Inputs        map[string]InputFact `json:"inputs"`
-	CorrelationID string               `json:"correlationId"`
+	TenantID           string               `json:"tenantId"`
+	SiteID             string               `json:"siteId"`
+	SubjectType        string               `json:"subjectType"`
+	SubjectID          string               `json:"subjectId"`
+	DeviceID           *string              `json:"deviceId,omitempty"`
+	EventID            *string              `json:"eventId,omitempty"`
+	PointID            *string              `json:"pointId,omitempty"`
+	InputRevision      string               `json:"inputRevision"`
+	AsOf               string               `json:"asOf"`
+	Inputs             map[string]InputFact `json:"inputs"`
+	CorrelationID      string               `json:"correlationId"`
+	UpstreamRuleActive map[string]bool      `json:"-"`
 }
 
 type AlarmEvaluationState struct {
@@ -342,14 +534,14 @@ func EvaluatePolicy(policy AlarmPolicyRevision, snapshot EvaluationSnapshot, pre
 			state.CandidateSince = nil
 			state.RepeatCount = 0
 			// A time-based raise (no data for a while) can come true again with no new reading (#615).
-			raiseResult := evaluateCondition(policy, policy.Raise, snapshot, state.SampleWindow, false, now)
+			raiseResult := evaluateRaiseCondition(policy, snapshot, state.SampleWindow, false, now)
 			state.NextEvaluationAt = formatOptionalTime(minTime(raiseResult.nextDue, nextScheduleBoundary))
 			finishEvaluationState(&state, snapshot, now)
 			recovery := recoveryForDecision(policy, snapshot, state.ActiveIncidentCorrelationID, fingerprint, now)
 			return EvaluationDecision{Status: state.Status, Effect: EvaluationEffectClear, Fingerprint: fingerprint, State: state, Recovery: &recovery}, nil
 		}
 
-		raiseResult := evaluateCondition(policy, policy.Raise, snapshot, state.SampleWindow, true, now)
+		raiseResult := evaluateRaiseCondition(policy, snapshot, state.SampleWindow, true, now)
 		state.NextEvaluationAt = formatOptionalTime(minTime(raiseResult.nextDue, nextScheduleBoundary))
 		state.CandidateSince = nil
 		state.RepeatCount = 0
@@ -369,7 +561,7 @@ func EvaluatePolicy(policy AlarmPolicyRevision, snapshot EvaluationSnapshot, pre
 		return EvaluationDecision{Status: state.Status, Effect: EvaluationEffectNone, Fingerprint: fingerprint, State: state}, nil
 	}
 
-	raiseResult := evaluateCondition(policy, policy.Raise, snapshot, state.SampleWindow, false, now)
+	raiseResult := evaluateRaiseCondition(policy, snapshot, state.SampleWindow, false, now)
 	if raiseResult.status == EvaluationIndeterminate {
 		state.Status = EvaluationIndeterminate
 		state.QualityBlocker = raiseResult.blocker
@@ -559,6 +751,12 @@ func (policy AlarmPolicyRevision) Validate() error {
 		}
 	}
 	if err := validateRuleDependencies(policy.PolicyID, policy.DependsOnRuleIDs); err != nil {
+		return err
+	}
+	if err := validateDependencyGate(policy.DependencyGate, policy.DependsOnRuleIDs); err != nil {
+		return err
+	}
+	if err := validateRuleActions(policy.Actions); err != nil {
 		return err
 	}
 	if policy.QualityPolicy != EvaluationQualityValidOnly && policy.QualityPolicy != EvaluationQualityUsable || policy.FreshnessSeconds <= 0 {
@@ -1358,4 +1556,83 @@ func validConditionReason(reason string) bool {
 func boundedText(value string, maximum int) bool {
 	trimmed := strings.TrimSpace(value)
 	return trimmed != "" && len(trimmed) <= maximum
+}
+
+func validRuleWorkOrderPriority(priority string) bool {
+	switch priority {
+	case "LOW", "MEDIUM", "HIGH", "CRITICAL":
+		return true
+	default:
+		return false
+	}
+}
+
+func validateDependencyGate(gate DependencyGateMode, deps []string) error {
+	switch gate {
+	case "", DependencyGateNone:
+		return nil
+	case DependencyGateAllActive, DependencyGateAnyActive:
+		if len(deps) == 0 {
+			return errors.New("alarm policy dependencyGate requires non-empty dependsOnRuleIds")
+		}
+		return nil
+	default:
+		return errors.New("alarm policy dependencyGate is invalid")
+	}
+}
+
+func validateRuleActions(actions []RuleAction) error {
+	if len(actions) > MaxActionsPerRule {
+		return errors.New("alarm policy actions exceed maximum")
+	}
+	for index, action := range actions {
+		if err := action.Validate(); err != nil {
+			return fmt.Errorf("alarm policy action %d: %w", index, err)
+		}
+	}
+	return nil
+}
+
+func cloneRuleActions(actions []RuleAction) []RuleAction {
+	if len(actions) == 0 {
+		return nil
+	}
+	cloned := make([]RuleAction, len(actions))
+	for index, action := range actions {
+		cloned[index] = action.Clone()
+	}
+	return cloned
+}
+
+func dependencyGateSatisfied(policy AlarmPolicyRevision, snapshot EvaluationSnapshot) bool {
+	switch policy.DependencyGate {
+	case "", DependencyGateNone:
+		return true
+	case DependencyGateAllActive:
+		if len(policy.DependsOnRuleIDs) == 0 {
+			return false
+		}
+		for _, depID := range policy.DependsOnRuleIDs {
+			if !snapshot.UpstreamRuleActive[depID] {
+				return false
+			}
+		}
+		return true
+	case DependencyGateAnyActive:
+		for _, depID := range policy.DependsOnRuleIDs {
+			if snapshot.UpstreamRuleActive[depID] {
+				return true
+			}
+		}
+		return false
+	default:
+		return false
+	}
+}
+
+func evaluateRaiseCondition(policy AlarmPolicyRevision, snapshot EvaluationSnapshot, samples []TimedSample, keepHolding bool, now time.Time) predicateResult {
+	if !dependencyGateSatisfied(policy, snapshot) {
+		return predicateResult{status: EvaluationNotMatched}
+	}
+	return evaluateCondition(policy, policy.Raise, snapshot, samples, keepHolding, now)
 }

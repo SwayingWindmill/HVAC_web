@@ -16,21 +16,22 @@ import (
 )
 
 const (
-	InternalSiteAlarmsPrefix = "/internal/v1/sites/"
-	InternalAlarmScopePrefix = "/internal/v1/alarms/"
-	AlarmReadContextHeader   = "X-Alarm-Read-Context"
-	AlarmWriteContextHeader  = "X-Alarm-Write-Context"
-	AlarmListAction          = "alarm:read"
-	AlarmReadAction          = "alarm:read"
-	AlarmResolveAction       = "alarm:resolve"
-	AlarmAcknowledgeAction   = "alarm:ack"
-	AlarmAssignAction        = "alarm:assign"
-	AlarmUnassignAction      = "alarm:unassign"
-	AlarmSuppressAction      = "alarm:suppress"
-	AlarmUnsuppressAction    = "alarm:unsuppress"
-	DefaultGatewaySPIFFEID   = "spiffe://hvac.local/platform-gateway"
-	DefaultAudience          = "alarm-service"
-	maximumMutationBody      = 8 * 1024
+	InternalSiteAlarmsPrefix        = "/internal/v1/sites/"
+	InternalAlarmScopePrefix        = "/internal/v1/alarms/"
+	AlarmReadContextHeader          = "X-Alarm-Read-Context"
+	AlarmWriteContextHeader         = "X-Alarm-Write-Context"
+	AlarmListAction                 = "alarm:read"
+	AlarmReadAction                 = "alarm:read"
+	AlarmResolveAction              = "alarm:resolve"
+	AlarmAcknowledgeAction          = "alarm:ack"
+	AlarmAssignAction               = "alarm:assign"
+	AlarmUnassignAction             = "alarm:unassign"
+	AlarmSuppressAction             = "alarm:suppress"
+	AlarmUnsuppressAction           = "alarm:unsuppress"
+	AlarmRuleDeadLetterReplayAction = "alarm:rule-action:replay"
+	DefaultGatewaySPIFFEID          = "spiffe://hvac.local/platform-gateway"
+	DefaultAudience                 = "alarm-service"
+	maximumMutationBody             = 8 * 1024
 )
 
 var idempotencyKeyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$`)
@@ -38,6 +39,7 @@ var idempotencyKeyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{7,12
 type HTTPConfig struct {
 	Store            Store
 	Rules            SiteRuleReader
+	DeadLetters      RuleActionDeadLetterStore
 	GatewayPublicKey crypto.PublicKey
 	Now              func() time.Time
 	GatewaySPIFFEID  string
@@ -48,6 +50,7 @@ type HTTPConfig struct {
 type httpHandler struct {
 	store            Store
 	rules            SiteRuleReader
+	deadLetters      RuleActionDeadLetterStore
 	gatewayPublicKey crypto.PublicKey
 	now              func() time.Time
 	gatewaySPIFFEID  string
@@ -98,8 +101,16 @@ func NewHTTPHandler(config HTTPConfig) (http.Handler, error) {
 	if config.MaxListLimit <= 0 || config.MaxListLimit > 200 {
 		config.MaxListLimit = 200
 	}
+	deadLetters := config.DeadLetters
+	if deadLetters == nil {
+		if storeDL, ok := config.Store.(RuleActionDeadLetterStore); ok {
+			deadLetters = storeDL
+		} else if rulesDL, ok := config.Rules.(RuleActionDeadLetterStore); ok {
+			deadLetters = rulesDL
+		}
+	}
 	return &httpHandler{
-		store: config.Store, rules: config.Rules, gatewayPublicKey: config.GatewayPublicKey, now: config.Now,
+		store: config.Store, rules: config.Rules, deadLetters: deadLetters, gatewayPublicKey: config.GatewayPublicKey, now: config.Now,
 		gatewaySPIFFEID: config.GatewaySPIFFEID, audience: config.Audience, maxListLimit: config.MaxListLimit,
 	}, nil
 }
@@ -146,6 +157,30 @@ func (handler *httpHandler) ServeHTTP(writer http.ResponseWriter, request *http.
 		if claims, ok := handler.authorizeSiteRuleRoute(writer, request, siteID, http.MethodPost, "Site rule simulation only supports POST.", "The Site rule simulation is outside the authorized read scope."); ok {
 			handler.simulateSiteRule(writer, request.WithContext(identitycontext.WithTenantID(request.Context(), claims.TenantID)), claims.TenantID, siteID)
 		}
+		return
+	}
+	if siteID, matches := matchSiteRuleDeadLettersPath(request.URL.Path); matches {
+		if claims, ok := handler.authorizeSiteRuleRoute(writer, request, siteID, http.MethodGet, "Site rule dead letters only support GET.", "The Site rule dead letters are outside the authorized read scope."); ok {
+			handler.listRuleActionDeadLetters(writer, request.WithContext(identitycontext.WithTenantID(request.Context(), claims.TenantID)), claims.TenantID, siteID)
+		}
+		return
+	}
+	if siteID, outboxID, matches := matchSiteRuleDeadLetterReplayPath(request.URL.Path); matches {
+		if request.Method != http.MethodPost {
+			writer.Header().Set("Allow", http.MethodPost)
+			handler.writeProblem(writer, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", "Site rule dead-letter replay only supports POST.", false)
+			return
+		}
+		if !alarmmodel.IsUUIDv7(siteID) || !alarmmodel.IsUUIDv7(outboxID) {
+			handler.writeProblem(writer, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The Alarm resource is not visible.", false)
+			return
+		}
+		claims, authorized := handler.authorize(request, AlarmWriteContextHeader, AlarmRuleDeadLetterReplayAction, []string{"site:" + siteID})
+		if !authorized {
+			handler.writeProblem(writer, http.StatusForbidden, "ALARM_ACCESS_DENIED", "Alarm access denied", "The Site rule dead-letter replay is outside the authorized write scope.", false)
+			return
+		}
+		handler.replayRuleActionDeadLetter(writer, request.WithContext(identitycontext.WithTenantID(request.Context(), claims.TenantID)), claims.TenantID, siteID, outboxID)
 		return
 	}
 	route, ok := matchAlarmPath(request.URL.Path)
@@ -489,6 +524,10 @@ func (handler *httpHandler) parseFilter(request *http.Request) (Filter, bool) {
 }
 
 func parseEvaluationLimit(request *http.Request) (int, bool) {
+	return parseQueryLimit(request, DefaultAlarmEvaluationsLimit, MaxAlarmEvaluationsLimit)
+}
+
+func parseQueryLimit(request *http.Request, defaultLimit, maxLimit int) (int, bool) {
 	query := request.URL.Query()
 	for key, values := range query {
 		if key != "limit" || len(values) != 1 {
@@ -497,13 +536,50 @@ func parseEvaluationLimit(request *http.Request) (int, bool) {
 	}
 	raw := query.Get("limit")
 	if raw == "" {
-		return DefaultAlarmEvaluationsLimit, true
+		return defaultLimit, true
 	}
 	value, err := strconv.Atoi(raw)
-	if err != nil || value < 1 || value > MaxAlarmEvaluationsLimit {
+	if err != nil || value < 1 || value > maxLimit {
 		return 0, false
 	}
 	return value, true
+}
+
+func (handler *httpHandler) listRuleActionDeadLetters(writer http.ResponseWriter, request *http.Request, tenantID, siteID string) {
+	if handler.deadLetters == nil {
+		handler.writeStoreFailure(writer, ErrUnavailable)
+		return
+	}
+	limit, ok := parseQueryLimit(request, defaultDeadLetterListLimit, maxDeadLetterListLimit)
+	if !ok {
+		handler.writeProblem(writer, http.StatusBadRequest, "ALARM_FILTER_INVALID", "Alarm filter invalid", "The Alarm rule dead-letter limit exceeds the supported read boundary.", false)
+		return
+	}
+	result, err := handler.deadLetters.ListRuleActionDeadLetters(request.Context(), tenantID, siteID, limit)
+	if err != nil {
+		handler.writeStoreFailure(writer, err)
+		return
+	}
+	if result.Items == nil {
+		result.Items = []RuleActionDeadLetterView{}
+	}
+	writeJSON(writer, http.StatusOK, result)
+}
+
+func (handler *httpHandler) replayRuleActionDeadLetter(writer http.ResponseWriter, request *http.Request, tenantID, siteID, outboxID string) {
+	if handler.deadLetters == nil {
+		handler.writeStoreFailure(writer, ErrUnavailable)
+		return
+	}
+	if err := handler.deadLetters.ReplayRuleActionDeadLetter(request.Context(), tenantID, siteID, outboxID, handler.now().UTC()); err != nil {
+		handler.writeMutationFailure(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, RuleActionReplayResult{
+		OutboxID: outboxID,
+		SiteID:   siteID,
+		Status:   RuleActionStatusPending,
+	})
 }
 
 func (handler *httpHandler) writeStoreFailure(writer http.ResponseWriter, err error) {
@@ -543,6 +619,22 @@ func writeJSON(writer http.ResponseWriter, status int, value any) {
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(value)
+}
+
+func matchSiteRuleDeadLettersPath(path string) (string, bool) {
+	segments := strings.Split(strings.Trim(path, "/"), "/")
+	if len(segments) != 6 || segments[0] != "internal" || segments[1] != "v1" || segments[2] != "sites" || segments[4] != "alarm-rules" || segments[5] != "dead-letters" {
+		return "", false
+	}
+	return segments[3], true
+}
+
+func matchSiteRuleDeadLetterReplayPath(path string) (string, string, bool) {
+	segments := strings.Split(strings.Trim(path, "/"), "/")
+	if len(segments) != 8 || segments[0] != "internal" || segments[1] != "v1" || segments[2] != "sites" || segments[4] != "alarm-rules" || segments[5] != "dead-letters" || segments[7] != "replay" {
+		return "", "", false
+	}
+	return segments[3], segments[6], true
 }
 
 func matchAlarmScopePath(path string) (string, bool) {

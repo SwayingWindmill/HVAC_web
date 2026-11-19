@@ -82,7 +82,7 @@ func TestPostgresTelemetryBridgeMergesDevicesKeepsNewestFactsAndDrivesDurationCl
 	if _, err := store.EvaluateTelemetrySnapshot(ctx, telemetryBridgeEventChiller1, chiller1, newerAt.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	records, _, err := store.loadSiteTelemetryEvaluationState(ctx, telemetryBridgeTenantID, telemetryBridgeSiteID)
+	records, _, _, err := store.loadSiteTelemetryEvaluationState(ctx, telemetryBridgeTenantID, telemetryBridgeSiteID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +211,7 @@ func TestPostgresTelemetryInputRemembersSinceWhenAReadingHeldItsValue(t *testing
 		if _, err := store.EvaluateTelemetrySnapshot(ctx, eventID, snapshot, at); err != nil {
 			t.Fatal(err)
 		}
-		records, _, err := store.loadSiteTelemetryEvaluationState(ctx, telemetryBridgeTenantID, siteID)
+		records, _, _, err := store.loadSiteTelemetryEvaluationState(ctx, telemetryBridgeTenantID, siteID)
 		if err != nil {
 			t.Fatal(err)
 		}

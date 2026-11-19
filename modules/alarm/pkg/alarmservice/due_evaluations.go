@@ -243,7 +243,7 @@ ORDER BY current.site_id, current.assignment_id`, tenantID)
 
 	var decisions []EvaluationDecision
 	for _, siteID := range sites {
-		records, _, err := store.loadSiteTelemetryEvaluationState(ctx, tenantID, siteID)
+		records, rules, upstreamActive, err := store.loadSiteTelemetryEvaluationState(ctx, tenantID, siteID)
 		if err != nil {
 			return decisions, err
 		}
@@ -257,14 +257,35 @@ ORDER BY current.site_id, current.assignment_id`, tenantID)
 		if err != nil {
 			return decisions, err
 		}
+		snapshot.UpstreamRuleActive = upstreamActive
+		pendingSet := make(map[string]bool, len(unevaluated[siteID]))
 		for _, assignmentID := range unevaluated[siteID] {
+			pendingSet[assignmentID] = true
+		}
+		orderedAssignments := make([]string, 0, len(unevaluated[siteID]))
+		for _, rule := range orderSiteRulesForEvaluation(rules) {
+			if pendingSet[rule.AssignmentID] {
+				orderedAssignments = append(orderedAssignments, rule.AssignmentID)
+				delete(pendingSet, rule.AssignmentID)
+			}
+		}
+		if len(pendingSet) > 0 {
+			for _, assignmentID := range unevaluated[siteID] {
+				if pendingSet[assignmentID] {
+					orderedAssignments = append(orderedAssignments, assignmentID)
+				}
+			}
+		}
+		for _, assignmentID := range orderedAssignments {
 			decision, err := store.EvaluateAssignedSnapshot(ctx, assignmentID, snapshot, now.UTC())
 			if errors.Is(err, ErrRuleRetired) {
+				delete(upstreamActive, assignmentID)
 				continue
 			}
 			if err != nil {
 				return decisions, err
 			}
+			upstreamActive[assignmentID] = decision.State.ActiveAlarmID != ""
 			decisions = append(decisions, decision)
 		}
 	}

@@ -5,10 +5,35 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/modules/telemetry/pkg/telemetryapi"
 )
+
+const (
+	defaultAlarmDeadLetterLimit = 50
+	maxAlarmDeadLetterLimit     = 200
+)
+
+type AlarmEvaluationDeadLetterFilter struct {
+	TenantID string
+	SiteID   string
+	DeviceID string
+	Limit    int
+}
+
+type AlarmEvaluationDeadLetter struct {
+	EventID          string `json:"eventId"`
+	TenantID         string `json:"tenantId"`
+	SiteID           string `json:"siteId"`
+	DeviceID         string `json:"deviceId"`
+	BusinessRevision int64  `json:"businessRevision"`
+	Attempts         int    `json:"attempts"`
+	LastErrorCode    string `json:"lastErrorCode,omitempty"`
+	DeadLetteredAt   string `json:"deadLetteredAt"`
+	CreatedAt        string `json:"createdAt"`
+}
 
 func (store *PostgresStore) ClaimPendingAlarmEvaluations(ctx context.Context, workerID string, limit int, now time.Time, leaseDuration time.Duration) ([]PendingPublication, error) {
 	if store == nil || store.pool == nil || workerID == "" || leaseDuration <= 0 {
@@ -85,6 +110,11 @@ WHERE event_id=$1::uuid AND subscription_id IS NULL AND alarm_delivery_state='PE
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("commit Alarm evaluation publication claim: %w", err)
+	}
+	if store.pipelineMetrics != nil {
+		for range corruptIDs {
+			store.pipelineMetrics.AddAlarmEvaluationDeadLetter("payload_invalid")
+		}
 	}
 	return publications, nil
 }
@@ -174,4 +204,131 @@ func decodeAlarmEvaluationPublication(eventID, deviceID string, revision int64, 
 	}, nil
 }
 
-var _ AlarmEvaluationRepository = (*PostgresStore)(nil)
+func (store *PostgresStore) CountAlarmEvaluationOutboxStates(ctx context.Context) (int64, int64, error) {
+	if store == nil || store.pool == nil {
+		return 0, 0, ErrAlarmEvaluationRelayUnavailable
+	}
+	var pending, deadLetter int64
+	err := store.pool.QueryRow(ctx, `
+SELECT
+  COUNT(*) FILTER (WHERE alarm_delivery_state = 'PENDING')::bigint,
+  COUNT(*) FILTER (WHERE alarm_delivery_state = 'DEAD_LETTER')::bigint
+FROM telemetry_runtime.telemetry_publication_outbox
+WHERE subscription_id IS NULL
+`).Scan(&pending, &deadLetter)
+	if err != nil {
+		return 0, 0, fmt.Errorf("count Alarm evaluation outbox states: %w", err)
+	}
+	return pending, deadLetter, nil
+}
+
+func (store *PostgresStore) ListAlarmEvaluationDeadLetters(ctx context.Context, filter AlarmEvaluationDeadLetterFilter) ([]AlarmEvaluationDeadLetter, error) {
+	if store == nil || store.pool == nil {
+		return nil, ErrAlarmEvaluationRelayUnavailable
+	}
+	tenantFilter, err := optionalUUIDv7Param(filter.TenantID, "tenantId")
+	if err != nil {
+		return nil, err
+	}
+	siteFilter, err := optionalUUIDv7Param(filter.SiteID, "siteId")
+	if err != nil {
+		return nil, err
+	}
+	deviceFilter, err := optionalUUIDv7Param(filter.DeviceID, "deviceId")
+	if err != nil {
+		return nil, err
+	}
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = defaultAlarmDeadLetterLimit
+	}
+	if limit > maxAlarmDeadLetterLimit {
+		limit = maxAlarmDeadLetterLimit
+	}
+	rows, err := store.pool.Query(ctx, `
+SELECT outbox.event_id::text, dev.tenant_id::text, dev.site_id::text, outbox.device_id::text,
+       outbox.business_revision, outbox.alarm_attempts, COALESCE(outbox.alarm_last_error_code, ''),
+       outbox.alarm_dead_lettered_at, outbox.created_at
+FROM telemetry_runtime.telemetry_publication_outbox AS outbox
+JOIN telemetry_runtime.devices AS dev
+  ON dev.device_id = outbox.device_id
+WHERE outbox.subscription_id IS NULL
+  AND outbox.alarm_delivery_state = 'DEAD_LETTER'
+  AND ($1::uuid IS NULL OR dev.tenant_id = $1::uuid)
+  AND ($2::uuid IS NULL OR dev.site_id = $2::uuid)
+  AND ($3::uuid IS NULL OR outbox.device_id = $3::uuid)
+ORDER BY outbox.alarm_dead_lettered_at DESC, outbox.event_id DESC
+LIMIT $4
+`, tenantFilter, siteFilter, deviceFilter, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list Alarm evaluation dead letters: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]AlarmEvaluationDeadLetter, 0)
+	for rows.Next() {
+		var item AlarmEvaluationDeadLetter
+		var deadLetteredAt, createdAt time.Time
+		if err := rows.Scan(
+			&item.EventID, &item.TenantID, &item.SiteID, &item.DeviceID,
+			&item.BusinessRevision, &item.Attempts, &item.LastErrorCode,
+			&deadLetteredAt, &createdAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan Alarm evaluation dead letter: %w", err)
+		}
+		item.DeadLetteredAt = deadLetteredAt.UTC().Format(time.RFC3339Nano)
+		item.CreatedAt = createdAt.UTC().Format(time.RFC3339Nano)
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate Alarm evaluation dead letters: %w", err)
+	}
+	return items, nil
+}
+
+func (store *PostgresStore) ReplayAlarmEvaluationDeadLetter(ctx context.Context, eventID string, now time.Time) error {
+	if store == nil || store.pool == nil {
+		return ErrAlarmEvaluationRelayUnavailable
+	}
+	normalized := strings.ToLower(strings.TrimSpace(eventID))
+	if !uuidV7Pattern.MatchString(normalized) {
+		return fmt.Errorf("eventId %q must be UUIDv7", eventID)
+	}
+	command, err := store.pool.Exec(ctx, `
+UPDATE telemetry_runtime.telemetry_publication_outbox
+SET alarm_delivery_state = 'PENDING',
+    alarm_attempts = 0,
+    alarm_available_at = $2,
+    alarm_dead_lettered_at = NULL,
+    alarm_published_at = NULL,
+    alarm_last_error_code = NULL,
+    alarm_claim_owner = NULL,
+    alarm_claim_until = NULL
+WHERE event_id = $1::uuid
+  AND subscription_id IS NULL
+  AND alarm_delivery_state = 'DEAD_LETTER'
+`, normalized, now.UTC())
+	if err != nil {
+		return fmt.Errorf("replay Alarm evaluation dead letter: %w", err)
+	}
+	if command.RowsAffected() != 1 {
+		return ErrAlarmEvaluationDeadLetterNotFound
+	}
+	return nil
+}
+
+func optionalUUIDv7Param(raw, field string) (*string, error) {
+	trimmed := strings.ToLower(strings.TrimSpace(raw))
+	if trimmed == "" {
+		return nil, nil
+	}
+	if !uuidV7Pattern.MatchString(trimmed) {
+		return nil, fmt.Errorf("%s %q must be UUIDv7", field, raw)
+	}
+	return &trimmed, nil
+}
+
+var (
+	_ AlarmEvaluationRepository         = (*PostgresStore)(nil)
+	_ AlarmEvaluationOutboxStateCounter = (*PostgresStore)(nil)
+)

@@ -46,6 +46,8 @@ type ruleTemplate struct {
 	Extends          string                                `json:"extends,omitempty"`
 	Template         string                                `json:"template,omitempty"`
 	RuleKind         alarmservice.RuleKind                 `json:"ruleKind,omitempty"`
+	DependencyGate   *alarmservice.DependencyGateMode      `json:"dependencyGate,omitempty"`
+	Actions          *[]alarmservice.RuleAction            `json:"actions,omitempty"`
 	Title            *string                               `json:"title,omitempty"`
 	Summary          *string                               `json:"summary,omitempty"`
 	Severity         *alarmmodel.Severity                  `json:"severity,omitempty"`
@@ -90,6 +92,8 @@ type rule struct {
 	Device           string                                `json:"device,omitempty"`
 	RuleKind         alarmservice.RuleKind                 `json:"ruleKind,omitempty"`
 	DependsOn        []string                              `json:"dependsOn,omitempty"`
+	DependencyGate   *alarmservice.DependencyGateMode      `json:"dependencyGate,omitempty"`
+	Actions          *[]alarmservice.RuleAction            `json:"actions,omitempty"`
 	Title            *string                               `json:"title,omitempty"`
 	Summary          *string                               `json:"summary,omitempty"`
 	Severity         *alarmmodel.Severity                  `json:"severity,omitempty"`
@@ -549,6 +553,14 @@ func mergeTemplateOverrides(dst *ruleTemplate, src ruleTemplate) {
 	if src.RuleKind != "" {
 		dst.RuleKind = src.RuleKind
 	}
+	if src.DependencyGate != nil {
+		v := *src.DependencyGate
+		dst.DependencyGate = &v
+	}
+	if src.Actions != nil {
+		cloned := cloneRuleActions(*src.Actions)
+		dst.Actions = &cloned
+	}
 	if src.Title != nil {
 		v := *src.Title
 		dst.Title = &v
@@ -634,6 +646,12 @@ func compileRuleEntry(entry rule, templates map[string]ruleTemplate, devices map
 	if merged.RepeatCount != nil {
 		policy.RepeatCount = *merged.RepeatCount
 	}
+	if merged.DependencyGate != nil {
+		policy.DependencyGate = *merged.DependencyGate
+	}
+	if merged.Actions != nil {
+		policy.Actions = cloneRuleActions(*merged.Actions)
+	}
 	var raiseCond, clearCond alarmservice.Condition
 	if merged.Raise != nil {
 		raiseCond = cloneCondition(*merged.Raise)
@@ -642,6 +660,14 @@ func compileRuleEntry(entry rule, templates map[string]ruleTemplate, devices map
 		clearCond = cloneCondition(*merged.Clear)
 	}
 
+	if entry.DependencyGate != nil {
+		policy.DependencyGate = *entry.DependencyGate
+		overridden = append(overridden, "dependencyGate")
+	}
+	if entry.Actions != nil {
+		policy.Actions = cloneRuleActions(*entry.Actions)
+		overridden = append(overridden, "actions")
+	}
 	if entry.Title != nil {
 		policy.Title = *entry.Title
 		overridden = append(overridden, "title")
@@ -701,11 +727,35 @@ func compileRuleEntry(entry rule, templates map[string]ruleTemplate, devices map
 		policy.Summary = strings.ReplaceAll(policy.Summary, "{device}", dev.name)
 		raiseCond = substituteConditionDevice(raiseCond, dev.code)
 		clearCond = substituteConditionDevice(clearCond, dev.code)
+		policy.Actions = substituteActionsDevice(policy.Actions, dev.name, dev.code)
 	} else {
 		if strings.Contains(policy.Title, "{device}") || strings.Contains(policy.Summary, "{device}") ||
-			conditionContainsPlaceholder(raiseCond, "{device}") || conditionContainsPlaceholder(clearCond, "{device}") {
+			conditionContainsPlaceholder(raiseCond, "{device}") || conditionContainsPlaceholder(clearCond, "{device}") ||
+			actionsContainPlaceholder(policy.Actions, "{device}") {
 			return alarmservice.AlarmPolicyRevision{}, fmt.Errorf("uses {device} placeholder without specifying device")
 		}
+	}
+
+	if len(policy.Actions) > alarmservice.MaxActionsPerRule {
+		return alarmservice.AlarmPolicyRevision{}, fmt.Errorf("actions exceed maximum of %d", alarmservice.MaxActionsPerRule)
+	}
+	for index := range policy.Actions {
+		if policy.Actions[index].Kind == alarmservice.RuleActionProtectionCommand {
+			rawDevice := policy.Actions[index].TargetDeviceID
+			if targetDev, ok := devices[rawDevice]; ok {
+				policy.Actions[index].TargetDeviceID = targetDev.id
+			} else if !alarmmodel.IsUUIDv7(rawDevice) {
+				return alarmservice.AlarmPolicyRevision{}, fmt.Errorf("action %d: unknown targetDeviceId %q", index, rawDevice)
+			}
+		}
+		if err := policy.Actions[index].Validate(); err != nil {
+			return alarmservice.AlarmPolicyRevision{}, fmt.Errorf("action %d: %w", index, err)
+		}
+	}
+	switch policy.DependencyGate {
+	case "", alarmservice.DependencyGateNone, alarmservice.DependencyGateAllActive, alarmservice.DependencyGateAnyActive:
+	default:
+		return alarmservice.AlarmPolicyRevision{}, fmt.Errorf("invalid dependencyGate %q", policy.DependencyGate)
 	}
 
 	raise, err := resolve(raiseCond, devices)
@@ -771,7 +821,50 @@ func resolveRuleDependencies(compiled *Compiled, entries []rule, ruleIndices map
 		idx := ruleIndices[entry.Code]
 		compiled.Policies[idx].Policy.DependsOnRuleIDs = depIDs
 	}
+	for _, entry := range entries {
+		idx := ruleIndices[entry.Code]
+		policy := compiled.Policies[idx].Policy
+		if (policy.DependencyGate == alarmservice.DependencyGateAllActive || policy.DependencyGate == alarmservice.DependencyGateAnyActive) && len(policy.DependsOnRuleIDs) == 0 {
+			return fmt.Errorf("rule %s: dependencyGate %s requires non-empty dependsOn", entry.Code, policy.DependencyGate)
+		}
+	}
 	return nil
+}
+
+func cloneRuleActions(actions []alarmservice.RuleAction) []alarmservice.RuleAction {
+	if actions == nil {
+		return nil
+	}
+	cloned := make([]alarmservice.RuleAction, len(actions))
+	for index, action := range actions {
+		cloned[index] = action.Clone()
+	}
+	return cloned
+}
+
+func substituteActionsDevice(actions []alarmservice.RuleAction, deviceName, deviceCode string) []alarmservice.RuleAction {
+	if len(actions) == 0 {
+		return actions
+	}
+	updated := cloneRuleActions(actions)
+	for index := range updated {
+		if updated[index].WorkOrderTitle != "" {
+			updated[index].WorkOrderTitle = strings.ReplaceAll(updated[index].WorkOrderTitle, "{device}", deviceName)
+		}
+		if updated[index].TargetDeviceID != "" {
+			updated[index].TargetDeviceID = strings.ReplaceAll(updated[index].TargetDeviceID, "{device}", deviceCode)
+		}
+	}
+	return updated
+}
+
+func actionsContainPlaceholder(actions []alarmservice.RuleAction, placeholder string) bool {
+	for _, action := range actions {
+		if strings.Contains(action.WorkOrderTitle, placeholder) || strings.Contains(action.TargetDeviceID, placeholder) {
+			return true
+		}
+	}
+	return false
 }
 
 func cloneCondition(condition alarmservice.Condition) alarmservice.Condition {

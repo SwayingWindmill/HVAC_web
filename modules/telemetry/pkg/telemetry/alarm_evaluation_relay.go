@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
 const (
@@ -20,8 +22,9 @@ const (
 )
 
 var (
-	ErrAlarmEvaluationRelayUnavailable = errors.New("alarm evaluation relay unavailable")
-	ErrPermanentAlarmEvaluationFailure = errors.New("alarm evaluation permanent failure")
+	ErrAlarmEvaluationRelayUnavailable   = errors.New("alarm evaluation relay unavailable")
+	ErrPermanentAlarmEvaluationFailure   = errors.New("alarm evaluation permanent failure")
+	ErrAlarmEvaluationDeadLetterNotFound = errors.New("alarm evaluation dead letter not found")
 )
 
 type AlarmEvaluationRepository interface {
@@ -31,6 +34,11 @@ type AlarmEvaluationRepository interface {
 	MarkAlarmEvaluationDeadLetter(context.Context, string, string, time.Time, string) error
 }
 
+// AlarmEvaluationOutboxStateCounter optionally exposes total pending and dead-letter row counts.
+type AlarmEvaluationOutboxStateCounter interface {
+	CountAlarmEvaluationOutboxStates(ctx context.Context) (pending int64, deadLetter int64, err error)
+}
+
 type AlarmEvaluationTransport interface {
 	EvaluateSnapshot(context.Context, PendingPublication) error
 }
@@ -38,6 +46,7 @@ type AlarmEvaluationTransport interface {
 type AlarmEvaluationRelayConfig struct {
 	Repository      AlarmEvaluationRepository
 	Transport       AlarmEvaluationTransport
+	Metrics         *observability.Registry
 	WorkerID        string
 	LeaseDuration   time.Duration
 	RetryDelay      time.Duration
@@ -49,6 +58,7 @@ type AlarmEvaluationRelayConfig struct {
 type AlarmEvaluationRelay struct {
 	repository      AlarmEvaluationRepository
 	transport       AlarmEvaluationTransport
+	metrics         *PipelineMetrics
 	workerID        string
 	leaseDuration   time.Duration
 	retryDelay      time.Duration
@@ -75,6 +85,7 @@ func NewAlarmEvaluationRelay(config AlarmEvaluationRelayConfig) (*AlarmEvaluatio
 	return &AlarmEvaluationRelay{
 		repository:      config.Repository,
 		transport:       config.Transport,
+		metrics:         NewPipelineMetrics(config.Metrics),
 		workerID:        strings.TrimSpace(config.WorkerID),
 		leaseDuration:   config.LeaseDuration,
 		retryDelay:      config.RetryDelay,
@@ -96,6 +107,7 @@ func (relay *AlarmEvaluationRelay) RelayOnce(ctx context.Context, limit int) (in
 	if err != nil {
 		return 0, fmt.Errorf("claim Alarm evaluation publications: %w", err)
 	}
+	defer relay.refreshOutboxDepths(ctx)
 	delivered := 0
 	var deadLetterErrs []error
 	for _, publication := range pending {
@@ -103,6 +115,7 @@ func (relay *AlarmEvaluationRelay) RelayOnce(ctx context.Context, limit int) (in
 			if dlErr := relay.repository.MarkAlarmEvaluationDeadLetter(ctx, publication.EventID, relay.workerID, now, "ALARM_EVALUATION_PAYLOAD_INVALID"); dlErr != nil {
 				return delivered, fmt.Errorf("dead-letter invalid Alarm evaluation publication: %w", dlErr)
 			}
+			relay.metrics.AddAlarmEvaluationDeadLetter("payload_invalid")
 			deadLetterErrs = append(deadLetterErrs, fmt.Errorf("%w: publication %s payload is inconsistent", ErrPermanentAlarmEvaluationFailure, publication.EventID))
 			continue
 		}
@@ -110,6 +123,7 @@ func (relay *AlarmEvaluationRelay) RelayOnce(ctx context.Context, limit int) (in
 			if dlErr := relay.repository.MarkAlarmEvaluationDeadLetter(ctx, publication.EventID, relay.workerID, now, "ALARM_EVALUATION_MAX_ATTEMPTS_EXCEEDED"); dlErr != nil {
 				return delivered, fmt.Errorf("dead-letter exhausted Alarm evaluation publication: %w", dlErr)
 			}
+			relay.metrics.AddAlarmEvaluationDeadLetter("max_attempts_exceeded")
 			deadLetterErrs = append(deadLetterErrs, fmt.Errorf("%w: publication %s reached max attempts (%d)", ErrPermanentAlarmEvaluationFailure, publication.EventID, relay.maxAttempts))
 			continue
 		}
@@ -118,6 +132,7 @@ func (relay *AlarmEvaluationRelay) RelayOnce(ctx context.Context, limit int) (in
 				if dlErr := relay.repository.MarkAlarmEvaluationDeadLetter(ctx, publication.EventID, relay.workerID, now, "ALARM_EVALUATION_PERMANENT_FAILURE"); dlErr != nil {
 					return delivered, fmt.Errorf("dead-letter permanently failed Alarm evaluation after %v: %w", err, dlErr)
 				}
+				relay.metrics.AddAlarmEvaluationDeadLetter("permanent_failure")
 				deadLetterErrs = append(deadLetterErrs, err)
 				continue
 			}
@@ -126,6 +141,7 @@ func (relay *AlarmEvaluationRelay) RelayOnce(ctx context.Context, limit int) (in
 				if dlErr := relay.repository.MarkAlarmEvaluationDeadLetter(ctx, publication.EventID, relay.workerID, now, "ALARM_EVALUATION_MAX_ATTEMPTS_EXCEEDED"); dlErr != nil {
 					return delivered, fmt.Errorf("dead-letter Alarm evaluation after max attempts (%v): %w", err, dlErr)
 				}
+				relay.metrics.AddAlarmEvaluationDeadLetter("max_attempts_exceeded")
 				deadLetterErrs = append(deadLetterErrs, fmt.Errorf("%w: %w", ErrPermanentAlarmEvaluationFailure, err))
 				continue
 			}
@@ -141,6 +157,22 @@ func (relay *AlarmEvaluationRelay) RelayOnce(ctx context.Context, limit int) (in
 		delivered++
 	}
 	return delivered, errors.Join(deadLetterErrs...)
+}
+
+func (relay *AlarmEvaluationRelay) refreshOutboxDepths(ctx context.Context) {
+	if relay == nil || relay.metrics == nil || ctx.Err() != nil {
+		return
+	}
+	counter, ok := relay.repository.(AlarmEvaluationOutboxStateCounter)
+	if !ok {
+		return
+	}
+	depthCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	pending, deadLetter, err := counter.CountAlarmEvaluationOutboxStates(depthCtx)
+	if err == nil {
+		relay.metrics.SetAlarmEvaluationOutboxDepths(pending, deadLetter)
+	}
 }
 
 func (relay *AlarmEvaluationRelay) evaluateWithTimeout(ctx context.Context, publication PendingPublication) error {

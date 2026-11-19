@@ -415,7 +415,7 @@ func runTelemetryWorker() int {
 		})
 	}
 
-	alarmRelay, alarmPollInterval, alarmContext, alarmCancel, err := loadAlarmEvaluationRelay(store, certificate)
+	alarmRelay, alarmPollInterval, alarmContext, alarmCancel, err := loadAlarmEvaluationRelay(store, certificate, observabilityRuntime.Metrics)
 	if err != nil {
 		logger.Error("telemetry_alarm_evaluation_configuration_invalid", "error_code", "TELEMETRY_ALARM_EVALUATION_CONFIGURATION_INVALID")
 		return 1
@@ -1382,7 +1382,7 @@ func runRevocationRelay(ctx context.Context, relay *telemetry.RevocationRelay, l
 	}
 }
 
-func loadAlarmEvaluationRelay(store *telemetry.PostgresStore, certificate tls.Certificate) (*telemetry.AlarmEvaluationRelay, time.Duration, context.Context, context.CancelFunc, error) {
+func loadAlarmEvaluationRelay(store *telemetry.PostgresStore, certificate tls.Certificate, metrics *observability.Registry) (*telemetry.AlarmEvaluationRelay, time.Duration, context.Context, context.CancelFunc, error) {
 	if !strings.EqualFold(strings.TrimSpace(os.Getenv("TELEMETRY_ALARM_EVALUATION_ENABLED")), "true") {
 		return nil, 0, context.Background(), nil, nil
 	}
@@ -1440,6 +1440,7 @@ func loadAlarmEvaluationRelay(store *telemetry.PostgresStore, certificate tls.Ce
 	relay, err := telemetry.NewAlarmEvaluationRelay(telemetry.AlarmEvaluationRelayConfig{
 		Repository:      store,
 		Transport:       transport,
+		Metrics:         metrics,
 		WorkerID:        workerID,
 		LeaseDuration:   leaseDuration,
 		RetryDelay:      retryDelay,
