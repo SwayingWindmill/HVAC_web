@@ -8,11 +8,11 @@ import (
 )
 
 type stubConditionInputReader struct {
-	inputs   []ConditionSampleInput
-	err      error
-	gotFrom  time.Time
-	gotTo    time.Time
-	calls    int
+	inputs  []ConditionSampleInput
+	err     error
+	gotFrom time.Time
+	gotTo   time.Time
+	calls   int
 }
 
 func (s *stubConditionInputReader) ReadConditionInputs(_ context.Context, from, to time.Time) ([]ConditionSampleInput, error) {
