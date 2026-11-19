@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"sync"
 	"testing"
 	"time"
 
@@ -62,8 +63,9 @@ func (store *memoryStore) Measures(_ context.Context, tenantID, siteID string) (
 }
 
 func (store *memoryStore) InsertDailyResult(_ context.Context, result DailyResult) error {
-	for _, existing := range store.results[result.MeasureID] {
+	for i, existing := range store.results[result.MeasureID] {
 		if existing.Day == result.Day {
+			store.results[result.MeasureID][i] = result
 			return nil
 		}
 	}
@@ -582,4 +584,104 @@ func TestEvaluateControlModeCOPComparison(t *testing.T) {
 			t.Fatalf("source error = %v, want %v", err, wantErr)
 		}
 	})
+}
+
+type mutablePlantHistory struct {
+	mu      sync.Mutex
+	history plantHistory
+}
+
+func (m *mutablePlantHistory) HasDeviceEnergy(ctx context.Context, tenantID, siteID, deviceID string) (bool, error) {
+	m.mu.Lock()
+	h := m.history
+	m.mu.Unlock()
+	return h.HasDeviceEnergy(ctx, tenantID, siteID, deviceID)
+}
+
+func (m *mutablePlantHistory) HourlySamples(ctx context.Context, tenantID, siteID string, boundaryDeviceID *string, from, to time.Time) ([]HourSample, error) {
+	m.mu.Lock()
+	h := m.history
+	m.mu.Unlock()
+	return h.HourlySamples(ctx, tenantID, siteID, boundaryDeviceID, from, to)
+}
+
+func TestVerifyDueDaysSelfHealsIncompleteDaysAndReverifyDaysUpdatesFinalizedDays(t *testing.T) {
+	implemented := time.Date(2026, 10, 15, 9, 0, 0, 0, shanghai)
+	// Initially reporting day 10-17 is missing 4 hours [10-17 08:00, 12:00) and saves 10% energy.
+	history := &mutablePlantHistory{
+		history: plantHistory{
+			changedAt: implemented,
+			factor:    0.9,
+			gapFrom:   time.Date(2026, 10, 17, 8, 0, 0, 0, shanghai),
+			gapTo:     time.Date(2026, 10, 17, 12, 0, 0, 0, shanghai),
+		},
+	}
+	store := newMemoryStore()
+	now := time.Date(2026, 10, 20, 10, 0, 0, 0, shanghai)
+	ids := 0
+	service, err := NewService(store, history, shanghaiClock{}, flatRate(0.8), func() time.Time { return now }, func(time.Time) (string, error) {
+		ids++
+		return "01990000-7000-7000-8000-000000000001", nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	measure := register(t, service, "提高冷冻水供水温度")
+	if _, err := service.Implement(t.Context(), testTenant, testSite, measure.ID, implemented, testActor); err != nil {
+		t.Fatal(err)
+	}
+
+	until := time.Date(2026, 10, 20, 2, 0, 0, 0, shanghai)
+	if err := service.VerifyDueDays(t.Context(), testTenant, testSite, until); err != nil {
+		t.Fatal(err)
+	}
+	// Days verified: 10-16, 10-17 (partial 20/24 hours), 10-18, 10-19.
+	if len(store.results[measure.ID]) != 4 || store.results[measure.ID][1].Day != "2026-10-17" || store.results[measure.ID][1].Hours != 20 {
+		t.Fatalf("initial results = %+v", store.results[measure.ID])
+	}
+	oldAvoided17 := store.results[measure.ID][1].AvoidedKWh
+	oldAvoided18 := store.results[measure.ID][2].AvoidedKWh
+
+	// Backfill fills the 4-hour outage gap on 10-17; VerifyDueDays self-heals the incomplete day without duplicating rows.
+	now = now.Add(time.Hour)
+	history.mu.Lock()
+	history.history.gapFrom = time.Time{}
+	history.history.gapTo = time.Time{}
+	history.mu.Unlock()
+	if err := service.VerifyDueDays(t.Context(), testTenant, testSite, until); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.results[measure.ID]) != 4 || store.results[measure.ID][1].Hours != 24 || store.results[measure.ID][1].AvoidedKWh <= oldAvoided17 {
+		t.Fatalf("expected self-healed 24h day for 10-17, got %+v", store.results[measure.ID][1])
+	}
+
+	// Late backfill revises energy factor on finalized days from 0.9 to 0.8 (20% avoided instead of 10%).
+	now = now.Add(time.Hour)
+	history.mu.Lock()
+	history.history.factor = 0.8
+	history.mu.Unlock()
+
+	// Cross-midnight local window [2026-10-17 22:00+08, 2026-10-18 02:00+08) reverifies 10-17 and 10-18 only.
+	from := time.Date(2026, 10, 17, 22, 0, 0, 0, shanghai).UTC()
+	to := time.Date(2026, 10, 18, 2, 0, 0, 0, shanghai).UTC()
+	if err := service.ReverifyDays(t.Context(), testTenant, testSite, from, to, until); err != nil {
+		t.Fatal(err)
+	}
+	results := store.results[measure.ID]
+	if len(results) != 4 {
+		t.Fatalf("expected 4 days (no duplicates after upsert), got %d", len(results))
+	}
+	// 10-16 untouched (~10%), 10-17 & 10-18 doubled (~20%), 10-19 untouched (~10%).
+	if share16 := results[0].AvoidedKWh / results[0].AdjustedBaselineKWh; math.Abs(share16-0.1) > 1e-6 {
+		t.Fatalf("10-16 share=%v, want 0.1 (untouched)", share16)
+	}
+	if share17 := results[1].AvoidedKWh / results[1].AdjustedBaselineKWh; math.Abs(share17-0.2) > 1e-6 {
+		t.Fatalf("10-17 share=%v, want 0.2 (reverified)", share17)
+	}
+	if results[2].AvoidedKWh <= oldAvoided18*1.9 || math.Abs(results[2].AvoidedKWh/results[2].AdjustedBaselineKWh-0.2) > 1e-6 {
+		t.Fatalf("10-18 not updated properly: %+v vs old %v", results[2], oldAvoided18)
+	}
+	if share19 := results[3].AvoidedKWh / results[3].AdjustedBaselineKWh; math.Abs(share19-0.1) > 1e-6 {
+		t.Fatalf("10-19 share=%v, want 0.1 (untouched)", share19)
+	}
 }

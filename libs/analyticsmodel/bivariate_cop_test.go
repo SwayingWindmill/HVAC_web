@@ -149,9 +149,9 @@ func TestEvaluateBivariateCOPSkipsAIShadowAndUnknownModes(t *testing.T) {
 
 func TestEvaluateBivariateCOPFiltersInvalidTelemetryAndCOP(t *testing.T) {
 	samples := []ControlTickSample{
-		// Valid pair at boundaries: ObservedCOP == 25.0 and ChillerPowerKW == 0.51 -> COP 20.0.
-		{Mode: ModeRuleBaseline, OutdoorWetBulbC: floatPtr(-2.5), CoolingLoadKW: floatPtr(10.2), ChillerPowerKW: floatPtr(0.51), DurationHours: 0.25},
-		{Mode: ModeAIClosedLoop, OutdoorWetBulbC: floatPtr(-2.1), CoolingLoadKW: floatPtr(10.0), ObservedCOP: floatPtr(25.0), DurationHours: 0.25},
+		// Valid pair at boundaries: CoolingLoadKW == 10.0 (with ChillerPowerKW == 5.0 -> COP 2.0) and ObservedCOP == 12.0.
+		{Mode: ModeRuleBaseline, OutdoorWetBulbC: floatPtr(-2.5), CoolingLoadKW: floatPtr(10.0), ChillerPowerKW: floatPtr(5.0), ChwSupplyTempC: floatPtr(7.0), ChwReturnTempC: floatPtr(10.5), ChwFlowM3H: floatPtr(120.0), DurationHours: 0.25},
+		{Mode: ModeAIClosedLoop, OutdoorWetBulbC: floatPtr(-2.1), CoolingLoadKW: floatPtr(60.0), ChillerPowerKW: floatPtr(5.0), ObservedCOP: floatPtr(12.0), ChwSupplyTempC: floatPtr(7.0), ChwReturnTempC: floatPtr(12.0), ChwFlowM3H: floatPtr(120.0), DurationHours: 0.25},
 
 		// Invalid samples that must all be filtered out:
 		{Mode: ModeAIClosedLoop, OutdoorWetBulbC: nil, CoolingLoadKW: floatPtr(500), ObservedCOP: floatPtr(5.0)},
@@ -159,24 +159,56 @@ func TestEvaluateBivariateCOPFiltersInvalidTelemetryAndCOP(t *testing.T) {
 		{Mode: ModeAIClosedLoop, OutdoorWetBulbC: floatPtr(math.Inf(1)), CoolingLoadKW: floatPtr(500), ObservedCOP: floatPtr(5.0)},
 		{Mode: ModeAIClosedLoop, OutdoorWetBulbC: floatPtr(24), CoolingLoadKW: nil, ObservedCOP: floatPtr(5.0)},
 		{Mode: ModeAIClosedLoop, OutdoorWetBulbC: floatPtr(24), CoolingLoadKW: floatPtr(0), ObservedCOP: floatPtr(5.0)},
+		{Mode: ModeAIClosedLoop, OutdoorWetBulbC: floatPtr(24), CoolingLoadKW: floatPtr(9.99), ChillerPowerKW: floatPtr(5.0)}, // below cooling deadband
 		{Mode: ModeAIClosedLoop, OutdoorWetBulbC: floatPtr(24), CoolingLoadKW: floatPtr(-100), ObservedCOP: floatPtr(5.0)},
 		{Mode: ModeAIClosedLoop, OutdoorWetBulbC: floatPtr(24), CoolingLoadKW: floatPtr(math.NaN()), ObservedCOP: floatPtr(5.0)},
 		{Mode: ModeAIClosedLoop, OutdoorWetBulbC: floatPtr(24), CoolingLoadKW: floatPtr(500), ObservedCOP: floatPtr(0)},
+		{Mode: ModeAIClosedLoop, OutdoorWetBulbC: floatPtr(24), CoolingLoadKW: floatPtr(500), ObservedCOP: floatPtr(0.99)}, // below min COP
 		{Mode: ModeAIClosedLoop, OutdoorWetBulbC: floatPtr(24), CoolingLoadKW: floatPtr(500), ObservedCOP: floatPtr(-3.2)},
-		{Mode: ModeAIClosedLoop, OutdoorWetBulbC: floatPtr(24), CoolingLoadKW: floatPtr(500), ObservedCOP: floatPtr(25.01)},
+		{Mode: ModeAIClosedLoop, OutdoorWetBulbC: floatPtr(24), CoolingLoadKW: floatPtr(500), ObservedCOP: floatPtr(12.01)}, // above max COP
+		{Mode: ModeAIClosedLoop, OutdoorWetBulbC: floatPtr(24), CoolingLoadKW: floatPtr(500), ObservedCOP: floatPtr(85.0)},  // standby spike COP 80+
 		{Mode: ModeAIClosedLoop, OutdoorWetBulbC: floatPtr(24), CoolingLoadKW: floatPtr(500), ObservedCOP: floatPtr(math.Inf(-1))},
 		{Mode: ModeAIClosedLoop, OutdoorWetBulbC: floatPtr(24), CoolingLoadKW: floatPtr(500), ObservedCOP: nil, ChillerPowerKW: nil},
-		{Mode: ModeAIClosedLoop, OutdoorWetBulbC: floatPtr(24), CoolingLoadKW: floatPtr(500), ObservedCOP: nil, ChillerPowerKW: floatPtr(0.5)},
-		{Mode: ModeAIClosedLoop, OutdoorWetBulbC: floatPtr(24), CoolingLoadKW: floatPtr(500), ObservedCOP: nil, ChillerPowerKW: floatPtr(10.0)}, // derived COP 50 > 25
+		{Mode: ModeAIClosedLoop, OutdoorWetBulbC: floatPtr(24), CoolingLoadKW: floatPtr(500), ObservedCOP: nil, ChillerPowerKW: floatPtr(4.99)},                                            // standby power deadband
+		{Mode: ModeAIClosedLoop, OutdoorWetBulbC: floatPtr(24), CoolingLoadKW: floatPtr(200), ObservedCOP: floatPtr(5.0), ChillerPowerKW: floatPtr(1.0)},                                   // standby power even with ObservedCOP
+		{Mode: ModeAIClosedLoop, OutdoorWetBulbC: floatPtr(24), CoolingLoadKW: floatPtr(500), ObservedCOP: nil, ChillerPowerKW: floatPtr(40.0)},                                            // derived COP 12.5 > 12
+		{Mode: ModeAIClosedLoop, OutdoorWetBulbC: floatPtr(24), CoolingLoadKW: floatPtr(500), ChillerPowerKW: floatPtr(100), ChwFlowM3H: floatPtr(0.5)},                                    // below flow deadband
+		{Mode: ModeAIClosedLoop, OutdoorWetBulbC: floatPtr(24), CoolingLoadKW: floatPtr(500), ChillerPowerKW: floatPtr(100), ChwSupplyTempC: floatPtr(8.0), ChwReturnTempC: floatPtr(8.0)}, // zero deltaT
+		{Mode: ModeAIClosedLoop, OutdoorWetBulbC: floatPtr(24), CoolingLoadKW: floatPtr(500), ChillerPowerKW: floatPtr(100), ChwSupplyTempC: floatPtr(8.5), ChwReturnTempC: floatPtr(7.9)}, // negative deltaT
+		{Mode: ModeAIClosedLoop, OutdoorWetBulbC: floatPtr(24), CoolingLoadKW: floatPtr(500), ChillerPowerKW: floatPtr(100), ChwSupplyTempC: floatPtr(math.NaN())},                         // NaN supply temp
+		{Mode: ModeAIClosedLoop, OutdoorWetBulbC: floatPtr(24), CoolingLoadKW: floatPtr(500), ChillerPowerKW: floatPtr(100), DurationHours: math.NaN()},                                    // NaN duration
+		{Mode: ModeAIClosedLoop, OutdoorWetBulbC: floatPtr(24), CoolingLoadKW: floatPtr(500), ChillerPowerKW: floatPtr(100), DurationHours: math.Inf(1)},                                   // Inf duration
 	}
 
 	summary := EvaluateBivariateCOP(samples, BivariateBinConfig{})
 	if summary.MatchedBinCount != 1 || summary.MatchedAISamples != 1 || summary.MatchedBaselineSamples != 1 {
 		t.Fatalf("invalid samples were not filtered cleanly: %+v", summary)
 	}
+	if summary.Incomplete || summary.ExcludedIncompleteSamples != 0 {
+		t.Fatalf("expected no incomplete samples flagged, got %+v", summary)
+	}
 	cell := summary.Cells[0]
-	if cell.WetBulbMinC != -4 || cell.WetBulbMaxC != -2 || cell.BaselineCOP != 20 || cell.AICOP != 25 {
+	if cell.WetBulbMinC != -4 || cell.WetBulbMaxC != -2 || cell.BaselineCOP != 2.0 || cell.AICOP != 12.0 {
 		t.Fatalf("unexpected boundary cell: %+v", cell)
+	}
+}
+
+func TestEvaluateBivariateCOPExcludesAndFlagsIncompleteSubmeters(t *testing.T) {
+	samples := []ControlTickSample{
+		{Mode: ModeRuleBaseline, OutdoorWetBulbC: floatPtr(24.5), CoolingLoadKW: floatPtr(500), ChillerPowerKW: floatPtr(125), DurationHours: 0.25},
+		{Mode: ModeAIClosedLoop, OutdoorWetBulbC: floatPtr(24.5), CoolingLoadKW: floatPtr(500), ChillerPowerKW: floatPtr(100), DurationHours: 0.25},
+		// Incomplete submeter tick (e.g. missing 1 chiller power meter -> inflated apparent COP 10.0) must be excluded and flagged.
+		{Mode: ModeAIClosedLoop, OutdoorWetBulbC: floatPtr(24.5), CoolingLoadKW: floatPtr(500), ChillerPowerKW: floatPtr(50), Incomplete: true, DurationHours: 0.25},
+		// Incomplete AI_SHADOW tick is outside closed-loop comparison so it is ignored silently.
+		{Mode: ModeAIShadow, OutdoorWetBulbC: floatPtr(24.5), CoolingLoadKW: floatPtr(500), ChillerPowerKW: floatPtr(50), Incomplete: true, DurationHours: 0.25},
+	}
+
+	summary := EvaluateBivariateCOP(samples, BivariateBinConfig{})
+	if !summary.Incomplete || summary.ExcludedIncompleteSamples != 1 {
+		t.Fatalf("expected Incomplete=true and ExcludedIncompleteSamples=1, got %+v", summary)
+	}
+	if summary.MatchedBinCount != 1 || summary.MatchedAISamples != 1 || summary.Cells[0].AICOP != 5.0 {
+		t.Fatalf("incomplete submeter sample leaked into COP cell: %+v", summary)
 	}
 }
 

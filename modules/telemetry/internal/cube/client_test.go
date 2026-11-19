@@ -479,6 +479,8 @@ func TestClientIncludesCrossGapInMonthlyBuckets(t *testing.T) {
 			]}`))
 		case decoded.Query.Measures[0] == "site_energy.max_data_watermark":
 			_, _ = writer.Write([]byte(`{"data":[{"site_energy.max_data_watermark":"2026-11-12T04:00:00.000Z","site_energy.max_dataset_revision":"9","site_energy.synthesized_total":"1"}]}`))
+		case decoded.Query.Measures[0] == "site_energy.missing_count":
+			_, _ = writer.Write([]byte(`{"data":[]}`))
 		default:
 			_, _ = writer.Write([]byte(`{"data":[
 				{"site_energy.period_end.month":"2026-11-01T00:00:00.000","site_energy.energy_valid_kwh":"200","site_energy.cross_gap_valid_kwh":"100","site_energy.valid_count":"48","site_energy.suspect_count":"0","site_energy.invalid_count":"0"}
@@ -510,6 +512,120 @@ func TestClientIncludesCrossGapInMonthlyBuckets(t *testing.T) {
 	}
 	if response.CrossGap == nil || response.CrossGap.EnergyKWh != 100 {
 		t.Fatalf("crossGap = %#v", response.CrossGap)
+	}
+}
+
+func TestClientMapsIncompleteSynthesizedDaysAndMonths(t *testing.T) {
+	location, _ := time.LoadLocation("Asia/Shanghai")
+
+	for _, testCase := range []struct {
+		name        string
+		granularity analyticsmodel.Granularity
+		from        time.Time
+		to          time.Time
+		watermark   string
+		seriesRows  string
+		missingRows string
+		wantLen     int
+		wantBadIdx  int
+		wantPartial bool
+	}{
+		{
+			name:        "day granularity",
+			granularity: analyticsmodel.GranularityDay,
+			from:        time.Date(2026, 11, 10, 0, 0, 0, 0, location).UTC(),
+			to:          time.Date(2026, 11, 12, 0, 0, 0, 0, location).UTC(),
+			watermark:   "2026-11-12T00:00:00.000Z",
+			seriesRows: `{"data":[
+				{"site_energy.period_end.day":"2026-11-10T00:00:00.000","site_energy.energy_valid_kwh":"100","site_energy.cross_gap_valid_kwh":null,"site_energy.valid_count":"24","site_energy.suspect_count":"0","site_energy.invalid_count":"0"},
+				{"site_energy.period_end.day":"2026-11-11T00:00:00.000","site_energy.energy_valid_kwh":"60","site_energy.cross_gap_valid_kwh":null,"site_energy.valid_count":"18","site_energy.suspect_count":"0","site_energy.invalid_count":"0"}
+			]}`,
+			missingRows: `{"data":[
+				{"site_energy.period_end.day":"2026-11-11T00:00:00.000","site_energy.missing_meter":"2号电表（D机组）","site_energy.missing_count":"3"},
+				{"site_energy.period_end.day":"2026-11-11T00:00:00.000","site_energy.missing_meter":"1号电表（B机组）","site_energy.missing_count":"1"},
+				{"site_energy.period_end.day":"2026-11-10T00:00:00.000","site_energy.missing_meter":"3号电表（A机组）","site_energy.missing_count":"0"}
+			]}`,
+			wantLen:     2,
+			wantBadIdx:  1,
+			wantPartial: true,
+		},
+		{
+			name:        "month granularity",
+			granularity: analyticsmodel.GranularityMonth,
+			from:        time.Date(2026, 11, 1, 0, 0, 0, 0, location).UTC(),
+			to:          time.Date(2026, 12, 1, 0, 0, 0, 0, location).UTC(),
+			watermark:   "2026-12-01T00:00:00.000Z",
+			seriesRows: `{"data":[
+				{"site_energy.period_end.month":"2026-11-01T00:00:00.000","site_energy.energy_valid_kwh":"3000","site_energy.cross_gap_valid_kwh":null,"site_energy.valid_count":"500","site_energy.suspect_count":"0","site_energy.invalid_count":"0"}
+			]}`,
+			missingRows: `{"data":[
+				{"site_energy.period_end.month":"2026-11-01T00:00:00.000","site_energy.missing_meter":"2号电表（D机组）","site_energy.missing_count":"2"},
+				{"site_energy.period_end.month":"2026-11-01T00:00:00.000","site_energy.missing_meter":"1号电表（B机组）","site_energy.missing_count":"1"}
+			]}`,
+			wantLen:     1,
+			wantBadIdx:  0,
+			wantPartial: true,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			var missingQuery *cubeQuery
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				var decoded loadRequest
+				if err := json.NewDecoder(request.Body).Decode(&decoded); err != nil {
+					t.Fatal(err)
+				}
+				writer.Header().Set("Content-Type", "application/json")
+				switch {
+				case strings.HasPrefix(decoded.Query.Measures[0], costView+"."):
+					_, _ = writer.Write([]byte(`{"data":[]}`))
+				case decoded.Query.Measures[0] == "site_energy.max_data_watermark":
+					_, _ = writer.Write([]byte(`{"data":[{"site_energy.max_data_watermark":"` + testCase.watermark + `","site_energy.max_dataset_revision":"9","site_energy.synthesized_total":"1"}]}`))
+				case decoded.Query.Measures[0] == "site_energy.missing_count":
+					q := decoded.Query
+					missingQuery = &q
+					_, _ = writer.Write([]byte(testCase.missingRows))
+				default:
+					_, _ = writer.Write([]byte(testCase.seriesRows))
+				}
+			}))
+			defer server.Close()
+
+			client, err := NewClient(Config{BaseURL: server.URL, DatasetRevision: "energy:v1", TokenFactory: fixedTokenFactory{}, HTTPClient: server.Client()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := client.QueryEnergySeries(context.Background(), analytics.CallerContext{PrincipalID: "user-1", PolicyRevision: "policy-1"}, analyticsmodel.EnergySeriesQuery{
+				TenantID:      testCubeTenantID,
+				SiteID:        testCubeSiteID,
+				EnergyType:    analyticsmodel.EnergyTypeElectricity,
+				Granularity:   testCase.granularity,
+				Timezone:      "Asia/Shanghai",
+				From:          testCase.from,
+				To:            testCase.to,
+				QualityPolicy: analyticsmodel.QualityPolicyValidOnly,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if missingQuery == nil || len(missingQuery.TimeDimensions) != 1 || missingQuery.TimeDimensions[0].Granularity != string(testCase.granularity) {
+				t.Fatalf("missing submeters query = %#v, want granularity %s", missingQuery, testCase.granularity)
+			}
+			if len(response.Points) != testCase.wantLen {
+				t.Fatalf("points = %#v", response.Points)
+			}
+			for index, point := range response.Points {
+				if index == testCase.wantBadIdx {
+					if !point.Incomplete || len(point.MissingMeters) != 2 || point.MissingMeters[0] != "1号电表（B机组）" || point.MissingMeters[1] != "2号电表（D机组）" {
+						t.Fatalf("point %d = %#v, want incomplete with sorted missing meters", index, point)
+					}
+				} else if point.Incomplete || len(point.MissingMeters) != 0 {
+					t.Fatalf("point %d = %#v, want complete", index, point)
+				}
+			}
+			if response.Metadata.Partial != testCase.wantPartial || !response.Metadata.Synthesized {
+				t.Fatalf("metadata = %#v", response.Metadata)
+			}
+		})
 	}
 }
 

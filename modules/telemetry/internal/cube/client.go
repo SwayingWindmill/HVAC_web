@@ -132,12 +132,12 @@ func (client *Client) QueryEnergySeries(ctx context.Context, caller analytics.Ca
 		if err := attachCosts(&response, costs, productQuery, location); err != nil {
 			return analyticsmodel.EnergySeriesResponse{}, err
 		}
-		if productQuery.Granularity == analyticsmodel.GranularityHour && len(response.Points) > 0 {
+		if response.Metadata.Synthesized && len(response.Points) > 0 {
 			missing, err := client.load(queryContext, token, buildMissingMetersQuery(productQuery, location))
 			if err != nil {
 				return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("query Cube missing submeters: %w", err)
 			}
-			if err := attachMissingMeters(&response, missing, location); err != nil {
+			if err := attachMissingMeters(&response, missing, productQuery.Granularity, location); err != nil {
 				return analyticsmodel.EnergySeriesResponse{}, err
 			}
 		}
@@ -379,11 +379,11 @@ func attachCosts(response *analyticsmodel.EnergySeriesResponse, decoded loadResp
 	return nil
 }
 
-func attachMissingMeters(response *analyticsmodel.EnergySeriesResponse, decoded loadResponse, location *time.Location) error {
+func attachMissingMeters(response *analyticsmodel.EnergySeriesResponse, decoded loadResponse, granularity analyticsmodel.Granularity, location *time.Location) error {
 	if len(decoded.Data) == 0 {
 		return nil
 	}
-	period := periodMember(siteView, analyticsmodel.GranularityHour)
+	period := periodMember(siteView, granularity)
 	byStart := make(map[int64]int, len(response.Points))
 	for index := range response.Points {
 		byStart[response.Points[index].PeriodStart.UTC().UnixNano()] = index

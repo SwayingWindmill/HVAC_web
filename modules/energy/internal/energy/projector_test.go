@@ -243,9 +243,16 @@ func validBinding() BindingResolution {
 func float64Pointer(value float64) *float64 { return &value }
 
 type fakeSource struct {
-	deltas []CounterDelta
-	limit  int
-	err    error
+	deltas       []CounterDelta
+	windowDeltas []CounterDelta
+	lastWindow   DirtyWindow
+	limit        int
+	err          error
+}
+
+func (source *fakeSource) WindowDeltas(_ context.Context, window DirtyWindow) ([]CounterDelta, error) {
+	source.lastWindow = window
+	return append([]CounterDelta(nil), source.windowDeltas...), source.err
 }
 
 var fakeThrough = ProjectionCursor{HistorySequence: 7, ObservationID: "018f2e00-0000-7000-8000-000000000099"}
@@ -285,7 +292,7 @@ func (sink *fakeSink) AppendRebuildEvent(context.Context, RebuildEvent) error {
 
 func (sink *fakeSink) InsertFacts(_ context.Context, facts []EnergyIntervalFact) error {
 	sink.called = true
-	sink.facts = append([]EnergyIntervalFact(nil), facts...)
+	sink.facts = append(sink.facts, facts...)
 	return sink.err
 }
 
@@ -341,5 +348,132 @@ func TestStaticBindingResolverAndMatchMeterBindingsEnforceEffectiveWindows(t *te
 	}
 	if ambiguous := query(end.Add(-30 * time.Minute)); ambiguous.Status != BindingAmbiguous {
 		t.Fatalf("overlap=%#v, want AMBIGUOUS", ambiguous)
+	}
+}
+
+func TestProjectorReemitsDeltaValueChangeAndInvalidationRevisions(t *testing.T) {
+	binding := validBinding()
+
+	deltaChanged := validDelta()
+	deltaChanged.CurrentObservationID = "018f4e00-3000-7000-8000-000000000010"
+	updatedKWh := 14.25
+	deltaChanged.DeltaValue = &updatedKWh
+	deltaChanged.ExistingFactFound = true
+	deltaChanged.ExistingFactMeterBindingID = binding.MeterBindingID
+	deltaChanged.ExistingFactPreviousObservationID = deltaChanged.PreviousObservationID
+	deltaChanged.ExistingFactEnergyKWh = 10.0
+	deltaChanged.ExistingFactTransitionType = TransitionIncrease
+	deltaChanged.ExistingFactQuality = FactQualityValid
+	deltaChanged.ExistingFactRevision = 2
+
+	deltaInvalidated := validDelta()
+	deltaInvalidated.CurrentObservationID = "018f4e00-3000-7000-8000-000000000011"
+	deltaInvalidated.TransitionType = TransitionInvalidDecrease
+	deltaInvalidated.DeltaValue = nil
+	deltaInvalidated.ExistingFactFound = true
+	deltaInvalidated.ExistingFactMeterBindingID = binding.MeterBindingID
+	deltaInvalidated.ExistingFactPreviousObservationID = deltaInvalidated.PreviousObservationID
+	deltaInvalidated.ExistingFactEnergyKWh = 6.5
+	deltaInvalidated.ExistingFactTransitionType = TransitionIncrease
+	deltaInvalidated.ExistingFactQuality = FactQualityValid
+	deltaInvalidated.ExistingFactRevision = 4
+
+	sink := &fakeSink{}
+	projector, err := NewProjector(ProjectorConfig{
+		CounterSource:   &fakeSource{deltas: []CounterDelta{deltaChanged, deltaInvalidated}},
+		BindingResolver: &fakeResolver{resolution: binding},
+		FactSink:        sink,
+		RebuildEvents:   sink,
+		BatchSize:       16,
+		Now:             func() time.Time { return time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projected, err := projector.ProjectOnce(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projected != 2 || len(sink.facts) != 2 {
+		t.Fatalf("projected=%d facts=%d, want 2", projected, len(sink.facts))
+	}
+	if sink.facts[0].FactRevision != 3 || sink.facts[0].EnergyKWh != 14.25 || sink.facts[0].Quality != FactQualityValid {
+		t.Fatalf("unexpected delta-updated fact: %+v", sink.facts[0])
+	}
+	if sink.facts[1].FactRevision != 5 || sink.facts[1].EnergyKWh != 0 || sink.facts[1].Quality != FactQualityInvalid {
+		t.Fatalf("unexpected invalidated fact: %+v", sink.facts[1])
+	}
+}
+
+func TestProjectorRebuildDirtyWindowStitchesBoundariesIdempotently(t *testing.T) {
+	binding := validBinding()
+
+	unchanged := validDelta()
+	unchanged.CurrentObservationID = "018f4e00-3000-7000-8000-000000000020"
+	unchanged.ExistingFactFound = true
+	unchanged.ExistingFactMeterBindingID = binding.MeterBindingID
+	unchanged.ExistingFactPreviousObservationID = unchanged.PreviousObservationID
+	unchanged.ExistingFactEnergyKWh = *unchanged.DeltaValue
+	unchanged.ExistingFactTransitionType = TransitionIncrease
+	unchanged.ExistingFactQuality = FactQualityValid
+	unchanged.ExistingFactRevision = 1
+
+	anchoredBeforeStart := validDelta()
+	anchoredBeforeStart.CurrentObservationID = "018f4e00-3000-7000-8000-000000000021"
+	anchoredBeforeStart.PreviousSampledAt = time.Date(2026, 7, 29, 8, 0, 0, 0, time.UTC)
+	anchoredBeforeStart.CurrentSampledAt = time.Date(2026, 7, 29, 13, 15, 0, 0, time.UTC)
+	edgeKWh := 18.0
+	anchoredBeforeStart.DeltaValue = &edgeKWh
+
+	successorAfterEnd := validDelta()
+	successorAfterEnd.CurrentObservationID = "018f4e00-3000-7000-8000-000000000022"
+	successorAfterEnd.PreviousObservationID = anchoredBeforeStart.CurrentObservationID
+	successorAfterEnd.PreviousSampledAt = anchoredBeforeStart.CurrentSampledAt
+	successorAfterEnd.CurrentSampledAt = time.Date(2026, 7, 29, 14, 20, 0, 0, time.UTC)
+	succKWh := 4.5
+	successorAfterEnd.DeltaValue = &succKWh
+	successorAfterEnd.ExistingFactFound = true
+	successorAfterEnd.ExistingFactMeterBindingID = binding.MeterBindingID
+	successorAfterEnd.ExistingFactPreviousObservationID = "018f4e00-3000-7000-8000-000000000001"
+	successorAfterEnd.ExistingFactEnergyKWh = 22.5
+	successorAfterEnd.ExistingFactTransitionType = TransitionIncrease
+	successorAfterEnd.ExistingFactQuality = FactQualityValid
+	successorAfterEnd.ExistingFactRevision = 0
+
+	source := &fakeSource{windowDeltas: []CounterDelta{unchanged, anchoredBeforeStart, successorAfterEnd}}
+	sink := &fakeSink{}
+	projector, err := NewProjector(ProjectorConfig{
+		CounterSource:   source,
+		BindingResolver: &fakeResolver{resolution: binding},
+		FactSink:        sink,
+		RebuildEvents:   sink,
+		BatchSize:       16,
+		Now:             func() time.Time { return time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	window := DirtyWindow{
+		TenantID: testTenantID,
+		SiteID:   testSiteID,
+		PointIDs: []string{testPointID},
+		Start:    time.Date(2026, 7, 29, 13, 0, 0, 0, time.UTC),
+		End:      time.Date(2026, 7, 29, 14, 0, 0, 0, time.UTC),
+	}
+	rebuilt, err := projector.RebuildDirtyWindow(context.Background(), window)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rebuilt != 2 || len(sink.facts) != 2 {
+		t.Fatalf("rebuilt=%d facts=%d, want 2 (unchanged skipped, start-anchor + T_end+1 kept)", rebuilt, len(sink.facts))
+	}
+	if len(sink.advanced) != 0 {
+		t.Fatalf("dirty window rebuild should not advance checkpoint, got %+v", sink.advanced)
+	}
+	if sink.facts[0].CurrentObservationID != anchoredBeforeStart.CurrentObservationID || sink.facts[0].EnergyKWh != 18.0 || sink.facts[0].FactRevision != 0 {
+		t.Fatalf("unexpected pre-T_start stitched fact: %+v", sink.facts[0])
+	}
+	if sink.facts[1].CurrentObservationID != successorAfterEnd.CurrentObservationID || sink.facts[1].EnergyKWh != 4.5 || sink.facts[1].FactRevision != 1 {
+		t.Fatalf("unexpected T_end+1 stitched successor fact: %+v", sink.facts[1])
 	}
 }

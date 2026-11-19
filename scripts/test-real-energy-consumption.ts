@@ -1,11 +1,28 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { periodWindow, summarizeEnergy } from '../apps/hvac-web/src/features/energy-analysis/consumption/model.ts';
+import type { EnergySeriesResponse } from '../apps/hvac-web/src/api/generated/platformGateway.gen.ts';
+import {
+  comparePeriods,
+  completeOnly,
+  copUnavailableText,
+  type EnergyPeriod,
+  evaluatePlantCop,
+  explainQuestion,
+  hourlyHeatmap,
+  periodWindow,
+  previousWindow,
+  relativeChange,
+  sanitizeReportedCop,
+  siteDays,
+  summarizeEnergy,
+  summaryCostBuckets,
+} from '../apps/hvac-web/src/features/energy-analysis/consumption/model.ts';
+import { sumCosts } from '../apps/hvac-web/src/features/tariff/tariff-model.ts';
 
 const now = new Date('2026-10-10T06:30:00Z'); // 14:30 Saturday in Asia/Shanghai
 
 test('periods start at Site-local boundaries, not UTC or browser midnight', () => {
-  const window = (period) => {
+  const window = (period: EnergyPeriod) => {
     const { granularity, from, to } = periodWindow(period, now, 'Asia/Shanghai');
     return [granularity, from.toISOString(), to.toISOString()];
   };
@@ -15,12 +32,19 @@ test('periods start at Site-local boundaries, not UTC or browser midnight', () =
   assert.deepEqual(window('year'), ['month', '2025-12-31T16:00:00.000Z', '2026-10-10T06:30:00.000Z']);
 });
 
-const series = (points, metadata = {}) => ({
+const series = (
+  points: readonly [string, number][],
+  metadata: Partial<EnergySeriesResponse['metadata']> = {},
+): EnergySeriesResponse => ({
   schemaVersion: 1,
   points: points.map(([periodStart, energyKWh]) => ({ periodStart, periodEnd: periodStart, energyKWh })),
   metadata: {
-    requestedGranularity: 'day', actualGranularity: 'day', datasetRevision: 'r', partial: false,
-    qualitySummary: { valid: 1, suspect: 0, invalid: 0 }, ...metadata,
+    requestedGranularity: 'day',
+    actualGranularity: 'day',
+    datasetRevision: 'r',
+    partial: false,
+    qualitySummary: { valid: 1, suspect: 0, invalid: 0 },
+    ...metadata,
   },
 });
 
@@ -57,9 +81,8 @@ test('a bucket without cooling has no efficiency and stays out of the period eff
   assert.equal(summarizeEnergy(series([['2026-10-10T02:00:00Z', 180]]), series([]), 'hour', 'Asia/Shanghai').cop, null);
 });
 
-test('the previous period covers the same span, ending where the current one starts', async () => {
-  const { previousWindow } = await import('../apps/hvac-web/src/features/energy-analysis/consumption/model.ts');
-  const window = (period) => {
+test('the previous period covers the same span, ending where the current one starts', () => {
+  const window = (period: EnergyPeriod) => {
     const { from, to } = previousWindow(period, now, 'Asia/Shanghai');
     return [from.toISOString(), to.toISOString()];
   };
@@ -72,11 +95,10 @@ test('the previous period covers the same span, ending where the current one sta
   assert.equal(to.toISOString(), '2026-02-28T16:00:00.000Z');
 });
 
-test('buckets line up by their place in the period, and the bucket still running stays off the chart', async () => {
-  const { comparePeriods, completeOnly, relativeChange } = await import('../apps/hvac-web/src/features/energy-analysis/consumption/model.ts');
+test('buckets line up by their place in the period, and the bucket still running stays off the chart', () => {
   const today = summarizeEnergy(series([['2026-10-10T02:00:00Z', 200], ['2026-10-10T03:00:00Z', 250]]), series([['2026-10-10T02:00:00Z', 700]]), 'hour', 'Asia/Shanghai');
   const yesterday = summarizeEnergy(series([['2026-10-09T02:00:00Z', 180], ['2026-10-09T05:00:00Z', 999]]), series([]), 'hour', 'Asia/Shanghai');
-  const hours = (at) => comparePeriods(today, yesterday, {
+  const hours = (at: string) => comparePeriods(today, yesterday, {
     from: new Date('2026-10-09T16:00:00Z'), previousFrom: new Date('2026-10-08T16:00:00Z'), now: new Date(at), timeZone: 'Asia/Shanghai',
   });
   // At 11:20 the 11:00 hour is still running: listed, but not drawn.
@@ -89,7 +111,7 @@ test('buckets line up by their place in the period, and the bucket still running
   assert.deepEqual(completeOnly(running).map((row) => row.electricityKWh), [200, null, null]);
   assert.deepEqual(completeOnly(hours('2026-10-10T04:00:00Z')).map((row) => row.electricityKWh), [200, 250, null]);
 
-  const days = (points) => summarizeEnergy(series(points), series([]), 'day', 'Asia/Shanghai');
+  const days = (points: readonly [string, number][]) => summarizeEnergy(series(points), series([]), 'day', 'Asia/Shanghai');
   const month = comparePeriods(days([['2026-09-30T16:00:00Z', 50], ['2026-10-02T16:00:00Z', 70]]), days([['2026-08-31T16:00:00Z', 40], ['2026-09-01T16:00:00Z', 45]]), {
     from: new Date('2026-09-30T16:00:00Z'), previousFrom: new Date('2026-08-31T16:00:00Z'), now, timeZone: 'Asia/Shanghai',
   });
@@ -104,9 +126,8 @@ test('buckets line up by their place in the period, and the bucket still running
   assert.equal(relativeChange(450, 0), null);
 });
 
-test('解释 asks about one bucket with its own date, its energy and the bucket it is compared with', async () => {
-  const { comparePeriods, explainQuestion } = await import('../apps/hvac-web/src/features/energy-analysis/consumption/model.ts');
-  const days = (points) => summarizeEnergy(series(points), series([]), 'day', 'Asia/Shanghai');
+test('解释 asks about one bucket with its own date, its energy and the bucket it is compared with', () => {
+  const days = (points: readonly [string, number][]) => summarizeEnergy(series(points), series([]), 'day', 'Asia/Shanghai');
   const week = comparePeriods(days([['2026-10-14T16:00:00Z', 1634.2], ['2026-10-15T16:00:00Z', 900]]), days([['2026-10-07T16:00:00Z', 872]]), {
     from: new Date('2026-10-14T16:00:00Z'), previousFrom: new Date('2026-10-07T16:00:00Z'), now: new Date('2026-10-16T10:00:00Z'), timeZone: 'Asia/Shanghai',
   });
@@ -121,8 +142,7 @@ test('解释 asks about one bucket with its own date, its energy and the bucket 
   assert.equal(explainQuestion(hours[0], 'hour', 'Asia/Shanghai'), '为什么 2026年10月16日 18:00–19:00 的空调用电比 10月15日同一时段 少？这一小时 80 kWh，10月15日同一时段 120 kWh。');
 });
 
-test('hourly energy becomes a Site-local day by hour grid with unread hours left empty', async () => {
-  const { hourlyHeatmap, siteDays } = await import('../apps/hvac-web/src/features/energy-analysis/consumption/model.ts');
+test('hourly energy becomes a Site-local day by hour grid with unread hours left empty', () => {
   const days = siteDays(now, 'Asia/Shanghai', 2);
   assert.deepEqual(days, ['2026-10-09', '2026-10-10']);
   const grid = hourlyHeatmap(series([['2026-10-09T16:00:00Z', 12], ['2026-10-10T05:00:00Z', 30]]), 'Asia/Shanghai', days);
@@ -133,11 +153,8 @@ test('hourly energy becomes a Site-local day by hour grid with unread hours left
   assert.equal(grid[0].values.every((value) => value === null), true);
 });
 
-test('synthesized incomplete hours preserve partial sum and missing meters, while cross-gap adds to period totals without entering hourly or daily rows (#798)', async () => {
-  const { comparePeriods, summaryCostBuckets } = await import('../apps/hvac-web/src/features/energy-analysis/consumption/model.ts');
-  const { sumCosts } = await import('../apps/hvac-web/src/features/tariff/tariff-model.ts');
-
-  const elecHour = {
+test('synthesized incomplete hours preserve partial sum and missing meters, while cross-gap adds to period totals without entering hourly or daily rows (#798)', () => {
+  const elecHour: EnergySeriesResponse = {
     schemaVersion: 1,
     points: [
       {
@@ -188,7 +205,7 @@ test('synthesized incomplete hours preserve partial sum and missing meters, whil
   assert.deepEqual(compared[0].missingMeters, ['2号电表（D机组）']);
 
   // Monthly granularity already includes each month's cross-gap inside points: must not double-count.
-  const elecMonth = {
+  const elecMonth: EnergySeriesResponse = {
     schemaVersion: 1,
     points: [
       {
@@ -215,4 +232,116 @@ test('synthesized incomplete hours preserve partial sum and missing meters, whil
   assert.equal(monthly.electricityKWh, 12_640);
   assert.equal(monthly.rows[0].crossGapElectricityKWh, 640);
   assert.equal(summaryCostBuckets(monthly).length, 1);
+});
+
+test('summary COP is energy-weighted across unbalanced load intervals, never arithmetic mean of point COPs', () => {
+  // Low-load hour: 100 kWh elec, 600 kWh cooling (COP = 6.0)
+  // High-load hour: 900 kWh elec, 2700 kWh cooling (COP = 3.0)
+  // Naive mean = (6.0 + 3.0) / 2 = 4.50; energy-weighted COP = 3300 / 1000 = 3.30.
+  const summary = summarizeEnergy(
+    series([['2026-10-10T01:00:00Z', 100], ['2026-10-10T02:00:00Z', 900]]),
+    series([['2026-10-10T01:00:00Z', 600], ['2026-10-10T02:00:00Z', 2700]]),
+    'hour',
+    'Asia/Shanghai',
+  );
+  assert.deepEqual(summary.rows.map((row) => row.cop), [6, 3]);
+  assert.equal(summary.cop, 3.3);
+  assert.equal(summary.copUnavailableReason, null);
+  assert.notEqual(summary.cop, 4.5);
+
+  // Standby hour (50 kWh standby elec, 0 cooling) yields null row COP (no 0.00)
+  // while weighing its electricity into the period plant COP.
+  const mixed = summarizeEnergy(
+    series([['2026-10-10T01:00:00Z', 50], ['2026-10-10T02:00:00Z', 200]]),
+    series([['2026-10-10T01:00:00Z', 0], ['2026-10-10T02:00:00Z', 800]]),
+    'hour',
+    'Asia/Shanghai',
+  );
+  assert.equal(mixed.rows[0].cop, null);
+  assert.equal(mixed.rows[1].cop, 4);
+  assert.equal(mixed.cop, 800 / 250);
+});
+
+test('standby, negligible load, invalid inputs, and implausible outliers return null COP with clear reasons', () => {
+  const standby = summarizeEnergy(
+    series([['2026-10-10T01:00:00Z', 24], ['2026-10-10T02:00:00Z', 18]]),
+    series([['2026-10-10T01:00:00Z', 0], ['2026-10-10T02:00:00Z', 0]]),
+    'hour',
+    'Asia/Shanghai',
+  );
+  assert.equal(standby.rows[0].cop, null);
+  assert.equal(standby.cop, null);
+  assert.equal(standby.copUnavailableReason, 'standby');
+  assert.equal(copUnavailableText(standby.copUnavailableReason).includes('—'), false);
+
+  assert.deepEqual(evaluatePlantCop(0.4, 0.1), { cop: null, unavailableReason: 'standby' });
+  assert.deepEqual(evaluatePlantCop(50, 0), { cop: null, unavailableReason: 'out-of-range' });
+
+  const outlier = summarizeEnergy(
+    series([['2026-10-10T01:00:00Z', 10]]),
+    series([['2026-10-10T01:00:00Z', 854]]),
+    'hour',
+    'Asia/Shanghai',
+  );
+  assert.equal(outlier.rows[0].cop, null);
+  assert.equal(outlier.cop, null);
+  assert.equal(outlier.copUnavailableReason, 'out-of-range');
+
+  assert.deepEqual(evaluatePlantCop(50, 100), { cop: null, unavailableReason: 'standby' });
+  assert.deepEqual(evaluatePlantCop(Number.NaN, 100), { cop: null, unavailableReason: 'no-data' });
+  assert.deepEqual(evaluatePlantCop(100, Number.POSITIVE_INFINITY), { cop: null, unavailableReason: 'no-data' });
+  assert.deepEqual(evaluatePlantCop(-10, 100), { cop: null, unavailableReason: 'out-of-range' });
+
+  assert.equal(sanitizeReportedCop(0, 0, 500).cop, null);
+  assert.equal(sanitizeReportedCop(85.4, 854, 10).cop, null);
+  assert.equal(sanitizeReportedCop(Number.NaN, 400, 100).cop, null);
+  assert.equal(sanitizeReportedCop(2.88, 209458.9, 72696.8).cop, 2.88);
+
+  assert.match(copUnavailableText('out-of-range', ['D 机组电表']), /D 机组电表/);
+});
+
+test('incomplete telemetry and missingMeters propagate cleanly across day and month granularities', () => {
+  const dayElec: EnergySeriesResponse = {
+    schemaVersion: 1,
+    points: [
+      { periodStart: '2026-10-08T16:00:00Z', periodEnd: '2026-10-09T16:00:00Z', energyKWh: 420, incomplete: true, missingMeters: ['D 机组电表'] },
+      { periodStart: '2026-10-09T16:00:00Z', periodEnd: '2026-10-10T16:00:00Z', energyKWh: 900 },
+    ],
+    metadata: { requestedGranularity: 'day', actualGranularity: 'day', datasetRevision: 'r', partial: true, qualitySummary: { valid: 2, suspect: 0, invalid: 0 } },
+  };
+  const dayCool = series([['2026-10-08T16:00:00Z', 2400], ['2026-10-09T16:00:00Z', 3000]]);
+  const daily = summarizeEnergy(dayElec, dayCool, 'day', 'Asia/Shanghai');
+  assert.equal(daily.incompleteBuckets, 1);
+  assert.deepEqual(daily.missingMeters, ['D 机组电表']);
+  assert.equal(daily.rows[0].incomplete, true);
+  assert.equal(daily.rows[1].incomplete, false);
+
+  const compared = comparePeriods(daily, summarizeEnergy(series([]), series([]), 'day', 'Asia/Shanghai'), {
+    from: new Date('2026-10-08T16:00:00Z'),
+    previousFrom: new Date('2026-10-01T16:00:00Z'),
+    now: new Date('2026-10-10T16:00:00Z'),
+    timeZone: 'Asia/Shanghai',
+  });
+  assert.equal(compared[0].incomplete, true);
+  assert.deepEqual(compared[0].missingMeters, ['D 机组电表']);
+  assert.equal(compared[1].incomplete, false);
+
+  const monthElec: EnergySeriesResponse = {
+    schemaVersion: 1,
+    points: [
+      { periodStart: '2026-09-30T16:00:00Z', periodEnd: '2026-10-31T16:00:00Z', energyKWh: 10_000, incomplete: true, missingMeters: ['2号电表（D机组）'] },
+    ],
+    metadata: { requestedGranularity: 'month', actualGranularity: 'month', datasetRevision: 'r', partial: true, qualitySummary: { valid: 1, suspect: 0, invalid: 0 } },
+  };
+  const monthCool: EnergySeriesResponse = {
+    schemaVersion: 1,
+    points: [
+      { periodStart: '2026-09-30T16:00:00Z', periodEnd: '2026-10-31T16:00:00Z', energyKWh: 35_000, incomplete: true },
+    ],
+    metadata: { requestedGranularity: 'month', actualGranularity: 'month', datasetRevision: 'r', partial: true, qualitySummary: { valid: 1, suspect: 0, invalid: 0 } },
+  };
+  const monthly = summarizeEnergy(monthElec, monthCool, 'month', 'Asia/Shanghai');
+  assert.equal(monthly.incompleteBuckets, 1);
+  assert.deepEqual(monthly.missingMeters, ['2号电表（D机组）']);
+  assert.equal(monthly.cop, 3.5);
 });

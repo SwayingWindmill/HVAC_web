@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -483,6 +485,96 @@ func scanPendingMetricResults(rows pgx.Rows) ([]Result, error) {
 		results = append(results, result)
 	}
 	return results, rows.Err()
+}
+
+// LoadBackfillWatermark reads the persisted worker-wide backfill cursor under unscoped RLS context.
+func (s *PostgresStore) LoadBackfillWatermark(ctx context.Context, scopeKey string) (BackfillWatermarkState, bool, error) {
+	if s == nil || s.pool == nil {
+		return BackfillWatermarkState{}, false, errors.New("metric postgres store is unavailable")
+	}
+	trimmed := strings.TrimSpace(scopeKey)
+	if trimmed == "" {
+		trimmed = DefaultBackfillWatermarkScope
+	}
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return BackfillWatermarkState{}, false, err
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `SELECT set_config('app.tenant_id', '', true), set_config('app.authorized_site_ids', '', true)`); err != nil {
+		return BackfillWatermarkState{}, false, err
+	}
+	var (
+		state      BackfillWatermarkState
+		seq        int64
+		ingestedAt *time.Time
+		updatedAt  time.Time
+	)
+	err = tx.QueryRow(ctx, `SELECT scope, last_processed_sequence, last_processed_ingested_at, updated_at
+FROM core_registry.metric_backfill_watermarks
+WHERE watermark_key = $1 AND tenant_id IS NULL AND site_id IS NULL`, trimmed).Scan(&state.Scope, &seq, &ingestedAt, &updatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return BackfillWatermarkState{}, false, nil
+	}
+	if err != nil {
+		return BackfillWatermarkState{}, false, fmt.Errorf("load metric backfill watermark: %w", err)
+	}
+	if seq < 0 {
+		return BackfillWatermarkState{}, false, fmt.Errorf("invalid persisted backfill watermark sequence %d", seq)
+	}
+	state.LastProcessedSequence = uint64(seq)
+	if ingestedAt != nil {
+		t := ingestedAt.UTC()
+		state.LastProcessedIngestedAt = &t
+	}
+	state.UpdatedAt = updatedAt.UTC()
+	if err = tx.Commit(ctx); err != nil {
+		return BackfillWatermarkState{}, false, err
+	}
+	return state, true, nil
+}
+
+// SaveBackfillWatermark monotonically upserts the persisted worker backfill sequence watermark.
+func (s *PostgresStore) SaveBackfillWatermark(ctx context.Context, state BackfillWatermarkState) error {
+	if s == nil || s.pool == nil {
+		return errors.New("metric postgres store is unavailable")
+	}
+	if state.LastProcessedSequence > math.MaxInt64 {
+		return errors.New("backfill watermark sequence overflows bigint")
+	}
+	trimmed := strings.TrimSpace(state.Scope)
+	if trimmed == "" {
+		trimmed = DefaultBackfillWatermarkScope
+	}
+	updatedAt := state.UpdatedAt.UTC()
+	if updatedAt.IsZero() {
+		updatedAt = time.Now().UTC()
+	}
+	var ingestedAt *time.Time
+	if state.LastProcessedIngestedAt != nil && !state.LastProcessedIngestedAt.IsZero() {
+		t := state.LastProcessedIngestedAt.UTC()
+		ingestedAt = &t
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `SELECT set_config('app.tenant_id', '', true), set_config('app.authorized_site_ids', '', true)`); err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO core_registry.metric_backfill_watermarks (
+  watermark_key, tenant_id, site_id, scope, last_processed_sequence, last_processed_ingested_at, updated_at
+) VALUES ($1, NULL, NULL, $2, $3, $4, $5)
+ON CONFLICT (watermark_key) DO UPDATE SET
+  last_processed_sequence = GREATEST(core_registry.metric_backfill_watermarks.last_processed_sequence, EXCLUDED.last_processed_sequence),
+  last_processed_ingested_at = COALESCE(EXCLUDED.last_processed_ingested_at, core_registry.metric_backfill_watermarks.last_processed_ingested_at),
+  updated_at = EXCLUDED.updated_at`,
+		trimmed, trimmed, int64(state.LastProcessedSequence), ingestedAt, updatedAt)
+	if err != nil {
+		return fmt.Errorf("save metric backfill watermark: %w", err)
+	}
+	return tx.Commit(ctx)
 }
 
 var _ pgconn.CommandTag

@@ -137,6 +137,8 @@ func run() int {
 	if backfillScanInterval > 0 {
 		builtDetector, detErr := metric.NewBackfillRecalcDetector(runtime.store, runtime.backfillSource, metric.BackfillRecalcConfig{
 			FinalizationDelay: finalizationDelay,
+			WatermarkStore:    runtime.store,
+			WatermarkScope:    envOr("METRIC_BACKFILL_WATERMARK_SCOPE", metric.DefaultBackfillWatermarkScope),
 		})
 		if detErr != nil {
 			logger.Error("metric_worker_configuration_invalid", "error_code", "METRIC_WORKER_CONFIGURATION_INVALID")

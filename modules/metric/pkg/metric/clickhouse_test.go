@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -405,6 +407,228 @@ func TestInsertMetricAndInsertMetricsUseAsyncInsertAndDedupToken(t *testing.T) {
 	}
 	if sha256.Size != 32 {
 		t.Fatal("unexpected sha256 size")
+	}
+}
+
+func TestReadPointEnforcesExplicitUTCAndCounterAnomalyCleaningSQL(t *testing.T) {
+	var capturedSQL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedSQL = r.URL.Query().Get("query")
+		_, _ = io.WriteString(w, "1002\t3\t3\t1000\t1002\t120\t2\t2\t0\t0\t0\n")
+	}))
+	defer server.Close()
+
+	store, err := NewClickHouseStore(server.URL, "", "", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	shanghai := time.FixedZone("Asia/Shanghai", 8*3600)
+	start := time.Date(2026, 8, 10, 12, 0, 0, 0, shanghai)
+	end := start.Add(time.Hour)
+	binding := Binding{
+		TenantID:          "01990000-3000-7000-8000-000000000001",
+		SiteID:            "01990000-5000-7000-8000-000000000001",
+		Granularity:       "HOUR",
+		Aggregation:       "LAST",
+		CalculationMethod: "DELTA",
+		SourceDefinition: map[string]any{
+			"counter": map[string]any{
+				"decreaseMode":    "RESET_TO_ZERO",
+				"maxPowerKw":      150.0,
+				"jitterTolerance": 0.25,
+			},
+		},
+	}
+	in, err := store.ReadPoint(context.Background(), binding, "01990000-4000-7000-8000-000000000001", start, end)
+	if err != nil {
+		t.Fatalf("ReadPoint failed: %v", err)
+	}
+	if in.Rise != 2 || in.Drops != 0 {
+		t.Fatalf("unexpected ReadPoint output: %+v", in)
+	}
+	for _, marker := range []string{
+		"parseDateTime64BestEffort('2026-08-10T04:00:00Z', 3, 'UTC')",
+		"parseDateTime64BestEffort('2026-08-10T05:00:00Z', 3, 'UTC')",
+		"arrayFold(",
+		"el.1 = 0 AND acc.4 > 0",
+		"150",
+		"0.25",
+		"RESET_TO_ZERO",
+		"multiIf(",
+		"((if(150 > 0.0,",
+		"toString('')",
+	} {
+		if !strings.Contains(capturedSQL, marker) {
+			t.Fatalf("ReadPoint SQL missing %q:\n%s", marker, capturedSQL)
+		}
+	}
+	if strings.Contains(capturedSQL, "%!") {
+		t.Fatalf("ReadPoint SQL contains fmt formatting error marker:\n%s", capturedSQL)
+	}
+	depth, minDepth, inQuote := 0, 0, false
+	for i := 0; i < len(capturedSQL); i++ {
+		c := capturedSQL[i]
+		if c == '\'' {
+			if i > 0 && capturedSQL[i-1] == '\\' && inQuote {
+				continue
+			}
+			inQuote = !inQuote
+			continue
+		}
+		if inQuote {
+			continue
+		}
+		switch c {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth < minDepth {
+				minDepth = depth
+			}
+		}
+	}
+	if depth != 0 || minDepth < 0 || inQuote {
+		t.Fatalf("ReadPoint SQL unbalanced parens/quotes: depth=%d minDepth=%d inQuote=%v\n%s", depth, minDepth, inQuote, capturedSQL)
+	}
+	if !strings.Contains(capturedSQL, "arrayFold((acc, el) -> multiIf(") {
+		t.Fatalf("ReadPoint SQL expected flat multiIf inside arrayFold:\n%s", capturedSQL)
+	}
+	if strings.Contains(capturedSQL, "mel.5ltiIf") {
+		t.Fatalf("ReadPoint SQL corrupted multiIf identifier:\n%s", capturedSQL)
+	}
+
+	// Non-finite values returned by ClickHouse must be rejected rather than propagated.
+	nanServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "10\t1\t1\t10\t10\t0\tinf\t0\t0\t0\t0\n")
+	}))
+	defer nanServer.Close()
+	nanStore, err := NewClickHouseStore(nanServer.URL, "", "", nanServer.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := nanStore.ReadPoint(context.Background(), binding, "01990000-4000-7000-8000-000000000001", start, end); err == nil {
+		t.Fatal("expected ReadPoint to reject non-finite inf column")
+	}
+}
+
+func TestReadEnergyWeightedCOPUsesSiteTimezoneAndGuardrails(t *testing.T) {
+	var lastSQL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lastSQL = r.URL.Query().Get("query")
+		_, _ = io.WriteString(w, "480.0\t100.0\t45\t60\n")
+	}))
+	defer server.Close()
+
+	store, err := NewClickHouseStore(server.URL, "", "", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := Binding{TenantID: "01990000-3000-7000-8000-000000000001", SiteID: "01990000-5000-7000-8000-000000000001"}
+	start := time.Date(2026, 8, 10, 4, 0, 0, 0, time.UTC)
+	end := start.Add(time.Hour)
+	agg, err := store.ReadEnergyWeightedCOP(context.Background(), binding, "01990000-4000-7000-8000-000000000011", "01990000-4000-7000-8000-000000000012", start, end, COPGuardrailOptions{
+		SiteTimezone:  "Asia/Shanghai",
+		MinPowerKW:    5.0,
+		MinDeltaTK:    0.5,
+		SupplyPointID: "01990000-4000-7000-8000-000000000013",
+		ReturnPointID: "01990000-4000-7000-8000-000000000014",
+	})
+	if err != nil {
+		t.Fatalf("ReadEnergyWeightedCOP failed: %v", err)
+	}
+	if math.Abs(agg.COP-4.8) > 1e-9 || agg.Quality != "PARTIAL" || math.Abs(agg.Completeness-0.75) > 1e-9 {
+		t.Fatalf("unexpected COP aggregate: %+v", agg)
+	}
+	for _, marker := range []string{
+		"toStartOfMinute(toTimeZone(sampled_at, 'Asia/Shanghai'))",
+		"parseDateTime64BestEffort('2026-08-10T04:00:00Z', 3, 'UTC')",
+		"sumIf(cooling_kw / 60.0",
+		"sumIf(power_kw / 60.0",
+		"power_kw >= 5",
+		"(ret_c - sup_c) >= 0.5",
+	} {
+		if !strings.Contains(lastSQL, marker) {
+			t.Fatalf("COP SQL missing %q:\n%s", marker, lastSQL)
+		}
+	}
+
+	if _, err := store.ReadEnergyWeightedCOP(context.Background(), binding, "p1", "p2", start, end, COPGuardrailOptions{SiteTimezone: "Invalid/Zone"}); err == nil {
+		t.Fatal("expected invalid timezone error")
+	}
+
+	// Standby-only / zero eligible buckets must be rejected cleanly.
+	standbyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "0\t0\t0\t60\n")
+	}))
+	defer standbyServer.Close()
+	standbyStore, err := NewClickHouseStore(standbyServer.URL, "", "", standbyServer.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := standbyStore.ReadEnergyWeightedCOP(context.Background(), binding, "p1", "p2", start, end, COPGuardrailOptions{}); err == nil {
+		t.Fatal("expected standby/zero-eligible COP window to be rejected")
+	}
+}
+
+func TestClickHouseOptionABoundary1200To1300Attribution(t *testing.T) {
+	ddlPath := filepath.Join("..", "..", "..", "..", "infra", "telemetry", "clickhouse", "init", "021-energy-accounting-p0.sql")
+	ddlBytes, err := os.ReadFile(ddlPath)
+	if err != nil {
+		t.Fatalf("read 021-energy-accounting-p0.sql: %v", err)
+	}
+	ddl := string(ddlBytes)
+	for _, marker := range []string{
+		"CREATE OR REPLACE VIEW telemetry_history.counter_deltas_from",
+		"DEFINER = CURRENT_USER",
+		"SQL SECURITY DEFINER",
+		"lagInFrame(",
+		"INVALID_ZERO_DROP",
+		"INVALID_SPIKE",
+		"toStartOfHour(addMilliseconds(period_end, -1)) AS hour",
+		"toStartOfHour(addMilliseconds(prior.period_end, -1)) AS hour",
+		"DROP VIEW IF EXISTS analytics.energy_facts_to_hourly",
+		"DROP VIEW IF EXISTS analytics.energy_fact_corrections_to_hourly",
+	} {
+		if !strings.Contains(ddl, marker) {
+			t.Fatalf("021-energy-accounting-p0.sql missing required marker %q", marker)
+		}
+	}
+
+	backfillPath := filepath.Join("..", "..", "..", "..", "infra", "telemetry", "clickhouse", "ops", "backfill-energy-hourly-rollup.sh")
+	backfillBytes, err := os.ReadFile(backfillPath)
+	if err != nil {
+		t.Fatalf("read backfill-energy-hourly-rollup.sh: %v", err)
+	}
+	backfill := string(backfillBytes)
+	for _, marker := range []string{
+		"toStartOfMonth(addMilliseconds(period_end, -1))",
+		"toStartOfHour(addMilliseconds(period_end, -1)) AS hour",
+		"AND addMilliseconds(period_end, -1) >= toDateTime64('$month 00:00:00', 3, 'UTC')",
+		"AND addMilliseconds(period_end, -1) < toDateTime64('$month 00:00:00', 3, 'UTC') + INTERVAL 1 MONTH",
+	} {
+		if !strings.Contains(backfill, marker) {
+			t.Fatalf("backfill-energy-hourly-rollup.sh missing Option A marker %q", marker)
+		}
+	}
+
+	// Verify exact Option A (period_start, period_end] boundary semantics:
+	// (12:00:00.000, 13:00:00.000] attributes to 12:00:00.000 UTC hour, while
+	// (13:00:00.000, 13:00:00.001] attributes to 13:00:00.000 UTC hour.
+	optionAHour := func(periodEnd time.Time) time.Time {
+		return periodEnd.UTC().Add(-time.Millisecond).Truncate(time.Hour)
+	}
+	twelve := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	thirteen := time.Date(2026, 8, 10, 13, 0, 0, 0, time.UTC)
+	if got := optionAHour(thirteen); !got.Equal(twelve) {
+		t.Fatalf("Option A hour(13:00:00.000) = %v, want %v", got, twelve)
+	}
+	if got := optionAHour(thirteen.Add(time.Millisecond)); !got.Equal(thirteen) {
+		t.Fatalf("Option A hour(13:00:00.001) = %v, want %v", got, thirteen)
+	}
+	monthBoundary := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	if got := optionAHour(monthBoundary); got.Month() != time.May || got.Hour() != 23 {
+		t.Fatalf("Option A hour(2026-06-01 00:00:00.000) = %v, want 2026-05-31 23:00:00 UTC", got)
 	}
 }
 

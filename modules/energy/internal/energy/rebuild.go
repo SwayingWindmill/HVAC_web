@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -87,17 +88,65 @@ func newUUIDv7(now time.Time) (string, error) {
 	return encoded[0:8] + "-" + encoded[8:12] + "-" + encoded[12:16] + "-" + encoded[16:20] + "-" + encoded[20:32], nil
 }
 
+var errFactUnchanged = errors.New("counter candidate already matches latest fact state")
+
 func correctionRevision(delta CounterDelta, binding BindingResolution) (uint64, bool, error) {
 	if !delta.ExistingFactFound || delta.ExistingFactMeterBindingID != binding.MeterBindingID {
 		return 0, false, nil
 	}
-	if delta.ExistingFactPreviousObservationID == delta.PreviousObservationID {
-		return 0, false, errors.New("counter candidate already matches latest fact predecessor")
+	unchangedPredecessor := delta.ExistingFactPreviousObservationID == delta.PreviousObservationID
+	unchangedTransition := delta.ExistingFactTransitionType == "" || delta.ExistingFactTransitionType == delta.TransitionType
+	unchangedEnergy := false
+	if delta.DeltaValue != nil && delta.TransitionType.ProducesFact() {
+		unchangedEnergy = math.Abs(delta.ExistingFactEnergyKWh-*delta.DeltaValue) <= 1e-6
+	} else {
+		unchangedEnergy = delta.ExistingFactQuality == FactQualityInvalid && math.Abs(delta.ExistingFactEnergyKWh) <= 1e-6
+	}
+	if unchangedPredecessor && unchangedTransition && unchangedEnergy {
+		return 0, false, errFactUnchanged
 	}
 	if delta.ExistingFactRevision == ^uint64(0) {
 		return 0, false, errors.New("fact revision overflow")
 	}
 	return delta.ExistingFactRevision + 1, true, nil
+}
+
+// RebuildDirtyWindow recomputes counter energy facts across [window.Start, window.End],
+// stitching the predecessor strictly before Start and the immediate T_end + 1 successor.
+func (p *Projector) RebuildDirtyWindow(ctx context.Context, window DirtyWindow) (int, error) {
+	if strings.TrimSpace(window.TenantID) == "" || strings.TrimSpace(window.SiteID) == "" {
+		return 0, errors.New("dirty window tenant_id and site_id are required")
+	}
+	if len(window.PointIDs) == 0 {
+		return 0, errors.New("dirty window requires at least one point_id")
+	}
+	for _, pointID := range window.PointIDs {
+		if strings.TrimSpace(pointID) == "" {
+			return 0, errors.New("dirty window point_ids cannot contain blank entries")
+		}
+	}
+	if window.Start.IsZero() || window.End.IsZero() || window.End.Before(window.Start) {
+		return 0, errors.New("dirty window start and end must be ordered non-zero timestamps")
+	}
+	windowSource, ok := p.source.(DirtyWindowCounterSource)
+	if !ok {
+		return 0, errors.New("counter source does not support dirty-window rebuilds")
+	}
+	deltas, err := windowSource.WindowDeltas(ctx, window)
+	if err != nil {
+		return 0, fmt.Errorf("list dirty window counter deltas: %w", err)
+	}
+	if len(deltas) == 0 {
+		return 0, nil
+	}
+	facts, err := p.buildFactsForDeltas(ctx, deltas, p.now().UTC(), true)
+	if err != nil {
+		return 0, err
+	}
+	if len(facts) == 0 {
+		return 0, nil
+	}
+	return p.persistFacts(ctx, facts)
 }
 
 func rebuildDetail(facts []EnergyIntervalFact, failure error) string {

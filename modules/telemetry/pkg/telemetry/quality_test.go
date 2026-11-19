@@ -582,3 +582,135 @@ func TestValidatePhysicalBoundsEnvelopesAndRegisterSentinels(t *testing.T) {
 		}
 	}
 }
+
+func TestCounterValidationZeroDropSpikeResetRolloverReplacementAndJitter(t *testing.T) {
+	t0 := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	tenant, site := "t1", "s1"
+
+	// 1) Bus zero-drop followed by recovery under RESET_TO_ZERO, ROLLOVER, and INVALID.
+	for _, mode := range []string{"RESET_TO_ZERO", "ROLLOVER", "INVALID"} {
+		samples := []CounterSample{
+			{TenantID: tenant, SiteID: site, PointID: "p-z", ObservationID: "o1", PointRevision: 1, Unit: "kWh", DecreaseMode: mode, RolloverModulus: 10000, SampledAt: t0, Value: 1000},
+			{TenantID: tenant, SiteID: site, PointID: "p-z", ObservationID: "o2", PointRevision: 1, Unit: "kWh", DecreaseMode: mode, RolloverModulus: 10000, SampledAt: t0.Add(time.Minute), Value: 0},
+			{TenantID: tenant, SiteID: site, PointID: "p-z", ObservationID: "o3", PointRevision: 1, Unit: "kWh", DecreaseMode: mode, RolloverModulus: 10000, SampledAt: t0.Add(2 * time.Minute), Value: 1002.5},
+		}
+		got, err := CleanCounterSeries(CounterValidationConfig{}, samples)
+		if err != nil {
+			t.Fatalf("mode %s CleanCounterSeries error: %v", mode, err)
+		}
+		if got[1].Transition != TransitionInvalidZeroDrop || !got[1].Quarantined || got[1].Quality != QualityInvalid || got[1].HasDelta {
+			t.Fatalf("mode %s zero-drop = %+v, want INVALID_ZERO_DROP quarantined INVALID", mode, got[1])
+		}
+		if got[2].Transition != TransitionIncrease || !got[2].HasDelta || math.Abs(got[2].Delta-2.5) > 1e-9 || got[2].PreviousObservationID != "o1" {
+			t.Fatalf("mode %s recovery = %+v, want INCREASE 2.5 anchored to o1", mode, got[2])
+		}
+	}
+
+	// Trailing unconfirmed zero-drop stays quarantined instead of seeding a 0 anchor.
+	unconfirmed, err := CleanCounterSeries(CounterValidationConfig{}, []CounterSample{
+		{TenantID: tenant, SiteID: site, PointID: "p-trail", ObservationID: "o1", PointRevision: 1, Unit: "kWh", DecreaseMode: "RESET_TO_ZERO", SampledAt: t0, Value: 1000},
+		{TenantID: tenant, SiteID: site, PointID: "p-trail", ObservationID: "o2", PointRevision: 1, Unit: "kWh", DecreaseMode: "RESET_TO_ZERO", SampledAt: t0.Add(time.Minute), Value: 0},
+	})
+	if err != nil || unconfirmed[1].Transition != TransitionInvalidZeroDrop || !unconfirmed[1].Quarantined {
+		t.Fatalf("unconfirmed zero-drop = %+v err=%v", unconfirmed, err)
+	}
+
+	// 2) Single-point and two-point register spikes > physical maxPowerKw * elapsedHours.
+	cfg150kW := CounterValidationConfig{MaxPowerKW: 150}
+	spiked, err := CleanCounterSeries(cfg150kW, []CounterSample{
+		{TenantID: tenant, SiteID: site, PointID: "p-spike", ObservationID: "o1", PointRevision: 1, Unit: "kWh", DecreaseMode: "RESET_TO_ZERO", SampledAt: t0, Value: 1000},
+		{TenantID: tenant, SiteID: site, PointID: "p-spike", ObservationID: "o2", PointRevision: 1, Unit: "kWh", DecreaseMode: "RESET_TO_ZERO", SampledAt: t0.Add(time.Minute), Value: 999999},
+		{TenantID: tenant, SiteID: site, PointID: "p-spike", ObservationID: "o3", PointRevision: 1, Unit: "kWh", DecreaseMode: "RESET_TO_ZERO", SampledAt: t0.Add(2 * time.Minute), Value: 1002},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spiked[1].Transition != TransitionInvalidSpike || spiked[1].Quality != QualityInvalid || !spiked[1].Quarantined {
+		t.Fatalf("spike sample = %+v, want INVALID_SPIKE", spiked[1])
+	}
+	if spiked[2].Transition != TransitionIncrease || math.Abs(spiked[2].Delta-2.0) > 1e-9 {
+		t.Fatalf("post-spike recovery = %+v, want 2.0 kWh", spiked[2])
+	}
+
+	// AssessPointQuality enforces counter physical step ceiling and respects sub-minute quantization.
+	checks := &QualityChecks{MaxPowerKW: 150}
+	prev := PriorNumeric{Value: 1000, SampledAt: t0}
+	if reasons := AssessPointQuality(1050, t0.Add(time.Minute), checks, PointQualityInput{PointType: "COUNTER", Unit: "kWh", Live: true, Previous: &prev}); !sameReasons(reasons, QualityReasonSpike) {
+		t.Fatalf("50 kWh in 1 min on 150 kW meter = %v, want SPIKE", reasons)
+	}
+	if reasons := AssessPointQuality(1001, t0.Add(10*time.Second), checks, PointQualityInput{PointType: "COUNTER", Unit: "kWh", Live: true, Previous: &prev}); len(reasons) != 0 {
+		t.Fatalf("1 kWh register tick in 10s on 150 kW meter should be allowed by 1m floor, got %v", reasons)
+	}
+
+	// 3) Real RESET_TO_ZERO, ROLLOVER, and METER_REPLACEMENT.
+	resets, err := CleanCounterSeries(cfg150kW, []CounterSample{
+		{TenantID: tenant, SiteID: site, PointID: "p-reset", ObservationID: "o1", PointRevision: 1, Unit: "kWh", DecreaseMode: "RESET_TO_ZERO", SampledAt: t0, Value: 1000},
+		{TenantID: tenant, SiteID: site, PointID: "p-reset", ObservationID: "o2", PointRevision: 1, Unit: "kWh", DecreaseMode: "RESET_TO_ZERO", SampledAt: t0.Add(time.Minute), Value: 0},
+		{TenantID: tenant, SiteID: site, PointID: "p-reset", ObservationID: "o3", PointRevision: 1, Unit: "kWh", DecreaseMode: "RESET_TO_ZERO", SampledAt: t0.Add(2 * time.Minute), Value: 1.5},
+		{TenantID: tenant, SiteID: site, PointID: "p-reset", ObservationID: "o4", PointRevision: 1, Unit: "kWh", DecreaseMode: "RESET_TO_ZERO", SampledAt: t0.Add(3 * time.Minute), Value: 3.5},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resets[1].Transition != TransitionReset || resets[1].Delta != 0 || resets[2].Transition != TransitionIncrease || math.Abs(resets[2].Delta-1.5) > 1e-9 || math.Abs(resets[3].Delta-2.0) > 1e-9 {
+		t.Fatalf("real RESET_TO_ZERO = %+v", resets)
+	}
+
+	rollovers, err := CleanCounterSeries(CounterValidationConfig{}, []CounterSample{
+		{TenantID: tenant, SiteID: site, PointID: "p-roll", ObservationID: "o1", PointRevision: 1, Unit: "kWh", DecreaseMode: "ROLLOVER", RolloverModulus: 1000, SampledAt: t0, Value: 990},
+		{TenantID: tenant, SiteID: site, PointID: "p-roll", ObservationID: "o2", PointRevision: 1, Unit: "kWh", DecreaseMode: "ROLLOVER", RolloverModulus: 1000, SampledAt: t0.Add(time.Minute), Value: 5},
+		{TenantID: tenant, SiteID: site, PointID: "p-roll", ObservationID: "o3", PointRevision: 1, Unit: "kWh", DecreaseMode: "ROLLOVER", RolloverModulus: 1000, SampledAt: t0.Add(2 * time.Minute), Value: 20},
+	})
+	if err != nil || rollovers[1].Transition != TransitionRollover || math.Abs(rollovers[1].Delta-15) > 1e-9 || math.Abs(rollovers[2].Delta-15) > 1e-9 {
+		t.Fatalf("ROLLOVER = %+v err=%v", rollovers, err)
+	}
+
+	replacements, err := CleanCounterSeries(CounterValidationConfig{CTRatio: 40, PTRatio: 1}, []CounterSample{
+		{TenantID: tenant, SiteID: site, PointID: "p-rep", ObservationID: "o1", PointRevision: 1, Unit: "kWh", DecreaseMode: "METER_REPLACEMENT", SampledAt: t0, Value: 25},
+		{TenantID: tenant, SiteID: site, PointID: "p-rep", ObservationID: "o2", PointRevision: 1, Unit: "kWh", DecreaseMode: "METER_REPLACEMENT", ReplacementCarry: 12.5, SampledAt: t0.Add(time.Minute), Value: 1},
+	})
+	if err != nil || replacements[1].Transition != TransitionMeterReplacement || math.Abs(replacements[1].Delta-52.5) > 1e-9 {
+		t.Fatalf("METER_REPLACEMENT with CT=40 = %+v err=%v", replacements, err)
+	}
+
+	// 4) Small communication jitter rollback preserves monotonic high-water anchor without fabricating energy.
+	jittered, err := CleanCounterSeries(CounterValidationConfig{}, []CounterSample{
+		{TenantID: tenant, SiteID: site, PointID: "p-jit", ObservationID: "o1", PointRevision: 1, Unit: "kWh", DecreaseMode: "RESET_TO_ZERO", SampledAt: t0, Value: 1000.0},
+		{TenantID: tenant, SiteID: site, PointID: "p-jit", ObservationID: "o2", PointRevision: 1, Unit: "kWh", DecreaseMode: "RESET_TO_ZERO", SampledAt: t0.Add(time.Minute), Value: 999.95},
+		{TenantID: tenant, SiteID: site, PointID: "p-jit", ObservationID: "o3", PointRevision: 1, Unit: "kWh", DecreaseMode: "RESET_TO_ZERO", SampledAt: t0.Add(2 * time.Minute), Value: 1000.0},
+		{TenantID: tenant, SiteID: site, PointID: "p-jit", ObservationID: "o4", PointRevision: 1, Unit: "kWh", DecreaseMode: "RESET_TO_ZERO", SampledAt: t0.Add(3 * time.Minute), Value: 999.92},
+		{TenantID: tenant, SiteID: site, PointID: "p-jit", ObservationID: "o5", PointRevision: 1, Unit: "kWh", DecreaseMode: "RESET_TO_ZERO", SampledAt: t0.Add(4 * time.Minute), Value: 1000.5},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var jitterTotal float64
+	for _, r := range jittered {
+		if r.HasDelta {
+			jitterTotal += r.Delta
+		}
+	}
+	if math.Abs(jitterTotal-0.5) > 1e-9 {
+		t.Fatalf("jittered total = %v, want exact 0.5 without oscillating phantom energy: %+v", jitterTotal, jittered)
+	}
+
+	// Cross-point isolation and MWh unit-scaled ceiling check.
+	interleaved, err := CleanCounterSeries(CounterValidationConfig{MaxPowerKW: 1000}, []CounterSample{
+		{TenantID: tenant, SiteID: site, PointID: "p-a", ObservationID: "a1", PointRevision: 1, Unit: "MWh", SampledAt: t0, Value: 1.0},
+		{TenantID: tenant, SiteID: site, PointID: "p-b", ObservationID: "b1", PointRevision: 1, Unit: "kWh", SampledAt: t0.Add(30 * time.Second), Value: 5000.0},
+		{TenantID: tenant, SiteID: site, PointID: "p-a", ObservationID: "a2", PointRevision: 1, Unit: "MWh", SampledAt: t0.Add(time.Hour), Value: 1.5},
+		{TenantID: tenant, SiteID: site, PointID: "p-a", ObservationID: "a3", PointRevision: 1, Unit: "MWh", SampledAt: t0.Add(61 * time.Minute), Value: 5.0},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if interleaved[1].Transition != TransitionInitial || interleaved[2].Transition != TransitionIncrease || math.Abs(interleaved[2].Delta-0.5) > 1e-9 || interleaved[3].Transition != TransitionInvalidSpike {
+		t.Fatalf("interleaved/MWh = %+v", interleaved)
+	}
+
+	// QualityChecks JSON parses maxPowerKw, counterJitterTolerance, ctRatio, ptRatio.
+	parsed, err := parseQualityChecks([]byte(`{"maxPowerKw": 180, "counterJitterTolerance": 0.2, "ctRatio": 20, "ptRatio": 1}`))
+	if err != nil || parsed == nil || parsed.MaxPowerKW != 180 || parsed.CounterJitterTolerance != 0.2 || parsed.CTRatio != 20 || parsed.PTRatio != 1 {
+		t.Fatalf("parseQualityChecks counter fields = %+v err=%v", parsed, err)
+	}
+}

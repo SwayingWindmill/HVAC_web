@@ -59,6 +59,7 @@ export interface EnergySummary {
   readonly electricityKWh: number | null;
   readonly coolingKWh: number | null;
   readonly cop: number | null;
+  readonly copUnavailableReason: CopUnavailableReason | null;
   readonly peak: EnergyRow | null;
   /** Latest instant both energies are known up to; null when either has no data. */
   readonly dataWatermark: string | null;
@@ -67,12 +68,116 @@ export interface EnergySummary {
   /** Counter intervals > 1h recovered in the window: counted in totals, excluded from hourly/daily curves. */
   readonly crossGapElectricityKWh: number;
   readonly crossGapCost: EnergyCost | null;
+  /** Count of buckets in this window flagged incomplete due to missing sub-meter telemetry. */
+  readonly incompleteBuckets: number;
   /** Distinct sub-meters missing across any incomplete hour in this window. */
   readonly missingMeters: readonly string[];
 }
 
 const HOUR_MS = 3_600_000;
 const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+
+/** Physical bounds for plant COP (cooling / electricity), aligned with nameplate.COPPlausible [1, 12]. */
+export const MIN_VALID_PLANT_COP = 1;
+export const MAX_VALID_PLANT_COP = 12;
+/** Minimum energy per bucket/period to filter out chiller standby leakage and meter drift. */
+export const MIN_COP_ELECTRICITY_KWH = 1;
+export const MIN_COP_COOLING_KWH = 1;
+
+export type CopUnavailableReason = 'no-data' | 'standby' | 'out-of-range';
+
+export interface CopEvaluation {
+  readonly cop: number | null;
+  readonly unavailableReason: CopUnavailableReason | null;
+}
+
+export const COP_UNAVAILABLE_COPY: Readonly<Record<CopUnavailableReason, string>> = {
+  'no-data': '缺少用电或供冷数据',
+  standby: '冷机待机或无有效冷负荷，暂不计算',
+  'out-of-range': '能效超出合理范围，暂不计算',
+};
+
+export function copUnavailableText(
+  reason: CopUnavailableReason | null,
+  missingMeters: readonly string[] = [],
+): string {
+  const resolved = reason ?? 'no-data';
+  if (resolved === 'out-of-range' && missingMeters.length > 0) {
+    return `缺 ${missingMeters.join('、')}，能效超出合理范围，暂不计算`;
+  }
+  return COP_UNAVAILABLE_COPY[resolved];
+}
+
+/**
+ * Evaluates energy-weighted plant COP (`coolingKWh / electricityKWh`), guarding against missing
+ * inputs, non-finite values, chiller standby / negligible load, and out-of-bounds outliers.
+ */
+export function evaluatePlantCop(
+  coolingKWh: number | null | undefined,
+  electricityKWh: number | null | undefined,
+): CopEvaluation {
+  if (
+    coolingKWh === null || coolingKWh === undefined
+    || electricityKWh === null || electricityKWh === undefined
+    || !Number.isFinite(coolingKWh)
+    || !Number.isFinite(electricityKWh)
+  ) {
+    return { cop: null, unavailableReason: 'no-data' };
+  }
+  if (coolingKWh < 0 || electricityKWh < 0) {
+    return { cop: null, unavailableReason: 'out-of-range' };
+  }
+  if (electricityKWh === 0) {
+    return { cop: null, unavailableReason: coolingKWh > 0 ? 'out-of-range' : 'no-data' };
+  }
+  if (coolingKWh === 0 || coolingKWh < MIN_COP_COOLING_KWH) {
+    return { cop: null, unavailableReason: 'standby' };
+  }
+  if (electricityKWh < MIN_COP_ELECTRICITY_KWH) {
+    return { cop: null, unavailableReason: 'out-of-range' };
+  }
+  const value = coolingKWh / electricityKWh;
+  if (!Number.isFinite(value)) {
+    return { cop: null, unavailableReason: 'out-of-range' };
+  }
+  if (value < MIN_VALID_PLANT_COP) {
+    return { cop: null, unavailableReason: 'standby' };
+  }
+  if (value > MAX_VALID_PLANT_COP) {
+    return { cop: null, unavailableReason: 'out-of-range' };
+  }
+  return { cop: value, unavailableReason: null };
+}
+
+/** Validates an already-computed (e.g. archived snapshot) COP against standby and physical bounds. */
+export function sanitizeReportedCop(
+  cop: number | null | undefined,
+  coolingKWh?: number | null,
+  electricityKWh?: number | null,
+): CopEvaluation {
+  if (cop === null || cop === undefined) {
+    const inferredReason = coolingKWh !== undefined || electricityKWh !== undefined
+      ? (evaluatePlantCop(coolingKWh, electricityKWh).unavailableReason ?? 'no-data')
+      : 'no-data';
+    return { cop: null, unavailableReason: inferredReason };
+  }
+  if (!Number.isFinite(cop)) {
+    return { cop: null, unavailableReason: 'out-of-range' };
+  }
+  if (coolingKWh !== undefined && electricityKWh !== undefined) {
+    const checked = evaluatePlantCop(coolingKWh, electricityKWh);
+    if (checked.cop === null) {
+      return { cop: null, unavailableReason: checked.unavailableReason };
+    }
+  }
+  if (cop < 0 || cop > MAX_VALID_PLANT_COP) {
+    return { cop: null, unavailableReason: 'out-of-range' };
+  }
+  if (cop < MIN_VALID_PLANT_COP) {
+    return { cop: null, unavailableReason: 'standby' };
+  }
+  return { cop, unavailableReason: null };
+}
 
 export function bucketLabel(periodStart: string, granularity: Granularity, timeZone: string): string {
   const instant = new Date(periodStart);
@@ -82,9 +187,6 @@ export function bucketLabel(periodStart: string, granularity: Granularity, timeZ
   const weekday = WEEKDAYS[new Date(Date.UTC(local.year, local.month - 1, local.day)).getUTCDay()];
   return `${local.month}/${local.day} ${weekday}`;
 }
-
-const ratio = (cooling: number | null, electricity: number | null) =>
-  cooling === null || electricity === null || electricity <= 0 ? null : cooling / electricity;
 
 const total = (series: EnergySeriesResponse, granularity: Granularity) => {
   const crossGap = granularity === 'month' ? 0 : (series.crossGap?.energyKWh ?? 0);
@@ -115,23 +217,46 @@ export function summarizeEnergy(
     cooling: number | null;
     cost: EnergyCost | null;
     incomplete: boolean;
-    missingMeters: readonly string[];
+    missingMeters: Set<string>;
   }>();
   const at = (periodStart: string) => {
     const key = new Date(periodStart).toISOString();
-    const entry = byStart.get(key) ?? { electricity: null, crossGapElectricity: 0, cooling: null, cost: null, incomplete: false, missingMeters: [] };
+    const entry = byStart.get(key) ?? {
+      electricity: null,
+      crossGapElectricity: 0,
+      cooling: null,
+      cost: null,
+      incomplete: false,
+      missingMeters: new Set<string>(),
+    };
     byStart.set(key, entry);
     return entry;
+  };
+  const mergeCompleteness = (
+    entry: ReturnType<typeof at>,
+    point: EnergySeriesResponse['points'][number],
+  ) => {
+    const pointMissing = point.missingMeters ?? [];
+    if (point.incomplete || pointMissing.length > 0) {
+      entry.incomplete = true;
+    }
+    for (const meter of pointMissing) {
+      const trimmed = meter.trim();
+      if (trimmed) entry.missingMeters.add(trimmed);
+    }
   };
   for (const point of electricity.points) {
     const entry = at(point.periodStart);
     entry.electricity = point.energyKWh;
     entry.crossGapElectricity = point.crossGapKWh ?? 0;
     entry.cost = point.cost ?? null;
-    entry.incomplete = point.incomplete ?? false;
-    entry.missingMeters = point.missingMeters ?? [];
+    mergeCompleteness(entry, point);
   }
-  for (const point of cooling.points) at(point.periodStart).cooling = point.energyKWh;
+  for (const point of cooling.points) {
+    const entry = at(point.periodStart);
+    entry.cooling = point.energyKWh;
+    mergeCompleteness(entry, point);
+  }
   const rows = [...byStart.entries()]
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([periodStart, energy]): EnergyRow => ({
@@ -140,31 +265,50 @@ export function summarizeEnergy(
       electricityKWh: energy.electricity,
       crossGapElectricityKWh: energy.crossGapElectricity,
       coolingKWh: energy.cooling,
-      cop: ratio(energy.cooling, energy.electricity),
+      cop: evaluatePlantCop(energy.cooling, energy.electricity).cop,
       cost: energy.cost,
       incomplete: energy.incomplete,
-      missingMeters: energy.missingMeters,
+      missingMeters: [...energy.missingMeters].sort((left, right) => left.localeCompare(right, 'zh-CN')),
     }));
-  const complete = rows.filter((row) => row.cop !== null);
-  const sum = (values: readonly (number | null)[]) => values.reduce<number>((acc, value) => acc + (value ?? 0), 0);
+  // Only buckets with both readings count so a cooling meter gap never understates efficiency;
+  // standby electricity in paired buckets stays in the denominator for energy-weighted period COP.
+  const paired = rows.filter(
+    (row): row is EnergyRow & { readonly electricityKWh: number; readonly coolingKWh: number } =>
+      row.electricityKWh !== null
+      && row.coolingKWh !== null
+      && Number.isFinite(row.electricityKWh)
+      && Number.isFinite(row.coolingKWh),
+  );
+  const sumValues = (values: readonly number[]) => values.reduce((acc, value) => acc + value, 0);
+  const copEval: CopEvaluation = paired.length === 0
+    ? { cop: null, unavailableReason: 'no-data' }
+    : evaluatePlantCop(
+        sumValues(paired.map((row) => row.coolingKWh)),
+        sumValues(paired.map((row) => row.electricityKWh)),
+      );
   let peak: EnergyRow | null = null;
   for (const row of rows) if (row.electricityKWh !== null && (peak === null || row.electricityKWh > peak.electricityKWh!)) peak = row;
   const excluded = (series: EnergySeriesResponse) => series.metadata.qualitySummary.suspect + series.metadata.qualitySummary.invalid;
   const missingSet = new Set<string>();
-  for (const row of rows) for (const meter of row.missingMeters) missingSet.add(meter);
+  let incompleteBuckets = 0;
+  for (const row of rows) {
+    if (row.incomplete) incompleteBuckets += 1;
+    for (const meter of row.missingMeters) missingSet.add(meter);
+  }
   const missingMeters = [...missingSet].sort((left, right) => left.localeCompare(right, 'zh-CN'));
   return {
     granularity,
     rows,
     electricityKWh: total(electricity, granularity),
     coolingKWh: total(cooling, granularity),
-    // Only buckets with both energies count, so a cooling meter gap does not understate efficiency.
-    cop: complete.length === 0 ? null : ratio(sum(complete.map((row) => row.coolingKWh)), sum(complete.map((row) => row.electricityKWh))),
+    cop: copEval.cop,
+    copUnavailableReason: copEval.unavailableReason,
     peak,
     dataWatermark: earlier(electricity.metadata.dataWatermark, cooling.metadata.dataWatermark),
     excludedIntervals: excluded(electricity) + excluded(cooling),
     crossGapElectricityKWh: electricity.crossGap?.energyKWh ?? 0,
     crossGapCost: electricity.crossGap?.cost ?? null,
+    incompleteBuckets,
     missingMeters,
   };
 }
@@ -216,6 +360,7 @@ export interface BucketComparison {
   readonly previousCost: EnergyCost | null;
   /** The current bucket has ended; the one still running holds partial energy. */
   readonly complete: boolean;
+  readonly incomplete: boolean;
   readonly missingMeters: readonly string[];
 }
 
@@ -250,6 +395,7 @@ export function comparePeriods(
       cost: row?.cost ?? null,
       previousCost: before?.cost ?? null,
       complete: bucketAt(from, granularity, ordinal + 1, timeZone) <= now,
+      incomplete: row?.incomplete ?? false,
       missingMeters: row?.missingMeters ?? [],
     };
   });

@@ -29,17 +29,21 @@ const valueEquality = 0.0001
 
 // QualityChecks is the optional per-point configuration stored on the freshness policy.
 type QualityChecks struct {
-	Copied            bool
-	MaxStep           *float64
-	MaxStepWindow     time.Duration
-	Sentinels         []float64
-	Flatline          time.Duration
-	FlatlineRunning   time.Duration
-	FlatlineStabilize time.Duration
-	Running           []OperatingExpect
-	Inputs            []PointRef
-	Physics           []PhysicsRule
-	Uncertainty       *UncertaintyCheck
+	Copied                 bool
+	MaxStep                *float64
+	MaxStepWindow          time.Duration
+	MaxPowerKW             float64
+	CounterJitterTolerance float64
+	CTRatio                float64
+	PTRatio                float64
+	Sentinels              []float64
+	Flatline               time.Duration
+	FlatlineRunning        time.Duration
+	FlatlineStabilize      time.Duration
+	Running                []OperatingExpect
+	Inputs                 []PointRef
+	Physics                []PhysicsRule
+	Uncertainty            *UncertaintyCheck
 }
 
 // UncertaintyCheck is the cooling-load or temperature-difference propagation compiled
@@ -143,6 +147,9 @@ type PriorNumeric struct {
 // PointQualityInput is everything one numeric check needs besides the new sample.
 type PointQualityInput struct {
 	PointType       string
+	Unit            string
+	DecreaseMode    string
+	RolloverModulus float64
 	Live            bool
 	Previous        *PriorNumeric
 	Running         bool
@@ -165,23 +172,27 @@ type physicalBounds struct {
 }
 
 var physicalUnitEnvelopes = map[string]physicalBounds{
-	"Cel":  {min: -60, max: 200},
-	"degC": {min: -60, max: 200},
-	"°C":   {min: -60, max: 200},
-	"℃":    {min: -60, max: 200},
-	"%":    {min: 0, max: 100},
-	"%RH":  {min: 0, max: 100},
-	"Hz":   {min: 0, max: 120},
-	"Pa":   {min: -101325, max: 10000000},
-	"kPa":  {min: -101.325, max: 10000},
-	"MPa":  {min: -0.101325, max: 10},
-	"bar":  {min: -1.01325, max: 100},
-	"m3/h": {min: 0, max: 100000},
-	"m³/h": {min: 0, max: 100000},
-	"L/s":  {min: 0, max: 30000},
-	"kW":   {min: -50000, max: 200000},
-	"kWh":  {min: 0, max: 1e12},
-	"MWh":  {min: 0, max: 1e12},
+	"Cel":   {min: -60, max: 200},
+	"degC":  {min: -60, max: 200},
+	"°C":    {min: -60, max: 200},
+	"℃":     {min: -60, max: 200},
+	"%":     {min: 0, max: 100},
+	"%RH":   {min: 0, max: 100},
+	"Hz":    {min: 0, max: 120},
+	"Pa":    {min: -101325, max: 10000000},
+	"kPa":   {min: -101.325, max: 10000},
+	"MPa":   {min: -0.101325, max: 10},
+	"bar":   {min: -1.01325, max: 100},
+	"m3/h":  {min: 0, max: 100000},
+	"m³/h":  {min: 0, max: 100000},
+	"L/s":   {min: 0, max: 30000},
+	"kW":    {min: -50000, max: 200000},
+	"Wh":    {min: 0, max: 1e15},
+	"kWh":   {min: 0, max: 1e12},
+	"MWh":   {min: 0, max: 1e12},
+	"kvarh": {min: 0, max: 1e12},
+	"MJ":    {min: 0, max: 1e12},
+	"GJ":    {min: 0, max: 1e12},
 }
 
 var registerSentinelUnits = map[string]struct{}{
@@ -234,13 +245,19 @@ func ValidatePhysicalBounds(value float64, unit *string, pointType string) []Qua
 }
 
 // AssessPointQuality reports suspect reasons for one numeric sample.
-// Range rejection stays in validateObservation. Counters only inherit an
-// untrusted input (a derived cooling total); they are not judged for spikes.
+// Range rejection stays in validateObservation. Counters enforce physical step-rate
+// ceilings and explicit policy violations while inheriting derived input quality.
 func AssessPointQuality(value float64, at time.Time, checks *QualityChecks, input PointQualityInput) []QualityReason {
-	if checks == nil || math.IsNaN(value) || math.IsInf(value, 0) {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
 		return nil
 	}
 	reasons := make([]QualityReason, 0, 4)
+	if input.PointType == "COUNTER" {
+		reasons = append(reasons, AssessCounterStepQuality(value, at, checks, input)...)
+	}
+	if checks == nil {
+		return reasons
+	}
 	if input.PointType != "COUNTER" && matchesSentinel(value, checks.Sentinels) {
 		reasons = append(reasons, QualityReasonSentinel)
 	}
@@ -570,6 +587,10 @@ type qualityChecksDocument struct {
 	Copied                   bool             `json:"copied,omitempty"`
 	MaxStep                  *float64         `json:"maxStep"`
 	MaxStepWindowSeconds     *int             `json:"maxStepWindowSeconds"`
+	MaxPowerKW               *float64         `json:"maxPowerKw"`
+	CounterJitterTolerance   *float64         `json:"counterJitterTolerance"`
+	CTRatio                  *float64         `json:"ctRatio"`
+	PTRatio                  *float64         `json:"ptRatio"`
 	Sentinels                []float64        `json:"sentinels"`
 	FlatlineSeconds          *int             `json:"flatlineSeconds"`
 	FlatlineRunningSeconds   *int             `json:"flatlineRunningSeconds"`
@@ -635,6 +656,18 @@ func parseQualityChecks(raw []byte) (*QualityChecks, error) {
 		return nil, err
 	}
 	checks := &QualityChecks{Copied: document.Copied, MaxStep: document.MaxStep, Sentinels: document.Sentinels}
+	if document.MaxPowerKW != nil && *document.MaxPowerKW > 0 && !math.IsNaN(*document.MaxPowerKW) && !math.IsInf(*document.MaxPowerKW, 0) {
+		checks.MaxPowerKW = *document.MaxPowerKW
+	}
+	if document.CounterJitterTolerance != nil && *document.CounterJitterTolerance > 0 && !math.IsNaN(*document.CounterJitterTolerance) && !math.IsInf(*document.CounterJitterTolerance, 0) {
+		checks.CounterJitterTolerance = *document.CounterJitterTolerance
+	}
+	if document.CTRatio != nil && *document.CTRatio > 0 && !math.IsNaN(*document.CTRatio) && !math.IsInf(*document.CTRatio, 0) {
+		checks.CTRatio = *document.CTRatio
+	}
+	if document.PTRatio != nil && *document.PTRatio > 0 && !math.IsNaN(*document.PTRatio) && !math.IsInf(*document.PTRatio, 0) {
+		checks.PTRatio = *document.PTRatio
+	}
 	if document.MaxStepWindowSeconds != nil && *document.MaxStepWindowSeconds > 0 {
 		checks.MaxStepWindow = time.Duration(*document.MaxStepWindowSeconds) * time.Second
 	}
@@ -673,7 +706,7 @@ func parseQualityChecks(raw []byte) (*QualityChecks, error) {
 		}
 		checks.Uncertainty = parsed
 	}
-	if !checks.Copied && checks.MaxStep == nil && len(checks.Sentinels) == 0 && checks.Flatline == 0 && checks.FlatlineRunning == 0 && checks.FlatlineStabilize == 0 && len(checks.Running) == 0 && len(checks.Inputs) == 0 && len(checks.Physics) == 0 && checks.Uncertainty == nil {
+	if !checks.Copied && checks.MaxStep == nil && checks.MaxPowerKW == 0 && checks.CounterJitterTolerance == 0 && checks.CTRatio == 0 && checks.PTRatio == 0 && len(checks.Sentinels) == 0 && checks.Flatline == 0 && checks.FlatlineRunning == 0 && checks.FlatlineStabilize == 0 && len(checks.Running) == 0 && len(checks.Inputs) == 0 && len(checks.Physics) == 0 && checks.Uncertainty == nil {
 		return nil, nil
 	}
 	return checks, nil

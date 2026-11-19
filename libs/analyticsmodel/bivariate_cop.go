@@ -21,8 +21,11 @@ const (
 	defaultWetBulbStepC      = 2.0
 	defaultCoolingLoadStepKW = 200.0
 	defaultMinSamplesPerMode = 1
-	maxValidCOP              = 25.0
-	minValidChillerPowerKW   = 0.5
+	minValidCOP              = 1.0
+	maxValidCOP              = 12.0
+	minValidChillerPowerKW   = 5.0
+	minValidCoolingLoadKW    = 10.0
+	minValidChwFlowM3H       = 1.0
 )
 
 // ControlTickSample is one control-interval plant observation used to compare closed-loop AI
@@ -33,6 +36,10 @@ type ControlTickSample struct {
 	CoolingLoadKW   *float64        `json:"coolingLoadKW"`
 	ChillerPowerKW  *float64        `json:"chillerPowerKW"`
 	ObservedCOP     *float64        `json:"observedCOP"`
+	ChwSupplyTempC  *float64        `json:"chwSupplyTempC,omitempty"`
+	ChwReturnTempC  *float64        `json:"chwReturnTempC,omitempty"`
+	ChwFlowM3H      *float64        `json:"chwFlowM3H,omitempty"`
+	Incomplete      bool            `json:"incomplete,omitempty"`
 	DurationHours   float64         `json:"durationHours"`
 }
 
@@ -62,14 +69,16 @@ type BivariateCOPCell struct {
 // BivariateCOPSummary reports weather- and load-normalized COP uplift and estimated electricity
 // savings across all matched bivariate operating bins.
 type BivariateCOPSummary struct {
-	MatchedBinCount        int                `json:"matchedBinCount"`
-	MatchedAISamples       int                `json:"matchedAiSamples"`
-	MatchedBaselineSamples int                `json:"matchedBaselineSamples"`
-	WeightedBaselineCOP    *float64           `json:"weightedBaselineCOP"`
-	WeightedAICOP          *float64           `json:"weightedAiCOP"`
-	WeightedCOPUpliftPct   *float64           `json:"weightedCopUpliftPct"`
-	TotalEstimatedSavedKWh float64            `json:"totalEstimatedSavedKWh"`
-	Cells                  []BivariateCOPCell `json:"cells"`
+	MatchedBinCount           int                `json:"matchedBinCount"`
+	MatchedAISamples          int                `json:"matchedAiSamples"`
+	MatchedBaselineSamples    int                `json:"matchedBaselineSamples"`
+	WeightedBaselineCOP       *float64           `json:"weightedBaselineCOP"`
+	WeightedAICOP             *float64           `json:"weightedAiCOP"`
+	WeightedCOPUpliftPct      *float64           `json:"weightedCopUpliftPct"`
+	TotalEstimatedSavedKWh    float64            `json:"totalEstimatedSavedKWh"`
+	Incomplete                bool               `json:"incomplete,omitempty"`
+	ExcludedIncompleteSamples int                `json:"excludedIncompleteSamples,omitempty"`
+	Cells                     []BivariateCOPCell `json:"cells"`
 }
 
 type bivariateBinKey struct {
@@ -93,10 +102,14 @@ type bivariateBinAccumulator struct {
 // comparison, and unmatched bins are discarded so weather/load shifts do not bias COP uplift.
 func EvaluateBivariateCOP(samples []ControlTickSample, cfg BivariateBinConfig) BivariateCOPSummary {
 	wbStep, loadStep, minSamples := normalizeBinConfig(cfg)
-	bins := accumulateBivariateBins(samples, wbStep, loadStep)
+	bins, excludedIncomplete := accumulateBivariateBins(samples, wbStep, loadStep)
 
 	cells := make([]BivariateCOPCell, 0, len(bins))
-	summary := BivariateCOPSummary{Cells: cells}
+	summary := BivariateCOPSummary{
+		Incomplete:                excludedIncomplete > 0,
+		ExcludedIncompleteSamples: excludedIncomplete,
+		Cells:                     cells,
+	}
 
 	var totalAICoolingKWh, totalAIElecKWh, totalCounterfactualBaseElecKWh, totalSavedKWh float64
 
@@ -104,11 +117,21 @@ func EvaluateBivariateCOP(samples []ControlTickSample, cfg BivariateBinConfig) B
 		if acc.baseline.samples < minSamples || acc.ai.samples < minSamples {
 			continue
 		}
+		if !isFinitePositive(acc.baseline.coolingKWh) || !isFinitePositive(acc.baseline.elecKWh) ||
+			!isFinitePositive(acc.ai.coolingKWh) || !isFinitePositive(acc.ai.elecKWh) {
+			continue
+		}
 		baseCOP := acc.baseline.coolingKWh / acc.baseline.elecKWh
 		aiCOP := acc.ai.coolingKWh / acc.ai.elecKWh
+		if !isValidCOP(baseCOP) || !isValidCOP(aiCOP) {
+			continue
+		}
 		upliftPct := ((aiCOP - baseCOP) / baseCOP) * 100.0
 		counterfactualBaseElecKWh := acc.ai.coolingKWh / baseCOP
 		savedKWh := counterfactualBaseElecKWh - acc.ai.elecKWh
+		if !isFinite(upliftPct) || !isFinitePositive(counterfactualBaseElecKWh) || !isFinite(savedKWh) {
+			continue
+		}
 
 		wbMin := key.wbBucket * wbStep
 		loadMin := key.loadBucket * loadStep
@@ -144,32 +167,49 @@ func EvaluateBivariateCOP(samples []ControlTickSample, cfg BivariateBinConfig) B
 	summary.MatchedBinCount = len(cells)
 	summary.Cells = cells
 
-	if len(cells) > 0 && isFinitePositive(totalAIElecKWh) && isFinitePositive(totalCounterfactualBaseElecKWh) {
+	if len(cells) > 0 && isFinitePositive(totalAICoolingKWh) && isFinitePositive(totalAIElecKWh) && isFinitePositive(totalCounterfactualBaseElecKWh) {
 		rawBaseCOP := totalAICoolingKWh / totalCounterfactualBaseElecKWh
 		rawAICOP := totalAICoolingKWh / totalAIElecKWh
-		weightedBaseCOP := roundScale(rawBaseCOP, 1e4)
-		weightedAICOP := roundScale(rawAICOP, 1e4)
-		weightedUpliftPct := roundScale(((rawAICOP-rawBaseCOP)/rawBaseCOP)*100.0, 1e4)
-		summary.WeightedBaselineCOP = &weightedBaseCOP
-		summary.WeightedAICOP = &weightedAICOP
-		summary.WeightedCOPUpliftPct = &weightedUpliftPct
-		summary.TotalEstimatedSavedKWh = roundScale(totalSavedKWh, 1e4)
+		rawUpliftPct := ((rawAICOP - rawBaseCOP) / rawBaseCOP) * 100.0
+		if isValidCOP(rawBaseCOP) && isValidCOP(rawAICOP) && isFinite(rawUpliftPct) && isFinite(totalSavedKWh) {
+			weightedBaseCOP := roundScale(rawBaseCOP, 1e4)
+			weightedAICOP := roundScale(rawAICOP, 1e4)
+			weightedUpliftPct := roundScale(rawUpliftPct, 1e4)
+			summary.WeightedBaselineCOP = &weightedBaseCOP
+			summary.WeightedAICOP = &weightedAICOP
+			summary.WeightedCOPUpliftPct = &weightedUpliftPct
+			summary.TotalEstimatedSavedKWh = roundScale(totalSavedKWh, 1e4)
+		}
 	}
 
 	return summary
 }
 
-func accumulateBivariateBins(samples []ControlTickSample, wbStep, loadStep float64) map[bivariateBinKey]*bivariateBinAccumulator {
+func accumulateBivariateBins(samples []ControlTickSample, wbStep, loadStep float64) (map[bivariateBinKey]*bivariateBinAccumulator, int) {
 	bins := make(map[bivariateBinKey]*bivariateBinAccumulator)
+	excludedIncomplete := 0
 	for _, sample := range samples {
 		isAI, included := classifyControlMode(sample.Mode)
 		if !included {
 			continue
 		}
+		if sample.Incomplete {
+			excludedIncomplete++
+			continue
+		}
 		if sample.OutdoorWetBulbC == nil || !isFinite(*sample.OutdoorWetBulbC) {
 			continue
 		}
-		if sample.CoolingLoadKW == nil || !isFinitePositive(*sample.CoolingLoadKW) {
+		if sample.CoolingLoadKW == nil || !isFinite(*sample.CoolingLoadKW) || *sample.CoolingLoadKW < minValidCoolingLoadKW {
+			continue
+		}
+		if sample.ChwFlowM3H != nil && (!isFinite(*sample.ChwFlowM3H) || *sample.ChwFlowM3H < minValidChwFlowM3H) {
+			continue
+		}
+		if !validChwTemperatures(sample) {
+			continue
+		}
+		if math.IsNaN(sample.DurationHours) || math.IsInf(sample.DurationHours, 0) {
 			continue
 		}
 		loadKW := *sample.CoolingLoadKW
@@ -206,7 +246,20 @@ func accumulateBivariateBins(samples []ControlTickSample, wbStep, loadStep float
 		target.coolingKWh += coolingKWh
 		target.elecKWh += elecKWh
 	}
-	return bins
+	return bins, excludedIncomplete
+}
+
+func validChwTemperatures(sample ControlTickSample) bool {
+	if sample.ChwSupplyTempC != nil && !isFinite(*sample.ChwSupplyTempC) {
+		return false
+	}
+	if sample.ChwReturnTempC != nil && !isFinite(*sample.ChwReturnTempC) {
+		return false
+	}
+	if sample.ChwSupplyTempC != nil && sample.ChwReturnTempC != nil {
+		return *sample.ChwReturnTempC > *sample.ChwSupplyTempC
+	}
+	return true
 }
 
 func normalizeBinConfig(cfg BivariateBinConfig) (wbStep, loadStep float64, minSamples int) {
@@ -238,6 +291,12 @@ func classifyControlMode(mode ControlTickMode) (isAI bool, included bool) {
 }
 
 func resolveTickCOP(sample ControlTickSample, loadKW float64) (float64, bool) {
+	if sample.ChillerPowerKW != nil {
+		powerKW := *sample.ChillerPowerKW
+		if !isFinite(powerKW) || powerKW < minValidChillerPowerKW {
+			return 0, false
+		}
+	}
 	if sample.ObservedCOP != nil {
 		cop := *sample.ObservedCOP
 		return cop, isValidCOP(cop)
@@ -245,16 +304,12 @@ func resolveTickCOP(sample ControlTickSample, loadKW float64) (float64, bool) {
 	if sample.ChillerPowerKW == nil {
 		return 0, false
 	}
-	powerKW := *sample.ChillerPowerKW
-	if !isFinite(powerKW) || powerKW <= minValidChillerPowerKW {
-		return 0, false
-	}
-	ratio := loadKW / powerKW
+	ratio := loadKW / *sample.ChillerPowerKW
 	return ratio, isValidCOP(ratio)
 }
 
 func isValidCOP(cop float64) bool {
-	return isFinite(cop) && cop > 0 && cop <= maxValidCOP
+	return isFinite(cop) && cop >= minValidCOP && cop <= maxValidCOP
 }
 
 func isFinite(value float64) bool {

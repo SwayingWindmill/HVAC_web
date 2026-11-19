@@ -218,11 +218,20 @@ func (store *PostgresStore) InsertDailyResult(ctx context.Context, result DailyR
 		_, err := tx.Exec(ctx, `INSERT INTO core_registry.savings_daily_results(tenant_id, site_id, measure_id, day, expected_hours, hours, unpriced_hours,
 adjusted_baseline_kwh, actual_kwh, avoided_kwh, avoided_cost, plant_kwh, verified_at)
 VALUES ($1::uuid,$2::uuid,$3::uuid,$4::date,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-ON CONFLICT (tenant_id, site_id, measure_id, day) DO NOTHING`,
+ON CONFLICT (tenant_id, site_id, measure_id, day) DO UPDATE SET
+expected_hours = EXCLUDED.expected_hours,
+hours = EXCLUDED.hours,
+unpriced_hours = EXCLUDED.unpriced_hours,
+adjusted_baseline_kwh = EXCLUDED.adjusted_baseline_kwh,
+actual_kwh = EXCLUDED.actual_kwh,
+avoided_kwh = EXCLUDED.avoided_kwh,
+avoided_cost = EXCLUDED.avoided_cost,
+plant_kwh = EXCLUDED.plant_kwh,
+verified_at = EXCLUDED.verified_at`,
 			result.TenantID, result.SiteID, result.MeasureID, result.Day, result.ExpectedHours, result.Hours, result.UnpricedHours,
 			result.AdjustedBaselineKWh, result.ActualKWh, result.AvoidedKWh, result.AvoidedCost, result.PlantKWh, result.VerifiedAt)
 		if err != nil {
-			return fmt.Errorf("insert savings day: %w", err)
+			return fmt.Errorf("upsert savings day: %w", err)
 		}
 		return nil
 	})

@@ -190,6 +190,7 @@ COPY infra/durability/postgres/init/operations-domain-audit-ledger.sql /opt/hvac
 COPY infra/registry/postgres/init/hydraulic-loop-topology.sql /opt/hvac/repo/infra/registry/postgres/init/hydraulic-loop-topology.sql
 COPY infra/connectivity/postgres/init/command-correlation-trace-and-audit-immutability.sql /opt/hvac/repo/infra/connectivity/postgres/init/command-correlation-trace-and-audit-immutability.sql
 COPY modules/command/migrations/command-audit-immutability.sql /opt/hvac/repo/modules/command/migrations/command-audit-immutability.sql
+COPY infra/registry/postgres/init/metric-backfill-watermarks-and-reverify.sql /opt/hvac/repo/infra/registry/postgres/init/metric-backfill-watermarks-and-reverify.sql
 
 FROM postgres:16.4-bookworm
 

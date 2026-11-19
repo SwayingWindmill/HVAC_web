@@ -30,7 +30,11 @@ const (
 	copMinimumSamples           = 96
 	copMaximumCVRMSE            = 0.30
 	copRunningPowerFraction     = 0.10
+	copMinimumRunningPowerKW    = DefaultChillerRunningPowerKW
+	copMinimumCoolingLoadKW     = nameplate.DefaultHeatBalanceMinimumKW
 	copMinimumAllocationDeltaTK = 0.2
+	copMinimumPhysicalCOP       = 1.0
+	copMaximumPhysicalCOP       = 12.0
 )
 
 // PlantBucket is one device's 15-minute means. A field is nil when the device reported no
@@ -149,12 +153,12 @@ func FitPlant(buckets []PlantBucket, from, to time.Time) PlantFit {
 		byBucket[at][bucket.DeviceID] = bucket
 	}
 	for _, bucket := range buckets {
-		if bucket.PowerKW != nil && bucket.ChwLeavingC != nil {
+		if bucket.PowerKW != nil && finite(*bucket.PowerKW) && bucket.ChwLeavingC != nil && finite(*bucket.ChwLeavingC) {
 			chillerSet[bucket.DeviceID] = true
 		}
 	}
 	for _, bucket := range buckets {
-		if chillerSet[bucket.DeviceID] && bucket.PowerKW != nil && *bucket.PowerKW > maxPower[bucket.DeviceID] {
+		if chillerSet[bucket.DeviceID] && bucket.PowerKW != nil && finite(*bucket.PowerKW) && *bucket.PowerKW > maxPower[bucket.DeviceID] {
 			maxPower[bucket.DeviceID] = *bucket.PowerKW
 		}
 	}
@@ -176,7 +180,10 @@ func FitPlant(buckets []PlantBucket, from, to time.Time) PlantFit {
 	}
 	running := func(group map[string]PlantBucket, id string) bool {
 		bucket, ok := group[id]
-		return ok && bucket.PowerKW != nil && maxPower[id] > 0 && *bucket.PowerKW > copRunningPowerFraction*maxPower[id]
+		return ok && bucket.PowerKW != nil && finite(*bucket.PowerKW) &&
+			maxPower[id] >= copMinimumRunningPowerKW &&
+			*bucket.PowerKW >= copMinimumRunningPowerKW &&
+			*bucket.PowerKW > copRunningPowerFraction*maxPower[id]
 	}
 	samples := map[string][]COPSample{}
 	for _, at := range times {
@@ -194,11 +201,15 @@ func FitPlant(buckets []PlantBucket, from, to time.Time) PlantFit {
 		load, hasLoad := 0.0, false
 		for _, bucket := range group {
 			if bucket.CoolingKW != nil {
+				if !finite(*bucket.CoolingKW) {
+					hasLoad = false
+					break
+				}
 				load += *bucket.CoolingKW
 				hasLoad = true
 			}
 		}
-		if !hasLoad || load <= 0 {
+		if !hasLoad || !finite(load) || load < copMinimumCoolingLoadKW {
 			evidence.SetAside["noCoolingLoad"]++
 			continue
 		}
@@ -216,6 +227,10 @@ func FitPlant(buckets []PlantBucket, from, to time.Time) PlantFit {
 			}
 			bucket := group[id]
 			sample := COPSample{Bucket: at, LoadKW: load * shares[index], PowerKW: *bucket.PowerKW, ChwSupplyC: *bucket.ChwLeavingC, CwReturnC: bucket.CwLeavingC, Allocation: method}
+			if !finitePositive(sample.LoadKW) || !finitePositive(sample.PowerKW) || sample.PowerKW < copMinimumRunningPowerKW {
+				evidence.SetAside["implausibleCOP"]++
+				continue
+			}
 			sample.observedCOP = sample.LoadKW / sample.PowerKW
 			if !nameplate.COPPlausible(sample.observedCOP, sample.ChwSupplyC, sample.CwReturnC) {
 				evidence.SetAside["implausibleCOP"]++
@@ -253,7 +268,9 @@ func FitPlant(buckets []PlantBucket, from, to time.Time) PlantFit {
 		fit.Chillers = append(fit.Chillers, chiller)
 	}
 	if len(residuals) > 0 {
-		fit.CVRMSEPower = ptr(round(cvRMSE(residuals, observed, parameters), 4))
+		if cv := cvRMSE(residuals, observed, parameters); finite(cv) {
+			fit.CVRMSEPower = ptr(round(cv, 4))
+		}
 	}
 	return fit
 }
@@ -274,14 +291,17 @@ func nameplateFrom(bucket PlantBucket) nameplate.Plate {
 func plausible(group map[string]PlantBucket, runningIDs []string) bool {
 	for _, id := range runningIDs {
 		bucket := group[id]
-		if bucket.ChwLeavingC == nil {
+		if bucket.ChwLeavingC == nil || !finite(*bucket.ChwLeavingC) {
 			return false
 		}
 		supply := *bucket.ChwLeavingC
-		if supply < 2 || supply > 12 || (bucket.ChwEnteringC != nil && supply > *bucket.ChwEnteringC+0.5) {
+		if supply < 2 || supply > 12 {
 			return false
 		}
-		if bucket.CwLeavingC != nil && (*bucket.CwLeavingC < 15 || *bucket.CwLeavingC > 45 || *bucket.CwLeavingC <= supply) {
+		if bucket.ChwEnteringC != nil && (!finite(*bucket.ChwEnteringC) || supply > *bucket.ChwEnteringC+0.5) {
+			return false
+		}
+		if bucket.CwLeavingC != nil && (!finite(*bucket.CwLeavingC) || *bucket.CwLeavingC < 15 || *bucket.CwLeavingC > 45 || *bucket.CwLeavingC <= supply) {
 			return false
 		}
 	}
@@ -297,14 +317,14 @@ func allocate(group map[string]PlantBucket, runningIDs []string) ([]float64, str
 	byDrop := true
 	for index, id := range runningIDs {
 		bucket := group[id]
-		if bucket.ChwEnteringC == nil || *bucket.ChwEnteringC-*bucket.ChwLeavingC < copMinimumAllocationDeltaTK {
+		if bucket.ChwEnteringC == nil || !finite(*bucket.ChwEnteringC) || !finite(*bucket.ChwLeavingC) || *bucket.ChwEnteringC-*bucket.ChwLeavingC < copMinimumAllocationDeltaTK {
 			byDrop = false
 			break
 		}
 		drops[index] = *bucket.ChwEnteringC - *bucket.ChwLeavingC
 		total += drops[index]
 	}
-	if byDrop {
+	if byDrop && finitePositive(total) {
 		for index := range drops {
 			drops[index] /= total
 		}
@@ -314,6 +334,13 @@ func allocate(group map[string]PlantBucket, runningIDs []string) ([]float64, str
 	for index, id := range runningIDs {
 		drops[index] = *group[id].PowerKW
 		total += drops[index]
+	}
+	if !finitePositive(total) {
+		even := 1.0 / float64(len(runningIDs))
+		for index := range drops {
+			drops[index] = even
+		}
+		return drops, "power"
 	}
 	for index := range drops {
 		drops[index] /= total
@@ -371,22 +398,49 @@ func fitChiller(deviceID string, samples []COPSample) ChillerFit {
 		chiller.Coefficients["condenserReturnTempC"] = coefficients[4]
 	}
 	chiller.ChwSupplyRangeC = []float64{round(low, 2), round(high, 2)}
+	const bucketHours = float64(copBucketMinutes) / 60.0
 	powerResiduals, powers, copResiduals, cops := make([]float64, len(samples)), make([]float64, len(samples)), make([]float64, len(samples)), make([]float64, len(samples))
 	predictable := true
+	var totalCoolingKWh, totalElectricityKWh float64
 	for index, sample := range samples {
 		predicted := chiller.predictCOP(sample.LoadRatio, sample.ChwSupplyC, sample.CwReturnC)
-		if predicted <= 0.5 {
+		if !finite(predicted) || predicted <= 0.5 {
 			predictable = false
 		}
+		safePredicted := 0.5
+		if finite(predicted) && predicted > 0.5 {
+			safePredicted = predicted
+		}
 		copResiduals[index], cops[index] = sample.observedCOP-predicted, sample.observedCOP
-		powerResiduals[index], powers[index] = sample.PowerKW-sample.LoadKW/math.Max(predicted, 0.5), sample.PowerKW
+		powerResiduals[index], powers[index] = sample.PowerKW-sample.LoadKW/safePredicted, sample.PowerKW
+		totalCoolingKWh += sample.LoadKW * bucketHours
+		totalElectricityKWh += sample.PowerKW * bucketHours
 	}
 	powerCV, copCV := cvRMSE(powerResiduals, powers, len(coefficients)), cvRMSE(copResiduals, cops, len(coefficients))
-	meanCOP := mean(cops)
-	chiller.CVRMSEPower, chiller.CVRMSECOP, chiller.MeanCOP = ptr(round(powerCV, 4)), ptr(round(copCV, 4)), ptr(round(meanCOP, 3))
+	if finite(powerCV) {
+		chiller.CVRMSEPower = ptr(round(powerCV, 4))
+	}
+	if finite(copCV) {
+		chiller.CVRMSECOP = ptr(round(copCV, 4))
+	}
+	var meanCOP float64
+	validMeanCOP := finitePositive(totalCoolingKWh) && finitePositive(totalElectricityKWh)
+	if validMeanCOP {
+		// Period/fit MeanCOP must be energy-weighted SUM(cooling_kwh)/SUM(electricity_kwh),
+		// never an arithmetic mean of per-bucket instantaneous COPs.
+		meanCOP = totalCoolingKWh / totalElectricityKWh
+		validMeanCOP = finite(meanCOP) && meanCOP >= copMinimumPhysicalCOP && meanCOP <= copMaximumPhysicalCOP
+	}
+	if validMeanCOP {
+		chiller.MeanCOP = ptr(round(meanCOP, 3))
+	}
 	switch {
 	case !predictable:
 		chiller.Status, chiller.Reason = ChillerRejected, "the fit predicts a COP at or below 0.5 for an observed operating point"
+	case !validMeanCOP:
+		chiller.Status, chiller.Reason = ChillerRejected, "energy-weighted mean COP is outside physical bounds"
+	case !finite(powerCV) || !finite(copCV):
+		chiller.Status, chiller.Reason = ChillerRejected, "the fit error metric is not finite"
 	case coefficients[3] < 0:
 		chiller.Status, chiller.Reason = ChillerRejected, "the fit says a warmer chilled-water supply lowers COP"
 	case withCondenser && coefficients[4] > 0:
@@ -419,7 +473,12 @@ func (chiller ChillerFit) referenceEnergy(since time.Time, delta float64) (float
 		if supply < chiller.ChwSupplyRangeC[0]-0.5 || supply > chiller.ChwSupplyRangeC[1]+0.5 {
 			extrapolated = true
 		}
-		energy += sample.LoadKW / math.Max(chiller.predictCOP(sample.LoadRatio, supply, sample.CwReturnC), 0.5) * copBucketMinutes / 60
+		predicted := chiller.predictCOP(sample.LoadRatio, supply, sample.CwReturnC)
+		denom := 0.5
+		if finite(predicted) && predicted > 0.5 {
+			denom = predicted
+		}
+		energy += sample.LoadKW / denom * copBucketMinutes / 60
 		count++
 	}
 	return energy, count, extrapolated
@@ -661,11 +720,18 @@ func leastSquares(rows [][]float64, targets []float64) ([]float64, error) {
 
 // cvRMSE is ASHRAE Guideline 14's CV(RMSE): sqrt(Σresidual²/(n−p)) / mean(observed).
 func cvRMSE(residuals, observed []float64, parameters int) float64 {
+	if len(residuals) <= parameters || len(observed) == 0 {
+		return math.NaN()
+	}
+	observedMean := mean(observed)
+	if !finitePositive(observedMean) {
+		return math.NaN()
+	}
 	sum := 0.0
 	for _, residual := range residuals {
 		sum += residual * residual
 	}
-	return math.Sqrt(sum/float64(len(residuals)-parameters)) / mean(observed)
+	return math.Sqrt(sum/float64(len(residuals)-parameters)) / observedMean
 }
 
 func mean(values []float64) float64 {

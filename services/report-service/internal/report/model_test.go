@@ -174,3 +174,90 @@ func TestMonthBoundsFollowTheSiteCalendar(t *testing.T) {
 		t.Fatal("month 13 accepted")
 	}
 }
+
+func TestReportCOPUsesEnergyWeightedSumAndHandlesStandbyMissingInvalidAndIncomplete(t *testing.T) {
+	first := time.Date(2026, 9, 14, 0, 0, 0, 0, shanghai)
+
+	t.Run("energy-weighted COP across varying hourly loads", func(t *testing.T) {
+		// Hour 0: 10 kWh elec, 60 kWh cooling (instant COP = 6.0)
+		// Hour 1: 100 kWh elec, 350 kWh cooling (instant COP = 3.5)
+		// Energy-weighted COP = 410 / 110 = 3.727272..., NOT arithmetic avg (6.0 + 3.5)/2 = 4.75.
+		hours := []Hour{
+			{Start: first, ElectricityKWh: 10, CoolingKWh: 60, HasElectricity: true},
+			{Start: first.Add(time.Hour), ElectricityKWh: 100, CoolingKWh: 350, HasElectricity: true},
+		}
+		snapshot, err := Build("2026-09", shanghai, MonthEnergy{Hours: hours}, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := 410.0 / 110.0
+		if snapshot.COP == nil || !near(*snapshot.COP, want) {
+			t.Fatalf("snapshot COP = %v, want %v", snapshot.COP, want)
+		}
+		if len(snapshot.Days) != 1 || snapshot.Days[0].COP == nil || !near(*snapshot.Days[0].COP, want) {
+			t.Fatalf("day COP = %+v, want %v", snapshot.Days, want)
+		}
+	})
+
+	t.Run("returns nil COP for standby, missing cooling, zero power, or out-of-bounds ratio", func(t *testing.T) {
+		cases := []struct {
+			name  string
+			hours []Hour
+		}{
+			{
+				name:  "standby power below deadband",
+				hours: []Hour{{Start: first, ElectricityKWh: 0.2, CoolingKWh: 20, HasElectricity: true}},
+			},
+			{
+				name:  "missing or zero cooling",
+				hours: []Hour{{Start: first, ElectricityKWh: 100, CoolingKWh: 0, HasElectricity: true}},
+			},
+			{
+				name:  "zero electricity",
+				hours: []Hour{{Start: first, ElectricityKWh: 0, CoolingKWh: 100, HasElectricity: true}},
+			},
+			{
+				name:  "physically impossible COP > 12",
+				hours: []Hour{{Start: first, ElectricityKWh: 2, CoolingKWh: 160, HasElectricity: true}},
+			},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				snapshot, err := Build("2026-09", shanghai, MonthEnergy{Hours: tc.hours}, nil, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if snapshot.COP != nil {
+					t.Fatalf("snapshot COP = %v, want nil", *snapshot.COP)
+				}
+				if len(snapshot.Days) == 1 && snapshot.Days[0].COP != nil {
+					t.Fatalf("day COP = %v, want nil", *snapshot.Days[0].COP)
+				}
+			})
+		}
+	})
+
+	t.Run("preserves submeter incompleteness and ignores NaN/Inf/negative readings cleanly", func(t *testing.T) {
+		hours := []Hour{
+			{Start: first, ElectricityKWh: 50, CoolingKWh: 200, HasElectricity: true, Incomplete: true, MissingMeters: []string{"2号电表（D机组）", "1号电表（B机组）"}},
+			{Start: first.Add(time.Hour), ElectricityKWh: math.NaN(), CoolingKWh: math.Inf(1), HasElectricity: true},
+			{Start: first.Add(2 * time.Hour), ElectricityKWh: -10, CoolingKWh: -5, HasElectricity: true},
+		}
+		snapshot, err := Build("2026-09", shanghai, MonthEnergy{Hours: hours, Partial: true}, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !snapshot.Incomplete || len(snapshot.MissingMeters) != 2 || snapshot.MissingMeters[0] != "1号电表（B机组）" || snapshot.MissingMeters[1] != "2号电表（D机组）" {
+			t.Fatalf("snapshot completeness = %+v", snapshot)
+		}
+		if !near(snapshot.ElectricityKWh, 50) || !near(snapshot.CoolingKWh, 200) {
+			t.Fatalf("invalid readings poisoned totals: elec=%v cooling=%v", snapshot.ElectricityKWh, snapshot.CoolingKWh)
+		}
+		if snapshot.COP == nil || !near(*snapshot.COP, 4.0) {
+			t.Fatalf("snapshot COP = %v, want 4.0 from valid reading", snapshot.COP)
+		}
+		if len(snapshot.Days) != 1 || !snapshot.Days[0].Incomplete || len(snapshot.Days[0].MissingMeters) != 2 {
+			t.Fatalf("day completeness = %+v", snapshot.Days)
+		}
+	})
+}
