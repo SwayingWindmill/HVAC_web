@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/intelligencemodel"
@@ -57,6 +58,11 @@ type WindowQuery struct {
 // EvidenceSource reads a window's per-minute samples from Telemetry history.
 type EvidenceSource interface {
 	WindowSamples(context.Context, WindowQuery) ([]Sample, error)
+}
+
+// MeterBalanceSource reads hourly site meter balance rows for meter-imbalance diagnostics.
+type MeterBalanceSource interface {
+	MeterBalanceHours(ctx context.Context, tenantID, siteID string, from, to time.Time) ([]MeterBalanceHour, error)
 }
 
 type Service struct {
@@ -175,6 +181,149 @@ func (service *Service) EvaluateLowDeltaT(ctx context.Context, request Evaluatio
 		return EvaluationResult{}, fmt.Errorf("persist FDD finding: %w", err)
 	}
 	result.Status, result.Finding = "FINDING", &finding
+	return result, nil
+}
+
+// EvaluateMeterImbalance evaluates hourly main-meter vs sub-meter energy balance for sustained
+// gaps or submeter-exceeds-main anomalies, deduplicating findings on a 24-hour recurrence window.
+func (service *Service) EvaluateMeterImbalance(ctx context.Context, req MeterImbalanceRequest) (MeterImbalanceResult, error) {
+	if err := req.Validate(); err != nil {
+		return MeterImbalanceResult{}, err
+	}
+	balanceSource, ok := service.evidence.(MeterBalanceSource)
+	if !ok {
+		return MeterImbalanceResult{}, errors.New("FDD evidence source does not support meter balance queries")
+	}
+	from := req.From.UTC()
+	to := req.To.UTC()
+	maxRatio, minMainKWh, minConsecutive := req.normalized()
+
+	hours, err := balanceSource.MeterBalanceHours(ctx, req.TenantID, req.SiteID, from, to)
+	if err != nil {
+		return MeterImbalanceResult{}, fmt.Errorf("read meter balance evidence: %w", err)
+	}
+
+	sorted := append([]MeterBalanceHour(nil), hours...)
+	slices.SortFunc(sorted, func(a, b MeterBalanceHour) int {
+		return a.Hour.UTC().Compare(b.Hour.UTC())
+	})
+
+	var (
+		overallWorst   *MeterBalanceHour
+		triggeredHours []MeterBalanceHour
+		currentRun     []MeterBalanceHour
+	)
+	flushRun := func() {
+		if len(currentRun) >= minConsecutive {
+			triggeredHours = append(triggeredHours, currentRun...)
+		}
+		currentRun = currentRun[:0]
+	}
+
+	for i := range sorted {
+		h := sorted[i]
+		if !finite(h.SiteKWh) || h.SiteKWh < minMainKWh || h.ImbalanceRatio == nil || !finite(*h.ImbalanceRatio) {
+			flushRun()
+			continue
+		}
+		ratio := *h.ImbalanceRatio
+		if overallWorst == nil || math.Abs(ratio) > math.Abs(*overallWorst.ImbalanceRatio) {
+			candidate := h
+			overallWorst = &candidate
+		}
+		if math.Abs(ratio) <= maxRatio {
+			flushRun()
+			continue
+		}
+		curHour := h.Hour.UTC().Truncate(time.Hour)
+		if len(currentRun) > 0 {
+			prevHour := currentRun[len(currentRun)-1].Hour.UTC().Truncate(time.Hour)
+			if curHour.Sub(prevHour) != time.Hour {
+				flushRun()
+			}
+		}
+		currentRun = append(currentRun, h)
+	}
+	flushRun()
+
+	if len(triggeredHours) == 0 {
+		result := MeterImbalanceResult{
+			Status:          StatusClear,
+			ImbalanceStatus: "BALANCED",
+			ThresholdRatio:  maxRatio,
+		}
+		if overallWorst != nil {
+			result.WorstRatio = *overallWorst.ImbalanceRatio
+			if finite(overallWorst.DiffKWh) {
+				result.ObservedGapKWh = overallWorst.DiffKWh
+			}
+		}
+		return result, nil
+	}
+
+	worst := triggeredHours[0]
+	evidenceIDs := make([]string, 0, len(triggeredHours))
+	for _, h := range triggeredHours {
+		if math.Abs(*h.ImbalanceRatio) > math.Abs(*worst.ImbalanceRatio) {
+			worst = h
+		}
+		evidenceIDs = append(evidenceIDs, fmt.Sprintf("meter-balance:%s:%s", req.SiteID, h.Hour.UTC().Format(time.RFC3339)))
+	}
+	worstRatio := *worst.ImbalanceRatio
+	observedGapKWh := 0.0
+	if finite(worst.DiffKWh) {
+		observedGapKWh = worst.DiffKWh
+	}
+	imbalanceStatus := "UNMETERED_GAP"
+	if worstRatio < 0 {
+		imbalanceStatus = "SUBMETER_EXCEEDS_MAIN"
+	}
+
+	result := MeterImbalanceResult{
+		Status:          "FINDING",
+		ImbalanceStatus: imbalanceStatus,
+		WorstRatio:      worstRatio,
+		ObservedGapKWh:  observedGapKWh,
+		ThresholdRatio:  maxRatio,
+		AffectedHours:   len(triggeredHours),
+	}
+
+	open, found, err := service.store.RecentFinding(ctx, req.TenantID, req.SiteID, req.SiteID, MeterImbalanceRuleCode, MeterBalanceRuleRevisionID, to.Add(-findingRecurrence))
+	if err != nil {
+		return MeterImbalanceResult{}, fmt.Errorf("read recent FDD finding: %w", err)
+	}
+	if found {
+		result.Status = "ONGOING"
+		result.Finding = &open
+		return result, nil
+	}
+
+	now := service.now().UTC()
+	findingID, err := schedulerjob.UUIDv7(now)
+	if err != nil {
+		return MeterImbalanceResult{}, err
+	}
+	excessRatio := math.Max(0, (math.Abs(worstRatio)-maxRatio)/math.Max(maxRatio, 0.01))
+	finding := intelligencemodel.FDDFinding{
+		ID:             findingID,
+		TenantID:       req.TenantID,
+		SiteID:         req.SiteID,
+		AssetID:        req.SiteID,
+		FindingType:    MeterImbalanceRuleCode,
+		EvaluationFrom: from,
+		EvaluationTo:   to,
+		EvidenceIDs:    evidenceIDs,
+		RuleRevisionID: MeterBalanceRuleRevisionID,
+		Confidence:     math.Min(0.99, 0.5+0.5*math.Min(1.0, excessRatio)),
+		CreatedAt:      now,
+		ObservedValue:  worstRatio,
+		ThresholdValue: maxRatio,
+		ValueUnit:      "1",
+	}
+	if err = service.store.InsertFinding(ctx, finding); err != nil {
+		return MeterImbalanceResult{}, fmt.Errorf("persist FDD finding: %w", err)
+	}
+	result.Finding = &finding
 	return result, nil
 }
 
