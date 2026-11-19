@@ -343,10 +343,12 @@ test('repository governance enforces 1:1 skill parity, required hook files, and 
       'scripts/run-command-formal-check.ts',
       'scripts/migration-conventions-baseline.json',
       'scripts/check-migration-conventions.ts',
+      'scripts/sync-phase1-migrations.ts',
+      'scripts/test-sync-phase1-migrations.ts',
     ]).length,
     0,
   );
-  assert.equal(findRequiredGuardrailFileViolations(['.agents/hooks.json']).length, 12);
+  assert.equal(findRequiredGuardrailFileViolations(['.agents/hooks.json']).length, 14);
 
   const verifyMapSandbox = mkdtempSync(join(tmpdir(), 'hvac-verify-map-'));
   try {
@@ -421,6 +423,8 @@ test('repository governance enforces 1:1 skill parity, required hook files, and 
     'scripts/web-as-cast-baseline.json',
     'scripts/coverage-baseline.json',
     'scripts/check-coverage-regression.ts',
+    'scripts/sync-phase1-migrations.ts',
+    'scripts/test-sync-phase1-migrations.ts',
   ]) {
     const classification = runClassification([file]);
     assert.equal(classification.unknown, false, file);

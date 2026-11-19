@@ -347,7 +347,8 @@ for (const file of files) {
         lower.includes('contract') ||
         lower.includes('production-rollout') ||
         lower.includes('migration-freeze') ||
-        lower.includes('migration-conventions'),
+        lower.includes('migration-conventions') ||
+        lower.includes('sync-phase1-migrations'),
       () => add(contractProfiles, ['core']),
     );
     if (!scriptMatched) {

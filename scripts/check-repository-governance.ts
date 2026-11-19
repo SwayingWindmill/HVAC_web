@@ -211,6 +211,8 @@ const requiredGuardrailFiles = Object.freeze([
   'scripts/run-command-formal-check.ts',
   'scripts/migration-conventions-baseline.json',
   'scripts/check-migration-conventions.ts',
+  'scripts/sync-phase1-migrations.ts',
+  'scripts/test-sync-phase1-migrations.ts',
 ]);
 
 const debugMarkerExtensions = Object.freeze(['.go', '.ts', '.tsx', '.mjs', '.js', '.cjs']);
