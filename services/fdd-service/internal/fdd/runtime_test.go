@@ -146,7 +146,10 @@ func TestDiagnosticsHandlerHealthzMetricsAndReadiness(t *testing.T) {
 
 type fakeFDDQueue struct {
 	jobs          []schedulerjob.Job
+	completeCalls int
+	lastOutput    any
 	failCalls     int
+	lastFailCode  string
 	lastFailRetry bool
 	lastFailCtx   error
 }
@@ -157,11 +160,14 @@ func (q *fakeFDDQueue) Claim(context.Context, string, int, time.Duration, time.T
 func (q *fakeFDDQueue) Start(context.Context, schedulerjob.Job, time.Duration, time.Time) (bool, error) {
 	return true, nil
 }
-func (q *fakeFDDQueue) Complete(context.Context, schedulerjob.Job, any, time.Time) error {
+func (q *fakeFDDQueue) Complete(_ context.Context, _ schedulerjob.Job, output any, _ time.Time) error {
+	q.completeCalls++
+	q.lastOutput = output
 	return nil
 }
-func (q *fakeFDDQueue) Fail(ctx context.Context, _ schedulerjob.Job, _ string, _ error, retryable bool, _ time.Time) error {
+func (q *fakeFDDQueue) Fail(ctx context.Context, _ schedulerjob.Job, code string, _ error, retryable bool, _ time.Time) error {
 	q.failCalls++
+	q.lastFailCode = code
 	q.lastFailRetry = retryable
 	q.lastFailCtx = ctx.Err()
 	return nil
@@ -206,5 +212,125 @@ func TestRunScheduledEvaluationsWithLoggerSIGTERMMarksRetryable(t *testing.T) {
 	}
 	if queue.failCalls != 1 || !queue.lastFailRetry || queue.lastFailCtx != nil {
 		t.Fatalf("unexpected fail state: calls=%d retry=%t ctxErr=%v", queue.failCalls, queue.lastFailRetry, queue.lastFailCtx)
+	}
+}
+
+type fakeFullFDDEvaluator struct {
+	fakeFDDEvaluator
+	imbalanceFn func(context.Context, MeterImbalanceRequest) (MeterImbalanceResult, error)
+}
+
+func (e fakeFullFDDEvaluator) EvaluateMeterImbalance(ctx context.Context, input MeterImbalanceRequest) (MeterImbalanceResult, error) {
+	return e.imbalanceFn(ctx, input)
+}
+
+func TestRunScheduledEvaluationsWithLoggerRuleDispatch(t *testing.T) {
+	now := time.Date(2026, 10, 17, 6, 0, 0, 0, time.UTC)
+	tenantID := "01990000-3000-7000-8000-000000000001"
+	siteID := "01990000-5000-7000-8000-000000000001"
+	jobBase := schedulerjob.Job{
+		JobID:          "01990000-1111-7000-8000-000000000002",
+		JobType:        EvaluationJobType,
+		TriggerType:    "SCHEDULE",
+		TenantID:       tenantID,
+		SiteID:         siteID,
+		ScheduledFor:   now,
+		TimeoutSeconds: 30,
+	}
+
+	imbalanceJob := jobBase
+	imbalanceJob.Payload = []byte(`{"ruleCode":"METER_IMBALANCE"}`)
+
+	// Existing lowDeltaTEvaluator mocks continue compiling and fail unsupported METER_IMBALANCE non-retryably.
+	lowOnlyQueue := &fakeFDDQueue{jobs: []schedulerjob.Job{imbalanceJob}}
+	if err := RunScheduledEvaluationsWithLogger(context.Background(), lowOnlyQueue, fakeFDDEvaluator{}, "w1", 8, slog.Default()); err != nil {
+		t.Fatalf("lowOnly failed: %v", err)
+	}
+	if lowOnlyQueue.failCalls != 1 || lowOnlyQueue.lastFailCode != "FDD_EVALUATION_UNSUPPORTED" || lowOnlyQueue.lastFailRetry {
+		t.Fatalf("unexpected lowOnly fail state: %+v", lowOnlyQueue)
+	}
+
+	var gotImbalanceReq MeterImbalanceRequest
+	var gotLowReq EvaluationRequest
+	lowJob := jobBase
+	lowJob.Payload = []byte(`{"ruleCode":"LOW_DELTA_T","assetId":"01990000-6000-7000-8000-000000000001","deviceId":"01990000-6100-7000-8000-000000000001"}`)
+
+	fullEval := fakeFullFDDEvaluator{
+		fakeFDDEvaluator: fakeFDDEvaluator{fn: func(_ context.Context, req EvaluationRequest) (EvaluationResult, error) {
+			gotLowReq = req
+			return EvaluationResult{Status: StatusClear}, nil
+		}},
+		imbalanceFn: func(_ context.Context, req MeterImbalanceRequest) (MeterImbalanceResult, error) {
+			gotImbalanceReq = req
+			return MeterImbalanceResult{Status: StatusClear, ImbalanceStatus: "BALANCED", ThresholdRatio: 0.05}, nil
+		},
+	}
+
+	queue := &fakeFDDQueue{jobs: []schedulerjob.Job{imbalanceJob, lowJob}}
+	if err := RunScheduledEvaluationsWithLogger(context.Background(), queue, fullEval, "w1", 8, slog.Default()); err != nil {
+		t.Fatalf("RunScheduledEvaluationsWithLogger failed: %v", err)
+	}
+	if queue.completeCalls != 2 || queue.failCalls != 0 {
+		t.Fatalf("complete=%d fail=%d", queue.completeCalls, queue.failCalls)
+	}
+	if !gotImbalanceReq.From.Equal(now.Add(-24*time.Hour)) || !gotImbalanceReq.To.Equal(now) {
+		t.Fatalf("imbalance window=%#v", gotImbalanceReq)
+	}
+	if gotLowReq.AssetID != "01990000-6000-7000-8000-000000000001" || !gotLowReq.At.Equal(now) {
+		t.Fatalf("lowDeltaT request=%#v", gotLowReq)
+	}
+}
+
+type fakeMeterBalanceSiteLister struct {
+	sites []SiteRuleScope
+	err   error
+	from  time.Time
+	to    time.Time
+}
+
+func (f *fakeMeterBalanceSiteLister) ListRecentMeterBalanceSites(_ context.Context, from, to time.Time) ([]SiteRuleScope, error) {
+	f.from = from
+	f.to = to
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.sites, nil
+}
+
+func TestRunMeterImbalanceSweepContinuesPastPerSiteFailure(t *testing.T) {
+	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
+	site1 := SiteRuleScope{TenantID: "01990000-3000-7000-8000-000000000001", SiteID: "01990000-5000-7000-8000-000000000001"}
+	site2 := SiteRuleScope{TenantID: "01990000-3000-7000-8000-000000000002", SiteID: "01990000-5000-7000-8000-000000000002"}
+	lister := &fakeMeterBalanceSiteLister{sites: []SiteRuleScope{site1, site2}}
+
+	var evaluated []SiteRuleScope
+	eval := fakeFullFDDEvaluator{
+		imbalanceFn: func(_ context.Context, req MeterImbalanceRequest) (MeterImbalanceResult, error) {
+			evaluated = append(evaluated, SiteRuleScope{TenantID: req.TenantID, SiteID: req.SiteID})
+			if !req.From.Equal(now.Add(-24*time.Hour)) || !req.To.Equal(now) {
+				t.Fatalf("unexpected sweep window [%s, %s)", req.From, req.To)
+			}
+			if req.SiteID == site1.SiteID {
+				return MeterImbalanceResult{}, errors.New("temporary clickhouse error")
+			}
+			return MeterImbalanceResult{Status: StatusClear}, nil
+		},
+	}
+
+	var logBuf bytes.Buffer
+	logger := observability.NewJSONLogger(&logBuf, slog.LevelInfo)
+	if err := RunMeterImbalanceSweep(context.Background(), lister, eval, now, logger); err != nil {
+		t.Fatalf("RunMeterImbalanceSweep failed: %v", err)
+	}
+	if len(evaluated) != 2 || evaluated[0] != site1 || evaluated[1] != site2 {
+		t.Fatalf("evaluated=%#v want [%#v %#v]", evaluated, site1, site2)
+	}
+	if !strings.Contains(logBuf.String(), "FDD_METER_IMBALANCE_SITE_FAILED") {
+		t.Fatalf("expected warning log for failing site, got:\n%s", logBuf.String())
+	}
+
+	listerErr := &fakeMeterBalanceSiteLister{err: errors.New("clickhouse unreachable")}
+	if err := RunMeterImbalanceSweep(context.Background(), listerErr, eval, now, logger); err == nil {
+		t.Fatal("expected list error to be returned")
 	}
 }

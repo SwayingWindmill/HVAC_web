@@ -1,6 +1,7 @@
 package query
 
 import (
+	"context"
 	"crypto"
 	"encoding/json"
 	"errors"
@@ -20,11 +21,18 @@ import (
 
 const (
 	EnergySeriesPath           = "/internal/v1/analytics/energy-series"
+	ReportEnrichmentPath       = "/internal/v1/analytics/report-enrichment"
 	SemanticQueryPath          = "/internal/v1/analytics/semantic-query"
 	DeviceHistoryPath          = "/internal/v1/telemetry/device-history"
 	DeviceHistoryAggregatePath = "/internal/v1/telemetry/device-history:aggregate"
 	maximumRequestBodySize     = int64(64 << 10)
 )
+
+// ReportEnrichmentHistoryEngine optionally extends history.Engine with P2 monthly report
+// enrichment queries over ClickHouse analytics views.
+type ReportEnrichmentHistoryEngine interface {
+	ReportEnrichment(context.Context, analyticsmodel.EnergySeriesQuery) (analyticsmodel.ReportEnrichmentResponse, error)
+}
 
 type ServerConfig struct {
 	Engine                 analytics.EnergySeriesEngine
@@ -105,7 +113,7 @@ func (server *handler) ServeHTTP(writer http.ResponseWriter, request *http.Reque
 	started := server.now()
 	routeName := "unmatched"
 	switch request.URL.Path {
-	case EnergySeriesPath, SemanticQueryPath, DeviceHistoryPath, DeviceHistoryAggregatePath:
+	case EnergySeriesPath, ReportEnrichmentPath, SemanticQueryPath, DeviceHistoryPath, DeviceHistoryAggregatePath:
 		routeName = request.URL.Path
 	}
 	ctx := server.observability.Tracer.ExtractHTTP(request.Context(), request.Header)
@@ -142,7 +150,7 @@ func (server *handler) ServeHTTP(writer http.ResponseWriter, request *http.Reque
 		)
 	}()
 
-	if request.URL.Path != EnergySeriesPath && request.URL.Path != SemanticQueryPath && request.URL.Path != DeviceHistoryPath && request.URL.Path != DeviceHistoryAggregatePath {
+	if routeName == "unmatched" {
 		writeProblem(writer, http.StatusNotFound, "ANALYTICS_ROUTE_NOT_FOUND", "The requested analytics route does not exist.", false)
 		return
 	}
@@ -201,11 +209,30 @@ func (server *handler) ServeHTTP(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 
+	if request.URL.Path == ReportEnrichmentPath {
+		server.serveReportEnrichment(writer, request, query)
+		return
+	}
+
 	response, err := server.engine.QueryEnergySeries(request.Context(), analytics.CallerContext{
 		PrincipalID: claims.PrincipalID, PolicyRevision: claims.PolicyRevision,
 	}, query)
 	if err != nil {
 		writeProblem(writer, http.StatusServiceUnavailable, "ANALYTICS_ENGINE_UNAVAILABLE", "The semantic query engine could not complete the request.", true)
+		return
+	}
+	writeJSON(writer, http.StatusOK, response)
+}
+
+func (server *handler) serveReportEnrichment(writer http.ResponseWriter, request *http.Request, query analyticsmodel.EnergySeriesQuery) {
+	enrichmentEngine, ok := server.historyEngine.(ReportEnrichmentHistoryEngine)
+	if !ok {
+		writeProblem(writer, http.StatusNotImplemented, "ANALYTICS_REPORT_ENRICHMENT_UNSUPPORTED", "The history engine does not support report enrichment.", false)
+		return
+	}
+	response, err := enrichmentEngine.ReportEnrichment(request.Context(), query)
+	if err != nil {
+		writeProblem(writer, http.StatusServiceUnavailable, "ANALYTICS_ENGINE_UNAVAILABLE", "The report enrichment query engine could not complete the request.", true)
 		return
 	}
 	writeJSON(writer, http.StatusOK, response)

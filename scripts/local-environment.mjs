@@ -93,6 +93,7 @@ function up() {
   }
   // The migrator and schema preflight must come from the checkout being deployed.
   compose('--profile', 'migration', 'run', '--rm', '--build', 'phase1-migrator');
+  compose('--profile', 'clickhouse-migration', 'run', '--rm', 'phase1-clickhouse-migrator');
   ensureKey(['identity', 'signing-key.pem'], 'identity-keygen');
   ensureKey(['identity', 'mfa-encryption.key'], 'identity-mfa-keygen');
   if (!existsSync(runtimePath('gateway-ca','connectivity.crt'))) {

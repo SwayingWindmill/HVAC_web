@@ -1,0 +1,115 @@
+# promtool unit tests for platform dependency telemetry queue and readiness probe alerts.
+rule_files:
+  - platform-dependencies.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # Healthy baseline, one-off historical drop below 5m duration, transient 1m blip, and optional dependency down must not fire.
+  - interval: 1m
+    input_series:
+      - series: 's0_telemetry_dropped_spans{service="energy-api"}'
+        values: '0x20'
+      - series: 's0_telemetry_dropped_spans{service="identity-service"}'
+        values: '0 5 5x18'
+      - series: 's0_dependency_up{service="energy-api",dependency="postgres-session",required="true"}'
+        values: '1x20'
+      - series: 's0_dependency_up{service="energy-api",dependency="telemetry-otlp",required="false"}'
+        values: '0x20'
+      - series: 's0_dependency_up{service="scheduler",dependency="postgres",required="true"}'
+        values: '1x3 0 1x16'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: Phase1TelemetrySpansDropped
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: Phase1TelemetrySpansDropped
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: Phase1TelemetrySpansDropped
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: Phase1DependencyReadinessDegraded
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: Phase1DependencyReadinessDegraded
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: Phase1DependencyReadinessDegraded
+        exp_alerts: []
+
+  # Continuous span drops for at least 5 minutes must fire Phase1TelemetrySpansDropped.
+  - interval: 1m
+    input_series:
+      - series: 's0_telemetry_dropped_spans{service="energy-api"}'
+        values: '0+5x20'
+      - series: 's0_telemetry_dropped_spans{service="telemetry-worker"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: Phase1TelemetrySpansDropped
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: Phase1TelemetrySpansDropped
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              primary_owner: platform-observability
+              secondary_owner: platform-operations
+              service: energy-api
+            exp_annotations:
+              summary: 异步追踪导出队列正在丢弃跨度
+              description: "energy-api 的追踪导出队列已满，连续 5 分钟有跨度被丢弃。业务接口正常，但追踪链路记录不完整。"
+              runbook: docs/operations/alerts.md#追踪队列丢弃跨度
+      - eval_time: 10m
+        alertname: Phase1TelemetrySpansDropped
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              primary_owner: platform-observability
+              secondary_owner: platform-operations
+              service: energy-api
+            exp_annotations:
+              summary: 异步追踪导出队列正在丢弃跨度
+              description: "energy-api 的追踪导出队列已满，连续 5 分钟有跨度被丢弃。业务接口正常，但追踪链路记录不完整。"
+              runbook: docs/operations/alerts.md#追踪队列丢弃跨度
+
+  # Required dependency down for at least 2 minutes fires Phase1DependencyReadinessDegraded only for that required dependency.
+  - interval: 1m
+    input_series:
+      - series: 's0_dependency_up{service="telemetry-worker",dependency="clickhouse",required="true"}'
+        values: '1x3 0x10'
+      - series: 's0_dependency_up{service="telemetry-worker",dependency="redis",required="true"}'
+        values: '1x13'
+      - series: 's0_dependency_up{service="energy-api",dependency="telemetry-otlp",required="false"}'
+        values: '0x13'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: Phase1DependencyReadinessDegraded
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: Phase1DependencyReadinessDegraded
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              primary_owner: platform-runtime
+              secondary_owner: platform-operations
+              service: telemetry-worker
+              dependency: clickhouse
+            exp_annotations:
+              summary: 核心服务必需依赖就绪探针异常
+              description: "telemetry-worker 的必需依赖 clickhouse 连续两分钟探测失败，服务已退出就绪状态。"
+              runbook: docs/operations/alerts.md#核心服务就绪探针依赖异常
+      - eval_time: 10m
+        alertname: Phase1DependencyReadinessDegraded
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              primary_owner: platform-runtime
+              secondary_owner: platform-operations
+              service: telemetry-worker
+              dependency: clickhouse
+            exp_annotations:
+              summary: 核心服务必需依赖就绪探针异常
+              description: "telemetry-worker 的必需依赖 clickhouse 连续两分钟探测失败，服务已退出就绪状态。"
+              runbook: docs/operations/alerts.md#核心服务就绪探针依赖异常

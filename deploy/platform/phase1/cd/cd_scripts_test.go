@@ -1258,6 +1258,7 @@ func TestDeployScriptDerivesTheBuildIDFromTheRelease(t *testing.T) {
 				"env=" + filepath.Join(platform, "deploy", "platform", "phase1", "environments", "server.runtime.env"),
 				"node scripts/issue-workload-identities.mjs",
 				"node scripts/phase1-wsl-compose.mjs --profile migration run --rm phase1-migrator",
+				"node scripts/phase1-wsl-compose.mjs --profile clickhouse-migration run --rm phase1-clickhouse-migrator",
 				"node scripts/local-environment.mjs administrator --no-build",
 				"node scripts/site-onboarding.mjs apply deploy/sites/songyaxuan.site.json",
 			} {
@@ -1276,6 +1277,66 @@ func TestDeployScriptRefusesToRunWithoutARevision(t *testing.T) {
 	output, err := cmd.CombinedOutput()
 	if err == nil || !strings.Contains(string(output), "no release revision") {
 		t.Fatalf("deploy.sh ran without a revision: %v\n%s", err, output)
+	}
+}
+
+func TestDeployScriptClickHouseMigrationModes(t *testing.T) {
+	revision := "0123456789abcdef0123456789abcdef01234567"
+	for name, tc := range map[string]struct {
+		envMode      string
+		fileMode     string
+		wantMigrator bool
+		wantErr      string
+	}{
+		"default local mode": {
+			wantMigrator: true,
+		},
+		"explicit external env": {
+			envMode:      "external",
+			wantMigrator: false,
+		},
+		"env file external mode": {
+			fileMode:     "external",
+			wantMigrator: false,
+		},
+		"unknown mode fails closed": {
+			envMode: "bogus",
+			wantErr: "unknown PHASE1_CLICKHOUSE_MODE",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			platform, bin, log := deployFixture(t, revision)
+			if tc.fileMode != "" {
+				envDir := filepath.Join(platform, "deploy", "platform", "phase1", "environments")
+				if err := os.MkdirAll(envDir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(envDir, "server.runtime.env"), []byte("PHASE1_CLICKHOUSE_MODE="+tc.fileMode+"\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cmd := exec.Command("bash", "deploy.sh")
+			cmd.Env = commandEnv(bin, "HVAC_PLATFORM_DIR="+platform, "CALLS_LOG="+log, "PHASE1_CLICKHOUSE_MODE="+tc.envMode)
+			output, err := cmd.CombinedOutput()
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(string(output), tc.wantErr) {
+					t.Fatalf("expected error containing %q, got err=%v\n%s", tc.wantErr, err, output)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("deploy.sh failed: %v\n%s", err, output)
+			}
+			calls := string(mustRead(t, log))
+			wantCmd := "node scripts/phase1-wsl-compose.mjs --profile clickhouse-migration run --rm phase1-clickhouse-migrator"
+			gotMigrator := strings.Contains(calls, wantCmd)
+			if gotMigrator != tc.wantMigrator {
+				t.Fatalf("clickhouse migrator called=%v want=%v\n%s", gotMigrator, tc.wantMigrator, calls)
+			}
+			if !strings.Contains(calls, "node scripts/phase1-wsl-compose.mjs --profile migration run --rm phase1-migrator") {
+				t.Fatalf("postgres migrator missing:\n%s", calls)
+			}
+		})
 	}
 }
 

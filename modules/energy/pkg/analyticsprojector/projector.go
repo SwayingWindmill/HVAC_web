@@ -56,3 +56,19 @@ func NewTotalSubmeterProjector(config TotalSubmeterProjectorConfig) (*TotalSubme
 func NewTotalSubmeterSource(config RegistryClientConfig) (TotalSubmeterSource, error) {
 	return coreclient.NewResolver(config)
 }
+
+type DirtyWindowEnqueuer = energy.DirtyWindowEnqueuer
+type HourlyV2Sink = energy.HourlyV2Sink
+type LoadProfileSource = energy.LoadProfileSource
+type ConditionInputReader = energy.ConditionInputReader
+type ConditionAnchorWriter = energy.ConditionAnchorWriter
+type ConditionAnchorProjectorConfig = energy.ConditionAnchorProjectorConfig
+type ConditionAnchorProjector = energy.ConditionAnchorProjector
+
+func NewDirtyWindowEnqueuer(config RegistryClientConfig) (DirtyWindowEnqueuer, error) {
+	return coreclient.NewResolver(config)
+}
+
+func NewConditionAnchorProjector(config ConditionAnchorProjectorConfig) (*ConditionAnchorProjector, error) {
+	return energy.NewConditionAnchorProjector(config)
+}

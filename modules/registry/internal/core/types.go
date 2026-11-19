@@ -99,24 +99,43 @@ type SiteMeterBindings struct {
 	Items  []MeterBindingResolution `json:"items"`
 }
 
+type MeterRatioVersionSummary struct {
+	ID                   string     `json:"id,omitempty"`
+	TenantID             string     `json:"tenantId,omitempty"`
+	SiteID               string     `json:"siteId,omitempty"`
+	MeterBindingID       string     `json:"meterBindingId,omitempty"`
+	PointID              string     `json:"pointId,omitempty"`
+	CTRatio              float64    `json:"ctRatio"`
+	PTRatio              float64    `json:"ptRatio"`
+	MeterMultiplier      float64    `json:"meterMultiplier"`
+	RatioApplicationMode string     `json:"ratioApplicationMode,omitempty"`
+	ReadingUnit          string     `json:"readingUnit"`
+	EffectiveFrom        time.Time  `json:"effectiveFrom"`
+	EffectiveTo          *time.Time `json:"effectiveTo,omitempty"`
+	Status               string     `json:"status,omitempty"`
+	Revision             int64      `json:"revision,omitempty"`
+}
+
 type MeterBindingResolution struct {
-	Status            string     `json:"status,omitempty"`
-	TenantID          string     `json:"tenantId,omitempty"`
-	SiteID            string     `json:"siteId,omitempty"`
-	MeterID           string     `json:"meterId,omitempty"`
-	MeterBindingID    string     `json:"meterBindingId,omitempty"`
-	TopologyVersionID string     `json:"topologyVersionId,omitempty"`
-	BindingVersion    int64      `json:"bindingVersion,omitempty"`
-	BindingRevision   int64      `json:"revision,omitempty"`
-	EnergyTypeID      string     `json:"energyTypeId,omitempty"`
-	EnergyType        string     `json:"energyType,omitempty"`
-	MeterRole         string     `json:"meterRole,omitempty"`
-	Direction         string     `json:"direction,omitempty"`
-	DeviceID          string     `json:"deviceId,omitempty"`
-	PointID           string     `json:"pointId,omitempty"`
-	PointType         string     `json:"pointType,omitempty"`
-	EffectiveFrom     time.Time  `json:"effectiveFrom,omitempty"`
-	EffectiveTo       *time.Time `json:"effectiveTo,omitempty"`
+	Status            string                     `json:"status,omitempty"`
+	TenantID          string                     `json:"tenantId,omitempty"`
+	SiteID            string                     `json:"siteId,omitempty"`
+	MeterID           string                     `json:"meterId,omitempty"`
+	MeterBindingID    string                     `json:"meterBindingId,omitempty"`
+	TopologyVersionID string                     `json:"topologyVersionId,omitempty"`
+	BindingVersion    int64                      `json:"bindingVersion,omitempty"`
+	BindingRevision   int64                      `json:"revision,omitempty"`
+	EnergyTypeID      string                     `json:"energyTypeId,omitempty"`
+	EnergyType        string                     `json:"energyType,omitempty"`
+	MeterRole         string                     `json:"meterRole,omitempty"`
+	Direction         string                     `json:"direction,omitempty"`
+	DeviceID          string                     `json:"deviceId,omitempty"`
+	PointID           string                     `json:"pointId,omitempty"`
+	PointType         string                     `json:"pointType,omitempty"`
+	ReadingUnit       string                     `json:"readingUnit,omitempty"`
+	RatioVersions     []MeterRatioVersionSummary `json:"ratioVersions,omitempty"`
+	EffectiveFrom     time.Time                  `json:"effectiveFrom,omitempty"`
+	EffectiveTo       *time.Time                 `json:"effectiveTo,omitempty"`
 	// AccountingScope is BRANCH for a sub-meter on the feed into one piece of equipment, SITE otherwise.
 	AccountingScope string `json:"accountingScope,omitempty"`
 	// LoadDeviceID is the equipment a BRANCH sub-meter feeds, which may not be the device reporting it.

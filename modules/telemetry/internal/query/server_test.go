@@ -10,6 +10,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -477,5 +478,107 @@ func TestHandlerRefusesASemanticQueryTooLargeToAnswer(t *testing.T) {
 	}
 	if response.Code != http.StatusUnprocessableEntity || problem.Code != "ANALYTICS_RESULT_TOO_LARGE" || problem.Retryable {
 		t.Fatalf("status = %d, problem = %+v", response.Code, problem)
+	}
+}
+
+type enrichmentHistoryEngineStub struct {
+	historyEngineStub
+	enrichmentResponse analyticsmodel.ReportEnrichmentResponse
+	enrichmentErr      error
+	enrichmentQuery    analyticsmodel.EnergySeriesQuery
+	enrichmentCalls    int
+}
+
+func (stub *enrichmentHistoryEngineStub) ReportEnrichment(_ context.Context, query analyticsmodel.EnergySeriesQuery) (analyticsmodel.ReportEnrichmentResponse, error) {
+	stub.enrichmentCalls++
+	stub.enrichmentQuery = query
+	return stub.enrichmentResponse, stub.enrichmentErr
+}
+
+func TestHandlerServesReportEnrichmentWithWorkloadGrantAndOptionalInterface(t *testing.T) {
+	now := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
+	query := validEnergyQuery()
+	payload, err := json.Marshal(query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	harness := newServerHarness(t, now, &engineStub{})
+	grant := harness.workloadGrant(t, query, harness.iamSigner, nil)
+
+	// Base historyEngineStub without ReportEnrichmentHistoryEngine fails with 501.
+	unsupportedReq := httptest.NewRequest(http.MethodPost, ReportEnrichmentPath, bytes.NewReader(payload))
+	unsupportedReq.Header.Set("Content-Type", "application/json")
+	unsupportedReq.Header.Set("X-Delegation-Grant", grant)
+	spiffe, _ := url.Parse(testReportWorkload)
+	unsupportedReq.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{{URIs: []*url.URL{spiffe}}}}
+	unsupportedRec := httptest.NewRecorder()
+	harness.handler.ServeHTTP(unsupportedRec, unsupportedReq)
+	if unsupportedRec.Code != http.StatusNotImplemented {
+		t.Fatalf("unsupported status = %d, want 501; body=%s", unsupportedRec.Code, unsupportedRec.Body.String())
+	}
+
+	plantCOP := 4.9
+	wetBulb := 22.1
+	enrichmentEngine := &enrichmentHistoryEngineStub{
+		enrichmentResponse: analyticsmodel.ReportEnrichmentResponse{
+			LayeredEfficiency: &analyticsmodel.LayeredEfficiency{PlantCOP: &plantCOP},
+			ConditionAnchors:  &analyticsmodel.ReportConditionAnchorsSummary{MeanWetBulbC: &wetBulb},
+		},
+	}
+	signer := harness.signer
+	iamSigner := harness.iamSigner
+	handler := NewHandler(ServerConfig{
+		Engine:                            &engineStub{},
+		HistoryEngine:                     enrichmentEngine,
+		DelegationPublicKey:               signer.Public(),
+		WorkloadGrantPublicKey:            iamSigner.Public(),
+		WorkloadGrantIssuerSPIFFE:         testIAM,
+		AllowedPresenterSPIFFE:            testPresenter,
+		AdditionalAllowedPresenterSPIFFEs: []string{testReportWorkload},
+		Audience:                          testAudience,
+		Now:                               func() time.Time { return now },
+	})
+
+	postEnrichment := func(body []byte, grantHeader string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, ReportEnrichmentPath, bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		if grantHeader != "" {
+			req.Header.Set("X-Delegation-Grant", grantHeader)
+		}
+		req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{{URIs: []*url.URL{spiffe}}}}
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	okRec := postEnrichment(payload, grant)
+	if okRec.Code != http.StatusOK || enrichmentEngine.enrichmentCalls != 1 || enrichmentEngine.enrichmentQuery.SiteID != query.SiteID {
+		t.Fatalf("status=%d calls=%d query=%#v body=%s", okRec.Code, enrichmentEngine.enrichmentCalls, enrichmentEngine.enrichmentQuery, okRec.Body.String())
+	}
+	var decoded analyticsmodel.ReportEnrichmentResponse
+	if err := json.NewDecoder(okRec.Body).Decode(&decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.LayeredEfficiency == nil || decoded.LayeredEfficiency.PlantCOP == nil || *decoded.LayeredEfficiency.PlantCOP != 4.9 {
+		t.Fatalf("decoded=%#v", decoded)
+	}
+
+	// Rejects unknown JSON fields strictly before dispatch.
+	unknownRec := postEnrichment([]byte(`{"tenantId":"`+testTenantID+`","siteId":"`+testSiteID+`","extra":1}`), grant)
+	if unknownRec.Code != http.StatusBadRequest {
+		t.Fatalf("unknown field status = %d, want 400", unknownRec.Code)
+	}
+
+	// Rejects tampered query that does not match grant scope.
+	tampered := validEnergyQueryForSite("018f1e00-1000-7000-8000-000000000099")
+	tamperedPayload, _ := json.Marshal(tampered)
+	if rec := postEnrichment(tamperedPayload, grant); rec.Code != http.StatusForbidden {
+		t.Fatalf("tampered status = %d, want 403", rec.Code)
+	}
+
+	// Engine error surfaces as 503 ANALYTICS_ENGINE_UNAVAILABLE.
+	enrichmentEngine.enrichmentErr = errors.New("clickhouse unavailable")
+	if rec := postEnrichment(payload, grant); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("engine error status = %d, want 503", rec.Code)
 	}
 }

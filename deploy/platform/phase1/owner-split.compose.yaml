@@ -1,5 +1,6 @@
 x-owner-env: &owner-env
   TZ: ${TZ:-Asia/Shanghai}
+  PHASE1_PRODUCT_VERSION: ${PHASE1_PRODUCT_VERSION:-0.1.0}
 
 x-owner-service: &owner-service
   profiles: ["owner-split"]
@@ -122,6 +123,13 @@ services:
       <<: *owner-env
       QUERY_SERVICE_ADDR: :18447
       QUERY_DIAGNOSTICS_ADDR: :19088
+    depends_on:
+      phase1-schema-preflight:
+        condition: service_completed_successfully
+      phase1-clickhouse-schema-preflight:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
     expose: ["18447", "19088"]
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19088/health/ready"]

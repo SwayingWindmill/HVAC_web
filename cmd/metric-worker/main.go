@@ -87,6 +87,10 @@ func run() int {
 		closeRuntimeOnce.Do(runtime.Close)
 	}
 	closers = append(closers, closeRuntime)
+	if err := runtime.VerifyProductSchema(sigCtx); err != nil {
+		logger.Error("metric_worker_schema_compatibility_invalid", "error_code", "SCHEMA_COMPATIBILITY_INVALID", "cause", err.Error())
+		return 1
+	}
 	telemetry.SetDependencies(observability.Dependency{Name: "metric-runtime", Required: true, Check: runtime.Ping})
 
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("METRIC_WORKER_MODE")), "oneshot") {
@@ -403,6 +407,13 @@ func (runtime *runtime) Ping(ctx context.Context) error {
 		return err
 	}
 	return runtime.latest.Ping(ctx)
+}
+
+func (runtime *runtime) VerifyProductSchema(ctx context.Context) error {
+	if runtime == nil {
+		return nil
+	}
+	return runtime.store.VerifyProductSchema(ctx)
 }
 
 func (runtime *runtime) Close() {

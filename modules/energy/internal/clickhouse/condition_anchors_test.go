@@ -201,3 +201,84 @@ func TestWriterInsertConditionAnchorsPropagatesHTTPAndValidationErrors(t *testin
 		}
 	}
 }
+
+func TestReaderReadConditionInputsCombinesObservationsAndCoolingWithoutShadowing(t *testing.T) {
+	var seenSQL string
+	var seenParams url.Values
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		seenSQL = string(raw)
+		seenParams = r.URL.Query()
+		_, _ = io.WriteString(w,
+			`{"tenant_id":"018f4d00-0000-7000-8000-000000000001","site_id":"018f4e00-1000-7000-8000-000000000001","hour_utc":"2026-10-12T04:00:00Z","outdoor_wet_bulb_c":23.5,"outdoor_dry_bulb_c":30.0,"cooling_kwh":640.5,"closed_loop_ticks":9,"total_control_ticks":10}`+"\n"+
+				`{"tenant_id":"018f4d00-0000-7000-8000-000000000001","site_id":"018f4e00-1000-7000-8000-000000000002","hour_utc":"2026-10-12T05:00:00Z","outdoor_wet_bulb_c":null,"outdoor_dry_bulb_c":null,"cooling_kwh":320.0,"closed_loop_ticks":"0","total_control_ticks":"0"}`+"\n")
+	}))
+	defer server.Close()
+
+	reader, err := NewReader(ReaderConfig{
+		BaseURL: server.URL, SourceDatabase: "telemetry_history",
+		AnalyticsDatabase: "analytics", AnalyticsTable: "energy_interval_facts",
+		HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	from := time.Date(2026, 10, 12, 4, 15, 0, 0, time.UTC)
+	to := time.Date(2026, 10, 12, 6, 0, 0, 0, time.UTC)
+	inputs, err := reader.ReadConditionInputs(context.Background(), from, to)
+	if err != nil {
+		t.Fatalf("ReadConditionInputs failed: %v", err)
+	}
+	if len(inputs) != 2 {
+		t.Fatalf("expected 2 condition inputs, got %d", len(inputs))
+	}
+	if inputs[0].SiteID != "018f4e00-1000-7000-8000-000000000001" ||
+		inputs[0].OutdoorWetBulbC == nil || *inputs[0].OutdoorWetBulbC != 23.5 ||
+		inputs[0].OutdoorDryBulbC == nil || *inputs[0].OutdoorDryBulbC != 30.0 ||
+		inputs[0].CoolingKWh == nil || *inputs[0].CoolingKWh != 640.5 ||
+		inputs[0].ClosedLoopTicks != 9 || inputs[0].TotalControlTicks != 10 {
+		t.Fatalf("unexpected first input: %+v", inputs[0])
+	}
+	if inputs[1].SiteID != "018f4e00-1000-7000-8000-000000000002" ||
+		inputs[1].OutdoorWetBulbC != nil || inputs[1].OutdoorDryBulbC != nil ||
+		inputs[1].CoolingKWh == nil || *inputs[1].CoolingKWh != 320.0 ||
+		inputs[1].ClosedLoopTicks != 0 || inputs[1].TotalControlTicks != 0 {
+		t.Fatalf("unexpected second input: %+v", inputs[1])
+	}
+
+	if seenParams.Get("param_from") != "2026-10-12 04:15:00.000" ||
+		seenParams.Get("param_cooling_from") != "2026-10-12 04:00:00.000" ||
+		seenParams.Get("param_to") != "2026-10-12 06:00:00.000" {
+		t.Fatalf("unexpected query params: %v", seenParams)
+	}
+	for _, needle := range []string{
+		"FROM analytics.operating_condition_observations AS obs",
+		"obs.hour_utc AS obs_hour_key",
+		"obs.value_text AS obs_text_val",
+		"FROM analytics.energy_hourly AS e",
+		"FULL OUTER JOIN cooling_hourly AS c",
+		"'weather.ambient_wet_bulb_temperature'",
+		"'weather.ambient_dry_bulb_temperature'",
+		"'control_mode'",
+	} {
+		if !strings.Contains(seenSQL, needle) {
+			t.Fatalf("ReadConditionInputs SQL missing %q:\n%s", needle, seenSQL)
+		}
+	}
+	if strings.Contains(seenSQL, "telemetry_history.observations") || strings.Contains(seenSQL, "value_string") || strings.Contains(seenSQL, "value_boolean") {
+		t.Fatalf("ReadConditionInputs must query analytics.operating_condition_observations view columns only:\n%s", seenSQL)
+	}
+	if strings.Contains(seenSQL, "AS hour_utc\n") || strings.Contains(seenSQL, "AS value_text") {
+		t.Fatalf("ClickHouse alias shadowing detected in ReadConditionInputs SQL:\n%s", seenSQL)
+	}
+
+	if _, err := reader.ReadConditionInputs(context.Background(), to, from); err == nil {
+		t.Fatal("expected error for unordered window")
+	}
+	var closed *Reader
+	if _, err := closed.ReadConditionInputs(context.Background(), from, to); err == nil {
+		t.Fatal("expected error on nil reader")
+	}
+}

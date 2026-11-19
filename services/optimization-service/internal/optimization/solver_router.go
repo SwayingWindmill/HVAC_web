@@ -413,6 +413,14 @@ func (adapter *RoutingSolverAdapter) Recommend(ctx context.Context, request Requ
 	return rec, nil
 }
 
+type RemoteAuxiliaryTarget struct {
+	LoopKey     string  `json:"loopKey"`
+	Capability  string  `json:"capability"`
+	TargetValue float64 `json:"targetValue"`
+	Unit        string  `json:"unit"`
+	Rationale   string  `json:"rationale,omitempty"`
+}
+
 type remoteSolverResponse struct {
 	ID                 string                                            `json:"id,omitempty"`
 	TenantID           string                                            `json:"tenantId,omitempty"`
@@ -437,6 +445,8 @@ type remoteSolverResponse struct {
 	CommandIntentID    string                                            `json:"commandIntentId,omitempty"`
 	ValidUntil         *time.Time                                        `json:"validUntil,omitempty"`
 	CreatedAt          *time.Time                                        `json:"createdAt,omitempty"`
+	SolverVersion      string                                            `json:"solverVersion,omitempty"`
+	AuxiliaryTargets   []RemoteAuxiliaryTarget                           `json:"auxiliaryTargets,omitempty"`
 }
 
 func (adapter *RoutingSolverAdapter) invokeRemoteHTTP(ctx context.Context, endpoint string, request Request, at time.Time) (Recommendation, error) {
@@ -511,6 +521,9 @@ func decodeRemoteRecommendation(body []byte, request Request, at time.Time) (Rec
 	}
 
 	if err := validateRemoteCandidateBounds(candidate, request); err != nil {
+		return Recommendation{}, err
+	}
+	if err := validateRemoteAuxiliaryTargets(raw.AuxiliaryTargets); err != nil {
 		return Recommendation{}, err
 	}
 
@@ -627,6 +640,30 @@ func validateRemoteCandidateBounds(candidate intelligencemodel.RecommendationCan
 	}
 	if math.Abs(candidate.SupplyTempC-request.Baseline.SupplyTempC) > request.Constraints.MaxSupplyTempStep+1e-9 {
 		return errors.New("remote solver supplyTempC exceeds maxSupplyTempStepC")
+	}
+	return nil
+}
+
+func validateRemoteAuxiliaryTargets(targets []RemoteAuxiliaryTarget) error {
+	for _, target := range targets {
+		if strings.TrimSpace(target.LoopKey) == "" {
+			return errors.New("remote solver auxiliary target loopKey is required")
+		}
+		if !finite(target.TargetValue) {
+			return fmt.Errorf("remote solver auxiliary target %s value must be finite", target.LoopKey)
+		}
+		switch target.Capability {
+		case "SET_FREQUENCY":
+			if target.Unit != "Hz" || target.TargetValue < 15.0 || target.TargetValue > 60.0 {
+				return fmt.Errorf("remote solver auxiliary frequency target out of bounds: %.2f %s", target.TargetValue, target.Unit)
+			}
+		case "SET_FAN_SPEED":
+			if target.Unit != "%" || target.TargetValue < 0.0 || target.TargetValue > 100.0 {
+				return fmt.Errorf("remote solver auxiliary fan speed target out of bounds: %.2f %s", target.TargetValue, target.Unit)
+			}
+		default:
+			return fmt.Errorf("remote solver unsupported auxiliary capability %q", target.Capability)
+		}
 	}
 	return nil
 }

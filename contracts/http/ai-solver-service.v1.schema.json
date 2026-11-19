@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "contracts/http/ai-solver-service.v1.schema.json",
+  "title": "HVAC External AI Solver HTTP Contract v1",
+  "description": "Wire JSON contract between Go optimization-service RoutingSolverAdapter and external Python ai-solver-service (/v1/solve).",
+  "type": "object",
+  "definitions": {
+    "UUID": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "SolveRequest": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "tenantId",
+        "siteId",
+        "optimizationRunId",
+        "inputSnapshotId",
+        "deploymentRevisionId",
+        "objective",
+        "horizon",
+        "horizonMinutes",
+        "granularity",
+        "validFrom",
+        "baseline",
+        "constraints",
+        "responseModel"
+      ],
+      "properties": {
+        "tenantId": { "$ref": "#/definitions/UUID" },
+        "siteId": { "$ref": "#/definitions/UUID" },
+        "optimizationRunId": { "$ref": "#/definitions/UUID" },
+        "inputSnapshotId": { "type": "string", "minLength": 1 },
+        "deploymentRevisionId": { "type": "string", "minLength": 1 },
+        "objective": { "type": "string", "minLength": 1 },
+        "horizon": { "type": "string", "minLength": 1 },
+        "horizonMinutes": { "type": "integer", "minimum": 1 },
+        "granularity": { "type": "string", "minLength": 1 },
+        "validFrom": { "type": "string", "format": "date-time" },
+        "baseline": {
+          "type": "object",
+          "required": ["dailyEnergyKWh", "dailyCost", "supplyTempC", "zoneTempC"],
+          "properties": {
+            "dailyEnergyKWh": { "type": "number", "exclusiveMinimum": 0 },
+            "dailyCost": { "type": "number", "minimum": 0 },
+            "supplyTempC": { "type": "number" },
+            "zoneTempC": { "type": "number" }
+          }
+        },
+        "constraints": {
+          "type": "object",
+          "required": ["supplyTempMinC", "supplyTempMaxC", "zoneTempMinC", "zoneTempMaxC", "maxSupplyTempStepC"],
+          "properties": {
+            "supplyTempMinC": { "type": "number" },
+            "supplyTempMaxC": { "type": "number" },
+            "zoneTempMinC": { "type": "number" },
+            "zoneTempMaxC": { "type": "number" },
+            "maxSupplyTempStepC": { "type": "number", "exclusiveMinimum": 0 }
+          }
+        },
+        "responseModel": {
+          "type": "object",
+          "required": [
+            "dailyEnergyDeltaKWhPerSupplyTempC",
+            "zoneTempDeltaCPerSupplyTempC",
+            "energyUncertaintyP90KWh",
+            "zoneTempUncertaintyP90C"
+          ],
+          "properties": {
+            "dailyEnergyDeltaKWhPerSupplyTempC": { "type": "number" },
+            "zoneTempDeltaCPerSupplyTempC": { "type": "number" },
+            "energyUncertaintyP90KWh": { "type": "number", "minimum": 0 },
+            "zoneTempUncertaintyP90C": { "type": "number", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "AuxiliaryTargetRecommendation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["loopKey", "capability", "targetValue", "unit"],
+      "properties": {
+        "loopKey": { "type": "string", "minLength": 1 },
+        "capability": { "type": "string", "enum": ["SET_FREQUENCY", "SET_FAN_SPEED"] },
+        "targetValue": { "type": "number" },
+        "unit": { "type": "string", "enum": ["Hz", "%"] },
+        "rationale": { "type": "string" }
+      }
+    },
+    "SolveResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidate", "expectedImpact", "uncertainty", "risk"],
+      "properties": {
+        "id": { "$ref": "#/definitions/UUID" },
+        "candidate": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["supplyTempC", "projectedZoneTempC", "dailyEnergyKWh", "dailyCost"],
+          "properties": {
+            "supplyTempC": { "type": "number", "minimum": 5.0 },
+            "projectedZoneTempC": { "type": "number" },
+            "dailyEnergyKWh": { "type": "number", "minimum": 0 },
+            "dailyCost": { "type": "number", "minimum": 0 }
+          }
+        },
+        "expectedImpact": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["energySavingKWhPerDay", "costSavingPerDay"],
+          "properties": {
+            "energySavingKWhPerDay": { "type": "number" },
+            "costSavingPerDay": { "type": "number" }
+          }
+        },
+        "uncertainty": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["energyP90KWh", "zoneTempP90C"],
+          "properties": {
+            "energyP90KWh": { "type": "number", "minimum": 0 },
+            "zoneTempP90C": { "type": "number", "minimum": 0 }
+          }
+        },
+        "risk": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["level", "comfortMarginC"],
+          "properties": {
+            "level": { "type": "string", "enum": ["LOW", "MEDIUM", "HIGH"] },
+            "comfortMarginC": { "type": "number" }
+          }
+        },
+        "rollbackPlan": { "type": "object" },
+        "verificationPlan": { "type": "object" },
+        "solverVersion": { "type": "string" },
+        "auxiliaryTargets": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/AuxiliaryTargetRecommendation" }
+        }
+      }
+    }
+  }
+}

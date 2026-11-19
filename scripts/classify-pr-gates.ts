@@ -194,6 +194,7 @@ for (const file of files) {
   match(
     file.startsWith('deploy/platform/phase1/')
       && !file.startsWith('deploy/platform/phase1/migrations/')
+      && !file.startsWith('deploy/platform/phase1/clickhouse-migrations/')
       && !file.startsWith('deploy/platform/phase1/cd/'),
     () => {
       add(contractProfiles, ['core']);
@@ -205,6 +206,14 @@ for (const file of files) {
   );
   match(file.startsWith('tools/promo-video/'), () => {
     addReason(file, 'standalone promo-video tooling changed');
+  });
+  match(file.startsWith('deploy/platform/phase1/clickhouse-migrations/'), () => {
+    selectBroad(file, 'Phase 1 ClickHouse migration set changed');
+    add(integrationProfiles, ['platform', 'analytics']);
+  });
+  match(file.startsWith('infra/observability/'), () => {
+    add(contractProfiles, ['core']);
+    addReason(file, 'observability alerts or dashboards changed');
   });
   if (phase1Migrations.has(file)) {
     add(integrationProfiles, ['platform']);
@@ -353,8 +362,14 @@ for (const file of files) {
         lower.includes('migration-freeze') ||
         lower.includes('migration-conventions') ||
         lower.includes('sync-phase1-migrations') ||
-        lower.includes('clickhouse-sql'),
+        lower.includes('clickhouse-sql') ||
+        file === 'scripts/check-clickhouse-migrations.ts' ||
+        file === 'scripts/test-clickhouse-migrations.ts',
       () => add(contractProfiles, ['core']),
+    );
+    scriptMatch(
+      file === 'scripts/run-phase1-clickhouse-restore-test.ts',
+      () => selectPlatform(file, 'Phase 1 ClickHouse restore drill changed', { integration: true }),
     );
     if (!scriptMatched) {
       unknown = true;

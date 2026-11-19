@@ -195,3 +195,10 @@ test('root npm task surface rejects historical stage-number commands', () => {
 test('ticket capability runner is physically retired', () => {
   assert.equal(existsSync('scripts/run-capability-task.mjs'), false);
 });
+
+test('platform domain matrix includes ClickHouse migration contract and restore drill', () => {
+  const contractPlan = resolveDomainCommands('platform', ['contracts']);
+  assert.ok(labels(contractPlan.commands).includes('npm run migrations:clickhouse:check'));
+  const integrationPlan = resolveDomainCommands('platform', ['integration']);
+  assert.ok(labels(integrationPlan.commands).includes('npm run deployment:phase1:clickhouse:restore:test'));
+});
