@@ -13,10 +13,10 @@ import (
 	"github.com/quanlaihe/hvac-web/modules/telemetry/internal/analytics"
 )
 
-// Each electricity fact is priced at the window its period ends in; energy outside every window
-// is reported as unpriced, never as free. run-analytics-cube-tests.mjs projects the Site's facts
-// (12:00 bucket: one fact of 2 kWh ending 12:58; 13:00 bucket: 1 kWh ending 13:00 and 1 kWh
-// ending 13:05) before it runs this test.
+// Each electricity fact follows Option A half-open interval attribution (period_start, period_end],
+// so it is bucketed and priced at addMilliseconds(period_end, -1); energy outside every window is
+// reported as unpriced, never as free. run-analytics-cube-tests.mjs projects the Site's facts
+// ((12:55, 12:58]: 2 kWh, (12:58, 13:00]: 1 kWh, (13:00, 13:05]: 1 kWh) before it runs this test.
 func TestCubePricesTheSiteElectricityAtItsPriceWindows(t *testing.T) {
 	cubeURL := strings.TrimSpace(os.Getenv("ANALYTICS_CUBE_TEST_URL"))
 	clickHouseURL := strings.TrimSpace(os.Getenv("ANALYTICS_CLICKHOUSE_TEST_URL"))
@@ -62,12 +62,56 @@ func TestCubePricesTheSiteElectricityAtItsPriceWindows(t *testing.T) {
 		got[index] = point.Cost
 	}
 	want := []*analyticsmodel.EnergyCost{
-		{AmountCNY: 1, Periods: []analyticsmodel.PeriodCost{{PeriodCode: "FLAT", EnergyKWh: 2, AmountCNY: 1}}},
-		{AmountCNY: 1, UnpricedKWh: 1, Periods: []analyticsmodel.PeriodCost{{PeriodCode: "PEAK", EnergyKWh: 1, AmountCNY: 1}}},
+		{AmountCNY: 1.5, Periods: []analyticsmodel.PeriodCost{{PeriodCode: "FLAT", EnergyKWh: 3, AmountCNY: 1.5}}},
+		{UnpricedKWh: 1, Periods: []analyticsmodel.PeriodCost{}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("hourly costs = %+v, want %+v", got, want)
 	}
+
+	// Verify an interval strictly inside (13:00, 13:02] is priced under 13:00 PEAK while (12:58, 13:00]
+	// stays under 12:00 FLAT on an isolated site so existing siteId=0001 assertions stay untouched.
+	t.Run("prices interval ending inside PEAK window", func(t *testing.T) {
+		const peakSiteID = "018f4f00-1000-7000-8000-000000000003"
+		for _, statement := range []string{
+			`INSERT INTO analytics.tariff_price_windows (tenant_id, site_id, generation, window_start, window_end, period_code, energy_rate_per_kwh, tariff_version_id) VALUES
+ ('` + tenantID + `', '` + peakSiteID + `', 1, '2026-07-29 12:00:00', '2026-07-29 13:00:00', 'FLAT', 0.5, '018f4f00-6000-7000-8000-000000000003'),
+ ('` + tenantID + `', '` + peakSiteID + `', 1, '2026-07-29 13:00:00', '2026-07-29 13:03:00', 'PEAK', 1.0, '018f4f00-6000-7000-8000-000000000003')`,
+			`INSERT INTO analytics.tariff_price_window_syncs (tenant_id, site_id, generation, timeline_digest, covered_to) VALUES
+ ('` + tenantID + `', '` + peakSiteID + `', 1, 'peak-integration', '2026-07-29 13:03:00')`,
+			`INSERT INTO analytics.energy_interval_facts (fact_id, tenant_id, site_id, meter_id, meter_binding_id, point_id, load_device_id, energy_type, accounting_scope, quality, period_start, period_end, energy_kwh, source_current_observation_id, data_watermark, dataset_revision, fact_revision) VALUES
+ (generateUUIDv4(), '` + tenantID + `', '` + peakSiteID + `', '018f4f00-5000-7000-8000-000000000031', '018f4f00-5100-7000-8000-000000000031', '018f4f00-7000-7000-8000-000000000031', NULL, 'electricity', 'SITE', 'VALID', '2026-07-29 12:58:00', '2026-07-29 13:00:00', 1, generateUUIDv4(), '2026-07-29 13:05:00', 1, 0),
+ (generateUUIDv4(), '` + tenantID + `', '` + peakSiteID + `', '018f4f00-5000-7000-8000-000000000031', '018f4f00-5100-7000-8000-000000000031', '018f4f00-7000-7000-8000-000000000031', NULL, 'electricity', 'SITE', 'VALID', '2026-07-29 13:00:00', '2026-07-29 13:02:00', 2, generateUUIDv4(), '2026-07-29 13:05:00', 2, 0)`,
+		} {
+			resp, postErr := http.Post(clickHouseURL+"/?user=telemetry_history", "text/plain", strings.NewReader(statement))
+			if postErr != nil {
+				t.Fatal(postErr)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("ClickHouse returned %d for %s", resp.StatusCode, statement)
+			}
+		}
+
+		peakResp, queryErr := client.QueryEnergySeries(context.Background(), analytics.CallerContext{PrincipalID: "analytics-integration-user", PolicyRevision: "analytics-integration:1"}, analyticsmodel.EnergySeriesQuery{
+			TenantID: tenantID, SiteID: peakSiteID, EnergyType: analyticsmodel.EnergyTypeElectricity, Granularity: analyticsmodel.GranularityHour, Timezone: "UTC",
+			From: time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC), To: time.Date(2026, 7, 29, 14, 0, 0, 0, time.UTC), QualityPolicy: analyticsmodel.QualityPolicyValidOnly,
+		})
+		if queryErr != nil {
+			t.Fatal(queryErr)
+		}
+		gotPeak := make([]*analyticsmodel.EnergyCost, len(peakResp.Points))
+		for index, point := range peakResp.Points {
+			gotPeak[index] = point.Cost
+		}
+		wantPeak := []*analyticsmodel.EnergyCost{
+			{AmountCNY: 0.5, Periods: []analyticsmodel.PeriodCost{{PeriodCode: "FLAT", EnergyKWh: 1, AmountCNY: 0.5}}},
+			{AmountCNY: 2.0, Periods: []analyticsmodel.PeriodCost{{PeriodCode: "PEAK", EnergyKWh: 2, AmountCNY: 2.0}}},
+		}
+		if !reflect.DeepEqual(gotPeak, wantPeak) {
+			t.Fatalf("peak boundary costs = %+v, want %+v", gotPeak, wantPeak)
+		}
+	})
 }
 
 func TestCubeSynthesizesSiteTotalMarksMissingSubmetersAndSeparatesCrossGap(t *testing.T) {

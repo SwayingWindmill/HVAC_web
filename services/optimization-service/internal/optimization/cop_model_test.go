@@ -437,3 +437,84 @@ func TestPlantBucketsResolvesSplitSensorsViaStaticTwin(t *testing.T) {
 		t.Fatalf("cooling load bucket mismatch: %+v", loadBucket)
 	}
 }
+
+func TestChillerCOPModelMeanCOPIsEnergyWeightedNotArithmetic(t *testing.T) {
+	at := time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC)
+	const totalBuckets = 123 // > 96 steady samples after skipping the first start-up bucket
+	loads := []float64{100, 300, 500}
+	baseCOPs := []float64{5.5, 4.5, 3.5}
+	buckets := make([]PlantBucket, 0, totalBuckets*2)
+
+	var totalCoolingKW, totalPowerKW, sumInstantCOP float64
+	var steadyCount int
+	for index := 0; index < totalBuckets; index++ {
+		when := at.Add(time.Duration(index-totalBuckets) * 15 * time.Minute)
+		supply := 7.0 + 0.5*math.Sin(float64(index)/5.0)
+		entering := supply + 4.0
+		bucketIdx := index % 3
+		load := loads[bucketIdx]
+		cop := baseCOPs[bucketIdx] + 0.15*(supply-7.0)
+		power := load / cop
+		buckets = append(buckets,
+			PlantBucket{Bucket: when, DeviceID: "chiller-weighted", PowerKW: ptr(power), ChwLeavingC: ptr(supply), ChwEnteringC: ptr(entering)},
+			PlantBucket{Bucket: when, DeviceID: "btu-weighted", CoolingKW: ptr(load)},
+		)
+		if index > 0 { // bucket 0 is skipped as startingUp
+			totalCoolingKW += load
+			totalPowerKW += power
+			sumInstantCOP += cop
+			steadyCount++
+		}
+	}
+
+	fit := FitPlant(buckets, at.Add(-totalBuckets*15*time.Minute), at)
+	if len(fit.Chillers) != 1 {
+		t.Fatalf("chillers = %+v", fit.Chillers)
+	}
+	chiller := fit.Chillers[0]
+	if chiller.Status != ChillerFitted || chiller.MeanCOP == nil {
+		t.Fatalf("expected fitted chiller with MeanCOP, got %+v", chiller)
+	}
+	expectedEnergyWeighted := round(totalCoolingKW/totalPowerKW, 3)
+	arithmeticAvg := sumInstantCOP / float64(steadyCount)
+	if math.Abs(*chiller.MeanCOP-expectedEnergyWeighted) > 1e-3 {
+		t.Fatalf("MeanCOP = %v, want energy-weighted %v (arithmetic avg would be %.3f)", *chiller.MeanCOP, expectedEnergyWeighted, arithmeticAvg)
+	}
+	if math.Abs(*chiller.MeanCOP-arithmeticAvg) < 0.3 {
+		t.Fatalf("expected energy-weighted MeanCOP (%v) to stay distinct from arithmetic average (%v)", *chiller.MeanCOP, arithmeticAvg)
+	}
+}
+
+func TestChillerCOPModelFiltersStandbyNaNInfAndBounds(t *testing.T) {
+	at := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+
+	// Standby-only chiller (power < 5 kW) and low-load/corrupt NaN/Inf readings must never fit or emit NaN/COP=80+.
+	buckets := []PlantBucket{
+		{Bucket: at.Add(-45 * time.Minute), DeviceID: "standby-chiller", PowerKW: ptr(2.0), ChwLeavingC: ptr(7.0), ChwEnteringC: ptr(10.0)},
+		{Bucket: at.Add(-45 * time.Minute), DeviceID: "btu", CoolingKW: ptr(400.0)}, // 400 kW / 2 kW = COP 200 -> blocked by standby deadband
+		{Bucket: at.Add(-30 * time.Minute), DeviceID: "standby-chiller", PowerKW: ptr(4.5), ChwLeavingC: ptr(7.0), ChwEnteringC: ptr(10.0)},
+		{Bucket: at.Add(-30 * time.Minute), DeviceID: "btu", CoolingKW: ptr(400.0)}, // 400 kW / 4.5 kW = COP 88.9 -> blocked by standby deadband
+		// Corrupt NaN / Inf buckets must not poison maxPower or temperatures.
+		{Bucket: at.Add(-15 * time.Minute), DeviceID: "real-chiller", PowerKW: ptr(math.Inf(1)), ChwLeavingC: ptr(7.0), ChwEnteringC: ptr(11.0)},
+		{Bucket: at.Add(-15 * time.Minute), DeviceID: "btu", CoolingKW: ptr(300.0)},
+		{Bucket: at, DeviceID: "real-chiller", PowerKW: ptr(60.0), ChwLeavingC: ptr(math.NaN()), ChwEnteringC: ptr(11.0)},
+		{Bucket: at, DeviceID: "btu", CoolingKW: ptr(300.0)},
+		{Bucket: at.Add(15 * time.Minute), DeviceID: "real-chiller", PowerKW: ptr(60.0), ChwLeavingC: ptr(7.0), ChwEnteringC: ptr(11.0)},
+		{Bucket: at.Add(15 * time.Minute), DeviceID: "btu", CoolingKW: ptr(5.0)}, // below 10 kW cooling deadband -> noCoolingLoad
+		{Bucket: at.Add(30 * time.Minute), DeviceID: "real-chiller", PowerKW: ptr(60.0), ChwLeavingC: ptr(7.0), ChwEnteringC: ptr(11.0)},
+		{Bucket: at.Add(30 * time.Minute), DeviceID: "btu", CoolingKW: ptr(math.NaN())},
+	}
+
+	fit := FitPlant(buckets, at.Add(-time.Hour), at.Add(time.Hour))
+	if fit.CVRMSEPower != nil {
+		t.Fatalf("expected nil plant CVRMSEPower without fitted chillers, got %v", *fit.CVRMSEPower)
+	}
+	if fit.History.SetAside["noCoolingLoad"] != 2 || fit.History.SetAside["implausibleReading"] != 1 {
+		t.Fatalf("unexpected setAside counts: %+v", fit.History.SetAside)
+	}
+	for _, chiller := range fit.Chillers {
+		if chiller.Status != ChillerInsufficientData || chiller.MeanCOP != nil {
+			t.Fatalf("chiller %s should not fit or produce MeanCOP: %+v", chiller.DeviceID, chiller)
+		}
+	}
+}

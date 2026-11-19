@@ -44,30 +44,72 @@ func (s *PostgresStore) LoadPeriod(ctx context.Context, tenantID, siteID, period
 		return Period{}, nil, Tariff{}, err
 	}
 	var period Period
-	var tariff Tariff
-	err = tx.QueryRow(ctx, `SELECT p.tenant_id::text,p.site_id::text,p.id::text,p.boundary_id::text,p.period_start,p.period_end,p.timezone,p.status,
- tv.tariff_id::text,tv.id::text,tv.version,tv.currency,tv.timezone
- FROM core_registry.settlement_periods p
- JOIN core_registry.tariff_assignments a ON a.tenant_id=p.tenant_id AND a.site_id=p.site_id AND a.boundary_id=p.boundary_id AND a.status='RELEASED' AND a.effective_from<=p.period_start AND (a.effective_to IS NULL OR a.effective_to>p.period_start)
- JOIN core_registry.tariff_versions tv ON tv.tenant_id=a.tenant_id AND tv.site_id=a.site_id AND tv.tariff_id=a.tariff_id AND tv.status='RELEASED' AND tv.effective_from<=p.period_start AND (tv.effective_to IS NULL OR tv.effective_to>p.period_start)
- WHERE p.tenant_id=$1::uuid AND p.site_id=$2::uuid AND p.id=$3::uuid`, tenantID, siteID, periodID).Scan(
+	err = tx.QueryRow(ctx, `SELECT p.tenant_id::text,p.site_id::text,p.id::text,p.boundary_id::text,p.period_start,p.period_end,p.timezone,p.status
+FROM core_registry.settlement_periods p
+WHERE p.tenant_id=$1::uuid AND p.site_id=$2::uuid AND p.id=$3::uuid`, tenantID, siteID, periodID).Scan(
 		&period.TenantID, &period.SiteID, &period.ID, &period.BoundaryID, &period.Start, &period.End, &period.Timezone, &period.Status,
-		&tariff.ID, &tariff.VersionID, &tariff.Version, &tariff.Currency, &tariff.Timezone,
 	)
 	if err != nil {
 		return Period{}, nil, Tariff{}, fmt.Errorf("load settlement period: %w", err)
 	}
-	rows, err := tx.Query(ctx, `SELECT tp.id::text,tp.period_code,tp.day_type,tp.local_start_minute,tp.local_end_minute,tp.pricing_rule
+	versionRows, err := tx.Query(ctx, `SELECT tv.tariff_id::text,tv.id::text,tv.version,tv.currency,tv.timezone,
+GREATEST(a.effective_from, tv.effective_from) AS effective_from,
+CASE
+ WHEN a.effective_to IS NULL THEN tv.effective_to
+ WHEN tv.effective_to IS NULL THEN a.effective_to
+ ELSE LEAST(a.effective_to, tv.effective_to)
+END AS effective_to
+FROM core_registry.tariff_assignments a
+JOIN core_registry.tariff_versions tv ON tv.tenant_id=a.tenant_id AND tv.site_id=a.site_id AND tv.tariff_id=a.tariff_id AND tv.status='RELEASED'
+WHERE a.tenant_id=$1::uuid AND a.site_id=$2::uuid AND a.boundary_id=$3::uuid AND a.status='RELEASED'
+ AND GREATEST(a.effective_from, tv.effective_from) < $5
+ AND (a.effective_to IS NULL OR a.effective_to > $4)
+ AND (tv.effective_to IS NULL OR tv.effective_to > $4)
+ AND (a.effective_to IS NULL OR tv.effective_from < a.effective_to)
+ AND (tv.effective_to IS NULL OR a.effective_from < tv.effective_to)
+ORDER BY GREATEST(a.effective_from, tv.effective_from) ASC, tv.version ASC, tv.id ASC`,
+		tenantID, siteID, period.BoundaryID, period.Start, period.End)
+	if err != nil {
+		return Period{}, nil, Tariff{}, fmt.Errorf("load tariff versions: %w", err)
+	}
+	var versions []TariffVersion
+	var versionIDs []string
+	versionIndices := map[string][]int{}
+	for versionRows.Next() {
+		var version TariffVersion
+		if err = versionRows.Scan(&version.ID, &version.VersionID, &version.Version, &version.Currency, &version.Timezone, &version.EffectiveFrom, &version.EffectiveTo); err != nil {
+			versionRows.Close()
+			return Period{}, nil, Tariff{}, err
+		}
+		if len(versions) > 0 && version.Currency != versions[0].Currency {
+			versionRows.Close()
+			return Period{}, nil, Tariff{}, fmt.Errorf("conflicting tariff currencies in settlement period: %s vs %s", versions[0].Currency, version.Currency)
+		}
+		if _, seen := versionIndices[version.VersionID]; !seen {
+			versionIDs = append(versionIDs, version.VersionID)
+		}
+		versionIndices[version.VersionID] = append(versionIndices[version.VersionID], len(versions))
+		versions = append(versions, version)
+	}
+	versionRows.Close()
+	if err = versionRows.Err(); err != nil {
+		return Period{}, nil, Tariff{}, err
+	}
+	if len(versions) == 0 {
+		return Period{}, nil, Tariff{}, errors.New("load settlement period: no released tariff version covers period")
+	}
+	rows, err := tx.Query(ctx, `SELECT tp.tariff_version_id::text,tp.id::text,tp.period_code,tp.day_type,tp.local_start_minute,tp.local_end_minute,tp.pricing_rule
 FROM core_registry.tariff_periods tp
-WHERE tp.tenant_id=$1::uuid AND tp.site_id=$2::uuid AND tp.tariff_version_id=$3::uuid
-ORDER BY tp.day_type,tp.ordinal`, tenantID, siteID, tariff.VersionID)
+WHERE tp.tenant_id=$1::uuid AND tp.site_id=$2::uuid AND tp.tariff_version_id=ANY($3::uuid[])
+ORDER BY tp.tariff_version_id,tp.day_type,tp.ordinal`, tenantID, siteID, versionIDs)
 	if err != nil {
 		return Period{}, nil, Tariff{}, err
 	}
 	for rows.Next() {
+		var versionID string
 		var slice TariffPeriod
 		var raw []byte
-		if err = rows.Scan(&slice.ID, &slice.Code, &slice.DayType, &slice.StartMinute, &slice.EndMinute, &raw); err != nil {
+		if err = rows.Scan(&versionID, &slice.ID, &slice.Code, &slice.DayType, &slice.StartMinute, &slice.EndMinute, &raw); err != nil {
 			rows.Close()
 			return Period{}, nil, Tariff{}, err
 		}
@@ -77,14 +119,29 @@ ORDER BY tp.day_type,tp.ordinal`, tenantID, siteID, tariff.VersionID)
 			return Period{}, nil, Tariff{}, fmt.Errorf("decode tariff pricing rule: %w", err)
 		}
 		slice.EnergyRate, slice.DemandRate = rule.EnergyRate, rule.DemandRate
-		tariff.Periods = append(tariff.Periods, slice)
+		for _, idx := range versionIndices[versionID] {
+			versions[idx].Periods = append(versions[idx].Periods, slice)
+		}
 	}
 	rows.Close()
 	if err = rows.Err(); err != nil {
 		return Period{}, nil, Tariff{}, err
 	}
-	if len(tariff.Periods) == 0 {
-		return Period{}, nil, Tariff{}, errors.New("released tariff version has no tariff periods")
+	for _, version := range versions {
+		if len(version.Periods) == 0 {
+			return Period{}, nil, Tariff{}, fmt.Errorf("released tariff version %s has no tariff periods", version.VersionID)
+		}
+	}
+	tariff := Tariff{
+		ID:            versions[0].ID,
+		VersionID:     versions[0].VersionID,
+		Version:       versions[0].Version,
+		Currency:      versions[0].Currency,
+		Timezone:      versions[0].Timezone,
+		EffectiveFrom: versions[0].EffectiveFrom,
+		EffectiveTo:   versions[0].EffectiveTo,
+		Periods:       versions[0].Periods,
+		Versions:      versions,
 	}
 
 	metricRows, err := tx.Query(ctx, `SELECT smb.id::text,smb.metric_binding_id::text,mb.metric_version_id::text,m.metric_code,smb.metric_role,coalesce(smb.tariff_period_code,'')
@@ -220,7 +277,7 @@ func (s *PostgresStore) InsertSnapshot(ctx context.Context, snapshot Snapshot) e
 		revision = snapshot.SettlementRevisionID
 	}
 	calc := snapshot.Calculation
-	tariffs := []map[string]any{{"tariffVersionId": calc.TariffVersionID}}
+	tariffs := tariffVersionRefPayload(calc)
 	demand := map[string]any{"kwByPeriod": calc.DemandKW}
 	cost := map[string]any{"currency": calc.Currency, "energyByPeriod": calc.EnergyCost, "demandByPeriod": calc.DemandCost, "total": calc.TotalCost}
 	_, err = tx.Exec(ctx, `INSERT INTO core_registry.settlement_snapshots(
@@ -238,6 +295,27 @@ VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6,$7::uuid,$8::uuid,$9::jso
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+func tariffVersionRefPayload(calc Calculation) []map[string]any {
+	seen := map[string]struct{}{}
+	refs := make([]map[string]any, 0, len(calc.TariffVersionRefs)+1)
+	appendRef := func(id string) {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return
+		}
+		if _, ok := seen[id]; ok {
+			return
+		}
+		seen[id] = struct{}{}
+		refs = append(refs, map[string]any{"tariffVersionId": id})
+	}
+	for _, id := range calc.TariffVersionRefs {
+		appendRef(id)
+	}
+	appendRef(calc.TariffVersionID)
+	return refs
 }
 
 const snapshotSelect = `SELECT s.id::text,s.revision_no,s.dataset_revision,coalesce(s.previous_snapshot_id::text,''),coalesce(s.settlement_revision_id::text,''),s.created_at,
@@ -272,8 +350,13 @@ func scanSnapshot(row scanner) (Snapshot, error) {
 	_ = json.Unmarshal(energy, &snapshot.Calculation.EnergyBreakdown)
 	var tariffRefs []map[string]any
 	_ = json.Unmarshal(tariffs, &tariffRefs)
-	if len(tariffRefs) > 0 {
-		snapshot.Calculation.TariffVersionID, _ = tariffRefs[0]["tariffVersionId"].(string)
+	for _, ref := range tariffRefs {
+		if id, _ := ref["tariffVersionId"].(string); id != "" {
+			if snapshot.Calculation.TariffVersionID == "" {
+				snapshot.Calculation.TariffVersionID = id
+			}
+			snapshot.Calculation.TariffVersionRefs = append(snapshot.Calculation.TariffVersionRefs, id)
+		}
 	}
 	var demandValue struct {
 		KW map[string]float64 `json:"kwByPeriod"`
@@ -427,7 +510,7 @@ func (s *PostgresStore) ApplyRevision(ctx context.Context, candidate Candidate, 
 		return err
 	}
 	calc := next.Calculation
-	tariffs := []map[string]any{{"tariffVersionId": calc.TariffVersionID}}
+	tariffs := tariffVersionRefPayload(calc)
 	demand := map[string]any{"kwByPeriod": calc.DemandKW}
 	cost := map[string]any{"currency": calc.Currency, "energyByPeriod": calc.EnergyCost, "demandByPeriod": calc.DemandCost, "total": calc.TotalCost}
 	_, err = tx.Exec(ctx, `INSERT INTO core_registry.settlement_snapshots(

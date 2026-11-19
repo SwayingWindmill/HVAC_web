@@ -8,9 +8,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
+	_ "time/tzdata"
 )
 
 type Period struct {
@@ -29,10 +31,21 @@ type TariffPeriod struct {
 	EnergyRate, DemandRate float64
 }
 
+type TariffVersion struct {
+	ID, VersionID, Currency, Timezone string
+	Version                           int64
+	EffectiveFrom                     time.Time
+	EffectiveTo                       *time.Time
+	Periods                           []TariffPeriod
+}
+
 type Tariff struct {
 	ID, VersionID, Currency, Timezone string
 	Version                           int64
+	EffectiveFrom                     time.Time
+	EffectiveTo                       *time.Time
 	Periods                           []TariffPeriod
+	Versions                          []TariffVersion
 }
 
 type Fact struct {
@@ -60,6 +73,7 @@ type Calculation struct {
 	SourceMetricRevisions    map[string]uint64
 	SourceWatermark          time.Time
 	TariffVersionID          string
+	TariffVersionRefs        []string `json:"TariffVersionRefs,omitempty"`
 }
 
 type Snapshot struct {
@@ -231,14 +245,30 @@ func calculate(period Period, bindings []MetricBinding, tariff Tariff, facts []F
 	if len(bindings) == 0 {
 		return Calculation{}, errors.New("settlement boundary has no released Metric bindings")
 	}
-	location, err := time.LoadLocation(period.Timezone)
+	periodLocation, err := loadExplicitLocation(period.Timezone)
 	if err != nil {
 		return Calculation{}, err
 	}
+	versions, err := normalizeTariffVersions(tariff)
+	if err != nil {
+		return Calculation{}, err
+	}
+	versionLocations := make([]*time.Location, len(versions))
+	for index, version := range versions {
+		loc := periodLocation
+		if strings.TrimSpace(version.Timezone) != "" {
+			loc, err = loadExplicitLocation(version.Timezone)
+			if err != nil {
+				return Calculation{}, err
+			}
+		}
+		versionLocations[index] = loc
+	}
 	calc := Calculation{
 		EnergyBreakdown: map[string]float64{}, DemandKW: map[string]float64{}, EnergyCost: map[string]float64{}, DemandCost: map[string]float64{},
-		Currency: tariff.Currency, Quality: "GOOD", Completeness: 1, TariffVersionID: tariff.VersionID,
-		MeterRefs: append([]string(nil), period.MeterBindingRefs...), SourceMetricRevisions: map[string]uint64{},
+		Currency: versions[0].Currency, Quality: "GOOD", Completeness: 1, TariffVersionID: versions[0].VersionID,
+		TariffVersionRefs: []string{versions[0].VersionID},
+		MeterRefs:         append([]string(nil), period.MeterBindingRefs...), SourceMetricRevisions: map[string]uint64{},
 	}
 	bindingByID := make(map[string]MetricBinding, len(bindings))
 	for _, binding := range bindings {
@@ -246,29 +276,66 @@ func calculate(period Period, bindings []MetricBinding, tariff Tariff, facts []F
 	}
 	bindingRefs := map[string]struct{}{}
 	versionRefs := map[string]struct{}{}
+	usedTariffVersions := []string{}
+	seenTariffVersions := map[string]struct{}{}
+	recordTariffVersion := func(versionID string) {
+		if versionID == "" {
+			return
+		}
+		if _, exists := seenTariffVersions[versionID]; !exists {
+			seenTariffVersions[versionID] = struct{}{}
+			usedTariffVersions = append(usedTariffVersions, versionID)
+		}
+	}
+	demandCostMax := map[string]float64{}
 	completenessTotal := 0.0
 	for _, fact := range facts {
 		binding, ok := bindingByID[fact.MetricBindingID]
 		if !ok || fact.MetricVersionID != binding.MetricVersionID {
 			return Calculation{}, errors.New("settlement Metric result does not match the released binding revision")
 		}
+		if math.IsNaN(fact.Value) || math.IsInf(fact.Value, 0) || math.IsNaN(fact.Completeness) || math.IsInf(fact.Completeness, 0) {
+			return Calculation{}, errors.New("settlement Metric fact contains non-finite numeric value")
+		}
+		if fact.Start.IsZero() {
+			return Calculation{}, errors.New("settlement Metric fact start timestamp is required")
+		}
+		segments, segErr := resolveFactTariffSegments(versions, fact.Start.UTC(), fact.End.UTC())
+		if segErr != nil {
+			return Calculation{}, segErr
+		}
 		periodCode := strings.TrimSpace(fact.TariffPeriodCode)
-		var tariffSlice TariffPeriod
-		if periodCode == "" {
-			tariffSlice, err = tariffFor(tariff.Periods, fact.Start.In(location))
-		} else {
-			tariffSlice, err = tariffByCode(tariff.Periods, periodCode)
-		}
-		if err != nil {
-			return Calculation{}, err
-		}
 		switch fact.Role {
 		case "ENERGY":
-			calc.EnergyBreakdown[tariffSlice.Code] += fact.Value
-			calc.EnergyCost[tariffSlice.Code] += fact.Value * tariffSlice.EnergyRate
+			for _, segment := range segments {
+				version := versions[segment.versionIndex]
+				loc := versionLocations[segment.versionIndex]
+				tariffSlice, sliceErr := resolveTariffSlice(version.Periods, periodCode, segment.start.In(loc))
+				if sliceErr != nil {
+					return Calculation{}, sliceErr
+				}
+				segmentEnergy := fact.Value * segment.fraction
+				calc.EnergyBreakdown[tariffSlice.Code] += segmentEnergy
+				calc.EnergyCost[tariffSlice.Code] += segmentEnergy * tariffSlice.EnergyRate
+				recordTariffVersion(version.VersionID)
+			}
 		case "DEMAND":
-			if fact.Value > calc.DemandKW[tariffSlice.Code] {
-				calc.DemandKW[tariffSlice.Code] = fact.Value
+			for _, segment := range segments {
+				version := versions[segment.versionIndex]
+				loc := versionLocations[segment.versionIndex]
+				tariffSlice, sliceErr := resolveTariffSlice(version.Periods, periodCode, segment.start.In(loc))
+				if sliceErr != nil {
+					return Calculation{}, sliceErr
+				}
+				if fact.Value > calc.DemandKW[tariffSlice.Code] {
+					calc.DemandKW[tariffSlice.Code] = fact.Value
+				}
+				if fact.Value > 0 && tariffSlice.DemandRate > 0 {
+					if candidateCost := fact.Value * tariffSlice.DemandRate; candidateCost > demandCostMax[tariffSlice.Code] {
+						demandCostMax[tariffSlice.Code] = candidateCost
+					}
+				}
+				recordTariffVersion(version.VersionID)
 			}
 		default:
 			return Calculation{}, fmt.Errorf("unsupported settlement Metric role %s", fact.Role)
@@ -287,14 +354,18 @@ func calculate(period Period, bindings []MetricBinding, tariff Tariff, facts []F
 			calc.Quality = "PARTIAL"
 		}
 	}
+	if len(usedTariffVersions) > 0 {
+		calc.TariffVersionRefs = usedTariffVersions
+		calc.TariffVersionID = usedTariffVersions[0]
+	}
 	for _, binding := range bindings {
 		if _, found := bindingRefs[binding.MetricBindingID]; !found {
 			calc.MissingMetricBindingRefs = append(calc.MissingMetricBindingRefs, binding.MetricBindingID)
 		}
 	}
-	for _, tariffSlice := range tariff.Periods {
-		if demand := calc.DemandKW[tariffSlice.Code]; demand > 0 && tariffSlice.DemandRate > 0 {
-			calc.DemandCost[tariffSlice.Code] = demand * tariffSlice.DemandRate
+	for code, demandCost := range demandCostMax {
+		if demandCost > 0 {
+			calc.DemandCost[code] = demandCost
 		}
 	}
 	for _, value := range calc.EnergyCost {
@@ -323,6 +394,150 @@ func calculate(period Period, bindings []MetricBinding, tariff Tariff, facts []F
 	sort.Strings(calc.MissingMetricBindingRefs)
 	sort.Strings(calc.SourceRefs)
 	return calc, nil
+}
+
+type tariffSegment struct {
+	versionIndex int
+	start        time.Time
+	fraction     float64
+}
+
+func loadExplicitLocation(raw string) (*time.Location, error) {
+	clean := strings.TrimSpace(raw)
+	if clean == "" || strings.EqualFold(clean, "Local") {
+		return nil, errors.New("settlement timezone must be an explicit IANA timezone")
+	}
+	loc, err := time.LoadLocation(clean)
+	if err != nil {
+		return nil, fmt.Errorf("invalid settlement timezone %q: %w", clean, err)
+	}
+	return loc, nil
+}
+
+func normalizeTariffVersions(tariff Tariff) ([]TariffVersion, error) {
+	var versions []TariffVersion
+	if len(tariff.Versions) > 0 {
+		versions = make([]TariffVersion, len(tariff.Versions))
+		for index, v := range tariff.Versions {
+			v.EffectiveFrom = v.EffectiveFrom.UTC()
+			if v.EffectiveTo != nil {
+				end := v.EffectiveTo.UTC()
+				v.EffectiveTo = &end
+				if !end.After(v.EffectiveFrom) {
+					return nil, errors.New("released tariff version effective window is empty")
+				}
+			}
+			if len(v.Periods) == 0 {
+				return nil, errors.New("released tariff version has no tariff periods")
+			}
+			versions[index] = v
+		}
+	} else {
+		if len(tariff.Periods) == 0 {
+			return nil, errors.New("released tariff version has no tariff periods")
+		}
+		var effectiveTo *time.Time
+		if tariff.EffectiveTo != nil {
+			end := tariff.EffectiveTo.UTC()
+			effectiveTo = &end
+			if !end.After(tariff.EffectiveFrom.UTC()) {
+				return nil, errors.New("released tariff version effective window is empty")
+			}
+		}
+		versions = []TariffVersion{{
+			ID:            tariff.ID,
+			VersionID:     tariff.VersionID,
+			Currency:      tariff.Currency,
+			Timezone:      tariff.Timezone,
+			Version:       tariff.Version,
+			EffectiveFrom: tariff.EffectiveFrom.UTC(),
+			EffectiveTo:   effectiveTo,
+			Periods:       tariff.Periods,
+		}}
+	}
+	sort.SliceStable(versions, func(left, right int) bool {
+		if !versions[left].EffectiveFrom.Equal(versions[right].EffectiveFrom) {
+			return versions[left].EffectiveFrom.Before(versions[right].EffectiveFrom)
+		}
+		if versions[left].Version != versions[right].Version {
+			return versions[left].Version < versions[right].Version
+		}
+		return versions[left].VersionID < versions[right].VersionID
+	})
+	currency := versions[0].Currency
+	for index, version := range versions {
+		if version.Currency != currency {
+			return nil, errors.New("settlement period spans mismatched tariff currencies")
+		}
+		if index > 0 {
+			prev := versions[index-1]
+			if prev.EffectiveTo == nil || version.EffectiveFrom.Before(*prev.EffectiveTo) {
+				return nil, fmt.Errorf("overlapping released tariff versions at %s", version.EffectiveFrom.UTC().Format(time.RFC3339))
+			}
+		}
+	}
+	return versions, nil
+}
+
+func resolveFactTariffSegments(versions []TariffVersion, start, end time.Time) ([]tariffSegment, error) {
+	if !end.After(start) {
+		index, err := versionAt(versions, start)
+		if err != nil {
+			return nil, err
+		}
+		return []tariffSegment{{versionIndex: index, start: start, fraction: 1.0}}, nil
+	}
+	totalDuration := end.Sub(start)
+	segments := []tariffSegment{}
+	cursor := start
+	for cursor.Before(end) {
+		index, err := versionAt(versions, cursor)
+		if err != nil {
+			return nil, err
+		}
+		version := versions[index]
+		segEnd := end
+		if version.EffectiveTo != nil && version.EffectiveTo.Before(segEnd) {
+			segEnd = *version.EffectiveTo
+		}
+		if !segEnd.After(cursor) {
+			return nil, fmt.Errorf("non-advancing tariff version boundary at %s", cursor.UTC().Format(time.RFC3339))
+		}
+		fraction := float64(segEnd.Sub(cursor)) / float64(totalDuration)
+		segments = append(segments, tariffSegment{versionIndex: index, start: cursor, fraction: fraction})
+		cursor = segEnd
+	}
+	return segments, nil
+}
+
+func versionAt(versions []TariffVersion, at time.Time) (int, error) {
+	matched := -1
+	for index, version := range versions {
+		if version.EffectiveFrom.IsZero() && version.EffectiveTo == nil {
+			if matched >= 0 {
+				return -1, fmt.Errorf("multiple released tariff versions overlap at %s", at.UTC().Format(time.RFC3339))
+			}
+			matched = index
+			continue
+		}
+		if !at.Before(version.EffectiveFrom) && (version.EffectiveTo == nil || at.Before(*version.EffectiveTo)) {
+			if matched >= 0 {
+				return -1, fmt.Errorf("multiple released tariff versions overlap at %s", at.UTC().Format(time.RFC3339))
+			}
+			matched = index
+		}
+	}
+	if matched < 0 {
+		return -1, fmt.Errorf("no released tariff version active at %s", at.UTC().Format(time.RFC3339))
+	}
+	return matched, nil
+}
+
+func resolveTariffSlice(periods []TariffPeriod, periodCode string, localizedAt time.Time) (TariffPeriod, error) {
+	if periodCode != "" {
+		return tariffByCode(periods, periodCode)
+	}
+	return tariffFor(periods, localizedAt)
 }
 
 func tariffByCode(periods []TariffPeriod, code string) (TariffPeriod, error) {

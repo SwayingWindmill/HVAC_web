@@ -232,22 +232,22 @@ try {
   const rows = response.data ?? [];
   if (rows.length !== 2) throw new Error(`unexpected Cube row count ${rows.length}`);
   const [firstHour, secondHour] = rows;
-  if (Number(firstHour['site_energy.energy_valid_kwh']) !== 2 || Number(secondHour['site_energy.energy_valid_kwh']) !== 2) {
+  if (Number(firstHour['site_energy.energy_valid_kwh']) !== 3 || Number(secondHour['site_energy.energy_valid_kwh']) !== 1) {
     throw new Error(`unexpected Cube valid energy ${JSON.stringify(rows)}`);
   }
-  if (Number(firstHour['site_energy.valid_count']) !== 1 || Number(secondHour['site_energy.valid_count']) !== 2 ||
+  if (Number(firstHour['site_energy.valid_count']) !== 2 || Number(secondHour['site_energy.valid_count']) !== 1 ||
       Number(firstHour['site_energy.suspect_count']) !== 0 || Number(secondHour['site_energy.suspect_count']) !== 0 ||
       Number(firstHour['site_energy.invalid_count']) !== 0 || Number(secondHour['site_energy.invalid_count']) !== 0) {
     throw new Error(`unexpected Cube quality counts ${JSON.stringify(rows)}`);
   }
-  if (Number(firstHour['site_energy.max_dataset_revision']) !== 1722257880000 || Number(secondHour['site_energy.max_dataset_revision']) !== 1722258300000) {
+  if (Number(firstHour['site_energy.max_dataset_revision']) !== 1722258000000 || Number(secondHour['site_energy.max_dataset_revision']) !== 1722258300000) {
     throw new Error(`unexpected Cube revision ${JSON.stringify(rows)}`);
   }
   const firstWatermark = String(firstHour['site_energy.max_data_watermark']);
   const secondWatermark = String(secondHour['site_energy.max_data_watermark']);
   const firstWatermarkUTC = firstWatermark.endsWith('Z') ? firstWatermark : `${firstWatermark}Z`;
   const secondWatermarkUTC = secondWatermark.endsWith('Z') ? secondWatermark : `${secondWatermark}Z`;
-  if (new Date(firstWatermarkUTC).toISOString() !== '2026-07-29T12:58:00.000Z' ||
+  if (new Date(firstWatermarkUTC).toISOString() !== '2026-07-29T13:00:00.000Z' ||
       new Date(secondWatermarkUTC).toISOString() !== '2026-07-29T13:05:00.000Z') {
     throw new Error(`unexpected Cube watermark ${JSON.stringify(rows)}`);
   }
@@ -255,7 +255,7 @@ try {
   // Cube reads dateRange and returns buckets as wall time in the query timezone (Telemetry Query Service relies on both).
   const local = (await queryCube(cubeToken(), energyQuery({ timezone: 'Asia/Shanghai', dateRange: ['2026-07-29T20:00:00.000', '2026-07-29T21:59:59.999'] }))).data ?? [];
   if (local.map((row) => `${row['site_energy.period_end.hour']}=${Number(row['site_energy.energy_valid_kwh'])}`).join(',') !==
-      '2026-07-29T20:00:00.000=2,2026-07-29T21:00:00.000=2') {
+      '2026-07-29T20:00:00.000=3,2026-07-29T21:00:00.000=1') {
     throw new Error(`unexpected Asia/Shanghai Cube buckets ${JSON.stringify(local)}`);
   }
   if (local.map((row) => String(row['site_energy.max_data_watermark'])).join(',') !== rows.map((row) => String(row['site_energy.max_data_watermark'])).join(',')) {
@@ -323,7 +323,7 @@ try {
     timezone: 'UTC',
     limit: 10,
   })).data ?? [];
-  if (cop.map((row) => `${Number(row['site_energy.electricity_valid_kwh'])}/${Number(row['site_energy.cooling_valid_kwh'])}=${Number(row['site_energy.cop'])}`).join(',') !== '2/8=4,2/8=4') {
+  if (cop.map((row) => `${Number(row['site_energy.electricity_valid_kwh'])}/${Number(row['site_energy.cooling_valid_kwh'])}=${Number(row['site_energy.cop'])}`).join(',') !== '3/12=4,1/4=4') {
     throw new Error(`unexpected Cube COP ${JSON.stringify(cop)}`);
   }
 
@@ -353,7 +353,7 @@ try {
   if ((denied.data ?? []).length !== 0) throw new Error('Cube row-level policy leaked another Site');
   // site_energy and equipment_energy read whole hours from the hourly rollup and single facts only for
   // an hour the range cuts into (015-energy-hourly-rollup.sql); either way they must equal the facts.
-  const factTotals = (from, to, scope = 'SITE') => clickHouse(`SELECT concat(toString(round(sumIf(energy_kwh, quality = 'VALID'), 6)), '/', toString(countIf(quality = 'VALID')), '/', toString(countIf(quality = 'SUSPECT'))) FROM analytics.energy_interval_facts_visible WHERE site_id = '${siteId}' AND accounting_scope = '${scope}' AND energy_type = 'electricity' AND period_end >= parseDateTime64BestEffort('${from}', 3) AND period_end <= parseDateTime64BestEffort('${to}', 3)`);
+  const factTotals = (from, to, scope = 'SITE') => clickHouse(`SELECT concat(toString(round(sumIf(energy_kwh, quality = 'VALID'), 6)), '/', toString(countIf(quality = 'VALID')), '/', toString(countIf(quality = 'SUSPECT'))) FROM analytics.energy_interval_facts_visible WHERE site_id = '${siteId}' AND accounting_scope = '${scope}' AND energy_type = 'electricity' AND addMilliseconds(period_end, -1) >= parseDateTime64BestEffort('${from}', 3) AND addMilliseconds(period_end, -1) <= parseDateTime64BestEffort('${to}', 3)`);
   const cubeTotals = async (from, to, view = 'site_energy') => {
     const [row = {}] = (await queryCube(cubeToken(), {
       measures: [`${view}.energy_valid_kwh`, `${view}.valid_count`, `${view}.suspect_count`],

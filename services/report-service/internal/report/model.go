@@ -4,7 +4,9 @@ package report
 
 import (
 	"fmt"
+	"math"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
@@ -12,6 +14,12 @@ import (
 
 // SchemaVersion is the shape of a stored snapshot's payload.
 const SchemaVersion = 1
+
+const (
+	minReportElectricityKWh = 1.0
+	minReportCoolingKWh     = 1.0
+	maxReportCOP            = 12.0
+)
 
 // Hour is one Site-local hour of the Site's valid energy, starting at Start, with its electricity
 // as the query service priced it (#575). HasElectricity is false for an hour with cooling readings
@@ -21,6 +29,8 @@ type Hour struct {
 	ElectricityKWh float64
 	CoolingKWh     float64
 	HasElectricity bool
+	Incomplete     bool
+	MissingMeters  []string
 	Cost           *analyticsmodel.EnergyCost
 }
 
@@ -29,6 +39,7 @@ type MonthEnergy struct {
 	Hours               []Hour
 	ElectricityCrossGap *analyticsmodel.EnergyCrossGap
 	CoolingCrossGapKWh  float64
+	Partial             bool
 }
 
 // Why a snapshot has or lacks an energy cost: every kWh priced, none of it priced (no Tariff in
@@ -67,6 +78,8 @@ type Day struct {
 	CoolingKWh     float64  `json:"coolingKWh"`
 	COP            *float64 `json:"cop"`
 	EnergyCostCNY  *float64 `json:"energyCostCNY"`
+	Incomplete     bool     `json:"incomplete,omitempty"`
+	MissingMeters  []string `json:"missingMeters,omitempty"`
 }
 
 type Findings struct {
@@ -106,6 +119,8 @@ type Snapshot struct {
 	Days             []Day         `json:"days"`
 	Findings         Findings      `json:"findings"`
 	Savings          Savings       `json:"savings"`
+	Incomplete       bool          `json:"incomplete,omitempty"`
+	MissingMeters    []string      `json:"missingMeters,omitempty"`
 }
 
 // MonthBounds is a YYYY-MM month on the Site's calendar: its first instant, the next month's first
@@ -132,31 +147,71 @@ func Build(month string, location *time.Location, energy MonthEnergy, savings []
 	}
 	byDay := map[string]*Day{}
 	dayCost := map[string]float64{}
+	dayIncomplete := map[string]bool{}
+	dayMissing := map[string]map[string]struct{}{}
+	snapshotMissing := map[string]struct{}{}
+	snapshotIncomplete := energy.Partial
 	periods := map[string]*PeriodTotal{}
 	var cost, pricedKWh, unpricedKWh float64
 	for _, hour := range energy.Hours {
 		if hour.Start.Before(from) || !hour.Start.Before(to) {
 			return Snapshot{}, fmt.Errorf("hour %s is outside %s", hour.Start.Format(time.RFC3339), month)
 		}
-		snapshot.ElectricityKWh += hour.ElectricityKWh
-		snapshot.CoolingKWh += hour.CoolingKWh
+		date := hour.Start.In(location).Format("2006-01-02")
+		elecValid := isFiniteNonNegative(hour.ElectricityKWh)
+		coolingValid := isFiniteNonNegative(hour.CoolingKWh)
+		if !elecValid || !coolingValid {
+			snapshotIncomplete = true
+			dayIncomplete[date] = true
+		}
+		elecKWh := 0.0
+		if elecValid {
+			elecKWh = hour.ElectricityKWh
+			snapshot.ElectricityKWh += elecKWh
+		}
+		coolingKWh := 0.0
+		if coolingValid {
+			coolingKWh = hour.CoolingKWh
+			snapshot.CoolingKWh += coolingKWh
+		}
+		if hour.Incomplete || len(hour.MissingMeters) > 0 {
+			snapshotIncomplete = true
+			dayIncomplete[date] = true
+			for _, rawMeter := range hour.MissingMeters {
+				meter := strings.TrimSpace(rawMeter)
+				if meter == "" {
+					continue
+				}
+				snapshotMissing[meter] = struct{}{}
+				if dayMissing[date] == nil {
+					dayMissing[date] = map[string]struct{}{}
+				}
+				dayMissing[date][meter] = struct{}{}
+			}
+		}
+		if !hour.HasElectricity && coolingValid && coolingKWh > 0 {
+			snapshotIncomplete = true
+		}
 		// A day has metering when it has an electricity reading; cooling alone still counts in the
 		// month's total.
-		date := hour.Start.In(location).Format("2006-01-02")
 		entry := byDay[date]
 		if entry == nil && hour.HasElectricity {
 			entry = &Day{Date: date}
 			byDay[date] = entry
 		}
 		if entry != nil {
-			entry.ElectricityKWh += hour.ElectricityKWh
-			entry.CoolingKWh += hour.CoolingKWh
+			entry.ElectricityKWh += elecKWh
+			entry.CoolingKWh += coolingKWh
 		}
 		if !hour.HasElectricity {
 			continue
 		}
-		if hour.Cost == nil {
-			unpricedKWh += hour.ElectricityKWh
+		if hour.Cost == nil || !validEnergyCost(hour.Cost) {
+			if hour.Cost != nil {
+				snapshotIncomplete = true
+				dayIncomplete[date] = true
+			}
+			unpricedKWh += elecKWh
 			continue
 		}
 		cost += hour.Cost.AmountCNY
@@ -173,25 +228,36 @@ func Build(month string, location *time.Location, energy MonthEnergy, savings []
 			pricedKWh += period.EnergyKWh
 		}
 	}
-	snapshot.CoolingKWh += energy.CoolingCrossGapKWh
-	if energy.ElectricityCrossGap != nil && energy.ElectricityCrossGap.EnergyKWh > 0 {
-		cgKWh := energy.ElectricityCrossGap.EnergyKWh
-		snapshot.ElectricityKWh += cgKWh
-		snapshot.CrossGapElectricityKWh = cgKWh
-		if energy.ElectricityCrossGap.Cost == nil {
-			unpricedKWh += cgKWh
-		} else {
-			cost += energy.ElectricityCrossGap.Cost.AmountCNY
-			unpricedKWh += energy.ElectricityCrossGap.Cost.UnpricedKWh
-			for _, period := range energy.ElectricityCrossGap.Cost.Periods {
-				total := periods[period.PeriodCode]
-				if total == nil {
-					total = &PeriodTotal{Code: period.PeriodCode}
-					periods[period.PeriodCode] = total
+	if !isFiniteNonNegative(energy.CoolingCrossGapKWh) {
+		snapshotIncomplete = true
+	} else {
+		snapshot.CoolingKWh += energy.CoolingCrossGapKWh
+	}
+	if energy.ElectricityCrossGap != nil {
+		if !isFiniteNonNegative(energy.ElectricityCrossGap.EnergyKWh) {
+			snapshotIncomplete = true
+		} else if energy.ElectricityCrossGap.EnergyKWh > 0 {
+			cgKWh := energy.ElectricityCrossGap.EnergyKWh
+			snapshot.ElectricityKWh += cgKWh
+			snapshot.CrossGapElectricityKWh = cgKWh
+			if energy.ElectricityCrossGap.Cost == nil || !validEnergyCost(energy.ElectricityCrossGap.Cost) {
+				if energy.ElectricityCrossGap.Cost != nil {
+					snapshotIncomplete = true
 				}
-				total.ElectricityKWh += period.EnergyKWh
-				total.CostCNY += period.AmountCNY
-				pricedKWh += period.EnergyKWh
+				unpricedKWh += cgKWh
+			} else {
+				cost += energy.ElectricityCrossGap.Cost.AmountCNY
+				unpricedKWh += energy.ElectricityCrossGap.Cost.UnpricedKWh
+				for _, period := range energy.ElectricityCrossGap.Cost.Periods {
+					total := periods[period.PeriodCode]
+					if total == nil {
+						total = &PeriodTotal{Code: period.PeriodCode}
+						periods[period.PeriodCode] = total
+					}
+					total.ElectricityKWh += period.EnergyKWh
+					total.CostCNY += period.AmountCNY
+					pricedKWh += period.EnergyKWh
+				}
 			}
 		}
 	}
@@ -212,7 +278,9 @@ func Build(month string, location *time.Location, energy MonthEnergy, savings []
 	sort.Strings(dates)
 	for _, date := range dates {
 		entry := *byDay[date]
-		entry.COP = ratio(entry.CoolingKWh, entry.ElectricityKWh)
+		entry.COP = reportCOP(entry.CoolingKWh, entry.ElectricityKWh)
+		entry.Incomplete = dayIncomplete[date]
+		entry.MissingMeters = sortedKeys(dayMissing[date])
 		if priced {
 			value := dayCost[date]
 			entry.EnergyCostCNY = &value
@@ -220,7 +288,9 @@ func Build(month string, location *time.Location, energy MonthEnergy, savings []
 		snapshot.Days = append(snapshot.Days, entry)
 	}
 	snapshot.DaysWithData = len(dates)
-	snapshot.COP = ratio(snapshot.CoolingKWh, snapshot.ElectricityKWh)
+	snapshot.COP = reportCOP(snapshot.CoolingKWh, snapshot.ElectricityKWh)
+	snapshot.Incomplete = snapshotIncomplete
+	snapshot.MissingMeters = sortedKeys(snapshotMissing)
 	if priced && (len(energy.Hours) > 0 || snapshot.CrossGapElectricityKWh > 0) {
 		snapshot.EnergyCostCNY = &cost
 		for _, total := range periods {
@@ -261,10 +331,48 @@ func periodRank(code string) int {
 	return 4
 }
 
-func ratio(numerator, denominator float64) *float64 {
-	if denominator <= 0 {
+func reportCOP(coolingKWh, electricityKWh float64) *float64 {
+	if !isFiniteNonNegative(coolingKWh) || !isFiniteNonNegative(electricityKWh) {
 		return nil
 	}
-	value := numerator / denominator
+	if electricityKWh < minReportElectricityKWh || coolingKWh < minReportCoolingKWh {
+		return nil
+	}
+	value := coolingKWh / electricityKWh
+	if math.IsNaN(value) || math.IsInf(value, 0) || value <= 0 || value > maxReportCOP {
+		return nil
+	}
 	return &value
+}
+
+func isFiniteNonNegative(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0) && value >= 0
+}
+
+func isFinitePositive(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0) && value > 0
+}
+
+func validEnergyCost(cost *analyticsmodel.EnergyCost) bool {
+	if cost == nil || !isFiniteNonNegative(cost.AmountCNY) || !isFiniteNonNegative(cost.UnpricedKWh) {
+		return false
+	}
+	for _, period := range cost.Periods {
+		if !isFiniteNonNegative(period.EnergyKWh) || !isFiniteNonNegative(period.AmountCNY) {
+			return false
+		}
+	}
+	return true
+}
+
+func sortedKeys(set map[string]struct{}) []string {
+	if len(set) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(set))
+	for key := range set {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
