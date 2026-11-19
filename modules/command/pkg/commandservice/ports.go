@@ -76,6 +76,13 @@ func controlErrorFromStore(err error, defaultDetail string) error {
 			Title:      "Resource not found",
 			Detail:     "The requested Command was not found.",
 		}
+	case errors.Is(err, ErrControlAlarmNotFound):
+		return &ControlError{
+			HTTPStatus: http.StatusNotFound,
+			Code:       "RESOURCE_NOT_FOUND",
+			Title:      "Resource not found",
+			Detail:     "The requested Control Alarm dead-letter entry was not found.",
+		}
 	case errors.Is(err, ErrAuthorizationDenied):
 		return &ControlError{
 			HTTPStatus: http.StatusForbidden,
@@ -248,6 +255,16 @@ type ActiveMaintenanceWindowView struct {
 	Reason    string `json:"reason"`
 }
 
+type DevicePriorityLockView struct {
+	DeviceID       string `json:"deviceId"`
+	LockedPriority string `json:"lockedPriority"`
+	CommandSource  string `json:"commandSource"`
+	LockedBy       string `json:"lockedBy"`
+	LockedUntil    string `json:"lockedUntil"`
+	Reason         string `json:"reason"`
+	UpdatedAt      string `json:"updatedAt"`
+}
+
 type SiteControlStateView struct {
 	ID                      *string                      `json:"id,omitempty"`
 	TenantID                string                       `json:"tenantId"`
@@ -259,6 +276,7 @@ type SiteControlStateView struct {
 	UpdatedAt               *string                      `json:"updatedAt"`
 	Revision                int64                        `json:"revision"`
 	AssetLocks              []AssetControlLockView       `json:"assetLocks"`
+	DevicePriorityLocks     []DevicePriorityLockView     `json:"devicePriorityLocks"`
 	ActiveMaintenanceWindow *ActiveMaintenanceWindowView `json:"activeMaintenanceWindow,omitempty"`
 }
 
@@ -316,6 +334,39 @@ type SiteControlModeResponse struct {
 type AssetControlLockResponse struct {
 	AssetControlLockView
 	CancelledCommandIDs []string `json:"cancelledCommandIds"`
+}
+
+type DevicePriorityLockInput struct {
+	LockedPriority  string `json:"lockedPriority"`
+	DurationMinutes *int   `json:"durationMinutes,omitempty"`
+	Reason          string `json:"reason"`
+}
+
+type DevicePriorityLockReleaseResponse struct {
+	Released bool   `json:"released"`
+	DeviceID string `json:"deviceId"`
+}
+
+type ControlAlarmDeadLetterView struct {
+	OutboxID      string `json:"outboxId"`
+	CommandID     string `json:"commandId"`
+	DeviceID      string `json:"deviceId"`
+	EventKind     string `json:"eventKind"`
+	ReasonCode    string `json:"reasonCode"`
+	Attempts      int    `json:"attempts"`
+	LastErrorCode string `json:"lastErrorCode"`
+	CreatedAt     string `json:"createdAt"`
+	UpdatedAt     string `json:"updatedAt"`
+}
+
+type ControlAlarmDeadLetterReplayResponse struct {
+	Replayed bool   `json:"replayed"`
+	OutboxID string `json:"outboxId"`
+}
+
+type ControlAlarmOutboxStateCounts struct {
+	Pending    int64 `json:"pending"`
+	DeadLetter int64 `json:"deadLetter"`
 }
 
 type SiteControlShutdownInput struct {

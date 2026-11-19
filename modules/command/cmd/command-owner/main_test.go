@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/modules/command/pkg/commandservice"
 )
 
@@ -162,5 +164,59 @@ func TestCommandControlFailureSenderDrainsBodyForKeepAlive(t *testing.T) {
 	}
 	if got := newConns.Load(); got != 1 {
 		t.Fatalf("new connections = %d, want 1 (keep-alive connection reused after draining response body)", got)
+	}
+}
+
+type fakeOutboxStateCounter struct {
+	counts commandservice.ControlAlarmOutboxStateCounts
+	err    error
+	calls  atomic.Int32
+}
+
+func (f *fakeOutboxStateCounter) CountControlAlarmOutboxStates(_ context.Context) (commandservice.ControlAlarmOutboxStateCounts, error) {
+	f.calls.Add(1)
+	if f.err != nil {
+		return commandservice.ControlAlarmOutboxStateCounts{}, f.err
+	}
+	return f.counts, nil
+}
+
+func TestRefreshControlAlarmOutboxDepthMetrics(t *testing.T) {
+	metrics := observability.NewRegistry()
+	counter := &fakeOutboxStateCounter{
+		counts: commandservice.ControlAlarmOutboxStateCounts{Pending: 7, DeadLetter: 2},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runControlAlarmOutboxDepthRefresher(ctx, slog.New(slog.NewJSONHandler(io.Discard, nil)), counter, metrics, 5*time.Millisecond)
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for counter.calls.Load() < 1 && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	cancel()
+	<-done
+
+	rec := httptest.NewRecorder()
+	metrics.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := rec.Body.String()
+	if !strings.Contains(body, `hvac_command_control_alarm_outbox_depth{state="pending"} 7`) {
+		t.Fatalf("missing pending depth gauge:\n%s", body)
+	}
+	if !strings.Contains(body, `hvac_command_control_alarm_outbox_depth{state="dead_letter"} 2`) {
+		t.Fatalf("missing dead_letter depth gauge:\n%s", body)
+	}
+
+	// Failing refresh leaves previously published gauges intact and does not panic.
+	counter.err = errors.New("database temporarily unavailable")
+	refreshControlAlarmOutboxDepth(context.Background(), slog.New(slog.NewJSONHandler(io.Discard, nil)), counter, metrics)
+	rec2 := httptest.NewRecorder()
+	metrics.Handler().ServeHTTP(rec2, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if !strings.Contains(rec2.Body.String(), `hvac_command_control_alarm_outbox_depth{state="dead_letter"} 2`) {
+		t.Fatalf("expected previous depth gauge preserved on transient error:\n%s", rec2.Body.String())
 	}
 }

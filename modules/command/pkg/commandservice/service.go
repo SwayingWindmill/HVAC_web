@@ -903,6 +903,30 @@ func (s *Service) GetDevicePriorityLock(tenantID, deviceID string) (*commandmode
 	return s.activePriorityLockLocked(tenantID, deviceID, s.now().UTC()), nil
 }
 
+// ListDevicePriorityLocks returns active priority locks for (tenantID, siteID) sorted by deviceID.
+func (s *Service) ListDevicePriorityLocks(tenantID, siteID string) ([]commandmodel.DevicePriorityLock, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	siteID = strings.TrimSpace(siteID)
+	if tenantID == "" || siteID == "" {
+		return nil, ErrInvalidRequest
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := s.now().UTC()
+	var locks []commandmodel.DevicePriorityLock
+	for _, lock := range s.priorityLocks {
+		if lock == nil || lock.TenantID != tenantID || lock.SiteID != siteID || !lock.LockedUntil.After(now) {
+			continue
+		}
+		locks = append(locks, *lock)
+	}
+	sort.Slice(locks, func(i, j int) bool {
+		return locks[i].DeviceID < locks[j].DeviceID
+	})
+	return locks, nil
+}
+
 // RejectPriorityLockedQueued transitions QUEUED commands invalidated by a higher-priority device lock to REJECTED.
 func (s *Service) RejectPriorityLockedQueued(tenantID string) ([]string, error) {
 	s.mu.Lock()

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,12 +21,16 @@ import (
 // MemoryAuthorityStore adapts the in-memory Service state machine to both AuthorityStore
 // and RuntimeStore with single-use grant tracking for unit and gateway BFF tests.
 type MemoryAuthorityStore struct {
-	svc        *Service
-	mu         sync.Mutex
-	now        func() time.Time
-	order      []string
-	usedGrants map[string]struct{}
-	ListErr    error
+	svc             *Service
+	mu              sync.Mutex
+	now             func() time.Time
+	order           []string
+	usedGrants      map[string]struct{}
+	deadLetters     map[string]*ControlAlarmOutboxRecord
+	ListErr         error
+	PriorityLockErr error
+	DeadLetterErr   error
+	AlarmWakeups    int
 }
 
 func NewMemoryAuthorityStore(now func() time.Time) *MemoryAuthorityStore {
@@ -33,9 +38,10 @@ func NewMemoryAuthorityStore(now func() time.Time) *MemoryAuthorityStore {
 		now = time.Now
 	}
 	return &MemoryAuthorityStore{
-		svc:        New(now),
-		now:        now,
-		usedGrants: map[string]struct{}{},
+		svc:         New(now),
+		now:         now,
+		usedGrants:  map[string]struct{}{},
+		deadLetters: map[string]*ControlAlarmOutboxRecord{},
 	}
 }
 
@@ -150,15 +156,142 @@ func (m *MemoryAuthorityStore) CancelPending(_ context.Context, req commandmodel
 }
 
 func (m *MemoryAuthorityStore) AcquireDevicePriorityLock(_ context.Context, lock commandmodel.DevicePriorityLock) (commandmodel.DevicePriorityLock, error) {
+	if m.PriorityLockErr != nil {
+		return commandmodel.DevicePriorityLock{}, m.PriorityLockErr
+	}
 	return m.svc.AcquireDevicePriorityLock(lock)
 }
 
 func (m *MemoryAuthorityStore) ReleaseDevicePriorityLock(_ context.Context, tenantID, deviceID string) error {
+	if m.PriorityLockErr != nil {
+		return m.PriorityLockErr
+	}
 	return m.svc.ReleaseDevicePriorityLock(tenantID, deviceID)
 }
 
 func (m *MemoryAuthorityStore) GetDevicePriorityLock(_ context.Context, tenantID, deviceID string) (*commandmodel.DevicePriorityLock, error) {
+	if m.PriorityLockErr != nil {
+		return nil, m.PriorityLockErr
+	}
 	return m.svc.GetDevicePriorityLock(tenantID, deviceID)
+}
+
+func (m *MemoryAuthorityStore) ListDevicePriorityLocks(_ context.Context, tenantID, siteID string) ([]commandmodel.DevicePriorityLock, error) {
+	if m.PriorityLockErr != nil {
+		return nil, m.PriorityLockErr
+	}
+	return m.svc.ListDevicePriorityLocks(tenantID, siteID)
+}
+
+func (m *MemoryAuthorityStore) SeedControlAlarmOutbox(rec ControlAlarmOutboxRecord) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.deadLetters == nil {
+		m.deadLetters = map[string]*ControlAlarmOutboxRecord{}
+	}
+	cloned := rec
+	if rec.LeaseUntil != nil {
+		lease := *rec.LeaseUntil
+		cloned.LeaseUntil = &lease
+	}
+	if rec.DeliveredAt != nil {
+		deliv := *rec.DeliveredAt
+		cloned.DeliveredAt = &deliv
+	}
+	m.deadLetters[cloned.OutboxID] = &cloned
+}
+
+func (m *MemoryAuthorityStore) GetControlAlarmOutbox(outboxID string) (*ControlAlarmOutboxRecord, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	rec, ok := m.deadLetters[outboxID]
+	if !ok || rec == nil {
+		return nil, false
+	}
+	cloned := *rec
+	return &cloned, true
+}
+
+func (m *MemoryAuthorityStore) ListControlAlarmDeadLetters(_ context.Context, tenantID, siteID string, limit int) ([]ControlAlarmDeadLetterView, error) {
+	if m.DeadLetterErr != nil {
+		return nil, m.DeadLetterErr
+	}
+	tenantID = strings.TrimSpace(tenantID)
+	siteID = strings.TrimSpace(siteID)
+	if !commandmodel.IsUUIDv7(tenantID) || siteID == "" {
+		return nil, ErrInvalidRequest
+	}
+	if limit <= 0 || limit > MaximumControlAlarmDeadLetters {
+		limit = MaximumControlAlarmDeadLetters
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var matches []*ControlAlarmOutboxRecord
+	for _, rec := range m.deadLetters {
+		if rec == nil || rec.TenantID != tenantID || rec.SiteID != siteID || rec.Status != ControlAlarmStatusDeadLetter {
+			continue
+		}
+		matches = append(matches, rec)
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		if !matches[i].UpdatedAt.Equal(matches[j].UpdatedAt) {
+			return matches[i].UpdatedAt.After(matches[j].UpdatedAt)
+		}
+		return matches[i].OutboxID > matches[j].OutboxID
+	})
+	if len(matches) > limit {
+		matches = matches[:limit]
+	}
+	views := make([]ControlAlarmDeadLetterView, 0, len(matches))
+	for _, rec := range matches {
+		errCode := ""
+		if strings.TrimSpace(rec.LastErrorCode) != "" {
+			errCode = sanitizeControlAlarmErrorCode(rec.LastErrorCode)
+		}
+		views = append(views, ControlAlarmDeadLetterView{
+			OutboxID:      rec.OutboxID,
+			CommandID:     rec.CommandID,
+			DeviceID:      rec.DeviceID,
+			EventKind:     rec.EventKind,
+			ReasonCode:    rec.ReasonCode,
+			Attempts:      rec.Attempts,
+			LastErrorCode: errCode,
+			CreatedAt:     rec.CreatedAt.UTC().Format(time.RFC3339Nano),
+			UpdatedAt:     rec.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		})
+	}
+	return views, nil
+}
+
+func (m *MemoryAuthorityStore) ReplayControlAlarmDeadLetter(_ context.Context, tenantID, siteID, outboxID string) (bool, error) {
+	if m.DeadLetterErr != nil {
+		return false, m.DeadLetterErr
+	}
+	tenantID = strings.TrimSpace(tenantID)
+	siteID = strings.TrimSpace(siteID)
+	outboxID = strings.TrimSpace(outboxID)
+	if !commandmodel.IsUUIDv7(tenantID) || siteID == "" || outboxID == "" {
+		return false, ErrInvalidRequest
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	rec, ok := m.deadLetters[outboxID]
+	if !ok || rec == nil || rec.TenantID != tenantID || rec.SiteID != siteID {
+		return false, ErrControlAlarmNotFound
+	}
+	if rec.Status != ControlAlarmStatusDeadLetter {
+		return false, nil
+	}
+	now := m.now().UTC()
+	rec.Status = ControlAlarmStatusPending
+	rec.Attempts = 0
+	rec.AvailableAt = now
+	rec.LeaseOwner = ""
+	rec.LeaseUntil = nil
+	rec.LastErrorCode = ""
+	rec.UpdatedAt = now
+	m.AlarmWakeups++
+	return true, nil
 }
 
 func (m *MemoryAuthorityStore) ClaimDispatch(_ context.Context, tenantID, leaseOwner string, leaseFor time.Duration) (commandmodel.DispatchEnvelope, error) {
@@ -687,6 +820,7 @@ func NewControlAuthorityForTest(now func() time.Time) (*TestControlHarness, erro
 func cloneSiteControlStateView(in SiteControlStateView) SiteControlStateView {
 	out := in
 	out.AssetLocks = append([]AssetControlLockView(nil), in.AssetLocks...)
+	out.DevicePriorityLocks = append([]DevicePriorityLockView(nil), in.DevicePriorityLocks...)
 	return out
 }
 
@@ -696,6 +830,10 @@ func init() {
 	var _ TelemetryLivePort = (*HTTPAdapters)(nil)
 	var _ IAMAuthorizerPort = (*HTTPAdapters)(nil)
 	var _ RuntimeStore = (*ControlAuthority)(nil)
+	var _ DevicePriorityLocker = (*PostgresStore)(nil)
+	var _ DevicePriorityLocker = (*MemoryAuthorityStore)(nil)
+	var _ ControlAlarmDeadLetterStore = (*PostgresStore)(nil)
+	var _ ControlAlarmDeadLetterStore = (*MemoryAuthorityStore)(nil)
 	var _ error = (*ControlError)(nil)
 	_ = errors.New
 }

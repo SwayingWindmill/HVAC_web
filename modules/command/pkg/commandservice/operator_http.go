@@ -97,6 +97,37 @@ func (h *OperatorHTTPHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 					return
 				}
 			}
+		} else if len(segments) == 4 && segments[1] == "devices" && segments[3] == "priority-lock" {
+			siteID, siteErr := url.PathUnescape(segments[0])
+			deviceID, devErr := url.PathUnescape(segments[2])
+			if siteErr == nil && devErr == nil && siteID != "" && deviceID != "" {
+				switch request.Method {
+				case http.MethodPut:
+					h.handlePutDevicePriorityLock(writer, request, operator, siteID, deviceID)
+				case http.MethodDelete:
+					h.handleDeleteDevicePriorityLock(writer, request, operator, siteID, deviceID)
+				default:
+					writer.Header().Set("Allow", "PUT, DELETE")
+					writeControlProblem(writer, request, &ControlError{
+						HTTPStatus: http.StatusMethodNotAllowed, Code: "COMMAND_METHOD_NOT_ALLOWED",
+						Title: "Method not allowed", Detail: "Unsupported HTTP method for this route.",
+					})
+				}
+				return
+			}
+		} else if len(segments) == 3 && segments[1] == "control-alarms" && segments[2] == "dead-letters" {
+			siteID, err := url.PathUnescape(segments[0])
+			if err == nil && siteID != "" {
+				h.dispatchMethod(writer, request, http.MethodGet, func() { h.handleListControlAlarmDeadLetters(writer, request, operator, siteID) })
+				return
+			}
+		} else if len(segments) == 5 && segments[1] == "control-alarms" && segments[2] == "dead-letters" && segments[4] == "replay" {
+			siteID, siteErr := url.PathUnescape(segments[0])
+			outboxID, outboxErr := url.PathUnescape(segments[3])
+			if siteErr == nil && outboxErr == nil && siteID != "" && outboxID != "" {
+				h.dispatchMethod(writer, request, http.MethodPost, func() { h.handleReplayControlAlarmDeadLetter(writer, request, operator, siteID, outboxID) })
+				return
+			}
 		}
 	}
 
@@ -408,6 +439,106 @@ func (h *OperatorHTTPHandler) handlePostSiteControlShutdown(writer http.Response
 	}
 	writer.Header().Set("Cache-Control", "private, no-store")
 	writeCommandJSON(writer, http.StatusOK, resp)
+}
+
+func (h *OperatorHTTPHandler) handlePutDevicePriorityLock(writer http.ResponseWriter, request *http.Request, operator OperatorIdentity, siteID, deviceID string) {
+	var input DevicePriorityLockInput
+	if !decodeStrictOperatorJSON(writer, request, &input, 8<<10) {
+		writeControlProblem(writer, request, &ControlError{
+			HTTPStatus: http.StatusBadRequest, Code: "CONTROL_EXIT_REQUEST_INVALID",
+			Title: "Device priority lock invalid", Detail: "The Device priority lock request payload is invalid.",
+		})
+		return
+	}
+	view, err := h.config.Authority.PutDevicePriorityLock(request.Context(), operator, siteID, deviceID, input)
+	if err != nil {
+		writeControlError(writer, request, err)
+		return
+	}
+	writer.Header().Set("Cache-Control", "private, no-store")
+	writeCommandJSON(writer, http.StatusOK, view)
+}
+
+func (h *OperatorHTTPHandler) handleDeleteDevicePriorityLock(writer http.ResponseWriter, request *http.Request, operator OperatorIdentity, siteID, deviceID string) {
+	var input struct {
+		Reason string `json:"reason"`
+	}
+	hasBody, ok := decodeOptionalStrictOperatorJSON(request, &input, 8<<10)
+	if !ok {
+		writeControlProblem(writer, request, &ControlError{
+			HTTPStatus: http.StatusBadRequest, Code: "CONTROL_EXIT_REQUEST_INVALID",
+			Title: "Device priority lock release invalid", Detail: "The Device priority lock release request body is invalid.",
+		})
+		return
+	}
+	if !hasBody {
+		input.Reason = request.URL.Query().Get("reason")
+	}
+	resp, err := h.config.Authority.DeleteDevicePriorityLock(request.Context(), operator, siteID, deviceID, input.Reason)
+	if err != nil {
+		writeControlError(writer, request, err)
+		return
+	}
+	writer.Header().Set("Cache-Control", "private, no-store")
+	writeCommandJSON(writer, http.StatusOK, resp)
+}
+
+func (h *OperatorHTTPHandler) handleListControlAlarmDeadLetters(writer http.ResponseWriter, request *http.Request, operator OperatorIdentity, siteID string) {
+	limit := MaximumControlAlarmDeadLetters
+	if raw := strings.TrimSpace(request.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > MaximumControlAlarmDeadLetters {
+			writeControlProblem(writer, request, &ControlError{
+				HTTPStatus: http.StatusBadRequest, Code: "CONTROL_EXIT_REQUEST_INVALID",
+				Title: "Control alarm list invalid", Detail: "limit must be between 1 and 50.",
+			})
+			return
+		}
+		limit = parsed
+	}
+	views, err := h.config.Authority.ListControlAlarmDeadLetters(request.Context(), operator, siteID, limit)
+	if err != nil {
+		writeControlError(writer, request, err)
+		return
+	}
+	writer.Header().Set("Cache-Control", "private, no-store")
+	writeCommandJSON(writer, http.StatusOK, struct {
+		Data []ControlAlarmDeadLetterView `json:"data"`
+	}{Data: views})
+}
+
+func (h *OperatorHTTPHandler) handleReplayControlAlarmDeadLetter(writer http.ResponseWriter, request *http.Request, operator OperatorIdentity, siteID, outboxID string) {
+	var empty struct{}
+	if _, ok := decodeOptionalStrictOperatorJSON(request, &empty, 8<<10); !ok {
+		writeControlProblem(writer, request, &ControlError{
+			HTTPStatus: http.StatusBadRequest, Code: "CONTROL_EXIT_REQUEST_INVALID",
+			Title: "Control alarm replay invalid", Detail: "The Control alarm replay request body must be empty or an empty JSON object.",
+		})
+		return
+	}
+	resp, err := h.config.Authority.ReplayControlAlarmDeadLetter(request.Context(), operator, siteID, outboxID)
+	if err != nil {
+		writeControlError(writer, request, err)
+		return
+	}
+	writer.Header().Set("Cache-Control", "private, no-store")
+	writeCommandJSON(writer, http.StatusOK, resp)
+}
+
+func decodeOptionalStrictOperatorJSON(request *http.Request, target any, maxBytes int64) (bool, bool) {
+	raw, err := io.ReadAll(io.LimitReader(request.Body, maxBytes+1))
+	if err != nil || int64(len(raw)) > maxBytes {
+		return false, false
+	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return false, true
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(target) != nil || ensureCommandJSONEOF(decoder) != nil {
+		return true, false
+	}
+	return true, true
 }
 
 func decodeStrictOperatorJSON(writer http.ResponseWriter, request *http.Request, target any, maxBytes int64) bool {

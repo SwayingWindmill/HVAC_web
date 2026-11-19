@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -420,5 +421,317 @@ func TestControlAuthoritySafeShutdownExitBlockedByDispatchingCommand(t *testing.
 		ControlMode: SiteControlModeSafeShutdownExit, Reason: "exit after clear",
 	}); err != nil {
 		t.Fatalf("expected SAFE_SHUTDOWN_EXIT to succeed after clearing DISPATCHING, got %v", err)
+	}
+}
+
+type storeWithoutPriorityLocker struct {
+	HTTPAuthority
+}
+
+func TestControlAuthorityGetSiteControlStatePriorityLocks(t *testing.T) {
+	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	clock := now
+	h, op := seedPlantHarness(t, now)
+	h.Authority.now = func() time.Time { return clock }
+	h.Store.now = func() time.Time { return clock }
+	h.Store.svc.now = func() time.Time { return clock }
+
+	// Empty active slice on default state.
+	state, err := h.Authority.GetSiteControlState(context.Background(), op, caSiteID)
+	if err != nil {
+		t.Fatalf("GetSiteControlState empty: %v", err)
+	}
+	if state.DevicePriorityLocks == nil || len(state.DevicePriorityLocks) != 0 {
+		t.Fatalf("expected non-nil empty devicePriorityLocks, got %#v", state.DevicePriorityLocks)
+	}
+
+	// Best-effort empty slice when store does not implement DevicePriorityLocker.
+	noLockerAuth, err := NewControlAuthority(ControlAuthorityConfig{
+		Store:   storeWithoutPriorityLocker{HTTPAuthority: h.Store},
+		Runtime: h.Store,
+		Twin:    h.Twin,
+		Live:    h.Live,
+		IAM:     h.IAM,
+		Now:     func() time.Time { return clock },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	noLockerState, err := noLockerAuth.GetSiteControlState(context.Background(), op, caSiteID)
+	if err != nil || noLockerState.DevicePriorityLocks == nil || len(noLockerState.DevicePriorityLocks) != 0 {
+		t.Fatalf("expected non-nil empty devicePriorityLocks without locker, got %#v err=%v", noLockerState.DevicePriorityLocks, err)
+	}
+
+	// Acquire out-of-order devices + an already-short lock that later expires.
+	if _, err := h.Store.AcquireDevicePriorityLock(context.Background(), commandmodel.DevicePriorityLock{
+		TenantID: caTenantID, SiteID: caSiteID, DeviceID: caPumpDev,
+		LockedPriority: commandmodel.PriorityProtectionRule, LockedBy: "op-2",
+		LockedUntil: clock.Add(2 * time.Hour), Reason: "pump freeze protection",
+	}); err != nil {
+		t.Fatalf("acquire pump lock: %v", err)
+	}
+	if _, err := h.Store.AcquireDevicePriorityLock(context.Background(), commandmodel.DevicePriorityLock{
+		TenantID: caTenantID, SiteID: caSiteID, DeviceID: caChillerDev,
+		LockedPriority: commandmodel.PriorityManualOverride, LockedBy: "op-1",
+		LockedUntil: clock.Add(15 * time.Minute), Reason: "chiller manual hold",
+	}); err != nil {
+		t.Fatalf("acquire chiller lock: %v", err)
+	}
+
+	activeState, err := h.Authority.GetSiteControlState(context.Background(), op, caSiteID)
+	if err != nil {
+		t.Fatalf("GetSiteControlState active: %v", err)
+	}
+	if len(activeState.DevicePriorityLocks) != 2 {
+		t.Fatalf("expected 2 active locks, got %d", len(activeState.DevicePriorityLocks))
+	}
+	if activeState.DevicePriorityLocks[0].DeviceID != caChillerDev || activeState.DevicePriorityLocks[1].DeviceID != caPumpDev {
+		t.Fatalf("expected deterministic deviceId sort, got %+v", activeState.DevicePriorityLocks)
+	}
+
+	// Advance clock past chiller lock expiry.
+	clock = clock.Add(30 * time.Minute)
+	afterExpiry, err := h.Authority.GetSiteControlState(context.Background(), op, caSiteID)
+	if err != nil {
+		t.Fatalf("GetSiteControlState after expiry: %v", err)
+	}
+	if len(afterExpiry.DevicePriorityLocks) != 1 || afterExpiry.DevicePriorityLocks[0].DeviceID != caPumpDev {
+		t.Fatalf("expected only pump lock after chiller lock expired, got %+v", afterExpiry.DevicePriorityLocks)
+	}
+
+	// Fail closed when priority locker returns a store error.
+	h.Store.PriorityLockErr = errors.New("db unavailable")
+	if _, err := h.Authority.GetSiteControlState(context.Background(), op, caSiteID); err == nil {
+		t.Fatal("expected fail-closed error when PriorityLockErr is set")
+	} else {
+		var ce *ControlError
+		if !errors.As(err, &ce) || ce.HTTPStatus != http.StatusServiceUnavailable {
+			t.Fatalf("expected 503 ControlError, got %v", err)
+		}
+	}
+}
+
+func TestControlAuthorityPutAndDeleteDevicePriorityLock(t *testing.T) {
+	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	h, op := seedPlantHarness(t, now)
+
+	// Invalid UUIDv7 -> 404.
+	if _, err := h.Authority.PutDevicePriorityLock(context.Background(), op, "not-uuid", caChillerDev, DevicePriorityLockInput{
+		LockedPriority: "MANUAL_OVERRIDE", Reason: "hold",
+	}); err == nil {
+		t.Fatal("expected invalid siteId error")
+	}
+	if _, err := h.Authority.PutDevicePriorityLock(context.Background(), op, caSiteID, "not-uuid", DevicePriorityLockInput{
+		LockedPriority: "MANUAL_OVERRIDE", Reason: "hold",
+	}); err == nil {
+		t.Fatal("expected invalid deviceId error")
+	}
+
+	// Device not on site -> 404.
+	unknownDevice := "018f3e00-3000-7000-8000-000000000099"
+	if _, err := h.Authority.PutDevicePriorityLock(context.Background(), op, caSiteID, unknownDevice, DevicePriorityLockInput{
+		LockedPriority: "MANUAL_OVERRIDE", Reason: "hold",
+	}); err == nil {
+		t.Fatal("expected unknown device 404")
+	} else {
+		var ce *ControlError
+		if !errors.As(err, &ce) || ce.HTTPStatus != http.StatusNotFound {
+			t.Fatalf("expected 404, got %v", err)
+		}
+	}
+
+	// Unauthorized action or site -> 403.
+	h.IAM.DenyScheduleManage = true
+	if _, err := h.Authority.PutDevicePriorityLock(context.Background(), op, caSiteID, caChillerDev, DevicePriorityLockInput{
+		LockedPriority: "MANUAL_OVERRIDE", Reason: "hold",
+	}); err == nil {
+		t.Fatal("expected 403 when ActionScheduleManage is denied")
+	} else {
+		var ce *ControlError
+		if !errors.As(err, &ce) || ce.HTTPStatus != http.StatusForbidden {
+			t.Fatalf("expected 403, got %v", err)
+		}
+	}
+	h.IAM.DenyScheduleManage = false
+	h.IAM.AllowedSites = []string{"018f3e00-1000-7000-8000-000000000099"}
+	if _, err := h.Authority.PutDevicePriorityLock(context.Background(), op, caSiteID, caChillerDev, DevicePriorityLockInput{
+		LockedPriority: "MANUAL_OVERRIDE", Reason: "hold",
+	}); err == nil {
+		t.Fatal("expected 403 when site is outside AllowedSiteIDs")
+	}
+	h.IAM.AllowedSites = []string{caSiteID}
+
+	// Invalid lockedPriority -> 400 CONTROL_EXIT_REQUEST_INVALID.
+	for _, badPriority := range []string{"", "AI_OPTIMIZATION", "SCHEDULE", "UNKNOWN"} {
+		_, err := h.Authority.PutDevicePriorityLock(context.Background(), op, caSiteID, caChillerDev, DevicePriorityLockInput{
+			LockedPriority: badPriority, Reason: "valid reason",
+		})
+		var ce *ControlError
+		if !errors.As(err, &ce) || ce.HTTPStatus != http.StatusBadRequest || ce.Code != "CONTROL_EXIT_REQUEST_INVALID" {
+			t.Fatalf("priority %q expected 400 CONTROL_EXIT_REQUEST_INVALID, got %v", badPriority, err)
+		}
+	}
+
+	// Invalid durationMinutes -> 400 CONTROL_EXIT_REQUEST_INVALID.
+	for _, badDur := range []int{0, 4, 1441} {
+		dur := badDur
+		_, err := h.Authority.PutDevicePriorityLock(context.Background(), op, caSiteID, caChillerDev, DevicePriorityLockInput{
+			LockedPriority: "MANUAL_OVERRIDE", DurationMinutes: &dur, Reason: "valid reason",
+		})
+		var ce *ControlError
+		if !errors.As(err, &ce) || ce.HTTPStatus != http.StatusBadRequest || ce.Code != "CONTROL_EXIT_REQUEST_INVALID" {
+			t.Fatalf("duration %d expected 400 CONTROL_EXIT_REQUEST_INVALID, got %v", badDur, err)
+		}
+	}
+
+	// Invalid reason (blank or >1000 runes) -> 400 CONTROL_EXIT_REQUEST_INVALID.
+	for _, badReason := range []string{"", "   ", strings.Repeat("锁", 1001)} {
+		_, err := h.Authority.PutDevicePriorityLock(context.Background(), op, caSiteID, caChillerDev, DevicePriorityLockInput{
+			LockedPriority: "MANUAL_OVERRIDE", Reason: badReason,
+		})
+		var ce *ControlError
+		if !errors.As(err, &ce) || ce.HTTPStatus != http.StatusBadRequest || ce.Code != "CONTROL_EXIT_REQUEST_INVALID" {
+			t.Fatalf("bad reason expected 400 CONTROL_EXIT_REQUEST_INVALID, got %v", err)
+		}
+	}
+
+	// Omitted duration defaults to 120m; exact 1000-rune reason succeeds.
+	maxReason := strings.Repeat("锁", 1000)
+	view, err := h.Authority.PutDevicePriorityLock(context.Background(), op, caSiteID, caChillerDev, DevicePriorityLockInput{
+		LockedPriority: "MANUAL_OVERRIDE", Reason: maxReason,
+	})
+	if err != nil {
+		t.Fatalf("PutDevicePriorityLock default duration: %v", err)
+	}
+	wantUntil := now.Add(120 * time.Minute).UTC().Format(time.RFC3339Nano)
+	if view.DeviceID != caChillerDev || view.LockedPriority != "MANUAL_OVERRIDE" || view.CommandSource != "OPERATOR" || view.LockedUntil != wantUntil {
+		t.Fatalf("unexpected lock view: %+v", view)
+	}
+
+	// Upgrade to SAFETY_INTERLOCK with explicit 5m duration succeeds, then lower priority returns 409 DEVICE_PRIORITY_LOCKED.
+	dur5 := 5
+	interlockView, err := h.Authority.PutDevicePriorityLock(context.Background(), op, caSiteID, caChillerDev, DevicePriorityLockInput{
+		LockedPriority: "SAFETY_INTERLOCK", DurationMinutes: &dur5, Reason: "high condenser pressure",
+	})
+	if err != nil || interlockView.LockedPriority != "SAFETY_INTERLOCK" || interlockView.CommandSource != string(commandmodel.SourceSafetyInterlock) {
+		t.Fatalf("upgrade to SAFETY_INTERLOCK failed: %+v err=%v", interlockView, err)
+	}
+	_, preemptErr := h.Authority.PutDevicePriorityLock(context.Background(), op, caSiteID, caChillerDev, DevicePriorityLockInput{
+		LockedPriority: "MANUAL_OVERRIDE", Reason: "downgrade attempt",
+	})
+	var ce *ControlError
+	if !errors.As(preemptErr, &ce) || ce.HTTPStatus != http.StatusConflict || ce.Code != "DEVICE_PRIORITY_LOCKED" {
+		t.Fatalf("expected 409 DEVICE_PRIORITY_LOCKED on downgrade, got %v", preemptErr)
+	}
+
+	// Delete requires non-empty reason <= 1000 runes, and releases idempotently.
+	if _, err := h.Authority.DeleteDevicePriorityLock(context.Background(), op, caSiteID, caChillerDev, "   "); err == nil {
+		t.Fatal("expected 400 on blank delete reason")
+	}
+	rel1, err := h.Authority.DeleteDevicePriorityLock(context.Background(), op, caSiteID, caChillerDev, "interlock cleared")
+	if err != nil || !rel1.Released || rel1.DeviceID != caChillerDev {
+		t.Fatalf("first release got %+v err=%v", rel1, err)
+	}
+	rel2, err := h.Authority.DeleteDevicePriorityLock(context.Background(), op, caSiteID, caChillerDev, "repeat clear")
+	if err != nil || rel2.Released || rel2.DeviceID != caChillerDev {
+		t.Fatalf("second idempotent release got %+v err=%v", rel2, err)
+	}
+}
+
+func TestOperatorHTTPDevicePriorityLockRoutesAndObservability(t *testing.T) {
+	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	h, _ := seedPlantHarness(t, now)
+
+	signCtx := func() string {
+		claims := identitycontext.DelegationClaims{
+			Issuer: "spiffe://hvac.local/platform-gateway", Subject: "op-1", SubjectIssuer: "https://issuer.test",
+			ExecutingService: "spiffe://hvac.local/platform-gateway", Audience: "command-service",
+			TenantID: caTenantID, Actions: []string{OperatorControlContextAction}, Scopes: []string{"tenant:" + caTenantID, "session:sess-1"},
+			PolicyRevision: "policy-v1", SessionID: "sess-1", IssuedAt: now.Unix(), ExpiresAt: now.Add(30 * time.Second).Unix(),
+			TokenID: "ctx-lock-1",
+		}
+		signed, err := identitycontext.SignDelegation(h.GatewaySigner, claims)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return signed
+	}
+
+	lockPath := InternalOperatorPrefix + "/sites/" + caSiteID + "/devices/" + caChillerDev + "/priority-lock"
+	statePath := InternalOperatorPrefix + "/sites/" + caSiteID + "/control-state"
+
+	// ObservabilityRoute maps lock path to bounded "control.lock" label.
+	if got := ObservabilityRoute(httptest.NewRequest(http.MethodPut, lockPath, nil)); got != "control.lock" {
+		t.Fatalf("ObservabilityRoute PUT = %q want control.lock", got)
+	}
+	if got := ObservabilityRoute(httptest.NewRequest(http.MethodDelete, lockPath, nil)); got != "control.lock" {
+		t.Fatalf("ObservabilityRoute DELETE = %q want control.lock", got)
+	}
+
+	// Unsupported GET -> 405 with Allow: PUT, DELETE.
+	getLockReq := httptest.NewRequest(http.MethodGet, lockPath, nil)
+	getLockReq.Header.Set("X-Command-Control-Context", signCtx())
+	getLockRec := httptest.NewRecorder()
+	h.OperatorHandler.ServeHTTP(getLockRec, getLockReq)
+	if getLockRec.Code != http.StatusMethodNotAllowed || getLockRec.Header().Get("Allow") != "PUT, DELETE" {
+		t.Fatalf("unexpected GET priority-lock status=%d allow=%q", getLockRec.Code, getLockRec.Header().Get("Allow"))
+	}
+
+	// Empty control-state returns "devicePriorityLocks": [].
+	emptyStateReq := httptest.NewRequest(http.MethodGet, statePath, nil)
+	emptyStateReq.Header.Set("X-Command-Control-Context", signCtx())
+	emptyStateRec := httptest.NewRecorder()
+	h.OperatorHandler.ServeHTTP(emptyStateRec, emptyStateReq)
+	if emptyStateRec.Code != http.StatusOK || !strings.Contains(emptyStateRec.Body.String(), `"devicePriorityLocks":[]`) {
+		t.Fatalf("expected non-null empty devicePriorityLocks JSON, status=%d body=%s", emptyStateRec.Code, emptyStateRec.Body.String())
+	}
+
+	// Unknown JSON field rejected with 400.
+	badPutReq := httptest.NewRequest(http.MethodPut, lockPath, bytes.NewBufferString(`{"lockedPriority":"MANUAL_OVERRIDE","reason":"ok","extra":1}`))
+	badPutReq.Header.Set("X-Command-Control-Context", signCtx())
+	badPutRec := httptest.NewRecorder()
+	h.OperatorHandler.ServeHTTP(badPutRec, badPutReq)
+	if badPutRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 on unknown JSON field, got %d body=%s", badPutRec.Code, badPutRec.Body.String())
+	}
+
+	// Valid PUT installs lock and GET control-state surfaces it.
+	putReq := httptest.NewRequest(http.MethodPut, lockPath, bytes.NewBufferString(`{"lockedPriority":"PROTECTION_RULE","durationMinutes":60,"reason":"coil freeze guard"}`))
+	putReq.Header.Set("X-Command-Control-Context", signCtx())
+	putRec := httptest.NewRecorder()
+	h.OperatorHandler.ServeHTTP(putRec, putReq)
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("PUT lock status=%d body=%s", putRec.Code, putRec.Body.String())
+	}
+
+	stateReq := httptest.NewRequest(http.MethodGet, statePath, nil)
+	stateReq.Header.Set("X-Command-Control-Context", signCtx())
+	stateRec := httptest.NewRecorder()
+	h.OperatorHandler.ServeHTTP(stateRec, stateReq)
+	var state SiteControlStateView
+	if stateRec.Code != http.StatusOK || json.NewDecoder(stateRec.Body).Decode(&state) != nil {
+		t.Fatalf("GET state failed status=%d", stateRec.Code)
+	}
+	if len(state.DevicePriorityLocks) != 1 || state.DevicePriorityLocks[0].LockedPriority != "PROTECTION_RULE" {
+		t.Fatalf("expected 1 PROTECTION_RULE lock in control-state, got %+v", state.DevicePriorityLocks)
+	}
+
+	// DELETE via JSON body then idempotently via ?reason= query fallback.
+	delReq := httptest.NewRequest(http.MethodDelete, lockPath, bytes.NewBufferString(`{"reason":"coil recovered"}`))
+	delReq.Header.Set("X-Command-Control-Context", signCtx())
+	delRec := httptest.NewRecorder()
+	h.OperatorHandler.ServeHTTP(delRec, delReq)
+	var rel1 DevicePriorityLockReleaseResponse
+	if delRec.Code != http.StatusOK || json.NewDecoder(delRec.Body).Decode(&rel1) != nil || !rel1.Released {
+		t.Fatalf("DELETE JSON failed status=%d resp=%+v", delRec.Code, rel1)
+	}
+
+	delReq2 := httptest.NewRequest(http.MethodDelete, lockPath+"?reason=confirm+cleared", nil)
+	delReq2.Header.Set("X-Command-Control-Context", signCtx())
+	delRec2 := httptest.NewRecorder()
+	h.OperatorHandler.ServeHTTP(delRec2, delReq2)
+	var rel2 DevicePriorityLockReleaseResponse
+	if delRec2.Code != http.StatusOK || json.NewDecoder(delRec2.Body).Decode(&rel2) != nil || rel2.Released {
+		t.Fatalf("DELETE query fallback failed status=%d resp=%+v", delRec2.Code, rel2)
 	}
 }

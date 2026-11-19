@@ -1073,6 +1073,63 @@ func (store *PostgresStore) GetDevicePriorityLock(ctx context.Context, tenantID,
 	return lock, nil
 }
 
+// ListDevicePriorityLocks returns active device priority locks for (tenantID, siteID) ordered by device_id.
+func (store *PostgresStore) ListDevicePriorityLocks(ctx context.Context, tenantID, siteID string) ([]commandmodel.DevicePriorityLock, error) {
+	if store == nil || store.pool == nil {
+		return nil, ErrCommandStoreClosed
+	}
+	tenantID = strings.TrimSpace(tenantID)
+	siteID = strings.TrimSpace(siteID)
+	if tenantID == "" || siteID == "" {
+		return nil, ErrInvalidRequest
+	}
+	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return nil, fmt.Errorf("begin list priority locks transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := activateTenant(ctx, tx, tenantID); err != nil {
+		return nil, err
+	}
+	now := store.now().UTC()
+	rows, err := tx.Query(ctx, `
+SELECT tenant_id::text, site_id::text, device_id::text, locked_priority, command_source,
+       locked_by, locked_until, reason, created_at, updated_at
+FROM command_runtime.device_priority_locks
+WHERE tenant_id = $1::uuid
+  AND site_id = $2::uuid
+  AND locked_until > $3
+ORDER BY device_id ASC
+`, tenantID, siteID, now)
+	if err != nil {
+		return nil, fmt.Errorf("list device priority locks: %w", err)
+	}
+	locks := make([]commandmodel.DevicePriorityLock, 0)
+	for rows.Next() {
+		var lock commandmodel.DevicePriorityLock
+		var priority, source string
+		if scanErr := rows.Scan(
+			&lock.TenantID, &lock.SiteID, &lock.DeviceID, &priority, &source,
+			&lock.LockedBy, &lock.LockedUntil, &lock.Reason, &lock.CreatedAt, &lock.UpdatedAt,
+		); scanErr != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scan device priority lock: %w", scanErr)
+		}
+		lock.LockedPriority = commandmodel.PriorityTier(priority)
+		lock.CommandSource = commandmodel.CommandSource(source)
+		locks = append(locks, lock)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("iterate device priority locks: %w", err)
+	}
+	rows.Close()
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit list device priority locks: %w", err)
+	}
+	return locks, nil
+}
+
 func loadActiveDevicePriorityLock(ctx context.Context, tx pgx.Tx, tenantID, deviceID string, now time.Time, forUpdate bool) (*commandmodel.DevicePriorityLock, error) {
 	lockClause := ""
 	if forUpdate {

@@ -323,6 +323,7 @@ func resetCommandFixture(t *testing.T, admin *pgxpool.Pool) {
 	if _, err := admin.Exec(ctx, `
 TRUNCATE TABLE
   command_runtime.connector_evidence,
+  command_runtime.device_priority_locks,
   command_runtime.command_grant_uses,
   command_runtime.command_audit_intents,
   command_runtime.control_alarm_outbox,
@@ -414,5 +415,77 @@ func commandPostgresTestURLs(t *testing.T) (string, string) {
 func fixedPostgresClock() func() time.Time {
 	return func() time.Time {
 		return time.Date(2026, 7, 26, 11, 0, 0, 0, time.UTC)
+	}
+}
+
+func TestPostgresDevicePriorityLocksListAndPreemption(t *testing.T) {
+	runtimeURL, adminURL := commandPostgresTestURLs(t)
+	ctx := t.Context()
+	admin, err := pgxpool.New(ctx, adminURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	resetCommandFixture(t, admin)
+
+	opened, err := OpenPostgresStore(ctx, runtimeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Close()
+
+	clock := time.Date(2026, 7, 26, 11, 0, 0, 0, time.UTC)
+	store := NewPostgresStore(opened.pool, func() time.Time { return clock }, nil)
+
+	devA := commandDeviceA
+	devB := "018f3e00-3000-7000-8000-000000000002"
+	devC := "018f3e00-3000-7000-8000-000000000003"
+
+	if _, err := store.AcquireDevicePriorityLock(ctx, commandmodel.DevicePriorityLock{
+		TenantID: commandTenantA, SiteID: commandSiteA, DeviceID: devB,
+		LockedPriority: commandmodel.PrioritySafetyInterlock, LockedBy: "op-1",
+		LockedUntil: clock.Add(time.Hour), Reason: "interlock b",
+	}); err != nil {
+		t.Fatalf("acquire devB: %v", err)
+	}
+	if _, err := store.AcquireDevicePriorityLock(ctx, commandmodel.DevicePriorityLock{
+		TenantID: commandTenantA, SiteID: commandSiteA, DeviceID: devA,
+		LockedPriority: commandmodel.PriorityManualOverride, LockedBy: "op-1",
+		LockedUntil: clock.Add(10 * time.Minute), Reason: "manual a",
+	}); err != nil {
+		t.Fatalf("acquire devA: %v", err)
+	}
+	if _, err := store.AcquireDevicePriorityLock(ctx, commandmodel.DevicePriorityLock{
+		TenantID: commandTenantA, SiteID: commandSiteA, DeviceID: devC,
+		LockedPriority: commandmodel.PriorityManualOverride, LockedBy: "op-1",
+		LockedUntil: clock.Add(time.Minute), Reason: "expiring c",
+	}); err != nil {
+		t.Fatalf("acquire devC: %v", err)
+	}
+
+	// Lower priority cannot preempt SAFETY_INTERLOCK on devB.
+	if _, err := store.AcquireDevicePriorityLock(ctx, commandmodel.DevicePriorityLock{
+		TenantID: commandTenantA, SiteID: commandSiteA, DeviceID: devB,
+		LockedPriority: commandmodel.PriorityManualOverride, LockedBy: "op-2",
+		LockedUntil: clock.Add(2 * time.Hour), Reason: "downgrade attempt",
+	}); !errors.Is(err, ErrDevicePriorityLocked) {
+		t.Fatalf("expected ErrDevicePriorityLocked on downgrade, got %v", err)
+	}
+
+	clock = clock.Add(2 * time.Minute)
+	locks, err := store.ListDevicePriorityLocks(ctx, commandTenantA, commandSiteA)
+	if err != nil {
+		t.Fatalf("ListDevicePriorityLocks: %v", err)
+	}
+	if len(locks) != 2 || locks[0].DeviceID != devA || locks[1].DeviceID != devB {
+		t.Fatalf("expected active locks [devA, devB], got %+v", locks)
+	}
+
+	if err := store.ReleaseDevicePriorityLock(ctx, commandTenantA, devB); err != nil {
+		t.Fatalf("ReleaseDevicePriorityLock: %v", err)
+	}
+	locksAfter, err := store.ListDevicePriorityLocks(ctx, commandTenantA, commandSiteA)
+	if err != nil || len(locksAfter) != 1 || locksAfter[0].DeviceID != devA {
+		t.Fatalf("expected [devA] after releasing devB, got %+v err=%v", locksAfter, err)
 	}
 }

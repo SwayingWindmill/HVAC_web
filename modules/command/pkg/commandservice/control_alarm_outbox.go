@@ -34,10 +34,12 @@ const (
 	defaultControlAlarmMaxBackoff      = 5 * time.Minute
 	maxControlAlarmBatchesPerTenant    = 16
 	maxControlAlarmErrorCodeLength     = 128
+	MaximumControlAlarmDeadLetters     = 50
 )
 
 var (
 	ErrControlAlarmLeaseLost = errors.New("control alarm outbox lease was lost or already finalized")
+	ErrControlAlarmNotFound  = errors.New("control alarm outbox entry not found")
 	ErrCommandStoreClosed    = errors.New("command store is closed")
 )
 
@@ -553,6 +555,227 @@ func (store *PostgresStore) runRetryableTenantTx(
 	return nil
 }
 
+// ListControlAlarmDeadLetters returns sanitized dead-letter control alarm entries for (tenantID, siteID), newest first.
+func (store *PostgresStore) ListControlAlarmDeadLetters(
+	ctx context.Context,
+	tenantID string,
+	siteID string,
+	limit int,
+) ([]ControlAlarmDeadLetterView, error) {
+	if store == nil || store.pool == nil {
+		return nil, ErrCommandStoreClosed
+	}
+	tenantID = strings.TrimSpace(tenantID)
+	siteID = strings.TrimSpace(siteID)
+	if !commandmodel.IsUUIDv7(tenantID) || siteID == "" {
+		return nil, ErrInvalidRequest
+	}
+	if limit <= 0 || limit > MaximumControlAlarmDeadLetters {
+		limit = MaximumControlAlarmDeadLetters
+	}
+	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return nil, fmt.Errorf("begin list control alarm dead letters transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := activateTenant(ctx, tx, tenantID); err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(ctx, `
+SELECT outbox_id::text, command_id::text, device_id::text, event_kind,
+       reason_code, attempts, COALESCE(last_error_code, ''), created_at, updated_at
+FROM command_runtime.control_alarm_outbox
+WHERE tenant_id = $1::uuid
+  AND site_id = $2::uuid
+  AND status = 'DEAD_LETTER'
+ORDER BY updated_at DESC, outbox_id DESC
+LIMIT $3
+`, tenantID, siteID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list control alarm dead letters: %w", err)
+	}
+	views := make([]ControlAlarmDeadLetterView, 0)
+	for rows.Next() {
+		var view ControlAlarmDeadLetterView
+		var rawErrorCode string
+		var createdAt, updatedAt time.Time
+		if scanErr := rows.Scan(
+			&view.OutboxID,
+			&view.CommandID,
+			&view.DeviceID,
+			&view.EventKind,
+			&view.ReasonCode,
+			&view.Attempts,
+			&rawErrorCode,
+			&createdAt,
+			&updatedAt,
+		); scanErr != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scan control alarm dead letter: %w", scanErr)
+		}
+		if strings.TrimSpace(rawErrorCode) != "" {
+			view.LastErrorCode = sanitizeControlAlarmErrorCode(rawErrorCode)
+		}
+		view.CreatedAt = createdAt.UTC().Format(time.RFC3339Nano)
+		view.UpdatedAt = updatedAt.UTC().Format(time.RFC3339Nano)
+		views = append(views, view)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("iterate control alarm dead letters: %w", err)
+	}
+	rows.Close()
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit list control alarm dead letters: %w", err)
+	}
+	return views, nil
+}
+
+// ReplayControlAlarmDeadLetter atomically resets a dead-letter control alarm entry back to PENDING and wakes the relay.
+func (store *PostgresStore) ReplayControlAlarmDeadLetter(ctx context.Context, tenantID, siteID, outboxID string) (bool, error) {
+	if store == nil || store.pool == nil {
+		return false, ErrCommandStoreClosed
+	}
+	tenantID = strings.TrimSpace(tenantID)
+	siteID = strings.TrimSpace(siteID)
+	outboxID = strings.TrimSpace(outboxID)
+	if !commandmodel.IsUUIDv7(tenantID) || siteID == "" || outboxID == "" {
+		return false, ErrInvalidRequest
+	}
+	replayed := false
+	err := store.runRetryableTenantTx(ctx, tenantID, pgx.ReadCommitted, func(tx pgx.Tx) error {
+		replayed = false
+		now := store.now().UTC()
+		tag, execErr := tx.Exec(ctx, `
+UPDATE command_runtime.control_alarm_outbox
+SET status = 'PENDING',
+    attempts = 0,
+    available_at = $4,
+    lease_owner = NULL,
+    lease_until = NULL,
+    last_error_code = '',
+    updated_at = $4
+WHERE tenant_id = $1::uuid
+  AND site_id = $2::uuid
+  AND outbox_id = $3::uuid
+  AND status = 'DEAD_LETTER'
+`, tenantID, siteID, outboxID, now)
+		if execErr != nil {
+			return fmt.Errorf("replay control alarm dead letter: %w", execErr)
+		}
+		if tag.RowsAffected() > 0 {
+			replayed = true
+			return nil
+		}
+		var existingStatus string
+		checkErr := tx.QueryRow(ctx, `
+SELECT status
+FROM command_runtime.control_alarm_outbox
+WHERE tenant_id = $1::uuid
+  AND site_id = $2::uuid
+  AND outbox_id = $3::uuid
+`, tenantID, siteID, outboxID).Scan(&existingStatus)
+		if errors.Is(checkErr, pgx.ErrNoRows) {
+			return ErrControlAlarmNotFound
+		}
+		if checkErr != nil {
+			return fmt.Errorf("inspect control alarm dead letter: %w", checkErr)
+		}
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	if replayed {
+		store.notifyControlAlarmWakeup()
+	}
+	return replayed, nil
+}
+
+// CountControlAlarmOutboxStates returns cross-tenant pending and dead-letter counts without exposing tenant IDs.
+func (store *PostgresStore) CountControlAlarmOutboxStates(ctx context.Context) (ControlAlarmOutboxStateCounts, error) {
+	if store == nil || store.pool == nil {
+		return ControlAlarmOutboxStateCounts{}, ErrCommandStoreClosed
+	}
+	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return ControlAlarmOutboxStateCounts{}, fmt.Errorf("begin count control alarm outbox states transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SET LOCAL ROLE s3_command_runtime`); err != nil {
+		return ControlAlarmOutboxStateCounts{}, fmt.Errorf("activate command runtime database identity: %w", err)
+	}
+	var counts ControlAlarmOutboxStateCounts
+	if err := tx.QueryRow(ctx, `
+SELECT pending_count, dead_letter_count
+FROM command_runtime.control_alarm_outbox_state_counts()
+`).Scan(&counts.Pending, &counts.DeadLetter); err != nil {
+		return ControlAlarmOutboxStateCounts{}, fmt.Errorf("count control alarm outbox states: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ControlAlarmOutboxStateCounts{}, fmt.Errorf("commit count control alarm outbox states: %w", err)
+	}
+	return counts, nil
+}
+
+// ControlAlarmErrorReasonFamily maps an alarm delivery error code onto the bounded reason_family metric catalog.
+func ControlAlarmErrorReasonFamily(errorCode string) string {
+	normalized := strings.ToUpper(strings.TrimSpace(errorCode))
+	switch normalized {
+	case "CONTROL_ALARM_HTTP_FAILED", "CONTROL_ALARM_DELIVERY_TIMEOUT":
+		return "transport"
+	case "CONTROL_ALARM_HTTP_REJECTED", "CONTROL_ALARM_PUBLISH_FAILED", "CONTROL_ALARM_TARGET_UNAVAILABLE",
+		"CONTROL_ALARM_DELIVERY_FAILED", "CONTROL_ALARM_SENDER_PANIC", "CONTROL_ALARM_LEASE_EXHAUSTED":
+		return "dependency"
+	case "CONTROL_ALARM_PAYLOAD_INVALID", "CONTROL_ALARM_REQUEST_INVALID":
+		return "scope"
+	case "CONTROL_ALARM_DELIVERY_CANCELED":
+		return "unknown"
+	}
+	lower := strings.ToLower(normalized)
+	switch {
+	case strings.Contains(lower, "rate_limit"), strings.Contains(lower, "ratelimit"), strings.Contains(lower, "429"), strings.Contains(lower, "throttle"), strings.Contains(lower, "too_many"):
+		return "rate_limited"
+	case strings.Contains(lower, "unauthorized"), strings.Contains(lower, "forbidden"), strings.Contains(lower, "auth"), strings.Contains(lower, "401"), strings.Contains(lower, "403"), strings.Contains(lower, "denied"), strings.Contains(lower, "permission"):
+		return "authorization"
+	case strings.Contains(lower, "capacity"), strings.Contains(lower, "quota"), strings.Contains(lower, "full"), strings.Contains(lower, "overflow"), strings.Contains(lower, "limit"):
+		return "capacity"
+	case strings.Contains(lower, "scope"), strings.Contains(lower, "invalid"), strings.Contains(lower, "malformed"), strings.Contains(lower, "payload"), strings.Contains(lower, "schema"), strings.Contains(lower, "validation"):
+		return "scope"
+	case strings.Contains(lower, "timeout"), strings.Contains(lower, "transport"), strings.Contains(lower, "network"), strings.Contains(lower, "dial"), strings.Contains(lower, "tls"), strings.Contains(lower, "dns"), strings.Contains(lower, "eof"), strings.Contains(lower, "reset"), strings.Contains(lower, "refused"):
+		return "transport"
+	case strings.Contains(lower, "reject"), strings.Contains(lower, "unavailable"), strings.Contains(lower, "dependency"), strings.Contains(lower, "upstream"), strings.Contains(lower, "downstream"), strings.Contains(lower, "502"), strings.Contains(lower, "503"), strings.Contains(lower, "504"), strings.Contains(lower, "panic"), strings.Contains(lower, "lease"), strings.Contains(lower, "publish"):
+		return "dependency"
+	default:
+		return "unknown"
+	}
+}
+
+// RecordControlAlarmOutboxDepthMetrics updates the bounded-label gauge for pending and dead-letter outbox depth.
+func RecordControlAlarmOutboxDepthMetrics(metrics *observability.Registry, counts ControlAlarmOutboxStateCounts) {
+	if metrics == nil {
+		return
+	}
+	const help = "Control alarm outbox row depth by state."
+	_ = metrics.SetGauge(
+		"hvac_command_control_alarm_outbox_depth",
+		help,
+		map[string]string{"state": "pending"},
+		float64(counts.Pending),
+	)
+	_ = metrics.SetGauge(
+		"hvac_command_control_alarm_outbox_depth",
+		help,
+		map[string]string{"state": "dead_letter"},
+		float64(counts.DeadLetter),
+	)
+}
+
+type ControlAlarmDeadLetterStore interface {
+	ListControlAlarmDeadLetters(ctx context.Context, tenantID, siteID string, limit int) ([]ControlAlarmDeadLetterView, error)
+	ReplayControlAlarmDeadLetter(ctx context.Context, tenantID, siteID, outboxID string) (bool, error)
+}
+
 // UniqueControlAlarmLeaseOwner returns a collision-resistant lease owner identifier for multi-replica relays.
 func UniqueControlAlarmLeaseOwner(prefix string) string {
 	trimmed := strings.TrimSpace(prefix)
@@ -848,6 +1071,14 @@ func (r *ControlAlarmRelay) recordFailure(ctx context.Context, rec ControlAlarmO
 			)
 		}
 		return
+	}
+	if deadLetter && r.metrics != nil {
+		_ = r.metrics.AddCounter(
+			"hvac_command_control_alarm_dead_letter_total",
+			"Control alarm outbox deliveries moved to dead letter by reason family.",
+			map[string]string{"reason_family": ControlAlarmErrorReasonFamily(errCode)},
+			1,
+		)
 	}
 	if r.logger != nil {
 		if deadLetter {

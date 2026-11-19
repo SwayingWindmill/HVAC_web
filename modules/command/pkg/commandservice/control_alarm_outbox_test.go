@@ -1,10 +1,13 @@
 package commandservice
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync"
@@ -15,6 +18,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
 type recordingControlAlarmExec struct {
@@ -620,5 +625,271 @@ func TestPostgresControlAlarmOutboxPersistenceLeaseAndDeadLetter(t *testing.T) {
 	}
 	if status1 != "DELIVERED" || status2 != "DEAD_LETTER" || errCode2 != "CONTROL_ALARM_HTTP_REJECTED" {
 		t.Fatalf("unexpected final states: status1=%s status2=%s errCode2=%s", status1, status2, errCode2)
+	}
+
+	// Verify dead-letter list, cross-tenant state count, and atomic replay with wakeup.
+	deadLetters, err := store.ListControlAlarmDeadLetters(ctx, commandTenantA, commandSiteA, 10)
+	if err != nil {
+		t.Fatalf("ListControlAlarmDeadLetters: %v", err)
+	}
+	if len(deadLetters) != 1 || deadLetters[0].OutboxID != r2.OutboxID || deadLetters[0].LastErrorCode != "CONTROL_ALARM_HTTP_REJECTED" {
+		t.Fatalf("unexpected Postgres dead letters: %+v", deadLetters)
+	}
+	countsBefore, err := store.CountControlAlarmOutboxStates(ctx)
+	if err != nil || countsBefore.Pending != 0 || countsBefore.DeadLetter != 1 {
+		t.Fatalf("unexpected outbox counts before replay: %+v err=%v", countsBefore, err)
+	}
+
+	wakeupsBefore := wakeups
+	replayed, err := store.ReplayControlAlarmDeadLetter(ctx, commandTenantA, commandSiteA, r2.OutboxID)
+	if err != nil || !replayed || wakeups != wakeupsBefore+1 {
+		t.Fatalf("first Postgres replay replayed=%v wakeups=%d/%d err=%v", replayed, wakeups, wakeupsBefore+1, err)
+	}
+	replayedAgain, err := store.ReplayControlAlarmDeadLetter(ctx, commandTenantA, commandSiteA, r2.OutboxID)
+	if err != nil || replayedAgain || wakeups != wakeupsBefore+1 {
+		t.Fatalf("second idempotent Postgres replay replayed=%v wakeups=%d err=%v", replayedAgain, wakeups, err)
+	}
+	if _, err := store.ReplayControlAlarmDeadLetter(ctx, commandTenantA, commandSiteA, "019a9000-ffff-7000-8000-000000000099"); !errors.Is(err, ErrControlAlarmNotFound) {
+		t.Fatalf("expected ErrControlAlarmNotFound for missing outboxId, got %v", err)
+	}
+	countsAfter, err := store.CountControlAlarmOutboxStates(ctx)
+	if err != nil || countsAfter.Pending != 1 || countsAfter.DeadLetter != 0 {
+		t.Fatalf("unexpected outbox counts after replay: %+v err=%v", countsAfter, err)
+	}
+}
+
+func TestControlAlarmRelayDeadLetterMetricsAndReasonFamily(t *testing.T) {
+	allowedFamilies := map[string]bool{
+		"transport": true, "dependency": true, "authorization": true,
+		"scope": true, "capacity": true, "rate_limited": true, "unknown": true,
+	}
+	cases := []struct {
+		code string
+		want string
+	}{
+		{"CONTROL_ALARM_HTTP_FAILED", "transport"},
+		{"CONTROL_ALARM_DELIVERY_TIMEOUT", "transport"},
+		{"CONTROL_ALARM_HTTP_REJECTED", "dependency"},
+		{"CONTROL_ALARM_SENDER_PANIC", "dependency"},
+		{"CONTROL_ALARM_PAYLOAD_INVALID", "scope"},
+		{"UPSTREAM_UNAUTHORIZED_403", "authorization"},
+		{"HTTP_429_RATE_LIMITED", "rate_limited"},
+		{"QUEUE_CAPACITY_EXCEEDED", "capacity"},
+		{"CONTROL_ALARM_DELIVERY_CANCELED", "unknown"},
+		{"UNCLASSIFIED_FOO", "unknown"},
+	}
+	for _, tc := range cases {
+		got := ControlAlarmErrorReasonFamily(tc.code)
+		if !allowedFamilies[got] || got != tc.want {
+			t.Fatalf("ControlAlarmErrorReasonFamily(%q) = %q, want %q", tc.code, got, tc.want)
+		}
+	}
+
+	now := time.Date(2026, 11, 17, 13, 0, 0, 0, time.UTC)
+	store := &memoryControlAlarmOutboxStore{
+		now: func() time.Time { return now },
+		rows: []*fakeControlAlarmRow{
+			{
+				rec: ControlAlarmOutboxRecord{
+					OutboxID: "019a9000-cccc-7000-8000-000000000001", TenantID: commandTenantA,
+					CommandID: "019a9000-bbbb-7000-8000-000000000011", SiteID: commandSiteA, DeviceID: commandDeviceA,
+					EventKind: "OUTCOME_UNKNOWN", Status: ControlAlarmStatusPending, AvailableAt: now,
+					Event: ControlFailureEvent{Kind: "OUTCOME_UNKNOWN", TenantID: commandTenantA, SiteID: commandSiteA, DeviceID: commandDeviceA, CommandID: "019a9000-bbbb-7000-8000-000000000011"},
+				},
+			},
+			{
+				rec: ControlAlarmOutboxRecord{
+					OutboxID: "019a9000-cccc-7000-8000-000000000002", TenantID: commandTenantA,
+					CommandID: "019a9000-bbbb-7000-8000-000000000012", SiteID: commandSiteA, DeviceID: commandDeviceA,
+					EventKind: "EMERGENCY_DO_RELEASE", Status: ControlAlarmStatusPending, AvailableAt: now,
+					Event: ControlFailureEvent{Kind: "EMERGENCY_DO_RELEASE", TenantID: commandTenantA, SiteID: commandSiteA, DeviceID: commandDeviceA, CommandID: "019a9000-bbbb-7000-8000-000000000012"},
+				},
+			},
+		},
+	}
+	metrics := observability.NewRegistry()
+	relay, err := NewControlAlarmRelay(ControlAlarmRelayConfig{
+		Store:       store,
+		Metrics:     metrics,
+		LeaseOwner:  "metrics-relay",
+		MaxAttempts: 1,
+		BaseBackoff: time.Second,
+		MaxBackoff:  time.Second,
+		Now:         func() time.Time { return now },
+		Sender: func(_ context.Context, evt ControlFailureEvent) error {
+			if evt.Kind == "OUTCOME_UNKNOWN" {
+				return &ControlAlarmDeliveryError{Code: "CONTROL_ALARM_HTTP_FAILED"}
+			}
+			return &ControlAlarmDeliveryError{Code: "CONTROL_ALARM_HTTP_REJECTED"}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := relay.ProcessOnce(t.Context()); err != nil {
+		t.Fatalf("ProcessOnce failed: %v", err)
+	}
+
+	scrapeRec := httptest.NewRecorder()
+	metrics.Handler().ServeHTTP(scrapeRec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := scrapeRec.Body.String()
+	if !strings.Contains(body, `hvac_command_control_alarm_dead_letter_total{reason_family="transport"} 1`) {
+		t.Fatalf("missing transport dead-letter counter in metrics:\n%s", body)
+	}
+	if !strings.Contains(body, `hvac_command_control_alarm_dead_letter_total{reason_family="dependency"} 1`) {
+		t.Fatalf("missing dependency dead-letter counter in metrics:\n%s", body)
+	}
+}
+
+func TestControlAuthorityAndHTTPControlAlarmDeadLetters(t *testing.T) {
+	now := time.Date(2026, 11, 17, 14, 0, 0, 0, time.UTC)
+	h, _ := seedPlantHarness(t, now)
+
+	otherSite := "018f3e00-1000-7000-8000-000000000099"
+	dlOld := "019a9000-dddd-7000-8000-000000000001"
+	dlNew := "019a9000-dddd-7000-8000-000000000002"
+	dlMid := "019a9000-dddd-7000-8000-000000000003"
+	pendingID := "019a9000-dddd-7000-8000-000000000004"
+	otherSiteID := "019a9000-dddd-7000-8000-000000000005"
+
+	h.Store.SeedControlAlarmOutbox(ControlAlarmOutboxRecord{
+		OutboxID: dlOld, TenantID: caTenantID, SiteID: caSiteID, DeviceID: caChillerDev,
+		CommandID: "019a9000-eeee-7000-8000-000000000001", EventKind: "OUTCOME_UNKNOWN",
+		ReasonCode: "LEASE_EXPIRED", Status: ControlAlarmStatusDeadLetter, Attempts: 10,
+		LastErrorCode: "CONTROL_ALARM_HTTP_FAILED\nsecret", CreatedAt: now.Add(-3 * time.Minute), UpdatedAt: now.Add(-3 * time.Minute),
+		Event: ControlFailureEvent{Detail: "Bearer secret-token-should-never-leak"},
+	})
+	h.Store.SeedControlAlarmOutbox(ControlAlarmOutboxRecord{
+		OutboxID: dlMid, TenantID: caTenantID, SiteID: caSiteID, DeviceID: caChillerDev,
+		CommandID: "019a9000-eeee-7000-8000-000000000002", EventKind: "PRE_SEND_REJECTED",
+		ReasonCode: "INTERLOCK_FAILED", Status: ControlAlarmStatusDeadLetter, Attempts: 10,
+		LastErrorCode: "CONTROL_ALARM_HTTP_REJECTED", CreatedAt: now.Add(-2 * time.Minute), UpdatedAt: now.Add(-2 * time.Minute),
+	})
+	h.Store.SeedControlAlarmOutbox(ControlAlarmOutboxRecord{
+		OutboxID: dlNew, TenantID: caTenantID, SiteID: caSiteID, DeviceID: caChillerDev,
+		CommandID: "019a9000-eeee-7000-8000-000000000003", EventKind: "EMERGENCY_DO_RELEASE",
+		ReasonCode: "EMERGENCY_DO_RELEASE", Status: ControlAlarmStatusDeadLetter, Attempts: 10,
+		LastErrorCode: "CONTROL_ALARM_DELIVERY_TIMEOUT", CreatedAt: now.Add(-time.Minute), UpdatedAt: now.Add(-time.Minute),
+	})
+	h.Store.SeedControlAlarmOutbox(ControlAlarmOutboxRecord{
+		OutboxID: pendingID, TenantID: caTenantID, SiteID: caSiteID, DeviceID: caChillerDev,
+		CommandID: "019a9000-eeee-7000-8000-000000000004", EventKind: "OUTCOME_UNKNOWN",
+		Status: ControlAlarmStatusPending, CreatedAt: now, UpdatedAt: now,
+	})
+	h.Store.SeedControlAlarmOutbox(ControlAlarmOutboxRecord{
+		OutboxID: otherSiteID, TenantID: caTenantID, SiteID: otherSite, DeviceID: caChillerDev,
+		CommandID: "019a9000-eeee-7000-8000-000000000005", EventKind: "OUTCOME_UNKNOWN",
+		Status: ControlAlarmStatusDeadLetter, CreatedAt: now, UpdatedAt: now,
+	})
+
+	signCtx := func() string {
+		claims := identitycontext.DelegationClaims{
+			Issuer: "spiffe://hvac.local/platform-gateway", Subject: "op-1", SubjectIssuer: "https://issuer.test",
+			ExecutingService: "spiffe://hvac.local/platform-gateway", Audience: "command-service",
+			TenantID: caTenantID, Actions: []string{OperatorControlContextAction}, Scopes: []string{"tenant:" + caTenantID, "session:sess-1"},
+			PolicyRevision: "policy-v1", SessionID: "sess-1", IssuedAt: now.Unix(), ExpiresAt: now.Add(30 * time.Second).Unix(),
+			TokenID: "ctx-dlq-1",
+		}
+		signed, err := identitycontext.SignDelegation(h.GatewaySigner, claims)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return signed
+	}
+
+	listPath := InternalOperatorPrefix + "/sites/" + caSiteID + "/control-alarms/dead-letters"
+	replayPath := listPath + "/" + dlNew + "/replay"
+
+	if got := ObservabilityRoute(httptest.NewRequest(http.MethodGet, listPath, nil)); got != "control.state" {
+		t.Fatalf("ObservabilityRoute list = %q want control.state", got)
+	}
+	if got := ObservabilityRoute(httptest.NewRequest(http.MethodPost, replayPath, nil)); got != "control.state" {
+		t.Fatalf("ObservabilityRoute replay = %q want control.state", got)
+	}
+
+	// List bounded by limit=2, newest first, sanitized without payload/secret leakage.
+	listReq := httptest.NewRequest(http.MethodGet, listPath+"?limit=2", nil)
+	listReq.Header.Set("X-Command-Control-Context", signCtx())
+	listRec := httptest.NewRecorder()
+	h.OperatorHandler.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list dead-letters status=%d body=%s", listRec.Code, listRec.Body.String())
+	}
+	rawBody := listRec.Body.String()
+	if strings.Contains(rawBody, "secret-token") || strings.Contains(rawBody, `"payload"`) {
+		t.Fatalf("dead-letter response must not contain raw payload or secrets: %s", rawBody)
+	}
+	var listPayload struct {
+		Data []ControlAlarmDeadLetterView `json:"data"`
+	}
+	if json.Unmarshal(listRec.Body.Bytes(), &listPayload) != nil || len(listPayload.Data) != 2 {
+		t.Fatalf("unexpected list payload: %s", rawBody)
+	}
+	if listPayload.Data[0].OutboxID != dlNew || listPayload.Data[1].OutboxID != dlMid {
+		t.Fatalf("expected newest-first order [dlNew, dlMid], got %+v", listPayload.Data)
+	}
+
+	// Invalid limit=51 -> 400.
+	badLimitReq := httptest.NewRequest(http.MethodGet, listPath+"?limit=51", nil)
+	badLimitReq.Header.Set("X-Command-Control-Context", signCtx())
+	badLimitRec := httptest.NewRecorder()
+	h.OperatorHandler.ServeHTTP(badLimitRec, badLimitReq)
+	if badLimitRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for limit=51, got %d", badLimitRec.Code)
+	}
+
+	// Unauthorized site or missing permission -> 403.
+	h.IAM.DenyScheduleManage = true
+	forbidReq := httptest.NewRequest(http.MethodGet, listPath, nil)
+	forbidReq.Header.Set("X-Command-Control-Context", signCtx())
+	forbidRec := httptest.NewRecorder()
+	h.OperatorHandler.ServeHTTP(forbidRec, forbidReq)
+	if forbidRec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 when ActionScheduleManage denied, got %d", forbidRec.Code)
+	}
+	h.IAM.DenyScheduleManage = false
+
+	// Replay with non-empty invalid JSON body -> 400.
+	badBodyReq := httptest.NewRequest(http.MethodPost, replayPath, bytes.NewBufferString(`{"unexpected":true}`))
+	badBodyReq.Header.Set("X-Command-Control-Context", signCtx())
+	badBodyRec := httptest.NewRecorder()
+	h.OperatorHandler.ServeHTTP(badBodyRec, badBodyReq)
+	if badBodyRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 on unexpected replay JSON body, got %d", badBodyRec.Code)
+	}
+
+	// Missing / other-site outboxId -> 404.
+	missingReq := httptest.NewRequest(http.MethodPost, listPath+"/"+otherSiteID+"/replay", bytes.NewBufferString(`{}`))
+	missingReq.Header.Set("X-Command-Control-Context", signCtx())
+	missingRec := httptest.NewRecorder()
+	h.OperatorHandler.ServeHTTP(missingRec, missingReq)
+	if missingRec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for cross-site outboxId replay, got %d", missingRec.Code)
+	}
+
+	// First replay moves DEAD_LETTER -> PENDING and fires wakeup.
+	repReq1 := httptest.NewRequest(http.MethodPost, replayPath, bytes.NewBufferString(`{}`))
+	repReq1.Header.Set("X-Command-Control-Context", signCtx())
+	repRec1 := httptest.NewRecorder()
+	h.OperatorHandler.ServeHTTP(repRec1, repReq1)
+	var rep1 ControlAlarmDeadLetterReplayResponse
+	if repRec1.Code != http.StatusOK || json.NewDecoder(repRec1.Body).Decode(&rep1) != nil || !rep1.Replayed || rep1.OutboxID != dlNew {
+		t.Fatalf("first replay status=%d resp=%+v", repRec1.Code, rep1)
+	}
+	if h.Store.AlarmWakeups != 1 {
+		t.Fatalf("AlarmWakeups=%d want 1", h.Store.AlarmWakeups)
+	}
+
+	// Second replay with empty body is idempotent with replayed=false and no extra wakeup.
+	repReq2 := httptest.NewRequest(http.MethodPost, replayPath, nil)
+	repReq2.Header.Set("X-Command-Control-Context", signCtx())
+	repRec2 := httptest.NewRecorder()
+	h.OperatorHandler.ServeHTTP(repRec2, repReq2)
+	var rep2 ControlAlarmDeadLetterReplayResponse
+	if repRec2.Code != http.StatusOK || json.NewDecoder(repRec2.Body).Decode(&rep2) != nil || rep2.Replayed || rep2.OutboxID != dlNew {
+		t.Fatalf("second idempotent replay status=%d resp=%+v", repRec2.Code, rep2)
+	}
+	if h.Store.AlarmWakeups != 1 {
+		t.Fatalf("AlarmWakeups=%d want 1 after idempotent replay", h.Store.AlarmWakeups)
 	}
 }

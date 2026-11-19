@@ -201,6 +201,9 @@ func (a *ControlAuthority) ExecuteSiteControlShutdown(
 		deferredIDs = append(deferredIDs, auxDeferred...)
 	}
 
+	if savedState.DevicePriorityLocks == nil {
+		savedState.DevicePriorityLocks = []DevicePriorityLockView{}
+	}
 	return SiteControlShutdownResponse{
 		SiteControlState:        savedState,
 		Mode:                    mode,
@@ -287,6 +290,9 @@ func (a *ControlAuthority) executeAbortUnitSequence(
 			HTTPStatus: http.StatusConflict, Code: "CONTROL_SHUTDOWN_LOCKED",
 			Title: "Control shutdown locked", Detail: "Unable to abort or stop the requested unit sequence because target assets are locked or waiting on active chillers.",
 		}
+	}
+	if currentState.DevicePriorityLocks == nil {
+		currentState.DevicePriorityLocks = []DevicePriorityLockView{}
 	}
 	return SiteControlShutdownResponse{
 		SiteControlState:        currentState,
