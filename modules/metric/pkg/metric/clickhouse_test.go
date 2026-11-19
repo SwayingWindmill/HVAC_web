@@ -455,10 +455,15 @@ func TestReadPointEnforcesExplicitUTCAndCounterAnomalyCleaningSQL(t *testing.T) 
 		"0.25",
 		"RESET_TO_ZERO",
 		"multiIf(",
+		"((if(150 > 0.0,",
+		"toString('')",
 	} {
 		if !strings.Contains(capturedSQL, marker) {
 			t.Fatalf("ReadPoint SQL missing %q:\n%s", marker, capturedSQL)
 		}
+	}
+	if strings.Contains(capturedSQL, "%!") {
+		t.Fatalf("ReadPoint SQL contains fmt formatting error marker:\n%s", capturedSQL)
 	}
 	if strings.Contains(capturedSQL, "mel.5ltiIf") {
 		t.Fatalf("ReadPoint SQL corrupted multiIf identifier:\n%s", capturedSQL)
