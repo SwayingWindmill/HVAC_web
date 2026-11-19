@@ -793,7 +793,7 @@ try {
   if (report.assertions.hourlyRollupCorrection !== '1|0|6|1') throw new Error(`hourly rollup kept a corrected or cross-gap fact: ${report.assertions.hourlyRollupCorrection}`);
   const hourlyKey = "tenant_id, site_id, point_id, hour, accounting_scope, energy_type, quality, ifNull(toString(load_device_id), '') AS load_device";
   report.assertions.hourlyRollupDrift = clickHouse(`SELECT count() FROM (
-      SELECT ${hourlyKey}, sum(energy_kwh) AS energy, count() AS intervals FROM (SELECT *, toStartOfHour(period_end) AS hour FROM analytics.energy_interval_facts_visible WHERE dateDiff('millisecond', period_start, period_end) <= 3600000) GROUP BY ALL
+      SELECT ${hourlyKey}, sum(energy_kwh) AS energy, count() AS intervals FROM (SELECT *, toStartOfHour(addMilliseconds(period_end, -1)) AS hour FROM analytics.energy_interval_facts_visible WHERE dateDiff('millisecond', period_start, period_end) <= 3600000) GROUP BY ALL
     ) AS facts FULL OUTER JOIN (
       SELECT ${hourlyKey}, energy_kwh AS energy, interval_count AS intervals FROM analytics.energy_hourly
     ) AS rollup USING (tenant_id, site_id, point_id, hour, accounting_scope, energy_type, quality, load_device)

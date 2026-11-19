@@ -349,10 +349,6 @@ func isFiniteNonNegative(value float64) bool {
 	return !math.IsNaN(value) && !math.IsInf(value, 0) && value >= 0
 }
 
-func isFinitePositive(value float64) bool {
-	return !math.IsNaN(value) && !math.IsInf(value, 0) && value > 0
-}
-
 func validEnergyCost(cost *analyticsmodel.EnergyCost) bool {
 	if cost == nil || !isFiniteNonNegative(cost.AmountCNY) || !isFiniteNonNegative(cost.UnpricedKWh) {
 		return false

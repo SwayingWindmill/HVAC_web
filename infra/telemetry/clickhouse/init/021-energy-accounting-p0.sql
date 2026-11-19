@@ -48,10 +48,14 @@ WITH
       ) AS unit_jitter_tol
     FROM telemetry_history.observations AS raw
     WHERE (empty({points:Array(UUID)}) OR raw.point_id IN {points:Array(UUID)})
-      AND raw.point_id IS NOT NULL
       AND raw.acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER')
       AND raw.point_type = 'COUNTER'
       AND raw.value_number IS NOT NULL
+      AND raw.tenant_id IS NOT NULL
+      AND raw.site_id IS NOT NULL
+      AND raw.device_id IS NOT NULL
+      AND raw.point_id IS NOT NULL
+      AND raw.point_revision IS NOT NULL
       AND isFinite(raw.value_number)
       AND raw.value_number >= 0
       AND raw.quality != 'INVALID'
@@ -194,7 +198,7 @@ WITH
               counter_rollover_modulus IS NULL
               OR counter_rollover_modulus <= 0
               OR prev_nz_at IS NULL
-              OR (counter_rollover_modulus - assumeNotNull(prev_nz_val)) > unit_max_rate * greatest(dateDiff('millisecond', assumeNotNull(prev_nz_at), sampled_at) / 3600000.0, 1.0 / 60.0)
+              OR (counter_rollover_modulus - ifNull(prev_nz_val, 0.0)) > unit_max_rate * greatest(dateDiff('millisecond', ifNull(prev_nz_at, sampled_at), sampled_at) / 3600000.0, 1.0 / 60.0)
             )
           )
         ),
@@ -217,9 +221,9 @@ WITH
       *,
       if(
         p1_val IS NOT NULL AND p1_at IS NOT NULL AND (
-          (value_number > assumeNotNull(p1_val) AND (value_number - assumeNotNull(p1_val)) > unit_max_rate * greatest(dateDiff('millisecond', assumeNotNull(p1_at), sampled_at) / 3600000.0, 1.0 / 60.0))
-          OR (value_number < assumeNotNull(p1_val) - unit_jitter_tol AND ifNull(counter_decrease_mode, '') IN ('RESET_TO_ZERO', 'RESET', 'METER_REPLACEMENT') AND value_number > unit_max_rate * greatest(dateDiff('millisecond', assumeNotNull(p1_at), sampled_at) / 3600000.0, 1.0 / 60.0))
-          OR (value_number < assumeNotNull(p1_val) - unit_jitter_tol AND counter_decrease_mode = 'ROLLOVER' AND counter_rollover_modulus IS NOT NULL AND counter_rollover_modulus > 0 AND (assumeNotNull(p1_val) > counter_rollover_modulus OR value_number >= counter_rollover_modulus OR ((counter_rollover_modulus - assumeNotNull(p1_val)) + value_number) > unit_max_rate * greatest(dateDiff('millisecond', assumeNotNull(p1_at), sampled_at) / 3600000.0, 1.0 / 60.0)))
+          (value_number > ifNull(p1_val, 0.0) AND (value_number - ifNull(p1_val, 0.0)) > unit_max_rate * greatest(dateDiff('millisecond', ifNull(p1_at, sampled_at), sampled_at) / 3600000.0, 1.0 / 60.0))
+          OR (value_number < ifNull(p1_val, 0.0) - unit_jitter_tol AND ifNull(counter_decrease_mode, '') IN ('RESET_TO_ZERO', 'RESET', 'METER_REPLACEMENT') AND value_number > unit_max_rate * greatest(dateDiff('millisecond', ifNull(p1_at, sampled_at), sampled_at) / 3600000.0, 1.0 / 60.0))
+          OR (value_number < ifNull(p1_val, 0.0) - unit_jitter_tol AND counter_decrease_mode = 'ROLLOVER' AND counter_rollover_modulus IS NOT NULL AND counter_rollover_modulus > 0 AND (ifNull(p1_val, 0.0) > counter_rollover_modulus OR value_number >= counter_rollover_modulus OR ((counter_rollover_modulus - ifNull(p1_val, 0.0)) + value_number) > unit_max_rate * greatest(dateDiff('millisecond', ifNull(p1_at, sampled_at), sampled_at) / 3600000.0, 1.0 / 60.0)))
         ),
         toUInt8(1),
         toUInt8(0)
@@ -240,14 +244,14 @@ WITH
       *,
       if(
         p2_val IS NOT NULL AND p2_at IS NOT NULL AND (
-          (value_number > assumeNotNull(p2_val) AND (value_number - assumeNotNull(p2_val)) > unit_max_rate * greatest(dateDiff('millisecond', assumeNotNull(p2_at), sampled_at) / 3600000.0, 1.0 / 60.0))
-          OR (value_number < assumeNotNull(p2_val) - unit_jitter_tol AND ifNull(counter_decrease_mode, '') IN ('RESET_TO_ZERO', 'RESET', 'METER_REPLACEMENT') AND value_number > unit_max_rate * greatest(dateDiff('millisecond', assumeNotNull(p2_at), sampled_at) / 3600000.0, 1.0 / 60.0))
-          OR (value_number < assumeNotNull(p2_val) - unit_jitter_tol AND counter_decrease_mode = 'ROLLOVER' AND counter_rollover_modulus IS NOT NULL AND counter_rollover_modulus > 0 AND (assumeNotNull(p2_val) > counter_rollover_modulus OR value_number >= counter_rollover_modulus OR ((counter_rollover_modulus - assumeNotNull(p2_val)) + value_number) > unit_max_rate * greatest(dateDiff('millisecond', assumeNotNull(p2_at), sampled_at) / 3600000.0, 1.0 / 60.0)))
+          (value_number > ifNull(p2_val, 0.0) AND (value_number - ifNull(p2_val, 0.0)) > unit_max_rate * greatest(dateDiff('millisecond', ifNull(p2_at, sampled_at), sampled_at) / 3600000.0, 1.0 / 60.0))
+          OR (value_number < ifNull(p2_val, 0.0) - unit_jitter_tol AND ifNull(counter_decrease_mode, '') IN ('RESET_TO_ZERO', 'RESET', 'METER_REPLACEMENT') AND value_number > unit_max_rate * greatest(dateDiff('millisecond', ifNull(p2_at, sampled_at), sampled_at) / 3600000.0, 1.0 / 60.0))
+          OR (value_number < ifNull(p2_val, 0.0) - unit_jitter_tol AND counter_decrease_mode = 'ROLLOVER' AND counter_rollover_modulus IS NOT NULL AND counter_rollover_modulus > 0 AND (ifNull(p2_val, 0.0) > counter_rollover_modulus OR value_number >= counter_rollover_modulus OR ((counter_rollover_modulus - ifNull(p2_val, 0.0)) + value_number) > unit_max_rate * greatest(dateDiff('millisecond', ifNull(p2_at, sampled_at), sampled_at) / 3600000.0, 1.0 / 60.0)))
         ),
         toUInt8(1),
         toUInt8(0)
       ) AS is_spike_2,
-      if(p2_val IS NOT NULL AND value_number < assumeNotNull(p2_val) - unit_jitter_tol, toUInt64(1), toUInt64(0)) AS reset_break
+      if(p2_val IS NOT NULL AND value_number < ifNull(p2_val, 0.0) - unit_jitter_tol, toUInt64(1), toUInt64(0)) AS reset_break
     FROM spike2_lag
   ),
   epoch_tagged AS (
@@ -275,7 +279,7 @@ WITH
       point_id,
       observation_id,
       if(
-        epoch_max_before IS NOT NULL AND value_number > 0 AND value_number < assumeNotNull(epoch_max_before) AND (assumeNotNull(epoch_max_before) - value_number) <= unit_jitter_tol,
+        epoch_max_before IS NOT NULL AND value_number > 0 AND value_number < ifNull(epoch_max_before, 0.0) AND (ifNull(epoch_max_before, 0.0) - value_number) <= unit_jitter_tol,
         toUInt8(1),
         toUInt8(0)
       ) AS is_jitter_rollback
@@ -312,7 +316,7 @@ WITH
     FROM zero_flagged AS z
     LEFT JOIN spike1_flagged AS s1 ON z.tenant_id = s1.tenant_id AND z.site_id = s1.site_id AND z.point_id = s1.point_id AND z.observation_id = s1.observation_id
     LEFT JOIN spike2_flagged AS s2 ON z.tenant_id = s2.tenant_id AND z.site_id = s2.site_id AND z.point_id = s2.point_id AND z.observation_id = s2.observation_id
-    LEFT JOIN jitter_flagged AS jf ON z.tenant_id = jf.tenant_id AND z.site_id = jf.site_id AND z.point_id = jf.point_id AND z.observation_id = jf.observation_id AND z.is_zero_drop = 0
+    LEFT JOIN jitter_flagged AS jf ON z.tenant_id = jf.tenant_id AND z.site_id = jf.site_id AND z.point_id = jf.point_id AND z.observation_id = jf.observation_id
   ),
   seq_with_valid_prev AS (
     SELECT
@@ -351,7 +355,7 @@ WITH
       lagInFrame(quality_reasons, 1, CAST([], 'Array(String)')) OVER point_window AS previous_quality_reasons,
       lagInFrame(toNullable(point_revision)) OVER point_window AS previous_point_revision,
       lagInFrame(unit) OVER point_window AS previous_unit,
-      max(toNullable(if(row_kind = 'PREFIX_MAX', assumeNotNull(prefix_max_value), value_number))) OVER revision_window AS previous_max_value
+      max(toNullable(if(row_kind = 'PREFIX_MAX', ifNull(prefix_max_value, value_number), value_number))) OVER revision_window AS previous_max_value
     FROM clean_input
     WINDOW
       point_window AS (
@@ -389,40 +393,40 @@ WITH
       previous_observation_id,
       previous_value,
       previous_sampled_at,
-      previous_quality,
+      toString(previous_quality) AS previous_quality,
       previous_quality_reasons,
       multiIf(
         previous_value IS NULL, 'INITIAL',
-        previous_point_revision IS NULL OR point_revision != assumeNotNull(previous_point_revision), 'REVISION_BOUNDARY',
+        previous_point_revision IS NULL OR point_revision != ifNull(previous_point_revision, toUInt32(0)), 'REVISION_BOUNDARY',
         ifNull(unit, '') != ifNull(previous_unit, ''), 'UNIT_BOUNDARY',
-        counter_decrease_mode = 'INVALID' AND previous_max_value IS NOT NULL AND value_number < assumeNotNull(previous_max_value), 'INVALID_DECREASE',
-        counter_decrease_mode = 'INVALID' AND previous_max_value IS NOT NULL AND assumeNotNull(previous_value) < assumeNotNull(previous_max_value) AND value_number >= assumeNotNull(previous_max_value), 'RECOVERY',
-        value_number = assumeNotNull(previous_value), 'UNCHANGED',
-        value_number > assumeNotNull(previous_value), 'INCREASE',
+        counter_decrease_mode = 'INVALID' AND previous_max_value IS NOT NULL AND value_number < ifNull(previous_max_value, 0.0), 'INVALID_DECREASE',
+        counter_decrease_mode = 'INVALID' AND previous_max_value IS NOT NULL AND ifNull(previous_value, 0.0) < ifNull(previous_max_value, 0.0) AND value_number >= ifNull(previous_max_value, 0.0), 'RECOVERY',
+        value_number = ifNull(previous_value, 0.0), 'UNCHANGED',
+        value_number > ifNull(previous_value, 0.0), 'INCREASE',
         ifNull(counter_decrease_mode, '') IN ('RESET_TO_ZERO', 'RESET', 'METER_REPLACEMENT'), 'RESET',
         counter_decrease_mode = 'ROLLOVER'
           AND counter_rollover_modulus IS NOT NULL
-          AND assumeNotNull(previous_value) >= 0
+          AND ifNull(previous_value, 0.0) >= 0
           AND value_number >= 0
-          AND assumeNotNull(previous_value) <= counter_rollover_modulus
+          AND ifNull(previous_value, 0.0) <= counter_rollover_modulus
           AND value_number < counter_rollover_modulus, 'ROLLOVER',
         'INVALID_DECREASE'
       ) AS transition_type,
       multiIf(
         previous_value IS NULL, CAST(NULL, 'Nullable(Float64)'),
-        previous_point_revision IS NULL OR point_revision != assumeNotNull(previous_point_revision), CAST(NULL, 'Nullable(Float64)'),
+        previous_point_revision IS NULL OR point_revision != ifNull(previous_point_revision, toUInt32(0)), CAST(NULL, 'Nullable(Float64)'),
         ifNull(unit, '') != ifNull(previous_unit, ''), CAST(NULL, 'Nullable(Float64)'),
-        counter_decrease_mode = 'INVALID' AND previous_max_value IS NOT NULL AND value_number < assumeNotNull(previous_max_value), CAST(NULL, 'Nullable(Float64)'),
-        counter_decrease_mode = 'INVALID' AND previous_max_value IS NOT NULL AND assumeNotNull(previous_value) < assumeNotNull(previous_max_value) AND value_number >= assumeNotNull(previous_max_value), toNullable(value_number - assumeNotNull(previous_max_value)),
-        value_number >= assumeNotNull(previous_value), toNullable(value_number - assumeNotNull(previous_value)),
+        counter_decrease_mode = 'INVALID' AND previous_max_value IS NOT NULL AND value_number < ifNull(previous_max_value, 0.0), CAST(NULL, 'Nullable(Float64)'),
+        counter_decrease_mode = 'INVALID' AND previous_max_value IS NOT NULL AND ifNull(previous_value, 0.0) < ifNull(previous_max_value, 0.0) AND value_number >= ifNull(previous_max_value, 0.0), toNullable(value_number - ifNull(previous_max_value, 0.0)),
+        value_number >= ifNull(previous_value, 0.0), toNullable(value_number - ifNull(previous_value, 0.0)),
         ifNull(counter_decrease_mode, '') IN ('RESET_TO_ZERO', 'RESET', 'METER_REPLACEMENT'), toNullable(value_number),
         counter_decrease_mode = 'ROLLOVER'
           AND counter_rollover_modulus IS NOT NULL
-          AND assumeNotNull(previous_value) >= 0
+          AND ifNull(previous_value, 0.0) >= 0
           AND value_number >= 0
-          AND assumeNotNull(previous_value) <= counter_rollover_modulus
+          AND ifNull(previous_value, 0.0) <= counter_rollover_modulus
           AND value_number < counter_rollover_modulus,
-          toNullable((counter_rollover_modulus - assumeNotNull(previous_value)) + value_number),
+          toNullable((counter_rollover_modulus - ifNull(previous_value, 0.0)) + value_number),
         CAST(NULL, 'Nullable(Float64)')
       ) AS delta_value
     FROM clean_windowed
@@ -452,7 +456,7 @@ WITH
       prev_valid_observation_id AS previous_observation_id,
       prev_valid_value AS previous_value,
       prev_valid_sampled_at AS previous_sampled_at,
-      prev_valid_quality AS previous_quality,
+      toString(prev_valid_quality) AS previous_quality,
       prev_valid_quality_reasons AS previous_quality_reasons,
       multiIf(
         is_jitter_rollback = 1, 'UNCHANGED',
@@ -507,20 +511,22 @@ SELECT
   toInt64(-1) AS interval_count,
   toDateTime64(0, 3, 'UTC') AS data_watermark,
   toUInt64(0) AS dataset_revision
-FROM (
+FROM analytics.energy_interval_facts AS correction
+INNER JOIN (
   SELECT *
   FROM analytics.energy_interval_fact_revisions
   WHERE (tenant_id, site_id, meter_id, meter_binding_id, period_end) IN (
     SELECT tenant_id, site_id, meter_id, meter_binding_id, period_end
     FROM analytics.energy_interval_facts
+    WHERE fact_revision > 0
   )
 ) AS prior
-INNER JOIN analytics.energy_interval_facts AS correction
   ON prior.tenant_id = correction.tenant_id
   AND prior.site_id = correction.site_id
   AND prior.meter_binding_id = correction.meter_binding_id
   AND prior.period_end = correction.period_end
   AND prior.source_current_observation_id = correction.source_current_observation_id
   AND prior.fact_revision + 1 = correction.fact_revision
-WHERE prior.period_end > prior.period_start
+WHERE correction.fact_revision > 0
+  AND prior.period_end > prior.period_start
   AND dateDiff('millisecond', prior.period_start, prior.period_end) <= 3600000;

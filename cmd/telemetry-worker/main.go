@@ -751,10 +751,6 @@ func loadAnalyticsProjection(certificate tls.Certificate) (*analyticsprojector.P
 	return projector, priceWindows, totalSubmeters, projectionContext, projectionCancel, nil
 }
 
-func runAnalyticsProjection(ctx context.Context, projector *analyticsprojector.Projector, runtime *observability.Runtime, logger *slog.Logger) {
-	runAnalyticsProjectionCoordinated(ctx, projector, runtime, nil, logger)
-}
-
 func runAnalyticsProjectionCoordinated(ctx context.Context, projector *analyticsprojector.Projector, runtime *observability.Runtime, locker leaseLocker, logger *slog.Logger) {
 	if projector == nil {
 		return
@@ -791,12 +787,8 @@ func runAnalyticsProjectionCoordinated(ctx context.Context, projector *analytics
 	})
 }
 
-// runPriceWindowProjection keeps every priced Site's Tariff laid out as price windows for Cube
+// runPriceWindowProjectionCoordinated keeps every priced Site's Tariff laid out as price windows for Cube
 // (#575). Tariffs change rarely, so it runs at start and then every few minutes.
-func runPriceWindowProjection(ctx context.Context, projector *analyticsprojector.PriceWindowProjector, runtime *observability.Runtime, logger *slog.Logger) {
-	runPriceWindowProjectionCoordinated(ctx, projector, runtime, 0, nil, logger)
-}
-
 func runPriceWindowProjectionCoordinated(ctx context.Context, projector *analyticsprojector.PriceWindowProjector, runtime *observability.Runtime, settlingBuffer time.Duration, locker leaseLocker, logger *slog.Logger) {
 	interval := durationEnv("ANALYTICS_PRICE_WINDOW_INTERVAL", 5*time.Minute, 10*time.Second, time.Hour)
 	runPeriodicLoop(ctx, periodicLoopConfig{
@@ -812,10 +804,6 @@ func runPriceWindowProjectionCoordinated(ctx context.Context, projector *analyti
 			logger.Warn("analytics_price_window_projection_failed", "error_code", "ANALYTICS_PRICE_WINDOW_PROJECTION_FAILED", "error", err.Error())
 		}
 	})
-}
-
-func runTotalSubmeterProjection(ctx context.Context, projector *analyticsprojector.TotalSubmeterProjector, runtime *observability.Runtime, logger *slog.Logger) {
-	runTotalSubmeterProjectionCoordinated(ctx, projector, runtime, 0, nil, logger)
 }
 
 func runTotalSubmeterProjectionCoordinated(ctx context.Context, projector *analyticsprojector.TotalSubmeterProjector, runtime *observability.Runtime, settlingBuffer time.Duration, locker leaseLocker, logger *slog.Logger) {
@@ -940,12 +928,8 @@ func runRealtimeRelay(ctx context.Context, service *telemetry.RealtimeService, l
 	}
 }
 
-// runRuntimeRetention prunes superseded presence signals, delivered publications and history
+// runRuntimeRetentionCoordinated prunes superseded presence signals, delivered publications and history
 // events, and week-old received observations, which nothing reads once past their window.
-func runRuntimeRetention(ctx context.Context, store *telemetry.PostgresStore, logger *slog.Logger) {
-	runRuntimeRetentionCoordinated(ctx, store, 0, nil, logger)
-}
-
 func runRuntimeRetentionCoordinated(ctx context.Context, store *telemetry.PostgresStore, settlingBuffer time.Duration, locker leaseLocker, logger *slog.Logger) {
 	runPeriodicLoop(ctx, periodicLoopConfig{
 		LockKey: "runtime_retention", LockTTL: 60 * time.Second, Interval: 5 * time.Minute, SettlingBuffer: settlingBuffer,
@@ -1195,12 +1179,8 @@ type probeOffsetSweeper interface {
 	SweepProbeOffsets(ctx context.Context, evaluatedAt time.Time) (int, error)
 }
 
-// runProbeOffsetSweep periodically folds idle supply/return probe-offset windows outside
+// runProbeOffsetSweepCoordinated periodically folds idle supply/return probe-offset windows outside
 // the synchronous observation write path.
-func runProbeOffsetSweep(ctx context.Context, sweeper probeOffsetSweeper, interval time.Duration, logger *slog.Logger) {
-	runProbeOffsetSweepCoordinated(ctx, sweeper, interval, nil, logger)
-}
-
 func runProbeOffsetSweepCoordinated(ctx context.Context, sweeper probeOffsetSweeper, interval time.Duration, locker leaseLocker, logger *slog.Logger) {
 	if sweeper == nil {
 		return
