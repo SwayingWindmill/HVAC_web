@@ -1,13 +1,12 @@
-# Each reviewed file is copied into two scratch stages (each well under OverlayFS's 127-layer
-# limit), then merged into the runtime image (#659).
-FROM scratch AS sources-core
+# Generated from deploy/platform/phase1/migrations/manifest.v1.json via `npm run migrations:sync`.
+# Split COPY steps across scratch stages (<= 75 layers each) to stay under OverlayFS's 127-layer limit (#659, #826).
+FROM scratch AS sources-1
 
 COPY deploy/platform/phase1/migrations/bootstrap-roles.sql /opt/hvac/migrations/bootstrap-roles.sql
 COPY deploy/platform/phase1/migrations/migration-list.tsv /opt/hvac/migrations/migration-list.tsv
 COPY deploy/platform/phase1/migrations/run-phase1-migrations.sh /opt/hvac/migrations/run-phase1-migrations.sh
 COPY deploy/platform/phase1/migrations/verify-phase1-schema.sh /opt/hvac/migrations/verify-phase1-schema.sh
 COPY deploy/platform/phase1/postgres/init/001-create-phase1-databases.sql /opt/hvac/migrations/create-databases.sql
-
 COPY infra/identity/postgres/init/001-identity-baseline.sql /opt/hvac/repo/infra/identity/postgres/init/001-identity-baseline.sql
 COPY infra/identity/postgres/init/002-identity-runtime-grants.sql /opt/hvac/repo/infra/identity/postgres/init/002-identity-runtime-grants.sql
 COPY infra/identity/postgres/init/003-identity-directory-least-privilege.sql /opt/hvac/repo/infra/identity/postgres/init/003-identity-directory-least-privilege.sql
@@ -26,7 +25,7 @@ COPY infra/durability/postgres/init/006-s04-audit-search.sql /opt/hvac/repo/infr
 COPY infra/durability/postgres/init/007-audit-postgres-outbox-transport.sql /opt/hvac/repo/infra/durability/postgres/init/007-audit-postgres-outbox-transport.sql
 COPY infra/durability/postgres/init/008-session-client.sql /opt/hvac/repo/infra/durability/postgres/init/008-session-client.sql
 COPY infra/durability/postgres/init/009-schema-and-table-comments.sql /opt/hvac/repo/infra/durability/postgres/init/009-schema-and-table-comments.sql
-
+COPY infra/durability/postgres/init/operations-domain-audit-ledger.sql /opt/hvac/repo/infra/durability/postgres/init/operations-domain-audit-ledger.sql
 COPY infra/registry/postgres/init/001-s1-registry-baseline.sql /opt/hvac/repo/infra/registry/postgres/init/001-s1-registry-baseline.sql
 COPY infra/registry/postgres/init/001a-tenant-foundation.sql /opt/hvac/repo/infra/registry/postgres/init/001a-tenant-foundation.sql
 COPY infra/registry/postgres/init/001b-device-binding-invariants.sql /opt/hvac/repo/infra/registry/postgres/init/001b-device-binding-invariants.sql
@@ -42,8 +41,8 @@ COPY infra/registry/postgres/init/007c-counter-semantics.sql /opt/hvac/repo/infr
 COPY infra/registry/postgres/init/008-s5-work-order-authorization.sql /opt/hvac/repo/infra/registry/postgres/init/008-s5-work-order-authorization.sql
 COPY infra/registry/postgres/init/009-energy-data-foundation.sql /opt/hvac/repo/infra/registry/postgres/init/009-energy-data-foundation.sql
 COPY infra/registry/postgres/init/009a-energy-topology-metering-v2.sql /opt/hvac/repo/infra/registry/postgres/init/009a-energy-topology-metering-v2.sql
-COPY infra/registry/postgres/init/009b-settlement-foundation-v2.sql /opt/hvac/repo/infra/registry/postgres/init/009b-settlement-foundation-v2.sql
 COPY infra/registry/postgres/init/009c-metric-model-v2.sql /opt/hvac/repo/infra/registry/postgres/init/009c-metric-model-v2.sql
+COPY infra/registry/postgres/init/009b-settlement-foundation-v2.sql /opt/hvac/repo/infra/registry/postgres/init/009b-settlement-foundation-v2.sql
 COPY infra/registry/postgres/init/009d-data-governance-v2.sql /opt/hvac/repo/infra/registry/postgres/init/009d-data-governance-v2.sql
 COPY infra/registry/postgres/init/009e-forecast-model-v2.sql /opt/hvac/repo/infra/registry/postgres/init/009e-forecast-model-v2.sql
 COPY infra/registry/postgres/init/009f-optimization-model-v2.sql /opt/hvac/repo/infra/registry/postgres/init/009f-optimization-model-v2.sql
@@ -78,6 +77,9 @@ COPY infra/registry/postgres/init/023-savings-device-boundary.sql /opt/hvac/repo
 COPY infra/registry/postgres/init/024-site-profile.sql /opt/hvac/repo/infra/registry/postgres/init/024-site-profile.sql
 COPY infra/registry/postgres/init/025-fdd-rule-revisions.sql /opt/hvac/repo/infra/registry/postgres/init/025-fdd-rule-revisions.sql
 COPY infra/registry/postgres/init/026-iam-role-assignments.sql /opt/hvac/repo/infra/registry/postgres/init/026-iam-role-assignments.sql
+
+FROM scratch AS sources-2
+
 COPY infra/registry/postgres/init/027-optimization-site-clock.sql /opt/hvac/repo/infra/registry/postgres/init/027-optimization-site-clock.sql
 COPY infra/registry/postgres/init/028-retire-own-tariff-pricing.sql /opt/hvac/repo/infra/registry/postgres/init/028-retire-own-tariff-pricing.sql
 COPY infra/registry/postgres/init/029-drop-registry-import-tables.sql /opt/hvac/repo/infra/registry/postgres/init/029-drop-registry-import-tables.sql
@@ -104,10 +106,25 @@ COPY infra/registry/postgres/init/iam-tenant-principal-names.sql /opt/hvac/repo/
 COPY infra/connectivity/postgres/init/gateway-tunnel-audit.sql /opt/hvac/repo/infra/connectivity/postgres/init/gateway-tunnel-audit.sql
 COPY infra/registry/postgres/init/registry-outbox-delivery-grants.sql /opt/hvac/repo/infra/registry/postgres/init/registry-outbox-delivery-grants.sql
 COPY infra/registry/postgres/init/plant-twin-relationships-and-roles.sql /opt/hvac/repo/infra/registry/postgres/init/plant-twin-relationships-and-roles.sql
-
-FROM scratch AS sources-runtime
-
+COPY infra/registry/postgres/init/registry-tags-and-template-read.sql /opt/hvac/repo/infra/registry/postgres/init/registry-tags-and-template-read.sql
+COPY infra/registry/postgres/init/iam-registry-read-views.sql /opt/hvac/repo/infra/registry/postgres/init/iam-registry-read-views.sql
 COPY infra/connectivity/postgres/init/gateway-certificate-revocation.sql /opt/hvac/repo/infra/connectivity/postgres/init/gateway-certificate-revocation.sql
+COPY infra/connectivity/postgres/init/gateway-config-shadows.sql /opt/hvac/repo/infra/connectivity/postgres/init/gateway-config-shadows.sql
+COPY infra/registry/postgres/init/optimization-monitor-lease.sql /opt/hvac/repo/infra/registry/postgres/init/optimization-monitor-lease.sql
+COPY infra/connectivity/postgres/init/uplink-quarantine-diagnostics.sql /opt/hvac/repo/infra/connectivity/postgres/init/uplink-quarantine-diagnostics.sql
+COPY infra/registry/postgres/init/alarm-suppress-unassign-capabilities.sql /opt/hvac/repo/infra/registry/postgres/init/alarm-suppress-unassign-capabilities.sql
+COPY services/notification-service/migrations/alarm-delivery-suppression-cooldown.sql /opt/hvac/repo/services/notification-service/migrations/alarm-delivery-suppression-cooldown.sql
+COPY infra/connectivity/postgres/init/gateway-shadow-drivers-and-autonomy.sql /opt/hvac/repo/infra/connectivity/postgres/init/gateway-shadow-drivers-and-autonomy.sql
+COPY infra/registry/postgres/init/optimization-safety-guardrails.sql /opt/hvac/repo/infra/registry/postgres/init/optimization-safety-guardrails.sql
+COPY infra/registry/postgres/init/optimization-shadow-and-trace.sql /opt/hvac/repo/infra/registry/postgres/init/optimization-shadow-and-trace.sql
+COPY infra/registry/postgres/init/optimization-governance-flywheel.sql /opt/hvac/repo/infra/registry/postgres/init/optimization-governance-flywheel.sql
+COPY infra/registry/postgres/init/metric-backfill-recalc-job-grants.sql /opt/hvac/repo/infra/registry/postgres/init/metric-backfill-recalc-job-grants.sql
+COPY infra/registry/postgres/init/iam-expired-binding-revocation.sql /opt/hvac/repo/infra/registry/postgres/init/iam-expired-binding-revocation.sql
+COPY infra/registry/postgres/init/hydraulic-loop-topology.sql /opt/hvac/repo/infra/registry/postgres/init/hydraulic-loop-topology.sql
+COPY infra/connectivity/postgres/init/command-correlation-trace-and-audit-immutability.sql /opt/hvac/repo/infra/connectivity/postgres/init/command-correlation-trace-and-audit-immutability.sql
+COPY infra/registry/postgres/init/metric-backfill-watermarks-and-reverify.sql /opt/hvac/repo/infra/registry/postgres/init/metric-backfill-watermarks-and-reverify.sql
+COPY infra/registry/postgres/init/energy-tou-holidays-and-recalc.sql /opt/hvac/repo/infra/registry/postgres/init/energy-tou-holidays-and-recalc.sql
+COPY infra/registry/postgres/init/mv-bivariate-weather-anchors.sql /opt/hvac/repo/infra/registry/postgres/init/mv-bivariate-weather-anchors.sql
 COPY infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql /opt/hvac/repo/infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql
 COPY infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql /opt/hvac/repo/infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql
 COPY infra/telemetry/postgres/init/003-s2-telemetry-ingest.sql /opt/hvac/repo/infra/telemetry/postgres/init/003-s2-telemetry-ingest.sql
@@ -126,7 +143,10 @@ COPY infra/telemetry/postgres/init/011-point-quality.sql /opt/hvac/repo/infra/te
 COPY infra/telemetry/postgres/init/012-measurement-uncertainty.sql /opt/hvac/repo/infra/telemetry/postgres/init/012-measurement-uncertainty.sql
 COPY infra/telemetry/postgres/init/013-schema-and-table-comments.sql /opt/hvac/repo/infra/telemetry/postgres/init/013-schema-and-table-comments.sql
 COPY infra/telemetry/postgres/init/mqtt-runtime-events.sql /opt/hvac/repo/infra/telemetry/postgres/init/mqtt-runtime-events.sql
-
+COPY infra/telemetry/postgres/init/alarm-evaluation-dead-letter.sql /opt/hvac/repo/infra/telemetry/postgres/init/alarm-evaluation-dead-letter.sql
+COPY infra/telemetry/postgres/init/telemetry-history-dead-letter-and-retention.sql /opt/hvac/repo/infra/telemetry/postgres/init/telemetry-history-dead-letter-and-retention.sql
+COPY infra/telemetry/postgres/init/telemetry-runtime-unnest-and-indexes.sql /opt/hvac/repo/infra/telemetry/postgres/init/telemetry-runtime-unnest-and-indexes.sql
+COPY infra/telemetry/postgres/init/telemetry-accepted-point-sample-index.sql /opt/hvac/repo/infra/telemetry/postgres/init/telemetry-accepted-point-sample-index.sql
 COPY modules/command/migrations/001_s3_command_runtime.sql /opt/hvac/repo/modules/command/migrations/001_s3_command_runtime.sql
 COPY modules/command/migrations/002_s3_target_runtime.sql /opt/hvac/repo/modules/command/migrations/002_s3_target_runtime.sql
 COPY modules/command/migrations/003_s3_tenant_scope.sql /opt/hvac/repo/modules/command/migrations/003_s3_tenant_scope.sql
@@ -135,10 +155,14 @@ COPY modules/command/migrations/005_s11_edge_execution_evidence.sql /opt/hvac/re
 COPY modules/command/migrations/006_command_control_locks_and_sequence_capabilities.sql /opt/hvac/repo/modules/command/migrations/006_command_control_locks_and_sequence_capabilities.sql
 COPY modules/command/migrations/007_schema_and_table_comments.sql /opt/hvac/repo/modules/command/migrations/007_schema_and_table_comments.sql
 COPY modules/command/migrations/008_command_precondition_mode.sql /opt/hvac/repo/modules/command/migrations/008_command_precondition_mode.sql
+
+FROM scratch AS sources-3
+
 COPY modules/command/migrations/command-template-capability-sync.sql /opt/hvac/repo/modules/command/migrations/command-template-capability-sync.sql
 COPY modules/command/migrations/command_intent_trace_context.sql /opt/hvac/repo/modules/command/migrations/command_intent_trace_context.sql
-COPY infra/registry/postgres/init/registry-tags-and-template-read.sql /opt/hvac/repo/infra/registry/postgres/init/registry-tags-and-template-read.sql
-COPY infra/registry/postgres/init/iam-registry-read-views.sql /opt/hvac/repo/infra/registry/postgres/init/iam-registry-read-views.sql
+COPY modules/command/migrations/control-alarm-outbox.sql /opt/hvac/repo/modules/command/migrations/control-alarm-outbox.sql
+COPY modules/command/migrations/command-priority-and-locks.sql /opt/hvac/repo/modules/command/migrations/command-priority-and-locks.sql
+COPY modules/command/migrations/command-audit-immutability.sql /opt/hvac/repo/modules/command/migrations/command-audit-immutability.sql
 COPY modules/alarm/migrations/001_s4_alarm_runtime.sql /opt/hvac/repo/modules/alarm/migrations/001_s4_alarm_runtime.sql
 COPY modules/alarm/migrations/002_s4_alarm_lifecycle.sql /opt/hvac/repo/modules/alarm/migrations/002_s4_alarm_lifecycle.sql
 COPY modules/alarm/migrations/003_s4_tenant_scope.sql /opt/hvac/repo/modules/alarm/migrations/003_s4_tenant_scope.sql
@@ -156,6 +180,8 @@ COPY modules/alarm/migrations/014_s31_retired_site_rules.sql /opt/hvac/repo/modu
 COPY modules/alarm/migrations/015_s32_reading_gap_escalation.sql /opt/hvac/repo/modules/alarm/migrations/015_s32_reading_gap_escalation.sql
 COPY modules/alarm/migrations/016_s32_rules_unevaluable.sql /opt/hvac/repo/modules/alarm/migrations/016_s32_rules_unevaluable.sql
 COPY modules/alarm/migrations/017_drop_legacy_migration_backups_and_comment_tables.sql /opt/hvac/repo/modules/alarm/migrations/017_drop_legacy_migration_backups_and_comment_tables.sql
+COPY modules/alarm/migrations/alarm-suppression-notification-events.sql /opt/hvac/repo/modules/alarm/migrations/alarm-suppression-notification-events.sql
+COPY modules/alarm/migrations/alarm-evaluation-slope-window.sql /opt/hvac/repo/modules/alarm/migrations/alarm-evaluation-slope-window.sql
 COPY modules/workorder/migrations/001_s5_work_order_runtime.sql /opt/hvac/repo/modules/workorder/migrations/001_s5_work_order_runtime.sql
 COPY modules/workorder/migrations/002_s5_work_order_create_assignment.sql /opt/hvac/repo/modules/workorder/migrations/002_s5_work_order_create_assignment.sql
 COPY modules/workorder/migrations/003_s5_work_order_lifecycle.sql /opt/hvac/repo/modules/workorder/migrations/003_s5_work_order_lifecycle.sql
@@ -163,42 +189,16 @@ COPY modules/workorder/migrations/004_s5_tenant_scope.sql /opt/hvac/repo/modules
 COPY modules/workorder/migrations/005_s19_alarm_links.sql /opt/hvac/repo/modules/workorder/migrations/005_s19_alarm_links.sql
 COPY modules/workorder/migrations/006_s26_equipment_source_domain.sql /opt/hvac/repo/modules/workorder/migrations/006_s26_equipment_source_domain.sql
 COPY modules/workorder/migrations/007_schema_and_table_comments.sql /opt/hvac/repo/modules/workorder/migrations/007_schema_and_table_comments.sql
-
 COPY services/operations-agent-service/migrations/operations/001_agent_sessions.sql /opt/hvac/repo/services/operations-agent-service/migrations/operations/001_agent_sessions.sql
 COPY services/operations-agent-service/migrations/operations/002_finding_without_summary.sql /opt/hvac/repo/services/operations-agent-service/migrations/operations/002_finding_without_summary.sql
 COPY services/operations-agent-service/migrations/operations/003_schema_and_table_comments.sql /opt/hvac/repo/services/operations-agent-service/migrations/operations/003_schema_and_table_comments.sql
-COPY infra/connectivity/postgres/init/gateway-config-shadows.sql /opt/hvac/repo/infra/connectivity/postgres/init/gateway-config-shadows.sql
-COPY infra/registry/postgres/init/optimization-monitor-lease.sql /opt/hvac/repo/infra/registry/postgres/init/optimization-monitor-lease.sql
-COPY infra/telemetry/postgres/init/alarm-evaluation-dead-letter.sql /opt/hvac/repo/infra/telemetry/postgres/init/alarm-evaluation-dead-letter.sql
-COPY infra/telemetry/postgres/init/telemetry-history-dead-letter-and-retention.sql /opt/hvac/repo/infra/telemetry/postgres/init/telemetry-history-dead-letter-and-retention.sql
-COPY modules/command/migrations/control-alarm-outbox.sql /opt/hvac/repo/modules/command/migrations/control-alarm-outbox.sql
-COPY infra/connectivity/postgres/init/uplink-quarantine-diagnostics.sql /opt/hvac/repo/infra/connectivity/postgres/init/uplink-quarantine-diagnostics.sql
-COPY infra/registry/postgres/init/alarm-suppress-unassign-capabilities.sql /opt/hvac/repo/infra/registry/postgres/init/alarm-suppress-unassign-capabilities.sql
-COPY services/notification-service/migrations/alarm-delivery-suppression-cooldown.sql /opt/hvac/repo/services/notification-service/migrations/alarm-delivery-suppression-cooldown.sql
-COPY modules/command/migrations/command-priority-and-locks.sql /opt/hvac/repo/modules/command/migrations/command-priority-and-locks.sql
-COPY modules/alarm/migrations/alarm-suppression-notification-events.sql /opt/hvac/repo/modules/alarm/migrations/alarm-suppression-notification-events.sql
-COPY modules/alarm/migrations/alarm-evaluation-slope-window.sql /opt/hvac/repo/modules/alarm/migrations/alarm-evaluation-slope-window.sql
-COPY infra/connectivity/postgres/init/gateway-shadow-drivers-and-autonomy.sql /opt/hvac/repo/infra/connectivity/postgres/init/gateway-shadow-drivers-and-autonomy.sql
-COPY infra/registry/postgres/init/optimization-safety-guardrails.sql /opt/hvac/repo/infra/registry/postgres/init/optimization-safety-guardrails.sql
-COPY infra/registry/postgres/init/optimization-shadow-and-trace.sql /opt/hvac/repo/infra/registry/postgres/init/optimization-shadow-and-trace.sql
-COPY infra/registry/postgres/init/optimization-governance-flywheel.sql /opt/hvac/repo/infra/registry/postgres/init/optimization-governance-flywheel.sql
-COPY infra/registry/postgres/init/metric-backfill-recalc-job-grants.sql /opt/hvac/repo/infra/registry/postgres/init/metric-backfill-recalc-job-grants.sql
-COPY infra/registry/postgres/init/iam-expired-binding-revocation.sql /opt/hvac/repo/infra/registry/postgres/init/iam-expired-binding-revocation.sql
-COPY infra/telemetry/postgres/init/telemetry-runtime-unnest-and-indexes.sql /opt/hvac/repo/infra/telemetry/postgres/init/telemetry-runtime-unnest-and-indexes.sql
-COPY infra/telemetry/postgres/init/telemetry-accepted-point-sample-index.sql /opt/hvac/repo/infra/telemetry/postgres/init/telemetry-accepted-point-sample-index.sql
-COPY infra/durability/postgres/init/operations-domain-audit-ledger.sql /opt/hvac/repo/infra/durability/postgres/init/operations-domain-audit-ledger.sql
-COPY infra/registry/postgres/init/hydraulic-loop-topology.sql /opt/hvac/repo/infra/registry/postgres/init/hydraulic-loop-topology.sql
-COPY infra/connectivity/postgres/init/command-correlation-trace-and-audit-immutability.sql /opt/hvac/repo/infra/connectivity/postgres/init/command-correlation-trace-and-audit-immutability.sql
-COPY modules/command/migrations/command-audit-immutability.sql /opt/hvac/repo/modules/command/migrations/command-audit-immutability.sql
-COPY infra/registry/postgres/init/metric-backfill-watermarks-and-reverify.sql /opt/hvac/repo/infra/registry/postgres/init/metric-backfill-watermarks-and-reverify.sql
-COPY infra/registry/postgres/init/energy-tou-holidays-and-recalc.sql /opt/hvac/repo/infra/registry/postgres/init/energy-tou-holidays-and-recalc.sql
-COPY infra/registry/postgres/init/mv-bivariate-weather-anchors.sql /opt/hvac/repo/infra/registry/postgres/init/mv-bivariate-weather-anchors.sql
 
 FROM postgres:16.4-bookworm
 
 WORKDIR /opt/hvac
-COPY --from=sources-core /opt/hvac /opt/hvac
-COPY --from=sources-runtime /opt/hvac /opt/hvac
+COPY --from=sources-1 /opt/hvac /opt/hvac
+COPY --from=sources-2 /opt/hvac /opt/hvac
+COPY --from=sources-3 /opt/hvac /opt/hvac
 RUN ! grep -R -E 'local-only|fixture-only' /opt/hvac/repo \
     && chmod 0555 /opt/hvac/migrations/run-phase1-migrations.sh /opt/hvac/migrations/verify-phase1-schema.sh
 ENTRYPOINT ["/opt/hvac/migrations/run-phase1-migrations.sh"]

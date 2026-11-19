@@ -131,6 +131,11 @@ test('a site without a writable supply setpoint offers a prefilled manual work o
   await expect(dialog.getByLabel('标题')).toHaveValue('人工调整冷冻水供水温度至 8.1 °C');
   await expect(dialog.getByLabel('说明')).toHaveValue(/估算电费 ¥51/);
   await dialog.getByRole('button', { name: '创建工单' }).click();
+  await expect(dialog).toBeHidden();
+
+  const orderLink = proposal.getByRole('link', { name: /已转为人工调温工单 · 待处理/ });
+  await expect(orderLink).toBeVisible();
+  await expect(proposal.getByRole('button', { name: '创建人工调温工单' })).toBeHidden();
 
   const createdWrite = gateway.writes.find((write) => write.path === `/api/v1/sites/${SITE_ID}/work-orders`);
   expect(createdWrite?.body).toMatchObject({
@@ -144,10 +149,6 @@ test('a site without a writable supply setpoint offers a prefilled manual work o
       },
     ],
   });
-
-  const orderLink = proposal.getByRole('link', { name: /已转为人工调温工单 · 待处理/ });
-  await expect(orderLink).toBeVisible();
-  await expect(proposal.getByRole('button', { name: '创建人工调温工单' })).toBeHidden();
 
   // Reloading keeps the unclosed work order linked instead of offering duplicate creation.
   await page.reload();
@@ -310,11 +311,11 @@ test('a stop recommendation for an idle tower is confirmed as a high-risk comman
   await confirm.getByRole('checkbox', { name: '我已和现场确认可以停' }).check();
   await confirm.getByRole('button', { name: '提交停机' }).click();
 
+  await expect(staging).toContainText('已提交 · 待审批');
+  await expect(staging.getByRole('link', { name: '在运行控制查看 ›' })).toBeVisible();
   expect(gateway.writes.find((write) => write.path === '/api/v1/commands')?.body).toEqual({
     assetId: tower.id, commandPointId: stopPoint.id, parameters: {}, verificationCode: '246810',
   });
-  await expect(staging).toContainText('已提交 · 待审批');
-  await expect(staging.getByRole('link', { name: '在运行控制查看 ›' })).toBeVisible();
 });
 
 test('under manual control the stop recommendations say they are paused and cannot be confirmed', async ({ page, gateway }) => {

@@ -111,7 +111,7 @@ export function AppRuntimeHost({ config, queryClient }: { config: RuntimeConfig;
   useEffect(() => {
     const unsubscribe = resources.runtime.subscribe((next) => {
       setSnapshot(next);
-      if (next.state === 'READY') void resources.router.invalidate();
+      if (next.state === 'READY' && next.sites?.state !== 'checking') void resources.router.invalidate();
     });
     void resources.runtime.bootstrap(window.location.href);
     return () => {
@@ -121,24 +121,27 @@ export function AppRuntimeHost({ config, queryClient }: { config: RuntimeConfig;
   }, [resources]);
 
   const showSignInPage = window.location.pathname === '/sign-in' || snapshot.state === 'LOGIN_REQUIRED';
+  const waitingForSites = snapshot.state === 'READY' && !showSignInPage && snapshot.sites?.state === 'checking';
+  const bootstrapping = (snapshot.state === 'BOOTSTRAPPING' || waitingForSites) && !showSignInPage;
+  const shellReady = snapshot.state === 'READY' && !waitingForSites && !showSignInPage;
   // The authenticated shell's SidebarInset is the page's main landmark; other states are their own.
-  const Root = snapshot.state === 'READY' && !showSignInPage ? 'div' : 'main';
+  const Root = shellReady ? 'div' : 'main';
   return (
     <Root
-      className={`real-shell-state${snapshot.state === 'READY' && !showSignInPage ? ' real-shell-state--authenticated' : ''}${showSignInPage ? ' real-shell-state--login' : ''}`}
+      className={`real-shell-state${shellReady ? ' real-shell-state--authenticated' : ''}${showSignInPage ? ' real-shell-state--login' : ''}`}
       aria-label={Root === 'main' ? WEB_SHELL_MARKER : undefined}
       data-build-graph={WEB_GRAPH_MARKER}
-      data-shell-state={showSignInPage ? 'LOGIN_REQUIRED' : snapshot.state}
-      data-protected-route-mounted={snapshot.state === 'READY' && !showSignInPage ? 'true' : 'false'}
+      data-shell-state={showSignInPage ? 'LOGIN_REQUIRED' : waitingForSites ? 'BOOTSTRAPPING' : snapshot.state}
+      data-protected-route-mounted={shellReady ? 'true' : 'false'}
     >
-      {snapshot.state === 'BOOTSTRAPPING' && !showSignInPage ? (
+      {bootstrapping ? (
         <RouteLoading label="正在加载系统" testId="real-shell-bootstrapping" routeState="BOOTSTRAPPING" variant="shell" />
       ) : null}
       {showSignInPage ? <LoginRequiredState snapshot={snapshot} beginLogin={() => resources.runtime.beginLogin()} /> : null}
       {snapshot.state === 'UNAVAILABLE' && !showSignInPage ? (
         <PrincipalUnavailableState config={config} snapshot={snapshot} retry={() => { void resources.runtime.retry(); }} />
       ) : null}
-      {snapshot.state === 'READY' && !showSignInPage ? (
+      {shellReady ? (
         <ShellRuntimeProvider runtime={resources.runtime}>
           <RouterProvider router={resources.router} />
         </ShellRuntimeProvider>

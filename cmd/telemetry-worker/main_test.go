@@ -95,7 +95,7 @@ func TestShutdownTelemetryWorkerOrder(t *testing.T) {
 		Exporter: &telemetryRecordingExporter{record: recordEvent},
 	})
 	obsRuntime.MarkReady()
-	logger := observability.NewJSONLogger(&bytes.Buffer{}, slog.LevelInfo)
+	logger := observability.NewJSONLogger(io.Discard, slog.LevelInfo)
 
 	var storesClosed atomic.Bool
 	httpEntered := make(chan struct{})
@@ -294,7 +294,7 @@ func TestShutdownTelemetryWorkerDrainRelaysAndAnalyticsOrder(t *testing.T) {
 		Exporter: &telemetryRecordingExporter{record: record},
 	})
 	obsRuntime.MarkReady()
-	logger := observability.NewJSONLogger(&bytes.Buffer{}, slog.LevelInfo)
+	logger := observability.NewJSONLogger(io.Discard, slog.LevelInfo)
 
 	var workersWG, analyticsWG sync.WaitGroup
 	workerCtx, workerCancel := context.WithCancel(context.Background())
@@ -704,7 +704,7 @@ func TestClonedHTTPTransportAndProbeSweepDebugLogging(t *testing.T) {
 		t.Fatalf("unexpected cloned transport config: %#v", transport)
 	}
 
-	var infoBuf bytes.Buffer
+	var infoBuf syncLogBuffer
 	infoCtx, cancelInfo := context.WithCancel(t.Context())
 	doneInfo := make(chan struct{})
 	exitedInfo := make(chan struct{})
@@ -719,7 +719,7 @@ func TestClonedHTTPTransportAndProbeSweepDebugLogging(t *testing.T) {
 		t.Fatalf("expected telemetry_probe_offsets_estimated suppressed at Info level, got: %s", infoBuf.String())
 	}
 
-	var debugBuf bytes.Buffer
+	var debugBuf syncLogBuffer
 	debugCtx, cancelDebug := context.WithCancel(t.Context())
 	doneDebug := make(chan struct{})
 	exitedDebug := make(chan struct{})
@@ -733,6 +733,23 @@ func TestClonedHTTPTransportAndProbeSweepDebugLogging(t *testing.T) {
 	if !strings.Contains(debugBuf.String(), "telemetry_probe_offsets_estimated") {
 		t.Fatalf("expected telemetry_probe_offsets_estimated at Debug level, got: %s", debugBuf.String())
 	}
+}
+
+type syncLogBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *syncLogBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *syncLogBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
 }
 
 func TestEnvHelpersReturnErrorsInsteadOfExiting(t *testing.T) {

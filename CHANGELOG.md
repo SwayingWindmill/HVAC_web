@@ -25,6 +25,11 @@
 
 #### 修复与加固
 
+- 修复 Web 壳层首屏启动竞态并落地 PR/CI 加速与静态防线（PR `#919`，`apps/hvac-web`、`deploy/platform/phase1/migrations`、`infra/registry`、`scripts/`、`.github/workflows/`）：
+  - **Web 站点发现就绪后再挂载路由**：`AppRuntimeHost` 在登录态成立后等待站点列表检查完成再触发路由校验与挂载，消除慢网场景下首次加载报 `RouteAccessError: SITE_DISCOVERY_UNAVAILABLE` 的间歇报错。
+  - **Phase 1 迁移唯一事实源**：以 `deploy/platform/phase1/migrations/manifest.v1.json` 为唯一事实源自动生成 `migration-list.tsv`、分段镜像 `Dockerfile` 与 `infra/registry/compose.yaml`（并补回遗漏的 `metric-backfill-recalc-job-grants.sql` 挂载）。
+  - **PR CI 提速与工程门禁**：并行拆解 `unit` 门禁（Go 静态与漏洞、Web E2E、分域 Go `-race` 测试）、启用 Go 编译与工具缓存并复用 Runner 系统 Chrome；新增 ClickHouse SQL 方言检查（`clickhouse:sql:check`）、Go 测试 `time.Sleep` 与并发日志无保护 `bytes.Buffer` 检查，以及本地预检 `npm run preflight`。
+
 - 完成上线前四轮系统稳定性与安全边界收尾（含 PR `#907`、`#911`、`#914`、`#915` 及可观测性与 ClickHouse 迁移恢复闭环）：
   - **容器端口收口与防暴露门禁（`#907`）**：把告警、持久审计、工单本地调试 Compose 里的数据库端口统一收口到本机回环 `127.0.0.1`；单机部署 `deploy/platform/phase1/compose.yaml` 仅保留 `nginx`（443）与 `mqtt-broker`（8883）对外暴露，数据库、缓存和内部诊断端口一律留在内网；仓库静态门禁新增 Compose 端口暴露检查，发现非白名单公网端口映射即阻断提交；同步收紧服务器运行目录权限与观测采集容器（`otel-collector`、`loki`、`tempo`）宿主机目录属主映射。
   - **ClickHouse 网络隔离、资源限额与系统日志收口（`#907`）**：新增 `default-security.xml`，把无密码 `default` 账号限制为仅限容器回环地址（`127.0.0.1`、`::1`）登录，同网段其他容器无法免密读写或删库；将 ClickHouse 会话时区固定为 `UTC`，设置服务器内存上限与标记/未压缩缓存边界，单条查询内存上限 1 GiB 且分组排序超 512 MiB 自动落盘；关闭 17 张内部诊断日志表并把 `query_log` 保留期收口为 3 天、`crash_log` 14 天、`backup_log` 30 天，为 6 张核心历史与分析表补齐按分区整块删除的兜底 TTL；夜间备份脚本补齐过期 WAL 自动清理、可选异地同步钩子 `BACKUP_OFFSITE_SYNC_CMD` 与双库备份就绪检查。
