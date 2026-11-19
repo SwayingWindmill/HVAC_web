@@ -685,3 +685,85 @@ func TestVerifyDueDaysSelfHealsIncompleteDaysAndReverifyDaysUpdatesFinalizedDays
 		t.Fatalf("10-19 share=%v, want 0.1 (untouched)", share19)
 	}
 }
+
+type bivariatePlantHistory struct {
+	changedAt    time.Time
+	factor       float64
+	wetBulbShift float64
+}
+
+func (bivariatePlantHistory) HasDeviceEnergy(_ context.Context, _, _, deviceID string) (bool, error) {
+	return deviceID != unmeteredDevice, nil
+}
+
+func (h bivariatePlantHistory) HourlySamples(_ context.Context, _, _ string, _ *string, from, to time.Time) ([]HourSample, error) {
+	var samples []HourSample
+	idx := 0
+	for at := from; at.Before(to); at = at.Add(time.Hour) {
+		cooling := 320.0
+		if hour := at.In(shanghai).Hour(); hour >= 8 && hour < 20 {
+			cooling = 720 + 12*float64(hour-8) + 20*float64(at.In(shanghai).Day()%3)
+		}
+		twb := 21.5 + 3.0*math.Sin(float64(idx)*0.25)
+		if !at.Before(h.changedAt) {
+			twb += h.wetBulbShift
+		}
+		tdry := twb + 4.8
+		loadRatio := cooling / 1200.0
+		aiShare := 0.85
+		plant := 40 + 0.16*cooling + 3.5*twb
+		energy := plant
+		if !at.Before(h.changedAt) {
+			energy *= h.factor
+		}
+		samples = append(samples, HourSample{
+			Start:             at,
+			EnergyKWh:         energy,
+			CoolingKWh:        cooling,
+			PlantKWh:          energy,
+			OutdoorWetBulbC:   mvFloatPtr(twb),
+			OutdoorDryBulbC:   mvFloatPtr(tdry),
+			PlantLoadRatio:    mvFloatPtr(loadRatio),
+			AIClosedLoopShare: mvFloatPtr(aiShare),
+		})
+		idx++
+	}
+	return samples, nil
+}
+
+func TestBivariateMeasureLifecyclePreservesWeatherAdjustmentAndDailyAnchors(t *testing.T) {
+	implemented := time.Date(2026, 10, 15, 9, 0, 0, 0, shanghai)
+	store := newMemoryStore()
+	history := bivariatePlantHistory{changedAt: implemented, factor: 0.85, wetBulbShift: 3.0}
+	service := newTestService(t, store, history)
+	measure := register(t, service, "湿球温度双变量基线控制优化")
+	implementedMeasure, err := service.Implement(t.Context(), testTenant, testSite, measure.ID, implemented, testActor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := implementedMeasure.Baseline
+	if b == nil || !b.Trusted || b.ModelKind != ModelKindBivariateWetBulb {
+		t.Fatalf("baseline = %+v, want trusted %s", b, ModelKindBivariateWetBulb)
+	}
+	if b.WetBulbSlope == nil || math.Abs(*b.WetBulbSlope-3.5) > 1e-6 || b.RSquared == nil || *b.RSquared < 0.999 || b.MeanWetBulbC == nil {
+		t.Fatalf("bivariate params = %+v", b)
+	}
+
+	if err := service.VerifyDueDays(t.Context(), testTenant, testSite, time.Date(2026, 10, 18, 2, 0, 0, 0, shanghai)); err != nil {
+		t.Fatal(err)
+	}
+	verified, err := service.Verified(t.Context(), testTenant, testSite, measure.ID)
+	if err != nil || len(verified.Days) != 2 {
+		t.Fatalf("verified = %+v err = %v", verified, err)
+	}
+	day17 := verified.Days[1]
+	if day17.Day != "2026-10-17" || math.Abs(day17.AvoidedKWh/day17.AdjustedBaselineKWh-0.15) > 1e-9 {
+		t.Fatalf("day17 savings = %+v", day17)
+	}
+	if day17.MeanWetBulbC == nil || day17.MeanDryBulbC == nil || day17.MeanLoadRatio == nil || day17.AIClosedLoopShare == nil {
+		t.Fatalf("day17 missing condition anchors: %+v", day17)
+	}
+	if math.Abs(*day17.AIClosedLoopShare-0.85) > 1e-9 {
+		t.Fatalf("day17 AIClosedLoopShare = %v, want 0.85", *day17.AIClosedLoopShare)
+	}
+}

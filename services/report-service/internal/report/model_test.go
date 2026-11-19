@@ -1,7 +1,9 @@
 package report
 
 import (
+	"encoding/json"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -295,4 +297,145 @@ func TestFiveTierTariffPeriodsIncludingDeepValleyAreTotalledAndSorted(t *testing
 	if !near(snapshot.TariffPeriods[4].CostCNY, 4) || !near(snapshot.TariffPeriods[4].ElectricityKWh, 20) {
 		t.Fatalf("deep valley totals = %#v", snapshot.TariffPeriods[4])
 	}
+}
+
+func reportFloatPtr(v float64) *float64 { return &v }
+
+func TestBuildCarriesP2SnapshotEnrichmentAndSanitizesNonFinite(t *testing.T) {
+	first := time.Date(2026, 9, 14, 0, 0, 0, 0, shanghai)
+
+	t.Run("carries valid P2 sections with SchemaVersion 1", func(t *testing.T) {
+		snapshot, err := Build("2026-09", shanghai, MonthEnergy{
+			Hours: day(first, 10, 40, always),
+			LayeredEfficiency: &LayeredEfficiencySnapshot{
+				PlantCOP:        reportFloatPtr(4.2),
+				ChillerCOP:      reportFloatPtr(5.8),
+				ChilledPumpWTF:  reportFloatPtr(31.5),
+				CoolingPumpWTF:  reportFloatPtr(27.0),
+				TowerPowerShare: reportFloatPtr(0.085),
+			},
+			MeterBalance: &MeterBalanceSnapshot{
+				SiteKWh:        240.0,
+				SubmeterSumKWh: 235.2,
+				DiffKWh:        4.8,
+				ImbalanceRatio: reportFloatPtr(0.02),
+				Status:         "BALANCED",
+			},
+			ConditionAnchors: &ConditionAnchorsSnapshot{
+				MeanWetBulbC:      reportFloatPtr(23.4),
+				MeanDryBulbC:      reportFloatPtr(28.1),
+				MeanLoadRatio:     reportFloatPtr(0.62),
+				AIClosedLoopShare: reportFloatPtr(0.78),
+			},
+		}, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if snapshot.SchemaVersion != 1 {
+			t.Fatalf("SchemaVersion = %d, want 1", snapshot.SchemaVersion)
+		}
+		raw, err := json.Marshal(snapshot)
+		if err != nil {
+			t.Fatalf("json.Marshal() error = %v", err)
+		}
+		var roundTrip Snapshot
+		if err := json.Unmarshal(raw, &roundTrip); err != nil {
+			t.Fatalf("json.Unmarshal() error = %v", err)
+		}
+		if roundTrip.LayeredEfficiency == nil || !near(*roundTrip.LayeredEfficiency.PlantCOP, 4.2) || !near(*roundTrip.LayeredEfficiency.ChilledPumpWTF, 31.5) {
+			t.Fatalf("roundTrip.LayeredEfficiency = %+v", roundTrip.LayeredEfficiency)
+		}
+		if roundTrip.MeterBalance == nil || !near(roundTrip.MeterBalance.SiteKWh, 240.0) || roundTrip.MeterBalance.Status != "BALANCED" || !near(*roundTrip.MeterBalance.ImbalanceRatio, 0.02) {
+			t.Fatalf("roundTrip.MeterBalance = %+v", roundTrip.MeterBalance)
+		}
+		if roundTrip.ConditionAnchors == nil || !near(*roundTrip.ConditionAnchors.MeanWetBulbC, 23.4) || !near(*roundTrip.ConditionAnchors.AIClosedLoopShare, 0.78) {
+			t.Fatalf("roundTrip.ConditionAnchors = %+v", roundTrip.ConditionAnchors)
+		}
+	})
+
+	t.Run("omits optional P2 blocks when nil for backward compatibility", func(t *testing.T) {
+		snapshot, err := Build("2026-09", shanghai, MonthEnergy{Hours: day(first, 10, 40, always)}, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := json.Marshal(snapshot)
+		if err != nil {
+			t.Fatalf("json.Marshal() error = %v", err)
+		}
+		text := string(raw)
+		for _, field := range []string{"layeredEfficiency", "meterBalance", "conditionAnchors"} {
+			if strings.Contains(text, field) {
+				t.Fatalf("omitted field %q present in JSON: %s", field, text)
+			}
+		}
+	})
+
+	t.Run("sanitizes NaN and Inf values across P2 blocks while preserving negative temperatures and diffs", func(t *testing.T) {
+		snapshot, err := Build("2026-09", shanghai, MonthEnergy{
+			Hours: day(first, 10, 40, always),
+			LayeredEfficiency: &LayeredEfficiencySnapshot{
+				PlantCOP:        reportFloatPtr(math.NaN()),
+				ChillerCOP:      reportFloatPtr(5.4),
+				ChilledPumpWTF:  reportFloatPtr(math.Inf(1)),
+				CoolingPumpWTF:  reportFloatPtr(math.Inf(-1)),
+				TowerPowerShare: nil,
+			},
+			MeterBalance: &MeterBalanceSnapshot{
+				SiteKWh:        240.0,
+				SubmeterSumKWh: 245.0,
+				DiffKWh:        math.NaN(),
+				ImbalanceRatio: reportFloatPtr(math.Inf(1)),
+				Status:         " EXCESS_SUBMETER ",
+			},
+			ConditionAnchors: &ConditionAnchorsSnapshot{
+				MeanWetBulbC:      reportFloatPtr(-2.5),
+				MeanDryBulbC:      reportFloatPtr(-1.0),
+				MeanLoadRatio:     reportFloatPtr(math.NaN()),
+				AIClosedLoopShare: reportFloatPtr(math.Inf(-1)),
+			},
+		}, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if snapshot.LayeredEfficiency == nil || snapshot.LayeredEfficiency.PlantCOP != nil ||
+			snapshot.LayeredEfficiency.ChillerCOP == nil || !near(*snapshot.LayeredEfficiency.ChillerCOP, 5.4) ||
+			snapshot.LayeredEfficiency.ChilledPumpWTF != nil || snapshot.LayeredEfficiency.CoolingPumpWTF != nil {
+			t.Fatalf("sanitized LayeredEfficiency = %+v", snapshot.LayeredEfficiency)
+		}
+		if snapshot.MeterBalance == nil || !near(snapshot.MeterBalance.DiffKWh, -5.0) ||
+			snapshot.MeterBalance.ImbalanceRatio != nil || snapshot.MeterBalance.Status != "EXCESS_SUBMETER" {
+			t.Fatalf("sanitized MeterBalance = %+v", snapshot.MeterBalance)
+		}
+		if snapshot.ConditionAnchors == nil || !near(*snapshot.ConditionAnchors.MeanWetBulbC, -2.5) ||
+			!near(*snapshot.ConditionAnchors.MeanDryBulbC, -1.0) ||
+			snapshot.ConditionAnchors.MeanLoadRatio != nil || snapshot.ConditionAnchors.AIClosedLoopShare != nil {
+			t.Fatalf("sanitized ConditionAnchors = %+v", snapshot.ConditionAnchors)
+		}
+		if _, err := json.Marshal(snapshot); err != nil {
+			t.Fatalf("json.Marshal() failed after sanitization: %v", err)
+		}
+
+		// Non-finite SiteKWh/SubmeterSumKWh drops MeterBalance, and all-NaN ConditionAnchors drops to nil.
+		dropped, err := Build("2026-09", shanghai, MonthEnergy{
+			Hours: day(first, 10, 40, always),
+			MeterBalance: &MeterBalanceSnapshot{
+				SiteKWh:        math.NaN(),
+				SubmeterSumKWh: 100,
+				DiffKWh:        math.Inf(1),
+				Status:         "UNKNOWN",
+			},
+			ConditionAnchors: &ConditionAnchorsSnapshot{
+				MeanWetBulbC: reportFloatPtr(math.NaN()),
+			},
+		}, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if dropped.MeterBalance != nil || dropped.ConditionAnchors != nil {
+			t.Fatalf("expected invalid MeterBalance and all-NaN ConditionAnchors to drop to nil, got mb=%+v ca=%+v", dropped.MeterBalance, dropped.ConditionAnchors)
+		}
+		if _, err := json.Marshal(dropped); err != nil {
+			t.Fatalf("json.Marshal() failed on dropped blocks: %v", err)
+		}
+	})
 }
