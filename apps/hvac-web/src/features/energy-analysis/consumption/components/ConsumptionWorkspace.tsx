@@ -22,7 +22,14 @@ import { DataGapBanner } from "@/features/data-gaps/DataGapBanner";
 import { dataGapsKeys } from "@/features/data-gaps/query";
 import { TouCostDetail } from "@/features/tariff/components/TouCostDetail";
 import { siteTariffQuery } from "@/features/tariff/query";
-import { PERIOD_LABEL, sumCosts, type PeriodCode, type TouCost } from "@/features/tariff/tariff-model";
+import {
+  PERIOD_LABEL,
+  PERIOD_ORDER,
+  sumCosts,
+  type PeriodCode,
+  type SiteTariffWithCalendar,
+  type TouCost,
+} from "@/features/tariff/tariff-model";
 import { formatDecimal, formatTime } from "@/lib/operator-format";
 import { isOneOf } from "@/lib/typed";
 import { cn } from "@/lib/utils";
@@ -49,7 +56,6 @@ const PERIOD_OPTIONS: readonly PeriodOption<EnergyPeriod>[] = ENERGY_PERIOD_KEYS
 /** What the period is compared with: the same span of the period before. */
 const PREVIOUS_LABEL: Record<EnergyPeriod, string> = { today: "昨日同时段", "7d": "前 7 天", month: "上月同期", year: "去年同期" };
 const BUCKET_HEADER: Record<Granularity, string> = { hour: "时段", day: "日期", month: "月份" };
-const PERIOD_ORDER: readonly PeriodCode[] = ["SUPER_PEAK", "PEAK", "FLAT", "VALLEY"];
 
 type ConsumptionMetric = "electricityKWh" | "coolingKWh" | "cop" | "cost";
 type ConsumptionView = "trend" | "tou" | "detail";
@@ -123,7 +129,7 @@ function rangeLabel(period: EnergyPeriod, timeZone: string): string {
 }
 
 /** Tariff periods the table splits energy into, hottest first. */
-const tariffCodes = (tariff: SiteTariff) => PERIOD_ORDER.filter((code) => tariff.periods.some((period) => period.periodCode === code));
+const tariffCodes = (tariff: SiteTariffWithCalendar) => PERIOD_ORDER.filter((code) => tariff.periods.some((period) => period.periodCode === code));
 
 export function ConsumptionWorkspace() {
   const { site } = siteRoute.useRouteContext();

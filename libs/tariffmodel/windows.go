@@ -3,6 +3,8 @@ package tariffmodel
 import (
 	"sort"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/fixedpoint"
 )
 
 // Version is an import Tariff Version over the time it prices a Site: the part where both the
@@ -13,6 +15,7 @@ type Version struct {
 	EffectiveTo   *time.Time
 	Location      *time.Location
 	Periods       []Period
+	HolidayDates  map[string]string
 }
 
 // Window is one stretch of time, in UTC, priced at one energy rate.
@@ -22,6 +25,16 @@ type Window struct {
 	PeriodCode       string
 	EnergyRatePerKWh float64
 	VersionID        string
+}
+
+// FixedEnergyRate converts EnergyRatePerKWh to fixedpoint.Decimal6.
+func (w Window) FixedEnergyRate() (fixedpoint.Decimal6, error) {
+	return fixedpoint.FromFloat64(w.EnergyRatePerKWh)
+}
+
+// PriceEnergy prices energyKWh at this window's EnergyRatePerKWh using fixedpoint.Decimal6.
+func (w Window) PriceEnergy(energyKWh float64) (fixedpoint.Decimal6, error) {
+	return PriceInterval(w.EnergyRatePerKWh, energyKWh)
 }
 
 // Windows lays the versions' periods out over [from, to) on each version's own clock and day
@@ -39,9 +52,17 @@ func Windows(versions []Version, from, to time.Time) []Window {
 		}
 		periods := append([]Period(nil), version.Periods...)
 		sort.Slice(periods, func(left, right int) bool { return periods[left].StartMinute < periods[right].StartMinute })
+		definedDayTypes := make(map[string]struct{}, len(periods))
+		for _, period := range periods {
+			definedDayTypes[period.DayType] = struct{}{}
+		}
+		hasDayType := func(dt string) bool {
+			_, ok := definedDayTypes[dt]
+			return ok
+		}
 		local := start.In(version.Location)
 		for day := midnight(local.Year(), local.Month(), local.Day(), version.Location); day.Before(end); day = midnight(day.Year(), day.Month(), day.Day()+1, version.Location) {
-			kind := dayType(day)
+			kind := ResolveDayType(day, version.HolidayDates, hasDayType)
 			for _, period := range periods {
 				if period.DayType != kind {
 					continue

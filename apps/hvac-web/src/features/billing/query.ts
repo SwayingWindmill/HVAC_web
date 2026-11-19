@@ -1,5 +1,12 @@
 import { queryOptions } from '@tanstack/react-query';
 import {
+  describeAccountingRecalcError,
+  listSiteAccountingRecalcJobs,
+  submitSiteAccountingRecalc,
+  type AccountingRecalcGranularity,
+  type AccountingRecalcJob,
+} from '@/api/accounting-recalc';
+import {
   PlatformApiError,
   createPlatformGatewayClient,
   type EnergySeriesResponse,
@@ -34,15 +41,35 @@ export const billingKeys = {
       params.meterScope ?? 'ALL',
       params.status ?? 'ALL',
     ] as const,
+  monthElectricityRoot: (siteId: string) => ['billing-month-electricity', siteId] as const,
   monthElectricity: (siteId: string, billingMonth: string, queryToIso: string) =>
     ['billing-month-electricity', siteId, billingMonth, queryToIso] as const,
+  readingWindowElectricityRoot: (siteId: string) =>
+    ['billing-reading-window-electricity', siteId] as const,
   readingWindowElectricity: (
     siteId: string,
     readingStartDate: string,
     readingEndDate: string,
   ) =>
     ['billing-reading-window-electricity', siteId, readingStartDate, readingEndDate] as const,
+  recalcJobs: (siteId: string) => ['accounting-recalc-jobs', siteId] as const,
 };
+
+export function siteAccountingRecalcJobsQuery(siteId: string, enabled = true) {
+  return queryOptions({
+    queryKey: billingKeys.recalcJobs(siteId),
+    queryFn: ({ signal }) => listSiteAccountingRecalcJobs(siteId, { signal }),
+    select: (items): readonly AccountingRecalcJob[] =>
+      [...items].sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt)),
+    enabled: Boolean(siteId) && enabled,
+    staleTime: 10_000,
+    retry: false,
+    refetchInterval: (query) =>
+      query.state.data?.some((job) => job.status === 'PENDING' || job.status === 'RUNNING')
+        ? 3_000
+        : false,
+  });
+}
 
 export function siteMonthlyBudgetQuery(siteId: string, billingMonth: string) {
   return queryOptions({
@@ -183,4 +210,10 @@ export function isBillingRevisionConflict(error: unknown): boolean {
   );
 }
 
-export { describeBillingApiError };
+export {
+  describeAccountingRecalcError,
+  describeBillingApiError,
+  submitSiteAccountingRecalc,
+  type AccountingRecalcGranularity,
+  type AccountingRecalcJob,
+};

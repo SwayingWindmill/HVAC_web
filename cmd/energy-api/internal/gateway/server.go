@@ -248,6 +248,10 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 			dispatchElectricityBillingRoute(h, writer, request, billingRoute)
 			return
 		}
+		if recalcRoute, matches := matchPublicAccountingRecalcRoute(request.Method, request.URL.Path); matches {
+			dispatchAccountingRecalcRoute(h, writer, request, recalcRoute)
+			return
+		}
 		if agentSessionRoute, matches := matchPublicAgentSessionRoute(request.URL.Path); matches {
 			dispatchAgentSessionRoute(h, writer, request, agentSessionRoute)
 			return

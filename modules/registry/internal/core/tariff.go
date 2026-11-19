@@ -13,13 +13,14 @@ import (
 // SiteTariff is the import Tariff in effect for a Site: the released version of the Tariff
 // assigned to the Site's grid connection, with its time-of-use periods.
 type SiteTariff struct {
-	SiteID        string         `json:"siteId"`
-	DisplayName   string         `json:"displayName"`
-	Version       int64          `json:"version"`
-	EffectiveFrom string         `json:"effectiveFrom"`
-	Timezone      string         `json:"timezone"`
-	Currency      string         `json:"currency"`
-	Periods       []TariffPeriod `json:"periods"`
+	SiteID        string            `json:"siteId"`
+	DisplayName   string            `json:"displayName"`
+	Version       int64             `json:"version"`
+	EffectiveFrom string            `json:"effectiveFrom"`
+	Timezone      string            `json:"timezone"`
+	Currency      string            `json:"currency"`
+	Periods       []TariffPeriod    `json:"periods"`
+	HolidayDates  map[string]string `json:"holidayDates,omitempty"`
 }
 
 // TariffPeriod prices the local minutes [StartMinute, EndMinute) of a day type. Settlement
@@ -66,12 +67,61 @@ LIMIT 1
 		}
 		tariff.EffectiveFrom = formatInstant(effectiveFrom)
 		tariff.Periods, err = queryTariffPeriods(ctx, transaction, versionID)
-		return err
+		if err != nil {
+			return err
+		}
+		holidays, err := querySiteHolidayDates(ctx, transaction, siteID, claims.DeniedSiteIDs)
+		if err != nil {
+			return err
+		}
+		if len(holidays) > 0 {
+			tariff.HolidayDates = holidays
+		}
+		return nil
 	})
 	if err != nil {
 		return SiteTariff{}, err
 	}
 	return tariff, nil
+}
+
+// querySiteHolidayDates reads site-level holiday overrides keyed by local date ("YYYY-MM-DD").
+func querySiteHolidayDates(ctx context.Context, transaction pgx.Tx, siteID string, deniedSiteIDs []string) (map[string]string, error) {
+	var hasTable bool
+	if err := transaction.QueryRow(ctx, `SELECT to_regclass('core_registry.site_calendar_holidays') IS NOT NULL`).Scan(&hasTable); err != nil {
+		return nil, fmt.Errorf("check Site calendar holidays table: %w", err)
+	}
+	if !hasTable {
+		return nil, nil
+	}
+	rows, err := transaction.Query(ctx, `
+SELECT to_char(holiday_date, 'YYYY-MM-DD'), day_type
+FROM core_registry.site_calendar_holidays
+WHERE site_id = $1::uuid
+  AND NOT (site_id = ANY($2::uuid[]))
+ORDER BY holiday_date
+`, siteID, postgresUUIDArray(deniedSiteIDs))
+	if err != nil {
+		return nil, fmt.Errorf("query Site calendar holidays: %w", err)
+	}
+	defer rows.Close()
+	holidays := map[string]string{}
+	for rows.Next() {
+		var dateKey, dayType string
+		if err := rows.Scan(&dateKey, &dayType); err != nil {
+			return nil, err
+		}
+		if dateKey != "" && dayType != "" {
+			holidays[dateKey] = dayType
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(holidays) == 0 {
+		return nil, nil
+	}
+	return holidays, nil
 }
 
 // queryTariffPeriods is a Tariff Version's time-of-use periods in clock order per day type.

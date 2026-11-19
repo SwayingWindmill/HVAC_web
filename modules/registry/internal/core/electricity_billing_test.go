@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 
@@ -603,5 +604,112 @@ func TestElectricityBillingUtilityBillValidationConfirmAndLocking(t *testing.T) 
 	}
 	if len(billList.Items) != 1 || billList.Items[0].ID != draft.ID {
 		t.Fatalf("unexpected confirmed bill list: %#v", billList.Items)
+	}
+}
+
+func TestElectricityBillingDeepValleyTouAndFixedPointMoneyValidation(t *testing.T) {
+	backend := newMemoryBillingBackend()
+	client := newBillingHTTPClient(t, backend)
+	manageClaims := testGrantClaims(registryauth.ActionBillingManage)
+
+	// 5-tier TOU including deepValleyKwh and IEEE-754 cent arithmetic (0.1 + 0.2 == 0.30, 19.99 + 0.01 == 20.00).
+	fiveTierResp := client.do(t, http.MethodPost, RegistryPathPrefix+"sites/"+testSiteA1+"/utility-bills", manageClaims, "财务王工", map[string]any{
+		"billingMonth":     "2026-11",
+		"readingStartDate": "2026-10-25",
+		"readingEndDate":   "2026-11-24",
+		"meterScope":       "CHILLER_PLANT",
+		"billedEnergyKwh":  100000,
+		"touBreakdown": map[string]any{
+			"sharpKwh":      10000,
+			"peakKwh":       25000,
+			"flatKwh":       30000,
+			"valleyKwh":     20000,
+			"deepValleyKwh": 15000,
+		},
+		"energyChargeCny":          100.1 + 200.2,
+		"basicChargeMode":          "MAX_DEMAND_KW",
+		"basicChargeQuantity":      500,
+		"basicChargeCny":           19.99,
+		"powerFactorAdjustmentCny": -0.05,
+		"otherChargesCny":          0.06,
+		"totalPayableCny":          320.30,
+		"meta":                     map[string]any{"expectedRevision": 0, "idempotencyKey": "bill-5tier-0001", "reason": "五段分时含深谷录入"},
+	})
+	if fiveTierResp.Code != http.StatusCreated {
+		t.Fatalf("create 5-tier bill status=%d, want 201; body=%s", fiveTierResp.Code, fiveTierResp.Body.String())
+	}
+	var saved UtilityBill
+	if err := json.NewDecoder(fiveTierResp.Body).Decode(&saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.TouBreakdown == nil || saved.TouBreakdown.DeepValleyKwh == nil || *saved.TouBreakdown.DeepValleyKwh != 15000 {
+		t.Fatalf("deepValleyKwh missing or mismatched: %#v", saved.TouBreakdown)
+	}
+	if saved.EnergyChargeCny != 300.30 || saved.TotalPayableCny != 320.30 {
+		t.Fatalf("unexpected fixed-point rounded bill amounts: energy=%v total=%v", saved.EnergyChargeCny, saved.TotalPayableCny)
+	}
+
+	// Only deepValleyKwh set must not be dropped by normalizeTouBreakdown.
+	deepVal := 420.5
+	normalized := normalizeTouBreakdown(&UtilityBillTouBreakdown{DeepValleyKwh: &deepVal})
+	if normalized == nil || normalized.DeepValleyKwh == nil || *normalized.DeepValleyKwh != 420.5 {
+		t.Fatalf("normalizeTouBreakdown dropped deepValleyKwh-only breakdown: %#v", normalized)
+	}
+
+	// Negative deepValleyKwh must be rejected.
+	badDeepResp := client.do(t, http.MethodPost, RegistryPathPrefix+"sites/"+testSiteA1+"/utility-bills", manageClaims, "财务王工", map[string]any{
+		"billingMonth":             "2026-11",
+		"readingStartDate":         "2026-10-25",
+		"readingEndDate":           "2026-11-24",
+		"meterScope":               "CHILLER_PLANT",
+		"billedEnergyKwh":          100,
+		"touBreakdown":             map[string]any{"deepValleyKwh": -1},
+		"energyChargeCny":          10,
+		"basicChargeMode":          "NONE",
+		"basicChargeCny":           0,
+		"powerFactorAdjustmentCny": 0,
+		"otherChargesCny":          0,
+		"totalPayableCny":          10,
+		"meta":                     map[string]any{"expectedRevision": 0, "idempotencyKey": "bill-bad-deep-0001", "reason": "负数深谷校验"},
+	})
+	if badDeepResp.Code != http.StatusBadRequest {
+		t.Fatalf("negative deepValleyKwh status=%d, want 400; body=%s", badDeepResp.Code, badDeepResp.Body.String())
+	}
+
+	// Half-up cent rounding and validMoneyCents checks without IEEE-754 drift.
+	if cents, ok := validMoneyCents(100.1+200.2, false); !ok || cents != 30030 {
+		t.Fatalf("validMoneyCents(0.1+0.2+300) = (%d, %v), want (30030, true)", cents, ok)
+	}
+	if _, ok := validMoneyCents(1.005, false); ok {
+		t.Fatal("validMoneyCents(1.005) should reject sub-cent precision")
+	}
+	if got := roundCents(1.005); got != 1.01 {
+		t.Fatalf("roundCents(1.005) = %v, want 1.01", got)
+	}
+	if got := formatNumericCents(-1.005); got != "-1.01" {
+		t.Fatalf("formatNumericCents(-1.005) = %q, want -1.01", got)
+	}
+	if parsed, err := parseMoneyField("123456.78"); err != nil || parsed != 123456.78 {
+		t.Fatalf("parseMoneyField = (%v, %v), want (123456.78, nil)", parsed, err)
+	}
+
+	// HolidayDates JSON omitempty behavior on SiteTariff and ImportTariffs.
+	emptyTariffJSON, err := json.Marshal(SiteTariff{SiteID: testSiteA1, Periods: []TariffPeriod{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(emptyTariffJSON), "holidayDates") {
+		t.Fatalf("expected empty SiteTariff.HolidayDates to be omitted, got %s", emptyTariffJSON)
+	}
+	populatedImportJSON, err := json.Marshal(ImportTariffs{
+		SiteID:       testSiteA1,
+		Versions:     []ImportTariffVersion{},
+		HolidayDates: map[string]string{"2026-10-01": "HOLIDAY"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(populatedImportJSON), `"holidayDates":{"2026-10-01":"HOLIDAY"}`) {
+		t.Fatalf("expected populated ImportTariffs.HolidayDates in JSON, got %s", populatedImportJSON)
 	}
 }

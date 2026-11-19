@@ -606,7 +606,7 @@ const siteTime = (instant: string, timezone: string): string => {
 const DIMENSION_WORDS = Object.freeze({
   energy_type: Object.freeze({ electricity: '用电', cooling: '供冷' }),
   quality: Object.freeze({ VALID: '有效', SUSPECT: '可疑', INVALID: '无效' }),
-  tariff_period: Object.freeze({ SUPER_PEAK: '尖峰', PEAK: '峰', FLAT: '平', VALLEY: '谷' }),
+  tariff_period: Object.freeze({ SUPER_PEAK: '尖峰', PEAK: '峰', FLAT: '平', VALLEY: '谷', DEEP_VALLEY: '深谷' }),
 }) as Readonly<Record<string, Readonly<Record<string, string>>>>;
 const ENERGY_WORDS = Object.freeze({ electricity: '用电', cooling: '供冷' } as const) satisfies typeof DIMENSION_WORDS[string];
 const ENERGY_GRANULARITY_WORDS = Object.freeze({ hour: '按小时', day: '按日', month: '按月' } as const);

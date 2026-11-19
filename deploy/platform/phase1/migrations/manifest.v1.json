@@ -135,7 +135,8 @@
         "infra/registry/postgres/init/iam-expired-binding-revocation.sql",
         "infra/registry/postgres/init/hydraulic-loop-topology.sql",
         "infra/connectivity/postgres/init/command-correlation-trace-and-audit-immutability.sql",
-        "infra/registry/postgres/init/metric-backfill-watermarks-and-reverify.sql"
+        "infra/registry/postgres/init/metric-backfill-watermarks-and-reverify.sql",
+        "infra/registry/postgres/init/energy-tou-holidays-and-recalc.sql"
       ]
     },
     {

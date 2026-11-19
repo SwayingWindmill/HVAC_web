@@ -1,8 +1,8 @@
 import { CalendarClock, Plus } from 'lucide-react';
-import type { OperatingSchedule, SiteTariff, TariffPeriod } from '@/api/generated/platformGateway.gen';
+import type { OperatingSchedule, SiteTariff } from '@/api/generated/platformGateway.gen';
 import { Panel, PanelHeader } from '@/blocks/panel';
 import { Button } from '@/components/ui/button';
-import { daySchedule, PERIOD_LABEL } from '@/features/tariff/tariff-model';
+import { daySchedule, PERIOD_LABEL, type PeriodCode } from '@/features/tariff/tariff-model';
 import { cn } from '@/lib/utils';
 import {
   EXCEPTION_KIND_LABELS,
@@ -15,11 +15,12 @@ import {
 
 const HOUR_TICKS = [0, 3, 6, 9, 12, 15, 18, 21, 24] as const;
 
-const TARIFF_BAND_STYLE: Readonly<Record<TariffPeriod['periodCode'], string>> = {
+const TARIFF_BAND_STYLE: Readonly<Record<PeriodCode, string>> = {
   SUPER_PEAK: 'bg-destructive/[0.08]',
   PEAK: 'bg-warning/[0.08]',
   FLAT: 'bg-muted/35',
   VALLEY: 'bg-success/[0.07]',
+  DEEP_VALLEY: 'bg-chart-2/[0.08]',
 };
 
 const EXCEPTION_BADGE_STYLE = {
@@ -173,6 +174,7 @@ export function WeeklyScheduleGrid({
                     ['PEAK', 'bg-warning/25'],
                     ['FLAT', 'bg-muted'],
                     ['VALLEY', 'bg-success/20'],
+                    ['DEEP_VALLEY', 'bg-chart-2/20'],
                   ] as const
                 ).map(([code, swatch]) => (
                   <span key={code} className="inline-flex items-center gap-1">

@@ -6,15 +6,70 @@ import {
   type UtilityBillBasicChargeMode,
   type UtilityBillMeterScope,
   type UtilityBillStatus,
+  type UtilityBillTouBreakdown,
 } from '../../api/generated/platformGateway.gen.ts';
-import { siteMidnight, wallTime } from '../energy-analysis/consumption/model.ts';
-import { PERIOD_LABEL, sumCosts, type PeriodCode } from '../tariff/tariff-model.ts';
+import type { AccountingRecalcGranularity } from '../../api/accounting-recalc.ts';
+import { formatDecimal, formatTime } from '../../lib/operator-format.ts';
+import { siteDayKey, siteMidnight, wallTime } from '../energy-analysis/consumption/model.ts';
+import { PERIOD_LABEL, PERIOD_ORDER, sumCosts, type CostInput, type PeriodCode } from '../tariff/tariff-model.ts';
 
 const DAY_MS = 86_400_000;
 const MONTH_PATTERN = /^(\d{4})-(0[1-9]|1[0-2])$/;
 const DATE_PATTERN = /^(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 
-const CANONICAL_PERIODS: readonly PeriodCode[] = ['SUPER_PEAK', 'PEAK', 'FLAT', 'VALLEY'];
+export const CANONICAL_PERIODS: readonly PeriodCode[] = PERIOD_ORDER;
+
+export type UtilityBillTouBreakdownWithDeepValley = UtilityBillTouBreakdown & {
+  readonly deepValleyKwh?: number;
+};
+
+export function hasTouBreakdownValues(
+  breakdown: UtilityBillTouBreakdownWithDeepValley | null | undefined,
+): boolean {
+  if (!breakdown) return false;
+  return (
+    breakdown.sharpKwh !== undefined ||
+    breakdown.peakKwh !== undefined ||
+    breakdown.flatKwh !== undefined ||
+    breakdown.valleyKwh !== undefined ||
+    breakdown.deepValleyKwh !== undefined
+  );
+}
+
+export function formatTouBreakdownSummary(
+  breakdown: UtilityBillTouBreakdownWithDeepValley | null | undefined,
+): string | null {
+  if (!breakdown) return null;
+  const entries: readonly (readonly [string, number | undefined])[] = [
+    [PERIOD_LABEL.SUPER_PEAK, breakdown.sharpKwh],
+    [PERIOD_LABEL.PEAK, breakdown.peakKwh],
+    [PERIOD_LABEL.FLAT, breakdown.flatKwh],
+    [PERIOD_LABEL.VALLEY, breakdown.valleyKwh],
+    [PERIOD_LABEL.DEEP_VALLEY, breakdown.deepValleyKwh],
+  ];
+  const parts = entries
+    .filter((entry): entry is readonly [string, number] => entry[1] !== undefined)
+    .map(([label, value]) => `${label} ${formatDecimal(value, 2)}`);
+  return parts.length > 0 ? `票面分时电量（kWh）：${parts.join(' · ')}` : null;
+}
+
+export const ACCOUNTING_RECALC_GRANULARITY_LABEL: Readonly<
+  Record<AccountingRecalcGranularity, string>
+> = {
+  ALL: '全部粒度（逐时、每日与每月）',
+  HOUR: '仅按小时',
+  DAY: '仅按日',
+  MONTH: '仅按月',
+};
+
+export const ACCOUNTING_RECALC_GRANULARITY_SHORT_LABEL: Readonly<
+  Record<AccountingRecalcGranularity, string>
+> = {
+  ALL: '全部粒度',
+  HOUR: '按小时',
+  DAY: '按日',
+  MONTH: '按月',
+};
 
 export const METER_SCOPE_LABEL: Readonly<Record<UtilityBillMeterScope, string>> = {
   CHILLER_PLANT: '冷站专变',
@@ -177,7 +232,20 @@ export interface MonthlyBudgetProgressSummary {
   readonly touPeriods: readonly TouCostShareRow[];
 }
 
-function hasSeriesElectricity(electricity: EnergySeriesResponse | null): boolean {
+export type BillingSeriesPointInput = Omit<EnergySeriesResponse['points'][number], 'cost'> & {
+  readonly cost?: CostInput;
+};
+
+export type BillingCrossGapInput = Omit<NonNullable<EnergySeriesResponse['crossGap']>, 'cost'> & {
+  readonly cost?: CostInput;
+};
+
+export type BillingElectricitySeriesInput = Omit<EnergySeriesResponse, 'points' | 'crossGap'> & {
+  readonly points: readonly BillingSeriesPointInput[];
+  readonly crossGap?: BillingCrossGapInput;
+};
+
+function hasSeriesElectricity(electricity: BillingElectricitySeriesInput | null): boolean {
   return Boolean(
     electricity &&
       (electricity.points.length > 0 ||
@@ -186,7 +254,7 @@ function hasSeriesElectricity(electricity: EnergySeriesResponse | null): boolean
 }
 
 function classifyPricingState(
-  electricity: EnergySeriesResponse | null,
+  electricity: BillingElectricitySeriesInput | null,
   energyKWh: number,
   unpricedKWh: number,
 ): BillingPricingState {
@@ -196,7 +264,7 @@ function classifyPricingState(
   return 'PARTIAL_UNPRICED';
 }
 
-function summarizeElectricitySeries(electricity: EnergySeriesResponse | null) {
+function summarizeElectricitySeries(electricity: BillingElectricitySeriesInput | null) {
   const buckets = [
     ...(electricity?.points ?? []).map((point) => ({
       electricityKWh: point.energyKWh,
@@ -228,7 +296,7 @@ function summarizeElectricitySeries(electricity: EnergySeriesResponse | null) {
 }
 
 export function summarizeMonthlyBudgetProgress(input: {
-  readonly electricity: EnergySeriesResponse | null;
+  readonly electricity: BillingElectricitySeriesInput | null;
   readonly billingMonth: string;
   readonly budget: MonthlyElectricityBudget | null;
   readonly now: Date;
@@ -396,6 +464,88 @@ export function resolveReadingDateWindow(
   return { from, to, dayCount };
 }
 
+export type RecalculateWindowValidationResult =
+  | { readonly ok: true; readonly window: ReadingDateWindow }
+  | { readonly ok: false; readonly field: 'fromDate' | 'toDate'; readonly message: string };
+
+export function validateRecalculateWindow(
+  fromDate: string,
+  toDate: string,
+  timeZone: string,
+  options: { readonly maxDate?: string; readonly maxDays?: number } = {},
+): RecalculateWindowValidationResult {
+  const start = parseCalendarDate(fromDate);
+  if (!start) {
+    return { ok: false, field: 'fromDate', message: '请输入有效的开始日期（YYYY-MM-DD）' };
+  }
+  const end = parseCalendarDate(toDate);
+  if (!end) {
+    return { ok: false, field: 'toDate', message: '请输入有效的结束日期（YYYY-MM-DD）' };
+  }
+  if (options.maxDate && parseCalendarDate(options.maxDate) && toDate > options.maxDate) {
+    return { ok: false, field: 'toDate', message: '重算结束日期不能晚于站点当前日期' };
+  }
+  const window = resolveReadingDateWindow(fromDate, toDate, timeZone);
+  if (!window) {
+    return { ok: false, field: 'toDate', message: '重算结束日期不能早于开始日期' };
+  }
+  const maxDays = options.maxDays ?? 366;
+  if (window.dayCount > maxDays) {
+    return { ok: false, field: 'toDate', message: `单次重算日期范围不能超过 ${maxDays} 天` };
+  }
+  return { ok: true, window };
+}
+
+export function defaultRecalcMonthRange(
+  billingMonth: string,
+  now: Date,
+  timeZone: string,
+): { readonly fromDate: string; readonly toDate: string } {
+  const todayKey = siteDayKey(now, timeZone);
+  const match = MONTH_PATTERN.exec(billingMonth);
+  if (!match) {
+    return { fromDate: todayKey, toDate: todayKey };
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const days = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const fromDate = `${billingMonth}-01`;
+  const monthEnd = `${billingMonth}-${String(days).padStart(2, '0')}`;
+  if (fromDate > todayKey) {
+    return { fromDate: todayKey, toDate: todayKey };
+  }
+  return { fromDate, toDate: monthEnd > todayKey ? todayKey : monthEnd };
+}
+
+export function formatRecalcWindowLabel(
+  windowStart: string,
+  windowEnd: string,
+  timeZone: string,
+): string {
+  if (parseCalendarDate(windowStart) && parseCalendarDate(windowEnd)) {
+    return windowStart === windowEnd ? windowStart : `${windowStart} 至 ${windowEnd}`;
+  }
+  const startMs = Date.parse(windowStart);
+  const endMs = Date.parse(windowEnd);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) {
+    return `${windowStart} 至 ${windowEnd}`;
+  }
+  const startLocal = wallTime(new Date(startMs), timeZone);
+  const endLocal = wallTime(new Date(endMs), timeZone);
+  if (
+    startLocal.hour === 0 &&
+    startLocal.minute === 0 &&
+    endLocal.hour === 0 &&
+    endLocal.minute === 0 &&
+    endMs > startMs
+  ) {
+    const startDay = siteDayKey(new Date(startMs), timeZone);
+    const endDay = siteDayKey(new Date(endMs - 1), timeZone);
+    return startDay === endDay ? startDay : `${startDay} 至 ${endDay}`;
+  }
+  return `${formatTime(windowStart, timeZone)} 至 ${formatTime(windowEnd, timeZone)}`;
+}
+
 export function computeUtilityBillTotalPayable(parts: {
   readonly energyChargeCny: number;
   readonly basicChargeCny: number;
@@ -449,7 +599,7 @@ export type UtilityBillReconciliation =
 
 export function reconcileUtilityBill(
   bill: UtilityBill,
-  windowElectricity: EnergySeriesResponse | null,
+  windowElectricity: BillingElectricitySeriesInput | null,
 ): UtilityBillReconciliation {
   const nonEnergyCents =
     Math.round(bill.basicChargeCny * 100) +

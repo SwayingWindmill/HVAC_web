@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"time"
 )
@@ -125,6 +126,8 @@ type BindingResolution struct {
 	DeviceID          string
 	PointID           string
 	PointType         string
+	ReadingUnit       string
+	RatioVersions     []RatioVersion
 	EffectiveFrom     time.Time
 	EffectiveTo       *time.Time
 }
@@ -209,6 +212,53 @@ type DirtyWindowCounterSource interface {
 	WindowDeltas(context.Context, DirtyWindow) ([]CounterDelta, error)
 }
 
+// HourlyFactV2 represents an idempotent fixed-precision hourly energy and cost record
+// written to analytics.energy_hourly_facts_v2 (ReplacingMergeTree(calc_version)).
+type HourlyFactV2 struct {
+	TenantID        string
+	SiteID          string
+	EnergyType      string
+	AccountingScope string
+	LoadDeviceID    string
+	PointID         string
+	Quality         string
+	TariffPeriod    string
+	Hour            time.Time
+	EnergyKWh       float64
+	CostCNY         float64
+	IntervalCount   int64
+	CalcVersion     uint64
+	DataWatermark   time.Time
+	DatasetRevision uint64
+	UpdatedAt       time.Time
+}
+
+// DirtyWindowEnqueueRequest identifies a debounced recalculation window queued when
+// backfilled or corrected energy intervals affect already-closed hours.
+type DirtyWindowEnqueueRequest struct {
+	TenantID           string
+	SiteID             string
+	Granularity        string
+	WindowStart        time.Time
+	WindowEnd          time.Time
+	AvailableAt        time.Time
+	RequestedBy        string
+	RequestedByDisplay string
+	Reason             string
+	Source             string
+}
+
+// DirtyWindowEnqueuer schedules downstream metric/accounting recalculation after backfill.
+type DirtyWindowEnqueuer interface {
+	EnqueueDirtyWindow(context.Context, DirtyWindowEnqueueRequest) error
+}
+
+// RatioResolver optionally loads effective-dated ratio versions for a point when not
+// embedded inside the primary meter binding payload.
+type RatioResolver interface {
+	ResolveRatios(ctx context.Context, tenantID, siteID, pointID string) ([]RatioVersion, error)
+}
+
 type BindingResolver interface {
 	Resolve(context.Context, BindingResolveInput) (BindingResolution, error)
 }
@@ -223,22 +273,35 @@ type RebuildEventSink interface {
 	AppendRebuildEvent(context.Context, RebuildEvent) error
 }
 
+const (
+	defaultDirtyWindowDelay       = 30 * time.Second
+	defaultDirtyWindowRequestedBy = "018f0000-0000-7000-8000-000000000001"
+)
+
 type ProjectorConfig struct {
-	CounterSource   CounterSource
-	BindingResolver BindingResolver
-	FactSink        FactSink
-	RebuildEvents   RebuildEventSink
-	BatchSize       int
-	Now             func() time.Time
+	CounterSource          CounterSource
+	BindingResolver        BindingResolver
+	FactSink               FactSink
+	RebuildEvents          RebuildEventSink
+	RatioResolver          RatioResolver
+	DirtyWindowEnqueuer    DirtyWindowEnqueuer
+	DirtyWindowDelay       time.Duration
+	DirtyWindowRequestedBy string
+	BatchSize              int
+	Now                    func() time.Time
 }
 
 type Projector struct {
-	source        CounterSource
-	resolver      BindingResolver
-	sink          FactSink
-	rebuildEvents RebuildEventSink
-	batchSize     int
-	now           func() time.Time
+	source                 CounterSource
+	resolver               BindingResolver
+	sink                   FactSink
+	rebuildEvents          RebuildEventSink
+	ratioResolver          RatioResolver
+	dirtyEnqueuer          DirtyWindowEnqueuer
+	dirtyDelay             time.Duration
+	dirtyWindowRequestedBy string
+	batchSize              int
+	now                    func() time.Time
 }
 
 func NewProjector(config ProjectorConfig) (*Projector, error) {
@@ -260,13 +323,25 @@ func NewProjector(config ProjectorConfig) (*Projector, error) {
 	if config.Now == nil {
 		config.Now = time.Now
 	}
+	dirtyDelay := config.DirtyWindowDelay
+	if dirtyDelay <= 0 {
+		dirtyDelay = defaultDirtyWindowDelay
+	}
+	requestedBy := strings.TrimSpace(config.DirtyWindowRequestedBy)
+	if requestedBy == "" {
+		requestedBy = defaultDirtyWindowRequestedBy
+	}
 	return &Projector{
-		source:        config.CounterSource,
-		resolver:      config.BindingResolver,
-		sink:          config.FactSink,
-		rebuildEvents: config.RebuildEvents,
-		batchSize:     config.BatchSize,
-		now:           config.Now,
+		source:                 config.CounterSource,
+		resolver:               config.BindingResolver,
+		sink:                   config.FactSink,
+		rebuildEvents:          config.RebuildEvents,
+		ratioResolver:          config.RatioResolver,
+		dirtyEnqueuer:          config.DirtyWindowEnqueuer,
+		dirtyDelay:             dirtyDelay,
+		dirtyWindowRequestedBy: requestedBy,
+		batchSize:              config.BatchSize,
+		now:                    config.Now,
 	}, nil
 }
 
@@ -278,7 +353,8 @@ func (p *Projector) ProjectOnce(ctx context.Context) (int, error) {
 	if batch.Through == nil {
 		return 0, nil
 	}
-	facts, err := p.buildFactsForDeltas(ctx, batch.Deltas, p.now().UTC(), false)
+	now := p.now().UTC()
+	facts, err := p.buildFactsForDeltas(ctx, batch.Deltas, now, false)
 	if err != nil {
 		return 0, err
 	}
@@ -286,6 +362,9 @@ func (p *Projector) ProjectOnce(ctx context.Context) (int, error) {
 	projected, err := p.persistFacts(ctx, facts)
 	if err != nil {
 		return 0, err
+	}
+	if err := p.enqueueHistoricalDirtyWindows(ctx, facts, now); err != nil {
+		return 0, fmt.Errorf("enqueue historical dirty windows: %w", err)
 	}
 	// Advancing only after the facts are written replays this batch if the process stops in
 	// between; the source skips deltas whose fact already has the same predecessor.
@@ -323,6 +402,13 @@ func (p *Projector) buildFactsForDeltas(ctx context.Context, deltas []CounterDel
 		if err := validateBindingResolution(delta, resolution); err != nil {
 			return nil, fmt.Errorf("validate meter binding for observation %s: %w", delta.CurrentObservationID, err)
 		}
+		if len(resolution.RatioVersions) == 0 && p.ratioResolver != nil {
+			ratios, ratioErr := p.ratioResolver.ResolveRatios(ctx, delta.TenantID, delta.SiteID, delta.PointID)
+			if ratioErr != nil {
+				return nil, fmt.Errorf("resolve meter ratios for observation %s: %w", delta.CurrentObservationID, ratioErr)
+			}
+			resolution.RatioVersions = ratios
+		}
 		if (!delta.TransitionType.ProducesFact() || delta.DeltaValue == nil) && delta.ExistingFactMeterBindingID != resolution.MeterBindingID {
 			continue
 		}
@@ -357,7 +443,16 @@ func BuildFact(delta CounterDelta, binding BindingResolution, projectedAt time.T
 	quality, qualityReasons := mapQuality(delta.CurrentQuality, delta.CurrentQualityReasons, delta.PreviousQuality, delta.PreviousQualityReasons)
 	energyKWh := 0.0
 	if delta.TransitionType.ProducesFact() && delta.DeltaValue != nil {
-		energyKWh = *delta.DeltaValue
+		lookupAt := IntervalRatioLookupTime(delta.PreviousSampledAt.UTC(), delta.CurrentSampledAt.UTC())
+		defaultUnit := strings.TrimSpace(binding.ReadingUnit)
+		if defaultUnit == "" {
+			defaultUnit = delta.Unit
+		}
+		resolved, err := EffectiveMultiplierAt(binding.RatioVersions, defaultUnit, lookupAt)
+		if err != nil {
+			return EnergyIntervalFact{}, err
+		}
+		energyKWh = *delta.DeltaValue * resolved.Multiplier
 	} else {
 		// Newly invalidated revision supersedes a prior fact with 0 kWh and INVALID quality.
 		quality = FactQualityInvalid
@@ -534,4 +629,69 @@ func uniqueStrings(values []string) []string {
 		result = append(result, value)
 	}
 	return result
+}
+
+func (p *Projector) enqueueHistoricalDirtyWindows(ctx context.Context, facts []EnergyIntervalFact, now time.Time) error {
+	if p.dirtyEnqueuer == nil || len(facts) == 0 {
+		return nil
+	}
+	currentHour := now.UTC().Truncate(time.Hour)
+	type siteSpan struct {
+		tenantID string
+		siteID   string
+		start    time.Time
+		end      time.Time
+	}
+	spans := make(map[string]*siteSpan)
+	for _, fact := range facts {
+		bucketHour := fact.PeriodEnd.UTC().Add(-time.Millisecond).Truncate(time.Hour)
+		if !bucketHour.Before(currentHour) && fact.FactRevision <= 1 {
+			continue
+		}
+		bucketEnd := bucketHour.Add(time.Hour)
+		key := fact.TenantID + "|" + fact.SiteID
+		span, exists := spans[key]
+		if !exists {
+			spans[key] = &siteSpan{
+				tenantID: fact.TenantID,
+				siteID:   fact.SiteID,
+				start:    bucketHour,
+				end:      bucketEnd,
+			}
+			continue
+		}
+		if bucketHour.Before(span.start) {
+			span.start = bucketHour
+		}
+		if bucketEnd.After(span.end) {
+			span.end = bucketEnd
+		}
+	}
+	if len(spans) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(spans))
+	for k := range spans {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	availableAt := now.UTC().Add(p.dirtyDelay)
+	for _, k := range keys {
+		span := spans[k]
+		if err := p.dirtyEnqueuer.EnqueueDirtyWindow(ctx, DirtyWindowEnqueueRequest{
+			TenantID:           span.tenantID,
+			SiteID:             span.siteID,
+			Granularity:        "HOUR",
+			WindowStart:        span.start,
+			WindowEnd:          span.end,
+			AvailableAt:        availableAt,
+			RequestedBy:        p.dirtyWindowRequestedBy,
+			RequestedByDisplay: "energy-projector",
+			Reason:             "backfill or revised energy interval impacted closed hourly bucket",
+			Source:             "BACKFILL",
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }

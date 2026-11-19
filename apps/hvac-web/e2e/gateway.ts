@@ -409,6 +409,8 @@ export class Gateway {
   /** The Site's Monthly Electricity Budgets and Utility Bills as the Registry owner keeps them. */
   readonly electricityBudgets: Json[] = [];
   readonly utilityBills: Json[] = [];
+  /** Manual accounting recalculation jobs queued for the Site. */
+  readonly accountingRecalcJobs: Json[] = [];
   /** Members of the Tenant as IAM and the identity directory keep them (系统管理 → 用户与角色). */
   readonly members: Json[] = [
     {
@@ -987,6 +989,94 @@ export class Gateway {
     return undefined;
   }
 
+  private accountingRecalc(
+    method: string,
+    path: string,
+    query: URLSearchParams,
+    body: Json | null,
+    csrfToken: string | undefined,
+    now: string,
+  ): { status?: number; body: unknown } | undefined {
+    const recalcPath = `/api/v1/sites/${SITE_ID}/accounting/recalculate`;
+    const jobsPath = `/api/v1/sites/${SITE_ID}/accounting/recalculate-jobs`;
+    if (path !== recalcPath && path !== jobsPath) return undefined;
+
+    const refuse = (status: number, code: string, detail: string) => ({
+      status,
+      body: { type: 'about:blank', title: 'Accounting recalculation refused', status, detail, instance: path, code, traceId: '0'.repeat(32), retryable: false },
+    });
+    const activePrincipal = this.principalOverride ?? principal;
+    const actor: string = activePrincipal.principalId;
+    const actorDisplay: string = activePrincipal.principal.displayName;
+    const capabilities: string[] = activePrincipal.authorization.capabilities ?? [];
+
+    if (method === 'GET' && path === jobsPath) {
+      const rawLimit = query.get('limit');
+      let limit = 50;
+      if (rawLimit !== null) {
+        if (!/^\d+$/.test(rawLimit)) return refuse(400, 'REGISTRY_QUERY_INVALID', 'limit must be an integer.');
+        limit = Number(rawLimit);
+        if (limit < 1 || limit > 100) return refuse(400, 'REGISTRY_QUERY_INVALID', 'limit must be between 1 and 100.');
+      }
+      return { body: { items: this.accountingRecalcJobs.slice(0, limit) } };
+    }
+
+    if (method === 'POST' && path === recalcPath) {
+      const expectedCsrf = activePrincipal.session?.csrfToken ?? principal.session.csrfToken;
+      if (csrfToken !== expectedCsrf) {
+        return refuse(403, 'CSRF_TOKEN_INVALID', 'CSRF token mismatch.');
+      }
+      if (!capabilities.includes('billing.manage') && !capabilities.includes('savings.manage')) {
+        return refuse(403, 'ACCOUNTING_RECALC_FORBIDDEN', 'billing.manage or savings.manage is required.');
+      }
+      const fromDate = typeof body?.fromDate === 'string' ? body.fromDate : '';
+      const toDate = typeof body?.toDate === 'string' ? body.toDate : '';
+      const granularity = typeof body?.granularity === 'string' && body.granularity.trim() !== '' ? body.granularity.trim() : 'HOUR';
+      const reason = typeof body?.reason === 'string' ? body.reason.trim() : '';
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDate) || !/^\d{4}-\d{2}-\d{2}$/.test(toDate)) {
+        return refuse(400, 'REGISTRY_MUTATION_INVALID', 'fromDate and toDate must be YYYY-MM-DD.');
+      }
+      const startMs = Date.parse(`${fromDate}T00:00:00+08:00`);
+      const endStartMs = Date.parse(`${toDate}T00:00:00+08:00`);
+      if (!Number.isFinite(startMs) || !Number.isFinite(endStartMs) || endStartMs < startMs) {
+        return refuse(400, 'REGISTRY_MUTATION_INVALID', 'fromDate must be on or before toDate.');
+      }
+      const endMs = endStartMs + DAY_MS;
+      if (endMs - startMs > 90 * DAY_MS) {
+        return refuse(400, 'REGISTRY_MUTATION_INVALID', 'recalculation range cannot exceed 90 days.');
+      }
+      if (!['HOUR', 'DAY', 'MONTH', 'ALL'].includes(granularity)) {
+        return refuse(400, 'REGISTRY_MUTATION_INVALID', 'unsupported granularity.');
+      }
+      if (!reason || reason.length > 1000) {
+        return refuse(400, 'REGISTRY_MUTATION_INVALID', 'reason must be 1 to 1000 characters.');
+      }
+      const job: Json = {
+        id: this.nextUuidV7('9200'),
+        tenantId: activePrincipal.context.tenantId,
+        siteId: SITE_ID,
+        granularity,
+        windowStart: new Date(startMs).toISOString(),
+        windowEnd: new Date(endMs).toISOString(),
+        status: 'PENDING',
+        availableAt: now,
+        requestedBy: actor,
+        requestedByDisplay: actorDisplay,
+        reason,
+        source: 'MANUAL',
+        attemptCount: 0,
+        lastError: '',
+        createdAt: now,
+        updatedAt: now,
+        finishedAt: null,
+      };
+      this.accountingRecalcJobs.unshift(job);
+      return { status: 202, body: job };
+    }
+
+    return undefined;
+  }
+
   // The M&V owner's ledger: implementing fits the recorded baseline over the fourteen days before the
   // implementation time; measures report at once only on different machines' sub-meters.
   private savings(method: string, path: string, query: URLSearchParams, body: Json | null, now: string): { status?: number; body: unknown } | undefined {
@@ -1508,6 +1598,8 @@ export class Gateway {
     if (scheduleReply) return scheduleReply;
     const billingReply = this.electricityBilling(method, path, query, body, now);
     if (billingReply) return billingReply;
+    const recalcReply = this.accountingRecalc(method, path, query, body, csrfToken, now);
+    if (recalcReply) return recalcReply;
     if (path.startsWith(`/api/v1/sites/${SITE_ID}/savings/`)) return this.savings(method, path, query, body, now);
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/reports/monthly`) {
       return { body: { items: this.reportSnapshots.filter((stored) => stored.month.startsWith(`${query.get('year')}-`)) } };

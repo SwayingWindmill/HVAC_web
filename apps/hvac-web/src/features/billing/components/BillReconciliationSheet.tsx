@@ -34,6 +34,7 @@ import { cn } from '@/lib/utils';
 import {
   BASIC_CHARGE_MODE_LABEL,
   formatBillingMonthLabel,
+  formatTouBreakdownSummary,
   METER_SCOPE_LABEL,
   reconcileUtilityBill,
   resolveReadingDateWindow,
@@ -175,23 +176,10 @@ export function BillReconciliationSheet({
     },
   });
 
-  const touSummaryText = useMemo(() => {
-    if (!bill?.touBreakdown) return null;
-    const parts: string[] = [];
-    if (bill.touBreakdown.sharpKwh !== undefined) {
-      parts.push(`尖峰 ${formatDecimal(bill.touBreakdown.sharpKwh, 2)}`);
-    }
-    if (bill.touBreakdown.peakKwh !== undefined) {
-      parts.push(`峰 ${formatDecimal(bill.touBreakdown.peakKwh, 2)}`);
-    }
-    if (bill.touBreakdown.flatKwh !== undefined) {
-      parts.push(`平 ${formatDecimal(bill.touBreakdown.flatKwh, 2)}`);
-    }
-    if (bill.touBreakdown.valleyKwh !== undefined) {
-      parts.push(`谷 ${formatDecimal(bill.touBreakdown.valleyKwh, 2)}`);
-    }
-    return parts.length > 0 ? `票面分时电量（kWh）：${parts.join(' · ')}` : null;
-  }, [bill?.touBreakdown]);
+  const touSummaryText = useMemo(
+    () => formatTouBreakdownSummary(bill?.touBreakdown),
+    [bill?.touBreakdown],
+  );
 
   return (
     <>

@@ -132,6 +132,21 @@ func run() int {
 		logger.Error("metric_worker_configuration_invalid", "error_code", "METRIC_WORKER_CONFIGURATION_INVALID")
 		return 1
 	}
+	dirtyRecalcInterval, err := durationEnv("METRIC_DIRTY_RECALC_INTERVAL", 5*time.Second, 0, 24*time.Hour)
+	if err != nil {
+		logger.Error("metric_worker_configuration_invalid", "error_code", "METRIC_WORKER_CONFIGURATION_INVALID")
+		return 1
+	}
+	reconcileInterval, err := reconcileIntervalEnv()
+	if err != nil {
+		logger.Error("metric_worker_configuration_invalid", "error_code", "METRIC_WORKER_CONFIGURATION_INVALID")
+		return 1
+	}
+	reconcileStaleAge, err := durationEnv("METRIC_RECONCILE_STALE_AGE", 5*time.Minute, time.Second, 24*time.Hour)
+	if err != nil {
+		logger.Error("metric_worker_configuration_invalid", "error_code", "METRIC_WORKER_CONFIGURATION_INVALID")
+		return 1
+	}
 
 	var detector backfillDetector
 	if backfillScanInterval > 0 {
@@ -145,6 +160,20 @@ func run() int {
 			return 1
 		}
 		detector = builtDetector
+	}
+
+	var recalcRunner dirtyRecalcRunner
+	if dirtyRecalcInterval > 0 {
+		builtRecalc, rwErr := metric.NewRecalcWorker(metric.RecalcWorkerConfig{
+			Store:      runtime.store,
+			Executor:   runtime.engine,
+			Reconciler: runtime.engine,
+		})
+		if rwErr != nil {
+			logger.Error("metric_worker_configuration_invalid", "error_code", "METRIC_WORKER_CONFIGURATION_INVALID")
+			return 1
+		}
+		recalcRunner = builtRecalc
 	}
 
 	diagnostics := &http.Server{
@@ -181,6 +210,22 @@ func run() int {
 			runBackfillDetectorLoop(workerCtx, detector, backfillScanInterval, telemetry, logger)
 		}()
 	}
+	if recalcRunner != nil {
+		bgWG.Add(1)
+		go func() {
+			defer bgWG.Done()
+			defer observability.Recover(logger, telemetry.Metrics, "metric_worker.dirty_recalc")
+			runDirtyRecalcLoop(workerCtx, recalcRunner, dirtyRecalcInterval, telemetry, logger)
+		}()
+	}
+	if reconcileInterval > 0 {
+		bgWG.Add(1)
+		go func() {
+			defer bgWG.Done()
+			defer observability.Recover(logger, telemetry.Metrics, "metric_worker.publication_reconcile")
+			runPublicationReconcileLoop(workerCtx, runtime.store, runtime.engine, reconcileInterval, reconcileStaleAge, telemetry, logger)
+		}()
+	}
 	bgWG.Add(1)
 	go func() {
 		defer bgWG.Done()
@@ -189,7 +234,17 @@ func run() int {
 	}()
 
 	telemetry.MarkReady()
-	logger.Info("metric_worker_started", "worker_id", workerID, "claim_interval", claimInterval.String(), "claim_batch", claimBatch, "lease_duration", leaseDuration.String(), "finalization_delay", finalizationDelay.String(), "backfill_scan_interval", backfillScanInterval.String())
+	logger.Info(
+		"metric_worker_started",
+		"worker_id", workerID,
+		"claim_interval", claimInterval.String(),
+		"claim_batch", claimBatch,
+		"lease_duration", leaseDuration.String(),
+		"finalization_delay", finalizationDelay.String(),
+		"backfill_scan_interval", backfillScanInterval.String(),
+		"dirty_recalc_interval", dirtyRecalcInterval.String(),
+		"reconcile_interval", reconcileInterval.String(),
+	)
 
 	exitCode := 0
 	select {
@@ -365,6 +420,126 @@ func (runtime *runtime) Close() {
 type backfillDetector interface {
 	InitializeWatermark(context.Context) error
 	DetectAndEnqueue(context.Context, time.Time) (int, error)
+}
+
+type dirtyRecalcRunner interface {
+	ProcessOnce(context.Context) (metric.RecalcBatchStats, error)
+}
+
+func runDirtyRecalcLoop(
+	ctx context.Context,
+	runner dirtyRecalcRunner,
+	pollInterval time.Duration,
+	telemetry *observability.Runtime,
+	logger *slog.Logger,
+) {
+	if runner == nil || pollInterval <= 0 {
+		return
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	defer observability.Recover(logger, runtimeMetrics(telemetry), "metric_worker.dirty_recalc")
+
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			runDirtyRecalcOnce(ctx, runner, telemetry, logger)
+		}
+	}
+}
+
+func runDirtyRecalcOnce(ctx context.Context, runner dirtyRecalcRunner, telemetry *observability.Runtime, logger *slog.Logger) {
+	passCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	stats, err := runner.ProcessOnce(passCtx)
+	cancel()
+	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		if telemetry != nil && telemetry.Metrics != nil {
+			_ = telemetry.Metrics.AddCounter("hvac_metric_dirty_recalc_passes_total", "Dirty window recalculation passes.", map[string]string{"outcome": "error"}, 1)
+		}
+		logger.Warn("metric_dirty_recalc_failed", "error_code", "METRIC_DIRTY_RECALC_FAILED", "claimed", stats.Claimed, "failed", stats.Failed)
+		return
+	}
+	if telemetry != nil && telemetry.Metrics != nil {
+		_ = telemetry.Metrics.AddCounter("hvac_metric_dirty_recalc_passes_total", "Dirty window recalculation passes.", map[string]string{"outcome": "success"}, 1)
+		if stats.ExecutedRuns > 0 {
+			_ = telemetry.Metrics.AddCounter("hvac_metric_dirty_recalc_runs_total", "Metric executions triggered by dirty window coalescing.", nil, float64(stats.ExecutedRuns))
+		}
+	}
+	if stats.Claimed > 0 {
+		logger.Info("metric_dirty_recalc_completed", "claimed", stats.Claimed, "coalesced_spans", stats.CoalescedSpan, "executed_runs", stats.ExecutedRuns, "succeeded", stats.Succeeded)
+	}
+}
+
+func runPublicationReconcileLoop(
+	ctx context.Context,
+	lister metric.PublicationScopeLister,
+	reconciler metric.ScopeReconciler,
+	interval time.Duration,
+	staleAge time.Duration,
+	telemetry *observability.Runtime,
+	logger *slog.Logger,
+) {
+	if lister == nil || reconciler == nil || interval <= 0 {
+		return
+	}
+	if staleAge <= 0 {
+		staleAge = 5 * time.Minute
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	defer observability.Recover(logger, runtimeMetrics(telemetry), "metric_worker.publication_reconcile")
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			reconcilePublicationsOnce(ctx, lister, reconciler, staleAge, telemetry, logger)
+		}
+	}
+}
+
+func reconcilePublicationsOnce(
+	ctx context.Context,
+	lister metric.PublicationScopeLister,
+	reconciler metric.ScopeReconciler,
+	staleAge time.Duration,
+	telemetry *observability.Runtime,
+	logger *slog.Logger,
+) {
+	passCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	repaired, err := metric.ReconcileStalePublications(passCtx, lister, reconciler, time.Now().UTC().Add(-staleAge), 100)
+	cancel()
+	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		if telemetry != nil && telemetry.Metrics != nil {
+			_ = telemetry.Metrics.AddCounter("hvac_metric_publication_reconcile_runs_total", "Periodic metric publication reconciliations.", map[string]string{"outcome": "error"}, 1)
+		}
+		logger.Warn("metric_publication_reconcile_failed", "error_code", "METRIC_PUBLICATION_RECONCILE_FAILED", "repaired", repaired)
+		return
+	}
+	if telemetry != nil && telemetry.Metrics != nil {
+		_ = telemetry.Metrics.AddCounter("hvac_metric_publication_reconcile_runs_total", "Periodic metric publication reconciliations.", map[string]string{"outcome": "success"}, 1)
+		if repaired > 0 {
+			_ = telemetry.Metrics.AddCounter("hvac_metric_publication_repaired_total", "Stale PERSISTING metric publications repaired by periodic reconciliation.", nil, float64(repaired))
+		}
+	}
+	if repaired > 0 {
+		logger.Info("metric_publication_reconcile_completed", "repaired", repaired)
+	}
 }
 
 func runBackfillDetectorLoop(
@@ -772,6 +947,13 @@ func parseDurationValue(raw string, fallback, minimum, maximum time.Duration) (t
 		return 0, errors.New("duration value is invalid")
 	}
 	return parsed, nil
+}
+
+func reconcileIntervalEnv() (time.Duration, error) {
+	if strings.TrimSpace(os.Getenv("RECONCILE_INTERVAL")) != "" {
+		return durationEnv("RECONCILE_INTERVAL", time.Minute, 0, 24*time.Hour)
+	}
+	return durationEnv("METRIC_RECONCILE_INTERVAL", time.Minute, 0, 24*time.Hour)
 }
 
 func durationEnv(name string, fallback, minimum, maximum time.Duration) (time.Duration, error) {

@@ -58,6 +58,13 @@ test('budget overview, cross-month whole-building allocation, chiller-plant vari
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   gateway.energySeriesHandler = buildPricedDailyElectricityHandler();
+  await page.route('**/api/v1/sites/*/accounting/recalculate-jobs', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [] }),
+    }),
+  );
 
   await page.goto(`/energy-analysis/billing?site=${SITE_ID}&month=2026-10`);
   await expect(page.getByRole('heading', { name: '电费账单' })).toBeVisible();
@@ -111,6 +118,7 @@ test('budget overview, cross-month whole-building allocation, chiller-plant vari
   await createDialog.getByLabel('考核标准功率因数（选填）').fill('0.90');
   await createDialog.getByLabel('实际功率因数（选填）').fill('0.95');
   await createDialog.getByLabel('尖峰电量（kWh）').fill('40000');
+  await expect(createDialog.getByLabel('深谷电量（kWh）')).toBeVisible();
   await createDialog.getByLabel('供电局发票 / 单据号（选填）').fill('GD-202610-WB01');
 
   // Auto-calculated payable: 310000 + 50900 - 1257 + 357 = 360,000.00
@@ -210,10 +218,17 @@ test('viewer without billing.manage sees read-only billing workspace and honest 
     authorization: {
       ...principalFixture.authorization,
       capabilities: principalFixture.authorization.capabilities.filter(
-        (cap: string) => cap !== 'billing.manage',
+        (cap: string) => cap !== 'billing.manage' && cap !== 'savings.manage',
       ),
     },
   };
+  await page.route('**/api/v1/sites/*/accounting/recalculate-jobs', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [] }),
+    }),
+  );
 
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(`/energy-analysis/billing?site=${SITE_ID}`);
@@ -224,4 +239,131 @@ test('viewer without billing.manage sees read-only billing workspace and honest 
   await expect(page.getByText('月内部分时段用电缺少分时电价覆盖')).toBeVisible();
   await expect(page.getByRole('button', { name: /设置月度预算|调整月度预算/ })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '录入结算电费单' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '重算时段数据' })).toHaveCount(0);
+  await expect(page.getByTestId('accounting-recalc-status-strip')).toHaveCount(0);
+});
+
+test('savings.manage operator can trigger manual recalculation, see error feedback, and track live status strip transitions', async ({
+  page,
+  gateway,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  gateway.energySeriesHandler = buildPricedDailyElectricityHandler();
+  gateway.principalOverride = {
+    ...principalFixture,
+    authorization: {
+      ...principalFixture.authorization,
+      capabilities: principalFixture.authorization.capabilities.filter(
+        (cap: string) => cap !== 'billing.manage',
+      ),
+    },
+  };
+
+  let jobsPollCount = 0;
+  let currentJobs: Array<Record<string, unknown>> = [];
+  let failNextPost = true;
+
+  await page.route('**/api/v1/sites/*/accounting/recalculate**', async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (request.method() === 'GET' && url.pathname.endsWith('/accounting/recalculate-jobs')) {
+      if (currentJobs.length > 0) {
+        jobsPollCount += 1;
+        if (jobsPollCount === 2) {
+          currentJobs = [{ ...currentJobs[0], status: 'RUNNING', updatedAt: '2026-10-16T04:00:03.000Z' }];
+        } else if (jobsPollCount >= 3) {
+          currentJobs = [
+            {
+              ...currentJobs[0],
+              status: 'SUCCEEDED',
+              updatedAt: '2026-10-16T04:00:06.000Z',
+              finishedAt: '2026-10-16T04:00:06.000Z',
+            },
+          ];
+        }
+      }
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ items: currentJobs }),
+      });
+    }
+    if (request.method() === 'POST' && url.pathname.endsWith('/accounting/recalculate')) {
+      if (failNextPost) {
+        failNextPost = false;
+        return route.fulfill({
+          status: 409,
+          contentType: 'application/problem+json',
+          body: JSON.stringify({
+            status: 409,
+            code: 'ACCOUNTING_RECALC_IN_PROGRESS',
+            detail: 'duplicate recalc window',
+          }),
+        });
+      }
+      const payload = request.postDataJSON() as {
+        fromDate: string;
+        toDate: string;
+        granularity: 'HOUR' | 'DAY' | 'MONTH' | 'ALL';
+        reason: string;
+      };
+      const job = {
+        id: '01990000-1100-7000-8000-000000000001',
+        tenantId: principalFixture.context.tenantId,
+        siteId: SITE_ID,
+        granularity: payload.granularity,
+        windowStart: '2026-09-30T16:00:00.000Z',
+        windowEnd: '2026-10-10T16:00:00.000Z',
+        status: 'PENDING',
+        availableAt: '2026-10-16T04:00:00.000Z',
+        requestedBy: principalFixture.principalId,
+        requestedByDisplay: '值班工程师',
+        reason: payload.reason,
+        source: 'MANUAL',
+        attemptCount: 0,
+        lastError: '',
+        createdAt: '2026-10-16T04:00:00.000Z',
+        updatedAt: '2026-10-16T04:00:00.000Z',
+        finishedAt: null,
+      };
+      currentJobs = [job];
+      jobsPollCount = 0;
+      return route.fulfill({
+        status: 202,
+        contentType: 'application/json',
+        body: JSON.stringify(job),
+      });
+    }
+    return route.fallback();
+  });
+
+  await page.goto(`/energy-analysis/billing?site=${SITE_ID}&month=2026-10`);
+
+  // savings.manage sees Recalculate button, while billing.manage actions stay hidden
+  await expect(page.getByRole('button', { name: '重算时段数据' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /设置月度预算|调整月度预算/ })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '录入结算电费单' })).toHaveCount(0);
+  await expect(page.getByTestId('accounting-recalc-status-strip')).toHaveCount(0);
+
+  // Open dialog, test inline refusal feedback, then submit successfully
+  await page.getByRole('button', { name: '重算时段数据' }).click();
+  const dialog = page.getByRole('dialog', { name: '要重新计算哪段时间的电费与能耗？' });
+  await expect(dialog).toBeVisible();
+  await dialog.getByLabel('开始日期').fill('2026-10-01');
+  await dialog.getByLabel('结束日期（含当日）').fill('2026-10-10');
+  await dialog.getByLabel('重算原因').fill('更新深谷分时电价后重算');
+  await dialog.getByRole('button', { name: '开始重算' }).click();
+  await expect(dialog.getByRole('alert')).toContainText('当前已有相同时段的重算任务正在执行');
+
+  await dialog.getByRole('button', { name: '开始重算' }).click();
+  await expect(dialog).toBeHidden();
+
+  const strip = page.getByTestId('accounting-recalc-status-strip');
+  await expect(strip).toBeVisible();
+  await expect(strip).toContainText('■ 排队重算中');
+  await expect(strip).toContainText('2026-10-01 至 2026-10-10');
+
+  // Auto-polling advances PENDING -> RUNNING -> SUCCEEDED
+  await expect(strip).toContainText('● 正在重算', { timeout: 6_000 });
+  await expect(strip).toContainText('○ 最近重算完成', { timeout: 6_000 });
 });

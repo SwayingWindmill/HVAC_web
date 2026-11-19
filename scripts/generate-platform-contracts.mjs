@@ -180,6 +180,8 @@ const expectedOperations = {
   createSiteUtilityBill: ['post', `${site}/utility-bills`],
   updateSiteUtilityBill: ['put', `${site}/utility-bills/{billId}`],
   confirmSiteUtilityBill: ['post', `${site}/utility-bills/{billId}/confirm`],
+  recalculateSiteAccounting: ['post', `${site}/accounting/recalculate`],
+  listSiteAccountingRecalcJobs: ['get', `${site}/accounting/recalculate-jobs`],
   listSiteDataGaps: ['get', `${site}/data-gaps`],
   getSiteControlState: ['get', `${site}/control-state`],
   updateSiteControlMode: ['put', `${site}/control-mode`],
@@ -248,6 +250,7 @@ const expectedSuccessSchemas = {
   listSiteUtilityBills: 'UtilityBillList',
   updateSiteUtilityBill: 'UtilityBill',
   confirmSiteUtilityBill: 'UtilityBill',
+  listSiteAccountingRecalcJobs: 'AccountingRecalcJobList',
   listSiteDataGaps: 'SiteDataGapList',
   getSiteControlState: 'SiteControlState',
   updateSiteControlMode: 'SiteControlModeMutationResponse',
@@ -264,6 +267,7 @@ const expectedSuccessSchemas = {
 for (const [operationId, schemaName] of Object.entries(expectedSuccessSchemas)) {
   invariant(schemaRef(operations[operationId].operation, '200') === `#/components/schemas/${schemaName}`, `${operationId} success schema is unsupported`);
 }
+invariant(schemaRef(operations.recalculateSiteAccounting.operation, '202') === '#/components/schemas/AccountingRecalcJob', 'recalculateSiteAccounting accepted schema is unsupported');
 invariant(schemaRef(operations.getTemplateRevision.operation, '200') === './s05-registry-writer.openapi.json#/components/schemas/TemplateRevision', 'getTemplateRevision success schema is unsupported');
 invariant(operations.logout.operation.responses?.['204'], 'logout must return 204');
 invariant(operations.logout.operation.responses?.['204']?.headers?.Location?.schema?.format === 'uri', 'logout must publish the provider end-session Location header');
@@ -314,8 +318,15 @@ const schemaRequirements = {
   AssetRelationship: [['id', 'tenantId', 'siteId', 'fromType', 'fromId', 'toType', 'toId', 'role', 'status', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt']],
   AssetModelCounts: [['spaces', 'assets', 'deviceEndpoints', 'physicalSensors', 'points']],
   SiteAssetModel: [['schemaVersion', 'tenantId', 'siteId', 'spaces', 'assets', 'devices', 'sensors', 'telemetryPoints', 'relationships', 'counts']],
-  SiteTariff: [['siteId', 'displayName', 'version', 'effectiveFrom', 'timezone', 'currency', 'periods']],
+  SiteTariff: [['siteId', 'displayName', 'version', 'effectiveFrom', 'timezone', 'currency', 'periods'], ['holidayDates']],
   TariffPeriod: [['periodCode', 'dayType', 'startMinute', 'endMinute', 'energyRatePerKWh', 'demandRatePerKW']],
+  AccountingRecalculateRequest: [['fromDate', 'toDate', 'reason'], ['granularity']],
+  AccountingRecalcJob: [[
+    'id', 'tenantId', 'siteId', 'granularity', 'windowStart', 'windowEnd',
+    'status', 'availableAt', 'requestedBy', 'requestedByDisplay', 'reason',
+    'source', 'attemptCount', 'lastError', 'createdAt', 'updatedAt', 'finishedAt',
+  ]],
+  AccountingRecalcJobList: [['items']],
   SiteDataGap: [['alarmId', 'deviceId', 'deviceName', 'pointId', 'pointCode', 'pointName', 'since', 'affectedFigures', 'excludesDeviceFromTotal']],
   SiteDataGapList: [['items']],
   AssetControlLockState: [['siteId', 'assetId', 'lockMode', 'reason', 'updatedBy', 'updatedAt', 'revision'], ['id', 'tenantId', 'updatedByName', 'boundDeviceIds']],
@@ -540,6 +551,8 @@ const replacements = {
   __SITE_UTILITY_BILLS_PATH__: operations.listSiteUtilityBills.path,
   __SITE_UTILITY_BILL_PATH__: operations.updateSiteUtilityBill.path,
   __SITE_UTILITY_BILL_CONFIRM_PATH__: operations.confirmSiteUtilityBill.path,
+  __SITE_ACCOUNTING_RECALCULATE_PATH__: operations.recalculateSiteAccounting.path,
+  __SITE_ACCOUNTING_RECALC_JOBS_PATH__: operations.listSiteAccountingRecalcJobs.path,
   __SITE_DATA_GAPS_PATH__: operations.listSiteDataGaps.path,
   __SITE_CONTROL_STATE_PATH__: operations.getSiteControlState.path,
   __SITE_CONTROL_MODE_PATH__: operations.updateSiteControlMode.path,

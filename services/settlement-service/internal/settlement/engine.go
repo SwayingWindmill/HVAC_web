@@ -9,10 +9,14 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/big"
 	"sort"
 	"strings"
 	"time"
 	_ "time/tzdata"
+
+	"github.com/quanlaihe/hvac-web/libs/fixedpoint"
+	"github.com/quanlaihe/hvac-web/libs/tariffmodel"
 )
 
 type Period struct {
@@ -46,6 +50,7 @@ type Tariff struct {
 	EffectiveTo                       *time.Time
 	Periods                           []TariffPeriod
 	Versions                          []TariffVersion
+	Holidays                          map[string]string
 }
 
 type Fact struct {
@@ -287,7 +292,10 @@ func calculate(period Period, bindings []MetricBinding, tariff Tariff, facts []F
 			usedTariffVersions = append(usedTariffVersions, versionID)
 		}
 	}
-	demandCostMax := map[string]float64{}
+	energyByCode := map[string]fixedpoint.Decimal6{}
+	energyCostByCode := map[string]fixedpoint.Decimal6{}
+	demandKWByCode := map[string]fixedpoint.Decimal6{}
+	demandCostMaxByCode := map[string]fixedpoint.Decimal6{}
 	completenessTotal := 0.0
 	for _, fact := range facts {
 		binding, ok := bindingByID[fact.MetricBindingID]
@@ -300,6 +308,10 @@ func calculate(period Period, bindings []MetricBinding, tariff Tariff, facts []F
 		if fact.Start.IsZero() {
 			return Calculation{}, errors.New("settlement Metric fact start timestamp is required")
 		}
+		factValDec, valErr := fixedpoint.FromFloat64(fact.Value)
+		if valErr != nil {
+			return Calculation{}, fmt.Errorf("settlement Metric fact value overflow: %w", valErr)
+		}
 		segments, segErr := resolveFactTariffSegments(versions, fact.Start.UTC(), fact.End.UTC())
 		if segErr != nil {
 			return Calculation{}, segErr
@@ -310,29 +322,57 @@ func calculate(period Period, bindings []MetricBinding, tariff Tariff, facts []F
 			for _, segment := range segments {
 				version := versions[segment.versionIndex]
 				loc := versionLocations[segment.versionIndex]
-				tariffSlice, sliceErr := resolveTariffSlice(version.Periods, periodCode, segment.start.In(loc))
+				tariffSlice, sliceErr := resolveTariffSlice(version.Periods, periodCode, segment.start.In(loc), tariff.Holidays)
 				if sliceErr != nil {
 					return Calculation{}, sliceErr
 				}
-				segmentEnergy := fact.Value * segment.fraction
-				calc.EnergyBreakdown[tariffSlice.Code] += segmentEnergy
-				calc.EnergyCost[tariffSlice.Code] += segmentEnergy * tariffSlice.EnergyRate
+				segmentEnergyDec := factValDec
+				if len(segments) > 1 {
+					segmentEnergyDec, err = mulDivDuration(factValDec, segment.duration, segment.totalDuration)
+					if err != nil {
+						return Calculation{}, fmt.Errorf("settlement segment energy calculation: %w", err)
+					}
+				}
+				energyByCode[tariffSlice.Code], err = energyByCode[tariffSlice.Code].Add(segmentEnergyDec)
+				if err != nil {
+					return Calculation{}, fmt.Errorf("settlement energy accumulation: %w", err)
+				}
+				energyRateDec, rateErr := fixedpoint.FromFloat64(tariffSlice.EnergyRate)
+				if rateErr != nil {
+					return Calculation{}, fmt.Errorf("settlement energy rate: %w", rateErr)
+				}
+				segmentCostDec, costErr := segmentEnergyDec.Mul(energyRateDec)
+				if costErr != nil {
+					return Calculation{}, fmt.Errorf("settlement energy cost: %w", costErr)
+				}
+				energyCostByCode[tariffSlice.Code], err = energyCostByCode[tariffSlice.Code].Add(segmentCostDec)
+				if err != nil {
+					return Calculation{}, fmt.Errorf("settlement energy cost accumulation: %w", err)
+				}
 				recordTariffVersion(version.VersionID)
 			}
 		case "DEMAND":
 			for _, segment := range segments {
 				version := versions[segment.versionIndex]
 				loc := versionLocations[segment.versionIndex]
-				tariffSlice, sliceErr := resolveTariffSlice(version.Periods, periodCode, segment.start.In(loc))
+				tariffSlice, sliceErr := resolveTariffSlice(version.Periods, periodCode, segment.start.In(loc), tariff.Holidays)
 				if sliceErr != nil {
 					return Calculation{}, sliceErr
 				}
-				if fact.Value > calc.DemandKW[tariffSlice.Code] {
-					calc.DemandKW[tariffSlice.Code] = fact.Value
+				if factValDec > demandKWByCode[tariffSlice.Code] {
+					demandKWByCode[tariffSlice.Code] = factValDec
 				}
-				if fact.Value > 0 && tariffSlice.DemandRate > 0 {
-					if candidateCost := fact.Value * tariffSlice.DemandRate; candidateCost > demandCostMax[tariffSlice.Code] {
-						demandCostMax[tariffSlice.Code] = candidateCost
+				demandRateDec, rateErr := fixedpoint.FromFloat64(tariffSlice.DemandRate)
+				if rateErr != nil {
+					return Calculation{}, fmt.Errorf("settlement demand rate: %w", rateErr)
+				}
+				if factValDec > 0 && demandRateDec > 0 {
+					candidateCostDec, costErr := factValDec.Mul(demandRateDec)
+					if costErr != nil {
+						return Calculation{}, fmt.Errorf("settlement demand cost: %w", costErr)
+					}
+					if candidateCostDec > demandCostMaxByCode[tariffSlice.Code] {
+						demandCostMaxByCode[tariffSlice.Code] = candidateCostDec
 					}
 				}
 				recordTariffVersion(version.VersionID)
@@ -363,17 +403,32 @@ func calculate(period Period, bindings []MetricBinding, tariff Tariff, facts []F
 			calc.MissingMetricBindingRefs = append(calc.MissingMetricBindingRefs, binding.MetricBindingID)
 		}
 	}
-	for code, demandCost := range demandCostMax {
-		if demandCost > 0 {
-			calc.DemandCost[code] = demandCost
+	for code, energyDec := range energyByCode {
+		calc.EnergyBreakdown[code] = energyDec.Float64()
+	}
+	for code, demandDec := range demandKWByCode {
+		calc.DemandKW[code] = demandDec.Float64()
+	}
+	totalCostDec := fixedpoint.Zero
+	for code, costDec := range energyCostByCode {
+		rounded := costDec.RoundHalfUp(2)
+		calc.EnergyCost[code] = rounded.Float64()
+		totalCostDec, err = totalCostDec.Add(rounded)
+		if err != nil {
+			return Calculation{}, fmt.Errorf("settlement total energy cost: %w", err)
 		}
 	}
-	for _, value := range calc.EnergyCost {
-		calc.TotalCost += value
+	for code, demandCostDec := range demandCostMaxByCode {
+		if demandCostDec > 0 {
+			rounded := demandCostDec.RoundHalfUp(2)
+			calc.DemandCost[code] = rounded.Float64()
+			totalCostDec, err = totalCostDec.Add(rounded)
+			if err != nil {
+				return Calculation{}, fmt.Errorf("settlement total demand cost: %w", err)
+			}
+		}
 	}
-	for _, value := range calc.DemandCost {
-		calc.TotalCost += value
-	}
+	calc.TotalCost = totalCostDec.RoundHalfUp(2).Float64()
 	denominator := len(facts) + len(calc.MissingMetricBindingRefs)
 	if denominator > 0 {
 		calc.Completeness = completenessTotal / float64(denominator)
@@ -397,9 +452,32 @@ func calculate(period Period, bindings []MetricBinding, tariff Tariff, facts []F
 }
 
 type tariffSegment struct {
-	versionIndex int
-	start        time.Time
-	fraction     float64
+	versionIndex  int
+	start         time.Time
+	duration      time.Duration
+	totalDuration time.Duration
+}
+
+func mulDivDuration(value fixedpoint.Decimal6, num, den time.Duration) (fixedpoint.Decimal6, error) {
+	if num == den || den == 0 {
+		return value, nil
+	}
+	prod := new(big.Int).Mul(big.NewInt(value.Int64Scaled()), big.NewInt(int64(num)))
+	denInt := big.NewInt(int64(den))
+	q, rem := new(big.Int).QuoRem(prod, denInt, new(big.Int))
+	absRem2 := new(big.Int).Abs(rem)
+	absRem2.Lsh(absRem2, 1)
+	if absRem2.Cmp(denInt) >= 0 {
+		if prod.Sign() < 0 {
+			q.Sub(q, big.NewInt(1))
+		} else {
+			q.Add(q, big.NewInt(1))
+		}
+	}
+	if !q.IsInt64() {
+		return 0, fixedpoint.ErrOverflow
+	}
+	return fixedpoint.FromInt64Scaled(q.Int64()), nil
 }
 
 func loadExplicitLocation(raw string) (*time.Location, error) {
@@ -485,7 +563,7 @@ func resolveFactTariffSegments(versions []TariffVersion, start, end time.Time) (
 		if err != nil {
 			return nil, err
 		}
-		return []tariffSegment{{versionIndex: index, start: start, fraction: 1.0}}, nil
+		return []tariffSegment{{versionIndex: index, start: start, duration: 1, totalDuration: 1}}, nil
 	}
 	totalDuration := end.Sub(start)
 	segments := []tariffSegment{}
@@ -503,8 +581,7 @@ func resolveFactTariffSegments(versions []TariffVersion, start, end time.Time) (
 		if !segEnd.After(cursor) {
 			return nil, fmt.Errorf("non-advancing tariff version boundary at %s", cursor.UTC().Format(time.RFC3339))
 		}
-		fraction := float64(segEnd.Sub(cursor)) / float64(totalDuration)
-		segments = append(segments, tariffSegment{versionIndex: index, start: cursor, fraction: fraction})
+		segments = append(segments, tariffSegment{versionIndex: index, start: cursor, duration: segEnd.Sub(cursor), totalDuration: totalDuration})
 		cursor = segEnd
 	}
 	return segments, nil
@@ -533,14 +610,37 @@ func versionAt(versions []TariffVersion, at time.Time) (int, error) {
 	return matched, nil
 }
 
-func resolveTariffSlice(periods []TariffPeriod, periodCode string, localizedAt time.Time) (TariffPeriod, error) {
-	if periodCode != "" {
-		return tariffByCode(periods, periodCode)
+func resolveSettlementDayType(periods []TariffPeriod, localizedAt time.Time, holidays map[string]string) string {
+	defined := make(map[string]struct{}, len(periods))
+	for _, period := range periods {
+		defined[period.DayType] = struct{}{}
 	}
-	return tariffFor(periods, localizedAt)
+	return tariffmodel.ResolveDayType(localizedAt, holidays, func(dayType string) bool {
+		_, ok := defined[dayType]
+		return ok
+	})
 }
 
-func tariffByCode(periods []TariffPeriod, code string) (TariffPeriod, error) {
+func resolveTariffSlice(periods []TariffPeriod, periodCode string, localizedAt time.Time, holidays map[string]string) (TariffPeriod, error) {
+	day := resolveSettlementDayType(periods, localizedAt, holidays)
+	minute := localizedAt.Hour()*60 + localizedAt.Minute()
+	if periodCode != "" {
+		return tariffByCode(periods, periodCode, day, minute)
+	}
+	return tariffFor(periods, day, minute)
+}
+
+func tariffByCode(periods []TariffPeriod, code, day string, minute int) (TariffPeriod, error) {
+	for _, period := range periods {
+		if period.Code == code && period.DayType == day && minute >= period.StartMinute && minute < period.EndMinute {
+			return period, nil
+		}
+	}
+	for _, period := range periods {
+		if period.Code == code && period.DayType == day {
+			return period, nil
+		}
+	}
 	for _, period := range periods {
 		if period.Code == code {
 			return period, nil
@@ -549,12 +649,7 @@ func tariffByCode(periods []TariffPeriod, code string) (TariffPeriod, error) {
 	return TariffPeriod{}, fmt.Errorf("tariff period %s is not defined", code)
 }
 
-func tariffFor(periods []TariffPeriod, at time.Time) (TariffPeriod, error) {
-	day := "WEEKDAY"
-	if at.Weekday() == time.Saturday || at.Weekday() == time.Sunday {
-		day = "WEEKEND"
-	}
-	minute := at.Hour()*60 + at.Minute()
+func tariffFor(periods []TariffPeriod, day string, minute int) (TariffPeriod, error) {
 	for _, period := range periods {
 		if period.DayType == day && minute >= period.StartMinute && minute < period.EndMinute {
 			return period, nil

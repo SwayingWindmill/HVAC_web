@@ -506,3 +506,66 @@ func validBinding() energy.BindingResolution {
 		EffectiveFrom: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
 }
+
+func TestWriterInsertsHourlyFactsV2AndAvoidsDeleteMutations(t *testing.T) {
+	var queries []string
+	var bodies []string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		q, _ := url.QueryUnescape(request.URL.Query().Get("query"))
+		queries = append(queries, q)
+		raw, _ := io.ReadAll(request.Body)
+		bodies = append(bodies, string(raw))
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	sink, err := NewWriter(WriterConfig{
+		BaseURL: server.URL, Database: "analytics", Table: "energy_interval_facts",
+		Username: "analytics_projector_writer", HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	site := energy.PricedSite{TenantID: "018f4d00-0000-7000-8000-000000000001", SiteID: "018f4e00-1000-7000-8000-000000000001"}
+	if err := sink.DropPriceWindowsBefore(context.Background(), energy.PriceWindowSync{PricedSite: site, Generation: 9}); err != nil {
+		t.Fatalf("DropPriceWindowsBefore failed: %v", err)
+	}
+	if err := sink.DropTotalSubmetersBefore(context.Background(), energy.TotalSubmeterSync{PricedSite: site, Generation: 9}); err != nil {
+		t.Fatalf("DropTotalSubmetersBefore failed: %v", err)
+	}
+	if len(queries) != 0 {
+		t.Fatalf("expected append-only Drop*Before no-ops to issue 0 ClickHouse mutations, got %v", queries)
+	}
+
+	hour := time.Date(2026, 7, 29, 13, 0, 0, 0, time.UTC)
+	err = sink.InsertHourlyFactsV2(context.Background(), []energy.HourlyFactV2{{
+		TenantID:        site.TenantID,
+		SiteID:          site.SiteID,
+		EnergyType:      energy.EnergyTypeElectricity,
+		AccountingScope: energy.AccountingScopeSite,
+		PointID:         "018f4e00-2100-7000-8000-000000000001",
+		Quality:         energy.FactQualityValid,
+		TariffPeriod:    "PEAK",
+		Hour:            hour,
+		EnergyKWh:       12.345678,
+		CostCNY:         15.432098,
+		IntervalCount:   12,
+		CalcVersion:     3,
+		DataWatermark:   hour.Add(55 * time.Minute),
+		DatasetRevision: 42,
+		UpdatedAt:       hour.Add(time.Hour),
+	}})
+	if err != nil {
+		t.Fatalf("InsertHourlyFactsV2 failed: %v", err)
+	}
+	if len(queries) != 1 || !strings.Contains(queries[0], "analytics.energy_hourly_facts_v2") {
+		t.Fatalf("unexpected query list: %v", queries)
+	}
+	if !strings.Contains(bodies[0], `"energy_kwh":"12.345678"`) ||
+		!strings.Contains(bodies[0], `"cost_cny":"15.432098"`) ||
+		!strings.Contains(bodies[0], `"calc_version":3`) ||
+		!strings.Contains(bodies[0], `"load_device_id":"00000000-0000-0000-0000-000000000000"`) {
+		t.Fatalf("unexpected Decimal64/calc_version payload: %s", bodies[0])
+	}
+}

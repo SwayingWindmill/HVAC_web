@@ -295,8 +295,9 @@ func TestRegistryWriteRoutesInvariantNoCSRFBypass(t *testing.T) {
 			if entry.Owner == ownershipregistry.OwnerCore && entry.Method != http.MethodGet {
 				_, isSchedule := matchPublicOperatingScheduleRoute(entry.Method, concretePath)
 				_, isBilling := matchPublicElectricityBillingRoute(entry.Method, concretePath)
+				_, isAccountingRecalc := matchPublicAccountingRecalcRoute(entry.Method, concretePath)
 				_, isIntelligence := matchPublicIntelligenceRoute(entry.Method, concretePath)
-				if !isSchedule && !isBilling && !isIntelligence {
+				if !isSchedule && !isBilling && !isAccountingRecalc && !isIntelligence {
 					t.Fatalf("unhandled non-GET platform-core-service route in ownership registry: %s %s", entry.Method, entry.Path)
 				}
 			}

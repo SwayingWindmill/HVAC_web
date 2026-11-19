@@ -10,7 +10,6 @@ import type {
   UtilityBillBasicChargeMode,
   UtilityBillMeterScope,
   UtilityBillMutation,
-  UtilityBillTouBreakdown,
 } from '@/api/generated/platformGateway.gen';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -46,8 +45,10 @@ import {
   BASIC_CHARGE_MODE_LABEL,
   computeUtilityBillTotalPayable,
   formatBillingMonthLabel,
+  hasTouBreakdownValues,
   METER_SCOPE_LABEL,
   resolveReadingDateWindow,
+  type UtilityBillTouBreakdownWithDeepValley,
 } from '../billing-model';
 import {
   billingGatewayClient,
@@ -177,6 +178,7 @@ const utilityBillFormSchema = z
     touPeakKwhInput: optionalNonNegativeKwhField,
     touFlatKwhInput: optionalNonNegativeKwhField,
     touValleyKwhInput: optionalNonNegativeKwhField,
+    touDeepValleyKwhInput: optionalNonNegativeKwhField,
     energyChargeInput: z
       .string()
       .trim()
@@ -334,10 +336,7 @@ function hasExtraTicketDetails(bill: UtilityBill | null): boolean {
     bill.utilityAccountNo ||
       bill.standardPowerFactor !== null ||
       bill.actualPowerFactor !== null ||
-      bill.touBreakdown?.sharpKwh !== undefined ||
-      bill.touBreakdown?.peakKwh !== undefined ||
-      bill.touBreakdown?.flatKwh !== undefined ||
-      bill.touBreakdown?.valleyKwh !== undefined,
+      hasTouBreakdownValues(bill.touBreakdown),
   );
 }
 
@@ -346,6 +345,7 @@ function buildInitialValues(
   defaultBillingMonth: string,
 ): UtilityBillFormValues {
   if (editingBill) {
+    const touBreakdown: UtilityBillTouBreakdownWithDeepValley | undefined = editingBill.touBreakdown;
     return {
       billingMonth: editingBill.billingMonth,
       meterScope: editingBill.meterScope,
@@ -353,21 +353,13 @@ function buildInitialValues(
       readingEndDate: editingBill.readingEndDate,
       billedEnergyInput: String(editingBill.billedEnergyKwh),
       touSuperPeakKwhInput:
-        editingBill.touBreakdown?.sharpKwh !== undefined
-          ? String(editingBill.touBreakdown.sharpKwh)
-          : '',
-      touPeakKwhInput:
-        editingBill.touBreakdown?.peakKwh !== undefined
-          ? String(editingBill.touBreakdown.peakKwh)
-          : '',
-      touFlatKwhInput:
-        editingBill.touBreakdown?.flatKwh !== undefined
-          ? String(editingBill.touBreakdown.flatKwh)
-          : '',
+        touBreakdown?.sharpKwh !== undefined ? String(touBreakdown.sharpKwh) : '',
+      touPeakKwhInput: touBreakdown?.peakKwh !== undefined ? String(touBreakdown.peakKwh) : '',
+      touFlatKwhInput: touBreakdown?.flatKwh !== undefined ? String(touBreakdown.flatKwh) : '',
       touValleyKwhInput:
-        editingBill.touBreakdown?.valleyKwh !== undefined
-          ? String(editingBill.touBreakdown.valleyKwh)
-          : '',
+        touBreakdown?.valleyKwh !== undefined ? String(touBreakdown.valleyKwh) : '',
+      touDeepValleyKwhInput:
+        touBreakdown?.deepValleyKwh !== undefined ? String(touBreakdown.deepValleyKwh) : '',
       energyChargeInput: String(editingBill.energyChargeCny),
       basicChargeMode: editingBill.basicChargeMode,
       basicChargeQuantityInput:
@@ -400,6 +392,7 @@ function buildInitialValues(
     touPeakKwhInput: '',
     touFlatKwhInput: '',
     touValleyKwhInput: '',
+    touDeepValleyKwhInput: '',
     energyChargeInput: '',
     basicChargeMode: 'MAX_DEMAND_KW',
     basicChargeQuantityInput: '',
@@ -416,12 +409,15 @@ function buildInitialValues(
   };
 }
 
-function buildTouBreakdown(values: UtilityBillFormValues): UtilityBillTouBreakdown | undefined {
+function buildTouBreakdown(
+  values: UtilityBillFormValues,
+): UtilityBillTouBreakdownWithDeepValley | undefined {
   const out: {
     sharpKwh?: number;
     peakKwh?: number;
     flatKwh?: number;
     valleyKwh?: number;
+    deepValleyKwh?: number;
   } = {};
   if (values.touSuperPeakKwhInput !== '') {
     out.sharpKwh = Number(Number(values.touSuperPeakKwhInput).toFixed(2));
@@ -434,6 +430,9 @@ function buildTouBreakdown(values: UtilityBillFormValues): UtilityBillTouBreakdo
   }
   if (values.touValleyKwhInput !== '') {
     out.valleyKwh = Number(Number(values.touValleyKwhInput).toFixed(2));
+  }
+  if (values.touDeepValleyKwhInput !== '') {
+    out.deepValleyKwh = Number(Number(values.touDeepValleyKwhInput).toFixed(2));
   }
   return Object.keys(out).length > 0 ? out : undefined;
 }
@@ -920,7 +919,7 @@ export function UtilityBillDialog({
                   </Field>
                 </div>
 
-                <div className="grid gap-3 sm:grid-cols-4">
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
                   <Field
                     data-invalid={
                       Boolean(form.formState.errors.touSuperPeakKwhInput) || undefined
@@ -973,6 +972,21 @@ export function UtilityBillDialog({
                       {...form.register('touValleyKwhInput')}
                     />
                     <FieldError errors={[form.formState.errors.touValleyKwhInput]} />
+                  </Field>
+
+                  <Field
+                    data-invalid={
+                      Boolean(form.formState.errors.touDeepValleyKwhInput) || undefined
+                    }
+                  >
+                    <FieldLabel htmlFor="bill-tou-deep-valley">深谷电量（kWh）</FieldLabel>
+                    <Input
+                      id="bill-tou-deep-valley"
+                      inputMode="decimal"
+                      disabled={mutation.isPending}
+                      {...form.register('touDeepValleyKwhInput')}
+                    />
+                    <FieldError errors={[form.formState.errors.touDeepValleyKwhInput]} />
                   </Field>
                 </div>
               </CollapsibleContent>

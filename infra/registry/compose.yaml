@@ -94,6 +94,7 @@ services:
       - ./postgres/init/hydraulic-loop-topology.sql:/docker-entrypoint-initdb.d/780.sql:ro
       - ../connectivity/postgres/init/command-correlation-trace-and-audit-immutability.sql:/docker-entrypoint-initdb.d/790.sql:ro
       - ./postgres/init/metric-backfill-watermarks-and-reverify.sql:/docker-entrypoint-initdb.d/800.sql:ro
+      - ./postgres/init/energy-tou-holidays-and-recalc.sql:/docker-entrypoint-initdb.d/810.sql:ro
     ports:
       - "127.0.0.1:${S1_POSTGRES_HOST_PORT:-55432}:5432"
     healthcheck:

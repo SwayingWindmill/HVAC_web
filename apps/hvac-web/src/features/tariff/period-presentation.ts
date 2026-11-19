@@ -6,4 +6,5 @@ export const PERIOD_COLOR: Record<PeriodCode, string> = {
   PEAK: 'var(--warning)',
   FLAT: 'var(--chart-1)',
   VALLEY: 'var(--success)',
+  DEEP_VALLEY: 'var(--chart-2)',
 };

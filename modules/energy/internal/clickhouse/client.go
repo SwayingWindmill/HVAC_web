@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -653,12 +654,20 @@ func clickHouseArray(values []string) string {
 	return "['" + strings.Join(values, "','") + "']"
 }
 
+type checkpointInsertRow struct {
+	ProjectionName  string `json:"projection_name"`
+	HistorySequence uint64 `json:"history_sequence"`
+	ObservationID   string `json:"observation_id"`
+}
+
 func (writer *Writer) AdvanceCheckpoint(ctx context.Context, cursor energy.ProjectionCursor) error {
 	if writer == nil || writer.endpoint == nil || writer.httpClient == nil {
 		return errors.New("ClickHouse analytics writer is closed")
 	}
-	body, err := json.Marshal(map[string]any{
-		"projection_name": energyProjection, "history_sequence": cursor.HistorySequence, "observation_id": cursor.ObservationID,
+	body, err := json.Marshal(checkpointInsertRow{
+		ProjectionName:  energyProjection,
+		HistorySequence: cursor.HistorySequence,
+		ObservationID:   cursor.ObservationID,
 	})
 	if err != nil {
 		return fmt.Errorf("encode energy projection checkpoint: %w", err)
@@ -739,6 +748,127 @@ func (writer *Writer) InsertFacts(ctx context.Context, facts []energy.EnergyInte
 		"async_insert_deduplicate":   {"1"},
 		"wait_end_of_query":          {"1"},
 	}, body.Bytes())
+}
+
+const zeroClickHouseUUID = "00000000-0000-0000-0000-000000000000"
+
+type hourlyFactV2InsertRow struct {
+	TenantID        string `json:"tenant_id"`
+	SiteID          string `json:"site_id"`
+	EnergyType      string `json:"energy_type"`
+	AccountingScope string `json:"accounting_scope"`
+	LoadDeviceID    string `json:"load_device_id"`
+	PointID         string `json:"point_id"`
+	Quality         string `json:"quality"`
+	TariffPeriod    string `json:"tariff_period"`
+	Hour            string `json:"hour"`
+	EnergyKWh       string `json:"energy_kwh"`
+	CostCNY         string `json:"cost_cny"`
+	IntervalCount   int64  `json:"interval_count"`
+	CalcVersion     uint64 `json:"calc_version"`
+	DataWatermark   string `json:"data_watermark"`
+	DatasetRevision uint64 `json:"dataset_revision"`
+	UpdatedAt       string `json:"updated_at"`
+}
+
+// InsertHourlyFactsV2 writes Decimal64(6) versioned hourly rollups into analytics.energy_hourly_facts_v2.
+func (writer *Writer) InsertHourlyFactsV2(ctx context.Context, rows []energy.HourlyFactV2) error {
+	if writer == nil || writer.endpoint == nil || writer.httpClient == nil {
+		return errors.New("ClickHouse analytics writer is closed")
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	if len(rows) > maximumBatchSize {
+		return errors.New("ClickHouse analytics v2 hourly batch exceeds 4096")
+	}
+	ordered := append([]energy.HourlyFactV2(nil), rows...)
+	sort.Slice(ordered, func(left, right int) bool {
+		a, b := ordered[left], ordered[right]
+		if a.TenantID != b.TenantID {
+			return a.TenantID < b.TenantID
+		}
+		if a.SiteID != b.SiteID {
+			return a.SiteID < b.SiteID
+		}
+		if a.PointID != b.PointID {
+			return a.PointID < b.PointID
+		}
+		if a.TariffPeriod != b.TariffPeriod {
+			return a.TariffPeriod < b.TariffPeriod
+		}
+		return a.Hour.Before(b.Hour)
+	})
+	var body bytes.Buffer
+	digest := sha256.New()
+	for _, row := range ordered {
+		if err := validateHourlyFactV2(row); err != nil {
+			return err
+		}
+		loadDeviceID := strings.TrimSpace(row.LoadDeviceID)
+		if loadDeviceID == "" {
+			loadDeviceID = zeroClickHouseUUID
+		}
+		hourUTC := row.Hour.UTC().Truncate(time.Hour)
+		updatedAt := row.UpdatedAt.UTC()
+		if updatedAt.IsZero() {
+			updatedAt = time.Now().UTC()
+		}
+		encoded, err := json.Marshal(hourlyFactV2InsertRow{
+			TenantID:        row.TenantID,
+			SiteID:          row.SiteID,
+			EnergyType:      row.EnergyType,
+			AccountingScope: row.AccountingScope,
+			LoadDeviceID:    loadDeviceID,
+			PointID:         row.PointID,
+			Quality:         row.Quality,
+			TariffPeriod:    row.TariffPeriod,
+			Hour:            hourUTC.Format("2006-01-02 15:04:05"),
+			EnergyKWh:       strconv.FormatFloat(row.EnergyKWh, 'f', 6, 64),
+			CostCNY:         strconv.FormatFloat(row.CostCNY, 'f', 6, 64),
+			IntervalCount:   row.IntervalCount,
+			CalcVersion:     row.CalcVersion,
+			DataWatermark:   clickHouseTime(row.DataWatermark),
+			DatasetRevision: row.DatasetRevision,
+			UpdatedAt:       clickHouseTime(updatedAt),
+		})
+		if err != nil {
+			return fmt.Errorf("encode hourly v2 fact: %w", err)
+		}
+		body.Write(encoded)
+		body.WriteByte('\n')
+		fmt.Fprintf(digest, "%s|%s|%s|%s|%s|%s|%s|%s|%d|%d\n",
+			row.TenantID, row.SiteID, row.EnergyType, row.AccountingScope,
+			loadDeviceID, row.PointID, row.Quality, row.TariffPeriod,
+			hourUTC.Unix(), row.CalcVersion,
+		)
+	}
+	return writer.insert(ctx, "hourly v2 fact insert", url.Values{
+		"query":                      {"INSERT INTO " + writer.database + ".energy_hourly_facts_v2 FORMAT JSONEachRow"},
+		"date_time_input_format":     {"best_effort"},
+		"insert_deduplication_token": {hex.EncodeToString(digest.Sum(nil))},
+		"async_insert":               {"1"},
+		"wait_for_async_insert":      {"1"},
+		"async_insert_deduplicate":   {"1"},
+		"wait_end_of_query":          {"1"},
+	}, body.Bytes())
+}
+
+func validateHourlyFactV2(row energy.HourlyFactV2) error {
+	if strings.TrimSpace(row.TenantID) == "" || strings.TrimSpace(row.SiteID) == "" ||
+		strings.TrimSpace(row.PointID) == "" || strings.TrimSpace(row.EnergyType) == "" ||
+		strings.TrimSpace(row.AccountingScope) == "" || strings.TrimSpace(row.Quality) == "" {
+		return errors.New("ClickHouse hourly v2 fact identifiers are required")
+	}
+	if row.Hour.IsZero() || row.DataWatermark.IsZero() || row.CalcVersion == 0 {
+		return errors.New("ClickHouse hourly v2 fact hour, data_watermark and positive calc_version are required")
+	}
+	if math.IsNaN(row.EnergyKWh) || math.IsInf(row.EnergyKWh, 0) || row.EnergyKWh < 0 ||
+		math.IsNaN(row.CostCNY) || math.IsInf(row.CostCNY, 0) || row.CostCNY < 0 ||
+		row.IntervalCount < 0 {
+		return errors.New("ClickHouse hourly v2 fact metrics must be finite and non-negative")
+	}
+	return nil
 }
 
 func (writer *Writer) AppendRebuildEvent(ctx context.Context, event energy.RebuildEvent) error {

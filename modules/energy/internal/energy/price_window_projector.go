@@ -16,7 +16,7 @@ import (
 // energy arrives, whatever the Site's timezone.
 const (
 	priceWindowHorizonDays = 4
-	pricedSiteLookback     = 48 * time.Hour
+	pricedSiteLookback     = 30 * 24 * time.Hour
 )
 
 // PricedSite is a Site whose electricity Cube prices.

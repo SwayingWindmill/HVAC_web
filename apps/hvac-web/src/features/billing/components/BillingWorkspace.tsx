@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, useNavigate } from '@tanstack/react-router';
-import { ChevronLeft, ChevronRight, Pencil, Plus } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Loader2, Pencil, Plus, RotateCcw } from 'lucide-react';
 import type {
   UtilityBill,
   UtilityBillMeterScope,
@@ -10,6 +10,7 @@ import type {
 import { PageHeader, PageMeta } from '@/blocks/page-header';
 import { StateCard } from '@/blocks/state/state-card';
 import { Main } from '@/components/layout/Main';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
   Select,
@@ -20,31 +21,124 @@ import {
 } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useNow } from '@/hooks/use-now';
+import { formatTime } from '@/lib/operator-format';
 import {
+  ACCOUNTING_RECALC_GRANULARITY_SHORT_LABEL,
   billingMonthOptions,
   currentSiteBillingMonth,
   describeBillingApiError,
   formatBillingMonthLabel,
+  formatRecalcWindowLabel,
   normalizeBillingMonth,
   shiftBillingMonth,
   summarizeMonthlyBudgetProgress,
 } from '../billing-model';
 import {
+  billingKeys,
+  siteAccountingRecalcJobsQuery,
   siteBillingMonthElectricityQuery,
   siteMonthlyBudgetQuery,
   siteUtilityBillsQuery,
+  type AccountingRecalcJob,
 } from '../query';
 import { BillReconciliationSheet } from './BillReconciliationSheet';
 import { BudgetEditorDialog } from './BudgetEditorDialog';
 import { BudgetOverviewTab } from './BudgetOverviewTab';
+import { RecalculateDialog } from './RecalculateDialog';
 import { UtilityBillDialog } from './UtilityBillDialog';
 import { UtilityBillsTab } from './UtilityBillsTab';
 
 const siteRoute = getRouteApi('/_app/_site');
 const pageRoute = getRouteApi('/_app/_site/energy-analysis/billing');
 
+function AccountingRecalcStatusStrip({
+  job,
+  timeZone,
+}: {
+  readonly job: AccountingRecalcJob;
+  readonly timeZone: string;
+}) {
+  const granularityText = ACCOUNTING_RECALC_GRANULARITY_SHORT_LABEL[job.granularity];
+  const windowText = formatRecalcWindowLabel(job.windowStart, job.windowEnd, timeZone);
+
+  if (job.status === 'PENDING') {
+    return (
+      <div
+        role="status"
+        aria-live="polite"
+        data-testid="accounting-recalc-status-strip"
+        className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card px-3.5 py-2 text-xs shadow-xs"
+      >
+        <Badge variant="warning">■ 排队重算中</Badge>
+        <span className="font-medium text-foreground">
+          {granularityText} · {windowText}
+        </span>
+        <span className="text-muted-foreground">
+          等待后台执行{job.requestedByDisplay ? ` · 由 ${job.requestedByDisplay} 发起` : ''}
+        </span>
+      </div>
+    );
+  }
+
+  if (job.status === 'RUNNING') {
+    return (
+      <div
+        role="status"
+        aria-live="polite"
+        data-testid="accounting-recalc-status-strip"
+        className="flex flex-wrap items-center gap-2 rounded-lg border border-primary-line bg-card px-3.5 py-2 text-xs shadow-xs"
+      >
+        <Badge variant="default">
+          <Loader2 className="motion-safe:animate-spin" aria-hidden="true" />
+          ● 正在重算
+        </Badge>
+        <span className="font-medium text-foreground">
+          {granularityText} · {windowText}
+        </span>
+        <span className="text-muted-foreground">正在重新计算分时电费与能耗，完成后将自动刷新</span>
+      </div>
+    );
+  }
+
+  if (job.status === 'FAILED') {
+    const failureReason = job.lastError.trim() || '请稍后重试或缩小重算日期范围';
+    return (
+      <div
+        role="status"
+        aria-live="polite"
+        data-testid="accounting-recalc-status-strip"
+        className="flex flex-wrap items-center gap-2 rounded-lg border border-destructive/35 bg-card px-3.5 py-2 text-xs shadow-xs"
+      >
+        <Badge variant="destructive">◆ 最近重算失败</Badge>
+        <span className="font-medium text-foreground">
+          {granularityText} · {windowText}
+        </span>
+        <span className="text-destructive-text">{failureReason}</span>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      data-testid="accounting-recalc-status-strip"
+      className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card px-3.5 py-2 text-xs shadow-xs"
+    >
+      <Badge variant="success">○ 最近重算完成</Badge>
+      <span className="font-medium text-foreground">
+        {granularityText} · {windowText}
+      </span>
+      <span className="text-muted-foreground tabular-nums">
+        完成于 {formatTime(job.finishedAt ?? job.updatedAt, timeZone)}
+      </span>
+    </div>
+  );
+}
+
 export function BillingWorkspace() {
   const { site, principal } = siteRoute.useRouteContext();
+  const queryClient = useQueryClient();
   const search = pageRoute.useSearch();
   const navigate = useNavigate({ from: '/energy-analysis/billing' });
   const nowMs = useNow(60_000);
@@ -52,6 +146,8 @@ export function BillingWorkspace() {
 
   const capabilities = principal.authorization.capabilities;
   const canManageBilling = capabilities.includes('billing.manage');
+  const canRecalculateAccounting =
+    capabilities.includes('billing.manage') || capabilities.includes('savings.manage');
 
   const activeView = search.view === 'bills' ? 'bills' : 'overview';
   const defaultMonth = useMemo(
@@ -71,6 +167,7 @@ export function BillingWorkspace() {
 
   const [budgetDialogOpen, setBudgetDialogOpen] = useState(false);
   const [billDialogOpen, setBillDialogOpen] = useState(false);
+  const [recalcDialogOpen, setRecalcDialogOpen] = useState(false);
   const [editingBill, setEditingBill] = useState<UtilityBill | null>(null);
 
   const budgetQuery = useQuery(siteMonthlyBudgetQuery(site.id, selectedMonth));
@@ -94,6 +191,34 @@ export function BillingWorkspace() {
       enabled: true,
     }),
   );
+  const recalcJobsQuery = useQuery(siteAccountingRecalcJobsQuery(site.id));
+  const latestRecalcJob = recalcJobsQuery.data?.[0] ?? null;
+
+  const prevRecalcJobRef = useRef<{
+    readonly id: string;
+    readonly status: AccountingRecalcJob['status'];
+  } | null>(null);
+
+  useEffect(() => {
+    const prev = prevRecalcJobRef.current;
+    if (latestRecalcJob) {
+      if (
+        prev &&
+        prev.id === latestRecalcJob.id &&
+        (prev.status === 'PENDING' || prev.status === 'RUNNING') &&
+        latestRecalcJob.status === 'SUCCEEDED'
+      ) {
+        void queryClient.invalidateQueries({ queryKey: billingKeys.monthElectricityRoot(site.id) });
+        void queryClient.invalidateQueries({
+          queryKey: billingKeys.readingWindowElectricityRoot(site.id),
+        });
+        void queryClient.invalidateQueries({ queryKey: ['energy-series', site.id] });
+      }
+      prevRecalcJobRef.current = { id: latestRecalcJob.id, status: latestRecalcJob.status };
+    } else {
+      prevRecalcJobRef.current = null;
+    }
+  }, [latestRecalcJob, queryClient, site.id]);
 
   const budgetSummary = useMemo(
     () =>
@@ -212,6 +337,18 @@ export function BillingWorkspace() {
               </Button>
             </div>
 
+            {canRecalculateAccounting ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => setRecalcDialogOpen(true)}
+              >
+                <RotateCcw data-icon="inline-start" />
+                重算时段数据
+              </Button>
+            ) : null}
+
             {canManageBilling ? (
               <>
                 <Button
@@ -239,6 +376,10 @@ export function BillingWorkspace() {
           </div>
         }
       />
+
+      {!recalcJobsQuery.isPending && !recalcJobsQuery.isError && latestRecalcJob ? (
+        <AccountingRecalcStatusStrip job={latestRecalcJob} timeZone={site.timezone} />
+      ) : null}
 
       <Tabs
         value={activeView}
@@ -342,6 +483,16 @@ export function BillingWorkspace() {
         monthOptions={monthOptions}
         csrfToken={principal.session.csrfToken}
         onSaved={(saved) => openInspectBill(saved.id)}
+      />
+
+      <RecalculateDialog
+        open={recalcDialogOpen}
+        onOpenChange={setRecalcDialogOpen}
+        siteId={site.id}
+        billingMonth={selectedMonth}
+        timezone={site.timezone}
+        csrfToken={principal.session.csrfToken}
+        now={now}
       />
 
       <BillReconciliationSheet

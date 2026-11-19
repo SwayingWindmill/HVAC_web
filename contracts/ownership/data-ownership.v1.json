@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 23,
+  "registryRevision": 24,
   "resources": [
     {
       "kind": "schema",
@@ -467,6 +467,36 @@
       "name": "work-order-mutation-audit",
       "writer": "work-order-service",
       "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "site_calendar_holidays",
+      "writer": "platform-core-service",
+      "revision": 1,
+      "schema": "core_registry"
+    },
+    {
+      "kind": "projection",
+      "name": "meter_ratio_versions",
+      "writer": "platform-core-service",
+      "revision": 1,
+      "schema": "core_registry"
+    },
+    {
+      "kind": "projection",
+      "name": "energy_recalc_dirty_windows",
+      "writer": "platform-core-service",
+      "revision": 1,
+      "schema": "core_registry"
+    },
+    {
+      "kind": "projection",
+      "name": "energy_hourly_facts_v2",
+      "writer": "analytics-read-model-projector",
+      "revision": 1,
+      "schema": "analytics",
+      "database": "clickhouse",
+      "sourceOwner": "telemetry-history-projector"
     }
   ],
   "databaseAccess": [

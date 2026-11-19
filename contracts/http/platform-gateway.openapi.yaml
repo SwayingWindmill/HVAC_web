@@ -3087,6 +3087,54 @@
         }
       }
     },
+    "/api/v1/sites/{siteId}/accounting/recalculate": {
+      "post": {
+        "operationId": "recalculateSiteAccounting",
+        "summary": "Enqueue a manual energy accounting recalculation window for a Site",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "platform-core-service",
+        "x-public-ingress": "platform-gateway",
+        "parameters": [
+          { "$ref": "#/components/parameters/SiteId" },
+          { "$ref": "#/components/parameters/CsrfToken" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/AccountingRecalculateRequest" }
+            }
+          }
+        },
+        "responses": {
+          "202": { "description": "Accepted accounting recalculation job.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AccountingRecalcJob" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/accounting/recalculate-jobs": {
+      "get": {
+        "operationId": "listSiteAccountingRecalcJobs",
+        "summary": "List recent energy accounting recalculation jobs for a Site",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "platform-core-service",
+        "x-public-ingress": "platform-gateway",
+        "parameters": [
+          { "$ref": "#/components/parameters/SiteId" },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 100 } }
+        ],
+        "responses": {
+          "200": { "description": "Recent accounting recalculation jobs.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AccountingRecalcJobList" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
     "/api/v1/sites/{siteId}/data-gaps": {
       "get": {
         "operationId": "listSiteDataGaps",
@@ -4851,7 +4899,7 @@
         "additionalProperties": false,
         "required": ["periodCode", "energyKWh", "amountCNY"],
         "properties": {
-          "periodCode": { "type": "string", "enum": ["SUPER_PEAK", "PEAK", "FLAT", "VALLEY"] },
+          "periodCode": { "type": "string", "enum": ["SUPER_PEAK", "PEAK", "FLAT", "VALLEY", "DEEP_VALLEY"] },
           "energyKWh": { "type": "number", "minimum": 0 },
           "amountCNY": { "type": "number", "minimum": 0 }
         }
@@ -5733,7 +5781,8 @@
           "effectiveFrom": { "type": "string", "format": "date-time" },
           "timezone": { "type": "string" },
           "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
-          "periods": { "type": "array", "items": { "$ref": "#/components/schemas/TariffPeriod" } }
+          "periods": { "type": "array", "items": { "$ref": "#/components/schemas/TariffPeriod" } },
+          "holidayDates": { "type": "object", "additionalProperties": { "type": "string" } }
         }
       },
       "TariffPeriod": {
@@ -5741,7 +5790,7 @@
         "additionalProperties": false,
         "required": ["periodCode", "dayType", "startMinute", "endMinute", "energyRatePerKWh", "demandRatePerKW"],
         "properties": {
-          "periodCode": { "type": "string", "enum": ["SUPER_PEAK", "PEAK", "FLAT", "VALLEY"] },
+          "periodCode": { "type": "string", "enum": ["SUPER_PEAK", "PEAK", "FLAT", "VALLEY", "DEEP_VALLEY"] },
           "dayType": { "type": "string", "enum": ["WEEKDAY", "WEEKEND", "HOLIDAY", "SPECIAL_DAY"] },
           "startMinute": { "type": "integer", "minimum": 0, "maximum": 1439 },
           "endMinute": { "type": "integer", "minimum": 1, "maximum": 1440 },
@@ -5926,7 +5975,8 @@
           "sharpKwh": { "type": "number", "minimum": 0 },
           "peakKwh": { "type": "number", "minimum": 0 },
           "flatKwh": { "type": "number", "minimum": 0 },
-          "valleyKwh": { "type": "number", "minimum": 0 }
+          "valleyKwh": { "type": "number", "minimum": 0 },
+          "deepValleyKwh": { "type": "number", "minimum": 0 }
         }
       },
       "UtilityBill": {
@@ -6020,6 +6070,53 @@
         "properties": {
           "note": { "type": "string", "maxLength": 1000 },
           "meta": { "$ref": "#/components/schemas/RegistryMutationMeta" }
+        }
+      },
+      "AccountingRecalculateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["fromDate", "toDate", "reason"],
+        "properties": {
+          "fromDate": { "type": "string", "format": "date", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+          "toDate": { "type": "string", "format": "date", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+          "granularity": { "type": "string", "enum": ["HOUR", "DAY", "MONTH", "ALL"], "default": "HOUR" },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 1000 }
+        }
+      },
+      "AccountingRecalcJob": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id", "tenantId", "siteId", "granularity", "windowStart", "windowEnd",
+          "status", "availableAt", "requestedBy", "requestedByDisplay", "reason",
+          "source", "attemptCount", "lastError", "createdAt", "updatedAt", "finishedAt"
+        ],
+        "properties": {
+          "id": { "$ref": "#/components/schemas/UUIDv7" },
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "granularity": { "type": "string", "enum": ["HOUR", "DAY", "MONTH", "ALL"] },
+          "windowStart": { "$ref": "#/components/schemas/Instant" },
+          "windowEnd": { "$ref": "#/components/schemas/Instant" },
+          "status": { "type": "string", "enum": ["PENDING", "RUNNING", "SUCCEEDED", "FAILED"] },
+          "availableAt": { "$ref": "#/components/schemas/Instant" },
+          "requestedBy": { "$ref": "#/components/schemas/UUIDv7" },
+          "requestedByDisplay": { "type": "string" },
+          "reason": { "type": "string", "maxLength": 1000 },
+          "source": { "type": "string", "enum": ["BACKFILL", "MANUAL", "TARIFF_CHANGE", "RATIO_CHANGE"] },
+          "attemptCount": { "type": "integer", "minimum": 0 },
+          "lastError": { "type": "string" },
+          "createdAt": { "$ref": "#/components/schemas/Instant" },
+          "updatedAt": { "$ref": "#/components/schemas/Instant" },
+          "finishedAt": { "oneOf": [{ "$ref": "#/components/schemas/Instant" }, { "type": "null" }] }
+        }
+      },
+      "AccountingRecalcJobList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items"],
+        "properties": {
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/AccountingRecalcJob" } }
         }
       },
       "SiteDataGap": {

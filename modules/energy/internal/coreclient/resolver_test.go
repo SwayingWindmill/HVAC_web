@@ -271,3 +271,51 @@ func resolveInput(tenantID string) energy.BindingResolveInput {
 		SampledAt: time.Date(2026, 7, 29, 13, 0, 0, 0, time.UTC),
 	}
 }
+
+func TestResolverDecodesReadingUnitAndRatioVersions(t *testing.T) {
+	clock := newTestClock()
+	iam := newFakeIAM(t, clock, true)
+	core := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte(`{
+  "siteId": "site-1",
+  "items": [{
+    "tenantId": "tenant-1",
+    "siteId": "site-1",
+    "meterId": "meter-1",
+    "meterBindingId": "binding-1",
+    "topologyVersionId": "topo-1",
+    "bindingVersion": 2,
+    "revision": 3,
+    "energyTypeId": "et-1",
+    "energyType": "electricity",
+    "meterRole": "PRIMARY",
+    "direction": "IMPORT",
+    "accountingScope": "SITE",
+    "deviceId": "device-1",
+    "pointId": "point-1",
+    "pointType": "COUNTER",
+    "readingUnit": "MWh",
+    "ratioVersions": [{
+      "id": "rv-1",
+      "ctRatio": 20,
+      "ptRatio": 1,
+      "meterMultiplier": 1,
+      "ratioApplicationMode": "PLATFORM_APPLIED",
+      "readingUnit": "kWh",
+      "effectiveFrom": "2026-07-01T00:00:00Z",
+      "status": "RELEASED"
+    }],
+    "effectiveFrom": "2026-01-01T00:00:00Z"
+  }]
+}`))
+	}))
+	defer core.Close()
+
+	res, err := newTestResolver(t, core, iam, clock).Resolve(context.Background(), resolveInput("tenant-1"))
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if res.ReadingUnit != "MWh" || len(res.RatioVersions) != 1 || res.RatioVersions[0].CTRatio != 20 {
+		t.Fatalf("unexpected decoded readingUnit/ratioVersions: %+v", res)
+	}
+}
