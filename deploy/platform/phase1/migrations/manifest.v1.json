@@ -133,7 +133,8 @@
         "infra/registry/postgres/init/optimization-governance-flywheel.sql",
         "infra/registry/postgres/init/metric-backfill-recalc-job-grants.sql",
         "infra/registry/postgres/init/iam-expired-binding-revocation.sql",
-        "infra/registry/postgres/init/hydraulic-loop-topology.sql"
+        "infra/registry/postgres/init/hydraulic-loop-topology.sql",
+        "infra/registry/postgres/init/metric-backfill-watermarks-and-reverify.sql"
       ]
     },
     {

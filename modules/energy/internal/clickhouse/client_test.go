@@ -294,6 +294,145 @@ func TestWriterAppendsRebuildEventWithDeduplication(t *testing.T) {
 	}
 }
 
+func TestWriterInsertDeduplicationTokenIgnoresRebuildRunID(t *testing.T) {
+	var tokens []string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		tokens = append(tokens, request.URL.Query().Get("insert_deduplication_token"))
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	sink, err := NewWriter(WriterConfig{
+		BaseURL: server.URL, Database: "analytics", Table: "energy_interval_facts",
+		Username: "analytics_writer", HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fact, err := energy.BuildFact(validDelta(), validBinding(), time.Date(2026, 7, 29, 13, 0, 3, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fact.FactRevision = 2
+	run1 := "01990000-2a00-7000-8000-000000000001"
+	run2 := "01990000-2a00-7000-8000-000000000002"
+	fact.RebuildRunID = &run1
+	if err := sink.InsertFacts(context.Background(), []energy.EnergyIntervalFact{fact}); err != nil {
+		t.Fatal(err)
+	}
+	fact.RebuildRunID = &run2
+	if err := sink.InsertFacts(context.Background(), []energy.EnergyIntervalFact{fact}); err != nil {
+		t.Fatal(err)
+	}
+	fact.FactRevision = 3
+	if err := sink.InsertFacts(context.Background(), []energy.EnergyIntervalFact{fact}); err != nil {
+		t.Fatal(err)
+	}
+	if len(tokens) != 3 {
+		t.Fatalf("tokens=%v, want 3 entries", tokens)
+	}
+	if tokens[0] != tokens[1] {
+		t.Fatalf("expected identical dedup token across RebuildRunID retries: %q vs %q", tokens[0], tokens[1])
+	}
+	if tokens[1] == tokens[2] {
+		t.Fatalf("expected different dedup token for next revision: %q", tokens[2])
+	}
+}
+
+func TestWriterAllowsInvalidationFactRevisionAndRejectsInitialInvalidDecrease(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	sink, err := NewWriter(WriterConfig{
+		BaseURL: server.URL, Database: "analytics", Table: "energy_interval_facts",
+		Username: "analytics_writer", HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	delta := validDelta()
+	delta.TransitionType = energy.TransitionInvalidDecrease
+	delta.DeltaValue = nil
+	delta.ExistingFactFound = true
+	delta.ExistingFactEnergyKWh = 2.75
+	delta.ExistingFactTransitionType = energy.TransitionIncrease
+	delta.ExistingFactQuality = energy.FactQualityValid
+	delta.ExistingFactRevision = 0
+
+	fact, err := energy.BuildFact(delta, validBinding(), time.Date(2026, 7, 29, 13, 0, 3, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.InsertFacts(context.Background(), []energy.EnergyIntervalFact{fact}); err == nil {
+		t.Fatal("expected rev-0 invalidation fact without incremented revision to be rejected")
+	}
+	fact.FactRevision = 1
+	if err := sink.InsertFacts(context.Background(), []energy.EnergyIntervalFact{fact}); err != nil {
+		t.Fatalf("expected rev-1 invalidation fact to succeed, got %v", err)
+	}
+}
+
+func TestReaderQueriesCheckDeltaValueInvalidationAndWindowBoundaries(t *testing.T) {
+	var seenWindowParams url.Values
+	var seenWindowSQL string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		seenWindowSQL = string(body)
+		seenWindowParams = request.URL.Query()
+		_, _ = io.WriteString(writer, `{"previous_observation_id":"018f4e00-3000-7000-8000-000000000001","current_observation_id":"018f4e00-3000-7000-8000-000000000002","tenant_id":"018f4d00-0000-7000-8000-000000000001","site_id":"018f4e00-1000-7000-8000-000000000001","device_id":"018f4e00-2000-7000-8000-000000000001","point_id":"018f4e00-2100-7000-8000-000000000001","sensor_id":null,"telemetry_key":"site.energy.total","point_revision":3,"unit":"kWh","counter_decrease_mode":"RESET_TO_ZERO","counter_rollover_modulus":null,"previous_value":100,"previous_quality":"GOOD","previous_quality_reasons":[],"previous_sampled_at":"2026-07-29T12:00:00Z","current_sampled_at":"2026-07-29T13:30:00Z","current_received_at":"2026-07-29T13:30:05Z","current_quality":"GOOD","current_quality_reasons":[],"source_event_id":"018f4e00-3100-7000-8000-000000000001","source_partition":"telemetry-0","source_offset":42,"transition_type":"INVALID_DECREASE","delta_value":null,"existing_fact_found":1,"existing_fact_meter_binding_id":"018f4e00-1200-7000-8000-000000000001","existing_fact_previous_observation_id":"018f4e00-3000-7000-8000-000000000001","existing_fact_energy_kwh":12.5,"existing_fact_transition_type":"INCREASE","existing_fact_quality":"VALID","existing_fact_revision":1}`+"\n")
+	}))
+	defer server.Close()
+
+	reader, err := NewReader(ReaderConfig{
+		BaseURL: server.URL, SourceDatabase: "telemetry_history",
+		AnalyticsDatabase: "analytics", AnalyticsTable: "energy_interval_facts",
+		HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	counterSQL := reader.counterDeltaQuery()
+	for _, needle := range []string{
+		"existing_fact_energy_kwh",
+		"existing_fact_transition_type",
+		"existing_fact_quality",
+		"abs(ifNull(existing.existing_fact_energy_kwh, 0.0) - ifNull(delta.delta_value, 0.0)) > 1e-6",
+		"existing.existing_fact_quality != 'INVALID'",
+		"delta.transition_type IN ('INCREASE', 'UNCHANGED', 'RECOVERY', 'RESET', 'ROLLOVER')",
+	} {
+		if !strings.Contains(counterSQL, needle) {
+			t.Fatalf("counterDeltaQuery missing %q:\n%s", needle, counterSQL)
+		}
+	}
+	if strings.Contains(strings.ToUpper(counterSQL), "ALTER TABLE") {
+		t.Fatalf("unexpected ClickHouse mutation in counterDeltaQuery:\n%s", counterSQL)
+	}
+
+	window := energy.DirtyWindow{
+		TenantID: "018f4d00-0000-7000-8000-000000000001",
+		SiteID:   "018f4e00-1000-7000-8000-000000000001",
+		PointIDs: []string{"018f4e00-2100-7000-8000-000000000001"},
+		Start:    time.Date(2026, 7, 29, 13, 0, 0, 0, time.UTC),
+		End:      time.Date(2026, 7, 29, 14, 0, 0, 0, time.UTC),
+	}
+	deltas, err := reader.WindowDeltas(context.Background(), window)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deltas) != 1 || deltas[0].ExistingFactEnergyKWh != 12.5 || deltas[0].ExistingFactQuality != energy.FactQualityValid || deltas[0].DeltaValue != nil {
+		t.Fatalf("unexpected decoded window deltas: %+v", deltas)
+	}
+	if !strings.Contains(seenWindowSQL, "delta.sampled_at > {until:DateTime64(3, 'UTC')}") {
+		t.Fatalf("windowDeltaQuery missing T_end+1 successor guard:\n%s", seenWindowSQL)
+	}
+	if seenWindowParams.Get("param_since") != "2026-07-29 13:00:00.000" || seenWindowParams.Get("param_until") != "2026-07-29 14:00:00.000" {
+		t.Fatalf("unexpected window params: %v", seenWindowParams)
+	}
+}
+
 func validDelta() energy.CounterDelta {
 	delta := 2.75
 	return energy.CounterDelta{

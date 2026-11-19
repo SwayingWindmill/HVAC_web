@@ -91,6 +91,9 @@ type CounterDelta struct {
 	ExistingFactFound                 bool
 	ExistingFactMeterBindingID        string
 	ExistingFactPreviousObservationID string
+	ExistingFactEnergyKWh             float64
+	ExistingFactTransitionType        TransitionType
+	ExistingFactQuality               string
 	ExistingFactRevision              uint64
 }
 
@@ -191,6 +194,21 @@ type CounterSource interface {
 	NextBatch(context.Context, int) (CounterBatch, error)
 }
 
+// DirtyWindow names an explicit counter rebuild window [Start, End] for one site's points.
+type DirtyWindow struct {
+	TenantID string
+	SiteID   string
+	PointIDs []string
+	Start    time.Time
+	End      time.Time
+}
+
+// DirtyWindowCounterSource fetches counter deltas across a dirty window, stitching the
+// predecessor before Start through the immediate T_end + 1 successor after End.
+type DirtyWindowCounterSource interface {
+	WindowDeltas(context.Context, DirtyWindow) ([]CounterDelta, error)
+}
+
 type BindingResolver interface {
 	Resolve(context.Context, BindingResolveInput) (BindingResolution, error)
 }
@@ -260,50 +278,9 @@ func (p *Projector) ProjectOnce(ctx context.Context) (int, error) {
 	if batch.Through == nil {
 		return 0, nil
 	}
-	deltas := batch.Deltas
-
-	projectedAt := p.now().UTC()
-	facts := make([]EnergyIntervalFact, 0, len(deltas))
-	seen := make(map[string]struct{}, len(deltas))
-	for _, delta := range deltas {
-		if !delta.TransitionType.ProducesFact() {
-			return 0, fmt.Errorf("counter delta %s has non-fact transition %q", delta.CurrentObservationID, delta.TransitionType)
-		}
-		resolution, resolveErr := p.resolver.Resolve(ctx, BindingResolveInput{
-			TenantID:  delta.TenantID,
-			SiteID:    delta.SiteID,
-			DeviceID:  delta.DeviceID,
-			PointID:   delta.PointID,
-			SampledAt: delta.CurrentSampledAt,
-		})
-		if resolveErr != nil {
-			return 0, fmt.Errorf("resolve meter binding for observation %s: %w", delta.CurrentObservationID, resolveErr)
-		}
-		// A counter no meter binding names (a calculated BTU meter's cooling, say) is outside the
-		// energy topology and makes no fact; only an ambiguous binding stops the projection.
-		if resolution.Status == BindingNoMatch {
-			continue
-		}
-		if resolution.Status != BindingMatch {
-			return 0, fmt.Errorf("resolve meter binding for observation %s: %s", delta.CurrentObservationID, resolution.Status)
-		}
-		if err := validateBindingResolution(delta, resolution); err != nil {
-			return 0, fmt.Errorf("validate meter binding for observation %s: %w", delta.CurrentObservationID, err)
-		}
-		fact, buildErr := BuildFact(delta, resolution, projectedAt)
-		if buildErr != nil {
-			return 0, fmt.Errorf("build energy fact for observation %s: %w", delta.CurrentObservationID, buildErr)
-		}
-		fact.FactRevision, _, buildErr = correctionRevision(delta, resolution)
-		if buildErr != nil {
-			return 0, fmt.Errorf("classify energy fact correction for observation %s: %w", delta.CurrentObservationID, buildErr)
-		}
-		key := fact.LogicalKey()
-		if _, exists := seen[key]; exists {
-			return 0, fmt.Errorf("duplicate energy fact logical key %q in batch", key)
-		}
-		seen[key] = struct{}{}
-		facts = append(facts, fact)
+	facts, err := p.buildFactsForDeltas(ctx, batch.Deltas, p.now().UTC(), false)
+	if err != nil {
+		return 0, err
 	}
 
 	projected, err := p.persistFacts(ctx, facts)
@@ -318,6 +295,58 @@ func (p *Projector) ProjectOnce(ctx context.Context) (int, error) {
 	return projected, nil
 }
 
+func (p *Projector) buildFactsForDeltas(ctx context.Context, deltas []CounterDelta, projectedAt time.Time, skipUnchanged bool) ([]EnergyIntervalFact, error) {
+	facts := make([]EnergyIntervalFact, 0, len(deltas))
+	seen := make(map[string]struct{}, len(deltas))
+	for _, delta := range deltas {
+		if !delta.TransitionType.ProducesFact() && !delta.ExistingFactFound {
+			return nil, fmt.Errorf("counter delta %s has non-fact transition %q", delta.CurrentObservationID, delta.TransitionType)
+		}
+		resolution, resolveErr := p.resolver.Resolve(ctx, BindingResolveInput{
+			TenantID:  delta.TenantID,
+			SiteID:    delta.SiteID,
+			DeviceID:  delta.DeviceID,
+			PointID:   delta.PointID,
+			SampledAt: delta.CurrentSampledAt,
+		})
+		if resolveErr != nil {
+			return nil, fmt.Errorf("resolve meter binding for observation %s: %w", delta.CurrentObservationID, resolveErr)
+		}
+		// A counter no meter binding names (a calculated BTU meter's cooling, say) is outside the
+		// energy topology and makes no fact; only an ambiguous binding stops the projection.
+		if resolution.Status == BindingNoMatch {
+			continue
+		}
+		if resolution.Status != BindingMatch {
+			return nil, fmt.Errorf("resolve meter binding for observation %s: %s", delta.CurrentObservationID, resolution.Status)
+		}
+		if err := validateBindingResolution(delta, resolution); err != nil {
+			return nil, fmt.Errorf("validate meter binding for observation %s: %w", delta.CurrentObservationID, err)
+		}
+		if (!delta.TransitionType.ProducesFact() || delta.DeltaValue == nil) && delta.ExistingFactMeterBindingID != resolution.MeterBindingID {
+			continue
+		}
+		fact, buildErr := BuildFact(delta, resolution, projectedAt)
+		if buildErr != nil {
+			return nil, fmt.Errorf("build energy fact for observation %s: %w", delta.CurrentObservationID, buildErr)
+		}
+		fact.FactRevision, _, buildErr = correctionRevision(delta, resolution)
+		if buildErr != nil {
+			if skipUnchanged && errors.Is(buildErr, errFactUnchanged) {
+				continue
+			}
+			return nil, fmt.Errorf("classify energy fact correction for observation %s: %w", delta.CurrentObservationID, buildErr)
+		}
+		key := fact.LogicalKey()
+		if _, exists := seen[key]; exists {
+			return nil, fmt.Errorf("duplicate energy fact logical key %q in batch", key)
+		}
+		seen[key] = struct{}{}
+		facts = append(facts, fact)
+	}
+	return facts, nil
+}
+
 func BuildFact(delta CounterDelta, binding BindingResolution, projectedAt time.Time) (EnergyIntervalFact, error) {
 	if err := validateCounterDelta(delta); err != nil {
 		return EnergyIntervalFact{}, err
@@ -326,6 +355,16 @@ func BuildFact(delta CounterDelta, binding BindingResolution, projectedAt time.T
 		return EnergyIntervalFact{}, err
 	}
 	quality, qualityReasons := mapQuality(delta.CurrentQuality, delta.CurrentQualityReasons, delta.PreviousQuality, delta.PreviousQualityReasons)
+	energyKWh := 0.0
+	if delta.TransitionType.ProducesFact() && delta.DeltaValue != nil {
+		energyKWh = *delta.DeltaValue
+	} else {
+		// Newly invalidated revision supersedes a prior fact with 0 kWh and INVALID quality.
+		quality = FactQualityInvalid
+		if strings.TrimSpace(string(delta.TransitionType)) != "" {
+			qualityReasons = uniqueStrings(append(qualityReasons, string(delta.TransitionType)))
+		}
+	}
 	var sensorID *string
 	if strings.TrimSpace(delta.SensorID) != "" {
 		sensorID = &delta.SensorID
@@ -359,7 +398,7 @@ func BuildFact(delta CounterDelta, binding BindingResolution, projectedAt time.T
 		CounterRolloverModulus: delta.CounterRolloverModulus,
 		PeriodStart:            delta.PreviousSampledAt.UTC(),
 		PeriodEnd:              delta.CurrentSampledAt.UTC(),
-		EnergyKWh:              *delta.DeltaValue,
+		EnergyKWh:              energyKWh,
 		TransitionType:         delta.TransitionType,
 		Quality:                quality,
 		QualityReasons:         qualityReasons,
@@ -396,9 +435,18 @@ func validateCounterDelta(delta CounterDelta) error {
 		return errors.New("current sampled_at must be after previous sampled_at")
 	}
 	if !delta.TransitionType.ProducesFact() {
-		return fmt.Errorf("transition %q does not produce a fact", delta.TransitionType)
+		if !delta.ExistingFactFound {
+			return fmt.Errorf("transition %q does not produce a fact", delta.TransitionType)
+		}
+		return nil
 	}
-	if delta.DeltaValue == nil || math.IsNaN(*delta.DeltaValue) || math.IsInf(*delta.DeltaValue, 0) {
+	if delta.DeltaValue == nil {
+		if delta.ExistingFactFound {
+			return nil
+		}
+		return errors.New("delta_value must be finite and non-null")
+	}
+	if math.IsNaN(*delta.DeltaValue) || math.IsInf(*delta.DeltaValue, 0) {
 		return errors.New("delta_value must be finite and non-null")
 	}
 	if *delta.DeltaValue < 0 {

@@ -88,7 +88,7 @@ type Store interface {
 	UpdateMeasure(context.Context, Measure) error
 	Measure(ctx context.Context, tenantID, siteID, id string) (Measure, error)
 	Measures(ctx context.Context, tenantID, siteID string) ([]Measure, error)
-	// InsertDailyResult keeps the first result written for a measure and day.
+	// InsertDailyResult persists or updates the verified savings result for a measure and day.
 	InsertDailyResult(context.Context, DailyResult) error
 	DailyResults(ctx context.Context, tenantID, siteID, measureID string) ([]DailyResult, error)
 }
@@ -353,9 +353,31 @@ func (service *Service) verifyDay(ctx context.Context, measure Measure, clock Si
 	})
 }
 
-// VerifyDueDays verifies every Site-local day with reporting hours that settled by until and has no
-// result yet, for each measure on the Site with a trusted baseline. A missed run is caught up here.
+// VerifyDueDays verifies every settled Site-local day that has no result yet or had incomplete
+// hours (for self-healing after backfill gaps), for each measure on the Site with a trusted baseline.
 func (service *Service) VerifyDueDays(ctx context.Context, tenantID, siteID string, until time.Time) error {
+	return service.verifyMeasureDays(ctx, tenantID, siteID, until, nil, nil, false)
+}
+
+// ReverifyDays idempotently recomputes and upserts settled reporting days overlapping [from, to)
+// after telemetry, energy, or metric backfills revise previously verified daily values.
+func (service *Service) ReverifyDays(ctx context.Context, tenantID, siteID string, from, to, until time.Time) error {
+	if from.IsZero() || to.IsZero() || to.Before(from) {
+		return fmt.Errorf("%w: reverify window start and end must be ordered", ErrInvalidMeasure)
+	}
+	if until.IsZero() {
+		until = service.now().UTC()
+	}
+	return service.verifyMeasureDays(ctx, tenantID, siteID, until, &from, &to, true)
+}
+
+func (service *Service) verifyMeasureDays(
+	ctx context.Context,
+	tenantID, siteID string,
+	until time.Time,
+	fromFilter, toFilter *time.Time,
+	forceReverify bool,
+) error {
 	measures, err := service.store.Measures(ctx, tenantID, siteID)
 	if err != nil {
 		return err
@@ -372,13 +394,16 @@ func (service *Service) VerifyDueDays(ctx context.Context, tenantID, siteID stri
 			}
 			clock = &read
 		}
-		results, err := service.store.DailyResults(ctx, tenantID, siteID, measure.ID)
-		if err != nil {
-			return err
-		}
-		verified := make(map[string]bool, len(results))
-		for _, result := range results {
-			verified[result.Day] = true
+		var verified map[string]DailyResult
+		if !forceReverify {
+			results, err := service.store.DailyResults(ctx, tenantID, siteID, measure.ID)
+			if err != nil {
+				return err
+			}
+			verified = make(map[string]DailyResult, len(results))
+			for _, result := range results {
+				verified[result.Day] = result
+			}
 		}
 		reporting := measure.ImplementedAt.Add(StabilizationPeriod).In(clock.Location)
 		day := time.Date(reporting.Year(), reporting.Month(), reporting.Day(), 0, 0, 0, 0, clock.Location)
@@ -386,11 +411,29 @@ func (service *Service) VerifyDueDays(ctx context.Context, tenantID, siteID stri
 			if measure.EndedAt != nil && !day.Before(*measure.EndedAt) {
 				break
 			}
-			if verified[day.Format(time.DateOnly)] {
-				continue
+			nextDay := day.AddDate(0, 0, 1)
+			if fromFilter != nil && toFilter != nil {
+				fromLocal := fromFilter.In(clock.Location)
+				toLocal := toFilter.In(clock.Location)
+				if !nextDay.After(fromLocal) {
+					continue
+				}
+				if toLocal.Equal(fromLocal) {
+					if day.After(toLocal) || !nextDay.After(fromLocal) {
+						continue
+					}
+				} else if !day.Before(toLocal) {
+					break
+				}
+			}
+			dayKey := day.Format(time.DateOnly)
+			if !forceReverify {
+				if existing, ok := verified[dayKey]; ok && existing.Hours >= existing.ExpectedHours {
+					continue
+				}
 			}
 			if err := service.verifyDay(ctx, measure, *clock, day); err != nil {
-				return fmt.Errorf("verify %s for measure %s: %w", day.Format(time.DateOnly), measure.ID, err)
+				return fmt.Errorf("verify %s for measure %s: %w", dayKey, measure.ID, err)
 			}
 		}
 	}

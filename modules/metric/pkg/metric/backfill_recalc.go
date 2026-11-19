@@ -27,6 +27,8 @@ const (
 	defaultBackfillJobMaxAttempt = 3
 	defaultBackfillJobTimeoutSec = 60
 	backfillBucketDuration       = 15 * time.Minute
+	// DefaultBackfillWatermarkScope identifies the worker-wide ClickHouse backfill cursor row.
+	DefaultBackfillWatermarkScope = "telemetry_history.observations"
 )
 
 // BackfillDirtyBucket describes one 15-minute UTC observation bucket with late arrivals.
@@ -46,20 +48,23 @@ type BackfillBucketCursor struct {
 	BucketStart time.Time
 }
 
-// BackfillBinding describes a RELEASED metric binding with point sources and site timezone.
+// BackfillBinding describes a RELEASED metric binding with point or derived-metric sources and site timezone.
 type BackfillBinding struct {
-	TenantID      string
-	SiteID        string
-	BindingID     string
-	SubjectType   string
-	SubjectID     string
-	Granularity   string
-	Timezone      string
-	PointIDs      []string
-	EffectiveFrom time.Time
-	EffectiveTo   *time.Time
-	VersionFrom   time.Time
-	VersionTo     *time.Time
+	TenantID            string
+	SiteID              string
+	BindingID           string
+	MetricID            string
+	MetricVersionID     string
+	SubjectType         string
+	SubjectID           string
+	Granularity         string
+	Timezone            string
+	PointIDs            []string
+	DependencyMetricIDs []string
+	EffectiveFrom       time.Time
+	EffectiveTo         *time.Time
+	VersionFrom         time.Time
+	VersionTo           *time.Time
 }
 
 // BackfillRecalcCandidate represents one coalesced METRIC_RECALC job to enqueue.
@@ -88,6 +93,20 @@ type BackfillJobStore interface {
 	EnqueueMetricRecalcJobs(ctx context.Context, candidates []BackfillRecalcCandidate, now time.Time) (int, error)
 }
 
+// BackfillWatermarkState stores the persisted cursor of BackfillRecalcDetector.
+type BackfillWatermarkState struct {
+	Scope                   string
+	LastProcessedSequence   uint64
+	LastProcessedIngestedAt *time.Time
+	UpdatedAt               time.Time
+}
+
+// BackfillWatermarkStore persists and reloads the backfill detector watermark across restarts.
+type BackfillWatermarkStore interface {
+	LoadBackfillWatermark(ctx context.Context, scope string) (BackfillWatermarkState, bool, error)
+	SaveBackfillWatermark(ctx context.Context, state BackfillWatermarkState) error
+}
+
 // BackfillRecalcConfig configures incremental ClickHouse backfill detection.
 type BackfillRecalcConfig struct {
 	FinalizationDelay time.Duration
@@ -95,12 +114,16 @@ type BackfillRecalcConfig struct {
 	PageLimit         int
 	MaxPagesPerScan   int
 	StartSequence     *uint64
+	WatermarkStore    BackfillWatermarkStore
+	WatermarkScope    string
 }
 
 // BackfillRecalcDetector incrementally scans telemetry_history.observations above its
 // history_sequence watermark and enqueues coalesced METRIC_RECALC scheduler jobs.
 type BackfillRecalcDetector struct {
 	store             BackfillJobStore
+	watermarkStore    BackfillWatermarkStore
+	watermarkScope    string
 	source            BackfillObservationSource
 	finalizationDelay time.Duration
 	minBackfillLag    time.Duration
@@ -135,8 +158,20 @@ func NewBackfillRecalcDetector(store BackfillJobStore, source BackfillObservatio
 	if maxPages <= 0 {
 		maxPages = defaultBackfillMaxPages
 	}
+	watermarkStore := cfg.WatermarkStore
+	if watermarkStore == nil {
+		if ws, ok := store.(BackfillWatermarkStore); ok {
+			watermarkStore = ws
+		}
+	}
+	watermarkScope := strings.TrimSpace(cfg.WatermarkScope)
+	if watermarkScope == "" {
+		watermarkScope = DefaultBackfillWatermarkScope
+	}
 	detector := &BackfillRecalcDetector{
 		store:             store,
+		watermarkStore:    watermarkStore,
+		watermarkScope:    watermarkScope,
 		source:            source,
 		finalizationDelay: cfg.FinalizationDelay,
 		minBackfillLag:    minLag,
@@ -150,20 +185,66 @@ func NewBackfillRecalcDetector(store BackfillJobStore, source BackfillObservatio
 	return detector, nil
 }
 
-// InitializeWatermark anchors the detector watermark at the current maximum history_sequence
-// so pre-existing historical rows do not trigger a startup recalculation storm.
+// InitializeWatermark restores any persisted backfill watermark or anchors a cold start at the
+// current maximum history_sequence so pre-existing rows do not cause a startup storm.
 func (d *BackfillRecalcDetector) InitializeWatermark(ctx context.Context) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	_, err := d.ensureWatermarkInitialized(ctx, time.Now().UTC(), false)
+	return err
+}
+
+func (d *BackfillRecalcDetector) ensureWatermarkInitialized(ctx context.Context, now time.Time, allowAdvanceScan bool) (bool, error) {
 	if d.initialized {
-		return nil
+		return allowAdvanceScan, nil
+	}
+	if d.watermarkStore != nil {
+		state, found, err := d.watermarkStore.LoadBackfillWatermark(ctx, d.watermarkScope)
+		if err != nil {
+			return false, err
+		}
+		if found {
+			d.watermark = state.LastProcessedSequence
+			d.initialized = true
+			return true, nil
+		}
 	}
 	maxSeq, err := d.source.MaxHistorySequence(ctx)
 	if err != nil {
-		return err
+		return false, err
+	}
+	if d.watermarkStore != nil {
+		ts := now.UTC()
+		if err := d.watermarkStore.SaveBackfillWatermark(ctx, BackfillWatermarkState{
+			Scope:                   d.watermarkScope,
+			LastProcessedSequence:   maxSeq,
+			LastProcessedIngestedAt: &ts,
+			UpdatedAt:               ts,
+		}); err != nil {
+			return false, err
+		}
 	}
 	d.watermark = maxSeq
 	d.initialized = true
+	return false, nil
+}
+
+func (d *BackfillRecalcDetector) advanceWatermark(ctx context.Context, seq uint64, now time.Time) error {
+	if seq <= d.watermark {
+		return nil
+	}
+	if d.watermarkStore != nil {
+		ts := now.UTC()
+		if err := d.watermarkStore.SaveBackfillWatermark(ctx, BackfillWatermarkState{
+			Scope:                   d.watermarkScope,
+			LastProcessedSequence:   seq,
+			LastProcessedIngestedAt: &ts,
+			UpdatedAt:               ts,
+		}); err != nil {
+			return err
+		}
+	}
+	d.watermark = seq
 	return nil
 }
 
@@ -185,14 +266,13 @@ func (d *BackfillRecalcDetector) DetectAndEnqueue(ctx context.Context, now time.
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	shouldScan, err := d.ensureWatermarkInitialized(ctx, now, true)
+	if err != nil || !shouldScan {
+		return 0, err
+	}
 	maxAvailSeq, err := d.source.MaxHistorySequence(ctx)
 	if err != nil {
 		return 0, err
-	}
-	if !d.initialized {
-		d.watermark = maxAvailSeq
-		d.initialized = true
-		return 0, nil
 	}
 	if maxAvailSeq <= d.watermark {
 		return 0, nil
@@ -206,7 +286,9 @@ func (d *BackfillRecalcDetector) DetectAndEnqueue(ctx context.Context, now time.
 			return totalEnqueued, err
 		}
 		if len(buckets) == 0 {
-			d.watermark = maxAvailSeq
+			if err := d.advanceWatermark(ctx, maxAvailSeq, now); err != nil {
+				return totalEnqueued, err
+			}
 			break
 		}
 
@@ -216,7 +298,9 @@ func (d *BackfillRecalcDetector) DetectAndEnqueue(ctx context.Context, now time.
 				return totalEnqueued, err
 			}
 			totalEnqueued += enqueued
-			d.watermark = maxAvailSeq
+			if err := d.advanceWatermark(ctx, maxAvailSeq, now); err != nil {
+				return totalEnqueued, err
+			}
 			break
 		}
 
@@ -232,7 +316,9 @@ func (d *BackfillRecalcDetector) DetectAndEnqueue(ctx context.Context, now time.
 				return totalEnqueued, err
 			}
 			totalEnqueued += enqueued
-			d.watermark = lastSeq - 1
+			if err := d.advanceWatermark(ctx, lastSeq-1, now); err != nil {
+				return totalEnqueued, err
+			}
 			continue
 		}
 
@@ -242,7 +328,9 @@ func (d *BackfillRecalcDetector) DetectAndEnqueue(ctx context.Context, now time.
 			return totalEnqueued, err
 		}
 		totalEnqueued += enqueued
-		d.watermark = firstSeq
+		if err := d.advanceWatermark(ctx, firstSeq, now); err != nil {
+			return totalEnqueued, err
+		}
 	}
 	return totalEnqueued, nil
 }
@@ -330,6 +418,18 @@ func (d *BackfillRecalcDetector) buildCandidates(ctx context.Context, buckets []
 	cutoff := now.UTC().Add(-d.finalizationDelay)
 	locations := make(map[string]*time.Location)
 	coalesced := make(map[candidateKey]BackfillRecalcCandidate)
+	visitedAtSeq := make(map[candidateKey]uint64)
+
+	type depScopeKey struct {
+		tenantID    string
+		siteID      string
+		subjectType string
+		granularity string
+	}
+	type cascadeItem struct {
+		binding BackfillBinding
+		period  Period
+	}
 
 	for _, siteKey := range siteKeys {
 		siteBuckets := grouped[siteKey]
@@ -353,11 +453,98 @@ func (d *BackfillRecalcDetector) buildCandidates(ctx context.Context, buckets []
 		}
 
 		byPoint := make(map[string][]BackfillBinding)
+		dependentsByProvider := make(map[depScopeKey]map[string][]BackfillBinding)
 		for _, binding := range bindings {
+			binding.MetricID = strings.ToLower(strings.TrimSpace(binding.MetricID))
+			binding.SubjectType = strings.ToUpper(strings.TrimSpace(binding.SubjectType))
+			binding.SubjectID = strings.ToLower(strings.TrimSpace(binding.SubjectID))
+			binding.Granularity = strings.ToUpper(strings.TrimSpace(binding.Granularity))
 			for _, pointID := range binding.PointIDs {
 				normalized := strings.ToLower(strings.TrimSpace(pointID))
 				if normalized != "" {
 					byPoint[normalized] = append(byPoint[normalized], binding)
+				}
+			}
+			if len(binding.DependencyMetricIDs) > 0 {
+				dscope := depScopeKey{
+					tenantID:    siteKey.tenantID,
+					siteID:      siteKey.siteID,
+					subjectType: binding.SubjectType,
+					granularity: binding.Granularity,
+				}
+				byMetric := dependentsByProvider[dscope]
+				if byMetric == nil {
+					byMetric = make(map[string][]BackfillBinding)
+					dependentsByProvider[dscope] = byMetric
+				}
+				for _, depMetricID := range binding.DependencyMetricIDs {
+					normalizedDep := strings.ToLower(strings.TrimSpace(depMetricID))
+					if normalizedDep != "" {
+						byMetric[normalizedDep] = append(byMetric[normalizedDep], binding)
+					}
+				}
+			}
+		}
+
+		addCandidateAndCascade := func(root BackfillBinding, period Period, tz string, maxSeq uint64) {
+			queue := []cascadeItem{{binding: root, period: period}}
+			for len(queue) > 0 {
+				item := queue[0]
+				queue = queue[1:]
+
+				ckey := candidateKey{
+					tenantID:    siteKey.tenantID,
+					siteID:      siteKey.siteID,
+					bindingID:   item.binding.BindingID,
+					periodStart: item.period.Start.UnixNano(),
+					periodEnd:   item.period.End.UnixNano(),
+				}
+				if prevSeq, seen := visitedAtSeq[ckey]; seen && prevSeq >= maxSeq {
+					continue
+				}
+				visitedAtSeq[ckey] = maxSeq
+
+				if existing, exists := coalesced[ckey]; exists {
+					if maxSeq > existing.MaxSeq {
+						existing.MaxSeq = maxSeq
+						coalesced[ckey] = existing
+					}
+				} else {
+					itemTZ := strings.TrimSpace(item.binding.Timezone)
+					if itemTZ == "" {
+						itemTZ = tz
+					}
+					coalesced[ckey] = BackfillRecalcCandidate{
+						TenantID:    siteKey.tenantID,
+						SiteID:      siteKey.siteID,
+						BindingID:   item.binding.BindingID,
+						SubjectType: item.binding.SubjectType,
+						SubjectID:   item.binding.SubjectID,
+						Timezone:    itemTZ,
+						PeriodStart: item.period.Start,
+						PeriodEnd:   item.period.End,
+						MaxSeq:      maxSeq,
+					}
+				}
+
+				if item.binding.MetricID == "" {
+					continue
+				}
+				dscope := depScopeKey{
+					tenantID:    siteKey.tenantID,
+					siteID:      siteKey.siteID,
+					subjectType: item.binding.SubjectType,
+					granularity: item.binding.Granularity,
+				}
+				for _, dependent := range dependentsByProvider[dscope][item.binding.MetricID] {
+					if item.binding.SubjectID != "" && dependent.SubjectID != "" && dependent.SubjectID != item.binding.SubjectID {
+						continue
+					}
+					if !windowOverlaps(dependent.EffectiveFrom, dependent.EffectiveTo, item.period.Start, item.period.Start) ||
+						!windowOverlaps(dependent.VersionFrom, dependent.VersionTo, item.period.Start, item.period.Start) {
+						continue
+					}
+					queue = append(queue, cascadeItem{binding: dependent, period: item.period})
 				}
 			}
 		}
@@ -388,7 +575,7 @@ func (d *BackfillRecalcDetector) buildCandidates(ctx context.Context, buckets []
 					locations[tz] = loc
 				}
 
-				periods := alignedPeriodsForBucket(binding.Granularity, loc, bStart, bEnd)
+				periods := alignedPeriodsWithSuccessor(binding.Granularity, loc, bStart, bEnd)
 				for _, period := range periods {
 					if !windowOverlaps(binding.EffectiveFrom, binding.EffectiveTo, period.Start, period.Start) ||
 						!windowOverlaps(binding.VersionFrom, binding.VersionTo, period.Start, period.Start) {
@@ -397,31 +584,7 @@ func (d *BackfillRecalcDetector) buildCandidates(ctx context.Context, buckets []
 					if period.End.After(cutoff) {
 						continue
 					}
-					ckey := candidateKey{
-						tenantID:    siteKey.tenantID,
-						siteID:      siteKey.siteID,
-						bindingID:   binding.BindingID,
-						periodStart: period.Start.UnixNano(),
-						periodEnd:   period.End.UnixNano(),
-					}
-					if existing, exists := coalesced[ckey]; exists {
-						if bucket.MaxSeq > existing.MaxSeq {
-							existing.MaxSeq = bucket.MaxSeq
-							coalesced[ckey] = existing
-						}
-						continue
-					}
-					coalesced[ckey] = BackfillRecalcCandidate{
-						TenantID:    siteKey.tenantID,
-						SiteID:      siteKey.siteID,
-						BindingID:   binding.BindingID,
-						SubjectType: binding.SubjectType,
-						SubjectID:   binding.SubjectID,
-						Timezone:    tz,
-						PeriodStart: period.Start,
-						PeriodEnd:   period.End,
-						MaxSeq:      bucket.MaxSeq,
-					}
+					addCandidateAndCascade(binding, period, tz, bucket.MaxSeq)
 				}
 			}
 		}
@@ -447,6 +610,20 @@ func (d *BackfillRecalcDetector) buildCandidates(ctx context.Context, buckets []
 		return candidates[i].BindingID < candidates[j].BindingID
 	})
 	return candidates, nil
+}
+
+func alignedPeriodsWithSuccessor(granularity string, loc *time.Location, bucketStart, bucketEnd time.Time) []Period {
+	periods := alignedPeriodsForBucket(granularity, loc, bucketStart, bucketEnd)
+	if len(periods) == 0 {
+		return nil
+	}
+	g := strings.ToUpper(strings.TrimSpace(granularity))
+	lastEnd := periods[len(periods)-1].End
+	succStart, succEnd := periodContaining(g, lastEnd.In(loc), loc)
+	if !succStart.IsZero() && succEnd.After(succStart) && succStart.UTC().Equal(lastEnd) {
+		periods = append(periods, Period{Start: succStart.UTC(), End: succEnd.UTC()})
+	}
+	return periods
 }
 
 func alignedPeriodsForBucket(granularity string, loc *time.Location, bucketStart, bucketEnd time.Time) []Period {
@@ -584,7 +761,7 @@ func (s *PostgresStore) LoadSiteBackfillBindings(ctx context.Context, tenantID, 
 		return nil, err
 	}
 
-	rows, err := tx.Query(ctx, `SELECT b.id::text, b.subject_type, b.subject_id::text, b.time_granularity, b.source_definition,
+	rows, err := tx.Query(ctx, `SELECT b.id::text, b.metric_id::text, b.metric_version_id::text, b.subject_type, b.subject_id::text, b.time_granularity, b.source_definition,
        b.effective_from, b.effective_to,
        v.effective_from, v.effective_to,
        s.timezone
@@ -605,7 +782,9 @@ WHERE b.tenant_id = $1::uuid
 	}
 	defer rows.Close()
 
-	var bindings []BackfillBinding
+	var loaded []BackfillBinding
+	versionIDSet := make(map[string]struct{})
+	var versionIDs []string
 	for rows.Next() {
 		var (
 			b              BackfillBinding
@@ -614,17 +793,17 @@ WHERE b.tenant_id = $1::uuid
 		b.TenantID = tenantID
 		b.SiteID = siteID
 		if err = rows.Scan(
-			&b.BindingID, &b.SubjectType, &b.SubjectID, &b.Granularity, &sourceDefBytes,
+			&b.BindingID, &b.MetricID, &b.MetricVersionID, &b.SubjectType, &b.SubjectID, &b.Granularity, &sourceDefBytes,
 			&b.EffectiveFrom, &b.EffectiveTo, &b.VersionFrom, &b.VersionTo, &b.Timezone,
 		); err != nil {
 			return nil, fmt.Errorf("scan metric backfill binding: %w", err)
 		}
+		b.MetricID = strings.ToLower(strings.TrimSpace(b.MetricID))
+		b.MetricVersionID = strings.ToLower(strings.TrimSpace(b.MetricVersionID))
+		b.SubjectID = strings.ToLower(strings.TrimSpace(b.SubjectID))
 		pointIDs, decErr := extractBoundPointIDs(sourceDefBytes)
 		if decErr != nil {
 			return nil, decErr
-		}
-		if len(pointIDs) == 0 {
-			continue
 		}
 		b.PointIDs = pointIDs
 		b.EffectiveFrom = b.EffectiveFrom.UTC()
@@ -637,12 +816,66 @@ WHERE b.tenant_id = $1::uuid
 			t := b.VersionTo.UTC()
 			b.VersionTo = &t
 		}
-		bindings = append(bindings, b)
+		loaded = append(loaded, b)
+		if b.MetricVersionID != "" {
+			if _, seen := versionIDSet[b.MetricVersionID]; !seen {
+				versionIDSet[b.MetricVersionID] = struct{}{}
+				versionIDs = append(versionIDs, b.MetricVersionID)
+			}
+		}
 	}
 	if err = rows.Err(); err != nil {
 		return nil, err
 	}
 	rows.Close()
+
+	depsByVersion := make(map[string][]string)
+	if len(versionIDs) > 0 {
+		depRows, depErr := tx.Query(ctx, `SELECT metric_version_id::text, dependency_metric_id::text
+FROM core_registry.metric_dependencies
+WHERE tenant_id = $1::uuid
+  AND metric_version_id = ANY($2::uuid[])
+  AND dependency_type = 'METRIC'
+  AND dependency_metric_id IS NOT NULL
+ORDER BY metric_version_id, sort_order`, tenantID, versionIDs)
+		if depErr != nil {
+			return nil, fmt.Errorf("load metric backfill dependencies: %w", depErr)
+		}
+		defer depRows.Close()
+		seenDep := make(map[string]map[string]struct{})
+		for depRows.Next() {
+			var versionID, depMetricID string
+			if err = depRows.Scan(&versionID, &depMetricID); err != nil {
+				return nil, fmt.Errorf("scan metric backfill dependency: %w", err)
+			}
+			versionID = strings.ToLower(strings.TrimSpace(versionID))
+			depMetricID = strings.ToLower(strings.TrimSpace(depMetricID))
+			if versionID == "" || depMetricID == "" {
+				continue
+			}
+			if seenDep[versionID] == nil {
+				seenDep[versionID] = make(map[string]struct{})
+			}
+			if _, ok := seenDep[versionID][depMetricID]; ok {
+				continue
+			}
+			seenDep[versionID][depMetricID] = struct{}{}
+			depsByVersion[versionID] = append(depsByVersion[versionID], depMetricID)
+		}
+		if err = depRows.Err(); err != nil {
+			return nil, err
+		}
+		depRows.Close()
+	}
+
+	bindings := make([]BackfillBinding, 0, len(loaded))
+	for _, b := range loaded {
+		b.DependencyMetricIDs = depsByVersion[b.MetricVersionID]
+		if len(b.PointIDs) == 0 && len(b.DependencyMetricIDs) == 0 {
+			continue
+		}
+		bindings = append(bindings, b)
+	}
 	if err = tx.Commit(ctx); err != nil {
 		return nil, err
 	}

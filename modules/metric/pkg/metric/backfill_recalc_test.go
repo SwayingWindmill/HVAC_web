@@ -92,6 +92,32 @@ type fakeBackfillJobStore struct {
 	enqueued       []BackfillRecalcCandidate
 	activeKeys     map[string]bool
 	dedupKeys      map[string]bool
+
+	watermarks map[string]BackfillWatermarkState
+	wmLoadErr  error
+	wmSaveErr  error
+}
+
+func (f *fakeBackfillJobStore) LoadBackfillWatermark(_ context.Context, scope string) (BackfillWatermarkState, bool, error) {
+	if f.wmLoadErr != nil {
+		return BackfillWatermarkState{}, false, f.wmLoadErr
+	}
+	if f.watermarks == nil {
+		return BackfillWatermarkState{}, false, nil
+	}
+	state, ok := f.watermarks[scope]
+	return state, ok, nil
+}
+
+func (f *fakeBackfillJobStore) SaveBackfillWatermark(_ context.Context, state BackfillWatermarkState) error {
+	if f.wmSaveErr != nil {
+		return f.wmSaveErr
+	}
+	if f.watermarks == nil {
+		f.watermarks = make(map[string]BackfillWatermarkState)
+	}
+	f.watermarks[state.Scope] = state
+	return nil
 }
 
 func (f *fakeBackfillJobStore) LoadSiteBackfillBindings(_ context.Context, tenantID, siteID string, _, _ time.Time) ([]BackfillBinding, error) {
@@ -242,9 +268,9 @@ func TestBackfillRecalcDetectorTimezoneAlignmentCoalescingAndFinalizationGate(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Expected: 15 (1MIN) + 3 (5MIN) + 1 (15MIN coalesced) + 1 (HOUR coalesced) = 20.
-	if n != 20 || len(store.enqueued) != 20 {
-		t.Fatalf("enqueued=%d (slice=%d), want 20", n, len(store.enqueued))
+	// Expected with T_end+1 boundary continuity: 16 (1MIN) + 4 (5MIN) + 2 (15MIN) + 2 (HOUR) = 24.
+	if n != 24 || len(store.enqueued) != 24 {
+		t.Fatalf("enqueued=%d (slice=%d), want 24", n, len(store.enqueued))
 	}
 
 	var found15m, foundHour bool
@@ -279,30 +305,30 @@ func TestBackfillRecalcDetectorTimezoneAlignmentCoalescingAndFinalizationGate(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 15 (1MIN) + 3 (5MIN) + 1 (15MIN) + 1 (HOUR) + 1 (DAY) + 1 (MONTH) + 1 (QUARTER) + 1 (YEAR) = 24.
-	if n != 24 {
-		t.Fatalf("future enqueued=%d, want 24", n)
+	// 16 (1MIN) + 4 (5MIN) + 2 (15MIN) + 2 (HOUR) + 2 (DAY+T_end+1) + 2 (MONTH+T_end+1) + 1 (QUARTER; next ends 2027-03-31) + 1 (YEAR; next ends 2027-12-31) = 30.
+	if n != 30 {
+		t.Fatalf("future enqueued=%d, want 30", n)
 	}
 
-	byBinding := make(map[string]BackfillRecalcCandidate)
+	periodsByBinding := make(map[string][]Period)
 	for _, cand := range store.enqueued {
-		byBinding[cand.BindingID] = cand
+		periodsByBinding[cand.BindingID] = append(periodsByBinding[cand.BindingID], Period{Start: cand.PeriodStart, End: cand.PeriodEnd})
 	}
 	wantDayStart := time.Date(2026, 10, 12, 16, 0, 0, 0, time.UTC)
-	if day := byBinding["b-day"]; !day.PeriodStart.Equal(wantDayStart) || !day.PeriodEnd.Equal(wantDayStart.AddDate(0, 0, 1)) {
-		t.Fatalf("DAY period = [%s, %s), want [%s, %s)", day.PeriodStart, day.PeriodEnd, wantDayStart, wantDayStart.AddDate(0, 0, 1))
+	if days := periodsByBinding["b-day"]; len(days) != 2 || !days[0].Start.Equal(wantDayStart) || !days[0].End.Equal(wantDayStart.AddDate(0, 0, 1)) || !days[1].Start.Equal(wantDayStart.AddDate(0, 0, 1)) || !days[1].End.Equal(wantDayStart.AddDate(0, 0, 2)) {
+		t.Fatalf("DAY periods = %+v", days)
 	}
 	wantMonthStart := time.Date(2026, 9, 30, 16, 0, 0, 0, time.UTC)
-	if month := byBinding["b-month"]; !month.PeriodStart.Equal(wantMonthStart) || !month.PeriodEnd.Equal(time.Date(2026, 10, 31, 16, 0, 0, 0, time.UTC)) {
-		t.Fatalf("MONTH period = [%s, %s)", month.PeriodStart, month.PeriodEnd)
+	if months := periodsByBinding["b-month"]; len(months) != 2 || !months[0].Start.Equal(wantMonthStart) || !months[0].End.Equal(time.Date(2026, 10, 31, 16, 0, 0, 0, time.UTC)) || !months[1].End.Equal(time.Date(2026, 11, 30, 16, 0, 0, 0, time.UTC)) {
+		t.Fatalf("MONTH periods = %+v", months)
 	}
 	wantQuarterStart := time.Date(2026, 9, 30, 16, 0, 0, 0, time.UTC)
-	if quarter := byBinding["b-quarter"]; !quarter.PeriodStart.Equal(wantQuarterStart) || !quarter.PeriodEnd.Equal(time.Date(2026, 12, 31, 16, 0, 0, 0, time.UTC)) {
-		t.Fatalf("QUARTER period = [%s, %s)", quarter.PeriodStart, quarter.PeriodEnd)
+	if quarters := periodsByBinding["b-quarter"]; len(quarters) != 1 || !quarters[0].Start.Equal(wantQuarterStart) || !quarters[0].End.Equal(time.Date(2026, 12, 31, 16, 0, 0, 0, time.UTC)) {
+		t.Fatalf("QUARTER periods = %+v", quarters)
 	}
 	wantYearStart := time.Date(2025, 12, 31, 16, 0, 0, 0, time.UTC)
-	if year := byBinding["b-year"]; !year.PeriodStart.Equal(wantYearStart) || !year.PeriodEnd.Equal(time.Date(2026, 12, 31, 16, 0, 0, 0, time.UTC)) {
-		t.Fatalf("YEAR period = [%s, %s)", year.PeriodStart, year.PeriodEnd)
+	if years := periodsByBinding["b-year"]; len(years) != 1 || !years[0].Start.Equal(wantYearStart) || !years[0].End.Equal(time.Date(2026, 12, 31, 16, 0, 0, 0, time.UTC)) {
+		t.Fatalf("YEAR periods = %+v", years)
 	}
 }
 
@@ -357,14 +383,204 @@ func TestBackfillRecalcDetectorPaginationAndFailureSafety(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 5 || len(store.enqueued) != 5 {
-		t.Fatalf("enqueued=%d, want all 5 paginated buckets", n)
+	// seq=10 drains [00:00..00:30)+[00:30,00:45), seq=11 drains [00:30..01:15)+T_end+1 [01:15,01:30).
+	if n != 7 || len(store.enqueued) != 7 {
+		t.Fatalf("enqueued=%d, want 7 (5 dirty buckets + T_end+1 overlap/tail)", n)
 	}
 	if source.atSeqCalls < 3 {
 		t.Fatalf("expected single-sequence keyset pagination calls, got %d", source.atSeqCalls)
 	}
 	if wm, _ := detector.Watermark(); wm != 12 {
 		t.Fatalf("final watermark=%d, want 12", wm)
+	}
+}
+
+func TestBackfillRecalcDetectorPersistedWatermarkResumesAcrossRestart(t *testing.T) {
+	const (
+		tenantID = "01910000-0000-7000-8000-000000000031"
+		siteID   = "01910000-0000-7000-8000-000000000032"
+		pointID  = "01910000-0000-7000-8000-000000000033"
+		bindID   = "01910000-0000-7000-8000-000000000034"
+	)
+	now := time.Date(2026, 10, 13, 14, 0, 0, 0, time.UTC)
+	bucketTime := time.Date(2026, 10, 13, 10, 0, 0, 0, time.UTC)
+
+	source := &fakeBackfillObservationSource{maxSeq: 100}
+	store := &fakeBackfillJobStore{
+		bindingsBySite: map[string][]BackfillBinding{
+			tenantID + "|" + siteID: {{
+				TenantID: tenantID, SiteID: siteID, BindingID: bindID,
+				SubjectType: "SITE", SubjectID: siteID, Granularity: "HOUR", Timezone: "UTC", PointIDs: []string{pointID},
+			}},
+		},
+	}
+
+	firstDetector, err := NewBackfillRecalcDetector(store, source, BackfillRecalcConfig{
+		FinalizationDelay: 5 * time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := firstDetector.InitializeWatermark(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if state := store.watermarks[DefaultBackfillWatermarkScope]; state.LastProcessedSequence != 100 {
+		t.Fatalf("persisted cold-start watermark = %+v, want 100", state)
+	}
+
+	// Simulate downtime while sequences 101..120 arrive, including late bucket at seq 112.
+	source.maxSeq = 120
+	source.buckets = append(source.buckets, BackfillDirtyBucket{
+		MaxSeq: 112, TenantID: tenantID, SiteID: siteID, PointID: pointID, BucketStart: bucketTime,
+	})
+
+	// If PG watermark load transiently fails, InitializeWatermark returns an error instead of jumping to 120.
+	store.wmLoadErr = errors.New("pg read timeout")
+	restarted, err := NewBackfillRecalcDetector(store, source, BackfillRecalcConfig{
+		FinalizationDelay: 5 * time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.InitializeWatermark(context.Background()); err == nil {
+		t.Fatal("expected watermark load error")
+	}
+	store.wmLoadErr = nil
+
+	if err := restarted.InitializeWatermark(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if wm, ok := restarted.Watermark(); !ok || wm != 100 {
+		t.Fatalf("restarted watermark = (%d, %v), want (100, true)", wm, ok)
+	}
+
+	// Simulate watermark save failure: enqueue succeeds idempotently, but memory watermark must not advance past 100.
+	store.wmSaveErr = errors.New("pg write failed")
+	if _, err := restarted.DetectAndEnqueue(context.Background(), now); err == nil {
+		t.Fatal("expected watermark save failure")
+	}
+	if wm, _ := restarted.Watermark(); wm != 100 {
+		t.Fatalf("watermark advanced to %d despite save failure", wm)
+	}
+	if len(store.enqueued) != 2 {
+		t.Fatalf("enqueued before watermark save failure = %d, want 2 [10:00 + T_end+1 11:00]", len(store.enqueued))
+	}
+	store.wmSaveErr = nil
+
+	// Retry after DB recovery is dedup-safe (0 duplicate inserts) and persists watermark 120.
+	n, err := restarted.DetectAndEnqueue(context.Background(), now)
+	if err != nil || n != 0 {
+		t.Fatalf("idempotent retry DetectAndEnqueue = (%d, %v), want (0, nil)", n, err)
+	}
+	if wm, _ := restarted.Watermark(); wm != 120 {
+		t.Fatalf("resumed watermark = %d, want 120", wm)
+	}
+	if state := store.watermarks[DefaultBackfillWatermarkScope]; state.LastProcessedSequence != 120 || state.LastProcessedIngestedAt == nil {
+		t.Fatalf("persisted watermark not updated cleanly: %+v", state)
+	}
+
+	// Simulate another restart without calling InitializeWatermark directly: DetectAndEnqueue loads 120 from PG.
+	source.maxSeq = 130
+	source.buckets = append(source.buckets, BackfillDirtyBucket{
+		MaxSeq: 125, TenantID: tenantID, SiteID: siteID, PointID: pointID, BucketStart: bucketTime.Add(-2 * time.Hour),
+	})
+	store.enqueued = nil
+	restarted2, err := NewBackfillRecalcDetector(store, source, BackfillRecalcConfig{
+		FinalizationDelay: 5 * time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err = restarted2.DetectAndEnqueue(context.Background(), now)
+	if err != nil || n != 2 || len(store.enqueued) != 2 {
+		t.Fatalf("auto-resume DetectAndEnqueue = (%d, %v) len=%d, want (2, nil)", n, err, len(store.enqueued))
+	}
+	if wm, _ := restarted2.Watermark(); wm != 130 {
+		t.Fatalf("restarted2 watermark = %d, want 130", wm)
+	}
+}
+
+func TestBackfillRecalcDetectorEndPlusOneAndSameGranularityMetricCascade(t *testing.T) {
+	const (
+		tenantID = "01910000-0000-7000-8000-000000000041"
+		siteID   = "01910000-0000-7000-8000-000000000042"
+		pointID  = "01910000-0000-7000-8000-000000000043"
+	)
+	now := time.Date(2026, 10, 13, 14, 0, 0, 0, time.UTC)
+	bucketTime := time.Date(2026, 10, 13, 10, 0, 0, 0, time.UTC)
+	startSeq := uint64(0)
+
+	source := &fakeBackfillObservationSource{
+		maxSeq: 15,
+		buckets: []BackfillDirtyBucket{
+			{MaxSeq: 15, TenantID: tenantID, SiteID: siteID, PointID: pointID, BucketStart: bucketTime},
+		},
+	}
+	store := &fakeBackfillJobStore{
+		bindingsBySite: map[string][]BackfillBinding{
+			tenantID + "|" + siteID: {
+				{
+					TenantID: tenantID, SiteID: siteID, BindingID: "b-base", MetricID: "m-base",
+					SubjectType: "SITE", SubjectID: siteID, Granularity: "HOUR", Timezone: "UTC",
+					PointIDs:            []string{pointID},
+					DependencyMetricIDs: []string{"m-cycle"}, // cycle guard test
+				},
+				{
+					TenantID: tenantID, SiteID: siteID, BindingID: "b-hop1", MetricID: "m-hop1",
+					SubjectType: "SITE", SubjectID: siteID, Granularity: "HOUR", Timezone: "UTC",
+					PointIDs:            nil, // derived-only binding must NOT be skipped
+					DependencyMetricIDs: []string{"m-base"},
+				},
+				{
+					TenantID: tenantID, SiteID: siteID, BindingID: "b-hop2", MetricID: "m-hop2",
+					SubjectType: "SITE", SubjectID: siteID, Granularity: "HOUR", Timezone: "UTC",
+					DependencyMetricIDs: []string{"m-hop1"},
+				},
+				{
+					TenantID: tenantID, SiteID: siteID, BindingID: "b-cycle", MetricID: "m-cycle",
+					SubjectType: "SITE", SubjectID: siteID, Granularity: "HOUR", Timezone: "UTC",
+					DependencyMetricIDs: []string{"m-hop2"},
+				},
+				{
+					TenantID: tenantID, SiteID: siteID, BindingID: "b-day-mismatch", MetricID: "m-day",
+					SubjectType: "SITE", SubjectID: siteID, Granularity: "DAY", Timezone: "UTC",
+					DependencyMetricIDs: []string{"m-base"}, // different time_granularity -> excluded
+				},
+				{
+					TenantID: tenantID, SiteID: siteID, BindingID: "b-asset-mismatch", MetricID: "m-asset",
+					SubjectType: "ASSET", SubjectID: "01910000-0000-7000-8000-000000000099", Granularity: "HOUR", Timezone: "UTC",
+					DependencyMetricIDs: []string{"m-base"}, // different subject_type -> excluded
+				},
+			},
+		},
+	}
+
+	detector, err := NewBackfillRecalcDetector(store, source, BackfillRecalcConfig{
+		FinalizationDelay: 5 * time.Minute,
+		StartSequence:     &startSeq,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := detector.DetectAndEnqueue(context.Background(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 4 same-granularity/same-subject bindings (b-base, b-hop1, b-hop2, b-cycle) * 2 periods (10:00..11:00 + T_end+1 11:00..12:00) = 8.
+	if n != 8 {
+		t.Fatalf("enqueued=%d, want 8 (got %+v)", n, store.enqueued)
+	}
+	seen := make(map[string]int)
+	for _, cand := range store.enqueued {
+		seen[cand.BindingID]++
+		if cand.BindingID == "b-day-mismatch" || cand.BindingID == "b-asset-mismatch" {
+			t.Fatalf("unexpected cross-granularity or cross-subject cascade: %+v", cand)
+		}
+	}
+	for _, wantID := range []string{"b-base", "b-hop1", "b-hop2", "b-cycle"} {
+		if seen[wantID] != 2 {
+			t.Fatalf("binding %s count=%d, want 2 (10:00 + 11:00)", wantID, seen[wantID])
+		}
 	}
 }
 

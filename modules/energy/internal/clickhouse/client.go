@@ -95,6 +95,9 @@ type counterDeltaRow struct {
 	ExistingFactFound                 uint8    `json:"existing_fact_found"`
 	ExistingFactMeterBindingID        string   `json:"existing_fact_meter_binding_id"`
 	ExistingFactPreviousObservationID string   `json:"existing_fact_previous_observation_id"`
+	ExistingFactEnergyKWh             *float64 `json:"existing_fact_energy_kwh"`
+	ExistingFactTransitionType        string   `json:"existing_fact_transition_type"`
+	ExistingFactQuality               string   `json:"existing_fact_quality"`
 	ExistingFactRevision              uint64   `json:"existing_fact_revision"`
 }
 
@@ -322,6 +325,29 @@ func (reader *Reader) deltas(ctx context.Context, arrivals []arrivalRow) ([]ener
 	return deltas, nil
 }
 
+func (reader *Reader) WindowDeltas(ctx context.Context, window energy.DirtyWindow) ([]energy.CounterDelta, error) {
+	if strings.TrimSpace(window.TenantID) == "" || strings.TrimSpace(window.SiteID) == "" {
+		return nil, errors.New("dirty window tenant_id and site_id are required")
+	}
+	if len(window.PointIDs) == 0 {
+		return nil, errors.New("dirty window requires at least one point_id")
+	}
+	if window.Start.IsZero() || window.End.IsZero() || window.End.Before(window.Start) {
+		return nil, errors.New("dirty window start and end must be ordered")
+	}
+	payload, err := reader.query(ctx, "window counter delta query", reader.windowDeltaQuery(), url.Values{
+		"param_tenants": {clickHouseArray([]string{window.TenantID})},
+		"param_sites":   {clickHouseArray([]string{window.SiteID})},
+		"param_points":  {clickHouseArray(window.PointIDs)},
+		"param_since":   {clickHouseTime(window.Start.UTC())},
+		"param_until":   {clickHouseTime(window.End.UTC())},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return decodeCounterDeltas(payload)
+}
+
 func (reader *Reader) windowDeltas(ctx context.Context, window deltaWindow) ([]energy.CounterDelta, error) {
 	payload, err := reader.query(ctx, "counter delta query", reader.counterDeltaQuery(), url.Values{
 		"param_observations": {clickHouseArray(window.observations)},
@@ -334,6 +360,10 @@ func (reader *Reader) windowDeltas(ctx context.Context, window deltaWindow) ([]e
 	if err != nil {
 		return nil, err
 	}
+	return decodeCounterDeltas(payload)
+}
+
+func decodeCounterDeltas(payload []byte) ([]energy.CounterDelta, error) {
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	deltas := make([]energy.CounterDelta, 0)
 	for {
@@ -359,6 +389,10 @@ func (reader *Reader) windowDeltas(ctx context.Context, window deltaWindow) ([]e
 		if row.SensorID != nil {
 			sensorID = *row.SensorID
 		}
+		existingEnergyKWh := 0.0
+		if row.ExistingFactEnergyKWh != nil {
+			existingEnergyKWh = *row.ExistingFactEnergyKWh
+		}
 		deltas = append(deltas, energy.CounterDelta{
 			PreviousObservationID: row.PreviousObservationID, CurrentObservationID: row.CurrentObservationID,
 			TenantID: row.TenantID, SiteID: row.SiteID, DeviceID: row.DeviceID,
@@ -374,6 +408,9 @@ func (reader *Reader) windowDeltas(ctx context.Context, window deltaWindow) ([]e
 			ExistingFactFound:                 row.ExistingFactFound != 0,
 			ExistingFactMeterBindingID:        row.ExistingFactMeterBindingID,
 			ExistingFactPreviousObservationID: row.ExistingFactPreviousObservationID,
+			ExistingFactEnergyKWh:             existingEnergyKWh,
+			ExistingFactTransitionType:        energy.TransitionType(row.ExistingFactTransitionType),
+			ExistingFactQuality:               row.ExistingFactQuality,
 			ExistingFactRevision:              row.ExistingFactRevision,
 		})
 	}
@@ -384,6 +421,24 @@ func (reader *Reader) windowDeltas(ctx context.Context, window deltaWindow) ([]e
 // them ends at or after since and starts at or before until: History only adds observations, so
 // every revision's predecessor is at or before the delta's, which is at or before until.
 func (reader *Reader) counterDeltaQuery() string {
+	return reader.deltaQuerySQL(`(has({observations:Array(UUID)}, delta.observation_id)
+    OR has({observations:Array(UUID)}, ifNull(delta.previous_observation_id, toUUID('00000000-0000-0000-0000-000000000000'))))`)
+}
+
+// windowDeltaQuery selects every interval within [since, until] (anchored to any predecessor
+// before since) plus the immediate T_end + 1 successor after until.
+func (reader *Reader) windowDeltaQuery() string {
+	return reader.deltaQuerySQL(`(
+    (delta.sampled_at >= {since:DateTime64(3, 'UTC')} AND delta.sampled_at <= {until:DateTime64(3, 'UTC')})
+    OR (
+      delta.sampled_at > {until:DateTime64(3, 'UTC')}
+      AND delta.previous_sampled_at IS NOT NULL
+      AND delta.previous_sampled_at <= {until:DateTime64(3, 'UTC')}
+    )
+  )`)
+}
+
+func (reader *Reader) deltaQuerySQL(scopeFilter string) string {
 	return fmt.Sprintf(`SELECT
   toString(delta.previous_observation_id) AS previous_observation_id,
   toString(delta.observation_id) AS current_observation_id,
@@ -413,6 +468,9 @@ func (reader *Reader) counterDeltaQuery() string {
   toUInt8(existing.existing_fact_count > 0) AS existing_fact_found,
   existing.existing_fact_meter_binding_id,
   existing.existing_fact_previous_observation_id,
+  existing.existing_fact_energy_kwh,
+  existing.existing_fact_transition_type,
+  existing.existing_fact_quality,
   existing.existing_fact_revision
 FROM %[1]s.counter_deltas_from(points = {points:Array(UUID)}, since = {since:DateTime64(3, 'UTC')}, until = {until:DateTime64(3, 'UTC')}) AS delta
 LEFT JOIN (
@@ -425,6 +483,9 @@ LEFT JOIN (
     count() AS existing_fact_count,
     argMax(toString(meter_binding_id), (fact_revision, projected_at, fact_id)) AS existing_fact_meter_binding_id,
     argMax(toString(source_previous_observation_id), (fact_revision, projected_at, fact_id)) AS existing_fact_previous_observation_id,
+    argMax(energy_kwh, (fact_revision, projected_at, fact_id)) AS existing_fact_energy_kwh,
+    argMax(transition_type, (fact_revision, projected_at, fact_id)) AS existing_fact_transition_type,
+    argMax(quality, (fact_revision, projected_at, fact_id)) AS existing_fact_quality,
     max(fact_revision) AS existing_fact_revision
   FROM %[2]s.%[3]s
   WHERE has({tenants:Array(UUID)}, tenant_id)
@@ -439,14 +500,38 @@ LEFT JOIN (
  AND existing.device_id = delta.device_id
  AND existing.point_id = delta.point_id
  AND existing.source_current_observation_id = delta.observation_id
-WHERE (has({observations:Array(UUID)}, delta.observation_id)
-    OR has({observations:Array(UUID)}, ifNull(delta.previous_observation_id, toUUID('00000000-0000-0000-0000-000000000000'))))
-  AND delta.transition_type IN ('INCREASE', 'UNCHANGED', 'RECOVERY', 'RESET', 'ROLLOVER')
-  AND delta.delta_value IS NOT NULL
-  AND (delta.previous_sampled_at IS NULL OR delta.sampled_at > delta.previous_sampled_at)
-  AND (existing.existing_fact_count = 0 OR existing.existing_fact_previous_observation_id != toString(delta.previous_observation_id))
+WHERE %[4]s
+  AND (
+    (
+      delta.transition_type IN ('INCREASE', 'UNCHANGED', 'RECOVERY', 'RESET', 'ROLLOVER')
+      AND delta.delta_value IS NOT NULL
+      AND (delta.previous_sampled_at IS NULL OR delta.sampled_at > delta.previous_sampled_at)
+      AND (
+        existing.existing_fact_count = 0
+        OR existing.existing_fact_previous_observation_id != toString(delta.previous_observation_id)
+        OR abs(ifNull(existing.existing_fact_energy_kwh, 0.0) - ifNull(delta.delta_value, 0.0)) > 1e-6
+        OR existing.existing_fact_transition_type != delta.transition_type
+      )
+    )
+    OR (
+      existing.existing_fact_count > 0
+      AND delta.previous_observation_id IS NOT NULL
+      AND delta.previous_sampled_at IS NOT NULL
+      AND delta.sampled_at > delta.previous_sampled_at
+      AND (
+        delta.delta_value IS NULL
+        OR NOT (delta.transition_type IN ('INCREASE', 'UNCHANGED', 'RECOVERY', 'RESET', 'ROLLOVER'))
+      )
+      AND (
+        existing.existing_fact_quality != 'INVALID'
+        OR abs(ifNull(existing.existing_fact_energy_kwh, 0.0)) > 1e-6
+        OR existing.existing_fact_transition_type != delta.transition_type
+        OR existing.existing_fact_previous_observation_id != toString(delta.previous_observation_id)
+      )
+    )
+  )
 ORDER BY delta.sampled_at, delta.source_offset, delta.observation_id
-FORMAT JSONEachRow`, reader.sourceDatabase, reader.analyticsDatabase, reader.analyticsTable)
+FORMAT JSONEachRow`, reader.sourceDatabase, reader.analyticsDatabase, reader.analyticsTable, scopeFilter)
 }
 
 // query runs a read whose values travel as ClickHouse query parameters, never as SQL text.
@@ -565,7 +650,7 @@ func (writer *Writer) InsertFacts(ctx context.Context, facts []energy.EnergyInte
 		}
 		body.Write(encoded)
 		body.WriteByte('\n')
-		fmt.Fprintf(digest, "%s|%d|%s", fact.LogicalKey(), fact.FactRevision, optionalRebuildRunID(fact.RebuildRunID))
+		fmt.Fprintf(digest, "%s|%d", fact.LogicalKey(), fact.FactRevision)
 		digest.Write([]byte{'\n'})
 	}
 
@@ -613,23 +698,18 @@ func (writer *Writer) AppendRebuildEvent(ctx context.Context, event energy.Rebui
 	}, append(body, '\n'))
 }
 
-func optionalRebuildRunID(value *string) string {
-	if value == nil {
-		return ""
-	}
-	return *value
-}
-
 func validateFact(fact energy.EnergyIntervalFact) error {
 	if strings.TrimSpace(fact.FactID) == "" || strings.TrimSpace(fact.TenantID) == "" || strings.TrimSpace(fact.SiteID) == "" ||
 		strings.TrimSpace(fact.MeterID) == "" || strings.TrimSpace(fact.MeterBindingID) == "" || strings.TrimSpace(fact.DeviceID) == "" ||
 		strings.TrimSpace(fact.PointID) == "" || strings.TrimSpace(fact.PreviousObservationID) == "" || strings.TrimSpace(fact.CurrentObservationID) == "" {
 		return errors.New("ClickHouse energy interval fact identifiers are required")
 	}
+	validTransition := fact.TransitionType.ProducesFact() ||
+		(fact.FactRevision > 0 && fact.Quality == energy.FactQualityInvalid && fact.EnergyKWh == 0 && strings.TrimSpace(string(fact.TransitionType)) != "")
 	if strings.TrimSpace(fact.EnergyType) == "" || fact.MeterRole != energy.MeterRolePrimary || fact.EnergyKWh < 0 ||
 		fact.PeriodStart.IsZero() || fact.PeriodEnd.IsZero() || !fact.PeriodStart.Before(fact.PeriodEnd) || fact.ProjectedAt.IsZero() ||
 		fact.DatasetRevision != fact.SourceOffset || fact.DataWatermark.IsZero() || !fact.DataWatermark.Equal(fact.PeriodEnd) ||
-		fact.FactID != fact.CurrentObservationID || !fact.TransitionType.ProducesFact() {
+		fact.FactID != fact.CurrentObservationID || !validTransition {
 		return errors.New("ClickHouse energy interval fact is invalid")
 	}
 	switch fact.Quality {

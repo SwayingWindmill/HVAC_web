@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"log/slog"
@@ -30,23 +32,24 @@ func main() {
 }
 
 type telemetryWorkerShutdown struct {
-	Observability    *observability.Runtime
-	Logger           *slog.Logger
-	Diagnostics      *http.Server
-	Server           *http.Server
-	CancelWorkers    func()
-	WorkersWG        *sync.WaitGroup
-	DrainRelays      func(context.Context)
-	CancelAnalytics  func()
-	AnalyticsWG      *sync.WaitGroup
-	HTTPTimeout      time.Duration
-	WorkerTimeout    time.Duration
-	DrainTimeout     time.Duration
-	TelemetryTimeout time.Duration
-	CloseHistory     func()
-	CloseLatestCache func()
-	CloseRateLimiter func()
-	CloseStore       func()
+	Observability     *observability.Runtime
+	Logger            *slog.Logger
+	Diagnostics       *http.Server
+	Server            *http.Server
+	CancelWorkers     func()
+	WorkersWG         *sync.WaitGroup
+	DrainRelays       func(context.Context)
+	CancelAnalytics   func()
+	AnalyticsWG       *sync.WaitGroup
+	HTTPTimeout       time.Duration
+	WorkerTimeout     time.Duration
+	DrainTimeout      time.Duration
+	TelemetryTimeout  time.Duration
+	CloseHistory      func()
+	CloseLatestCache  func()
+	CloseRateLimiter  func()
+	CloseCoordination func()
+	CloseStore        func()
 }
 
 func shutdownTelemetryWorker(cfg telemetryWorkerShutdown) {
@@ -106,6 +109,9 @@ func shutdownTelemetryWorker(cfg telemetryWorkerShutdown) {
 	}
 	if cfg.CloseRateLimiter != nil {
 		cfg.CloseRateLimiter()
+	}
+	if cfg.CloseCoordination != nil {
+		cfg.CloseCoordination()
 	}
 	if cfg.CloseStore != nil {
 		cfg.CloseStore()
@@ -215,16 +221,23 @@ func runTelemetryWorker() int {
 	shutdownCfg.CloseStore = store.Close
 	pipelineMetrics := telemetry.NewPipelineMetrics(observabilityRuntime.Metrics)
 	store.SetPipelineMetrics(pipelineMetrics)
+	coordinationLocker, closeCoordination, err := loadTelemetryCoordinationLocks(os.Getenv)
+	if err != nil {
+		logger.Error("telemetry_coordination_config_invalid", "error_code", "TELEMETRY_COORDINATION_CONFIG_INVALID")
+		return 1
+	}
+	shutdownCfg.CloseCoordination = closeCoordination
+	settlingBuffer := durationEnv("TELEMETRY_SCHEDULE_WATERMARK_BUFFER", 30*time.Second, 0, 10*time.Minute)
 	retentionContext, retentionCancel := context.WithCancel(context.Background())
 	workerCancels = append(workerCancels, retentionCancel)
 	runSupervised(retentionContext, &workersWG, observabilityRuntime, logger, "telemetry.runtime_retention", func() {
-		runRuntimeRetention(retentionContext, store, logger)
+		runRuntimeRetentionCoordinated(retentionContext, store, settlingBuffer, coordinationLocker, logger)
 	})
 	runSupervised(retentionContext, &workersWG, observabilityRuntime, logger, "telemetry.presence_sweep", func() {
-		runPresenceSweep(retentionContext, store, time.Minute, logger)
+		runPresenceSweepCoordinated(retentionContext, store, time.Minute, settlingBuffer, coordinationLocker, logger)
 	})
 	runSupervised(retentionContext, &workersWG, observabilityRuntime, logger, "telemetry.probe_offset_sweep", func() {
-		runProbeOffsetSweep(retentionContext, store, 5*time.Second, logger)
+		runProbeOffsetSweepCoordinated(retentionContext, store, 5*time.Second, coordinationLocker, logger)
 	})
 	clickHousePruner, clickHouseRetentionCtx, clickHouseRetentionCancel, err := loadClickHouseRetentionPruner(pipelineMetrics)
 	if err != nil {
@@ -235,7 +248,7 @@ func runTelemetryWorker() int {
 		workerCancels = append(workerCancels, clickHouseRetentionCancel)
 		clickHouseRetentionInterval := durationEnv("TELEMETRY_RETENTION_CLICKHOUSE_INTERVAL", time.Hour, time.Minute, 24*time.Hour)
 		runSupervised(clickHouseRetentionCtx, &workersWG, observabilityRuntime, logger, "telemetry.clickhouse_retention", func() {
-			runClickHouseRetention(clickHouseRetentionCtx, clickHousePruner, clickHouseRetentionInterval, logger)
+			runClickHouseRetentionCoordinated(clickHouseRetentionCtx, clickHousePruner, clickHouseRetentionInterval, settlingBuffer, coordinationLocker, logger)
 		})
 	}
 
@@ -283,13 +296,13 @@ func runTelemetryWorker() int {
 	if analyticsCancel != nil {
 		shutdownCfg.CancelAnalytics = analyticsCancel
 		runSupervised(analyticsContext, &analyticsWG, observabilityRuntime, logger, "telemetry.analytics_projection", func() {
-			runAnalyticsProjection(analyticsContext, analyticsProjector, observabilityRuntime, logger)
+			runAnalyticsProjectionCoordinated(analyticsContext, analyticsProjector, observabilityRuntime, coordinationLocker, logger)
 		})
 		runSupervised(analyticsContext, &analyticsWG, observabilityRuntime, logger, "telemetry.price_window_projection", func() {
-			runPriceWindowProjection(analyticsContext, priceWindows, observabilityRuntime, logger)
+			runPriceWindowProjectionCoordinated(analyticsContext, priceWindows, observabilityRuntime, settlingBuffer, coordinationLocker, logger)
 		})
 		runSupervised(analyticsContext, &analyticsWG, observabilityRuntime, logger, "telemetry.total_submeter_projection", func() {
-			runTotalSubmeterProjection(analyticsContext, totalSubmeters, observabilityRuntime, logger)
+			runTotalSubmeterProjectionCoordinated(analyticsContext, totalSubmeters, observabilityRuntime, settlingBuffer, coordinationLocker, logger)
 		})
 	}
 
@@ -739,88 +752,90 @@ func loadAnalyticsProjection(certificate tls.Certificate) (*analyticsprojector.P
 }
 
 func runAnalyticsProjection(ctx context.Context, projector *analyticsprojector.Projector, runtime *observability.Runtime, logger *slog.Logger) {
+	runAnalyticsProjectionCoordinated(ctx, projector, runtime, nil, logger)
+}
+
+func runAnalyticsProjectionCoordinated(ctx context.Context, projector *analyticsprojector.Projector, runtime *observability.Runtime, locker leaseLocker, logger *slog.Logger) {
 	if projector == nil {
 		return
 	}
 	pollInterval := durationEnv("ANALYTICS_PROJECTOR_POLL_INTERVAL", 500*time.Millisecond, 25*time.Millisecond, time.Minute)
-	ticker := time.NewTicker(pollInterval)
-	defer ticker.Stop()
 	lastFailureLog := time.Time{}
 	logger.Info("analytics_read_model_projection_started", "poll_interval", pollInterval.String(), "deployment", "telemetry-runtime-in-process")
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			projectionContext, span := runtime.Tracer.Start(ctx, "analytics.energy_interval.project", observability.SpanKindInternal, map[string]any{
-				"db.system": "clickhouse", "analytics.model": "energy_interval_facts",
-			})
-			projectContext, projectCancel := context.WithTimeout(projectionContext, 20*time.Second)
-			projected, err := projector.ProjectOnce(projectContext)
-			projectCancel()
-			if err != nil {
-				span.SetStatus("error", "projection failed")
-				span.End()
-				_ = runtime.Metrics.AddCounter("hvac_analytics_projection_failures_total", "Failed analytics read-model projection batches.", map[string]string{"model": "energy_interval_facts"}, 1)
-				if time.Since(lastFailureLog) >= time.Second {
-					logger.Warn("analytics_energy_projection_failed", "error_code", "ANALYTICS_ENERGY_PROJECTION_FAILED")
-					lastFailureLog = time.Now()
-				}
-				continue
-			}
-			span.SetStatus("ok", "")
+	runPeriodicLoop(ctx, periodicLoopConfig{
+		LockKey: "analytics_projection", LockTTL: 30 * time.Second, Interval: pollInterval,
+		Locker: locker, Logger: logger, LockFailEvent: "analytics_projection_lock_failed", ImmediateFirstTick: true,
+	}, func(runCtx context.Context, _ time.Time) {
+		projectionContext, span := runtime.Tracer.Start(runCtx, "analytics.energy_interval.project", observability.SpanKindInternal, map[string]any{
+			"db.system": "clickhouse", "analytics.model": "energy_interval_facts",
+		})
+		projectContext, projectCancel := context.WithTimeout(projectionContext, 20*time.Second)
+		projected, err := projector.ProjectOnce(projectContext)
+		projectCancel()
+		if err != nil {
+			span.SetStatus("error", "projection failed")
 			span.End()
-			if projected > 0 {
-				_ = runtime.Metrics.AddCounter("hvac_analytics_energy_intervals_projected_total", "Projected additive energy intervals.", map[string]string{"model": "energy_interval_facts"}, float64(projected))
-				logger.Info("analytics_energy_intervals_projected", "interval_count", projected)
+			_ = runtime.Metrics.AddCounter("hvac_analytics_projection_failures_total", "Failed analytics read-model projection batches.", map[string]string{"model": "energy_interval_facts"}, 1)
+			if time.Since(lastFailureLog) >= time.Second {
+				logger.Warn("analytics_energy_projection_failed", "error_code", "ANALYTICS_ENERGY_PROJECTION_FAILED")
+				lastFailureLog = time.Now()
 			}
+			return
 		}
-	}
+		span.SetStatus("ok", "")
+		span.End()
+		if projected > 0 {
+			_ = runtime.Metrics.AddCounter("hvac_analytics_energy_intervals_projected_total", "Projected additive energy intervals.", map[string]string{"model": "energy_interval_facts"}, float64(projected))
+			logger.Info("analytics_energy_intervals_projected", "interval_count", projected)
+		}
+	})
 }
 
 // runPriceWindowProjection keeps every priced Site's Tariff laid out as price windows for Cube
 // (#575). Tariffs change rarely, so it runs at start and then every few minutes.
 func runPriceWindowProjection(ctx context.Context, projector *analyticsprojector.PriceWindowProjector, runtime *observability.Runtime, logger *slog.Logger) {
+	runPriceWindowProjectionCoordinated(ctx, projector, runtime, 0, nil, logger)
+}
+
+func runPriceWindowProjectionCoordinated(ctx context.Context, projector *analyticsprojector.PriceWindowProjector, runtime *observability.Runtime, settlingBuffer time.Duration, locker leaseLocker, logger *slog.Logger) {
 	interval := durationEnv("ANALYTICS_PRICE_WINDOW_INTERVAL", 5*time.Minute, 10*time.Second, time.Hour)
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		syncContext, cancel := context.WithTimeout(ctx, time.Minute)
+	runPeriodicLoop(ctx, periodicLoopConfig{
+		LockKey: "price_window_projection", LockTTL: 90 * time.Second, Interval: interval, SettlingBuffer: settlingBuffer,
+		AlignToWindow: settlingBuffer > 0, ImmediateFirstTick: settlingBuffer == 0,
+		Locker: locker, Logger: logger, LockFailEvent: "analytics_price_window_lock_failed",
+	}, func(runCtx context.Context, _ time.Time) {
+		syncContext, cancel := context.WithTimeout(runCtx, time.Minute)
 		err := projector.SyncOnce(syncContext)
 		cancel()
 		if err != nil {
 			_ = runtime.Metrics.AddCounter("hvac_analytics_projection_failures_total", "Failed analytics read-model projection batches.", map[string]string{"model": "tariff_price_windows"}, 1)
 			logger.Warn("analytics_price_window_projection_failed", "error_code", "ANALYTICS_PRICE_WINDOW_PROJECTION_FAILED", "error", err.Error())
 		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
+	})
 }
 
 func runTotalSubmeterProjection(ctx context.Context, projector *analyticsprojector.TotalSubmeterProjector, runtime *observability.Runtime, logger *slog.Logger) {
+	runTotalSubmeterProjectionCoordinated(ctx, projector, runtime, 0, nil, logger)
+}
+
+func runTotalSubmeterProjectionCoordinated(ctx context.Context, projector *analyticsprojector.TotalSubmeterProjector, runtime *observability.Runtime, settlingBuffer time.Duration, locker leaseLocker, logger *slog.Logger) {
 	if projector == nil {
 		return
 	}
 	interval := durationEnv("ANALYTICS_TOTAL_SUBMETER_INTERVAL", time.Minute, 10*time.Second, time.Hour)
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		syncContext, cancel := context.WithTimeout(ctx, 30*time.Second)
+	runPeriodicLoop(ctx, periodicLoopConfig{
+		LockKey: "total_submeter_projection", LockTTL: 60 * time.Second, Interval: interval, SettlingBuffer: settlingBuffer,
+		AlignToWindow: settlingBuffer > 0, ImmediateFirstTick: settlingBuffer == 0,
+		Locker: locker, Logger: logger, LockFailEvent: "analytics_total_submeter_lock_failed",
+	}, func(runCtx context.Context, _ time.Time) {
+		syncContext, cancel := context.WithTimeout(runCtx, 30*time.Second)
 		err := projector.SyncOnce(syncContext)
 		cancel()
 		if err != nil {
 			_ = runtime.Metrics.AddCounter("hvac_analytics_projection_failures_total", "Failed analytics read-model projection batches.", map[string]string{"model": "site_total_submeters"}, 1)
 			logger.Warn("analytics_total_submeter_projection_failed", "error_code", "ANALYTICS_TOTAL_SUBMETER_PROJECTION_FAILED")
 		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
+	})
 }
 
 func newAnalyticsHTTPClient(caPath string) (*http.Client, error) {
@@ -928,10 +943,16 @@ func runRealtimeRelay(ctx context.Context, service *telemetry.RealtimeService, l
 // runRuntimeRetention prunes superseded presence signals, delivered publications and history
 // events, and week-old received observations, which nothing reads once past their window.
 func runRuntimeRetention(ctx context.Context, store *telemetry.PostgresStore, logger *slog.Logger) {
-	ticker := time.NewTicker(5 * time.Minute)
-	defer ticker.Stop()
-	for {
-		pruned, err := store.PruneRuntimeHistory(ctx, time.Now())
+	runRuntimeRetentionCoordinated(ctx, store, 0, nil, logger)
+}
+
+func runRuntimeRetentionCoordinated(ctx context.Context, store *telemetry.PostgresStore, settlingBuffer time.Duration, locker leaseLocker, logger *slog.Logger) {
+	runPeriodicLoop(ctx, periodicLoopConfig{
+		LockKey: "runtime_retention", LockTTL: 60 * time.Second, Interval: 5 * time.Minute, SettlingBuffer: settlingBuffer,
+		AlignToWindow: settlingBuffer > 0, ImmediateFirstTick: settlingBuffer == 0,
+		Locker: locker, Logger: logger, LockFailEvent: "telemetry_runtime_retention_lock_failed",
+	}, func(runCtx context.Context, _ time.Time) {
+		pruned, err := store.PruneRuntimeHistory(runCtx, time.Now())
 		switch {
 		case err != nil && ctx.Err() == nil:
 			logger.Warn("telemetry_runtime_retention_failed", "error_code", "TELEMETRY_RUNTIME_RETENTION_FAILED")
@@ -949,12 +970,7 @@ func runRuntimeRetention(ctx context.Context, store *telemetry.PostgresStore, lo
 				"subscriptions", pruned.Subscriptions,
 				"replay_positions", pruned.ReplayPositions)
 		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
+	})
 }
 
 type telemetryRelayBatchDrainer interface {
@@ -1106,16 +1122,22 @@ type clickHouseRetentionExecutor interface {
 }
 
 func runClickHouseRetention(ctx context.Context, pruner clickHouseRetentionExecutor, interval time.Duration, logger *slog.Logger) {
+	runClickHouseRetentionCoordinated(ctx, pruner, interval, 0, nil, logger)
+}
+
+func runClickHouseRetentionCoordinated(ctx context.Context, pruner clickHouseRetentionExecutor, interval, settlingBuffer time.Duration, locker leaseLocker, logger *slog.Logger) {
 	if pruner == nil {
 		return
 	}
 	if interval <= 0 {
 		interval = time.Hour
 	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		pruneCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	runPeriodicLoop(ctx, periodicLoopConfig{
+		LockKey: "clickhouse_retention", LockTTL: 3 * time.Minute, Interval: interval, SettlingBuffer: settlingBuffer,
+		AlignToWindow: settlingBuffer > 0, ImmediateFirstTick: settlingBuffer == 0,
+		Locker: locker, Logger: logger, LockFailEvent: "telemetry_clickhouse_retention_lock_failed",
+	}, func(runCtx context.Context, _ time.Time) {
+		pruneCtx, cancel := context.WithTimeout(runCtx, 2*time.Minute)
 		result, err := pruner.Prune(pruneCtx, time.Now())
 		cancel()
 		switch {
@@ -1132,12 +1154,7 @@ func runClickHouseRetention(ctx context.Context, pruner clickHouseRetentionExecu
 				)
 			}
 		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
+	})
 }
 
 type presenceSweeper interface {
@@ -1147,16 +1164,22 @@ type presenceSweeper interface {
 // runPresenceSweep re-evaluates devices whose presence window elapsed without new own signals,
 // so silent or copy-only devices transition to OFFLINE and publish snapshot deltas.
 func runPresenceSweep(ctx context.Context, sweeper presenceSweeper, interval time.Duration, logger *slog.Logger) {
+	runPresenceSweepCoordinated(ctx, sweeper, interval, 0, nil, logger)
+}
+
+func runPresenceSweepCoordinated(ctx context.Context, sweeper presenceSweeper, interval, settlingBuffer time.Duration, locker leaseLocker, logger *slog.Logger) {
 	if sweeper == nil {
 		return
 	}
 	if interval <= 0 {
 		interval = time.Minute
 	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		sweepCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	runPeriodicLoop(ctx, periodicLoopConfig{
+		LockKey: "presence_sweep", LockTTL: 30 * time.Second, Interval: interval, SettlingBuffer: settlingBuffer,
+		AlignToWindow: settlingBuffer > 0, ImmediateFirstTick: settlingBuffer == 0,
+		Locker: locker, Logger: logger, LockFailEvent: "telemetry_presence_sweep_lock_failed",
+	}, func(runCtx context.Context, _ time.Time) {
+		sweepCtx, cancel := context.WithTimeout(runCtx, 15*time.Second)
 		swept, err := sweeper.SweepDuePresence(sweepCtx, time.Now(), 256)
 		cancel()
 		switch {
@@ -1165,12 +1188,7 @@ func runPresenceSweep(ctx context.Context, sweeper presenceSweeper, interval tim
 		case swept > 0:
 			logger.Info("telemetry_presence_swept", "device_count", swept)
 		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
+	})
 }
 
 type probeOffsetSweeper interface {
@@ -1180,30 +1198,30 @@ type probeOffsetSweeper interface {
 // runProbeOffsetSweep periodically folds idle supply/return probe-offset windows outside
 // the synchronous observation write path.
 func runProbeOffsetSweep(ctx context.Context, sweeper probeOffsetSweeper, interval time.Duration, logger *slog.Logger) {
+	runProbeOffsetSweepCoordinated(ctx, sweeper, interval, nil, logger)
+}
+
+func runProbeOffsetSweepCoordinated(ctx context.Context, sweeper probeOffsetSweeper, interval time.Duration, locker leaseLocker, logger *slog.Logger) {
 	if sweeper == nil {
 		return
 	}
 	if interval <= 0 {
 		interval = 5 * time.Second
 	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			sweepCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-			estimated, err := sweeper.SweepProbeOffsets(sweepCtx, time.Now().UTC())
-			cancel()
-			switch {
-			case err != nil && ctx.Err() == nil:
-				logger.Warn("telemetry_probe_offset_sweep_failed", "error_code", "TELEMETRY_PROBE_OFFSET_SWEEP_FAILED")
-			case estimated > 0:
-				logger.Info("telemetry_probe_offsets_estimated", "estimate_count", estimated)
-			}
+	runPeriodicLoop(ctx, periodicLoopConfig{
+		LockKey: "probe_offset_sweep", LockTTL: 30 * time.Second, Interval: interval,
+		Locker: locker, Logger: logger, LockFailEvent: "telemetry_probe_offset_sweep_lock_failed",
+	}, func(runCtx context.Context, _ time.Time) {
+		sweepCtx, cancel := context.WithTimeout(runCtx, 15*time.Second)
+		estimated, err := sweeper.SweepProbeOffsets(sweepCtx, time.Now().UTC())
+		cancel()
+		switch {
+		case err != nil && ctx.Err() == nil:
+			logger.Warn("telemetry_probe_offset_sweep_failed", "error_code", "TELEMETRY_PROBE_OFFSET_SWEEP_FAILED")
+		case estimated > 0:
+			logger.Info("telemetry_probe_offsets_estimated", "estimate_count", estimated)
 		}
-	}
+	})
 }
 
 // runRevocationRelay applies IAM telemetry revocations to open realtime subscriptions.
@@ -1516,4 +1534,280 @@ func parseTelemetryPostgresPoolConfig(lookup func(string) string) (telemetry.Pos
 		cfg.HealthCheckPeriod = healthPeriod
 	}
 	return cfg, nil
+}
+
+type leaseLocker interface {
+	Acquire(ctx context.Context, resource string, ttl time.Duration) (release func(context.Context), acquired bool, err error)
+}
+
+type localLeaseEntry struct {
+	token     string
+	expiresAt time.Time
+}
+
+type localLeaseLocker struct {
+	mu     sync.Mutex
+	now    func() time.Time
+	leases map[string]localLeaseEntry
+}
+
+func newLocalLeaseLocker(now func() time.Time) *localLeaseLocker {
+	if now == nil {
+		now = time.Now
+	}
+	return &localLeaseLocker{now: now, leases: make(map[string]localLeaseEntry)}
+}
+
+func (l *localLeaseLocker) Acquire(_ context.Context, resource string, ttl time.Duration) (func(context.Context), bool, error) {
+	if ttl <= 0 {
+		ttl = 30 * time.Second
+	}
+	token, err := newLeaseToken()
+	if err != nil {
+		return nil, false, err
+	}
+	now := l.now().UTC()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if existing, exists := l.leases[resource]; exists && existing.expiresAt.After(now) {
+		return nil, false, nil
+	}
+	l.leases[resource] = localLeaseEntry{token: token, expiresAt: now.Add(ttl)}
+	return func(context.Context) {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		if current, exists := l.leases[resource]; exists && current.token == token {
+			delete(l.leases, resource)
+		}
+	}, true, nil
+}
+
+var (
+	releaseRedisLeaseScript = redis.NewScript(`if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("DEL", KEYS[1]) else return 0 end`)
+	renewRedisLeaseScript   = redis.NewScript(`if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("PEXPIRE", KEYS[1], ARGV[2]) else return 0 end`)
+)
+
+type redisLeaseLocker struct {
+	client    *redis.Client
+	keyPrefix string
+}
+
+func newRedisLeaseLocker(client *redis.Client, keyPrefix string) *redisLeaseLocker {
+	prefix := strings.TrimSpace(keyPrefix)
+	if prefix == "" {
+		prefix = "hvac:telemetry:lock:"
+	}
+	if !strings.HasSuffix(prefix, ":") {
+		prefix += ":"
+	}
+	return &redisLeaseLocker{client: client, keyPrefix: prefix}
+}
+
+func (l *redisLeaseLocker) Acquire(ctx context.Context, resource string, ttl time.Duration) (func(context.Context), bool, error) {
+	if l == nil || l.client == nil {
+		return nil, false, errors.New("redis lease locker is not initialized")
+	}
+	if ttl <= 0 {
+		ttl = 30 * time.Second
+	}
+	token, err := newLeaseToken()
+	if err != nil {
+		return nil, false, err
+	}
+	key := l.keyPrefix + resource
+	acquired, err := l.client.SetNX(ctx, key, token, ttl).Result()
+	if err != nil || !acquired {
+		return nil, false, err
+	}
+
+	renewCtx, stopRenew := context.WithCancel(context.Background())
+	renewDone := make(chan struct{})
+	renewEvery := ttl / 3
+	if renewEvery < 10*time.Millisecond {
+		renewEvery = 10 * time.Millisecond
+	}
+	ttlMs := strconv.FormatInt(max(ttl.Milliseconds(), 1), 10)
+	go func() {
+		defer close(renewDone)
+		ticker := time.NewTicker(renewEvery)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-renewCtx.Done():
+				return
+			case <-ticker.C:
+				callCtx, cancelCall := context.WithTimeout(renewCtx, min(ttl/2, 2*time.Second))
+				res, renewErr := renewRedisLeaseScript.Run(callCtx, l.client, []string{key}, token, ttlMs).Int64()
+				cancelCall()
+				if renewErr == nil && res == 0 {
+					return
+				}
+			}
+		}
+	}()
+
+	var releaseOnce sync.Once
+	return func(releaseCtx context.Context) {
+		releaseOnce.Do(func() {
+			stopRenew()
+			<-renewDone
+			if releaseCtx == nil || releaseCtx.Err() != nil {
+				var cancelRelease context.CancelFunc
+				releaseCtx, cancelRelease = context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancelRelease()
+			}
+			_, _ = releaseRedisLeaseScript.Run(releaseCtx, l.client, []string{key}, token).Result()
+		})
+	}, true, nil
+}
+
+func newLeaseToken() (string, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(raw[:]), nil
+}
+
+func loadTelemetryCoordinationLocks(lookup func(string) string) (leaseLocker, func(), error) {
+	for _, envName := range []string{
+		"TELEMETRY_COORDINATION_REDIS_URL",
+		"TELEMETRY_LATEST_CACHE_REDIS_URL",
+		"TELEMETRY_LIMIT_POLICY_REDIS_URL",
+	} {
+		rawURL := strings.TrimSpace(lookup(envName))
+		if rawURL == "" {
+			continue
+		}
+		options, err := redis.ParseURL(rawURL)
+		if err != nil {
+			return nil, func() {}, err
+		}
+		client := redis.NewClient(options)
+		return newRedisLeaseLocker(client, "hvac:telemetry:lock:"), func() { _ = client.Close() }, nil
+	}
+	return newLocalLeaseLocker(time.Now), func() {}, nil
+}
+
+func effectiveSettlingBuffer(period, configured time.Duration) time.Duration {
+	if period <= 0 || configured <= 0 {
+		return 0
+	}
+	half := period / 2
+	if half > 0 && configured > half {
+		return half
+	}
+	return configured
+}
+
+// nextSettledTick aligns periodic execution to period boundaries plus settlingBuffer so
+// in-flight gateway messages and memory batcher flushes settle before aggregation runs.
+func nextSettledTick(now time.Time, period, settlingBuffer time.Duration) (fireAt time.Time, boundary time.Time) {
+	nowUTC := now.UTC()
+	if period <= 0 {
+		return nowUTC, nowUTC
+	}
+	buffer := max(settlingBuffer, 0)
+	boundary = nowUTC.Truncate(period)
+	candidate := boundary.Add(buffer)
+	if !candidate.After(nowUTC) {
+		boundary = boundary.Add(period)
+		candidate = boundary.Add(buffer)
+	}
+	return candidate, boundary
+}
+
+type periodicLoopConfig struct {
+	LockKey            string
+	LockTTL            time.Duration
+	Interval           time.Duration
+	SettlingBuffer     time.Duration
+	AlignToWindow      bool
+	ImmediateFirstTick bool
+	Locker             leaseLocker
+	Logger             *slog.Logger
+	LockFailEvent      string
+	Now                func() time.Time
+	WaitUntil          func(ctx context.Context, target time.Time) bool
+}
+
+func runPeriodicLoop(ctx context.Context, cfg periodicLoopConfig, fn func(runCtx context.Context, boundary time.Time)) {
+	if fn == nil {
+		return
+	}
+	nowFn := cfg.Now
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+	waitUntil := cfg.WaitUntil
+	if waitUntil == nil {
+		waitUntil = waitUntilTimer
+	}
+	interval := cfg.Interval
+	if interval <= 0 {
+		interval = time.Minute
+	}
+	buffer := effectiveSettlingBuffer(interval, cfg.SettlingBuffer)
+	lastLockFailureLog := time.Time{}
+
+	runAttempt := func(boundary time.Time) {
+		if ctx.Err() != nil {
+			return
+		}
+		if cfg.Locker != nil && cfg.LockKey != "" {
+			lockCtx, cancelLock := context.WithTimeout(ctx, 5*time.Second)
+			release, acquired, err := cfg.Locker.Acquire(lockCtx, cfg.LockKey, cfg.LockTTL)
+			cancelLock()
+			if err != nil {
+				if cfg.Logger != nil && ctx.Err() == nil && time.Since(lastLockFailureLog) >= 10*time.Second {
+					event := cfg.LockFailEvent
+					if event == "" {
+						event = "telemetry_scheduled_lock_failed"
+					}
+					cfg.Logger.Warn(event, "lock_key", cfg.LockKey, "error_code", "TELEMETRY_COORDINATION_LOCK_FAILED")
+					lastLockFailureLog = time.Now()
+				}
+				return
+			}
+			if !acquired {
+				return
+			}
+			defer release(ctx)
+		}
+		fn(ctx, boundary)
+	}
+
+	if !cfg.AlignToWindow && cfg.ImmediateFirstTick {
+		runAttempt(nowFn().UTC())
+	}
+
+	for {
+		var boundary time.Time
+		var waitTarget time.Time
+		if cfg.AlignToWindow && buffer > 0 {
+			waitTarget, boundary = nextSettledTick(nowFn(), interval, buffer)
+		} else {
+			waitTarget = nowFn().UTC().Add(interval)
+			boundary = waitTarget
+		}
+		if !waitUntil(ctx, waitTarget) {
+			return
+		}
+		runAttempt(boundary)
+	}
+}
+
+func waitUntilTimer(ctx context.Context, target time.Time) bool {
+	delay := time.Until(target)
+	if delay <= 0 {
+		return ctx.Err() == nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
