@@ -49,27 +49,52 @@ type runtime struct {
 }
 
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
+	var closers []func()
+	defer func() {
+		for i := len(closers) - 1; i >= 0; i-- {
+			closers[i]()
+		}
+	}()
+
 	logger := observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
 	telemetry := observability.NewRuntime(observability.RuntimeConfig{
 		Service: "metric-worker", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond,
 	})
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
+	var telemetryShutdownOnce sync.Once
+	shutdownTelemetry := func() {
+		telemetryShutdownOnce.Do(func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = telemetry.Shutdown(shutdownCtx)
+		})
+	}
+	defer shutdownTelemetry()
 
-	runtime, err := openRuntime(ctx)
+	sigCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignals()
+
+	runtime, err := openRuntime(sigCtx)
 	if err != nil {
 		logger.Error("metric_worker_configuration_invalid", "error_code", "METRIC_WORKER_CONFIGURATION_INVALID")
-		os.Exit(1)
+		return 1
 	}
-	defer runtime.Close()
+	var closeRuntimeOnce sync.Once
+	closeRuntime := func() {
+		closeRuntimeOnce.Do(runtime.Close)
+	}
+	closers = append(closers, closeRuntime)
 	telemetry.SetDependencies(observability.Dependency{Name: "metric-runtime", Required: true, Check: runtime.Ping})
 
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("METRIC_WORKER_MODE")), "oneshot") {
-		if err := runOneShot(ctx, runtime, os.Stdin, os.Stdout); err != nil {
+		if err := runOneShot(sigCtx, runtime, os.Stdin, os.Stdout); err != nil {
 			logger.Error("metric_oneshot_failed", "error_code", "METRIC_ONESHOT_FAILED")
-			os.Exit(1)
+			return 1
 		}
-		return
+		return 0
 	}
 
 	workerID := strings.TrimSpace(os.Getenv("METRIC_WORKER_ID"))
@@ -77,58 +102,178 @@ func main() {
 		hostname, _ := os.Hostname()
 		workerID = "metric-worker:" + hostname
 	}
-	claimInterval := durationEnv("METRIC_JOB_CLAIM_INTERVAL", 2*time.Second, time.Second, time.Minute)
-	claimBatch := integerEnv("METRIC_JOB_CLAIM_BATCH", 20, 1, 100)
-	leaseDuration := durationEnv("METRIC_JOB_LEASE_DURATION", 60*time.Second, 10*time.Second, 30*time.Minute)
-	leaseRenew := durationEnv("METRIC_JOB_LEASE_RENEW_INTERVAL", leaseDuration/3, time.Second, leaseDuration/2)
-	finalizationDelay := durationEnv("METRIC_WORKER_FINALIZATION_DELAY", 5*time.Minute, 0, 24*time.Hour)
-	backfillScanInterval := durationEnv("METRIC_BACKFILL_SCAN_INTERVAL", 30*time.Second, 0, 24*time.Hour)
-
-	diagnostics := &http.Server{
-		Addr: envOr("METRIC_DIAGNOSTICS_ADDR", ":19090"), Handler: telemetry.DiagnosticsHandler(),
-		ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second,
+	claimInterval, err := durationEnv("METRIC_JOB_CLAIM_INTERVAL", 2*time.Second, time.Second, time.Minute)
+	if err != nil {
+		logger.Error("metric_worker_configuration_invalid", "error_code", "METRIC_WORKER_CONFIGURATION_INVALID")
+		return 1
 	}
-	go func() {
-		defer observability.Recover(logger, telemetry.Metrics, "metric_worker.diagnostics")
-		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Error("metric_diagnostics_failed", "error_code", "METRIC_DIAGNOSTICS_SERVE_FAILED")
-			cancel()
-		}
-	}()
+	claimBatch, err := integerEnv("METRIC_JOB_CLAIM_BATCH", 20, 1, 100)
+	if err != nil {
+		logger.Error("metric_worker_configuration_invalid", "error_code", "METRIC_WORKER_CONFIGURATION_INVALID")
+		return 1
+	}
+	leaseDuration, err := durationEnv("METRIC_JOB_LEASE_DURATION", 60*time.Second, 10*time.Second, 30*time.Minute)
+	if err != nil {
+		logger.Error("metric_worker_configuration_invalid", "error_code", "METRIC_WORKER_CONFIGURATION_INVALID")
+		return 1
+	}
+	leaseRenew, err := durationEnv("METRIC_JOB_LEASE_RENEW_INTERVAL", leaseDuration/3, time.Second, leaseDuration/2)
+	if err != nil {
+		logger.Error("metric_worker_configuration_invalid", "error_code", "METRIC_WORKER_CONFIGURATION_INVALID")
+		return 1
+	}
+	finalizationDelay, err := durationEnv("METRIC_WORKER_FINALIZATION_DELAY", 5*time.Minute, 0, 24*time.Hour)
+	if err != nil {
+		logger.Error("metric_worker_configuration_invalid", "error_code", "METRIC_WORKER_CONFIGURATION_INVALID")
+		return 1
+	}
+	backfillScanInterval, err := durationEnv("METRIC_BACKFILL_SCAN_INTERVAL", 30*time.Second, 0, 24*time.Hour)
+	if err != nil {
+		logger.Error("metric_worker_configuration_invalid", "error_code", "METRIC_WORKER_CONFIGURATION_INVALID")
+		return 1
+	}
 
-	var detectorWG sync.WaitGroup
+	var detector backfillDetector
 	if backfillScanInterval > 0 {
-		detector, detErr := metric.NewBackfillRecalcDetector(runtime.store, runtime.backfillSource, metric.BackfillRecalcConfig{
+		builtDetector, detErr := metric.NewBackfillRecalcDetector(runtime.store, runtime.backfillSource, metric.BackfillRecalcConfig{
 			FinalizationDelay: finalizationDelay,
 			WatermarkStore:    runtime.store,
 			WatermarkScope:    envOr("METRIC_BACKFILL_WATERMARK_SCOPE", metric.DefaultBackfillWatermarkScope),
 		})
 		if detErr != nil {
 			logger.Error("metric_worker_configuration_invalid", "error_code", "METRIC_WORKER_CONFIGURATION_INVALID")
-			os.Exit(1)
+			return 1
 		}
-		detectorWG.Add(1)
+		detector = builtDetector
+	}
+
+	diagnostics := &http.Server{
+		Addr: envOr("METRIC_DIAGNOSTICS_ADDR", ":19090"), Handler: telemetry.DiagnosticsHandler(),
+		ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second,
+	}
+	diagDone := make(chan struct{})
+	diagErr := make(chan error, 1)
+	go func() {
+		defer close(diagDone)
+		defer observability.Recover(logger, telemetry.Metrics, "metric_worker.diagnostics", func(any) {
+			select {
+			case diagErr <- errors.New("diagnostics server panicked"):
+			default:
+			}
+		})
+		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("metric_diagnostics_failed", "error_code", "METRIC_DIAGNOSTICS_SERVE_FAILED")
+			select {
+			case diagErr <- err:
+			default:
+			}
+		}
+	}()
+
+	workerCtx, cancelWorker := context.WithCancel(context.Background())
+	defer cancelWorker()
+	var bgWG sync.WaitGroup
+	if detector != nil {
+		bgWG.Add(1)
 		go func() {
-			defer detectorWG.Done()
-			runBackfillDetectorLoop(ctx, detector, backfillScanInterval, telemetry, logger)
+			defer bgWG.Done()
+			defer observability.Recover(logger, telemetry.Metrics, "metric_worker.backfill_detector")
+			runBackfillDetectorLoop(workerCtx, detector, backfillScanInterval, telemetry, logger)
 		}()
 	}
+	bgWG.Add(1)
+	go func() {
+		defer bgWG.Done()
+		defer observability.Recover(logger, telemetry.Metrics, "metric_worker.loop")
+		runWorker(workerCtx, runtime, workerID, claimInterval, claimBatch, leaseDuration, leaseRenew, finalizationDelay, telemetry, logger)
+	}()
 
 	telemetry.MarkReady()
 	logger.Info("metric_worker_started", "worker_id", workerID, "claim_interval", claimInterval.String(), "claim_batch", claimBatch, "lease_duration", leaseDuration.String(), "finalization_delay", finalizationDelay.String(), "backfill_scan_interval", backfillScanInterval.String())
-	runWorker(ctx, runtime, workerID, claimInterval, claimBatch, leaseDuration, leaseRenew, finalizationDelay, telemetry, logger)
-	telemetry.MarkNotReady()
-	detectorWG.Wait()
 
-	shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer shutdownCancel()
-	_ = diagnostics.Shutdown(shutdownContext)
-	_ = telemetry.Shutdown(shutdownContext)
+	exitCode := 0
+	select {
+	case <-sigCtx.Done():
+	case <-diagErr:
+		exitCode = 1
+	}
+	stopSignals()
+
+	shutdownMetricWorker(logger, telemetry, diagnostics, diagDone, cancelWorker, &bgWG, shutdownTelemetry, closeRuntime, 10*time.Second)
 	logger.Info("metric_worker_stopped")
+	return exitCode
+}
+
+func shutdownMetricWorker(
+	logger *slog.Logger,
+	telemetry *observability.Runtime,
+	diagnostics *http.Server,
+	diagDone <-chan struct{},
+	cancelWorker context.CancelFunc,
+	bgWG *sync.WaitGroup,
+	shutdownTelemetry func(),
+	closeRuntime func(),
+	drainTimeout time.Duration,
+) {
+	if drainTimeout <= 0 {
+		drainTimeout = 10 * time.Second
+	}
+	if telemetry != nil {
+		telemetry.MarkNotReady()
+	}
+	if diagnostics != nil {
+		httpCtx, cancelHTTP := context.WithTimeout(context.Background(), drainTimeout)
+		if err := diagnostics.Shutdown(httpCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			_ = diagnostics.Close()
+		}
+		if diagDone != nil {
+			select {
+			case <-diagDone:
+			case <-httpCtx.Done():
+			}
+		}
+		cancelHTTP()
+	} else if diagDone != nil {
+		timer := time.NewTimer(drainTimeout)
+		select {
+		case <-diagDone:
+		case <-timer.C:
+		}
+		timer.Stop()
+	}
+	if cancelWorker != nil {
+		cancelWorker()
+	}
+	if bgWG != nil {
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			bgWG.Wait()
+		}()
+		timer := time.NewTimer(drainTimeout)
+		select {
+		case <-done:
+		case <-timer.C:
+			if logger != nil {
+				logger.Warn("metric_worker_shutdown_timeout", "error_code", "METRIC_WORKER_SHUTDOWN_TIMEOUT")
+			}
+		}
+		timer.Stop()
+	}
+	if shutdownTelemetry != nil {
+		shutdownTelemetry()
+	}
+	if closeRuntime != nil {
+		closeRuntime()
+	}
 }
 
 func openRuntime(ctx context.Context) (*runtime, error) {
-	config, err := pgxpool.ParseConfig(requiredEnv("METRIC_POSTGRES_DSN"))
+	dsn, err := requiredEnv("METRIC_POSTGRES_DSN")
+	if err != nil {
+		return nil, err
+	}
+	config, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("parse metric PostgreSQL DSN: %w", err)
 	}
@@ -138,6 +283,8 @@ func openRuntime(ctx context.Context) (*runtime, error) {
 	config.MaxConns = 8
 	config.MinConns = 1
 	config.MaxConnLifetime = 30 * time.Minute
+	config.MaxConnIdleTime = 5 * time.Minute
+	config.HealthCheckPeriod = 30 * time.Second
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		return nil, err
@@ -151,7 +298,11 @@ func openRuntime(ctx context.Context) (*runtime, error) {
 		pool.Close()
 		return nil, err
 	}
-	clickhouseURL := requiredEnv("METRIC_CLICKHOUSE_URL")
+	clickhouseURL, err := requiredEnv("METRIC_CLICKHOUSE_URL")
+	if err != nil {
+		store.Close()
+		return nil, err
+	}
 	clickhouseUser := os.Getenv("METRIC_CLICKHOUSE_USER")
 	clickhousePassword := os.Getenv("METRIC_CLICKHOUSE_PASSWORD")
 	series, err := metric.NewClickHouseStore(clickhouseURL, clickhouseUser, clickhousePassword, nil)
@@ -164,7 +315,12 @@ func openRuntime(ctx context.Context) (*runtime, error) {
 		store.Close()
 		return nil, err
 	}
-	latest, err := metric.NewRedisLatestStore(requiredEnv("METRIC_REDIS_URL"), 7*24*time.Hour)
+	redisURL, err := requiredEnv("METRIC_REDIS_URL")
+	if err != nil {
+		store.Close()
+		return nil, err
+	}
+	latest, err := metric.NewRedisLatestStore(redisURL, 7*24*time.Hour)
 	if err != nil {
 		store.Close()
 		return nil, err
@@ -591,13 +747,12 @@ func runOneShot(ctx context.Context, runtime *runtime, input *os.File, output *o
 	}
 }
 
-func requiredEnv(name string) string {
+func requiredEnv(name string) (string, error) {
 	value := strings.TrimSpace(os.Getenv(name))
 	if value == "" {
-		_, _ = os.Stderr.WriteString(name + " is required\n")
-		os.Exit(1)
+		return "", errors.New(name + " is required")
 	}
-	return value
+	return value, nil
 }
 
 func envOr(name, fallback string) string {
@@ -619,24 +774,22 @@ func parseDurationValue(raw string, fallback, minimum, maximum time.Duration) (t
 	return parsed, nil
 }
 
-func durationEnv(name string, fallback, minimum, maximum time.Duration) time.Duration {
+func durationEnv(name string, fallback, minimum, maximum time.Duration) (time.Duration, error) {
 	parsed, err := parseDurationValue(os.Getenv(name), fallback, minimum, maximum)
 	if err != nil {
-		_, _ = os.Stderr.WriteString(name + " is invalid\n")
-		os.Exit(1)
+		return 0, errors.New(name + " is invalid")
 	}
-	return parsed
+	return parsed, nil
 }
 
-func integerEnv(name string, fallback, minimum, maximum int) int {
+func integerEnv(name string, fallback, minimum, maximum int) (int, error) {
 	value := strings.TrimSpace(os.Getenv(name))
 	if value == "" {
-		return fallback
+		return fallback, nil
 	}
 	parsed, err := strconv.Atoi(value)
 	if err != nil || parsed < minimum || parsed > maximum {
-		_, _ = os.Stderr.WriteString(name + " is invalid\n")
-		os.Exit(1)
+		return 0, errors.New(name + " is invalid")
 	}
-	return parsed
+	return parsed, nil
 }

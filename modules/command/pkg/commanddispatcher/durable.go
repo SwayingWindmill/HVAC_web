@@ -3,12 +3,27 @@ package commanddispatcher
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/modules/command/pkg/commandservice"
 )
+
+var commandDispatcherTracer = observability.NewTracer("command-dispatcher", nil)
+
+func withCommandTraceContext(ctx context.Context, rawTraceID string) (context.Context, string) {
+	normalized := commandmodel.NormalizeTraceID(rawTraceID)
+	if observability.TraceID(ctx) == "" && normalized != "" {
+		ctx = observability.ContextWithRemoteParent(ctx, commandDispatcherTracer, "00-"+normalized+"-0000000000000001-01", "")
+	}
+	if active := commandmodel.NormalizeTraceID(observability.TraceID(ctx)); active != "" {
+		return ctx, active
+	}
+	return ctx, normalized
+}
 
 type Connector interface {
 	Execute(ctx context.Context, envelope commandmodel.DispatchEnvelope) (commandmodel.ConnectorResult, error)
@@ -55,18 +70,22 @@ func (d *DurableDispatcher) RunOnce(ctx context.Context, tenantID string) error 
 	if err != nil {
 		return err
 	}
-	result, err := d.connector.Execute(ctx, envelope)
+	execCtx, traceID := withCommandTraceContext(ctx, envelope.TraceID)
+	result, err := d.connector.Execute(execCtx, envelope)
 	if err != nil {
+		slog.WarnContext(execCtx, "command_dispatch_execute_failed", "command_id", envelope.CommandID, "attempt_id", envelope.AttemptID, "execution_fence", envelope.ExecutionFence, "trace_id", traceID, "error", err.Error())
 		return err
 	}
-	if err := d.store.ResolveDispatch(ctx, envelope, result); err != nil {
+	if err := d.store.ResolveDispatch(execCtx, envelope, result); err != nil {
+		slog.WarnContext(execCtx, "command_dispatch_resolve_failed", "command_id", envelope.CommandID, "attempt_id", envelope.AttemptID, "execution_fence", envelope.ExecutionFence, "trace_id", traceID, "phase", result.Phase, "failure_code", result.FailureCode, "error", err.Error())
 		if finalizer, ok := d.connector.(DispatchResolutionFinalizer); ok && errors.Is(err, commandservice.ErrStaleFence) && replyBackedResult(result) {
-			return finalizer.FinalizeDispatch(ctx, envelope, result)
+			return finalizer.FinalizeDispatch(execCtx, envelope, result)
 		}
 		return err
 	}
+	slog.InfoContext(execCtx, "command_dispatch_resolved", "command_id", envelope.CommandID, "attempt_id", envelope.AttemptID, "execution_fence", envelope.ExecutionFence, "trace_id", traceID, "phase", result.Phase, "failure_code", result.FailureCode)
 	if finalizer, ok := d.connector.(DispatchResolutionFinalizer); ok {
-		return finalizer.FinalizeDispatch(ctx, envelope, result)
+		return finalizer.FinalizeDispatch(execCtx, envelope, result)
 	}
 	return nil
 }

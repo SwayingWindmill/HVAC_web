@@ -7,6 +7,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -179,7 +180,20 @@ func credentialServerWithDiagnostics(
 	if err != nil {
 		return nil, nil, err
 	}
-	client := &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: roots, Certificates: []tls.Certificate{cert}, ServerName: "iam-service"}}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	var iamTransport *http.Transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok && base != nil {
+		iamTransport = base.Clone()
+	} else {
+		iamTransport = &http.Transport{}
+	}
+	iamTransport.DialContext = (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext
+	iamTransport.MaxConnsPerHost = 16
+	iamTransport.MaxIdleConns = 64
+	iamTransport.MaxIdleConnsPerHost = 16
+	iamTransport.IdleConnTimeout = 90 * time.Second
+	iamTransport.ResponseHeaderTimeout = 10 * time.Second
+	iamTransport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: roots, Certificates: []tls.Certificate{cert}, ServerName: "iam-service"}
+	client := &http.Client{Timeout: 3 * time.Second, Transport: iamTransport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	status, err := coreservice.NewHTTPGrantStatusProvider(envOr("CONNECTIVITY_IAM_URL", "https://iam-service:8444"), client)
 	if err != nil {
 		return nil, nil, err

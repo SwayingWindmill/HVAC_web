@@ -1,12 +1,16 @@
 package commanddispatcher
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/modules/command/pkg/commandservice"
 )
 
@@ -392,5 +396,56 @@ func TestDurableVerificationWorkerMultiCommandNonStarvation(t *testing.T) {
 	}
 	if store.items[0].resolved == nil || store.items[0].resolved.Outcome != commandmodel.VerificationSucceeded {
 		t.Fatalf("Command A did not settle after lease elapsed: %#v", store.items[0].resolved)
+	}
+}
+
+type traceRecordingVerificationStore struct {
+	envelope        commandmodel.VerificationEnvelope
+	resolvedTraceID string
+}
+
+func (s *traceRecordingVerificationStore) ClaimVerification(_ context.Context, _, _ string, _ time.Duration) (commandmodel.VerificationEnvelope, error) {
+	return s.envelope, nil
+}
+
+func (s *traceRecordingVerificationStore) ResolveVerification(ctx context.Context, _ commandmodel.VerificationEnvelope, _ commandmodel.VerificationResult) error {
+	s.resolvedTraceID = observability.TraceID(ctx)
+	return nil
+}
+
+type traceRecordingReportedReader struct {
+	readTraceID string
+	reported    commandmodel.ReportedStateEvidence
+}
+
+func (r *traceRecordingReportedReader) ReadReportedState(ctx context.Context, _ commandmodel.VerificationEnvelope) (string, commandmodel.ReportedStateEvidence, error) {
+	r.readTraceID = observability.TraceID(ctx)
+	return "ev-trace-1", r.reported, nil
+}
+
+func TestDurableVerificationWorkerPropagatesTraceContextAndLogs(t *testing.T) {
+	const wantTrace = "4bf92f3577b34da6a3ce929d0e0e4736"
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(observability.NewJSONLogger(&logs, slog.LevelInfo))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	env := verificationEnvelope()
+	env.CommandID = "cmd-verify-trace-1"
+	env.TraceID = "4BF92F3577B34DA6A3CE929D0E0E4736"
+	store := &traceRecordingVerificationStore{envelope: env}
+	reader := &traceRecordingReportedReader{reported: validReportedState(env)}
+	verifier := NewAuthoritativeReportedStateVerifier(reader)
+	worker := NewDurableVerificationWorker(store, verifier, "verifier-a", 15*time.Second)
+
+	if err := worker.RunOnce(context.Background(), env.TenantID); err != nil {
+		t.Fatalf("RunOnce failed: %v", err)
+	}
+	if reader.readTraceID != wantTrace || store.resolvedTraceID != wantTrace {
+		t.Fatalf("trace mismatch read=%q resolve=%q want=%q", reader.readTraceID, store.resolvedTraceID, wantTrace)
+	}
+	logOutput := logs.String()
+	if !strings.Contains(logOutput, `"command_id":"cmd-verify-trace-1"`) || !strings.Contains(logOutput, `"trace_id":"`+wantTrace+`"`) {
+		t.Fatalf("missing structured command_id/trace_id in logs:\n%s", logOutput)
 	}
 }

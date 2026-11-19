@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 )
@@ -169,6 +170,7 @@ func (h *handler) serveGatewayDiagnostics(w http.ResponseWriter, r *http.Request
 		upstreamReq.Header.Set("Content-Type", "application/json")
 	}
 	upstreamReq.Header.Set("X-Delegation-Grant", auth.coreGrant)
+	observability.InjectHTTP(r.Context(), upstreamReq.Header)
 
 	response, err := h.connectivity.HTTPClient.Do(upstreamReq)
 	if err != nil {
@@ -179,7 +181,7 @@ func (h *handler) serveGatewayDiagnostics(w http.ResponseWriter, r *http.Request
 		writeProblem(w, r, http.StatusServiceUnavailable, "CONNECTIVITY_UNAVAILABLE", "Gateway diagnostics unavailable", "Connectivity could not be reached.", true, nil)
 		return true
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 
 	body, err := readBoundedBody(response.Body, maxGatewayDiagnosticsResponseBodyBytes)
 	if err != nil {

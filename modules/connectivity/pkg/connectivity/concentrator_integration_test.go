@@ -36,7 +36,8 @@ func TestConcentratorAuditPostgresRLSAndConstraints(t *testing.T) {
 	const reqID2 = "0194f000-5000-7000-8000-000000000002"
 
 	cleanup := func() {
-		for _, table := range []string{"gateway_concentrator_audit", "gateway_credential_audit", "gateway_enrollments", "gateway_credentials"} {
+		_, _ = admin.Exec(ctx, "TRUNCATE TABLE connectivity.gateway_concentrator_audit, connectivity.gateway_credential_audit")
+		for _, table := range []string{"gateway_enrollments", "gateway_credentials"} {
 			_, _ = admin.Exec(ctx, "DELETE FROM connectivity."+table+" WHERE gateway_id = $1::uuid", gatewayA)
 		}
 		_, _ = admin.Exec(ctx, "DELETE FROM core_registry.devices WHERE id = $1::uuid", gatewayA)
@@ -184,4 +185,7 @@ VALUES($1,$2,$3,$3,$3)`, tenantA, gatewayA, now); err != nil {
 	if _, err := store.ResolveGatewayForOperator(ctx, allowedClaims, gatewayA); !errors.Is(err, connectivity.ErrCredentialRevoked) {
 		t.Fatalf("revoked enrollment got %v, want ErrCredentialRevoked", err)
 	}
+
+	assertAuditMutationBlocked(t, ctx, admin, `UPDATE connectivity.gateway_concentrator_audit SET reason = 'tampered' WHERE gateway_id = $1::uuid`, gatewayA)
+	assertAuditMutationBlocked(t, ctx, admin, `DELETE FROM connectivity.gateway_concentrator_audit WHERE gateway_id = $1::uuid`, gatewayA)
 }

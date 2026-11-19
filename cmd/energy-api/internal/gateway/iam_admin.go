@@ -60,7 +60,7 @@ func (controller *identityController) forwardIAMAdmin(ctx context.Context, sessi
 		failure := identityFailure{503, "IAM_UNAVAILABLE", "IAM unavailable", "The private IAM service could not be reached.", true}
 		return 0, nil, &failure
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if err != nil {
 		failure := identityFailure{503, "IAM_RESPONSE_INVALID", "IAM response invalid", "IAM returned an unreadable administration response.", true}

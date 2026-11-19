@@ -162,6 +162,7 @@ func loadRegistryConfig(snapshot *ownershipregistry.Snapshot, identityEnabled bo
 
 func nonRedirectingClient(transport http.RoundTripper) *http.Client {
 	return &http.Client{
+		Timeout:   10 * time.Second,
 		Transport: transport,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse

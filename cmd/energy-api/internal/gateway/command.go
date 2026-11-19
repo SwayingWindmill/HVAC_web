@@ -212,6 +212,27 @@ func matchPublicCommandRoute(path string) (commandRouteKind, string, bool) {
 	return kind, raw, true
 }
 
+func matchCommandPathTemplate(path string) (string, bool) {
+	kind, _, matches := matchPublicCommandRoute(path)
+	if !matches {
+		return "", false
+	}
+	switch kind {
+	case commandRouteCollection:
+		return "/api/v1/commands", true
+	case commandRouteItem:
+		return "/api/v1/commands/{commandId}", true
+	case commandRouteApproval:
+		return "/api/v1/commands/{commandId}/approve", true
+	case commandRouteReconciliation:
+		return "/api/v1/commands/{commandId}/reconcile", true
+	case commandRouteCancel:
+		return "/api/v1/commands/{commandId}/cancel", true
+	default:
+		return "", false
+	}
+}
+
 func dispatchCommandRoute(h *handler, writer http.ResponseWriter, request *http.Request, kind commandRouteKind, commandID string) {
 	if h.command == nil {
 		writeProblem(writer, request, http.StatusServiceUnavailable, "COMMAND_UNAVAILABLE", "Command unavailable", "The Command API is not configured.", true, nil)
@@ -791,7 +812,7 @@ func (h *handler) callOperatorCommandBackend(
 		failure := commandUnavailable("Command Service is temporarily unavailable.")
 		return 0, nil, &failure
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 
 	if maxResponseBytes <= 0 {
 		maxResponseBytes = h.command.maxResponseBytes
@@ -1162,7 +1183,7 @@ func (h *handler) executeCommandCreate(ctx context.Context, request *http.Reques
 		failure := commandUnavailable("Command Service is temporarily unavailable.")
 		return commandView{}, 0, "", &failure
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	rawBody, err := readBoundedBody(response.Body, h.command.maxResponseBytes)
 	if err != nil {
 		failure := commandUnavailable("Command Service response exceeded size limit.")

@@ -129,7 +129,7 @@ func (h *handler) proxyAgentUsage(writer http.ResponseWriter, request *http.Requ
 		writeProblem(writer, request, http.StatusBadGateway, "OPERATIONS_AGENT_BAD_GATEWAY", "Operations Agent unavailable", "The Operations Agent did not answer the usage request.", true, nil)
 		return
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	raw, err := readBoundedBody(response.Body, h.operations.maxResponseBytes)
 	if err != nil {
 		writeProblem(writer, request, http.StatusBadGateway, "OPERATIONS_AGENT_BAD_GATEWAY", "Operations Agent gateway failed", "The assistant usage response was unreadable or oversized.", true, nil)

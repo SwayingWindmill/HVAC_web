@@ -1,8 +1,11 @@
 package core
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -454,5 +457,31 @@ LIMIT 1
 	}
 	if attempts != outboxMaxDeliveryAttempts || hasNextRetry || !utf8.ValidString(lastErr) {
 		t.Fatalf("expected attempt=%d next_retry_at=NULL valid-utf8 last_error, got attempt=%d hasNextRetry=%v lastErrLen=%d", outboxMaxDeliveryAttempts, attempts, hasNextRetry, len(lastErr))
+	}
+}
+
+func TestOutboxRelayPostJSONDrainsOversizedBodyForKeepAlive(t *testing.T) {
+	var newConns atomic.Int32
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(strings.Repeat("x", 8192)))
+	}))
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			newConns.Add(1)
+		}
+	}
+	server.Start()
+	defer server.Close()
+
+	client := &httpDownstreamClient{baseURL: server.URL, client: server.Client()}
+	for i := 0; i < 2; i++ {
+		if err := client.postJSON(context.Background(), "/internal/v1/test", map[string]string{"ok": "1"}); err != nil {
+			t.Fatalf("postJSON attempt %d err = %v", i+1, err)
+		}
+	}
+	if got := newConns.Load(); got != 1 {
+		t.Fatalf("new connections = %d, want 1 (keep-alive connection reused after draining response body)", got)
 	}
 }

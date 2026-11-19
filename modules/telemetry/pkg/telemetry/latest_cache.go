@@ -194,6 +194,27 @@ func OpenRedisLatestCache(ctx context.Context, config RedisLatestCacheConfig) (*
 		return nil, fmt.Errorf("parse telemetry latest Redis URL: %w", err)
 	}
 	options.ClientName = "telemetry-runtime-latest-cache"
+	if options.DialTimeout <= 0 {
+		options.DialTimeout = 5 * time.Second
+	}
+	if options.ReadTimeout <= 0 {
+		options.ReadTimeout = 3 * time.Second
+	}
+	if options.WriteTimeout <= 0 {
+		options.WriteTimeout = 3 * time.Second
+	}
+	if options.PoolTimeout <= 0 {
+		options.PoolTimeout = 4 * time.Second
+	}
+	if options.PoolSize <= 0 || options.PoolSize > 32 {
+		options.PoolSize = 32
+	}
+	if options.MinIdleConns <= 0 || options.MinIdleConns > options.PoolSize {
+		options.MinIdleConns = 4
+	}
+	if options.ConnMaxIdleTime <= 0 {
+		options.ConnMaxIdleTime = 5 * time.Minute
+	}
 	client := redis.NewClient(options)
 	if err := client.Ping(ctx).Err(); err != nil {
 		_ = client.Close()

@@ -881,6 +881,7 @@ func (runtime *Runtime) startWorkers(ctx context.Context) {
 		for range workerCount {
 			go func() {
 				defer runtime.workers.Done()
+				defer observability.Recover(runtime.logger, runtime.metrics, "connectivity.uplink_worker")
 				runtime.runWorkerLoop(ctx)
 			}()
 		}
@@ -1755,7 +1756,7 @@ func (runtime *Runtime) processPrefix(ctx context.Context, gatewayID string, pen
 			result := outcome.Result
 			runtime.recordProcessingSuccess()
 			runtime.recordProcessingResult(result, elapsed)
-			runtime.logger.Info("mqtt_uplink_message_processed", "gateway_id", gatewayID, "message_id", result.MessageID, "message_type", result.MessageType,
+			runtime.logger.Debug("mqtt_uplink_message_processed", "gateway_id", gatewayID, "message_id", result.MessageID, "message_type", result.MessageType,
 				"trace_id", result.TraceID, "point_count", result.PointCount, "accepted", result.Accepted, "duplicate", result.Duplicate, "out_of_order", result.OutOfOrder,
 				"quarantined", result.Quarantined, "rejected", result.Rejected)
 		}

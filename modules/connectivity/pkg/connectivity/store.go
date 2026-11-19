@@ -90,6 +90,18 @@ func openConfig(databaseURL string) (*pgxpool.Config, error) {
 		return nil, err
 	}
 	config.MaxConns = maxConns
+	if config.MinConns <= 0 {
+		config.MinConns = min(int32(2), maxConns)
+	}
+	if config.MaxConnLifetime <= 0 {
+		config.MaxConnLifetime = 30 * time.Minute
+	}
+	if config.MaxConnIdleTime <= 0 {
+		config.MaxConnIdleTime = 5 * time.Minute
+	}
+	if config.HealthCheckPeriod <= 0 {
+		config.HealthCheckPeriod = 30 * time.Second
+	}
 	return config, nil
 }
 
@@ -140,6 +152,13 @@ func (store *Store) Close() {
 	}
 }
 
+func (store *Store) Ping(ctx context.Context) error {
+	if store == nil || store.pool == nil {
+		return errors.New("connectivity PostgreSQL pool is unavailable")
+	}
+	return store.pool.Ping(ctx)
+}
+
 func (store *Store) PrepareCommandCorrelation(ctx context.Context, correlation commandmodel.CommandCorrelation) (commandmodel.CommandCorrelation, error) {
 	if correlation.State != commandmodel.CorrelationPrepared {
 		return commandmodel.CommandCorrelation{}, ErrCorrelationMismatch
@@ -151,16 +170,17 @@ func (store *Store) PrepareCommandCorrelation(ctx context.Context, correlation c
 			return commandmodel.CommandCorrelation{}, err
 		}
 		defer tx.Rollback(ctx)
+		normalizedTraceID := commandmodel.NormalizeTraceID(correlation.Envelope.TraceID)
 		_, err = tx.Exec(ctx, `
 INSERT INTO connectivity.command_reply_correlations (
   attempt_id, execution_fence, command_id, tenant_id, site_id, gateway_id,
   device_id, point_id, capability, external_device_id, payload_hash, lease_owner, lease_until,
   mapping_revision, binding_revision, provider_endpoint, provider_method,
-  request_sha256, state, prepared_at, updated_at
+  request_sha256, state, prepared_at, updated_at, trace_id
 ) VALUES (
   $1::uuid, $2, $3::uuid, $4::uuid, $5::uuid, $6::uuid,
   $7::uuid, $8::uuid, $9, $10, $11, $12, $13,
-  $14, $15, $16, $17, $18, 'PREPARED', $19, $19
+  $14, $15, $16, $17, $18, 'PREPARED', $19, $19, $20
 )
 ON CONFLICT (attempt_id, execution_fence) DO NOTHING
 `, correlation.Envelope.AttemptID, correlation.Envelope.ExecutionFence, correlation.Envelope.CommandID,
@@ -168,7 +188,7 @@ ON CONFLICT (attempt_id, execution_fence) DO NOTHING
 			correlation.Envelope.DeviceID, correlation.Envelope.PointID, string(correlation.Envelope.Capability), correlation.ExternalDeviceID,
 			correlation.Envelope.PayloadHash, correlation.Envelope.LeaseOwner, correlation.Envelope.LeaseUntil.UTC(),
 			correlation.MappingRevision, correlation.BindingRevision,
-			correlation.ProviderEndpoint, correlation.ProviderMethod, correlation.RequestSHA256, correlation.PreparedAt.UTC())
+			correlation.ProviderEndpoint, correlation.ProviderMethod, correlation.RequestSHA256, correlation.PreparedAt.UTC(), normalizedTraceID)
 		if err != nil {
 			return commandmodel.CommandCorrelation{}, fmt.Errorf("prepare durable command correlation: %w", err)
 		}
@@ -377,7 +397,7 @@ SELECT attempt_id::text, execution_fence, command_id::text, tenant_id::text, sit
        payload_hash, lease_owner, lease_until, mapping_revision, binding_revision,
        provider_endpoint, provider_method, request_sha256, prepared_at, state,
        COALESCE(reply_sha256, ''), COALESCE(reply_status, ''), reply_event_time,
-       COALESCE(reply_reason_code, ''), reply_execution_evidence, replied_at
+       COALESCE(reply_reason_code, ''), reply_execution_evidence, replied_at, trace_id
 FROM connectivity.command_reply_correlations
 `
 
@@ -403,7 +423,7 @@ func scanCorrelation(row rowScanner) (commandmodel.CommandCorrelation, error) {
 		&correlation.Envelope.PayloadHash, &correlation.Envelope.LeaseOwner, &correlation.Envelope.LeaseUntil,
 		&correlation.MappingRevision, &correlation.BindingRevision,
 		&correlation.ProviderEndpoint, &correlation.ProviderMethod, &correlation.RequestSHA256, &correlation.PreparedAt,
-		&state, &correlation.ReplySHA256, &correlation.ReplyStatus, &replyEventTime, &correlation.ReplyReasonCode, &edgeExecutionJSON, &repliedAt,
+		&state, &correlation.ReplySHA256, &correlation.ReplyStatus, &replyEventTime, &correlation.ReplyReasonCode, &edgeExecutionJSON, &repliedAt, &correlation.Envelope.TraceID,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return commandmodel.CommandCorrelation{}, fmt.Errorf("%w: %w", ErrNotFound, commandmodel.ErrCommandCorrelationNotFound)
@@ -412,6 +432,7 @@ func scanCorrelation(row rowScanner) (commandmodel.CommandCorrelation, error) {
 		return commandmodel.CommandCorrelation{}, fmt.Errorf("scan command correlation: %w", err)
 	}
 	correlation.Envelope.Capability = commandmodel.Capability(capability)
+	correlation.Envelope.TraceID = commandmodel.NormalizeTraceID(correlation.Envelope.TraceID)
 	correlation.State = commandmodel.CorrelationState(state)
 	if len(edgeExecutionJSON) > 0 {
 		var evidence commandmodel.EdgeExecutionEvidence
@@ -433,7 +454,9 @@ func sameCorrelationIdentity(left, right commandmodel.CommandCorrelation) bool {
 	return left.Envelope.AttemptID == right.Envelope.AttemptID && left.Envelope.ExecutionFence == right.Envelope.ExecutionFence &&
 		left.Envelope.CommandID == right.Envelope.CommandID && left.Envelope.TenantID == right.Envelope.TenantID &&
 		left.Envelope.SiteID == right.Envelope.SiteID && left.Envelope.DeviceID == right.Envelope.DeviceID &&
-		left.Envelope.PointID == right.Envelope.PointID && left.Envelope.Capability == right.Envelope.Capability &&
+		left.Envelope.PointID == right.Envelope.PointID &&
+		commandmodel.NormalizeTraceID(left.Envelope.TraceID) == commandmodel.NormalizeTraceID(right.Envelope.TraceID) &&
+		left.Envelope.Capability == right.Envelope.Capability &&
 		left.Envelope.PayloadHash == right.Envelope.PayloadHash &&
 		left.Envelope.LeaseOwner == right.Envelope.LeaseOwner && left.GatewayID == right.GatewayID &&
 		left.ExternalDeviceID == right.ExternalDeviceID &&

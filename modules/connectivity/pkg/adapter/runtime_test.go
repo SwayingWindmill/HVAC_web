@@ -1516,7 +1516,7 @@ func TestGatewayGaugeLeakFixedOnReapEvictAndClose(t *testing.T) {
 
 func TestRuntimeCatalogMetricsOnlineGatewaysTraceLogsAndPacketHook(t *testing.T) {
 	var logBuf syncLogBuffer
-	logger := observability.NewJSONLogger(&logBuf, slog.LevelInfo)
+	logger := observability.NewJSONLogger(&logBuf, slog.LevelDebug)
 	registry := observability.NewRegistry()
 	tracer := observability.NewTracer("mqtt-telemetry-adapter", nil)
 

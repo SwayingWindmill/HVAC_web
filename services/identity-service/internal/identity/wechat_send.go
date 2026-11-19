@@ -125,7 +125,7 @@ func (weChat *WeChat) post(ctx context.Context, path string, body []byte, into a
 	if err != nil {
 		return errWeChatUnclear
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	if response.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(into) != nil {
 		return errWeChatUnclear
 	}

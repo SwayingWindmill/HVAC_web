@@ -92,17 +92,21 @@ func (w *Worker) process(ctx context.Context, job Job) {
 			if renewErr != nil {
 				cancel()
 				w.Logger.Warn("maintenance_job_lease_lost", "job_type", job.Type, "error_code", "MAINTENANCE_JOB_LEASE_LOST")
+				<-done
 				return
 			}
 			if cancelRequested {
 				cancel()
 				_ = w.Store.CancelJob(context.Background(), job, time.Now().UTC())
+				<-done
 				return
 			}
 		case <-execCtx.Done():
 			if errors.Is(execCtx.Err(), context.DeadlineExceeded) {
 				_ = w.Store.FailJob(context.Background(), job, "MAINTENANCE_JOB_TIMEOUT", execCtx.Err(), true, time.Now().UTC())
 			}
+			cancel()
+			<-done
 			return
 		}
 	}

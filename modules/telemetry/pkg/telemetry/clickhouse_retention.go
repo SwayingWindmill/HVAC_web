@@ -498,6 +498,13 @@ func buildClickHouseRetentionDelete(target clickHouseRetentionTarget, cutoff tim
 	return fmt.Sprintf("ALTER TABLE %s.%s DELETE WHERE %s", target.database, target.table, where), params
 }
 
+func (pruner *ClickHouseRetentionPruner) Ping(ctx context.Context) error {
+	if pruner == nil || pruner.baseURL == nil || pruner.httpClient == nil {
+		return errors.New("ClickHouse retention pruner is closed")
+	}
+	return pingClickHouseHTTP(ctx, pruner.baseURL, pruner.username, pruner.password, pruner.httpClient, "ClickHouse retention ping")
+}
+
 func (pruner *ClickHouseRetentionPruner) execQuery(ctx context.Context, qualifiedTable, opLabel, sql string, params url.Values) ([]byte, error) {
 	endpoint := *pruner.baseURL
 	endpoint.RawQuery = params.Encode()
@@ -514,7 +521,7 @@ func (pruner *ClickHouseRetentionPruner) execQuery(ctx context.Context, qualifie
 		return nil, fmt.Errorf("ClickHouse retention %s for %s: %w", opLabel, qualifiedTable, err)
 	}
 	body, readErr := io.ReadAll(io.LimitReader(response.Body, 1<<20))
-	_, _ = io.Copy(io.Discard, response.Body)
+	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
 	closeErr := response.Body.Close()
 	if readErr != nil {
 		return nil, fmt.Errorf("read ClickHouse retention %s response for %s: %w", opLabel, qualifiedTable, readErr)

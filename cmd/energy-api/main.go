@@ -9,12 +9,15 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -34,64 +37,87 @@ var (
 )
 
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
+	logger := observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
 	telemetry := observability.NewRuntime(observability.RuntimeConfig{
 		Service: "platform-gateway", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
-		QueueSize: 1024, ExportTimeout: 500 * time.Millisecond,
+		QueueSize: 1024, ExportTimeout: 500 * time.Millisecond, Logger: logger,
 	})
-	logger := observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
 	address := envOr("PLATFORM_GATEWAY_ADDR", ":8080")
 	runContext, cancelRun := context.WithCancel(context.Background())
-	defer cancelRun()
-	embeddedServices, err := startEmbeddedEnergyServices(runContext, logger)
+
+	var bgWG sync.WaitGroup
+	var embeddedServices *embeddedEnergyServices
+	var closers []func()
+	addCloser := func(fn func()) {
+		if fn != nil {
+			closers = append(closers, fn)
+		}
+	}
+	var gatewayShutdownDone bool
+	defer func() {
+		if !gatewayShutdownDone {
+			cleanupGatewayRuntime(telemetry, embeddedServices, cancelRun, &bgWG, 10*time.Second)
+		}
+		for i := len(closers) - 1; i >= 0; i-- {
+			closers[i]()
+		}
+	}()
+
+	var err error
+	embeddedServices, err = startEmbeddedEnergyServices(runContext, logger)
 	if err != nil {
 		logger.Error("energy_api_embedded_services_invalid", "error_code", "ENERGY_API_EMBEDDED_SERVICES_INVALID", "cause", err.Error())
-		os.Exit(1)
+		return 1
 	}
-	defer embeddedServices.Close()
+	addCloser(embeddedServices.Close)
 	attachEmbeddedTelemetry(telemetry, embeddedServices)
 	identity, workloadCertificate, closeIdentity, err := loadIdentityConfig(runContext)
 	if err != nil {
-		logger.Error("gateway_identity_config_invalid", "error_code", "IDENTITY_CONFIG_INVALID")
-		os.Exit(1)
+		logger.Error("gateway_identity_config_invalid", "error_code", "IDENTITY_CONFIG_INVALID", "cause", err.Error())
+		return 1
 	}
-	defer closeIdentity()
+	addCloser(closeIdentity)
 	if identity != nil && identity.ReadinessCheck != nil {
 		telemetry.SetDependencies(observability.Dependency{Name: "postgres-session", Required: true, Check: identity.ReadinessCheck})
 	}
 	telemetryConfig, err := loadTelemetryConfig(workloadCertificate)
 	if err != nil {
 		logger.Error("gateway_telemetry_config_invalid", "error_code", "TELEMETRY_CONFIG_INVALID")
-		os.Exit(1)
+		return 1
 	}
 	commandConfig, err := loadCommandConfig(workloadCertificate)
 	if err != nil {
 		logger.Error("gateway_command_config_invalid", "error_code", "COMMAND_CONFIG_INVALID")
-		os.Exit(1)
+		return 1
 	}
 	alarmConfig, err := loadAlarmConfig(workloadCertificate)
 	if err != nil {
 		logger.Error("gateway_alarm_config_invalid", "error_code", "ALARM_CONFIG_INVALID")
-		os.Exit(1)
+		return 1
 	}
 	notificationConfig, err := loadNotificationConfig(workloadCertificate)
 	if err != nil {
 		logger.Error("gateway_notification_config_invalid", "error_code", "NOTIFICATION_CONFIG_INVALID")
-		os.Exit(1)
+		return 1
 	}
 	workOrderConfig, err := loadWorkOrderConfig(workloadCertificate)
 	if err != nil {
 		logger.Error("gateway_work_order_config_invalid", "error_code", "WORK_ORDER_CONFIG_INVALID")
-		os.Exit(1)
+		return 1
 	}
 	analyticsConfig, err := loadAnalyticsConfig(workloadCertificate)
 	if err != nil {
 		logger.Error("gateway_analytics_config_invalid", "error_code", "ANALYTICS_CONFIG_INVALID")
-		os.Exit(1)
+		return 1
 	}
 	ownerClient, err := loadIntelligenceOwnerClient(workloadCertificate)
 	if err != nil {
 		logger.Error("gateway_intelligence_config_invalid", "error_code", "INTELLIGENCE_CONFIG_INVALID")
-		os.Exit(1)
+		return 1
 	}
 	intelligenceConfig := &gateway.IntelligenceConfig{
 		ForecastBaseURL:     envOr("FORECAST_SERVICE_URL", "https://forecast-service:19092"),
@@ -105,39 +131,52 @@ func main() {
 	operationsConfig, closeOperations, err := loadOperationsConfig(runContext, workloadCertificate)
 	if err != nil {
 		logger.Error("gateway_operations_config_invalid", "error_code", "OPERATIONS_CONFIG_INVALID")
-		os.Exit(1)
+		return 1
 	}
-	defer closeOperations()
+	addCloser(closeOperations)
 	rateLimiter, closeRateLimiter, err := loadRateLimiter(runContext)
 	if err != nil {
 		logger.Error("gateway_limit_policy_config_invalid", "error_code", "LIMIT_POLICY_CONFIG_INVALID")
-		os.Exit(1)
+		return 1
 	}
-	defer closeRateLimiter()
+	addCloser(closeRateLimiter)
 	if operationsConfig != nil {
 		operationsConfig.RateLimiter = rateLimiter
 	}
 	serverTLSConfig, serverTLSEnabled, err := loadGatewayServerTLSConfig()
 	if err != nil {
 		logger.Error("gateway_server_tls_config_invalid", "error_code", "GATEWAY_SERVER_TLS_CONFIG_INVALID")
-		os.Exit(1)
+		return 1
 	}
 
 	routing, err := loadRoutingRuntime(runContext, logger, identity != nil)
 	if err != nil {
 		logger.Error("gateway_route_config_invalid", "error_code", "ROUTE_CONFIG_INVALID", "cause", err.Error())
-		os.Exit(1)
+		return 1
 	}
-	defer routing.close()
-	go routing.watch(runContext)
+	addCloser(routing.close)
+	bgWG.Add(1)
+	go func() {
+		defer bgWG.Done()
+		defer observability.Recover(logger, telemetry.Metrics, "gateway.routing_watcher")
+		routing.watch(runContext)
+	}()
+
 	var connectivityConfig *gateway.ConnectivityConfig
 	if workloadCertificate != nil {
 		roots, err := loadCertPool(envOr("CONNECTIVITY_SERVER_CA", "/run/hvac/gateway-ca/ca.crt"), "Connectivity server CA")
 		if err != nil {
 			logger.Error("connectivity_client_config_invalid", "error_code", "CONNECTIVITY_CLIENT_CONFIG_INVALID")
-			os.Exit(1)
+			return 1
 		}
-		connectivityConfig = &gateway.ConnectivityConfig{BaseURL: envOr("CONNECTIVITY_SERVICE_URL", "https://connectivity:8448"), HTTPClient: &http.Client{Timeout: 25 * time.Second, Transport: workloadTransport(roots, workloadCertificate, "connectivity"), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+		connectivityConfig = &gateway.ConnectivityConfig{
+			BaseURL: envOr("CONNECTIVITY_SERVICE_URL", "https://connectivity:8448"),
+			HTTPClient: &http.Client{
+				Timeout:       25 * time.Second,
+				Transport:     workloadTransport(roots, workloadCertificate, "connectivity"),
+				CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+			},
+		}
 	}
 
 	var handler = gateway.NewHandler(gateway.Config{
@@ -167,7 +206,7 @@ func main() {
 	handler, err = withRealtimeProxy(handler, logger)
 	if err != nil {
 		logger.Error("gateway_realtime_config_invalid", "error_code", "REALTIME_CONFIG_INVALID")
-		os.Exit(1)
+		return 1
 	}
 	server := &http.Server{
 		Addr:              address,
@@ -182,54 +221,195 @@ func main() {
 		Addr: envOr("PLATFORM_GATEWAY_DIAGNOSTICS_ADDR", "127.0.0.1:19080"), Handler: telemetry.DiagnosticsHandler(),
 		ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second,
 	}
-	go func() {
-		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Error("gateway_diagnostics_failed", "error_code", "DIAGNOSTICS_SERVE_FAILED")
-		}
-	}()
 	internal, err := loadGatewayInternalServer(handler)
 	if err != nil {
 		logger.Error("gateway_internal_config_invalid", "error_code", "GATEWAY_INTERNAL_CONFIG_INVALID")
-		os.Exit(1)
+		return 1
 	}
+
+	sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	serveErr := make(chan error, 3)
+	var httpWG sync.WaitGroup
+	httpWG.Add(1)
+	go func() {
+		defer httpWG.Done()
+		defer observability.Recover(logger, telemetry.Metrics, "gateway.diagnostics_server", func(any) {
+			select {
+			case serveErr <- errors.New("diagnostics server panicked"):
+			default:
+			}
+		})
+		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("gateway_diagnostics_failed", "error_code", "DIAGNOSTICS_SERVE_FAILED")
+			select {
+			case serveErr <- fmt.Errorf("diagnostics server: %w", err):
+			default:
+			}
+		}
+	}()
 	if internal != nil {
+		httpWG.Add(1)
 		go func() {
+			defer httpWG.Done()
+			defer observability.Recover(logger, telemetry.Metrics, "gateway.internal_server", func(any) {
+				select {
+				case serveErr <- errors.New("internal server panicked"):
+				default:
+				}
+			})
 			if err := internal.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				logger.Error("gateway_internal_failed", "error_code", "GATEWAY_INTERNAL_SERVE_FAILED")
+				select {
+				case serveErr <- fmt.Errorf("internal server: %w", err):
+				default:
+				}
 			}
 		}()
 	}
 
-	shutdownSignal := make(chan os.Signal, 1)
-	signal.Notify(shutdownSignal, syscall.SIGINT, syscall.SIGTERM)
+	httpWG.Add(1)
 	go func() {
-		<-shutdownSignal
-		telemetry.MarkNotReady()
-		cancelRun()
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := server.Shutdown(ctx); err != nil {
-			logger.Error("gateway_shutdown_failed", "error_code", "GATEWAY_SHUTDOWN_FAILED")
+		defer httpWG.Done()
+		defer observability.Recover(logger, telemetry.Metrics, "gateway.public_server", func(any) {
+			select {
+			case serveErr <- errors.New("public server panicked"):
+			default:
+			}
+		})
+		telemetry.MarkReady()
+		logger.Info("gateway_started", "service", "platform-gateway", "address", address, "version", version, "commit", commit, "identity_enabled", identity != nil, "tls_enabled", serverTLSEnabled)
+		serve := server.ListenAndServe
+		if serverTLSEnabled {
+			serve = func() error { return server.ListenAndServeTLS("", "") }
 		}
-		embeddedServices.Shutdown(ctx)
-		if internal != nil {
-			_ = internal.Shutdown(ctx)
+		if err := serve(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("gateway_stopped_unexpectedly", "error_code", "GATEWAY_SERVE_FAILED")
+			select {
+			case serveErr <- fmt.Errorf("public server: %w", err):
+			default:
+			}
 		}
-		_ = diagnostics.Shutdown(ctx)
-		_ = telemetry.Shutdown(ctx)
 	}()
 
-	telemetry.MarkReady()
-	logger.Info("gateway_started", "service", "platform-gateway", "address", address, "version", version, "commit", commit, "identity_enabled", identity != nil, "tls_enabled", serverTLSEnabled)
-	serve := server.ListenAndServe
-	if serverTLSEnabled {
-		serve = func() error { return server.ListenAndServeTLS("", "") }
+	exitCode := 0
+	select {
+	case <-sigCtx.Done():
+		logger.Info("gateway_shutdown_requested", "service", "platform-gateway")
+	case <-serveErr:
+		exitCode = 1
+	case embErr := <-embeddedServices.ServeErr():
+		logger.Error("gateway_embedded_service_failed", "error_code", "ENERGY_API_EMBEDDED_SERVICE_FAILED", "cause", embErr.Error())
+		exitCode = 1
 	}
-	if err := serve(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		logger.Error("gateway_stopped_unexpectedly", "error_code", "GATEWAY_SERVE_FAILED")
-		os.Exit(1)
-	}
+
+	shutdownGateway(logger, telemetry, embeddedServices, server, internal, diagnostics, &httpWG, cancelRun, &bgWG, 10*time.Second)
+	gatewayShutdownDone = true
 	logger.Info("gateway_stopped", "service", "platform-gateway")
+	return exitCode
+}
+
+func cleanupGatewayRuntime(
+	telemetry *observability.Runtime,
+	embeddedServices *embeddedEnergyServices,
+	cancelRun context.CancelFunc,
+	bgWG *sync.WaitGroup,
+	shutdownTimeout time.Duration,
+) {
+	if shutdownTimeout <= 0 {
+		shutdownTimeout = 10 * time.Second
+	}
+	if telemetry != nil {
+		telemetry.MarkNotReady()
+	}
+	embeddedServices.MarkNotReady()
+	if embeddedServices != nil {
+		httpCtx, cancelHTTP := context.WithTimeout(context.Background(), shutdownTimeout)
+		embeddedServices.ShutdownHTTP(httpCtx)
+		cancelHTTP()
+	}
+	if cancelRun != nil {
+		cancelRun()
+	}
+	if bgWG != nil {
+		bgWG.Wait()
+	}
+	embeddedServices.WaitBackground()
+	obsCtx, cancelObs := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelObs()
+	embeddedServices.ShutdownTelemetry(obsCtx)
+	if telemetry != nil {
+		_ = telemetry.Shutdown(obsCtx)
+	}
+}
+
+func shutdownGateway(
+	logger *slog.Logger,
+	telemetry *observability.Runtime,
+	embeddedServices *embeddedEnergyServices,
+	publicServer *http.Server,
+	internalServer *http.Server,
+	diagnosticsServer *http.Server,
+	httpWG *sync.WaitGroup,
+	cancelRun context.CancelFunc,
+	bgWG *sync.WaitGroup,
+	shutdownTimeout time.Duration,
+) {
+	telemetry.MarkNotReady()
+	embeddedServices.MarkNotReady()
+
+	shutdownDone := make(chan struct{})
+	go func() {
+		defer close(shutdownDone)
+		defer observability.Recover(logger, telemetry.Metrics, "gateway.http_shutdown")
+		drainCtx, cancelDrain := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancelDrain()
+
+		var ingressWG sync.WaitGroup
+		for _, srv := range []*http.Server{publicServer, internalServer} {
+			if srv == nil {
+				continue
+			}
+			ingressWG.Add(1)
+			go func(target *http.Server) {
+				defer ingressWG.Done()
+				if err := target.Shutdown(drainCtx); err != nil {
+					logger.Error("gateway_shutdown_failed", "error_code", "GATEWAY_SHUTDOWN_FAILED", "cause", err.Error())
+					_ = target.Close()
+				}
+			}(srv)
+		}
+		ingressWG.Wait()
+
+		embeddedServices.ShutdownHTTP(drainCtx)
+
+		if diagnosticsServer != nil {
+			if err := diagnosticsServer.Shutdown(drainCtx); err != nil {
+				logger.Warn("gateway_diagnostics_shutdown_failed", "error_code", "GATEWAY_DIAGNOSTICS_SHUTDOWN_FAILED", "cause", err.Error())
+				_ = diagnosticsServer.Close()
+			}
+		}
+		if httpWG != nil {
+			httpWG.Wait()
+		}
+	}()
+	<-shutdownDone
+
+	if cancelRun != nil {
+		cancelRun()
+	}
+	if bgWG != nil {
+		bgWG.Wait()
+	}
+	embeddedServices.WaitBackground()
+
+	obsCtx, cancelObs := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelObs()
+	embeddedServices.ShutdownTelemetry(obsCtx)
+	if err := telemetry.Shutdown(obsCtx); err != nil {
+		logger.Warn("gateway_telemetry_shutdown_failed", "error_code", "TELEMETRY_SHUTDOWN_FAILED", "cause", err.Error())
+	}
 }
 
 func loadIdentityConfig(ctx context.Context) (*gateway.IdentityConfig, *tls.Certificate, func(), error) {
@@ -257,7 +437,7 @@ func loadIdentityConfig(ctx context.Context) (*gateway.IdentityConfig, *tls.Cert
 	if err != nil {
 		return nil, nil, func() {}, err
 	}
-	oidcClient := &http.Client{Timeout: 5 * time.Second}
+	oidcClient := &http.Client{Timeout: 5 * time.Second, Transport: cloneDefaultTransportWithTLS(nil)}
 	if oidcCAPath := os.Getenv("OIDC_SERVER_CA"); oidcCAPath != "" {
 		oidcRoots, err := loadCertPool(oidcCAPath, "OIDC server CA")
 		if err != nil {
@@ -493,7 +673,7 @@ func loadTelemetryConfig(certificate *tls.Certificate) (*gateway.TelemetryConfig
 		RuntimeAudience:   envOr("TELEMETRY_RUNTIME_AUDIENCE", "telemetry-runtime-service"),
 		Timeout:           2 * time.Second,
 		MaxResponseBytes:  2 << 20,
-		RuntimeHTTPClient: &http.Client{Transport: workloadTransport(roots, certificate, envOr("TELEMETRY_RUNTIME_SERVER_NAME", "localhost"))},
+		RuntimeHTTPClient: &http.Client{Timeout: 5 * time.Second, Transport: workloadTransport(roots, certificate, envOr("TELEMETRY_RUNTIME_SERVER_NAME", "localhost"))},
 	}, nil
 }
 
@@ -519,7 +699,7 @@ func loadCommandConfig(certificate *tls.Certificate) (*gateway.CommandConfig, er
 		IAMGrantIssuer:    envOr("IAM_COMMAND_GRANT_ISSUER", "spiffe://hvac.local/iam-service"),
 		Timeout:           10 * time.Second,
 		MaxResponseBytes:  256 << 10,
-		BackendHTTPClient: &http.Client{Transport: workloadTransport(roots, certificate, envOr("COMMAND_SERVICE_SERVER_NAME", "localhost"))},
+		BackendHTTPClient: &http.Client{Timeout: 15 * time.Second, Transport: workloadTransport(roots, certificate, envOr("COMMAND_SERVICE_SERVER_NAME", "localhost"))},
 	}, nil
 }
 
@@ -562,7 +742,7 @@ func loadAlarmConfig(certificate *tls.Certificate) (*gateway.AlarmConfig, error)
 		BackendAudience:  envOr("ALARM_SERVICE_AUDIENCE", "alarm-service"),
 		Timeout:          5 * time.Second,
 		MaxResponseBytes: 2 << 20,
-		BackendHTTPClient: &http.Client{Transport: workloadTransport(
+		BackendHTTPClient: &http.Client{Timeout: 10 * time.Second, Transport: workloadTransport(
 			roots,
 			certificate,
 			envOr("ALARM_SERVICE_SERVER_NAME", "localhost"),
@@ -596,7 +776,7 @@ func loadNotificationConfig(certificate *tls.Certificate) (*gateway.Notification
 		BackendAudience:  envOr("NOTIFICATION_SERVICE_AUDIENCE", "notification-service"),
 		Timeout:          5 * time.Second,
 		MaxResponseBytes: 2 << 20,
-		BackendHTTPClient: &http.Client{Transport: workloadTransport(
+		BackendHTTPClient: &http.Client{Timeout: 10 * time.Second, Transport: workloadTransport(
 			roots, certificate, envOr("NOTIFICATION_SERVICE_SERVER_NAME", "localhost"),
 		)},
 	}, nil
@@ -628,7 +808,7 @@ func loadWorkOrderConfig(certificate *tls.Certificate) (*gateway.WorkOrderConfig
 		BackendAudience:  envOr("WORK_ORDER_SERVICE_AUDIENCE", "work-order-service"),
 		Timeout:          5 * time.Second,
 		MaxResponseBytes: 2 << 20,
-		BackendHTTPClient: &http.Client{Transport: workloadTransport(
+		BackendHTTPClient: &http.Client{Timeout: 10 * time.Second, Transport: workloadTransport(
 			roots, certificate, envOr("WORK_ORDER_SERVICE_SERVER_NAME", "localhost"),
 		)},
 	}, nil
@@ -661,7 +841,7 @@ func loadAnalyticsConfig(certificate *tls.Certificate) (*gateway.AnalyticsConfig
 		QueryAudience:    envOr("TELEMETRY_QUERY_AUDIENCE", "telemetry-query-service"),
 		Timeout:          8 * time.Second,
 		MaxResponseBytes: 8 << 20,
-		QueryHTTPClient:  &http.Client{Transport: workloadTransport(roots, certificate, envOr("TELEMETRY_QUERY_SERVER_NAME", "localhost"))},
+		QueryHTTPClient:  &http.Client{Timeout: 15 * time.Second, Transport: workloadTransport(roots, certificate, envOr("TELEMETRY_QUERY_SERVER_NAME", "localhost"))},
 	}, nil
 }
 
@@ -706,7 +886,70 @@ func workloadTransport(roots *x509.CertPool, certificate *tls.Certificate, serve
 	if certificate != nil {
 		config.Certificates = []tls.Certificate{*certificate}
 	}
-	return &http.Transport{TLSClientConfig: config}
+	return cloneDefaultTransportWithTLS(config)
+}
+
+func cloneDefaultTransportWithTLS(tlsConfig *tls.Config) *http.Transport {
+	base, ok := http.DefaultTransport.(*http.Transport)
+	if !ok || base == nil {
+		base = &http.Transport{}
+	}
+	cloned := base.Clone()
+	cloned.DialContext = (&net.Dialer{
+		Timeout:   5 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext
+	cloned.TLSHandshakeTimeout = 5 * time.Second
+	cloned.IdleConnTimeout = 90 * time.Second
+	if cloned.MaxIdleConns <= 0 {
+		cloned.MaxIdleConns = 100
+	}
+	if cloned.MaxIdleConnsPerHost <= 0 || cloned.MaxIdleConnsPerHost < 16 {
+		cloned.MaxIdleConnsPerHost = 16
+	}
+	if tlsConfig != nil {
+		cloned.TLSClientConfig = tlsConfig
+	}
+	return cloned
+}
+
+const maxDrainBodyBytes = 64 << 10
+
+func drainAndCloseBody(body io.ReadCloser) {
+	if body == nil {
+		return
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(body, maxDrainBodyBytes))
+	_ = body.Close()
+}
+
+func applyRedisClientBounds(options *redis.Options) {
+	if options == nil {
+		return
+	}
+	if options.DialTimeout <= 0 || options.DialTimeout > 5*time.Second {
+		options.DialTimeout = 3 * time.Second
+	}
+	if options.ReadTimeout <= 0 || options.ReadTimeout > 5*time.Second {
+		options.ReadTimeout = 2 * time.Second
+	}
+	if options.WriteTimeout <= 0 || options.WriteTimeout > 5*time.Second {
+		options.WriteTimeout = 2 * time.Second
+	}
+	if options.PoolTimeout <= 0 || options.PoolTimeout > 5*time.Second {
+		options.PoolTimeout = 3 * time.Second
+	}
+	if options.PoolSize < 4 {
+		options.PoolSize = 16
+	} else if options.PoolSize > 32 {
+		options.PoolSize = 32
+	}
+	if options.MinIdleConns < 2 {
+		options.MinIdleConns = 2
+	}
+	if options.MinIdleConns > options.PoolSize {
+		options.MinIdleConns = options.PoolSize
+	}
 }
 
 func loadCertPool(path, label string) (*x509.CertPool, error) {
@@ -749,6 +992,7 @@ func loadRateLimiter(ctx context.Context) (*limitpolicy.Limiter, func(), error) 
 	if err != nil {
 		return nil, func() {}, fmt.Errorf("parse LIMIT_POLICY_REDIS_URL: %w", err)
 	}
+	applyRedisClientBounds(options)
 	client := redis.NewClient(options)
 	pingContext, cancel := context.WithTimeout(ctx, 5*time.Second)
 	err = client.Ping(pingContext).Err()

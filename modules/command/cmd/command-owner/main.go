@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -28,64 +29,127 @@ import (
 )
 
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
 	logger := observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
 	telemetry := observability.NewRuntime(observability.RuntimeConfig{
 		Service: "command-service", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 2048, ExportTimeout: 500 * time.Millisecond,
 	})
-
-	certFiles := workloadtls.CertificateFiles{
-		CertificatePath: requiredEnv("COMMAND_TLS_CERT"),
-		PrivateKeyPath:  requiredEnv("COMMAND_TLS_KEY"),
+	var telemetryShutdownOnce sync.Once
+	shutdownTelemetry := func(ctx context.Context) error {
+		var shutdownErr error
+		telemetryShutdownOnce.Do(func() {
+			shutdownErr = telemetry.Shutdown(ctx)
+		})
+		return shutdownErr
 	}
-	clientCAPath := requiredEnv("COMMAND_CLIENT_CA")
+	var (
+		store         *commandservice.PostgresStore
+		authority     *commandservice.ControlAuthority
+		runtimeCloser interface{ Close() }
+	)
+	defer func() {
+		if runtimeCloser != nil {
+			runtimeCloser.Close()
+		}
+		if authority != nil {
+			authority.Close()
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = shutdownTelemetry(ctx)
+		cancel()
+		if store != nil {
+			store.Close()
+		}
+	}()
+
+	certPath, err := requiredEnv("COMMAND_TLS_CERT")
+	if err != nil {
+		logEnvError(logger, "command_tls_configuration_invalid", "COMMAND_TLS_CONFIGURATION_INVALID", err)
+		return 1
+	}
+	keyPath, err := requiredEnv("COMMAND_TLS_KEY")
+	if err != nil {
+		logEnvError(logger, "command_tls_configuration_invalid", "COMMAND_TLS_CONFIGURATION_INVALID", err)
+		return 1
+	}
+	clientCAPath, err := requiredEnv("COMMAND_CLIENT_CA")
+	if err != nil {
+		logEnvError(logger, "command_tls_configuration_invalid", "COMMAND_TLS_CONFIGURATION_INVALID", err)
+		return 1
+	}
+	certFiles := workloadtls.CertificateFiles{
+		CertificatePath: certPath,
+		PrivateKeyPath:  keyPath,
+	}
 	serverTLSConfig, err := workloadtls.NewServerTLSConfig(workloadtls.ServerConfig{
 		CertificateFiles: certFiles,
 		ClientCAPath:     clientCAPath,
 	})
 	if err != nil {
 		logger.Error("command_tls_configuration_invalid", "error_code", "COMMAND_TLS_CONFIGURATION_INVALID")
-		os.Exit(1)
+		return 1
 	}
 	tlsCert, err := tls.LoadX509KeyPair(certFiles.CertificatePath, certFiles.PrivateKeyPath)
 	if err != nil {
 		logger.Error("command_tls_configuration_invalid", "error_code", "COMMAND_TLS_CONFIGURATION_INVALID")
-		os.Exit(1)
+		return 1
 	}
 	delegationSigner, ok := tlsCert.PrivateKey.(crypto.Signer)
 	if !ok {
 		logger.Error("command_tls_configuration_invalid", "error_code", "COMMAND_TLS_CONFIGURATION_INVALID")
-		os.Exit(1)
+		return 1
 	}
-	commandGrantPublicKey, err := loadCertificatePublicKey(requiredEnv("COMMAND_IAM_GRANT_CERT"))
+	commandGrantCertPath, err := requiredEnv("COMMAND_IAM_GRANT_CERT")
+	if err != nil {
+		logEnvError(logger, "command_iam_grant_key_load_failed", "COMMAND_IAM_GRANT_KEY_LOAD_FAILED", err)
+		return 1
+	}
+	commandGrantPublicKey, err := loadCertificatePublicKey(commandGrantCertPath)
 	if err != nil {
 		logger.Error("command_iam_grant_key_load_failed", "error_code", "COMMAND_IAM_GRANT_KEY_LOAD_FAILED")
-		os.Exit(1)
+		return 1
 	}
-	gatewayDelegationPublicKey, err := loadCertificatePublicKey(requiredEnv("COMMAND_GATEWAY_DELEGATION_CERT"))
+	gatewayDelegationCertPath, err := requiredEnv("COMMAND_GATEWAY_DELEGATION_CERT")
+	if err != nil {
+		logEnvError(logger, "command_gateway_delegation_key_load_failed", "COMMAND_GATEWAY_DELEGATION_KEY_LOAD_FAILED", err)
+		return 1
+	}
+	gatewayDelegationPublicKey, err := loadCertificatePublicKey(gatewayDelegationCertPath)
 	if err != nil {
 		logger.Error("command_gateway_delegation_key_load_failed", "error_code", "COMMAND_GATEWAY_DELEGATION_KEY_LOAD_FAILED")
-		os.Exit(1)
+		return 1
 	}
 
-	databaseURL, err := loadRequiredValueFile(requiredEnv("COMMAND_DATABASE_URL_FILE"), 64<<10)
+	databaseURLFile, err := requiredEnv("COMMAND_DATABASE_URL_FILE")
+	if err != nil {
+		logEnvError(logger, "command_database_reference_invalid", "COMMAND_DATABASE_REFERENCE_INVALID", err)
+		return 1
+	}
+	databaseURL, err := loadRequiredValueFile(databaseURLFile, 64<<10)
 	if err != nil {
 		logger.Error("command_database_reference_invalid", "error_code", "COMMAND_DATABASE_REFERENCE_INVALID")
-		os.Exit(1)
+		return 1
 	}
 	openContext, cancelOpen := context.WithTimeout(context.Background(), 10*time.Second)
-	store, err := commandservice.OpenPostgresStore(openContext, databaseURL)
+	store, err = commandservice.OpenPostgresStore(openContext, databaseURL)
 	cancelOpen()
 	if err != nil {
 		logger.Error("command_database_open_failed", "error_code", "COMMAND_DATABASE_OPEN_FAILED")
-		os.Exit(1)
+		return 1
 	}
-	defer store.Close()
 
-	policyRevision := requiredEnv("COMMAND_POLICY_REVISION")
+	policyRevision, err := requiredEnv("COMMAND_POLICY_REVISION")
+	if err != nil {
+		logEnvError(logger, "command_policy_revision_invalid", "COMMAND_POLICY_REVISION_INVALID", err)
+		return 1
+	}
 	revocationRevision, err := parseUint64Env("COMMAND_EMERGENCY_REVOCATION_REVISION")
 	if err != nil {
-		logger.Error("command_revocation_revision_invalid", "error_code", "COMMAND_REVOCATION_REVISION_INVALID")
-		os.Exit(1)
+		logEnvError(logger, "command_revocation_revision_invalid", "COMMAND_REVOCATION_REVISION_INVALID", err)
+		return 1
 	}
 	gatewaySPIFFE := envOr("COMMAND_GATEWAY_SPIFFE", "spiffe://hvac.local/platform-gateway")
 	commandServiceSPIFFE := envOr("COMMAND_WORKLOAD_SPIFFE", "spiffe://hvac.local/command-service")
@@ -107,7 +171,7 @@ func main() {
 	})
 	if err != nil {
 		logger.Error("command_adapters_configuration_invalid", "error_code", "COMMAND_ADAPTERS_CONFIGURATION_INVALID")
-		os.Exit(1)
+		return 1
 	}
 	alarmSender := buildCommandControlFailureSender(logger)
 	var alarmRelay *commandservice.ControlAlarmRelay
@@ -121,11 +185,11 @@ func main() {
 		})
 		if err != nil {
 			logger.Error("command_alarm_relay_configuration_invalid", "error_code", "COMMAND_ALARM_RELAY_CONFIGURATION_INVALID")
-			os.Exit(1)
+			return 1
 		}
 		store.SetControlAlarmOutboxWakeup(alarmRelay.Notify)
 	}
-	authority, err := commandservice.NewControlAuthority(commandservice.ControlAuthorityConfig{
+	authority, err = commandservice.NewControlAuthority(commandservice.ControlAuthorityConfig{
 		Store:                  store,
 		Runtime:                store,
 		Twin:                   adapters,
@@ -139,9 +203,8 @@ func main() {
 	})
 	if err != nil {
 		logger.Error("command_authority_configuration_invalid", "error_code", "COMMAND_AUTHORITY_CONFIGURATION_INVALID")
-		os.Exit(1)
+		return 1
 	}
-	defer authority.Close()
 
 	commandHandler, err := commandservice.NewHTTPHandler(commandservice.HTTPConfig{
 		Authority:                  store,
@@ -155,7 +218,7 @@ func main() {
 	})
 	if err != nil {
 		logger.Error("command_http_configuration_invalid", "error_code", "COMMAND_HTTP_CONFIGURATION_INVALID")
-		os.Exit(1)
+		return 1
 	}
 	operatorHandler, err := commandservice.NewOperatorHTTPHandler(commandservice.OperatorHTTPConfig{
 		Authority:                  authority,
@@ -165,15 +228,15 @@ func main() {
 	})
 	if err != nil {
 		logger.Error("command_operator_http_configuration_invalid", "error_code", "COMMAND_OPERATOR_HTTP_CONFIGURATION_INVALID")
-		os.Exit(1)
+		return 1
 	}
 	runtimeHandler, err := commandservice.NewRuntimeHTTPHandler(runtimeHTTPConfig(authority, telemetry.Metrics, nil))
 	if err != nil {
 		logger.Error("command_runtime_configuration_invalid", "error_code", "COMMAND_RUNTIME_CONFIGURATION_INVALID")
-		os.Exit(1)
+		return 1
 	}
 	if closer, ok := runtimeHandler.(interface{ Close() }); ok {
-		defer closer.Close()
+		runtimeCloser = closer
 	}
 
 	router := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -211,51 +274,61 @@ func main() {
 		Addr: envOr("COMMAND_DIAGNOSTICS_ADDR", ":19087"), Handler: telemetry.DiagnosticsHandler(),
 		ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second,
 	}
+	diagnosticsDone := make(chan struct{})
 	go func() {
+		defer close(diagnosticsDone)
+		defer observability.Recover(logger, telemetry.Metrics, "command_owner.diagnostics")
 		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("command_diagnostics_failed", "error_code", "DIAGNOSTICS_SERVE_FAILED")
 		}
 	}()
 
 	relayCtx, cancelRelay := context.WithCancel(context.Background())
+	defer cancelRelay()
 	var relayWg sync.WaitGroup
-	defer func() {
-		cancelRelay()
-		relayWg.Wait()
-	}()
 	if alarmRelay != nil {
 		relayWg.Add(1)
 		go func() {
 			defer relayWg.Done()
+			defer observability.Recover(logger, telemetry.Metrics, "command_owner.alarm_relay")
 			alarmRelay.Run(relayCtx)
 		}()
 	}
 
-	shutdown := make(chan os.Signal, 1)
-	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
+	signalCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignals()
+	shutdownDone := make(chan struct{})
 	go func() {
-		<-shutdown
-		cancelRelay()
+		defer close(shutdownDone)
+		defer observability.Recover(logger, telemetry.Metrics, "command_owner.shutdown")
+		<-signalCtx.Done()
 		telemetry.MarkNotReady()
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		_ = server.Shutdown(ctx)
+		cancelRelay()
+		relayWg.Wait()
 		_ = diagnostics.Shutdown(ctx)
-		_ = telemetry.Shutdown(ctx)
+		select {
+		case <-diagnosticsDone:
+		case <-ctx.Done():
+		}
+		_ = shutdownTelemetry(ctx)
 	}()
 
 	telemetry.MarkReady()
 	logger.Info("command_service_started", "address", server.Addr, "policy_revision", policyRevision)
+	exitCode := 0
 	if err := server.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("command_service_stopped_unexpectedly", "error_code", "COMMAND_SERVE_FAILED")
-		cancelRelay()
-		relayWg.Wait()
-		store.Close()
-		os.Exit(1)
+		exitCode = 1
 	}
-	cancelRelay()
-	relayWg.Wait()
-	logger.Info("command_service_stopped")
+	stopSignals()
+	<-shutdownDone
+	if exitCode == 0 {
+		logger.Info("command_service_stopped")
+	}
+	return exitCode
 }
 
 // runtimeHTTPConfig names the dispatcher, verifier, and core registry callers; each serves every Tenant.
@@ -410,6 +483,7 @@ func newHTTPControlFailureSender(endpoint string, client *http.Client, logger *s
 			}
 			return &commandservice.ControlAlarmDeliveryError{Code: "CONTROL_ALARM_HTTP_FAILED"}
 		}
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 		_ = resp.Body.Close()
 		if resp.StatusCode >= http.StatusMultipleChoices {
 			if logger != nil {
@@ -482,7 +556,10 @@ func writeProblem(writer http.ResponseWriter, status int, code string) {
 }
 
 func parseUint64Env(name string) (uint64, error) {
-	value := requiredEnv(name)
+	value, err := requiredEnv(name)
+	if err != nil {
+		return 0, err
+	}
 	parsed, err := strconv.ParseUint(value, 10, 64)
 	if err != nil {
 		return 0, fmt.Errorf("%s is invalid", name)
@@ -497,11 +574,19 @@ func envOr(name, fallback string) string {
 	return fallback
 }
 
-func requiredEnv(name string) string {
+func logEnvError(logger *slog.Logger, msg, code string, err error) {
+	if err != nil {
+		_, _ = os.Stderr.WriteString(err.Error() + "\n")
+	}
+	if logger != nil {
+		logger.Error(msg, "error_code", code)
+	}
+}
+
+func requiredEnv(name string) (string, error) {
 	value := strings.TrimSpace(os.Getenv(name))
 	if value == "" {
-		_, _ = os.Stderr.WriteString(name + " is required\n")
-		os.Exit(1)
+		return "", fmt.Errorf("%s is required", name)
 	}
-	return value
+	return value, nil
 }

@@ -1,6 +1,7 @@
 package clickhouse
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"io"
@@ -236,7 +237,7 @@ func TestWriterAdvanceCheckpointEnablesAsyncInsertAndPooledTransport(t *testing.
 		t.Fatal(err)
 	}
 	transport, ok := reader.httpClient.Transport.(*http.Transport)
-	if !ok || transport == nil || transport.MaxIdleConns != 64 || transport.MaxIdleConnsPerHost != 32 || transport.IdleConnTimeout != 90*time.Second {
+	if !ok || transport == nil || transport.MaxConnsPerHost != 16 || transport.MaxIdleConns != 64 || transport.MaxIdleConnsPerHost != 16 || transport.IdleConnTimeout != 90*time.Second || transport.ResponseHeaderTimeout != 30*time.Second || transport.DialContext == nil {
 		t.Fatalf("unexpected reader transport=%#v", reader.httpClient.Transport)
 	}
 
@@ -430,6 +431,51 @@ func TestReaderQueriesCheckDeltaValueInvalidationAndWindowBoundaries(t *testing.
 	}
 	if seenWindowParams.Get("param_since") != "2026-07-29 13:00:00.000" || seenWindowParams.Get("param_until") != "2026-07-29 14:00:00.000" {
 		t.Fatalf("unexpected window params: %v", seenWindowParams)
+	}
+}
+
+func TestReaderPingAndGzipSelectDecompression(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, pass, ok := r.BasicAuth()
+		if !ok || user != "reader_user" || pass != "reader_pass" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		q := r.URL.Query()
+		if q.Get("query") == "SELECT 1" {
+			_, _ = w.Write([]byte("1\n"))
+			return
+		}
+		if q.Get("enable_http_compression") != "1" || r.Header.Get("Accept-Encoding") != "gzip" {
+			t.Fatalf("expected gzip request negotiation, query=%v accept=%q", q, r.Header.Get("Accept-Encoding"))
+		}
+		w.Header().Set("Content-Encoding", "gzip")
+		gz := gzip.NewWriter(w)
+		_, _ = gz.Write([]byte(`{"tenant_id":"018f4d00-0000-7000-8000-000000000001","site_id":"018f4e00-1000-7000-8000-000000000001"}` + "\n"))
+		_ = gz.Close()
+	}))
+	defer server.Close()
+
+	reader, err := NewReader(ReaderConfig{
+		BaseURL:           server.URL,
+		SourceDatabase:    "telemetry_history",
+		AnalyticsDatabase: "analytics",
+		AnalyticsTable:    "energy_interval_facts",
+		Username:          "reader_user",
+		Password:          "reader_pass",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reader.Ping(context.Background()); err != nil {
+		t.Fatalf("Reader.Ping failed: %v", err)
+	}
+	sites, err := reader.PricedSites(context.Background(), time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("PricedSites with gzip failed: %v", err)
+	}
+	if len(sites) != 1 || sites[0].SiteID != "018f4e00-1000-7000-8000-000000000001" {
+		t.Fatalf("unexpected sites=%+v", sites)
 	}
 }
 

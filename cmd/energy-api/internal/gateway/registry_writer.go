@@ -254,6 +254,6 @@ func (h *handler) executeCoreRegistryMutation(ctx context.Context, route publicR
 		}
 		return unavailableRegistryResult(ownershipregistry.OwnerCore, http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE")
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	return h.decodeRegistryBackendResponse(ownershipregistry.OwnerCore, response, route)
 }

@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/url"
 	"slices"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/eclipse/paho.golang/autopaho"
 	"github.com/eclipse/paho.golang/paho"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
 const (
@@ -611,6 +613,7 @@ func (s *SharedSession) handleConnectionUp(manager *autopaho.ConnectionManager) 
 	go func() {
 		defer s.subWG.Done()
 		defer subCancel()
+		defer observability.Recover(slog.Default(), nil, "mqtt_shared_session_resubscribe")
 		s.resubscribeAll(subCtx, manager, gen)
 	}()
 }

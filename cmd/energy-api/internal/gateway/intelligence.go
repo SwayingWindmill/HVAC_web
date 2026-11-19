@@ -660,7 +660,7 @@ func (h *handler) executeOwner(publicRequest *http.Request, session bffSession, 
 	if err != nil {
 		return nil, 0, err
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	raw, err := readBoundedBody(response.Body, maximumIntelligenceResponse)
 	if err != nil {
 		return nil, response.StatusCode, err

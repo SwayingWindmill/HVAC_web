@@ -190,3 +190,63 @@ func TestOpenConfigDBMaxConns(t *testing.T) {
 		}
 	}
 }
+
+type fakeRowScanner struct {
+	values []any
+}
+
+func (r fakeRowScanner) Scan(dest ...any) error {
+	if len(dest) != len(r.values) {
+		return fmt.Errorf("scan arity=%d want=%d", len(dest), len(r.values))
+	}
+	for i, v := range r.values {
+		switch target := dest[i].(type) {
+		case *string:
+			*target = v.(string)
+		case *uint64:
+			*target = v.(uint64)
+		case *time.Time:
+			*target = v.(time.Time)
+		case **time.Time:
+			*target = v.(*time.Time)
+		case *[]byte:
+			*target = v.([]byte)
+		default:
+			return fmt.Errorf("unsupported scan type at %d: %T", i, dest[i])
+		}
+	}
+	return nil
+}
+
+func TestScanCorrelationAndIdentityValidateTraceID(t *testing.T) {
+	now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	leaseUntil := now.Add(30 * time.Second)
+	rawTraceID := " 4BF92F3577B34DA6A3CE929D0E0E4736 "
+	wantTraceID := "4bf92f3577b34da6a3ce929d0e0e4736"
+
+	correlation, err := scanCorrelation(fakeRowScanner{
+		values: []any{
+			"att-1", uint64(2), "cmd-1", "tenant-1", "site-1",
+			"gw-1", "dev-1", "pt-1", string(commandmodel.CapabilityStart), "EXT-1",
+			"hash-1", "worker-1", leaseUntil, "map-1", "bind-1",
+			"hvac/v1/gw-1/down/command", "start", "req-sha", now, string(commandmodel.CorrelationReplied),
+			"reply-sha", "EXECUTED", &now, "", []byte(nil), &now, rawTraceID,
+		},
+	})
+	if err != nil {
+		t.Fatalf("scanCorrelation failed: %v", err)
+	}
+	if correlation.Envelope.TraceID != wantTraceID {
+		t.Fatalf("TraceID=%q want %q", correlation.Envelope.TraceID, wantTraceID)
+	}
+
+	other := correlation
+	other.Envelope.TraceID = wantTraceID
+	if !sameCorrelationIdentity(correlation, other) {
+		t.Fatal("expected normalized trace IDs to match in sameCorrelationIdentity")
+	}
+	other.Envelope.TraceID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	if sameCorrelationIdentity(correlation, other) {
+		t.Fatal("expected different trace IDs to trigger identity mismatch")
+	}
+}

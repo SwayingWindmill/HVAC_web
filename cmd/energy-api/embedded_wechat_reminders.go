@@ -86,6 +86,7 @@ func newWeChatReminderWorker(logger *slog.Logger, scheduler *notificationservice
 			baseURL: strings.TrimRight(required["OIDC_BACKCHANNEL_BASE_URL"], "/"),
 			client: &http.Client{
 				Timeout:       15 * time.Second,
+				Transport:     cloneDefaultTransportWithTLS(nil),
 				CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 			},
 			signer: signer, workload: workload, policyRevision: envOr("IDENTITY_POLICY_REVISION", "policy-v1"),
@@ -158,7 +159,7 @@ func exchangeJSON(client *http.Client, request *http.Request, into any) (int, er
 	if err != nil {
 		return 0, errors.New("the owner could not be reached")
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if err != nil {
 		return response.StatusCode, err
@@ -326,7 +327,7 @@ func (sender identityWeChatSender) SendWeChatMessage(ctx context.Context, person
 		// The request went out and no answer came back: the message may have been sent.
 		return notificationservice.ErrWeChatOutcomeUnknown
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	var refusal struct {
 		Error string `json:"error"`
 	}

@@ -42,7 +42,19 @@ var (
 	ErrPayloadMismatch        = errors.New("MQTT command attempt payload mismatch")
 	ErrOldFence               = errors.New("MQTT command execution fence is stale")
 	replyPersistRetryBackoffs = []time.Duration{20 * time.Millisecond, 60 * time.Millisecond}
+	mqttConnectorTracer       = observability.NewTracer("mqtt-connector", nil)
 )
+
+func withCommandTraceContext(ctx context.Context, rawTraceID string) (context.Context, string) {
+	normalized := commandmodel.NormalizeTraceID(rawTraceID)
+	if observability.TraceID(ctx) == "" && normalized != "" {
+		ctx = observability.ContextWithRemoteParent(ctx, mqttConnectorTracer, "00-"+normalized+"-0000000000000001-01", "")
+	}
+	if active := commandmodel.NormalizeTraceID(observability.TraceID(ctx)); active != "" {
+		return ctx, active
+	}
+	return ctx, normalized
+}
 
 type EvidenceStore interface {
 	Prepare(context.Context, commandmodel.PreparedConnectorEvidence) error
@@ -154,6 +166,7 @@ type commandReply struct {
 type queuedReply struct {
 	gatewayID        string
 	commandID        string
+	traceID          string
 	executionFence   uint64
 	replySHA256      string
 	status           string
@@ -294,6 +307,9 @@ func (connector *Connector) Execute(ctx context.Context, envelope commandmodel.D
 	if connector == nil || (connector.manager == nil && connector.publish == nil) {
 		return commandmodel.ConnectorResult{}, errors.New("MQTT command connector is unavailable")
 	}
+	logger, _ := connector.recoveryDeps()
+	ctx, traceID := withCommandTraceContext(ctx, envelope.TraceID)
+	envelope.TraceID = traceID
 	route, err := connector.config.TransportState.ResolveCommandRoute(ctx, envelope)
 	if failureCode := commandmodel.RouteFailureCode(err); failureCode != "" {
 		// Nothing has been prepared or published: the command is provably not sent.
@@ -345,6 +361,7 @@ func (connector *Connector) Execute(ctx context.Context, envelope commandmodel.D
 		State: commandmodel.CorrelationPrepared,
 	})
 	if err != nil {
+		logger.WarnContext(ctx, "mqtt_command_correlation_prepare_failed", "gateway_id", route.GatewayID, "command_id", envelope.CommandID, "execution_fence", envelope.ExecutionFence, "trace_id", traceID, "error", err.Error())
 		return commandmodel.ConnectorResult{}, errors.New("MQTT command correlation preparation failed")
 	}
 	if correlation.Envelope.PayloadHash != envelope.PayloadHash {
@@ -395,6 +412,7 @@ func (connector *Connector) Execute(ctx context.Context, envelope commandmodel.D
 			publishOutcome = "timed_out"
 		}
 		connector.addCounter("hvac_mqtt_command_publishes_total", "MQTT command publish attempts by outcome.", map[string]string{"outcome": publishOutcome}, 1)
+		logger.WarnContext(ctx, "mqtt_command_publish_outcome_unknown", "gateway_id", route.GatewayID, "command_id", envelope.CommandID, "execution_fence", envelope.ExecutionFence, "trace_id", traceID, "error", publishErr.Error())
 		// The durable correlation is armed before calling the MQTT client. A process
 		// crash or publish error after this point is not provably unsent, so retrying
 		// the physical write would be unsafe.
@@ -432,6 +450,7 @@ func (connector *Connector) Execute(ctx context.Context, envelope commandmodel.D
 			outcome = "timed_out"
 		}
 		connector.recordReplyWaitMetric(outcome, waitStartedAt)
+		logger.WarnContext(ctx, "mqtt_command_reply_wait_ended", "gateway_id", route.GatewayID, "command_id", envelope.CommandID, "execution_fence", envelope.ExecutionFence, "trace_id", traceID, "reason", "MQTT_COMMAND_CONTEXT_DONE")
 		return connector.completeOutcomeUnknown(ctx, prepared, "MQTT_COMMAND_CONTEXT_DONE")
 	}
 
@@ -441,6 +460,7 @@ func (connector *Connector) Execute(ctx context.Context, envelope commandmodel.D
 			return finishContextDone()
 		case <-timer.C:
 			connector.recordReplyWaitMetric("timed_out", waitStartedAt)
+			logger.WarnContext(ctx, "mqtt_command_reply_wait_ended", "gateway_id", route.GatewayID, "command_id", envelope.CommandID, "execution_fence", envelope.ExecutionFence, "trace_id", traceID, "reason", "MQTT_COMMAND_REPLY_TIMEOUT")
 			return connector.completeOutcomeUnknown(ctx, prepared, "MQTT_COMMAND_REPLY_TIMEOUT")
 		case replyCorrelation := <-waiter:
 			if pollTicker != nil {
@@ -449,6 +469,7 @@ func (connector *Connector) Execute(ctx context.Context, envelope commandmodel.D
 			timer.Stop()
 			result, err := connector.completeRecoveredReply(ctx, replyCorrelation)
 			connector.recordReplyWaitMetric(replyWaitOutcome(result, err), waitStartedAt)
+			logger.InfoContext(ctx, "mqtt_command_reply_completed", "gateway_id", route.GatewayID, "command_id", envelope.CommandID, "execution_fence", envelope.ExecutionFence, "trace_id", traceID, "phase", result.Phase, "failure_code", result.FailureCode)
 			return result, err
 		case <-pollCh:
 			if ctx.Err() != nil {
@@ -462,6 +483,7 @@ func (connector *Connector) Execute(ctx context.Context, envelope commandmodel.D
 				timer.Stop()
 				result, err := connector.completeRecoveredReply(ctx, loaded)
 				connector.recordReplyWaitMetric(replyWaitOutcome(result, err), waitStartedAt)
+				logger.InfoContext(ctx, "mqtt_command_reply_completed", "gateway_id", route.GatewayID, "command_id", envelope.CommandID, "execution_fence", envelope.ExecutionFence, "trace_id", traceID, "phase", result.Phase, "failure_code", result.FailureCode)
 				return result, err
 			}
 		}
@@ -619,10 +641,12 @@ func (connector *Connector) drainReplyWorkers(ctx context.Context) {
 	if !started {
 		return
 	}
+	logger, metrics := connector.recoveryDeps()
 	done := make(chan struct{})
 	go func() {
+		defer close(done)
+		defer observability.Recover(logger, metrics, "command.mqtt_reply_drain_wait")
 		connector.replyWG.Wait()
-		close(done)
 	}()
 	select {
 	case <-done:
@@ -737,7 +761,7 @@ func (connector *Connector) ackReply(item queuedReply) {
 	}
 	if err := item.ackFn(item.packet); err != nil {
 		logger, _ := connector.recoveryDeps()
-		logger.Warn("mqtt_command_reply_ack_failed", "gateway_id", item.gatewayID, "topic", item.packet.Topic, "error", err.Error())
+		logger.Warn("mqtt_command_reply_ack_failed", "gateway_id", item.gatewayID, "command_id", item.commandID, "trace_id", item.traceID, "topic", item.packet.Topic, "error", err.Error())
 	}
 }
 
@@ -773,7 +797,7 @@ func (connector *Connector) processReply(item queuedReply) {
 			break
 		}
 		if isPermanentCorrelationError(err) {
-			logger.Warn("mqtt_command_reply_unmatched", "gateway_id", item.gatewayID, "command_id", item.commandID, "execution_fence", item.executionFence, "error", err.Error())
+			logger.Warn("mqtt_command_reply_unmatched", "gateway_id", item.gatewayID, "command_id", item.commandID, "execution_fence", item.executionFence, "trace_id", item.traceID, "error", err.Error())
 			connector.recordReplyMetric("unmatched")
 			connector.ackReply(item)
 			return
@@ -792,7 +816,7 @@ func (connector *Connector) processReply(item queuedReply) {
 		}
 	}
 	if err != nil {
-		logger.Warn("mqtt_command_reply_persist_failed", "gateway_id", item.gatewayID, "command_id", item.commandID, "execution_fence", item.executionFence, "error", err.Error())
+		logger.Warn("mqtt_command_reply_persist_failed", "gateway_id", item.gatewayID, "command_id", item.commandID, "execution_fence", item.executionFence, "trace_id", item.traceID, "error", err.Error())
 		connector.recordReplyMetric("transient_error")
 		connector.closeConnection(item.connectionClosed)
 		return
@@ -813,7 +837,12 @@ func (connector *Connector) processReply(item queuedReply) {
 		}
 		return
 	}
-	resolveCtx, cancel := context.WithTimeout(baseCtx, 5*time.Second)
+	replyTraceID := correlation.Envelope.TraceID
+	if replyTraceID == "" {
+		replyTraceID = item.traceID
+	}
+	resolveCtx, _ := withCommandTraceContext(baseCtx, replyTraceID)
+	resolveCtx, cancel := context.WithTimeout(resolveCtx, 5*time.Second)
 	defer cancel()
 	_ = connector.ResolveCorrelationReply(resolveCtx, correlation)
 }
@@ -888,9 +917,11 @@ func (connector *Connector) onReply(received paho.PublishReceived) (bool, error)
 	if received.Client != nil {
 		ackFn = received.Client.Ack
 	}
+	replyTraceID := commandmodel.NormalizeTraceID(reply.TraceID)
 	task := queuedReply{
 		gatewayID:        gatewayID,
 		commandID:        reply.CommandID,
+		traceID:          replyTraceID,
 		executionFence:   reply.ExecutionFence,
 		replySHA256:      sha256Hex(replyBody),
 		status:           status,
@@ -906,7 +937,7 @@ func (connector *Connector) onReply(received paho.PublishReceived) (bool, error)
 		return true, nil
 	}
 	if !enqueued {
-		logger.Warn("mqtt_command_reply_backpressure_shed", "gateway_id", gatewayID, "command_id", reply.CommandID, "execution_fence", reply.ExecutionFence)
+		logger.Warn("mqtt_command_reply_backpressure_shed", "gateway_id", gatewayID, "command_id", reply.CommandID, "execution_fence", reply.ExecutionFence, "trace_id", replyTraceID)
 		connector.recordReplyMetric("shed")
 		connector.closeConnection(connectionClosed)
 		return true, nil
@@ -1030,16 +1061,25 @@ func (connector *Connector) ResolveCorrelationReply(ctx context.Context, correla
 	if connector.config.LateResultSink == nil || correlation.State != commandmodel.CorrelationReplied {
 		return nil
 	}
+	logger, _ := connector.recoveryDeps()
+	ctx, traceID := withCommandTraceContext(ctx, correlation.Envelope.TraceID)
 	result, err := connector.completeRecoveredReply(ctx, correlation)
 	if err != nil {
+		logger.WarnContext(ctx, "mqtt_command_reply_recovery_failed", "command_id", correlation.Envelope.CommandID, "attempt_id", correlation.Envelope.AttemptID, "execution_fence", correlation.Envelope.ExecutionFence, "trace_id", traceID, "error", err.Error())
 		return err
 	}
 	if err := connector.config.LateResultSink.ResolveDispatch(ctx, correlation.Envelope, result); err != nil &&
 		!errors.Is(err, commandservice.ErrStaleFence) &&
 		!errors.Is(err, commandservice.ErrCommandNotFound) {
+		logger.WarnContext(ctx, "mqtt_command_reply_recovery_failed", "command_id", correlation.Envelope.CommandID, "attempt_id", correlation.Envelope.AttemptID, "execution_fence", correlation.Envelope.ExecutionFence, "trace_id", traceID, "error", err.Error())
 		return err
 	}
-	return connector.config.TransportState.MarkCommandCorrelationResolved(ctx, correlation.Envelope.TenantID, correlation.Envelope.AttemptID, correlation.Envelope.ExecutionFence, connector.config.Now().UTC())
+	if err := connector.config.TransportState.MarkCommandCorrelationResolved(ctx, correlation.Envelope.TenantID, correlation.Envelope.AttemptID, correlation.Envelope.ExecutionFence, connector.config.Now().UTC()); err != nil {
+		logger.WarnContext(ctx, "mqtt_command_reply_recovery_failed", "command_id", correlation.Envelope.CommandID, "attempt_id", correlation.Envelope.AttemptID, "execution_fence", correlation.Envelope.ExecutionFence, "trace_id", traceID, "error", err.Error())
+		return err
+	}
+	logger.InfoContext(ctx, "mqtt_command_reply_recovery_resolved", "command_id", correlation.Envelope.CommandID, "attempt_id", correlation.Envelope.AttemptID, "execution_fence", correlation.Envelope.ExecutionFence, "trace_id", traceID)
+	return nil
 }
 
 func (connector *Connector) completeRecoveredReply(ctx context.Context, correlation commandmodel.CommandCorrelation) (commandmodel.ConnectorResult, error) {

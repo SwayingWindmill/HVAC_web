@@ -7,10 +7,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/quanlaihe/hvac-web/services/identity-service/internal/identity"
 )
 
@@ -56,23 +54,18 @@ type Directory struct {
 }
 
 func Open(ctx context.Context, databaseURL string) (*Directory, error) {
-	pool, err := pgxpool.New(ctx, strings.TrimSpace(databaseURL))
+	store, err := identity.OpenStore(ctx, databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("open identity directory: %w", err)
 	}
-	var role string
-	if err := pool.QueryRow(ctx, `SELECT current_user`).Scan(&role); err != nil {
-		pool.Close()
+	role, err := store.CurrentUser(ctx)
+	if err != nil {
+		store.Close()
 		return nil, fmt.Errorf("read identity directory role: %w", err)
 	}
 	if role != databaseRole {
-		pool.Close()
+		store.Close()
 		return nil, fmt.Errorf("identity directory role %q is not allowed", role)
-	}
-	pool.Close()
-	store, err := identity.OpenStore(ctx, databaseURL)
-	if err != nil {
-		return nil, err
 	}
 	return &Directory{store: store, now: time.Now}, nil
 }

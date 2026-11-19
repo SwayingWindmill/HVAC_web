@@ -39,30 +39,6 @@ type ClickHouseSink struct {
 	client         *http.Client
 }
 
-func newDefaultForecastClickHouseHTTPClient(timeout time.Duration, disableRedirects bool) *http.Client {
-	var transport *http.Transport
-	if base, ok := http.DefaultTransport.(*http.Transport); ok && base != nil {
-		transport = base.Clone()
-	} else {
-		transport = &http.Transport{}
-	}
-	transport.MaxIdleConns = 64
-	transport.MaxIdleConnsPerHost = 32
-	transport.IdleConnTimeout = 90 * time.Second
-	transport.TLSHandshakeTimeout = 10 * time.Second
-	transport.ExpectContinueTimeout = time.Second
-	client := &http.Client{
-		Timeout:   timeout,
-		Transport: transport,
-	}
-	if disableRedirects {
-		client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
-			return http.ErrUseLastResponse
-		}
-	}
-	return client
-}
-
 func NewClickHouseSink(config ClickHouseConfig) (*ClickHouseSink, error) {
 	parsed, err := url.Parse(config.BaseURL)
 	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
@@ -81,9 +57,79 @@ func NewClickHouseSink(config ClickHouseConfig) (*ClickHouseSink, error) {
 	}
 	client := config.HTTPClient
 	if client == nil {
-		client = newDefaultForecastClickHouseHTTPClient(10*time.Second, true)
+		client = newDefaultClickHouseHTTPClient(10 * time.Second)
 	}
 	return &ClickHouseSink{baseURL: parsed, database: database, table: table, username: config.Username, password: config.Password, readerUsername: config.ReaderUsername, readerPassword: config.ReaderPassword, client: client}, nil
+}
+
+func newDefaultClickHouseHTTPClient(timeout time.Duration) *http.Client {
+	var transport *http.Transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok && base != nil {
+		transport = base.Clone()
+	} else {
+		transport = &http.Transport{}
+	}
+	transport.MaxIdleConns = 64
+	transport.MaxIdleConnsPerHost = 32
+	transport.IdleConnTimeout = 90 * time.Second
+	transport.TLSHandshakeTimeout = 10 * time.Second
+	transport.ExpectContinueTimeout = 1 * time.Second
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: transport,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
+
+func drainAndClose(body io.ReadCloser) {
+	if body == nil {
+		return
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(body, 64<<10))
+	_ = body.Close()
+}
+
+func (sink *ClickHouseSink) CloseIdleConnections() {
+	if sink != nil && sink.client != nil {
+		sink.client.CloseIdleConnections()
+	}
+}
+
+func (sink *ClickHouseSink) Ping(ctx context.Context) error {
+	if sink == nil || sink.baseURL == nil || sink.client == nil {
+		return errors.New("forecast ClickHouse sink is unavailable")
+	}
+	user, pass := sink.readerUsername, sink.readerPassword
+	if user == "" {
+		user, pass = sink.username, sink.password
+	}
+	return pingClickHouseHTTP(ctx, sink.baseURL, user, pass, sink.client, "forecast ClickHouse")
+}
+
+func pingClickHouseHTTP(ctx context.Context, baseURL *url.URL, username, password string, client *http.Client, label string) error {
+	endpoint := *baseURL
+	query := endpoint.Query()
+	query.Set("query", "SELECT 1")
+	endpoint.RawQuery = query.Encode()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return err
+	}
+	if username != "" {
+		request.SetBasicAuth(username, password)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return fmt.Errorf("ping %s: %w", label, err)
+	}
+	defer drainAndClose(response.Body)
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		detail, _ := io.ReadAll(io.LimitReader(response.Body, 2048))
+		return fmt.Errorf("ping %s returned %d: %s", label, response.StatusCode, strings.TrimSpace(string(detail)))
+	}
+	return nil
 }
 
 func (sink *ClickHouseSink) InsertForecastPoints(ctx context.Context, points []Point) error {
@@ -144,13 +190,11 @@ func (sink *ClickHouseSink) InsertForecastPoints(ctx context.Context, points []P
 	if err != nil {
 		return fmt.Errorf("insert forecast ClickHouse result: %w", err)
 	}
-	defer response.Body.Close()
+	defer drainAndClose(response.Body)
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		detail, _ := io.ReadAll(io.LimitReader(response.Body, 2048))
-		_, _ = io.Copy(io.Discard, response.Body)
 		return fmt.Errorf("insert forecast ClickHouse result returned %d: %s", response.StatusCode, strings.TrimSpace(string(detail)))
 	}
-	_, _ = io.Copy(io.Discard, response.Body)
 	return nil
 }
 
@@ -223,10 +267,9 @@ func (sink *ClickHouseSink) ReadForecastJob(ctx context.Context, scope ForecastJ
 	if err != nil {
 		return nil, fmt.Errorf("query forecast ClickHouse result: %w", err)
 	}
-	defer response.Body.Close()
+	defer drainAndClose(response.Body)
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		detail, _ := io.ReadAll(io.LimitReader(response.Body, 2048))
-		_, _ = io.Copy(io.Discard, response.Body)
 		return nil, fmt.Errorf("query forecast ClickHouse result returned %d: %s", response.StatusCode, strings.TrimSpace(string(detail)))
 	}
 	decoder := json.NewDecoder(response.Body)
@@ -241,7 +284,6 @@ func (sink *ClickHouseSink) ReadForecastJob(ctx context.Context, scope ForecastJ
 		}
 		points = append(points, point)
 	}
-	_, _ = io.Copy(io.Discard, response.Body)
 	return points, nil
 }
 
@@ -269,9 +311,8 @@ func (sink *ClickHouseSink) HasForecastJob(ctx context.Context, scope ForecastJo
 	if err != nil {
 		return false, err
 	}
-	defer response.Body.Close()
+	defer drainAndClose(response.Body)
 	body, err := io.ReadAll(io.LimitReader(response.Body, 4096))
-	_, _ = io.Copy(io.Discard, response.Body)
 	if err != nil {
 		return false, err
 	}

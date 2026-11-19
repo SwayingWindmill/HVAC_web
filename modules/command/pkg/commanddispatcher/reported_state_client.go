@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
 const (
@@ -68,17 +69,22 @@ func (client *ReportedStateClient) ReadReportedState(ctx context.Context, envelo
 		strings.TrimSpace(envelope.VerificationPointKey) == "" {
 		return "", commandmodel.ReportedStateEvidence{}, errors.New("verification envelope is incomplete")
 	}
+	ctx, _ = withCommandTraceContext(ctx, envelope.TraceID)
 	endpoint := client.baseURL + internalCommandReportedStatePath + "?deviceId=" + url.QueryEscape(envelope.DeviceID) + "&key=" + url.QueryEscape(envelope.VerificationPointKey)
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return "", commandmodel.ReportedStateEvidence{}, fmt.Errorf("construct S2 reported-state request: %w", err)
 	}
 	request.Header.Set("Accept", "application/json")
+	observability.InjectHTTP(ctx, request.Header)
 	response, err := client.httpClient.Do(request)
 	if err != nil {
 		return "", commandmodel.ReportedStateEvidence{}, fmt.Errorf("S2 reported-state request failed: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+		_ = response.Body.Close()
+	}()
 	body, err := readReportedStateBody(response.Body)
 	if err != nil {
 		return "", commandmodel.ReportedStateEvidence{}, err

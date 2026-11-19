@@ -12,19 +12,21 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 )
 
 type configShadowGatewayFixture struct {
 	*commandGatewayFixture
-	gatewayID          string
-	upstreamCalls      atomic.Int32
-	upstreamStatus     int
-	upstreamBody       string
-	lastUpstreamMethod string
-	lastUpstreamPath   string
-	lastUpstreamBody   string
+	gatewayID               string
+	upstreamCalls           atomic.Int32
+	upstreamStatus          int
+	upstreamBody            string
+	lastUpstreamMethod      string
+	lastUpstreamPath        string
+	lastUpstreamBody        string
+	lastUpstreamTraceparent string
 }
 
 func newConfigShadowGatewayFixture(t *testing.T) *configShadowGatewayFixture {
@@ -81,6 +83,7 @@ func newConfigShadowGatewayFixture(t *testing.T) *configShadowGatewayFixture {
 			fix.upstreamCalls.Add(1)
 			fix.lastUpstreamMethod = request.Method
 			fix.lastUpstreamPath = request.URL.Path
+			fix.lastUpstreamTraceparent = request.Header.Get("traceparent")
 			if request.Header.Get("X-Delegation-Grant") == "" {
 				t.Fatal("missing X-Delegation-Grant")
 			}
@@ -171,5 +174,22 @@ func TestGatewayConfigShadowRateLimitAndSafeLogPath(t *testing.T) {
 	}
 	if got := safeLogPath("/api/v1/gateways/" + fix.gatewayID + "/config-shadow"); got != "/api/v1/gateways/{gatewayId}/config-shadow" {
 		t.Fatalf("safeLogPath = %q", got)
+	}
+}
+
+func TestGatewayConfigShadowPropagatesTraceparent(t *testing.T) {
+	fix := newConfigShadowGatewayFixture(t)
+	const wantTraceID = "4bf92f3577b34da6a3ce929d0e0e4736"
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/gateways/"+fix.gatewayID+"/config-shadow", nil)
+	fix.authenticate(req, false)
+	req.Header.Set("traceparent", "00-"+wantTraceID+"-00f067aa0ba902b7-01")
+	rec := httptest.NewRecorder()
+	fix.handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	parsed, ok := observability.ParseTraceparent(fix.lastUpstreamTraceparent, "")
+	if !ok || parsed.TraceID != wantTraceID {
+		t.Fatalf("connectivity traceparent=%q (ok=%t), want traceId=%s", fix.lastUpstreamTraceparent, ok, wantTraceID)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -19,8 +20,25 @@ type PostgresStore struct{ pool *pgxpool.Pool }
 
 var _ ControlTickSource = (*PostgresStore)(nil)
 
-func OpenPostgres(ctx context.Context, dsn string) (*PostgresStore, error) {
+// ParsePostgresPoolConfig builds a pgxpool configuration with bounded pool sizing and health checks.
+func ParsePostgresPoolConfig(dsn string) (*pgxpool.Config, error) {
+	if strings.TrimSpace(dsn) == "" {
+		return nil, errors.New("M&V postgres dsn is required")
+	}
 	config, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("parse M&V postgres dsn: %w", err)
+	}
+	config.MaxConns = 16
+	config.MinConns = 1
+	config.MaxConnLifetime = 30 * time.Minute
+	config.MaxConnIdleTime = 5 * time.Minute
+	config.HealthCheckPeriod = 30 * time.Second
+	return config, nil
+}
+
+func OpenPostgres(ctx context.Context, dsn string) (*PostgresStore, error) {
+	config, err := ParsePostgresPoolConfig(dsn)
 	if err != nil {
 		return nil, err
 	}
@@ -28,14 +46,28 @@ func OpenPostgres(ctx context.Context, dsn string) (*PostgresStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err = pool.Ping(ctx); err != nil {
+	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err = pool.Ping(pingCtx); err != nil {
 		pool.Close()
 		return nil, err
 	}
 	return &PostgresStore{pool: pool}, nil
 }
 
-func (store *PostgresStore) Close() { store.pool.Close() }
+func (store *PostgresStore) Close() {
+	if store != nil && store.pool != nil {
+		store.pool.Close()
+	}
+}
+
+// Ping verifies PostgreSQL connectivity for readiness probes.
+func (store *PostgresStore) Ping(ctx context.Context) error {
+	if store == nil || store.pool == nil {
+		return errors.New("M&V postgres store is not initialized")
+	}
+	return store.pool.Ping(ctx)
+}
 
 func (store *PostgresStore) EvaluationQueue() (*schedulerjob.Queue, error) {
 	return schedulerjob.NewQueue(store.pool, EvaluationJobType)

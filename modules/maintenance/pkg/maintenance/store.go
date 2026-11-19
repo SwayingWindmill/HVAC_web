@@ -45,6 +45,8 @@ func OpenStore(ctx context.Context, dsn string) (*Store, error) {
 	config.MaxConns = 4
 	config.MinConns = 1
 	config.MaxConnLifetime = 30 * time.Minute
+	config.MaxConnIdleTime = 5 * time.Minute
+	config.HealthCheckPeriod = 30 * time.Second
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		return nil, err

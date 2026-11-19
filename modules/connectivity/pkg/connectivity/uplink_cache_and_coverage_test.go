@@ -230,7 +230,8 @@ func TestPostgresUplinkCacheRevocationAndCoverageQueries(t *testing.T) {
 	)
 
 	cleanup := func() {
-		for _, table := range []string{"gateway_concentrator_audit", "gateway_credential_audit", "gateway_enrollments", "gateway_credentials"} {
+		_, _ = admin.Exec(ctx, "TRUNCATE TABLE connectivity.gateway_concentrator_audit, connectivity.gateway_credential_audit")
+		for _, table := range []string{"gateway_enrollments", "gateway_credentials"} {
 			_, _ = admin.Exec(ctx, "DELETE FROM connectivity."+table+" WHERE gateway_id IN ($1::uuid,$2::uuid,$3::uuid)", gwActive, gwRevoked, gwRetired)
 		}
 		_, _ = admin.Exec(ctx, `DELETE FROM connectivity.uplink_quarantine WHERE gateway_id IN ($1,$2,$3)`, gwActive, gwRevoked, gwRetired)

@@ -34,13 +34,20 @@ func RunScheduledEvaluations(ctx context.Context, store *PostgresStore, logger *
 	runScheduledEvaluations(ctx, store, logger, dueEvaluationInterval)
 }
 
-func runScheduledEvaluations(ctx context.Context, runner dueEvaluationRunner, logger *slog.Logger, interval time.Duration) {
+// StartScheduledEvaluations launches the scheduled evaluation loop and returns a channel that closes when it exits.
+func StartScheduledEvaluations(ctx context.Context, store *PostgresStore, logger *slog.Logger) <-chan struct{} {
+	return runScheduledEvaluations(ctx, store, logger, dueEvaluationInterval)
+}
+
+func runScheduledEvaluations(ctx context.Context, runner dueEvaluationRunner, logger *slog.Logger, interval time.Duration) <-chan struct{} {
 	host, err := os.Hostname()
 	if err != nil {
 		host = "alarm-owner"
 	}
 	workerID := "alarm-due-evaluations:" + host
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		defer observability.Recover(logger, nil, "alarm.due_evaluations_loop")
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
@@ -53,6 +60,7 @@ func runScheduledEvaluations(ctx context.Context, runner dueEvaluationRunner, lo
 			runDueEvaluationPass(ctx, runner, workerID, logger)
 		}
 	}()
+	return done
 }
 
 func runDueEvaluationPass(ctx context.Context, runner dueEvaluationRunner, workerID string, logger *slog.Logger) {

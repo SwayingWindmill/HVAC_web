@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
 )
 
@@ -252,11 +253,12 @@ func (controller *identityController) backchannel(request *http.Request, method,
 	for name, value := range header {
 		outbound.Header.Set(name, value)
 	}
+	observability.InjectHTTP(request.Context(), outbound.Header)
 	response, err := controller.config.OIDCHTTPClient.Do(outbound)
 	if err != nil {
 		return 0, nil, err
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	reply, err := io.ReadAll(io.LimitReader(response.Body, 16<<10))
 	if err != nil {
 		return 0, nil, err

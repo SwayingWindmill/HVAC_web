@@ -5,7 +5,11 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/http/pprof"
+	"net/netip"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -28,6 +32,7 @@ type RuntimeConfig struct {
 	QueueSize     int
 	ExportTimeout time.Duration
 	Exporter      Exporter
+	Logger        *slog.Logger
 }
 
 type Runtime struct {
@@ -35,6 +40,8 @@ type Runtime struct {
 	Tracer        *Tracer
 	Metrics       *Registry
 	async         *AsyncExporter
+	logger        *slog.Logger
+	depMu         sync.RWMutex
 	dependencies  []Dependency
 	ready         atomic.Bool
 	started       time.Time
@@ -50,12 +57,18 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	if delegate == nil {
 		delegate = NopExporter{}
 	}
-	async := NewAsyncExporter(delegate, config.QueueSize)
+	logger := config.Logger
+	if logger == nil {
+		logger = NewJSONLogger(os.Stdout, slog.LevelInfo)
+	}
+	metrics := NewRegistry()
+	async := newAsyncExporter(delegate, config.QueueSize, logger, metrics)
 	return &Runtime{
 		Service: config.Service,
 		Tracer:  NewTracer(config.Service, async),
-		Metrics: NewRegistry(),
+		Metrics: metrics,
 		async:   async,
+		logger:  logger,
 		started: time.Now().UTC(),
 	}
 }
@@ -73,7 +86,9 @@ func (runtime *Runtime) SetDependencies(dependencies ...Dependency) {
 		}
 		kept = append(kept, dependency)
 	}
+	runtime.depMu.Lock()
 	runtime.dependencies = kept
+	runtime.depMu.Unlock()
 }
 
 func (runtime *Runtime) MarkReady() {
@@ -121,25 +136,39 @@ type dependencyStatus struct {
 }
 
 func (runtime *Runtime) probeDependencies(parent context.Context) []dependencyStatus {
-	dependencies := runtime.dependencies
+	if parent == nil {
+		parent = context.Background()
+	}
+	runtime.depMu.RLock()
+	dependencies := append([]Dependency(nil), runtime.dependencies...)
+	runtime.depMu.RUnlock()
 	statuses := make([]dependencyStatus, len(dependencies))
 	var group sync.WaitGroup
 	for index, dependency := range dependencies {
 		group.Add(1)
-		go func() {
+		go func(idx int, dep Dependency) {
 			defer group.Done()
-			statuses[index] = dependencyStatus{Name: dependency.Name, Required: dependency.Required, Status: "up"}
-			defer Recover(nil, runtime.Metrics, "observability.probe_dependency", func(any) {
-				statuses[index].Status = "down"
-				statuses[index].Error = "[REDACTED]"
+			statuses[idx] = dependencyStatus{Name: dep.Name, Required: dep.Required, Status: "up"}
+			defer Recover(runtime.logger, runtime.Metrics, "observability.probe_dependency", func(any) {
+				statuses[idx].Status = "down"
+				statuses[idx].Error = "[REDACTED]"
 			})
 			ctx, cancel := context.WithTimeout(parent, time.Second)
 			defer cancel()
-			if err := dependency.Check(ctx); err != nil {
-				statuses[index].Status = "down"
-				statuses[index].Error = err.Error()
+			if err := dep.Check(ctx); err != nil {
+				statuses[idx].Status = "down"
+				statuses[idx].Error = "[REDACTED]"
+				if runtime.logger != nil {
+					runtime.logger.Warn(
+						"readiness_dependency_failed",
+						"service", runtime.Service,
+						"dependency", dep.Name,
+						"required", dep.Required,
+						"cause", err.Error(),
+					)
+				}
 			}
-		}()
+		}(index, dependency)
 	}
 	group.Wait()
 	return statuses
@@ -208,6 +237,11 @@ func (runtime *Runtime) DiagnosticsHandler() http.Handler {
 		}
 		metricsHandler.ServeHTTP(writer, request)
 	})
+	mux.HandleFunc("/healthz", func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		writer.WriteHeader(http.StatusOK)
+		_, _ = writer.Write([]byte("ok\n"))
+	})
 	mux.HandleFunc("/health/startup", func(writer http.ResponseWriter, _ *http.Request) {
 		runtime.writeHealth(writer, "started", http.StatusOK, nil)
 	})
@@ -258,7 +292,36 @@ func (runtime *Runtime) DiagnosticsHandler() http.Handler {
 			"telemetry": map[string]any{"droppedSpans": runtime.DroppedSpans(), "failedExports": runtime.FailedExports()},
 		})
 	})
+	if os.Getenv("ENABLE_DIAGNOSTICS_PPROF") == "true" {
+		mux.Handle("/debug/pprof/", loopbackOnly(http.HandlerFunc(pprof.Index)))
+		mux.Handle("/debug/pprof/cmdline", loopbackOnly(http.HandlerFunc(pprof.Cmdline)))
+		mux.Handle("/debug/pprof/profile", loopbackOnly(http.HandlerFunc(pprof.Profile)))
+		mux.Handle("/debug/pprof/symbol", loopbackOnly(http.HandlerFunc(pprof.Symbol)))
+		mux.Handle("/debug/pprof/trace", loopbackOnly(http.HandlerFunc(pprof.Trace)))
+	}
 	return mux
+}
+
+func loopbackOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if !isLoopbackRemoteAddr(request.RemoteAddr) {
+			http.Error(writer, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(writer, request)
+	})
+}
+
+func isLoopbackRemoteAddr(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(remoteAddr))
+	if err != nil {
+		return false
+	}
+	addr, err := netip.ParseAddr(host)
+	if err != nil {
+		return false
+	}
+	return addr.Unmap().IsLoopback()
 }
 
 func NewJSONLogger(writer io.Writer, level slog.Level) *slog.Logger {
@@ -266,8 +329,24 @@ func NewJSONLogger(writer io.Writer, level slog.Level) *slog.Logger {
 }
 
 func redactLogAttribute(_ []string, attribute slog.Attr) slog.Attr {
-	key := strings.ToLower(attribute.Key)
-	for _, fragment := range []string{"authorization", "cookie", "token", "grant", "secret", "password", "body", "connection_string", "database_url", "dsn"} {
+	key := strings.ReplaceAll(strings.ToLower(attribute.Key), "-", "_")
+	for _, fragment := range []string{
+		"authorization",
+		"cookie",
+		"token",
+		"grant",
+		"secret",
+		"password",
+		"body",
+		"connection_string",
+		"database_url",
+		"dsn",
+		"api_key",
+		"apikey",
+		"private_key",
+		"privatekey",
+		"credential",
+	} {
 		if strings.Contains(key, fragment) {
 			return slog.String(attribute.Key, "[REDACTED]")
 		}

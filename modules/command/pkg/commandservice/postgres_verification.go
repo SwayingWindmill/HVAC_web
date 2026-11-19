@@ -51,7 +51,7 @@ func (store *PostgresStore) claimVerificationOnce(ctx context.Context, tenantID 
 	var parameters, edgeExecutionJSON []byte
 	var attemptVersion uint64
 	err = tx.QueryRow(ctx, `
-SELECT i.command_id::text, a.attempt_id::text, i.tenant_id::text, i.site_id::text, i.device_id::text, i.point_id::text,
+SELECT i.command_id::text, a.attempt_id::text, i.tenant_id::text, i.site_id::text, i.device_id::text, i.point_id::text, i.trace_id,
        i.capability_name, i.capability_revision, i.canonical_parameters, i.verification_point_key,
        i.payload_hash, a.execution_fence, i.snapshot_revision,
        a.acknowledged_at, a.verification_deadline, a.connector_evidence_id, a.version,
@@ -75,7 +75,7 @@ ORDER BY a.acknowledged_at, a.attempt_id
 FOR UPDATE OF i, a SKIP LOCKED
 LIMIT 1
 `, tenantID, now, setpointControlGroup).Scan(
-		&envelope.CommandID, &envelope.AttemptID, &envelope.TenantID, &envelope.SiteID, &envelope.DeviceID, &envelope.PointID,
+		&envelope.CommandID, &envelope.AttemptID, &envelope.TenantID, &envelope.SiteID, &envelope.DeviceID, &envelope.PointID, &envelope.TraceID,
 		&capability, &envelope.CapabilityRevision, &parameters, &envelope.VerificationPointKey,
 		&envelope.PayloadHash, &envelope.ExecutionFence, &envelope.BaselineBusinessRevision,
 		&envelope.AcknowledgedAt, &envelope.VerificationDeadline, &envelope.ConnectorEvidenceID, &attemptVersion, &edgeExecutionJSON,
@@ -101,6 +101,7 @@ LIMIT 1
 	}
 	envelope.EdgeExecution = &edgeExecution
 	envelope.Capability = commandmodel.Capability(capability)
+	envelope.TraceID = commandmodel.NormalizeTraceID(envelope.TraceID)
 	leaseUntil := now.Add(leaseFor).UTC().Truncate(time.Microsecond)
 	if envelope.VerificationDeadline.Before(leaseUntil) {
 		leaseUntil = envelope.VerificationDeadline
@@ -297,16 +298,16 @@ WHERE tenant_id = $1::uuid AND device_id = $2::uuid
 
 func (store *PostgresStore) reconcileExpiredAcknowledgedAttempts(ctx context.Context, tx postgresQueryExecutor, tenantID string, now time.Time) ([]ControlFailureEvent, error) {
 	type expiredVerification struct {
-		AttemptID, CommandID, SiteID, DeviceID, PointID        string
-		Capability, CapabilityRevision, VerificationPointKey   string
-		PayloadHash, ConnectorEvidenceID                       string
-		Parameters, EdgeExecutionJSON                          []byte
-		SnapshotRevision, Fence, IntentVersion, AttemptVersion uint64
-		AcknowledgedAt, VerificationDeadline                   time.Time
+		AttemptID, CommandID, SiteID, DeviceID, PointID, TraceID string
+		Capability, CapabilityRevision, VerificationPointKey     string
+		PayloadHash, ConnectorEvidenceID                         string
+		Parameters, EdgeExecutionJSON                            []byte
+		SnapshotRevision, Fence, IntentVersion, AttemptVersion   uint64
+		AcknowledgedAt, VerificationDeadline                     time.Time
 	}
 	rows, err := tx.Query(ctx, `
 SELECT a.attempt_id::text, a.command_id::text, a.site_id::text, a.device_id::text,
-       i.point_id::text, i.capability_name, i.capability_revision, i.canonical_parameters,
+       i.point_id::text, i.trace_id, i.capability_name, i.capability_revision, i.canonical_parameters,
        i.verification_point_key, i.snapshot_revision,
        a.payload_hash, COALESCE(a.connector_evidence_id, ''), a.execution_fence,
        i.version, a.version, a.acknowledged_at, a.verification_deadline,
@@ -332,7 +333,7 @@ LIMIT 50
 		var item expiredVerification
 		if err := rows.Scan(
 			&item.AttemptID, &item.CommandID, &item.SiteID, &item.DeviceID,
-			&item.PointID, &item.Capability, &item.CapabilityRevision, &item.Parameters,
+			&item.PointID, &item.TraceID, &item.Capability, &item.CapabilityRevision, &item.Parameters,
 			&item.VerificationPointKey, &item.SnapshotRevision,
 			&item.PayloadHash, &item.ConnectorEvidenceID, &item.Fence,
 			&item.IntentVersion, &item.AttemptVersion, &item.AcknowledgedAt, &item.VerificationDeadline,
@@ -367,6 +368,7 @@ LIMIT 50
 			SiteID:               item.SiteID,
 			DeviceID:             item.DeviceID,
 			PointID:              item.PointID,
+			TraceID:              commandmodel.NormalizeTraceID(item.TraceID),
 			Capability:           commandmodel.Capability(item.Capability),
 			CapabilityRevision:   item.CapabilityRevision,
 			Parameters:           params,
@@ -383,6 +385,7 @@ LIMIT 50
 			SiteID:                   item.SiteID,
 			DeviceID:                 item.DeviceID,
 			PointID:                  item.PointID,
+			TraceID:                  intent.TraceID,
 			Capability:               intent.Capability,
 			CapabilityRevision:       item.CapabilityRevision,
 			Parameters:               params,

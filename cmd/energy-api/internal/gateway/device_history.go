@@ -249,7 +249,7 @@ func (h *handler) executeHistoryQuery(ctx context.Context, publicRequest *http.R
 		failure := historyUnavailable("Telemetry Query Service is temporarily unavailable.")
 		return nil, &failure
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	raw, err := readBoundedBody(response.Body, h.analytics.maxResponseBytes)
 	if err != nil {
 		failure := telemetryFailure{http.StatusBadGateway, "TELEMETRY_HISTORY_RESPONSE_INVALID", "Device History response invalid", "Telemetry Query Service returned an oversized or unreadable response.", true}

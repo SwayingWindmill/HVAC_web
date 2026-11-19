@@ -9,6 +9,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -36,6 +37,7 @@ type telemetryWorkerShutdown struct {
 	Logger            *slog.Logger
 	Diagnostics       *http.Server
 	Server            *http.Server
+	HTTPWG            *sync.WaitGroup
 	CancelWorkers     func()
 	WorkersWG         *sync.WaitGroup
 	DrainRelays       func(context.Context)
@@ -62,19 +64,33 @@ func shutdownTelemetryWorker(cfg telemetryWorkerShutdown) {
 	}
 	if cfg.Diagnostics != nil || cfg.Server != nil {
 		httpCtx, cancelHTTP := context.WithTimeout(context.Background(), httpTimeout)
-		var httpWG sync.WaitGroup
+		var metrics *observability.Registry
+		if cfg.Observability != nil {
+			metrics = cfg.Observability.Metrics
+		}
+		var shutdownWG sync.WaitGroup
 		for _, srv := range []*http.Server{cfg.Diagnostics, cfg.Server} {
 			if srv == nil {
 				continue
 			}
-			httpWG.Add(1)
+			shutdownWG.Add(1)
 			go func(s *http.Server) {
-				defer httpWG.Done()
-				_ = s.Shutdown(httpCtx)
+				defer shutdownWG.Done()
+				defer observability.Recover(cfg.Logger, metrics, "telemetry_worker.http_shutdown")
+				if err := s.Shutdown(httpCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+					_ = s.Close()
+				}
 			}(srv)
 		}
-		httpWG.Wait()
+		shutdownWG.Wait()
+		if !waitWorkersBounded(cfg.HTTPWG, httpTimeout) && cfg.Logger != nil {
+			cfg.Logger.Warn("telemetry_http_shutdown_timed_out", "error_code", "TELEMETRY_HTTP_SHUTDOWN_TIMEOUT")
+		}
 		cancelHTTP()
+	} else if cfg.HTTPWG != nil {
+		if !waitWorkersBounded(cfg.HTTPWG, httpTimeout) && cfg.Logger != nil {
+			cfg.Logger.Warn("telemetry_http_shutdown_timed_out", "error_code", "TELEMETRY_HTTP_SHUTDOWN_TIMEOUT")
+		}
 	}
 	if cfg.CancelWorkers != nil {
 		cfg.CancelWorkers()
@@ -101,6 +117,15 @@ func shutdownTelemetryWorker(cfg telemetryWorkerShutdown) {
 	if !waitWorkersBounded(cfg.AnalyticsWG, workerTimeout) && cfg.Logger != nil {
 		cfg.Logger.Warn("telemetry_analytics_shutdown_timed_out", "error_code", "TELEMETRY_ANALYTICS_SHUTDOWN_TIMEOUT")
 	}
+	if cfg.Observability != nil {
+		telemetryTimeout := cfg.TelemetryTimeout
+		if telemetryTimeout <= 0 {
+			telemetryTimeout = 2 * time.Second
+		}
+		shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), telemetryTimeout)
+		_ = cfg.Observability.Shutdown(shutdownContext)
+		cancelShutdown()
+	}
 	if cfg.CloseHistory != nil {
 		cfg.CloseHistory()
 	}
@@ -116,15 +141,6 @@ func shutdownTelemetryWorker(cfg telemetryWorkerShutdown) {
 	if cfg.CloseStore != nil {
 		cfg.CloseStore()
 	}
-	if cfg.Observability != nil {
-		telemetryTimeout := cfg.TelemetryTimeout
-		if telemetryTimeout <= 0 {
-			telemetryTimeout = 2 * time.Second
-		}
-		shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), telemetryTimeout)
-		_ = cfg.Observability.Shutdown(shutdownContext)
-		cancelShutdown()
-	}
 }
 
 func waitWorkersBounded(wg *sync.WaitGroup, timeout time.Duration) bool {
@@ -134,6 +150,7 @@ func waitWorkersBounded(wg *sync.WaitGroup, timeout time.Duration) bool {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		defer observability.Recover(slog.Default(), nil, "telemetry_worker.wait_workers")
 		wg.Wait()
 	}()
 	if timeout <= 0 {
@@ -156,12 +173,14 @@ func runTelemetryWorker() int {
 		QueueSize: 1024, ExportTimeout: 500 * time.Millisecond,
 	})
 	logger := observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
+	var httpWG sync.WaitGroup
 	var workersWG sync.WaitGroup
 	var analyticsWG sync.WaitGroup
 	var workerCancels []context.CancelFunc
 	shutdownCfg := telemetryWorkerShutdown{
 		Observability: observabilityRuntime,
 		Logger:        logger,
+		HTTPWG:        &httpWG,
 		WorkersWG:     &workersWG,
 		AnalyticsWG:   &analyticsWG,
 		CancelWorkers: func() {
@@ -184,22 +203,47 @@ func runTelemetryWorker() int {
 	}
 	defer runShutdown()
 
-	certificate, err := tls.LoadX509KeyPair(requiredEnv("TELEMETRY_TLS_CERT"), requiredEnv("TELEMETRY_TLS_KEY"))
+	tlsCert, err := requiredEnv("TELEMETRY_TLS_CERT")
 	if err != nil {
 		logger.Error("telemetry_tls_identity_load_failed", "error_code", "TELEMETRY_TLS_IDENTITY_LOAD_FAILED")
 		return 1
 	}
-	clientCAs, err := loadCertPool(requiredEnv("TELEMETRY_CLIENT_CA"))
+	tlsKey, err := requiredEnv("TELEMETRY_TLS_KEY")
+	if err != nil {
+		logger.Error("telemetry_tls_identity_load_failed", "error_code", "TELEMETRY_TLS_IDENTITY_LOAD_FAILED")
+		return 1
+	}
+	certificate, err := tls.LoadX509KeyPair(tlsCert, tlsKey)
+	if err != nil {
+		logger.Error("telemetry_tls_identity_load_failed", "error_code", "TELEMETRY_TLS_IDENTITY_LOAD_FAILED")
+		return 1
+	}
+	clientCAPath, err := requiredEnv("TELEMETRY_CLIENT_CA")
 	if err != nil {
 		logger.Error("telemetry_client_ca_invalid", "error_code", "TELEMETRY_CLIENT_CA_INVALID")
 		return 1
 	}
-	iamCAs, err := loadCertPool(requiredEnv("TELEMETRY_IAM_CA"))
+	clientCAs, err := loadCertPool(clientCAPath)
+	if err != nil {
+		logger.Error("telemetry_client_ca_invalid", "error_code", "TELEMETRY_CLIENT_CA_INVALID")
+		return 1
+	}
+	iamCAPath, err := requiredEnv("TELEMETRY_IAM_CA")
 	if err != nil {
 		logger.Error("telemetry_iam_ca_invalid", "error_code", "TELEMETRY_IAM_CA_INVALID")
 		return 1
 	}
-	iamGrantPublicKey, err := loadCertificatePublicKey(requiredEnv("TELEMETRY_IAM_GRANT_CERT"))
+	iamCAs, err := loadCertPool(iamCAPath)
+	if err != nil {
+		logger.Error("telemetry_iam_ca_invalid", "error_code", "TELEMETRY_IAM_CA_INVALID")
+		return 1
+	}
+	iamGrantCertPath, err := requiredEnv("TELEMETRY_IAM_GRANT_CERT")
+	if err != nil {
+		logger.Error("telemetry_iam_grant_certificate_invalid", "error_code", "TELEMETRY_IAM_GRANT_CERTIFICATE_INVALID")
+		return 1
+	}
+	iamGrantPublicKey, err := loadCertificatePublicKey(iamGrantCertPath)
 	if err != nil {
 		logger.Error("telemetry_iam_grant_certificate_invalid", "error_code", "TELEMETRY_IAM_GRANT_CERTIFICATE_INVALID")
 		return 1
@@ -211,8 +255,13 @@ func runTelemetryWorker() int {
 		return 1
 	}
 
+	databaseURL, err := requiredEnv("TELEMETRY_DATABASE_URL")
+	if err != nil {
+		logger.Error("telemetry_store_open_failed", "error_code", "TELEMETRY_STORE_OPEN_FAILED")
+		return 1
+	}
 	openContext, cancelOpen := context.WithTimeout(context.Background(), 5*time.Second)
-	store, err := telemetry.OpenPostgresStoreWithConfig(openContext, requiredEnv("TELEMETRY_DATABASE_URL"), poolConfig)
+	store, err := telemetry.OpenPostgresStoreWithConfig(openContext, databaseURL, poolConfig)
 	cancelOpen()
 	if err != nil {
 		logger.Error("telemetry_store_open_failed", "error_code", "TELEMETRY_STORE_OPEN_FAILED")
@@ -245,8 +294,13 @@ func runTelemetryWorker() int {
 		return 1
 	}
 	if clickHouseRetentionCancel != nil {
+		clickHouseRetentionInterval, err := durationEnv("TELEMETRY_RETENTION_CLICKHOUSE_INTERVAL", time.Hour, time.Minute, 24*time.Hour)
+		if err != nil {
+			clickHouseRetentionCancel()
+			logger.Error("telemetry_clickhouse_retention_configuration_invalid", "error_code", "TELEMETRY_CLICKHOUSE_RETENTION_CONFIGURATION_INVALID")
+			return 1
+		}
 		workerCancels = append(workerCancels, clickHouseRetentionCancel)
-		clickHouseRetentionInterval := durationEnv("TELEMETRY_RETENTION_CLICKHOUSE_INTERVAL", time.Hour, time.Minute, 24*time.Hour)
 		runSupervised(clickHouseRetentionCtx, &workersWG, observabilityRuntime, logger, "telemetry.clickhouse_retention", func() {
 			runClickHouseRetentionCoordinated(clickHouseRetentionCtx, clickHousePruner, clickHouseRetentionInterval, settlingBuffer, coordinationLocker, logger)
 		})
@@ -265,18 +319,22 @@ func runTelemetryWorker() int {
 		dependencies = append(dependencies, observability.Dependency{Name: "redis-latest-cache", Required: false, Check: latestCache.Ping})
 		shutdownCfg.CloseLatestCache = func() { _ = latestCache.Close() }
 	}
+	historyRepository, historySink, historyRelay, historySettings, historyContext, historyCancel, err := loadHistoryProjection(pipelineMetrics)
+	if err != nil {
+		logger.Error("telemetry_history_projection_configuration_invalid", "error_code", "TELEMETRY_HISTORY_PROJECTION_CONFIGURATION_INVALID")
+		return 1
+	}
+	if historySink != nil {
+		dependencies = append(dependencies, observability.Dependency{Name: "clickhouse", Required: true, Check: historySink.Ping})
+	} else if clickHousePruner != nil {
+		dependencies = append(dependencies, observability.Dependency{Name: "clickhouse", Required: true, Check: clickHousePruner.Ping})
+	}
 	observabilityRuntime.SetDependencies(dependencies...)
 	if latestCancel != nil {
 		workerCancels = append(workerCancels, latestCancel)
 		runSupervised(latestContext, &workersWG, observabilityRuntime, logger, "telemetry.latest_cache_relay", func() {
 			runLatestCacheRelay(latestContext, latestRelay, logger)
 		})
-	}
-
-	historyRepository, historyRelay, historySettings, historyContext, historyCancel, err := loadHistoryProjection(pipelineMetrics)
-	if err != nil {
-		logger.Error("telemetry_history_projection_configuration_invalid", "error_code", "TELEMETRY_HISTORY_PROJECTION_CONFIGURATION_INVALID")
-		return 1
 	}
 	if historyRepository != nil {
 		shutdownCfg.CloseHistory = historyRepository.Close
@@ -288,7 +346,7 @@ func runTelemetryWorker() int {
 		})
 	}
 
-	analyticsProjector, priceWindows, totalSubmeters, analyticsContext, analyticsCancel, err := loadAnalyticsProjection(certificate)
+	analyticsProjector, priceWindows, totalSubmeters, analyticsSettings, analyticsContext, analyticsCancel, err := loadAnalyticsProjection(certificate)
 	if err != nil {
 		logger.Error("analytics_projection_configuration_invalid", "error_code", "ANALYTICS_PROJECTION_CONFIGURATION_INVALID")
 		return 1
@@ -296,30 +354,30 @@ func runTelemetryWorker() int {
 	if analyticsCancel != nil {
 		shutdownCfg.CancelAnalytics = analyticsCancel
 		runSupervised(analyticsContext, &analyticsWG, observabilityRuntime, logger, "telemetry.analytics_projection", func() {
-			runAnalyticsProjectionCoordinated(analyticsContext, analyticsProjector, observabilityRuntime, coordinationLocker, logger)
+			runAnalyticsProjectionCoordinated(analyticsContext, analyticsProjector, analyticsSettings.ProjectorInterval, observabilityRuntime, coordinationLocker, logger)
 		})
 		runSupervised(analyticsContext, &analyticsWG, observabilityRuntime, logger, "telemetry.price_window_projection", func() {
-			runPriceWindowProjectionCoordinated(analyticsContext, priceWindows, observabilityRuntime, settlingBuffer, coordinationLocker, logger)
+			runPriceWindowProjectionCoordinated(analyticsContext, priceWindows, analyticsSettings.PriceWindowInterval, observabilityRuntime, settlingBuffer, coordinationLocker, logger)
 		})
 		runSupervised(analyticsContext, &analyticsWG, observabilityRuntime, logger, "telemetry.total_submeter_projection", func() {
-			runTotalSubmeterProjectionCoordinated(analyticsContext, totalSubmeters, observabilityRuntime, settlingBuffer, coordinationLocker, logger)
+			runTotalSubmeterProjectionCoordinated(analyticsContext, totalSubmeters, analyticsSettings.TotalSubmeterInterval, observabilityRuntime, settlingBuffer, coordinationLocker, logger)
 		})
 	}
 
 	iamClient := &http.Client{
 		Timeout: 5 * time.Second,
-		Transport: &http.Transport{
-			Proxy: http.ProxyFromEnvironment,
-			TLSClientConfig: &tls.Config{
-				MinVersion: tls.VersionTLS13, RootCAs: iamCAs, Certificates: []tls.Certificate{certificate},
-			},
-			DisableCompression: true,
-			ForceAttemptHTTP2:  false,
-		},
+		Transport: newClonedTelemetryHTTPTransport(&tls.Config{
+			MinVersion: tls.VersionTLS13, RootCAs: iamCAs, Certificates: []tls.Certificate{certificate},
+		}, true, false, 10*time.Second),
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
+	iamEndpoint, err := requiredEnv("TELEMETRY_IAM_ENDPOINT")
+	if err != nil {
+		logger.Error("telemetry_iam_authorizer_invalid", "error_code", "TELEMETRY_IAM_AUTHORIZER_INVALID")
+		return 1
+	}
 	authorizer, err := telemetry.NewHTTPGrantAuthorizer(
-		requiredEnv("TELEMETRY_IAM_ENDPOINT"), iamClient, iamGrantPublicKey,
+		iamEndpoint, iamClient, iamGrantPublicKey,
 		envOr("TELEMETRY_GRANT_ISSUER", "spiffe://hvac.local/iam-service"),
 		envOr("TELEMETRY_GRANT_AUDIENCE", "telemetry-runtime-service"),
 	)
@@ -338,7 +396,7 @@ func runTelemetryWorker() int {
 		runSupervised(realtimeContext, &workersWG, observabilityRuntime, logger, "telemetry.realtime_relay", func() {
 			runRealtimeRelay(realtimeContext, realtimeService, logger)
 		})
-		revocationSource, err := telemetry.NewHTTPRevocationSource(requiredEnv("TELEMETRY_IAM_ENDPOINT"), iamClient)
+		revocationSource, err := telemetry.NewHTTPRevocationSource(iamEndpoint, iamClient)
 		if err != nil {
 			logger.Error("telemetry_revocation_source_invalid", "error_code", "TELEMETRY_REVOCATION_SOURCE_INVALID")
 			return 1
@@ -353,7 +411,7 @@ func runTelemetryWorker() int {
 		})
 	}
 
-	alarmRelay, alarmContext, alarmCancel, err := loadAlarmEvaluationRelay(store, certificate)
+	alarmRelay, alarmPollInterval, alarmContext, alarmCancel, err := loadAlarmEvaluationRelay(store, certificate)
 	if err != nil {
 		logger.Error("telemetry_alarm_evaluation_configuration_invalid", "error_code", "TELEMETRY_ALARM_EVALUATION_CONFIGURATION_INVALID")
 		return 1
@@ -361,7 +419,7 @@ func runTelemetryWorker() int {
 	if alarmCancel != nil {
 		workerCancels = append(workerCancels, alarmCancel)
 		runSupervised(alarmContext, &workersWG, observabilityRuntime, logger, "telemetry.alarm_evaluation_relay", func() {
-			runAlarmEvaluationRelay(alarmContext, alarmRelay, logger)
+			runAlarmEvaluationRelay(alarmContext, alarmRelay, alarmPollInterval, logger)
 		})
 	}
 
@@ -435,20 +493,40 @@ func runTelemetryWorker() int {
 	}
 	shutdownCfg.Diagnostics = diagnostics
 	shutdownCfg.Server = server
-	observabilityRuntime.Go(logger, "telemetry.diagnostics", func() {
+	serverErr := make(chan error, 2)
+	httpWG.Add(1)
+	go func() {
+		defer httpWG.Done()
+		defer observability.Recover(logger, observabilityRuntime.Metrics, "telemetry.diagnostics", func(any) {
+			select {
+			case serverErr <- errors.New("diagnostics server panicked"):
+			default:
+			}
+		})
 		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("telemetry_diagnostics_stopped_unexpectedly", "error_code", "TELEMETRY_DIAGNOSTICS_SERVE_FAILED")
+			select {
+			case serverErr <- err:
+			default:
+			}
 		}
-	})
-	serverErr := make(chan error, 1)
-	observabilityRuntime.Go(logger, "telemetry.http", func() {
+	}()
+	httpWG.Add(1)
+	go func() {
+		defer httpWG.Done()
+		defer observability.Recover(logger, observabilityRuntime.Metrics, "telemetry.http", func(any) {
+			select {
+			case serverErr <- errors.New("http server panicked"):
+			default:
+			}
+		})
 		logger.Info("telemetry_runtime_started", "service", "telemetry-runtime-service", "address", server.Addr)
 		if serveErr := server.ListenAndServeTLS("", ""); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			serverErr <- serveErr
 			return
 		}
 		serverErr <- nil
-	})
+	}()
 	observabilityRuntime.MarkReady()
 
 	signalCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -563,7 +641,7 @@ func runLatestCacheRelay(ctx context.Context, relay *telemetry.LatestCacheRelay,
 				continue
 			}
 			if materialized > 0 {
-				logger.Info("telemetry_latest_cache_relay_batch_materialized", "materialized_count", materialized)
+				logger.Debug("telemetry_latest_cache_relay_batch_materialized", "materialized_count", materialized)
 			}
 		}
 	}
@@ -607,22 +685,31 @@ func parseHistoryProjectionSettings(lookup func(string) string) (historyProjecti
 	}, nil
 }
 
-func loadHistoryProjection(metrics *telemetry.PipelineMetrics) (*telemetry.HistoryPostgresRepository, *telemetry.HistoryRelay, historyProjectionSettings, context.Context, context.CancelFunc, error) {
+func loadHistoryProjection(metrics *telemetry.PipelineMetrics) (*telemetry.HistoryPostgresRepository, *telemetry.ClickHouseHistorySink, *telemetry.HistoryRelay, historyProjectionSettings, context.Context, context.CancelFunc, error) {
 	if !strings.EqualFold(strings.TrimSpace(os.Getenv("TELEMETRY_HISTORY_PROJECTION_ENABLED")), "true") {
-		return nil, nil, historyProjectionSettings{}, context.Background(), nil, nil
+		return nil, nil, nil, historyProjectionSettings{}, context.Background(), nil, nil
 	}
 	settings, err := parseHistoryProjectionSettings(os.Getenv)
 	if err != nil {
-		return nil, nil, historyProjectionSettings{}, nil, nil, err
+		return nil, nil, nil, historyProjectionSettings{}, nil, nil, err
+	}
+	historyDBURL, err := requiredEnv("TELEMETRY_HISTORY_DATABASE_URL")
+	if err != nil {
+		return nil, nil, nil, historyProjectionSettings{}, nil, nil, err
 	}
 	openContext, cancelOpen := context.WithTimeout(context.Background(), 5*time.Second)
-	repository, err := telemetry.OpenHistoryPostgresRepository(openContext, requiredEnv("TELEMETRY_HISTORY_DATABASE_URL"))
+	repository, err := telemetry.OpenHistoryPostgresRepository(openContext, historyDBURL)
 	cancelOpen()
 	if err != nil {
-		return nil, nil, historyProjectionSettings{}, nil, nil, err
+		return nil, nil, nil, historyProjectionSettings{}, nil, nil, err
+	}
+	clickHouseURL, err := requiredEnv("TELEMETRY_CLICKHOUSE_HTTP_URL")
+	if err != nil {
+		repository.Close()
+		return nil, nil, nil, historyProjectionSettings{}, nil, nil, err
 	}
 	sink, err := telemetry.NewClickHouseHistorySink(telemetry.ClickHouseHistoryConfig{
-		BaseURL:  requiredEnv("TELEMETRY_CLICKHOUSE_HTTP_URL"),
+		BaseURL:  clickHouseURL,
 		Database: envOr("TELEMETRY_CLICKHOUSE_DATABASE", "telemetry_history"),
 		Table:    envOr("TELEMETRY_CLICKHOUSE_TABLE", "observations"),
 		Username: envOr("TELEMETRY_CLICKHOUSE_USERNAME", "telemetry_history_writer"),
@@ -630,7 +717,7 @@ func loadHistoryProjection(metrics *telemetry.PipelineMetrics) (*telemetry.Histo
 	})
 	if err != nil {
 		repository.Close()
-		return nil, nil, historyProjectionSettings{}, nil, nil, err
+		return nil, nil, nil, historyProjectionSettings{}, nil, nil, err
 	}
 	relay, err := telemetry.NewHistoryRelay(telemetry.HistoryRelayConfig{
 		Repository:    repository,
@@ -643,10 +730,10 @@ func loadHistoryProjection(metrics *telemetry.PipelineMetrics) (*telemetry.Histo
 	})
 	if err != nil {
 		repository.Close()
-		return nil, nil, historyProjectionSettings{}, nil, nil, err
+		return nil, nil, nil, historyProjectionSettings{}, nil, nil, err
 	}
 	relayContext, relayCancel := context.WithCancel(context.Background())
-	return repository, relay, settings, relayContext, relayCancel, nil
+	return repository, sink, relay, settings, relayContext, relayCancel, nil
 }
 
 func runHistoryProjection(ctx context.Context, relay *telemetry.HistoryRelay, settings historyProjectionSettings, logger *slog.Logger) {
@@ -668,20 +755,45 @@ func runHistoryProjection(ctx context.Context, relay *telemetry.HistoryRelay, se
 			return
 		}
 		if published > 0 {
-			logger.Info("telemetry_history_batch_projected", "observation_count", published)
+			logger.Debug("telemetry_history_batch_projected", "observation_count", published)
 		}
 	})
 }
 
-func loadAnalyticsProjection(certificate tls.Certificate) (*analyticsprojector.Projector, *analyticsprojector.PriceWindowProjector, *analyticsprojector.TotalSubmeterProjector, context.Context, context.CancelFunc, error) {
+type analyticsProjectionSettings struct {
+	ProjectorInterval     time.Duration
+	PriceWindowInterval   time.Duration
+	TotalSubmeterInterval time.Duration
+}
+
+func loadAnalyticsProjection(certificate tls.Certificate) (*analyticsprojector.Projector, *analyticsprojector.PriceWindowProjector, *analyticsprojector.TotalSubmeterProjector, analyticsProjectionSettings, context.Context, context.CancelFunc, error) {
 	if !strings.EqualFold(strings.TrimSpace(os.Getenv("ANALYTICS_PROJECTION_ENABLED")), "true") {
-		return nil, nil, nil, context.Background(), nil, nil
+		return nil, nil, nil, analyticsProjectionSettings{}, context.Background(), nil, nil
+	}
+	projectorInterval, err := durationEnv("ANALYTICS_PROJECTOR_POLL_INTERVAL", 500*time.Millisecond, 25*time.Millisecond, time.Minute)
+	if err != nil {
+		return nil, nil, nil, analyticsProjectionSettings{}, nil, nil, err
+	}
+	priceWindowInterval, err := durationEnv("ANALYTICS_PRICE_WINDOW_INTERVAL", 5*time.Minute, 10*time.Second, time.Hour)
+	if err != nil {
+		return nil, nil, nil, analyticsProjectionSettings{}, nil, nil, err
+	}
+	totalSubmeterInterval, err := durationEnv("ANALYTICS_TOTAL_SUBMETER_INTERVAL", time.Minute, 10*time.Second, time.Hour)
+	if err != nil {
+		return nil, nil, nil, analyticsProjectionSettings{}, nil, nil, err
+	}
+	batchSize, err := integerEnv("ANALYTICS_PROJECTOR_BATCH_SIZE", 256, 1, 4096)
+	if err != nil {
+		return nil, nil, nil, analyticsProjectionSettings{}, nil, nil, err
 	}
 	httpClient, err := newAnalyticsHTTPClient(strings.TrimSpace(os.Getenv("ANALYTICS_CLICKHOUSE_CA")))
 	if err != nil {
-		return nil, nil, nil, nil, nil, err
+		return nil, nil, nil, analyticsProjectionSettings{}, nil, nil, err
 	}
-	baseURL := requiredEnv("ANALYTICS_CLICKHOUSE_HTTP_URL")
+	baseURL, err := requiredEnv("ANALYTICS_CLICKHOUSE_HTTP_URL")
+	if err != nil {
+		return nil, nil, nil, analyticsProjectionSettings{}, nil, nil, err
+	}
 	reader, err := analyticsprojector.NewReader(analyticsprojector.ReaderConfig{
 		BaseURL:           baseURL,
 		SourceDatabase:    envOr("ANALYTICS_SOURCE_DATABASE", "telemetry_history"),
@@ -692,7 +804,7 @@ func loadAnalyticsProjection(certificate tls.Certificate) (*analyticsprojector.P
 		HTTPClient:        httpClient,
 	})
 	if err != nil {
-		return nil, nil, nil, nil, nil, err
+		return nil, nil, nil, analyticsProjectionSettings{}, nil, nil, err
 	}
 	writer, err := analyticsprojector.NewWriter(analyticsprojector.WriterConfig{
 		BaseURL:    baseURL,
@@ -703,59 +815,74 @@ func loadAnalyticsProjection(certificate tls.Certificate) (*analyticsprojector.P
 		HTTPClient: httpClient,
 	})
 	if err != nil {
-		return nil, nil, nil, nil, nil, err
+		return nil, nil, nil, analyticsProjectionSettings{}, nil, nil, err
 	}
-	internalRoots, err := loadCertPool(requiredEnv("ANALYTICS_INTERNAL_CA"))
+	internalCAPath, err := requiredEnv("ANALYTICS_INTERNAL_CA")
 	if err != nil {
-		return nil, nil, nil, nil, nil, err
+		return nil, nil, nil, analyticsProjectionSettings{}, nil, nil, err
+	}
+	internalRoots, err := loadCertPool(internalCAPath)
+	if err != nil {
+		return nil, nil, nil, analyticsProjectionSettings{}, nil, nil, err
+	}
+	coreRegistryURL, err := requiredEnv("ANALYTICS_CORE_REGISTRY_URL")
+	if err != nil {
+		return nil, nil, nil, analyticsProjectionSettings{}, nil, nil, err
+	}
+	iamURL, err := requiredEnv("ANALYTICS_IAM_URL")
+	if err != nil {
+		return nil, nil, nil, analyticsProjectionSettings{}, nil, nil, err
 	}
 	internalClient := &http.Client{
 		Timeout:       10 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		Transport: &http.Transport{
-			Proxy:              http.ProxyFromEnvironment,
-			TLSClientConfig:    &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: internalRoots, Certificates: []tls.Certificate{certificate}},
-			DisableCompression: true,
-		},
+		Transport:     newClonedTelemetryHTTPTransport(&tls.Config{MinVersion: tls.VersionTLS13, RootCAs: internalRoots, Certificates: []tls.Certificate{certificate}}, true, true, 15*time.Second),
 	}
 	registryConfig := analyticsprojector.RegistryClientConfig{
-		BaseURL: requiredEnv("ANALYTICS_CORE_REGISTRY_URL"), IAMURL: requiredEnv("ANALYTICS_IAM_URL"), HTTPClient: internalClient,
+		BaseURL: coreRegistryURL, IAMURL: iamURL, HTTPClient: internalClient,
 	}
 	bindingResolver, err := analyticsprojector.NewBindingResolver(registryConfig)
 	if err != nil {
-		return nil, nil, nil, nil, nil, err
+		return nil, nil, nil, analyticsProjectionSettings{}, nil, nil, err
 	}
 	projector, err := analyticsprojector.NewProjector(analyticsprojector.ProjectorConfig{
-		CounterSource: reader, BindingResolver: bindingResolver, FactSink: writer, RebuildEvents: writer, BatchSize: integerEnv("ANALYTICS_PROJECTOR_BATCH_SIZE", 256, 1, 4096),
+		CounterSource: reader, BindingResolver: bindingResolver, FactSink: writer, RebuildEvents: writer, BatchSize: batchSize,
 	})
 	if err != nil {
-		return nil, nil, nil, nil, nil, err
+		return nil, nil, nil, analyticsProjectionSettings{}, nil, nil, err
 	}
 	tariffs, err := analyticsprojector.NewTariffSource(registryConfig)
 	if err != nil {
-		return nil, nil, nil, nil, nil, err
+		return nil, nil, nil, analyticsProjectionSettings{}, nil, nil, err
 	}
 	priceWindows, err := analyticsprojector.NewPriceWindowProjector(analyticsprojector.PriceWindowProjectorConfig{Reader: reader, Writer: writer, Tariffs: tariffs})
 	if err != nil {
-		return nil, nil, nil, nil, nil, err
+		return nil, nil, nil, analyticsProjectionSettings{}, nil, nil, err
 	}
 	submeterSources, err := analyticsprojector.NewTotalSubmeterSource(registryConfig)
 	if err != nil {
-		return nil, nil, nil, nil, nil, err
+		return nil, nil, nil, analyticsProjectionSettings{}, nil, nil, err
 	}
 	totalSubmeters, err := analyticsprojector.NewTotalSubmeterProjector(analyticsprojector.TotalSubmeterProjectorConfig{Reader: reader, Writer: writer, Sources: submeterSources})
 	if err != nil {
-		return nil, nil, nil, nil, nil, err
+		return nil, nil, nil, analyticsProjectionSettings{}, nil, nil, err
 	}
 	projectionContext, projectionCancel := context.WithCancel(context.Background())
-	return projector, priceWindows, totalSubmeters, projectionContext, projectionCancel, nil
+	settings := analyticsProjectionSettings{
+		ProjectorInterval:     projectorInterval,
+		PriceWindowInterval:   priceWindowInterval,
+		TotalSubmeterInterval: totalSubmeterInterval,
+	}
+	return projector, priceWindows, totalSubmeters, settings, projectionContext, projectionCancel, nil
 }
 
-func runAnalyticsProjectionCoordinated(ctx context.Context, projector *analyticsprojector.Projector, runtime *observability.Runtime, locker leaseLocker, logger *slog.Logger) {
+func runAnalyticsProjectionCoordinated(ctx context.Context, projector *analyticsprojector.Projector, pollInterval time.Duration, runtime *observability.Runtime, locker leaseLocker, logger *slog.Logger) {
 	if projector == nil {
 		return
 	}
-	pollInterval := durationEnv("ANALYTICS_PROJECTOR_POLL_INTERVAL", 500*time.Millisecond, 25*time.Millisecond, time.Minute)
+	if pollInterval <= 0 {
+		pollInterval = 500 * time.Millisecond
+	}
 	lastFailureLog := time.Time{}
 	logger.Info("analytics_read_model_projection_started", "poll_interval", pollInterval.String(), "deployment", "telemetry-runtime-in-process")
 	runPeriodicLoop(ctx, periodicLoopConfig{
@@ -782,15 +909,20 @@ func runAnalyticsProjectionCoordinated(ctx context.Context, projector *analytics
 		span.End()
 		if projected > 0 {
 			_ = runtime.Metrics.AddCounter("hvac_analytics_energy_intervals_projected_total", "Projected additive energy intervals.", map[string]string{"model": "energy_interval_facts"}, float64(projected))
-			logger.Info("analytics_energy_intervals_projected", "interval_count", projected)
+			logger.Debug("analytics_energy_intervals_projected", "interval_count", projected)
 		}
 	})
 }
 
 // runPriceWindowProjectionCoordinated keeps every priced Site's Tariff laid out as price windows for Cube
 // (#575). Tariffs change rarely, so it runs at start and then every few minutes.
-func runPriceWindowProjectionCoordinated(ctx context.Context, projector *analyticsprojector.PriceWindowProjector, runtime *observability.Runtime, settlingBuffer time.Duration, locker leaseLocker, logger *slog.Logger) {
-	interval := durationEnv("ANALYTICS_PRICE_WINDOW_INTERVAL", 5*time.Minute, 10*time.Second, time.Hour)
+func runPriceWindowProjectionCoordinated(ctx context.Context, projector *analyticsprojector.PriceWindowProjector, interval time.Duration, runtime *observability.Runtime, settlingBuffer time.Duration, locker leaseLocker, logger *slog.Logger) {
+	if projector == nil {
+		return
+	}
+	if interval <= 0 {
+		interval = 5 * time.Minute
+	}
 	runPeriodicLoop(ctx, periodicLoopConfig{
 		LockKey: "price_window_projection", LockTTL: 90 * time.Second, Interval: interval, SettlingBuffer: settlingBuffer,
 		AlignToWindow: settlingBuffer > 0, ImmediateFirstTick: settlingBuffer == 0,
@@ -806,11 +938,13 @@ func runPriceWindowProjectionCoordinated(ctx context.Context, projector *analyti
 	})
 }
 
-func runTotalSubmeterProjectionCoordinated(ctx context.Context, projector *analyticsprojector.TotalSubmeterProjector, runtime *observability.Runtime, settlingBuffer time.Duration, locker leaseLocker, logger *slog.Logger) {
+func runTotalSubmeterProjectionCoordinated(ctx context.Context, projector *analyticsprojector.TotalSubmeterProjector, interval time.Duration, runtime *observability.Runtime, settlingBuffer time.Duration, locker leaseLocker, logger *slog.Logger) {
 	if projector == nil {
 		return
 	}
-	interval := durationEnv("ANALYTICS_TOTAL_SUBMETER_INTERVAL", time.Minute, 10*time.Second, time.Hour)
+	if interval <= 0 {
+		interval = time.Minute
+	}
 	runPeriodicLoop(ctx, periodicLoopConfig{
 		LockKey: "total_submeter_projection", LockTTL: 60 * time.Second, Interval: interval, SettlingBuffer: settlingBuffer,
 		AlignToWindow: settlingBuffer > 0, ImmediateFirstTick: settlingBuffer == 0,
@@ -836,16 +970,8 @@ func newAnalyticsHTTPClient(caPath string) (*http.Client, error) {
 		tlsConfig.RootCAs = roots
 	}
 	return &http.Client{
-		Timeout: 15 * time.Second,
-		Transport: &http.Transport{
-			Proxy:                 http.ProxyFromEnvironment,
-			TLSClientConfig:       tlsConfig,
-			MaxIdleConns:          64,
-			MaxIdleConnsPerHost:   32,
-			IdleConnTimeout:       90 * time.Second,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ExpectContinueTimeout: time.Second,
-		},
+		Timeout:   15 * time.Second,
+		Transport: newClonedTelemetryHTTPTransport(tlsConfig, false, true, 30*time.Second),
 	}, nil
 }
 
@@ -853,24 +979,31 @@ func loadRealtimeService(store *telemetry.PostgresStore, certificate tls.Certifi
 	if !strings.EqualFold(strings.TrimSpace(os.Getenv("TELEMETRY_REALTIME_ENABLED")), "true") {
 		return nil, context.Background(), nil, nil
 	}
-	centrifugoCAs, err := loadCertPool(requiredEnv("TELEMETRY_CENTRIFUGO_CA"))
+	centrifugoCAPath, err := requiredEnv("TELEMETRY_CENTRIFUGO_CA")
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	transport := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		TLSClientConfig: &tls.Config{
-			MinVersion:   tls.VersionTLS13,
-			RootCAs:      centrifugoCAs,
-			Certificates: []tls.Certificate{certificate},
-			ServerName:   strings.TrimSpace(os.Getenv("TELEMETRY_CENTRIFUGO_SERVER_NAME")),
-		},
-		DisableCompression: true,
-		ForceAttemptHTTP2:  false,
+	centrifugoCAs, err := loadCertPool(centrifugoCAPath)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	transport := newClonedTelemetryHTTPTransport(&tls.Config{
+		MinVersion:   tls.VersionTLS13,
+		RootCAs:      centrifugoCAs,
+		Certificates: []tls.Certificate{certificate},
+		ServerName:   strings.TrimSpace(os.Getenv("TELEMETRY_CENTRIFUGO_SERVER_NAME")),
+	}, true, false, 15*time.Second)
+	centrifugoAPIURL, err := requiredEnv("TELEMETRY_CENTRIFUGO_API_URL")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	centrifugoAPIKey, err := requiredEnv("TELEMETRY_CENTRIFUGO_API_KEY")
+	if err != nil {
+		return nil, nil, nil, err
 	}
 	centrifugo, err := telemetry.NewCentrifugoTransport(telemetry.CentrifugoTransportConfig{
-		BaseURL:    requiredEnv("TELEMETRY_CENTRIFUGO_API_URL"),
-		APIKey:     requiredEnv("TELEMETRY_CENTRIFUGO_API_KEY"),
+		BaseURL:    centrifugoAPIURL,
+		APIKey:     centrifugoAPIKey,
 		HTTPClient: telemetry.NewBoundedCentrifugoHTTPClient(transport),
 	})
 	if err != nil {
@@ -882,14 +1015,30 @@ func loadRealtimeService(store *telemetry.PostgresStore, certificate tls.Certifi
 		hostname, _ := os.Hostname()
 		relayWorkerID = "telemetry-realtime:" + hostname
 	}
+	publicEndpoint, err := requiredEnv("TELEMETRY_REALTIME_ENDPOINT")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	capabilityKey, err := requiredEnv("TELEMETRY_REALTIME_CAPABILITY_HMAC_KEY")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	tokenKey, err := requiredEnv("TELEMETRY_CENTRIFUGO_TOKEN_HMAC_KEY")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	relayLeaseDuration, err := durationEnv("TELEMETRY_REALTIME_RELAY_LEASE_DURATION", 30*time.Second, 5*time.Second, 5*time.Minute)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	service, err := telemetry.NewRealtimeService(telemetry.RealtimeConfig{
 		Repository:             store,
 		Transport:              instrumentedTransport,
-		PublicEndpoint:         requiredEnv("TELEMETRY_REALTIME_ENDPOINT"),
-		CapabilityHMACKey:      []byte(requiredEnv("TELEMETRY_REALTIME_CAPABILITY_HMAC_KEY")),
-		ConnectionTokenHMACKey: []byte(requiredEnv("TELEMETRY_CENTRIFUGO_TOKEN_HMAC_KEY")),
+		PublicEndpoint:         publicEndpoint,
+		CapabilityHMACKey:      []byte(capabilityKey),
+		ConnectionTokenHMACKey: []byte(tokenKey),
 		RelayWorkerID:          relayWorkerID,
-		RelayLeaseDuration:     durationEnv("TELEMETRY_REALTIME_RELAY_LEASE_DURATION", 30*time.Second, 5*time.Second, 5*time.Minute),
+		RelayLeaseDuration:     relayLeaseDuration,
 	})
 	if err != nil {
 		return nil, nil, nil, err
@@ -922,7 +1071,7 @@ func runRealtimeRelay(ctx context.Context, service *telemetry.RealtimeService, l
 				continue
 			}
 			if published > 0 {
-				logger.Info("telemetry_realtime_relay_batch_published", "publication_count", published)
+				logger.Debug("telemetry_realtime_relay_batch_published", "publication_count", published)
 			}
 		}
 	}
@@ -1199,7 +1348,7 @@ func runProbeOffsetSweepCoordinated(ctx context.Context, sweeper probeOffsetSwee
 		case err != nil && ctx.Err() == nil:
 			logger.Warn("telemetry_probe_offset_sweep_failed", "error_code", "TELEMETRY_PROBE_OFFSET_SWEEP_FAILED")
 		case estimated > 0:
-			logger.Info("telemetry_probe_offsets_estimated", "estimate_count", estimated)
+			logger.Debug("telemetry_probe_offsets_estimated", "estimate_count", estimated)
 		}
 	})
 }
@@ -1229,33 +1378,55 @@ func runRevocationRelay(ctx context.Context, relay *telemetry.RevocationRelay, l
 	}
 }
 
-func loadAlarmEvaluationRelay(store *telemetry.PostgresStore, certificate tls.Certificate) (*telemetry.AlarmEvaluationRelay, context.Context, context.CancelFunc, error) {
+func loadAlarmEvaluationRelay(store *telemetry.PostgresStore, certificate tls.Certificate) (*telemetry.AlarmEvaluationRelay, time.Duration, context.Context, context.CancelFunc, error) {
 	if !strings.EqualFold(strings.TrimSpace(os.Getenv("TELEMETRY_ALARM_EVALUATION_ENABLED")), "true") {
-		return nil, context.Background(), nil, nil
+		return nil, 0, context.Background(), nil, nil
 	}
-	alarmCAs, err := loadCertPool(requiredEnv("TELEMETRY_ALARM_CA"))
+	alarmCAPath, err := requiredEnv("TELEMETRY_ALARM_CA")
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, 0, nil, nil, err
 	}
-	deliveryTimeout := durationEnv("TELEMETRY_ALARM_RELAY_DELIVERY_TIMEOUT", telemetry.DefaultAlarmEvaluationDeliveryTimeout, 100*time.Millisecond, time.Minute)
+	alarmCAs, err := loadCertPool(alarmCAPath)
+	if err != nil {
+		return nil, 0, nil, nil, err
+	}
+	deliveryTimeout, err := durationEnv("TELEMETRY_ALARM_RELAY_DELIVERY_TIMEOUT", telemetry.DefaultAlarmEvaluationDeliveryTimeout, 100*time.Millisecond, time.Minute)
+	if err != nil {
+		return nil, 0, nil, nil, err
+	}
+	alarmEvalURL, err := requiredEnv("TELEMETRY_ALARM_EVALUATION_URL")
+	if err != nil {
+		return nil, 0, nil, nil, err
+	}
 	client := &http.Client{
 		Timeout:       deliveryTimeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		Transport: &http.Transport{
-			Proxy: http.ProxyFromEnvironment,
-			TLSClientConfig: &tls.Config{
-				MinVersion: tls.VersionTLS13, RootCAs: alarmCAs, Certificates: []tls.Certificate{certificate},
-				ServerName: strings.TrimSpace(os.Getenv("TELEMETRY_ALARM_SERVER_NAME")),
-			},
-			DisableCompression: true,
-			ForceAttemptHTTP2:  false,
-		},
+		Transport: newClonedTelemetryHTTPTransport(&tls.Config{
+			MinVersion: tls.VersionTLS13, RootCAs: alarmCAs, Certificates: []tls.Certificate{certificate},
+			ServerName: strings.TrimSpace(os.Getenv("TELEMETRY_ALARM_SERVER_NAME")),
+		}, true, false, deliveryTimeout),
 	}
 	transport, err := telemetry.NewHTTPAlarmEvaluationTransport(telemetry.HTTPAlarmEvaluationTransportConfig{
-		Endpoint: requiredEnv("TELEMETRY_ALARM_EVALUATION_URL"), HTTPClient: client,
+		Endpoint: alarmEvalURL, HTTPClient: client,
 	})
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, 0, nil, nil, err
+	}
+	leaseDuration, err := durationEnv("TELEMETRY_ALARM_RELAY_LEASE_DURATION", 30*time.Second, 5*time.Second, 5*time.Minute)
+	if err != nil {
+		return nil, 0, nil, nil, err
+	}
+	retryDelay, err := durationEnv("TELEMETRY_ALARM_RELAY_RETRY_DELAY", 5*time.Second, time.Second, time.Hour)
+	if err != nil {
+		return nil, 0, nil, nil, err
+	}
+	maxAttempts, err := integerEnv("TELEMETRY_ALARM_RELAY_MAX_ATTEMPTS", telemetry.DefaultAlarmEvaluationMaxAttempts, 1, 1000)
+	if err != nil {
+		return nil, 0, nil, nil, err
+	}
+	pollInterval, err := durationEnv("TELEMETRY_ALARM_RELAY_POLL_INTERVAL", 100*time.Millisecond, 25*time.Millisecond, time.Minute)
+	if err != nil {
+		return nil, 0, nil, nil, err
 	}
 	workerID := strings.TrimSpace(os.Getenv("TELEMETRY_ALARM_RELAY_WORKER_ID"))
 	if workerID == "" {
@@ -1266,23 +1437,25 @@ func loadAlarmEvaluationRelay(store *telemetry.PostgresStore, certificate tls.Ce
 		Repository:      store,
 		Transport:       transport,
 		WorkerID:        workerID,
-		LeaseDuration:   durationEnv("TELEMETRY_ALARM_RELAY_LEASE_DURATION", 30*time.Second, 5*time.Second, 5*time.Minute),
-		RetryDelay:      durationEnv("TELEMETRY_ALARM_RELAY_RETRY_DELAY", 5*time.Second, time.Second, time.Hour),
-		MaxAttempts:     integerEnv("TELEMETRY_ALARM_RELAY_MAX_ATTEMPTS", telemetry.DefaultAlarmEvaluationMaxAttempts, 1, 1000),
+		LeaseDuration:   leaseDuration,
+		RetryDelay:      retryDelay,
+		MaxAttempts:     maxAttempts,
 		DeliveryTimeout: deliveryTimeout,
 	})
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, 0, nil, nil, err
 	}
 	relayContext, relayCancel := context.WithCancel(context.Background())
-	return relay, relayContext, relayCancel, nil
+	return relay, pollInterval, relayContext, relayCancel, nil
 }
 
-func runAlarmEvaluationRelay(ctx context.Context, relay *telemetry.AlarmEvaluationRelay, logger *slog.Logger) {
+func runAlarmEvaluationRelay(ctx context.Context, relay *telemetry.AlarmEvaluationRelay, pollInterval time.Duration, logger *slog.Logger) {
 	if relay == nil {
 		return
 	}
-	pollInterval := durationEnv("TELEMETRY_ALARM_RELAY_POLL_INTERVAL", 100*time.Millisecond, 25*time.Millisecond, time.Minute)
+	if pollInterval <= 0 {
+		pollInterval = 100 * time.Millisecond
+	}
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 	lastFailureLog := time.Time{}
@@ -1303,7 +1476,7 @@ func runAlarmEvaluationRelay(ctx context.Context, relay *telemetry.AlarmEvaluati
 				continue
 			}
 			if delivered > 0 {
-				logger.Info("telemetry_alarm_evaluation_batch_delivered", "publication_count", delivered)
+				logger.Debug("telemetry_alarm_evaluation_batch_delivered", "publication_count", delivered)
 			}
 		}
 	}
@@ -1348,8 +1521,56 @@ func loadTelemetryRateLimiter() (*limitpolicy.Limiter, func(), error) {
 	if err != nil {
 		return nil, func() {}, err
 	}
+	if options.DialTimeout <= 0 {
+		options.DialTimeout = 5 * time.Second
+	}
+	if options.ReadTimeout <= 0 {
+		options.ReadTimeout = 3 * time.Second
+	}
+	if options.WriteTimeout <= 0 {
+		options.WriteTimeout = 3 * time.Second
+	}
+	if options.PoolTimeout <= 0 {
+		options.PoolTimeout = 4 * time.Second
+	}
+	if options.PoolSize <= 0 || options.PoolSize > 16 {
+		options.PoolSize = 16
+	}
+	if options.MinIdleConns <= 0 || options.MinIdleConns > options.PoolSize {
+		options.MinIdleConns = 2
+	}
+	if options.ConnMaxIdleTime <= 0 {
+		options.ConnMaxIdleTime = 5 * time.Minute
+	}
 	client := redis.NewClient(options)
 	return limitpolicy.NewLimiter(limitpolicy.NewRedisCounter(client, "hvac:telemetry:limit"), telemetryLimitPolicy()), func() { _ = client.Close() }, nil
+}
+
+func newClonedTelemetryHTTPTransport(tlsConfig *tls.Config, disableCompression, allowHTTP2 bool, responseHeaderTimeout time.Duration) *http.Transport {
+	var transport *http.Transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok && base != nil {
+		transport = base.Clone()
+	} else {
+		transport = &http.Transport{}
+	}
+	transport.Proxy = http.ProxyFromEnvironment
+	transport.DialContext = (&net.Dialer{
+		Timeout:   5 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext
+	transport.TLSClientConfig = tlsConfig
+	transport.DisableCompression = disableCompression
+	if !allowHTTP2 {
+		transport.ForceAttemptHTTP2 = false
+	}
+	transport.MaxConnsPerHost = 16
+	transport.MaxIdleConns = 64
+	transport.MaxIdleConnsPerHost = 16
+	transport.IdleConnTimeout = 90 * time.Second
+	transport.TLSHandshakeTimeout = 10 * time.Second
+	transport.ResponseHeaderTimeout = responseHeaderTimeout
+	transport.ExpectContinueTimeout = time.Second
+	return transport
 }
 
 // telemetryLimitPolicy keeps telemetry ingest fail-open: Redis loss must not drop source observations.
@@ -1384,39 +1605,20 @@ func commaSeparated(raw string) []string {
 	return values
 }
 
-func requiredEnv(name string) string {
+func requiredEnv(name string) (string, error) {
 	value := strings.TrimSpace(os.Getenv(name))
 	if value == "" {
-		_, _ = os.Stderr.WriteString(name + " is required\n")
-		os.Exit(1)
+		return "", errors.New(name + " is required")
 	}
-	return value
+	return value, nil
 }
 
-func integerEnv(name string, fallback, minimum, maximum int) int {
-	value := strings.TrimSpace(os.Getenv(name))
-	if value == "" {
-		return fallback
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil || parsed < minimum || parsed > maximum {
-		_, _ = os.Stderr.WriteString(name + " is invalid\n")
-		os.Exit(1)
-	}
-	return parsed
+func integerEnv(name string, fallback, minimum, maximum int) (int, error) {
+	return parseBoundedIntEnv(os.Getenv, name, fallback, minimum, maximum)
 }
 
-func durationEnv(name string, fallback, minimum, maximum time.Duration) time.Duration {
-	value := strings.TrimSpace(os.Getenv(name))
-	if value == "" {
-		return fallback
-	}
-	parsed, err := time.ParseDuration(value)
-	if err != nil || parsed < minimum || parsed > maximum {
-		_, _ = os.Stderr.WriteString(name + " is invalid\n")
-		os.Exit(1)
-	}
-	return parsed
+func durationEnv(name string, fallback, minimum, maximum time.Duration) (time.Duration, error) {
+	return parseBoundedDurationEnv(os.Getenv, name, fallback, minimum, maximum)
 }
 
 func parsePositiveInt32Env(lookup func(string) string, name string) (int32, bool, error) {

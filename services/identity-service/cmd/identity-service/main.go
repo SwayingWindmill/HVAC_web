@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -16,9 +17,13 @@ import (
 )
 
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
 	logger := observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
 	telemetry := observability.NewRuntime(observability.RuntimeConfig{
-		Service: "identity-service", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 128, ExportTimeout: 500 * time.Millisecond,
+		Service: "identity-service", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 128, ExportTimeout: 500 * time.Millisecond, Logger: logger,
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	server, err := identity.NewServer(ctx, identity.Config{
@@ -47,7 +52,7 @@ func main() {
 			component = "signing_key"
 		}
 		logger.Error("identity_configuration_invalid", "error_code", "IDENTITY_CONFIG_INVALID", "component", component, "error", err.Error())
-		os.Exit(1)
+		return 1
 	}
 	defer server.Close()
 	telemetry.SetDependencies(observability.Dependency{Name: "postgres", Required: true, Check: server.Ping})
@@ -60,30 +65,101 @@ func main() {
 		Addr: envOr("IDENTITY_DIAGNOSTICS_ADDR", ":19085"), Handler: telemetry.DiagnosticsHandler(),
 		ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second,
 	}
+
+	sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	serveErr := make(chan error, 2)
+	var httpWG sync.WaitGroup
+	httpWG.Add(1)
 	go func() {
+		defer httpWG.Done()
+		defer observability.Recover(logger, telemetry.Metrics, "identity.diagnostics_server", func(any) {
+			select {
+			case serveErr <- errors.New("diagnostics server panicked"):
+			default:
+			}
+		})
 		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("identity_diagnostics_failed", "error_code", "IDENTITY_DIAGNOSTICS_FAILED")
+			select {
+			case serveErr <- err:
+			default:
+			}
 		}
 	}()
 
-	shutdown := make(chan os.Signal, 1)
-	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
+	httpWG.Add(1)
 	go func() {
-		<-shutdown
-		telemetry.MarkNotReady()
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = httpServer.Shutdown(ctx)
-		_ = diagnostics.Shutdown(ctx)
-		_ = telemetry.Shutdown(ctx)
+		defer httpWG.Done()
+		defer observability.Recover(logger, telemetry.Metrics, "identity.http_server", func(any) {
+			select {
+			case serveErr <- errors.New("http server panicked"):
+			default:
+			}
+		})
+		telemetry.MarkReady()
+		logger.Info("identity_started", "service", "identity-service", "issuer", os.Getenv("IDENTITY_ISSUER"))
+		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("identity_stopped_unexpectedly", "error_code", "IDENTITY_SERVE_FAILED", "error", err.Error())
+			select {
+			case serveErr <- err:
+			default:
+			}
+		}
 	}()
 
-	telemetry.MarkReady()
-	logger.Info("identity_started", "service", "identity-service", "issuer", os.Getenv("IDENTITY_ISSUER"))
-	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		logger.Error("identity_stopped_unexpectedly", "error_code", "IDENTITY_SERVE_FAILED", "error", err.Error())
-		os.Exit(1)
+	return drainAndShutdown(sigCtx, serveErr, logger, telemetry, httpServer, diagnostics, &httpWG, 10*time.Second)
+}
+
+func drainAndShutdown(
+	sigCtx context.Context,
+	serveErr <-chan error,
+	logger *slog.Logger,
+	telemetry *observability.Runtime,
+	httpServer *http.Server,
+	diagnostics *http.Server,
+	httpWG *sync.WaitGroup,
+	shutdownTimeout time.Duration,
+) int {
+	exitCode := 0
+	select {
+	case <-sigCtx.Done():
+		logger.Info("identity_shutting_down", "service", "identity-service")
+	case <-serveErr:
+		exitCode = 1
 	}
+
+	telemetry.MarkNotReady()
+
+	shutdownDone := make(chan struct{})
+	go func() {
+		defer close(shutdownDone)
+		defer observability.Recover(logger, telemetry.Metrics, "identity.shutdown")
+		drainCtx, cancelDrain := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancelDrain()
+		for _, srv := range []*http.Server{httpServer, diagnostics} {
+			if srv == nil {
+				continue
+			}
+			if err := srv.Shutdown(drainCtx); err != nil {
+				logger.Warn("identity_http_shutdown_failed", "error_code", "IDENTITY_SHUTDOWN_FAILED", "cause", err.Error())
+				_ = srv.Close()
+			}
+		}
+		if httpWG != nil {
+			httpWG.Wait()
+		}
+	}()
+	<-shutdownDone
+
+	obsCtx, cancelObs := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelObs()
+	if err := telemetry.Shutdown(obsCtx); err != nil {
+		logger.Warn("identity_telemetry_shutdown_failed", "error_code", "TELEMETRY_SHUTDOWN_FAILED", "cause", err.Error())
+	}
+	logger.Info("identity_stopped", "service", "identity-service")
+	return exitCode
 }
 
 func envOr(name, fallback string) string {

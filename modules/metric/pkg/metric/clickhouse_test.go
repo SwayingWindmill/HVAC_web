@@ -271,13 +271,16 @@ func TestNewClickHouseStoreInitializesTunedDefaultHTTPTransport(t *testing.T) {
 	if !ok || transport == nil {
 		t.Fatalf("Transport=%T, want *http.Transport", store.client.Transport)
 	}
-	if transport.MaxIdleConns != 64 ||
-		transport.MaxIdleConnsPerHost != 32 ||
+	if transport.MaxConnsPerHost != 16 ||
+		transport.MaxIdleConns != 64 ||
+		transport.MaxIdleConnsPerHost != 16 ||
 		transport.IdleConnTimeout != 90*time.Second ||
 		transport.TLSHandshakeTimeout != 10*time.Second ||
-		transport.ExpectContinueTimeout != time.Second {
-		t.Fatalf("unexpected transport tuning: MaxIdleConns=%d MaxIdleConnsPerHost=%d IdleConnTimeout=%s TLSHandshakeTimeout=%s ExpectContinueTimeout=%s",
-			transport.MaxIdleConns, transport.MaxIdleConnsPerHost, transport.IdleConnTimeout, transport.TLSHandshakeTimeout, transport.ExpectContinueTimeout)
+		transport.ResponseHeaderTimeout != 30*time.Second ||
+		transport.ExpectContinueTimeout != time.Second ||
+		transport.DialContext == nil {
+		t.Fatalf("unexpected transport tuning: MaxConnsPerHost=%d MaxIdleConns=%d MaxIdleConnsPerHost=%d IdleConnTimeout=%s TLSHandshakeTimeout=%s ResponseHeaderTimeout=%s ExpectContinueTimeout=%s DialContext=%v",
+			transport.MaxConnsPerHost, transport.MaxIdleConns, transport.MaxIdleConnsPerHost, transport.IdleConnTimeout, transport.TLSHandshakeTimeout, transport.ResponseHeaderTimeout, transport.ExpectContinueTimeout, transport.DialContext != nil)
 	}
 
 	custom := &http.Client{Timeout: 4 * time.Second}
@@ -404,6 +407,11 @@ func TestInsertMetricAndInsertMetricsUseAsyncInsertAndDedupToken(t *testing.T) {
 	}
 	if sha256.Size != 32 {
 		t.Fatal("unexpected sha256 size")
+	}
+}
+
+	if !strings.Contains(capturedSQL, "sampled_at") {
+		t.Fatalf("unexpected query: %s", capturedSQL)
 	}
 }
 
@@ -592,5 +600,68 @@ func TestClickHouseOptionABoundary1200To1300Attribution(t *testing.T) {
 	monthBoundary := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 	if got := optionAHour(monthBoundary); got.Month() != time.May || got.Hour() != 23 {
 		t.Fatalf("Option A hour(2026-06-01 00:00:00.000) = %v, want 2026-05-31 23:00:00 UTC", got)
+	}
+}
+
+func TestClickHouseStorePingAndSelectGzipDecompression(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		user, pass, ok := request.BasicAuth()
+		if !ok || user != "metric_user" || pass != "metric_pass" {
+			writer.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		q := request.URL.Query()
+		if q.Get("enable_http_compression") != "1" {
+			t.Fatalf("expected enable_http_compression=1, got %q", q.Get("enable_http_compression"))
+		}
+		if request.Header.Get("Accept-Encoding") != "gzip" {
+			t.Fatalf("expected Accept-Encoding: gzip, got %q", request.Header.Get("Accept-Encoding"))
+		}
+		sql := q.Get("query")
+		var payload string
+		switch {
+		case sql == "SELECT 1":
+			payload = "1\n"
+		case strings.Contains(sql, "analytics.metric_result_facts"):
+			payload = "1\n"
+		default:
+			t.Fatalf("unexpected query: %s", sql)
+		}
+		writer.Header().Set("Content-Encoding", "gzip")
+		gz := gzip.NewWriter(writer)
+		_, _ = io.WriteString(gz, payload)
+		_ = gz.Close()
+	}))
+	defer server.Close()
+
+	store, err := NewClickHouseStore(server.URL, "metric_user", "metric_pass", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Ping(context.Background()); err != nil {
+		t.Fatalf("Ping failed: %v", err)
+	}
+	found, err := store.HasMetricResult(context.Background(), Result{ResultID: "018f2e00-9100-7000-8000-000000000001"})
+	if err != nil {
+		t.Fatalf("HasMetricResult failed: %v", err)
+	}
+	if !found {
+		t.Fatal("expected HasMetricResult to return true for gzip-compressed SELECT response")
+	}
+}
+
+func TestNewRedisLatestStoreAppliesBoundedPoolAndTimeouts(t *testing.T) {
+	store, err := NewRedisLatestStore("redis://:secret@127.0.0.1:6379/0", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	opts := store.client.Options()
+	if opts.DialTimeout != 5*time.Second || opts.ReadTimeout != 3*time.Second || opts.WriteTimeout != 3*time.Second {
+		t.Fatalf("unexpected timeouts: dial=%s read=%s write=%s", opts.DialTimeout, opts.ReadTimeout, opts.WriteTimeout)
+	}
+	if opts.PoolSize != 16 || opts.MinIdleConns != 2 || opts.PoolTimeout != 4*time.Second || opts.ConnMaxIdleTime != 5*time.Minute {
+		t.Fatalf("unexpected pool options: size=%d minIdle=%d poolTimeout=%s connMaxIdle=%s", opts.PoolSize, opts.MinIdleConns, opts.PoolTimeout, opts.ConnMaxIdleTime)
 	}
 }

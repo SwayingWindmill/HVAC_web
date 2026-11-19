@@ -1,6 +1,7 @@
 package commandservice
 
 import (
+	"context"
 	"errors"
 	"os"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 )
@@ -318,25 +320,85 @@ func postgresCommandRequest(idempotencyKey string, setpoint float64) commandmode
 func resetCommandFixture(t *testing.T, admin *pgxpool.Pool) {
 	t.Helper()
 	ctx := t.Context()
-	for _, statement := range []string{
-		`DELETE FROM command_runtime.connector_evidence`,
-		`DELETE FROM command_runtime.command_grant_uses`,
-		`DELETE FROM command_runtime.command_audit_intents`,
-		`DELETE FROM command_runtime.control_alarm_outbox`,
-		`DELETE FROM command_runtime.command_dispatch_outbox`,
-		`DELETE FROM command_runtime.command_transitions`,
-		`DELETE FROM command_runtime.command_attempts`,
-		`DELETE FROM command_runtime.command_approval_snapshots`,
-		`DELETE FROM command_runtime.command_risk_snapshots`,
-		`DELETE FROM command_runtime.command_authorization_snapshots`,
-		`DELETE FROM command_runtime.command_idempotency`,
-		`DELETE FROM command_runtime.command_intents`,
-		`DELETE FROM command_runtime.device_control_state`,
-	} {
-		if _, err := admin.Exec(ctx, statement); err != nil {
-			t.Fatal(err)
-		}
+	if _, err := admin.Exec(ctx, `
+TRUNCATE TABLE
+  command_runtime.connector_evidence,
+  command_runtime.command_grant_uses,
+  command_runtime.command_audit_intents,
+  command_runtime.control_alarm_outbox,
+  command_runtime.command_dispatch_outbox,
+  command_runtime.command_transitions,
+  command_runtime.command_attempts,
+  command_runtime.command_approval_snapshots,
+  command_runtime.command_risk_snapshots,
+  command_runtime.command_authorization_snapshots,
+  command_runtime.command_idempotency,
+  command_runtime.command_intents,
+  command_runtime.device_control_state
+`); err != nil {
+		t.Fatal(err)
 	}
+}
+
+func assertPostgresAuditMutationBlocked(t *testing.T, ctx context.Context, pool *pgxpool.Pool, query string, args ...any) {
+	t.Helper()
+	_, err := pool.Exec(ctx, query, args...)
+	if err == nil {
+		t.Fatalf("expected append-only audit mutation to be rejected: %s", query)
+	}
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23000" {
+		t.Fatalf("expected integrity_constraint_violation (23000) for %s, got %v", query, err)
+	}
+}
+
+func TestPostgresTransitionsAndAuditIntentsEnforceImmutability(t *testing.T) {
+	runtimeURL, adminURL := commandPostgresTestURLs(t)
+	ctx := t.Context()
+	admin, err := pgxpool.New(ctx, adminURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	resetCommandFixture(t, admin)
+
+	opened, err := OpenPostgresStore(ctx, runtimeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Close()
+	store := NewPostgresStore(opened.pool, fixedPostgresClock(), nil)
+
+	created, err := store.Submit(ctx, postgresCommandRequest("postgres-audit-immutability", 24))
+	if err != nil {
+		t.Fatalf("submit failed: %v", err)
+	}
+	assertPostgresAuditMutationBlocked(t, ctx, admin,
+		`UPDATE command_runtime.command_transitions SET reason = 'TAMPERED' WHERE command_id = $1::uuid`,
+		created.Intent.ID,
+	)
+	assertPostgresAuditMutationBlocked(t, ctx, admin,
+		`DELETE FROM command_runtime.command_transitions WHERE command_id = $1::uuid`,
+		created.Intent.ID,
+	)
+	assertPostgresAuditMutationBlocked(t, ctx, admin,
+		`DELETE FROM command_runtime.command_audit_intents WHERE command_id = $1::uuid`,
+		created.Intent.ID,
+	)
+	assertPostgresAuditMutationBlocked(t, ctx, admin,
+		`UPDATE command_runtime.command_audit_intents SET event_kind = 'TAMPERED', relayed_at = now() WHERE command_id = $1::uuid`,
+		created.Intent.ID,
+	)
+	if _, err := admin.Exec(ctx,
+		`UPDATE command_runtime.command_audit_intents SET relayed_at = now() WHERE command_id = $1::uuid AND relayed_at IS NULL`,
+		created.Intent.ID,
+	); err != nil {
+		t.Fatalf("initial relay timestamp transition failed: %v", err)
+	}
+	assertPostgresAuditMutationBlocked(t, ctx, admin,
+		`UPDATE command_runtime.command_audit_intents SET relayed_at = now() WHERE command_id = $1::uuid`,
+		created.Intent.ID,
+	)
 }
 
 func commandPostgresTestURLs(t *testing.T) (string, string) {

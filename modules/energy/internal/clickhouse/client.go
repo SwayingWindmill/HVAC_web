@@ -2,6 +2,7 @@ package clickhouse
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -9,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -151,12 +153,60 @@ func newDefaultAnalyticsHTTPClient(timeout time.Duration) *http.Client {
 	} else {
 		transport = &http.Transport{}
 	}
+	transport.DialContext = (&net.Dialer{
+		Timeout:   5 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext
+	transport.MaxConnsPerHost = 16
 	transport.MaxIdleConns = 64
-	transport.MaxIdleConnsPerHost = 32
+	transport.MaxIdleConnsPerHost = 16
 	transport.IdleConnTimeout = 90 * time.Second
 	transport.TLSHandshakeTimeout = 10 * time.Second
+	transport.ResponseHeaderTimeout = 30 * time.Second
 	transport.ExpectContinueTimeout = time.Second
 	return &http.Client{Timeout: timeout, Transport: transport}
+}
+
+func (reader *Reader) Ping(ctx context.Context) error {
+	if reader == nil || reader.endpoint == nil || reader.httpClient == nil {
+		return errors.New("ClickHouse analytics reader is closed")
+	}
+	return pingAnalyticsClickHouse(ctx, reader.endpoint, reader.username, reader.password, reader.httpClient)
+}
+
+func (writer *Writer) Ping(ctx context.Context) error {
+	if writer == nil || writer.endpoint == nil || writer.httpClient == nil {
+		return errors.New("ClickHouse analytics writer is closed")
+	}
+	return pingAnalyticsClickHouse(ctx, writer.endpoint, writer.username, writer.password, writer.httpClient)
+}
+
+func pingAnalyticsClickHouse(ctx context.Context, endpoint *url.URL, username, password string, client *http.Client) error {
+	u := *endpoint
+	q := u.Query()
+	q.Set("query", "SELECT 1")
+	u.RawQuery = q.Encode()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return fmt.Errorf("create ClickHouse analytics ping: %w", err)
+	}
+	if username != "" {
+		request.SetBasicAuth(username, password)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return fmt.Errorf("ClickHouse analytics ping: %w", err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(response.Body, 4096))
+	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+	if err != nil {
+		return fmt.Errorf("read ClickHouse analytics ping response: %w", err)
+	}
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return clickHouseStatusError("ping", response.StatusCode, body)
+	}
+	return nil
 }
 
 const (
@@ -537,12 +587,24 @@ FORMAT JSONEachRow`, reader.sourceDatabase, reader.analyticsDatabase, reader.ana
 // query runs a read whose values travel as ClickHouse query parameters, never as SQL text.
 func (reader *Reader) query(ctx context.Context, operation, sql string, parameters url.Values) ([]byte, error) {
 	endpoint := *reader.endpoint
-	endpoint.RawQuery = parameters.Encode()
+	queryParams := url.Values{}
+	for key, values := range parameters {
+		queryParams[key] = append([]string(nil), values...)
+	}
+	trimmedUpper := strings.ToUpper(strings.TrimSpace(sql))
+	selectQuery := strings.HasPrefix(trimmedUpper, "SELECT") || strings.HasPrefix(trimmedUpper, "WITH")
+	if selectQuery {
+		queryParams.Set("enable_http_compression", "1")
+	}
+	endpoint.RawQuery = queryParams.Encode()
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), strings.NewReader(sql))
 	if err != nil {
 		return nil, fmt.Errorf("create ClickHouse analytics %s: %w", operation, err)
 	}
 	request.Header.Set("Accept", "application/x-ndjson")
+	if selectQuery {
+		request.Header.Set("Accept-Encoding", "gzip")
+	}
 	request.Header.Set("Content-Type", "text/plain; charset=utf-8")
 	if reader.username != "" {
 		request.SetBasicAuth(reader.username, reader.password)
@@ -553,8 +615,22 @@ func (reader *Reader) query(ctx context.Context, operation, sql string, paramete
 		return nil, fmt.Errorf("ClickHouse analytics %s: %w", operation, err)
 	}
 	defer response.Body.Close()
-	payload, err := io.ReadAll(io.LimitReader(response.Body, maximumResponseBodySize+1))
-	_, _ = io.Copy(io.Discard, response.Body)
+	const maxDrainBytes = 4096
+	bodyReader := io.Reader(io.LimitReader(response.Body, maximumResponseBodySize+1))
+	if strings.EqualFold(strings.TrimSpace(response.Header.Get("Content-Encoding")), "gzip") {
+		gz, gzErr := gzip.NewReader(bodyReader)
+		if gzErr != nil {
+			_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxDrainBytes))
+			if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+				return nil, clickHouseStatusError(operation, response.StatusCode, nil)
+			}
+			return nil, fmt.Errorf("decode ClickHouse analytics %s gzip response: %w", operation, gzErr)
+		}
+		defer gz.Close()
+		bodyReader = io.LimitReader(gz, maximumResponseBodySize+1)
+	}
+	payload, err := io.ReadAll(bodyReader)
+	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxDrainBytes))
 	if err != nil {
 		return nil, fmt.Errorf("read ClickHouse analytics %s response: %w", operation, err)
 	}
@@ -614,7 +690,7 @@ func (writer *Writer) insert(ctx context.Context, operation string, settings url
 	}
 	defer response.Body.Close()
 	payload, err := io.ReadAll(io.LimitReader(response.Body, 8<<10))
-	_, _ = io.Copy(io.Discard, response.Body)
+	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
 	if err != nil {
 		return fmt.Errorf("read ClickHouse analytics %s response: %w", operation, err)
 	}

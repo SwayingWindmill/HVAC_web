@@ -53,7 +53,7 @@ func NewClickHouseInputReader(config InputReaderConfig) (*ClickHouseInputReader,
 	}
 	client := config.HTTPClient
 	if client == nil {
-		client = newDefaultOptimizationClickHouseHTTPClient(10 * time.Second)
+		client = newPooledHTTPClient(10*time.Second, true)
 	}
 	if config.Energy == nil {
 		return nil, errors.New("optimization input reader requires the Energy Series reader")
@@ -430,6 +430,21 @@ func (reader *ClickHouseInputReader) query(ctx context.Context, sql string) ([]b
 	return reader.queryLimited(ctx, sql, maximumOptimizationInputResponseBytes)
 }
 
+// Ping checks ClickHouse connectivity with the reader credentials.
+func (reader *ClickHouseInputReader) Ping(ctx context.Context) error {
+	if reader == nil {
+		return errors.New("optimization ClickHouse input reader is not initialized")
+	}
+	return pingClickHouseHTTP(ctx, reader.client, reader.baseURL, reader.username, reader.password, "optimization ClickHouse reader")
+}
+
+// CloseIdleConnections releases idle HTTP keep-alive connections held by this reader.
+func (reader *ClickHouseInputReader) CloseIdleConnections() {
+	if reader != nil && reader.client != nil {
+		reader.client.CloseIdleConnections()
+	}
+}
+
 func (reader *ClickHouseInputReader) queryLimited(ctx context.Context, sql string, limit int64) ([]byte, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, reader.baseURL.String(), strings.NewReader(sql))
 	if err != nil {
@@ -444,9 +459,8 @@ func (reader *ClickHouseInputReader) queryLimited(ctx context.Context, sql strin
 	if err != nil {
 		return nil, err
 	}
-	defer response.Body.Close()
+	defer drainAndClose(response.Body)
 	payload, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
-	_, _ = io.Copy(io.Discard, response.Body)
 	if err != nil {
 		return nil, err
 	}

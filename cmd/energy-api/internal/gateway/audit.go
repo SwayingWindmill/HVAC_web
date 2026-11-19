@@ -85,7 +85,7 @@ func (h *handler) GetSessionAuditEvent(writer http.ResponseWriter, request *http
 		writeIdentityFailure(writer, request, identityFailure{503, "AUDIT_LEDGER_UNAVAILABLE", "Audit Ledger unavailable", "The private Audit Ledger service could not be reached.", true})
 		return
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	if response.StatusCode == http.StatusNotFound {
 		writeIdentityFailure(writer, request, identityFailure{404, "AUDIT_RECORD_NOT_FOUND", "Audit record not found", "No audit record is visible for this Tenant and message ID.", false})
 		return
@@ -167,7 +167,7 @@ func (h *handler) SearchAudit(writer http.ResponseWriter, request *http.Request)
 		writeIdentityFailure(writer, request, identityFailure{503, "AUDIT_LEDGER_UNAVAILABLE", "Audit Ledger unavailable", "The private Audit Ledger service could not be reached.", true})
 		return
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if err != nil {
 		writeIdentityFailure(writer, request, identityFailure{503, "AUDIT_RESPONSE_INVALID", "Audit response invalid", "The private Audit Ledger returned an invalid response.", true})

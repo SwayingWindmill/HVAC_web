@@ -1296,3 +1296,25 @@ test('songyaxuan.site.json enforces chwp-main start interlock and 120s run_state
     assert.match(row, new RegExp(`^\\('${dev.id}', 'run_state', 1, 120, true, 60,`), `${code}/run_state must have fresh_within_seconds=120`);
   }
 });
+
+test('executor echoes W3C 32-hex traceId verbatim on CommandReplyEnvelope', async () => {
+  const { executor, replies } = createFakeExecutor();
+  await executor.initialize();
+
+  const traceId = '4bf92f3577b34da6a3ce929d0e0e4736';
+  const reply = await executor.handleCommand(makeCommand({
+    commandId: 'cmd-trace-echo',
+    traceId,
+    deviceId: 'ctrl-chwp-1',
+    commandCode: 'START',
+    pointCode: 'start',
+    actuationMode: 'LEVEL',
+    channel: 'u11',
+    coilAddress: 0,
+    executionFence: 7,
+  }));
+  assert.equal(reply.edgeStatus, 'EXECUTED');
+  assert.equal(reply.traceId, traceId);
+  assert.equal(replies.length, 1);
+  assert.equal(replies[0]?.reply.traceId, traceId);
+});

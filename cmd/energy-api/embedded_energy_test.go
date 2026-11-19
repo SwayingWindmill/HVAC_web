@@ -202,6 +202,10 @@ func TestEmbeddedCoreOutboxRelayConnectivityCARequiredAndMTLSClientsConfigured(t
 		if !ok || tr.TLSClientConfig == nil {
 			t.Fatalf("%s missing TLSClientConfig", name)
 		}
+		if tr.TLSHandshakeTimeout != 5*time.Second || tr.IdleConnTimeout != 90*time.Second || tr.MaxIdleConnsPerHost < 16 || tr.DialContext == nil {
+			t.Fatalf("%s expected cloned bounded transport defaults, got handshake=%s idle=%s perHost=%d dialNil=%v",
+				name, tr.TLSHandshakeTimeout, tr.IdleConnTimeout, tr.MaxIdleConnsPerHost, tr.DialContext == nil)
+		}
 		if tr.TLSClientConfig.ServerName != tc.serverName {
 			t.Fatalf("%s ServerName=%q, want %q", name, tr.TLSClientConfig.ServerName, tc.serverName)
 		}

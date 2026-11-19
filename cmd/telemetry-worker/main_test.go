@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"io"
 	"log/slog"
@@ -65,13 +66,22 @@ func TestRunPresenceSweepTicksAndStopsOnCancel(t *testing.T) {
 	}
 }
 
-func TestShutdownTelemetryWorkerOrder(t *testing.T) {
-	obsRuntime := observability.NewRuntime(observability.RuntimeConfig{
-		Service: "telemetry-runtime-test", QueueSize: 8, ExportTimeout: 100 * time.Millisecond,
-	})
-	obsRuntime.MarkReady()
-	logger := observability.NewJSONLogger(&bytes.Buffer{}, slog.LevelInfo)
+type telemetryRecordingExporter struct {
+	record func(string)
+}
 
+func (e *telemetryRecordingExporter) Export(context.Context, []observability.SpanData) error {
+	return nil
+}
+
+func (e *telemetryRecordingExporter) Shutdown(context.Context) error {
+	if e.record != nil {
+		e.record("telemetry_shutdown")
+	}
+	return nil
+}
+
+func TestShutdownTelemetryWorkerOrder(t *testing.T) {
 	var eventsMu sync.Mutex
 	var events []string
 	recordEvent := func(ev string) {
@@ -79,6 +89,13 @@ func TestShutdownTelemetryWorkerOrder(t *testing.T) {
 		events = append(events, ev)
 		eventsMu.Unlock()
 	}
+
+	obsRuntime := observability.NewRuntime(observability.RuntimeConfig{
+		Service: "telemetry-runtime-test", QueueSize: 8, ExportTimeout: 100 * time.Millisecond,
+		Exporter: &telemetryRecordingExporter{record: recordEvent},
+	})
+	obsRuntime.MarkReady()
+	logger := observability.NewJSONLogger(&bytes.Buffer{}, slog.LevelInfo)
 
 	var storesClosed atomic.Bool
 	httpEntered := make(chan struct{})
@@ -101,14 +118,25 @@ func TestShutdownTelemetryWorkerOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	go func() { _ = apiSrv.Serve(apiLn) }()
+	var httpWG sync.WaitGroup
+	httpWG.Add(1)
+	go func() {
+		defer httpWG.Done()
+		_ = apiSrv.Serve(apiLn)
+		recordEvent("api_http_goroutine_done")
+	}()
 
 	diagSrv := &http.Server{Handler: obsRuntime.DiagnosticsHandler()}
 	diagLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	go func() { _ = diagSrv.Serve(diagLn) }()
+	httpWG.Add(1)
+	go func() {
+		defer httpWG.Done()
+		_ = diagSrv.Serve(diagLn)
+		recordEvent("diag_http_goroutine_done")
+	}()
 
 	var workersWG sync.WaitGroup
 	workerCtx, workerCancel := context.WithCancel(context.Background())
@@ -142,6 +170,7 @@ func TestShutdownTelemetryWorkerOrder(t *testing.T) {
 			Logger:           logger,
 			Diagnostics:      diagSrv,
 			Server:           apiSrv,
+			HTTPWG:           &httpWG,
 			CancelWorkers:    workerCancel,
 			WorkersWG:        &workersWG,
 			HTTPTimeout:      2 * time.Second,
@@ -187,16 +216,25 @@ func TestShutdownTelemetryWorkerOrder(t *testing.T) {
 	eventsMu.Lock()
 	got := slices.Clone(events)
 	eventsMu.Unlock()
-	want := []string{
-		"http_handler_done",
-		"worker_done",
-		"close_history",
-		"close_latest_cache",
-		"close_rate_limiter",
-		"close_store",
+	httpHandlerIdx := slices.Index(got, "http_handler_done")
+	apiGoroutineIdx := slices.Index(got, "api_http_goroutine_done")
+	diagGoroutineIdx := slices.Index(got, "diag_http_goroutine_done")
+	workerIdx := slices.Index(got, "worker_done")
+	telemetryIdx := slices.Index(got, "telemetry_shutdown")
+	closeHistoryIdx := slices.Index(got, "close_history")
+	if httpHandlerIdx < 0 || apiGoroutineIdx < 0 || diagGoroutineIdx < 0 || workerIdx < 0 || telemetryIdx < 0 || closeHistoryIdx < 0 {
+		t.Fatalf("missing expected shutdown events: %v", got)
 	}
-	if !slices.Equal(got, want) {
-		t.Fatalf("shutdown event order=%v, want %v", got, want)
+	if httpHandlerIdx >= workerIdx || apiGoroutineIdx >= workerIdx || diagGoroutineIdx >= workerIdx {
+		t.Fatalf("expected HTTP drain and server goroutines to finish before worker_done, got %v", got)
+	}
+	if telemetryIdx < workerIdx || telemetryIdx > closeHistoryIdx {
+		t.Fatalf("expected telemetry_shutdown after worker_done and before store closes, got %v", got)
+	}
+	tail := got[closeHistoryIdx:]
+	wantTail := []string{"close_history", "close_latest_cache", "close_rate_limiter", "close_store"}
+	if !slices.Equal(tail, wantTail) {
+		t.Fatalf("store close tail=%v, want %v (full=%v)", tail, wantTail, got)
 	}
 }
 
@@ -243,12 +281,6 @@ func TestShutdownTelemetryWorkerBoundedWorkerWait(t *testing.T) {
 }
 
 func TestShutdownTelemetryWorkerDrainRelaysAndAnalyticsOrder(t *testing.T) {
-	obsRuntime := observability.NewRuntime(observability.RuntimeConfig{
-		Service: "telemetry-runtime-4phase-test", QueueSize: 4, ExportTimeout: 100 * time.Millisecond,
-	})
-	obsRuntime.MarkReady()
-	logger := observability.NewJSONLogger(&bytes.Buffer{}, slog.LevelInfo)
-
 	var eventsMu sync.Mutex
 	var events []string
 	record := func(ev string) {
@@ -256,6 +288,13 @@ func TestShutdownTelemetryWorkerDrainRelaysAndAnalyticsOrder(t *testing.T) {
 		events = append(events, ev)
 		eventsMu.Unlock()
 	}
+
+	obsRuntime := observability.NewRuntime(observability.RuntimeConfig{
+		Service: "telemetry-runtime-4phase-test", QueueSize: 4, ExportTimeout: 100 * time.Millisecond,
+		Exporter: &telemetryRecordingExporter{record: record},
+	})
+	obsRuntime.MarkReady()
+	logger := observability.NewJSONLogger(&bytes.Buffer{}, slog.LevelInfo)
 
 	var workersWG, analyticsWG sync.WaitGroup
 	workerCtx, workerCancel := context.WithCancel(context.Background())
@@ -305,7 +344,7 @@ func TestShutdownTelemetryWorkerDrainRelaysAndAnalyticsOrder(t *testing.T) {
 	eventsMu.Lock()
 	got := slices.Clone(events)
 	eventsMu.Unlock()
-	want := []string{"poll_stopped", "drain_relays", "analytics_stopped", "close_history", "close_store"}
+	want := []string{"poll_stopped", "drain_relays", "analytics_stopped", "telemetry_shutdown", "close_history", "close_store"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("shutdown event order=%v, want %v", got, want)
 	}
@@ -642,5 +681,73 @@ func TestParseHistoryProjectionSettingsPipelineDepth(t *testing.T) {
 		"TELEMETRY_HISTORY_BATCH_SIZE": "32769",
 	})); err == nil {
 		t.Fatal("expected error for TELEMETRY_HISTORY_BATCH_SIZE=32769")
+	}
+}
+
+type stubProbeOffsetSweeper struct {
+	calls atomic.Int32
+	done  chan struct{}
+}
+
+func (s *stubProbeOffsetSweeper) SweepProbeOffsets(context.Context, time.Time) (int, error) {
+	if s.calls.Add(1) == 1 && s.done != nil {
+		close(s.done)
+	}
+	return 3, nil
+}
+
+func TestClonedHTTPTransportAndProbeSweepDebugLogging(t *testing.T) {
+	transport := newClonedTelemetryHTTPTransport(&tls.Config{MinVersion: tls.VersionTLS13}, true, false, 12*time.Second)
+	if transport.MaxConnsPerHost != 16 || transport.MaxIdleConns != 64 || transport.MaxIdleConnsPerHost != 16 ||
+		transport.IdleConnTimeout != 90*time.Second || transport.ResponseHeaderTimeout != 12*time.Second ||
+		transport.DialContext == nil || !transport.DisableCompression || transport.TLSClientConfig == nil {
+		t.Fatalf("unexpected cloned transport config: %#v", transport)
+	}
+
+	var infoBuf bytes.Buffer
+	infoCtx, cancelInfo := context.WithCancel(t.Context())
+	doneInfo := make(chan struct{})
+	exitedInfo := make(chan struct{})
+	go func() {
+		defer close(exitedInfo)
+		runProbeOffsetSweep(infoCtx, &stubProbeOffsetSweeper{done: doneInfo}, 10*time.Millisecond, observability.NewJSONLogger(&infoBuf, slog.LevelInfo))
+	}()
+	<-doneInfo
+	cancelInfo()
+	<-exitedInfo
+	if strings.Contains(infoBuf.String(), "telemetry_probe_offsets_estimated") {
+		t.Fatalf("expected telemetry_probe_offsets_estimated suppressed at Info level, got: %s", infoBuf.String())
+	}
+
+	var debugBuf bytes.Buffer
+	debugCtx, cancelDebug := context.WithCancel(t.Context())
+	doneDebug := make(chan struct{})
+	exitedDebug := make(chan struct{})
+	go func() {
+		defer close(exitedDebug)
+		runProbeOffsetSweep(debugCtx, &stubProbeOffsetSweeper{done: doneDebug}, 10*time.Millisecond, observability.NewJSONLogger(&debugBuf, slog.LevelDebug))
+	}()
+	<-doneDebug
+	cancelDebug()
+	<-exitedDebug
+	if !strings.Contains(debugBuf.String(), "telemetry_probe_offsets_estimated") {
+		t.Fatalf("expected telemetry_probe_offsets_estimated at Debug level, got: %s", debugBuf.String())
+	}
+}
+
+func TestEnvHelpersReturnErrorsInsteadOfExiting(t *testing.T) {
+	t.Setenv("TEST_TELEMETRY_REQUIRED_EMPTY", "   ")
+	if _, err := requiredEnv("TEST_TELEMETRY_REQUIRED_EMPTY"); err == nil {
+		t.Fatal("expected error for blank requiredEnv")
+	}
+
+	t.Setenv("TEST_TELEMETRY_DURATION_BAD", "invalid")
+	if _, err := durationEnv("TEST_TELEMETRY_DURATION_BAD", time.Second, time.Second, time.Minute); err == nil {
+		t.Fatal("expected error for invalid durationEnv")
+	}
+
+	t.Setenv("TEST_TELEMETRY_INT_BAD", "999")
+	if _, err := integerEnv("TEST_TELEMETRY_INT_BAD", 5, 1, 100); err == nil {
+		t.Fatal("expected error for out-of-range integerEnv")
 	}
 }

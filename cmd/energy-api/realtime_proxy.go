@@ -189,6 +189,7 @@ func newRealtimeProxyHandler(next http.Handler, logger *slog.Logger, limiter *re
 	}
 
 	proxy := &httputil.ReverseProxy{
+		Transport: cloneDefaultTransportWithTLS(nil),
 		Rewrite: func(proxyRequest *httputil.ProxyRequest) {
 			proxyRequest.SetURL(upstream)
 			proxyRequest.Out.URL.Path = "/connection/" + strings.TrimPrefix(proxyRequest.In.URL.Path, realtimePublicPrefix)

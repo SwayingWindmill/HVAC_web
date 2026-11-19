@@ -401,7 +401,7 @@ func (h *handler) forwardSiteRegistryBackendRequestWithAudit(
 		writeProblem(writer, request, http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "The Core Registry is temporarily unavailable.", true, nil)
 		return http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE"
 	}
-	defer response.Body.Close()
+	defer drainAndCloseBody(response.Body)
 
 	writer.Header().Set("X-Route-Policy-Revision", formatRevision(registryRevision))
 	return writeSiteRegistryBackendResponse(writer, request, response, h.registry.maxResponseBytes, messages)

@@ -83,12 +83,7 @@ func NewWorkloadCommandClient(config WorkloadCommandClientConfig) (*WorkloadComm
 					return nil, err
 				}
 			} else {
-				gatewayClient = &http.Client{
-					Timeout: 15 * time.Second,
-					CheckRedirect: func(*http.Request, []*http.Request) error {
-						return http.ErrUseLastResponse
-					},
-				}
+				gatewayClient = newPooledHTTPClient(15*time.Second, true)
 			}
 		}
 	}
@@ -116,7 +111,7 @@ func (client *WorkloadCommandClient) RequestCommandGrant(ctx context.Context, re
 	if err != nil {
 		return "", commandauth.Decision{}, fmt.Errorf("request IAM workload command decision: %w", err)
 	}
-	defer resp.Body.Close()
+	defer drainAndClose(resp.Body)
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 256<<10))
 	if err != nil {
 		return "", commandauth.Decision{}, err
@@ -231,7 +226,7 @@ func (client *WorkloadCommandClient) SubmitAutoCommand(ctx context.Context, gran
 	if err != nil {
 		return "", fmt.Errorf("submit auto optimization command: %w", err)
 	}
-	defer resp.Body.Close()
+	defer drainAndClose(resp.Body)
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 256<<10))
 	if err != nil {
 		return "", err
