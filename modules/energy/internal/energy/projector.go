@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/fixedpoint"
 )
 
 const (
@@ -269,6 +271,16 @@ type FactSink interface {
 	AdvanceCheckpoint(context.Context, ProjectionCursor) error
 }
 
+// HourlyV2Sink persists versioned fixed-precision hourly rollups to analytics.energy_hourly_facts_v2.
+type HourlyV2Sink interface {
+	InsertHourlyFactsV2(context.Context, []HourlyFactV2) error
+}
+
+// LoadProfileSource loads hourly active-power weights used to split cross-gap energy intervals.
+type LoadProfileSource interface {
+	HourlyPowerProfile(ctx context.Context, tenantID, siteID, deviceID string, from, to time.Time) ([]HourlyLoadWeight, error)
+}
+
 type RebuildEventSink interface {
 	AppendRebuildEvent(context.Context, RebuildEvent) error
 }
@@ -276,12 +288,15 @@ type RebuildEventSink interface {
 const (
 	defaultDirtyWindowDelay       = 30 * time.Second
 	defaultDirtyWindowRequestedBy = "018f0000-0000-7000-8000-000000000001"
+	maxHourlyV2InsertBatch        = 4096
 )
 
 type ProjectorConfig struct {
 	CounterSource          CounterSource
 	BindingResolver        BindingResolver
 	FactSink               FactSink
+	HourlyV2Sink           HourlyV2Sink
+	LoadProfileSource      LoadProfileSource
 	RebuildEvents          RebuildEventSink
 	RatioResolver          RatioResolver
 	DirtyWindowEnqueuer    DirtyWindowEnqueuer
@@ -295,6 +310,8 @@ type Projector struct {
 	source                 CounterSource
 	resolver               BindingResolver
 	sink                   FactSink
+	hourlyV2Sink           HourlyV2Sink
+	loadProfileSource      LoadProfileSource
 	rebuildEvents          RebuildEventSink
 	ratioResolver          RatioResolver
 	dirtyEnqueuer          DirtyWindowEnqueuer
@@ -335,6 +352,8 @@ func NewProjector(config ProjectorConfig) (*Projector, error) {
 		source:                 config.CounterSource,
 		resolver:               config.BindingResolver,
 		sink:                   config.FactSink,
+		hourlyV2Sink:           config.HourlyV2Sink,
+		loadProfileSource:      config.LoadProfileSource,
 		rebuildEvents:          config.RebuildEvents,
 		ratioResolver:          config.RatioResolver,
 		dirtyEnqueuer:          config.DirtyWindowEnqueuer,
@@ -362,6 +381,9 @@ func (p *Projector) ProjectOnce(ctx context.Context) (int, error) {
 	projected, err := p.persistFacts(ctx, facts)
 	if err != nil {
 		return 0, err
+	}
+	if err := p.projectHourlyV2(ctx, facts, now); err != nil {
+		return 0, fmt.Errorf("project hourly v2 facts: %w", err)
 	}
 	if err := p.enqueueHistoricalDirtyWindows(ctx, facts, now); err != nil {
 		return 0, fmt.Errorf("enqueue historical dirty windows: %w", err)
@@ -691,6 +713,254 @@ func (p *Projector) enqueueHistoricalDirtyWindows(ctx context.Context, facts []E
 			Source:             "BACKFILL",
 		}); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+type hourlyV2GroupKey struct {
+	tenantID        string
+	siteID          string
+	energyType      string
+	accountingScope string
+	loadDeviceID    string
+	pointID         string
+	quality         string
+	tariffPeriod    string
+	hourUnix        int64
+}
+
+type hourlyV2Accumulator struct {
+	key             hourlyV2GroupKey
+	hour            time.Time
+	energy          fixedpoint.Decimal6
+	intervalCount   int64
+	dataWatermark   time.Time
+	datasetRevision uint64
+}
+
+type loadProfileCacheKey struct {
+	tenantID string
+	siteID   string
+	deviceID string
+	fromUnix int64
+	toUnix   int64
+}
+
+func (p *Projector) projectHourlyV2(ctx context.Context, facts []EnergyIntervalFact, projectedAt time.Time) error {
+	if p.hourlyV2Sink == nil || len(facts) == 0 {
+		return nil
+	}
+	v2Rows, err := p.buildHourlyFactsV2(ctx, facts, projectedAt)
+	if err != nil || len(v2Rows) == 0 {
+		return err
+	}
+	for start := 0; start < len(v2Rows); start += maxHourlyV2InsertBatch {
+		end := min(start+maxHourlyV2InsertBatch, len(v2Rows))
+		if err := p.hourlyV2Sink.InsertHourlyFactsV2(ctx, v2Rows[start:end]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *Projector) buildHourlyFactsV2(ctx context.Context, facts []EnergyIntervalFact, projectedAt time.Time) ([]HourlyFactV2, error) {
+	projectedUTC := projectedAt.UTC()
+	var calcVersion uint64
+	if millis := projectedUTC.UnixMilli(); millis > 0 {
+		calcVersion = uint64(millis)
+	} else {
+		calcVersion = 1
+	}
+
+	accumulators := make(map[hourlyV2GroupKey]*hourlyV2Accumulator, len(facts))
+	profileCache := make(map[loadProfileCacheKey][]HourlyLoadWeight)
+
+	addBucket := func(fact EnergyIntervalFact, loadDeviceID, quality string, hour time.Time, delta fixedpoint.Decimal6) error {
+		hourUTC := hour.UTC().Truncate(time.Hour)
+		key := hourlyV2GroupKey{
+			tenantID:        fact.TenantID,
+			siteID:          fact.SiteID,
+			energyType:      fact.EnergyType,
+			accountingScope: fact.AccountingScope,
+			loadDeviceID:    loadDeviceID,
+			pointID:         fact.PointID,
+			quality:         quality,
+			tariffPeriod:    "",
+			hourUnix:        hourUTC.Unix(),
+		}
+		acc := accumulators[key]
+		if acc == nil {
+			acc = &hourlyV2Accumulator{
+				key:           key,
+				hour:          hourUTC,
+				dataWatermark: fact.DataWatermark.UTC(),
+			}
+			accumulators[key] = acc
+		}
+		sum, err := acc.energy.Add(delta)
+		if err != nil {
+			return err
+		}
+		acc.energy = sum
+		acc.intervalCount++
+		if wm := fact.DataWatermark.UTC(); wm.After(acc.dataWatermark) {
+			acc.dataWatermark = wm
+		}
+		if fact.DatasetRevision > acc.datasetRevision {
+			acc.datasetRevision = fact.DatasetRevision
+		}
+		return nil
+	}
+
+	for _, fact := range facts {
+		loadDeviceID := ""
+		if fact.LoadDeviceID != nil {
+			loadDeviceID = strings.TrimSpace(*fact.LoadDeviceID)
+		}
+		span := fact.PeriodEnd.Sub(fact.PeriodStart)
+		if span <= time.Hour {
+			delta, err := fixedpoint.FromFloat64(fact.EnergyKWh)
+			if err != nil {
+				return nil, fmt.Errorf("convert hourly v2 energy_kwh for observation %s: %w", fact.CurrentObservationID, err)
+			}
+			hour := fact.PeriodEnd.UTC().Add(-time.Millisecond).Truncate(time.Hour)
+			if err := addBucket(fact, loadDeviceID, fact.Quality, hour, delta); err != nil {
+				return nil, fmt.Errorf("accumulate hourly v2 energy_kwh for observation %s: %w", fact.CurrentObservationID, err)
+			}
+			continue
+		}
+		if fact.Quality != FactQualityValid || fact.EnergyKWh < 0 {
+			continue
+		}
+		totalDecimal, err := fixedpoint.FromFloat64(fact.EnergyKWh)
+		if err != nil {
+			return nil, fmt.Errorf("convert cross-gap v2 energy_kwh for observation %s: %w", fact.CurrentObservationID, err)
+		}
+		profile := p.lookupCrossGapLoadProfile(ctx, fact, loadDeviceID, profileCache)
+		allocRes, err := AllocateCrossGapEnergy(CrossGapAllocationRequest{
+			TenantID:       fact.TenantID,
+			SiteID:         fact.SiteID,
+			PointID:        fact.PointID,
+			EnergyType:     fact.EnergyType,
+			PeriodStart:    fact.PeriodStart.UTC(),
+			PeriodEnd:      fact.PeriodEnd.UTC(),
+			TotalEnergyKWh: totalDecimal,
+			LoadProfile:    profile,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("allocate cross-gap hourly v2 energy for observation %s: %w", fact.CurrentObservationID, err)
+		}
+		for _, alloc := range allocRes.Allocations {
+			if err := addBucket(fact, loadDeviceID, alloc.Quality, alloc.HourStart, alloc.EnergyKWh); err != nil {
+				return nil, fmt.Errorf("accumulate cross-gap hourly v2 energy for observation %s: %w", fact.CurrentObservationID, err)
+			}
+		}
+	}
+
+	rows := make([]HourlyFactV2, 0, len(accumulators))
+	for _, acc := range accumulators {
+		rows = append(rows, HourlyFactV2{
+			TenantID:        acc.key.tenantID,
+			SiteID:          acc.key.siteID,
+			EnergyType:      acc.key.energyType,
+			AccountingScope: acc.key.accountingScope,
+			LoadDeviceID:    acc.key.loadDeviceID,
+			PointID:         acc.key.pointID,
+			Quality:         acc.key.quality,
+			TariffPeriod:    acc.key.tariffPeriod,
+			Hour:            acc.hour,
+			EnergyKWh:       acc.energy.Float64(),
+			CostCNY:         0,
+			IntervalCount:   acc.intervalCount,
+			CalcVersion:     calcVersion,
+			DataWatermark:   acc.dataWatermark,
+			DatasetRevision: acc.datasetRevision,
+			UpdatedAt:       projectedUTC,
+		})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		a, b := rows[i], rows[j]
+		if a.TenantID != b.TenantID {
+			return a.TenantID < b.TenantID
+		}
+		if a.SiteID != b.SiteID {
+			return a.SiteID < b.SiteID
+		}
+		if a.EnergyType != b.EnergyType {
+			return a.EnergyType < b.EnergyType
+		}
+		if a.AccountingScope != b.AccountingScope {
+			return a.AccountingScope < b.AccountingScope
+		}
+		if a.LoadDeviceID != b.LoadDeviceID {
+			return a.LoadDeviceID < b.LoadDeviceID
+		}
+		if a.PointID != b.PointID {
+			return a.PointID < b.PointID
+		}
+		if a.Quality != b.Quality {
+			return a.Quality < b.Quality
+		}
+		if a.TariffPeriod != b.TariffPeriod {
+			return a.TariffPeriod < b.TariffPeriod
+		}
+		return a.Hour.Before(b.Hour)
+	})
+	return rows, nil
+}
+
+func (p *Projector) lookupCrossGapLoadProfile(
+	ctx context.Context,
+	fact EnergyIntervalFact,
+	loadDeviceID string,
+	cache map[loadProfileCacheKey][]HourlyLoadWeight,
+) []HourlyLoadWeight {
+	if p.loadProfileSource == nil {
+		return nil
+	}
+	from := fact.PeriodStart.UTC().Truncate(time.Hour)
+	to := fact.PeriodEnd.UTC().Add(-time.Millisecond).Truncate(time.Hour).Add(time.Hour)
+	if !from.Before(to) {
+		return nil
+	}
+
+	candidates := make([]string, 0, 2)
+	reportingDevice := strings.TrimSpace(fact.DeviceID)
+	if reportingDevice != "" {
+		candidates = append(candidates, reportingDevice)
+	}
+	if fact.AccountingScope == AccountingScopeBranch {
+		if loadDeviceID != "" && loadDeviceID != reportingDevice {
+			candidates = append(candidates, loadDeviceID)
+		}
+	} else {
+		candidates = append(candidates, "")
+	}
+	if len(candidates) == 0 {
+		candidates = append(candidates, "")
+	}
+
+	for _, deviceID := range candidates {
+		cacheKey := loadProfileCacheKey{
+			tenantID: fact.TenantID,
+			siteID:   fact.SiteID,
+			deviceID: deviceID,
+			fromUnix: from.Unix(),
+			toUnix:   to.Unix(),
+		}
+		profile, cached := cache[cacheKey]
+		if !cached {
+			loaded, err := p.loadProfileSource.HourlyPowerProfile(ctx, fact.TenantID, fact.SiteID, deviceID, from, to)
+			if err != nil {
+				// Empty/error load profile degrades gracefully to uniform split in AllocateCrossGapEnergy.
+				loaded = nil
+			}
+			cache[cacheKey] = loaded
+			profile = loaded
+		}
+		if len(profile) > 0 {
+			return profile
 		}
 	}
 	return nil

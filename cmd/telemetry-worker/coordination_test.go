@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"strconv"
 	"strings"
@@ -383,4 +384,59 @@ func TestLoadTelemetryCoordinationLocksSelectsRedisOrLocalFallback(t *testing.T)
 	}); err == nil {
 		t.Fatal("expected invalid redis URL error")
 	}
+}
+
+type stubConditionAnchorRunner struct {
+	calls atomic.Int32
+	fn    func(context.Context, int32) (int, error)
+}
+
+func (s *stubConditionAnchorRunner) SyncOnce(ctx context.Context) (int, error) {
+	call := s.calls.Add(1)
+	if s.fn != nil {
+		return s.fn(ctx, call)
+	}
+	return 0, nil
+}
+
+func TestRunConditionAnchorProjectionCoordinatedUsesLeaseLockAndRecoversFailures(t *testing.T) {
+	locker := newLocalLeaseLocker(time.Now)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var logs strings.Builder
+	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	runner := &stubConditionAnchorRunner{
+		fn: func(_ context.Context, call int32) (int, error) {
+			// While running under lease lock, a second replica must not acquire analytics_condition_anchors.
+			if _, acquired, err := locker.Acquire(context.Background(), "analytics_condition_anchors", time.Minute); err != nil || acquired {
+				t.Errorf("concurrent replica acquired analytics_condition_anchors lock: acquired=%v err=%v", acquired, err)
+			}
+			if call == 1 {
+				return 3, nil
+			}
+			cancel()
+			return 0, fmt.Errorf("transient clickhouse failure")
+		},
+	}
+
+	runConditionAnchorProjectionCoordinated(ctx, runner, 5*time.Millisecond, nil, 0, locker, logger)
+
+	if got := runner.calls.Load(); got < 2 {
+		t.Fatalf("SyncOnce calls=%d, want >= 2", got)
+	}
+	out := logs.String()
+	if !strings.Contains(out, `"analytics_condition_anchors_synced"`) || !strings.Contains(out, `"anchor_count":3`) {
+		t.Fatalf("missing synced debug log: %s", out)
+	}
+	if !strings.Contains(out, `"ANALYTICS_CONDITION_ANCHOR_PROJECTION_FAILED"`) {
+		t.Fatalf("missing failure warning log: %s", out)
+	}
+	// Lease must be released cleanly on exit.
+	rel, acquiredAfter, err := locker.Acquire(context.Background(), "analytics_condition_anchors", time.Minute)
+	if err != nil || !acquiredAfter {
+		t.Fatalf("expected analytics_condition_anchors lock to be released, acquired=%v err=%v", acquiredAfter, err)
+	}
+	rel(context.Background())
 }
