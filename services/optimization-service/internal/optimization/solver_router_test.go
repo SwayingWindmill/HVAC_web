@@ -1,12 +1,16 @@
 package optimization
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -392,4 +396,99 @@ func TestRoutingSolverAdapterRemoteHTTPTracingProvenanceAndFallbacks(t *testing.
 			t.Fatalf("expected saturated bulkhead not to dial HTTP server, hits %d -> %d", hitsBeforeBulkhead, hits.Load())
 		}
 	})
+}
+
+func TestRoutingSolverAdapterWithPythonSolverService(t *testing.T) {
+	pythonBin, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 not installed in PATH")
+	}
+	serviceDir, err := filepath.Abs(filepath.Join("..", "..", "..", "ai-solver-service"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, statErr := os.Stat(filepath.Join(serviceDir, "ai_solver", "main.py")); statErr != nil {
+		t.Fatalf("python solver entrypoint missing: %v", statErr)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, pythonBin, "-m", "ai_solver.main")
+	cmd.Dir = serviceDir
+	cmd.Env = append(os.Environ(), "PYTHONPATH="+serviceDir, "AI_SOLVER_HTTP_ADDR=127.0.0.1:0")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		cancel()
+		_ = cmd.Wait()
+	}()
+
+	listenCh := make(chan string, 1)
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if after, ok := strings.CutPrefix(line, "AI_SOLVER_LISTENING="); ok {
+				listenCh <- strings.TrimSpace(after)
+				return
+			}
+		}
+	}()
+
+	var baseURL string
+	select {
+	case baseURL = <-listenCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for python ai-solver-service startup banner")
+	}
+	parsedURL, err := url.Parse(baseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	baselineSpy := &spySolverAdapter{inner: HVACRecommendationSolver{}}
+	adapter := NewRoutingSolverAdapter(RoutingSolverConfig{
+		Resolver: &stubActiveSolverResolver{
+			selection: ActiveSolverSelection{
+				ServingRef: baseURL + "/v1/solve",
+				Source:     SolverSourceSiteLoopCanary,
+				LoopKey:    DefaultSolverLoopKey,
+			},
+		},
+		Baseline:     baselineSpy,
+		AllowedHosts: []string{parsedURL.Hostname()},
+		HTTPClient:   &http.Client{Timeout: 3 * time.Second},
+		Timeout:      3 * time.Second,
+	})
+
+	req := validRequest()
+	// Verify Python fine-grid optimization picks intermediate step (+1.2 C -> 8.2 C)
+	// when coarse +/-1.5 C baseline would breach zoneTempMaxC under P90 uncertainty.
+	req.Constraints.MaxSupplyTempStep = 1.5
+	req.Constraints.ZoneTempMaxC = 24.5
+	req.ResponseModel.ZoneTempUncertaintyP90C = 0.5
+	req.ResponseModel.DailyEnergyDeltaPerSupplyTempC = -180.0
+	req.ResponseModel.ZoneTempDeltaPerSupplyTempC = 0.8
+
+	tracer := observability.NewTracer("optimization-python-test", nil)
+	traceCtx := observability.ContextWithRemoteParent(t.Context(), tracer, "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", "")
+	rec, err := adapter.Recommend(traceCtx, req, req.ValidFrom.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("python solver integration Recommend failed: %v", err)
+	}
+	if baselineSpy.calls != 0 {
+		t.Fatalf("expected direct Python solver success without baseline fallback, baselineCalls=%d", baselineSpy.calls)
+	}
+	if rec.Candidate.SupplyTempC <= 7.0 || rec.Candidate.SupplyTempC >= 8.5 {
+		t.Fatalf("expected Python fine-grid candidate between 7.0 and 8.5 C, got %.2f", rec.Candidate.SupplyTempC)
+	}
+	if rec.TenantID != req.TenantID || rec.SiteID != req.SiteID || rec.Approval != intelligencemodel.RecommendationDraft {
+		t.Fatalf("unexpected provenance/approval on Python recommendation: %+v", rec)
+	}
 }

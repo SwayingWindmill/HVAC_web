@@ -9,6 +9,10 @@
 
 #### 新增与架构演进
 
+- 完成独立外部 Python 优化推理服务骨架与 Phase 1 编排联调（`services/ai-solver-service/`、`contracts/http/ai-solver-service.v1.schema.json`、`services/optimization-service/internal/optimization/solver_router.go`、`deploy/platform/phase1/ai-solver.compose.yaml`、`apps/hvac-web`）：
+  - **独立 Python HTTP 求解服务（`ai-solver-service`）**：实现 `GET /healthz`、`GET /readyz` 与 `POST /v1/solve`，执行满足 `>= 5.0 °C` 防冻下限、单步爬坡限幅与室温 P90 舒适区间的细粒度物理搜索（含水泵/冷却塔风机协调建议），支持 `traceparent` 穿透与容器非 root 只读运行。
+  - **跨语言契约、Go 联调测试与前端标签对齐**：新增 JSON Schema 契约与 `ai-solver.compose.yaml` 可选覆盖编排，并在 `solver_router_test.go` 增设 Go 真实拉起 Python 子进程集成测试；网页端 `formatSolverRef` 为 `ai-solver-service` 展示「外部 Python 优化服务」。
+
 - 完成能源统计与电费结算体系 P2 扩展（分层能效、主配电平衡诊断、按冷负荷分摊跨缺口与双变量对比基线，覆盖 `libs/analyticsmodel`、`modules/energy`、`services/fdd-service`、`services/mv-service`、`services/report-service`、`apps/hvac-web`、`scripts/` 与迁移 `023-meter-balance-and-layered-efficiency.sql`、`mv-bivariate-weather-anchors.sql`）：
   - **主配电平衡校验、分层能效模型与偏差诊断**：在 ClickHouse 新增 `site_meter_balance_hourly` 等平衡视图（`023-meter-balance-and-layered-efficiency.sql`）并在 `libs/analyticsmodel/layered_efficiency.go` 与前端 `layered-efficiency.ts` / `LayeredEfficiencyStrip.tsx` 实现冷站综合 COP、冷机 COP、冷冻泵与冷却泵输送系数 WTF、冷却塔电耗占比及主计量与设备计量平衡状态校验；`fdd-service` 与网页端 `diagnostics-model.ts` 新增 `METER_IMBALANCE`（「主计量与设备计量差额偏大」，默认偏差阈值 `5%`）规则。
   - **跨缺口电量分摊与运行条件归档**：在 `modules/energy` 新增按冷负荷加权分摊跨缺口电量（`cross_gap_allocator.go`）与室外温湿度/负荷/控制模式条件归档（`condition_archiver.go`、`condition_anchors.go`）。
