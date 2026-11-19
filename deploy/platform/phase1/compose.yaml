@@ -616,6 +616,7 @@ services:
       OPTIMIZATION_QUERY_URL: https://telemetry-query-service:18447
       OPTIMIZATION_GATEWAY_URL: https://platform-gateway:8452
       OPTIMIZATION_TELEMETRY_URL: ${OPTIMIZATION_TELEMETRY_URL:-https://telemetry-runtime-service:8446}
+      OPTIMIZATION_ALLOWED_SOLVER_HOSTS: ${OPTIMIZATION_ALLOWED_SOLVER_HOSTS:-}
       OPTIMIZATION_TLS_CERT: /run/hvac/pki/optimization/tls.crt
       OPTIMIZATION_TLS_KEY: /run/hvac/pki/optimization/tls.key
       OPTIMIZATION_TLS_CA: /run/hvac/pki/ca.crt

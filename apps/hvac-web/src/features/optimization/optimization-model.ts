@@ -891,6 +891,9 @@ export function formatSolverRef(servingRef: string): string {
   const exact = SOLVER_REF_LABELS[normalized];
   if (exact) return exact;
   if (normalized.startsWith('http://') || normalized.startsWith('https://')) {
+    if (normalized.includes('ai-solver-service')) {
+      return '外部 Python 优化服务';
+    }
     return '外部协同优化服务';
   }
   if (normalized.startsWith('builtin://')) {
