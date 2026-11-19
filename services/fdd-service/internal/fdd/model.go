@@ -15,6 +15,8 @@ var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-
 const (
 	// LowDeltaTRuleCode is the chilled-water low-delta-T rule.
 	LowDeltaTRuleCode = "CHILLED_WATER_LOW_DELTA_T"
+	// LowDeltaTScheduleRuleCode is the short schedule payload ruleCode alias for low-delta-T.
+	LowDeltaTScheduleRuleCode = "LOW_DELTA_T"
 	// MeterImbalanceRuleCode is the hourly site main-meter vs sub-meter imbalance rule.
 	MeterImbalanceRuleCode     = "METER_IMBALANCE"
 	MeterBalanceRuleRevisionID = "meter-balance-v1"
@@ -22,7 +24,14 @@ const (
 	defaultMaxImbalanceRatio     = 0.05
 	defaultMinMainElectricityKWh = 10.0
 	defaultMinConsecutiveHours   = 2
+	meterImbalanceDefaultWindow  = 24 * time.Hour
 )
+
+// SiteRuleScope identifies a Tenant and Site eligible for periodic rule evaluation.
+type SiteRuleScope struct {
+	TenantID string `json:"tenantId"`
+	SiteID   string `json:"siteId"`
+}
 
 // ErrRuleNotFound means the Tenant has no revision of the rule in effect.
 var ErrRuleNotFound = errors.New("no FDD rule revision is in effect")
@@ -144,4 +153,19 @@ func (request MeterImbalanceRequest) normalized() (maxRatio float64, minMainKWh 
 		minConsecutive = defaultMinConsecutiveHours
 	}
 	return maxRatio, minMainKWh, minConsecutive
+}
+
+func resolveMeterImbalanceWindow(fallbackEnd time.Time, fromUTC, toUTC *time.Time) (time.Time, time.Time, error) {
+	to := fallbackEnd.UTC()
+	if toUTC != nil {
+		to = toUTC.UTC()
+	}
+	from := to.Add(-meterImbalanceDefaultWindow)
+	if fromUTC != nil {
+		from = fromUTC.UTC()
+	}
+	if from.IsZero() || to.IsZero() || !to.After(from) {
+		return time.Time{}, time.Time{}, errors.New("meter imbalance evaluation window is invalid")
+	}
+	return from, to, nil
 }

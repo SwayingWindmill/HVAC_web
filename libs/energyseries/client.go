@@ -19,6 +19,7 @@ import (
 const (
 	workloadDecisionPath = "/internal/v1/analytics/workload-decision"
 	energySeriesPath     = "/internal/v1/analytics/energy-series"
+	reportEnrichmentPath = "/internal/v1/analytics/report-enrichment"
 	maximumResponseBytes = int64(4 << 20)
 )
 
@@ -48,25 +49,50 @@ func New(config Config) *Client {
 
 // Series is one Energy Series query, answered under a grant IAM signed for exactly that query.
 func (client *Client) Series(ctx context.Context, query analyticsmodel.EnergySeriesQuery) (analyticsmodel.EnergySeriesResponse, error) {
+	var series analyticsmodel.EnergySeriesResponse
+	if err := client.queryWithGrant(ctx, query, energySeriesPath, &series); err != nil {
+		if errors.Is(err, ErrSiteNotBound) {
+			return analyticsmodel.EnergySeriesResponse{}, err
+		}
+		return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("energy series %s: %w", query.EnergyType, err)
+	}
+	return series, nil
+}
+
+// ReportEnrichment queries P2 monthly report diagnostics under an IAM workload grant bound to query.
+func (client *Client) ReportEnrichment(ctx context.Context, query analyticsmodel.EnergySeriesQuery) (analyticsmodel.ReportEnrichmentResponse, error) {
+	var enrichment analyticsmodel.ReportEnrichmentResponse
+	if err := client.queryWithGrant(ctx, query, reportEnrichmentPath, &enrichment); err != nil {
+		if errors.Is(err, ErrSiteNotBound) {
+			return analyticsmodel.ReportEnrichmentResponse{}, err
+		}
+		return analyticsmodel.ReportEnrichmentResponse{}, fmt.Errorf("report enrichment: %w", err)
+	}
+	return enrichment, nil
+}
+
+func (client *Client) queryWithGrant(ctx context.Context, query analyticsmodel.EnergySeriesQuery, targetPath string, into any) error {
+	if client == nil || client.iamClient == nil || client.queryClient == nil {
+		return errors.New("energy series client is not configured")
+	}
 	body, err := json.Marshal(query)
 	if err != nil {
-		return analyticsmodel.EnergySeriesResponse{}, err
+		return err
 	}
 	var grant struct {
 		DelegationGrant string `json:"delegationGrant"`
 	}
 	status, err := post(ctx, client.iamClient, client.iamURL+workloadDecisionPath, body, "", &grant)
 	if status == http.StatusNotFound {
-		return analyticsmodel.EnergySeriesResponse{}, ErrSiteNotBound
+		return ErrSiteNotBound
 	}
 	if err != nil {
-		return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("IAM Energy grant: %w", err)
+		return fmt.Errorf("IAM Energy grant: %w", err)
 	}
-	var series analyticsmodel.EnergySeriesResponse
-	if _, err := post(ctx, client.queryClient, client.queryURL+energySeriesPath, body, grant.DelegationGrant, &series); err != nil {
-		return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("energy series %s: %w", query.EnergyType, err)
+	if _, err := post(ctx, client.queryClient, client.queryURL+targetPath, body, grant.DelegationGrant, into); err != nil {
+		return err
 	}
-	return series, nil
+	return nil
 }
 
 func post(ctx context.Context, client *http.Client, target string, body []byte, grant string, into any) (int, error) {
