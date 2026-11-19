@@ -163,6 +163,7 @@ ON CONFLICT (tenant_id, alarm_id) DO UPDATE SET
 // AlarmDeliveryDispatcher decides and sends Alarm messages for every Tenant.
 type AlarmDeliveryDispatcher struct {
 	Scheduler  *Scheduler
+	Reloader   *RoutingReloader
 	Routing    AlarmRoutingTable
 	Recipients RecipientDirectory
 	Sender     DeliverySender
@@ -170,6 +171,23 @@ type AlarmDeliveryDispatcher struct {
 	// ConsoleURL is the web console's origin, for the link to the Alarm in each message.
 	ConsoleURL string
 	Logger     *slog.Logger
+}
+
+func (dispatcher *AlarmDeliveryDispatcher) currentConfig() (AlarmRoutingTable, RecipientDirectory) {
+	if dispatcher.Reloader != nil {
+		if snap := dispatcher.Reloader.Snapshot(); snap != nil {
+			var routing AlarmRoutingTable
+			var recipients RecipientDirectory
+			if snap.Routing != nil {
+				routing = *snap.Routing
+			}
+			if snap.Recipients != nil {
+				recipients = *snap.Recipients
+			}
+			return routing, recipients
+		}
+	}
+	return dispatcher.Routing, dispatcher.Recipients
 }
 
 func (dispatcher *AlarmDeliveryDispatcher) log() *slog.Logger {
@@ -232,7 +250,8 @@ ORDER BY next_due_at LIMIT 1 FOR UPDATE SKIP LOCKED`, now.UTC()).Scan(
 WHERE tenant_id = $1::uuid AND alarm_id = $2::uuid`, alarm.TenantID, alarm.AlarmID, value, now.UTC())
 		return err
 	}
-	routing, ok := dispatcher.Routing.Site(alarm.SiteID)
+	routingTable, _ := dispatcher.currentConfig()
+	routing, ok := routingTable.Site(alarm.SiteID)
 	if !ok {
 		// A Site without a routing file tells nobody; it is looked at again when the Alarm changes.
 		if err := setNext(nil); err != nil {
@@ -389,51 +408,75 @@ type claimedAttempt struct {
 	leaseUntil                  time.Time
 }
 
+type claimedBatch struct {
+	claims  []claimedAttempt
+	alarms  []DeliveryAlarm
+	routing SiteRouting
+	to      string
+	msgErr  error
+}
+
 func (dispatcher *AlarmDeliveryDispatcher) sendOne(ctx context.Context, now time.Time) (bool, error) {
-	claim, worked, err := dispatcher.claimAttempt(ctx, now)
-	if err != nil || claim == nil {
+	batch, worked, err := dispatcher.claimBatch(ctx, now)
+	if err != nil || batch == nil {
 		return worked, err
 	}
+	primary := batch.claims[0]
 	settle := func(state, reason string, retry bool) error {
 		settleCtx, cancelSettle := settleContext(ctx, defaultDeliverySettleTimeout)
 		defer cancelSettle()
-		return dispatcher.settle(settleCtx, *claim, now, state, reason, retry)
+		return dispatcher.settleBatch(settleCtx, batch.claims, now, state, reason, retry)
 	}
-	message, err := dispatcher.outbound(ctx, *claim)
-	if err != nil {
-		dispatcher.log().Error("alarm_delivery_message_failed", "error_code", "ALARM_DELIVERY_MESSAGE_FAILED", "alarm_id", claim.alarmID, "key", claim.dedupKey, "reason", err.Error())
+	if batch.msgErr != nil {
+		dispatcher.log().Error("alarm_delivery_message_failed", "error_code", "ALARM_DELIVERY_MESSAGE_FAILED", "alarm_id", primary.alarmID, "key", primary.dedupKey, "reason", batch.msgErr.Error())
 		return true, settle("FAILED", "NO_CONTACT", false)
 	}
-	message.DryRun = dispatcher.Mode != DeliveryLive
+	var subject, text, key string
+	if len(batch.claims) == 1 {
+		subject, text = RenderDeliveryMessage(batch.alarms[0], batch.routing, primary.kind, primary.step, dispatcher.ConsoleURL)
+		key = primary.dedupKey
+	} else {
+		subject, text = RenderGroupedDeliveryMessage(batch.alarms, batch.routing, primary.step, dispatcher.ConsoleURL)
+		key = primary.dedupKey + "+group:" + itoa(len(batch.claims))
+	}
+	message := OutboundMessage{
+		Channel: primary.channel,
+		To:      batch.to,
+		Subject: subject,
+		Text:    text,
+		DryRun:  dispatcher.Mode != DeliveryLive,
+		Key:     key,
+	}
 	sendCtx, cancelSend := withBoundedTimeout(ctx, defaultDeliverySendTimeout)
 	err = dispatcher.Sender.SendAlarmMessage(sendCtx, message)
 	cancelSend()
 	switch {
 	case err == nil && message.DryRun:
-		dispatcher.log().Info("alarm_delivery_dry_run", "alarm_id", claim.alarmID, "kind", string(claim.kind), "step", claim.step, "channel", string(claim.channel), "recipient", claim.recipient)
+		dispatcher.log().Info("alarm_delivery_dry_run", "alarm_id", primary.alarmID, "kind", string(primary.kind), "step", primary.step, "channel", string(primary.channel), "recipient", primary.recipient, "batch_size", len(batch.claims))
 		return true, settle("DRY_RUN", "", false)
 	case err == nil:
-		dispatcher.log().Info("alarm_delivery_sent", "alarm_id", claim.alarmID, "kind", string(claim.kind), "step", claim.step, "channel", string(claim.channel), "recipient", claim.recipient)
+		dispatcher.log().Info("alarm_delivery_sent", "alarm_id", primary.alarmID, "kind", string(primary.kind), "step", primary.step, "channel", string(primary.channel), "recipient", primary.recipient, "batch_size", len(batch.claims))
 		return true, settle("SENT", "", false)
 	case errors.Is(err, ErrDeliveryRejected):
-		dispatcher.log().Error("alarm_delivery_rejected", "error_code", "ALARM_DELIVERY_REJECTED", "alarm_id", claim.alarmID, "key", claim.dedupKey)
+		dispatcher.log().Error("alarm_delivery_rejected", "error_code", "ALARM_DELIVERY_REJECTED", "alarm_id", primary.alarmID, "key", message.Key, "batch_size", len(batch.claims))
 		return true, settle("FAILED", "REJECTED", false)
 	default:
-		dispatcher.log().Warn("alarm_delivery_send_failed", "error_code", "ALARM_DELIVERY_SEND_FAILED", "alarm_id", claim.alarmID, "key", claim.dedupKey, "attempt", claim.attempts)
+		dispatcher.log().Warn("alarm_delivery_send_failed", "error_code", "ALARM_DELIVERY_SEND_FAILED", "alarm_id", primary.alarmID, "key", message.Key, "attempt", primary.attempts, "batch_size", len(batch.claims))
 		return true, settle("PENDING", "", true)
 	}
 }
 
-func (dispatcher *AlarmDeliveryDispatcher) claimAttempt(ctx context.Context, now time.Time) (*claimedAttempt, bool, error) {
+func (dispatcher *AlarmDeliveryDispatcher) claimBatch(ctx context.Context, now time.Time) (*claimedBatch, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
+	routingTable, recipients := dispatcher.currentConfig()
 	tx, err := dispatcher.Scheduler.pool.Begin(ctx)
 	if err != nil {
 		return nil, false, err
 	}
 	defer tx.Rollback(ctx)
-	claim := claimedAttempt{}
+	primary := claimedAttempt{}
 	var kind, channel, state string
 	err = tx.QueryRow(ctx, `
 SELECT tenant_id::text, alarm_id::text, dedup_key, kind, step, channel, recipient, state, attempts
@@ -442,67 +485,260 @@ WHERE (state = 'PENDING' AND next_attempt_at <= $1)
    OR (state = 'SENDING' AND (lease_until IS NULL OR lease_until <= $1))
 ORDER BY CASE WHEN state = 'SENDING' THEN COALESCE(lease_until, next_attempt_at) ELSE next_attempt_at END,
          next_attempt_at
-LIMIT 1 FOR UPDATE SKIP LOCKED`, now.UTC()).Scan(&claim.tenantID, &claim.alarmID, &claim.dedupKey, &kind, &claim.step, &channel, &claim.recipient, &state, &claim.attempts)
+LIMIT 1 FOR UPDATE SKIP LOCKED`, now.UTC()).Scan(&primary.tenantID, &primary.alarmID, &primary.dedupKey, &kind, &primary.step, &channel, &primary.recipient, &state, &primary.attempts)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, false, nil
 	}
 	if err != nil {
 		return nil, false, fmt.Errorf("claim Alarm message: %w", err)
 	}
-	claim.kind, claim.channel = DeliveryKind(kind), DeliveryChannel(channel)
-	if state == "SENDING" && claim.attempts >= deliveryAttempts {
+	primary.kind, primary.channel = DeliveryKind(kind), DeliveryChannel(channel)
+	if state == "SENDING" && primary.attempts >= deliveryAttempts {
 		if _, err := tx.Exec(ctx, `UPDATE notification_runtime.alarm_delivery_attempt
 SET state = 'FAILED', reason = 'GAVE_UP', next_attempt_at = $3, lease_until = NULL, updated_at = $3
 WHERE tenant_id = $1::uuid AND dedup_key = $2`,
-			claim.tenantID, claim.dedupKey, now.UTC()); err != nil {
+			primary.tenantID, primary.dedupKey, now.UTC()); err != nil {
 			return nil, false, err
 		}
 		if err := tx.Commit(ctx); err != nil {
 			return nil, false, err
 		}
-		dispatcher.log().Error("alarm_delivery_gave_up", "error_code", "ALARM_DELIVERY_GAVE_UP", "alarm_id", claim.alarmID, "key", claim.dedupKey, "reason", "LEASE_EXPIRED", "attempts", claim.attempts)
+		dispatcher.log().Error("alarm_delivery_gave_up", "error_code", "ALARM_DELIVERY_GAVE_UP", "alarm_id", primary.alarmID, "key", primary.dedupKey, "reason", "LEASE_EXPIRED", "attempts", primary.attempts)
 		return nil, true, nil
 	}
-	claim.attempts++
-	claim.leaseUntil = now.Add(deliveryLease).UTC()
+	primaryAlarm, err := readDeliveryAlarmTx(ctx, tx, primary.tenantID, primary.alarmID)
+	if err != nil {
+		return nil, false, err
+	}
+	primary.attempts++
+	primary.leaseUntil = now.Add(deliveryLease).UTC()
 	if _, err := tx.Exec(ctx, `UPDATE notification_runtime.alarm_delivery_attempt
 SET state = 'SENDING', attempts = $3, next_attempt_at = $4, lease_until = $4, updated_at = $5
 WHERE tenant_id = $1::uuid AND dedup_key = $2`,
-		claim.tenantID, claim.dedupKey, claim.attempts, claim.leaseUntil, now.UTC()); err != nil {
+		primary.tenantID, primary.dedupKey, primary.attempts, primary.leaseUntil, now.UTC()); err != nil {
 		return nil, false, err
 	}
+
+	batch := &claimedBatch{
+		claims: []claimedAttempt{primary},
+		alarms: []DeliveryAlarm{primaryAlarm},
+	}
+	routing, ok := routingTable.Site(primaryAlarm.SiteID)
+	if !ok {
+		batch.msgErr = errors.New("the Site has no routing any more")
+	} else {
+		batch.routing = routing
+		to, contactErr := recipientContact(recipients, primary.channel, primary.recipient)
+		if contactErr != nil {
+			batch.msgErr = contactErr
+		} else {
+			batch.to = to
+		}
+	}
+
+	if batch.msgErr == nil && state == "PENDING" && primary.kind == DeliveryFire && primaryAlarm.Severity != alarmmodel.SeverityCritical {
+		route, routeIndex, routeOK := routing.routeWithIndex(primaryAlarm.AlarmType, primaryAlarm.Severity)
+		if routeOK && route.GroupWindowSeconds > 0 {
+			sibClaims, sibAlarms, sibErr := claimSiblingAttemptsTx(ctx, tx, primary, primaryAlarm, routing, route, routeIndex, now)
+			if sibErr != nil {
+				return nil, false, sibErr
+			}
+			batch.claims = append(batch.claims, sibClaims...)
+			batch.alarms = append(batch.alarms, sibAlarms...)
+		}
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return nil, false, err
 	}
 	if state == "SENDING" {
-		dispatcher.log().Warn("alarm_delivery_lease_reclaimed", "alarm_id", claim.alarmID, "key", claim.dedupKey, "attempt", claim.attempts)
+		dispatcher.log().Warn("alarm_delivery_lease_reclaimed", "alarm_id", primary.alarmID, "key", primary.dedupKey, "attempt", primary.attempts)
 	}
-	return &claim, true, nil
+	return batch, true, nil
 }
 
-// settle records how a claimed message ended; a retry waits attempts² minutes, until the last.
-func (dispatcher *AlarmDeliveryDispatcher) settle(ctx context.Context, claim claimedAttempt, now time.Time, state, reason string, retry bool) error {
-	next := now
-	if retry {
-		if claim.attempts >= deliveryAttempts {
-			state, reason = "FAILED", "GAVE_UP"
-			dispatcher.log().Error("alarm_delivery_gave_up", "error_code", "ALARM_DELIVERY_GAVE_UP", "alarm_id", claim.alarmID, "key", claim.dedupKey)
-		} else {
-			next = now.Add(time.Duration(claim.attempts*claim.attempts) * time.Minute)
+func readDeliveryAlarmTx(ctx context.Context, tx pgx.Tx, tenantID, alarmID string) (DeliveryAlarm, error) {
+	var alarm DeliveryAlarm
+	var severity string
+	var acknowledgedBy *string
+	if err := tx.QueryRow(ctx, `SELECT tenant_id::text, alarm_id::text, site_id::text, alarm_type, title, summary, severity, alarm_version, began_at,
+       acknowledged_at, acknowledged_by, cleared_at, COALESCE(device_id, ''), suppressed_until
+FROM notification_runtime.alarm_delivery WHERE tenant_id = $1::uuid AND alarm_id = $2::uuid`,
+		tenantID, alarmID).Scan(&alarm.TenantID, &alarm.AlarmID, &alarm.SiteID, &alarm.AlarmType, &alarm.Title, &alarm.Summary, &severity, &alarm.Version,
+		&alarm.BeganAt, &alarm.AcknowledgedAt, &acknowledgedBy, &alarm.ClearedAt, &alarm.DeviceID, &alarm.SuppressedUntil); err != nil {
+		return DeliveryAlarm{}, fmt.Errorf("read the Alarm: %w", err)
+	}
+	alarm.Severity = alarmmodel.Severity(severity)
+	if acknowledgedBy != nil {
+		alarm.AcknowledgedBy = *acknowledgedBy
+	}
+	return alarm, nil
+}
+
+func claimSiblingAttemptsTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	primary claimedAttempt,
+	primaryAlarm DeliveryAlarm,
+	routing SiteRouting,
+	primaryRoute AlarmRoute,
+	primaryRouteIndex int,
+	now time.Time,
+) ([]claimedAttempt, []DeliveryAlarm, error) {
+	maxSiblings := effectiveGroupMaxItems(primaryRoute) - 1
+	if maxSiblings <= 0 {
+		return nil, nil, nil
+	}
+	windowEnd := now.Add(time.Duration(primaryRoute.GroupWindowSeconds) * time.Second).UTC()
+	var severityFilter, alarmTypeFilter string
+	switch effectiveGroupBy(primaryRoute) {
+	case "severity":
+		severityFilter = string(primaryAlarm.Severity)
+	case "alarmType":
+		alarmTypeFilter = primaryAlarm.AlarmType
+	}
+	rows, err := tx.Query(ctx, `
+SELECT a.dedup_key, a.alarm_id::text, a.attempts,
+       d.tenant_id::text, d.site_id::text, d.alarm_type, d.title, d.summary, d.severity, d.alarm_version, d.began_at,
+       d.acknowledged_at, d.acknowledged_by, d.cleared_at, COALESCE(d.device_id, ''), d.suppressed_until
+FROM notification_runtime.alarm_delivery_attempt a
+JOIN notification_runtime.alarm_delivery d
+  ON d.tenant_id = a.tenant_id AND d.alarm_id = a.alarm_id
+WHERE a.tenant_id = $1::uuid
+  AND a.site_id = $2::uuid
+  AND a.channel = $3
+  AND a.recipient = $4
+  AND a.kind = 'FIRE'
+  AND a.step = $5
+  AND a.state = 'PENDING'
+  AND a.attempts < $6
+  AND a.next_attempt_at <= $7
+  AND a.dedup_key <> $8
+  AND d.severity <> 'CRITICAL'
+  AND ($9 = '' OR d.severity = $9)
+  AND ($10 = '' OR d.alarm_type = $10)
+ORDER BY a.next_attempt_at, a.created_at, a.dedup_key
+FOR UPDATE OF a SKIP LOCKED`,
+		primary.tenantID, primaryAlarm.SiteID, string(primary.channel), primary.recipient, primary.step,
+		deliveryAttempts, windowEnd, primary.dedupKey, severityFilter, alarmTypeFilter)
+	if err != nil {
+		return nil, nil, fmt.Errorf("claim grouped sibling messages: %w", err)
+	}
+	var sibClaims []claimedAttempt
+	var sibAlarms []DeliveryAlarm
+	for rows.Next() {
+		var sib claimedAttempt
+		var sibAlarm DeliveryAlarm
+		var severityStr string
+		var ackBy *string
+		if scanErr := rows.Scan(
+			&sib.dedupKey, &sib.alarmID, &sib.attempts,
+			&sibAlarm.TenantID, &sibAlarm.SiteID, &sibAlarm.AlarmType, &sibAlarm.Title, &sibAlarm.Summary, &severityStr, &sibAlarm.Version, &sibAlarm.BeganAt,
+			&sibAlarm.AcknowledgedAt, &ackBy, &sibAlarm.ClearedAt, &sibAlarm.DeviceID, &sibAlarm.SuppressedUntil,
+		); scanErr != nil {
+			rows.Close()
+			return nil, nil, fmt.Errorf("scan grouped sibling message: %w", scanErr)
+		}
+		sibAlarm.AlarmID = sib.alarmID
+		sibAlarm.Severity = alarmmodel.Severity(severityStr)
+		if ackBy != nil {
+			sibAlarm.AcknowledgedBy = *ackBy
+		}
+		if sibAlarm.Severity == alarmmodel.SeverityCritical {
+			continue
+		}
+		sibRoute, sibRouteIndex, sibOK := routing.routeWithIndex(sibAlarm.AlarmType, sibAlarm.Severity)
+		if !sibOK || sibRouteIndex != primaryRouteIndex || sibRoute.GroupWindowSeconds <= 0 {
+			continue
+		}
+		sib.tenantID = primary.tenantID
+		sib.kind = primary.kind
+		sib.step = primary.step
+		sib.channel = primary.channel
+		sib.recipient = primary.recipient
+		sib.attempts++
+		sib.leaseUntil = primary.leaseUntil
+		sibClaims = append(sibClaims, sib)
+		sibAlarms = append(sibAlarms, sibAlarm)
+		if len(sibClaims) >= maxSiblings {
+			break
 		}
 	}
-	var reasonValue any
-	if reason != "" {
-		reasonValue = reason
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, nil, fmt.Errorf("iterate grouped sibling messages: %w", err)
 	}
-	tag, err := dispatcher.Scheduler.pool.Exec(ctx, `UPDATE notification_runtime.alarm_delivery_attempt
+	rows.Close()
+
+	if len(sibClaims) > 0 {
+		dedupKeys := make([]string, len(sibClaims))
+		for i, sib := range sibClaims {
+			dedupKeys[i] = sib.dedupKey
+		}
+		if _, err := tx.Exec(ctx, `UPDATE notification_runtime.alarm_delivery_attempt
+SET state = 'SENDING', attempts = attempts + 1, next_attempt_at = $3, lease_until = $3, updated_at = $4
+WHERE tenant_id = $1::uuid AND dedup_key = ANY($2::text[]) AND state = 'PENDING'`,
+			primary.tenantID, dedupKeys, primary.leaseUntil, now.UTC()); err != nil {
+			return nil, nil, fmt.Errorf("mark grouped sibling messages SENDING: %w", err)
+		}
+	}
+	return sibClaims, sibAlarms, nil
+}
+
+func recipientContact(recipients RecipientDirectory, channel DeliveryChannel, recipientID string) (string, error) {
+	if channel == ChannelWeComBot {
+		return "", nil
+	}
+	entry := recipients.Recipients[recipientID]
+	var to string
+	switch channel {
+	case ChannelSMTP:
+		to = entry.Email
+	case ChannelWeComApp:
+		to = entry.WeComUserID
+	}
+	if strings.TrimSpace(to) == "" {
+		return "", fmt.Errorf("recipient %s has no contact for %s", recipientID, channel)
+	}
+	return to, nil
+}
+
+// settleBatch records how a single or grouped send ended; a retry waits attempts² minutes, until the last.
+func (dispatcher *AlarmDeliveryDispatcher) settleBatch(ctx context.Context, claims []claimedAttempt, now time.Time, state, reason string, retry bool) error {
+	if len(claims) == 0 {
+		return nil
+	}
+	tx, err := dispatcher.Scheduler.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	for _, claim := range claims {
+		itemState, itemReason, next := state, reason, now
+		if retry {
+			if claim.attempts >= deliveryAttempts {
+				itemState, itemReason = "FAILED", "GAVE_UP"
+				dispatcher.log().Error("alarm_delivery_gave_up", "error_code", "ALARM_DELIVERY_GAVE_UP", "alarm_id", claim.alarmID, "key", claim.dedupKey)
+			} else {
+				next = now.Add(time.Duration(claim.attempts*claim.attempts) * time.Minute)
+			}
+		}
+		var reasonValue any
+		if itemReason != "" {
+			reasonValue = itemReason
+		}
+		tag, execErr := tx.Exec(ctx, `UPDATE notification_runtime.alarm_delivery_attempt
 SET state = $3, reason = $4, next_attempt_at = $5, lease_until = NULL, updated_at = $6
 WHERE tenant_id = $1::uuid AND dedup_key = $2 AND state = 'SENDING' AND lease_until = $7`,
-		claim.tenantID, claim.dedupKey, state, reasonValue, next.UTC(), now.UTC(), claim.leaseUntil)
-	if err == nil && tag.RowsAffected() == 0 {
-		dispatcher.log().Warn("alarm_delivery_lease_lost", "alarm_id", claim.alarmID, "key", claim.dedupKey, "target_state", state)
+			claim.tenantID, claim.dedupKey, itemState, reasonValue, next.UTC(), now.UTC(), claim.leaseUntil)
+		if execErr != nil {
+			return execErr
+		}
+		if tag.RowsAffected() == 0 {
+			dispatcher.log().Warn("alarm_delivery_lease_lost", "alarm_id", claim.alarmID, "key", claim.dedupKey, "target_state", itemState)
+		}
 	}
-	return err
+	return tx.Commit(ctx)
 }
 
 func withDefaultTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
@@ -523,41 +759,84 @@ func settleContext(ctx context.Context, timeout time.Duration) (context.Context,
 	return context.WithTimeout(context.WithoutCancel(ctx), timeout)
 }
 
-// outbound renders the claimed message for its channel and recipient.
-func (dispatcher *AlarmDeliveryDispatcher) outbound(ctx context.Context, claim claimedAttempt) (OutboundMessage, error) {
-	var alarm DeliveryAlarm
-	var severity string
-	var acknowledgedBy *string
-	if err := dispatcher.Scheduler.pool.QueryRow(ctx, `SELECT tenant_id::text, alarm_id::text, site_id::text, alarm_type, title, summary, severity, alarm_version, began_at,
-       acknowledged_at, acknowledged_by, cleared_at, COALESCE(device_id, ''), suppressed_until FROM notification_runtime.alarm_delivery WHERE tenant_id = $1::uuid AND alarm_id = $2::uuid`,
-		claim.tenantID, claim.alarmID).Scan(&alarm.TenantID, &alarm.AlarmID, &alarm.SiteID, &alarm.AlarmType, &alarm.Title, &alarm.Summary, &severity, &alarm.Version,
-		&alarm.BeganAt, &alarm.AcknowledgedAt, &acknowledgedBy, &alarm.ClearedAt, &alarm.DeviceID, &alarm.SuppressedUntil); err != nil {
-		return OutboundMessage{}, fmt.Errorf("read the Alarm: %w", err)
-	}
-	alarm.Severity = alarmmodel.Severity(severity)
-	if acknowledgedBy != nil {
-		alarm.AcknowledgedBy = *acknowledgedBy
-	}
-	routing, ok := dispatcher.Routing.Site(alarm.SiteID)
-	if !ok {
-		return OutboundMessage{}, errors.New("the Site has no routing any more")
-	}
-	to := ""
-	switch claim.channel {
-	case ChannelSMTP:
-		to = dispatcher.Recipients.Recipients[claim.recipient].Email
-	case ChannelWeComApp:
-		to = dispatcher.Recipients.Recipients[claim.recipient].WeComUserID
-	}
-	if claim.channel != ChannelWeComBot && to == "" {
-		return OutboundMessage{}, fmt.Errorf("recipient %s has no contact for %s", claim.recipient, claim.channel)
-	}
-	subject, text := RenderDeliveryMessage(alarm, routing, claim.kind, claim.step, dispatcher.ConsoleURL)
-	return OutboundMessage{Channel: claim.channel, To: to, Subject: subject, Text: text, Key: claim.dedupKey}, nil
-}
-
 var deliverySeverityLabels = map[alarmmodel.Severity]string{
 	alarmmodel.SeverityCritical: "紧急", alarmmodel.SeverityMajor: "重要", alarmmodel.SeverityMinor: "次要", alarmmodel.SeverityWarning: "警告", alarmmodel.SeverityInfo: "提示",
+}
+
+// RenderGroupedDeliveryMessage renders a combined digest for a batch of grouped FIRE alarms in the Site's zone.
+func RenderGroupedDeliveryMessage(alarms []DeliveryAlarm, routing SiteRouting, step int, consoleURL string) (string, string) {
+	if len(alarms) == 0 {
+		return "", ""
+	}
+	if len(alarms) == 1 {
+		return RenderDeliveryMessage(alarms[0], routing, DeliveryFire, step, consoleURL)
+	}
+	location, err := time.LoadLocation(routing.Timezone)
+	if err != nil {
+		location = time.UTC
+	}
+	clock := func(at time.Time) string { return at.In(location).Format("2006-01-02 15:04") }
+
+	sameSeverity := true
+	firstSeverity := alarms[0].Severity
+	for _, alarm := range alarms[1:] {
+		if alarm.Severity != firstSeverity {
+			sameSeverity = false
+			break
+		}
+	}
+	siteName := sanitizeOneLine(routing.SiteName)
+	var subject string
+	if sameSeverity {
+		label := deliverySeverityLabels[firstSeverity]
+		subject = fmt.Sprintf("[%s] %d 条%s告警汇总", siteName, len(alarms), label)
+	} else {
+		subject = fmt.Sprintf("[%s] %d 条告警汇总", siteName, len(alarms))
+	}
+
+	maxItems := defaultGroupMaxItems
+	route, hasRoute := routing.Route(alarms[0].AlarmType, alarms[0].Severity)
+	if hasRoute {
+		if route.GroupWindowSeconds > 0 {
+			maxItems = effectiveGroupMaxItems(route)
+		} else if route.GroupMaxItems >= minGroupMaxItems && route.GroupMaxItems <= maxGroupMaxItems {
+			maxItems = route.GroupMaxItems
+		}
+	}
+	shown := min(len(alarms), maxItems)
+
+	var body strings.Builder
+	body.WriteString(subject + "\n")
+	fmt.Fprintf(&body, "时区：%s\n", routing.Timezone)
+	for index, alarm := range alarms[:shown] {
+		title := clip(sanitizeOneLine(alarm.Title), 80)
+		device := strings.TrimSpace(sanitizeOneLine(alarm.DeviceID))
+		prefix := ""
+		if !sameSeverity {
+			if label := deliverySeverityLabels[alarm.Severity]; label != "" {
+				prefix = "[" + label + "] "
+			}
+		}
+		if device != "" {
+			fmt.Fprintf(&body, "%d. %s%s（设备：%s，开始：%s）\n", index+1, prefix, title, clip(device, 64), clock(alarm.BeganAt))
+		} else {
+			fmt.Fprintf(&body, "%d. %s%s（开始：%s）\n", index+1, prefix, title, clock(alarm.BeganAt))
+		}
+	}
+	if len(alarms) > shown {
+		fmt.Fprintf(&body, "其余 %d 条告警请在控制台查看。\n", len(alarms)-shown)
+	}
+	if hasRoute && step+1 < len(route.Steps) {
+		fmt.Fprintf(&body, "%d 分钟内无人确认，将通知下一级。\n", route.Steps[step+1].AfterMinutes-route.Steps[step].AfterMinutes)
+	}
+	if consoleURL = strings.TrimRight(strings.TrimSpace(consoleURL), "/"); consoleURL != "" {
+		fmt.Fprintf(&body, "查看告警：%s/operations/alarms?site=%s&view=all\n", consoleURL, alarms[0].SiteID)
+	}
+	return subject, strings.TrimRight(body.String(), "\n")
+}
+
+func sanitizeOneLine(value string) string {
+	return strings.NewReplacer("\r", " ", "\n", " ", "\x00", "").Replace(strings.TrimSpace(value))
 }
 
 // RenderDeliveryMessage is the subject and text of one message, times in the Site's zone.

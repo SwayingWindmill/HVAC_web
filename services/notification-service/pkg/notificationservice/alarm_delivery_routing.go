@@ -84,10 +84,13 @@ type QuietHours struct {
 // AlarmRoute matches Alarms of at least MinSeverity (and, when given, of one of AlarmTypePrefixes).
 // The first matching route of the file decides.
 type AlarmRoute struct {
-	Name              string              `json:"name"`
-	MinSeverity       alarmmodel.Severity `json:"minSeverity"`
-	AlarmTypePrefixes []string            `json:"alarmTypePrefixes,omitempty"`
-	CooldownMinutes   int                 `json:"cooldownMinutes,omitempty"`
+	Name               string              `json:"name"`
+	MinSeverity        alarmmodel.Severity `json:"minSeverity"`
+	AlarmTypePrefixes  []string            `json:"alarmTypePrefixes,omitempty"`
+	CooldownMinutes    int                 `json:"cooldownMinutes,omitempty"`
+	GroupWindowSeconds int                 `json:"groupWindowSeconds,omitempty"`
+	GroupMaxItems      int                 `json:"groupMaxItems,omitempty"`
+	GroupBy            string              `json:"groupBy,omitempty"`
 	// Steps: the first is sent when the hold ends; each later one AfterMinutes after the first,
 	// only while nobody acknowledged and the Alarm is still active.
 	Steps          []EscalationStep `json:"steps"`
@@ -134,6 +137,24 @@ func NewAlarmRoutingTable(routings ...SiteRouting) AlarmRoutingTable {
 	return table
 }
 
+const (
+	maxGroupWindowSeconds = 900
+	defaultGroupMaxItems  = 10
+	minGroupMaxItems      = 2
+	maxGroupMaxItems      = 50
+)
+
+var (
+	errRecipientsInvalid       = errors.New("recipients configuration is invalid")
+	errRoutingInvalid          = errors.New("routing configuration is invalid")
+	errRoutingRecipientInvalid = errors.New("routing recipient mapping is invalid")
+)
+
+type namedRoutingFile struct {
+	base string
+	body []byte
+}
+
 // LoadAlarmRouting reads every *.alarm-routing.json in dir and checks each against the recipients.
 func LoadAlarmRouting(dir string, recipients RecipientDirectory) (AlarmRoutingTable, error) {
 	paths, err := filepath.Glob(filepath.Join(dir, "*.alarm-routing.json"))
@@ -141,22 +162,30 @@ func LoadAlarmRouting(dir string, recipients RecipientDirectory) (AlarmRoutingTa
 		return AlarmRoutingTable{}, err
 	}
 	sort.Strings(paths)
-	table := AlarmRoutingTable{sites: map[string]SiteRouting{}}
+	files := make([]namedRoutingFile, 0, len(paths))
 	for _, path := range paths {
 		body, err := os.ReadFile(path)
 		if err != nil {
 			return AlarmRoutingTable{}, err
 		}
-		routing, err := ParseSiteRouting(body)
+		files = append(files, namedRoutingFile{base: filepath.Base(path), body: body})
+	}
+	return loadAlarmRoutingFiles(files, recipients)
+}
+
+func loadAlarmRoutingFiles(files []namedRoutingFile, recipients RecipientDirectory) (AlarmRoutingTable, error) {
+	table := AlarmRoutingTable{sites: map[string]SiteRouting{}}
+	for _, file := range files {
+		routing, err := ParseSiteRouting(file.body)
 		if err != nil {
-			return AlarmRoutingTable{}, fmt.Errorf("%s: %w", filepath.Base(path), err)
+			return AlarmRoutingTable{}, fmt.Errorf("%s: %w", file.base, fmt.Errorf("%w: %w", errRoutingInvalid, err))
 		}
 		if err := routing.checkRecipients(recipients); err != nil {
-			return AlarmRoutingTable{}, fmt.Errorf("%s: %w", filepath.Base(path), err)
+			return AlarmRoutingTable{}, fmt.Errorf("%s: %w", file.base, fmt.Errorf("%w: %w", errRoutingRecipientInvalid, err))
 		}
 		key := strings.ToLower(routing.SiteID)
 		if _, seen := table.sites[key]; seen {
-			return AlarmRoutingTable{}, fmt.Errorf("%s: Site %s is routed twice", filepath.Base(path), routing.SiteID)
+			return AlarmRoutingTable{}, fmt.Errorf("%s: %w: Site %s is routed twice", file.base, errRoutingInvalid, routing.SiteID)
 		}
 		table.sites[key] = routing
 	}
@@ -169,24 +198,28 @@ func LoadRecipientDirectory(path string) (RecipientDirectory, error) {
 	if err != nil {
 		return RecipientDirectory{}, err
 	}
+	return parseRecipientDirectory(body)
+}
+
+func parseRecipientDirectory(body []byte) (RecipientDirectory, error) {
 	var directory RecipientDirectory
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&directory); err != nil {
-		return RecipientDirectory{}, errors.New("recipients file is not valid JSON of the documented shape")
+	if err := decoder.Decode(&directory); err != nil || decoder.More() {
+		return RecipientDirectory{}, fmt.Errorf("%w: recipients file is not valid JSON of the documented shape", errRecipientsInvalid)
 	}
 	for id, recipient := range directory.Recipients {
 		if !recipientIDPattern.MatchString(id) {
-			return RecipientDirectory{}, fmt.Errorf("recipient id %q is invalid", id)
+			return RecipientDirectory{}, fmt.Errorf("%w: recipient id %q is invalid", errRecipientsInvalid, id)
 		}
 		if strings.TrimSpace(recipient.Email) == "" && strings.TrimSpace(recipient.WeComUserID) == "" {
-			return RecipientDirectory{}, fmt.Errorf("recipient %s has neither email nor wecomUserId", id)
+			return RecipientDirectory{}, fmt.Errorf("%w: recipient %s has neither email nor wecomUserId", errRecipientsInvalid, id)
 		}
 		if recipient.Email != "" && (!strings.Contains(recipient.Email, "@") || strings.ContainsAny(recipient.Email, " \r\n<>,")) {
-			return RecipientDirectory{}, fmt.Errorf("recipient %s has an invalid email", id)
+			return RecipientDirectory{}, fmt.Errorf("%w: recipient %s has an invalid email", errRecipientsInvalid, id)
 		}
 		if strings.ContainsAny(recipient.WeComUserID, " \r\n|") {
-			return RecipientDirectory{}, fmt.Errorf("recipient %s has an invalid wecomUserId", id)
+			return RecipientDirectory{}, fmt.Errorf("%w: recipient %s has an invalid wecomUserId", errRecipientsInvalid, id)
 		}
 	}
 	return directory, nil
@@ -197,95 +230,115 @@ func ParseSiteRouting(body []byte) (SiteRouting, error) {
 	var routing SiteRouting
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&routing); err != nil {
-		return SiteRouting{}, fmt.Errorf("routing file: %w", err)
-	}
-	if routing.SchemaVersion != 1 {
-		return SiteRouting{}, errors.New("routing schemaVersion must be 1")
-	}
-	if !alarmmodel.IsUUIDv7(routing.SiteID) || strings.TrimSpace(routing.SiteName) == "" {
-		return SiteRouting{}, errors.New("routing needs the Site's id and name")
-	}
-	if _, err := time.LoadLocation(routing.Timezone); err != nil || routing.Timezone == "" {
-		return SiteRouting{}, errors.New("routing timezone is not an IANA zone")
-	}
-	if routing.HoldMinutes < 0 || routing.HoldMinutes > 60 {
-		return SiteRouting{}, errors.New("holdMinutes must be 0 to 60")
+	if err := decoder.Decode(&routing); err != nil || decoder.More() {
+		return SiteRouting{}, fmt.Errorf("routing file: %w", errors.New("invalid JSON"))
 	}
 	if routing.MaxAgeHours <= 0 {
 		routing.MaxAgeHours = 12
 	}
+	if err := routing.Validate(); err != nil {
+		return SiteRouting{}, err
+	}
+	return routing, nil
+}
+
+// Validate checks every field and route bound of a SiteRouting configuration.
+func (routing SiteRouting) Validate() error {
+	if routing.SchemaVersion != 1 {
+		return errors.New("routing schemaVersion must be 1")
+	}
+	if !alarmmodel.IsUUIDv7(routing.SiteID) || strings.TrimSpace(routing.SiteName) == "" {
+		return errors.New("routing needs the Site's id and name")
+	}
+	if _, err := time.LoadLocation(routing.Timezone); err != nil || routing.Timezone == "" {
+		return errors.New("routing timezone is not an IANA zone")
+	}
+	if routing.HoldMinutes < 0 || routing.HoldMinutes > 60 {
+		return errors.New("holdMinutes must be 0 to 60")
+	}
+	if routing.MaxAgeHours < 0 {
+		return errors.New("maxAgeHours must not be negative")
+	}
 	if routing.RateLimitPerHour < 0 {
-		return SiteRouting{}, errors.New("rateLimitPerHour must not be negative")
+		return errors.New("rateLimitPerHour must not be negative")
 	}
 	if routing.CooldownMinutes < 0 || routing.CooldownMinutes > 10080 {
-		return SiteRouting{}, errors.New("cooldownMinutes must be 0 to 10080")
+		return errors.New("cooldownMinutes must be 0 to 10080")
 	}
 	if quiet := routing.QuietHours; quiet != nil {
 		if _, err := clockMinutes(quiet.Start); err != nil {
-			return SiteRouting{}, err
+			return err
 		}
 		if _, err := clockMinutes(quiet.End); err != nil {
-			return SiteRouting{}, err
+			return err
 		}
 		if quiet.Start == quiet.End {
-			return SiteRouting{}, errors.New("quiet hours start and end must differ")
+			return errors.New("quiet hours start and end must differ")
 		}
 		if severityRank[quiet.BypassSeverity] == 0 {
-			return SiteRouting{}, errors.New("quiet hours bypassSeverity is invalid")
+			return errors.New("quiet hours bypassSeverity is invalid")
 		}
 	}
 	if len(routing.SuppressWhenRootCause) > 0 && strings.TrimSpace(routing.RootCauseAlarmType) == "" {
-		return SiteRouting{}, errors.New("suppressWhenRootCause needs rootCauseAlarmType")
+		return errors.New("suppressWhenRootCause needs rootCauseAlarmType")
 	}
 	for index, rule := range routing.RootCauseRules {
 		if strings.TrimSpace(rule.WhenActivePrefix) == "" {
-			return SiteRouting{}, fmt.Errorf("rootCauseRules[%d] needs whenActivePrefix", index)
+			return fmt.Errorf("rootCauseRules[%d] needs whenActivePrefix", index)
 		}
 		if rule.WhenDeviceID != "" && strings.TrimSpace(rule.WhenDeviceID) == "" {
-			return SiteRouting{}, fmt.Errorf("rootCauseRules[%d] has a blank whenDeviceId", index)
+			return fmt.Errorf("rootCauseRules[%d] has a blank whenDeviceId", index)
 		}
 		if rule.ScopeSameDevice && !strings.HasSuffix(rule.WhenActivePrefix, "/") {
-			return SiteRouting{}, fmt.Errorf("rootCauseRules[%d] with scopeSameDevice needs trailing / on whenActivePrefix", index)
+			return fmt.Errorf("rootCauseRules[%d] with scopeSameDevice needs trailing / on whenActivePrefix", index)
 		}
 		if len(rule.SuppressPrefixes) == 0 {
-			return SiteRouting{}, fmt.Errorf("rootCauseRules[%d] needs suppressPrefixes", index)
+			return fmt.Errorf("rootCauseRules[%d] needs suppressPrefixes", index)
 		}
 		for _, prefix := range rule.SuppressPrefixes {
 			if strings.TrimSpace(prefix) == "" {
-				return SiteRouting{}, fmt.Errorf("rootCauseRules[%d] has an empty suppressPrefix", index)
+				return fmt.Errorf("rootCauseRules[%d] has an empty suppressPrefix", index)
 			}
 		}
 		for _, deviceID := range rule.SuppressDeviceIDs {
 			if strings.TrimSpace(deviceID) == "" {
-				return SiteRouting{}, fmt.Errorf("rootCauseRules[%d] has an empty suppressDeviceId", index)
+				return fmt.Errorf("rootCauseRules[%d] has an empty suppressDeviceId", index)
 			}
 		}
 	}
 	if len(routing.Routes) == 0 {
-		return SiteRouting{}, errors.New("routing needs at least one route")
+		return errors.New("routing needs at least one route")
 	}
 	for index, route := range routing.Routes {
 		if strings.TrimSpace(route.Name) == "" || severityRank[route.MinSeverity] == 0 {
-			return SiteRouting{}, fmt.Errorf("route %d needs a name and a valid minSeverity", index)
+			return fmt.Errorf("route %d needs a name and a valid minSeverity", index)
 		}
 		if route.CooldownMinutes < 0 || route.CooldownMinutes > 10080 {
-			return SiteRouting{}, fmt.Errorf("route %s cooldownMinutes must be 0 to 10080", route.Name)
+			return fmt.Errorf("route %s cooldownMinutes must be 0 to 10080", route.Name)
+		}
+		if route.GroupWindowSeconds < 0 || route.GroupWindowSeconds > maxGroupWindowSeconds {
+			return fmt.Errorf("route %s groupWindowSeconds must be 0 to %d", route.Name, maxGroupWindowSeconds)
+		}
+		if route.GroupMaxItems != 0 && (route.GroupMaxItems < minGroupMaxItems || route.GroupMaxItems > maxGroupMaxItems) {
+			return fmt.Errorf("route %s groupMaxItems must be 0 or %d to %d", route.Name, minGroupMaxItems, maxGroupMaxItems)
+		}
+		if !isValidGroupBy(route.GroupBy) {
+			return fmt.Errorf("route %s groupBy %q must be site, severity, alarmType or empty", route.Name, route.GroupBy)
 		}
 		if len(route.Steps) == 0 || len(route.Steps) > 5 {
-			return SiteRouting{}, fmt.Errorf("route %s needs 1 to 5 steps", route.Name)
+			return fmt.Errorf("route %s needs 1 to 5 steps", route.Name)
 		}
 		previous := -1
 		for stepIndex, step := range route.Steps {
 			if stepIndex == 0 && step.AfterMinutes != 0 {
-				return SiteRouting{}, fmt.Errorf("route %s: the first step is sent when the hold ends (afterMinutes 0)", route.Name)
+				return fmt.Errorf("route %s: the first step is sent when the hold ends (afterMinutes 0)", route.Name)
 			}
 			if step.AfterMinutes <= previous || step.AfterMinutes > 24*60 {
-				return SiteRouting{}, fmt.Errorf("route %s: step afterMinutes must increase and stay within a day", route.Name)
+				return fmt.Errorf("route %s: step afterMinutes must increase and stay within a day", route.Name)
 			}
 			previous = step.AfterMinutes
 			if len(step.Channels) == 0 {
-				return SiteRouting{}, fmt.Errorf("route %s step %d has no channel", route.Name, stepIndex)
+				return fmt.Errorf("route %s step %d has no channel", route.Name, stepIndex)
 			}
 			personal := false
 			for _, channel := range step.Channels {
@@ -294,20 +347,56 @@ func ParseSiteRouting(body []byte) (SiteRouting, error) {
 					personal = true
 				case ChannelWeComBot:
 				default:
-					return SiteRouting{}, fmt.Errorf("route %s step %d: unknown channel %q", route.Name, stepIndex, channel)
+					return fmt.Errorf("route %s step %d: unknown channel %q", route.Name, stepIndex, channel)
 				}
 			}
 			if personal && len(step.Recipients) == 0 {
-				return SiteRouting{}, fmt.Errorf("route %s step %d sends mail or WeCom app messages to nobody", route.Name, stepIndex)
+				return fmt.Errorf("route %s step %d sends mail or WeCom app messages to nobody", route.Name, stepIndex)
 			}
 			for _, recipient := range step.Recipients {
 				if !recipientIDPattern.MatchString(recipient) {
-					return SiteRouting{}, fmt.Errorf("route %s step %d: recipient id %q is invalid", route.Name, stepIndex, recipient)
+					return fmt.Errorf("route %s step %d: recipient id %q is invalid", route.Name, stepIndex, recipient)
 				}
 			}
 		}
 	}
-	return routing, nil
+	return nil
+}
+
+func isValidGroupBy(groupBy string) bool {
+	switch groupBy {
+	case "", "site", "severity", "alarmType":
+		return true
+	default:
+		return false
+	}
+}
+
+func clampRouteGrouping(route AlarmRoute) AlarmRoute {
+	if route.GroupWindowSeconds < 0 {
+		route.GroupWindowSeconds = 0
+	} else if route.GroupWindowSeconds > maxGroupWindowSeconds {
+		route.GroupWindowSeconds = maxGroupWindowSeconds
+	}
+	if route.GroupWindowSeconds > 0 {
+		if route.GroupMaxItems == 0 {
+			route.GroupMaxItems = defaultGroupMaxItems
+		} else if route.GroupMaxItems < minGroupMaxItems {
+			route.GroupMaxItems = minGroupMaxItems
+		} else if route.GroupMaxItems > maxGroupMaxItems {
+			route.GroupMaxItems = maxGroupMaxItems
+		}
+	} else if route.GroupMaxItems != 0 {
+		if route.GroupMaxItems < minGroupMaxItems {
+			route.GroupMaxItems = minGroupMaxItems
+		} else if route.GroupMaxItems > maxGroupMaxItems {
+			route.GroupMaxItems = maxGroupMaxItems
+		}
+	}
+	if !isValidGroupBy(route.GroupBy) {
+		route.GroupBy = ""
+	}
+	return route
 }
 
 func (routing SiteRouting) checkRecipients(directory RecipientDirectory) error {
@@ -331,16 +420,21 @@ func (routing SiteRouting) checkRecipients(directory RecipientDirectory) error {
 
 // Route is the first route the Alarm matches.
 func (routing SiteRouting) Route(alarmType string, severity alarmmodel.Severity) (AlarmRoute, bool) {
-	for _, route := range routing.Routes {
+	route, _, ok := routing.routeWithIndex(alarmType, severity)
+	return route, ok
+}
+
+func (routing SiteRouting) routeWithIndex(alarmType string, severity alarmmodel.Severity) (AlarmRoute, int, bool) {
+	for index, route := range routing.Routes {
 		if severityRank[severity] < severityRank[route.MinSeverity] {
 			continue
 		}
 		if len(route.AlarmTypePrefixes) > 0 && !hasAnyPrefix(alarmType, route.AlarmTypePrefixes) {
 			continue
 		}
-		return route, true
+		return clampRouteGrouping(route), index, true
 	}
-	return AlarmRoute{}, false
+	return AlarmRoute{}, -1, false
 }
 
 func hasAnyPrefix(value string, prefixes []string) bool {
@@ -357,6 +451,31 @@ func effectiveCooldownMinutes(routing SiteRouting, route AlarmRoute) int {
 		return route.CooldownMinutes
 	}
 	return max(0, routing.CooldownMinutes)
+}
+
+func effectiveGroupMaxItems(route AlarmRoute) int {
+	if route.GroupWindowSeconds <= 0 {
+		return 1
+	}
+	if route.GroupMaxItems >= minGroupMaxItems && route.GroupMaxItems <= maxGroupMaxItems {
+		return route.GroupMaxItems
+	}
+	if route.GroupMaxItems == 0 {
+		return defaultGroupMaxItems
+	}
+	if route.GroupMaxItems < minGroupMaxItems {
+		return minGroupMaxItems
+	}
+	return maxGroupMaxItems
+}
+
+func effectiveGroupBy(route AlarmRoute) string {
+	switch route.GroupBy {
+	case "severity", "alarmType", "site":
+		return route.GroupBy
+	default:
+		return "site"
+	}
 }
 
 // IsSuppressedByRootCauseForAlarm reports whether an active root-cause Alarm suppresses notifications for alarm.
