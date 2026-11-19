@@ -258,6 +258,7 @@ CREATE POLICY energy_recalc_dirty_windows_scheduler_rw
   );
 
 -- 5. Least-privilege role grants.
+REVOKE ALL ON TABLE core_registry.site_calendar_holidays, core_registry.energy_recalc_dirty_windows FROM PUBLIC;
 GRANT USAGE ON SCHEMA core_registry TO s1_core_runtime, s1_core_writer, metric_engine_runtime, scheduler_runtime, settlement_runtime, mv_runtime;
 
 GRANT SELECT ON TABLE core_registry.site_calendar_holidays TO s1_core_runtime, settlement_runtime, mv_runtime;

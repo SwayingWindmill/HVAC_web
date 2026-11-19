@@ -73,15 +73,18 @@ AS
 WITH
     thermal_obs AS (
         SELECT
-            tenant_id,
-            site_id,
-            device_id,
+            assumeNotNull(tenant_id) AS tenant_id,
+            assumeNotNull(site_id) AS site_id,
+            assumeNotNull(device_id) AS device_id,
             telemetry_key,
             sampled_at,
-            value_number AS thermal_kw
+            assumeNotNull(value_number) AS thermal_kw
         FROM telemetry_history.observations
         WHERE acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER')
           AND quality IN ('GOOD', 'INTERPOLATED', 'AGGREGATED')
+          AND tenant_id IS NOT NULL
+          AND site_id IS NOT NULL
+          AND device_id IS NOT NULL
           AND value_number IS NOT NULL
           AND isFinite(value_number)
           AND telemetry_key IN (
@@ -94,15 +97,19 @@ WITH
     ),
     electrical_obs AS (
         SELECT
-            tenant_id,
-            site_id,
-            device_id,
+            assumeNotNull(tenant_id) AS tenant_id,
+            assumeNotNull(site_id) AS site_id,
+            assumeNotNull(device_id) AS device_id,
             telemetry_key,
             sampled_at,
-            value_number AS electrical_kw
+            assumeNotNull(value_number) AS electrical_kw,
+            toUInt8(1) AS matched
         FROM telemetry_history.observations
         WHERE acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER')
           AND quality IN ('GOOD', 'INTERPOLATED', 'AGGREGATED')
+          AND tenant_id IS NOT NULL
+          AND site_id IS NOT NULL
+          AND device_id IS NOT NULL
           AND value_number IS NOT NULL
           AND isFinite(value_number)
           AND telemetry_key IN (
@@ -115,13 +122,16 @@ WITH
     ),
     delta_t_obs AS (
         SELECT
-            tenant_id,
-            site_id,
+            assumeNotNull(tenant_id) AS tenant_id,
+            assumeNotNull(site_id) AS site_id,
             sampled_at,
-            value_number AS delta_t_c
+            assumeNotNull(value_number) AS delta_t_c,
+            toUInt8(1) AS matched
         FROM telemetry_history.observations
         WHERE acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER')
           AND quality IN ('GOOD', 'INTERPOLATED', 'AGGREGATED')
+          AND tenant_id IS NOT NULL
+          AND site_id IS NOT NULL
           AND value_number IS NOT NULL
           AND isFinite(value_number)
           AND telemetry_key IN (
@@ -138,44 +148,33 @@ WITH
             t.telemetry_key AS thermal_key,
             t.sampled_at AS thermal_sampled_at,
             t.thermal_kw AS thermal_kw,
-            if(
-                prev_e.sampled_at IS NOT NULL AND (
-                    next_e.sampled_at IS NULL
-                    OR abs(dateDiff('second', t.sampled_at, prev_e.sampled_at))
-                       <= abs(dateDiff('second', t.sampled_at, next_e.sampled_at))
-                ),
-                prev_e.device_id,
+            if(prev_e.matched = 1 OR next_e.matched = 1, toUInt8(1), toUInt8(0)) AS has_electrical,
+            multiIf(
+                prev_e.matched = 1 AND next_e.matched = 1,
+                if(abs(dateDiff('second', t.sampled_at, prev_e.sampled_at)) <= abs(dateDiff('second', t.sampled_at, next_e.sampled_at)), prev_e.device_id, next_e.device_id),
+                prev_e.matched = 1, prev_e.device_id,
                 next_e.device_id
             ) AS electrical_device_id,
-            if(
-                prev_e.sampled_at IS NOT NULL AND (
-                    next_e.sampled_at IS NULL
-                    OR abs(dateDiff('second', t.sampled_at, prev_e.sampled_at))
-                       <= abs(dateDiff('second', t.sampled_at, next_e.sampled_at))
-                ),
-                prev_e.telemetry_key,
+            multiIf(
+                prev_e.matched = 1 AND next_e.matched = 1,
+                if(abs(dateDiff('second', t.sampled_at, prev_e.sampled_at)) <= abs(dateDiff('second', t.sampled_at, next_e.sampled_at)), prev_e.telemetry_key, next_e.telemetry_key),
+                prev_e.matched = 1, prev_e.telemetry_key,
                 next_e.telemetry_key
             ) AS electrical_key,
-            if(
-                prev_e.sampled_at IS NOT NULL AND (
-                    next_e.sampled_at IS NULL
-                    OR abs(dateDiff('second', t.sampled_at, prev_e.sampled_at))
-                       <= abs(dateDiff('second', t.sampled_at, next_e.sampled_at))
-                ),
-                prev_e.sampled_at,
+            multiIf(
+                prev_e.matched = 1 AND next_e.matched = 1,
+                if(abs(dateDiff('second', t.sampled_at, prev_e.sampled_at)) <= abs(dateDiff('second', t.sampled_at, next_e.sampled_at)), prev_e.sampled_at, next_e.sampled_at),
+                prev_e.matched = 1, prev_e.sampled_at,
                 next_e.sampled_at
             ) AS electrical_sampled_at,
-            if(
-                prev_e.sampled_at IS NOT NULL AND (
-                    next_e.sampled_at IS NULL
-                    OR abs(dateDiff('second', t.sampled_at, prev_e.sampled_at))
-                       <= abs(dateDiff('second', t.sampled_at, next_e.sampled_at))
-                ),
-                prev_e.electrical_kw,
+            multiIf(
+                prev_e.matched = 1 AND next_e.matched = 1,
+                if(abs(dateDiff('second', t.sampled_at, prev_e.sampled_at)) <= abs(dateDiff('second', t.sampled_at, next_e.sampled_at)), prev_e.electrical_kw, next_e.electrical_kw),
+                prev_e.matched = 1, prev_e.electrical_kw,
                 next_e.electrical_kw
             ) AS electrical_kw,
             if(
-                dt.sampled_at IS NOT NULL
+                dt.matched = 1
                 AND abs(dateDiff('second', t.sampled_at, dt.sampled_at)) <= 90,
                 dt.delta_t_c,
                 CAST(NULL, 'Nullable(Float64)')
@@ -215,14 +214,14 @@ SELECT
         CAST(NULL, 'Nullable(Float64)')
     ) AS instant_cop
 FROM matched
-WHERE electrical_sampled_at IS NOT NULL
+WHERE has_electrical = 1
   AND abs(dateDiff('second', thermal_sampled_at, electrical_sampled_at)) <= 90
   AND (
       electrical_kw > 5.0
       OR (delta_t_c IS NOT NULL AND delta_t_c >= 0.5)
   );
 
-GRANT SELECT, INSERT ON analytics.energy_hourly_facts_v2 TO analytics_projector_writer;
+GRANT INSERT ON analytics.energy_hourly_facts_v2 TO analytics_projector_writer;
 GRANT SELECT ON analytics.energy_hourly_facts_v2 TO analytics_projector_reader, cube_analytics_reader;
 GRANT SELECT ON analytics.energy_hourly_v2 TO analytics_projector_reader, cube_analytics_reader;
 GRANT SELECT ON analytics.thermal_cop_asof_audit TO analytics_projector_reader, cube_analytics_reader;

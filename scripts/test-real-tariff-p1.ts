@@ -88,7 +88,7 @@ function makeTariff(
 test('5-tier TOU defines DEEP_VALLEY presentation, label, and hottest-first order', () => {
   assert.deepEqual(PERIOD_ORDER, ['SUPER_PEAK', 'PEAK', 'FLAT', 'VALLEY', 'DEEP_VALLEY']);
   assert.equal(PERIOD_LABEL.DEEP_VALLEY, '深谷');
-  assert.equal(PERIOD_COLOR.DEEP_VALLEY, 'var(--information)');
+  assert.equal(PERIOD_COLOR.DEEP_VALLEY, 'var(--chart-2)');
 
   const expectedCodes: readonly PeriodCode[] = ['SUPER_PEAK', 'PEAK', 'FLAT', 'VALLEY', 'DEEP_VALLEY'];
   for (const code of expectedCodes) {

@@ -20,7 +20,7 @@ const TARIFF_BAND_STYLE: Readonly<Record<PeriodCode, string>> = {
   PEAK: 'bg-warning/[0.08]',
   FLAT: 'bg-muted/35',
   VALLEY: 'bg-success/[0.07]',
-  DEEP_VALLEY: 'bg-information/[0.08]',
+  DEEP_VALLEY: 'bg-chart-2/[0.08]',
 };
 
 const EXCEPTION_BADGE_STYLE = {
@@ -174,7 +174,7 @@ export function WeeklyScheduleGrid({
                     ['PEAK', 'bg-warning/25'],
                     ['FLAT', 'bg-muted'],
                     ['VALLEY', 'bg-success/20'],
-                    ['DEEP_VALLEY', 'bg-information/20'],
+                    ['DEEP_VALLEY', 'bg-chart-2/20'],
                   ] as const
                 ).map(([code, swatch]) => (
                   <span key={code} className="inline-flex items-center gap-1">
