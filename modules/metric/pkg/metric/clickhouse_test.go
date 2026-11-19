@@ -465,6 +465,35 @@ func TestReadPointEnforcesExplicitUTCAndCounterAnomalyCleaningSQL(t *testing.T) 
 	if strings.Contains(capturedSQL, "%!") {
 		t.Fatalf("ReadPoint SQL contains fmt formatting error marker:\n%s", capturedSQL)
 	}
+	depth, minDepth, inQuote := 0, 0, false
+	for i := 0; i < len(capturedSQL); i++ {
+		c := capturedSQL[i]
+		if c == '\'' {
+			if i > 0 && capturedSQL[i-1] == '\\' && inQuote {
+				continue
+			}
+			inQuote = !inQuote
+			continue
+		}
+		if inQuote {
+			continue
+		}
+		switch c {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth < minDepth {
+				minDepth = depth
+			}
+		}
+	}
+	if depth != 0 || minDepth < 0 || inQuote {
+		t.Fatalf("ReadPoint SQL unbalanced parens/quotes: depth=%d minDepth=%d inQuote=%v\n%s", depth, minDepth, inQuote, capturedSQL)
+	}
+	if !strings.Contains(capturedSQL, "arrayFold((acc, el) -> multiIf(") {
+		t.Fatalf("ReadPoint SQL expected flat multiIf inside arrayFold:\n%s", capturedSQL)
+	}
 	if strings.Contains(capturedSQL, "mel.5ltiIf") {
 		t.Fatalf("ReadPoint SQL corrupted multiIf identifier:\n%s", capturedSQL)
 	}
