@@ -278,25 +278,66 @@ test('foldFragmentsIntoChangelog merges categories deterministically while prese
   assert.equal(merged.match(/^#### 修复$/gmu)?.length, 2);
 });
 
-test('repository satisfies changelog.d fragment format and passes check + release dry-run', () => {
+test('CLI --check enforces policy against fork point and --release --dry-run passes on repository', () => {
   const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+  const scriptPath = join(repoRoot, 'scripts/changelog-fragments.ts');
   const tracked = spawnSync('git', ['ls-files'], { cwd: repoRoot, encoding: 'utf8', windowsHide: true })
     .stdout.split(/\r?\n/u)
     .filter(Boolean);
   assert.deepEqual(findChangelogFragmentViolations({ root: repoRoot, trackedFiles: tracked }), []);
 
-  const checkResult = spawnSync(
-    process.execPath,
-    ['--experimental-strip-types', 'scripts/changelog-fragments.ts', '--check'],
-    { cwd: repoRoot, encoding: 'utf8', windowsHide: true },
-  );
-  assert.equal(checkResult.status, 0, checkResult.stderr || checkResult.stdout);
-
   const dryRunResult = spawnSync(
     process.execPath,
-    ['--experimental-strip-types', 'scripts/changelog-fragments.ts', '--release', '--dry-run'],
+    ['--experimental-strip-types', scriptPath, '--release', '--dry-run'],
     { cwd: repoRoot, encoding: 'utf8', windowsHide: true },
   );
   assert.equal(dryRunResult.status, 0, dryRunResult.stderr || dryRunResult.stdout);
   assert.match(readFileSync(join(repoRoot, 'CHANGELOG.md'), 'utf8'), /^## 未发布$/mu);
+
+  const repo = mkdtempSync(join(tmpdir(), 'hvac-changelog-cli-'));
+  const env: NodeJS.ProcessEnv = { ...process.env, GITHUB_BASE_SHA: 'main' };
+  delete env.GIT_DIR;
+  delete env.GIT_WORK_TREE;
+  const git = (...args: string[]): void => {
+    const result = spawnSync('git', ['-c', 'user.name=test', '-c', 'user.email=test@example.com', ...args], {
+      cwd: repo,
+      encoding: 'utf8',
+      env,
+      windowsHide: true,
+    });
+    assert.equal(result.status, 0, result.stderr);
+  };
+  const runCheck = () =>
+    spawnSync(process.execPath, ['--experimental-strip-types', scriptPath, '--check'], {
+      cwd: repo,
+      encoding: 'utf8',
+      env,
+      windowsHide: true,
+    });
+
+  try {
+    git('init', '--quiet', '--initial-branch=main');
+    mkdirSync(join(repo, 'changelog.d'), { recursive: true });
+    writeFileSync(join(repo, CHANGELOG_README_PATH), '# guide\n');
+    writeFileSync(join(repo, 'CHANGELOG.md'), '# 更新记录\n\n## 未发布\n\n### 2026-11-19\n\n#### 修复\n\n- 既有条目\n');
+    git('add', '.');
+    git('commit', '--quiet', '-m', 'base');
+    git('switch', '--quiet', '-c', 'feature');
+
+    writeFileSync(
+      join(repo, 'changelog.d/2026-11-20-feature.md'),
+      '---\ndate: 2026-11-20\ncategory: 新增\n---\n- 新增合法碎片\n',
+    );
+    assert.equal(runCheck().status, 0);
+
+    writeFileSync(
+      join(repo, 'CHANGELOG.md'),
+      '# 更新记录\n\n## 未发布\n\n### 2026-11-19\n\n#### 修复\n\n- 直接修改未发布\n- 既有条目\n',
+    );
+    const badCheck = runCheck();
+    assert.equal(badCheck.status, 1);
+    assert.match(badCheck.stderr, /do not edit entries under "## 未发布" directly/u);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
 });

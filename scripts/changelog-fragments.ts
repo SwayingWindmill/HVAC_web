@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 export const CHANGELOG_FRAGMENTS_DIR = 'changelog.d';
 export const CHANGELOG_README_PATH = 'changelog.d/README.md';
@@ -574,7 +574,7 @@ function runReleaseCli(root: string, dryRun: boolean): number {
 
 const invokedPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : '';
 if (invokedPath === import.meta.url) {
-  const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+  const root = process.cwd();
   const args = process.argv.slice(2);
   if (args.includes('--check')) {
     process.exitCode = runCheckCli(root);
