@@ -1,7 +1,7 @@
 # 更新记录
 
 记录对使用者可见的变化：功能、页面与运行行为。格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
-项目尚未正式发布，所有变化都在「未发布」下按日期记录；每条注明对应的 PR。
+项目尚未正式发布：各 PR 将新增条目放在 [`changelog.d/`](./changelog.d/README.md) 独立碎片文件中，汇总发布时运行 `npm run changelog:release` 归并进下方「未发布」，避免并行 PR 直接修改本文件引发合并冲突。
 
 ## 未发布
 

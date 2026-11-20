@@ -179,8 +179,15 @@ for (const file of files) {
     addReason(file, 'Go code, dependencies or Go check rules changed; lint and vulnerability-scan every Go module');
   }
   match(file === '.golangci.yml', () => {});
-  match(file === 'AGENTS.md' || file === 'CLAUDE.md' || file === 'README.md' || file === 'LICENSE' || file === 'CHANGELOG.md' || file === 'GLOSSARY.md' || file === '.mcp.json' || file === '.mwgrc' || file.startsWith('.github/ISSUE_TEMPLATE/'), () => {
+  match(file === 'AGENTS.md' || file === 'CLAUDE.md' || file === 'README.md' || file === 'LICENSE' || file === 'GLOSSARY.md' || file === '.mcp.json' || file === '.mwgrc' || file.startsWith('.github/ISSUE_TEMPLATE/'), () => {
     addReason(file, 'repository documentation or metadata only');
+  });
+  match(file === 'CHANGELOG.md', () => {
+    add(contractProfiles, ['core']);
+    addReason(file, 'CHANGELOG.md changed; verify rollup policy in contracts core');
+  });
+  match(file.startsWith('changelog.d/'), () => {
+    addReason(file, 'changelog fragment changed (validated in static gate)');
   });
   match(file.startsWith('.github/workflows/'), () => selectBroad(file, 'workflow behavior changed'));
   match(file.startsWith('deploy/platform/phase1/migrations/'), () => {
@@ -364,7 +371,9 @@ for (const file of files) {
         lower.includes('sync-phase1-migrations') ||
         lower.includes('clickhouse-sql') ||
         file === 'scripts/check-clickhouse-migrations.ts' ||
-        file === 'scripts/test-clickhouse-migrations.ts',
+        file === 'scripts/test-clickhouse-migrations.ts' ||
+        file === 'scripts/changelog-fragments.ts' ||
+        file === 'scripts/test-changelog-fragments.ts',
       () => add(contractProfiles, ['core']),
     );
     scriptMatch(

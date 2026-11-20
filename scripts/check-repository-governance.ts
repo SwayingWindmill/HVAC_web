@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { findChangelogFragmentViolations } from './changelog-fragments.ts';
 import { findGoTestHygieneViolations } from './check-go-test-hygiene.ts';
 import { goExecutableName, readGoWorkspace } from './lib/go-workspace.mjs';
 
@@ -220,6 +221,9 @@ const requiredGuardrailFiles = Object.freeze([
   'scripts/go-test-sleep-baseline.json',
   'scripts/test-go-test-hygiene.ts',
   'scripts/run-preflight.ts',
+  'changelog.d/README.md',
+  'scripts/changelog-fragments.ts',
+  'scripts/test-changelog-fragments.ts',
 ]);
 
 const debugMarkerExtensions = Object.freeze(['.go', '.ts', '.tsx', '.mjs', '.js', '.cjs']);
@@ -812,6 +816,7 @@ export const checkRepositoryGovernance = (root = repositoryRoot) => {
     ...findHandoffBudgetViolations({ bytes: readFileSync(join(root, 'docs/HANDOFF.md')).byteLength }),
     ...findGoFormatViolations(root, trackedFiles),
     ...findGoTestHygieneViolations(root, trackedFiles),
+    ...findChangelogFragmentViolations({ root, trackedFiles }),
   ];
 
   if (violations.length > 0) {
