@@ -66,7 +66,8 @@ test('documentation-only changes keep expensive affected gates idle', () => {
     'docs/architecture/overview.md',
     '.mwgrc',
     '.mcp.json',
-    'CHANGELOG.md',
+    'changelog.d/README.md',
+    'changelog.d/2026-11-20-sample.md',
     'CLAUDE.md',
     'GLOSSARY.md',
     '.agents/skills/correct/SKILL.md',
@@ -351,10 +352,13 @@ test('repository governance enforces 1:1 skill parity, required hook files, and 
       'scripts/go-test-sleep-baseline.json',
       'scripts/test-go-test-hygiene.ts',
       'scripts/run-preflight.ts',
+      'changelog.d/README.md',
+      'scripts/changelog-fragments.ts',
+      'scripts/test-changelog-fragments.ts',
     ]).length,
     0,
   );
-  assert.equal(findRequiredGuardrailFileViolations(['.agents/hooks.json']).length, 20);
+  assert.equal(findRequiredGuardrailFileViolations(['.agents/hooks.json']).length, 23);
 
   const verifyMapSandbox = mkdtempSync(join(tmpdir(), 'hvac-verify-map-'));
   try {
@@ -641,7 +645,18 @@ test('ClickHouse migration governance, restore drill, and observability alerts c
   assert.deepEqual(obs.contractProfiles, ['core']);
 
   const coreContracts = runPlan('contracts', ['core']).commands;
+  assert.ok(coreContracts.includes('npm run changelog:check'));
   assert.ok(coreContracts.includes('npm run migrations:clickhouse:check'));
   const platformIntegration = runPlan('integration', ['platform']).commands;
   assert.ok(platformIntegration.includes('npm run deployment:phase1:clickhouse:restore:test'));
+});
+
+test('CHANGELOG.md and changelog-fragments tooling run contracts core without broad fan-out', () => {
+  for (const file of ['CHANGELOG.md', 'scripts/changelog-fragments.ts', 'scripts/test-changelog-fragments.ts']) {
+    const classification = runClassification([file]);
+    assert.deepEqual(classification.contractProfiles, ['core'], file);
+    assert.equal(classification.units, false, file);
+    assert.equal(classification.broad, false, file);
+    assert.equal(classification.unknown, false, file);
+  }
 });

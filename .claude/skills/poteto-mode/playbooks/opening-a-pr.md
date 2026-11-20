@@ -8,7 +8,7 @@ Invoked at the end of Bug fix, Feature, and Refactoring (unless the task explici
 1. Run [`deslop`](../../deslop/SKILL.md) over the branch diff against `main`.
 2. Run [`no-comments`](../../no-comments/SKILL.md) over touched code paths.
 3. For large or cross-module branches (>10 changed files vs `main` or multiple domains; otherwise `skip: <=10 files in single domain`), run [`open-code-review-delegate`](../../open-code-review-delegate/SKILL.md) in findings-only mode (`ocr delegate preview --from main --format json` + `ocr delegate rule`) so every reviewable file is checked before pushing.
-4. Run [`make-pr-easy-to-review`](../../make-pr-easy-to-review/SKILL.md) (check commit ordering and `CHANGELOG.md` for user-visible changes; update `docs/HANDOFF.md` only when server, site, or local-env facts changed, keeping it under `28 KiB`).
+4. Run [`make-pr-easy-to-review`](../../make-pr-easy-to-review/SKILL.md) (check commit ordering and add a standalone `changelog.d/YYYY-MM-DD-<slug>.md` fragment for user-visible changes per `changelog.d/README.md` instead of editing `CHANGELOG.md` directly; update `docs/HANDOFF.md` only when server, site, or local-env facts changed, keeping it under `28 KiB`).
 5. Apply [`unslop`](../../unslop/SKILL.md) to PR copy/docs and run `npm run preflight` (which covers `npm run check` and every affected gate from `scripts/domain-task-matrix.ts`; use `--skip-e2e` for fast iteration before pushing) via `wsl -e bash -lc "..."` after your last edit.
 
 **PR body.** Keep the PR body concise and scannable (under ~40 lines when squashed):

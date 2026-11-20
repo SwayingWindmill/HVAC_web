@@ -78,7 +78,7 @@ npm run deployment:phase1:check                          # 改了 Compose 或迁
 
 | 规则 | 由什么自动守住 |
 | --- | --- |
-| 脚本严格类型检查、遗留 JS 数量与字节上限（`102`，禁止 `.agents/` 新增 JS）、`.agents/skills` 与 `.claude/skills` 逐字节镜像一致、`verify/features` 全覆盖与四段结构、禁止跟踪 `.audit/` 与代码残留 `[DEBUG-*]`、`docs/HANDOFF.md` 单次读取上限（`<= 28 KiB`）、Go 测试 `time.Sleep` 棘轮与并发日志无保护 `bytes.Buffer` 拦截 | `npm run typecheck:scripts` 与 `npm run repo:check`（`tsconfig.scripts.json`、`scripts/check-repository-governance.ts`、`scripts/check-go-test-hygiene.ts`） |
+| 脚本严格类型检查、遗留 JS 数量与字节上限（`102`，禁止 `.agents/` 新增 JS）、`.agents/skills` 与 `.claude/skills` 逐字节镜像一致、`verify/features` 全覆盖与四段结构、禁止跟踪 `.audit/` 与代码残留 `[DEBUG-*]`、`docs/HANDOFF.md` 单次读取上限（`<= 28 KiB`）、Go 测试 `time.Sleep` 棘轮与并发日志无保护 `bytes.Buffer` 拦截、`changelog.d/` 碎片格式与禁止在业务 PR 直改 `CHANGELOG.md` `## 未发布` 正文 | `npm run typecheck:scripts`、`npm run repo:check` 与 `npm run changelog:check`（`tsconfig.scripts.json`、`scripts/check-repository-governance.ts`、`scripts/check-go-test-hygiene.ts`、`scripts/changelog-fragments.ts`） |
 | 破坏性 Git 命令、打印运行密钥与未授权生产发布/重置本地库拦截 | `.agents/hooks.json` + `.claude/settings.json`（`scripts/hooks/pre-tool-guard.ts`，由 `npm run pr:gates:test` 测试） |
 | 页面组合语法（`DataTableBlock`、禁止 `<main>`、`FactTile` 禁用 `className`、禁 `<Button variant="secondary">`）、`DESIGN.md` §1 禁用文案、feature/route 禁裸 `fetch`/`WebSocket`、禁 `components/ui/` 外 `"use client"` / `@ts-ignore` / `eslint-disable` / `console.log` / `JSON.parse(JSON.stringify(...))`、`as unknown as` 清零与非 `const` `as` 棘轮（`scripts/web-as-cast-baseline.json` `43`）、`routeTree.gen.ts` 新鲜度、`Enter` 输入法防误触、`color-scheme` 与浅/深双主题 WCAG 对比度 | `npm run design:check`（`scripts/check-design-system.ts`）与 `scripts/test-real-design-tokens.ts` |
 | 权限目录与内置角色展示同 IAM 契约严格一致 | `npm -w @hvac/web run typecheck` 与 `npm run web:principal:contract`（`scripts/test-rms-principal-capability-contract.mjs`） |
@@ -97,7 +97,7 @@ npm run deployment:phase1:check                          # 改了 Compose 或迁
 - 只写现在成立的事：过时的直接改掉或删掉，历史留在 git 里。状态写「已采纳」「已实现」「还没做」这类现在的状态；阶段代号（S0–S5）和「目标态」「候选」这类标签换成具体的现状。
 - 调研和参照比对的记录，只在被现行的 ADR、规格、HANDOFF 或代码引用时保留。
 - 新的架构决定只在难以撤回、不看背景会让人意外、又确实在几个方案里做了取舍时写 ADR；格式和名词的维护见 `docs/agents/domain.md`。
-- 用户看得到的变化记进 `CHANGELOG.md`（随 PR 更新）；只在实际改动了服务器部署前提、松雅轩现场基线或本地环境偏差时同步更新 `docs/HANDOFF.md`（不再在其中维护开发计划或写文字规则）。
+- 用户看得到的变化在 `changelog.d/YYYY-MM-DD-<slug>.md` 新增独立碎片（格式见 `changelog.d/README.md`，禁止直接在业务 PR 编辑 `CHANGELOG.md` `## 未发布` 正文；汇总发布时运行 `npm run changelog:release`）；只在实际改动了服务器部署前提、松雅轩现场基线或本地环境偏差时同步更新 `docs/HANDOFF.md`（不再在其中维护开发计划或写文字规则）。
 
 ## 交付和 Git
 
