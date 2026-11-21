@@ -409,6 +409,11 @@ assert(nginx.includes('location /realtime/'), 'Nginx must proxy realtime WebSock
 assert(!nginx.includes('location /connection/'), 'Nginx must not expose the internal Centrifugo connection path');
 assert(!nginx.includes('proxy_pass http://centrifugo:8000;'), 'Nginx must not proxy browsers directly to Centrifugo');
 assert(nginx.includes('try_files $uri $uri/ /index.html;'), 'Nginx must serve the React SPA fallback');
+const badNginxRegex = nginx.split(/\r?\n/u).find((raw) => {
+  const toks = raw.replace(/#.*$/u, '').trim().split(/\s+/u);
+  return toks.some((t, i) => /^~\*?.*[{}]/u.test(t) || (/^~\*?$/u.test(toks[i - 1] ?? '') && t !== '{' && !/^['"]/u.test(t) && /[{}]/u.test(t)));
+});
+assert(!badNginxRegex, `wrap nginx regex with {...} in double quotes: ${badNginxRegex}`);
 assert(webDockerfile.includes('npm run build'), 'production web image must build the authoritative web artifact');
 assert(!webDockerfile.includes('npm run dev'), 'production web image must never run a Vite development server');
 
