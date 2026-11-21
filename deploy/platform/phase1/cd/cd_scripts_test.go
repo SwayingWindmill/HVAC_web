@@ -1450,7 +1450,6 @@ func TestDeployScriptProtectsRuntimeSecretsAndDropsDeadKeygen(t *testing.T) {
 		"mqtt-pki",
 		"mqtt-crl",
 		"tls",
-		"secrets",
 		"observability/textfile",
 	}
 	for _, dir := range dirs {
@@ -1484,9 +1483,8 @@ func TestDeployScriptProtectsRuntimeSecretsAndDropsDeadKeygen(t *testing.T) {
 		"alarm-delivery/recipients.json",
 		"mqtt-pki/mqtt-broker-key.pem",
 		"mqtt-crl/gateway-ca.crl.pem",
-		"tls/tls.crt",
-		"tls/tls.key",
-		"secrets/alarm.dsn",
+		"tls/public.crt",
+		"tls/public.key",
 		"observability/textfile/backup.prom",
 	}
 	for _, rel := range seedFiles {
@@ -1537,7 +1535,6 @@ func TestDeployScriptProtectsRuntimeSecretsAndDropsDeadKeygen(t *testing.T) {
 		"alarm-delivery",
 		"mqtt-pki",
 		"tls",
-		"secrets",
 	} {
 		assertPerm(sensitiveDir, func(m os.FileMode) bool { return m == 0o750 }, "0750")
 	}
@@ -1548,7 +1545,7 @@ func TestDeployScriptProtectsRuntimeSecretsAndDropsDeadKeygen(t *testing.T) {
 		"gateway-ca/trusted-client-ca.pem",
 		"gateway-ca/connectivity.crt",
 		"mqtt-crl/gateway-ca.crl.pem",
-		"tls/tls.crt",
+		"tls/public.crt",
 		"observability/textfile/backup.prom",
 	} {
 		assertPerm(publicCert, func(m os.FileMode) bool { return m == 0o644 }, "0644")
@@ -1560,6 +1557,7 @@ func TestDeployScriptProtectsRuntimeSecretsAndDropsDeadKeygen(t *testing.T) {
 		"gateway-ca/ca.key",
 		"db-role-credentials/roles.sql",
 		"local-admin.credentials",
+		"tls/public.key",
 	} {
 		assertPerm(hostOnly, func(m os.FileMode) bool { return m == 0o600 }, "0600")
 	}
@@ -1575,8 +1573,6 @@ func TestDeployScriptProtectsRuntimeSecretsAndDropsDeadKeygen(t *testing.T) {
 		"alarm-delivery/alarm-send-token",
 		"alarm-delivery/recipients.json",
 		"mqtt-pki/mqtt-broker-key.pem",
-		"tls/tls.key",
-		"secrets/alarm.dsn",
 	} {
 		assertPerm(workloadSecret, func(m os.FileMode) bool { return m == 0o640 || m == 0o600 }, "0640 or 0600 (not world-readable)")
 	}
@@ -1591,7 +1587,7 @@ func TestDeployScriptProtectsRuntimeSecretsAndDropsDeadKeygen(t *testing.T) {
 		"chown -R 65532:65532",
 		"gateway-ca mqtt-crl",
 		"chown -R 0:65532",
-		"internal-pki alert-receiver alarm-delivery secrets tls",
+		"find /runtime/tls -type d -exec chown 0:65532 {} +",
 		"chown -R 1883:65532 /runtime/mqtt-pki",
 		"chown -R 101:101 /runtime/backups/clickhouse",
 		"chown -R 999:999 /runtime/backups/postgres",
@@ -1624,7 +1620,7 @@ case "$1" in
     printf 'restarting/unhealthy\n'
     ;;
   logs)
-    printf 'mocked energy-api failure: permission denied on /run/hvac/public-tls/tls.key\n'
+    printf 'mocked energy-api failure: permission denied on /run/hvac/public-tls/public.crt\n'
     ;;
 esac
 `)
@@ -1636,7 +1632,7 @@ esac
 	}
 	text := string(output)
 	if !strings.Contains(text, "--- container logs: energy-api (restarting/unhealthy) ---") ||
-		!strings.Contains(text, "mocked energy-api failure: permission denied on /run/hvac/public-tls/tls.key") {
+		!strings.Contains(text, "mocked energy-api failure: permission denied on /run/hvac/public-tls/public.crt") {
 		t.Fatalf("deploy.sh did not dump unhealthy container logs:\n%s", text)
 	}
 }

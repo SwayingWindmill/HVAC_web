@@ -582,3 +582,134 @@ func TestHandlerServesReportEnrichmentWithWorkloadGrantAndOptionalInterface(t *t
 		t.Fatalf("engine error status = %d, want 503", rec.Code)
 	}
 }
+
+type counterAuditEngineStub struct {
+	historyEngineStub
+	auditResponse telemetryhistorymodel.CounterAuditResponse
+	auditErr      error
+	auditQuery    telemetryhistorymodel.CounterAuditQuery
+	auditCalls    int
+}
+
+func (stub *counterAuditEngineStub) QueryCounterAudit(_ context.Context, query telemetryhistorymodel.CounterAuditQuery) (telemetryhistorymodel.CounterAuditResponse, error) {
+	stub.auditCalls++
+	stub.auditQuery = query
+	return stub.auditResponse, stub.auditErr
+}
+
+func TestHandlerServesCounterAudit(t *testing.T) {
+	now := time.Date(2026, 10, 10, 8, 0, 0, 0, time.UTC)
+	from := time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC)
+	to := from.Add(24 * time.Hour)
+	query := telemetryhistorymodel.CounterAuditQuery{
+		TenantID: testTenantID,
+		SiteID:   testSiteID,
+		From:     from,
+		To:       to,
+		Limit:    50,
+	}
+	canonical, err := query.Canonical()
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope, err := canonical.ScopeDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(query)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	harness := newServerHarness(t, now, &engineStub{})
+	grant, err := identitycontext.SignDelegation(harness.signer, identitycontext.DelegationClaims{
+		Issuer:           testPresenter,
+		Subject:          testPrincipalID,
+		SubjectIssuer:    "spiffe://hvac.local",
+		PrincipalID:      testPrincipalID,
+		ExecutingService: testPresenter,
+		Audience:         testAudience,
+		TenantID:         testTenantID,
+		Actions:          []string{analyticsmodel.EnergySeriesAction},
+		Scopes:           []string{scope},
+		PolicyRevision:   "analytics-policy:1",
+		SessionID:        "session-test",
+		IssuedAt:         now.Add(-time.Second).Unix(),
+		ExpiresAt:        now.Add(30 * time.Second).Unix(),
+		TokenID:          "token-counter-audit",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spiffe, _ := url.Parse(testPresenter)
+
+	// Base historyEngineStub without CounterAuditHistoryEngine returns 501.
+	unsupportedReq := httptest.NewRequest(http.MethodPost, CounterAuditPath, bytes.NewReader(payload))
+	unsupportedReq.Header.Set("Content-Type", "application/json")
+	unsupportedReq.Header.Set("X-Delegation-Grant", grant)
+	unsupportedReq.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{{URIs: []*url.URL{spiffe}}}}
+	unsupportedRec := httptest.NewRecorder()
+	harness.handler.ServeHTTP(unsupportedRec, unsupportedReq)
+	if unsupportedRec.Code != http.StatusNotImplemented {
+		t.Fatalf("unsupported status = %d, want 501; body=%s", unsupportedRec.Code, unsupportedRec.Body.String())
+	}
+
+	auditEngine := &counterAuditEngineStub{
+		auditResponse: telemetryhistorymodel.CounterAuditResponse{
+			SiteID:    testSiteID,
+			From:      from,
+			To:        to,
+			Summary:   telemetryhistorymodel.CounterAuditSummary{TotalSamples: 10, AnomalyCount: 1, ResetCount: 1},
+			Items:     []telemetryhistorymodel.CounterAuditItem{},
+			Truncated: false,
+		},
+	}
+	handler := NewHandler(ServerConfig{
+		Engine:                 &engineStub{},
+		HistoryEngine:          auditEngine,
+		DelegationPublicKey:    harness.signer.Public(),
+		AllowedPresenterSPIFFE: testPresenter,
+		Audience:               testAudience,
+		Now:                    func() time.Time { return now },
+	})
+
+	postAudit := func(body []byte, grantHeader string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, CounterAuditPath, bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		if grantHeader != "" {
+			req.Header.Set("X-Delegation-Grant", grantHeader)
+		}
+		req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{{URIs: []*url.URL{spiffe}}}}
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	okRec := postAudit(payload, grant)
+	if okRec.Code != http.StatusOK || auditEngine.auditCalls != 1 || auditEngine.auditQuery.SiteID != testSiteID {
+		t.Fatalf("status=%d calls=%d query=%#v body=%s", okRec.Code, auditEngine.auditCalls, auditEngine.auditQuery, okRec.Body.String())
+	}
+	if cacheControl := okRec.Header().Get("Cache-Control"); cacheControl != "private, no-store" {
+		t.Fatalf("Cache-Control = %q, want private, no-store", cacheControl)
+	}
+
+	// Rejects unknown JSON fields strictly before dispatch.
+	unknownRec := postAudit([]byte(`{"tenantId":"`+testTenantID+`","siteId":"`+testSiteID+`","extra":1}`), grant)
+	if unknownRec.Code != http.StatusBadRequest {
+		t.Fatalf("unknown field status = %d, want 400", unknownRec.Code)
+	}
+
+	// Rejects tampered query that does not match grant scope.
+	tampered := query
+	tampered.Limit = 99
+	tamperedPayload, _ := json.Marshal(tampered)
+	if rec := postAudit(tamperedPayload, grant); rec.Code != http.StatusForbidden {
+		t.Fatalf("tampered status = %d, want 403", rec.Code)
+	}
+
+	// Engine error surfaces as 503.
+	auditEngine.auditErr = errors.New("clickhouse unavailable")
+	if rec := postAudit(payload, grant); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("engine error status = %d, want 503", rec.Code)
+	}
+}

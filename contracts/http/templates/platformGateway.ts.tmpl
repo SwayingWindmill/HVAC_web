@@ -1243,6 +1243,141 @@ export const accountingRecalcJobListSchema = z.object({
   items: z.array(accountingRecalcJobSchema),
 }).strict();
 
+const flexInstantSchema = z.string().datetime({ offset: true });
+const calendarDateStringSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
+export const siteCalendarHolidayDayTypeSchema = z.enum(['HOLIDAY', 'SPECIAL_DAY', 'WEEKDAY', 'WEEKEND']);
+
+export const siteCalendarHolidaySchema = z.object({
+  id: uuidV7Schema,
+  tenantId: uuidV7Schema,
+  siteId: uuidV7Schema,
+  holidayDate: calendarDateStringSchema,
+  dayType: siteCalendarHolidayDayTypeSchema,
+  label: z.string().max(256),
+  revision: revisionSchema,
+  createdAt: flexInstantSchema,
+  updatedAt: flexInstantSchema,
+}).strict();
+
+export const siteCalendarHolidayListSchema = z.object({
+  items: z.array(siteCalendarHolidaySchema),
+}).strict();
+
+export const siteCalendarHolidayUpsertRequestSchema = z.object({
+  dayType: siteCalendarHolidayDayTypeSchema,
+  label: z.string().max(256).optional(),
+  expectedRevision: revisionSchema.optional(),
+}).strict();
+
+export const siteCalendarHolidayDeleteResultSchema = z.object({
+  deleted: z.boolean(),
+  siteId: uuidV7Schema,
+  holidayDate: calendarDateStringSchema,
+}).strict();
+
+export const meterRatioApplicationModeSchema = z.enum(['DEVICE_APPLIED', 'EDGE_APPLIED', 'PLATFORM_APPLIED']);
+export const meterReadingUnitSchema = z.enum(['Wh', 'kWh', 'MWh', 'GJ', 'MJ', 'RTh']);
+export const meterRatioStatusSchema = z.enum(['DRAFT', 'RELEASED', 'SUPERSEDED']);
+
+export const meterRatioVersionSchema = z.object({
+  id: uuidV7Schema,
+  tenantId: uuidV7Schema,
+  siteId: uuidV7Schema,
+  meterId: uuidV7Schema.nullable().optional(),
+  meterBindingId: uuidV7Schema.nullable().optional(),
+  pointId: uuidV7Schema.nullable().optional(),
+  version: revisionSchema.optional(),
+  ctRatio: z.number().positive(),
+  ptRatio: z.number().positive(),
+  meterMultiplier: z.number().positive(),
+  cloudMultiplier: z.number().positive().optional(),
+  ratioApplicationMode: meterRatioApplicationModeSchema,
+  readingUnit: meterReadingUnitSchema,
+  effectiveFrom: flexInstantSchema,
+  effectiveTo: flexInstantSchema.nullable(),
+  status: meterRatioStatusSchema,
+  revision: revisionSchema,
+  createdAt: flexInstantSchema,
+  updatedAt: flexInstantSchema,
+}).strict();
+
+export const meterRatioVersionListSchema = z.object({
+  items: z.array(meterRatioVersionSchema),
+}).strict();
+
+export const meterRatioVersionCreateRequestSchema = z.object({
+  meterId: uuidV7Schema.nullable().optional(),
+  meterBindingId: uuidV7Schema.nullable().optional(),
+  pointId: uuidV7Schema.nullable().optional(),
+  ctRatio: z.number().positive(),
+  ptRatio: z.number().positive(),
+  meterMultiplier: z.number().positive(),
+  ratioApplicationMode: meterRatioApplicationModeSchema,
+  readingUnit: meterReadingUnitSchema,
+  effectiveFrom: flexInstantSchema,
+  effectiveTo: flexInstantSchema.nullable().optional(),
+  reason: z.string().max(1000).optional(),
+}).strict();
+
+export const meterRatioVersionRetireRequestSchema = z.object({
+  effectiveTo: flexInstantSchema.nullable().optional(),
+  expectedRevision: revisionSchema.optional(),
+  reason: z.string().max(1000).optional(),
+}).strict();
+
+export const counterTransitionTypeSchema = z.enum([
+  'INITIAL',
+  'INCREASE',
+  'UNCHANGED',
+  'RESET',
+  'ROLLOVER',
+  'METER_REPLACEMENT',
+  'RECOVERY',
+  'REVISION_BOUNDARY',
+  'UNIT_BOUNDARY',
+  'INVALID_DECREASE',
+  'INVALID_ZERO_DROP',
+  'INVALID_SPIKE',
+  'INVALID',
+]);
+
+export const counterAuditQualitySchema = z.enum(['GOOD', 'PARTIAL', 'ESTIMATED', 'MANUAL', 'STALE', 'INVALID']);
+
+export const counterAuditSummarySchema = z.object({
+  totalSamples: z.number().int().nonnegative(),
+  anomalyCount: z.number().int().nonnegative(),
+  zeroDropCount: z.number().int().nonnegative(),
+  spikeCount: z.number().int().nonnegative(),
+  resetCount: z.number().int().nonnegative(),
+  rolloverCount: z.number().int().nonnegative(),
+  invalidDecreaseCount: z.number().int().nonnegative(),
+}).strict();
+
+export const counterAuditItemSchema = z.object({
+  pointId: uuidV7Schema,
+  deviceId: uuidV7Schema,
+  telemetryKey: z.string().min(1),
+  periodStart: flexInstantSchema,
+  periodEnd: flexInstantSchema,
+  rawPrevious: z.number().nullable(),
+  rawCurrent: z.number(),
+  cleanedDeltaKWh: z.number().nonnegative().nullable(),
+  transitionType: counterTransitionTypeSchema,
+  quality: counterAuditQualitySchema,
+  qualityReasons: z.array(z.string()),
+  unit: z.string(),
+}).strict();
+
+export const counterAuditResponseSchema = z.object({
+  siteId: uuidV7Schema,
+  from: flexInstantSchema,
+  to: flexInstantSchema,
+  summary: counterAuditSummarySchema,
+  items: z.array(counterAuditItemSchema).max(500),
+  truncated: z.boolean(),
+}).strict();
+
 export const siteDataGapSchema = z.object({
   alarmId: userAdminUUIDv7,
   deviceId: userAdminUUIDv7,
@@ -1785,6 +1920,33 @@ export type AccountingRecalculateRequest = z.infer<typeof accountingRecalculateR
 export type AccountingRecalcJob = z.infer<typeof accountingRecalcJobSchema>;
 export type AccountingRecalcJobList = z.infer<typeof accountingRecalcJobListSchema>;
 export type AccountingRecalcJobsParams = { limit?: number };
+export type SiteCalendarHolidayDayType = z.infer<typeof siteCalendarHolidayDayTypeSchema>;
+export type SiteCalendarHoliday = z.infer<typeof siteCalendarHolidaySchema>;
+export type SiteCalendarHolidayList = z.infer<typeof siteCalendarHolidayListSchema>;
+export type SiteCalendarHolidayUpsertRequest = z.infer<typeof siteCalendarHolidayUpsertRequestSchema>;
+export type SiteCalendarHolidayDeleteResult = z.infer<typeof siteCalendarHolidayDeleteResultSchema>;
+export type SiteCalendarHolidaysParams = { year?: number };
+export type MeterRatioApplicationMode = z.infer<typeof meterRatioApplicationModeSchema>;
+export type MeterReadingUnit = z.infer<typeof meterReadingUnitSchema>;
+export type MeterRatioStatus = z.infer<typeof meterRatioStatusSchema>;
+export type MeterRatioVersion = z.infer<typeof meterRatioVersionSchema>;
+export type MeterRatioVersionList = z.infer<typeof meterRatioVersionListSchema>;
+export type MeterRatioVersionCreateRequest = z.infer<typeof meterRatioVersionCreateRequestSchema>;
+export type MeterRatioVersionRetireRequest = z.infer<typeof meterRatioVersionRetireRequestSchema>;
+export type SiteMeterRatioVersionsParams = { pointId?: string; meterBindingId?: string; status?: MeterRatioStatus };
+export type CounterTransitionType = z.infer<typeof counterTransitionTypeSchema>;
+export type CounterAuditQuality = z.infer<typeof counterAuditQualitySchema>;
+export type CounterAuditSummary = z.infer<typeof counterAuditSummarySchema>;
+export type CounterAuditItem = z.infer<typeof counterAuditItemSchema>;
+export type CounterAuditResponse = z.infer<typeof counterAuditResponseSchema>;
+export type SiteCounterAuditParams = {
+  from: string;
+  to: string;
+  deviceId?: string;
+  pointId?: string;
+  anomaliesOnly?: boolean;
+  limit?: number;
+};
 export type SiteDataGap = z.infer<typeof siteDataGapSchema>;
 export type SiteDataGapList = z.infer<typeof siteDataGapListSchema>;
 export type SiteControlMode = z.infer<typeof siteControlModeSchema>;
@@ -2272,6 +2434,60 @@ export function createPlatformGatewayClient(baseUrl = '') {
       const query = new URLSearchParams();
       if (params.limit !== undefined) query.set('limit', String(params.limit));
       return request(`${basePath}${query.size ? `?${query.toString()}` : ''}`, accountingRecalcJobListSchema, { ...init, method: 'GET' });
+    },
+    listSiteCalendarHolidays: (siteId: string, params: SiteCalendarHolidaysParams = {}, init?: RequestInit) => {
+      const basePath = '__SITE_ACCOUNTING_HOLIDAYS_PATH__'.replace('{siteId}', encodeURIComponent(siteId));
+      const query = new URLSearchParams();
+      if (params.year !== undefined) query.set('year', String(params.year));
+      return request(`${basePath}${query.size ? `?${query.toString()}` : ''}`, siteCalendarHolidayListSchema, { ...init, method: 'GET' });
+    },
+    upsertSiteCalendarHoliday: (siteId: string, date: string, body: SiteCalendarHolidayUpsertRequest, csrfToken: string, init?: RequestInit) => mutation(
+      '__SITE_ACCOUNTING_HOLIDAY_PATH__'.replace('{siteId}', encodeURIComponent(siteId)).replace('{date}', encodeURIComponent(date)),
+      'PUT',
+      body,
+      siteCalendarHolidayUpsertRequestSchema,
+      siteCalendarHolidaySchema,
+      withCsrf(csrfToken, init),
+    ),
+    deleteSiteCalendarHoliday: (siteId: string, date: string, csrfToken: string, init?: RequestInit) => request(
+      '__SITE_ACCOUNTING_HOLIDAY_PATH__'.replace('{siteId}', encodeURIComponent(siteId)).replace('{date}', encodeURIComponent(date)),
+      siteCalendarHolidayDeleteResultSchema,
+      { ...withCsrf(csrfToken, init), method: 'DELETE' },
+    ),
+    listSiteMeterRatioVersions: (siteId: string, params: SiteMeterRatioVersionsParams = {}, init?: RequestInit) => {
+      const basePath = '__SITE_ACCOUNTING_METER_RATIOS_PATH__'.replace('{siteId}', encodeURIComponent(siteId));
+      const query = new URLSearchParams();
+      if (params.pointId !== undefined) query.set('pointId', params.pointId);
+      if (params.meterBindingId !== undefined) query.set('meterBindingId', params.meterBindingId);
+      if (params.status !== undefined) query.set('status', params.status);
+      return request(`${basePath}${query.size ? `?${query.toString()}` : ''}`, meterRatioVersionListSchema, { ...init, method: 'GET' });
+    },
+    createSiteMeterRatioVersion: (siteId: string, body: MeterRatioVersionCreateRequest, csrfToken: string, init?: RequestInit) => mutation(
+      '__SITE_ACCOUNTING_METER_RATIOS_PATH__'.replace('{siteId}', encodeURIComponent(siteId)),
+      'POST',
+      body,
+      meterRatioVersionCreateRequestSchema,
+      meterRatioVersionSchema,
+      withCsrf(csrfToken, init),
+    ),
+    retireSiteMeterRatioVersion: (siteId: string, versionId: string, body: MeterRatioVersionRetireRequest, csrfToken: string, init?: RequestInit) => mutation(
+      '__SITE_ACCOUNTING_METER_RATIO_RETIRE_PATH__'.replace('{siteId}', encodeURIComponent(siteId)).replace('{versionId}', encodeURIComponent(versionId)),
+      'POST',
+      body,
+      meterRatioVersionRetireRequestSchema,
+      meterRatioVersionSchema,
+      withCsrf(csrfToken, init),
+    ),
+    getSiteCounterAudit: (siteId: string, params: SiteCounterAuditParams, init?: RequestInit) => {
+      const basePath = '__SITE_ACCOUNTING_COUNTER_AUDIT_PATH__'.replace('{siteId}', encodeURIComponent(siteId));
+      const query = new URLSearchParams();
+      query.set('from', params.from);
+      query.set('to', params.to);
+      if (params.deviceId !== undefined) query.set('deviceId', params.deviceId);
+      if (params.pointId !== undefined) query.set('pointId', params.pointId);
+      if (params.anomaliesOnly !== undefined) query.set('anomaliesOnly', String(params.anomaliesOnly));
+      if (params.limit !== undefined) query.set('limit', String(params.limit));
+      return request(`${basePath}?${query.toString()}`, counterAuditResponseSchema, { ...init, method: 'GET' });
     },
     listSiteDataGaps: (siteId: string, init?: RequestInit) => request(
       '__SITE_DATA_GAPS_PATH__'.replace('{siteId}', encodeURIComponent(siteId)),
