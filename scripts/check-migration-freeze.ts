@@ -5,26 +5,36 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-const normalizeIdentifier = (raw: string): string => raw.replaceAll('"', '').toLowerCase();
+const normalizeIdentifier = (raw: string): string =>
+  raw.replaceAll('"', '').replaceAll('`', '').toLowerCase();
 const withoutComments = (sql: string): string => sql.replace(/\/\*[\s\S]*?\*\//gu, '').replace(/--[^\n]*/gu, '');
 
 const createdTables = (sql: string): string[] =>
-  [...sql.matchAll(/\bcreate\s+(?:unlogged\s+)?table\s+(?:if\s+not\s+exists\s+)?([\w."]+)/giu)].map((match) =>
-    normalizeIdentifier(match[1]),
+  [...withoutComments(sql).matchAll(/\bcreate\s+(?:unlogged\s+)?table\s+(?:if\s+not\s+exists\s+)?([\w."`]+)/giu)].map(
+    (match) => normalizeIdentifier(match[1]),
   );
 
 const droppedTables = (sql: string): string[] =>
   [...withoutComments(sql).matchAll(/\bdrop\s+table\s+(?:if\s+exists\s+)?([^;]+)/giu)].flatMap((match) =>
     match[1]
-      .replace(/\b(?:cascade|restrict)\b/giu, '')
+      .replace(/\b(?:cascade|restrict|sync|no\s+delay)\b/giu, '')
       .split(',')
-      .map((table) => normalizeIdentifier(table.trim())),
+      .map((table) => normalizeIdentifier(table.trim()))
+      .filter(Boolean),
   );
 
-const droppedSchemas = (sql: string): string[] =>
-  [...withoutComments(sql).matchAll(/\bdrop\s+schema\s+(?:if\s+exists\s+)?([^;]+?)\s+cascade\b/giu)].flatMap((match) =>
-    match[1].split(',').map((schema) => normalizeIdentifier(schema.trim())),
-  );
+const droppedSchemas = (sql: string): string[] => [
+  ...[...withoutComments(sql).matchAll(/\bdrop\s+schema\s+(?:if\s+exists\s+)?([^;]+?)\s+cascade\b/giu)].flatMap(
+    (match) => match[1].split(',').map((schema) => normalizeIdentifier(schema.trim())).filter(Boolean),
+  ),
+  ...[...withoutComments(sql).matchAll(/\bdrop\s+database\s+(?:if\s+exists\s+)?([^;]+)/giu)].flatMap((match) =>
+    match[1]
+      .replace(/\b(?:sync|no\s+delay)\b/giu, '')
+      .split(',')
+      .map((schema) => normalizeIdentifier(schema.trim()))
+      .filter(Boolean),
+  ),
+];
 
 // The registered migration paths, and a reader that returns undefined for a path whose file is gone.
 export type MigrationTree = { list: string[]; read: (path: string) => string | undefined };
@@ -51,7 +61,10 @@ export function findFreezeViolations(base: MigrationTree, head: MigrationTree): 
   return violations;
 }
 
-const listPath = 'deploy/platform/phase1/migrations/migration-list.tsv';
+const migrationListPaths = [
+  'deploy/platform/phase1/migrations/migration-list.tsv',
+  'deploy/platform/phase1/clickhouse-migrations/clickhouse-migration-list.tsv',
+] as const;
 const parseList = (text: string): string[] => text.split(/\r?\n/u).filter(Boolean).map((line) => line.split('|')[1]);
 
 const git = (...args: string[]): string => {
@@ -60,14 +73,35 @@ const git = (...args: string[]): string => {
   return result.stdout;
 };
 
+const gitObjectExists = (refPath: string): boolean => {
+  const result = spawnSync('git', ['rev-parse', '--verify', '--quiet', refPath], { encoding: 'utf8' });
+  if (result.status === 0) return true;
+  if (result.status === 1 && !(result.stderr ?? '').trim()) return false;
+  throw new Error(`git rev-parse --verify --quiet ${refPath} failed: ${(result.stderr ?? '').trim()}`);
+};
+
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const forkPoint = git('merge-base', process.env.GITHUB_BASE_SHA || 'origin/main', 'HEAD').trim();
-  const base: MigrationTree = { list: parseList(git('show', `${forkPoint}:${listPath}`)), read: (path) => git('show', `${forkPoint}:${path}`) };
-  const head: MigrationTree = {
-    list: parseList(readFileSync(listPath, 'utf8')),
-    read: (path) => (existsSync(path) ? readFileSync(path, 'utf8') : undefined),
-  };
-  const violations = findFreezeViolations(base, head);
+  const violations: string[] = [];
+  let checkedLists = 0;
+
+  for (const listPath of migrationListPaths) {
+    if (!gitObjectExists(`${forkPoint}:${listPath}`)) continue;
+    checkedLists += 1;
+    const base: MigrationTree = {
+      list: parseList(git('show', `${forkPoint}:${listPath}`)),
+      read: (path) => (gitObjectExists(`${forkPoint}:${path}`) ? git('show', `${forkPoint}:${path}`) : undefined),
+    };
+    const head: MigrationTree = {
+      list: existsSync(listPath) ? parseList(readFileSync(listPath, 'utf8')) : [],
+      read: (path) => (existsSync(path) ? readFileSync(path, 'utf8') : undefined),
+    };
+    violations.push(...findFreezeViolations(base, head));
+  }
+
+  if (checkedLists === 0) {
+    throw new Error(`no registered migration list found at ${forkPoint.slice(0, 8)}`);
+  }
   if (violations.length > 0) {
     console.error(violations.join('\n'));
     process.exit(1);

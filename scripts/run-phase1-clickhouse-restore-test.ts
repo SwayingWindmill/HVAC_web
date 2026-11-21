@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { basename, dirname, relative, resolve } from 'node:path';
 
@@ -491,6 +492,41 @@ try {
   });
   run(docker, migratorArgs(migrateScriptAbs));
 
+  // (d2) Audited legacy equivalent sha256 passes idempotently while unlisted hashes fail closed.
+  const target025Path = 'infra/telemetry/clickhouse/init/025-clickhouse-complete-governance.sql';
+  const current025Sha256 = createHash('sha256').update(readFileSync(resolve(root, target025Path))).digest('hex');
+  const eqBaseRow = readLatestMigrationRow(target025Path);
+  const eqBaseVersion = BigInt(String(eqBaseRow.version ?? '0'));
+  const legacy025Sha256 = 'f3fd123335b1821d0d961a4833dbfeea60a52c3018210071114cbda3709e9438';
+  const unlisted025Sha256 = current025Sha256 === '2'.repeat(64) ? '3'.repeat(64) : '2'.repeat(64);
+
+  insertMigrationRow(writableColumns, {
+    ...eqBaseRow,
+    sha256: legacy025Sha256,
+    status: 'APPLIED',
+    version: (eqBaseVersion + 1n).toString(),
+  });
+  const equivalentStdout = run(docker, migratorArgs(migrateScriptAbs));
+  if (!equivalentStdout.includes('equivalent checksum')) {
+    throw new Error(`expected equivalent checksum log for ${target025Path}, got: ${equivalentStdout}`);
+  }
+
+  insertMigrationRow(writableColumns, {
+    ...eqBaseRow,
+    sha256: unlisted025Sha256,
+    status: 'APPLIED',
+    version: (eqBaseVersion + 2n).toString(),
+  });
+  runMustFail(docker, migratorArgs(migrateScriptAbs), 'ClickHouse migration drift detected');
+
+  insertMigrationRow(writableColumns, {
+    ...eqBaseRow,
+    sha256: current025Sha256,
+    status: 'APPLIED',
+    version: (eqBaseVersion + 3n).toString(),
+  });
+  run(docker, migratorArgs(migrateScriptAbs));
+
   // (e) Peer container security boundary proof + phase1_schema_reader preflight checks.
   const peerDefaultRejected = runMustFail(
     docker,
@@ -677,6 +713,7 @@ try {
     idempotentRerunPassed: true,
     incompleteMigrationBlocksRetry: Boolean(incompleteFailure),
     digestDriftFailsClosed: Boolean(driftFailure),
+    equivalentLegacyChecksumAccepted: Boolean(equivalentStdout),
     peerDefaultRejected: Boolean(peerDefaultRejected),
     schemaReaderPreflightPassed: true,
     incompatibleProductVersionRejected: Boolean(incompatiblePreflightFailure),

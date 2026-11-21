@@ -130,7 +130,7 @@ PostgreSQL（本机或外部）上有身份库 `hvac_identity`，以及各业务
 - 新增迁移文件（在 `infra/*/postgres/init/` 或各模块的 `migrations/` 下）使用小写业务主题命名（`<domain-topic>.sql`），不加数字序号前缀，执行顺序以 `manifest.v1.json` 为唯一事实源；新增后只需登记到 `manifest.v1.json` 并运行 `npm run migrations:sync`，自动生成 `migration-list.tsv`、分段不超过 75 层的 `Dockerfile` 与 `infra/registry/compose.yaml` 挂载清单（由 `contracts` 门禁的 `npm run migrations:sync:check` 校验）。
 - 新增数据库、schema、角色、表与视图须按业务域小写下划线命名，禁止阶段代号（`hvac_s*`、`s13_*`）、`CREATE TABLE ... AS` 临时备份表及重复 schema 前缀；所有在用 schema 和表须附带非空中文 `COMMENT ON SCHEMA` / `COMMENT ON TABLE`（由 `npm run migrations:conventions:check` 拦截）。
 
-迁移已经冻结（2026-10-22，#688）：服务器上已有真实站点的数据，`migration-list.tsv` 里登记过的迁移都执行过，内容一个字节都不能改，改表结构只能新增迁移（已有库遇到改过的迁移，迁移器会按哈希中止）。不要的迁移可以从清单里去掉，但它建的每张表都要由清单里还在的某条迁移删掉（`DROP TABLE`，或 `DROP SCHEMA ... CASCADE` 删掉整个 schema），例如 `031-drop-outbound-delivery.sql`、`032-drop-generic-rules.sql` 用 `DROP SCHEMA ... CASCADE` 删掉了已去掉的模块的表。`npm run migrations:freeze:check` 拿当前分支和它从 main 分出来的那个提交比，守住这两条，门禁的 contracts 一步会跑它。
+迁移已经冻结（2026-10-22，#688；2026-11-21 扩展覆盖 ClickHouse）：服务器上已有真实站点的数据，`migration-list.tsv` 与 `clickhouse-migration-list.tsv` 里登记过的迁移都执行过，内容一个字节都不能改，改表结构只能新增迁移（已有库遇到改过的迁移，迁移器会按哈希中止）。不要的迁移可以从清单里去掉，但它建的每张表都要由清单里还在的某条迁移删掉（`DROP TABLE`，PostgreSQL 可用 `DROP SCHEMA ... CASCADE`，ClickHouse 可用 `DROP DATABASE ...`），例如 `031-drop-outbound-delivery.sql`、`032-drop-generic-rules.sql` 用 `DROP SCHEMA ... CASCADE` 删掉了已去掉的模块的表。`npm run migrations:freeze:check` 拿当前分支和它从 main 分出来的那个提交比，守住这两条，门禁的 contracts 一步会跑它。
 
 服务正常启动前先跑一次性的产品 / 表结构预检，要求产品版本和迁移清单的摘要完全一致；正式环境没有跳过的开关。
 
@@ -152,7 +152,7 @@ PHASE1_ENV_FILE=deploy/platform/phase1/environments/production.runtime.env \
 
 本机 ClickHouse 不再只靠空卷首次启动时跑一次 `/docker-entrypoint-initdb.d` 初始化目录，而是改用显式的版本化迁移与启动前核验：
 
-- `phase1-clickhouse-migrator`：通过共享 `clickhouse` 容器网络命名空间走本机回环（`127.0.0.1:9000`）运行 `deploy/platform/phase1/clickhouse-migrations/run-clickhouse-migrations.sh`，按清单顺序执行 SQL，并把每条迁移的执行状态和文件 SHA-256 哈希记录在 `phase1_deployment.schema_migrations`；如果发现上一轮留下未收尾的 `APPLYING` 状态或文件被修改过（哈希漂移），会立即停下要求人工恢复，不跳过也不覆写。完成后把当前产品版本号与迁移清单摘要写入 `phase1_deployment.product_schema`。
+- `phase1-clickhouse-migrator`：通过共享 `clickhouse` 容器网络命名空间走本机回环（`127.0.0.1:9000`）运行 `deploy/platform/phase1/clickhouse-migrations/run-clickhouse-migrations.sh`，按清单顺序执行 SQL，并把每条迁移的执行状态和文件 SHA-256 哈希记录在 `phase1_deployment.schema_migrations`；如果发现上一轮留下未收尾的 `APPLYING` 状态或未在 `clickhouse-migration-equivalent-sha256.tsv` 登记为历史等价哈希的篡改/漂移，会立即停下要求人工恢复，不跳过也不覆写。完成后把当前产品版本号与迁移清单摘要写入 `phase1_deployment.product_schema`。
 - `phase1-clickhouse-schema-preflight`：服务启动前使用最小权限只读账号 `phase1_schema_reader` 运行 `deploy/platform/phase1/clickhouse-migrations/verify-clickhouse-schema.sh`，核对产品版本与迁移清单摘要完全一致才放行启动。
 - 无密码 `default` 账号已通过 `clickhouse/default-security.xml` 锁在容器回环地址（`127.0.0.1`、`::1`），同网段里的其他容器无法免密使用 `default` 查询或删库。
 

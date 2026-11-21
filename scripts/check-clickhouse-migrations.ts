@@ -15,6 +15,7 @@ interface ClickHouseManifest {
   schemaReaderRole: string;
   databases: string[];
   migrations: string[];
+  equivalentSha256?: Record<string, string[]>;
 }
 
 interface ProductRelease {
@@ -90,12 +91,21 @@ export function checkClickHouseMigrations(repoRoot: string): void {
   const chDir = join(repoRoot, 'deploy/platform/phase1/clickhouse-migrations');
   const manifestPath = join(chDir, 'clickhouse-manifest.v1.json');
   const tsvPath = join(chDir, 'clickhouse-migration-list.tsv');
+  const equivalentShaPath = join(chDir, 'clickhouse-migration-equivalent-sha256.tsv');
   const roleCredExamplePath = join(chDir, 'clickhouse-role-credentials.sql.example');
   const runScriptPath = join(chDir, 'run-clickhouse-migrations.sh');
   const verifyScriptPath = join(chDir, 'verify-clickhouse-schema.sh');
   const initDir = join(repoRoot, 'infra/telemetry/clickhouse/init');
 
-  for (const required of [manifestPath, tsvPath, roleCredExamplePath, runScriptPath, verifyScriptPath, initDir]) {
+  for (const required of [
+    manifestPath,
+    tsvPath,
+    equivalentShaPath,
+    roleCredExamplePath,
+    runScriptPath,
+    verifyScriptPath,
+    initDir,
+  ]) {
     assert(existsSync(required), `missing required ClickHouse migration artifact: ${required}`);
   }
 
@@ -143,6 +153,57 @@ export function checkClickHouseMigrations(repoRoot: string): void {
     'clickhouse-migration-list.tsv must match clickhouse-manifest.v1.json migrations 1:1',
   );
 
+  const rawEquivalent = manifest.equivalentSha256 ?? {};
+  assert(
+    typeof rawEquivalent === 'object' && rawEquivalent !== null && !Array.isArray(rawEquivalent),
+    'clickhouse-manifest.v1.json equivalentSha256 must be an object mapping migration path to legacy sha256 array',
+  );
+  const registeredSet = new Set(manifest.migrations);
+  const expectedEquivalentLines: string[] = [];
+  for (const [migrationPath, hashes] of Object.entries(rawEquivalent).sort(([a], [b]) => a.localeCompare(b))) {
+    assert(
+      registeredSet.has(migrationPath),
+      `clickhouse-manifest.v1.json equivalentSha256 references unregistered migration: ${migrationPath}`,
+    );
+    assert(
+      Array.isArray(hashes) && hashes.length > 0,
+      `clickhouse-manifest.v1.json equivalentSha256.${migrationPath} must be a non-empty array`,
+    );
+    const currentSha = sha256File(join(repoRoot, migrationPath));
+    const seenHashes = new Set<string>();
+    for (const hash of hashes) {
+      assert(
+        typeof hash === 'string' && /^[0-9a-f]{64}$/.test(hash),
+        `clickhouse-manifest.v1.json equivalentSha256.${migrationPath} contains invalid sha256: ${String(hash)}`,
+      );
+      assert(
+        hash !== currentSha,
+        `clickhouse-manifest.v1.json equivalentSha256.${migrationPath} must not duplicate current sha256: ${hash}`,
+      );
+      assert(
+        !seenHashes.has(hash),
+        `clickhouse-manifest.v1.json equivalentSha256.${migrationPath} contains duplicate sha256: ${hash}`,
+      );
+      seenHashes.add(hash);
+      expectedEquivalentLines.push(`${migrationPath}|${hash}`);
+    }
+  }
+
+  const eqTsvLines = readUtf8Lf(equivalentShaPath, 'clickhouse-migration-equivalent-sha256.tsv')
+    .split('\n')
+    .filter((line) => line.length > 0);
+  for (const line of eqTsvLines) {
+    assert(
+      /^[^|]+\|[0-9a-f]{64}$/.test(line),
+      `invalid line in clickhouse-migration-equivalent-sha256.tsv: ${line}`,
+    );
+  }
+  assert(
+    eqTsvLines.length === expectedEquivalentLines.length &&
+      eqTsvLines.every((entry, idx) => entry === expectedEquivalentLines[idx]),
+    'clickhouse-migration-equivalent-sha256.tsv must match clickhouse-manifest.v1.json equivalentSha256 1:1',
+  );
+
   const declaredUsers = new Set<string>(['phase1_schema_reader']);
   const localPasswordPattern = /IDENTIFIED\s+WITH\s+(?:plaintext_password|sha256_password|double_sha1_password)\s+BY\b/i;
   for (const relPath of manifest.migrations) {
@@ -177,6 +238,8 @@ export function checkClickHouseMigrations(repoRoot: string): void {
   for (const requiredSnippet of [
     'incomplete ClickHouse migration',
     'ClickHouse migration drift detected',
+    'clickhouse-migration-equivalent-sha256.tsv',
+    'equivalent checksum',
     'ReplacingMergeTree',
     'FINAL',
     '--param_',

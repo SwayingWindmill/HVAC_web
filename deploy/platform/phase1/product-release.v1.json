@@ -28,7 +28,7 @@
     "migrationManifest": "deploy/platform/phase1/migrations/manifest.v1.json",
     "migrationManifestSha256": "c49c7d0cfe19c1f7a256b90f6dfdc0bbd3c5d87a90e982e80ecf04a7be178d74",
     "clickhouseMigrationManifest": "deploy/platform/phase1/clickhouse-migrations/clickhouse-manifest.v1.json",
-    "clickhouseMigrationManifestSha256": "f7309ccc57ec6092143452be92ee9b9b5d758f381fb3ef678a106a05d15ba644",
+    "clickhouseMigrationManifestSha256": "a43f12210e740712d71bed8ed6d4c8a8a7c5a2e6c00faec0a370c78b0a52cc83",
     "compatibilityMode": "exact-product-and-manifest",
     "skipAllowed": false,
     "requiredDatabases": [

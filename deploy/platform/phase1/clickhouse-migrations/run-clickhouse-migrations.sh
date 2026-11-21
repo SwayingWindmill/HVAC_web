@@ -15,9 +15,24 @@ PHASE1_CLICKHOUSE_ROLE_CREDENTIALS_FILE="${PHASE1_CLICKHOUSE_ROLE_CREDENTIALS_FI
 REPO_ROOT="${PHASE1_CLICKHOUSE_MIGRATION_ROOT}"
 MANIFEST_DIR="${PHASE1_CLICKHOUSE_MANIFEST_DIR}"
 manifest="${MANIFEST_DIR}/clickhouse-migration-list.tsv"
+equivalent_manifest="${MANIFEST_DIR}/clickhouse-migration-equivalent-sha256.tsv"
 product="hvac-web"
 
 [[ -r "${manifest}" ]] || { echo "ClickHouse migration manifest is missing: ${manifest}" >&2; exit 1; }
+
+is_equivalent_sha() {
+  local target_path="$1"
+  local candidate_sha="$2"
+  [[ -r "${equivalent_manifest}" ]] || return 1
+  local eq_path eq_sha
+  while IFS='|' read -r eq_path eq_sha || [[ -n "${eq_path:-}" ]]; do
+    [[ -n "${eq_path}" && -n "${eq_sha:-}" ]] || continue
+    if [[ "${eq_path}" == "${target_path}" && "${eq_sha}" == "${candidate_sha}" ]]; then
+      return 0
+    fi
+  done < "${equivalent_manifest}"
+  return 1
+}
 
 ch_client() {
   local args=(--host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" --user "$CLICKHOUSE_USER")
@@ -102,6 +117,10 @@ while IFS='|' read -r target migration_path <&3; do
       exit 1
     fi
     if [[ "${recorded_sha}" != "${file_sha}" ]]; then
+      if is_equivalent_sha "${migration_path}" "${recorded_sha}"; then
+        echo "ClickHouse migration already applied (equivalent checksum): ${migration_path} recorded=${recorded_sha} current=${file_sha}"
+        continue
+      fi
       echo "ClickHouse migration drift detected for ${migration_path}: recorded=${recorded_sha} current=${file_sha}" >&2
       exit 1
     fi

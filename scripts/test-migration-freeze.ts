@@ -66,13 +66,35 @@ test('dropping the schema with CASCADE drops every table in it', () => {
   assert.deepEqual(findFreezeViolations(base, head), []);
 });
 
-test('the command compares the branch with where it left main', async () => {
-  const repo = await mkdtemp(join(tmpdir(), 'migration-freeze-'));
+test('ClickHouse DROP DATABASE/TABLE SYNC and backtick identifiers are recognized', () => {
+  const baseDb = tree({
+    'infra/telemetry/clickhouse/init/001.sql': 'CREATE TABLE IF NOT EXISTS telemetry_history.`obs_v1` (id UInt64) ENGINE = MergeTree ORDER BY id;\n',
+  });
+  const headDb = tree({ 'infra/telemetry/clickhouse/init/002.sql': 'DROP DATABASE IF EXISTS telemetry_history SYNC;\n' });
+  assert.deepEqual(findFreezeViolations(baseDb, headDb), []);
+
+  const headTable = tree({ 'infra/telemetry/clickhouse/init/002.sql': 'DROP TABLE IF EXISTS telemetry_history.`obs_v1` SYNC;\n' });
+  assert.deepEqual(findFreezeViolations(baseDb, headTable), []);
+});
+
+async function withTempMigrationRepo(
+  prefix: string,
+  fn: (ctx: {
+    git: (...args: string[]) => void;
+    write: (path: string, content: string) => Promise<void>;
+    check: () => ReturnType<typeof spawnSync>;
+  }) => Promise<void>,
+): Promise<void> {
+  const repo = await mkdtemp(join(tmpdir(), prefix));
   const env: NodeJS.ProcessEnv = { ...process.env, GITHUB_BASE_SHA: 'main' };
   delete env.GIT_DIR;
   delete env.GIT_WORK_TREE;
   const git = (...args: string[]): void => {
-    const result = spawnSync('git', ['-c', 'user.name=test', '-c', 'user.email=test@example.com', ...args], { cwd: repo, encoding: 'utf8', env });
+    const result = spawnSync('git', ['-c', 'user.name=test', '-c', 'user.email=test@example.com', ...args], {
+      cwd: repo,
+      encoding: 'utf8',
+      env,
+    });
     assert.equal(result.status, 0, result.stderr);
   };
   const write = async (path: string, content: string): Promise<void> => {
@@ -81,6 +103,14 @@ test('the command compares the branch with where it left main', async () => {
   };
   const check = () => spawnSync(process.execPath, ['--experimental-strip-types', checkScript], { cwd: repo, encoding: 'utf8', env });
   try {
+    await fn({ git, write, check });
+  } finally {
+    await rm(repo, { recursive: true, force: true });
+  }
+}
+
+test('the command compares the branch with where it left main', async () => {
+  await withTempMigrationRepo('migration-freeze-', async ({ git, write, check }) => {
     git('init', '--quiet', '--initial-branch=main');
     await write('deploy/platform/phase1/migrations/migration-list.tsv', 'hvac_s1|infra/a/001.sql\n');
     await write('infra/a/001.sql', 'CREATE TABLE a.items (id int);\n');
@@ -94,8 +124,44 @@ test('the command compares the branch with where it left main', async () => {
     git('commit', '--quiet', '-am', 'edit a registered migration');
     const result = check();
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /infra\/a\/001\.sql was already registered/u);
-  } finally {
-    await rm(repo, { recursive: true, force: true });
-  }
+    assert.match(String(result.stderr), /infra\/a\/001\.sql was already registered/u);
+  });
+});
+
+test('editing a registered ClickHouse migration fails freeze check while appending a new one passes', async () => {
+  await withTempMigrationRepo('ch-migration-freeze-', async ({ git, write, check }) => {
+    git('init', '--quiet', '--initial-branch=main');
+    await write(
+      'deploy/platform/phase1/clickhouse-migrations/clickhouse-migration-list.tsv',
+      'clickhouse|infra/telemetry/clickhouse/init/025-clickhouse-complete-governance.sql\n',
+    );
+    await write(
+      'infra/telemetry/clickhouse/init/025-clickhouse-complete-governance.sql',
+      'CREATE TABLE telemetry_history.observations (id UInt64) ENGINE = MergeTree ORDER BY id;\n',
+    );
+    git('add', '.');
+    git('commit', '--quiet', '-m', 'base');
+    git('switch', '--quiet', '-c', 'feature');
+
+    await write(
+      'deploy/platform/phase1/clickhouse-migrations/clickhouse-migration-list.tsv',
+      'clickhouse|infra/telemetry/clickhouse/init/025-clickhouse-complete-governance.sql\nclickhouse|infra/telemetry/clickhouse/init/026-extra.sql\n',
+    );
+    await write('infra/telemetry/clickhouse/init/026-extra.sql', 'SELECT 1;\n');
+    git('add', '.');
+    git('commit', '--quiet', '-m', 'add clickhouse migration 026');
+    assert.equal(check().status, 0);
+
+    await write(
+      'infra/telemetry/clickhouse/init/025-clickhouse-complete-governance.sql',
+      'CREATE TABLE telemetry_history.observations (id UInt64) ENGINE = MergeTree ORDER BY id SETTINGS max_threads = 1;\n',
+    );
+    git('commit', '--quiet', '-am', 'edit registered 025');
+    const result = check();
+    assert.equal(result.status, 1);
+    assert.match(
+      String(result.stderr),
+      /infra\/telemetry\/clickhouse\/init\/025-clickhouse-complete-governance\.sql was already registered/u,
+    );
+  });
 });
