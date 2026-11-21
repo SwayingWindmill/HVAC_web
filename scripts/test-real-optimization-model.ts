@@ -5,6 +5,9 @@ import {
   buildOptimizationWorkOrderDraft,
   buildReadinessSummary,
   findActiveRecommendationWorkOrder,
+  formatAuxiliaryCapabilityLabel,
+  formatAuxiliaryLoopLabel,
+  formatAuxiliaryTargetValue,
   formatCoolingLoadBin,
   formatCopUpliftPct,
   formatGuardrailAction,
@@ -761,4 +764,39 @@ test('multi-loop VFD/fan lease bounds validate conditionally and monitor helpers
   assert.equal(formatMonitorNumericValue(39.5, 'Hz'), '39.5 Hz');
   assert.equal(formatMonitorNumericValue(66.0, '%'), '66.0%');
   assert.equal(formatMonitorNumericValue(7.8, 'C'), '7.8 °C');
+});
+
+test('parseRecommendation preserves auxiliaryTargets and defaults cleanly when omitted', () => {
+  const withoutAux = parseRecommendation(publishedFixture);
+  assert.deepEqual(withoutAux.auxiliaryTargets, []);
+
+  const withAux = parseRecommendation({
+    ...publishedFixture,
+    recommendation: {
+      ...publishedFixture.recommendation,
+      auxiliaryTargets: [
+        {
+          loopKey: 'chilled_water_pump_freq',
+          capability: 'SET_FREQUENCY',
+          targetValue: 38.5,
+          unit: 'Hz',
+          rationale: 'CHW pump coordinated',
+        },
+        {
+          loopKey: 'cooling_tower_fan_speed',
+          capability: 'SET_FAN_SPEED',
+          targetValue: 67.0,
+          unit: '%',
+          rationale: 'CT fan coordinated',
+        },
+      ],
+    },
+  });
+  assert.equal(withAux.auxiliaryTargets.length, 2);
+  assert.equal(formatAuxiliaryLoopLabel(withAux.auxiliaryTargets[0].loopKey), '冷冻水泵频率');
+  assert.equal(formatAuxiliaryCapabilityLabel(withAux.auxiliaryTargets[0].capability), '变频频率调节');
+  assert.equal(formatAuxiliaryTargetValue(withAux.auxiliaryTargets[0].targetValue, withAux.auxiliaryTargets[0].unit), '38.5 Hz');
+  assert.equal(formatAuxiliaryLoopLabel(withAux.auxiliaryTargets[1].loopKey), '冷却塔风机转速');
+  assert.equal(formatAuxiliaryCapabilityLabel(withAux.auxiliaryTargets[1].capability), '风机转速调节');
+  assert.equal(formatAuxiliaryTargetValue(withAux.auxiliaryTargets[1].targetValue, withAux.auxiliaryTargets[1].unit), '67.0%');
 });

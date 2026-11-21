@@ -15,6 +15,39 @@ export type RecommendationTrigger = 'MANUAL' | 'SCHEDULE';
 
 export const TRIGGER_LABEL: Record<RecommendationTrigger, string> = { MANUAL: '手动生成', SCHEDULE: '定时生成' };
 
+export interface OptimizationAuxiliaryTarget {
+  readonly loopKey: string;
+  readonly capability: string;
+  readonly targetValue: number;
+  readonly unit: string;
+  readonly rationale?: string;
+}
+
+const AUXILIARY_LOOP_LABELS: Record<string, string> = {
+  chilled_water_pump_freq: '冷冻水泵频率',
+  cooling_water_pump_freq: '冷却水泵频率',
+  cooling_tower_fan_speed: '冷却塔风机转速',
+};
+
+const AUXILIARY_CAPABILITY_LABELS: Record<string, string> = {
+  SET_FREQUENCY: '变频频率调节',
+  SET_FAN_SPEED: '风机转速调节',
+};
+
+export function formatAuxiliaryLoopLabel(loopKey: string): string {
+  return AUXILIARY_LOOP_LABELS[loopKey] ?? loopKey;
+}
+
+export function formatAuxiliaryCapabilityLabel(capability: string): string {
+  return AUXILIARY_CAPABILITY_LABELS[capability] ?? capability;
+}
+
+export function formatAuxiliaryTargetValue(targetValue: number, unit: string): string {
+  const formatted = formatDecimal(targetValue, 1);
+  if (unit === '%') return `${formatted}%`;
+  return unit ? `${formatted} ${unit}` : formatted;
+}
+
 export interface OptimizationRecommendation {
   readonly id: string;
   readonly runId: string;
@@ -22,6 +55,7 @@ export interface OptimizationRecommendation {
   readonly createdAt: string;
   readonly baseline: { readonly supplyTempC: number; readonly zoneTempC: number; readonly dailyEnergyKWh: number; readonly dailyCost: number };
   readonly candidate: { readonly supplyTempC: number; readonly projectedZoneTempC: number; readonly dailyEnergyKWh: number; readonly dailyCost: number };
+  readonly auxiliaryTargets: readonly OptimizationAuxiliaryTarget[];
   readonly saving: { readonly energyKWhPerDay: number; readonly costPerDay: number };
   readonly supplyRange: { readonly minC: number; readonly maxC: number; readonly maxStepC: number };
   readonly comfortRange: { readonly minC: number; readonly maxC: number };
@@ -50,6 +84,7 @@ export interface PublishedRecommendation {
     readonly createdAt: string;
     readonly baseline: OptimizationRecommendation['baseline'];
     readonly candidate: OptimizationRecommendation['candidate'];
+    readonly auxiliaryTargets?: readonly OptimizationAuxiliaryTarget[];
     readonly expectedImpact: { readonly energySavingKWhPerDay: number; readonly costSavingPerDay: number };
     readonly constraints: readonly PublishedConstraint[];
     readonly uncertainty: { readonly energyP90KWh: number; readonly zoneTempP90C: number };
@@ -76,6 +111,7 @@ export function parseRecommendation(published: PublishedRecommendation): Optimiz
     createdAt: recommendation.createdAt,
     baseline: recommendation.baseline,
     candidate: recommendation.candidate,
+    auxiliaryTargets: recommendation.auxiliaryTargets ?? [],
     saving: { energyKWhPerDay: recommendation.expectedImpact.energySavingKWhPerDay, costPerDay: recommendation.expectedImpact.costSavingPerDay },
     supplyRange: { minC: supply.minC!, maxC: supply.maxC!, maxStepC: supply.maxStepC! },
     comfortRange: { minC: comfort.minC!, maxC: comfort.maxC! },

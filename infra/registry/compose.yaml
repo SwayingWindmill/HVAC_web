@@ -102,6 +102,7 @@ services:
       - ./postgres/init/accounting-config-delete-grants.sql:/docker-entrypoint-initdb.d/0910.sql:ro
       - ./postgres/init/device-hardware-replacements.sql:/docker-entrypoint-initdb.d/0920.sql:ro
       - ./postgres/init/optimization-multiloop-vfd-bounds.sql:/docker-entrypoint-initdb.d/0930.sql:ro
+      - ./postgres/init/optimization-recommendation-auxiliary-targets.sql:/docker-entrypoint-initdb.d/0940.sql:ro
     ports:
       - "127.0.0.1:${S1_POSTGRES_HOST_PORT:-55432}:5432"
     healthcheck:

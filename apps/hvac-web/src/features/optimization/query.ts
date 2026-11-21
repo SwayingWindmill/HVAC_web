@@ -37,6 +37,14 @@ const opt = <S extends z.ZodTypeAny>(schema: S) => schema.nullish().transform((v
 
 const riskLevelSchema = z.enum(['LOW', 'MEDIUM', 'HIGH']);
 
+const optimizationAuxiliaryTargetSchema = z.object({
+  loopKey: z.string().min(1),
+  capability: z.string().min(1),
+  targetValue: z.number().finite(),
+  unit: z.string(),
+  rationale: opt(z.string()),
+});
+
 const publishedRecommendationSchema: z.ZodType<PublishedRecommendation> = z.object({
   runId: z.string(),
   trigger: z.enum(['MANUAL', 'SCHEDULE']),
@@ -59,6 +67,7 @@ const publishedRecommendationSchema: z.ZodType<PublishedRecommendation> = z.obje
       dailyEnergyKWh: z.number(),
       dailyCost: z.number(),
     }),
+    auxiliaryTargets: opt(z.array(optimizationAuxiliaryTargetSchema)),
     expectedImpact: z.object({
       energySavingKWhPerDay: z.number(),
       costSavingPerDay: z.number(),

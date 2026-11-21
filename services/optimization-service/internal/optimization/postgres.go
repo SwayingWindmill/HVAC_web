@@ -233,11 +233,11 @@ WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND id=$3::uuid AND status='SOLVIN
 		return errors.New("optimization run FEASIBLE transition rejected")
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO core_registry.optimization_recommendations(
-id,tenant_id,site_id,optimization_run_id,input_snapshot_id,deployment_revision_id,baseline,objective,constraints,candidate,expected_impact,uncertainty,risk,rollback_plan,verification_plan,approval_state,revision,created_at,updated_at)
-VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::uuid,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$13::jsonb,$14::jsonb,$15::jsonb,$16,1,$17,$17)
+id,tenant_id,site_id,optimization_run_id,input_snapshot_id,deployment_revision_id,baseline,objective,constraints,candidate,auxiliary_targets,expected_impact,uncertainty,risk,rollback_plan,verification_plan,approval_state,revision,created_at,updated_at)
+VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::uuid,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$13::jsonb,$14::jsonb,$15::jsonb,$16::jsonb,$17,1,$18,$18)
 ON CONFLICT (tenant_id,site_id,optimization_run_id) DO NOTHING`, recommendation.ID, request.TenantID, request.SiteID, request.OptimizationRunID,
 		recommendation.InputSnapshotID, recommendation.DeploymentRevision, encodeOptimizationJSON(recommendation.Baseline), encodeOptimizationJSON(recommendation.Objective),
-		encodeOptimizationJSON(recommendation.Constraints), encodeOptimizationJSON(recommendation.Candidate), encodeOptimizationJSON(recommendation.ExpectedImpact),
+		encodeOptimizationJSON(recommendation.Constraints), encodeOptimizationJSON(recommendation.Candidate), marshalAuxiliaryTargets(recommendation.AuxiliaryTargets), encodeOptimizationJSON(recommendation.ExpectedImpact),
 		encodeOptimizationJSON(recommendation.Uncertainty), encodeOptimizationJSON(recommendation.Risk), encodeOptimizationJSON(recommendation.RollbackPlan),
 		encodeOptimizationJSON(recommendation.VerificationPlan), recommendation.Approval, at)
 	if err != nil {
@@ -423,11 +423,11 @@ func (store *PostgresStore) GetRecommendation(ctx context.Context, tenantID, sit
 		return PublishedRecommendation{}, err
 	}
 	var result PublishedRecommendation
-	var baseline, objective, constraints, candidate, expectedImpact, uncertainty, risk, rollbackPlan, verificationPlan []byte
+	var baseline, objective, constraints, candidate, auxiliaryTargets, expectedImpact, uncertainty, risk, rollbackPlan, verificationPlan []byte
 	var currentStateRevalidation, responseModel []byte
 	var commandIntentID *string
 	err = tx.QueryRow(ctx, `SELECT r.id::text,r.optimization_run_id::text,r.input_snapshot_id::text,r.deployment_revision_id::text,
-r.baseline,r.objective,r.constraints,r.candidate,r.expected_impact,r.uncertainty,r.risk,r.rollback_plan,r.verification_plan,
+r.baseline,r.objective,r.constraints,r.candidate,r.auxiliary_targets,r.expected_impact,r.uncertainty,r.risk,r.rollback_plan,r.verification_plan,
 r.approval_state,r.current_state_revalidation,CASE WHEN r.command_intent_id IS NULL THEN NULL ELSE r.command_intent_id::text END,r.created_at,
 run.status,run.quality,job.trigger_type,snapshot.safety_constraints->'responseModel'
 FROM core_registry.optimization_recommendations r
@@ -438,7 +438,7 @@ JOIN core_registry.optimization_input_snapshots snapshot
 JOIN core_registry.job_instances job ON job.job_id=run.id
 WHERE r.tenant_id=$1::uuid AND r.site_id=$2::uuid AND r.optimization_run_id=$3::uuid AND run.status='PUBLISHED'`, tenantID, siteID, runID).Scan(
 		&result.Recommendation.ID, &result.RunID, &result.Recommendation.InputSnapshotID, &result.Recommendation.DeploymentRevision,
-		&baseline, &objective, &constraints, &candidate, &expectedImpact, &uncertainty, &risk, &rollbackPlan, &verificationPlan,
+		&baseline, &objective, &constraints, &candidate, &auxiliaryTargets, &expectedImpact, &uncertainty, &risk, &rollbackPlan, &verificationPlan,
 		&result.Recommendation.Approval, &currentStateRevalidation, &commandIntentID, &result.Recommendation.CreatedAt,
 		&result.RunStatus, &result.Quality, &result.Trigger, &responseModel,
 	)
@@ -469,6 +469,11 @@ WHERE r.tenant_id=$1::uuid AND r.site_id=$2::uuid AND r.optimization_run_id=$3::
 			return PublishedRecommendation{}, fmt.Errorf("decode published optimization recommendation: %w", err)
 		}
 	}
+	decodedAuxTargets, auxErr := unmarshalAuxiliaryTargets(auxiliaryTargets)
+	if auxErr != nil {
+		return PublishedRecommendation{}, fmt.Errorf("decode auxiliary targets: %w", auxErr)
+	}
+	result.Recommendation.AuxiliaryTargets = decodedAuxTargets
 	if len(currentStateRevalidation) > 0 && string(currentStateRevalidation) != "null" {
 		var revalidation intelligencemodel.CurrentStateRevalidation
 		if err = json.Unmarshal(currentStateRevalidation, &revalidation); err != nil {
@@ -492,6 +497,28 @@ WHERE r.tenant_id=$1::uuid AND r.site_id=$2::uuid AND r.optimization_run_id=$3::
 func encodeOptimizationJSON(value any) []byte {
 	raw, _ := json.Marshal(value)
 	return raw
+}
+
+func marshalAuxiliaryTargets(targets []intelligencemodel.OptimizationAuxiliaryTarget) []byte {
+	if len(targets) == 0 {
+		return []byte("[]")
+	}
+	return encodeOptimizationJSON(targets)
+}
+
+func unmarshalAuxiliaryTargets(raw []byte) ([]intelligencemodel.OptimizationAuxiliaryTarget, error) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" || trimmed == "[]" {
+		return nil, nil
+	}
+	var out []intelligencemodel.OptimizationAuxiliaryTarget
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
 }
 
 func optimizationUUIDv7(at time.Time) (string, error) {

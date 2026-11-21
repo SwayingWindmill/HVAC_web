@@ -10,6 +10,7 @@ import {
   Lightbulb,
   Send,
   ShieldCheck,
+  SlidersHorizontal,
   Sparkles,
   TriangleAlert,
   Undo2,
@@ -46,6 +47,9 @@ import {
   buildReadinessSummary,
   changesSupply,
   findActiveRecommendationWorkOrder,
+  formatAuxiliaryCapabilityLabel,
+  formatAuxiliaryLoopLabel,
+  formatAuxiliaryTargetValue,
   formatCelsius as celsius,
   formatSigned as signed,
   isUnscheduledReady,
@@ -828,6 +832,35 @@ function Proposal({
           />
         </ConstraintRow>
       </Panel>
+
+      {recommendation.auxiliaryTargets.length > 0 ? (
+        <Panel aria-label="协同变频与风机建议">
+          <PanelHeader
+            title={<span className="flex items-center gap-1.5"><SlidersHorizontal className="size-4 text-primary" aria-hidden="true" />协同变频与风机建议</span>}
+            caption={confirmationMode === 'AUTO_WITH_LEASE'
+              ? '以下辅助回路目标由多回路策略协同生成；开启自动闭环后按授权边界执行'
+              : '以下辅助回路目标由多回路策略协同生成；人工确认模式下供现场参考，不会自动下发'}
+          />
+          <div className="grid grid-cols-1 divide-y divide-divider md:grid-cols-3 md:divide-x md:divide-y-0">
+            {recommendation.auxiliaryTargets.map((target) => (
+              <div key={`${target.loopKey}:${target.capability}`} className="flex flex-col gap-2 px-5 py-4">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-semibold text-foreground">{formatAuxiliaryLoopLabel(target.loopKey)}</span>
+                  <span className="rounded-md bg-muted px-2 py-0.5 text-[11px] font-medium text-secondary-foreground">
+                    {formatAuxiliaryCapabilityLabel(target.capability)}
+                  </span>
+                </div>
+                <span className="text-2xl leading-[30px] font-semibold tracking-[-0.03em] text-primary tabular-nums">
+                  {formatAuxiliaryTargetValue(target.targetValue, target.unit)}
+                </span>
+                {target.rationale ? (
+                  <p className="text-xs leading-relaxed text-muted-foreground">{target.rationale}</p>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        </Panel>
+      ) : null}
 
       <ReadinessDisclosure readiness={readiness} recommendation={recommendation} />
     </>
