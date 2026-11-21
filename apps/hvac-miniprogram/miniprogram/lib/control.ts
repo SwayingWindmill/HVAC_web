@@ -926,6 +926,113 @@ export async function fetchCommandById(client: ControlGatewayClient, commandId: 
   return client.get<CommandRecord>(`/api/v1/commands/${encodeURIComponent(commandId)}`);
 }
 
+export type AutoControlExecutionMode = 'CLOSED_LOOP' | 'SHADOW';
+
+export interface AutoControlLeaseRecord {
+  readonly id: string;
+  readonly status: 'ACTIVE' | 'TRIPPED' | 'REVOKED' | 'EXPIRED';
+  readonly expiresAt: string;
+  readonly executionMode?: AutoControlExecutionMode;
+  readonly supplyTempMinC: number;
+  readonly supplyTempMaxC: number;
+  readonly pumpFreqMinHz?: number;
+  readonly pumpFreqMaxHz?: number;
+  readonly fanSpeedMinPct?: number;
+  readonly fanSpeedMaxPct?: number;
+  readonly manualBackoffUntil?: string | null;
+  readonly manualBackoffReason?: string;
+}
+
+export interface AutoControlLeaseState {
+  readonly tenantId: string;
+  readonly siteId: string;
+  readonly confirmationMode: 'MANUAL_CONFIRM' | 'AUTO_WITH_LEASE';
+  readonly activeLease: AutoControlLeaseRecord | null;
+  readonly latestLease?: AutoControlLeaseRecord | null;
+}
+
+export interface AutoControlLeaseBanner {
+  readonly tone: 'good' | 'warning' | 'neutral';
+  readonly badge: string;
+  readonly headline: string;
+  readonly detail: string;
+}
+
+function formatLeaseClockHHmm(iso: string, timezone = 'Asia/Shanghai'): string {
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return '--:--';
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(new Date(ms));
+    const hour = parts.find((part) => part.type === 'hour')?.value;
+    const minute = parts.find((part) => part.type === 'minute')?.value;
+    if (hour && minute) return `${hour}:${minute}`;
+  } catch {
+    // Fall back to fixed UTC+8 clock on older runtimes without full Intl TZ data.
+  }
+  const local = new Date(ms + 8 * 3_600_000);
+  return `${String(local.getUTCHours()).padStart(2, '0')}:${String(local.getUTCMinutes()).padStart(2, '0')}`;
+}
+
+export async function fetchSiteAutoControlLease(client: ControlGatewayClient, siteId: string): Promise<AutoControlLeaseState | null> {
+  try {
+    return await client.get<AutoControlLeaseState>(`/api/v1/sites/${encodeURIComponent(siteId)}/optimization/auto-control-lease`);
+  } catch {
+    return null;
+  }
+}
+
+export function presentAutoControlLease(
+  state: AutoControlLeaseState | null,
+  now: Date = new Date(),
+  timezone = 'Asia/Shanghai',
+): AutoControlLeaseBanner | null {
+  const lease = state?.activeLease ?? null;
+  if (lease === null || lease.status !== 'ACTIVE') return null;
+  const nowMs = now.getTime();
+  const expiresMs = Date.parse(lease.expiresAt);
+  if (!Number.isFinite(expiresMs) || expiresMs <= nowMs) return null;
+
+  const backoffMs = lease.manualBackoffUntil ? Date.parse(lease.manualBackoffUntil) : Number.NaN;
+  if (Number.isFinite(backoffMs) && backoffMs > nowMs && lease.manualBackoffUntil) {
+    return {
+      tone: 'warning',
+      badge: '人工退避保护中',
+      headline: 'AI 自动调节已暂停',
+      detail: `退避至 ${formatLeaseClockHHmm(lease.manualBackoffUntil, timezone)}，期间不会覆盖现场手动调节`,
+    };
+  }
+
+  const expiryClock = formatLeaseClockHHmm(lease.expiresAt, timezone);
+  const supplyBounds = `供水 ${lease.supplyTempMinC.toFixed(1)}–${lease.supplyTempMaxC.toFixed(1)} °C`;
+  if (lease.executionMode === 'SHADOW') {
+    return {
+      tone: 'neutral',
+      badge: '影子跟跑中',
+      headline: '策略仅模拟评估，不下发控制',
+      detail: `租约有效期至 ${expiryClock} · ${supplyBounds}`,
+    };
+  }
+
+  const bounds: string[] = [supplyBounds];
+  if (lease.pumpFreqMinHz != null && lease.pumpFreqMaxHz != null) {
+    bounds.push(`水泵 ${lease.pumpFreqMinHz.toFixed(1)}–${lease.pumpFreqMaxHz.toFixed(1)} Hz`);
+  }
+  if (lease.fanSpeedMinPct != null && lease.fanSpeedMaxPct != null) {
+    bounds.push(`风机 ${lease.fanSpeedMinPct.toFixed(0)}–${lease.fanSpeedMaxPct.toFixed(0)}%`);
+  }
+  return {
+    tone: 'good',
+    badge: 'AI 自动托管中',
+    headline: '站点处于自动闭环控制',
+    detail: `有效期至 ${expiryClock} · ${bounds.join(' · ')}`,
+  };
+}
+
 export async function dispatchControlCommand(
   client: ControlGatewayClient,
   intent: PendingControlIntent,

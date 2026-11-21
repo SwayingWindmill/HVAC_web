@@ -29,6 +29,14 @@
       </block>
 
       <block wx:else>
+        <view wx:if="{{autoLeaseBanner}}" class="lease-banner lease-banner-{{autoLeaseBanner.tone}}" aria-label="自动控制租约状态">
+          <view class="lease-banner-head">
+            <text class="badge badge-{{autoLeaseBanner.tone}}">{{autoLeaseBanner.badge}}</text>
+            <text class="lease-banner-title">{{autoLeaseBanner.headline}}</text>
+          </view>
+          <text class="caption">{{autoLeaseBanner.detail}}</text>
+        </view>
+
         <view wx:if="{{commandStatus}}" class="command-banner command-banner-{{commandStatus.tone}}">
           <view class="split">
             <text class="badge badge-{{commandStatus.tone}}">{{commandStatus.label}}</text>

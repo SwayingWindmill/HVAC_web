@@ -43,14 +43,14 @@ class SolverRequestHandler(BaseHTTPRequestHandler):
             self._write_json(HTTPStatus.OK, {"status": "ok", "service": "ai-solver-service"})
             return
         if path == "/readyz":
-            self._write_json(
-                HTTPStatus.OK,
-                {
-                    "status": "ready",
-                    "service": "ai-solver-service",
-                    "solverVersion": SOLVER_VERSION,
-                },
-            )
+            body: dict[str, Any] = {
+                "status": "ready",
+                "service": "ai-solver-service",
+                "solverVersion": SOLVER_VERSION,
+            }
+            if self.server.solver.calibration is not None and self.server.solver.calibration.profile_id:
+                body["calibrationProfileId"] = self.server.solver.calibration.profile_id
+            self._write_json(HTTPStatus.OK, body)
             return
         self._write_problem(HTTPStatus.NOT_FOUND, "NOT_FOUND", "Unknown solver endpoint")
 

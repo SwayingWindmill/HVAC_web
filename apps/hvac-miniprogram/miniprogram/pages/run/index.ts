@@ -1,7 +1,8 @@
+import { fetchSiteAutoControlLease, presentAutoControlLease, type AutoControlLeaseBanner } from '../../lib/control';
 import { energySeries, siteTodayStart } from '../../lib/energy';
 import type { Plant } from '../../lib/plant';
 import { loadPlant } from '../../lib/plant-load';
-import { requireSession } from '../../lib/platform';
+import { gateway, requireSession } from '../../lib/platform';
 import { whileShown } from '../../lib/refresh';
 import { hourlyCop, presentDevices, presentRealtime, type DeviceFilter } from '../../lib/run';
 import { siteClock } from '../../lib/today';
@@ -46,6 +47,7 @@ Page({
     deviceCount: 0,
     chart: null as Chart | null,
     chartNote: '',
+    autoLeaseBanner: null as AutoControlLeaseBanner | null,
   },
 
   onShow() {
@@ -70,19 +72,24 @@ Page({
       const site = await currentSite(rereadEquipment);
       if (site === null) {
         plant = null;
-        this.setData({ loading: false, noSite: true, siteName: '', updatedAt: '', realtime: null, devices: null, deviceCount: 0, chart: null, chartNote: '' });
+        this.setData({ loading: false, noSite: true, siteName: '', updatedAt: '', realtime: null, devices: null, deviceCount: 0, chart: null, chartNote: '', autoLeaseBanner: null });
         return;
       }
       const now = new Date();
-      const [plantRead, dayStart] = await Promise.allSettled([loadPlant(site, rereadEquipment), siteTodayStart(site, now)]);
+      const [plantRead, dayStart, leaseRead] = await Promise.allSettled([
+        loadPlant(site, rereadEquipment),
+        siteTodayStart(site, now),
+        fetchSiteAutoControlLease(gateway, site.id),
+      ]);
       if (plantRead.status === 'rejected') {
         plant = null;
-        this.setData({ siteName: site.displayName, loading: false, noSite: false, failed: true });
+        this.setData({ siteName: site.displayName, loading: false, noSite: false, failed: true, autoLeaseBanner: null });
         return;
       }
       plant = plantRead.value;
       const { chart, note } = await loadChart(site, dayStart, now);
       const start = dayStart.status === 'fulfilled' ? dayStart.value : null;
+      const leaseState = leaseRead.status === 'fulfilled' ? leaseRead.value : null;
       const devices = presentDevices(plant, this.data.filter);
       this.setData({
         siteName: site.displayName,
@@ -97,6 +104,7 @@ Page({
         deviceCount: devices.filters[0].count,
         chart,
         chartNote: note,
+        autoLeaseBanner: presentAutoControlLease(leaseState, now, site.timezone),
       });
     } catch {
       // The Site list itself could not be read; signed-out failures already went to the sign-in page.

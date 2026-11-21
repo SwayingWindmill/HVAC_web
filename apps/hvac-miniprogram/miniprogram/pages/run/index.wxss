@@ -248,3 +248,36 @@
   font-size: 13px;
   font-weight: 500;
 }
+
+.lease-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.lease-banner-good {
+  border-color: #bfe8ce;
+  background: var(--success-soft);
+}
+
+.lease-banner-warning {
+  border-color: #f5d0a9;
+  background: var(--warning-soft);
+}
+
+.lease-banner-neutral {
+  border-color: var(--border);
+  background: var(--card);
+}
+
+.lease-banner-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.lease-banner-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--foreground);
+}

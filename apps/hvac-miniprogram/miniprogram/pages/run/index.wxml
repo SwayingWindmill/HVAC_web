@@ -16,6 +16,14 @@
       <text wx:if="{{updatedAt}}" class="caption">数据 <text class="mono">{{updatedAt}}</text></text>
     </view>
 
+    <view wx:if="{{autoLeaseBanner}}" class="card card-pad lease-banner lease-banner-{{autoLeaseBanner.tone}}" aria-label="自动控制租约状态">
+      <view class="lease-banner-head">
+        <text class="badge badge-{{autoLeaseBanner.tone}}">{{autoLeaseBanner.badge}}</text>
+        <text class="lease-banner-title">{{autoLeaseBanner.headline}}</text>
+      </view>
+      <text class="caption">{{autoLeaseBanner.detail}}</text>
+    </view>
+
     <view class="card card-pad plant" aria-label="冷站现在">
       <view wx:if="{{realtime.status}}" class="plant-status">
         <view class="dot dot-{{realtime.status.tone}}" aria-hidden="true" />
