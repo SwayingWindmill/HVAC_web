@@ -105,6 +105,7 @@
     "mqtt:e2e:integration": "node scripts/run-mqtt-e2e-tests.mjs",
     "test:gateway": "node scripts/run-go.mjs test ./cmd/energy-api/...",
     "test:analytics": "node scripts/run-go.mjs test ./libs/analyticsmodel/... ./libs/intelligencemodel/... ./libs/nameplate/... ./modules/energy/... ./modules/telemetry/... ./modules/metric/... ./modules/scheduler/... ./cmd/metric-worker/... ./services/forecast-service/... ./services/optimization-service/... ./services/fdd-service/... ./services/mv-service/... ./services/report-service/... ./libs/tariffmodel/...",
+    "ai-solver:test": "python3 -m unittest discover -s services/ai-solver-service/tests -t services/ai-solver-service -v",
     "clickhouse:sql:check": "node --experimental-strip-types scripts/check-clickhouse-sql.ts",
     "analytics:history:check": "node scripts/check-analytics-history.mjs",
     "analytics:history:integration": "node scripts/run-analytics-history-tests.mjs && node scripts/run-analytics-cube-tests.mjs",

@@ -1145,3 +1145,68 @@ test('latest recommendation renders multi-loop auxiliary pump and tower fan targ
     await page.screenshot({ path: process.env.WAVE_D_AUX_SCREENSHOT });
   }
 });
+
+test('operator can manually dispatch a matching auxiliary pump frequency recommendation', async ({ page, gateway }) => {
+  const baseLatest = fixture('optimization-latest.json');
+  gateway.optimization = {
+    ...baseLatest,
+    recommendation: {
+      ...baseLatest.recommendation,
+      auxiliaryTargets: [
+        {
+          loopKey: 'chilled_water_pump_freq',
+          capability: 'SET_FREQUENCY',
+          targetValue: 38.5,
+          unit: 'Hz',
+          rationale: 'CHW pump frequency coordinated with supply reset and comfort margin',
+        },
+        {
+          loopKey: 'cooling_water_pump_freq',
+          capability: 'SET_FREQUENCY',
+          targetValue: 41.0,
+          unit: 'Hz',
+          rationale: 'CW pump frequency coordinated for condenser heat rejection',
+        },
+        {
+          loopKey: 'cooling_tower_fan_speed',
+          capability: 'SET_FAN_SPEED',
+          targetValue: 67.0,
+          unit: '%',
+          rationale: 'Cooling tower fan speed balanced against wet-bulb heat rejection',
+        },
+      ],
+    },
+  };
+
+  await page.goto(`/energy-analysis/optimization?site=${SITE_ID}`);
+
+  const auxPanel = page.getByRole('region', { name: '协同变频与风机建议' });
+  await expect(auxPanel).toBeVisible();
+
+  const chwDispatch = auxPanel.getByRole('button', { name: '按建议下发冷冻水泵频率' });
+  await expect(chwDispatch).toBeVisible();
+  await chwDispatch.click();
+
+  const confirm = page.getByRole('alertdialog');
+  await expect(confirm).toContainText('向 CHWP-01 下发指令？');
+  await expect(confirm).toContainText('38.5 Hz');
+  await confirm.getByRole('button', { name: '确认下发' }).click();
+
+  await expect(page.getByText('已提交，正在下发')).toBeVisible();
+  await expect(auxPanel.getByRole('link', { name: /已提交.*CHWP-01/ })).toBeVisible();
+  expect(gateway.writes).toContainEqual(
+    expect.objectContaining({
+      path: '/api/v1/commands',
+      body: {
+        assetId: '01910000-0000-7000-8000-000000000006',
+        commandPointId: '01910000-0000-7000-8000-500000000009',
+        parameters: { frequencyHz: 38.5 },
+      },
+    }),
+  );
+
+  if (process.env.WAVE_G_AUX_DISPATCH_SCREENSHOT) {
+    await auxPanel.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: process.env.WAVE_G_AUX_DISPATCH_SCREENSHOT });
+  }
+});

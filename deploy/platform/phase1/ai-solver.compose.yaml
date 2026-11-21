@@ -9,6 +9,7 @@ services:
     environment:
       TZ: ${TZ:-Asia/Shanghai}
       AI_SOLVER_HTTP_ADDR: ":19099"
+      AI_SOLVER_PROFILE_PATH: "${AI_SOLVER_PROFILE_PATH:-}"
     expose: ["19099"]
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:19099/healthz', timeout=2).read()"]

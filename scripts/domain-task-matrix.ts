@@ -123,6 +123,7 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
       npmRun('test:analytics'),
       npmRun('test:analytics-gateway'),
       nodeRun('scripts/run-go.mjs', 'test', './libs/planttwin/...'),
+      npmRun('ai-solver:test'),
     ]),
     'operations-agent': Object.freeze([
       npmCi('services/operations-agent-service'),

@@ -53,10 +53,13 @@ import {
   formatCelsius as celsius,
   formatSigned as signed,
   isUnscheduledReady,
+  matchAuxiliaryControlTarget,
   preparationProblem,
   preparationReadinessReasons,
+  recommendedAuxiliaryValue,
   recommendedSetpoint,
   TRIGGER_LABEL,
+  type OptimizationAuxiliaryTarget,
   type OptimizationRecommendation,
   type ReadinessItem,
   type ReadinessStatus,
@@ -88,6 +91,13 @@ const RISK: Record<RecommendationRisk, { label: string; className: string }> = {
 
 // A requested run publishes within seconds; past this the page stops waiting and says so.
 const RUN_PATIENCE_MS = 90_000;
+
+interface AuxiliaryControlBinding {
+  readonly aux: OptimizationAuxiliaryTarget;
+  readonly matched: { readonly target: ControlTarget; readonly setting: ControlSetting } | null;
+  readonly dispatchedValue: number | null;
+  readonly sent: Command | undefined;
+}
 
 interface Marker {
   readonly value: number;
@@ -262,6 +272,18 @@ export function OptimizationWorkspace() {
   const supplyReading = supply?.setting.feedbackSourceKey
     ? plant.devices.find((device) => device.deviceId === supply.target.deviceId)?.reading(supply.setting.feedbackSourceKey) ?? null
     : null;
+  const auxiliaryControls = useMemo<readonly AuxiliaryControlBinding[]>(() => {
+    if (!recommendation) return [];
+    const createdAfter = Date.parse(recommendation.createdAt);
+    return recommendation.auxiliaryTargets.map((aux) => {
+      const matched = registry.data ? matchAuxiliaryControlTarget(aux, targets) : null;
+      const dispatchedValue = matched ? recommendedAuxiliaryValue(aux.targetValue, matched.setting) : null;
+      const sent = matched
+        ? commands.data?.find((command) => command.pointId === matched.setting.pointId && Date.parse(command.createdAt) >= createdAfter)
+        : undefined;
+      return { aux, matched, dispatchedValue, sent };
+    });
+  }, [recommendation, registry.data, targets, commands.data]);
   // The supply setpoint command sent since this recommendation was made, newest first.
   const sent = recommendation && supply
     ? commands.data?.find((command) => command.pointId === supply.setting.pointId && Date.parse(command.createdAt) >= Date.parse(recommendation.createdAt))
@@ -276,6 +298,30 @@ export function OptimizationWorkspace() {
         {
           label: '观察与回退',
           value: `下发后观察 ${recommendation.verificationMinutes} 分钟；任一条件不满足时恢复至 ${celsius(recommendation.restoreSupplyTempC)}`,
+        },
+      ],
+    });
+  };
+  const dispatchAuxiliary = (binding: AuxiliaryControlBinding) => {
+    if (!recommendation || !binding.matched || binding.dispatchedValue === null) return;
+    const { aux, matched, dispatchedValue } = binding;
+    const reading = matched.setting.feedbackSourceKey
+      ? plant.devices.find((device) => device.deviceId === matched.target.deviceId)?.reading(matched.setting.feedbackSourceKey) ?? null
+      : null;
+    setPending({
+      target: matched.target,
+      label: matched.setting.label,
+      pointId: matched.setting.pointId,
+      parameters: { [matched.setting.parameterKey]: dispatchedValue },
+      change: { from: reading, to: dispatchedValue, unit: matched.setting.unit },
+      facts: [
+        {
+          label: '协同回路',
+          value: `${formatAuxiliaryLoopLabel(aux.loopKey)} · ${formatAuxiliaryCapabilityLabel(aux.capability)}`,
+        },
+        {
+          label: '观察窗口',
+          value: `下发后观察 ${recommendation.verificationMinutes} 分钟，确认压差、频率与供水温度平稳`,
         },
       ],
     });
@@ -421,9 +467,11 @@ export function OptimizationWorkspace() {
                       : 'ready'
               }
               sent={sent}
+              auxiliaryControls={auxiliaryControls}
               activeWorkOrder={activeWorkOrder}
               canCreateWorkOrder={canCreateWorkOrder}
               onDispatch={dispatch}
+              onDispatchAuxiliary={dispatchAuxiliary}
               onCreateWorkOrder={() => setCreatingWorkOrder(true)}
               onRetryWorkOrders={() => void recommendationWorkOrders.refetch()}
             />
@@ -655,9 +703,11 @@ function Proposal({
   registryState,
   workOrdersState,
   sent,
+  auxiliaryControls,
   activeWorkOrder,
   canCreateWorkOrder,
   onDispatch,
+  onDispatchAuxiliary,
   onCreateWorkOrder,
   onRetryWorkOrders,
 }: {
@@ -671,9 +721,11 @@ function Proposal({
   readonly registryState: 'pending' | 'error' | 'ready';
   readonly workOrdersState: 'pending' | 'error' | 'ready';
   readonly sent: Command | undefined;
+  readonly auxiliaryControls: readonly AuxiliaryControlBinding[];
   readonly activeWorkOrder: WorkOrder | null;
   readonly canCreateWorkOrder: boolean;
   readonly onDispatch: () => void;
+  readonly onDispatchAuxiliary: (binding: AuxiliaryControlBinding) => void;
   readonly onCreateWorkOrder: () => void;
   readonly onRetryWorkOrders: () => void;
 }) {
@@ -833,31 +885,83 @@ function Proposal({
         </ConstraintRow>
       </Panel>
 
-      {recommendation.auxiliaryTargets.length > 0 ? (
+      {auxiliaryControls.length > 0 ? (
         <Panel aria-label="协同变频与风机建议">
           <PanelHeader
             title={<span className="flex items-center gap-1.5"><SlidersHorizontal className="size-4 text-primary" aria-hidden="true" />协同变频与风机建议</span>}
             caption={confirmationMode === 'AUTO_WITH_LEASE'
-              ? '以下辅助回路目标由多回路策略协同生成；开启自动闭环后按授权边界执行'
-              : '以下辅助回路目标由多回路策略协同生成；人工确认模式下供现场参考，不会自动下发'}
+              ? '以下辅助回路目标由多回路策略协同生成；开启自动闭环后按授权边界执行，也可手动确认单回路下发'
+              : '以下辅助回路目标由多回路策略协同生成；人工确认模式下可逐回路确认下发'}
           />
           <div className="grid grid-cols-1 divide-y divide-divider md:grid-cols-3 md:divide-x md:divide-y-0">
-            {recommendation.auxiliaryTargets.map((target) => (
-              <div key={`${target.loopKey}:${target.capability}`} className="flex flex-col gap-2 px-5 py-4">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm font-semibold text-foreground">{formatAuxiliaryLoopLabel(target.loopKey)}</span>
-                  <span className="rounded-md bg-muted px-2 py-0.5 text-[11px] font-medium text-secondary-foreground">
-                    {formatAuxiliaryCapabilityLabel(target.capability)}
+            {auxiliaryControls.map((binding) => {
+              const { aux, matched, dispatchedValue, sent: auxSent } = binding;
+              const loopLabel = formatAuxiliaryLoopLabel(aux.loopKey);
+              const steppedCaption = matched && dispatchedValue !== null
+                ? Math.abs(dispatchedValue - aux.targetValue) >= 0.05
+                  ? `按步长取整为 ${formatAuxiliaryTargetValue(dispatchedValue, matched.setting.unit ?? aux.unit)}`
+                  : `下发至 ${matched.target.assetName}`
+                : null;
+              return (
+                <div key={`${aux.loopKey}:${aux.capability}`} className="flex flex-col gap-2 px-5 py-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-semibold text-foreground">{loopLabel}</span>
+                    <span className="rounded-md bg-muted px-2 py-0.5 text-[11px] font-medium text-secondary-foreground">
+                      {formatAuxiliaryCapabilityLabel(aux.capability)}
+                    </span>
+                  </div>
+                  <span className="text-2xl leading-[30px] font-semibold tracking-[-0.03em] text-primary tabular-nums">
+                    {formatAuxiliaryTargetValue(aux.targetValue, aux.unit)}
                   </span>
+                  {aux.rationale ? (
+                    <p className="text-xs leading-relaxed text-muted-foreground">{aux.rationale}</p>
+                  ) : null}
+                  <div className="mt-auto pt-2">
+                    {registryState === 'pending' ? (
+                      <Skeleton className="h-8 w-28 rounded-md" />
+                    ) : registryState === 'error' ? (
+                      <span className="text-xs text-muted-foreground">站点资产列表暂时读不到，无法核验控制点</span>
+                    ) : matched && dispatchedValue !== null ? (
+                      auxSent ? (
+                        <Link
+                          to="/operations/control"
+                          search={{ site: siteId, inspect: auxSent.commandId }}
+                          className="flex items-center gap-2 rounded-lg border bg-muted/40 px-3 py-2 text-xs outline-none hover:bg-accent focus-visible:ring-3 focus-visible:ring-ring-soft"
+                        >
+                          <CommandMark status={auxSent.status} />
+                          <span className="flex min-w-0 flex-1 flex-col">
+                            <span className="font-semibold text-foreground">已提交 · {STATUS_PRESENTATION[auxSent.status].label}</span>
+                            <span className="truncate text-muted-foreground">
+                              {matched.target.assetName} → {formatAuxiliaryTargetValue(dispatchedValue, matched.setting.unit ?? aux.unit)}
+                            </span>
+                          </span>
+                          <span className="flex shrink-0 items-center font-medium text-primary">
+                            查看指令<ChevronRight className="size-3.5" aria-hidden="true" />
+                          </span>
+                        </Link>
+                      ) : (
+                        <div className="flex flex-wrap items-center gap-2.5">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            aria-label={`按建议下发${loopLabel}`}
+                            onClick={() => onDispatchAuxiliary(binding)}
+                          >
+                            <Send data-icon="inline-start" />
+                            按建议下发
+                          </Button>
+                          {steppedCaption ? (
+                            <span className="text-xs text-muted-foreground">{steppedCaption}</span>
+                          ) : null}
+                        </div>
+                      )
+                    ) : (
+                      <span className="text-xs text-muted-foreground">当前站点未登记可写控制点，供现场参考</span>
+                    )}
+                  </div>
                 </div>
-                <span className="text-2xl leading-[30px] font-semibold tracking-[-0.03em] text-primary tabular-nums">
-                  {formatAuxiliaryTargetValue(target.targetValue, target.unit)}
-                </span>
-                {target.rationale ? (
-                  <p className="text-xs leading-relaxed text-muted-foreground">{target.rationale}</p>
-                ) : null}
-              </div>
-            ))}
+              );
+            })}
           </div>
         </Panel>
       ) : null}
