@@ -344,11 +344,36 @@ func deltaWindows(arrivals []arrivalRow) ([]deltaWindow, error) {
 		window := &windows[len(windows)-1]
 		window.until = arrival.at
 		window.observations = append(window.observations, arrival.ObservationID)
-		window.tenants = append(window.tenants, arrival.TenantID)
-		window.sites = append(window.sites, arrival.SiteID)
-		window.points = append(window.points, arrival.PointID)
+		window.tenants = appendUnique(window.tenants, arrival.TenantID)
+		window.sites = appendUnique(window.sites, arrival.SiteID)
+		window.points = appendUnique(window.points, arrival.PointID)
 	}
 	return windows, nil
+}
+
+func deduplicateStrings(values []string) []string {
+	if len(values) <= 1 {
+		return values
+	}
+	seen := make(map[string]struct{}, len(values))
+	deduped := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		deduped = append(deduped, value)
+	}
+	return deduped
+}
+
+func appendUnique(values []string, value string) []string {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 // deltas reads each window's deltas. A late arrival's successor can be another window's
@@ -389,7 +414,7 @@ func (reader *Reader) WindowDeltas(ctx context.Context, window energy.DirtyWindo
 	payload, err := reader.query(ctx, "window counter delta query", reader.windowDeltaQuery(), url.Values{
 		"param_tenants": {clickHouseArray([]string{window.TenantID})},
 		"param_sites":   {clickHouseArray([]string{window.SiteID})},
-		"param_points":  {clickHouseArray(window.PointIDs)},
+		"param_points":  {clickHouseArray(deduplicateStrings(window.PointIDs))},
 		"param_since":   {clickHouseTime(window.Start.UTC())},
 		"param_until":   {clickHouseTime(window.End.UTC())},
 	})

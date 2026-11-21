@@ -2053,3 +2053,153 @@ func TestBuildReleaseStagePythonExcludesCachesAndVerifyApplyPythonSolver(t *test
 		t.Fatalf("python solver image layers=%d label=%q, want 7 on base %s", solverLayers, solverLabel, solverRunning)
 	}
 }
+
+func TestApplyBuildsConnectivityWithNonRootSpoolDir(t *testing.T) {
+	bin, store, platform := applyFixture(t)
+	seedImage(t, store, "hvac/energy-api:0.1.0-dev", 12, "")
+	seedImage(t, store, "hvac/connectivity:0.1.0-dev", 12, "")
+
+	release := t.TempDir()
+	for _, dir := range []string{"bins/energy-api", "bins/connectivity", "src/deploy/platform/phase1/cd"} {
+		if err := os.MkdirAll(filepath.Join(release, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files := map[string]string{
+		"REVISION":                  strings.Repeat("c", 40) + "\n",
+		"services.tsv":              "energy-api\thvac/energy-api:0.1.0-dev\tgo\trequired\t./cmd/energy-api\nconnectivity\thvac/connectivity:0.1.0-dev\tgo\trequired\t./cmd/connectivity\n",
+		"bins/healthcheck":          "hc",
+		"bins/energy-api/service":   "api-svc",
+		"bins/connectivity/service": "conn-svc",
+		"src/README":                "tree",
+		"src/deploy/platform/phase1/cd/observability-config.sh": "#!/bin/sh\nexit 0\n",
+		"rollback.sh":              "#!/bin/sh\nexit 0\n",
+		"smoke-release.sh":         "#!/bin/sh\nexit 0\n",
+		"prune-rollback-images.sh": "#!/bin/sh\nexit 0\n",
+		"rebuild-deploy-base.sh":   string(mustRead(t, "rebuild-deploy-base.sh")),
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(release, name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if out, err := exec.Command("tar", append([]string{"-C", filepath.Join(release, "src"), "-cf", filepath.Join(release, "source.tar")}, topLevel(t, filepath.Join(release, "src"))...)...).CombinedOutput(); err != nil {
+		t.Fatalf("tar: %v\n%s", err, out)
+	}
+
+	cmd := exec.Command("bash", "apply-on-server.sh", release)
+	cmd.Env = commandEnv(bin,
+		"DOCKER_STORE="+store,
+		"HVAC_PLATFORM_DIR="+platform,
+		"HVAC_DEPLOY_SCRIPT="+writeExe(t, bin, "restart", "#!/bin/sh\nexit 0\n"),
+		"FAKE_STAMP=20261121T030000Z",
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("apply-on-server.sh: %v\n%s", err, out)
+	}
+
+	connDF := string(mustRead(t, filepath.Join(store, "dockerfiles", "hvac_connectivity_candidate-20261121T030000Z")))
+	if !strings.Contains(connDF, "COPY --chown=65532:65532 spool /var/lib/hvac/connectivity-spool") {
+		t.Fatalf("connectivity Dockerfile missing non-root spool dir copy:\n%s", connDF)
+	}
+	apiDF := string(mustRead(t, filepath.Join(store, "dockerfiles", "hvac_energy-api_candidate-20261121T030000Z")))
+	if strings.Contains(apiDF, "connectivity-spool") {
+		t.Fatalf("non-connectivity Go service must not copy connectivity-spool:\n%s", apiDF)
+	}
+}
+
+func TestDeployScriptChownsExistingConnectivitySpoolVolume(t *testing.T) {
+	revision := "0123456789abcdef0123456789abcdef01234567"
+	for name, tc := range map[string]struct {
+		volumeExists string
+		wantChown    bool
+	}{
+		"volume present": {volumeExists: "1", wantChown: true},
+		"volume absent":  {volumeExists: "0", wantChown: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			platform, bin, log := deployFixture(t, revision)
+			writeExe(t, bin, "docker", `#!/bin/sh
+printf 'docker %s\n' "$*" >> "$CALLS_LOG"
+if [ "$1" = volume ] && [ "$2" = inspect ]; then
+  [ "$MOCK_VOLUME_EXISTS" = 1 ] && exit 0
+  exit 1
+fi
+`)
+			cmd := exec.Command("bash", "deploy.sh")
+			cmd.Env = commandEnv(bin, "HVAC_PLATFORM_DIR="+platform, "CALLS_LOG="+log, "MOCK_VOLUME_EXISTS="+tc.volumeExists)
+			if output, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("deploy.sh: %v\n%s", err, output)
+			}
+			calls := string(mustRead(t, log))
+			wantCmd := "docker run --rm --user 0 --entrypoint chown -v hvac-platform_connectivity-spool:/data postgres:16.4-bookworm -R 65532:65532 /data"
+			gotChown := strings.Contains(calls, wantCmd)
+			if gotChown != tc.wantChown {
+				t.Fatalf("connectivity-spool chown = %v, want %v\ncalls:\n%s", gotChown, tc.wantChown, calls)
+			}
+		})
+	}
+}
+
+func TestDeployScriptRecreatesClickHouseWhenBindMountedXmlDrifts(t *testing.T) {
+	revision := "0123456789abcdef0123456789abcdef01234567"
+	const hostProfile = "<clickhouse><profiles><default><cancel_http_readonly_queries_on_client_close>1</cancel_http_readonly_queries_on_client_close></default></profiles></clickhouse>\n"
+	const staleProfile = "<clickhouse><profiles><default><log_queries_min_type>QUERY_FINISH</log_queries_min_type></default></profiles></clickhouse>\n"
+
+	for name, tc := range map[string]struct {
+		mode             string
+		containerProfile string
+		wantRecreate     bool
+	}{
+		"matching bind-mounted xml": {
+			mode:             "local",
+			containerProfile: hostProfile,
+			wantRecreate:     false,
+		},
+		"stale query-log-profile xml inode after tar extract": {
+			mode:             "local",
+			containerProfile: staleProfile,
+			wantRecreate:     true,
+		},
+		"external clickhouse skips xml check": {
+			mode:             "external",
+			containerProfile: staleProfile,
+			wantRecreate:     false,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			platform, bin, log := deployFixture(t, revision)
+			chDir := filepath.Join(platform, "deploy", "platform", "phase1", "clickhouse")
+			if err := os.MkdirAll(chDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(chDir, "query-log-profile.xml"), []byte(hostProfile), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			writeExe(t, bin, "docker", `#!/bin/sh
+printf 'docker %s\n' "$*" >> "$CALLS_LOG"
+if [ "$1" = exec ] && [ "$3" = cat ]; then
+  case "$4" in
+    /etc/clickhouse-server/users.d/query-log-profile.xml) printf '%s' "$MOCK_CONTAINER_PROFILE" ;;
+  esac
+fi
+`)
+			cmd := exec.Command("bash", "deploy.sh")
+			cmd.Env = commandEnv(bin,
+				"HVAC_PLATFORM_DIR="+platform,
+				"CALLS_LOG="+log,
+				"PHASE1_CLICKHOUSE_MODE="+tc.mode,
+				"MOCK_CONTAINER_PROFILE="+tc.containerProfile,
+			)
+			if output, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("deploy.sh: %v\n%s", err, output)
+			}
+			calls := string(mustRead(t, log))
+			recreateCall := "node scripts/phase1-wsl-compose.mjs --integration up -d --force-recreate --no-deps clickhouse"
+			gotRecreate := strings.Contains(calls, recreateCall)
+			if gotRecreate != tc.wantRecreate {
+				t.Fatalf("recreate clickhouse = %v, want %v\ncalls:\n%s", gotRecreate, tc.wantRecreate, calls)
+			}
+		})
+	}
+}

@@ -221,6 +221,12 @@ LABEL ${base_label}=${base_id}
 COPY --chown=65532:65532 service /service
 COPY --chown=65532:65532 healthcheck /healthcheck
 EOF
+      if [[ "$service" == connectivity ]]; then
+        mkdir -p "$context/spool"
+        cat >> "$context/Dockerfile" <<'EOF'
+COPY --chown=65532:65532 spool /var/lib/hvac/connectivity-spool
+EOF
+      fi
       ;;
     web)
       if [[ ! -f "$release/web/dist/index.html" || ! -f "$release/web/nginx.conf" ]]; then
