@@ -101,7 +101,9 @@ SELECT EXISTS (
 			err = transaction.QueryRow(ctx, `
 SELECT l.id::text, l.armed_by::text, l.expires_at, l.allowed_capabilities,
        l.max_setpoint_step_c, l.supply_temp_min_c, l.supply_temp_max_c, l.max_commands_per_hour,
-       l.manual_backoff_until, l.execution_mode
+       l.manual_backoff_until, l.execution_mode,
+       l.pump_freq_min_hz, l.pump_freq_max_hz, l.max_freq_step_hz, l.freq_deadband_hz,
+       l.fan_speed_min_pct, l.fan_speed_max_pct, l.max_fan_step_pct, l.fan_deadband_pct
 FROM core_registry.optimization_execution_monitors_v1 AS m
 JOIN core_registry.site_auto_control_leases_v1 AS l
   ON l.tenant_id = m.tenant_id AND l.site_id = m.site_id AND l.id = m.lease_id
@@ -116,6 +118,8 @@ LIMIT 1
 				&lease.ID, &lease.ArmedBy, &lease.ExpiresAt, &lease.AllowedCapabilities,
 				&lease.MaxSetpointStepC, &lease.SupplyTempMinC, &lease.SupplyTempMaxC, &lease.MaxCommandsPerHour,
 				&lease.ManualBackoffUntil, &lease.ExecutionMode,
+				&lease.PumpFreqMinHz, &lease.PumpFreqMaxHz, &lease.MaxFreqStepHz, &lease.FreqDeadbandHz,
+				&lease.FanSpeedMinPct, &lease.FanSpeedMaxPct, &lease.MaxFanStepPct, &lease.FanDeadbandPct,
 			)
 			if err == nil {
 				result.MatchingObservingRollback = true
@@ -124,7 +128,9 @@ LIMIT 1
 			err = transaction.QueryRow(ctx, `
 SELECT l.id::text, l.armed_by::text, l.expires_at, l.allowed_capabilities,
        l.max_setpoint_step_c, l.supply_temp_min_c, l.supply_temp_max_c, l.max_commands_per_hour,
-       l.manual_backoff_until, l.execution_mode
+       l.manual_backoff_until, l.execution_mode,
+       l.pump_freq_min_hz, l.pump_freq_max_hz, l.max_freq_step_hz, l.freq_deadband_hz,
+       l.fan_speed_min_pct, l.fan_speed_max_pct, l.max_fan_step_pct, l.fan_deadband_pct
 FROM core_registry.site_auto_control_leases_v1 AS l
 WHERE l.tenant_id = $1::uuid AND l.site_id = $2::uuid
   AND l.status = 'ACTIVE' AND l.expires_at > $3
@@ -134,6 +140,8 @@ LIMIT 1
 				&lease.ID, &lease.ArmedBy, &lease.ExpiresAt, &lease.AllowedCapabilities,
 				&lease.MaxSetpointStepC, &lease.SupplyTempMinC, &lease.SupplyTempMaxC, &lease.MaxCommandsPerHour,
 				&lease.ManualBackoffUntil, &lease.ExecutionMode,
+				&lease.PumpFreqMinHz, &lease.PumpFreqMaxHz, &lease.MaxFreqStepHz, &lease.FreqDeadbandHz,
+				&lease.FanSpeedMinPct, &lease.FanSpeedMaxPct, &lease.MaxFanStepPct, &lease.FanDeadbandPct,
 			)
 		}
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {

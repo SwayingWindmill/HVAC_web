@@ -52,12 +52,15 @@ import {
   formatGuardrailVerdict,
   formatMonitorDecisionTrace,
   formatMonitorExecutionMode,
+  formatMonitorLoopLabel,
+  formatMonitorNumericValue,
   initialArmLeaseValues,
   LEASE_STATUS_PRESENTATION,
   MONITOR_STATUS_PRESENTATION,
   resolveActiveLeaseBackoff,
   resolveAutoControlExecutionMode,
   resolveMonitorExecutionMode,
+  resolveMonitorUnit,
   SELECTABLE_LEASE_CAPABILITIES,
   validateArmLeaseForm,
   type ArmLeaseFieldErrors,
@@ -69,10 +72,6 @@ function guardImeEnter(event: KeyboardEvent<HTMLInputElement>) {
   if (event.key === 'Enter' && (event.nativeEvent.isComposing || event.keyCode === 229)) {
     event.preventDefault();
   }
-}
-
-function formatTempC(value: number | undefined): string {
-  return value === undefined ? '暂无' : `${formatDecimal(value, 1)} °C`;
 }
 
 function NumericField({
@@ -232,6 +231,9 @@ function ArmLeaseForm({
     }
   };
 
+  const hasFrequencyCap = values.allowedCapabilities.includes('SET_FREQUENCY');
+  const hasFanSpeedCap = values.allowedCapabilities.includes('SET_FAN_SPEED');
+
   const handleBlur = (field: ArmLeaseFieldName) => {
     setTouched((prev) => ({ ...prev, [field]: true }));
     const nextValidation = validateArmLeaseForm(values, { includeSubmitOnly: field === 'reason' || field === 'verificationCode' });
@@ -239,6 +241,8 @@ function ArmLeaseForm({
       ...prev,
       [field]: nextValidation[field],
       ...(field === 'supplyTempMinC' ? { supplyTempMaxC: touched.supplyTempMaxC ? nextValidation.supplyTempMaxC : prev.supplyTempMaxC } : {}),
+      ...(field === 'pumpFreqMinHz' ? { pumpFreqMaxHz: touched.pumpFreqMaxHz ? nextValidation.pumpFreqMaxHz : prev.pumpFreqMaxHz } : {}),
+      ...(field === 'fanSpeedMinPct' ? { fanSpeedMaxPct: touched.fanSpeedMaxPct ? nextValidation.fanSpeedMaxPct : prev.fanSpeedMaxPct } : {}),
     }));
   };
 
@@ -249,8 +253,19 @@ function ArmLeaseForm({
     setTouched((prev) => ({ ...prev, allowedCapabilities: true }));
     const nextValues = { ...values, allowedCapabilities: next };
     setValues(nextValues);
-    const nextValidation = validateArmLeaseForm(nextValues);
-    setFieldErrors((prev) => ({ ...prev, allowedCapabilities: nextValidation.allowedCapabilities }));
+    const nextValidation = validateArmLeaseForm(nextValues, { includeSubmitOnly: Boolean(touched.reason || touched.verificationCode) });
+    setFieldErrors((prev) => ({
+      ...prev,
+      allowedCapabilities: nextValidation.allowedCapabilities,
+      pumpFreqMinHz: nextValidation.pumpFreqMinHz,
+      pumpFreqMaxHz: nextValidation.pumpFreqMaxHz,
+      maxFreqStepHz: nextValidation.maxFreqStepHz,
+      freqDeadbandHz: nextValidation.freqDeadbandHz,
+      fanSpeedMinPct: nextValidation.fanSpeedMinPct,
+      fanSpeedMaxPct: nextValidation.fanSpeedMaxPct,
+      maxFanStepPct: nextValidation.maxFanStepPct,
+      fanDeadbandPct: nextValidation.fanDeadbandPct,
+    }));
   };
 
   const handleSubmit = () => {
@@ -267,6 +282,14 @@ function ArmLeaseForm({
         zoneTempMaxC: true,
         minRunningChillers: true,
         maxCommandsPerHour: true,
+        pumpFreqMinHz: hasFrequencyCap,
+        pumpFreqMaxHz: hasFrequencyCap,
+        maxFreqStepHz: hasFrequencyCap,
+        freqDeadbandHz: hasFrequencyCap,
+        fanSpeedMinPct: hasFanSpeedCap,
+        fanSpeedMaxPct: hasFanSpeedCap,
+        maxFanStepPct: hasFanSpeedCap,
+        fanDeadbandPct: hasFanSpeedCap,
         allowedCapabilities: true,
         reason: true,
         verificationCode: true,
@@ -441,6 +464,110 @@ function ArmLeaseForm({
           <p role="alert" className="text-xs text-destructive-text">{fieldErrors.allowedCapabilities}</p>
         ) : null}
       </fieldset>
+
+      {hasFrequencyCap ? (
+        <fieldset className="flex flex-col gap-2 rounded-lg border border-divider bg-muted/30 p-3">
+          <legend className="px-1 text-xs font-medium text-foreground">水泵变频边界 (Hz)</legend>
+          <div className="grid grid-cols-1 gap-x-3 gap-y-2 sm:grid-cols-2">
+            <NumericField
+              id={`${baseId}-pump-freq-min`}
+              label="水泵下限频率"
+              unit="Hz (20.0 至 50.0)"
+              min={20}
+              step="0.5"
+              value={values.pumpFreqMinHz}
+              error={fieldErrors.pumpFreqMinHz}
+              onChange={(next) => updateField('pumpFreqMinHz', next)}
+              onBlur={() => handleBlur('pumpFreqMinHz')}
+            />
+            <NumericField
+              id={`${baseId}-pump-freq-max`}
+              label="水泵上限频率"
+              unit="Hz (25.0 至 60.0)"
+              min={25}
+              step="0.5"
+              value={values.pumpFreqMaxHz}
+              error={fieldErrors.pumpFreqMaxHz}
+              onChange={(next) => updateField('pumpFreqMaxHz', next)}
+              onBlur={() => handleBlur('pumpFreqMaxHz')}
+            />
+            <NumericField
+              id={`${baseId}-pump-freq-step`}
+              label="单次调频步长"
+              unit="Hz (不超过 10.0)"
+              min={0.1}
+              step="0.5"
+              value={values.maxFreqStepHz}
+              error={fieldErrors.maxFreqStepHz}
+              onChange={(next) => updateField('maxFreqStepHz', next)}
+              onBlur={() => handleBlur('maxFreqStepHz')}
+            />
+            <NumericField
+              id={`${baseId}-pump-freq-deadband`}
+              label="调频防抖死区"
+              unit="Hz (0.1 至 5.0)"
+              min={0.1}
+              step="0.1"
+              value={values.freqDeadbandHz}
+              error={fieldErrors.freqDeadbandHz}
+              onChange={(next) => updateField('freqDeadbandHz', next)}
+              onBlur={() => handleBlur('freqDeadbandHz')}
+            />
+          </div>
+        </fieldset>
+      ) : null}
+
+      {hasFanSpeedCap ? (
+        <fieldset className="flex flex-col gap-2 rounded-lg border border-divider bg-muted/30 p-3">
+          <legend className="px-1 text-xs font-medium text-foreground">冷却塔风机边界 (%)</legend>
+          <div className="grid grid-cols-1 gap-x-3 gap-y-2 sm:grid-cols-2">
+            <NumericField
+              id={`${baseId}-fan-speed-min`}
+              label="风机下限转速"
+              unit="% (15 至 100)"
+              min={15}
+              step="1"
+              value={values.fanSpeedMinPct}
+              error={fieldErrors.fanSpeedMinPct}
+              onChange={(next) => updateField('fanSpeedMinPct', next)}
+              onBlur={() => handleBlur('fanSpeedMinPct')}
+            />
+            <NumericField
+              id={`${baseId}-fan-speed-max`}
+              label="风机上限转速"
+              unit="% (20 至 100)"
+              min={20}
+              step="1"
+              value={values.fanSpeedMaxPct}
+              error={fieldErrors.fanSpeedMaxPct}
+              onChange={(next) => updateField('fanSpeedMaxPct', next)}
+              onBlur={() => handleBlur('fanSpeedMaxPct')}
+            />
+            <NumericField
+              id={`${baseId}-fan-step`}
+              label="单次调速步长"
+              unit="% (不超过 25)"
+              min={0.5}
+              step="1"
+              value={values.maxFanStepPct}
+              error={fieldErrors.maxFanStepPct}
+              onChange={(next) => updateField('maxFanStepPct', next)}
+              onBlur={() => handleBlur('maxFanStepPct')}
+            />
+            <NumericField
+              id={`${baseId}-fan-deadband`}
+              label="调速防抖死区"
+              unit="% (0.5 至 15.0)"
+              min={0.5}
+              step="0.5"
+              value={values.fanDeadbandPct}
+              error={fieldErrors.fanDeadbandPct}
+              onChange={(next) => updateField('fanDeadbandPct', next)}
+              onBlur={() => handleBlur('fanDeadbandPct')}
+            />
+          </div>
+        </fieldset>
+      ) : null}
 
       <div className="flex flex-col gap-1.5">
         <ReasonField
@@ -642,15 +769,20 @@ export function AutoControlPanel({
       id: 'window',
       header: '观察窗口',
       cell: ({ row }) => (
-        <div className="flex flex-col gap-0.5 font-mono text-xs tabular-nums">
+        <div className="flex flex-col gap-1 font-mono text-xs tabular-nums">
           <span className="text-foreground">{formatCompactTime(row.original.startedAt, timeZone)} 至 {formatCompactTime(row.original.windowEndsAt, timeZone)}</span>
-          <span className="text-muted-foreground">{formatAutoControlCapability(row.original.targetCapability)}</span>
+          <div className="flex flex-wrap items-center gap-1.5 font-sans">
+            <Badge variant="secondary">
+              {formatMonitorLoopLabel(row.original.loopKey, row.original.targetCapability)}
+            </Badge>
+            <span className="text-muted-foreground">{formatAutoControlCapability(row.original.targetCapability)}</span>
+          </div>
         </div>
       ),
     },
     {
       id: 'temperatures',
-      header: '供水温度变化',
+      header: '设定值变化',
       cell: ({ row }) => {
         const {
           baselineSupplyTempC,
@@ -659,6 +791,7 @@ export function AutoControlPanel({
           rawRecommendedValue,
           clampedValue,
         } = row.original;
+        const unit = resolveMonitorUnit(row.original);
         const rawVal = typeof rawRecommendedValue === 'number' ? rawRecommendedValue : undefined;
         const clampedVal = typeof clampedValue === 'number' ? clampedValue : undefined;
         const hasClampedDiff =
@@ -677,22 +810,22 @@ export function AutoControlPanel({
         return (
           <div className="flex flex-col gap-0.5 text-xs tabular-nums">
             <span className="font-medium text-foreground">
-              {formatTempC(baselineSupplyTempC)} → {formatTempC(appliedSupplyTempC)}
+              {formatMonitorNumericValue(baselineSupplyTempC, unit)} → {formatMonitorNumericValue(appliedSupplyTempC, unit)}
             </span>
             <span className="text-muted-foreground">
-              回退目标 {formatTempC(restoreSupplyTempC)}
+              回退目标 {formatMonitorNumericValue(restoreSupplyTempC, unit)}
             </span>
             {hasClampedDiff ? (
               <span className="text-warning-text">
-                原建议 {formatDecimal(rawVal, 1)} °C，限幅为 {formatDecimal(clampedVal, 1)} °C
+                原建议 {formatMonitorNumericValue(rawVal, unit)}，限幅为 {formatMonitorNumericValue(clampedVal, unit)}
               </span>
             ) : showClampedOnly ? (
               <span className="text-muted-foreground">
-                限幅目标 {formatDecimal(clampedVal, 1)} °C
+                限幅目标 {formatMonitorNumericValue(clampedVal, unit)}
               </span>
             ) : showRawOnly ? (
               <span className="text-muted-foreground">
-                原始建议 {formatDecimal(rawVal, 1)} °C
+                原始建议 {formatMonitorNumericValue(rawVal, unit)}
               </span>
             ) : null}
           </div>
@@ -702,15 +835,22 @@ export function AutoControlPanel({
     {
       id: 'limits',
       header: '租约安全边界',
-      cell: ({ row }) => (
-        <span className="text-xs text-muted-foreground tabular-nums">
-          {row.original.supplyTempMinC !== undefined
-            ? `供水 ${formatDecimal(row.original.supplyTempMinC, 1)} 至 ${formatDecimal(row.original.supplyTempMaxC, 1)} °C`
-            : `供水 ≤ ${formatDecimal(row.original.supplyTempMaxC, 1)} °C`}
-          {' · '}
-          室内 ≤ {formatDecimal(row.original.zoneTempMaxC, 1)} °C
-        </span>
-      ),
+      cell: ({ row }) => {
+        const unit = resolveMonitorUnit(row.original);
+        const loopSubject = unit === 'Hz' ? '频率' : unit === '%' ? '转速' : '供水';
+        const suffix = unit === '%' ? '%' : unit === 'Hz' ? ' Hz' : ' °C';
+        const minVal = row.original.supplyTempMinC;
+        const maxText = `${formatDecimal(row.original.supplyTempMaxC, 1)}${suffix}`;
+        return (
+          <span className="text-xs text-muted-foreground tabular-nums">
+            {minVal !== undefined
+              ? `${loopSubject} ${formatDecimal(minVal, 1)} 至 ${maxText}`
+              : `${loopSubject} ≤ ${maxText}`}
+            {' · '}
+            室内 ≤ {formatDecimal(row.original.zoneTempMaxC, 1)} °C
+          </span>
+        );
+      },
     },
     {
       id: 'status',
@@ -951,6 +1091,26 @@ export function AutoControlPanel({
               >
                 {`${activeLease.maxCommandsPerHour} 次`}
               </FactTile>
+              {(activeLease.allowedCapabilities.includes('SET_FREQUENCY')
+                || activeLease.pumpFreqMinHz !== undefined
+                || activeLease.pumpFreqMaxHz !== undefined) ? (
+                <FactTile
+                  label="水泵变频边界"
+                  valueClassName="text-sm font-semibold text-foreground tabular-nums"
+                >
+                  {`${formatDecimal(activeLease.pumpFreqMinHz ?? 28.0, 1)} 至 ${formatDecimal(activeLease.pumpFreqMaxHz ?? 50.0, 1)} Hz · 步长 ≤ ${formatDecimal(activeLease.maxFreqStepHz ?? 2.5, 1)} Hz`}
+                </FactTile>
+              ) : null}
+              {(activeLease.allowedCapabilities.includes('SET_FAN_SPEED')
+                || activeLease.fanSpeedMinPct !== undefined
+                || activeLease.fanSpeedMaxPct !== undefined) ? (
+                <FactTile
+                  label="风机转速边界"
+                  valueClassName="text-sm font-semibold text-foreground tabular-nums"
+                >
+                  {`${formatDecimal(activeLease.fanSpeedMinPct ?? 25.0, 1)}% 至 ${formatDecimal(activeLease.fanSpeedMaxPct ?? 100.0, 1)}% · 步长 ≤ ${formatDecimal(activeLease.maxFanStepPct ?? 10.0, 1)}%`}
+                </FactTile>
+              ) : null}
               <div className="col-span-2 sm:col-span-3 lg:col-span-2">
                 <FactTile
                   label="允许能力"

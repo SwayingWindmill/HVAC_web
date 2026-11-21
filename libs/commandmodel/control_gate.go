@@ -228,7 +228,9 @@ func AllowsEmergencyPreconditionBypass(
 	}
 	return priorityTier == PriorityProtectionRule &&
 		commandSource == SourceProtectionRule &&
-		capability == CapabilitySetChilledWaterTemperatureSetpoint &&
+		(capability == CapabilitySetChilledWaterTemperatureSetpoint ||
+			capability == CapabilitySetFrequency ||
+			capability == CapabilitySetFanSpeed) &&
 		strings.HasPrefix(idempotencyKey, "auto-rollback:")
 }
 

@@ -733,3 +733,68 @@ func TestControlAuthorityServesTopologyUsesExplicitEdgesNotInterlockChecks(t *te
 		t.Fatalf("header pump served=%v, want [%s %s]", graphTopo.servedChillersByAux[hdrPumpID], caChillerID, chillerBID)
 	}
 }
+
+func TestControlAuthorityChillerPostStopPumpCooldown(t *testing.T) {
+	now := time.Date(2026, 11, 21, 10, 0, 0, 0, time.UTC)
+	clk := now
+	h, err := NewControlAuthorityForTest(func() time.Time { return clk })
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseH, op := seedPlantHarness(t, now)
+	h.IAM.AllowedSites = baseH.IAM.AllowedSites
+	h.Twin.BoundDevices = baseH.Twin.BoundDevices
+	h.Twin.Assets = baseH.Twin.Assets
+	h.Twin.Models = baseH.Twin.Models
+	op.StepUpTOTPVerified = true
+
+	// Chiller is STOPPED and served chilled-water pump is RUNNING.
+	h.Live.Set(caChillerDev, "run_state", healthyTextObs(clk, "STOPPED", 31), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000061")
+	h.Live.Set(caPumpDev, "run_state", healthyTextObs(clk, "RUNNING", 32), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000062")
+
+	// 1. In-flight STOP command on served chiller blocks stopping the pump.
+	inflightStopID := seedCommandHistoryEntry(t, h, op, caChillerDev, caStopPt, commandmodel.CapabilityStop, commandmodel.IntentQueued, clk, "seed-chiller-queued-stop")
+	_, err = h.Authority.SubmitOperatorCommand(context.Background(), op, SubmitOperatorCommandInput{
+		AssetID: caPumpID, CommandPointID: caPumpStopPt, Parameters: commandmodel.CommandParameters{}, IdempotencyKey: "pump-stop-inflight-chiller-stop",
+	})
+	var ce *ControlError
+	if !errors.As(err, &ce) || ce.HTTPStatus != http.StatusConflict || ce.Code != "CHILLER_POST_STOP_COOLDOWN_ACTIVE" {
+		t.Fatalf("expected 409 CHILLER_POST_STOP_COOLDOWN_ACTIVE (in-flight chiller STOP), got %v", err)
+	}
+	if _, cancelErr := h.Authority.CancelOperatorCommand(context.Background(), op, inflightStopID, "clear queued stop"); cancelErr != nil {
+		t.Fatalf("cancel queued stop: %v", cancelErr)
+	}
+
+	// 2. Succeeded chiller STOP 2m ago blocks stopping served pump inside 5-minute cooldown.
+	seedCommandHistoryEntry(t, h, op, caChillerDev, caStopPt, commandmodel.CapabilityStop, commandmodel.IntentSucceeded, clk.Add(-2*time.Minute), "seed-chiller-recent-stop")
+	_, err = h.Authority.SubmitOperatorCommand(context.Background(), op, SubmitOperatorCommandInput{
+		AssetID: caPumpID, CommandPointID: caPumpStopPt, Parameters: commandmodel.CommandParameters{}, IdempotencyKey: "pump-stop-cooldown-block",
+	})
+	ce = nil
+	if !errors.As(err, &ce) || ce.HTTPStatus != http.StatusConflict || ce.Code != "CHILLER_POST_STOP_COOLDOWN_ACTIVE" || !strings.Contains(ce.Detail, "5-minute post-stop cool-down") {
+		t.Fatalf("expected 409 CHILLER_POST_STOP_COOLDOWN_ACTIVE (5-minute cooldown), got %v", err)
+	}
+
+	// 3. Non-pump auxiliary (COOLING_TOWER) or detached pump is not blocked by pump post-stop cooldown.
+	if err := checkChillerPostStopPumpCooldown(
+		shutdownTopology{},
+		AssetDTO{ID: "tower-1", Code: "CT-1", AssetType: "COOLING_TOWER"},
+		[]string{caChillerID},
+		[]commandmodel.CommandIntent{{DeviceID: caChillerDev, Capability: commandmodel.CapabilityStop, Status: commandmodel.IntentSucceeded, UpdatedAt: clk.Add(-1 * time.Minute)}},
+		clk,
+	); err != nil {
+		t.Fatalf("expected non-pump cooling tower not to be blocked by pump post-stop cooldown, got %v", err)
+	}
+
+	// 4. Advancing past 5 minutes unlocks pump STOP cleanly.
+	clk = clk.Add(4 * time.Minute)
+	h.Live.Set(caChillerDev, "run_state", healthyTextObs(clk, "STOPPED", 33), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000063")
+	h.Live.Set(caPumpDev, "run_state", healthyTextObs(clk, "RUNNING", 34), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000064")
+	op.IssuedAt = clk
+	op.ExpiresAt = clk.Add(5 * time.Minute)
+	if _, err := h.Authority.SubmitOperatorCommand(context.Background(), op, SubmitOperatorCommandInput{
+		AssetID: caPumpID, CommandPointID: caPumpStopPt, Parameters: commandmodel.CommandParameters{}, IdempotencyKey: "pump-stop-after-cooldown",
+	}); err != nil {
+		t.Fatalf("expected pump STOP to succeed after 5-minute chiller post-stop cooldown, got %v", err)
+	}
+}
