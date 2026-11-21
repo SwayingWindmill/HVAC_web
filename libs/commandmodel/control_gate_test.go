@@ -362,15 +362,21 @@ func TestEvaluateControlGatePreDispatchStepDeltaRisk(t *testing.T) {
 func TestAutoRollbackEmergencyPreconditionBypassScope(t *testing.T) {
 	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
 
-	t.Run("AllowsEmergencyPreconditionBypass only permits scoped auto-rollback setpoint", func(t *testing.T) {
-		if !AllowsEmergencyPreconditionBypass(
+	t.Run("AllowsEmergencyPreconditionBypass only permits scoped auto-rollback setpoint and auxiliary loops", func(t *testing.T) {
+		for _, cap := range []Capability{
 			CapabilitySetChilledWaterTemperatureSetpoint,
-			PriorityProtectionRule,
-			SourceProtectionRule,
-			"auto-rollback:action-1",
-			"revert setpoint",
-		) {
-			t.Fatalf("expected scoped auto-rollback bypass to be allowed")
+			CapabilitySetFrequency,
+			CapabilitySetFanSpeed,
+		} {
+			if !AllowsEmergencyPreconditionBypass(
+				cap,
+				PriorityProtectionRule,
+				SourceProtectionRule,
+				"auto-rollback:action-1",
+				"revert loop",
+			) {
+				t.Fatalf("expected scoped auto-rollback bypass to be allowed for %s", cap)
+			}
 		}
 		cases := []struct {
 			name string
@@ -380,7 +386,7 @@ func TestAutoRollbackEmergencyPreconditionBypassScope(t *testing.T) {
 			idem string
 			rsn  string
 		}{
-			{"wrong capability", CapabilitySetFrequency, PriorityProtectionRule, SourceProtectionRule, "auto-rollback:1", "reason"},
+			{"wrong capability", CapabilitySetLoadLimit, PriorityProtectionRule, SourceProtectionRule, "auto-rollback:1", "reason"},
 			{"wrong tier", CapabilitySetChilledWaterTemperatureSetpoint, PriorityAIOptimization, SourceProtectionRule, "auto-rollback:1", "reason"},
 			{"wrong source", CapabilitySetChilledWaterTemperatureSetpoint, PriorityProtectionRule, SourceOptimization, "auto-rollback:1", "reason"},
 			{"missing prefix", CapabilitySetChilledWaterTemperatureSetpoint, PriorityProtectionRule, SourceProtectionRule, "ai-action:1", "reason"},

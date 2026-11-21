@@ -14,16 +14,26 @@ import (
 )
 
 const (
-	chillerStartupBlindWindow  = 6 * time.Minute
-	chillerMinRunDwell         = 20 * time.Minute
-	chillerMinOffDwell         = 15 * time.Minute
-	chillerStartWindowDuration = 60 * time.Minute
-	chillerMaxStartsPerHour    = 2
+	chillerStartupBlindWindow   = 6 * time.Minute
+	chillerPostStopPumpCooldown = 5 * time.Minute
+	chillerMinRunDwell          = 20 * time.Minute
+	chillerMinOffDwell          = 15 * time.Minute
+	chillerStartWindowDuration  = 60 * time.Minute
+	chillerMaxStartsPerHour     = 2
 )
 
 func isStartupBlindWindowAuxType(assetType string) bool {
 	switch strings.ToUpper(strings.TrimSpace(assetType)) {
 	case planttwin.AssetTypeChilledWaterPump, planttwin.AssetTypeCoolingWaterPump, planttwin.AssetTypeCoolingTower:
+		return true
+	default:
+		return false
+	}
+}
+
+func isPostStopCooldownPumpType(assetType string) bool {
+	switch strings.ToUpper(strings.TrimSpace(assetType)) {
+	case planttwin.AssetTypeChilledWaterPump, planttwin.AssetTypeCoolingWaterPump:
 		return true
 	default:
 		return false
@@ -73,7 +83,11 @@ func (a *ControlAuthority) enforcePlantOperationalGuards(
 	topo := resolveSiteControlTopology(model, now)
 
 	if isAuxStop {
-		if err := checkAuxStopStartupBlindWindow(topo, target.asset, topo.servedChillersByAux[target.asset.ID], commands, now); err != nil {
+		servedChillers := topo.servedChillersByAux[target.asset.ID]
+		if err := checkAuxStopStartupBlindWindow(topo, target.asset, servedChillers, commands, now); err != nil {
+			return err
+		}
+		if err := checkChillerPostStopPumpCooldown(topo, target.asset, servedChillers, commands, now); err != nil {
 			return err
 		}
 	}
@@ -97,13 +111,7 @@ func (a *ControlAuthority) enforcePlantOperationalGuards(
 	return nil
 }
 
-func checkAuxStopStartupBlindWindow(
-	topo shutdownTopology,
-	aux AssetDTO,
-	servedChillerIDs []string,
-	commands []commandmodel.CommandIntent,
-	now time.Time,
-) error {
+func buildChillerLabelMap(topo shutdownTopology) map[string]string {
 	chillerLabels := make(map[string]string, len(topo.chillers))
 	for _, ch := range topo.chillers {
 		label := strings.TrimSpace(ch.Code)
@@ -112,6 +120,17 @@ func checkAuxStopStartupBlindWindow(
 		}
 		chillerLabels[ch.ID] = label
 	}
+	return chillerLabels
+}
+
+func checkAuxStopStartupBlindWindow(
+	topo shutdownTopology,
+	aux AssetDTO,
+	servedChillerIDs []string,
+	commands []commandmodel.CommandIntent,
+	now time.Time,
+) error {
+	chillerLabels := buildChillerLabelMap(topo)
 	for _, chID := range servedChillerIDs {
 		chillerDevices := topo.boundDevicesByAsset[chID]
 		if len(chillerDevices) == 0 {
@@ -166,6 +185,77 @@ func checkAuxStopStartupBlindWindow(
 				Code:       "COMMAND_INTERLOCK_BLOCKED",
 				Title:      "Command Interlock Blocked",
 				Detail:     fmt.Sprintf("Cannot stop auxiliary %s within the 6-minute startup pulse and meter blind window after chiller %s started (%s remaining).", aux.Code, chillerLabel, remaining),
+			}
+		}
+	}
+	return nil
+}
+
+func checkChillerPostStopPumpCooldown(
+	topo shutdownTopology,
+	aux AssetDTO,
+	servedChillerIDs []string,
+	commands []commandmodel.CommandIntent,
+	now time.Time,
+) error {
+	if !isPostStopCooldownPumpType(aux.AssetType) {
+		return nil
+	}
+	chillerLabels := buildChillerLabelMap(topo)
+	for _, chID := range servedChillerIDs {
+		chillerDevices := topo.boundDevicesByAsset[chID]
+		if len(chillerDevices) == 0 {
+			continue
+		}
+		chillerLabel := chillerLabels[chID]
+		if chillerLabel == "" {
+			chillerLabel = chID
+		}
+		var latestSucceededStop time.Time
+		hasSucceededStop := false
+		var latestSucceededStart time.Time
+		hasSucceededStart := false
+
+		for _, cmd := range commands {
+			if !containsString(chillerDevices, cmd.DeviceID) {
+				continue
+			}
+			if isStopCapability(cmd.Capability) {
+				if isNonTerminalCommandStatus(cmd.Status) {
+					return &ControlError{
+						HTTPStatus: http.StatusConflict,
+						Code:       "CHILLER_POST_STOP_COOLDOWN_ACTIVE",
+						Title:      "Chiller Post-Stop Pump Cool-Down Active",
+						Detail:     fmt.Sprintf("Cannot stop pump %s while served chiller %s has a %s command (%s) in progress.", aux.Code, chillerLabel, cmd.Capability, cmd.Status),
+					}
+				}
+				if cmd.Status == commandmodel.IntentSucceeded {
+					if !hasSucceededStop || cmd.UpdatedAt.After(latestSucceededStop) {
+						latestSucceededStop = cmd.UpdatedAt
+						hasSucceededStop = true
+					}
+				}
+			} else if isStartCapability(cmd.Capability) && cmd.Status == commandmodel.IntentSucceeded {
+				if !hasSucceededStart || cmd.UpdatedAt.After(latestSucceededStart) {
+					latestSucceededStart = cmd.UpdatedAt
+					hasSucceededStart = true
+				}
+			}
+		}
+
+		if hasSucceededStop && (!hasSucceededStart || !latestSucceededStart.After(latestSucceededStop)) {
+			elapsed := now.Sub(latestSucceededStop)
+			if elapsed >= 0 && elapsed < chillerPostStopPumpCooldown {
+				remaining := (chillerPostStopPumpCooldown - elapsed).Round(time.Second)
+				if remaining < time.Second {
+					remaining = time.Second
+				}
+				return &ControlError{
+					HTTPStatus: http.StatusConflict,
+					Code:       "CHILLER_POST_STOP_COOLDOWN_ACTIVE",
+					Title:      "Chiller Post-Stop Pump Cool-Down Active",
+					Detail:     fmt.Sprintf("Cannot stop pump %s within the 5-minute post-stop cool-down interlock after chiller %s stopped (%s remaining).", aux.Code, chillerLabel, remaining),
+				}
 			}
 		}
 	}

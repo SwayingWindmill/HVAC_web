@@ -157,6 +157,7 @@ func (fix *registryCSRFFixture) writeCases() []registryWriteCase {
 		{name: "updateSiteAsset", method: http.MethodPatch, path: sitePrefix + "/assets/" + fix.assetID, template: "/api/v1/sites/{siteId}/assets/{assetId}", expectedStatus: http.StatusOK},
 		{name: "createSiteDevice", method: http.MethodPost, path: sitePrefix + "/devices", template: "/api/v1/sites/{siteId}/devices", expectedStatus: http.StatusCreated},
 		{name: "updateSiteDevice", method: http.MethodPatch, path: sitePrefix + "/devices/" + fix.deviceID, template: "/api/v1/sites/{siteId}/devices/{deviceId}", expectedStatus: http.StatusOK},
+		{name: "replaceDeviceHardware", method: http.MethodPost, path: sitePrefix + "/devices/" + fix.deviceID + "/replace-hardware", template: "/api/v1/sites/{siteId}/devices/{deviceId}/replace-hardware", expectedStatus: http.StatusCreated},
 		{name: "createSiteSensor", method: http.MethodPost, path: sitePrefix + "/sensors", template: "/api/v1/sites/{siteId}/sensors", expectedStatus: http.StatusCreated},
 		{name: "updateSiteSensor", method: http.MethodPatch, path: sitePrefix + "/sensors/" + fix.sensorID, template: "/api/v1/sites/{siteId}/sensors/{sensorId}", expectedStatus: http.StatusOK},
 		{name: "createSitePoint", method: http.MethodPost, path: sitePrefix + "/points", template: "/api/v1/sites/{siteId}/points", expectedStatus: http.StatusCreated},
@@ -187,8 +188,8 @@ func assertRegistryProblem(t *testing.T, recorder *httptest.ResponseRecorder, wa
 func TestRegistryWriteRoutesEnforceOriginAndCSRF(t *testing.T) {
 	fix := newRegistryCSRFFixture(t)
 	cases := fix.writeCases()
-	if len(cases) != 18 {
-		t.Fatalf("expected 18 Registry write cases, got %d", len(cases))
+	if len(cases) != 19 {
+		t.Fatalf("expected 19 Registry write cases, got %d", len(cases))
 	}
 
 	serve := func(method, path string, configure func(*http.Request)) *httptest.ResponseRecorder {
@@ -280,9 +281,11 @@ func TestRegistryWriteRoutesInvariantNoCSRFBypass(t *testing.T) {
 		"{deviceId}", fix.deviceID,
 		"{sensorId}", fix.sensorID,
 		"{pointId}", registryTestPointID,
+		"{date}", "2026-10-01",
+		"{versionId}", "018f3e00-9000-7000-8000-000000000001",
 	)
 
-	expectedByKey := make(map[string]registryWriteCase, 18)
+	expectedByKey := make(map[string]registryWriteCase, 19)
 	for _, tc := range fix.writeCases() {
 		expectedByKey[tc.method+" "+tc.template] = tc
 	}
@@ -296,8 +299,9 @@ func TestRegistryWriteRoutesInvariantNoCSRFBypass(t *testing.T) {
 				_, isSchedule := matchPublicOperatingScheduleRoute(entry.Method, concretePath)
 				_, isBilling := matchPublicElectricityBillingRoute(entry.Method, concretePath)
 				_, isAccountingRecalc := matchPublicAccountingRecalcRoute(entry.Method, concretePath)
+				_, isAccountingConfig := matchPublicAccountingConfigRoute(entry.Method, concretePath)
 				_, isIntelligence := matchPublicIntelligenceRoute(entry.Method, concretePath)
-				if !isSchedule && !isBilling && !isAccountingRecalc && !isIntelligence {
+				if !isSchedule && !isBilling && !isAccountingRecalc && !isAccountingConfig && !isIntelligence {
 					t.Fatalf("unhandled non-GET platform-core-service route in ownership registry: %s %s", entry.Method, entry.Path)
 				}
 			}

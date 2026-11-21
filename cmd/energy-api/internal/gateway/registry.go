@@ -495,9 +495,9 @@ func (h *handler) decodeRegistryBackendResponse(owner string, response *http.Res
 	case response.StatusCode == http.StatusNotFound:
 		result.status = http.StatusNotFound
 		result.code = "RESOURCE_NOT_FOUND"
-	case response.StatusCode == http.StatusBadRequest && problem.Code == "CURSOR_INVALID":
+	case response.StatusCode == http.StatusBadRequest && (problem.Code == "CURSOR_INVALID" || problem.Code == "REGISTRY_MUTATION_INVALID"):
 		result.status = http.StatusBadRequest
-		result.code = "CURSOR_INVALID"
+		result.code = problem.Code
 	case response.StatusCode == http.StatusConflict && problem.Code != "":
 		result.status = http.StatusConflict
 		result.code = problem.Code
@@ -621,6 +621,8 @@ func (h *handler) writeRegistryBackendResult(writer http.ResponseWriter, request
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Registry resource was not found.", false, nil)
 	case "CURSOR_INVALID":
 		writeProblem(writer, request, http.StatusBadRequest, result.code, "Cursor invalid", "The Registry page cursor or limit is invalid.", false, nil)
+	case "REGISTRY_MUTATION_INVALID":
+		writeProblem(writer, request, http.StatusBadRequest, result.code, "Registry mutation invalid", "The Registry mutation does not satisfy the canonical contract.", false, nil)
 	case "MAPPING_INVALID", "MAPPING_QUARANTINED":
 		writeProblem(writer, request, http.StatusConflict, result.code, "Registry mapping unavailable", "The Registry resource mapping is not available for public reads.", false, nil)
 	case "REGISTRY_REVISION_CONFLICT", "REGISTRY_IDEMPOTENCY_CONFLICT", "REGISTRY_BINDING_CONFLICT", "TEMPLATE_REVISION_IMMUTABLE", "REGISTRY_IMPORT_PLAN_INVALID":
@@ -787,6 +789,15 @@ func matchPublicRegistryRoute(method, path string) (publicRegistryRoute, string,
 			action := map[string]registryauth.Action{"assets": registryauth.ActionAssetWrite, "devices": registryauth.ActionDeviceWrite, "spaces": registryauth.ActionSpaceWrite, "sensors": registryauth.ActionSensorWrite, "points": registryauth.ActionPointWrite}[segments[2]]
 			resource := strings.TrimSuffix(segments[2], "s") + "-write"
 			return publicRegistryRoute{template: "/api/v1/sites/{siteId}/" + segments[2] + "/{" + strings.TrimSuffix(segments[2], "s") + "Id}", internalPath: "/internal/v1/registry/sites/" + siteID + "/" + segments[2] + "/" + id, resource: resource, action: action, scopeID: siteID, write: true}, siteID, true
+		}
+	case len(segments) == 5 && segments[0] == "sites":
+		siteID := segments[1]
+		if segments[2] == "devices" && segments[4] == "replace-hardware" && method == http.MethodPost {
+			deviceID := segments[3]
+			if !isLowerUUIDv7(deviceID) {
+				return publicRegistryRoute{}, "", false
+			}
+			return publicRegistryRoute{template: "/api/v1/sites/{siteId}/devices/{deviceId}/replace-hardware", internalPath: "/internal/v1/registry/sites/" + siteID + "/devices/" + deviceID + "/replace-hardware", resource: "device-replace-hardware", action: registryauth.ActionDeviceWrite, scopeID: siteID, write: true}, siteID, true
 		}
 	case len(segments) == 2 && segments[0] == "templates" && method == http.MethodPost:
 		if segments[1] == "revisions" {

@@ -2218,6 +2218,14 @@
         "responses": { "200": { "description": "Updated Device.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Device" } } } }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
     },
+    "/api/v1/sites/{siteId}/devices/{deviceId}/replace-hardware": {
+      "post": {
+        "operationId": "replaceDeviceHardware", "summary": "Replace physical hardware on an existing logical Device while preserving historical continuity", "x-architecture-status": "ACTIVE", "x-shape-source": "contracts/http/s05-registry-writer.openapi.json",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/DeviceId" }, { "$ref": "#/components/parameters/CsrfToken" }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "./s05-registry-writer.openapi.json#/components/schemas/ReplaceDeviceHardwareRequest" } } } },
+        "responses": { "201": { "description": "Replaced hardware on the logical Device.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ReplaceDeviceHardwareResult" } } } }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
     "/api/v1/sites/{siteId}/sensors": {
       "post": {
         "operationId": "createSiteSensor", "summary": "Create an independently traceable PhysicalSensor", "x-architecture-status": "ACTIVE", "x-shape-source": "contracts/http/s05-registry-writer.openapi.json",
@@ -3135,6 +3143,183 @@
         }
       }
     },
+    "/api/v1/sites/{siteId}/accounting/holidays": {
+      "get": {
+        "operationId": "listSiteCalendarHolidays",
+        "summary": "List configured Site calendar holiday overrides used for time-of-use electricity accounting",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "platform-core-service",
+        "x-public-ingress": "platform-gateway",
+        "parameters": [
+          { "$ref": "#/components/parameters/SiteId" },
+          { "name": "year", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 2000, "maximum": 9999 } }
+        ],
+        "responses": {
+          "200": { "description": "Configured holiday overrides for the Site.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SiteCalendarHolidayList" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/accounting/holidays/{date}": {
+      "put": {
+        "operationId": "upsertSiteCalendarHoliday",
+        "summary": "Create or update a Site calendar holiday override for a specific calendar date",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "platform-core-service",
+        "x-public-ingress": "platform-gateway",
+        "parameters": [
+          { "$ref": "#/components/parameters/SiteId" },
+          { "name": "date", "in": "path", "required": true, "schema": { "type": "string", "format": "date", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" } },
+          { "$ref": "#/components/parameters/CsrfToken" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/SiteCalendarHolidayUpsertRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Upserted holiday override.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SiteCalendarHoliday" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "409": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      },
+      "delete": {
+        "operationId": "deleteSiteCalendarHoliday",
+        "summary": "Delete a Site calendar holiday override for a specific calendar date",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "platform-core-service",
+        "x-public-ingress": "platform-gateway",
+        "parameters": [
+          { "$ref": "#/components/parameters/SiteId" },
+          { "name": "date", "in": "path", "required": true, "schema": { "type": "string", "format": "date", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" } },
+          { "$ref": "#/components/parameters/CsrfToken" }
+        ],
+        "responses": {
+          "200": { "description": "Deleted holiday override result.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SiteCalendarHolidayDeleteResult" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/accounting/meter-ratios": {
+      "get": {
+        "operationId": "listSiteMeterRatioVersions",
+        "summary": "List CT/PT/multiplier versions configured for a Site's counter points and meter bindings",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "platform-core-service",
+        "x-public-ingress": "platform-gateway",
+        "parameters": [
+          { "$ref": "#/components/parameters/SiteId" },
+          { "name": "pointId", "in": "query", "required": false, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "name": "meterBindingId", "in": "query", "required": false, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "name": "status", "in": "query", "required": false, "schema": { "type": "string", "enum": ["DRAFT", "RELEASED", "SUPERSEDED"] } }
+        ],
+        "responses": {
+          "200": { "description": "Meter ratio versions for the Site.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MeterRatioVersionList" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      },
+      "post": {
+        "operationId": "createSiteMeterRatioVersion",
+        "summary": "Create a new released CT/PT/multiplier version for a Site meter or point",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "platform-core-service",
+        "x-public-ingress": "platform-gateway",
+        "parameters": [
+          { "$ref": "#/components/parameters/SiteId" },
+          { "$ref": "#/components/parameters/CsrfToken" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/MeterRatioVersionCreateRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Created meter ratio version.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MeterRatioVersion" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "409": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/accounting/meter-ratios/{versionId}/retire": {
+      "post": {
+        "operationId": "retireSiteMeterRatioVersion",
+        "summary": "Retire or bound the effective window of an active meter ratio version",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "platform-core-service",
+        "x-public-ingress": "platform-gateway",
+        "parameters": [
+          { "$ref": "#/components/parameters/SiteId" },
+          { "name": "versionId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "$ref": "#/components/parameters/CsrfToken" }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/MeterRatioVersionRetireRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Retired or superseded meter ratio version.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MeterRatioVersion" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "409": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/accounting/counter-audit": {
+      "get": {
+        "operationId": "getSiteCounterAudit",
+        "summary": "Audit cleaned counter transitions, resets, rollovers, and quarantined anomalies for a Site",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "telemetry-query-service",
+        "x-public-ingress": "platform-gateway",
+        "parameters": [
+          { "$ref": "#/components/parameters/SiteId" },
+          { "name": "from", "in": "query", "required": true, "schema": { "$ref": "#/components/schemas/Instant" } },
+          { "name": "to", "in": "query", "required": true, "schema": { "$ref": "#/components/schemas/Instant" } },
+          { "name": "deviceId", "in": "query", "required": false, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "name": "pointId", "in": "query", "required": false, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "name": "anomaliesOnly", "in": "query", "required": false, "schema": { "type": "boolean" } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 500 } }
+        ],
+        "responses": {
+          "200": { "description": "Counter cleaning audit summary and sample transition records.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CounterAuditResponse" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "429": { "$ref": "#/components/responses/Problem" },
+          "502": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" },
+          "504": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
     "/api/v1/sites/{siteId}/data-gaps": {
       "get": {
         "operationId": "listSiteDataGaps",
@@ -3312,6 +3497,92 @@
         ],
         "responses": {
           "200": { "description": "Optimization governance and M&V flywheel summary for the Site.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OptimizationGovernanceSummary" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/optimization/canary-bindings": {
+      "get": {
+        "operationId": "listSiteOptimizationCanaryBindings",
+        "summary": "List optimization canary solver bindings, active solver resolution, and allowlisted external solver hosts for a Site",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "optimization-service",
+        "x-public-ingress": "platform-gateway",
+        "parameters": [
+          { "$ref": "#/components/parameters/SiteId" }
+        ],
+        "responses": {
+          "200": { "description": "Canary solver bindings configured for the Site.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OptimizationCanaryBindingList" } } } },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/optimization/canary-bindings/{loopKey}": {
+      "put": {
+        "operationId": "upsertSiteOptimizationCanaryBinding",
+        "summary": "Create or update a site-loop canary solver routing binding",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "optimization-service",
+        "x-public-ingress": "platform-gateway",
+        "parameters": [
+          { "$ref": "#/components/parameters/CsrfToken" },
+          { "$ref": "#/components/parameters/SiteId" },
+          { "name": "loopKey", "in": "path", "required": true, "schema": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_]{0,63}$" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UpsertOptimizationCanaryBindingRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Persisted site-loop canary solver binding.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OptimizationCanaryBindingRecord" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "422": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      },
+      "delete": {
+        "operationId": "deleteSiteOptimizationCanaryBinding",
+        "summary": "Delete a site-loop canary solver routing binding and revert to deployment or baseline defaults",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "optimization-service",
+        "x-public-ingress": "platform-gateway",
+        "parameters": [
+          { "$ref": "#/components/parameters/CsrfToken" },
+          { "$ref": "#/components/parameters/SiteId" },
+          { "name": "loopKey", "in": "path", "required": true, "schema": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_]{0,63}$" } }
+        ],
+        "responses": {
+          "200": { "description": "Deleted canary solver binding confirmation.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OptimizationCanaryBindingDeleteResult" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/optimization/negative-samples": {
+      "get": {
+        "operationId": "listSiteOptimizationNegativeSamples",
+        "summary": "List paginated guardrail clamp, veto, manual override, tracking deviation, and monitor trip negative samples for a Site",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "optimization-service",
+        "x-public-ingress": "platform-gateway",
+        "parameters": [
+          { "$ref": "#/components/parameters/SiteId" },
+          { "name": "windowDays", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 365 } },
+          { "name": "sampleKind", "in": "query", "required": false, "schema": { "type": "string", "enum": ["ALL", "GUARDRAIL_CLAMPED", "GUARDRAIL_VETOED", "MANUAL_OVERRIDE", "MONITOR_TRIPPED", "TRACKING_DEVIATION"] } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 100 } },
+          { "name": "offset", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 0 } }
+        ],
+        "responses": {
+          "200": { "description": "Paginated optimization flywheel negative samples for the Site.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OptimizationNegativeSamplePage" } } } },
           "400": { "$ref": "#/components/responses/Problem" },
           "403": { "$ref": "#/components/responses/Problem" },
           "404": { "$ref": "#/components/responses/Problem" },
@@ -5311,9 +5582,58 @@
           "updatedAt": {
             "$ref": "#/components/schemas/Instant"
           },
+          "externalId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "protocolAddress": {
+            "type": "object",
+            "additionalProperties": true
+          },
           "tags": {
             "$ref": "#/components/schemas/TagMap"
           }
+        }
+      },
+      "ReplaceDeviceHardwareResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "replacementId",
+          "tenantId",
+          "siteId",
+          "deviceId",
+          "revision",
+          "previousExternalId",
+          "newExternalId",
+          "previousGatewayDeviceId",
+          "newGatewayDeviceId",
+          "previousProtocolAddress",
+          "newProtocolAddress",
+          "reason",
+          "replacedBy",
+          "replacedAt",
+          "device",
+          "replayed"
+        ],
+        "properties": {
+          "replacementId": { "$ref": "#/components/schemas/UUIDv7" },
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "deviceId": { "$ref": "#/components/schemas/UUIDv7" },
+          "revision": { "$ref": "#/components/schemas/Revision" },
+          "previousExternalId": { "type": ["string", "null"], "minLength": 1, "maxLength": 256 },
+          "newExternalId": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "previousGatewayDeviceId": { "oneOf": [{ "$ref": "#/components/schemas/UUIDv7" }, { "type": "null" }] },
+          "newGatewayDeviceId": { "oneOf": [{ "$ref": "#/components/schemas/UUIDv7" }, { "type": "null" }] },
+          "previousProtocolAddress": { "type": ["object", "null"], "additionalProperties": true },
+          "newProtocolAddress": { "type": ["object", "null"], "additionalProperties": true },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 1000 },
+          "replacedBy": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "replacedAt": { "$ref": "#/components/schemas/Instant" },
+          "device": { "$ref": "#/components/schemas/Device" },
+          "replayed": { "type": "boolean" }
         }
       },
       "DeviceBinding": {
@@ -6416,6 +6736,14 @@
           "maxCommandsPerHour": { "type": "integer" },
           "deadbandC": { "type": "number" },
           "executionMode": { "type": "string", "enum": ["SHADOW", "CLOSED_LOOP"] },
+          "pumpFreqMinHz": { "type": "number" },
+          "pumpFreqMaxHz": { "type": "number" },
+          "maxFreqStepHz": { "type": "number" },
+          "freqDeadbandHz": { "type": "number" },
+          "fanSpeedMinPct": { "type": "number" },
+          "fanSpeedMaxPct": { "type": "number" },
+          "maxFanStepPct": { "type": "number" },
+          "fanDeadbandPct": { "type": "number" },
           "manualBackoffUntil": { "oneOf": [{ "$ref": "#/components/schemas/Instant" }, { "type": "null" }] },
           "manualBackoffReason": { "type": "string" },
           "tripReason": { "type": "string" },
@@ -6452,6 +6780,14 @@
           "minRunningChillers": { "type": "integer", "minimum": 0 },
           "maxCommandsPerHour": { "type": "integer", "minimum": 1, "maximum": 6 },
           "executionMode": { "type": "string", "enum": ["SHADOW", "CLOSED_LOOP"] },
+          "pumpFreqMinHz": { "type": "number", "minimum": 20.0, "maximum": 50.0 },
+          "pumpFreqMaxHz": { "type": "number", "minimum": 25.0, "maximum": 60.0 },
+          "maxFreqStepHz": { "type": "number", "exclusiveMinimum": 0, "maximum": 10.0 },
+          "freqDeadbandHz": { "type": "number", "minimum": 0.1, "maximum": 5.0 },
+          "fanSpeedMinPct": { "type": "number", "minimum": 15.0, "maximum": 100.0 },
+          "fanSpeedMaxPct": { "type": "number", "minimum": 20.0, "maximum": 100.0 },
+          "maxFanStepPct": { "type": "number", "exclusiveMinimum": 0, "maximum": 25.0 },
+          "fanDeadbandPct": { "type": "number", "minimum": 0.5, "maximum": 15.0 },
           "reason": { "type": "string", "minLength": 1, "maxLength": 1000 },
           "verificationCode": { "type": "string", "pattern": "^[0-9]{6}$" },
           "expectedRevision": { "type": "integer", "minimum": 0 }
@@ -6479,6 +6815,8 @@
           "commandIntentId": { "oneOf": [{ "$ref": "#/components/schemas/UUIDv7" }, { "type": "null" }] },
           "deviceId": { "$ref": "#/components/schemas/UUIDv7" },
           "targetCapability": { "type": "string" },
+          "loopKey": { "type": "string" },
+          "targetUnit": { "type": "string", "enum": ["C", "Hz", "%"] },
           "baselineSupplyTempC": { "type": "number" },
           "appliedSupplyTempC": { "type": "number" },
           "restoreSupplyTempC": { "type": "number" },
@@ -6629,6 +6967,286 @@
           "tickCounts": { "$ref": "#/components/schemas/OptimizationTickCounts" },
           "copComparison": { "$ref": "#/components/schemas/OptimizationCopComparison" },
           "flywheel": { "$ref": "#/components/schemas/OptimizationFlywheelSummary" }
+        }
+      },
+      "OptimizationCanaryBindingRecord": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "tenantId", "siteId", "loopKey", "servingRef", "status", "createdAt", "updatedAt"],
+        "properties": {
+          "id": { "$ref": "#/components/schemas/UUIDv7" },
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "loopKey": { "type": "string", "pattern": "^[A-Z0-9][A-Z0-9_]{0,63}$" },
+          "servingRef": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "status": { "type": "string", "enum": ["ACTIVE", "DISABLED"] },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "updatedAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "OptimizationCanaryBindingList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["tenantId", "siteId", "allowedSolverHosts", "activeSolver", "items"],
+        "properties": {
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "allowedSolverHosts": { "type": "array", "items": { "type": "string" } },
+          "activeSolver": { "$ref": "#/components/schemas/OptimizationActiveSolver" },
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/OptimizationCanaryBindingRecord" } }
+        }
+      },
+      "UpsertOptimizationCanaryBindingRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["servingRef", "status"],
+        "properties": {
+          "servingRef": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "status": { "type": "string", "enum": ["ACTIVE", "DISABLED"] }
+        }
+      },
+      "OptimizationCanaryBindingDeleteResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["deleted", "siteId", "loopKey"],
+        "properties": {
+          "deleted": { "type": "boolean" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "loopKey": { "type": "string", "pattern": "^[A-Z0-9][A-Z0-9_]{0,63}$" }
+        }
+      },
+      "OptimizationGuardrailStageResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["stage", "action", "before", "after"],
+        "properties": {
+          "stage": { "type": "string" },
+          "action": { "type": "string" },
+          "before": { "type": "number" },
+          "after": { "type": "number" },
+          "reason": { "type": "string" }
+        }
+      },
+      "OptimizationFeatureSnapshot": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["runningChillers", "cabinetLocalManual", "deviceFaultActive", "leaseDeadbandC", "supplyTempMinC", "supplyTempMaxC"],
+        "properties": {
+          "supplyTempC": { "type": ["number", "null"] },
+          "zoneMaxTempC": { "type": ["number", "null"] },
+          "outdoorWetBulbC": { "type": ["number", "null"] },
+          "coolingLoadKW": { "type": ["number", "null"] },
+          "chillerPowerKW": { "type": ["number", "null"] },
+          "observedCOP": { "type": ["number", "null"] },
+          "runningChillers": { "type": "integer", "minimum": 0 },
+          "cabinetLocalManual": { "type": "boolean" },
+          "deviceFaultActive": { "type": "boolean" },
+          "leaseDeadbandC": { "type": "number" },
+          "supplyTempMinC": { "type": "number" },
+          "supplyTempMaxC": { "type": "number" }
+        }
+      },
+      "OptimizationNegativeSampleItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "decisionId", "recommendationId", "monitorId", "traceId", "sampleKind", "reasonCode", "solverServingRef", "rawRecommendedValue", "appliedOrClampedValue", "occurredAt", "guardrailTrace", "featureSnapshot"],
+        "properties": {
+          "id": { "$ref": "#/components/schemas/UUIDv7" },
+          "decisionId": { "type": "string" },
+          "recommendationId": { "type": ["string", "null"] },
+          "monitorId": { "type": ["string", "null"] },
+          "traceId": { "type": "string" },
+          "sampleKind": { "type": "string", "enum": ["GUARDRAIL_CLAMPED", "GUARDRAIL_VETOED", "MANUAL_OVERRIDE", "MONITOR_TRIPPED", "TRACKING_DEVIATION"] },
+          "reasonCode": { "type": "string" },
+          "solverServingRef": { "type": "string" },
+          "rawRecommendedValue": { "type": ["number", "null"] },
+          "appliedOrClampedValue": { "type": ["number", "null"] },
+          "occurredAt": { "type": "string", "format": "date-time" },
+          "guardrailTrace": { "type": "array", "items": { "$ref": "#/components/schemas/OptimizationGuardrailStageResult" } },
+          "featureSnapshot": { "$ref": "#/components/schemas/OptimizationFeatureSnapshot" }
+        }
+      },
+      "OptimizationNegativeSamplePage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["tenantId", "siteId", "windowDays", "sampleKind", "total", "limit", "offset", "hasMore", "items"],
+        "properties": {
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "windowDays": { "type": "integer", "minimum": 1, "maximum": 365 },
+          "sampleKind": { "type": "string", "enum": ["ALL", "GUARDRAIL_CLAMPED", "GUARDRAIL_VETOED", "MANUAL_OVERRIDE", "MONITOR_TRIPPED", "TRACKING_DEVIATION"] },
+          "total": { "type": "integer", "minimum": 0 },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 100 },
+          "offset": { "type": "integer", "minimum": 0 },
+          "hasMore": { "type": "boolean" },
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/OptimizationNegativeSampleItem" } }
+        }
+      },
+      "SiteCalendarHoliday": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "tenantId", "siteId", "holidayDate", "dayType", "label", "revision", "createdAt", "updatedAt"],
+        "properties": {
+          "id": { "$ref": "#/components/schemas/UUIDv7" },
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "holidayDate": { "type": "string", "format": "date", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+          "dayType": { "type": "string", "enum": ["HOLIDAY", "SPECIAL_DAY", "WEEKDAY", "WEEKEND"] },
+          "label": { "type": "string", "maxLength": 256 },
+          "revision": { "type": "integer", "minimum": 1 },
+          "createdAt": { "$ref": "#/components/schemas/Instant" },
+          "updatedAt": { "$ref": "#/components/schemas/Instant" }
+        }
+      },
+      "SiteCalendarHolidayList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items"],
+        "properties": {
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/SiteCalendarHoliday" } }
+        }
+      },
+      "SiteCalendarHolidayUpsertRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["dayType"],
+        "properties": {
+          "dayType": { "type": "string", "enum": ["HOLIDAY", "SPECIAL_DAY", "WEEKDAY", "WEEKEND"] },
+          "label": { "type": "string", "maxLength": 256 },
+          "expectedRevision": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "SiteCalendarHolidayDeleteResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["deleted", "siteId", "holidayDate"],
+        "properties": {
+          "deleted": { "type": "boolean" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "holidayDate": { "type": "string", "format": "date", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" }
+        }
+      },
+      "MeterRatioVersion": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id", "tenantId", "siteId", "ctRatio", "ptRatio", "meterMultiplier",
+          "ratioApplicationMode", "readingUnit", "effectiveFrom", "effectiveTo",
+          "status", "revision", "createdAt", "updatedAt"
+        ],
+        "properties": {
+          "id": { "$ref": "#/components/schemas/UUIDv7" },
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "meterId": { "oneOf": [{ "$ref": "#/components/schemas/UUIDv7" }, { "type": "null" }] },
+          "meterBindingId": { "oneOf": [{ "$ref": "#/components/schemas/UUIDv7" }, { "type": "null" }] },
+          "pointId": { "oneOf": [{ "$ref": "#/components/schemas/UUIDv7" }, { "type": "null" }] },
+          "version": { "type": "integer", "minimum": 1 },
+          "ctRatio": { "type": "number", "exclusiveMinimum": 0 },
+          "ptRatio": { "type": "number", "exclusiveMinimum": 0 },
+          "meterMultiplier": { "type": "number", "exclusiveMinimum": 0 },
+          "cloudMultiplier": { "type": "number", "exclusiveMinimum": 0 },
+          "ratioApplicationMode": { "type": "string", "enum": ["DEVICE_APPLIED", "EDGE_APPLIED", "PLATFORM_APPLIED"] },
+          "readingUnit": { "type": "string", "enum": ["Wh", "kWh", "MWh", "GJ", "MJ", "RTh"] },
+          "effectiveFrom": { "$ref": "#/components/schemas/Instant" },
+          "effectiveTo": { "oneOf": [{ "$ref": "#/components/schemas/Instant" }, { "type": "null" }] },
+          "status": { "type": "string", "enum": ["DRAFT", "RELEASED", "SUPERSEDED"] },
+          "revision": { "type": "integer", "minimum": 1 },
+          "createdAt": { "$ref": "#/components/schemas/Instant" },
+          "updatedAt": { "$ref": "#/components/schemas/Instant" }
+        }
+      },
+      "MeterRatioVersionList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items"],
+        "properties": {
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/MeterRatioVersion" } }
+        }
+      },
+      "MeterRatioVersionCreateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ctRatio", "ptRatio", "meterMultiplier", "ratioApplicationMode", "readingUnit", "effectiveFrom"],
+        "properties": {
+          "meterId": { "oneOf": [{ "$ref": "#/components/schemas/UUIDv7" }, { "type": "null" }] },
+          "meterBindingId": { "oneOf": [{ "$ref": "#/components/schemas/UUIDv7" }, { "type": "null" }] },
+          "pointId": { "oneOf": [{ "$ref": "#/components/schemas/UUIDv7" }, { "type": "null" }] },
+          "ctRatio": { "type": "number", "exclusiveMinimum": 0 },
+          "ptRatio": { "type": "number", "exclusiveMinimum": 0 },
+          "meterMultiplier": { "type": "number", "exclusiveMinimum": 0 },
+          "ratioApplicationMode": { "type": "string", "enum": ["DEVICE_APPLIED", "EDGE_APPLIED", "PLATFORM_APPLIED"] },
+          "readingUnit": { "type": "string", "enum": ["Wh", "kWh", "MWh", "GJ", "MJ", "RTh"] },
+          "effectiveFrom": { "$ref": "#/components/schemas/Instant" },
+          "effectiveTo": { "oneOf": [{ "$ref": "#/components/schemas/Instant" }, { "type": "null" }] },
+          "reason": { "type": "string", "maxLength": 1000 }
+        }
+      },
+      "MeterRatioVersionRetireRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [],
+        "properties": {
+          "effectiveTo": { "oneOf": [{ "$ref": "#/components/schemas/Instant" }, { "type": "null" }] },
+          "expectedRevision": { "type": "integer", "minimum": 1 },
+          "reason": { "type": "string", "maxLength": 1000 }
+        }
+      },
+      "CounterAuditSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["totalSamples", "anomalyCount", "zeroDropCount", "spikeCount", "resetCount", "rolloverCount", "invalidDecreaseCount"],
+        "properties": {
+          "totalSamples": { "type": "integer", "format": "int64", "minimum": 0 },
+          "anomalyCount": { "type": "integer", "format": "int64", "minimum": 0 },
+          "zeroDropCount": { "type": "integer", "format": "int64", "minimum": 0 },
+          "spikeCount": { "type": "integer", "format": "int64", "minimum": 0 },
+          "resetCount": { "type": "integer", "format": "int64", "minimum": 0 },
+          "rolloverCount": { "type": "integer", "format": "int64", "minimum": 0 },
+          "invalidDecreaseCount": { "type": "integer", "format": "int64", "minimum": 0 }
+        }
+      },
+      "CounterAuditItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "pointId", "deviceId", "telemetryKey", "periodStart", "periodEnd",
+          "rawPrevious", "rawCurrent", "cleanedDeltaKWh", "transitionType",
+          "quality", "qualityReasons", "unit"
+        ],
+        "properties": {
+          "pointId": { "$ref": "#/components/schemas/UUIDv7" },
+          "deviceId": { "$ref": "#/components/schemas/UUIDv7" },
+          "telemetryKey": { "type": "string", "minLength": 1 },
+          "periodStart": { "$ref": "#/components/schemas/Instant" },
+          "periodEnd": { "$ref": "#/components/schemas/Instant" },
+          "rawPrevious": { "oneOf": [{ "type": "number" }, { "type": "null" }] },
+          "rawCurrent": { "type": "number" },
+          "cleanedDeltaKWh": { "oneOf": [{ "type": "number", "minimum": 0 }, { "type": "null" }] },
+          "transitionType": {
+            "type": "string",
+            "enum": [
+              "INITIAL", "INCREASE", "UNCHANGED", "RESET", "ROLLOVER",
+              "METER_REPLACEMENT", "RECOVERY", "REVISION_BOUNDARY", "UNIT_BOUNDARY",
+              "INVALID_DECREASE", "INVALID_ZERO_DROP", "INVALID_SPIKE", "INVALID"
+            ]
+          },
+          "quality": { "type": "string", "enum": ["GOOD", "PARTIAL", "ESTIMATED", "MANUAL", "STALE", "INVALID"] },
+          "qualityReasons": { "type": "array", "items": { "type": "string" } },
+          "unit": { "type": "string" }
+        }
+      },
+      "CounterAuditResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["siteId", "from", "to", "summary", "items", "truncated"],
+        "properties": {
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "from": { "$ref": "#/components/schemas/Instant" },
+          "to": { "$ref": "#/components/schemas/Instant" },
+          "summary": { "$ref": "#/components/schemas/CounterAuditSummary" },
+          "items": { "type": "array", "maxItems": 500, "items": { "$ref": "#/components/schemas/CounterAuditItem" } },
+          "truncated": { "type": "boolean" }
         }
       },
       "FieldError": {

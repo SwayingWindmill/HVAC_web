@@ -481,6 +481,7 @@ test('repository governance enforces 1:1 skill parity, required hook files, and 
     'scripts/test-gateway-nodered-tunnel.ts',
     'scripts/sync-songyaxuan-nodered.ts',
     'scripts/run-mqtt-broker-acl-tests.mjs',
+    'scripts/run-mqtt-broker-crl-kick-tests.ts',
   ]) {
     const concClassification = runClassification([connFile]);
     assert.deepEqual(concClassification.unitProfiles, ['telemetry']);

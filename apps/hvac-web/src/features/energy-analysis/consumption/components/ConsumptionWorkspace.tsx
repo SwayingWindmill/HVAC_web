@@ -20,6 +20,7 @@ import { useAssistantPanel } from "@/features/assistant/assistant-panel-store";
 import { useEnergyBreakdown } from "@/features/breakdown/query";
 import { DataGapBanner } from "@/features/data-gaps/DataGapBanner";
 import { dataGapsKeys } from "@/features/data-gaps/query";
+import { billingKeys } from "@/features/billing/query";
 import { TouCostDetail } from "@/features/tariff/components/TouCostDetail";
 import { siteTariffQuery } from "@/features/tariff/query";
 import {
@@ -47,6 +48,7 @@ import {
   type Granularity,
 } from "../model";
 import { useEnergyComparison } from "../query";
+import { CounterAnomalyAuditTab } from "./CounterAnomalyAuditTab";
 import { LayeredEfficiencyStrip } from "./LayeredEfficiencyStrip";
 
 const siteRoute = getRouteApi("/_app/_site");
@@ -59,8 +61,8 @@ const PREVIOUS_LABEL: Record<EnergyPeriod, string> = { today: "昨日同时段",
 const BUCKET_HEADER: Record<Granularity, string> = { hour: "时段", day: "日期", month: "月份" };
 
 type ConsumptionMetric = "electricityKWh" | "coolingKWh" | "cop" | "cost";
-type ConsumptionView = "trend" | "tou" | "detail";
-const CONSUMPTION_VIEWS = ["trend", "tou", "detail"] as const satisfies readonly ConsumptionView[];
+type ConsumptionView = "trend" | "tou" | "detail" | "anomalies";
+const CONSUMPTION_VIEWS = ["trend", "tou", "detail", "anomalies"] as const satisfies readonly ConsumptionView[];
 
 const GRANULARITY_COPY: Readonly<Record<Granularity, {
   readonly detailTitle: string;
@@ -203,7 +205,7 @@ export function ConsumptionWorkspace() {
               ) : null}
             </span>
             <PeriodTabs aria-label="统计期间" options={PERIOD_OPTIONS} value={period} onValueChange={(value) => setSearch({ period: value })} />
-            <Button variant="outline" size="icon" aria-label="刷新能耗" onClick={() => { void query.refetch(); void destination.query.refetch(); void destination.previous.refetch(); void queryClient.invalidateQueries({ queryKey: dataGapsKeys.site(site.id) }); }}>
+            <Button variant="outline" size="icon" aria-label="刷新能耗" onClick={() => { void query.refetch(); void destination.query.refetch(); void destination.previous.refetch(); void queryClient.invalidateQueries({ queryKey: dataGapsKeys.site(site.id) }); void queryClient.invalidateQueries({ queryKey: billingKeys.counterAuditRoot(site.id) }); }}>
               <RefreshCw />
             </Button>
             <Button variant="outline" disabled={!comparison?.buckets.length} onClick={exportCsv}>
@@ -241,11 +243,13 @@ export function ConsumptionWorkspace() {
                   <TabsTrigger value="trend" className="h-12 flex-none px-0 after:bottom-0!">分项趋势</TabsTrigger>
                   <TabsTrigger value="tou" className="h-12 flex-none px-0 after:bottom-0!">分时电费</TabsTrigger>
                   <TabsTrigger value="detail" className="h-12 flex-none px-0 after:bottom-0!">{GRANULARITY_COPY[comparison.current.granularity].detailTitle}</TabsTrigger>
+                  <TabsTrigger value="anomalies" className="h-12 flex-none px-0 after:bottom-0!">异常清洗留痕</TabsTrigger>
                 </TabsList>
                 <span className="ml-auto flex min-w-0 items-center gap-1 truncate text-xs text-muted-foreground">
                   {view === "trend" ? "未走完的时段以浅色显示"
                     : view === "tou" ? (tariff.data ? <>{tariff.data.displayName}<InfoTip>按站点电价估算，正式电费以结算为准</InfoTip></> : null)
-                      : "kWh · 最新在前"}
+                      : view === "anomalies" ? "记录异常跳过、零值过滤与换表归零过程"
+                        : "kWh · 最新在前"}
                 </span>
               </header>
               <TabsContent value="trend">
@@ -256,6 +260,9 @@ export function ConsumptionWorkspace() {
               </TabsContent>
               <TabsContent value="detail">
                 <DetailTable comparison={comparison} pricing={pricing} previousLabel={previousLabel} timeZone={site.timezone} />
+              </TabsContent>
+              <TabsContent value="anomalies">
+                <CounterAnomalyAuditTab period={period} />
               </TabsContent>
             </Tabs>
           </Panel>

@@ -704,3 +704,69 @@ func testGrantClaims(action registryauth.Action) registryauth.GrantClaims {
 		Transitive:     false,
 	}
 }
+
+func TestServerRejectsAccountingConfigRoutesWhenStoreOrWriterNotConfigured(t *testing.T) {
+	now := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
+	harness := newCoreHarness(t, now, &fakeRegistryStore{}, StaticGrantStatusProvider{PolicyRevision: testPolicy})
+
+	readRoutes := []string{
+		RegistryPathPrefix + "sites/" + testSiteA1 + "/accounting/holidays",
+		RegistryPathPrefix + "sites/" + testSiteA1 + "/accounting/meter-ratios",
+	}
+	for _, path := range readRoutes {
+		rec := harness.serve(t, http.MethodGet, path, testGrantClaims(registryauth.ActionSiteRead), nil)
+		if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), `"code":"REGISTRY_UNAVAILABLE"`) {
+			t.Fatalf("GET %s without AccountingConfigStore status=%d, body=%s", path, rec.Code, rec.Body.String())
+		}
+	}
+
+	// Nil writer and non-implementing writer both return 503 REGISTRY_WRITER_UNAVAILABLE.
+	backend := newMemoryScheduleBackend()
+	client := newScheduleHTTPClient(t, backend)
+	for _, tc := range []struct {
+		method string
+		path   string
+		body   any
+	}{
+		{http.MethodPut, RegistryPathPrefix + "sites/" + testSiteA1 + "/accounting/holidays/2026-10-01", map[string]any{"dayType": "HOLIDAY"}},
+		{http.MethodDelete, RegistryPathPrefix + "sites/" + testSiteA1 + "/accounting/holidays/2026-10-01", nil},
+		{http.MethodPost, RegistryPathPrefix + "sites/" + testSiteA1 + "/accounting/meter-ratios", map[string]any{"pointId": testBindingA1, "ctRatio": 10, "ptRatio": 1, "ratioApplicationMode": "PLATFORM_APPLIED", "effectiveFrom": "2026-08-01T00:00:00Z"}},
+		{http.MethodPost, RegistryPathPrefix + "sites/" + testSiteA1 + "/accounting/meter-ratios/" + testBindingA1 + "/retire", map[string]any{"effectiveTo": "2026-09-01T00:00:00Z"}},
+	} {
+		recNoWriter := harness.serve(t, tc.method, tc.path, testGrantClaims(registryauth.ActionBillingManage), nil)
+		if recNoWriter.Code != http.StatusServiceUnavailable || !strings.Contains(recNoWriter.Body.String(), `"code":"REGISTRY_WRITER_UNAVAILABLE"`) {
+			t.Fatalf("%s %s with nil writer status=%d, body=%s", tc.method, tc.path, recNoWriter.Code, recNoWriter.Body.String())
+		}
+		respNonImpl := client.do(t, tc.method, tc.path, testGrantClaims(registryauth.ActionBillingManage), "", tc.body)
+		if respNonImpl.Code != http.StatusServiceUnavailable || !strings.Contains(respNonImpl.Body.String(), `"code":"REGISTRY_WRITER_UNAVAILABLE"`) {
+			t.Fatalf("%s %s with non-implementing writer status=%d, body=%s", tc.method, tc.path, respNonImpl.Code, respNonImpl.Body.String())
+		}
+	}
+}
+
+func TestParseRegistryRouteAccountingConfigRoutes(t *testing.T) {
+	tests := []struct {
+		method     string
+		path       string
+		wantOK     bool
+		wantAction registryauth.Action
+		wantWrite  bool
+	}{
+		{http.MethodGet, RegistryPathPrefix + "sites/" + testSiteA1 + "/accounting/holidays", true, registryauth.ActionSiteRead, false},
+		{http.MethodPut, RegistryPathPrefix + "sites/" + testSiteA1 + "/accounting/holidays/2026-10-01", true, registryauth.ActionBillingManage, true},
+		{http.MethodDelete, RegistryPathPrefix + "sites/" + testSiteA1 + "/accounting/holidays/2026-10-01", true, registryauth.ActionBillingManage, true},
+		{http.MethodGet, RegistryPathPrefix + "sites/" + testSiteA1 + "/accounting/meter-ratios", true, registryauth.ActionSiteRead, false},
+		{http.MethodPost, RegistryPathPrefix + "sites/" + testSiteA1 + "/accounting/meter-ratios", true, registryauth.ActionBillingManage, true},
+		{http.MethodPost, RegistryPathPrefix + "sites/" + testSiteA1 + "/accounting/meter-ratios/" + testBindingA1 + "/retire", true, registryauth.ActionBillingManage, true},
+		{http.MethodPost, RegistryPathPrefix + "sites/" + testSiteA1 + "/accounting/holidays/2026-10-01", false, "", false},
+	}
+	for _, tc := range tests {
+		route, ok := parseRegistryRoute(tc.method, tc.path)
+		if ok != tc.wantOK {
+			t.Fatalf("%s %s ok=%v, want %v", tc.method, tc.path, ok, tc.wantOK)
+		}
+		if ok && (route.action != tc.wantAction || route.write != tc.wantWrite) {
+			t.Fatalf("%s %s route=%#v, want action=%s write=%v", tc.method, tc.path, route, tc.wantAction, tc.wantWrite)
+		}
+	}
+}

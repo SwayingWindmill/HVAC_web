@@ -110,7 +110,7 @@ if ! command -v go >/dev/null 2>&1; then
 fi
 
 rm -rf "$staging"
-mkdir -p "$staging/bins" "$staging/web" "$staging/agent" "$staging/migrator"
+mkdir -p "$staging/bins" "$staging/web" "$staging/agent" "$staging/migrator" "$staging/mqtt"
 
 git rev-parse HEAD | tr -d '[:space:]' > "$staging/REVISION"
 echo >> "$staging/REVISION"
@@ -164,9 +164,20 @@ npm --prefix services/operations-agent-service run build
 stage_agent "$root/services/operations-agent-service" "$staging/agent"
 
 collect_migrator_tree "$staging/migrator"
+
+echo "building mqtt crl plugin (deploy/platform/phase1/mqtt/Dockerfile)"
+DOCKER_BUILDKIT=1 docker build --platform linux/amd64 \
+  -f "$root/deploy/platform/phase1/mqtt/Dockerfile" \
+  --target plugin-export \
+  --output "type=local,dest=$staging/mqtt" \
+  "$root"
+test -s "$staging/mqtt/mosquitto_hvac_crl.so"
+chmod 755 "$staging/mqtt/mosquitto_hvac_crl.so"
+
 echo "staged source.tar $(wc -c < "$staging/source.tar" | tr -d '[:space:]') bytes"
 echo "staged bins $(du -sb "$staging/bins" | awk '{print $1}') bytes"
 echo "staged web $(du -sb "$staging/web" | awk '{print $1}') bytes"
 echo "staged agent $(du -sb "$staging/agent" | awk '{print $1}') bytes (lockfile and dist, no node_modules)"
 echo "staged migrator $(du -sb "$staging/migrator" | awk '{print $1}') bytes"
+echo "staged mqtt $(du -sb "$staging/mqtt" | awk '{print $1}') bytes"
 echo "production release staged at $staging ($(cat "$staging/REVISION"))"

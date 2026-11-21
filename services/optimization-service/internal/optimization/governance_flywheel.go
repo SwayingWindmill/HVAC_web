@@ -725,19 +725,21 @@ func finiteFloatPtr(v *float64) *float64 {
 }
 
 type dispatchFlywheelState struct {
-	recommendation  Recommendation
-	lease           *AutoControlLeaseRecord
-	siteCtx         *AutoControlSiteContext
-	liveState       *autoControlLiveState
-	liveObs         *AutoControlLiveObservation
-	guardrail       *commandmodel.GuardrailResult
-	guardrailTrace  json.RawMessage
-	monitorID       string
-	baselineSupplyC *float64
-	appliedSupplyC  *float64
-	decisionID      string
-	traceID         string
-	now             time.Time
+	recommendation   Recommendation
+	lease            *AutoControlLeaseRecord
+	siteCtx          *AutoControlSiteContext
+	liveState        *autoControlLiveState
+	liveObs          *AutoControlLiveObservation
+	guardrail        *commandmodel.GuardrailResult
+	guardrailTrace   json.RawMessage
+	loopKey          string
+	monitorID        string
+	baselineSupplyC  *float64
+	recommendedValue *float64
+	appliedSupplyC   *float64
+	decisionID       string
+	traceID          string
+	now              time.Time
 }
 
 func flywheelWriteContext(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -1009,7 +1011,10 @@ func (controller *AutoController) recordDispatchFlywheel(
 	}
 
 	var recommendedSupplyC *float64
-	if finite(state.recommendation.Candidate.SupplyTempC) && state.recommendation.Candidate.SupplyTempC != 0 {
+	if state.recommendedValue != nil && finite(*state.recommendedValue) {
+		v := *state.recommendedValue
+		recommendedSupplyC = &v
+	} else if finite(state.recommendation.Candidate.SupplyTempC) && state.recommendation.Candidate.SupplyTempC != 0 {
 		v := state.recommendation.Candidate.SupplyTempC
 		recommendedSupplyC = &v
 	}
@@ -1028,6 +1033,10 @@ func (controller *AutoController) recordDispatchFlywheel(
 
 	recID := cleanStringPtr(state.recommendation.ID)
 	monID := cleanStringPtr(state.monitorID)
+	loopKey := strings.TrimSpace(state.loopKey)
+	if loopKey == "" {
+		loopKey = solverSel.LoopKey
+	}
 
 	writeCtx, cancel := flywheelWriteContext(ctx)
 	defer cancel()
@@ -1038,7 +1047,7 @@ func (controller *AutoController) recordDispatchFlywheel(
 		RecommendationID:       recID,
 		DecisionID:             state.decisionID,
 		ControlMode:            controlMode,
-		LoopKey:                solverSel.LoopKey,
+		LoopKey:                loopKey,
 		SolverServingRef:       solverSel.ServingRef,
 		DeploymentRevisionID:   depRevID,
 		BaselineSupplyTempC:    baselineSupplyC,

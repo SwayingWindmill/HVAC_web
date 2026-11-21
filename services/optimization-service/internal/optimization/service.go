@@ -142,16 +142,18 @@ func standardVerificationPlan() intelligencemodel.RecommendationVerificationPlan
 type Clock func() time.Time
 
 type Service struct {
-	solver         SolverAdapter
-	publication    EvaluationPublicationStore
-	evaluations    EvaluationSink
-	clock          Clock
-	shadow         *shadowSolver
-	shadowReader   ShadowEvaluationReader
-	staging        *StagingEvaluator
-	solverResolver ActiveSolverResolver
-	flywheelStore  GovernanceFlywheelStore
-	siteVisibility SiteVisibilityChecker
+	solver             SolverAdapter
+	publication        EvaluationPublicationStore
+	evaluations        EvaluationSink
+	clock              Clock
+	shadow             *shadowSolver
+	shadowReader       ShadowEvaluationReader
+	staging            *StagingEvaluator
+	solverResolver     ActiveSolverResolver
+	flywheelStore      GovernanceFlywheelStore
+	siteVisibility     SiteVisibilityChecker
+	canaryStore        CanaryBindingStore
+	allowedSolverHosts []string
 }
 
 var ErrShadowEvaluationNotFound = errors.New("optimization shadow evaluation not found")
@@ -275,6 +277,16 @@ func (service *Service) WithGovernanceFlywheel(store GovernanceFlywheelStore) *S
 
 func (service *Service) WithSiteVisibility(checker SiteVisibilityChecker) *Service {
 	service.siteVisibility = checker
+	return service
+}
+
+func (service *Service) WithCanaryStore(store CanaryBindingStore) *Service {
+	service.canaryStore = store
+	return service
+}
+
+func (service *Service) WithAllowedSolverHosts(hosts []string) *Service {
+	service.allowedSolverHosts = append([]string(nil), hosts...)
 	return service
 }
 

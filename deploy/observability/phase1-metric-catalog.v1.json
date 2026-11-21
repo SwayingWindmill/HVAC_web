@@ -50,6 +50,7 @@
     {"name":"hvac_mqtt_concentrator_rpc_duration_seconds","type":"histogram","labels":["outcome"],"seriesBudget":8},
     {"name":"hvac_mqtt_command_publishes_total","type":"counter","labels":["outcome"],"seriesBudget":8},
     {"name":"hvac_mqtt_command_reply_wait_seconds","type":"histogram","labels":["outcome"],"seriesBudget":8},
+    {"name":"hvac_mqtt_crl_control_events_total","type":"counter","labels":["action","outcome"],"seriesBudget":8},
     {"name":"hvac_mqtt_guard_handshakes_total","type":"counter","labels":["outcome"],"seriesBudget":8},
     {"name":"hvac_mqtt_guard_active_sessions","type":"gauge","labels":[],"seriesBudget":1},
     {"name":"hvac_mqtt_shadow_replication_total","type":"counter","labels":["outcome"],"seriesBudget":8},
@@ -83,6 +84,7 @@
     ],
     "reason_family": ["transport", "dependency", "authorization", "scope", "capacity", "rate_limited", "unknown"],
     "message_type": ["telemetry", "event", "status", "shadow", "unknown"],
-    "priority": ["VERY_HIGH", "HIGH", "MEDIUM", "LOW", "UNKNOWN"]
+    "priority": ["VERY_HIGH", "HIGH", "MEDIUM", "LOW", "UNKNOWN"],
+    "action": ["reload", "reload_and_kick", "unknown"]
   }
 }

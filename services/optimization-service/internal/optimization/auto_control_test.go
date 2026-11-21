@@ -151,9 +151,26 @@ func (store *fakeAutoControlStore) recordFakeMonitor(reg AutomatedDispatchRegist
 	if !shadow && normalizeExecutionMode(store.lease.ExecutionMode) == ExecutionModeShadow {
 		return PreRegisterDispatchResult{SkipReason: "SHADOW_MODE_ACTIVE"}, nil
 	}
-	for _, rec := range store.dispatchedRecs {
-		if rec.ID == reg.Recommendation.ID {
-			return PreRegisterDispatchResult{SkipReason: "ALREADY_DISPATCHED"}, nil
+	targetCap := reg.TargetCapability
+	if strings.TrimSpace(string(targetCap)) == "" {
+		targetCap = commandmodel.CapabilitySetChilledWaterTemperatureSetpoint
+	}
+	loopKey := normalizeMonitorLoopKey(reg.LoopKey, targetCap)
+	targetUnit := firstNonEmptyString(strings.TrimSpace(reg.TargetUnit), targetUnitForCapability(targetCap))
+
+	if loopKey == LoopKeyPlant {
+		for _, rec := range store.dispatchedRecs {
+			if rec.ID == reg.Recommendation.ID {
+				return PreRegisterDispatchResult{SkipReason: "ALREADY_DISPATCHED"}, nil
+			}
+		}
+	} else if !shadow {
+		for _, mon := range store.monitors {
+			if mon.RecommendationID == reg.Recommendation.ID &&
+				normalizeMonitorLoopKey(mon.LoopKey, effectiveMonitorCapability(mon)) == loopKey &&
+				mon.Status != ExecutionMonitorSubmitFailed {
+				return PreRegisterDispatchResult{SkipReason: "ALREADY_DISPATCHED"}, nil
+			}
 		}
 	}
 	recentCount := 0
@@ -163,7 +180,9 @@ func (store *fakeAutoControlStore) recordFakeMonitor(reg AutomatedDispatchRegist
 		if mon.TenantID != reg.Recommendation.TenantID || mon.SiteID != reg.Recommendation.SiteID {
 			continue
 		}
-		if !shadow && (mon.Status == ExecutionMonitorPendingSubmit || mon.Status == ExecutionMonitorObserving) {
+		if !shadow &&
+			normalizeMonitorLoopKey(mon.LoopKey, effectiveMonitorCapability(mon)) == loopKey &&
+			(mon.Status == ExecutionMonitorPendingSubmit || mon.Status == ExecutionMonitorObserving) {
 			return PreRegisterDispatchResult{SkipReason: "ACTIVE_MONITOR_EXISTS"}, nil
 		}
 		if !mon.StartedAt.Before(hourAgo) {
@@ -215,7 +234,9 @@ func (store *fakeAutoControlStore) recordFakeMonitor(reg AutomatedDispatchRegist
 		LeaseID:             reg.LeaseID,
 		RecommendationID:    reg.Recommendation.ID,
 		DeviceID:            reg.Target.DeviceID,
-		TargetCapability:    string(commandmodel.CapabilitySetChilledWaterTemperatureSetpoint),
+		TargetCapability:    string(targetCap),
+		LoopKey:             loopKey,
+		TargetUnit:          targetUnit,
 		BaselineSupplyTempC: &baseline,
 		AppliedSupplyTempC:  &applied,
 		RestoreSupplyTempC:  &restore,
@@ -252,7 +273,9 @@ func (store *fakeAutoControlStore) ActivateAutomatedDispatch(_ context.Context, 
 		store.monitors[idx].Status = ExecutionMonitorObserving
 		store.monitors[idx].CommandIntentID = commandIntentID
 		store.monitors[idx].LastCheckedAt = &nowUTC
-		store.dispatchedRecs = append(store.dispatchedRecs, recommendation)
+		if normalizeMonitorLoopKey(store.monitors[idx].LoopKey, effectiveMonitorCapability(store.monitors[idx])) == LoopKeyPlant {
+			store.dispatchedRecs = append(store.dispatchedRecs, recommendation)
+		}
 		return nil
 	}
 	return errors.New("pending monitor not found")

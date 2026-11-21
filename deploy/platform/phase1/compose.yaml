@@ -444,6 +444,8 @@ services:
       TELEMETRY_CENTRIFUGO_TOKEN_HMAC_KEY: ${TELEMETRY_CENTRIFUGO_TOKEN_HMAC_KEY:-}
       TELEMETRY_CLICKHOUSE_DATABASE: ${TELEMETRY_CLICKHOUSE_DATABASE:-}
       TELEMETRY_CLICKHOUSE_USERNAME: ${TELEMETRY_CLICKHOUSE_USERNAME:-}
+      TELEMETRY_CLICKHOUSE_PASSWORD: ${TELEMETRY_CLICKHOUSE_PASSWORD:-}
+      TELEMETRY_CLICKHOUSE_CA: ${PHASE1_CLICKHOUSE_CA:-${TELEMETRY_CLICKHOUSE_CA:-}}
       TELEMETRY_CLIENT_CA: ${TELEMETRY_CLIENT_CA:-}
       TELEMETRY_DATABASE_URL: ${TELEMETRY_DATABASE_URL:-}
       TELEMETRY_HISTORY_DATABASE_URL: ${TELEMETRY_HISTORY_DATABASE_URL:-}
@@ -470,7 +472,7 @@ services:
       ANALYTICS_CLICKHOUSE_READER_USERNAME: analytics_projector_reader
       ANALYTICS_CLICKHOUSE_WRITER_USERNAME: analytics_projector_writer
       TELEMETRY_CLICKHOUSE_HTTP_URL: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
-      TELEMETRY_CLICKHOUSE_NATIVE_ADDR: ${PHASE1_CLICKHOUSE_NATIVE_ADDR:-}
+      TELEMETRY_CLICKHOUSE_NATIVE_ADDR: ${PHASE1_CLICKHOUSE_NATIVE_ADDR:-${TELEMETRY_CLICKHOUSE_NATIVE_ADDR:-}}
       ANALYTICS_CLICKHOUSE_HTTP_URL: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
       TELEMETRY_LIMIT_POLICY_REDIS_URL: ${TELEMETRY_LIMIT_POLICY_REDIS_URL:-redis://redis:6379/2}
       TELEMETRY_ALARM_EVALUATION_ENABLED: "true"
@@ -790,9 +792,11 @@ services:
       CONNECTIVITY_DATABASE_URL: ${CONNECTIVITY_DATABASE_URL:-}
       CONNECTIVITY_OVERFLOW_DIR: ${CONNECTIVITY_OVERFLOW_DIR:-/var/lib/hvac/connectivity-spool}
       GATEWAY_BROKER_URL: ${GATEWAY_BROKER_URL:-tls://localhost:8883}
+      GATEWAY_CRL_OUTPUT_FILE: ${GATEWAY_CRL_OUTPUT_FILE:-/var/lib/hvac/mqtt-crl/gateway-ca.crl.pem}
       CONNECTIVITY_IAM_URL: ${IAM_URL:-https://iam-service:8444}
     volumes:
       - ${PHASE1_RUNTIME_DIR:-./runtime}/gateway-ca:/run/hvac/gateway-ca:ro
+      - ${MQTT_CRL_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/mqtt-crl}:/var/lib/hvac/mqtt-crl
       - connectivity-spool:/var/lib/hvac/connectivity-spool
     depends_on:
       phase1-schema-preflight:
@@ -1143,7 +1147,10 @@ services:
 
   mqtt-broker:
     profiles: ["integration"]
-    image: eclipse-mosquitto:2.1.2-alpine
+    image: ${MQTT_BROKER_IMAGE:-hvac/mqtt-broker:0.1.0-dev}
+    build:
+      context: ../../..
+      dockerfile: deploy/platform/phase1/mqtt/Dockerfile
     restart: unless-stopped
     environment:
       TZ: ${TZ:-Asia/Shanghai}
@@ -1154,6 +1161,7 @@ services:
       - ../../../infra/telemetry/mqtt/acl:/mosquitto/config/acl:ro
       - ${MQTT_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/mqtt-pki}:/mosquitto/config/pki:ro
       - ${PHASE1_RUNTIME_DIR:-./runtime}/gateway-ca/trusted-client-ca.pem:/mosquitto/config/gateway-ca.pem:ro
+      - ${MQTT_CRL_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/mqtt-crl}:/mosquitto/config/crl:ro
       - ${MQTT_DATA_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/data/mqtt}:/mosquitto/data
     networks: [public, mqtt]
     cpus: ${MQTT_CPUS:-0.75}

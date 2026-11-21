@@ -49,6 +49,11 @@ const (
 	UnsuppressAlarmPathTemplate           = "__ALARM_UNSUPPRESS_PATH__"
 	ListAlarmEvaluationsPathTemplate      = "__ALARM_EVALUATIONS_PATH__"
 	ListSiteDataGapsPathTemplate          = "__SITE_DATA_GAPS_PATH__"
+	ListSiteCalendarHolidaysPathTemplate     = "__SITE_ACCOUNTING_HOLIDAYS_PATH__"
+	SiteCalendarHolidayPathTemplate          = "__SITE_ACCOUNTING_HOLIDAY_PATH__"
+	ListSiteMeterRatioVersionsPathTemplate   = "__SITE_ACCOUNTING_METER_RATIOS_PATH__"
+	RetireSiteMeterRatioVersionPathTemplate  = "__SITE_ACCOUNTING_METER_RATIO_RETIRE_PATH__"
+	GetSiteCounterAuditPathTemplate          = "__SITE_ACCOUNTING_COUNTER_AUDIT_PATH__"
 )
 
 type BuildInfo struct {
@@ -238,17 +243,19 @@ type Asset struct {
 }
 
 type Device struct {
-	ID          string            `json:"id"`
-	TenantID    string            `json:"tenantId"`
-	SiteID      string            `json:"siteId"`
-	Code        string            `json:"code"`
-	DisplayName string            `json:"displayName"`
-	DeviceType  string            `json:"deviceType"`
-	Status      string            `json:"status"`
-	Revision    int64             `json:"revision"`
-	CreatedAt   string            `json:"createdAt"`
-	UpdatedAt   string            `json:"updatedAt"`
-	Tags        map[string]string `json:"tags,omitempty"`
+	ID              string            `json:"id"`
+	TenantID        string            `json:"tenantId"`
+	SiteID          string            `json:"siteId"`
+	Code            string            `json:"code"`
+	DisplayName     string            `json:"displayName"`
+	DeviceType      string            `json:"deviceType"`
+	Status          string            `json:"status"`
+	Revision        int64             `json:"revision"`
+	CreatedAt       string            `json:"createdAt"`
+	UpdatedAt       string            `json:"updatedAt"`
+	ExternalID      *string           `json:"externalId,omitempty"`
+	ProtocolAddress map[string]any    `json:"protocolAddress,omitempty"`
+	Tags            map[string]string `json:"tags,omitempty"`
 }
 
 type Template struct {
@@ -485,6 +492,133 @@ type SiteDataGapList struct {
 	Items []SiteDataGap `json:"items"`
 }
 
+type SiteCalendarHoliday struct {
+	ID          string `json:"id"`
+	TenantID    string `json:"tenantId"`
+	SiteID      string `json:"siteId"`
+	HolidayDate string `json:"holidayDate"`
+	DayType     string `json:"dayType"`
+	Label       string `json:"label"`
+	Revision    int64  `json:"revision"`
+	CreatedAt   string `json:"createdAt"`
+	UpdatedAt   string `json:"updatedAt"`
+}
+
+type SiteCalendarHolidayList struct {
+	Items []SiteCalendarHoliday `json:"items"`
+}
+
+type SiteCalendarHolidayUpsertRequest struct {
+	DayType          string `json:"dayType"`
+	Label            string `json:"label,omitempty"`
+	ExpectedRevision *int64 `json:"expectedRevision,omitempty"`
+}
+
+type SiteCalendarHolidayDeleteResult struct {
+	Deleted     bool   `json:"deleted"`
+	SiteID      string `json:"siteId"`
+	HolidayDate string `json:"holidayDate"`
+}
+
+type MeterRatioVersion struct {
+	ID                   string   `json:"id"`
+	TenantID             string   `json:"tenantId"`
+	SiteID               string   `json:"siteId"`
+	MeterID              *string  `json:"meterId,omitempty"`
+	MeterBindingID       *string  `json:"meterBindingId,omitempty"`
+	PointID              *string  `json:"pointId,omitempty"`
+	Version              *int64   `json:"version,omitempty"`
+	CTRatio              float64  `json:"ctRatio"`
+	PTRatio              float64  `json:"ptRatio"`
+	MeterMultiplier      float64  `json:"meterMultiplier"`
+	CloudMultiplier      *float64 `json:"cloudMultiplier,omitempty"`
+	RatioApplicationMode string   `json:"ratioApplicationMode"`
+	ReadingUnit          string   `json:"readingUnit"`
+	EffectiveFrom        string   `json:"effectiveFrom"`
+	EffectiveTo          *string  `json:"effectiveTo"`
+	Status               string   `json:"status"`
+	Revision             int64    `json:"revision"`
+	CreatedAt            string   `json:"createdAt"`
+	UpdatedAt            string   `json:"updatedAt"`
+}
+
+type MeterRatioVersionList struct {
+	Items []MeterRatioVersion `json:"items"`
+}
+
+type MeterRatioVersionCreateRequest struct {
+	MeterID              *string `json:"meterId,omitempty"`
+	MeterBindingID       *string `json:"meterBindingId,omitempty"`
+	PointID              *string `json:"pointId,omitempty"`
+	CTRatio              float64 `json:"ctRatio"`
+	PTRatio              float64 `json:"ptRatio"`
+	MeterMultiplier      float64 `json:"meterMultiplier"`
+	RatioApplicationMode string  `json:"ratioApplicationMode"`
+	ReadingUnit          string  `json:"readingUnit"`
+	EffectiveFrom        string  `json:"effectiveFrom"`
+	EffectiveTo          *string `json:"effectiveTo,omitempty"`
+	Reason               string  `json:"reason,omitempty"`
+}
+
+type MeterRatioVersionRetireRequest struct {
+	EffectiveTo      *string `json:"effectiveTo,omitempty"`
+	ExpectedRevision *int64  `json:"expectedRevision,omitempty"`
+	Reason           string  `json:"reason,omitempty"`
+}
+
+type CounterAuditSummary struct {
+	TotalSamples         int64 `json:"totalSamples"`
+	AnomalyCount         int64 `json:"anomalyCount"`
+	ZeroDropCount        int64 `json:"zeroDropCount"`
+	SpikeCount           int64 `json:"spikeCount"`
+	ResetCount           int64 `json:"resetCount"`
+	RolloverCount        int64 `json:"rolloverCount"`
+	InvalidDecreaseCount int64 `json:"invalidDecreaseCount"`
+}
+
+type CounterAuditItem struct {
+	PointID         string   `json:"pointId"`
+	DeviceID        string   `json:"deviceId"`
+	TelemetryKey    string   `json:"telemetryKey"`
+	PeriodStart     string   `json:"periodStart"`
+	PeriodEnd       string   `json:"periodEnd"`
+	RawPrevious     *float64 `json:"rawPrevious"`
+	RawCurrent      float64  `json:"rawCurrent"`
+	CleanedDeltaKWh *float64 `json:"cleanedDeltaKWh"`
+	TransitionType  string   `json:"transitionType"`
+	Quality         string   `json:"quality"`
+	QualityReasons  []string `json:"qualityReasons"`
+	Unit            string   `json:"unit"`
+}
+
+type CounterAuditResponse struct {
+	SiteID    string              `json:"siteId"`
+	From      string              `json:"from"`
+	To        string              `json:"to"`
+	Summary   CounterAuditSummary `json:"summary"`
+	Items     []CounterAuditItem  `json:"items"`
+	Truncated bool                `json:"truncated"`
+}
+
+type SiteCalendarHolidaysParams struct {
+	Year *int
+}
+
+type SiteMeterRatioVersionsParams struct {
+	PointID        string
+	MeterBindingID string
+	Status         string
+}
+
+type SiteCounterAuditParams struct {
+	From          string
+	To            string
+	DeviceID      string
+	PointID       string
+	AnomaliesOnly *bool
+	Limit         *int
+}
+
 type FieldError struct {
 	Field   string `json:"field"`
 	Message string `json:"message"`
@@ -667,6 +801,102 @@ func (c *Client) GetSiteAssetModel(ctx context.Context, siteID string) (*Respons
 func (c *Client) ListSiteDataGaps(ctx context.Context, siteID string) (*Response[SiteDataGapList], error) {
 	path := strings.Replace(ListSiteDataGapsPathTemplate, "{siteId}", url.PathEscape(siteID), 1)
 	return doJSON[SiteDataGapList](ctx, c.httpClient, http.MethodGet, c.baseURL+path, "", nil)
+}
+
+func (c *Client) ListSiteCalendarHolidays(ctx context.Context, siteID string, params *SiteCalendarHolidaysParams) (*Response[SiteCalendarHolidayList], error) {
+	path := strings.Replace(ListSiteCalendarHolidaysPathTemplate, "{siteId}", url.PathEscape(siteID), 1)
+	parsed, err := url.Parse(c.baseURL + path)
+	if err != nil {
+		return nil, err
+	}
+	if params != nil && params.Year != nil {
+		query := parsed.Query()
+		query.Set("year", fmt.Sprintf("%d", *params.Year))
+		parsed.RawQuery = query.Encode()
+	}
+	return doJSON[SiteCalendarHolidayList](ctx, c.httpClient, http.MethodGet, parsed.String(), "", nil)
+}
+
+func (c *Client) UpsertSiteCalendarHoliday(ctx context.Context, siteID, date, csrfToken string, input SiteCalendarHolidayUpsertRequest) (*Response[SiteCalendarHoliday], error) {
+	path := strings.Replace(SiteCalendarHolidayPathTemplate, "{siteId}", url.PathEscape(siteID), 1)
+	path = strings.Replace(path, "{date}", url.PathEscape(date), 1)
+	body, err := json.Marshal(input)
+	if err != nil {
+		return nil, err
+	}
+	return doJSON[SiteCalendarHoliday](ctx, c.httpClient, http.MethodPut, c.baseURL+path, csrfToken, body)
+}
+
+func (c *Client) DeleteSiteCalendarHoliday(ctx context.Context, siteID, date, csrfToken string) (*Response[SiteCalendarHolidayDeleteResult], error) {
+	path := strings.Replace(SiteCalendarHolidayPathTemplate, "{siteId}", url.PathEscape(siteID), 1)
+	path = strings.Replace(path, "{date}", url.PathEscape(date), 1)
+	return doJSON[SiteCalendarHolidayDeleteResult](ctx, c.httpClient, http.MethodDelete, c.baseURL+path, csrfToken, nil)
+}
+
+func (c *Client) ListSiteMeterRatioVersions(ctx context.Context, siteID string, params *SiteMeterRatioVersionsParams) (*Response[MeterRatioVersionList], error) {
+	path := strings.Replace(ListSiteMeterRatioVersionsPathTemplate, "{siteId}", url.PathEscape(siteID), 1)
+	parsed, err := url.Parse(c.baseURL + path)
+	if err != nil {
+		return nil, err
+	}
+	if params != nil {
+		query := parsed.Query()
+		if params.PointID != "" {
+			query.Set("pointId", params.PointID)
+		}
+		if params.MeterBindingID != "" {
+			query.Set("meterBindingId", params.MeterBindingID)
+		}
+		if params.Status != "" {
+			query.Set("status", params.Status)
+		}
+		parsed.RawQuery = query.Encode()
+	}
+	return doJSON[MeterRatioVersionList](ctx, c.httpClient, http.MethodGet, parsed.String(), "", nil)
+}
+
+func (c *Client) CreateSiteMeterRatioVersion(ctx context.Context, siteID, csrfToken string, input MeterRatioVersionCreateRequest) (*Response[MeterRatioVersion], error) {
+	path := strings.Replace(ListSiteMeterRatioVersionsPathTemplate, "{siteId}", url.PathEscape(siteID), 1)
+	body, err := json.Marshal(input)
+	if err != nil {
+		return nil, err
+	}
+	return doJSON[MeterRatioVersion](ctx, c.httpClient, http.MethodPost, c.baseURL+path, csrfToken, body)
+}
+
+func (c *Client) RetireSiteMeterRatioVersion(ctx context.Context, siteID, versionID, csrfToken string, input MeterRatioVersionRetireRequest) (*Response[MeterRatioVersion], error) {
+	path := strings.Replace(RetireSiteMeterRatioVersionPathTemplate, "{siteId}", url.PathEscape(siteID), 1)
+	path = strings.Replace(path, "{versionId}", url.PathEscape(versionID), 1)
+	body, err := json.Marshal(input)
+	if err != nil {
+		return nil, err
+	}
+	return doJSON[MeterRatioVersion](ctx, c.httpClient, http.MethodPost, c.baseURL+path, csrfToken, body)
+}
+
+func (c *Client) GetSiteCounterAudit(ctx context.Context, siteID string, params SiteCounterAuditParams) (*Response[CounterAuditResponse], error) {
+	path := strings.Replace(GetSiteCounterAuditPathTemplate, "{siteId}", url.PathEscape(siteID), 1)
+	parsed, err := url.Parse(c.baseURL + path)
+	if err != nil {
+		return nil, err
+	}
+	query := parsed.Query()
+	query.Set("from", params.From)
+	query.Set("to", params.To)
+	if params.DeviceID != "" {
+		query.Set("deviceId", params.DeviceID)
+	}
+	if params.PointID != "" {
+		query.Set("pointId", params.PointID)
+	}
+	if params.AnomaliesOnly != nil {
+		query.Set("anomaliesOnly", fmt.Sprintf("%t", *params.AnomaliesOnly))
+	}
+	if params.Limit != nil {
+		query.Set("limit", fmt.Sprintf("%d", *params.Limit))
+	}
+	parsed.RawQuery = query.Encode()
+	return doJSON[CounterAuditResponse](ctx, c.httpClient, http.MethodGet, parsed.String(), "", nil)
 }
 
 func (c *Client) GetDevice(ctx context.Context, deviceID string) (*Response[Device], error) {

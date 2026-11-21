@@ -126,6 +126,7 @@ const expectedOperations = {
   updateSiteAsset: ['patch', `${site}/assets/{assetId}`],
   createSiteDevice: ['post', `${site}/devices`],
   updateSiteDevice: ['patch', `${site}/devices/{deviceId}`],
+  replaceDeviceHardware: ['post', `${site}/devices/{deviceId}/replace-hardware`],
   createSiteSensor: ['post', `${site}/sensors`],
   updateSiteSensor: ['patch', `${site}/sensors/{sensorId}`],
   createSitePoint: ['post', `${site}/points`],
@@ -182,6 +183,13 @@ const expectedOperations = {
   confirmSiteUtilityBill: ['post', `${site}/utility-bills/{billId}/confirm`],
   recalculateSiteAccounting: ['post', `${site}/accounting/recalculate`],
   listSiteAccountingRecalcJobs: ['get', `${site}/accounting/recalculate-jobs`],
+  listSiteCalendarHolidays: ['get', `${site}/accounting/holidays`],
+  upsertSiteCalendarHoliday: ['put', `${site}/accounting/holidays/{date}`],
+  deleteSiteCalendarHoliday: ['delete', `${site}/accounting/holidays/{date}`],
+  listSiteMeterRatioVersions: ['get', `${site}/accounting/meter-ratios`],
+  createSiteMeterRatioVersion: ['post', `${site}/accounting/meter-ratios`],
+  retireSiteMeterRatioVersion: ['post', `${site}/accounting/meter-ratios/{versionId}/retire`],
+  getSiteCounterAudit: ['get', `${site}/accounting/counter-audit`],
   listSiteDataGaps: ['get', `${site}/data-gaps`],
   getSiteControlState: ['get', `${site}/control-state`],
   updateSiteControlMode: ['put', `${site}/control-mode`],
@@ -192,6 +200,10 @@ const expectedOperations = {
   revokeSiteAutoControlLease: ['post', `${site}/optimization/auto-control-lease/revoke`],
   listSiteOptimizationExecutionMonitors: ['get', `${site}/optimization/execution-monitors`],
   getSiteOptimizationGovernanceSummary: ['get', `${opt}/governance-summary`],
+  listSiteOptimizationCanaryBindings: ['get', `${opt}/canary-bindings`],
+  upsertSiteOptimizationCanaryBinding: ['put', `${opt}/canary-bindings/{loopKey}`],
+  deleteSiteOptimizationCanaryBinding: ['delete', `${opt}/canary-bindings/{loopKey}`],
+  listSiteOptimizationNegativeSamples: ['get', `${opt}/negative-samples`],
 };
 const operations = {};
 for (const [operationId, [method, subPath]] of Object.entries(expectedOperations)) {
@@ -251,6 +263,12 @@ const expectedSuccessSchemas = {
   updateSiteUtilityBill: 'UtilityBill',
   confirmSiteUtilityBill: 'UtilityBill',
   listSiteAccountingRecalcJobs: 'AccountingRecalcJobList',
+  listSiteCalendarHolidays: 'SiteCalendarHolidayList',
+  upsertSiteCalendarHoliday: 'SiteCalendarHoliday',
+  deleteSiteCalendarHoliday: 'SiteCalendarHolidayDeleteResult',
+  listSiteMeterRatioVersions: 'MeterRatioVersionList',
+  retireSiteMeterRatioVersion: 'MeterRatioVersion',
+  getSiteCounterAudit: 'CounterAuditResponse',
   listSiteDataGaps: 'SiteDataGapList',
   getSiteControlState: 'SiteControlState',
   updateSiteControlMode: 'SiteControlModeMutationResponse',
@@ -263,11 +281,17 @@ const expectedSuccessSchemas = {
   revokeSiteAutoControlLease: 'SiteAutoControlLeaseState',
   listSiteOptimizationExecutionMonitors: 'OptimizationExecutionMonitorList',
   getSiteOptimizationGovernanceSummary: 'OptimizationGovernanceSummary',
+  listSiteOptimizationCanaryBindings: 'OptimizationCanaryBindingList',
+  upsertSiteOptimizationCanaryBinding: 'OptimizationCanaryBindingRecord',
+  deleteSiteOptimizationCanaryBinding: 'OptimizationCanaryBindingDeleteResult',
+  listSiteOptimizationNegativeSamples: 'OptimizationNegativeSamplePage',
 };
 for (const [operationId, schemaName] of Object.entries(expectedSuccessSchemas)) {
   invariant(schemaRef(operations[operationId].operation, '200') === `#/components/schemas/${schemaName}`, `${operationId} success schema is unsupported`);
 }
 invariant(schemaRef(operations.recalculateSiteAccounting.operation, '202') === '#/components/schemas/AccountingRecalcJob', 'recalculateSiteAccounting accepted schema is unsupported');
+invariant(schemaRef(operations.createSiteMeterRatioVersion.operation, '201') === '#/components/schemas/MeterRatioVersion', 'createSiteMeterRatioVersion created schema is unsupported');
+invariant(schemaRef(operations.replaceDeviceHardware.operation, '201') === '#/components/schemas/ReplaceDeviceHardwareResult', 'replaceDeviceHardware success schema is unsupported');
 invariant(schemaRef(operations.getTemplateRevision.operation, '200') === './s05-registry-writer.openapi.json#/components/schemas/TemplateRevision', 'getTemplateRevision success schema is unsupported');
 invariant(operations.logout.operation.responses?.['204'], 'logout must return 204');
 invariant(operations.logout.operation.responses?.['204']?.headers?.Location?.schema?.format === 'uri', 'logout must publish the provider end-session Location header');
@@ -302,7 +326,12 @@ const schemaRequirements = {
   ]],
   Site: [['id', 'tenantId', 'code', 'displayName', 'timezone', 'status', 'revision', 'createdAt', 'updatedAt', 'floorAreaM2', 'climateZone']],
   Asset: [['id', 'tenantId', 'siteId', 'code', 'displayName', 'assetType', 'status', 'revision', 'createdAt', 'updatedAt'], ['ratedPower', 'ratedCapacity', 'tags', 'waterLoop', 'branchCode']],
-  Device: [['id', 'tenantId', 'siteId', 'code', 'displayName', 'deviceType', 'status', 'revision', 'createdAt', 'updatedAt'], ['tags']],
+  Device: [['id', 'tenantId', 'siteId', 'code', 'displayName', 'deviceType', 'status', 'revision', 'createdAt', 'updatedAt'], ['externalId', 'protocolAddress', 'tags']],
+  ReplaceDeviceHardwareResult: [[
+    'replacementId', 'tenantId', 'siteId', 'deviceId', 'revision', 'previousExternalId', 'newExternalId',
+    'previousGatewayDeviceId', 'newGatewayDeviceId', 'previousProtocolAddress', 'newProtocolAddress',
+    'reason', 'replacedBy', 'replacedAt', 'device', 'replayed',
+  ]],
   Template: [['id', 'tenantId', 'templateKey', 'templateKind', 'createdAt'], ['latestRevisionId', 'latestRevisionNumber', 'releasedAt']],
   TemplateCollection: [['items', 'nextCursor', 'hasMore']],
   TemplateAssignmentCollection: [['items', 'nextCursor', 'hasMore']],
@@ -327,6 +356,23 @@ const schemaRequirements = {
     'source', 'attemptCount', 'lastError', 'createdAt', 'updatedAt', 'finishedAt',
   ]],
   AccountingRecalcJobList: [['items']],
+  SiteCalendarHoliday: [['id', 'tenantId', 'siteId', 'holidayDate', 'dayType', 'label', 'revision', 'createdAt', 'updatedAt']],
+  SiteCalendarHolidayList: [['items']],
+  SiteCalendarHolidayUpsertRequest: [['dayType'], ['label', 'expectedRevision']],
+  SiteCalendarHolidayDeleteResult: [['deleted', 'siteId', 'holidayDate']],
+  MeterRatioVersion: [
+    ['id', 'tenantId', 'siteId', 'ctRatio', 'ptRatio', 'meterMultiplier', 'ratioApplicationMode', 'readingUnit', 'effectiveFrom', 'effectiveTo', 'status', 'revision', 'createdAt', 'updatedAt'],
+    ['meterId', 'meterBindingId', 'pointId', 'version', 'cloudMultiplier'],
+  ],
+  MeterRatioVersionList: [['items']],
+  MeterRatioVersionCreateRequest: [
+    ['ctRatio', 'ptRatio', 'meterMultiplier', 'ratioApplicationMode', 'readingUnit', 'effectiveFrom'],
+    ['meterId', 'meterBindingId', 'pointId', 'effectiveTo', 'reason'],
+  ],
+  MeterRatioVersionRetireRequest: [[], ['effectiveTo', 'expectedRevision', 'reason']],
+  CounterAuditSummary: [['totalSamples', 'anomalyCount', 'zeroDropCount', 'spikeCount', 'resetCount', 'rolloverCount', 'invalidDecreaseCount']],
+  CounterAuditItem: [['pointId', 'deviceId', 'telemetryKey', 'periodStart', 'periodEnd', 'rawPrevious', 'rawCurrent', 'cleanedDeltaKWh', 'transitionType', 'quality', 'qualityReasons', 'unit']],
+  CounterAuditResponse: [['siteId', 'from', 'to', 'summary', 'items', 'truncated']],
   SiteDataGap: [['alarmId', 'deviceId', 'deviceName', 'pointId', 'pointCode', 'pointName', 'since', 'affectedFigures', 'excludesDeviceFromTotal']],
   SiteDataGapList: [['items']],
   AssetControlLockState: [['siteId', 'assetId', 'lockMode', 'reason', 'updatedBy', 'updatedAt', 'revision'], ['id', 'tenantId', 'updatedByName', 'boundDeviceIds']],
@@ -347,13 +393,13 @@ const schemaRequirements = {
   OptimizationPreparationResponseCoefficient: [['status', 'calibratedAt']],
   OptimizationPreparationTenantStrategy: [['status']],
   OptimizationPreparation: [['trigger', 'status', 'reason', 'firedAt', 'completedAt', 'responseCoefficient', 'tenantStrategy']],
-  AutoControlLease: [['id', 'tenantId', 'siteId', 'status', 'armedBy', 'armedAt', 'expiresAt', 'allowedCapabilities', 'maxSetpointStepC', 'supplyTempMinC', 'supplyTempMaxC', 'zoneTempMaxC', 'minRunningChillers', 'maxCommandsPerHour', 'revision', 'createdAt', 'updatedAt'], ['deadbandC', 'manualBackoffUntil', 'manualBackoffReason', 'tripReason', 'executionMode']],
+  AutoControlLease: [['id', 'tenantId', 'siteId', 'status', 'armedBy', 'armedAt', 'expiresAt', 'allowedCapabilities', 'maxSetpointStepC', 'supplyTempMinC', 'supplyTempMaxC', 'zoneTempMaxC', 'minRunningChillers', 'maxCommandsPerHour', 'revision', 'createdAt', 'updatedAt'], ['deadbandC', 'manualBackoffUntil', 'manualBackoffReason', 'tripReason', 'executionMode', 'pumpFreqMinHz', 'pumpFreqMaxHz', 'maxFreqStepHz', 'freqDeadbandHz', 'fanSpeedMinPct', 'fanSpeedMaxPct', 'maxFanStepPct', 'fanDeadbandPct']],
   SiteAutoControlLeaseState: [['tenantId', 'siteId', 'confirmationMode', 'activeLease', 'latestLease']],
-  ArmAutoControlLeaseRequest: [['allowedCapabilities', 'supplyTempMinC', 'supplyTempMaxC', 'reason', 'verificationCode'], ['expiresInHours', 'expiresAt', 'maxSetpointStepC', 'deadbandC', 'zoneTempMaxC', 'minRunningChillers', 'maxCommandsPerHour', 'executionMode', 'expectedRevision']],
+  ArmAutoControlLeaseRequest: [['allowedCapabilities', 'supplyTempMinC', 'supplyTempMaxC', 'reason', 'verificationCode'], ['expiresInHours', 'expiresAt', 'maxSetpointStepC', 'deadbandC', 'zoneTempMaxC', 'minRunningChillers', 'maxCommandsPerHour', 'executionMode', 'pumpFreqMinHz', 'pumpFreqMaxHz', 'maxFreqStepHz', 'freqDeadbandHz', 'fanSpeedMinPct', 'fanSpeedMaxPct', 'maxFanStepPct', 'fanDeadbandPct', 'expectedRevision']],
   RevokeAutoControlLeaseRequest: [['reason'], ['expectedRevision']],
   OptimizationExecutionMonitor: [
     ['id', 'tenantId', 'siteId', 'leaseId', 'recommendationId', 'commandIntentId', 'deviceId', 'targetCapability', 'zoneTempMaxC', 'supplyTempMaxC', 'startedAt', 'windowEndsAt', 'status', 'createdAt', 'updatedAt'],
-    ['baselineSupplyTempC', 'appliedSupplyTempC', 'restoreSupplyTempC', 'supplyTempMinC', 'rawRecommendedValue', 'clampedValue', 'guardrailVerdict', 'guardrailTrace', 'executionMode', 'decisionId', 'traceId', 'lastCheckedAt', 'telemetryUnhealthySince', 'tripReason', 'rollbackCommandIntentId'],
+    ['loopKey', 'targetUnit', 'baselineSupplyTempC', 'appliedSupplyTempC', 'restoreSupplyTempC', 'supplyTempMinC', 'rawRecommendedValue', 'clampedValue', 'guardrailVerdict', 'guardrailTrace', 'executionMode', 'decisionId', 'traceId', 'lastCheckedAt', 'telemetryUnhealthySince', 'tripReason', 'rollbackCommandIntentId'],
   ],
   OptimizationExecutionMonitorList: [['tenantId', 'siteId', 'items']],
   OptimizationActiveSolver: [['servingRef', 'source', 'loopKey', 'deploymentRevisionId']],
@@ -361,6 +407,14 @@ const schemaRequirements = {
   OptimizationCopComparison: [['matchedBinCount', 'matchedAiSamples', 'matchedBaselineSamples', 'weightedBaselineCOP', 'weightedAiCOP', 'weightedCopUpliftPct', 'totalEstimatedSavedKWh', 'cells']],
   OptimizationFlywheelSummary: [['totalSamples', 'guardrailClamped', 'guardrailVetoed', 'manualOverride', 'monitorTripped', 'trackingDeviation']],
   OptimizationGovernanceSummary: [['tenantId', 'siteId', 'windowDays', 'generatedAt', 'activeSolver', 'tickCounts', 'copComparison', 'flywheel']],
+  OptimizationCanaryBindingRecord: [['id', 'tenantId', 'siteId', 'loopKey', 'servingRef', 'status', 'createdAt', 'updatedAt']],
+  OptimizationCanaryBindingList: [['tenantId', 'siteId', 'allowedSolverHosts', 'activeSolver', 'items']],
+  UpsertOptimizationCanaryBindingRequest: [['servingRef', 'status']],
+  OptimizationCanaryBindingDeleteResult: [['deleted', 'siteId', 'loopKey']],
+  OptimizationGuardrailStageResult: [['stage', 'action', 'before', 'after'], ['reason']],
+  OptimizationFeatureSnapshot: [['runningChillers', 'cabinetLocalManual', 'deviceFaultActive', 'leaseDeadbandC', 'supplyTempMinC', 'supplyTempMaxC'], ['supplyTempC', 'zoneMaxTempC', 'outdoorWetBulbC', 'coolingLoadKW', 'chillerPowerKW', 'observedCOP']],
+  OptimizationNegativeSampleItem: [['id', 'decisionId', 'recommendationId', 'monitorId', 'traceId', 'sampleKind', 'reasonCode', 'solverServingRef', 'rawRecommendedValue', 'appliedOrClampedValue', 'occurredAt', 'guardrailTrace', 'featureSnapshot']],
+  OptimizationNegativeSamplePage: [['tenantId', 'siteId', 'windowDays', 'sampleKind', 'total', 'limit', 'offset', 'hasMore', 'items']],
   GatewayCredentialRecord: [['id', 'gatewayId', 'fingerprintSha256', 'status', 'validFrom', 'validUntil', 'createdAt'], ['serialNumber', 'revokedAt', 'revocationReason']],
   GatewayCredentialList: [['items']],
   GatewayCertificateRevokeRequest: [[], ['reason']],
@@ -502,6 +556,7 @@ const replacements = {
   __SITE_SPACE_PATH__: operations.updateSiteSpace.path,
   __SITE_ASSET_DETAIL_PATH__: operations.updateSiteAsset.path,
   __SITE_DEVICE_DETAIL_PATH__: operations.updateSiteDevice.path,
+  __SITE_DEVICE_REPLACE_HARDWARE_PATH__: operations.replaceDeviceHardware.path,
   __SITE_SENSORS_PATH__: operations.createSiteSensor.path,
   __SITE_SENSOR_PATH__: operations.updateSiteSensor.path,
   __SITE_POINTS_PATH__: operations.createSitePoint.path,
@@ -553,6 +608,11 @@ const replacements = {
   __SITE_UTILITY_BILL_CONFIRM_PATH__: operations.confirmSiteUtilityBill.path,
   __SITE_ACCOUNTING_RECALCULATE_PATH__: operations.recalculateSiteAccounting.path,
   __SITE_ACCOUNTING_RECALC_JOBS_PATH__: operations.listSiteAccountingRecalcJobs.path,
+  __SITE_ACCOUNTING_HOLIDAYS_PATH__: operations.listSiteCalendarHolidays.path,
+  __SITE_ACCOUNTING_HOLIDAY_PATH__: operations.upsertSiteCalendarHoliday.path,
+  __SITE_ACCOUNTING_METER_RATIOS_PATH__: operations.listSiteMeterRatioVersions.path,
+  __SITE_ACCOUNTING_METER_RATIO_RETIRE_PATH__: operations.retireSiteMeterRatioVersion.path,
+  __SITE_ACCOUNTING_COUNTER_AUDIT_PATH__: operations.getSiteCounterAudit.path,
   __SITE_DATA_GAPS_PATH__: operations.listSiteDataGaps.path,
   __SITE_CONTROL_STATE_PATH__: operations.getSiteControlState.path,
   __SITE_CONTROL_MODE_PATH__: operations.updateSiteControlMode.path,
@@ -562,6 +622,9 @@ const replacements = {
   __SITE_AUTO_CONTROL_LEASE_REVOKE_PATH__: operations.revokeSiteAutoControlLease.path,
   __SITE_OPTIMIZATION_EXECUTION_MONITORS_PATH__: operations.listSiteOptimizationExecutionMonitors.path,
   __SITE_OPTIMIZATION_GOVERNANCE_SUMMARY_PATH__: operations.getSiteOptimizationGovernanceSummary.path,
+  __SITE_OPTIMIZATION_CANARY_BINDINGS_PATH__: operations.listSiteOptimizationCanaryBindings.path,
+  __SITE_OPTIMIZATION_CANARY_BINDING_PATH__: operations.upsertSiteOptimizationCanaryBinding.path,
+  __SITE_OPTIMIZATION_NEGATIVE_SAMPLES_PATH__: operations.listSiteOptimizationNegativeSamples.path,
 };
 
 function render(template) {

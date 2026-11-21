@@ -160,7 +160,7 @@ func run() int {
 	}
 	concentratorService := concentrator.NewService(connectivityStore, concentratorTransport)
 	presence := newGatewayOnlineTrackerWithMetrics(telemetry.Metrics)
-	credentials, tunnelHub, mqttGuard, err := newCredentialRuntime(credentialRuntimeConfig{
+	credentials, tunnelHub, mqttGuard, crlCtrl, err := newCredentialRuntime(credentialRuntimeConfig{
 		RootCtx:             drainRootCtx,
 		Logger:              logger,
 		Metrics:             telemetry.Metrics,
@@ -185,6 +185,7 @@ func run() int {
 		})
 	}
 	addCloser(tunnelHub.Close)
+	addCloser(crlCtrl.Close)
 	var (
 		bgMu     sync.RWMutex
 		bgClosed bool
@@ -346,6 +347,7 @@ func run() int {
 		}
 	}()
 	retentionDone := startQuarantineRetentionLoop(ingressCtx, connectivityStore, logger, telemetry.Metrics, time.Hour, connectivity.DefaultQuarantineRetention)
+	crlDone := startCRLRefreshLoop(ingressCtx, logger, telemetry.Metrics, defaultCRLRefreshInterval, crlCtrl.RefreshAndReload)
 	commandsDone := make(chan struct{})
 	if commands != nil {
 		observability.GoSafe(logger, telemetry.Metrics, "connectivity.command_runtime", func() {
@@ -380,6 +382,7 @@ func run() int {
 		},
 		mqttGuardDone:   mqttGuardDone,
 		closeTunnelHub:  tunnelHub.Close,
+		closeCRL:        crlCtrl.Close,
 		cancelIngress:   ingressCancel,
 		cancelDrainRoot: drainRootCancel,
 		runtimeDone:     runtimeDone,
@@ -402,6 +405,7 @@ func run() int {
 			return commands.Wait(ctx)
 		},
 		retentionDone:   retentionDone,
+		crlDone:         crlDone,
 		flushQuarantine: connectivityStore.FlushQuarantineBursts,
 		closeConcentrator: func(ctx context.Context) error {
 			return concentratorTransport.Close(ctx)
@@ -441,6 +445,7 @@ type connectivityShutdownDeps struct {
 	shutdownMQTTGuard   func(context.Context) error
 	mqttGuardDone       <-chan struct{}
 	closeTunnelHub      func()
+	closeCRL            func()
 	cancelIngress       func()
 	cancelDrainRoot     func()
 	runtimeDone         <-chan struct{}
@@ -448,6 +453,7 @@ type connectivityShutdownDeps struct {
 	commandsDone        <-chan struct{}
 	waitCommands        func(context.Context) error
 	retentionDone       <-chan struct{}
+	crlDone             <-chan struct{}
 	flushQuarantine     func(context.Context) error
 	closeConcentrator   func(context.Context) error
 	closeMQTTSession    func(context.Context) error
@@ -476,6 +482,9 @@ func shutdownConnectivityRuntime(deps connectivityShutdownDeps) {
 	if deps.closeTunnelHub != nil {
 		deps.closeTunnelHub()
 	}
+	if deps.closeCRL != nil {
+		deps.closeCRL()
+	}
 
 	if deps.cancelIngress != nil {
 		deps.cancelIngress()
@@ -494,6 +503,7 @@ func shutdownConnectivityRuntime(deps connectivityShutdownDeps) {
 		_ = deps.waitCommands(drainCtx)
 	}
 	awaitSignal(drainCtx, deps.retentionDone)
+	awaitSignal(drainCtx, deps.crlDone)
 	if deps.flushQuarantine != nil {
 		_ = deps.flushQuarantine(drainCtx)
 	}

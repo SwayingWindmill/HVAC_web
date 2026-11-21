@@ -462,7 +462,7 @@ func TestGatewayAutoControlLeaseForwardsShadowExecutionMode(t *testing.T) {
 		}),
 	}
 
-	req := httptest.NewRequest(http.MethodPut, "/api/v1/sites/"+fixture.siteID+"/optimization/auto-control-lease", strings.NewReader(`{"expiresInHours":8,"allowedCapabilities":["SET_CHILLED_WATER_TEMPERATURE_SETPOINT"],"supplyTempMinC":6,"supplyTempMaxC":12,"executionMode":"SHADOW","reason":"开启影子推演","verificationCode":"123456"}`))
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/sites/"+fixture.siteID+"/optimization/auto-control-lease", strings.NewReader(`{"expiresInHours":8,"allowedCapabilities":["SET_CHILLED_WATER_TEMPERATURE_SETPOINT","SET_FREQUENCY","SET_FAN_SPEED"],"supplyTempMinC":6,"supplyTempMaxC":12,"executionMode":"SHADOW","pumpFreqMinHz":30,"pumpFreqMaxHz":48,"maxFreqStepHz":2.5,"freqDeadbandHz":0.5,"fanSpeedMinPct":35,"fanSpeedMaxPct":90,"maxFanStepPct":10,"fanDeadbandPct":2,"reason":"开启影子推演","verificationCode":"123456"}`))
 	fixture.authenticate(req, true)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -470,8 +470,8 @@ func TestGatewayAutoControlLeaseForwardsShadowExecutionMode(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PUT shadow lease status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(forwardedBody, `"executionMode":"SHADOW"`) {
-		t.Fatalf("expected executionMode SHADOW forwarded to core registry, got %s", forwardedBody)
+	if !strings.Contains(forwardedBody, `"executionMode":"SHADOW"`) || !strings.Contains(forwardedBody, `"pumpFreqMinHz":30`) || !strings.Contains(forwardedBody, `"fanSpeedMaxPct":90`) {
+		t.Fatalf("expected executionMode SHADOW and VFD/fan bounds forwarded to core registry, got %s", forwardedBody)
 	}
 	if !strings.Contains(rec.Body.String(), `"executionMode":"SHADOW"`) {
 		t.Fatalf("expected executionMode SHADOW in gateway response, got %s", rec.Body.String())
@@ -618,5 +618,97 @@ func jsonHTTPResponse(status int, body string) *http.Response {
 		StatusCode: status,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+}
+
+func TestGatewayOptimizationCanaryBindingsAndNegativeSamples(t *testing.T) {
+	fixture := newOperationsGatewayFixture(t, 30)
+	controller := fixture.handler.(*handler)
+	snapshot, err := ownershipregistry.Parse(readRepositoryFile(t, "contracts", "ownership", "route-ownership.v1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller.routeManager = ownershipregistry.NewManager(snapshot, ownershipregistry.NewMemoryAuditSink(), func() time.Time { return fixture.now })
+
+	upstreamStatus := http.StatusOK
+	upstreamBody := `{}`
+	controller.intelligence.ownerHTTPClient = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			fixture.lastOwner.Store(req)
+			return jsonHTTPResponse(upstreamStatus, upstreamBody), nil
+		}),
+	}
+
+	// 1. GET /canary-bindings forwards optimization:read context.
+	upstreamBody = `{"tenantId":"` + fixture.tenantID + `","siteId":"` + fixture.siteID + `","allowedSolverHosts":["ai-solver-service:8090"],"activeSolver":{"servingRef":"builtin://hvac-recommendation-v1","source":"DEFAULT","loopKey":"PLANT","deploymentRevisionId":null},"items":[]}`
+	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/sites/"+fixture.siteID+"/optimization/canary-bindings", nil)
+	fixture.authenticate(getReq, false)
+	getRec := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GET canary-bindings status=%d body=%s", getRec.Code, getRec.Body.String())
+	}
+	requireOwnerContext(t, fixture, "X-Optimization-Context", "optimization-service", optimizationReadAction)
+
+	// 2. PUT /canary-bindings/{loopKey} requires CSRF token.
+	noCSRFReq := httptest.NewRequest(http.MethodPut, "/api/v1/sites/"+fixture.siteID+"/optimization/canary-bindings/PLANT", strings.NewReader(`{"servingRef":"http://ai-solver-service:8090","status":"ACTIVE"}`))
+	fixture.authenticate(noCSRFReq, false)
+	noCSRFRec := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(noCSRFRec, noCSRFReq)
+	assertProblemCode(t, noCSRFRec, http.StatusForbidden, "CSRF_INVALID")
+
+	// 3. Valid PUT forwards optimization:write context and maps upstream 422 allowlist error to OPTIMIZATION_SOLVER_HOST_NOT_ALLOWED.
+	upstreamStatus = http.StatusUnprocessableEntity
+	upstreamBody = `{"error":"optimization_solver_host_not_allowed"}`
+	badHostReq := httptest.NewRequest(http.MethodPut, "/api/v1/sites/"+fixture.siteID+"/optimization/canary-bindings/PLANT", strings.NewReader(`{"servingRef":"http://evil.example.com:8090","status":"ACTIVE"}`))
+	fixture.authenticate(badHostReq, true)
+	badHostRec := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(badHostRec, badHostReq)
+	assertProblemCode(t, badHostRec, http.StatusUnprocessableEntity, "OPTIMIZATION_SOLVER_HOST_NOT_ALLOWED")
+	requireOwnerContext(t, fixture, "X-Optimization-Context", "optimization-service", optimizationWriteAction)
+
+	// 4. Valid PUT 200 and DELETE 200 succeed cleanly.
+	upstreamStatus = http.StatusOK
+	upstreamBody = `{"id":"01990000-1111-7000-8000-000000000001","tenantId":"` + fixture.tenantID + `","siteId":"` + fixture.siteID + `","loopKey":"PLANT","servingRef":"http://ai-solver-service:8090","status":"ACTIVE","createdAt":"2026-07-31T08:00:00Z","updatedAt":"2026-07-31T08:00:00Z"}`
+	putReq := httptest.NewRequest(http.MethodPut, "/api/v1/sites/"+fixture.siteID+"/optimization/canary-bindings/PLANT", strings.NewReader(`{"servingRef":"http://ai-solver-service:8090","status":"ACTIVE"}`))
+	fixture.authenticate(putReq, true)
+	putRec := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(putRec, putReq)
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("PUT canary-binding status=%d body=%s", putRec.Code, putRec.Body.String())
+	}
+
+	upstreamBody = `{"deleted":true,"siteId":"` + fixture.siteID + `","loopKey":"PLANT"}`
+	delReq := httptest.NewRequest(http.MethodDelete, "/api/v1/sites/"+fixture.siteID+"/optimization/canary-bindings/PLANT", nil)
+	fixture.authenticate(delReq, true)
+	delRec := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(delRec, delReq)
+	if delRec.Code != http.StatusOK {
+		t.Fatalf("DELETE canary-binding status=%d body=%s", delRec.Code, delRec.Body.String())
+	}
+
+	// 5. GET /negative-samples forwards query string.
+	upstreamBody = `{"tenantId":"` + fixture.tenantID + `","siteId":"` + fixture.siteID + `","windowDays":14,"sampleKind":"GUARDRAIL_CLAMPED","total":0,"limit":20,"offset":0,"hasMore":false,"items":[]}`
+	nsReq := httptest.NewRequest(http.MethodGet, "/api/v1/sites/"+fixture.siteID+"/optimization/negative-samples?sampleKind=GUARDRAIL_CLAMPED&limit=20&offset=0", nil)
+	fixture.authenticate(nsReq, false)
+	nsRec := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(nsRec, nsReq)
+	if nsRec.Code != http.StatusOK {
+		t.Fatalf("GET negative-samples status=%d body=%s", nsRec.Code, nsRec.Body.String())
+	}
+	if up := fixture.lastOwner.Load(); up == nil || up.URL.RawQuery != "sampleKind=GUARDRAIL_CLAMPED&limit=20&offset=0" {
+		t.Fatalf("unexpected negative-samples upstream request: %v", up)
+	}
+
+	// 6. Write RBAC denial returns 403 CONTROL_EXIT_FORBIDDEN without forwarding to optimization-service.
+	fixture.lastOwner.Store(nil)
+	fixture.denySite.Store(true)
+	forbiddenDel := httptest.NewRequest(http.MethodDelete, "/api/v1/sites/"+fixture.siteID+"/optimization/canary-bindings/PLANT", nil)
+	fixture.authenticate(forbiddenDel, true)
+	forbiddenRec := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(forbiddenRec, forbiddenDel)
+	assertProblemCode(t, forbiddenRec, http.StatusForbidden, "CONTROL_EXIT_FORBIDDEN")
+	if fixture.lastOwner.Load() != nil {
+		t.Fatal("optimization-service must not be called when control exit write authorization fails")
 	}
 }

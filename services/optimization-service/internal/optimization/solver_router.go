@@ -615,6 +615,7 @@ func decodeRemoteRecommendation(body []byte, request Request, at time.Time) (Rec
 		},
 		Constraints:      frozenRecommendationConstraints(request.Constraints),
 		Candidate:        candidate,
+		AuxiliaryTargets: toModelAuxiliaryTargets(raw.AuxiliaryTargets),
 		ExpectedImpact:   expectedImpact,
 		Uncertainty:      uncertainty,
 		Risk:             risk,
@@ -666,6 +667,23 @@ func validateRemoteAuxiliaryTargets(targets []RemoteAuxiliaryTarget) error {
 		}
 	}
 	return nil
+}
+
+func toModelAuxiliaryTargets(targets []RemoteAuxiliaryTarget) []intelligencemodel.OptimizationAuxiliaryTarget {
+	if len(targets) == 0 {
+		return nil
+	}
+	out := make([]intelligencemodel.OptimizationAuxiliaryTarget, 0, len(targets))
+	for _, target := range targets {
+		out = append(out, intelligencemodel.OptimizationAuxiliaryTarget{
+			LoopKey:     strings.TrimSpace(target.LoopKey),
+			Capability:  strings.TrimSpace(target.Capability),
+			TargetValue: target.TargetValue,
+			Unit:        strings.TrimSpace(target.Unit),
+			Rationale:   strings.TrimSpace(target.Rationale),
+		})
+	}
+	return out
 }
 
 func isUUIDv7(raw string) bool {

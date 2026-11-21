@@ -3,10 +3,21 @@ import { z } from 'zod';
 import { gatewayPath, gatewayRequest, publishedValueOf, valueOf, type GatewayProblem } from '@/api/gateway-client';
 import {
   intelligencePaths,
+  optimizationCanaryBindingDeleteResultSchema,
+  optimizationCanaryBindingListSchema,
+  optimizationCanaryBindingRecordSchema,
   optimizationCopCellSchema,
+  optimizationNegativeSamplePageSchema,
   optimizationPreparationSchema,
   stagingEvaluationSchema,
+  type OptimizationCanaryBindingDeleteResult,
+  type OptimizationCanaryBindingList,
+  type OptimizationCanaryBindingRecord,
+  type OptimizationNegativeSampleFilterKind,
+  type OptimizationNegativeSampleItem,
+  type OptimizationNegativeSamplePage,
   type StagingEvaluation,
+  type UpsertOptimizationCanaryBindingRequest,
 } from '@/api/generated/platformGateway.gen';
 import { listWorkOrders, type WorkOrderList } from '@/api/work-orders';
 import { workOrderKeys } from '@/features/work-orders/work-order-queries';
@@ -202,6 +213,11 @@ export const optimizationKeys = {
   preparation: (siteId: string) => ['optimization', siteId, 'preparation'] as const,
   shadow: (siteId: string, runId: string | null) => ['optimization', siteId, 'shadow', runId] as const,
   governanceSummary: (siteId: string) => ['optimization', siteId, 'governance-summary'] as const,
+  canaryBindings: (siteId: string) => ['optimization', siteId, 'canary-bindings'] as const,
+  negativeSamples: (
+    siteId: string,
+    params: { windowDays?: number; sampleKind?: OptimizationNegativeSampleFilterKind; limit?: number; offset?: number },
+  ) => ['optimization', siteId, 'negative-samples', params] as const,
   staging: (siteId: string) => ['optimization', siteId, 'staging'] as const,
 };
 
@@ -284,6 +300,120 @@ export function siteOptimizationGovernanceSummaryQuery(siteId: string, enabled: 
     retry: false,
   });
 }
+
+function canaryRefusal(problem: GatewayProblem): string {
+  switch (problem.code) {
+    case 'OPTIMIZATION_SOLVER_HOST_NOT_ALLOWED':
+      return '外部优化服务地址不在允许名单内，请联系平台管理员在服务配置中添加白名单主机';
+    case 'CONTROL_EXIT_FORBIDDEN':
+      return '你没有管理优化策略灰度路由的权限';
+    case 'OPTIMIZATION_CANARY_REQUEST_INVALID':
+      return '回路标识或求解服务地址格式无效，请检查后重试';
+    case 'RESOURCE_NOT_FOUND':
+      return '当前站点尚未配置该回路的灰度路由绑定';
+    default:
+      return UNAVAILABLE;
+  }
+}
+
+export function siteOptimizationCanaryBindingsQuery(siteId: string, enabled: boolean) {
+  return queryOptions({
+    queryKey: optimizationKeys.canaryBindings(siteId),
+    queryFn: async ({ signal }): Promise<OptimizationCanaryBindingList> => valueOf(
+      await gatewayRequest(
+        gatewayPath(intelligencePaths.siteOptimizationCanaryBindings, { siteId }),
+        {
+          signal,
+          parse: (payload) => optimizationCanaryBindingListSchema.parse(payload),
+        },
+      ),
+      { unavailable: UNAVAILABLE, refused: canaryRefusal },
+    ),
+    enabled: Boolean(siteId) && enabled,
+    retry: false,
+  });
+}
+
+export async function upsertSiteOptimizationCanaryBinding(
+  siteId: string,
+  loopKey: string,
+  body: UpsertOptimizationCanaryBindingRequest,
+  csrfToken: string,
+): Promise<OptimizationCanaryBindingRecord> {
+  const result = await gatewayRequest(
+    gatewayPath(intelligencePaths.siteOptimizationCanaryBinding, { siteId, loopKey }),
+    {
+      method: 'PUT',
+      csrfToken,
+      body,
+      parse: (payload) => optimizationCanaryBindingRecordSchema.parse(payload),
+    },
+  );
+  return valueOf(result, { unavailable: UNAVAILABLE, refused: canaryRefusal });
+}
+
+export async function deleteSiteOptimizationCanaryBinding(
+  siteId: string,
+  loopKey: string,
+  csrfToken: string,
+): Promise<OptimizationCanaryBindingDeleteResult> {
+  const result = await gatewayRequest(
+    gatewayPath(intelligencePaths.siteOptimizationCanaryBinding, { siteId, loopKey }),
+    {
+      method: 'DELETE',
+      csrfToken,
+      parse: (payload) => optimizationCanaryBindingDeleteResultSchema.parse(payload),
+    },
+  );
+  return valueOf(result, { unavailable: UNAVAILABLE, refused: canaryRefusal });
+}
+
+export interface NegativeSamplesQueryParams {
+  readonly windowDays?: number;
+  readonly sampleKind?: OptimizationNegativeSampleFilterKind;
+  readonly limit?: number;
+  readonly offset?: number;
+}
+
+function buildNegativeSamplesPath(siteId: string, params: NegativeSamplesQueryParams): string {
+  const base = gatewayPath(intelligencePaths.siteOptimizationNegativeSamples, { siteId });
+  const search = new URLSearchParams();
+  if (params.windowDays !== undefined) search.set('windowDays', String(params.windowDays));
+  if (params.sampleKind !== undefined) search.set('sampleKind', params.sampleKind);
+  if (params.limit !== undefined) search.set('limit', String(params.limit));
+  if (params.offset !== undefined) search.set('offset', String(params.offset));
+  return search.size > 0 ? `${base}?${search.toString()}` : base;
+}
+
+export async function fetchSiteOptimizationNegativeSamples(
+  siteId: string,
+  params: NegativeSamplesQueryParams,
+  signal?: AbortSignal,
+): Promise<OptimizationNegativeSamplePage> {
+  const result = await gatewayRequest(
+    buildNegativeSamplesPath(siteId, params),
+    {
+      signal,
+      parse: (payload) => optimizationNegativeSamplePageSchema.parse(payload),
+    },
+  );
+  return valueOf(result, { unavailable: UNAVAILABLE, refused: canaryRefusal });
+}
+
+export function siteOptimizationNegativeSamplesQuery(
+  siteId: string,
+  params: NegativeSamplesQueryParams,
+  enabled: boolean,
+) {
+  return queryOptions({
+    queryKey: optimizationKeys.negativeSamples(siteId, params),
+    queryFn: ({ signal }) => fetchSiteOptimizationNegativeSamples(siteId, params, signal),
+    enabled: Boolean(siteId) && enabled,
+    retry: false,
+  });
+}
+
+export type { OptimizationNegativeSampleItem };
 
 /** Asks the Optimization owner for a new recommendation; it is computed and published asynchronously. */
 export async function requestRecommendation(siteId: string, csrfToken: string): Promise<{ readonly runId: string }> {

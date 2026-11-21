@@ -486,6 +486,9 @@ func (server *server) handleAuthorized(writer http.ResponseWriter, request *http
 		writeJSON(writer, http.StatusAccepted, job)
 		return http.StatusAccepted
 	}
+	if status, handled := server.tryHandleAccountingConfigRoute(writer, request, route, claims); handled {
+		return status
+	}
 	if route.write {
 		return server.handleAuthorizedWrite(writer, request, route, claims)
 	}
@@ -1013,6 +1016,8 @@ func parseRegistryRoute(method, path string) (registryRoute, bool) {
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/devices", resource: "device-write", parentID: segments[1], action: registryauth.ActionDeviceWrite, write: true}, true
 	case method == http.MethodPatch && len(segments) == 4 && segments[0] == "sites" && segments[2] == "devices":
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/devices/{deviceId}", resource: "device-write", parentID: segments[1], id: segments[3], action: registryauth.ActionDeviceWrite, write: true}, true
+	case method == http.MethodPost && len(segments) == 5 && segments[0] == "sites" && segments[2] == "devices" && segments[4] == "replace-hardware":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/devices/{deviceId}/replace-hardware", resource: "device-replace-hardware", parentID: segments[1], id: segments[3], action: registryauth.ActionDeviceWrite, write: true}, true
 	case method == http.MethodPost && len(segments) == 3 && segments[0] == "sites" && segments[2] == "spaces":
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/spaces", resource: "space-write", parentID: segments[1], action: registryauth.ActionSpaceWrite, write: true}, true
 	case method == http.MethodPatch && len(segments) == 4 && segments[0] == "sites" && segments[2] == "spaces":
@@ -1089,6 +1094,18 @@ func parseRegistryRoute(method, path string) (registryRoute, bool) {
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/accounting/dirty-windows", resource: "accounting-dirty-window", parentID: segments[1], action: registryauth.ActionMeterBindingResolve, write: true}, true
 	case method == http.MethodGet && len(segments) == 4 && segments[0] == "sites" && segments[2] == "accounting" && segments[3] == "recalculate-jobs":
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/accounting/recalculate-jobs", resource: "accounting-recalculate-jobs", parentID: segments[1], action: registryauth.ActionSiteRead}, true
+	case method == http.MethodGet && len(segments) == 4 && segments[0] == "sites" && segments[2] == "accounting" && segments[3] == "holidays":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/accounting/holidays", resource: "accounting-holidays", parentID: segments[1], action: registryauth.ActionSiteRead}, true
+	case method == http.MethodPut && len(segments) == 5 && segments[0] == "sites" && segments[2] == "accounting" && segments[3] == "holidays":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/accounting/holidays/{date}", resource: "accounting-holiday-upsert", parentID: segments[1], id: segments[4], action: registryauth.ActionBillingManage, write: true}, true
+	case method == http.MethodDelete && len(segments) == 5 && segments[0] == "sites" && segments[2] == "accounting" && segments[3] == "holidays":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/accounting/holidays/{date}", resource: "accounting-holiday-delete", parentID: segments[1], id: segments[4], action: registryauth.ActionBillingManage, write: true}, true
+	case method == http.MethodGet && len(segments) == 4 && segments[0] == "sites" && segments[2] == "accounting" && segments[3] == "meter-ratios":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/accounting/meter-ratios", resource: "accounting-meter-ratios", parentID: segments[1], action: registryauth.ActionSiteRead}, true
+	case method == http.MethodPost && len(segments) == 4 && segments[0] == "sites" && segments[2] == "accounting" && segments[3] == "meter-ratios":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/accounting/meter-ratios", resource: "accounting-meter-ratio-create", parentID: segments[1], action: registryauth.ActionBillingManage, write: true}, true
+	case method == http.MethodPost && len(segments) == 6 && segments[0] == "sites" && segments[2] == "accounting" && segments[3] == "meter-ratios" && segments[5] == "retire":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/accounting/meter-ratios/{versionId}/retire", resource: "accounting-meter-ratio-retire", parentID: segments[1], id: segments[4], action: registryauth.ActionBillingManage, write: true}, true
 	case method == http.MethodGet && len(segments) == 3 && segments[0] == "sites" && segments[2] == "control-state":
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/control-state", resource: "site-control-state", parentID: segments[1], action: registryauth.ActionSiteRead}, true
 	case method == http.MethodPut && len(segments) == 3 && segments[0] == "sites" && segments[2] == "control-mode":

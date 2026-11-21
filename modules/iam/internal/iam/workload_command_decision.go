@@ -3,6 +3,7 @@ package iam
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"net/http"
 	"slices"
@@ -34,6 +35,14 @@ type AutoControlLeaseFacts struct {
 	MaxCommandsPerHour  int
 	ManualBackoffUntil  *time.Time
 	ExecutionMode       string
+	PumpFreqMinHz       *float64
+	PumpFreqMaxHz       *float64
+	MaxFreqStepHz       *float64
+	FreqDeadbandHz      *float64
+	FanSpeedMinPct      *float64
+	FanSpeedMaxPct      *float64
+	MaxFanStepPct       *float64
+	FanDeadbandPct      *float64
 }
 
 type CommandWorkloadAuthorizationFacts struct {
@@ -190,9 +199,15 @@ func evaluateWorkloadCommandAuthorization(
 			return decision, nil
 		}
 		target := *requestedSetpoint
-		if target < lease.SupplyTempMinC || target > lease.SupplyTempMaxC {
+		minBound, maxBound, maxStep, hasBounds, boundLabel := resolveLeaseCapabilityBounds(request.Capability, *lease)
+		if !hasBounds {
 			decision.ReasonCode = commandauth.ReasonDenyAutoLease
-			decision.Detail = "target setpoint falls outside lease supply temperature bounds"
+			decision.Detail = "capability does not have supported safety bounds on site auto-control lease"
+			return decision, nil
+		}
+		if target < minBound || target > maxBound {
+			decision.ReasonCode = commandauth.ReasonDenyAutoLease
+			decision.Detail = fmt.Sprintf("target setpoint falls outside lease %s bounds", boundLabel)
 			return decision, nil
 		}
 		if !request.IsRollback {
@@ -201,9 +216,9 @@ func evaluateWorkloadCommandAuthorization(
 				decision.Detail = "current measured value is required to verify setpoint step"
 				return decision, nil
 			}
-			if math.Abs(target-*request.CurrentValue) > lease.MaxSetpointStepC+1e-9 {
+			if math.Abs(target-*request.CurrentValue) > maxStep+1e-9 {
 				decision.ReasonCode = commandauth.ReasonDenyAutoLease
-				decision.Detail = "setpoint delta exceeds lease max_setpoint_step_c"
+				decision.Detail = fmt.Sprintf("setpoint delta exceeds lease %s max step limit", boundLabel)
 				return decision, nil
 			}
 		}
@@ -216,7 +231,7 @@ func evaluateWorkloadCommandAuthorization(
 
 	riskLevel, _, ok := commandmodel.EvaluateRiskLevel(request.Capability, request.Parameters, request.CurrentValue)
 	if !ok {
-		if request.IsRollback && request.Capability == commandmodel.CapabilitySetChilledWaterTemperatureSetpoint {
+		if request.IsRollback && isRollbackSupportedCapability(request.Capability) {
 			riskLevel = commandmodel.RiskMedium
 		} else {
 			decision.ReasonCode = commandauth.ReasonDenyAutoLease
@@ -230,6 +245,44 @@ func evaluateWorkloadCommandAuthorization(
 	decision.LeaseID = lease.ID
 	decision.ArmedBy = lease.ArmedBy
 	return decision, nil
+}
+
+func resolveLeaseCapabilityBounds(capability commandmodel.Capability, lease AutoControlLeaseFacts) (minBound, maxBound, maxStep float64, ok bool, label string) {
+	switch capability {
+	case commandmodel.CapabilitySetChilledWaterTemperatureSetpoint, commandmodel.CapabilitySetTemperatureSetpoint:
+		return lease.SupplyTempMinC, lease.SupplyTempMaxC, lease.MaxSetpointStepC, true, "supply temperature"
+	case commandmodel.CapabilitySetFrequency:
+		minHz := derefFloatOrDefault(lease.PumpFreqMinHz, commandmodel.DefaultPumpFrequencyMinHz)
+		maxHz := derefFloatOrDefault(lease.PumpFreqMaxHz, commandmodel.DefaultPumpFrequencyMaxHz)
+		stepHz := derefFloatOrDefault(lease.MaxFreqStepHz, commandmodel.DefaultFrequencyMaxStepHz)
+		if minHz > maxHz || stepHz <= 0 {
+			return 0, 0, 0, false, "pump frequency"
+		}
+		return minHz, maxHz, stepHz, true, "pump frequency"
+	case commandmodel.CapabilitySetFanSpeed:
+		minPct := derefFloatOrDefault(lease.FanSpeedMinPct, commandmodel.DefaultFanSpeedMinPct)
+		maxPct := derefFloatOrDefault(lease.FanSpeedMaxPct, commandmodel.DefaultFanSpeedMaxPct)
+		stepPct := derefFloatOrDefault(lease.MaxFanStepPct, commandmodel.DefaultFanSpeedMaxStepPct)
+		if minPct > maxPct || stepPct <= 0 {
+			return 0, 0, 0, false, "fan speed"
+		}
+		return minPct, maxPct, stepPct, true, "fan speed"
+	default:
+		return 0, 0, 0, false, ""
+	}
+}
+
+func derefFloatOrDefault(value *float64, fallback float64) float64 {
+	if value == nil || math.IsNaN(*value) || math.IsInf(*value, 0) {
+		return fallback
+	}
+	return *value
+}
+
+func isRollbackSupportedCapability(capability commandmodel.Capability) bool {
+	return capability == commandmodel.CapabilitySetChilledWaterTemperatureSetpoint ||
+		capability == commandmodel.CapabilitySetFrequency ||
+		capability == commandmodel.CapabilitySetFanSpeed
 }
 
 func (h *handler) handleCommandWorkloadDecision(writer http.ResponseWriter, request *http.Request) int {

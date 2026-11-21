@@ -15,6 +15,7 @@ topic read hvac/v1/+/up/shadow
 topic read $SYS/broker/log/N
 topic write hvac/v1/+/down/concentrator
 topic write hvac/v1/+/down/shadow
+topic write $CONTROL/hvac-crl/v1
 
 # Connectivity's command connection sends to every Gateway and reads every reply.
 user command-dispatcher

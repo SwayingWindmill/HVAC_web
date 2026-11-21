@@ -19,6 +19,8 @@ import {
   type RegistryListParams,
   type RegistrySearchParams,
   type ReleaseTemplateRequest,
+  type ReplaceDeviceHardwareRequest,
+  type ReplaceDeviceHardwareResult,
   type RetireRequest,
   type Site,
   type SiteAssetModel,
@@ -111,6 +113,8 @@ export function presentRegistryError(error: unknown): RegistryErrorPresentation 
         return { kind: 'binding-conflict', title: '绑定变更冲突', description: detail, retryable: false, traceId };
       case 'REGISTRY_IMPORT_PLAN_INVALID':
         return { kind: 'import-conflict', title: '导入计划已失效', description: '请重新校验导入内容后再提交。', retryable: false, traceId };
+      case 'REGISTRY_MUTATION_INVALID':
+        return { kind: 'invalid-request', title: '输入校验未通过', description: detail, retryable: false, traceId };
       case 'REGISTRY_IDEMPOTENCY_CONFLICT':
       case 'TEMPLATE_REVISION_IMMUTABLE':
         return { kind: 'mutation-conflict', title: '登记保存冲突', description: detail, retryable: false, traceId };
@@ -434,6 +438,9 @@ export const registryAdminApi = {
   updateAsset: async (siteId: string, assetId: string, body: AssetMutation, csrfToken: string) => (await client.updateSiteAsset(registryId(siteId), registryId(assetId), body, csrfToken)).data,
   createDevice: async (siteId: string, body: DeviceMutation, csrfToken: string) => (await client.createSiteDevice(registryId(siteId), body, csrfToken)).data,
   updateDevice: async (siteId: string, deviceId: string, body: DeviceMutation, csrfToken: string) => (await client.updateSiteDevice(registryId(siteId), registryId(deviceId), body, csrfToken)).data,
+  replaceDeviceHardware: async (siteId: string, deviceId: string, body: ReplaceDeviceHardwareRequest, csrfToken: string): Promise<ReplaceDeviceHardwareResult> => (
+    await client.replaceDeviceHardware(registryId(siteId), registryId(deviceId), body, csrfToken)
+  ).data,
   createPoint: async (siteId: string, body: PointMutation, csrfToken: string) => (await client.createSitePoint(registryId(siteId), body, csrfToken)).data,
   updatePoint: async (siteId: string, pointId: string, body: PointMutation, csrfToken: string) => (await client.updateSitePoint(registryId(siteId), registryId(pointId), body, csrfToken)).data,
   rebind: async (siteId: string, body: RebindRequest, csrfToken: string) => (await client.rebindRegistryResource(registryId(siteId), body, csrfToken)).data,
