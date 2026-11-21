@@ -280,6 +280,8 @@ func TestRegistryWriteRoutesInvariantNoCSRFBypass(t *testing.T) {
 		"{deviceId}", fix.deviceID,
 		"{sensorId}", fix.sensorID,
 		"{pointId}", registryTestPointID,
+		"{date}", "2026-10-01",
+		"{versionId}", "018f3e00-9000-7000-8000-000000000001",
 	)
 
 	expectedByKey := make(map[string]registryWriteCase, 18)
@@ -296,8 +298,9 @@ func TestRegistryWriteRoutesInvariantNoCSRFBypass(t *testing.T) {
 				_, isSchedule := matchPublicOperatingScheduleRoute(entry.Method, concretePath)
 				_, isBilling := matchPublicElectricityBillingRoute(entry.Method, concretePath)
 				_, isAccountingRecalc := matchPublicAccountingRecalcRoute(entry.Method, concretePath)
+				_, isAccountingConfig := matchPublicAccountingConfigRoute(entry.Method, concretePath)
 				_, isIntelligence := matchPublicIntelligenceRoute(entry.Method, concretePath)
-				if !isSchedule && !isBilling && !isAccountingRecalc && !isIntelligence {
+				if !isSchedule && !isBilling && !isAccountingRecalc && !isAccountingConfig && !isIntelligence {
 					t.Fatalf("unhandled non-GET platform-core-service route in ownership registry: %s %s", entry.Method, entry.Path)
 				}
 			}

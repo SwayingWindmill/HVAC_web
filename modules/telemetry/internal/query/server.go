@@ -25,8 +25,14 @@ const (
 	SemanticQueryPath          = "/internal/v1/analytics/semantic-query"
 	DeviceHistoryPath          = "/internal/v1/telemetry/device-history"
 	DeviceHistoryAggregatePath = "/internal/v1/telemetry/device-history:aggregate"
+	CounterAuditPath           = "/internal/v1/telemetry/counter-audit"
 	maximumRequestBodySize     = int64(64 << 10)
 )
+
+// CounterAuditHistoryEngine optionally extends history.Engine with per-sample counter validation audit queries.
+type CounterAuditHistoryEngine interface {
+	QueryCounterAudit(context.Context, telemetryhistorymodel.CounterAuditQuery) (telemetryhistorymodel.CounterAuditResponse, error)
+}
 
 // ReportEnrichmentHistoryEngine optionally extends history.Engine with P2 monthly report
 // enrichment queries over ClickHouse analytics views.
@@ -113,7 +119,7 @@ func (server *handler) ServeHTTP(writer http.ResponseWriter, request *http.Reque
 	started := server.now()
 	routeName := "unmatched"
 	switch request.URL.Path {
-	case EnergySeriesPath, ReportEnrichmentPath, SemanticQueryPath, DeviceHistoryPath, DeviceHistoryAggregatePath:
+	case EnergySeriesPath, ReportEnrichmentPath, SemanticQueryPath, DeviceHistoryPath, DeviceHistoryAggregatePath, CounterAuditPath:
 		routeName = request.URL.Path
 	}
 	ctx := server.observability.Tracer.ExtractHTTP(request.Context(), request.Header)
@@ -176,6 +182,10 @@ func (server *handler) ServeHTTP(writer http.ResponseWriter, request *http.Reque
 	}
 	if request.URL.Path == DeviceHistoryAggregatePath {
 		server.serveDeviceHistoryAggregate(writer, request, peerSPIFFE)
+		return
+	}
+	if request.URL.Path == CounterAuditPath {
+		server.serveCounterAudit(writer, request, peerSPIFFE)
 		return
 	}
 	if request.URL.Path == SemanticQueryPath {
@@ -387,6 +397,51 @@ func (server *handler) serveDeviceHistoryAggregate(writer http.ResponseWriter, r
 	}
 	if err := response.ValidateFor(canonical); err != nil {
 		writeProblem(writer, http.StatusServiceUnavailable, "TELEMETRY_HISTORY_AGGREGATE_RESPONSE_INVALID", "The Device History aggregate engine returned an invalid response.", true)
+		return
+	}
+	writer.Header().Set("Cache-Control", "private, no-store")
+	writeJSON(writer, http.StatusOK, response)
+}
+
+func (server *handler) serveCounterAudit(writer http.ResponseWriter, request *http.Request, peerSPIFFE string) {
+	decoder := json.NewDecoder(http.MaxBytesReader(writer, request.Body, maximumRequestBodySize))
+	decoder.DisallowUnknownFields()
+	var query telemetryhistorymodel.CounterAuditQuery
+	if err := decoder.Decode(&query); err != nil || ensureJSONEOF(decoder) != nil {
+		writeProblem(writer, http.StatusBadRequest, "TELEMETRY_COUNTER_AUDIT_REQUEST_INVALID", "The counter audit request body is invalid.", false)
+		return
+	}
+	canonical, err := query.Canonical()
+	if err != nil {
+		writeProblem(writer, http.StatusBadRequest, "TELEMETRY_COUNTER_AUDIT_QUERY_INVALID", "The counter audit query exceeds the supported product boundary.", false)
+		return
+	}
+	scope, err := canonical.ScopeDigest()
+	if err != nil {
+		writeProblem(writer, http.StatusBadRequest, "TELEMETRY_COUNTER_AUDIT_QUERY_INVALID", "The counter audit query exceeds the supported product boundary.", false)
+		return
+	}
+	_, valid, authorized := server.energyGrant(request.Header.Get("X-Delegation-Grant"), peerSPIFFE, canonical.TenantID, scope)
+	if !valid {
+		writeProblem(writer, http.StatusUnauthorized, "ANALYTICS_DELEGATION_INVALID", "The analytics delegation grant is invalid.", false)
+		return
+	}
+	if !authorized {
+		writeProblem(writer, http.StatusForbidden, "ANALYTICS_DELEGATION_REJECTED", "The analytics delegation grant is not authorized for this query.", false)
+		return
+	}
+	auditEngine, ok := server.historyEngine.(CounterAuditHistoryEngine)
+	if !ok {
+		writeProblem(writer, http.StatusNotImplemented, "TELEMETRY_COUNTER_AUDIT_UNSUPPORTED", "The history engine does not support counter audit queries.", false)
+		return
+	}
+	response, err := auditEngine.QueryCounterAudit(request.Context(), canonical)
+	if err != nil {
+		writeProblem(writer, http.StatusServiceUnavailable, "TELEMETRY_COUNTER_AUDIT_ENGINE_UNAVAILABLE", "The counter audit engine could not complete the request.", true)
+		return
+	}
+	if err := response.ValidateFor(canonical); err != nil {
+		writeProblem(writer, http.StatusServiceUnavailable, "TELEMETRY_COUNTER_AUDIT_RESPONSE_INVALID", "The counter audit engine returned an invalid response.", true)
 		return
 	}
 	writer.Header().Set("Cache-Control", "private, no-store")
