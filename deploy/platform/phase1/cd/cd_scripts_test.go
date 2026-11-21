@@ -1449,6 +1449,7 @@ func TestDeployScriptProtectsRuntimeSecretsAndDropsDeadKeygen(t *testing.T) {
 		"alarm-delivery",
 		"mqtt-pki",
 		"mqtt-crl",
+		"tls",
 		"observability/textfile",
 	}
 	for _, dir := range dirs {
@@ -1482,6 +1483,8 @@ func TestDeployScriptProtectsRuntimeSecretsAndDropsDeadKeygen(t *testing.T) {
 		"alarm-delivery/recipients.json",
 		"mqtt-pki/mqtt-broker-key.pem",
 		"mqtt-crl/gateway-ca.crl.pem",
+		"tls/public.crt",
+		"tls/public.key",
 		"observability/textfile/backup.prom",
 	}
 	for _, rel := range seedFiles {
@@ -1531,6 +1534,7 @@ func TestDeployScriptProtectsRuntimeSecretsAndDropsDeadKeygen(t *testing.T) {
 		"alert-receiver",
 		"alarm-delivery",
 		"mqtt-pki",
+		"tls",
 	} {
 		assertPerm(sensitiveDir, func(m os.FileMode) bool { return m == 0o750 }, "0750")
 	}
@@ -1541,6 +1545,7 @@ func TestDeployScriptProtectsRuntimeSecretsAndDropsDeadKeygen(t *testing.T) {
 		"gateway-ca/trusted-client-ca.pem",
 		"gateway-ca/connectivity.crt",
 		"mqtt-crl/gateway-ca.crl.pem",
+		"tls/public.crt",
 		"observability/textfile/backup.prom",
 	} {
 		assertPerm(publicCert, func(m os.FileMode) bool { return m == 0o644 }, "0644")
@@ -1552,6 +1557,7 @@ func TestDeployScriptProtectsRuntimeSecretsAndDropsDeadKeygen(t *testing.T) {
 		"gateway-ca/ca.key",
 		"db-role-credentials/roles.sql",
 		"local-admin.credentials",
+		"tls/public.key",
 	} {
 		assertPerm(hostOnly, func(m os.FileMode) bool { return m == 0o600 }, "0600")
 	}
@@ -1581,6 +1587,7 @@ func TestDeployScriptProtectsRuntimeSecretsAndDropsDeadKeygen(t *testing.T) {
 		"chown -R 65532:65532",
 		"gateway-ca mqtt-crl",
 		"chown -R 0:65532",
+		"find /runtime/tls -type d -exec chown 0:65532 {} +",
 		"chown -R 1883:65532 /runtime/mqtt-pki",
 		"chown -R 101:101 /runtime/backups/clickhouse",
 		"chown -R 999:999 /runtime/backups/postgres",
