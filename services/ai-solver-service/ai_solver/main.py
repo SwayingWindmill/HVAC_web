@@ -8,7 +8,9 @@ import signal
 import sys
 import threading
 
+from ai_solver.calibration import load_calibration_profile
 from ai_solver.server import create_server
+from ai_solver.solver import HVACPhysicsSolver
 
 
 def main() -> int:
@@ -18,7 +20,9 @@ def main() -> int:
         stream=sys.stdout,
     )
     addr = os.environ.get("AI_SOLVER_HTTP_ADDR", ":19099")
-    server = create_server(addr)
+    profile_path = (os.environ.get("AI_SOLVER_PROFILE_PATH") or "").strip()
+    calibration = load_calibration_profile(profile_path) if profile_path else None
+    server = create_server(addr, solver=HVACPhysicsSolver(calibration=calibration))
     host, port = server.server_address[:2]
     print(f"AI_SOLVER_LISTENING=http://{host}:{port}", flush=True)
 

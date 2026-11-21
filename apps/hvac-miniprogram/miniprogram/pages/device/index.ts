@@ -7,15 +7,18 @@ import {
   createCommandSubmitMutex,
   dispatchControlCommand,
   evaluateControlGuards,
+  fetchSiteAutoControlLease,
   fetchSiteCommands,
   fetchSiteControlState,
   mapCommandSubmitError,
   normalizeTotpCode,
   parseDeviceControlTargets,
+  presentAutoControlLease,
   presentCommandStatus,
   reconcileActiveCommandStatus,
   startCommandPolling,
   type ActionButtonView,
+  type AutoControlLeaseBanner,
   type CommandRecord,
   type DeviceControlTarget,
   type GuardSummary,
@@ -98,6 +101,7 @@ Page({
     canControl: false,
     controlTargets: [] as readonly ControlTargetView[],
     settingInputs: {} as Readonly<Record<string, string>>,
+    autoLeaseBanner: null as AutoControlLeaseBanner | null,
     commandStatus: null as PresentedCommandStatus | null,
     pollingNote: '',
     pendingIntent: null as PendingControlIntent | null,
@@ -158,13 +162,14 @@ Page({
         return;
       }
       const now = new Date();
-      const [device, dayStart, modelResult, principalResult, controlStateResult, commandsResult] = await Promise.all([
+      const [device, dayStart, modelResult, principalResult, controlStateResult, commandsResult, leaseResult] = await Promise.all([
         loadPlantDevice(site, deviceId, rereadEquipment),
         Promise.allSettled([siteTodayStart(site, now)]),
         Promise.allSettled([loadSiteAssetModel(site, rereadEquipment)]),
         Promise.allSettled([gateway.get<PrincipalCapabilitiesResponse>('/api/v1/principal')]),
         Promise.allSettled([fetchSiteControlState(gateway, site.id)]),
         Promise.allSettled([fetchSiteCommands(gateway, site.id, 50)]),
+        Promise.allSettled([fetchSiteAutoControlLease(gateway, site.id)]),
       ]);
       if (generation !== pageGeneration) return;
       if (device === null) {
@@ -176,6 +181,7 @@ Page({
       const principal = principalResult[0].status === 'fulfilled' ? principalResult[0].value : null;
       const controlState: SiteControlState | null = controlStateResult[0].status === 'fulfilled' ? controlStateResult[0].value : null;
       const commands: readonly CommandRecord[] = commandsResult[0].status === 'fulfilled' ? commandsResult[0].value : [];
+      const leaseState = leaseResult[0].status === 'fulfilled' ? leaseResult[0].value : null;
 
       const targets = rawModel !== null ? parseDeviceControlTargets(rawModel, deviceId, now) : [];
       const hasControllablePoints = targets.length > 0;
@@ -240,6 +246,7 @@ Page({
         canControl,
         controlTargets,
         settingInputs: buildSettingDraftTextMap(controlTargets),
+        autoLeaseBanner: presentAutoControlLease(leaseState, now, site.timezone),
         ...(activePolling === null
           ? { commandStatus: reconcileActiveCommandStatus(this.data.commandStatus, openStatus, commands) }
           : {}),

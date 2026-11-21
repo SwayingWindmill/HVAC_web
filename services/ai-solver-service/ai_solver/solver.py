@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import hashlib
 import math
 
+from ai_solver.calibration import CalibrationProfile, SiteCalibration
 from ai_solver.model import (
     AuxiliaryTargetRecommendation,
     HARD_CHILLED_WATER_MIN_C,
@@ -47,10 +48,15 @@ class _CandidateEval:
 class HVACPhysicsSolver:
     """Physics-constrained fine-grid HVAC setpoint and VFD coordination solver."""
 
+    def __init__(self, calibration: CalibrationProfile | None = None) -> None:
+        self.calibration = calibration
+
     def solve(self, req: SolverRequest) -> SolverResponse:
         base = req.baseline
         cons = req.constraints
         rm = req.response_model
+
+        site_cal = self.calibration.calibration_for_site(req.site_id) if self.calibration else SiteCalibration()
 
         hard_min_c = max(HARD_CHILLED_WATER_MIN_C, cons.supply_temp_min_c)
         hard_max_c = cons.supply_temp_max_c
@@ -60,14 +66,15 @@ class HVACPhysicsSolver:
             )
 
         cost_per_kwh = base.daily_cost / base.daily_energy_kwh
-        step_limit = cons.max_supply_temp_step_c
+        step_limit = cons.max_supply_temp_step_c * site_cal.supply_step_scale
         # Generate deterministic fine grid within [-step_limit, +step_limit] plus exact 0 and bounds.
         count = max(1, int(math.floor(step_limit / GRID_STEP_C + 1e-9)))
         deltas = {0.0, -step_limit, step_limit}
         for idx in range(-count, count + 1):
             deltas.add(round(idx * GRID_STEP_C, 4))
 
-        best: _CandidateEval | None = None
+        best_penalized: _CandidateEval | None = None
+        best_unpenalized: _CandidateEval | None = None
         for delta in sorted(deltas):
             if abs(delta) > step_limit + 1e-9:
                 continue
@@ -95,9 +102,13 @@ class HVACPhysicsSolver:
                 comfort_margin_c=max(0.0, margin),
                 delta_c=effective_delta,
             )
-            if best is None or self._is_better(cand, best):
-                best = cand
+            if best_unpenalized is None or self._is_better(cand, best_unpenalized):
+                best_unpenalized = cand
+            if margin >= site_cal.comfort_margin_penalty_c - 1e-9:
+                if best_penalized is None or self._is_better(cand, best_penalized):
+                    best_penalized = cand
 
+        best = best_penalized if best_penalized is not None else best_unpenalized
         if best is None:
             raise SolverInfeasibleError(
                 "no HVAC setpoint candidate satisfies freeze floor, step limit, and comfort P90 bounds"
@@ -107,7 +118,7 @@ class HVACPhysicsSolver:
         if best.comfort_margin_c <= max(0.5, 2.0 * rm.zone_temp_uncertainty_p90_c):
             risk_level = "MEDIUM"
 
-        aux_targets = self._compute_auxiliary_targets(best.delta_c, best.comfort_margin_c)
+        aux_targets = self._compute_auxiliary_targets(best.delta_c, best.comfort_margin_c, site_cal)
         rec_id = deterministic_uuidv7(f"{req.optimization_run_id}:recommendation:1")
 
         return SolverResponse(
@@ -142,12 +153,26 @@ class HVACPhysicsSolver:
     def _compute_auxiliary_targets(
         supply_delta_c: float,
         comfort_margin_c: float,
+        site_cal: SiteCalibration | None = None,
     ) -> tuple[AuxiliaryTargetRecommendation, ...]:
+        cal = site_cal or SiteCalibration()
         # Higher CHW supply temperature slightly lowers lift/flow demand, bounded within safe VFD curves.
         comfort_bias_hz = 1.5 if comfort_margin_c < 0.8 else 0.0
-        chw_pump_hz = clamp(40.0 - 1.5 * supply_delta_c + comfort_bias_hz, HARD_PUMP_FREQ_MIN_HZ, HARD_PUMP_FREQ_MAX_HZ)
-        cw_pump_hz = clamp(42.0 - 1.0 * supply_delta_c + comfort_bias_hz, HARD_PUMP_FREQ_MIN_HZ, HARD_PUMP_FREQ_MAX_HZ)
-        tower_fan_pct = clamp(70.0 - 3.0 * supply_delta_c, HARD_FAN_SPEED_MIN_PCT, HARD_FAN_SPEED_MAX_PCT)
+        chw_pump_hz = clamp(
+            40.0 - 1.5 * supply_delta_c + comfort_bias_hz + cal.chw_pump_bias_hz,
+            HARD_PUMP_FREQ_MIN_HZ,
+            HARD_PUMP_FREQ_MAX_HZ,
+        )
+        cw_pump_hz = clamp(
+            42.0 - 1.0 * supply_delta_c + comfort_bias_hz + cal.cw_pump_bias_hz,
+            HARD_PUMP_FREQ_MIN_HZ,
+            HARD_PUMP_FREQ_MAX_HZ,
+        )
+        tower_fan_pct = clamp(
+            70.0 - 3.0 * supply_delta_c + cal.tower_fan_bias_pct,
+            HARD_FAN_SPEED_MIN_PCT,
+            HARD_FAN_SPEED_MAX_PCT,
+        )
 
         return (
             AuxiliaryTargetRecommendation(

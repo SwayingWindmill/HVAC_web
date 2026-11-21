@@ -9,12 +9,15 @@ import {
   createCommandSubmitMutex,
   dispatchControlCommand,
   evaluateControlGuards,
+  fetchSiteAutoControlLease,
   mapCommandSubmitError,
   normalizeTotpCode,
   parseDeviceControlTargets,
+  presentAutoControlLease,
   presentCommandStatus,
   reconcileActiveCommandStatus,
   startCommandPolling,
+  type AutoControlLeaseState,
   type CommandRecord,
   type SiteControlState,
 } from '../miniprogram/lib/control.ts';
@@ -585,4 +588,90 @@ test('reconcileActiveCommandStatus settles stale active command banners after on
   // 4. Dismissed or already settled banners remain untouched.
   assert.equal(reconcileActiveCommandStatus(null, null, []), null);
   assert.deepEqual(reconcileActiveCommandStatus(settledInHistory, null, []), settledInHistory);
+});
+
+test('auto-control lease banner presents closed-loop, shadow, manual backoff precedence, and graceful 404 fallback', async () => {
+  const now = new Date('2026-11-21T06:00:00Z'); // 14:00 Asia/Shanghai
+  const baseLease: AutoControlLeaseState = {
+    tenantId: 'tenant-1',
+    siteId: 'site-1',
+    confirmationMode: 'AUTO_WITH_LEASE',
+    activeLease: {
+      id: 'lease-1',
+      status: 'ACTIVE',
+      expiresAt: '2026-11-21T10:30:00Z', // 18:30 Asia/Shanghai
+      executionMode: 'CLOSED_LOOP',
+      supplyTempMinC: 6.0,
+      supplyTempMaxC: 12.0,
+      pumpFreqMinHz: 30.0,
+      pumpFreqMaxHz: 48.0,
+      fanSpeedMinPct: 35,
+      fanSpeedMaxPct: 90,
+      manualBackoffUntil: null,
+    },
+  };
+
+  // 1. Closed-loop active shows multi-loop bounds & expiry clock without banned words.
+  const closedLoop = presentAutoControlLease(baseLease, now, 'Asia/Shanghai');
+  assert.ok(closedLoop);
+  assert.equal(closedLoop.tone, 'good');
+  assert.equal(closedLoop.badge, 'AI 自动托管中');
+  assert.match(closedLoop.detail, /18:30/);
+  assert.match(closedLoop.detail, /供水 6\.0–12\.0 °C/);
+  assert.match(closedLoop.detail, /水泵 30\.0–48\.0 Hz/);
+  assert.match(closedLoop.detail, /风机 35–90%/);
+
+  // 2. Manual backoff takes precedence over active lease.
+  const backedOff = presentAutoControlLease({
+    ...baseLease,
+    activeLease: {
+      ...baseLease.activeLease!,
+      manualBackoffUntil: '2026-11-21T07:45:00Z', // 15:45 Asia/Shanghai
+    },
+  }, now, 'Asia/Shanghai');
+  assert.ok(backedOff);
+  assert.equal(backedOff.tone, 'warning');
+  assert.equal(backedOff.badge, '人工退避保护中');
+  assert.match(backedOff.detail, /15:45/);
+
+  // 3. Shadow mode displays neutral banner.
+  const shadow = presentAutoControlLease({
+    ...baseLease,
+    activeLease: {
+      ...baseLease.activeLease!,
+      executionMode: 'SHADOW',
+    },
+  }, now, 'Asia/Shanghai');
+  assert.ok(shadow);
+  assert.equal(shadow.tone, 'neutral');
+  assert.equal(shadow.badge, '影子跟跑中');
+
+  // Verify no banned DESIGN.md words appear across states.
+  for (const banner of [closedLoop, backedOff, shadow]) {
+    const combined = `${banner.badge} ${banner.headline} ${banner.detail}`;
+    for (const banned of BANNED_DESIGN_WORDS) {
+      assert.equal(combined.includes(banned), false);
+    }
+  }
+
+  // 4. Expired or revoked leases return null.
+  assert.equal(presentAutoControlLease({
+    ...baseLease,
+    activeLease: { ...baseLease.activeLease!, expiresAt: '2026-11-21T05:59:00Z' },
+  }, now, 'Asia/Shanghai'), null);
+  assert.equal(presentAutoControlLease({ ...baseLease, activeLease: null }, now, 'Asia/Shanghai'), null);
+
+  // 5. 404 or missing optimization service returns null gracefully.
+  const notFoundGw = createGateway({
+    origin: 'https://hvac.example.test',
+    chunked: noStreams,
+    session: memorySession('mini-bearer-1'),
+    onSignedOut: () => {},
+    transport: async (_req: TransportRequest) => ({
+      statusCode: 404,
+      data: { code: 'RESOURCE_NOT_FOUND', detail: 'missing' },
+    }),
+  });
+  const missingResult = await fetchSiteAutoControlLease(notFoundGw, 'site-1');
+  assert.equal(missingResult, null);
 });
