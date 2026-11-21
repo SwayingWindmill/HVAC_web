@@ -347,4 +347,3 @@ func TestRuntimeHTTPClaimAnyDispatchAndVerificationRoutes(t *testing.T) {
 		t.Fatalf("idle dispatch claim-any status=%d, want 204", idleRec.Code)
 	}
 }
-

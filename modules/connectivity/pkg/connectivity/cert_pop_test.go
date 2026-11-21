@@ -40,8 +40,7 @@ func issuePoPTestCert(t *testing.T, key any) (*x509.Certificate, []byte) {
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	}
-	var signer any = key
-	der, err := x509.CreateCertificate(rand.Reader, tpl, tpl, pub, signer)
+	der, err := x509.CreateCertificate(rand.Reader, tpl, tpl, pub, key)
 	if err != nil {
 		t.Fatal(err)
 	}

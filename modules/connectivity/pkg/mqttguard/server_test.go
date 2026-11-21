@@ -203,19 +203,19 @@ func TestMQTTGuardProxiesChecksRevocationRateLimitAndKicks(t *testing.T) {
 
 	disconnectCh := make(chan string, 4)
 	srv, err := New(Config{
-		ListenAddr:          "127.0.0.1:0",
-		ServerCertificate:   pki.serverCert,
-		GatewayClientCAs:    pki.caPool,
-		UpstreamAddr:        upstreamLn.Addr().String(),
-		UpstreamRootCAs:     pki.caPool,
-		UpstreamServerName:  "mqtt-broker",
-		Verifier:            verifier,
-		Issuer:              pki.authority,
-		PerIPBurst:          100,
+		ListenAddr:            "127.0.0.1:0",
+		ServerCertificate:     pki.serverCert,
+		GatewayClientCAs:      pki.caPool,
+		UpstreamAddr:          upstreamLn.Addr().String(),
+		UpstreamRootCAs:       pki.caPool,
+		UpstreamServerName:    "mqtt-broker",
+		Verifier:              verifier,
+		Issuer:                pki.authority,
+		PerIPBurst:            100,
 		PerIPHandshakesPerSec: 100,
-		PerGatewayBurst:     3,
-		PerGatewayPerSec:    0.001, // 3 allowed total during short test before rate limit triggers
-		Metrics:             metrics,
+		PerGatewayBurst:       3,
+		PerGatewayPerSec:      0.001, // 3 allowed total during short test before rate limit triggers
+		Metrics:               metrics,
 		OnGatewayDisconnect: func(_ context.Context, gw string, _ time.Time) {
 			disconnectCh <- gw
 		},

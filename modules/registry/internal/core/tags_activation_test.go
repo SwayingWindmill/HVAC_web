@@ -852,11 +852,11 @@ func TestTemplateModbusDriverMaterializationAndTagOverrides(t *testing.T) {
 	payload := map[string]any{
 		"deviceType": "CHILLER",
 		"modbusDriver": map[string]any{
-			"driverType":        "MODBUS_TCP",
-			"endpoint":          "10.2.3.4:502",
-			"unitId":            5,
-			"timeoutMs":         1500,
-			"retries":           3,
+			"driverType": "MODBUS_TCP",
+			"endpoint":   "10.2.3.4:502",
+			"unitId":     5,
+			"timeoutMs":  1500,
+			"retries":    3,
 			"registers": []any{
 				map[string]any{
 					"pointCode":       "chw_supply_temp_c",

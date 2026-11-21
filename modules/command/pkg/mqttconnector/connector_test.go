@@ -2292,4 +2292,3 @@ func TestConnectorExportsSpansToConfiguredTracer(t *testing.T) {
 		t.Fatalf("expected mqtt.command.publish and mqtt.command.reply spans, got %+v", spans)
 	}
 }
-

@@ -30,14 +30,14 @@ const (
 	// HeaderGatewayCertForwardedBy is set by a trusted mTLS front proxy when forwarding client certs.
 	HeaderGatewayCertForwardedBy = "X-Gateway-Cert-Forwarded-By"
 
-	popCanonicalPrefix    = "HVAC-GW-POP-V1"
-	popMaxClockSkew       = 300 * time.Second
-	popReplayWindow       = 10 * time.Minute
-	popMaxReplayEntries   = 65536
-	popMinNonceLength     = 16
-	popMaxNonceLength     = 128
-	popMaxSignatureBytes  = 4096
-	popRequireEnvVarName  = "CONNECTIVITY_REQUIRE_FORWARDED_CERT_POP"
+	popCanonicalPrefix   = "HVAC-GW-POP-V1"
+	popMaxClockSkew      = 300 * time.Second
+	popReplayWindow      = 10 * time.Minute
+	popMaxReplayEntries  = 65536
+	popMinNonceLength    = 16
+	popMaxNonceLength    = 128
+	popMaxSignatureBytes = 4096
+	popRequireEnvVarName = "CONNECTIVITY_REQUIRE_FORWARDED_CERT_POP"
 )
 
 // PoPReplayGuard tracks seen (certFingerprintSHA256, nonce) pairs within popReplayWindow

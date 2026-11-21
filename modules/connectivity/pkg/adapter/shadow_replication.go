@@ -28,8 +28,8 @@ const (
 )
 
 var (
-	replicationUUIDPattern    = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
-	lowerSHA256HexPattern     = regexp.MustCompile(`^[a-f0-9]{64}$`)
+	replicationUUIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+	lowerSHA256HexPattern  = regexp.MustCompile(`^[a-f0-9]{64}$`)
 )
 
 // ShadowDownlinkTopic returns the per-gateway desired config notification topic.

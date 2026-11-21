@@ -2,11 +2,10 @@ package commandservice
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 )
 
 func TestWorkSignalBroadcastAndRotation(t *testing.T) {
@@ -64,33 +63,78 @@ func TestMemoryAuthorityStoreClaimAnyImmediateWakeup(t *testing.T) {
 	store := NewMemoryAuthorityStore(func() time.Time { return now })
 	defer store.Close()
 
-	claimedCh := make(chan commandmodel.DispatchEnvelope, 1)
-	errCh := make(chan error, 1)
-	go func() {
-		env, err := store.ClaimAnyDispatch(t.Context(), "worker-wake", 30*time.Second, 2*time.Second)
-		if err != nil {
-			errCh <- err
-			return
-		}
-		claimedCh <- env
-	}()
-
-	time.Sleep(25 * time.Millisecond)
+	// 1. Verify MemoryAuthorityStore.Submit wakes dispatch subscribers immediately.
+	dispatchSub := store.SubscribeDispatchWork()
 	req := validRequest()
 	req.IdempotencyKey = "wake-cmd-1"
 	if _, err := store.Submit(t.Context(), req); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
+	select {
+	case <-dispatchSub:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Submit did not notify dispatch work subscribers")
+	}
+
+	// 2. Verify ClaimAnyDispatch claims queued work deterministically across wakeup.
+	env, err := store.ClaimAnyDispatch(t.Context(), "worker-wake", 30*time.Second, 2*time.Second)
+	if err != nil {
+		t.Fatalf("ClaimAnyDispatch err=%v", err)
+	}
+	if env.TenantID != req.TenantID {
+		t.Fatalf("claimed tenant=%q, want %q", env.TenantID, req.TenantID)
+	}
+
+	// 3. Verify claimAnyWork waits after an empty scan and wakes immediately on Notify without sleeping.
+	sig := newWorkSignal()
+	firstScanDone := make(chan struct{})
+	var closeScanOnce sync.Once
+	var ready atomic.Bool
+	var cursor atomic.Uint64
+
+	claimedCh := make(chan string, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		item, claimErr := claimAnyWork(
+			t.Context(),
+			2*time.Second,
+			sig.Subscribe,
+			func(context.Context) ([]string, error) {
+				if !ready.Load() {
+					closeScanOnce.Do(func() { close(firstScanDone) })
+					return nil, nil
+				}
+				return []string{req.TenantID}, nil
+			},
+			&cursor,
+			func(_ context.Context, tenantID string) (string, error) {
+				return tenantID, nil
+			},
+			ErrNoDispatchAvailable,
+		)
+		if claimErr != nil {
+			errCh <- claimErr
+			return
+		}
+		claimedCh <- item
+	}()
+
+	select {
+	case <-firstScanDone:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("claimAnyWork did not complete initial scan")
+	}
+	ready.Store(true)
+	sig.Notify()
 
 	select {
 	case err := <-errCh:
-		t.Fatalf("ClaimAnyDispatch err=%v", err)
-	case env := <-claimedCh:
-		if env.TenantID != req.TenantID {
-			t.Fatalf("claimed tenant=%q, want %q", env.TenantID, req.TenantID)
+		t.Fatalf("claimAnyWork err=%v", err)
+	case item := <-claimedCh:
+		if item != req.TenantID {
+			t.Fatalf("claimAnyWork item=%q, want %q", item, req.TenantID)
 		}
 	case <-time.After(500 * time.Millisecond):
-		t.Fatal("ClaimAnyDispatch did not wake up promptly after Submit")
+		t.Fatal("claimAnyWork did not wake up promptly after Notify")
 	}
 }
-

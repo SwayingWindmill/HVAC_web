@@ -9,6 +9,27 @@ import (
 	"github.com/eclipse/paho.golang/paho"
 )
 
+type fakeBrokerTimer struct {
+	mu      sync.Mutex
+	delay   time.Duration
+	fn      func()
+	stopped bool
+}
+
+func (f *fakeBrokerTimer) Stop() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	wasActive := !f.stopped
+	f.stopped = true
+	return wasActive
+}
+
+func (f *fakeBrokerTimer) fire() {
+	if f.fn != nil {
+		f.fn()
+	}
+}
+
 func TestBrokerLogWatcherParsesConnectAndDebouncedDisconnect(t *testing.T) {
 	t.Parallel()
 
@@ -18,6 +39,16 @@ func TestBrokerLogWatcherParsesConnectAndDebouncedDisconnect(t *testing.T) {
 		clockMu.Lock()
 		defer clockMu.Unlock()
 		return now
+	}
+
+	var timersMu sync.Mutex
+	var scheduledTimers []*fakeBrokerTimer
+	afterFunc := func(d time.Duration, fn func()) brokerDebounceTimer {
+		timer := &fakeBrokerTimer{delay: d, fn: fn}
+		timersMu.Lock()
+		scheduledTimers = append(scheduledTimers, timer)
+		timersMu.Unlock()
+		return timer
 	}
 
 	type disconnectCall struct {
@@ -39,6 +70,7 @@ func TestBrokerLogWatcherParsesConnectAndDebouncedDisconnect(t *testing.T) {
 		},
 		WithBrokerDisconnectDebounce(25*time.Millisecond),
 		WithBrokerLogClock(currentNow),
+		withBrokerLogAfterFunc(afterFunc),
 	)
 	defer watcher.Close()
 
@@ -56,9 +88,24 @@ func TestBrokerLogWatcherParsesConnectAndDebouncedDisconnect(t *testing.T) {
 
 	// Quick disconnect followed by fast reconnect within debounce window cancels offline callback.
 	watcher.HandleLine("1795081951: Client " + clientA + " closed its connection.")
-	watcher.HandleLine("1795081951: New client connected from 10.0.0.8:44314 as " + clientA + " (p5, c0, k30, u'" + testGatewayA + "').")
+	timersMu.Lock()
+	if len(scheduledTimers) != 1 || scheduledTimers[0].delay != 25*time.Millisecond {
+		timersMu.Unlock()
+		t.Fatalf("expected 1 debounce timer after disconnect, got %+v", scheduledTimers)
+	}
+	firstTimer := scheduledTimers[0]
+	timersMu.Unlock()
 
-	time.Sleep(60 * time.Millisecond)
+	watcher.HandleLine("1795081951: New client connected from 10.0.0.8:44314 as " + clientA + " (p5, c0, k30, u'" + testGatewayA + "').")
+	firstTimer.mu.Lock()
+	firstStopped := firstTimer.stopped
+	firstTimer.mu.Unlock()
+	if !firstStopped {
+		t.Fatal("expected fast reconnect to stop pending disconnect debounce timer")
+	}
+	// Even an in-flight overdue timer callback firing after reconnect must be fenced out.
+	firstTimer.fire()
+
 	callsMu.Lock()
 	if len(calls) != 0 {
 		t.Fatalf("expected reconnect within debounce to cancel disconnect callback, got %+v", calls)
@@ -68,7 +115,12 @@ func TestBrokerLogWatcherParsesConnectAndDebouncedDisconnect(t *testing.T) {
 	// Multiple simultaneous clients for the same gateway do not trigger until ALL disconnect.
 	watcher.HandleLine("1795081952: New client connected from 10.0.0.8:44315 as " + clientA + "-aux (p5, c0, k30, u'" + testGatewayA + "').")
 	watcher.HandleLine("1795081953: Client " + clientA + " disconnected.")
-	time.Sleep(60 * time.Millisecond)
+	timersMu.Lock()
+	timerCountWithAux := len(scheduledTimers)
+	timersMu.Unlock()
+	if timerCountWithAux != 1 {
+		t.Fatalf("expected active aux client to suppress scheduling a disconnect timer, got %d timers", timerCountWithAux)
+	}
 	callsMu.Lock()
 	if len(calls) != 0 {
 		t.Fatalf("expected active aux client to suppress disconnect callback, got %+v", calls)
@@ -81,6 +133,14 @@ func TestBrokerLogWatcherParsesConnectAndDebouncedDisconnect(t *testing.T) {
 	clockMu.Unlock()
 
 	watcher.HandleLine("1795081958: Client " + clientA + "-aux has exceeded timeout, disconnecting.")
+	timersMu.Lock()
+	if len(scheduledTimers) != 2 {
+		timersMu.Unlock()
+		t.Fatalf("expected 2nd debounce timer once last client disconnected, got %d", len(scheduledTimers))
+	}
+	secondTimer := scheduledTimers[1]
+	timersMu.Unlock()
+	secondTimer.fire()
 
 	select {
 	case got := <-disconnectedCh:
@@ -91,8 +151,17 @@ func TestBrokerLogWatcherParsesConnectAndDebouncedDisconnect(t *testing.T) {
 		t.Fatal("timed out waiting for debounced disconnect callback")
 	}
 
-	// Disconnect after connectivity restart without prior connect notice still works if clientId is UUIDv7.
-	watcher.HandleLine("1795081960: Socket error on client " + testGatewayB + ", disconnecting.")
+	// Disconnect after connectivity restart without prior connect notice still works if clientId is UUIDv7
+	// using default real time.AfterFunc scheduling.
+	realWatcher := NewBrokerLogWatcher(
+		t.Context(),
+		func(_ context.Context, gatewayID string, disconnectedAt time.Time) {
+			disconnectedCh <- disconnectCall{gatewayID: gatewayID, at: disconnectedAt}
+		},
+		WithBrokerDisconnectDebounce(0),
+	)
+	defer realWatcher.Close()
+	realWatcher.HandleLine("1795081960: Socket error on client " + testGatewayB + ", disconnecting.")
 	select {
 	case got := <-disconnectedCh:
 		if got.gatewayID != testGatewayB {
@@ -175,4 +244,3 @@ func TestProcessorHandleBrokerGatewayDisconnectFencesAndReportsCoverage(t *testi
 		t.Fatalf("expected gateway + child device in coverage report, got %+v", gotReport.DeviceIDs)
 	}
 }
-

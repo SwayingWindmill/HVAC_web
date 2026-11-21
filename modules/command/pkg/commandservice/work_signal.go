@@ -149,4 +149,3 @@ func claimAnyWork[T any](
 		}
 	}
 }
-

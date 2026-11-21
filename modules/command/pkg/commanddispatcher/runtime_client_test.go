@@ -203,4 +203,3 @@ func TestRuntimeClientClaimAnyDispatchAndVerification(t *testing.T) {
 		t.Fatalf("ClaimAnyVerification=(%+v, %v) wait=%q", gotVer, err, gotWait)
 	}
 }
-

@@ -366,8 +366,8 @@ func run() int {
 			}
 			return mqttGuard.Shutdown(ctx)
 		},
-		mqttGuardDone:  mqttGuardDone,
-		closeTunnelHub: tunnelHub.Close,
+		mqttGuardDone:   mqttGuardDone,
+		closeTunnelHub:  tunnelHub.Close,
 		cancelIngress:   ingressCancel,
 		cancelDrainRoot: drainRootCancel,
 		runtimeDone:     runtimeDone,

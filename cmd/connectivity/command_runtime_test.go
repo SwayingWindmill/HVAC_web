@@ -231,8 +231,10 @@ func TestCommandRuntimeDecoupledWorkerPoolsExecuteConcurrently(t *testing.T) {
 	var dispActive, dispMax atomic.Int32
 	var verCalls atomic.Int32
 	allDispEntered := make(chan struct{})
-	releaseDisp := make(chan struct{})
-	var closeAllOnce sync.Once
+	firstVerEntered := make(chan struct{})
+	releaseWorkers := make(chan struct{})
+	var closeAllDispOnce sync.Once
+	var closeFirstVerOnce sync.Once
 
 	rt := &commandRuntime{
 		dispatchWorkers:     4,
@@ -246,15 +248,16 @@ func TestCommandRuntimeDecoupledWorkerPoolsExecuteConcurrently(t *testing.T) {
 				}
 			}
 			if cur == 4 {
-				closeAllOnce.Do(func() { close(allDispEntered) })
+				closeAllDispOnce.Do(func() { close(allDispEntered) })
 			}
-			<-releaseDisp
+			<-releaseWorkers
 			dispActive.Add(-1)
 			return commandservice.ErrNoDispatchAvailable
 		},
 		verifyAnyFn: func(_ context.Context, _ time.Duration) error {
 			verCalls.Add(1)
-			time.Sleep(15 * time.Millisecond)
+			closeFirstVerOnce.Do(func() { close(firstVerEntered) })
+			<-releaseWorkers
 			return commandservice.ErrVerificationNotAvailable
 		},
 	}
@@ -267,7 +270,12 @@ func TestCommandRuntimeDecoupledWorkerPoolsExecuteConcurrently(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatalf("expected 4 concurrent dispatch workers, max observed=%d", dispMax.Load())
 	}
-	close(releaseDisp)
+	select {
+	case <-firstVerEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("expected verification worker to execute while dispatch workers were busy")
+	}
+	close(releaseWorkers)
 	cancelClaim()
 	if err := rt.Wait(context.Background()); err != nil {
 		t.Fatalf("Wait returned error: %v", err)
@@ -276,4 +284,3 @@ func TestCommandRuntimeDecoupledWorkerPoolsExecuteConcurrently(t *testing.T) {
 		t.Fatalf("unexpected concurrency stats dispMax=%d verCalls=%d", dispMax.Load(), verCalls.Load())
 	}
 }
-

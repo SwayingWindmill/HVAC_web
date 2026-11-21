@@ -21,11 +21,11 @@ import (
 )
 
 const (
-	outboxRelayConsumerName     = "registry-lifecycle-relay"
-	outboxDefaultLeaseDuration  = 30 * time.Second
-	outboxDefaultPollInterval   = 500 * time.Millisecond
-	outboxDefaultBatchSize      = 16
-	outboxMaxDeliveryAttempts   = 10
+	outboxRelayConsumerName             = "registry-lifecycle-relay"
+	outboxDefaultLeaseDuration          = 30 * time.Second
+	outboxDefaultPollInterval           = 500 * time.Millisecond
+	outboxDefaultBatchSize              = 16
+	outboxMaxDeliveryAttempts           = 10
 	outboxTelemetrySyncPath             = "/internal/v1/telemetry/registry-sync:apply"
 	outboxCommandCancelPath             = "/internal/v1/commands:cancelRetiredTarget"
 	outboxConnectivityRetireFmt         = "/internal/v1/gateways/%s:retire"
@@ -174,12 +174,12 @@ type OutboxRelay struct {
 	connectivityDriver ConnectivityTemplateDriverClient
 	command            CommandCancelClient
 	commandCapability  CommandCapabilitySyncClient
-	leaseOwner        string
-	leaseFor          time.Duration
-	pollInterval      time.Duration
-	batchSize         int
-	now               func() time.Time
-	logger            *slog.Logger
+	leaseOwner         string
+	leaseFor           time.Duration
+	pollInterval       time.Duration
+	batchSize          int
+	now                func() time.Time
+	logger             *slog.Logger
 }
 
 type claimedOutboxEvent struct {
@@ -274,12 +274,12 @@ func NewOutboxRelay(store *PostgresStore, config OutboxRelayConfig) (*OutboxRela
 		connectivityDriver: connectivityDriverClient,
 		command:            commandClient,
 		commandCapability:  commandCapabilityClient,
-		leaseOwner:        leaseOwner,
-		leaseFor:          leaseFor,
-		pollInterval:      pollInterval,
-		batchSize:         batchSize,
-		now:               now,
-		logger:            logger,
+		leaseOwner:         leaseOwner,
+		leaseFor:           leaseFor,
+		pollInterval:       pollInterval,
+		batchSize:          batchSize,
+		now:                now,
+		logger:             logger,
 	}, nil
 }
 
@@ -665,12 +665,12 @@ func (r *OutboxRelay) syncDeviceTemplateDriversToBoundGateways(
 		sourceKey string
 	}
 	var (
-		templateKey      string
-		revisionID       string
-		driver           *TemplateModbusDriver
-		deviceStatus     string
-		deviceTagsRaw    []byte
-		boundGateways    []boundGatewayTarget
+		templateKey   string
+		revisionID    string
+		driver        *TemplateModbusDriver
+		deviceStatus  string
+		deviceTagsRaw []byte
+		boundGateways []boundGatewayTarget
 	)
 	err := r.withTenantWriterTx(ctx, tenantID, pgx.ReadOnly, func(tx pgx.Tx) error {
 		var payloadRaw []byte

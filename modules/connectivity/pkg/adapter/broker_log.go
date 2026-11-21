@@ -21,9 +21,13 @@ const (
 )
 
 var (
-	mosquittoConnectNoticePattern    = regexp.MustCompile(`^New client connected from .+ as (\S+)(?: \(([^)]*)\))?\.?$`)
+	mosquittoConnectNoticePattern  = regexp.MustCompile(`^New client connected from .+ as (\S+)(?: \(([^)]*)\))?\.?$`)
 	mosquittoUsernameOptionPattern = regexp.MustCompile(`(?:^|,\s*)u'([^']+)'`)
 )
+
+type brokerDebounceTimer interface {
+	Stop() bool
+}
 
 // BrokerLogWatcher tracks active Mosquitto client sessions from $SYS/broker/log/N
 // notices and emits debounced gateway disconnect callbacks when the last active
@@ -34,6 +38,7 @@ type BrokerLogWatcher struct {
 	onDisconnect func(context.Context, string, time.Time)
 	debounce     time.Duration
 	now          func() time.Time
+	afterFunc    func(time.Duration, func()) brokerDebounceTimer
 	logger       *slog.Logger
 	metrics      *observability.Registry
 
@@ -41,7 +46,7 @@ type BrokerLogWatcher struct {
 	closed          bool
 	clientToGateway map[string]string
 	activeClients   map[string]map[string]struct{}
-	timers          map[string]*time.Timer
+	timers          map[string]brokerDebounceTimer
 	timerGen        map[string]uint64
 	wg              sync.WaitGroup
 }
@@ -68,6 +73,14 @@ func WithBrokerLogClock(now func() time.Time) BrokerLogWatcherOption {
 	}
 }
 
+func withBrokerLogAfterFunc(afterFunc func(time.Duration, func()) brokerDebounceTimer) BrokerLogWatcherOption {
+	return func(w *BrokerLogWatcher) {
+		if afterFunc != nil {
+			w.afterFunc = afterFunc
+		}
+	}
+}
+
 // WithBrokerLogObservability attaches structured logging and panic recovery metrics.
 func WithBrokerLogObservability(logger *slog.Logger, metrics *observability.Registry) BrokerLogWatcherOption {
 	return func(w *BrokerLogWatcher) {
@@ -88,14 +101,17 @@ func NewBrokerLogWatcher(
 	}
 	watchCtx, cancel := context.WithCancel(ctx)
 	w := &BrokerLogWatcher{
-		ctx:             watchCtx,
-		cancel:          cancel,
-		onDisconnect:    onDisconnect,
-		debounce:        defaultBrokerDisconnectDebounce,
-		now:             time.Now,
+		ctx:          watchCtx,
+		cancel:       cancel,
+		onDisconnect: onDisconnect,
+		debounce:     defaultBrokerDisconnectDebounce,
+		now:          time.Now,
+		afterFunc: func(d time.Duration, fn func()) brokerDebounceTimer {
+			return time.AfterFunc(d, fn)
+		},
 		clientToGateway: make(map[string]string),
 		activeClients:   make(map[string]map[string]struct{}),
-		timers:          make(map[string]*time.Timer),
+		timers:          make(map[string]brokerDebounceTimer),
 		timerGen:        make(map[string]uint64),
 	}
 	for _, opt := range opts {
@@ -222,7 +238,7 @@ func (w *BrokerLogWatcher) recordDisconnect(clientID string) {
 	gen := w.timerGen[gatewayID] + 1
 	w.timerGen[gatewayID] = gen
 	disconnectedAt := w.now().UTC()
-	w.timers[gatewayID] = time.AfterFunc(w.debounce, func() {
+	w.timers[gatewayID] = w.afterFunc(w.debounce, func() {
 		w.fireDisconnect(gatewayID, gen, disconnectedAt)
 	})
 }

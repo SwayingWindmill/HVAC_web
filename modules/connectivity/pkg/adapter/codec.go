@@ -170,7 +170,7 @@ func (JSONV2Codec) canDecodeProbe(messageType string, probe versionProbe) bool {
 	}
 	if messageType == MessageTypeStatus {
 		_, _, ok := parseV2SchemaVersion(probe.SchemaVersion)
-	return ok
+		return ok
 	}
 	return true
 }
