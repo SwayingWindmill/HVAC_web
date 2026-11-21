@@ -1560,7 +1560,7 @@ func boundedText(value string, maximum int) bool {
 
 func validRuleWorkOrderPriority(priority string) bool {
 	switch priority {
-	case "LOW", "MEDIUM", "HIGH", "CRITICAL":
+	case "LOW", "MEDIUM", "HIGH", "URGENT":
 		return true
 	default:
 		return false

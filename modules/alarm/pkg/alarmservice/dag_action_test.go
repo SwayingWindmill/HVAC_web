@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -67,7 +69,7 @@ func TestValidateDependencyGateAndRuleActionsContracts(t *testing.T) {
 		},
 		{
 			Kind:              RuleActionWorkOrder,
-			WorkOrderPriority: "CRITICAL",
+			WorkOrderPriority: "URGENT",
 			WorkOrderTitle:    "紧急排查冷机供水温度",
 		},
 		{
@@ -111,8 +113,11 @@ func TestValidateDependencyGateAndRuleActionsContracts(t *testing.T) {
 		"webhook invalid secretRef": func(pol *AlarmPolicyRevision) {
 			pol.Actions = []RuleAction{{Kind: RuleActionWebhook, WebhookURL: "https://hooks.example.com/a", SecretRef: "bad secret ref!"}}
 		},
-		"work order invalid priority": func(pol *AlarmPolicyRevision) {
-			pol.Actions = []RuleAction{{Kind: RuleActionWorkOrder, WorkOrderPriority: "URGENT", WorkOrderTitle: "bad"}}
+		"work order invalid priority CRITICAL": func(pol *AlarmPolicyRevision) {
+			pol.Actions = []RuleAction{{Kind: RuleActionWorkOrder, WorkOrderPriority: "CRITICAL", WorkOrderTitle: "bad"}}
+		},
+		"work order invalid priority NORMAL": func(pol *AlarmPolicyRevision) {
+			pol.Actions = []RuleAction{{Kind: RuleActionWorkOrder, WorkOrderPriority: "NORMAL", WorkOrderTitle: "bad"}}
 		},
 		"work order title over 200": func(pol *AlarmPolicyRevision) {
 			pol.Actions = []RuleAction{{Kind: RuleActionWorkOrder, WorkOrderPriority: "HIGH", WorkOrderTitle: strings.Repeat("x", 201)}}
@@ -653,8 +658,8 @@ func TestRuleActionRelayBackoffDeadLetterProtectionTierAndMetrics(t *testing.T) 
 	registry.Handler().ServeHTTP(scraped, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	metricsBody := scraped.Body.String()
 	for _, want := range []string{
-		`hvac_alarm_action_dead_letter_total{reason_family="ssrf_blocked"} 1`,
-		`hvac_alarm_action_dead_letter_total{reason_family="work_order_error"} 1`,
+		`hvac_alarm_action_dead_letter_total{reason_family="authorization"} 1`,
+		`hvac_alarm_action_dead_letter_total{reason_family="dependency"} 1`,
 		`hvac_alarm_action_outbox_depth{state="pending"} 0`,
 		`hvac_alarm_action_outbox_depth{state="dead_letter"} 2`,
 	} {
@@ -668,6 +673,7 @@ type stubDeadLetterStore struct {
 	list          RuleActionDeadLetterList
 	replayedID    string
 	replayErr     error
+	replayStatus  RuleActionStatus
 	lastListLimit int
 }
 
@@ -676,9 +682,15 @@ func (s *stubDeadLetterStore) ListRuleActionDeadLetters(_ context.Context, _, _ 
 	return s.list, nil
 }
 
-func (s *stubDeadLetterStore) ReplayRuleActionDeadLetter(_ context.Context, _, _, outboxID string, _ time.Time) error {
+func (s *stubDeadLetterStore) ReplayRuleActionDeadLetter(_ context.Context, _, _, outboxID string, _ time.Time) (RuleActionStatus, error) {
 	s.replayedID = outboxID
-	return s.replayErr
+	if s.replayErr != nil {
+		return "", s.replayErr
+	}
+	if s.replayStatus != "" {
+		return s.replayStatus, nil
+	}
+	return RuleActionStatusPending, nil
 }
 
 func TestDeadLetterHTTPListSanitizedAndReplayAuth(t *testing.T) {
@@ -737,16 +749,75 @@ func TestDeadLetterHTTPListSanitizedAndReplayAuth(t *testing.T) {
 		t.Fatalf("expected 403 when replay lacks write delegation header, got %d", unauthRec.Code)
 	}
 
-	// Valid write delegation replays dead letter cleanly.
-	replayReq := httptest.NewRequest(http.MethodPost, InternalSiteAlarmsPrefix+testSiteID+"/alarm-rules/dead-letters/"+outboxID+"/replay", nil)
+	replayRec := httptest.NewRequest(http.MethodPost, InternalSiteAlarmsPrefix+testSiteID+"/alarm-rules/dead-letters/"+outboxID+"/replay", nil)
+	replayReq := replayRec
 	replayReq.Header.Set(AlarmWriteContextHeader, signedReadContext(t, signer, now, AlarmRuleDeadLetterReplayAction, testTenantID, testSiteID, ""))
-	replayRec := httptest.NewRecorder()
-	handler.ServeHTTP(replayRec, replayReq)
-	if replayRec.Code != http.StatusOK || dlStore.replayedID != outboxID {
-		t.Fatalf("POST dead-letter replay status=%d replayed=%q body=%s", replayRec.Code, dlStore.replayedID, replayRec.Body.String())
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, replayReq)
+	if rec.Code != http.StatusOK || dlStore.replayedID != outboxID {
+		t.Fatalf("POST dead-letter replay status=%d replayed=%q body=%s", rec.Code, dlStore.replayedID, rec.Body.String())
 	}
 	var res RuleActionReplayResult
-	if err := json.Unmarshal(replayRec.Body.Bytes(), &res); err != nil || res.Status != RuleActionStatusPending || res.OutboxID != outboxID {
-		t.Fatalf("unexpected replay response: err=%v body=%s", err, replayRec.Body.String())
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil || res.Status != RuleActionStatusPending || res.OutboxID != outboxID {
+		t.Fatalf("unexpected replay response: err=%v body=%s", err, rec.Body.String())
+	}
+
+	dlStore.replayStatus = RuleActionStatusDelivered
+	idempReq := httptest.NewRequest(http.MethodPost, InternalSiteAlarmsPrefix+testSiteID+"/alarm-rules/dead-letters/"+outboxID+"/replay", nil)
+	idempReq.Header.Set(AlarmWriteContextHeader, signedReadContext(t, signer, now, AlarmRuleDeadLetterReplayAction, testTenantID, testSiteID, ""))
+	idempRec := httptest.NewRecorder()
+	handler.ServeHTTP(idempRec, idempReq)
+	if idempRec.Code != http.StatusOK {
+		t.Fatalf("idempotent replay status=%d body=%s", idempRec.Code, idempRec.Body.String())
+	}
+	var res2 RuleActionReplayResult
+	if err := json.Unmarshal(idempRec.Body.Bytes(), &res2); err != nil || res2.Status != RuleActionStatusDelivered {
+		t.Fatalf("unexpected idempotent replay status: err=%v body=%s", err, idempRec.Body.String())
+	}
+}
+
+func TestIsPublicUnicastAddrBlocksReservedAndNAT64Prefixes(t *testing.T) {
+	blocked := []string{
+		"0.0.0.0", "0.255.255.254", "100.64.0.1", "127.0.0.1", "169.254.169.254",
+		"192.0.0.1", "192.0.2.1", "198.18.0.1", "198.19.255.254", "198.51.100.10", "203.0.113.5",
+		"224.0.0.1", "240.0.0.1",
+		"::", "::1", "fe80::1", "fc00::1", "2001:db8::1", "2002:7f00:1::1", "100::1", "64:ff9b::10.0.0.1", "64:ff9b:1::1",
+	}
+	for _, raw := range blocked {
+		addr := netip.MustParseAddr(raw)
+		if isPublicUnicastAddr(addr) {
+			t.Fatalf("expected non-public address %s to be blocked", raw)
+		}
+	}
+	for _, raw := range []string{"93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946"} {
+		addr := netip.MustParseAddr(raw)
+		if !isPublicUnicastAddr(addr) {
+			t.Fatalf("expected public unicast address %s to be allowed", raw)
+		}
+	}
+}
+
+func TestDirWebhookSecretResolver(t *testing.T) {
+	if NewDirWebhookSecretResolver("   ") != nil {
+		t.Fatalf("expected nil resolver for blank base dir")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "hook.hmac:v1"), []byte("super-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "empty.hmac"), []byte("\r\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resolver := NewDirWebhookSecretResolver(dir)
+	secret, err := resolver(context.Background(), "hook.hmac:v1")
+	if err != nil || string(secret) != "super-secret" {
+		t.Fatalf("expected secret loaded, got %q err=%v", string(secret), err)
+	}
+	for _, ref := range []string{"../escape", ".hidden", "missing.hmac", "empty.hmac"} {
+		_, err := resolver(context.Background(), ref)
+		var perm *PermanentRuleActionError
+		if !errors.As(err, &perm) || perm.ReasonCode != "secret_unavailable" {
+			t.Fatalf("ref=%q expected permanent secret_unavailable, got %v", ref, err)
+		}
 	}
 }

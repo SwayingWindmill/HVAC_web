@@ -2,7 +2,6 @@ package alarmservice
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/observability"
@@ -182,17 +180,19 @@ func TestPostgresDAGTopologicalEvaluationOutboxRelayAndDeadLetterReplay(t *testi
 		t.Fatalf("dead-letter TargetRef leaked query/secret: %q", dlList.Items[0].TargetRef)
 	}
 
-	// Replay dead letter -> PENDING, then clear downstream alarm -> BOTH webhook enqueued on CLEAR too.
+	// Replay dead letter -> PENDING, idempotent replay keeps PENDING, then clear downstream alarm -> BOTH webhook enqueued on CLEAR too.
 	replayAt := t2.Add(5 * time.Second)
-	if err := store.ReplayRuleActionDeadLetter(ctx, tenantID, siteID, dlList.Items[0].OutboxID, replayAt); err != nil {
-		t.Fatalf("ReplayRuleActionDeadLetter failed: %v", err)
+	status1, err := store.ReplayRuleActionDeadLetter(ctx, tenantID, siteID, dlList.Items[0].OutboxID, replayAt)
+	if err != nil || status1 != RuleActionStatusPending {
+		t.Fatalf("ReplayRuleActionDeadLetter failed: status=%q err=%v", status1, err)
 	}
 	afterReplay, err := store.ListRuleActionDeadLetters(ctx, tenantID, siteID, 20)
 	if err != nil || len(afterReplay.Items) != 0 {
 		t.Fatalf("expected 0 dead letters after replay, got %#v err=%v", afterReplay.Items, err)
 	}
-	if err := store.ReplayRuleActionDeadLetter(ctx, tenantID, siteID, dlList.Items[0].OutboxID, replayAt); !errors.Is(err, alarmmodel.ErrInvalidOperation) {
-		t.Fatalf("expected ErrInvalidOperation replaying non-dead-letter entry, got %v", err)
+	status2, err := store.ReplayRuleActionDeadLetter(ctx, tenantID, siteID, dlList.Items[0].OutboxID, replayAt)
+	if err != nil || status2 != RuleActionStatusPending {
+		t.Fatalf("expected idempotent replay to return PENDING without error, got status=%q err=%v", status2, err)
 	}
 
 	t3 := t2.Add(20 * time.Second)
@@ -216,7 +216,7 @@ func TestPostgresDAGTopologicalEvaluationOutboxRelayAndDeadLetterReplay(t *testi
 	// Check metrics emitted by RelayOnce earlier.
 	rec := httptest.NewRecorder()
 	registry.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-	if !strings.Contains(rec.Body.String(), `hvac_alarm_action_dead_letter_total{reason_family="ssrf_blocked"} 1`) {
+	if !strings.Contains(rec.Body.String(), `hvac_alarm_action_dead_letter_total{reason_family="authorization"} 1`) {
 		t.Fatalf("expected action dead-letter metric in:\n%s", rec.Body.String())
 	}
 }

@@ -13,6 +13,8 @@
     {"id":7,"title":"Verification timeout rate","type":"stat","targets":[{"expr":"sum(rate(hvac_command_verifications_total{outcome=\"timed_out\"}[10m])) / sum(rate(hvac_command_verifications_total[10m]))"}]},
     {"id":8,"title":"Verification p95","type":"timeseries","targets":[{"expr":"histogram_quantile(0.95, sum by (le) (rate(hvac_command_verification_duration_seconds_bucket[5m])))"}]},
     {"id":9,"title":"Command API in flight","type":"timeseries","targets":[{"expr":"max(hvac_command_http_in_flight)"}]},
-    {"id":10,"title":"S2 security zero invariants","type":"stat","targets":[{"expr":"sum(hvac_s2_security_zero_invariant_total)"}]}
+    {"id":10,"title":"S2 security zero invariants","type":"stat","targets":[{"expr":"sum(hvac_s2_security_zero_invariant_total)"}]},
+    {"id":11,"title":"Control alarm outbox depth by state","type":"timeseries","targets":[{"expr":"max by (state) (hvac_command_control_alarm_outbox_depth)"}]},
+    {"id":12,"title":"Control alarm dead letters by reason","type":"timeseries","targets":[{"expr":"sum by (reason_family) (rate(hvac_command_control_alarm_dead_letter_total[5m]))"}]}
   ]
 }

@@ -15,8 +15,11 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/alarmauth"
 	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
 	"github.com/quanlaihe/hvac-web/libs/observability"
+	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/modules/alarm/pkg/alarmservice"
+	"github.com/quanlaihe/hvac-web/modules/audit/pkg/auditserver"
 )
 
 const (
@@ -37,10 +40,13 @@ type publicAlarmRoute struct {
 	alarmID  string
 	action   alarmauth.Action
 	// siteRules is the Site's rules in effect (#693), read with the same grant as its alarm list.
-	siteRules         bool
-	siteRulesSimulate bool
-	evaluations       bool
-	now               time.Time
+	siteRules                bool
+	siteRulesSimulate        bool
+	siteRuleDeadLetters      bool
+	siteRuleDeadLetterReplay bool
+	outboxID                 string
+	evaluations              bool
+	now                      time.Time
 }
 
 type alarmScope struct {
@@ -116,6 +122,10 @@ func (a *directAlarmAdapter) ResolveScope(ctx context.Context, tenantID, alarmID
 func (a *directAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Request, route publicAlarmRoute, _ string) ([]byte, int, *ownerFailure) {
 	if route.siteRules || route.siteRulesSimulate {
 		failure := alarmUnavailable("Site rules are only served by the Alarm Service.")
+		return nil, http.StatusServiceUnavailable, &failure
+	}
+	if route.siteRuleDeadLetters || route.siteRuleDeadLetterReplay {
+		failure := alarmUnavailable("Site rule dead letters are only served by the Alarm Service.")
 		return nil, http.StatusServiceUnavailable, &failure
 	}
 	query := publicRequest.URL.Query()
@@ -377,10 +387,15 @@ func (a *httpAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Requ
 	callCtx, cancel := context.WithTimeout(ctx, a.timeout)
 	defer cancel()
 	path := internalSiteAlarmsPrefix + url.PathEscape(route.siteID) + "/alarms"
-	if route.siteRules {
+	switch {
+	case route.siteRules:
 		path = internalSiteAlarmsPrefix + url.PathEscape(route.siteID) + "/alarm-rules"
-	} else if route.siteRulesSimulate {
+	case route.siteRulesSimulate:
 		path = internalSiteAlarmsPrefix + url.PathEscape(route.siteID) + "/alarm-rules:simulate"
+	case route.siteRuleDeadLetters:
+		path = internalSiteAlarmsPrefix + url.PathEscape(route.siteID) + "/alarm-rules/dead-letters"
+	case route.siteRuleDeadLetterReplay:
+		path = internalSiteAlarmsPrefix + url.PathEscape(route.siteID) + "/alarm-rules/dead-letters/" + url.PathEscape(route.outboxID) + "/replay"
 	}
 	method := http.MethodGet
 	var requestBody io.Reader
@@ -403,6 +418,8 @@ func (a *httpAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Requ
 			return nil, 0, &failure
 		}
 		requestBody = bytes.NewReader(rawBody)
+	} else if route.siteRuleDeadLetterReplay {
+		method = http.MethodPost
 	} else if route.alarmID == "" {
 		query := publicRequest.URL.Query()
 		query.Del("siteId")
@@ -451,7 +468,7 @@ func (a *httpAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Requ
 		} else {
 			request.Header.Set("Content-Type", "application/json")
 		}
-	} else if route.action == alarmauth.ActionAck || isMutation {
+	} else if route.siteRuleDeadLetterReplay || route.action == alarmauth.ActionAck || isMutation {
 		request.Header.Set(alarmWriteContextHeader, serviceContext)
 		if ct := publicRequest.Header.Get("Content-Type"); strings.TrimSpace(ct) != "" {
 			request.Header.Set("Content-Type", ct)
@@ -532,6 +549,23 @@ func matchPublicAlarmRoute(path string) (publicAlarmRoute, bool) {
 	if path == "/api/v1/alarm-rules/simulate" {
 		return publicAlarmRoute{template: "/api/v1/alarm-rules/simulate", action: alarmauth.ActionRead, siteRulesSimulate: true}, true
 	}
+	if path == "/api/v1/alarm-rules/dead-letters" {
+		return publicAlarmRoute{template: "/api/v1/alarm-rules/dead-letters", action: alarmauth.ActionRead, siteRuleDeadLetters: true}, true
+	}
+	if rest, ok := strings.CutPrefix(path, "/api/v1/alarm-rules/dead-letters/"); ok {
+		parts := strings.Split(rest, "/")
+		if len(parts) == 2 && parts[0] != "" && parts[1] == "replay" {
+			outboxID, err := url.PathUnescape(parts[0])
+			if err == nil && outboxID != "" {
+				return publicAlarmRoute{
+					template:                 "/api/v1/alarm-rules/dead-letters/{outboxId}/replay",
+					outboxID:                 outboxID,
+					siteRuleDeadLetterReplay: true,
+				}, true
+			}
+		}
+		return publicAlarmRoute{}, false
+	}
 	prefix := "/api/v1/alarms/"
 	if !strings.HasPrefix(path, prefix) {
 		return publicAlarmRoute{}, false
@@ -586,6 +620,14 @@ func dispatchAlarmRoute(h *handler, writer http.ResponseWriter, request *http.Re
 	}
 	if route.siteRulesSimulate {
 		dispatchSiteRulesSimulateRoute(h, writer, request, route)
+		return
+	}
+	if route.siteRuleDeadLetters {
+		dispatchSiteRuleDeadLettersRoute(h, writer, request, route)
+		return
+	}
+	if route.siteRuleDeadLetterReplay {
+		dispatchSiteRuleDeadLetterReplayRoute(h, writer, request, route)
 		return
 	}
 	expectedMethod := http.MethodGet
@@ -794,6 +836,248 @@ func dispatchSiteRulesSimulateRoute(h *handler, writer http.ResponseWriter, requ
 	})
 }
 
+func validateDeadLetterListQuery(query url.Values) (string, bool) {
+	for key, values := range query {
+		if len(values) != 1 || (key != "siteId" && key != "limit") {
+			return "", false
+		}
+	}
+	siteID := strings.TrimSpace(query.Get("siteId"))
+	if !alarmmodel.IsUUIDv7(siteID) {
+		return "", false
+	}
+	if rawLimit := strings.TrimSpace(query.Get("limit")); rawLimit != "" {
+		limit, err := strconv.Atoi(rawLimit)
+		if err != nil || limit < 1 || limit > 50 {
+			return "", false
+		}
+	}
+	return siteID, true
+}
+
+func dispatchSiteRuleDeadLettersRoute(h *handler, writer http.ResponseWriter, request *http.Request, route publicAlarmRoute) {
+	fail := func(failure ownerFailure) {
+		writeProblem(writer, request, failure.status, failure.code, failure.title, failure.detail, failure.retryable, nil)
+	}
+	if request.Method != http.MethodGet {
+		writeMethodNotAllowedFor(writer, request, http.MethodGet)
+		return
+	}
+	if h.alarm == nil || h.alarm.operations == nil {
+		fail(alarmUnavailable("The Alarm service is not configured."))
+		return
+	}
+	siteID, valid := validateDeadLetterListQuery(request.URL.Query())
+	if !valid {
+		fail(alarmInvalid("The Site rule dead-letter query requires siteId and optional limit between 1 and 50."))
+		return
+	}
+	route.siteID = siteID
+	session, ok := h.alarmSession(writer, request)
+	if !ok {
+		return
+	}
+	if failure := h.checkAlarmSiteVisibility(request, session, route.siteID, true); failure != nil {
+		fail(*failure)
+		return
+	}
+	response, failure := CallOwner(request.Context(), h, h.alarmCaller(session), h.alarmOwner(), string(route.action), route.scope(session.TenantID), alarmCall{public: request, route: route})
+	if failure != nil {
+		fail(*failure)
+		return
+	}
+	if response.status != http.StatusOK {
+		upstreamFailure := alarmProblemFromUpstream(response.status, response.body, "Alarm Service could not list Site rule dead letters.")
+		fail(upstreamFailure)
+		return
+	}
+	list, ok := response.value.(alarmservice.RuleActionDeadLetterList)
+	if !ok {
+		fail(alarmUnavailable("Alarm Service returned an invalid Site rule dead-letter list."))
+		return
+	}
+	items := list.Items
+	if items == nil {
+		items = []alarmservice.RuleActionDeadLetterView{}
+	}
+	writer.Header().Set("Cache-Control", "private, no-store")
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"data": items,
+		"meta": map[string]any{"requestId": requestIDFromContext(request.Context())},
+	})
+}
+
+func (h *handler) authorizeSiteScheduleManageProblem(
+	writer http.ResponseWriter,
+	request *http.Request,
+	session bffSession,
+	siteID string,
+	forbiddenDetail string,
+) (registryAuthorization, int, bool) {
+	authorization, failure := h.authorizeRegistry(request.Context(), session, registryauth.ActionScheduleManage)
+	if failure != nil {
+		if failure.status == http.StatusForbidden {
+			writeProblem(writer, request, http.StatusForbidden, "FORBIDDEN", "Forbidden", forbiddenDetail, false, nil)
+			return registryAuthorization{}, http.StatusForbidden, false
+		}
+		if failure.status == http.StatusNotFound {
+			writeProblem(writer, request, http.StatusNotFound, "SITE_NOT_FOUND", "Site not found", "The requested Site was not found.", false, nil)
+			return registryAuthorization{}, http.StatusNotFound, false
+		}
+		writeProblem(writer, request, failure.status, failure.code, failure.title, failure.detail, failure.retryable, nil)
+		return registryAuthorization{}, failure.status, false
+	}
+	if _, allowed := authorization.allowedSiteIDs[siteID]; !allowed {
+		writeProblem(writer, request, http.StatusForbidden, "FORBIDDEN", "Forbidden", forbiddenDetail, false, nil)
+		return registryAuthorization{}, http.StatusForbidden, false
+	}
+	return authorization, 0, true
+}
+
+func dispatchSiteRuleDeadLetterReplayRoute(h *handler, writer http.ResponseWriter, request *http.Request, route publicAlarmRoute) {
+	targetID := "outbox:" + route.outboxID
+	emitAudit := func(session bffSession, outcome string, summary map[string]any) {
+		h.emitDomainAudit(request.Context(), request, session, domainAuditInput{
+			Category:      auditserver.AggregateTypeRegistryMutation,
+			TargetID:      targetID,
+			TargetLabel:   "告警规则动作死信重投",
+			Action:        "ALARM_RULE_ACTION_DEAD_LETTER_REPLAYED",
+			Outcome:       outcome,
+			ChangeSummary: summary,
+		})
+	}
+	fail := func(failure ownerFailure) {
+		writeProblem(writer, request, failure.status, failure.code, failure.title, failure.detail, failure.retryable, nil)
+	}
+	if request.Method != http.MethodPost {
+		writeMethodNotAllowedFor(writer, request, http.MethodPost)
+		return
+	}
+	if h.alarm == nil || h.alarm.operations == nil || h.identity == nil || h.identity.config.DelegationSigner == nil {
+		fail(alarmUnavailable("The Alarm service is not configured."))
+		return
+	}
+	session, ok := h.alarmSession(writer, request)
+	if !ok {
+		return
+	}
+	if failure := h.identity.validateStateChange(request, session, request.Header.Get("X-CSRF-Token")); failure != nil {
+		emitAudit(session, auditOutcomeRejected, map[string]any{"reasonCode": failure.code})
+		writeIdentityFailure(writer, request, *failure)
+		return
+	}
+	if !h.allowRateLimitedTenant(writer, request, limitpolicy.DimensionCommandWrite, session.TenantID) {
+		return
+	}
+	if !alarmmodel.IsUUIDv7(route.outboxID) {
+		emitAudit(session, auditOutcomeRejected, map[string]any{"reasonCode": "RESOURCE_NOT_FOUND"})
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested rule action dead-letter entry was not found.", false, nil)
+		return
+	}
+	query := request.URL.Query()
+	if len(query) != 1 || len(query["siteId"]) != 1 || !alarmmodel.IsUUIDv7(query.Get("siteId")) {
+		emitAudit(session, auditOutcomeRejected, map[string]any{"reasonCode": "INVALID_ARGUMENT"})
+		fail(alarmInvalid("The Site rule dead-letter replay query takes exactly one siteId."))
+		return
+	}
+	route.siteID = query.Get("siteId")
+	if request.Body != nil && request.ContentLength != 0 {
+		if mediaType := strings.TrimSpace(strings.Split(request.Header.Get("Content-Type"), ";")[0]); mediaType != "" && mediaType != "application/json" {
+			emitAudit(session, auditOutcomeRejected, map[string]any{"siteId": route.siteID, "reasonCode": "INVALID_ARGUMENT"})
+			writeProblem(writer, request, http.StatusUnsupportedMediaType, "INVALID_ARGUMENT", "Invalid content type", "The replay request body must use application/json.", false, nil)
+			return
+		}
+		rawBody, err := readBoundedBody(request.Body, 16<<10)
+		if err != nil {
+			emitAudit(session, auditOutcomeRejected, map[string]any{"siteId": route.siteID, "reasonCode": "INVALID_ARGUMENT"})
+			fail(alarmInvalid("The replay request body is too large or unreadable."))
+			return
+		}
+		if len(bytes.TrimSpace(rawBody)) > 0 {
+			var empty struct{}
+			if decodeStrictAlarmJSON(rawBody, &empty) != nil {
+				emitAudit(session, auditOutcomeRejected, map[string]any{"siteId": route.siteID, "reasonCode": "INVALID_ARGUMENT"})
+				fail(alarmInvalid("The replay request body must be empty or {}."))
+				return
+			}
+		}
+	}
+	if failure := h.checkAlarmSiteVisibility(request, session, route.siteID, true); failure != nil {
+		emitAudit(session, auditOutcomeForStatus(failure.status), map[string]any{"siteId": route.siteID, "reasonCode": failure.code})
+		fail(*failure)
+		return
+	}
+	authorization, failStatus, allowed := h.authorizeSiteScheduleManageProblem(writer, request, session, route.siteID, "The caller lacks permission to replay Site rule dead letters.")
+	if !allowed {
+		emitAudit(session, auditOutcomeForStatus(failStatus), map[string]any{"siteId": route.siteID, "reasonCode": "FORBIDDEN"})
+		return
+	}
+	now := h.identity.now().UTC()
+	expiresAt := now.Add(h.identity.config.DelegationTTL)
+	if !session.ExpiresAt.IsZero() && expiresAt.After(session.ExpiresAt) {
+		expiresAt = session.ExpiresAt
+	}
+	policyRevision := strings.TrimSpace(authorization.policyRevision)
+	if policyRevision == "" {
+		policyRevision = h.identity.config.PolicyRevision
+	}
+	principalID := strings.TrimSpace(authorization.principalID)
+	if principalID == "" {
+		principalID = session.Principal.Subject
+	}
+	claims := identitycontext.DelegationClaims{
+		Issuer:           h.identity.config.ExecutingWorkloadSPIFFE,
+		Subject:          principalID,
+		SubjectIssuer:    session.Principal.Issuer,
+		DisplayName:      session.Principal.DisplayName,
+		Email:            session.Principal.Email,
+		Roles:            append([]string(nil), session.Principal.Roles...),
+		ExecutingService: h.identity.config.ExecutingWorkloadSPIFFE,
+		Audience:         h.alarm.backendAudience,
+		TenantID:         session.TenantID,
+		Actions:          []string{alarmservice.AlarmRuleDeadLetterReplayAction},
+		Scopes:           []string{"tenant:" + session.TenantID, "site:" + route.siteID},
+		PolicyRevision:   policyRevision,
+		SessionID:        session.ID,
+		IssuedAt:         now.Unix(),
+		ExpiresAt:        expiresAt.Unix(),
+		TokenID:          randomURLToken(16),
+	}
+	serviceContext, err := identitycontext.SignDelegation(h.identity.config.DelegationSigner, claims)
+	if err != nil {
+		emitAudit(session, auditOutcomeFailed, map[string]any{"siteId": route.siteID, "reasonCode": "INTERNAL_ERROR"})
+		fail(alarmUnavailable("The Alarm replay context could not be signed."))
+		return
+	}
+	rawBody, status, execFailure := h.alarm.operations.Execute(request.Context(), request, route, serviceContext)
+	if execFailure != nil {
+		emitAudit(session, auditOutcomeForStatus(execFailure.status), map[string]any{"siteId": route.siteID, "reasonCode": execFailure.code})
+		fail(*execFailure)
+		return
+	}
+	if status != http.StatusOK {
+		upstreamFailure := alarmProblemFromUpstream(status, rawBody, "Alarm Service could not replay the Site rule dead letter.")
+		emitAudit(session, auditOutcomeForStatus(upstreamFailure.status), map[string]any{"siteId": route.siteID, "reasonCode": upstreamFailure.code})
+		fail(upstreamFailure)
+		return
+	}
+	var result alarmservice.RuleActionReplayResult
+	if decodeStrictAlarmJSON(rawBody, &result) != nil || result.OutboxID != route.outboxID || result.SiteID != route.siteID {
+		emitAudit(session, auditOutcomeFailed, map[string]any{"siteId": route.siteID, "reasonCode": "INTERNAL_ERROR"})
+		fail(alarmUnavailable("Alarm Service returned an invalid Site rule replay response."))
+		return
+	}
+	emitAudit(session, auditOutcomeSucceeded, map[string]any{
+		"siteId": route.siteID,
+		"status": string(result.Status),
+	})
+	writer.Header().Set("Cache-Control", "private, no-store")
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"data": result,
+		"meta": map[string]any{"requestId": requestIDFromContext(request.Context())},
+	})
+}
+
 func validatePublicAlarmQuery(query url.Values) (string, int, bool) {
 	for key := range query {
 		switch key {
@@ -993,6 +1277,12 @@ func validateAlarmResponse(scope ownerScope, call alarmCall, response ownerRespo
 			return nil, err
 		}
 		return sim, sim.Validate("")
+	case call.route.siteRuleDeadLetters:
+		var list alarmservice.RuleActionDeadLetterList
+		if err := decodeStrictAlarmJSON(response.body, &list); err != nil {
+			return nil, err
+		}
+		return list, nil
 	case call.route.evaluations:
 		var list alarmservice.AlarmEvaluationList
 		if err := decodeStrictAlarmJSON(response.body, &list); err != nil {

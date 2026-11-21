@@ -387,9 +387,9 @@ func TestAlarmEvaluationRelayInstrumentsDeadLetterAndOutboxDepthMetrics(t *testi
 	registry.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	body := rec.Body.String()
 	for _, want := range []string{
-		`hvac_alarm_evaluation_dead_letter_total{reason_family="payload_invalid"} 1`,
-		`hvac_alarm_evaluation_dead_letter_total{reason_family="permanent_failure"} 1`,
-		`hvac_alarm_evaluation_dead_letter_total{reason_family="max_attempts_exceeded"} 1`,
+		`hvac_alarm_evaluation_dead_letter_total{reason_family="scope"} 1`,
+		`hvac_alarm_evaluation_dead_letter_total{reason_family="dependency"} 1`,
+		`hvac_alarm_evaluation_dead_letter_total{reason_family="transport"} 1`,
 		`hvac_alarm_evaluation_outbox_depth{state="pending"} 4`,
 		`hvac_alarm_evaluation_outbox_depth{state="dead_letter"} 3`,
 	} {

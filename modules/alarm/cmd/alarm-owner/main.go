@@ -142,6 +142,22 @@ func run() int {
 	scheduledCtx, cancelScheduled := context.WithCancel(context.Background())
 	defer cancelScheduled()
 	scheduledDone := alarmservice.StartScheduledEvaluations(scheduledCtx, store, logger)
+	actionRelayWorkerID := envOr("ALARM_ACTION_RELAY_WORKER_ID", "alarm-service-action-relay")
+	if host, hostErr := os.Hostname(); hostErr == nil && strings.TrimSpace(host) != "" {
+		actionRelayWorkerID += ":" + strings.TrimSpace(host)
+	}
+	actionRelay, err := alarmservice.NewRuleActionRelay(alarmservice.RuleActionRelayConfig{
+		Store:         store,
+		WebhookSender: alarmservice.NewSSRFWebhookSender(alarmservice.NewDirWebhookSecretResolver(os.Getenv("ALARM_WEBHOOK_SECRET_DIR"))),
+		Metrics:       telemetry.Metrics,
+		Logger:        logger,
+		WorkerID:      actionRelayWorkerID,
+	})
+	if err != nil {
+		logger.Error("alarm_rule_action_relay_configuration_invalid", "error_code", "ALARM_RULE_ACTION_RELAY_CONFIGURATION_INVALID")
+		return 1
+	}
+	actionRelayDone := actionRelay.Start(scheduledCtx, 5*time.Second)
 
 	signalCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stopSignals()
@@ -170,6 +186,7 @@ func run() int {
 	drainAlarmOwnerWorkers(alarmOwnerWorkerDrainDeps{
 		cancelScheduled:   cancelScheduled,
 		scheduledDone:     scheduledDone,
+		actionRelayDone:   actionRelayDone,
 		shutdownTelemetry: shutdownTelemetry,
 	})
 	if exitCode == 0 {
@@ -208,6 +225,7 @@ func shutdownAlarmOwnerHTTP(deps alarmOwnerHTTPShutdownDeps) {
 type alarmOwnerWorkerDrainDeps struct {
 	cancelScheduled   func()
 	scheduledDone     <-chan struct{}
+	actionRelayDone   <-chan struct{}
 	shutdownTelemetry func(context.Context) error
 }
 
@@ -220,6 +238,12 @@ func drainAlarmOwnerWorkers(deps alarmOwnerWorkerDrainDeps) {
 	if deps.scheduledDone != nil {
 		select {
 		case <-deps.scheduledDone:
+		case <-ctx.Done():
+		}
+	}
+	if deps.actionRelayDone != nil {
+		select {
+		case <-deps.actionRelayDone:
 		case <-ctx.Done():
 		}
 	}
@@ -241,6 +265,12 @@ func alarmObservabilityRoute(request *http.Request) string {
 	}
 	if !strings.HasPrefix(path, alarmservice.InternalSiteAlarmsPrefix) {
 		return "unknown"
+	}
+	if strings.HasSuffix(path, "/alarm-rules") || strings.HasSuffix(path, "/alarm-rules:simulate") {
+		return "alarms.rules"
+	}
+	if strings.Contains(path, "/alarm-rules/dead-letters") {
+		return "alarms.dead_letters"
 	}
 	for suffix, operation := range map[string]string{
 		":acknowledge": "alarms.acknowledge",

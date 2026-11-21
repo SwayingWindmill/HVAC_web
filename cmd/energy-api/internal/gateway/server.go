@@ -290,6 +290,18 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 			dispatchAlarmRoute(h, writer, request, alarmRoute)
 			return
 		}
+		if siteID, isReload, matches := matchPublicAlarmRoutingRoute(request.URL.Path); matches {
+			decision := routeDecisionFromContext(request.Context())
+			if decision.SelectedOwner != ownershipregistry.OwnerNotification {
+				writeProblem(writer, request, http.StatusServiceUnavailable, "NOTIFICATION_UNAVAILABLE", "Notification unavailable", "The Alarm routing route is not active for this Session.", true, nil)
+				return
+			}
+			dispatchAlarmRoutingRoute(h, writer, request, siteID, isReload)
+			return
+		}
+	} else if siteID, isReload, matches := matchPublicAlarmRoutingRoute(request.URL.Path); matches {
+		dispatchAlarmRoutingRoute(h, writer, request, siteID, isReload)
+		return
 	}
 
 	if agentSessionRoute, matches := matchPublicAgentSessionRoute(request.URL.Path); matches {
@@ -769,6 +781,15 @@ func safeLogPath(path string) string {
 		}
 		if controlRoute, matches := matchPublicControlExitRoute(path); matches {
 			return controlRoute.template
+		}
+		if _, isReload, matches := matchPublicAlarmRoutingRoute(path); matches {
+			if isReload {
+				return "/api/v1/sites/{siteId}/alarm-routing/reload"
+			}
+			return "/api/v1/sites/{siteId}/alarm-routing"
+		}
+		if alarmRoute, matches := matchPublicAlarmRoute(path); matches {
+			return alarmRoute.template
 		}
 		if agentSessionRoute, matches := matchPublicAgentSessionRoute(path); matches {
 			return agentSessionRoute.template

@@ -101,3 +101,22 @@ func TestRunScheduledEvaluationsRecoversTickPanicAndRunsNextTick(t *testing.T) {
 		t.Fatalf("expected tick N+1 to complete after tick N panic: due=%d watch=%d prune=%d", runner.dueCalls.Load(), runner.watchCalls.Load(), runner.pruneCalls.Load())
 	}
 }
+
+func TestSelectDownstreamSiteRulesTopologicalCascade(t *testing.T) {
+	const (
+		rootA = "01910000-7a02-7000-8000-000000000001"
+		midB  = "01910000-7a02-7000-8000-000000000002"
+		leafC = "01910000-7a02-7000-8000-000000000003"
+		indD  = "01910000-7a02-7000-8000-000000000004"
+	)
+	ordered := orderSiteRulesForEvaluation([]SiteRule{
+		{AssignmentID: leafC, Policy: AlarmPolicyRevision{DependsOnRuleIDs: []string{midB}, DependencyGate: DependencyGateAnyActive}},
+		{AssignmentID: midB, Policy: AlarmPolicyRevision{DependsOnRuleIDs: []string{rootA}, DependencyGate: DependencyGateAllActive}},
+		{AssignmentID: rootA},
+		{AssignmentID: indD},
+	})
+	downstream := selectDownstreamSiteRules(ordered, map[string]bool{rootA: true})
+	if len(downstream) != 2 || downstream[0].AssignmentID != midB || downstream[1].AssignmentID != leafC {
+		t.Fatalf("expected [midB leafC] in topological order, got %#v", downstream)
+	}
+}

@@ -735,3 +735,111 @@ func TestOperatorHTTPDevicePriorityLockRoutesAndObservability(t *testing.T) {
 		t.Fatalf("DELETE query fallback failed status=%d resp=%+v", delRec2.Code, rel2)
 	}
 }
+
+func TestControlModeAndShutdownPopulateDevicePriorityLocks(t *testing.T) {
+	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	h, op := seedPlantHarness(t, now)
+	op.StepUpTOTPVerified = true
+
+	if _, err := h.Authority.PutDevicePriorityLock(context.Background(), op, caSiteID, caChillerDev, DevicePriorityLockInput{
+		LockedPriority: "MANUAL_OVERRIDE",
+		Reason:         "hold chiller during inspection",
+	}); err != nil {
+		t.Fatalf("PutDevicePriorityLock: %v", err)
+	}
+
+	modeResp, err := h.Authority.PutSiteControlMode(context.Background(), op, caSiteID, SiteControlModeInput{
+		ControlMode:    SiteControlModeManualOverride,
+		Reason:         "switch to manual override",
+		IdempotencyKey: "mode-lock-pop-1",
+	})
+	if err != nil {
+		t.Fatalf("PutSiteControlMode: %v", err)
+	}
+	if len(modeResp.DevicePriorityLocks) != 1 || modeResp.DevicePriorityLocks[0].DeviceID != caChillerDev {
+		t.Fatalf("expected active DevicePriorityLocks in PutSiteControlMode response, got %#v", modeResp.DevicePriorityLocks)
+	}
+
+	shutResp, err := h.Authority.ExecuteSiteControlShutdown(context.Background(), op, caSiteID, SiteControlShutdownInput{
+		Mode:           ShutdownModePlantSafe,
+		Reason:         "safe stop test",
+		IdempotencyKey: "shut-lock-pop-1",
+	})
+	if err != nil {
+		t.Fatalf("ExecuteSiteControlShutdown: %v", err)
+	}
+	if len(shutResp.SiteControlState.DevicePriorityLocks) != 1 || shutResp.SiteControlState.DevicePriorityLocks[0].DeviceID != caChillerDev {
+		t.Fatalf("expected active DevicePriorityLocks in ExecuteSiteControlShutdown response, got %#v", shutResp.SiteControlState.DevicePriorityLocks)
+	}
+}
+
+func TestSubmitProtectionRuleCommandResolvesPointCodeAndEnforcesPriority(t *testing.T) {
+	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	h, op := seedPlantHarness(t, now)
+
+	// Missing point code returns 404.
+	if _, err := h.Authority.SubmitProtectionRuleCommand(context.Background(), ProtectionRuleCommandInput{
+		TenantID:        caTenantID,
+		SiteID:          caSiteID,
+		DeviceID:        caChillerDev,
+		TargetPointCode: "missing_point",
+		Capability:      commandmodel.CapabilitySetTemperatureSetpoint,
+		Parameters:      commandmodel.CommandParameters{"setpointC": 23.5},
+		IdempotencyKey:  "alarm-rule-action:01910000-0000-7000-8000-000000000001",
+		OutboxID:        "01910000-0000-7000-8000-000000000001",
+		AssignmentID:    "01910000-7a02-7000-8000-000000000001",
+	}); err == nil {
+		t.Fatal("expected 404 for unknown targetPointCode")
+	} else {
+		var ce *ControlError
+		if !errors.As(err, &ce) || ce.HTTPStatus != http.StatusNotFound {
+			t.Fatalf("expected 404 ControlError, got %v", err)
+		}
+	}
+
+	// Valid human point_code resolves caSetpointPt and submits with PROTECTION_RULE priority.
+	res, err := h.Authority.SubmitProtectionRuleCommand(context.Background(), ProtectionRuleCommandInput{
+		TenantID:        caTenantID,
+		SiteID:          caSiteID,
+		DeviceID:        caChillerDev,
+		TargetPointCode: "temp_sp",
+		Capability:      commandmodel.CapabilitySetTemperatureSetpoint,
+		Parameters:      commandmodel.CommandParameters{"setpointC": 23.5},
+		IdempotencyKey:  "alarm-rule-action:01910000-0000-7000-8000-000000000002",
+		TraceID:         "alarm-action-01910000-0000-7000-8000-000000000002",
+		OutboxID:        "01910000-0000-7000-8000-000000000002",
+		AssignmentID:    "01910000-7a02-7000-8000-000000000001",
+	})
+	if err != nil {
+		t.Fatalf("SubmitProtectionRuleCommand failed: %v", err)
+	}
+	if res.Intent.PointID != caSetpointPt || res.Intent.PriorityTier != commandmodel.PriorityProtectionRule || res.Intent.CommandSource != commandmodel.SourceProtectionRule {
+		t.Fatalf("unexpected submitted protection command intent: %+v", res.Intent)
+	}
+
+	// Higher MANUAL_OVERRIDE device priority lock blocks PROTECTION_RULE submission.
+	if _, err := h.Authority.PutDevicePriorityLock(context.Background(), op, caSiteID, caChillerDev, DevicePriorityLockInput{
+		LockedPriority: "MANUAL_OVERRIDE",
+		Reason:         "operator override",
+	}); err != nil {
+		t.Fatalf("PutDevicePriorityLock: %v", err)
+	}
+	if _, err := h.Authority.SubmitProtectionRuleCommand(context.Background(), ProtectionRuleCommandInput{
+		TenantID:        caTenantID,
+		SiteID:          caSiteID,
+		DeviceID:        caChillerDev,
+		TargetPointCode: "temp_sp",
+		Capability:      commandmodel.CapabilitySetTemperatureSetpoint,
+		Parameters:      commandmodel.CommandParameters{"setpointC": 24.0},
+		IdempotencyKey:  "alarm-rule-action:01910000-0000-7000-8000-000000000003",
+		OutboxID:        "01910000-0000-7000-8000-000000000003",
+		AssignmentID:    "01910000-7a02-7000-8000-000000000001",
+	}); err == nil {
+		t.Fatal("expected DEVICE_PRIORITY_LOCKED conflict when MANUAL_OVERRIDE lock holds")
+	} else {
+		var ce *ControlError
+		if !errors.As(err, &ce) || ce.Code != "DEVICE_PRIORITY_LOCKED" {
+			t.Fatalf("expected DEVICE_PRIORITY_LOCKED ControlError, got %v", err)
+		}
+	}
+}

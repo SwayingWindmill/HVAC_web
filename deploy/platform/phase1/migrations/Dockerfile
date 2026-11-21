@@ -193,6 +193,8 @@ COPY modules/command/migrations/command-audit-immutability.sql /opt/hvac/repo/mo
 COPY infra/registry/postgres/init/metric-backfill-watermarks-and-reverify.sql /opt/hvac/repo/infra/registry/postgres/init/metric-backfill-watermarks-and-reverify.sql
 COPY infra/registry/postgres/init/energy-tou-holidays-and-recalc.sql /opt/hvac/repo/infra/registry/postgres/init/energy-tou-holidays-and-recalc.sql
 COPY infra/registry/postgres/init/mv-bivariate-weather-anchors.sql /opt/hvac/repo/infra/registry/postgres/init/mv-bivariate-weather-anchors.sql
+COPY modules/command/migrations/control-alarm-dead-letter-inspect.sql /opt/hvac/repo/modules/command/migrations/control-alarm-dead-letter-inspect.sql
+COPY modules/alarm/migrations/alarm-rule-action-outbox.sql /opt/hvac/repo/modules/alarm/migrations/alarm-rule-action-outbox.sql
 
 FROM postgres:16.4-bookworm
 

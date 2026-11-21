@@ -165,7 +165,7 @@ test('multi-tenant switcher switches organizations, clears site/inspect params, 
   gateway.principalOverride = { ...adminPrincipal, availableTenants };
   gateway.tenantPrincipals.set(tenantB, {
     ...adminPrincipal,
-    context: { ...adminPrincipal.context, tenantId: tenantB },
+    context: { ...principal.context, tenantId: tenantB },
     availableTenants,
   });
   gateway.tenantSites.set(tenantB, [

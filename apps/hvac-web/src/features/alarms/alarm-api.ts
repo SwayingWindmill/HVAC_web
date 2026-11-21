@@ -1,6 +1,23 @@
 import { queryOptions } from '@tanstack/react-query';
 import { failureStatus, gatewayPath, gatewayRequest, ROUTE_MISSING_MESSAGE, type GatewayRequest } from '@/api/gateway-client';
-import { alarmPaths } from '@/api/generated/platformGateway.gen';
+import {
+  alarmPaths,
+  alarmRuleDeadLetterListEnvelopeSchema,
+  alarmRuleDeadLetterReplayEnvelopeSchema,
+  siteAlarmRoutingEnvelopeSchema,
+  siteAlarmRoutingReloadEnvelopeSchema,
+  type AlarmRuleDeadLetter,
+  type AlarmRuleDeadLetterReplay,
+  type SiteAlarmRoutingReloadResult,
+  type SiteAlarmRoutingSummary,
+} from '@/api/generated/platformGateway.gen';
+
+export type {
+  AlarmRuleDeadLetter,
+  AlarmRuleDeadLetterReplay,
+  SiteAlarmRoutingReloadResult,
+  SiteAlarmRoutingSummary,
+};
 
 // Alarm owner API through the Platform Gateway. Condition (active/cleared) and
 // acknowledgement are independent, as in ThingsBoard's alarm model: an alarm clears
@@ -218,7 +235,68 @@ export const alarmKeys = {
   activeSummary: (siteId: string) => ['alarms', siteId, 'active-summary'] as const,
   detail: (siteId: string, alarmId: string) => ['alarms', siteId, 'detail', alarmId] as const,
   evaluations: (siteId: string, alarmId: string, limit: number) => ['alarms', siteId, 'evaluations', alarmId, limit] as const,
+  ruleDeadLetters: (siteId: string, limit = 20) => ['alarms', siteId, 'rule-dead-letters', limit] as const,
+  routing: (siteId: string) => ['alarms', siteId, 'routing'] as const,
 };
+
+export function alarmRuleDeadLettersQuery(siteId: string, limit = 20) {
+  return queryOptions({
+    queryKey: alarmKeys.ruleDeadLetters(siteId, limit),
+    queryFn: async ({ signal }) => {
+      const query = new URLSearchParams({ siteId, limit: String(limit) });
+      const body = await send(`${alarmPaths.ruleDeadLetters}?${query.toString()}`, {
+        signal,
+        parse: (payload) => alarmRuleDeadLetterListEnvelopeSchema.parse(payload),
+      });
+      return body.data;
+    },
+    refetchInterval: 30_000,
+  });
+}
+
+export async function replayAlarmRuleDeadLetter(
+  siteId: string,
+  outboxId: string,
+  csrfToken: string,
+): Promise<AlarmRuleDeadLetterReplay> {
+  const path = gatewayPath(alarmPaths.ruleDeadLetterReplay, { outboxId });
+  const query = new URLSearchParams({ siteId });
+  const body = await send(`${path}?${query.toString()}`, {
+    method: 'POST',
+    csrfToken,
+    body: {},
+    parse: (payload) => alarmRuleDeadLetterReplayEnvelopeSchema.parse(payload),
+  });
+  return body.data;
+}
+
+export function siteAlarmRoutingQuery(siteId: string) {
+  return queryOptions({
+    queryKey: alarmKeys.routing(siteId),
+    queryFn: async ({ signal }) => {
+      const path = gatewayPath(alarmPaths.siteRouting, { siteId });
+      const body = await send(path, {
+        signal,
+        parse: (payload) => siteAlarmRoutingEnvelopeSchema.parse(payload),
+      });
+      return body.data;
+    },
+  });
+}
+
+export async function reloadSiteAlarmRouting(
+  siteId: string,
+  csrfToken: string,
+): Promise<SiteAlarmRoutingReloadResult> {
+  const path = gatewayPath(alarmPaths.siteRoutingReload, { siteId });
+  const body = await send(path, {
+    method: 'POST',
+    csrfToken,
+    body: {},
+    parse: (payload) => siteAlarmRoutingReloadEnvelopeSchema.parse(payload),
+  });
+  return body.data;
+}
 
 const PAGE_LIMIT = 10;
 

@@ -106,6 +106,16 @@ groups:
         annotations:
           summary: Command API 5xx rate is above 1 percent
           runbook: docs/operations/alerts.md#指令接口出错
+      - alert: CommandControlAlarmDeadLetterNonZero
+        expr: max(hvac_command_control_alarm_outbox_depth{state="dead_letter"}) > 0
+        for: 5m
+        labels:
+          severity: page
+          primary_owner: control-platform
+          secondary_owner: alarm-platform
+        annotations:
+          summary: Command control alarm outbox has dead-letter entries awaiting inspection or replay
+          runbook: docs/operations/alerts.md#控制告警死信队列积压
 
   - name: alarm-phase1
     interval: 30s
@@ -130,3 +140,33 @@ groups:
         annotations:
           summary: Alarm lifecycle mutation rejection rate is above 20 percent
           runbook: docs/operations/alerts.md#告警操作被拒绝
+      - alert: AlarmRuleActionDeadLetterNonZero
+        expr: max(hvac_alarm_action_outbox_depth{state="dead_letter"}) > 0
+        for: 5m
+        labels:
+          severity: page
+          primary_owner: alarm-platform
+          secondary_owner: platform-operations
+        annotations:
+          summary: Alarm rule action outbox has dead-letter entries awaiting replay
+          runbook: docs/operations/alerts.md#规则动作死信队列积压
+      - alert: TelemetryAlarmEvaluationDeadLetterNonZero
+        expr: max(hvac_alarm_evaluation_outbox_depth{state="dead_letter"}) > 0
+        for: 5m
+        labels:
+          severity: page
+          primary_owner: telemetry-platform
+          secondary_owner: alarm-platform
+        annotations:
+          summary: Telemetry alarm evaluation outbox has dead-letter entries
+          runbook: docs/operations/alerts.md#遥测告警评估死信积压
+      - alert: AlarmRoutingReloadFailed
+        expr: sum(increase(hvac_alarm_routing_reloads_total{outcome="failed"}[15m])) > 0
+        for: 1m
+        labels:
+          severity: ticket
+          primary_owner: alarm-platform
+          secondary_owner: platform-operations
+        annotations:
+          summary: Alarm notification routing config reload failed and retained prior active snapshot
+          runbook: docs/operations/alerts.md#告警路由配置重载失败

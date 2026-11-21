@@ -275,6 +275,23 @@
     "overriddenFields": ["raise.delta"],
     "dependsOnRuleIds": ["01910000-b100-7000-8000-00000000000a"],
     "hopDepth": 1,
+    "dependencyGate": "ALL_ACTIVE",
+    "actions": [
+      {
+        "kind": "WORK_ORDER",
+        "triggerOn": "RAISE",
+        "workOrderPriority": "HIGH",
+        "workOrderTitle": "排查冷机供水温度骤升异常"
+      },
+      {
+        "kind": "PROTECTION_COMMAND",
+        "triggerOn": "RAISE",
+        "targetDeviceId": "018f3e00-4000-7000-8000-000000000001",
+        "targetPointCode": "chilled_water_temperature_setpoint",
+        "capability": "SET_CHILLED_WATER_TEMPERATURE_SETPOINT",
+        "parameters": { "setpointC": 8 }
+      }
+    ],
     "triggerMode": "SIMPLE",
     "raise": {
       "kind": "SLOPE",

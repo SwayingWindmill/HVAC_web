@@ -627,6 +627,66 @@ func (a *HTTPAdapters) GetDispatchContext(ctx context.Context, tenantID, siteID,
 	return out, nil
 }
 
+func (a *HTTPAdapters) ResolveProtectionDispatchContext(
+	ctx context.Context,
+	tenantID, siteID, deviceID, pointCode string,
+	capability commandmodel.Capability,
+) (ControlDispatchContext, error) {
+	trimmedCode := strings.TrimSpace(pointCode)
+	if commandmodel.IsUUIDv7(trimmedCode) {
+		return a.GetDispatchContext(ctx, tenantID, siteID, deviceID, trimmedCode)
+	}
+	if a.coreBaseURL == "" || a.coreHTTPClient == nil {
+		return ControlDispatchContext{}, coreUnavailableError("Core Registry is not configured for protection command resolution.")
+	}
+	params := url.Values{
+		"tenantId":   {tenantID},
+		"siteId":     {siteID},
+		"deviceId":   {deviceID},
+		"capability": {string(capability)},
+	}
+	if trimmedCode != "" {
+		params.Set("pointCode", trimmedCode)
+	}
+	endpoint := a.coreBaseURL + registryDispatchContextPath + "?" + params.Encode()
+	status, raw, err := a.doHTTP(ctx, a.coreHTTPClient, http.MethodGet, endpoint, nil, map[string]string{
+		"Accept": "application/json, application/problem+json",
+	})
+	if err != nil {
+		return ControlDispatchContext{}, coreUnavailableError("Core Registry is temporarily unavailable.")
+	}
+	if status == http.StatusNotFound {
+		return ControlDispatchContext{}, notFoundControlError("The requested Command Point was not found.")
+	}
+	if status == http.StatusBadRequest || status == http.StatusConflict {
+		return ControlDispatchContext{}, &ControlError{
+			HTTPStatus: status,
+			Code:       "COMMAND_REQUEST_INVALID",
+			Title:      "Command request invalid",
+			Detail:     "Protection command target point could not be uniquely resolved.",
+		}
+	}
+	if status != http.StatusOK {
+		return ControlDispatchContext{}, coreUnavailableError("Core Registry could not resolve protection command dispatch context.")
+	}
+	var out ControlDispatchContext
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&out); err != nil || ensureCommandJSONEOF(decoder) != nil {
+		return ControlDispatchContext{}, coreUnavailableError("Core Registry returned an invalid protection dispatch context.")
+	}
+	if out.TenantID != tenantID || out.SiteID != siteID || out.DeviceID != deviceID || !commandmodel.IsUUIDv7(out.PointID) {
+		return ControlDispatchContext{}, coreUnavailableError("Core Registry returned a protection dispatch context outside the requested scope.")
+	}
+	if out.AssetLocks == nil {
+		out.AssetLocks = []AssetControlLockView{}
+	}
+	if out.Interlocks == nil {
+		out.Interlocks = []commandmodel.InterlockCheck{}
+	}
+	return out, nil
+}
+
 func (a *HTTPAdapters) ReadLivePoint(
 	ctx context.Context,
 	tenantID, siteID, deviceID, pointKey string,

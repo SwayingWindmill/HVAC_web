@@ -176,14 +176,20 @@ func (m *PipelineMetrics) SetAlarmEvaluationOutboxDepths(pending, deadLetter int
 
 func normalizeAlarmEvaluationDeadLetterReason(reason string) string {
 	switch strings.ToLower(strings.TrimSpace(reason)) {
-	case "payload_invalid", "alarm_evaluation_payload_invalid":
-		return "payload_invalid"
-	case "max_attempts_exceeded", "alarm_evaluation_max_attempts_exceeded":
-		return "max_attempts_exceeded"
-	case "permanent_failure", "alarm_evaluation_permanent_failure":
-		return "permanent_failure"
+	case "payload_invalid", "alarm_evaluation_payload_invalid", "scope":
+		return "scope"
+	case "max_attempts_exceeded", "alarm_evaluation_max_attempts_exceeded", "transport", "timeout":
+		return "transport"
+	case "permanent_failure", "alarm_evaluation_permanent_failure", "dependency", "delivery_error":
+		return "dependency"
+	case "rate_limited":
+		return "rate_limited"
+	case "authorization":
+		return "authorization"
+	case "capacity":
+		return "capacity"
 	default:
-		return "delivery_error"
+		return "unknown"
 	}
 }
 

@@ -12,7 +12,22 @@ import {
 import {
   alarmRuleListSchema,
   alarmRuleSimulationEnvelopeSchema,
+  alarmRuleDeadLetterListEnvelopeSchema,
+  devicePriorityLockStateSchema,
+  siteAlarmRoutingEnvelopeSchema,
 } from '../apps/hvac-web/src/api/generated/platformGateway.gen.ts';
+import {
+  describeDeadLetterError,
+  describeDependencyGate,
+  describeGroupBy,
+  describePlannedActionSummary,
+  describeReloadError,
+  describeRoutingChannel,
+  describeRoutingRouteName,
+  describeRuleAction,
+  routingDigestPrefix,
+  summarizeRuleActions,
+} from '../apps/hvac-web/src/features/alarms/alarm-operations.ts';
 
 const tenantId = '018f3e00-1000-7000-8000-000000000001';
 const siteId = '018f3e00-2000-7000-8000-000000000001';
@@ -240,4 +255,115 @@ test('AlarmRule and dry-run simulation contracts validate slope, expression, tem
     ...parsedRules,
     data: [{ ...parsedRules.data[0], hopDepth: 4 }],
   }));
+});
+
+test('Alarm operations formatters and Wave 4 routing/DLQ/priority-lock schemas validate', () => {
+  assert.equal(describeDependencyGate('ALL_ACTIVE'), '需全部上游告警同时触发');
+  assert.equal(describeDependencyGate('ANY_ACTIVE'), '任一上游告警触发即可');
+  assert.equal(describeDependencyGate(undefined), '无前置条件');
+  assert.equal(
+    describeRuleAction({ kind: 'WORK_ORDER', triggerOn: 'RAISE', workOrderTitle: '排查冷机供水温度骤升异常' }),
+    '触发时创建运维工单（排查冷机供水温度骤升异常）',
+  );
+  assert.equal(
+    summarizeRuleActions([
+      { kind: 'WORK_ORDER', triggerOn: 'RAISE', workOrderTitle: '排查冷机' },
+      { kind: 'PROTECTION_COMMAND', triggerOn: 'RAISE', targetDeviceId: '018f3e00-4000-7000-8000-000000000001' },
+    ]),
+    '联动 2 项动作：创建运维工单、下发保护指令',
+  );
+  assert.equal(describeRoutingChannel('wecom_app'), '企业微信应用');
+  assert.equal(describeRoutingChannel('wecom_bot'), '企业微信群机器人');
+  assert.equal(describeGroupBy('severity'), '按严重级别合并');
+  assert.match(describeGroupBy('alarmType'), /告警类型/);
+  assert.doesNotMatch(describeGroupBy('alarmType'), /策略|alarmType/);
+  assert.equal(describeRoutingRouteName('major'), '重要分级通道');
+  assert.doesNotMatch(describeRoutingRouteName('warning'), /策略|warning/i);
+  assert.equal(describeDeadLetterError('TRANSPORT'), '网络请求超时或传输中断');
+  assert.equal(describeDeadLetterError('network_error'), '网络请求超时或传输中断');
+  const ssrfText = describeDeadLetterError('ssrf_blocked');
+  assert.ok(ssrfText.length > 0);
+  assert.doesNotMatch(ssrfText, /策略|ssrf_blocked/i);
+  assert.match(describeReloadError('INVALID_ROUTING') ?? '', /保留上一版有效配置/);
+  const recipientsErr = describeReloadError('RECIPIENTS_INVALID') ?? '';
+  assert.ok(recipientsErr.length > 0);
+  assert.doesNotMatch(recipientsErr, /策略|RECIPIENTS_INVALID/);
+  assert.equal(
+    describePlannedActionSummary({ kind: 'PROTECTION_COMMAND', target: 'chiller-1', summary: 'protection command setpoint' }),
+    '保护设定值与联锁指令',
+  );
+  assert.match(
+    describePlannedActionSummary({ kind: 'WORK_ORDER', target: '排查冷机供水温度骤升异常', summary: 'work order [HIGH]: 排查冷机供水温度骤升异常' }),
+    /排查冷机供水温度骤升异常/,
+  );
+  assert.equal(routingDigestPrefix('0123456789abcdef'), '0123456789ab');
+
+  const dlq = alarmRuleDeadLetterListEnvelopeSchema.parse({
+    data: [{
+      outboxId: '01910000-e200-7000-8000-000000000001',
+      siteId,
+      alarmId,
+      alarmVersion: 1,
+      assignmentId: '01910000-b000-7000-8000-00000000000b',
+      actionIndex: 0,
+      triggerKind: 'RAISE',
+      actionKind: 'WEBHOOK',
+      targetRef: 'https://ops.example.invalid/hook',
+      attempts: 3,
+      lastErrorCode: 'TRANSPORT',
+      deadLetteredAt: '2026-11-18T09:10:00Z',
+      createdAt: '2026-11-18T09:00:00Z',
+    }],
+    meta: { requestId: 'req-dlq' },
+  });
+  assert.equal(dlq.data.length, 1);
+
+  const routing = siteAlarmRoutingEnvelopeSchema.parse({
+    data: {
+      siteId,
+      siteName: '中央机房',
+      timezone: 'Asia/Shanghai',
+      holdMinutes: 3,
+      maxAgeHours: 12,
+      rateLimitPerHour: 6,
+      routes: [{
+        name: 'major',
+        minSeverity: 'MAJOR',
+        groupWindowSeconds: 60,
+        groupMaxItems: 10,
+        groupBy: 'severity',
+        notifyAck: true,
+        notifyRecovery: true,
+        steps: [{ afterMinutes: 0, channels: ['wecom_app', 'smtp'], recipientCount: 2 }],
+      }],
+      configDigest: '7a9e4c1b2f3d8a90',
+      loadedAt: '2026-11-18T08:00:00Z',
+      reloadCount: 0,
+    },
+    meta: { requestId: 'req-route' },
+  });
+  assert.equal(routing.data.routes[0].steps[0].recipientCount, 2);
+
+  const lock = devicePriorityLockStateSchema.parse({
+    deviceId: '018f3e00-4000-7000-8000-000000000001',
+    lockedPriority: 'SAFETY_INTERLOCK',
+    commandSource: 'OPERATOR',
+    lockedBy: '018f3e00-2000-7000-8000-000000000001',
+    lockedByName: '周敏',
+    lockedUntil: '2026-11-18T12:00:00Z',
+    reason: '传感器联动联锁锁机',
+    updatedAt: '2026-11-18T11:00:00Z',
+  });
+  assert.equal(lock.lockedPriority, 'SAFETY_INTERLOCK');
+
+  const scheduleLock = devicePriorityLockStateSchema.parse({
+    deviceId: '018f3e00-4000-7000-8000-000000000002',
+    lockedPriority: 'SCHEDULE',
+    commandSource: 'SCHEDULE',
+    lockedBy: 'schedule-engine',
+    lockedUntil: '2026-11-18T13:00:00Z',
+    reason: '定时启停锁定',
+    updatedAt: '2026-11-18T11:00:00Z',
+  });
+  assert.equal(scheduleLock.lockedPriority, 'SCHEDULE');
 });

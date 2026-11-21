@@ -272,8 +272,88 @@ export class Gateway {
   readonly priorityLockedDeviceIds = new Set<string>();
   /** The Site's control mode and asset locks, as the Registry owner keeps them. */
   controlState: Json = {
-    tenantId: principal.context.tenantId, siteId: SITE_ID, controlMode: 'REMOTE_AUTO', reason: '', updatedBy: null, updatedByName: null, updatedAt: null, revision: 1, assetLocks: [],
+    tenantId: principal.context.tenantId, siteId: SITE_ID, controlMode: 'REMOTE_AUTO', reason: '', updatedBy: null, updatedByName: null, updatedAt: null, revision: 1, assetLocks: [], devicePriorityLocks: [],
   };
+  readonly replayedControlAlarmDlqIds = new Set<string>();
+  readonly replayedRuleDlqIds = new Set<string>();
+  controlAlarmDeadLetters: Json[] = [
+    {
+      outboxId: '01910000-e100-7000-8000-000000000001',
+      commandId: '01910000-c100-7000-8000-000000000001',
+      deviceId: '018f3e00-4000-7000-8000-000000000001',
+      eventKind: 'OUTCOME_UNKNOWN',
+      reasonCode: 'VERIFY_TIMEOUT',
+      attempts: 5,
+      lastErrorCode: 'CONTROL_ALARM_HTTP_FAILED',
+      createdAt: '2026-11-18T08:15:00.000Z',
+      updatedAt: '2026-11-18T08:20:00.000Z',
+    },
+  ];
+  alarmRuleDeadLetters: Json[] = [
+    {
+      outboxId: '01910000-e200-7000-8000-000000000001',
+      siteId: SITE_ID,
+      alarmId: '01910000-a200-7000-8000-000000000001',
+      alarmVersion: 1,
+      assignmentId: '01910000-b000-7000-8000-00000000000b',
+      actionIndex: 0,
+      triggerKind: 'RAISE',
+      actionKind: 'WEBHOOK',
+      targetRef: 'https://ops-webhook.example.invalid/hvac-alarm',
+      attempts: 4,
+      lastErrorCode: 'network_error',
+      deadLetteredAt: '2026-11-18T09:10:00.000Z',
+      createdAt: '2026-11-18T09:00:00.000Z',
+    },
+  ];
+  siteAlarmRouting: Json = {
+    siteId: SITE_ID,
+    siteName: '中央机房',
+    timezone: 'Asia/Shanghai',
+    holdMinutes: 3,
+    maxAgeHours: 12,
+    rateLimitPerHour: 6,
+    quietHours: { start: '22:00', end: '07:00', bypassSeverity: 'MAJOR' },
+    rootCauseRules: [
+      {
+        whenActivePrefix: 'reports-interrupted',
+        suppressPrefixes: ['readings-not-updated', 'reading-gap/', 'rules-unevaluable'],
+      },
+    ],
+    routes: [
+      {
+        name: 'major',
+        minSeverity: 'MAJOR',
+        cooldownMinutes: 10,
+        groupWindowSeconds: 60,
+        groupMaxItems: 10,
+        groupBy: 'severity',
+        notifyAck: true,
+        notifyRecovery: true,
+        steps: [
+          { afterMinutes: 0, channels: ['wecom_app', 'smtp'], recipientCount: 2 },
+          { afterMinutes: 15, channels: ['wecom_app', 'smtp', 'wecom_bot'], recipientCount: 4 },
+        ],
+      },
+      {
+        name: 'warning',
+        minSeverity: 'WARNING',
+        cooldownMinutes: 30,
+        groupWindowSeconds: 60,
+        groupMaxItems: 10,
+        groupBy: 'severity',
+        notifyAck: false,
+        notifyRecovery: false,
+        steps: [
+          { afterMinutes: 0, channels: ['smtp'], recipientCount: 2 },
+        ],
+      },
+    ],
+    configDigest: '7a9e4c1b2f3d8a9012bc34de56fa789012bc34de56fa789012bc34de56fa7890',
+    loadedAt: '2026-11-18T08:00:00.000Z',
+    reloadCount: 0,
+  };
+  routingChangedOnNextReload = true;
   /** The latest stage-down and idle-auxiliary evaluation; null until the service evaluated the Site. */
   staging: Json | null = null;
   /** The session signed in with two steps in the last 10 minutes, so high-risk approvals go through. */
@@ -1748,6 +1828,13 @@ export class Gateway {
         return { status: 400, body: { type: 'about:blank', title: 'Bad Request', status: 400, detail: 'Steps out of range.', instance: path, code: 'INVALID_ARGUMENT', traceId: '0'.repeat(32), retryable: false } };
       }
       const baseMs = Date.parse('2026-11-17T10:00:00Z');
+      const deps: string[] = Array.isArray(rule.dependsOnRuleIds) ? rule.dependsOnRuleIds : [];
+      const gate: string = typeof body?.dependencyGate === 'string'
+        ? body.dependencyGate
+        : (typeof rule.dependencyGate === 'string' ? rule.dependencyGate : 'NONE');
+      const ruleActions: Json[] = Array.isArray(body?.actions)
+        ? body.actions
+        : (Array.isArray(rule.actions) ? rule.actions : []);
       let active = false;
       let firstNumeric: number | undefined;
       const stepsOut = rawSteps.map((stepIn: Json, idx: number) => {
@@ -1756,6 +1843,9 @@ export class Gateway {
         const tempVal = byPoint.get('supply_water_temperature') ?? byPoint.get('return_water_temperature');
         const numTemp = typeof tempVal === 'number' ? tempVal : Number.NaN;
         if (firstNumeric === undefined && Number.isFinite(numTemp)) firstNumeric = numTemp;
+        const upstreamSet = new Set<string>(Array.isArray(stepIn?.upstreamActiveRuleIds) ? stepIn.upstreamActiveRuleIds : []);
+        const depsSatisfied = deps.length === 0 || gate === 'NONE'
+          || (gate === 'ANY_ACTIVE' ? deps.some((id) => upstreamSet.has(id)) : deps.every((id) => upstreamSet.has(id)));
         let status: 'MATCHED' | 'NOT_MATCHED' | 'INDETERMINATE' = 'NOT_MATCHED';
         let effect: 'NONE' | 'PUBLISH' | 'CLEAR' = 'NONE';
         const matchedReasons: string[] = [];
@@ -1763,10 +1853,14 @@ export class Gateway {
           const delta = typeof rule.raise?.delta === 'number' ? rule.raise.delta : 2;
           if (!active) {
             if (Number.isFinite(numTemp) && firstNumeric !== undefined && numTemp - firstNumeric >= delta) {
-              status = 'MATCHED';
-              effect = 'PUBLISH';
-              active = true;
-              matchedReasons.push('达到触发条件', '斜率变化达标');
+              if (!depsSatisfied) {
+                matchedReasons.push('前置上游告警未全部激活');
+              } else {
+                status = 'MATCHED';
+                effect = 'PUBLISH';
+                active = true;
+                matchedReasons.push('达到触发条件', '斜率变化达标');
+              }
             } else {
               matchedReasons.push('未触发告警条件');
             }
@@ -1781,10 +1875,14 @@ export class Gateway {
           }
         } else {
           if (!active && Number.isFinite(numTemp) && numTemp <= 10.5) {
-            status = 'MATCHED';
-            effect = 'PUBLISH';
-            active = true;
-            matchedReasons.push('达到触发条件');
+            if (!depsSatisfied) {
+              matchedReasons.push('前置上游告警未全部激活');
+            } else {
+              status = 'MATCHED';
+              effect = 'PUBLISH';
+              active = true;
+              matchedReasons.push('达到触发条件');
+            }
           } else if (active && Number.isFinite(numTemp) && numTemp >= 11.5) {
             status = 'MATCHED';
             effect = 'CLEAR';
@@ -1795,6 +1893,25 @@ export class Gateway {
             matchedReasons.push(active ? '告警保持活动' : '未触发告警条件');
           }
         }
+        const plannedActions = effect === 'NONE'
+          ? []
+          : ruleActions
+            .filter((action) => {
+              const trig = action.triggerOn ?? 'RAISE';
+              return (effect === 'PUBLISH' && (trig === 'RAISE' || trig === 'BOTH'))
+                || (effect === 'CLEAR' && (trig === 'CLEAR' || trig === 'BOTH'));
+            })
+            .map((action) => ({
+              kind: action.kind,
+              triggerOn: action.triggerOn ?? 'RAISE',
+              target: String(action.workOrderTitle ?? action.targetDeviceId ?? action.webhookUrl ?? '目标'),
+              summary:
+                action.kind === 'WORK_ORDER'
+                  ? `work order [${String(action.workOrderPriority ?? 'HIGH')}]: ${String(action.workOrderTitle ?? '处理告警')}`
+                  : action.kind === 'PROTECTION_COMMAND'
+                    ? `protection command ${String(action.targetPointCode ?? 'setpoint')}`
+                    : `webhook ${String(action.webhookUrl ?? '')}`,
+            }));
         return {
           step: idx + 1,
           evaluatedAt: new Date(baseMs + idx * 60_000).toISOString(),
@@ -1802,6 +1919,7 @@ export class Gateway {
           effect,
           active,
           matchedReasons,
+          ...(plannedActions.length > 0 ? { plannedActions } : {}),
         };
       });
       return {
@@ -1810,13 +1928,50 @@ export class Gateway {
             ruleId: rule.ruleId,
             title: rule.title,
             hopDepth: typeof rule.hopDepth === 'number' ? rule.hopDepth : 0,
-            ...(Array.isArray(rule.dependsOnRuleIds) && rule.dependsOnRuleIds.length > 0 ? { dependsOnRuleIds: rule.dependsOnRuleIds } : {}),
+            ...(deps.length > 0 ? { dependsOnRuleIds: deps, dependencyGate: gate } : {}),
+            ...(ruleActions.length > 0 ? { actions: ruleActions } : {}),
             finalActive: active,
             steps: stepsOut,
           },
           meta: { requestId: 'e2e' },
         },
       };
+    }
+    if (method === 'GET' && path === '/api/v1/alarm-rules/dead-letters') {
+      if (query.get('siteId') !== SITE_ID) {
+        return { status: 404, body: { status: 404, code: 'RESOURCE_NOT_FOUND', title: 'Resource not found' } };
+      }
+      return { body: { data: this.alarmRuleDeadLetters, meta: { requestId: 'e2e' } } };
+    }
+    const ruleDlqReplay = path.match(/^\/api\/v1\/alarm-rules\/dead-letters\/([^/]+)\/replay$/);
+    if (method === 'POST' && ruleDlqReplay) {
+      if (!csrfToken) return { status: 403, body: { status: 403, code: 'CSRF_INVALID', title: 'Forbidden' } };
+      if (query.get('siteId') !== SITE_ID) return { status: 404, body: { status: 404, code: 'RESOURCE_NOT_FOUND' } };
+      const outboxId = ruleDlqReplay[1];
+      if (this.replayedRuleDlqIds.has(outboxId)) {
+        return { body: { data: { outboxId, siteId: SITE_ID, status: 'PENDING' }, meta: { requestId: 'e2e' } } };
+      }
+      const idx = this.alarmRuleDeadLetters.findIndex((item) => item.outboxId === outboxId);
+      if (idx === -1) return { status: 404, body: { status: 404, code: 'RESOURCE_NOT_FOUND' } };
+      this.alarmRuleDeadLetters.splice(idx, 1);
+      this.replayedRuleDlqIds.add(outboxId);
+      return { body: { data: { outboxId, siteId: SITE_ID, status: 'PENDING' }, meta: { requestId: 'e2e' } } };
+    }
+    if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/alarm-routing`) {
+      return { body: { data: this.siteAlarmRouting, meta: { requestId: 'e2e' } } };
+    }
+    if (method === 'POST' && path === `/api/v1/sites/${SITE_ID}/alarm-routing/reload`) {
+      if (!csrfToken) return { status: 403, body: { status: 403, code: 'CSRF_INVALID', title: 'Forbidden' } };
+      const changed = this.routingChangedOnNextReload;
+      if (changed) {
+        this.siteAlarmRouting = {
+          ...this.siteAlarmRouting,
+          reloadCount: Number(this.siteAlarmRouting.reloadCount ?? 0) + 1,
+          loadedAt: now,
+          configDigest: `9b1f2e3c4d5a60718293a4b5c6d7e8f90123456789abcdef0123456789${String(Number(this.siteAlarmRouting.reloadCount ?? 0) + 1).padStart(4, '0')}`,
+        };
+      }
+      return { body: { data: { ...this.siteAlarmRouting, changed }, meta: { requestId: 'e2e' } } };
     }
     const alarmMatch = path.match(/^\/api\/v1\/alarms\/([^/]+)(?:\/(ack|assign|unassign|suppress|unsuppress|evaluations))?$/);
     if (alarmMatch) {
@@ -1928,6 +2083,67 @@ export class Gateway {
     if (method === 'POST' && path === `/api/v1/sites/${SITE_ID}/control-shutdown`) return this.shutdownSite(body!, now);
     const lockMatch = path.match(/^\/api\/v1\/assets\/([^/]+)\/control-lock$/);
     if (method === 'PUT' && lockMatch) return this.updateControlLock(lockMatch[1], body!, now);
+    const priorityLockMatch = path.match(new RegExp(`^/api/v1/sites/${SITE_ID}/devices/([^/]+)/priority-lock$`));
+    if (priorityLockMatch) {
+      if (!csrfToken) return { status: 403, body: { status: 403, code: 'CSRF_INVALID' } };
+      const deviceId = priorityLockMatch[1];
+      if (method === 'PUT') {
+        const durationMinutes = typeof body?.durationMinutes === 'number' ? body.durationMinutes : 60;
+        if (!String(body?.reason ?? '').trim() || durationMinutes < 5 || durationMinutes > 1440) {
+          return { status: 400, body: { status: 400, code: 'CONTROL_EXIT_REQUEST_INVALID', detail: 'Invalid priority lock payload.' } };
+        }
+        const lockedUntil = new Date(Date.parse(now) + durationMinutes * 60_000).toISOString();
+        const saved: Json = {
+          deviceId,
+          lockedPriority: body?.lockedPriority ?? 'MANUAL_OVERRIDE',
+          commandSource: 'OPERATOR',
+          lockedBy: MY_ID,
+          lockedByName: principal.principal.displayName,
+          lockedUntil,
+          reason: String(body?.reason ?? '').trim(),
+          updatedAt: now,
+        };
+        const currentLocks: Json[] = Array.isArray(this.controlState.devicePriorityLocks)
+          ? this.controlState.devicePriorityLocks
+          : [];
+        this.controlState = {
+          ...this.controlState,
+          devicePriorityLocks: [...currentLocks.filter((lock) => lock.deviceId !== deviceId), saved],
+        };
+        this.priorityLockedDeviceIds.add(deviceId);
+        return { body: saved };
+      }
+      if (method === 'DELETE') {
+        const reason = String(body?.reason ?? query.get('reason') ?? '').trim();
+        if (!reason) {
+          return { status: 400, body: { status: 400, code: 'CONTROL_EXIT_REQUEST_INVALID', detail: 'Reason required.' } };
+        }
+        const currentLocks: Json[] = Array.isArray(this.controlState.devicePriorityLocks)
+          ? this.controlState.devicePriorityLocks
+          : [];
+        const nextLocks = currentLocks.filter((lock) => lock.deviceId !== deviceId);
+        const released = nextLocks.length !== currentLocks.length;
+        this.controlState = { ...this.controlState, devicePriorityLocks: nextLocks };
+        this.priorityLockedDeviceIds.delete(deviceId);
+        return { body: { released, deviceId } };
+      }
+    }
+    if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/control-alarms/dead-letters`) {
+      return { body: { data: this.controlAlarmDeadLetters, meta: { requestId: 'e2e' } } };
+    }
+    const controlDlqReplay = path.match(new RegExp(`^/api/v1/sites/${SITE_ID}/control-alarms/dead-letters/([^/]+)/replay$`));
+    if (method === 'POST' && controlDlqReplay) {
+      if (!csrfToken) return { status: 403, body: { status: 403, code: 'CSRF_INVALID' } };
+      const outboxId = controlDlqReplay[1];
+      if (this.replayedControlAlarmDlqIds.has(outboxId)) {
+        return { body: { replayed: false, outboxId } };
+      }
+      const idx = this.controlAlarmDeadLetters.findIndex((item) => item.outboxId === outboxId);
+      if (idx === -1) return { status: 404, body: { status: 404, code: 'RESOURCE_NOT_FOUND' } };
+      this.controlAlarmDeadLetters.splice(idx, 1);
+      this.replayedControlAlarmDlqIds.add(outboxId);
+      return { body: { replayed: true, outboxId } };
+    }
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/optimization/staging-recommendations/latest`) {
       return this.staging ? { body: this.staging } : { status: 404, body: { status: 404, code: 'RESOURCE_NOT_FOUND', title: 'Resource not found' } };
     }

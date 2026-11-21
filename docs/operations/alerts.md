@@ -377,6 +377,39 @@ Centrifugo（v6.8.1）不走 8000。8000 是客户端端口，正式环境只开
 
 演示站点的定时任务是停用的（模拟器没开）。那不会让调度器本身的 `up == 0`。
 
+## 控制告警死信队列积压
+
+触发阈值：`hvac_command_control_alarm_outbox_depth{state="dead_letter"} > 0` 持续 5 分钟。
+
+排查与处置：
+1. 在控制台冷站控制页点击「控制告警死信」或在接口 `/api/v1/sites/{siteId}/control-alarms/dead-letters` 查看失败原因码与失败次数。
+2. 先确认 `alarm-service` 进程健康与数据库连通，修掉根因后再单条点击「重新投递」使记录回到待发送队列。
+
+## 规则动作死信队列积压
+
+触发阈值：`hvac_alarm_action_outbox_depth{state="dead_letter"} > 0` 持续 5 分钟。
+
+排查与处置：
+1. 在告警页面查看规则动作死信列表及 `lastErrorCode`（例如 `ssrf_blocked`、`http_5xx`、`timeout`）。
+2. 对配置了非法内网地址的 Webhook 规则先修正目标地址，确认接收端恢复后点击「重新投递」。
+
+## 遥测告警评估死信积压
+
+触发阈值：`hvac_alarm_evaluation_outbox_depth{state="dead_letter"} > 0` 持续 5 分钟。
+
+排查与处置：
+1. 检查 `telemetry-worker` 日志、`hvac_alarm_evaluation_dead_letter_total` 的 `reason_family` 标签（`scope` / `transport` / `dependency`）与 `alarm-service` `/internal/v1/alarm-evaluations` mTLS 状态。
+2. 修复契约或连接问题后按租户重放遥测评估死信记录。
+
+## 告警路由配置重载失败
+
+触发阈值：`increase(hvac_alarm_routing_reloads_total{outcome="failed"}[15m]) > 0`。
+
+说明：服务已在内存保留上一版合法路由快照，现有告警投递不会中断，但本次变更未生效。
+排查与处置：
+1. 在告警页面路由配置卡片检查 `lastReloadErrorCode` 与收件人/站点路由 JSON 文件语法、时间窗、接收人引用一致性。
+2. 修正磁盘配置后在页面触发「热重载路由配置」或向 `energy-api` 发送 `SIGHUP` 验证摘要更新。
+
 ## 告警怎么送到人
 
 Prometheus 把告警交给 Alertmanager。Alertmanager 和把告警转成企业微信消息的 `wecom-alert-adapter` 在 `alert-egress` 上，只有它们能访问外网。仓库里的 `deploy/platform/phase1/observability/alertmanager.yaml` 仍然是空接收方（`receiver: none`）。容器启动时用 `render-alertmanager-config.sh` 看运行目录里的文件：什么都没放，就原样用这个空接收方，告警留在 Alertmanager 里，不发出去。

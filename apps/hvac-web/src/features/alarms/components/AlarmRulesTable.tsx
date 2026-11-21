@@ -18,6 +18,7 @@ import {
   type AlarmRule,
   type ReadingNames,
 } from '../alarm-rules';
+import { describeDependencyGate, summarizeRuleActions } from '../alarm-operations';
 import { SeverityBadge, severityRank } from '../alarm-presentation';
 import { AlarmRuleSimulateSheet } from './AlarmRuleSimulateSheet';
 
@@ -48,12 +49,20 @@ export function AlarmRulesTable({ siteId }: { readonly siteId: string }) {
     {
       id: 'lineage',
       header: '来源与联动',
-      cell: ({ row }) => (
-        <div className="flex flex-col gap-0.5 text-xs">
-          <span className="text-foreground">{describeRuleOrigin(row.original)}</span>
-          <span className="text-muted-foreground">{describeRuleLinkage(row.original, titleByRuleId)}</span>
-        </div>
-      ),
+      cell: ({ row }) => {
+        const hasDeps = (row.original.dependsOnRuleIds?.length ?? 0) > 0;
+        const actionSummary = summarizeRuleActions(row.original.actions);
+        return (
+          <div className="flex flex-col gap-0.5 text-xs">
+            <span className="text-foreground">{describeRuleOrigin(row.original)}</span>
+            <span className="text-muted-foreground">
+              {describeRuleLinkage(row.original, titleByRuleId)}
+              {hasDeps ? `（${describeDependencyGate(row.original.dependencyGate)}）` : ''}
+            </span>
+            {actionSummary ? <span className="text-primary">{actionSummary}</span> : null}
+          </div>
+        );
+      },
     },
     { id: 'severity', header: '严重程度', cell: ({ row }) => <SeverityBadge severity={row.original.severity} /> },
     {

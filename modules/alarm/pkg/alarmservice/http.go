@@ -571,14 +571,15 @@ func (handler *httpHandler) replayRuleActionDeadLetter(writer http.ResponseWrite
 		handler.writeStoreFailure(writer, ErrUnavailable)
 		return
 	}
-	if err := handler.deadLetters.ReplayRuleActionDeadLetter(request.Context(), tenantID, siteID, outboxID, handler.now().UTC()); err != nil {
+	status, err := handler.deadLetters.ReplayRuleActionDeadLetter(request.Context(), tenantID, siteID, outboxID, handler.now().UTC())
+	if err != nil {
 		handler.writeMutationFailure(writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, RuleActionReplayResult{
 		OutboxID: outboxID,
 		SiteID:   siteID,
-		Status:   RuleActionStatusPending,
+		Status:   status,
 	})
 }
 

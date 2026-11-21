@@ -334,16 +334,23 @@ func (fixture *alarmContractFixture) iamClient(t *testing.T, signer *ecdsa.Priva
 			if json.NewDecoder(request.Body).Decode(&input) != nil {
 				t.Fatal("invalid Registry decision request")
 			}
+			allowed := input.Action != registryauth.ActionScheduleManage || !fixture.deny.Load()
+			reason := registryauth.ReasonAllowSiteRole
+			allowedSites := []string{fixture.siteID}
+			if !allowed {
+				reason = registryauth.ReasonDenyActionNotGranted
+				allowedSites = nil
+			}
 			decision := registryauth.Decision{
-				Allowed: true, PrincipalID: "01910000-5000-7000-8000-000000000001", SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject,
-				TenantID: fixture.tenantID, AllowedSiteIDs: []string{fixture.siteID}, Actions: []registryauth.Action{input.Action},
-				PolicyRevision: "registry-read:1/iam:1", ReasonCode: registryauth.ReasonAllowSiteRole, DecidedAt: now.Format(time.RFC3339Nano),
+				Allowed: allowed, PrincipalID: "01910000-5000-7000-8000-000000000001", SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject,
+				TenantID: fixture.tenantID, AllowedSiteIDs: allowedSites, Actions: []registryauth.Action{input.Action},
+				PolicyRevision: "registry-read:1/iam:1", ReasonCode: reason, DecidedAt: now.Format(time.RFC3339Nano),
 			}
 			claims := registryauth.GrantClaims{
 				Issuer: "spiffe://hvac.local/iam-service", Presenter: "spiffe://hvac.local/platform-gateway", Audience: "platform-core-service",
 				PrincipalID: decision.PrincipalID, SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject, TenantID: fixture.tenantID,
-				AllowedSiteIDs: []string{fixture.siteID}, Actions: []registryauth.Action{input.Action}, PolicyRevision: decision.PolicyRevision,
-				DecisionReason: registryauth.ReasonAllowSiteRole, SessionID: parent.SessionID, ParentTokenID: parent.TokenID,
+				AllowedSiteIDs: allowedSites, Actions: []registryauth.Action{input.Action}, PolicyRevision: decision.PolicyRevision,
+				DecisionReason: reason, SessionID: parent.SessionID, ParentTokenID: parent.TokenID,
 				IssuedAt: now.Unix(), ExpiresAt: now.Add(30 * time.Second).Unix(), TokenID: randomURLToken(16),
 			}
 			return telemetryJSONResponse(http.StatusOK, registryauth.DecisionResponse{Decision: decision, DelegationGrant: commandUnsignedRegistryGrant(claims)}), nil
@@ -646,11 +653,48 @@ func number(value any) (float64, bool) {
 }
 
 const (
-	contractRuleBaseID    = "01910000-7a02-7000-8000-000000000008"
-	contractRuleSlopeID   = "01910000-7a02-7000-8000-000000000009"
-	contractRuleDeviceID  = "01910000-3000-7000-8000-000000000009"
-	contractRuleMissingID = "01910000-7a02-7000-8000-0000000000ff"
+	contractRuleBaseID       = "01910000-7a02-7000-8000-000000000008"
+	contractRuleSlopeID      = "01910000-7a02-7000-8000-000000000009"
+	contractRuleDeviceID     = "01910000-3000-7000-8000-000000000009"
+	contractRuleMissingID    = "01910000-7a02-7000-8000-0000000000ff"
+	contractRuleDeadLetterID = "01910000-9a00-7000-8000-000000000001"
 )
+
+type contractRuleActionDeadLetterStore struct {
+	siteID   string
+	items    []alarmservice.RuleActionDeadLetterView
+	replayed map[string]bool
+}
+
+func (s *contractRuleActionDeadLetterStore) ListRuleActionDeadLetters(_ context.Context, _, siteID string, limit int) (alarmservice.RuleActionDeadLetterList, error) {
+	if siteID != s.siteID {
+		return alarmservice.RuleActionDeadLetterList{}, nil
+	}
+	if limit > 0 && limit < len(s.items) {
+		return alarmservice.RuleActionDeadLetterList{Items: s.items[:limit]}, nil
+	}
+	return alarmservice.RuleActionDeadLetterList{Items: append([]alarmservice.RuleActionDeadLetterView(nil), s.items...)}, nil
+}
+
+func (s *contractRuleActionDeadLetterStore) ReplayRuleActionDeadLetter(_ context.Context, _, siteID, outboxID string, _ time.Time) (alarmservice.RuleActionStatus, error) {
+	if siteID != s.siteID {
+		return "", alarmservice.ErrNotFound
+	}
+	if s.replayed[outboxID] {
+		return alarmservice.RuleActionStatusPending, nil
+	}
+	for i, item := range s.items {
+		if item.OutboxID == outboxID {
+			s.items = append(s.items[:i], s.items[i+1:]...)
+			if s.replayed == nil {
+				s.replayed = map[string]bool{}
+			}
+			s.replayed[outboxID] = true
+			return alarmservice.RuleActionStatusPending, nil
+		}
+	}
+	return "", alarmservice.ErrNotFound
+}
 
 type contractSiteRules struct{}
 
@@ -703,9 +747,27 @@ func TestAlarmSuppressionUnassignAndEvaluationsEndToEnd(t *testing.T) {
 
 		var owner AlarmOperations
 		var internalServer *httptest.Server
+		dlqStub := &contractRuleActionDeadLetterStore{
+			siteID: fixture.siteID,
+			items: []alarmservice.RuleActionDeadLetterView{{
+				OutboxID:       contractRuleDeadLetterID,
+				SiteID:         fixture.siteID,
+				AlarmID:        contractRuleBaseID,
+				AlarmVersion:   1,
+				AssignmentID:   contractRuleSlopeID,
+				ActionIndex:    0,
+				TriggerKind:    alarmservice.ActionTriggerRaise,
+				ActionKind:     alarmservice.RuleActionWebhook,
+				TargetRef:      "https://hooks.example.com/alarm",
+				Attempts:       5,
+				LastErrorCode:  "http_5xx",
+				DeadLetteredAt: now.Add(-time.Minute).Format(time.RFC3339Nano),
+				CreatedAt:      now.Add(-5 * time.Minute).Format(time.RFC3339Nano),
+			}},
+		}
 		if useHTTPAdapter {
 			internalHandler, err := alarmservice.NewHTTPHandler(alarmservice.HTTPConfig{
-				Store: store, Rules: contractSiteRules{}, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now },
+				Store: store, Rules: contractSiteRules{}, DeadLetters: dlqStub, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now },
 				GatewaySPIFFEID: "spiffe://hvac.local/platform-gateway", Audience: "alarm-service", MaxListLimit: 200,
 			})
 			if err != nil {
@@ -880,6 +942,60 @@ func TestAlarmSuppressionUnassignAndEvaluationsEndToEnd(t *testing.T) {
 			fixture.handler.ServeHTTP(csrfRec, missingCSRFSim)
 			if csrfRec.Code != http.StatusForbidden {
 				t.Fatalf("expected 403 when simulate omits CSRF token, got %d body=%s", csrfRec.Code, csrfRec.Body.String())
+			}
+
+			// List & replay rule action dead letters via alarm-service HTTP handler.
+			badDL := fixture.serve(http.MethodGet, "/api/v1/alarm-rules/dead-letters?siteId="+fixture.siteID+"&limit=51", "", "")
+			if badDL.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400 for limit=51, got %d body=%s", badDL.Code, badDL.Body.String())
+			}
+			dlRec := fixture.serve(http.MethodGet, "/api/v1/alarm-rules/dead-letters?siteId="+fixture.siteID+"&limit=10", "", "")
+			if dlRec.Code != http.StatusOK {
+				t.Fatalf("dead-letters list status=%d body=%s", dlRec.Code, dlRec.Body.String())
+			}
+			var dlEnv struct {
+				Data []alarmservice.RuleActionDeadLetterView `json:"data"`
+			}
+			if err := json.Unmarshal(dlRec.Body.Bytes(), &dlEnv); err != nil || len(dlEnv.Data) != 1 || dlEnv.Data[0].OutboxID != contractRuleDeadLetterID {
+				t.Fatalf("unexpected dead-letters body: err=%v body=%s", err, dlRec.Body.String())
+			}
+
+			noCSRFReplay := httptest.NewRequest(http.MethodPost, "https://web.example.test/api/v1/alarm-rules/dead-letters/"+contractRuleDeadLetterID+"/replay?siteId="+fixture.siteID, nil)
+			noCSRFReplay.AddCookie(&http.Cookie{Name: sessionCookieName, Value: fixture.sessionID})
+			noCSRFReplay.Header.Set("Origin", "https://web.example.test")
+			noCSRFReplayRec := httptest.NewRecorder()
+			fixture.handler.ServeHTTP(noCSRFReplayRec, noCSRFReplay)
+			if noCSRFReplayRec.Code != http.StatusForbidden {
+				t.Fatalf("expected 403 when replay omits CSRF token, got %d body=%s", noCSRFReplayRec.Code, noCSRFReplayRec.Body.String())
+			}
+
+			fixture.deny.Store(true)
+			deniedReplay := fixture.serve(http.MethodPost, "/api/v1/alarm-rules/dead-letters/"+contractRuleDeadLetterID+"/replay?siteId="+fixture.siteID, `{}`, "")
+			if deniedReplay.Code != http.StatusForbidden {
+				t.Fatalf("expected 403 when schedule.manage is denied on replay, got %d body=%s", deniedReplay.Code, deniedReplay.Body.String())
+			}
+			fixture.deny.Store(false)
+
+			replayRec := fixture.serve(http.MethodPost, "/api/v1/alarm-rules/dead-letters/"+contractRuleDeadLetterID+"/replay?siteId="+fixture.siteID, `{}`, "")
+			if replayRec.Code != http.StatusOK {
+				t.Fatalf("replay status=%d body=%s", replayRec.Code, replayRec.Body.String())
+			}
+			var replayEnv struct {
+				Data alarmservice.RuleActionReplayResult `json:"data"`
+			}
+			if err := json.Unmarshal(replayRec.Body.Bytes(), &replayEnv); err != nil || replayEnv.Data.OutboxID != contractRuleDeadLetterID || replayEnv.Data.Status != alarmservice.RuleActionStatusPending {
+				t.Fatalf("unexpected replay response: err=%v body=%s", err, replayRec.Body.String())
+			}
+			idempReplayRec := fixture.serve(http.MethodPost, "/api/v1/alarm-rules/dead-letters/"+contractRuleDeadLetterID+"/replay?siteId="+fixture.siteID, `{}`, "")
+			if idempReplayRec.Code != http.StatusOK {
+				t.Fatalf("expected idempotent 200 on repeated replay, got %d body=%s", idempReplayRec.Code, idempReplayRec.Body.String())
+			}
+			afterReplayRec := fixture.serve(http.MethodGet, "/api/v1/alarm-rules/dead-letters?siteId="+fixture.siteID, "", "")
+			var afterReplayEnv struct {
+				Data []alarmservice.RuleActionDeadLetterView `json:"data"`
+			}
+			if err := json.Unmarshal(afterReplayRec.Body.Bytes(), &afterReplayEnv); err != nil || len(afterReplayEnv.Data) != 0 {
+				t.Fatalf("expected empty dead-letters after replay, got err=%v body=%s", err, afterReplayRec.Body.String())
 			}
 		}
 

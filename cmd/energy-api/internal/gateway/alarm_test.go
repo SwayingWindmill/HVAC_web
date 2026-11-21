@@ -31,6 +31,8 @@ func TestMatchPublicAlarmRoutesUsesDomainV1Shape(t *testing.T) {
 		{path: "/api/v1/alarms", template: "/api/v1/alarms", action: alarmauth.ActionRead},
 		{path: "/api/v1/alarm-rules", template: "/api/v1/alarm-rules", action: alarmauth.ActionRead},
 		{path: "/api/v1/alarm-rules/simulate", template: "/api/v1/alarm-rules/simulate", action: alarmauth.ActionRead},
+		{path: "/api/v1/alarm-rules/dead-letters", template: "/api/v1/alarm-rules/dead-letters", action: alarmauth.ActionRead},
+		{path: "/api/v1/alarm-rules/dead-letters/" + gatewayAlarmID + "/replay", template: "/api/v1/alarm-rules/dead-letters/{outboxId}/replay"},
 		{path: "/api/v1/alarms/" + gatewayAlarmID, template: "/api/v1/alarms/{alarmId}", action: alarmauth.ActionRead, alarmID: gatewayAlarmID},
 		{path: "/api/v1/alarms/" + gatewayAlarmID + "/ack", template: "/api/v1/alarms/{alarmId}/ack", action: alarmauth.ActionAck, alarmID: gatewayAlarmID},
 		{path: "/api/v1/alarms/" + gatewayAlarmID + "/assign", template: "/api/v1/alarms/{alarmId}/assign", action: alarmauth.ActionAssign, alarmID: gatewayAlarmID},
@@ -276,5 +278,30 @@ func TestDirectAndHTTPAlarmAdaptersHandleSuppressionUnassignAndEvaluations(t *te
 	}
 	if seenMethod != http.MethodGet || seenPath != "/internal/v1/sites/"+siteID+"/alarms/"+alarm.AlarmID+"/evaluations" || seenQuery != "limit=5" || seenReadCtx != "signed-read-ctx" || seenWriteCtx != "" {
 		t.Fatalf("http evaluations upstream mismatch: method=%s path=%s query=%s readCtx=%q writeCtx=%q", seenMethod, seenPath, seenQuery, seenReadCtx, seenWriteCtx)
+	}
+}
+
+func TestSafeLogPathNormalizesAlarmAndRoutingPaths(t *testing.T) {
+	const (
+		siteID   = "01910000-0001-7000-8000-000000000001"
+		alarmID  = "01910000-1000-7000-8000-000000000001"
+		outboxID = "01910000-9900-7000-8000-000000000001"
+	)
+	cases := map[string]string{
+		"/api/v1/alarm-rules":                                                 "/api/v1/alarm-rules",
+		"/api/v1/alarm-rules/simulate":                                        "/api/v1/alarm-rules/simulate",
+		"/api/v1/alarm-rules/dead-letters":                                    "/api/v1/alarm-rules/dead-letters",
+		"/api/v1/alarm-rules/dead-letters/" + outboxID + "/replay":            "/api/v1/alarm-rules/dead-letters/{outboxId}/replay",
+		"/api/v1/alarms/" + alarmID:                                           "/api/v1/alarms/{alarmId}",
+		"/api/v1/alarms/" + alarmID + "/ack":                                  "/api/v1/alarms/{alarmId}/ack",
+		"/api/v1/sites/" + siteID + "/alarm-routing":                          "/api/v1/sites/{siteId}/alarm-routing",
+		"/api/v1/sites/" + siteID + "/alarm-routing/reload":                   "/api/v1/sites/{siteId}/alarm-routing/reload",
+		"/api/v1/sites/" + siteID + "/control-alarms/dead-letters":            "/api/v1/sites/{siteId}/control-alarms/dead-letters",
+		"/api/v1/sites/" + siteID + "/devices/" + outboxID + "/priority-lock": "/api/v1/sites/{siteId}/devices/{deviceId}/priority-lock",
+	}
+	for path, want := range cases {
+		if got := safeLogPath(path); got != want {
+			t.Fatalf("safeLogPath(%q) = %q, want %q", path, got, want)
+		}
 	}
 }

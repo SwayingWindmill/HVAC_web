@@ -17,6 +17,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -219,7 +220,7 @@ type RuleActionStore interface {
 
 type RuleActionDeadLetterStore interface {
 	ListRuleActionDeadLetters(ctx context.Context, tenantID, siteID string, limit int) (RuleActionDeadLetterList, error)
-	ReplayRuleActionDeadLetter(ctx context.Context, tenantID, siteID, outboxID string, now time.Time) error
+	ReplayRuleActionDeadLetter(ctx context.Context, tenantID, siteID, outboxID string, now time.Time) (RuleActionStatus, error)
 }
 
 type SSRFWebhookSender struct {
@@ -233,6 +234,59 @@ func NewSSRFWebhookSender(secretResolver func(ctx context.Context, secretRef str
 		Client:         NewSSRFWebhookHTTPClient(nil),
 		SecretResolver: secretResolver,
 		Now:            time.Now,
+	}
+}
+
+// NewDirWebhookSecretResolver loads bounded HMAC signing secrets by validated secretRef inside baseDir.
+func NewDirWebhookSecretResolver(baseDir string) func(context.Context, string) ([]byte, error) {
+	trimmedBase := strings.TrimSpace(baseDir)
+	if trimmedBase == "" {
+		return nil
+	}
+	cleanBase := filepath.Clean(trimmedBase)
+	const maxSecretBytes = 4096
+	return func(_ context.Context, secretRef string) ([]byte, error) {
+		if secretRef == "" ||
+			!actionSecretRefPattern.MatchString(secretRef) ||
+			strings.HasPrefix(secretRef, ".") ||
+			strings.Contains(secretRef, "..") ||
+			strings.ContainsAny(secretRef, `/\`) {
+			return nil, MarkPermanentActionFailure("secret_unavailable", errors.New("webhook secretRef is invalid"))
+		}
+		absBase, err := filepath.EvalSymlinks(cleanBase)
+		if err != nil {
+			return nil, MarkPermanentActionFailure("secret_unavailable", errors.New("webhook secret directory is unavailable"))
+		}
+		candidate := filepath.Join(absBase, secretRef)
+		realPath, err := filepath.EvalSymlinks(candidate)
+		if err != nil {
+			return nil, MarkPermanentActionFailure("secret_unavailable", errors.New("webhook signing secret was not found"))
+		}
+		rel, err := filepath.Rel(absBase, realPath)
+		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+			return nil, MarkPermanentActionFailure("secret_unavailable", errors.New("webhook secret path escaped base directory"))
+		}
+		info, err := os.Stat(realPath)
+		if err != nil || !info.Mode().IsRegular() {
+			return nil, MarkPermanentActionFailure("secret_unavailable", errors.New("webhook secret must be a regular file"))
+		}
+		file, err := os.Open(realPath)
+		if err != nil {
+			return nil, MarkPermanentActionFailure("secret_unavailable", errors.New("webhook signing secret cannot be opened"))
+		}
+		defer func() { _ = file.Close() }()
+		raw, err := io.ReadAll(io.LimitReader(file, maxSecretBytes+1))
+		if err != nil {
+			return nil, MarkPermanentActionFailure("secret_unavailable", errors.New("webhook signing secret cannot be read"))
+		}
+		if len(raw) > maxSecretBytes {
+			return nil, MarkPermanentActionFailure("secret_unavailable", errors.New("webhook signing secret exceeds size limit"))
+		}
+		trimmed := bytes.TrimRight(raw, "\r\n")
+		if len(trimmed) == 0 {
+			return nil, MarkPermanentActionFailure("secret_unavailable", errors.New("webhook signing secret is empty"))
+		}
+		return trimmed, nil
 	}
 }
 
@@ -304,10 +358,48 @@ func isPublicUnicastAddr(addr netip.Addr) bool {
 	}
 	if addr.Is4() {
 		b := addr.As4()
+		if b[0] == 0 {
+			return false
+		}
 		if b[0] == 100 && b[1] >= 64 && b[1] <= 127 {
 			return false
 		}
+		if b[0] == 192 && b[1] == 0 && (b[2] == 0 || b[2] == 2) {
+			return false
+		}
+		if b[0] == 198 && (b[1] == 18 || b[1] == 19) {
+			return false
+		}
+		if b[0] == 198 && b[1] == 51 && b[2] == 100 {
+			return false
+		}
+		if b[0] == 203 && b[1] == 0 && b[2] == 113 {
+			return false
+		}
 		if b[0] >= 224 {
+			return false
+		}
+		return true
+	}
+	b6 := addr.As16()
+	// Documentation prefix 2001:db8::/32
+	if b6[0] == 0x20 && b6[1] == 0x01 && b6[2] == 0x0d && b6[3] == 0xb8 {
+		return false
+	}
+	// 6to4 prefix 2002::/16 (can embed private/reserved IPv4 addresses)
+	if b6[0] == 0x20 && b6[1] == 0x02 {
+		return false
+	}
+	// Discard-only prefix 100::/64
+	if b6[0] == 0x01 && b6[1] == 0x00 && b6[2] == 0 && b6[3] == 0 && b6[4] == 0 && b6[5] == 0 && b6[6] == 0 && b6[7] == 0 {
+		return false
+	}
+	// NAT64 well-known 64:ff9b::/96 and local-use 64:ff9b:1::/48
+	if b6[0] == 0x00 && b6[1] == 0x64 && b6[2] == 0xff && b6[3] == 0x9b {
+		if b6[4] == 0x00 && b6[5] == 0x01 {
+			return false
+		}
+		if b6[4] == 0 && b6[5] == 0 && b6[6] == 0 && b6[7] == 0 && b6[8] == 0 && b6[9] == 0 && b6[10] == 0 && b6[11] == 0 {
 			return false
 		}
 	}
@@ -349,8 +441,11 @@ func (sender *SSRFWebhookSender) Send(ctx context.Context, action ClaimedRuleAct
 			return MarkPermanentActionFailure("secret_unavailable", errors.New("webhook secret resolver is not configured"))
 		}
 		secret, secretErr := sender.SecretResolver(ctx, action.Payload.SecretRef)
-		if secretErr != nil || len(secret) == 0 {
+		if secretErr != nil {
 			return fmt.Errorf("resolve webhook signing secret: %w", secretErr)
+		}
+		if len(secret) == 0 {
+			return MarkPermanentActionFailure("secret_unavailable", errors.New("webhook signing secret is empty"))
 		}
 		nowFn := sender.Now
 		if nowFn == nil {
@@ -655,16 +750,48 @@ func (relay *RuleActionRelay) backoffForAttempt(attempt int) time.Duration {
 	return delay
 }
 
-func (relay *RuleActionRelay) recordDeadLetterMetric(reasonFamily string) {
+func (relay *RuleActionRelay) recordDeadLetterMetric(reasonCode string) {
 	if relay.metrics == nil {
 		return
 	}
 	_ = relay.metrics.AddCounter(
 		actionOutboxMetricDeadTotal,
 		"Total Alarm rule actions transitioned to DEAD_LETTER by error reason family.",
-		map[string]string{"reason_family": sanitizeActionErrorCode(reasonFamily, "delivery_error")},
+		map[string]string{"reason_family": ruleActionReasonFamily(reasonCode)},
 		1,
 	)
+}
+
+func ruleActionReasonFamily(reasonCode string) string {
+	normalized := strings.ToLower(strings.TrimSpace(reasonCode))
+	switch normalized {
+	case "ssrf_blocked", "redirect_blocked", "http_401", "http_403":
+		return "authorization"
+	case "http_429":
+		return "rate_limited"
+	case "http_408", "timeout", "network_error":
+		return "transport"
+	case "http_5xx", "work_order_error", "command_error", "permanent_failure":
+		return "dependency"
+	case "http_4xx", "invalid_payload", "payload_invalid":
+		return "scope"
+	}
+	switch {
+	case strings.Contains(normalized, "rate_limit"), strings.Contains(normalized, "429"), strings.Contains(normalized, "throttle"):
+		return "rate_limited"
+	case strings.Contains(normalized, "auth"), strings.Contains(normalized, "ssrf"), strings.Contains(normalized, "redirect"), strings.Contains(normalized, "forbidden"), strings.Contains(normalized, "denied"):
+		return "authorization"
+	case strings.Contains(normalized, "capacity"), strings.Contains(normalized, "quota"), strings.Contains(normalized, "overflow"):
+		return "capacity"
+	case strings.Contains(normalized, "invalid"), strings.Contains(normalized, "payload"), strings.Contains(normalized, "scope"), strings.Contains(normalized, "schema"), strings.Contains(normalized, "4xx"):
+		return "scope"
+	case strings.Contains(normalized, "timeout"), strings.Contains(normalized, "network"), strings.Contains(normalized, "transport"), strings.Contains(normalized, "dial"), strings.Contains(normalized, "tls"), strings.Contains(normalized, "dns"):
+		return "transport"
+	case strings.Contains(normalized, "work_order"), strings.Contains(normalized, "command"), strings.Contains(normalized, "5xx"), strings.Contains(normalized, "unavailable"), strings.Contains(normalized, "reject"), strings.Contains(normalized, "dependency"), strings.Contains(normalized, "permanent"):
+		return "dependency"
+	default:
+		return "unknown"
+	}
 }
 
 func (relay *RuleActionRelay) refreshOutboxDepthMetrics(ctx context.Context) {
@@ -1121,16 +1248,16 @@ LIMIT $3`, tenantID, siteID, limit)
 	return RuleActionDeadLetterList{Items: items}, nil
 }
 
-func (store *PostgresStore) ReplayRuleActionDeadLetter(ctx context.Context, tenantID, siteID, outboxID string, now time.Time) error {
+func (store *PostgresStore) ReplayRuleActionDeadLetter(ctx context.Context, tenantID, siteID, outboxID string, now time.Time) (RuleActionStatus, error) {
 	if store == nil || store.pool == nil {
-		return ErrUnavailable
+		return "", ErrUnavailable
 	}
 	if !alarmmodel.IsUUIDv7(tenantID) || !alarmmodel.IsUUIDv7(siteID) || !alarmmodel.IsUUIDv7(outboxID) {
-		return alarmmodel.ErrInvalidOperation
+		return "", alarmmodel.ErrInvalidOperation
 	}
 	tx, err := store.beginTenantTransaction(ctx, tenantID, false)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
@@ -1149,8 +1276,9 @@ SET status = 'PENDING',
 WHERE tenant_id = $1 AND site_id = $2 AND outbox_id = $3 AND status = 'DEAD_LETTER'`,
 		tenantID, siteID, outboxID, nowUTC)
 	if err != nil {
-		return fmt.Errorf("replay Alarm rule action dead letter: %w", err)
+		return "", fmt.Errorf("replay Alarm rule action dead letter: %w", err)
 	}
+	status := RuleActionStatusPending
 	if command.RowsAffected() == 0 {
 		var existingStatus string
 		scanErr := tx.QueryRow(ctx, `
@@ -1159,15 +1287,20 @@ FROM alarm_runtime.rule_action_outbox
 WHERE tenant_id = $1 AND site_id = $2 AND outbox_id = $3`,
 			tenantID, siteID, outboxID).Scan(&existingStatus)
 		if errors.Is(scanErr, pgx.ErrNoRows) {
-			return ErrNotFound
+			return "", ErrNotFound
 		}
 		if scanErr != nil {
-			return fmt.Errorf("check Alarm rule action dead letter status: %w", scanErr)
+			return "", fmt.Errorf("check Alarm rule action dead letter status: %w", scanErr)
 		}
-		return alarmmodel.ErrInvalidOperation
+		switch RuleActionStatus(existingStatus) {
+		case RuleActionStatusPending, RuleActionStatusDelivered:
+			status = RuleActionStatus(existingStatus)
+		default:
+			return "", alarmmodel.ErrInvalidOperation
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit Alarm rule action dead letter replay: %w", err)
+		return "", fmt.Errorf("commit Alarm rule action dead letter replay: %w", err)
 	}
-	return nil
+	return status, nil
 }

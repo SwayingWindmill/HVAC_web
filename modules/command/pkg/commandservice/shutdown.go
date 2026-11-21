@@ -201,8 +201,8 @@ func (a *ControlAuthority) ExecuteSiteControlShutdown(
 		deferredIDs = append(deferredIDs, auxDeferred...)
 	}
 
-	if savedState.DevicePriorityLocks == nil {
-		savedState.DevicePriorityLocks = []DevicePriorityLockView{}
+	if err := a.populateDevicePriorityLocks(ctx, operator.TenantID, siteID, &savedState); err != nil {
+		return SiteControlShutdownResponse{}, err
 	}
 	return SiteControlShutdownResponse{
 		SiteControlState:        savedState,
@@ -291,8 +291,8 @@ func (a *ControlAuthority) executeAbortUnitSequence(
 			Title: "Control shutdown locked", Detail: "Unable to abort or stop the requested unit sequence because target assets are locked or waiting on active chillers.",
 		}
 	}
-	if currentState.DevicePriorityLocks == nil {
-		currentState.DevicePriorityLocks = []DevicePriorityLockView{}
+	if err := a.populateDevicePriorityLocks(ctx, operator.TenantID, siteID, &currentState); err != nil {
+		return SiteControlShutdownResponse{}, err
 	}
 	return SiteControlShutdownResponse{
 		SiteControlState:        currentState,

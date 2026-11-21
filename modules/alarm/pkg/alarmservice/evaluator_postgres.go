@@ -184,7 +184,7 @@ func (store *PostgresStore) EvaluateClaim(ctx context.Context, claim EvaluationC
 	if err != nil {
 		return EvaluationDecision{}, err
 	}
-	if persisted.Snapshot.UpstreamRuleActive == nil && (assigned.Policy.DependencyGate == DependencyGateAllActive || assigned.Policy.DependencyGate == DependencyGateAnyActive) {
+	if assigned.Policy.DependencyGate == DependencyGateAllActive || assigned.Policy.DependencyGate == DependencyGateAnyActive {
 		upstreamActive, err := loadUpstreamActiveMap(ctx, tx, claim.TenantID, claim.SiteID, assigned.Policy.DependsOnRuleIDs)
 		if err != nil {
 			return EvaluationDecision{}, err

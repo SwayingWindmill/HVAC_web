@@ -1,4 +1,4 @@
-import { Link2, Lock, LockOpen, Play, RotateCcw, SlidersHorizontal, Square } from 'lucide-react';
+import { Link2, Lock, LockOpen, Play, RotateCcw, ShieldAlert, SlidersHorizontal, Square } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { StatusBadge, statusDotClass } from '@/components/common/StatusBadge';
 import { deviceStatus, LowConfidenceBadge } from '@/features/operations/realtime/device-presentation';
@@ -8,7 +8,18 @@ import { cn } from '@/lib/utils';
 import { WITHDRAWABLE, type Command } from '../command-api';
 import { ACTION_VERB, CODE_AT_SUBMIT, STATUS_PRESENTATION } from '../command-presentation';
 import { blockingInterlocks, unitActivePower, type ControlAction, type ControlTarget, type Interlock, type PlantUnit } from '../control-model';
-import { LOCK_PRESENTATION, MAINTENANCE_BLOCKED, MAINTENANCE_PERMITTED, MODE_PRESENTATION, type ActiveMaintenanceWindow, type AssetControlLockState, type SiteControlMode } from '../control-state';
+import {
+  DEVICE_PRIORITY_TIER_LABEL,
+  formatLockRemaining,
+  LOCK_PRESENTATION,
+  MAINTENANCE_BLOCKED,
+  MAINTENANCE_PERMITTED,
+  MODE_PRESENTATION,
+  type ActiveMaintenanceWindow,
+  type AssetControlLockState,
+  type DevicePriorityLockState,
+  type SiteControlMode,
+} from '../control-state';
 import type { PendingCommand } from './CommandConfirmation';
 
 export interface PlantContext {
@@ -20,10 +31,13 @@ export interface PlantContext {
   /** Interlocked device codes in the operator's words: the asset each controls. */
   readonly nameByDeviceCode: ReadonlyMap<string, string>;
   readonly locks: ReadonlyMap<string, AssetControlLockState>;
+  readonly priorityLocks: ReadonlyMap<string, DevicePriorityLockState>;
+  readonly nowMs: number;
   readonly commands: readonly Command[];
   readonly canLock: boolean;
   readonly onCommand: (pending: PendingCommand) => void;
   readonly onLock: (target: ControlTarget) => void;
+  readonly onPriorityLock: (target: ControlTarget) => void;
   /** Aborts a unit's running one-click sequence and stops the unit in order. */
   readonly onAbort: (unit: PlantUnit) => void;
   readonly onSettings: (target: ControlTarget) => void;
@@ -82,6 +96,7 @@ function DeviceRow({ target, label, context }: { readonly target: ControlTarget;
   const device = context.devices.get(target.deviceId);
   const status = device ? deviceStatus(device) : null;
   const lock = context.locks.get(target.assetId);
+  const priorityLock = context.priorityLocks.get(target.deviceId);
   const action = primaryAction(target, device);
   const open = openOn(context.commands, target.actions.filter((item) => item.capability !== 'START_UNIT_SEQUENCE' && item.capability !== 'STOP_UNIT_SEQUENCE').map((item) => item.pointId).concat(target.settings.map((setting) => setting.pointId)));
   const blocked = action ? blockingInterlocks(action, context.runStateByDeviceCode) : [];
@@ -120,6 +135,24 @@ function DeviceRow({ target, label, context }: { readonly target: ControlTarget;
           </Button>
         ) : null}
         <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          className={priorityLock ? 'text-primary' : 'text-muted-foreground'}
+          aria-label={priorityLock ? `管理 ${target.assetName} 优先级锁定` : `设置 ${target.assetName} 优先级锁定`}
+          title={
+            context.canLock
+              ? priorityLock
+                ? `已启用${DEVICE_PRIORITY_TIER_LABEL[priorityLock.lockedPriority]}锁定，点击调整或解除`
+                : '设置设备优先级仲裁锁'
+              : '你没有设置优先级锁定的权限'
+          }
+          disabled={!context.canLock}
+          onClick={() => context.onPriorityLock(target)}
+        >
+          <ShieldAlert />
+        </Button>
+        <Button
           variant="ghost"
           size="icon-sm"
           className="text-muted-foreground"
@@ -135,6 +168,14 @@ function DeviceRow({ target, label, context }: { readonly target: ControlTarget;
         <span>{status?.label ?? '暂无实时数据'}</span>
         {lock && lock.lockMode !== 'UNLOCKED' ? (
           <StatusBadge tone={lock.lockMode === 'MAINTENANCE_LOCK' ? 'destructive' : 'warning'} label={LOCK_PRESENTATION[lock.lockMode].label} />
+        ) : null}
+        {priorityLock ? (
+          <span title={`${priorityLock.lockedByName ?? '系统规则'}：${priorityLock.reason}`}>
+            <StatusBadge
+              tone={priorityLock.lockedPriority === 'SAFETY_INTERLOCK' ? 'destructive' : 'info'}
+              label={`${DEVICE_PRIORITY_TIER_LABEL[priorityLock.lockedPriority]} · ${formatLockRemaining(priorityLock.lockedUntil, context.nowMs)}`}
+            />
+          </span>
         ) : null}
         {open ? (
           <button type="button" className="rounded-sm outline-none hover:underline focus-visible:ring-3 focus-visible:ring-ring-soft" onClick={() => context.onInspect(open.commandId)}>

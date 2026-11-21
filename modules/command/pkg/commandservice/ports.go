@@ -256,13 +256,14 @@ type ActiveMaintenanceWindowView struct {
 }
 
 type DevicePriorityLockView struct {
-	DeviceID       string `json:"deviceId"`
-	LockedPriority string `json:"lockedPriority"`
-	CommandSource  string `json:"commandSource"`
-	LockedBy       string `json:"lockedBy"`
-	LockedUntil    string `json:"lockedUntil"`
-	Reason         string `json:"reason"`
-	UpdatedAt      string `json:"updatedAt"`
+	DeviceID       string  `json:"deviceId"`
+	LockedPriority string  `json:"lockedPriority"`
+	CommandSource  string  `json:"commandSource"`
+	LockedBy       string  `json:"lockedBy"`
+	LockedByName   *string `json:"lockedByName,omitempty"`
+	LockedUntil    string  `json:"lockedUntil"`
+	Reason         string  `json:"reason"`
+	UpdatedAt      string  `json:"updatedAt"`
 }
 
 type SiteControlStateView struct {
@@ -421,6 +422,19 @@ type SubmitOperatorCommandOutput struct {
 	Replayed bool
 }
 
+type ProtectionRuleCommandInput struct {
+	TenantID        string
+	SiteID          string
+	DeviceID        string
+	TargetPointCode string
+	Capability      commandmodel.Capability
+	Parameters      commandmodel.CommandParameters
+	IdempotencyKey  string
+	TraceID         string
+	AssignmentID    string
+	OutboxID        string
+}
+
 type PlantTwinPort interface {
 	GetAsset(ctx context.Context, operator OperatorIdentity, assetID string) (AssetDTO, error)
 	GetSiteAssetModel(ctx context.Context, operator OperatorIdentity, siteID string) (SiteAssetModelDTO, error)
@@ -429,6 +443,7 @@ type PlantTwinPort interface {
 	SaveSiteControlMode(ctx context.Context, operator OperatorIdentity, siteID, controlMode, reason string, meta ControlMutationMeta) (SiteControlStateView, error)
 	SaveAssetControlLock(ctx context.Context, operator OperatorIdentity, assetID, siteID, lockMode, reason string, meta ControlMutationMeta) (AssetControlLockView, error)
 	GetDispatchContext(ctx context.Context, tenantID, siteID, deviceID, pointID string) (ControlDispatchContext, error)
+	ResolveProtectionDispatchContext(ctx context.Context, tenantID, siteID, deviceID, pointCode string, capability commandmodel.Capability) (ControlDispatchContext, error)
 }
 
 type TelemetryLivePort interface {

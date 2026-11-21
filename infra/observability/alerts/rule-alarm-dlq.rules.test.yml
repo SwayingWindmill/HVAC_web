@@ -1,0 +1,64 @@
+rule_files:
+  - domain-phase1.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'hvac_command_control_alarm_outbox_depth{state="dead_letter"}'
+        values: '0+0x4 1+0x10 0+0x5'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: CommandControlAlarmDeadLetterNonZero
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              primary_owner: control-platform
+              secondary_owner: alarm-platform
+            exp_annotations:
+              summary: Command control alarm outbox has dead-letter entries awaiting inspection or replay
+              runbook: docs/operations/alerts.md#控制告警死信队列积压
+      - eval_time: 18m
+        alertname: CommandControlAlarmDeadLetterNonZero
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'hvac_alarm_action_outbox_depth{state="dead_letter"}'
+        values: '0+0x4 2+0x10 0+0x5'
+      - series: 'hvac_alarm_evaluation_outbox_depth{state="dead_letter"}'
+        values: '0+0x4 3+0x10 0+0x5'
+      - series: 'hvac_alarm_routing_reloads_total{outcome="failed"}'
+        values: '0+0x4 1+0x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: AlarmRuleActionDeadLetterNonZero
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              primary_owner: alarm-platform
+              secondary_owner: platform-operations
+            exp_annotations:
+              summary: Alarm rule action outbox has dead-letter entries awaiting replay
+              runbook: docs/operations/alerts.md#规则动作死信队列积压
+      - eval_time: 10m
+        alertname: TelemetryAlarmEvaluationDeadLetterNonZero
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              primary_owner: telemetry-platform
+              secondary_owner: alarm-platform
+            exp_annotations:
+              summary: Telemetry alarm evaluation outbox has dead-letter entries
+              runbook: docs/operations/alerts.md#遥测告警评估死信积压
+      - eval_time: 8m
+        alertname: AlarmRoutingReloadFailed
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              primary_owner: alarm-platform
+              secondary_owner: platform-operations
+            exp_annotations:
+              summary: Alarm notification routing config reload failed and retained prior active snapshot
+              runbook: docs/operations/alerts.md#告警路由配置重载失败

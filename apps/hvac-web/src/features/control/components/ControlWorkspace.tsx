@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, useNavigate } from '@tanstack/react-router';
-import { RefreshCw, Terminal } from 'lucide-react';
+import { RefreshCw, ShieldAlert, Terminal } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { PageHeader } from '@/blocks/page-header';
@@ -26,12 +26,14 @@ import {
 } from '../command-api';
 import { commandSummary, IN_FLIGHT, needsPerson, STATUS_PRESENTATION } from '../command-presentation';
 import { commandLabels, controlTargets, hasEmergencyRelease, plantUnits, type ControlTarget, type PlantUnit } from '../control-model';
-import { activeLocks, siteControlStateQuery, type SiteControlMode } from '../control-state';
+import { activeLocks, activePriorityLocks, controlAlarmDeadLettersQuery, siteControlStateQuery, type SiteControlMode } from '../control-state';
 import { siteAutoControlLeaseQuery } from '@/features/optimization/auto-control-api';
 import { CommandLog, CommandSheet, StepUpDialog, type CommandActions } from './CommandLog';
 import { commandFailure, ConfirmCommand, type PendingCommand } from './CommandConfirmation';
+import { ControlAlarmDeadLettersDialog } from './ControlAlarmDeadLettersDialog';
 import { AssetLockDialog, ControlModeBar, ControlModeDialog, type LockSubject } from './ControlBoundary';
 import { PlantUnitGrid, type PlantContext } from './PlantUnitGrid';
+import { PriorityLockDialog } from './PriorityLockDialog';
 import { SiteShutdownDialog, type ShutdownSubject } from './SiteShutdown';
 import { SettingsDialog } from './SettingsDialog';
 
@@ -66,16 +68,27 @@ export function ControlWorkspace() {
   const [pending, setPending] = useState<PendingCommand | null>(null);
   const [modeTarget, setModeTarget] = useState<SiteControlMode | null>(null);
   const [lockTarget, setLockTarget] = useState<ControlTarget | null>(null);
+  const [priorityLockTarget, setPriorityLockTarget] = useState<ControlTarget | null>(null);
+  const [deadLettersOpen, setDeadLettersOpen] = useState(false);
   const [settingsTarget, setSettingsTarget] = useState<ControlTarget | null>(null);
   const [stepUp, setStepUp] = useState<Command | null>(null);
   const [shutdown, setShutdown] = useState<ShutdownSubject | null>(null);
 
+  const deadLetters = useQuery({
+    ...controlAlarmDeadLettersQuery(site.id),
+    enabled: Boolean(site.id),
+  });
   const model = registry.data?.assetModel;
   const targets = useMemo(() => (model ? controlTargets(model, new Date(now)) : []), [model, now]);
   const grouped = useMemo(() => (model ? plantUnits(targets, model, new Date(now)) : { units: [], others: [] }), [targets, model, now]);
   const labels = useMemo(() => commandLabels(targets), [targets]);
   const devices = useMemo(() => new Map(plant.devices.map((device) => [device.deviceId, device])), [plant.devices]);
+  const deviceNames = useMemo(
+    () => new Map((model?.devices ?? []).map((device) => [device.id, device.displayName])),
+    [model?.devices],
+  );
   const locks = useMemo(() => activeLocks(controlState.data), [controlState.data]);
+  const priorityLocks = useMemo(() => activePriorityLocks(controlState.data, now), [controlState.data, now]);
   const list = commands.data ?? [];
   const mode = controlState.data?.controlMode ?? 'REMOTE_AUTO';
 
@@ -129,8 +142,8 @@ export function ControlWorkspace() {
     return { runStateByDeviceCode, nameByDeviceCode };
   }, [model, targets, devices]);
   const context: PlantContext = {
-    mode, maintenance: controlState.data?.activeMaintenanceWindow ?? null, devices, ...interlockFacts, locks, commands: list, canLock: canManage,
-    onCommand: setPending, onLock: setLockTarget, onAbort: (unit) => setShutdown(abortSubject(unit)), onSettings: setSettingsTarget, onInspect: inspect,
+    mode, maintenance: controlState.data?.activeMaintenanceWindow ?? null, devices, ...interlockFacts, locks, priorityLocks, nowMs: now, commands: list, canLock: canManage,
+    onCommand: setPending, onLock: setLockTarget, onPriorityLock: setPriorityLockTarget, onAbort: (unit) => setShutdown(abortSubject(unit)), onSettings: setSettingsTarget, onInspect: inspect,
   };
 
   // A unit is named to the gateway by its chiller's asset code, e.g. chiller-a.
@@ -163,7 +176,16 @@ export function ControlWorkspace() {
         actions={(
           <>
             {plant.latestSampleAt ? <span className="text-xs text-muted-foreground">数据时间 <span className="font-mono">{formatClock(plant.latestSampleAt, site.timezone)}</span></span> : null}
-            <Button variant="outline" size="sm" onClick={() => { refresh(); void commands.refetch(); void controlState.refetch(); }}>
+            <Button
+              type="button"
+              variant={deadLetters.data && deadLetters.data.length > 0 ? 'destructive' : 'outline'}
+              size="sm"
+              onClick={() => setDeadLettersOpen(true)}
+            >
+              <ShieldAlert data-icon="inline-start" />
+              {deadLetters.data && deadLetters.data.length > 0 ? `控制告警死信 (${deadLetters.data.length})` : '控制告警死信'}
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => { refresh(); void commands.refetch(); void controlState.refetch(); void deadLetters.refetch(); }}>
               <RefreshCw data-icon="inline-start" />
               刷新
             </Button>
@@ -289,6 +311,24 @@ export function ControlWorkspace() {
         <SiteShutdownDialog siteId={site.id} csrfToken={csrfToken} state={controlState.data} subject={shutdown} onClose={() => setShutdown(null)} />
       ) : null}
       <AssetLockDialog siteId={site.id} csrfToken={csrfToken} subject={lockSubject} myId={myId} timeZone={site.timezone} onClose={() => setLockTarget(null)} />
+      <PriorityLockDialog
+        target={priorityLockTarget}
+        activeLock={priorityLockTarget ? priorityLocks.get(priorityLockTarget.deviceId) : undefined}
+        siteId={site.id}
+        csrfToken={csrfToken}
+        timeZone={site.timezone}
+        nowMs={now}
+        onClose={() => setPriorityLockTarget(null)}
+      />
+      <ControlAlarmDeadLettersDialog
+        open={deadLettersOpen}
+        siteId={site.id}
+        canManage={canManage}
+        csrfToken={csrfToken}
+        deviceNames={deviceNames}
+        timeZone={site.timezone}
+        onClose={() => setDeadLettersOpen(false)}
+      />
       <StepUpDialog command={stepUp} describe={describe} onClose={() => setStepUp(null)} />
       <CommandSheet
         command={list.find((command) => command.commandId === search.inspect)}

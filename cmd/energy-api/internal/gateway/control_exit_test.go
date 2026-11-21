@@ -1072,3 +1072,197 @@ func TestGatewayControlExitResolvesUpdatedByNameAndFallsBackCleanly(t *testing.T
 		}
 	})
 }
+
+func TestGatewayDevicePriorityLocksAndControlAlarmDeadLetters(t *testing.T) {
+	fixture := newCommandGatewayFixture(t)
+	fixture.principalNames = map[string]string{
+		fixture.principalID: "周敏",
+		"command-user":      "周敏",
+	}
+
+	lockPath := "/api/v1/sites/" + fixture.siteID + "/devices/" + fixture.deviceID + "/priority-lock"
+
+	// Method validation returns 405 with Allow: PUT, DELETE.
+	badMethod := httptest.NewRequest(http.MethodPost, lockPath, strings.NewReader(`{}`))
+	fixture.authenticate(badMethod, true)
+	badMethodRec := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(badMethodRec, badMethod)
+	if badMethodRec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST priority-lock status=%d want 405", badMethodRec.Code)
+	}
+
+	// Missing CSRF on PUT priority-lock returns 403.
+	missingCSRF := httptest.NewRequest(http.MethodPut, lockPath, strings.NewReader(`{"lockedPriority":"MANUAL_OVERRIDE","durationMinutes":30,"reason":"人工点检"}`))
+	fixture.authenticate(missingCSRF, false)
+	missingCSRF.Header.Set("Content-Type", "application/json")
+	missingCSRFRec := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(missingCSRFRec, missingCSRF)
+	if missingCSRFRec.Code != http.StatusForbidden {
+		t.Fatalf("PUT priority-lock without CSRF status=%d want 403 body=%s", missingCSRFRec.Code, missingCSRFRec.Body.String())
+	}
+
+	// IAM denial returns 403.
+	fixture.control.IAM.DenyScheduleManage = true
+	deniedPut := httptest.NewRequest(http.MethodPut, lockPath, strings.NewReader(`{"lockedPriority":"MANUAL_OVERRIDE","durationMinutes":30,"reason":"人工点检"}`))
+	fixture.authenticate(deniedPut, true)
+	deniedPut.Header.Set("Content-Type", "application/json")
+	deniedPutRec := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(deniedPutRec, deniedPut)
+	if deniedPutRec.Code != http.StatusForbidden {
+		t.Fatalf("denied PUT priority-lock status=%d want 403 body=%s", deniedPutRec.Code, deniedPutRec.Body.String())
+	}
+	fixture.control.IAM.DenyScheduleManage = false
+
+	// Invalid duration rejected cleanly with 400.
+	badDur := httptest.NewRequest(http.MethodPut, lockPath, strings.NewReader(`{"lockedPriority":"MANUAL_OVERRIDE","durationMinutes":2,"reason":"太短"}`))
+	fixture.authenticate(badDur, true)
+	badDur.Header.Set("Content-Type", "application/json")
+	badDurRec := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(badDurRec, badDur)
+	if badDurRec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid duration status=%d want 400 body=%s", badDurRec.Code, badDurRec.Body.String())
+	}
+
+	// Invalid UUID returns 404.
+	badDev := httptest.NewRequest(http.MethodPut, "/api/v1/sites/"+fixture.siteID+"/devices/not-a-uuid/priority-lock", strings.NewReader(`{"lockedPriority":"MANUAL_OVERRIDE","durationMinutes":30,"reason":"测试"}`))
+	fixture.authenticate(badDev, true)
+	badDev.Header.Set("Content-Type", "application/json")
+	badDevRec := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(badDevRec, badDev)
+	if badDevRec.Code != http.StatusNotFound {
+		t.Fatalf("invalid device UUID status=%d want 404", badDevRec.Code)
+	}
+
+	// Acquire SAFETY_INTERLOCK priority lock and verify lockedByName + GET control-state projection.
+	putLock := httptest.NewRequest(http.MethodPut, lockPath, strings.NewReader(`{"lockedPriority":"SAFETY_INTERLOCK","durationMinutes":60,"reason":"冷冻水压差异常联锁"}`))
+	fixture.authenticate(putLock, true)
+	putLock.Header.Set("Content-Type", "application/json")
+	putLockRec := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(putLockRec, putLock)
+	if putLockRec.Code != http.StatusOK {
+		t.Fatalf("PUT priority-lock status=%d body=%s", putLockRec.Code, putLockRec.Body.String())
+	}
+	var lockView commandservice.DevicePriorityLockView
+	if err := json.Unmarshal(putLockRec.Body.Bytes(), &lockView); err != nil {
+		t.Fatal(err)
+	}
+	if lockView.DeviceID != fixture.deviceID || lockView.LockedPriority != "SAFETY_INTERLOCK" || lockView.LockedByName == nil || *lockView.LockedByName != "周敏" {
+		t.Fatalf("unexpected priority lock view: %#v", lockView)
+	}
+
+	// Lower-tier preemption returns 409 CONFLICT.
+	lowerPut := httptest.NewRequest(http.MethodPut, lockPath, strings.NewReader(`{"lockedPriority":"MANUAL_OVERRIDE","durationMinutes":30,"reason":"尝试降级抢占"}`))
+	fixture.authenticate(lowerPut, true)
+	lowerPut.Header.Set("Content-Type", "application/json")
+	lowerPutRec := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(lowerPutRec, lowerPut)
+	if lowerPutRec.Code != http.StatusConflict {
+		t.Fatalf("preemption lower priority status=%d want 409 body=%s", lowerPutRec.Code, lowerPutRec.Body.String())
+	}
+
+	// GET control-state reflects active device priority lock and resolved name.
+	stateReq := httptest.NewRequest(http.MethodGet, "/api/v1/sites/"+fixture.siteID+"/control-state", nil)
+	fixture.authenticate(stateReq, false)
+	stateRec := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(stateRec, stateReq)
+	if stateRec.Code != http.StatusOK {
+		t.Fatalf("GET control-state status=%d body=%s", stateRec.Code, stateRec.Body.String())
+	}
+	var stateView siteControlStateView
+	if err := json.Unmarshal(stateRec.Body.Bytes(), &stateView); err != nil || len(stateView.DevicePriorityLocks) != 1 || stateView.DevicePriorityLocks[0].LockedByName == nil || *stateView.DevicePriorityLocks[0].LockedByName != "周敏" {
+		t.Fatalf("expected active priority lock in control-state: err=%v view=%#v", err, stateView)
+	}
+
+	// Release lock via DELETE ?reason=... and verify released=true then idempotent released=false.
+	delReq := httptest.NewRequest(http.MethodDelete, lockPath+"?reason=联锁复位释放", nil)
+	fixture.authenticate(delReq, true)
+	delRec := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(delRec, delReq)
+	if delRec.Code != http.StatusOK {
+		t.Fatalf("DELETE priority-lock status=%d body=%s", delRec.Code, delRec.Body.String())
+	}
+	var relResp commandservice.DevicePriorityLockReleaseResponse
+	if err := json.Unmarshal(delRec.Body.Bytes(), &relResp); err != nil || !relResp.Released || relResp.DeviceID != fixture.deviceID {
+		t.Fatalf("unexpected delete response: err=%v resp=%#v", err, relResp)
+	}
+
+	// Seed control-alarm dead letters, list, then replay.
+	outbox1 := "018f3e00-9000-7000-8000-000000000001"
+	outbox2 := "018f3e00-9000-7000-8000-000000000002"
+	fixture.control.Store.SeedControlAlarmOutbox(commandservice.ControlAlarmOutboxRecord{
+		OutboxID:      outbox1,
+		TenantID:      fixture.tenantID,
+		SiteID:        fixture.siteID,
+		CommandID:     fixture.commandID,
+		DeviceID:      fixture.deviceID,
+		EventKind:     "VERIFY_TIMEOUT",
+		ReasonCode:    "COMMAND_READBACK_TIMEOUT",
+		Status:        commandservice.ControlAlarmStatusDeadLetter,
+		Attempts:      8,
+		LastErrorCode: "CONTROL_ALARM_HTTP_FAILED",
+		CreatedAt:     fixture.now.Add(-10 * time.Minute),
+		UpdatedAt:     fixture.now.Add(-5 * time.Minute),
+	})
+	fixture.control.Store.SeedControlAlarmOutbox(commandservice.ControlAlarmOutboxRecord{
+		OutboxID:      outbox2,
+		TenantID:      fixture.tenantID,
+		SiteID:        fixture.siteID,
+		CommandID:     fixture.commandID,
+		DeviceID:      fixture.deviceID,
+		EventKind:     "DISPATCH_REJECTED",
+		ReasonCode:    "DEVICE_OFFLINE",
+		Status:        commandservice.ControlAlarmStatusDeadLetter,
+		Attempts:      8,
+		LastErrorCode: "CONTROL_ALARM_HTTP_REJECTED",
+		CreatedAt:     fixture.now.Add(-4 * time.Minute),
+		UpdatedAt:     fixture.now.Add(-2 * time.Minute),
+	})
+
+	dlqPath := "/api/v1/sites/" + fixture.siteID + "/control-alarms/dead-letters"
+	badQuery := httptest.NewRequest(http.MethodGet, dlqPath+"?limit=51", nil)
+	fixture.authenticate(badQuery, false)
+	badQueryRec := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(badQueryRec, badQuery)
+	if badQueryRec.Code != http.StatusBadRequest {
+		t.Fatalf("limit=51 status=%d want 400", badQueryRec.Code)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, dlqPath+"?limit=1", nil)
+	fixture.authenticate(listReq, false)
+	listRec := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("GET control-alarms dead-letters status=%d body=%s", listRec.Code, listRec.Body.String())
+	}
+	var listEnv struct {
+		Data []commandservice.ControlAlarmDeadLetterView `json:"data"`
+		Meta struct {
+			RequestID string `json:"requestId"`
+		} `json:"meta"`
+	}
+	if err := json.Unmarshal(listRec.Body.Bytes(), &listEnv); err != nil || len(listEnv.Data) != 1 || listEnv.Data[0].OutboxID != outbox2 || listEnv.Meta.RequestID == "" {
+		t.Fatalf("unexpected dead-letter list: err=%v body=%s", err, listRec.Body.String())
+	}
+
+	replayPath := dlqPath + "/" + outbox2 + "/replay"
+	noCSRFReplay := httptest.NewRequest(http.MethodPost, replayPath, nil)
+	fixture.authenticate(noCSRFReplay, false)
+	noCSRFReplayRec := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(noCSRFReplayRec, noCSRFReplay)
+	if noCSRFReplayRec.Code != http.StatusForbidden {
+		t.Fatalf("POST replay without CSRF status=%d want 403", noCSRFReplayRec.Code)
+	}
+
+	replayReq := httptest.NewRequest(http.MethodPost, replayPath, strings.NewReader(`{}`))
+	fixture.authenticate(replayReq, true)
+	replayReq.Header.Set("Content-Type", "application/json")
+	replayRec := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(replayRec, replayReq)
+	if replayRec.Code != http.StatusOK {
+		t.Fatalf("POST replay status=%d body=%s", replayRec.Code, replayRec.Body.String())
+	}
+	var replayResp commandservice.ControlAlarmDeadLetterReplayResponse
+	if err := json.Unmarshal(replayRec.Body.Bytes(), &replayResp); err != nil || !replayResp.Replayed || replayResp.OutboxID != outbox2 {
+		t.Fatalf("unexpected replay response: err=%v body=%s", err, replayRec.Body.String())
+	}
+}

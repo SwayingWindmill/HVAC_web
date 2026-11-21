@@ -9,6 +9,11 @@
     {"id":3,"title":"Alarm API 5xx rate","type":"timeseries","targets":[{"expr":"sum(rate(hvac_alarm_http_requests_total{status_class=\"5xx\"}[5m])) / sum(rate(hvac_alarm_http_requests_total[5m]))"}]},
     {"id":4,"title":"Alarm mutation 4xx rate","type":"timeseries","targets":[{"expr":"sum(rate(hvac_alarm_http_requests_total{method=\"POST\",status_class=\"4xx\"}[10m])) / sum(rate(hvac_alarm_http_requests_total{method=\"POST\"}[10m]))"}]},
     {"id":5,"title":"Alarm lifecycle operation rate","type":"timeseries","targets":[{"expr":"sum by (route,status_class) (rate(hvac_alarm_http_requests_total{method=\"POST\"}[5m]))"}]},
-    {"id":6,"title":"Alarm API in flight","type":"timeseries","targets":[{"expr":"max(hvac_alarm_http_in_flight)"}]}
+    {"id":6,"title":"Alarm API in flight","type":"timeseries","targets":[{"expr":"max(hvac_alarm_http_in_flight)"}]},
+    {"id":7,"title":"Alarm rule action outbox depth","type":"timeseries","targets":[{"expr":"max by (state) (hvac_alarm_action_outbox_depth)"}]},
+    {"id":8,"title":"Alarm rule action dead letters/s","type":"timeseries","targets":[{"expr":"sum by (reason_family) (rate(hvac_alarm_action_dead_letter_total[5m]))"}]},
+    {"id":9,"title":"Telemetry alarm evaluation outbox depth","type":"timeseries","targets":[{"expr":"max by (state) (hvac_alarm_evaluation_outbox_depth)"}]},
+    {"id":10,"title":"Telemetry alarm evaluation dead letters/s","type":"timeseries","targets":[{"expr":"sum by (reason_family) (rate(hvac_alarm_evaluation_dead_letter_total[5m]))"}]},
+    {"id":11,"title":"Alarm routing reloads by outcome","type":"timeseries","targets":[{"expr":"sum by (outcome) (increase(hvac_alarm_routing_reloads_total[15m]))"}]}
   ]
 }

@@ -605,6 +605,57 @@ func (f *FakePlantTwin) GetDispatchContext(_ context.Context, tenantID, siteID, 
 	return out, nil
 }
 
+func (f *FakePlantTwin) ResolveProtectionDispatchContext(
+	ctx context.Context,
+	tenantID, siteID, deviceID, pointCode string,
+	capability commandmodel.Capability,
+) (ControlDispatchContext, error) {
+	trimmedCode := strings.TrimSpace(pointCode)
+	if commandmodel.IsUUIDv7(trimmedCode) {
+		return f.GetDispatchContext(ctx, tenantID, siteID, deviceID, trimmedCode)
+	}
+	f.mu.Lock()
+	if f.DispatchErr != nil {
+		err := f.DispatchErr
+		f.mu.Unlock()
+		return ControlDispatchContext{}, err
+	}
+	model, ok := f.Models[siteID]
+	var matches []string
+	if ok {
+		for _, pt := range model.TelemetryPoints {
+			if pt.TenantID != tenantID || pt.SiteID != siteID || pt.ReportingDeviceID != deviceID {
+				continue
+			}
+			if !strings.EqualFold(pt.Status, "ACTIVE") || pt.PointType != "COMMAND" || !pt.Writable {
+				continue
+			}
+			capName, _ := pt.SourceMetadata["capability"].(string)
+			if strings.TrimSpace(capName) != string(capability) {
+				continue
+			}
+			if trimmedCode != "" && pt.PointCode != trimmedCode {
+				continue
+			}
+			matches = append(matches, pt.ID)
+		}
+	}
+	f.mu.Unlock()
+
+	if len(matches) == 0 {
+		return ControlDispatchContext{}, notFoundControlError("The requested Command Point was not found.")
+	}
+	if len(matches) > 1 {
+		return ControlDispatchContext{}, &ControlError{
+			HTTPStatus: http.StatusConflict,
+			Code:       "COMMAND_REQUEST_INVALID",
+			Title:      "Command request invalid",
+			Detail:     "Protection command target point could not be uniquely resolved.",
+		}
+	}
+	return f.GetDispatchContext(ctx, tenantID, siteID, deviceID, matches[0])
+}
+
 type FakeLiveEntry struct {
 	Obs        *commandmodel.LivePointObservation
 	EvidenceID string
