@@ -138,7 +138,8 @@
         "infra/registry/postgres/init/metric-backfill-watermarks-and-reverify.sql",
         "infra/registry/postgres/init/energy-tou-holidays-and-recalc.sql",
         "infra/registry/postgres/init/mv-bivariate-weather-anchors.sql",
-        "infra/registry/postgres/init/optimization-canary-write-rls.sql"
+        "infra/registry/postgres/init/optimization-canary-write-rls.sql",
+        "infra/registry/postgres/init/accounting-config-delete-grants.sql"
       ]
     },
     {

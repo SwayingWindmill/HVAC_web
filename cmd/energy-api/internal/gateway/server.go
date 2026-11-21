@@ -252,6 +252,10 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 			dispatchAccountingRecalcRoute(h, writer, request, recalcRoute)
 			return
 		}
+		if configRoute, matches := matchPublicAccountingConfigRoute(request.Method, request.URL.Path); matches {
+			dispatchAccountingConfigRoute(h, writer, request, configRoute)
+			return
+		}
 		if agentSessionRoute, matches := matchPublicAgentSessionRoute(request.URL.Path); matches {
 			dispatchAgentSessionRoute(h, writer, request, agentSessionRoute)
 			return
@@ -294,6 +298,10 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 
 	if agentSessionRoute, matches := matchPublicAgentSessionRoute(request.URL.Path); matches {
 		dispatchAgentSessionRoute(h, writer, request, agentSessionRoute)
+		return
+	}
+	if counterAuditRoute, matches := matchPublicCounterAuditRoute(request.Method, request.URL.Path); matches {
+		dispatchCounterAuditRoute(h, writer, request, counterAuditRoute)
 		return
 	}
 	if telemetryRoute, deviceID, matches := matchPublicTelemetryRoute(request.URL.Path); matches {
@@ -766,6 +774,14 @@ func safeLogPath(path string) string {
 			if scheduleRoute, matches := matchPublicOperatingScheduleRoute(method, path); matches {
 				return scheduleRoute.template
 			}
+		}
+		for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete} {
+			if configRoute, matches := matchPublicAccountingConfigRoute(method, path); matches {
+				return configRoute.template
+			}
+		}
+		if counterAuditRoute, matches := matchPublicCounterAuditRoute(http.MethodGet, path); matches {
+			return counterAuditRoute.template
 		}
 		if controlRoute, matches := matchPublicControlExitRoute(path); matches {
 			return controlRoute.template

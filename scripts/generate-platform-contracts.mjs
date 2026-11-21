@@ -182,6 +182,13 @@ const expectedOperations = {
   confirmSiteUtilityBill: ['post', `${site}/utility-bills/{billId}/confirm`],
   recalculateSiteAccounting: ['post', `${site}/accounting/recalculate`],
   listSiteAccountingRecalcJobs: ['get', `${site}/accounting/recalculate-jobs`],
+  listSiteCalendarHolidays: ['get', `${site}/accounting/holidays`],
+  upsertSiteCalendarHoliday: ['put', `${site}/accounting/holidays/{date}`],
+  deleteSiteCalendarHoliday: ['delete', `${site}/accounting/holidays/{date}`],
+  listSiteMeterRatioVersions: ['get', `${site}/accounting/meter-ratios`],
+  createSiteMeterRatioVersion: ['post', `${site}/accounting/meter-ratios`],
+  retireSiteMeterRatioVersion: ['post', `${site}/accounting/meter-ratios/{versionId}/retire`],
+  getSiteCounterAudit: ['get', `${site}/accounting/counter-audit`],
   listSiteDataGaps: ['get', `${site}/data-gaps`],
   getSiteControlState: ['get', `${site}/control-state`],
   updateSiteControlMode: ['put', `${site}/control-mode`],
@@ -255,6 +262,12 @@ const expectedSuccessSchemas = {
   updateSiteUtilityBill: 'UtilityBill',
   confirmSiteUtilityBill: 'UtilityBill',
   listSiteAccountingRecalcJobs: 'AccountingRecalcJobList',
+  listSiteCalendarHolidays: 'SiteCalendarHolidayList',
+  upsertSiteCalendarHoliday: 'SiteCalendarHoliday',
+  deleteSiteCalendarHoliday: 'SiteCalendarHolidayDeleteResult',
+  listSiteMeterRatioVersions: 'MeterRatioVersionList',
+  retireSiteMeterRatioVersion: 'MeterRatioVersion',
+  getSiteCounterAudit: 'CounterAuditResponse',
   listSiteDataGaps: 'SiteDataGapList',
   getSiteControlState: 'SiteControlState',
   updateSiteControlMode: 'SiteControlModeMutationResponse',
@@ -276,6 +289,7 @@ for (const [operationId, schemaName] of Object.entries(expectedSuccessSchemas)) 
   invariant(schemaRef(operations[operationId].operation, '200') === `#/components/schemas/${schemaName}`, `${operationId} success schema is unsupported`);
 }
 invariant(schemaRef(operations.recalculateSiteAccounting.operation, '202') === '#/components/schemas/AccountingRecalcJob', 'recalculateSiteAccounting accepted schema is unsupported');
+invariant(schemaRef(operations.createSiteMeterRatioVersion.operation, '201') === '#/components/schemas/MeterRatioVersion', 'createSiteMeterRatioVersion created schema is unsupported');
 invariant(schemaRef(operations.getTemplateRevision.operation, '200') === './s05-registry-writer.openapi.json#/components/schemas/TemplateRevision', 'getTemplateRevision success schema is unsupported');
 invariant(operations.logout.operation.responses?.['204'], 'logout must return 204');
 invariant(operations.logout.operation.responses?.['204']?.headers?.Location?.schema?.format === 'uri', 'logout must publish the provider end-session Location header');
@@ -335,6 +349,23 @@ const schemaRequirements = {
     'source', 'attemptCount', 'lastError', 'createdAt', 'updatedAt', 'finishedAt',
   ]],
   AccountingRecalcJobList: [['items']],
+  SiteCalendarHoliday: [['id', 'tenantId', 'siteId', 'holidayDate', 'dayType', 'label', 'revision', 'createdAt', 'updatedAt']],
+  SiteCalendarHolidayList: [['items']],
+  SiteCalendarHolidayUpsertRequest: [['dayType'], ['label', 'expectedRevision']],
+  SiteCalendarHolidayDeleteResult: [['deleted', 'siteId', 'holidayDate']],
+  MeterRatioVersion: [
+    ['id', 'tenantId', 'siteId', 'ctRatio', 'ptRatio', 'meterMultiplier', 'ratioApplicationMode', 'readingUnit', 'effectiveFrom', 'effectiveTo', 'status', 'revision', 'createdAt', 'updatedAt'],
+    ['meterId', 'meterBindingId', 'pointId', 'version', 'cloudMultiplier'],
+  ],
+  MeterRatioVersionList: [['items']],
+  MeterRatioVersionCreateRequest: [
+    ['ctRatio', 'ptRatio', 'meterMultiplier', 'ratioApplicationMode', 'readingUnit', 'effectiveFrom'],
+    ['meterId', 'meterBindingId', 'pointId', 'effectiveTo', 'reason'],
+  ],
+  MeterRatioVersionRetireRequest: [[], ['effectiveTo', 'expectedRevision', 'reason']],
+  CounterAuditSummary: [['totalSamples', 'anomalyCount', 'zeroDropCount', 'spikeCount', 'resetCount', 'rolloverCount', 'invalidDecreaseCount']],
+  CounterAuditItem: [['pointId', 'deviceId', 'telemetryKey', 'periodStart', 'periodEnd', 'rawPrevious', 'rawCurrent', 'cleanedDeltaKWh', 'transitionType', 'quality', 'qualityReasons', 'unit']],
+  CounterAuditResponse: [['siteId', 'from', 'to', 'summary', 'items', 'truncated']],
   SiteDataGap: [['alarmId', 'deviceId', 'deviceName', 'pointId', 'pointCode', 'pointName', 'since', 'affectedFigures', 'excludesDeviceFromTotal']],
   SiteDataGapList: [['items']],
   AssetControlLockState: [['siteId', 'assetId', 'lockMode', 'reason', 'updatedBy', 'updatedAt', 'revision'], ['id', 'tenantId', 'updatedByName', 'boundDeviceIds']],
@@ -569,6 +600,11 @@ const replacements = {
   __SITE_UTILITY_BILL_CONFIRM_PATH__: operations.confirmSiteUtilityBill.path,
   __SITE_ACCOUNTING_RECALCULATE_PATH__: operations.recalculateSiteAccounting.path,
   __SITE_ACCOUNTING_RECALC_JOBS_PATH__: operations.listSiteAccountingRecalcJobs.path,
+  __SITE_ACCOUNTING_HOLIDAYS_PATH__: operations.listSiteCalendarHolidays.path,
+  __SITE_ACCOUNTING_HOLIDAY_PATH__: operations.upsertSiteCalendarHoliday.path,
+  __SITE_ACCOUNTING_METER_RATIOS_PATH__: operations.listSiteMeterRatioVersions.path,
+  __SITE_ACCOUNTING_METER_RATIO_RETIRE_PATH__: operations.retireSiteMeterRatioVersion.path,
+  __SITE_ACCOUNTING_COUNTER_AUDIT_PATH__: operations.getSiteCounterAudit.path,
   __SITE_DATA_GAPS_PATH__: operations.listSiteDataGaps.path,
   __SITE_CONTROL_STATE_PATH__: operations.getSiteControlState.path,
   __SITE_CONTROL_MODE_PATH__: operations.updateSiteControlMode.path,

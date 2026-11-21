@@ -41,6 +41,7 @@ import {
   siteUtilityBillsQuery,
   type AccountingRecalcJob,
 } from '../query';
+import { AccountingConfigTab } from './AccountingConfigTab';
 import { BillReconciliationSheet } from './BillReconciliationSheet';
 import { BudgetEditorDialog } from './BudgetEditorDialog';
 import { BudgetOverviewTab } from './BudgetOverviewTab';
@@ -149,7 +150,12 @@ export function BillingWorkspace() {
   const canRecalculateAccounting =
     capabilities.includes('billing.manage') || capabilities.includes('savings.manage');
 
-  const activeView = search.view === 'bills' ? 'bills' : 'overview';
+  const activeView =
+    search.view === 'bills'
+      ? 'bills'
+      : search.view === 'config'
+        ? 'config'
+        : 'overview';
   const defaultMonth = useMemo(
     () => currentSiteBillingMonth(now, site.timezone),
     [now, site.timezone],
@@ -387,7 +393,7 @@ export function BillingWorkspace() {
           void navigate({
             search: (prev) => ({
               ...prev,
-              view: value === 'bills' ? 'bills' : undefined,
+              view: value === 'bills' ? 'bills' : value === 'config' ? 'config' : undefined,
             }),
           });
         }}
@@ -396,6 +402,7 @@ export function BillingWorkspace() {
         <TabsList>
           <TabsTrigger value="overview">预算进度</TabsTrigger>
           <TabsTrigger value="bills">结算电费单核对</TabsTrigger>
+          <TabsTrigger value="config">计量与日历配置</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="mt-0">
@@ -460,6 +467,16 @@ export function BillingWorkspace() {
               setEditingBill(null);
               setBillDialogOpen(true);
             }}
+          />
+        </TabsContent>
+
+        <TabsContent value="config" className="mt-0">
+          <AccountingConfigTab
+            siteId={site.id}
+            timezone={site.timezone}
+            csrfToken={principal.session.csrfToken}
+            canManageBilling={canManageBilling}
+            now={now}
           />
         </TabsContent>
       </Tabs>
