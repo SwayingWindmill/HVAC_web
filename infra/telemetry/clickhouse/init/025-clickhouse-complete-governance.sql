@@ -5,8 +5,6 @@
 -- 3) Add metric_binding_id_bf bloom filter, revoke ALTER DELETE from metric engine writers,
 --    grant retention cleanup on analytics.metric_result_facts, and enforce 1825-day part-drop TTLs.
 
-DROP VIEW IF EXISTS telemetry_history.observations_to_numeric_gauge_1min;
-DROP VIEW IF EXISTS telemetry_history.observations_to_numeric_gauge_15min;
 DROP TABLE IF EXISTS telemetry_history.observations_v2;
 
 CREATE TABLE telemetry_history.observations_v2 (
@@ -125,8 +123,18 @@ SELECT
   payload_sha256,
   projected_at,
   history_sequence
-FROM telemetry_history.observations;
+FROM telemetry_history.observations
+SETTINGS
+  max_threads = 1,
+  max_insert_threads = 1,
+  max_block_size = 8192,
+  max_insert_block_size = 32768,
+  min_insert_block_size_rows = 32768,
+  min_insert_block_size_bytes = 33554432,
+  max_bytes_before_external_sort = 134217728;
 
+DROP VIEW IF EXISTS telemetry_history.observations_to_numeric_gauge_1min;
+DROP VIEW IF EXISTS telemetry_history.observations_to_numeric_gauge_15min;
 EXCHANGE TABLES telemetry_history.observations AND telemetry_history.observations_v2;
 DROP TABLE IF EXISTS telemetry_history.observations_v2;
 
