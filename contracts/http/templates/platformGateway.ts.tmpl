@@ -345,7 +345,10 @@ export const alarmPaths = {
   unsuppress: '__ALARM_UNSUPPRESS_PATH__',
   evaluations: '__ALARM_EVALUATIONS_PATH__',
   rules: '__ALARM_RULES_PATH__',
+  rulesDiff: '__ALARM_RULES_DIFF_PATH__',
   simulate: '__ALARM_RULES_SIMULATE_PATH__',
+  ruleRevisions: '__ALARM_RULES_REVISIONS_PATH__',
+  ruleRollback: '__ALARM_RULES_ROLLBACK_PATH__',
   ruleDeadLetters: '__ALARM_RULES_DEAD_LETTERS_PATH__',
   ruleDeadLetterReplay: '__ALARM_RULES_DEAD_LETTER_REPLAY_PATH__',
   siteRouting: '__SITE_ALARM_ROUTING_PATH__',
@@ -758,6 +761,8 @@ export const simulatedActionSchema = z.object({
 export const alarmRuleSchema = z.object({
   ruleId: uuidV7Schema,
   title: z.string().min(1).max(256),
+  alarmType: z.string().min(1).max(128).optional(),
+  summary: z.string().min(1).max(2048).optional(),
   severity: z.enum(['INFO', 'WARNING', 'MINOR', 'MAJOR', 'CRITICAL']),
   ruleKind: z.enum(['THRESHOLD', 'SLOPE', 'EXPRESSION']).optional(),
   templateKey: z.string().min(1).max(128).optional(),
@@ -766,16 +771,165 @@ export const alarmRuleSchema = z.object({
   hopDepth: z.number().int().min(0).max(3).optional(),
   dependencyGate: z.enum(['NONE', 'ALL_ACTIVE', 'ANY_ACTIVE']).optional(),
   actions: z.array(alarmRuleActionSchema).max(4).optional(),
+  qualityPolicy: z.enum(['VALID_ONLY', 'USABLE']).optional(),
+  freshnessSeconds: z.number().int().positive().optional(),
   triggerMode: z.enum(['SIMPLE', 'DURATION', 'REPEATING']),
   durationSeconds: z.number().int().positive().optional(),
   repeatCount: z.number().int().positive().optional(),
   raise: alarmRuleConditionSchema,
   clear: alarmRuleConditionSchema,
 }).strict();
+export const alarmRuleDraftSchema = z.object({
+  ruleId: uuidV7Schema.optional(),
+  title: z.string().min(1).max(256),
+  alarmType: z.string().min(1).max(128).optional(),
+  summary: z.string().min(1).max(2048).optional(),
+  severity: z.enum(['INFO', 'WARNING', 'MINOR', 'MAJOR', 'CRITICAL']),
+  ruleKind: z.enum(['THRESHOLD', 'SLOPE', 'EXPRESSION']).optional(),
+  templateKey: z.string().min(1).max(128).optional(),
+  overriddenFields: z.array(z.string().min(1).max(128)).max(32).optional(),
+  dependsOnRuleIds: z.array(uuidV7Schema).max(16).optional(),
+  dependencyGate: z.enum(['NONE', 'ALL_ACTIVE', 'ANY_ACTIVE']).optional(),
+  actions: z.array(alarmRuleActionSchema).max(4).optional(),
+  qualityPolicy: z.enum(['VALID_ONLY', 'USABLE']).optional(),
+  freshnessSeconds: z.number().int().positive().optional(),
+  triggerMode: z.enum(['SIMPLE', 'DURATION', 'REPEATING']),
+  durationSeconds: z.number().int().nonnegative().optional(),
+  repeatCount: z.number().int().nonnegative().optional(),
+  raise: alarmRuleConditionSchema,
+  clear: alarmRuleConditionSchema,
+}).strict();
 export const alarmRuleListSchema = z.object({
   data: z.array(alarmRuleSchema),
+  meta: z.object({
+    requestId: z.string(),
+    bundleRevision: z.number().int().positive().optional(),
+    bundleDigest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  }).strict(),
+}).strict();
+export const alarmRuleValidationIssueSchema = z.object({
+  ruleId: z.string().optional(),
+  field: z.string().optional(),
+  code: z.string(),
+  message: z.string(),
+}).strict();
+export const alarmRuleSyncSummarySchema = z.object({
+  added: z.number().int().nonnegative(),
+  changed: z.number().int().nonnegative(),
+  unchanged: z.number().int().nonnegative(),
+  retired: z.number().int().nonnegative(),
+  addedRuleIds: z.array(uuidV7Schema),
+  changedRuleIds: z.array(uuidV7Schema),
+  unchangedRuleIds: z.array(uuidV7Schema),
+  retiredRuleIds: z.array(uuidV7Schema),
+}).strict();
+export const alarmRuleChangeEntrySchema = z.object({
+  ruleId: uuidV7Schema,
+  title: z.string(),
+  change: z.enum(['ADDED', 'CHANGED', 'UNCHANGED', 'RETIRED']),
+  changedFields: z.array(z.string()),
+  willClearActiveAlarm: z.boolean().optional(),
+  before: alarmRuleSchema.optional(),
+  after: alarmRuleSchema.optional(),
+}).strict();
+export const alarmRuleGraphNodeSchema = z.object({
+  ruleId: uuidV7Schema,
+  title: z.string(),
+  severity: z.enum(['INFO', 'WARNING', 'MINOR', 'MAJOR', 'CRITICAL']),
+  ruleKind: z.enum(['THRESHOLD', 'SLOPE', 'EXPRESSION']).optional(),
+  hopDepth: z.number().int().min(0).max(3),
+  dependsOnRuleIds: z.array(uuidV7Schema),
+  actionCount: z.number().int().nonnegative(),
+  change: z.enum(['ADDED', 'CHANGED', 'UNCHANGED', 'RETIRED']).optional(),
+}).strict();
+export const alarmRuleGraphEdgeSchema = z.object({
+  fromRuleId: uuidV7Schema,
+  toRuleId: uuidV7Schema,
+}).strict();
+export const alarmRuleGraphSchema = z.object({
+  nodes: z.array(alarmRuleGraphNodeSchema),
+  edges: z.array(alarmRuleGraphEdgeSchema),
+  topologicalOrder: z.array(uuidV7Schema),
+  maxHopDepth: z.number().int().min(0).max(3),
+}).strict();
+export const alarmRuleDiffRequestSchema = z.object({
+  rules: z.array(alarmRuleDraftSchema).max(256),
+}).strict();
+export const alarmRuleDiffResultSchema = z.object({
+  valid: z.boolean(),
+  currentRevision: z.number().int().nonnegative(),
+  currentDigest: z.string(),
+  nextDigest: z.string(),
+  summary: alarmRuleSyncSummarySchema,
+  changes: z.array(alarmRuleChangeEntrySchema),
+  graph: alarmRuleGraphSchema,
+  issues: z.array(alarmRuleValidationIssueSchema),
+}).strict();
+export const alarmRuleDiffEnvelopeSchema = z.object({
+  data: alarmRuleDiffResultSchema,
   meta: z.object({ requestId: z.string() }).strict(),
 }).strict();
+export const alarmRulePublishRequestSchema = z.object({
+  expectedRevision: z.number().int().nonnegative(),
+  changeNote: z.string().max(500).optional(),
+  rules: z.array(alarmRuleDraftSchema).max(256),
+}).strict();
+export const alarmRulePublishResultSchema = z.object({
+  bundleRevision: z.number().int().positive(),
+  bundleDigest: z.string().regex(/^[a-f0-9]{64}$/),
+  source: z.enum(['WEB_WORKBENCH', 'CLI_SYNC', 'ROLLBACK']),
+  changed: z.boolean(),
+  rolledBackFromRevision: z.number().int().positive().optional(),
+  changeNote: z.string().optional(),
+  publishedAt: z.string(),
+  publishedBy: z.string(),
+  publishedByName: z.string().optional(),
+  summary: alarmRuleSyncSummarySchema,
+  graph: alarmRuleGraphSchema,
+  items: z.array(alarmRuleSchema),
+}).strict();
+export const alarmRulePublishEnvelopeSchema = z.object({
+  data: alarmRulePublishResultSchema,
+  meta: z.object({ requestId: z.string() }).strict(),
+}).strict();
+export const alarmRuleBundleRevisionSchema = z.object({
+  bundleRevision: z.number().int().positive(),
+  bundleDigest: z.string().regex(/^[a-f0-9]{64}$/),
+  changeNote: z.string().optional(),
+  source: z.enum(['WEB_WORKBENCH', 'CLI_SYNC', 'ROLLBACK']),
+  rolledBackFromRevision: z.number().int().positive().optional(),
+  summary: alarmRuleSyncSummarySchema,
+  ruleCount: z.number().int().nonnegative(),
+  publishedAt: z.string(),
+  publishedBy: z.string(),
+  publishedByName: z.string().optional(),
+}).strict();
+export const alarmRuleRevisionListSchema = z.object({
+  currentRevision: z.number().int().nonnegative(),
+  items: z.array(alarmRuleBundleRevisionSchema),
+}).strict();
+export const alarmRuleRevisionListEnvelopeSchema = z.object({
+  data: alarmRuleRevisionListSchema,
+  meta: z.object({ requestId: z.string() }).strict(),
+}).strict();
+export const alarmRuleRollbackRequestSchema = z.object({
+  expectedRevision: z.number().int().nonnegative(),
+  changeNote: z.string().max(500).optional(),
+}).strict();
+export type AlarmRuleDraft = z.infer<typeof alarmRuleDraftSchema>;
+export type AlarmRuleValidationIssue = z.infer<typeof alarmRuleValidationIssueSchema>;
+export type AlarmRuleSyncSummary = z.infer<typeof alarmRuleSyncSummarySchema>;
+export type AlarmRuleChangeEntry = z.infer<typeof alarmRuleChangeEntrySchema>;
+export type AlarmRuleGraphNode = z.infer<typeof alarmRuleGraphNodeSchema>;
+export type AlarmRuleGraphEdge = z.infer<typeof alarmRuleGraphEdgeSchema>;
+export type AlarmRuleGraph = z.infer<typeof alarmRuleGraphSchema>;
+export type AlarmRuleDiffRequest = z.infer<typeof alarmRuleDiffRequestSchema>;
+export type AlarmRuleDiffResult = z.infer<typeof alarmRuleDiffResultSchema>;
+export type AlarmRulePublishRequest = z.infer<typeof alarmRulePublishRequestSchema>;
+export type AlarmRulePublishResult = z.infer<typeof alarmRulePublishResultSchema>;
+export type AlarmRuleBundleRevision = z.infer<typeof alarmRuleBundleRevisionSchema>;
+export type AlarmRuleRevisionList = z.infer<typeof alarmRuleRevisionListSchema>;
+export type AlarmRuleRollbackRequest = z.infer<typeof alarmRuleRollbackRequestSchema>;
 export type AlarmRuleAction = z.infer<typeof alarmRuleActionSchema>;
 export type SimulatedAction = z.infer<typeof simulatedActionSchema>;
 export type AlarmRule = z.infer<typeof alarmRuleSchema>;
@@ -794,6 +948,7 @@ export const alarmRuleSimulationStepInputSchema = z.object({
 }).strict();
 export const alarmRuleSimulationRequestSchema = z.object({
   ruleId: uuidV7Schema,
+  ruleDraft: alarmRuleDraftSchema.optional(),
   dependencyGate: z.enum(['NONE', 'ALL_ACTIVE', 'ANY_ACTIVE']).optional(),
   actions: z.array(alarmRuleActionSchema).max(4).optional(),
   steps: z.array(alarmRuleSimulationStepInputSchema).min(1).max(32),
@@ -2494,6 +2649,44 @@ export function createPlatformGatewayClient(baseUrl = '') {
     listSiteAlarmRules: (siteId: string, init?: RequestInit) => request(
       `__ALARM_RULES_PATH__?${new URLSearchParams({ siteId }).toString()}`, alarmRuleListSchema, { ...init, method: 'GET' },
     ),
+    diffSiteAlarmRules: (siteId: string, body: AlarmRuleDiffRequest, csrfToken: string, init?: RequestInit) => request(
+      `__ALARM_RULES_DIFF_PATH__?${new URLSearchParams({ siteId }).toString()}`,
+      alarmRuleDiffEnvelopeSchema,
+      {
+        ...init,
+        method: 'POST',
+        body: JSON.stringify(alarmRuleDiffRequestSchema.parse(body)),
+        headers: { ...Object.fromEntries(new Headers(init?.headers)), 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+      },
+    ),
+    publishSiteAlarmRules: (siteId: string, body: AlarmRulePublishRequest, csrfToken: string, init?: RequestInit) => request(
+      `__ALARM_RULES_PATH__?${new URLSearchParams({ siteId }).toString()}`,
+      alarmRulePublishEnvelopeSchema,
+      {
+        ...init,
+        method: 'PUT',
+        body: JSON.stringify(alarmRulePublishRequestSchema.parse(body)),
+        headers: { ...Object.fromEntries(new Headers(init?.headers)), 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+      },
+    ),
+    listSiteAlarmRuleRevisions: (siteId: string, limit?: number, init?: RequestInit) => {
+      const query = new URLSearchParams({ siteId });
+      if (limit !== undefined) query.set('limit', String(limit));
+      return request(`__ALARM_RULES_REVISIONS_PATH__?${query.toString()}`, alarmRuleRevisionListEnvelopeSchema, { ...init, method: 'GET' });
+    },
+    rollbackSiteAlarmRules: (siteId: string, revision: number, body: AlarmRuleRollbackRequest, csrfToken: string, init?: RequestInit) => {
+      const path = '__ALARM_RULES_ROLLBACK_PATH__'.replace('{revision}', encodeURIComponent(String(revision)));
+      return request(
+        `${path}?${new URLSearchParams({ siteId }).toString()}`,
+        alarmRulePublishEnvelopeSchema,
+        {
+          ...init,
+          method: 'POST',
+          body: JSON.stringify(alarmRuleRollbackRequestSchema.parse(body)),
+          headers: { ...Object.fromEntries(new Headers(init?.headers)), 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+        },
+      );
+    },
     simulateSiteAlarmRule: (siteId: string, body: AlarmRuleSimulationRequest, csrfToken: string, init?: RequestInit) => request(
       `__ALARM_RULES_SIMULATE_PATH__?${new URLSearchParams({ siteId }).toString()}`,
       alarmRuleSimulationEnvelopeSchema,

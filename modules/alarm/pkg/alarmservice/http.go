@@ -13,6 +13,7 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
 const (
@@ -28,6 +29,7 @@ const (
 	AlarmUnassignAction             = "alarm:unassign"
 	AlarmSuppressAction             = "alarm:suppress"
 	AlarmUnsuppressAction           = "alarm:unsuppress"
+	AlarmRulePublishAction          = "alarm:rules:publish"
 	AlarmRuleDeadLetterReplayAction = "alarm:rule-action:replay"
 	DefaultGatewaySPIFFEID          = "spiffe://hvac.local/platform-gateway"
 	DefaultAudience                 = "alarm-service"
@@ -39,7 +41,9 @@ var idempotencyKeyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{7,12
 type HTTPConfig struct {
 	Store            Store
 	Rules            SiteRuleReader
+	Authoring        SiteRuleAuthoringStore
 	DeadLetters      RuleActionDeadLetterStore
+	Metrics          *observability.Registry
 	GatewayPublicKey crypto.PublicKey
 	Now              func() time.Time
 	GatewaySPIFFEID  string
@@ -50,7 +54,9 @@ type HTTPConfig struct {
 type httpHandler struct {
 	store            Store
 	rules            SiteRuleReader
+	authoring        SiteRuleAuthoringStore
 	deadLetters      RuleActionDeadLetterStore
+	metrics          *observability.Registry
 	gatewayPublicKey crypto.PublicKey
 	now              func() time.Time
 	gatewaySPIFFEID  string
@@ -109,8 +115,17 @@ func NewHTTPHandler(config HTTPConfig) (http.Handler, error) {
 			deadLetters = rulesDL
 		}
 	}
+	authoring := config.Authoring
+	if authoring == nil {
+		if storeAuthoring, ok := config.Store.(SiteRuleAuthoringStore); ok {
+			authoring = storeAuthoring
+		} else if rulesAuthoring, ok := config.Rules.(SiteRuleAuthoringStore); ok {
+			authoring = rulesAuthoring
+		}
+	}
 	return &httpHandler{
-		store: config.Store, rules: config.Rules, deadLetters: deadLetters, gatewayPublicKey: config.GatewayPublicKey, now: config.Now,
+		store: config.Store, rules: config.Rules, authoring: authoring, deadLetters: deadLetters, metrics: config.Metrics,
+		gatewayPublicKey: config.GatewayPublicKey, now: config.Now,
 		gatewaySPIFFEID: config.GatewaySPIFFEID, audience: config.Audience, maxListLimit: config.MaxListLimit,
 	}, nil
 }
@@ -148,9 +163,56 @@ func (handler *httpHandler) ServeHTTP(writer http.ResponseWriter, request *http.
 		return
 	}
 	if siteID, matches := matchSiteRuleSubpath(request.URL.Path, "alarm-rules"); matches {
-		if claims, ok := handler.authorizeSiteRuleRoute(writer, request, siteID, http.MethodGet, "Site rules only support GET.", "The Site rules are outside the authorized read scope."); ok {
-			handler.siteRules(writer, request.WithContext(identitycontext.WithTenantID(request.Context(), claims.TenantID)), claims.TenantID, siteID)
+		switch request.Method {
+		case http.MethodGet:
+			if claims, ok := handler.authorizeSiteRuleRoute(writer, request, siteID, http.MethodGet, "Site rules only support GET or PUT.", "The Site rules are outside the authorized read scope."); ok {
+				handler.siteRules(writer, request.WithContext(identitycontext.WithTenantID(request.Context(), claims.TenantID)), claims.TenantID, siteID)
+			}
+		case http.MethodPut:
+			if !alarmmodel.IsUUIDv7(siteID) {
+				handler.writeProblem(writer, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The Alarm resource is not visible.", false)
+				return
+			}
+			claims, authorized := handler.authorize(request, AlarmWriteContextHeader, AlarmRulePublishAction, []string{"site:" + siteID})
+			if !authorized {
+				handler.writeProblem(writer, http.StatusForbidden, "ALARM_ACCESS_DENIED", "Alarm access denied", "The Site rule publish request is outside the authorized write scope.", false)
+				return
+			}
+			handler.publishSiteRules(writer, request.WithContext(identitycontext.WithTenantID(request.Context(), claims.TenantID)), claims.TenantID, siteID, claims)
+		default:
+			writer.Header().Set("Allow", "GET, PUT")
+			handler.writeProblem(writer, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", "Site rules only support GET or PUT.", false)
 		}
+		return
+	}
+	if siteID, matches := matchSiteRuleSubpath(request.URL.Path, "alarm-rules:diff"); matches {
+		if claims, ok := handler.authorizeSiteRuleRoute(writer, request, siteID, http.MethodPost, "Site rule diff only supports POST.", "The Site rule diff is outside the authorized read scope."); ok {
+			handler.diffSiteRules(writer, request.WithContext(identitycontext.WithTenantID(request.Context(), claims.TenantID)), claims.TenantID, siteID)
+		}
+		return
+	}
+	if siteID, matches := matchSiteRuleRevisionsPath(request.URL.Path); matches {
+		if claims, ok := handler.authorizeSiteRuleRoute(writer, request, siteID, http.MethodGet, "Site rule revisions only support GET.", "The Site rule revisions are outside the authorized read scope."); ok {
+			handler.listSiteRuleRevisions(writer, request.WithContext(identitycontext.WithTenantID(request.Context(), claims.TenantID)), claims.TenantID, siteID)
+		}
+		return
+	}
+	if siteID, revText, matches := matchSiteRuleRevisionRollbackPath(request.URL.Path); matches {
+		if request.Method != http.MethodPost {
+			writer.Header().Set("Allow", http.MethodPost)
+			handler.writeProblem(writer, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", "Site rule rollback only supports POST.", false)
+			return
+		}
+		if !alarmmodel.IsUUIDv7(siteID) {
+			handler.writeProblem(writer, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The Alarm resource is not visible.", false)
+			return
+		}
+		claims, authorized := handler.authorize(request, AlarmWriteContextHeader, AlarmRulePublishAction, []string{"site:" + siteID})
+		if !authorized {
+			handler.writeProblem(writer, http.StatusForbidden, "ALARM_ACCESS_DENIED", "Alarm access denied", "The Site rule rollback request is outside the authorized write scope.", false)
+			return
+		}
+		handler.rollbackSiteRules(writer, request.WithContext(identitycontext.WithTenantID(request.Context(), claims.TenantID)), claims.TenantID, siteID, revText, claims)
 		return
 	}
 	if siteID, matches := matchSiteRuleSubpath(request.URL.Path, "alarm-rules:simulate"); matches {

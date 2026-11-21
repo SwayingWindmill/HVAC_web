@@ -28,6 +28,7 @@ services:
       - ../../modules/alarm/migrations/alarm-suppression-notification-events.sql:/docker-entrypoint-initdb.d/018_alarm_suppression_notification_events.sql:ro
       - ../../modules/alarm/migrations/alarm-evaluation-slope-window.sql:/docker-entrypoint-initdb.d/019_alarm_evaluation_slope_window.sql:ro
       - ../../modules/alarm/migrations/alarm-rule-action-outbox.sql:/docker-entrypoint-initdb.d/020_alarm_rule_action_outbox.sql:ro
+      - ../../modules/alarm/migrations/alarm-site-rule-bundles.sql:/docker-entrypoint-initdb.d/021_alarm_site_rule_bundles.sql:ro
       - ../../modules/alarm/testdata/postgres/010_seed.sql:/docker-entrypoint-initdb.d/010_seed.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d hvac_s4"]

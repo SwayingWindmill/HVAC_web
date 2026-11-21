@@ -3,31 +3,88 @@ import {
   createPlatformGatewayClient,
   PlatformApiError,
   type AlarmRule,
+  type AlarmRuleBundleRevision,
+  type AlarmRuleChangeEntry,
   type AlarmRuleCondition,
+  type AlarmRuleDiffResult,
+  type AlarmRuleDraft,
+  type AlarmRuleGraph,
+  type AlarmRuleGraphEdge,
+  type AlarmRuleGraphNode,
+  type AlarmRulePublishRequest,
+  type AlarmRulePublishResult,
   type AlarmRuleReading,
+  type AlarmRuleRevisionList,
+  type AlarmRuleRollbackRequest,
   type AlarmRuleSimulationRequest,
   type AlarmRuleSimulationResult,
   type AlarmRuleSimulationStep,
+  type AlarmRuleSyncSummary,
+  type AlarmRuleValidationIssue,
 } from '@/api/generated/platformGateway.gen';
 import { formatTelemetryDisplayValue, formatTelemetryUnit } from '@/domain/centralPlantTelemetry';
 
 const client = createPlatformGatewayClient();
 
+export type AlarmRuleSeverity = AlarmRule['severity'];
+
 export type {
   AlarmRule,
+  AlarmRuleBundleRevision,
+  AlarmRuleChangeEntry,
   AlarmRuleCondition,
+  AlarmRuleDiffResult,
+  AlarmRuleDraft,
+  AlarmRuleGraph,
+  AlarmRuleGraphEdge,
+  AlarmRuleGraphNode,
+  AlarmRulePublishRequest,
+  AlarmRulePublishResult,
   AlarmRuleReading,
+  AlarmRuleRevisionList,
+  AlarmRuleRollbackRequest,
   AlarmRuleSimulationRequest,
   AlarmRuleSimulationResult,
   AlarmRuleSimulationStep,
+  AlarmRuleSyncSummary,
+  AlarmRuleValidationIssue,
 };
 
-/** The rules the Site evaluates now. They change only when someone publishes the rules file. */
+/** The rules the Site evaluates now. */
 export function siteAlarmRulesQuery(siteId: string) {
   return queryOptions({
     queryKey: ['alarms', siteId, 'rules'] as const,
     queryFn: async ({ signal }) => (await client.listSiteAlarmRules(siteId, { signal })).data.data,
-    staleTime: 5 * 60_000,
+    staleTime: 60_000,
+  });
+}
+
+export interface SiteAlarmRulesBundleSnapshot {
+  readonly items: readonly AlarmRule[];
+  readonly bundleRevision: number;
+  readonly bundleDigest?: string;
+}
+
+export function siteAlarmRulesBundleQuery(siteId: string) {
+  return queryOptions({
+    queryKey: ['alarms', siteId, 'rules', 'bundle'] as const,
+    queryFn: async ({ signal }): Promise<SiteAlarmRulesBundleSnapshot> => {
+      const response = (await client.listSiteAlarmRules(siteId, { signal })).data;
+      return {
+        items: response.data,
+        bundleRevision: response.meta.bundleRevision ?? 0,
+        bundleDigest: response.meta.bundleDigest,
+      };
+    },
+    staleTime: 60_000,
+  });
+}
+
+export function siteAlarmRuleRevisionsQuery(siteId: string, limit = 30) {
+  return queryOptions({
+    queryKey: ['alarms', siteId, 'rule-revisions', limit] as const,
+    queryFn: async ({ signal }) => (await client.listSiteAlarmRuleRevisions(siteId, limit, { signal })).data.data,
+    staleTime: 30_000,
   });
 }
 
@@ -352,7 +409,47 @@ const SIMULATION_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   FORBIDDEN: '你没有执行规则模拟试算的权限',
   RESOURCE_NOT_FOUND: '未找到对应的站内规则，请刷新规则列表',
   RULE_GRAPH_INVALID: '规则因果依赖图校验未通过，无法试算',
+  ALARM_RULE_GRAPH_INVALID: '规则因果依赖图校验未通过，无法试算',
+  ALARM_RULE_DRAFT_INVALID: '规则草稿条件不合法，请修正后再试算',
 };
+
+const AUTHORING_ERROR_MESSAGES: Readonly<Record<string, string>> = {
+  ORIGIN_NOT_ALLOWED: '页面来源校验未通过，请刷新页面后重试',
+  CSRF_TOKEN_INVALID: '会话安全凭证失效，请刷新页面后重试',
+  CSRF_REQUIRED: '缺少会话安全凭证，请刷新页面后重试',
+  CSRF_INVALID: '会话安全凭证无效，请刷新页面后重试',
+  ALARM_ACCESS_DENIED: '你没有变更站点告警规则的权限',
+  FORBIDDEN: '你没有变更站点告警规则的权限，请联系站点管理员授权',
+  ALARM_RULE_BUNDLE_CONFLICT: '站点规则版本已在后台或他人会话中更新，请重新加载最新版本后再发布',
+  ALARM_RULE_GRAPH_INVALID: '联动依赖图存在环路、缺失上游或链路深度超限（最多 3 跳）',
+  ALARM_RULE_DRAFT_INVALID: '规则草稿参数不符合校验规范，请检查后重试',
+  RESOURCE_NOT_FOUND: '未找到指定的历史规则版本，请刷新版本历史后重试',
+};
+
+export { formatRuleValidationIssue } from './alarm-rule-dag';
+
+export class SiteRuleAuthoringError extends Error {
+  readonly status: number;
+  readonly code: string;
+
+  constructor(status: number, code: string, message: string) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
+
+function toAuthoringError(error: unknown, fallback: string): Error {
+  if (error instanceof PlatformApiError) {
+    const code = error.problem.code ?? '';
+    const detail = error.problem.detail ?? '';
+    const message = code in AUTHORING_ERROR_MESSAGES
+      ? AUTHORING_ERROR_MESSAGES[code]
+      : (/[\u4e00-\u9fff]/.test(detail) ? detail : fallback);
+    return new SiteRuleAuthoringError(error.problem.status, code, message);
+  }
+  return new Error(fallback);
+}
 
 export async function simulateSiteAlarmRule(
   siteId: string,
@@ -376,6 +473,77 @@ export async function simulateSiteAlarmRule(
     throw error instanceof Error ? error : new Error('模拟试算未能完成，请稍后重试');
   }
 }
+
+export async function diffSiteAlarmRules(
+  siteId: string,
+  rules: readonly AlarmRuleDraft[],
+  csrfToken: string,
+): Promise<AlarmRuleDiffResult> {
+  try {
+    const response = await client.diffSiteAlarmRules(siteId, { rules: [...rules] }, csrfToken);
+    return response.data.data;
+  } catch (error) {
+    throw toAuthoringError(error, '规则变更差异预检失败，请稍后重试');
+  }
+}
+
+export async function publishSiteAlarmRules(
+  siteId: string,
+  body: AlarmRulePublishRequest,
+  csrfToken: string,
+): Promise<AlarmRulePublishResult> {
+  try {
+    const response = await client.publishSiteAlarmRules(siteId, body, csrfToken);
+    return response.data.data;
+  } catch (error) {
+    throw toAuthoringError(error, '热发布站点告警规则失败，请稍后重试');
+  }
+}
+
+export async function rollbackSiteAlarmRules(
+  siteId: string,
+  revision: number,
+  body: AlarmRuleRollbackRequest,
+  csrfToken: string,
+): Promise<AlarmRulePublishResult> {
+  try {
+    const response = await client.rollbackSiteAlarmRules(siteId, revision, body, csrfToken);
+    return response.data.data;
+  } catch (error) {
+    throw toAuthoringError(error, '回滚历史规则版本失败，请稍后重试');
+  }
+}
+
+export const BUNDLE_SOURCE_LABELS: Readonly<Record<AlarmRuleBundleRevision['source'], string>> = {
+  WEB_WORKBENCH: '工作台热发布',
+  CLI_SYNC: '规则文件同步',
+  ROLLBACK: '历史版本回滚',
+};
+
+export const RULE_CHANGE_LABELS: Readonly<Record<AlarmRuleChangeEntry['change'], string>> = {
+  ADDED: '新增',
+  CHANGED: '修改',
+  RETIRED: '停用',
+  UNCHANGED: '未变化',
+};
+
+export const CHANGED_FIELD_LABELS: Readonly<Record<string, string>> = {
+  title: '规则名称',
+  severity: '严重级别',
+  ruleKind: '规则类型',
+  triggerMode: '触发方式',
+  durationSeconds: '持续时长',
+  repeatCount: '连续次数',
+  raise: '报警条件',
+  clear: '恢复条件',
+  dependsOnRuleIds: '前置依赖规则',
+  dependencyGate: '联动门控条件',
+  actions: '自动联动动作',
+  qualityPolicy: '数据质量门控',
+  freshnessSeconds: '有效时长阈值',
+  summary: '规则说明',
+  alarmType: '告警类型标识',
+};
 
 /** Every device a rule reads, by name in the order it first reads them; past LISTED they are counted. */
 export function describeDevices(rule: AlarmRule, names: ReadingNames): string {

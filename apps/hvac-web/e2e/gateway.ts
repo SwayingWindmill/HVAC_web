@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import type { Page, Request, Route } from '@playwright/test';
 import { AssistantOwner } from './assistant-owner';
@@ -256,6 +257,102 @@ function replayForecast(forecast: Json, now: string): Json {
   };
 }
 
+const INITIAL_ALARM_RULES = fixture<Json[]>('alarm-rules.json');
+
+function digestAlarmRules(rules: readonly Json[]): string {
+  return createHash('sha256').update(JSON.stringify(rules)).digest('hex');
+}
+
+function buildRuleDiffFields(before: Json, after: Json): string[] {
+  const fields = [
+    'title', 'alarmType', 'summary', 'severity', 'ruleKind', 'dependsOnRuleIds',
+    'dependencyGate', 'actions', 'qualityPolicy', 'freshnessSeconds', 'triggerMode',
+    'durationSeconds', 'repeatCount', 'raise', 'clear',
+  ];
+  return fields.filter((field) => JSON.stringify(before[field] ?? null) !== JSON.stringify(after[field] ?? null));
+}
+
+function compileRuleHopDepths(rules: readonly Json[]): {
+  readonly compiled: Json[];
+  readonly graph: Json;
+  readonly issues: Json[];
+} {
+  const byId = new Map(rules.map((r) => [String(r.ruleId), r]));
+  const depthMemo = new Map<string, number>();
+  const visiting = new Set<string>();
+  const cycleIds = new Set<string>();
+  const depthOf = (id: string): number => {
+    if (depthMemo.has(id)) return depthMemo.get(id)!;
+    if (visiting.has(id)) {
+      cycleIds.add(id);
+      return 0;
+    }
+    visiting.add(id);
+    const rule = byId.get(id);
+    const deps: string[] = Array.isArray(rule?.dependsOnRuleIds) ? rule.dependsOnRuleIds : [];
+    let maxDep = -1;
+    for (const dep of deps) {
+      if (byId.has(dep)) maxDep = Math.max(maxDep, depthOf(dep));
+    }
+    visiting.delete(id);
+    const depth = maxDep >= 0 ? maxDep + 1 : 0;
+    depthMemo.set(id, depth);
+    return depth;
+  };
+  const issues: Json[] = [];
+  for (const r of rules) {
+    const id = String(r.ruleId);
+    const deps: string[] = Array.isArray(r.dependsOnRuleIds) ? r.dependsOnRuleIds : [];
+    const gate = typeof r.dependencyGate === 'string' ? r.dependencyGate : '';
+    if (deps.length === 0 && (gate === 'ALL_ACTIVE' || gate === 'ANY_ACTIVE')) {
+      issues.push({ ruleId: id, field: 'dependencyGate', code: 'INVALID_DEPENDENCY_GATE', message: 'dependencyGate requires non-empty dependsOnRuleIds' });
+    }
+    for (const dep of deps) {
+      if (dep === id || !byId.has(dep)) {
+        issues.push({ ruleId: id, field: 'dependsOnRuleIds', code: 'UNKNOWN_DEPENDENCY', message: `unknown dependency ${dep}` });
+      }
+    }
+    const rawDepth = depthOf(id);
+    if (rawDepth > 3) {
+      issues.push({ ruleId: id, field: 'dependsOnRuleIds', code: 'MAX_LINKAGE_HOPS_EXCEEDED', message: `hopDepth ${rawDepth} exceeds maximum 3` });
+    }
+  }
+  if (cycleIds.size > 0) {
+    issues.push({ code: 'RULE_CYCLE_DETECTED', message: '检测到规则依赖环路' });
+  }
+  const compiled: Json[] = rules.map((r): Json => {
+    const hopDepth = Math.min(3, depthMemo.get(String(r.ruleId)) ?? 0);
+    return { ...r, hopDepth };
+  });
+  let maxHopDepth = 0;
+  const edges: Json[] = [];
+  const nodes = compiled.map((r) => {
+    const hopDepth = Number(r.hopDepth ?? 0);
+    if (hopDepth > maxHopDepth) maxHopDepth = hopDepth;
+    const deps: string[] = Array.isArray(r.dependsOnRuleIds) ? r.dependsOnRuleIds : [];
+    for (const dep of deps) edges.push({ fromRuleId: dep, toRuleId: r.ruleId });
+    return {
+      ruleId: r.ruleId,
+      title: r.title,
+      severity: r.severity,
+      ...(r.ruleKind ? { ruleKind: r.ruleKind } : {}),
+      hopDepth,
+      dependsOnRuleIds: deps,
+      actionCount: Array.isArray(r.actions) ? r.actions.length : 0,
+    };
+  });
+  return {
+    compiled,
+    graph: {
+      nodes,
+      edges,
+      topologicalOrder: compiled.map((r) => r.ruleId),
+      maxHopDepth,
+    },
+    issues,
+  };
+}
+
 export class Gateway {
   principalOverride: Json | null = null;
   readonly tenantPrincipals = new Map<string, Json>();
@@ -264,8 +361,33 @@ export class Gateway {
   assetModel: Json = fixture<Json>('asset-model.json');
   readonly alarms = fixture<Json[]>('alarms.json');
   readonly alarmEvaluations: Record<string, Json[]> = {};
-  // The Site's rules in effect, as the Alarm owner lists them; publishing the rules file changes them, not the page.
-  readonly alarmRules = fixture<Json[]>('alarm-rules.json');
+  // The Site's rules in effect, with immutable revision ledger for workbench publish/rollback tests.
+  alarmRules: Json[] = structuredClone(INITIAL_ALARM_RULES);
+  alarmRuleBundleRevision = 1;
+  alarmRuleBundleDigest = digestAlarmRules(INITIAL_ALARM_RULES);
+  readonly alarmRuleRevisionSnapshots = new Map<number, Json[]>([[1, structuredClone(INITIAL_ALARM_RULES)]]);
+  readonly alarmRuleRevisions: Json[] = [
+    {
+      bundleRevision: 1,
+      bundleDigest: digestAlarmRules(INITIAL_ALARM_RULES),
+      changeNote: '初始规则文件同步基线',
+      source: 'CLI_SYNC',
+      summary: {
+        added: INITIAL_ALARM_RULES.length,
+        changed: 0,
+        unchanged: 0,
+        retired: 0,
+        addedRuleIds: INITIAL_ALARM_RULES.map((r) => r.ruleId),
+        changedRuleIds: [],
+        unchangedRuleIds: [],
+        retiredRuleIds: [],
+      },
+      ruleCount: INITIAL_ALARM_RULES.length,
+      publishedAt: '2026-10-01T00:00:00.000Z',
+      publishedBy: principal.principalId,
+      publishedByName: principal.principal.displayName,
+    },
+  ];
   readonly workOrders = fixture<Json[]>('work-orders.json');
   readonly snapshots = fixture<Json>('snapshots.json');
   readonly commands: Json[] = [];
@@ -790,6 +912,169 @@ export class Gateway {
     }
     if (reply.status === 204) return route.fulfill({ status: 204 });
     return route.fulfill({ status: reply.status ?? 200, contentType: 'application/json', body: JSON.stringify(reply.body) });
+  }
+
+  private authorizeAlarmRulePublish(path: string, csrfToken: string | undefined): { status: number; body: Json } | null {
+    const activePrincipal = this.principalOverride ?? principal;
+    const expectedCsrf = activePrincipal.session?.csrfToken ?? principal.session.csrfToken;
+    if (!csrfToken || csrfToken !== expectedCsrf) {
+      return {
+        status: 403,
+        body: {
+          type: 'about:blank',
+          title: 'Forbidden',
+          status: 403,
+          detail: 'CSRF token required.',
+          instance: path,
+          code: 'CSRF_INVALID',
+          traceId: '0'.repeat(32),
+          retryable: false,
+        },
+      };
+    }
+    const caps: string[] = activePrincipal.authorization?.capabilities ?? [];
+    if (!caps.includes('schedule.manage')) {
+      return {
+        status: 403,
+        body: {
+          type: 'about:blank',
+          title: 'Forbidden',
+          status: 403,
+          detail: 'Missing schedule.manage capability.',
+          instance: path,
+          code: 'FORBIDDEN',
+          traceId: '0'.repeat(32),
+          retryable: false,
+        },
+      };
+    }
+    return null;
+  }
+
+  private evaluateAlarmRuleBundleDraft(drafts: readonly Json[]): {
+    readonly diff: Json;
+    readonly compiled: Json[];
+    readonly nextDigest: string;
+  } {
+    const currentById = new Map(this.alarmRules.map((r) => [String(r.ruleId), r]));
+    const { compiled, graph, issues } = compileRuleHopDepths(drafts);
+    const nextById = new Map(compiled.map((r) => [String(r.ruleId), r]));
+    const addedRuleIds: string[] = [];
+    const changedRuleIds: string[] = [];
+    const unchangedRuleIds: string[] = [];
+    const retiredRuleIds: string[] = [];
+    const changes: Json[] = [];
+
+    for (const nextRule of compiled) {
+      const id = String(nextRule.ruleId);
+      const prevRule = currentById.get(id);
+      if (!prevRule) {
+        addedRuleIds.push(id);
+        changes.push({ ruleId: id, title: nextRule.title, change: 'ADDED', changedFields: [], after: nextRule });
+        continue;
+      }
+      const changedFields = buildRuleDiffFields(prevRule, nextRule);
+      if (changedFields.length > 0) {
+        changedRuleIds.push(id);
+        changes.push({ ruleId: id, title: nextRule.title, change: 'CHANGED', changedFields, before: prevRule, after: nextRule });
+      } else {
+        unchangedRuleIds.push(id);
+        changes.push({ ruleId: id, title: nextRule.title, change: 'UNCHANGED', changedFields: [], before: prevRule, after: nextRule });
+      }
+    }
+
+    for (const prevRule of this.alarmRules) {
+      const id = String(prevRule.ruleId);
+      if (!nextById.has(id)) {
+        retiredRuleIds.push(id);
+        const hasActive = this.alarms.some((a) => a.condition === 'ACTIVE' && (a.ruleId === id || a.title === prevRule.title));
+        changes.push({
+          ruleId: id,
+          title: prevRule.title,
+          change: 'RETIRED',
+          changedFields: [],
+          willClearActiveAlarm: hasActive,
+          before: prevRule,
+        });
+      }
+    }
+
+    const changeById = new Map(changes.map((c) => [String(c.ruleId), c.change]));
+    const enrichedGraph = {
+      ...graph,
+      nodes: (graph.nodes as Json[]).map((n) => ({
+        ...n,
+        ...(changeById.has(String(n.ruleId)) ? { change: changeById.get(String(n.ruleId)) } : {}),
+      })),
+    };
+    const nextDigest = digestAlarmRules(compiled);
+    const summary = {
+      added: addedRuleIds.length,
+      changed: changedRuleIds.length,
+      unchanged: unchangedRuleIds.length,
+      retired: retiredRuleIds.length,
+      addedRuleIds,
+      changedRuleIds,
+      unchangedRuleIds,
+      retiredRuleIds,
+    };
+    return {
+      compiled,
+      nextDigest,
+      diff: {
+        valid: issues.length === 0,
+        currentRevision: this.alarmRuleBundleRevision,
+        currentDigest: this.alarmRuleBundleDigest,
+        nextDigest,
+        summary,
+        changes,
+        graph: enrichedGraph,
+        issues,
+      },
+    };
+  }
+
+  private applyAlarmRuleBundleRevision(
+    drafts: readonly Json[],
+    source: 'WEB_WORKBENCH' | 'ROLLBACK',
+    changeNote: string | undefined,
+    rolledBackFromRevision: number | undefined,
+    now: string,
+  ): Json {
+    const activePrincipal = this.principalOverride ?? principal;
+    const { diff, compiled, nextDigest } = this.evaluateAlarmRuleBundleDraft(drafts);
+    const changed = diff.summary.added > 0 || diff.summary.changed > 0 || diff.summary.retired > 0 || nextDigest !== this.alarmRuleBundleDigest;
+    const nextRevision = this.alarmRuleBundleRevision + 1;
+    this.alarmRules = structuredClone(compiled);
+    this.alarmRuleBundleRevision = nextRevision;
+    this.alarmRuleBundleDigest = nextDigest;
+    this.alarmRuleRevisionSnapshots.set(nextRevision, structuredClone(compiled));
+    this.alarmRuleRevisions.unshift({
+      bundleRevision: nextRevision,
+      bundleDigest: nextDigest,
+      ...(changeNote ? { changeNote } : {}),
+      source,
+      ...(rolledBackFromRevision ? { rolledBackFromRevision } : {}),
+      summary: diff.summary,
+      ruleCount: compiled.length,
+      publishedAt: now,
+      publishedBy: activePrincipal.principalId ?? principal.principalId,
+      publishedByName: activePrincipal.principal?.displayName ?? principal.principal.displayName,
+    });
+    return {
+      bundleRevision: nextRevision,
+      bundleDigest: nextDigest,
+      source,
+      changed,
+      ...(rolledBackFromRevision ? { rolledBackFromRevision } : {}),
+      ...(changeNote ? { changeNote } : {}),
+      publishedAt: now,
+      publishedBy: activePrincipal.principalId ?? principal.principalId,
+      publishedByName: activePrincipal.principal?.displayName ?? principal.principal.displayName,
+      summary: diff.summary,
+      graph: diff.graph,
+      items: structuredClone(compiled),
+    };
   }
 
   /** Withdraws the commands not yet dispatched on these devices, as leaving auto control or locking does. */
@@ -2624,7 +2909,123 @@ export class Gateway {
       return { body: { data: items, meta: { nextCursor: null, hasMore: false, limit: 100, requestId: 'e2e' } } };
     }
     if (method === 'GET' && path === '/api/v1/alarm-rules') {
-      return { body: { data: query.get('siteId') === SITE_ID ? this.alarmRules : [], meta: { requestId: 'e2e' } } };
+      if (query.get('siteId') === SITE_ID) {
+        return {
+          body: {
+            data: this.alarmRules,
+            meta: {
+              requestId: 'e2e',
+              bundleRevision: this.alarmRuleBundleRevision,
+              bundleDigest: this.alarmRuleBundleDigest,
+            },
+          },
+        };
+      }
+      return { body: { data: [], meta: { requestId: 'e2e' } } };
+    }
+    if (method === 'POST' && path === '/api/v1/alarm-rules/diff') {
+      const activePrincipal = this.principalOverride ?? principal;
+      const expectedCsrf = activePrincipal.session?.csrfToken ?? principal.session.csrfToken;
+      if (!csrfToken || csrfToken !== expectedCsrf) {
+        return { status: 403, body: { type: 'about:blank', title: 'Forbidden', status: 403, detail: 'CSRF token required.', instance: path, code: 'CSRF_INVALID', traceId: '0'.repeat(32), retryable: false } };
+      }
+      if (query.get('siteId') !== SITE_ID) {
+        return { status: 404, body: { type: 'about:blank', title: 'Not Found', status: 404, detail: 'Site not found.', instance: path, code: 'SITE_NOT_FOUND', traceId: '0'.repeat(32), retryable: false } };
+      }
+      const drafts = Array.isArray(body?.rules) ? body.rules : [];
+      const { diff } = this.evaluateAlarmRuleBundleDraft(drafts);
+      return { body: { data: diff, meta: { requestId: 'e2e' } } };
+    }
+    if (method === 'PUT' && path === '/api/v1/alarm-rules') {
+      const denied = this.authorizeAlarmRulePublish(path, csrfToken);
+      if (denied) return denied;
+      if (query.get('siteId') !== SITE_ID) {
+        return { status: 404, body: { type: 'about:blank', title: 'Not Found', status: 404, detail: 'Site not found.', instance: path, code: 'SITE_NOT_FOUND', traceId: '0'.repeat(32), retryable: false } };
+      }
+      if (body?.expectedRevision !== this.alarmRuleBundleRevision) {
+        return {
+          status: 409,
+          body: {
+            type: 'about:blank',
+            title: 'Conflict',
+            status: 409,
+            detail: 'Alarm rule bundle revision has changed.',
+            instance: path,
+            code: 'ALARM_RULE_BUNDLE_CONFLICT',
+            traceId: '0'.repeat(32),
+            retryable: false,
+          },
+        };
+      }
+      const drafts = Array.isArray(body?.rules) ? body.rules : [];
+      const { diff } = this.evaluateAlarmRuleBundleDraft(drafts);
+      if (!diff.valid) {
+        const hasGraphErr = (diff.issues as Json[]).some((i) => ['RULE_CYCLE_DETECTED', 'UNKNOWN_DEPENDENCY', 'MAX_LINKAGE_HOPS_EXCEEDED'].includes(String(i.code)));
+        return {
+          status: 422,
+          body: {
+            type: 'about:blank',
+            title: 'Unprocessable Entity',
+            status: 422,
+            detail: 'Invalid rule bundle draft.',
+            instance: path,
+            code: hasGraphErr ? 'ALARM_RULE_GRAPH_INVALID' : 'ALARM_RULE_DRAFT_INVALID',
+            traceId: '0'.repeat(32),
+            retryable: false,
+          },
+        };
+      }
+      const changeNote = typeof body?.changeNote === 'string' && body.changeNote.trim() ? body.changeNote.trim() : undefined;
+      const result = this.applyAlarmRuleBundleRevision(drafts, 'WEB_WORKBENCH', changeNote, undefined, now);
+      return { body: { data: result, meta: { requestId: 'e2e' } } };
+    }
+    if (method === 'GET' && path === '/api/v1/alarm-rules/revisions') {
+      if (query.get('siteId') !== SITE_ID) {
+        return { status: 404, body: { type: 'about:blank', title: 'Not Found', status: 404, detail: 'Site not found.', instance: path, code: 'SITE_NOT_FOUND', traceId: '0'.repeat(32), retryable: false } };
+      }
+      const limit = Math.max(1, Number(query.get('limit') ?? 30));
+      return {
+        body: {
+          data: {
+            currentRevision: this.alarmRuleBundleRevision,
+            items: this.alarmRuleRevisions.slice(0, limit),
+          },
+          meta: { requestId: 'e2e' },
+        },
+      };
+    }
+    const rollbackMatch = path.match(/^\/api\/v1\/alarm-rules\/revisions\/(\d+)\/rollback$/);
+    if (method === 'POST' && rollbackMatch) {
+      const denied = this.authorizeAlarmRulePublish(path, csrfToken);
+      if (denied) return denied;
+      if (query.get('siteId') !== SITE_ID) {
+        return { status: 404, body: { type: 'about:blank', title: 'Not Found', status: 404, detail: 'Site not found.', instance: path, code: 'SITE_NOT_FOUND', traceId: '0'.repeat(32), retryable: false } };
+      }
+      const targetRev = Number(rollbackMatch[1]);
+      const snapshot = this.alarmRuleRevisionSnapshots.get(targetRev);
+      if (!snapshot) {
+        return { status: 404, body: { type: 'about:blank', title: 'Not Found', status: 404, detail: 'Revision not found.', instance: path, code: 'RESOURCE_NOT_FOUND', traceId: '0'.repeat(32), retryable: false } };
+      }
+      if (body?.expectedRevision !== undefined && body.expectedRevision !== this.alarmRuleBundleRevision) {
+        return {
+          status: 409,
+          body: {
+            type: 'about:blank',
+            title: 'Conflict',
+            status: 409,
+            detail: 'Alarm rule bundle revision has changed.',
+            instance: path,
+            code: 'ALARM_RULE_BUNDLE_CONFLICT',
+            traceId: '0'.repeat(32),
+            retryable: false,
+          },
+        };
+      }
+      const note = typeof body?.changeNote === 'string' && body.changeNote.trim()
+        ? body.changeNote.trim()
+        : `回滚至版本 v${targetRev}`;
+      const result = this.applyAlarmRuleBundleRevision(snapshot, 'ROLLBACK', note, targetRev, now);
+      return { body: { data: result, meta: { requestId: 'e2e' } } };
     }
     if (method === 'POST' && path === '/api/v1/alarm-rules/simulate') {
       if (!csrfToken) {
@@ -2633,7 +3034,10 @@ export class Gateway {
       if (query.get('siteId') !== SITE_ID) {
         return { status: 404, body: { type: 'about:blank', title: 'Not Found', status: 404, detail: 'Site not found.', instance: path, code: 'SITE_NOT_FOUND', traceId: '0'.repeat(32), retryable: false } };
       }
-      const rule = this.alarmRules.find((candidate) => candidate.ruleId === body?.ruleId);
+      const draftInput = body?.ruleDraft && typeof body.ruleDraft === 'object' ? body.ruleDraft : null;
+      const rule = draftInput
+        ? { ...draftInput, ruleId: draftInput.ruleId ?? body?.ruleId }
+        : this.alarmRules.find((candidate) => candidate.ruleId === body?.ruleId);
       if (!rule) {
         return { status: 404, body: { type: 'about:blank', title: 'Not Found', status: 404, detail: 'Alarm rule not found.', instance: path, code: 'RESOURCE_NOT_FOUND', traceId: '0'.repeat(32), retryable: false } };
       }

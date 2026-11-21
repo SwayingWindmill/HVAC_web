@@ -216,6 +216,11 @@ func (store *PostgresStore) PublishSitePolicy(ctx context.Context, tenantID, sit
 		return AlarmPolicyRevision{}, false, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if alarmmodel.IsUUIDv7(siteID) {
+		if err := lockSiteRulesStreamInTx(ctx, tx, tenantID, siteID); err != nil {
+			return AlarmPolicyRevision{}, false, err
+		}
+	}
 	published, changed, err := publishSitePolicyInTx(ctx, tx, store, tenantID, siteID, policy, assignmentID, at, by)
 	if err != nil {
 		return AlarmPolicyRevision{}, false, err
@@ -224,6 +229,7 @@ func (store *PostgresStore) PublishSitePolicy(ctx context.Context, tenantID, sit
 		if err := tx.Commit(ctx); err != nil {
 			return AlarmPolicyRevision{}, false, fmt.Errorf("commit Site Alarm policy publish: %w", err)
 		}
+		store.ruleCache.Invalidate(tenantID, siteID)
 	}
 	return published, changed, nil
 }

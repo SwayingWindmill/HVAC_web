@@ -103,7 +103,7 @@ func run() int {
 	}
 	gatewaySPIFFE := envOr("ALARM_GATEWAY_SPIFFE", alarmservice.DefaultGatewaySPIFFEID)
 	handler, err := alarmservice.NewHTTPHandler(alarmservice.HTTPConfig{
-		Store: store, Rules: store, GatewayPublicKey: gatewayPublicKey, GatewaySPIFFEID: gatewaySPIFFE,
+		Store: store, Rules: store, Metrics: telemetry.Metrics, GatewayPublicKey: gatewayPublicKey, GatewaySPIFFEID: gatewaySPIFFE,
 		Audience: envOr("ALARM_READ_AUDIENCE", alarmservice.DefaultAudience), MaxListLimit: 100,
 	})
 	if err != nil {
@@ -266,7 +266,11 @@ func alarmObservabilityRoute(request *http.Request) string {
 	if !strings.HasPrefix(path, alarmservice.InternalSiteAlarmsPrefix) {
 		return "unknown"
 	}
-	if strings.HasSuffix(path, "/alarm-rules") || strings.HasSuffix(path, "/alarm-rules:simulate") {
+	if strings.HasSuffix(path, "/alarm-rules") ||
+		strings.HasSuffix(path, "/alarm-rules:simulate") ||
+		strings.HasSuffix(path, "/alarm-rules:diff") ||
+		strings.HasSuffix(path, "/alarm-rules/revisions") ||
+		(strings.Contains(path, "/alarm-rules/revisions/") && strings.HasSuffix(path, ":rollback")) {
 		return "alarms.rules"
 	}
 	if strings.Contains(path, "/alarm-rules/dead-letters") {

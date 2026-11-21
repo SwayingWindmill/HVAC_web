@@ -35,6 +35,7 @@
     {"name":"hvac_alarm_evaluation_outbox_depth","type":"gauge","labels":["state"],"seriesBudget":4},
     {"name":"hvac_alarm_evaluation_dead_letter_total","type":"counter","labels":["reason_family"],"seriesBudget":8},
     {"name":"hvac_alarm_routing_reloads_total","type":"counter","labels":["outcome"],"seriesBudget":4},
+    {"name":"hvac_alarm_rule_publishes_total","type":"counter","labels":["outcome"],"seriesBudget":4},
 
     {"name":"hvac_mqtt_connected","type":"gauge","labels":[],"seriesBudget":1},
     {"name":"hvac_mqtt_subscribed","type":"gauge","labels":[],"seriesBudget":1},
