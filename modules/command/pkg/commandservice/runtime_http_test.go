@@ -47,6 +47,10 @@ func (stub *runtimeStoreStub) ClaimDispatch(_ context.Context, tenantID string, 
 	return stub.dispatchEnvelope, stub.claimDispatchErr
 }
 
+func (stub *runtimeStoreStub) ClaimAnyDispatch(_ context.Context, _ string, _, _ time.Duration) (commandmodel.DispatchEnvelope, error) {
+	return stub.dispatchEnvelope, stub.claimDispatchErr
+}
+
 func (stub *runtimeStoreStub) ResolveDispatch(context.Context, commandmodel.DispatchEnvelope, commandmodel.ConnectorResult) error {
 	stub.resolvedDispatch = true
 	return nil
@@ -54,6 +58,10 @@ func (stub *runtimeStoreStub) ResolveDispatch(context.Context, commandmodel.Disp
 
 func (stub *runtimeStoreStub) ClaimVerification(_ context.Context, tenantID string, _ string, _ time.Duration) (commandmodel.VerificationEnvelope, error) {
 	stub.claimedTenant = tenantID
+	return stub.verificationEnvelope, stub.claimVerificationErr
+}
+
+func (stub *runtimeStoreStub) ClaimAnyVerification(_ context.Context, _ string, _, _ time.Duration) (commandmodel.VerificationEnvelope, error) {
 	return stub.verificationEnvelope, stub.claimVerificationErr
 }
 
@@ -282,4 +290,64 @@ func runtimeRequest(t *testing.T, method, path, body, spiffe string) *http.Reque
 	}
 	request.TLS.PeerCertificates = []*x509.Certificate{{URIs: []*url.URL{identity}}}
 	return request
+}
+
+func TestRuntimeHTTPClaimAnyDispatchAndVerificationRoutes(t *testing.T) {
+	t.Parallel()
+
+	stub := &runtimeStoreStub{
+		dispatchEnvelope:     commandmodel.DispatchEnvelope{CommandID: "cmd-any-1", AttemptID: "att-any-1", TenantID: runtimeTestOrganization},
+		verificationEnvelope: commandmodel.VerificationEnvelope{CommandID: "cmd-any-2", AttemptID: "att-any-2", TenantID: runtimeTestOrganization},
+	}
+	handler := runtimeTestHandler(t, stub)
+
+	body := `{"leaseOwner":"worker-1","leaseSeconds":30}`
+	dispReq := runtimeRequest(t, http.MethodPost, InternalDispatchClaimAnyPath+"?waitMs=25", body, "spiffe://hvac.local/command-dispatcher")
+	dispRec := httptest.NewRecorder()
+	handler.ServeHTTP(dispRec, dispReq)
+	if dispRec.Code != http.StatusOK {
+		t.Fatalf("dispatch claim-any status=%d, want 200 (%s)", dispRec.Code, dispRec.Body.String())
+	}
+	if route := ObservabilityRoute(dispReq); route != "dispatch.claim-any" {
+		t.Fatalf("dispatch claim-any metric route=%q, want dispatch.claim-any", route)
+	}
+
+	verReq := runtimeRequest(t, http.MethodPost, InternalVerificationClaimAnyPath+"?waitMs=25", body, "spiffe://hvac.local/command-verifier")
+	verRec := httptest.NewRecorder()
+	handler.ServeHTTP(verRec, verReq)
+	if verRec.Code != http.StatusOK {
+		t.Fatalf("verification claim-any status=%d, want 200 (%s)", verRec.Code, verRec.Body.String())
+	}
+	if route := ObservabilityRoute(verReq); route != "verification.claim-any" {
+		t.Fatalf("verification claim-any metric route=%q, want verification.claim-any", route)
+	}
+
+	forbiddenReq := runtimeRequest(t, http.MethodPost, InternalDispatchClaimAnyPath, body, "spiffe://hvac.local/command-verifier")
+	forbiddenRec := httptest.NewRecorder()
+	handler.ServeHTTP(forbiddenRec, forbiddenReq)
+	if forbiddenRec.Code != http.StatusForbidden {
+		t.Fatalf("wrong peer status=%d, want 403", forbiddenRec.Code)
+	}
+
+	badWaitReq := runtimeRequest(t, http.MethodPost, InternalDispatchClaimAnyPath+"?waitMs=5000", body, "spiffe://hvac.local/command-dispatcher")
+	badWaitRec := httptest.NewRecorder()
+	handler.ServeHTTP(badWaitRec, badWaitReq)
+	if badWaitRec.Code != http.StatusBadRequest {
+		t.Fatalf("out-of-bounds waitMs status=%d, want 400", badWaitRec.Code)
+	}
+
+	stub.claimDispatchErr = ErrNoDispatchAvailable
+	stub.claimVerificationErr = ErrVerificationNotAvailable
+	idleRec := httptest.NewRecorder()
+	handler.ServeHTTP(idleRec, runtimeRequest(t, http.MethodPost, InternalDispatchClaimAnyPath, body, "spiffe://hvac.local/command-dispatcher"))
+	if idleRec.Code != http.StatusNoContent {
+		t.Fatalf("idle dispatch claim-any status=%d, want 204", idleRec.Code)
+	}
+
+	stub.claimDispatchErr = errTransientSafetyEvaluation
+	transientRec := httptest.NewRecorder()
+	handler.ServeHTTP(transientRec, runtimeRequest(t, http.MethodPost, InternalDispatchClaimAnyPath, body, "spiffe://hvac.local/command-dispatcher"))
+	if transientRec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("transient safety eval claim-any status=%d, want 503", transientRec.Code)
+	}
 }

@@ -49,7 +49,7 @@ type EnvelopePoint struct {
 
 func DecodeTelemetryEnvelope(payload []byte, gatewayID string) (TelemetryEnvelope, error) {
 	var envelope TelemetryEnvelope
-	if err := decodeStrictEnvelope(payload, &envelope); err != nil {
+	if err := decodeV2Envelope(payload, &envelope); err != nil {
 		return TelemetryEnvelope{}, err
 	}
 	if err := envelope.Validate(gatewayID); err != nil {

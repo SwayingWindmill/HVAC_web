@@ -126,6 +126,7 @@ const expectedOperations = {
   updateSiteAsset: ['patch', `${site}/assets/{assetId}`],
   createSiteDevice: ['post', `${site}/devices`],
   updateSiteDevice: ['patch', `${site}/devices/{deviceId}`],
+  replaceDeviceHardware: ['post', `${site}/devices/{deviceId}/replace-hardware`],
   createSiteSensor: ['post', `${site}/sensors`],
   updateSiteSensor: ['patch', `${site}/sensors/{sensorId}`],
   createSitePoint: ['post', `${site}/points`],
@@ -306,6 +307,7 @@ for (const [operationId, schemaName] of Object.entries(expectedSuccessSchemas)) 
 }
 invariant(schemaRef(operations.recalculateSiteAccounting.operation, '202') === '#/components/schemas/AccountingRecalcJob', 'recalculateSiteAccounting accepted schema is unsupported');
 invariant(schemaRef(operations.createSiteMeterRatioVersion.operation, '201') === '#/components/schemas/MeterRatioVersion', 'createSiteMeterRatioVersion created schema is unsupported');
+invariant(schemaRef(operations.replaceDeviceHardware.operation, '201') === '#/components/schemas/ReplaceDeviceHardwareResult', 'replaceDeviceHardware success schema is unsupported');
 invariant(schemaRef(operations.getTemplateRevision.operation, '200') === './s05-registry-writer.openapi.json#/components/schemas/TemplateRevision', 'getTemplateRevision success schema is unsupported');
 invariant(operations.logout.operation.responses?.['204'], 'logout must return 204');
 invariant(operations.logout.operation.responses?.['204']?.headers?.Location?.schema?.format === 'uri', 'logout must publish the provider end-session Location header');
@@ -340,7 +342,12 @@ const schemaRequirements = {
   ]],
   Site: [['id', 'tenantId', 'code', 'displayName', 'timezone', 'status', 'revision', 'createdAt', 'updatedAt', 'floorAreaM2', 'climateZone']],
   Asset: [['id', 'tenantId', 'siteId', 'code', 'displayName', 'assetType', 'status', 'revision', 'createdAt', 'updatedAt'], ['ratedPower', 'ratedCapacity', 'tags', 'waterLoop', 'branchCode']],
-  Device: [['id', 'tenantId', 'siteId', 'code', 'displayName', 'deviceType', 'status', 'revision', 'createdAt', 'updatedAt'], ['tags']],
+  Device: [['id', 'tenantId', 'siteId', 'code', 'displayName', 'deviceType', 'status', 'revision', 'createdAt', 'updatedAt'], ['externalId', 'protocolAddress', 'tags']],
+  ReplaceDeviceHardwareResult: [[
+    'replacementId', 'tenantId', 'siteId', 'deviceId', 'revision', 'previousExternalId', 'newExternalId',
+    'previousGatewayDeviceId', 'newGatewayDeviceId', 'previousProtocolAddress', 'newProtocolAddress',
+    'reason', 'replacedBy', 'replacedAt', 'device', 'replayed',
+  ]],
   Template: [['id', 'tenantId', 'templateKey', 'templateKind', 'createdAt'], ['latestRevisionId', 'latestRevisionNumber', 'releasedAt']],
   TemplateCollection: [['items', 'nextCursor', 'hasMore']],
   TemplateAssignmentCollection: [['items', 'nextCursor', 'hasMore']],
@@ -402,13 +409,13 @@ const schemaRequirements = {
   OptimizationPreparationResponseCoefficient: [['status', 'calibratedAt']],
   OptimizationPreparationTenantStrategy: [['status']],
   OptimizationPreparation: [['trigger', 'status', 'reason', 'firedAt', 'completedAt', 'responseCoefficient', 'tenantStrategy']],
-  AutoControlLease: [['id', 'tenantId', 'siteId', 'status', 'armedBy', 'armedAt', 'expiresAt', 'allowedCapabilities', 'maxSetpointStepC', 'supplyTempMinC', 'supplyTempMaxC', 'zoneTempMaxC', 'minRunningChillers', 'maxCommandsPerHour', 'revision', 'createdAt', 'updatedAt'], ['deadbandC', 'manualBackoffUntil', 'manualBackoffReason', 'tripReason', 'executionMode']],
+  AutoControlLease: [['id', 'tenantId', 'siteId', 'status', 'armedBy', 'armedAt', 'expiresAt', 'allowedCapabilities', 'maxSetpointStepC', 'supplyTempMinC', 'supplyTempMaxC', 'zoneTempMaxC', 'minRunningChillers', 'maxCommandsPerHour', 'revision', 'createdAt', 'updatedAt'], ['deadbandC', 'manualBackoffUntil', 'manualBackoffReason', 'tripReason', 'executionMode', 'pumpFreqMinHz', 'pumpFreqMaxHz', 'maxFreqStepHz', 'freqDeadbandHz', 'fanSpeedMinPct', 'fanSpeedMaxPct', 'maxFanStepPct', 'fanDeadbandPct']],
   SiteAutoControlLeaseState: [['tenantId', 'siteId', 'confirmationMode', 'activeLease', 'latestLease']],
-  ArmAutoControlLeaseRequest: [['allowedCapabilities', 'supplyTempMinC', 'supplyTempMaxC', 'reason', 'verificationCode'], ['expiresInHours', 'expiresAt', 'maxSetpointStepC', 'deadbandC', 'zoneTempMaxC', 'minRunningChillers', 'maxCommandsPerHour', 'executionMode', 'expectedRevision']],
+  ArmAutoControlLeaseRequest: [['allowedCapabilities', 'supplyTempMinC', 'supplyTempMaxC', 'reason', 'verificationCode'], ['expiresInHours', 'expiresAt', 'maxSetpointStepC', 'deadbandC', 'zoneTempMaxC', 'minRunningChillers', 'maxCommandsPerHour', 'executionMode', 'pumpFreqMinHz', 'pumpFreqMaxHz', 'maxFreqStepHz', 'freqDeadbandHz', 'fanSpeedMinPct', 'fanSpeedMaxPct', 'maxFanStepPct', 'fanDeadbandPct', 'expectedRevision']],
   RevokeAutoControlLeaseRequest: [['reason'], ['expectedRevision']],
   OptimizationExecutionMonitor: [
     ['id', 'tenantId', 'siteId', 'leaseId', 'recommendationId', 'commandIntentId', 'deviceId', 'targetCapability', 'zoneTempMaxC', 'supplyTempMaxC', 'startedAt', 'windowEndsAt', 'status', 'createdAt', 'updatedAt'],
-    ['baselineSupplyTempC', 'appliedSupplyTempC', 'restoreSupplyTempC', 'supplyTempMinC', 'rawRecommendedValue', 'clampedValue', 'guardrailVerdict', 'guardrailTrace', 'executionMode', 'decisionId', 'traceId', 'lastCheckedAt', 'telemetryUnhealthySince', 'tripReason', 'rollbackCommandIntentId'],
+    ['loopKey', 'targetUnit', 'baselineSupplyTempC', 'appliedSupplyTempC', 'restoreSupplyTempC', 'supplyTempMinC', 'rawRecommendedValue', 'clampedValue', 'guardrailVerdict', 'guardrailTrace', 'executionMode', 'decisionId', 'traceId', 'lastCheckedAt', 'telemetryUnhealthySince', 'tripReason', 'rollbackCommandIntentId'],
   ],
   OptimizationExecutionMonitorList: [['tenantId', 'siteId', 'items']],
   OptimizationActiveSolver: [['servingRef', 'source', 'loopKey', 'deploymentRevisionId']],
@@ -565,6 +572,7 @@ const replacements = {
   __SITE_SPACE_PATH__: operations.updateSiteSpace.path,
   __SITE_ASSET_DETAIL_PATH__: operations.updateSiteAsset.path,
   __SITE_DEVICE_DETAIL_PATH__: operations.updateSiteDevice.path,
+  __SITE_DEVICE_REPLACE_HARDWARE_PATH__: operations.replaceDeviceHardware.path,
   __SITE_SENSORS_PATH__: operations.createSiteSensor.path,
   __SITE_SENSOR_PATH__: operations.updateSiteSensor.path,
   __SITE_POINTS_PATH__: operations.createSitePoint.path,

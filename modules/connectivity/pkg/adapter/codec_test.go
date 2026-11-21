@@ -11,7 +11,6 @@ func TestCodecRegistryDecodesV2AndCompactV1TelemetryAndStatus(t *testing.T) {
 
 	registry := DefaultCodecRegistry()
 
-	// Standard v2.0 telemetry
 	v2Payload := telemetryPayload(testGatewayA, testMessageID, 1, "METER-01", "active_power")
 	decV2, err := registry.DecodeTelemetry(v2Payload, testGatewayA)
 	if err != nil {
@@ -21,7 +20,6 @@ func TestCodecRegistryDecodesV2AndCompactV1TelemetryAndStatus(t *testing.T) {
 		t.Fatalf("unexpected v2 decoded telemetry: %+v", decV2)
 	}
 
-	// Compact v1.0 batch telemetry with RFC3339 timestamps, replay, GOOD/BAD quality
 	v1Payload := []byte(`{
 		"v": "1.0",
 		"gw": "` + testGatewayA + `",
@@ -61,7 +59,6 @@ func TestCodecRegistryDecodesV2AndCompactV1TelemetryAndStatus(t *testing.T) {
 	if !uuidV7Pattern.MatchString(decV1.Envelope.MessageID) {
 		t.Fatalf("expected valid UUIDv7 messageId fallback, got %q", decV1.Envelope.MessageID)
 	}
-	// Deterministic messageId for identical frame
 	decV1Again, err := registry.DecodeTelemetry(v1Payload, testGatewayA)
 	if err != nil || decV1Again.Envelope.MessageID != decV1.Envelope.MessageID {
 		t.Fatalf("expected deterministic UUIDv7 generation, got %q vs %q (err=%v)", decV1Again.Envelope.MessageID, decV1.Envelope.MessageID, err)
@@ -81,7 +78,6 @@ func TestCodecRegistryDecodesV2AndCompactV1TelemetryAndStatus(t *testing.T) {
 		t.Fatalf("unexpected compact point quality mapping: %+v", ch1.Points)
 	}
 
-	// Compact v1.0 status frame
 	statusPayload := []byte(`{"v":"1.0","gw":"` + testGatewayA + `","sid":"sess-9","seq":7,"ts":"2026-11-17T12:01:00Z","online":true}`)
 	st, err := registry.DecodeStatus(statusPayload, testGatewayA)
 	if err != nil {
@@ -91,7 +87,6 @@ func TestCodecRegistryDecodesV2AndCompactV1TelemetryAndStatus(t *testing.T) {
 		t.Fatalf("unexpected decoded status: %+v", st)
 	}
 
-	// Legacy status frame omitting sid/seq/v
 	legacyPayload := []byte(`{"online":false,"ts":1786352400000}`)
 	legacyStatus, err := registry.DecodeStatus(legacyPayload, testGatewayA)
 	if err != nil {
@@ -161,5 +156,125 @@ func TestCodecRejectsNaNInfBoundsAndMalformedPayloadsWithoutPanic(t *testing.T) 
 				}
 			}
 		})
+	}
+}
+
+func TestV2MinorForwardCompatibilityAndStrict20Boundaries(t *testing.T) {
+	t.Parallel()
+
+	registry := DefaultCodecRegistry()
+
+	// 2.1 telemetry with unknown fields at top level, device level, and point level succeeds
+	// while still enforcing UseNumber, trailing-token EOF, header checks, and Validate().
+	v21Telemetry := []byte(`{
+		"schemaVersion": "2.1",
+		"messageId": "` + testMessageID + `",
+		"gatewayId": "` + testGatewayA + `",
+		"timestamp": 1786352400000,
+		"sequence": 7,
+		"traceId": "trace-v21",
+		"futureTopField": {"nested": true},
+		"payload": {
+			"futurePayloadFlag": "enabled",
+			"devices": [
+				{
+					"deviceId": "CH-01",
+					"deviceTimestamp": 1786352400000,
+					"firmwareBuild": "2026.11",
+					"points": [
+						{
+							"code": "supply_temp",
+							"value": 7.25,
+							"quality": 0,
+							"rawRegister": 725
+						}
+					]
+				}
+			]
+		}
+	}`)
+	dec, err := registry.DecodeTelemetry(v21Telemetry, testGatewayA)
+	if err != nil {
+		t.Fatalf("expected 2.1 telemetry with unknown fields to decode, got %v", err)
+	}
+	if dec.Envelope.SchemaVersion != "2.1" || len(dec.Envelope.Payload.Devices) != 1 {
+		t.Fatalf("unexpected 2.1 decoded telemetry envelope: %+v", dec.Envelope)
+	}
+	if got := dec.Envelope.Payload.Devices[0].Points[0].Value; got != json.Number("7.25") {
+		if f, ok := got.(float64); !ok || f != 7.25 {
+			t.Fatalf("expected numeric value 7.25 preserved, got %#v", got)
+		}
+	}
+
+	// 2.1 with trailing JSON tokens MUST still be rejected.
+	trailingV21 := append(append([]byte(nil), v21Telemetry...), []byte(`{"trailing":1}`)...)
+	if _, err := registry.DecodeTelemetry(trailingV21, testGatewayA); err == nil {
+		t.Fatal("expected trailing tokens on 2.1 telemetry to fail")
+	}
+
+	// 2.1 event with unknown fields succeeds; identical 2.0 event with unknown field fails.
+	v21Event := []byte(`{
+		"schemaVersion": "2.1",
+		"messageId": "` + testMessageID + `",
+		"gatewayId": "` + testGatewayA + `",
+		"timestamp": 1786352400000,
+		"sequence": 8,
+		"traceId": "trace-evt-21",
+		"futureEventHeader": "ok",
+		"payload": {
+			"eventType": "DEVICE_FAULT",
+			"sourceType": "DEVICE",
+			"sourceId": "CH-01",
+			"eventTime": 1786352400000,
+			"severity": "WARNING",
+			"data": {"code": 42},
+			"extraDetail": {"code": 42}
+		}
+	}`)
+	ev, err := registry.DecodeEvent(v21Event, testGatewayA)
+	if err != nil {
+		t.Fatalf("expected 2.1 event with unknown fields to decode, got %v", err)
+	}
+	if ev.SchemaVersion != "2.1" {
+		t.Fatalf("expected event schemaVersion 2.1, got %q", ev.SchemaVersion)
+	}
+	v20EventStrict := strings.Replace(string(v21Event), `"schemaVersion": "2.1"`, `"schemaVersion": "2.0"`, 1)
+	if _, err := registry.DecodeEvent([]byte(v20EventStrict), testGatewayA); err == nil {
+		t.Fatal("expected 2.0 event with unknown fields to be rejected")
+	}
+
+	// 2.1 status with unknown fields succeeds; 2.0 status with unknown fields fails.
+	v21Status := []byte(`{
+		"schemaVersion": "2.1",
+		"messageId": "` + testMessageID + `",
+		"gatewayId": "` + testGatewayA + `",
+		"sessionId": "sess-21",
+		"sequence": 9,
+		"eventTime": "2026-11-17T12:00:00Z",
+		"online": true,
+		"firmware": "1.2.3"
+	}`)
+	st, err := registry.DecodeStatus(v21Status, testGatewayA)
+	if err != nil {
+		t.Fatalf("expected 2.1 status with unknown fields to decode, got %v", err)
+	}
+	if st.SchemaVersion != "2.1" || !st.Online || st.SessionID != "sess-21" {
+		t.Fatalf("unexpected 2.1 decoded status: %+v", st)
+	}
+	v20StatusStrict := strings.Replace(string(v21Status), `"schemaVersion": "2.1"`, `"schemaVersion": "2.0"`, 1)
+	if _, err := registry.DecodeStatus([]byte(v20StatusStrict), testGatewayA); err == nil {
+		t.Fatal("expected 2.0 status with unknown fields to be rejected")
+	}
+
+	// Invalid 2.x minor formats must still be rejected across all message types.
+	for _, badVer := range []string{"2.", "2.00", "2.01", "2.-1", "2.1.0", "2.abc", "3.0"} {
+		badTelemetry := strings.Replace(string(v21Telemetry), `"schemaVersion": "2.1"`, `"schemaVersion": "`+badVer+`"`, 1)
+		if _, err := registry.DecodeTelemetry([]byte(badTelemetry), testGatewayA); err == nil {
+			t.Fatalf("expected telemetry with version %q to fail", badVer)
+		}
+		badStatus := strings.Replace(string(v21Status), `"schemaVersion": "2.1"`, `"schemaVersion": "`+badVer+`"`, 1)
+		if _, err := registry.DecodeStatus([]byte(badStatus), testGatewayA); err == nil {
+			t.Fatalf("expected status with version %q to fail", badVer)
+		}
 	}
 }

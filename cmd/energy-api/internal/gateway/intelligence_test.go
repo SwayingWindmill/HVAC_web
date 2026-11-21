@@ -462,7 +462,7 @@ func TestGatewayAutoControlLeaseForwardsShadowExecutionMode(t *testing.T) {
 		}),
 	}
 
-	req := httptest.NewRequest(http.MethodPut, "/api/v1/sites/"+fixture.siteID+"/optimization/auto-control-lease", strings.NewReader(`{"expiresInHours":8,"allowedCapabilities":["SET_CHILLED_WATER_TEMPERATURE_SETPOINT"],"supplyTempMinC":6,"supplyTempMaxC":12,"executionMode":"SHADOW","reason":"开启影子推演","verificationCode":"123456"}`))
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/sites/"+fixture.siteID+"/optimization/auto-control-lease", strings.NewReader(`{"expiresInHours":8,"allowedCapabilities":["SET_CHILLED_WATER_TEMPERATURE_SETPOINT","SET_FREQUENCY","SET_FAN_SPEED"],"supplyTempMinC":6,"supplyTempMaxC":12,"executionMode":"SHADOW","pumpFreqMinHz":30,"pumpFreqMaxHz":48,"maxFreqStepHz":2.5,"freqDeadbandHz":0.5,"fanSpeedMinPct":35,"fanSpeedMaxPct":90,"maxFanStepPct":10,"fanDeadbandPct":2,"reason":"开启影子推演","verificationCode":"123456"}`))
 	fixture.authenticate(req, true)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -470,8 +470,8 @@ func TestGatewayAutoControlLeaseForwardsShadowExecutionMode(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PUT shadow lease status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(forwardedBody, `"executionMode":"SHADOW"`) {
-		t.Fatalf("expected executionMode SHADOW forwarded to core registry, got %s", forwardedBody)
+	if !strings.Contains(forwardedBody, `"executionMode":"SHADOW"`) || !strings.Contains(forwardedBody, `"pumpFreqMinHz":30`) || !strings.Contains(forwardedBody, `"fanSpeedMaxPct":90`) {
+		t.Fatalf("expected executionMode SHADOW and VFD/fan bounds forwarded to core registry, got %s", forwardedBody)
 	}
 	if !strings.Contains(rec.Body.String(), `"executionMode":"SHADOW"`) {
 		t.Fatalf("expected executionMode SHADOW in gateway response, got %s", rec.Body.String())

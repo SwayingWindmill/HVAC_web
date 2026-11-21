@@ -462,3 +462,74 @@ func TestIAMCommandWorkloadDecisionShadowModeBlocksDispatchButAllowsRollback(t *
 		}
 	})
 }
+
+func TestIAMCommandWorkloadDecisionEnforcesMultiLoopFrequencyAndFanBounds(t *testing.T) {
+	now := time.Date(2026, 11, 21, 4, 0, 0, 0, time.UTC)
+	freqMin := 30.0
+	freqMax := 48.0
+	freqStep := 2.5
+	fanMin := 35.0
+	fanMax := 90.0
+	fanStep := 10.0
+
+	facts := validWorkloadBaseFacts(now)
+	facts.ActiveLease.AllowedCapabilities = []string{
+		string(commandmodel.CapabilitySetChilledWaterTemperatureSetpoint),
+		string(commandmodel.CapabilitySetFrequency),
+		string(commandmodel.CapabilitySetFanSpeed),
+	}
+	facts.ActiveLease.PumpFreqMinHz = &freqMin
+	facts.ActiveLease.PumpFreqMaxHz = &freqMax
+	facts.ActiveLease.MaxFreqStepHz = &freqStep
+	facts.ActiveLease.FanSpeedMinPct = &fanMin
+	facts.ActiveLease.FanSpeedMaxPct = &fanMax
+	facts.ActiveLease.MaxFanStepPct = &fanStep
+
+	currentFreq := 40.0
+	freqReq := commandauth.WorkloadDecisionRequest{
+		TenantID:           "01990000-0000-7000-8000-000000000001",
+		SiteID:             S1FixtureOwnerASite1ID,
+		DeviceID:           "01990000-3000-7000-8000-0000000000f1",
+		Capability:         commandmodel.CapabilitySetFrequency,
+		CapabilityRevision: "capability:set-frequency:v1",
+		Purpose:            commandmodel.AuthorizationCommandSubmit,
+		Parameters:         commandmodel.CommandParameters{commandmodel.ParameterFrequencyHz: 42.0},
+		CurrentValue:       &currentFreq,
+	}
+	decision, err := evaluateWorkloadCommandAuthorization(t.Context(), &memoryCommandWorkloadStore{facts: facts}, now, "spiffe://hvac.local", defaultOptimizationCommandWorkload, freqReq)
+	if err != nil || !decision.Allowed || decision.ReasonCode != commandauth.ReasonAllowAutoLease {
+		t.Fatalf("expected SET_FREQUENCY within lease bounds+step to allow, got %#v err=%v", decision, err)
+	}
+
+	outOfBoundsFreq := freqReq
+	outOfBoundsFreq.Parameters = commandmodel.CommandParameters{commandmodel.ParameterFrequencyHz: 29.0}
+	if got, err := evaluateWorkloadCommandAuthorization(t.Context(), &memoryCommandWorkloadStore{facts: facts}, now, "spiffe://hvac.local", defaultOptimizationCommandWorkload, outOfBoundsFreq); err != nil || got.Allowed || got.ReasonCode != commandauth.ReasonDenyAutoLease {
+		t.Fatalf("expected SET_FREQUENCY below lease pumpFreqMinHz to deny, got %#v err=%v", got, err)
+	}
+
+	excessStepFreq := freqReq
+	excessStepFreq.Parameters = commandmodel.CommandParameters{commandmodel.ParameterFrequencyHz: 44.0}
+	if got, err := evaluateWorkloadCommandAuthorization(t.Context(), &memoryCommandWorkloadStore{facts: facts}, now, "spiffe://hvac.local", defaultOptimizationCommandWorkload, excessStepFreq); err != nil || got.Allowed || got.ReasonCode != commandauth.ReasonDenyAutoLease {
+		t.Fatalf("expected SET_FREQUENCY step 4.0 > 2.5 Hz to deny, got %#v err=%v", got, err)
+	}
+
+	currentFan := 65.0
+	fanReq := freqReq
+	fanReq.Capability = commandmodel.CapabilitySetFanSpeed
+	fanReq.CapabilityRevision = "capability:set-fan-speed:v1"
+	fanReq.Parameters = commandmodel.CommandParameters{commandmodel.ParameterFanSpeedPct: 72.0}
+	fanReq.CurrentValue = &currentFan
+	if got, err := evaluateWorkloadCommandAuthorization(t.Context(), &memoryCommandWorkloadStore{facts: facts}, now, "spiffe://hvac.local", defaultOptimizationCommandWorkload, fanReq); err != nil || !got.Allowed || got.ReasonCode != commandauth.ReasonAllowAutoLease {
+		t.Fatalf("expected SET_FAN_SPEED within lease bounds+step to allow, got %#v err=%v", got, err)
+	}
+
+	shadowFacts := facts
+	shadowFacts.ActiveLease.ExecutionMode = "SHADOW"
+	shadowFacts.MatchingObservingRollback = true
+	rbFan := fanReq
+	rbFan.IsRollback = true
+	rbFan.CurrentValue = nil
+	if got, err := evaluateWorkloadCommandAuthorization(t.Context(), &memoryCommandWorkloadStore{facts: shadowFacts}, now, "spiffe://hvac.local", defaultOptimizationCommandWorkload, rbFan); err != nil || !got.Allowed || got.MaximumRisk != commandmodel.RiskMedium {
+		t.Fatalf("expected SET_FAN_SPEED rollback with nil CurrentValue to allow with medium risk, got %#v err=%v", got, err)
+	}
+}

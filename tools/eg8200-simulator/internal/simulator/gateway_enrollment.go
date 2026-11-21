@@ -3,6 +3,7 @@ package simulator
 import (
 	"bytes"
 	"context"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -19,6 +20,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 )
 
 // MaintainGatewayCredential ensures the Gateway Credential before the transport
@@ -114,6 +117,13 @@ func EnsureGatewayCredential(ctx context.Context, config *MQTTGatewayConfig, cod
 		return err
 	}
 	request.Header.Set("Content-Type", "application/json")
+	if renew && len(identity.Certificate) > 0 {
+		if signer, ok := identity.PrivateKey.(crypto.Signer); ok {
+			if err := edgecontrol.SignGatewayRequestPoP(request, identity.Certificate[0], signer, time.Now().UTC()); err != nil {
+				return fmt.Errorf("sign gateway renewal PoP: %w", err)
+			}
+		}
+	}
 	response, err := client.Do(request)
 	if err != nil {
 		return fmt.Errorf("gateway credential request: %w", err)

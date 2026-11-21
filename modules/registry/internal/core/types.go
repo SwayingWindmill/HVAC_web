@@ -55,17 +55,19 @@ type Asset struct {
 }
 
 type Device struct {
-	ID          string            `json:"id"`
-	TenantID    string            `json:"tenantId"`
-	SiteID      string            `json:"siteId"`
-	Code        string            `json:"code"`
-	DisplayName string            `json:"displayName"`
-	DeviceType  string            `json:"deviceType"`
-	Status      string            `json:"status"`
-	Revision    int64             `json:"revision"`
-	CreatedAt   string            `json:"createdAt"`
-	UpdatedAt   string            `json:"updatedAt"`
-	Tags        map[string]string `json:"tags,omitempty"`
+	ID              string            `json:"id"`
+	TenantID        string            `json:"tenantId"`
+	SiteID          string            `json:"siteId"`
+	Code            string            `json:"code"`
+	DisplayName     string            `json:"displayName"`
+	DeviceType      string            `json:"deviceType"`
+	Status          string            `json:"status"`
+	Revision        int64             `json:"revision"`
+	CreatedAt       string            `json:"createdAt"`
+	UpdatedAt       string            `json:"updatedAt"`
+	ExternalID      *string           `json:"externalId,omitempty"`
+	ProtocolAddress map[string]any    `json:"protocolAddress,omitempty"`
+	Tags            map[string]string `json:"tags,omitempty"`
 }
 
 type Template struct {

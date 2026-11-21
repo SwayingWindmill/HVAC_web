@@ -131,7 +131,21 @@ node scripts/phase1-bootstrap-local-foundation.mjs
 $L run --rm -T identity-reconciler < "$R/identity-reconcile.json"
 
 step up
-$L --integration up -d
+if ! $L --integration up -d; then
+  echo "error: compose up failed; collecting status and recent logs for unhealthy containers" >&2
+  $L --integration ps -a >&2 || true
+  for svc in energy-api identity-service telemetry-worker metric-worker scheduler maintenance connectivity nginx; do
+    cid="$(docker ps -aq --filter "label=com.docker.compose.project=${HVAC_LOCAL_PROJECT}" --filter "label=com.docker.compose.service=${svc}" | head -n 1 || true)"
+    if [ -n "$cid" ]; then
+      st="$(docker inspect --format '{{.State.Status}}/{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$cid" 2>/dev/null || true)"
+      if [ "$st" != "running/healthy" ] && [ "$st" != "running/none" ]; then
+        echo "--- container logs: ${svc} (${st}) ---" >&2
+        docker logs --tail=60 "$cid" >&2 || true
+      fi
+    fi
+  done
+  exit 1
+fi
 # Single-file bind mounts retain the previous host inode after `tar -xf` replaces a file;
 # recreate mqtt-broker only when a mounted file in the container differs from the host tree.
 if [ -f infra/telemetry/mqtt/mosquitto.conf ] && [ -f infra/telemetry/mqtt/acl ]; then

@@ -88,12 +88,37 @@ stage_agent() {
   fi
 }
 
+stage_python_solver() {
+  local src="$1"
+  local dest="$2"
+  if [[ ! -f "$src/pyproject.toml" || ! -f "$src/ai_solver/main.py" ]]; then
+    echo "error: python solver source is missing pyproject.toml or ai_solver/main.py" >&2
+    exit 1
+  fi
+  mkdir -p "$dest"
+  rm -rf "$dest/ai_solver"
+  cp "$src/pyproject.toml" "$dest/pyproject.toml"
+  mkdir -p "$dest/ai_solver"
+  cp -a "$src/ai_solver/." "$dest/ai_solver/"
+  find "$dest" -depth \( -type d -name __pycache__ -o -type d -name .pytest_cache \) -exec rm -rf {} +
+  find "$dest" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+}
+
 if [[ "${1:-}" == "--stage-agent" ]]; then
   if [[ $# -ne 3 ]]; then
     echo "error: usage: build-release.sh --stage-agent SRC DEST" >&2
     exit 1
   fi
   stage_agent "$2" "$3"
+  exit 0
+fi
+
+if [[ "${1:-}" == "--stage-python" ]]; then
+  if [[ $# -ne 3 ]]; then
+    echo "error: usage: build-release.sh --stage-python SRC DEST" >&2
+    exit 1
+  fi
+  stage_python_solver "$2" "$3"
   exit 0
 fi
 
@@ -110,7 +135,7 @@ if ! command -v go >/dev/null 2>&1; then
 fi
 
 rm -rf "$staging"
-mkdir -p "$staging/bins" "$staging/web" "$staging/agent" "$staging/migrator" "$staging/mqtt"
+mkdir -p "$staging/bins" "$staging/web" "$staging/agent" "$staging/migrator" "$staging/mqtt" "$staging/python"
 
 git rev-parse HEAD | tr -d '[:space:]' > "$staging/REVISION"
 echo >> "$staging/REVISION"
@@ -129,6 +154,11 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
 
 while IFS=$'\t' read -r service image kind required package <&3; do
   [[ -z "${service:-}" || "$service" == \#* ]] && continue
+  if [[ "$kind" == python ]]; then
+    echo "staging $service ($package)"
+    stage_python_solver "$root/$package" "$staging/python/$service"
+    continue
+  fi
   if [[ "$kind" != go && "$kind" != static ]]; then
     continue
   fi
@@ -180,4 +210,5 @@ echo "staged web $(du -sb "$staging/web" | awk '{print $1}') bytes"
 echo "staged agent $(du -sb "$staging/agent" | awk '{print $1}') bytes (lockfile and dist, no node_modules)"
 echo "staged migrator $(du -sb "$staging/migrator" | awk '{print $1}') bytes"
 echo "staged mqtt $(du -sb "$staging/mqtt" | awk '{print $1}') bytes"
+echo "staged python $(du -sb "$staging/python" | awk '{print $1}') bytes"
 echo "production release staged at $staging ($(cat "$staging/REVISION"))"

@@ -2,7 +2,6 @@ package connectivity
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -10,13 +9,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 )
-
-type commandPointSourceMetadata struct {
-	ActuationMode   string `json:"actuationMode"`
-	Channel         string `json:"channel"`
-	CoilAddress     *int   `json:"coilAddress"`
-	PulseDurationMs int    `json:"pulseDurationMs"`
-}
 
 // ResolveCommandRoute finds where a command goes from the Registry read port, and
 // refuses it before anything is sent when the Device is not behind a registered
@@ -77,16 +69,16 @@ func applyPointSourceMetadata(route *commandmodel.DeviceRoute, pointCode string,
 	if len(rawMetadata) == 0 {
 		return nil
 	}
-	var metadata commandPointSourceMetadata
-	if err := json.Unmarshal(rawMetadata, &metadata); err != nil {
+	metadata, err := commandmodel.ParseCommandPointMetadataJSON(rawMetadata)
+	if err != nil {
 		return fmt.Errorf("decode command Point source metadata: %w", err)
 	}
 	if mode := normalizeActuationMode(metadata.ActuationMode); mode != "" {
 		route.PointCode = pointCode
 		route.ActuationMode = mode
-		route.Channel = strings.TrimSpace(metadata.Channel)
-		if metadata.PulseDurationMs > 0 {
-			route.PulseDurationMs = metadata.PulseDurationMs
+		route.Channel = metadata.Channel
+		if metadata.PulseDurationMS > 0 {
+			route.PulseDurationMs = metadata.PulseDurationMS
 		}
 		if metadata.CoilAddress != nil && *metadata.CoilAddress >= 0 {
 			route.CoilAddress = *metadata.CoilAddress

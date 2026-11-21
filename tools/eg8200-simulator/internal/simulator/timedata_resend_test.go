@@ -389,3 +389,123 @@ func TestTimedataResendQueueMarkPublishedContiguousAndRestart(t *testing.T) {
 		t.Fatalf("expected only DEV-ACK/p1 replayed, got %+v", replayed)
 	}
 }
+
+func TestTimedataResendDrainUpToPreservesLiveRecordsAfterWatermark(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	timedataDir := filepath.Join(dir, "timedata")
+	cursorPath := filepath.Join(dir, "resend-cursor.json")
+	timedata, err := edgecontrol.OpenFileTimedata(timedataDir, edgecontrol.PriorityLow)
+	if err != nil {
+		t.Fatalf("OpenFileTimedata() error = %v", err)
+	}
+
+	host, err := edgecontrol.NewHost()
+	if err != nil {
+		t.Fatalf("NewHost() error = %v", err)
+	}
+	makeCh := func(id string) edgecontrol.ChannelDescriptor {
+		return edgecontrol.ChannelDescriptor{
+			ComponentID:               "DEV-WM",
+			ChannelID:                 id,
+			PointID:                   "DEV-WM:" + id,
+			DataType:                  edgecontrol.DataTypeDouble,
+			Access:                    edgecontrol.AccessReadOnly,
+			Unit:                      "degC",
+			Category:                  edgecontrol.ChannelCategoryOpenemsType,
+			PollPriority:              edgecontrol.PriorityHigh,
+			LocalPersistencePriority:  edgecontrol.PriorityHigh,
+			RemotePersistencePriority: edgecontrol.PriorityHigh,
+			AggregationPriority:       edgecontrol.PriorityHigh,
+			ResendPriority:            edgecontrol.PriorityHigh,
+		}
+	}
+	stub := &resendStubDevice{
+		component: edgecontrol.ComponentDescriptor{
+			ID:        "DEV-WM",
+			Enabled:   true,
+			Kind:      edgecontrol.ComponentDeviceDriver,
+			Type:      "DECLARATIVE_MODBUS_TCP",
+			FactoryID: edgecontrol.DeclarativeModbusFactoryID,
+			Version:   "1.0.0",
+		},
+		channels: []edgecontrol.ChannelDescriptor{makeCh("p1"), makeCh("p2")},
+		samples:  map[string]edgecontrol.Sample{},
+	}
+	if err := host.RegisterAdapter(stub); err != nil {
+		t.Fatalf("RegisterAdapter() error = %v", err)
+	}
+	if err := host.Start(nil); err != nil {
+		t.Fatalf("host.Start() error = %v", err)
+	}
+	if err := host.AttachTimedata(timedata); err != nil {
+		t.Fatalf("AttachTimedata() error = %v", err)
+	}
+
+	t1 := time.Date(2026, 11, 21, 10, 0, 0, 0, time.UTC)
+	stub.samples["DEV-WM/p1"] = edgecontrol.Sample{Value: edgecontrol.DoubleValue(10), Quality: edgecontrol.QualityGood, ObservedAt: t1}
+	stub.samples["DEV-WM/p2"] = edgecontrol.Sample{Value: edgecontrol.DoubleValue(20), Quality: edgecontrol.QualityGood, ObservedAt: t1}
+	if _, err := host.RunCycle(context.Background(), t1); err != nil {
+		t.Fatalf("RunCycle t1 error = %v", err)
+	}
+
+	var mu sync.Mutex
+	var replayed []mqttTelemetryEnvelope
+	q, err := NewTimedataResendQueue(TimedataResendConfig{
+		GatewayID:  "01950000-0000-7000-8000-000000000088",
+		Timedata:   timedata,
+		CursorPath: cursorPath,
+		BatchSize:  10,
+		PointMetadata: func(addr string) TimedataResendPointMeta {
+			dev, code, _ := strings.Cut(addr, "/")
+			return TimedataResendPointMeta{DeviceID: dev, PointCode: code, Priority: edgecontrol.PriorityHigh}
+		},
+		Publish: func(_ context.Context, _ string, payload []byte) error {
+			var env mqttTelemetryEnvelope
+			if err := json.Unmarshal(payload, &env); err == nil {
+				mu.Lock()
+				replayed = append(replayed, env)
+				mu.Unlock()
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewTimedataResendQueue() error = %v", err)
+	}
+
+	zeroRes, err := q.DrainUpTo(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("DrainUpTo(0) error = %v", err)
+	}
+	if zeroRes.RecordsReplayed != 0 || !q.IsSynced() {
+		t.Fatalf("expected DrainUpTo(0) to mark synced without replaying t1 records, got res=%+v synced=%v", zeroRes, q.IsSynced())
+	}
+
+	q.SetOnlineSynced(false)
+	offlineWatermark := q.LatestTimedataSequence()
+
+	t2 := t1.Add(time.Second)
+	stub.samples["DEV-WM/p1"] = edgecontrol.Sample{Value: edgecontrol.DoubleValue(15), Quality: edgecontrol.QualityGood, ObservedAt: t2}
+	stub.samples["DEV-WM/p2"] = edgecontrol.Sample{Value: edgecontrol.DoubleValue(25), Quality: edgecontrol.QualityGood, ObservedAt: t2}
+	if _, err := host.RunCycle(context.Background(), t2); err != nil {
+		t.Fatalf("RunCycle t2 error = %v", err)
+	}
+
+	boundedRes, err := q.DrainUpTo(context.Background(), offlineWatermark)
+	if err != nil {
+		t.Fatalf("DrainUpTo(offlineWatermark) error = %v", err)
+	}
+	if boundedRes.RecordsReplayed != 2 || !q.IsSynced() {
+		t.Fatalf("expected DrainUpTo(offlineWatermark) to replay only 2 t1 records, got res=%+v synced=%v", boundedRes, q.IsSynced())
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(replayed) != 1 || replayed[0].Timestamp != t1.UnixMilli() {
+		t.Fatalf("expected only t1 (%d) replayed, got %+v", t1.UnixMilli(), replayed)
+	}
+	if got := q.CursorSnapshot().ByPriority[edgecontrol.PriorityHigh]; got != offlineWatermark {
+		t.Fatalf("expected HIGH cursor=%d after bounded drain, got %d", offlineWatermark, got)
+	}
+}

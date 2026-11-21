@@ -1021,3 +1021,77 @@ WHERE command_id = $1::uuid AND delivered_at IS NULL
 		t.Fatalf("expected PRIORITY_PREEMPTED reason, got %s", lastTransition.Reason)
 	}
 }
+
+func TestPostgresStoreDueWorkTenantsAndClaimAny(t *testing.T) {
+	store, admin, now, cleanup := postgresDispatchFixture(t)
+	defer cleanup()
+	ctx := t.Context()
+
+	emptyDisp, err := store.DueDispatchTenants(ctx, *now)
+	if err != nil {
+		t.Fatalf("DueDispatchTenants empty: %v", err)
+	}
+	if len(emptyDisp) != 0 {
+		t.Fatalf("expected 0 due dispatch tenants initially, got %v", emptyDisp)
+	}
+	emptyVer, err := store.DueVerificationTenants(ctx, *now)
+	if err != nil {
+		t.Fatalf("DueVerificationTenants empty: %v", err)
+	}
+	if len(emptyVer) != 0 {
+		t.Fatalf("expected 0 due verification tenants initially, got %v", emptyVer)
+	}
+
+	created, err := store.Submit(ctx, postgresCommandRequest("pg-claim-any-1", 24))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dueDisp, err := store.DueDispatchTenants(ctx, *now)
+	if err != nil {
+		t.Fatalf("DueDispatchTenants populated: %v", err)
+	}
+	if len(dueDisp) != 1 || dueDisp[0] != commandTenantA {
+		t.Fatalf("DueDispatchTenants = %v, want [%s]", dueDisp, commandTenantA)
+	}
+
+	dispatch, err := store.ClaimAnyDispatch(ctx, "disp-any-pg", 10*time.Second, 0)
+	if err != nil {
+		t.Fatalf("ClaimAnyDispatch: %v", err)
+	}
+	if dispatch.CommandID != created.Intent.ID || dispatch.TenantID != commandTenantA {
+		t.Fatalf("ClaimAnyDispatch = %+v, want command %s tenant %s", dispatch, created.Intent.ID, commandTenantA)
+	}
+	if err := store.ResolveDispatch(ctx, dispatch, commandmodel.ConnectorResult{
+		Phase:         commandmodel.ConnectorAcknowledged,
+		Acknowledged:  true,
+		EvidenceID:    "provider-ack-any-1",
+		EdgeExecution: recordAcknowledgedConnectorEvidence(t, store, *now, dispatch),
+	}); err != nil {
+		t.Fatalf("ResolveDispatch: %v", err)
+	}
+
+	dueVer, err := store.DueVerificationTenants(ctx, *now)
+	if err != nil {
+		t.Fatalf("DueVerificationTenants populated: %v", err)
+	}
+	if len(dueVer) != 1 || dueVer[0] != commandTenantA {
+		t.Fatalf("DueVerificationTenants = %v, want [%s]", dueVer, commandTenantA)
+	}
+
+	verification, err := store.ClaimAnyVerification(ctx, "ver-any-pg", 15*time.Second, 0)
+	if err != nil {
+		t.Fatalf("ClaimAnyVerification: %v", err)
+	}
+	if verification.CommandID != created.Intent.ID || verification.TenantID != commandTenantA {
+		t.Fatalf("ClaimAnyVerification = %+v, want command %s", verification, created.Intent.ID)
+	}
+	*now = now.Add(time.Second)
+	if err := store.ResolveVerification(ctx, verification, commandmodel.VerificationResult{
+		Outcome:    commandmodel.VerificationSucceeded,
+		EvidenceID: "s2-verified-any-1",
+		Reported:   postgresReportedState(verification, 24),
+	}); err != nil {
+		t.Fatalf("ResolveVerification: %v", err)
+	}
+	assertDispatchDatabaseState(t, admin, created.Intent.ID, "SUCCEEDED", "VERIFIED", 1, false)
+}

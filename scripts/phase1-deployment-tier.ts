@@ -1,4 +1,25 @@
 const resourceExpression = /^\$\{([A-Z0-9_]+):-([^}]+)\}$/;
+const clickHouseNativeDisableSentinels = new Set(["off", "false", "disabled", "http"]);
+
+export function resolvePhase1ClickHouseNativeAddr({
+  localClickHouse,
+  runtimeEnvironment = {},
+}: {
+  localClickHouse: boolean;
+  runtimeEnvironment?: Record<string, string | undefined>;
+}): string {
+  const explicit =
+    runtimeEnvironment.PHASE1_CLICKHOUSE_NATIVE_ADDR?.trim() ||
+    runtimeEnvironment.TELEMETRY_CLICKHOUSE_NATIVE_ADDR?.trim() ||
+    "";
+  if (explicit !== "") {
+    if (clickHouseNativeDisableSentinels.has(explicit.toLowerCase())) {
+      return "";
+    }
+    return explicit;
+  }
+  return localClickHouse ? "clickhouse:9000" : "";
+}
 
 export interface ComposeResourceRef {
   variable: string;
@@ -215,6 +236,12 @@ export function resolveDeploymentTier({
     );
   }
 
+  const localClickHouse = additionalProfiles.includes("local-clickhouse");
+  const clickhouseNativeAddr = resolvePhase1ClickHouseNativeAddr({
+    localClickHouse,
+    runtimeEnvironment,
+  });
+
   return {
     tier,
     profiles: [...tier.profiles],
@@ -226,6 +253,8 @@ export function resolveDeploymentTier({
       ...runtimeOverrides,
       PHASE1_DEPLOYMENT_TIER: tier.id,
       PHASE1_OBSERVABILITY_PROFILE: tier.profiles[0],
+      PHASE1_CLICKHOUSE_NATIVE_ADDR: clickhouseNativeAddr,
+      TELEMETRY_CLICKHOUSE_NATIVE_ADDR: clickhouseNativeAddr,
     },
   };
 }

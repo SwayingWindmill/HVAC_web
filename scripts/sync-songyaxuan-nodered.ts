@@ -271,19 +271,40 @@ export function buildRemoteModulePayload(options: {
   const tunnelTs = readFileSync(resolve(scriptDir, '../edge/node-red/gateway-nodered-tunnel.ts'), 'utf8');
   const syncTs = readFileSync(resolve(scriptDir, './sync-songyaxuan-nodered.ts'), 'utf8');
 
-  const imports: string[] = [];
+  const namespaceImports = new Map<string, string>();
+  const namedImports = new Map<string, Set<string>>();
+  const rawImports: string[] = [];
   const bodies: string[] = [];
   for (const source of [tunnelTs, syncTs]) {
     const stripped = stripTypeScriptTypes(source.replace(/^#![^\n]*\n/, ''), { mode: 'strip' });
-    const body = stripped.replace(/^import\s+[\s\S]*?\s+from\s+['"]([^'"]+)['"];?\s*$/gm, (stmt, spec: string) => {
+    const body = stripped.replace(/^import\s+([\s\S]*?)\s+from\s+['"]([^'"]+)['"];?\s*$/gm, (_stmt, clause: string, spec: string) => {
       if (spec.startsWith('node:')) {
-        const cleaned = stmt.replace(/\s+/g, ' ').trim();
-        if (!imports.includes(cleaned)) imports.push(cleaned);
+        const trimmed = clause.replace(/\s+/g, ' ').trim();
+        if (trimmed.startsWith('* as ')) {
+          namespaceImports.set(`${spec}:${trimmed}`, `import ${trimmed} from '${spec}';`);
+        } else if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+          const names = namedImports.get(spec) ?? new Set<string>();
+          for (const part of trimmed.slice(1, -1).split(',')) {
+            const binding = part.trim();
+            if (binding) names.add(binding);
+          }
+          namedImports.set(spec, names);
+        } else {
+          const stmtClean = `import ${trimmed} from '${spec}';`;
+          if (!rawImports.includes(stmtClean)) rawImports.push(stmtClean);
+        }
       }
       return '';
     });
     bodies.push(body);
   }
+  const imports: string[] = [
+    ...namespaceImports.values(),
+    ...Array.from(namedImports.entries()).map(
+      ([spec, names]) => `import { ${Array.from(names).join(', ')} } from '${spec}';`,
+    ),
+    ...rawImports,
+  ];
 
   return [
     ...imports,

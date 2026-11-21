@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 )
 
@@ -247,6 +249,14 @@ func (input PointMutation) Validate() error {
 	}
 	if input.PointType == "COMMAND" && !input.Writable || input.PointType != "COMMAND" && input.PointType != "SETTING" && input.Writable {
 		return ErrInvalidMutation
+	}
+	if _, err := edgecontrol.ParseEdgePointSourceMetadata(input.SourceMetadata); err != nil {
+		return ErrInvalidMutation
+	}
+	if input.PointType == "COMMAND" {
+		if err := commandmodel.ValidateCommandPointMetadata(input.SourceMetadata); err != nil {
+			return ErrInvalidMutation
+		}
 	}
 	if input.PointType != "COUNTER" {
 		if input.CounterDecreaseMode != nil || input.CounterRolloverModulus != nil {
@@ -615,6 +625,7 @@ type RegistryWriter interface {
 	SaveSpace(context.Context, registryauth.GrantClaims, SpaceMutation) (Space, bool, error)
 	SaveAsset(context.Context, registryauth.GrantClaims, AssetMutation) (Asset, bool, error)
 	SaveDevice(context.Context, registryauth.GrantClaims, DeviceMutation) (Device, bool, error)
+	ReplaceDeviceHardware(context.Context, registryauth.GrantClaims, ReplaceDeviceHardwareRequest) (ReplaceDeviceHardwareResult, error)
 	SaveSensor(context.Context, registryauth.GrantClaims, SensorMutation) (Sensor, bool, error)
 	SavePoint(context.Context, registryauth.GrantClaims, PointMutation) (TelemetryPoint, bool, error)
 	Rebind(context.Context, registryauth.GrantClaims, RebindRequest) (BindingMutationResult, error)

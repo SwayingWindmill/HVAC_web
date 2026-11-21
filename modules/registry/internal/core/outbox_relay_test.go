@@ -341,7 +341,6 @@ func TestPostgresOutboxRelayCopyOnlyPointRetireSaveDeviceRetireAndAttemptCap(t *
 		t.Fatalf("expected NOT_APPLICABLE for copy-only active device, got %#v", copyCall.Devices)
 	}
 
-	// Add a non-copied own TELEMETRY point -> flips to APPLICABLE; then retire it -> RetiredPoints ONLY.
 	ownPt, _, err := store.SavePoint(ctx, ptClaims, PointMutation{
 		SiteID: site.ID, ReportingDeviceID: copyDev.ID, PointCode: "own_temp", SourceKey: "own-temp",
 		DisplayName: "Own Temp", PointType: "TELEMETRY", ValueType: "NUMBER", Unit: "Cel",
@@ -363,7 +362,6 @@ func TestPostgresOutboxRelayCopyOnlyPointRetireSaveDeviceRetireAndAttemptCap(t *
 		t.Fatalf("expected APPLICABLE after own active point added, got %#v", ownCall.Devices)
 	}
 
-	// Retire ownPt via SavePoint -> deliverPointSync must send it ONLY in RetiredPoints, NOT Devices[0].Points.
 	if _, _, err := store.SavePoint(ctx, ptClaims, PointMutation{
 		ID: ownPt.ID, SiteID: site.ID, ReportingDeviceID: copyDev.ID, PointCode: "own_temp", SourceKey: "own-temp",
 		DisplayName: "Own Temp", PointType: "TELEMETRY", ValueType: "NUMBER", Unit: "Cel",
@@ -483,5 +481,265 @@ func TestOutboxRelayPostJSONDrainsOversizedBodyForKeepAlive(t *testing.T) {
 	}
 	if got := newConns.Load(); got != 1 {
 		t.Fatalf("new connections = %d, want 1 (keep-alive connection reused after draining response body)", got)
+	}
+}
+
+func TestPostgresOutboxRelayMaterializesTemplateDriverToBoundGateway(t *testing.T) {
+	ctx, store := openRegistryWriterIntegrationStore(t)
+
+	type capturedDriverCall struct {
+		path string
+		req  RelayGatewayTemplateDriverRequest
+	}
+	var (
+		mu          sync.Mutex
+		driverCalls []capturedDriverCall
+	)
+	connServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/config-shadow:upsert-template-driver") {
+			var req RelayGatewayTemplateDriverRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			mu.Lock()
+			driverCalls = append(driverCalls, capturedDriverCall{path: r.URL.Path, req: req})
+			mu.Unlock()
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer connServer.Close()
+
+	now := time.Date(2026, 11, 21, 9, 0, 0, 0, time.UTC)
+	relay, err := NewOutboxRelay(store, OutboxRelayConfig{
+		ConnectivityBaseURL: connServer.URL,
+		LeaseOwner:          "test-template-driver-relay",
+		Now:                 func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	site, _, err := store.SaveSite(ctx, writerIntegrationClaims(registryauth.ActionSiteWrite), SiteMutation{
+		Code: "tpl-drv-site", DisplayName: "Template Driver Site", Timezone: "Asia/Shanghai", Status: "ACTIVE",
+		Meta: MutationMeta{IdempotencyKey: "tpl-drv-site-01", Reason: "site setup"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	devClaims := writerIntegrationClaims(registryauth.ActionDeviceWrite, site.ID)
+	gw, _, err := store.SaveDevice(ctx, devClaims, DeviceMutation{
+		SiteID: site.ID, Code: "tpl-drv-gw", DisplayName: "Template Driver GW", DeviceType: "GATEWAY", Status: "ACTIVE",
+		Meta: MutationMeta{IdempotencyKey: "tpl-drv-gw-01", Reason: "gateway setup"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	chiller, _, err := store.SaveDevice(ctx, devClaims, DeviceMutation{
+		SiteID: site.ID, Code: "tpl-drv-ch1", DisplayName: "Template Chiller 1", DeviceType: "CHILLER", Status: "ACTIVE",
+		Tags: map[string]string{"modbus_endpoint": "10.9.0.11:502", "modbus_unit_id": "7"},
+		Meta: MutationMeta{IdempotencyKey: "tpl-drv-ch1-01", Reason: "chiller setup with tags"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tplClaims := writerIntegrationClaims(registryauth.ActionTemplateManage, site.ID)
+	tplRev, _, err := store.ReleaseTemplate(ctx, tplClaims, ReleaseTemplateRequest{
+		TemplateKey:  "chiller.modbus.tpl",
+		TemplateKind: TemplateDevice,
+		Payload: map[string]any{
+			"deviceType": "CHILLER",
+			"modbusDriver": map[string]any{
+				"driverType": "MODBUS_TCP",
+				"timeoutMs":  1200,
+				"retries":    2,
+				"registers": []any{
+					map[string]any{
+						"pointCode": "chw_supply_temp_c", "semanticChannel": "SupplyTemperature",
+						"functionCode": 3, "address": 100, "registerCount": 1,
+						"rawType": "INT16", "byteOrder": "BIG_ENDIAN", "wordOrder": "BIG_ENDIAN",
+						"scale": 0.1, "offset": 0.0, "pollPriority": "HIGH",
+					},
+				},
+			},
+		},
+		ReleaseReferences: map[string]string{"spec": "P1-3"},
+		Meta:              MutationMeta{IdempotencyKey: "tpl-drv-rel-01", Reason: "release modbus template"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := store.AssignTemplate(ctx, tplClaims, AssignTemplateRequest{
+		SiteID: site.ID, TargetType: TemplateDevice, TargetID: chiller.ID, TemplateRevisionID: tplRev.ID,
+		EffectiveAt: "2026-11-21T08:00:00Z",
+		Meta:        MutationMeta{IdempotencyKey: "tpl-drv-assign-01", Reason: "assign before binding"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := relay.ProcessOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	beforeBindCount := len(driverCalls)
+	mu.Unlock()
+	if beforeBindCount != 0 {
+		t.Fatalf("expected 0 driver calls before gateway binding, got %d", beforeBindCount)
+	}
+
+	bindClaims := writerIntegrationClaims(registryauth.ActionBindingWrite, site.ID)
+	if _, err := store.Rebind(ctx, bindClaims, RebindRequest{
+		SiteID: site.ID, Kind: BindingGatewaySourceKey, SourceID: chiller.ID, TargetID: gw.ID, Role: "chiller-01",
+		EffectiveAt: "2026-11-21T08:05:00Z",
+		Meta:        MutationMeta{IdempotencyKey: "tpl-drv-bind-01", Reason: "bind chiller to gateway"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := relay.ProcessOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	afterBind := append([]capturedDriverCall(nil), driverCalls...)
+	driverCalls = nil
+	mu.Unlock()
+	expectedPath := "/internal/v1/gateways/" + gw.ID + "/config-shadow:upsert-template-driver"
+	if len(afterBind) != 1 || afterBind[0].path != expectedPath || afterBind[0].req.DeviceKey != "chiller-01" ||
+		afterBind[0].req.Endpoint == nil || *afterBind[0].req.Endpoint != "10.9.0.11:502" ||
+		afterBind[0].req.UnitID == nil || *afterBind[0].req.UnitID != 7 {
+		t.Fatalf("unexpected driver upsert after binding: %+v", afterBind)
+	}
+
+	tplRev2, _, err := store.ReleaseTemplate(ctx, tplClaims, ReleaseTemplateRequest{
+		TemplateKey:  "chiller.modbus.tpl",
+		TemplateKind: TemplateDevice,
+		Payload: map[string]any{
+			"deviceType": "CHILLER",
+			"modbusDriver": map[string]any{
+				"driverType": "MODBUS_TCP",
+				"timeoutMs":  2000,
+				"retries":    3,
+				"registers": []any{
+					map[string]any{
+						"pointCode": "chw_supply_temp_c", "semanticChannel": "SupplyTemperature",
+						"functionCode": 3, "address": 100, "registerCount": 1,
+						"rawType": "INT16", "byteOrder": "BIG_ENDIAN", "wordOrder": "BIG_ENDIAN",
+						"scale": 0.1, "offset": 0.0, "pollPriority": "HIGH",
+					},
+				},
+			},
+		},
+		ReleaseReferences: map[string]string{"spec": "P1-3"},
+		Meta:              MutationMeta{IdempotencyKey: "tpl-drv-rel-02", Reason: "release modbus template v2"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.AssignTemplate(ctx, tplClaims, AssignTemplateRequest{
+		SiteID: site.ID, TargetType: TemplateDevice, TargetID: chiller.ID, TemplateRevisionID: tplRev2.ID,
+		EffectiveAt: "2026-11-21T08:10:00Z",
+		Meta:        MutationMeta{IdempotencyKey: "tpl-drv-assign-02", Reason: "assign template v2 while bound"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := relay.ProcessOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	afterAssign := append([]capturedDriverCall(nil), driverCalls...)
+	driverCalls = nil
+	mu.Unlock()
+	if len(afterAssign) != 1 || afterAssign[0].req.TimeoutMS == nil || *afterAssign[0].req.TimeoutMS != 2000 || !strings.Contains(afterAssign[0].req.Reason, tplRev2.ID) {
+		t.Fatalf("unexpected driver upsert after v2 template assignment: %+v", afterAssign)
+	}
+
+	gw2, _, err := store.SaveDevice(ctx, devClaims, DeviceMutation{
+		SiteID: site.ID, Code: "tpl-drv-gw2", DisplayName: "Template Driver GW2", DeviceType: "GATEWAY", Status: "ACTIVE",
+		Meta: MutationMeta{IdempotencyKey: "tpl-drv-gw2-01", Reason: "second gateway setup"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Rebind(ctx, bindClaims, RebindRequest{
+		SiteID: site.ID, Kind: BindingGatewaySourceKey, SourceID: chiller.ID, TargetID: gw2.ID, Role: "chiller-01-new",
+		EffectiveAt: "2026-11-21T08:15:00Z",
+		Meta:        MutationMeta{IdempotencyKey: "tpl-drv-rebind-gw2-01", Reason: "move chiller to gateway 2"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := relay.ProcessOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	afterMove := append([]capturedDriverCall(nil), driverCalls...)
+	driverCalls = nil
+	mu.Unlock()
+	if len(afterMove) != 2 ||
+		afterMove[0].path != "/internal/v1/gateways/"+gw.ID+"/config-shadow:upsert-template-driver" ||
+		!afterMove[0].req.Remove || afterMove[0].req.DeviceKey != "chiller-01" ||
+		afterMove[1].path != "/internal/v1/gateways/"+gw2.ID+"/config-shadow:upsert-template-driver" ||
+		afterMove[1].req.Remove || afterMove[1].req.DeviceKey != "chiller-01-new" {
+		t.Fatalf("expected move to remove on gw and upsert on gw2, got %+v", afterMove)
+	}
+
+	tplNoDriver, _, err := store.ReleaseTemplate(ctx, tplClaims, ReleaseTemplateRequest{
+		TemplateKey:       "chiller.modbus.tpl",
+		TemplateKind:      TemplateDevice,
+		Payload:           map[string]any{"deviceType": "CHILLER"},
+		ReleaseReferences: map[string]string{"spec": "P1-3"},
+		Meta:              MutationMeta{IdempotencyKey: "tpl-drv-rel-03", Reason: "release template without modbus driver"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.AssignTemplate(ctx, tplClaims, AssignTemplateRequest{
+		SiteID: site.ID, TargetType: TemplateDevice, TargetID: chiller.ID, TemplateRevisionID: tplNoDriver.ID,
+		EffectiveAt: "2026-11-21T08:20:00Z",
+		Meta:        MutationMeta{IdempotencyKey: "tpl-drv-assign-03", Reason: "assign template without modbus driver"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := relay.ProcessOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	afterDropDriver := append([]capturedDriverCall(nil), driverCalls...)
+	driverCalls = nil
+	mu.Unlock()
+	if len(afterDropDriver) != 1 || afterDropDriver[0].path != "/internal/v1/gateways/"+gw2.ID+"/config-shadow:upsert-template-driver" ||
+		!afterDropDriver[0].req.Remove || afterDropDriver[0].req.DeviceKey != "chiller-01-new" {
+		t.Fatalf("expected driver removal when template omits modbusDriver, got %+v", afterDropDriver)
+	}
+
+	if _, _, err := store.AssignTemplate(ctx, tplClaims, AssignTemplateRequest{
+		SiteID: site.ID, TargetType: TemplateDevice, TargetID: chiller.ID, TemplateRevisionID: tplRev2.ID,
+		EffectiveAt: "2026-11-21T08:25:00Z",
+		Meta:        MutationMeta{IdempotencyKey: "tpl-drv-assign-04", Reason: "restore template v2"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := relay.ProcessOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	driverCalls = nil
+	mu.Unlock()
+
+	if _, err := store.Rebind(ctx, bindClaims, RebindRequest{
+		SiteID: site.ID, Kind: BindingGatewaySourceKey, SourceID: chiller.ID, TargetID: gw2.ID, Role: "chiller-01-new",
+		EffectiveAt: "2026-11-21T08:30:00Z", CloseOnly: true,
+		Meta: MutationMeta{IdempotencyKey: "tpl-drv-close-01", Reason: "unbind chiller from gateway 2"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := relay.ProcessOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	afterClose := append([]capturedDriverCall(nil), driverCalls...)
+	mu.Unlock()
+	if len(afterClose) != 1 || afterClose[0].path != "/internal/v1/gateways/"+gw2.ID+"/config-shadow:upsert-template-driver" ||
+		!afterClose[0].req.Remove || afterClose[0].req.DeviceKey != "chiller-01-new" {
+		t.Fatalf("expected CloseOnly unbind to emit remove on gw2, got %+v", afterClose)
 	}
 }

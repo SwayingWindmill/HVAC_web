@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 )
 
 type SpaceConfig struct {
@@ -203,6 +205,10 @@ func validateAssetModel(config Config) error {
 			if err := validateCommandPointMetadata(point); err != nil {
 				return fmt.Errorf("point %s: %w", point.TelemetryKey, err)
 			}
+		} else if len(point.SourceMetadata) > 0 {
+			if _, err := edgecontrol.ParseEdgePointSourceMetadata(point.SourceMetadata); err != nil {
+				return fmt.Errorf("point %s sourceMetadata: %w", point.TelemetryKey, err)
+			}
 		}
 		if point.PointType != "COMMAND" && point.PointType != "SETTING" && point.Writable {
 			return fmt.Errorf("point %s only COMMAND or SETTING may be writable", point.TelemetryKey)
@@ -285,14 +291,23 @@ func allowedPointType(value string) bool {
 	}
 }
 
+func parsedPointMetadata(point PointConfig) edgecontrol.EdgePointSourceMetadata {
+	meta, err := edgecontrol.ParseEdgePointSourceMetadata(point.SourceMetadata)
+	if err != nil {
+		return edgecontrol.EdgePointSourceMetadata{}
+	}
+	return meta
+}
+
 func validateCommandPointMetadata(point PointConfig) error {
-	kind, _ := point.SourceMetadata["controlKind"].(string)
-	capability, _ := point.SourceMetadata["capability"].(string)
-	feedbackPointKey, _ := point.SourceMetadata["feedbackPointKey"].(string)
-	if strings.TrimSpace(capability) == "" || strings.TrimSpace(feedbackPointKey) == "" {
+	meta, err := edgecontrol.ParseEdgePointSourceMetadata(point.SourceMetadata)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(meta.Capability) == "" || strings.TrimSpace(meta.FeedbackPointKey) == "" {
 		return errors.New("COMMAND metadata requires capability and feedbackPointKey")
 	}
-	switch kind {
+	switch meta.ControlKind {
 	case "ACTION":
 		if point.ValueType != "BOOLEAN" {
 			return errors.New("ACTION COMMAND must use BOOLEAN valueType")
@@ -301,15 +316,11 @@ func validateCommandPointMetadata(point PointConfig) error {
 		if point.ValueType != "NUMBER" {
 			return errors.New("NUMBER COMMAND must use NUMBER valueType")
 		}
-		parameterKey, _ := point.SourceMetadata["parameterKey"].(string)
-		minimum, minimumOK := point.SourceMetadata["minimum"].(float64)
-		maximum, maximumOK := point.SourceMetadata["maximum"].(float64)
-		step, stepOK := point.SourceMetadata["step"].(float64)
-		if strings.TrimSpace(parameterKey) == "" || !minimumOK || !maximumOK || !stepOK || minimum > maximum || step <= 0 {
+		if strings.TrimSpace(meta.ParameterKey) == "" || meta.Minimum == nil || meta.Maximum == nil || meta.Step == nil || *meta.Minimum > *meta.Maximum || *meta.Step <= 0 {
 			return errors.New("NUMBER COMMAND metadata requires parameterKey and valid minimum/maximum/step")
 		}
 	default:
-		return fmt.Errorf("unsupported COMMAND controlKind %q", kind)
+		return fmt.Errorf("unsupported COMMAND controlKind %q", meta.ControlKind)
 	}
 	return nil
 }

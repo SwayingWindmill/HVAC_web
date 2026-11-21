@@ -37,6 +37,11 @@ type runtimeClaimRequest struct {
 	LeaseSeconds int64  `json:"leaseSeconds"`
 }
 
+type runtimeAnyClaimRequest struct {
+	LeaseOwner   string `json:"leaseOwner"`
+	LeaseSeconds int64  `json:"leaseSeconds"`
+}
+
 type runtimeDispatchResolveRequest struct {
 	Envelope commandmodel.DispatchEnvelope `json:"envelope"`
 	Result   commandmodel.ConnectorResult  `json:"result"`
@@ -79,6 +84,20 @@ func (client *RuntimeClient) ClaimDispatch(ctx context.Context, tenantID, leaseO
 	return envelope, err
 }
 
+func (client *RuntimeClient) ClaimAnyDispatch(ctx context.Context, leaseOwner string, leaseFor, waitDuration time.Duration) (commandmodel.DispatchEnvelope, error) {
+	var envelope commandmodel.DispatchEnvelope
+	status, err := client.post(ctx, claimAnyPathWithWait(commandservice.InternalDispatchClaimAnyPath, waitDuration), runtimeAnyClaimRequest{
+		LeaseOwner: leaseOwner, LeaseSeconds: int64(leaseFor / time.Second),
+	}, &envelope)
+	if status == http.StatusNoContent && err == nil {
+		return commandmodel.DispatchEnvelope{}, commandservice.ErrNoDispatchAvailable
+	}
+	if err == nil && !commandmodel.IsUUIDv7(envelope.TenantID) {
+		return commandmodel.DispatchEnvelope{}, commandservice.ErrInvalidRequest
+	}
+	return envelope, err
+}
+
 func (client *RuntimeClient) ResolveDispatch(ctx context.Context, envelope commandmodel.DispatchEnvelope, result commandmodel.ConnectorResult) error {
 	ctx, _ = withCommandTraceContext(ctx, envelope.TraceID)
 	_, err := client.post(ctx, commandservice.InternalDispatchResolvePath, runtimeDispatchResolveRequest{Envelope: envelope, Result: result}, nil)
@@ -97,6 +116,31 @@ func (client *RuntimeClient) ClaimVerification(ctx context.Context, tenantID, le
 		return commandmodel.VerificationEnvelope{}, commandservice.ErrInvalidRequest
 	}
 	return envelope, err
+}
+
+func (client *RuntimeClient) ClaimAnyVerification(ctx context.Context, leaseOwner string, leaseFor, waitDuration time.Duration) (commandmodel.VerificationEnvelope, error) {
+	var envelope commandmodel.VerificationEnvelope
+	status, err := client.post(ctx, claimAnyPathWithWait(commandservice.InternalVerificationClaimAnyPath, waitDuration), runtimeAnyClaimRequest{
+		LeaseOwner: leaseOwner, LeaseSeconds: int64(leaseFor / time.Second),
+	}, &envelope)
+	if status == http.StatusNoContent && err == nil {
+		return commandmodel.VerificationEnvelope{}, commandservice.ErrVerificationNotAvailable
+	}
+	if err == nil && !commandmodel.IsUUIDv7(envelope.TenantID) {
+		return commandmodel.VerificationEnvelope{}, commandservice.ErrInvalidRequest
+	}
+	return envelope, err
+}
+
+func claimAnyPathWithWait(basePath string, waitDuration time.Duration) string {
+	waitMs := waitDuration.Milliseconds()
+	if waitMs <= 0 {
+		return basePath
+	}
+	if waitMs > 2000 {
+		waitMs = 2000
+	}
+	return fmt.Sprintf("%s?waitMs=%d", basePath, waitMs)
 }
 
 func (client *RuntimeClient) ResolveVerification(ctx context.Context, envelope commandmodel.VerificationEnvelope, result commandmodel.VerificationResult) error {

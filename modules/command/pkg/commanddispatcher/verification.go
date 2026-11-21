@@ -17,6 +17,13 @@ type DurableVerificationStore interface {
 	ResolveVerification(ctx context.Context, envelope commandmodel.VerificationEnvelope, result commandmodel.VerificationResult) error
 }
 
+// AnyTenantVerificationStore is an optional extension of DurableVerificationStore supporting
+// cross-tenant fair claim with bounded wait.
+type AnyTenantVerificationStore interface {
+	DurableVerificationStore
+	ClaimAnyVerification(ctx context.Context, leaseOwner string, leaseFor, waitDuration time.Duration) (commandmodel.VerificationEnvelope, error)
+}
+
 type ReportedStateReader interface {
 	ReadReportedState(ctx context.Context, envelope commandmodel.VerificationEnvelope) (string, commandmodel.ReportedStateEvidence, error)
 }
@@ -174,6 +181,27 @@ func (worker *DurableVerificationWorker) RunOnce(ctx context.Context, tenantID s
 	if err != nil {
 		return err
 	}
+	return worker.verifyAndResolve(ctx, envelope)
+}
+
+// RunAnyOnce claims the next acknowledged command due for reported-state verification
+// across all tenants and evaluates it once.
+func (worker *DurableVerificationWorker) RunAnyOnce(ctx context.Context, waitDuration time.Duration) error {
+	if worker == nil || worker.store == nil || worker.verifier == nil || strings.TrimSpace(worker.workerID) == "" {
+		return errors.New("verification worker is not configured")
+	}
+	anyStore, ok := worker.store.(AnyTenantVerificationStore)
+	if !ok {
+		return errors.New("verification store does not support cross-tenant claim")
+	}
+	envelope, err := anyStore.ClaimAnyVerification(ctx, worker.workerID, worker.leaseFor, waitDuration)
+	if err != nil {
+		return err
+	}
+	return worker.verifyAndResolve(ctx, envelope)
+}
+
+func (worker *DurableVerificationWorker) verifyAndResolve(ctx context.Context, envelope commandmodel.VerificationEnvelope) error {
 	verifyCtx, traceID := withCommandTraceContext(ctx, envelope.TraceID)
 	result, err := worker.verifier.VerifyOnce(verifyCtx, envelope)
 	if err != nil {

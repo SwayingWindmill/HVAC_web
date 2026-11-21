@@ -111,7 +111,7 @@ func (l *GatewayRateLimiter) getOrCreateLocked(gatewayID string, now time.Time) 
 
 func normalizeRateLimitMessageType(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case MessageTypeTelemetry, MessageTypeEvent, MessageTypeStatus:
+	case MessageTypeTelemetry, MessageTypeEvent, MessageTypeStatus, MessageTypeShadow:
 		return strings.ToLower(strings.TrimSpace(raw))
 	default:
 		return "unknown"

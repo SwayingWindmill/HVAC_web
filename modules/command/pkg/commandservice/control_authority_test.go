@@ -318,29 +318,44 @@ func TestControlAuthorityClaimDispatchPreDispatchGateScanAndTransientHandling(t 
 	// Resolve cmd2 as pre-send transient error or complete it; queue another pump stop with transient telemetry error.
 	_ = h.Authority.ResolveDispatch(context.Background(), env, commandmodel.ConnectorResult{Phase: commandmodel.ConnectorPreSendRejected, FailureCode: "COMMAND_CONTROL_DISABLED"})
 
-	h.Live.SetError(caPumpDev, "run_state", unavailableControlError("transient telemetry timeout"))
+	h.Live.Set(caPumpDev, "run_state", healthyTextObs(now, "RUNNING", 21), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000011")
 	cmd3, err := h.Authority.SubmitOperatorCommand(context.Background(), op, SubmitOperatorCommandInput{
 		AssetID: caPumpID, CommandPointID: caPumpStopPt, IdempotencyKey: "cmd-q3",
 	})
 	if err != nil {
-		// Wait: Submit fails because Live.ReadLivePoint returns 503; restore healthy for submit then inject error before ClaimDispatch!
-		h.Live.Set(caPumpDev, "run_state", healthyTextObs(now, "RUNNING", 21), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000011")
-		cmd3, err = h.Authority.SubmitOperatorCommand(context.Background(), op, SubmitOperatorCommandInput{
-			AssetID: caPumpID, CommandPointID: caPumpStopPt, IdempotencyKey: "cmd-q3",
-		})
-		if err != nil {
-			t.Fatalf("submit cmd3 failed: %v", err)
-		}
-		h.Live.SetError(caPumpDev, "run_state", unavailableControlError("transient telemetry timeout"))
+		t.Fatalf("submit cmd3 failed: %v", err)
 	}
+	h.Live.SetError(caPumpDev, "run_state", unavailableControlError("transient telemetry timeout"))
 	_, transientErr := h.Authority.ClaimDispatch(context.Background(), caTenantID, "dispatcher-1", 30*time.Second)
-	if !errors.Is(transientErr, ErrNoDispatchAvailable) {
-		t.Fatalf("expected ErrNoDispatchAvailable on transient failure, got %v", transientErr)
+	if !errors.Is(transientErr, ErrNoDispatchAvailable) || !errors.Is(transientErr, errTransientSafetyEvaluation) {
+		t.Fatalf("expected ErrNoDispatchAvailable wrapping errTransientSafetyEvaluation on transient failure, got %v", transientErr)
 	}
 	got3, _ := h.Store.Get(context.Background(), caTenantID, cmd3.View.CommandID)
-	// Must remain QUEUED (requeued once, NOT burned 3 times in the same ClaimDispatch call).
 	if got3.Status != commandmodel.IntentQueued || len(got3.Attempts) != 1 {
 		t.Fatalf("expected 1 retryable attempt keeping QUEUED, got status=%s attempts=%d", got3.Status, len(got3.Attempts))
+	}
+
+	h.Live.Set(caPumpDev, "run_state", healthyTextObs(now, "RUNNING", 21), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000012")
+	badInterlockModel := h.Twin.Models[caSiteID]
+	pts := append([]TelemetryPointDTO(nil), badInterlockModel.TelemetryPoints...)
+	for i := range pts {
+		if pts[i].ID == caPumpStopPt {
+			metaCopy := make(map[string]any, len(pts[i].SourceMetadata)+1)
+			for k, v := range pts[i].SourceMetadata {
+				metaCopy[k] = v
+			}
+			metaCopy["interlockChecks"] = []any{map[string]any{"deviceId": 123, "key": "run_state", "expected": "RUNNING"}}
+			pts[i].SourceMetadata = metaCopy
+		}
+	}
+	badInterlockModel.TelemetryPoints = pts
+	h.Twin.Models[caSiteID] = badInterlockModel
+	_, interlockErr := h.Authority.SubmitOperatorCommand(context.Background(), op, SubmitOperatorCommandInput{
+		AssetID: caPumpID, CommandPointID: caPumpStopPt, IdempotencyKey: "cmd-bad-interlock-type",
+	})
+	var ctrlErr *ControlError
+	if !errors.As(interlockErr, &ctrlErr) || ctrlErr.HTTPStatus != 400 || ctrlErr.Code != "COMMAND_REQUEST_INVALID" {
+		t.Fatalf("expected 400 COMMAND_REQUEST_INVALID for malformed interlockChecks field, got %v", interlockErr)
 	}
 }
 

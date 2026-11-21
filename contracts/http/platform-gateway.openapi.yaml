@@ -2218,6 +2218,14 @@
         "responses": { "200": { "description": "Updated Device.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Device" } } } }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
     },
+    "/api/v1/sites/{siteId}/devices/{deviceId}/replace-hardware": {
+      "post": {
+        "operationId": "replaceDeviceHardware", "summary": "Replace physical hardware on an existing logical Device while preserving historical continuity", "x-architecture-status": "ACTIVE", "x-shape-source": "contracts/http/s05-registry-writer.openapi.json",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/DeviceId" }, { "$ref": "#/components/parameters/CsrfToken" }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "./s05-registry-writer.openapi.json#/components/schemas/ReplaceDeviceHardwareRequest" } } } },
+        "responses": { "201": { "description": "Replaced hardware on the logical Device.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ReplaceDeviceHardwareResult" } } } }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
     "/api/v1/sites/{siteId}/sensors": {
       "post": {
         "operationId": "createSiteSensor", "summary": "Create an independently traceable PhysicalSensor", "x-architecture-status": "ACTIVE", "x-shape-source": "contracts/http/s05-registry-writer.openapi.json",
@@ -5787,9 +5795,58 @@
           "updatedAt": {
             "$ref": "#/components/schemas/Instant"
           },
+          "externalId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "protocolAddress": {
+            "type": "object",
+            "additionalProperties": true
+          },
           "tags": {
             "$ref": "#/components/schemas/TagMap"
           }
+        }
+      },
+      "ReplaceDeviceHardwareResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "replacementId",
+          "tenantId",
+          "siteId",
+          "deviceId",
+          "revision",
+          "previousExternalId",
+          "newExternalId",
+          "previousGatewayDeviceId",
+          "newGatewayDeviceId",
+          "previousProtocolAddress",
+          "newProtocolAddress",
+          "reason",
+          "replacedBy",
+          "replacedAt",
+          "device",
+          "replayed"
+        ],
+        "properties": {
+          "replacementId": { "$ref": "#/components/schemas/UUIDv7" },
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "deviceId": { "$ref": "#/components/schemas/UUIDv7" },
+          "revision": { "$ref": "#/components/schemas/Revision" },
+          "previousExternalId": { "type": ["string", "null"], "minLength": 1, "maxLength": 256 },
+          "newExternalId": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "previousGatewayDeviceId": { "oneOf": [{ "$ref": "#/components/schemas/UUIDv7" }, { "type": "null" }] },
+          "newGatewayDeviceId": { "oneOf": [{ "$ref": "#/components/schemas/UUIDv7" }, { "type": "null" }] },
+          "previousProtocolAddress": { "type": ["object", "null"], "additionalProperties": true },
+          "newProtocolAddress": { "type": ["object", "null"], "additionalProperties": true },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 1000 },
+          "replacedBy": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "replacedAt": { "$ref": "#/components/schemas/Instant" },
+          "device": { "$ref": "#/components/schemas/Device" },
+          "replayed": { "type": "boolean" }
         }
       },
       "DeviceBinding": {
@@ -7096,6 +7153,14 @@
           "maxCommandsPerHour": { "type": "integer" },
           "deadbandC": { "type": "number" },
           "executionMode": { "type": "string", "enum": ["SHADOW", "CLOSED_LOOP"] },
+          "pumpFreqMinHz": { "type": "number" },
+          "pumpFreqMaxHz": { "type": "number" },
+          "maxFreqStepHz": { "type": "number" },
+          "freqDeadbandHz": { "type": "number" },
+          "fanSpeedMinPct": { "type": "number" },
+          "fanSpeedMaxPct": { "type": "number" },
+          "maxFanStepPct": { "type": "number" },
+          "fanDeadbandPct": { "type": "number" },
           "manualBackoffUntil": { "oneOf": [{ "$ref": "#/components/schemas/Instant" }, { "type": "null" }] },
           "manualBackoffReason": { "type": "string" },
           "tripReason": { "type": "string" },
@@ -7132,6 +7197,14 @@
           "minRunningChillers": { "type": "integer", "minimum": 0 },
           "maxCommandsPerHour": { "type": "integer", "minimum": 1, "maximum": 6 },
           "executionMode": { "type": "string", "enum": ["SHADOW", "CLOSED_LOOP"] },
+          "pumpFreqMinHz": { "type": "number", "minimum": 20.0, "maximum": 50.0 },
+          "pumpFreqMaxHz": { "type": "number", "minimum": 25.0, "maximum": 60.0 },
+          "maxFreqStepHz": { "type": "number", "exclusiveMinimum": 0, "maximum": 10.0 },
+          "freqDeadbandHz": { "type": "number", "minimum": 0.1, "maximum": 5.0 },
+          "fanSpeedMinPct": { "type": "number", "minimum": 15.0, "maximum": 100.0 },
+          "fanSpeedMaxPct": { "type": "number", "minimum": 20.0, "maximum": 100.0 },
+          "maxFanStepPct": { "type": "number", "exclusiveMinimum": 0, "maximum": 25.0 },
+          "fanDeadbandPct": { "type": "number", "minimum": 0.5, "maximum": 15.0 },
           "reason": { "type": "string", "minLength": 1, "maxLength": 1000 },
           "verificationCode": { "type": "string", "pattern": "^[0-9]{6}$" },
           "expectedRevision": { "type": "integer", "minimum": 0 }
@@ -7159,6 +7232,8 @@
           "commandIntentId": { "oneOf": [{ "$ref": "#/components/schemas/UUIDv7" }, { "type": "null" }] },
           "deviceId": { "$ref": "#/components/schemas/UUIDv7" },
           "targetCapability": { "type": "string" },
+          "loopKey": { "type": "string" },
+          "targetUnit": { "type": "string", "enum": ["C", "Hz", "%"] },
           "baselineSupplyTempC": { "type": "number" },
           "appliedSupplyTempC": { "type": "number" },
           "restoreSupplyTempC": { "type": "number" },

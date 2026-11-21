@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/commandauth"
@@ -21,16 +22,20 @@ import (
 // MemoryAuthorityStore adapts the in-memory Service state machine to both AuthorityStore
 // and RuntimeStore with single-use grant tracking for unit and gateway BFF tests.
 type MemoryAuthorityStore struct {
-	svc             *Service
-	mu              sync.Mutex
-	now             func() time.Time
-	order           []string
-	usedGrants      map[string]struct{}
-	deadLetters     map[string]*ControlAlarmOutboxRecord
-	ListErr         error
-	PriorityLockErr error
-	DeadLetterErr   error
-	AlarmWakeups    int
+	svc                *Service
+	mu                 sync.Mutex
+	now                func() time.Time
+	order              []string
+	usedGrants         map[string]struct{}
+	deadLetters        map[string]*ControlAlarmOutboxRecord
+	dispatchSignal     *workSignal
+	verificationSignal *workSignal
+	dispatchCursor     atomic.Uint64
+	verificationCursor atomic.Uint64
+	ListErr            error
+	PriorityLockErr    error
+	DeadLetterErr      error
+	AlarmWakeups       int
 }
 
 func NewMemoryAuthorityStore(now func() time.Time) *MemoryAuthorityStore {
@@ -38,10 +43,12 @@ func NewMemoryAuthorityStore(now func() time.Time) *MemoryAuthorityStore {
 		now = time.Now
 	}
 	return &MemoryAuthorityStore{
-		svc:         New(now),
-		now:         now,
-		usedGrants:  map[string]struct{}{},
-		deadLetters: map[string]*ControlAlarmOutboxRecord{},
+		svc:                New(now),
+		now:                now,
+		usedGrants:         map[string]struct{}{},
+		deadLetters:        map[string]*ControlAlarmOutboxRecord{},
+		dispatchSignal:     newWorkSignal(),
+		verificationSignal: newWorkSignal(),
 	}
 }
 
@@ -60,6 +67,9 @@ func (m *MemoryAuthorityStore) Submit(_ context.Context, req commandmodel.Submit
 		m.mu.Lock()
 		m.order = append(m.order, res.Intent.ID)
 		m.mu.Unlock()
+		if res.Intent.Status == commandmodel.IntentQueued {
+			m.dispatchSignal.Notify()
+		}
 	}
 	return res, nil
 }
@@ -121,7 +131,11 @@ func (m *MemoryAuthorityStore) Approve(_ context.Context, req commandmodel.Appro
 	if req.TenantID != "" && intent.TenantID != req.TenantID {
 		return commandmodel.CommandIntent{}, ErrCommandNotFound
 	}
-	return m.svc.Approve(req)
+	updated, err := m.svc.Approve(req)
+	if err == nil && updated.Status == commandmodel.IntentQueued {
+		m.dispatchSignal.Notify()
+	}
+	return updated, err
 }
 
 func (m *MemoryAuthorityStore) Reconcile(_ context.Context, req commandmodel.ReconcileRequest) (commandmodel.CommandIntent, error) {
@@ -344,7 +358,115 @@ func (m *MemoryAuthorityStore) ClaimDispatch(_ context.Context, tenantID, leaseO
 }
 
 func (m *MemoryAuthorityStore) ResolveDispatch(_ context.Context, env commandmodel.DispatchEnvelope, res commandmodel.ConnectorResult) error {
-	return m.svc.ResolveDispatch(env, res)
+	err := m.svc.ResolveDispatch(env, res)
+	if err == nil {
+		if intent, gErr := m.svc.Get(env.CommandID); gErr == nil {
+			if intent.Status == commandmodel.IntentQueued {
+				switch res.FailureCode {
+				case "DISPATCH_SAFETY_EVALUATION_FAILED", "DISPATCH_SAFETY_UNAVAILABLE":
+				default:
+					m.dispatchSignal.Notify()
+				}
+			} else if intent.Status == commandmodel.IntentDispatching && res.Phase == commandmodel.ConnectorAcknowledged {
+				m.verificationSignal.Notify()
+			}
+		}
+	}
+	return err
+}
+
+func (m *MemoryAuthorityStore) SubscribeDispatchWork() <-chan struct{} {
+	if m == nil {
+		return nil
+	}
+	return m.dispatchSignal.Subscribe()
+}
+
+func (m *MemoryAuthorityStore) SubscribeVerificationWork() <-chan struct{} {
+	if m == nil {
+		return nil
+	}
+	return m.verificationSignal.Subscribe()
+}
+
+func (m *MemoryAuthorityStore) DueDispatchTenants(_ context.Context, _ time.Time) ([]string, error) {
+	m.mu.Lock()
+	ids := append([]string(nil), m.order...)
+	m.mu.Unlock()
+	seen := make(map[string]struct{})
+	tenants := make([]string, 0)
+	for _, id := range ids {
+		intent, err := m.svc.Get(id)
+		if err != nil || intent.Status != commandmodel.IntentQueued {
+			continue
+		}
+		if _, dup := seen[intent.TenantID]; dup {
+			continue
+		}
+		seen[intent.TenantID] = struct{}{}
+		tenants = append(tenants, intent.TenantID)
+	}
+	sort.Strings(tenants)
+	return tenants, nil
+}
+
+func (m *MemoryAuthorityStore) DueVerificationTenants(_ context.Context, _ time.Time) ([]string, error) {
+	m.mu.Lock()
+	ids := append([]string(nil), m.order...)
+	m.mu.Unlock()
+	seen := make(map[string]struct{})
+	tenants := make([]string, 0)
+	for _, id := range ids {
+		intent, err := m.svc.Get(id)
+		if err != nil || intent.Status != commandmodel.IntentDispatching {
+			continue
+		}
+		if _, dup := seen[intent.TenantID]; dup {
+			continue
+		}
+		seen[intent.TenantID] = struct{}{}
+		tenants = append(tenants, intent.TenantID)
+	}
+	sort.Strings(tenants)
+	return tenants, nil
+}
+
+func (m *MemoryAuthorityStore) ClaimAnyDispatch(ctx context.Context, leaseOwner string, leaseFor, waitDuration time.Duration) (commandmodel.DispatchEnvelope, error) {
+	if strings.TrimSpace(leaseOwner) == "" || leaseFor < time.Second || leaseFor > 2*time.Minute {
+		return commandmodel.DispatchEnvelope{}, ErrInvalidRequest
+	}
+	return claimAnyWork(
+		ctx,
+		waitDuration,
+		m.SubscribeDispatchWork,
+		func(scanCtx context.Context) ([]string, error) {
+			return m.DueDispatchTenants(scanCtx, m.now().UTC())
+		},
+		&m.dispatchCursor,
+		func(claimCtx context.Context, tenantID string) (commandmodel.DispatchEnvelope, error) {
+			return m.ClaimDispatch(claimCtx, tenantID, leaseOwner, leaseFor)
+		},
+		ErrNoDispatchAvailable,
+	)
+}
+
+func (m *MemoryAuthorityStore) ClaimAnyVerification(ctx context.Context, leaseOwner string, leaseFor, waitDuration time.Duration) (commandmodel.VerificationEnvelope, error) {
+	if strings.TrimSpace(leaseOwner) == "" || leaseFor < time.Second || leaseFor > time.Minute {
+		return commandmodel.VerificationEnvelope{}, ErrInvalidRequest
+	}
+	return claimAnyWork(
+		ctx,
+		waitDuration,
+		m.SubscribeVerificationWork,
+		func(scanCtx context.Context) ([]string, error) {
+			return m.DueVerificationTenants(scanCtx, m.now().UTC())
+		},
+		&m.verificationCursor,
+		func(claimCtx context.Context, tenantID string) (commandmodel.VerificationEnvelope, error) {
+			return m.ClaimVerification(claimCtx, tenantID, leaseOwner, leaseFor)
+		},
+		ErrVerificationNotAvailable,
+	)
 }
 
 func (m *MemoryAuthorityStore) ClaimVerification(_ context.Context, tenantID, leaseOwner string, leaseFor time.Duration) (commandmodel.VerificationEnvelope, error) {
@@ -589,14 +711,16 @@ func (f *FakePlantTwin) GetDispatchContext(_ context.Context, tenantID, siteID, 
 		}
 		for _, pt := range model.TelemetryPoints {
 			if pt.ID == pointID && pt.ReportingDeviceID == deviceID {
-				if mode, _ := pt.SourceMetadata["actuationMode"].(string); mode != "" {
-					out.ActuationMode = mode
-				}
-				if fk, _ := pt.SourceMetadata["feedbackPointKey"].(string); fk != "" {
-					out.FeedbackPointKey = fk
-				}
-				if checks, err := parsePointInterlockChecks(pt.SourceMetadata, model); err == nil && len(checks) > 0 {
-					out.Interlocks = checks
+				if meta, err := commandmodel.ParseCommandPointMetadata(pt.SourceMetadata); err == nil {
+					if meta.ActuationMode != "" {
+						out.ActuationMode = meta.ActuationMode
+					}
+					if meta.FeedbackPointKey != "" {
+						out.FeedbackPointKey = meta.FeedbackPointKey
+					}
+					if checks, chkErr := validatePointInterlockChecks(meta.InterlockChecks, model); chkErr == nil && len(checks) > 0 {
+						out.Interlocks = checks
+					}
 				}
 				break
 			}

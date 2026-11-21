@@ -77,6 +77,17 @@
           "meta": { "$ref": "#/components/schemas/MutationMeta" }
         }
       },
+      "ReplaceDeviceHardwareRequest": {
+        "type": "object", "additionalProperties": false,
+        "required": ["newExternalId", "meta"],
+        "properties": {
+          "newExternalId": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "newGatewayDeviceId": { "$ref": "#/components/schemas/UUIDv7" },
+          "newSourceKey": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,127}$" },
+          "newProtocolAddress": { "type": "object", "additionalProperties": true },
+          "meta": { "$ref": "#/components/schemas/MutationMeta" }
+        }
+      },
       "SensorMutation": {
         "type": "object", "additionalProperties": false,
         "required": ["code", "displayName", "sensorType", "metadata", "status", "meta"],

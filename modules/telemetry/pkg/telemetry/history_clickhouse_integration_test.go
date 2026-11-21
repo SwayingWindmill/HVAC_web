@@ -485,9 +485,20 @@ func TestPostgresOutboxProjectsClickHouseNativePrepareBatchDeduplicatesRetry(t *
 		t.Fatal(err)
 	}
 	defer repository.Close()
+	writerUser := strings.TrimSpace(os.Getenv("S2_CLICKHOUSE_WRITER_USERNAME"))
+	writerPassword := os.Getenv("S2_CLICKHOUSE_WRITER_PASSWORD")
+	if writerUser == "" {
+		if os.Getenv("S2_CLICKHOUSE_PASSWORD") == "" {
+			writerUser = "telemetry_history_writer"
+			writerPassword = ""
+		} else {
+			writerUser = os.Getenv("S2_CLICKHOUSE_USERNAME")
+			writerPassword = os.Getenv("S2_CLICKHOUSE_PASSWORD")
+		}
+	}
 	sink, err := NewClickHouseNativeHistorySink(ClickHouseNativeHistoryConfig{
 		Addr: clickHouseNativeAddr, Database: "telemetry_history", Table: "observations",
-		Username: os.Getenv("S2_CLICKHOUSE_USERNAME"), Password: os.Getenv("S2_CLICKHOUSE_PASSWORD"),
+		Username: writerUser, Password: writerPassword,
 	})
 	if err != nil {
 		t.Fatal(err)

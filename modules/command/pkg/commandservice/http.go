@@ -724,10 +724,14 @@ func ObservabilityRoute(request *http.Request) string {
 		return "commands.cancel"
 	case InternalDispatchClaimPath:
 		return "dispatch.claim"
+	case InternalDispatchClaimAnyPath:
+		return "dispatch.claim-any"
 	case InternalDispatchResolvePath:
 		return "dispatch.resolve"
 	case InternalVerificationClaimPath:
 		return "verification.claim"
+	case InternalVerificationClaimAnyPath:
+		return "verification.claim-any"
 	case InternalVerificationResolvePath:
 		return "verification.resolve"
 	case InternalConnectorPreparePath:

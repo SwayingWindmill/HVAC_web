@@ -517,3 +517,54 @@ func TestResolveLatestPreparationTruthDerivation(t *testing.T) {
 		}
 	})
 }
+
+func TestAuxiliaryTargetsJSONPersistenceHelpers(t *testing.T) {
+	if got := string(marshalAuxiliaryTargets(nil)); got != "[]" {
+		t.Fatalf("marshalAuxiliaryTargets(nil) = %q, want []", got)
+	}
+	if got := string(marshalAuxiliaryTargets([]intelligencemodel.OptimizationAuxiliaryTarget{})); got != "[]" {
+		t.Fatalf("marshalAuxiliaryTargets(empty) = %q, want []", got)
+	}
+	for _, raw := range []string{"", "null", "[]", "   "} {
+		decoded, err := unmarshalAuxiliaryTargets([]byte(raw))
+		if err != nil || decoded != nil {
+			t.Fatalf("unmarshalAuxiliaryTargets(%q) = (%v, %v), want (nil, nil)", raw, decoded, err)
+		}
+	}
+
+	sample := []intelligencemodel.OptimizationAuxiliaryTarget{
+		{
+			LoopKey:     "chilled_water_pump_freq",
+			Capability:  "SET_FREQUENCY",
+			TargetValue: 38.5,
+			Unit:        "Hz",
+			Rationale:   "CHW pump frequency coordinated with supply reset",
+		},
+		{
+			LoopKey:     "cooling_water_pump_freq",
+			Capability:  "SET_FREQUENCY",
+			TargetValue: 41.0,
+			Unit:        "Hz",
+			Rationale:   "CW pump frequency coordinated for condenser heat rejection",
+		},
+		{
+			LoopKey:     "cooling_tower_fan_speed",
+			Capability:  "SET_FAN_SPEED",
+			TargetValue: 67.0,
+			Unit:        "%",
+			Rationale:   "Cooling tower fan speed balanced against wet-bulb heat rejection",
+		},
+	}
+	encoded := marshalAuxiliaryTargets(sample)
+	decoded, err := unmarshalAuxiliaryTargets(encoded)
+	if err != nil {
+		t.Fatalf("round-trip decode error: %v", err)
+	}
+	if len(decoded) != 3 || decoded[0] != sample[0] || decoded[1] != sample[1] || decoded[2] != sample[2] {
+		t.Fatalf("decoded mismatch:\n got=%#v\nwant=%#v", decoded, sample)
+	}
+
+	if _, err := unmarshalAuxiliaryTargets([]byte(`{"unexpected":"object"}`)); err == nil {
+		t.Fatal("expected error decoding non-array JSON into auxiliary targets")
+	}
+}

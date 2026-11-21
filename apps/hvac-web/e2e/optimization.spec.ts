@@ -951,3 +951,197 @@ test('canary bindings dialog manages loop routing and negative samples drawer in
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toBe('negative-samples-14d.jsonl');
 });
+
+test('multi-loop auto-control lease validates VFD and fan bounds conditionally and renders Hz/% execution monitors', async ({ page, gateway }) => {
+  await page.goto(`/energy-analysis/optimization?site=${SITE_ID}`);
+
+  const leasePanel = page.getByRole('region', { name: '自动控制租约' });
+  await expect(leasePanel).toBeVisible();
+  await leasePanel.getByRole('button', { name: '开启自动控制租约…' }).click();
+
+  const dialog = page.getByRole('dialog', { name: '开启限时自动控制租约' });
+  await expect(dialog.getByLabel(/水泵下限频率/)).toHaveCount(0);
+  await expect(dialog.getByLabel(/风机下限转速/)).toHaveCount(0);
+
+  await dialog.getByRole('checkbox', { name: '调整运行频率' }).check();
+  await dialog.getByRole('checkbox', { name: '调整风机转速' }).check();
+
+  await expect(dialog.getByLabel(/水泵下限频率/)).toHaveValue('28.0');
+  await expect(dialog.getByLabel(/风机上限转速/)).toHaveValue('100.0');
+
+  // Inverted pump frequency bounds trigger inline Chinese error.
+  await dialog.getByLabel(/水泵下限频率/).fill('49.0');
+  await dialog.getByLabel(/水泵上限频率/).fill('45.0');
+  await dialog.getByLabel(/水泵上限频率/).blur();
+  await expect(dialog).toContainText('水泵最高频率需不低于下限且在 25.0 至 60.0 Hz 之间');
+
+  // Fix VFD & fan bounds and submit.
+  await dialog.getByLabel(/水泵下限频率/).fill('30.0');
+  await dialog.getByLabel(/水泵上限频率/).fill('48.0');
+  await dialog.getByLabel(/风机下限转速/).fill('35');
+  await dialog.getByLabel(/风机上限转速/).fill('90');
+  await dialog.getByLabel('原因').fill('冷站水泵与冷却塔风机开启协同变频闭环');
+  await dialog.getByRole('textbox', { name: '动态口令' }).fill('123456');
+  await dialog.getByRole('button', { name: '确认开启租约' }).click();
+
+  await expect(page.getByText('已开启限时自动控制租约')).toBeVisible();
+  const armWrite = gateway.writes.find((write) => write.method === 'PUT' && write.path.endsWith('/optimization/auto-control-lease'));
+  expect(armWrite?.body).toMatchObject({
+    pumpFreqMinHz: 30,
+    pumpFreqMaxHz: 48,
+    maxFreqStepHz: 2.5,
+    freqDeadbandHz: 0.5,
+    fanSpeedMinPct: 35,
+    fanSpeedMaxPct: 90,
+    maxFanStepPct: 10,
+    fanDeadbandPct: 2,
+  });
+
+  await expect(leasePanel).toContainText('水泵变频边界');
+  await expect(leasePanel).toContainText('30.0 至 48.0 Hz');
+  await expect(leasePanel).toContainText('风机转速边界');
+  await expect(leasePanel).toContainText('35.0% 至 90.0%');
+
+  const now = Date.now();
+  gateway.optimizationExecutionMonitors = [
+    {
+      id: '01990000-9900-7000-8000-000000000101',
+      tenantId: principal.context.tenantId,
+      siteId: SITE_ID,
+      leaseId: '01990000-8800-7000-8000-000000000001',
+      recommendationId: '01990000-2000-7000-8000-000000000101',
+      commandIntentId: '01990000-7777-7000-8000-000000000101',
+      deviceId: '01990000-6000-7000-8000-000000000001',
+      targetCapability: 'SET_CHILLED_WATER_TEMPERATURE_SETPOINT',
+      loopKey: 'PLANT',
+      targetUnit: 'C',
+      baselineSupplyTempC: 7.0,
+      appliedSupplyTempC: 7.8,
+      restoreSupplyTempC: 7.0,
+      zoneTempMaxC: 26.0,
+      supplyTempMinC: 6.0,
+      supplyTempMaxC: 12.0,
+      executionMode: 'CLOSED_LOOP',
+      startedAt: new Date(now - 5 * 60_000).toISOString(),
+      windowEndsAt: new Date(now + 25 * 60_000).toISOString(),
+      status: 'OBSERVING',
+      createdAt: new Date(now - 5 * 60_000).toISOString(),
+      updatedAt: new Date(now - 5 * 60_000).toISOString(),
+    },
+    {
+      id: '01990000-9900-7000-8000-000000000102',
+      tenantId: principal.context.tenantId,
+      siteId: SITE_ID,
+      leaseId: '01990000-8800-7000-8000-000000000001',
+      recommendationId: '01990000-2000-7000-8000-000000000101',
+      commandIntentId: '01990000-7777-7000-8000-000000000102',
+      deviceId: '01990000-6000-7000-8000-000000000002',
+      targetCapability: 'SET_FREQUENCY',
+      loopKey: 'CHW_PUMP',
+      targetUnit: 'Hz',
+      baselineSupplyTempC: 42.0,
+      appliedSupplyTempC: 39.5,
+      restoreSupplyTempC: 42.0,
+      rawRecommendedValue: 36.0,
+      clampedValue: 39.5,
+      guardrailVerdict: 'CLAMPED',
+      zoneTempMaxC: 26.0,
+      supplyTempMinC: 30.0,
+      supplyTempMaxC: 48.0,
+      executionMode: 'CLOSED_LOOP',
+      startedAt: new Date(now - 5 * 60_000).toISOString(),
+      windowEndsAt: new Date(now + 25 * 60_000).toISOString(),
+      status: 'VERIFIED',
+      createdAt: new Date(now - 5 * 60_000).toISOString(),
+      updatedAt: new Date(now - 1 * 60_000).toISOString(),
+    },
+    {
+      id: '01990000-9900-7000-8000-000000000103',
+      tenantId: principal.context.tenantId,
+      siteId: SITE_ID,
+      leaseId: '01990000-8800-7000-8000-000000000001',
+      recommendationId: '01990000-2000-7000-8000-000000000101',
+      commandIntentId: '01990000-7777-7000-8000-000000000103',
+      deviceId: '01990000-6000-7000-8000-000000000003',
+      targetCapability: 'SET_FAN_SPEED',
+      loopKey: 'CT_FAN',
+      targetUnit: '%',
+      baselineSupplyTempC: 60.0,
+      appliedSupplyTempC: 66.0,
+      restoreSupplyTempC: 60.0,
+      zoneTempMaxC: 26.0,
+      supplyTempMinC: 35.0,
+      supplyTempMaxC: 90.0,
+      executionMode: 'CLOSED_LOOP',
+      startedAt: new Date(now - 5 * 60_000).toISOString(),
+      windowEndsAt: new Date(now + 25 * 60_000).toISOString(),
+      status: 'OBSERVING',
+      createdAt: new Date(now - 5 * 60_000).toISOString(),
+      updatedAt: new Date(now - 5 * 60_000).toISOString(),
+    },
+  ];
+  await page.reload();
+
+  const monitorsTable = page.getByRole('table', { name: '30 分钟执行监护' });
+  await expect(monitorsTable).toContainText('冷冻水供水');
+  await expect(monitorsTable).toContainText('冷冻泵变频');
+  await expect(monitorsTable).toContainText('冷却塔风机');
+  await expect(monitorsTable).toContainText('42.0 Hz → 39.5 Hz');
+  await expect(monitorsTable).toContainText('原建议 36.0 Hz，限幅为 39.5 Hz');
+  await expect(monitorsTable).toContainText('频率 30.0 至 48.0 Hz');
+  await expect(monitorsTable).toContainText('60.0% → 66.0%');
+  await expect(monitorsTable).toContainText('转速 35.0 至 90.0%');
+  await expect(monitorsTable).not.toContainText('CHW_PUMP');
+  await expect(monitorsTable).not.toContainText('CT_FAN');
+});
+
+test('latest recommendation renders multi-loop auxiliary pump and tower fan targets', async ({ page, gateway }) => {
+  const baseLatest = fixture('optimization-latest.json');
+  gateway.optimization = {
+    ...baseLatest,
+    recommendation: {
+      ...baseLatest.recommendation,
+      auxiliaryTargets: [
+        {
+          loopKey: 'chilled_water_pump_freq',
+          capability: 'SET_FREQUENCY',
+          targetValue: 38.5,
+          unit: 'Hz',
+          rationale: 'CHW pump frequency coordinated with supply reset and comfort margin',
+        },
+        {
+          loopKey: 'cooling_water_pump_freq',
+          capability: 'SET_FREQUENCY',
+          targetValue: 41.0,
+          unit: 'Hz',
+          rationale: 'CW pump frequency coordinated for condenser heat rejection',
+        },
+        {
+          loopKey: 'cooling_tower_fan_speed',
+          capability: 'SET_FAN_SPEED',
+          targetValue: 67.0,
+          unit: '%',
+          rationale: 'Cooling tower fan speed balanced against wet-bulb heat rejection',
+        },
+      ],
+    },
+  };
+
+  await page.goto(`/energy-analysis/optimization?site=${SITE_ID}`);
+
+  const auxPanel = page.getByRole('region', { name: '协同变频与风机建议' });
+  await expect(auxPanel).toBeVisible();
+  await expect(auxPanel).toContainText('冷冻水泵频率');
+  await expect(auxPanel).toContainText('38.5 Hz');
+  await expect(auxPanel).toContainText('冷却水泵频率');
+  await expect(auxPanel).toContainText('41.0 Hz');
+  await expect(auxPanel).toContainText('冷却塔风机转速');
+  await expect(auxPanel).toContainText('67.0%');
+  await expect(auxPanel).toContainText('变频频率调节');
+  await expect(auxPanel).toContainText('风机转速调节');
+
+  if (process.env.WAVE_D_AUX_SCREENSHOT) {
+    await auxPanel.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: process.env.WAVE_D_AUX_SCREENSHOT });
+  }
+});

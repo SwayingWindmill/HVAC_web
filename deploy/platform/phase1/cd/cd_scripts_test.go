@@ -1599,6 +1599,44 @@ func TestDeployScriptProtectsRuntimeSecretsAndDropsDeadKeygen(t *testing.T) {
 	}
 }
 
+func TestDeployScriptDumpsUnhealthyContainerLogsOnUpFailure(t *testing.T) {
+	revision := "0123456789abcdef0123456789abcdef01234567"
+	platform, bin, log := deployFixture(t, revision)
+	writeExe(t, bin, "node", `#!/bin/sh
+printf 'node %s\n' "$*" >> "$CALLS_LOG"
+case "$*" in
+  *"--integration up -d") exit 1 ;;
+esac
+`)
+	writeExe(t, bin, "docker", `#!/bin/sh
+printf 'docker %s\n' "$*" >> "$CALLS_LOG"
+case "$1" in
+  ps)
+    case "$*" in
+      *"com.docker.compose.service=energy-api"*) printf 'cid-energy-api\n' ;;
+    esac
+    ;;
+  inspect)
+    printf 'restarting/unhealthy\n'
+    ;;
+  logs)
+    printf 'mocked energy-api failure: permission denied on /run/hvac/public-tls/public.crt\n'
+    ;;
+esac
+`)
+	cmd := exec.Command("bash", "deploy.sh")
+	cmd.Env = commandEnv(bin, "HVAC_PLATFORM_DIR="+platform, "CALLS_LOG="+log)
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected deploy.sh to fail when compose up fails:\n%s", output)
+	}
+	text := string(output)
+	if !strings.Contains(text, "--- container logs: energy-api (restarting/unhealthy) ---") ||
+		!strings.Contains(text, "mocked energy-api failure: permission denied on /run/hvac/public-tls/public.crt") {
+		t.Fatalf("deploy.sh did not dump unhealthy container logs:\n%s", text)
+	}
+}
+
 // seedContent gives a seeded image a filesystem and a `docker image inspect` config.
 func seedContent(t *testing.T, store, id string, files map[string]string, config string) {
 	t.Helper()
@@ -1913,5 +1951,105 @@ func TestApplyBuildsMqttBrokerFromUpstreamWithoutPullOrOverwritingBase(t *testin
 	secondID, secondLayers, _ := imageOf(t, store, "hvac/mqtt-broker:0.1.0-dev")
 	if secondID == firstID || secondLayers != 5 {
 		t.Fatalf("second mqtt deploy id=%s layers=%d; want new image with 5 layers", secondID, secondLayers)
+	}
+}
+
+func TestBuildReleaseStagePythonExcludesCachesAndVerifyApplyPythonSolver(t *testing.T) {
+	src := t.TempDir()
+	dest := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(src, "ai_solver", "__pycache__"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "pyproject.toml"), []byte("[project]\nname = \"ai-solver-service\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "ai_solver", "main.py"), []byte("print('ok')\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "ai_solver", "__pycache__", "main.cpython-312.pyc"), []byte("bytecode"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stageCmd := exec.Command("bash", "build-release.sh", "--stage-python", src, dest)
+	if out, err := stageCmd.CombinedOutput(); err != nil {
+		t.Fatalf("build-release.sh --stage-python failed: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "ai_solver", "main.py")); err != nil {
+		t.Fatalf("staged python solver missing ai_solver/main.py: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "ai_solver", "__pycache__")); !os.IsNotExist(err) {
+		t.Fatalf("staged python solver must strip __pycache__")
+	}
+
+	// Verify optional python solver skips cleanly when image is absent on host, and updates from deploy-base when present.
+	bin, store, platform := applyFixture(t)
+	energyRunning := seedImage(t, store, "hvac/energy-api:0.1.0-dev", 5, "")
+
+	stagePythonRelease := func() string {
+		release := t.TempDir()
+		for _, dir := range []string{"bins/energy-api", "python/ai-solver-service/ai_solver", "src/deploy/platform/phase1/cd"} {
+			if err := os.MkdirAll(filepath.Join(release, dir), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		files := map[string]string{
+			"REVISION":                strings.Repeat("b", 40) + "\n",
+			"services.tsv":            "energy-api\thvac/energy-api:0.1.0-dev\tgo\trequired\t./cmd/energy-api\nai-solver-service\thvac/ai-solver-service:0.1.0-dev\tpython\toptional\tservices/ai-solver-service\n",
+			"bins/healthcheck":        "hc",
+			"bins/energy-api/service": "svc",
+			"python/ai-solver-service/pyproject.toml":    "[project]\nname = \"ai-solver-service\"\n",
+			"python/ai-solver-service/ai_solver/main.py": "def main(): return 0\n",
+			"src/README": "tree",
+			"src/deploy/platform/phase1/cd/observability-config.sh": "#!/bin/sh\nexit 0\n",
+			"rollback.sh":              "#!/bin/sh\nexit 0\n",
+			"smoke-release.sh":         "#!/bin/sh\nexit 0\n",
+			"prune-rollback-images.sh": "#!/bin/sh\nexit 0\n",
+			"rebuild-deploy-base.sh":   string(mustRead(t, "rebuild-deploy-base.sh")),
+		}
+		for name, body := range files {
+			if err := os.WriteFile(filepath.Join(release, name), []byte(body), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if out, err := exec.Command("tar", append([]string{"-C", filepath.Join(release, "src"), "-cf", filepath.Join(release, "source.tar")}, topLevel(t, filepath.Join(release, "src"))...)...).CombinedOutput(); err != nil {
+			t.Fatalf("tar: %v\n%s", err, out)
+		}
+		return release
+	}
+
+	release1 := stagePythonRelease()
+	cmdSkip := exec.Command("bash", "apply-on-server.sh", release1)
+	cmdSkip.Env = commandEnv(bin,
+		"DOCKER_STORE="+store,
+		"HVAC_PLATFORM_DIR="+platform,
+		"HVAC_DEPLOY_SCRIPT="+writeExe(t, bin, "restart", "#!/bin/sh\nexit 0\n"),
+		"FAKE_STAMP=20261121T010000Z",
+	)
+	outSkip, err := cmdSkip.CombinedOutput()
+	if err != nil {
+		t.Fatalf("optional python service absent should skip cleanly: %v\n%s", err, outSkip)
+	}
+	if !strings.Contains(string(outSkip), "skip ai-solver-service: hvac/ai-solver-service:0.1.0-dev is not on this host") {
+		t.Fatalf("expected skip message for optional absent ai-solver-service:\n%s", outSkip)
+	}
+	_ = energyRunning
+
+	solverRunning := seedImage(t, store, "hvac/ai-solver-service:0.1.0-dev", 6, "")
+	cmdApply := exec.Command("bash", "apply-on-server.sh", release1)
+	cmdApply.Env = commandEnv(bin,
+		"DOCKER_STORE="+store,
+		"HVAC_PLATFORM_DIR="+platform,
+		"HVAC_DEPLOY_SCRIPT="+writeExe(t, bin, "restart", "#!/bin/sh\nexit 0\n"),
+		"FAKE_STAMP=20261121T020000Z",
+	)
+	outApply, err := cmdApply.CombinedOutput()
+	if err != nil {
+		t.Fatalf("python service present should rebuild candidate from deploy-base: %v\n%s", err, outApply)
+	}
+	if !strings.Contains(string(outApply), "replaced hvac/ai-solver-service:0.1.0-dev (previous hvac/ai-solver-service:before-20261121T020000Z)") {
+		t.Fatalf("expected ai-solver-service replacement output:\n%s", outApply)
+	}
+	_, solverLayers, solverLabel := imageOf(t, store, "hvac/ai-solver-service:0.1.0-dev")
+	if solverLayers != 7 || solverLabel != solverRunning {
+		t.Fatalf("python solver image layers=%d label=%q, want 7 on base %s", solverLayers, solverLabel, solverRunning)
 	}
 }

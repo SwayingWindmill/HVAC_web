@@ -43,6 +43,11 @@ func (h *handler) serveRegistryMutation(writer http.ResponseWriter, request *htt
 	}
 	authorization, failure := h.authorizeRegistry(request.Context(), session, route.action)
 	if failure != nil {
+		if failure.status == http.StatusForbidden && route.resource == "device-replace-hardware" {
+			h.emitDomainAudit(request.Context(), request, session, buildRegistryAuditInput(route, request, nil, nil, auditOutcomeDenied, failure.code))
+			writeProblem(writer, request, http.StatusForbidden, "AUTHORIZATION_DENIED", "Device hardware replacement forbidden", "The authenticated Principal is not allowed to replace Device hardware.", false, nil)
+			return
+		}
 		if failure.status == http.StatusForbidden || failure.status == http.StatusNotFound {
 			h.emitDomainAudit(request.Context(), request, session, buildRegistryAuditInput(route, request, nil, nil, auditOutcomeDenied, failure.code))
 			writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Registry resource was not found.", false, nil)
@@ -101,14 +106,17 @@ func buildRegistryAuditInput(
 	action, defaultLabel := registryAuditMeta(route.resource, request.Method)
 	reqMap := decodeFlatJSONObject(reqBody)
 	respMap := decodeFlatJSONObject(respBody)
+	deviceMap, _ := respMap["device"].(map[string]any)
 	targetLabel := firstNonEmpty(
 		stringValue(respMap, "displayName"),
+		stringValue(deviceMap, "displayName"),
 		stringValue(reqMap, "displayName"),
 		stringValue(respMap, "name"),
 		stringValue(reqMap, "name"),
 		stringValue(respMap, "templateKey"),
 		stringValue(reqMap, "templateKey"),
 		stringValue(respMap, "code"),
+		stringValue(deviceMap, "code"),
 		stringValue(reqMap, "code"),
 		stringValue(reqMap, "pointCode"),
 		stringValue(reqMap, "namespace"),
@@ -116,11 +124,13 @@ func buildRegistryAuditInput(
 	)
 	targetID := firstNonEmpty(
 		stringValue(respMap, "id"),
+		stringValue(respMap, "deviceId"),
 		stringValue(respMap, "bindingId"),
 		stringValue(respMap, "resourceId"),
 		stringValue(respMap, "sagaId"),
 		stringValue(reqMap, "id"),
 		stringValue(reqMap, "resourceId"),
+		routeDeviceID(route),
 		route.scopeID,
 		route.internalPath,
 	)
@@ -130,6 +140,13 @@ func buildRegistryAuditInput(
 	}
 	if reason := firstNonEmpty(nestedStringValue(reqMap, "meta", "reason"), stringValue(reqMap, "reason")); reason != "" {
 		summary["reason"] = reason
+	}
+	if route.resource == "device-replace-hardware" {
+		for _, key := range []string{"replacementId", "previousExternalId", "newExternalId", "previousGatewayDeviceId", "newGatewayDeviceId"} {
+			if value := stringValue(respMap, key); value != "" {
+				summary[key] = value
+			}
+		}
 	}
 	if changed := changedJSONKeys(reqMap); len(changed) > 0 {
 		summary["changedFields"] = changed
@@ -147,6 +164,17 @@ func buildRegistryAuditInput(
 	}
 }
 
+func routeDeviceID(route publicRegistryRoute) string {
+	if route.resource != "device-replace-hardware" {
+		return ""
+	}
+	parts := strings.Split(strings.TrimPrefix(route.internalPath, "/internal/v1/registry/"), "/")
+	if len(parts) == 5 && parts[2] == "devices" {
+		return parts[3]
+	}
+	return ""
+}
+
 func registryAuditMeta(resource, _ string) (string, string) {
 	switch resource {
 	case "site-write":
@@ -157,6 +185,8 @@ func registryAuditMeta(resource, _ string) (string, string) {
 		return "REGISTRY_ASSET_MUTATED", "设备档案"
 	case "device-write":
 		return "REGISTRY_DEVICE_MUTATED", "采集设备"
+	case "device-replace-hardware":
+		return "REGISTRY_DEVICE_HARDWARE_REPLACED", "采集设备硬件"
 	case "sensor-write":
 		return "REGISTRY_SENSOR_MUTATED", "传感器"
 	case "point-write":

@@ -5,6 +5,11 @@ import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { checkClickHouseMigrations } from './check-clickhouse-migrations.ts';
+import {
+  type DeploymentTierContract,
+  resolveDeploymentTier,
+  resolvePhase1ClickHouseNativeAddr,
+} from './phase1-deployment-tier.ts';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -117,4 +122,99 @@ test('local plaintext password statement in init SQL fails closed', () => {
     );
   });
   assert.throws(run, /local password statements/);
+});
+
+test('resolvePhase1ClickHouseNativeAddr defaults clickhouse:9000 only in local mode and supports opt-out', () => {
+  assert.equal(resolvePhase1ClickHouseNativeAddr({ localClickHouse: true }), 'clickhouse:9000');
+  assert.equal(
+    resolvePhase1ClickHouseNativeAddr({
+      localClickHouse: true,
+      runtimeEnvironment: { PHASE1_CLICKHOUSE_NATIVE_ADDR: '', TELEMETRY_CLICKHOUSE_NATIVE_ADDR: '' },
+    }),
+    'clickhouse:9000',
+  );
+  assert.equal(
+    resolvePhase1ClickHouseNativeAddr({
+      localClickHouse: true,
+      runtimeEnvironment: { PHASE1_CLICKHOUSE_NATIVE_ADDR: 'custom-ch:9440' },
+    }),
+    'custom-ch:9440',
+  );
+  assert.equal(
+    resolvePhase1ClickHouseNativeAddr({
+      localClickHouse: true,
+      runtimeEnvironment: { TELEMETRY_CLICKHOUSE_NATIVE_ADDR: 'telemetry-ch:9440' },
+    }),
+    'telemetry-ch:9440',
+  );
+  for (const sentinel of ['off', 'OFF', 'disabled', 'false', 'http']) {
+    assert.equal(
+      resolvePhase1ClickHouseNativeAddr({
+        localClickHouse: true,
+        runtimeEnvironment: {
+          PHASE1_CLICKHOUSE_NATIVE_ADDR: sentinel,
+          TELEMETRY_CLICKHOUSE_NATIVE_ADDR: 'clickhouse:9000',
+        },
+      }),
+      '',
+    );
+    assert.equal(
+      resolvePhase1ClickHouseNativeAddr({
+        localClickHouse: true,
+        runtimeEnvironment: { TELEMETRY_CLICKHOUSE_NATIVE_ADDR: sentinel },
+      }),
+      '',
+    );
+  }
+  assert.equal(resolvePhase1ClickHouseNativeAddr({ localClickHouse: false }), '');
+  assert.equal(
+    resolvePhase1ClickHouseNativeAddr({
+      localClickHouse: false,
+      runtimeEnvironment: { PHASE1_CLICKHOUSE_NATIVE_ADDR: 'ext-ch.internal:9440' },
+    }),
+    'ext-ch.internal:9440',
+  );
+});
+
+test('resolveDeploymentTier enables Native TCP for local-clickhouse and compose plumbs CA and password', () => {
+  const contract = JSON.parse(
+    readFileSync(join(repoRoot, 'deploy/platform/phase1/deployment-tiers.v1.json'), 'utf8'),
+  ) as DeploymentTierContract;
+  const compose = readFileSync(join(repoRoot, 'deploy/platform/phase1/compose.yaml'), 'utf8');
+
+  const localResolved = resolveDeploymentTier({
+    contract,
+    compose,
+    tierId: 'single-lite',
+    environment: 'production',
+    runtimeEnvironment: { TELEMETRY_CLICKHOUSE_NATIVE_ADDR: '' },
+    additionalProfiles: ['local-postgres', 'local-clickhouse', 'local-redis'],
+  });
+  assert.equal(localResolved.environment.PHASE1_CLICKHOUSE_NATIVE_ADDR, 'clickhouse:9000');
+  assert.equal(localResolved.environment.TELEMETRY_CLICKHOUSE_NATIVE_ADDR, 'clickhouse:9000');
+
+  const optedOut = resolveDeploymentTier({
+    contract,
+    compose,
+    tierId: 'single-lite',
+    environment: 'production',
+    runtimeEnvironment: { PHASE1_CLICKHOUSE_NATIVE_ADDR: 'off' },
+    additionalProfiles: ['local-postgres', 'local-clickhouse', 'local-redis'],
+  });
+  assert.equal(optedOut.environment.PHASE1_CLICKHOUSE_NATIVE_ADDR, '');
+  assert.equal(optedOut.environment.TELEMETRY_CLICKHOUSE_NATIVE_ADDR, '');
+
+  const externalResolved = resolveDeploymentTier({
+    contract,
+    compose,
+    tierId: 'single-lite',
+    environment: 'production',
+    additionalProfiles: ['local-postgres', 'local-redis'],
+  });
+  assert.equal(externalResolved.environment.PHASE1_CLICKHOUSE_NATIVE_ADDR, '');
+  assert.equal(externalResolved.environment.TELEMETRY_CLICKHOUSE_NATIVE_ADDR, '');
+
+  assert.match(compose, /TELEMETRY_CLICKHOUSE_PASSWORD:\s*\$\{TELEMETRY_CLICKHOUSE_PASSWORD:-\}/);
+  assert.match(compose, /TELEMETRY_CLICKHOUSE_CA:\s*\$\{PHASE1_CLICKHOUSE_CA:-\$\{TELEMETRY_CLICKHOUSE_CA:-\}\}/);
+  assert.match(compose, /TELEMETRY_CLICKHOUSE_NATIVE_ADDR:\s*\$\{PHASE1_CLICKHOUSE_NATIVE_ADDR:-\$\{TELEMETRY_CLICKHOUSE_NATIVE_ADDR:-\}\}/);
 });

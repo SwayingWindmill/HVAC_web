@@ -331,6 +331,25 @@ COPY opt/hvac /opt/hvac
 RUN chmod 0555 /opt/hvac/migrations/run-phase1-migrations.sh /opt/hvac/migrations/verify-phase1-schema.sh
 EOF
       ;;
+    python)
+      if [[ ! -f "$release/python/$service/ai_solver/main.py" || ! -f "$release/python/$service/pyproject.toml" ]]; then
+        echo "error: release is missing python solver files for $service." >&2
+        exit 1
+      fi
+      mkdir -p "$context/ai_solver"
+      cp -a "$release/python/$service/ai_solver/." "$context/ai_solver/"
+      cp "$release/python/$service/pyproject.toml" "$context/pyproject.toml"
+      cat > "$context/Dockerfile" <<EOF
+FROM ${from}
+LABEL ${base_label}=${base_id}
+USER root
+WORKDIR /app
+RUN rm -rf /app/ai_solver
+COPY --chown=10001:10001 ai_solver ./ai_solver
+COPY --chown=10001:10001 pyproject.toml ./pyproject.toml
+USER 10001
+EOF
+      ;;
     *)
       echo "error: unknown image kind '$kind' for $service" >&2
       exit 1

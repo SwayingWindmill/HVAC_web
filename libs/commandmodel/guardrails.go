@@ -19,8 +19,10 @@ const (
 	DefaultValveOpeningMaxPct     = 100.0
 	DefaultChilledWaterMaxStepC   = 1.0
 	DefaultFrequencyMaxStepHz     = 2.5
+	DefaultFanSpeedMaxStepPct     = 10.0
 	DefaultChilledWaterDeadbandC  = 0.2
 	DefaultFrequencyDeadbandHz    = 0.5
+	DefaultFanSpeedDeadbandPct    = 2.0
 )
 
 type GuardrailVerdict string
@@ -385,6 +387,8 @@ func resolveMaxStep(capability Capability, override *float64) (float64, bool) {
 		return DefaultChilledWaterMaxStepC, true
 	case CapabilitySetFrequency:
 		return DefaultFrequencyMaxStepHz, true
+	case CapabilitySetFanSpeed:
+		return DefaultFanSpeedMaxStepPct, true
 	default:
 		return 0, true
 	}
@@ -402,6 +406,8 @@ func resolveDeadband(capability Capability, override *float64) (float64, bool) {
 		return DefaultChilledWaterDeadbandC, true
 	case CapabilitySetFrequency:
 		return DefaultFrequencyDeadbandHz, true
+	case CapabilitySetFanSpeed:
+		return DefaultFanSpeedDeadbandPct, true
 	default:
 		return 0, true
 	}

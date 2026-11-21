@@ -127,6 +127,9 @@ COPY infra/registry/postgres/init/energy-tou-holidays-and-recalc.sql /opt/hvac/r
 COPY infra/registry/postgres/init/mv-bivariate-weather-anchors.sql /opt/hvac/repo/infra/registry/postgres/init/mv-bivariate-weather-anchors.sql
 COPY infra/registry/postgres/init/optimization-canary-write-rls.sql /opt/hvac/repo/infra/registry/postgres/init/optimization-canary-write-rls.sql
 COPY infra/registry/postgres/init/accounting-config-delete-grants.sql /opt/hvac/repo/infra/registry/postgres/init/accounting-config-delete-grants.sql
+COPY infra/registry/postgres/init/device-hardware-replacements.sql /opt/hvac/repo/infra/registry/postgres/init/device-hardware-replacements.sql
+COPY infra/registry/postgres/init/optimization-multiloop-vfd-bounds.sql /opt/hvac/repo/infra/registry/postgres/init/optimization-multiloop-vfd-bounds.sql
+COPY infra/registry/postgres/init/optimization-recommendation-auxiliary-targets.sql /opt/hvac/repo/infra/registry/postgres/init/optimization-recommendation-auxiliary-targets.sql
 COPY infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql /opt/hvac/repo/infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql
 COPY infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql /opt/hvac/repo/infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql
 COPY infra/telemetry/postgres/init/003-s2-telemetry-ingest.sql /opt/hvac/repo/infra/telemetry/postgres/init/003-s2-telemetry-ingest.sql
@@ -152,12 +155,12 @@ COPY infra/telemetry/postgres/init/telemetry-accepted-point-sample-index.sql /op
 COPY modules/command/migrations/001_s3_command_runtime.sql /opt/hvac/repo/modules/command/migrations/001_s3_command_runtime.sql
 COPY modules/command/migrations/002_s3_target_runtime.sql /opt/hvac/repo/modules/command/migrations/002_s3_target_runtime.sql
 COPY modules/command/migrations/003_s3_tenant_scope.sql /opt/hvac/repo/modules/command/migrations/003_s3_tenant_scope.sql
-COPY modules/command/migrations/004_s3_command_point_identity.sql /opt/hvac/repo/modules/command/migrations/004_s3_command_point_identity.sql
-COPY modules/command/migrations/005_s11_edge_execution_evidence.sql /opt/hvac/repo/modules/command/migrations/005_s11_edge_execution_evidence.sql
-COPY modules/command/migrations/006_command_control_locks_and_sequence_capabilities.sql /opt/hvac/repo/modules/command/migrations/006_command_control_locks_and_sequence_capabilities.sql
 
 FROM scratch AS sources-3
 
+COPY modules/command/migrations/004_s3_command_point_identity.sql /opt/hvac/repo/modules/command/migrations/004_s3_command_point_identity.sql
+COPY modules/command/migrations/005_s11_edge_execution_evidence.sql /opt/hvac/repo/modules/command/migrations/005_s11_edge_execution_evidence.sql
+COPY modules/command/migrations/006_command_control_locks_and_sequence_capabilities.sql /opt/hvac/repo/modules/command/migrations/006_command_control_locks_and_sequence_capabilities.sql
 COPY modules/command/migrations/007_schema_and_table_comments.sql /opt/hvac/repo/modules/command/migrations/007_schema_and_table_comments.sql
 COPY modules/command/migrations/008_command_precondition_mode.sql /opt/hvac/repo/modules/command/migrations/008_command_precondition_mode.sql
 COPY modules/command/migrations/command-template-capability-sync.sql /opt/hvac/repo/modules/command/migrations/command-template-capability-sync.sql
@@ -165,6 +168,7 @@ COPY modules/command/migrations/command_intent_trace_context.sql /opt/hvac/repo/
 COPY modules/command/migrations/control-alarm-outbox.sql /opt/hvac/repo/modules/command/migrations/control-alarm-outbox.sql
 COPY modules/command/migrations/command-priority-and-locks.sql /opt/hvac/repo/modules/command/migrations/command-priority-and-locks.sql
 COPY modules/command/migrations/command-audit-immutability.sql /opt/hvac/repo/modules/command/migrations/command-audit-immutability.sql
+COPY modules/command/migrations/command-due-work-tenants.sql /opt/hvac/repo/modules/command/migrations/command-due-work-tenants.sql
 COPY modules/command/migrations/control-alarm-dead-letter-inspect.sql /opt/hvac/repo/modules/command/migrations/control-alarm-dead-letter-inspect.sql
 COPY modules/alarm/migrations/001_s4_alarm_runtime.sql /opt/hvac/repo/modules/alarm/migrations/001_s4_alarm_runtime.sql
 COPY modules/alarm/migrations/002_s4_alarm_lifecycle.sql /opt/hvac/repo/modules/alarm/migrations/002_s4_alarm_lifecycle.sql

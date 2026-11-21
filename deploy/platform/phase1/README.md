@@ -57,15 +57,15 @@ PostgreSQL、ClickHouse、Redis 各自可以放在本机或外部，互不影响
 PHASE1_POSTGRES_MODE=local       -> 启动 local-postgres
 PHASE1_POSTGRES_MODE=external    -> 不起 PostgreSQL 容器；迁移和预检用 PHASE1_POSTGRES_HOST/PORT/SSLMODE
 
-PHASE1_CLICKHOUSE_MODE=local     -> 启动 local-clickhouse
-PHASE1_CLICKHOUSE_MODE=external  -> 不起 ClickHouse 容器；客户端用 PHASE1_CLICKHOUSE_HTTP_URL
+PHASE1_CLICKHOUSE_MODE=local     -> 启动 local-clickhouse 并由启动器自动注入 PHASE1_CLICKHOUSE_NATIVE_ADDR=clickhouse:9000（设 off 可回退 HTTP JSONEachRow）
+PHASE1_CLICKHOUSE_MODE=external  -> 不起 ClickHouse 容器；客户端默认走 PHASE1_CLICKHOUSE_HTTP_URL，需要 Native TCP 时另配 PHASE1_CLICKHOUSE_NATIVE_ADDR 与可选 PHASE1_CLICKHOUSE_CA
 
 PHASE1_REDIS_MODE=local          -> 启动 local-redis
 PHASE1_REDIS_MODE=external       -> 不起 Redis 容器；各服务用各自配置的外部地址
 ```
 
 - 外部 PostgreSQL：把 `PHASE1_POSTGRES_HOST` 指向外部地址，并更新环境文件里每个应用的连接串。表结构预检（`phase1-schema-preflight`）照样必须先通过。
-- 外部 ClickHouse：`PHASE1_CLICKHOUSE_HTTP_URL` 设成受保护的外部 HTTP(S) 地址，Compose 会把它传给能耗查询、历史和能耗计算、指标、预测和优化；同时配置原生 TCP 启动预检参数 `PHASE1_CLICKHOUSE_HOST`、`PHASE1_CLICKHOUSE_TCP_PORT`（需要 TLS 时设 `PHASE1_CLICKHOUSE_SECURE=true`）、`PHASE1_CLICKHOUSE_PREFLIGHT_USER`（如 `phase1_schema_reader`）与 `PHASE1_CLICKHOUSE_PREFLIGHT_PASSWORD`，让 `phase1-clickhouse-schema-preflight` 在服务启动前核对 `phase1_deployment.product_schema` 版本与清单哈希。上线前在外部建好 `telemetry_history`、`analytics`、`phase1_deployment` 表结构和同样最小权限的账号，并参照 `clickhouse-migrations/clickhouse-role-credentials.sql.example` 在部署密钥中配置密码。仓库里本机 ClickHouse 的初始化 SQL 用的是无密码的内部账号，不能原样用在网络可达的外部部署上，外部账号的密码放在部署密钥里。
+- 外部 ClickHouse：`PHASE1_CLICKHOUSE_HTTP_URL` 设成受保护的外部 HTTP(S) 地址，Compose 会把它传给能耗查询、历史和能耗计算、指标、预测和优化（如需开启 `telemetry-worker` 的 Native TCP `PrepareBatch` 写入，另配置 `PHASE1_CLICKHOUSE_NATIVE_ADDR` 或 `TELEMETRY_CLICKHOUSE_NATIVE_ADDR`，启用 TLS 时配合 `PHASE1_CLICKHOUSE_CA` 或 `TELEMETRY_CLICKHOUSE_CA`；本机 `local` 模式默认自动启用 `clickhouse:9000`，显式设 `PHASE1_CLICKHOUSE_NATIVE_ADDR=off` 可强制走 HTTP）；同时配置原生 TCP 启动预检参数 `PHASE1_CLICKHOUSE_HOST`、`PHASE1_CLICKHOUSE_TCP_PORT`（需要 TLS 时设 `PHASE1_CLICKHOUSE_SECURE=true`）、`PHASE1_CLICKHOUSE_PREFLIGHT_USER`（如 `phase1_schema_reader`）与 `PHASE1_CLICKHOUSE_PREFLIGHT_PASSWORD`，让 `phase1-clickhouse-schema-preflight` 在服务启动前核对 `phase1_deployment.product_schema` 版本与清单哈希。上线前在外部建好 `telemetry_history`、`analytics`、`phase1_deployment` 表结构和同样最小权限的账号，并参照 `clickhouse-migrations/clickhouse-role-credentials.sql.example` 在部署密钥中配置密码。仓库里本机 ClickHouse 的初始化 SQL 用的是无密码的内部账号，不能原样用在网络可达的外部部署上，外部账号的密码放在部署密钥里。
 - 外部 Redis：保持一个 Redis，但保留原来的逻辑分隔：DB 0 / 前缀给实时推送和可重建的最新值，DB 1 给短时的 OIDC 登录状态，DB 2 给共享的限流计数。配置 `CENTRIFUGO_ENGINE_REDIS_ADDRESS`、`TELEMETRY_LATEST_CACHE_REDIS_URL`、`METRIC_REDIS_URL`、`OIDC_STATE_REDIS_URL`、`LIMIT_POLICY_REDIS_URL`。这一步不引入 Redis 哨兵或集群，也不算高可用。
 
 任何一个数据服务放到外部时，启动程序会给这个部署的 `data` 网络开出站。三个都在本机时，`data` 只在内部。放到外部只是换了位置和故障范围，不是高可用。
