@@ -2,10 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
-// A workload's mutual-TLS identity, issued by the runtime's internal CA like every other:
-// <pki>/<name>/tls.{crt,key} carrying the SPIFFE ID. A workload that also serves (dns) can be
-// reached under that name. An identity issued with the same extensions is kept; one issued
-// otherwise (a client-only identity that now serves, #612) is issued again.
+// Internal CA mTLS workload identity; re-issues automatically if extensions change (#612).
 export function ensureWorkloadIdentity(pki, name, spiffeId, dns) {
   const identity = path.join(pki, name);
   const file = (entry) => path.join(identity, entry);
@@ -40,11 +37,8 @@ function shareWithServices(identity) {
   execFileSync('docker', ['run', '--rm', '--user', '0', '--entrypoint', 'chgrp', '-v', `${identity}:/identity`, 'postgres:16.4-bookworm', '-R', String(serviceGroup), '/identity'], { stdio: 'ignore' });
 }
 
-// Workloads that call internal owners themselves, or serve them over mutual TLS, and so need
-// their own identity.
 export const workloadIdentities = Object.freeze([
-  // FDD serves the Gateway and the Operations Agent over mutual TLS (#595); Forecast, Optimization
-  // and M&V serve the Gateway (#612), and so does Report (#613).
+  { name: 'command', spiffeId: 'spiffe://hvac.local/command-service', dns: 'command-service' },
   { name: 'report', spiffeId: 'spiffe://hvac.local/report-service', dns: 'report-service' },
   { name: 'fdd', spiffeId: 'spiffe://hvac.local/fdd-service', dns: 'fdd-service' },
   { name: 'forecast', spiffeId: 'spiffe://hvac.local/forecast-service', dns: 'forecast-service' },

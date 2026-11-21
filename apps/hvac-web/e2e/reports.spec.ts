@@ -106,3 +106,35 @@ test('an archived snapshot with P2 layered efficiency and condition anchors disp
   await expect(anchors).toContainText('主配电平衡差额');
   await expect(anchors).toContainText('+1,576.4 kWh');
 });
+
+test('an empty month shows clear empty-month notice and chart empty state without errors', async ({ page, gateway }) => {
+  const consoleErrors: string[] = [];
+  const pageErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text());
+  });
+  page.on('pageerror', (error) => {
+    pageErrors.push(error.message);
+  });
+  gateway.energySeriesHandler = (query) => ({
+    body: {
+      schemaVersion: 1,
+      points: [],
+      metadata: {
+        requestedGranularity: query?.granularity ?? 'day',
+        actualGranularity: query?.granularity ?? 'day',
+        datasetRevision: 'local-development-v1:0',
+        partial: true,
+        qualitySummary: { valid: 0, suspect: 0, invalid: 0 },
+      },
+    },
+  });
+
+  await page.goto(`/reports?site=${SITE_ID}`);
+
+  const report = page.getByRole('article', { name: /能源报告/ });
+  await expect(report.getByTestId('report-empty-month-notice')).toContainText('所选月份暂无计量数据，待冷站表计读数接入后自动汇总。');
+  await expect(report).toContainText('所选月份暂无日用电与能效计量数据');
+  expect(consoleErrors).toEqual([]);
+  expect(pageErrors).toEqual([]);
+});

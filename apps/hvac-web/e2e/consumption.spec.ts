@@ -164,3 +164,30 @@ test('counter anomaly audit tab shows cleaning summary, anomalies by default, an
   await expect(dataRows).toHaveCount(5);
   await expect(table).toContainText('正常递进');
 });
+
+test('empty period renders energy flow empty state without SVG NaN console errors', async ({ page, gateway }) => {
+  const consoleErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text());
+  });
+  gateway.energySeriesHandler = (query) => ({
+    body: {
+      schemaVersion: 1,
+      points: [],
+      ...(query?.breakdown === 'device' ? { devices: [] } : {}),
+      metadata: {
+        requestedGranularity: query?.granularity ?? 'hour',
+        actualGranularity: query?.granularity ?? 'hour',
+        datasetRevision: 'local-development-v1:0',
+        partial: true,
+        qualitySummary: { valid: 0, suspect: 0, invalid: 0 },
+      },
+    },
+  });
+
+  await page.goto(`/energy-analysis/consumption?site=${SITE_ID}`);
+
+  const flow = page.getByRole('region', { name: '用电去向' });
+  await expect(flow).toContainText('所选时段暂无设备用电流向数据');
+  expect(consoleErrors.filter((entry) => entry.includes('NaN'))).toEqual([]);
+});

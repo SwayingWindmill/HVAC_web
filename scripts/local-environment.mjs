@@ -10,6 +10,7 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 
 import { ensureServiceDataDirectory, localContainer, localEnvFile, localProject, repoRoot, runtimeDir, runtimePath, writePrivate } from './lib/local-environment.mjs';
+import { hasConfiguredDeepSeekApiKey } from './lib/local-runtime-env.ts';
 
 const launcher = path.join(repoRoot, 'scripts', 'phase1-wsl-compose.mjs');
 
@@ -107,11 +108,12 @@ function up() {
   // One-shot tools are built from the checkout too, so a changed input contract never meets a stale image.
   run([launcher, 'run', '--rm', '--build', '-T', 'identity-reconciler'], { input: readFileSync(runtimePath('identity-reconcile.json'), 'utf8') });
   ensureServiceDataDirectory('mqtt-crl');
-  compose('--source-deploy', '--integration', '--intelligence', 'up', '-d');
+  const env = readFileSync(localEnvFile, 'utf8');
+  const scaleArgs = hasConfiguredDeepSeekApiKey(env) ? [] : (console.log('Skipping operations-agent-service: DEEPSEEK_API_KEY is not configured in local env.'), ['--scale', 'operations-agent-service=0']);
+  compose('--source-deploy', '--integration', '--intelligence', 'up', '-d', ...scaleArgs);
   ensureServiceDataDirectory('data', 'eg8200');
   ensureServiceDataDirectory('data', 'eg8200-b');
   script('phase1-central-plant-simulator.mjs');
-  const env = readFileSync(localEnvFile, 'utf8');
   const origin = /^PUBLIC_ORIGIN=(.+)$/m.exec(env)?.[1]?.trim();
   console.log(`Local environment ${localProject} is up${origin ? ` at ${origin}` : ''}; administrator credentials: ${path.relative(repoRoot, runtimePath('local-admin.credentials'))}`);
 }

@@ -112,6 +112,15 @@ export function EnergyTrend({ rows, unitLabel = '空调用电 · kWh' }: {
   readonly rows: readonly { label: string; electricityKWh: number | null; cop: number | null }[];
   readonly unitLabel?: string;
 }) {
+  const hasEnergy = rows.some((row) => row.electricityKWh !== null);
+  const hasCop = rows.some((row) => row.cop !== null);
+  if (!hasEnergy && !hasCop) {
+    return (
+      <p className="rounded-lg border border-dashed border-divider bg-muted/20 px-4 py-10 text-center text-sm text-muted-foreground">
+        所选月份暂无日用电与能效计量数据
+      </p>
+    );
+  }
   const peak = Math.max(...rows.map((row) => row.electricityKWh ?? 0));
   return (
     <div className="flex flex-col gap-2">
@@ -128,15 +137,21 @@ export function EnergyTrend({ rows, unitLabel = '空调用电 · kWh' }: {
         </ComposedChart>
       </ChartContainer>
       <span className="text-xs text-muted-foreground">综合能效 · COP</span>
-      <ChartContainer config={copConfig} className="aspect-auto h-[120px] w-full">
-        <ComposedChart data={[...rows]} margin={{ left: 4, right: 4, top: 8 }}>
-          <CartesianGrid vertical={false} />
-          <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} minTickGap={12} />
-          <YAxis tickLine={false} axisLine={false} width={48} domain={['auto', 'auto']} />
-          <ChartTooltip content={<ChartTooltipContent indicator="dot" />} />
-          <Line dataKey="cop" stroke="var(--color-cop)" strokeWidth={2} dot={{ r: 2.5, strokeWidth: 0, fill: 'var(--color-cop)' }} connectNulls isAnimationActive={false} />
-        </ComposedChart>
-      </ChartContainer>
+      {hasCop ? (
+        <ChartContainer config={copConfig} className="aspect-auto h-[120px] w-full">
+          <ComposedChart data={[...rows]} margin={{ left: 4, right: 4, top: 8 }}>
+            <CartesianGrid vertical={false} />
+            <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} minTickGap={12} />
+            <YAxis tickLine={false} axisLine={false} width={48} domain={['auto', 'auto']} />
+            <ChartTooltip content={<ChartTooltipContent indicator="dot" />} />
+            <Line dataKey="cop" stroke="var(--color-cop)" strokeWidth={2} dot={{ r: 2.5, strokeWidth: 0, fill: 'var(--color-cop)' }} connectNulls isAnimationActive={false} />
+          </ComposedChart>
+        </ChartContainer>
+      ) : (
+        <p className="rounded-lg border border-dashed border-divider bg-muted/20 px-4 py-6 text-center text-xs text-muted-foreground">
+          所选月份暂无综合能效数据
+        </p>
+      )}
     </div>
   );
 }

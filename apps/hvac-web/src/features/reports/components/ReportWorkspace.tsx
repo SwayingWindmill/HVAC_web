@@ -158,11 +158,46 @@ function ConfirmedUtilityBillsSidecar({ siteId, month }: { readonly siteId: stri
   );
 }
 
+function ReportSheetSkeleton() {
+  return (
+    <div
+      role="status"
+      aria-label="正在加载报告"
+      className={`${sheetFrame} overflow-hidden rounded-xl border bg-card px-10 py-9 shadow-xs`}
+    >
+      <div className="flex items-start justify-between gap-6 pb-7">
+        <div className="flex flex-col gap-2">
+          <Skeleton className="h-3.5 w-32" />
+          <Skeleton className="h-8 w-56" />
+          <Skeleton className="h-4 w-72" />
+        </div>
+        <div className="flex flex-col items-end gap-2">
+          <Skeleton className="h-5 w-16 rounded-md" />
+          <Skeleton className="h-3.5 w-40" />
+        </div>
+      </div>
+      <div className="grid grid-cols-4 gap-x-8 gap-y-6 border-t border-divider py-7">
+        {Array.from({ length: 8 }, (_, index) => (
+          <div key={index} className="flex flex-col gap-2">
+            <Skeleton className="h-3.5 w-20" />
+            <Skeleton className="h-7 w-28" />
+            <Skeleton className="h-3.5 w-24" />
+          </div>
+        ))}
+      </div>
+      <div className="flex flex-col gap-3 border-t border-divider pt-7">
+        <Skeleton className="h-5 w-40" />
+        <Skeleton className="h-[200px] w-full rounded-lg" />
+      </div>
+    </div>
+  );
+}
+
 /** A closed month reads from its snapshot when it has one; otherwise it is built from the records. */
 function MonthlyReport({ month, span }: { readonly month: string; readonly span: ReportWindow }) {
   const { site } = siteRoute.useRouteContext();
   const snapshot = useQuery({ ...monthlySnapshotQuery(site.id, month), enabled: span.complete });
-  if (span.complete && snapshot.isPending) return <Skeleton className={`${sheetFrame} h-[900px] rounded-xl`} />;
+  if (span.complete && snapshot.isPending) return <ReportSheetSkeleton />;
   if (snapshot.data) return <ArchivedMonthlyReport stored={snapshot.data} span={span} />;
   return <LiveMonthlyReport month={month} span={span} archiveUnavailable={snapshot.isError} />;
 }
@@ -321,7 +356,7 @@ function LiveMonthlyReport({ month, span, archiveUnavailable }: { readonly month
     return peak;
   }, [demand.data]);
 
-  if (energy.isPending) return <Skeleton className={`${sheetFrame} h-[900px] rounded-xl`} />;
+  if (energy.isPending) return <ReportSheetSkeleton />;
   if (energy.isError || !energy.data) {
     return <div className={`${sheetFrame} rounded-xl border bg-card py-16 text-center text-sm text-muted-foreground`}>报告所需的能耗数据暂时读不到</div>;
   }
@@ -389,6 +424,15 @@ function LiveMonthlyReport({ month, span, archiveUnavailable }: { readonly month
       footnote={<>说明：空调用电、供冷量取自空调总电表和冷量表的有效读数；电度电费按每段用电所在时段当时生效的分时电价估算，需量按 15 分钟平均功率计，正式电费以结算为准。{alarms.data && !alarms.data.complete ? ' 告警超过读取上限，统计可能不全。' : ''}</>}
     >
       <Section index={1} title="概要" description={span.complete ? '与上月全月对比' : '与上月同期对比'}>
+        {days.length === 0 && current.electricityKWh === null && current.coolingKWh === null ? (
+          <div
+            role="status"
+            data-testid="report-empty-month-notice"
+            className="rounded-lg border border-divider bg-muted/35 px-3.5 py-2.5 text-xs text-muted-foreground"
+          >
+            所选月份暂无计量数据，待冷站表计读数接入后自动汇总。
+          </div>
+        ) : null}
         <FigureGrid>
           <Figure label="空调用电" value={current.electricityKWh === null ? null : formatDecimal(current.electricityKWh, 0)} unit="kWh" delta={relativeChange(current.electricityKWh, previous.electricityKWh)} invert note={`上月 ${energyText(previous.electricityKWh)}`} />
           <Figure label="供冷量" value={current.coolingKWh === null ? null : formatDecimal(current.coolingKWh, 0)} unit="kWh" delta={relativeChange(current.coolingKWh, previous.coolingKWh)} note={`上月 ${energyText(previous.coolingKWh)}`} />
