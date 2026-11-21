@@ -3318,6 +3318,92 @@
           "default": { "$ref": "#/components/responses/Problem" }
         }
       }
+    },
+    "/api/v1/sites/{siteId}/optimization/canary-bindings": {
+      "get": {
+        "operationId": "listSiteOptimizationCanaryBindings",
+        "summary": "List optimization canary solver bindings, active solver resolution, and allowlisted external solver hosts for a Site",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "optimization-service",
+        "x-public-ingress": "platform-gateway",
+        "parameters": [
+          { "$ref": "#/components/parameters/SiteId" }
+        ],
+        "responses": {
+          "200": { "description": "Canary solver bindings configured for the Site.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OptimizationCanaryBindingList" } } } },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/optimization/canary-bindings/{loopKey}": {
+      "put": {
+        "operationId": "upsertSiteOptimizationCanaryBinding",
+        "summary": "Create or update a site-loop canary solver routing binding",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "optimization-service",
+        "x-public-ingress": "platform-gateway",
+        "parameters": [
+          { "$ref": "#/components/parameters/CsrfToken" },
+          { "$ref": "#/components/parameters/SiteId" },
+          { "name": "loopKey", "in": "path", "required": true, "schema": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_]{0,63}$" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UpsertOptimizationCanaryBindingRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Persisted site-loop canary solver binding.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OptimizationCanaryBindingRecord" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "422": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      },
+      "delete": {
+        "operationId": "deleteSiteOptimizationCanaryBinding",
+        "summary": "Delete a site-loop canary solver routing binding and revert to deployment or baseline defaults",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "optimization-service",
+        "x-public-ingress": "platform-gateway",
+        "parameters": [
+          { "$ref": "#/components/parameters/CsrfToken" },
+          { "$ref": "#/components/parameters/SiteId" },
+          { "name": "loopKey", "in": "path", "required": true, "schema": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_]{0,63}$" } }
+        ],
+        "responses": {
+          "200": { "description": "Deleted canary solver binding confirmation.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OptimizationCanaryBindingDeleteResult" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/optimization/negative-samples": {
+      "get": {
+        "operationId": "listSiteOptimizationNegativeSamples",
+        "summary": "List paginated guardrail clamp, veto, manual override, tracking deviation, and monitor trip negative samples for a Site",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "optimization-service",
+        "x-public-ingress": "platform-gateway",
+        "parameters": [
+          { "$ref": "#/components/parameters/SiteId" },
+          { "name": "windowDays", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 365 } },
+          { "name": "sampleKind", "in": "query", "required": false, "schema": { "type": "string", "enum": ["ALL", "GUARDRAIL_CLAMPED", "GUARDRAIL_VETOED", "MANUAL_OVERRIDE", "MONITOR_TRIPPED", "TRACKING_DEVIATION"] } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 100 } },
+          { "name": "offset", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 0 } }
+        ],
+        "responses": {
+          "200": { "description": "Paginated optimization flywheel negative samples for the Site.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OptimizationNegativeSamplePage" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
     }
   },
   "components": {
@@ -6629,6 +6715,119 @@
           "tickCounts": { "$ref": "#/components/schemas/OptimizationTickCounts" },
           "copComparison": { "$ref": "#/components/schemas/OptimizationCopComparison" },
           "flywheel": { "$ref": "#/components/schemas/OptimizationFlywheelSummary" }
+        }
+      },
+      "OptimizationCanaryBindingRecord": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "tenantId", "siteId", "loopKey", "servingRef", "status", "createdAt", "updatedAt"],
+        "properties": {
+          "id": { "$ref": "#/components/schemas/UUIDv7" },
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "loopKey": { "type": "string", "pattern": "^[A-Z0-9][A-Z0-9_]{0,63}$" },
+          "servingRef": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "status": { "type": "string", "enum": ["ACTIVE", "DISABLED"] },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "updatedAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "OptimizationCanaryBindingList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["tenantId", "siteId", "allowedSolverHosts", "activeSolver", "items"],
+        "properties": {
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "allowedSolverHosts": { "type": "array", "items": { "type": "string" } },
+          "activeSolver": { "$ref": "#/components/schemas/OptimizationActiveSolver" },
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/OptimizationCanaryBindingRecord" } }
+        }
+      },
+      "UpsertOptimizationCanaryBindingRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["servingRef", "status"],
+        "properties": {
+          "servingRef": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "status": { "type": "string", "enum": ["ACTIVE", "DISABLED"] }
+        }
+      },
+      "OptimizationCanaryBindingDeleteResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["deleted", "siteId", "loopKey"],
+        "properties": {
+          "deleted": { "type": "boolean" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "loopKey": { "type": "string", "pattern": "^[A-Z0-9][A-Z0-9_]{0,63}$" }
+        }
+      },
+      "OptimizationGuardrailStageResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["stage", "action", "before", "after"],
+        "properties": {
+          "stage": { "type": "string" },
+          "action": { "type": "string" },
+          "before": { "type": "number" },
+          "after": { "type": "number" },
+          "reason": { "type": "string" }
+        }
+      },
+      "OptimizationFeatureSnapshot": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["runningChillers", "cabinetLocalManual", "deviceFaultActive", "leaseDeadbandC", "supplyTempMinC", "supplyTempMaxC"],
+        "properties": {
+          "supplyTempC": { "type": ["number", "null"] },
+          "zoneMaxTempC": { "type": ["number", "null"] },
+          "outdoorWetBulbC": { "type": ["number", "null"] },
+          "coolingLoadKW": { "type": ["number", "null"] },
+          "chillerPowerKW": { "type": ["number", "null"] },
+          "observedCOP": { "type": ["number", "null"] },
+          "runningChillers": { "type": "integer", "minimum": 0 },
+          "cabinetLocalManual": { "type": "boolean" },
+          "deviceFaultActive": { "type": "boolean" },
+          "leaseDeadbandC": { "type": "number" },
+          "supplyTempMinC": { "type": "number" },
+          "supplyTempMaxC": { "type": "number" }
+        }
+      },
+      "OptimizationNegativeSampleItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "decisionId", "recommendationId", "monitorId", "traceId", "sampleKind", "reasonCode", "solverServingRef", "rawRecommendedValue", "appliedOrClampedValue", "occurredAt", "guardrailTrace", "featureSnapshot"],
+        "properties": {
+          "id": { "$ref": "#/components/schemas/UUIDv7" },
+          "decisionId": { "type": "string" },
+          "recommendationId": { "type": ["string", "null"] },
+          "monitorId": { "type": ["string", "null"] },
+          "traceId": { "type": "string" },
+          "sampleKind": { "type": "string", "enum": ["GUARDRAIL_CLAMPED", "GUARDRAIL_VETOED", "MANUAL_OVERRIDE", "MONITOR_TRIPPED", "TRACKING_DEVIATION"] },
+          "reasonCode": { "type": "string" },
+          "solverServingRef": { "type": "string" },
+          "rawRecommendedValue": { "type": ["number", "null"] },
+          "appliedOrClampedValue": { "type": ["number", "null"] },
+          "occurredAt": { "type": "string", "format": "date-time" },
+          "guardrailTrace": { "type": "array", "items": { "$ref": "#/components/schemas/OptimizationGuardrailStageResult" } },
+          "featureSnapshot": { "$ref": "#/components/schemas/OptimizationFeatureSnapshot" }
+        }
+      },
+      "OptimizationNegativeSamplePage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["tenantId", "siteId", "windowDays", "sampleKind", "total", "limit", "offset", "hasMore", "items"],
+        "properties": {
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "windowDays": { "type": "integer", "minimum": 1, "maximum": 365 },
+          "sampleKind": { "type": "string", "enum": ["ALL", "GUARDRAIL_CLAMPED", "GUARDRAIL_VETOED", "MANUAL_OVERRIDE", "MONITOR_TRIPPED", "TRACKING_DEVIATION"] },
+          "total": { "type": "integer", "minimum": 0 },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 100 },
+          "offset": { "type": "integer", "minimum": 0 },
+          "hasMore": { "type": "boolean" },
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/OptimizationNegativeSampleItem" } }
         }
       },
       "FieldError": {

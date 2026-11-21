@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 59,
+  "registryRevision": 60,
   "routes": [
     {"method": "GET", "path": "/api/v1/sites/{siteId}/data-gaps", "owner": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
     {"method": "GET", "path": "/api/v1/iam/members", "owner": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "principal"]},
@@ -2154,6 +2154,70 @@
     {
       "method": "GET",
       "path": "/api/v1/sites/{siteId}/optimization/governance-summary",
+      "owner": "optimization-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sites/{siteId}/optimization/canary-bindings",
+      "owner": "optimization-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/sites/{siteId}/optimization/canary-bindings/{loopKey}",
+      "owner": "optimization-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/sites/{siteId}/optimization/canary-bindings/{loopKey}",
+      "owner": "optimization-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sites/{siteId}/optimization/negative-samples",
       "owner": "optimization-service",
       "publicIngress": "platform-gateway",
       "revision": 1,

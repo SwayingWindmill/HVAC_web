@@ -875,6 +875,9 @@ const SOLVER_REF_LABELS: Readonly<Record<string, string>> = {
 
 const LOOP_KEY_LABELS: Readonly<Record<string, string>> = {
   plant: '全冷站主回路',
+  chw_pump: '冷冻泵变频回路',
+  cw_pump: '冷却泵变频回路',
+  ct_fan: '冷却塔风机回路',
   chilled_water_supply_temp: '冷冻水供水温度回路',
   chilled_water_supply_reset: '冷冻水供水温度回路',
   chilled_water_supply: '冷冻水供水温度回路',
@@ -1018,4 +1021,83 @@ export function parseOptimizationGovernanceSummary(
       ],
     },
   };
+}
+
+export type NegativeSampleKind =
+  | 'GUARDRAIL_CLAMPED'
+  | 'GUARDRAIL_VETOED'
+  | 'MANUAL_OVERRIDE'
+  | 'MONITOR_TRIPPED'
+  | 'TRACKING_DEVIATION';
+
+export type NegativeSampleFilterKind = 'ALL' | NegativeSampleKind;
+
+export const NEGATIVE_SAMPLE_KIND_LABELS: Readonly<Record<NegativeSampleKind, string>> = {
+  GUARDRAIL_CLAMPED: '护栏限幅修正',
+  GUARDRAIL_VETOED: '物理安全拦截',
+  MANUAL_OVERRIDE: '人工接管覆写',
+  MONITOR_TRIPPED: '监控越界回退',
+  TRACKING_DEVIATION: '跟踪偏差回退',
+};
+
+const GUARDRAIL_STAGE_LABELS: Readonly<Record<string, string>> = {
+  validity: '输入合法性检查',
+  freshness: '测点新鲜度检查',
+  fault_and_local_veto: '设备故障与就地检修否决',
+  manual_backoff: '人工退避保护',
+  interlock_and_dwell: '顺序联锁与启停间隔',
+  hard_clamp: '物理上下限钳位',
+  slew_rate: '单步调幅限速',
+  deadband: '死区静默过滤',
+};
+
+const GUARDRAIL_ACTION_LABELS: Readonly<Record<string, string>> = {
+  pass: '通过',
+  clamped: '已钳位',
+  vetoed: '已拦截',
+  skipped: '死区跳过',
+};
+
+const NEGATIVE_SAMPLE_REASON_LABELS: Readonly<Record<string, string>> = {
+  step_rate_limit: '单步变化超限',
+  slew_rate_limit: '单步调幅限速',
+  min_clamp: '低于最小物理下限',
+  max_clamp: '高于最大物理上限',
+  hard_clamp: '超出安全上下限',
+  manual_backoff: '人工接管退避期内',
+  device_fault: '设备故障保护拦截',
+  local_manual: '控制柜就地手动锁定',
+  tracking_deviation: '设定值跟踪偏差超限',
+  zone_temp_high: '室温超出上限回退',
+  telemetry_unhealthy: '实时测点健康异常回退',
+  stale_telemetry: '采集数据超时失真拦截',
+};
+
+export function formatNegativeSampleKind(kind: NegativeSampleKind): string {
+  return NEGATIVE_SAMPLE_KIND_LABELS[kind];
+}
+
+export function formatGuardrailStage(stage: string): string {
+  const normalized = stage.trim().toLowerCase();
+  return GUARDRAIL_STAGE_LABELS[normalized] ?? '安全护栏规则';
+}
+
+export function formatGuardrailAction(action: string): string {
+  const normalized = action.trim().toLowerCase();
+  return GUARDRAIL_ACTION_LABELS[normalized] ?? '已处理';
+}
+
+export function formatNegativeSampleReason(reasonCode: string): string {
+  const trimmed = reasonCode.trim();
+  if (!trimmed) return '安全规则触发';
+  const normalized = trimmed.toLowerCase();
+  const mapped = NEGATIVE_SAMPLE_REASON_LABELS[normalized];
+  if (mapped) return mapped;
+  if (/[\u4e00-\u9fff]/.test(trimmed)) return trimmed;
+  return '安全护栏规则触发';
+}
+
+export function serializeNegativeSamplesJsonl(items: readonly unknown[]): string {
+  if (items.length === 0) return '';
+  return `${items.map((item) => JSON.stringify(item)).join('\n')}\n`;
 }

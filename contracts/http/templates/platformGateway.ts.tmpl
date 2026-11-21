@@ -384,6 +384,9 @@ export const intelligencePaths = {
   autoControlLeaseRevoke: '__SITE_AUTO_CONTROL_LEASE_REVOKE_PATH__',
   siteOptimizationExecutionMonitors: '__SITE_OPTIMIZATION_EXECUTION_MONITORS_PATH__',
   siteOptimizationGovernanceSummary: '__SITE_OPTIMIZATION_GOVERNANCE_SUMMARY_PATH__',
+  siteOptimizationCanaryBindings: '__SITE_OPTIMIZATION_CANARY_BINDINGS_PATH__',
+  siteOptimizationCanaryBinding: '__SITE_OPTIMIZATION_CANARY_BINDING_PATH__',
+  siteOptimizationNegativeSamples: '__SITE_OPTIMIZATION_NEGATIVE_SAMPLES_PATH__',
 } as const;
 
 export const buildInfoSchema = z.object({
@@ -1578,6 +1581,106 @@ export const optimizationGovernanceSummarySchema = z.object({
   flywheel: optimizationFlywheelSummarySchema,
 }).strict();
 
+export const optimizationCanaryBindingStatusSchema = z.enum(['ACTIVE', 'DISABLED']);
+
+export const optimizationCanaryBindingRecordSchema = z.object({
+  id: uuidV7Schema,
+  tenantId: uuidV7Schema,
+  siteId: uuidV7Schema,
+  loopKey: z.string().regex(/^[A-Z0-9][A-Z0-9_]{0,63}$/),
+  servingRef: z.string().min(1).max(512),
+  status: optimizationCanaryBindingStatusSchema,
+  createdAt: z.string().datetime({ offset: true }),
+  updatedAt: z.string().datetime({ offset: true }),
+}).strict();
+
+export const optimizationCanaryBindingListSchema = z.object({
+  tenantId: uuidV7Schema,
+  siteId: uuidV7Schema,
+  allowedSolverHosts: z.array(z.string()),
+  activeSolver: optimizationActiveSolverSchema,
+  items: z.array(optimizationCanaryBindingRecordSchema),
+}).strict();
+
+export const upsertOptimizationCanaryBindingRequestSchema = z.object({
+  servingRef: z.string().trim().min(1).max(512),
+  status: optimizationCanaryBindingStatusSchema,
+}).strict();
+
+export const optimizationCanaryBindingDeleteResultSchema = z.object({
+  deleted: z.boolean(),
+  siteId: uuidV7Schema,
+  loopKey: z.string().regex(/^[A-Z0-9][A-Z0-9_]{0,63}$/),
+}).strict();
+
+export const optimizationGuardrailStageResultSchema = z.object({
+  stage: z.string(),
+  action: z.string(),
+  before: z.number(),
+  after: z.number(),
+  reason: z.string().optional(),
+}).strict();
+
+export const optimizationFeatureSnapshotSchema = z.object({
+  supplyTempC: z.number().nullable().optional(),
+  zoneMaxTempC: z.number().nullable().optional(),
+  outdoorWetBulbC: z.number().nullable().optional(),
+  coolingLoadKW: z.number().nullable().optional(),
+  chillerPowerKW: z.number().nullable().optional(),
+  observedCOP: z.number().nullable().optional(),
+  runningChillers: z.number().int().nonnegative(),
+  cabinetLocalManual: z.boolean(),
+  deviceFaultActive: z.boolean(),
+  leaseDeadbandC: z.number(),
+  supplyTempMinC: z.number(),
+  supplyTempMaxC: z.number(),
+}).strict();
+
+export const optimizationNegativeSampleKindSchema = z.enum([
+  'GUARDRAIL_CLAMPED',
+  'GUARDRAIL_VETOED',
+  'MANUAL_OVERRIDE',
+  'MONITOR_TRIPPED',
+  'TRACKING_DEVIATION',
+]);
+
+export const optimizationNegativeSampleFilterKindSchema = z.enum([
+  'ALL',
+  'GUARDRAIL_CLAMPED',
+  'GUARDRAIL_VETOED',
+  'MANUAL_OVERRIDE',
+  'MONITOR_TRIPPED',
+  'TRACKING_DEVIATION',
+]);
+
+export const optimizationNegativeSampleItemSchema = z.object({
+  id: uuidV7Schema,
+  decisionId: z.string(),
+  recommendationId: z.string().nullable(),
+  monitorId: z.string().nullable(),
+  traceId: z.string(),
+  sampleKind: optimizationNegativeSampleKindSchema,
+  reasonCode: z.string(),
+  solverServingRef: z.string(),
+  rawRecommendedValue: z.number().nullable(),
+  appliedOrClampedValue: z.number().nullable(),
+  occurredAt: z.string().datetime({ offset: true }),
+  guardrailTrace: z.array(optimizationGuardrailStageResultSchema),
+  featureSnapshot: optimizationFeatureSnapshotSchema,
+}).strict();
+
+export const optimizationNegativeSamplePageSchema = z.object({
+  tenantId: uuidV7Schema,
+  siteId: uuidV7Schema,
+  windowDays: z.number().int().min(1).max(365),
+  sampleKind: optimizationNegativeSampleFilterKindSchema,
+  total: z.number().int().nonnegative(),
+  limit: z.number().int().min(1).max(100),
+  offset: z.number().int().nonnegative(),
+  hasMore: z.boolean(),
+  items: z.array(optimizationNegativeSampleItemSchema),
+}).strict();
+
 export const fieldErrorSchema = z.object({ field: z.string(), message: z.string() }).strict();
 export const registryProblemCodes = [
   'RESOURCE_NOT_FOUND', 'CURSOR_INVALID', 'REGISTRY_UNAVAILABLE', 'REGISTRY_TIMEOUT', 'MAPPING_INVALID', 'MAPPING_QUARANTINED',
@@ -1718,6 +1821,17 @@ export type OptimizationTickCounts = z.infer<typeof optimizationTickCountsSchema
 export type OptimizationCopComparison = z.infer<typeof optimizationCopComparisonSchema>;
 export type OptimizationFlywheelSummary = z.infer<typeof optimizationFlywheelSummarySchema>;
 export type OptimizationGovernanceSummary = z.infer<typeof optimizationGovernanceSummarySchema>;
+export type OptimizationCanaryBindingStatus = z.infer<typeof optimizationCanaryBindingStatusSchema>;
+export type OptimizationCanaryBindingRecord = z.infer<typeof optimizationCanaryBindingRecordSchema>;
+export type OptimizationCanaryBindingList = z.infer<typeof optimizationCanaryBindingListSchema>;
+export type UpsertOptimizationCanaryBindingRequest = z.infer<typeof upsertOptimizationCanaryBindingRequestSchema>;
+export type OptimizationCanaryBindingDeleteResult = z.infer<typeof optimizationCanaryBindingDeleteResultSchema>;
+export type OptimizationGuardrailStageResult = z.infer<typeof optimizationGuardrailStageResultSchema>;
+export type OptimizationFeatureSnapshot = z.infer<typeof optimizationFeatureSnapshotSchema>;
+export type OptimizationNegativeSampleKind = z.infer<typeof optimizationNegativeSampleKindSchema>;
+export type OptimizationNegativeSampleFilterKind = z.infer<typeof optimizationNegativeSampleFilterKindSchema>;
+export type OptimizationNegativeSampleItem = z.infer<typeof optimizationNegativeSampleItemSchema>;
+export type OptimizationNegativeSamplePage = z.infer<typeof optimizationNegativeSamplePageSchema>;
 export type StepUpFailureReason = z.infer<typeof stepUpFailureReasonSchema>;
 export type ProblemDetails = z.infer<typeof problemDetailsSchema>;
 export type RegistryListParams = { limit?: number; cursor?: string };
@@ -2229,6 +2343,37 @@ export function createPlatformGatewayClient(baseUrl = '') {
       const query = new URLSearchParams();
       if (params.windowDays !== undefined) query.set('windowDays', String(params.windowDays));
       return request(`${basePath}${query.size ? `?${query.toString()}` : ''}`, optimizationGovernanceSummarySchema, { ...init, method: 'GET' });
+    },
+    listSiteOptimizationCanaryBindings: (siteId: string, init?: RequestInit) => request(
+      '__SITE_OPTIMIZATION_CANARY_BINDINGS_PATH__'.replace('{siteId}', encodeURIComponent(siteId)),
+      optimizationCanaryBindingListSchema,
+      { ...init, method: 'GET' },
+    ),
+    upsertSiteOptimizationCanaryBinding: (siteId: string, loopKey: string, body: UpsertOptimizationCanaryBindingRequest, csrfToken: string, init?: RequestInit) => mutation(
+      '__SITE_OPTIMIZATION_CANARY_BINDING_PATH__'.replace('{siteId}', encodeURIComponent(siteId)).replace('{loopKey}', encodeURIComponent(loopKey)),
+      'PUT',
+      body,
+      upsertOptimizationCanaryBindingRequestSchema,
+      optimizationCanaryBindingRecordSchema,
+      { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), 'X-CSRF-Token': csrfToken } },
+    ),
+    deleteSiteOptimizationCanaryBinding: (siteId: string, loopKey: string, csrfToken: string, init?: RequestInit) => request(
+      '__SITE_OPTIMIZATION_CANARY_BINDING_PATH__'.replace('{siteId}', encodeURIComponent(siteId)).replace('{loopKey}', encodeURIComponent(loopKey)),
+      optimizationCanaryBindingDeleteResultSchema,
+      { ...init, method: 'DELETE', headers: { ...Object.fromEntries(new Headers(init?.headers)), 'X-CSRF-Token': csrfToken } },
+    ),
+    listSiteOptimizationNegativeSamples: (
+      siteId: string,
+      params: { windowDays?: number; sampleKind?: OptimizationNegativeSampleFilterKind; limit?: number; offset?: number } = {},
+      init?: RequestInit,
+    ) => {
+      const basePath = '__SITE_OPTIMIZATION_NEGATIVE_SAMPLES_PATH__'.replace('{siteId}', encodeURIComponent(siteId));
+      const query = new URLSearchParams();
+      if (params.windowDays !== undefined) query.set('windowDays', String(params.windowDays));
+      if (params.sampleKind !== undefined) query.set('sampleKind', params.sampleKind);
+      if (params.limit !== undefined) query.set('limit', String(params.limit));
+      if (params.offset !== undefined) query.set('offset', String(params.offset));
+      return request(`${basePath}${query.size ? `?${query.toString()}` : ''}`, optimizationNegativeSamplePageSchema, { ...init, method: 'GET' });
     },
   };
 }

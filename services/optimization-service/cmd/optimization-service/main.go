@@ -211,6 +211,7 @@ func runService(logger *slog.Logger) error {
 		return err
 	}
 	service.WithShadowReader(inputs)
+	service.WithAllowedSolverHosts(allowedSolverHosts)
 	service.WithStaging(&optimization.StagingEvaluator{
 		History:  inputs,
 		Snapshot: inputs,

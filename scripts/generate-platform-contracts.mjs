@@ -192,6 +192,10 @@ const expectedOperations = {
   revokeSiteAutoControlLease: ['post', `${site}/optimization/auto-control-lease/revoke`],
   listSiteOptimizationExecutionMonitors: ['get', `${site}/optimization/execution-monitors`],
   getSiteOptimizationGovernanceSummary: ['get', `${opt}/governance-summary`],
+  listSiteOptimizationCanaryBindings: ['get', `${opt}/canary-bindings`],
+  upsertSiteOptimizationCanaryBinding: ['put', `${opt}/canary-bindings/{loopKey}`],
+  deleteSiteOptimizationCanaryBinding: ['delete', `${opt}/canary-bindings/{loopKey}`],
+  listSiteOptimizationNegativeSamples: ['get', `${opt}/negative-samples`],
 };
 const operations = {};
 for (const [operationId, [method, subPath]] of Object.entries(expectedOperations)) {
@@ -263,6 +267,10 @@ const expectedSuccessSchemas = {
   revokeSiteAutoControlLease: 'SiteAutoControlLeaseState',
   listSiteOptimizationExecutionMonitors: 'OptimizationExecutionMonitorList',
   getSiteOptimizationGovernanceSummary: 'OptimizationGovernanceSummary',
+  listSiteOptimizationCanaryBindings: 'OptimizationCanaryBindingList',
+  upsertSiteOptimizationCanaryBinding: 'OptimizationCanaryBindingRecord',
+  deleteSiteOptimizationCanaryBinding: 'OptimizationCanaryBindingDeleteResult',
+  listSiteOptimizationNegativeSamples: 'OptimizationNegativeSamplePage',
 };
 for (const [operationId, schemaName] of Object.entries(expectedSuccessSchemas)) {
   invariant(schemaRef(operations[operationId].operation, '200') === `#/components/schemas/${schemaName}`, `${operationId} success schema is unsupported`);
@@ -361,6 +369,14 @@ const schemaRequirements = {
   OptimizationCopComparison: [['matchedBinCount', 'matchedAiSamples', 'matchedBaselineSamples', 'weightedBaselineCOP', 'weightedAiCOP', 'weightedCopUpliftPct', 'totalEstimatedSavedKWh', 'cells']],
   OptimizationFlywheelSummary: [['totalSamples', 'guardrailClamped', 'guardrailVetoed', 'manualOverride', 'monitorTripped', 'trackingDeviation']],
   OptimizationGovernanceSummary: [['tenantId', 'siteId', 'windowDays', 'generatedAt', 'activeSolver', 'tickCounts', 'copComparison', 'flywheel']],
+  OptimizationCanaryBindingRecord: [['id', 'tenantId', 'siteId', 'loopKey', 'servingRef', 'status', 'createdAt', 'updatedAt']],
+  OptimizationCanaryBindingList: [['tenantId', 'siteId', 'allowedSolverHosts', 'activeSolver', 'items']],
+  UpsertOptimizationCanaryBindingRequest: [['servingRef', 'status']],
+  OptimizationCanaryBindingDeleteResult: [['deleted', 'siteId', 'loopKey']],
+  OptimizationGuardrailStageResult: [['stage', 'action', 'before', 'after'], ['reason']],
+  OptimizationFeatureSnapshot: [['runningChillers', 'cabinetLocalManual', 'deviceFaultActive', 'leaseDeadbandC', 'supplyTempMinC', 'supplyTempMaxC'], ['supplyTempC', 'zoneMaxTempC', 'outdoorWetBulbC', 'coolingLoadKW', 'chillerPowerKW', 'observedCOP']],
+  OptimizationNegativeSampleItem: [['id', 'decisionId', 'recommendationId', 'monitorId', 'traceId', 'sampleKind', 'reasonCode', 'solverServingRef', 'rawRecommendedValue', 'appliedOrClampedValue', 'occurredAt', 'guardrailTrace', 'featureSnapshot']],
+  OptimizationNegativeSamplePage: [['tenantId', 'siteId', 'windowDays', 'sampleKind', 'total', 'limit', 'offset', 'hasMore', 'items']],
   GatewayCredentialRecord: [['id', 'gatewayId', 'fingerprintSha256', 'status', 'validFrom', 'validUntil', 'createdAt'], ['serialNumber', 'revokedAt', 'revocationReason']],
   GatewayCredentialList: [['items']],
   GatewayCertificateRevokeRequest: [[], ['reason']],
@@ -562,6 +578,9 @@ const replacements = {
   __SITE_AUTO_CONTROL_LEASE_REVOKE_PATH__: operations.revokeSiteAutoControlLease.path,
   __SITE_OPTIMIZATION_EXECUTION_MONITORS_PATH__: operations.listSiteOptimizationExecutionMonitors.path,
   __SITE_OPTIMIZATION_GOVERNANCE_SUMMARY_PATH__: operations.getSiteOptimizationGovernanceSummary.path,
+  __SITE_OPTIMIZATION_CANARY_BINDINGS_PATH__: operations.listSiteOptimizationCanaryBindings.path,
+  __SITE_OPTIMIZATION_CANARY_BINDING_PATH__: operations.upsertSiteOptimizationCanaryBinding.path,
+  __SITE_OPTIMIZATION_NEGATIVE_SAMPLES_PATH__: operations.listSiteOptimizationNegativeSamples.path,
 };
 
 function render(template) {

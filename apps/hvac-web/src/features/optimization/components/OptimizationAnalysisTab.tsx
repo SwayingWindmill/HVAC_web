@@ -35,6 +35,8 @@ import {
   type PublishedShadowChillerFit,
 } from '../optimization-model';
 import { latestShadowEvaluationQuery, siteOptimizationGovernanceSummaryQuery } from '../query';
+import { CanaryBindingsDialog } from './CanaryBindingsDialog';
+import { NegativeSamplesDrawer } from './NegativeSamplesDrawer';
 
 const FORECAST_VIEW_OPTIONS: readonly PeriodOption<'chart' | 'table'>[] = [
   { value: 'chart', label: '曲线' },
@@ -69,12 +71,18 @@ export function OptimizationAnalysisTab({
   timeZone,
   recommendation,
   active,
+  canManageControl = false,
+  csrfToken = '',
 }: {
   readonly siteId: string;
   readonly timeZone: string;
   readonly recommendation: OptimizationRecommendation | null;
   readonly active: boolean;
+  readonly canManageControl?: boolean;
+  readonly csrfToken?: string;
 }) {
+  const [canaryOpen, setCanaryOpen] = useState(false);
+  const [samplesOpen, setSamplesOpen] = useState(false);
   const nameByDevice = useDeviceNames(siteId);
   const governanceQuery = useQuery(siteOptimizationGovernanceSummaryQuery(siteId, active));
   const shadowQuery = useQuery(
@@ -106,6 +114,24 @@ export function OptimizationAnalysisTab({
         isError={governanceQuery.isError}
         summary={governanceQuery.data ?? null}
         onRetry={() => void governanceQuery.refetch()}
+        onOpenCanary={() => setCanaryOpen(true)}
+        onOpenNegativeSamples={() => setSamplesOpen(true)}
+      />
+
+      <CanaryBindingsDialog
+        siteId={siteId}
+        timeZone={timeZone}
+        open={canaryOpen}
+        onOpenChange={setCanaryOpen}
+        canManage={canManageControl}
+        csrfToken={csrfToken}
+      />
+
+      <NegativeSamplesDrawer
+        siteId={siteId}
+        timeZone={timeZone}
+        open={samplesOpen}
+        onOpenChange={setSamplesOpen}
       />
 
       {recommendation === null ? (
@@ -172,13 +198,31 @@ function GovernanceSummaryPanel({
   isError,
   summary,
   onRetry,
+  onOpenCanary,
+  onOpenNegativeSamples,
 }: {
   readonly timeZone: string;
   readonly isPending: boolean;
   readonly isError: boolean;
   readonly summary: OptimizationGovernanceSummary | null;
   readonly onRetry: () => void;
+  readonly onOpenCanary: () => void;
+  readonly onOpenNegativeSamples: () => void;
 }) {
+  const governanceActions = (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button type="button" variant="outline" size="sm" onClick={onOpenCanary}>
+        管理灰度路由
+      </Button>
+      <Button type="button" variant="outline" size="sm" onClick={onOpenNegativeSamples}>
+        查看负样本明细
+      </Button>
+      <InfoTip>
+        按室外湿球温度与冷负荷同步分箱对比 AI 闭环与规则基准能效，并汇总护栏限幅、安全拦截与自动回退负样本。
+      </InfoTip>
+    </div>
+  );
+
   if (isPending) {
     return <Skeleton className="h-64 rounded-xl" />;
   }
@@ -186,7 +230,7 @@ function GovernanceSummaryPanel({
   if (isError) {
     return (
       <Panel aria-label="策略路由与运行治理">
-        <PanelHeader title="策略路由与运行治理" />
+        <PanelHeader title="策略路由与运行治理" action={governanceActions} />
         <div className="flex flex-col items-start gap-2 px-5 py-8">
           <p className="text-sm font-semibold">策略路由与运行治理统计暂时读不到</p>
           <Button variant="outline" size="sm" onClick={onRetry}>
@@ -200,7 +244,7 @@ function GovernanceSummaryPanel({
   if (!summary) {
     return (
       <Panel aria-label="策略路由与运行治理">
-        <PanelHeader title="策略路由与运行治理" />
+        <PanelHeader title="策略路由与运行治理" action={governanceActions} />
         <div className="flex flex-col items-center gap-2 px-6 py-10 text-center">
           <span className="flex size-9 items-center justify-center rounded-xl bg-muted text-muted-foreground">
             <Gauge className="size-[18px]" aria-hidden="true" />
@@ -224,11 +268,7 @@ function GovernanceSummaryPanel({
           </Badge>
         }
         caption={`近 ${summary.windowDays} 天统计 · 更新于 ${formatTime(summary.generatedAt, timeZone)}`}
-        action={
-          <InfoTip>
-            按室外湿球温度与冷负荷同步分箱对比 AI 闭环与规则基准能效，并汇总护栏限幅、安全拦截与自动回退负样本。
-          </InfoTip>
-        }
+        action={governanceActions}
       />
 
       <dl className="grid grid-cols-2 gap-x-6 gap-y-4 border-b border-divider px-5 py-4 sm:grid-cols-3 lg:grid-cols-6">

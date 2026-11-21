@@ -161,7 +161,7 @@ func (fixture *operationsGatewayFixture) iamClient(t *testing.T) *http.Client {
 			}
 			var input registryauth.DecisionRequest
 			if err := json.NewDecoder(request.Body).Decode(&input); err != nil ||
-				(input.Action != registryauth.ActionSiteRead && input.Action != registryauth.ActionAssetList && input.Action != registryauth.ActionAssetModelRead && input.Action != registryauth.ActionSavingsManage) {
+				(input.Action != registryauth.ActionSiteRead && input.Action != registryauth.ActionAssetList && input.Action != registryauth.ActionAssetModelRead && input.Action != registryauth.ActionSavingsManage && input.Action != registryauth.ActionScheduleManage) {
 				t.Fatal("invalid Registry authorization request")
 			}
 			fixture.registryActions = append(fixture.registryActions, input.Action)
