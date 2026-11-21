@@ -764,3 +764,135 @@ func TestTemplatePayloadModbusDriverValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestPointAndTemplateValidateTypedSourceMetadata(t *testing.T) {
+	basePoint := func(pointType string, writable bool, meta map[string]any) PointMutation {
+		return PointMutation{
+			SiteID:            "018f1e00-1000-7000-8000-000000000001",
+			ReportingDeviceID: "018f1e00-4000-7000-8000-000000000001",
+			PointCode:         "chw_supply_temp_sp",
+			SourceKey:         "chwSupplyTempSp",
+			DisplayName:       "冷冻水供水温度设定",
+			PointType:         pointType,
+			ValueType:         "NUMBER",
+			Writable:          writable,
+			SampleIntervalMS:  1000,
+			PublishIntervalMS: 5000,
+			StaleAfterMS:      30000,
+			SourceMetadata:    meta,
+			Status:            "ACTIVE",
+			Meta: MutationMeta{
+				ExpectedRevision: 0,
+				IdempotencyKey:   "idem-meta-0001",
+				Reason:           "validate typed metadata",
+			},
+		}
+	}
+
+	validMeta := map[string]any{
+		"capability":         "SET_CHILLED_WATER_TEMPERATURE_SETPOINT",
+		"capabilityRevision": "capability:set-chilled-water-temperature-setpoint:v1",
+		"feedbackPointKey":   "chw_supply_temp_c",
+		"controlKind":        "NUMBER",
+		"parameterKey":       "setpointC",
+		"minimum":            5.0,
+		"maximum":            15.0,
+		"step":               0.5,
+		"deadband":           0.2,
+	}
+	if err := basePoint("COMMAND", true, validMeta).Validate(); err != nil {
+		t.Fatalf("expected valid COMMAND metadata to pass, got %v", err)
+	}
+	if err := basePoint("TELEMETRY", false, map[string]any{}).Validate(); err != nil {
+		t.Fatalf("expected empty TELEMETRY metadata to pass, got %v", err)
+	}
+
+	badMutations := []struct {
+		name      string
+		pointType string
+		writable  bool
+		meta      map[string]any
+	}{
+		{"min exceeds max", "COMMAND", true, map[string]any{"minimum": 20.0, "maximum": 10.0, "step": 1.0}},
+		{"zero step", "COMMAND", true, map[string]any{"minimum": 5.0, "maximum": 15.0, "step": 0.0}},
+		{"invalid controlKind", "COMMAND", true, map[string]any{"controlKind": "TOGGLE"}},
+		{"non-numeric deadband", "TELEMETRY", false, map[string]any{"deadband": "bad"}},
+		{"bad capability revision", "COMMAND", true, map[string]any{"capability": "START", "capabilityRevision": "v999"}},
+	}
+	for _, tc := range badMutations {
+		t.Run("writer/"+tc.name, func(t *testing.T) {
+			if err := basePoint(tc.pointType, tc.writable, tc.meta).Validate(); !errors.Is(err, ErrInvalidMutation) {
+				t.Fatalf("expected ErrInvalidMutation for %s, got %v", tc.name, err)
+			}
+		})
+		t.Run("template/"+tc.name, func(t *testing.T) {
+			payload := map[string]any{
+				"standardPoints": []any{
+					map[string]any{
+						"pointCode":         "bad_point",
+						"displayName":       "坏点位",
+						"pointType":         tc.pointType,
+						"valueType":         "NUMBER",
+						"writable":          tc.writable,
+						"sampleIntervalMs":  1000,
+						"publishIntervalMs": 5000,
+						"staleAfterMs":      30000,
+						"sourceMetadata":    tc.meta,
+					},
+				},
+			}
+			if _, err := parseAndValidateTemplatePayload(TemplateDevice, payload); !errors.Is(err, ErrInvalidMutation) {
+				t.Fatalf("expected template ErrInvalidMutation for %s, got %v", tc.name, err)
+			}
+		})
+	}
+}
+
+func TestTemplateModbusDriverMaterializationAndTagOverrides(t *testing.T) {
+	payload := map[string]any{
+		"deviceType": "CHILLER",
+		"modbusDriver": map[string]any{
+			"driverType": "MODBUS_TCP",
+			"endpoint":   "10.2.3.4:502",
+			"unitId":     5,
+			"timeoutMs":  1500,
+			"retries":    3,
+			"registers": []any{
+				map[string]any{
+					"pointCode":       "chw_supply_temp_c",
+					"semanticChannel": "SupplyTemperature",
+					"functionCode":    3,
+					"address":         100,
+					"registerCount":   1,
+					"rawType":         "INT16",
+					"byteOrder":       "BIG_ENDIAN",
+					"wordOrder":       "BIG_ENDIAN",
+					"scale":           0.1,
+					"offset":          0.0,
+					"pollPriority":    "HIGH",
+				},
+			},
+		},
+	}
+	act, err := parseAndValidateTemplatePayload(TemplateDevice, payload)
+	if err != nil || act == nil || act.ModbusDriver == nil {
+		t.Fatalf("expected TemplatePayloadActivation.ModbusDriver populated, got (%+v, %v)", act, err)
+	}
+	if act.ModbusDriver.DriverType != "MODBUS_TCP" || act.ModbusDriver.Endpoint == nil || *act.ModbusDriver.Endpoint != "10.2.3.4:502" || act.ModbusDriver.UnitID == nil || *act.ModbusDriver.UnitID != 5 || len(act.ModbusDriver.Registers) != 1 {
+		t.Fatalf("unexpected ModbusDriver on activation: %+v", act.ModbusDriver)
+	}
+
+	ep, uid, err := parseModbusTagOverrides([]byte(`{"modbus_endpoint":" 192.168.1.50:502 ","modbus_unit_id":"12"}`))
+	if err != nil || ep == nil || *ep != "192.168.1.50:502" || uid == nil || *uid != 12 {
+		t.Fatalf("unexpected string tag overrides: ep=%v uid=%v err=%v", ep, uid, err)
+	}
+	if _, _, err := parseModbusTagOverrides([]byte(`{"modbus_endpoint":"","modbus_unit_id":12}`)); err == nil {
+		t.Fatal("expected blank modbus_endpoint tag override to error")
+	}
+	if _, _, err := parseModbusTagOverrides([]byte(`{"modbus_endpoint":"192.168.1.50:502","modbus_unit_id":999}`)); err == nil {
+		t.Fatal("expected out-of-range modbus_unit_id tag override to error")
+	}
+	if _, _, err := parseModbusTagOverrides([]byte(`{"modbus_unit_id":`)); err == nil {
+		t.Fatal("expected malformed device tags JSON to error")
+	}
+}

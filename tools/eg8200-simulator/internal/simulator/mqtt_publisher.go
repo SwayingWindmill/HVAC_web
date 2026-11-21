@@ -10,7 +10,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -124,6 +126,8 @@ type MQTTPublisher struct {
 	commandHandler          *edgeCommandHandler
 	evidenceSpool           *mqttEvidenceSpool
 	resendQueue             *TimedataResendQueue
+	reconnectWatermark      atomic.Uint64
+	hasReconnectWatermark   atomic.Bool
 	pendingObsMu            sync.Mutex
 	pendingObsByMsgID       map[string][]PublishedObservation
 	commandTopic            string
@@ -132,6 +136,8 @@ type MQTTPublisher struct {
 	eventSequence           *atomic.Uint64
 	session                 *mqttSessionState
 	configShadow            *edgeConfigShadow
+	shadowClientMu          sync.Mutex
+	shadowHTTPClient        *http.Client
 	snapshotMu              sync.Mutex
 	snapshotInterval        time.Duration
 	lastFullSnapshotAt      time.Time
@@ -332,6 +338,12 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 		OnConnectionUp: func(manager *autopaho.ConnectionManager, _ *paho.Connack) {
 			managerPtr.Store(manager)
 			sessionID, sessionTime := session.current()
+			watermark := uint64(0)
+			if publisher.resendQueue != nil {
+				watermark = publisher.resendQueue.LatestTimedataSequence()
+			}
+			publisher.reconnectWatermark.Store(watermark)
+			publisher.hasReconnectWatermark.Store(true)
 			connected.Store(true)
 			if edgeRuntime != nil {
 				edgeRuntime.NotifyCloudContact(true, sessionTime)
@@ -339,11 +351,13 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 			_ = metrics.SetGauge("hvac_edge_mqtt_connected", "Whether the Edge publisher is connected to the MQTT broker.", nil, 1)
 			_ = metrics.AddCounter("hvac_edge_mqtt_connections_total", "Edge MQTT connection attempts by outcome.", map[string]string{"outcome": "success"}, 1)
 			commandTopic := mqttCommandTopic(config)
+			shadowTopic := mqttShadowDownlinkTopic(config.GatewayID)
 			go func() {
 				subscribeContext, cancel := context.WithTimeout(ctx, 10*time.Second)
 				defer cancel()
 				if _, err := manager.Subscribe(subscribeContext, &paho.Subscribe{Subscriptions: []paho.SubscribeOptions{
 					{Topic: commandTopic, QoS: 1},
+					{Topic: shadowTopic, QoS: 1},
 				}}); err != nil {
 					return
 				}
@@ -362,7 +376,12 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 				if strings.TrimSpace(config.EnrollmentURL) != "" {
 					shadowContext, shadowCancel := context.WithTimeout(ctx, 15*time.Second)
 					defer shadowCancel()
-					_ = syncConfigShadowHTTP(shadowContext, config, configShadow, nil)
+					client, clientErr := publisher.shadowClient()
+					if clientErr != nil {
+						publisher.recordShadowSyncError("connect_sync", clientErr)
+					} else if syncErr := syncConfigShadowHTTP(shadowContext, config, configShadow, client); syncErr != nil {
+						publisher.recordShadowSyncError("connect_sync", syncErr)
+					}
 				}
 			}()
 		},
@@ -371,6 +390,37 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 			OnPublishReceived: []func(paho.PublishReceived) (bool, error){func(recv paho.PublishReceived) (bool, error) {
 				if edgeRuntime != nil {
 					edgeRuntime.NotifyCloudContact(true, time.Now().UTC())
+				}
+				if strings.TrimSpace(recv.Packet.Topic) == mqttShadowDownlinkTopic(config.GatewayID) {
+					raw := append([]byte(nil), recv.Packet.Payload...)
+					go func() {
+						shadowCtx, shadowCancel := context.WithTimeout(ctx, 15*time.Second)
+						defer shadowCancel()
+						var client *http.Client
+						if strings.TrimSpace(config.EnrollmentURL) != "" {
+							built, clientErr := publisher.shadowClient()
+							if clientErr != nil {
+								publisher.recordShadowSyncError("downlink_client", clientErr)
+								return
+							}
+							client = built
+						}
+						if syncErr := handleDownlinkShadowMessage(shadowCtx, config, configShadow, client, func(pubCtx context.Context, topic string, payload []byte) error {
+							mgr := managerPtr.Load()
+							if mgr == nil {
+								return errors.New("MQTT connection manager is unavailable")
+							}
+							_, pubErr := mgr.Publish(pubCtx, &paho.Publish{
+								Topic:   topic,
+								QoS:     1,
+								Payload: payload,
+							})
+							return pubErr
+						}, raw); syncErr != nil {
+							publisher.recordShadowSyncError("downlink_replication", syncErr)
+						}
+					}()
+					return true, nil
 				}
 				return commandHandler.Handle(recv)
 			}},
@@ -532,7 +582,11 @@ func (publisher *MQTTPublisher) flushAndSyncResend(ctx context.Context) {
 		}
 	}
 	if publisher.resendQueue != nil && publisher.connected.Load() && !publisher.resendQueue.IsSynced() {
-		_, _ = publisher.resendQueue.Drain(ctx)
+		if publisher.hasReconnectWatermark.Load() {
+			_, _ = publisher.resendQueue.DrainUpTo(ctx, publisher.reconnectWatermark.Load())
+		} else {
+			_, _ = publisher.resendQueue.Drain(ctx)
+		}
 	}
 }
 
@@ -595,7 +649,37 @@ func (publisher *MQTTPublisher) withShadowMeasurements(measurements []Measuremen
 	return combined
 }
 
+func (publisher *MQTTPublisher) recordShadowSyncError(stage string, err error) {
+	if err == nil {
+		return
+	}
+	gatewayID := ""
+	var metrics *observability.Registry
+	if publisher != nil {
+		gatewayID = publisher.gatewayID
+		metrics = publisher.metrics
+	}
+	slog.Default().Warn("edge_shadow_sync_failed", "stage", stage, "gateway_id", gatewayID, "error", err.Error())
+	if metrics != nil {
+		_ = metrics.AddCounter(
+			"hvac_edge_shadow_replication_errors_total",
+			"Edge config shadow HTTP sync and MQTT replication errors.",
+			map[string]string{"stage": stage},
+			1,
+		)
+	}
+}
+
 func (publisher *MQTTPublisher) Disconnect(ctx context.Context) error {
+	if publisher != nil {
+		publisher.shadowClientMu.Lock()
+		shadowHTTP := publisher.shadowHTTPClient
+		publisher.shadowHTTPClient = nil
+		publisher.shadowClientMu.Unlock()
+		if shadowHTTP != nil {
+			shadowHTTP.CloseIdleConnections()
+		}
+	}
 	mgr := publisher.currentManager()
 	if mgr == nil {
 		return nil
@@ -1106,12 +1190,8 @@ func newUUIDV7(at time.Time) (string, error) {
 
 func telemetryDeadband(point PointConfig, policyDeadband float64) float64 {
 	best := policyDeadband
-	if point.SourceMetadata != nil {
-		if raw, ok := point.SourceMetadata["deadband"]; ok {
-			if val, numOK := toFloat64(raw); numOK && !math.IsNaN(val) && !math.IsInf(val, 0) && val > best {
-				best = val
-			}
-		}
+	if meta, err := edgecontrol.ParseEdgePointSourceMetadata(point.SourceMetadata); err == nil && meta.Deadband != nil && *meta.Deadband > best {
+		best = *meta.Deadband
 	}
 	return best
 }

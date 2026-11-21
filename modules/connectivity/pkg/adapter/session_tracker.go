@@ -14,13 +14,16 @@ const (
 
 // SessionTransition describes a gateway online/offline lifecycle event or status update.
 type SessionTransition struct {
-	GatewayID    string
-	SessionID    string
-	Sequence     int64
-	HasSequence  bool
-	EventTime    int64
-	HasEventTime bool
-	Online       bool
+	GatewayID      string
+	SessionID      string
+	Sequence       int64
+	HasSequence    bool
+	EventTime      int64
+	HasEventTime   bool
+	ServerTime     int64
+	HasServerTime  bool
+	ServerObserved bool
+	Online         bool
 }
 
 // GatewaySessionSnapshot exposes the current fenced session state for a gateway.
@@ -42,6 +45,7 @@ type gatewaySessionState struct {
 	hasSequence          bool
 	lastEventTime        int64
 	lastTelemetryTime    int64
+	lastServerTime       int64
 	lastTelemetrySession string
 	online               bool
 	hasTransition        bool
@@ -102,14 +106,21 @@ func NewGatewaySessionTracker(opts ...SessionTrackerOption) *GatewaySessionTrack
 
 // ApplyStatus applies a decoded StatusEnvelope transition.
 func (t *GatewaySessionTracker) ApplyStatus(status StatusEnvelope) bool {
+	return t.ApplyStatusAt(status, 0, false)
+}
+
+// ApplyStatusAt applies a decoded StatusEnvelope transition with an optional server clock observation.
+func (t *GatewaySessionTracker) ApplyStatusAt(status StatusEnvelope, serverTime int64, hasServerTime bool) bool {
 	return t.ApplyTransition(SessionTransition{
-		GatewayID:    status.GatewayID,
-		SessionID:    status.SessionID,
-		Sequence:     status.Sequence,
-		HasSequence:  status.HasSequence,
-		EventTime:    status.EventTime,
-		HasEventTime: status.HasEventTime,
-		Online:       status.Online,
+		GatewayID:     status.GatewayID,
+		SessionID:     status.SessionID,
+		Sequence:      status.Sequence,
+		HasSequence:   status.HasSequence,
+		EventTime:     status.EventTime,
+		HasEventTime:  status.HasEventTime,
+		ServerTime:    serverTime,
+		HasServerTime: hasServerTime,
+		Online:        status.Online,
 	})
 }
 
@@ -136,11 +147,20 @@ func (t *GatewaySessionTracker) ApplyTransition(tx SessionTransition) bool {
 			if sid != "" && cur.lastTelemetrySession != "" && sid != cur.lastTelemetrySession {
 				return false
 			}
-			if tx.HasEventTime && cur.lastTelemetryTime > 0 && tx.EventTime < cur.lastTelemetryTime {
-				return false
-			}
-			if cur.lastTelemetrySession != "" && sid == "" && tx.HasEventTime && tx.EventTime <= cur.lastTelemetryTime {
-				return false
+			if tx.ServerObserved {
+				if tx.HasEventTime && cur.lastServerTime > 0 && tx.EventTime < cur.lastServerTime {
+					return false
+				}
+				if cur.lastTelemetrySession != "" && sid == "" && tx.HasEventTime && cur.lastServerTime > 0 && tx.EventTime <= cur.lastServerTime {
+					return false
+				}
+			} else {
+				if tx.HasEventTime && cur.lastTelemetryTime > 0 && tx.EventTime < cur.lastTelemetryTime {
+					return false
+				}
+				if cur.lastTelemetrySession != "" && sid == "" && tx.HasEventTime && tx.EventTime <= cur.lastTelemetryTime {
+					return false
+				}
 			}
 		} else {
 			if sid != "" && cur.lastTelemetrySession != "" && sid != cur.lastTelemetrySession &&
@@ -194,6 +214,17 @@ func (t *GatewaySessionTracker) ApplyTransition(tx SessionTransition) bool {
 		return applyAcceptedTransitionLocked(cur, tx, sid, true)
 
 	case sid == "" && cur.sessionID != "":
+		if tx.ServerObserved {
+			if !tx.Online && cur.online {
+				if !tx.HasEventTime || (cur.lastServerTime > 0 && tx.EventTime <= cur.lastServerTime) {
+					return false
+				}
+			}
+			if tx.HasEventTime && cur.lastServerTime > 0 && tx.EventTime < cur.lastServerTime {
+				return false
+			}
+			return applyAcceptedTransitionLocked(cur, tx, "", false)
+		}
 		if !tx.Online && cur.online {
 			if !tx.HasEventTime || (cur.lastEventTime > 0 && tx.EventTime <= cur.lastEventTime) {
 				return false
@@ -209,6 +240,12 @@ func (t *GatewaySessionTracker) ApplyTransition(tx SessionTransition) bool {
 
 	default:
 		// Legacy path: both incoming and active session omit sessionId.
+		if tx.ServerObserved {
+			if tx.HasEventTime && cur.lastServerTime > 0 && tx.EventTime < cur.lastServerTime {
+				return false
+			}
+			return applyAcceptedTransitionLocked(cur, tx, "", false)
+		}
 		if cur.hasSequence && tx.HasSequence && tx.Sequence <= cur.lastSequence {
 			return false
 		}
@@ -245,8 +282,17 @@ func applyAcceptedTransitionLocked(cur *gatewaySessionState, tx SessionTransitio
 		cur.hasSequence = true
 		cur.lastSequence = tx.Sequence
 	}
-	if tx.HasEventTime && tx.EventTime > cur.lastEventTime {
+	if tx.HasEventTime && !tx.ServerObserved && tx.EventTime > cur.lastEventTime {
 		cur.lastEventTime = tx.EventTime
+	}
+	serverTime := tx.ServerTime
+	hasServerTime := tx.HasServerTime
+	if !hasServerTime && tx.HasEventTime {
+		serverTime = tx.EventTime
+		hasServerTime = true
+	}
+	if hasServerTime && serverTime > cur.lastServerTime {
+		cur.lastServerTime = serverTime
 	}
 	return true
 }
@@ -254,6 +300,12 @@ func applyAcceptedTransitionLocked(cur *gatewaySessionState, tx SessionTransitio
 // ObserveTelemetry advances gateway telemetry recency and optional sessionId awareness
 // without modifying event/status sequence numbering.
 func (t *GatewaySessionTracker) ObserveTelemetry(gatewayID, sessionID string, eventTime int64) {
+	t.ObserveTelemetryAt(gatewayID, sessionID, eventTime, 0, false)
+}
+
+// ObserveTelemetryAt advances gateway telemetry recency plus server receive time so
+// server-observed disconnect notices never race against gateway RTC clock skew.
+func (t *GatewaySessionTracker) ObserveTelemetryAt(gatewayID, sessionID string, eventTime, serverTime int64, hasServerTime bool) {
 	if t == nil {
 		return
 	}
@@ -269,6 +321,9 @@ func (t *GatewaySessionTracker) ObserveTelemetry(gatewayID, sessionID string, ev
 	cur := t.getOrCreateLocked(gw)
 	if eventTime > cur.lastTelemetryTime {
 		cur.lastTelemetryTime = eventTime
+	}
+	if hasServerTime && serverTime > cur.lastServerTime {
+		cur.lastServerTime = serverTime
 	}
 	if sid == "" || cur.isSuperseded(sid) {
 		return

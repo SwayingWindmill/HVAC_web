@@ -167,6 +167,7 @@ COPY modules/command/migrations/command_intent_trace_context.sql /opt/hvac/repo/
 COPY modules/command/migrations/control-alarm-outbox.sql /opt/hvac/repo/modules/command/migrations/control-alarm-outbox.sql
 COPY modules/command/migrations/command-priority-and-locks.sql /opt/hvac/repo/modules/command/migrations/command-priority-and-locks.sql
 COPY modules/command/migrations/command-audit-immutability.sql /opt/hvac/repo/modules/command/migrations/command-audit-immutability.sql
+COPY modules/command/migrations/command-due-work-tenants.sql /opt/hvac/repo/modules/command/migrations/command-due-work-tenants.sql
 COPY modules/alarm/migrations/001_s4_alarm_runtime.sql /opt/hvac/repo/modules/alarm/migrations/001_s4_alarm_runtime.sql
 COPY modules/alarm/migrations/002_s4_alarm_lifecycle.sql /opt/hvac/repo/modules/alarm/migrations/002_s4_alarm_lifecycle.sql
 COPY modules/alarm/migrations/003_s4_tenant_scope.sql /opt/hvac/repo/modules/alarm/migrations/003_s4_tenant_scope.sql

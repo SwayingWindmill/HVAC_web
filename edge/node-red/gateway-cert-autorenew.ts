@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as https from 'node:https';
 import { isIP as netIsIp } from 'node:net';
 import * as path from 'node:path';
-import { mergeTransportCaCertificates, type NodeRedFlowItem } from './gateway-nodered-tunnel.ts';
+import { buildGatewayPopHeaders, mergeTransportCaCertificates, type NodeRedFlowItem } from './gateway-nodered-tunnel.ts';
 
 export const DEFAULT_RENEW_THRESHOLD_DAYS = 14;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -143,15 +143,18 @@ function postRenewRequest(
   keyPem: string,
   caPem: string,
   rejectUnauthorized: boolean,
+  nowMs = Date.now(),
 ): Promise<{ certificatePem: string; caPem: string; expiresAt: string }> {
   return new Promise((resolve, reject) => {
     const target = new URL(renewUrl);
     const body = JSON.stringify({ csrPem });
+    const pathAndQuery = `${target.pathname}${target.search}`;
+    const popHeaders = buildGatewayPopHeaders('POST', pathAndQuery, certPem, keyPem, nowMs);
     const req = https.request(
       {
         hostname: target.hostname,
         port: target.port ? Number(target.port) : 443,
-        path: `${target.pathname}${target.search}`,
+        path: pathAndQuery,
         method: 'POST',
         cert: certPem,
         key: keyPem,
@@ -161,6 +164,7 @@ function postRenewRequest(
         headers: {
           'Content-Type': 'application/json',
           'Content-Length': Buffer.byteLength(body),
+          ...popHeaders,
         },
         timeout: 15_000,
       },
@@ -224,6 +228,7 @@ export async function checkAndRenewGatewayCertificate(
     keyPem,
     currentCaPem,
     options.rejectUnauthorized ?? true,
+    nowMs,
   );
 
   const currentCa = new X509Certificate(currentCaPem);

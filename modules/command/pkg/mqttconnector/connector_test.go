@@ -2091,3 +2091,202 @@ func TestConnectorTracePropagationAcrossReplyRecoveryAndLogs(t *testing.T) {
 		}
 	}
 }
+
+type recordingSpanExporter struct {
+	mu    sync.Mutex
+	spans []observability.SpanData
+}
+
+func (e *recordingSpanExporter) Export(_ context.Context, spans []observability.SpanData) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.spans = append(e.spans, spans...)
+	return nil
+}
+
+func (e *recordingSpanExporter) Shutdown(context.Context) error { return nil }
+
+func (e *recordingSpanExporter) snapshot() []observability.SpanData {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]observability.SpanData(nil), e.spans...)
+}
+
+type spanTransportState struct {
+	*fakeTransportState
+	gwID  string
+	mu    sync.Mutex
+	armed bool
+}
+
+func (s *spanTransportState) ResolveCommandRoute(context.Context, commandmodel.DispatchEnvelope) (commandmodel.DeviceRoute, error) {
+	return commandmodel.DeviceRoute{
+		GatewayID:        s.gwID,
+		ExternalDeviceID: "CHILLER-01",
+		BindingRevision:  1,
+	}, nil
+}
+
+func (s *spanTransportState) PrepareCommandCorrelation(_ context.Context, c commandmodel.CommandCorrelation) (commandmodel.CommandCorrelation, error) {
+	c.State = commandmodel.CorrelationPrepared
+	s.put(c)
+	return c, nil
+}
+
+func (s *spanTransportState) ArmCommandCorrelation(_ context.Context, tenantID, attemptID string, executionFence uint64, armedAt time.Time) error {
+	s.mu.Lock()
+	s.armed = true
+	s.mu.Unlock()
+	s.fakeTransportState.mu.Lock()
+	key := fmt.Sprintf("%s|%s|%d", tenantID, attemptID, executionFence)
+	if corr, ok := s.correlations[key]; ok {
+		corr.State = commandmodel.CorrelationMayCommit
+		s.correlations[key] = corr
+	}
+	s.fakeTransportState.mu.Unlock()
+	return nil
+}
+
+func (s *spanTransportState) RecordCommandReply(_ context.Context, tenantID, _ string, commandID string, executionFence uint64, replySHA, edgeStatus string, eventTime time.Time, reason string, exec *commandmodel.EdgeExecutionEvidence, now time.Time) (commandmodel.CommandCorrelation, error) {
+	s.fakeTransportState.mu.Lock()
+	defer s.fakeTransportState.mu.Unlock()
+	for k, corr := range s.correlations {
+		if corr.Envelope.TenantID == tenantID && corr.Envelope.CommandID == commandID && corr.Envelope.ExecutionFence == executionFence {
+			corr.State = commandmodel.CorrelationReplied
+			corr.ReplySHA256 = replySHA
+			corr.ReplyStatus = edgeStatus
+			corr.ReplyEventTime = eventTime
+			corr.ReplyReasonCode = reason
+			corr.EdgeExecution = exec
+			corr.RepliedAt = now
+			s.correlations[k] = corr
+			return corr, nil
+		}
+	}
+	return commandmodel.CommandCorrelation{}, commandmodel.ErrCommandCorrelationNotFound
+}
+
+func TestConnectorExportsSpansToConfiguredTracer(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 11, 19, 10, 0, 0, 0, time.UTC)
+	gwID := "0193f000-2000-7000-8000-000000000001"
+	traceID := "0123456789abcdef0123456789abcdef"
+	exporter := &recordingSpanExporter{}
+	tracer := observability.NewTracer("connectivity-commands-test", exporter)
+	transport := &spanTransportState{
+		fakeTransportState: &fakeTransportState{correlations: map[string]commandmodel.CommandCorrelation{}},
+		gwID:               gwID,
+	}
+	service := commandservice.New(func() time.Time { return now })
+	connector, err := NewOffline(Config{
+		TransportState: transport,
+		EvidenceStore:  fakeEvidenceStore{},
+		LateResultSink: fakeLateResultSink{service: service},
+		ReplyTimeout:   5 * time.Second,
+		Tracer:         tracer,
+		Now:            func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("NewOffline: %v", err)
+	}
+	defer func() { _ = connector.Disconnect(context.Background()) }()
+
+	applied := commandmodel.NumberScalar(7.5)
+	execEvidence := &commandmodel.EdgeExecutionEvidence{
+		Requested:          commandmodel.NumberScalar(7.5),
+		Effective:          &applied,
+		Applied:            &applied,
+		WinnerControllerID: "chiller-lead-1",
+		Cycle:              1,
+	}
+
+	envelope := commandmodel.DispatchEnvelope{
+		AttemptID:          "0193f000-3000-7000-8000-000000000001",
+		CommandID:          "0193f000-4000-7000-8000-000000000001",
+		TenantID:           "tenant-1",
+		SiteID:             "0193f000-1000-7000-8000-000000000001",
+		DeviceID:           "0193f000-5000-7000-8000-000000000001",
+		PointID:            "0193f000-6000-7000-8000-000000000001",
+		Capability:         commandmodel.CapabilitySetChilledWaterTemperatureSetpoint,
+		CapabilityRevision: "v1",
+		Parameters:         commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 7.5},
+		ExecutionFence:     1,
+		LeaseOwner:         "worker-1",
+		LeaseUntil:         now.Add(10 * time.Second),
+		TraceID:            traceID,
+	}
+
+	connector.publish = func(_ context.Context, pub *paho.Publish) (*paho.PublishResponse, error) {
+		go func() {
+			replyPayload, _ := json.Marshal(commandReply{
+				SchemaVersion:     commandSchemaVersion,
+				MessageID:         "0193f000-7000-7000-8000-000000000001",
+				CommandID:         envelope.CommandID,
+				TraceID:           traceID,
+				EventTime:         now.UnixMilli(),
+				EdgeStatus:        "EXECUTED",
+				ExecutionFence:    envelope.ExecutionFence,
+				ExecutionEvidence: execEvidence,
+			})
+			_, _ = connector.onReply(paho.PublishReceived{
+				Packet: &paho.Publish{
+					Topic:   "hvac/v1/" + gwID + "/up/reply",
+					Payload: replyPayload,
+				},
+			})
+		}()
+		return &paho.PublishResponse{}, nil
+	}
+
+	res, err := connector.Execute(t.Context(), envelope)
+	if err != nil || !res.Acknowledged {
+		t.Fatalf("Execute = (%+v, %v), want acknowledged", res, err)
+	}
+
+	lateAttempt := "0193f000-3000-7000-8000-000000000002"
+	lateCmd := "0193f000-4000-7000-8000-000000000002"
+	lateEnvelope := envelope
+	lateEnvelope.AttemptID = lateAttempt
+	lateEnvelope.CommandID = lateCmd
+	transport.put(commandmodel.CommandCorrelation{
+		Envelope: lateEnvelope,
+		State:    commandmodel.CorrelationMayCommit,
+	})
+	lateReplyPayload, _ := json.Marshal(commandReply{
+		SchemaVersion:     commandSchemaVersion,
+		MessageID:         "0193f000-7000-7000-8000-000000000002",
+		CommandID:         lateCmd,
+		TraceID:           traceID,
+		EventTime:         now.UnixMilli(),
+		EdgeStatus:        "EXECUTED",
+		ExecutionFence:    lateEnvelope.ExecutionFence,
+		ExecutionEvidence: execEvidence,
+	})
+	if handled, onErr := connector.onReply(paho.PublishReceived{
+		Packet: &paho.Publish{
+			Topic:   "hvac/v1/" + gwID + "/up/reply",
+			Payload: lateReplyPayload,
+		},
+	}); !handled || onErr != nil {
+		t.Fatalf("late onReply = (%v, %v), want (true, nil)", handled, onErr)
+	}
+	connector.drainReplyWorkers(context.Background())
+
+	spans := exporter.snapshot()
+	var sawPublish, sawReply bool
+	for _, sp := range spans {
+		if sp.TraceID != traceID {
+			t.Fatalf("span %q TraceID=%q, want %q", sp.Name, sp.TraceID, traceID)
+		}
+		if sp.Name == "mqtt.command.publish" {
+			sawPublish = true
+		}
+		if sp.Name == "mqtt.command.reply" {
+			sawReply = true
+		}
+	}
+	if !sawPublish || !sawReply {
+		t.Fatalf("expected mqtt.command.publish and mqtt.command.reply spans, got %+v", spans)
+	}
+}

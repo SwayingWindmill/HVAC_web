@@ -3,6 +3,7 @@ package simulator
 import (
 	"bytes"
 	"context"
+	"crypto"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -19,6 +20,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 )
 
 const (
@@ -588,11 +591,32 @@ func (publisher *MQTTPublisher) ConfigShadowState() (appliedRevision int64, poin
 	return snap.AppliedRevision, snap.PointMappings, snap.SamplingPolicies, snap.ConcentratorConfigs
 }
 
+func (publisher *MQTTPublisher) shadowClient() (*http.Client, error) {
+	if publisher == nil {
+		return nil, nil
+	}
+	publisher.shadowClientMu.Lock()
+	defer publisher.shadowClientMu.Unlock()
+	if publisher.shadowHTTPClient != nil {
+		return publisher.shadowHTTPClient, nil
+	}
+	built, err := newShadowHTTPClient(publisher.config)
+	if err != nil {
+		return nil, err
+	}
+	publisher.shadowHTTPClient = built
+	return built, nil
+}
+
 func (publisher *MQTTPublisher) SyncConfigShadow(ctx context.Context) error {
-	if publisher == nil || publisher.configShadow == nil {
+	if publisher == nil || publisher.configShadow == nil || strings.TrimSpace(publisher.config.EnrollmentURL) == "" {
 		return nil
 	}
-	return syncConfigShadowHTTP(ctx, publisher.config, publisher.configShadow, nil)
+	client, err := publisher.shadowClient()
+	if err != nil {
+		return err
+	}
+	return syncConfigShadowHTTP(ctx, publisher.config, publisher.configShadow, client)
 }
 
 func (publisher *MQTTPublisher) SyncConfigShadowWithClient(ctx context.Context, client *http.Client) error {
@@ -612,7 +636,11 @@ func (publisher *MQTTPublisher) MaybeSyncConfigShadow(ctx context.Context, minIn
 	if !publisher.configShadow.markAttemptIfDue(minInterval, time.Now().UTC()) {
 		return nil
 	}
-	return syncConfigShadowHTTP(ctx, publisher.config, publisher.configShadow, nil)
+	client, err := publisher.shadowClient()
+	if err != nil {
+		return err
+	}
+	return syncConfigShadowHTTP(ctx, publisher.config, publisher.configShadow, client)
 }
 
 func syncConfigShadowHTTP(ctx context.Context, config MQTTGatewayConfig, shadow *edgeConfigShadow, client *http.Client) error {
@@ -630,11 +658,17 @@ func syncConfigShadowHTTP(ctx context.Context, config MQTTGatewayConfig, shadow 
 		}
 		client = built
 	}
+	certDER, signer, hasSigningID := loadShadowSigningIdentity(config)
 	snap := shadow.snapshot()
 	pullURL := baseURL + "/gateway/v1/config-shadow?sinceRevision=" + url.QueryEscape(strconv.FormatInt(snap.AppliedRevision, 10))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pullURL, nil)
 	if err != nil {
 		return fmt.Errorf("build config shadow pull request: %w", err)
+	}
+	if hasSigningID {
+		if err := signShadowRequestPoP(req, certDER, signer, time.Now().UTC()); err != nil {
+			return fmt.Errorf("sign config shadow pull PoP: %w", err)
+		}
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -673,6 +707,11 @@ func syncConfigShadowHTTP(ctx context.Context, config MQTTGatewayConfig, shadow 
 		return fmt.Errorf("build config shadow report request: %w", err)
 	}
 	postReq.Header.Set("Content-Type", "application/json")
+	if hasSigningID {
+		if err := signShadowRequestPoP(postReq, certDER, signer, time.Now().UTC()); err != nil {
+			return fmt.Errorf("sign config shadow report PoP: %w", err)
+		}
+	}
 	postResp, err := client.Do(postReq)
 	if err != nil {
 		return fmt.Errorf("report gateway config shadow: %w", err)
@@ -718,6 +757,25 @@ func newShadowHTTPClient(config MQTTGatewayConfig) (*http.Client, error) {
 		Timeout:   15 * time.Second,
 		Transport: &http.Transport{TLSClientConfig: tlsCfg},
 	}, nil
+}
+
+func loadShadowSigningIdentity(config MQTTGatewayConfig) ([]byte, crypto.Signer, bool) {
+	if strings.TrimSpace(config.CertFile) == "" || strings.TrimSpace(config.KeyFile) == "" {
+		return nil, nil, false
+	}
+	identity, err := tls.LoadX509KeyPair(config.CertFile, config.KeyFile)
+	if err != nil || len(identity.Certificate) == 0 {
+		return nil, nil, false
+	}
+	signer, ok := identity.PrivateKey.(crypto.Signer)
+	if !ok {
+		return nil, nil, false
+	}
+	return identity.Certificate[0], signer, true
+}
+
+func signShadowRequestPoP(req *http.Request, certDER []byte, signer crypto.Signer, now time.Time) error {
+	return edgecontrol.SignGatewayRequestPoP(req, certDER, signer, now)
 }
 
 func isProtectedEdgeConcentratorUID(unitID int) bool {

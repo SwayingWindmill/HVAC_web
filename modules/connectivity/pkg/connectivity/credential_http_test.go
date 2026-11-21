@@ -327,3 +327,59 @@ func TestCredentialHTTPNewRoutesAndValidation(t *testing.T) {
 		t.Fatalf("blank revoke reason status=%d, want 400", blankRec.Code)
 	}
 }
+
+func TestCertificateAuthorityIssueEphemeralGatewayTLS(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 11, 19, 10, 0, 0, 0, time.UTC)
+	caDir := t.TempDir()
+	if err := InitializeGatewayCA(caDir, []byte(""), now); err != nil {
+		t.Fatalf("InitializeGatewayCA: %v", err)
+	}
+	caPEM, err := os.ReadFile(filepath.Join(caDir, "ca.crt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPEM, err := os.ReadFile(filepath.Join(caDir, "ca.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, err := NewCertificateAuthority(caPEM, keyPEM, "tls://mqtt-broker:8883")
+	if err != nil {
+		t.Fatalf("NewCertificateAuthority: %v", err)
+	}
+
+	if _, err := authority.IssueEphemeralGatewayTLS("not-a-uuid", 5*time.Minute, now); !errors.Is(err, ErrEnrollmentRejected) {
+		t.Fatalf("expected ErrEnrollmentRejected for invalid gateway ID, got %v", err)
+	}
+
+	gatewayID := "0193f000-2000-7000-8000-000000000001"
+	tlsCert, err := authority.IssueEphemeralGatewayTLS(gatewayID, 10*time.Minute, now)
+	if err != nil {
+		t.Fatalf("IssueEphemeralGatewayTLS: %v", err)
+	}
+	if tlsCert.Leaf == nil || tlsCert.Leaf.Subject.CommonName != gatewayID {
+		t.Fatalf("unexpected leaf cert: %+v", tlsCert.Leaf)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		t.Fatal("failed to parse gateway CA")
+	}
+	if _, err := tlsCert.Leaf.Verify(x509.VerifyOptions{
+		Roots:       pool,
+		CurrentTime: now.Add(5 * time.Minute),
+		KeyUsages:   []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}); err != nil {
+		t.Fatalf("ephemeral cert failed verification against Gateway CA: %v", err)
+	}
+
+	// Clamps requested TTL to CA NotAfter when CA expires sooner.
+	farTTL := 100 * 365 * 24 * time.Hour
+	clamped, err := authority.IssueEphemeralGatewayTLS(gatewayID, farTTL, now)
+	if err != nil {
+		t.Fatalf("IssueEphemeralGatewayTLS clamped: %v", err)
+	}
+	if clamped.Leaf.NotAfter.After(authority.certificate.NotAfter) {
+		t.Fatalf("clamped NotAfter=%v exceeds CA NotAfter=%v", clamped.Leaf.NotAfter, authority.certificate.NotAfter)
+	}
+}

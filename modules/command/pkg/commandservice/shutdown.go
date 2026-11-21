@@ -759,25 +759,24 @@ func (topo *shutdownTopology) resolveTargets(
 		if !hasDevice {
 			continue
 		}
-		capName, _ := point.SourceMetadata["capability"].(string)
-		capability := commandmodel.Capability(strings.TrimSpace(capName))
-		profile, supported := commandmodel.CapabilityProfileFor(capability)
-		declaredRev, _ := point.SourceMetadata["capabilityRevision"].(string)
-		feedbackKey, _ := point.SourceMetadata["feedbackPointKey"].(string)
-		feedbackKey = strings.TrimSpace(feedbackKey)
-		if !supported || strings.TrimSpace(declaredRev) != profile.Revision || feedbackKey == "" {
+		meta, metaErr := commandmodel.ParseCommandPointMetadata(point.SourceMetadata)
+		if metaErr != nil {
 			continue
 		}
-		feedbackPoint, hasFeedback := feedbackByDeviceKey[device.ID+"\x00"+feedbackKey]
+		capability := meta.Capability
+		profile, supported := commandmodel.CapabilityProfileFor(capability)
+		if !supported || meta.CapabilityRevision != profile.Revision || meta.FeedbackPointKey == "" {
+			continue
+		}
+		feedbackPoint, hasFeedback := feedbackByDeviceKey[device.ID+"\x00"+meta.FeedbackPointKey]
 		if !hasFeedback {
 			continue
 		}
-		interlocks, interlockErr := parsePointInterlockChecks(point.SourceMetadata, model)
+		interlocks, interlockErr := validatePointInterlockChecks(meta.InterlockChecks, model)
 		if interlockErr != nil {
 			continue
 		}
-		actuationMode, _ := point.SourceMetadata["actuationMode"].(string)
-		trimmedMode := strings.ToUpper(strings.TrimSpace(actuationMode))
+		trimmedMode := meta.ActuationMode
 		baseTarget := shutdownControlTarget{
 			device: device, point: point, feedbackPoint: feedbackPoint,
 			capability: capability, profile: profile, actuationMode: trimmedMode, interlocks: interlocks,

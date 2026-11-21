@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -159,10 +160,29 @@ func run() int {
 	}
 	concentratorService := concentrator.NewService(connectivityStore, concentratorTransport)
 	presence := newGatewayOnlineTrackerWithMetrics(telemetry.Metrics)
-	credentials, tunnelHub, crlCtrl, err := credentialServerWithDiagnostics(drainRootCtx, logger, telemetry.Metrics, presence, connectivityStore, concentratorService, telemetryRuntime, tap, mqttSession, tunnel.WithObservability(logger, telemetry.Metrics))
+	credentials, tunnelHub, mqttGuard, crlCtrl, err := newCredentialRuntime(credentialRuntimeConfig{
+		RootCtx:             drainRootCtx,
+		Logger:              logger,
+		Metrics:             telemetry.Metrics,
+		Presence:            presence,
+		Store:               connectivityStore,
+		ConcentratorService: concentratorService,
+		CoverageReporter:    telemetryRuntime,
+		Tap:                 tap,
+		EnableGuardFromEnv:  true,
+		MQTTSession:         mqttSession,
+		TunnelOptions:       []tunnel.Option{tunnel.WithObservability(logger, telemetry.Metrics)},
+	})
 	if err != nil {
 		logger.Error("connectivity_credentials_unavailable", "error_code", "CREDENTIAL_MODULE_UNAVAILABLE")
 		return 1
+	}
+	if mqttGuard != nil {
+		addCloser(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = mqttGuard.Shutdown(ctx)
+		})
 	}
 	addCloser(tunnelHub.Close)
 	addCloser(crlCtrl.Close)
@@ -180,6 +200,14 @@ func run() int {
 		adapter.WithAutoBackfillLagThreshold(config.AutoBackfillLagThreshold),
 		adapter.WithProcessorPacketHook(tap.Record),
 		adapter.WithGatewayPresenceHook(presence.SetOnline),
+		adapter.WithShadowAckHook(func(_ context.Context, gw adapter.Gateway, ack adapter.ShadowChangeAckPayload) {
+			logger.Info("mqtt_shadow_change_ack",
+				"gateway_id", gw.ID,
+				"status", ack.Status,
+				"cursor", ack.Cursor,
+				"delivery_id", ack.DeliveryID,
+			)
+		}),
 		adapter.WithGatewayConnectHook(func(_ context.Context, gatewayID string) {
 			bgMu.RLock()
 			if bgClosed || ingressCtx.Err() != nil {
@@ -199,6 +227,31 @@ func run() int {
 		logger.Error("mqtt_telemetry_adapter_processor_invalid", "error", err.Error())
 		return 1
 	}
+	brokerLogWatcher := adapter.NewBrokerLogWatcher(
+		ingressCtx,
+		func(ctx context.Context, gatewayID string, disconnectedAt time.Time) {
+			if disconnectErr := processor.HandleBrokerGatewayDisconnect(ctx, gatewayID, disconnectedAt); disconnectErr != nil && ctx.Err() == nil {
+				logger.Warn("broker_gateway_disconnect_handle_failed", "gateway_id", gatewayID, "error", disconnectErr.Error())
+			}
+		},
+		adapter.WithBrokerLogObservability(logger, telemetry.Metrics),
+	)
+	if mqttGuard != nil {
+		mqttGuard.SetOnGatewayDisconnect(func(ctx context.Context, gatewayID string, disconnectedAt time.Time) {
+			if disconnectErr := processor.HandleBrokerGatewayDisconnect(ctx, gatewayID, disconnectedAt); disconnectErr != nil && ctx.Err() == nil {
+				logger.Warn("mqttguard_gateway_disconnect_handle_failed", "gateway_id", gatewayID, "error", disconnectErr.Error())
+			}
+		})
+	}
+	var unregisterBrokerLog func(context.Context) error
+	if mqttSession != nil {
+		unregisterBrokerLog, err = mqttSession.RegisterRoute("connectivity-broker-log", []string{adapter.BrokerNoticeLogTopic}, brokerLogWatcher.HandlePublish)
+		if err != nil {
+			brokerLogWatcher.Close()
+			logger.Error("connectivity_broker_log_route_failed", "error", err.Error())
+			return 1
+		}
+	}
 	runtimeOptions := []adapter.RuntimeOption{
 		adapter.WithCoverageReporter(connectivityStore, telemetryRuntime),
 		adapter.WithPacketHook(tap.Record),
@@ -206,6 +259,8 @@ func run() int {
 	}
 	if mqttSession != nil {
 		runtimeOptions = append(runtimeOptions, adapter.WithSharedSession(mqttSession))
+	} else {
+		runtimeOptions = append(runtimeOptions, adapter.WithBrokerLogWatcher(brokerLogWatcher))
 	}
 	runtime, err := adapter.NewRuntime(
 		config,
@@ -223,7 +278,7 @@ func run() int {
 	// fails instead of reporting healthy without a command channel.
 	var commands *commandRuntime
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("COMMAND_RUNTIME_IN_PROCESS_ENABLED")), "true") {
-		if commands, err = loadCommandRuntime(drainRootCtx, connectivityStore, logger, telemetry.Metrics, tap); err != nil {
+		if commands, err = loadCommandRuntime(drainRootCtx, connectivityStore, logger, telemetry.Metrics, telemetry.Tracer, tap); err != nil {
 			logger.Error("connectivity_command_runtime_unavailable", "error_code", "COMMAND_MODULE_UNAVAILABLE", "error", err.Error())
 			return 1
 		}
@@ -235,7 +290,7 @@ func run() int {
 	}
 	telemetry.MarkReady()
 	diagnostics := diagnosticsServer(*diagnosticsAddress, runtime, telemetry, &shuttingDown)
-	diagnosticsErr := make(chan error, 2)
+	diagnosticsErr := make(chan error, 3)
 	credentialsDone := make(chan struct{})
 	go func() {
 		defer close(credentialsDone)
@@ -249,6 +304,23 @@ func run() int {
 			diagnosticsErr <- err
 		}
 	}()
+	mqttGuardDone := make(chan struct{})
+	if mqttGuard != nil {
+		go func() {
+			defer close(mqttGuardDone)
+			defer observability.Recover(logger, telemetry.Metrics, "connectivity.mqtt_guard_server", func(any) {
+				select {
+				case diagnosticsErr <- errors.New("mqttguard server panicked"):
+				default:
+				}
+			})
+			if guardErr := mqttGuard.ListenAndServe(); guardErr != nil && !errors.Is(guardErr, net.ErrClosed) {
+				diagnosticsErr <- guardErr
+			}
+		}()
+	} else {
+		close(mqttGuardDone)
+	}
 	diagnosticsDone := make(chan struct{})
 	go func() {
 		defer close(diagnosticsDone)
@@ -302,6 +374,13 @@ func run() int {
 			return credentials.Shutdown(ctx)
 		},
 		credentialsDone: credentialsDone,
+		shutdownMQTTGuard: func(ctx context.Context) error {
+			if mqttGuard == nil {
+				return nil
+			}
+			return mqttGuard.Shutdown(ctx)
+		},
+		mqttGuardDone:   mqttGuardDone,
 		closeTunnelHub:  tunnelHub.Close,
 		closeCRL:        crlCtrl.Close,
 		cancelIngress:   ingressCancel,
@@ -332,6 +411,10 @@ func run() int {
 			return concentratorTransport.Close(ctx)
 		},
 		closeMQTTSession: func(ctx context.Context) error {
+			if unregisterBrokerLog != nil {
+				_ = unregisterBrokerLog(ctx)
+			}
+			brokerLogWatcher.Close()
 			if mqttSession == nil {
 				return nil
 			}
@@ -359,6 +442,8 @@ type connectivityShutdownDeps struct {
 	markShuttingDown    func()
 	shutdownCredentials func(context.Context) error
 	credentialsDone     <-chan struct{}
+	shutdownMQTTGuard   func(context.Context) error
+	mqttGuardDone       <-chan struct{}
 	closeTunnelHub      func()
 	closeCRL            func()
 	cancelIngress       func()
@@ -388,7 +473,11 @@ func shutdownConnectivityRuntime(deps connectivityShutdownDeps) {
 	if deps.shutdownCredentials != nil {
 		_ = deps.shutdownCredentials(credShutdownCtx)
 	}
+	if deps.shutdownMQTTGuard != nil {
+		_ = deps.shutdownMQTTGuard(credShutdownCtx)
+	}
 	awaitSignal(credShutdownCtx, deps.credentialsDone)
+	awaitSignal(credShutdownCtx, deps.mqttGuardDone)
 	credShutdownCancel()
 	if deps.closeTunnelHub != nil {
 		deps.closeTunnelHub()
@@ -717,18 +806,7 @@ func defaultMQTTClientIDForHost(prefix, host string) string {
 }
 
 func sanitizeMQTTClientID(raw string) string {
-	var builder strings.Builder
-	builder.Grow(min(len(raw), maxDefaultMQTTClientIDLen))
-	for i := 0; i < len(raw); i++ {
-		ch := raw[i]
-		if (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-' {
-			builder.WriteByte(ch)
-			if builder.Len() >= maxDefaultMQTTClientIDLen {
-				break
-			}
-		}
-	}
-	return builder.String()
+	return sanitizeClientIDToken(raw, false, maxDefaultMQTTClientIDLen)
 }
 
 const (

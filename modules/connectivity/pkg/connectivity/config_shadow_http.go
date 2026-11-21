@@ -26,6 +26,12 @@ type ConfigShadowStore interface {
 	ReportGatewayAppliedConfig(ctx context.Context, gatewayID string, input GatewayShadowReportInput) (GatewayConfigShadow, error)
 }
 
+// TemplateDriverShadowUpserter is an optional extension of ConfigShadowStore for
+// internal template-to-shadow driver materialization requests.
+type TemplateDriverShadowUpserter interface {
+	UpsertGatewayTemplateDriverConfig(ctx context.Context, gatewayID string, input TemplateDriverUpsertInput) (TemplateDriverUpsertResult, error)
+}
+
 func NewConfigShadowHandler(
 	store ConfigShadowStore,
 	credentials GatewayPeerVerifier,
@@ -77,6 +83,53 @@ func NewConfigShadowHandlerWithPresence(
 			onDesiredUpdated(gatewayID)
 		}
 		writeShadowJSONResult(w, shadow, err)
+	})
+
+	mux.HandleFunc("POST /internal/v1/gateways/{gatewayId}/config-shadow:upsert-template-driver", func(w http.ResponseWriter, r *http.Request) {
+		upserter, ok := store.(TemplateDriverShadowUpserter)
+		if store == nil || !ok {
+			writeShadowErrorJSON(w, http.StatusServiceUnavailable, "CONFIG_SHADOW_UNAVAILABLE", "config shadow driver upsert unavailable")
+			return
+		}
+		trustedCore := isCoreServiceClientCert(r)
+		var claims registryauth.GrantClaims
+		if !trustedCore {
+			var authOK bool
+			claims, authOK = authorizeShadowHTTP(w, r, authorize, registryauth.ActionDeviceWrite)
+			if !authOK {
+				return
+			}
+		}
+		var input TemplateDriverUpsertInput
+		if err := decodeShadowStrictJSON(w, r, &input, maxConfigShadowRequestBodyBytes); err != nil {
+			writeShadowErrorJSON(w, http.StatusBadRequest, "CONFIG_SHADOW_REQUEST_INVALID", "invalid template driver upsert request")
+			return
+		}
+		gatewayID := r.PathValue("gatewayId")
+		if !trustedCore {
+			if !strings.EqualFold(strings.TrimSpace(claims.TenantID), strings.TrimSpace(input.TenantID)) {
+				writeShadowError(w, ErrCredentialForbidden)
+				return
+			}
+			if scopeChecker, hasScope := store.(interface {
+				ResolveGatewayScopeForOperator(context.Context, registryauth.GrantClaims, string) (string, error)
+			}); hasScope {
+				scopedTenant, scopeErr := scopeChecker.ResolveGatewayScopeForOperator(r.Context(), claims, gatewayID)
+				if scopeErr != nil {
+					writeShadowError(w, scopeErr)
+					return
+				}
+				if !strings.EqualFold(strings.TrimSpace(scopedTenant), strings.TrimSpace(input.TenantID)) {
+					writeShadowError(w, ErrCredentialForbidden)
+					return
+				}
+			}
+		}
+		result, err := upserter.UpsertGatewayTemplateDriverConfig(r.Context(), gatewayID, input)
+		if err == nil && result.Changed && onDesiredUpdated != nil {
+			onDesiredUpdated(gatewayID)
+		}
+		writeShadowJSONResult(w, result, err)
 	})
 
 	mux.HandleFunc("GET /gateway/v1/config-shadow", func(w http.ResponseWriter, r *http.Request) {
@@ -138,6 +191,18 @@ func NewConfigShadowHandlerWithPresence(
 	})
 
 	return mux
+}
+
+func isCoreServiceClientCert(r *http.Request) bool {
+	if r == nil || r.TLS == nil || len(r.TLS.VerifiedChains) == 0 || len(r.TLS.VerifiedChains[0]) == 0 {
+		return false
+	}
+	for _, uri := range r.TLS.VerifiedChains[0][0].URIs {
+		if uri.String() == "spiffe://hvac.local/platform-core-service" {
+			return true
+		}
+	}
+	return false
 }
 
 func authorizeShadowHTTP(w http.ResponseWriter, r *http.Request, authorize CredentialAuthorizer, action registryauth.Action) (registryauth.GrantClaims, bool) {

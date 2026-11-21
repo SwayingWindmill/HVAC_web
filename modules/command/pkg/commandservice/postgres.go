@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -30,13 +31,17 @@ type postgresCommitter interface {
 }
 
 type PostgresStore struct {
-	pool              *pgxpool.Pool
-	now               func() time.Time
-	newID             IDGenerator
-	mu                sync.RWMutex
-	failureNotifier   ControlFailureNotifier
-	failureQueue      controlFailureQueue
-	alarmOutboxWakeup func()
+	pool               *pgxpool.Pool
+	now                func() time.Time
+	newID              IDGenerator
+	mu                 sync.RWMutex
+	failureNotifier    ControlFailureNotifier
+	failureQueue       controlFailureQueue
+	alarmOutboxWakeup  func()
+	dispatchSignal     *workSignal
+	verificationSignal *workSignal
+	dispatchCursor     atomic.Uint64
+	verificationCursor atomic.Uint64
 }
 
 func OpenPostgresStore(ctx context.Context, databaseURL string) (*PostgresStore, error) {
@@ -74,7 +79,78 @@ func NewPostgresStore(pool *pgxpool.Pool, now func() time.Time, generator IDGene
 	if generator == nil {
 		generator = newUUID
 	}
-	return &PostgresStore{pool: pool, now: now, newID: generator}
+	return &PostgresStore{
+		pool:               pool,
+		now:                now,
+		newID:              generator,
+		dispatchSignal:     newWorkSignal(),
+		verificationSignal: newWorkSignal(),
+	}
+}
+
+// SubscribeDispatchWork subscribes to broadcast notifications fired when dispatchable
+// commands commit.
+func (store *PostgresStore) SubscribeDispatchWork() <-chan struct{} {
+	if store == nil {
+		return nil
+	}
+	return store.dispatchSignal.Subscribe()
+}
+
+// SubscribeVerificationWork subscribes to broadcast notifications fired when acknowledged
+// commands enter reported-state verification.
+func (store *PostgresStore) SubscribeVerificationWork() <-chan struct{} {
+	if store == nil {
+		return nil
+	}
+	return store.verificationSignal.Subscribe()
+}
+
+func (store *PostgresStore) notifyDispatchWork() {
+	if store != nil {
+		store.dispatchSignal.Notify()
+	}
+}
+
+func (store *PostgresStore) notifyVerificationWork() {
+	if store != nil {
+		store.verificationSignal.Notify()
+	}
+}
+
+func (store *PostgresStore) queryDueTenants(ctx context.Context, query string, at time.Time) ([]string, error) {
+	if store == nil || store.pool == nil {
+		return nil, errors.New("command store is closed")
+	}
+	if at.IsZero() {
+		at = store.now().UTC()
+	}
+	rows, err := store.pool.Query(ctx, query, at.UTC())
+	if err != nil {
+		return nil, fmt.Errorf("query due command tenants: %w", err)
+	}
+	defer rows.Close()
+	seen := make(map[string]struct{})
+	tenants := make([]string, 0)
+	for rows.Next() {
+		var tenantID string
+		if scanErr := rows.Scan(&tenantID); scanErr != nil {
+			return nil, fmt.Errorf("scan due command tenant: %w", scanErr)
+		}
+		trimmed := strings.TrimSpace(tenantID)
+		if trimmed == "" {
+			continue
+		}
+		if _, dup := seen[trimmed]; dup {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		tenants = append(tenants, trimmed)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate due command tenants: %w", err)
+	}
+	return tenants, nil
 }
 
 // SetControlFailureNotifier registers an optional non-blocking notifier for OUTCOME_UNKNOWN and unconfirmed-power settlements.
@@ -454,6 +530,9 @@ INSERT INTO command_runtime.command_dispatch_outbox (
 
 	if err := tx.Commit(ctx); err != nil {
 		return SubmitResult{}, fmt.Errorf("commit command submission: %w", err)
+	}
+	if intent.Status == commandmodel.IntentQueued {
+		store.notifyDispatchWork()
 	}
 	return SubmitResult{Intent: intent}, nil
 }

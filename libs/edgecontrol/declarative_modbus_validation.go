@@ -435,3 +435,80 @@ func expectedRegisterCount(rawType ModbusRawType) (uint16, error) {
 		return 0, fmt.Errorf("unsupported rawType %q", rawType)
 	}
 }
+
+// CloneModbusRegisters deep-copies a slice of wire ModbusRegisterInput entries,
+// cloning optional pointer fields and EnumMap to avoid cross-request aliasing.
+func CloneModbusRegisters(src []ModbusRegisterInput) []ModbusRegisterInput {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]ModbusRegisterInput, len(src))
+	for i, r := range src {
+		if r.WriteFunctionCode != nil {
+			v := *r.WriteFunctionCode
+			r.WriteFunctionCode = &v
+		}
+		if r.BitIndex != nil {
+			v := *r.BitIndex
+			r.BitIndex = &v
+		}
+		r.EnumMap = cloneStringMap(r.EnumMap)
+		out[i] = r
+	}
+	return out
+}
+
+// ToDriverInput converts a DeclarativeModbusProfile into a wire ModbusDriverInput.
+func (profile DeclarativeModbusProfile) ToDriverInput(includeGatewayBindings bool) ModbusDriverInput {
+	regs := make([]ModbusRegisterInput, len(profile.Registers))
+	for i, reg := range profile.Registers {
+		var writeFC *int
+		if reg.WriteFunctionCode != 0 {
+			v := int(reg.WriteFunctionCode)
+			writeFC = &v
+		}
+		var bitIdx *int
+		if reg.RawType == ModbusRawBitBool || reg.BitIndex != 0 {
+			v := reg.BitIndex
+			bitIdx = &v
+		}
+		regs[i] = ModbusRegisterInput{
+			PointCode:         reg.PointCode,
+			SemanticChannel:   string(reg.SemanticChannel),
+			FunctionCode:      int(reg.FunctionCode),
+			WriteFunctionCode: writeFC,
+			Address:           int(reg.Address),
+			RegisterCount:     int(reg.RegisterCount),
+			RawType:           string(reg.RawType),
+			ByteOrder:         string(reg.ByteOrder),
+			WordOrder:         string(reg.WordOrder),
+			BitIndex:          bitIdx,
+			Scale:             reg.Scale,
+			Offset:            reg.Offset,
+			PollPriority:      string(reg.PollPriority),
+			EnumMap:           cloneStringMap(reg.EnumMap),
+		}
+	}
+	out := ModbusDriverInput{
+		DeviceKey:         profile.ComponentID,
+		DriverType:        string(profile.DriverType),
+		CapabilityProfile: string(profile.CapabilityProfile),
+		Registers:         regs,
+	}
+	if includeGatewayBindings {
+		if ep := strings.TrimSpace(profile.Endpoint); ep != "" {
+			out.Endpoint = &ep
+		}
+		if profile.UnitID > 0 {
+			u := int(profile.UnitID)
+			out.UnitID = &u
+		}
+	}
+	if profile.TimeoutMS > 0 {
+		t := profile.TimeoutMS
+		out.TimeoutMS = &t
+	}
+	r := profile.Retries
+	out.Retries = &r
+	return out
+}

@@ -55,6 +55,22 @@ func (store *PostgresStore) Rebind(ctx context.Context, claims registryauth.Gran
 		if input.CloseOnly {
 			eventType = "registry.binding.closed"
 			payload["closeOnly"] = true
+			if input.Kind == BindingGatewaySourceKey {
+				payload["gatewayId"] = closed.GatewayID
+				payload["sourceKey"] = closed.SourceKey
+			}
+		} else if input.Kind == BindingGatewaySourceKey && len(closed.PreviousGatewayBindings) > 0 {
+			var prevChanged []closedGatewayBinding
+			for _, prev := range closed.PreviousGatewayBindings {
+				if !strings.EqualFold(prev.GatewayID, input.TargetID) || prev.SourceKey != input.Role {
+					prevChanged = append(prevChanged, prev)
+				}
+			}
+			if len(prevChanged) > 0 {
+				payload["previousGatewayId"] = prevChanged[0].GatewayID
+				payload["previousSourceKey"] = prevChanged[0].SourceKey
+				payload["previousBindings"] = prevChanged
+			}
 		}
 		value := BindingMutationResult{
 			BindingID: bindingID, SiteID: input.SiteID, Kind: string(input.Kind), SourceID: input.SourceID,
@@ -99,10 +115,18 @@ func validateGatewaySourceKeyEndpoints(ctx context.Context, tx pgx.Tx, tenantID,
 	return nil
 }
 
+type closedGatewayBinding struct {
+	GatewayID string `json:"gatewayId"`
+	SourceKey string `json:"sourceKey"`
+}
+
 type closedBindingInfo struct {
-	ID        string
-	Revision  int64
-	ValidFrom time.Time
+	ID                      string
+	Revision                int64
+	ValidFrom               time.Time
+	GatewayID               string
+	SourceKey               string
+	PreviousGatewayBindings []closedGatewayBinding
 }
 
 type temporalBindingSpec struct {
@@ -271,20 +295,49 @@ func closeCurrentBinding(ctx context.Context, tx pgx.Tx, tenantID string, input 
 		return closedBindingInfo{}, ErrInvalidMutation
 	}
 	if !input.CloseOnly {
-		_, err := tx.Exec(ctx, `UPDATE core_registry.gateway_device_source_keys SET status = 'RETIRED', revision = revision + 1, updated_at = $4 WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND device_id = $3::uuid AND status = 'ACTIVE'`, tenantID, input.SiteID, input.SourceID, now)
-		return closedBindingInfo{}, mapRegistryWriteError(err)
+		rows, err := tx.Query(ctx, `UPDATE core_registry.gateway_device_source_keys SET status = 'RETIRED', revision = revision + 1, updated_at = $4 WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND device_id = $3::uuid AND status = 'ACTIVE' RETURNING id::text, revision, gateway_device_id::text, source_key`, tenantID, input.SiteID, input.SourceID, now)
+		if err != nil {
+			return closedBindingInfo{}, mapRegistryWriteError(err)
+		}
+		defer rows.Close()
+		var info closedBindingInfo
+		for rows.Next() {
+			var (
+				rowID  string
+				rowRev int64
+				gwID   string
+				srcKey string
+			)
+			if scanErr := rows.Scan(&rowID, &rowRev, &gwID, &srcKey); scanErr != nil {
+				return closedBindingInfo{}, mapRegistryWriteError(scanErr)
+			}
+			if info.ID == "" {
+				info.ID = rowID
+				info.Revision = rowRev
+				info.GatewayID = gwID
+				info.SourceKey = srcKey
+			}
+			info.PreviousGatewayBindings = append(info.PreviousGatewayBindings, closedGatewayBinding{
+				GatewayID: gwID,
+				SourceKey: srcKey,
+			})
+		}
+		if rowsErr := rows.Err(); rowsErr != nil {
+			return closedBindingInfo{}, mapRegistryWriteError(rowsErr)
+		}
+		return info, nil
 	}
 	var info closedBindingInfo
 	var query string
 	var args []any
 	if input.TargetID != "" {
-		query = `UPDATE core_registry.gateway_device_source_keys SET status = 'RETIRED', revision = revision + 1, updated_at = $6 WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND device_id = $3::uuid AND source_key = $4 AND gateway_device_id = $5::uuid AND status = 'ACTIVE' RETURNING id::text, revision`
+		query = `UPDATE core_registry.gateway_device_source_keys SET status = 'RETIRED', revision = revision + 1, updated_at = $6 WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND device_id = $3::uuid AND source_key = $4 AND gateway_device_id = $5::uuid AND status = 'ACTIVE' RETURNING id::text, revision, gateway_device_id::text, source_key`
 		args = []any{tenantID, input.SiteID, input.SourceID, input.Role, input.TargetID, now}
 	} else {
-		query = `UPDATE core_registry.gateway_device_source_keys SET status = 'RETIRED', revision = revision + 1, updated_at = $5 WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND device_id = $3::uuid AND source_key = $4 AND status = 'ACTIVE' RETURNING id::text, revision`
+		query = `UPDATE core_registry.gateway_device_source_keys SET status = 'RETIRED', revision = revision + 1, updated_at = $5 WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND device_id = $3::uuid AND source_key = $4 AND status = 'ACTIVE' RETURNING id::text, revision, gateway_device_id::text, source_key`
 		args = []any{tenantID, input.SiteID, input.SourceID, input.Role, now}
 	}
-	err := tx.QueryRow(ctx, query, args...).Scan(&info.ID, &info.Revision)
+	err := tx.QueryRow(ctx, query, args...).Scan(&info.ID, &info.Revision, &info.GatewayID, &info.SourceKey)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return closedBindingInfo{}, ErrNotFound
 	}

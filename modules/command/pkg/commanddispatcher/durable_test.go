@@ -390,3 +390,32 @@ func TestDurableDispatcherPropagatesTraceContextAndLogs(t *testing.T) {
 		t.Fatalf("missing structured command_id/trace_id in logs:\n%s", logOutput)
 	}
 }
+
+type anyTenantDispatchStore struct {
+	*traceRecordingDispatchStore
+}
+
+func (s *anyTenantDispatchStore) ClaimAnyDispatch(ctx context.Context, leaseOwner string, leaseFor, _ time.Duration) (commandmodel.DispatchEnvelope, error) {
+	return s.ClaimDispatch(ctx, s.envelope.TenantID, leaseOwner, leaseFor)
+}
+
+func TestDurableDispatcherRunAnyOnceExecutesAndResolves(t *testing.T) {
+	t.Parallel()
+
+	store := &anyTenantDispatchStore{
+		traceRecordingDispatchStore: &traceRecordingDispatchStore{
+			envelope: commandmodel.DispatchEnvelope{
+				CommandID: "cmd-any-exec", AttemptID: "att-any-exec", TenantID: "org-1",
+				ExecutionFence: 1,
+			},
+		},
+	}
+	conn := &traceRecordingConnector{}
+	d := NewDurable(store, conn, "replica-any", 30*time.Second)
+	if err := d.RunAnyOnce(t.Context(), 100*time.Millisecond); err != nil {
+		t.Fatalf("RunAnyOnce failed: %v", err)
+	}
+	if conn.finalizeTraceID == "" && store.resolvedTraceID != "" {
+		t.Fatalf("unexpected trace mismatch")
+	}
+}
