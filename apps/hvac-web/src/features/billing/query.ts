@@ -1,5 +1,18 @@
 import { queryOptions } from '@tanstack/react-query';
 import {
+  createSiteMeterRatioVersion,
+  deleteSiteAccountingHoliday,
+  describeAccountingConfigError,
+  fetchSiteCounterAudit,
+  listSiteAccountingHolidays,
+  listSiteMeterRatioVersions,
+  retireSiteMeterRatioVersion,
+  upsertSiteAccountingHoliday,
+  type CounterAnomalyAudit,
+  type MeterRatioVersion,
+  type SiteCalendarHoliday,
+} from '@/api/accounting-config';
+import {
   describeAccountingRecalcError,
   listSiteAccountingRecalcJobs,
   submitSiteAccountingRecalc,
@@ -53,7 +66,98 @@ export const billingKeys = {
   ) =>
     ['billing-reading-window-electricity', siteId, readingStartDate, readingEndDate] as const,
   recalcJobs: (siteId: string) => ['accounting-recalc-jobs', siteId] as const,
+  holidaysRoot: (siteId: string) => ['accounting-holidays', siteId] as const,
+  holidays: (siteId: string, year?: number) =>
+    ['accounting-holidays', siteId, year ?? 'ALL'] as const,
+  meterRatiosRoot: (siteId: string) => ['accounting-meter-ratios', siteId] as const,
+  meterRatios: (
+    siteId: string,
+    params: { readonly pointId?: string; readonly includeSuperseded?: boolean } = {},
+  ) =>
+    [
+      'accounting-meter-ratios',
+      siteId,
+      params.pointId ?? 'ALL',
+      params.includeSuperseded ? 'WITH_SUPERSEDED' : 'ACTIVE_ONLY',
+    ] as const,
+  counterAuditRoot: (siteId: string) => ['accounting-counter-audit', siteId] as const,
+  counterAudit: (
+    siteId: string,
+    params: {
+      readonly from: string;
+      readonly to: string;
+      readonly anomaliesOnly?: boolean;
+      readonly limit?: number;
+    },
+  ) =>
+    [
+      'accounting-counter-audit',
+      siteId,
+      params.from,
+      params.to,
+      params.anomaliesOnly ?? true,
+      params.limit ?? 200,
+    ] as const,
 };
+
+export function siteAccountingHolidaysQuery(siteId: string, year?: number, enabled = true) {
+  return queryOptions({
+    queryKey: billingKeys.holidays(siteId, year),
+    queryFn: ({ signal }) => listSiteAccountingHolidays(siteId, { year, signal }),
+    select: (items): readonly SiteCalendarHoliday[] =>
+      [...items].sort((left, right) => left.holidayDate.localeCompare(right.holidayDate)),
+    enabled: Boolean(siteId) && enabled,
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
+export function siteMeterRatioVersionsQuery(
+  siteId: string,
+  params: { readonly pointId?: string; readonly includeSuperseded?: boolean } = {},
+  enabled = true,
+) {
+  return queryOptions({
+    queryKey: billingKeys.meterRatios(siteId, params),
+    queryFn: ({ signal }) =>
+      listSiteMeterRatioVersions(siteId, {
+        pointId: params.pointId,
+        includeSuperseded: params.includeSuperseded,
+        signal,
+      }),
+    select: (items): readonly MeterRatioVersion[] =>
+      [...items].sort((left, right) => Date.parse(right.effectiveFrom) - Date.parse(left.effectiveFrom)),
+    enabled: Boolean(siteId) && enabled,
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
+export function siteCounterAuditQuery(
+  siteId: string,
+  params: {
+    readonly from: string;
+    readonly to: string;
+    readonly anomaliesOnly?: boolean;
+    readonly limit?: number;
+  },
+  enabled = true,
+) {
+  return queryOptions({
+    queryKey: billingKeys.counterAudit(siteId, params),
+    queryFn: ({ signal }): Promise<CounterAnomalyAudit> =>
+      fetchSiteCounterAudit(siteId, {
+        from: params.from,
+        to: params.to,
+        anomaliesOnly: params.anomaliesOnly,
+        limit: params.limit,
+        signal,
+      }),
+    enabled: Boolean(siteId) && enabled,
+    staleTime: 30_000,
+    retry: false,
+  });
+}
 
 export function siteAccountingRecalcJobsQuery(siteId: string, enabled = true) {
   return queryOptions({
@@ -211,9 +315,17 @@ export function isBillingRevisionConflict(error: unknown): boolean {
 }
 
 export {
+  createSiteMeterRatioVersion,
+  deleteSiteAccountingHoliday,
+  describeAccountingConfigError,
   describeAccountingRecalcError,
   describeBillingApiError,
+  retireSiteMeterRatioVersion,
   submitSiteAccountingRecalc,
+  upsertSiteAccountingHoliday,
   type AccountingRecalcGranularity,
   type AccountingRecalcJob,
+  type CounterAnomalyAudit,
+  type MeterRatioVersion,
+  type SiteCalendarHoliday,
 };

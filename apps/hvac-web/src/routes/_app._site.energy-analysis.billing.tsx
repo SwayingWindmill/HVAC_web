@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { BillingWorkspace } from '@/features/billing/components/BillingWorkspace';
 
 export const billingSearchSchema = z.object({
-  view: z.enum(['overview', 'bills']).optional().catch(undefined),
+  view: z.enum(['overview', 'bills', 'config']).optional().catch(undefined),
   month: z
     .string()
     .regex(/^\d{4}-(0[1-9]|1[0-2])$/)
