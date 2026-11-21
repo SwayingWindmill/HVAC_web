@@ -1599,6 +1599,44 @@ func TestDeployScriptProtectsRuntimeSecretsAndDropsDeadKeygen(t *testing.T) {
 	}
 }
 
+func TestDeployScriptDumpsUnhealthyContainerLogsOnUpFailure(t *testing.T) {
+	revision := "0123456789abcdef0123456789abcdef01234567"
+	platform, bin, log := deployFixture(t, revision)
+	writeExe(t, bin, "node", `#!/bin/sh
+printf 'node %s\n' "$*" >> "$CALLS_LOG"
+case "$*" in
+  *"--integration up -d") exit 1 ;;
+esac
+`)
+	writeExe(t, bin, "docker", `#!/bin/sh
+printf 'docker %s\n' "$*" >> "$CALLS_LOG"
+case "$1" in
+  ps)
+    case "$*" in
+      *"com.docker.compose.service=energy-api"*) printf 'cid-energy-api\n' ;;
+    esac
+    ;;
+  inspect)
+    printf 'restarting/unhealthy\n'
+    ;;
+  logs)
+    printf 'mocked energy-api failure: permission denied on /run/hvac/public-tls/public.crt\n'
+    ;;
+esac
+`)
+	cmd := exec.Command("bash", "deploy.sh")
+	cmd.Env = commandEnv(bin, "HVAC_PLATFORM_DIR="+platform, "CALLS_LOG="+log)
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected deploy.sh to fail when compose up fails:\n%s", output)
+	}
+	text := string(output)
+	if !strings.Contains(text, "--- container logs: energy-api (restarting/unhealthy) ---") ||
+		!strings.Contains(text, "mocked energy-api failure: permission denied on /run/hvac/public-tls/public.crt") {
+		t.Fatalf("deploy.sh did not dump unhealthy container logs:\n%s", text)
+	}
+}
+
 // seedContent gives a seeded image a filesystem and a `docker image inspect` config.
 func seedContent(t *testing.T, store, id string, files map[string]string, config string) {
 	t.Helper()
