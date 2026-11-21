@@ -67,40 +67,40 @@ func (client *Client) counterAuditQuery(canonical telemetryhistorymodel.CounterA
 	extraFilters := ""
 	if canonical.DeviceID != nil {
 		params.Set("param_device_id", *canonical.DeviceID)
-		extraFilters += "\n  AND device_id = toUUID({device_id:UUID})"
+		extraFilters += "\n  AND history_source.device_id = toUUID({device_id:UUID})"
 	}
 	if canonical.PointID != nil {
 		params.Set("param_point_id", *canonical.PointID)
-		extraFilters += "\n  AND point_id = toUUID({point_id:UUID})"
+		extraFilters += "\n  AND history_source.point_id = toUUID({point_id:UUID})"
 	}
 
 	sqlText := fmt.Sprintf(`SELECT
-  toString(observation_id) AS observation_id,
-  toString(assumeNotNull(device_id)) AS device_id,
-  toString(assumeNotNull(point_id)) AS point_id,
-  telemetry_key,
-  assumeNotNull(point_revision) AS point_revision,
-  unit,
-  counter_decrease_mode,
-  counter_rollover_modulus,
-  assumeNotNull(value_number) AS value_number,
-  formatDateTime(sampled_at, '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS sampled_at,
-  quality,
-  quality_reasons
-FROM %s.%s
-WHERE tenant_id = toUUID({tenant_id:UUID})
-  AND site_id = toUUID({site_id:UUID})
-  AND sampled_at >= parseDateTime64BestEffort({lookback_from_ts:String}, 3, 'UTC')
-  AND sampled_at < parseDateTime64BestEffort({to_ts:String}, 3, 'UTC')%s
-  AND acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER')
-  AND point_type = 'COUNTER'
-  AND point_id IS NOT NULL
-  AND point_revision IS NOT NULL
-  AND device_id IS NOT NULL
-  AND value_type = 'NUMBER'
-  AND value_number IS NOT NULL
-  AND isFinite(value_number)
-ORDER BY (point_id, sampled_at, observation_id)
+  toString(history_source.observation_id) AS observation_id,
+  toString(assumeNotNull(history_source.device_id)) AS device_id,
+  toString(assumeNotNull(history_source.point_id)) AS point_id,
+  history_source.telemetry_key AS telemetry_key,
+  assumeNotNull(history_source.point_revision) AS point_revision,
+  history_source.unit AS unit,
+  history_source.counter_decrease_mode AS counter_decrease_mode,
+  history_source.counter_rollover_modulus AS counter_rollover_modulus,
+  assumeNotNull(history_source.value_number) AS value_number,
+  formatDateTime(history_source.sampled_at, '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS sampled_at,
+  history_source.quality AS quality,
+  history_source.quality_reasons AS quality_reasons
+FROM %s.%s AS history_source
+WHERE history_source.tenant_id = toUUID({tenant_id:UUID})
+  AND history_source.site_id = toUUID({site_id:UUID})
+  AND history_source.sampled_at >= parseDateTime64BestEffort({lookback_from_ts:String}, 3, 'UTC')
+  AND history_source.sampled_at < parseDateTime64BestEffort({to_ts:String}, 3, 'UTC')%s
+  AND history_source.acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER')
+  AND history_source.point_type = 'COUNTER'
+  AND history_source.point_id IS NOT NULL
+  AND history_source.point_revision IS NOT NULL
+  AND history_source.device_id IS NOT NULL
+  AND history_source.value_type = 'NUMBER'
+  AND history_source.value_number IS NOT NULL
+  AND isFinite(history_source.value_number)
+ORDER BY (history_source.point_id, history_source.sampled_at, history_source.observation_id)
 LIMIT %d
 FORMAT JSONEachRow`, client.database, client.table, extraFilters, counterAuditRowLimit)
 

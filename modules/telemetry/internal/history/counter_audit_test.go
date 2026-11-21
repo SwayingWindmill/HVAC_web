@@ -172,6 +172,9 @@ func TestQueryCounterAuditClassifiesAnomaliesUsesLookbackAndConvertsUnits(t *tes
 	if !strings.Contains(capturedSQL, "{lookback_from_ts:String}") || !strings.Contains(capturedSQL, "{device_id:UUID}") {
 		t.Fatalf("expected parameterized SQL placeholders, got:\n%s", capturedSQL)
 	}
+	if !strings.Contains(capturedSQL, "AS history_source") || !strings.Contains(capturedSQL, "history_source.sampled_at >=") {
+		t.Fatalf("expected qualified history_source columns to avoid ClickHouse alias shadowing, got:\n%s", capturedSQL)
+	}
 	if strings.Contains(capturedSQL, auditTestTenantID) || strings.Contains(capturedSQL, auditTestDeviceID) {
 		t.Fatalf("SQL must not inline parameter values: %s", capturedSQL)
 	}
