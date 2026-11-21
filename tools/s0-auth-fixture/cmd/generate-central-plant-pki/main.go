@@ -80,7 +80,7 @@ func generate(directory string, now time.Time) error {
 		{name: "mqtt-gateway", commonName: "018f3e00-4000-7000-8000-000000000100", spiffeID: "spiffe://hvac.local/eg8200-gateway", client: true},
 		{name: "mqtt-gateway-b", commonName: "018f3e00-4000-7000-8000-000000000200", spiffeID: "spiffe://hvac.local/eg8200-gateway-b", client: true},
 		{name: "centrifugo", commonName: "centrifugo", spiffeID: "spiffe://hvac.local/centrifugo", client: true},
-		{name: "command", commonName: "localhost", spiffeID: "spiffe://hvac.local/command-service", dnsNames: []string{"localhost", "command-service"}, server: true},
+		{name: "command", commonName: "localhost", spiffeID: "spiffe://hvac.local/command-service", dnsNames: []string{"localhost", "command-service"}, server: true, client: true},
 		{name: "command-dispatcher", commonName: "command-dispatcher", spiffeID: "spiffe://hvac.local/command-dispatcher", client: true},
 		{name: "command-verifier", commonName: "command-verifier", spiffeID: "spiffe://hvac.local/command-verifier", client: true},
 		{name: "web", commonName: "localhost", spiffeID: "spiffe://hvac.local/hvac-web", dnsNames: []string{"localhost"}, server: true},

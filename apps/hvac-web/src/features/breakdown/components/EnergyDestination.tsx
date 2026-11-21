@@ -89,7 +89,15 @@ function isFlowNode(value: unknown): value is FlowNode {
 }
 
 function FlowNodeShape({ x, y, width, height, payload }: SankeyNodeProps) {
-  if (!isFlowNode(payload)) return <Layer />;
+  if (
+    !isFlowNode(payload)
+    || !Number.isFinite(x)
+    || !Number.isFinite(y)
+    || !Number.isFinite(width)
+    || !Number.isFinite(height)
+  ) {
+    return <Layer />;
+  }
   return (
     <Layer>
       <Rectangle x={x} y={y} width={width} height={height} fill={payload.color} fillOpacity={0.9} radius={2} />
@@ -105,6 +113,13 @@ function FlowNodeShape({ x, y, width, height, payload }: SankeyNodeProps) {
 
 function EnergyFlow({ breakdown }: { readonly breakdown: Breakdown }) {
   const data = useMemo(() => flowData(breakdown), [breakdown]);
+  if (data.links.length === 0) {
+    return (
+      <p className="py-8 text-center text-sm text-muted-foreground">
+        所选时段暂无设备用电流向数据
+      </p>
+    );
+  }
   return (
     <ChartContainer config={chartConfig} className="aspect-auto h-[320px] w-full">
       <Sankey
