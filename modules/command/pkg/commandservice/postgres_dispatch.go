@@ -463,6 +463,11 @@ INSERT INTO command_runtime.command_dispatch_outbox (
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit dispatch resolution: %w", err)
 	}
+	if retry {
+		store.notifyDispatchWork()
+	} else if intentFinal == commandmodel.IntentDispatching && attemptFinal == commandmodel.AttemptAcknowledged {
+		store.notifyVerificationWork()
+	}
 	if notifyFailure {
 		store.notifyControlFailure(failureEvent)
 	}
@@ -823,4 +828,33 @@ INSERT INTO command_runtime.command_audit_intents (
 		return fmt.Errorf("insert dispatch audit intent: %w", err)
 	}
 	return nil
+}
+
+// DueDispatchTenants lists distinct tenants currently holding due dispatchable work.
+func (store *PostgresStore) DueDispatchTenants(ctx context.Context, now time.Time) ([]string, error) {
+	return store.queryDueTenants(ctx, `SELECT tenant_id::text FROM command_runtime.tenants_with_due_dispatch($1) ORDER BY 1`, now)
+}
+
+// ClaimAnyDispatch scans due tenants fairly and claims the next dispatchable command,
+// waiting up to waitDuration (capped at 2s) on the dispatch wakeup signal when idle.
+func (store *PostgresStore) ClaimAnyDispatch(ctx context.Context, leaseOwner string, leaseFor, waitDuration time.Duration) (commandmodel.DispatchEnvelope, error) {
+	if store == nil || store.pool == nil {
+		return commandmodel.DispatchEnvelope{}, errors.New("command store is closed")
+	}
+	if strings.TrimSpace(leaseOwner) == "" || leaseFor < time.Second || leaseFor > 2*time.Minute {
+		return commandmodel.DispatchEnvelope{}, ErrInvalidRequest
+	}
+	return claimAnyWork(
+		ctx,
+		waitDuration,
+		store.SubscribeDispatchWork,
+		func(scanCtx context.Context) ([]string, error) {
+			return store.DueDispatchTenants(scanCtx, store.now().UTC())
+		},
+		&store.dispatchCursor,
+		func(claimCtx context.Context, tenantID string) (commandmodel.DispatchEnvelope, error) {
+			return store.ClaimDispatch(claimCtx, tenantID, leaseOwner, leaseFor)
+		},
+		ErrNoDispatchAvailable,
+	)
 }

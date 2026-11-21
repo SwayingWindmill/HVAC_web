@@ -264,14 +264,17 @@ func TestConfigShadowDriftCanonicalizationAndStatus(t *testing.T) {
 }
 
 type fakeConfigShadowStore struct {
-	shadow     GatewayConfigShadow
-	pullResp   GatewayShadowPullResponse
-	updateErr  error
-	pullErr    error
-	reportErr  error
-	lastSince  int64
-	lastReport *GatewayShadowReportInput
-	lastUpdate *UpdateDesiredConfigInput
+	shadow             GatewayConfigShadow
+	pullResp           GatewayShadowPullResponse
+	updateErr          error
+	pullErr            error
+	reportErr          error
+	lastSince          int64
+	lastReport         *GatewayShadowReportInput
+	lastUpdate         *UpdateDesiredConfigInput
+	lastTemplateUpsert *TemplateDriverUpsertInput
+	templateUpsertRes  TemplateDriverUpsertResult
+	templateUpsertErr  error
 }
 
 func (f *fakeConfigShadowStore) GetGatewayConfigShadowForOperator(_ context.Context, _ registryauth.GrantClaims, _ string) (GatewayConfigShadow, error) {
@@ -300,6 +303,18 @@ func (f *fakeConfigShadowStore) ReportGatewayAppliedConfig(_ context.Context, _ 
 		return GatewayConfigShadow{}, f.reportErr
 	}
 	return f.shadow, nil
+}
+
+func (f *fakeConfigShadowStore) UpsertGatewayTemplateDriverConfig(_ context.Context, _ string, input TemplateDriverUpsertInput) (TemplateDriverUpsertResult, error) {
+	f.lastTemplateUpsert = &input
+	if f.templateUpsertErr != nil {
+		return TemplateDriverUpsertResult{}, f.templateUpsertErr
+	}
+	res := f.templateUpsertRes
+	if res.Shadow.GatewayID == "" {
+		res.Shadow = f.shadow
+	}
+	return res, nil
 }
 
 type fakePeerVerifier struct {
@@ -1031,5 +1046,95 @@ func TestConfigShadowDriverAndAutonomyDriftAndTriStateJSON(t *testing.T) {
 	var unknownField UpdateDesiredConfigInput
 	if err := json.Unmarshal([]byte(`{"autonomyPolicy":{"enabled":true,"extraField":1},"reason":"bad"}`), &unknownField); err == nil {
 		t.Fatalf("expected unknown field inside autonomyPolicy to be rejected")
+	}
+}
+
+func TestConfigShadowTemplateDriverUpsertHTTPAndSPIFFEACL(t *testing.T) {
+	const gwID = "0194f000-3000-7000-8000-000000000001"
+	const tenantID = "0194f000-1000-7000-8000-000000000001"
+
+	store := &fakeConfigShadowStore{
+		shadow: GatewayConfigShadow{
+			TenantID:   tenantID,
+			GatewayID:  gwID,
+			SyncStatus: ShadowSyncStatusPendingSync,
+			Drift:      []DriftDetail{},
+		},
+		templateUpsertRes: TemplateDriverUpsertResult{
+			Changed: true,
+			Skipped: false,
+		},
+	}
+	var updatedCalls []string
+	shadowHandler := NewConfigShadowHandler(store, fakePeerVerifier{gatewayID: gwID}, func(_ *http.Request, _ registryauth.Action) (registryauth.GrantClaims, error) {
+		return registryauth.GrantClaims{}, ErrCredentialForbidden
+	}, func(gatewayID string) {
+		updatedCalls = append(updatedCalls, gatewayID)
+	})
+	handler := NewCredentialHandlerWithShadow(nil, nil, nil, nil, shadowHandler)
+
+	coreURI, _ := url.Parse("spiffe://hvac.local/platform-core-service")
+	corePeer := &x509.Certificate{URIs: []*url.URL{coreURI}}
+	gwURI, _ := url.Parse("spiffe://hvac.local/platform-gateway")
+	gwPeer := &x509.Certificate{URIs: []*url.URL{gwURI}}
+
+	body := `{"tenantId":"` + tenantID + `","deviceKey":"chiller-1","driverType":"MODBUS_TCP","endpoint":"10.0.0.5:502","unitId":1,"registers":[{"pointCode":"chw_temp","functionCode":3,"address":1,"registerCount":1,"rawType":"INT16","byteOrder":"BIG_ENDIAN","wordOrder":"BIG_ENDIAN","scale":0.1,"offset":0,"pollPriority":"HIGH"}],"reason":"template sync"}`
+
+	// platform-core-service with Changed=true succeeds without X-Delegation-Grant and triggers onDesiredUpdated.
+	reqChanged := httptest.NewRequest(http.MethodPost, "/internal/v1/gateways/"+gwID+"/config-shadow:upsert-template-driver", strings.NewReader(body))
+	reqChanged.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{corePeer}}}
+	recChanged := httptest.NewRecorder()
+	handler.ServeHTTP(recChanged, reqChanged)
+	if recChanged.Code != http.StatusOK || len(updatedCalls) != 1 || updatedCalls[0] != gwID {
+		t.Fatalf("Changed=true status=%d updatedCalls=%v body=%s", recChanged.Code, updatedCalls, recChanged.Body.String())
+	}
+	if store.lastTemplateUpsert == nil || store.lastTemplateUpsert.DeviceKey != "chiller-1" {
+		t.Fatalf("unexpected captured upsert input: %+v", store.lastTemplateUpsert)
+	}
+
+	// Changed=false / Skipped=true must NOT invoke onDesiredUpdated.
+	store.templateUpsertRes = TemplateDriverUpsertResult{Changed: false, Skipped: true}
+	reqNoChange := httptest.NewRequest(http.MethodPost, "/internal/v1/gateways/"+gwID+"/config-shadow:upsert-template-driver", strings.NewReader(body))
+	reqNoChange.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{corePeer}}}
+	recNoChange := httptest.NewRecorder()
+	handler.ServeHTTP(recNoChange, reqNoChange)
+	if recNoChange.Code != http.StatusOK || len(updatedCalls) != 1 {
+		t.Fatalf("Skipped=true status=%d updatedCalls=%v body=%s", recNoChange.Code, updatedCalls, recNoChange.Body.String())
+	}
+
+	// platform-core-service must still be rejected (401) on generic config-shadow and gateway routes.
+	for _, blocked := range []struct {
+		method, path string
+	}{
+		{http.MethodGet, "/internal/v1/gateways/" + gwID + "/config-shadow"},
+		{http.MethodPut, "/internal/v1/gateways/" + gwID + "/config-shadow"},
+		{http.MethodGet, "/gateway/v1/config-shadow"},
+	} {
+		req := httptest.NewRequest(blocked.method, blocked.path, nil)
+		req.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{corePeer}}}
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 for platform-core-service on %s %s, got %d", blocked.method, blocked.path, rec.Code)
+		}
+	}
+
+	// Requests carrying spoofed X-Gateway-Client-Cert on internal upsert route must return 403.
+	spoofReq := httptest.NewRequest(http.MethodPost, "/internal/v1/gateways/"+gwID+"/config-shadow:upsert-template-driver", strings.NewReader(body))
+	spoofReq.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{corePeer}}}
+	spoofReq.Header.Set("X-Gateway-Client-Cert", "spoof")
+	spoofRec := httptest.NewRecorder()
+	handler.ServeHTTP(spoofRec, spoofReq)
+	if spoofRec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 with X-Gateway-Client-Cert on internal route, got %d", spoofRec.Code)
+	}
+
+	// platform-gateway without valid delegation grant is denied (403) on :upsert-template-driver.
+	gwDeniedReq := httptest.NewRequest(http.MethodPost, "/internal/v1/gateways/"+gwID+"/config-shadow:upsert-template-driver", strings.NewReader(body))
+	gwDeniedReq.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{gwPeer}}}
+	gwDeniedRec := httptest.NewRecorder()
+	handler.ServeHTTP(gwDeniedRec, gwDeniedReq)
+	if gwDeniedRec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for platform-gateway without grant on upsert route, got %d", gwDeniedRec.Code)
 	}
 }

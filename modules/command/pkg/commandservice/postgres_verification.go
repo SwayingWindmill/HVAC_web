@@ -470,3 +470,33 @@ WHERE tenant_id = $1::uuid AND device_id = $2::uuid
 	}
 	return events, nil
 }
+
+// DueVerificationTenants lists distinct tenants currently holding acknowledged commands
+// due for reported-state verification.
+func (store *PostgresStore) DueVerificationTenants(ctx context.Context, now time.Time) ([]string, error) {
+	return store.queryDueTenants(ctx, `SELECT tenant_id::text FROM command_runtime.tenants_with_due_verification($1) ORDER BY 1`, now)
+}
+
+// ClaimAnyVerification scans due tenants fairly and claims the next verification work item,
+// waiting up to waitDuration (capped at 2s) on the verification wakeup signal when idle.
+func (store *PostgresStore) ClaimAnyVerification(ctx context.Context, leaseOwner string, leaseFor, waitDuration time.Duration) (commandmodel.VerificationEnvelope, error) {
+	if store == nil || store.pool == nil {
+		return commandmodel.VerificationEnvelope{}, errors.New("command store is closed")
+	}
+	if strings.TrimSpace(leaseOwner) == "" || leaseFor < time.Second || leaseFor > time.Minute {
+		return commandmodel.VerificationEnvelope{}, ErrInvalidRequest
+	}
+	return claimAnyWork(
+		ctx,
+		waitDuration,
+		store.SubscribeVerificationWork,
+		func(scanCtx context.Context) ([]string, error) {
+			return store.DueVerificationTenants(scanCtx, store.now().UTC())
+		},
+		&store.verificationCursor,
+		func(claimCtx context.Context, tenantID string) (commandmodel.VerificationEnvelope, error) {
+			return store.ClaimVerification(claimCtx, tenantID, leaseOwner, leaseFor)
+		},
+		ErrVerificationNotAvailable,
+	)
+}

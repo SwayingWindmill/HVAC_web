@@ -471,6 +471,58 @@ func TestConfigShadowPostgresRLSConcurrencyAndDrift(t *testing.T) {
 		t.Fatalf("expected driverConfigs cleared to empty slice, got %+v err=%v", clearedDriversShadow, err)
 	}
 
+	// Template driver upsert: skips without endpoint/unitId on new driver, materializes on full input,
+	// stays idempotent when unchanged, inherits existing endpoint/unitId on update, and enforces tenant isolation.
+	endpoint10 := "10.10.0.10:502"
+	unit7 := 7
+	tplReg := []connectivity.GatewayModbusRegisterMapping{{
+		PointCode: "tpl_temp", SemanticChannel: "SupplyTemperature", FunctionCode: 3,
+		Address: 100, RegisterCount: 1, RawType: "INT16", ByteOrder: "BIG_ENDIAN", WordOrder: "BIG_ENDIAN",
+		Scale: 0.1, Offset: 0, PollPriority: "HIGH",
+	}}
+	skippedRes, err := store.UpsertGatewayTemplateDriverConfig(ctx, gatewayA, connectivity.TemplateDriverUpsertInput{
+		TenantID: tenantA, DeviceKey: "tpl-unbound-drv", DriverType: "MODBUS_TCP",
+		Registers: tplReg, Reason: "skip without endpoint",
+	})
+	if err != nil || !skippedRes.Skipped || skippedRes.Changed {
+		t.Fatalf("expected skipped=true changed=false without endpoint/unitId, got %+v err=%v", skippedRes, err)
+	}
+	res13, err := store.UpsertGatewayTemplateDriverConfig(ctx, gatewayA, connectivity.TemplateDriverUpsertInput{
+		TenantID: tenantA, DeviceKey: "tpl-chiller-1", DriverType: "MODBUS_TCP",
+		Endpoint: &endpoint10, UnitID: &unit7, Registers: tplReg,
+		UpdatedBy: actorA, Reason: "materialize template driver",
+	})
+	if err != nil || !res13.Changed || res13.Skipped || res13.Shadow.Desired == nil || res13.Shadow.Desired.DesiredRevision != 13 || len(res13.Shadow.Desired.DriverConfigs) != 1 {
+		t.Fatalf("expected rev 13 changed=true with 1 driver, got %+v err=%v", res13, err)
+	}
+	idempotentRes, err := store.UpsertGatewayTemplateDriverConfig(ctx, gatewayA, connectivity.TemplateDriverUpsertInput{
+		TenantID: tenantA, DeviceKey: "tpl-chiller-1", DriverType: "MODBUS_TCP",
+		Endpoint: &endpoint10, UnitID: &unit7, Registers: tplReg,
+		Reason: "idempotent repeat",
+	})
+	if err != nil || idempotentRes.Changed || idempotentRes.Skipped || idempotentRes.Shadow.Desired.DesiredRevision != 13 {
+		t.Fatalf("expected idempotent unchanged rev 13, got %+v err=%v", idempotentRes, err)
+	}
+	// Update register without repeating endpoint/unitId inherits 10.10.0.10:502 & unitId=7 and bumps rev 14.
+	tplRegUpdated := append(slices.Clone(tplReg), connectivity.GatewayModbusRegisterMapping{
+		PointCode: "tpl_return_temp", SemanticChannel: "ReturnTemperature", FunctionCode: 3,
+		Address: 102, RegisterCount: 1, RawType: "INT16", ByteOrder: "BIG_ENDIAN", WordOrder: "BIG_ENDIAN",
+		Scale: 0.1, Offset: 0, PollPriority: "HIGH",
+	})
+	res14, err := store.UpsertGatewayTemplateDriverConfig(ctx, gatewayA, connectivity.TemplateDriverUpsertInput{
+		TenantID: tenantA, DeviceKey: "tpl-chiller-1", DriverType: "MODBUS_TCP",
+		Registers: tplRegUpdated, Reason: "inherit endpoint and update registers",
+	})
+	if err != nil || !res14.Changed || res14.Shadow.Desired.DesiredRevision != 14 || len(res14.Shadow.Desired.DriverConfigs[0].Registers) != 2 || res14.Shadow.Desired.DriverConfigs[0].Endpoint != endpoint10 {
+		t.Fatalf("expected rev 14 inheriting endpoint & 2 registers, got %+v err=%v", res14, err)
+	}
+	if _, err := store.UpsertGatewayTemplateDriverConfig(ctx, gatewayA, connectivity.TemplateDriverUpsertInput{
+		TenantID: "0194f000-1000-7000-8000-000000000099", DeviceKey: "tpl-chiller-1", DriverType: "MODBUS_TCP",
+		Endpoint: &endpoint10, UnitID: &unit7, Registers: tplReg, Reason: "cross tenant denied",
+	}); !errors.Is(err, connectivity.ErrCredentialForbidden) {
+		t.Fatalf("expected ErrCredentialForbidden for cross-tenant upsert, got %v", err)
+	}
+
 	// Query without app.tenant_id returns 0 rows under FORCE ROW LEVEL SECURITY.
 	runtimePool, err := pgxpool.New(ctx, runtimeDSN)
 	if err != nil {

@@ -196,6 +196,9 @@ INSERT INTO command_runtime.command_dispatch_outbox (
 	if err := tx.Commit(ctx); err != nil {
 		return commandmodel.CommandIntent{}, fmt.Errorf("commit command approval: %w", err)
 	}
+	if finalStatus == commandmodel.IntentQueued {
+		store.notifyDispatchWork()
+	}
 	if finalStatus == commandmodel.IntentAwaitingApproval {
 		return updated, ErrApprovalRequired
 	}

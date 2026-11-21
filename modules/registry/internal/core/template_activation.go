@@ -26,6 +26,7 @@ type TemplatePayloadActivation struct {
 	QualityChecksByPoint map[string]*TemplateQualityCheck
 	DefaultQualityCheck  *TemplateQualityCheck
 	CapabilityProfiles   []TemplateCapabilityProfile
+	ModbusDriver         *TemplateModbusDriver
 }
 
 type TemplateStandardPoint struct {
@@ -214,9 +215,11 @@ func parseAndValidateTemplatePayload(kind TemplateKind, payload map[string]any) 
 		if kind != TemplateDevice {
 			return nil, fmt.Errorf("%w: modbusDriver is only valid on DEVICE templates", ErrInvalidMutation)
 		}
-		if err := validateTemplateModbusDriver(rawModbusDriver); err != nil {
+		driver, err := validateTemplateModbusDriver(rawModbusDriver)
+		if err != nil {
 			return nil, fmt.Errorf("%w: modbusDriver: %v", ErrInvalidMutation, err)
 		}
+		out.ModbusDriver = driver
 	}
 
 	return out, nil
@@ -309,6 +312,14 @@ func validateStandardPoint(parsed templateStandardPointJSON) (TemplateStandardPo
 	meta := map[string]any{}
 	for k, v := range parsed.SourceMetadata {
 		meta[k] = v
+	}
+	if _, err := edgecontrol.ParseEdgePointSourceMetadata(meta); err != nil {
+		return TemplateStandardPoint{}, err
+	}
+	if parsed.PointType == "COMMAND" {
+		if err := commandmodel.ValidateCommandPointMetadata(meta); err != nil {
+			return TemplateStandardPoint{}, err
+		}
 	}
 	return TemplateStandardPoint{
 		PointCode:              parsed.PointCode,
@@ -468,7 +479,9 @@ func validateTemplateCapabilityProfile(profile TemplateCapabilityProfile) error 
 	return nil
 }
 
-type templateModbusDriverJSON struct {
+// TemplateModbusDriver holds the validated declarative Modbus driver template payload
+// stored on a RELEASED DEVICE TemplateRevision and materialized to bound gateways.
+type TemplateModbusDriver struct {
 	DriverType        string                            `json:"driverType"`
 	Endpoint          *string                           `json:"endpoint,omitempty"`
 	UnitID            *int                              `json:"unitId,omitempty"`
@@ -478,29 +491,29 @@ type templateModbusDriverJSON struct {
 	Registers         []edgecontrol.ModbusRegisterInput `json:"registers"`
 }
 
-func validateTemplateModbusDriver(raw any) error {
+func validateTemplateModbusDriver(raw any) (*TemplateModbusDriver, error) {
 	obj, ok := raw.(map[string]any)
 	if !ok {
-		return errors.New("must be an object")
+		return nil, errors.New("must be an object")
 	}
-	var parsed templateModbusDriverJSON
+	var parsed TemplateModbusDriver
 	if err := decodeStrictJSONValue(obj, &parsed); err != nil {
-		return err
+		return nil, err
 	}
 	if regSlice, ok := obj["registers"].([]any); ok {
 		for i, item := range regSlice {
 			regMap, ok := item.(map[string]any)
 			if !ok {
-				return fmt.Errorf("registers[%d] must be an object", i)
+				return nil, fmt.Errorf("registers[%d] must be an object", i)
 			}
 			for _, req := range []string{"address", "offset"} {
 				if val, exists := regMap[req]; !exists || val == nil {
-					return fmt.Errorf("registers[%d].%s is required", i, req)
+					return nil, fmt.Errorf("registers[%d].%s is required", i, req)
 				}
 			}
 		}
 	}
-	_, err := edgecontrol.ValidateModbusDriverInput(edgecontrol.ModbusDriverInput{
+	profile, err := edgecontrol.ValidateModbusDriverInput(edgecontrol.ModbusDriverInput{
 		DriverType:        parsed.DriverType,
 		Endpoint:          parsed.Endpoint,
 		UnitID:            parsed.UnitID,
@@ -512,7 +525,66 @@ func validateTemplateModbusDriver(raw any) error {
 		RequireDeviceKey:       false,
 		RequireGatewayBindings: false,
 	})
-	return err
+	if err != nil {
+		return nil, err
+	}
+	normalized := &TemplateModbusDriver{
+		DriverType:        string(profile.DriverType),
+		CapabilityProfile: string(profile.CapabilityProfile),
+		Registers:         make([]edgecontrol.ModbusRegisterInput, len(profile.Registers)),
+	}
+	if parsed.Endpoint != nil {
+		ep := profile.Endpoint
+		normalized.Endpoint = &ep
+	}
+	if parsed.UnitID != nil {
+		u := int(profile.UnitID)
+		normalized.UnitID = &u
+	}
+	if parsed.TimeoutMS != nil {
+		tmo := profile.TimeoutMS
+		normalized.TimeoutMS = &tmo
+	}
+	if parsed.Retries != nil {
+		ret := profile.Retries
+		normalized.Retries = &ret
+	}
+	for i, spec := range profile.Registers {
+		var writeFC *int
+		if spec.WriteFunctionCode != 0 {
+			w := int(spec.WriteFunctionCode)
+			writeFC = &w
+		}
+		var bitIdx *int
+		if spec.RawType == edgecontrol.ModbusRawBitBool {
+			b := spec.BitIndex
+			bitIdx = &b
+		}
+		var enumCopy map[string]string
+		if len(spec.EnumMap) > 0 {
+			enumCopy = make(map[string]string, len(spec.EnumMap))
+			for k, v := range spec.EnumMap {
+				enumCopy[k] = v
+			}
+		}
+		normalized.Registers[i] = edgecontrol.ModbusRegisterInput{
+			PointCode:         spec.PointCode,
+			SemanticChannel:   string(spec.SemanticChannel),
+			FunctionCode:      int(spec.FunctionCode),
+			WriteFunctionCode: writeFC,
+			Address:           int(spec.Address),
+			RegisterCount:     int(spec.RegisterCount),
+			RawType:           string(spec.RawType),
+			ByteOrder:         string(spec.ByteOrder),
+			WordOrder:         string(spec.WordOrder),
+			BitIndex:          bitIdx,
+			Scale:             spec.Scale,
+			Offset:            spec.Offset,
+			PollPriority:      string(spec.PollPriority),
+			EnumMap:           enumCopy,
+		}
+	}
+	return normalized, nil
 }
 
 func validIdentifierToken(value string, maxBytes int) bool {

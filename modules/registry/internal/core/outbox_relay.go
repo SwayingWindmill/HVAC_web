@@ -11,11 +11,13 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 )
 
 const (
@@ -24,9 +26,10 @@ const (
 	outboxDefaultPollInterval   = 500 * time.Millisecond
 	outboxDefaultBatchSize      = 16
 	outboxMaxDeliveryAttempts   = 10
-	outboxTelemetrySyncPath     = "/internal/v1/telemetry/registry-sync:apply"
-	outboxCommandCancelPath     = "/internal/v1/commands:cancelRetiredTarget"
-	outboxConnectivityRetireFmt = "/internal/v1/gateways/%s:retire"
+	outboxTelemetrySyncPath             = "/internal/v1/telemetry/registry-sync:apply"
+	outboxCommandCancelPath             = "/internal/v1/commands:cancelRetiredTarget"
+	outboxConnectivityRetireFmt         = "/internal/v1/gateways/%s:retire"
+	outboxConnectivityTemplateDriverFmt = "/internal/v1/gateways/%s/config-shadow:upsert-template-driver"
 )
 
 func truncateRelayUTF8(value string, maxBytes int) string {
@@ -56,6 +59,7 @@ var relayedOutboxEventTypes = []string{
 	"registry.retirement.completed",
 	"registry.template-revision.released",
 	"registry.template-assignment.changed",
+	"registry.binding.rebound",
 }
 
 // TelemetrySyncClient delivers authoritative device and point updates to Telemetry runtime.
@@ -66,6 +70,26 @@ type TelemetrySyncClient interface {
 // ConnectivityRetireClient notifies Connectivity to revoke retired gateways.
 type ConnectivityRetireClient interface {
 	RetireGateway(ctx context.Context, tenantID, gatewayID string) error
+}
+
+// ConnectivityTemplateDriverClient materializes template Modbus driver configs onto bound gateway shadows.
+type ConnectivityTemplateDriverClient interface {
+	UpsertGatewayTemplateDriver(ctx context.Context, gatewayID string, request RelayGatewayTemplateDriverRequest) error
+}
+
+// RelayGatewayTemplateDriverRequest mirrors connectivity.TemplateDriverUpsertInput across module boundaries.
+type RelayGatewayTemplateDriverRequest struct {
+	TenantID          string                            `json:"tenantId"`
+	DeviceKey         string                            `json:"deviceKey"`
+	DriverType        string                            `json:"driverType"`
+	Endpoint          *string                           `json:"endpoint,omitempty"`
+	UnitID            *int                              `json:"unitId,omitempty"`
+	CapabilityProfile string                            `json:"capabilityProfile,omitempty"`
+	TimeoutMS         *int                              `json:"timeoutMs,omitempty"`
+	Retries           *int                              `json:"retries,omitempty"`
+	Registers         []edgecontrol.ModbusRegisterInput `json:"registers"`
+	UpdatedBy         string                            `json:"updatedBy,omitempty"`
+	Reason            string                            `json:"reason"`
 }
 
 // CommandCancelClient notifies Command service to cancel pending commands for retired devices.
@@ -123,9 +147,10 @@ type OutboxRelayConfig struct {
 	TelemetryHTTPClient *http.Client
 	TelemetryClient     TelemetrySyncClient
 
-	ConnectivityBaseURL    string
-	ConnectivityHTTPClient *http.Client
-	ConnectivityClient     ConnectivityRetireClient
+	ConnectivityBaseURL      string
+	ConnectivityHTTPClient   *http.Client
+	ConnectivityClient       ConnectivityRetireClient
+	ConnectivityDriverClient ConnectivityTemplateDriverClient
 
 	CommandBaseURL          string
 	CommandHTTPClient       *http.Client
@@ -143,11 +168,12 @@ type OutboxRelayConfig struct {
 // OutboxRelay claims undelivered core_registry.domain_outbox_events rows and pushes
 // authoritative downstream updates via mTLS endpoints.
 type OutboxRelay struct {
-	store             *PostgresStore
-	telemetry         TelemetrySyncClient
-	connectivity      ConnectivityRetireClient
-	command           CommandCancelClient
-	commandCapability CommandCapabilitySyncClient
+	store              *PostgresStore
+	telemetry          TelemetrySyncClient
+	connectivity       ConnectivityRetireClient
+	connectivityDriver ConnectivityTemplateDriverClient
+	command            CommandCancelClient
+	commandCapability  CommandCapabilitySyncClient
 	leaseOwner        string
 	leaseFor          time.Duration
 	pollInterval      time.Duration
@@ -199,6 +225,13 @@ func NewOutboxRelay(store *PostgresStore, config OutboxRelayConfig) (*OutboxRela
 		commandClient = &httpDownstreamClient{baseURL: strings.TrimRight(strings.TrimSpace(config.CommandBaseURL), "/"), client: httpClient}
 	}
 
+	connectivityDriverClient := config.ConnectivityDriverClient
+	if connectivityDriverClient == nil {
+		if driverSyncer, ok := connectivityClient.(ConnectivityTemplateDriverClient); ok {
+			connectivityDriverClient = driverSyncer
+		}
+	}
+
 	commandCapabilityClient := config.CommandCapabilityClient
 	if commandCapabilityClient == nil {
 		if syncer, ok := commandClient.(CommandCapabilitySyncClient); ok {
@@ -235,11 +268,12 @@ func NewOutboxRelay(store *PostgresStore, config OutboxRelayConfig) (*OutboxRela
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	return &OutboxRelay{
-		store:             store,
-		telemetry:         telemetryClient,
-		connectivity:      connectivityClient,
-		command:           commandClient,
-		commandCapability: commandCapabilityClient,
+		store:              store,
+		telemetry:          telemetryClient,
+		connectivity:       connectivityClient,
+		connectivityDriver: connectivityDriverClient,
+		command:            commandClient,
+		commandCapability:  commandCapabilityClient,
 		leaseOwner:        leaseOwner,
 		leaseFor:          leaseFor,
 		pollInterval:      pollInterval,
@@ -554,6 +588,8 @@ func (r *OutboxRelay) deliverEvent(ctx context.Context, event claimedOutboxEvent
 		return r.deliverTemplateRevisionReleased(ctx, event)
 	case "registry.template-assignment.changed":
 		return r.deliverTemplateAssignmentChanged(ctx, event)
+	case "registry.binding.rebound":
+		return r.deliverBindingRebound(ctx, event)
 	default:
 		return nil
 	}
@@ -579,16 +615,223 @@ func (r *OutboxRelay) deliverTemplateAssignmentChanged(ctx context.Context, even
 	}
 	targetType := payloadStringField(event.Payload, "targetType")
 	targetID := payloadStringField(event.Payload, "targetId")
-	if strings.EqualFold(targetType, "DEVICE") && siteID != "" && targetID != "" && r.telemetry != nil {
-		req, found, err := r.loadDeviceSyncRequest(ctx, event.TenantID, siteID, targetID)
-		if err != nil || !found {
+	if strings.EqualFold(targetType, "DEVICE") && siteID != "" && targetID != "" {
+		if r.telemetry != nil {
+			req, found, err := r.loadDeviceSyncRequest(ctx, event.TenantID, siteID, targetID)
+			if err != nil || !found {
+				return err
+			}
+			if err := r.telemetry.SyncRegistry(ctx, req); err != nil {
+				return err
+			}
+		}
+		if r.connectivityDriver != nil {
+			if err := r.syncDeviceTemplateDriversToBoundGateways(ctx, event.TenantID, siteID, targetID, "", event.EventID); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (r *OutboxRelay) deliverBindingRebound(ctx context.Context, event claimedOutboxEvent) error {
+	if r.connectivityDriver == nil {
+		return nil
+	}
+	if !strings.EqualFold(payloadStringField(event.Payload, "kind"), string(BindingGatewaySourceKey)) {
+		return nil
+	}
+	siteID := payloadStringField(event.Payload, "siteId")
+	if siteID == "" {
+		siteID = strings.TrimSpace(event.SiteID)
+	}
+	deviceID := payloadStringField(event.Payload, "sourceId")
+	gatewayID := payloadStringField(event.Payload, "targetId")
+	if siteID == "" || deviceID == "" || gatewayID == "" {
+		return nil
+	}
+	return r.syncDeviceTemplateDriversToBoundGateways(ctx, event.TenantID, siteID, deviceID, gatewayID, event.EventID)
+}
+
+func (r *OutboxRelay) syncDeviceTemplateDriversToBoundGateways(
+	ctx context.Context,
+	tenantID, siteID, deviceID, gatewayFilterID, causationEventID string,
+) error {
+	if r.connectivityDriver == nil || tenantID == "" || siteID == "" || deviceID == "" {
+		return nil
+	}
+	type boundGatewayTarget struct {
+		gatewayID string
+		sourceKey string
+	}
+	var (
+		templateKey      string
+		revisionID       string
+		driver           *TemplateModbusDriver
+		deviceStatus     string
+		deviceTagsRaw    []byte
+		boundGateways    []boundGatewayTarget
+	)
+	err := r.withTenantWriterTx(ctx, tenantID, pgx.ReadOnly, func(tx pgx.Tx) error {
+		var payloadRaw []byte
+		qErr := tx.QueryRow(ctx, `
+SELECT tr.id::text, t.template_key, tr.payload
+FROM core_registry.registry_template_assignments AS ta
+JOIN core_registry.registry_template_revisions AS tr
+  ON tr.tenant_id = ta.tenant_id AND tr.id = ta.template_revision_id
+JOIN core_registry.registry_templates AS t
+  ON t.tenant_id = tr.tenant_id AND t.id = tr.template_id
+WHERE ta.tenant_id = $1::uuid
+  AND ta.site_id = $2::uuid
+  AND ta.target_type = 'DEVICE'
+  AND ta.target_id = $3::uuid
+  AND ta.status = 'ACTIVE'
+  AND ta.valid_to IS NULL
+ORDER BY ta.valid_from DESC, ta.created_at DESC
+LIMIT 1
+`, tenantID, siteID, deviceID).Scan(&revisionID, &templateKey, &payloadRaw)
+		if errors.Is(qErr, pgx.ErrNoRows) {
+			return nil
+		}
+		if qErr != nil {
+			return qErr
+		}
+		var payloadMap map[string]any
+		if len(payloadRaw) == 0 {
+			return nil
+		}
+		if err := json.Unmarshal(payloadRaw, &payloadMap); err != nil {
 			return err
 		}
-		if err := r.telemetry.SyncRegistry(ctx, req); err != nil {
+		activation, err := parseAndValidateTemplatePayload(TemplateDevice, payloadMap)
+		if err != nil {
+			return err
+		}
+		if activation == nil || activation.ModbusDriver == nil {
+			return nil
+		}
+		driver = activation.ModbusDriver
+
+		devErr := tx.QueryRow(ctx, `
+SELECT status, COALESCE(tags, '{}'::jsonb)
+FROM core_registry.devices
+WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND id = $3::uuid
+`, tenantID, siteID, deviceID).Scan(&deviceStatus, &deviceTagsRaw)
+		if errors.Is(devErr, pgx.ErrNoRows) || !strings.EqualFold(deviceStatus, "ACTIVE") {
+			driver = nil
+			return nil
+		}
+		if devErr != nil {
+			return devErr
+		}
+
+		rows, err := tx.Query(ctx, `
+SELECT sk.gateway_device_id::text, sk.source_key
+FROM core_registry.gateway_device_source_keys AS sk
+JOIN core_registry.devices AS gw
+  ON gw.tenant_id = sk.tenant_id AND gw.site_id = sk.site_id AND gw.id = sk.gateway_device_id
+WHERE sk.tenant_id = $1::uuid
+  AND sk.site_id = $2::uuid
+  AND sk.device_id = $3::uuid
+  AND sk.status = 'ACTIVE'
+  AND gw.device_type = 'GATEWAY'
+  AND gw.status = 'ACTIVE'
+ORDER BY sk.gateway_device_id ASC, sk.source_key ASC
+`, tenantID, siteID, deviceID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var target boundGatewayTarget
+			if scanErr := rows.Scan(&target.gatewayID, &target.sourceKey); scanErr != nil {
+				return scanErr
+			}
+			if gatewayFilterID == "" || strings.EqualFold(target.gatewayID, gatewayFilterID) {
+				boundGateways = append(boundGateways, target)
+			}
+		}
+		return rows.Err()
+	})
+	if err != nil || driver == nil || len(boundGateways) == 0 {
+		return err
+	}
+
+	endpoint := driver.Endpoint
+	unitID := driver.UnitID
+	if tagEndpoint, tagUnitID := parseModbusTagOverrides(deviceTagsRaw); endpoint == nil && tagEndpoint != nil || unitID == nil && tagUnitID != nil {
+		if endpoint == nil {
+			endpoint = tagEndpoint
+		}
+		if unitID == nil {
+			unitID = tagUnitID
+		}
+	}
+
+	reason := "template:" + templateKey + "@" + revisionID
+	for _, target := range boundGateways {
+		req := RelayGatewayTemplateDriverRequest{
+			TenantID:          tenantID,
+			DeviceKey:         target.sourceKey,
+			DriverType:        driver.DriverType,
+			Endpoint:          endpoint,
+			UnitID:            unitID,
+			CapabilityProfile: driver.CapabilityProfile,
+			TimeoutMS:         driver.TimeoutMS,
+			Retries:           driver.Retries,
+			Registers:         slicesCloneRegisters(driver.Registers),
+			UpdatedBy:         strings.TrimSpace(causationEventID),
+			Reason:            reason,
+		}
+		if err := r.connectivityDriver.UpsertGatewayTemplateDriver(ctx, target.gatewayID, req); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func parseModbusTagOverrides(raw []byte) (*string, *int) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil, nil
+	}
+	var tags map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &tags); err != nil {
+		return nil, nil
+	}
+	var endpointPtr *string
+	if epRaw, ok := tags["modbus_endpoint"]; ok {
+		var s string
+		if json.Unmarshal(epRaw, &s) == nil {
+			if clean := strings.TrimSpace(s); clean != "" {
+				endpointPtr = &clean
+			}
+		}
+	}
+	var unitPtr *int
+	if uRaw, ok := tags["modbus_unit_id"]; ok {
+		var uInt int
+		if json.Unmarshal(uRaw, &uInt) == nil && uInt >= 1 && uInt <= 247 {
+			unitPtr = &uInt
+		} else {
+			var uStr string
+			if json.Unmarshal(uRaw, &uStr) == nil {
+				if parsed, parseErr := strconv.Atoi(strings.TrimSpace(uStr)); parseErr == nil && parsed >= 1 && parsed <= 247 {
+					unitPtr = &parsed
+				}
+			}
+		}
+	}
+	return endpointPtr, unitPtr
+}
+
+func slicesCloneRegisters(src []edgecontrol.ModbusRegisterInput) []edgecontrol.ModbusRegisterInput {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]edgecontrol.ModbusRegisterInput, len(src))
+	copy(out, src)
+	return out
 }
 
 func payloadStringField(payload map[string]any, key string) string {
@@ -1015,6 +1258,10 @@ func (c *httpDownstreamClient) SyncRegistry(ctx context.Context, request RelayTe
 
 func (c *httpDownstreamClient) RetireGateway(ctx context.Context, tenantID, gatewayID string) error {
 	return c.postJSON(ctx, fmt.Sprintf(outboxConnectivityRetireFmt, gatewayID), map[string]string{"tenantId": tenantID})
+}
+
+func (c *httpDownstreamClient) UpsertGatewayTemplateDriver(ctx context.Context, gatewayID string, request RelayGatewayTemplateDriverRequest) error {
+	return c.postJSON(ctx, fmt.Sprintf(outboxConnectivityTemplateDriverFmt, gatewayID), request)
 }
 
 func (c *httpDownstreamClient) CancelRetiredTarget(ctx context.Context, request RelayCommandCancelRequest) error {

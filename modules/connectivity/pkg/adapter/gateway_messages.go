@@ -16,6 +16,7 @@ const (
 	MessageTypeTelemetry = "telemetry"
 	MessageTypeEvent     = "event"
 	MessageTypeStatus    = "status"
+	MessageTypeShadow    = "shadow"
 )
 
 // UplinkTopicFilters are the Gateway uplinks Connectivity consumes (ADR 0015). The broker
@@ -24,6 +25,7 @@ var UplinkTopicFilters = []string{
 	"hvac/v1/+/up/" + MessageTypeTelemetry,
 	"hvac/v1/+/up/" + MessageTypeEvent,
 	"hvac/v1/+/up/" + MessageTypeStatus,
+	"hvac/v1/+/up/" + MessageTypeShadow,
 }
 
 type MessageTopic struct {
@@ -40,7 +42,7 @@ func ParseMessageTopic(topic string) (MessageTopic, error) {
 		return MessageTopic{}, errors.New("MQTT topic Gateway id is invalid")
 	}
 	switch parts[4] {
-	case MessageTypeTelemetry, MessageTypeEvent, MessageTypeStatus:
+	case MessageTypeTelemetry, MessageTypeEvent, MessageTypeStatus, MessageTypeShadow:
 	default:
 		return MessageTopic{}, errors.New("MQTT uplink message type is not accepted")
 	}
@@ -80,7 +82,7 @@ type EventPayload struct {
 
 func DecodeEventEnvelope(payload []byte, gatewayID string) (EventEnvelope, error) {
 	var envelope EventEnvelope
-	if err := decodeStrictEnvelope(payload, &envelope); err != nil {
+	if err := decodeV2Envelope(payload, &envelope); err != nil {
 		return EventEnvelope{}, err
 	}
 	if err := validateMessageHeader(envelope.SchemaVersion, envelope.MessageID, envelope.GatewayID, envelope.Timestamp, envelope.Sequence, envelope.TraceID, gatewayID); err != nil {
@@ -105,11 +107,21 @@ func DecodeEventEnvelope(payload []byte, gatewayID string) (EventEnvelope, error
 }
 
 func decodeStrictEnvelope(payload []byte, destination any) error {
+	return decodeEnvelopeWithOptions(payload, destination, false)
+}
+
+func decodeForwardCompatEnvelope(payload []byte, destination any) error {
+	return decodeEnvelopeWithOptions(payload, destination, true)
+}
+
+func decodeEnvelopeWithOptions(payload []byte, destination any, allowUnknownFields bool) error {
 	if len(payload) == 0 || len(payload) > maximumEnvelopeBytes {
 		return errors.New("MQTT envelope size is invalid")
 	}
 	decoder := json.NewDecoder(io.LimitReader(bytes.NewReader(payload), maximumEnvelopeBytes))
-	decoder.DisallowUnknownFields()
+	if !allowUnknownFields {
+		decoder.DisallowUnknownFields()
+	}
 	decoder.UseNumber()
 	if err := decoder.Decode(destination); err != nil {
 		return fmt.Errorf("decode MQTT envelope: %w", err)
@@ -122,7 +134,7 @@ func decodeStrictEnvelope(payload []byte, destination any) error {
 }
 
 func validateMessageHeader(schemaVersion, messageID, envelopeGatewayID string, timestamp int64, sequence uint64, traceID, topicGatewayID string) error {
-	if strings.TrimSpace(schemaVersion) != EnvelopeSchemaVersion {
+	if _, _, ok := parseV2SchemaVersion(schemaVersion); !ok {
 		return fmt.Errorf("unsupported MQTT envelope schemaVersion %s", schemaVersion)
 	}
 	if !uuidV7Pattern.MatchString(strings.TrimSpace(messageID)) {

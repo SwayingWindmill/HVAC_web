@@ -339,11 +339,13 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 			_ = metrics.SetGauge("hvac_edge_mqtt_connected", "Whether the Edge publisher is connected to the MQTT broker.", nil, 1)
 			_ = metrics.AddCounter("hvac_edge_mqtt_connections_total", "Edge MQTT connection attempts by outcome.", map[string]string{"outcome": "success"}, 1)
 			commandTopic := mqttCommandTopic(config)
+			shadowTopic := mqttShadowDownlinkTopic(config.GatewayID)
 			go func() {
 				subscribeContext, cancel := context.WithTimeout(ctx, 10*time.Second)
 				defer cancel()
 				if _, err := manager.Subscribe(subscribeContext, &paho.Subscribe{Subscriptions: []paho.SubscribeOptions{
 					{Topic: commandTopic, QoS: 1},
+					{Topic: shadowTopic, QoS: 1},
 				}}); err != nil {
 					return
 				}
@@ -371,6 +373,26 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 			OnPublishReceived: []func(paho.PublishReceived) (bool, error){func(recv paho.PublishReceived) (bool, error) {
 				if edgeRuntime != nil {
 					edgeRuntime.NotifyCloudContact(true, time.Now().UTC())
+				}
+				if strings.TrimSpace(recv.Packet.Topic) == mqttShadowDownlinkTopic(config.GatewayID) {
+					raw := append([]byte(nil), recv.Packet.Payload...)
+					go func() {
+						shadowCtx, shadowCancel := context.WithTimeout(ctx, 15*time.Second)
+						defer shadowCancel()
+						_ = handleDownlinkShadowMessage(shadowCtx, config, configShadow, nil, func(pubCtx context.Context, topic string, payload []byte) error {
+							mgr := managerPtr.Load()
+							if mgr == nil {
+								return errors.New("MQTT connection manager is unavailable")
+							}
+							_, pubErr := mgr.Publish(pubCtx, &paho.Publish{
+								Topic:   topic,
+								QoS:     1,
+								Payload: payload,
+							})
+							return pubErr
+						}, raw)
+					}()
+					return true, nil
 				}
 				return commandHandler.Handle(recv)
 			}},
@@ -1106,12 +1128,8 @@ func newUUIDV7(at time.Time) (string, error) {
 
 func telemetryDeadband(point PointConfig, policyDeadband float64) float64 {
 	best := policyDeadband
-	if point.SourceMetadata != nil {
-		if raw, ok := point.SourceMetadata["deadband"]; ok {
-			if val, numOK := toFloat64(raw); numOK && !math.IsNaN(val) && !math.IsInf(val, 0) && val > best {
-				best = val
-			}
-		}
+	if meta, err := edgecontrol.ParseEdgePointSourceMetadata(point.SourceMetadata); err == nil && meta.Deadband != nil && *meta.Deadband > best {
+		best = *meta.Deadband
 	}
 	return best
 }

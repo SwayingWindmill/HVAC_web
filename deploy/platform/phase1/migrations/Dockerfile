@@ -190,6 +190,7 @@ COPY infra/durability/postgres/init/operations-domain-audit-ledger.sql /opt/hvac
 COPY infra/registry/postgres/init/hydraulic-loop-topology.sql /opt/hvac/repo/infra/registry/postgres/init/hydraulic-loop-topology.sql
 COPY infra/connectivity/postgres/init/command-correlation-trace-and-audit-immutability.sql /opt/hvac/repo/infra/connectivity/postgres/init/command-correlation-trace-and-audit-immutability.sql
 COPY modules/command/migrations/command-audit-immutability.sql /opt/hvac/repo/modules/command/migrations/command-audit-immutability.sql
+COPY modules/command/migrations/command-due-work-tenants.sql /opt/hvac/repo/modules/command/migrations/command-due-work-tenants.sql
 COPY infra/registry/postgres/init/metric-backfill-watermarks-and-reverify.sql /opt/hvac/repo/infra/registry/postgres/init/metric-backfill-watermarks-and-reverify.sql
 COPY infra/registry/postgres/init/energy-tou-holidays-and-recalc.sql /opt/hvac/repo/infra/registry/postgres/init/energy-tou-holidays-and-recalc.sql
 COPY infra/registry/postgres/init/mv-bivariate-weather-anchors.sql /opt/hvac/repo/infra/registry/postgres/init/mv-bivariate-weather-anchors.sql

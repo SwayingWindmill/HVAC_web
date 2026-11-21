@@ -98,6 +98,73 @@ func (authority *CertificateAuthority) issue(gatewayID string, csr *x509.Certifi
 	}, cert, nil
 }
 
+// IssueEphemeralGatewayTLS generates an ephemeral ECDSA P-256 client certificate signed
+// by the Gateway CA with CommonName set to gatewayID for short-lived upstream mTLS
+// forwarding to the MQTT broker.
+func (authority *CertificateAuthority) IssueEphemeralGatewayTLS(gatewayID string, ttl time.Duration, now time.Time) (tls.Certificate, error) {
+	if authority == nil || authority.certificate == nil || authority.signer == nil {
+		return tls.Certificate{}, errors.New("gateway CA is not initialized")
+	}
+	if !authority.certificate.IsCA || authority.certificate.KeyUsage&x509.KeyUsageCertSign == 0 {
+		return tls.Certificate{}, errors.New("gateway CA lacks certificate signing capability")
+	}
+	normalizedID := strings.ToLower(strings.TrimSpace(gatewayID))
+	if !gatewayIDPattern.MatchString(normalizedID) {
+		return tls.Certificate{}, ErrEnrollmentRejected
+	}
+	if ttl <= 0 {
+		ttl = 5 * time.Minute
+	}
+	issuedAt := now.UTC()
+	if issuedAt.IsZero() {
+		issuedAt = time.Now().UTC()
+	}
+	if issuedAt.Before(authority.certificate.NotBefore) || !issuedAt.Before(authority.certificate.NotAfter) {
+		return tls.Certificate{}, errors.New("gateway CA is outside its validity window")
+	}
+	notBefore := issuedAt.Add(-time.Minute)
+	if notBefore.Before(authority.certificate.NotBefore) {
+		notBefore = authority.certificate.NotBefore
+	}
+	notAfter := issuedAt.Add(ttl)
+	if notAfter.After(authority.certificate.NotAfter) {
+		notAfter = authority.certificate.NotAfter
+	}
+	if !notAfter.After(notBefore) {
+		return tls.Certificate{}, errors.New("gateway CA validity window exhausted")
+	}
+	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	tpl := &x509.Certificate{
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: normalizedID},
+		NotBefore:             notBefore,
+		NotAfter:              notAfter,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tpl, authority.certificate, &privKey.PublicKey, authority.signer)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	leaf, err := x509.ParseCertificate(der)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	return tls.Certificate{
+		Certificate: [][]byte{der},
+		PrivateKey:  privKey,
+		Leaf:        leaf,
+	}, nil
+}
+
 // CreateCRL signs an RFC 5280 CRL (PEM-encoded) containing the supplied revoked serials.
 func (authority *CertificateAuthority) CreateCRL(entries []pkix.RevokedCertificate, now time.Time) ([]byte, error) {
 	if authority == nil || authority.certificate == nil || authority.signer == nil {

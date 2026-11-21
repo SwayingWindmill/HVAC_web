@@ -4,8 +4,10 @@ import {
   createPrivateKey,
   createPublicKey,
   generateKeyPairSync,
+  createHash,
   randomBytes,
   sign,
+  verify,
   X509Certificate,
 } from 'node:crypto';
 import * as fs from 'node:fs';
@@ -19,6 +21,7 @@ import * as tls from 'node:tls';
 import { pathToFileURL } from 'node:url';
 import {
   ALLOWED_TARGET_PORT,
+  buildGatewayPopHeaders,
   decodeFramesFromBuffer,
   encodeFrame,
   FrameType,
@@ -1120,4 +1123,177 @@ test('syncSongyaxuanEnvelopeViaApi handles 401 password-file token exchange, pas
       child.stdin.end(remoteScript);
     });
   }
+});
+
+function verifyPopHeadersAgainstCert(opts: {
+  method: string;
+  pathAndQuery: string;
+  certPem: string;
+  headers: Record<string, string | undefined>;
+}): void {
+  const ts = opts.headers['X-Gateway-Cert-Pop-Timestamp'] ?? opts.headers['x-gateway-cert-pop-timestamp'];
+  const nonce = opts.headers['X-Gateway-Cert-Pop-Nonce'] ?? opts.headers['x-gateway-cert-pop-nonce'];
+  const sigB64 = opts.headers['X-Gateway-Cert-Pop-Signature'] ?? opts.headers['x-gateway-cert-pop-signature'];
+  assert.ok(ts && /^\d+$/.test(ts), `expected integer PoP timestamp, got ${ts}`);
+  assert.ok(nonce && nonce.length >= 16 && nonce.length <= 128, `expected valid PoP nonce, got ${nonce}`);
+  assert.ok(sigB64 && sigB64.length > 0, 'expected non-empty PoP signature');
+
+  const cert = new X509Certificate(opts.certPem);
+  const fpHex = createHash('sha256').update(cert.raw).digest('hex');
+  const canonical = [
+    'HVAC-GW-POP-V1',
+    opts.method.toUpperCase(),
+    opts.pathAndQuery,
+    ts,
+    nonce,
+    fpHex,
+  ].join('\n');
+  const alg = cert.publicKey.asymmetricKeyType === 'ed25519' ? null : 'sha256';
+  const ok = verify(alg, Buffer.from(canonical, 'utf8'), cert.publicKey, Buffer.from(sigB64, 'base64'));
+  assert.equal(ok, true, `PoP signature must verify for ${opts.method} ${opts.pathAndQuery} (${cert.publicKey.asymmetricKeyType})`);
+}
+
+test('buildGatewayPopHeaders signs verifiable ECDSA and Ed25519 PoP payloads and wires into tunnel & renew', async (t) => {
+  const gatewayId = '01a14000-4000-7000-8000-000000000199';
+  const now = Date.now();
+  const ecPki = createTestPKI(gatewayId, 5);
+  const ecHeaders = buildGatewayPopHeaders('GET', '/gateway/v1/tunnel', ecPki.gwPem, ecPki.gwKey, now);
+  assert.equal(ecHeaders['X-Gateway-Cert-Pop-Timestamp'], String(Math.floor(now / 1000)));
+  verifyPopHeadersAgainstCert({
+    method: 'GET',
+    pathAndQuery: '/gateway/v1/tunnel',
+    certPem: ecPki.gwPem,
+    headers: ecHeaders,
+  });
+
+  const edKeys = generateKeyPairSync('ed25519');
+  const edCertPem = issueSignedX509Cert({
+    subjectCN: gatewayId,
+    issuerCN: 'Test Gateway CA',
+    publicKeyPem: edKeys.publicKey.export({ type: 'spki', format: 'pem' }) as string,
+    signerKeyPem: ecPki.caPriv,
+    notBefore: new Date(now - 60_000),
+    notAfter: new Date(now + 90 * 86400_000),
+    extKeyUsageClient: true,
+  });
+  const edKeyPem = edKeys.privateKey.export({ type: 'pkcs8', format: 'pem' }) as string;
+  const edHeaders = buildGatewayPopHeaders('POST', '/gateway/v1/renew', edCertPem, edKeyPem, now);
+  verifyPopHeadersAgainstCert({
+    method: 'POST',
+    pathAndQuery: '/gateway/v1/renew',
+    certPem: edCertPem,
+    headers: edHeaders,
+  });
+
+  // Verify live tunnel upgrade and autorenew POST requests emit verifiable PoP headers on the wire.
+  let renewReqHeaders: Record<string, string | undefined> | null = null;
+  let tunnelReqHeaders: Record<string, string | undefined> | null = null;
+  const renewedLeaf = issueSignedX509Cert({
+    subjectCN: gatewayId,
+    issuerCN: 'Test Gateway CA',
+    publicKeyPem: ecPki.gwPub,
+    signerKeyPem: ecPki.caPriv,
+    notBefore: new Date(now - 60_000),
+    notAfter: new Date(now + 90 * 86400_000),
+    extKeyUsageClient: true,
+  });
+
+  const srv = tls.createServer({
+    cert: ecPki.srvPem,
+    key: ecPki.srvKey,
+    ca: ecPki.caPem,
+    requestCert: true,
+    rejectUnauthorized: true,
+  });
+  srv.on('secureConnection', (sock) => {
+    sock.once('data', (chunk) => {
+      const raw = chunk.toString('utf8');
+      const lines = raw.split('\r\n');
+      const reqLine = lines[0] ?? '';
+      const parsed: Record<string, string> = {};
+      for (const line of lines.slice(1)) {
+        if (!line) break;
+        const idx = line.indexOf(':');
+        if (idx > 0) {
+          parsed[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+        }
+      }
+      if (reqLine.startsWith('POST /gateway/v1/renew ')) {
+        renewReqHeaders = parsed;
+        const body = JSON.stringify({
+          certificatePem: renewedLeaf,
+          caPem: ecPki.caPem,
+          expiresAt: new Date(now + 90 * 86400_000).toISOString(),
+        });
+        sock.write(
+          `HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`,
+        );
+        sock.end();
+        return;
+      }
+      if (reqLine.startsWith('GET /gateway/v1/tunnel ')) {
+        tunnelReqHeaders = parsed;
+        sock.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n');
+      }
+    });
+  });
+  await new Promise<void>((resolve) => srv.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise<void>((resolve) => srv.close(() => resolve())));
+  const addr = srv.address();
+  assert.ok(addr && typeof addr === 'object');
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hvac-pop-wire-'));
+  tempDirs.push(dir);
+  const certPath = path.join(dir, 'gateway.crt');
+  const keyPath = path.join(dir, 'gateway.key');
+  const caPath = path.join(dir, 'ca.crt');
+  fs.writeFileSync(certPath, ecPki.gwPem);
+  fs.writeFileSync(keyPath, ecPki.gwKey);
+  fs.writeFileSync(caPath, ecPki.caPem);
+
+  const renewResult = await checkAndRenewGatewayCertificate({
+    renewUrl: `https://localhost:${addr.port}/gateway/v1/renew`,
+    certPath,
+    keyPath,
+    caPath,
+    rejectUnauthorized: true,
+  });
+  assert.equal(renewResult.renewed, true);
+  assert.ok(renewReqHeaders, 'expected autorenew request headers');
+  verifyPopHeadersAgainstCert({
+    method: 'POST',
+    pathAndQuery: '/gateway/v1/renew',
+    certPem: ecPki.gwPem,
+    headers: renewReqHeaders,
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    const client = new GatewayTunnelClient({
+      tunnelUrl: `https://localhost:${addr.port}/gateway/v1/tunnel`,
+      loadCredentials: () => ({
+        certPem: fs.readFileSync(certPath, 'utf8'),
+        keyPem: fs.readFileSync(keyPath, 'utf8'),
+        caPem: fs.readFileSync(caPath, 'utf8'),
+      }),
+      rejectUnauthorized: true,
+      onConnected: () => {
+        client.stop();
+        resolve();
+      },
+      onDisconnected: (err) => {
+        if (err) {
+          client.stop();
+          reject(err);
+        }
+      },
+    });
+    client.start();
+  });
+  assert.ok(tunnelReqHeaders, 'expected tunnel upgrade request headers');
+  verifyPopHeadersAgainstCert({
+    method: 'GET',
+    pathAndQuery: '/gateway/v1/tunnel',
+    certPem: fs.readFileSync(certPath, 'utf8'),
+    headers: tunnelReqHeaders,
+  });
 });

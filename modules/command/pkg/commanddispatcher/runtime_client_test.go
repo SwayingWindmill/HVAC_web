@@ -160,3 +160,47 @@ func TestRuntimeClientInjectsTraceparentHeader(t *testing.T) {
 		t.Fatalf("runtime client traceparent=%q, want %q", gotTraceparent, traceparent)
 	}
 }
+
+func TestRuntimeClientClaimAnyDispatchAndVerification(t *testing.T) {
+	t.Parallel()
+
+	dispEnv := commandmodel.DispatchEnvelope{
+		CommandID: "cmd-any-d1", AttemptID: "att-any-d1", TenantID: runtimeClientTestOrganization,
+		SiteID: runtimeClientTestSite, DeviceID: runtimeClientTestDevice,
+		Capability: commandmodel.CapabilityStart, CapabilityRevision: "v1",
+		ExecutionFence: 1, LeaseOwner: "disp-any", LeaseUntil: time.Now().UTC().Add(time.Minute),
+	}
+	verEnv := commandmodel.VerificationEnvelope{
+		CommandID: "cmd-any-v1", AttemptID: "att-any-v1", TenantID: runtimeClientTestOrganization,
+		SiteID: runtimeClientTestSite, DeviceID: runtimeClientTestDevice,
+		Capability: commandmodel.CapabilityStart, ExecutionFence: 1,
+		LeaseOwner: "ver-any", LeaseUntil: time.Now().UTC().Add(time.Minute),
+	}
+	var gotWait string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		gotWait = request.URL.Query().Get("waitMs")
+		switch request.URL.Path {
+		case commandservice.InternalDispatchClaimAnyPath:
+			writeTestJSON(writer, http.StatusOK, dispEnv)
+		case commandservice.InternalVerificationClaimAnyPath:
+			writeTestJSON(writer, http.StatusOK, verEnv)
+		default:
+			writer.WriteHeader(http.StatusNoContent)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewRuntimeClient(RuntimeClientConfig{BaseURL: server.URL, HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotDisp, err := client.ClaimAnyDispatch(t.Context(), "disp-any", 30*time.Second, 250*time.Millisecond)
+	if err != nil || gotDisp.CommandID != dispEnv.CommandID || gotWait != "250" {
+		t.Fatalf("ClaimAnyDispatch=(%+v, %v) wait=%q", gotDisp, err, gotWait)
+	}
+	gotVer, err := client.ClaimAnyVerification(t.Context(), "ver-any", 10*time.Second, 500*time.Millisecond)
+	if err != nil || gotVer.CommandID != verEnv.CommandID || gotWait != "500" {
+		t.Fatalf("ClaimAnyVerification=(%+v, %v) wait=%q", gotVer, err, gotWait)
+	}
+}
+

@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,8 +17,10 @@ import (
 
 const (
 	InternalDispatchClaimPath          = "/internal/v1/dispatches:claim"
+	InternalDispatchClaimAnyPath       = "/internal/v1/dispatches:claim-any"
 	InternalDispatchResolvePath        = "/internal/v1/dispatches:resolve"
 	InternalVerificationClaimPath      = "/internal/v1/verifications:claim"
+	InternalVerificationClaimAnyPath   = "/internal/v1/verifications:claim-any"
 	InternalVerificationResolvePath    = "/internal/v1/verifications:resolve"
 	InternalConnectorPreparePath       = "/internal/v1/connector-evidence:prepare"
 	InternalConnectorCompletePath      = "/internal/v1/connector-evidence:complete"
@@ -56,6 +59,14 @@ type RuntimeStore interface {
 	CancelPending(context.Context, commandmodel.CancelPendingRequest) ([]string, error)
 }
 
+// AnyTenantRuntimeStore is an optional RuntimeStore extension supporting cross-tenant
+// fair claiming with bounded wakeup wait.
+type AnyTenantRuntimeStore interface {
+	RuntimeStore
+	ClaimAnyDispatch(ctx context.Context, leaseOwner string, leaseFor, waitDuration time.Duration) (commandmodel.DispatchEnvelope, error)
+	ClaimAnyVerification(ctx context.Context, leaseOwner string, leaseFor, waitDuration time.Duration) (commandmodel.VerificationEnvelope, error)
+}
+
 // RuntimeHTTPConfig names the one dispatcher and the one verifier workload. Each serves
 // every Tenant: which Devices may be controlled is decided by the Registry (an active
 // writable command Point), checked by Connectivity before anything is sent.
@@ -90,6 +101,11 @@ func (handler *runtimeHTTPHandler) Close() {
 
 type runtimeClaimRequest struct {
 	TenantID     string `json:"tenantId"`
+	LeaseOwner   string `json:"leaseOwner"`
+	LeaseSeconds int64  `json:"leaseSeconds"`
+}
+
+type runtimeAnyClaimRequest struct {
 	LeaseOwner   string `json:"leaseOwner"`
 	LeaseSeconds int64  `json:"leaseSeconds"`
 }
@@ -170,9 +186,9 @@ func (handler *runtimeHTTPHandler) ServeHTTP(writer http.ResponseWriter, request
 	}
 	var workload string
 	switch request.URL.Path {
-	case InternalDispatchClaimPath, InternalDispatchResolvePath, InternalConnectorPreparePath, InternalConnectorCompletePath:
+	case InternalDispatchClaimPath, InternalDispatchClaimAnyPath, InternalDispatchResolvePath, InternalConnectorPreparePath, InternalConnectorCompletePath:
 		workload = handler.dispatcher
-	case InternalVerificationClaimPath, InternalVerificationResolvePath:
+	case InternalVerificationClaimPath, InternalVerificationClaimAnyPath, InternalVerificationResolvePath:
 		workload = handler.verifier
 	default:
 		writeRuntimeProblem(writer, http.StatusNotFound, "COMMAND_RUNTIME_ROUTE_NOT_FOUND", false)
@@ -186,10 +202,14 @@ func (handler *runtimeHTTPHandler) ServeHTTP(writer http.ResponseWriter, request
 	switch request.URL.Path {
 	case InternalDispatchClaimPath:
 		handler.claimDispatch(writer, request)
+	case InternalDispatchClaimAnyPath:
+		handler.claimAnyDispatch(writer, request)
 	case InternalDispatchResolvePath:
 		handler.resolveDispatch(writer, request)
 	case InternalVerificationClaimPath:
 		handler.claimVerification(writer, request)
+	case InternalVerificationClaimAnyPath:
+		handler.claimAnyVerification(writer, request)
 	case InternalVerificationResolvePath:
 		handler.resolveVerification(writer, request)
 	case InternalConnectorPreparePath:
@@ -337,6 +357,28 @@ func (handler *runtimeHTTPHandler) claimDispatch(writer http.ResponseWriter, req
 	writeRuntimeJSON(writer, http.StatusOK, envelope)
 }
 
+func (handler *runtimeHTTPHandler) claimAnyDispatch(writer http.ResponseWriter, request *http.Request) {
+	input, waitDuration, ok := decodeRuntimeAnyClaim(writer, request)
+	if !ok {
+		return
+	}
+	anyStore, ok := handler.store.(AnyTenantRuntimeStore)
+	if !ok {
+		writeRuntimeProblem(writer, http.StatusNotImplemented, "COMMAND_RUNTIME_CLAIM_ANY_UNSUPPORTED", false)
+		return
+	}
+	envelope, err := anyStore.ClaimAnyDispatch(request.Context(), input.LeaseOwner, time.Duration(input.LeaseSeconds)*time.Second, waitDuration)
+	if errors.Is(err, ErrNoDispatchAvailable) {
+		writer.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err != nil {
+		writeRuntimeStoreError(writer, err)
+		return
+	}
+	writeRuntimeJSON(writer, http.StatusOK, envelope)
+}
+
 type controlFailureNotifyingStore interface {
 	hasControlFailureNotifier() bool
 }
@@ -393,6 +435,28 @@ func (handler *runtimeHTTPHandler) claimVerification(writer http.ResponseWriter,
 		return
 	}
 	envelope, err := handler.store.ClaimVerification(request.Context(), input.TenantID, input.LeaseOwner, time.Duration(input.LeaseSeconds)*time.Second)
+	if errors.Is(err, ErrVerificationNotAvailable) {
+		writer.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err != nil {
+		writeRuntimeStoreError(writer, err)
+		return
+	}
+	writeRuntimeJSON(writer, http.StatusOK, envelope)
+}
+
+func (handler *runtimeHTTPHandler) claimAnyVerification(writer http.ResponseWriter, request *http.Request) {
+	input, waitDuration, ok := decodeRuntimeAnyClaim(writer, request)
+	if !ok {
+		return
+	}
+	anyStore, ok := handler.store.(AnyTenantRuntimeStore)
+	if !ok {
+		writeRuntimeProblem(writer, http.StatusNotImplemented, "COMMAND_RUNTIME_CLAIM_ANY_UNSUPPORTED", false)
+		return
+	}
+	envelope, err := anyStore.ClaimAnyVerification(request.Context(), input.LeaseOwner, time.Duration(input.LeaseSeconds)*time.Second, waitDuration)
 	if errors.Is(err, ErrVerificationNotAvailable) {
 		writer.WriteHeader(http.StatusNoContent)
 		return
@@ -481,6 +545,27 @@ func decodeRuntimeClaim(writer http.ResponseWriter, request *http.Request) (runt
 		return runtimeClaimRequest{}, false
 	}
 	return input, true
+}
+
+func decodeRuntimeAnyClaim(writer http.ResponseWriter, request *http.Request) (runtimeAnyClaimRequest, time.Duration, bool) {
+	var input runtimeAnyClaimRequest
+	if !decodeRuntimeJSON(writer, request, &input) {
+		return runtimeAnyClaimRequest{}, 0, false
+	}
+	if strings.TrimSpace(input.LeaseOwner) == "" || input.LeaseSeconds <= 0 || input.LeaseSeconds > 120 {
+		writeRuntimeProblem(writer, http.StatusBadRequest, "COMMAND_RUNTIME_REQUEST_INVALID", false)
+		return runtimeAnyClaimRequest{}, 0, false
+	}
+	rawWait := strings.TrimSpace(request.URL.Query().Get("waitMs"))
+	if rawWait == "" {
+		return input, 0, true
+	}
+	waitMs, err := strconv.Atoi(rawWait)
+	if err != nil || waitMs < 0 || waitMs > int(maxCrossTenantClaimWait/time.Millisecond) {
+		writeRuntimeProblem(writer, http.StatusBadRequest, "COMMAND_RUNTIME_REQUEST_INVALID", false)
+		return runtimeAnyClaimRequest{}, 0, false
+	}
+	return input, time.Duration(waitMs) * time.Millisecond, true
 }
 
 func decodeRuntimeJSON(writer http.ResponseWriter, request *http.Request, target any) bool {

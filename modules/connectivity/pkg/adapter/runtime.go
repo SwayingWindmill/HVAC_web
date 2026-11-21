@@ -101,6 +101,14 @@ func WithSharedSession(session *mqttclient.SharedSession) RuntimeOption {
 	}
 }
 
+// WithBrokerLogWatcher attaches a Mosquitto $SYS/broker/log/N watcher used in standalone
+// mode (when Runtime owns the MQTT connection).
+func WithBrokerLogWatcher(watcher *BrokerLogWatcher) RuntimeOption {
+	return func(runtime *Runtime) {
+		runtime.brokerLog = watcher
+	}
+}
+
 // Runtime consumes every Gateway's uplink. Each Gateway gets an ordered mailbox
 // serviced by a bounded pool of workers. A message is acknowledged only after it is
 // processed or quarantined; when a Gateway's queue is full, receiving pauses and the
@@ -111,6 +119,7 @@ type Runtime struct {
 	logger         *slog.Logger
 	metrics        *observability.Registry
 	sharedSession  *mqttclient.SharedSession
+	brokerLog      *BrokerLogWatcher
 	retryDelay     func(int) time.Duration
 	rateLimitFloor time.Duration
 	// reconnectBackoff is how long to wait before reconnection attempt N.
@@ -336,6 +345,13 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 					if received.Packet == nil || received.Client == nil {
 						return false, errors.New("MQTT publish callback is incomplete")
 					}
+					if runtime.brokerLog != nil && received.Packet.Topic == BrokerNoticeLogTopic {
+						runtime.brokerLog.HandlePublish(received.Packet)
+						if received.Packet.QoS > 0 {
+							runtime.ack("broker-log", received.Packet, received.Client.Ack)
+						}
+						return true, nil
+					}
 					return true, runtime.enqueue(workerContext, runtime.currentConnectionClosed(), received.Packet, received.Client.Ack)
 				},
 			},
@@ -523,9 +539,12 @@ func (runtime *Runtime) finishShutdown(drainFirst bool, workerCancel context.Can
 
 func (runtime *Runtime) subscribe(ctx context.Context, manager *autopaho.ConnectionManager, connection <-chan struct{}, gen uint64) {
 	filters := runtime.config.SubscriptionTopicFilters()
-	subscriptions := make([]paho.SubscribeOptions, 0, len(filters))
+	subscriptions := make([]paho.SubscribeOptions, 0, len(filters)+1)
 	for _, topic := range filters {
 		subscriptions = append(subscriptions, paho.SubscribeOptions{Topic: topic, QoS: 1})
+	}
+	if runtime.brokerLog != nil {
+		subscriptions = append(subscriptions, paho.SubscribeOptions{Topic: BrokerNoticeLogTopic, QoS: 1})
 	}
 	if err := mqttclient.SubscribeWithRetry(
 		ctx,

@@ -15,11 +15,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/eclipse/paho.golang/paho"
+	"github.com/quanlaihe/hvac-web/libs/mqttclient"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/concentrator"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/connectivity"
+	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/mqttguard"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/packettap"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/tunnel"
 	"github.com/quanlaihe/hvac-web/modules/registry/pkg/coreservice"
@@ -128,6 +131,42 @@ func credentialServerWithDiagnostics(
 	tap *packettap.Manager,
 	tunnelOptions ...tunnel.Option,
 ) (*http.Server, *tunnel.Hub, error) {
+	srv, hub, _, err := credentialAndGuardServerWithDiagnostics(
+		rootCtx, logger, metrics, presence, store, concentratorService, coverageReporter, tap, false, tunnelOptions...,
+	)
+	return srv, hub, err
+}
+
+func credentialAndGuardServerWithDiagnostics(
+	rootCtx context.Context,
+	logger *slog.Logger,
+	metrics *observability.Registry,
+	presence *gatewayOnlineTracker,
+	store *connectivity.Store,
+	concentratorService *concentrator.Service,
+	coverageReporter adapter.CoverageReporter,
+	tap *packettap.Manager,
+	enableGuardFromEnv bool,
+	tunnelOptions ...tunnel.Option,
+) (*http.Server, *tunnel.Hub, *mqttguard.Server, error) {
+	return credentialAndGuardServerWithSession(
+		rootCtx, logger, metrics, presence, store, concentratorService, coverageReporter, tap, enableGuardFromEnv, nil, tunnelOptions...,
+	)
+}
+
+func credentialAndGuardServerWithSession(
+	rootCtx context.Context,
+	logger *slog.Logger,
+	metrics *observability.Registry,
+	presence *gatewayOnlineTracker,
+	store *connectivity.Store,
+	concentratorService *concentrator.Service,
+	coverageReporter adapter.CoverageReporter,
+	tap *packettap.Manager,
+	enableGuardFromEnv bool,
+	mqttSession *mqttclient.SharedSession,
+	tunnelOptions ...tunnel.Option,
+) (*http.Server, *tunnel.Hub, *mqttguard.Server, error) {
 	if rootCtx == nil {
 		rootCtx = context.Background()
 	}
@@ -137,48 +176,48 @@ func credentialServerWithDiagnostics(
 	loopbackAddr := strings.TrimSpace(envOr("CONNECTIVITY_TUNNEL_LOOPBACK_ADDR", "127.0.0.1:18800"))
 	if loopbackAddr != "" && !strings.EqualFold(loopbackAddr, "off") {
 		if err := tunnel.ValidateLoopbackAddr(loopbackAddr); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 	}
 	serverIdentity, err := tls.LoadX509KeyPair(envOr("CONNECTIVITY_SERVER_CERT", "/run/hvac/gateway-ca/connectivity.crt"), envOr("CONNECTIVITY_SERVER_KEY", "/run/hvac/gateway-ca/connectivity.key"))
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	cert, err := tls.LoadX509KeyPair(envOr("CONNECTIVITY_TLS_CERT", "/run/hvac/pki/mqtt-telemetry-adapter/tls.crt"), envOr("CONNECTIVITY_TLS_KEY", "/run/hvac/pki/mqtt-telemetry-adapter/tls.key"))
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	rootPEM, err := os.ReadFile(envOr("CONNECTIVITY_CA", "/run/hvac/pki/ca.crt"))
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	roots := x509.NewCertPool()
 	if !roots.AppendCertsFromPEM(rootPEM) {
-		return nil, nil, errors.New("invalid workload CA")
+		return nil, nil, nil, errors.New("invalid workload CA")
 	}
 	caPEM, err := os.ReadFile(envOr("GATEWAY_CA_CERT", "/run/hvac/gateway-ca/ca.crt"))
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	keyPEM, err := os.ReadFile(envOr("GATEWAY_CA_KEY", "/run/hvac/gateway-ca/ca.key"))
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	authority, err := connectivity.NewCertificateAuthority(caPEM, keyPEM, envOr("GATEWAY_BROKER_URL", "tls://localhost:8883"))
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	iamPEM, err := os.ReadFile(envOr("CONNECTIVITY_IAM_CERT", "/run/hvac/pki/iam/tls.crt"))
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	block, _ := pem.Decode(iamPEM)
 	if block == nil {
-		return nil, nil, errors.New("invalid IAM signing certificate")
+		return nil, nil, nil, errors.New("invalid IAM signing certificate")
 	}
 	iam, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	var iamTransport *http.Transport
 	if base, ok := http.DefaultTransport.(*http.Transport); ok && base != nil {
@@ -196,7 +235,7 @@ func credentialServerWithDiagnostics(
 	client := &http.Client{Timeout: 3 * time.Second, Transport: iamTransport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	status, err := coreservice.NewHTTPGrantStatusProvider(envOr("CONNECTIVITY_IAM_URL", "https://iam-service:8444"), client)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	authorize := func(r *http.Request, action registryauth.Action) (registryauth.GrantClaims, error) {
 		claims, err := registryauth.VerifyGrant(iam.PublicKey, r.Header.Get("X-Delegation-Grant"))
@@ -245,11 +284,68 @@ func credentialServerWithDiagnostics(
 			slog.Default().Warn("gateway_crl_write_failed", "path", crlOutPath, "error", writeErr.Error())
 		}
 	}
+	var mqttGuard *mqttguard.Server
+	if enableGuardFromEnv {
+		if guardAddr := strings.TrimSpace(os.Getenv("CONNECTIVITY_MQTT_GUARD_ADDR")); guardAddr != "" {
+			if authority == nil {
+				return nil, nil, nil, errors.New("mqttguard requires gateway CA authority")
+			}
+			guardCert := serverIdentity
+			if certPath := strings.TrimSpace(os.Getenv("CONNECTIVITY_MQTT_GUARD_CERT")); certPath != "" {
+				keyPath := strings.TrimSpace(os.Getenv("CONNECTIVITY_MQTT_GUARD_KEY"))
+				if keyPath == "" {
+					return nil, nil, nil, errors.New("CONNECTIVITY_MQTT_GUARD_KEY is required when CONNECTIVITY_MQTT_GUARD_CERT is set")
+				}
+				loaded, loadErr := tls.LoadX509KeyPair(certPath, keyPath)
+				if loadErr != nil {
+					return nil, nil, nil, loadErr
+				}
+				guardCert = loaded
+			}
+			gatewayClientCAs := x509.NewCertPool()
+			if !gatewayClientCAs.AppendCertsFromPEM(caPEM) {
+				return nil, nil, nil, errors.New("parse gateway CA for mqttguard")
+			}
+			upstreamRoots := x509.NewCertPool()
+			if !upstreamRoots.AppendCertsFromPEM(rootPEM) {
+				return nil, nil, nil, errors.New("parse upstream CA for mqttguard")
+			}
+			if upstreamCAPath := strings.TrimSpace(os.Getenv("CONNECTIVITY_MQTT_GUARD_UPSTREAM_CA")); upstreamCAPath != "" {
+				extraPEM, readErr := os.ReadFile(upstreamCAPath)
+				if readErr != nil {
+					return nil, nil, nil, readErr
+				}
+				if !upstreamRoots.AppendCertsFromPEM(extraPEM) {
+					return nil, nil, nil, errors.New("parse CONNECTIVITY_MQTT_GUARD_UPSTREAM_CA")
+				}
+			}
+			var guardErr error
+			mqttGuard, guardErr = mqttguard.New(mqttguard.Config{
+				ListenAddr:         guardAddr,
+				ServerCertificate:  guardCert,
+				GatewayClientCAs:   gatewayClientCAs,
+				UpstreamAddr:       envOr("CONNECTIVITY_MQTT_GUARD_UPSTREAM_ADDR", "mqtt-broker:8883"),
+				UpstreamRootCAs:    upstreamRoots,
+				UpstreamServerName: envOr("CONNECTIVITY_MQTT_SERVER_NAME", "mqtt-broker"),
+				Verifier:           service,
+				Issuer:             authority,
+				Logger:             logger,
+				Metrics:            metrics,
+			})
+			if guardErr != nil {
+				return nil, nil, nil, guardErr
+			}
+		}
+	}
+
 	service.SetRevokeHook(func(gatewayID string) {
 		if presence != nil {
 			presence.SetOnline(gatewayID, false)
 		}
 		tunnelHub.CloseGateway(gatewayID)
+		if mqttGuard != nil {
+			mqttGuard.CloseGateway(gatewayID)
+		}
 		reportGatewayRevokedCoverage(store, coverageReporter, gatewayID)
 		refreshCRL()
 	})
@@ -258,6 +354,9 @@ func credentialServerWithDiagnostics(
 			presence.SetOnline(gatewayID, false)
 		}
 		applyCertificateRevokeHook(tunnelHub, store, coverageReporter, gatewayID, fingerprintSHA256, hasRemainingActive)
+		if mqttGuard != nil {
+			mqttGuard.CloseGatewayByFingerprint(gatewayID, fingerprintSHA256)
+		}
 		refreshCRL()
 	})
 	if crlOutPath != "" && authority != nil && store != nil {
@@ -266,21 +365,30 @@ func credentialServerWithDiagnostics(
 	if loopbackAddr != "" && !strings.EqualFold(loopbackAddr, "off") {
 		if _, err := tunnelHub.StartLoopbackListener(loopbackAddr); err != nil {
 			tunnelHub.Close()
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 	}
 	tunnelHandler := tunnel.NewUpgradeHandler(tunnelHub, connectivity.ParseGatewayPeerCert, service.VerifyActiveCredential)
 	var concentratorHandler http.Handler
-	var onDesiredUpdated func(gatewayID string)
 	if concentratorService != nil {
 		concentratorHandler = concentrator.NewHTTPHandler(concentratorService, authorize)
+	}
+	var onDesiredUpdated func(gatewayID string)
+	if concentratorService != nil || (store != nil && mqttSession != nil) {
 		onDesiredUpdated = func(gatewayID string) {
-			if presence != nil && !presence.IsOnline(gatewayID) {
-				return
+			if store != nil && mqttSession != nil {
+				observability.GoSafe(logger, metrics, "connectivity.shadow_replication_publish", func() {
+					publishGatewayDesiredShadow(rootCtx, store, mqttSession, logger, metrics, tap, gatewayID)
+				})
 			}
-			observability.GoSafe(logger, metrics, "connectivity.concentrator_shadow_reconcile", func() {
-				reconcileConcentratorShadowAsync(rootCtx, concentratorService, logger, gatewayID)
-			})
+			if concentratorService != nil {
+				if presence != nil && !presence.IsOnline(gatewayID) {
+					return
+				}
+				observability.GoSafe(logger, metrics, "connectivity.concentrator_shadow_reconcile", func() {
+					reconcileConcentratorShadowAsync(rootCtx, concentratorService, logger, gatewayID)
+				})
+			}
 		}
 	}
 	var configShadowHandler http.Handler
@@ -309,7 +417,81 @@ func credentialServerWithDiagnostics(
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       30 * time.Second,
-	}, tunnelHub, nil
+	}, tunnelHub, mqttGuard, nil
+}
+
+type shadowDesiredPuller interface {
+	PullGatewayDesiredConfig(ctx context.Context, gatewayID string, sinceRevision int64) (connectivity.GatewayShadowPullResponse, error)
+}
+
+type shadowMQTTPublisher interface {
+	Publish(ctx context.Context, pub *paho.Publish) (*paho.PublishResponse, error)
+}
+
+func recordShadowPublishMetric(metrics *observability.Registry, outcome string) {
+	if metrics == nil {
+		return
+	}
+	_ = metrics.AddCounter(adapter.ShadowReplicationMetricName, adapter.ShadowReplicationMetricHelp, map[string]string{"outcome": outcome}, 1)
+}
+
+func publishGatewayDesiredShadow(
+	rootCtx context.Context,
+	puller shadowDesiredPuller,
+	publisher shadowMQTTPublisher,
+	logger *slog.Logger,
+	metrics *observability.Registry,
+	tap *packettap.Manager,
+	gatewayID string,
+) {
+	if puller == nil || publisher == nil {
+		return
+	}
+	gwID := strings.TrimSpace(gatewayID)
+	if gwID == "" {
+		return
+	}
+	if rootCtx == nil {
+		rootCtx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(rootCtx, 10*time.Second)
+	defer cancel()
+
+	pullResp, err := puller.PullGatewayDesiredConfig(ctx, gwID, 0)
+	if err != nil {
+		recordShadowPublishMetric(metrics, "failed")
+		if logger != nil {
+			logger.Warn("mqtt_shadow_pull_failed", "gateway_id", gwID, "error", err.Error())
+		}
+		return
+	}
+	if pullResp.Desired == nil || pullResp.DesiredRevision < 1 {
+		return
+	}
+	wireBytes, msgID, err := adapter.EncodeShadowChangeBatch(gwID, pullResp.DesiredRevision, pullResp.Desired, time.Now().UTC())
+	if err != nil {
+		recordShadowPublishMetric(metrics, "failed")
+		if logger != nil {
+			logger.Warn("mqtt_shadow_encode_failed", "gateway_id", gwID, "error", err.Error())
+		}
+		return
+	}
+	topic := adapter.ShadowDownlinkTopic(gwID)
+	if tap != nil {
+		tap.Record("DOWNLINK", "SHADOW", gwID, topic, msgID, wireBytes)
+	}
+	if _, err := publisher.Publish(ctx, &paho.Publish{
+		Topic:   topic,
+		QoS:     1,
+		Payload: wireBytes,
+	}); err != nil {
+		recordShadowPublishMetric(metrics, "failed")
+		if logger != nil {
+			logger.Warn("mqtt_shadow_publish_failed", "gateway_id", gwID, "topic", topic, "error", err.Error())
+		}
+		return
+	}
+	recordShadowPublishMetric(metrics, "success")
 }
 
 type gatewayChildLister interface {

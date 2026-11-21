@@ -26,7 +26,7 @@
   },
   "schemaContract": {
     "migrationManifest": "deploy/platform/phase1/migrations/manifest.v1.json",
-    "migrationManifestSha256": "3a212ae0e545ee8c95df0cd374a2dbdc53b30acc94d1f4ba1e69dafa9ba68fb3",
+    "migrationManifestSha256": "c310e65d2c9c108cd1d3d3aa2e190d84b375d2265c0d1aab0fd214875640147a",
     "clickhouseMigrationManifest": "deploy/platform/phase1/clickhouse-migrations/clickhouse-manifest.v1.json",
     "clickhouseMigrationManifestSha256": "8d19187ffea5a89599ae9156d1c67412f5ea4488c4318a5b3bbd26e8166e1588",
     "compatibilityMode": "exact-product-and-manifest",

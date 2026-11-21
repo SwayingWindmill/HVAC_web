@@ -3,8 +3,16 @@ package simulator
 import (
 	"bytes"
 	"context"
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -630,11 +638,17 @@ func syncConfigShadowHTTP(ctx context.Context, config MQTTGatewayConfig, shadow 
 		}
 		client = built
 	}
+	certDER, signer, hasSigningID := loadShadowSigningIdentity(config)
 	snap := shadow.snapshot()
 	pullURL := baseURL + "/gateway/v1/config-shadow?sinceRevision=" + url.QueryEscape(strconv.FormatInt(snap.AppliedRevision, 10))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pullURL, nil)
 	if err != nil {
 		return fmt.Errorf("build config shadow pull request: %w", err)
+	}
+	if hasSigningID {
+		if err := signShadowRequestPoP(req, certDER, signer, time.Now().UTC()); err != nil {
+			return fmt.Errorf("sign config shadow pull PoP: %w", err)
+		}
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -673,6 +687,11 @@ func syncConfigShadowHTTP(ctx context.Context, config MQTTGatewayConfig, shadow 
 		return fmt.Errorf("build config shadow report request: %w", err)
 	}
 	postReq.Header.Set("Content-Type", "application/json")
+	if hasSigningID {
+		if err := signShadowRequestPoP(postReq, certDER, signer, time.Now().UTC()); err != nil {
+			return fmt.Errorf("sign config shadow report PoP: %w", err)
+		}
+	}
 	postResp, err := client.Do(postReq)
 	if err != nil {
 		return fmt.Errorf("report gateway config shadow: %w", err)
@@ -718,6 +737,66 @@ func newShadowHTTPClient(config MQTTGatewayConfig) (*http.Client, error) {
 		Timeout:   15 * time.Second,
 		Transport: &http.Transport{TLSClientConfig: tlsCfg},
 	}, nil
+}
+
+func loadShadowSigningIdentity(config MQTTGatewayConfig) ([]byte, crypto.Signer, bool) {
+	if strings.TrimSpace(config.CertFile) == "" || strings.TrimSpace(config.KeyFile) == "" {
+		return nil, nil, false
+	}
+	identity, err := tls.LoadX509KeyPair(config.CertFile, config.KeyFile)
+	if err != nil || len(identity.Certificate) == 0 {
+		return nil, nil, false
+	}
+	signer, ok := identity.PrivateKey.(crypto.Signer)
+	if !ok {
+		return nil, nil, false
+	}
+	return identity.Certificate[0], signer, true
+}
+
+func signShadowRequestPoP(req *http.Request, certDER []byte, signer crypto.Signer, now time.Time) error {
+	if req == nil || len(certDER) == 0 || signer == nil || req.URL == nil {
+		return errors.New("missing request or signing identity")
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	var nonceBytes [16]byte
+	if _, err := rand.Read(nonceBytes[:]); err != nil {
+		return err
+	}
+	nonce := hex.EncodeToString(nonceBytes[:])
+	ts := strconv.FormatInt(now.UTC().Unix(), 10)
+	certSum := sha256.Sum256(certDER)
+	fingerprint := hex.EncodeToString(certSum[:])
+	pathAndQuery := req.URL.RequestURI()
+	if pathAndQuery == "" {
+		pathAndQuery = "/"
+	}
+	canonical := "HVAC-GW-POP-V1\n" +
+		strings.ToUpper(strings.TrimSpace(req.Method)) + "\n" +
+		pathAndQuery + "\n" +
+		ts + "\n" +
+		nonce + "\n" +
+		fingerprint
+	var sig []byte
+	var err error
+	switch signer.Public().(type) {
+	case ed25519.PublicKey:
+		sig, err = signer.Sign(rand.Reader, []byte(canonical), crypto.Hash(0))
+	case *ecdsa.PublicKey, *rsa.PublicKey:
+		digest := sha256.Sum256([]byte(canonical))
+		sig, err = signer.Sign(rand.Reader, digest[:], crypto.SHA256)
+	default:
+		return errors.New("unsupported gateway PoP signer key type")
+	}
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-Gateway-Cert-Pop-Timestamp", ts)
+	req.Header.Set("X-Gateway-Cert-Pop-Nonce", nonce)
+	req.Header.Set("X-Gateway-Cert-Pop-Signature", base64.StdEncoding.EncodeToString(sig))
+	return nil
 }
 
 func isProtectedEdgeConcentratorUID(unitID int) bool {

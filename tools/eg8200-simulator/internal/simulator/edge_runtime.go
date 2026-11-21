@@ -165,7 +165,8 @@ func newEdgeControlRuntime(config Config, adapters []edgecontrol.DeviceAdapter, 
 		if point.PointType != "COMMAND" {
 			continue
 		}
-		capability, _ := point.SourceMetadata["capability"].(string)
+		meta := parsedPointMetadata(point)
+		capability := meta.Capability
 		if strings.TrimSpace(capability) == "" {
 			return nil, fmt.Errorf("COMMAND point %s has no capability", point.PointCode)
 		}
@@ -174,14 +175,12 @@ func newEdgeControlRuntime(config Config, adapters []edgecontrol.DeviceAdapter, 
 			return nil, fmt.Errorf("device %s exposes duplicate command capability %s", point.DeviceID, capability)
 		}
 		commandByKey[key] = edgeCommandBinding{point: point, address: address}
-		leaseByAddress[address] = controlKind(point) == "NUMBER"
-		if controlKind(point) == "NUMBER" {
-			minimum, minimumOK := point.SourceMetadata["minimum"].(float64)
-			maximum, maximumOK := point.SourceMetadata["maximum"].(float64)
-			if !minimumOK || !maximumOK {
+		leaseByAddress[address] = meta.ControlKind == "NUMBER"
+		if meta.ControlKind == "NUMBER" {
+			if meta.Minimum == nil || meta.Maximum == nil {
 				return nil, fmt.Errorf("numeric COMMAND point %s has invalid limits", point.PointCode)
 			}
-			limits = append(limits, edgeNumericLimit{address: address, minimum: minimum, maximum: maximum})
+			limits = append(limits, edgeNumericLimit{address: address, minimum: *meta.Minimum, maximum: *meta.Maximum})
 		}
 	}
 	intentController, err := edgecontrol.NewIntentController("cloud-command-intent", intentStore)
@@ -461,9 +460,9 @@ func (runtime *EdgeControlRuntime) replaceOrRegisterDeviceLocked(adapter edgecon
 			addr := ch.Address()
 			runtime.addressByPointID[pt.PointID] = addr
 			if pt.PointType == "COMMAND" {
-				if capability, _ := pt.SourceMetadata["capability"].(string); strings.TrimSpace(capability) != "" {
-					runtime.commandByKey[commandBindingKey(pt.DeviceID, capability)] = edgeCommandBinding{point: pt, address: addr}
-					runtime.leaseByAddress[addr] = controlKind(pt) == "NUMBER"
+				if meta := parsedPointMetadata(pt); strings.TrimSpace(meta.Capability) != "" {
+					runtime.commandByKey[commandBindingKey(pt.DeviceID, meta.Capability)] = edgeCommandBinding{point: pt, address: addr}
+					runtime.leaseByAddress[addr] = meta.ControlKind == "NUMBER"
 				}
 			}
 		}
@@ -727,13 +726,14 @@ func (runtime *EdgeControlRuntime) SubmitCommand(request EdgeCommandIntentReques
 }
 
 func requestedEdgeValue(point PointConfig, params map[string]float64) (edgecontrol.Value, error) {
-	if controlKind(point) == "ACTION" {
+	meta := parsedPointMetadata(point)
+	if meta.ControlKind == "ACTION" {
 		if len(params) != 0 {
 			return edgecontrol.Value{}, errors.New("ACTION command does not accept parameters")
 		}
 		return edgecontrol.BooleanValue(true), nil
 	}
-	parameterKey, _ := point.SourceMetadata["parameterKey"].(string)
+	parameterKey := meta.ParameterKey
 	if parameterKey == "" || len(params) != 1 {
 		return edgecontrol.Value{}, errors.New("numeric command requires exactly one parameter")
 	}

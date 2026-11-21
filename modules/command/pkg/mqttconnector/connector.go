@@ -45,15 +45,33 @@ var (
 	mqttConnectorTracer       = observability.NewTracer("mqtt-connector", nil)
 )
 
+func (connector *Connector) activeTracer() *observability.Tracer {
+	if connector != nil && connector.config.Tracer != nil {
+		return connector.config.Tracer
+	}
+	return mqttConnectorTracer
+}
+
 func withCommandTraceContext(ctx context.Context, rawTraceID string) (context.Context, string) {
+	return withCommandTraceContextForTracer(ctx, mqttConnectorTracer, rawTraceID)
+}
+
+func withCommandTraceContextForTracer(ctx context.Context, tracer *observability.Tracer, rawTraceID string) (context.Context, string) {
+	if tracer == nil {
+		tracer = mqttConnectorTracer
+	}
 	normalized := commandmodel.NormalizeTraceID(rawTraceID)
 	if observability.TraceID(ctx) == "" && normalized != "" {
-		ctx = observability.ContextWithRemoteParent(ctx, mqttConnectorTracer, "00-"+normalized+"-0000000000000001-01", "")
+		ctx = observability.ContextWithRemoteParent(ctx, tracer, "00-"+normalized+"-0000000000000001-01", "")
 	}
 	if active := commandmodel.NormalizeTraceID(observability.TraceID(ctx)); active != "" {
 		return ctx, active
 	}
 	return ctx, normalized
+}
+
+func (connector *Connector) withTraceContext(ctx context.Context, rawTraceID string) (context.Context, string) {
+	return withCommandTraceContextForTracer(ctx, connector.activeTracer(), rawTraceID)
 }
 
 type EvidenceStore interface {
@@ -79,6 +97,7 @@ type Config struct {
 	Now                      func() time.Time
 	Logger                   *slog.Logger
 	Metrics                  *observability.Registry
+	Tracer                   *observability.Tracer
 	PacketHook               func(direction, channel, gatewayID, topic, traceID string, payload []byte)
 }
 
@@ -308,7 +327,7 @@ func (connector *Connector) Execute(ctx context.Context, envelope commandmodel.D
 		return commandmodel.ConnectorResult{}, errors.New("MQTT command connector is unavailable")
 	}
 	logger, _ := connector.recoveryDeps()
-	ctx, traceID := withCommandTraceContext(ctx, envelope.TraceID)
+	ctx, traceID := connector.withTraceContext(ctx, envelope.TraceID)
 	envelope.TraceID = traceID
 	route, err := connector.config.TransportState.ResolveCommandRoute(ctx, envelope)
 	if failureCode := commandmodel.RouteFailureCode(err); failureCode != "" {
@@ -397,7 +416,12 @@ func (connector *Connector) Execute(ctx context.Context, envelope commandmodel.D
 	remainingBeforePublish := expireAt.Sub(connector.config.Now().UTC())
 	expirySeconds := messageExpirySeconds(remainingBeforePublish)
 	connector.emitPacketHook("DOWNLINK", "COMMAND", route.GatewayID, commandTopic, request.TraceID, body)
-	publishContext, cancel := context.WithTimeout(ctx, 10*time.Second)
+	publishSpanCtx, publishSpan := connector.activeTracer().Start(ctx, "mqtt.command.publish", observability.SpanKindProducer, map[string]any{
+		"mqtt.gateway_id": route.GatewayID,
+		"mqtt.command_id": envelope.CommandID,
+		"mqtt.topic":      commandTopic,
+	})
+	publishContext, cancel := context.WithTimeout(publishSpanCtx, 10*time.Second)
 	_, publishErr := connector.publishCommand(publishContext, &paho.Publish{
 		QoS:        1,
 		Retain:     false,
@@ -406,6 +430,14 @@ func (connector *Connector) Execute(ctx context.Context, envelope commandmodel.D
 		Properties: &paho.PublishProperties{MessageExpiry: &expirySeconds},
 	})
 	cancel()
+	if publishSpan != nil {
+		if publishErr != nil {
+			publishSpan.SetStatus("error", "publish command failed")
+		} else {
+			publishSpan.SetStatus("ok", "")
+		}
+		publishSpan.End()
+	}
 	if publishErr != nil {
 		publishOutcome := "failed"
 		if errors.Is(publishErr, context.DeadlineExceeded) {
@@ -557,7 +589,7 @@ func ReplyBackedResult(result commandmodel.ConnectorResult) bool {
 }
 
 func (connector *Connector) customDialContext(ctx context.Context, tlsConfig *tls.Config, server *url.URL) (net.Conn, error) {
-	conn, _, _, err := connector.tracker().DialTLS(ctx, tlsConfig, server.Host, 10*time.Second, nil)
+	conn, _, _, err := connector.tracker().DialBrokerURL(ctx, server, 10*time.Second, tlsConfig, nil)
 	return conn, err
 }
 
@@ -841,10 +873,22 @@ func (connector *Connector) processReply(item queuedReply) {
 	if replyTraceID == "" {
 		replyTraceID = item.traceID
 	}
-	resolveCtx, _ := withCommandTraceContext(baseCtx, replyTraceID)
+	resolveCtx, _ := connector.withTraceContext(baseCtx, replyTraceID)
+	resolveCtx, replySpan := connector.activeTracer().Start(resolveCtx, "mqtt.command.reply", observability.SpanKindConsumer, map[string]any{
+		"mqtt.gateway_id": item.gatewayID,
+		"mqtt.command_id": item.commandID,
+	})
 	resolveCtx, cancel := context.WithTimeout(resolveCtx, 5*time.Second)
 	defer cancel()
-	_ = connector.ResolveCorrelationReply(resolveCtx, correlation)
+	resolveErr := connector.ResolveCorrelationReply(resolveCtx, correlation)
+	if replySpan != nil {
+		if resolveErr != nil {
+			replySpan.SetStatus("error", "resolve command reply failed")
+		} else {
+			replySpan.SetStatus("ok", "")
+		}
+		replySpan.End()
+	}
 }
 
 func (connector *Connector) onReply(received paho.PublishReceived) (bool, error) {

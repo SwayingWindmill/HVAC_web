@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -26,23 +27,27 @@ type commandTenantLister interface {
 // commandRuntime dispatches and verifies commands for every Tenant with a Gateway. Which
 // Devices may be controlled and where their commands go both come from the Registry.
 type commandRuntime struct {
-	store            *connectivity.Store
-	tenantLister     commandTenantLister
-	dispatcher       *commanddispatcher.DurableDispatcher
-	dispatcherWorker string
-	verifier         *commanddispatcher.DurableVerificationWorker
-	verifierWorker   string
-	dispatchFn       func(context.Context, string) error
-	verifyFn         func(context.Context, string) error
-	connector        *mqttconnector.Connector
-	metrics          *observability.Registry
-	doneMu           sync.Mutex
-	done             chan struct{}
+	store               *connectivity.Store
+	tenantLister        commandTenantLister
+	dispatcher          *commanddispatcher.DurableDispatcher
+	dispatcherWorker    string
+	verifier            *commanddispatcher.DurableVerificationWorker
+	verifierWorker      string
+	dispatchFn          func(context.Context, string) error
+	verifyFn            func(context.Context, string) error
+	dispatchAnyFn       func(context.Context, time.Duration) error
+	verifyAnyFn         func(context.Context, time.Duration) error
+	dispatchWorkers     int
+	verificationWorkers int
+	connector           *mqttconnector.Connector
+	metrics             *observability.Registry
+	doneMu              sync.Mutex
+	done                chan struct{}
 }
 
 // loadCommandRuntime builds the command runtime from defaults for the Phase 1 compose
 // network; every value can be overridden by its environment variable.
-func loadCommandRuntime(ctx context.Context, store *connectivity.Store, logger *slog.Logger, metrics *observability.Registry, tap *packettap.Manager) (*commandRuntime, error) {
+func loadCommandRuntime(ctx context.Context, store *connectivity.Store, logger *slog.Logger, metrics *observability.Registry, tracer *observability.Tracer, tap *packettap.Manager) (*commandRuntime, error) {
 	ca := envOr("COMMAND_RUNTIME_CA", "/run/hvac/pki/ca.crt")
 	dispatcherIdentity := workloadtls.CertificateFiles{
 		CertificatePath: envOr("COMMAND_DISPATCHER_CERT", "/run/hvac/pki/command-dispatcher/tls.crt"),
@@ -94,6 +99,7 @@ func loadCommandRuntime(ctx context.Context, store *connectivity.Store, logger *
 		ReplyTimeout:            25 * time.Second,
 		Logger:                  logger,
 		Metrics:                 metrics,
+		Tracer:                  tracer,
 		PacketHook:              packetHook,
 	})
 	if err != nil {
@@ -102,16 +108,71 @@ func loadCommandRuntime(ctx context.Context, store *connectivity.Store, logger *
 
 	dispatcherWorkerID := envOr("COMMAND_DISPATCHER_WORKER_ID", hostnameOr("connectivity-command-dispatcher"))
 	verifierWorkerID := envOr("COMMAND_VERIFIER_WORKER_ID", hostnameOr("connectivity-command-verifier"))
+	dispatcher := commanddispatcher.NewDurable(dispatcherRuntimeClient, connector, dispatcherWorkerID, 45*time.Second)
+	verifier := commanddispatcher.NewDurableVerificationWorker(verifierRuntimeClient, commanddispatcher.NewAuthoritativeReportedStateVerifier(verificationReader), verifierWorkerID, 5*time.Second)
 	return &commandRuntime{
-		store:            store,
-		tenantLister:     store,
-		dispatcher:       commanddispatcher.NewDurable(dispatcherRuntimeClient, connector, dispatcherWorkerID, 45*time.Second),
-		dispatcherWorker: dispatcherWorkerID,
-		verifier:         commanddispatcher.NewDurableVerificationWorker(verifierRuntimeClient, commanddispatcher.NewAuthoritativeReportedStateVerifier(verificationReader), verifierWorkerID, 5*time.Second),
-		verifierWorker:   verifierWorkerID,
-		connector:        connector,
-		metrics:          metrics,
+		store:               store,
+		tenantLister:        store,
+		dispatcher:          dispatcher,
+		dispatcherWorker:    dispatcherWorkerID,
+		verifier:            verifier,
+		verifierWorker:      verifierWorkerID,
+		dispatchAnyFn:       dispatcher.RunAnyOnce,
+		verifyAnyFn:         verifier.RunAnyOnce,
+		dispatchWorkers:     parseWorkerPoolCount("COMMAND_DISPATCH_WORKERS", defaultDispatchWorkers),
+		verificationWorkers: parseWorkerPoolCount("COMMAND_VERIFICATION_WORKERS", defaultVerificationWorkers),
+		connector:           connector,
+		metrics:             metrics,
 	}, nil
+}
+
+func parseWorkerPoolCount(envKey string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(envKey))
+	if raw == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(raw)
+	if err != nil || parsed < 1 {
+		return fallback
+	}
+	if parsed > maxCommandPoolWorkers {
+		return maxCommandPoolWorkers
+	}
+	return parsed
+}
+
+func (runtime *commandRuntime) dispatchAnyOnce() func(context.Context, time.Duration) error {
+	if runtime.dispatchAnyFn != nil {
+		return runtime.dispatchAnyFn
+	}
+	if runtime.dispatchFn == nil && runtime.dispatcher != nil {
+		return runtime.dispatcher.RunAnyOnce
+	}
+	return nil
+}
+
+func (runtime *commandRuntime) verifyAnyOnce() func(context.Context, time.Duration) error {
+	if runtime.verifyAnyFn != nil {
+		return runtime.verifyAnyFn
+	}
+	if runtime.verifyFn == nil && runtime.verifier != nil {
+		return runtime.verifier.RunAnyOnce
+	}
+	return nil
+}
+
+func (runtime *commandRuntime) effectiveDispatchWorkers() int {
+	if runtime != nil && runtime.dispatchWorkers > 0 {
+		return runtime.dispatchWorkers
+	}
+	return defaultDispatchWorkers
+}
+
+func (runtime *commandRuntime) effectiveVerificationWorkers() int {
+	if runtime != nil && runtime.verificationWorkers > 0 {
+		return runtime.verificationWorkers
+	}
+	return defaultVerificationWorkers
 }
 
 func (runtime *commandRuntime) dispatchOnce() func(context.Context, string) error {
@@ -195,18 +256,46 @@ func (runtime *commandRuntime) RunWithDrain(claimCtx, execCtx context.Context, l
 	done := runtime.resetDone()
 	defer close(done)
 
+	dispatchAnyFn := runtime.dispatchAnyOnce()
+	verifyAnyFn := runtime.verifyAnyOnce()
 	dispatchFn := runtime.dispatchOnce()
 	verifyFn := runtime.verifyOnce()
-	logger.Info("connectivity_command_runtime_started", "dispatcher_worker_id", runtime.dispatcherWorker, "verifier_worker_id", runtime.verifierWorker)
+	logger.Info(
+		"connectivity_command_runtime_started",
+		"dispatcher_worker_id", runtime.dispatcherWorker,
+		"verifier_worker_id", runtime.verifierWorker,
+		"dispatch_workers", runtime.effectiveDispatchWorkers(),
+		"verification_workers", runtime.effectiveVerificationWorkers(),
+	)
 	var workers sync.WaitGroup
-	if dispatchFn != nil {
+	switch {
+	case dispatchAnyFn != nil:
+		count := runtime.effectiveDispatchWorkers()
+		for i := 0; i < count; i++ {
+			workers.Add(1)
+			observability.GoSafe(logger, runtime.metrics, "connectivity.command_dispatch", func() {
+				defer workers.Done()
+				runtime.runAnyWorkerLoop(claimCtx, execCtx, logger, "dispatch", 40*time.Second, commandAnyClaimWait, dispatchAnyFn, commandservice.ErrNoDispatchAvailable)
+			})
+		}
+	case dispatchFn != nil:
 		workers.Add(1)
 		observability.GoSafe(logger, runtime.metrics, "connectivity.command_dispatch", func() {
 			defer workers.Done()
 			runtime.runForEveryTenantLoop(claimCtx, execCtx, logger, "dispatch", 40*time.Second, dispatchFn, commandservice.ErrNoDispatchAvailable)
 		})
 	}
-	if verifyFn != nil {
+	switch {
+	case verifyAnyFn != nil:
+		count := runtime.effectiveVerificationWorkers()
+		for i := 0; i < count; i++ {
+			workers.Add(1)
+			observability.GoSafe(logger, runtime.metrics, "connectivity.command_verification", func() {
+				defer workers.Done()
+				runtime.runAnyWorkerLoop(claimCtx, execCtx, logger, "verification", 12*time.Second, commandAnyClaimWait, verifyAnyFn, commandservice.ErrVerificationNotAvailable)
+			})
+		}
+	case verifyFn != nil:
 		workers.Add(1)
 		observability.GoSafe(logger, runtime.metrics, "connectivity.command_verification", func() {
 			defer workers.Done()
@@ -215,6 +304,64 @@ func (runtime *commandRuntime) RunWithDrain(claimCtx, execCtx context.Context, l
 	}
 	<-claimCtx.Done()
 	workers.Wait()
+}
+
+func (runtime *commandRuntime) runAnyWorkerLoop(
+	claimCtx, execCtx context.Context,
+	logger *slog.Logger,
+	work string,
+	timeout, waitWindow time.Duration,
+	runAny func(context.Context, time.Duration) error,
+	noWork error,
+) {
+	backoff := commandTenantBaseBackoff
+	for claimCtx.Err() == nil {
+		panicked := false
+		var err error
+		func() {
+			defer observability.Recover(logger, runtime.metrics, "connectivity.command_"+work, func(any) {
+				panicked = true
+			})
+			turnCtx, cancel := context.WithTimeout(execCtx, timeout)
+			defer cancel()
+			err = runAny(turnCtx, waitWindow)
+		}()
+		if claimCtx.Err() != nil {
+			return
+		}
+		if panicked {
+			backoff = commandWaitOnError(claimCtx, time.Second)
+			continue
+		}
+		if err == nil || errors.Is(err, noWork) {
+			backoff = commandTenantBaseBackoff
+			continue
+		}
+		if logger != nil {
+			logger.Warn("command_"+work+"_worker_failed", "error", err.Error())
+		}
+		delay := backoff
+		if backoff < commandTenantMaxBackoff {
+			backoff *= 2
+			if backoff > commandTenantMaxBackoff {
+				backoff = commandTenantMaxBackoff
+			}
+		}
+		_ = commandWaitOnError(claimCtx, delay)
+	}
+}
+
+func commandWaitOnError(ctx context.Context, delay time.Duration) time.Duration {
+	if delay <= 0 {
+		return commandTenantBaseBackoff
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
+	}
+	return commandTenantBaseBackoff
 }
 
 func (runtime *commandRuntime) runForEveryTenantLoop(claimCtx, execCtx context.Context, logger *slog.Logger, work string, timeout time.Duration, runOnce func(context.Context, string) error, noWork error) {
@@ -247,6 +394,10 @@ func (runtime *commandRuntime) Close(ctx context.Context) error {
 }
 
 const (
+	defaultDispatchWorkers      = 16
+	defaultVerificationWorkers  = 8
+	maxCommandPoolWorkers       = 256
+	commandAnyClaimWait         = 2 * time.Second
 	maxConcurrentCommandTenants = 4
 	commandTenantBaseBackoff    = 100 * time.Millisecond
 	commandIdleMaxBackoff       = 1500 * time.Millisecond

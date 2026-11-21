@@ -171,7 +171,7 @@ func (driver *simulatedDeviceAdapter) Apply(_ context.Context, _ edgecontrol.Pro
 				continue
 			}
 		} else {
-			parameterKey, _ := point.SourceMetadata["parameterKey"].(string)
+			parameterKey := parsedPointMetadata(point).ParameterKey
 			if parameterKey == "" || decision.Effective.Type != edgecontrol.DataTypeDouble {
 				results = append(results, edgecontrol.DeviceWriteResult{Address: decision.Address, Success: false, Code: "COMMAND_PARAMETER_INVALID"})
 				continue
@@ -290,7 +290,7 @@ func edgeValue(dataType edgecontrol.DataType, raw any) (edgecontrol.Value, error
 
 func semanticChannelForPoint(profile edgecontrol.CapabilityProfileID, point PointConfig) (edgecontrol.SemanticChannel, bool) {
 	if point.PointType == "COMMAND" {
-		capability, _ := point.SourceMetadata["capability"].(string)
+		capability := parsedPointMetadata(point).Capability
 		switch capability {
 		case "START":
 			return edgecontrol.SemanticStartCommand, true
@@ -380,6 +380,5 @@ func semanticChannelForPoint(profile edgecontrol.CapabilityProfileID, point Poin
 }
 
 func controlKind(point PointConfig) string {
-	value, _ := point.SourceMetadata["controlKind"].(string)
-	return value
+	return parsedPointMetadata(point).ControlKind
 }

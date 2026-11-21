@@ -3,12 +3,12 @@ package commandservice
 import (
 	"context"
 	"crypto"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -60,6 +60,8 @@ type ControlAuthority struct {
 	failureNotifier        ControlFailureNotifier
 	failureQueue           controlFailureQueue
 	now                    func() time.Time
+	dispatchCursor         atomic.Uint64
+	verificationCursor     atomic.Uint64
 }
 
 // Close drains queued control failure notifications before returning.
@@ -192,6 +194,78 @@ func (a *ControlAuthority) CompleteConnectorEvidence(ctx context.Context, eviden
 
 func (a *ControlAuthority) CancelPending(ctx context.Context, request commandmodel.CancelPendingRequest) ([]string, error) {
 	return a.store.CancelPending(ctx, request)
+}
+
+// ClaimAnyDispatch scans tenants with due dispatchable work via DueTenantLister,
+// enforcing the full 3-phase Twin + Live pre-dispatch safety gate through ClaimDispatch.
+func (a *ControlAuthority) ClaimAnyDispatch(ctx context.Context, leaseOwner string, leaseFor, waitDuration time.Duration) (commandmodel.DispatchEnvelope, error) {
+	if a == nil || a.runtime == nil {
+		return commandmodel.DispatchEnvelope{}, errors.New("control authority is not configured")
+	}
+	if strings.TrimSpace(leaseOwner) == "" || leaseFor < time.Second || leaseFor > 2*time.Minute {
+		return commandmodel.DispatchEnvelope{}, ErrInvalidRequest
+	}
+	lister, ok := a.runtime.(DueTenantLister)
+	if !ok {
+		return commandmodel.DispatchEnvelope{}, ErrNoDispatchAvailable
+	}
+	var subscribe func() <-chan struct{}
+	if sub, hasSub := a.runtime.(WorkSignalSubscriber); hasSub {
+		subscribe = sub.SubscribeDispatchWork
+	}
+	nowFn := a.now
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+	return claimAnyWork(
+		ctx,
+		waitDuration,
+		subscribe,
+		func(scanCtx context.Context) ([]string, error) {
+			return lister.DueDispatchTenants(scanCtx, nowFn().UTC())
+		},
+		&a.dispatchCursor,
+		func(claimCtx context.Context, tenantID string) (commandmodel.DispatchEnvelope, error) {
+			return a.ClaimDispatch(claimCtx, tenantID, leaseOwner, leaseFor)
+		},
+		ErrNoDispatchAvailable,
+	)
+}
+
+// ClaimAnyVerification scans tenants with due verification work via DueTenantLister
+// and delegates verification claim to ClaimVerification.
+func (a *ControlAuthority) ClaimAnyVerification(ctx context.Context, leaseOwner string, leaseFor, waitDuration time.Duration) (commandmodel.VerificationEnvelope, error) {
+	if a == nil || a.runtime == nil {
+		return commandmodel.VerificationEnvelope{}, errors.New("control authority is not configured")
+	}
+	if strings.TrimSpace(leaseOwner) == "" || leaseFor < time.Second || leaseFor > time.Minute {
+		return commandmodel.VerificationEnvelope{}, ErrInvalidRequest
+	}
+	lister, ok := a.runtime.(DueTenantLister)
+	if !ok {
+		return commandmodel.VerificationEnvelope{}, ErrVerificationNotAvailable
+	}
+	var subscribe func() <-chan struct{}
+	if sub, hasSub := a.runtime.(WorkSignalSubscriber); hasSub {
+		subscribe = sub.SubscribeVerificationWork
+	}
+	nowFn := a.now
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+	return claimAnyWork(
+		ctx,
+		waitDuration,
+		subscribe,
+		func(scanCtx context.Context) ([]string, error) {
+			return lister.DueVerificationTenants(scanCtx, nowFn().UTC())
+		},
+		&a.verificationCursor,
+		func(claimCtx context.Context, tenantID string) (commandmodel.VerificationEnvelope, error) {
+			return a.ClaimVerification(claimCtx, tenantID, leaseOwner, leaseFor)
+		},
+		ErrVerificationNotAvailable,
+	)
 }
 
 func (a *ControlAuthority) evaluatePreDispatch(
@@ -1126,13 +1200,21 @@ func resolveAssetCommandTarget(
 		return resolvedCommandPointTarget{}, unavailableControlError("The Command Device is unavailable.")
 	}
 
-	capabilityName, _ := point.SourceMetadata["capability"].(string)
-	capability := commandmodel.Capability(strings.TrimSpace(capabilityName))
-	profile, supported := commandmodel.CapabilityProfileFor(capability)
-	declaredRevision, _ := point.SourceMetadata["capabilityRevision"].(string)
-	feedbackPointKey, _ := point.SourceMetadata["feedbackPointKey"].(string)
-	feedbackPointKey = strings.TrimSpace(feedbackPointKey)
-	if !supported || strings.TrimSpace(declaredRevision) != profile.Revision || feedbackPointKey == "" {
+	meta, metaErr := commandmodel.ParseCommandPointMetadata(point.SourceMetadata)
+	if metaErr != nil {
+		if strings.Contains(metaErr.Error(), "interlockChecks") {
+			return resolvedCommandPointTarget{}, &ControlError{
+				HTTPStatus: http.StatusBadRequest, Code: "COMMAND_REQUEST_INVALID",
+				Title: "Command request invalid", Detail: "Command point interlock configuration is invalid.",
+			}
+		}
+		return resolvedCommandPointTarget{}, &ControlError{
+			HTTPStatus: http.StatusServiceUnavailable, Code: "COMMAND_UNAVAILABLE",
+			Title: "Command unavailable", Detail: "The COMMAND Point does not declare a supported authoritative capability contract.", Retryable: true,
+		}
+	}
+	profile, supported := commandmodel.CapabilityProfileFor(meta.Capability)
+	if !supported || meta.CapabilityRevision != profile.Revision || meta.FeedbackPointKey == "" {
 		return resolvedCommandPointTarget{}, &ControlError{
 			HTTPStatus: http.StatusServiceUnavailable, Code: "COMMAND_UNAVAILABLE",
 			Title: "Command unavailable", Detail: "The COMMAND Point does not declare a supported authoritative capability contract.", Retryable: true,
@@ -1142,7 +1224,7 @@ func resolveAssetCommandTarget(
 	var feedbackPoint TelemetryPointDTO
 	var feedbackFound bool
 	for _, candidate := range model.TelemetryPoints {
-		if candidate.ReportingDeviceID == device.ID && candidate.PointCode == feedbackPointKey && strings.EqualFold(candidate.Status, "ACTIVE") {
+		if candidate.ReportingDeviceID == device.ID && candidate.PointCode == meta.FeedbackPointKey && strings.EqualFold(candidate.Status, "ACTIVE") {
 			feedbackPoint = candidate
 			feedbackFound = true
 			break
@@ -1152,42 +1234,26 @@ func resolveAssetCommandTarget(
 		return resolvedCommandPointTarget{}, unavailableControlError("The Command feedback Point is unavailable.")
 	}
 
-	interlocks, interlockErr := parsePointInterlockChecks(point.SourceMetadata, model)
+	interlocks, interlockErr := validatePointInterlockChecks(meta.InterlockChecks, model)
 	if interlockErr != nil {
 		return resolvedCommandPointTarget{}, &ControlError{
 			HTTPStatus: http.StatusBadRequest, Code: "COMMAND_REQUEST_INVALID",
 			Title: "Command request invalid", Detail: "Command point interlock configuration is invalid.",
 		}
 	}
-	actuationMode, _ := point.SourceMetadata["actuationMode"].(string)
 	return resolvedCommandPointTarget{
 		asset:         asset,
 		device:        device,
 		point:         point,
 		feedbackPoint: feedbackPoint,
-		capability:    capability,
+		capability:    meta.Capability,
 		profile:       profile,
-		actuationMode: strings.ToUpper(strings.TrimSpace(actuationMode)),
+		actuationMode: meta.ActuationMode,
 		interlocks:    interlocks,
 	}, nil
 }
 
-func parsePointInterlockChecks(sourceMetadata map[string]any, model SiteAssetModelDTO) ([]commandmodel.InterlockCheck, error) {
-	if len(sourceMetadata) == 0 {
-		return nil, nil
-	}
-	raw, present := sourceMetadata["interlockChecks"]
-	if !present || raw == nil {
-		return nil, nil
-	}
-	encoded, err := json.Marshal(raw)
-	if err != nil {
-		return nil, err
-	}
-	var parsed []commandmodel.InterlockCheck
-	if err := json.Unmarshal(encoded, &parsed); err != nil {
-		return nil, err
-	}
+func validatePointInterlockChecks(parsed []commandmodel.InterlockCheck, model SiteAssetModelDTO) ([]commandmodel.InterlockCheck, error) {
 	if len(parsed) == 0 {
 		return nil, nil
 	}

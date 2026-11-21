@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -220,3 +221,59 @@ func TestCommandRuntimeRunWithDrainFinishesInFlightCommand(t *testing.T) {
 		t.Fatalf("dispatchCalls = %d, want 1 (no new claim allowed after claimCtx cancel)", dispatchCalls.Load())
 	}
 }
+
+func TestCommandRuntimeDecoupledWorkerPoolsExecuteConcurrently(t *testing.T) {
+	t.Parallel()
+
+	claimCtx, cancelClaim := context.WithCancel(context.Background())
+	defer cancelClaim()
+
+	var dispActive, dispMax atomic.Int32
+	var verCalls atomic.Int32
+	allDispEntered := make(chan struct{})
+	releaseDisp := make(chan struct{})
+	var closeAllOnce sync.Once
+
+	rt := &commandRuntime{
+		dispatchWorkers:     4,
+		verificationWorkers: 2,
+		dispatchAnyFn: func(_ context.Context, _ time.Duration) error {
+			cur := dispActive.Add(1)
+			for {
+				prev := dispMax.Load()
+				if cur <= prev || dispMax.CompareAndSwap(prev, cur) {
+					break
+				}
+			}
+			if cur == 4 {
+				closeAllOnce.Do(func() { close(allDispEntered) })
+			}
+			<-releaseDisp
+			dispActive.Add(-1)
+			return commandservice.ErrNoDispatchAvailable
+		},
+		verifyAnyFn: func(_ context.Context, _ time.Duration) error {
+			verCalls.Add(1)
+			time.Sleep(15 * time.Millisecond)
+			return commandservice.ErrVerificationNotAvailable
+		},
+	}
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	go rt.RunWithDrain(claimCtx, context.Background(), logger)
+
+	select {
+	case <-allDispEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("expected 4 concurrent dispatch workers, max observed=%d", dispMax.Load())
+	}
+	close(releaseDisp)
+	cancelClaim()
+	if err := rt.Wait(context.Background()); err != nil {
+		t.Fatalf("Wait returned error: %v", err)
+	}
+	if dispMax.Load() < 4 || verCalls.Load() < 1 {
+		t.Fatalf("unexpected concurrency stats dispMax=%d verCalls=%d", dispMax.Load(), verCalls.Load())
+	}
+}
+

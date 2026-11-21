@@ -4,10 +4,17 @@
 pattern write hvac/v1/%u/up/#
 pattern read hvac/v1/%u/down/#
 
-# Connectivity consumes every Gateway's uplink and sends concentrator RPC requests.
+# Connectivity consumes Gateway uplinks (excluding command replies), subscribes to
+# Mosquitto connection notices, and sends concentrator RPC and shadow replication messages.
 user mqtt-telemetry-adapter
-topic read hvac/v1/+/up/#
+topic read hvac/v1/+/up/telemetry
+topic read hvac/v1/+/up/event
+topic read hvac/v1/+/up/status
+topic read hvac/v1/+/up/concentrator
+topic read hvac/v1/+/up/shadow
+topic read $SYS/broker/log/N
 topic write hvac/v1/+/down/concentrator
+topic write hvac/v1/+/down/shadow
 
 # Connectivity's command connection sends to every Gateway and reads every reply.
 user command-dispatcher

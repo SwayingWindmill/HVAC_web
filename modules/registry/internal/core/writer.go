@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 )
 
@@ -247,6 +249,14 @@ func (input PointMutation) Validate() error {
 	}
 	if input.PointType == "COMMAND" && !input.Writable || input.PointType != "COMMAND" && input.PointType != "SETTING" && input.Writable {
 		return ErrInvalidMutation
+	}
+	if _, err := edgecontrol.ParseEdgePointSourceMetadata(input.SourceMetadata); err != nil {
+		return ErrInvalidMutation
+	}
+	if input.PointType == "COMMAND" {
+		if err := commandmodel.ValidateCommandPointMetadata(input.SourceMetadata); err != nil {
+			return ErrInvalidMutation
+		}
 	}
 	if input.PointType != "COUNTER" {
 		if input.CounterDecreaseMode != nil || input.CounterRolloverModulus != nil {

@@ -10,7 +10,7 @@ const pkiDir = join(outDir, 'pki');
 const rpt = join(outDir, 'acl.json');
 const cf = ['-p', `hvac-mqtt-acl-${process.pid}`, '-f', resolve('infra/telemetry/mqtt/compose.yaml')];
 const [GW, ADP, CMD] = ['mqtt-gateway', 'mqtt-adapter', 'command-dispatcher'], GWB = `${GW}-b`;
-const [UT, UC, UR, DC, DN] = ['up/telemetry', 'up/concentrator', 'up/reply', 'down/command', 'down/concentrator'];
+const [UT, UC, UR, US, DC, DN, DS] = ['up/telemetry', 'up/concentrator', 'up/reply', 'up/shadow', 'down/command', 'down/concentrator', 'down/shadow'];
 const tp = (n, s) => `hvac/v1/018f3e00-4000-7000-8000-000000000${n}00/${s}`;
 const env = { ...process.env, MQTT_PKI_DIR: pkiDir, MQTT_HOST_PORT: '0' };
 const now = () => new Date().toISOString();
@@ -82,15 +82,33 @@ try {
   port = +compose(['port', 'mqtt-broker', '8883']).split(':').pop();
 
   const a = report.assertions, base = 'hvac/v1/+/up', [sUp, sRep] = [`$share/connectivity/${base}/#`, `$share/command-dispatcher/${base}/reply`];
-  const uplinks = [[GW, tp(1, UT)], [GW, tp(1, UC)], [GWB, tp(2, 'up/event')]], expected = uplinks.map(([, t]) => t).sort();
-  const [s0] = await sub(ADP, `${base}/#`, 3, 15000);
+  const uplinks = [
+    [GW, tp(1, UT)],
+    [GW, tp(1, UC)],
+    [GWB, tp(2, 'up/event')],
+    [GWB, tp(2, 'up/status')],
+    [GW, tp(1, US)],
+  ];
+  const expected = uplinks.map(([, t]) => t).sort();
+  const [s0] = await sub(ADP, `${base}/#`, expected.length, 15000);
+  const [sSysLog] = await sub(ADP, '$SYS/broker/log/N', 1, 5000);
+  a.gatewayBReplyWhileAdapterWildcard = await pub(GWB, tp(2, UR));
+  if (a.gatewayBReplyWhileAdapterWildcard !== 0 && a.gatewayBReplyWhileAdapterWildcard !== 16) {
+    throw new Error(`gatewayBReplyWhileAdapterWildcard: ${a.gatewayBReplyWhileAdapterWildcard}`);
+  }
   for (const [k, id, t, want] of [
     ['gatewayAOwnTopic', ...uplinks[0], 0], ['gatewayAOwnConcentrator', ...uplinks[1], 0], ['gatewayBOwnTopic', ...uplinks[2], 0],
+    ['gatewayBOwnStatus', ...uplinks[3], 0], ['gatewayAOwnShadow', ...uplinks[4], 0],
     ['gatewayAIntoGatewayB', GW, tp(2, UT), 135], ['gatewayAConcIntoB', GW, tp(2, UC), 135], ['gatewayAIntoDownlink', GW, tp(1, DC), 135],
-    ['gatewayAIntoConcDown', GW, tp(1, DN), 135], ['adapterConcToGatewayB', ADP, tp(2, DN), 16], ['commandsToGatewayB', CMD, tp(2, DC), 16],
-    ['commandsIntoUplink', CMD, tp(1, UT), 135],
+    ['gatewayAIntoConcDown', GW, tp(1, DN), 135], ['adapterConcToGatewayB', ADP, tp(2, DN), 16], ['adapterShadowToGatewayB', ADP, tp(2, DS), 16],
+    ['commandsToGatewayB', CMD, tp(2, DC), 16], ['commandsIntoShadow', CMD, tp(2, DS), 135], ['commandsIntoUplink', CMD, tp(1, UT), 135],
   ]) if ((a[k] = await pub(id, t)) !== want) throw new Error(`${k}: ${a[k]}`);
   eq(a.connectivityReceived = await s0, expected, 'uplinks');
+  if ((a.brokerSysLogCount = (await sSysLog).length) < 1) throw new Error('expected at least 1 $SYS/broker/log/N notice');
+
+  const [sAdpRep] = await sub(ADP, `${base}/reply`, 1, 1500);
+  await pub(GWB, tp(2, UR));
+  eq(a.adapterReplyBlocked = await sAdpRep, [], 'adapterReplyBlocked');
 
   for (const [k, id, f, pubs, want] of [
     ['sharedConnectivityReceived', ADP, sUp, uplinks, expected],
@@ -100,6 +118,10 @@ try {
     for (const [pId, t] of pubs) if ((await pub(pId, t)) !== 0) throw new Error(`${k}: ${t}`);
     eq(a[k] = await done, want, k);
   }
+
+  const [sGwShadow] = await sub(GWB, tp(2, DS), 1, 5000);
+  if ((a.adapterShadowDelivered = await pub(ADP, tp(2, DS))) !== 0) throw new Error(`adapterShadowDelivered: ${a.adapterShadowDelivered}`);
+  eq(a.gatewayBShadowReceived = await sGwShadow, [tp(2, DS)], 'shadowDownlink');
 
   const steals = await Promise.all([sUp, sRep, `$share/steal/${tp(2, 'down/#')}`].map((f) => sub(GW, f, 1, 1500)));
   for (const [id, t] of [...uplinks, [GWB, tp(2, UR)], [CMD, tp(2, DC)]]) await pub(id, t);

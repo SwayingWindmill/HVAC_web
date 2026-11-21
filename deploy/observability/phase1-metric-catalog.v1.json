@@ -50,6 +50,9 @@
     {"name":"hvac_mqtt_concentrator_rpc_duration_seconds","type":"histogram","labels":["outcome"],"seriesBudget":8},
     {"name":"hvac_mqtt_command_publishes_total","type":"counter","labels":["outcome"],"seriesBudget":8},
     {"name":"hvac_mqtt_command_reply_wait_seconds","type":"histogram","labels":["outcome"],"seriesBudget":8},
+    {"name":"hvac_mqtt_guard_handshakes_total","type":"counter","labels":["outcome"],"seriesBudget":8},
+    {"name":"hvac_mqtt_guard_active_sessions","type":"gauge","labels":[],"seriesBudget":1},
+    {"name":"hvac_mqtt_shadow_replication_total","type":"counter","labels":["outcome"],"seriesBudget":8},
 
     {"name":"hvac_edge_mqtt_connected","type":"gauge","labels":[],"seriesBudget":1},
     {"name":"hvac_edge_mqtt_connections_total","type":"counter","labels":["outcome"],"seriesBudget":4},
@@ -71,7 +74,7 @@
     "route": [
       "commands.create", "commands.approve", "commands.get", "commands.reconcile", "commands.cancel",
       "control.state", "control.mode", "control.lock", "control.shutdown",
-      "dispatch.claim", "dispatch.resolve", "verification.claim", "verification.resolve", "connector.prepare", "connector.complete",
+      "dispatch.claim", "dispatch.claim-any", "dispatch.resolve", "verification.claim", "verification.claim-any", "verification.resolve", "connector.prepare", "connector.complete",
       "alarms.list", "alarms.get", "alarms.acknowledge", "alarms.assign", "alarms.unassign", "alarms.suppress", "alarms.unsuppress", "alarms.close", "alarms.reopen", "unknown"
     ],
     "outcome": [
@@ -79,7 +82,7 @@
       "pre_send_rejected", "request_committed", "acknowledged", "verified", "inconclusive", "mismatch", "timed_out", "unknown"
     ],
     "reason_family": ["transport", "dependency", "authorization", "scope", "capacity", "rate_limited", "unknown"],
-    "message_type": ["telemetry", "event", "status", "unknown"],
+    "message_type": ["telemetry", "event", "status", "shadow", "unknown"],
     "priority": ["VERY_HIGH", "HIGH", "MEDIUM", "LOW", "UNKNOWN"]
   }
 }

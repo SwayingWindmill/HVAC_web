@@ -36,6 +36,13 @@ type DurableCommandStore interface {
 	ResolveDispatch(ctx context.Context, envelope commandmodel.DispatchEnvelope, result commandmodel.ConnectorResult) error
 }
 
+// AnyTenantCommandStore is an optional extension of DurableCommandStore supporting
+// cross-tenant fair claim with bounded wait.
+type AnyTenantCommandStore interface {
+	DurableCommandStore
+	ClaimAnyDispatch(ctx context.Context, leaseOwner string, leaseFor, waitDuration time.Duration) (commandmodel.DispatchEnvelope, error)
+}
+
 type DispatchResolutionFinalizer interface {
 	FinalizeDispatch(ctx context.Context, envelope commandmodel.DispatchEnvelope, result commandmodel.ConnectorResult) error
 }
@@ -70,6 +77,23 @@ func (d *DurableDispatcher) RunOnce(ctx context.Context, tenantID string) error 
 	if err != nil {
 		return err
 	}
+	return d.executeAndResolve(ctx, envelope)
+}
+
+// RunAnyOnce claims the next due pre-dispatch gated Command across all tenants and executes it.
+func (d *DurableDispatcher) RunAnyOnce(ctx context.Context, waitDuration time.Duration) error {
+	anyStore, ok := d.store.(AnyTenantCommandStore)
+	if !ok {
+		return errors.New("command store does not support cross-tenant claim")
+	}
+	envelope, err := anyStore.ClaimAnyDispatch(ctx, d.workerID, d.leaseFor, waitDuration)
+	if err != nil {
+		return err
+	}
+	return d.executeAndResolve(ctx, envelope)
+}
+
+func (d *DurableDispatcher) executeAndResolve(ctx context.Context, envelope commandmodel.DispatchEnvelope) error {
 	execCtx, traceID := withCommandTraceContext(ctx, envelope.TraceID)
 	result, err := d.connector.Execute(execCtx, envelope)
 	if err != nil {

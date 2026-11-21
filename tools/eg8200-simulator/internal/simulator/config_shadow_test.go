@@ -81,6 +81,7 @@ func TestConfigShadowReconnectDeltaSyncAndPersistence(t *testing.T) {
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/gateway/v1/config-shadow":
+			assertValidGatewayShadowPoPHeaders(t, r, certPath)
 			mu.Lock()
 			sinceRaw := r.URL.Query().Get("sinceRevision")
 			pullQueries = append(pullQueries, sinceRaw)
@@ -97,6 +98,7 @@ func TestConfigShadowReconnectDeltaSyncAndPersistence(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(resp)
 		case r.Method == http.MethodPost && r.URL.Path == "/gateway/v1/config-shadow/report":
+			assertValidGatewayShadowPoPHeaders(t, r, certPath)
 			var req GatewayShadowReportRequest
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				t.Errorf("decode shadow report failed: %v", err)

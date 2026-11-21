@@ -1,6 +1,29 @@
-import { randomInt } from 'node:crypto';
+import { createHash, createPrivateKey, randomBytes, randomInt, sign, X509Certificate } from 'node:crypto';
 import * as net from 'node:net';
 import * as tls from 'node:tls';
+
+export function buildGatewayPopHeaders(
+  method: string,
+  pathAndQuery: string,
+  certPem: string | Buffer,
+  keyPem: string | Buffer,
+  nowMs = Date.now(),
+): Record<string, string> {
+  const cert = new X509Certificate(certPem);
+  const certFingerprint = createHash('sha256').update(cert.raw).digest('hex');
+  const timestamp = String(Math.floor(nowMs / 1000));
+  const nonce = randomBytes(16).toString('hex');
+  const normalizedPath = pathAndQuery.trim() || '/';
+  const canonical = ['HVAC-GW-POP-V1', method.toUpperCase(), normalizedPath, timestamp, nonce, certFingerprint].join('\n');
+  const privateKey = createPrivateKey(keyPem);
+  const alg = privateKey.asymmetricKeyType === 'ed25519' ? null : 'sha256';
+  const signature = sign(alg, Buffer.from(canonical, 'utf8'), privateKey).toString('base64');
+  return {
+    'X-Gateway-Cert-Pop-Timestamp': timestamp,
+    'X-Gateway-Cert-Pop-Nonce': nonce,
+    'X-Gateway-Cert-Pop-Signature': signature,
+  };
+}
 
 export const TUNNEL_PROTOCOL_NAME = 'hvac-gateway-tunnel/v1';
 export const ALLOWED_TARGET_PORT = 1880;
@@ -312,11 +335,15 @@ export class GatewayTunnelClient {
         socket.on('data', onData);
         socket.once('error', onErr);
         socket.once('close', onClose);
+        const popHeaders = buildGatewayPopHeaders('GET', pathAndQuery, creds.certPem, creds.keyPem);
         const reqHead =
           `GET ${pathAndQuery} HTTP/1.1\r\n` +
           `Host: ${target.host}\r\n` +
           `Connection: Upgrade\r\n` +
-          `Upgrade: ${TUNNEL_PROTOCOL_NAME}\r\n\r\n`;
+          `Upgrade: ${TUNNEL_PROTOCOL_NAME}\r\n` +
+          `X-Gateway-Cert-Pop-Timestamp: ${popHeaders['X-Gateway-Cert-Pop-Timestamp']}\r\n` +
+          `X-Gateway-Cert-Pop-Nonce: ${popHeaders['X-Gateway-Cert-Pop-Nonce']}\r\n` +
+          `X-Gateway-Cert-Pop-Signature: ${popHeaders['X-Gateway-Cert-Pop-Signature']}\r\n\r\n`;
         socket.write(reqHead);
       });
 

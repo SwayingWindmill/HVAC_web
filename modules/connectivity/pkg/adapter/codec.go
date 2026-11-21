@@ -169,7 +169,8 @@ func (JSONV2Codec) canDecodeProbe(messageType string, probe versionProbe) bool {
 		return false
 	}
 	if messageType == MessageTypeStatus {
-		return probe.SchemaVersion == EnvelopeSchemaVersion
+		_, _, ok := parseV2SchemaVersion(probe.SchemaVersion)
+	return ok
 	}
 	return true
 }
@@ -200,10 +201,10 @@ type v2StatusWire struct {
 
 func (JSONV2Codec) DecodeStatus(payload []byte, topicGatewayID string) (StatusEnvelope, error) {
 	var wire v2StatusWire
-	if err := decodeStrictEnvelope(payload, &wire); err != nil {
+	if err := decodeV2Envelope(payload, &wire); err != nil {
 		return StatusEnvelope{}, err
 	}
-	if strings.TrimSpace(wire.SchemaVersion) != EnvelopeSchemaVersion {
+	if _, _, ok := parseV2SchemaVersion(wire.SchemaVersion); !ok {
 		return StatusEnvelope{}, fmt.Errorf("unsupported MQTT status schemaVersion %s", wire.SchemaVersion)
 	}
 	gw := strings.TrimSpace(wire.GatewayID)
@@ -214,7 +215,7 @@ func (JSONV2Codec) DecodeStatus(payload []byte, topicGatewayID string) (StatusEn
 		return StatusEnvelope{}, errors.New("MQTT status payload missing online boolean")
 	}
 	status := StatusEnvelope{
-		SchemaVersion: EnvelopeSchemaVersion,
+		SchemaVersion: strings.TrimSpace(wire.SchemaVersion),
 		MessageID:     strings.TrimSpace(wire.MessageID),
 		GatewayID:     gw,
 		SessionID:     strings.TrimSpace(wire.SessionID),
@@ -247,6 +248,39 @@ func (JSONV2Codec) DecodeStatus(payload []byte, topicGatewayID string) (StatusEn
 		status.HasEventTime = true
 	}
 	return status, nil
+}
+
+func parseV2SchemaVersion(raw string) (minor int, allowUnknown bool, ok bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == EnvelopeSchemaVersion {
+		return 0, false, true
+	}
+	suffix, hasPrefix := strings.CutPrefix(trimmed, "2.")
+	if !hasPrefix || suffix == "" || len(suffix) > 6 || (len(suffix) > 1 && suffix[0] == '0') {
+		return 0, false, false
+	}
+	val := 0
+	for i := 0; i < len(suffix); i++ {
+		ch := suffix[i]
+		if ch < '0' || ch > '9' {
+			return 0, false, false
+		}
+		val = val*10 + int(ch-'0')
+	}
+	if val < 1 {
+		return 0, false, false
+	}
+	return val, true, true
+}
+
+func decodeV2Envelope(payload []byte, destination any) error {
+	probe, err := decodeEnvelopeVersion(payload)
+	if err == nil {
+		if _, allowUnknown, ok := parseV2SchemaVersion(probe.SchemaVersion); ok && allowUnknown {
+			return decodeForwardCompatEnvelope(payload, destination)
+		}
+	}
+	return decodeStrictEnvelope(payload, destination)
 }
 
 // CompactJSONV1Codec decodes compact JSON v1.0 telemetry/status payloads and legacy

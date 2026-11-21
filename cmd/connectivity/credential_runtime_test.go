@@ -10,8 +10,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eclipse/paho.golang/paho"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
+	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/connectivity"
+	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/packettap"
 )
 
 type fakeRevokeChildLister struct {
@@ -149,5 +152,66 @@ func TestGatewayOnlineTrackerPublishesOnlineCountGauge(t *testing.T) {
 	}
 	if body := scrape(); !strings.Contains(body, "hvac_mqtt_online_gateways 0\n") {
 		t.Fatalf("expected gauge 0 in /metrics after offline, got:\n%s", body)
+	}
+}
+
+type fakeShadowPuller struct {
+	resp connectivity.GatewayShadowPullResponse
+	err  error
+}
+
+func (f *fakeShadowPuller) PullGatewayDesiredConfig(context.Context, string, int64) (connectivity.GatewayShadowPullResponse, error) {
+	return f.resp, f.err
+}
+
+type fakeShadowPublisher struct {
+	published []*paho.Publish
+	err       error
+}
+
+func (f *fakeShadowPublisher) Publish(_ context.Context, pub *paho.Publish) (*paho.PublishResponse, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	f.published = append(f.published, pub)
+	return &paho.PublishResponse{}, nil
+}
+
+func TestPublishGatewayDesiredShadowEmitsChangeBatchAndMetrics(t *testing.T) {
+	const gwID = "018f3e00-4000-7000-8000-000000000201"
+	metrics := observability.NewRegistry()
+	tap := packettap.NewManager()
+	puller := &fakeShadowPuller{
+		resp: connectivity.GatewayShadowPullResponse{
+			GatewayID:       gwID,
+			DesiredRevision: 4,
+			HasDelta:        true,
+			Desired: &connectivity.GatewayDesiredConfig{
+				DesiredRevision:     4,
+				PointMappings:       []connectivity.GatewayPointMapping{},
+				SamplingPolicies:    []connectivity.GatewaySamplingPolicy{},
+				ConcentratorConfigs: map[string]connectivity.ConcentratorUnitShadow{},
+			},
+		},
+	}
+	pub := &fakeShadowPublisher{}
+	publishGatewayDesiredShadow(context.Background(), puller, pub, nil, metrics, tap, gwID)
+	if len(pub.published) != 1 || pub.published[0].Topic != adapter.ShadowDownlinkTopic(gwID) || pub.published[0].QoS != 1 {
+		t.Fatalf("unexpected published shadow messages: %+v", pub.published)
+	}
+
+	pub.err = fmt.Errorf("broker disconnected")
+	publishGatewayDesiredShadow(context.Background(), puller, pub, nil, metrics, tap, gwID)
+
+	rec := httptest.NewRecorder()
+	metrics.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := rec.Body.String()
+	for _, want := range []string{
+		`hvac_mqtt_shadow_replication_total{outcome="success"} 1`,
+		`hvac_mqtt_shadow_replication_total{outcome="failed"} 1`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected metric %q in:\n%s", want, body)
+		}
 	}
 }

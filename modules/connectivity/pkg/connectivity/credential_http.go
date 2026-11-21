@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 )
@@ -18,7 +19,9 @@ import (
 // checked against Registry by CredentialService, not by a caller's Tenant header.
 type CredentialAuthorizer func(*http.Request, registryauth.Action) (registryauth.GrantClaims, error)
 
-// ParseGatewayPeerCert parses nginx's URL-escaped PEM client certificate header.
+// ParseGatewayPeerCert parses nginx's URL-escaped PEM client certificate header and
+// enforces Gateway Proof-of-Possession signatures when PoP headers are supplied or
+// CONNECTIVITY_REQUIRE_FORWARDED_CERT_POP is enabled.
 func ParseGatewayPeerCert(r *http.Request) (*x509.Certificate, error) {
 	encoded, err := url.QueryUnescape(r.Header.Get("X-Gateway-Client-Cert"))
 	if err != nil {
@@ -31,6 +34,11 @@ func ParseGatewayPeerCert(r *http.Request) (*x509.Certificate, error) {
 	peer, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
 		return nil, ErrEnrollmentRejected
+	}
+	if shouldVerifyGatewayRequestPoP(r) {
+		if popErr := VerifyGatewayRequestPoP(r, peer, defaultPoPReplayGuard, time.Now().UTC()); popErr != nil {
+			return nil, popErr
+		}
 	}
 	return peer, nil
 }
@@ -157,6 +165,7 @@ func NewCredentialHandlerWithDiagnostics(service *CredentialService, authorize C
 		mux.Handle("POST /gateway/v1/config-shadow/report", configShadowHandler)
 		mux.Handle("GET /internal/v1/gateways/{gatewayId}/config-shadow", configShadowHandler)
 		mux.Handle("PUT /internal/v1/gateways/{gatewayId}/config-shadow", configShadowHandler)
+		mux.Handle("POST /internal/v1/gateways/{gatewayId}/config-shadow:upsert-template-driver", configShadowHandler)
 	}
 	if diagnosticsHandler != nil {
 		mux.Handle("GET /internal/v1/gateways/{gatewayId}/quarantine", diagnosticsHandler)
@@ -289,7 +298,7 @@ func NewCredentialHandlerWithDiagnostics(service *CredentialService, authorize C
 		finish(w, value, err)
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		isRetireRoute := isGatewayRetireRequest(r)
+		allowCoreService := isGatewayRetireRequest(r) || isGatewayTemplateDriverUpsertRequest(r)
 		trusted := false
 		if r.TLS != nil && len(r.TLS.VerifiedChains) > 0 && len(r.TLS.VerifiedChains[0]) > 0 {
 			for _, uri := range r.TLS.VerifiedChains[0][0].URIs {
@@ -297,7 +306,7 @@ func NewCredentialHandlerWithDiagnostics(service *CredentialService, authorize C
 				case "spiffe://hvac.local/platform-gateway":
 					trusted = true
 				case "spiffe://hvac.local/platform-core-service":
-					if isRetireRoute {
+					if allowCoreService {
 						trusted = true
 					}
 				}
@@ -325,4 +334,16 @@ func isGatewayRetireRequest(r *http.Request) bool {
 	}
 	gatewayID, ok := strings.CutSuffix(rest, ":retire")
 	return ok && strings.TrimSpace(gatewayID) != ""
+}
+
+func isGatewayTemplateDriverUpsertRequest(r *http.Request) bool {
+	if r == nil || r.Method != http.MethodPost {
+		return false
+	}
+	rest, ok := strings.CutPrefix(r.URL.Path, "/internal/v1/gateways/")
+	if !ok {
+		return false
+	}
+	gatewayID, hasSuffix := strings.CutSuffix(rest, "/config-shadow:upsert-template-driver")
+	return hasSuffix && !strings.Contains(gatewayID, "/") && strings.TrimSpace(gatewayID) != ""
 }
