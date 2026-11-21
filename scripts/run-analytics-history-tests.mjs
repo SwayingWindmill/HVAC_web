@@ -69,8 +69,8 @@ function registryContainer(service) {
   return registryCompose(['ps', '-q', service]);
 }
 
-function clickHouse(sql) {
-  return run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'telemetry_history', '--query', sql]);
+function clickHouse(sql, user = 'telemetry_history') {
+  return run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', user, '--query', sql]);
 }
 
 function clickHouseMustFail(sql, user) {
@@ -599,6 +599,10 @@ try {
   report.assertions.boundedCounterDeltasIndex = clickHouse(`EXPLAIN indexes = 1 SELECT count() FROM telemetry_history.counter_deltas_from(points = [toUUID('${resetCounterPointId}')], since = '2026-08-11 11:01:00.000', until = '2026-08-11 11:02:00.000')`);
   const deltaKeys = report.assertions.boundedCounterDeltasIndex.split('PrimaryKey').slice(1).map((block) => /Keys:([\s\S]*?)Condition:/.exec(block)?.[1]?.trim() ?? '');
   if (deltaKeys.length === 0 || deltaKeys.some((keys) => !keys.includes('point_id'))) throw new Error(`bounded Counter deltas do not filter points on the key: ${JSON.stringify(deltaKeys)}`);
+  const observationScans = (report.assertions.boundedCounterDeltasIndex.match(/ReadFromMergeTree \(telemetry_history\.observations\)/g) ?? []).length;
+  if (observationScans === 0 || observationScans > 4) {
+    throw new Error(`bounded Counter deltas multiplied base table scans (${observationScans} > 4)`);
+  }
 
   const metricId = '01990000-1500-7000-8000-000000000001';
   const metricVersionId = '01990000-1510-7000-8000-000000000001';
@@ -811,15 +815,16 @@ try {
   const expectedForecastTraceability = '4|15|60|VALID|3|7|01990000-1720-7000-8000-000000000001|01990000-1740-7000-8000-000000000001|01990000-1760-7000-8000-000000000001|01990000-1770-7000-8000-000000000001|4';
   if (report.assertions.forecastSeriesTraceability !== expectedForecastTraceability) throw new Error(`unexpected Forecast traceability ${report.assertions.forecastSeriesTraceability}`);
 
-  report.assertions.readerCanSelectCanonical = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'analytics_projector_reader', '--query', "SELECT count() FROM telemetry_history.counter_deltas_from(points = [toUUID('01990000-1000-7000-8000-000000000010')], since = '2026-08-11 11:01:00.000', until = '2026-08-11 11:02:00.000')"]);
+  report.assertions.readerCanSelectCanonical = clickHouse("SELECT count() FROM telemetry_history.counter_deltas_from(points = [toUUID('01990000-1000-7000-8000-000000000010')], since = '2026-08-11 11:01:00.000', until = '2026-08-11 11:02:00.000')", 'analytics_projector_reader');
+  report.assertions.readerCanSelectHourly = clickHouse('SELECT count() FROM analytics.energy_hourly', 'analytics_projector_reader');
   report.assertions.readerCannotSelectRaw = clickHouseMustFail('SELECT count() FROM telemetry_history.observations', 'analytics_projector_reader');
-  report.assertions.historyQueryCanSelect = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'telemetry_query_history_reader', '--query', 'SELECT count() FROM telemetry_history.observations']);
-  report.assertions.cubeCanSelect = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'cube_analytics_reader', '--query', 'SELECT count() FROM analytics.energy_interval_facts']);
-  report.assertions.cubeCanSelectHourly = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'cube_analytics_reader', '--query', 'SELECT count() FROM analytics.energy_hourly']);
-  report.assertions.metricReaderCanSelect = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'metric_engine_reader', '--query', 'SELECT count() FROM analytics.metric_result_facts']);
-  report.assertions.cubeCanSelectMetric = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'cube_analytics_reader', '--query', 'SELECT count() FROM analytics.metric_result_facts']);
-  report.assertions.forecastReaderCanSelect = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'forecast_service_reader', '--query', 'SELECT count() FROM analytics.forecast_series']);
-  report.assertions.cubeCanSelectForecast = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'cube_analytics_reader', '--query', 'SELECT count() FROM analytics.forecast_series']);
+  report.assertions.historyQueryCanSelect = clickHouse('SELECT count() FROM telemetry_history.observations', 'telemetry_query_history_reader');
+  report.assertions.cubeCanSelect = clickHouse('SELECT count() FROM analytics.energy_interval_facts', 'cube_analytics_reader');
+  report.assertions.cubeCanSelectHourly = clickHouse('SELECT count() FROM analytics.energy_hourly', 'cube_analytics_reader');
+  report.assertions.metricReaderCanSelect = clickHouse('SELECT count() FROM analytics.metric_result_facts', 'metric_engine_reader');
+  report.assertions.cubeCanSelectMetric = clickHouse('SELECT count() FROM analytics.metric_result_facts', 'cube_analytics_reader');
+  report.assertions.forecastReaderCanSelect = clickHouse('SELECT count() FROM analytics.forecast_series', 'forecast_service_reader');
+  report.assertions.cubeCanSelectForecast = clickHouse('SELECT count() FROM analytics.forecast_series', 'cube_analytics_reader');
   report.assertions.readerCannotInsert = clickHouseMustFail('INSERT INTO analytics.energy_interval_facts (fact_id) VALUES (generateUUIDv4())', 'analytics_projector_reader');
   report.assertions.metricReaderCannotInsert = clickHouseMustFail("INSERT INTO analytics.metric_result_facts (result_id) VALUES (generateUUIDv4())", 'metric_engine_reader');
   report.assertions.metricWriterCannotSelect = clickHouseMustFail('SELECT count() FROM analytics.metric_result_facts', 'metric_engine_writer');
@@ -839,10 +844,10 @@ try {
   report.assertions.historyQueryCannotInsert = clickHouseMustFail('INSERT INTO telemetry_history.observations (observation_id) VALUES (generateUUIDv4())', 'telemetry_query_history_reader');
   report.assertions.historyQueryCannotSelectAnalytics = clickHouseMustFail('SELECT count() FROM analytics.energy_interval_facts', 'telemetry_query_history_reader');
   report.assertions.writerCannotSelect = clickHouseMustFail('SELECT count() FROM analytics.energy_interval_facts', 'analytics_projector_writer');
-  report.assertions.fddReaderCanSelectObservations = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'fdd_service_reader', '--query', 'SELECT count() FROM telemetry_history.observations']);
+  report.assertions.fddReaderCanSelectObservations = clickHouse('SELECT count() FROM telemetry_history.observations', 'fdd_service_reader');
   report.assertions.fddReaderCannotSelectAnalytics = clickHouseMustFail('SELECT count() FROM analytics.energy_interval_facts', 'fdd_service_reader');
   report.assertions.fddReaderCannotInsert = clickHouseMustFail('INSERT INTO telemetry_history.observations (observation_id) VALUES (generateUUIDv4())', 'fdd_service_reader');
-  report.assertions.mvReaderCanSelectMetricResults = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'mv_service_reader', '--query', 'SELECT count() FROM analytics.metric_result_facts']);
+  report.assertions.mvReaderCanSelectMetricResults = clickHouse('SELECT count() FROM analytics.metric_result_facts', 'mv_service_reader');
   report.assertions.mvReaderCannotSelectObservations = clickHouseMustFail('SELECT count() FROM telemetry_history.observations', 'mv_service_reader');
   report.assertions.mvReaderCannotInsert = clickHouseMustFail('INSERT INTO analytics.metric_result_facts (result_id) VALUES (generateUUIDv4())', 'mv_service_reader');
   report.assertions.cubeCannotInsert = clickHouseMustFail('INSERT INTO analytics.energy_interval_facts (fact_id) VALUES (generateUUIDv4())', 'cube_analytics_reader');

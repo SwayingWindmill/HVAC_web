@@ -57,6 +57,9 @@ docker run --rm --user 0 --entrypoint sh -v "$R:/runtime" postgres:16.4-bookworm
   chown -R 999:999 /runtime/backups/postgres
   chown -R 10001:10001 /runtime/data/otel-collector
 '
+if docker volume inspect "${HVAC_LOCAL_PROJECT}_connectivity-spool" >/dev/null 2>&1; then
+  docker run --rm --user 0 --entrypoint chown -v "${HVAC_LOCAL_PROJECT}_connectivity-spool:/data" postgres:16.4-bookworm -R 65532:65532 /data
+fi
 # Postgres requires 0700 on PGDATA; keep data/ untouched and restrict secret/PKI dirs to 0750.
 find "$R" -mindepth 1 -type d \
   ! \( -path "$R/data" -o -path "$R/data/*" \
@@ -153,6 +156,26 @@ if [ -f infra/telemetry/mqtt/mosquitto.conf ] && [ -f infra/telemetry/mqtt/acl ]
     || ! docker exec "${HVAC_LOCAL_PROJECT}-mqtt-broker-1" cat /mosquitto/config/acl 2>/dev/null | cmp -s - infra/telemetry/mqtt/acl \
     || { [ -f "$R/gateway-ca/trusted-client-ca.pem" ] && ! docker exec "${HVAC_LOCAL_PROJECT}-mqtt-broker-1" cat /mosquitto/config/gateway-ca.pem 2>/dev/null | cmp -s - "$R/gateway-ca/trusted-client-ca.pem"; }; then
     $L --integration up -d --force-recreate --no-deps mqtt-broker
+  fi
+fi
+if [[ "$clickhouse_mode" == local ]]; then
+  ch_drifted=0
+  for ch_spec in \
+    "deploy/platform/phase1/clickhouse/query-log-profile.xml:/etc/clickhouse-server/users.d/query-log-profile.xml" \
+    "deploy/platform/phase1/clickhouse/resource-limits.xml:/etc/clickhouse-server/config.d/resource-limits.xml" \
+    "deploy/platform/phase1/clickhouse/system-logs.xml:/etc/clickhouse-server/config.d/system-logs.xml" \
+    "deploy/platform/phase1/clickhouse/default-security.xml:/etc/clickhouse-server/users.d/default-security.xml" \
+    "deploy/platform/phase1/clickhouse/prometheus.xml:/etc/clickhouse-server/config.d/prometheus.xml" \
+    "deploy/platform/phase1/backup/clickhouse-backup.xml:/etc/clickhouse-server/config.d/backup.xml"; do
+    ch_host_file="${ch_spec%%:*}"
+    ch_container_file="${ch_spec#*:}"
+    if [ -f "$ch_host_file" ] && ! docker exec "${HVAC_LOCAL_PROJECT}-clickhouse-1" cat "$ch_container_file" 2>/dev/null | cmp -s - "$ch_host_file"; then
+      ch_drifted=1
+      break
+    fi
+  done
+  if [ "$ch_drifted" -eq 1 ]; then
+    $L --integration up -d --force-recreate --no-deps clickhouse
   fi
 fi
 # Intelligence services, the Operations Agent included (DEEPSEEK_API_KEY in the runtime env, 2026-10-16).

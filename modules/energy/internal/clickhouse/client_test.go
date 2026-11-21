@@ -646,3 +646,76 @@ func TestReaderHourlyPowerProfileQueriesUTCAndOptionalDeviceFilter(t *testing.T)
 		t.Fatal("expected error for unordered window")
 	}
 }
+
+func TestReaderDeduplicatesDeltaFilterArrays(t *testing.T) {
+	tenantID := "018f4d00-0000-7000-8000-000000000001"
+	siteID := "018f4e00-1000-7000-8000-000000000001"
+	pointA := "018f4e00-2100-7000-8000-000000000001"
+	pointB := "018f4e00-2100-7000-8000-000000000002"
+	var seenNextBatchParams url.Values
+	var seenWindowParams url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		sql := string(body)
+		query := request.URL.Query()
+		switch {
+		case strings.Contains(sql, "energy_projection_checkpoints"):
+		case strings.Contains(sql, "counter_arrivals"):
+			for _, row := range []map[string]any{
+				{"history_sequence": 100, "observation_id": "018f4e00-3000-7000-8000-000000000001", "tenant_id": tenantID, "site_id": siteID, "point_id": pointA, "sampled_at": "2026-10-13 04:00:00.000"},
+				{"history_sequence": 101, "observation_id": "018f4e00-3000-7000-8000-000000000002", "tenant_id": tenantID, "site_id": siteID, "point_id": pointA, "sampled_at": "2026-10-13 04:01:00.000"},
+				{"history_sequence": 102, "observation_id": "018f4e00-3000-7000-8000-000000000003", "tenant_id": tenantID, "site_id": siteID, "point_id": pointB, "sampled_at": "2026-10-13 04:02:00.000"},
+				{"history_sequence": 103, "observation_id": "018f4e00-3000-7000-8000-000000000004", "tenant_id": tenantID, "site_id": siteID, "point_id": pointA, "sampled_at": "2026-10-13 04:03:00.000"},
+			} {
+				if err := json.NewEncoder(writer).Encode(row); err != nil {
+					t.Error(err)
+				}
+			}
+		case strings.Contains(sql, "has({observations:Array(UUID)}"):
+			seenNextBatchParams = query
+		case strings.Contains(sql, "counter_deltas_from"):
+			seenWindowParams = query
+		default:
+			t.Errorf("unexpected query %s", sql)
+		}
+	}))
+	defer server.Close()
+
+	reader, err := NewReader(ReaderConfig{
+		BaseURL: server.URL, SourceDatabase: "telemetry_history",
+		AnalyticsDatabase: "analytics", AnalyticsTable: "energy_interval_facts",
+		HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reader.NextBatch(context.Background(), 256); err != nil {
+		t.Fatalf("NextBatch() error = %v", err)
+	}
+	if got := seenNextBatchParams.Get("param_tenants"); got != "['"+tenantID+"']" {
+		t.Fatalf("param_tenants = %s, want deduplicated single tenant", got)
+	}
+	if got := seenNextBatchParams.Get("param_sites"); got != "['"+siteID+"']" {
+		t.Fatalf("param_sites = %s, want deduplicated single site", got)
+	}
+	if got := seenNextBatchParams.Get("param_points"); got != "['"+pointA+"','"+pointB+"']" {
+		t.Fatalf("param_points = %s, want deduplicated points", got)
+	}
+	if got := seenNextBatchParams.Get("param_observations"); got != "['018f4e00-3000-7000-8000-000000000001','018f4e00-3000-7000-8000-000000000002','018f4e00-3000-7000-8000-000000000003','018f4e00-3000-7000-8000-000000000004']" {
+		t.Fatalf("param_observations = %s, want all 4 observations kept", got)
+	}
+
+	start := time.Date(2026, 10, 13, 4, 0, 0, 0, time.UTC)
+	if _, err := reader.WindowDeltas(context.Background(), energy.DirtyWindow{
+		TenantID: tenantID,
+		SiteID:   siteID,
+		PointIDs: []string{pointA, pointB, pointA},
+		Start:    start,
+		End:      start.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("WindowDeltas() error = %v", err)
+	}
+	if got := seenWindowParams.Get("param_points"); got != "['"+pointA+"','"+pointB+"']" {
+		t.Fatalf("WindowDeltas param_points = %s, want deduplicated points", got)
+	}
+}

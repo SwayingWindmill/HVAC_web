@@ -23,3 +23,4 @@ clickhouse|infra/telemetry/clickhouse/init/022-energy-hourly-v2-decimal.sql
 clickhouse|infra/telemetry/clickhouse/init/023-meter-balance-and-layered-efficiency.sql
 clickhouse|infra/telemetry/clickhouse/init/024-energy-runtime-wiring.sql
 clickhouse|infra/telemetry/clickhouse/init/025-clickhouse-complete-governance.sql
+clickhouse|infra/telemetry/clickhouse/init/026-counter-deltas-single-pass-and-grants.sql
