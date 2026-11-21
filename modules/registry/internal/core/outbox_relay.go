@@ -50,6 +50,7 @@ func truncateRelayUTF8(value string, maxBytes int) string {
 var relayedOutboxEventTypes = []string{
 	"registry.device.created",
 	"registry.device.updated",
+	"registry.device.hardware_replaced",
 	"registry.point.created",
 	"registry.point.updated",
 	"registry.import.committed",
@@ -535,7 +536,7 @@ WHERE event_id = $1::uuid
 
 func (r *OutboxRelay) deliverEvent(ctx context.Context, event claimedOutboxEvent) error {
 	switch event.EventType {
-	case "registry.device.created", "registry.device.updated":
+	case "registry.device.created", "registry.device.updated", "registry.device.hardware_replaced":
 		return r.deliverDeviceSync(ctx, event)
 	case "registry.point.created", "registry.point.updated":
 		deviceID, pointKey, err := r.lookupPointDevice(ctx, event.TenantID, event.SubjectID)

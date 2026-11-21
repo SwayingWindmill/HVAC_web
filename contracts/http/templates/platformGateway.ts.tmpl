@@ -562,6 +562,8 @@ export const deviceSchema = z.object({
   revision: revisionSchema,
   createdAt: instantSchema,
   updatedAt: instantSchema,
+  externalId: z.string().min(1).max(256).optional(),
+  protocolAddress: z.record(z.string(), z.unknown()).optional(),
   tags: tagMapSchema.optional(),
 }).strict();
 export const deviceBindingSchema = z.object({
@@ -825,6 +827,31 @@ export const deviceMutationSchema = z.object({
   status: registryStatusSchema,
   tags: tagMapSchema.optional(),
   meta: mutationMetaSchema,
+}).strict();
+export const replaceDeviceHardwareRequestSchema = z.object({
+  newExternalId: z.string().trim().min(1).max(256),
+  newGatewayDeviceId: uuidV7Schema.optional(),
+  newSourceKey: z.string().min(1).max(128).regex(/^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/).optional(),
+  newProtocolAddress: z.record(z.string(), z.unknown()).optional(),
+  meta: mutationMetaSchema,
+}).strict();
+export const replaceDeviceHardwareResultSchema = z.object({
+  replacementId: uuidV7Schema,
+  tenantId: uuidV7Schema,
+  siteId: uuidV7Schema,
+  deviceId: uuidV7Schema,
+  revision: revisionSchema,
+  previousExternalId: z.string().min(1).max(256).nullable(),
+  newExternalId: z.string().min(1).max(256),
+  previousGatewayDeviceId: uuidV7Schema.nullable(),
+  newGatewayDeviceId: uuidV7Schema.nullable(),
+  previousProtocolAddress: z.record(z.string(), z.unknown()).nullable(),
+  newProtocolAddress: z.record(z.string(), z.unknown()).nullable(),
+  reason: z.string().min(1).max(1000),
+  replacedBy: z.string().min(1).max(256),
+  replacedAt: instantSchema,
+  device: deviceSchema,
+  replayed: z.boolean(),
 }).strict();
 export const sensorMutationSchema = z.object({
   code: z.string().min(1).max(64).regex(/^[a-z0-9][a-z0-9-]{0,63}$/),
@@ -1867,6 +1894,8 @@ export type SiteMutation = z.infer<typeof siteMutationSchema>;
 export type SpaceMutation = z.infer<typeof spaceMutationSchema>;
 export type AssetMutation = z.infer<typeof assetMutationSchema>;
 export type DeviceMutation = z.infer<typeof deviceMutationSchema>;
+export type ReplaceDeviceHardwareRequest = z.infer<typeof replaceDeviceHardwareRequestSchema>;
+export type ReplaceDeviceHardwareResult = z.infer<typeof replaceDeviceHardwareResultSchema>;
 export type SensorMutation = z.infer<typeof sensorMutationSchema>;
 export type PointMutation = z.infer<typeof pointMutationSchema>;
 export type RebindRequest = z.infer<typeof rebindRequestSchema>;
@@ -2307,6 +2336,9 @@ export function createPlatformGatewayClient(baseUrl = '') {
     ),
     updateSiteDevice: (siteId: string, deviceId: string, body: DeviceMutation, csrfToken: string, init?: RequestInit) => mutation(
       '__SITE_DEVICE_DETAIL_PATH__'.replace('{siteId}', encodeURIComponent(siteId)).replace('{deviceId}', encodeURIComponent(deviceId)), 'PATCH', body, deviceMutationSchema, deviceSchema, withCsrf(csrfToken, init),
+    ),
+    replaceDeviceHardware: (siteId: string, deviceId: string, body: ReplaceDeviceHardwareRequest, csrfToken: string, init?: RequestInit) => mutation(
+      '__SITE_DEVICE_REPLACE_HARDWARE_PATH__'.replace('{siteId}', encodeURIComponent(siteId)).replace('{deviceId}', encodeURIComponent(deviceId)), 'POST', body, replaceDeviceHardwareRequestSchema, replaceDeviceHardwareResultSchema, withCsrf(csrfToken, init),
     ),
     createSiteSensor: (siteId: string, body: SensorMutation, csrfToken: string, init?: RequestInit) => mutation(
       '__SITE_SENSORS_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), 'POST', body, sensorMutationSchema, sensorSchema, withCsrf(csrfToken, init),

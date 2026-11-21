@@ -615,6 +615,7 @@ type RegistryWriter interface {
 	SaveSpace(context.Context, registryauth.GrantClaims, SpaceMutation) (Space, bool, error)
 	SaveAsset(context.Context, registryauth.GrantClaims, AssetMutation) (Asset, bool, error)
 	SaveDevice(context.Context, registryauth.GrantClaims, DeviceMutation) (Device, bool, error)
+	ReplaceDeviceHardware(context.Context, registryauth.GrantClaims, ReplaceDeviceHardwareRequest) (ReplaceDeviceHardwareResult, error)
 	SaveSensor(context.Context, registryauth.GrantClaims, SensorMutation) (Sensor, bool, error)
 	SavePoint(context.Context, registryauth.GrantClaims, PointMutation) (TelemetryPoint, bool, error)
 	Rebind(context.Context, registryauth.GrantClaims, RebindRequest) (BindingMutationResult, error)

@@ -280,6 +280,9 @@ func (*memoryBillingBackend) SaveAsset(context.Context, registryauth.GrantClaims
 func (*memoryBillingBackend) SaveDevice(context.Context, registryauth.GrantClaims, DeviceMutation) (Device, bool, error) {
 	return Device{}, false, ErrInvalidMutation
 }
+func (*memoryBillingBackend) ReplaceDeviceHardware(context.Context, registryauth.GrantClaims, ReplaceDeviceHardwareRequest) (ReplaceDeviceHardwareResult, error) {
+	return ReplaceDeviceHardwareResult{}, ErrInvalidMutation
+}
 func (*memoryBillingBackend) SaveSensor(context.Context, registryauth.GrantClaims, SensorMutation) (Sensor, bool, error) {
 	return Sensor{}, false, ErrInvalidMutation
 }

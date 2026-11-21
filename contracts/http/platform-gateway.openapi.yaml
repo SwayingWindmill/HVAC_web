@@ -2218,6 +2218,14 @@
         "responses": { "200": { "description": "Updated Device.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Device" } } } }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
     },
+    "/api/v1/sites/{siteId}/devices/{deviceId}/replace-hardware": {
+      "post": {
+        "operationId": "replaceDeviceHardware", "summary": "Replace physical hardware on an existing logical Device while preserving historical continuity", "x-architecture-status": "ACTIVE", "x-shape-source": "contracts/http/s05-registry-writer.openapi.json",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/DeviceId" }, { "$ref": "#/components/parameters/CsrfToken" }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "./s05-registry-writer.openapi.json#/components/schemas/ReplaceDeviceHardwareRequest" } } } },
+        "responses": { "201": { "description": "Replaced hardware on the logical Device.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ReplaceDeviceHardwareResult" } } } }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
     "/api/v1/sites/{siteId}/sensors": {
       "post": {
         "operationId": "createSiteSensor", "summary": "Create an independently traceable PhysicalSensor", "x-architecture-status": "ACTIVE", "x-shape-source": "contracts/http/s05-registry-writer.openapi.json",
@@ -5574,9 +5582,58 @@
           "updatedAt": {
             "$ref": "#/components/schemas/Instant"
           },
+          "externalId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "protocolAddress": {
+            "type": "object",
+            "additionalProperties": true
+          },
           "tags": {
             "$ref": "#/components/schemas/TagMap"
           }
+        }
+      },
+      "ReplaceDeviceHardwareResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "replacementId",
+          "tenantId",
+          "siteId",
+          "deviceId",
+          "revision",
+          "previousExternalId",
+          "newExternalId",
+          "previousGatewayDeviceId",
+          "newGatewayDeviceId",
+          "previousProtocolAddress",
+          "newProtocolAddress",
+          "reason",
+          "replacedBy",
+          "replacedAt",
+          "device",
+          "replayed"
+        ],
+        "properties": {
+          "replacementId": { "$ref": "#/components/schemas/UUIDv7" },
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "deviceId": { "$ref": "#/components/schemas/UUIDv7" },
+          "revision": { "$ref": "#/components/schemas/Revision" },
+          "previousExternalId": { "type": ["string", "null"], "minLength": 1, "maxLength": 256 },
+          "newExternalId": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "previousGatewayDeviceId": { "oneOf": [{ "$ref": "#/components/schemas/UUIDv7" }, { "type": "null" }] },
+          "newGatewayDeviceId": { "oneOf": [{ "$ref": "#/components/schemas/UUIDv7" }, { "type": "null" }] },
+          "previousProtocolAddress": { "type": ["object", "null"], "additionalProperties": true },
+          "newProtocolAddress": { "type": ["object", "null"], "additionalProperties": true },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 1000 },
+          "replacedBy": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "replacedAt": { "$ref": "#/components/schemas/Instant" },
+          "device": { "$ref": "#/components/schemas/Device" },
+          "replayed": { "type": "boolean" }
         }
       },
       "DeviceBinding": {

@@ -52,6 +52,7 @@ import { CLIMATE_ZONE_LABEL, type ClimateZone } from '@/lib/climate-zone';
 import { isOneOf } from '@/lib/typed';
 import { cn } from '@/lib/utils';
 import { confirmDiscardRegistryDraft } from './confirmDiscard';
+import { ReplaceHardwareDialog } from './ReplaceHardwareDialog';
 import {
   makeRegistryMutationMeta,
   newRegistryIdempotencyKey,
@@ -463,10 +464,12 @@ export function RegistryResourceWorkbench({ site, sites, model, capabilities, cs
   const [editDraft, setEditDraft] = useState<EditDraft>(() => defaultEditDraft({ type: 'SPACE' }));
   const [retireTarget, setRetireTarget] = useState<ResourceRow | null>(null);
   const [retireReason, setRetireReason] = useState('');
+  const [replaceTarget, setReplaceTarget] = useState<Device | null>(null);
   const [rebindOpen, setRebindOpen] = useState(false);
   const [rebindDraft, setRebindDraft] = useState<RebindDraft>({ kind: 'DEVICE_ASSET', sourceId: '', targetId: '', targetType: 'ASSET', role: 'CONTROLLER', reason: '调整登记关系' });
   const [editDirty, setEditDirty] = useState(false);
   const [retireDirty, setRetireDirty] = useState(false);
+  const [replaceDirty, setReplaceDirty] = useState(false);
   const [rebindDirty, setRebindDirty] = useState(false);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -474,7 +477,7 @@ export function RegistryResourceWorkbench({ site, sites, model, capabilities, cs
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
   const pointsQuery = useRegistryDevicePoints(selectedDeviceId);
   const devicePoints = flattenRegistryPages(pointsQuery.data);
-  const dirty = editDirty || retireDirty || rebindDirty;
+  const dirty = editDirty || retireDirty || replaceDirty || rebindDirty;
 
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
   useEffect(() => {
@@ -556,6 +559,23 @@ export function RegistryResourceWorkbench({ site, sites, model, capabilities, cs
   const retireAllowed = capabilities.has('registry.retire');
   const bindingAllowed = capabilities.has('binding.write');
   const selectedDevice = useMemo(() => model.devices.find((device) => device.id === selectedDeviceId), [model.devices, selectedDeviceId]);
+  const gatewayDevicesForReplacement = useMemo(() => {
+    if (!replaceTarget) return [];
+    const byId = new Map<string, Device>();
+    for (const device of model.devices) {
+      byId.set(device.id, device);
+    }
+    for (const row of rows) {
+      if (row.type === 'DEVICE') byId.set(row.entity.id, row.entity);
+    }
+    return Array.from(byId.values()).filter(
+      (candidate) =>
+        candidate.siteId === replaceTarget.siteId
+        && candidate.deviceType === 'GATEWAY'
+        && candidate.status === 'ACTIVE'
+        && candidate.id !== replaceTarget.id,
+    );
+  }, [model.devices, replaceTarget, rows]);
 
   const spaceChildrenByParent = useMemo(() => {
     const map = new Map<string, RegistrySpace[]>();
@@ -835,6 +855,11 @@ export function RegistryResourceWorkbench({ site, sites, model, capabilities, cs
           <div>
             <strong className="block text-sm">{row.original.displayName}</strong>
             <span className="font-mono text-xs text-muted-foreground">{row.original.code}</span>
+            {row.original.type === 'DEVICE' && row.original.entity.externalId ? (
+              <span className="block font-mono text-[11px] text-muted-foreground">
+                硬件标识: {row.original.entity.externalId}
+              </span>
+            ) : null}
           </div>
         ),
       },
@@ -897,6 +922,20 @@ export function RegistryResourceWorkbench({ site, sites, model, capabilities, cs
             >
               <Pencil />编辑
             </Button>
+            {row.original.type === 'DEVICE' ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={!capabilities.has('device.write') || row.original.status !== 'ACTIVE'}
+                onClick={() => {
+                  if (row.original.type !== 'DEVICE') return;
+                  setError(null);
+                  setReplaceTarget(row.original.entity);
+                }}
+              >
+                <RefreshCw />更换硬件
+              </Button>
+            ) : null}
             <Button
               variant="ghost"
               size="sm"
@@ -1194,7 +1233,7 @@ export function RegistryResourceWorkbench({ site, sites, model, capabilities, cs
               tableAriaLabel={RESOURCE_COPY[resourceType].tableTitle}
               empty={RESOURCE_COPY[resourceType].emptyLabel}
               getHeaderCellProps={(header) => ({
-                className: header.id === 'actions' ? 'w-64' : undefined,
+                className: header.id === 'actions' ? 'w-80' : undefined,
               })}
               footer={<DataTablePagination table={resourceTable} totalRows={rows.length} />}
             />
@@ -1382,6 +1421,26 @@ export function RegistryResourceWorkbench({ site, sites, model, capabilities, cs
           <DialogFooter><Button variant="outline" onClick={closeRebind}>取消</Button><Button disabled={working || !rebindDraft.sourceId || !rebindDraft.targetId || !rebindDraft.role || !rebindDraft.reason.trim()} onClick={() => void runRebind()}>{working ? '正在保存…' : '保存关系'}</Button></DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ReplaceHardwareDialog
+        open={Boolean(replaceTarget)}
+        device={replaceTarget}
+        gatewayDevices={gatewayDevicesForReplacement}
+        csrfToken={csrfToken}
+        onOpenChange={(open) => {
+          if (!open) setReplaceTarget(null);
+        }}
+        onDirtyChange={setReplaceDirty}
+        onReplaced={async (result, target) => {
+          setError(null);
+          setResultMessage(
+            `已完成「${target.displayName}」的硬件更换（新硬件标识：${result.newExternalId}），原有设备、点位与历史数据保持连续。`,
+          );
+          setReplaceTarget(null);
+          setReplaceDirty(false);
+          await Promise.all([onRefresh(), invalidateFilteredQueries()]);
+        }}
+      />
     </div>
   );
 }

@@ -54,6 +54,14 @@ func (server *server) handleAuthorizedWrite(writer http.ResponseWriter, request 
 		input.SiteID, input.ID = route.parentID, route.id
 		value, replayed, err := server.writer.SaveDevice(request.Context(), claims, input)
 		return server.writeMutationResult(writer, request, value, replayed, route.id == "", err)
+	case "device-replace-hardware":
+		var input ReplaceDeviceHardwareRequest
+		if !decodeRegistryMutation(writer, request, &input) {
+			return http.StatusBadRequest
+		}
+		input.SiteID, input.DeviceID = route.parentID, route.id
+		value, err := server.writer.ReplaceDeviceHardware(request.Context(), claims, input)
+		return server.writeMutationResult(writer, request, value, value.Replayed, true, err)
 	case "sensor-write":
 		var input SensorMutation
 		if !decodeRegistryMutation(writer, request, &input) {
