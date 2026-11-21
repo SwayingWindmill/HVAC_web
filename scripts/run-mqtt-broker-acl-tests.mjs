@@ -78,7 +78,7 @@ try {
   ca = await rd('ca.pem');
   await chmod(join(pkiDir, 'mqtt-broker-key.pem'), 0o644);
   down();
-  compose(['up', '-d', '--wait', 'mqtt-broker']);
+  compose(['up', '-d', '--build', '--wait', 'mqtt-broker']);
   port = +compose(['port', 'mqtt-broker', '8883']).split(':').pop();
 
   const a = report.assertions, base = 'hvac/v1/+/up', [sUp, sRep] = [`$share/connectivity/${base}/#`, `$share/command-dispatcher/${base}/reply`];
@@ -89,6 +89,7 @@ try {
     ['gatewayAIntoGatewayB', GW, tp(2, UT), 135], ['gatewayAConcIntoB', GW, tp(2, UC), 135], ['gatewayAIntoDownlink', GW, tp(1, DC), 135],
     ['gatewayAIntoConcDown', GW, tp(1, DN), 135], ['adapterConcToGatewayB', ADP, tp(2, DN), 16], ['commandsToGatewayB', CMD, tp(2, DC), 16],
     ['commandsIntoUplink', CMD, tp(1, UT), 135],
+    ['gatewayAIntoControlCrl', GW, '$CONTROL/hvac-crl/v1', 135],
   ]) if ((a[k] = await pub(id, t)) !== want) throw new Error(`${k}: ${a[k]}`);
   eq(a.connectivityReceived = await s0, expected, 'uplinks');
 

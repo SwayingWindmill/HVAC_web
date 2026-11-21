@@ -1448,6 +1448,7 @@ func TestDeployScriptProtectsRuntimeSecretsAndDropsDeadKeygen(t *testing.T) {
 		"alert-receiver",
 		"alarm-delivery",
 		"mqtt-pki",
+		"mqtt-crl",
 		"observability/textfile",
 	}
 	for _, dir := range dirs {
@@ -1480,6 +1481,7 @@ func TestDeployScriptProtectsRuntimeSecretsAndDropsDeadKeygen(t *testing.T) {
 		"alarm-delivery/alarm-send-token",
 		"alarm-delivery/recipients.json",
 		"mqtt-pki/mqtt-broker-key.pem",
+		"mqtt-crl/gateway-ca.crl.pem",
 		"observability/textfile/backup.prom",
 	}
 	for _, rel := range seedFiles {
@@ -1538,6 +1540,7 @@ func TestDeployScriptProtectsRuntimeSecretsAndDropsDeadKeygen(t *testing.T) {
 		"internal-pki/forecast/tls.crt",
 		"gateway-ca/trusted-client-ca.pem",
 		"gateway-ca/connectivity.crt",
+		"mqtt-crl/gateway-ca.crl.pem",
 		"observability/textfile/backup.prom",
 	} {
 		assertPerm(publicCert, func(m os.FileMode) bool { return m == 0o644 }, "0644")
@@ -1567,6 +1570,7 @@ func TestDeployScriptProtectsRuntimeSecretsAndDropsDeadKeygen(t *testing.T) {
 	} {
 		assertPerm(workloadSecret, func(m os.FileMode) bool { return m == 0o640 || m == 0o600 }, "0640 or 0600 (not world-readable)")
 	}
+	assertPerm("mqtt-crl", func(m os.FileMode) bool { return m == 0o755 }, "0755")
 	assertPerm("data/otel-collector", func(m os.FileMode) bool { return m == 0o750 }, "0750")
 	assertPerm("backups/clickhouse", func(m os.FileMode) bool { return m == 0o750 }, "0750")
 	assertPerm("backups/postgres/base", func(m os.FileMode) bool { return m == 0o750 }, "0750")
@@ -1575,6 +1579,7 @@ func TestDeployScriptProtectsRuntimeSecretsAndDropsDeadKeygen(t *testing.T) {
 	calls := string(mustRead(t, log))
 	for _, wantOwnership := range []string{
 		"chown -R 65532:65532",
+		"gateway-ca mqtt-crl",
 		"chown -R 0:65532",
 		"chown -R 1883:65532 /runtime/mqtt-pki",
 		"chown -R 101:101 /runtime/backups/clickhouse",
@@ -1825,5 +1830,81 @@ func TestBuildReleaseStagesAllMigrationsAcrossScratchStages(t *testing.T) {
 	}
 	if count < 140 {
 		t.Fatalf("staged only %d migrator files, want >= 140 across all scratch stages:\n%s", count, output)
+	}
+}
+
+func TestApplyBuildsMqttBrokerFromUpstreamWithoutPullOrOverwritingBase(t *testing.T) {
+	bin, store, platform := applyFixture(t)
+	upstreamID := seedImage(t, store, "eclipse-mosquitto:2.1.2-alpine", 4, "")
+
+	runMqttApply := func(run int) string {
+		t.Helper()
+		release := t.TempDir()
+		for _, dir := range []string{"bins", "mqtt", "src/deploy/platform/phase1/cd"} {
+			if err := os.MkdirAll(filepath.Join(release, dir), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		files := map[string]string{
+			"REVISION":                   strings.Repeat("a", 40) + "\n",
+			"services.tsv":               "mqtt-broker\thvac/mqtt-broker:0.1.0-dev\tmqtt\trequired\tinfra/telemetry/mqtt/crl-plugin\n",
+			"bins/healthcheck":           "hc",
+			"mqtt/mosquitto_hvac_crl.so": "crl-so-v" + strconv.Itoa(run),
+			"src/README":                 "tree",
+			"src/deploy/platform/phase1/cd/observability-config.sh": "#!/bin/sh\nexit 0\n",
+			"rollback.sh":              "#!/bin/sh\nexit 0\n",
+			"smoke-release.sh":         "#!/bin/sh\nexit 0\n",
+			"prune-rollback-images.sh": "#!/bin/sh\nexit 0\n",
+			"rebuild-deploy-base.sh":   string(mustRead(t, "rebuild-deploy-base.sh")),
+		}
+		for name, body := range files {
+			if err := os.WriteFile(filepath.Join(release, name), []byte(body), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if out, err := exec.Command("tar", append([]string{"-C", filepath.Join(release, "src"), "-cf", filepath.Join(release, "source.tar")}, topLevel(t, filepath.Join(release, "src"))...)...).CombinedOutput(); err != nil {
+			t.Fatalf("tar: %v\n%s", err, out)
+		}
+		cmd := exec.Command("bash", "apply-on-server.sh", release)
+		cmd.Env = commandEnv(bin,
+			"DOCKER_STORE="+store,
+			"HVAC_PLATFORM_DIR="+platform,
+			"HVAC_DEPLOY_SCRIPT="+writeExe(t, bin, "restart", "#!/bin/sh\nexit 0\n"),
+			"FAKE_STAMP=20261121T00000"+strconv.Itoa(run)+"Z",
+		)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("apply mqtt run %d: %v\n%s", run, err, out)
+		}
+		return string(out)
+	}
+
+	out1 := runMqttApply(1)
+	if !strings.Contains(out1, "created hvac/mqtt-broker:0.1.0-dev") {
+		t.Fatalf("first mqtt deploy should create hvac/mqtt-broker:0.1.0-dev:\n%s", out1)
+	}
+	firstID, firstLayers, _ := imageOf(t, store, "hvac/mqtt-broker:0.1.0-dev")
+	if firstLayers != 5 {
+		t.Fatalf("first mqtt image layers = %d, want 5", firstLayers)
+	}
+	baseNowID, _, _ := imageOf(t, store, "eclipse-mosquitto:2.1.2-alpine")
+	if baseNowID != upstreamID {
+		t.Fatalf("upstream base image overwritten: got %s, want %s", baseNowID, upstreamID)
+	}
+	if tagExists(store, "hvac/mqtt-broker:deploy-base") {
+		t.Fatal("mqtt kind should build directly from upstream base without creating deploy-base")
+	}
+
+	out2 := runMqttApply(2)
+	if !strings.Contains(out2, "replaced hvac/mqtt-broker:0.1.0-dev (previous hvac/mqtt-broker:before-20261121T000002Z)") {
+		t.Fatalf("second mqtt deploy should record rollback tag:\n%s", out2)
+	}
+	rbID, _, _ := imageOf(t, store, "hvac/mqtt-broker:before-20261121T000002Z")
+	if rbID != firstID {
+		t.Fatalf("rollback tag points to %s, want first deployed %s", rbID, firstID)
+	}
+	secondID, secondLayers, _ := imageOf(t, store, "hvac/mqtt-broker:0.1.0-dev")
+	if secondID == firstID || secondLayers != 5 {
+		t.Fatalf("second mqtt deploy id=%s layers=%d; want new image with 5 layers", secondID, secondLayers)
 	}
 }
