@@ -1237,29 +1237,32 @@ func newEmbeddedAlarmServer(ctx context.Context, logger *slog.Logger, alarmRef *
 		return nil, nil, func() {}, err
 	}
 	gatewaySPIFFE := envOr("ALARM_GATEWAY_SPIFFE", alarmservice.DefaultGatewaySPIFFEID)
+	telemetry := observability.NewRuntime(observability.RuntimeConfig{
+		Service: "energy-api-alarm", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond, Logger: logger,
+	})
 	handler, err := alarmservice.NewHTTPHandler(alarmservice.HTTPConfig{
-		Store: store, Rules: store, GatewayPublicKey: gatewayPublicKey, GatewaySPIFFEID: gatewaySPIFFE,
+		Store: store, Rules: store, Metrics: telemetry.Metrics, GatewayPublicKey: gatewayPublicKey, GatewaySPIFFEID: gatewaySPIFFE,
 		Audience: envOr("ALARM_READ_AUDIENCE", alarmservice.DefaultAudience), MaxListLimit: 200,
 	})
 	if err != nil {
+		_ = telemetry.Shutdown(ctx)
 		store.Close()
 		return nil, nil, func() {}, err
 	}
 	telemetryEvaluationHandler, err := alarmservice.NewTelemetryEvaluationHandler(store)
 	if err != nil {
+		_ = telemetry.Shutdown(ctx)
 		store.Close()
 		return nil, nil, func() {}, err
 	}
 	controlEventsHandler, err := alarmservice.NewControlFailureHandler(store)
 	if err != nil {
+		_ = telemetry.Shutdown(ctx)
 		store.Close()
 		return nil, nil, func() {}, err
 	}
 	alarmRef.setStore(store)
 	telemetrySPIFFE := envOr("ALARM_TELEMETRY_SPIFFE", "spiffe://hvac.local/telemetry-runtime-service")
-	telemetry := observability.NewRuntime(observability.RuntimeConfig{
-		Service: "energy-api-alarm", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond, Logger: logger,
-	})
 	router, err := alarmservice.NewOwnerRouter(alarmservice.OwnerRouterConfig{
 		GatewaySPIFFE:        gatewaySPIFFE,
 		TelemetrySPIFFE:      telemetrySPIFFE,

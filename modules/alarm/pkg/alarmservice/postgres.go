@@ -15,8 +15,9 @@ import (
 )
 
 type PostgresStore struct {
-	pool  *pgxpool.Pool
-	newID idGenerator
+	pool      *pgxpool.Pool
+	newID     idGenerator
+	ruleCache siteRuleCache
 }
 
 func OpenPostgresStore(ctx context.Context, databaseURL string) (*PostgresStore, error) {

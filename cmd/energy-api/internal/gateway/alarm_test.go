@@ -30,7 +30,10 @@ func TestMatchPublicAlarmRoutesUsesDomainV1Shape(t *testing.T) {
 	}{
 		{path: "/api/v1/alarms", template: "/api/v1/alarms", action: alarmauth.ActionRead},
 		{path: "/api/v1/alarm-rules", template: "/api/v1/alarm-rules", action: alarmauth.ActionRead},
+		{path: "/api/v1/alarm-rules/diff", template: "/api/v1/alarm-rules/diff", action: alarmauth.ActionRead},
 		{path: "/api/v1/alarm-rules/simulate", template: "/api/v1/alarm-rules/simulate", action: alarmauth.ActionRead},
+		{path: "/api/v1/alarm-rules/revisions", template: "/api/v1/alarm-rules/revisions", action: alarmauth.ActionRead},
+		{path: "/api/v1/alarm-rules/revisions/12/rollback", template: "/api/v1/alarm-rules/revisions/{revision}/rollback"},
 		{path: "/api/v1/alarm-rules/dead-letters", template: "/api/v1/alarm-rules/dead-letters", action: alarmauth.ActionRead},
 		{path: "/api/v1/alarm-rules/dead-letters/" + gatewayAlarmID + "/replay", template: "/api/v1/alarm-rules/dead-letters/{outboxId}/replay"},
 		{path: "/api/v1/alarms/" + gatewayAlarmID, template: "/api/v1/alarms/{alarmId}", action: alarmauth.ActionRead, alarmID: gatewayAlarmID},
@@ -289,7 +292,10 @@ func TestSafeLogPathNormalizesAlarmAndRoutingPaths(t *testing.T) {
 	)
 	cases := map[string]string{
 		"/api/v1/alarm-rules":                                                 "/api/v1/alarm-rules",
+		"/api/v1/alarm-rules/diff":                                            "/api/v1/alarm-rules/diff",
 		"/api/v1/alarm-rules/simulate":                                        "/api/v1/alarm-rules/simulate",
+		"/api/v1/alarm-rules/revisions":                                       "/api/v1/alarm-rules/revisions",
+		"/api/v1/alarm-rules/revisions/7/rollback":                            "/api/v1/alarm-rules/revisions/{revision}/rollback",
 		"/api/v1/alarm-rules/dead-letters":                                    "/api/v1/alarm-rules/dead-letters",
 		"/api/v1/alarm-rules/dead-letters/" + outboxID + "/replay":            "/api/v1/alarm-rules/dead-letters/{outboxId}/replay",
 		"/api/v1/alarms/" + alarmID:                                           "/api/v1/alarms/{alarmId}",

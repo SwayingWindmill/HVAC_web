@@ -8,10 +8,12 @@ import (
 	"math"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
+	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/modules/alarm/pkg/rulegraph"
 )
 
@@ -22,27 +24,33 @@ type SiteRuleReader interface {
 
 // SiteRuleList is the Site's rules in effect, as the alarm page lists them (#693).
 type SiteRuleList struct {
-	Items []SiteRuleView `json:"items"`
+	BundleRevision uint64         `json:"bundleRevision,omitempty"`
+	BundleDigest   string         `json:"bundleDigest,omitempty"`
+	Items          []SiteRuleView `json:"items"`
 }
 
 // SiteRuleView is one rule in effect: what raises its Alarm, what clears it and how bad it is. Its
 // conditions name each reading by device and point, for the page to put into words.
 type SiteRuleView struct {
-	RuleID           string              `json:"ruleId"`
-	Title            string              `json:"title"`
-	Severity         alarmmodel.Severity `json:"severity"`
-	RuleKind         RuleKind            `json:"ruleKind,omitempty"`
-	TemplateKey      string              `json:"templateKey,omitempty"`
-	OverriddenFields []string            `json:"overriddenFields,omitempty"`
-	DependsOnRuleIDs []string            `json:"dependsOnRuleIds,omitempty"`
-	HopDepth         int                 `json:"hopDepth,omitempty"`
-	DependencyGate   DependencyGateMode  `json:"dependencyGate,omitempty"`
-	Actions          []RuleAction        `json:"actions,omitempty"`
-	TriggerMode      TriggerMode         `json:"triggerMode"`
-	DurationSeconds  int64               `json:"durationSeconds,omitempty"`
-	RepeatCount      uint64              `json:"repeatCount,omitempty"`
-	Raise            RuleCondition       `json:"raise"`
-	Clear            RuleCondition       `json:"clear"`
+	RuleID           string                  `json:"ruleId"`
+	Title            string                  `json:"title"`
+	AlarmType        string                  `json:"alarmType,omitempty"`
+	Summary          string                  `json:"summary,omitempty"`
+	Severity         alarmmodel.Severity     `json:"severity"`
+	RuleKind         RuleKind                `json:"ruleKind,omitempty"`
+	TemplateKey      string                  `json:"templateKey,omitempty"`
+	OverriddenFields []string                `json:"overriddenFields,omitempty"`
+	DependsOnRuleIDs []string                `json:"dependsOnRuleIds,omitempty"`
+	HopDepth         int                     `json:"hopDepth,omitempty"`
+	DependencyGate   DependencyGateMode      `json:"dependencyGate,omitempty"`
+	Actions          []RuleAction            `json:"actions,omitempty"`
+	QualityPolicy    EvaluationQualityPolicy `json:"qualityPolicy,omitempty"`
+	FreshnessSeconds int64                   `json:"freshnessSeconds,omitempty"`
+	TriggerMode      TriggerMode             `json:"triggerMode"`
+	DurationSeconds  int64                   `json:"durationSeconds,omitempty"`
+	RepeatCount      uint64                  `json:"repeatCount,omitempty"`
+	Raise            RuleCondition           `json:"raise"`
+	Clear            RuleCondition           `json:"clear"`
 }
 
 // RuleCondition is a Condition with its reading split into device and point and its value a plain
@@ -91,6 +99,7 @@ type SimulateRuleStepInput struct {
 
 type SimulateSiteRuleRequest struct {
 	RuleID         string                  `json:"ruleId"`
+	RuleDraft      *SiteRuleDraft          `json:"ruleDraft,omitempty"`
 	DependencyGate *DependencyGateMode     `json:"dependencyGate,omitempty"`
 	Actions        *[]RuleAction           `json:"actions,omitempty"`
 	Steps          []SimulateRuleStepInput `json:"steps"`
@@ -148,6 +157,8 @@ func siteRuleViewWithHopDepth(rule SiteRule, hopDepth int) (SiteRuleView, error)
 	return SiteRuleView{
 		RuleID:           rule.AssignmentID,
 		Title:            rule.Policy.Title,
+		AlarmType:        rule.Policy.AlarmType,
+		Summary:          rule.Policy.Summary,
 		Severity:         rule.Policy.Severity,
 		RuleKind:         ruleKind,
 		TemplateKey:      rule.Policy.TemplateKey,
@@ -156,6 +167,8 @@ func siteRuleViewWithHopDepth(rule SiteRule, hopDepth int) (SiteRuleView, error)
 		HopDepth:         hopDepth,
 		DependencyGate:   rule.Policy.DependencyGate,
 		Actions:          cloneRuleActions(rule.Policy.Actions),
+		QualityPolicy:    rule.Policy.QualityPolicy,
+		FreshnessSeconds: rule.Policy.FreshnessSeconds,
 		TriggerMode:      rule.Policy.TriggerMode,
 		DurationSeconds:  rule.Policy.DurationSeconds,
 		RepeatCount:      rule.Policy.RepeatCount,
@@ -230,6 +243,17 @@ func (handler *httpHandler) siteRules(writer http.ResponseWriter, request *http.
 		return
 	}
 	list := SiteRuleList{Items: make([]SiteRuleView, 0, len(rules))}
+	if handler.authoring != nil {
+		meta, metaErr := handler.authoring.LatestSiteRuleBundleMeta(request.Context(), tenantID, siteID)
+		if metaErr != nil {
+			handler.writeStoreFailure(writer, metaErr)
+			return
+		}
+		if meta.BundleRevision > 0 {
+			list.BundleRevision = meta.BundleRevision
+			list.BundleDigest = meta.BundleDigest
+		}
+	}
 	for _, rule := range rules {
 		view, err := siteRuleViewWithHopDepth(rule, report.Nodes[rule.AssignmentID].HopDepth)
 		if err != nil {
@@ -263,23 +287,60 @@ func (handler *httpHandler) simulateSiteRule(writer http.ResponseWriter, request
 		handler.writeStoreFailure(writer, err)
 		return
 	}
-	var target *SiteRule
-	for i := range rules {
-		if rules[i].AssignmentID == input.RuleID {
-			target = &rules[i]
-			break
+	var target SiteRule
+	candidateRules := slices.Clone(rules)
+	if input.RuleDraft != nil {
+		if input.RuleDraft.RuleID != "" && input.RuleDraft.RuleID != input.RuleID {
+			handler.writeProblem(writer, http.StatusBadRequest, "ALARM_REQUEST_INVALID", "Alarm request invalid", "ruleDraft.ruleId must match ruleId.", false)
+			return
+		}
+		draft := *input.RuleDraft
+		draft.RuleID = input.RuleID
+		history := make(map[string]SiteRule, len(rules))
+		for _, r := range rules {
+			history[r.AssignmentID] = r
+		}
+		compiled, issues := compileSingleRuleDraft(0, draft, history, map[string]bool{}, nil)
+		if len(issues) > 0 {
+			handler.writeProblem(writer, http.StatusUnprocessableEntity, "ALARM_RULE_DRAFT_INVALID", "Alarm rule draft invalid", issues[0].Message, false)
+			return
+		}
+		target = compiled
+		replaced := false
+		for i := range candidateRules {
+			if candidateRules[i].AssignmentID == input.RuleID {
+				candidateRules[i] = compiled
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			candidateRules = append(candidateRules, compiled)
+		}
+	} else {
+		foundTarget := false
+		for i := range rules {
+			if rules[i].AssignmentID == input.RuleID {
+				target = rules[i]
+				foundTarget = true
+				break
+			}
+		}
+		if !foundTarget {
+			handler.writeProblem(writer, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Alarm rule was not found on this Site.", false)
+			return
 		}
 	}
-	if target == nil {
-		handler.writeProblem(writer, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Alarm rule was not found on this Site.", false)
-		return
-	}
-	report, err := ValidateSiteRuleGraph(rules)
+	report, err := ValidateSiteRuleGraph(candidateRules)
 	if err != nil {
+		if input.RuleDraft != nil {
+			handler.writeProblem(writer, http.StatusUnprocessableEntity, "ALARM_RULE_GRAPH_INVALID", "Alarm rule graph invalid", err.Error(), false)
+			return
+		}
 		handler.writeProblem(writer, http.StatusBadGateway, "ALARM_RESPONSE_INVALID", "Alarm response invalid", "Site rules contain an invalid dependency graph.", false)
 		return
 	}
-	policy, err := simulationPolicyForRule(*target)
+	policy, err := simulationPolicyForRule(target)
 	if err != nil {
 		handler.writeProblem(writer, http.StatusBadGateway, "ALARM_RESPONSE_INVALID", "Alarm response invalid", "Stored Alarm rule cannot be simulated.", false)
 		return
@@ -567,6 +628,170 @@ func simulationStepReasons(policy AlarmPolicyRevision, decision EvaluationDecisi
 	return reasons
 }
 
+func matchSiteRuleRevisionsPath(path string) (string, bool) {
+	segments := strings.Split(strings.Trim(path, "/"), "/")
+	if len(segments) != 6 || segments[0] != "internal" || segments[1] != "v1" || segments[2] != "sites" || segments[4] != "alarm-rules" || segments[5] != "revisions" {
+		return "", false
+	}
+	return segments[3], true
+}
+
+func matchSiteRuleRevisionRollbackPath(path string) (string, string, bool) {
+	segments := strings.Split(strings.Trim(path, "/"), "/")
+	if len(segments) != 7 || segments[0] != "internal" || segments[1] != "v1" || segments[2] != "sites" || segments[4] != "alarm-rules" || segments[5] != "revisions" {
+		return "", "", false
+	}
+	revText, hasSuffix := strings.CutSuffix(segments[6], ":rollback")
+	if !hasSuffix || revText == "" {
+		return "", "", false
+	}
+	return segments[3], revText, true
+}
+
+func (handler *httpHandler) recordRulePublishMetric(outcome string) {
+	if handler == nil || handler.metrics == nil {
+		return
+	}
+	_ = handler.metrics.AddCounter(
+		"hvac_alarm_rule_publishes_total",
+		"Site alarm rule hot-publish and rollback outcomes.",
+		map[string]string{"outcome": outcome},
+		1,
+	)
+}
+
+func (handler *httpHandler) diffSiteRules(writer http.ResponseWriter, request *http.Request, tenantID, siteID string) {
+	if handler.authoring == nil {
+		handler.writeStoreFailure(writer, ErrUnavailable)
+		return
+	}
+	if mediaType := strings.TrimSpace(strings.Split(request.Header.Get("Content-Type"), ";")[0]); mediaType != "application/json" {
+		handler.writeProblem(writer, http.StatusUnsupportedMediaType, "ALARM_REQUEST_INVALID", "Alarm request invalid", "Alarm rule diff requests must use application/json.", false)
+		return
+	}
+	request.Body = http.MaxBytesReader(writer, request.Body, maxRuleBundleBodyBytes)
+	var input SiteRuleDiffRequest
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&input) != nil || ensureJSONEOF(decoder) != nil || input.Rules == nil {
+		handler.writeProblem(writer, http.StatusBadRequest, "ALARM_REQUEST_INVALID", "Alarm request invalid", "The Alarm rule diff request is invalid.", false)
+		return
+	}
+	result, err := handler.authoring.DiffSiteRules(request.Context(), tenantID, siteID, input.Rules)
+	if err != nil {
+		handler.writeStoreFailure(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, result)
+}
+
+func (handler *httpHandler) publishSiteRules(writer http.ResponseWriter, request *http.Request, tenantID, siteID string, claims identitycontext.DelegationClaims) {
+	if handler.authoring == nil {
+		handler.recordRulePublishMetric("failed")
+		handler.writeStoreFailure(writer, ErrUnavailable)
+		return
+	}
+	if mediaType := strings.TrimSpace(strings.Split(request.Header.Get("Content-Type"), ";")[0]); mediaType != "application/json" {
+		handler.recordRulePublishMetric("rejected")
+		handler.writeProblem(writer, http.StatusUnsupportedMediaType, "ALARM_REQUEST_INVALID", "Alarm request invalid", "Alarm rule publish requests must use application/json.", false)
+		return
+	}
+	request.Body = http.MaxBytesReader(writer, request.Body, maxRuleBundleBodyBytes)
+	var input SiteRulePublishRequest
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&input) != nil || ensureJSONEOF(decoder) != nil || input.Rules == nil {
+		handler.recordRulePublishMetric("rejected")
+		handler.writeProblem(writer, http.StatusBadRequest, "ALARM_REQUEST_INVALID", "Alarm request invalid", "The Alarm rule publish request is invalid.", false)
+		return
+	}
+	result, err := handler.authoring.PublishSiteRules(request.Context(), tenantID, siteID, input, claims.Subject, claims.DisplayName, handler.now().UTC())
+	if err != nil {
+		handler.writeAuthoringMutationFailure(writer, err)
+		return
+	}
+	handler.recordRulePublishMetric("success")
+	writeJSON(writer, http.StatusOK, result)
+}
+
+func (handler *httpHandler) listSiteRuleRevisions(writer http.ResponseWriter, request *http.Request, tenantID, siteID string) {
+	if handler.authoring == nil {
+		handler.writeStoreFailure(writer, ErrUnavailable)
+		return
+	}
+	limit, ok := parseQueryLimit(request, defaultRuleBundleRevisionLimit, maxRuleBundleRevisionLimit)
+	if !ok {
+		handler.writeProblem(writer, http.StatusBadRequest, "ALARM_FILTER_INVALID", "Alarm filter invalid", "The Alarm rule revision query exceeds the supported read boundary.", false)
+		return
+	}
+	result, err := handler.authoring.ListSiteRuleBundleRevisions(request.Context(), tenantID, siteID, limit)
+	if err != nil {
+		handler.writeStoreFailure(writer, err)
+		return
+	}
+	if result.Items == nil {
+		result.Items = []SiteRuleBundleRevisionView{}
+	}
+	writeJSON(writer, http.StatusOK, result)
+}
+
+func (handler *httpHandler) rollbackSiteRules(writer http.ResponseWriter, request *http.Request, tenantID, siteID, revText string, claims identitycontext.DelegationClaims) {
+	if handler.authoring == nil {
+		handler.recordRulePublishMetric("failed")
+		handler.writeStoreFailure(writer, ErrUnavailable)
+		return
+	}
+	targetRevision, revErr := strconv.ParseUint(revText, 10, 64)
+	if revErr != nil || targetRevision == 0 || targetRevision > math.MaxInt64 {
+		handler.recordRulePublishMetric("rejected")
+		handler.writeProblem(writer, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Alarm rule bundle revision was not found.", false)
+		return
+	}
+	if mediaType := strings.TrimSpace(strings.Split(request.Header.Get("Content-Type"), ";")[0]); mediaType != "application/json" {
+		handler.recordRulePublishMetric("rejected")
+		handler.writeProblem(writer, http.StatusUnsupportedMediaType, "ALARM_REQUEST_INVALID", "Alarm request invalid", "Alarm rule rollback requests must use application/json.", false)
+		return
+	}
+	request.Body = http.MaxBytesReader(writer, request.Body, maximumMutationBody)
+	var input SiteRuleRollbackRequest
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&input) != nil || ensureJSONEOF(decoder) != nil {
+		handler.recordRulePublishMetric("rejected")
+		handler.writeProblem(writer, http.StatusBadRequest, "ALARM_REQUEST_INVALID", "Alarm request invalid", "The Alarm rule rollback request is invalid.", false)
+		return
+	}
+	result, err := handler.authoring.RollbackSiteRules(request.Context(), tenantID, siteID, targetRevision, input, claims.Subject, claims.DisplayName, handler.now().UTC())
+	if err != nil {
+		handler.writeAuthoringMutationFailure(writer, err)
+		return
+	}
+	handler.recordRulePublishMetric("success")
+	writeJSON(writer, http.StatusOK, result)
+}
+
+func (handler *httpHandler) writeAuthoringMutationFailure(writer http.ResponseWriter, err error) {
+	var conflictErr *RuleBundleConflictError
+	if errors.As(err, &conflictErr) {
+		handler.recordRulePublishMetric("rejected")
+		handler.writeProblem(writer, http.StatusConflict, "ALARM_RULE_BUNDLE_CONFLICT", "Alarm rule bundle revision conflict", conflictErr.Error(), false)
+		return
+	}
+	var draftErr *RuleDraftValidationError
+	if errors.As(err, &draftErr) {
+		handler.recordRulePublishMetric("rejected")
+		handler.writeProblem(writer, http.StatusUnprocessableEntity, draftErr.Code, "Alarm rule draft invalid", draftErr.Error(), false)
+		return
+	}
+	if errors.Is(err, ErrNotFound) {
+		handler.recordRulePublishMetric("rejected")
+		handler.writeProblem(writer, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Alarm rule bundle revision was not found.", false)
+		return
+	}
+	handler.recordRulePublishMetric("failed")
+	handler.writeStoreFailure(writer, err)
+}
+
 func matchSiteRuleSubpath(path, leaf string) (string, bool) {
 	segments := strings.Split(strings.Trim(path, "/"), "/")
 	if len(segments) != 5 || segments[0] != "internal" || segments[1] != "v1" || segments[2] != "sites" || segments[4] != leaf {
@@ -584,6 +809,18 @@ func (list SiteRuleList) Validate() error {
 	for _, rule := range list.Items {
 		if !alarmmodel.IsUUIDv7(rule.RuleID) || !boundedText(rule.Title, 256) || !validAlarmSeverity(rule.Severity) {
 			return errors.New("site rule identity is invalid")
+		}
+		if rule.AlarmType != "" && !boundedText(rule.AlarmType, 128) {
+			return errors.New("site rule alarmType is invalid")
+		}
+		if rule.Summary != "" && !boundedText(rule.Summary, 2048) {
+			return errors.New("site rule summary is invalid")
+		}
+		if rule.QualityPolicy != "" && rule.QualityPolicy != EvaluationQualityValidOnly && rule.QualityPolicy != EvaluationQualityUsable {
+			return errors.New("site rule qualityPolicy is invalid")
+		}
+		if rule.FreshnessSeconds < 0 {
+			return errors.New("site rule freshnessSeconds is invalid")
 		}
 		if rule.RuleKind != "" && !validRuleKind(rule.RuleKind) {
 			return errors.New("site rule kind is invalid")
@@ -736,7 +973,7 @@ func (condition RuleCondition) validate() error {
 		valid = condition.Trigger != nil && condition.Reset != nil &&
 			(condition.Direction == DirectionAbove && *condition.Reset < *condition.Trigger || condition.Direction == DirectionBelow && *condition.Reset > *condition.Trigger)
 	case ConditionNoData, ConditionStale, ConditionUnchanged, ConditionChanged:
-		valid = condition.AgeSeconds > 0
+		valid = condition.AgeSeconds > 0 && condition.AgeSeconds <= maxRuleDurationSeconds
 	case ConditionReasons:
 		if (condition.Match == ReasonMatchAny || condition.Match == ReasonMatchNone) && len(condition.Reasons) >= 1 && len(condition.Reasons) <= 8 {
 			valid = true

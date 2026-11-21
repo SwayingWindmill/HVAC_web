@@ -111,6 +111,9 @@ export class AlarmRequestError extends Error {
 
 const ALARM_PROBLEM_MESSAGES: Readonly<Record<string, string>> = {
   ALARM_VERSION_CONFLICT: '告警状态刚刚已被其他人更新，请刷新后再试',
+  ALARM_RULE_BUNDLE_CONFLICT: '规则版本已被他人更新，请重新加载最新版本后再发布',
+  ALARM_RULE_GRAPH_INVALID: '联动依赖关系存在环路、缺失上游或超过最大深度限制，请检查后重试',
+  ALARM_RULE_DRAFT_INVALID: '规则草稿配置存在不合法项，请修正后重试',
   ALARM_TRANSITION_INVALID: '当前告警状态不支持这个操作',
   ALARM_IDEMPOTENCY_CONFLICT: '重复请求与此前提交内容不一致，请刷新重试',
   ALARM_ACCESS_DENIED: '你没有执行这项告警操作的权限',

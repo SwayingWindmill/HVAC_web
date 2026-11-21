@@ -190,6 +190,7 @@ COPY modules/alarm/migrations/017_drop_legacy_migration_backups_and_comment_tabl
 COPY modules/alarm/migrations/alarm-suppression-notification-events.sql /opt/hvac/repo/modules/alarm/migrations/alarm-suppression-notification-events.sql
 COPY modules/alarm/migrations/alarm-evaluation-slope-window.sql /opt/hvac/repo/modules/alarm/migrations/alarm-evaluation-slope-window.sql
 COPY modules/alarm/migrations/alarm-rule-action-outbox.sql /opt/hvac/repo/modules/alarm/migrations/alarm-rule-action-outbox.sql
+COPY modules/alarm/migrations/alarm-site-rule-bundles.sql /opt/hvac/repo/modules/alarm/migrations/alarm-site-rule-bundles.sql
 COPY modules/workorder/migrations/001_s5_work_order_runtime.sql /opt/hvac/repo/modules/workorder/migrations/001_s5_work_order_runtime.sql
 COPY modules/workorder/migrations/002_s5_work_order_create_assignment.sql /opt/hvac/repo/modules/workorder/migrations/002_s5_work_order_create_assignment.sql
 COPY modules/workorder/migrations/003_s5_work_order_lifecycle.sql /opt/hvac/repo/modules/workorder/migrations/003_s5_work_order_lifecycle.sql

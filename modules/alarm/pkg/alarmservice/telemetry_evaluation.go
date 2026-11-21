@@ -348,41 +348,52 @@ ORDER BY device_id`, tenantID, siteID)
 	}
 	rows.Close()
 
-	assignmentRows, err := tx.Query(ctx, `
+	bundleRevision, assignmentCount, err := store.siteRuleCacheStampInTx(ctx, tx, tenantID, siteID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	activeRuleSet := make(map[string]struct{})
+	rules, cacheHit := store.ruleCache.Get(tenantID, siteID, bundleRevision, assignmentCount)
+	if cacheHit {
+		for _, rule := range rules {
+			activeRuleSet[rule.AssignmentID] = struct{}{}
+		}
+	} else {
+		assignmentRows, err := tx.Query(ctx, `
 SELECT DISTINCT ON (assignment.assignment_id) assignment.assignment_id::text, assignment.retired, policy.policy
 FROM alarm_runtime.alarm_policy_assignment assignment
 JOIN alarm_runtime.alarm_policy_revision policy
   ON policy.tenant_id = assignment.tenant_id AND policy.site_id = assignment.site_id AND policy.policy_revision_id = assignment.policy_revision_id
 WHERE assignment.tenant_id=$1 AND assignment.site_id=$2 AND assignment.subject_type='SITE' AND assignment.subject_id=$2
 ORDER BY assignment.assignment_id, assignment.assignment_revision DESC`, tenantID, siteID)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("resolve Site Alarm policy assignments: %w", err)
-	}
-	rules := make([]SiteRule, 0)
-	activeRuleSet := make(map[string]struct{})
-	for assignmentRows.Next() {
-		var rule SiteRule
-		var retired bool
-		var policyJSON []byte
-		if err := assignmentRows.Scan(&rule.AssignmentID, &retired, &policyJSON); err != nil {
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("resolve Site Alarm policy assignments: %w", err)
+		}
+		rules = make([]SiteRule, 0)
+		for assignmentRows.Next() {
+			var rule SiteRule
+			var retired bool
+			var policyJSON []byte
+			if err := assignmentRows.Scan(&rule.AssignmentID, &retired, &policyJSON); err != nil {
+				assignmentRows.Close()
+				return nil, nil, nil, fmt.Errorf("scan Site Alarm policy assignment: %w", err)
+			}
+			if retired {
+				continue
+			}
+			if rule.Policy, err = decodeAlarmPolicy(policyJSON); err != nil {
+				assignmentRows.Close()
+				return nil, nil, nil, err
+			}
+			activeRuleSet[rule.AssignmentID] = struct{}{}
+			rules = append(rules, rule)
+		}
+		if err := assignmentRows.Err(); err != nil {
 			assignmentRows.Close()
-			return nil, nil, nil, fmt.Errorf("scan Site Alarm policy assignment: %w", err)
+			return nil, nil, nil, fmt.Errorf("iterate Site Alarm policy assignments: %w", err)
 		}
-		if retired {
-			continue
-		}
-		if rule.Policy, err = decodeAlarmPolicy(policyJSON); err != nil {
-			assignmentRows.Close()
-			return nil, nil, nil, err
-		}
-		activeRuleSet[rule.AssignmentID] = struct{}{}
-		rules = append(rules, rule)
-	}
-	if err := assignmentRows.Err(); err != nil {
 		assignmentRows.Close()
-		return nil, nil, nil, fmt.Errorf("iterate Site Alarm policy assignments: %w", err)
 	}
-	assignmentRows.Close()
 
 	activeRows, err := tx.Query(ctx, `
 SELECT assignment_id::text
@@ -410,6 +421,9 @@ WHERE tenant_id=$1 AND site_id=$2 AND active_alarm_id IS NOT NULL`, tenantID, si
 
 	if err := tx.Commit(ctx); err != nil {
 		return nil, nil, nil, fmt.Errorf("commit Site Alarm evaluation input read: %w", err)
+	}
+	if !cacheHit {
+		store.ruleCache.Put(tenantID, siteID, bundleRevision, assignmentCount, rules)
 	}
 	return records, rules, upstreamActive, nil
 }

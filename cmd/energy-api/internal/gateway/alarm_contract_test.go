@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -696,16 +697,25 @@ func (s *contractRuleActionDeadLetterStore) ReplayRuleActionDeadLetter(_ context
 	return "", alarmservice.ErrNotFound
 }
 
-type contractSiteRules struct{}
+type contractSiteRules struct {
+	mu        sync.Mutex
+	rules     []alarmservice.SiteRule
+	revisions []alarmservice.SiteRuleBundleRevisionView
+	snapshots map[uint64][]alarmservice.SiteRule
+}
 
-func (contractSiteRules) SiteRules(context.Context, string, string) ([]alarmservice.SiteRule, error) {
+func newContractSiteRules() *contractSiteRules {
 	delta := 2.0
-	return []alarmservice.SiteRule{
+	initial := []alarmservice.SiteRule{
 		{
 			AssignmentID: contractRuleBaseID,
 			Policy: alarmservice.AlarmPolicyRevision{
+				PolicyID:         contractRuleBaseID,
 				AlarmType:        "CHILLER_HIGH_TEMP",
+				SourceType:       alarmmodel.SourceSiteRule,
+				SourceReference:  "alarm-rules:" + contractRuleBaseID,
 				Title:            "供水温度过高",
+				Summary:          "供水温度过高",
 				Severity:         alarmmodel.SeverityMajor,
 				QualityPolicy:    alarmservice.EvaluationQualityValidOnly,
 				FreshnessSeconds: 900,
@@ -717,8 +727,12 @@ func (contractSiteRules) SiteRules(context.Context, string, string) ([]alarmserv
 		{
 			AssignmentID: contractRuleSlopeID,
 			Policy: alarmservice.AlarmPolicyRevision{
+				PolicyID:         contractRuleSlopeID,
 				AlarmType:        "CHILLER_SLOPE_RISE",
+				SourceType:       alarmmodel.SourceSiteRule,
+				SourceReference:  "alarm-rules:" + contractRuleSlopeID,
 				Title:            "供水温度骤升",
+				Summary:          "供水温度骤升",
 				Severity:         alarmmodel.SeverityWarning,
 				RuleKind:         alarmservice.RuleKindSlope,
 				TemplateKey:      "chiller-slope-rise",
@@ -731,7 +745,182 @@ func (contractSiteRules) SiteRules(context.Context, string, string) ([]alarmserv
 				Clear:            alarmservice.Condition{Kind: alarmservice.ConditionExpression, Expression: "supply <= 7.0", ExprInputs: map[string]string{"supply": contractRuleDeviceID + "/supply_water_temperature"}},
 			},
 		},
+	}
+	return &contractSiteRules{
+		rules: initial,
+		snapshots: map[uint64][]alarmservice.SiteRule{
+			1: append([]alarmservice.SiteRule(nil), initial...),
+		},
+		revisions: []alarmservice.SiteRuleBundleRevisionView{{
+			BundleRevision: 1,
+			BundleDigest:   strings.Repeat("1", 64),
+			Source:         alarmservice.RuleBundleSourceCLISync,
+			Summary:        alarmservice.SiteRuleSyncSummary{Added: 2, AddedRuleIDs: []string{contractRuleBaseID, contractRuleSlopeID}, ChangedRuleIDs: []string{}, UnchangedRuleIDs: []string{}, RetiredRuleIDs: []string{}},
+			RuleCount:      2,
+			PublishedAt:    "2026-08-24T01:00:00Z",
+			PublishedBy:    "alarm-rules",
+		}},
+	}
+}
+
+func (s *contractSiteRules) SiteRules(context.Context, string, string) ([]alarmservice.SiteRule, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]alarmservice.SiteRule(nil), s.rules...), nil
+}
+
+func (s *contractSiteRules) LatestSiteRuleBundleMeta(context.Context, string, string) (alarmservice.SiteRuleBundleMeta, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rev := s.revisions[0]
+	return alarmservice.SiteRuleBundleMeta{BundleRevision: rev.BundleRevision, BundleDigest: rev.BundleDigest}, nil
+}
+
+func (s *contractSiteRules) DiffSiteRules(_ context.Context, _, _ string, drafts []alarmservice.SiteRuleDraft) (alarmservice.SiteRuleDiffResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rev := s.revisions[0]
+	changes := make([]alarmservice.SiteRuleChangeEntry, 0, len(drafts))
+	changedIDs := make([]string, 0)
+	nodes := make([]alarmservice.SiteRuleGraphNodeView, 0, len(drafts))
+	edges := make([]alarmservice.SiteRuleGraphEdgeView, 0)
+	order := make([]string, 0, len(drafts))
+	for i, draft := range drafts {
+		ruleID := draft.RuleID
+		if ruleID == "" {
+			ruleID = fmt.Sprintf("01910000-b000-7000-8000-%012d", i+1)
+		}
+		changes = append(changes, alarmservice.SiteRuleChangeEntry{
+			RuleID:        ruleID,
+			Title:         draft.Title,
+			Change:        "CHANGED",
+			ChangedFields: []string{"title"},
+		})
+		changedIDs = append(changedIDs, ruleID)
+		deps := append([]string(nil), draft.DependsOnRuleIDs...)
+		nodes = append(nodes, alarmservice.SiteRuleGraphNodeView{
+			RuleID:           ruleID,
+			Title:            draft.Title,
+			Severity:         draft.Severity,
+			HopDepth:         len(deps),
+			DependsOnRuleIDs: deps,
+			ActionCount:      len(draft.Actions),
+			Change:           "CHANGED",
+		})
+		for _, depID := range deps {
+			edges = append(edges, alarmservice.SiteRuleGraphEdgeView{FromRuleID: depID, ToRuleID: ruleID})
+		}
+		order = append(order, ruleID)
+	}
+	return alarmservice.SiteRuleDiffResult{
+		Valid:           true,
+		CurrentRevision: rev.BundleRevision,
+		CurrentDigest:   rev.BundleDigest,
+		NextDigest:      strings.Repeat("2", 64),
+		Summary:         alarmservice.SiteRuleSyncSummary{AddedRuleIDs: []string{}, Changed: len(changedIDs), ChangedRuleIDs: changedIDs, UnchangedRuleIDs: []string{}, RetiredRuleIDs: []string{}},
+		Changes:         changes,
+		Graph:           alarmservice.SiteRuleGraphView{Nodes: nodes, Edges: edges, TopologicalOrder: order},
+		Issues:          []alarmservice.SiteRuleValidationIssue{},
 	}, nil
+}
+
+func (s *contractSiteRules) PublishSiteRules(_ context.Context, _, _ string, req alarmservice.SiteRulePublishRequest, actorID, actorName string, now time.Time) (alarmservice.SiteRulePublishResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current := s.revisions[0].BundleRevision
+	if req.ExpectedRevision != current {
+		return alarmservice.SiteRulePublishResult{}, &alarmservice.RuleBundleConflictError{ExpectedRevision: req.ExpectedRevision, CurrentRevision: current}
+	}
+	nextRev := current + 1
+	nextDigest := strings.Repeat("2", 64)
+	updated := make([]alarmservice.SiteRule, 0, len(req.Rules))
+	for _, draft := range req.Rules {
+		updated = append(updated, alarmservice.SiteRule{
+			AssignmentID: draft.RuleID,
+			Policy: alarmservice.AlarmPolicyRevision{
+				Title:            draft.Title,
+				Severity:         draft.Severity,
+				RuleKind:         draft.RuleKind,
+				DependsOnRuleIDs: append([]string(nil), draft.DependsOnRuleIDs...),
+				DependencyGate:   draft.DependencyGate,
+				TriggerMode:      draft.TriggerMode,
+				DurationSeconds:  draft.DurationSeconds,
+				RepeatCount:      draft.RepeatCount,
+				Raise:            alarmservice.Condition{Kind: alarmservice.ConditionCompare, Input: contractRuleDeviceID + "/supply_water_temperature", Operator: alarmservice.CompareGT, Value: alarmservice.NumberValue(10)},
+				Clear:            alarmservice.Condition{Kind: alarmservice.ConditionCompare, Input: contractRuleDeviceID + "/supply_water_temperature", Operator: alarmservice.CompareLT, Value: alarmservice.NumberValue(8)},
+			},
+		})
+	}
+	s.rules = updated
+	s.snapshots[nextRev] = append([]alarmservice.SiteRule(nil), updated...)
+	summary := alarmservice.SiteRuleSyncSummary{AddedRuleIDs: []string{}, Changed: len(updated), ChangedRuleIDs: []string{}, UnchangedRuleIDs: []string{}, RetiredRuleIDs: []string{}}
+	revEntry := alarmservice.SiteRuleBundleRevisionView{
+		BundleRevision: nextRev, BundleDigest: nextDigest, ChangeNote: req.ChangeNote,
+		Source: alarmservice.RuleBundleSourceWebWorkbench, Summary: summary, RuleCount: len(updated),
+		PublishedAt: now.UTC().Format(time.RFC3339Nano), PublishedBy: actorID, PublishedByName: actorName,
+	}
+	s.revisions = append([]alarmservice.SiteRuleBundleRevisionView{revEntry}, s.revisions...)
+	return s.publishResult(updated, revEntry, true, nil), nil
+}
+
+func (s *contractSiteRules) ListSiteRuleBundleRevisions(_ context.Context, _, _ string, _ int) (alarmservice.SiteRuleBundleRevisionList, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return alarmservice.SiteRuleBundleRevisionList{
+		CurrentRevision: s.revisions[0].BundleRevision,
+		Items:           append([]alarmservice.SiteRuleBundleRevisionView(nil), s.revisions...),
+	}, nil
+}
+
+func (s *contractSiteRules) RollbackSiteRules(_ context.Context, _, _ string, targetRevision uint64, req alarmservice.SiteRuleRollbackRequest, actorID, actorName string, now time.Time) (alarmservice.SiteRulePublishResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current := s.revisions[0].BundleRevision
+	if req.ExpectedRevision != current {
+		return alarmservice.SiteRulePublishResult{}, &alarmservice.RuleBundleConflictError{ExpectedRevision: req.ExpectedRevision, CurrentRevision: current}
+	}
+	snap, ok := s.snapshots[targetRevision]
+	if !ok {
+		return alarmservice.SiteRulePublishResult{}, alarmservice.ErrNotFound
+	}
+	nextRev := current + 1
+	nextDigest := strings.Repeat("3", 64)
+	s.rules = append([]alarmservice.SiteRule(nil), snap...)
+	s.snapshots[nextRev] = append([]alarmservice.SiteRule(nil), snap...)
+	fromRev := targetRevision
+	summary := alarmservice.SiteRuleSyncSummary{AddedRuleIDs: []string{}, Changed: len(snap), ChangedRuleIDs: []string{}, UnchangedRuleIDs: []string{}, RetiredRuleIDs: []string{}}
+	revEntry := alarmservice.SiteRuleBundleRevisionView{
+		BundleRevision: nextRev, BundleDigest: nextDigest, ChangeNote: req.ChangeNote,
+		Source: alarmservice.RuleBundleSourceRollback, RolledBackFromRevision: &fromRev, Summary: summary, RuleCount: len(snap),
+		PublishedAt: now.UTC().Format(time.RFC3339Nano), PublishedBy: actorID, PublishedByName: actorName,
+	}
+	s.revisions = append([]alarmservice.SiteRuleBundleRevisionView{revEntry}, s.revisions...)
+	return s.publishResult(snap, revEntry, true, &fromRev), nil
+}
+
+func (s *contractSiteRules) publishResult(rules []alarmservice.SiteRule, rev alarmservice.SiteRuleBundleRevisionView, changed bool, from *uint64) alarmservice.SiteRulePublishResult {
+	views := make([]alarmservice.SiteRuleView, 0, len(rules))
+	nodes := make([]alarmservice.SiteRuleGraphNodeView, 0, len(rules))
+	order := make([]string, 0, len(rules))
+	for _, rule := range rules {
+		views = append(views, alarmservice.SiteRuleView{
+			RuleID: rule.AssignmentID, Title: rule.Policy.Title, Severity: rule.Policy.Severity, TriggerMode: rule.Policy.TriggerMode,
+			DurationSeconds: rule.Policy.DurationSeconds, RepeatCount: rule.Policy.RepeatCount,
+			Raise: alarmservice.RuleCondition{Kind: alarmservice.ConditionCompare, Reading: &alarmservice.RuleReading{DeviceID: contractRuleDeviceID, PointCode: "supply_water_temperature"}, Operator: alarmservice.CompareGT, Value: 10},
+			Clear: alarmservice.RuleCondition{Kind: alarmservice.ConditionCompare, Reading: &alarmservice.RuleReading{DeviceID: contractRuleDeviceID, PointCode: "supply_water_temperature"}, Operator: alarmservice.CompareLT, Value: 8},
+		})
+		nodes = append(nodes, alarmservice.SiteRuleGraphNodeView{
+			RuleID: rule.AssignmentID, Title: rule.Policy.Title, Severity: rule.Policy.Severity, DependsOnRuleIDs: []string{},
+		})
+		order = append(order, rule.AssignmentID)
+	}
+	return alarmservice.SiteRulePublishResult{
+		BundleRevision: rev.BundleRevision, BundleDigest: rev.BundleDigest, Source: rev.Source, Changed: changed,
+		RolledBackFromRevision: from, ChangeNote: rev.ChangeNote, PublishedAt: rev.PublishedAt,
+		PublishedBy: rev.PublishedBy, PublishedByName: rev.PublishedByName, Summary: rev.Summary,
+		Graph: alarmservice.SiteRuleGraphView{Nodes: nodes, Edges: []alarmservice.SiteRuleGraphEdgeView{}, TopologicalOrder: order},
+		Items: views,
+	}
 }
 
 func TestAlarmSuppressionUnassignAndEvaluationsEndToEnd(t *testing.T) {
@@ -766,8 +955,9 @@ func TestAlarmSuppressionUnassignAndEvaluationsEndToEnd(t *testing.T) {
 			}},
 		}
 		if useHTTPAdapter {
+			rulesStore := newContractSiteRules()
 			internalHandler, err := alarmservice.NewHTTPHandler(alarmservice.HTTPConfig{
-				Store: store, Rules: contractSiteRules{}, DeadLetters: dlqStub, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now },
+				Store: store, Rules: rulesStore, Authoring: rulesStore, DeadLetters: dlqStub, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now },
 				GatewaySPIFFEID: "spiffe://hvac.local/platform-gateway", Audience: "alarm-service", MaxListLimit: 200,
 			})
 			if err != nil {
@@ -996,6 +1186,47 @@ func TestAlarmSuppressionUnassignAndEvaluationsEndToEnd(t *testing.T) {
 			}
 			if err := json.Unmarshal(afterReplayRec.Body.Bytes(), &afterReplayEnv); err != nil || len(afterReplayEnv.Data) != 0 {
 				t.Fatalf("expected empty dead-letters after replay, got err=%v body=%s", err, afterReplayRec.Body.String())
+			}
+
+			// Diff, hot-publish (CSRF + RBAC + 409 conflict + 200), revisions, rollback, and draft simulation.
+			diffReq := fmt.Sprintf(`{"rules":[{"ruleId":%q,"title":"供水温度过高（新版）","severity":"CRITICAL","triggerMode":"SIMPLE","raise":{"kind":"COMPARE","reading":{"deviceId":%q,"pointCode":"supply_water_temperature"},"operator":"GT","value":9.5},"clear":{"kind":"COMPARE","reading":{"deviceId":%q,"pointCode":"supply_water_temperature"},"operator":"LT","value":7.5}}]}`, contractRuleBaseID, contractRuleDeviceID, contractRuleDeviceID)
+			diffRec := fixture.serve(http.MethodPost, "/api/v1/alarm-rules/diff?siteId="+fixture.siteID, diffReq, "")
+			if diffRec.Code != http.StatusOK || !strings.Contains(diffRec.Body.String(), `"valid":true`) {
+				t.Fatalf("diff status=%d body=%s", diffRec.Code, diffRec.Body.String())
+			}
+
+			draftSimReq := fmt.Sprintf(`{"ruleId":%q,"ruleDraft":{"ruleId":%q,"title":"草稿阈值推演","severity":"MAJOR","triggerMode":"SIMPLE","raise":{"kind":"COMPARE","reading":{"deviceId":%q,"pointCode":"supply_water_temperature"},"operator":"GT","value":8},"clear":{"kind":"COMPARE","reading":{"deviceId":%q,"pointCode":"supply_water_temperature"},"operator":"LT","value":6}},"steps":[{"readings":[{"deviceId":%q,"pointCode":"supply_water_temperature","value":9.0}]}]}`, contractRuleBaseID, contractRuleBaseID, contractRuleDeviceID, contractRuleDeviceID, contractRuleDeviceID)
+			draftSimRec := fixture.serve(http.MethodPost, "/api/v1/alarm-rules/simulate?siteId="+fixture.siteID, draftSimReq, "")
+			if draftSimRec.Code != http.StatusOK || !strings.Contains(draftSimRec.Body.String(), `"finalActive":true`) {
+				t.Fatalf("draft simulate status=%d body=%s", draftSimRec.Code, draftSimRec.Body.String())
+			}
+
+			pubBody := fmt.Sprintf(`{"expectedRevision":1,"changeNote":"工作台调整阈值","rules":[{"ruleId":%q,"title":"供水温度过高（新版）","severity":"CRITICAL","triggerMode":"SIMPLE","raise":{"kind":"COMPARE","reading":{"deviceId":%q,"pointCode":"supply_water_temperature"},"operator":"GT","value":9.5},"clear":{"kind":"COMPARE","reading":{"deviceId":%q,"pointCode":"supply_water_temperature"},"operator":"LT","value":7.5}}]}`, contractRuleBaseID, contractRuleDeviceID, contractRuleDeviceID)
+			fixture.deny.Store(true)
+			deniedPub := fixture.serve(http.MethodPut, "/api/v1/alarm-rules?siteId="+fixture.siteID, pubBody, "")
+			if deniedPub.Code != http.StatusForbidden {
+				t.Fatalf("expected 403 when schedule.manage is denied on PUT /alarm-rules, got %d body=%s", deniedPub.Code, deniedPub.Body.String())
+			}
+			fixture.deny.Store(false)
+
+			pubRec := fixture.serve(http.MethodPut, "/api/v1/alarm-rules?siteId="+fixture.siteID, pubBody, "")
+			if pubRec.Code != http.StatusOK || !strings.Contains(pubRec.Body.String(), `"bundleRevision":2`) {
+				t.Fatalf("publish status=%d body=%s", pubRec.Code, pubRec.Body.String())
+			}
+
+			stalePubRec := fixture.serve(http.MethodPut, "/api/v1/alarm-rules?siteId="+fixture.siteID, pubBody, "")
+			if stalePubRec.Code != http.StatusConflict || !strings.Contains(stalePubRec.Body.String(), "ALARM_RULE_BUNDLE_CONFLICT") {
+				t.Fatalf("expected 409 ALARM_RULE_BUNDLE_CONFLICT on stale publish, got %d body=%s", stalePubRec.Code, stalePubRec.Body.String())
+			}
+
+			revsRec := fixture.serve(http.MethodGet, "/api/v1/alarm-rules/revisions?siteId="+fixture.siteID+"&limit=10", "", "")
+			if revsRec.Code != http.StatusOK || !strings.Contains(revsRec.Body.String(), `"currentRevision":2`) {
+				t.Fatalf("revisions status=%d body=%s", revsRec.Code, revsRec.Body.String())
+			}
+
+			rbRec := fixture.serve(http.MethodPost, "/api/v1/alarm-rules/revisions/1/rollback?siteId="+fixture.siteID, `{"expectedRevision":2,"changeNote":"回滚首版"}`, "")
+			if rbRec.Code != http.StatusOK || !strings.Contains(rbRec.Body.String(), `"bundleRevision":3`) || !strings.Contains(rbRec.Body.String(), `"rolledBackFromRevision":1`) {
+				t.Fatalf("rollback status=%d body=%s", rbRec.Code, rbRec.Body.String())
 			}
 		}
 

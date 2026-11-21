@@ -214,7 +214,8 @@
         "modules/alarm/migrations/017_drop_legacy_migration_backups_and_comment_tables.sql",
         "modules/alarm/migrations/alarm-suppression-notification-events.sql",
         "modules/alarm/migrations/alarm-evaluation-slope-window.sql",
-        "modules/alarm/migrations/alarm-rule-action-outbox.sql"
+        "modules/alarm/migrations/alarm-rule-action-outbox.sql",
+        "modules/alarm/migrations/alarm-site-rule-bundles.sql"
       ]
     },
     {

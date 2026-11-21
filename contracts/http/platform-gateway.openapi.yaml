@@ -2406,13 +2406,50 @@
           "4XX": { "$ref": "#/components/responses/Problem" },
           "5XX": { "$ref": "#/components/responses/Problem" }
         }
+      },
+      "put": {
+        "operationId": "publishSiteAlarmRules",
+        "summary": "Hot-publish a validated DAG rule bundle for a Site",
+        "description": "Validates the full rule bundle and causal DAG, checks optimistic revision lock (409 on stale expectedRevision), atomically publishes changes, preserves unchanged evaluation state, and records an immutable bundle revision.",
+        "parameters": [
+          { "name": "siteId", "in": "query", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "$ref": "#/components/parameters/CsrfToken" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlarmRulePublishRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Hot-published Site rule bundle result.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlarmRulePublishEnvelope" } } } },
+          "4XX": { "$ref": "#/components/responses/Problem" },
+          "5XX": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/alarm-rules/diff": {
+      "post": {
+        "operationId": "diffSiteAlarmRules",
+        "summary": "Preview structural diff and DAG validation for a candidate Site rule bundle",
+        "parameters": [
+          { "name": "siteId", "in": "query", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "$ref": "#/components/parameters/CsrfToken" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlarmRuleDiffRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Candidate bundle diff and DAG validation result.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlarmRuleDiffEnvelope" } } } },
+          "4XX": { "$ref": "#/components/responses/Problem" },
+          "5XX": { "$ref": "#/components/responses/Problem" }
+        }
       }
     },
     "/api/v1/alarm-rules/simulate": {
       "post": {
         "operationId": "simulateSiteAlarmRule",
         "summary": "Dry-run a Site alarm rule against multi-step telemetry samples",
-        "description": "Side-effect-free simulation against the Site's rules in effect. Evaluates 1 to 32 sequential snapshots without persisting state or firing alarms.",
+        "description": "Side-effect-free simulation against the Site's rules in effect or an unsaved ruleDraft. Evaluates 1 to 32 sequential snapshots without persisting state or firing alarms.",
         "parameters": [
           { "name": "siteId", "in": "query", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } }
         ],
@@ -2422,6 +2459,41 @@
         },
         "responses": {
           "200": { "description": "Step-by-step evaluation result.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlarmRuleSimulationEnvelope" } } } },
+          "4XX": { "$ref": "#/components/responses/Problem" },
+          "5XX": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/alarm-rules/revisions": {
+      "get": {
+        "operationId": "listSiteAlarmRuleRevisions",
+        "summary": "List immutable Site rule bundle revisions newest-first",
+        "parameters": [
+          { "name": "siteId", "in": "query", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 100 } }
+        ],
+        "responses": {
+          "200": { "description": "Immutable rule bundle revision history.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlarmRuleRevisionListEnvelope" } } } },
+          "4XX": { "$ref": "#/components/responses/Problem" },
+          "5XX": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/alarm-rules/revisions/{revision}/rollback": {
+      "post": {
+        "operationId": "rollbackSiteAlarmRules",
+        "summary": "Roll back a Site's active alarm rules to a historical bundle revision",
+        "parameters": [
+          { "name": "revision", "in": "path", "required": true, "schema": { "type": "integer", "minimum": 1 } },
+          { "name": "siteId", "in": "query", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "$ref": "#/components/parameters/CsrfToken" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlarmRuleRollbackRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Rolled back rule bundle result.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlarmRulePublishEnvelope" } } } },
           "4XX": { "$ref": "#/components/responses/Problem" },
           "5XX": { "$ref": "#/components/responses/Problem" }
         }
@@ -5057,7 +5129,11 @@
             "type": "object",
             "additionalProperties": false,
             "required": ["requestId"],
-            "properties": { "requestId": { "type": "string" } }
+            "properties": {
+              "requestId": { "type": "string" },
+              "bundleRevision": { "type": "integer", "minimum": 1 },
+              "bundleDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+            }
           }
         }
       },
@@ -5068,6 +5144,8 @@
         "properties": {
           "ruleId": { "$ref": "#/components/schemas/UUIDv7" },
           "title": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "alarmType": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "summary": { "type": "string", "minLength": 1, "maxLength": 2048 },
           "severity": { "type": "string", "enum": ["INFO", "WARNING", "MINOR", "MAJOR", "CRITICAL"] },
           "ruleKind": { "type": "string", "enum": ["THRESHOLD", "SLOPE", "EXPRESSION"] },
           "templateKey": { "type": "string", "minLength": 1, "maxLength": 128 },
@@ -5076,11 +5154,242 @@
           "hopDepth": { "type": "integer", "minimum": 0, "maximum": 3 },
           "dependencyGate": { "type": "string", "enum": ["NONE", "ALL_ACTIVE", "ANY_ACTIVE"] },
           "actions": { "type": "array", "maxItems": 4, "items": { "$ref": "#/components/schemas/AlarmRuleAction" } },
+          "qualityPolicy": { "type": "string", "enum": ["VALID_ONLY", "USABLE"] },
+          "freshnessSeconds": { "type": "integer", "minimum": 1 },
           "triggerMode": { "type": "string", "enum": ["SIMPLE", "DURATION", "REPEATING"], "description": "SIMPLE raises at once; DURATION once the raise condition has held durationSeconds; REPEATING once it has held repeatCount readings in a row." },
           "durationSeconds": { "type": "integer", "minimum": 1 },
           "repeatCount": { "type": "integer", "minimum": 1 },
           "raise": { "$ref": "#/components/schemas/AlarmRuleCondition" },
           "clear": { "$ref": "#/components/schemas/AlarmRuleCondition" }
+        }
+      },
+      "AlarmRuleDraft": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title", "severity", "triggerMode", "raise", "clear"],
+        "properties": {
+          "ruleId": { "$ref": "#/components/schemas/UUIDv7" },
+          "title": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "alarmType": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "summary": { "type": "string", "minLength": 1, "maxLength": 2048 },
+          "severity": { "type": "string", "enum": ["INFO", "WARNING", "MINOR", "MAJOR", "CRITICAL"] },
+          "ruleKind": { "type": "string", "enum": ["THRESHOLD", "SLOPE", "EXPRESSION"] },
+          "templateKey": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "overriddenFields": { "type": "array", "maxItems": 32, "items": { "type": "string", "minLength": 1, "maxLength": 128 } },
+          "dependsOnRuleIds": { "type": "array", "maxItems": 16, "items": { "$ref": "#/components/schemas/UUIDv7" } },
+          "dependencyGate": { "type": "string", "enum": ["NONE", "ALL_ACTIVE", "ANY_ACTIVE"] },
+          "actions": { "type": "array", "maxItems": 4, "items": { "$ref": "#/components/schemas/AlarmRuleAction" } },
+          "qualityPolicy": { "type": "string", "enum": ["VALID_ONLY", "USABLE"] },
+          "freshnessSeconds": { "type": "integer", "minimum": 1 },
+          "triggerMode": { "type": "string", "enum": ["SIMPLE", "DURATION", "REPEATING"] },
+          "durationSeconds": { "type": "integer", "minimum": 0 },
+          "repeatCount": { "type": "integer", "minimum": 0 },
+          "raise": { "$ref": "#/components/schemas/AlarmRuleCondition" },
+          "clear": { "$ref": "#/components/schemas/AlarmRuleCondition" }
+        }
+      },
+      "AlarmRuleValidationIssue": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "message"],
+        "properties": {
+          "ruleId": { "type": "string" },
+          "field": { "type": "string" },
+          "code": { "type": "string" },
+          "message": { "type": "string" }
+        }
+      },
+      "AlarmRuleSyncSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["added", "changed", "unchanged", "retired", "addedRuleIds", "changedRuleIds", "unchangedRuleIds", "retiredRuleIds"],
+        "properties": {
+          "added": { "type": "integer", "minimum": 0 },
+          "changed": { "type": "integer", "minimum": 0 },
+          "unchanged": { "type": "integer", "minimum": 0 },
+          "retired": { "type": "integer", "minimum": 0 },
+          "addedRuleIds": { "type": "array", "items": { "$ref": "#/components/schemas/UUIDv7" } },
+          "changedRuleIds": { "type": "array", "items": { "$ref": "#/components/schemas/UUIDv7" } },
+          "unchangedRuleIds": { "type": "array", "items": { "$ref": "#/components/schemas/UUIDv7" } },
+          "retiredRuleIds": { "type": "array", "items": { "$ref": "#/components/schemas/UUIDv7" } }
+        }
+      },
+      "AlarmRuleChangeEntry": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ruleId", "title", "change", "changedFields"],
+        "properties": {
+          "ruleId": { "$ref": "#/components/schemas/UUIDv7" },
+          "title": { "type": "string" },
+          "change": { "type": "string", "enum": ["ADDED", "CHANGED", "UNCHANGED", "RETIRED"] },
+          "changedFields": { "type": "array", "items": { "type": "string" } },
+          "willClearActiveAlarm": { "type": "boolean" },
+          "before": { "$ref": "#/components/schemas/AlarmRule" },
+          "after": { "$ref": "#/components/schemas/AlarmRule" }
+        }
+      },
+      "AlarmRuleGraphNode": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ruleId", "title", "severity", "hopDepth", "dependsOnRuleIds", "actionCount"],
+        "properties": {
+          "ruleId": { "$ref": "#/components/schemas/UUIDv7" },
+          "title": { "type": "string" },
+          "severity": { "type": "string", "enum": ["INFO", "WARNING", "MINOR", "MAJOR", "CRITICAL"] },
+          "ruleKind": { "type": "string", "enum": ["THRESHOLD", "SLOPE", "EXPRESSION"] },
+          "hopDepth": { "type": "integer", "minimum": 0, "maximum": 3 },
+          "dependsOnRuleIds": { "type": "array", "items": { "$ref": "#/components/schemas/UUIDv7" } },
+          "actionCount": { "type": "integer", "minimum": 0 },
+          "change": { "type": "string", "enum": ["ADDED", "CHANGED", "UNCHANGED", "RETIRED"] }
+        }
+      },
+      "AlarmRuleGraphEdge": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["fromRuleId", "toRuleId"],
+        "properties": {
+          "fromRuleId": { "$ref": "#/components/schemas/UUIDv7" },
+          "toRuleId": { "$ref": "#/components/schemas/UUIDv7" }
+        }
+      },
+      "AlarmRuleGraph": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["nodes", "edges", "topologicalOrder", "maxHopDepth"],
+        "properties": {
+          "nodes": { "type": "array", "items": { "$ref": "#/components/schemas/AlarmRuleGraphNode" } },
+          "edges": { "type": "array", "items": { "$ref": "#/components/schemas/AlarmRuleGraphEdge" } },
+          "topologicalOrder": { "type": "array", "items": { "$ref": "#/components/schemas/UUIDv7" } },
+          "maxHopDepth": { "type": "integer", "minimum": 0, "maximum": 3 }
+        }
+      },
+      "AlarmRuleDiffRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["rules"],
+        "properties": {
+          "rules": { "type": "array", "maxItems": 256, "items": { "$ref": "#/components/schemas/AlarmRuleDraft" } }
+        }
+      },
+      "AlarmRuleDiffResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["valid", "currentRevision", "currentDigest", "nextDigest", "summary", "changes", "graph", "issues"],
+        "properties": {
+          "valid": { "type": "boolean" },
+          "currentRevision": { "type": "integer", "minimum": 0 },
+          "currentDigest": { "type": "string" },
+          "nextDigest": { "type": "string" },
+          "summary": { "$ref": "#/components/schemas/AlarmRuleSyncSummary" },
+          "changes": { "type": "array", "items": { "$ref": "#/components/schemas/AlarmRuleChangeEntry" } },
+          "graph": { "$ref": "#/components/schemas/AlarmRuleGraph" },
+          "issues": { "type": "array", "items": { "$ref": "#/components/schemas/AlarmRuleValidationIssue" } }
+        }
+      },
+      "AlarmRuleDiffEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["data", "meta"],
+        "properties": {
+          "data": { "$ref": "#/components/schemas/AlarmRuleDiffResult" },
+          "meta": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["requestId"],
+            "properties": { "requestId": { "type": "string" } }
+          }
+        }
+      },
+      "AlarmRulePublishRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["expectedRevision", "rules"],
+        "properties": {
+          "expectedRevision": { "type": "integer", "minimum": 0 },
+          "changeNote": { "type": "string", "maxLength": 500 },
+          "rules": { "type": "array", "maxItems": 256, "items": { "$ref": "#/components/schemas/AlarmRuleDraft" } }
+        }
+      },
+      "AlarmRulePublishResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["bundleRevision", "bundleDigest", "source", "changed", "publishedAt", "publishedBy", "summary", "graph", "items"],
+        "properties": {
+          "bundleRevision": { "type": "integer", "minimum": 1 },
+          "bundleDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "source": { "type": "string", "enum": ["WEB_WORKBENCH", "CLI_SYNC", "ROLLBACK"] },
+          "changed": { "type": "boolean" },
+          "rolledBackFromRevision": { "type": "integer", "minimum": 1 },
+          "changeNote": { "type": "string" },
+          "publishedAt": { "type": "string" },
+          "publishedBy": { "type": "string" },
+          "publishedByName": { "type": "string" },
+          "summary": { "$ref": "#/components/schemas/AlarmRuleSyncSummary" },
+          "graph": { "$ref": "#/components/schemas/AlarmRuleGraph" },
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/AlarmRule" } }
+        }
+      },
+      "AlarmRulePublishEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["data", "meta"],
+        "properties": {
+          "data": { "$ref": "#/components/schemas/AlarmRulePublishResult" },
+          "meta": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["requestId"],
+            "properties": { "requestId": { "type": "string" } }
+          }
+        }
+      },
+      "AlarmRuleBundleRevision": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["bundleRevision", "bundleDigest", "source", "summary", "ruleCount", "publishedAt", "publishedBy"],
+        "properties": {
+          "bundleRevision": { "type": "integer", "minimum": 1 },
+          "bundleDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "changeNote": { "type": "string" },
+          "source": { "type": "string", "enum": ["WEB_WORKBENCH", "CLI_SYNC", "ROLLBACK"] },
+          "rolledBackFromRevision": { "type": "integer", "minimum": 1 },
+          "summary": { "$ref": "#/components/schemas/AlarmRuleSyncSummary" },
+          "ruleCount": { "type": "integer", "minimum": 0 },
+          "publishedAt": { "type": "string" },
+          "publishedBy": { "type": "string" },
+          "publishedByName": { "type": "string" }
+        }
+      },
+      "AlarmRuleRevisionList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["currentRevision", "items"],
+        "properties": {
+          "currentRevision": { "type": "integer", "minimum": 0 },
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/AlarmRuleBundleRevision" } }
+        }
+      },
+      "AlarmRuleRevisionListEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["data", "meta"],
+        "properties": {
+          "data": { "$ref": "#/components/schemas/AlarmRuleRevisionList" },
+          "meta": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["requestId"],
+            "properties": { "requestId": { "type": "string" } }
+          }
+        }
+      },
+      "AlarmRuleRollbackRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["expectedRevision"],
+        "properties": {
+          "expectedRevision": { "type": "integer", "minimum": 0 },
+          "changeNote": { "type": "string", "maxLength": 500 }
         }
       },
       "AlarmRuleAction": {
@@ -5173,6 +5482,7 @@
         "required": ["ruleId", "steps"],
         "properties": {
           "ruleId": { "$ref": "#/components/schemas/UUIDv7" },
+          "ruleDraft": { "$ref": "#/components/schemas/AlarmRuleDraft" },
           "dependencyGate": { "type": "string", "enum": ["NONE", "ALL_ACTIVE", "ANY_ACTIVE"] },
           "actions": { "type": "array", "maxItems": 4, "items": { "$ref": "#/components/schemas/AlarmRuleAction" } },
           "steps": { "type": "array", "minItems": 1, "maxItems": 32, "items": { "$ref": "#/components/schemas/AlarmRuleSimulationStepInput" } }

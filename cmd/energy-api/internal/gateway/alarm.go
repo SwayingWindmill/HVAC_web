@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -41,9 +42,14 @@ type publicAlarmRoute struct {
 	action   alarmauth.Action
 	// siteRules is the Site's rules in effect (#693), read with the same grant as its alarm list.
 	siteRules                bool
+	siteRulesDiff            bool
+	siteRulesPublish         bool
 	siteRulesSimulate        bool
+	siteRuleRevisions        bool
+	siteRuleRollback         bool
 	siteRuleDeadLetters      bool
 	siteRuleDeadLetterReplay bool
+	bundleRevision           uint64
 	outboxID                 string
 	evaluations              bool
 	now                      time.Time
@@ -120,7 +126,7 @@ func (a *directAlarmAdapter) ResolveScope(ctx context.Context, tenantID, alarmID
 }
 
 func (a *directAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Request, route publicAlarmRoute, _ string) ([]byte, int, *ownerFailure) {
-	if route.siteRules || route.siteRulesSimulate {
+	if route.siteRules || route.siteRulesDiff || route.siteRulesPublish || route.siteRulesSimulate || route.siteRuleRevisions || route.siteRuleRollback {
 		failure := alarmUnavailable("Site rules are only served by the Alarm Service.")
 		return nil, http.StatusServiceUnavailable, &failure
 	}
@@ -390,8 +396,14 @@ func (a *httpAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Requ
 	switch {
 	case route.siteRules:
 		path = internalSiteAlarmsPrefix + url.PathEscape(route.siteID) + "/alarm-rules"
+	case route.siteRulesDiff:
+		path = internalSiteAlarmsPrefix + url.PathEscape(route.siteID) + "/alarm-rules:diff"
 	case route.siteRulesSimulate:
 		path = internalSiteAlarmsPrefix + url.PathEscape(route.siteID) + "/alarm-rules:simulate"
+	case route.siteRuleRevisions:
+		path = internalSiteAlarmsPrefix + url.PathEscape(route.siteID) + "/alarm-rules/revisions"
+	case route.siteRuleRollback:
+		path = internalSiteAlarmsPrefix + url.PathEscape(route.siteID) + "/alarm-rules/revisions/" + strconv.FormatUint(route.bundleRevision, 10) + ":rollback"
 	case route.siteRuleDeadLetters:
 		path = internalSiteAlarmsPrefix + url.PathEscape(route.siteID) + "/alarm-rules/dead-letters"
 	case route.siteRuleDeadLetterReplay:
@@ -406,7 +418,44 @@ func (a *httpAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Requ
 		}
 	}
 	upstreamURL := a.baseURL + path
-	if route.siteRulesSimulate {
+	switch {
+	case route.siteRulesPublish:
+		method = http.MethodPut
+		if publicRequest.Body == nil {
+			failure := alarmInvalid("The Alarm rule publish request body is required.")
+			return nil, 0, &failure
+		}
+		rawBody, err := readBoundedBody(publicRequest.Body, 256<<10)
+		if err != nil || len(bytes.TrimSpace(rawBody)) == 0 {
+			failure := alarmInvalid("The Alarm rule publish request body is invalid.")
+			return nil, 0, &failure
+		}
+		requestBody = bytes.NewReader(rawBody)
+	case route.siteRulesDiff:
+		method = http.MethodPost
+		if publicRequest.Body == nil {
+			failure := alarmInvalid("The Alarm rule diff request body is required.")
+			return nil, 0, &failure
+		}
+		rawBody, err := readBoundedBody(publicRequest.Body, 256<<10)
+		if err != nil || len(bytes.TrimSpace(rawBody)) == 0 {
+			failure := alarmInvalid("The Alarm rule diff request body is invalid.")
+			return nil, 0, &failure
+		}
+		requestBody = bytes.NewReader(rawBody)
+	case route.siteRuleRollback:
+		method = http.MethodPost
+		if publicRequest.Body == nil {
+			failure := alarmInvalid("The Alarm rule rollback request body is required.")
+			return nil, 0, &failure
+		}
+		rawBody, err := readBoundedBody(publicRequest.Body, 16<<10)
+		if err != nil || len(bytes.TrimSpace(rawBody)) == 0 {
+			failure := alarmInvalid("The Alarm rule rollback request body is invalid.")
+			return nil, 0, &failure
+		}
+		requestBody = bytes.NewReader(rawBody)
+	case route.siteRulesSimulate:
 		method = http.MethodPost
 		if publicRequest.Body == nil {
 			failure := alarmInvalid("The Alarm rule simulation request body is required.")
@@ -418,15 +467,15 @@ func (a *httpAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Requ
 			return nil, 0, &failure
 		}
 		requestBody = bytes.NewReader(rawBody)
-	} else if route.siteRuleDeadLetterReplay {
+	case route.siteRuleDeadLetterReplay:
 		method = http.MethodPost
-	} else if route.alarmID == "" {
+	case route.alarmID == "":
 		query := publicRequest.URL.Query()
 		query.Del("siteId")
 		if encoded := query.Encode(); encoded != "" {
 			upstreamURL += "?" + encoded
 		}
-	} else if route.evaluations {
+	case route.evaluations:
 		if encoded := publicRequest.URL.Query().Encode(); encoded != "" {
 			upstreamURL += "?" + encoded
 		}
@@ -461,18 +510,18 @@ func (a *httpAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Requ
 		return nil, 0, &failure
 	}
 	request.Header.Set("Accept", "application/json, application/problem+json")
-	if route.siteRulesSimulate {
+	if route.siteRulesSimulate || route.siteRulesDiff {
 		request.Header.Set(alarmReadContextHeader, serviceContext)
 		if ct := strings.TrimSpace(publicRequest.Header.Get("Content-Type")); ct != "" {
 			request.Header.Set("Content-Type", ct)
 		} else {
 			request.Header.Set("Content-Type", "application/json")
 		}
-	} else if route.siteRuleDeadLetterReplay || route.action == alarmauth.ActionAck || isMutation {
+	} else if route.siteRulesPublish || route.siteRuleRollback || route.siteRuleDeadLetterReplay || route.action == alarmauth.ActionAck || isMutation {
 		request.Header.Set(alarmWriteContextHeader, serviceContext)
 		if ct := publicRequest.Header.Get("Content-Type"); strings.TrimSpace(ct) != "" {
 			request.Header.Set("Content-Type", ct)
-		} else if isMutation {
+		} else if isMutation || route.siteRulesPublish || route.siteRuleRollback {
 			request.Header.Set("Content-Type", "application/json")
 		}
 		if key := strings.TrimSpace(publicRequest.Header.Get("Idempotency-Key")); key != "" {
@@ -546,8 +595,30 @@ func matchPublicAlarmRoute(path string) (publicAlarmRoute, bool) {
 	if path == "/api/v1/alarm-rules" {
 		return publicAlarmRoute{template: "/api/v1/alarm-rules", action: alarmauth.ActionRead, siteRules: true}, true
 	}
+	if path == "/api/v1/alarm-rules/diff" {
+		return publicAlarmRoute{template: "/api/v1/alarm-rules/diff", action: alarmauth.ActionRead, siteRulesDiff: true}, true
+	}
 	if path == "/api/v1/alarm-rules/simulate" {
 		return publicAlarmRoute{template: "/api/v1/alarm-rules/simulate", action: alarmauth.ActionRead, siteRulesSimulate: true}, true
+	}
+	if path == "/api/v1/alarm-rules/revisions" {
+		return publicAlarmRoute{template: "/api/v1/alarm-rules/revisions", action: alarmauth.ActionRead, siteRuleRevisions: true}, true
+	}
+	if rest, ok := strings.CutPrefix(path, "/api/v1/alarm-rules/revisions/"); ok {
+		parts := strings.Split(rest, "/")
+		if len(parts) == 2 && parts[0] != "" && parts[1] == "rollback" {
+			revText, err := url.PathUnescape(parts[0])
+			if err == nil && revText != "" {
+				if rev, parseErr := strconv.ParseInt(revText, 10, 64); parseErr == nil && rev > 0 && strconv.FormatInt(rev, 10) == revText {
+					return publicAlarmRoute{
+						template:         "/api/v1/alarm-rules/revisions/{revision}/rollback",
+						bundleRevision:   uint64(rev),
+						siteRuleRollback: true,
+					}, true
+				}
+			}
+		}
+		return publicAlarmRoute{}, false
 	}
 	if path == "/api/v1/alarm-rules/dead-letters" {
 		return publicAlarmRoute{template: "/api/v1/alarm-rules/dead-letters", action: alarmauth.ActionRead, siteRuleDeadLetters: true}, true
@@ -618,8 +689,20 @@ func dispatchAlarmRoute(h *handler, writer http.ResponseWriter, request *http.Re
 		dispatchSiteRulesRoute(h, writer, request, route)
 		return
 	}
+	if route.siteRulesDiff {
+		dispatchSiteRulesDiffRoute(h, writer, request, route)
+		return
+	}
 	if route.siteRulesSimulate {
 		dispatchSiteRulesSimulateRoute(h, writer, request, route)
+		return
+	}
+	if route.siteRuleRevisions {
+		dispatchSiteRuleRevisionsRoute(h, writer, request, route)
+		return
+	}
+	if route.siteRuleRollback {
+		dispatchSiteRuleRollbackRoute(h, writer, request, route)
 		return
 	}
 	if route.siteRuleDeadLetters {
@@ -785,9 +868,18 @@ func executeSiteRulesGatewayCall(
 	return response, true
 }
 
-// dispatchSiteRulesRoute lists the Site's rules in effect. It answers with Problem Details, as the
-// generated client expects, where the older Alarm routes keep their own error envelope.
+// dispatchSiteRulesRoute handles GET (list rules) and PUT (hot-publish bundle) on /api/v1/alarm-rules.
 func dispatchSiteRulesRoute(h *handler, writer http.ResponseWriter, request *http.Request, route publicAlarmRoute) {
+	switch request.Method {
+	case http.MethodGet:
+	case http.MethodPut:
+		route.siteRulesPublish = true
+		dispatchSiteRulesPublishRoute(h, writer, request, route)
+		return
+	default:
+		writeMethodNotAllowedFor(writer, request, "GET, PUT")
+		return
+	}
 	response, ok := executeSiteRulesGatewayCall(h, writer, request, route, http.MethodGet, "The Site rules query takes exactly one siteId.", false)
 	if !ok {
 		return
@@ -806,11 +898,315 @@ func dispatchSiteRulesRoute(h *handler, writer http.ResponseWriter, request *htt
 		writeProblem(writer, request, http.StatusServiceUnavailable, "INTERNAL_ERROR", "Internal error", "Alarm Service returned an invalid Site rule list.", true, nil)
 		return
 	}
+	meta := map[string]any{"requestId": requestIDFromContext(request.Context())}
+	if list.BundleRevision > 0 {
+		meta["bundleRevision"] = list.BundleRevision
+	}
+	if list.BundleDigest != "" {
+		meta["bundleDigest"] = list.BundleDigest
+	}
 	writer.Header().Set("Cache-Control", "private, no-store")
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"data": list.Items,
+		"meta": meta,
+	})
+}
+
+func dispatchSiteRulesDiffRoute(h *handler, writer http.ResponseWriter, request *http.Request, route publicAlarmRoute) {
+	response, ok := executeSiteRulesGatewayCall(h, writer, request, route, http.MethodPost, "The Site rule diff query takes exactly one siteId.", true)
+	if !ok {
+		return
+	}
+	if response.status != http.StatusOK {
+		failure := alarmProblemFromUpstream(response.status, response.body, "Alarm Service could not compute the Site rule diff.")
+		writeProblem(writer, request, failure.status, failure.code, failure.title, failure.detail, failure.retryable, nil)
+		return
+	}
+	result, ok := response.value.(alarmservice.SiteRuleDiffResult)
+	if !ok {
+		failure := alarmUnavailable("Alarm Service returned an invalid Site rule diff.")
+		writeProblem(writer, request, failure.status, failure.code, failure.title, failure.detail, failure.retryable, nil)
+		return
+	}
+	writer.Header().Set("Cache-Control", "private, no-store")
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"data": result,
 		"meta": map[string]any{"requestId": requestIDFromContext(request.Context())},
 	})
+}
+
+func validateSiteRuleRevisionsQuery(query url.Values) (string, bool) {
+	for key, values := range query {
+		if len(values) != 1 || (key != "siteId" && key != "limit") {
+			return "", false
+		}
+	}
+	siteID := strings.TrimSpace(query.Get("siteId"))
+	if !alarmmodel.IsUUIDv7(siteID) {
+		return "", false
+	}
+	if rawLimit := strings.TrimSpace(query.Get("limit")); rawLimit != "" {
+		limit, err := strconv.Atoi(rawLimit)
+		if err != nil || limit < 1 || limit > 100 {
+			return "", false
+		}
+	}
+	return siteID, true
+}
+
+func dispatchSiteRuleRevisionsRoute(h *handler, writer http.ResponseWriter, request *http.Request, route publicAlarmRoute) {
+	fail := func(failure ownerFailure) {
+		writeProblem(writer, request, failure.status, failure.code, failure.title, failure.detail, failure.retryable, nil)
+	}
+	if request.Method != http.MethodGet {
+		writeMethodNotAllowedFor(writer, request, http.MethodGet)
+		return
+	}
+	if h.alarm == nil || h.alarm.operations == nil {
+		fail(alarmUnavailable("The Alarm service is not configured."))
+		return
+	}
+	siteID, valid := validateSiteRuleRevisionsQuery(request.URL.Query())
+	if !valid {
+		fail(alarmInvalid("The Site rule revisions query requires siteId and optional limit between 1 and 100."))
+		return
+	}
+	route.siteID = siteID
+	session, ok := h.alarmSession(writer, request)
+	if !ok {
+		return
+	}
+	if failure := h.checkAlarmSiteVisibility(request, session, route.siteID, true); failure != nil {
+		fail(*failure)
+		return
+	}
+	response, failure := CallOwner(request.Context(), h, h.alarmCaller(session), h.alarmOwner(), string(route.action), route.scope(session.TenantID), alarmCall{public: request, route: route})
+	if failure != nil {
+		fail(*failure)
+		return
+	}
+	if response.status != http.StatusOK {
+		fail(alarmProblemFromUpstream(response.status, response.body, "Alarm Service could not list Site rule revisions."))
+		return
+	}
+	list, ok := response.value.(alarmservice.SiteRuleBundleRevisionList)
+	if !ok {
+		fail(alarmUnavailable("Alarm Service returned an invalid Site rule revision list."))
+		return
+	}
+	if list.Items == nil {
+		list.Items = []alarmservice.SiteRuleBundleRevisionView{}
+	}
+	writer.Header().Set("Cache-Control", "private, no-store")
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"data": list,
+		"meta": map[string]any{"requestId": requestIDFromContext(request.Context())},
+	})
+}
+
+type siteRuleWriteSpec struct {
+	expectedMethod        string
+	targetID              string
+	targetLabel           string
+	auditAction           string
+	forbiddenDetail       string
+	queryErrorDetail      string
+	contentTypeDetail     string
+	invalidBodyDetail     string
+	maxBodyBytes          int64
+	upstreamErrorDetail   string
+	invalidResponseDetail string
+}
+
+func dispatchSiteRulesPublishRoute(h *handler, writer http.ResponseWriter, request *http.Request, route publicAlarmRoute) {
+	query := request.URL.Query()
+	if len(query) != 1 || len(query["siteId"]) != 1 || !alarmmodel.IsUUIDv7(query.Get("siteId")) {
+		writeProblem(writer, request, http.StatusBadRequest, "INVALID_ARGUMENT", "Invalid argument", "The Site rule publish query takes exactly one siteId.", false, nil)
+		return
+	}
+	route.siteID = query.Get("siteId")
+	executeSiteRuleWriteRoute(h, writer, request, route, siteRuleWriteSpec{
+		expectedMethod:        http.MethodPut,
+		targetID:              "site:" + route.siteID,
+		targetLabel:           "站点告警规则热发布",
+		auditAction:           "ALARM_RULES_PUBLISHED",
+		forbiddenDetail:       "The caller lacks permission to publish Site alarm rules.",
+		queryErrorDetail:      "The Site rule publish query takes exactly one siteId.",
+		contentTypeDetail:     "The Site rule publish request must use application/json.",
+		invalidBodyDetail:     "The Site rule publish request body is missing, empty, or oversized.",
+		maxBodyBytes:          256 << 10,
+		upstreamErrorDetail:   "Alarm Service could not publish the Site alarm rules.",
+		invalidResponseDetail: "Alarm Service returned an invalid Site rule publish response.",
+	})
+}
+
+func dispatchSiteRuleRollbackRoute(h *handler, writer http.ResponseWriter, request *http.Request, route publicAlarmRoute) {
+	if request.Method != http.MethodPost {
+		writeMethodNotAllowedFor(writer, request, http.MethodPost)
+		return
+	}
+	query := request.URL.Query()
+	if len(query) != 1 || len(query["siteId"]) != 1 || !alarmmodel.IsUUIDv7(query.Get("siteId")) {
+		writeProblem(writer, request, http.StatusBadRequest, "INVALID_ARGUMENT", "Invalid argument", "The Site rule rollback query takes exactly one siteId.", false, nil)
+		return
+	}
+	route.siteID = query.Get("siteId")
+	executeSiteRuleWriteRoute(h, writer, request, route, siteRuleWriteSpec{
+		expectedMethod:        http.MethodPost,
+		targetID:              fmt.Sprintf("site:%s:rev:%d", route.siteID, route.bundleRevision),
+		targetLabel:           "站点告警规则版本回滚",
+		auditAction:           "ALARM_RULES_ROLLED_BACK",
+		forbiddenDetail:       "The caller lacks permission to roll back Site alarm rules.",
+		queryErrorDetail:      "The Site rule rollback query takes exactly one siteId.",
+		contentTypeDetail:     "The Site rule rollback request must use application/json.",
+		invalidBodyDetail:     "The Site rule rollback request body is missing, empty, or oversized.",
+		maxBodyBytes:          16 << 10,
+		upstreamErrorDetail:   "Alarm Service could not roll back the Site alarm rules.",
+		invalidResponseDetail: "Alarm Service returned an invalid Site rule rollback response.",
+	})
+}
+
+func executeSiteRuleWriteRoute(h *handler, writer http.ResponseWriter, request *http.Request, route publicAlarmRoute, spec siteRuleWriteSpec) {
+	emitAudit := func(session bffSession, outcome string, summary map[string]any) {
+		h.emitDomainAudit(request.Context(), request, session, domainAuditInput{
+			Category:      auditserver.AggregateTypeRegistryMutation,
+			TargetID:      spec.targetID,
+			TargetLabel:   spec.targetLabel,
+			Action:        spec.auditAction,
+			Outcome:       outcome,
+			ChangeSummary: summary,
+		})
+	}
+	fail := func(failure ownerFailure) {
+		writeProblem(writer, request, failure.status, failure.code, failure.title, failure.detail, failure.retryable, nil)
+	}
+	if request.Method != spec.expectedMethod {
+		writeMethodNotAllowedFor(writer, request, spec.expectedMethod)
+		return
+	}
+	if h.alarm == nil || h.alarm.operations == nil || h.identity == nil || h.identity.config.DelegationSigner == nil {
+		fail(alarmUnavailable("The Alarm service is not configured."))
+		return
+	}
+	session, ok := h.alarmSession(writer, request)
+	if !ok {
+		return
+	}
+	if failure := h.identity.validateStateChange(request, session, request.Header.Get("X-CSRF-Token")); failure != nil {
+		emitAudit(session, auditOutcomeRejected, map[string]any{"siteId": route.siteID, "reasonCode": failure.code})
+		writeIdentityFailure(writer, request, *failure)
+		return
+	}
+	if !h.allowRateLimitedTenant(writer, request, limitpolicy.DimensionCommandWrite, session.TenantID) {
+		return
+	}
+	if mediaType := strings.TrimSpace(strings.Split(request.Header.Get("Content-Type"), ";")[0]); mediaType != "application/json" {
+		emitAudit(session, auditOutcomeRejected, map[string]any{"siteId": route.siteID, "reasonCode": "INVALID_ARGUMENT"})
+		writeProblem(writer, request, http.StatusUnsupportedMediaType, "INVALID_ARGUMENT", "Invalid content type", spec.contentTypeDetail, false, nil)
+		return
+	}
+	if request.Body == nil {
+		emitAudit(session, auditOutcomeRejected, map[string]any{"siteId": route.siteID, "reasonCode": "INVALID_ARGUMENT"})
+		fail(alarmInvalid(spec.invalidBodyDetail))
+		return
+	}
+	rawBody, err := readBoundedBody(request.Body, spec.maxBodyBytes)
+	if err != nil || len(bytes.TrimSpace(rawBody)) == 0 {
+		emitAudit(session, auditOutcomeRejected, map[string]any{"siteId": route.siteID, "reasonCode": "INVALID_ARGUMENT"})
+		fail(alarmInvalid(spec.invalidBodyDetail))
+		return
+	}
+	clonedRequest := request.Clone(request.Context())
+	clonedRequest.Body = io.NopCloser(bytes.NewReader(rawBody))
+	clonedRequest.ContentLength = int64(len(rawBody))
+	if failure := h.checkAlarmSiteVisibility(request, session, route.siteID, true); failure != nil {
+		emitAudit(session, auditOutcomeForStatus(failure.status), map[string]any{"siteId": route.siteID, "reasonCode": failure.code})
+		fail(*failure)
+		return
+	}
+	authorization, failStatus, allowed := h.authorizeSiteScheduleManageProblem(writer, request, session, route.siteID, spec.forbiddenDetail)
+	if !allowed {
+		emitAudit(session, auditOutcomeForStatus(failStatus), map[string]any{"siteId": route.siteID, "reasonCode": "FORBIDDEN"})
+		return
+	}
+	serviceContext, signErr := h.signAlarmSiteDelegation(session, authorization, route.siteID, alarmservice.AlarmRulePublishAction)
+	if signErr != nil {
+		emitAudit(session, auditOutcomeFailed, map[string]any{"siteId": route.siteID, "reasonCode": "INTERNAL_ERROR"})
+		fail(alarmUnavailable("The Alarm rule write context could not be signed."))
+		return
+	}
+	respBody, status, execFailure := h.alarm.operations.Execute(request.Context(), clonedRequest, route, serviceContext)
+	if execFailure != nil {
+		emitAudit(session, auditOutcomeForStatus(execFailure.status), map[string]any{"siteId": route.siteID, "reasonCode": execFailure.code})
+		fail(*execFailure)
+		return
+	}
+	if status != http.StatusOK {
+		upstreamFailure := alarmProblemFromUpstream(status, respBody, spec.upstreamErrorDetail)
+		emitAudit(session, auditOutcomeForStatus(upstreamFailure.status), map[string]any{"siteId": route.siteID, "reasonCode": upstreamFailure.code})
+		fail(upstreamFailure)
+		return
+	}
+	var result alarmservice.SiteRulePublishResult
+	if decodeStrictAlarmJSON(respBody, &result) != nil || result.BundleRevision == 0 || (alarmservice.SiteRuleList{Items: result.Items}).Validate() != nil {
+		emitAudit(session, auditOutcomeFailed, map[string]any{"siteId": route.siteID, "reasonCode": "INTERNAL_ERROR"})
+		fail(alarmUnavailable(spec.invalidResponseDetail))
+		return
+	}
+	emitAudit(session, auditOutcomeSucceeded, map[string]any{
+		"siteId":         route.siteID,
+		"bundleRevision": result.BundleRevision,
+		"source":         result.Source,
+		"changed":        result.Changed,
+		"added":          result.Summary.Added,
+		"changedRules":   result.Summary.Changed,
+		"retired":        result.Summary.Retired,
+	})
+	writer.Header().Set("Cache-Control", "private, no-store")
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"data": result,
+		"meta": map[string]any{"requestId": requestIDFromContext(request.Context())},
+	})
+}
+
+func (h *handler) signAlarmSiteDelegation(
+	session bffSession,
+	authorization registryAuthorization,
+	siteID string,
+	action string,
+) (string, error) {
+	now := h.identity.now().UTC()
+	expiresAt := now.Add(h.identity.config.DelegationTTL)
+	if !session.ExpiresAt.IsZero() && expiresAt.After(session.ExpiresAt) {
+		expiresAt = session.ExpiresAt
+	}
+	policyRevision := strings.TrimSpace(authorization.policyRevision)
+	if policyRevision == "" {
+		policyRevision = h.identity.config.PolicyRevision
+	}
+	principalID := strings.TrimSpace(authorization.principalID)
+	if principalID == "" {
+		principalID = session.Principal.Subject
+	}
+	claims := identitycontext.DelegationClaims{
+		Issuer:           h.identity.config.ExecutingWorkloadSPIFFE,
+		Subject:          principalID,
+		SubjectIssuer:    session.Principal.Issuer,
+		DisplayName:      session.Principal.DisplayName,
+		Email:            session.Principal.Email,
+		Roles:            append([]string(nil), session.Principal.Roles...),
+		ExecutingService: h.identity.config.ExecutingWorkloadSPIFFE,
+		Audience:         h.alarm.backendAudience,
+		TenantID:         session.TenantID,
+		Actions:          []string{action},
+		Scopes:           []string{"tenant:" + session.TenantID, "site:" + siteID},
+		PolicyRevision:   policyRevision,
+		SessionID:        session.ID,
+		IssuedAt:         now.Unix(),
+		ExpiresAt:        expiresAt.Unix(),
+		TokenID:          randomURLToken(16),
+	}
+	return identitycontext.SignDelegation(h.identity.config.DelegationSigner, claims)
 }
 
 func dispatchSiteRulesSimulateRoute(h *handler, writer http.ResponseWriter, request *http.Request, route publicAlarmRoute) {
@@ -1012,38 +1408,7 @@ func dispatchSiteRuleDeadLetterReplayRoute(h *handler, writer http.ResponseWrite
 		emitAudit(session, auditOutcomeForStatus(failStatus), map[string]any{"siteId": route.siteID, "reasonCode": "FORBIDDEN"})
 		return
 	}
-	now := h.identity.now().UTC()
-	expiresAt := now.Add(h.identity.config.DelegationTTL)
-	if !session.ExpiresAt.IsZero() && expiresAt.After(session.ExpiresAt) {
-		expiresAt = session.ExpiresAt
-	}
-	policyRevision := strings.TrimSpace(authorization.policyRevision)
-	if policyRevision == "" {
-		policyRevision = h.identity.config.PolicyRevision
-	}
-	principalID := strings.TrimSpace(authorization.principalID)
-	if principalID == "" {
-		principalID = session.Principal.Subject
-	}
-	claims := identitycontext.DelegationClaims{
-		Issuer:           h.identity.config.ExecutingWorkloadSPIFFE,
-		Subject:          principalID,
-		SubjectIssuer:    session.Principal.Issuer,
-		DisplayName:      session.Principal.DisplayName,
-		Email:            session.Principal.Email,
-		Roles:            append([]string(nil), session.Principal.Roles...),
-		ExecutingService: h.identity.config.ExecutingWorkloadSPIFFE,
-		Audience:         h.alarm.backendAudience,
-		TenantID:         session.TenantID,
-		Actions:          []string{alarmservice.AlarmRuleDeadLetterReplayAction},
-		Scopes:           []string{"tenant:" + session.TenantID, "site:" + route.siteID},
-		PolicyRevision:   policyRevision,
-		SessionID:        session.ID,
-		IssuedAt:         now.Unix(),
-		ExpiresAt:        expiresAt.Unix(),
-		TokenID:          randomURLToken(16),
-	}
-	serviceContext, err := identitycontext.SignDelegation(h.identity.config.DelegationSigner, claims)
+	serviceContext, err := h.signAlarmSiteDelegation(session, authorization, route.siteID, alarmservice.AlarmRuleDeadLetterReplayAction)
 	if err != nil {
 		emitAudit(session, auditOutcomeFailed, map[string]any{"siteId": route.siteID, "reasonCode": "INTERNAL_ERROR"})
 		fail(alarmUnavailable("The Alarm replay context could not be signed."))
@@ -1271,6 +1636,18 @@ func validateAlarmResponse(scope ownerScope, call alarmCall, response ownerRespo
 			return nil, err
 		}
 		return list, list.Validate()
+	case call.route.siteRulesDiff:
+		var diff alarmservice.SiteRuleDiffResult
+		if err := decodeStrictAlarmJSON(response.body, &diff); err != nil {
+			return nil, err
+		}
+		return diff, nil
+	case call.route.siteRuleRevisions:
+		var revisions alarmservice.SiteRuleBundleRevisionList
+		if err := decodeStrictAlarmJSON(response.body, &revisions); err != nil {
+			return nil, err
+		}
+		return revisions, nil
 	case call.route.siteRulesSimulate:
 		var sim alarmservice.SiteRuleSimulationResult
 		if err := decodeStrictAlarmJSON(response.body, &sim); err != nil {
@@ -1430,6 +1807,16 @@ func alarmProblemFromUpstream(status int, body []byte, fallbackDetail string) ow
 			detail = "The requested Alarm resource was not found."
 		}
 		return ownerFailure{status: http.StatusNotFound, code: value.Code, title: title, detail: detail}
+	case http.StatusConflict:
+		title := value.Title
+		if strings.TrimSpace(title) == "" {
+			title = "Conflict"
+		}
+		detail := value.Detail
+		if strings.TrimSpace(detail) == "" {
+			detail = "The requested Alarm resource changed concurrently."
+		}
+		return ownerFailure{status: http.StatusConflict, code: value.Code, title: title, detail: detail}
 	case http.StatusBadRequest, http.StatusUnprocessableEntity, http.StatusUnsupportedMediaType:
 		title := value.Title
 		if strings.TrimSpace(title) == "" {

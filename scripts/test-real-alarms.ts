@@ -13,9 +13,21 @@ import {
   alarmRuleListSchema,
   alarmRuleSimulationEnvelopeSchema,
   alarmRuleDeadLetterListEnvelopeSchema,
+  alarmRuleDiffEnvelopeSchema,
+  alarmRulePublishEnvelopeSchema,
+  alarmRuleRevisionListEnvelopeSchema,
   devicePriorityLockStateSchema,
   siteAlarmRoutingEnvelopeSchema,
 } from '../apps/hvac-web/src/api/generated/platformGateway.gen.ts';
+import {
+  computeDraftDelta,
+  computeRuleDagLayout,
+  formatRuleValidationIssue,
+  newRuleUuidV7,
+  ruleDraftSignature,
+  ruleToDraft,
+} from '../apps/hvac-web/src/features/alarms/alarm-rule-dag.ts';
+import type { AlarmRule } from '../apps/hvac-web/src/features/alarms/alarm-rules.ts';
 import {
   describeDeadLetterError,
   describeDependencyGate,
@@ -366,4 +378,120 @@ test('Alarm operations formatters and Wave 4 routing/DLQ/priority-lock schemas v
     updatedAt: '2026-11-18T11:00:00Z',
   });
   assert.equal(scheduleLock.lockedPriority, 'SCHEDULE');
+
+  // P2-2 DAG layout, cycle/depth guards, draft delta, and rule bundle envelopes.
+  const id1 = newRuleUuidV7(1_760_000_000_000);
+  const id2 = newRuleUuidV7(1_760_000_000_001);
+  const id3 = newRuleUuidV7(1_760_000_000_002);
+  const id4 = newRuleUuidV7(1_760_000_000_003);
+  const id5 = newRuleUuidV7(1_760_000_000_004);
+  assert.match(id1, /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+
+  const baseCond = {
+    kind: 'COMPARE' as const,
+    reading: { deviceId: '018f3e00-4000-7000-8000-000000000001', pointCode: 'supply_water_temperature' },
+    operator: 'GT' as const,
+    value: 10,
+  };
+  const baseClear = { ...baseCond, operator: 'LT' as const, value: 8 };
+  const r1: AlarmRule = { ruleId: id1, title: '主规则', severity: 'MAJOR', triggerMode: 'SIMPLE', raise: baseCond, clear: baseClear };
+  const r2: AlarmRule = { ruleId: id2, title: '次级联动', severity: 'WARNING', triggerMode: 'SIMPLE', dependsOnRuleIds: [id1], dependencyGate: 'ALL_ACTIVE', raise: baseCond, clear: baseClear };
+  const dag = computeRuleDagLayout([r1, r2]);
+  assert.equal(dag.maxHopDepth, 1);
+  assert.equal(dag.edges.length, 1);
+  assert.equal(dag.cycleRuleIds.length, 0);
+
+  const cycleLayout = computeRuleDagLayout([
+    { ...r1, dependsOnRuleIds: [id2] },
+    r2,
+  ]);
+  assert.equal(cycleLayout.cycleRuleIds.length, 2);
+
+  const overDepthLayout = computeRuleDagLayout([
+    r1,
+    { ...r2 },
+    { ...r1, ruleId: id3, dependsOnRuleIds: [id2] },
+    { ...r1, ruleId: id4, dependsOnRuleIds: [id3] },
+    { ...r1, ruleId: id5, dependsOnRuleIds: [id4] },
+  ]);
+  assert.equal(overDepthLayout.maxHopDepth, 4);
+  assert.deepEqual(overDepthLayout.overDepthRuleIds, [id5]);
+
+  const delta = computeDraftDelta([r1, r2], [{ ...r1, title: '主规则（已修改）' }, { ...r1, ruleId: id3, title: '新规则' }]);
+  assert.equal(delta.dirty, true);
+  assert.equal(delta.addedCount, 1);
+  assert.equal(delta.changedCount, 1);
+  assert.equal(delta.retiredCount, 1);
+  assert.equal(ruleToDraft(r2).dependsOnRuleIds?.[0], id1);
+
+  const diffEnv = alarmRuleDiffEnvelopeSchema.parse({
+    data: {
+      valid: true,
+      currentRevision: 1,
+      currentDigest: 'a'.repeat(64),
+      nextDigest: 'b'.repeat(64),
+      summary: { added: 1, changed: 0, unchanged: 1, retired: 0, addedRuleIds: [id2], changedRuleIds: [], unchangedRuleIds: [id1], retiredRuleIds: [] },
+      changes: [{ ruleId: id2, title: '次级联动', change: 'ADDED', changedFields: [] }],
+      graph: {
+        nodes: [{ ruleId: id1, title: '主规则', severity: 'MAJOR', hopDepth: 0, dependsOnRuleIds: [], actionCount: 0 }],
+        edges: [],
+        topologicalOrder: [id1],
+        maxHopDepth: 0,
+      },
+      issues: [],
+    },
+    meta: { requestId: 'req-diff' },
+  });
+  assert.equal(diffEnv.data.valid, true);
+
+  const pubEnv = alarmRulePublishEnvelopeSchema.parse({
+    data: {
+      bundleRevision: 2,
+      bundleDigest: 'b'.repeat(64),
+      source: 'WEB_WORKBENCH',
+      changed: true,
+      publishedAt: '2026-11-21T10:00:00Z',
+      publishedBy: 'principal:operator-1',
+      summary: { added: 1, changed: 0, unchanged: 1, retired: 0, addedRuleIds: [id2], changedRuleIds: [], unchangedRuleIds: [id1], retiredRuleIds: [] },
+      graph: diffEnv.data.graph,
+      items: [r1],
+    },
+    meta: { requestId: 'req-pub' },
+  });
+  assert.equal(pubEnv.data.bundleRevision, 2);
+
+  const revsEnv = alarmRuleRevisionListEnvelopeSchema.parse({
+    data: {
+      currentRevision: 2,
+      items: [{
+        bundleRevision: 2,
+        bundleDigest: 'b'.repeat(64),
+        source: 'WEB_WORKBENCH',
+        summary: pubEnv.data.summary,
+        ruleCount: 1,
+        publishedAt: '2026-11-21T10:00:00Z',
+        publishedBy: 'principal:operator-1',
+      }],
+    },
+    meta: { requestId: 'req-revs' },
+  });
+  assert.equal(revsEnv.data.currentRevision, 2);
+
+  // Unknown & self dependencies in computeRuleDagLayout + clean ruleToDraft + operator Chinese issue translation.
+  const unknownLayout = computeRuleDagLayout([
+    r1,
+    { ...r2, dependsOnRuleIds: [id1, id4] },
+    { ...r1, ruleId: id3, dependsOnRuleIds: [id3] },
+  ]);
+  assert.equal(unknownLayout.unknownDeps.length, 2);
+  const cleanedDraft = ruleToDraft({ ...r2, dependsOnRuleIds: [], dependencyGate: 'ALL_ACTIVE' });
+  assert.equal(cleanedDraft.dependsOnRuleIds, undefined);
+  assert.equal(cleanedDraft.dependencyGate, undefined);
+  assert.equal(ruleDraftSignature(r1), ruleDraftSignature({ ...r1, ruleKind: 'THRESHOLD' }));
+  const translated = formatRuleValidationIssue(
+    { ruleId: id2, code: 'RULE_CYCLE_DETECTED', message: `raw English message ${id2}` },
+    new Map([[id2, '次级联动']]),
+  );
+  assert.ok(translated.includes('「次级联动」'));
+  assert.ok(!/[0-9a-f]{8}-[0-9a-f]{4}-|raw English/.test(translated));
 });

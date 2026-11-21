@@ -28,6 +28,7 @@ import {
   describePlannedActionSummary,
   summarizeRuleActions,
 } from '../alarm-operations';
+import { ruleToDraft } from '../alarm-rule-dag';
 import {
   collectRuleReadings,
   describeRuleLinkage,
@@ -107,6 +108,7 @@ export function AlarmRuleSimulateSheet({
   siteId,
   csrfToken,
   rule,
+  isDraft = false,
   titleByRuleId,
   displayContext,
   names,
@@ -115,6 +117,7 @@ export function AlarmRuleSimulateSheet({
   readonly siteId: string;
   readonly csrfToken: string;
   readonly rule: AlarmRule | null;
+  readonly isDraft?: boolean;
   readonly titleByRuleId: ReadonlyMap<string, string>;
   readonly displayContext: EvaluationDisplayContext;
   readonly names: ReadingNames;
@@ -218,6 +221,7 @@ export function AlarmRuleSimulateSheet({
       : parsedSteps;
     simulation.mutate({
       ruleId: rule.ruleId,
+      ...(isDraft ? { ruleDraft: ruleToDraft(rule) } : {}),
       steps: stepsWithUpstream,
     });
   };
@@ -229,10 +233,10 @@ export function AlarmRuleSimulateSheet({
     <Sheet open={rule !== null} onOpenChange={(open) => { if (!open) onClose(); }}>
       <SheetContent side="right" className="w-full overflow-y-auto data-[side=right]:sm:max-w-[640px]">
         <SheetHeader className="border-b border-divider">
-          <SheetTitle>{rule ? `规则模拟试算：${rule.title}` : '规则模拟试算'}</SheetTitle>
+          <SheetTitle>{rule ? `${isDraft ? '规则草稿模拟试算' : '规则模拟试算'}：${rule.title}` : '规则模拟试算'}</SheetTitle>
           <SheetDescription>
             {rule
-              ? `${describeRuleOrigin(rule)} · ${describeRuleLinkage(rule, titleByRuleId)}${actionsSummary ? ` · ${actionsSummary}` : ''}。在内存中推演连续采样序列，不产生真实告警。`
+              ? `${isDraft ? '当前未发布草稿 · ' : ''}${describeRuleOrigin(rule)} · ${describeRuleLinkage(rule, titleByRuleId)}${actionsSummary ? ` · ${actionsSummary}` : ''}。在内存中推演连续采样序列，不产生真实告警。`
               : '输入多步采样值验证规则触发与恢复条件。'}
           </SheetDescription>
         </SheetHeader>

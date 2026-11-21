@@ -38,7 +38,7 @@ import {
   type AlarmSeverity,
 } from '../alarm-api';
 import { alarmDailyCounts, alarmsByDevice, alarmsInWindow, meanTimeToClear } from '../alarm-history';
-import { siteAlarmRulesQuery } from '../alarm-rules';
+import { siteAlarmRulesBundleQuery } from '../alarm-rules';
 import {
   formatDuration,
   formatSpan,
@@ -176,7 +176,7 @@ export function AlarmsWorkspace() {
 
   const active = useQuery(activeAlarmsQuery(site.id));
   const history = useQuery(alarmHistoryQuery(site.id));
-  const rules = useQuery(siteAlarmRulesQuery(site.id));
+  const rules = useQuery(siteAlarmRulesBundleQuery(site.id));
   const showingRules = search.tab === 'rules';
   const filter = VIEWS.find((candidate) => candidate.value === view)!.filter;
   const list = useInfiniteQuery({
@@ -262,14 +262,20 @@ export function AlarmsWorkspace() {
           <TabsTrigger value="alarms" className="h-9 flex-none gap-1.5 px-0 after:bottom-[-1px]!">告警记录</TabsTrigger>
           <TabsTrigger value="rules" className="h-9 flex-none gap-1.5 px-0 after:bottom-[-1px]!">
             正在生效的规则
-            {rules.data ? <span className="font-mono text-[11px] text-subtle-foreground">{rules.data.length}</span> : null}
+            {rules.data ? <span className="font-mono text-[11px] text-subtle-foreground">{rules.data.items.length}</span> : null}
           </TabsTrigger>
         </TabsList>
       </Tabs>
 
       {showingRules ? (
         <div className="flex flex-col gap-6">
-          <AlarmRulesTable siteId={site.id} />
+          <AlarmRulesTable
+            key={site.id}
+            siteId={site.id}
+            canManage={canManage}
+            csrfToken={principal.session.csrfToken}
+            timeZone={site.timezone}
+          />
           <RuleActionDeadLettersPanel
             siteId={site.id}
             canManage={canManage}

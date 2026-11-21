@@ -261,3 +261,95 @@ test('operators can unassign, suppress and unsuppress alarms, and review evaluat
   const unsuppressWrite = gateway.writes.find((write) => write.path === `/api/v1/alarms/${ACTIVE_ALARM}/unsuppress`);
   expect(unsuppressWrite?.body).toMatchObject({ reason: '恢复告警通知' });
 });
+
+test('operators can edit rules on the DAG canvas, dry-run drafts, diff and hot-publish, and roll back revisions', async ({ page, gateway }) => {
+  await page.goto(`/operations/alarms?site=${SITE_ID}&tab=rules`);
+  await expect(page.getByText('生效版本 v1', { exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: '拓扑画布' }).click();
+  await page.getByRole('button', { name: /1 号冷机供水温度骤升/ }).click();
+  await page.getByRole('button', { name: '编辑规则' }).click();
+
+  const editor = page.getByRole('dialog', { name: '编辑告警规则' });
+  await expect(editor).toBeVisible();
+  await editor.getByLabel('规则名称').fill('1 号冷机供水温度骤升（已调优）');
+  await editor.getByRole('button', { name: '试算草稿' }).click();
+
+  const simSheet = page.getByRole('dialog', { name: /规则草稿模拟试算：1 号冷机供水温度骤升（已调优）/ });
+  await expect(simSheet).toBeVisible();
+  const draftSteps = simSheet.locator('fieldset');
+  await draftSteps.nth(0).getByLabel(/btu meter supply water temperature/).fill('7');
+  await draftSteps.nth(1).getByLabel(/btu meter supply water temperature/).fill('10.5');
+  await simSheet.getByRole('checkbox', { name: '冷冻水回水温度过低' }).check();
+  await simSheet.getByRole('button', { name: '运行模拟试算' }).click();
+  await expect(simSheet.getByRole('table', { name: '试算结果明细' })).toContainText('触发告警');
+  const draftSimWrite = gateway.writes.filter((w) => w.path === '/api/v1/alarm-rules/simulate').at(-1);
+  expect(draftSimWrite?.body).toMatchObject({
+    ruleDraft: { title: '1 号冷机供水温度骤升（已调优）' },
+  });
+  await page.keyboard.press('Escape');
+
+  await expect(page.getByText('未发布草稿：新增 0 条 · 修改 1 条 · 停用 0 条')).toBeVisible();
+  await page.getByRole('button', { name: '预览差异并热发布' }).click();
+
+  const diffDialog = page.getByRole('dialog', { name: '确认热发布站点告警规则？' });
+  await expect(diffDialog).toContainText('1 号冷机供水温度骤升（已调优）');
+  await expect(diffDialog).toContainText('变更字段：规则名称');
+  await expect(diffDialog).not.toContainText(/[0-9a-f]{8}-[0-9a-f]{4}-|CHANGED|RETIRED|PROTECTION_COMMAND|WEB_WORKBENCH/);
+  await diffDialog.getByLabel('变更说明（选填）').fill('更新规则显示名称并校验试算结果');
+  await diffDialog.getByRole('button', { name: '确认热发布' }).click();
+
+  await expect(page.getByText('已热发布规则包至版本 v2（共 4 条生效规则）。')).toBeVisible();
+  await expect(page.getByText('生效版本 v2', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: /1 号冷机供水温度骤升（已调优）/ })).toBeVisible();
+
+  await page.getByRole('button', { name: '版本历史' }).click();
+  const revSheet = page.getByRole('dialog', { name: '规则版本账本' });
+  await expect(revSheet).toContainText('工作台热发布');
+  await expect(revSheet).toContainText('当前生效');
+  await expect(revSheet).toContainText('更新规则显示名称并校验试算结果');
+  await expect(revSheet).not.toContainText(/[0-9a-f]{8}-[0-9a-f]{4}-|WEB_WORKBENCH|CLI_SYNC|ROLLBACK/);
+
+  await revSheet.getByRole('button', { name: '回滚到此版本' }).click();
+  await revSheet.getByRole('button', { name: '确认回滚' }).click();
+
+  await expect(page.getByText('已回滚规则包至版本 v3（共 4 条生效规则）。')).toBeVisible();
+  await expect(page.getByText('生效版本 v3', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: /1 号冷机供水温度骤升/ })).toBeVisible();
+
+  const publishWrite = gateway.writes.find((w) => w.method === 'PUT' && w.path === '/api/v1/alarm-rules');
+  expect(publishWrite?.body).toMatchObject({ expectedRevision: 1, changeNote: '更新规则显示名称并校验试算结果' });
+  const rollbackWrite = gateway.writes.find((w) => w.path === '/api/v1/alarm-rules/revisions/1/rollback');
+  expect(rollbackWrite?.body).toMatchObject({ expectedRevision: 2 });
+
+  // Retire upstream rule with active alarm -> auto-cleans downstream dependencyGate + shows clear notice -> conflict recovery test.
+  await page.getByRole('button', { name: '新建规则' }).click();
+  const createEditor = page.getByRole('dialog', { name: '新建告警规则' });
+  await createEditor.getByLabel('规则名称').fill('临时压差偏高告警');
+  await createEditor.getByRole('button', { name: '保存至草稿' }).click();
+  await expect(page.getByText('未发布草稿：新增 1 条 · 修改 0 条 · 停用 0 条')).toBeVisible();
+  await page.getByRole('button', { name: '放弃草稿' }).click();
+  await expect(page.getByText('未发布草稿：')).toHaveCount(0);
+
+  // Select upstream rule 冷冻水回水温度过低 & retire it cleanly without dangling ALL_ACTIVE 422 error.
+  await page.getByRole('button', { name: /冷冻水回水温度过低/ }).click();
+  await page.getByRole('button', { name: '停用规则' }).click();
+  await expect(page.getByText('未发布草稿：新增 0 条 · 修改 1 条 · 停用 1 条')).toBeVisible();
+  await page.getByRole('button', { name: '预览差异并热发布' }).click();
+  await expect(diffDialog).toContainText('停用将自动恢复活动告警');
+  await expect(diffDialog).toContainText('变更字段：前置依赖规则、联动门控条件');
+
+  // Simulate concurrent revision bump before confirm -> surfaces 409 reload recovery banner cleanly.
+  gateway.alarmRuleBundleRevision = 4;
+  await diffDialog.getByRole('button', { name: '确认热发布' }).click();
+  await expect(diffDialog).toContainText('服务端规则版本已在其他会话中更新');
+  await diffDialog.getByRole('button', { name: '重新加载最新版本' }).click();
+  await expect(page.getByText('未发布草稿：')).toHaveCount(0);
+
+  // Check 1440px DAG horizontal fit in dark & light themes.
+  const appearance = page.getByRole('radiogroup', { name: '外观' });
+  await appearance.getByRole('radio', { name: '浅色' }).click();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  await appearance.getByRole('radio', { name: '深色' }).click();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+});
