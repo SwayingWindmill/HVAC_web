@@ -389,7 +389,7 @@ test('billing config tab manages site calendar holidays, enforces meter ratio ov
   await page.getByRole('tab', { name: '计量与日历配置' }).click();
 
   const holidayRegion = page.getByRole('region', { name: '站点节假日日历' });
-  const ratioRegion = page.getByRole('region', { name: '电表 CT/PT 倍率版本台账' });
+  const ratioRegion = page.getByRole('region', { name: '电表 CT/PT 倍率版本' });
   await expect(holidayRegion).toBeVisible();
   await expect(ratioRegion).toBeVisible();
 
@@ -436,6 +436,8 @@ test('billing config tab manages site calendar holidays, enforces meter ratio ov
   await ratioRegion.getByRole('button', { name: '新增倍率版本' }).click();
   const createRatioDialog = page.getByRole('dialog');
   await expect(createRatioDialog).toBeVisible();
+  await createRatioDialog.getByRole('combobox', { name: '测点 ID' }).click();
+  await page.getByRole('option', { name: /hvac meter energy/ }).click();
   await createRatioDialog.getByLabel('CT 变比').fill('60');
   await fillTemporalField(
     createRatioDialog.getByLabel('生效开始时间'),
@@ -464,6 +466,8 @@ test('billing config tab manages site calendar holidays, enforces meter ratio ov
 
   await ratioRegion.getByRole('button', { name: '新增倍率版本' }).click();
   await expect(createRatioDialog).toBeVisible();
+  await createRatioDialog.getByRole('combobox', { name: '测点 ID' }).click();
+  await page.getByRole('option', { name: /hvac meter energy/ }).click();
   await createRatioDialog.getByLabel('CT 变比').fill('60');
   await fillTemporalField(
     createRatioDialog.getByLabel('生效开始时间'),
