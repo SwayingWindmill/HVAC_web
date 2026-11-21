@@ -69,11 +69,6 @@ func (s *ClickHouseStore) query(ctx context.Context, sql string) ([]byte, error)
 	return s.doSQL(ctx, http.MethodGet, sql)
 }
 
-func (s *ClickHouseStore) execute(ctx context.Context, sql string) error {
-	_, err := s.doSQL(ctx, http.MethodPost, sql)
-	return err
-}
-
 func (s *ClickHouseStore) doSQL(ctx context.Context, method, sql string) ([]byte, error) {
 	return doClickHouseHTTPQuery(ctx, s.base, s.user, s.password, s.client, method, sql, 1<<20, "metric ClickHouse query")
 }
@@ -553,10 +548,6 @@ func (s *ClickHouseStore) ReadMetricResult(ctx context.Context, result Result) (
 	result.Completeness = completeness
 	result.CalculatedAt = calculatedAt.UTC()
 	return result, nil
-}
-
-func (s *ClickHouseStore) DeleteMetricResult(ctx context.Context, tenantID, siteID, resultID string) error {
-	return s.execute(ctx, fmt.Sprintf(`ALTER TABLE analytics.metric_result_facts DELETE WHERE tenant_id=toUUID(%s) AND site_id=toUUID(%s) AND result_id=toUUID(%s)`, quote(tenantID), quote(siteID), quote(resultID)))
 }
 
 func (s *ClickHouseStore) InsertMetric(ctx context.Context, r Result) error {

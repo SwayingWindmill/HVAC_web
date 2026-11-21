@@ -283,6 +283,78 @@ func utcPtr(value *time.Time) *time.Time {
 	return &utc
 }
 
+type dirtyWindowEnqueuePayload struct {
+	TenantID           string `json:"tenantId"`
+	SiteID             string `json:"siteId"`
+	Granularity        string `json:"granularity"`
+	WindowStart        string `json:"windowStart"`
+	WindowEnd          string `json:"windowEnd"`
+	AvailableAt        string `json:"availableAt"`
+	RequestedBy        string `json:"requestedBy"`
+	RequestedByDisplay string `json:"requestedByDisplay"`
+	Reason             string `json:"reason"`
+	Source             string `json:"source"`
+}
+
+// EnqueueDirtyWindow posts a debounced historical recalculation window to Core Registry using
+// the energy projector's meter-binding.resolve workload grant.
+func (resolver *Resolver) EnqueueDirtyWindow(ctx context.Context, req energy.DirtyWindowEnqueueRequest) error {
+	if resolver == nil || resolver.endpoint == nil || resolver.httpClient == nil {
+		return errors.New("core registry resolver is closed")
+	}
+	tenantID := strings.TrimSpace(req.TenantID)
+	siteID := strings.TrimSpace(req.SiteID)
+	if tenantID == "" || siteID == "" {
+		return errors.New("dirty window tenant_id and site_id are required")
+	}
+	if req.WindowStart.IsZero() || req.WindowEnd.IsZero() || !req.WindowEnd.After(req.WindowStart) {
+		return errors.New("dirty window start and end must be ordered non-zero timestamps")
+	}
+	availableAt := req.AvailableAt
+	if availableAt.IsZero() {
+		availableAt = resolver.now()
+	}
+	granularity := strings.TrimSpace(req.Granularity)
+	if granularity == "" {
+		granularity = "HOUR"
+	}
+
+	grant, err := resolver.grantFor(ctx, tenantID, registryauth.ActionMeterBindingResolve)
+	if err != nil {
+		return err
+	}
+
+	body, err := json.Marshal(dirtyWindowEnqueuePayload{
+		TenantID:           tenantID,
+		SiteID:             siteID,
+		Granularity:        granularity,
+		WindowStart:        req.WindowStart.UTC().Format(time.RFC3339Nano),
+		WindowEnd:          req.WindowEnd.UTC().Format(time.RFC3339Nano),
+		AvailableAt:        availableAt.UTC().Format(time.RFC3339Nano),
+		RequestedBy:        strings.TrimSpace(req.RequestedBy),
+		RequestedByDisplay: strings.TrimSpace(req.RequestedByDisplay),
+		Reason:             strings.TrimSpace(req.Reason),
+		Source:             strings.TrimSpace(req.Source),
+	})
+	if err != nil {
+		return fmt.Errorf("encode Core dirty window enqueue request: %w", err)
+	}
+
+	endpoint := *resolver.endpoint
+	endpoint.Path = "/internal/v1/registry/sites/" + url.PathEscape(siteID) + "/accounting/dirty-windows"
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create Core dirty window enqueue request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("X-Delegation-Grant", grant)
+	if _, err := resolver.exchange(request, "Core dirty window enqueue"); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (resolver *Resolver) grantFor(ctx context.Context, tenantID string, action registryauth.Action) (string, error) {
 	key := grantKey{tenantID: tenantID, action: action}
 	resolver.mu.Lock()
@@ -346,4 +418,7 @@ func (resolver *Resolver) exchange(request *http.Request, operation string) ([]b
 	return payload, nil
 }
 
-var _ energy.BindingResolver = (*Resolver)(nil)
+var (
+	_ energy.BindingResolver     = (*Resolver)(nil)
+	_ energy.DirtyWindowEnqueuer = (*Resolver)(nil)
+)

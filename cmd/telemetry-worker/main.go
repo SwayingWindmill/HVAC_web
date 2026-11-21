@@ -352,8 +352,15 @@ func runTelemetryWorker() int {
 			runLatestCacheRelay(latestContext, latestRelay, logger)
 		})
 	}
-	if historyRepository != nil {
-		shutdownCfg.CloseHistory = historyRepository.Close
+	if historyRepository != nil || historySink != nil {
+		shutdownCfg.CloseHistory = func() {
+			if historySink != nil {
+				_ = historySink.Close()
+			}
+			if historyRepository != nil {
+				historyRepository.Close()
+			}
+		}
 	}
 	if historyCancel != nil {
 		workerCancels = append(workerCancels, historyCancel)
@@ -362,21 +369,24 @@ func runTelemetryWorker() int {
 		})
 	}
 
-	analyticsProjector, priceWindows, totalSubmeters, analyticsSettings, analyticsContext, analyticsCancel, err := loadAnalyticsProjection(certificate)
+	analyticsRuntime, err := loadAnalyticsProjection(certificate)
 	if err != nil {
 		logger.Error("analytics_projection_configuration_invalid", "error_code", "ANALYTICS_PROJECTION_CONFIGURATION_INVALID")
 		return 1
 	}
-	if analyticsCancel != nil {
-		shutdownCfg.CancelAnalytics = analyticsCancel
-		runSupervised(analyticsContext, &analyticsWG, observabilityRuntime, logger, "telemetry.analytics_projection", func() {
-			runAnalyticsProjectionCoordinated(analyticsContext, analyticsProjector, analyticsSettings.ProjectorInterval, observabilityRuntime, coordinationLocker, logger)
+	if analyticsRuntime.cancel != nil {
+		shutdownCfg.CancelAnalytics = analyticsRuntime.cancel
+		runSupervised(analyticsRuntime.ctx, &analyticsWG, observabilityRuntime, logger, "telemetry.analytics_projection", func() {
+			runAnalyticsProjectionCoordinated(analyticsRuntime.ctx, analyticsRuntime.projector, analyticsRuntime.settings.ProjectorInterval, observabilityRuntime, coordinationLocker, logger)
 		})
-		runSupervised(analyticsContext, &analyticsWG, observabilityRuntime, logger, "telemetry.price_window_projection", func() {
-			runPriceWindowProjectionCoordinated(analyticsContext, priceWindows, analyticsSettings.PriceWindowInterval, observabilityRuntime, settlingBuffer, coordinationLocker, logger)
+		runSupervised(analyticsRuntime.ctx, &analyticsWG, observabilityRuntime, logger, "telemetry.price_window_projection", func() {
+			runPriceWindowProjectionCoordinated(analyticsRuntime.ctx, analyticsRuntime.priceWindows, analyticsRuntime.settings.PriceWindowInterval, observabilityRuntime, settlingBuffer, coordinationLocker, logger)
 		})
-		runSupervised(analyticsContext, &analyticsWG, observabilityRuntime, logger, "telemetry.total_submeter_projection", func() {
-			runTotalSubmeterProjectionCoordinated(analyticsContext, totalSubmeters, analyticsSettings.TotalSubmeterInterval, observabilityRuntime, settlingBuffer, coordinationLocker, logger)
+		runSupervised(analyticsRuntime.ctx, &analyticsWG, observabilityRuntime, logger, "telemetry.total_submeter_projection", func() {
+			runTotalSubmeterProjectionCoordinated(analyticsRuntime.ctx, analyticsRuntime.totalSubmeters, analyticsRuntime.settings.TotalSubmeterInterval, observabilityRuntime, settlingBuffer, coordinationLocker, logger)
+		})
+		runSupervised(analyticsRuntime.ctx, &analyticsWG, observabilityRuntime, logger, "telemetry.analytics_condition_anchors", func() {
+			runConditionAnchorProjectionCoordinated(analyticsRuntime.ctx, analyticsRuntime.conditionAnchors, analyticsRuntime.settings.ConditionAnchorInterval, observabilityRuntime, settlingBuffer, coordinationLocker, logger)
 		})
 	}
 
@@ -701,7 +711,11 @@ func parseHistoryProjectionSettings(lookup func(string) string) (historyProjecti
 	}, nil
 }
 
-func loadHistoryProjection(metrics *telemetry.PipelineMetrics) (*telemetry.HistoryPostgresRepository, *telemetry.ClickHouseHistorySink, *telemetry.HistoryRelay, historyProjectionSettings, context.Context, context.CancelFunc, error) {
+func openTelemetryHistorySink(lookup func(string) string) (telemetry.HistorySinkCloser, error) {
+	return telemetry.OpenClickHouseHistorySinkFromLookup(lookup, "telemetry_history_writer")
+}
+
+func loadHistoryProjection(metrics *telemetry.PipelineMetrics) (*telemetry.HistoryPostgresRepository, telemetry.HistorySinkCloser, *telemetry.HistoryRelay, historyProjectionSettings, context.Context, context.CancelFunc, error) {
 	if !strings.EqualFold(strings.TrimSpace(os.Getenv("TELEMETRY_HISTORY_PROJECTION_ENABLED")), "true") {
 		return nil, nil, nil, historyProjectionSettings{}, context.Background(), nil, nil
 	}
@@ -726,18 +740,7 @@ func loadHistoryProjection(metrics *telemetry.PipelineMetrics) (*telemetry.Histo
 		repository.Close()
 		return nil, nil, nil, historyProjectionSettings{}, nil, nil, schemaCompatibilityError{err: err}
 	}
-	clickHouseURL, err := requiredEnv("TELEMETRY_CLICKHOUSE_HTTP_URL")
-	if err != nil {
-		repository.Close()
-		return nil, nil, nil, historyProjectionSettings{}, nil, nil, err
-	}
-	sink, err := telemetry.NewClickHouseHistorySink(telemetry.ClickHouseHistoryConfig{
-		BaseURL:  clickHouseURL,
-		Database: envOr("TELEMETRY_CLICKHOUSE_DATABASE", "telemetry_history"),
-		Table:    envOr("TELEMETRY_CLICKHOUSE_TABLE", "observations"),
-		Username: envOr("TELEMETRY_CLICKHOUSE_USERNAME", "telemetry_history_writer"),
-		Password: os.Getenv("TELEMETRY_CLICKHOUSE_PASSWORD"),
-	})
+	sink, err := openTelemetryHistorySink(os.Getenv)
 	if err != nil {
 		repository.Close()
 		return nil, nil, nil, historyProjectionSettings{}, nil, nil, err
@@ -752,6 +755,7 @@ func loadHistoryProjection(metrics *telemetry.PipelineMetrics) (*telemetry.Histo
 		Metrics:       metrics,
 	})
 	if err != nil {
+		_ = sink.Close()
 		repository.Close()
 		return nil, nil, nil, historyProjectionSettings{}, nil, nil, err
 	}
@@ -784,38 +788,53 @@ func runHistoryProjection(ctx context.Context, relay *telemetry.HistoryRelay, se
 }
 
 type analyticsProjectionSettings struct {
-	ProjectorInterval     time.Duration
-	PriceWindowInterval   time.Duration
-	TotalSubmeterInterval time.Duration
+	ProjectorInterval       time.Duration
+	PriceWindowInterval     time.Duration
+	TotalSubmeterInterval   time.Duration
+	ConditionAnchorInterval time.Duration
 }
 
-func loadAnalyticsProjection(certificate tls.Certificate) (*analyticsprojector.Projector, *analyticsprojector.PriceWindowProjector, *analyticsprojector.TotalSubmeterProjector, analyticsProjectionSettings, context.Context, context.CancelFunc, error) {
+type analyticsProjectionRuntime struct {
+	projector        *analyticsprojector.Projector
+	priceWindows     *analyticsprojector.PriceWindowProjector
+	totalSubmeters   *analyticsprojector.TotalSubmeterProjector
+	conditionAnchors *analyticsprojector.ConditionAnchorProjector
+	settings         analyticsProjectionSettings
+	ctx              context.Context
+	cancel           context.CancelFunc
+}
+
+func loadAnalyticsProjection(certificate tls.Certificate) (analyticsProjectionRuntime, error) {
 	if !strings.EqualFold(strings.TrimSpace(os.Getenv("ANALYTICS_PROJECTION_ENABLED")), "true") {
-		return nil, nil, nil, analyticsProjectionSettings{}, context.Background(), nil, nil
+		return analyticsProjectionRuntime{ctx: context.Background()}, nil
 	}
 	projectorInterval, err := durationEnv("ANALYTICS_PROJECTOR_POLL_INTERVAL", 500*time.Millisecond, 25*time.Millisecond, time.Minute)
 	if err != nil {
-		return nil, nil, nil, analyticsProjectionSettings{}, nil, nil, err
+		return analyticsProjectionRuntime{}, err
 	}
 	priceWindowInterval, err := durationEnv("ANALYTICS_PRICE_WINDOW_INTERVAL", 5*time.Minute, 10*time.Second, time.Hour)
 	if err != nil {
-		return nil, nil, nil, analyticsProjectionSettings{}, nil, nil, err
+		return analyticsProjectionRuntime{}, err
 	}
 	totalSubmeterInterval, err := durationEnv("ANALYTICS_TOTAL_SUBMETER_INTERVAL", time.Minute, 10*time.Second, time.Hour)
 	if err != nil {
-		return nil, nil, nil, analyticsProjectionSettings{}, nil, nil, err
+		return analyticsProjectionRuntime{}, err
+	}
+	conditionAnchorInterval, err := durationEnv("ANALYTICS_CONDITION_ANCHOR_INTERVAL", 5*time.Minute, 10*time.Second, time.Hour)
+	if err != nil {
+		return analyticsProjectionRuntime{}, err
 	}
 	batchSize, err := integerEnv("ANALYTICS_PROJECTOR_BATCH_SIZE", 256, 1, 4096)
 	if err != nil {
-		return nil, nil, nil, analyticsProjectionSettings{}, nil, nil, err
+		return analyticsProjectionRuntime{}, err
 	}
 	httpClient, err := newAnalyticsHTTPClient(strings.TrimSpace(os.Getenv("ANALYTICS_CLICKHOUSE_CA")))
 	if err != nil {
-		return nil, nil, nil, analyticsProjectionSettings{}, nil, nil, err
+		return analyticsProjectionRuntime{}, err
 	}
 	baseURL, err := requiredEnv("ANALYTICS_CLICKHOUSE_HTTP_URL")
 	if err != nil {
-		return nil, nil, nil, analyticsProjectionSettings{}, nil, nil, err
+		return analyticsProjectionRuntime{}, err
 	}
 	reader, err := analyticsprojector.NewReader(analyticsprojector.ReaderConfig{
 		BaseURL:           baseURL,
@@ -827,7 +846,7 @@ func loadAnalyticsProjection(certificate tls.Certificate) (*analyticsprojector.P
 		HTTPClient:        httpClient,
 	})
 	if err != nil {
-		return nil, nil, nil, analyticsProjectionSettings{}, nil, nil, err
+		return analyticsProjectionRuntime{}, err
 	}
 	writer, err := analyticsprojector.NewWriter(analyticsprojector.WriterConfig{
 		BaseURL:    baseURL,
@@ -838,23 +857,23 @@ func loadAnalyticsProjection(certificate tls.Certificate) (*analyticsprojector.P
 		HTTPClient: httpClient,
 	})
 	if err != nil {
-		return nil, nil, nil, analyticsProjectionSettings{}, nil, nil, err
+		return analyticsProjectionRuntime{}, err
 	}
 	internalCAPath, err := requiredEnv("ANALYTICS_INTERNAL_CA")
 	if err != nil {
-		return nil, nil, nil, analyticsProjectionSettings{}, nil, nil, err
+		return analyticsProjectionRuntime{}, err
 	}
 	internalRoots, err := loadCertPool(internalCAPath)
 	if err != nil {
-		return nil, nil, nil, analyticsProjectionSettings{}, nil, nil, err
+		return analyticsProjectionRuntime{}, err
 	}
 	coreRegistryURL, err := requiredEnv("ANALYTICS_CORE_REGISTRY_URL")
 	if err != nil {
-		return nil, nil, nil, analyticsProjectionSettings{}, nil, nil, err
+		return analyticsProjectionRuntime{}, err
 	}
 	iamURL, err := requiredEnv("ANALYTICS_IAM_URL")
 	if err != nil {
-		return nil, nil, nil, analyticsProjectionSettings{}, nil, nil, err
+		return analyticsProjectionRuntime{}, err
 	}
 	internalClient := &http.Client{
 		Timeout:       10 * time.Second,
@@ -866,37 +885,60 @@ func loadAnalyticsProjection(certificate tls.Certificate) (*analyticsprojector.P
 	}
 	bindingResolver, err := analyticsprojector.NewBindingResolver(registryConfig)
 	if err != nil {
-		return nil, nil, nil, analyticsProjectionSettings{}, nil, nil, err
+		return analyticsProjectionRuntime{}, err
+	}
+	dirtyWindowEnqueuer, err := analyticsprojector.NewDirtyWindowEnqueuer(registryConfig)
+	if err != nil {
+		return analyticsProjectionRuntime{}, err
 	}
 	projector, err := analyticsprojector.NewProjector(analyticsprojector.ProjectorConfig{
-		CounterSource: reader, BindingResolver: bindingResolver, FactSink: writer, RebuildEvents: writer, BatchSize: batchSize,
+		CounterSource:       reader,
+		BindingResolver:     bindingResolver,
+		FactSink:            writer,
+		HourlyV2Sink:        writer,
+		LoadProfileSource:   reader,
+		RebuildEvents:       writer,
+		DirtyWindowEnqueuer: dirtyWindowEnqueuer,
+		BatchSize:           batchSize,
 	})
 	if err != nil {
-		return nil, nil, nil, analyticsProjectionSettings{}, nil, nil, err
+		return analyticsProjectionRuntime{}, err
 	}
 	tariffs, err := analyticsprojector.NewTariffSource(registryConfig)
 	if err != nil {
-		return nil, nil, nil, analyticsProjectionSettings{}, nil, nil, err
+		return analyticsProjectionRuntime{}, err
 	}
 	priceWindows, err := analyticsprojector.NewPriceWindowProjector(analyticsprojector.PriceWindowProjectorConfig{Reader: reader, Writer: writer, Tariffs: tariffs})
 	if err != nil {
-		return nil, nil, nil, analyticsProjectionSettings{}, nil, nil, err
+		return analyticsProjectionRuntime{}, err
 	}
 	submeterSources, err := analyticsprojector.NewTotalSubmeterSource(registryConfig)
 	if err != nil {
-		return nil, nil, nil, analyticsProjectionSettings{}, nil, nil, err
+		return analyticsProjectionRuntime{}, err
 	}
 	totalSubmeters, err := analyticsprojector.NewTotalSubmeterProjector(analyticsprojector.TotalSubmeterProjectorConfig{Reader: reader, Writer: writer, Sources: submeterSources})
 	if err != nil {
-		return nil, nil, nil, analyticsProjectionSettings{}, nil, nil, err
+		return analyticsProjectionRuntime{}, err
+	}
+	conditionAnchors, err := analyticsprojector.NewConditionAnchorProjector(analyticsprojector.ConditionAnchorProjectorConfig{Reader: reader, Writer: writer})
+	if err != nil {
+		return analyticsProjectionRuntime{}, err
 	}
 	projectionContext, projectionCancel := context.WithCancel(context.Background())
-	settings := analyticsProjectionSettings{
-		ProjectorInterval:     projectorInterval,
-		PriceWindowInterval:   priceWindowInterval,
-		TotalSubmeterInterval: totalSubmeterInterval,
-	}
-	return projector, priceWindows, totalSubmeters, settings, projectionContext, projectionCancel, nil
+	return analyticsProjectionRuntime{
+		projector:        projector,
+		priceWindows:     priceWindows,
+		totalSubmeters:   totalSubmeters,
+		conditionAnchors: conditionAnchors,
+		settings: analyticsProjectionSettings{
+			ProjectorInterval:       projectorInterval,
+			PriceWindowInterval:     priceWindowInterval,
+			TotalSubmeterInterval:   totalSubmeterInterval,
+			ConditionAnchorInterval: conditionAnchorInterval,
+		},
+		ctx:    projectionContext,
+		cancel: projectionCancel,
+	}, nil
 }
 
 func runAnalyticsProjectionCoordinated(ctx context.Context, projector *analyticsprojector.Projector, pollInterval time.Duration, runtime *observability.Runtime, locker leaseLocker, logger *slog.Logger) {
@@ -979,6 +1021,45 @@ func runTotalSubmeterProjectionCoordinated(ctx context.Context, projector *analy
 		if err != nil {
 			_ = runtime.Metrics.AddCounter("hvac_analytics_projection_failures_total", "Failed analytics read-model projection batches.", map[string]string{"model": "site_total_submeters"}, 1)
 			logger.Warn("analytics_total_submeter_projection_failed", "error_code", "ANALYTICS_TOTAL_SUBMETER_PROJECTION_FAILED")
+		}
+	})
+}
+
+type conditionAnchorSyncer interface {
+	SyncOnce(context.Context) (int, error)
+}
+
+func runConditionAnchorProjectionCoordinated(ctx context.Context, projector conditionAnchorSyncer, interval time.Duration, runtime *observability.Runtime, settlingBuffer time.Duration, locker leaseLocker, logger *slog.Logger) {
+	if projector == nil {
+		return
+	}
+	if interval <= 0 {
+		interval = 5 * time.Minute
+	}
+	runPeriodicLoop(ctx, periodicLoopConfig{
+		LockKey: "analytics_condition_anchors", LockTTL: 90 * time.Second, Interval: interval, SettlingBuffer: settlingBuffer,
+		AlignToWindow: settlingBuffer > 0, ImmediateFirstTick: settlingBuffer == 0,
+		Locker: locker, Logger: logger, LockFailEvent: "analytics_condition_anchors_lock_failed",
+	}, func(runCtx context.Context, _ time.Time) {
+		syncContext, cancel := context.WithTimeout(runCtx, time.Minute)
+		synced, err := projector.SyncOnce(syncContext)
+		cancel()
+		if err != nil {
+			if runtime != nil {
+				_ = runtime.Metrics.AddCounter("hvac_analytics_projection_failures_total", "Failed analytics read-model projection batches.", map[string]string{"model": "site_condition_anchors_hourly"}, 1)
+			}
+			if logger != nil {
+				logger.Warn("analytics_condition_anchor_projection_failed", "error_code", "ANALYTICS_CONDITION_ANCHOR_PROJECTION_FAILED")
+			}
+			return
+		}
+		if synced > 0 {
+			if runtime != nil {
+				_ = runtime.Metrics.AddCounter("hvac_analytics_condition_anchors_synced_total", "Synced hourly site condition anchors.", map[string]string{"model": "site_condition_anchors_hourly"}, float64(synced))
+			}
+			if logger != nil {
+				logger.Debug("analytics_condition_anchors_synced", "anchor_count", synced)
+			}
 		}
 	})
 }

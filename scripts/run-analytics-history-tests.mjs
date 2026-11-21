@@ -823,7 +823,17 @@ try {
   report.assertions.readerCannotInsert = clickHouseMustFail('INSERT INTO analytics.energy_interval_facts (fact_id) VALUES (generateUUIDv4())', 'analytics_projector_reader');
   report.assertions.metricReaderCannotInsert = clickHouseMustFail("INSERT INTO analytics.metric_result_facts (result_id) VALUES (generateUUIDv4())", 'metric_engine_reader');
   report.assertions.metricWriterCannotSelect = clickHouseMustFail('SELECT count() FROM analytics.metric_result_facts', 'metric_engine_writer');
-  report.assertions.metricWriterCanDelete = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'metric_engine_writer', '--query', "ALTER TABLE analytics.metric_result_facts DELETE WHERE result_id = toUUID('00000000-0000-0000-0000-000000000000') SETTINGS mutations_sync=1"]);
+  report.assertions.metricWriterCannotDelete = clickHouseMustFail("ALTER TABLE analytics.metric_result_facts DELETE WHERE result_id = toUUID('00000000-0000-0000-0000-000000000000') SETTINGS mutations_sync=1", 'metric_engine_writer');
+  report.assertions.metricRuntimeCannotDelete = clickHouseMustFail("ALTER TABLE analytics.metric_result_facts DELETE WHERE result_id = toUUID('00000000-0000-0000-0000-000000000000') SETTINGS mutations_sync=1", 'metric_engine_runtime');
+  report.assertions.observationsEngine = clickHouse("SELECT engine FROM system.tables WHERE database = 'telemetry_history' AND name = 'observations'");
+  if (report.assertions.observationsEngine !== 'ReplacingMergeTree') {
+    throw new Error(`expected telemetry_history.observations to use ReplacingMergeTree, got ${report.assertions.observationsEngine}`);
+  }
+  report.assertions.boundedDeviceHistoryIndex = clickHouse(`EXPLAIN indexes = 1 SELECT count() FROM telemetry_history.observations WHERE tenant_id = toUUID('018f1d00-0000-7000-8000-000000000001') AND site_id = toUUID('018f1e00-1000-7000-8000-000000000001') AND device_id = toUUID('01990000-2900-7000-8000-000000000001') AND telemetry_key = 'btu_meter.supply_water_temperature'`);
+  const deviceHistoryKeys = report.assertions.boundedDeviceHistoryIndex.split('PrimaryKey').slice(1).map((block) => /Keys:([\s\S]*?)Condition:/.exec(block)?.[1]?.trim() ?? '');
+  if (deviceHistoryKeys.length === 0 || deviceHistoryKeys.some((keys) => !keys.includes('device_id') || !keys.includes('telemetry_key'))) {
+    throw new Error(`device telemetry history query must filter on device_id and telemetry_key PrimaryKey: ${JSON.stringify(deviceHistoryKeys)}`);
+  }
   report.assertions.forecastReaderCannotInsert = clickHouseMustFail('INSERT INTO analytics.forecast_series (forecast_id) VALUES (generateUUIDv4())', 'forecast_service_reader');
   report.assertions.forecastWriterCannotSelect = clickHouseMustFail('SELECT count() FROM analytics.forecast_series', 'forecast_service_writer');
   report.assertions.historyQueryCannotInsert = clickHouseMustFail('INSERT INTO telemetry_history.observations (observation_id) VALUES (generateUUIDv4())', 'telemetry_query_history_reader');

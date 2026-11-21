@@ -470,6 +470,7 @@ services:
       ANALYTICS_CLICKHOUSE_READER_USERNAME: analytics_projector_reader
       ANALYTICS_CLICKHOUSE_WRITER_USERNAME: analytics_projector_writer
       TELEMETRY_CLICKHOUSE_HTTP_URL: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
+      TELEMETRY_CLICKHOUSE_NATIVE_ADDR: ${PHASE1_CLICKHOUSE_NATIVE_ADDR:-}
       ANALYTICS_CLICKHOUSE_HTTP_URL: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
       TELEMETRY_LIMIT_POLICY_REDIS_URL: ${TELEMETRY_LIMIT_POLICY_REDIS_URL:-redis://redis:6379/2}
       TELEMETRY_ALARM_EVALUATION_ENABLED: "true"
@@ -616,6 +617,7 @@ services:
       OPTIMIZATION_QUERY_URL: https://telemetry-query-service:18447
       OPTIMIZATION_GATEWAY_URL: https://platform-gateway:8452
       OPTIMIZATION_TELEMETRY_URL: ${OPTIMIZATION_TELEMETRY_URL:-https://telemetry-runtime-service:8446}
+      OPTIMIZATION_ALLOWED_SOLVER_HOSTS: ${OPTIMIZATION_ALLOWED_SOLVER_HOSTS:-}
       OPTIMIZATION_TLS_CERT: /run/hvac/pki/optimization/tls.crt
       OPTIMIZATION_TLS_KEY: /run/hvac/pki/optimization/tls.key
       OPTIMIZATION_TLS_CA: /run/hvac/pki/ca.crt

@@ -150,7 +150,7 @@ cubes:
              energy_kwh, interval_count, data_watermark, dataset_revision,
              toUInt8(0) AS is_cross_gap, '' AS missing_meter,
              toUInt8(energy_type = 'electricity' AND accounting_scope = 'BRANCH') AS is_synthesized
-      FROM analytics.energy_hourly
+      FROM analytics.energy_hourly_effective
       WHERE {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')}
         AND {FILTER_PARAMS.site_energy_facts.period_end.filter('hour')}
         AND {FILTER_PARAMS.site_energy_facts.period_end.filter('addSeconds(hour, 3599)')}
@@ -209,7 +209,7 @@ cubes:
              toUInt8(1) AS is_synthesized
       FROM (
         SELECT tenant_id, site_id, hour, groupUniqArrayIf(point_id, quality = 'VALID') AS valid_points
-        FROM analytics.energy_hourly
+        FROM analytics.energy_hourly_effective
         WHERE accounting_scope = 'BRANCH' AND energy_type = 'electricity'
           AND {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')}
           AND {FILTER_PARAMS.site_energy_facts.period_end.filter('hour')}
@@ -309,7 +309,7 @@ cubes:
     sql: >
       SELECT tenant_id, site_id, energy_type, quality, load_device_id, hour AS period_end,
              energy_kwh, interval_count, data_watermark, dataset_revision, toUInt8(0) AS is_cross_gap
-      FROM analytics.energy_hourly
+      FROM analytics.energy_hourly_effective
       WHERE accounting_scope = 'BRANCH' AND {FILTER_PARAMS.equipment_energy_facts.site_id.filter('site_id')}
         AND {FILTER_PARAMS.equipment_energy_facts.period_end.filter('hour')}
         AND {FILTER_PARAMS.equipment_energy_facts.period_end.filter('addSeconds(hour, 3599)')}
@@ -499,6 +499,130 @@ cubes:
         type: time
 
     # The same row policy as energy_facts: only the caller's Tenant and Site.
+    access_policy:
+      - group: analytics_reader
+        member_level:
+          includes: "*"
+        row_level:
+          filters:
+            - member: tenant_id
+              operator: equals
+              values: ["{ securityContext.tenantId }"]
+            - member: site_id
+              operator: equals
+              values: ["{ securityContext.siteId }"]
+
+  - name: site_meter_balance_facts
+    public: false
+    title: 站点主分表平衡
+    description: 站点物理总表与设备分表用电量的小时级对比结果与偏差状态。
+    sql: >
+      SELECT tenant_id, site_id, hour, site_kwh, submeter_sum_kwh, diff_kwh, imbalance_status
+      FROM analytics.site_meter_balance_hourly
+
+    measures:
+      - name: site_kwh
+        title: 站点总表用电量
+        description: 站点物理总表在所选时段内的有效用电量之和，单位 kWh。
+        sql: site_kwh
+        type: sum
+
+      - name: submeter_sum_kwh
+        title: 分表用电量之和
+        description: 各设备分表在所选时段内的有效用电量之和，单位 kWh。
+        sql: submeter_sum_kwh
+        type: sum
+
+      - name: diff_kwh
+        title: 主分表电量差额
+        description: 站点总表用电量减去各分表用电量之和的差额，单位 kWh；正值表示有未分表覆盖的用电，负值表示分表之和大于总表。
+        sql: diff_kwh
+        type: sum
+
+    dimensions:
+      - name: tenant_id
+        title: 租户
+        description: 数据所属租户的编号，用于访问控制。
+        sql: tenant_id
+        type: string
+
+      - name: site_id
+        title: 站点
+        description: 站点编号；每个查询只能看到被授权的站点。
+        sql: site_id
+        type: string
+
+      - name: imbalance_status
+        title: 平衡状态
+        description: 总表与分表用电量对比的状态分类，例如平衡、存在未计量缺口、分表之和大于总表或缺少总表。
+        sql: imbalance_status
+        type: string
+
+      - name: period_end
+        title: 统计时段
+        description: 按小时对齐的统计时刻；按小时、日、月汇总时归入该时段。
+        sql: hour
+        type: time
+
+    access_policy:
+      - group: analytics_reader
+        member_level:
+          includes: "*"
+        row_level:
+          filters:
+            - member: tenant_id
+              operator: equals
+              values: ["{ securityContext.tenantId }"]
+            - member: site_id
+              operator: equals
+              values: ["{ securityContext.siteId }"]
+
+  - name: thermal_cop_asof_facts
+    public: false
+    title: 瞬时能效对齐审计
+    description: 将瞬时制冷功率与最邻近时刻的用电功率对齐后的瞬时功率与能效数据。
+    sql: >
+      SELECT tenant_id, site_id, thermal_sampled_at, thermal_kw, electrical_kw, instant_cop
+      FROM analytics.thermal_cop_asof_audit
+
+    measures:
+      - name: thermal_kw
+        title: 平均制冷功率
+        description: 所选时段内对齐样本的平均瞬时制冷功率，单位 kW。
+        sql: thermal_kw
+        type: avg
+
+      - name: electrical_kw
+        title: 平均用电功率
+        description: 所选时段内对齐样本的平均瞬时用电功率，单位 kW。
+        sql: electrical_kw
+        type: avg
+
+      - name: asof_cop
+        title: 对齐瞬时能效
+        description: 有效对齐样本的制冷总功率除以用电总功率得到的能效比（COP）；没有有效对齐样本时为空。
+        sql: "if(sumIf({CUBE}.electrical_kw, {CUBE}.instant_cop IS NOT NULL) > 0, sumIf({CUBE}.thermal_kw, {CUBE}.instant_cop IS NOT NULL) / sumIf({CUBE}.electrical_kw, {CUBE}.instant_cop IS NOT NULL), NULL)"
+        type: number
+
+    dimensions:
+      - name: tenant_id
+        title: 租户
+        description: 数据所属租户的编号，用于访问控制。
+        sql: tenant_id
+        type: string
+
+      - name: site_id
+        title: 站点
+        description: 站点编号；每个查询只能看到被授权的站点。
+        sql: site_id
+        type: string
+
+      - name: period_end
+        title: 采样时刻
+        description: 瞬时制冷功率的采样时间；按小时、日、月汇总时归入该时段。
+        sql: thermal_sampled_at
+        type: time
+
     access_policy:
       - group: analytics_reader
         member_level:

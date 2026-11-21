@@ -42,6 +42,10 @@ type AccountingRecalcWriter interface {
 	RequestAccountingRecalculation(ctx context.Context, claims registryauth.GrantClaims, input AccountingRecalculateRequest) (AccountingRecalcJob, error)
 }
 
+type InternalDirtyWindowWriter interface {
+	EnqueueInternalDirtyWindow(ctx context.Context, claims registryauth.GrantClaims, input InternalDirtyWindowRequest) (AccountingRecalcJob, error)
+}
+
 type AccountingRecalculateRequest struct {
 	SiteID           string `json:"siteId,omitempty"`
 	ActorDisplayName string `json:"-"`
@@ -49,6 +53,19 @@ type AccountingRecalculateRequest struct {
 	ToDate           string `json:"toDate"`
 	Granularity      string `json:"granularity,omitempty"`
 	Reason           string `json:"reason"`
+}
+
+type InternalDirtyWindowRequest struct {
+	TenantID           string    `json:"tenantId,omitempty"`
+	SiteID             string    `json:"siteId,omitempty"`
+	Granularity        string    `json:"granularity"`
+	WindowStart        time.Time `json:"windowStart"`
+	WindowEnd          time.Time `json:"windowEnd"`
+	AvailableAt        time.Time `json:"availableAt,omitempty"`
+	RequestedBy        string    `json:"requestedBy,omitempty"`
+	RequestedByDisplay string    `json:"requestedByDisplay,omitempty"`
+	Reason             string    `json:"reason"`
+	Source             string    `json:"source"`
 }
 
 type AccountingRecalcJob struct {
@@ -332,3 +349,195 @@ INSERT INTO core_registry.energy_recalc_dirty_windows (
 	}
 	return job, nil
 }
+
+type normalizedInternalDirtyWindowInput struct {
+	tenantID           string
+	siteID             string
+	granularity        string
+	windowStart        time.Time
+	windowEnd          time.Time
+	availableAt        time.Time
+	requestedBy        string
+	requestedByDisplay string
+	reason             string
+	source             string
+}
+
+func (input InternalDirtyWindowRequest) normalize(fallbackRequestedBy string, now time.Time) (normalizedInternalDirtyWindowInput, error) {
+	if !validUUIDv7(input.TenantID) || !validUUIDv7(input.SiteID) {
+		return normalizedInternalDirtyWindowInput{}, ErrInvalidMutation
+	}
+	requestedBy := strings.TrimSpace(input.RequestedBy)
+	if requestedBy == "" {
+		requestedBy = strings.TrimSpace(fallbackRequestedBy)
+	}
+	if requestedBy != "" && !validUUIDv7(requestedBy) {
+		return normalizedInternalDirtyWindowInput{}, ErrInvalidMutation
+	}
+	granularity := strings.TrimSpace(input.Granularity)
+	switch granularity {
+	case AccountingRecalcGranularityHour, AccountingRecalcGranularityDay, AccountingRecalcGranularityMonth, AccountingRecalcGranularityAll:
+	default:
+		return normalizedInternalDirtyWindowInput{}, ErrInvalidMutation
+	}
+	if input.WindowStart.IsZero() || input.WindowEnd.IsZero() {
+		return normalizedInternalDirtyWindowInput{}, ErrInvalidMutation
+	}
+	windowStart := input.WindowStart.UTC()
+	windowEnd := input.WindowEnd.UTC()
+	if !windowStart.Before(windowEnd) {
+		return normalizedInternalDirtyWindowInput{}, ErrInvalidMutation
+	}
+	if windowEnd.After(windowStart.Add(maxAccountingRecalcRangeDays * 24 * time.Hour)) {
+		return normalizedInternalDirtyWindowInput{}, ErrInvalidMutation
+	}
+	source := strings.TrimSpace(input.Source)
+	switch source {
+	case AccountingRecalcSourceBackfill, AccountingRecalcSourceTariffChange, AccountingRecalcSourceRatioChange:
+	default:
+		return normalizedInternalDirtyWindowInput{}, ErrInvalidMutation
+	}
+	trimmedReason := strings.TrimSpace(input.Reason)
+	if trimmedReason == "" || utf8.RuneCountInString(trimmedReason) > 1000 || utf8.RuneCountInString(input.Reason) > 1000 {
+		return normalizedInternalDirtyWindowInput{}, ErrInvalidMutation
+	}
+	availableAt := now.UTC()
+	if !input.AvailableAt.IsZero() {
+		availableAt = input.AvailableAt.UTC()
+	}
+	return normalizedInternalDirtyWindowInput{
+		tenantID:           input.TenantID,
+		siteID:             input.SiteID,
+		granularity:        granularity,
+		windowStart:        windowStart,
+		windowEnd:          windowEnd,
+		availableAt:        availableAt,
+		requestedBy:        requestedBy,
+		requestedByDisplay: normalizeActorDisplay(input.RequestedByDisplay, requestedBy),
+		reason:             trimmedReason,
+		source:             source,
+	}, nil
+}
+
+func (input InternalDirtyWindowRequest) Validate() error {
+	_, err := input.normalize("", time.Now().UTC())
+	return err
+}
+
+func (store *PostgresStore) EnqueueInternalDirtyWindow(ctx context.Context, claims registryauth.GrantClaims, input InternalDirtyWindowRequest) (AccountingRecalcJob, error) {
+	if len(claims.Actions) != 1 || !registryauth.ActionAllows(claims.Actions[0], registryauth.ActionMeterBindingResolve) {
+		return AccountingRecalcJob{}, ErrMutationForbidden
+	}
+	if !validUUIDv7(claims.PrincipalID) || !validUUIDv7(claims.TenantID) {
+		return AccountingRecalcJob{}, ErrInvalidMutation
+	}
+	now := time.Now().UTC()
+	normalized, err := input.normalize(claims.PrincipalID, now)
+	if err != nil {
+		return AccountingRecalcJob{}, err
+	}
+	if normalized.tenantID != claims.TenantID {
+		return AccountingRecalcJob{}, ErrInvalidMutation
+	}
+	if !registryauth.ScopeAllows(claims, normalized.siteID) {
+		return AccountingRecalcJob{}, ErrNotFound
+	}
+
+	var job AccountingRecalcJob
+	err = store.withWriteTransaction(ctx, claims, registryauth.ActionMeterBindingResolve, func(tx pgx.Tx) error {
+		var siteExists bool
+		if err := tx.QueryRow(ctx, `
+SELECT EXISTS (
+  SELECT 1 FROM core_registry.sites
+  WHERE tenant_id = $1::uuid AND id = $2::uuid AND NOT (id = ANY($3::uuid[]))
+)
+`, normalized.tenantID, normalized.siteID, postgresUUIDArray(claims.DeniedSiteIDs)).Scan(&siteExists); err != nil {
+			return fmt.Errorf("verify Site for internal dirty window: %w", err)
+		}
+		if !siteExists {
+			return ErrNotFound
+		}
+
+		var existingID string
+		err := tx.QueryRow(ctx, `
+SELECT id::text
+FROM core_registry.energy_recalc_dirty_windows
+WHERE tenant_id = $1::uuid
+  AND site_id = $2::uuid
+  AND NOT (site_id = ANY($3::uuid[]))
+  AND granularity = $4
+  AND source = $5
+  AND status = $6
+  AND window_start <= $8
+  AND window_end >= $7
+ORDER BY created_at ASC, id ASC
+LIMIT 1
+FOR UPDATE
+`, normalized.tenantID, normalized.siteID, postgresUUIDArray(claims.DeniedSiteIDs),
+			normalized.granularity, normalized.source, AccountingRecalcStatusPending,
+			normalized.windowStart, normalized.windowEnd).Scan(&existingID)
+		if err == nil {
+			updated, scanErr := scanAccountingRecalcJob(tx.QueryRow(ctx, `
+UPDATE core_registry.energy_recalc_dirty_windows
+SET window_start = LEAST(window_start, $3),
+    window_end = GREATEST(window_end, $4),
+    available_at = GREATEST(available_at, $5),
+    updated_at = GREATEST($6, created_at)
+WHERE tenant_id = $1::uuid
+  AND id = $2::uuid
+  AND status = $7
+RETURNING id::text, tenant_id::text, site_id::text, granularity,
+          window_start, window_end, status, available_at,
+          requested_by::text, requested_by_display, reason, source,
+          attempt_count, last_error, created_at, updated_at, finished_at
+`, normalized.tenantID, existingID, normalized.windowStart, normalized.windowEnd,
+				normalized.availableAt, now, AccountingRecalcStatusPending))
+			if scanErr != nil {
+				return mapRegistryWriteError(fmt.Errorf("update overlapping energy recalc dirty window: %w", scanErr))
+			}
+			job = updated
+			return nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("query overlapping energy recalc dirty window: %w", err)
+		}
+
+		jobID, err := newCoreUUIDv7(now)
+		if err != nil {
+			return err
+		}
+		inserted, err := scanAccountingRecalcJob(tx.QueryRow(ctx, `
+INSERT INTO core_registry.energy_recalc_dirty_windows (
+  id, tenant_id, site_id, granularity, window_start, window_end,
+  status, available_at, requested_by, requested_by_display,
+  reason, source, attempt_count, last_error, created_at, updated_at, finished_at
+) VALUES (
+  $1::uuid, $2::uuid, $3::uuid, $4, $5, $6,
+  $7, $8, $9::uuid, $10,
+  $11, $12, 0, '', $13, $13, NULL
+)
+RETURNING id::text, tenant_id::text, site_id::text, granularity,
+          window_start, window_end, status, available_at,
+          requested_by::text, requested_by_display, reason, source,
+          attempt_count, last_error, created_at, updated_at, finished_at
+`, jobID, normalized.tenantID, normalized.siteID, normalized.granularity,
+			normalized.windowStart, normalized.windowEnd, AccountingRecalcStatusPending,
+			normalized.availableAt, normalized.requestedBy, normalized.requestedByDisplay,
+			normalized.reason, normalized.source, now))
+		if err != nil {
+			return mapRegistryWriteError(fmt.Errorf("insert internal energy recalc dirty window: %w", err))
+		}
+		job = inserted
+		return nil
+	})
+	if err != nil {
+		return AccountingRecalcJob{}, err
+	}
+	return job, nil
+}
+
+var (
+	_ AccountingRecalcStore     = (*PostgresStore)(nil)
+	_ AccountingRecalcWriter    = (*PostgresStore)(nil)
+	_ InternalDirtyWindowWriter = (*PostgresStore)(nil)
+)

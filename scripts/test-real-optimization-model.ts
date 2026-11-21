@@ -548,6 +548,7 @@ test('governance summary helpers map solver routing, M&V COP bins, and flywheel 
   assert.equal(formatSolverRef('builtin://chiller-cop-model'), '冷机 COP 拟合策略');
   assert.equal(formatSolverRef('https://solver.internal.example/v2/recommend'), '外部协同优化服务');
   assert.equal(formatSolverRef('http://localhost:8090/solve'), '外部协同优化服务');
+  assert.equal(formatSolverRef('http://ai-solver-service:19099/v1/solve'), '外部 Python 优化服务');
   assert.equal(formatSolverRef('builtin://experimental-v2'), '内置优化策略');
 
   assert.equal(formatSolverSource('DEFAULT'), '默认基线');

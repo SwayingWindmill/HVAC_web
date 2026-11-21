@@ -121,6 +121,11 @@ func (sink *ClickHouseHistorySink) Ping(ctx context.Context) error {
 	return pingClickHouseHTTP(ctx, sink.baseURL, sink.username, sink.password, sink.httpClient, "ClickHouse history ping")
 }
 
+// Close satisfies closer interfaces used alongside the native TCP sink; HTTP transports are stateless here.
+func (sink *ClickHouseHistorySink) Close() error {
+	return nil
+}
+
 func pingClickHouseHTTP(ctx context.Context, baseURL *url.URL, username, password string, client *http.Client, label string) error {
 	endpoint := *baseURL
 	q := endpoint.Query()
@@ -204,31 +209,44 @@ func compressHistoryGzip(raw []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+func prepareOrderedHistoryObservations(sequence uint64, observations []HistoryObservation) ([]HistoryObservation, error) {
+	if len(observations) == 0 {
+		return nil, nil
+	}
+	if len(observations) > maxHistoryBatchRows {
+		return nil, fmt.Errorf("ClickHouse history insert batch exceeds %d observations", maxHistoryBatchRows)
+	}
+	if sequence == 0 {
+		return nil, errors.New("ClickHouse history insert requires the batch History Sequence")
+	}
+	// PostgreSQL UPDATE RETURNING has no order guarantee. Retries must produce
+	// identical rows, order and block boundaries, including after a worker restart.
+	ordered := deduplicateResolvedBatchSamples(slices.Clone(observations))
+	slices.SortFunc(ordered, func(a, b HistoryObservation) int { return strings.Compare(a.ObservationID, b.ObservationID) })
+	for i := range ordered {
+		ordered[i].HistorySequence = sequence
+		if err := validateHistoryObservation(ordered[i]); err != nil {
+			return nil, err
+		}
+	}
+	return ordered, nil
+}
+
 // PrepareObservations deterministically orders, deduplicates resolved (point_id, sampled_at)
 // collisions, validates, encodes, hashes, and gzip-compresses one history batch.
 func (sink *ClickHouseHistorySink) PrepareObservations(sequence uint64, observations []HistoryObservation) ([]byte, string, error) {
 	if sink == nil {
 		return nil, "", errors.New("ClickHouse history sink is closed")
 	}
-	if len(observations) == 0 {
+	ordered, err := prepareOrderedHistoryObservations(sequence, observations)
+	if err != nil {
+		return nil, "", err
+	}
+	if len(ordered) == 0 {
 		return nil, "", nil
 	}
-	if len(observations) > maxHistoryBatchRows {
-		return nil, "", fmt.Errorf("ClickHouse history insert batch exceeds %d observations", maxHistoryBatchRows)
-	}
-	if sequence == 0 {
-		return nil, "", errors.New("ClickHouse history insert requires the batch History Sequence")
-	}
-	// PostgreSQL UPDATE RETURNING has no order guarantee. Retries must produce
-	// identical rows, order and block boundaries, including after a worker restart.
-	observations = deduplicateResolvedBatchSamples(slices.Clone(observations))
-	slices.SortFunc(observations, func(a, b HistoryObservation) int { return strings.Compare(a.ObservationID, b.ObservationID) })
 	var encoded bytes.Buffer
-	for _, observation := range observations {
-		observation.HistorySequence = sequence
-		if err := validateHistoryObservation(observation); err != nil {
-			return nil, "", err
-		}
+	for _, observation := range ordered {
 		body, err := json.Marshal(observation)
 		if err != nil {
 			return nil, "", fmt.Errorf("%w: encode ClickHouse history observation %s: %w", ErrHistoryBatchPermanent, observation.ObservationID, err)

@@ -31,11 +31,15 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
       npmRun('design:check'),
       npmRun('lint'),
       npmRun('build'),
+      npmRun('miniprogram:check'),
     ]),
   }),
   contracts: Object.freeze({
     core: Object.freeze([
       npmRun('contracts:check'),
+      npmRun('changelog:check'),
+      npmRun('migrations:sync:check'),
+      npmRun('clickhouse:sql:check'),
       npmRun('operations-agent:contracts:check'),
       npmRun('semantic:catalog:check'),
       npmRun('ownership:check'),
@@ -63,7 +67,7 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
   unit: Object.freeze({
     // Every Go module, whatever the domain: selected by the classifier for any Go code, dependency or lint-rule change.
     go: Object.freeze([npmRun('go:lint'), npmRun('security:go-vuln')]),
-    web: Object.freeze([npmRun('web:shell:test'), npmRun('web:model:test'), npmRun('web:e2e'), npmRun('miniprogram:check')]),
+    web: Object.freeze([npmRun('web:shell:test'), npmRun('web:model:test'), npmRun('web:e2e')]),
     platform: Object.freeze([npmRun('test:identity'), npmRun('test:durable-unit')]),
     registry: Object.freeze([
       nodeRun('scripts/run-go.mjs', 'test', './libs/planttwin/...', './modules/registry/...'),

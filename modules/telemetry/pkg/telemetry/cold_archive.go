@@ -73,6 +73,22 @@ var coldArchiveTables = map[string]coldArchiveTableSpec{
 			"data_watermark", "projected_at", "fact_revision", "rebuild_run_id",
 		}, ", "),
 	},
+	"metric_result_facts": {
+		table:         "metric_result_facts",
+		timeColumn:    "period_start",
+		paramType:     "DateTime64(3, 'UTC')",
+		timeLayout:    "2006-01-02 15:04:05.000",
+		nullableScope: false,
+		orderBy:       "period_start ASC, result_id ASC",
+		selectColumns: strings.Join([]string{
+			"result_id", "tenant_id", "site_id", "subject_type", "subject_id",
+			"metric_id", "metric_version_id", "metric_code", "metric_version",
+			"metric_binding_id", "binding_version", "period_start", "period_end",
+			"calculated_at", "granularity", "value_type", "value_json", "value_number",
+			"value_string", "value_boolean", "unit", "quality", "completeness",
+			"calculation_run_id", "revision", "provenance",
+		}, ", "),
+	},
 }
 
 // ColdArchiveConfig configures pre-prune streaming exports from ClickHouse into local

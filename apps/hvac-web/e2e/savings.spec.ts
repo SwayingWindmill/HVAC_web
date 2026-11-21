@@ -16,23 +16,23 @@ test('a measure is registered on the Site clock and implemented, and a baseline 
   await page.getByLabel('依据说明（可选）').fill('10 月 12 日优化建议');
   await page.getByRole('button', { name: '登记', exact: true }).click();
 
+  const sheet = page.getByRole('dialog');
+  await expect(sheet).toContainText('计划中');
+  await expect(sheet).toContainText('确认实施后，系统用实施前 14 天的逐时用电与供冷量算出对比基线');
   const [registered] = gateway.writes.filter((write) => write.path === MEASURES);
   expect(registered.csrfToken).toBe('e2e-csrf-token');
   expect(registered.body).toMatchObject({
     name: '冷冻水供水温度由 7 °C 提高到 8 °C', kind: 'SETPOINT_RESET', plannedAt: '2026-10-12T07:17:00.000Z',
     expectedAnnualKWh: 21000, evidence: '10 月 12 日优化建议',
   });
-  const sheet = page.getByRole('dialog');
-  await expect(sheet).toContainText('计划中');
-  await expect(sheet).toContainText('确认实施后，系统用实施前 14 天的逐时用电与供冷量算出对比基线');
 
   await sheet.getByRole('button', { name: '确认实施' }).click();
   await page.getByLabel('实施时间').fill('2026-10-12T15:17');
   await page.getByRole('button', { name: '确认实施并拟合基线' }).click();
 
+  await expect(sheet).toContainText('对比基线不可靠，暂不统计');
   const [implemented] = gateway.writes.filter((write) => write.path.endsWith('/implement'));
   expect(implemented.body).toEqual({ implementedAt: '2026-10-12T07:17:00.000Z' });
-  await expect(sheet).toContainText('对比基线不可靠，暂不统计');
   await expect(sheet).toContainText('对比基线期完整小时不足 72 小时');
   const checks = sheet.getByRole('table', { name: '对比基线的检验' });
   await expect(checks.getByRole('row').filter({ hasText: '数据完整度' })).toContainText('15 / 336（4%）');

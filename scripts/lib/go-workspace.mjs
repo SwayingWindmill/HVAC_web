@@ -21,7 +21,8 @@ export function goExecutableName(name, platform = process.platform) {
 // workspace's Go: golangci-lint and govulncheck cannot load code that targets a newer Go than they were built with.
 // GOFLAGS is cleared so a gate's -race does not build a race-instrumented tool.
 export function installGoTool({ root, goBinary, goCacheDir, goVersion, name, packagePath, version }) {
-  const toolDir = join(tmpdir(), 'hvac-go-tools', `${name}-${version}-go${goVersion}`);
+  const toolRoot = process.env.HVAC_GO_TOOLS_DIR || join(tmpdir(), 'hvac-go-tools');
+  const toolDir = join(toolRoot, `${name}-${version}-go${goVersion}`);
   const binary = join(toolDir, goExecutableName(name));
   if (existsSync(binary)) return binary;
   mkdirSync(toolDir, { recursive: true });

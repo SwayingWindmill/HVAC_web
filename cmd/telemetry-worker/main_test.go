@@ -95,7 +95,7 @@ func TestShutdownTelemetryWorkerOrder(t *testing.T) {
 		Exporter: &telemetryRecordingExporter{record: recordEvent},
 	})
 	obsRuntime.MarkReady()
-	logger := observability.NewJSONLogger(&bytes.Buffer{}, slog.LevelInfo)
+	logger := observability.NewJSONLogger(io.Discard, slog.LevelInfo)
 
 	var storesClosed atomic.Bool
 	httpEntered := make(chan struct{})
@@ -294,7 +294,7 @@ func TestShutdownTelemetryWorkerDrainRelaysAndAnalyticsOrder(t *testing.T) {
 		Exporter: &telemetryRecordingExporter{record: record},
 	})
 	obsRuntime.MarkReady()
-	logger := observability.NewJSONLogger(&bytes.Buffer{}, slog.LevelInfo)
+	logger := observability.NewJSONLogger(io.Discard, slog.LevelInfo)
 
 	var workersWG, analyticsWG sync.WaitGroup
 	workerCtx, workerCancel := context.WithCancel(context.Background())
@@ -614,19 +614,19 @@ func TestLoadClickHouseRetentionPrunerArchiveEnvWiring(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Prune failed: %v", err)
 		}
-		if len(res.ArchivedTables) != 2 || len(res.SubmittedTables) != 8 {
+		if len(res.ArchivedTables) != 3 || len(res.SubmittedTables) != 9 {
 			t.Fatalf("unexpected result: %+v", res)
 		}
 		entries, err := os.ReadDir(archiveDir)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(entries) != 4 {
-			t.Fatalf("expected 4 archive files, got %d", len(entries))
+		if len(entries) != 6 {
+			t.Fatalf("expected 6 archive files, got %d", len(entries))
 		}
 		mu.Lock()
 		defer mu.Unlock()
-		if len(ops) != 10 || ops[0] != "SELECT" || ops[1] != "SELECT" {
+		if len(ops) != 12 || ops[0] != "SELECT" || ops[1] != "SELECT" || ops[2] != "SELECT" {
 			t.Fatalf("unexpected query order: %v", ops)
 		}
 	})
@@ -704,7 +704,7 @@ func TestClonedHTTPTransportAndProbeSweepDebugLogging(t *testing.T) {
 		t.Fatalf("unexpected cloned transport config: %#v", transport)
 	}
 
-	var infoBuf bytes.Buffer
+	var infoBuf syncLogBuffer
 	infoCtx, cancelInfo := context.WithCancel(t.Context())
 	doneInfo := make(chan struct{})
 	exitedInfo := make(chan struct{})
@@ -719,7 +719,7 @@ func TestClonedHTTPTransportAndProbeSweepDebugLogging(t *testing.T) {
 		t.Fatalf("expected telemetry_probe_offsets_estimated suppressed at Info level, got: %s", infoBuf.String())
 	}
 
-	var debugBuf bytes.Buffer
+	var debugBuf syncLogBuffer
 	debugCtx, cancelDebug := context.WithCancel(t.Context())
 	doneDebug := make(chan struct{})
 	exitedDebug := make(chan struct{})
@@ -733,6 +733,23 @@ func TestClonedHTTPTransportAndProbeSweepDebugLogging(t *testing.T) {
 	if !strings.Contains(debugBuf.String(), "telemetry_probe_offsets_estimated") {
 		t.Fatalf("expected telemetry_probe_offsets_estimated at Debug level, got: %s", debugBuf.String())
 	}
+}
+
+type syncLogBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *syncLogBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *syncLogBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
 }
 
 func TestEnvHelpersReturnErrorsInsteadOfExiting(t *testing.T) {
@@ -750,4 +767,67 @@ func TestEnvHelpersReturnErrorsInsteadOfExiting(t *testing.T) {
 	if _, err := integerEnv("TEST_TELEMETRY_INT_BAD", 5, 1, 100); err == nil {
 		t.Fatal("expected error for out-of-range integerEnv")
 	}
+}
+
+func TestOpenTelemetryHistorySink(t *testing.T) {
+	lookupFrom := func(values map[string]string) func(string) string {
+		return func(key string) string { return values[key] }
+	}
+
+	t.Run("selects Native TCP PrepareBatch sink when TELEMETRY_CLICKHOUSE_NATIVE_ADDR is set", func(t *testing.T) {
+		sink, err := openTelemetryHistorySink(lookupFrom(map[string]string{
+			"TELEMETRY_CLICKHOUSE_NATIVE_ADDR": "127.0.0.1:9000",
+			"TELEMETRY_CLICKHOUSE_HTTP_URL":    "http://127.0.0.1:8123",
+		}))
+		if err != nil {
+			t.Fatalf("unexpected error opening native sink: %v", err)
+		}
+		defer func() { _ = sink.Close() }()
+		if _, ok := sink.(*telemetry.ClickHouseNativeHistorySink); !ok {
+			t.Fatalf("expected *telemetry.ClickHouseNativeHistorySink, got %T", sink)
+		}
+	})
+
+	t.Run("falls back to HTTP JSONEachRow sink when native addr is unset", func(t *testing.T) {
+		sink, err := openTelemetryHistorySink(lookupFrom(map[string]string{
+			"TELEMETRY_CLICKHOUSE_HTTP_URL": "http://127.0.0.1:8123",
+		}))
+		if err != nil {
+			t.Fatalf("unexpected error opening HTTP sink: %v", err)
+		}
+		defer func() { _ = sink.Close() }()
+		if _, ok := sink.(*telemetry.ClickHouseHistorySink); !ok {
+			t.Fatalf("expected *telemetry.ClickHouseHistorySink, got %T", sink)
+		}
+	})
+
+	t.Run("rejects invalid native addr, invalid CA file, and missing endpoints", func(t *testing.T) {
+		if _, err := openTelemetryHistorySink(lookupFrom(map[string]string{
+			"TELEMETRY_CLICKHOUSE_NATIVE_ADDR": "clickhouse-without-port",
+		})); err == nil {
+			t.Fatal("expected error for invalid TELEMETRY_CLICKHOUSE_NATIVE_ADDR")
+		}
+
+		if _, err := openTelemetryHistorySink(lookupFrom(map[string]string{
+			"TELEMETRY_CLICKHOUSE_NATIVE_ADDR": "127.0.0.1:9000",
+			"TELEMETRY_CLICKHOUSE_CA":          t.TempDir() + "/missing-ca.pem",
+		})); err == nil {
+			t.Fatal("expected error for missing TELEMETRY_CLICKHOUSE_CA file")
+		}
+
+		badCAPath := t.TempDir() + "/bad-ca.pem"
+		if err := os.WriteFile(badCAPath, []byte("not-a-pem"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := openTelemetryHistorySink(lookupFrom(map[string]string{
+			"TELEMETRY_CLICKHOUSE_NATIVE_ADDR": "127.0.0.1:9000",
+			"TELEMETRY_CLICKHOUSE_CA":          badCAPath,
+		})); err == nil {
+			t.Fatal("expected error for invalid PEM content in TELEMETRY_CLICKHOUSE_CA")
+		}
+
+		if _, err := openTelemetryHistorySink(lookupFrom(map[string]string{})); err == nil {
+			t.Fatal("expected error when both TELEMETRY_CLICKHOUSE_NATIVE_ADDR and TELEMETRY_CLICKHOUSE_HTTP_URL are empty")
+		}
+	})
 }

@@ -31,13 +31,30 @@ import (
 const authFixtureTenantID = "018f3d00-0000-7000-8000-000000000001"
 const authFixtureMFAACR = "urn:hvac:loa:2"
 
+type authTestSyncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *authTestSyncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *authTestSyncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 type authHarness struct {
 	gatewayServer *httptest.Server
 	iamServer     *httptest.Server
 	oidcServer    *httptest.Server
 	provider      *oidctest.Provider
 	gatewayURL    string
-	logs          *bytes.Buffer
+	logs          *authTestSyncBuffer
 	transport     http.RoundTripper
 	sessionStore  *sessionstore.MemoryStore
 }
@@ -455,7 +472,7 @@ func buildAuthHarnessWithGatewayConfig(t *testing.T, factory func(clientSPIFFEID
 		t.Fatal("client key is not a signer")
 	}
 	provider.TrustGatewayGrants(signer.Public(), bundle.ClientSPIFFEID)
-	var logs bytes.Buffer
+	var logs authTestSyncBuffer
 	sessionStore := sessionstore.NewMemoryStore()
 	identity := &gateway.IdentityConfig{
 		OIDCIssuer: oidcServer.URL, OIDCClientID: "hvac-web-s0", OIDCRedirectURI: redirectURI, PublicOrigin: gatewayURL,

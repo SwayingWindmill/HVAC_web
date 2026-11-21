@@ -139,14 +139,22 @@ func (p *Projector) RebuildDirtyWindow(ctx context.Context, window DirtyWindow) 
 	if len(deltas) == 0 {
 		return 0, nil
 	}
-	facts, err := p.buildFactsForDeltas(ctx, deltas, p.now().UTC(), true)
+	projectedAt := p.now().UTC()
+	facts, err := p.buildFactsForDeltas(ctx, deltas, projectedAt, true)
 	if err != nil {
 		return 0, err
 	}
 	if len(facts) == 0 {
 		return 0, nil
 	}
-	return p.persistFacts(ctx, facts)
+	projected, err := p.persistFacts(ctx, facts)
+	if err != nil {
+		return 0, err
+	}
+	if err := p.projectHourlyV2(ctx, facts, projectedAt); err != nil {
+		return 0, fmt.Errorf("project hourly v2 facts: %w", err)
+	}
+	return projected, nil
 }
 
 func rebuildDetail(facts []EnergyIntervalFact, failure error) string {

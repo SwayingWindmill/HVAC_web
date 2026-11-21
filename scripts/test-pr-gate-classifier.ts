@@ -25,10 +25,14 @@ interface ClassificationReport {
   unknown: boolean;
   contracts: boolean;
   units: boolean;
+  unitGoLint: boolean;
+  unitWeb: boolean;
+  unitDomain: boolean;
   integrations: boolean;
   browsers: boolean;
   contractProfiles: string[];
   unitProfiles: string[];
+  unitDomainProfiles: string[];
   integrationProfiles: string[];
   browserProfiles: string[];
 }
@@ -62,7 +66,8 @@ test('documentation-only changes keep expensive affected gates idle', () => {
     'docs/architecture/overview.md',
     '.mwgrc',
     '.mcp.json',
-    'CHANGELOG.md',
+    'changelog.d/README.md',
+    'changelog.d/2026-11-20-sample.md',
     'CLAUDE.md',
     'GLOSSARY.md',
     '.agents/skills/correct/SKILL.md',
@@ -149,12 +154,18 @@ test('semantic plant twin library changes select registry, command, and analytic
   assert.equal(classification.broad, false);
 });
 
-test('Phase 1 migration changes rerun the migration integration test and the freeze check', () => {
+test('Phase 1 migration changes rerun the migration integration test and the freeze check without broad fan-out', () => {
   for (const file of ['deploy/platform/phase1/migrations/manifest.v1.json', 'modules/alarm/migrations/001_s4_alarm_runtime.sql', 'services/notification-service/migrations/002_wechat_reminders.sql']) {
     const classification = runClassification([file]);
     assert.ok(classification.integrationProfiles.includes('platform'), file);
     assert.ok(classification.contractProfiles.includes('core'), file);
   }
+  const manifestClassification = runClassification(['deploy/platform/phase1/migrations/manifest.v1.json']);
+  assert.equal(manifestClassification.broad, false);
+  assert.deepEqual(manifestClassification.contractProfiles, ['core']);
+  assert.deepEqual(manifestClassification.integrationProfiles, ['platform']);
+  assert.equal(manifestClassification.unitWeb, false);
+
   const plan = runPlan('integration', ['platform']);
   assert.ok(plan.commands.includes('npm run deployment:phase1:migration:test'));
   const contractCommands = runPlan('contracts', ['core']).commands;
@@ -165,6 +176,30 @@ test('Phase 1 migration changes rerun the migration integration test and the fre
     const scriptClassification = runClassification([scriptFile]);
     assert.ok(scriptClassification.contractProfiles.includes('core'), scriptFile);
   }
+
+  const cdClassification = runClassification(['deploy/platform/phase1/cd/smoke-release.sh']);
+  assert.equal(cdClassification.unknown, false);
+  assert.equal(cdClassification.broad, false);
+  assert.deepEqual(cdClassification.unitDomainProfiles, ['platform']);
+
+  const promoClassification = runClassification(['tools/promo-video/package-lock.json']);
+  assert.equal(promoClassification.unknown, false);
+  assert.equal(promoClassification.broad, false);
+  assert.equal(promoClassification.units, false);
+});
+
+test('unit classification splits go lint, web, and domain Go tests cleanly', () => {
+  const mixed = runClassification(['apps/hvac-web/src/app/router.ts', 'modules/alarm/pkg/alarmrules/rules.go']);
+  assert.equal(mixed.unitGoLint, true);
+  assert.equal(mixed.unitWeb, true);
+  assert.equal(mixed.unitDomain, true);
+  assert.deepEqual(mixed.unitDomainProfiles, ['alarm']);
+
+  const webOnly = runClassification(['apps/hvac-web/src/app/router.ts']);
+  assert.equal(webOnly.unitGoLint, false);
+  assert.equal(webOnly.unitWeb, true);
+  assert.equal(webOnly.unitDomain, false);
+  assert.deepEqual(webOnly.unitDomainProfiles, []);
 });
 
 test('package, workflow, and central task-matrix changes fail closed to broad contract and unit coverage', () => {
@@ -309,10 +344,21 @@ test('repository governance enforces 1:1 skill parity, required hook files, and 
       'scripts/run-command-formal-check.ts',
       'scripts/migration-conventions-baseline.json',
       'scripts/check-migration-conventions.ts',
+      'scripts/sync-phase1-migrations.ts',
+      'scripts/test-sync-phase1-migrations.ts',
+      'scripts/check-clickhouse-sql.ts',
+      'scripts/test-clickhouse-sql.ts',
+      'scripts/check-go-test-hygiene.ts',
+      'scripts/go-test-sleep-baseline.json',
+      'scripts/test-go-test-hygiene.ts',
+      'scripts/run-preflight.ts',
+      'changelog.d/README.md',
+      'scripts/changelog-fragments.ts',
+      'scripts/test-changelog-fragments.ts',
     ]).length,
     0,
   );
-  assert.equal(findRequiredGuardrailFileViolations(['.agents/hooks.json']).length, 12);
+  assert.equal(findRequiredGuardrailFileViolations(['.agents/hooks.json']).length, 23);
 
   const verifyMapSandbox = mkdtempSync(join(tmpdir(), 'hvac-verify-map-'));
   try {
@@ -387,6 +433,14 @@ test('repository governance enforces 1:1 skill parity, required hook files, and 
     'scripts/web-as-cast-baseline.json',
     'scripts/coverage-baseline.json',
     'scripts/check-coverage-regression.ts',
+    'scripts/sync-phase1-migrations.ts',
+    'scripts/test-sync-phase1-migrations.ts',
+    'scripts/check-clickhouse-sql.ts',
+    'scripts/test-clickhouse-sql.ts',
+    'scripts/check-go-test-hygiene.ts',
+    'scripts/go-test-sleep-baseline.json',
+    'scripts/test-go-test-hygiene.ts',
+    'scripts/run-preflight.ts',
   ]) {
     const classification = runClassification([file]);
     assert.equal(classification.unknown, false, file);
@@ -413,7 +467,7 @@ test('repository governance enforces 1:1 skill parity, required hook files, and 
   assert.equal(edgeExecutor.broad, false);
 
   const siteManifest = runClassification(['deploy/sites/songyaxuan.site.json']);
-  assert.deepEqual(siteManifest.unitProfiles, ['command', 'registry', 'telemetry']);
+  assert.deepEqual(siteManifest.unitProfiles, ['alarm', 'command', 'registry', 'telemetry']);
   assert.equal(siteManifest.unknown, false);
   assert.equal(siteManifest.broad, false);
 
@@ -591,7 +645,18 @@ test('ClickHouse migration governance, restore drill, and observability alerts c
   assert.deepEqual(obs.contractProfiles, ['core']);
 
   const coreContracts = runPlan('contracts', ['core']).commands;
+  assert.ok(coreContracts.includes('npm run changelog:check'));
   assert.ok(coreContracts.includes('npm run migrations:clickhouse:check'));
   const platformIntegration = runPlan('integration', ['platform']).commands;
   assert.ok(platformIntegration.includes('npm run deployment:phase1:clickhouse:restore:test'));
+});
+
+test('CHANGELOG.md and changelog-fragments tooling run contracts core without broad fan-out', () => {
+  for (const file of ['CHANGELOG.md', 'scripts/changelog-fragments.ts', 'scripts/test-changelog-fragments.ts']) {
+    const classification = runClassification([file]);
+    assert.deepEqual(classification.contractProfiles, ['core'], file);
+    assert.equal(classification.units, false, file);
+    assert.equal(classification.broad, false, file);
+    assert.equal(classification.unknown, false, file);
+  }
 });

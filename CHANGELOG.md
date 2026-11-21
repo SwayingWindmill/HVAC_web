@@ -1,13 +1,17 @@
 # 更新记录
 
 记录对使用者可见的变化：功能、页面与运行行为。格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
-项目尚未正式发布，所有变化都在「未发布」下按日期记录；每条注明对应的 PR。
+项目尚未正式发布：各 PR 将新增条目放在 [`changelog.d/`](./changelog.d/README.md) 独立碎片文件中，汇总发布时运行 `npm run changelog:release` 归并进下方「未发布」，避免并行 PR 直接修改本文件引发合并冲突。
 
 ## 未发布
 
 ### 2026-11-19
 
 #### 新增与架构演进
+
+- 完成独立外部 Python 优化推理服务骨架与 Phase 1 编排联调（`services/ai-solver-service/`、`contracts/http/ai-solver-service.v1.schema.json`、`services/optimization-service/internal/optimization/solver_router.go`、`deploy/platform/phase1/ai-solver.compose.yaml`、`apps/hvac-web`）：
+  - **独立 Python HTTP 求解服务（`ai-solver-service`）**：实现 `GET /healthz`、`GET /readyz` 与 `POST /v1/solve`，执行满足 `>= 5.0 °C` 防冻下限、单步爬坡限幅与室温 P90 舒适区间的细粒度物理搜索（含水泵/冷却塔风机协调建议），支持 `traceparent` 穿透与容器非 root 只读运行。
+  - **跨语言契约、Go 联调测试与前端标签对齐**：新增 JSON Schema 契约与 `ai-solver.compose.yaml` 可选覆盖编排，并在 `solver_router_test.go` 增设 Go 真实拉起 Python 子进程集成测试；网页端 `formatSolverRef` 为 `ai-solver-service` 展示「外部 Python 优化服务」。
 
 - 完成能源统计与电费结算体系 P2 扩展（分层能效、主配电平衡诊断、按冷负荷分摊跨缺口与双变量对比基线，覆盖 `libs/analyticsmodel`、`modules/energy`、`services/fdd-service`、`services/mv-service`、`services/report-service`、`apps/hvac-web`、`scripts/` 与迁移 `023-meter-balance-and-layered-efficiency.sql`、`mv-bivariate-weather-anchors.sql`）：
   - **主配电平衡校验、分层能效模型与偏差诊断**：在 ClickHouse 新增 `site_meter_balance_hourly` 等平衡视图（`023-meter-balance-and-layered-efficiency.sql`）并在 `libs/analyticsmodel/layered_efficiency.go` 与前端 `layered-efficiency.ts` / `LayeredEfficiencyStrip.tsx` 实现冷站综合 COP、冷机 COP、冷冻泵与冷却泵输送系数 WTF、冷却塔电耗占比及主计量与设备计量平衡状态校验；`fdd-service` 与网页端 `diagnostics-model.ts` 新增 `METER_IMBALANCE`（「主计量与设备计量差额偏大」，默认偏差阈值 `5%`）规则。
@@ -20,6 +24,11 @@
   - **防抖自动重算与手动重算入口**：`metric-worker` 接入电价、倍率与点位映射变更防抖重算队列；平台网关与网页端「电费统计」新增按权限控制的手动重算弹窗与任务进度查看面板。
 
 #### 修复与加固
+
+- 修复 Web 壳层首屏启动竞态并落地 PR/CI 加速与静态防线（PR `#919`，`apps/hvac-web`、`deploy/platform/phase1/migrations`、`infra/registry`、`scripts/`、`.github/workflows/`）：
+  - **Web 站点发现就绪后再挂载路由**：`AppRuntimeHost` 在登录态成立后等待站点列表检查完成再触发路由校验与挂载，消除慢网场景下首次加载报 `RouteAccessError: SITE_DISCOVERY_UNAVAILABLE` 的间歇报错。
+  - **Phase 1 迁移唯一事实源**：以 `deploy/platform/phase1/migrations/manifest.v1.json` 为唯一事实源自动生成 `migration-list.tsv`、分段镜像 `Dockerfile` 与 `infra/registry/compose.yaml`（并补回遗漏的 `metric-backfill-recalc-job-grants.sql` 挂载）。
+  - **PR CI 提速与工程门禁**：并行拆解 `unit` 门禁（Go 静态与漏洞、Web E2E、分域 Go `-race` 测试）、启用 Go 编译与工具缓存并复用 Runner 系统 Chrome；新增 ClickHouse SQL 方言检查（`clickhouse:sql:check`）、Go 测试 `time.Sleep` 与并发日志无保护 `bytes.Buffer` 检查，以及本地预检 `npm run preflight`。
 
 - 完成上线前四轮系统稳定性与安全边界收尾（含 PR `#907`、`#911`、`#914`、`#915` 及可观测性与 ClickHouse 迁移恢复闭环）：
   - **容器端口收口与防暴露门禁（`#907`）**：把告警、持久审计、工单本地调试 Compose 里的数据库端口统一收口到本机回环 `127.0.0.1`；单机部署 `deploy/platform/phase1/compose.yaml` 仅保留 `nginx`（443）与 `mqtt-broker`（8883）对外暴露，数据库、缓存和内部诊断端口一律留在内网；仓库静态门禁新增 Compose 端口暴露检查，发现非白名单公网端口映射即阻断提交；同步收紧服务器运行目录权限与观测采集容器（`otel-collector`、`loki`、`tempo`）宿主机目录属主映射。

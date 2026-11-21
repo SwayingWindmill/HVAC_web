@@ -20,11 +20,13 @@ import (
 )
 
 const (
-	defaultShutdownTimeout         = 10 * time.Second
-	defaultBackgroundDrainTimeout  = 10 * time.Second
-	defaultPanicRestartDelay       = time.Second
-	defaultWorkerInterval          = 5 * time.Second
-	defaultTelemetryShutdownPeriod = 5 * time.Second
+	defaultShutdownTimeout            = 10 * time.Second
+	defaultBackgroundDrainTimeout     = 10 * time.Second
+	defaultPanicRestartDelay          = time.Second
+	defaultWorkerInterval             = 5 * time.Second
+	defaultMeterImbalanceInterval     = time.Hour
+	defaultMeterImbalanceSweepTimeout = 2 * time.Minute
+	defaultTelemetryShutdownPeriod    = 5 * time.Second
 )
 
 func main() {
@@ -147,6 +149,10 @@ func runService(logger *slog.Logger) error {
 		return err
 	}
 	workerID := envOrDefault("FDD_WORKER_ID", "fdd-service:"+hostname())
+	meterImbalanceInterval, err := envDurationOrDefault("FDD_METER_IMBALANCE_INTERVAL", defaultMeterImbalanceInterval)
+	if err != nil {
+		return err
+	}
 
 	workerCtx, cancelWorkers := context.WithCancel(context.Background())
 	defer cancelWorkers()
@@ -154,6 +160,13 @@ func runService(logger *slog.Logger) error {
 	runSupervised(workerCtx, &bgWG, logger, metrics, "fdd.worker", defaultPanicRestartDelay, func() {
 		runFDDWorkerLoop(workerCtx, defaultWorkerInterval, logger, func(runCtx context.Context) error {
 			return fdd.RunScheduledEvaluationsWithLogger(runCtx, queue, service, workerID, 8, logger)
+		})
+	})
+	runSupervised(workerCtx, &bgWG, logger, metrics, "fdd.meter_imbalance", defaultPanicRestartDelay, func() {
+		runPeriodicFDDLoop(workerCtx, meterImbalanceInterval, logger, "fdd_meter_imbalance_sweep_failed", "FDD_METER_IMBALANCE_SWEEP_FAILED", func(runCtx context.Context) error {
+			sweepCtx, sweepCancel := context.WithTimeout(runCtx, defaultMeterImbalanceSweepTimeout)
+			defer sweepCancel()
+			return fdd.RunMeterImbalanceSweep(sweepCtx, evidence, service, time.Now().UTC(), logger)
 		})
 	})
 
@@ -262,6 +275,10 @@ func shutdownServiceRuntime(
 }
 
 func runFDDWorkerLoop(ctx context.Context, interval time.Duration, logger *slog.Logger, runOnce func(context.Context) error) {
+	runPeriodicFDDLoop(ctx, interval, logger, "fdd_scheduled_evaluations_failed", "FDD_SCHEDULED_EVALUATIONS_FAILED", runOnce)
+}
+
+func runPeriodicFDDLoop(ctx context.Context, interval time.Duration, logger *slog.Logger, eventName, errorCode string, runOnce func(context.Context) error) {
 	if runOnce == nil || ctx.Err() != nil {
 		return
 	}
@@ -269,7 +286,7 @@ func runFDDWorkerLoop(ctx context.Context, interval time.Duration, logger *slog.
 	defer ticker.Stop()
 	for {
 		if err := runOnce(ctx); err != nil && ctx.Err() == nil && logger != nil {
-			logger.Warn("fdd_scheduled_evaluations_failed", "error_code", "FDD_SCHEDULED_EVALUATIONS_FAILED", "error", err)
+			logger.Warn(eventName, "error_code", errorCode, "error", err)
 		}
 		select {
 		case <-ctx.Done():
@@ -407,4 +424,16 @@ func envOrDefault(name, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func envDurationOrDefault(name string, fallback time.Duration) (time.Duration, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback, nil
+	}
+	parsed, err := time.ParseDuration(raw)
+	if err != nil || parsed <= 0 {
+		return 0, fmt.Errorf("%s must be a positive duration", name)
+	}
+	return parsed, nil
 }

@@ -444,6 +444,48 @@ func (server *server) handleAuthorized(writer http.ResponseWriter, request *http
 		writeJSON(writer, http.StatusAccepted, job)
 		return http.StatusAccepted
 	}
+	if route.resource == "accounting-dirty-window" {
+		if request.URL.RawQuery != "" {
+			writeProblem(writer, request, http.StatusBadRequest, "REGISTRY_MUTATION_INVALID", "Registry mutation routes do not accept query parameters.", false)
+			return http.StatusBadRequest
+		}
+		if server.writer == nil {
+			writeProblem(writer, request, http.StatusServiceUnavailable, "REGISTRY_WRITER_UNAVAILABLE", "The Registry writer is not configured.", true)
+			return http.StatusServiceUnavailable
+		}
+		dirtyWriter, ok := server.writer.(InternalDirtyWindowWriter)
+		if !ok {
+			writeProblem(writer, request, http.StatusServiceUnavailable, "REGISTRY_WRITER_UNAVAILABLE", "The Registry internal dirty-window writer is not configured.", true)
+			return http.StatusServiceUnavailable
+		}
+		var input InternalDirtyWindowRequest
+		if !decodeRegistryMutation(writer, request, &input) {
+			return http.StatusBadRequest
+		}
+		if input.TenantID == "" {
+			input.TenantID = claims.TenantID
+		} else if input.TenantID != claims.TenantID {
+			return server.writeMutationError(writer, request, ErrInvalidMutation)
+		}
+		if input.SiteID == "" {
+			input.SiteID = route.parentID
+		} else if input.SiteID != route.parentID {
+			return server.writeMutationError(writer, request, ErrInvalidMutation)
+		}
+		if input.RequestedByDisplay == "" {
+			input.RequestedByDisplay = request.Header.Get("X-Actor-Display-Name")
+		}
+		job, err := dirtyWriter.EnqueueInternalDirtyWindow(request.Context(), claims, input)
+		if err != nil {
+			if errors.Is(err, ErrMutationForbidden) {
+				writeProblem(writer, request, http.StatusForbidden, "ACCOUNTING_RECALC_FORBIDDEN", "The authenticated Principal is not allowed to enqueue accounting dirty windows on this Site.", false)
+				return http.StatusForbidden
+			}
+			return server.writeMutationError(writer, request, err)
+		}
+		writeJSON(writer, http.StatusAccepted, job)
+		return http.StatusAccepted
+	}
 	if route.write {
 		return server.handleAuthorizedWrite(writer, request, route, claims)
 	}
@@ -1043,6 +1085,8 @@ func parseRegistryRoute(method, path string) (registryRoute, bool) {
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/utility-bills/{billId}/confirm", resource: "utility-bill-confirm", parentID: segments[1], id: segments[3], action: registryauth.ActionBillingManage, write: true}, true
 	case method == http.MethodPost && len(segments) == 4 && segments[0] == "sites" && segments[2] == "accounting" && segments[3] == "recalculate":
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/accounting/recalculate", resource: "accounting-recalculate", parentID: segments[1], action: registryauth.ActionBillingManage, write: true}, true
+	case method == http.MethodPost && len(segments) == 4 && segments[0] == "sites" && segments[2] == "accounting" && segments[3] == "dirty-windows":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/accounting/dirty-windows", resource: "accounting-dirty-window", parentID: segments[1], action: registryauth.ActionMeterBindingResolve, write: true}, true
 	case method == http.MethodGet && len(segments) == 4 && segments[0] == "sites" && segments[2] == "accounting" && segments[3] == "recalculate-jobs":
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/accounting/recalculate-jobs", resource: "accounting-recalculate-jobs", parentID: segments[1], action: registryauth.ActionSiteRead}, true
 	case method == http.MethodGet && len(segments) == 3 && segments[0] == "sites" && segments[2] == "control-state":

@@ -19,7 +19,6 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	clickhouseclient "github.com/quanlaihe/hvac-web/modules/energy/internal/clickhouse"
-	"github.com/quanlaihe/hvac-web/modules/energy/internal/energy"
 	"github.com/quanlaihe/hvac-web/modules/energy/pkg/analyticsprojector"
 )
 
@@ -132,14 +131,32 @@ func run() int {
 		logger.Error("analytics_submeter_projector_invalid", "error_code", "ANALYTICS_SUBMETER_PROJECTOR_INVALID")
 		return 1
 	}
+	dirtyWindowEnqueuer, err := analyticsprojector.NewDirtyWindowEnqueuer(registryConfig)
+	if err != nil {
+		logger.Error("analytics_core_dirty_window_enqueuer_invalid", "error_code", "ANALYTICS_CORE_DIRTY_WINDOW_ENQUEUER_INVALID")
+		return 1
+	}
+	conditionAnchors, err := analyticsprojector.NewConditionAnchorProjector(analyticsprojector.ConditionAnchorProjectorConfig{
+		Reader: reader, Writer: writer,
+	})
+	if err != nil {
+		logger.Error("analytics_condition_anchor_projector_invalid", "error_code", "ANALYTICS_CONDITION_ANCHOR_PROJECTOR_INVALID")
+		return 1
+	}
 	batchSize, err := integerEnv("ANALYTICS_PROJECTOR_BATCH_SIZE", 256, 1, 4096)
 	if err != nil {
 		logEnvError(logger, "analytics_projector_configuration_invalid", "ANALYTICS_PROJECTOR_CONFIGURATION_INVALID", err)
 		return 1
 	}
-	projector, err := energy.NewProjector(energy.ProjectorConfig{
-		CounterSource: reader, BindingResolver: bindingResolver, FactSink: writer, RebuildEvents: writer,
-		BatchSize: batchSize,
+	projector, err := analyticsprojector.NewProjector(analyticsprojector.ProjectorConfig{
+		CounterSource:       reader,
+		BindingResolver:     bindingResolver,
+		FactSink:            writer,
+		HourlyV2Sink:        writer,
+		LoadProfileSource:   reader,
+		RebuildEvents:       writer,
+		DirtyWindowEnqueuer: dirtyWindowEnqueuer,
+		BatchSize:           batchSize,
 	})
 	if err != nil {
 		logger.Error("analytics_projector_configuration_invalid", "error_code", "ANALYTICS_PROJECTOR_CONFIGURATION_INVALID")
@@ -151,6 +168,11 @@ func run() int {
 		return 1
 	}
 	submeterInterval, err := durationEnv("ANALYTICS_TOTAL_SUBMETER_INTERVAL", 5*time.Minute, 10*time.Second, time.Hour)
+	if err != nil {
+		logEnvError(logger, "analytics_projector_configuration_invalid", "ANALYTICS_PROJECTOR_CONFIGURATION_INVALID", err)
+		return 1
+	}
+	conditionAnchorInterval, err := durationEnv("ANALYTICS_CONDITION_ANCHOR_INTERVAL", 5*time.Minute, 10*time.Second, time.Hour)
 	if err != nil {
 		logEnvError(logger, "analytics_projector_configuration_invalid", "ANALYTICS_PROJECTOR_CONFIGURATION_INVALID", err)
 		return 1
@@ -188,6 +210,13 @@ func run() int {
 			}
 		}
 	}()
+	conditionAnchorDone := make(chan struct{})
+	go func() {
+		defer close(conditionAnchorDone)
+		runSupervisedPeriodic(ctx, conditionAnchorInterval, telemetry, logger, "analytics_condition_anchors", func(runCtx context.Context) {
+			syncConditionAnchorsOnce(runCtx, conditionAnchors, telemetry, logger)
+		})
+	}()
 
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
@@ -196,11 +225,12 @@ func run() int {
 		select {
 		case <-ctx.Done():
 			shutdownEnergyProjector(energyProjectorShutdownDeps{
-				markNotReady:      telemetry.MarkNotReady,
-				submeterDone:      submeterDone,
-				shutdownDiag:      diagnostics.Shutdown,
-				diagnosticsDone:   diagnosticsDone,
-				shutdownTelemetry: shutdownTelemetry,
+				markNotReady:        telemetry.MarkNotReady,
+				submeterDone:        submeterDone,
+				conditionAnchorDone: conditionAnchorDone,
+				shutdownDiag:        diagnostics.Shutdown,
+				diagnosticsDone:     diagnosticsDone,
+				shutdownTelemetry:   shutdownTelemetry,
 			})
 			logger.Info("analytics_read_model_projector_stopped")
 			return 0
@@ -235,11 +265,12 @@ func run() int {
 }
 
 type energyProjectorShutdownDeps struct {
-	markNotReady      func()
-	submeterDone      <-chan struct{}
-	shutdownDiag      func(context.Context) error
-	diagnosticsDone   <-chan struct{}
-	shutdownTelemetry func(context.Context) error
+	markNotReady        func()
+	submeterDone        <-chan struct{}
+	conditionAnchorDone <-chan struct{}
+	shutdownDiag        func(context.Context) error
+	diagnosticsDone     <-chan struct{}
+	shutdownTelemetry   func(context.Context) error
 }
 
 func shutdownEnergyProjector(deps energyProjectorShutdownDeps) {
@@ -253,6 +284,14 @@ func shutdownEnergyProjector(deps energyProjectorShutdownDeps) {
 		case <-submeterCtx.Done():
 		}
 		submeterCancel()
+	}
+	if deps.conditionAnchorDone != nil {
+		anchorCtx, anchorCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		select {
+		case <-deps.conditionAnchorDone:
+		case <-anchorCtx.Done():
+		}
+		anchorCancel()
 	}
 	if deps.shutdownDiag != nil || deps.diagnosticsDone != nil {
 		diagCtx, diagCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -281,6 +320,60 @@ func syncSubmetersOnce(ctx context.Context, totalSubmeters *analyticsprojector.T
 	if syncErr := totalSubmeters.SyncOnce(syncCtx); syncErr != nil {
 		_ = telemetry.Metrics.AddCounter("hvac_analytics_projection_failures_total", "Failed analytics read-model projection batches.", map[string]string{"model": "site_total_submeters"}, 1)
 		logger.Warn("analytics_total_submeter_projection_failed", "error_code", "ANALYTICS_TOTAL_SUBMETER_PROJECTION_FAILED")
+	}
+}
+
+func syncConditionAnchorsOnce(ctx context.Context, conditionAnchors *analyticsprojector.ConditionAnchorProjector, telemetry *observability.Runtime, logger *slog.Logger) {
+	defer observability.Recover(logger, telemetry.Metrics, "energy_projector.condition_anchors_sync")
+	syncCtx, syncCancel := context.WithTimeout(ctx, time.Minute)
+	defer syncCancel()
+	synced, syncErr := conditionAnchors.SyncOnce(syncCtx)
+	if syncErr != nil {
+		_ = telemetry.Metrics.AddCounter("hvac_analytics_projection_failures_total", "Failed analytics read-model projection batches.", map[string]string{"model": "site_condition_anchors_hourly"}, 1)
+		logger.Warn("analytics_condition_anchor_projection_failed", "error_code", "ANALYTICS_CONDITION_ANCHOR_PROJECTION_FAILED")
+		return
+	}
+	if synced > 0 {
+		_ = telemetry.Metrics.AddCounter("hvac_analytics_condition_anchors_synced_total", "Synced hourly site condition anchors.", map[string]string{"model": "site_condition_anchors_hourly"}, float64(synced))
+		logger.Debug("analytics_condition_anchors_synced", "anchor_count", synced)
+	}
+}
+
+func runSupervisedPeriodic(ctx context.Context, interval time.Duration, telemetry *observability.Runtime, logger *slog.Logger, component string, fn func(context.Context)) {
+	if interval <= 0 {
+		interval = 5 * time.Minute
+	}
+	var metrics *observability.Registry
+	if telemetry != nil {
+		metrics = telemetry.Metrics
+	}
+	for ctx.Err() == nil {
+		panicked := false
+		func() {
+			defer observability.Recover(logger, metrics, component, func(any) {
+				panicked = true
+			})
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
+			for {
+				fn(ctx)
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+				}
+			}
+		}()
+		if !panicked || ctx.Err() != nil {
+			return
+		}
+		backoff := time.NewTimer(time.Second)
+		select {
+		case <-ctx.Done():
+			backoff.Stop()
+			return
+		case <-backoff.C:
+		}
 	}
 }
 
