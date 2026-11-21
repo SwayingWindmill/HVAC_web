@@ -661,3 +661,16 @@ test('CHANGELOG.md and changelog-fragments tooling run contracts core without br
     assert.equal(classification.unknown, false, file);
   }
 });
+
+test('Python AI solver service changes run analytics unit tests cleanly without broad or unknown fallback', () => {
+  const classification = runClassification(['services/ai-solver-service/ai_solver/solver.py']);
+  assert.equal(classification.unknown, false);
+  assert.equal(classification.broad, false);
+  assert.deepEqual(classification.contractProfiles, ['core']);
+  assert.deepEqual(classification.unitProfiles, ['analytics']);
+  assert.deepEqual(classification.integrationProfiles, []);
+  assert.deepEqual(classification.browserProfiles, []);
+
+  const analyticsUnitCommands = runPlan('unit', ['analytics']).commands;
+  assert.ok(analyticsUnitCommands.includes('npm run ai-solver:test'));
+});

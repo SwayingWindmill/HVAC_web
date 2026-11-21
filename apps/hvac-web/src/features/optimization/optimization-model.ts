@@ -48,6 +48,46 @@ export function formatAuxiliaryTargetValue(targetValue: number, unit: string): s
   return unit ? `${formatted} ${unit}` : formatted;
 }
 
+const AUXILIARY_LOOP_ASSET_TYPES: Record<string, string> = {
+  chilled_water_pump_freq: 'CHILLED_WATER_PUMP',
+  cooling_water_pump_freq: 'COOLING_WATER_PUMP',
+  cooling_tower_fan_speed: 'COOLING_TOWER',
+};
+
+export function auxiliaryLoopAssetType(loopKey: string): string | null {
+  return AUXILIARY_LOOP_ASSET_TYPES[loopKey] ?? null;
+}
+
+/** Snap and clamp a recommended pump frequency or tower fan speed onto the target point's writable range. */
+export function recommendedAuxiliaryValue(
+  targetValue: number,
+  setting: { readonly minimum: number; readonly maximum: number; readonly step: number },
+): number {
+  const low = Math.min(setting.minimum, setting.maximum);
+  const high = Math.max(setting.minimum, setting.maximum);
+  const stepped = setting.step > 0
+    ? setting.minimum + Math.round((targetValue - setting.minimum) / setting.step) * setting.step
+    : targetValue;
+  const inside = Math.min(high, Math.max(low, stepped));
+  return Number(inside.toFixed(6));
+}
+
+/** Match an auxiliary loop suggestion to the site's writable control point by asset role and capability. */
+export function matchAuxiliaryControlTarget<
+  TTarget extends { readonly assetType: string; readonly settings: readonly { readonly capability: string }[] },
+>(
+  aux: OptimizationAuxiliaryTarget,
+  targets: readonly TTarget[],
+): { readonly target: TTarget; readonly setting: TTarget['settings'][number] } | null {
+  const expectedAssetType = auxiliaryLoopAssetType(aux.loopKey);
+  for (const target of targets) {
+    if (expectedAssetType !== null && target.assetType !== expectedAssetType) continue;
+    const setting = target.settings.find((candidate) => candidate.capability === aux.capability);
+    if (setting) return { target, setting };
+  }
+  return null;
+}
+
 export interface OptimizationRecommendation {
   readonly id: string;
   readonly runId: string;

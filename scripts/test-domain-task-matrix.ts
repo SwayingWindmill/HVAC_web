@@ -202,3 +202,8 @@ test('platform domain matrix includes ClickHouse migration contract and restore 
   const integrationPlan = resolveDomainCommands('platform', ['integration']);
   assert.ok(labels(integrationPlan.commands).includes('npm run deployment:phase1:clickhouse:restore:test'));
 });
+
+test('analytics domain matrix includes Python ai-solver unit tests', () => {
+  const unitPlan = resolveDomainCommands('analytics', ['unit']);
+  assert.ok(labels(unitPlan.commands).includes('npm run ai-solver:test'));
+});

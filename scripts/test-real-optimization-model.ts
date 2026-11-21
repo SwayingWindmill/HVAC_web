@@ -8,6 +8,8 @@ import {
   formatAuxiliaryCapabilityLabel,
   formatAuxiliaryLoopLabel,
   formatAuxiliaryTargetValue,
+  matchAuxiliaryControlTarget,
+  recommendedAuxiliaryValue,
   formatCoolingLoadBin,
   formatCopUpliftPct,
   formatGuardrailAction,
@@ -799,4 +801,50 @@ test('parseRecommendation preserves auxiliaryTargets and defaults cleanly when o
   assert.equal(formatAuxiliaryLoopLabel(withAux.auxiliaryTargets[1].loopKey), '冷却塔风机转速');
   assert.equal(formatAuxiliaryCapabilityLabel(withAux.auxiliaryTargets[1].capability), '风机转速调节');
   assert.equal(formatAuxiliaryTargetValue(withAux.auxiliaryTargets[1].targetValue, withAux.auxiliaryTargets[1].unit), '67.0%');
+});
+
+test('recommendedAuxiliaryValue snaps to step and clamps bounds, and matchAuxiliaryControlTarget resolves matching loop asset', () => {
+  const setting = { minimum: 20, maximum: 50, step: 0.5 };
+  assert.equal(recommendedAuxiliaryValue(38.4, setting), 38.5);
+  assert.equal(recommendedAuxiliaryValue(12, setting), 20);
+  assert.equal(recommendedAuxiliaryValue(55, setting), 50);
+
+  const fanSetting = { minimum: 20, maximum: 100, step: 1 };
+  assert.equal(recommendedAuxiliaryValue(66.6, fanSetting), 67);
+
+  const targets = [
+    {
+      assetId: 'asset-chw-pump-1',
+      assetName: 'CHWP-01',
+      assetType: 'CHILLED_WATER_PUMP',
+      settings: [{ pointId: 'pt-chw', capability: 'SET_FREQUENCY', parameterKey: 'frequencyHz', unit: 'Hz', minimum: 20, maximum: 50, step: 0.5 }],
+    },
+    {
+      assetId: 'asset-cwp-1',
+      assetName: 'CWP-01',
+      assetType: 'COOLING_WATER_PUMP',
+      settings: [{ pointId: 'pt-cwp', capability: 'SET_FREQUENCY', parameterKey: 'frequencyHz', unit: 'Hz', minimum: 20, maximum: 50, step: 0.5 }],
+    },
+    {
+      assetId: 'asset-ct-1',
+      assetName: 'CT-01',
+      assetType: 'COOLING_TOWER',
+      settings: [{ pointId: 'pt-ct', capability: 'SET_FAN_SPEED', parameterKey: 'fanSpeedPct', unit: '%', minimum: 20, maximum: 100, step: 1 }],
+    },
+  ];
+
+  const matchedChw = matchAuxiliaryControlTarget({ loopKey: 'chilled_water_pump_freq', capability: 'SET_FREQUENCY', targetValue: 38.5, unit: 'Hz' }, targets);
+  assert.equal(matchedChw?.target.assetName, 'CHWP-01');
+  assert.equal(matchedChw?.setting.pointId, 'pt-chw');
+
+  const matchedCwp = matchAuxiliaryControlTarget({ loopKey: 'cooling_water_pump_freq', capability: 'SET_FREQUENCY', targetValue: 41.0, unit: 'Hz' }, targets);
+  assert.equal(matchedCwp?.target.assetName, 'CWP-01');
+  assert.equal(matchedCwp?.setting.pointId, 'pt-cwp');
+
+  const matchedCt = matchAuxiliaryControlTarget({ loopKey: 'cooling_tower_fan_speed', capability: 'SET_FAN_SPEED', targetValue: 67.0, unit: '%' }, targets);
+  assert.equal(matchedCt?.target.assetName, 'CT-01');
+  assert.equal(matchedCt?.setting.pointId, 'pt-ct');
+
+  const unmatched = matchAuxiliaryControlTarget({ loopKey: 'chilled_water_pump_freq', capability: 'SET_FAN_SPEED', targetValue: 50, unit: '%' }, targets);
+  assert.equal(unmatched, null);
 });
