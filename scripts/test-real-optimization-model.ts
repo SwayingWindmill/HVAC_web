@@ -7,7 +7,11 @@ import {
   findActiveRecommendationWorkOrder,
   formatCoolingLoadBin,
   formatCopUpliftPct,
+  formatGuardrailAction,
+  formatGuardrailStage,
   formatLoopKey,
+  formatNegativeSampleKind,
+  formatNegativeSampleReason,
   formatSavedKWh,
   formatSolverRef,
   formatSolverSource,
@@ -17,6 +21,7 @@ import {
   parseRecommendation,
   parseShadowEvaluation,
   preparationReadinessReasons,
+  serializeNegativeSamplesJsonl,
   type PublishedOptimizationGovernanceSummary,
   type PublishedRecommendation,
   type PublishedShadowEvaluation,
@@ -669,4 +674,25 @@ test('governance summary helpers map solver routing, M&V COP bins, and flywheel 
   assert.equal(empty.copComparison.weightedCopUpliftLabel, '—');
   assert.equal(empty.copComparison.totalEstimatedSavedLabel, '—');
   assert.equal(empty.copComparison.cells.length, 0);
+});
+
+test('negative sample inspector formatters and JSONL serializer produce plain Chinese labels without leaking raw internal codes', () => {
+  assert.equal(formatLoopKey('CHW_PUMP'), '冷冻泵变频回路');
+  assert.equal(formatLoopKey('CW_PUMP'), '冷却泵变频回路');
+  assert.equal(formatLoopKey('CT_FAN'), '冷却塔风机回路');
+
+  assert.equal(formatNegativeSampleKind('GUARDRAIL_CLAMPED'), '护栏限幅修正');
+  assert.equal(formatNegativeSampleKind('TRACKING_DEVIATION'), '跟踪偏差回退');
+  assert.equal(formatGuardrailStage('slew_rate'), '单步调幅限速');
+  assert.equal(formatGuardrailStage('unknown_stage'), '安全护栏规则');
+  assert.equal(formatGuardrailAction('vetoed'), '已拦截');
+  assert.equal(formatNegativeSampleReason('step_rate_limit'), '单步变化超限');
+  assert.equal(formatNegativeSampleReason('raw_unknown_code'), '安全护栏规则触发');
+
+  assert.equal(serializeNegativeSamplesJsonl([]), '');
+  const jsonl = serializeNegativeSamplesJsonl([{ id: '1', sampleKind: 'GUARDRAIL_CLAMPED' }, { id: '2', sampleKind: 'MANUAL_OVERRIDE' }]);
+  const lines = jsonl.trim().split('\n');
+  assert.equal(lines.length, 2);
+  assert.equal(JSON.parse(lines[0]).id, '1');
+  assert.equal(JSON.parse(lines[1]).sampleKind, 'MANUAL_OVERRIDE');
 });

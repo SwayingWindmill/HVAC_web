@@ -80,6 +80,7 @@ type publicIntelligenceRoute struct {
 	owner      string
 	siteID     string
 	findingID  string
+	loopKey    string
 	target     string
 	method     string
 	publicPath string
@@ -156,6 +157,22 @@ func matchPublicIntelligenceRoute(method, path string) (publicIntelligenceRoute,
 	if siteID, ok := matchSinglePathParameter(path, "/api/v1/sites/{siteId}/optimization/governance-summary", "{siteId}"); ok {
 		return publicIntelligenceRoute{owner: ownershipregistry.OwnerOptimization, siteID: siteID, target: "optimization-governance", method: http.MethodGet, publicPath: "/api/v1/sites/{siteId}/optimization/governance-summary"}, method == http.MethodGet
 	}
+	if siteID, ok := matchSinglePathParameter(path, "/api/v1/sites/{siteId}/optimization/canary-bindings", "{siteId}"); ok {
+		return publicIntelligenceRoute{owner: ownershipregistry.OwnerOptimization, siteID: siteID, target: "optimization-canary-list", method: http.MethodGet, publicPath: "/api/v1/sites/{siteId}/optimization/canary-bindings"}, method == http.MethodGet
+	}
+	if siteID, loopKey, ok := matchOptimizationCanaryBindingPath(path); ok {
+		switch method {
+		case http.MethodPut:
+			return publicIntelligenceRoute{owner: ownershipregistry.OwnerOptimization, siteID: siteID, loopKey: loopKey, target: "optimization-canary-upsert", method: http.MethodPut, publicPath: "/api/v1/sites/{siteId}/optimization/canary-bindings/{loopKey}"}, true
+		case http.MethodDelete:
+			return publicIntelligenceRoute{owner: ownershipregistry.OwnerOptimization, siteID: siteID, loopKey: loopKey, target: "optimization-canary-delete", method: http.MethodDelete, publicPath: "/api/v1/sites/{siteId}/optimization/canary-bindings/{loopKey}"}, true
+		default:
+			return publicIntelligenceRoute{}, false
+		}
+	}
+	if siteID, ok := matchSinglePathParameter(path, "/api/v1/sites/{siteId}/optimization/negative-samples", "{siteId}"); ok {
+		return publicIntelligenceRoute{owner: ownershipregistry.OwnerOptimization, siteID: siteID, target: "optimization-negative-samples", method: http.MethodGet, publicPath: "/api/v1/sites/{siteId}/optimization/negative-samples"}, method == http.MethodGet
+	}
 	if siteID, ok := matchSinglePathParameter(path, "/api/v1/sites/{siteId}/optimization/auto-control-lease", "{siteId}"); ok {
 		switch method {
 		case http.MethodGet:
@@ -206,6 +223,26 @@ func matchFDDLinkPath(path string) (string, string, bool) {
 		return "", "", false
 	}
 	return siteID, findingID, true
+}
+
+func matchOptimizationCanaryBindingPath(path string) (string, string, bool) {
+	remainder, ok := strings.CutPrefix(path, "/api/v1/sites/")
+	if !ok || strings.HasSuffix(remainder, "/") {
+		return "", "", false
+	}
+	segments := strings.Split(remainder, "/")
+	if len(segments) != 4 || segments[1] != "optimization" || segments[2] != "canary-bindings" {
+		return "", "", false
+	}
+	siteID, err := url.PathUnescape(segments[0])
+	if err != nil || siteID == "" {
+		return "", "", false
+	}
+	loopKey, err := url.PathUnescape(segments[3])
+	if err != nil || strings.TrimSpace(loopKey) == "" {
+		return "", "", false
+	}
+	return siteID, loopKey, true
 }
 
 func dispatchIntelligenceRoute(h *handler, writer http.ResponseWriter, request *http.Request, route publicIntelligenceRoute) {
@@ -277,6 +314,22 @@ func dispatchIntelligenceRoute(h *handler, writer http.ResponseWriter, request *
 	}
 	if route.target == "optimization-governance" {
 		h.serveOptimizationGovernanceSummaryRead(writer, request, session, route)
+		return
+	}
+	if route.target == "optimization-canary-list" {
+		h.serveOptimizationCanaryList(writer, request, session, route)
+		return
+	}
+	if route.target == "optimization-canary-upsert" {
+		h.serveOptimizationCanaryUpsert(writer, request, session, route)
+		return
+	}
+	if route.target == "optimization-canary-delete" {
+		h.serveOptimizationCanaryDelete(writer, request, session, route)
+		return
+	}
+	if route.target == "optimization-negative-samples" {
+		h.serveOptimizationNegativeSamplesRead(writer, request, session, route)
 		return
 	}
 	h.createOptimizationRun(writer, request, session)
@@ -566,6 +619,125 @@ func (h *handler) serveOptimizationGovernanceSummaryRead(writer http.ResponseWri
 	}
 	raw, status, err := h.executeOwner(request, session, optimizationOwner, h.intelligence.optimizationBaseURL, route.siteID, optimizationReadAction, http.MethodGet, internalPath, nil)
 	h.writeIntelligenceResult(writer, request, raw, status, err)
+}
+
+type optimizationCanaryUpsertPayload struct {
+	ServingRef string `json:"servingRef"`
+	Status     string `json:"status"`
+}
+
+func (h *handler) serveOptimizationCanaryList(writer http.ResponseWriter, request *http.Request, session bffSession, route publicIntelligenceRoute) {
+	if h.intelligence.optimizationBaseURL == "" {
+		writeRouteWithoutOwner(writer, request)
+		return
+	}
+	if !isLowerUUIDv7(route.siteID) {
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
+		return
+	}
+	allowedSites, ok := h.authorizeIntelligenceSitesWithWriter(writer, request, session)
+	if !ok {
+		return
+	}
+	if _, allowed := allowedSites[route.siteID]; !allowed {
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
+		return
+	}
+	internalPath := "/v1/sites/" + url.PathEscape(route.siteID) + "/optimization/canary-bindings"
+	raw, status, err := h.executeOwner(request, session, optimizationOwner, h.intelligence.optimizationBaseURL, route.siteID, optimizationReadAction, http.MethodGet, internalPath, nil)
+	h.writeIntelligenceResult(writer, request, raw, status, err)
+}
+
+func (h *handler) serveOptimizationCanaryUpsert(writer http.ResponseWriter, request *http.Request, session bffSession, route publicIntelligenceRoute) {
+	if h.intelligence.optimizationBaseURL == "" {
+		writeRouteWithoutOwner(writer, request)
+		return
+	}
+	if !isLowerUUIDv7(route.siteID) {
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
+		return
+	}
+	if _, ok := h.authorizeSiteControlExitWrite(writer, request, session, route.siteID, "Schedule manage authorization is required to manage optimization canary routing."); !ok {
+		return
+	}
+	raw, err := readBoundedBody(request.Body, maximumIntelligenceRequestBytes)
+	if err != nil {
+		writeProblem(writer, request, http.StatusBadRequest, "OPTIMIZATION_CANARY_REQUEST_INVALID", "Canary binding request invalid", "The canary binding request is too large or unreadable.", false, nil)
+		return
+	}
+	var payload optimizationCanaryUpsertPayload
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&payload) != nil || ensureIntelligenceJSONEOF(decoder) != nil {
+		writeProblem(writer, request, http.StatusBadRequest, "OPTIMIZATION_CANARY_REQUEST_INVALID", "Canary binding request invalid", "The canary binding request payload is invalid.", false, nil)
+		return
+	}
+	upstreamBody, err := json.Marshal(payload)
+	if err != nil {
+		writeProblem(writer, request, http.StatusBadRequest, "OPTIMIZATION_CANARY_REQUEST_INVALID", "Canary binding request invalid", "The canary binding request could not be encoded.", false, nil)
+		return
+	}
+	internalPath := "/v1/sites/" + url.PathEscape(route.siteID) + "/optimization/canary-bindings/" + url.PathEscape(route.loopKey)
+	respRaw, status, callErr := h.executeOwner(request, session, optimizationOwner, h.intelligence.optimizationBaseURL, route.siteID, optimizationWriteAction, http.MethodPut, internalPath, upstreamBody)
+	if callErr == nil && status == http.StatusUnprocessableEntity {
+		writeProblem(writer, request, http.StatusUnprocessableEntity, "OPTIMIZATION_SOLVER_HOST_NOT_ALLOWED", "Solver host not allowed", "External solver host is not in the configured allowlist.", false, nil)
+		return
+	}
+	if callErr == nil && status == http.StatusBadRequest {
+		writeProblem(writer, request, http.StatusBadRequest, "OPTIMIZATION_CANARY_REQUEST_INVALID", "Canary binding request invalid", "The canary binding parameters or loop key are invalid.", false, nil)
+		return
+	}
+	h.writeIntelligenceResult(writer, request, respRaw, status, callErr)
+}
+
+func (h *handler) serveOptimizationCanaryDelete(writer http.ResponseWriter, request *http.Request, session bffSession, route publicIntelligenceRoute) {
+	if h.intelligence.optimizationBaseURL == "" {
+		writeRouteWithoutOwner(writer, request)
+		return
+	}
+	if !isLowerUUIDv7(route.siteID) {
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
+		return
+	}
+	if _, ok := h.authorizeSiteControlExitWrite(writer, request, session, route.siteID, "Schedule manage authorization is required to manage optimization canary routing."); !ok {
+		return
+	}
+	internalPath := "/v1/sites/" + url.PathEscape(route.siteID) + "/optimization/canary-bindings/" + url.PathEscape(route.loopKey)
+	respRaw, status, callErr := h.executeOwner(request, session, optimizationOwner, h.intelligence.optimizationBaseURL, route.siteID, optimizationWriteAction, http.MethodDelete, internalPath, nil)
+	if callErr == nil && status == http.StatusBadRequest {
+		writeProblem(writer, request, http.StatusBadRequest, "OPTIMIZATION_CANARY_REQUEST_INVALID", "Canary binding request invalid", "The canary binding loop key is invalid.", false, nil)
+		return
+	}
+	h.writeIntelligenceResult(writer, request, respRaw, status, callErr)
+}
+
+func (h *handler) serveOptimizationNegativeSamplesRead(writer http.ResponseWriter, request *http.Request, session bffSession, route publicIntelligenceRoute) {
+	if h.intelligence.optimizationBaseURL == "" {
+		writeRouteWithoutOwner(writer, request)
+		return
+	}
+	if !isLowerUUIDv7(route.siteID) {
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
+		return
+	}
+	allowedSites, ok := h.authorizeIntelligenceSitesWithWriter(writer, request, session)
+	if !ok {
+		return
+	}
+	if _, allowed := allowedSites[route.siteID]; !allowed {
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
+		return
+	}
+	internalPath := "/v1/sites/" + url.PathEscape(route.siteID) + "/optimization/negative-samples"
+	if rawQuery := strings.TrimSpace(request.URL.RawQuery); rawQuery != "" {
+		internalPath += "?" + rawQuery
+	}
+	respRaw, status, callErr := h.executeOwner(request, session, optimizationOwner, h.intelligence.optimizationBaseURL, route.siteID, optimizationReadAction, http.MethodGet, internalPath, nil)
+	if callErr == nil && status == http.StatusBadRequest {
+		writeProblem(writer, request, http.StatusBadRequest, "OPTIMIZATION_NEGATIVE_SAMPLES_QUERY_INVALID", "Negative samples query invalid", "The negative samples query parameters are invalid.", false, nil)
+		return
+	}
+	h.writeIntelligenceResult(writer, request, respRaw, status, callErr)
 }
 
 func (h *handler) createOptimizationRun(writer http.ResponseWriter, request *http.Request, session bffSession) {

@@ -355,6 +355,82 @@ export class Gateway {
     },
   };
   governanceReads = 0;
+  allowedSolverHosts: string[] = ['ai-solver-service:8090'];
+  optimizationCanaryBindings: Json[] = [
+    {
+      id: '01990000-2200-7000-8000-000000000001',
+      tenantId: principal.context.tenantId,
+      siteId: SITE_ID,
+      loopKey: 'CHW_PUMP',
+      servingRef: 'builtin://chiller-cop-model',
+      status: 'ACTIVE',
+      createdAt: '2026-10-10T08:00:00Z',
+      updatedAt: '2026-10-11T08:00:00Z',
+    },
+  ];
+  optimizationNegativeSamples: Json[] = [
+    {
+      id: '01990000-3300-7000-8000-000000000001',
+      decisionId: '01990000-4400-7000-8000-000000000001',
+      recommendationId: '01990000-5500-7000-8000-000000000001',
+      monitorId: null,
+      traceId: '11111111111111111111111111111111',
+      sampleKind: 'GUARDRAIL_CLAMPED',
+      reasonCode: 'step_rate_limit',
+      solverServingRef: 'http://ai-solver-service:8090',
+      rawRecommendedValue: 10.5,
+      appliedOrClampedValue: 8.5,
+      occurredAt: '2026-10-11T15:30:00Z',
+      guardrailTrace: [
+        { stage: 'hard_clamp', action: 'pass', before: 10.5, after: 10.5 },
+        { stage: 'slew_rate', action: 'clamped', before: 10.5, after: 8.5, reason: 'max step 1C' },
+      ],
+      featureSnapshot: {
+        supplyTempC: 7.5,
+        zoneMaxTempC: 24.4,
+        outdoorWetBulbC: 23.2,
+        coolingLoadKW: 520,
+        chillerPowerKW: 112,
+        observedCOP: 4.64,
+        runningChillers: 2,
+        cabinetLocalManual: false,
+        deviceFaultActive: false,
+        leaseDeadbandC: 0.2,
+        supplyTempMinC: 5.5,
+        supplyTempMaxC: 12.0,
+      },
+    },
+    {
+      id: '01990000-3300-7000-8000-000000000002',
+      decisionId: '01990000-4400-7000-8000-000000000002',
+      recommendationId: null,
+      monitorId: '01990000-6600-7000-8000-000000000002',
+      traceId: '22222222222222222222222222222222',
+      sampleKind: 'MANUAL_OVERRIDE',
+      reasonCode: 'manual_backoff',
+      solverServingRef: 'builtin://chiller-cop-model',
+      rawRecommendedValue: 8.0,
+      appliedOrClampedValue: 7.0,
+      occurredAt: '2026-10-11T14:15:00Z',
+      guardrailTrace: [
+        { stage: 'manual_backoff', action: 'vetoed', before: 8.0, after: 7.0, reason: 'manual backoff window' },
+      ],
+      featureSnapshot: {
+        supplyTempC: 7.0,
+        zoneMaxTempC: 24.1,
+        outdoorWetBulbC: 22.8,
+        coolingLoadKW: 480,
+        chillerPowerKW: 105,
+        observedCOP: 4.57,
+        runningChillers: 2,
+        cabinetLocalManual: false,
+        deviceFaultActive: false,
+        leaseDeadbandC: 0.2,
+        supplyTempMinC: 5.5,
+        supplyTempMaxC: 12.0,
+      },
+    },
+  ];
   /** IAM refuses Energy Analytics for the Site, as it does for a Site outside the principal's analytics grant. */
   analyticsDenied = false;
   /** IAM refuses Alarm listing for the Site. */
@@ -1667,6 +1743,122 @@ export class Gateway {
       return this.optimizationGovernanceSummary
         ? { body: this.optimizationGovernanceSummary }
         : { status: 404, body: { status: 404, code: 'RESOURCE_NOT_FOUND', title: 'Resource not found' } };
+    }
+    if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/optimization/canary-bindings`) {
+      const plantActive = this.optimizationCanaryBindings.find((b) => b.loopKey === 'PLANT' && b.status === 'ACTIVE');
+      const activeSolver = plantActive
+        ? { servingRef: plantActive.servingRef, source: 'SITE_LOOP_CANARY', loopKey: 'PLANT', deploymentRevisionId: null }
+        : (this.optimizationGovernanceSummary?.activeSolver ?? {
+            servingRef: 'builtin://hvac-recommendation-v1',
+            source: 'DEFAULT',
+            loopKey: 'PLANT',
+            deploymentRevisionId: null,
+          });
+      return {
+        body: {
+          tenantId: principal.context.tenantId,
+          siteId: SITE_ID,
+          allowedSolverHosts: this.allowedSolverHosts,
+          activeSolver,
+          items: this.optimizationCanaryBindings,
+        },
+      };
+    }
+    const canaryPrefix = `/api/v1/sites/${SITE_ID}/optimization/canary-bindings/`;
+    if (path.startsWith(canaryPrefix)) {
+      const loopKey = decodeURIComponent(path.slice(canaryPrefix.length)).trim().toUpperCase();
+      if (method === 'PUT') {
+        const servingRef = String(body?.servingRef ?? '').trim();
+        const status = String(body?.status ?? 'ACTIVE').trim().toUpperCase();
+        if (servingRef.startsWith('http://') || servingRef.startsWith('https://')) {
+          let parsed: URL;
+          try {
+            parsed = new URL(servingRef);
+          } catch {
+            return { status: 400, body: { status: 400, code: 'OPTIMIZATION_CANARY_REQUEST_INVALID', title: 'Invalid servingRef' } };
+          }
+          const allowed = this.allowedSolverHosts.some(
+            (host) => host.toLowerCase() === parsed.host.toLowerCase() || host.toLowerCase() === parsed.hostname.toLowerCase(),
+          );
+          if (!allowed) {
+            return {
+              status: 422,
+              body: {
+                type: 'about:blank',
+                title: 'Solver host not allowed',
+                status: 422,
+                detail: 'External solver host is not in the configured allowlist.',
+                instance: path,
+                code: 'OPTIMIZATION_SOLVER_HOST_NOT_ALLOWED',
+                traceId: '0'.repeat(32),
+                retryable: false,
+              },
+            };
+          }
+        }
+        const existingIndex = this.optimizationCanaryBindings.findIndex((item) => item.loopKey === loopKey);
+        const saved: Json = {
+          id: existingIndex >= 0
+            ? this.optimizationCanaryBindings[existingIndex].id
+            : '01990000-2200-7000-8000-000000000099',
+          tenantId: principal.context.tenantId,
+          siteId: SITE_ID,
+          loopKey,
+          servingRef,
+          status: status === 'DISABLED' ? 'DISABLED' : 'ACTIVE',
+          createdAt: existingIndex >= 0 ? this.optimizationCanaryBindings[existingIndex].createdAt : now,
+          updatedAt: now,
+        };
+        if (existingIndex >= 0) {
+          this.optimizationCanaryBindings[existingIndex] = saved;
+        } else {
+          this.optimizationCanaryBindings.unshift(saved);
+        }
+        if (loopKey === 'PLANT' && saved.status === 'ACTIVE' && this.optimizationGovernanceSummary) {
+          this.optimizationGovernanceSummary = {
+            ...this.optimizationGovernanceSummary,
+            activeSolver: { servingRef: saved.servingRef, source: 'SITE_LOOP_CANARY', loopKey: 'PLANT', deploymentRevisionId: null },
+          };
+        }
+        return { body: saved };
+      }
+      if (method === 'DELETE') {
+        const idx = this.optimizationCanaryBindings.findIndex((item) => item.loopKey === loopKey);
+        if (idx < 0) {
+          return { status: 404, body: { status: 404, code: 'RESOURCE_NOT_FOUND', title: 'Resource not found' } };
+        }
+        this.optimizationCanaryBindings.splice(idx, 1);
+        if (loopKey === 'PLANT' && this.optimizationGovernanceSummary) {
+          this.optimizationGovernanceSummary = {
+            ...this.optimizationGovernanceSummary,
+            activeSolver: { servingRef: 'builtin://hvac-recommendation-v1', source: 'DEFAULT', loopKey: 'PLANT', deploymentRevisionId: null },
+          };
+        }
+        return { body: { deleted: true, siteId: SITE_ID, loopKey } };
+      }
+    }
+    if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/optimization/negative-samples`) {
+      const windowDays = Number(query.get('windowDays') ?? '14');
+      const sampleKind = (query.get('sampleKind') ?? 'ALL').toUpperCase();
+      const limit = Number(query.get('limit') ?? '20');
+      const offset = Number(query.get('offset') ?? '0');
+      const filtered = this.optimizationNegativeSamples.filter(
+        (item) => sampleKind === 'ALL' || item.sampleKind === sampleKind,
+      );
+      const items = filtered.slice(offset, offset + limit);
+      return {
+        body: {
+          tenantId: principal.context.tenantId,
+          siteId: SITE_ID,
+          windowDays,
+          sampleKind,
+          total: filtered.length,
+          limit,
+          offset,
+          hasMore: offset + items.length < filtered.length,
+          items,
+        },
+      };
     }
     if (method === 'POST' && path === '/api/v1/optimization/runs') {
       if (!this.nextRecommendation) return { status: 502, body: fixture('optimization-run-declined.json') };

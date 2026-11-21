@@ -53,6 +53,10 @@ func NewHTTPHandler(service *Service, preparer *Preparer, auth AuthConfig) (http
 	mux.HandleFunc("GET /v1/sites/{siteId}/optimization/shadow-evaluations/latest", handler.guard(ReadAction, handler.handleLatestShadowEvaluation))
 	mux.HandleFunc("GET /v1/sites/{siteId}/optimization/staging-recommendations/latest", handler.guard(ReadAction, handler.handleLatestStagingEvaluation))
 	mux.HandleFunc("GET /v1/sites/{siteId}/optimization/governance-summary", handler.guard(ReadAction, handler.handleGovernanceSummary))
+	mux.HandleFunc("GET /v1/sites/{siteId}/optimization/canary-bindings", handler.guard(ReadAction, handler.handleListCanaryBindings))
+	mux.HandleFunc("PUT /v1/sites/{siteId}/optimization/canary-bindings/{loopKey}", handler.guard(WriteAction, handler.handleUpsertCanaryBinding))
+	mux.HandleFunc("DELETE /v1/sites/{siteId}/optimization/canary-bindings/{loopKey}", handler.guard(WriteAction, handler.handleDeleteCanaryBinding))
+	mux.HandleFunc("GET /v1/sites/{siteId}/optimization/negative-samples", handler.guard(ReadAction, handler.handleListNegativeSamples))
 	return mux, nil
 }
 
@@ -176,6 +180,126 @@ func (handler *HTTPHandler) handleGovernanceSummary(writer http.ResponseWriter, 
 	result, err := handler.service.GovernanceSummary(request.Context(), site.TenantID, site.SiteID, windowDays)
 	if errors.Is(err, ErrOptimizationNotFound) {
 		writeJSONError(writer, http.StatusNotFound, "optimization_not_found")
+		return
+	}
+	if err != nil {
+		writeJSONError(writer, http.StatusBadGateway, "optimization_unavailable")
+		return
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(writer).Encode(result)
+}
+
+func (handler *HTTPHandler) handleListCanaryBindings(writer http.ResponseWriter, request *http.Request, site identitycontext.SiteContext) {
+	result, err := handler.service.ListCanaryBindings(request.Context(), site.TenantID, site.SiteID)
+	if errors.Is(err, ErrOptimizationNotFound) {
+		writeJSONError(writer, http.StatusNotFound, "optimization_not_found")
+		return
+	}
+	if errors.Is(err, ErrCanaryInvalidRequest) {
+		writeJSONError(writer, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	if err != nil {
+		writeJSONError(writer, http.StatusBadGateway, "optimization_unavailable")
+		return
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(writer).Encode(result)
+}
+
+func (handler *HTTPHandler) handleUpsertCanaryBinding(writer http.ResponseWriter, request *http.Request, site identitycontext.SiteContext) {
+	reader := http.MaxBytesReader(writer, request.Body, 16*1024)
+	defer reader.Close()
+	decoder := json.NewDecoder(reader)
+	decoder.DisallowUnknownFields()
+	var input UpsertCanaryBindingRequest
+	if err := decoder.Decode(&input); err != nil {
+		writeJSONError(writer, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	if err := ensureJSONEOF(decoder); err != nil {
+		writeJSONError(writer, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	loopKey := request.PathValue("loopKey")
+	result, err := handler.service.UpsertCanaryBinding(request.Context(), site.TenantID, site.SiteID, loopKey, input)
+	if errors.Is(err, ErrOptimizationNotFound) {
+		writeJSONError(writer, http.StatusNotFound, "optimization_not_found")
+		return
+	}
+	if errors.Is(err, ErrCanaryHostNotAllowed) {
+		writeJSONError(writer, http.StatusUnprocessableEntity, "optimization_solver_host_not_allowed")
+		return
+	}
+	if errors.Is(err, ErrCanaryInvalidRequest) {
+		writeJSONError(writer, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	if err != nil {
+		writeJSONError(writer, http.StatusBadGateway, "optimization_unavailable")
+		return
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(writer).Encode(result)
+}
+
+func (handler *HTTPHandler) handleDeleteCanaryBinding(writer http.ResponseWriter, request *http.Request, site identitycontext.SiteContext) {
+	loopKey := request.PathValue("loopKey")
+	result, err := handler.service.DeleteCanaryBinding(request.Context(), site.TenantID, site.SiteID, loopKey)
+	if errors.Is(err, ErrOptimizationNotFound) {
+		writeJSONError(writer, http.StatusNotFound, "optimization_not_found")
+		return
+	}
+	if errors.Is(err, ErrCanaryInvalidRequest) {
+		writeJSONError(writer, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	if err != nil {
+		writeJSONError(writer, http.StatusBadGateway, "optimization_unavailable")
+		return
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(writer).Encode(result)
+}
+
+func (handler *HTTPHandler) handleListNegativeSamples(writer http.ResponseWriter, request *http.Request, site identitycontext.SiteContext) {
+	q := request.URL.Query()
+	windowDays := DefaultGovernanceWindowDays
+	if rawWindow := strings.TrimSpace(q.Get("windowDays")); rawWindow != "" {
+		parsed, err := strconv.Atoi(rawWindow)
+		if err != nil || parsed <= 0 || parsed > MaxGovernanceWindowDays {
+			writeJSONError(writer, http.StatusBadRequest, "invalid_request")
+			return
+		}
+		windowDays = parsed
+	}
+	limit := DefaultNegativeSampleLimit
+	if rawLimit := strings.TrimSpace(q.Get("limit")); rawLimit != "" {
+		parsed, err := strconv.Atoi(rawLimit)
+		if err != nil || parsed <= 0 || parsed > MaxNegativeSampleLimit {
+			writeJSONError(writer, http.StatusBadRequest, "invalid_request")
+			return
+		}
+		limit = parsed
+	}
+	offset := 0
+	if rawOffset := strings.TrimSpace(q.Get("offset")); rawOffset != "" {
+		parsed, err := strconv.Atoi(rawOffset)
+		if err != nil || parsed < 0 {
+			writeJSONError(writer, http.StatusBadRequest, "invalid_request")
+			return
+		}
+		offset = parsed
+	}
+	sampleKind := strings.TrimSpace(q.Get("sampleKind"))
+	result, err := handler.service.ListNegativeSamplesPage(request.Context(), site.TenantID, site.SiteID, windowDays, sampleKind, limit, offset)
+	if errors.Is(err, ErrOptimizationNotFound) {
+		writeJSONError(writer, http.StatusNotFound, "optimization_not_found")
+		return
+	}
+	if errors.Is(err, ErrCanaryInvalidRequest) {
+		writeJSONError(writer, http.StatusBadRequest, "invalid_request")
 		return
 	}
 	if err != nil {

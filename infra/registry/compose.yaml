@@ -98,6 +98,7 @@ services:
       - ./postgres/init/metric-backfill-watermarks-and-reverify.sql:/docker-entrypoint-initdb.d/0870.sql:ro
       - ./postgres/init/energy-tou-holidays-and-recalc.sql:/docker-entrypoint-initdb.d/0880.sql:ro
       - ./postgres/init/mv-bivariate-weather-anchors.sql:/docker-entrypoint-initdb.d/0890.sql:ro
+      - ./postgres/init/optimization-canary-write-rls.sql:/docker-entrypoint-initdb.d/0900.sql:ro
     ports:
       - "127.0.0.1:${S1_POSTGRES_HOST_PORT:-55432}:5432"
     healthcheck:
