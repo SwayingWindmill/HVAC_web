@@ -78,3 +78,15 @@ func TestParseAndValidateCommandPointMetadata(t *testing.T) {
 		}
 	}
 }
+
+func TestParseCommandPointMetadataIntOverflow(t *testing.T) {
+	for _, raw := range []map[string]any{
+		{"coilAddress": json.Number("9223372036854775808")},
+		{"coilAddress": json.Number("-9223372036854775809")},
+		{"coilAddress": float64(1e20)},
+	} {
+		if _, err := ParseCommandPointMetadata(raw); !errors.Is(err, ErrInvalidPointMetadata) {
+			t.Fatalf("expected ErrInvalidPointMetadata for overflow input %v, got %v", raw, err)
+		}
+	}
+}

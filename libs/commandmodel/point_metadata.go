@@ -212,6 +212,8 @@ func parseMetadataFiniteFloat(raw map[string]any, key string) (*float64, error) 
 	return &num, nil
 }
 
+const maxMetadataIntFloat = float64(uint64(1) << (strconv.IntSize - 1))
+
 func parseMetadataInt(raw map[string]any, key string) (*int, error) {
 	val, exists := raw[key]
 	if !exists || val == nil {
@@ -225,20 +227,24 @@ func parseMetadataInt(raw map[string]any, key string) (*int, error) {
 		v := int(typed)
 		return &v, nil
 	case int64:
-		v := int(typed)
-		if int64(v) != typed {
+		if typed < math.MinInt || typed > math.MaxInt {
 			return nil, fmt.Errorf("%w: %s overflows int", ErrInvalidPointMetadata, key)
 		}
+		v := int(typed)
 		return &v, nil
 	case json.Number:
-		if parsed, err := strconv.ParseInt(typed.String(), 10, 64); err == nil {
-			v := int(parsed)
-			if int64(v) != parsed {
-				return nil, fmt.Errorf("%w: %s overflows int", ErrInvalidPointMetadata, key)
-			}
+		parsed, err := strconv.Atoi(typed.String())
+		if err == nil {
+			v := parsed
 			return &v, nil
 		}
+		if errors.Is(err, strconv.ErrRange) {
+			return nil, fmt.Errorf("%w: %s overflows int", ErrInvalidPointMetadata, key)
+		}
 		if f, err := typed.Float64(); err == nil && !math.IsNaN(f) && !math.IsInf(f, 0) && math.Trunc(f) == f {
+			if f < -maxMetadataIntFloat || f >= maxMetadataIntFloat {
+				return nil, fmt.Errorf("%w: %s overflows int", ErrInvalidPointMetadata, key)
+			}
 			v := int(f)
 			return &v, nil
 		}
@@ -246,6 +252,9 @@ func parseMetadataInt(raw map[string]any, key string) (*int, error) {
 	case float64:
 		if math.IsNaN(typed) || math.IsInf(typed, 0) || math.Trunc(typed) != typed {
 			return nil, fmt.Errorf("%w: %s must be an integer", ErrInvalidPointMetadata, key)
+		}
+		if typed < -maxMetadataIntFloat || typed >= maxMetadataIntFloat {
+			return nil, fmt.Errorf("%w: %s overflows int", ErrInvalidPointMetadata, key)
 		}
 		v := int(typed)
 		return &v, nil
