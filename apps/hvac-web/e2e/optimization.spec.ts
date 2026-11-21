@@ -1094,3 +1094,54 @@ test('multi-loop auto-control lease validates VFD and fan bounds conditionally a
   await expect(monitorsTable).not.toContainText('CHW_PUMP');
   await expect(monitorsTable).not.toContainText('CT_FAN');
 });
+
+test('latest recommendation renders multi-loop auxiliary pump and tower fan targets', async ({ page, gateway }) => {
+  const baseLatest = fixture('optimization-latest.json');
+  gateway.optimization = {
+    ...baseLatest,
+    recommendation: {
+      ...baseLatest.recommendation,
+      auxiliaryTargets: [
+        {
+          loopKey: 'chilled_water_pump_freq',
+          capability: 'SET_FREQUENCY',
+          targetValue: 38.5,
+          unit: 'Hz',
+          rationale: 'CHW pump frequency coordinated with supply reset and comfort margin',
+        },
+        {
+          loopKey: 'cooling_water_pump_freq',
+          capability: 'SET_FREQUENCY',
+          targetValue: 41.0,
+          unit: 'Hz',
+          rationale: 'CW pump frequency coordinated for condenser heat rejection',
+        },
+        {
+          loopKey: 'cooling_tower_fan_speed',
+          capability: 'SET_FAN_SPEED',
+          targetValue: 67.0,
+          unit: '%',
+          rationale: 'Cooling tower fan speed balanced against wet-bulb heat rejection',
+        },
+      ],
+    },
+  };
+
+  await page.goto(`/energy-analysis/optimization?site=${SITE_ID}`);
+
+  const auxPanel = page.getByRole('region', { name: '协同变频与风机建议' });
+  await expect(auxPanel).toBeVisible();
+  await expect(auxPanel).toContainText('冷冻水泵频率');
+  await expect(auxPanel).toContainText('38.5 Hz');
+  await expect(auxPanel).toContainText('冷却水泵频率');
+  await expect(auxPanel).toContainText('41.0 Hz');
+  await expect(auxPanel).toContainText('冷却塔风机转速');
+  await expect(auxPanel).toContainText('67.0%');
+  await expect(auxPanel).toContainText('变频频率调节');
+  await expect(auxPanel).toContainText('风机转速调节');
+
+  if (process.env.WAVE_D_AUX_SCREENSHOT) {
+    await auxPanel.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: process.env.WAVE_D_AUX_SCREENSHOT });
+  }
+});
