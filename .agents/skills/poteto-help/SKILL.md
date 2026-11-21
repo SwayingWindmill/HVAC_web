@@ -97,7 +97,6 @@ The default entry point for non-trivial work is [`poteto-mode`](../poteto-mode/S
 | Navigate installed pstack skills and playbooks | [`poteto-help`](SKILL.md) |
 | Drive HVAC Web 1440px UI Playwright & live checks (project) | [`verify`](../verify/SKILL.md) |
 | Verify command intent, fence, MQTT commit, and recovery invariants (project) | [`command-safety`](../command-safety/SKILL.md) |
-| Shape HVAC Web visual design, hierarchy, and composition (project) | [`frontend-design`](../frontend-design/SKILL.md) |
 | Add/style shadcn/ui components consistently (project) | [`shadcn`](../shadcn/SKILL.md) |
 | Audit web accessibility, keyboard, focus, and UX quality (project) | [`web-design-guidelines`](../web-design-guidelines/SKILL.md) |
 

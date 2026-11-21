@@ -16,7 +16,7 @@ This is the repository-local review profile derived from Vercel's `web-design-gu
 
 Unlike the upstream skill, **do not fetch mutable review instructions from `main` during execution**. HVAC Web requires reproducible external guidance. Update this local profile deliberately through source review when upstream guidance changes materially.
 
-Use this skill primarily as the final UI review pass after `impeccable` and `frontend-design` have shaped the surface.
+Use this skill primarily as the final UI review pass after `impeccable` and `DESIGN.md` have shaped the surface.
 
 ## Review scope
 
@@ -140,12 +140,12 @@ Prefer `path:line — finding — recommended correction` when line information 
 
 Use the project frontend sequence:
 
-1. `impeccable` for module/content hierarchy and product-UI critique.
-2. `frontend-design` for visual direction, typography, spacing, density, and composition.
+1. `DESIGN.md` + `PRODUCT.md` as the single source of truth for tokens, component grammar, copy rules, and domain constraints.
+2. `impeccable` (in `Operate` mode, plus `distill` / `polish` / `harden` / `clarify` playbooks) for information architecture, visual hierarchy, density, simplification, and product-UI critique.
 3. `modern-web-guidance` (when installed, gated by `.mwgrc`) for Baseline web-platform CSS/DOM/input mechanics that fit inside `DESIGN.md` and shadcn/Radix primitives without replacing them.
-4. `web-design-guidelines` for final web UX/accessibility/interaction audit.
+4. `web-design-guidelines` for final web UX, accessibility, keyboard, form, and interaction audit.
 
-shadcn/ui primitives, TanStack Router/Query/Table, React Hook Form, Zod, and Apache ECharts are the implementation vocabulary and should be checked against their official behavior when relevant. Legacy Ant/Pro usage is migration code, not a design authority.
+shadcn/ui (`radix-nova`) primitives, TanStack Router/Query/Table, React Hook Form, Zod, and Recharts are the implementation vocabulary and should be checked against their official behavior when relevant.
 
 ## Upstream provenance
 
