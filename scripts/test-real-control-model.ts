@@ -252,9 +252,9 @@ test('activePriorityLocks filters expired locks and formats remaining countdown 
   assert.equal(describeControlAlarmEvent('PRIORITY_LOCK'), '优先级锁定');
   assert.equal(describeControlAlarmEvent('OUTCOME_UNKNOWN'), '执行结果未知');
   assert.equal(describeControlAlarmEvent('PULSE_DELIVERED_POWER_UNCONFIRMED'), '脉冲发出后功率未确认');
-  assert.equal(describeControlAlarmEvent('EMERGENCY_DO_RELEASE'), '紧急释放运行允许位');
+  assert.equal(describeControlAlarmEvent('EMERGENCY_DO_RELEASE'), '紧急输出释放');
   assert.equal(describeControlAlarmError('TIMEOUT'), '下游告警服务超时未响应');
-  assert.equal(describeControlAlarmError('VERIFY_TIMEOUT'), '指令动作超时未确认');
-  assert.equal(describeControlAlarmError('DISPATCH_REJECTED'), '控制命令下发被拒');
+  assert.equal(describeControlAlarmError('VERIFY_TIMEOUT'), '设备状态读回超时未确认');
+  assert.equal(describeControlAlarmError('DISPATCH_REJECTED'), '安全校验未通过导致下发拒收');
   assert.equal(describeControlAlarmError('CONTROL_ALARM_HTTP_FAILED'), '下游告警服务通信失败');
 });
