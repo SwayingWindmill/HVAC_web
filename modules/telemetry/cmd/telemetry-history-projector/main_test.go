@@ -22,11 +22,14 @@ func TestShutdownHistoryProjectorOrder(t *testing.T) {
 			order = append(order, "telemetry_shutdown")
 			return nil
 		},
+		closeSink: func() {
+			order = append(order, "sink_close")
+		},
 		closeRepository: func() {
 			order = append(order, "repository_close")
 		},
 	})
-	want := "mark_not_ready,diagnostics_shutdown,telemetry_shutdown,repository_close"
+	want := "mark_not_ready,diagnostics_shutdown,telemetry_shutdown,sink_close,repository_close"
 	if got := strings.Join(order, ","); got != want {
 		t.Fatalf("shutdown order = %s, want %s", got, want)
 	}

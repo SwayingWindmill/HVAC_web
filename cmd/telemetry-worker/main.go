@@ -352,8 +352,15 @@ func runTelemetryWorker() int {
 			runLatestCacheRelay(latestContext, latestRelay, logger)
 		})
 	}
-	if historyRepository != nil {
-		shutdownCfg.CloseHistory = historyRepository.Close
+	if historyRepository != nil || historySink != nil {
+		shutdownCfg.CloseHistory = func() {
+			if historySink != nil {
+				_ = historySink.Close()
+			}
+			if historyRepository != nil {
+				historyRepository.Close()
+			}
+		}
 	}
 	if historyCancel != nil {
 		workerCancels = append(workerCancels, historyCancel)
@@ -704,7 +711,11 @@ func parseHistoryProjectionSettings(lookup func(string) string) (historyProjecti
 	}, nil
 }
 
-func loadHistoryProjection(metrics *telemetry.PipelineMetrics) (*telemetry.HistoryPostgresRepository, *telemetry.ClickHouseHistorySink, *telemetry.HistoryRelay, historyProjectionSettings, context.Context, context.CancelFunc, error) {
+func openTelemetryHistorySink(lookup func(string) string) (telemetry.HistorySinkCloser, error) {
+	return telemetry.OpenClickHouseHistorySinkFromLookup(lookup, "telemetry_history_writer")
+}
+
+func loadHistoryProjection(metrics *telemetry.PipelineMetrics) (*telemetry.HistoryPostgresRepository, telemetry.HistorySinkCloser, *telemetry.HistoryRelay, historyProjectionSettings, context.Context, context.CancelFunc, error) {
 	if !strings.EqualFold(strings.TrimSpace(os.Getenv("TELEMETRY_HISTORY_PROJECTION_ENABLED")), "true") {
 		return nil, nil, nil, historyProjectionSettings{}, context.Background(), nil, nil
 	}
@@ -729,18 +740,7 @@ func loadHistoryProjection(metrics *telemetry.PipelineMetrics) (*telemetry.Histo
 		repository.Close()
 		return nil, nil, nil, historyProjectionSettings{}, nil, nil, schemaCompatibilityError{err: err}
 	}
-	clickHouseURL, err := requiredEnv("TELEMETRY_CLICKHOUSE_HTTP_URL")
-	if err != nil {
-		repository.Close()
-		return nil, nil, nil, historyProjectionSettings{}, nil, nil, err
-	}
-	sink, err := telemetry.NewClickHouseHistorySink(telemetry.ClickHouseHistoryConfig{
-		BaseURL:  clickHouseURL,
-		Database: envOr("TELEMETRY_CLICKHOUSE_DATABASE", "telemetry_history"),
-		Table:    envOr("TELEMETRY_CLICKHOUSE_TABLE", "observations"),
-		Username: envOr("TELEMETRY_CLICKHOUSE_USERNAME", "telemetry_history_writer"),
-		Password: os.Getenv("TELEMETRY_CLICKHOUSE_PASSWORD"),
-	})
+	sink, err := openTelemetryHistorySink(os.Getenv)
 	if err != nil {
 		repository.Close()
 		return nil, nil, nil, historyProjectionSettings{}, nil, nil, err
@@ -755,6 +755,7 @@ func loadHistoryProjection(metrics *telemetry.PipelineMetrics) (*telemetry.Histo
 		Metrics:       metrics,
 	})
 	if err != nil {
+		_ = sink.Close()
 		repository.Close()
 		return nil, nil, nil, historyProjectionSettings{}, nil, nil, err
 	}

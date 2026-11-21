@@ -446,3 +446,47 @@ func TestColdArchiveExporterPingAndGzipSelectStream(t *testing.T) {
 		t.Fatalf("RowCount=%d, want 1", res.Manifest.RowCount)
 	}
 }
+
+func TestColdArchiveExporterStreamsMetricResultFacts(t *testing.T) {
+	now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	cutoff := now.Add(-1825 * 24 * time.Hour)
+	holdTenant := "018f2d00-0000-7000-8000-000000000001"
+	metricLines := `{"result_id":"018f2e00-9300-7000-8000-000000000001","metric_code":"daily_energy","value_number":120.5}` + "\n"
+
+	var seenSQL string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		sqlBytes, _ := io.ReadAll(request.Body)
+		seenSQL = string(sqlBytes)
+		_, _ = io.WriteString(writer, metricLines)
+	}))
+	defer server.Close()
+
+	exporter, err := NewColdArchiveExporter(ColdArchiveConfig{
+		BaseURL:    server.URL,
+		ArchiveDir: filepath.Join(t.TempDir(), "cold-archive"),
+		HTTPClient: server.Client(),
+		Now:        func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := exporter.ExportBeforePrune(t.Context(), ColdArchiveExportRequest{
+		Database:   "analytics",
+		Table:      "metric_result_facts",
+		Cutoff:     cutoff,
+		LegalHolds: []ClickHouseLegalHoldScope{{TenantID: holdTenant}},
+	})
+	if err != nil {
+		t.Fatalf("export metric_result_facts: %v", err)
+	}
+	if res.Manifest.Database != "analytics" || res.Manifest.Table != "metric_result_facts" || res.Manifest.RowCount != 1 {
+		t.Fatalf("unexpected manifest: %+v", res.Manifest)
+	}
+	if !strings.Contains(seenSQL, "FROM analytics.metric_result_facts") ||
+		!strings.Contains(seenSQL, "period_start < {cutoff:DateTime64(3, 'UTC')}") ||
+		!strings.Contains(seenSQL, "ORDER BY period_start ASC, result_id ASC") {
+		t.Fatalf("unexpected metric_result_facts archive SQL: %q", seenSQL)
+	}
+	verifyArchiveFileMatchesManifest(t, res.ArchivePath, res.ManifestPath, metricLines)
+}

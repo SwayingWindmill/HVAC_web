@@ -109,3 +109,69 @@ func TestClickHouseStorePoolingDrainAndPing(t *testing.T) {
 		t.Fatal("expected oversized response error")
 	}
 }
+
+func TestClickHouseStoreReadMetricFactsScopesLeadingMetricID(t *testing.T) {
+	var queries []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		queries = append(queries, r.URL.Query().Get("query"))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("01990000-8000-7000-8000-000000000001\t01990000-7000-7000-8000-000000000001\t01990000-6000-7000-8000-000000000001\tenergy\t2026-08-10T00:00:00Z\t2026-08-10T01:00:00Z\t12.5\tGOOD\t1\t2\t2026-08-10T01:05:00Z\n"))
+	}))
+	defer server.Close()
+
+	store, err := NewClickHouseStore(server.URL, "settlement_reader", "secret", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	period := Period{
+		TenantID: "01990000-3000-7000-8000-000000000001",
+		SiteID:   "01990000-5000-7000-8000-000000000001",
+		Start:    time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC),
+		End:      time.Date(2026, 8, 10, 1, 0, 0, 0, time.UTC),
+	}
+	facts, err := store.ReadMetricFacts(context.Background(), period, []MetricBinding{
+		{
+			MetricID:        "01990000-4000-7000-8000-000000000002",
+			MetricBindingID: "01990000-7000-7000-8000-000000000002",
+			MetricCode:      "demand",
+		},
+		{
+			MetricID:        "01990000-4000-7000-8000-000000000001",
+			MetricBindingID: "01990000-7000-7000-8000-000000000001",
+			MetricCode:      "energy",
+		},
+		{
+			MetricID:        "01990000-4000-7000-8000-000000000001",
+			MetricBindingID: "01990000-7000-7000-8000-000000000003",
+			MetricCode:      "energy_dup",
+		},
+	})
+	if err != nil {
+		t.Fatalf("ReadMetricFacts with MetricID failed: %v", err)
+	}
+	if len(facts) != 1 || facts[0].Value != 12.5 || facts[0].Revision != 2 {
+		t.Fatalf("unexpected facts: %#v", facts)
+	}
+	wantClause := "metric_id IN (toUUID('01990000-4000-7000-8000-000000000001'),toUUID('01990000-4000-7000-8000-000000000002'))"
+	if !strings.Contains(queries[0], wantClause) {
+		t.Fatalf("expected leading metric_id predicate %q in query:\n%s", wantClause, queries[0])
+	}
+
+	_, err = store.ReadMetricFacts(context.Background(), period, []MetricBinding{
+		{
+			MetricID:        "01990000-4000-7000-8000-000000000001",
+			MetricBindingID: "01990000-7000-7000-8000-000000000001",
+			MetricCode:      "energy",
+		},
+		{
+			MetricBindingID: "01990000-7000-7000-8000-000000000002",
+			MetricCode:      "demand",
+		},
+	})
+	if err != nil {
+		t.Fatalf("ReadMetricFacts with partial MetricID failed: %v", err)
+	}
+	if strings.Contains(queries[1], "metric_id IN") {
+		t.Fatalf("expected metric_id filter omitted when any binding lacks MetricID:\n%s", queries[1])
+	}
+}

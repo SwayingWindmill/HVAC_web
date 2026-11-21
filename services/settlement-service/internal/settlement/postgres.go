@@ -207,7 +207,7 @@ ORDER BY tp.tariff_version_id,tp.day_type,tp.ordinal`, tenantID, siteID, version
 		tariff.Holidays = holidays
 	}
 
-	metricRows, err := tx.Query(ctx, `SELECT smb.id::text,smb.metric_binding_id::text,mb.metric_version_id::text,m.metric_code,smb.metric_role,coalesce(smb.tariff_period_code,'')
+	metricRows, err := tx.Query(ctx, `SELECT smb.id::text,mb.metric_id::text,smb.metric_binding_id::text,mb.metric_version_id::text,m.metric_code,smb.metric_role,coalesce(smb.tariff_period_code,'')
 FROM core_registry.settlement_metric_bindings smb
 JOIN core_registry.metric_bindings mb ON mb.tenant_id=smb.tenant_id AND mb.site_id=smb.site_id AND mb.id=smb.metric_binding_id AND mb.status='RELEASED'
 JOIN core_registry.metric_versions mv ON mv.tenant_id=mb.tenant_id AND mv.id=mb.metric_version_id AND mv.status='RELEASED'
@@ -221,7 +221,7 @@ ORDER BY smb.metric_role,smb.tariff_period_code,smb.id`, tenantID, siteID, perio
 	bindings := make([]MetricBinding, 0)
 	for metricRows.Next() {
 		var binding MetricBinding
-		if err = metricRows.Scan(&binding.ID, &binding.MetricBindingID, &binding.MetricVersionID, &binding.MetricCode, &binding.Role, &binding.TariffPeriodCode); err != nil {
+		if err = metricRows.Scan(&binding.ID, &binding.MetricID, &binding.MetricBindingID, &binding.MetricVersionID, &binding.MetricCode, &binding.Role, &binding.TariffPeriodCode); err != nil {
 			metricRows.Close()
 			return Period{}, nil, Tariff{}, err
 		}

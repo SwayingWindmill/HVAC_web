@@ -50,16 +50,6 @@ func (f *fakeLifecycleGovernance) RecordLifecycleEvent(_ context.Context, _ Sche
 	return nil
 }
 
-type fakeLifecycleData struct {
-	deleteCalls int
-	err         error
-}
-
-func (f *fakeLifecycleData) DeleteMetricResult(context.Context, string, string, string) error {
-	f.deleteCalls++
-	return f.err
-}
-
 func dueLifecycleFixture(archiveRequired bool) (*fakeLifecycleGovernance, SchedulerJob, LifecyclePayload, time.Time) {
 	deleteDays := 30
 	now := time.Date(2026, 8, 19, 8, 0, 0, 0, time.UTC)
@@ -75,8 +65,7 @@ func dueLifecycleFixture(archiveRequired bool) (*fakeLifecycleGovernance, Schedu
 func TestLifecycleLegalHoldBlocksSourceDeletion(t *testing.T) {
 	governance, job, payload, now := dueLifecycleFixture(false)
 	governance.hold = true
-	data := &fakeLifecycleData{}
-	executor, err := NewLifecycleExecutor(governance, data)
+	executor, err := NewLifecycleExecutor(governance)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,8 +73,8 @@ func TestLifecycleLegalHoldBlocksSourceDeletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome.Status != "HOLD_BLOCKED" || data.deleteCalls != 0 || governance.applyCalls != 0 {
-		t.Fatalf("outcome=%#v deleteCalls=%d applyCalls=%d", outcome, data.deleteCalls, governance.applyCalls)
+	if outcome.Status != "HOLD_BLOCKED" || governance.applyCalls != 0 {
+		t.Fatalf("outcome=%#v applyCalls=%d", outcome, governance.applyCalls)
 	}
 	if len(governance.events) != 2 || governance.events[0] != "CLAIMED" || governance.events[1] != "HOLD_BLOCKED" {
 		t.Fatalf("events=%v", governance.events)
@@ -95,8 +84,7 @@ func TestLifecycleLegalHoldBlocksSourceDeletion(t *testing.T) {
 func TestLifecycleCurrentResultCannotDeleteSource(t *testing.T) {
 	governance, job, payload, now := dueLifecycleFixture(false)
 	governance.target.IsCurrent = true
-	data := &fakeLifecycleData{}
-	executor, err := NewLifecycleExecutor(governance, data)
+	executor, err := NewLifecycleExecutor(governance)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,8 +92,8 @@ func TestLifecycleCurrentResultCannotDeleteSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome.Status != "CURRENT_BLOCKED" || data.deleteCalls != 0 || governance.applyCalls != 0 {
-		t.Fatalf("outcome=%#v deleteCalls=%d applyCalls=%d", outcome, data.deleteCalls, governance.applyCalls)
+	if outcome.Status != "CURRENT_BLOCKED" || governance.applyCalls != 0 {
+		t.Fatalf("outcome=%#v applyCalls=%d", outcome, governance.applyCalls)
 	}
 	if len(governance.events) != 2 || governance.events[1] != "CURRENT_BLOCKED" {
 		t.Fatalf("events=%v", governance.events)
@@ -115,8 +103,7 @@ func TestLifecycleCurrentResultCannotDeleteSource(t *testing.T) {
 func TestLifecycleArchiveFailureCannotDeleteSource(t *testing.T) {
 	governance, job, payload, now := dueLifecycleFixture(true)
 	governance.archiveErr = pgx.ErrNoRows
-	data := &fakeLifecycleData{}
-	executor, err := NewLifecycleExecutor(governance, data)
+	executor, err := NewLifecycleExecutor(governance)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,10 +111,35 @@ func TestLifecycleArchiveFailureCannotDeleteSource(t *testing.T) {
 	if !errors.Is(err, ErrArchiveEvidenceRequired) {
 		t.Fatalf("error=%v, want ErrArchiveEvidenceRequired", err)
 	}
-	if data.deleteCalls != 0 || governance.applyCalls != 0 {
-		t.Fatalf("archive failure reached delete/apply: deleteCalls=%d applyCalls=%d", data.deleteCalls, governance.applyCalls)
+	if governance.applyCalls != 0 {
+		t.Fatalf("archive failure reached apply: applyCalls=%d", governance.applyCalls)
 	}
 	if len(governance.events) != 2 || governance.events[1] != "ARCHIVE_FAILED" {
 		t.Fatalf("events=%v", governance.events)
+	}
+}
+
+func TestLifecycleAppliesTombstoneWithoutRowLevelClickHouseMutation(t *testing.T) {
+	governance, job, payload, now := dueLifecycleFixture(true)
+	governance.archiveID = "01910000-0000-7000-8000-000000000099"
+	executor, err := NewLifecycleExecutor(governance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome, err := executor.Execute(context.Background(), job, payload, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Status != "DELETED" || outcome.TombstoneID != "tombstone" || governance.applyCalls != 1 {
+		t.Fatalf("outcome=%#v applyCalls=%d", outcome, governance.applyCalls)
+	}
+	wantEvents := []string{"CLAIMED", "ARCHIVE_VERIFIED", "DELETE_STARTED", "DELETE_APPLIED"}
+	if len(governance.events) != len(wantEvents) {
+		t.Fatalf("events=%v want %v", governance.events, wantEvents)
+	}
+	for i, want := range wantEvents {
+		if governance.events[i] != want {
+			t.Fatalf("events=%v want %v", governance.events, wantEvents)
+		}
 	}
 }

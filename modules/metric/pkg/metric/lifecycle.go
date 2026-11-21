@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -58,20 +57,15 @@ type LifecycleGovernance interface {
 	RecordLifecycleEvent(context.Context, SchedulerJob, LifecyclePayload, string, map[string]any, time.Time) error
 }
 
-type LifecycleDataStore interface {
-	DeleteMetricResult(context.Context, string, string, string) error
-}
-
 type LifecycleExecutor struct {
 	governance LifecycleGovernance
-	data       LifecycleDataStore
 }
 
-func NewLifecycleExecutor(governance LifecycleGovernance, data LifecycleDataStore) (*LifecycleExecutor, error) {
-	if governance == nil || data == nil {
-		return nil, errors.New("lifecycle governance and data stores are required")
+func NewLifecycleExecutor(governance LifecycleGovernance) (*LifecycleExecutor, error) {
+	if governance == nil {
+		return nil, errors.New("lifecycle governance store is required")
 	}
-	return &LifecycleExecutor{governance: governance, data: data}, nil
+	return &LifecycleExecutor{governance: governance}, nil
 }
 
 func (executor *LifecycleExecutor) Execute(ctx context.Context, job SchedulerJob, payload LifecyclePayload, now time.Time) (LifecycleOutcome, error) {
@@ -139,10 +133,9 @@ func (executor *LifecycleExecutor) Execute(ctx context.Context, job SchedulerJob
 	if err = executor.governance.RecordLifecycleEvent(ctx, job, payload, "DELETE_STARTED", map[string]any{"deletionRequestId": deletion.ID}, now); err != nil {
 		return LifecycleOutcome{}, err
 	}
-	if err = executor.data.DeleteMetricResult(ctx, job.TenantID, job.SiteID, target.ResultID); err != nil {
-		_ = executor.governance.RecordLifecycleEvent(ctx, job, payload, "FAILED", map[string]any{"deletionRequestId": deletion.ID, "reason": "SOURCE_DELETE_FAILED"}, now)
-		return LifecycleOutcome{}, fmt.Errorf("delete Metric Result source: %w", err)
-	}
+	// ClickHouse metric_result_facts rows are reclaimed in bulk per monthly partition by
+	// ClickHouseRetentionPruner after cold archival; per-row ALTER DELETE mutations would
+	// repeatedly rewrite active parts. PostgreSQL tombstones govern per-revision lifecycle state.
 	tombstoneID, err := executor.governance.ApplyRetentionDeletion(ctx, job, payload, target, deletion, now)
 	if err != nil {
 		return LifecycleOutcome{}, err
