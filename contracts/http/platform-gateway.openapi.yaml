@@ -2427,6 +2427,37 @@
         }
       }
     },
+    "/api/v1/alarm-rules/dead-letters": {
+      "get": {
+        "operationId": "listAlarmRuleDeadLetters",
+        "summary": "List dead-letter Alarm rule action outbox entries for a Site",
+        "parameters": [
+          { "name": "siteId", "in": "query", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 50 } }
+        ],
+        "responses": {
+          "200": { "description": "Dead-letter rule action entries.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlarmRuleDeadLetterListEnvelope" } } } },
+          "4XX": { "$ref": "#/components/responses/Problem" },
+          "5XX": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/alarm-rules/dead-letters/{outboxId}/replay": {
+      "post": {
+        "operationId": "replayAlarmRuleDeadLetter",
+        "summary": "Replay one dead-letter Alarm rule action entry",
+        "parameters": [
+          { "name": "outboxId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "name": "siteId", "in": "query", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "$ref": "#/components/parameters/CsrfToken" }
+        ],
+        "responses": {
+          "200": { "description": "Rule action re-queued to PENDING.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlarmRuleDeadLetterReplayEnvelope" } } } },
+          "4XX": { "$ref": "#/components/responses/Problem" },
+          "5XX": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
     "/api/v1/alarms/{alarmId}": {
       "get": {
         "operationId": "getAlarmV212",
@@ -3393,6 +3424,94 @@
           "409": { "$ref": "#/components/responses/Problem" },
           "428": { "$ref": "#/components/responses/Problem" },
           "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/devices/{deviceId}/priority-lock": {
+      "put": {
+        "operationId": "putDevicePriorityLock",
+        "summary": "Acquire or extend a bounded priority lock on a Device",
+        "parameters": [
+          { "$ref": "#/components/parameters/SiteId" },
+          { "name": "deviceId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "$ref": "#/components/parameters/CsrfToken" }
+        ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DevicePriorityLockMutation" } } } },
+        "responses": {
+          "200": { "description": "Updated Device priority lock.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DevicePriorityLockState" } } } },
+          "4XX": { "$ref": "#/components/responses/Problem" },
+          "5XX": { "$ref": "#/components/responses/Problem" }
+        }
+      },
+      "delete": {
+        "operationId": "deleteDevicePriorityLock",
+        "summary": "Release the active priority lock on a Device",
+        "parameters": [
+          { "$ref": "#/components/parameters/SiteId" },
+          { "name": "deviceId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "name": "reason", "in": "query", "required": false, "schema": { "type": "string", "minLength": 1, "maxLength": 1000 } },
+          { "$ref": "#/components/parameters/CsrfToken" }
+        ],
+        "requestBody": { "required": false, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DevicePriorityLockReleaseRequest" } } } },
+        "responses": {
+          "200": { "description": "Released Device priority lock.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DevicePriorityLockReleaseResponse" } } } },
+          "4XX": { "$ref": "#/components/responses/Problem" },
+          "5XX": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/control-alarms/dead-letters": {
+      "get": {
+        "operationId": "listControlAlarmDeadLetters",
+        "summary": "List dead-letter control alarm deliveries for a Site",
+        "parameters": [
+          { "$ref": "#/components/parameters/SiteId" },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 50 } }
+        ],
+        "responses": {
+          "200": { "description": "Dead-letter control alarm outbox entries.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ControlAlarmDeadLetterListEnvelope" } } } },
+          "4XX": { "$ref": "#/components/responses/Problem" },
+          "5XX": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/control-alarms/dead-letters/{outboxId}/replay": {
+      "post": {
+        "operationId": "replayControlAlarmDeadLetter",
+        "summary": "Replay one dead-letter control alarm outbox entry",
+        "parameters": [
+          { "$ref": "#/components/parameters/SiteId" },
+          { "name": "outboxId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "$ref": "#/components/parameters/CsrfToken" }
+        ],
+        "responses": {
+          "200": { "description": "Control alarm delivery re-queued to PENDING.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ControlAlarmDeadLetterReplayResponse" } } } },
+          "4XX": { "$ref": "#/components/responses/Problem" },
+          "5XX": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/alarm-routing": {
+      "get": {
+        "operationId": "getSiteAlarmRouting",
+        "summary": "Read non-secret alarm notification routing summary for a Site",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }],
+        "responses": {
+          "200": { "description": "Active Site alarm routing summary.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SiteAlarmRoutingEnvelope" } } } },
+          "4XX": { "$ref": "#/components/responses/Problem" },
+          "5XX": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/alarm-routing/reload": {
+      "post": {
+        "operationId": "reloadSiteAlarmRouting",
+        "summary": "Hot-reload alarm notification routing configuration from disk",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/CsrfToken" }],
+        "responses": {
+          "200": { "description": "Reload result and active Site alarm routing summary.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SiteAlarmRoutingReloadEnvelope" } } } },
+          "4XX": { "$ref": "#/components/responses/Problem" },
+          "5XX": { "$ref": "#/components/responses/Problem" }
         }
       }
     },
@@ -4955,11 +5074,41 @@
           "overriddenFields": { "type": "array", "maxItems": 32, "items": { "type": "string", "minLength": 1, "maxLength": 128 } },
           "dependsOnRuleIds": { "type": "array", "maxItems": 16, "items": { "$ref": "#/components/schemas/UUIDv7" } },
           "hopDepth": { "type": "integer", "minimum": 0, "maximum": 3 },
+          "dependencyGate": { "type": "string", "enum": ["NONE", "ALL_ACTIVE", "ANY_ACTIVE"] },
+          "actions": { "type": "array", "maxItems": 4, "items": { "$ref": "#/components/schemas/AlarmRuleAction" } },
           "triggerMode": { "type": "string", "enum": ["SIMPLE", "DURATION", "REPEATING"], "description": "SIMPLE raises at once; DURATION once the raise condition has held durationSeconds; REPEATING once it has held repeatCount readings in a row." },
           "durationSeconds": { "type": "integer", "minimum": 1 },
           "repeatCount": { "type": "integer", "minimum": 1 },
           "raise": { "$ref": "#/components/schemas/AlarmRuleCondition" },
           "clear": { "$ref": "#/components/schemas/AlarmRuleCondition" }
+        }
+      },
+      "AlarmRuleAction": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind"],
+        "properties": {
+          "kind": { "type": "string", "enum": ["WEBHOOK", "WORK_ORDER", "PROTECTION_COMMAND"] },
+          "triggerOn": { "type": "string", "enum": ["RAISE", "CLEAR", "BOTH"] },
+          "webhookUrl": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "secretRef": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "workOrderPriority": { "type": "string", "enum": ["LOW", "MEDIUM", "HIGH", "URGENT"] },
+          "workOrderTitle": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "targetDeviceId": { "$ref": "#/components/schemas/UUIDv7" },
+          "targetPointCode": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "capability": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "parameters": { "type": "object", "additionalProperties": { "type": "number" } }
+        }
+      },
+      "SimulatedAction": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "triggerOn", "target", "summary"],
+        "properties": {
+          "kind": { "type": "string", "enum": ["WEBHOOK", "WORK_ORDER", "PROTECTION_COMMAND"] },
+          "triggerOn": { "type": "string", "enum": ["RAISE", "CLEAR", "BOTH"] },
+          "target": { "type": "string" },
+          "summary": { "type": "string" }
         }
       },
       "AlarmRuleCondition": {
@@ -5014,7 +5163,8 @@
         "required": ["readings"],
         "properties": {
           "evaluatedAt": { "type": "string", "minLength": 1, "maxLength": 64 },
-          "readings": { "type": "array", "maxItems": 64, "items": { "$ref": "#/components/schemas/AlarmRuleSimulationReading" } }
+          "readings": { "type": "array", "maxItems": 64, "items": { "$ref": "#/components/schemas/AlarmRuleSimulationReading" } },
+          "upstreamActiveRuleIds": { "type": "array", "maxItems": 16, "items": { "$ref": "#/components/schemas/UUIDv7" } }
         }
       },
       "AlarmRuleSimulationRequest": {
@@ -5023,6 +5173,8 @@
         "required": ["ruleId", "steps"],
         "properties": {
           "ruleId": { "$ref": "#/components/schemas/UUIDv7" },
+          "dependencyGate": { "type": "string", "enum": ["NONE", "ALL_ACTIVE", "ANY_ACTIVE"] },
+          "actions": { "type": "array", "maxItems": 4, "items": { "$ref": "#/components/schemas/AlarmRuleAction" } },
           "steps": { "type": "array", "minItems": 1, "maxItems": 32, "items": { "$ref": "#/components/schemas/AlarmRuleSimulationStepInput" } }
         }
       },
@@ -5037,7 +5189,8 @@
           "effect": { "type": "string", "enum": ["NONE", "PUBLISH", "CLEAR"] },
           "active": { "type": "boolean" },
           "qualityBlocker": { "type": "string" },
-          "matchedReasons": { "type": "array", "items": { "type": "string" } }
+          "matchedReasons": { "type": "array", "items": { "type": "string" } },
+          "plannedActions": { "type": "array", "items": { "$ref": "#/components/schemas/SimulatedAction" } }
         }
       },
       "AlarmRuleSimulationResult": {
@@ -5049,6 +5202,8 @@
           "title": { "type": "string", "minLength": 1, "maxLength": 256 },
           "hopDepth": { "type": "integer", "minimum": 0, "maximum": 3 },
           "dependsOnRuleIds": { "type": "array", "maxItems": 16, "items": { "$ref": "#/components/schemas/UUIDv7" } },
+          "dependencyGate": { "type": "string", "enum": ["NONE", "ALL_ACTIVE", "ANY_ACTIVE"] },
+          "actions": { "type": "array", "maxItems": 4, "items": { "$ref": "#/components/schemas/AlarmRuleAction" } },
           "finalActive": { "type": "boolean" },
           "steps": { "type": "array", "minItems": 1, "maxItems": 32, "items": { "$ref": "#/components/schemas/AlarmRuleSimulationStep" } }
         }
@@ -5059,6 +5214,64 @@
         "required": ["data", "meta"],
         "properties": {
           "data": { "$ref": "#/components/schemas/AlarmRuleSimulationResult" },
+          "meta": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["requestId"],
+            "properties": { "requestId": { "type": "string" } }
+          }
+        }
+      },
+      "AlarmRuleDeadLetter": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["outboxId", "siteId", "alarmId", "alarmVersion", "assignmentId", "actionIndex", "triggerKind", "actionKind", "targetRef", "attempts", "deadLetteredAt", "createdAt"],
+        "properties": {
+          "outboxId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "alarmId": { "$ref": "#/components/schemas/UUIDv7" },
+          "alarmVersion": { "type": "integer", "minimum": 1 },
+          "assignmentId": { "$ref": "#/components/schemas/UUIDv7" },
+          "actionIndex": { "type": "integer", "minimum": 0 },
+          "triggerKind": { "type": "string", "enum": ["RAISE", "CLEAR", "BOTH"] },
+          "actionKind": { "type": "string", "enum": ["WEBHOOK", "WORK_ORDER", "PROTECTION_COMMAND"] },
+          "targetRef": { "type": "string" },
+          "attempts": { "type": "integer", "minimum": 0 },
+          "lastErrorCode": { "type": "string" },
+          "deadLetteredAt": { "type": "string" },
+          "createdAt": { "type": "string" }
+        }
+      },
+      "AlarmRuleDeadLetterListEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["data", "meta"],
+        "properties": {
+          "data": { "type": "array", "items": { "$ref": "#/components/schemas/AlarmRuleDeadLetter" } },
+          "meta": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["requestId"],
+            "properties": { "requestId": { "type": "string" } }
+          }
+        }
+      },
+      "AlarmRuleDeadLetterReplay": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["outboxId", "siteId", "status"],
+        "properties": {
+          "outboxId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "status": { "type": "string", "enum": ["PENDING", "DELIVERED", "DEAD_LETTER"] }
+        }
+      },
+      "AlarmRuleDeadLetterReplayEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["data", "meta"],
+        "properties": {
+          "data": { "$ref": "#/components/schemas/AlarmRuleDeadLetterReplay" },
           "meta": {
             "type": "object",
             "additionalProperties": false,
@@ -6517,7 +6730,210 @@
           "updatedAt": { "oneOf": [{ "$ref": "#/components/schemas/Instant" }, { "type": "null" }] },
           "revision": { "type": "integer", "minimum": 0 },
           "assetLocks": { "type": "array", "items": { "$ref": "#/components/schemas/AssetControlLockState" } },
+          "devicePriorityLocks": { "type": "array", "items": { "$ref": "#/components/schemas/DevicePriorityLockState" } },
           "activeMaintenanceWindow": { "$ref": "#/components/schemas/ActiveMaintenanceWindow" }
+        }
+      },
+      "DevicePriorityLockState": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["deviceId", "lockedPriority", "commandSource", "lockedBy", "lockedUntil", "reason", "updatedAt"],
+        "properties": {
+          "deviceId": { "$ref": "#/components/schemas/UUIDv7" },
+          "lockedPriority": { "type": "string", "enum": ["SCHEDULE", "AI_OPTIMIZATION", "MANUAL_OVERRIDE", "PROTECTION_RULE", "SAFETY_INTERLOCK"] },
+          "commandSource": { "type": "string" },
+          "lockedBy": { "type": "string" },
+          "lockedByName": { "oneOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
+          "lockedUntil": { "type": "string" },
+          "reason": { "type": "string", "maxLength": 1000 },
+          "updatedAt": { "type": "string" }
+        }
+      },
+      "DevicePriorityLockMutation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["lockedPriority", "reason"],
+        "properties": {
+          "lockedPriority": { "type": "string", "enum": ["MANUAL_OVERRIDE", "PROTECTION_RULE", "SAFETY_INTERLOCK"] },
+          "durationMinutes": { "type": "integer", "minimum": 5, "maximum": 1440 },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 1000 }
+        }
+      },
+      "DevicePriorityLockReleaseRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "reason": { "type": "string", "minLength": 1, "maxLength": 1000 }
+        }
+      },
+      "DevicePriorityLockReleaseResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["released", "deviceId"],
+        "properties": {
+          "released": { "type": "boolean" },
+          "deviceId": { "$ref": "#/components/schemas/UUIDv7" }
+        }
+      },
+      "ControlAlarmDeadLetter": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["outboxId", "commandId", "deviceId", "eventKind", "reasonCode", "attempts", "createdAt", "updatedAt"],
+        "properties": {
+          "outboxId": { "$ref": "#/components/schemas/UUIDv7" },
+          "commandId": { "type": "string" },
+          "deviceId": { "type": "string" },
+          "eventKind": { "type": "string" },
+          "reasonCode": { "type": "string" },
+          "attempts": { "type": "integer", "minimum": 0 },
+          "lastErrorCode": { "type": "string" },
+          "createdAt": { "type": "string" },
+          "updatedAt": { "type": "string" }
+        }
+      },
+      "ControlAlarmDeadLetterListEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["data", "meta"],
+        "properties": {
+          "data": { "type": "array", "items": { "$ref": "#/components/schemas/ControlAlarmDeadLetter" } },
+          "meta": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["requestId"],
+            "properties": { "requestId": { "type": "string" } }
+          }
+        }
+      },
+      "ControlAlarmDeadLetterReplayResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["replayed", "outboxId"],
+        "properties": {
+          "replayed": { "type": "boolean" },
+          "outboxId": { "$ref": "#/components/schemas/UUIDv7" }
+        }
+      },
+      "AlarmRoutingQuietHours": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["start", "end", "bypassSeverity"],
+        "properties": {
+          "start": { "type": "string" },
+          "end": { "type": "string" },
+          "bypassSeverity": { "type": "string", "enum": ["INFO", "WARNING", "MINOR", "MAJOR", "CRITICAL"] }
+        }
+      },
+      "AlarmRoutingRootCauseRule": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["whenActivePrefix", "suppressPrefixes"],
+        "properties": {
+          "whenActivePrefix": { "type": "string" },
+          "whenDeviceId": { "type": "string" },
+          "scopeSameDevice": { "type": "boolean" },
+          "suppressPrefixes": { "type": "array", "items": { "type": "string" } },
+          "suppressDeviceIds": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "AlarmRoutingStepSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["afterMinutes", "channels", "recipientCount"],
+        "properties": {
+          "afterMinutes": { "type": "integer", "minimum": 0 },
+          "channels": { "type": "array", "items": { "type": "string" } },
+          "recipientCount": { "type": "integer", "minimum": 0 }
+        }
+      },
+      "AlarmRoutingRouteSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "minSeverity", "notifyAck", "notifyRecovery", "steps"],
+        "properties": {
+          "name": { "type": "string" },
+          "minSeverity": { "type": "string", "enum": ["INFO", "WARNING", "MINOR", "MAJOR", "CRITICAL"] },
+          "alarmTypePrefixes": { "type": "array", "items": { "type": "string" } },
+          "cooldownMinutes": { "type": "integer", "minimum": 0 },
+          "groupWindowSeconds": { "type": "integer", "minimum": 0 },
+          "groupMaxItems": { "type": "integer", "minimum": 0 },
+          "groupBy": { "type": "string" },
+          "notifyAck": { "type": "boolean" },
+          "notifyRecovery": { "type": "boolean" },
+          "steps": { "type": "array", "items": { "$ref": "#/components/schemas/AlarmRoutingStepSummary" } }
+        }
+      },
+      "SiteAlarmRoutingSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["siteId", "siteName", "timezone", "holdMinutes", "maxAgeHours", "rateLimitPerHour", "routes", "configDigest", "loadedAt", "reloadCount"],
+        "properties": {
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteName": { "type": "string" },
+          "timezone": { "type": "string" },
+          "holdMinutes": { "type": "integer", "minimum": 0 },
+          "maxAgeHours": { "type": "integer", "minimum": 0 },
+          "rateLimitPerHour": { "type": "integer", "minimum": 0 },
+          "quietHours": { "$ref": "#/components/schemas/AlarmRoutingQuietHours" },
+          "rootCauseAlarmType": { "type": "string" },
+          "suppressWhenRootCause": { "type": "array", "items": { "type": "string" } },
+          "rootCauseRules": { "type": "array", "items": { "$ref": "#/components/schemas/AlarmRoutingRootCauseRule" } },
+          "routes": { "type": "array", "items": { "$ref": "#/components/schemas/AlarmRoutingRouteSummary" } },
+          "configDigest": { "type": "string" },
+          "loadedAt": { "type": "string" },
+          "reloadCount": { "type": "integer", "minimum": 0 },
+          "lastReloadErrorCode": { "type": "string" }
+        }
+      },
+      "SiteAlarmRoutingReloadResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["siteId", "siteName", "timezone", "holdMinutes", "maxAgeHours", "rateLimitPerHour", "routes", "configDigest", "loadedAt", "reloadCount", "changed"],
+        "properties": {
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteName": { "type": "string" },
+          "timezone": { "type": "string" },
+          "holdMinutes": { "type": "integer", "minimum": 0 },
+          "maxAgeHours": { "type": "integer", "minimum": 0 },
+          "rateLimitPerHour": { "type": "integer", "minimum": 0 },
+          "quietHours": { "$ref": "#/components/schemas/AlarmRoutingQuietHours" },
+          "rootCauseAlarmType": { "type": "string" },
+          "suppressWhenRootCause": { "type": "array", "items": { "type": "string" } },
+          "rootCauseRules": { "type": "array", "items": { "$ref": "#/components/schemas/AlarmRoutingRootCauseRule" } },
+          "routes": { "type": "array", "items": { "$ref": "#/components/schemas/AlarmRoutingRouteSummary" } },
+          "configDigest": { "type": "string" },
+          "loadedAt": { "type": "string" },
+          "reloadCount": { "type": "integer", "minimum": 0 },
+          "lastReloadErrorCode": { "type": "string" },
+          "changed": { "type": "boolean" }
+        }
+      },
+      "SiteAlarmRoutingEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["data", "meta"],
+        "properties": {
+          "data": { "$ref": "#/components/schemas/SiteAlarmRoutingSummary" },
+          "meta": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["requestId"],
+            "properties": { "requestId": { "type": "string" } }
+          }
+        }
+      },
+      "SiteAlarmRoutingReloadEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["data", "meta"],
+        "properties": {
+          "data": { "$ref": "#/components/schemas/SiteAlarmRoutingReloadResult" },
+          "meta": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["requestId"],
+            "properties": { "requestId": { "type": "string" } }
+          }
         }
       },
       "SiteControlModeMutation": {
@@ -6546,6 +6962,7 @@
           "updatedAt": { "oneOf": [{ "$ref": "#/components/schemas/Instant" }, { "type": "null" }] },
           "revision": { "type": "integer", "minimum": 0 },
           "assetLocks": { "type": "array", "items": { "$ref": "#/components/schemas/AssetControlLockState" } },
+          "devicePriorityLocks": { "type": "array", "items": { "$ref": "#/components/schemas/DevicePriorityLockState" } },
           "activeMaintenanceWindow": { "$ref": "#/components/schemas/ActiveMaintenanceWindow" },
           "cancelledCommandIds": { "type": "array", "items": { "type": "string" } }
         }

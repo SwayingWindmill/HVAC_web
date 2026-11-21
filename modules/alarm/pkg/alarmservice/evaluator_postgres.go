@@ -78,6 +78,13 @@ func (store *PostgresStore) EvaluateAssignedSnapshot(ctx context.Context, assign
 	if found {
 		previous = persisted.State
 	}
+	if snapshot.UpstreamRuleActive == nil && (assigned.Policy.DependencyGate == DependencyGateAllActive || assigned.Policy.DependencyGate == DependencyGateAnyActive) {
+		upstreamActive, err := loadUpstreamActiveMap(ctx, tx, snapshot.TenantID, snapshot.SiteID, assigned.Policy.DependsOnRuleIDs)
+		if err != nil {
+			return EvaluationDecision{}, err
+		}
+		snapshot.UpstreamRuleActive = upstreamActive
+	}
 	decision, err := evaluateAtSiteClock(ctx, tx, snapshot.TenantID, snapshot.SiteID, assigned.Policy, snapshot, previous, now)
 	if err != nil {
 		return EvaluationDecision{}, err
@@ -88,7 +95,7 @@ func (store *PostgresStore) EvaluateAssignedSnapshot(ctx context.Context, assign
 		}
 		return decision, nil
 	}
-	if err := store.applyEvaluationEffect(ctx, tx, snapshot.TenantID, snapshot.SiteID, &decision); err != nil {
+	if err := store.applyEvaluationEffect(ctx, tx, snapshot.TenantID, snapshot.SiteID, assigned, &decision); err != nil {
 		return EvaluationDecision{}, err
 	}
 	if err := persistEvaluation(ctx, tx, assigned, decision, snapshot, persisted); err != nil {
@@ -177,6 +184,13 @@ func (store *PostgresStore) EvaluateClaim(ctx context.Context, claim EvaluationC
 	if err != nil {
 		return EvaluationDecision{}, err
 	}
+	if assigned.Policy.DependencyGate == DependencyGateAllActive || assigned.Policy.DependencyGate == DependencyGateAnyActive {
+		upstreamActive, err := loadUpstreamActiveMap(ctx, tx, claim.TenantID, claim.SiteID, assigned.Policy.DependsOnRuleIDs)
+		if err != nil {
+			return EvaluationDecision{}, err
+		}
+		persisted.Snapshot.UpstreamRuleActive = upstreamActive
+	}
 	decision, err := evaluateAtSiteClock(ctx, tx, claim.TenantID, claim.SiteID, assigned.Policy, persisted.Snapshot, persisted.State, now)
 	if err != nil {
 		return EvaluationDecision{}, err
@@ -184,7 +198,7 @@ func (store *PostgresStore) EvaluateClaim(ctx context.Context, claim EvaluationC
 	if decision.State.Version == persisted.State.Version {
 		return EvaluationDecision{}, ErrEvaluationClaimLost
 	}
-	if err := store.applyEvaluationEffect(ctx, tx, claim.TenantID, claim.SiteID, &decision); err != nil {
+	if err := store.applyEvaluationEffect(ctx, tx, claim.TenantID, claim.SiteID, assigned, &decision); err != nil {
 		return EvaluationDecision{}, err
 	}
 	if err := persistEvaluation(ctx, tx, assigned, decision, persisted.Snapshot, persisted); err != nil {
@@ -196,7 +210,7 @@ func (store *PostgresStore) EvaluateClaim(ctx context.Context, claim EvaluationC
 	return decision, nil
 }
 
-func (store *PostgresStore) applyEvaluationEffect(ctx context.Context, tx pgx.Tx, tenantID, siteID string, decision *EvaluationDecision) error {
+func (store *PostgresStore) applyEvaluationEffect(ctx context.Context, tx pgx.Tx, tenantID, siteID string, assigned assignedAlarmPolicy, decision *EvaluationDecision) error {
 	switch decision.Effect {
 	case EvaluationEffectNone:
 		return nil
@@ -210,20 +224,58 @@ func (store *PostgresStore) applyEvaluationEffect(ctx context.Context, tx pgx.Tx
 		}
 		decision.State.ActiveAlarmID = incident.AlarmID
 		decision.State.ActiveIncidentCorrelationID = incident.IncidentCorrelationID
-		return nil
+		occurredAt := parseEvaluationEffectTime(decision.Publication.OccurredAt)
+		return store.enqueueRuleActionsInTx(ctx, tx, tenantID, siteID, incident, assigned, ActionTriggerRaise, occurredAt)
 	case EvaluationEffectClear:
 		if decision.Recovery == nil {
 			return errors.New("alarm evaluation clear decision is incomplete")
 		}
-		if _, err := store.clearInTransaction(ctx, tx, tenantID, siteID, *decision.Recovery); err != nil {
+		cleared, err := store.clearInTransaction(ctx, tx, tenantID, siteID, *decision.Recovery)
+		if err != nil {
 			return err
 		}
 		decision.State.ActiveAlarmID = ""
 		decision.State.ActiveIncidentCorrelationID = ""
-		return nil
+		occurredAt := parseEvaluationEffectTime(decision.Recovery.OccurredAt)
+		return store.enqueueRuleActionsInTx(ctx, tx, tenantID, siteID, cleared, assigned, ActionTriggerClear, occurredAt)
 	default:
 		return errors.New("alarm evaluation effect is invalid")
 	}
+}
+
+func loadUpstreamActiveMap(ctx context.Context, tx pgx.Tx, tenantID, siteID string, depIDs []string) (map[string]bool, error) {
+	active := make(map[string]bool, len(depIDs))
+	if len(depIDs) == 0 {
+		return active, nil
+	}
+	rows, err := tx.Query(ctx, `
+SELECT assignment_id::text
+FROM alarm_runtime.alarm_evaluation_state
+WHERE tenant_id=$1 AND site_id=$2 AND assignment_id = ANY($3::uuid[]) AND active_alarm_id IS NOT NULL`,
+		tenantID, siteID, depIDs)
+	if err != nil {
+		return nil, fmt.Errorf("load upstream Alarm evaluation states: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var assignmentID string
+		if err := rows.Scan(&assignmentID); err != nil {
+			return nil, fmt.Errorf("scan upstream Alarm evaluation state: %w", err)
+		}
+		active[assignmentID] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate upstream Alarm evaluation states: %w", err)
+	}
+	return active, nil
+}
+
+func parseEvaluationEffectTime(raw string) time.Time {
+	parsed, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return time.Now().UTC()
+	}
+	return parsed.UTC()
 }
 
 func (store *PostgresStore) publishInTransaction(ctx context.Context, tx pgx.Tx, tenantID, siteID string, publication Publication) (alarmmodel.Alarm, error) {

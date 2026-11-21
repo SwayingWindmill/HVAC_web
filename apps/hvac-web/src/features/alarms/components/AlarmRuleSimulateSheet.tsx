@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { AlertCircle, Plus, Play, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { formatTelemetryUnit } from '@/domain/centralPlantTelemetry';
@@ -20,6 +21,13 @@ import {
   formatQualityBlocker,
   type EvaluationDisplayContext,
 } from '../alarm-presentation';
+import {
+  describeActionKind,
+  describeActionTrigger,
+  describeDependencyGate,
+  describePlannedActionSummary,
+  summarizeRuleActions,
+} from '../alarm-operations';
 import {
   collectRuleReadings,
   describeRuleLinkage,
@@ -51,13 +59,19 @@ function defaultReadingValue(reading: AlarmRuleReading): string {
   return '10';
 }
 
-function initialStepsForRule(rule: AlarmRule): ReadonlyArray<Record<string, string>> {
+interface SimulationStepDraft {
+  readonly id: string;
+  readonly values: Record<string, string>;
+}
+
+function defaultValuesForRule(rule: AlarmRule): Record<string, string> {
   const readings = collectRuleReadings(rule);
-  const baseRow = Object.fromEntries(readings.map((reading) => [readingKey(reading), defaultReadingValue(reading)]));
-  return [
-    { ...baseRow },
-    { ...baseRow },
-  ];
+  return Object.fromEntries(readings.map((reading) => [readingKey(reading), defaultReadingValue(reading)]));
+}
+
+function createStepDraft(counter: { current: number }, values: Record<string, string>): SimulationStepDraft {
+  counter.current += 1;
+  return { id: `step-${counter.current}`, values: { ...values } };
 }
 
 function parseSampleValue(raw: string): { readonly ok: true; readonly value: number | string | boolean } | { readonly ok: false; readonly message: string } {
@@ -106,7 +120,10 @@ export function AlarmRuleSimulateSheet({
   readonly names: ReadingNames;
   readonly onClose: () => void;
 }) {
-  const [steps, setSteps] = useState<Array<Record<string, string>>>([]);
+  const upstreamGroupId = useId();
+  const stepSeqRef = useRef(0);
+  const [steps, setSteps] = useState<SimulationStepDraft[]>([]);
+  const [upstreamActiveIds, setUpstreamActiveIds] = useState<string[]>([]);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [result, setResult] = useState<AlarmRuleSimulationResult | null>(null);
 
@@ -122,12 +139,18 @@ export function AlarmRuleSimulateSheet({
   useEffect(() => {
     if (!rule) {
       setSteps([]);
+      setUpstreamActiveIds([]);
       setFieldErrors({});
       setResult(null);
       resetSimulation();
       return;
     }
-    setSteps(initialStepsForRule(rule).map((row) => ({ ...row })));
+    const baseValues = defaultValuesForRule(rule);
+    setSteps([
+      createStepDraft(stepSeqRef, baseValues),
+      createStepDraft(stepSeqRef, baseValues),
+    ]);
+    setUpstreamActiveIds([]);
     setFieldErrors({});
     setResult(null);
     resetSimulation();
@@ -135,9 +158,9 @@ export function AlarmRuleSimulateSheet({
 
   const readings = rule ? collectRuleReadings(rule) : [];
 
-  const handleFieldChange = (stepIndex: number, key: string, value: string) => {
-    setSteps((prev) => prev.map((row, idx) => (idx === stepIndex ? { ...row, [key]: value } : row)));
-    const errKey = `${stepIndex}:${key}`;
+  const handleFieldChange = (stepId: string, key: string, value: string) => {
+    setSteps((prev) => prev.map((step) => (step.id === stepId ? { ...step, values: { ...step.values, [key]: value } } : step)));
+    const errKey = `${stepId}:${key}`;
     if (fieldErrors[errKey]) {
       setFieldErrors((prev) => {
         const next = { ...prev };
@@ -149,26 +172,32 @@ export function AlarmRuleSimulateSheet({
 
   const handleAddStep = () => {
     if (!rule || steps.length >= MAX_STEPS) return;
-    const template = steps.at(-1) ?? initialStepsForRule(rule)[0];
-    setSteps((prev) => [...prev, { ...template }]);
+    const template = steps.at(-1)?.values ?? defaultValuesForRule(rule);
+    setSteps((prev) => [...prev, createStepDraft(stepSeqRef, template)]);
   };
 
-  const handleRemoveStep = (stepIndex: number) => {
+  const handleRemoveStep = (stepId: string) => {
     if (steps.length <= 1) return;
-    setSteps((prev) => prev.filter((_, idx) => idx !== stepIndex));
-    setFieldErrors({});
+    setSteps((prev) => prev.filter((step) => step.id !== stepId));
+    setFieldErrors((prev) => {
+      const next: Record<string, string> = {};
+      for (const [key, msg] of Object.entries(prev)) {
+        if (!key.startsWith(`${stepId}:`)) next[key] = msg;
+      }
+      return next;
+    });
   };
 
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!rule) return;
     const nextErrors: Record<string, string> = {};
-    const parsedSteps = steps.map((row, stepIndex) => ({
+    const parsedSteps = steps.map((step) => ({
       readings: readings.map((reading) => {
         const key = readingKey(reading);
-        const parsed = parseSampleValue(row[key] ?? '');
+        const parsed = parseSampleValue(step.values[key] ?? '');
         if (!parsed.ok) {
-          nextErrors[`${stepIndex}:${key}`] = parsed.message;
+          nextErrors[`${step.id}:${key}`] = parsed.message;
           return { deviceId: reading.deviceId, pointCode: reading.pointCode, value: 0 };
         }
         return {
@@ -184,11 +213,17 @@ export function AlarmRuleSimulateSheet({
       return;
     }
     setFieldErrors({});
+    const stepsWithUpstream = upstreamActiveIds.length > 0
+      ? parsedSteps.map((step) => ({ ...step, upstreamActiveRuleIds: upstreamActiveIds }))
+      : parsedSteps;
     simulation.mutate({
       ruleId: rule.ruleId,
-      steps: parsedSteps,
+      steps: stepsWithUpstream,
     });
   };
+
+  const upstreamDeps = rule?.dependsOnRuleIds ?? [];
+  const actionsSummary = rule ? summarizeRuleActions(rule.actions) : null;
 
   return (
     <Sheet open={rule !== null} onOpenChange={(open) => { if (!open) onClose(); }}>
@@ -197,13 +232,41 @@ export function AlarmRuleSimulateSheet({
           <SheetTitle>{rule ? `规则模拟试算：${rule.title}` : '规则模拟试算'}</SheetTitle>
           <SheetDescription>
             {rule
-              ? `${describeRuleOrigin(rule)} · ${describeRuleLinkage(rule, titleByRuleId)}。在内存中推演连续采样序列，不产生真实告警。`
+              ? `${describeRuleOrigin(rule)} · ${describeRuleLinkage(rule, titleByRuleId)}${actionsSummary ? ` · ${actionsSummary}` : ''}。在内存中推演连续采样序列，不产生真实告警。`
               : '输入多步采样值验证规则触发与恢复条件。'}
           </SheetDescription>
         </SheetHeader>
 
         {rule ? (
           <form onSubmit={handleSubmit} className="flex flex-1 flex-col gap-4 p-4">
+            {upstreamDeps.length > 0 ? (
+              <div role="group" aria-labelledby={upstreamGroupId} className="flex flex-col gap-2 rounded-lg border border-divider bg-muted/30 p-3">
+                <span id={upstreamGroupId} className="text-xs font-medium text-foreground">
+                  模拟上游告警激活状态（{describeDependencyGate(rule.dependencyGate)}）
+                </span>
+                <div className="flex flex-wrap gap-3">
+                  {upstreamDeps.map((depId) => {
+                    const label = titleByRuleId.get(depId) ?? '前置规则';
+                    const checked = upstreamActiveIds.includes(depId);
+                    return (
+                      <Label key={depId} className="flex cursor-pointer items-center gap-2 text-xs font-normal text-foreground">
+                        <Checkbox
+                          checked={checked}
+                          onCheckedChange={(nextChecked) => {
+                            setUpstreamActiveIds((prev) =>
+                              nextChecked === true
+                                ? (prev.includes(depId) ? prev : [...prev, depId])
+                                : prev.filter((id) => id !== depId),
+                            );
+                          }}
+                        />
+                        <span>{label}</span>
+                      </Label>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
             <div className="flex items-center justify-between">
               <span className="text-xs font-medium text-muted-foreground">
                 采样步序列（每步间隔 1 分钟，最多 {MAX_STEPS} 步）
@@ -227,9 +290,9 @@ export function AlarmRuleSimulateSheet({
             ) : null}
 
             <div className="flex flex-col gap-3">
-              {steps.map((row, stepIndex) => (
+              {steps.map((step, stepIndex) => (
                 <fieldset
-                  key={`sim-step-${stepIndex}`}
+                  key={step.id}
                   className="flex flex-col gap-3 rounded-lg border border-divider bg-background/60 p-3"
                 >
                   <legend className="px-1 text-xs font-semibold text-foreground">
@@ -242,7 +305,7 @@ export function AlarmRuleSimulateSheet({
                         variant="ghost"
                         size="sm"
                         aria-label={`删除第 ${stepIndex + 1} 步`}
-                        onClick={() => handleRemoveStep(stepIndex)}
+                        onClick={() => handleRemoveStep(step.id)}
                         disabled={simulation.isPending}
                       >
                         <Trash2 className="size-3.5" aria-hidden="true" />
@@ -253,8 +316,8 @@ export function AlarmRuleSimulateSheet({
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     {readings.map((reading) => {
                       const key = readingKey(reading);
-                      const inputId = `sim-${stepIndex}-${key.replace(/\//g, '-')}`;
-                      const errKey = `${stepIndex}:${key}`;
+                      const inputId = `sim-${step.id}-${key.replace(/\//g, '-')}`;
+                      const errKey = `${step.id}:${key}`;
                       const errMsg = fieldErrors[errKey];
                       const errId = `${inputId}-error`;
                       const devName = names.device(reading.deviceId);
@@ -270,10 +333,10 @@ export function AlarmRuleSimulateSheet({
                           </Label>
                           <Input
                             id={inputId}
-                            value={row[key] ?? ''}
+                            value={step.values[key] ?? ''}
                             aria-invalid={Boolean(errMsg)}
                             aria-describedby={errMsg ? errId : undefined}
-                            onChange={(e) => handleFieldChange(stepIndex, key, e.target.value)}
+                            onChange={(e) => handleFieldChange(step.id, key, e.target.value)}
                             onKeyDown={(e) => {
                               if (e.key === 'Enter' && (e.nativeEvent.isComposing || e.keyCode === 229)) {
                                 e.preventDefault();
@@ -321,21 +384,37 @@ export function AlarmRuleSimulateSheet({
                   <table aria-label="试算结果明细" className="w-full border-collapse text-left text-xs">
                     <thead className="border-b border-divider bg-muted/40 text-muted-foreground">
                       <tr>
-                        <th scope="col" className="px-2.5 py-2 font-medium">步骤</th>
-                        <th scope="col" className="px-2.5 py-2 font-medium">判定</th>
-                        <th scope="col" className="px-2.5 py-2 font-medium">动作</th>
-                        <th scope="col" className="px-2.5 py-2 font-medium">告警态</th>
+                        <th scope="col" className="px-2.5 py-2 font-medium whitespace-nowrap">步骤</th>
+                        <th scope="col" className="px-2.5 py-2 font-medium whitespace-nowrap">判定</th>
+                        <th scope="col" className="px-2.5 py-2 font-medium whitespace-nowrap">动作</th>
+                        <th scope="col" className="px-2.5 py-2 font-medium whitespace-nowrap">告警态</th>
                         <th scope="col" className="px-2.5 py-2 font-medium">说明</th>
                       </tr>
                     </thead>
                     <tbody>
                       {result.steps.map((step) => (
                         <tr key={step.step} className="border-b border-divider last:border-b-0">
-                          <td className="px-2.5 py-2 tabular-nums">第 {step.step} 步</td>
-                          <td className="px-2.5 py-2">{EVALUATION_STATUS_LABELS[step.status]}</td>
-                          <td className="px-2.5 py-2">{EVALUATION_EFFECT_LABELS[step.effect]}</td>
-                          <td className="px-2.5 py-2">{step.active ? '活动' : '未触发'}</td>
-                          <td className="px-2.5 py-2 text-muted-foreground">{describeStepReason(step, displayContext)}</td>
+                          <td className="px-2.5 py-2 whitespace-nowrap tabular-nums">第 {step.step} 步</td>
+                          <td className="px-2.5 py-2 whitespace-nowrap">{EVALUATION_STATUS_LABELS[step.status]}</td>
+                          <td className="px-2.5 py-2 whitespace-nowrap">{EVALUATION_EFFECT_LABELS[step.effect]}</td>
+                          <td className="px-2.5 py-2 whitespace-nowrap">{step.active ? '活动' : '未触发'}</td>
+                          <td className="px-2.5 py-2 text-muted-foreground">
+                            <div className="flex flex-col gap-1">
+                              <span>{describeStepReason(step, displayContext)}</span>
+                              {step.plannedActions && step.plannedActions.length > 0 ? (
+                                <div className="flex flex-wrap gap-1">
+                                  {step.plannedActions.map((action, actionIndex) => (
+                                    <span
+                                      key={`${step.step}-${actionIndex}`}
+                                      className="rounded bg-primary-soft px-1.5 py-0.5 text-[11px] font-medium text-primary"
+                                    >
+                                      拟触发 {describeActionTrigger(action.triggerOn)}{describeActionKind(action.kind)}：{describePlannedActionSummary(action)}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </div>
+                          </td>
                         </tr>
                       ))}
                     </tbody>

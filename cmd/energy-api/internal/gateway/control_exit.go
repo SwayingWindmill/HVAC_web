@@ -8,10 +8,12 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/platformapi"
+	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
 	"github.com/quanlaihe/hvac-web/libs/observability"
@@ -40,15 +42,22 @@ const (
 var controlWriteKeyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}\z`)
 
 type publicControlExitRoute struct {
-	template     string
-	kind         string
-	resourceID   string
-	internalPath string
-	method       string
+	template       string
+	kind           string
+	resourceID     string
+	secondaryID    string
+	internalPath   string
+	method         string
+	allowedMethods []string
 }
 
 type assetControlLockView = commandservice.AssetControlLockView
 type activeMaintenanceWindowView = commandservice.ActiveMaintenanceWindowView
+type devicePriorityLockView = commandservice.DevicePriorityLockView
+type devicePriorityLockInput = commandservice.DevicePriorityLockInput
+type devicePriorityLockReleaseResponse = commandservice.DevicePriorityLockReleaseResponse
+type controlAlarmDeadLetterView = commandservice.ControlAlarmDeadLetterView
+type controlAlarmDeadLetterReplayResponse = commandservice.ControlAlarmDeadLetterReplayResponse
 type siteControlStateView = commandservice.SiteControlStateView
 type siteControlModeMutationResponse = commandservice.SiteControlModeResponse
 type assetControlLockMutationResponse = commandservice.AssetControlLockResponse
@@ -99,6 +108,43 @@ func matchPublicControlExitRoute(path string) (publicControlExitRoute, bool) {
 					}, true
 				}
 			}
+		} else if len(segments) == 4 && segments[1] == "devices" && segments[3] == "priority-lock" {
+			siteID, siteErr := url.PathUnescape(segments[0])
+			deviceID, devErr := url.PathUnescape(segments[2])
+			if siteErr == nil && devErr == nil && siteID != "" && deviceID != "" {
+				return publicControlExitRoute{
+					template:       "/api/v1/sites/{siteId}/devices/{deviceId}/priority-lock",
+					kind:           "site-device-priority-lock",
+					resourceID:     siteID,
+					secondaryID:    deviceID,
+					internalPath:   internalOperatorPrefix + "/sites/" + url.PathEscape(siteID) + "/devices/" + url.PathEscape(deviceID) + "/priority-lock",
+					allowedMethods: []string{http.MethodPut, http.MethodDelete},
+				}, true
+			}
+		} else if len(segments) == 3 && segments[1] == "control-alarms" && segments[2] == "dead-letters" {
+			siteID, siteErr := url.PathUnescape(segments[0])
+			if siteErr == nil && siteID != "" {
+				return publicControlExitRoute{
+					template:     "/api/v1/sites/{siteId}/control-alarms/dead-letters",
+					kind:         "site-control-alarm-dead-letters",
+					resourceID:   siteID,
+					internalPath: internalOperatorPrefix + "/sites/" + url.PathEscape(siteID) + "/control-alarms/dead-letters",
+					method:       http.MethodGet,
+				}, true
+			}
+		} else if len(segments) == 5 && segments[1] == "control-alarms" && segments[2] == "dead-letters" && segments[4] == "replay" {
+			siteID, siteErr := url.PathUnescape(segments[0])
+			outboxID, outErr := url.PathUnescape(segments[3])
+			if siteErr == nil && outErr == nil && siteID != "" && outboxID != "" {
+				return publicControlExitRoute{
+					template:     "/api/v1/sites/{siteId}/control-alarms/dead-letters/{outboxId}/replay",
+					kind:         "site-control-alarm-dead-letter-replay",
+					resourceID:   siteID,
+					secondaryID:  outboxID,
+					internalPath: internalOperatorPrefix + "/sites/" + url.PathEscape(siteID) + "/control-alarms/dead-letters/" + url.PathEscape(outboxID) + "/replay",
+					method:       http.MethodPost,
+				}, true
+			}
 		}
 	}
 	if remainder, ok := strings.CutPrefix(path, "/api/v1/assets/"); ok && !strings.HasSuffix(remainder, "/") {
@@ -119,12 +165,27 @@ func matchPublicControlExitRoute(path string) (publicControlExitRoute, bool) {
 	return publicControlExitRoute{}, false
 }
 
+func controlExitMethodAllowed(route publicControlExitRoute, method string) (string, bool) {
+	if len(route.allowedMethods) > 0 {
+		for _, candidate := range route.allowedMethods {
+			if method == candidate {
+				return "", true
+			}
+		}
+		return strings.Join(route.allowedMethods, ", "), false
+	}
+	if method == route.method {
+		return "", true
+	}
+	return route.method, false
+}
+
 func dispatchControlExitRoute(h *handler, writer http.ResponseWriter, request *http.Request, route publicControlExitRoute) {
-	if request.Method != route.method {
-		writeMethodNotAllowedFor(writer, request, route.method)
+	if allowHeader, ok := controlExitMethodAllowed(route, request.Method); !ok {
+		writeMethodNotAllowedFor(writer, request, allowHeader)
 		return
 	}
-	requireWrite := route.method != http.MethodGet
+	requireWrite := request.Method != http.MethodGet
 	session, ok := h.commandSession(writer, request, requireWrite)
 	if !ok {
 		return
@@ -132,17 +193,17 @@ func dispatchControlExitRoute(h *handler, writer http.ResponseWriter, request *h
 	if requireWrite && !h.allowRateLimitedTenant(writer, request, limitpolicy.DimensionCommandWrite, session.TenantID) {
 		return
 	}
-	if !isLowerUUIDv7(route.resourceID) {
+	if !isLowerUUIDv7(route.resourceID) || (route.secondaryID != "" && !isLowerUUIDv7(route.secondaryID)) {
 		if requireWrite {
-			targetID, targetLabel, action := controlExitRouteAuditMeta(route)
+			targetID, targetLabel, action := controlExitRouteAuditMeta(route, request.Method)
 			h.emitControlExitAudit(request, session, targetID, targetLabel, action, auditOutcomeRejected, map[string]any{"reasonCode": "RESOURCE_NOT_FOUND"})
 		}
-		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site or Asset was not found.", false, nil)
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site, Device, or Control Alarm dead-letter entry was not found.", false, nil)
 		return
 	}
 	if h.command == nil || h.command.baseURL == "" || h.command.httpClient == nil {
 		if requireWrite {
-			targetID, targetLabel, action := controlExitRouteAuditMeta(route)
+			targetID, targetLabel, action := controlExitRouteAuditMeta(route, request.Method)
 			h.emitControlExitAudit(request, session, targetID, targetLabel, action, auditOutcomeFailed, map[string]any{"reasonCode": "COMMAND_UNAVAILABLE"})
 		}
 		writeProblem(writer, request, http.StatusServiceUnavailable, "COMMAND_UNAVAILABLE", "Command unavailable", "Command Service is not configured.", true, nil)
@@ -157,6 +218,16 @@ func dispatchControlExitRoute(h *handler, writer http.ResponseWriter, request *h
 		h.postSiteControlShutdown(writer, request, session, route)
 	case "asset-control-lock":
 		h.putAssetControlLock(writer, request, session, route)
+	case "site-device-priority-lock":
+		if request.Method == http.MethodDelete {
+			h.deleteDevicePriorityLock(writer, request, session, route)
+			return
+		}
+		h.putDevicePriorityLock(writer, request, session, route)
+	case "site-control-alarm-dead-letters":
+		h.listControlAlarmDeadLetters(writer, request, session, route)
+	case "site-control-alarm-dead-letter-replay":
+		h.replayControlAlarmDeadLetter(writer, request, session, route)
 	default:
 		writeProblem(writer, request, http.StatusNotFound, "ROUTE_NOT_FOUND", "Route not found", "The requested public API route does not exist.", false, nil)
 	}
@@ -387,6 +458,223 @@ func (h *handler) postSiteControlShutdown(writer http.ResponseWriter, request *h
 	writeJSON(writer, http.StatusOK, resp)
 }
 
+func (h *handler) putDevicePriorityLock(writer http.ResponseWriter, request *http.Request, session bffSession, route publicControlExitRoute) {
+	targetID := "device:" + route.secondaryID
+	if mediaType := strings.TrimSpace(strings.Split(request.Header.Get("Content-Type"), ";")[0]); mediaType != "application/json" {
+		h.emitControlExitAudit(request, session, targetID, "设备优先级锁定", "DEVICE_PRIORITY_LOCK_UPDATED", auditOutcomeRejected, map[string]any{"reasonCode": "CONTROL_EXIT_REQUEST_INVALID"})
+		writeProblem(writer, request, http.StatusUnsupportedMediaType, "CONTROL_EXIT_REQUEST_INVALID", "Device priority lock invalid", "The Device priority lock request must use application/json.", false, nil)
+		return
+	}
+	var input devicePriorityLockInput
+	if !decodeStrictControlJSON(writer, request, &input, maximumControlExitRequestBody) {
+		h.emitControlExitAudit(request, session, targetID, "设备优先级锁定", "DEVICE_PRIORITY_LOCK_UPDATED", auditOutcomeRejected, map[string]any{"reasonCode": "CONTROL_EXIT_REQUEST_INVALID"})
+		writeProblem(writer, request, http.StatusBadRequest, "CONTROL_EXIT_REQUEST_INVALID", "Device priority lock invalid", "The Device priority lock request payload is invalid.", false, nil)
+		return
+	}
+	switch commandmodel.PriorityTier(input.LockedPriority) {
+	case commandmodel.PriorityManualOverride, commandmodel.PriorityProtectionRule, commandmodel.PrioritySafetyInterlock:
+	default:
+		h.emitControlExitAudit(request, session, targetID, "设备优先级锁定", "DEVICE_PRIORITY_LOCK_UPDATED", auditOutcomeRejected, map[string]any{"reasonCode": "CONTROL_EXIT_REQUEST_INVALID"})
+		writeProblem(writer, request, http.StatusBadRequest, "CONTROL_EXIT_REQUEST_INVALID", "Device priority lock invalid", "lockedPriority must be MANUAL_OVERRIDE, PROTECTION_RULE, or SAFETY_INTERLOCK.", false, nil)
+		return
+	}
+	if input.DurationMinutes != nil && (*input.DurationMinutes < 5 || *input.DurationMinutes > 1440) {
+		h.emitControlExitAudit(request, session, targetID, "设备优先级锁定", "DEVICE_PRIORITY_LOCK_UPDATED", auditOutcomeRejected, map[string]any{"reasonCode": "CONTROL_EXIT_REQUEST_INVALID"})
+		writeProblem(writer, request, http.StatusBadRequest, "CONTROL_EXIT_REQUEST_INVALID", "Device priority lock invalid", "durationMinutes must be between 5 and 1440 minutes.", false, nil)
+		return
+	}
+	if strings.TrimSpace(input.Reason) == "" || utf8.RuneCountInString(strings.TrimSpace(input.Reason)) > 1000 {
+		h.emitControlExitAudit(request, session, targetID, "设备优先级锁定", "DEVICE_PRIORITY_LOCK_UPDATED", auditOutcomeRejected, map[string]any{"reasonCode": "CONTROL_EXIT_REQUEST_INVALID"})
+		writeProblem(writer, request, http.StatusBadRequest, "CONTROL_EXIT_REQUEST_INVALID", "Device priority lock invalid", "A non-empty reason up to 1000 characters is required.", false, nil)
+		return
+	}
+
+	status, rawBody, failure := h.callOperatorCommandBackend(
+		request, session, http.MethodPut, route.internalPath, input, nil, h.command.maxResponseBytes,
+	)
+	if failure != nil {
+		h.emitControlExitAudit(request, session, targetID, "设备优先级锁定", "DEVICE_PRIORITY_LOCK_UPDATED", auditOutcomeForStatus(failure.status), map[string]any{"siteId": route.resourceID, "lockedPriority": input.LockedPriority, "reasonCode": failure.code})
+		h.writeCommandFailure(writer, request, *failure)
+		return
+	}
+	if status != http.StatusOK {
+		h.emitControlExitAudit(request, session, targetID, "设备优先级锁定", "DEVICE_PRIORITY_LOCK_UPDATED", auditOutcomeForStatus(status), map[string]any{"siteId": route.resourceID, "lockedPriority": input.LockedPriority, "reasonCode": problemCodeFromRaw(rawBody)})
+		h.writeOperatorProblem(writer, request, status, rawBody, "")
+		return
+	}
+	var resp devicePriorityLockView
+	if json.Unmarshal(rawBody, &resp) != nil || resp.DeviceID != route.secondaryID {
+		h.emitControlExitAudit(request, session, targetID, "设备优先级锁定", "DEVICE_PRIORITY_LOCK_UPDATED", auditOutcomeFailed, map[string]any{"siteId": route.resourceID, "reasonCode": "COMMAND_RESPONSE_INVALID"})
+		h.writeCommandFailure(writer, request, commandUnavailable("Command Service returned an invalid Device priority lock response."))
+		return
+	}
+	h.emitControlExitAudit(request, session, targetID, "设备优先级锁定", "DEVICE_PRIORITY_LOCK_UPDATED", auditOutcomeSucceeded, map[string]any{
+		"siteId":         route.resourceID,
+		"lockedPriority": resp.LockedPriority,
+		"lockedUntil":    resp.LockedUntil,
+		"reason":         resp.Reason,
+	})
+	if strings.TrimSpace(resp.LockedBy) != "" {
+		names := h.lookupTenantPrincipalNames(request.Context(), session, resp.LockedBy, []string{resp.LockedBy})
+		resp.LockedByName = resolvedStringName(resp.LockedBy, names)
+	}
+	writer.Header().Set("Cache-Control", "private, no-store")
+	writeJSON(writer, http.StatusOK, resp)
+}
+
+func (h *handler) deleteDevicePriorityLock(writer http.ResponseWriter, request *http.Request, session bffSession, route publicControlExitRoute) {
+	targetID := "device:" + route.secondaryID
+	var input struct {
+		Reason string `json:"reason"`
+	}
+	hasQuery := len(request.URL.Query()) > 0
+	if hasQuery {
+		for key, values := range request.URL.Query() {
+			if key != "reason" || len(values) != 1 {
+				h.emitControlExitAudit(request, session, targetID, "设备优先级锁定", "DEVICE_PRIORITY_LOCK_RELEASED", auditOutcomeRejected, map[string]any{"reasonCode": "CONTROL_EXIT_REQUEST_INVALID"})
+				writeProblem(writer, request, http.StatusBadRequest, "CONTROL_EXIT_REQUEST_INVALID", "Device priority lock release invalid", "Only a single reason query parameter is accepted.", false, nil)
+				return
+			}
+		}
+		input.Reason = request.URL.Query().Get("reason")
+	} else if request.Body != nil && request.ContentLength != 0 {
+		if mediaType := strings.TrimSpace(strings.Split(request.Header.Get("Content-Type"), ";")[0]); mediaType != "" && mediaType != "application/json" {
+			h.emitControlExitAudit(request, session, targetID, "设备优先级锁定", "DEVICE_PRIORITY_LOCK_RELEASED", auditOutcomeRejected, map[string]any{"reasonCode": "CONTROL_EXIT_REQUEST_INVALID"})
+			writeProblem(writer, request, http.StatusUnsupportedMediaType, "CONTROL_EXIT_REQUEST_INVALID", "Device priority lock release invalid", "The release request body must use application/json.", false, nil)
+			return
+		}
+		if !decodeStrictControlJSON(writer, request, &input, maximumControlExitRequestBody) {
+			h.emitControlExitAudit(request, session, targetID, "设备优先级锁定", "DEVICE_PRIORITY_LOCK_RELEASED", auditOutcomeRejected, map[string]any{"reasonCode": "CONTROL_EXIT_REQUEST_INVALID"})
+			writeProblem(writer, request, http.StatusBadRequest, "CONTROL_EXIT_REQUEST_INVALID", "Device priority lock release invalid", "The release request payload is invalid.", false, nil)
+			return
+		}
+	}
+	reason := strings.TrimSpace(input.Reason)
+	if reason == "" || utf8.RuneCountInString(reason) > 1000 {
+		h.emitControlExitAudit(request, session, targetID, "设备优先级锁定", "DEVICE_PRIORITY_LOCK_RELEASED", auditOutcomeRejected, map[string]any{"reasonCode": "CONTROL_EXIT_REQUEST_INVALID"})
+		writeProblem(writer, request, http.StatusBadRequest, "CONTROL_EXIT_REQUEST_INVALID", "Device priority lock release invalid", "A non-empty reason up to 1000 characters is required.", false, nil)
+		return
+	}
+	status, rawBody, failure := h.callOperatorCommandBackend(
+		request, session, http.MethodDelete, route.internalPath, map[string]string{"reason": reason}, nil, h.command.maxResponseBytes,
+	)
+	if failure != nil {
+		h.emitControlExitAudit(request, session, targetID, "设备优先级锁定", "DEVICE_PRIORITY_LOCK_RELEASED", auditOutcomeForStatus(failure.status), map[string]any{"siteId": route.resourceID, "reasonCode": failure.code})
+		h.writeCommandFailure(writer, request, *failure)
+		return
+	}
+	if status != http.StatusOK {
+		h.emitControlExitAudit(request, session, targetID, "设备优先级锁定", "DEVICE_PRIORITY_LOCK_RELEASED", auditOutcomeForStatus(status), map[string]any{"siteId": route.resourceID, "reasonCode": problemCodeFromRaw(rawBody)})
+		h.writeOperatorProblem(writer, request, status, rawBody, "")
+		return
+	}
+	var resp devicePriorityLockReleaseResponse
+	if json.Unmarshal(rawBody, &resp) != nil || resp.DeviceID != route.secondaryID {
+		h.emitControlExitAudit(request, session, targetID, "设备优先级锁定", "DEVICE_PRIORITY_LOCK_RELEASED", auditOutcomeFailed, map[string]any{"siteId": route.resourceID, "reasonCode": "COMMAND_RESPONSE_INVALID"})
+		h.writeCommandFailure(writer, request, commandUnavailable("Command Service returned an invalid Device priority lock release response."))
+		return
+	}
+	h.emitControlExitAudit(request, session, targetID, "设备优先级锁定", "DEVICE_PRIORITY_LOCK_RELEASED", auditOutcomeSucceeded, map[string]any{
+		"siteId":   route.resourceID,
+		"released": resp.Released,
+		"reason":   reason,
+	})
+	writer.Header().Set("Cache-Control", "private, no-store")
+	writeJSON(writer, http.StatusOK, resp)
+}
+
+func (h *handler) listControlAlarmDeadLetters(writer http.ResponseWriter, request *http.Request, session bffSession, route publicControlExitRoute) {
+	query := request.URL.Query()
+	for key, values := range query {
+		if key != "limit" || len(values) != 1 {
+			writeProblem(writer, request, http.StatusBadRequest, "CONTROL_EXIT_REQUEST_INVALID", "Invalid query", "Only a single limit query parameter is supported.", false, nil)
+			return
+		}
+	}
+	internalPath := route.internalPath
+	if rawLimit := strings.TrimSpace(query.Get("limit")); rawLimit != "" {
+		limit, err := strconv.Atoi(rawLimit)
+		if err != nil || limit < 1 || limit > commandservice.MaximumControlAlarmDeadLetters {
+			writeProblem(writer, request, http.StatusBadRequest, "CONTROL_EXIT_REQUEST_INVALID", "Invalid query", "limit must be between 1 and 50.", false, nil)
+			return
+		}
+		internalPath += "?limit=" + strconv.Itoa(limit)
+	}
+	status, rawBody, failure := h.callOperatorCommandBackend(
+		request, session, http.MethodGet, internalPath, nil, nil, h.command.maxResponseBytes,
+	)
+	if failure != nil {
+		h.writeCommandFailure(writer, request, *failure)
+		return
+	}
+	if status != http.StatusOK {
+		h.writeOperatorProblem(writer, request, status, rawBody, "")
+		return
+	}
+	var payload struct {
+		Data []controlAlarmDeadLetterView `json:"data"`
+	}
+	if json.Unmarshal(rawBody, &payload) != nil {
+		h.writeCommandFailure(writer, request, commandUnavailable("Command Service returned an invalid Control Alarm dead-letter list."))
+		return
+	}
+	if payload.Data == nil {
+		payload.Data = []controlAlarmDeadLetterView{}
+	}
+	writer.Header().Set("Cache-Control", "private, no-store")
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"data": payload.Data,
+		"meta": map[string]any{"requestId": requestIDFromContext(request.Context())},
+	})
+}
+
+func (h *handler) replayControlAlarmDeadLetter(writer http.ResponseWriter, request *http.Request, session bffSession, route publicControlExitRoute) {
+	targetID := "outbox:" + route.secondaryID
+	if len(request.URL.Query()) != 0 {
+		h.emitControlExitAudit(request, session, targetID, "控制告警死信重投", "CONTROL_ALARM_DEAD_LETTER_REPLAYED", auditOutcomeRejected, map[string]any{"reasonCode": "CONTROL_EXIT_REQUEST_INVALID"})
+		writeProblem(writer, request, http.StatusBadRequest, "CONTROL_EXIT_REQUEST_INVALID", "Control alarm replay invalid", "Control alarm replay does not accept query parameters.", false, nil)
+		return
+	}
+	if request.Body != nil && request.ContentLength != 0 {
+		if mediaType := strings.TrimSpace(strings.Split(request.Header.Get("Content-Type"), ";")[0]); mediaType != "" && mediaType != "application/json" {
+			h.emitControlExitAudit(request, session, targetID, "控制告警死信重投", "CONTROL_ALARM_DEAD_LETTER_REPLAYED", auditOutcomeRejected, map[string]any{"reasonCode": "CONTROL_EXIT_REQUEST_INVALID"})
+			writeProblem(writer, request, http.StatusUnsupportedMediaType, "CONTROL_EXIT_REQUEST_INVALID", "Control alarm replay invalid", "The Control alarm replay request body must use application/json.", false, nil)
+			return
+		}
+		var empty struct{}
+		if !decodeStrictControlJSON(writer, request, &empty, maximumControlExitRequestBody) {
+			h.emitControlExitAudit(request, session, targetID, "控制告警死信重投", "CONTROL_ALARM_DEAD_LETTER_REPLAYED", auditOutcomeRejected, map[string]any{"reasonCode": "CONTROL_EXIT_REQUEST_INVALID"})
+			writeProblem(writer, request, http.StatusBadRequest, "CONTROL_EXIT_REQUEST_INVALID", "Control alarm replay invalid", "The Control alarm replay request body must be empty or {}.", false, nil)
+			return
+		}
+	}
+	status, rawBody, failure := h.callOperatorCommandBackend(
+		request, session, http.MethodPost, route.internalPath, struct{}{}, nil, h.command.maxResponseBytes,
+	)
+	if failure != nil {
+		h.emitControlExitAudit(request, session, targetID, "控制告警死信重投", "CONTROL_ALARM_DEAD_LETTER_REPLAYED", auditOutcomeForStatus(failure.status), map[string]any{"siteId": route.resourceID, "reasonCode": failure.code})
+		h.writeCommandFailure(writer, request, *failure)
+		return
+	}
+	if status != http.StatusOK {
+		h.emitControlExitAudit(request, session, targetID, "控制告警死信重投", "CONTROL_ALARM_DEAD_LETTER_REPLAYED", auditOutcomeForStatus(status), map[string]any{"siteId": route.resourceID, "reasonCode": problemCodeFromRaw(rawBody)})
+		h.writeOperatorProblem(writer, request, status, rawBody, "")
+		return
+	}
+	var resp controlAlarmDeadLetterReplayResponse
+	if json.Unmarshal(rawBody, &resp) != nil || resp.OutboxID != route.secondaryID {
+		h.emitControlExitAudit(request, session, targetID, "控制告警死信重投", "CONTROL_ALARM_DEAD_LETTER_REPLAYED", auditOutcomeFailed, map[string]any{"siteId": route.resourceID, "reasonCode": "COMMAND_RESPONSE_INVALID"})
+		h.writeCommandFailure(writer, request, commandUnavailable("Command Service returned an invalid Control Alarm replay response."))
+		return
+	}
+	h.emitControlExitAudit(request, session, targetID, "控制告警死信重投", "CONTROL_ALARM_DEAD_LETTER_REPLAYED", auditOutcomeSucceeded, map[string]any{
+		"siteId":   route.resourceID,
+		"replayed": resp.Replayed,
+	})
+	writer.Header().Set("Cache-Control", "private, no-store")
+	writeJSON(writer, http.StatusOK, resp)
+}
+
 func (h *handler) emitControlExitAudit(
 	request *http.Request,
 	session bffSession,
@@ -403,12 +691,19 @@ func (h *handler) emitControlExitAudit(
 	})
 }
 
-func controlExitRouteAuditMeta(route publicControlExitRoute) (string, string, string) {
+func controlExitRouteAuditMeta(route publicControlExitRoute, method string) (string, string, string) {
 	switch route.kind {
 	case "asset-control-lock":
 		return "asset:" + route.resourceID, "设备控制锁定", "ASSET_CONTROL_LOCK_UPDATED"
 	case "site-control-shutdown":
 		return "site:" + route.resourceID, "紧急停机控制", "SITE_CONTROL_SHUTDOWN"
+	case "site-device-priority-lock":
+		if method == http.MethodDelete {
+			return "device:" + route.secondaryID, "设备优先级锁定", "DEVICE_PRIORITY_LOCK_RELEASED"
+		}
+		return "device:" + route.secondaryID, "设备优先级锁定", "DEVICE_PRIORITY_LOCK_UPDATED"
+	case "site-control-alarm-dead-letter-replay":
+		return "outbox:" + route.secondaryID, "控制告警死信重投", "CONTROL_ALARM_DEAD_LETTER_REPLAYED"
 	default:
 		return "site:" + route.resourceID, "站点控制模式", "SITE_CONTROL_MODE_UPDATED"
 	}
@@ -651,7 +946,7 @@ func (h *handler) populateSiteControlStateNames(ctx context.Context, session bff
 	if state == nil {
 		return
 	}
-	ids := make([]string, 0, 1+len(state.AssetLocks))
+	ids := make([]string, 0, 1+len(state.AssetLocks)+len(state.DevicePriorityLocks))
 	if state.UpdatedBy != nil && strings.TrimSpace(*state.UpdatedBy) != "" {
 		ids = append(ids, strings.TrimSpace(*state.UpdatedBy))
 	}
@@ -660,11 +955,27 @@ func (h *handler) populateSiteControlStateNames(ctx context.Context, session bff
 			ids = append(ids, strings.TrimSpace(*lock.UpdatedBy))
 		}
 	}
+	for _, lock := range state.DevicePriorityLocks {
+		if strings.TrimSpace(lock.LockedBy) != "" {
+			ids = append(ids, strings.TrimSpace(lock.LockedBy))
+		}
+	}
 	names := h.lookupTenantPrincipalNames(ctx, session, actorPrincipalID, ids)
 	state.UpdatedByName = resolvedPrincipalName(state.UpdatedBy, names)
 	for i := range state.AssetLocks {
 		state.AssetLocks[i].UpdatedByName = resolvedPrincipalName(state.AssetLocks[i].UpdatedBy, names)
 	}
+	for i := range state.DevicePriorityLocks {
+		state.DevicePriorityLocks[i].LockedByName = resolvedStringName(state.DevicePriorityLocks[i].LockedBy, names)
+	}
+}
+
+func resolvedStringName(rawID string, names map[string]string) *string {
+	trimmed := strings.TrimSpace(rawID)
+	if trimmed == "" {
+		return nil
+	}
+	return resolvedPrincipalName(&trimmed, names)
 }
 
 func (h *handler) populateAssetControlLockName(ctx context.Context, session bffSession, actorPrincipalID string, lock *assetControlLockView) {

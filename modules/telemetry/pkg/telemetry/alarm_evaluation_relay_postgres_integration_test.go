@@ -2,10 +2,15 @@ package telemetry
 
 import (
 	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
 )
 
@@ -266,5 +271,66 @@ SET alarm_delivery_state='DEAD_LETTER', alarm_dead_lettered_at=$2, alarm_publish
 WHERE event_id=$1::uuid
 `, eventID, deadAt); err != nil {
 		t.Fatalf("s2_telemetry_relay must have UPDATE privilege on alarm_dead_lettered_at: %v", err)
+	}
+	_ = txRelay.Rollback(ctx)
+
+	// Verify dead-letter count, filtered list, replay back to PENDING, and subsequent claim + metrics.
+	registry := observability.NewRegistry()
+	store.SetPipelineMetrics(NewPipelineMetrics(registry))
+
+	pendingBefore, dlqBefore, err := store.CountAlarmEvaluationOutboxStates(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dlqBefore < 2 {
+		t.Fatalf("expected at least 2 dead-letter rows (corrupt + eventID), got pending=%d dlq=%d", pendingBefore, dlqBefore)
+	}
+
+	listedByDevice, err := store.ListAlarmEvaluationDeadLetters(ctx, AlarmEvaluationDeadLetterFilter{
+		SiteID:   siteA,
+		DeviceID: deviceA,
+		Limit:    20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var foundEvent, foundCorrupt bool
+	for _, item := range listedByDevice {
+		if item.EventID == eventID && item.LastErrorCode == "ALARM_EVALUATION_PERMANENT_FAILURE" {
+			foundEvent = true
+		}
+		if item.EventID == corruptEventID && item.LastErrorCode == "ALARM_EVALUATION_PAYLOAD_INVALID" {
+			foundCorrupt = true
+		}
+	}
+	if !foundEvent || !foundCorrupt {
+		t.Fatalf("filtered ListAlarmEvaluationDeadLetters missing expected entries: %#v", listedByDevice)
+	}
+
+	replayAt := deadAt.Add(2 * time.Minute)
+	if err := store.ReplayAlarmEvaluationDeadLetter(ctx, eventID, replayAt); err != nil {
+		t.Fatalf("ReplayAlarmEvaluationDeadLetter failed: %v", err)
+	}
+	if err := store.ReplayAlarmEvaluationDeadLetter(ctx, eventID, replayAt); !errors.Is(err, ErrAlarmEvaluationDeadLetterNotFound) {
+		t.Fatalf("expected ErrAlarmEvaluationDeadLetterNotFound on non-dead-letter replay, got %v", err)
+	}
+
+	claimsAfterReplay, err := store.ClaimPendingAlarmEvaluations(ctx, "alarm-dlq-replay-worker", 10, replayAt, 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !pendingPublicationContainsEvent(claimsAfterReplay, eventID) {
+		t.Fatalf("replayed dead-letter row was not reclaimable at replayAt: %#v", claimsAfterReplay)
+	}
+
+	rec := httptest.NewRecorder()
+	pendingAfter, dlqAfter, err := store.CountAlarmEvaluationOutboxStates(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	NewPipelineMetrics(registry).SetAlarmEvaluationOutboxDepths(pendingAfter, dlqAfter)
+	registry.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if !strings.Contains(rec.Body.String(), `hvac_alarm_evaluation_outbox_depth{state="dead_letter"} `) {
+		t.Fatalf("missing outbox depth metric in:\n%s", rec.Body.String())
 	}
 }

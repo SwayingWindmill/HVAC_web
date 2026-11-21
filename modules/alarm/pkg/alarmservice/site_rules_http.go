@@ -36,6 +36,8 @@ type SiteRuleView struct {
 	OverriddenFields []string            `json:"overriddenFields,omitempty"`
 	DependsOnRuleIDs []string            `json:"dependsOnRuleIds,omitempty"`
 	HopDepth         int                 `json:"hopDepth,omitempty"`
+	DependencyGate   DependencyGateMode  `json:"dependencyGate,omitempty"`
+	Actions          []RuleAction        `json:"actions,omitempty"`
 	TriggerMode      TriggerMode         `json:"triggerMode"`
 	DurationSeconds  int64               `json:"durationSeconds,omitempty"`
 	RepeatCount      uint64              `json:"repeatCount,omitempty"`
@@ -82,23 +84,34 @@ type SimulateRuleReadingSample struct {
 }
 
 type SimulateRuleStepInput struct {
-	EvaluatedAt string                      `json:"evaluatedAt,omitempty"`
-	Readings    []SimulateRuleReadingSample `json:"readings"`
+	EvaluatedAt           string                      `json:"evaluatedAt,omitempty"`
+	Readings              []SimulateRuleReadingSample `json:"readings"`
+	UpstreamActiveRuleIDs []string                    `json:"upstreamActiveRuleIds,omitempty"`
 }
 
 type SimulateSiteRuleRequest struct {
-	RuleID string                  `json:"ruleId"`
-	Steps  []SimulateRuleStepInput `json:"steps"`
+	RuleID         string                  `json:"ruleId"`
+	DependencyGate *DependencyGateMode     `json:"dependencyGate,omitempty"`
+	Actions        *[]RuleAction           `json:"actions,omitempty"`
+	Steps          []SimulateRuleStepInput `json:"steps"`
+}
+
+type SimulatedActionView struct {
+	Kind      RuleActionKind  `json:"kind"`
+	TriggerOn ActionTriggerOn `json:"triggerOn"`
+	Target    string          `json:"target"`
+	Summary   string          `json:"summary"`
 }
 
 type SiteRuleSimulationStep struct {
-	Step           int              `json:"step"`
-	EvaluatedAt    string           `json:"evaluatedAt"`
-	Status         EvaluationStatus `json:"status"`
-	Effect         EvaluationEffect `json:"effect"`
-	Active         bool             `json:"active"`
-	QualityBlocker string           `json:"qualityBlocker,omitempty"`
-	MatchedReasons []string         `json:"matchedReasons,omitempty"`
+	Step           int                   `json:"step"`
+	EvaluatedAt    string                `json:"evaluatedAt"`
+	Status         EvaluationStatus      `json:"status"`
+	Effect         EvaluationEffect      `json:"effect"`
+	Active         bool                  `json:"active"`
+	QualityBlocker string                `json:"qualityBlocker,omitempty"`
+	MatchedReasons []string              `json:"matchedReasons,omitempty"`
+	PlannedActions []SimulatedActionView `json:"plannedActions,omitempty"`
 }
 
 type SiteRuleSimulationResult struct {
@@ -106,6 +119,8 @@ type SiteRuleSimulationResult struct {
 	Title            string                   `json:"title"`
 	HopDepth         int                      `json:"hopDepth"`
 	DependsOnRuleIDs []string                 `json:"dependsOnRuleIds,omitempty"`
+	DependencyGate   DependencyGateMode       `json:"dependencyGate,omitempty"`
+	Actions          []RuleAction             `json:"actions,omitempty"`
 	FinalActive      bool                     `json:"finalActive"`
 	Steps            []SiteRuleSimulationStep `json:"steps"`
 }
@@ -139,6 +154,8 @@ func siteRuleViewWithHopDepth(rule SiteRule, hopDepth int) (SiteRuleView, error)
 		OverriddenFields: slices.Clone(rule.Policy.OverriddenFields),
 		DependsOnRuleIDs: slices.Clone(rule.Policy.DependsOnRuleIDs),
 		HopDepth:         hopDepth,
+		DependencyGate:   rule.Policy.DependencyGate,
+		Actions:          cloneRuleActions(rule.Policy.Actions),
 		TriggerMode:      rule.Policy.TriggerMode,
 		DurationSeconds:  rule.Policy.DurationSeconds,
 		RepeatCount:      rule.Policy.RepeatCount,
@@ -267,6 +284,28 @@ func (handler *httpHandler) simulateSiteRule(writer http.ResponseWriter, request
 		handler.writeProblem(writer, http.StatusBadGateway, "ALARM_RESPONSE_INVALID", "Alarm response invalid", "Stored Alarm rule cannot be simulated.", false)
 		return
 	}
+	if input.DependencyGate != nil {
+		policy.DependencyGate = *input.DependencyGate
+	}
+	if input.Actions != nil {
+		policy.Actions = cloneRuleActions(*input.Actions)
+	}
+	if input.DependencyGate != nil || input.Actions != nil {
+		if err := validateDependencyGate(policy.DependencyGate, policy.DependsOnRuleIDs); err != nil {
+			handler.writeProblem(writer, http.StatusBadRequest, "ALARM_REQUEST_INVALID", "Alarm request invalid", err.Error(), false)
+			return
+		}
+		if err := validateRuleActions(policy.Actions); err != nil {
+			handler.writeProblem(writer, http.StatusBadRequest, "ALARM_REQUEST_INVALID", "Alarm request invalid", err.Error(), false)
+			return
+		}
+		digest, err := AlarmPolicyDigest(policy)
+		if err != nil {
+			handler.writeProblem(writer, http.StatusBadRequest, "ALARM_REQUEST_INVALID", "Alarm request invalid", "Simulation rule policy digest cannot be computed.", false)
+			return
+		}
+		policy.Digest = digest
+	}
 
 	baseNow := handler.now().UTC()
 	var prevStepAt time.Time
@@ -343,15 +382,29 @@ func (handler *httpHandler) simulateSiteRule(writer http.ResponseWriter, request
 			}
 		}
 
+		if len(stepIn.UpstreamActiveRuleIDs) > 16 {
+			handler.writeProblem(writer, http.StatusBadRequest, "ALARM_REQUEST_INVALID", "Alarm request invalid", "Each simulation step accepts at most 16 upstreamActiveRuleIds.", false)
+			return
+		}
+		upstreamActive := make(map[string]bool, len(stepIn.UpstreamActiveRuleIDs))
+		for _, depID := range stepIn.UpstreamActiveRuleIDs {
+			if !alarmmodel.IsUUIDv7(depID) {
+				handler.writeProblem(writer, http.StatusBadRequest, "ALARM_REQUEST_INVALID", "Alarm request invalid", "Simulation upstreamActiveRuleIds must contain UUIDv7 identifiers.", false)
+				return
+			}
+			upstreamActive[depID] = true
+		}
+
 		snapshot := EvaluationSnapshot{
-			TenantID:      simTenant,
-			SiteID:        siteID,
-			SubjectType:   "SITE",
-			SubjectID:     siteID,
-			InputRevision: fmt.Sprintf("sim-step-%d", idx+1),
-			AsOf:          stepAt.Format(time.RFC3339Nano),
-			Inputs:        inputs,
-			CorrelationID: simulateSyntheticCorrID,
+			TenantID:           simTenant,
+			SiteID:             siteID,
+			SubjectType:        "SITE",
+			SubjectID:          siteID,
+			InputRevision:      fmt.Sprintf("sim-step-%d", idx+1),
+			AsOf:               stepAt.Format(time.RFC3339Nano),
+			Inputs:             inputs,
+			CorrelationID:      simulateSyntheticCorrID,
+			UpstreamRuleActive: upstreamActive,
 		}
 		decision, err := EvaluatePolicy(policy, snapshot, state, stepAt)
 		if err != nil {
@@ -366,6 +419,18 @@ func (handler *httpHandler) simulateSiteRule(writer http.ResponseWriter, request
 			state.ActiveIncidentCorrelationID = ""
 		}
 		active := state.ActiveIncidentCorrelationID != ""
+		var plannedActions []SimulatedActionView
+		for _, action := range policy.Actions {
+			if !action.MatchesEffect(decision.Effect) {
+				continue
+			}
+			plannedActions = append(plannedActions, SimulatedActionView{
+				Kind:      action.Kind,
+				TriggerOn: action.EffectiveTriggerOn(),
+				Target:    action.SanitizedTargetRef(),
+				Summary:   action.Summary(),
+			})
+		}
 		stepsOut = append(stepsOut, SiteRuleSimulationStep{
 			Step:           idx + 1,
 			EvaluatedAt:    stepAt.Format(time.RFC3339Nano),
@@ -374,6 +439,7 @@ func (handler *httpHandler) simulateSiteRule(writer http.ResponseWriter, request
 			Active:         active,
 			QualityBlocker: decision.State.QualityBlocker,
 			MatchedReasons: simulationStepReasons(policy, decision, active),
+			PlannedActions: plannedActions,
 		})
 	}
 
@@ -382,6 +448,8 @@ func (handler *httpHandler) simulateSiteRule(writer http.ResponseWriter, request
 		Title:            target.Policy.Title,
 		HopDepth:         report.Nodes[target.AssignmentID].HopDepth,
 		DependsOnRuleIDs: slices.Clone(target.Policy.DependsOnRuleIDs),
+		DependencyGate:   policy.DependencyGate,
+		Actions:          cloneRuleActions(policy.Actions),
 		FinalActive:      state.ActiveIncidentCorrelationID != "",
 		Steps:            stepsOut,
 	}
@@ -537,6 +605,12 @@ func (list SiteRuleList) Validate() error {
 		if rule.HopDepth < 0 || rule.HopDepth > rulegraph.MaxLinkageHops {
 			return errors.New("site rule hopDepth is invalid")
 		}
+		if err := validateDependencyGate(rule.DependencyGate, rule.DependsOnRuleIDs); err != nil {
+			return err
+		}
+		if err := validateRuleActions(rule.Actions); err != nil {
+			return err
+		}
 		switch {
 		case rule.TriggerMode == TriggerSimple && rule.DurationSeconds == 0 && rule.RepeatCount == 0:
 		case rule.TriggerMode == TriggerDuration && rule.DurationSeconds > 0 && rule.RepeatCount == 0:
@@ -564,6 +638,12 @@ func (result SiteRuleSimulationResult) Validate(expectedRuleID string) error {
 	if err := validateRuleDependencies(result.RuleID, result.DependsOnRuleIDs); err != nil {
 		return err
 	}
+	if err := validateDependencyGate(result.DependencyGate, result.DependsOnRuleIDs); err != nil {
+		return err
+	}
+	if err := validateRuleActions(result.Actions); err != nil {
+		return err
+	}
 	if len(result.Steps) == 0 || len(result.Steps) > maxSimulateSteps {
 		return errors.New("site rule simulation steps out of bounds")
 	}
@@ -584,6 +664,28 @@ func (result SiteRuleSimulationResult) Validate(expectedRuleID string) error {
 		default:
 			return errors.New("site rule simulation step effect is invalid")
 		}
+		for _, planned := range step.PlannedActions {
+			if err := planned.validate(); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (action SimulatedActionView) validate() error {
+	switch action.Kind {
+	case RuleActionWebhook, RuleActionWorkOrder, RuleActionProtectionCommand:
+	default:
+		return errors.New("site rule simulation planned action kind is invalid")
+	}
+	switch action.TriggerOn {
+	case ActionTriggerRaise, ActionTriggerClear, ActionTriggerBoth:
+	default:
+		return errors.New("site rule simulation planned action triggerOn is invalid")
+	}
+	if !boundedText(action.Target, 256) || !boundedText(action.Summary, 512) {
+		return errors.New("site rule simulation planned action summary is invalid")
 	}
 	return nil
 }

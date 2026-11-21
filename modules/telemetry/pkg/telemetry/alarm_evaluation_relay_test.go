@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/modules/telemetry/pkg/telemetryapi"
 )
 
@@ -286,6 +288,12 @@ type alarmEvaluationRelayRepositoryStub struct {
 	deadLetterEventID string
 	deadLetterAt      time.Time
 	deadLetterCode    string
+	pendingCount      int64
+	deadLetterCount   int64
+}
+
+func (repository *alarmEvaluationRelayRepositoryStub) CountAlarmEvaluationOutboxStates(context.Context) (int64, int64, error) {
+	return repository.pendingCount, repository.deadLetterCount, nil
 }
 
 func (repository *alarmEvaluationRelayRepositoryStub) ClaimPendingAlarmEvaluations(context.Context, string, int, time.Time, time.Duration) ([]PendingPublication, error) {
@@ -333,5 +341,60 @@ func alarmEvaluationPendingPublication(now time.Time) PendingPublication {
 			SchemaVersion: 1, DeviceId: telemetryapi.UUIDv7(deviceID), TenantId: "01910000-a000-7000-8000-000000000003", SiteId: "01910000-a000-7000-8000-000000000004",
 			BusinessRevision: 1, EvaluatedAt: telemetryapi.Instant(now.Format(time.RFC3339Nano)), EvaluationAvailability: telemetryapi.EvaluationAvailabilityAvailable,
 		},
+	}
+}
+
+func TestAlarmEvaluationRelayInstrumentsDeadLetterAndOutboxDepthMetrics(t *testing.T) {
+	now := time.Date(2026, 11, 19, 16, 0, 0, 0, time.UTC)
+	invalidPub := alarmEvaluationPendingPublication(now)
+	invalidPub.EventID = "01910000-a000-7000-8000-000000000011"
+	invalidPub.Snapshot.BusinessRevision = 99
+
+	permPub := alarmEvaluationPendingPublication(now)
+	permPub.EventID = "01910000-a000-7000-8000-000000000012"
+
+	exhaustedPub := alarmEvaluationPendingPublication(now)
+	exhaustedPub.EventID = "01910000-a000-7000-8000-000000000013"
+	exhaustedPub.AlarmAttempts = 2
+
+	registry := observability.NewRegistry()
+	repository := &alarmEvaluationRelayRepositoryStub{
+		pending:         []PendingPublication{invalidPub, permPub, exhaustedPub},
+		pendingCount:    4,
+		deadLetterCount: 3,
+	}
+	transport := &alarmEvaluationTransportStub{
+		fn: func(_ context.Context, pub PendingPublication) error {
+			if pub.EventID == permPub.EventID {
+				return fmt.Errorf("%w: HTTP 400", ErrPermanentAlarmEvaluationFailure)
+			}
+			return errors.New("temporary 503")
+		},
+	}
+	relay, err := NewAlarmEvaluationRelay(AlarmEvaluationRelayConfig{
+		Repository: repository, Transport: transport, Metrics: registry,
+		WorkerID: "relay-metrics", LeaseDuration: 30 * time.Second, RetryDelay: 5 * time.Second, MaxAttempts: 2,
+		Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := relay.RelayOnce(context.Background(), 10); err == nil {
+		t.Fatal("expected joined permanent errors")
+	}
+
+	rec := httptest.NewRecorder()
+	registry.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := rec.Body.String()
+	for _, want := range []string{
+		`hvac_alarm_evaluation_dead_letter_total{reason_family="scope"} 1`,
+		`hvac_alarm_evaluation_dead_letter_total{reason_family="dependency"} 1`,
+		`hvac_alarm_evaluation_dead_letter_total{reason_family="transport"} 1`,
+		`hvac_alarm_evaluation_outbox_depth{state="pending"} 4`,
+		`hvac_alarm_evaluation_outbox_depth{state="dead_letter"} 3`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("missing metric line %q in:\n%s", want, body)
+		}
 	}
 }

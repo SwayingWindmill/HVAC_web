@@ -758,6 +758,12 @@ func ObservabilityRoute(request *http.Request) string {
 			case "control-shutdown":
 				return "control.shutdown"
 			}
+		} else if len(segments) == 4 && segments[0] != "" && segments[1] == "devices" && segments[2] != "" && segments[3] == "priority-lock" {
+			return "control.lock"
+		} else if len(segments) == 3 && segments[0] != "" && segments[1] == "control-alarms" && segments[2] == "dead-letters" {
+			return "control.state"
+		} else if len(segments) == 5 && segments[0] != "" && segments[1] == "control-alarms" && segments[2] == "dead-letters" && segments[3] != "" && segments[4] == "replay" {
+			return "control.state"
 		}
 	}
 	if remainder, ok := strings.CutPrefix(path, InternalOperatorPrefix+"/assets/"); ok {

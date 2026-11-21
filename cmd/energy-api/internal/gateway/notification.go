@@ -55,12 +55,19 @@ func newNotificationController(config *NotificationConfig) *notificationControll
 }
 
 func (h *handler) signNotificationContext(session bffSession, action string) (string, error) {
+	return h.signNotificationContextScopes(session, action, []string{"tenant:" + session.TenantID, "principal:" + session.Principal.Subject})
+}
+
+func (h *handler) signSiteNotificationContext(session bffSession, action, siteID string) (string, error) {
+	return h.signNotificationContextScopes(session, action, []string{"tenant:" + session.TenantID, "site:" + siteID})
+}
+
+func (h *handler) signNotificationContextScopes(session bffSession, action string, scopes []string) (string, error) {
 	now := h.identity.now().UTC()
 	expiresAt := now.Add(h.identity.config.DelegationTTL)
-	if expiresAt.After(session.ExpiresAt) {
+	if !session.ExpiresAt.IsZero() && expiresAt.After(session.ExpiresAt) {
 		expiresAt = session.ExpiresAt
 	}
-	scopes := []string{"tenant:" + session.TenantID, "principal:" + session.Principal.Subject}
 	claims := identitycontext.DelegationClaims{
 		Issuer: h.identity.config.ExecutingWorkloadSPIFFE, Subject: session.Principal.Subject, SubjectIssuer: session.Principal.Issuer,
 		DisplayName: session.Principal.DisplayName, Email: session.Principal.Email, Roles: append([]string(nil), session.Principal.Roles...),

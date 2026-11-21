@@ -53,6 +53,18 @@ func TestBuildAlarmOwnerRouterWiresControlEventsEndpoint(t *testing.T) {
 	if got := alarmObservabilityRoute(httptest.NewRequest(http.MethodPost, alarmservice.InternalControlEventsPath, nil)); got != "alarms.publish_control_event" {
 		t.Fatalf("route=%q want alarms.publish_control_event", got)
 	}
+	if got := alarmObservabilityRoute(httptest.NewRequest(http.MethodGet, alarmservice.InternalSiteAlarmsPrefix+"018f3e00-1000-7000-8000-000000000001/alarm-rules", nil)); got != "alarms.rules" {
+		t.Fatalf("route=%q want alarms.rules", got)
+	}
+	if got := alarmObservabilityRoute(httptest.NewRequest(http.MethodPost, alarmservice.InternalSiteAlarmsPrefix+"018f3e00-1000-7000-8000-000000000001/alarm-rules:simulate", nil)); got != "alarms.rules" {
+		t.Fatalf("route=%q want alarms.rules", got)
+	}
+	if got := alarmObservabilityRoute(httptest.NewRequest(http.MethodGet, alarmservice.InternalSiteAlarmsPrefix+"018f3e00-1000-7000-8000-000000000001/alarm-rules/dead-letters", nil)); got != "alarms.dead_letters" {
+		t.Fatalf("route=%q want alarms.dead_letters", got)
+	}
+	if got := alarmObservabilityRoute(httptest.NewRequest(http.MethodPost, alarmservice.InternalSiteAlarmsPrefix+"018f3e00-1000-7000-8000-000000000001/alarm-rules/dead-letters/018f3e00-1000-7000-8000-000000000002/replay", nil)); got != "alarms.dead_letters" {
+		t.Fatalf("route=%q want alarms.dead_letters", got)
+	}
 }
 
 func TestAlarmOwnerShutdownOrderAndRequiredEnv(t *testing.T) {

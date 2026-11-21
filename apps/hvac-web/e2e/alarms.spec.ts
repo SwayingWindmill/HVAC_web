@@ -104,13 +104,32 @@ test('正在生效的规则 lists each rule with its devices, conditions and sev
   await expect(rule('1 号冷机供水温度骤升')).toContainText('BTU-METER-01、CHILLER-01');
   await expect(rule('1 号冷机供水温度骤升')).toContainText('在 5 分钟内升高达到 2 °C');
   await expect(rule('1 号冷机供水温度骤升')).toContainText('模板派生（覆盖变化幅度） · 斜率趋势');
-  await expect(rule('1 号冷机供水温度骤升')).toContainText('第 1 跳 · 依赖「冷冻水回水温度过低」');
+  await expect(rule('1 号冷机供水温度骤升')).toContainText('第 1 跳 · 依赖「冷冻水回水温度过低」（需全部上游告警同时触发）');
+  await expect(rule('1 号冷机供水温度骤升')).toContainText('联动 2 项动作：创建运维工单、下发保护指令');
   await expect(rule('CWP-01 读数长时间没有更新')).toContainText('CWP-01 的 4 个读数中任一个超过 30 分钟没有新读数');
   await expect(rule('CWP-01 读数长时间没有更新')).toContainText('CWP-01 的 4 个读数都有新读数');
   await expect(rule('网关上报中断')).toContainText('3 台设备的 5 个读数都超过 15 分钟没有新读数');
   await expect(rule('网关上报中断')).toContainText('3 台设备的 5 个读数中任一个有新读数');
   // Operators see names, never the identifiers or enums behind them.
-  await expect(table).not.toContainText(/[0-9a-f]{8}-[0-9a-f]{4}-|RUNNING|NO_DATA|MAJOR|SLOPE|EXPRESSION/);
+  await expect(table).not.toContainText(/[0-9a-f]{8}-[0-9a-f]{4}-|RUNNING|NO_DATA|MAJOR|SLOPE|EXPRESSION|ALL_ACTIVE|WORK_ORDER|PROTECTION_COMMAND/);
+
+  const dlqTable = page.getByRole('table', { name: '规则动作投递死信' });
+  await expect(dlqTable).toContainText('回调外部接口');
+  await expect(dlqTable).toContainText('触发时');
+  await expect(dlqTable).toContainText('网络请求超时或传输中断');
+  await dlqTable.getByRole('button', { name: '重新投递' }).click();
+  await expect(page.getByText('已重新提交到规则动作投递队列')).toBeVisible();
+  await expect(page.getByText('当前没有待重投的规则联动动作死信')).toBeVisible();
+
+  await expect(page.getByText('通知路由与降噪配置')).toBeVisible();
+  const routingPanel = page.getByRole('region', { name: '分级路由与升级路径' });
+  await expect(routingPanel).toContainText('重要分级通道');
+  await expect(routingPanel).not.toContainText(/\b(?:major|warning)\b/);
+  await expect(routingPanel).toContainText('企业微信应用 / 邮件（2 人）');
+  await expect(routingPanel).not.toContainText(/example\.com|duty-a/);
+  await page.getByRole('button', { name: '热重载路由配置' }).click();
+  await expect(page.getByText('站点通知路由配置已热更新并生效')).toBeVisible();
+  await expect(page.getByText('1 次')).toBeVisible();
 
   const appearance = page.getByRole('radiogroup', { name: '外观' });
   await appearance.getByRole('radio', { name: '浅色' }).click();
@@ -142,20 +161,36 @@ test('模拟试算 dry-runs a multi-step sampling sequence without mutating alar
   await expect(steps).toHaveCount(3);
   await steps.nth(2).getByLabel(/btu meter supply water temperature/).fill('6.8');
 
+  // With ALL_ACTIVE gate and upstream unchecked, raise stays blocked until upstream is checked.
   await sheet.getByRole('button', { name: '运行模拟试算' }).click();
   const resultTable = sheet.getByRole('table', { name: '试算结果明细' });
-  await expect(resultTable).toContainText('触发告警');
-  await expect(resultTable).toContainText('自动恢复');
-  await expect(resultTable).not.toContainText(/[0-9a-f]{8}-[0-9a-f]{4}-|MATCHED|PUBLISH|CLEAR/);
+  await expect(resultTable).toContainText('前置上游告警未全部激活');
 
-  const simWrite = gateway.writes.find((write) => write.path === '/api/v1/alarm-rules/simulate');
+  await sheet.getByRole('checkbox', { name: '冷冻水回水温度过低' }).check();
+  await sheet.getByRole('button', { name: '运行模拟试算' }).click();
+  await expect(resultTable).toContainText('触发告警');
+  await expect(resultTable).toContainText('拟触发 触发时创建运维工单：排查冷机供水温度骤升异常');
+  await expect(resultTable).toContainText('拟触发 触发时下发保护指令：保护设定值与联锁指令');
+  await expect(resultTable).toContainText('自动恢复');
+  await expect(resultTable).not.toContainText(/[0-9a-f]{8}-[0-9a-f]{4}-|MATCHED|PUBLISH|CLEAR|WORK_ORDER|PROTECTION_COMMAND/);
+
+  const simWrite = gateway.writes.filter((write) => write.path === '/api/v1/alarm-rules/simulate').at(-1);
   expect(simWrite?.csrfToken).toBe('e2e-csrf-token');
   expect(simWrite?.body).toMatchObject({
     ruleId: '01910000-b100-7000-8000-00000000000d',
     steps: [
-      { readings: [{ pointCode: 'supply_water_temperature', value: 7 }, { pointCode: 'run_state', value: 'RUNNING' }] },
-      { readings: [{ pointCode: 'supply_water_temperature', value: 10.5 }, { pointCode: 'run_state', value: 'RUNNING' }] },
-      { readings: [{ pointCode: 'supply_water_temperature', value: 6.8 }, { pointCode: 'run_state', value: 'RUNNING' }] },
+      {
+        upstreamActiveRuleIds: ['01910000-b100-7000-8000-00000000000a'],
+        readings: [{ pointCode: 'supply_water_temperature', value: 7 }, { pointCode: 'run_state', value: 'RUNNING' }],
+      },
+      {
+        upstreamActiveRuleIds: ['01910000-b100-7000-8000-00000000000a'],
+        readings: [{ pointCode: 'supply_water_temperature', value: 10.5 }, { pointCode: 'run_state', value: 'RUNNING' }],
+      },
+      {
+        upstreamActiveRuleIds: ['01910000-b100-7000-8000-00000000000a'],
+        readings: [{ pointCode: 'supply_water_temperature', value: 6.8 }, { pointCode: 'run_state', value: 'RUNNING' }],
+      },
     ],
   });
 });

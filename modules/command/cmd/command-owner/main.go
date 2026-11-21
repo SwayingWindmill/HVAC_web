@@ -294,6 +294,14 @@ func run() int {
 			alarmRelay.Run(relayCtx)
 		}()
 	}
+	if telemetry.Metrics != nil {
+		relayWg.Add(1)
+		go func() {
+			defer relayWg.Done()
+			defer observability.Recover(logger, telemetry.Metrics, "command_owner.alarm_outbox_depth")
+			runControlAlarmOutboxDepthRefresher(relayCtx, logger, store, telemetry.Metrics, defaultControlAlarmDepthRefreshInterval)
+		}()
+	}
 
 	signalCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stopSignals()
@@ -589,4 +597,57 @@ func requiredEnv(name string) (string, error) {
 		return "", fmt.Errorf("%s is required", name)
 	}
 	return value, nil
+}
+
+const defaultControlAlarmDepthRefreshInterval = 15 * time.Second
+
+type controlAlarmOutboxStateCounter interface {
+	CountControlAlarmOutboxStates(ctx context.Context) (commandservice.ControlAlarmOutboxStateCounts, error)
+}
+
+func refreshControlAlarmOutboxDepth(
+	ctx context.Context,
+	logger *slog.Logger,
+	counter controlAlarmOutboxStateCounter,
+	metrics *observability.Registry,
+) {
+	if counter == nil || metrics == nil {
+		return
+	}
+	queryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	counts, err := counter.CountControlAlarmOutboxStates(queryCtx)
+	if err != nil {
+		if logger != nil && !errors.Is(err, context.Canceled) {
+			logger.Warn("command_control_alarm_outbox_depth_refresh_failed", "error_code", commandservice.ControlAlarmErrorCode(err))
+		}
+		return
+	}
+	commandservice.RecordControlAlarmOutboxDepthMetrics(metrics, counts)
+}
+
+func runControlAlarmOutboxDepthRefresher(
+	ctx context.Context,
+	logger *slog.Logger,
+	counter controlAlarmOutboxStateCounter,
+	metrics *observability.Registry,
+	interval time.Duration,
+) {
+	if counter == nil || metrics == nil {
+		return
+	}
+	if interval <= 0 {
+		interval = defaultControlAlarmDepthRefreshInterval
+	}
+	refreshControlAlarmOutboxDepth(ctx, logger, counter, metrics)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			refreshControlAlarmOutboxDepth(ctx, logger, counter, metrics)
+		}
+	}
 }

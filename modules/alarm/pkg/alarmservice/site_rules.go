@@ -99,10 +99,11 @@ func ValidateSiteRuleGraph(rules []SiteRule) (rulegraph.GraphReport, error) {
 	nodes := make([]rulegraph.Node, 0, len(rules))
 	for _, rule := range rules {
 		nodes = append(nodes, rulegraph.Node{
-			ID:          rule.AssignmentID,
-			Code:        rule.Policy.AlarmType,
-			DependsOn:   append([]string(nil), rule.Policy.DependsOnRuleIDs...),
-			ReadDevices: readDevicesForPolicy(rule.Policy),
+			ID:           rule.AssignmentID,
+			Code:         rule.Policy.AlarmType,
+			DependsOn:    append([]string(nil), rule.Policy.DependsOnRuleIDs...),
+			ReadDevices:  readDevicesForPolicy(rule.Policy),
+			WriteDevices: writeDevicesForPolicy(rule.Policy),
 		})
 	}
 	return rulegraph.ValidateDAG(nodes)
@@ -118,6 +119,25 @@ func readDevicesForPolicy(policy AlarmPolicyRevision) []string {
 		if deviceID, _, ok := strings.Cut(key, "/"); ok && deviceID != "" {
 			devices = append(devices, deviceID)
 		}
+	}
+	return devices
+}
+
+func writeDevicesForPolicy(policy AlarmPolicyRevision) []string {
+	if len(policy.Actions) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(policy.Actions))
+	devices := make([]string, 0, len(policy.Actions))
+	for _, action := range policy.Actions {
+		if action.Kind != RuleActionProtectionCommand || action.TargetDeviceID == "" {
+			continue
+		}
+		if _, exists := seen[action.TargetDeviceID]; exists {
+			continue
+		}
+		seen[action.TargetDeviceID] = struct{}{}
+		devices = append(devices, action.TargetDeviceID)
 	}
 	return devices
 }

@@ -465,3 +465,47 @@ test('command log and drawer show Chinese priority tier and translate DEVICE_PRI
   await page.getByRole('alertdialog').getByRole('button', { name: '确认下发' }).click();
   await expect(page.getByText('这台设备正由更高优先级的安全联锁或人工指令锁定，当前指令不能下发。').first()).toBeVisible();
 });
+
+test('operators can acquire and release device priority locks and replay control alarm dead letters', async ({ page, gateway }) => {
+  await page.goto(`/operations/control?site=${SITE_ID}`);
+
+  const chillerCard = page.getByRole('group', { name: 'CHILLER-01' });
+  await chillerCard.getByRole('button', { name: '设置 CHILLER-01 优先级锁定' }).click();
+  const lockDialog = page.getByRole('dialog', { name: /CHILLER-01 优先级仲裁锁/ });
+  await lockDialog.getByText('安全联锁', { exact: true }).click();
+  await lockDialog.getByRole('button', { name: '30 分钟' }).click();
+  await lockDialog.getByRole('textbox', { name: '锁定原因' }).fill('冷凝器压差高，高优先级保护锁机');
+  await lockDialog.getByRole('button', { name: '确认锁定' }).click();
+
+  await expect(page.getByText('已为 CHILLER-01 设置安全联锁锁定')).toBeVisible();
+  await expect(chillerCard).toContainText('安全联锁 · 剩余');
+  await expect(chillerCard).not.toContainText(/SAFETY_INTERLOCK/);
+
+  const lockPut = gateway.writes.find((entry) => entry.method === 'PUT' && entry.path.endsWith('/priority-lock'));
+  expect(lockPut?.body).toEqual({
+    lockedPriority: 'SAFETY_INTERLOCK',
+    durationMinutes: 30,
+    reason: '冷凝器压差高，高优先级保护锁机',
+  });
+
+  await chillerCard.getByRole('button', { name: '管理 CHILLER-01 优先级锁定' }).click();
+  const editDialog = page.getByRole('dialog', { name: /CHILLER-01 优先级仲裁锁/ });
+  await expect(editDialog).toContainText('冷凝器压差高，高优先级保护锁机');
+  await editDialog.getByRole('textbox', { name: '更新或解除原因' }).fill('压差恢复正常');
+  await editDialog.getByRole('button', { name: '解除锁定' }).click();
+  await expect(page.getByText('已解除 CHILLER-01 的优先级锁定')).toBeVisible();
+  await expect(chillerCard).not.toContainText('安全联锁 · 剩余');
+
+  const dlqButton = page.getByRole('button', { name: /控制告警死信 \(1\)/ });
+  await dlqButton.click();
+  const dlqDialog = page.getByRole('dialog', { name: '控制告警投递死信' });
+  const dlqTable = dlqDialog.getByRole('table', { name: '控制告警投递死信列表' });
+  await expect(dlqTable).toContainText('CHILLER-01');
+  await expect(dlqTable).toContainText('执行结果未知');
+  await expect(dlqTable).toContainText('下游告警服务通信失败');
+  await dlqTable.getByRole('button', { name: '重新投递' }).click();
+  await expect(page.getByText('已重新提交到控制告警投递队列')).toBeVisible();
+  await expect(dlqDialog).toContainText('当前没有待重投的控制告警死信记录');
+  await dlqDialog.getByRole('button', { name: 'Close' }).click();
+  await expect(dlqDialog).toBeHidden();
+});

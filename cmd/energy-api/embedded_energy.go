@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"crypto"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -21,10 +23,12 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/commandauth"
+	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/sessionevent"
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
 	"github.com/quanlaihe/hvac-web/libs/workloadtls"
+	"github.com/quanlaihe/hvac-web/libs/workordermodel"
 	"github.com/quanlaihe/hvac-web/modules/alarm/pkg/alarmservice"
 	"github.com/quanlaihe/hvac-web/modules/audit/pkg/auditserver"
 	"github.com/quanlaihe/hvac-web/modules/command/pkg/commandservice"
@@ -118,6 +122,52 @@ func (ref *embeddedAlarmStoreRef) getStore() alarmservice.Store {
 	return ref.store
 }
 
+type embeddedWorkOrderStoreRef struct {
+	mu    sync.RWMutex
+	store workorderservice.Store
+}
+
+func (ref *embeddedWorkOrderStoreRef) setStore(store workorderservice.Store) {
+	if ref == nil {
+		return
+	}
+	ref.mu.Lock()
+	ref.store = store
+	ref.mu.Unlock()
+}
+
+func (ref *embeddedWorkOrderStoreRef) getStore() workorderservice.Store {
+	if ref == nil {
+		return nil
+	}
+	ref.mu.RLock()
+	defer ref.mu.RUnlock()
+	return ref.store
+}
+
+type embeddedCommandAuthorityRef struct {
+	mu        sync.RWMutex
+	authority *commandservice.ControlAuthority
+}
+
+func (ref *embeddedCommandAuthorityRef) setAuthority(authority *commandservice.ControlAuthority) {
+	if ref == nil {
+		return
+	}
+	ref.mu.Lock()
+	ref.authority = authority
+	ref.mu.Unlock()
+}
+
+func (ref *embeddedCommandAuthorityRef) getAuthority() *commandservice.ControlAuthority {
+	if ref == nil {
+		return nil
+	}
+	ref.mu.RLock()
+	defer ref.mu.RUnlock()
+	return ref.authority
+}
+
 func startEmbeddedEnergyServices(ctx context.Context, logger *slog.Logger) (*embeddedEnergyServices, error) {
 	owners, err := parseEmbeddedOwners(os.Getenv("ENERGY_API_EMBEDDED_OWNERS"))
 	if err != nil {
@@ -129,6 +179,8 @@ func startEmbeddedEnergyServices(ctx context.Context, logger *slog.Logger) (*emb
 		serveErr: make(chan error, len(owners)),
 	}
 	alarmStoreRef := &embeddedAlarmStoreRef{}
+	workOrderStoreRef := &embeddedWorkOrderStoreRef{}
+	commandAuthorityRef := &embeddedCommandAuthorityRef{}
 	fail := func(err error) (*embeddedEnergyServices, error) {
 		cancelServices()
 		services.bgWG.Wait()
@@ -170,7 +222,7 @@ func startEmbeddedEnergyServices(ctx context.Context, logger *slog.Logger) (*emb
 			services.servers = append(services.servers, server)
 			services.telemetry = append(services.telemetry, telemetry)
 		case "alarm":
-			server, telemetry, closeOwner, configureErr := newEmbeddedAlarmServer(serviceCtx, logger, alarmStoreRef, &services.bgWG)
+			server, telemetry, closeOwner, configureErr := newEmbeddedAlarmServer(serviceCtx, logger, alarmStoreRef, workOrderStoreRef, commandAuthorityRef, &services.bgWG)
 			if configureErr != nil {
 				return fail(fmt.Errorf("configure embedded Alarm: %w", configureErr))
 			}
@@ -186,14 +238,14 @@ func startEmbeddedEnergyServices(ctx context.Context, logger *slog.Logger) (*emb
 			services.telemetry = append(services.telemetry, telemetry)
 			services.closeFuncs = append(services.closeFuncs, closeOwner)
 		case "work-order":
-			server, closeOwner, configureErr := newEmbeddedWorkOrderServer(serviceCtx, logger)
+			server, closeOwner, configureErr := newEmbeddedWorkOrderServer(serviceCtx, logger, workOrderStoreRef)
 			if configureErr != nil {
 				return fail(fmt.Errorf("configure embedded Work Order: %w", configureErr))
 			}
 			services.servers = append(services.servers, server)
 			services.closeFuncs = append(services.closeFuncs, closeOwner)
 		case "command":
-			server, telemetry, closeOwner, configureErr := newEmbeddedCommandServer(serviceCtx, logger, alarmStoreRef, &services.bgWG)
+			server, telemetry, closeOwner, configureErr := newEmbeddedCommandServer(serviceCtx, logger, alarmStoreRef, commandAuthorityRef, &services.bgWG)
 			if configureErr != nil {
 				return fail(fmt.Errorf("configure embedded Command: %w", configureErr))
 			}
@@ -705,7 +757,7 @@ func buildEmbeddedCoreOutboxRelayConfig(cert tls.Certificate, defaultRoots, fall
 	}, true, nil
 }
 
-func newEmbeddedCommandServer(ctx context.Context, logger *slog.Logger, alarmRef *embeddedAlarmStoreRef, bgWG *sync.WaitGroup) (*http.Server, *observability.Runtime, func(), error) {
+func newEmbeddedCommandServer(ctx context.Context, logger *slog.Logger, alarmRef *embeddedAlarmStoreRef, authorityRef *embeddedCommandAuthorityRef, bgWG *sync.WaitGroup) (*http.Server, *observability.Runtime, func(), error) {
 	certPath := energyRequiredEnv("COMMAND_TLS_CERT")
 	keyPath := energyRequiredEnv("COMMAND_TLS_KEY")
 	clientCAPath := energyRequiredEnv("COMMAND_CLIENT_CA")
@@ -791,6 +843,7 @@ func newEmbeddedCommandServer(ctx context.Context, logger *slog.Logger, alarmRef
 		store.Close()
 		return nil, nil, func() {}, err
 	}
+	authorityRef.setAuthority(authority)
 	commandHandler, err := commandservice.NewHTTPHandler(commandservice.HTTPConfig{
 		Authority:                  store,
 		CommandGrantPublicKey:      commandGrantPublicKey,
@@ -853,6 +906,35 @@ func newEmbeddedCommandServer(ctx context.Context, logger *slog.Logger, alarmRef
 			alarmRelay.Run(relayCtx)
 		})
 	}
+	const controlAlarmDepthRefreshInterval = 15 * time.Second
+	relayWG.Add(1)
+	launchEmbeddedWorker(bgWG, func() {
+		defer relayWG.Done()
+		defer observability.Recover(logger, telemetry.Metrics, "command.control_alarm_outbox_depth")
+		refreshDepth := func() {
+			queryCtx, cancelQuery := context.WithTimeout(relayCtx, 5*time.Second)
+			defer cancelQuery()
+			counts, depthErr := store.CountControlAlarmOutboxStates(queryCtx)
+			if depthErr != nil {
+				if logger != nil && !errors.Is(depthErr, context.Canceled) {
+					logger.Warn("command_control_alarm_outbox_depth_refresh_failed", "error_code", commandservice.ControlAlarmErrorCode(depthErr))
+				}
+				return
+			}
+			commandservice.RecordControlAlarmOutboxDepthMetrics(telemetry.Metrics, counts)
+		}
+		refreshDepth()
+		ticker := time.NewTicker(controlAlarmDepthRefreshInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-relayCtx.Done():
+				return
+			case <-ticker.C:
+				refreshDepth()
+			}
+		}
+	})
 	handler := newEmbeddedCommandHandler(gatewaySPIFFE, operatorHandler, commandHandler, runtimeHandler, telemetry)
 	server := &http.Server{
 		Addr: envOr("COMMAND_SERVICE_ADDR", ":8447"), Handler: handler,
@@ -1022,7 +1104,116 @@ func buildEmbeddedCommandControlFailureSender(alarmRef *embeddedAlarmStoreRef, c
 	}
 }
 
-func newEmbeddedAlarmServer(ctx context.Context, logger *slog.Logger, alarmRef *embeddedAlarmStoreRef, bgWG *sync.WaitGroup) (*http.Server, *observability.Runtime, func(), error) {
+func embeddedUUIDv7(now time.Time) (string, error) {
+	millis := now.UTC().UnixMilli()
+	if millis < 0 || millis > (1<<48)-1 {
+		return "", errors.New("UUIDv7 timestamp is out of range")
+	}
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return "", err
+	}
+	value[0] = byte(millis >> 40)
+	value[1] = byte(millis >> 32)
+	value[2] = byte(millis >> 24)
+	value[3] = byte(millis >> 16)
+	value[4] = byte(millis >> 8)
+	value[5] = byte(millis)
+	value[6] = (value[6] & 0x0f) | 0x70
+	value[8] = (value[8] & 0x3f) | 0x80
+
+	encoded := make([]byte, 36)
+	hex.Encode(encoded[0:8], value[0:4])
+	encoded[8] = '-'
+	hex.Encode(encoded[9:13], value[4:6])
+	encoded[13] = '-'
+	hex.Encode(encoded[14:18], value[6:8])
+	encoded[18] = '-'
+	hex.Encode(encoded[19:23], value[8:10])
+	encoded[23] = '-'
+	hex.Encode(encoded[24:36], value[10:16])
+	return string(encoded), nil
+}
+
+func embeddedRuleActionWorkOrderCallback(workOrderRef *embeddedWorkOrderStoreRef) func(context.Context, alarmservice.RuleActionWorkOrderRequest) error {
+	return func(ctx context.Context, req alarmservice.RuleActionWorkOrderRequest) error {
+		woStore := workOrderRef.getStore()
+		if woStore == nil {
+			return errors.New("work order store is not available")
+		}
+		occurredAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(req.OccurredAt))
+		if err != nil {
+			occurredAt = time.Now().UTC()
+		}
+		workOrderID, err := embeddedUUIDv7(occurredAt)
+		if err != nil {
+			return fmt.Errorf("allocate work order id: %w", err)
+		}
+		priority := workordermodel.Priority(strings.ToUpper(strings.TrimSpace(req.Priority)))
+		switch priority {
+		case workordermodel.PriorityLow, workordermodel.PriorityMedium, workordermodel.PriorityHigh, workordermodel.PriorityUrgent:
+		default:
+			priority = workordermodel.PriorityHigh
+		}
+		title := strings.TrimSpace(req.Title)
+		if title == "" {
+			title = "告警自动运维工单"
+		}
+		tenantCtx := identitycontext.WithTenantID(ctx, req.TenantID)
+		_, err = woStore.Create(tenantCtx, req.TenantID, req.SiteID, workorderservice.CreateMutation{
+			WorkOrderID: workOrderID,
+			Title:       title,
+			Description: fmt.Sprintf("由告警规则触发自动工单（告警编号 %s，规则编号 %s）。", req.AlarmID, req.AssignmentID),
+			Priority:    priority,
+			SourceReferences: []workordermodel.SourceReference{{
+				Domain:       workordermodel.SourceAlarm,
+				ResourceID:   req.AlarmID,
+				Relationship: workordermodel.RelationshipOrigin,
+			}},
+			ActorType:      "SYSTEM",
+			ActorID:        "alarm-rule-action-relay",
+			PolicyRevision: "alarm-rule-action:v1",
+			CorrelationID:  req.OutboxID,
+			IdempotencyKey: req.IdempotencyKey,
+			OccurredAt:     occurredAt.UTC().Format(time.RFC3339Nano),
+		})
+		if errors.Is(err, workordermodel.ErrInvalidCreate) {
+			return alarmservice.MarkPermanentActionFailure("invalid_payload", err)
+		}
+		return err
+	}
+}
+
+func embeddedRuleActionProtectionCallback(commandRef *embeddedCommandAuthorityRef) func(context.Context, alarmservice.RuleActionProtectionCommandRequest) error {
+	return func(ctx context.Context, req alarmservice.RuleActionProtectionCommandRequest) error {
+		authority := commandRef.getAuthority()
+		if authority == nil {
+			return errors.New("command authority is not available")
+		}
+		_, err := authority.SubmitProtectionRuleCommand(ctx, commandservice.ProtectionRuleCommandInput{
+			TenantID:        req.TenantID,
+			SiteID:          req.SiteID,
+			DeviceID:        req.TargetDeviceID,
+			TargetPointCode: req.TargetPointCode,
+			Capability:      req.Capability,
+			Parameters:      req.Parameters,
+			IdempotencyKey:  req.IdempotencyKey,
+			TraceID:         req.TraceID,
+			AssignmentID:    req.AssignmentID,
+			OutboxID:        req.OutboxID,
+		})
+		if err != nil {
+			var ce *commandservice.ControlError
+			if errors.As(err, &ce) && !ce.Retryable {
+				return alarmservice.MarkPermanentActionFailure("command_error", err)
+			}
+			return err
+		}
+		return nil
+	}
+}
+
+func newEmbeddedAlarmServer(ctx context.Context, logger *slog.Logger, alarmRef *embeddedAlarmStoreRef, workOrderRef *embeddedWorkOrderStoreRef, commandRef *embeddedCommandAuthorityRef, bgWG *sync.WaitGroup) (*http.Server, *observability.Runtime, func(), error) {
 	certificate, err := tls.LoadX509KeyPair(energyRequiredEnv("ALARM_TLS_CERT"), energyRequiredEnv("ALARM_TLS_KEY"))
 	if err != nil {
 		return nil, nil, func() {}, err
@@ -1085,8 +1276,27 @@ func newEmbeddedAlarmServer(ctx context.Context, logger *slog.Logger, alarmRef *
 	evalCtx, cancelEval := context.WithCancel(ctx)
 	// A Site that stops reporting sends no telemetry to evaluate; only the scheduled pass notices it (#615).
 	scheduledDone := alarmservice.StartScheduledEvaluations(evalCtx, store, logger)
+	actionRelay, err := alarmservice.NewRuleActionRelay(alarmservice.RuleActionRelayConfig{
+		Store:                   store,
+		WebhookSender:           alarmservice.NewSSRFWebhookSender(alarmservice.NewDirWebhookSecretResolver(os.Getenv("ALARM_WEBHOOK_SECRET_DIR"))),
+		CreateWorkOrder:         embeddedRuleActionWorkOrderCallback(workOrderRef),
+		SubmitProtectionCommand: embeddedRuleActionProtectionCallback(commandRef),
+		Metrics:                 telemetry.Metrics,
+		Logger:                  logger,
+		WorkerID:                replicaWorkerID("ALARM_ACTION_RELAY_WORKER_ID", "energy-api-alarm-action-relay"),
+	})
+	if err != nil {
+		cancelEval()
+		<-scheduledDone
+		store.Close()
+		return nil, nil, func() {}, err
+	}
+	actionRelayDone := actionRelay.Start(evalCtx, 5*time.Second)
 	launchEmbeddedWorker(bgWG, func() {
 		<-scheduledDone
+	})
+	launchEmbeddedWorker(bgWG, func() {
+		<-actionRelayDone
 	})
 	server := &http.Server{
 		Addr: envOr("ALARM_SERVICE_ADDR", ":8448"), Handler: router,
@@ -1098,13 +1308,14 @@ func newEmbeddedAlarmServer(ctx context.Context, logger *slog.Logger, alarmRef *
 	closeOwner := func() {
 		cancelEval()
 		<-scheduledDone
+		<-actionRelayDone
 		store.Close()
 	}
 	logger.Info("energy_api_alarm_configured", "address", server.Addr)
 	return server, telemetry, closeOwner, nil
 }
 
-func newEmbeddedWorkOrderServer(ctx context.Context, logger *slog.Logger) (*http.Server, func(), error) {
+func newEmbeddedWorkOrderServer(ctx context.Context, logger *slog.Logger, workOrderRef *embeddedWorkOrderStoreRef) (*http.Server, func(), error) {
 	certificate, err := tls.LoadX509KeyPair(energyRequiredEnv("WORK_ORDER_TLS_CERT"), energyRequiredEnv("WORK_ORDER_TLS_KEY"))
 	if err != nil {
 		return nil, func() {}, err
@@ -1135,6 +1346,7 @@ func newEmbeddedWorkOrderServer(ctx context.Context, logger *slog.Logger) (*http
 	if err != nil {
 		return nil, func() {}, err
 	}
+	workOrderRef.setStore(store)
 	gatewaySPIFFE := envOr("WORK_ORDER_GATEWAY_SPIFFE", workorderservice.DefaultGatewaySPIFFEID)
 	handler, err := workorderservice.NewHTTPHandler(workorderservice.HTTPConfig{
 		Store: store, GatewayPublicKey: gatewayPublicKey, GatewaySPIFFEID: gatewaySPIFFE,

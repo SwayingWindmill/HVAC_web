@@ -73,7 +73,18 @@ const conc = `${gw}/concentrators/{unitId}`;
 const site = 'sites/{siteId}';
 const sav = `${site}/savings/measures`;
 const opt = `${site}/optimization`;
+const w4 = [
+  ['listAlarmRuleDeadLetters', 'get', 'alarm-rules/dead-letters', 'AlarmRuleDeadLetterListEnvelope', '__ALARM_RULES_DEAD_LETTERS_PATH__'],
+  ['replayAlarmRuleDeadLetter', 'post', 'alarm-rules/dead-letters/{outboxId}/replay', 'AlarmRuleDeadLetterReplayEnvelope', '__ALARM_RULES_DEAD_LETTER_REPLAY_PATH__'],
+  ['putDevicePriorityLock', 'put', `${site}/devices/{deviceId}/priority-lock`, 'DevicePriorityLockState', '__DEVICE_PRIORITY_LOCK_PATH__'],
+  ['deleteDevicePriorityLock', 'delete', `${site}/devices/{deviceId}/priority-lock`, 'DevicePriorityLockReleaseResponse'],
+  ['listControlAlarmDeadLetters', 'get', `${site}/control-alarms/dead-letters`, 'ControlAlarmDeadLetterListEnvelope', '__CONTROL_ALARM_DEAD_LETTERS_PATH__'],
+  ['replayControlAlarmDeadLetter', 'post', `${site}/control-alarms/dead-letters/{outboxId}/replay`, 'ControlAlarmDeadLetterReplayResponse', '__CONTROL_ALARM_DEAD_LETTER_REPLAY_PATH__'],
+  ['getSiteAlarmRouting', 'get', `${site}/alarm-routing`, 'SiteAlarmRoutingEnvelope', '__SITE_ALARM_ROUTING_PATH__'],
+  ['reloadSiteAlarmRouting', 'post', `${site}/alarm-routing/reload`, 'SiteAlarmRoutingReloadEnvelope', '__SITE_ALARM_ROUTING_RELOAD_PATH__'],
+];
 const expectedOperations = {
+  ...Object.fromEntries(w4.map(([k, m, p]) => [k, [m, p]])),
   getGatewayCredential: ['get', `${gw}/credential`],
   listGatewayCredentials: ['get', `${gw}/credentials`],
   revokeGatewayCertificate: ['post', `${gw}/credentials/{credentialId}/revoke`],
@@ -213,6 +224,7 @@ for (const [operationId, [method, subPath]] of Object.entries(expectedOperations
 }
 
 const expectedSuccessSchemas = {
+  ...Object.fromEntries(w4.map(([k, , , s]) => [k, s])),
   getGatewayCredential: 'GatewayCredentialStatus',
   listGatewayCredentials: 'GatewayCredentialList',
   revokeGatewayCertificate: 'GatewayCredentialRecord',
@@ -377,9 +389,9 @@ const schemaRequirements = {
   SiteDataGapList: [['items']],
   AssetControlLockState: [['siteId', 'assetId', 'lockMode', 'reason', 'updatedBy', 'updatedAt', 'revision'], ['id', 'tenantId', 'updatedByName', 'boundDeviceIds']],
   ActiveMaintenanceWindow: [['id', 'title', 'startDate', 'endDate', 'reason']],
-  SiteControlState: [['tenantId', 'siteId', 'controlMode', 'reason', 'updatedBy', 'updatedAt', 'revision', 'assetLocks'], ['id', 'updatedByName', 'activeMaintenanceWindow']],
+  SiteControlState: [['tenantId', 'siteId', 'controlMode', 'reason', 'updatedBy', 'updatedAt', 'revision', 'assetLocks'], ['id', 'updatedByName', 'devicePriorityLocks', 'activeMaintenanceWindow']],
   SiteControlModeMutation: [['controlMode'], ['reason', 'expectedRevision', 'meta']],
-  SiteControlModeMutationResponse: [['tenantId', 'siteId', 'controlMode', 'reason', 'updatedBy', 'updatedAt', 'revision', 'assetLocks', 'cancelledCommandIds'], ['id', 'updatedByName', 'activeMaintenanceWindow']],
+  SiteControlModeMutationResponse: [['tenantId', 'siteId', 'controlMode', 'reason', 'updatedBy', 'updatedAt', 'revision', 'assetLocks', 'cancelledCommandIds'], ['id', 'updatedByName', 'devicePriorityLocks', 'activeMaintenanceWindow']],
   AssetControlLockMutation: [['lockMode'], ['reason', 'expectedRevision', 'meta']],
   AssetControlLockMutationResponse: [['siteId', 'assetId', 'lockMode', 'reason', 'updatedBy', 'updatedAt', 'revision', 'cancelledCommandIds'], ['id', 'tenantId', 'updatedByName', 'boundDeviceIds']],
   SiteControlShutdownRequest: [['mode', 'reason', 'verificationCode'], ['unitCode', 'confirmEmergencyDoRelease', 'expectedRevision']],
@@ -523,6 +535,7 @@ invariant(spec.components?.responses?.Problem?.content?.['application/problem+js
 
 const banner = `Generator: platform-contracts@${generatorVersion}; Contract SHA-256: ${digest}`;
 const replacements = {
+  ...Object.fromEntries(w4.flatMap(([k, , , , r]) => (r ? [[r, operations[k].path]] : []))),
   __CONTRACT_BANNER__: banner,
   __HEALTH_PATH__: operations.getHealth.path,
   __VERSION_PATH__: operations.getVersion.path,

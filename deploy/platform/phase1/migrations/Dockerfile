@@ -169,6 +169,7 @@ COPY modules/command/migrations/control-alarm-outbox.sql /opt/hvac/repo/modules/
 COPY modules/command/migrations/command-priority-and-locks.sql /opt/hvac/repo/modules/command/migrations/command-priority-and-locks.sql
 COPY modules/command/migrations/command-audit-immutability.sql /opt/hvac/repo/modules/command/migrations/command-audit-immutability.sql
 COPY modules/command/migrations/command-due-work-tenants.sql /opt/hvac/repo/modules/command/migrations/command-due-work-tenants.sql
+COPY modules/command/migrations/control-alarm-dead-letter-inspect.sql /opt/hvac/repo/modules/command/migrations/control-alarm-dead-letter-inspect.sql
 COPY modules/alarm/migrations/001_s4_alarm_runtime.sql /opt/hvac/repo/modules/alarm/migrations/001_s4_alarm_runtime.sql
 COPY modules/alarm/migrations/002_s4_alarm_lifecycle.sql /opt/hvac/repo/modules/alarm/migrations/002_s4_alarm_lifecycle.sql
 COPY modules/alarm/migrations/003_s4_tenant_scope.sql /opt/hvac/repo/modules/alarm/migrations/003_s4_tenant_scope.sql
@@ -188,6 +189,7 @@ COPY modules/alarm/migrations/016_s32_rules_unevaluable.sql /opt/hvac/repo/modul
 COPY modules/alarm/migrations/017_drop_legacy_migration_backups_and_comment_tables.sql /opt/hvac/repo/modules/alarm/migrations/017_drop_legacy_migration_backups_and_comment_tables.sql
 COPY modules/alarm/migrations/alarm-suppression-notification-events.sql /opt/hvac/repo/modules/alarm/migrations/alarm-suppression-notification-events.sql
 COPY modules/alarm/migrations/alarm-evaluation-slope-window.sql /opt/hvac/repo/modules/alarm/migrations/alarm-evaluation-slope-window.sql
+COPY modules/alarm/migrations/alarm-rule-action-outbox.sql /opt/hvac/repo/modules/alarm/migrations/alarm-rule-action-outbox.sql
 COPY modules/workorder/migrations/001_s5_work_order_runtime.sql /opt/hvac/repo/modules/workorder/migrations/001_s5_work_order_runtime.sql
 COPY modules/workorder/migrations/002_s5_work_order_create_assignment.sql /opt/hvac/repo/modules/workorder/migrations/002_s5_work_order_create_assignment.sql
 COPY modules/workorder/migrations/003_s5_work_order_lifecycle.sql /opt/hvac/repo/modules/workorder/migrations/003_s5_work_order_lifecycle.sql

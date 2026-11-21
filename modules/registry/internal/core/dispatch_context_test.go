@@ -14,9 +14,14 @@ import (
 
 type dispatchContextFakeStore struct {
 	*fakeRegistryStore
-	ctxView CommandDispatchContext
-	ctxErr  error
-	calls   int
+	ctxView       CommandDispatchContext
+	ctxErr        error
+	calls         int
+	resolveCalls  int
+	resolvedID    string
+	resolveErr    error
+	lastPointCode string
+	lastCap       string
 }
 
 func (s *dispatchContextFakeStore) GetCommandDispatchContext(
@@ -33,6 +38,25 @@ func (s *dispatchContextFakeStore) GetCommandDispatchContext(
 	view.SiteID = siteID
 	view.DeviceID = deviceID
 	view.PointID = pointID
+	return view, nil
+}
+
+func (s *dispatchContextFakeStore) ResolveCommandDispatchContext(
+	_ context.Context,
+	tenantID, siteID, deviceID, pointCode, capability string,
+	_ time.Time,
+) (CommandDispatchContext, error) {
+	s.resolveCalls++
+	s.lastPointCode = pointCode
+	s.lastCap = capability
+	if s.resolveErr != nil {
+		return CommandDispatchContext{}, s.resolveErr
+	}
+	view := s.ctxView
+	view.TenantID = tenantID
+	view.SiteID = siteID
+	view.DeviceID = deviceID
+	view.PointID = s.resolvedID
 	return view, nil
 }
 
@@ -145,5 +169,61 @@ func TestServerServesCommandDispatchContextOnlyToCommandService(t *testing.T) {
 		got.ActuationMode != "PULSE" || got.FeedbackPointKey != "run_state" ||
 		len(got.AssetLocks) != 1 || got.ActiveMaintenanceWindow == nil || len(got.Interlocks) != 1 {
 		t.Fatalf("unexpected dispatch context: %+v", got)
+	}
+
+	// Mixing pointId with capability/pointCode must fail with 400.
+	mixReq := httptest.NewRequest(http.MethodGet, queryURL+"&capability=SET_FREQUENCY", nil)
+	mixReq.TLS = okReq.TLS
+	mixRec := httptest.NewRecorder()
+	harness.handler.ServeHTTP(mixRec, mixReq)
+	if mixRec.Code != http.StatusBadRequest {
+		t.Fatalf("mixed query status=%d body=%s, want 400", mixRec.Code, mixRec.Body.String())
+	}
+
+	// Missing both pointId and capability must fail with 400.
+	noPointReq := httptest.NewRequest(http.MethodGet, CommandDispatchContextPath+"?tenantId="+testTenantA+"&siteId="+testSiteA1+"&deviceId="+testDeviceA1, nil)
+	noPointReq.TLS = okReq.TLS
+	noPointRec := httptest.NewRecorder()
+	harness.handler.ServeHTTP(noPointRec, noPointReq)
+	if noPointRec.Code != http.StatusBadRequest {
+		t.Fatalf("missing point selector status=%d body=%s, want 400", noPointRec.Code, noPointRec.Body.String())
+	}
+
+	// Mode B: Resolve by capability and optional pointCode succeeds.
+	store.resolvedID = pointID
+	resolveURL := CommandDispatchContextPath +
+		"?tenantId=" + testTenantA +
+		"&siteId=" + testSiteA1 +
+		"&deviceId=" + testDeviceA1 +
+		"&pointCode=freq_cmd&capability=SET_FREQUENCY"
+	resReq := httptest.NewRequest(http.MethodGet, resolveURL, nil)
+	resReq.TLS = okReq.TLS
+	resRec := httptest.NewRecorder()
+	harness.handler.ServeHTTP(resRec, resReq)
+	if resRec.Code != http.StatusOK || store.resolveCalls != 1 || store.lastPointCode != "freq_cmd" || store.lastCap != "SET_FREQUENCY" {
+		t.Fatalf("resolve status=%d calls=%d code=%q cap=%q body=%s", resRec.Code, store.resolveCalls, store.lastPointCode, store.lastCap, resRec.Body.String())
+	}
+	var resolved CommandDispatchContext
+	if err := json.NewDecoder(resRec.Body).Decode(&resolved); err != nil || resolved.PointID != pointID {
+		t.Fatalf("resolved payload mismatch: err=%v got=%+v", err, resolved)
+	}
+
+	// ErrNotFound -> 404, ErrBindingConflict -> 409.
+	store.resolveErr = ErrNotFound
+	nfReq := httptest.NewRequest(http.MethodGet, resolveURL, nil)
+	nfReq.TLS = okReq.TLS
+	nfRec := httptest.NewRecorder()
+	harness.handler.ServeHTTP(nfRec, nfReq)
+	if nfRec.Code != http.StatusNotFound {
+		t.Fatalf("not found resolve status=%d, want 404", nfRec.Code)
+	}
+
+	store.resolveErr = ErrBindingConflict
+	confReq := httptest.NewRequest(http.MethodGet, resolveURL, nil)
+	confReq.TLS = okReq.TLS
+	confRec := httptest.NewRecorder()
+	harness.handler.ServeHTTP(confRec, confReq)
+	if confRec.Code != http.StatusConflict {
+		t.Fatalf("ambiguous resolve status=%d, want 409", confRec.Code)
 	}
 }

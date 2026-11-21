@@ -1,8 +1,13 @@
 package notificationservice
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -46,6 +51,29 @@ func (fake *fakeDeliverySender) take() []string {
 	fake.sent = nil
 	sort.Strings(out)
 	return out
+}
+
+func (fake *fakeDeliverySender) takeOutbound() []OutboundMessage {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	out := append([]OutboundMessage(nil), fake.sent...)
+	fake.sent = nil
+	return out
+}
+
+func (fixture *deliveryFixture) runOutbound(at time.Time) []OutboundMessage {
+	fixture.t.Helper()
+	for range 100 {
+		worked, err := fixture.dispatcher.RunOnce(context.Background(), at)
+		if err != nil {
+			fixture.t.Fatal(err)
+		}
+		if !worked {
+			return fixture.sender.takeOutbound()
+		}
+	}
+	fixture.t.Fatal("the dispatcher never ran out of work")
+	return nil
 }
 
 type deliveryFixture struct {
@@ -471,4 +499,278 @@ func TestPostgresParentDeviceTopologyRootCauseSuppression(t *testing.T) {
 	equal(t, "panel recovery and released chiller-a fire", gotAfterClear,
 		"FIRE smtp duty@example.test", "FIRE wecom_app duty-wecom",
 		"RECOVERY smtp duty@example.test", "RECOVERY wecom_app duty-wecom")
+}
+
+func TestPostgresAlarmGroupingWindowBatchDeliveryMaxItemsAndCriticalImmediate(t *testing.T) {
+	ctx := context.Background()
+	fixture := newDeliveryFixture(t, DeliveryDryRun)
+	routing := testRouting(t)
+	routing.SiteID = fixture.siteID
+	routing.RateLimitPerHour = 20
+	routing.Routes[0].Steps = routing.Routes[0].Steps[:1]
+	routing.Routes[0].GroupWindowSeconds = 60
+	routing.Routes[0].GroupMaxItems = 3
+	routing.Routes[0].GroupBy = "severity"
+	routing.Routes[1].GroupWindowSeconds = 60
+	routing.Routes[1].GroupMaxItems = 3
+	routing.Routes[1].GroupBy = "severity"
+	fixture.dispatcher.Routing = NewAlarmRoutingTable(routing)
+
+	// Four MAJOR alarms (exceeding GroupMaxItems=3 -> batch of 3 + batch of 1), one CRITICAL (immediate ungrouped), one WARNING (separate severity group).
+	major1 := fixture.reminders.uuid()
+	major2 := fixture.reminders.uuid()
+	major3 := fixture.reminders.uuid()
+	major4 := fixture.reminders.uuid()
+	crit1 := fixture.reminders.uuid()
+	warn1 := fixture.reminders.uuid()
+
+	fixture.recordWithAttrs(major1, "physics/cop-low", AlarmCreated, alarmmodel.SeverityMajor, deliveryBase, 1, map[string]string{"title": "冷机1 COP偏低", "deviceId": "chiller-1"})
+	fixture.recordWithAttrs(major2, "physics/pump-diff", AlarmCreated, alarmmodel.SeverityMajor, deliveryBase.Add(5*time.Second), 1, map[string]string{"title": "冷冻泵压差高", "deviceId": "pump-1"})
+	fixture.recordWithAttrs(major3, "physics/tower-fan", AlarmCreated, alarmmodel.SeverityMajor, deliveryBase.Add(10*time.Second), 1, map[string]string{"title": "冷却塔风机故障", "deviceId": "tower-1"})
+	fixture.recordWithAttrs(major4, "physics/chw-temp", AlarmCreated, alarmmodel.SeverityMajor, deliveryBase.Add(15*time.Second), 1, map[string]string{"title": "冷冻水供水温度高", "deviceId": "chiller-2"})
+	fixture.recordWithAttrs(crit1, "physics/chiller-trip", AlarmCreated, alarmmodel.SeverityCritical, deliveryBase.Add(20*time.Second), 1, map[string]string{"title": "主机紧急停机", "deviceId": "chiller-1"})
+	fixture.recordWithAttrs(warn1, "rules-unevaluable", AlarmCreated, alarmmodel.SeverityWarning, deliveryBase.Add(25*time.Second), 1, map[string]string{"title": "规则暂无法评估"})
+
+	sent := fixture.runOutbound(deliveryBase.Add(4 * time.Minute))
+	// Expected sends:
+	// - major batch of 3: 1 smtp + 1 wecom_app
+	// - major single (4th item): 1 smtp + 1 wecom_app
+	// - critical single (immediate ungrouped): 1 smtp + 1 wecom_app
+	// - warning single: 1 smtp
+	// Total = 7 outbound messages instead of 11.
+	if len(sent) != 7 {
+		t.Fatalf("expected 7 outbound messages, got %d: %+v", len(sent), sent)
+	}
+	groupedMajorCount := 0
+	criticalCount := 0
+	for _, msg := range sent {
+		if msg.Subject == "[松雅轩] 3 条重要告警汇总" {
+			groupedMajorCount++
+			if !strings.Contains(msg.Text, "查看告警：https://console.example.test/operations/alarms?site="+fixture.siteID) {
+				t.Fatalf("grouped digest missing console URL: %s", msg.Text)
+			}
+		}
+		if msg.Subject == "【告警·紧急】松雅轩：主机紧急停机" {
+			criticalCount++
+		}
+	}
+	if groupedMajorCount != 2 || criticalCount != 2 {
+		t.Fatalf("expected 2 grouped major digests and 2 immediate critical sends, got grouped=%d critical=%d messages=%+v", groupedMajorCount, criticalCount, sent)
+	}
+	for _, id := range []string{major1, major2, major3, major4, crit1} {
+		if st := fixture.states(id); !strings.Contains(st, "FIRE smtp duty DRY_RUN") || !strings.Contains(st, "FIRE wecom_app duty DRY_RUN") {
+			t.Fatalf("expected DRY_RUN on both channels for %s, got %s", id, st)
+		}
+	}
+
+	// Verify lookahead window (next_attempt_at <= now + groupWindowSeconds):
+	// Schedule 3 attempts: primary at T, siblingA at T+30s (inside 60s window), siblingB at T+90s (outside 60s window).
+	fixture2 := newDeliveryFixture(t, DeliveryDryRun)
+	routing2 := testRouting(t)
+	routing2.SiteID = fixture2.siteID
+	routing2.RateLimitPerHour = 20
+	routing2.Routes[0].Steps = routing2.Routes[0].Steps[:1]
+	routing2.Routes[0].GroupWindowSeconds = 60
+	routing2.Routes[0].GroupMaxItems = 10
+	routing2.Routes[0].GroupBy = "severity"
+	fixture2.dispatcher.Routing = NewAlarmRoutingTable(routing2)
+
+	winBase := deliveryBase.Add(2 * time.Hour)
+	primID := fixture2.reminders.uuid()
+	sibInsideID := fixture2.reminders.uuid()
+	sibOutsideID := fixture2.reminders.uuid()
+	fixture2.recordWithAttrs(primID, "physics/a", AlarmCreated, alarmmodel.SeverityMajor, winBase, 1, map[string]string{"title": "窗口主告警"})
+	fixture2.recordWithAttrs(sibInsideID, "physics/b", AlarmCreated, alarmmodel.SeverityMajor, winBase.Add(5*time.Second), 1, map[string]string{"title": "窗口内兄弟告警"})
+	fixture2.recordWithAttrs(sibOutsideID, "physics/c", AlarmCreated, alarmmodel.SeverityMajor, winBase.Add(10*time.Second), 1, map[string]string{"title": "窗口外告警"})
+
+	planAt := winBase.Add(4 * time.Minute)
+	for {
+		worked, err := fixture2.dispatcher.planOne(ctx, planAt)
+		if err != nil {
+			t.Fatalf("planOne failed: %v", err)
+		}
+		if !worked {
+			break
+		}
+	}
+	if _, err := fixture2.dispatcher.Scheduler.pool.Exec(ctx, `UPDATE notification_runtime.alarm_delivery_attempt SET next_attempt_at = $2 WHERE tenant_id = $1::uuid AND alarm_id = $3::uuid`,
+		alarmReminderTenantID, planAt.Add(30*time.Second).UTC(), sibInsideID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture2.dispatcher.Scheduler.pool.Exec(ctx, `UPDATE notification_runtime.alarm_delivery_attempt SET next_attempt_at = $2 WHERE tenant_id = $1::uuid AND alarm_id = $3::uuid`,
+		alarmReminderTenantID, planAt.Add(90*time.Second).UTC(), sibOutsideID); err != nil {
+		t.Fatal(err)
+	}
+
+	windowSent := fixture2.runOutbound(planAt)
+	if len(windowSent) != 2 {
+		t.Fatalf("expected 2 grouped messages (smtp + wecom_app) at planAt, got %d: %+v", len(windowSent), windowSent)
+	}
+	for _, msg := range windowSent {
+		if msg.Subject != "[松雅轩] 2 条重要告警汇总" || !strings.Contains(msg.Text, "窗口内兄弟告警") || strings.Contains(msg.Text, "窗口外告警") {
+			t.Fatalf("unexpected lookahead window digest: %+v", msg)
+		}
+	}
+	if st := fixture2.states(sibOutsideID); !strings.Contains(st, "PENDING") {
+		t.Fatalf("expected outside-window alarm to remain PENDING, got %s", st)
+	}
+	laterSent := fixture2.runOutbound(planAt.Add(90 * time.Second))
+	if len(laterSent) != 2 {
+		t.Fatalf("expected outside-window alarm to fire separately at +90s, got %+v", laterSent)
+	}
+}
+
+func TestPostgresAlarmGroupingCoordinatedRetryAndGiveUp(t *testing.T) {
+	fixture := newDeliveryFixture(t, DeliveryLive)
+	routing := testRouting(t)
+	routing.SiteID = fixture.siteID
+	routing.RateLimitPerHour = 20
+	routing.Routes[0].Steps = routing.Routes[0].Steps[:1]
+	routing.Routes[0].GroupWindowSeconds = 60
+	routing.Routes[0].GroupMaxItems = 10
+	routing.Routes[0].GroupBy = "severity"
+	routing.Routes[0].Steps[0].Channels = []DeliveryChannel{ChannelSMTP}
+	fixture.dispatcher.Routing = NewAlarmRoutingTable(routing)
+
+	down := errors.New("adapter temporarily down")
+	fixture.sender.outcomes["smtp:duty@example.test"] = []error{down, nil}
+
+	alarmA := fixture.reminders.uuid()
+	alarmB := fixture.reminders.uuid()
+	fixture.recordWithAttrs(alarmA, "physics/a", AlarmCreated, alarmmodel.SeverityMajor, deliveryBase, 1, map[string]string{"title": "告警A"})
+	fixture.recordWithAttrs(alarmB, "physics/b", AlarmCreated, alarmmodel.SeverityMajor, deliveryBase.Add(5*time.Second), 1, map[string]string{"title": "告警B"})
+
+	// First attempt fails (past 3m hold for both) -> both return to PENDING for retry at +1m.
+	if sent := fixture.runOutbound(deliveryBase.Add(4 * time.Minute)); len(sent) != 0 {
+		t.Fatalf("expected 0 sent on failure, got %+v", sent)
+	}
+	for _, id := range []string{alarmA, alarmB} {
+		if st := fixture.states(id); !strings.Contains(st, "FIRE smtp duty PENDING") {
+			t.Fatalf("expected coordinated retry PENDING for %s, got %s", id, st)
+		}
+	}
+
+	// Retry 1m later succeeds -> both settle to SENT with one grouped send.
+	retried := fixture.runOutbound(deliveryBase.Add(5 * time.Minute))
+	if len(retried) != 1 || retried[0].Subject != "[松雅轩] 2 条重要告警汇总" {
+		t.Fatalf("expected 1 grouped retry send, got %+v", retried)
+	}
+	for _, id := range []string{alarmA, alarmB} {
+		if st := fixture.states(id); !strings.Contains(st, "FIRE smtp duty SENT") {
+			t.Fatalf("expected SENT for %s, got %s", id, st)
+		}
+	}
+
+	// Subsequent batch that exhausts all 4 attempts settles both as FAILED GAVE_UP.
+	fixture.sender.outcomes["smtp:duty@example.test"] = []error{down, down, down, down}
+	alarmC := fixture.reminders.uuid()
+	alarmD := fixture.reminders.uuid()
+	base2 := deliveryBase.Add(2 * time.Hour)
+	fixture.recordWithAttrs(alarmC, "physics/c", AlarmCreated, alarmmodel.SeverityMajor, base2, 1, map[string]string{"title": "告警C"})
+	fixture.recordWithAttrs(alarmD, "physics/d", AlarmCreated, alarmmodel.SeverityMajor, base2.Add(5*time.Second), 1, map[string]string{"title": "告警D"})
+	for _, offset := range []time.Duration{4 * time.Minute, 5 * time.Minute, 9 * time.Minute, 18 * time.Minute} {
+		if sent := fixture.runOutbound(base2.Add(offset)); len(sent) != 0 {
+			t.Fatalf("expected 0 sent during failure exhaust at +%v, got %+v", offset, sent)
+		}
+	}
+	for _, id := range []string{alarmC, alarmD} {
+		if st := fixture.states(id); !strings.Contains(st, "FIRE smtp duty FAILED GAVE_UP") {
+			t.Fatalf("expected coordinated FAILED GAVE_UP for %s, got %s", id, st)
+		}
+	}
+}
+
+func TestPostgresAlarmGroupingKeysAndReloaderHotSwap(t *testing.T) {
+	fixture := newDeliveryFixture(t, DeliveryDryRun)
+	dir := t.TempDir()
+	recipientsPath := filepath.Join(dir, "recipients.json")
+	routingDir := filepath.Join(dir, "sites")
+	if err := os.MkdirAll(routingDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(recipientsPath, []byte(`{"recipients":{"duty":{"name":"值班","email":"duty-v1@example.test","wecomUserId":"duty-v1"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	siteRouting := SiteRouting{
+		SchemaVersion:    1,
+		SiteID:           fixture.siteID,
+		SiteName:         "松雅轩",
+		Timezone:         "Asia/Shanghai",
+		HoldMinutes:      3,
+		MaxAgeHours:      12,
+		RateLimitPerHour: 20,
+		Routes: []AlarmRoute{
+			{
+				Name:               "all-grouped-by-site",
+				MinSeverity:        alarmmodel.SeverityMinor,
+				GroupWindowSeconds: 60,
+				GroupMaxItems:      10,
+				GroupBy:            "site",
+				Steps:              []EscalationStep{{AfterMinutes: 0, Recipients: []string{"duty"}, Channels: []DeliveryChannel{ChannelSMTP}}},
+			},
+		},
+	}
+	initialJSON, _ := json.Marshal(siteRouting)
+	routingFile := filepath.Join(routingDir, "site.alarm-routing.json")
+	if err := os.WriteFile(routingFile, initialJSON, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	reloader, err := NewRoutingReloader(recipientsPath, routingDir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloader.logger.Store(slog.New(slog.NewJSONHandler(&bytes.Buffer{}, nil)))
+	fixture.dispatcher.Reloader = reloader
+
+	// Under groupBy=site, MAJOR + MINOR merge together, while CRITICAL still stays ungrouped.
+	majorID := fixture.reminders.uuid()
+	minorID := fixture.reminders.uuid()
+	critID := fixture.reminders.uuid()
+	fixture.recordWithAttrs(majorID, "physics/a", AlarmCreated, alarmmodel.SeverityMajor, deliveryBase, 1, map[string]string{"title": "重要告警"})
+	fixture.recordWithAttrs(minorID, "physics/b", AlarmCreated, alarmmodel.SeverityMinor, deliveryBase.Add(5*time.Second), 1, map[string]string{"title": "次要告警"})
+	fixture.recordWithAttrs(critID, "physics/c", AlarmCreated, alarmmodel.SeverityCritical, deliveryBase.Add(10*time.Second), 1, map[string]string{"title": "紧急告警"})
+
+	sent1 := fixture.runOutbound(deliveryBase.Add(4 * time.Minute))
+	if len(sent1) != 2 {
+		t.Fatalf("expected 1 grouped (MAJOR+MINOR) + 1 immediate CRITICAL = 2 messages, got %+v", sent1)
+	}
+	for _, msg := range sent1 {
+		if msg.To != "duty-v1@example.test" {
+			t.Fatalf("expected v1 recipient before hot reload, got %q", msg.To)
+		}
+	}
+
+	// Hot-reload recipients email + switch groupBy to alarmType without recreating dispatcher.
+	if err := os.WriteFile(recipientsPath, []byte(`{"recipients":{"duty":{"name":"值班","email":"duty-v2@example.test","wecomUserId":"duty-v2"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	siteRouting.Routes[0].GroupBy = "alarmType"
+	updatedJSON, _ := json.Marshal(siteRouting)
+	if err := os.WriteFile(routingFile, updatedJSON, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	changed, _, err := reloader.ReloadNow(context.Background())
+	if err != nil || !changed {
+		t.Fatalf("ReloadNow failed: changed=%v err=%v", changed, err)
+	}
+
+	base2 := deliveryBase.Add(time.Hour)
+	sameType1 := fixture.reminders.uuid()
+	sameType2 := fixture.reminders.uuid()
+	otherType := fixture.reminders.uuid()
+	fixture.recordWithAttrs(sameType1, "physics/cop-low", AlarmCreated, alarmmodel.SeverityMajor, base2, 1, map[string]string{"title": "冷机1 COP低"})
+	fixture.recordWithAttrs(sameType2, "physics/cop-low", AlarmCreated, alarmmodel.SeverityMajor, base2.Add(5*time.Second), 1, map[string]string{"title": "冷机2 COP低"})
+	fixture.recordWithAttrs(otherType, "physics/pump-high", AlarmCreated, alarmmodel.SeverityMajor, base2.Add(10*time.Second), 1, map[string]string{"title": "水泵电流高"})
+
+	sent2 := fixture.runOutbound(base2.Add(4 * time.Minute))
+	if len(sent2) != 2 {
+		t.Fatalf("expected 1 grouped alarmType digest + 1 separate alarmType = 2 messages, got %+v", sent2)
+	}
+	for _, msg := range sent2 {
+		if msg.To != "duty-v2@example.test" {
+			t.Fatalf("expected hot-reloaded v2 recipient, got %q", msg.To)
+		}
+	}
 }

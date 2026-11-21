@@ -138,6 +138,61 @@ func (m *PipelineMetrics) ObserveColdArchiveRun(outcome string) {
 	)
 }
 
+func (m *PipelineMetrics) AddAlarmEvaluationDeadLetter(reasonFamily string) {
+	if m == nil || m.registry == nil {
+		return
+	}
+	_ = m.registry.AddCounter(
+		"hvac_alarm_evaluation_dead_letter_total",
+		"Total telemetry alarm evaluation publications transitioned to DEAD_LETTER by reason family.",
+		map[string]string{"reason_family": normalizeAlarmEvaluationDeadLetterReason(reasonFamily)},
+		1,
+	)
+}
+
+func (m *PipelineMetrics) SetAlarmEvaluationOutboxDepths(pending, deadLetter int64) {
+	if m == nil || m.registry == nil {
+		return
+	}
+	if pending < 0 {
+		pending = 0
+	}
+	if deadLetter < 0 {
+		deadLetter = 0
+	}
+	_ = m.registry.SetGauge(
+		"hvac_alarm_evaluation_outbox_depth",
+		"Current telemetry alarm evaluation outbox row count by delivery state.",
+		map[string]string{"state": "pending"},
+		float64(pending),
+	)
+	_ = m.registry.SetGauge(
+		"hvac_alarm_evaluation_outbox_depth",
+		"Current telemetry alarm evaluation outbox row count by delivery state.",
+		map[string]string{"state": "dead_letter"},
+		float64(deadLetter),
+	)
+}
+
+func normalizeAlarmEvaluationDeadLetterReason(reason string) string {
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case "payload_invalid", "alarm_evaluation_payload_invalid", "scope":
+		return "scope"
+	case "max_attempts_exceeded", "alarm_evaluation_max_attempts_exceeded", "transport", "timeout":
+		return "transport"
+	case "permanent_failure", "alarm_evaluation_permanent_failure", "dependency", "delivery_error":
+		return "dependency"
+	case "rate_limited":
+		return "rate_limited"
+	case "authorization":
+		return "authorization"
+	case "capacity":
+		return "capacity"
+	default:
+		return "unknown"
+	}
+}
+
 func normalizeHistoryOutboxState(state string) (string, bool) {
 	switch strings.ToLower(strings.TrimSpace(state)) {
 	case HistoryOutboxStatePending:

@@ -4,6 +4,12 @@ import type { Asset, AssetRelationship, Device, TelemetryPoint } from '../apps/h
 import type { PlantReading } from '../apps/hvac-web/src/features/operations/realtime/plant-model.ts';
 import { blockingInterlocks, controlTargets, plantUnits, unitActivePower } from '../apps/hvac-web/src/features/control/control-model.ts';
 import { controlErrorMessage, stepUpErrorPresentation } from '../apps/hvac-web/src/features/control/control-errors.ts';
+import {
+  activePriorityLocks,
+  describeControlAlarmError,
+  describeControlAlarmEvent,
+  formatLockRemaining,
+} from '../apps/hvac-web/src/features/control/control-priority-lock.ts';
 
 const at = '2026-10-01T00:00:00.000Z';
 const site = { tenantId: 't', siteId: 's' };
@@ -202,4 +208,53 @@ test('stepUpErrorPresentation distinguishes all four TOTP reasons and flags enro
 test('controlErrorMessage translates DEVICE_PRIORITY_LOCKED and COMMAND_PRIORITY_INVALID', () => {
   assert.match(controlErrorMessage('DEVICE_PRIORITY_LOCKED', 'fallback'), /更高优先级的安全联锁或人工指令锁定/);
   assert.match(controlErrorMessage('COMMAND_PRIORITY_INVALID', 'fallback'), /指令优先级与控制来源不匹配/);
+});
+
+test('activePriorityLocks filters expired locks and formats remaining countdown and DLQ reasons in Chinese', () => {
+  const nowMs = Date.parse('2026-11-18T10:00:00Z');
+  const active = activePriorityLocks({
+    devicePriorityLocks: [
+      {
+        deviceId: 'd-active',
+        lockedPriority: 'SAFETY_INTERLOCK',
+        commandSource: 'OPERATOR',
+        lockedBy: 'u-1',
+        lockedUntil: '2026-11-18T10:45:00Z',
+        reason: '压差联锁',
+        updatedAt: '2026-11-18T09:45:00Z',
+      },
+      {
+        deviceId: 'd-schedule',
+        lockedPriority: 'SCHEDULE',
+        commandSource: 'SCHEDULE',
+        lockedBy: 'schedule-engine',
+        lockedUntil: '2026-11-18T11:30:00Z',
+        reason: '定时日程控制',
+        updatedAt: '2026-11-18T09:50:00Z',
+      },
+      {
+        deviceId: 'd-expired',
+        lockedPriority: 'MANUAL_OVERRIDE',
+        commandSource: 'OPERATOR',
+        lockedBy: 'u-1',
+        lockedUntil: '2026-11-18T09:59:00Z',
+        reason: '已过期',
+        updatedAt: '2026-11-18T09:00:00Z',
+      },
+    ],
+  }, nowMs);
+  assert.equal(active.size, 2);
+  assert.equal(active.get('d-active')?.lockedPriority, 'SAFETY_INTERLOCK');
+  assert.equal(active.get('d-schedule')?.lockedPriority, 'SCHEDULE');
+  assert.equal(formatLockRemaining('2026-11-18T10:45:00Z', nowMs), '剩余 45 分钟');
+  assert.equal(formatLockRemaining('2026-11-18T12:10:00Z', nowMs), '剩余 2 小时 10 分钟');
+  assert.equal(formatLockRemaining('2026-11-18T09:59:00Z', nowMs), '即将到期');
+  assert.equal(describeControlAlarmEvent('PRIORITY_LOCK'), '优先级锁定');
+  assert.equal(describeControlAlarmEvent('OUTCOME_UNKNOWN'), '执行结果未知');
+  assert.equal(describeControlAlarmEvent('PULSE_DELIVERED_POWER_UNCONFIRMED'), '脉冲发出后功率未确认');
+  assert.equal(describeControlAlarmEvent('EMERGENCY_DO_RELEASE'), '紧急输出释放');
+  assert.equal(describeControlAlarmError('TIMEOUT'), '下游告警服务超时未响应');
+  assert.equal(describeControlAlarmError('VERIFY_TIMEOUT'), '设备状态读回超时未确认');
+  assert.equal(describeControlAlarmError('DISPATCH_REJECTED'), '安全校验未通过导致下发拒收');
+  assert.equal(describeControlAlarmError('CONTROL_ALARM_HTTP_FAILED'), '下游告警服务通信失败');
 });

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sort"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
@@ -127,6 +128,19 @@ func (store *PostgresStore) RunDueEvaluations(ctx context.Context, workerID stri
 	var failures []error
 	for _, tenantID := range tenants {
 		tenantContext := identitycontext.WithTenantID(ctx, tenantID)
+		changedBySite := map[string]map[string]bool{}
+		recordChanged := func(siteID, assignmentID string, decision EvaluationDecision) {
+			if decision.Effect != EvaluationEffectPublish && decision.Effect != EvaluationEffectClear {
+				return
+			}
+			siteChanged := changedBySite[siteID]
+			if siteChanged == nil {
+				siteChanged = map[string]bool{}
+				changedBySite[siteID] = siteChanged
+			}
+			siteChanged[assignmentID] = true
+		}
+
 		// A Site rule published while the Site was already silent has no evaluation, and a new
 		// version of a rule whose device is silent has none with that version; no reading will
 		// come to make one (#659): evaluate it with the Site's last readings.
@@ -135,8 +149,9 @@ func (store *PostgresStore) RunDueEvaluations(ctx context.Context, workerID stri
 			result.Failed++
 			failures = append(failures, err)
 		}
-		for _, decision := range firsts {
-			result.count(decision)
+		for _, evaluated := range firsts {
+			result.count(evaluated.decision)
+			recordChanged(evaluated.siteID, evaluated.assignmentID, evaluated.decision)
 		}
 		claims, err := store.ClaimDueEvaluations(tenantContext, tenantID, workerID, now, dueEvaluationLease, dueEvaluationBatch)
 		if err != nil {
@@ -154,6 +169,24 @@ func (store *PostgresStore) RunDueEvaluations(ctx context.Context, workerID stri
 					continue
 				}
 				result.count(decision)
+				recordChanged(claim.SiteID, claim.AssignmentID, decision)
+			}
+		}
+		if len(changedBySite) > 0 {
+			changedSites := make([]string, 0, len(changedBySite))
+			for siteID := range changedBySite {
+				changedSites = append(changedSites, siteID)
+			}
+			sort.Strings(changedSites)
+			for _, siteID := range changedSites {
+				cascaded, err := store.cascadeDownstreamSiteRules(tenantContext, tenantID, siteID, changedBySite[siteID], now)
+				if err != nil {
+					result.Failed++
+					failures = append(failures, err)
+				}
+				for _, decision := range cascaded {
+					result.count(decision)
+				}
 			}
 		}
 		escalated, err := store.escalateUnacknowledgedReadingGaps(tenantContext, tenantID, now)
@@ -195,9 +228,103 @@ func (result *DueEvaluationResult) count(decision EvaluationDecision) {
 	}
 }
 
+type evaluatedRuleDecision struct {
+	siteID       string
+	assignmentID string
+	decision     EvaluationDecision
+}
+
+// selectDownstreamSiteRules returns rules in topological order that depend (directly or transitively)
+// on any rule in changedAssignmentIDs, excluding the seed rules themselves.
+func selectDownstreamSiteRules(ordered []SiteRule, changedAssignmentIDs map[string]bool) []SiteRule {
+	if len(ordered) == 0 || len(changedAssignmentIDs) == 0 {
+		return nil
+	}
+	activeFrontier := make(map[string]bool, len(changedAssignmentIDs))
+	for id, changed := range changedAssignmentIDs {
+		if changed {
+			activeFrontier[id] = true
+		}
+	}
+	if len(activeFrontier) == 0 {
+		return nil
+	}
+	downstreamIDs := make(map[string]bool)
+	for {
+		added := false
+		for _, rule := range ordered {
+			if changedAssignmentIDs[rule.AssignmentID] || downstreamIDs[rule.AssignmentID] {
+				continue
+			}
+			for _, depID := range rule.Policy.DependsOnRuleIDs {
+				if activeFrontier[depID] {
+					downstreamIDs[rule.AssignmentID] = true
+					activeFrontier[rule.AssignmentID] = true
+					added = true
+					break
+				}
+			}
+		}
+		if !added {
+			break
+		}
+	}
+	if len(downstreamIDs) == 0 {
+		return nil
+	}
+	out := make([]SiteRule, 0, len(downstreamIDs))
+	for _, rule := range ordered {
+		if downstreamIDs[rule.AssignmentID] {
+			out = append(out, rule)
+		}
+	}
+	return out
+}
+
+func (store *PostgresStore) cascadeDownstreamSiteRules(
+	ctx context.Context,
+	tenantID, siteID string,
+	changedAssignmentIDs map[string]bool,
+	now time.Time,
+) ([]EvaluationDecision, error) {
+	records, rules, upstreamActive, err := store.loadSiteTelemetryEvaluationState(ctx, tenantID, siteID)
+	if err != nil || len(records) == 0 || len(rules) == 0 {
+		return nil, err
+	}
+	downstream := selectDownstreamSiteRules(orderSiteRulesForEvaluation(rules), changedAssignmentIDs)
+	if len(downstream) == 0 {
+		return nil, nil
+	}
+	newest := records[0]
+	for _, record := range records {
+		if record.EvaluatedAt.After(newest.EvaluatedAt) {
+			newest = record
+		}
+	}
+	snapshot, err := buildSiteEvaluationSnapshot(newest.EventID, tenantID, siteID, records)
+	if err != nil {
+		return nil, err
+	}
+	snapshot.UpstreamRuleActive = upstreamActive
+	decisions := make([]EvaluationDecision, 0, len(downstream))
+	for _, rule := range downstream {
+		decision, err := store.EvaluateAssignedSnapshot(ctx, rule.AssignmentID, snapshot, now.UTC())
+		if errors.Is(err, ErrRuleRetired) {
+			delete(upstreamActive, rule.AssignmentID)
+			continue
+		}
+		if err != nil {
+			return decisions, err
+		}
+		upstreamActive[rule.AssignmentID] = decision.State.ActiveAlarmID != ""
+		decisions = append(decisions, decision)
+	}
+	return decisions, nil
+}
+
 // evaluateUnevaluatedSiteRules evaluates each Site rule not yet evaluated with the version
 // assigned to it, with the Site's last readings, as a reading arriving would.
-func (store *PostgresStore) evaluateUnevaluatedSiteRules(ctx context.Context, tenantID string, now time.Time) ([]EvaluationDecision, error) {
+func (store *PostgresStore) evaluateUnevaluatedSiteRules(ctx context.Context, tenantID string, now time.Time) ([]evaluatedRuleDecision, error) {
 	tx, err := store.beginTenantTransaction(ctx, tenantID, true)
 	if err != nil {
 		return nil, err
@@ -241,9 +368,9 @@ ORDER BY current.site_id, current.assignment_id`, tenantID)
 		return nil, fmt.Errorf("iterate unevaluated Site Alarm rules: %w", err)
 	}
 
-	var decisions []EvaluationDecision
+	var decisions []evaluatedRuleDecision
 	for _, siteID := range sites {
-		records, _, err := store.loadSiteTelemetryEvaluationState(ctx, tenantID, siteID)
+		records, rules, upstreamActive, err := store.loadSiteTelemetryEvaluationState(ctx, tenantID, siteID)
 		if err != nil {
 			return decisions, err
 		}
@@ -257,15 +384,40 @@ ORDER BY current.site_id, current.assignment_id`, tenantID)
 		if err != nil {
 			return decisions, err
 		}
+		snapshot.UpstreamRuleActive = upstreamActive
+		pendingSet := make(map[string]bool, len(unevaluated[siteID]))
 		for _, assignmentID := range unevaluated[siteID] {
+			pendingSet[assignmentID] = true
+		}
+		orderedAssignments := make([]string, 0, len(unevaluated[siteID]))
+		for _, rule := range orderSiteRulesForEvaluation(rules) {
+			if pendingSet[rule.AssignmentID] {
+				orderedAssignments = append(orderedAssignments, rule.AssignmentID)
+				delete(pendingSet, rule.AssignmentID)
+			}
+		}
+		if len(pendingSet) > 0 {
+			for _, assignmentID := range unevaluated[siteID] {
+				if pendingSet[assignmentID] {
+					orderedAssignments = append(orderedAssignments, assignmentID)
+				}
+			}
+		}
+		for _, assignmentID := range orderedAssignments {
 			decision, err := store.EvaluateAssignedSnapshot(ctx, assignmentID, snapshot, now.UTC())
 			if errors.Is(err, ErrRuleRetired) {
+				delete(upstreamActive, assignmentID)
 				continue
 			}
 			if err != nil {
 				return decisions, err
 			}
-			decisions = append(decisions, decision)
+			upstreamActive[assignmentID] = decision.State.ActiveAlarmID != ""
+			decisions = append(decisions, evaluatedRuleDecision{
+				siteID:       siteID,
+				assignmentID: assignmentID,
+				decision:     decision,
+			})
 		}
 	}
 	return decisions, nil

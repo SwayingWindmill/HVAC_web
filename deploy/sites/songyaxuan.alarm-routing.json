@@ -25,6 +25,9 @@
       "name": "major",
       "minSeverity": "MAJOR",
       "cooldownMinutes": 10,
+      "groupWindowSeconds": 60,
+      "groupMaxItems": 10,
+      "groupBy": "severity",
       "notifyAck": true,
       "notifyRecovery": true,
       "steps": [
@@ -36,6 +39,9 @@
       "name": "warning",
       "minSeverity": "WARNING",
       "cooldownMinutes": 30,
+      "groupWindowSeconds": 60,
+      "groupMaxItems": 10,
+      "groupBy": "severity",
       "notifyAck": false,
       "notifyRecovery": false,
       "steps": [

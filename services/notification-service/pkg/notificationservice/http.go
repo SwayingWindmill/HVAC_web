@@ -14,9 +14,12 @@ import (
 )
 
 const (
-	InternalWeChatRemindersPath = "/internal/v1/notifications/wechat-reminders"
+	InternalWeChatRemindersPath    = "/internal/v1/notifications/wechat-reminders"
+	InternalSiteAlarmRoutingPrefix = "/internal/v1/notifications/sites/"
 	// WeChatRemindersAction lets the Gateway read, add and clear the signed-in person's reminders.
 	WeChatRemindersAction     = "notification:wechat-reminders"
+	AlarmRoutingReadAction    = "notification:alarm-routing.read"
+	AlarmRoutingManageAction  = "notification:alarm-routing.manage"
 	NotificationContextHeader = "X-Notification-Context"
 	DefaultGatewaySPIFFEID    = "spiffe://hvac.local/platform-gateway"
 	DefaultAudience           = "notification-service"
@@ -31,6 +34,7 @@ type WeChatReminderStore interface {
 
 type HTTPConfig struct {
 	Reminders        WeChatReminderStore
+	Routing          *RoutingReloader
 	GatewayPublicKey crypto.PublicKey
 	GatewaySPIFFEID  string
 	Audience         string
@@ -39,6 +43,7 @@ type HTTPConfig struct {
 
 type httpHandler struct {
 	reminders        WeChatReminderStore
+	routing          *RoutingReloader
 	gatewayPublicKey crypto.PublicKey
 	gatewaySPIFFEID  string
 	audience         string
@@ -67,7 +72,7 @@ func NewHTTPHandler(config HTTPConfig) (http.Handler, error) {
 	if strings.TrimSpace(config.Audience) == "" {
 		config.Audience = DefaultAudience
 	}
-	return &httpHandler{reminders: config.Reminders, gatewayPublicKey: config.GatewayPublicKey, gatewaySPIFFEID: config.GatewaySPIFFEID, audience: config.Audience, now: config.Now}, nil
+	return &httpHandler{reminders: config.Reminders, routing: config.Routing, gatewayPublicKey: config.GatewayPublicKey, gatewaySPIFFEID: config.GatewaySPIFFEID, audience: config.Audience, now: config.Now}, nil
 }
 
 func (handler *httpHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -78,11 +83,97 @@ func (handler *httpHandler) ServeHTTP(writer http.ResponseWriter, request *http.
 			return
 		}
 	}
-	if request.URL.Path != InternalWeChatRemindersPath {
-		handler.writeProblem(writer, http.StatusNotFound, "ROUTE_NOT_FOUND", "Route not found", "The requested Notification route does not exist.", false)
+	if request.URL.Path == InternalWeChatRemindersPath {
+		handler.serveWeChatReminders(writer, request)
 		return
 	}
-	handler.serveWeChatReminders(writer, request)
+	if strings.HasPrefix(request.URL.Path, InternalSiteAlarmRoutingPrefix) {
+		rest := strings.TrimPrefix(request.URL.Path, InternalSiteAlarmRoutingPrefix)
+		siteID, actionPath, hasSlash := strings.Cut(rest, "/")
+		if hasSlash && siteID != "" {
+			switch actionPath {
+			case "alarm-routing":
+				handler.serveSiteAlarmRoutingRead(writer, request, siteID)
+				return
+			case "alarm-routing:reload":
+				handler.serveSiteAlarmRoutingReload(writer, request, siteID)
+				return
+			}
+		}
+	}
+	handler.writeProblem(writer, http.StatusNotFound, "ROUTE_NOT_FOUND", "Route not found", "The requested Notification route does not exist.", false)
+}
+
+func (handler *httpHandler) serveSiteAlarmRoutingRead(writer http.ResponseWriter, request *http.Request, siteID string) {
+	if request.Method != http.MethodGet {
+		writer.Header().Set("Allow", http.MethodGet)
+		handler.writeProblem(writer, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", "Alarm routing read supports GET.", false)
+		return
+	}
+	if !handler.authorizeSiteRequest(writer, request, AlarmRoutingReadAction, siteID) {
+		return
+	}
+	if handler.routing == nil {
+		handler.writeProblem(writer, http.StatusServiceUnavailable, "ALARM_ROUTING_UNAVAILABLE", "Alarm routing unavailable", "Alarm routing reloader is not configured.", true)
+		return
+	}
+	summary, ok := handler.routing.SiteRoutingSummary(siteID)
+	if !ok {
+		handler.writeProblem(writer, http.StatusNotFound, "ALARM_ROUTING_NOT_FOUND", "Alarm routing not found", "The requested Site has no alarm routing configuration.", false)
+		return
+	}
+	writeNotificationJSON(writer, http.StatusOK, summary)
+}
+
+func (handler *httpHandler) serveSiteAlarmRoutingReload(writer http.ResponseWriter, request *http.Request, siteID string) {
+	if request.Method != http.MethodPost {
+		writer.Header().Set("Allow", http.MethodPost)
+		handler.writeProblem(writer, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", "Alarm routing reload supports POST.", false)
+		return
+	}
+	if !handler.authorizeSiteRequest(writer, request, AlarmRoutingManageAction, siteID) {
+		return
+	}
+	if handler.routing == nil {
+		handler.writeProblem(writer, http.StatusServiceUnavailable, "ALARM_ROUTING_UNAVAILABLE", "Alarm routing unavailable", "Alarm routing reloader is not configured.", true)
+		return
+	}
+	changed, _, err := handler.routing.ReloadNow(request.Context())
+	if err != nil {
+		code := classifyReloadError(err)
+		status := http.StatusUnprocessableEntity
+		retryable := false
+		if code == ReloadErrorRecipientsRead || code == ReloadErrorRoutingRead {
+			status = http.StatusServiceUnavailable
+			retryable = true
+		}
+		handler.writeProblem(writer, status, code, "Alarm routing reload failed", "Alarm routing reload failed; the previous routing remains active.", retryable)
+		return
+	}
+	summary, ok := handler.routing.SiteRoutingSummary(siteID)
+	if !ok {
+		handler.writeProblem(writer, http.StatusNotFound, "ALARM_ROUTING_NOT_FOUND", "Alarm routing not found", "The requested Site has no alarm routing configuration.", false)
+		return
+	}
+	writeNotificationJSON(writer, http.StatusOK, AlarmRoutingReloadResponse{SiteRoutingSummaryView: summary, Changed: changed})
+}
+
+func (handler *httpHandler) authorizeSiteRequest(writer http.ResponseWriter, request *http.Request, action, siteID string) bool {
+	claims, err := identitycontext.VerifyDelegation(handler.gatewayPublicKey, strings.TrimSpace(request.Header.Get(NotificationContextHeader)))
+	if err != nil || !alarmmodel.IsUUIDv7(claims.TenantID) || strings.TrimSpace(claims.Subject) == "" || len(claims.Actions) != 1 || claims.Actions[0] != action {
+		handler.writeProblem(writer, http.StatusForbidden, "NOTIFICATION_ACCESS_DENIED", "Notification access denied", "Alarm routing is outside the authorized Site scope.", false)
+		return false
+	}
+	expectedScopes := []string{"tenant:" + claims.TenantID, "site:" + siteID}
+	if err := identitycontext.ValidateDelegationAnyScope(claims, handler.now().UTC(), handler.gatewaySPIFFEID, handler.audience, action, expectedScopes); err != nil || !sameStringSet(claims.Scopes, expectedScopes) {
+		handler.writeProblem(writer, http.StatusForbidden, "NOTIFICATION_ACCESS_DENIED", "Notification access denied", "Alarm routing is outside the authorized Site scope.", false)
+		return false
+	}
+	if !alarmmodel.IsUUIDv7(siteID) {
+		handler.writeProblem(writer, http.StatusBadRequest, "INVALID_ARGUMENT", "Invalid argument", "Site id must be a valid UUIDv7.", false)
+		return false
+	}
+	return true
 }
 
 func (handler *httpHandler) authorize(request *http.Request, action string) (identitycontext.DelegationClaims, bool) {

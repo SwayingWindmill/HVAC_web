@@ -51,7 +51,9 @@ import {
 import { useAlarmActions } from '../use-alarm-actions';
 import { AlarmDetailPane } from './AlarmDetailPane';
 import { AlarmGroupHeader, AlarmListRow } from './AlarmListRow';
+import { AlarmRoutingPanel } from './AlarmRoutingPanel';
 import { AlarmRulesTable } from './AlarmRulesTable';
+import { RuleActionDeadLettersPanel } from './RuleActionDeadLettersPanel';
 
 const siteRoute = getRouteApi('/_app/_site');
 const pageRoute = getRouteApi('/_app/_site/operations/alarms');
@@ -166,6 +168,7 @@ export function AlarmsWorkspace() {
   const severities = useMemo(() => search.severity ?? [], [search.severity]);
   const deviceNames = useDeviceNames(site.id);
   const myId = principal.principalId;
+  const canManage = principal.authorization.capabilities.includes('schedule.manage');
   const now = useNow(30_000);
   const { acknowledge } = useAlarmActions();
   const [searchDraft, setSearchDraft] = useState(search.q ?? '');
@@ -264,7 +267,23 @@ export function AlarmsWorkspace() {
         </TabsList>
       </Tabs>
 
-      {showingRules ? <AlarmRulesTable siteId={site.id} /> : (
+      {showingRules ? (
+        <div className="flex flex-col gap-6">
+          <AlarmRulesTable siteId={site.id} />
+          <RuleActionDeadLettersPanel
+            siteId={site.id}
+            canManage={canManage}
+            csrfToken={principal.session.csrfToken}
+            timeZone={site.timezone}
+          />
+          <AlarmRoutingPanel
+            siteId={site.id}
+            canManage={canManage}
+            csrfToken={principal.session.csrfToken}
+            timeZone={site.timezone}
+          />
+        </div>
+      ) : (
         <>
         <AlarmSummary
           alarms={windowed}

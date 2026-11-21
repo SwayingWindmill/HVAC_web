@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -35,14 +36,40 @@ type CommandDispatchContext struct {
 	Interlocks              []CommandDispatchInterlock `json:"interlocks"`
 }
 
+var (
+	dispatchPointCodePattern  = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}\z`)
+	dispatchCapabilityPattern = regexp.MustCompile(`^[A-Z0-9_]{1,64}\z`)
+)
+
 type CommandDispatchContextStore interface {
 	GetCommandDispatchContext(ctx context.Context, tenantID, siteID, deviceID, pointID string, at time.Time) (CommandDispatchContext, error)
+	ResolveCommandDispatchContext(ctx context.Context, tenantID, siteID, deviceID, pointCode, capability string, at time.Time) (CommandDispatchContext, error)
 }
 
 type commandPointDispatchMeta struct {
 	ActuationMode    string                     `json:"actuationMode"`
 	FeedbackPointKey string                     `json:"feedbackPointKey"`
 	InterlockChecks  []CommandDispatchInterlock `json:"interlockChecks"`
+}
+
+func (store *PostgresStore) beginDispatchContextTx(ctx context.Context, tenantID, siteID string) (pgx.Tx, error) {
+	transaction, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return nil, fmt.Errorf("begin Core dispatch context read: %w", err)
+	}
+	if _, err := transaction.Exec(ctx, `SET LOCAL ROLE s1_core_runtime`); err != nil {
+		_ = transaction.Rollback(ctx)
+		return nil, fmt.Errorf("activate Core runtime role: %w", err)
+	}
+	var configuredTenant, configuredSites string
+	if err := transaction.QueryRow(ctx, `
+SELECT set_config('app.tenant_id', $1, true),
+       set_config('app.authorized_site_ids', $2, true)
+`, tenantID, postgresUUIDArray([]string{siteID})).Scan(&configuredTenant, &configuredSites); err != nil {
+		_ = transaction.Rollback(ctx)
+		return nil, fmt.Errorf("set Core dispatch context RLS: %w", err)
+	}
+	return transaction, nil
 }
 
 func (store *PostgresStore) GetCommandDispatchContext(
@@ -56,7 +83,82 @@ func (store *PostgresStore) GetCommandDispatchContext(
 	if !validUUIDv7(tenantID) || !validUUIDv7(siteID) || !validUUIDv7(deviceID) || !validUUIDv7(pointID) {
 		return CommandDispatchContext{}, ErrInvalidMutation
 	}
+	transaction, err := store.beginDispatchContextTx(ctx, tenantID, siteID)
+	if err != nil {
+		return CommandDispatchContext{}, err
+	}
+	defer func() { _ = transaction.Rollback(ctx) }()
 
+	return loadCommandDispatchContextInTx(ctx, transaction, tenantID, siteID, deviceID, pointID, at)
+}
+
+func (store *PostgresStore) ResolveCommandDispatchContext(
+	ctx context.Context,
+	tenantID, siteID, deviceID, pointCode, capability string,
+	at time.Time,
+) (CommandDispatchContext, error) {
+	if store == nil || store.pool == nil {
+		return CommandDispatchContext{}, ErrStoreClosed
+	}
+	pointCode = strings.TrimSpace(pointCode)
+	capability = strings.TrimSpace(capability)
+	if !validUUIDv7(tenantID) || !validUUIDv7(siteID) || !validUUIDv7(deviceID) || !dispatchCapabilityPattern.MatchString(capability) {
+		return CommandDispatchContext{}, ErrInvalidMutation
+	}
+	if pointCode != "" && !dispatchPointCodePattern.MatchString(pointCode) {
+		return CommandDispatchContext{}, ErrInvalidMutation
+	}
+	transaction, err := store.beginDispatchContextTx(ctx, tenantID, siteID)
+	if err != nil {
+		return CommandDispatchContext{}, err
+	}
+	defer func() { _ = transaction.Rollback(ctx) }()
+
+	rows, err := transaction.Query(ctx, `
+SELECT id::text
+FROM core_registry.telemetry_points
+WHERE tenant_id = $1::uuid
+  AND site_id = $2::uuid
+  AND reporting_device_id = $3::uuid
+  AND point_type = 'COMMAND'
+  AND writable
+  AND status = 'ACTIVE'
+  AND COALESCE(source_metadata->>'capability', '') = $4
+  AND ($5 = '' OR point_code = $5)
+ORDER BY id ASC
+LIMIT 2
+`, tenantID, siteID, deviceID, capability, pointCode)
+	if err != nil {
+		return CommandDispatchContext{}, fmt.Errorf("resolve command Point for dispatch context: %w", err)
+	}
+	var pointIDs []string
+	for rows.Next() {
+		var pointID string
+		if scanErr := rows.Scan(&pointID); scanErr != nil {
+			rows.Close()
+			return CommandDispatchContext{}, fmt.Errorf("scan resolved command Point ID: %w", scanErr)
+		}
+		pointIDs = append(pointIDs, pointID)
+	}
+	rows.Close()
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return CommandDispatchContext{}, fmt.Errorf("iterate resolved command Point IDs: %w", rowsErr)
+	}
+	if len(pointIDs) == 0 {
+		return CommandDispatchContext{}, ErrNotFound
+	}
+	if len(pointIDs) > 1 {
+		return CommandDispatchContext{}, ErrBindingConflict
+	}
+	return loadCommandDispatchContextInTx(ctx, transaction, tenantID, siteID, deviceID, pointIDs[0], at)
+}
+
+func loadCommandDispatchContextInTx(
+	ctx context.Context,
+	transaction pgx.Tx,
+	tenantID, siteID, deviceID, pointID string,
+	at time.Time,
+) (CommandDispatchContext, error) {
 	result := CommandDispatchContext{
 		TenantID:         tenantID,
 		SiteID:           siteID,
@@ -68,25 +170,8 @@ func (store *PostgresStore) GetCommandDispatchContext(
 		Interlocks:       []CommandDispatchInterlock{},
 	}
 
-	transaction, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
-	if err != nil {
-		return CommandDispatchContext{}, fmt.Errorf("begin Core dispatch context read: %w", err)
-	}
-	defer func() { _ = transaction.Rollback(ctx) }()
-
-	if _, err := transaction.Exec(ctx, `SET LOCAL ROLE s1_core_runtime`); err != nil {
-		return CommandDispatchContext{}, fmt.Errorf("activate Core runtime role: %w", err)
-	}
-	var configuredTenant, configuredSites string
-	if err := transaction.QueryRow(ctx, `
-SELECT set_config('app.tenant_id', $1, true),
-       set_config('app.authorized_site_ids', $2, true)
-`, tenantID, postgresUUIDArray([]string{siteID})).Scan(&configuredTenant, &configuredSites); err != nil {
-		return CommandDispatchContext{}, fmt.Errorf("set Core dispatch context RLS: %w", err)
-	}
-
 	var timezone string
-	err = transaction.QueryRow(ctx, `
+	err := transaction.QueryRow(ctx, `
 SELECT timezone
 FROM core_registry.sites
 WHERE tenant_id = $1::uuid AND id = $2::uuid
@@ -206,7 +291,13 @@ WHERE tenant_id = $1::uuid
 func (server *server) handleCommandDispatchContext(writer http.ResponseWriter, request *http.Request) int {
 	query := request.URL.Query()
 	for name, values := range query {
-		if (name != "tenantId" && name != "siteId" && name != "deviceId" && name != "pointId") || len(values) != 1 {
+		switch name {
+		case "tenantId", "siteId", "deviceId", "pointId", "pointCode", "capability":
+		default:
+			writeProblem(writer, request, http.StatusBadRequest, "REGISTRY_QUERY_INVALID", "The command dispatch context query is invalid.", false)
+			return http.StatusBadRequest
+		}
+		if len(values) != 1 {
 			writeProblem(writer, request, http.StatusBadRequest, "REGISTRY_QUERY_INVALID", "The command dispatch context query is invalid.", false)
 			return http.StatusBadRequest
 		}
@@ -215,8 +306,10 @@ func (server *server) handleCommandDispatchContext(writer http.ResponseWriter, r
 	siteID := strings.TrimSpace(query.Get("siteId"))
 	deviceID := strings.TrimSpace(query.Get("deviceId"))
 	pointID := strings.TrimSpace(query.Get("pointId"))
-	if !validUUIDv7(tenantID) || !validUUIDv7(siteID) || !validUUIDv7(deviceID) || !validUUIDv7(pointID) {
-		writeProblem(writer, request, http.StatusBadRequest, "REGISTRY_QUERY_INVALID", "tenantId, siteId, deviceId, and pointId must all be valid UUIDv7 identifiers.", false)
+	pointCode := strings.TrimSpace(query.Get("pointCode"))
+	capability := strings.TrimSpace(query.Get("capability"))
+	if !validUUIDv7(tenantID) || !validUUIDv7(siteID) || !validUUIDv7(deviceID) {
+		writeProblem(writer, request, http.StatusBadRequest, "REGISTRY_QUERY_INVALID", "tenantId, siteId, and deviceId must all be valid UUIDv7 identifiers.", false)
 		return http.StatusBadRequest
 	}
 	reader, ok := server.store.(CommandDispatchContextStore)
@@ -224,8 +317,33 @@ func (server *server) handleCommandDispatchContext(writer http.ResponseWriter, r
 		writeProblem(writer, request, http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "The Core Registry dispatch context reader is unavailable.", true)
 		return http.StatusServiceUnavailable
 	}
-	contextView, err := reader.GetCommandDispatchContext(request.Context(), tenantID, siteID, deviceID, pointID, server.now().UTC())
+
+	var (
+		contextView CommandDispatchContext
+		err         error
+	)
+	if pointID != "" {
+		if pointCode != "" || capability != "" || !validUUIDv7(pointID) {
+			writeProblem(writer, request, http.StatusBadRequest, "REGISTRY_QUERY_INVALID", "pointId cannot be combined with pointCode or capability and must be a valid UUIDv7 identifier.", false)
+			return http.StatusBadRequest
+		}
+		contextView, err = reader.GetCommandDispatchContext(request.Context(), tenantID, siteID, deviceID, pointID, server.now().UTC())
+	} else {
+		if !dispatchCapabilityPattern.MatchString(capability) || (pointCode != "" && !dispatchPointCodePattern.MatchString(pointCode)) {
+			writeProblem(writer, request, http.StatusBadRequest, "REGISTRY_QUERY_INVALID", "Either pointId or a valid capability (with optional pointCode) is required.", false)
+			return http.StatusBadRequest
+		}
+		contextView, err = reader.ResolveCommandDispatchContext(request.Context(), tenantID, siteID, deviceID, pointCode, capability, server.now().UTC())
+	}
 	if err != nil {
+		if errors.Is(err, ErrInvalidMutation) {
+			writeProblem(writer, request, http.StatusBadRequest, "REGISTRY_QUERY_INVALID", "The command dispatch context query is invalid.", false)
+			return http.StatusBadRequest
+		}
+		if errors.Is(err, ErrBindingConflict) {
+			writeProblem(writer, request, http.StatusConflict, "REGISTRY_POINT_AMBIGUOUS", "Multiple active writable command points matched the requested capability.", false)
+			return http.StatusConflict
+		}
 		return server.writeStoreError(writer, request, err)
 	}
 	writeJSON(writer, http.StatusOK, contextView)

@@ -8,8 +8,10 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/observability"
@@ -69,9 +71,22 @@ func newEmbeddedNotificationServer(ctx context.Context, logger *slog.Logger, bgW
 		return nil, nil, func() {}, err
 	}
 
+	telemetry := observability.NewRuntime(observability.RuntimeConfig{
+		Service: "energy-api-notification", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond, Logger: logger,
+	})
+	telemetry.SetDependencies(observability.Dependency{Name: "postgres", Required: true, Check: store.Ping})
+
+	reloader, err := newAlarmRoutingReloader(logger, telemetry.Metrics)
+	if err != nil {
+		relay.Close()
+		scheduler.Close()
+		store.Close()
+		return nil, nil, func() {}, err
+	}
+
 	gatewaySPIFFE := envOr("NOTIFICATION_GATEWAY_SPIFFE", notificationservice.DefaultGatewaySPIFFEID)
 	handler, err := notificationservice.NewHTTPHandler(notificationservice.HTTPConfig{
-		Reminders: store, GatewayPublicKey: gatewayPublicKey, GatewaySPIFFEID: gatewaySPIFFE,
+		Reminders: store, Routing: reloader, GatewayPublicKey: gatewayPublicKey, GatewaySPIFFEID: gatewaySPIFFE,
 		Audience: envOr("NOTIFICATION_SERVICE_AUDIENCE", notificationservice.DefaultAudience),
 	})
 	if err != nil {
@@ -87,17 +102,13 @@ func newEmbeddedNotificationServer(ctx context.Context, logger *slog.Logger, bgW
 		store.Close()
 		return nil, nil, func() {}, err
 	}
-	delivery, err := newAlarmDeliveryDispatcher(logger, scheduler)
+	delivery, err := newAlarmDeliveryDispatcherWithReloader(logger, scheduler, reloader)
 	if err != nil {
 		relay.Close()
 		scheduler.Close()
 		store.Close()
 		return nil, nil, func() {}, err
 	}
-	telemetry := observability.NewRuntime(observability.RuntimeConfig{
-		Service: "energy-api-notification", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond, Logger: logger,
-	})
-	telemetry.SetDependencies(observability.Dependency{Name: "postgres", Required: true, Check: store.Ping})
 	router := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if embeddedPeerSPIFFE(request) != gatewaySPIFFE {
 			embeddedWriteProblem(writer, http.StatusForbidden, "NOTIFICATION_GATEWAY_WORKLOAD_FORBIDDEN")
@@ -118,6 +129,26 @@ func newEmbeddedNotificationServer(ctx context.Context, logger *slog.Logger, bgW
 	launchEmbeddedWorker(bgWG, func() {
 		runWeChatReminders(ctx, logger, telemetry.Metrics, reminders)
 	})
+	if reloader != nil {
+		launchEmbeddedWorker(bgWG, func() {
+			runSupervisedNotificationLoop(ctx, logger, telemetry.Metrics, "notification.routing_reloader", func() {
+				reloader.Run(ctx, 30*time.Second, logger)
+			})
+		})
+		launchEmbeddedWorker(bgWG, func() {
+			sighupCh := make(chan os.Signal, 1)
+			signal.Notify(sighupCh, syscall.SIGHUP)
+			defer signal.Stop(sighupCh)
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-sighupCh:
+					_, _, _ = reloader.ReloadNow(ctx)
+				}
+			}
+		})
+	}
 	if delivery != nil {
 		launchEmbeddedWorker(bgWG, func() {
 			runSupervisedNotificationLoop(ctx, logger, telemetry.Metrics, "notification.alarm_delivery", func() {

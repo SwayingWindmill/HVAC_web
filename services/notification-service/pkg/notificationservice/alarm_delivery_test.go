@@ -768,6 +768,133 @@ func TestParseSiteRoutingValidatesCooldownTopologyAndSongyaxuanConfig(t *testing
 	if len(songyaxuan.Routes) < 2 || songyaxuan.Routes[0].CooldownMinutes != 10 || songyaxuan.Routes[1].CooldownMinutes != 30 {
 		t.Fatalf("unexpected songyaxuan cooldown config: %+v", songyaxuan.Routes)
 	}
+	for index, wantName := range []string{"major", "warning"} {
+		route := songyaxuan.Routes[index]
+		if route.Name != wantName || route.GroupWindowSeconds != 60 || route.GroupMaxItems != 10 || route.GroupBy != "severity" {
+			t.Fatalf("unexpected songyaxuan grouping config on route %d (%s): %+v", index, wantName, route)
+		}
+	}
+}
+
+func TestParseSiteRoutingAndRouteValidateGroupingBounds(t *testing.T) {
+	for name, body := range map[string]string{
+		"negative groupWindowSeconds": `{"schemaVersion":1,"siteId":"` + deliveryTestSiteID + `","siteName":"x","timezone":"Asia/Shanghai","routes":[{"name":"a","minSeverity":"MAJOR","groupWindowSeconds":-1,"steps":[{"afterMinutes":0,"recipients":["duty"],"channels":["smtp"]}]}]}`,
+		"huge groupWindowSeconds":     `{"schemaVersion":1,"siteId":"` + deliveryTestSiteID + `","siteName":"x","timezone":"Asia/Shanghai","routes":[{"name":"a","minSeverity":"MAJOR","groupWindowSeconds":901,"steps":[{"afterMinutes":0,"recipients":["duty"],"channels":["smtp"]}]}]}`,
+		"negative groupMaxItems":      `{"schemaVersion":1,"siteId":"` + deliveryTestSiteID + `","siteName":"x","timezone":"Asia/Shanghai","routes":[{"name":"a","minSeverity":"MAJOR","groupWindowSeconds":60,"groupMaxItems":-1,"steps":[{"afterMinutes":0,"recipients":["duty"],"channels":["smtp"]}]}]}`,
+		"one groupMaxItems":           `{"schemaVersion":1,"siteId":"` + deliveryTestSiteID + `","siteName":"x","timezone":"Asia/Shanghai","routes":[{"name":"a","minSeverity":"MAJOR","groupWindowSeconds":60,"groupMaxItems":1,"steps":[{"afterMinutes":0,"recipients":["duty"],"channels":["smtp"]}]}]}`,
+		"huge groupMaxItems":          `{"schemaVersion":1,"siteId":"` + deliveryTestSiteID + `","siteName":"x","timezone":"Asia/Shanghai","routes":[{"name":"a","minSeverity":"MAJOR","groupWindowSeconds":60,"groupMaxItems":51,"steps":[{"afterMinutes":0,"recipients":["duty"],"channels":["smtp"]}]}]}`,
+		"invalid groupBy":             `{"schemaVersion":1,"siteId":"` + deliveryTestSiteID + `","siteName":"x","timezone":"Asia/Shanghai","routes":[{"name":"a","minSeverity":"MAJOR","groupWindowSeconds":60,"groupBy":"device","steps":[{"afterMinutes":0,"recipients":["duty"],"channels":["smtp"]}]}]}`,
+		"uppercase groupBy":           `{"schemaVersion":1,"siteId":"` + deliveryTestSiteID + `","siteName":"x","timezone":"Asia/Shanghai","routes":[{"name":"a","minSeverity":"MAJOR","groupWindowSeconds":60,"groupBy":"SITE","steps":[{"afterMinutes":0,"recipients":["duty"],"channels":["smtp"]}]}]}`,
+	} {
+		if _, err := ParseSiteRouting([]byte(body)); err == nil {
+			t.Errorf("%s: unexpectedly accepted", name)
+		}
+	}
+
+	for _, groupBy := range []string{"", "site", "severity", "alarmType"} {
+		body := `{"schemaVersion":1,"siteId":"` + deliveryTestSiteID + `","siteName":"x","timezone":"Asia/Shanghai","routes":[{"name":"a","minSeverity":"MAJOR","groupWindowSeconds":900,"groupMaxItems":50,"groupBy":"` + groupBy + `","steps":[{"afterMinutes":0,"recipients":["duty"],"channels":["smtp"]}]}]}`
+		parsed, err := ParseSiteRouting([]byte(body))
+		if err != nil {
+			t.Fatalf("valid grouping (%q) rejected: %v", groupBy, err)
+		}
+		if err := parsed.Validate(); err != nil {
+			t.Fatalf("Validate() rejected valid grouping (%q): %v", groupBy, err)
+		}
+	}
+
+	// Route clamps unvalidated struct fields deterministically and defaults GroupMaxItems to 10.
+	unvalidated := SiteRouting{
+		SchemaVersion: 1,
+		SiteID:        deliveryTestSiteID,
+		SiteName:      "松雅轩",
+		Timezone:      "Asia/Shanghai",
+		Routes: []AlarmRoute{
+			{
+				Name:               "grouped",
+				MinSeverity:        alarmmodel.SeverityWarning,
+				GroupWindowSeconds: 1200,
+				GroupMaxItems:      0,
+				GroupBy:            "bad",
+				Steps:              []EscalationStep{{AfterMinutes: 0, Recipients: []string{"duty"}, Channels: []DeliveryChannel{ChannelSMTP}}},
+			},
+		},
+	}
+	if err := unvalidated.Validate(); err == nil {
+		t.Fatal("expected Validate() to reject out-of-bounds grouping struct")
+	}
+	clamped, ok := unvalidated.Route("physics/cop", alarmmodel.SeverityWarning)
+	if !ok {
+		t.Fatal("expected Route to match")
+	}
+	if clamped.GroupWindowSeconds != 900 || clamped.GroupMaxItems != 10 || clamped.GroupBy != "" {
+		t.Fatalf("expected deterministic clamping on Route, got %+v", clamped)
+	}
+}
+
+func TestRenderGroupedDeliveryMessageDigestFormatAndBounds(t *testing.T) {
+	routing := testRouting(t)
+	routing.Routes[0].GroupWindowSeconds = 60
+	routing.Routes[0].GroupMaxItems = 3
+	routing.Routes[0].GroupBy = "severity"
+
+	alarms := []DeliveryAlarm{
+		{
+			TenantID: alarmReminderTenantID, AlarmID: "0190f000-0050-7000-8000-0000000000c1", SiteID: deliveryTestSiteID,
+			AlarmType: "physics/cop-out-of-range", Title: "1号冷机COP偏低", DeviceID: "chiller-1",
+			Severity: alarmmodel.SeverityMajor, BeganAt: deliveryBase,
+		},
+		{
+			TenantID: alarmReminderTenantID, AlarmID: "0190f000-0050-7000-8000-0000000000c2", SiteID: deliveryTestSiteID,
+			AlarmType: "physics/pump-pressure", Title: "冷冻水泵压差异常", DeviceID: "pump-2",
+			Severity: alarmmodel.SeverityMajor, BeganAt: deliveryBase.Add(time.Minute),
+		},
+		{
+			TenantID: alarmReminderTenantID, AlarmID: "0190f000-0050-7000-8000-0000000000c3", SiteID: deliveryTestSiteID,
+			AlarmType: "reports-interrupted", Title: "网关上报中断",
+			Severity: alarmmodel.SeverityMajor, BeganAt: deliveryBase.Add(2 * time.Minute),
+		},
+		{
+			TenantID: alarmReminderTenantID, AlarmID: "0190f000-0050-7000-8000-0000000000c4", SiteID: deliveryTestSiteID,
+			AlarmType: "physics/tower-fan", Title: "冷却塔风机故障", DeviceID: "tower-1",
+			Severity: alarmmodel.SeverityMajor, BeganAt: deliveryBase.Add(3 * time.Minute),
+		},
+	}
+
+	subject, text := RenderGroupedDeliveryMessage(alarms, routing, 0, "https://console.example.test/")
+	if subject != "[松雅轩] 4 条重要告警汇总" {
+		t.Fatalf("subject = %q, want %q", subject, "[松雅轩] 4 条重要告警汇总")
+	}
+	if strings.ContainsAny(subject, "\r\n") {
+		t.Fatalf("subject contains newline: %q", subject)
+	}
+	for _, want := range []string{
+		"1. 1号冷机COP偏低（设备：chiller-1，开始：2026-11-01 14:26）",
+		"2. 冷冻水泵压差异常（设备：pump-2，开始：2026-11-01 14:27）",
+		"3. 网关上报中断（开始：2026-11-01 14:28）",
+		"其余 1 条告警请在控制台查看。",
+		"15 分钟内无人确认，将通知下一级。",
+		"查看告警：https://console.example.test/operations/alarms?site=" + deliveryTestSiteID + "&view=all",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("grouped body missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "冷却塔风机故障") {
+		t.Fatalf("grouped body exceeded GroupMaxItems=3:\n%s", text)
+	}
+
+	mixed := []DeliveryAlarm{alarms[0], {
+		TenantID: alarmReminderTenantID, AlarmID: "0190f000-0050-7000-8000-0000000000c5", SiteID: deliveryTestSiteID,
+		AlarmType: "rules-unevaluable", Title: "规则暂无法评估",
+		Severity: alarmmodel.SeverityWarning, BeganAt: deliveryBase.Add(time.Minute),
+	}}
+	mixedSubj, mixedText := RenderGroupedDeliveryMessage(mixed, routing, 0, "")
+	if mixedSubj != "[松雅轩] 2 条告警汇总" {
+		t.Fatalf("mixed severity subject = %q", mixedSubj)
+	}
+	if !strings.Contains(mixedText, "[重要]") || !strings.Contains(mixedText, "[警告]") {
+		t.Fatalf("expected severity tags in mixed grouped body:\n%s", mixedText)
+	}
 }
 
 func TestDecideRootCauseParentDeviceAndGatewayTopology(t *testing.T) {

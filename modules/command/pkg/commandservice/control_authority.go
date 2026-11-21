@@ -30,6 +30,9 @@ var (
 
 type DevicePriorityLocker interface {
 	AcquireDevicePriorityLock(ctx context.Context, lock commandmodel.DevicePriorityLock) (commandmodel.DevicePriorityLock, error)
+	ReleaseDevicePriorityLock(ctx context.Context, tenantID, deviceID string) error
+	GetDevicePriorityLock(ctx context.Context, tenantID, deviceID string) (*commandmodel.DevicePriorityLock, error)
+	ListDevicePriorityLocks(ctx context.Context, tenantID, siteID string) ([]commandmodel.DevicePriorityLock, error)
 }
 
 type ControlAuthorityConfig struct {
@@ -833,6 +836,164 @@ func (a *ControlAuthority) CancelOperatorCommand(
 	return commandView(cancelled), nil
 }
 
+func (a *ControlAuthority) populateDevicePriorityLocks(
+	ctx context.Context,
+	tenantID, siteID string,
+	state *SiteControlStateView,
+) error {
+	if state == nil {
+		return nil
+	}
+	locksView := make([]DevicePriorityLockView, 0)
+	if locker, ok := a.store.(DevicePriorityLocker); ok {
+		locks, lockErr := locker.ListDevicePriorityLocks(ctx, tenantID, siteID)
+		if lockErr != nil {
+			return controlErrorFromStore(lockErr, "Command Service could not load active Device priority locks.")
+		}
+		for _, lock := range locks {
+			locksView = append(locksView, devicePriorityLockView(lock))
+		}
+	}
+	state.DevicePriorityLocks = locksView
+	return nil
+}
+
+func (a *ControlAuthority) SubmitProtectionRuleCommand(
+	ctx context.Context,
+	input ProtectionRuleCommandInput,
+) (SubmitResult, error) {
+	if a.twin == nil || a.live == nil || a.store == nil {
+		return SubmitResult{}, unavailableControlError("Command Service control ports are not configured.")
+	}
+	idemKey := strings.TrimSpace(input.IdempotencyKey)
+	if !commandmodel.IsUUIDv7(input.TenantID) || !commandmodel.IsUUIDv7(input.SiteID) || !commandmodel.IsUUIDv7(input.DeviceID) || !controlWriteKeyPattern.MatchString(idemKey) {
+		return SubmitResult{}, &ControlError{
+			HTTPStatus: http.StatusBadRequest, Code: "COMMAND_REQUEST_INVALID",
+			Title: "Command request invalid", Detail: "Protection command requires valid tenantId, siteId, deviceId, and idempotencyKey.",
+		}
+	}
+	profile, supported := commandmodel.CapabilityProfileFor(input.Capability)
+	if !supported || !commandmodel.ParametersValid(input.Capability, input.Parameters) {
+		return SubmitResult{}, &ControlError{
+			HTTPStatus: http.StatusBadRequest, Code: "COMMAND_REQUEST_INVALID",
+			Title: "Command request invalid", Detail: "Protection command capability or parameters are invalid.",
+		}
+	}
+	dctx, err := a.twin.ResolveProtectionDispatchContext(ctx, input.TenantID, input.SiteID, input.DeviceID, strings.TrimSpace(input.TargetPointCode), input.Capability)
+	if err != nil {
+		return SubmitResult{}, controlErrorFromStore(err, "Core Registry could not resolve protection command dispatch context.")
+	}
+	feedbackKey := strings.TrimSpace(dctx.FeedbackPointKey)
+	if !commandmodel.IsUUIDv7(dctx.PointID) || feedbackKey == "" {
+		return SubmitResult{}, unavailableControlError("Core Registry returned an incomplete protection command dispatch context.")
+	}
+	targetObs, _, err := a.live.ReadLivePoint(ctx, input.TenantID, input.SiteID, input.DeviceID, feedbackKey)
+	if err != nil {
+		return SubmitResult{}, err
+	}
+	peerObs, err := a.readGateInterlockPeerStates(ctx, input.TenantID, input.SiteID, dctx.Interlocks)
+	if err != nil {
+		return SubmitResult{}, err
+	}
+
+	locks, mw := toGateLocksAndWindow(dctx.AssetLocks, dctx.ActiveMaintenanceWindow)
+	decision, rejection := commandmodel.EvaluateControlGate(commandmodel.GateInput{
+		Phase:                   commandmodel.GatePhaseSubmit,
+		AssetID:                 dctx.AssetID,
+		DeviceID:                input.DeviceID,
+		Capability:              input.Capability,
+		CapabilityRevision:      profile.Revision,
+		ParameterKey:            profile.ParameterKey,
+		ActuationMode:           dctx.ActuationMode,
+		AllowEmergencyDoRelease: false,
+		Parameters:              input.Parameters,
+		PriorityTier:            commandmodel.PriorityProtectionRule,
+		CommandSource:           commandmodel.SourceProtectionRule,
+		SiteMode:                commandmodel.SiteControlMode(dctx.ControlMode),
+		AssetLocks:              locks,
+		ActiveMaintenanceWindow: mw,
+		IdempotencyKey:          idemKey,
+		PreconditionMode:        commandmodel.PreconditionRequireCurrentState,
+		TargetState:             targetObs,
+		Interlocks:              dctx.Interlocks,
+		PeerStates:              peerObs,
+	})
+	if rejection != nil {
+		return SubmitResult{}, problemFromGateRejection(rejection)
+	}
+	if decision.Risk == commandmodel.RiskCritical {
+		return SubmitResult{}, &ControlError{
+			HTTPStatus: http.StatusForbidden,
+			Code:       "COMMAND_AUTHORIZATION_DENIED",
+			Title:      "Command forbidden",
+			Detail:     "Critical-risk commands cannot be executed automatically by protection rules.",
+		}
+	}
+
+	now := a.now().UTC()
+	grantID := strings.TrimSpace(input.OutboxID)
+	if grantID == "" {
+		grantID = idemKey
+	}
+	principalSuffix := strings.TrimSpace(input.AssignmentID)
+	if principalSuffix == "" {
+		principalSuffix = grantID
+	}
+	principalID := "alarm-protection-rule:" + principalSuffix
+	auth := commandmodel.AuthorizationSnapshot{
+		GrantID:            "protection-rule:" + grantID,
+		PolicyRevision:     "alarm-protection-rule:v1",
+		Purpose:            commandmodel.AuthorizationCommandSubmit,
+		PrincipalID:        principalID,
+		TenantID:           input.TenantID,
+		SiteID:             input.SiteID,
+		DeviceID:           input.DeviceID,
+		Capability:         input.Capability,
+		MaximumRisk:        commandmodel.RiskHigh,
+		CapabilityRevision: profile.Revision,
+		WorkloadSPIFFE:     "spiffe://hvac.local/alarm-service",
+		IssuedAt:           now,
+		ExpiresAt:          now.Add(25 * time.Second),
+	}
+	var currentState commandmodel.CurrentStateEvidence
+	if targetObs != nil {
+		currentState = commandmodel.CurrentStateEvidence{
+			EvaluationAvailability: targetObs.EvaluationAvailability,
+			Presence:               targetObs.Presence,
+			Readiness:              targetObs.Readiness,
+			Quality:                targetObs.Quality,
+			BusinessRevision:       targetObs.BusinessRevision,
+			CurrentValue:           targetObs.CurrentValue,
+			ObservedAt:             targetObs.ObservedAt,
+		}
+	}
+	normalizedTraceID := commandmodel.NormalizeTraceID(input.TraceID)
+	if normalizedTraceID == "" {
+		normalizedTraceID = commandmodel.NormalizeTraceID(observability.TraceID(ctx))
+	}
+	res, err := a.store.Submit(ctx, commandmodel.SubmitRequest{
+		TenantID:             input.TenantID,
+		SiteID:               input.SiteID,
+		DeviceID:             input.DeviceID,
+		PointID:              dctx.PointID,
+		PrincipalID:          principalID,
+		IdempotencyKey:       idemKey,
+		TraceID:              normalizedTraceID,
+		Capability:           input.Capability,
+		Parameters:           cloneParameters(input.Parameters),
+		VerificationPointKey: feedbackKey,
+		PreconditionMode:     commandmodel.PreconditionRequireCurrentState,
+		PriorityTier:         commandmodel.PriorityProtectionRule,
+		CommandSource:        commandmodel.SourceProtectionRule,
+		CurrentState:         currentState,
+		Authorization:        auth,
+	})
+	if err != nil {
+		return SubmitResult{}, controlErrorFromStore(err, "Command Service failed to accept the protection rule Command.")
+	}
+	return res, nil
+}
+
 func (a *ControlAuthority) GetSiteControlState(ctx context.Context, operator OperatorIdentity, siteID string) (SiteControlStateView, error) {
 	if a.twin == nil {
 		return SiteControlStateView{}, unavailableControlError("Core Registry is not configured.")
@@ -842,6 +1003,9 @@ func (a *ControlAuthority) GetSiteControlState(ctx context.Context, operator Ope
 	}
 	state, err := a.twin.GetSiteControlState(ctx, operator, siteID)
 	if err != nil {
+		return SiteControlStateView{}, err
+	}
+	if err := a.populateDevicePriorityLocks(ctx, operator.TenantID, siteID, &state); err != nil {
 		return SiteControlStateView{}, err
 	}
 	if state.ControlMode == SiteControlModeSafeShutdownExit {
@@ -929,6 +1093,9 @@ func (a *ControlAuthority) PutSiteControlMode(
 		}
 	}
 
+	if err := a.populateDevicePriorityLocks(ctx, operator.TenantID, siteID, &saved); err != nil {
+		return SiteControlModeResponse{}, err
+	}
 	return SiteControlModeResponse{
 		SiteControlStateView: saved,
 		CancelledCommandIDs:  cancelledIDs,
@@ -1016,6 +1183,241 @@ func (a *ControlAuthority) PutAssetControlLock(
 		AssetControlLockView: saved,
 		CancelledCommandIDs:  cancelledIDs,
 	}, nil
+}
+
+func (a *ControlAuthority) PutDevicePriorityLock(
+	ctx context.Context,
+	operator OperatorIdentity,
+	siteID string,
+	deviceID string,
+	input DevicePriorityLockInput,
+) (DevicePriorityLockView, error) {
+	if a.twin == nil || a.iam == nil {
+		return DevicePriorityLockView{}, unavailableControlError("Control lock ports are not configured.")
+	}
+	locker, ok := a.store.(DevicePriorityLocker)
+	if !ok {
+		return DevicePriorityLockView{}, unavailableControlError("Command Service priority lock store is not configured.")
+	}
+	if !commandmodel.IsUUIDv7(siteID) {
+		return DevicePriorityLockView{}, notFoundControlError("The requested Site was not found.")
+	}
+	if !commandmodel.IsUUIDv7(deviceID) {
+		return DevicePriorityLockView{}, notFoundControlError("The requested Device was not found.")
+	}
+	priority := commandmodel.PriorityTier(input.LockedPriority)
+	switch priority {
+	case commandmodel.PriorityManualOverride, commandmodel.PriorityProtectionRule, commandmodel.PrioritySafetyInterlock:
+	default:
+		return DevicePriorityLockView{}, &ControlError{
+			HTTPStatus: http.StatusBadRequest, Code: "CONTROL_EXIT_REQUEST_INVALID",
+			Title: "Device priority lock invalid", Detail: "lockedPriority must be MANUAL_OVERRIDE, PROTECTION_RULE, or SAFETY_INTERLOCK.",
+		}
+	}
+	durationMinutes := 120
+	if input.DurationMinutes != nil {
+		durationMinutes = *input.DurationMinutes
+	}
+	if durationMinutes < 5 || durationMinutes > 1440 {
+		return DevicePriorityLockView{}, &ControlError{
+			HTTPStatus: http.StatusBadRequest, Code: "CONTROL_EXIT_REQUEST_INVALID",
+			Title: "Device priority lock invalid", Detail: "durationMinutes must be between 5 and 1440 minutes.",
+		}
+	}
+	reason, ctrlErr := validatePriorityLockReason(input.Reason, "Device priority lock invalid")
+	if ctrlErr != nil {
+		return DevicePriorityLockView{}, ctrlErr
+	}
+	decision, err := a.authorizeSiteScheduleManage(ctx, operator, siteID, "The authenticated Principal is not allowed to lock Devices on this Site.")
+	if err != nil {
+		return DevicePriorityLockView{}, err
+	}
+	if err := a.verifySiteDevice(ctx, operator, siteID, deviceID); err != nil {
+		return DevicePriorityLockView{}, err
+	}
+	lockedBy := resolveControlPrincipalID(nil, decision.PrincipalID, operator.Subject)
+	lockedUntil := a.now().UTC().Add(time.Duration(durationMinutes) * time.Minute)
+	stored, err := locker.AcquireDevicePriorityLock(ctx, commandmodel.DevicePriorityLock{
+		TenantID:       operator.TenantID,
+		SiteID:         siteID,
+		DeviceID:       deviceID,
+		LockedPriority: priority,
+		CommandSource:  commandmodel.DefaultCommandSourceForPriority(priority),
+		LockedBy:       lockedBy,
+		LockedUntil:    lockedUntil,
+		Reason:         reason,
+	})
+	if err != nil {
+		return DevicePriorityLockView{}, controlErrorFromStore(err, "Command Service could not acquire the Device priority lock.")
+	}
+	return devicePriorityLockView(stored), nil
+}
+
+func (a *ControlAuthority) DeleteDevicePriorityLock(
+	ctx context.Context,
+	operator OperatorIdentity,
+	siteID string,
+	deviceID string,
+	rawReason string,
+) (DevicePriorityLockReleaseResponse, error) {
+	if a.twin == nil || a.iam == nil {
+		return DevicePriorityLockReleaseResponse{}, unavailableControlError("Control lock ports are not configured.")
+	}
+	locker, ok := a.store.(DevicePriorityLocker)
+	if !ok {
+		return DevicePriorityLockReleaseResponse{}, unavailableControlError("Command Service priority lock store is not configured.")
+	}
+	if !commandmodel.IsUUIDv7(siteID) {
+		return DevicePriorityLockReleaseResponse{}, notFoundControlError("The requested Site was not found.")
+	}
+	if !commandmodel.IsUUIDv7(deviceID) {
+		return DevicePriorityLockReleaseResponse{}, notFoundControlError("The requested Device was not found.")
+	}
+	if _, ctrlErr := validatePriorityLockReason(rawReason, "Device priority lock release invalid"); ctrlErr != nil {
+		return DevicePriorityLockReleaseResponse{}, ctrlErr
+	}
+	if _, err := a.authorizeSiteScheduleManage(ctx, operator, siteID, "The authenticated Principal is not allowed to release Device priority locks on this Site."); err != nil {
+		return DevicePriorityLockReleaseResponse{}, err
+	}
+	if err := a.verifySiteDevice(ctx, operator, siteID, deviceID); err != nil {
+		return DevicePriorityLockReleaseResponse{}, err
+	}
+	existing, err := locker.GetDevicePriorityLock(ctx, operator.TenantID, deviceID)
+	if err != nil {
+		return DevicePriorityLockReleaseResponse{}, controlErrorFromStore(err, "Command Service could not inspect the Device priority lock.")
+	}
+	released := existing != nil
+	if err := locker.ReleaseDevicePriorityLock(ctx, operator.TenantID, deviceID); err != nil {
+		return DevicePriorityLockReleaseResponse{}, controlErrorFromStore(err, "Command Service could not release the Device priority lock.")
+	}
+	return DevicePriorityLockReleaseResponse{
+		Released: released,
+		DeviceID: deviceID,
+	}, nil
+}
+
+func (a *ControlAuthority) ListControlAlarmDeadLetters(
+	ctx context.Context,
+	operator OperatorIdentity,
+	siteID string,
+	limit int,
+) ([]ControlAlarmDeadLetterView, error) {
+	if a.iam == nil {
+		return nil, unavailableControlError("IAM authorization is not configured.")
+	}
+	dlq, ok := a.store.(ControlAlarmDeadLetterStore)
+	if !ok {
+		return nil, unavailableControlError("Command Service control alarm dead-letter store is not configured.")
+	}
+	if !commandmodel.IsUUIDv7(siteID) {
+		return nil, notFoundControlError("The requested Site was not found.")
+	}
+	if _, err := a.authorizeSiteScheduleManage(ctx, operator, siteID, "The authenticated Principal is not allowed to inspect Control Alarm dead letters on this Site."); err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > MaximumControlAlarmDeadLetters {
+		limit = MaximumControlAlarmDeadLetters
+	}
+	views, err := dlq.ListControlAlarmDeadLetters(ctx, operator.TenantID, siteID, limit)
+	if err != nil {
+		return nil, controlErrorFromStore(err, "Command Service could not load Control Alarm dead letters.")
+	}
+	if views == nil {
+		return []ControlAlarmDeadLetterView{}, nil
+	}
+	return views, nil
+}
+
+func (a *ControlAuthority) ReplayControlAlarmDeadLetter(
+	ctx context.Context,
+	operator OperatorIdentity,
+	siteID string,
+	outboxID string,
+) (ControlAlarmDeadLetterReplayResponse, error) {
+	if a.iam == nil {
+		return ControlAlarmDeadLetterReplayResponse{}, unavailableControlError("IAM authorization is not configured.")
+	}
+	dlq, ok := a.store.(ControlAlarmDeadLetterStore)
+	if !ok {
+		return ControlAlarmDeadLetterReplayResponse{}, unavailableControlError("Command Service control alarm dead-letter store is not configured.")
+	}
+	if !commandmodel.IsUUIDv7(siteID) {
+		return ControlAlarmDeadLetterReplayResponse{}, notFoundControlError("The requested Site was not found.")
+	}
+	if !lowerUUIDPattern.MatchString(outboxID) {
+		return ControlAlarmDeadLetterReplayResponse{}, notFoundControlError("The requested Control Alarm dead-letter entry was not found.")
+	}
+	if _, err := a.authorizeSiteScheduleManage(ctx, operator, siteID, "The authenticated Principal is not allowed to replay Control Alarm dead letters on this Site."); err != nil {
+		return ControlAlarmDeadLetterReplayResponse{}, err
+	}
+	replayed, err := dlq.ReplayControlAlarmDeadLetter(ctx, operator.TenantID, siteID, outboxID)
+	if err != nil {
+		return ControlAlarmDeadLetterReplayResponse{}, controlErrorFromStore(err, "Command Service could not replay the Control Alarm dead-letter entry.")
+	}
+	return ControlAlarmDeadLetterReplayResponse{
+		Replayed: replayed,
+		OutboxID: outboxID,
+	}, nil
+}
+
+func (a *ControlAuthority) authorizeSiteScheduleManage(
+	ctx context.Context,
+	operator OperatorIdentity,
+	siteID string,
+	forbiddenDetail string,
+) (RegistryDecisionResult, error) {
+	decision, err := a.iam.AuthorizeRegistry(ctx, operator, ActionScheduleManage)
+	if err != nil {
+		return RegistryDecisionResult{}, err
+	}
+	if !decision.Allowed || !containsString(decision.AllowedSiteIDs, siteID) {
+		return RegistryDecisionResult{}, &ControlError{
+			HTTPStatus: http.StatusForbidden,
+			Code:       "CONTROL_EXIT_FORBIDDEN",
+			Title:      "Control exit forbidden",
+			Detail:     forbiddenDetail,
+		}
+	}
+	return decision, nil
+}
+
+func (a *ControlAuthority) verifySiteDevice(ctx context.Context, operator OperatorIdentity, siteID, deviceID string) error {
+	model, err := a.twin.GetSiteAssetModel(ctx, operator, siteID)
+	if err != nil {
+		return err
+	}
+	for _, dev := range model.Devices {
+		if dev.ID == deviceID && dev.TenantID == operator.TenantID && dev.SiteID == siteID &&
+			(strings.TrimSpace(dev.Status) == "" || strings.EqualFold(dev.Status, "ACTIVE")) {
+			return nil
+		}
+	}
+	return notFoundControlError("The requested Device was not found on this Site.")
+}
+
+func validatePriorityLockReason(rawReason, title string) (string, *ControlError) {
+	reason := strings.TrimSpace(rawReason)
+	if reason == "" || utf8.RuneCountInString(reason) > 1000 {
+		return "", &ControlError{
+			HTTPStatus: http.StatusBadRequest,
+			Code:       "CONTROL_EXIT_REQUEST_INVALID",
+			Title:      title,
+			Detail:     "A non-empty reason up to 1000 characters is required.",
+		}
+	}
+	return reason, nil
+}
+
+func devicePriorityLockView(lock commandmodel.DevicePriorityLock) DevicePriorityLockView {
+	return DevicePriorityLockView{
+		DeviceID:       lock.DeviceID,
+		LockedPriority: string(lock.LockedPriority),
+		CommandSource:  string(lock.CommandSource),
+		LockedBy:       lock.LockedBy,
+		LockedUntil:    lock.LockedUntil.UTC().Format(time.RFC3339Nano),
+		Reason:         lock.Reason,
+		UpdatedAt:      lock.UpdatedAt.UTC().Format(time.RFC3339Nano),
+	}
 }
 
 func (a *ControlAuthority) mintGrantAndSubmit(
