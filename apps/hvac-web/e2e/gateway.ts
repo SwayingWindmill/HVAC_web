@@ -558,89 +558,74 @@ export class Gateway {
   /** Counter cleaning & anomaly audit samples for the Site. */
   counterAuditSamples: Json[] = [
     {
-      observationId: '01990000-1400-7000-8000-000000000005',
-      tenantId: principal.context.tenantId,
-      siteId: SITE_ID,
-      deviceId: '018f3e00-4000-7000-8000-000000000005',
       pointId: '01910000-0000-7000-8000-000000000034',
+      deviceId: '018f3e00-4000-7000-8000-000000000005',
       telemetryKey: 'energy',
-      unit: 'kWh',
-      sampledAt: '2026-10-10T06:40:00.000Z',
-      previousSampledAt: '2026-10-10T06:30:00.000Z',
-      transitionType: 'INVALID_ZERO_DROP',
+      periodStart: '2026-10-10T06:30:00.000Z',
+      periodEnd: '2026-10-10T06:40:00.000Z',
       rawPrevious: 14280.5,
       rawCurrent: 0,
       cleanedDeltaKWh: null,
+      transitionType: 'INVALID_ZERO_DROP',
       quality: 'INVALID',
       qualityReasons: ['COUNTER_ZERO_DROP'],
+      unit: 'kWh',
     },
     {
-      observationId: '01990000-1400-7000-8000-000000000004',
-      tenantId: principal.context.tenantId,
-      siteId: SITE_ID,
-      deviceId: '018f3e00-4000-7000-8000-000000000005',
       pointId: '01910000-0000-7000-8000-000000000034',
+      deviceId: '018f3e00-4000-7000-8000-000000000005',
       telemetryKey: 'energy',
-      unit: 'kWh',
-      sampledAt: '2026-10-10T05:30:00.000Z',
-      previousSampledAt: '2026-10-10T05:20:00.000Z',
-      transitionType: 'INVALID_SPIKE',
+      periodStart: '2026-10-10T05:20:00.000Z',
+      periodEnd: '2026-10-10T05:30:00.000Z',
       rawPrevious: 14280.5,
       rawCurrent: 999999,
       cleanedDeltaKWh: null,
+      transitionType: 'INVALID_SPIKE',
       quality: 'INVALID',
       qualityReasons: ['COUNTER_STEP_SPIKE'],
+      unit: 'kWh',
     },
     {
-      observationId: '01990000-1400-7000-8000-000000000003',
-      tenantId: principal.context.tenantId,
-      siteId: SITE_ID,
-      deviceId: '018f3e00-4000-7000-8000-000000000005',
       pointId: '01910000-0000-7000-8000-000000000034',
+      deviceId: '018f3e00-4000-7000-8000-000000000005',
       telemetryKey: 'energy',
-      unit: 'kWh',
-      sampledAt: '2026-10-10T04:20:00.000Z',
-      previousSampledAt: '2026-10-10T04:10:00.000Z',
-      transitionType: 'RESET',
+      periodStart: '2026-10-10T04:10:00.000Z',
+      periodEnd: '2026-10-10T04:20:00.000Z',
       rawPrevious: 15020.0,
       rawCurrent: 12.4,
       cleanedDeltaKWh: 12.4,
+      transitionType: 'RESET',
       quality: 'GOOD',
       qualityReasons: ['COUNTER_RESET'],
+      unit: 'kWh',
     },
     {
-      observationId: '01990000-1400-7000-8000-000000000002',
-      tenantId: principal.context.tenantId,
-      siteId: SITE_ID,
-      deviceId: '018f3e00-4000-7000-8000-000000000005',
       pointId: '01910000-0000-7000-8000-000000000034',
+      deviceId: '018f3e00-4000-7000-8000-000000000005',
       telemetryKey: 'energy',
-      unit: 'kWh',
-      sampledAt: '2026-10-10T03:10:00.000Z',
-      previousSampledAt: '2026-10-10T03:00:00.000Z',
-      transitionType: 'ROLLOVER',
+      periodStart: '2026-10-10T03:00:00.000Z',
+      periodEnd: '2026-10-10T03:10:00.000Z',
       rawPrevious: 99985.0,
       rawCurrent: 10.0,
       cleanedDeltaKWh: 25.0,
+      transitionType: 'ROLLOVER',
       quality: 'GOOD',
       qualityReasons: ['COUNTER_ROLLOVER'],
+      unit: 'kWh',
     },
     {
-      observationId: '01990000-1400-7000-8000-000000000001',
-      tenantId: principal.context.tenantId,
-      siteId: SITE_ID,
-      deviceId: '018f3e00-4000-7000-8000-000000000005',
       pointId: '01910000-0000-7000-8000-000000000034',
+      deviceId: '018f3e00-4000-7000-8000-000000000005',
       telemetryKey: 'energy',
-      unit: 'kWh',
-      sampledAt: '2026-10-10T02:15:00.000Z',
-      previousSampledAt: '2026-10-10T02:05:00.000Z',
-      transitionType: 'INCREASE',
+      periodStart: '2026-10-10T02:05:00.000Z',
+      periodEnd: '2026-10-10T02:15:00.000Z',
       rawPrevious: 15000.0,
       rawCurrent: 15020.0,
       cleanedDeltaKWh: 20.0,
+      transitionType: 'INCREASE',
       quality: 'GOOD',
       qualityReasons: [],
+      unit: 'kWh',
     },
   ];
   counterAuditStrictWindow = false;
@@ -1694,10 +1679,12 @@ export class Gateway {
       (!deviceId || sample.deviceId === deviceId) && (!pointId || sample.pointId === pointId));
 
     let scopedSamples = byTarget;
+    const responseFrom = rawFrom && Number.isFinite(fromMs) ? new Date(fromMs!).toISOString() : '2026-10-09T16:00:00.000Z';
+    const responseTo = rawTo && Number.isFinite(toMs) ? new Date(toMs!).toISOString() : '2026-10-10T16:00:00.000Z';
     if (fromMs !== null || toMs !== null) {
       const inRange = (sample: Json) => {
-        const sampledMs = Date.parse(String(sample.sampledAt));
-        return (fromMs === null || sampledMs >= fromMs) && (toMs === null || sampledMs < toMs);
+        const endMs = Date.parse(String(sample.periodEnd));
+        return (fromMs === null || endMs >= fromMs) && (toMs === null || endMs < toMs);
       };
       const directMatches = byTarget.filter(inRange);
       if (directMatches.length > 0 || this.counterAuditStrictWindow || byTarget.length === 0) {
@@ -1710,15 +1697,15 @@ export class Gateway {
         const spanMs = Math.max(1, anchorEndMs - anchorStartMs);
         scopedSamples = byTarget.map((sample, index) => {
           const offsetMs = Math.floor((spanMs * (byTarget.length - index)) / (byTarget.length + 1));
-          const sampledMs = anchorStartMs + offsetMs;
+          const endMs = anchorStartMs + offsetMs;
           const prevDeltaMs = Math.max(
             60_000,
-            Date.parse(String(sample.sampledAt)) - Date.parse(String(sample.previousSampledAt)),
+            Date.parse(String(sample.periodEnd)) - Date.parse(String(sample.periodStart)),
           );
           return {
             ...sample,
-            sampledAt: new Date(sampledMs).toISOString(),
-            previousSampledAt: new Date(sampledMs - Math.min(prevDeltaMs, Math.max(1, offsetMs - 1))).toISOString(),
+            periodStart: new Date(endMs - Math.min(prevDeltaMs, Math.max(1, offsetMs - 1))).toISOString(),
+            periodEnd: new Date(endMs).toISOString(),
           };
         });
       }
@@ -1762,16 +1749,25 @@ export class Gateway {
       }
     }
 
-    const items = (anomaliesOnly
+    const filteredItems = (anomaliesOnly
       ? scopedSamples.filter((sample) =>
         sample.transitionType !== 'INCREASE'
         && sample.transitionType !== 'UNCHANGED'
         && sample.transitionType !== 'INITIAL')
       : scopedSamples)
-      .sort((left, right) => Date.parse(String(right.sampledAt)) - Date.parse(String(left.sampledAt)))
-      .slice(0, limit);
+      .sort((left, right) => Date.parse(String(right.periodEnd)) - Date.parse(String(left.periodEnd)));
+    const items = filteredItems.slice(0, limit);
 
-    return { body: { summary, items } };
+    return {
+      body: {
+        siteId: SITE_ID,
+        from: responseFrom,
+        to: responseTo,
+        summary,
+        items,
+        truncated: filteredItems.length > limit,
+      },
+    };
   }
 
   // The M&V owner's ledger: implementing fits the recorded baseline over the fourteen days before the

@@ -412,7 +412,7 @@ test('billing config tab manages site calendar holidays, enforces meter ratio ov
   await expect(holidayDialog).toBeVisible();
   await holidayDialog.getByLabel('日期', { exact: true }).fill('2026-10-18');
   await holidayDialog.getByRole('combobox', { name: '日期类型' }).click();
-  await page.getByRole('option', { name: /特殊调休日/ }).click();
+  await page.getByRole('option', { name: /^特殊日/ }).click();
   await holidayDialog.getByLabel('说明').fill('秋检停机调试日');
   await holidayDialog.getByRole('button', { name: '保存节假日' }).click();
   await expect(holidayDialog).toBeHidden();
