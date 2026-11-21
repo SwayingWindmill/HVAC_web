@@ -798,3 +798,128 @@ func TestControlAuthorityChillerPostStopPumpCooldown(t *testing.T) {
 		t.Fatalf("expected pump STOP to succeed after 5-minute chiller post-stop cooldown, got %v", err)
 	}
 }
+
+func TestControlAuthorityChillerStartHydraulicInterlock(t *testing.T) {
+	now := time.Date(2026, 11, 21, 11, 0, 0, 0, time.UTC)
+	ts := now.Format(time.RFC3339)
+	valveAssetID := "018f3e00-2000-7000-8000-000000000031"
+	valveDevID := "018f3e00-3000-7000-8000-000000000031"
+	valveOpenPtID := "018f3e00-4100-7000-8000-000000000031"
+	valvePosPtID := "018f3e00-4100-7000-8000-000000000032"
+	flowSwitchPtID := "018f3e00-4100-7000-8000-000000000033"
+
+	setupMappedHarness := func(t *testing.T) (*TestControlHarness, OperatorIdentity) {
+		t.Helper()
+		h, op := seedPlantHarness(t, now)
+		op.StepUpTOTPVerified = true
+		model := h.Twin.Models[caSiteID]
+		model.Assets = append(model.Assets, AssetDTO{
+			ID: valveAssetID, TenantID: caTenantID, SiteID: caSiteID, Code: "bv-ch-a", DisplayName: "隔离蝶阀", AssetType: "BUTTERFLY_VALVE", Status: "ACTIVE",
+		})
+		model.Devices = append(model.Devices, DeviceDTO{
+			ID: valveDevID, TenantID: caTenantID, SiteID: caSiteID, Code: "ctrl-bv-a", Status: "ACTIVE",
+		})
+		model.TelemetryPoints = append(model.TelemetryPoints,
+			TelemetryPointDTO{
+				ID: valveOpenPtID, TenantID: caTenantID, SiteID: caSiteID, ReportingDeviceID: valveDevID,
+				PointCode: "butterfly_valve_open", PointType: "STATE", ValueType: "STRING", Status: "ACTIVE",
+			},
+			TelemetryPointDTO{
+				ID: valvePosPtID, TenantID: caTenantID, SiteID: caSiteID, ReportingDeviceID: valveDevID,
+				PointCode: "chw_valve_position", PointType: "TELEMETRY", ValueType: "NUMBER", Status: "ACTIVE",
+				SourceMetadata: map[string]any{"unit": "%"},
+			},
+			TelemetryPointDTO{
+				ID: flowSwitchPtID, TenantID: caTenantID, SiteID: caSiteID, ReportingDeviceID: caPumpDev,
+				PointCode: "chw_flow_switch", PointType: "STATE", ValueType: "STRING", Status: "ACTIVE",
+			},
+		)
+		model.Relationships = append(model.Relationships,
+			AssetRelationshipDTO{ID: "rel-valve-dev", TenantID: caTenantID, SiteID: caSiteID, FromType: "DEVICE", FromID: valveDevID, ToType: "ASSET", ToID: valveAssetID, Role: "OBSERVES", Status: "ACTIVE", ValidFrom: ts},
+			AssetRelationshipDTO{ID: "rel-valve-ch", TenantID: caTenantID, SiteID: caSiteID, FromType: "ASSET", FromID: valveAssetID, ToType: "ASSET", ToID: caChillerID, Role: "SERVES", Status: "ACTIVE", ValidFrom: ts},
+		)
+		h.Twin.Models[caSiteID] = model
+		h.Live.Set(caChillerDev, "run_state", healthyTextObs(now, "STOPPED", 40), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000070")
+		h.Live.Set(caPumpDev, "run_state", healthyTextObs(now, "RUNNING", 41), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000071")
+		return h, op
+	}
+
+	t.Run("unmapped_site_without_valve_or_flow_points_allows_chiller_start", func(t *testing.T) {
+		h, op := seedPlantHarness(t, now)
+		op.StepUpTOTPVerified = true
+		if _, err := h.Authority.SubmitOperatorCommand(context.Background(), op, SubmitOperatorCommandInput{
+			AssetID: caChillerID, CommandPointID: caStartPt, Parameters: commandmodel.CommandParameters{}, IdempotencyKey: "chiller-start-unmapped",
+		}); err != nil {
+			t.Fatalf("expected chiller START to pass when site has no mapped valve/flow points, got %v", err)
+		}
+	})
+
+	t.Run("closed_discrete_butterfly_valve_blocks_chiller_start", func(t *testing.T) {
+		h, op := setupMappedHarness(t)
+		h.Live.Set(valveDevID, "butterfly_valve_open", healthyTextObs(now, "CLOSED", 50), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000072")
+		h.Live.Set(valveDevID, "chw_valve_position", healthyNumObs(now, 100.0, 51), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000073")
+		h.Live.Set(caPumpDev, "chw_flow_switch", healthyTextObs(now, "FLOW", 52), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000074")
+
+		_, err := h.Authority.SubmitOperatorCommand(context.Background(), op, SubmitOperatorCommandInput{
+			AssetID: caChillerID, CommandPointID: caStartPt, Parameters: commandmodel.CommandParameters{}, IdempotencyKey: "chiller-start-closed-valve",
+		})
+		var ce *ControlError
+		if !errors.As(err, &ce) || ce.HTTPStatus != http.StatusConflict || ce.Code != "CHILLER_HYDRAULIC_INTERLOCK_NOT_PROVEN" {
+			t.Fatalf("expected 409 CHILLER_HYDRAULIC_INTERLOCK_NOT_PROVEN, got %v", err)
+		}
+	})
+
+	t.Run("insufficient_analog_valve_opening_blocks_chiller_start", func(t *testing.T) {
+		h, op := setupMappedHarness(t)
+		h.Live.Set(valveDevID, "butterfly_valve_open", healthyTextObs(now, "OPEN", 50), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000075")
+		h.Live.Set(valveDevID, "chw_valve_position", healthyNumObs(now, 25.0, 51), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000076")
+		h.Live.Set(caPumpDev, "chw_flow_switch", healthyTextObs(now, "FLOW", 52), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000077")
+
+		_, err := h.Authority.SubmitOperatorCommand(context.Background(), op, SubmitOperatorCommandInput{
+			AssetID: caChillerID, CommandPointID: caStartPt, Parameters: commandmodel.CommandParameters{}, IdempotencyKey: "chiller-start-25pct-valve",
+		})
+		var ce *ControlError
+		if !errors.As(err, &ce) || ce.HTTPStatus != http.StatusConflict || ce.Code != "CHILLER_HYDRAULIC_INTERLOCK_NOT_PROVEN" || !strings.Contains(ce.Detail, "25.0%") {
+			t.Fatalf("expected 409 CHILLER_HYDRAULIC_INTERLOCK_NOT_PROVEN (25.0%%), got %v", err)
+		}
+	})
+
+	t.Run("no_flow_and_stale_flow_switch_fail_closed", func(t *testing.T) {
+		h, op := setupMappedHarness(t)
+		h.Live.Set(valveDevID, "butterfly_valve_open", healthyTextObs(now, "OPEN", 50), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000078")
+		h.Live.Set(valveDevID, "chw_valve_position", healthyNumObs(now, 95.0, 51), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000079")
+		h.Live.Set(caPumpDev, "chw_flow_switch", healthyTextObs(now, "NO_FLOW", 52), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000080")
+
+		_, err := h.Authority.SubmitOperatorCommand(context.Background(), op, SubmitOperatorCommandInput{
+			AssetID: caChillerID, CommandPointID: caStartPt, Parameters: commandmodel.CommandParameters{}, IdempotencyKey: "chiller-start-no-flow",
+		})
+		var ce *ControlError
+		if !errors.As(err, &ce) || ce.HTTPStatus != http.StatusConflict || ce.Code != "CHILLER_HYDRAULIC_INTERLOCK_NOT_PROVEN" {
+			t.Fatalf("expected 409 CHILLER_HYDRAULIC_INTERLOCK_NOT_PROVEN for NO_FLOW, got %v", err)
+		}
+
+		stale := healthyTextObs(now, "FLOW", 53)
+		stale.Freshness = "STALE"
+		h.Live.Set(caPumpDev, "chw_flow_switch", stale, "s2:sha256:0000000000000000000000000000000000000000000000000000000000000081")
+		_, err = h.Authority.SubmitOperatorCommand(context.Background(), op, SubmitOperatorCommandInput{
+			AssetID: caChillerID, CommandPointID: caStartPt, Parameters: commandmodel.CommandParameters{}, IdempotencyKey: "chiller-start-stale-flow",
+		})
+		ce = nil
+		if !errors.As(err, &ce) || ce.HTTPStatus != http.StatusConflict || ce.Code != "CHILLER_HYDRAULIC_INTERLOCK_NOT_PROVEN" || !strings.Contains(ce.Detail, "stale") {
+			t.Fatalf("expected fail-closed stale telemetry rejection, got %v", err)
+		}
+	})
+
+	t.Run("open_butterfly_valve_and_proven_flow_switch_allow_chiller_start", func(t *testing.T) {
+		h, op := setupMappedHarness(t)
+		h.Live.Set(valveDevID, "butterfly_valve_open", healthyTextObs(now, "OPEN", 50), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000082")
+		h.Live.Set(valveDevID, "chw_valve_position", healthyNumObs(now, 95.0, 51), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000083")
+		h.Live.Set(caPumpDev, "chw_flow_switch", healthyTextObs(now, "FLOW", 52), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000084")
+
+		if _, err := h.Authority.SubmitOperatorCommand(context.Background(), op, SubmitOperatorCommandInput{
+			AssetID: caChillerID, CommandPointID: caStartPt, Parameters: commandmodel.CommandParameters{}, IdempotencyKey: "chiller-start-proven-interlock",
+		}); err != nil {
+			t.Fatalf("expected chiller START with open butterfly valve and proven flow switch to pass, got %v", err)
+		}
+	})
+}
