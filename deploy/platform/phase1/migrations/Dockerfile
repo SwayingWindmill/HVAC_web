@@ -126,6 +126,7 @@ COPY infra/registry/postgres/init/metric-backfill-watermarks-and-reverify.sql /o
 COPY infra/registry/postgres/init/energy-tou-holidays-and-recalc.sql /opt/hvac/repo/infra/registry/postgres/init/energy-tou-holidays-and-recalc.sql
 COPY infra/registry/postgres/init/mv-bivariate-weather-anchors.sql /opt/hvac/repo/infra/registry/postgres/init/mv-bivariate-weather-anchors.sql
 COPY infra/registry/postgres/init/optimization-canary-write-rls.sql /opt/hvac/repo/infra/registry/postgres/init/optimization-canary-write-rls.sql
+COPY infra/registry/postgres/init/accounting-config-delete-grants.sql /opt/hvac/repo/infra/registry/postgres/init/accounting-config-delete-grants.sql
 COPY infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql /opt/hvac/repo/infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql
 COPY infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql /opt/hvac/repo/infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql
 COPY infra/telemetry/postgres/init/003-s2-telemetry-ingest.sql /opt/hvac/repo/infra/telemetry/postgres/init/003-s2-telemetry-ingest.sql
@@ -154,10 +155,10 @@ COPY modules/command/migrations/003_s3_tenant_scope.sql /opt/hvac/repo/modules/c
 COPY modules/command/migrations/004_s3_command_point_identity.sql /opt/hvac/repo/modules/command/migrations/004_s3_command_point_identity.sql
 COPY modules/command/migrations/005_s11_edge_execution_evidence.sql /opt/hvac/repo/modules/command/migrations/005_s11_edge_execution_evidence.sql
 COPY modules/command/migrations/006_command_control_locks_and_sequence_capabilities.sql /opt/hvac/repo/modules/command/migrations/006_command_control_locks_and_sequence_capabilities.sql
-COPY modules/command/migrations/007_schema_and_table_comments.sql /opt/hvac/repo/modules/command/migrations/007_schema_and_table_comments.sql
 
 FROM scratch AS sources-3
 
+COPY modules/command/migrations/007_schema_and_table_comments.sql /opt/hvac/repo/modules/command/migrations/007_schema_and_table_comments.sql
 COPY modules/command/migrations/008_command_precondition_mode.sql /opt/hvac/repo/modules/command/migrations/008_command_precondition_mode.sql
 COPY modules/command/migrations/command-template-capability-sync.sql /opt/hvac/repo/modules/command/migrations/command-template-capability-sync.sql
 COPY modules/command/migrations/command_intent_trace_context.sql /opt/hvac/repo/modules/command/migrations/command_intent_trace_context.sql
