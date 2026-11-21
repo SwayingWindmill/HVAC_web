@@ -1449,6 +1449,8 @@ func TestDeployScriptProtectsRuntimeSecretsAndDropsDeadKeygen(t *testing.T) {
 		"alarm-delivery",
 		"mqtt-pki",
 		"mqtt-crl",
+		"tls",
+		"secrets",
 		"observability/textfile",
 	}
 	for _, dir := range dirs {
@@ -1482,6 +1484,9 @@ func TestDeployScriptProtectsRuntimeSecretsAndDropsDeadKeygen(t *testing.T) {
 		"alarm-delivery/recipients.json",
 		"mqtt-pki/mqtt-broker-key.pem",
 		"mqtt-crl/gateway-ca.crl.pem",
+		"tls/tls.crt",
+		"tls/tls.key",
+		"secrets/alarm.dsn",
 		"observability/textfile/backup.prom",
 	}
 	for _, rel := range seedFiles {
@@ -1531,6 +1536,8 @@ func TestDeployScriptProtectsRuntimeSecretsAndDropsDeadKeygen(t *testing.T) {
 		"alert-receiver",
 		"alarm-delivery",
 		"mqtt-pki",
+		"tls",
+		"secrets",
 	} {
 		assertPerm(sensitiveDir, func(m os.FileMode) bool { return m == 0o750 }, "0750")
 	}
@@ -1541,6 +1548,7 @@ func TestDeployScriptProtectsRuntimeSecretsAndDropsDeadKeygen(t *testing.T) {
 		"gateway-ca/trusted-client-ca.pem",
 		"gateway-ca/connectivity.crt",
 		"mqtt-crl/gateway-ca.crl.pem",
+		"tls/tls.crt",
 		"observability/textfile/backup.prom",
 	} {
 		assertPerm(publicCert, func(m os.FileMode) bool { return m == 0o644 }, "0644")
@@ -1567,6 +1575,8 @@ func TestDeployScriptProtectsRuntimeSecretsAndDropsDeadKeygen(t *testing.T) {
 		"alarm-delivery/alarm-send-token",
 		"alarm-delivery/recipients.json",
 		"mqtt-pki/mqtt-broker-key.pem",
+		"tls/tls.key",
+		"secrets/alarm.dsn",
 	} {
 		assertPerm(workloadSecret, func(m os.FileMode) bool { return m == 0o640 || m == 0o600 }, "0640 or 0600 (not world-readable)")
 	}
@@ -1581,6 +1591,7 @@ func TestDeployScriptProtectsRuntimeSecretsAndDropsDeadKeygen(t *testing.T) {
 		"chown -R 65532:65532",
 		"gateway-ca mqtt-crl",
 		"chown -R 0:65532",
+		"internal-pki alert-receiver alarm-delivery secrets tls",
 		"chown -R 1883:65532 /runtime/mqtt-pki",
 		"chown -R 101:101 /runtime/backups/clickhouse",
 		"chown -R 999:999 /runtime/backups/postgres",
@@ -1589,6 +1600,44 @@ func TestDeployScriptProtectsRuntimeSecretsAndDropsDeadKeygen(t *testing.T) {
 		if !strings.Contains(calls, wantOwnership) {
 			t.Fatalf("deploy.sh missing ownership hardening %q in:\n%s", wantOwnership, calls)
 		}
+	}
+}
+
+func TestDeployScriptDumpsUnhealthyContainerLogsOnUpFailure(t *testing.T) {
+	revision := "0123456789abcdef0123456789abcdef01234567"
+	platform, bin, log := deployFixture(t, revision)
+	writeExe(t, bin, "node", `#!/bin/sh
+printf 'node %s\n' "$*" >> "$CALLS_LOG"
+case "$*" in
+  *"--integration up -d") exit 1 ;;
+esac
+`)
+	writeExe(t, bin, "docker", `#!/bin/sh
+printf 'docker %s\n' "$*" >> "$CALLS_LOG"
+case "$1" in
+  ps)
+    case "$*" in
+      *"com.docker.compose.service=energy-api"*) printf 'cid-energy-api\n' ;;
+    esac
+    ;;
+  inspect)
+    printf 'restarting/unhealthy\n'
+    ;;
+  logs)
+    printf 'mocked energy-api failure: permission denied on /run/hvac/public-tls/tls.key\n'
+    ;;
+esac
+`)
+	cmd := exec.Command("bash", "deploy.sh")
+	cmd.Env = commandEnv(bin, "HVAC_PLATFORM_DIR="+platform, "CALLS_LOG="+log)
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected deploy.sh to fail when compose up fails:\n%s", output)
+	}
+	text := string(output)
+	if !strings.Contains(text, "--- container logs: energy-api (restarting/unhealthy) ---") ||
+		!strings.Contains(text, "mocked energy-api failure: permission denied on /run/hvac/public-tls/tls.key") {
+		t.Fatalf("deploy.sh did not dump unhealthy container logs:\n%s", text)
 	}
 }
 

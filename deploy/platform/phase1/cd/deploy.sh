@@ -50,7 +50,7 @@ chmod 750 "$R/data/otel-collector"
 # Non-root containers run under UID 65532 (Go services), supplementary group 65532 (alertmanager/centrifugo/operations-agent), UID 1883 (mosquitto), UID 101 (clickhouse), UID 999 (postgres), or UID 10001 (otel-collector).
 docker run --rm --user 0 --entrypoint sh -v "$R:/runtime" postgres:16.4-bookworm -c '
   for d in identity iam gateway-ca mqtt-crl; do [ -d "/runtime/$d" ] && chown -R 65532:65532 "/runtime/$d"; done
-  for d in internal-pki alert-receiver alarm-delivery secrets; do [ -d "/runtime/$d" ] && chown -R 0:65532 "/runtime/$d"; done
+  for d in internal-pki alert-receiver alarm-delivery secrets tls; do [ -d "/runtime/$d" ] && chown -R 0:65532 "/runtime/$d"; done
   [ -d /runtime/mqtt-pki ] && chown -R 1883:65532 /runtime/mqtt-pki
   chown -R 101:101 /runtime/backups/clickhouse
   chown -R 999:999 /runtime/backups/postgres
@@ -130,7 +130,21 @@ node scripts/phase1-bootstrap-local-foundation.mjs
 $L run --rm -T identity-reconciler < "$R/identity-reconcile.json"
 
 step up
-$L --integration up -d
+if ! $L --integration up -d; then
+  echo "error: compose up failed; collecting status and recent logs for unhealthy containers" >&2
+  $L --integration ps -a >&2 || true
+  for svc in energy-api identity-service telemetry-worker metric-worker scheduler maintenance connectivity nginx; do
+    cid="$(docker ps -aq --filter "label=com.docker.compose.project=${HVAC_LOCAL_PROJECT}" --filter "label=com.docker.compose.service=${svc}" | head -n 1 || true)"
+    if [ -n "$cid" ]; then
+      st="$(docker inspect --format '{{.State.Status}}/{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$cid" 2>/dev/null || true)"
+      if [ "$st" != "running/healthy" ] && [ "$st" != "running/none" ]; then
+        echo "--- container logs: ${svc} (${st}) ---" >&2
+        docker logs --tail=60 "$cid" >&2 || true
+      fi
+    fi
+  done
+  exit 1
+fi
 # Single-file bind mounts retain the previous host inode after `tar -xf` replaces a file;
 # recreate mqtt-broker only when a mounted file in the container differs from the host tree.
 if [ -f infra/telemetry/mqtt/mosquitto.conf ] && [ -f infra/telemetry/mqtt/acl ]; then
