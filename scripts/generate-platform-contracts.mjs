@@ -73,7 +73,18 @@ const conc = `${gw}/concentrators/{unitId}`;
 const site = 'sites/{siteId}';
 const sav = `${site}/savings/measures`;
 const opt = `${site}/optimization`;
+const w4 = [
+  ['listAlarmRuleDeadLetters', 'get', 'alarm-rules/dead-letters', 'AlarmRuleDeadLetterListEnvelope', '__ALARM_RULES_DEAD_LETTERS_PATH__'],
+  ['replayAlarmRuleDeadLetter', 'post', 'alarm-rules/dead-letters/{outboxId}/replay', 'AlarmRuleDeadLetterReplayEnvelope', '__ALARM_RULES_DEAD_LETTER_REPLAY_PATH__'],
+  ['putDevicePriorityLock', 'put', `${site}/devices/{deviceId}/priority-lock`, 'DevicePriorityLockState', '__DEVICE_PRIORITY_LOCK_PATH__'],
+  ['deleteDevicePriorityLock', 'delete', `${site}/devices/{deviceId}/priority-lock`, 'DevicePriorityLockReleaseResponse'],
+  ['listControlAlarmDeadLetters', 'get', `${site}/control-alarms/dead-letters`, 'ControlAlarmDeadLetterListEnvelope', '__CONTROL_ALARM_DEAD_LETTERS_PATH__'],
+  ['replayControlAlarmDeadLetter', 'post', `${site}/control-alarms/dead-letters/{outboxId}/replay`, 'ControlAlarmDeadLetterReplayResponse', '__CONTROL_ALARM_DEAD_LETTER_REPLAY_PATH__'],
+  ['getSiteAlarmRouting', 'get', `${site}/alarm-routing`, 'SiteAlarmRoutingEnvelope', '__SITE_ALARM_ROUTING_PATH__'],
+  ['reloadSiteAlarmRouting', 'post', `${site}/alarm-routing/reload`, 'SiteAlarmRoutingReloadEnvelope', '__SITE_ALARM_ROUTING_RELOAD_PATH__'],
+];
 const expectedOperations = {
+  ...Object.fromEntries(w4.map(([k, m, p]) => [k, [m, p]])),
   getGatewayCredential: ['get', `${gw}/credential`],
   listGatewayCredentials: ['get', `${gw}/credentials`],
   revokeGatewayCertificate: ['post', `${gw}/credentials/{credentialId}/revoke`],
@@ -147,8 +158,6 @@ const expectedOperations = {
   listAlarmEvaluationsV212: ['get', 'alarms/{alarmId}/evaluations'],
   listSiteAlarmRules: ['get', 'alarm-rules'],
   simulateSiteAlarmRule: ['post', 'alarm-rules/simulate'],
-  listAlarmRuleDeadLetters: ['get', 'alarm-rules/dead-letters'],
-  replayAlarmRuleDeadLetter: ['post', 'alarm-rules/dead-letters/{outboxId}/replay'],
   listCommandsV212: ['get', 'commands'],
   getCommandV212: ['get', 'commands/{commandId}'],
   approveCommandV212: ['post', 'commands/{commandId}/approve'],
@@ -197,12 +206,6 @@ const expectedOperations = {
   updateSiteControlMode: ['put', `${site}/control-mode`],
   executeSiteControlShutdown: ['post', `${site}/control-shutdown`],
   updateAssetControlLock: ['put', 'assets/{assetId}/control-lock'],
-  putDevicePriorityLock: ['put', `${site}/devices/{deviceId}/priority-lock`],
-  deleteDevicePriorityLock: ['delete', `${site}/devices/{deviceId}/priority-lock`],
-  listControlAlarmDeadLetters: ['get', `${site}/control-alarms/dead-letters`],
-  replayControlAlarmDeadLetter: ['post', `${site}/control-alarms/dead-letters/{outboxId}/replay`],
-  getSiteAlarmRouting: ['get', `${site}/alarm-routing`],
-  reloadSiteAlarmRouting: ['post', `${site}/alarm-routing/reload`],
   getSiteAutoControlLease: ['get', `${site}/optimization/auto-control-lease`],
   armSiteAutoControlLease: ['put', `${site}/optimization/auto-control-lease`],
   revokeSiteAutoControlLease: ['post', `${site}/optimization/auto-control-lease/revoke`],
@@ -221,6 +224,7 @@ for (const [operationId, [method, subPath]] of Object.entries(expectedOperations
 }
 
 const expectedSuccessSchemas = {
+  ...Object.fromEntries(w4.map(([k, , , s]) => [k, s])),
   getGatewayCredential: 'GatewayCredentialStatus',
   listGatewayCredentials: 'GatewayCredentialList',
   revokeGatewayCertificate: 'GatewayCredentialRecord',
@@ -261,8 +265,6 @@ const expectedSuccessSchemas = {
   listSiteTemplateAssignments: 'TemplateAssignmentCollection',
   listSiteAlarmRules: 'AlarmRuleList',
   simulateSiteAlarmRule: 'AlarmRuleSimulationEnvelope',
-  listAlarmRuleDeadLetters: 'AlarmRuleDeadLetterListEnvelope',
-  replayAlarmRuleDeadLetter: 'AlarmRuleDeadLetterReplayEnvelope',
   getSiteOperatingSchedule: 'OperatingSchedule',
   saveSiteOperatingSchedule: 'OperatingSchedule',
   listSiteOperatingExceptions: 'OperatingExceptionList',
@@ -284,12 +286,6 @@ const expectedSuccessSchemas = {
   updateSiteControlMode: 'SiteControlModeMutationResponse',
   executeSiteControlShutdown: 'SiteControlShutdownResponse',
   updateAssetControlLock: 'AssetControlLockMutationResponse',
-  putDevicePriorityLock: 'DevicePriorityLockState',
-  deleteDevicePriorityLock: 'DevicePriorityLockReleaseResponse',
-  listControlAlarmDeadLetters: 'ControlAlarmDeadLetterListEnvelope',
-  replayControlAlarmDeadLetter: 'ControlAlarmDeadLetterReplayResponse',
-  getSiteAlarmRouting: 'SiteAlarmRoutingEnvelope',
-  reloadSiteAlarmRouting: 'SiteAlarmRoutingReloadEnvelope',
   getLatestSiteOptimizationPreparationV212: 'OptimizationPreparation',
   getLatestSiteOptimizationStagingRecommendations: 'StagingEvaluation',
   getSiteAutoControlLease: 'SiteAutoControlLeaseState',
@@ -539,6 +535,7 @@ invariant(spec.components?.responses?.Problem?.content?.['application/problem+js
 
 const banner = `Generator: platform-contracts@${generatorVersion}; Contract SHA-256: ${digest}`;
 const replacements = {
+  ...Object.fromEntries(w4.flatMap(([k, , , , r]) => (r ? [[r, operations[k].path]] : []))),
   __CONTRACT_BANNER__: banner,
   __HEALTH_PATH__: operations.getHealth.path,
   __VERSION_PATH__: operations.getVersion.path,
@@ -593,8 +590,6 @@ const replacements = {
   __ALARM_EVALUATIONS_PATH__: operations.listAlarmEvaluationsV212.path,
   __ALARM_RULES_PATH__: operations.listSiteAlarmRules.path,
   __ALARM_RULES_SIMULATE_PATH__: operations.simulateSiteAlarmRule.path,
-  __ALARM_RULES_DEAD_LETTERS_PATH__: operations.listAlarmRuleDeadLetters.path,
-  __ALARM_RULES_DEAD_LETTER_REPLAY_PATH__: operations.replayAlarmRuleDeadLetter.path,
   __COMMANDS_PATH__: operations.listCommandsV212.path,
   __COMMAND_PATH__: operations.getCommandV212.path,
   __COMMAND_APPROVE_PATH__: operations.approveCommandV212.path,
@@ -636,11 +631,6 @@ const replacements = {
   __SITE_CONTROL_MODE_PATH__: operations.updateSiteControlMode.path,
   __SITE_CONTROL_SHUTDOWN_PATH__: operations.executeSiteControlShutdown.path,
   __ASSET_CONTROL_LOCK_PATH__: operations.updateAssetControlLock.path,
-  __DEVICE_PRIORITY_LOCK_PATH__: operations.putDevicePriorityLock.path,
-  __CONTROL_ALARM_DEAD_LETTERS_PATH__: operations.listControlAlarmDeadLetters.path,
-  __CONTROL_ALARM_DEAD_LETTER_REPLAY_PATH__: operations.replayControlAlarmDeadLetter.path,
-  __SITE_ALARM_ROUTING_PATH__: operations.getSiteAlarmRouting.path,
-  __SITE_ALARM_ROUTING_RELOAD_PATH__: operations.reloadSiteAlarmRouting.path,
   __SITE_AUTO_CONTROL_LEASE_PATH__: operations.getSiteAutoControlLease.path,
   __SITE_AUTO_CONTROL_LEASE_REVOKE_PATH__: operations.revokeSiteAutoControlLease.path,
   __SITE_OPTIMIZATION_EXECUTION_MONITORS_PATH__: operations.listSiteOptimizationExecutionMonitors.path,
