@@ -489,6 +489,161 @@ export class Gateway {
   readonly utilityBills: Json[] = [];
   /** Manual accounting recalculation jobs queued for the Site. */
   readonly accountingRecalcJobs: Json[] = [];
+  /** Site-level calendar overrides for TOU holiday/special workday resolution. */
+  accountingHolidays: Json[] = [
+    {
+      id: '01990000-1300-7000-8000-000000000001',
+      tenantId: principal.context.tenantId,
+      siteId: SITE_ID,
+      holidayDate: '2026-10-01',
+      dayType: 'HOLIDAY',
+      label: '国庆节',
+      revision: 1,
+      createdAt: '2026-09-20T00:00:00.000Z',
+      updatedAt: '2026-09-20T00:00:00.000Z',
+    },
+    {
+      id: '01990000-1300-7000-8000-000000000002',
+      tenantId: principal.context.tenantId,
+      siteId: SITE_ID,
+      holidayDate: '2026-10-10',
+      dayType: 'SPECIAL_DAY',
+      label: '节前调休工作日',
+      revision: 1,
+      createdAt: '2026-09-20T00:00:00.000Z',
+      updatedAt: '2026-09-20T00:00:00.000Z',
+    },
+  ];
+  /** Versioned CT/PT transformer ratios and multipliers per site meter/point. */
+  meterRatioVersions: Json[] = [
+    {
+      id: '01990000-1350-7000-8000-000000000001',
+      tenantId: principal.context.tenantId,
+      siteId: SITE_ID,
+      meterBindingId: null,
+      pointId: '01910000-0000-7000-8000-000000000034',
+      ctRatio: 40,
+      ptRatio: 1,
+      meterMultiplier: 1,
+      cloudMultiplier: 40,
+      ratioApplicationMode: 'PLATFORM_APPLIED',
+      readingUnit: 'kWh',
+      effectiveFrom: '2026-06-01T00:00:00.000Z',
+      effectiveTo: null,
+      status: 'RELEASED',
+      revision: 1,
+      createdAt: '2026-06-01T00:00:00.000Z',
+      updatedAt: '2026-06-01T00:00:00.000Z',
+    },
+    {
+      id: '01990000-1350-7000-8000-000000000002',
+      tenantId: principal.context.tenantId,
+      siteId: SITE_ID,
+      meterBindingId: null,
+      pointId: '01910000-0000-7000-8000-000000000034',
+      ctRatio: 20,
+      ptRatio: 1,
+      meterMultiplier: 1,
+      cloudMultiplier: 20,
+      ratioApplicationMode: 'PLATFORM_APPLIED',
+      readingUnit: 'kWh',
+      effectiveFrom: '2026-01-01T00:00:00.000Z',
+      effectiveTo: '2026-06-01T00:00:00.000Z',
+      status: 'RELEASED',
+      revision: 1,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    },
+  ];
+  /** Counter cleaning & anomaly audit samples for the Site. */
+  counterAuditSamples: Json[] = [
+    {
+      observationId: '01990000-1400-7000-8000-000000000005',
+      tenantId: principal.context.tenantId,
+      siteId: SITE_ID,
+      deviceId: '018f3e00-4000-7000-8000-000000000005',
+      pointId: '01910000-0000-7000-8000-000000000034',
+      telemetryKey: 'energy',
+      unit: 'kWh',
+      sampledAt: '2026-10-10T06:40:00.000Z',
+      previousSampledAt: '2026-10-10T06:30:00.000Z',
+      transitionType: 'INVALID_ZERO_DROP',
+      rawPrevious: 14280.5,
+      rawCurrent: 0,
+      cleanedDeltaKWh: null,
+      quality: 'INVALID',
+      qualityReasons: ['COUNTER_ZERO_DROP'],
+    },
+    {
+      observationId: '01990000-1400-7000-8000-000000000004',
+      tenantId: principal.context.tenantId,
+      siteId: SITE_ID,
+      deviceId: '018f3e00-4000-7000-8000-000000000005',
+      pointId: '01910000-0000-7000-8000-000000000034',
+      telemetryKey: 'energy',
+      unit: 'kWh',
+      sampledAt: '2026-10-10T05:30:00.000Z',
+      previousSampledAt: '2026-10-10T05:20:00.000Z',
+      transitionType: 'INVALID_SPIKE',
+      rawPrevious: 14280.5,
+      rawCurrent: 999999,
+      cleanedDeltaKWh: null,
+      quality: 'INVALID',
+      qualityReasons: ['COUNTER_STEP_SPIKE'],
+    },
+    {
+      observationId: '01990000-1400-7000-8000-000000000003',
+      tenantId: principal.context.tenantId,
+      siteId: SITE_ID,
+      deviceId: '018f3e00-4000-7000-8000-000000000005',
+      pointId: '01910000-0000-7000-8000-000000000034',
+      telemetryKey: 'energy',
+      unit: 'kWh',
+      sampledAt: '2026-10-10T04:20:00.000Z',
+      previousSampledAt: '2026-10-10T04:10:00.000Z',
+      transitionType: 'RESET',
+      rawPrevious: 15020.0,
+      rawCurrent: 12.4,
+      cleanedDeltaKWh: 12.4,
+      quality: 'GOOD',
+      qualityReasons: ['COUNTER_RESET'],
+    },
+    {
+      observationId: '01990000-1400-7000-8000-000000000002',
+      tenantId: principal.context.tenantId,
+      siteId: SITE_ID,
+      deviceId: '018f3e00-4000-7000-8000-000000000005',
+      pointId: '01910000-0000-7000-8000-000000000034',
+      telemetryKey: 'energy',
+      unit: 'kWh',
+      sampledAt: '2026-10-10T03:10:00.000Z',
+      previousSampledAt: '2026-10-10T03:00:00.000Z',
+      transitionType: 'ROLLOVER',
+      rawPrevious: 99985.0,
+      rawCurrent: 10.0,
+      cleanedDeltaKWh: 25.0,
+      quality: 'GOOD',
+      qualityReasons: ['COUNTER_ROLLOVER'],
+    },
+    {
+      observationId: '01990000-1400-7000-8000-000000000001',
+      tenantId: principal.context.tenantId,
+      siteId: SITE_ID,
+      deviceId: '018f3e00-4000-7000-8000-000000000005',
+      pointId: '01910000-0000-7000-8000-000000000034',
+      telemetryKey: 'energy',
+      unit: 'kWh',
+      sampledAt: '2026-10-10T02:15:00.000Z',
+      previousSampledAt: '2026-10-10T02:05:00.000Z',
+      transitionType: 'INCREASE',
+      rawPrevious: 15000.0,
+      rawCurrent: 15020.0,
+      cleanedDeltaKWh: 20.0,
+      quality: 'GOOD',
+      qualityReasons: [],
+    },
+  ];
+  counterAuditStrictWindow = false;
   /** Members of the Tenant as IAM and the identity directory keep them (系统管理 → 用户与角色). */
   readonly members: Json[] = [
     {
@@ -1067,6 +1222,76 @@ export class Gateway {
     return undefined;
   }
 
+  private accountingProblem(
+    path: string,
+    status: number,
+    code: string,
+    title: string,
+    detail: string,
+  ): { status: number; body: Json } {
+    return {
+      status,
+      body: {
+        type: 'about:blank',
+        title,
+        status,
+        detail,
+        instance: path,
+        code,
+        traceId: '0'.repeat(32),
+        retryable: false,
+      },
+    };
+  }
+
+  private requireBillingAccountingWrite(
+    path: string,
+    csrfToken: string | undefined,
+    activePrincipal: Json,
+  ): { status: number; body: Json } | undefined {
+    const expectedCsrf = activePrincipal.session?.csrfToken ?? principal.session.csrfToken;
+    if (csrfToken !== expectedCsrf) {
+      return this.accountingProblem(path, 403, 'CSRF_TOKEN_INVALID', 'CSRF validation failed', 'CSRF token mismatch.');
+    }
+    const capabilities: string[] = activePrincipal.authorization?.capabilities ?? [];
+    if (!capabilities.includes('billing.manage')) {
+      return this.accountingProblem(path, 403, 'BILLING_MANAGE_FORBIDDEN', 'Forbidden', 'billing.manage is required.');
+    }
+    return undefined;
+  }
+
+  private enqueueAccountingRecalcJob(input: {
+    readonly activePrincipal: Json;
+    readonly granularity: 'HOUR' | 'DAY' | 'MONTH' | 'ALL';
+    readonly windowStart: string;
+    readonly windowEnd: string;
+    readonly reason: string;
+    readonly source: 'BACKFILL' | 'MANUAL' | 'TARIFF_CHANGE' | 'RATIO_CHANGE';
+    readonly now: string;
+  }): Json {
+    const job: Json = {
+      id: this.nextUuidV7('9200'),
+      tenantId: input.activePrincipal.context.tenantId,
+      siteId: SITE_ID,
+      granularity: input.granularity,
+      windowStart: input.windowStart,
+      windowEnd: input.windowEnd,
+      status: 'PENDING',
+      availableAt: input.now,
+      requestedBy: input.activePrincipal.principalId,
+      requestedByDisplay: input.activePrincipal.principal.displayName,
+      reason: input.reason,
+      source: input.source,
+      attemptCount: 0,
+      lastError: '',
+      createdAt: input.now,
+      updatedAt: input.now,
+      finishedAt: null,
+    };
+    this.accountingRecalcJobs.unshift(job);
+    return job;
+  }
+
   private accountingRecalc(
     method: string,
     path: string,
@@ -1079,13 +1304,9 @@ export class Gateway {
     const jobsPath = `/api/v1/sites/${SITE_ID}/accounting/recalculate-jobs`;
     if (path !== recalcPath && path !== jobsPath) return undefined;
 
-    const refuse = (status: number, code: string, detail: string) => ({
-      status,
-      body: { type: 'about:blank', title: 'Accounting recalculation refused', status, detail, instance: path, code, traceId: '0'.repeat(32), retryable: false },
-    });
+    const refuse = (status: number, code: string, detail: string) =>
+      this.accountingProblem(path, status, code, 'Accounting recalculation refused', detail);
     const activePrincipal = this.principalOverride ?? principal;
-    const actor: string = activePrincipal.principalId;
-    const actorDisplay: string = activePrincipal.principal.displayName;
     const capabilities: string[] = activePrincipal.authorization.capabilities ?? [];
 
     if (method === 'GET' && path === jobsPath) {
@@ -1109,7 +1330,10 @@ export class Gateway {
       }
       const fromDate = typeof body?.fromDate === 'string' ? body.fromDate : '';
       const toDate = typeof body?.toDate === 'string' ? body.toDate : '';
-      const granularity = typeof body?.granularity === 'string' && body.granularity.trim() !== '' ? body.granularity.trim() : 'HOUR';
+      const rawGranularity = typeof body?.granularity === 'string' && body.granularity.trim() !== '' ? body.granularity.trim() : 'HOUR';
+      const granularity = rawGranularity === 'HOUR' || rawGranularity === 'DAY' || rawGranularity === 'MONTH' || rawGranularity === 'ALL'
+        ? rawGranularity
+        : null;
       const reason = typeof body?.reason === 'string' ? body.reason.trim() : '';
       if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDate) || !/^\d{4}-\d{2}-\d{2}$/.test(toDate)) {
         return refuse(400, 'REGISTRY_MUTATION_INVALID', 'fromDate and toDate must be YYYY-MM-DD.');
@@ -1123,36 +1347,431 @@ export class Gateway {
       if (endMs - startMs > 90 * DAY_MS) {
         return refuse(400, 'REGISTRY_MUTATION_INVALID', 'recalculation range cannot exceed 90 days.');
       }
-      if (!['HOUR', 'DAY', 'MONTH', 'ALL'].includes(granularity)) {
+      if (!granularity) {
         return refuse(400, 'REGISTRY_MUTATION_INVALID', 'unsupported granularity.');
       }
       if (!reason || reason.length > 1000) {
         return refuse(400, 'REGISTRY_MUTATION_INVALID', 'reason must be 1 to 1000 characters.');
       }
-      const job: Json = {
-        id: this.nextUuidV7('9200'),
-        tenantId: activePrincipal.context.tenantId,
-        siteId: SITE_ID,
+      const job = this.enqueueAccountingRecalcJob({
+        activePrincipal,
         granularity,
         windowStart: new Date(startMs).toISOString(),
         windowEnd: new Date(endMs).toISOString(),
-        status: 'PENDING',
-        availableAt: now,
-        requestedBy: actor,
-        requestedByDisplay: actorDisplay,
         reason,
         source: 'MANUAL',
-        attemptCount: 0,
-        lastError: '',
-        createdAt: now,
-        updatedAt: now,
-        finishedAt: null,
-      };
-      this.accountingRecalcJobs.unshift(job);
+        now,
+      });
       return { status: 202, body: job };
     }
 
     return undefined;
+  }
+
+  private accountingHolidaysEndpoint(
+    method: string,
+    path: string,
+    query: URLSearchParams,
+    body: Json | null,
+    csrfToken: string | undefined,
+    now: string,
+  ): { status?: number; body: unknown } | undefined {
+    const match = path.match(/^\/api\/v1\/sites\/([^/]+)\/accounting\/holidays(?:\/([^/]+))?$/);
+    if (!match) return undefined;
+    const siteId = decodeURIComponent(match[1]!);
+    const holidayDate = match[2] ? decodeURIComponent(match[2]) : null;
+    if (siteId !== SITE_ID) {
+      return this.accountingProblem(path, 404, 'RESOURCE_NOT_FOUND', 'Resource not found', 'Site not found.');
+    }
+
+    const activePrincipal = this.principalOverride ?? principal;
+    const capabilities: string[] = activePrincipal.authorization?.capabilities ?? [];
+
+    if (method === 'GET' && holidayDate === null) {
+      if (!capabilities.includes('site.read')) {
+        return this.accountingProblem(path, 403, 'FORBIDDEN', 'Forbidden', 'site.read is required.');
+      }
+      const year = query.get('year')?.trim();
+      if (year && !/^\d{4}$/.test(year)) {
+        return this.accountingProblem(path, 400, 'REGISTRY_QUERY_INVALID', 'Invalid query', 'year must be YYYY.');
+      }
+      const items = this.accountingHolidays
+        .filter((item) => !year || String(item.holidayDate).startsWith(`${year}-`))
+        .sort((left, right) => String(left.holidayDate).localeCompare(String(right.holidayDate)));
+      return { body: { items } };
+    }
+
+    if (holidayDate === null) return undefined;
+
+    if (method === 'PUT') {
+      const denied = this.requireBillingAccountingWrite(path, csrfToken, activePrincipal);
+      if (denied) return denied;
+      if (!isValidCalendarDate(holidayDate)) {
+        return this.accountingProblem(path, 400, 'REGISTRY_MUTATION_INVALID', 'Invalid holiday date', 'date must be a valid YYYY-MM-DD calendar date.');
+      }
+      const dayType = typeof body?.dayType === 'string' ? body.dayType.trim() : '';
+      if (!['HOLIDAY', 'SPECIAL_DAY', 'WEEKDAY', 'WEEKEND'].includes(dayType)) {
+        return this.accountingProblem(path, 400, 'REGISTRY_MUTATION_INVALID', 'Invalid dayType', 'dayType must be HOLIDAY, SPECIAL_DAY, WEEKDAY, or WEEKEND.');
+      }
+      if (body?.label !== undefined && body.label !== null && typeof body.label !== 'string') {
+        return this.accountingProblem(path, 400, 'REGISTRY_MUTATION_INVALID', 'Invalid label', 'label must be a string.');
+      }
+      const label = typeof body?.label === 'string' ? body.label.trim() : '';
+      if (label.length > 200) {
+        return this.accountingProblem(path, 400, 'REGISTRY_MUTATION_INVALID', 'Invalid label', 'label must be at most 200 characters.');
+      }
+
+      let row = this.accountingHolidays.find((item) => item.holidayDate === holidayDate);
+      if (row) {
+        row.dayType = dayType;
+        row.label = label;
+        row.revision = Number(row.revision) + 1;
+        row.updatedAt = now;
+      } else {
+        row = {
+          id: this.nextUuidV7('9300'),
+          tenantId: activePrincipal.context.tenantId,
+          siteId: SITE_ID,
+          holidayDate,
+          dayType,
+          label,
+          revision: 1,
+          createdAt: now,
+          updatedAt: now,
+        };
+        this.accountingHolidays.push(row);
+      }
+      const startMs = Date.parse(`${holidayDate}T00:00:00+08:00`);
+      const job = this.enqueueAccountingRecalcJob({
+        activePrincipal,
+        granularity: 'ALL',
+        windowStart: new Date(startMs).toISOString(),
+        windowEnd: new Date(startMs + DAY_MS).toISOString(),
+        reason: `更新站点节假日日历 ${holidayDate}（${dayType}）`,
+        source: 'TARIFF_CHANGE',
+        now,
+      });
+      return { body: { ...row, recalcJobId: job.id } };
+    }
+
+    if (method === 'DELETE') {
+      const denied = this.requireBillingAccountingWrite(path, csrfToken, activePrincipal);
+      if (denied) return denied;
+      if (!isValidCalendarDate(holidayDate)) {
+        return this.accountingProblem(path, 400, 'REGISTRY_MUTATION_INVALID', 'Invalid holiday date', 'date must be a valid YYYY-MM-DD calendar date.');
+      }
+      const index = this.accountingHolidays.findIndex((item) => item.holidayDate === holidayDate);
+      if (index < 0) {
+        return this.accountingProblem(path, 404, 'RESOURCE_NOT_FOUND', 'Resource not found', 'Holiday override not found.');
+      }
+      this.accountingHolidays.splice(index, 1);
+      const startMs = Date.parse(`${holidayDate}T00:00:00+08:00`);
+      const job = this.enqueueAccountingRecalcJob({
+        activePrincipal,
+        granularity: 'ALL',
+        windowStart: new Date(startMs).toISOString(),
+        windowEnd: new Date(startMs + DAY_MS).toISOString(),
+        reason: `删除站点节假日日历 ${holidayDate}`,
+        source: 'TARIFF_CHANGE',
+        now,
+      });
+      return { body: { holidayDate, deleted: true, recalcJobId: job.id } };
+    }
+
+    return undefined;
+  }
+
+  private accountingMeterRatiosEndpoint(
+    method: string,
+    path: string,
+    query: URLSearchParams,
+    body: Json | null,
+    csrfToken: string | undefined,
+    now: string,
+  ): { status?: number; body: unknown } | undefined {
+    const retireMatch = path.match(/^\/api\/v1\/sites\/([^/]+)\/accounting\/meter-ratios\/([^/]+)\/retire$/);
+    const listMatch = retireMatch ? null : path.match(/^\/api\/v1\/sites\/([^/]+)\/accounting\/meter-ratios$/);
+    if (!retireMatch && !listMatch) return undefined;
+
+    const siteId = decodeURIComponent((retireMatch ? retireMatch[1] : listMatch![1])!);
+    if (siteId !== SITE_ID) {
+      return this.accountingProblem(path, 404, 'RESOURCE_NOT_FOUND', 'Resource not found', 'Site not found.');
+    }
+
+    const activePrincipal = this.principalOverride ?? principal;
+    const capabilities: string[] = activePrincipal.authorization?.capabilities ?? [];
+
+    if (listMatch && method === 'GET') {
+      if (!capabilities.includes('site.read')) {
+        return this.accountingProblem(path, 403, 'FORBIDDEN', 'Forbidden', 'site.read is required.');
+      }
+      const pointId = query.get('pointId')?.trim();
+      const includeSuperseded = query.get('includeSuperseded') === 'true';
+      const items = this.meterRatioVersions
+        .filter((item) =>
+          (includeSuperseded || item.status !== 'SUPERSEDED')
+          && (!pointId || item.pointId === pointId))
+        .sort((left, right) => Date.parse(String(right.effectiveFrom)) - Date.parse(String(left.effectiveFrom)));
+      return { body: { items } };
+    }
+
+    if (listMatch && method === 'POST') {
+      const denied = this.requireBillingAccountingWrite(path, csrfToken, activePrincipal);
+      if (denied) return denied;
+      const pointId = typeof body?.pointId === 'string' ? body.pointId.trim() : '';
+      const ctRatio = Number(body?.ctRatio);
+      const ptRatio = body?.ptRatio === undefined ? 1 : Number(body.ptRatio);
+      const meterMultiplier = body?.meterMultiplier === undefined || body.meterMultiplier === null ? 1 : Number(body.meterMultiplier);
+      const ratioApplicationMode = typeof body?.ratioApplicationMode === 'string' && body.ratioApplicationMode.trim() !== ''
+        ? body.ratioApplicationMode.trim()
+        : 'PLATFORM_APPLIED';
+      const readingUnit = typeof body?.readingUnit === 'string' && body.readingUnit.trim() !== ''
+        ? body.readingUnit.trim()
+        : 'kWh';
+      const rawEffectiveFrom = typeof body?.effectiveFrom === 'string' ? body.effectiveFrom.trim() : '';
+      const fromMs = Date.parse(rawEffectiveFrom);
+      const rawEffectiveTo = body?.effectiveTo === undefined || body.effectiveTo === null ? '' : String(body.effectiveTo).trim();
+      const toMs = rawEffectiveTo === '' ? null : Date.parse(rawEffectiveTo);
+
+      if (
+        !pointId
+        || !Number.isFinite(ctRatio) || ctRatio <= 0
+        || !Number.isFinite(ptRatio) || ptRatio <= 0
+        || !Number.isFinite(meterMultiplier) || meterMultiplier <= 0
+        || !['DEVICE_APPLIED', 'EDGE_APPLIED', 'PLATFORM_APPLIED'].includes(ratioApplicationMode)
+        || !['Wh', 'kWh', 'MWh', 'GJ', 'MJ', 'RTh'].includes(readingUnit)
+        || !Number.isFinite(fromMs)
+        || (toMs !== null && (!Number.isFinite(toMs) || toMs <= fromMs))
+      ) {
+        return this.accountingProblem(path, 400, 'REGISTRY_MUTATION_INVALID', 'Invalid meter ratio payload', 'ctRatio, ptRatio, effectiveFrom, and effectiveTo must be valid.');
+      }
+
+      const effectiveFrom = new Date(fromMs).toISOString();
+      const effectiveTo = toMs === null ? null : new Date(toMs).toISOString();
+      const overlaps = this.meterRatioVersions.some((existing) =>
+        existing.status === 'RELEASED'
+        && existing.pointId === pointId
+        && intervalsOverlap(effectiveFrom, effectiveTo, String(existing.effectiveFrom), existing.effectiveTo ?? null));
+      if (overlaps) {
+        return this.accountingProblem(
+          path,
+          409,
+          'METER_RATIO_OVERLAP',
+          'Meter ratio version overlaps',
+          'The requested effective window overlaps an existing meter ratio version.',
+        );
+      }
+
+      const cloudMultiplier = ratioApplicationMode === 'PLATFORM_APPLIED'
+        ? Number((ctRatio * ptRatio * meterMultiplier).toFixed(8))
+        : 1;
+      const created: Json = {
+        id: this.nextUuidV7('9350'),
+        tenantId: activePrincipal.context.tenantId,
+        siteId: SITE_ID,
+        meterBindingId: typeof body?.meterBindingId === 'string' && body.meterBindingId.trim() ? body.meterBindingId.trim() : null,
+        pointId,
+        ctRatio,
+        ptRatio,
+        meterMultiplier,
+        cloudMultiplier,
+        ratioApplicationMode,
+        readingUnit,
+        effectiveFrom,
+        effectiveTo,
+        status: 'RELEASED',
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+      };
+      this.meterRatioVersions.unshift(created);
+      const windowEndMs = effectiveTo ? Date.parse(effectiveTo) : Math.max(Date.parse(now), fromMs + DAY_MS);
+      const job = this.enqueueAccountingRecalcJob({
+        activePrincipal,
+        granularity: 'ALL',
+        windowStart: effectiveFrom,
+        windowEnd: new Date(windowEndMs).toISOString(),
+        reason: typeof body?.reason === 'string' && body.reason.trim() ? body.reason.trim() : `新增电表倍率版本 CT=${ctRatio} PT=${ptRatio}`,
+        source: 'RATIO_CHANGE',
+        now,
+      });
+      return { status: 201, body: { ...created, recalcJobId: job.id } };
+    }
+
+    if (retireMatch && method === 'POST') {
+      const denied = this.requireBillingAccountingWrite(path, csrfToken, activePrincipal);
+      if (denied) return denied;
+      const versionId = decodeURIComponent(retireMatch[2]!);
+      const target = this.meterRatioVersions.find((item) => item.id === versionId);
+      if (!target) {
+        return this.accountingProblem(path, 404, 'RESOURCE_NOT_FOUND', 'Resource not found', 'Meter ratio version not found.');
+      }
+      const rawEffectiveTo = typeof body?.effectiveTo === 'string' ? body.effectiveTo.trim() : '';
+      const toMs = Date.parse(rawEffectiveTo);
+      const fromMs = Date.parse(String(target.effectiveFrom));
+      if (!rawEffectiveTo || !Number.isFinite(toMs) || toMs <= fromMs) {
+        return this.accountingProblem(path, 400, 'REGISTRY_MUTATION_INVALID', 'Invalid effectiveTo', 'effectiveTo must be a valid timestamp strictly after effectiveFrom.');
+      }
+      const effectiveTo = new Date(toMs).toISOString();
+      const overlaps = this.meterRatioVersions.some((other) =>
+        other.id !== target.id
+        && other.status === 'RELEASED'
+        && other.pointId === target.pointId
+        && intervalsOverlap(String(target.effectiveFrom), effectiveTo, String(other.effectiveFrom), other.effectiveTo ?? null));
+      if (overlaps) {
+        return this.accountingProblem(
+          path,
+          409,
+          'METER_RATIO_OVERLAP',
+          'Meter ratio version overlaps',
+          'The requested effective window overlaps an existing meter ratio version.',
+        );
+      }
+
+      target.effectiveTo = effectiveTo;
+      target.status = 'RELEASED';
+      target.revision = Number(target.revision) + 1;
+      target.updatedAt = now;
+
+      const reason = typeof body?.reason === 'string' && body.reason.trim() ? body.reason.trim() : '终止电表倍率版本生效时间';
+      const job = this.enqueueAccountingRecalcJob({
+        activePrincipal,
+        granularity: 'ALL',
+        windowStart: String(target.effectiveFrom),
+        windowEnd: effectiveTo,
+        reason,
+        source: 'RATIO_CHANGE',
+        now,
+      });
+      return { body: { ...target, recalcJobId: job.id } };
+    }
+
+    return undefined;
+  }
+
+  private accountingCounterAuditEndpoint(
+    method: string,
+    path: string,
+    query: URLSearchParams,
+  ): { status?: number; body: unknown } | undefined {
+    const match = path.match(/^\/api\/v1\/sites\/([^/]+)\/accounting\/counter-audit$/);
+    if (!match || method !== 'GET') return undefined;
+    const siteId = decodeURIComponent(match[1]!);
+    if (siteId !== SITE_ID) {
+      return this.accountingProblem(path, 404, 'RESOURCE_NOT_FOUND', 'Resource not found', 'Site not found.');
+    }
+
+    const activePrincipal = this.principalOverride ?? principal;
+    const capabilities: string[] = activePrincipal.authorization?.capabilities ?? [];
+    if (!capabilities.includes('site.read')) {
+      return this.accountingProblem(path, 403, 'FORBIDDEN', 'Forbidden', 'site.read is required.');
+    }
+
+    const rawFrom = query.get('from')?.trim();
+    const rawTo = query.get('to')?.trim();
+    const fromMs = rawFrom ? Date.parse(rawFrom) : null;
+    const toMs = rawTo ? Date.parse(rawTo) : null;
+    if ((rawFrom && !Number.isFinite(fromMs)) || (rawTo && !Number.isFinite(toMs))) {
+      return this.accountingProblem(path, 400, 'REGISTRY_QUERY_INVALID', 'Invalid window', 'from and to must be valid ISO timestamps.');
+    }
+    const rawLimit = query.get('limit');
+    let limit = 200;
+    if (rawLimit !== null && rawLimit !== '') {
+      if (!/^\d+$/.test(rawLimit)) {
+        return this.accountingProblem(path, 400, 'REGISTRY_QUERY_INVALID', 'Invalid limit', 'limit must be a positive integer.');
+      }
+      limit = Number(rawLimit);
+      if (limit < 1 || limit > 1000) {
+        return this.accountingProblem(path, 400, 'REGISTRY_QUERY_INVALID', 'Invalid limit', 'limit must be between 1 and 1000.');
+      }
+    }
+
+    const deviceId = query.get('deviceId')?.trim();
+    const pointId = query.get('pointId')?.trim();
+    const anomaliesOnly = query.get('anomaliesOnly') !== 'false';
+
+    const byTarget = this.counterAuditSamples.filter((sample) =>
+      (!deviceId || sample.deviceId === deviceId) && (!pointId || sample.pointId === pointId));
+
+    let scopedSamples = byTarget;
+    if (fromMs !== null || toMs !== null) {
+      const inRange = (sample: Json) => {
+        const sampledMs = Date.parse(String(sample.sampledAt));
+        return (fromMs === null || sampledMs >= fromMs) && (toMs === null || sampledMs < toMs);
+      };
+      const directMatches = byTarget.filter(inRange);
+      if (directMatches.length > 0 || this.counterAuditStrictWindow || byTarget.length === 0) {
+        scopedSamples = directMatches;
+      } else if (fromMs !== null && toMs !== null && toMs <= fromMs) {
+        scopedSamples = [];
+      } else {
+        const anchorEndMs = toMs ?? (fromMs! + DAY_MS);
+        const anchorStartMs = fromMs ?? (anchorEndMs - DAY_MS);
+        const spanMs = Math.max(1, anchorEndMs - anchorStartMs);
+        scopedSamples = byTarget.map((sample, index) => {
+          const offsetMs = Math.floor((spanMs * (byTarget.length - index)) / (byTarget.length + 1));
+          const sampledMs = anchorStartMs + offsetMs;
+          const prevDeltaMs = Math.max(
+            60_000,
+            Date.parse(String(sample.sampledAt)) - Date.parse(String(sample.previousSampledAt)),
+          );
+          return {
+            ...sample,
+            sampledAt: new Date(sampledMs).toISOString(),
+            previousSampledAt: new Date(sampledMs - Math.min(prevDeltaMs, Math.max(1, offsetMs - 1))).toISOString(),
+          };
+        });
+      }
+    }
+
+    const summary = {
+      totalSamples: scopedSamples.length,
+      anomalyCount: 0,
+      zeroDropCount: 0,
+      spikeCount: 0,
+      resetCount: 0,
+      rolloverCount: 0,
+      invalidDecreaseCount: 0,
+    };
+    for (const sample of scopedSamples) {
+      switch (sample.transitionType) {
+        case 'INVALID_ZERO_DROP':
+          summary.anomalyCount += 1;
+          summary.zeroDropCount += 1;
+          break;
+        case 'INVALID_SPIKE':
+          summary.anomalyCount += 1;
+          summary.spikeCount += 1;
+          break;
+        case 'RESET':
+        case 'METER_REPLACEMENT':
+          summary.anomalyCount += 1;
+          summary.resetCount += 1;
+          break;
+        case 'ROLLOVER':
+          summary.anomalyCount += 1;
+          summary.rolloverCount += 1;
+          break;
+        case 'INVALID_DECREASE':
+        case 'INVALID':
+          summary.anomalyCount += 1;
+          summary.invalidDecreaseCount += 1;
+          break;
+        default:
+          break;
+      }
+    }
+
+    const items = (anomaliesOnly
+      ? scopedSamples.filter((sample) =>
+        sample.transitionType !== 'INCREASE'
+        && sample.transitionType !== 'UNCHANGED'
+        && sample.transitionType !== 'INITIAL')
+      : scopedSamples)
+      .sort((left, right) => Date.parse(String(right.sampledAt)) - Date.parse(String(left.sampledAt)))
+      .slice(0, limit);
+
+    return { body: { summary, items } };
   }
 
   // The M&V owner's ledger: implementing fits the recorded baseline over the fourteen days before the
@@ -1877,6 +2496,12 @@ export class Gateway {
     if (billingReply) return billingReply;
     const recalcReply = this.accountingRecalc(method, path, query, body, csrfToken, now);
     if (recalcReply) return recalcReply;
+    const holidaysReply = this.accountingHolidaysEndpoint(method, path, query, body, csrfToken, now);
+    if (holidaysReply) return holidaysReply;
+    const meterRatiosReply = this.accountingMeterRatiosEndpoint(method, path, query, body, csrfToken, now);
+    if (meterRatiosReply) return meterRatiosReply;
+    const counterAuditReply = this.accountingCounterAuditEndpoint(method, path, query);
+    if (counterAuditReply) return counterAuditReply;
     if (path.startsWith(`/api/v1/sites/${SITE_ID}/savings/`)) return this.savings(method, path, query, body, now);
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/reports/monthly`) {
       return { body: { items: this.reportSnapshots.filter((stored) => stored.month.startsWith(`${query.get('year')}-`)) } };
@@ -3823,4 +4448,28 @@ function areAutonomyPoliciesEqual(left: Json, right: Json): boolean {
     left.minStopSeconds === right.minStopSeconds &&
     left.snapshotIntervalSeconds === right.snapshotIntervalSeconds
   );
+}
+
+function isValidCalendarDate(dateStr: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return false;
+  const [year, month, day] = dateStr.split('-').map(Number);
+  const utc = new Date(Date.UTC(year!, month! - 1, day!));
+  return (
+    utc.getUTCFullYear() === year &&
+    utc.getUTCMonth() === month! - 1 &&
+    utc.getUTCDate() === day
+  );
+}
+
+function intervalsOverlap(
+  startA: string,
+  endA: string | null,
+  startB: string,
+  endB: string | null,
+): boolean {
+  const startAMs = Date.parse(startA);
+  const endAMs = endA === null ? Number.POSITIVE_INFINITY : Date.parse(endA);
+  const startBMs = Date.parse(startB);
+  const endBMs = endB === null ? Number.POSITIVE_INFINITY : Date.parse(endB);
+  return startAMs < endBMs && startBMs < endAMs;
 }

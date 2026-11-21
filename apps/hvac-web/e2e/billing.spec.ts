@@ -1,6 +1,16 @@
 import { readFileSync } from 'node:fs';
+import type { Locator } from '@playwright/test';
 import { SITE_ID } from './gateway';
 import { expect, test } from './test';
+
+async function fillTemporalField(
+  input: Locator,
+  dateValue: string,
+  dateTimeLocalValue: string,
+) {
+  const inputType = await input.getAttribute('type');
+  await input.fill(inputType === 'date' ? dateValue : dateTimeLocalValue);
+}
 
 const DAY_MS = 86_400_000;
 const principalFixture = JSON.parse(
@@ -366,4 +376,134 @@ test('savings.manage operator can trigger manual recalculation, see error feedba
   // Auto-polling advances PENDING -> RUNNING -> SUCCEEDED
   await expect(strip).toContainText('● 正在重算', { timeout: 6_000 });
   await expect(strip).toContainText('○ 最近重算完成', { timeout: 6_000 });
+});
+
+test('billing config tab manages site calendar holidays, enforces meter ratio overlap 409, retires active version, and creates replacement version', async ({
+  page,
+  gateway,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  gateway.energySeriesHandler = buildPricedDailyElectricityHandler();
+
+  await page.goto(`/energy-analysis/billing?site=${SITE_ID}&month=2026-10`);
+  await page.getByRole('tab', { name: '计量与日历配置' }).click();
+
+  const holidayRegion = page.getByRole('region', { name: '站点节假日日历' });
+  const ratioRegion = page.getByRole('region', { name: '电表 CT/PT 倍率版本台账' });
+  await expect(holidayRegion).toBeVisible();
+  await expect(ratioRegion).toBeVisible();
+
+  // 1. Site calendar holidays: verify seed, create override, and delete with confirmation
+  const holidayTable = holidayRegion.getByRole('table', { name: '节假日日历列表' });
+  await expect(holidayTable).toBeVisible();
+  await expect(holidayTable.getByRole('row', { name: /2026-10-01/ })).toContainText('国庆节');
+
+  const activeRatioRow = ratioRegion.getByRole('row', { name: /生效中/ });
+  await expect(activeRatioRow).toBeVisible();
+  await expect(activeRatioRow).toContainText('40');
+
+  const hasOverflowConfig = await page.evaluate(
+    () => document.documentElement.scrollWidth > window.innerWidth,
+  );
+  expect(hasOverflowConfig).toBe(false);
+
+  await holidayRegion.getByRole('button', { name: '新增或更新节假日' }).click();
+  const holidayDialog = page.getByRole('dialog');
+  await expect(holidayDialog).toBeVisible();
+  await holidayDialog.getByLabel('日期', { exact: true }).fill('2026-10-18');
+  await holidayDialog.getByRole('combobox', { name: '日期类型' }).click();
+  await page.getByRole('option', { name: /特殊调休日/ }).click();
+  await holidayDialog.getByLabel('说明').fill('秋检停机调试日');
+  await holidayDialog.getByRole('button', { name: '保存节假日' }).click();
+  await expect(holidayDialog).toBeHidden();
+
+  const createdHolidayRow = holidayTable.getByRole('row', { name: /2026-10-18/ });
+  await expect(createdHolidayRow).toBeVisible();
+  await expect(createdHolidayRow).toContainText('秋检停机调试日');
+
+  await createdHolidayRow.getByRole('button', { name: /删除/ }).click();
+  const deleteHolidayDialog = page
+    .getByRole('dialog', { name: '确认删除节假日' })
+    .or(page.getByRole('alertdialog', { name: '确认删除节假日' }));
+  await expect(deleteHolidayDialog).toBeVisible();
+  await deleteHolidayDialog.getByRole('button', { name: '确认删除' }).click();
+  await expect(deleteHolidayDialog).toBeHidden();
+  await expect(holidayTable.getByRole('row', { name: /2026-10-18/ })).toHaveCount(0);
+
+  // 2. Meter CT/PT ratios: verify active seed, trigger 409 overlap error, retire active version, then create CT=60
+  await expect(activeRatioRow).toContainText('40');
+
+  await ratioRegion.getByRole('button', { name: '新增倍率版本' }).click();
+  const createRatioDialog = page.getByRole('dialog');
+  await expect(createRatioDialog).toBeVisible();
+  await createRatioDialog.getByLabel('CT 变比').fill('60');
+  await fillTemporalField(
+    createRatioDialog.getByLabel('生效开始时间'),
+    '2026-07-01',
+    '2026-07-01T00:00',
+  );
+  await createRatioDialog.getByRole('button', { name: '创建倍率版本' }).click();
+  await expect(createRatioDialog.getByRole('alert')).toContainText('重叠');
+  await createRatioDialog.getByRole('button', { name: '取消' }).click();
+  await expect(createRatioDialog).toBeHidden();
+
+  await activeRatioRow.getByRole('button', { name: '终止生效' }).click();
+  const retireDialog = page
+    .getByRole('dialog', { name: '终止倍率版本' })
+    .or(page.getByRole('alertdialog', { name: '终止倍率版本' }));
+  await expect(retireDialog).toBeVisible();
+  await fillTemporalField(
+    retireDialog.getByLabel('生效结束时间'),
+    '2026-10-01',
+    '2026-10-01T00:00',
+  );
+  await retireDialog.getByRole('button', { name: '确认终止' }).click();
+  await expect(retireDialog).toBeHidden();
+  await expect(ratioRegion.getByRole('row', { name: /生效中/ })).toHaveCount(0);
+  await expect(ratioRegion.getByRole('row', { name: /已终止/ })).toHaveCount(2);
+
+  await ratioRegion.getByRole('button', { name: '新增倍率版本' }).click();
+  await expect(createRatioDialog).toBeVisible();
+  await createRatioDialog.getByLabel('CT 变比').fill('60');
+  await fillTemporalField(
+    createRatioDialog.getByLabel('生效开始时间'),
+    '2026-10-02',
+    '2026-10-02T00:00',
+  );
+  await createRatioDialog.getByRole('button', { name: '创建倍率版本' }).click();
+  await expect(createRatioDialog).toBeHidden();
+
+  const replacementRow = ratioRegion.getByRole('row', { name: /生效中/ });
+  await expect(replacementRow).toBeVisible();
+  await expect(replacementRow).toContainText('60');
+
+  // Verify CSRF tokens and recalc side effects recorded on gateway
+  const holidayPut = gateway.writes.find(
+    (write) => write.method === 'PUT' && write.path === `/api/v1/sites/${SITE_ID}/accounting/holidays/2026-10-18`,
+  );
+  expect(holidayPut?.csrfToken).toBe('e2e-csrf-token');
+  expect(holidayPut?.body).toMatchObject({ dayType: 'SPECIAL_DAY', label: '秋检停机调试日' });
+
+  const holidayDelete = gateway.writes.find(
+    (write) => write.method === 'DELETE' && write.path === `/api/v1/sites/${SITE_ID}/accounting/holidays/2026-10-18`,
+  );
+  expect(holidayDelete?.csrfToken).toBe('e2e-csrf-token');
+
+  const ratioCreates = gateway.writes.filter(
+    (write) => write.method === 'POST' && write.path === `/api/v1/sites/${SITE_ID}/accounting/meter-ratios`,
+  );
+  expect(ratioCreates).toHaveLength(2);
+  expect(ratioCreates[1]?.csrfToken).toBe('e2e-csrf-token');
+  expect(ratioCreates[1]?.body).toMatchObject({ ctRatio: 60 });
+
+  const ratioRetire = gateway.writes.find(
+    (write) => write.method === 'POST' && write.path.endsWith('/retire'),
+  );
+  expect(ratioRetire?.csrfToken).toBe('e2e-csrf-token');
+  expect(gateway.accountingRecalcJobs.map((job) => job.source)).toEqual([
+    'RATIO_CHANGE',
+    'RATIO_CHANGE',
+    'TARIFF_CHANGE',
+    'TARIFF_CHANGE',
+  ]);
 });
