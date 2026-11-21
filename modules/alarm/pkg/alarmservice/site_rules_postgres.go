@@ -870,4 +870,3 @@ WHERE tenant_id = $1 AND site_id = $2 AND bundle_revision = $3`,
 		Items:                  views,
 	}, nil
 }
-

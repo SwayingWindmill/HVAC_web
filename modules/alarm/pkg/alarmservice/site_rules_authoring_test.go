@@ -284,7 +284,7 @@ func TestAlarmHTTPAuthoringDiffPublishRollbackAndDraftSimulate(t *testing.T) {
 			CurrentRevision: 2,
 			Items: []SiteRuleBundleRevisionView{{
 				BundleRevision: 2, BundleDigest: strings.Repeat("c", 64), Source: RuleBundleSourceWebWorkbench,
-				Summary: SiteRuleSyncSummary{AddedRuleIDs: []string{}, ChangedRuleIDs: []string{}, UnchangedRuleIDs: []string{}, RetiredRuleIDs: []string{}},
+				Summary:   SiteRuleSyncSummary{AddedRuleIDs: []string{}, ChangedRuleIDs: []string{}, UnchangedRuleIDs: []string{}, RetiredRuleIDs: []string{}},
 				RuleCount: 1, PublishedAt: now.Format(time.RFC3339Nano), PublishedBy: "operator",
 			}},
 		},

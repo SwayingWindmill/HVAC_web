@@ -104,13 +104,13 @@ type SiteRuleValidationIssue struct {
 
 // SiteRuleChangeEntry summarizes the before/after delta and alarm impact for one rule across two bundles.
 type SiteRuleChangeEntry struct {
-	RuleID             string        `json:"ruleId"`
-	Title              string        `json:"title"`
-	Change             string        `json:"change"`
-	ChangedFields      []string      `json:"changedFields"`
-	WillClearActiveAlarm bool        `json:"willClearActiveAlarm,omitempty"`
-	Before             *SiteRuleView `json:"before,omitempty"`
-	After              *SiteRuleView `json:"after,omitempty"`
+	RuleID               string        `json:"ruleId"`
+	Title                string        `json:"title"`
+	Change               string        `json:"change"`
+	ChangedFields        []string      `json:"changedFields"`
+	WillClearActiveAlarm bool          `json:"willClearActiveAlarm,omitempty"`
+	Before               *SiteRuleView `json:"before,omitempty"`
+	After                *SiteRuleView `json:"after,omitempty"`
 }
 
 // SiteRuleGraphNodeView describes one rule node in the validated causal DAG.
