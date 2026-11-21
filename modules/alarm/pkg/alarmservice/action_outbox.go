@@ -959,7 +959,7 @@ func (store *PostgresStore) ListTenantsWithPendingRuleActions(ctx context.Contex
 	if store == nil || store.pool == nil {
 		return nil, ErrUnavailable
 	}
-	rows, err := store.pool.Query(ctx, `SELECT tenant_id::text FROM alarm_runtime.tenants_with_pending_rule_actions($1)`, readyAt.UTC())
+	rows, err := store.pool.Query(ctx, `SELECT tenant_id::text FROM alarm_runtime.tenants_with_pending_rule_actions($1) AS t(tenant_id)`, readyAt.UTC())
 	if err != nil {
 		return nil, fmt.Errorf("list Tenants with pending Alarm rule actions: %w", err)
 	}
