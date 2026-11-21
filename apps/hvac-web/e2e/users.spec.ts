@@ -146,7 +146,7 @@ test('an administrator assigns a temporary maintenance role with validTo and see
 });
 
 test('multi-tenant switcher switches organizations, clears site/inspect params, and hides for single-tenant users', async ({ page, gateway }) => {
-  const adminPrincipal = {
+  const adminPrincipal: typeof principal = {
     ...principal,
     principal: { ...principal.principal, roles: ['admin'] },
     authorization: { ...principal.authorization, capabilities: [...principal.authorization.capabilities, 'iam.admin'] },
@@ -165,7 +165,7 @@ test('multi-tenant switcher switches organizations, clears site/inspect params, 
   gateway.principalOverride = { ...adminPrincipal, availableTenants };
   gateway.tenantPrincipals.set(tenantB, {
     ...adminPrincipal,
-    context: { ...principal.context, tenantId: tenantB },
+    context: { ...adminPrincipal.context, tenantId: tenantB },
     availableTenants,
   });
   gateway.tenantSites.set(tenantB, [

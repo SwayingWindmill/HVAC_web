@@ -399,6 +399,94 @@ func (reader *Reader) WindowDeltas(ctx context.Context, window energy.DirtyWindo
 	return decodeCounterDeltas(payload)
 }
 
+type hourlyPowerProfileRow struct {
+	HourStart string  `json:"hour_start"`
+	Weight    float64 `json:"weight"`
+}
+
+func (reader *Reader) analyticsDB() string {
+	db := strings.TrimSpace(reader.analyticsDatabase)
+	if db == "" {
+		return "analytics"
+	}
+	return db
+}
+
+// HourlyPowerProfile reads hourly mean active power (kW) weights from
+// <analyticsDB>.hourly_active_power_profile in UTC for cross-gap load-weighted energy attribution.
+func (reader *Reader) HourlyPowerProfile(ctx context.Context, tenantID, siteID, deviceID string, from, to time.Time) ([]energy.HourlyLoadWeight, error) {
+	if reader == nil || reader.endpoint == nil || reader.httpClient == nil {
+		return nil, errors.New("ClickHouse analytics reader is closed")
+	}
+	tenant := strings.TrimSpace(tenantID)
+	site := strings.TrimSpace(siteID)
+	device := strings.TrimSpace(deviceID)
+	if tenant == "" || site == "" {
+		return nil, errors.New("hourly power profile tenant_id and site_id are required")
+	}
+	if from.IsZero() || to.IsZero() || !from.Before(to) {
+		return nil, errors.New("hourly power profile window must be ordered non-zero timestamps")
+	}
+
+	fromHour := from.UTC().Truncate(time.Hour)
+	toHour := to.UTC().Add(-time.Nanosecond).Truncate(time.Hour).Add(time.Hour)
+
+	params := url.Values{
+		"param_tenant": {tenant},
+		"param_site":   {site},
+		"param_from":   {clickHouseTime(fromHour)},
+		"param_to":     {clickHouseTime(toHour)},
+	}
+	deviceFilter := ""
+	if device != "" {
+		deviceFilter = "\n  AND p.device_id = {device:UUID}"
+		params.Set("param_device", device)
+	}
+
+	sql := fmt.Sprintf(`SELECT
+  formatDateTime(p.hour_utc, '%%Y-%%m-%%dT%%H:%%i:%%SZ', 'UTC') AS hour_start,
+  sum(p.mean_kw * toFloat64(p.sample_count)) / nullIf(toFloat64(sum(p.sample_count)), 0) AS weight
+FROM %s.hourly_active_power_profile AS p
+WHERE p.tenant_id = {tenant:UUID}
+  AND p.site_id = {site:UUID}%s
+  AND p.hour_utc >= {from:DateTime64(3, 'UTC')}
+  AND p.hour_utc < {to:DateTime64(3, 'UTC')}
+  AND p.mean_kw > 0
+  AND isFinite(p.mean_kw)
+  AND p.sample_count > 0
+GROUP BY p.hour_utc
+HAVING sum(p.sample_count) > 0
+ORDER BY p.hour_utc ASC
+FORMAT JSONEachRow`, reader.analyticsDB(), deviceFilter)
+
+	payload, err := reader.query(ctx, "hourly power profile query", sql, params)
+	if err != nil {
+		return nil, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	weights := make([]energy.HourlyLoadWeight, 0)
+	for {
+		var row hourlyPowerProfileRow
+		if err := decoder.Decode(&row); errors.Is(err, io.EOF) {
+			return weights, nil
+		} else if err != nil {
+			return nil, fmt.Errorf("decode ClickHouse hourly power profile: %w", err)
+		}
+		if math.IsNaN(row.Weight) || math.IsInf(row.Weight, 0) || row.Weight <= 0 {
+			continue
+		}
+		hourStart, err := parseClickHouseTime(row.HourStart)
+		if err != nil {
+			return nil, fmt.Errorf("decode hourly power profile hour_start: %w", err)
+		}
+		weights = append(weights, energy.HourlyLoadWeight{
+			HourStart: hourStart.UTC().Truncate(time.Hour),
+			Weight:    row.Weight,
+			Source:    "active_power",
+		})
+	}
+}
+
 func (reader *Reader) windowDeltas(ctx context.Context, window deltaWindow) ([]energy.CounterDelta, error) {
 	payload, err := reader.query(ctx, "counter delta query", reader.counterDeltaQuery(), url.Values{
 		"param_observations": {clickHouseArray(window.observations)},
@@ -944,7 +1032,9 @@ func clickHouseStatusError(operation string, status int, payload []byte) error {
 }
 
 var (
-	_ energy.CounterSource    = (*Reader)(nil)
-	_ energy.FactSink         = (*Writer)(nil)
-	_ energy.RebuildEventSink = (*Writer)(nil)
+	_ energy.CounterSource     = (*Reader)(nil)
+	_ energy.LoadProfileSource = (*Reader)(nil)
+	_ energy.FactSink          = (*Writer)(nil)
+	_ energy.HourlyV2Sink      = (*Writer)(nil)
+	_ energy.RebuildEventSink  = (*Writer)(nil)
 )

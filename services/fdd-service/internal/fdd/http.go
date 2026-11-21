@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/observability"
@@ -29,6 +30,7 @@ func NewHTTPHandler(service *Service, auth AuthConfig) (http.Handler, error) {
 	handler := &HTTPHandler{service: service}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/fdd/evaluate/low-delta-t", guard.guard(WriteAction, false, handler.handleEvaluateLowDeltaT))
+	mux.HandleFunc("POST /v1/fdd/evaluate/meter-imbalance", guard.guard(WriteAction, false, handler.handleEvaluateMeterImbalance))
 	mux.HandleFunc("GET /v1/sites/{siteId}/fdd/rules/low-delta-t", guard.guard(ReadAction, false, ignoreContext(handler.handleCurrentRule)))
 	mux.HandleFunc("GET /v1/sites/{siteId}/fdd/findings", guard.guard(ReadAction, true, ignoreContext(handler.handleListFindings)))
 	mux.HandleFunc("PATCH /v1/sites/{siteId}/fdd/findings/{findingId}/links", guard.guard(WriteAction, false, ignoreContext(handler.handleLinkFinding)))
@@ -100,6 +102,43 @@ func (handler *HTTPHandler) handleEvaluateLowDeltaT(writer http.ResponseWriter, 
 		writeFDDError(writer, http.StatusConflict, "fdd_rule_not_found")
 		return
 	}
+	if err != nil {
+		writeFDDError(writer, http.StatusUnprocessableEntity, "fdd_evaluation_rejected")
+		return
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	writer.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(writer).Encode(result)
+}
+
+// handleEvaluateMeterImbalance diagnoses Site-level main-vs-submeter imbalance over [fromUtc, toUtc),
+// defaulting to the trailing 24 hours ending at now when omitted.
+func (handler *HTTPHandler) handleEvaluateMeterImbalance(writer http.ResponseWriter, request *http.Request, site identitycontext.SiteContext) {
+	var input struct {
+		TenantID string     `json:"tenantId"`
+		SiteID   string     `json:"siteId"`
+		FromUTC  *time.Time `json:"fromUtc"`
+		ToUTC    *time.Time `json:"toUtc"`
+	}
+	if err := decodeStrictFDDJSON(request.Body, &input); err != nil {
+		writeFDDError(writer, http.StatusBadRequest, "fdd_request_invalid")
+		return
+	}
+	if input.TenantID != site.TenantID || input.SiteID != site.SiteID {
+		writeFDDError(writer, http.StatusForbidden, "fdd_context_invalid")
+		return
+	}
+	from, to, err := resolveMeterImbalanceWindow(handler.service.now().UTC(), input.FromUTC, input.ToUTC)
+	if err != nil {
+		writeFDDError(writer, http.StatusBadRequest, "fdd_request_invalid")
+		return
+	}
+	result, err := handler.service.EvaluateMeterImbalance(request.Context(), MeterImbalanceRequest{
+		TenantID: input.TenantID,
+		SiteID:   input.SiteID,
+		From:     from,
+		To:       to,
+	})
 	if err != nil {
 		writeFDDError(writer, http.StatusUnprocessableEntity, "fdd_evaluation_rejected")
 		return

@@ -21,6 +21,7 @@ const (
 	DefaultClickHouseNumericHourlyRetention           = 1825 * 24 * time.Hour
 	DefaultClickHouseEnergyIntervalRetention          = 1825 * 24 * time.Hour
 	DefaultClickHouseEnergyHourlyRetention            = 1825 * 24 * time.Hour
+	DefaultClickHouseMetricResultFactsRetention       = 1825 * 24 * time.Hour
 	DefaultClickHouseForecastSeriesRetention          = 365 * 24 * time.Hour
 	DefaultClickHouseOptimizationEvaluationsRetention = 365 * 24 * time.Hour
 	DefaultClickHouseEnergyRebuildRunsRetention       = 365 * 24 * time.Hour
@@ -60,6 +61,7 @@ type ClickHouseRetentionConfig struct {
 	NumericHourlyRetention           time.Duration
 	EnergyIntervalRetention          time.Duration
 	EnergyHourlyRetention            time.Duration
+	MetricResultFactsRetention       time.Duration
 	ForecastSeriesRetention          time.Duration
 	OptimizationEvaluationsRetention time.Duration
 	EnergyRebuildRunsRetention       time.Duration
@@ -172,6 +174,10 @@ func NewClickHouseRetentionPruner(config ClickHouseRetentionConfig) (*ClickHouse
 	if err != nil {
 		return nil, err
 	}
+	metricResultFactsRetention, err := resolveRetentionDuration(config.MetricResultFactsRetention, DefaultClickHouseMetricResultFactsRetention, "metric_result_facts")
+	if err != nil {
+		return nil, err
+	}
 	forecastSeriesRetention, err := resolveRetentionDuration(config.ForecastSeriesRetention, DefaultClickHouseForecastSeriesRetention, "forecast_series")
 	if err != nil {
 		return nil, err
@@ -257,6 +263,15 @@ func NewClickHouseRetentionPruner(config ClickHouseRetentionConfig) (*ClickHouse
 				paramType:  "DateTime64(3, 'UTC')",
 				timeLayout: "2006-01-02 15:04:05.000",
 				retention:  energyHourlyRetention,
+			},
+			{
+				database:    analyticsDB,
+				table:       "metric_result_facts",
+				timeColumn:  "period_start",
+				paramType:   "DateTime64(3, 'UTC')",
+				timeLayout:  "2006-01-02 15:04:05.000",
+				retention:   metricResultFactsRetention,
+				archiveable: true,
 			},
 			{
 				database:   analyticsDB,

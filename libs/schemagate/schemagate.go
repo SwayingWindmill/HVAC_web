@@ -6,7 +6,10 @@ package schemagate
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -23,6 +26,9 @@ type Querier interface {
 // row whose product_version equals expectedVersion. A missing row or a
 // version mismatch is an error; the caller must refuse to start on it.
 func VerifyProductSchema(ctx context.Context, db Querier, expectedVersion string) error {
+	if db == nil {
+		return errors.New("schema compatibility check requires a non-nil database connection")
+	}
 	var actual string
 	err := db.QueryRow(ctx,
 		"SELECT product_version FROM phase1_deployment.product_schema WHERE product = $1",
@@ -35,4 +41,15 @@ func VerifyProductSchema(ctx context.Context, db Querier, expectedVersion string
 		return fmt.Errorf("schema version mismatch: binary expects %s, database has %s", expectedVersion, actual)
 	}
 	return nil
+}
+
+// VerifyEnvProductSchema enforces VerifyProductSchema when
+// PHASE1_PRODUCT_VERSION is non-empty after trimming whitespace. Unset or
+// blank values allow unit/integration tests and standalone utilities to run.
+func VerifyEnvProductSchema(ctx context.Context, db Querier) error {
+	expectedVersion := strings.TrimSpace(os.Getenv("PHASE1_PRODUCT_VERSION"))
+	if expectedVersion == "" {
+		return nil
+	}
+	return VerifyProductSchema(ctx, db, expectedVersion)
 }

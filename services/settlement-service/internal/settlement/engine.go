@@ -26,7 +26,7 @@ type Period struct {
 }
 
 type MetricBinding struct {
-	ID, MetricBindingID, MetricVersionID, MetricCode, Role, TariffPeriodCode string
+	ID, MetricID, MetricBindingID, MetricVersionID, MetricCode, Role, TariffPeriodCode string
 }
 
 type TariffPeriod struct {

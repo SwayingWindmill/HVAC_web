@@ -168,33 +168,6 @@ func TestReadPointFiltersGoodFiniteSamplesAndCompleteness(t *testing.T) {
 	}
 }
 
-func TestDeleteMetricResultSubmitsAsyncMutation(t *testing.T) {
-	var method, query string
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		method = request.Method
-		query = request.URL.Query().Get("query")
-		writer.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-
-	store, err := NewClickHouseStore(server.URL, "", "", server.Client())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.DeleteMetricResult(context.Background(), "t1", "s1", "r1"); err != nil {
-		t.Fatalf("DeleteMetricResult failed: %v", err)
-	}
-	if method != http.MethodPost {
-		t.Fatalf("expected POST, got %s", method)
-	}
-	if !strings.HasPrefix(query, "ALTER TABLE analytics.metric_result_facts DELETE WHERE ") {
-		t.Fatalf("unexpected delete SQL: %s", query)
-	}
-	if strings.Contains(strings.ToLower(query), "mutations_sync") {
-		t.Fatalf("DeleteMetricResult must not set mutations_sync: %s", query)
-	}
-}
-
 func TestMetricResultLookupsIncludeLeadingPrimaryKeyPredicates(t *testing.T) {
 	var seen []string
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

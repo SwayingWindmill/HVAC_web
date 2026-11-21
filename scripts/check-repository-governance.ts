@@ -4,6 +4,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { findChangelogFragmentViolations } from './changelog-fragments.ts';
+import { findGoTestHygieneViolations } from './check-go-test-hygiene.ts';
 import { goExecutableName, readGoWorkspace } from './lib/go-workspace.mjs';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -211,6 +213,17 @@ const requiredGuardrailFiles = Object.freeze([
   'scripts/run-command-formal-check.ts',
   'scripts/migration-conventions-baseline.json',
   'scripts/check-migration-conventions.ts',
+  'scripts/sync-phase1-migrations.ts',
+  'scripts/test-sync-phase1-migrations.ts',
+  'scripts/check-clickhouse-sql.ts',
+  'scripts/test-clickhouse-sql.ts',
+  'scripts/check-go-test-hygiene.ts',
+  'scripts/go-test-sleep-baseline.json',
+  'scripts/test-go-test-hygiene.ts',
+  'scripts/run-preflight.ts',
+  'changelog.d/README.md',
+  'scripts/changelog-fragments.ts',
+  'scripts/test-changelog-fragments.ts',
 ]);
 
 const debugMarkerExtensions = Object.freeze(['.go', '.ts', '.tsx', '.mjs', '.js', '.cjs']);
@@ -802,6 +815,8 @@ export const checkRepositoryGovernance = (root = repositoryRoot) => {
     ...findWorkflowViolations(readFileSync(join(root, '.github/workflows/pr-gates.yml'), 'utf8')),
     ...findHandoffBudgetViolations({ bytes: readFileSync(join(root, 'docs/HANDOFF.md')).byteLength }),
     ...findGoFormatViolations(root, trackedFiles),
+    ...findGoTestHygieneViolations(root, trackedFiles),
+    ...findChangelogFragmentViolations({ root, trackedFiles }),
   ];
 
   if (violations.length > 0) {

@@ -45,12 +45,13 @@ node scripts/issue-workload-identities.mjs
 
 step permissions
 chmod 700 "$R"
-mkdir -p "$R/backups/postgres/base" "$R/backups/postgres/wal" "$R/backups/clickhouse" "$R/alarm-delivery" "$R/data/otel-collector"
+mkdir -p "$R/backups/postgres/base" "$R/backups/postgres/wal" "$R/backups/clickhouse" "$R/alarm-delivery" "$R/data/otel-collector" "$R/mqtt-crl"
 chmod 750 "$R/data/otel-collector"
 # Non-root containers run under UID 65532 (Go services), supplementary group 65532 (alertmanager/centrifugo/operations-agent), UID 1883 (mosquitto), UID 101 (clickhouse), UID 999 (postgres), or UID 10001 (otel-collector).
 docker run --rm --user 0 --entrypoint sh -v "$R:/runtime" postgres:16.4-bookworm -c '
-  for d in identity iam gateway-ca; do [ -d "/runtime/$d" ] && chown -R 65532:65532 "/runtime/$d"; done
+  for d in identity iam gateway-ca mqtt-crl; do [ -d "/runtime/$d" ] && chown -R 65532:65532 "/runtime/$d"; done
   for d in internal-pki alert-receiver alarm-delivery secrets; do [ -d "/runtime/$d" ] && chown -R 0:65532 "/runtime/$d"; done
+  [ -d /runtime/tls ] && find /runtime/tls -type d -exec chown 0:65532 {} +
   [ -d /runtime/mqtt-pki ] && chown -R 1883:65532 /runtime/mqtt-pki
   chown -R 101:101 /runtime/backups/clickhouse
   chown -R 999:999 /runtime/backups/postgres
@@ -78,7 +79,7 @@ for sensitive_dir in identity iam gateway-ca internal-pki db-role-credentials al
 done
 # Only public certificates stay world-readable (0644); CA and workload secrets stay locked down.
 find "$R" -mindepth 1 -type f ! -path "$R/data/*" ! -path "$R/backups/*" \
-  \( -name '*.crt' -o -name 'trusted-client-ca.pem' -o -name '*.pub' \) \
+  \( -name '*.crt' -o -name 'trusted-client-ca.pem' -o -name '*.crl.pem' -o -name '*.pub' \) \
   -exec chmod 644 {} +
 find "$R" -mindepth 1 -type f ! -path "$R/data/*" ! -path "$R/backups/*" \
   \( -name 'tls.key' -o -name 'signing-key.pem' -o -name 'mfa-encryption.key' \
@@ -87,7 +88,7 @@ find "$R" -mindepth 1 -type f ! -path "$R/data/*" ! -path "$R/backups/*" \
     -o -name 'recipients.json' -o -name '*.dsn' -o -name '*.env' \) \
   -exec chmod 640 {} +
 find "$R" -mindepth 1 -type f ! -path "$R/data/*" \
-  \( -name 'ca.key' -o -name 'ca.srl' -o -name 'roles.sql' -o -name 'local-admin.credentials' \) \
+  \( -name 'ca.key' -o -name 'ca.srl' -o -name 'roles.sql' -o -name 'local-admin.credentials' -o -name 'public.key' \) \
   -exec chmod 600 {} +
 
 step roles
@@ -95,6 +96,23 @@ node scripts/local-environment.mjs roles
 
 step migrate
 $L --profile migration run --rm phase1-migrator
+clickhouse_mode="${PHASE1_CLICKHOUSE_MODE:-}"
+if [[ -z "$clickhouse_mode" && -r "$PHASE1_ENV_FILE" ]]; then
+  clickhouse_mode="$(awk -F= '/^PHASE1_CLICKHOUSE_MODE=/{v=$2; gsub(/["'\''\r[:space:]]/, "", v); val=v} END{print val}' "$PHASE1_ENV_FILE")"
+fi
+clickhouse_mode="${clickhouse_mode:-local}"
+case "$clickhouse_mode" in
+  local)
+    $L --profile clickhouse-migration run --rm phase1-clickhouse-migrator
+    ;;
+  external)
+    echo "skipping local ClickHouse migrator (PHASE1_CLICKHOUSE_MODE=external)"
+    ;;
+  *)
+    echo "error: unknown PHASE1_CLICKHOUSE_MODE: '${clickhouse_mode}'" >&2
+    exit 1
+    ;;
+esac
 
 step keys
 [ -f "$R/identity/signing-key.pem" ] || $L run --rm identity-keygen

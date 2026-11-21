@@ -269,7 +269,7 @@ try {
   // Only the views are public, and every member carries a Chinese title and description for operators and the Agent.
   const meta = await cubeMeta(cubeToken());
   const published = (meta.cubes ?? []).map((cube) => cube.name).sort();
-  if (published.join(',') !== 'equipment_energy,site_energy,site_energy_cost') throw new Error(`Cube publishes ${published.join(',')}`);
+  if (published.join(',') !== 'equipment_energy,site_energy,site_energy_cost,site_meter_balance,thermal_cop_asof') throw new Error(`Cube publishes ${published.join(',')}`);
   for (const view of meta.cubes) {
     for (const member of [...view.measures, ...view.dimensions]) {
       if (!/[\u4e00-\u9fff]/u.test(member.title ?? '') || !/[\u4e00-\u9fff]/u.test(member.description ?? '')) {
@@ -278,7 +278,13 @@ try {
       if (/tenant_id|point_id|sensor_id|accounting_scope|period_start/u.test(member.name)) throw new Error(`${member.name} is not a consumer member`);
     }
   }
-  for (const internal of ['site_energy_facts.energy_valid_kwh', 'equipment_energy_facts.energy_valid_kwh', 'site_energy_cost_facts.cost_valid_cny']) {
+  for (const internal of [
+    'site_energy_facts.energy_valid_kwh',
+    'equipment_energy_facts.energy_valid_kwh',
+    'site_energy_cost_facts.cost_valid_cny',
+    'site_meter_balance_facts.site_kwh',
+    'thermal_cop_asof_facts.thermal_kw',
+  ]) {
     const refusal = await cubeRefusal(cubeToken(), { measures: [internal], limit: 1 });
     // Cube 1.6 reports a hidden member with this message (as a 500), so the message is what is checked.
     if (!refusal?.includes(`You requested hidden member: '${internal}'`)) throw new Error(`Cube did not refuse ${internal} as hidden: ${refusal}`);

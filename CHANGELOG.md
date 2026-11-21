@@ -1,13 +1,17 @@
 # 更新记录
 
 记录对使用者可见的变化：功能、页面与运行行为。格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
-项目尚未正式发布，所有变化都在「未发布」下按日期记录；每条注明对应的 PR。
+项目尚未正式发布：各 PR 将新增条目放在 [`changelog.d/`](./changelog.d/README.md) 独立碎片文件中，汇总发布时运行 `npm run changelog:release` 归并进下方「未发布」，避免并行 PR 直接修改本文件引发合并冲突。
 
 ## 未发布
 
 ### 2026-11-19
 
 #### 新增与架构演进
+
+- 完成独立外部 Python 优化推理服务骨架与 Phase 1 编排联调（`services/ai-solver-service/`、`contracts/http/ai-solver-service.v1.schema.json`、`services/optimization-service/internal/optimization/solver_router.go`、`deploy/platform/phase1/ai-solver.compose.yaml`、`apps/hvac-web`）：
+  - **独立 Python HTTP 求解服务（`ai-solver-service`）**：实现 `GET /healthz`、`GET /readyz` 与 `POST /v1/solve`，执行满足 `>= 5.0 °C` 防冻下限、单步爬坡限幅与室温 P90 舒适区间的细粒度物理搜索（含水泵/冷却塔风机协调建议），支持 `traceparent` 穿透与容器非 root 只读运行。
+  - **跨语言契约、Go 联调测试与前端标签对齐**：新增 JSON Schema 契约与 `ai-solver.compose.yaml` 可选覆盖编排，并在 `solver_router_test.go` 增设 Go 真实拉起 Python 子进程集成测试；网页端 `formatSolverRef` 为 `ai-solver-service` 展示「外部 Python 优化服务」。
 
 - 完成能源统计与电费结算体系 P2 扩展（分层能效、主配电平衡诊断、按冷负荷分摊跨缺口与双变量对比基线，覆盖 `libs/analyticsmodel`、`modules/energy`、`services/fdd-service`、`services/mv-service`、`services/report-service`、`apps/hvac-web`、`scripts/` 与迁移 `023-meter-balance-and-layered-efficiency.sql`、`mv-bivariate-weather-anchors.sql`）：
   - **主配电平衡校验、分层能效模型与偏差诊断**：在 ClickHouse 新增 `site_meter_balance_hourly` 等平衡视图（`023-meter-balance-and-layered-efficiency.sql`）并在 `libs/analyticsmodel/layered_efficiency.go` 与前端 `layered-efficiency.ts` / `LayeredEfficiencyStrip.tsx` 实现冷站综合 COP、冷机 COP、冷冻泵与冷却泵输送系数 WTF、冷却塔电耗占比及主计量与设备计量平衡状态校验；`fdd-service` 与网页端 `diagnostics-model.ts` 新增 `METER_IMBALANCE`（「主计量与设备计量差额偏大」，默认偏差阈值 `5%`）规则。
@@ -20,6 +24,18 @@
   - **防抖自动重算与手动重算入口**：`metric-worker` 接入电价、倍率与点位映射变更防抖重算队列；平台网关与网页端「电费统计」新增按权限控制的手动重算弹窗与任务进度查看面板。
 
 #### 修复与加固
+
+- 修复 Web 壳层首屏启动竞态并落地 PR/CI 加速与静态防线（PR `#919`，`apps/hvac-web`、`deploy/platform/phase1/migrations`、`infra/registry`、`scripts/`、`.github/workflows/`）：
+  - **Web 站点发现就绪后再挂载路由**：`AppRuntimeHost` 在登录态成立后等待站点列表检查完成再触发路由校验与挂载，消除慢网场景下首次加载报 `RouteAccessError: SITE_DISCOVERY_UNAVAILABLE` 的间歇报错。
+  - **Phase 1 迁移唯一事实源**：以 `deploy/platform/phase1/migrations/manifest.v1.json` 为唯一事实源自动生成 `migration-list.tsv`、分段镜像 `Dockerfile` 与 `infra/registry/compose.yaml`（并补回遗漏的 `metric-backfill-recalc-job-grants.sql` 挂载）。
+  - **PR CI 提速与工程门禁**：并行拆解 `unit` 门禁（Go 静态与漏洞、Web E2E、分域 Go `-race` 测试）、启用 Go 编译与工具缓存并复用 Runner 系统 Chrome；新增 ClickHouse SQL 方言检查（`clickhouse:sql:check`）、Go 测试 `time.Sleep` 与并发日志无保护 `bytes.Buffer` 检查，以及本地预检 `npm run preflight`。
+
+- 完成上线前四轮系统稳定性与安全边界收尾（含 PR `#907`、`#911`、`#914`、`#915` 及可观测性与 ClickHouse 迁移恢复闭环）：
+  - **容器端口收口与防暴露门禁（`#907`）**：把告警、持久审计、工单本地调试 Compose 里的数据库端口统一收口到本机回环 `127.0.0.1`；单机部署 `deploy/platform/phase1/compose.yaml` 仅保留 `nginx`（443）与 `mqtt-broker`（8883）对外暴露，数据库、缓存和内部诊断端口一律留在内网；仓库静态门禁新增 Compose 端口暴露检查，发现非白名单公网端口映射即阻断提交；同步收紧服务器运行目录权限与观测采集容器（`otel-collector`、`loki`、`tempo`）宿主机目录属主映射。
+  - **ClickHouse 网络隔离、资源限额与系统日志收口（`#907`）**：新增 `default-security.xml`，把无密码 `default` 账号限制为仅限容器回环地址（`127.0.0.1`、`::1`）登录，同网段其他容器无法免密读写或删库；将 ClickHouse 会话时区固定为 `UTC`，设置服务器内存上限与标记/未压缩缓存边界，单条查询内存上限 1 GiB 且分组排序超 512 MiB 自动落盘；关闭 17 张内部诊断日志表并把 `query_log` 保留期收口为 3 天、`crash_log` 14 天、`backup_log` 30 天，为 6 张核心历史与分析表补齐按分区整块删除的兜底 TTL；夜间备份脚本补齐过期 WAL 自动清理、可选异地同步钩子 `BACKUP_OFFSITE_SYNC_CMD` 与双库备份就绪检查。
+  - **Go 进程反向停机排水、连接池边界与协程崩溃防护（`#911`）**：网关（`energy-api`）、身份服务、微信告警适配、接入服务、各智能计算服务与业务域独立进程统一改用信号优雅停机与「先摘除就绪、再排空 HTTP 请求、再等待后台任务结束、最后刷新遥测并关闭数据库与缓存连接池」的反向退出顺序；收紧 PostgreSQL 连接池与 ClickHouse/OTLP HTTP 连接池上限并排空响应体，后台常驻协程统一接入 `Recover`/`GoSafe` 防崩溃保护并保留客户端断开错误语义；`/health/ready` 探测改为读写锁并发检查并把返回体里的异常详情脱敏为 `[REDACTED]`（真实原因记入结构化警告日志），补充 `/healthz` 端点并把 `/debug/pprof/` 锁死为按环境变量显式开启且仅限本机回环访问，扩展敏感日志字段脱敏与高频噪声降噪。
+  - **控制指令全链路 `trace_id` 贯通与审计表防篡改（`#914`）**：在平台网关、指令调度、持久关联表（`connectivity.command_reply_correlations` 新增 `trace_id`）及 MQTT 南向下发与回执恢复全链路贯通 W3C 32 位十六进制追踪编号；通过数据库触发器与权限回收锁定指令流转、授权使用、执行凭据、审计外发意向以及网关证书/集中器/隧道审计表只允许追加写入（执行凭据与外发意向仅放行完成态一次性回填并锁死其余字段），拦截行级修改、删除与清空表操作。
+  - **运行时版本门禁、ClickHouse 版本化迁移恢复演练与追踪/就绪告警（`#915`）**：在保留既有身份服务校验的基础上，为网关（`energy-api`）、遥测工作进程（`telemetry-worker`）、设备接入（`connectivity`）、指标引擎（`metric-worker`）、调度器（`scheduler`）与维保工作进程（`maintenance-worker`）接入 `libs/schemagate` 启动版本核对，并向全体运行账号授予 `phase1_deployment.product_schema` 只读权限；ClickHouse 告别依赖空卷初始化目录裸跑一次的方式，切换为显式 `phase1-clickhouse-migrator`（`clickhouse-migration` profile）版本化迁移与 `phase1_schema_reader` 启动前校验 `phase1-clickhouse-schema-preflight`，新增隔离恢复演练脚本 `scripts/run-phase1-clickhouse-restore-test.ts`（覆盖迁移幂等与卡滞/篡改拦截、跨容器 `default` 拒访、预检阻断、`clickhouse-backup.sh` 备份、双库删除后 `RESTORE` 恢复一致校验）；告警规则补全 `Phase1TelemetrySpansDropped` 与 `Phase1DependencyReadinessDegraded`、`promtool` 单元测试及 `docs/operations/alerts.md` 排障步骤。
 
 - 完成能源统计与电费结算体系 P0 读数清洗、时间归属、能效护栏与补采重算加固（PR `#916`，覆盖 `modules/telemetry`、`modules/energy`、`modules/metric`、`libs/analyticsmodel`、`services/mv-service`、`services/optimization-service`、`services/report-service`、`services/settlement-service`、`semantic/cube/`、`cmd/telemetry-worker`、`cmd/metric-worker`、`apps/hvac-web` 与迁移 `metric-backfill-watermarks-and-reverify.sql`、`021-energy-accounting-p0.sql`）：
   - **累计表读数校验与 Option A 区间对齐**：强化累计电表/冷量表跳变与回退清洗，统一 ClickHouse 与 Cube 按半开区间 `(period_start, period_end]` 归属时段能量并支持按跨时段多版本生效分时电价结算电费，持久化补算水位线以支持幂等回补重算。

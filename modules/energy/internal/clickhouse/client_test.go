@@ -569,3 +569,80 @@ func TestWriterInsertsHourlyFactsV2AndAvoidsDeleteMutations(t *testing.T) {
 		t.Fatalf("unexpected Decimal64/calc_version payload: %s", bodies[0])
 	}
 }
+
+func TestReaderHourlyPowerProfileQueriesUTCAndOptionalDeviceFilter(t *testing.T) {
+	var seenSQL []string
+	var seenParams []url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		seenSQL = append(seenSQL, string(body))
+		seenParams = append(seenParams, r.URL.Query())
+		_, _ = io.WriteString(w, `{"hour_start":"2026-10-12T13:00:00Z","weight":120.5}`+"\n"+
+			`{"hour_start":"2026-10-12T14:00:00Z","weight":240.25}`+"\n")
+	}))
+	defer server.Close()
+
+	reader, err := NewReader(ReaderConfig{
+		BaseURL: server.URL, SourceDatabase: "telemetry_history",
+		AnalyticsDatabase: "analytics", AnalyticsTable: "energy_interval_facts",
+		HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tenantID := "018f4d00-0000-7000-8000-000000000001"
+	siteID := "018f4e00-1000-7000-8000-000000000001"
+	deviceID := "018f4e00-2000-7000-8000-000000000001"
+	from := time.Date(2026, 10, 12, 13, 0, 0, 0, time.UTC)
+	to := from.Add(2 * time.Hour)
+
+	weights, err := reader.HourlyPowerProfile(context.Background(), tenantID, siteID, deviceID, from, to)
+	if err != nil {
+		t.Fatalf("HourlyPowerProfile(device) failed: %v", err)
+	}
+	if len(weights) != 2 || weights[0].Weight != 120.5 || weights[1].Weight != 240.25 ||
+		!weights[0].HourStart.Equal(from) || !weights[1].HourStart.Equal(from.Add(time.Hour)) {
+		t.Fatalf("unexpected weights: %+v", weights)
+	}
+
+	// Empty deviceID omits device_id predicate.
+	if _, err := reader.HourlyPowerProfile(context.Background(), tenantID, siteID, "", from, to); err != nil {
+		t.Fatalf("HourlyPowerProfile(site-wide) failed: %v", err)
+	}
+	if len(seenSQL) != 2 {
+		t.Fatalf("expected 2 queries, got %d", len(seenSQL))
+	}
+	for _, needle := range []string{
+		"FROM analytics.hourly_active_power_profile AS p",
+		"p.tenant_id = {tenant:UUID}",
+		"p.site_id = {site:UUID}",
+		"p.hour_utc >= {from:DateTime64(3, 'UTC')}",
+		"p.hour_utc < {to:DateTime64(3, 'UTC')}",
+		"sum(p.mean_kw * toFloat64(p.sample_count)) / nullIf(toFloat64(sum(p.sample_count)), 0) AS weight",
+		"GROUP BY p.hour_utc",
+	} {
+		if !strings.Contains(seenSQL[0], needle) {
+			t.Fatalf("HourlyPowerProfile SQL missing %q:\n%s", needle, seenSQL[0])
+		}
+	}
+	if strings.Contains(seenSQL[0], "telemetry_history.observations") {
+		t.Fatalf("HourlyPowerProfile must query SQL SECURITY DEFINER view, not telemetry_history.observations:\n%s", seenSQL[0])
+	}
+	if !strings.Contains(seenSQL[0], "p.device_id = {device:UUID}") || seenParams[0].Get("param_device") != deviceID {
+		t.Fatalf("expected device_id filter on device-scoped query, sql=%s params=%v", seenSQL[0], seenParams[0])
+	}
+	if strings.Contains(seenSQL[1], "p.device_id") || seenParams[1].Get("param_device") != "" {
+		t.Fatalf("unexpected device_id filter when deviceID is empty, sql=%s params=%v", seenSQL[1], seenParams[1])
+	}
+	// Ensure no alias shadowing on hour_utc/mean_kw/sample_count.
+	if strings.Contains(seenSQL[0], "AS hour_utc") || strings.Contains(seenSQL[0], "AS mean_kw") || strings.Contains(seenSQL[0], "AS sample_count") {
+		t.Fatalf("ClickHouse alias shadowing detected in SQL:\n%s", seenSQL[0])
+	}
+	if _, err := reader.HourlyPowerProfile(context.Background(), "", siteID, "", from, to); err == nil {
+		t.Fatal("expected error for missing tenantID")
+	}
+	if _, err := reader.HourlyPowerProfile(context.Background(), tenantID, siteID, "", to, from); err == nil {
+		t.Fatal("expected error for unordered window")
+	}
+}

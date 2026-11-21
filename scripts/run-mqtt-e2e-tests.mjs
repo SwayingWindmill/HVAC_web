@@ -148,7 +148,7 @@ try {
     return ready.status === 0 && ready.stdout.trim() === 't';
   }, 120000, 'Registry migrations');
   psql(registrySeed());
-  runDockerCompose(run, ['-p', brokerProject, '-f', brokerCompose, 'up', '-d', '--wait', 'mqtt-broker'], { env: brokerEnv });
+  runDockerCompose(run, ['-p', brokerProject, '-f', brokerCompose, 'up', '-d', '--build', '--wait', 'mqtt-broker'], { env: brokerEnv });
 
   const observations = [];
   let sourceIdentityVerified = false;
@@ -250,7 +250,7 @@ try {
   const first = observations.slice(0, expectedPointCount);
   const deviceIds = new Set(first.map((observation) => observation.device?.deviceId));
   const unresolved = first.filter((observation) => observation.sourceId !== gatewayId || observation.device?.tenantId !== tenantId || observation.device?.siteId !== siteId
-    || !uuidV7.test(String(observation.sourcePosition?.eventId ?? '')) || !String(observation.sourcePosition?.partition).startsWith(`mqtt:${gatewayId}:`));
+    || !uuidV7.test(String(observation.sourcePosition?.eventId ?? '')) || !String(observation.sourcePosition?.partition).startsWith(`${observation.edgeReplay ? 'mqtt-replay' : 'mqtt'}:${gatewayId}:`));
   const registeredCodes = new Set(registeredPoints.map((point) => `${point.deviceId}/${point.pointCode}`));
   const missingPoints = first.filter((observation) => registeredCodes.has(`${observation.externalId}/${observation.telemetryKey}`) && !observation.point?.pointId);
   if (deviceIds.size !== plantDevices.length || unresolved.length || missingPoints.length) {

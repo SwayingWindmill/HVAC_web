@@ -440,6 +440,8 @@ export function OptimizationWorkspace() {
             timeZone={site.timezone}
             recommendation={recommendation}
             active={activeView === 'analysis'}
+            canManageControl={canManageLease}
+            csrfToken={principal.session.csrfToken}
           />
         </TabsContent>
       </Tabs>

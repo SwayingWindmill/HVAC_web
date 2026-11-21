@@ -22,16 +22,22 @@ async function findAvailablePort() {
   return address.port;
 }
 
-const [postgresHostPort, clickHouseHostPort] = await Promise.all([findAvailablePort(), findAvailablePort()]);
+const [postgresHostPort, clickHouseHostPort, clickHouseNativePort] = await Promise.all([
+  findAvailablePort(),
+  findAvailablePort(),
+  findAvailablePort(),
+]);
 const composeEnvironment = {
   ...process.env,
   S2_POSTGRES_HOST_PORT: String(postgresHostPort),
   S2_CLICKHOUSE_HTTP_HOST_PORT: String(clickHouseHostPort),
+  S2_CLICKHOUSE_NATIVE_HOST_PORT: String(clickHouseNativePort),
 };
 const runtimeURL = `postgres://s2_telemetry_service:s2-telemetry-runtime-local-only@127.0.0.1:${postgresHostPort}/hvac_s2?sslmode=disable`;
 const historyURL = `postgres://s2_telemetry_history_service:s2-telemetry-history-local-only@127.0.0.1:${postgresHostPort}/hvac_s2?sslmode=disable`;
 const adminURL = `postgres://postgres:postgres-local-only@127.0.0.1:${postgresHostPort}/hvac_s2?sslmode=disable`;
 const clickHouseURL = `http://127.0.0.1:${clickHouseHostPort}`;
+const clickHouseNativeAddr = `127.0.0.1:${clickHouseNativePort}`;
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { cwd: root, encoding: 'utf8', windowsHide: true, ...options });
@@ -98,7 +104,7 @@ try {
   report.assertions.goIntegration = run(process.execPath, [
     'scripts/run-isolated-go.mjs',
     '--module=modules/telemetry',
-    'test', '-count=1', '-run', 'TestPostgresOutboxProjectsClickHouseHistoryDeduplicatesRetry|TestPostgresOutboxDeduplicatesRetransmittedTimestampBeforeClickHouseMV|TestHistoryMicrobatch', '-v', './pkg/telemetry/...',
+    'test', '-count=1', '-run', 'TestPostgresOutboxProjectsClickHouseHistoryDeduplicatesRetry|TestPostgresOutboxProjectsClickHouseNativePrepareBatchDeduplicatesRetry|TestPostgresOutboxDeduplicatesRetransmittedTimestampBeforeClickHouseMV|TestHistoryMicrobatch', '-v', './pkg/telemetry/...',
   ], {
     env: {
       ...process.env,
@@ -106,11 +112,13 @@ try {
       S2_TELEMETRY_ADMIN_DATABASE_URL: adminURL,
       S2_TELEMETRY_HISTORY_DATABASE_URL: historyURL,
       S2_CLICKHOUSE_HTTP_URL: clickHouseURL,
+      S2_CLICKHOUSE_NATIVE_ADDR: clickHouseNativeAddr,
       S2_CLICKHOUSE_USERNAME: 'telemetry_history',
       S2_CLICKHOUSE_PASSWORD: '',
     },
   });
   if (!report.assertions.goIntegration.includes('--- PASS: TestPostgresOutboxProjectsClickHouseHistoryDeduplicatesRetry') ||
+      !report.assertions.goIntegration.includes('--- PASS: TestPostgresOutboxProjectsClickHouseNativePrepareBatchDeduplicatesRetry') ||
       report.assertions.goIntegration.includes('--- SKIP:')) {
     throw new Error('history integration tests must execute, not skip');
   }

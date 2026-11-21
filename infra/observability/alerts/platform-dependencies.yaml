@@ -142,3 +142,27 @@ groups:
         annotations:
           summary: 读不到容器重启和健康状态
           runbook: docs/operations/alerts.md#容器反复重启或不健康
+
+      - alert: Phase1TelemetrySpansDropped
+        expr: increase(s0_telemetry_dropped_spans[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          primary_owner: platform-observability
+          secondary_owner: platform-operations
+        annotations:
+          summary: 异步追踪导出队列正在丢弃跨度
+          description: "{{ $labels.service }} 的追踪导出队列已满，连续 5 分钟有跨度被丢弃。业务接口正常，但追踪链路记录不完整。"
+          runbook: docs/operations/alerts.md#追踪队列丢弃跨度
+
+      - alert: Phase1DependencyReadinessDegraded
+        expr: min by (service, dependency) (s0_dependency_up{required="true"}) == 0
+        for: 2m
+        labels:
+          severity: page
+          primary_owner: platform-runtime
+          secondary_owner: platform-operations
+        annotations:
+          summary: 核心服务必需依赖就绪探针异常
+          description: "{{ $labels.service }} 的必需依赖 {{ $labels.dependency }} 连续两分钟探测失败，服务已退出就绪状态。"
+          runbook: docs/operations/alerts.md#核心服务就绪探针依赖异常

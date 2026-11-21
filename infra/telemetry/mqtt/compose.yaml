@@ -1,12 +1,16 @@
 services:
   mqtt-broker:
-    image: eclipse-mosquitto:2.1.2-alpine@sha256:6f8d8a947c506f8a2290ec65cd4bd2bc7cb4d43fb5f6271f861cb013e2ef9797
+    image: ${MQTT_BROKER_IMAGE:-hvac/mqtt-broker:0.1.0-dev}
+    build:
+      context: ../../..
+      dockerfile: deploy/platform/phase1/mqtt/Dockerfile
     command: ["mosquitto", "-c", "/mosquitto/config/mosquitto.conf"]
     volumes:
       - ${MQTT_PKI_DIR:?MQTT_PKI_DIR is required}/ca.pem:/mosquitto/config/gateway-ca.pem:ro
       - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - ./acl:/mosquitto/config/acl:ro
       - ${MQTT_PKI_DIR:?MQTT_PKI_DIR is required}:/mosquitto/config/pki:ro
+      - ${MQTT_CRL_DIR:-./crl-empty}:/mosquitto/config/crl:ro
       - mqtt-broker-data:/mosquitto/data
     ports:
       - "127.0.0.1:${MQTT_HOST_PORT:-18883}:8883"

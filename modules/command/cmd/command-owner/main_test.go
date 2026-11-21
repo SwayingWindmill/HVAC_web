@@ -171,10 +171,17 @@ type fakeOutboxStateCounter struct {
 	counts commandservice.ControlAlarmOutboxStateCounts
 	err    error
 	calls  atomic.Int32
+	called chan struct{}
 }
 
 func (f *fakeOutboxStateCounter) CountControlAlarmOutboxStates(_ context.Context) (commandservice.ControlAlarmOutboxStateCounts, error) {
 	f.calls.Add(1)
+	if f.called != nil {
+		select {
+		case f.called <- struct{}{}:
+		default:
+		}
+	}
 	if f.err != nil {
 		return commandservice.ControlAlarmOutboxStateCounts{}, f.err
 	}
@@ -183,8 +190,10 @@ func (f *fakeOutboxStateCounter) CountControlAlarmOutboxStates(_ context.Context
 
 func TestRefreshControlAlarmOutboxDepthMetrics(t *testing.T) {
 	metrics := observability.NewRegistry()
+	called := make(chan struct{}, 8)
 	counter := &fakeOutboxStateCounter{
 		counts: commandservice.ControlAlarmOutboxStateCounts{Pending: 7, DeadLetter: 2},
+		called: called,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -194,9 +203,17 @@ func TestRefreshControlAlarmOutboxDepthMetrics(t *testing.T) {
 		runControlAlarmOutboxDepthRefresher(ctx, slog.New(slog.NewJSONHandler(io.Discard, nil)), counter, metrics, 5*time.Millisecond)
 	}()
 
-	deadline := time.Now().Add(time.Second)
-	for counter.calls.Load() < 1 && time.Now().Before(deadline) {
-		time.Sleep(2 * time.Millisecond)
+	timeout := time.NewTimer(2 * time.Second)
+	defer timeout.Stop()
+	// Waiting for a second invocation guarantees the first refresh has published its gauges before cancel.
+	for range 2 {
+		select {
+		case <-called:
+		case <-timeout.C:
+			cancel()
+			<-done
+			t.Fatal("timed out waiting for control alarm outbox depth refresh")
+		}
 	}
 	cancel()
 	<-done

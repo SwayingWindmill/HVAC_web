@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -598,6 +599,7 @@ SELECT mb.tenant_id::text,
        mb.device_id::text,
        mb.point_id::text,
        mb.point_type,
+       COALESCE(pt.unit, ''),
        mb.effective_from,
        mb.effective_to,
        CASE WHEN scope.branch THEN 'BRANCH' ELSE 'SITE' END,
@@ -607,13 +609,15 @@ JOIN core_registry.energy_types AS et ON et.id = mb.energy_type_id
 JOIN core_registry.energy_edges AS edge ON edge.id = mb.energy_edge_id
 JOIN core_registry.energy_nodes AS fn ON fn.id = edge.from_node_id
 JOIN core_registry.energy_nodes AS tn ON tn.id = edge.to_node_id
+LEFT JOIN core_registry.telemetry_points AS pt ON pt.id = mb.point_id
 CROSS JOIN LATERAL (SELECT tn.node_type = 'LOAD' AND tn.device_id IS NOT NULL AND fn.node_type <> 'GRID' AS branch) AS scope
 WHERE mb.site_id = $1::uuid
+  AND NOT (mb.site_id = ANY($2::uuid[]))
   AND mb.point_type = 'COUNTER'
   AND mb.meter_role = 'PRIMARY'
   AND mb.status IN ('RELEASED', 'ACTIVE')
 ORDER BY mb.device_id ASC, mb.point_id ASC, mb.effective_from DESC, mb.version DESC, mb.id ASC
-`, siteID)
+`, siteID, postgresUUIDArray(claims.DeniedSiteIDs))
 		if err != nil {
 			return fmt.Errorf("query Core site meter bindings: %w", err)
 		}
@@ -624,10 +628,11 @@ ORDER BY mb.device_id ASC, mb.point_id ASC, mb.effective_from DESC, mb.version D
 			if err := rows.Scan(
 				&item.TenantID, &item.SiteID, &item.MeterID, &item.MeterBindingID, &item.TopologyVersionID,
 				&item.BindingVersion, &item.BindingRevision, &item.EnergyTypeID, &item.EnergyType, &item.MeterRole, &item.Direction,
-				&item.DeviceID, &item.PointID, &item.PointType, &item.EffectiveFrom, &item.EffectiveTo, &item.AccountingScope, &loadDeviceID,
+				&item.DeviceID, &item.PointID, &item.PointType, &item.ReadingUnit, &item.EffectiveFrom, &item.EffectiveTo, &item.AccountingScope, &loadDeviceID,
 			); err != nil {
 				return fmt.Errorf("scan Core site meter binding: %w", err)
 			}
+			item.ReadingUnit = strings.TrimSpace(item.ReadingUnit)
 			if loadDeviceID != nil {
 				item.LoadDeviceID = *loadDeviceID
 			}
@@ -638,12 +643,133 @@ ORDER BY mb.device_id ASC, mb.point_id ASC, mb.effective_from DESC, mb.version D
 			}
 			result.Items = append(result.Items, item)
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		rows.Close()
+		if len(result.Items) == 0 {
+			return nil
+		}
+		ratios, err := querySiteMeterRatioVersions(ctx, transaction, siteID, claims.DeniedSiteIDs)
+		if err != nil {
+			return err
+		}
+		attachMeterRatioVersions(result.Items, ratios)
+		return nil
 	})
 	if err != nil {
 		return SiteMeterBindings{}, err
 	}
 	return result, nil
+}
+
+func querySiteMeterRatioVersions(ctx context.Context, transaction pgx.Tx, siteID string, deniedSiteIDs []string) ([]MeterRatioVersionSummary, error) {
+	var hasTable bool
+	if err := transaction.QueryRow(ctx, `SELECT to_regclass('core_registry.meter_ratio_versions') IS NOT NULL`).Scan(&hasTable); err != nil {
+		return nil, fmt.Errorf("check meter ratio versions table: %w", err)
+	}
+	if !hasTable {
+		return nil, nil
+	}
+	rows, err := transaction.Query(ctx, `
+SELECT id::text,
+       tenant_id::text,
+       site_id::text,
+       COALESCE(meter_binding_id::text, ''),
+       COALESCE(point_id::text, ''),
+       ct_ratio::double precision,
+       pt_ratio::double precision,
+       meter_multiplier::double precision,
+       ratio_application_mode,
+       reading_unit,
+       effective_from,
+       effective_to,
+       status,
+       revision
+FROM core_registry.meter_ratio_versions
+WHERE site_id = $1::uuid
+  AND NOT (site_id = ANY($2::uuid[]))
+  AND status = 'RELEASED'
+ORDER BY effective_from ASC, revision ASC, id ASC
+`, siteID, postgresUUIDArray(deniedSiteIDs))
+	if err != nil {
+		return nil, fmt.Errorf("query Core site meter ratio versions: %w", err)
+	}
+	defer rows.Close()
+	ratios := []MeterRatioVersionSummary{}
+	for rows.Next() {
+		var ratio MeterRatioVersionSummary
+		if err := rows.Scan(
+			&ratio.ID,
+			&ratio.TenantID,
+			&ratio.SiteID,
+			&ratio.MeterBindingID,
+			&ratio.PointID,
+			&ratio.CTRatio,
+			&ratio.PTRatio,
+			&ratio.MeterMultiplier,
+			&ratio.RatioApplicationMode,
+			&ratio.ReadingUnit,
+			&ratio.EffectiveFrom,
+			&ratio.EffectiveTo,
+			&ratio.Status,
+			&ratio.Revision,
+		); err != nil {
+			return nil, fmt.Errorf("scan Core site meter ratio version: %w", err)
+		}
+		ratio.EffectiveFrom = ratio.EffectiveFrom.UTC()
+		if ratio.EffectiveTo != nil {
+			value := ratio.EffectiveTo.UTC()
+			ratio.EffectiveTo = &value
+		}
+		ratios = append(ratios, ratio)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return ratios, nil
+}
+
+func attachMeterRatioVersions(items []MeterBindingResolution, ratios []MeterRatioVersionSummary) {
+	if len(items) == 0 || len(ratios) == 0 {
+		return
+	}
+	byPoint := make(map[string][]MeterRatioVersionSummary)
+	byBinding := make(map[string][]MeterRatioVersionSummary)
+	for _, ratio := range ratios {
+		ratio.EffectiveFrom = ratio.EffectiveFrom.UTC()
+		if ratio.EffectiveTo != nil {
+			value := ratio.EffectiveTo.UTC()
+			ratio.EffectiveTo = &value
+		}
+		if ratio.PointID != "" {
+			byPoint[ratio.PointID] = append(byPoint[ratio.PointID], ratio)
+		} else if ratio.MeterBindingID != "" {
+			byBinding[ratio.MeterBindingID] = append(byBinding[ratio.MeterBindingID], ratio)
+		}
+	}
+	for index := range items {
+		pointMatches := byPoint[items[index].PointID]
+		bindingMatches := byBinding[items[index].MeterBindingID]
+		if len(pointMatches) == 0 && len(bindingMatches) == 0 {
+			continue
+		}
+		merged := make([]MeterRatioVersionSummary, 0, len(pointMatches)+len(bindingMatches))
+		merged = append(merged, pointMatches...)
+		merged = append(merged, bindingMatches...)
+		if len(merged) > 1 {
+			sort.Slice(merged, func(i, j int) bool {
+				if !merged[i].EffectiveFrom.Equal(merged[j].EffectiveFrom) {
+					return merged[i].EffectiveFrom.Before(merged[j].EffectiveFrom)
+				}
+				if merged[i].Revision != merged[j].Revision {
+					return merged[i].Revision < merged[j].Revision
+				}
+				return merged[i].ID < merged[j].ID
+			})
+		}
+		items[index].RatioVersions = merged
+	}
 }
 
 type rowScanner interface {

@@ -319,3 +319,95 @@ func TestResolverDecodesReadingUnitAndRatioVersions(t *testing.T) {
 		t.Fatalf("unexpected decoded readingUnit/ratioVersions: %+v", res)
 	}
 }
+
+func TestResolverEnqueueDirtyWindowPostsRFC3339UTCWithGrant(t *testing.T) {
+	clock := newTestClock()
+	iam := newFakeIAM(t, clock, true)
+
+	var seenMethod string
+	var seenPath string
+	var seenGrant string
+	var seenContentType string
+	var seenBody map[string]string
+	core := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		seenMethod = request.Method
+		seenPath = request.URL.Path
+		seenGrant = request.Header.Get("X-Delegation-Grant")
+		seenContentType = request.Header.Get("Content-Type")
+		if err := json.NewDecoder(request.Body).Decode(&seenBody); err != nil {
+			t.Fatal(err)
+		}
+		writer.WriteHeader(http.StatusAccepted)
+		_, _ = io.WriteString(writer, `{"id":"dw-1","status":"PENDING"}`)
+	}))
+	defer core.Close()
+
+	shanghai := time.FixedZone("UTC+8", 8*3600)
+	winStart := time.Date(2026, 7, 29, 20, 0, 0, 0, shanghai)
+	winEnd := time.Date(2026, 7, 29, 21, 0, 0, 0, shanghai)
+	availableAt := time.Date(2026, 7, 29, 21, 0, 30, 500_000_000, shanghai)
+
+	resolver := newTestResolver(t, core, iam, clock)
+	err := resolver.EnqueueDirtyWindow(context.Background(), energy.DirtyWindowEnqueueRequest{
+		TenantID:           "tenant-1",
+		SiteID:             "site-1",
+		Granularity:        "HOUR",
+		WindowStart:        winStart,
+		WindowEnd:          winEnd,
+		AvailableAt:        availableAt,
+		RequestedBy:        "018f0000-0000-7000-8000-000000000001",
+		RequestedByDisplay: "energy-projector",
+		Reason:             "backfill or revised energy interval impacted closed hourly bucket",
+		Source:             "BACKFILL",
+	})
+	if err != nil {
+		t.Fatalf("EnqueueDirtyWindow() error = %v", err)
+	}
+	if seenMethod != http.MethodPost || seenPath != "/internal/v1/registry/sites/site-1/accounting/dirty-windows" {
+		t.Fatalf("request = %s %s", seenMethod, seenPath)
+	}
+	if seenGrant != "grant-tenant-1-1" || seenContentType != "application/json" {
+		t.Fatalf("headers grant=%q content-type=%q", seenGrant, seenContentType)
+	}
+	if seenBody["tenantId"] != "tenant-1" ||
+		seenBody["siteId"] != "site-1" ||
+		seenBody["granularity"] != "HOUR" ||
+		seenBody["windowStart"] != "2026-07-29T12:00:00Z" ||
+		seenBody["windowEnd"] != "2026-07-29T13:00:00Z" ||
+		seenBody["availableAt"] != "2026-07-29T13:00:30.5Z" ||
+		seenBody["requestedBy"] != "018f0000-0000-7000-8000-000000000001" ||
+		seenBody["requestedByDisplay"] != "energy-projector" ||
+		seenBody["reason"] != "backfill or revised energy interval impacted closed hourly bucket" ||
+		seenBody["source"] != "BACKFILL" {
+		t.Fatalf("unexpected dirty window payload: %+v", seenBody)
+	}
+}
+
+func TestResolverEnqueueDirtyWindowValidationAndErrorPropagation(t *testing.T) {
+	clock := newTestClock()
+	iam := newFakeIAM(t, clock, true)
+	core := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		http.Error(writer, "dirty window conflict", http.StatusConflict)
+	}))
+	defer core.Close()
+
+	resolver := newTestResolver(t, core, iam, clock)
+	baseStart := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+
+	if err := resolver.EnqueueDirtyWindow(context.Background(), energy.DirtyWindowEnqueueRequest{
+		SiteID: "site-1", WindowStart: baseStart, WindowEnd: baseStart.Add(time.Hour),
+	}); err == nil {
+		t.Fatal("expected error for missing tenantId")
+	}
+	if err := resolver.EnqueueDirtyWindow(context.Background(), energy.DirtyWindowEnqueueRequest{
+		TenantID: "tenant-1", SiteID: "site-1", WindowStart: baseStart, WindowEnd: baseStart,
+	}); err == nil {
+		t.Fatal("expected error for non-ordered window")
+	}
+	err := resolver.EnqueueDirtyWindow(context.Background(), energy.DirtyWindowEnqueueRequest{
+		TenantID: "tenant-1", SiteID: "site-1", WindowStart: baseStart, WindowEnd: baseStart.Add(time.Hour),
+	})
+	if err == nil || !strings.Contains(err.Error(), "409") || !strings.Contains(err.Error(), "dirty window conflict") {
+		t.Fatalf("expected HTTP 409 error propagation, got %v", err)
+	}
+}

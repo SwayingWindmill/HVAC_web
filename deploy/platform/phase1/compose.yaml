@@ -8,6 +8,7 @@ x-default-logging: &default-logging
 
 x-default-env: &default-env
   TZ: ${TZ:-Asia/Shanghai}
+  PHASE1_PRODUCT_VERSION: ${PHASE1_PRODUCT_VERSION:-0.1.0}
 
 x-go-service: &go-service
   restart: unless-stopped
@@ -212,6 +213,8 @@ services:
       ALARM_DELIVERY_CONSOLE_URL: ${ALARM_DELIVERY_CONSOLE_URL:-${PLATFORM_PUBLIC_ORIGIN:-}}
     depends_on:
       phase1-schema-preflight:
+        condition: service_completed_successfully
+      phase1-clickhouse-schema-preflight:
         condition: service_completed_successfully
       clickhouse:
         condition: service_healthy
@@ -467,6 +470,7 @@ services:
       ANALYTICS_CLICKHOUSE_READER_USERNAME: analytics_projector_reader
       ANALYTICS_CLICKHOUSE_WRITER_USERNAME: analytics_projector_writer
       TELEMETRY_CLICKHOUSE_HTTP_URL: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
+      TELEMETRY_CLICKHOUSE_NATIVE_ADDR: ${PHASE1_CLICKHOUSE_NATIVE_ADDR:-}
       ANALYTICS_CLICKHOUSE_HTTP_URL: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
       TELEMETRY_LIMIT_POLICY_REDIS_URL: ${TELEMETRY_LIMIT_POLICY_REDIS_URL:-redis://redis:6379/2}
       TELEMETRY_ALARM_EVALUATION_ENABLED: "true"
@@ -475,6 +479,8 @@ services:
       TELEMETRY_RETENTION_CLICKHOUSE_USER: ${TELEMETRY_RETENTION_CLICKHOUSE_USER:-telemetry_retention_writer}
     depends_on:
       phase1-schema-preflight:
+        condition: service_completed_successfully
+      phase1-clickhouse-schema-preflight:
         condition: service_completed_successfully
       clickhouse:
         condition: service_healthy
@@ -523,6 +529,8 @@ services:
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
+      phase1-clickhouse-schema-preflight:
+        condition: service_completed_successfully
       clickhouse:
         condition: service_healthy
         required: false
@@ -570,6 +578,8 @@ services:
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
+      phase1-clickhouse-schema-preflight:
+        condition: service_completed_successfully
       clickhouse:
         condition: service_healthy
         required: false
@@ -607,6 +617,7 @@ services:
       OPTIMIZATION_QUERY_URL: https://telemetry-query-service:18447
       OPTIMIZATION_GATEWAY_URL: https://platform-gateway:8452
       OPTIMIZATION_TELEMETRY_URL: ${OPTIMIZATION_TELEMETRY_URL:-https://telemetry-runtime-service:8446}
+      OPTIMIZATION_ALLOWED_SOLVER_HOSTS: ${OPTIMIZATION_ALLOWED_SOLVER_HOSTS:-}
       OPTIMIZATION_TLS_CERT: /run/hvac/pki/optimization/tls.crt
       OPTIMIZATION_TLS_KEY: /run/hvac/pki/optimization/tls.key
       OPTIMIZATION_TLS_CA: /run/hvac/pki/ca.crt
@@ -617,6 +628,8 @@ services:
       - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}/optimization:/run/hvac/pki/optimization:ro
     depends_on:
       phase1-schema-preflight:
+        condition: service_completed_successfully
+      phase1-clickhouse-schema-preflight:
         condition: service_completed_successfully
       clickhouse:
         condition: service_healthy
@@ -656,6 +669,8 @@ services:
       FDD_CLICKHOUSE_READER_PASSWORD: ${FDD_CLICKHOUSE_READER_PASSWORD:-}
     depends_on:
       phase1-schema-preflight:
+        condition: service_completed_successfully
+      phase1-clickhouse-schema-preflight:
         condition: service_completed_successfully
     volumes:
       - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}/ca.crt:/run/hvac/pki/ca.crt:ro
@@ -702,6 +717,8 @@ services:
       - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}/mv:/run/hvac/pki/mv:ro
     depends_on:
       phase1-schema-preflight:
+        condition: service_completed_successfully
+      phase1-clickhouse-schema-preflight:
         condition: service_completed_successfully
     expose: ["19096"]
     healthcheck:
@@ -773,9 +790,11 @@ services:
       CONNECTIVITY_DATABASE_URL: ${CONNECTIVITY_DATABASE_URL:-}
       CONNECTIVITY_OVERFLOW_DIR: ${CONNECTIVITY_OVERFLOW_DIR:-/var/lib/hvac/connectivity-spool}
       GATEWAY_BROKER_URL: ${GATEWAY_BROKER_URL:-tls://localhost:8883}
+      GATEWAY_CRL_OUTPUT_FILE: ${GATEWAY_CRL_OUTPUT_FILE:-/var/lib/hvac/mqtt-crl/gateway-ca.crl.pem}
       CONNECTIVITY_IAM_URL: ${IAM_URL:-https://iam-service:8444}
     volumes:
       - ${PHASE1_RUNTIME_DIR:-./runtime}/gateway-ca:/run/hvac/gateway-ca:ro
+      - ${MQTT_CRL_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/mqtt-crl}:/var/lib/hvac/mqtt-crl
       - connectivity-spool:/var/lib/hvac/connectivity-spool
     depends_on:
       phase1-schema-preflight:
@@ -983,7 +1002,6 @@ services:
       - ./clickhouse/prometheus.xml:/etc/clickhouse-server/config.d/prometheus.xml:ro
       - ./clickhouse/query-log-profile.xml:/etc/clickhouse-server/users.d/query-log-profile.xml:ro
       - ./clickhouse/default-security.xml:/etc/clickhouse-server/users.d/default-security.xml:ro
-      - ../../../infra/telemetry/clickhouse/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "clickhouse-client --query 'SELECT 1'"]
       interval: 5s
@@ -996,6 +1014,62 @@ services:
     mem_reservation: ${CLICKHOUSE_MEMORY_RESERVATION:-1024m}
     logging: *default-logging
 
+  phase1-clickhouse-migrator:
+    profiles: ["clickhouse-migration"]
+    image: clickhouse/clickhouse-server:26.3.39.7
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    network_mode: "service:clickhouse"
+    entrypoint: ["/bin/bash", "/opt/hvac/clickhouse-migrations/run-clickhouse-migrations.sh"]
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      CLICKHOUSE_HOST: 127.0.0.1
+      CLICKHOUSE_PORT: 9000
+      CLICKHOUSE_USER: ${CLICKHOUSE_ADMIN_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_ADMIN_PASSWORD:-}
+      PHASE1_CLICKHOUSE_SECURE: ${PHASE1_CLICKHOUSE_SECURE:-false}
+      PHASE1_PRODUCT_VERSION: ${PHASE1_PRODUCT_VERSION:-0.1.0}
+      PHASE1_RELEASE_REVISION: ${PHASE1_RELEASE_REVISION:-unversioned-local-run}
+      PHASE1_CLICKHOUSE_ROLE_CREDENTIALS_FILE: ${PHASE1_CLICKHOUSE_ROLE_CREDENTIALS_FILE:-}
+    volumes:
+      - ./clickhouse-migrations:/opt/hvac/clickhouse-migrations:ro
+      - ../../../infra/telemetry/clickhouse/init:/opt/hvac/repo/infra/telemetry/clickhouse/init:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    logging: *default-logging
+
+  phase1-clickhouse-schema-preflight:
+    image: clickhouse/clickhouse-server:26.3.39.7
+    restart: "no"
+    entrypoint: ["/bin/bash", "/opt/hvac/clickhouse-migrations/verify-clickhouse-schema.sh"]
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+        required: false
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      CLICKHOUSE_HOST: ${PHASE1_CLICKHOUSE_HOST:-clickhouse}
+      CLICKHOUSE_PORT: ${PHASE1_CLICKHOUSE_TCP_PORT:-9000}
+      CLICKHOUSE_USER: ${PHASE1_CLICKHOUSE_PREFLIGHT_USER:-phase1_schema_reader}
+      CLICKHOUSE_PASSWORD: ${PHASE1_CLICKHOUSE_PREFLIGHT_PASSWORD:-}
+      PHASE1_CLICKHOUSE_SECURE: ${PHASE1_CLICKHOUSE_SECURE:-false}
+      PHASE1_PRODUCT_VERSION: ${PHASE1_PRODUCT_VERSION:-0.1.0}
+    volumes:
+      - ./clickhouse-migrations:/opt/hvac/clickhouse-migrations:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    networks: [data]
+    mem_limit: 128m
+    logging: *default-logging
+
   cube:
     profiles: ["local-clickhouse"]
     image: cubejs/cube:v1.6.51@sha256:bc8c3f27aa588e0bf9c9937ca5bbb37192bc14d78bd18241299c94b9d2ca20e5
@@ -1003,6 +1077,8 @@ services:
     depends_on:
       clickhouse:
         condition: service_healthy
+      phase1-clickhouse-schema-preflight:
+        condition: service_completed_successfully
     environment:
       TZ: ${TZ:-Asia/Shanghai}
       CUBEJS_DB_TYPE: clickhouse
@@ -1069,7 +1145,10 @@ services:
 
   mqtt-broker:
     profiles: ["integration"]
-    image: eclipse-mosquitto:2.1.2-alpine
+    image: ${MQTT_BROKER_IMAGE:-hvac/mqtt-broker:0.1.0-dev}
+    build:
+      context: ../../..
+      dockerfile: deploy/platform/phase1/mqtt/Dockerfile
     restart: unless-stopped
     environment:
       TZ: ${TZ:-Asia/Shanghai}
@@ -1080,6 +1159,7 @@ services:
       - ../../../infra/telemetry/mqtt/acl:/mosquitto/config/acl:ro
       - ${MQTT_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/mqtt-pki}:/mosquitto/config/pki:ro
       - ${PHASE1_RUNTIME_DIR:-./runtime}/gateway-ca/trusted-client-ca.pem:/mosquitto/config/gateway-ca.pem:ro
+      - ${MQTT_CRL_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/mqtt-crl}:/mosquitto/config/crl:ro
       - ${MQTT_DATA_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/data/mqtt}:/mosquitto/data
     networks: [public, mqtt]
     cpus: ${MQTT_CPUS:-0.75}

@@ -54,6 +54,10 @@ func loadRoutingRuntime(ctx context.Context, logger *slog.Logger, identityEnable
 		if err != nil {
 			return routingRuntime{}, errors.New("durable route audit store is unavailable")
 		}
+		if err := postgresAudit.VerifyProductSchema(ctx); err != nil {
+			postgresAudit.Close()
+			return routingRuntime{}, fmt.Errorf("durable route audit store schema incompatible: %w", err)
+		}
 		audit = postgresAudit
 		closeAudit = postgresAudit.Close
 	} else if os.Getenv("S0_ALLOW_MEMORY_ROUTE_AUDIT") == "true" {

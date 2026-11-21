@@ -1,0 +1,38 @@
+services:
+  ai-solver-service:
+    profiles: ["intelligence"]
+    restart: unless-stopped
+    build:
+      context: ../../..
+      dockerfile: services/ai-solver-service/Dockerfile
+    image: ${AI_SOLVER_SERVICE_IMAGE:-hvac/ai-solver-service:0.1.0-dev}
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      AI_SOLVER_HTTP_ADDR: ":19099"
+    expose: ["19099"]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:19099/healthz', timeout=2).read()"]
+      interval: 10s
+      timeout: 4s
+      retries: 6
+      start_period: 10s
+    networks: [application]
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cpus: ${AI_SOLVER_SERVICE_CPUS:-0.50}
+    mem_limit: ${AI_SOLVER_SERVICE_MEMORY_LIMIT:-512m}
+    mem_reservation: ${AI_SOLVER_SERVICE_MEMORY_RESERVATION:-128m}
+    logging:
+      driver: json-file
+      options:
+        max-size: ${DOCKER_LOG_MAX_SIZE:-20m}
+        max-file: "${DOCKER_LOG_MAX_FILES:-5}"
+
+  optimization-service:
+    environment:
+      OPTIMIZATION_ALLOWED_SOLVER_HOSTS: ${OPTIMIZATION_ALLOWED_SOLVER_HOSTS:-ai-solver-service}
+    depends_on:
+      ai-solver-service:
+        condition: service_healthy
+        required: false

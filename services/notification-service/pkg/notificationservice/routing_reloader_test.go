@@ -197,7 +197,7 @@ func TestRoutingReloaderConcurrentReadsReloadsAndBadInjectionsRace(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reloader.logger.Store(slog.New(slog.NewJSONHandler(&bytes.Buffer{}, nil)))
+	reloader.logger.Store(slog.New(slog.NewJSONHandler(&syncBuffer{}, nil)))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

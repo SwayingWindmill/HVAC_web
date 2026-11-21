@@ -461,3 +461,41 @@ node scripts/phase1-wsl-compose.mjs --integration --intelligence up -d --no-deps
 ```
 
 只改了 `alert-receiver/` 里的密钥文件不会触发这一步（它们不在发布里），按上面「告警怎么送到人」手工重建。
+
+## 追踪队列丢弃跨度
+
+告警：`Phase1TelemetrySpansDropped`（`increase(s0_telemetry_dropped_spans[5m]) > 0` 连续成立 5 分钟）。
+
+各 Go 服务把追踪跨度放进有固定上限的异步队列再发往 OpenTelemetry 收集器（`OTEL_EXPORTER_OTLP_ENDPOINT`）。队列满时为了不拖慢或卡死业务请求，新产生的跨度会被直接丢弃并累加 `s0_telemetry_dropped_spans`。业务功能照常运行，只是排查问题时追踪链路会缺段。
+
+常见原因：
+
+1. `otel-collector` 容器停止、重启或后端处理变慢，导致每次导出都卡满 750ms 超时，把队列堵死。
+2. 观测档位没开 `otel-collector`（例如只开了核心指标档），却仍配置了指向 `otel-collector:4318` 的导出地址。
+3. 短时间内请求或后台任务突然暴增，跨度产生速度持续超过异步队列消费速度。
+
+现场排查动作：
+
+1. 先确认对应服务的业务接口和核心指标是否正常（丢弃跨度不会阻塞数据库事务和接口响应）。
+2. 访问或查看该服务诊断端口的 `/diagnostics`（`telemetry.droppedSpans` 与 `telemetry.failedExports`）以及 `/metrics` 中的 `s0_telemetry_dropped_spans`、`s0_telemetry_failed_exports`，确认是否伴随 `S0TelemetryExportFailures` 告警。
+3. 在服务器上执行 `docker ps -a --filter name=otel-collector` 和 `docker logs --tail 80 hvac-platform-otel-collector-1`，确认收集器与网络是否通畅；若开了全量追踪档，同时检查 `tempo` 容器状态和磁盘余量。
+4. 只有确认收集器完全健康且队列仍持续打满时，再评估内存余量后调整队列大小，不要靠盲目调大队列掩盖收集器堵塞。
+
+## 核心服务就绪探针依赖异常
+
+告警：`Phase1DependencyReadinessDegraded`（`min by (service, dependency) (s0_dependency_up{required="true"}) == 0` 连续成立 2 分钟）。
+
+各 Go 服务的诊断端口 `/health/ready` 会并发探测自身依赖。标为必需（`required="true"`）的依赖一旦连续探测失败，`/health/ready` 会返回 HTTP 503 并把 `s0_dependency_up{required="true"}` 置为 `0`，让容器或网关把该实例摘出就绪状态；非必需依赖（`required="false"`）异常只标为降级（`degraded`），不会触发本告警。
+
+常见原因：
+
+1. 对应依赖（如 PostgreSQL、ClickHouse、Redis、身份服务或下游核心服务）进程宕机、连接池打满或正在重启。
+2. 数据库表结构预检未通过、密码或内部 TLS 证书过期/权限不对，导致探测连接被拒或超时（单次探针超时 1 秒）。
+3. Docker 内部网络异常或容器 DNS 解析失败。
+
+现场排查动作：
+
+1. 从告警标签看清是哪一个 `service` 的哪一个 `dependency` 失败（如 `service="energy-api"`、`dependency="postgres-session"`）。
+2. `/health/ready` 返回体里的错误详情已脱敏为 `[REDACTED]`，要看真实原因直接查对应服务容器日志里的 `readiness_dependency_failed` 记录：`docker logs --tail 100 <容器名> | grep readiness_dependency_failed`。
+3. 核对被指出的依赖容器状态与同时间段告警（`Phase1PostgresDown`、`Phase1ClickHouseDown`、`Phase1RedisDown`、`Phase1ContainerUnhealthy`），优先恢复底层数据库或依赖服务。
+4. 若底层服务正常而探针仍失败，检查该服务环境变量里的连接地址、内部证书目录（`INTERNAL_PKI_DIR`）挂载与文件权限，确认恢复后 `/health/ready` 返回 `ready` 且 `s0_dependency_up` 回到 `1`。

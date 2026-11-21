@@ -7,17 +7,17 @@
   "authorityLock": {
     "routeOwnership": {
       "path": "contracts/ownership/route-ownership.v1.json",
-      "registryRevision": 60,
-      "sha256": "fe1372636c56faae42b6047f06cfd65d8a1d7719d2bf6f7ec76bf957f34512f6"
+      "registryRevision": 62,
+      "sha256": "e19bf220098e1501f134ac307d3c207975c56b54eda0a85b967efbd6bee3cd83"
     },
     "dataOwnership": {
       "path": "contracts/ownership/data-ownership.v1.json",
-      "registryRevision": 23,
-      "sha256": "4001240249fe2ab1367b972c9a2adf0229153e074e23908ed4915560717e6624"
+      "registryRevision": 24,
+      "sha256": "ebc70a71e6c3cae46c6fb1037311e077047933ec27b36bfe8b86793d01cd56d9"
     },
     "httpContract": {
       "path": "contracts/http/platform-gateway.openapi.yaml",
-      "sha256": "bd8b19454e8ba4031041da7062ddc4761eef7641653d59b130049cf63c0fcb4c"
+      "sha256": "52d58484606efeebc775fc07c44488138b725123cb9cbf194fc97f3c4dc5ab0b"
     },
     "edgeReplicationContract": {
       "path": "contracts/mqtt/edge-replication-envelope.v1.schema.json",
@@ -26,7 +26,9 @@
   },
   "schemaContract": {
     "migrationManifest": "deploy/platform/phase1/migrations/manifest.v1.json",
-    "migrationManifestSha256": "ece120cdd5b3a9faf1853315489e27a438b4f7521885d6226affdd4a14ed8db5",
+    "migrationManifestSha256": "9826b24073aa86ef0e316140189acbcd50f96a2dd8a14c2d22d6058318eb886f",
+    "clickhouseMigrationManifest": "deploy/platform/phase1/clickhouse-migrations/clickhouse-manifest.v1.json",
+    "clickhouseMigrationManifestSha256": "f7309ccc57ec6092143452be92ee9b9b5d758f381fb3ef678a106a05d15ba644",
     "compatibilityMode": "exact-product-and-manifest",
     "skipAllowed": false,
     "requiredDatabases": [

@@ -22,3 +22,4 @@ nginx	hvac/hvac-web-real:0.1.0-dev	web	required	-
 operations-agent-service	hvac/operations-agent-service:0.1.0-dev	node	required	-
 phase1-migrator	hvac/phase1-migrator:0.1.0-dev	migrator	required	-
 wecom-alert-adapter	hvac/wecom-alert-adapter:0.1.0-dev	static	required	./cmd/wecom-alert-adapter
+mqtt-broker	hvac/mqtt-broker:0.1.0-dev	mqtt	required	infra/telemetry/mqtt/crl-plugin

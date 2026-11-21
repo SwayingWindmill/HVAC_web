@@ -48,3 +48,39 @@ func TestVerifyProductSchemaRejectsMissingRow(t *testing.T) {
 		t.Fatal("missing schema row was accepted")
 	}
 }
+
+func TestVerifyProductSchemaRejectsNilQuerier(t *testing.T) {
+	if err := VerifyProductSchema(context.Background(), nil, "0.1.0"); err == nil {
+		t.Fatal("nil querier was accepted")
+	}
+}
+
+func TestVerifyEnvProductSchemaSkipsWhenUnsetOrBlank(t *testing.T) {
+	for _, value := range []string{"", "   "} {
+		t.Setenv("PHASE1_PRODUCT_VERSION", value)
+		if err := VerifyEnvProductSchema(context.Background(), nil); err != nil {
+			t.Fatalf("expected unset/blank PHASE1_PRODUCT_VERSION=%q to skip verification, got %v", value, err)
+		}
+	}
+}
+
+func TestVerifyEnvProductSchemaEnforcesMatchingVersion(t *testing.T) {
+	t.Setenv("PHASE1_PRODUCT_VERSION", " 0.1.0 ")
+	if err := VerifyEnvProductSchema(context.Background(), fakeQuerier{row: fakeRow{value: "0.1.0"}}); err != nil {
+		t.Fatalf("matching trimmed version rejected: %v", err)
+	}
+}
+
+func TestVerifyEnvProductSchemaRejectsMismatchedVersion(t *testing.T) {
+	t.Setenv("PHASE1_PRODUCT_VERSION", "0.2.0")
+	if err := VerifyEnvProductSchema(context.Background(), fakeQuerier{row: fakeRow{value: "0.1.0"}}); err == nil {
+		t.Fatal("mismatched version was accepted when PHASE1_PRODUCT_VERSION was set")
+	}
+}
+
+func TestVerifyEnvProductSchemaRejectsMissingRowWhenEnvSet(t *testing.T) {
+	t.Setenv("PHASE1_PRODUCT_VERSION", "0.1.0")
+	if err := VerifyEnvProductSchema(context.Background(), fakeQuerier{row: fakeRow{err: errors.New("no rows in result set")}}); err == nil {
+		t.Fatal("missing schema row was accepted when PHASE1_PRODUCT_VERSION was set")
+	}
+}

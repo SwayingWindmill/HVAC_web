@@ -115,9 +115,13 @@ declare -a planned_previous=()
 
 while IFS=$'\t' read -r service image kind required package <&3; do
   [[ -z "${service:-}" || "$service" == \#* ]] && continue
-  resolved="$(resolve_image "$service" "$image")"
-  if [[ -z "$resolved" && "$kind" == static ]]; then
+  if [[ "$kind" == mqtt ]]; then
     resolved="$image"
+  else
+    resolved="$(resolve_image "$service" "$image")"
+    if [[ -z "$resolved" && "$kind" == static ]]; then
+      resolved="$image"
+    fi
   fi
   if [[ -z "$resolved" ]]; then
     if [[ "$required" == required ]]; then
@@ -131,7 +135,7 @@ while IFS=$'\t' read -r service image kind required package <&3; do
   previous=""
   if docker image inspect "$resolved" >/dev/null 2>&1 </dev/null; then
     previous="$(rollback_tag "$resolved")"
-  elif [[ "$kind" != static ]]; then
+  elif [[ "$kind" != static && "$kind" != mqtt ]]; then
     echo "error: refusing to replace ${resolved}; the image is not present." >&2
     exit 1
   fi
@@ -167,7 +171,7 @@ if [[ "$rebuild_base" == 1 ]]; then
   fi
   declare -a rebuilt=()
   for index in "${!planned_services[@]}"; do
-    [[ "${planned_kinds[$index]}" == static ]] && continue
+    [[ "${planned_kinds[$index]}" == static || "${planned_kinds[$index]}" == mqtt ]] && continue
     image="${planned_images[$index]}"
     staged="${image%:*}:rebuilt-${stamp}"
     staged_bases+=("$staged")
@@ -192,7 +196,7 @@ for index in "${!planned_services[@]}"; do
   candidates+=("$candidate")
   from="$image"
   base_id=""
-  if [[ "$kind" != static ]]; then
+  if [[ "$kind" != static && "$kind" != mqtt ]]; then
     stable="$(stable_base "$image")"
     from="${stable%%$'\t'*}"
     base_id="${stable#*$'\t'}"
@@ -285,6 +289,32 @@ FROM ${from}
 COPY --chown=65532:65532 service /wecom-alert-adapter
 USER 65532:65532
 ENTRYPOINT ["/wecom-alert-adapter"]
+EOF
+      ;;
+    mqtt)
+      if [[ ! -s "$release/mqtt/mosquitto_hvac_crl.so" ]]; then
+        echo "error: release is missing mqtt/mosquitto_hvac_crl.so." >&2
+        exit 1
+      fi
+      from=""
+      if docker image inspect eclipse-mosquitto:2.1.2-alpine >/dev/null 2>&1 </dev/null; then
+        from="eclipse-mosquitto:2.1.2-alpine"
+      else
+        candidate_from="$(resolve_image "$service" eclipse-mosquitto:2.1.2-alpine)"
+        if [[ -n "$candidate_from" && "$candidate_from" != "$image" ]]; then
+          from="$candidate_from"
+        fi
+      fi
+      if [[ -z "$from" ]]; then
+        echo "error: $service is built FROM the local eclipse-mosquitto:2.1.2-alpine image, which is not on this host." >&2
+        exit 1
+      fi
+      cp "$release/mqtt/mosquitto_hvac_crl.so" "$context/mosquitto_hvac_crl.so"
+      chmod 755 "$context/mosquitto_hvac_crl.so"
+      cat > "$context/Dockerfile" <<EOF
+FROM ${from}
+COPY --chown=0:0 mosquitto_hvac_crl.so /usr/lib/mosquitto_hvac_crl.so
+RUN chmod 0755 /usr/lib/mosquitto_hvac_crl.so
 EOF
       ;;
     migrator)

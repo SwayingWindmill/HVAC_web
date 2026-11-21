@@ -131,6 +131,11 @@ test('a site without a writable supply setpoint offers a prefilled manual work o
   await expect(dialog.getByLabel('标题')).toHaveValue('人工调整冷冻水供水温度至 8.1 °C');
   await expect(dialog.getByLabel('说明')).toHaveValue(/估算电费 ¥51/);
   await dialog.getByRole('button', { name: '创建工单' }).click();
+  await expect(dialog).toBeHidden();
+
+  const orderLink = proposal.getByRole('link', { name: /已转为人工调温工单 · 待处理/ });
+  await expect(orderLink).toBeVisible();
+  await expect(proposal.getByRole('button', { name: '创建人工调温工单' })).toBeHidden();
 
   const createdWrite = gateway.writes.find((write) => write.path === `/api/v1/sites/${SITE_ID}/work-orders`);
   expect(createdWrite?.body).toMatchObject({
@@ -144,10 +149,6 @@ test('a site without a writable supply setpoint offers a prefilled manual work o
       },
     ],
   });
-
-  const orderLink = proposal.getByRole('link', { name: /已转为人工调温工单 · 待处理/ });
-  await expect(orderLink).toBeVisible();
-  await expect(proposal.getByRole('button', { name: '创建人工调温工单' })).toBeHidden();
 
   // Reloading keeps the unclosed work order linked instead of offering duplicate creation.
   await page.reload();
@@ -310,11 +311,11 @@ test('a stop recommendation for an idle tower is confirmed as a high-risk comman
   await confirm.getByRole('checkbox', { name: '我已和现场确认可以停' }).check();
   await confirm.getByRole('button', { name: '提交停机' }).click();
 
+  await expect(staging).toContainText('已提交 · 待审批');
+  await expect(staging.getByRole('link', { name: '在运行控制查看 ›' })).toBeVisible();
   expect(gateway.writes.find((write) => write.path === '/api/v1/commands')?.body).toEqual({
     assetId: tower.id, commandPointId: stopPoint.id, parameters: {}, verificationCode: '246810',
   });
-  await expect(staging).toContainText('已提交 · 待审批');
-  await expect(staging.getByRole('link', { name: '在运行控制查看 ›' })).toBeVisible();
 });
 
 test('under manual control the stop recommendations say they are paused and cannot be confirmed', async ({ page, gateway }) => {
@@ -889,4 +890,64 @@ test('governance summary lazy-loads on analysis tab without recommendation, show
   await expect(reloadedGov).toContainText('外部协同优化服务');
   await expect(reloadedGov).not.toContainText('https://external-optimizer.example/solve');
   await expect(reloadedGov).toContainText('尚无满足同湿球与同冷负荷分箱条件的对照周期，积累闭环与基准周期后将自动展示。');
+});
+
+test('canary bindings dialog manages loop routing and negative samples drawer inspects & exports flywheel', async ({ page, gateway }) => {
+  void gateway;
+  await page.goto(`/energy-analysis/optimization?site=${SITE_ID}`);
+  await page.getByRole('tab', { name: '模型与负荷分析' }).click();
+
+  const govPanel = page.getByRole('region', { name: '策略路由与运行治理' });
+  await expect(govPanel).toBeVisible();
+
+  // 1. Open CanaryBindingsDialog and test allowlist validation + CRUD.
+  await govPanel.getByRole('button', { name: '管理灰度路由' }).click();
+  const canaryDialog = page.getByRole('dialog');
+  await expect(canaryDialog).toContainText('站点控制回路灰度路由管理');
+  await expect(canaryDialog).toContainText('冷冻泵变频回路');
+  await expect(canaryDialog).toContainText('ai-solver-service:8090');
+
+  // Switch solver mode to external Python service and submit an unallowlisted host.
+  await canaryDialog.getByRole('combobox', { name: '目标优化策略' }).click();
+  await page.getByRole('option', { name: '外部 Python 优化服务' }).click();
+  await canaryDialog.getByLabel('外部服务地址').fill('http://evil.example.com:8090');
+  await canaryDialog.getByRole('button', { name: '保存灰度绑定' }).click();
+  await expect(canaryDialog).toContainText('外部优化服务地址不在允许名单内');
+
+  // Click the allowlisted host badge to fill http://ai-solver-service:8090 and save.
+  await canaryDialog.getByRole('button', { name: 'ai-solver-service:8090' }).click();
+  await canaryDialog.getByRole('button', { name: '保存灰度绑定' }).click();
+  await expect(canaryDialog).toContainText('全冷站主回路');
+  await expect(canaryDialog).toContainText('外部 Python 优化服务');
+
+  // Revert PLANT back to default.
+  const plantRow = canaryDialog.getByRole('row', { name: /全冷站主回路/ });
+  await plantRow.getByRole('button', { name: '切回默认' }).click();
+  await expect(canaryDialog.getByRole('row', { name: /全冷站主回路/ })).toHaveCount(0);
+
+  await canaryDialog.getByRole('button', { name: '关闭' }).click();
+  await expect(canaryDialog).toBeHidden();
+
+  // 2. Open NegativeSamplesDrawer, filter by kind, expand trace details, and export JSONL.
+  await govPanel.getByRole('button', { name: '查看负样本明细' }).click();
+  const drawer = page.getByRole('dialog');
+  await expect(drawer).toContainText('安全护栏负样本明细与复盘导出');
+  await expect(drawer).toContainText('共 2 条');
+  await expect(drawer).toContainText('单步变化超限');
+
+  await drawer.getByRole('combobox', { name: '按负样本类别筛选' }).click();
+  await page.getByRole('option', { name: '护栏限幅修正' }).click();
+  await expect(drawer).toContainText('共 1 条');
+
+  await drawer.getByRole('button', { name: '展开护栏判定细节' }).first().click();
+  await expect(drawer).toContainText('安全护栏判定轨迹');
+  await expect(drawer).toContainText('单步调幅限速');
+  await expect(drawer).toContainText('10.50 → 8.50');
+  await expect(drawer).toContainText('发生时刻采集快照');
+  await expect(drawer).toContainText('520 kW');
+
+  const downloadPromise = page.waitForEvent('download');
+  await drawer.getByRole('button', { name: '导出 JSONL' }).click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe('negative-samples-14d.jsonl');
 });

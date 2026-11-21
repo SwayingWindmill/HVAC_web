@@ -179,13 +179,48 @@ for (const file of files) {
     addReason(file, 'Go code, dependencies or Go check rules changed; lint and vulnerability-scan every Go module');
   }
   match(file === '.golangci.yml', () => {});
-  match(file === 'AGENTS.md' || file === 'CLAUDE.md' || file === 'README.md' || file === 'LICENSE' || file === 'CHANGELOG.md' || file === 'GLOSSARY.md' || file === '.mcp.json' || file === '.mwgrc' || file.startsWith('.github/ISSUE_TEMPLATE/'), () => {
+  match(file === 'AGENTS.md' || file === 'CLAUDE.md' || file === 'README.md' || file === 'LICENSE' || file === 'GLOSSARY.md' || file === '.mcp.json' || file === '.mwgrc' || file.startsWith('.github/ISSUE_TEMPLATE/'), () => {
     addReason(file, 'repository documentation or metadata only');
+  });
+  match(file === 'CHANGELOG.md', () => {
+    add(contractProfiles, ['core']);
+    addReason(file, 'CHANGELOG.md changed; verify rollup policy in contracts core');
+  });
+  match(file.startsWith('changelog.d/'), () => {
+    addReason(file, 'changelog fragment changed (validated in static gate)');
   });
   match(file.startsWith('.github/workflows/'), () => selectBroad(file, 'workflow behavior changed'));
   match(file.startsWith('deploy/platform/phase1/migrations/'), () => {
-    selectBroad(file, 'Phase 1 migration set changed');
+    add(contractProfiles, ['core']);
     add(integrationProfiles, ['platform']);
+    addReason(file, 'Phase 1 migration set changed');
+  });
+  match(file.startsWith('deploy/platform/phase1/cd/'), () => {
+    selectPlatform(file, 'Phase 1 CD script or test changed');
+  });
+  match(
+    file.startsWith('deploy/platform/phase1/')
+      && !file.startsWith('deploy/platform/phase1/migrations/')
+      && !file.startsWith('deploy/platform/phase1/clickhouse-migrations/')
+      && !file.startsWith('deploy/platform/phase1/cd/'),
+    () => {
+      add(contractProfiles, ['core']);
+      if (file.includes('compose') || file.includes('postgres') || file.includes('backup') || file.includes('clickhouse')) {
+        add(integrationProfiles, ['platform']);
+      }
+      addReason(file, 'Phase 1 deployment config changed');
+    },
+  );
+  match(file.startsWith('tools/promo-video/'), () => {
+    addReason(file, 'standalone promo-video tooling changed');
+  });
+  match(file.startsWith('deploy/platform/phase1/clickhouse-migrations/'), () => {
+    selectBroad(file, 'Phase 1 ClickHouse migration set changed');
+    add(integrationProfiles, ['platform', 'analytics']);
+  });
+  match(file.startsWith('infra/observability/'), () => {
+    add(contractProfiles, ['core']);
+    addReason(file, 'observability alerts or dashboards changed');
   });
   if (phase1Migrations.has(file)) {
     add(integrationProfiles, ['platform']);
@@ -257,6 +292,7 @@ for (const file of files) {
     selectRegistry(file, 'site onboarding manifest changed');
     selectTelemetry(file, 'site onboarding manifest changed');
     selectCommand(file, 'site onboarding manifest changed');
+    selectAlarm(file, 'site onboarding manifest changed');
   });
   match(file.startsWith('libs/alarmauth/') || file.startsWith('libs/alarmmodel/') || file.startsWith('modules/alarm/') || file.startsWith('infra/alarm/'), () => selectAlarm(file, 'Alarm capability changed', { integration: true }));
   match(file.startsWith('libs/workorderauth/') || file.startsWith('libs/workordermodel/') || file.startsWith('modules/workorder/') || file.startsWith('infra/workorder/'), () => selectWorkOrder(file, 'Work Order capability changed', { integration: true }));
@@ -301,6 +337,10 @@ for (const file of files) {
       'scripts/javascript-tooling-baseline.json',
       'scripts/hooks/pre-tool-guard.ts',
       'scripts/test-pre-tool-guard.ts',
+      'scripts/check-go-test-hygiene.ts',
+      'scripts/go-test-sleep-baseline.json',
+      'scripts/test-go-test-hygiene.ts',
+      'scripts/run-preflight.ts',
     ].includes(file), () => addReason(file, 'repository governance baseline or pre-tool hook guard changed (verified in static gate)'));
     scriptMatch(file === 'scripts/web-as-cast-baseline.json', () => selectWeb(file, 'web type-cast baseline changed'));
     scriptMatch(lower.includes('rms') || lower.includes('browser-audit') || lower.includes('design-system') || lower.includes('verify-runtime') || lower.includes('verify-live') || lower.includes('local-administrator-browser') || lower.startsWith('scripts/test-real-'), () => selectWeb(file, 'browser, RMS or Web model test automation changed'));
@@ -320,15 +360,25 @@ for (const file of files) {
     scriptMatch(lower.includes('s5-') || lower.includes('work-order') || lower.includes('workorder'), () => selectWorkOrder(file, 'Work Order automation changed', { integration: lower.includes('postgres'), browser: lower.includes('browser') }));
     scriptMatch(lower.includes('analytics'), () => selectAnalytics(file, 'analytics automation changed', { integration: lower.includes('history') || lower.includes('cube') }));
     scriptMatch(lower.includes('operations-agent'), () => selectOperationsAgent(file, 'Operations Agent automation changed', { integration: lower.includes('postgres') || lower.includes('migration') }));
-    scriptMatch(lower.includes('concentrator') || lower.includes('mqtt-broker-acl') || lower.includes('gateway-nodered-tunnel') || lower.includes('nodered'), () => selectTelemetry(file, 'Connectivity or MQTT automation changed'));
+    scriptMatch(lower.includes('concentrator') || lower.includes('mqtt-broker-acl') || lower.includes('mqtt-broker-crl') || lower.includes('gateway-nodered-tunnel') || lower.includes('nodered'), () => selectTelemetry(file, 'Connectivity or MQTT automation changed'));
     // The migration freeze and convention checks run in the contracts core; their tests run in every static gate.
     scriptMatch(
       lower.includes('ownership') ||
         lower.includes('contract') ||
         lower.includes('production-rollout') ||
         lower.includes('migration-freeze') ||
-        lower.includes('migration-conventions'),
+        lower.includes('migration-conventions') ||
+        lower.includes('sync-phase1-migrations') ||
+        lower.includes('clickhouse-sql') ||
+        file === 'scripts/check-clickhouse-migrations.ts' ||
+        file === 'scripts/test-clickhouse-migrations.ts' ||
+        file === 'scripts/changelog-fragments.ts' ||
+        file === 'scripts/test-changelog-fragments.ts',
       () => add(contractProfiles, ['core']),
+    );
+    scriptMatch(
+      file === 'scripts/run-phase1-clickhouse-restore-test.ts',
+      () => selectPlatform(file, 'Phase 1 ClickHouse restore drill changed', { integration: true }),
     );
     if (!scriptMatched) {
       unknown = true;
@@ -353,6 +403,12 @@ for (const file of files) {
   }
 }
 
+const unitProfileList = sorted(unitProfiles);
+const unitGoLint = unitProfiles.has('go');
+const unitWeb = unitProfiles.has('web');
+const unitDomainProfiles = unitProfileList.filter((profile) => profile !== 'go' && profile !== 'web');
+const unitDomain = unitDomainProfiles.length > 0;
+
 const classification = {
   schemaVersion: 1,
   changedFiles: sorted(files),
@@ -360,10 +416,14 @@ const classification = {
   unknown,
   contracts: contractProfiles.size > 0,
   units: unitProfiles.size > 0,
+  unitGoLint,
+  unitWeb,
+  unitDomain,
   integrations: integrationProfiles.size > 0,
   browsers: browserProfiles.size > 0,
   contractProfiles: sorted(contractProfiles),
-  unitProfiles: sorted(unitProfiles),
+  unitProfiles: unitProfileList,
+  unitDomainProfiles,
   integrationProfiles: sorted(integrationProfiles),
   browserProfiles: sorted(browserProfiles),
   reasons,
@@ -377,10 +437,14 @@ if (process.env.GITHUB_OUTPUT) {
   const outputs = [
     `contracts=${classification.contracts}`,
     `units=${classification.units}`,
+    `unit_go_lint=${classification.unitGoLint}`,
+    `unit_web=${classification.unitWeb}`,
+    `unit_domain=${classification.unitDomain}`,
     `integrations=${classification.integrations}`,
     `browsers=${classification.browsers}`,
     `contract_profiles=${classification.contractProfiles.join(',')}`,
     `unit_profiles=${classification.unitProfiles.join(',')}`,
+    `unit_domain_profiles=${classification.unitDomainProfiles.join(',')}`,
     `integration_profiles=${classification.integrationProfiles.join(',')}`,
     `browser_profiles=${classification.browserProfiles.join(',')}`,
   ];
