@@ -503,7 +503,6 @@ func TestConfigShadowPostgresRLSConcurrencyAndDrift(t *testing.T) {
 	if err != nil || idempotentRes.Changed || idempotentRes.Skipped || idempotentRes.Shadow.Desired.DesiredRevision != 13 {
 		t.Fatalf("expected idempotent unchanged rev 13, got %+v err=%v", idempotentRes, err)
 	}
-	// Update register without repeating endpoint/unitId inherits 10.10.0.10:502 & unitId=7 and bumps rev 14.
 	tplRegUpdated := append(slices.Clone(tplReg), connectivity.GatewayModbusRegisterMapping{
 		PointCode: "tpl_return_temp", SemanticChannel: "ReturnTemperature", FunctionCode: 3,
 		Address: 102, RegisterCount: 1, RawType: "INT16", ByteOrder: "BIG_ENDIAN", WordOrder: "BIG_ENDIAN",
@@ -521,6 +520,18 @@ func TestConfigShadowPostgresRLSConcurrencyAndDrift(t *testing.T) {
 		Endpoint: &endpoint10, UnitID: &unit7, Registers: tplReg, Reason: "cross tenant denied",
 	}); !errors.Is(err, connectivity.ErrCredentialForbidden) {
 		t.Fatalf("expected ErrCredentialForbidden for cross-tenant upsert, got %v", err)
+	}
+	removedRes, err := store.UpsertGatewayTemplateDriverConfig(ctx, gatewayA, connectivity.TemplateDriverUpsertInput{
+		TenantID: tenantA, DeviceKey: "tpl-chiller-1", Remove: true, Reason: "remove template driver",
+	})
+	if err != nil || !removedRes.Changed || removedRes.Skipped || removedRes.Shadow.Desired == nil || removedRes.Shadow.Desired.DesiredRevision != 15 || len(removedRes.Shadow.Desired.DriverConfigs) != 0 {
+		t.Fatalf("expected rev 15 removing template driver, got %+v err=%v", removedRes, err)
+	}
+	removedRepeat, err := store.UpsertGatewayTemplateDriverConfig(ctx, gatewayA, connectivity.TemplateDriverUpsertInput{
+		TenantID: tenantA, DeviceKey: "tpl-chiller-1", Remove: true, Reason: "idempotent repeat remove",
+	})
+	if err != nil || removedRepeat.Changed || removedRepeat.Skipped || removedRepeat.Shadow.Desired.DesiredRevision != 15 {
+		t.Fatalf("expected idempotent repeat remove at rev 15, got %+v err=%v", removedRepeat, err)
 	}
 
 	// Query without app.tenant_id returns 0 rows under FORCE ROW LEVEL SECURITY.

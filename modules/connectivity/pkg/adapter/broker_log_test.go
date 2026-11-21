@@ -74,19 +74,16 @@ func TestBrokerLogWatcherParsesConnectAndDebouncedDisconnect(t *testing.T) {
 	)
 	defer watcher.Close()
 
-	// Non-gateway internal clients are ignored.
 	watcher.HandleLine("1795081947: New client connected from 172.18.0.5:51234 as connectivity-host-1 (p5, c0, k30, u'mqtt-telemetry-adapter').")
 	watcher.HandleLine("1795081948: Client connectivity-host-1 disconnected.")
 	watcher.HandleLine("1795081949: Socket error on client <unknown>, disconnecting.")
 
-	// Gateway connects using username=gatewayID even when MQTT clientId has a custom suffix.
 	clientA := "eg8200-018f3e00"
 	watcher.HandlePublish(&paho.Publish{
 		Topic:   BrokerNoticeLogTopic,
 		Payload: []byte("1795081950: New client connected from 10.0.0.8:44312 as " + clientA + " (p5, c0, k30, u'" + testGatewayA + "')."),
 	})
 
-	// Quick disconnect followed by fast reconnect within debounce window cancels offline callback.
 	watcher.HandleLine("1795081951: Client " + clientA + " closed its connection.")
 	timersMu.Lock()
 	if len(scheduledTimers) != 1 || scheduledTimers[0].delay != 25*time.Millisecond {
@@ -103,7 +100,6 @@ func TestBrokerLogWatcherParsesConnectAndDebouncedDisconnect(t *testing.T) {
 	if !firstStopped {
 		t.Fatal("expected fast reconnect to stop pending disconnect debounce timer")
 	}
-	// Even an in-flight overdue timer callback firing after reconnect must be fenced out.
 	firstTimer.fire()
 
 	callsMu.Lock()
@@ -112,7 +108,6 @@ func TestBrokerLogWatcherParsesConnectAndDebouncedDisconnect(t *testing.T) {
 	}
 	callsMu.Unlock()
 
-	// Multiple simultaneous clients for the same gateway do not trigger until ALL disconnect.
 	watcher.HandleLine("1795081952: New client connected from 10.0.0.8:44315 as " + clientA + "-aux (p5, c0, k30, u'" + testGatewayA + "').")
 	watcher.HandleLine("1795081953: Client " + clientA + " disconnected.")
 	timersMu.Lock()
@@ -151,8 +146,6 @@ func TestBrokerLogWatcherParsesConnectAndDebouncedDisconnect(t *testing.T) {
 		t.Fatal("timed out waiting for debounced disconnect callback")
 	}
 
-	// Disconnect after connectivity restart without prior connect notice still works if clientId is UUIDv7
-	// using default real time.AfterFunc scheduling.
 	realWatcher := NewBrokerLogWatcher(
 		t.Context(),
 		func(_ context.Context, gatewayID string, disconnectedAt time.Time) {
@@ -194,7 +187,6 @@ func TestProcessorHandleBrokerGatewayDisconnectFencesAndReportsCoverage(t *testi
 		t.Fatalf("NewProcessor: %v", err)
 	}
 
-	// Gateway connects with session s1 at t=1000ms.
 	if !processor.sessions().ApplyTransition(SessionTransition{
 		GatewayID:    testGatewayA,
 		SessionID:    "s1",
@@ -207,7 +199,6 @@ func TestProcessorHandleBrokerGatewayDisconnectFencesAndReportsCoverage(t *testi
 		t.Fatal("expected initial s1 connect to be accepted")
 	}
 
-	// A stale disconnect timestamped <= connect event time (900ms < 1000ms) is fenced out.
 	if err := processor.HandleBrokerGatewayDisconnect(t.Context(), testGatewayA, time.UnixMilli(900).UTC()); err != nil {
 		t.Fatalf("HandleBrokerGatewayDisconnect stale: %v", err)
 	}
@@ -216,7 +207,6 @@ func TestProcessorHandleBrokerGatewayDisconnectFencesAndReportsCoverage(t *testi
 		t.Fatalf("expected stale broker disconnect to keep session online, got %+v", snap)
 	}
 
-	// Genuine disconnect after connect (2000ms > 1000ms) flips presence offline and reports child coverage unavailable.
 	if err := processor.HandleBrokerGatewayDisconnect(t.Context(), testGatewayA, time.UnixMilli(2000).UTC()); err != nil {
 		t.Fatalf("HandleBrokerGatewayDisconnect live: %v", err)
 	}
@@ -242,5 +232,65 @@ func TestProcessorHandleBrokerGatewayDisconnectFencesAndReportsCoverage(t *testi
 	}
 	if len(gotReport.DeviceIDs) != 2 {
 		t.Fatalf("expected gateway + child device in coverage report, got %+v", gotReport.DeviceIDs)
+	}
+}
+
+func TestHandleBrokerGatewayDisconnectIgnoresForwardGatewayClockSkew(t *testing.T) {
+	t.Parallel()
+
+	spy := newSpyIdentities(testDeviceID)
+	telemetry := &fakeTelemetry{}
+	presence := make(map[string]bool)
+	var presenceMu sync.Mutex
+
+	processor, err := NewProcessor(
+		spy,
+		telemetry,
+		WithGatewayPresenceHook(func(gatewayID string, online bool) {
+			presenceMu.Lock()
+			presence[gatewayID] = online
+			presenceMu.Unlock()
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewProcessor: %v", err)
+	}
+	processor.now = func() time.Time { return time.UnixMilli(1000).UTC() }
+
+	statusPayload := []byte(`{"v":"1.0","gw":"` + testGatewayA + `","sid":"s1","seq":1,"ts":601000,"online":true}`)
+	if _, err := processor.Process(t.Context(), "hvac/v1/"+testGatewayA+"/up/status", statusPayload); err != nil {
+		t.Fatalf("Process status: %v", err)
+	}
+	telemetryFrame := telemetryPayloadWithTimestamps(testGatewayA, testMessageID, 1, false, 601500, "METER-01", "active_power")
+	if _, err := processor.Process(t.Context(), "hvac/v1/"+testGatewayA+"/up/telemetry", telemetryFrame); err != nil {
+		t.Fatalf("Process telemetry: %v", err)
+	}
+
+	if err := processor.HandleBrokerGatewayDisconnect(t.Context(), testGatewayA, time.UnixMilli(900).UTC()); err != nil {
+		t.Fatalf("HandleBrokerGatewayDisconnect stale: %v", err)
+	}
+	snap, ok := processor.sessions().Snapshot(testGatewayA)
+	if !ok || !snap.Online {
+		t.Fatalf("expected stale broker disconnect to keep session online, got %+v", snap)
+	}
+
+	if err := processor.HandleBrokerGatewayDisconnect(t.Context(), testGatewayA, time.UnixMilli(2000).UTC()); err != nil {
+		t.Fatalf("HandleBrokerGatewayDisconnect skewed: %v", err)
+	}
+	snap, ok = processor.sessions().Snapshot(testGatewayA)
+	if !ok || snap.Online {
+		t.Fatalf("expected broker disconnect at server t=2000ms to overcome forward gateway clock skew, got %+v", snap)
+	}
+	presenceMu.Lock()
+	onlineAfterDisconnect := presence[testGatewayA]
+	presenceMu.Unlock()
+	if onlineAfterDisconnect {
+		t.Fatal("expected onGatewayPresence to mark gateway offline after skewed disconnect")
+	}
+	telemetry.mu.Lock()
+	reports := append([]SourceCoverageReport(nil), telemetry.coverageReports...)
+	telemetry.mu.Unlock()
+	if len(reports) != 1 || reports[0].Available {
+		t.Fatalf("expected 1 unavailable coverage report, got %+v", reports)
 	}
 }

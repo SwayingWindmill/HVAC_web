@@ -474,7 +474,7 @@ WHERE tenant_id = $1::uuid AND device_id = $2::uuid
 // DueVerificationTenants lists distinct tenants currently holding acknowledged commands
 // due for reported-state verification.
 func (store *PostgresStore) DueVerificationTenants(ctx context.Context, now time.Time) ([]string, error) {
-	return store.queryDueTenants(ctx, `SELECT tenant_id::text FROM command_runtime.tenants_with_due_verification($1) ORDER BY 1`, now)
+	return store.queryDueTenants(ctx, `SELECT t.tenant_id::text FROM command_runtime.tenants_with_due_verification($1) AS t(tenant_id) ORDER BY 1`, now)
 }
 
 // ClaimAnyVerification scans due tenants fairly and claims the next verification work item,

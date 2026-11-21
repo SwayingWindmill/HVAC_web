@@ -11,7 +11,6 @@ func TestCodecRegistryDecodesV2AndCompactV1TelemetryAndStatus(t *testing.T) {
 
 	registry := DefaultCodecRegistry()
 
-	// Standard v2.0 telemetry
 	v2Payload := telemetryPayload(testGatewayA, testMessageID, 1, "METER-01", "active_power")
 	decV2, err := registry.DecodeTelemetry(v2Payload, testGatewayA)
 	if err != nil {
@@ -21,7 +20,6 @@ func TestCodecRegistryDecodesV2AndCompactV1TelemetryAndStatus(t *testing.T) {
 		t.Fatalf("unexpected v2 decoded telemetry: %+v", decV2)
 	}
 
-	// Compact v1.0 batch telemetry with RFC3339 timestamps, replay, GOOD/BAD quality
 	v1Payload := []byte(`{
 		"v": "1.0",
 		"gw": "` + testGatewayA + `",
@@ -61,7 +59,6 @@ func TestCodecRegistryDecodesV2AndCompactV1TelemetryAndStatus(t *testing.T) {
 	if !uuidV7Pattern.MatchString(decV1.Envelope.MessageID) {
 		t.Fatalf("expected valid UUIDv7 messageId fallback, got %q", decV1.Envelope.MessageID)
 	}
-	// Deterministic messageId for identical frame
 	decV1Again, err := registry.DecodeTelemetry(v1Payload, testGatewayA)
 	if err != nil || decV1Again.Envelope.MessageID != decV1.Envelope.MessageID {
 		t.Fatalf("expected deterministic UUIDv7 generation, got %q vs %q (err=%v)", decV1Again.Envelope.MessageID, decV1.Envelope.MessageID, err)
@@ -81,7 +78,6 @@ func TestCodecRegistryDecodesV2AndCompactV1TelemetryAndStatus(t *testing.T) {
 		t.Fatalf("unexpected compact point quality mapping: %+v", ch1.Points)
 	}
 
-	// Compact v1.0 status frame
 	statusPayload := []byte(`{"v":"1.0","gw":"` + testGatewayA + `","sid":"sess-9","seq":7,"ts":"2026-11-17T12:01:00Z","online":true}`)
 	st, err := registry.DecodeStatus(statusPayload, testGatewayA)
 	if err != nil {
@@ -91,7 +87,6 @@ func TestCodecRegistryDecodesV2AndCompactV1TelemetryAndStatus(t *testing.T) {
 		t.Fatalf("unexpected decoded status: %+v", st)
 	}
 
-	// Legacy status frame omitting sid/seq/v
 	legacyPayload := []byte(`{"online":false,"ts":1786352400000}`)
 	legacyStatus, err := registry.DecodeStatus(legacyPayload, testGatewayA)
 	if err != nil {

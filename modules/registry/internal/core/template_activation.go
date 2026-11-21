@@ -528,10 +528,11 @@ func validateTemplateModbusDriver(raw any) (*TemplateModbusDriver, error) {
 	if err != nil {
 		return nil, err
 	}
+	normalizedInput := profile.ToDriverInput(false)
 	normalized := &TemplateModbusDriver{
-		DriverType:        string(profile.DriverType),
-		CapabilityProfile: string(profile.CapabilityProfile),
-		Registers:         make([]edgecontrol.ModbusRegisterInput, len(profile.Registers)),
+		DriverType:        normalizedInput.DriverType,
+		CapabilityProfile: normalizedInput.CapabilityProfile,
+		Registers:         normalizedInput.Registers,
 	}
 	if parsed.Endpoint != nil {
 		ep := profile.Endpoint
@@ -548,41 +549,6 @@ func validateTemplateModbusDriver(raw any) (*TemplateModbusDriver, error) {
 	if parsed.Retries != nil {
 		ret := profile.Retries
 		normalized.Retries = &ret
-	}
-	for i, spec := range profile.Registers {
-		var writeFC *int
-		if spec.WriteFunctionCode != 0 {
-			w := int(spec.WriteFunctionCode)
-			writeFC = &w
-		}
-		var bitIdx *int
-		if spec.RawType == edgecontrol.ModbusRawBitBool {
-			b := spec.BitIndex
-			bitIdx = &b
-		}
-		var enumCopy map[string]string
-		if len(spec.EnumMap) > 0 {
-			enumCopy = make(map[string]string, len(spec.EnumMap))
-			for k, v := range spec.EnumMap {
-				enumCopy[k] = v
-			}
-		}
-		normalized.Registers[i] = edgecontrol.ModbusRegisterInput{
-			PointCode:         spec.PointCode,
-			SemanticChannel:   string(spec.SemanticChannel),
-			FunctionCode:      int(spec.FunctionCode),
-			WriteFunctionCode: writeFC,
-			Address:           int(spec.Address),
-			RegisterCount:     int(spec.RegisterCount),
-			RawType:           string(spec.RawType),
-			ByteOrder:         string(spec.ByteOrder),
-			WordOrder:         string(spec.WordOrder),
-			BitIndex:          bitIdx,
-			Scale:             spec.Scale,
-			Offset:            spec.Offset,
-			PollPriority:      string(spec.PollPriority),
-			EnumMap:           enumCopy,
-		}
 	}
 	return normalized, nil
 }

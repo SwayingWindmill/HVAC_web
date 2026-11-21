@@ -201,6 +201,14 @@ func (q *TimedataResendQueue) SetOnlineSynced(synced bool) {
 	q.mu.Unlock()
 }
 
+// LatestTimedataSequence returns the highest sequence number currently stored in Timedata.
+func (q *TimedataResendQueue) LatestTimedataSequence() uint64 {
+	if q == nil || q.timedata == nil {
+		return 0
+	}
+	return q.timedata.LatestSequence()
+}
+
 // SyncOnlineBaseline advances all priority cursors to LatestSequence when live telemetry
 // has been cleanly admitted while online. Calling while offline is a no-op.
 func (q *TimedataResendQueue) SyncOnlineBaseline() error {
@@ -340,6 +348,16 @@ func (q *TimedataResendQueue) MarkPublishedObservations(obs []PublishedObservati
 // strictly exhausting VERY_HIGH before HIGH, HIGH before MEDIUM, and MEDIUM before LOW.
 // Cursor updates are committed atomically only after each published batch succeeds.
 func (q *TimedataResendQueue) Drain(ctx context.Context) (TimedataDrainResult, error) {
+	return q.drainUpTo(ctx, 0, false)
+}
+
+// DrainUpTo replays buffered FileTimedata records up to maxSequence so reconnect catch-up
+// never steals live samples recorded after the connection came up.
+func (q *TimedataResendQueue) DrainUpTo(ctx context.Context, maxSequence uint64) (TimedataDrainResult, error) {
+	return q.drainUpTo(ctx, maxSequence, true)
+}
+
+func (q *TimedataResendQueue) drainUpTo(ctx context.Context, maxSequence uint64, bounded bool) (TimedataDrainResult, error) {
 	result := TimedataDrainResult{
 		ByPriority: make(map[edgecontrol.DataPriority]int, len(ResendPriorityOrder)),
 	}
@@ -353,6 +371,11 @@ func (q *TimedataResendQueue) Drain(ctx context.Context) (TimedataDrainResult, e
 	q.drainMu.Lock()
 	defer q.drainMu.Unlock()
 
+	if bounded && maxSequence == 0 {
+		q.SetOnlineSynced(true)
+		return result, nil
+	}
+
 	topic := "hvac/v1/" + q.gatewayID + "/up/telemetry"
 	for _, priority := range ResendPriorityOrder {
 		for {
@@ -361,6 +384,9 @@ func (q *TimedataResendQueue) Drain(ctx context.Context) (TimedataDrainResult, e
 			}
 			afterSeq := q.cursorForPriority(priority)
 			records, err := q.timedata.QueryAfterSequence(afterSeq, q.batchSize, func(rec edgecontrol.TimedataRecord) bool {
+				if bounded && rec.Sequence > maxSequence {
+					return false
+				}
 				return q.resolveMeta(rec.Address).Priority == priority
 			})
 			if err != nil {

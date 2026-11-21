@@ -26,8 +26,8 @@ func TestEncodeAndDecodeShadowReplicationEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeShadowChangeBatch failed: %v", err)
 	}
-	if !replicationUUIDPattern.MatchString(msgID) {
-		t.Fatalf("expected UUID messageId, got %q", msgID)
+	if !uuidV7Pattern.MatchString(msgID) {
+		t.Fatalf("expected UUIDv7 messageId, got %q", msgID)
 	}
 
 	var env ShadowReplicationEnvelope
@@ -81,7 +81,6 @@ func TestEncodeAndDecodeShadowReplicationEnvelope(t *testing.T) {
 		t.Fatalf("unexpected decoded CHANGE_ACK: env=%+v ack=%+v", decEnv, decAck)
 	}
 
-	// Reject gateway mismatch, unknown fields, and bad digest.
 	if _, _, err := DecodeShadowChangeAck(ackBytes, testGatewayB); err == nil {
 		t.Fatal("expected gateway mismatch rejection")
 	}

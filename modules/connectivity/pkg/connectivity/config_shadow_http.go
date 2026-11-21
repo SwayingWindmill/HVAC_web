@@ -91,8 +91,12 @@ func NewConfigShadowHandlerWithPresence(
 			writeShadowErrorJSON(w, http.StatusServiceUnavailable, "CONFIG_SHADOW_UNAVAILABLE", "config shadow driver upsert unavailable")
 			return
 		}
-		if !isCoreServiceClientCert(r) {
-			if _, authOK := authorizeShadowHTTP(w, r, authorize, registryauth.ActionDeviceWrite); !authOK {
+		trustedCore := isCoreServiceClientCert(r)
+		var claims registryauth.GrantClaims
+		if !trustedCore {
+			var authOK bool
+			claims, authOK = authorizeShadowHTTP(w, r, authorize, registryauth.ActionDeviceWrite)
+			if !authOK {
 				return
 			}
 		}
@@ -102,6 +106,25 @@ func NewConfigShadowHandlerWithPresence(
 			return
 		}
 		gatewayID := r.PathValue("gatewayId")
+		if !trustedCore {
+			if !strings.EqualFold(strings.TrimSpace(claims.TenantID), strings.TrimSpace(input.TenantID)) {
+				writeShadowError(w, ErrCredentialForbidden)
+				return
+			}
+			if scopeChecker, hasScope := store.(interface {
+				ResolveGatewayScopeForOperator(context.Context, registryauth.GrantClaims, string) (string, error)
+			}); hasScope {
+				scopedTenant, scopeErr := scopeChecker.ResolveGatewayScopeForOperator(r.Context(), claims, gatewayID)
+				if scopeErr != nil {
+					writeShadowError(w, scopeErr)
+					return
+				}
+				if !strings.EqualFold(strings.TrimSpace(scopedTenant), strings.TrimSpace(input.TenantID)) {
+					writeShadowError(w, ErrCredentialForbidden)
+					return
+				}
+			}
+		}
 		result, err := upserter.UpsertGatewayTemplateDriverConfig(r.Context(), gatewayID, input)
 		if err == nil && result.Changed && onDesiredUpdated != nil {
 			onDesiredUpdated(gatewayID)

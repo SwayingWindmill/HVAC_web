@@ -1185,7 +1185,6 @@ test('buildGatewayPopHeaders signs verifiable ECDSA and Ed25519 PoP payloads and
     headers: edHeaders,
   });
 
-  // Verify live tunnel upgrade and autorenew POST requests emit verifiable PoP headers on the wire.
   let renewReqHeaders: Record<string, string | undefined> | null = null;
   let tunnelReqHeaders: Record<string, string | undefined> | null = null;
   const renewedLeaf = issueSignedX509Cert({

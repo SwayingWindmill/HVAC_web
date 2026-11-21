@@ -13,6 +13,9 @@ import (
 // ErrInvalidPointMetadata indicates a malformed or out-of-bounds field in point sourceMetadata.
 var ErrInvalidPointMetadata = errors.New("invalid command point source metadata")
 
+// ErrInvalidInterlockMetadata indicates invalid or missing fields inside point sourceMetadata interlockChecks.
+var ErrInvalidInterlockMetadata = errors.New("invalid interlockChecks metadata")
+
 // CommandPointMetadata holds validated typed control metadata extracted from a COMMAND point's sourceMetadata.
 type CommandPointMetadata struct {
 	Capability         Capability
@@ -145,7 +148,7 @@ func ParseCommandPointMetadata(raw map[string]any) (CommandPointMetadata, error)
 	}
 
 	if out.InterlockChecks, err = parseMetadataInterlockChecks(raw); err != nil {
-		return CommandPointMetadata{}, err
+		return CommandPointMetadata{}, fmt.Errorf("%w: %w", ErrInvalidInterlockMetadata, err)
 	}
 
 	return out, nil
@@ -179,7 +182,7 @@ func ValidateCommandPointMetadata(raw map[string]any) error {
 	}
 	for i, chk := range meta.InterlockChecks {
 		if chk.DeviceID == "" || chk.Key == "" || chk.Expected == "" {
-			return fmt.Errorf("%w: interlockChecks[%d] requires deviceId, key, and expected", ErrInvalidPointMetadata, i)
+			return fmt.Errorf("%w: %w: interlockChecks[%d] requires deviceId, key, and expected", ErrInvalidPointMetadata, ErrInvalidInterlockMetadata, i)
 		}
 	}
 	return nil

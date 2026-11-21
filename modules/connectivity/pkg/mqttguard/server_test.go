@@ -18,6 +18,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -67,7 +68,6 @@ func newGuardTestPKI(t *testing.T, gatewayID string) guardTestPKI {
 	t.Helper()
 	now := time.Now().UTC().Add(-time.Minute)
 
-	caDir := t.TempDir()
 	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -95,7 +95,6 @@ func newGuardTestPKI(t *testing.T, gatewayID string) guardTestPKI {
 		t.Fatal(err)
 	}
 	caKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: caKeyDER})
-	_ = caDir
 
 	authority, err := connectivity.NewCertificateAuthority(caPEM, caKeyPEM, "tls://mqtt-broker:8883")
 	if err != nil {
@@ -243,7 +242,6 @@ func TestMQTTGuardProxiesChecksRevocationRateLimitAndKicks(t *testing.T) {
 		})
 	}
 
-	// 1. Valid gateway session succeeds and echoes over ephemeral upstream TLS.
 	c1, err := dialGuard(pki.gatewayCertA)
 	if err != nil {
 		t.Fatalf("dialGuard c1: %v", err)
@@ -259,7 +257,6 @@ func TestMQTTGuardProxiesChecksRevocationRateLimitAndKicks(t *testing.T) {
 		t.Fatalf("reply=%q, want PING", string(reply))
 	}
 
-	// Verify active session closes immediately on fingerprint revocation kick.
 	if kicked := srv.CloseGatewayByFingerprint(gatewayID, pki.gatewayFpA); kicked != 1 {
 		t.Fatalf("kicked=%d, want 1", kicked)
 	}
@@ -278,7 +275,6 @@ func TestMQTTGuardProxiesChecksRevocationRateLimitAndKicks(t *testing.T) {
 		t.Fatal("timed out waiting for disconnect callback after kick")
 	}
 
-	// 2. Subsequent dial with revoked fingerprint is rejected before dialing upstream.
 	verifier.revoke(pki.gatewayFpA)
 	if cRevoked, err := dialGuard(pki.gatewayCertA); err == nil {
 		_ = cRevoked.SetReadDeadline(time.Now().Add(time.Second))
@@ -289,7 +285,6 @@ func TestMQTTGuardProxiesChecksRevocationRateLimitAndKicks(t *testing.T) {
 		_ = cRevoked.Close()
 	}
 
-	// 3. Per-gateway rate limit drops burst beyond configured capacity using a non-revoked cert.
 	gwCertB, err := pki.authority.IssueEphemeralGatewayTLS(gatewayID, time.Hour, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
@@ -309,5 +304,85 @@ func TestMQTTGuardProxiesChecksRevocationRateLimitAndKicks(t *testing.T) {
 	upstreamPeersMu.Unlock()
 	if peerCount < 1 || firstCN != gatewayID {
 		t.Fatalf("unexpected upstream peer CNs=%v", upstreamPeerCNs)
+	}
+}
+
+type twoPhaseRevokeVerifier struct {
+	gatewayID string
+	calls     atomic.Int32
+}
+
+func (v *twoPhaseRevokeVerifier) VerifyActiveCredential(context.Context, *x509.Certificate) (string, error) {
+	if v.calls.Add(1) == 1 {
+		return v.gatewayID, nil
+	}
+	return "", connectivity.ErrCredentialRevoked
+}
+
+func TestMQTTGuardRejectsCredentialRevokedBetweenDialAndRegister(t *testing.T) {
+	t.Parallel()
+
+	const gatewayID = "018f3e00-2000-7000-8000-000000000099"
+	pki := newGuardTestPKI(t, gatewayID)
+
+	upLn, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+		MinVersion:   tls.VersionTLS13,
+		Certificates: []tls.Certificate{pki.brokerCert},
+		ClientCAs:    pki.caPool,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upLn.Close()
+	go func() {
+		for {
+			c, acceptErr := upLn.Accept()
+			if acceptErr != nil {
+				return
+			}
+			_ = c.Close()
+		}
+	}()
+
+	srv, err := New(Config{
+		ListenAddr:         "127.0.0.1:0",
+		ServerCertificate:  pki.serverCert,
+		GatewayClientCAs:   pki.caPool,
+		UpstreamAddr:       upLn.Addr().String(),
+		UpstreamRootCAs:    pki.caPool,
+		UpstreamServerName: "mqtt-broker",
+		Verifier:           &twoPhaseRevokeVerifier{gatewayID: gatewayID},
+		Issuer:             pki.authority,
+		DisableRateLimits:  true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = srv.Serve(ln) }()
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+	}()
+
+	conn, err := tls.Dial("tcp", ln.Addr().String(), &tls.Config{
+		MinVersion:   tls.VersionTLS13,
+		RootCAs:      pki.caPool,
+		ServerName:   "localhost",
+		Certificates: []tls.Certificate{pki.gatewayCertA},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+	buf := make([]byte, 1)
+	if _, readErr := conn.Read(buf); readErr == nil {
+		t.Fatal("expected TOCTOU revocation post-register recheck to close connection immediately")
 	}
 }

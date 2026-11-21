@@ -125,6 +125,7 @@ func claimAnyWork[T any](
 			return zero, err
 		}
 		ordered := rotateTenants(tenants, cursor)
+		var fallbackErr error
 		for _, tenantID := range ordered {
 			item, claimErr := claimTenant(ctx, tenantID)
 			if claimErr == nil {
@@ -133,19 +134,26 @@ func claimAnyWork[T any](
 			if !errors.Is(claimErr, noWorkErr) {
 				return zero, claimErr
 			}
+			if claimErr != noWorkErr {
+				fallbackErr = claimErr
+			}
+		}
+		idleErr := noWorkErr
+		if fallbackErr != nil {
+			idleErr = fallbackErr
 		}
 		if wait <= 0 || sig == nil {
-			return zero, noWorkErr
+			return zero, idleErr
 		}
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			return zero, noWorkErr
+			return zero, idleErr
 		}
 		if !waitForWorkSignal(ctx, sig, remaining) {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return zero, ctxErr
 			}
-			return zero, noWorkErr
+			return zero, idleErr
 		}
 	}
 }

@@ -160,7 +160,19 @@ func run() int {
 	}
 	concentratorService := concentrator.NewService(connectivityStore, concentratorTransport)
 	presence := newGatewayOnlineTrackerWithMetrics(telemetry.Metrics)
-	credentials, tunnelHub, mqttGuard, err := credentialAndGuardServerWithSession(drainRootCtx, logger, telemetry.Metrics, presence, connectivityStore, concentratorService, telemetryRuntime, tap, true, mqttSession, tunnel.WithObservability(logger, telemetry.Metrics))
+	credentials, tunnelHub, mqttGuard, err := newCredentialRuntime(credentialRuntimeConfig{
+		RootCtx:             drainRootCtx,
+		Logger:              logger,
+		Metrics:             telemetry.Metrics,
+		Presence:            presence,
+		Store:               connectivityStore,
+		ConcentratorService: concentratorService,
+		CoverageReporter:    telemetryRuntime,
+		Tap:                 tap,
+		EnableGuardFromEnv:  true,
+		MQTTSession:         mqttSession,
+		TunnelOptions:       []tunnel.Option{tunnel.WithObservability(logger, telemetry.Metrics)},
+	})
 	if err != nil {
 		logger.Error("connectivity_credentials_unavailable", "error_code", "CREDENTIAL_MODULE_UNAVAILABLE")
 		return 1
@@ -784,18 +796,7 @@ func defaultMQTTClientIDForHost(prefix, host string) string {
 }
 
 func sanitizeMQTTClientID(raw string) string {
-	var builder strings.Builder
-	builder.Grow(min(len(raw), maxDefaultMQTTClientIDLen))
-	for i := 0; i < len(raw); i++ {
-		ch := raw[i]
-		if (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-' {
-			builder.WriteByte(ch)
-			if builder.Len() >= maxDefaultMQTTClientIDLen {
-				break
-			}
-		}
-	}
-	return builder.String()
+	return sanitizeClientIDToken(raw, false, maxDefaultMQTTClientIDLen)
 }
 
 const (

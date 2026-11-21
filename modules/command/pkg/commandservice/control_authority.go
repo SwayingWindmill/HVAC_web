@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -64,6 +65,8 @@ type ControlAuthority struct {
 	verificationCursor     atomic.Uint64
 }
 
+var errTransientSafetyEvaluation = fmt.Errorf("%w: transient safety evaluation unavailable", ErrNoDispatchAvailable)
+
 // Close drains queued control failure notifications before returning.
 func (a *ControlAuthority) Close() {
 	if a == nil {
@@ -123,7 +126,7 @@ func (a *ControlAuthority) ClaimDispatch(ctx context.Context, tenantID, leaseOwn
 				Phase:       commandmodel.ConnectorPreSendRejected,
 				FailureCode: "DISPATCH_SAFETY_UNAVAILABLE",
 			})
-			return commandmodel.DispatchEnvelope{}, ErrNoDispatchAvailable
+			return commandmodel.DispatchEnvelope{}, errTransientSafetyEvaluation
 		}
 
 		intent, err := a.store.Get(ctx, envelope.TenantID, envelope.CommandID)
@@ -132,7 +135,7 @@ func (a *ControlAuthority) ClaimDispatch(ctx context.Context, tenantID, leaseOwn
 				Phase:       commandmodel.ConnectorPreSendRejected,
 				FailureCode: "DISPATCH_SAFETY_EVALUATION_FAILED",
 			})
-			return commandmodel.DispatchEnvelope{}, ErrNoDispatchAvailable
+			return commandmodel.DispatchEnvelope{}, errTransientSafetyEvaluation
 		}
 
 		dctx, err := a.twin.GetDispatchContext(ctx, envelope.TenantID, envelope.SiteID, envelope.DeviceID, envelope.PointID)
@@ -141,7 +144,7 @@ func (a *ControlAuthority) ClaimDispatch(ctx context.Context, tenantID, leaseOwn
 				Phase:       commandmodel.ConnectorPreSendRejected,
 				FailureCode: "DISPATCH_SAFETY_EVALUATION_FAILED",
 			})
-			return commandmodel.DispatchEnvelope{}, ErrNoDispatchAvailable
+			return commandmodel.DispatchEnvelope{}, errTransientSafetyEvaluation
 		}
 
 		decision, rejection, evidenceID, evalErr := a.evaluatePreDispatch(ctx, envelope, intent, dctx)
@@ -150,7 +153,7 @@ func (a *ControlAuthority) ClaimDispatch(ctx context.Context, tenantID, leaseOwn
 				Phase:       commandmodel.ConnectorPreSendRejected,
 				FailureCode: "DISPATCH_SAFETY_EVALUATION_FAILED",
 			})
-			return commandmodel.DispatchEnvelope{}, ErrNoDispatchAvailable
+			return commandmodel.DispatchEnvelope{}, errTransientSafetyEvaluation
 		}
 		if rejection != nil {
 			evID := evidenceID
@@ -1202,7 +1205,7 @@ func resolveAssetCommandTarget(
 
 	meta, metaErr := commandmodel.ParseCommandPointMetadata(point.SourceMetadata)
 	if metaErr != nil {
-		if strings.Contains(metaErr.Error(), "interlockChecks") {
+		if errors.Is(metaErr, commandmodel.ErrInvalidInterlockMetadata) {
 			return resolvedCommandPointTarget{}, &ControlError{
 				HTTPStatus: http.StatusBadRequest, Code: "COMMAND_REQUEST_INVALID",
 				Title: "Command request invalid", Detail: "Command point interlock configuration is invalid.",

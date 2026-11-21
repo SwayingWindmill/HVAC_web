@@ -204,6 +204,13 @@ func (processor *Processor) recordPacket(direction, channel, gatewayID, topic, t
 	processor.packetHook(direction, channel, gatewayID, topic, traceID, payload)
 }
 
+func (processor *Processor) nowUTC() time.Time {
+	if processor == nil || processor.now == nil {
+		return time.Now().UTC()
+	}
+	return processor.now().UTC()
+}
+
 func (processor *Processor) recordShadowMetric(outcome string) {
 	if processor == nil || processor.metrics == nil {
 		return
@@ -569,8 +576,9 @@ func (processor *Processor) processTelemetryBatch(ctx context.Context, gateway G
 		span.SetStatus("ok", "")
 	}
 	if sessions := processor.sessions(); sessions != nil {
+		nowMS := processor.nowUTC().UnixMilli()
 		for _, frame := range decodedFrames {
-			sessions.ObserveTelemetry(gateway.ID, frame.SessionID, frame.Envelope.Timestamp)
+			sessions.ObserveTelemetryAt(gateway.ID, frame.SessionID, frame.Envelope.Timestamp, nowMS, true)
 		}
 	}
 	for index, bound := range bounds {
@@ -637,7 +645,7 @@ func (processor *Processor) isolateInvalidTelemetryBatch(
 			outcomes = append(outcomes, ProcessingOutcome{Result: result})
 			anySucceeded = true
 			if sessions != nil {
-				sessions.ObserveTelemetry(gateway.ID, decodedFrames[index].SessionID, decodedFrames[index].Envelope.Timestamp)
+				sessions.ObserveTelemetryAt(gateway.ID, decodedFrames[index].SessionID, decodedFrames[index].Envelope.Timestamp, processor.nowUTC().UnixMilli(), true)
 			}
 			processor.recordPacket("UPLINK", "TELEMETRY", gateway.ID, messages[index].Topic, bound.traceID, messages[index].Payload)
 			continue
@@ -941,13 +949,15 @@ func (processor *Processor) processEvent(ctx context.Context, gateway Gateway, t
 		accepted := true
 		if sessions := processor.sessions(); sessions != nil {
 			accepted = sessions.ApplyTransition(SessionTransition{
-				GatewayID:    gateway.ID,
-				SessionID:    extractEventSessionID(event.Data),
-				Sequence:     int64(envelope.Sequence),
-				HasSequence:  true,
-				EventTime:    event.EventTime,
-				HasEventTime: true,
-				Online:       isConnect,
+				GatewayID:     gateway.ID,
+				SessionID:     extractEventSessionID(event.Data),
+				Sequence:      int64(envelope.Sequence),
+				HasSequence:   true,
+				EventTime:     event.EventTime,
+				HasEventTime:  true,
+				ServerTime:    processor.nowUTC().UnixMilli(),
+				HasServerTime: true,
+				Online:        isConnect,
 			})
 		}
 		if accepted {
@@ -971,7 +981,7 @@ func (processor *Processor) processStatus(ctx context.Context, gateway Gateway, 
 	}
 	accepted := true
 	if sessions := processor.sessions(); sessions != nil {
-		accepted = sessions.ApplyStatus(status)
+		accepted = sessions.ApplyStatusAt(status, processor.nowUTC().UnixMilli(), true)
 	}
 	if span != nil {
 		span.SetStatus("ok", "")
@@ -1075,20 +1085,20 @@ func (processor *Processor) HandleBrokerGatewayDisconnect(ctx context.Context, g
 	if normalizedGatewayID == "" {
 		return nil
 	}
-	nowFn := processor.now
-	if nowFn == nil {
-		nowFn = time.Now
-	}
+	nowUTC := processor.nowUTC()
 	ts := disconnectedAt.UTC()
 	if ts.IsZero() {
-		ts = nowFn().UTC()
+		ts = nowUTC
 	}
 	if sessions := processor.sessions(); sessions != nil {
 		accepted := sessions.ApplyTransition(SessionTransition{
-			GatewayID:    normalizedGatewayID,
-			EventTime:    ts.UnixMilli(),
-			HasEventTime: true,
-			Online:       false,
+			GatewayID:      normalizedGatewayID,
+			EventTime:      ts.UnixMilli(),
+			HasEventTime:   true,
+			ServerTime:     ts.UnixMilli(),
+			HasServerTime:  true,
+			ServerObserved: true,
+			Online:         false,
 		})
 		if !accepted {
 			return nil
@@ -1100,32 +1110,11 @@ func (processor *Processor) HandleBrokerGatewayDisconnect(ctx context.Context, g
 	if processor.runtime == nil {
 		return nil
 	}
-	if ctx == nil {
-		ctx = context.Background()
+	var childrenResolver GatewayChildrenResolver
+	if resolver, ok := processor.identities.(GatewayChildrenResolver); ok {
+		childrenResolver = resolver
 	}
-	deviceIDs := []string{normalizedGatewayID}
-	if childrenResolver, ok := processor.identities.(GatewayChildrenResolver); ok {
-		childIDs, err := childrenResolver.ListGatewayChildDeviceIDs(ctx, normalizedGatewayID)
-		if err != nil {
-			return fmt.Errorf("list gateway child devices on disconnect: %w", err)
-		}
-		seen := map[string]struct{}{normalizedGatewayID: {}}
-		for _, rawID := range childIDs {
-			id := strings.ToLower(strings.TrimSpace(rawID))
-			if id == "" {
-				continue
-			}
-			if _, dup := seen[id]; dup {
-				continue
-			}
-			seen[id] = struct{}{}
-			deviceIDs = append(deviceIDs, id)
-		}
-	}
-	slices.Sort(deviceIDs)
-	reason := "GATEWAY_DISCONNECTED"
-	observedAt := ts.Format(time.RFC3339Nano)
-	sourceRev := max(nowFn().UTC().UnixNano(), 1)
+	sourceRev := max(nowUTC.UnixNano(), 1)
 	for {
 		prev := processor.coverageRev.Load()
 		if sourceRev <= prev {
@@ -1135,20 +1124,8 @@ func (processor *Processor) HandleBrokerGatewayDisconnect(ctx context.Context, g
 			break
 		}
 	}
-	for start := 0; start < len(deviceIDs); start += MaximumCoverageBatchSize {
-		end := min(start+MaximumCoverageBatchSize, len(deviceIDs))
-		batch := deviceIDs[start:end]
-		if err := processor.runtime.ReportSourceCoverage(ctx, SourceCoverageReport{
-			SourceID:       normalizedGatewayID,
-			DeviceIDs:      batch,
-			GatewayScopes:  []GatewayCoverageScope{{GatewayID: normalizedGatewayID, DeviceIDs: batch}},
-			Available:      false,
-			ReasonCode:     &reason,
-			ObservedAt:     observedAt,
-			SourceRevision: sourceRev,
-		}); err != nil {
-			return fmt.Errorf("report broker gateway disconnect coverage: %w", err)
-		}
+	if err := ReportGatewayUnavailableCoverage(ctx, childrenResolver, processor.runtime, normalizedGatewayID, "GATEWAY_DISCONNECTED", ts, sourceRev); err != nil {
+		return fmt.Errorf("report broker gateway disconnect coverage: %w", err)
 	}
 	return nil
 }

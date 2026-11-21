@@ -172,10 +172,6 @@ func (handler *runtimeHTTPHandler) ServeHTTP(writer http.ResponseWriter, request
 			writeRuntimeProblem(writer, http.StatusForbidden, "COMMAND_RUNTIME_WORKLOAD_FORBIDDEN", false)
 			return
 		}
-		if request.Method != http.MethodPost {
-			writeRuntimeProblem(writer, http.StatusMethodNotAllowed, "COMMAND_RUNTIME_METHOD_NOT_ALLOWED", false)
-			return
-		}
 		request.Body = http.MaxBytesReader(writer, request.Body, maximumRuntimeRequestBody)
 		if request.URL.Path == InternalCapabilityProfilesSyncPath {
 			handler.syncCapabilityProfiles(writer, request)
@@ -368,6 +364,10 @@ func (handler *runtimeHTTPHandler) claimAnyDispatch(writer http.ResponseWriter, 
 		return
 	}
 	envelope, err := anyStore.ClaimAnyDispatch(request.Context(), input.LeaseOwner, time.Duration(input.LeaseSeconds)*time.Second, waitDuration)
+	if errors.Is(err, errTransientSafetyEvaluation) {
+		writeRuntimeProblem(writer, http.StatusServiceUnavailable, "COMMAND_SAFETY_UNAVAILABLE", true)
+		return
+	}
 	if errors.Is(err, ErrNoDispatchAvailable) {
 		writer.WriteHeader(http.StatusNoContent)
 		return

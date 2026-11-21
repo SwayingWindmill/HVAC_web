@@ -89,39 +89,7 @@ func TestCommandSharedSubscriptionGroup(t *testing.T) {
 	})
 }
 
-type fakeCommandTenantLister struct {
-	tenants []string
-}
-
-func (f *fakeCommandTenantLister) Tenants(context.Context) ([]string, error) {
-	return append([]string(nil), f.tenants...), nil
-}
-
-func TestCommandRuntimeAdaptiveIdleWakeDelay(t *testing.T) {
-	now := time.Unix(1700000000, 0)
-	inFlight := map[string]bool{}
-	fetchedAt := now
-
-	if d := nextTenantWakeDelay(now, nil, inFlight, map[string]time.Time{}, time.Time{}, fetchedAt); d != commandTenantsRefreshWindow {
-		t.Fatalf("empty tenants wake delay = %s, want %s", d, commandTenantsRefreshWindow)
-	}
-
-	readyAt := map[string]time.Time{"tenant-idle": now.Add(800 * time.Millisecond)}
-	if d := nextTenantWakeDelay(now, []string{"tenant-idle"}, inFlight, readyAt, time.Time{}, fetchedAt); d != 800*time.Millisecond {
-		t.Fatalf("idle tenant wake delay = %s, want 800ms (must not cap at 100ms)", d)
-	}
-
-	readyAt["tenant-idle"] = now.Add(commandIdleMaxBackoff)
-	if d := nextTenantWakeDelay(now, []string{"tenant-idle"}, inFlight, readyAt, time.Time{}, fetchedAt); d != commandIdleMaxBackoff {
-		t.Fatalf("max idle tenant wake delay = %s, want %s", d, commandIdleMaxBackoff)
-	}
-
-	if d := nextTenantWakeDelay(now, []string{"tenant-idle", "tenant-new"}, inFlight, readyAt, time.Time{}, fetchedAt); d != time.Millisecond {
-		t.Fatalf("unpolled tenant wake delay = %s, want 1ms", d)
-	}
-}
-
-func TestCommandRuntimeAdaptiveIdleBackoffBehavior(t *testing.T) {
+func TestCommandRuntimeAnyWorkerFastNoWorkGuard(t *testing.T) {
 	claimCtx, cancelClaim := context.WithCancel(context.Background())
 	defer cancelClaim()
 
@@ -129,8 +97,8 @@ func TestCommandRuntimeAdaptiveIdleBackoffBehavior(t *testing.T) {
 	var timestamps [4]int64
 	doneObserved := make(chan struct{})
 	rt := &commandRuntime{
-		tenantLister: &fakeCommandTenantLister{tenants: []string{"tenant-1"}},
-		dispatchFn: func(_ context.Context, _ string) error {
+		dispatchWorkers: 1,
+		dispatchAnyFn: func(_ context.Context, _ time.Duration) error {
 			n := int(noWorkCalls.Add(1))
 			if n <= len(timestamps) {
 				timestamps[n-1] = time.Now().UnixNano()
@@ -148,17 +116,17 @@ func TestCommandRuntimeAdaptiveIdleBackoffBehavior(t *testing.T) {
 	select {
 	case <-doneObserved:
 	case <-time.After(3 * time.Second):
-		t.Fatalf("timed out waiting for idle poll cycles; calls=%d", noWorkCalls.Load())
+		t.Fatalf("timed out waiting for fast noWork cycles; calls=%d", noWorkCalls.Load())
 	}
 	cancelClaim()
 	if err := rt.Wait(context.Background()); err != nil {
 		t.Fatalf("Wait returned error: %v", err)
 	}
 
-	// Cumulative delay across 3 noWork waits (100ms + 200ms + 400ms = 700ms); keep margin for CI timers.
+	// Fast noWork spin guard sleeps commandTenantBaseBackoff (100ms) across 3 waits.
 	totalElapsed := time.Duration(timestamps[3] - timestamps[0])
-	if totalElapsed < 450*time.Millisecond {
-		t.Fatalf("expected exponential idle backoff (sum ~700ms across 3 waits), got %s", totalElapsed)
+	if totalElapsed < 220*time.Millisecond {
+		t.Fatalf("expected fast noWork guard (~300ms across 3 waits), got %s", totalElapsed)
 	}
 }
 
@@ -174,8 +142,9 @@ func TestCommandRuntimeRunWithDrainFinishesInFlightCommand(t *testing.T) {
 	var seenExecErrDuringFlight atomic.Bool
 
 	rt := &commandRuntime{
-		tenantLister: &fakeCommandTenantLister{tenants: []string{"tenant-1"}},
-		dispatchFn: func(ctx context.Context, _ string) error {
+		dispatchWorkers:     1,
+		verificationWorkers: 1,
+		dispatchAnyFn: func(ctx context.Context, _ time.Duration) error {
 			dispatchCalls.Add(1)
 			close(started)
 			err := <-release
@@ -184,7 +153,7 @@ func TestCommandRuntimeRunWithDrainFinishesInFlightCommand(t *testing.T) {
 			}
 			return err
 		},
-		verifyFn: func(_ context.Context, _ string) error {
+		verifyAnyFn: func(_ context.Context, _ time.Duration) error {
 			verifyCalls.Add(1)
 			return commandservice.ErrVerificationNotAvailable
 		},

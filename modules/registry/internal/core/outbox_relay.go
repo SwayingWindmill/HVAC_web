@@ -11,7 +11,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -60,6 +59,7 @@ var relayedOutboxEventTypes = []string{
 	"registry.template-revision.released",
 	"registry.template-assignment.changed",
 	"registry.binding.rebound",
+	"registry.binding.closed",
 }
 
 // TelemetrySyncClient delivers authoritative device and point updates to Telemetry runtime.
@@ -81,13 +81,14 @@ type ConnectivityTemplateDriverClient interface {
 type RelayGatewayTemplateDriverRequest struct {
 	TenantID          string                            `json:"tenantId"`
 	DeviceKey         string                            `json:"deviceKey"`
-	DriverType        string                            `json:"driverType"`
+	Remove            bool                              `json:"remove,omitempty"`
+	DriverType        string                            `json:"driverType,omitempty"`
 	Endpoint          *string                           `json:"endpoint,omitempty"`
 	UnitID            *int                              `json:"unitId,omitempty"`
 	CapabilityProfile string                            `json:"capabilityProfile,omitempty"`
 	TimeoutMS         *int                              `json:"timeoutMs,omitempty"`
 	Retries           *int                              `json:"retries,omitempty"`
-	Registers         []edgecontrol.ModbusRegisterInput `json:"registers"`
+	Registers         []edgecontrol.ModbusRegisterInput `json:"registers,omitempty"`
 	UpdatedBy         string                            `json:"updatedBy,omitempty"`
 	Reason            string                            `json:"reason"`
 }
@@ -193,6 +194,7 @@ type claimedOutboxEvent struct {
 	Attempt       int
 	CreatedAt     time.Time
 	Payload       map[string]any
+	PayloadErr    error
 }
 
 // NewOutboxRelay constructs an OutboxRelay backed by PostgresStore.
@@ -514,6 +516,7 @@ ORDER BY e.created_at ASC, e.id ASC
 			if len(rawPayload) > 0 {
 				if unmarshalErr := json.Unmarshal(rawPayload, &ev.Payload); unmarshalErr != nil {
 					ev.Payload = map[string]any{}
+					ev.PayloadErr = fmt.Errorf("decode outbox event payload: %w", unmarshalErr)
 				}
 			}
 			if ev.SiteID == "" {
@@ -568,6 +571,9 @@ WHERE event_id = $1::uuid
 }
 
 func (r *OutboxRelay) deliverEvent(ctx context.Context, event claimedOutboxEvent) error {
+	if event.PayloadErr != nil {
+		return event.PayloadErr
+	}
 	switch event.EventType {
 	case "registry.device.created", "registry.device.updated":
 		return r.deliverDeviceSync(ctx, event)
@@ -590,6 +596,8 @@ func (r *OutboxRelay) deliverEvent(ctx context.Context, event claimedOutboxEvent
 		return r.deliverTemplateAssignmentChanged(ctx, event)
 	case "registry.binding.rebound":
 		return r.deliverBindingRebound(ctx, event)
+	case "registry.binding.closed":
+		return r.deliverBindingClosed(ctx, event)
 	default:
 		return nil
 	}
@@ -598,23 +606,23 @@ func (r *OutboxRelay) deliverEvent(ctx context.Context, event claimedOutboxEvent
 func (r *OutboxRelay) deliverTemplateRevisionReleased(ctx context.Context, event claimedOutboxEvent) error {
 	revisionID := strings.TrimSpace(event.SubjectID)
 	if revisionID == "" {
-		revisionID = payloadStringField(event.Payload, "templateRevisionId")
+		revisionID = payloadString(event.Payload, "templateRevisionId")
 	}
 	return r.syncTemplateRevisionCapabilities(ctx, event.TenantID, revisionID, event.CreatedAt)
 }
 
 func (r *OutboxRelay) deliverTemplateAssignmentChanged(ctx context.Context, event claimedOutboxEvent) error {
-	if revisionID := payloadStringField(event.Payload, "templateRevisionId"); revisionID != "" {
+	if revisionID := payloadString(event.Payload, "templateRevisionId"); revisionID != "" {
 		if err := r.syncTemplateRevisionCapabilities(ctx, event.TenantID, revisionID, event.CreatedAt); err != nil {
 			return err
 		}
 	}
-	siteID := payloadStringField(event.Payload, "siteId")
+	siteID := payloadString(event.Payload, "siteId")
 	if siteID == "" {
 		siteID = strings.TrimSpace(event.SiteID)
 	}
-	targetType := payloadStringField(event.Payload, "targetType")
-	targetID := payloadStringField(event.Payload, "targetId")
+	targetType := payloadString(event.Payload, "targetType")
+	targetID := payloadString(event.Payload, "targetId")
 	if strings.EqualFold(targetType, "DEVICE") && siteID != "" && targetID != "" {
 		if r.telemetry != nil {
 			req, found, err := r.loadDeviceSyncRequest(ctx, event.TenantID, siteID, targetID)
@@ -632,217 +640,6 @@ func (r *OutboxRelay) deliverTemplateAssignmentChanged(ctx context.Context, even
 		}
 	}
 	return nil
-}
-
-func (r *OutboxRelay) deliverBindingRebound(ctx context.Context, event claimedOutboxEvent) error {
-	if r.connectivityDriver == nil {
-		return nil
-	}
-	if !strings.EqualFold(payloadStringField(event.Payload, "kind"), string(BindingGatewaySourceKey)) {
-		return nil
-	}
-	siteID := payloadStringField(event.Payload, "siteId")
-	if siteID == "" {
-		siteID = strings.TrimSpace(event.SiteID)
-	}
-	deviceID := payloadStringField(event.Payload, "sourceId")
-	gatewayID := payloadStringField(event.Payload, "targetId")
-	if siteID == "" || deviceID == "" || gatewayID == "" {
-		return nil
-	}
-	return r.syncDeviceTemplateDriversToBoundGateways(ctx, event.TenantID, siteID, deviceID, gatewayID, event.EventID)
-}
-
-func (r *OutboxRelay) syncDeviceTemplateDriversToBoundGateways(
-	ctx context.Context,
-	tenantID, siteID, deviceID, gatewayFilterID, causationEventID string,
-) error {
-	if r.connectivityDriver == nil || tenantID == "" || siteID == "" || deviceID == "" {
-		return nil
-	}
-	type boundGatewayTarget struct {
-		gatewayID string
-		sourceKey string
-	}
-	var (
-		templateKey   string
-		revisionID    string
-		driver        *TemplateModbusDriver
-		deviceStatus  string
-		deviceTagsRaw []byte
-		boundGateways []boundGatewayTarget
-	)
-	err := r.withTenantWriterTx(ctx, tenantID, pgx.ReadOnly, func(tx pgx.Tx) error {
-		var payloadRaw []byte
-		qErr := tx.QueryRow(ctx, `
-SELECT tr.id::text, t.template_key, tr.payload
-FROM core_registry.registry_template_assignments AS ta
-JOIN core_registry.registry_template_revisions AS tr
-  ON tr.tenant_id = ta.tenant_id AND tr.id = ta.template_revision_id
-JOIN core_registry.registry_templates AS t
-  ON t.tenant_id = tr.tenant_id AND t.id = tr.template_id
-WHERE ta.tenant_id = $1::uuid
-  AND ta.site_id = $2::uuid
-  AND ta.target_type = 'DEVICE'
-  AND ta.target_id = $3::uuid
-  AND ta.status = 'ACTIVE'
-  AND ta.valid_to IS NULL
-ORDER BY ta.valid_from DESC, ta.created_at DESC
-LIMIT 1
-`, tenantID, siteID, deviceID).Scan(&revisionID, &templateKey, &payloadRaw)
-		if errors.Is(qErr, pgx.ErrNoRows) {
-			return nil
-		}
-		if qErr != nil {
-			return qErr
-		}
-		var payloadMap map[string]any
-		if len(payloadRaw) == 0 {
-			return nil
-		}
-		if err := json.Unmarshal(payloadRaw, &payloadMap); err != nil {
-			return err
-		}
-		activation, err := parseAndValidateTemplatePayload(TemplateDevice, payloadMap)
-		if err != nil {
-			return err
-		}
-		if activation == nil || activation.ModbusDriver == nil {
-			return nil
-		}
-		driver = activation.ModbusDriver
-
-		devErr := tx.QueryRow(ctx, `
-SELECT status, COALESCE(tags, '{}'::jsonb)
-FROM core_registry.devices
-WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND id = $3::uuid
-`, tenantID, siteID, deviceID).Scan(&deviceStatus, &deviceTagsRaw)
-		if errors.Is(devErr, pgx.ErrNoRows) || !strings.EqualFold(deviceStatus, "ACTIVE") {
-			driver = nil
-			return nil
-		}
-		if devErr != nil {
-			return devErr
-		}
-
-		rows, err := tx.Query(ctx, `
-SELECT sk.gateway_device_id::text, sk.source_key
-FROM core_registry.gateway_device_source_keys AS sk
-JOIN core_registry.devices AS gw
-  ON gw.tenant_id = sk.tenant_id AND gw.site_id = sk.site_id AND gw.id = sk.gateway_device_id
-WHERE sk.tenant_id = $1::uuid
-  AND sk.site_id = $2::uuid
-  AND sk.device_id = $3::uuid
-  AND sk.status = 'ACTIVE'
-  AND gw.device_type = 'GATEWAY'
-  AND gw.status = 'ACTIVE'
-ORDER BY sk.gateway_device_id ASC, sk.source_key ASC
-`, tenantID, siteID, deviceID)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var target boundGatewayTarget
-			if scanErr := rows.Scan(&target.gatewayID, &target.sourceKey); scanErr != nil {
-				return scanErr
-			}
-			if gatewayFilterID == "" || strings.EqualFold(target.gatewayID, gatewayFilterID) {
-				boundGateways = append(boundGateways, target)
-			}
-		}
-		return rows.Err()
-	})
-	if err != nil || driver == nil || len(boundGateways) == 0 {
-		return err
-	}
-
-	endpoint := driver.Endpoint
-	unitID := driver.UnitID
-	if tagEndpoint, tagUnitID := parseModbusTagOverrides(deviceTagsRaw); endpoint == nil && tagEndpoint != nil || unitID == nil && tagUnitID != nil {
-		if endpoint == nil {
-			endpoint = tagEndpoint
-		}
-		if unitID == nil {
-			unitID = tagUnitID
-		}
-	}
-
-	reason := "template:" + templateKey + "@" + revisionID
-	for _, target := range boundGateways {
-		req := RelayGatewayTemplateDriverRequest{
-			TenantID:          tenantID,
-			DeviceKey:         target.sourceKey,
-			DriverType:        driver.DriverType,
-			Endpoint:          endpoint,
-			UnitID:            unitID,
-			CapabilityProfile: driver.CapabilityProfile,
-			TimeoutMS:         driver.TimeoutMS,
-			Retries:           driver.Retries,
-			Registers:         slicesCloneRegisters(driver.Registers),
-			UpdatedBy:         strings.TrimSpace(causationEventID),
-			Reason:            reason,
-		}
-		if err := r.connectivityDriver.UpsertGatewayTemplateDriver(ctx, target.gatewayID, req); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func parseModbusTagOverrides(raw []byte) (*string, *int) {
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-		return nil, nil
-	}
-	var tags map[string]json.RawMessage
-	if err := json.Unmarshal(trimmed, &tags); err != nil {
-		return nil, nil
-	}
-	var endpointPtr *string
-	if epRaw, ok := tags["modbus_endpoint"]; ok {
-		var s string
-		if json.Unmarshal(epRaw, &s) == nil {
-			if clean := strings.TrimSpace(s); clean != "" {
-				endpointPtr = &clean
-			}
-		}
-	}
-	var unitPtr *int
-	if uRaw, ok := tags["modbus_unit_id"]; ok {
-		var uInt int
-		if json.Unmarshal(uRaw, &uInt) == nil && uInt >= 1 && uInt <= 247 {
-			unitPtr = &uInt
-		} else {
-			var uStr string
-			if json.Unmarshal(uRaw, &uStr) == nil {
-				if parsed, parseErr := strconv.Atoi(strings.TrimSpace(uStr)); parseErr == nil && parsed >= 1 && parsed <= 247 {
-					unitPtr = &parsed
-				}
-			}
-		}
-	}
-	return endpointPtr, unitPtr
-}
-
-func slicesCloneRegisters(src []edgecontrol.ModbusRegisterInput) []edgecontrol.ModbusRegisterInput {
-	if len(src) == 0 {
-		return nil
-	}
-	out := make([]edgecontrol.ModbusRegisterInput, len(src))
-	copy(out, src)
-	return out
-}
-
-func payloadStringField(payload map[string]any, key string) string {
-	if len(payload) == 0 {
-		return ""
-	}
-	value, ok := payload[key].(string)
-	if !ok {
-		return ""
-	}
-	return strings.TrimSpace(value)
 }
 
 func (r *OutboxRelay) syncTemplateRevisionCapabilities(ctx context.Context, tenantID, revisionID string, syncedAt time.Time) error {
@@ -960,13 +757,19 @@ func (r *OutboxRelay) retireDeviceDownstream(ctx context.Context, tenantID, site
 			return err
 		}
 	}
-	if r.connectivity != nil {
+	if r.connectivity != nil || r.connectivityDriver != nil {
 		deviceType, err := r.lookupDeviceType(ctx, tenantID, siteID, deviceID)
 		if err != nil {
 			return err
 		}
 		if strings.ToUpper(deviceType) == "GATEWAY" {
-			if err := r.connectivity.RetireGateway(ctx, tenantID, deviceID); err != nil {
+			if r.connectivity != nil {
+				if err := r.connectivity.RetireGateway(ctx, tenantID, deviceID); err != nil {
+					return err
+				}
+			}
+		} else if r.connectivityDriver != nil {
+			if err := r.removeDeviceTemplateDriversFromBoundGateways(ctx, tenantID, siteID, deviceID, causationID, "device-retired:"+causationID); err != nil {
 				return err
 			}
 		}

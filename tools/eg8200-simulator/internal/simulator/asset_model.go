@@ -205,6 +205,10 @@ func validateAssetModel(config Config) error {
 			if err := validateCommandPointMetadata(point); err != nil {
 				return fmt.Errorf("point %s: %w", point.TelemetryKey, err)
 			}
+		} else if len(point.SourceMetadata) > 0 {
+			if _, err := edgecontrol.ParseEdgePointSourceMetadata(point.SourceMetadata); err != nil {
+				return fmt.Errorf("point %s sourceMetadata: %w", point.TelemetryKey, err)
+			}
 		}
 		if point.PointType != "COMMAND" && point.PointType != "SETTING" && point.Writable {
 			return fmt.Errorf("point %s only COMMAND or SETTING may be writable", point.TelemetryKey)

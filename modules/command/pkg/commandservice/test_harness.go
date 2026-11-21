@@ -230,7 +230,11 @@ func (m *MemoryAuthorityStore) ResolveDispatch(_ context.Context, env commandmod
 	if err == nil {
 		if intent, gErr := m.svc.Get(env.CommandID); gErr == nil {
 			if intent.Status == commandmodel.IntentQueued {
-				m.dispatchSignal.Notify()
+				switch res.FailureCode {
+				case "DISPATCH_SAFETY_EVALUATION_FAILED", "DISPATCH_SAFETY_UNAVAILABLE":
+				default:
+					m.dispatchSignal.Notify()
+				}
 			} else if intent.Status == commandmodel.IntentDispatching && res.Phase == commandmodel.ConnectorAcknowledged {
 				m.verificationSignal.Notify()
 			}

@@ -2244,8 +2244,6 @@ func TestConnectorExportsSpansToConfiguredTracer(t *testing.T) {
 		t.Fatalf("Execute = (%+v, %v), want acknowledged", res, err)
 	}
 
-	// Simulate an asynchronous/late reply arriving with no in-memory waiter so
-	// processReply drives the consumer span directly.
 	lateAttempt := "0193f000-3000-7000-8000-000000000002"
 	lateCmd := "0193f000-4000-7000-8000-000000000002"
 	lateEnvelope := envelope

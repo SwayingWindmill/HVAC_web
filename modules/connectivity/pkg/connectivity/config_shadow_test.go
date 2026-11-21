@@ -1080,7 +1080,6 @@ func TestConfigShadowTemplateDriverUpsertHTTPAndSPIFFEACL(t *testing.T) {
 
 	body := `{"tenantId":"` + tenantID + `","deviceKey":"chiller-1","driverType":"MODBUS_TCP","endpoint":"10.0.0.5:502","unitId":1,"registers":[{"pointCode":"chw_temp","functionCode":3,"address":1,"registerCount":1,"rawType":"INT16","byteOrder":"BIG_ENDIAN","wordOrder":"BIG_ENDIAN","scale":0.1,"offset":0,"pollPriority":"HIGH"}],"reason":"template sync"}`
 
-	// platform-core-service with Changed=true succeeds without X-Delegation-Grant and triggers onDesiredUpdated.
 	reqChanged := httptest.NewRequest(http.MethodPost, "/internal/v1/gateways/"+gwID+"/config-shadow:upsert-template-driver", strings.NewReader(body))
 	reqChanged.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{corePeer}}}
 	recChanged := httptest.NewRecorder()
@@ -1092,7 +1091,6 @@ func TestConfigShadowTemplateDriverUpsertHTTPAndSPIFFEACL(t *testing.T) {
 		t.Fatalf("unexpected captured upsert input: %+v", store.lastTemplateUpsert)
 	}
 
-	// Changed=false / Skipped=true must NOT invoke onDesiredUpdated.
 	store.templateUpsertRes = TemplateDriverUpsertResult{Changed: false, Skipped: true}
 	reqNoChange := httptest.NewRequest(http.MethodPost, "/internal/v1/gateways/"+gwID+"/config-shadow:upsert-template-driver", strings.NewReader(body))
 	reqNoChange.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{corePeer}}}
@@ -1102,7 +1100,6 @@ func TestConfigShadowTemplateDriverUpsertHTTPAndSPIFFEACL(t *testing.T) {
 		t.Fatalf("Skipped=true status=%d updatedCalls=%v body=%s", recNoChange.Code, updatedCalls, recNoChange.Body.String())
 	}
 
-	// platform-core-service must still be rejected (401) on generic config-shadow and gateway routes.
 	for _, blocked := range []struct {
 		method, path string
 	}{
@@ -1119,7 +1116,6 @@ func TestConfigShadowTemplateDriverUpsertHTTPAndSPIFFEACL(t *testing.T) {
 		}
 	}
 
-	// Requests carrying spoofed X-Gateway-Client-Cert on internal upsert route must return 403.
 	spoofReq := httptest.NewRequest(http.MethodPost, "/internal/v1/gateways/"+gwID+"/config-shadow:upsert-template-driver", strings.NewReader(body))
 	spoofReq.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{corePeer}}}
 	spoofReq.Header.Set("X-Gateway-Client-Cert", "spoof")
@@ -1129,12 +1125,24 @@ func TestConfigShadowTemplateDriverUpsertHTTPAndSPIFFEACL(t *testing.T) {
 		t.Fatalf("expected 403 with X-Gateway-Client-Cert on internal route, got %d", spoofRec.Code)
 	}
 
-	// platform-gateway without valid delegation grant is denied (403) on :upsert-template-driver.
 	gwDeniedReq := httptest.NewRequest(http.MethodPost, "/internal/v1/gateways/"+gwID+"/config-shadow:upsert-template-driver", strings.NewReader(body))
 	gwDeniedReq.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{gwPeer}}}
 	gwDeniedRec := httptest.NewRecorder()
 	handler.ServeHTTP(gwDeniedRec, gwDeniedReq)
 	if gwDeniedRec.Code != http.StatusForbidden {
 		t.Fatalf("expected 403 for platform-gateway without grant on upsert route, got %d", gwDeniedRec.Code)
+	}
+
+	const tenantB = "0194f000-1000-7000-8000-000000000099"
+	crossTenantHandler := NewConfigShadowHandler(store, fakePeerVerifier{gatewayID: gwID}, func(_ *http.Request, _ registryauth.Action) (registryauth.GrantClaims, error) {
+		return registryauth.GrantClaims{TenantID: tenantB}, nil
+	}, nil)
+	crossTenantOuter := NewCredentialHandlerWithShadow(nil, nil, nil, nil, crossTenantHandler)
+	crossReq := httptest.NewRequest(http.MethodPost, "/internal/v1/gateways/"+gwID+"/config-shadow:upsert-template-driver", strings.NewReader(body))
+	crossReq.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{gwPeer}}}
+	crossRec := httptest.NewRecorder()
+	crossTenantOuter.ServeHTTP(crossRec, crossReq)
+	if crossRec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for cross-tenant platform-gateway grant on upsert route, got %d (%s)", crossRec.Code, crossRec.Body.String())
 	}
 }

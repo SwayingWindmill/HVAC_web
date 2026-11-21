@@ -63,13 +63,11 @@ func TestCertificateRevokeHookRespectsRemainingCerts(t *testing.T) {
 	lister := &fakeRevokeChildLister{ids: []string{"018f3e00-5000-7000-8000-000000000001"}}
 	reporter := &fakeRevokeCoverageReporter{}
 
-	// Remaining active certificate: no coverage unavailability reported.
 	applyCertificateRevokeHook(nil, lister, reporter, gatewayID, strings.Repeat("a", 64), true)
 	if len(reporter.reports) != 0 {
 		t.Fatalf("expected 0 coverage reports while another cert stays active, got %+v", reporter.reports)
 	}
 
-	// Last active certificate revoked: coverage marks gateway and child devices unavailable.
 	applyCertificateRevokeHook(nil, lister, reporter, gatewayID, strings.Repeat("b", 64), false)
 	if len(reporter.reports) != 1 || reporter.reports[0].Available {
 		t.Fatalf("expected 1 unavailable coverage report when last cert revoked, got %+v", reporter.reports)

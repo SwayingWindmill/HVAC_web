@@ -4,13 +4,11 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
-	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
-	"errors"
 	"math"
 	"net/http"
 	"os"
@@ -18,19 +16,20 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 )
 
 const (
 	// HeaderGatewayCertPopTimestamp holds Unix epoch seconds of a gateway PoP signature.
-	HeaderGatewayCertPopTimestamp = "X-Gateway-Cert-Pop-Timestamp"
+	HeaderGatewayCertPopTimestamp = edgecontrol.HeaderGatewayCertPopTimestamp
 	// HeaderGatewayCertPopNonce holds a per-request unique nonce (>= 16 printable ASCII bytes).
-	HeaderGatewayCertPopNonce = "X-Gateway-Cert-Pop-Nonce"
+	HeaderGatewayCertPopNonce = edgecontrol.HeaderGatewayCertPopNonce
 	// HeaderGatewayCertPopSignature holds the base64 PoP signature over the canonical string.
-	HeaderGatewayCertPopSignature = "X-Gateway-Cert-Pop-Signature"
+	HeaderGatewayCertPopSignature = edgecontrol.HeaderGatewayCertPopSignature
 	// HeaderGatewayCertForwardedBy is set by a trusted mTLS front proxy when forwarding client certs.
-	HeaderGatewayCertForwardedBy = "X-Gateway-Cert-Forwarded-By"
+	HeaderGatewayCertForwardedBy = edgecontrol.HeaderGatewayCertForwardedBy
 
-	popCanonicalPrefix   = "HVAC-GW-POP-V1"
 	popMaxClockSkew      = 300 * time.Second
 	popReplayWindow      = 10 * time.Minute
 	popMaxReplayEntries  = 65536
@@ -119,16 +118,7 @@ var defaultPoPReplayGuard = NewPoPReplayGuard(popReplayWindow, popMaxReplayEntri
 // CanonicalGatewayPoPPayload builds the deterministic ASCII signing payload shared by
 // Go gateways, edge Node-RED scripts, and connectivity HTTP ingress verification.
 func CanonicalGatewayPoPPayload(method, requestURI, timestamp, nonce, certFingerprintSHA256 string) string {
-	pathAndQuery := strings.TrimSpace(requestURI)
-	if pathAndQuery == "" {
-		pathAndQuery = "/"
-	}
-	return popCanonicalPrefix + "\n" +
-		strings.ToUpper(strings.TrimSpace(method)) + "\n" +
-		pathAndQuery + "\n" +
-		strings.TrimSpace(timestamp) + "\n" +
-		strings.TrimSpace(nonce) + "\n" +
-		strings.ToLower(strings.TrimSpace(certFingerprintSHA256))
+	return edgecontrol.CanonicalGatewayPoPPayload(method, requestURI, timestamp, nonce, certFingerprintSHA256)
 }
 
 func certFingerprintSHA256Hex(certDER []byte) string {
@@ -166,9 +156,15 @@ func shouldVerifyGatewayRequestPoP(r *http.Request) bool {
 	if hasAnyGatewayPoPHeader(r) {
 		return true
 	}
-	// Direct gateway mTLS connections already prove private-key possession in TLS 1.3;
-	// only forwarded client certificate requests require PoP when configured globally.
-	if r != nil && r.Header.Get("X-Gateway-Client-Cert") != "" {
+	if r == nil {
+		return false
+	}
+	// Proxy-forwarded requests explicitly marked by X-Gateway-Cert-Forwarded-By always require PoP,
+	// whereas direct gateway TLS 1.3 mTLS already proves private-key possession unless enforced globally.
+	if strings.TrimSpace(r.Header.Get(HeaderGatewayCertForwardedBy)) != "" {
+		return true
+	}
+	if strings.TrimSpace(r.Header.Get("X-Gateway-Client-Cert")) != "" {
 		return strings.EqualFold(strings.TrimSpace(os.Getenv(popRequireEnvVarName)), "true")
 	}
 	return false
@@ -221,28 +217,7 @@ func VerifyGatewayRequestPoP(r *http.Request, peer *x509.Certificate, guard *PoP
 // SignGatewayRequestPoP attaches X-Gateway-Cert-Pop-{Timestamp,Nonce,Signature} headers
 // to req signed by the gateway leaf certificate's private key.
 func SignGatewayRequestPoP(req *http.Request, certDER []byte, signer crypto.Signer, now time.Time) error {
-	if req == nil || len(certDER) == 0 || signer == nil {
-		return errors.New("gateway PoP signing requires request, certificate, and signer")
-	}
-	if now.IsZero() {
-		now = time.Now().UTC()
-	}
-	var nonceBytes [16]byte
-	if _, err := rand.Read(nonceBytes[:]); err != nil {
-		return err
-	}
-	nonce := hex.EncodeToString(nonceBytes[:])
-	ts := strconv.FormatInt(now.UTC().Unix(), 10)
-	fingerprint := certFingerprintSHA256Hex(certDER)
-	canonical := CanonicalGatewayPoPPayload(req.Method, requestPathAndQuery(req), ts, nonce, fingerprint)
-	sig, err := signGatewayPoPPayload(signer, []byte(canonical))
-	if err != nil {
-		return err
-	}
-	req.Header.Set(HeaderGatewayCertPopTimestamp, ts)
-	req.Header.Set(HeaderGatewayCertPopNonce, nonce)
-	req.Header.Set(HeaderGatewayCertPopSignature, base64.StdEncoding.EncodeToString(sig))
-	return nil
+	return edgecontrol.SignGatewayRequestPoP(req, certDER, signer, now)
 }
 
 func isValidPoPNonce(nonce string) bool {
@@ -256,18 +231,6 @@ func isValidPoPNonce(nonce string) bool {
 		}
 	}
 	return true
-}
-
-func signGatewayPoPPayload(signer crypto.Signer, payload []byte) ([]byte, error) {
-	switch signer.Public().(type) {
-	case ed25519.PublicKey:
-		return signer.Sign(rand.Reader, payload, crypto.Hash(0))
-	case *ecdsa.PublicKey, *rsa.PublicKey:
-		digest := sha256.Sum256(payload)
-		return signer.Sign(rand.Reader, digest[:], crypto.SHA256)
-	default:
-		return nil, errors.New("unsupported gateway PoP signer key type")
-	}
 }
 
 func verifyGatewayPoPSignature(pub crypto.PublicKey, payload, sig []byte) bool {

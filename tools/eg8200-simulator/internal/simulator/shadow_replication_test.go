@@ -103,7 +103,6 @@ func TestHandleDownlinkShadowMessageInlineAckAndQuarantine(t *testing.T) {
 		t.Fatalf("expected inline shadow rev 3 persisted, got %+v", snap)
 	}
 
-	// Corrupt payload digest triggers QUARANTINED CHANGE_ACK and skips apply.
 	badBatch, _, badDigest := buildTestChangeBatch(t, gwID, 4, desired, true)
 	if err := handleDownlinkShadowMessage(context.Background(), cfg, shadow, nil, publishFn, badBatch); err != nil {
 		t.Fatalf("quarantine handleDownlinkShadowMessage failed: %v", err)
@@ -119,6 +118,18 @@ func TestHandleDownlinkShadowMessageInlineAckAndQuarantine(t *testing.T) {
 	}
 	if snap := shadow.snapshot(); snap.AppliedRevision != 3 {
 		t.Fatalf("expected shadow revision unchanged (3) after quarantine, got %d", snap.AppliedRevision)
+	}
+
+	invalidItemEnv, _ := json.Marshal(edgeReplicationEnvelope{
+		SchemaVersion: edgeReplicationSchemaVersion,
+		MessageID:     "0193f000-7000-7000-8000-000000000097",
+		EdgeID:        gwID,
+		SentAt:        1786352400000,
+		Type:          edgeReplicationTypeBatch,
+		Payload:       json.RawMessage(`{"items":[{"cursor":0,"deliveryId":"bad","ownerDomain":"DRIVER_CONFIG","orderingKey":"k","sourceRevision":0,"payloadDigest":"bad"}]}`),
+	})
+	if err := handleDownlinkShadowMessage(context.Background(), cfg, shadow, nil, publishFn, invalidItemEnv); err == nil {
+		t.Fatal("expected malformed CHANGE_BATCH item to return error instead of skipping")
 	}
 }
 
@@ -186,7 +197,48 @@ func TestHandleDownlinkShadowMessageTriggersHTTPSyncAndAcks(t *testing.T) {
 		QueueDirectory:       filepath.Join(dir, "queue"),
 	}
 	shadow := newEdgeConfigShadow(filepath.Join(dir, "shadow.v1.json"))
-	validBatch, _, _ := buildTestChangeBatch(t, gwID, 5, desired, false)
+	desiredBytes, err := json.Marshal(desired)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digestSum := sha256.Sum256(desiredBytes)
+	digest := hex.EncodeToString(digestSum[:])
+	multiBatchBytes, err := json.Marshal(edgeChangeBatchPayload{
+		Items: []edgeChangeBatchItem{
+			{
+				Cursor:         4,
+				DeliveryID:     "0193f000-7000-7000-8000-000000000091",
+				OwnerDomain:    "DRIVER_CONFIG",
+				OrderingKey:    "gateway-shadow:" + gwID,
+				SourceRevision: 4,
+				PayloadDigest:  digest,
+				Payload:        desiredBytes,
+			},
+			{
+				Cursor:         5,
+				DeliveryID:     "0193f000-7000-7000-8000-000000000092",
+				OwnerDomain:    "DRIVER_CONFIG",
+				OrderingKey:    "gateway-shadow:" + gwID,
+				SourceRevision: 5,
+				PayloadDigest:  digest,
+				Payload:        desiredBytes,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	validBatch, err := json.Marshal(edgeReplicationEnvelope{
+		SchemaVersion: edgeReplicationSchemaVersion,
+		MessageID:     "0193f000-7000-7000-8000-000000000098",
+		EdgeID:        gwID,
+		SentAt:        1786352400000,
+		Type:          edgeReplicationTypeBatch,
+		Payload:       multiBatchBytes,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	var ackPayloads [][]byte
 	if err := handleDownlinkShadowMessage(context.Background(), cfg, shadow, nil, func(_ context.Context, _ string, payload []byte) error {
@@ -199,10 +251,13 @@ func TestHandleDownlinkShadowMessageTriggersHTTPSyncAndAcks(t *testing.T) {
 	pulls, reports := pullCount, reportCount
 	mu.Unlock()
 	if pulls != 1 || reports != 1 {
-		t.Fatalf("expected pull=1 report=1 via HTTP sync, got pull=%d report=%d", pulls, reports)
+		t.Fatalf("expected coalesced pull=1 report=1 across 2-item batch, got pull=%d report=%d", pulls, reports)
+	}
+	if len(ackPayloads) != 2 {
+		t.Fatalf("expected 2 CHANGE_ACK payloads, got %d", len(ackPayloads))
 	}
 	var envAck edgeReplicationEnvelope
-	if err := json.Unmarshal(ackPayloads[0], &envAck); err != nil {
+	if err := json.Unmarshal(ackPayloads[1], &envAck); err != nil {
 		t.Fatal(err)
 	}
 	var ack edgeChangeAckPayload

@@ -176,6 +176,9 @@ func main() {
 	}
 
 	runEdgeCycleAndPublish := func() {
+		if syncErr := publisher.MaybeSyncConfigShadow(ctx, 30*time.Second); syncErr != nil {
+			logger.Warn("eg8200_config_shadow_sync_failed", "error_code", "CONFIG_SHADOW_SYNC_FAILED")
+		}
 		snapshot := plant.TickTo(time.Now())
 		edgeCycle := edgeRuntime.RunCycle(ctx, snapshot.ObservedAt)
 		for _, poll := range edgeCycle.PollResults {
@@ -197,9 +200,6 @@ func main() {
 		if !edgeCycle.Publishable() {
 			logger.Warn("eg8200_edge_clock_regressed", "cycle_at", snapshot.ObservedAt.UTC().Format(time.RFC3339Nano))
 			return
-		}
-		if syncErr := publisher.MaybeSyncConfigShadow(ctx, 30*time.Second); syncErr != nil {
-			logger.Warn("eg8200_config_shadow_sync_failed", "error_code", "CONFIG_SHADOW_SYNC_FAILED")
 		}
 		publish(edgeCycle.TelemetrySnapshot)
 	}

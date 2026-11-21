@@ -4,15 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto"
-	"crypto/ecdsa"
-	"crypto/ed25519"
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +20,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 )
 
 const (
@@ -596,11 +591,32 @@ func (publisher *MQTTPublisher) ConfigShadowState() (appliedRevision int64, poin
 	return snap.AppliedRevision, snap.PointMappings, snap.SamplingPolicies, snap.ConcentratorConfigs
 }
 
+func (publisher *MQTTPublisher) shadowClient() (*http.Client, error) {
+	if publisher == nil {
+		return nil, nil
+	}
+	publisher.shadowClientMu.Lock()
+	defer publisher.shadowClientMu.Unlock()
+	if publisher.shadowHTTPClient != nil {
+		return publisher.shadowHTTPClient, nil
+	}
+	built, err := newShadowHTTPClient(publisher.config)
+	if err != nil {
+		return nil, err
+	}
+	publisher.shadowHTTPClient = built
+	return built, nil
+}
+
 func (publisher *MQTTPublisher) SyncConfigShadow(ctx context.Context) error {
-	if publisher == nil || publisher.configShadow == nil {
+	if publisher == nil || publisher.configShadow == nil || strings.TrimSpace(publisher.config.EnrollmentURL) == "" {
 		return nil
 	}
-	return syncConfigShadowHTTP(ctx, publisher.config, publisher.configShadow, nil)
+	client, err := publisher.shadowClient()
+	if err != nil {
+		return err
+	}
+	return syncConfigShadowHTTP(ctx, publisher.config, publisher.configShadow, client)
 }
 
 func (publisher *MQTTPublisher) SyncConfigShadowWithClient(ctx context.Context, client *http.Client) error {
@@ -620,7 +636,11 @@ func (publisher *MQTTPublisher) MaybeSyncConfigShadow(ctx context.Context, minIn
 	if !publisher.configShadow.markAttemptIfDue(minInterval, time.Now().UTC()) {
 		return nil
 	}
-	return syncConfigShadowHTTP(ctx, publisher.config, publisher.configShadow, nil)
+	client, err := publisher.shadowClient()
+	if err != nil {
+		return err
+	}
+	return syncConfigShadowHTTP(ctx, publisher.config, publisher.configShadow, client)
 }
 
 func syncConfigShadowHTTP(ctx context.Context, config MQTTGatewayConfig, shadow *edgeConfigShadow, client *http.Client) error {
@@ -755,48 +775,7 @@ func loadShadowSigningIdentity(config MQTTGatewayConfig) ([]byte, crypto.Signer,
 }
 
 func signShadowRequestPoP(req *http.Request, certDER []byte, signer crypto.Signer, now time.Time) error {
-	if req == nil || len(certDER) == 0 || signer == nil || req.URL == nil {
-		return errors.New("missing request or signing identity")
-	}
-	if now.IsZero() {
-		now = time.Now().UTC()
-	}
-	var nonceBytes [16]byte
-	if _, err := rand.Read(nonceBytes[:]); err != nil {
-		return err
-	}
-	nonce := hex.EncodeToString(nonceBytes[:])
-	ts := strconv.FormatInt(now.UTC().Unix(), 10)
-	certSum := sha256.Sum256(certDER)
-	fingerprint := hex.EncodeToString(certSum[:])
-	pathAndQuery := req.URL.RequestURI()
-	if pathAndQuery == "" {
-		pathAndQuery = "/"
-	}
-	canonical := "HVAC-GW-POP-V1\n" +
-		strings.ToUpper(strings.TrimSpace(req.Method)) + "\n" +
-		pathAndQuery + "\n" +
-		ts + "\n" +
-		nonce + "\n" +
-		fingerprint
-	var sig []byte
-	var err error
-	switch signer.Public().(type) {
-	case ed25519.PublicKey:
-		sig, err = signer.Sign(rand.Reader, []byte(canonical), crypto.Hash(0))
-	case *ecdsa.PublicKey, *rsa.PublicKey:
-		digest := sha256.Sum256([]byte(canonical))
-		sig, err = signer.Sign(rand.Reader, digest[:], crypto.SHA256)
-	default:
-		return errors.New("unsupported gateway PoP signer key type")
-	}
-	if err != nil {
-		return err
-	}
-	req.Header.Set("X-Gateway-Cert-Pop-Timestamp", ts)
-	req.Header.Set("X-Gateway-Cert-Pop-Nonce", nonce)
-	req.Header.Set("X-Gateway-Cert-Pop-Signature", base64.StdEncoding.EncodeToString(sig))
-	return nil
+	return edgecontrol.SignGatewayRequestPoP(req, certDER, signer, now)
 }
 
 func isProtectedEdgeConcentratorUID(unitID int) bool {

@@ -70,17 +70,13 @@ func TestVerifyGatewayRequestPoPSupportsKeyTypesAndRejectsReplaySkewPathTamper(t
 	}
 
 	for _, tc := range []struct {
-		name   string
-		signer interface {
-			Public() any
-		}
-		key any
+		name string
+		key  any
 	}{
 		{name: "ecdsa_p256", key: ecKey},
 		{name: "rsa_2048", key: rsaKey},
 		{name: "ed25519", key: edKey},
 	} {
-		_ = tc.signer
 		t.Run(tc.name, func(t *testing.T) {
 			cert, _ := issuePoPTestCert(t, tc.key)
 			req := httptest.NewRequest(http.MethodGet, "/gateway/v1/config-shadow?sinceRevision=12", nil)
@@ -105,19 +101,16 @@ func TestVerifyGatewayRequestPoPSupportsKeyTypesAndRejectsReplaySkewPathTamper(t
 				t.Fatalf("VerifyGatewayRequestPoP failed: %v", err)
 			}
 
-			// Replaying identical nonce fails.
 			if err := VerifyGatewayRequestPoP(req, cert, guard, now); !errors.Is(err, ErrEnrollmentRejected) {
 				t.Fatalf("expected ErrEnrollmentRejected on replay, got %v", err)
 			}
 
-			// Tampering request path or method fails.
 			tampered := req.Clone(t.Context())
 			tampered.Method = http.MethodPost
 			if err := VerifyGatewayRequestPoP(tampered, cert, NewPoPReplayGuard(5*time.Minute, 16), now); !errors.Is(err, ErrEnrollmentRejected) {
 				t.Fatalf("expected ErrEnrollmentRejected on method tamper, got %v", err)
 			}
 
-			// Expired timestamp (> 300s skew) fails.
 			if err := VerifyGatewayRequestPoP(req, cert, NewPoPReplayGuard(5*time.Minute, 16), now.Add(301*time.Second)); !errors.Is(err, ErrEnrollmentRejected) {
 				t.Fatalf("expected ErrEnrollmentRejected on expired PoP, got %v", err)
 			}
@@ -133,21 +126,32 @@ func TestParseGatewayPeerCertEnforcesPoPWhenHeadersPresentOrEnvRequired(t *testi
 	}
 	cert, certPEM := issuePoPTestCert(t, key)
 
-	// Without PoP headers and without CONNECTIVITY_REQUIRE_FORWARDED_CERT_POP, backward compatible.
 	reqPlain := httptest.NewRequest(http.MethodPost, "/gateway/v1/renew", nil)
 	reqPlain.Header.Set("X-Gateway-Client-Cert", url.QueryEscape(string(certPEM)))
 	if _, err := ParseGatewayPeerCert(reqPlain); err != nil {
 		t.Fatalf("expected compatibility without PoP headers, got %v", err)
 	}
 
-	// Partial or invalid PoP header triggers immediate rejection.
+	reqForwardedUnsigned := reqPlain.Clone(t.Context())
+	reqForwardedUnsigned.Header.Set(HeaderGatewayCertForwardedBy, "host-edge-proxy")
+	if _, err := ParseGatewayPeerCert(reqForwardedUnsigned); !errors.Is(err, ErrEnrollmentRejected) {
+		t.Fatalf("expected ErrEnrollmentRejected when forwarded-by header set without PoP, got %v", err)
+	}
+
+	reqForwardedSigned := reqForwardedUnsigned.Clone(t.Context())
+	if err := SignGatewayRequestPoP(reqForwardedSigned, cert.Raw, key, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseGatewayPeerCert(reqForwardedSigned); err != nil {
+		t.Fatalf("expected forwarded request with valid PoP to pass, got %v", err)
+	}
+
 	reqPartial := reqPlain.Clone(t.Context())
 	reqPartial.Header.Set(HeaderGatewayCertPopTimestamp, "1700000000")
 	if _, err := ParseGatewayPeerCert(reqPartial); !errors.Is(err, ErrEnrollmentRejected) {
 		t.Fatalf("expected ErrEnrollmentRejected on partial PoP header, got %v", err)
 	}
 
-	// Valid PoP passes and replay is blocked.
 	reqSigned := reqPlain.Clone(t.Context())
 	if err := SignGatewayRequestPoP(reqSigned, cert.Raw, key, now); err != nil {
 		t.Fatal(err)
@@ -159,7 +163,6 @@ func TestParseGatewayPeerCertEnforcesPoPWhenHeadersPresentOrEnvRequired(t *testi
 		t.Fatalf("expected replayed signed PoP to fail, got %v", err)
 	}
 
-	// Global requirement rejects unsigned requests.
 	t.Setenv(popRequireEnvVarName, "true")
 	if _, err := ParseGatewayPeerCert(reqPlain); !errors.Is(err, ErrEnrollmentRejected) {
 		t.Fatalf("expected ErrEnrollmentRejected when PoP required globally, got %v", err)

@@ -464,7 +464,11 @@ INSERT INTO command_runtime.command_dispatch_outbox (
 		return fmt.Errorf("commit dispatch resolution: %w", err)
 	}
 	if retry {
-		store.notifyDispatchWork()
+		switch result.FailureCode {
+		case "DISPATCH_SAFETY_EVALUATION_FAILED", "DISPATCH_SAFETY_UNAVAILABLE":
+		default:
+			store.notifyDispatchWork()
+		}
 	} else if intentFinal == commandmodel.IntentDispatching && attemptFinal == commandmodel.AttemptAcknowledged {
 		store.notifyVerificationWork()
 	}
@@ -832,7 +836,7 @@ INSERT INTO command_runtime.command_audit_intents (
 
 // DueDispatchTenants lists distinct tenants currently holding due dispatchable work.
 func (store *PostgresStore) DueDispatchTenants(ctx context.Context, now time.Time) ([]string, error) {
-	return store.queryDueTenants(ctx, `SELECT tenant_id::text FROM command_runtime.tenants_with_due_dispatch($1) ORDER BY 1`, now)
+	return store.queryDueTenants(ctx, `SELECT t.tenant_id::text FROM command_runtime.tenants_with_due_dispatch($1) AS t(tenant_id) ORDER BY 1`, now)
 }
 
 // ClaimAnyDispatch scans due tenants fairly and claims the next dispatchable command,

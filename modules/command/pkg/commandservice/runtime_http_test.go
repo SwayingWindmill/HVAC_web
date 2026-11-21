@@ -322,7 +322,6 @@ func TestRuntimeHTTPClaimAnyDispatchAndVerificationRoutes(t *testing.T) {
 		t.Fatalf("verification claim-any metric route=%q, want verification.claim-any", route)
 	}
 
-	// Wrong SPIFFE peer rejected.
 	forbiddenReq := runtimeRequest(t, http.MethodPost, InternalDispatchClaimAnyPath, body, "spiffe://hvac.local/command-verifier")
 	forbiddenRec := httptest.NewRecorder()
 	handler.ServeHTTP(forbiddenRec, forbiddenReq)
@@ -330,7 +329,6 @@ func TestRuntimeHTTPClaimAnyDispatchAndVerificationRoutes(t *testing.T) {
 		t.Fatalf("wrong peer status=%d, want 403", forbiddenRec.Code)
 	}
 
-	// Invalid waitMs rejected.
 	badWaitReq := runtimeRequest(t, http.MethodPost, InternalDispatchClaimAnyPath+"?waitMs=5000", body, "spiffe://hvac.local/command-dispatcher")
 	badWaitRec := httptest.NewRecorder()
 	handler.ServeHTTP(badWaitRec, badWaitReq)
@@ -338,12 +336,18 @@ func TestRuntimeHTTPClaimAnyDispatchAndVerificationRoutes(t *testing.T) {
 		t.Fatalf("out-of-bounds waitMs status=%d, want 400", badWaitRec.Code)
 	}
 
-	// Idle stores return 204 No Content.
 	stub.claimDispatchErr = ErrNoDispatchAvailable
 	stub.claimVerificationErr = ErrVerificationNotAvailable
 	idleRec := httptest.NewRecorder()
 	handler.ServeHTTP(idleRec, runtimeRequest(t, http.MethodPost, InternalDispatchClaimAnyPath, body, "spiffe://hvac.local/command-dispatcher"))
 	if idleRec.Code != http.StatusNoContent {
 		t.Fatalf("idle dispatch claim-any status=%d, want 204", idleRec.Code)
+	}
+
+	stub.claimDispatchErr = errTransientSafetyEvaluation
+	transientRec := httptest.NewRecorder()
+	handler.ServeHTTP(transientRec, runtimeRequest(t, http.MethodPost, InternalDispatchClaimAnyPath, body, "spiffe://hvac.local/command-dispatcher"))
+	if transientRec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("transient safety eval claim-any status=%d, want 503", transientRec.Code)
 	}
 }

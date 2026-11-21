@@ -66,4 +66,15 @@ func TestParseAndValidateCommandPointMetadata(t *testing.T) {
 			t.Fatalf("expected ErrInvalidPointMetadata for %v, got %v", bad, err)
 		}
 	}
+
+	for _, badInterlock := range []map[string]any{
+		{"interlockChecks": "bad"},
+		{"interlockChecks": []any{map[string]any{"deviceId": 123, "key": "run_state", "expected": "RUNNING"}}},
+		{"interlockChecks": []any{map[string]any{"deviceId": "dev-1", "key": "run_state", "expected": ""}}},
+	} {
+		err := ValidateCommandPointMetadata(badInterlock)
+		if !errors.Is(err, ErrInvalidInterlockMetadata) || !errors.Is(err, ErrInvalidPointMetadata) {
+			t.Fatalf("expected ErrInvalidInterlockMetadata + ErrInvalidPointMetadata for %v, got %v", badInterlock, err)
+		}
+	}
 }

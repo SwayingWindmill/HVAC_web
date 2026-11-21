@@ -442,6 +442,19 @@ func (s *Server) handleConn(rawConn net.Conn) {
 		_ = upstreamConn.Close()
 		return
 	}
+
+	// Re-check credential status after registering in s.sessions to close any revocation race window.
+	recheckCtx, recheckCancel := context.WithTimeout(s.rootCtx, s.cfg.HandshakeTimeout)
+	recheckGatewayID, recheckErr := s.cfg.Verifier.VerifyActiveCredential(recheckCtx, leaf)
+	recheckCancel()
+	if recheckErr != nil || strings.ToLower(strings.TrimSpace(recheckGatewayID)) != gatewayID {
+		s.unregisterSession(sess)
+		s.recordHandshake("rejected")
+		_ = tlsConn.Close()
+		_ = upstreamConn.Close()
+		return
+	}
+
 	s.recordHandshake("accepted")
 
 	defer func() {

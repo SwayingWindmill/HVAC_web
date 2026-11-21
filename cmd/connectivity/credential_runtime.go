@@ -99,80 +99,43 @@ func (t *gatewayOnlineTracker) publishCount(count int) {
 	_ = t.metrics.SetGauge("hvac_mqtt_online_gateways", onlineGatewayMetricHelp, nil, float64(count))
 }
 
+type credentialRuntimeConfig struct {
+	RootCtx             context.Context
+	Logger              *slog.Logger
+	Metrics             *observability.Registry
+	Presence            *gatewayOnlineTracker
+	Store               *connectivity.Store
+	ConcentratorService *concentrator.Service
+	CoverageReporter    adapter.CoverageReporter
+	Tap                 *packettap.Manager
+	EnableGuardFromEnv  bool
+	MQTTSession         *mqttclient.SharedSession
+	TunnelOptions       []tunnel.Option
+}
+
 func credentialServer(store *connectivity.Store) (*http.Server, *tunnel.Hub, error) {
-	return credentialServerWithRuntime(store, nil, nil)
-}
-
-func credentialServerWithRuntime(store *connectivity.Store, concentratorService *concentrator.Service, coverageReporter adapter.CoverageReporter, tunnelOptions ...tunnel.Option) (*http.Server, *tunnel.Hub, error) {
-	return credentialServerWithContext(context.Background(), slog.Default(), nil, nil, store, concentratorService, coverageReporter, tunnelOptions...)
-}
-
-func credentialServerWithContext(
-	rootCtx context.Context,
-	logger *slog.Logger,
-	metrics *observability.Registry,
-	presence *gatewayOnlineTracker,
-	store *connectivity.Store,
-	concentratorService *concentrator.Service,
-	coverageReporter adapter.CoverageReporter,
-	tunnelOptions ...tunnel.Option,
-) (*http.Server, *tunnel.Hub, error) {
-	return credentialServerWithDiagnostics(rootCtx, logger, metrics, presence, store, concentratorService, coverageReporter, nil, tunnelOptions...)
-}
-
-func credentialServerWithDiagnostics(
-	rootCtx context.Context,
-	logger *slog.Logger,
-	metrics *observability.Registry,
-	presence *gatewayOnlineTracker,
-	store *connectivity.Store,
-	concentratorService *concentrator.Service,
-	coverageReporter adapter.CoverageReporter,
-	tap *packettap.Manager,
-	tunnelOptions ...tunnel.Option,
-) (*http.Server, *tunnel.Hub, error) {
-	srv, hub, _, err := credentialAndGuardServerWithDiagnostics(
-		rootCtx, logger, metrics, presence, store, concentratorService, coverageReporter, tap, false, tunnelOptions...,
-	)
+	srv, hub, _, err := newCredentialRuntime(credentialRuntimeConfig{Store: store})
 	return srv, hub, err
 }
 
-func credentialAndGuardServerWithDiagnostics(
-	rootCtx context.Context,
-	logger *slog.Logger,
-	metrics *observability.Registry,
-	presence *gatewayOnlineTracker,
-	store *connectivity.Store,
-	concentratorService *concentrator.Service,
-	coverageReporter adapter.CoverageReporter,
-	tap *packettap.Manager,
-	enableGuardFromEnv bool,
-	tunnelOptions ...tunnel.Option,
-) (*http.Server, *tunnel.Hub, *mqttguard.Server, error) {
-	return credentialAndGuardServerWithSession(
-		rootCtx, logger, metrics, presence, store, concentratorService, coverageReporter, tap, enableGuardFromEnv, nil, tunnelOptions...,
-	)
-}
-
-func credentialAndGuardServerWithSession(
-	rootCtx context.Context,
-	logger *slog.Logger,
-	metrics *observability.Registry,
-	presence *gatewayOnlineTracker,
-	store *connectivity.Store,
-	concentratorService *concentrator.Service,
-	coverageReporter adapter.CoverageReporter,
-	tap *packettap.Manager,
-	enableGuardFromEnv bool,
-	mqttSession *mqttclient.SharedSession,
-	tunnelOptions ...tunnel.Option,
-) (*http.Server, *tunnel.Hub, *mqttguard.Server, error) {
+func newCredentialRuntime(cfg credentialRuntimeConfig) (*http.Server, *tunnel.Hub, *mqttguard.Server, error) {
+	rootCtx := cfg.RootCtx
 	if rootCtx == nil {
 		rootCtx = context.Background()
 	}
+	logger := cfg.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
+	metrics := cfg.Metrics
+	presence := cfg.Presence
+	store := cfg.Store
+	concentratorService := cfg.ConcentratorService
+	coverageReporter := cfg.CoverageReporter
+	tap := cfg.Tap
+	enableGuardFromEnv := cfg.EnableGuardFromEnv
+	mqttSession := cfg.MQTTSession
+	tunnelOptions := cfg.TunnelOptions
 	loopbackAddr := strings.TrimSpace(envOr("CONNECTIVITY_TUNNEL_LOOPBACK_ADDR", "127.0.0.1:18800"))
 	if loopbackAddr != "" && !strings.EqualFold(loopbackAddr, "off") {
 		if err := tunnel.ValidateLoopbackAddr(loopbackAddr); err != nil {
@@ -276,12 +239,12 @@ func credentialAndGuardServerWithSession(
 		crlPEM, crlErr := service.ExportCRL(refreshCtx)
 		if crlErr != nil {
 			if !errors.Is(crlErr, connectivity.ErrCRLSignUnsupported) {
-				slog.Default().Warn("gateway_crl_export_failed", "error", crlErr.Error())
+				logger.Warn("gateway_crl_export_failed", "error", crlErr.Error())
 			}
 			return
 		}
 		if writeErr := writeAtomicCRLFile(crlOutPath, crlPEM); writeErr != nil {
-			slog.Default().Warn("gateway_crl_write_failed", "path", crlOutPath, "error", writeErr.Error())
+			logger.Warn("gateway_crl_write_failed", "path", crlOutPath, "error", writeErr.Error())
 		}
 	}
 	var mqttGuard *mqttguard.Server
@@ -346,14 +309,22 @@ func credentialAndGuardServerWithSession(
 		if mqttGuard != nil {
 			mqttGuard.CloseGateway(gatewayID)
 		}
-		reportGatewayRevokedCoverage(store, coverageReporter, gatewayID)
+		var lister gatewayChildLister
+		if store != nil {
+			lister = store
+		}
+		reportGatewayRevokedCoverageWithLogger(logger, lister, coverageReporter, gatewayID)
 		refreshCRL()
 	})
 	service.SetCertificateRevokeHook(func(gatewayID, fingerprintSHA256 string, hasRemainingActive bool) {
 		if !hasRemainingActive && presence != nil {
 			presence.SetOnline(gatewayID, false)
 		}
-		applyCertificateRevokeHook(tunnelHub, store, coverageReporter, gatewayID, fingerprintSHA256, hasRemainingActive)
+		var lister gatewayChildLister
+		if store != nil {
+			lister = store
+		}
+		applyCertificateRevokeHookWithLogger(logger, tunnelHub, lister, coverageReporter, gatewayID, fingerprintSHA256, hasRemainingActive)
 		if mqttGuard != nil {
 			mqttGuard.CloseGatewayByFingerprint(gatewayID, fingerprintSHA256)
 		}
@@ -499,84 +470,36 @@ type gatewayChildLister interface {
 }
 
 func applyCertificateRevokeHook(hub *tunnel.Hub, lister gatewayChildLister, reporter adapter.CoverageReporter, gatewayID, fingerprintSHA256 string, hasRemainingActive bool) {
+	applyCertificateRevokeHookWithLogger(nil, hub, lister, reporter, gatewayID, fingerprintSHA256, hasRemainingActive)
+}
+
+func applyCertificateRevokeHookWithLogger(logger *slog.Logger, hub *tunnel.Hub, lister gatewayChildLister, reporter adapter.CoverageReporter, gatewayID, fingerprintSHA256 string, hasRemainingActive bool) {
 	if hub != nil {
 		hub.CloseGatewayByFingerprint(gatewayID, fingerprintSHA256)
 	}
 	if !hasRemainingActive {
-		reportGatewayRevokedCoverageWithLister(lister, reporter, gatewayID)
+		reportGatewayRevokedCoverageWithLogger(logger, lister, reporter, gatewayID)
 	}
-}
-
-func reportGatewayRevokedCoverage(store *connectivity.Store, reporter adapter.CoverageReporter, gatewayID string) {
-	if store == nil {
-		return
-	}
-	reportGatewayRevokedCoverageWithLister(store, reporter, gatewayID)
 }
 
 func reportGatewayRevokedCoverageWithLister(lister gatewayChildLister, reporter adapter.CoverageReporter, gatewayID string) {
+	reportGatewayRevokedCoverageWithLogger(nil, lister, reporter, gatewayID)
+}
+
+func reportGatewayRevokedCoverageWithLogger(logger *slog.Logger, lister gatewayChildLister, reporter adapter.CoverageReporter, gatewayID string) {
 	if lister == nil || reporter == nil {
-		return
-	}
-	trimmedGatewayID := strings.ToLower(strings.TrimSpace(gatewayID))
-	if trimmedGatewayID == "" {
 		return
 	}
 	reportCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	deviceIDs, err := lister.ListGatewayChildDeviceIDs(reportCtx, trimmedGatewayID)
-	if err != nil {
-		return
-	}
-	if isUUIDv7(trimmedGatewayID) {
-		seen := false
-		for _, id := range deviceIDs {
-			if strings.EqualFold(id, trimmedGatewayID) {
-				seen = true
-				break
-			}
-		}
-		if !seen {
-			deviceIDs = append(deviceIDs, trimmedGatewayID)
-		}
-	}
-	if len(deviceIDs) == 0 {
-		return
-	}
-	reason := "SOURCE_UNAVAILABLE"
 	now := time.Now().UTC()
-	observedAt := now.Format(time.RFC3339Nano)
-	sourceRev := max(now.UnixNano(), 1)
-	for start := 0; start < len(deviceIDs); start += adapter.MaximumCoverageBatchSize {
-		end := min(start+adapter.MaximumCoverageBatchSize, len(deviceIDs))
-		_ = reporter.ReportSourceCoverage(reportCtx, adapter.SourceCoverageReport{
-			SourceID:       trimmedGatewayID,
-			DeviceIDs:      deviceIDs[start:end],
-			Available:      false,
-			ReasonCode:     &reason,
-			ObservedAt:     observedAt,
-			SourceRevision: sourceRev,
-		})
-	}
-}
-
-func isUUIDv7(raw string) bool {
-	if len(raw) != 36 || raw[8] != '-' || raw[13] != '-' || raw[18] != '-' || raw[23] != '-' || raw[14] != '7' {
-		return false
-	}
-	if raw[19] != '8' && raw[19] != '9' && raw[19] != 'a' && raw[19] != 'b' {
-		return false
-	}
-	for i := 0; i < len(raw); i++ {
-		if i == 8 || i == 13 || i == 18 || i == 23 {
-			continue
+	var resolver adapter.GatewayChildrenResolver = lister
+	if err := adapter.ReportGatewayUnavailableCoverage(reportCtx, resolver, reporter, gatewayID, "SOURCE_UNAVAILABLE", now, max(now.UnixNano(), 1)); err != nil {
+		if logger == nil {
+			logger = slog.Default()
 		}
-		c := raw[i]
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return false
-		}
+		logger.Warn("gateway_revoked_coverage_report_failed", "gateway_id", gatewayID, "error", err.Error())
 	}
-	return true
 }
 
 func writeAtomicCRLFile(targetPath string, content []byte) error {

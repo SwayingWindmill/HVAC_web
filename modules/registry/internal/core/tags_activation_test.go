@@ -882,12 +882,17 @@ func TestTemplateModbusDriverMaterializationAndTagOverrides(t *testing.T) {
 		t.Fatalf("unexpected ModbusDriver on activation: %+v", act.ModbusDriver)
 	}
 
-	ep, uid := parseModbusTagOverrides([]byte(`{"modbus_endpoint":" 192.168.1.50:502 ","modbus_unit_id":"12"}`))
-	if ep == nil || *ep != "192.168.1.50:502" || uid == nil || *uid != 12 {
-		t.Fatalf("unexpected string tag overrides: ep=%v uid=%v", ep, uid)
+	ep, uid, err := parseModbusTagOverrides([]byte(`{"modbus_endpoint":" 192.168.1.50:502 ","modbus_unit_id":"12"}`))
+	if err != nil || ep == nil || *ep != "192.168.1.50:502" || uid == nil || *uid != 12 {
+		t.Fatalf("unexpected string tag overrides: ep=%v uid=%v err=%v", ep, uid, err)
 	}
-	epNum, uidNum := parseModbusTagOverrides([]byte(`{"modbus_endpoint":"","modbus_unit_id":999}`))
-	if epNum != nil || uidNum != nil {
-		t.Fatalf("expected invalid/blank tag overrides ignored, got ep=%v uid=%v", epNum, uidNum)
+	if _, _, err := parseModbusTagOverrides([]byte(`{"modbus_endpoint":"","modbus_unit_id":12}`)); err == nil {
+		t.Fatal("expected blank modbus_endpoint tag override to error")
+	}
+	if _, _, err := parseModbusTagOverrides([]byte(`{"modbus_endpoint":"192.168.1.50:502","modbus_unit_id":999}`)); err == nil {
+		t.Fatal("expected out-of-range modbus_unit_id tag override to error")
+	}
+	if _, _, err := parseModbusTagOverrides([]byte(`{"modbus_unit_id":`)); err == nil {
+		t.Fatal("expected malformed device tags JSON to error")
 	}
 }
