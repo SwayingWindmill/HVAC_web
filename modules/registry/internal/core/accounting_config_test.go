@@ -88,8 +88,8 @@ func newMemoryAccountingConfigBackend() *memoryAccountingConfigBackend {
 	}
 }
 
-func strPtr(v string) *string  { return &v }
-func int64Ptr(v int64) *int64  { return &v }
+func strPtr(v string) *string { return &v }
+func int64Ptr(v int64) *int64 { return &v }
 func float64Ptr(v float64) *float64 {
 	return &v
 }
@@ -605,8 +605,16 @@ func TestAccountingConfigValidationAndErrorMapping(t *testing.T) {
 		{"bad ratioApplicationMode", func() CreateSiteMeterRatioVersionInput { r := validRatio; r.RatioApplicationMode = "CLOUD"; return r }},
 		{"bad readingUnit", func() CreateSiteMeterRatioVersionInput { r := validRatio; r.ReadingUnit = "kW"; return r }},
 		{"bad effectiveFrom", func() CreateSiteMeterRatioVersionInput { r := validRatio; r.EffectiveFrom = "2026-08-01"; return r }},
-		{"effectiveTo equals effectiveFrom", func() CreateSiteMeterRatioVersionInput { r := validRatio; r.EffectiveTo = strPtr("2026-08-01T00:00:00Z"); return r }},
-		{"effectiveTo before effectiveFrom", func() CreateSiteMeterRatioVersionInput { r := validRatio; r.EffectiveTo = strPtr("2026-07-31T23:59:59Z"); return r }},
+		{"effectiveTo equals effectiveFrom", func() CreateSiteMeterRatioVersionInput {
+			r := validRatio
+			r.EffectiveTo = strPtr("2026-08-01T00:00:00Z")
+			return r
+		}},
+		{"effectiveTo before effectiveFrom", func() CreateSiteMeterRatioVersionInput {
+			r := validRatio
+			r.EffectiveTo = strPtr("2026-07-31T23:59:59Z")
+			return r
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if err := tc.build().Validate(); !errors.Is(err, ErrInvalidMutation) {

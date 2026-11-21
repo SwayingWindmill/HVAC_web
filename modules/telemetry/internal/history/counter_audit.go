@@ -21,18 +21,18 @@ const (
 )
 
 type counterAuditRow struct {
-	ObservationID         string   `json:"observation_id"`
-	DeviceID              string   `json:"device_id"`
-	PointID               string   `json:"point_id"`
-	TelemetryKey          string   `json:"telemetry_key"`
-	PointRevision         uint64   `json:"point_revision"`
-	Unit                  *string  `json:"unit"`
-	CounterDecreaseMode   *string  `json:"counter_decrease_mode"`
+	ObservationID          string   `json:"observation_id"`
+	DeviceID               string   `json:"device_id"`
+	PointID                string   `json:"point_id"`
+	TelemetryKey           string   `json:"telemetry_key"`
+	PointRevision          uint64   `json:"point_revision"`
+	Unit                   *string  `json:"unit"`
+	CounterDecreaseMode    *string  `json:"counter_decrease_mode"`
 	CounterRolloverModulus *float64 `json:"counter_rollover_modulus"`
-	ValueNumber           float64  `json:"value_number"`
-	SampledAt             string   `json:"sampled_at"`
-	Quality               string   `json:"quality"`
-	QualityReasons        []string `json:"quality_reasons"`
+	ValueNumber            float64  `json:"value_number"`
+	SampledAt              string   `json:"sampled_at"`
+	Quality                string   `json:"quality"`
+	QualityReasons         []string `json:"quality_reasons"`
 }
 
 type counterAuditObsMeta struct {
