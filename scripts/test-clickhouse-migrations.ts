@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -122,6 +123,67 @@ test('local plaintext password statement in init SQL fails closed', () => {
     );
   });
   assert.throws(run, /local password statements/);
+});
+
+function updateManifestInSandbox(
+  sandbox: string,
+  mutate: (manifest: { equivalentSha256?: Record<string, string[]>; [key: string]: unknown }) => void,
+): void {
+  const manifestPath = join(sandbox, 'deploy/platform/phase1/clickhouse-migrations/clickhouse-manifest.v1.json');
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
+    equivalentSha256?: Record<string, string[]>;
+    [key: string]: unknown;
+  };
+  mutate(manifest);
+  const nextRaw = `${JSON.stringify(manifest, null, 2)}\n`;
+  writeFileSync(manifestPath, nextRaw, 'utf8');
+
+  const releasePath = join(sandbox, 'deploy/platform/phase1/product-release.v1.json');
+  const release = JSON.parse(readFileSync(releasePath, 'utf8')) as {
+    schemaContract: { clickhouseMigrationManifestSha256: string };
+  };
+  release.schemaContract.clickhouseMigrationManifestSha256 = createHash('sha256').update(nextRaw).digest('hex');
+  writeFileSync(releasePath, `${JSON.stringify(release, null, 2)}\n`, 'utf8');
+}
+
+test('drifted clickhouse-migration-equivalent-sha256.tsv fails closed', () => {
+  const run = withSandboxRepo((sandbox) => {
+    const tsvPath = join(sandbox, 'deploy/platform/phase1/clickhouse-migrations/clickhouse-migration-equivalent-sha256.tsv');
+    writeFileSync(tsvPath, 'infra/telemetry/clickhouse/init/025-clickhouse-complete-governance.sql|0000\n', 'utf8');
+  });
+  assert.throws(run, /clickhouse-migration-equivalent-sha256\.tsv/);
+});
+
+test('equivalentSha256 rejects unregistered migration, invalid sha256, and current file sha256', () => {
+  const runUnregistered = withSandboxRepo((sandbox) => {
+    updateManifestInSandbox(sandbox, (manifest) => {
+      manifest.equivalentSha256 = {
+        'infra/telemetry/clickhouse/init/999-missing.sql': ['a'.repeat(64)],
+      };
+    });
+  });
+  assert.throws(runUnregistered, /unregistered migration/);
+
+  const runInvalidHash = withSandboxRepo((sandbox) => {
+    updateManifestInSandbox(sandbox, (manifest) => {
+      manifest.equivalentSha256 = {
+        'infra/telemetry/clickhouse/init/025-clickhouse-complete-governance.sql': ['not-a-sha256'],
+      };
+    });
+  });
+  assert.throws(runInvalidHash, /invalid sha256/);
+
+  const runCurrentHash = withSandboxRepo((sandbox) => {
+    const current025Sha = createHash('sha256')
+      .update(readFileSync(join(sandbox, 'infra/telemetry/clickhouse/init/025-clickhouse-complete-governance.sql')))
+      .digest('hex');
+    updateManifestInSandbox(sandbox, (manifest) => {
+      manifest.equivalentSha256 = {
+        'infra/telemetry/clickhouse/init/025-clickhouse-complete-governance.sql': [current025Sha],
+      };
+    });
+  });
+  assert.throws(runCurrentHash, /must not duplicate current sha256/);
 });
 
 test('resolvePhase1ClickHouseNativeAddr defaults clickhouse:9000 only in local mode and supports opt-out', () => {
