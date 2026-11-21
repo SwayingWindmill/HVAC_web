@@ -353,3 +353,68 @@ test('operators can edit rules on the DAG canvas, dry-run drafts, diff and hot-p
   await appearance.getByRole('radio', { name: '深色' }).click();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });
+
+test('operators can author streaming window rules, compile edge bundles and push to gateway shadow', async ({ page, gateway }) => {
+  gateway.principalOverride = {
+    ...principalFixture,
+    authorization: {
+      ...principalFixture.authorization,
+      capabilities: [...principalFixture.authorization.capabilities, 'device.write'],
+    },
+  };
+  await page.goto(`/operations/alarms?site=${SITE_ID}&tab=rules`);
+  await expect(page.getByText('生效版本 v1', { exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: '新建规则' }).click();
+  const editor = page.getByRole('dialog', { name: '新建告警规则' });
+  await expect(editor).toBeVisible();
+  await editor.getByLabel('规则名称').fill('1 号冷机供水窗口均值偏高');
+
+  await editor.getByRole('combobox', { name: '规则类型' }).click();
+  await page.getByRole('option', { name: '流式窗口', exact: true }).click();
+
+  await editor.getByRole('combobox', { name: '执行位置' }).click();
+  await page.getByRole('option', { name: '云边协同执行', exact: true }).click();
+  await expect(editor).toContainText('符合云边协同执行要求');
+
+  await editor.getByRole('combobox', { name: '触发报警条件判定类型' }).click();
+  await page.getByRole('option', { name: '流式窗口聚合', exact: true }).click();
+
+  await editor.getByLabel('触发报警条件聚合阈值').fill('15');
+  await editor.getByLabel('触发报警条件窗口时长秒数').fill('300');
+  await editor.getByLabel('触发报警条件最小样本数').fill('3');
+  await editor.getByRole('button', { name: '保存至草稿' }).click();
+  await expect(editor).toHaveCount(0);
+
+  await expect(page.getByText('1 号冷机供水窗口均值偏高')).toBeVisible();
+  await expect(page.getByText('云边协同', { exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: '预览差异并热发布' }).click();
+  const diffDialog = page.getByRole('dialog', { name: '确认热发布站点告警规则？' });
+  await diffDialog.getByRole('button', { name: '确认热发布' }).click();
+  await expect(page.getByText('已热发布规则包至版本 v2（共 5 条生效规则）。')).toBeVisible();
+
+  await page.getByRole('button', { name: '边缘编译下发' }).click();
+  const edgeSheet = page.getByRole('dialog', { name: '云边统一编译与网关下发' });
+  await expect(edgeSheet).toBeVisible();
+  await expect(edgeSheet).toContainText('1 条');
+  await expect(edgeSheet).toContainText('已编入边缘');
+  await expect(edgeSheet).toContainText('EG8200-COMMERCIAL-001');
+
+  await edgeSheet.getByRole('button', { name: '下发至网关配置影子' }).click();
+  await expect(edgeSheet).toContainText('已下发 1 条边缘规则至网关配置影子');
+
+  const shadowWrite = gateway.writes.find(
+    (entry) => entry.method === 'PUT' && entry.path === '/api/v1/gateways/018f3e00-4000-7000-8000-000000000100/config-shadow',
+  );
+  expect(shadowWrite?.body?.edgeRuleBundle?.rules).toHaveLength(1);
+  expect(shadowWrite?.body?.edgeRuleBundle?.rules?.[0]?.raise?.kind).toBe('WINDOW_AGG');
+  expect(shadowWrite?.body?.edgeRuleBundle?.edgeBundleDigest).toMatch(/^[a-f0-9]{64}$/);
+
+  await edgeSheet.getByRole('button', { name: '清空边缘规则包' }).click();
+  await expect(edgeSheet).toContainText('已清空目标网关配置影子中的边缘规则包');
+  const clearWrite = gateway.writes.filter(
+    (entry) => entry.method === 'PUT' && entry.path === '/api/v1/gateways/018f3e00-4000-7000-8000-000000000100/config-shadow',
+  ).at(-1);
+  expect(clearWrite?.body?.edgeRuleBundle).toBeNull();
+});

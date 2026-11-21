@@ -17,6 +17,7 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 )
 
 const AlarmPolicySchemaVersion = 1
@@ -67,7 +68,36 @@ type RuleKind string
 const (
 	RuleKindThreshold  RuleKind = "THRESHOLD"
 	RuleKindSlope      RuleKind = "SLOPE"
+	RuleKindWindow     RuleKind = "WINDOW"
 	RuleKindExpression RuleKind = "EXPRESSION"
+)
+
+type WindowAggFunc string
+
+const (
+	WindowAggAvg    WindowAggFunc = WindowAggFunc(edgecontrol.EdgeWindowAggAvg)
+	WindowAggMin    WindowAggFunc = WindowAggFunc(edgecontrol.EdgeWindowAggMin)
+	WindowAggMax    WindowAggFunc = WindowAggFunc(edgecontrol.EdgeWindowAggMax)
+	WindowAggSum    WindowAggFunc = WindowAggFunc(edgecontrol.EdgeWindowAggSum)
+	WindowAggCount  WindowAggFunc = WindowAggFunc(edgecontrol.EdgeWindowAggCount)
+	WindowAggStdDev WindowAggFunc = WindowAggFunc(edgecontrol.EdgeWindowAggStdDev)
+	WindowAggP95    WindowAggFunc = WindowAggFunc(edgecontrol.EdgeWindowAggP95)
+	WindowAggP99    WindowAggFunc = WindowAggFunc(edgecontrol.EdgeWindowAggP99)
+)
+
+type WindowType string
+
+const (
+	WindowTypeSliding  WindowType = WindowType(edgecontrol.EdgeWindowSliding)
+	WindowTypeTumbling WindowType = WindowType(edgecontrol.EdgeWindowTumbling)
+)
+
+type ExecutionTarget string
+
+const (
+	ExecutionTargetCloud        ExecutionTarget = "CLOUD"
+	ExecutionTargetEdge         ExecutionTarget = ExecutionTarget(edgecontrol.EdgeTargetEdge)
+	ExecutionTargetCloudAndEdge ExecutionTarget = ExecutionTarget(edgecontrol.EdgeTargetCloudAndEdge)
 )
 
 type ConditionKind string
@@ -89,6 +119,7 @@ const (
 	// stays on screen, health is BAD) can still raise.
 	ConditionReasons    ConditionKind = "REASONS"
 	ConditionSlope      ConditionKind = "SLOPE"
+	ConditionWindowAgg  ConditionKind = "WINDOW_AGG"
 	ConditionExpression ConditionKind = "EXPRESSION"
 	ConditionAnd        ConditionKind = "AND"
 	ConditionOr         ConditionKind = "OR"
@@ -157,6 +188,10 @@ type Condition struct {
 	AgeSeconds    int64               `json:"ageSeconds,omitempty"`
 	Delta         *float64            `json:"delta,omitempty"`
 	WindowSeconds int64               `json:"windowSeconds,omitempty"`
+	Agg           WindowAggFunc       `json:"agg,omitempty"`
+	WindowType    WindowType          `json:"windowType,omitempty"`
+	MinSamples    int                 `json:"minSamples,omitempty"`
+	Threshold     *float64            `json:"threshold,omitempty"`
 	Expression    string              `json:"expression,omitempty"`
 	ExprInputs    map[string]string   `json:"inputs,omitempty"`
 	Children      []Condition         `json:"children,omitempty"`
@@ -374,6 +409,7 @@ type AlarmPolicyRevision struct {
 	Summary          string                  `json:"summary"`
 	Severity         alarmmodel.Severity     `json:"severity"`
 	RuleKind         RuleKind                `json:"ruleKind,omitempty"`
+	ExecutionTarget  ExecutionTarget         `json:"executionTarget,omitempty"`
 	TemplateKey      string                  `json:"templateKey,omitempty"`
 	OverriddenFields []string                `json:"overriddenFields,omitempty"`
 	DependsOnRuleIDs []string                `json:"dependsOnRuleIds,omitempty"`
@@ -389,7 +425,11 @@ type AlarmPolicyRevision struct {
 	Schedule         *SiteSchedule           `json:"schedule,omitempty"`
 }
 
-const MaxSlopeSamplesPerRule = 32
+const (
+	MaxSlopeSamplesPerRule   = 32
+	MaxWindowSamplesPerRule  = edgecontrol.MaxEdgeRuleSamplesPerRule
+	MaxWindowSamplesPerInput = edgecontrol.MaxEdgeRuleSamplesPerInput
+)
 
 type TimedSample struct {
 	Input      string  `json:"input"`
@@ -502,7 +542,7 @@ func EvaluatePolicy(policy AlarmPolicyRevision, snapshot EvaluationSnapshot, pre
 		return EvaluationDecision{Status: state.Status, Effect: EvaluationEffectNone, Fingerprint: fingerprint, State: state}, nil
 	}
 	if newInput {
-		state.SampleWindow = updateSlopeSampleWindow(policy, snapshot, state.SampleWindow, now)
+		state.SampleWindow = updateRuleSampleWindow(policy, snapshot, state.SampleWindow, now)
 	}
 
 	active, nextScheduleBoundary, err := scheduleState(policy.Schedule, now)
@@ -649,6 +689,9 @@ func (policy AlarmPolicyRevision) EffectiveRuleKind() RuleKind {
 	if policy.RuleKind != "" {
 		return policy.RuleKind
 	}
+	if conditionHasKind(policy.Raise, ConditionWindowAgg) || conditionHasKind(policy.Clear, ConditionWindowAgg) {
+		return RuleKindWindow
+	}
 	if conditionHasKind(policy.Raise, ConditionExpression) || conditionHasKind(policy.Clear, ConditionExpression) {
 		return RuleKindExpression
 	}
@@ -656,6 +699,13 @@ func (policy AlarmPolicyRevision) EffectiveRuleKind() RuleKind {
 		return RuleKindSlope
 	}
 	return RuleKindThreshold
+}
+
+func (policy AlarmPolicyRevision) EffectiveExecutionTarget() ExecutionTarget {
+	if policy.ExecutionTarget == "" {
+		return ExecutionTargetCloud
+	}
+	return policy.ExecutionTarget
 }
 
 func conditionHasKind(condition Condition, target ConditionKind) bool {
@@ -706,22 +756,26 @@ func collectConditionInputs(condition Condition, inputs map[string]struct{}) {
 	}
 }
 
-func slopeInputWindows(policy AlarmPolicyRevision) map[string]int64 {
+func policyHasWindowAgg(policy AlarmPolicyRevision) bool {
+	return conditionHasKind(policy.Raise, ConditionWindowAgg) || conditionHasKind(policy.Clear, ConditionWindowAgg)
+}
+
+func ruleSampleWindows(policy AlarmPolicyRevision) map[string]int64 {
 	windows := map[string]int64{}
-	collectSlopeWindows(policy.Raise, windows)
-	collectSlopeWindows(policy.Clear, windows)
+	collectRuleSampleWindows(policy.Raise, windows)
+	collectRuleSampleWindows(policy.Clear, windows)
 	return windows
 }
 
-func collectSlopeWindows(condition Condition, windows map[string]int64) {
-	if condition.Kind == ConditionSlope && condition.Input != "" {
+func collectRuleSampleWindows(condition Condition, windows map[string]int64) {
+	if (condition.Kind == ConditionSlope || condition.Kind == ConditionWindowAgg) && condition.Input != "" {
 		if condition.WindowSeconds > windows[condition.Input] {
 			windows[condition.Input] = condition.WindowSeconds
 		}
 		return
 	}
 	for _, child := range condition.Children {
-		collectSlopeWindows(child, windows)
+		collectRuleSampleWindows(child, windows)
 	}
 }
 
@@ -738,6 +792,9 @@ func (policy AlarmPolicyRevision) Validate() error {
 	}
 	if policy.RuleKind != "" && !validRuleKind(policy.RuleKind) {
 		return errors.New("alarm policy rule kind is invalid")
+	}
+	if policy.ExecutionTarget != "" && !validExecutionTarget(policy.ExecutionTarget) {
+		return errors.New("alarm policy execution target is invalid")
 	}
 	if policy.TemplateKey != "" && (len(policy.TemplateKey) > 128 || !boundedText(policy.TemplateKey, 128)) {
 		return errors.New("alarm policy template key is invalid")
@@ -831,6 +888,16 @@ func (condition Condition) Validate() error {
 	case ConditionSlope:
 		if !boundedText(condition.Input, maxSnapshotInputKeyBytes) || !validSlopeOperator(condition.Operator) || condition.Delta == nil || math.IsNaN(*condition.Delta) || math.IsInf(*condition.Delta, 0) || condition.WindowSeconds < 1 || condition.WindowSeconds > 86400 {
 			return errors.New("slope predicate is invalid")
+		}
+	case ConditionWindowAgg:
+		if !boundedText(condition.Input, maxSnapshotInputKeyBytes) ||
+			!validWindowAggFunc(condition.Agg) ||
+			!validWindowType(condition.WindowType) ||
+			condition.WindowSeconds < 1 || condition.WindowSeconds > 86400 ||
+			!validCompareOperator(condition.Operator) ||
+			condition.Threshold == nil || math.IsNaN(*condition.Threshold) || math.IsInf(*condition.Threshold, 0) ||
+			condition.MinSamples < 0 || condition.MinSamples > MaxWindowSamplesPerInput {
+			return errors.New("window aggregation predicate is invalid")
 		}
 	case ConditionExpression:
 		if len(condition.ExprInputs) > MaxExpressionInputs {
@@ -972,6 +1039,8 @@ func evaluateCondition(policy AlarmPolicyRevision, condition Condition, snapshot
 		return evaluateExpression(policy, condition, snapshot, now)
 	case ConditionSlope:
 		return evaluateSlope(policy, condition, snapshot, sampleWindow, now)
+	case ConditionWindowAgg:
+		return evaluateWindowAgg(policy, condition, snapshot, sampleWindow, now)
 	}
 
 	input, exists := snapshot.Inputs[condition.Input]
@@ -1017,8 +1086,8 @@ func evaluateCondition(policy AlarmPolicyRevision, condition Condition, snapshot
 	}
 }
 
-func updateSlopeSampleWindow(policy AlarmPolicyRevision, snapshot EvaluationSnapshot, previous []TimedSample, now time.Time) []TimedSample {
-	windows := slopeInputWindows(policy)
+func updateRuleSampleWindow(policy AlarmPolicyRevision, snapshot EvaluationSnapshot, previous []TimedSample, now time.Time) []TimedSample {
+	windows := ruleSampleWindows(policy)
 	if len(windows) == 0 {
 		return nil
 	}
@@ -1089,14 +1158,79 @@ func updateSlopeSampleWindow(policy AlarmPolicyRevision, snapshot EvaluationSnap
 		}
 		return kept[left].sample.Input < kept[right].sample.Input
 	})
-	if len(kept) > MaxSlopeSamplesPerRule {
-		kept = kept[len(kept)-MaxSlopeSamplesPerRule:]
+
+	perInputCount := make(map[string]int, len(windows))
+	bounded := make([]indexedSample, 0, len(kept))
+	for i := len(kept) - 1; i >= 0; i-- {
+		item := kept[i]
+		if perInputCount[item.sample.Input] >= MaxWindowSamplesPerInput {
+			continue
+		}
+		perInputCount[item.sample.Input]++
+		bounded = append(bounded, item)
 	}
-	result := make([]TimedSample, len(kept))
-	for index, item := range kept {
+	slices.Reverse(bounded)
+
+	maxSamples := MaxSlopeSamplesPerRule
+	if policyHasWindowAgg(policy) {
+		maxSamples = MaxWindowSamplesPerRule
+	}
+	if len(bounded) > maxSamples {
+		bounded = bounded[len(bounded)-maxSamples:]
+	}
+	result := make([]TimedSample, len(bounded))
+	for index, item := range bounded {
 		result[index] = item.sample
 	}
 	return result
+}
+
+func evaluateWindowAgg(policy AlarmPolicyRevision, condition Condition, snapshot EvaluationSnapshot, sampleWindow []TimedSample, now time.Time) predicateResult {
+	input, exists := snapshot.Inputs[condition.Input]
+	trusted, blocker, nextDue := trustedInput(policy, condition.Input, input, exists, now)
+	if !trusted {
+		return predicateResult{status: EvaluationIndeterminate, blocker: blocker, nextDue: nextDue}
+	}
+	if input.Value.Type != EvaluationValueNumber || math.IsNaN(input.Value.Number) || math.IsInf(input.Value.Number, 0) {
+		return predicateResult{status: EvaluationIndeterminate, blocker: qualityBlockerInvalidPrefix + condition.Input, nextDue: nextDue}
+	}
+	asOfTime, err := time.Parse(time.RFC3339Nano, snapshot.AsOf)
+	if err != nil {
+		return predicateResult{status: EvaluationIndeterminate, blocker: qualityBlockerInvalidPrefix + condition.Input, nextDue: nextDue}
+	}
+	if condition.Threshold == nil {
+		return predicateResult{status: EvaluationIndeterminate, blocker: qualityBlockerInvalidPrefix + condition.Input, nextDue: nextDue}
+	}
+	windowStart := edgecontrol.WindowStartTime(asOfTime, edgecontrol.EdgeWindowType(condition.WindowType), condition.WindowSeconds)
+	values := make([]float64, 0, len(sampleWindow))
+	for _, sample := range sampleWindow {
+		if sample.Input != condition.Input || math.IsNaN(sample.Value) || math.IsInf(sample.Value, 0) {
+			continue
+		}
+		sampleTime, err := time.Parse(time.RFC3339Nano, sample.ObservedAt)
+		if err != nil {
+			continue
+		}
+		if sampleTime.Before(windowStart) || sampleTime.After(asOfTime) {
+			continue
+		}
+		values = append(values, sample.Value)
+	}
+	minSamples := condition.MinSamples
+	if minSamples < 1 {
+		minSamples = 1
+	}
+	if condition.Agg == WindowAggStdDev && minSamples < 2 {
+		minSamples = 2
+	}
+	if len(values) < minSamples {
+		return predicateResult{status: EvaluationNotMatched, nextDue: nextDue}
+	}
+	metric, ok := edgecontrol.ComputeWindowAggregate(edgecontrol.EdgeWindowAggFunc(condition.Agg), values)
+	if !ok {
+		return predicateResult{status: EvaluationNotMatched, nextDue: nextDue}
+	}
+	return truthResult(compareTyped(NumberValue(metric), condition.Operator, NumberValue(*condition.Threshold)), nextDue)
 }
 
 func evaluateSlope(policy AlarmPolicyRevision, condition Condition, snapshot EvaluationSnapshot, sampleWindow []TimedSample, now time.Time) predicateResult {
@@ -1519,11 +1653,28 @@ func validEvaluationSubjectType(value string) bool {
 
 func validRuleKind(value RuleKind) bool {
 	switch value {
-	case RuleKindThreshold, RuleKindSlope, RuleKindExpression:
+	case RuleKindThreshold, RuleKindSlope, RuleKindWindow, RuleKindExpression:
 		return true
 	default:
 		return false
 	}
+}
+
+func validExecutionTarget(value ExecutionTarget) bool {
+	switch value {
+	case ExecutionTargetCloud, ExecutionTargetEdge, ExecutionTargetCloudAndEdge:
+		return true
+	default:
+		return false
+	}
+}
+
+func validWindowAggFunc(value WindowAggFunc) bool {
+	return edgecontrol.EdgeWindowAggFunc(value).Valid()
+}
+
+func validWindowType(value WindowType) bool {
+	return edgecontrol.EdgeWindowType(value).Valid()
 }
 
 func validSlopeOperator(value CompareOperator) bool {

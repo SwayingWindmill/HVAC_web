@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 )
 
 const (
@@ -191,14 +192,16 @@ func (store *Store) UpsertGatewayTemplateDriverConfig(ctx context.Context, gatew
 	effectivePolicies := []GatewaySamplingPolicy{}
 	effectiveUnits := map[string]ConcentratorUnitShadow{}
 	var effectiveAutonomy *GatewayAutonomyPolicy
+	var effectiveEdgeRules *edgecontrol.EdgeRuleBundle
 	if existing != nil {
 		effectiveMappings = clonePointMappingsList(existing.PointMappings)
 		effectivePolicies = cloneSamplingPoliciesList(existing.SamplingPolicies)
 		effectiveUnits = cloneConcentratorUnits(existing.ConcentratorConfigs)
 		effectiveAutonomy = cloneAutonomyPolicy(existing.AutonomyPolicy)
+		effectiveEdgeRules = existing.EdgeRuleBundle.Clone()
 	}
 
-	encoded, err := marshalShadowSections(effectiveMappings, effectivePolicies, effectiveUnits, cleanedDrivers, effectiveAutonomy)
+	encoded, err := marshalShadowSections(effectiveMappings, effectivePolicies, effectiveUnits, cleanedDrivers, effectiveAutonomy, effectiveEdgeRules)
 	if err != nil {
 		return TemplateDriverUpsertResult{}, err
 	}
@@ -218,6 +221,7 @@ func (store *Store) UpsertGatewayTemplateDriverConfig(ctx context.Context, gatew
 		ConcentratorConfigs: effectiveUnits,
 		DriverConfigs:       cleanedDrivers,
 		AutonomyPolicy:      effectiveAutonomy,
+		EdgeRuleBundle:      effectiveEdgeRules,
 		UpdatedBy:           updatedBy,
 		Reason:              reason,
 		CreatedAt:           createdAt,

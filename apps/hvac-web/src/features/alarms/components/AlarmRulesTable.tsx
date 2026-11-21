@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
-import { GitBranch, History, List, Pencil, Plus, Rocket, RotateCcw, Trash2 } from 'lucide-react';
+import { Cpu, GitBranch, History, List, Pencil, Plus, Rocket, RotateCcw, Trash2 } from 'lucide-react';
 import { DataTableBlock } from '@/blocks/data-table';
 import { DataTable, type DataTableFeatures } from '@/components/data-table';
 import { Badge } from '@/components/ui/badge';
@@ -12,7 +12,7 @@ import { useDataTable } from '@/hooks/use-data-table';
 import { alarmKeys } from '../alarm-api';
 import { describeDependencyGate, summarizeRuleActions } from '../alarm-operations';
 import { SeverityBadge, severityRank } from '../alarm-presentation';
-import { computeDraftDelta } from '../alarm-rule-dag';
+import { computeDraftDelta, EXECUTION_TARGET_LABELS } from '../alarm-rule-dag';
 import {
   describeCondition,
   describeDevices,
@@ -25,6 +25,7 @@ import {
   type ReadingNames,
 } from '../alarm-rules';
 import { AlarmRuleDagCanvas } from './AlarmRuleDagCanvas';
+import { AlarmRuleEdgeCompileSheet } from './AlarmRuleEdgeCompileSheet';
 import { AlarmRuleEditorSheet } from './AlarmRuleEditorSheet';
 import { AlarmRulePublishDiffDialog } from './AlarmRulePublishDiffDialog';
 import { AlarmRuleRevisionsSheet } from './AlarmRuleRevisionsSheet';
@@ -34,11 +35,15 @@ import { AlarmRuleSimulateSheet } from './AlarmRuleSimulateSheet';
 export function AlarmRulesTable({
   siteId,
   canManage,
+  canReadGatewayShadow = false,
+  canManageGatewayShadow = false,
   csrfToken,
   timeZone,
 }: {
   readonly siteId: string;
   readonly canManage: boolean;
+  readonly canReadGatewayShadow?: boolean;
+  readonly canManageGatewayShadow?: boolean;
   readonly csrfToken: string;
   readonly timeZone: string;
 }) {
@@ -54,6 +59,7 @@ export function AlarmRulesTable({
   const [simulating, setSimulating] = useState<{ readonly rule: AlarmRule; readonly isDraft: boolean } | null>(null);
   const [diffDialogOpen, setDiffDialogOpen] = useState(false);
   const [revisionsOpen, setRevisionsOpen] = useState(false);
+  const [edgeCompileOpen, setEdgeCompileOpen] = useState(false);
   const [publishNotice, setPublishNotice] = useState<string | null>(null);
 
   const bundleQuery = useQuery(siteAlarmRulesBundleQuery(siteId));
@@ -145,9 +151,15 @@ export function AlarmRulesTable({
       cell: ({ row }) => {
         const isAdded = delta.addedIds.has(row.original.ruleId);
         const isChanged = delta.changedIds.has(row.original.ruleId);
+        const target = row.original.executionTarget ?? 'CLOUD';
         return (
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="font-medium text-foreground">{row.original.title}</span>
+            {target !== 'CLOUD' ? (
+              <Badge variant="outline" className="h-5 border-primary/35 bg-primary-soft px-1.5 text-[11px] font-normal text-primary">
+                {EXECUTION_TARGET_LABELS[target]}
+              </Badge>
+            ) : null}
             {isAdded ? <Badge variant="default" className="h-5 px-1.5 text-[11px]">草稿新增</Badge> : null}
             {isChanged ? <Badge variant="warning" className="h-5 px-1.5 text-[11px]">草稿修改</Badge> : null}
           </div>
@@ -252,6 +264,10 @@ export function AlarmRulesTable({
           <Button type="button" variant="outline" size="sm" onClick={() => setRevisionsOpen(true)}>
             <History data-icon="inline-start" className="size-3.5" aria-hidden="true" />
             版本历史
+          </Button>
+          <Button type="button" variant="outline" size="sm" onClick={() => setEdgeCompileOpen(true)}>
+            <Cpu data-icon="inline-start" className="size-3.5" aria-hidden="true" />
+            边缘编译下发
           </Button>
         </div>
 
@@ -375,6 +391,19 @@ export function AlarmRulesTable({
         timeZone={timeZone}
         onClose={() => setRevisionsOpen(false)}
         onRolledBack={(result) => void handleSyncedBundleResult(result, '回滚')}
+      />
+
+      <AlarmRuleEdgeCompileSheet
+        open={edgeCompileOpen}
+        siteId={siteId}
+        canManage={canManage}
+        canReadGatewayShadow={canReadGatewayShadow}
+        canManageGatewayShadow={canManageGatewayShadow}
+        csrfToken={csrfToken}
+        hasUnsavedDraft={delta.dirty}
+        draftRules={delta.dirty ? activeRules : undefined}
+        publishedBundleRevision={bundleRevision}
+        onClose={() => setEdgeCompileOpen(false)}
       />
     </DataTableBlock>
   );

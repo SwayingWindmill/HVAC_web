@@ -648,3 +648,159 @@ func TestMQTTPublisherAnalogDeadbandAndMaxSilenceFilter(t *testing.T) {
 		t.Fatalf("expected emission after disabling deadband filter, got %+v", env80.Payload.Devices)
 	}
 }
+
+type fakeRawQoSPublisher struct {
+	mu      sync.Mutex
+	packets []*paho.Publish
+}
+
+func (f *fakeRawQoSPublisher) Publish(_ context.Context, pub *paho.Publish) (*paho.PublishResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cp := *pub
+	cp.Payload = append([]byte(nil), pub.Payload...)
+	f.packets = append(f.packets, &cp)
+	return &paho.PublishResponse{}, nil
+}
+
+func TestMQTTPublisherSpoolsEdgeRuleEventsOfflineAndFlushesOnReconnect(t *testing.T) {
+	t.Parallel()
+
+	config := loadGeneratedCentralPlantConfig(t)
+	at := time.Date(2026, 11, 22, 3, 0, 0, 0, time.UTC)
+	plant := NewPlant(config.Plant, config.Scenario, at)
+	runtime, err := NewEdgeControlRuntime(config, plant)
+	if err != nil {
+		t.Fatalf("NewEdgeControlRuntime() error = %v", err)
+	}
+
+	initialTemp := plant.Snapshot().Devices[config.Plant.Chiller.ID]["leavingChilledWaterTemperatureC"].(float64)
+	thresh := initialTemp + 5.0
+	clearThresh := initialTemp + 6.0
+	bundle := &edgecontrol.EdgeRuleBundle{
+		SchemaVersion:  edgecontrol.EdgeRuleSchemaVersion,
+		SiteID:         "0194f000-2000-7000-8000-000000000001",
+		BundleRevision: 5,
+		CompiledAt:     "2026-11-22T03:00:00Z",
+		Rules: []edgecontrol.CompiledEdgeRule{{
+			RuleID:           "0194f000-4000-7000-8000-000000000103",
+			AlarmType:        "EDGE_OFFLINE_RULE",
+			Title:            "Offline Edge Rule Event",
+			Severity:         "CRITICAL",
+			ExecutionTarget:  edgecontrol.EdgeTargetEdge,
+			QualityPolicy:    edgecontrol.EdgeQualityValidOnly,
+			FreshnessSeconds: 30,
+			TriggerMode:      edgecontrol.EdgeTriggerSimple,
+			Raise: edgecontrol.EdgeCondition{
+				Kind:     edgecontrol.EdgeConditionCompare,
+				Input:    config.Plant.Chiller.ID + "/leaving_chilled_water_temperature",
+				Operator: edgecontrol.EdgeCompareLT,
+				Value:    &edgecontrol.EdgeTypedValue{Type: edgecontrol.EdgeValueNumber, Number: thresh},
+			},
+			Clear: edgecontrol.EdgeCondition{
+				Kind:     edgecontrol.EdgeConditionCompare,
+				Input:    config.Plant.Chiller.ID + "/leaving_chilled_water_temperature",
+				Operator: edgecontrol.EdgeCompareGT,
+				Value:    &edgecontrol.EdgeTypedValue{Type: edgecontrol.EdgeValueNumber, Number: clearThresh},
+			},
+		}},
+	}
+	digest, err := bundle.ComputeDigest()
+	if err != nil {
+		t.Fatalf("ComputeDigest() error = %v", err)
+	}
+	bundle.EdgeBundleDigest = digest
+	if err := runtime.ApplyEdgeRuleBundle(bundle); err != nil {
+		t.Fatalf("ApplyEdgeRuleBundle() error = %v", err)
+	}
+	runtime.NotifyCloudContact(false, at)
+
+	dir := t.TempDir()
+	spool, err := newMQTTEvidenceSpool(filepath.Join(dir, "outbound"), 1<<20)
+	if err != nil {
+		t.Fatalf("newMQTTEvidenceSpool() error = %v", err)
+	}
+	rawPub := &fakeRawQoSPublisher{}
+	var connected atomic.Bool
+	publisher := &MQTTPublisher{
+		gatewayID:       config.GatewayID,
+		connected:       &connected,
+		qosPub:          rawPub,
+		evidenceSpool:   spool,
+		edgeRuntime:     runtime,
+		eventSequence:   &atomic.Uint64{},
+		pointByKey:      map[string]PointConfig{},
+		lastPointStates: map[string]lastEmittedPointState{},
+	}
+
+	// Trigger offline edge alarm event and spool via PublishMeasurements while disconnected.
+	runtime.RunCycle(context.Background(), at.Add(time.Second))
+	if err := publisher.PublishMeasurements(context.Background(), nil); err != nil {
+		t.Fatalf("offline PublishMeasurements() error = %v", err)
+	}
+	rawPub.mu.Lock()
+	if len(rawPub.packets) != 0 {
+		t.Fatalf("expected 0 MQTT packets published while offline, got %d", len(rawPub.packets))
+	}
+	rawPub.mu.Unlock()
+	if spool.UsedBytes() == 0 {
+		t.Fatal("expected ALARM_FACT edge rule event spooled persistently while offline")
+	}
+
+	// Reconnect and flush: ALARM_FACT event arrives on gateway event topic.
+	connected.Store(true)
+	runtime.NotifyCloudContact(true, at.Add(3*time.Second))
+	publisher.flushAndSyncResend(context.Background())
+
+	rawPub.mu.Lock()
+	packets := append([]*paho.Publish(nil), rawPub.packets...)
+	rawPub.mu.Unlock()
+	if len(packets) != 1 || packets[0].Topic != mqttEventTopic(config.GatewayID) {
+		t.Fatalf("expected 1 flushed event packet on reconnect, got %+v", packets)
+	}
+	var env mqttEventEnvelope
+	if err := json.Unmarshal(packets[0].Payload, &env); err != nil {
+		t.Fatalf("decode flushed mqttEventEnvelope: %v", err)
+	}
+	if env.Payload.EventType != edgecontrol.EdgeRuleEventRaised || env.Payload.SourceType != "EDGE_RULE" || env.Payload.SourceID != "0194f000-4000-7000-8000-000000000103" {
+		t.Fatalf("unexpected flushed edge alarm envelope: %+v", env)
+	}
+
+	// Spool capacity overflow must retain un-spooled edge rule events without dropping or blocking telemetry.
+	tinySpool, err := newMQTTEvidenceSpool(filepath.Join(t.TempDir(), "tiny"), 64)
+	if err != nil {
+		t.Fatalf("newMQTTEvidenceSpool(tiny) error = %v", err)
+	}
+	tinyPub := &MQTTPublisher{
+		gatewayID:       config.GatewayID,
+		connected:       &atomic.Bool{},
+		qosPub:          rawPub,
+		evidenceSpool:   tinySpool,
+		edgeRuntime:     runtime,
+		eventSequence:   &atomic.Uint64{},
+		pointByKey:      map[string]PointConfig{},
+		lastPointStates: map[string]lastEmittedPointState{},
+	}
+	// Clear rule and generate a new clear event while tinySpool rejects EvidenceAlarm due to capacity.
+	_ = runtime.ApplyEdgeRuleBundle(nil)
+	if len(runtime.PeekEdgeRuleEvents()) != 1 {
+		t.Fatalf("expected 1 pending clear event before spool attempt")
+	}
+	if err := tinyPub.PublishEdgeRuleEvents(context.Background()); err == nil {
+		t.Fatal("expected tinySpool overflow error from PublishEdgeRuleEvents")
+	}
+	if rem := runtime.PeekEdgeRuleEvents(); len(rem) != 1 {
+		t.Fatalf("expected failed spool attempt to retain event in edgeRuntime, got %+v", rem)
+	}
+	if err := tinyPub.PublishMeasurements(context.Background(), nil); err != nil {
+		t.Fatalf("PublishMeasurements must continue despite non-fatal edge alarm spool overflow: %v", err)
+	}
+	// Large publisher succeeds on retry with the retained event still intact.
+	publisher.evidenceSpool = spool
+	if err := publisher.PublishEdgeRuleEvents(context.Background()); err != nil {
+		t.Fatalf("retry PublishEdgeRuleEvents() error = %v", err)
+	}
+	if rem := runtime.PeekEdgeRuleEvents(); len(rem) != 0 {
+		t.Fatalf("expected 0 remaining events after successful retry, got %+v", rem)
+	}
+}

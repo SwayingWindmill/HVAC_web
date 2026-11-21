@@ -26,6 +26,7 @@ type GatewayAutonomyPolicy = edgecontrol.AutonomyPolicyConfig
 type edgeDriverApplyHook func(ctx context.Context, cfg GatewayModbusDriverConfig, profile edgecontrol.DeclarativeModbusProfile) error
 type edgeDriverRemoveHook func(ctx context.Context, deviceKey string) error
 type edgeAutonomyApplyHook func(ctx context.Context, policy *GatewayAutonomyPolicy) error
+type edgeRulesApplyHook func(ctx context.Context, bundle *edgecontrol.EdgeRuleBundle) error
 
 // ToDeclarativeProfile converts a shadow Modbus driver configuration into a validated
 // DeclarativeModbusProfile using the canonical edgecontrol validator.
@@ -50,13 +51,15 @@ func (d GatewayModbusDriverConfig) ToDeclarativeProfile() (edgecontrol.Declarati
 }
 
 type driverAutonomyApplyResult struct {
-	acceptedDrivers  []GatewayModbusDriverConfig
-	committedDrivers []GatewayModbusDriverConfig
-	reportedPolicy   *GatewayAutonomyPolicy
-	committedPolicy  *GatewayAutonomyPolicy
-	status           string
-	drift            []ShadowDriftDetail
-	errorMessages    []string
+	acceptedDrivers    []GatewayModbusDriverConfig
+	committedDrivers   []GatewayModbusDriverConfig
+	reportedPolicy     *GatewayAutonomyPolicy
+	committedPolicy    *GatewayAutonomyPolicy
+	reportedEdgeRules  *edgecontrol.EdgeRuleBundle
+	committedEdgeRules *edgecontrol.EdgeRuleBundle
+	status             string
+	drift              []ShadowDriftDetail
+	errorMessages      []string
 }
 
 func applyDesiredDriversAndAutonomy(
@@ -64,9 +67,11 @@ func applyDesiredDriversAndAutonomy(
 	desired GatewayDesiredConfig,
 	prevDrivers []GatewayModbusDriverConfig,
 	prevPolicy *GatewayAutonomyPolicy,
+	prevEdgeRules *edgecontrol.EdgeRuleBundle,
 	driverHook edgeDriverApplyHook,
 	removeDriverHook edgeDriverRemoveHook,
 	autonomyHook edgeAutonomyApplyHook,
+	rulesHook edgeRulesApplyHook,
 	hasConcentratorHook bool,
 	acceptedUnitsCount int,
 	drift []ShadowDriftDetail,
@@ -153,6 +158,39 @@ func applyDesiredDriversAndAutonomy(
 		}
 	}
 
+	var reportedEdgeRules *edgecontrol.EdgeRuleBundle
+	edgeRulesApplied := false
+	if desired.EdgeRuleBundle != nil {
+		if err := desired.EdgeRuleBundle.Validate(); err != nil {
+			msg := fmt.Sprintf("edgeRuleBundle validation failed: %v", err)
+			drift = append(drift, ShadowDriftDetail{
+				Section: shadowDriftSectionEdgeRules,
+				Target:  "edgeRuleBundle",
+				Reason:  shadowDriftReasonApplyFailed,
+				Detail:  clampShadowRunes(msg, 512),
+			})
+			errorMessages = append(errorMessages, msg)
+		} else if rulesHook != nil {
+			rulesCopy := desired.EdgeRuleBundle.Clone()
+			if err := rulesHook(ctx, rulesCopy); err != nil {
+				msg := fmt.Sprintf("edgeRuleBundle apply failed: %v", err)
+				drift = append(drift, ShadowDriftDetail{
+					Section: shadowDriftSectionEdgeRules,
+					Target:  "edgeRuleBundle",
+					Reason:  shadowDriftReasonApplyFailed,
+					Detail:  clampShadowRunes(msg, 512),
+				})
+				errorMessages = append(errorMessages, msg)
+			} else {
+				reportedEdgeRules = desired.EdgeRuleBundle.Clone()
+				edgeRulesApplied = true
+			}
+		} else {
+			reportedEdgeRules = desired.EdgeRuleBundle.Clone()
+			edgeRulesApplied = true
+		}
+	}
+
 	status := shadowAppliedStatusApplied
 	if len(drift) > 0 || len(errorMessages) > 0 {
 		requestedItems := len(desired.DriverConfigs)
@@ -162,8 +200,14 @@ func applyDesiredDriversAndAutonomy(
 		if desired.AutonomyPolicy != nil {
 			requestedItems++
 		}
+		if desired.EdgeRuleBundle != nil {
+			requestedItems++
+		}
 		succeededItems := len(acceptedDrivers) + acceptedUnitsCount
 		if autonomyApplied {
+			succeededItems++
+		}
+		if edgeRulesApplied {
 			succeededItems++
 		}
 		if requestedItems > 0 && succeededItems == 0 && len(desired.PointMappings) == 0 && len(desired.SamplingPolicies) == 0 {
@@ -175,9 +219,11 @@ func applyDesiredDriversAndAutonomy(
 
 	committedDrivers := acceptedDrivers
 	committedPolicy := reportedPolicy
+	committedEdgeRules := reportedEdgeRules
 	if status == shadowAppliedStatusRejected {
 		committedDrivers = prevDrivers
 		committedPolicy = prevPolicy
+		committedEdgeRules = prevEdgeRules
 	} else {
 		if removeDriverHook != nil && len(prevDrivers) > 0 {
 			acceptedSet := make(map[string]struct{}, len(acceptedDrivers))
@@ -223,19 +269,40 @@ func applyDesiredDriversAndAutonomy(
 		} else if !autonomyApplied {
 			committedPolicy = prevPolicy
 		}
+		if desired.EdgeRuleBundle == nil {
+			if rulesHook != nil {
+				if err := rulesHook(ctx, nil); err != nil {
+					msg := fmt.Sprintf("edgeRuleBundle clear failed: %v", err)
+					drift = append(drift, ShadowDriftDetail{
+						Section: shadowDriftSectionEdgeRules,
+						Target:  "edgeRuleBundle",
+						Reason:  shadowDriftReasonApplyFailed,
+						Detail:  clampShadowRunes(msg, 512),
+					})
+					errorMessages = append(errorMessages, msg)
+					committedEdgeRules = prevEdgeRules
+				} else {
+					committedEdgeRules = nil
+				}
+			}
+		} else if !edgeRulesApplied {
+			committedEdgeRules = prevEdgeRules
+		}
 		if len(drift) > 0 && status == shadowAppliedStatusApplied {
 			status = shadowAppliedStatusPartial
 		}
 	}
 
 	return driverAutonomyApplyResult{
-		acceptedDrivers:  acceptedDrivers,
-		committedDrivers: committedDrivers,
-		reportedPolicy:   reportedPolicy,
-		committedPolicy:  committedPolicy,
-		status:           status,
-		drift:            drift,
-		errorMessages:    errorMessages,
+		acceptedDrivers:    acceptedDrivers,
+		committedDrivers:   committedDrivers,
+		reportedPolicy:     reportedPolicy,
+		committedPolicy:    committedPolicy,
+		reportedEdgeRules:  reportedEdgeRules,
+		committedEdgeRules: committedEdgeRules,
+		status:             status,
+		drift:              drift,
+		errorMessages:      errorMessages,
 	}
 }
 

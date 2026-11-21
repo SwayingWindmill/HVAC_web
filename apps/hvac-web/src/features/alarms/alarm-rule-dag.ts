@@ -1,12 +1,45 @@
 import type {
   AlarmRule,
+  AlarmRuleCondition,
   AlarmRuleDraft,
   AlarmRuleGraphEdge,
-  AlarmRuleSeverity,
   AlarmRuleValidationIssue,
-} from './alarm-rules';
+} from '../../api/generated/platformGateway.gen.ts';
+
+type AlarmRuleSeverity = AlarmRule['severity'];
 
 export const MAX_RULE_LINKAGE_HOPS = 3;
+
+export const EXECUTION_TARGET_LABELS: Readonly<Record<NonNullable<AlarmRule['executionTarget']>, string>> = {
+  CLOUD: '云端',
+  EDGE: '边缘',
+  CLOUD_AND_EDGE: '云边协同',
+};
+
+export const WINDOW_AGG_LABELS: Readonly<Record<NonNullable<AlarmRuleCondition['agg']>, string>> = {
+  AVG: '平均值',
+  MIN: '最小值',
+  MAX: '最大值',
+  SUM: '求和',
+  COUNT: '样本计数',
+  STDDEV: '标准差',
+  P95: '95 分位',
+  P99: '99 分位',
+};
+
+export const WINDOW_TYPE_LABELS: Readonly<Record<NonNullable<AlarmRuleCondition['windowType']>, string>> = {
+  SLIDING: '滑动窗口',
+  TUMBLING: '滚动窗口',
+};
+
+export const EDGE_ELIGIBILITY_REASON_LABELS: Readonly<Record<string, string>> = {
+  CLOUD_ONLY_TARGET: '执行位置设为仅云端，不下发至边缘网关。',
+  EDGE_SCHEDULE_NOT_SUPPORTED: '绑定站点运行日程的规则仅在云端评估，不支持编译到边缘网关。',
+  EDGE_UNSUPPORTED_CONDITION_KIND: '包含缺数、过期、停滞、变化检测或诊断原因等条件，当前仅支持在云端评估。',
+  EDGE_CLOUD_ONLY_ACTION: '仅边缘执行模式下不能配置工单或外部 Webhook 动作，请改为云边协同模式或移除相关动作。',
+  EDGE_UPSTREAM_NOT_ON_EDGE: '启用了上游告警联动门控，但部分上游规则仅在云端执行，无法编入边缘规则包。',
+  EDGE_BUNDLE_LIMIT_EXCEEDED: '单个边缘规则包最多容纳 128 条规则，超出部分仅在云端执行。',
+};
 
 export interface DagNodePosition {
   readonly rule: AlarmRule;
@@ -96,6 +129,7 @@ export function ruleToDraft(rule: AlarmRule): AlarmRuleDraft {
     ...(rule.summary ? { summary: rule.summary } : {}),
     severity: rule.severity,
     ...(rule.ruleKind ? { ruleKind: rule.ruleKind } : {}),
+    ...(rule.executionTarget ? { executionTarget: rule.executionTarget } : {}),
     ...(rule.templateKey ? { templateKey: rule.templateKey } : {}),
     ...(rule.overriddenFields && rule.overriddenFields.length > 0 ? { overriddenFields: [...rule.overriddenFields] } : {}),
     ...(rule.dependsOnRuleIds && rule.dependsOnRuleIds.length > 0 ? { dependsOnRuleIds: [...rule.dependsOnRuleIds] } : {}),
@@ -129,6 +163,9 @@ export function ruleDraftSignature(rule: AlarmRule): string {
   }
   if (draft.ruleKind === 'THRESHOLD') {
     delete draft.ruleKind;
+  }
+  if (draft.executionTarget === 'CLOUD') {
+    delete draft.executionTarget;
   }
   return JSON.stringify(stableNormalize(draft));
 }
@@ -340,7 +377,106 @@ const VALIDATION_ISSUE_LABELS: Readonly<Record<string, string>> = {
   DUPLICATE_RULE_ID: '草稿中存在重复的规则标识，请去除重复项后重试。',
   INVALID_RULE_BUNDLE: '规则包大小或规则总数超出站点限制。',
   RULE_GRAPH_INVALID: '规则因果依赖图校验未通过，请检查联动关系。',
+  EDGE_RULE_INELIGIBLE: '所选边缘或云边协同规则不满足边缘执行编译约束，请检查条件、联动动作或上游依赖。',
 };
+
+function findUnsupportedEdgeConditionKind(cond: AlarmRuleCondition): string | null {
+  switch (cond.kind) {
+    case 'AND':
+    case 'OR':
+      for (const child of cond.children ?? []) {
+        const bad = findUnsupportedEdgeConditionKind(child);
+        if (bad) return bad;
+      }
+      return null;
+    case 'COMPARE':
+    case 'RANGE':
+    case 'HYSTERESIS':
+    case 'SLOPE':
+    case 'WINDOW_AGG':
+    case 'EXPRESSION':
+      return null;
+    default:
+      return cond.kind;
+  }
+}
+
+export interface LocalEdgeEligibilityResult {
+  readonly eligible: boolean;
+  readonly reasonCode?: string;
+  readonly message?: string;
+}
+
+/**
+ * Mirrors backend CheckEdgeRuleEligibility in modules/alarm/pkg/alarmservice/edge_compile.go
+ * so operators receive instant feedback while authoring EDGE or CLOUD_AND_EDGE rules.
+ */
+export function evaluateLocalEdgeEligibility(
+  rule: AlarmRule | AlarmRuleDraft,
+  allRules: readonly (AlarmRule | AlarmRuleDraft)[],
+  visited = new Set<string>(),
+): LocalEdgeEligibilityResult {
+  const target = rule.executionTarget ?? 'CLOUD';
+  if (target !== 'EDGE' && target !== 'CLOUD_AND_EDGE') {
+    return {
+      eligible: false,
+      reasonCode: 'CLOUD_ONLY_TARGET',
+      message: EDGE_ELIGIBILITY_REASON_LABELS.CLOUD_ONLY_TARGET,
+    };
+  }
+  const badRaise = findUnsupportedEdgeConditionKind(rule.raise);
+  if (badRaise) {
+    return {
+      eligible: false,
+      reasonCode: 'EDGE_UNSUPPORTED_CONDITION_KIND',
+      message: EDGE_ELIGIBILITY_REASON_LABELS.EDGE_UNSUPPORTED_CONDITION_KIND,
+    };
+  }
+  const badClear = findUnsupportedEdgeConditionKind(rule.clear);
+  if (badClear) {
+    return {
+      eligible: false,
+      reasonCode: 'EDGE_UNSUPPORTED_CONDITION_KIND',
+      message: EDGE_ELIGIBILITY_REASON_LABELS.EDGE_UNSUPPORTED_CONDITION_KIND,
+    };
+  }
+  if (target === 'EDGE') {
+    for (const action of rule.actions ?? []) {
+      if (action.kind !== 'PROTECTION_COMMAND') {
+        return {
+          eligible: false,
+          reasonCode: 'EDGE_CLOUD_ONLY_ACTION',
+          message: EDGE_ELIGIBILITY_REASON_LABELS.EDGE_CLOUD_ONLY_ACTION,
+        };
+      }
+    }
+  }
+  if (rule.dependencyGate === 'ALL_ACTIVE' || rule.dependencyGate === 'ANY_ACTIVE') {
+    const byId = new Map(allRules.filter((r) => Boolean(r.ruleId)).map((r) => [r.ruleId!, r]));
+    if (rule.ruleId) visited.add(rule.ruleId);
+    for (const depId of rule.dependsOnRuleIds ?? []) {
+      if (visited.has(depId)) continue;
+      const upstream = byId.get(depId);
+      if (!upstream) {
+        return {
+          eligible: false,
+          reasonCode: 'EDGE_UPSTREAM_NOT_ON_EDGE',
+          message: EDGE_ELIGIBILITY_REASON_LABELS.EDGE_UPSTREAM_NOT_ON_EDGE,
+        };
+      }
+      const nextVisited = new Set(visited);
+      nextVisited.add(depId);
+      if (!evaluateLocalEdgeEligibility(upstream, allRules, nextVisited).eligible) {
+        return {
+          eligible: false,
+          reasonCode: 'EDGE_UPSTREAM_NOT_ON_EDGE',
+          message: EDGE_ELIGIBILITY_REASON_LABELS.EDGE_UPSTREAM_NOT_ON_EDGE,
+        };
+      }
+    }
+  }
+  return { eligible: true };
+}
 
 /** Formats backend rule validation issues into plain operator Chinese without leaking UUIDs or internal codes. */
 export function formatRuleValidationIssue(

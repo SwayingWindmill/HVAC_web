@@ -10,11 +10,12 @@ import (
 )
 
 type stubAutonomyDeviceAdapter struct {
-	mu        sync.Mutex
-	component ComponentDescriptor
-	channels  []ChannelDescriptor
-	samples   map[string]Sample
-	values    map[string]Value
+	mu                 sync.Mutex
+	component          ComponentDescriptor
+	channels           []ChannelDescriptor
+	samples            map[string]Sample
+	values             map[string]Value
+	preserveObservedAt bool
 }
 
 func newStubAutonomyDeviceAdapter(component ComponentDescriptor, channels []ChannelDescriptor) *stubAutonomyDeviceAdapter {
@@ -58,7 +59,9 @@ func (a *stubAutonomyDeviceAdapter) Poll(_ context.Context, at time.Time) ([]Cha
 		if !ok {
 			continue
 		}
-		sample.ObservedAt = at
+		if !a.preserveObservedAt || sample.ObservedAt.IsZero() {
+			sample.ObservedAt = at
+		}
 		updates = append(updates, ChannelUpdate{Address: addr, Sample: sample})
 	}
 	return updates, nil

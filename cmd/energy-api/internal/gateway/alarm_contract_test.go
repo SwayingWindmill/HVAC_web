@@ -202,7 +202,7 @@ func (owner signedAlarmOwner) Execute(ctx context.Context, request *http.Request
 }
 
 func alarmRouteMethod(route publicAlarmRoute) string {
-	if route.siteRulesSimulate {
+	if route.siteRulesSimulate || route.siteRulesCompileEdge || route.siteRulesDiff {
 		return http.MethodPost
 	}
 	if route.action == alarmauth.ActionRead {
@@ -841,6 +841,7 @@ func (s *contractSiteRules) PublishSiteRules(_ context.Context, _, _ string, req
 				Title:            draft.Title,
 				Severity:         draft.Severity,
 				RuleKind:         draft.RuleKind,
+				ExecutionTarget:  draft.ExecutionTarget,
 				DependsOnRuleIDs: append([]string(nil), draft.DependsOnRuleIDs...),
 				DependencyGate:   draft.DependencyGate,
 				TriggerMode:      draft.TriggerMode,
@@ -896,6 +897,13 @@ func (s *contractSiteRules) RollbackSiteRules(_ context.Context, _, _ string, ta
 	}
 	s.revisions = append([]alarmservice.SiteRuleBundleRevisionView{revEntry}, s.revisions...)
 	return s.publishResult(snap, revEntry, true, &fromRev), nil
+}
+
+func (s *contractSiteRules) CompileSiteRulesEdge(_ context.Context, _, siteID string, _ *[]alarmservice.SiteRuleDraft, now time.Time) (alarmservice.EdgeRuleCompileResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rev := s.revisions[0]
+	return alarmservice.CompileSiteRulesForEdge(siteID, rev.BundleRevision, rev.BundleDigest, s.rules, now)
 }
 
 func (s *contractSiteRules) publishResult(rules []alarmservice.SiteRule, rev alarmservice.SiteRuleBundleRevisionView, changed bool, from *uint64) alarmservice.SiteRulePublishResult {
@@ -1201,7 +1209,7 @@ func TestAlarmSuppressionUnassignAndEvaluationsEndToEnd(t *testing.T) {
 				t.Fatalf("draft simulate status=%d body=%s", draftSimRec.Code, draftSimRec.Body.String())
 			}
 
-			pubBody := fmt.Sprintf(`{"expectedRevision":1,"changeNote":"工作台调整阈值","rules":[{"ruleId":%q,"title":"供水温度过高（新版）","severity":"CRITICAL","triggerMode":"SIMPLE","raise":{"kind":"COMPARE","reading":{"deviceId":%q,"pointCode":"supply_water_temperature"},"operator":"GT","value":9.5},"clear":{"kind":"COMPARE","reading":{"deviceId":%q,"pointCode":"supply_water_temperature"},"operator":"LT","value":7.5}}]}`, contractRuleBaseID, contractRuleDeviceID, contractRuleDeviceID)
+			pubBody := fmt.Sprintf(`{"expectedRevision":1,"changeNote":"工作台调整阈值","rules":[{"ruleId":%q,"title":"供水温度过高（新版）","severity":"CRITICAL","executionTarget":"CLOUD_AND_EDGE","triggerMode":"SIMPLE","raise":{"kind":"COMPARE","reading":{"deviceId":%q,"pointCode":"supply_water_temperature"},"operator":"GT","value":9.5},"clear":{"kind":"COMPARE","reading":{"deviceId":%q,"pointCode":"supply_water_temperature"},"operator":"LT","value":7.5}}]}`, contractRuleBaseID, contractRuleDeviceID, contractRuleDeviceID)
 			fixture.deny.Store(true)
 			deniedPub := fixture.serve(http.MethodPut, "/api/v1/alarm-rules?siteId="+fixture.siteID, pubBody, "")
 			if deniedPub.Code != http.StatusForbidden {
@@ -1212,6 +1220,11 @@ func TestAlarmSuppressionUnassignAndEvaluationsEndToEnd(t *testing.T) {
 			pubRec := fixture.serve(http.MethodPut, "/api/v1/alarm-rules?siteId="+fixture.siteID, pubBody, "")
 			if pubRec.Code != http.StatusOK || !strings.Contains(pubRec.Body.String(), `"bundleRevision":2`) {
 				t.Fatalf("publish status=%d body=%s", pubRec.Code, pubRec.Body.String())
+			}
+
+			compileEdgeRec := fixture.serve(http.MethodPost, "/api/v1/alarm-rules/compile-edge?siteId="+fixture.siteID, `{}`, "")
+			if compileEdgeRec.Code != http.StatusOK || !strings.Contains(compileEdgeRec.Body.String(), `"edgeRuleCount":1`) || !strings.Contains(compileEdgeRec.Body.String(), `"edgeBundleDigest"`) {
+				t.Fatalf("compile-edge status=%d body=%s", compileEdgeRec.Code, compileEdgeRec.Body.String())
 			}
 
 			stalePubRec := fixture.serve(http.MethodPut, "/api/v1/alarm-rules?siteId="+fixture.siteID, pubBody, "")

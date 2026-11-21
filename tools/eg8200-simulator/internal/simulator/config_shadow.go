@@ -25,7 +25,7 @@ import (
 )
 
 const (
-	shadowSyncMaxBodyBytes = 1 << 20
+	shadowSyncMaxBodyBytes = 4 << 20
 
 	shadowAppliedStatusApplied  = "APPLIED"
 	shadowAppliedStatusPartial  = "PARTIAL"
@@ -34,6 +34,7 @@ const (
 	shadowDriftSectionConcentrator   = "CONCENTRATOR"
 	shadowDriftSectionDriverConfigs  = "DRIVER_CONFIGS"
 	shadowDriftSectionAutonomyPolicy = "AUTONOMY_POLICY"
+	shadowDriftSectionEdgeRules      = "EDGE_RULES"
 	shadowDriftReasonApplyFailed     = "EDGE_APPLY_FAILED"
 )
 
@@ -98,6 +99,7 @@ type GatewayDesiredConfig struct {
 	ConcentratorConfigs map[string]ConcentratorUnitShadow `json:"concentratorConfigs"`
 	DriverConfigs       []GatewayModbusDriverConfig       `json:"driverConfigs,omitempty"`
 	AutonomyPolicy      *GatewayAutonomyPolicy            `json:"autonomyPolicy,omitempty"`
+	EdgeRuleBundle      *edgecontrol.EdgeRuleBundle       `json:"edgeRuleBundle,omitempty"`
 	UpdatedBy           string                            `json:"updatedBy,omitempty"`
 	Reason              string                            `json:"reason,omitempty"`
 	CreatedAt           *time.Time                        `json:"createdAt,omitempty"`
@@ -119,6 +121,7 @@ type GatewayShadowReportRequest struct {
 	ConcentratorConfigs map[string]ConcentratorUnitShadow `json:"concentratorConfigs"`
 	DriverConfigs       []GatewayModbusDriverConfig       `json:"driverConfigs,omitempty"`
 	AutonomyPolicy      *GatewayAutonomyPolicy            `json:"autonomyPolicy,omitempty"`
+	EdgeRuleBundle      *edgecontrol.EdgeRuleBundle       `json:"edgeRuleBundle,omitempty"`
 	DriftDetails        []ShadowDriftDetail               `json:"driftDetails,omitempty"`
 	ErrorMessage        *string                           `json:"errorMessage,omitempty"`
 	ReportedAt          *time.Time                        `json:"reportedAt,omitempty"`
@@ -131,6 +134,7 @@ type persistedEdgeShadowState struct {
 	ConcentratorConfigs map[string]ConcentratorUnitShadow `json:"concentratorConfigs"`
 	DriverConfigs       []GatewayModbusDriverConfig       `json:"driverConfigs,omitempty"`
 	AutonomyPolicy      *GatewayAutonomyPolicy            `json:"autonomyPolicy,omitempty"`
+	EdgeRuleBundle      *edgecontrol.EdgeRuleBundle       `json:"edgeRuleBundle,omitempty"`
 }
 
 type edgeConfigShadowApplyHook func(ctx context.Context, desired GatewayDesiredConfig) ([]ShadowDriftDetail, string, error)
@@ -145,12 +149,14 @@ type edgeConfigShadow struct {
 	concentratorConfigs map[string]ConcentratorUnitShadow
 	driverConfigs       []GatewayModbusDriverConfig
 	autonomyPolicy      *GatewayAutonomyPolicy
+	edgeRuleBundle      *edgecontrol.EdgeRuleBundle
 	lastPublished       map[string]time.Time
 	lastSyncAttempt     time.Time
 	applyHook           edgeConfigShadowApplyHook
 	applyDriverHook     edgeDriverApplyHook
 	removeDriverHook    edgeDriverRemoveHook
 	applyAutonomyHook   edgeAutonomyApplyHook
+	applyEdgeRulesHook  edgeRulesApplyHook
 }
 
 func newEdgeConfigShadow(statePath string) *edgeConfigShadow {
@@ -187,6 +193,7 @@ func (s *edgeConfigShadow) load() error {
 	s.concentratorConfigs = cloneConcentratorConfigs(state.ConcentratorConfigs)
 	s.driverConfigs = cloneDriverConfigs(state.DriverConfigs)
 	s.autonomyPolicy = cloneAutonomyPolicy(state.AutonomyPolicy)
+	s.edgeRuleBundle = state.EdgeRuleBundle.Clone()
 	return nil
 }
 
@@ -204,6 +211,7 @@ func (s *edgeConfigShadow) persistLocked() error {
 		ConcentratorConfigs: s.concentratorConfigs,
 		DriverConfigs:       s.driverConfigs,
 		AutonomyPolicy:      s.autonomyPolicy,
+		EdgeRuleBundle:      s.edgeRuleBundle,
 	}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode edge config shadow state: %w", err)
@@ -237,6 +245,7 @@ func (s *edgeConfigShadow) snapshot() persistedEdgeShadowState {
 		ConcentratorConfigs: cloneConcentratorConfigs(s.concentratorConfigs),
 		DriverConfigs:       cloneDriverConfigs(s.driverConfigs),
 		AutonomyPolicy:      cloneAutonomyPolicy(s.autonomyPolicy),
+		EdgeRuleBundle:      s.edgeRuleBundle.Clone(),
 	}
 }
 
@@ -247,6 +256,7 @@ type preparedEdgeShadow struct {
 	concentratorConfigs map[string]ConcentratorUnitShadow
 	driverConfigs       []GatewayModbusDriverConfig
 	autonomyPolicy      *GatewayAutonomyPolicy
+	edgeRuleBundle      *edgecontrol.EdgeRuleBundle
 	report              GatewayShadowReportRequest
 }
 
@@ -279,8 +289,10 @@ func (s *edgeConfigShadow) prepareDesired(ctx context.Context, desired GatewayDe
 	driverHook := s.applyDriverHook
 	removeDriverHook := s.removeDriverHook
 	autonomyHook := s.applyAutonomyHook
+	rulesHook := s.applyEdgeRulesHook
 	prevDrivers := cloneDriverConfigs(s.driverConfigs)
 	prevPolicy := cloneAutonomyPolicy(s.autonomyPolicy)
+	prevEdgeRules := s.edgeRuleBundle.Clone()
 	s.mu.Unlock()
 
 	drift := []ShadowDriftDetail{}
@@ -335,9 +347,11 @@ func (s *edgeConfigShadow) prepareDesired(ctx context.Context, desired GatewayDe
 		desired,
 		prevDrivers,
 		prevPolicy,
+		prevEdgeRules,
 		driverHook,
 		removeDriverHook,
 		autonomyHook,
+		rulesHook,
 		hook != nil,
 		len(cleanedUnits),
 		drift,
@@ -361,6 +375,7 @@ func (s *edgeConfigShadow) prepareDesired(ctx context.Context, desired GatewayDe
 		concentratorConfigs: cleanedUnits,
 		driverConfigs:       res.committedDrivers,
 		autonomyPolicy:      res.committedPolicy,
+		edgeRuleBundle:      res.committedEdgeRules,
 		report: GatewayShadowReportRequest{
 			ReportedRevision:    desired.DesiredRevision,
 			AppliedStatus:       res.status,
@@ -369,6 +384,7 @@ func (s *edgeConfigShadow) prepareDesired(ctx context.Context, desired GatewayDe
 			ConcentratorConfigs: cleanedUnits,
 			DriverConfigs:       res.acceptedDrivers,
 			AutonomyPolicy:      res.reportedPolicy,
+			EdgeRuleBundle:      res.reportedEdgeRules,
 			DriftDetails:        res.drift,
 			ErrorMessage:        errPtr,
 			ReportedAt:          &now,
@@ -391,11 +407,18 @@ func (s *edgeConfigShadow) commitPrepared(prepared preparedEdgeShadow) error {
 	s.concentratorConfigs = cloneConcentratorConfigs(prepared.concentratorConfigs)
 	s.driverConfigs = cloneDriverConfigs(prepared.driverConfigs)
 	s.autonomyPolicy = cloneAutonomyPolicy(prepared.autonomyPolicy)
+	s.edgeRuleBundle = prepared.edgeRuleBundle.Clone()
 	s.lastPublished = map[string]time.Time{}
 	return s.persistLocked()
 }
 
 func (s *edgeConfigShadow) applyDesired(ctx context.Context, desired GatewayDesiredConfig) (GatewayShadowReportRequest, error) {
+	if s == nil {
+		return GatewayShadowReportRequest{}, errors.New("edge config shadow is nil")
+	}
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+
 	prepared, stale, err := s.prepareDesired(ctx, desired)
 	if err != nil {
 		return GatewayShadowReportRequest{}, err
@@ -536,8 +559,10 @@ func (s *edgeConfigShadow) reapplyPersisted(ctx context.Context) error {
 	s.mu.Lock()
 	drivers := cloneDriverConfigs(s.driverConfigs)
 	policy := cloneAutonomyPolicy(s.autonomyPolicy)
+	edgeRules := s.edgeRuleBundle.Clone()
 	driverHook := s.applyDriverHook
 	autonomyHook := s.applyAutonomyHook
+	rulesHook := s.applyEdgeRulesHook
 	s.mu.Unlock()
 
 	var errs []string
@@ -561,6 +586,17 @@ func (s *edgeConfigShadow) reapplyPersisted(ctx context.Context) error {
 		}
 	} else if policy == nil && autonomyHook != nil {
 		if err := autonomyHook(ctx, nil); err != nil {
+			errs = append(errs, err.Error())
+		}
+	}
+	if edgeRules != nil && rulesHook != nil {
+		if err := edgeRules.Validate(); err != nil {
+			errs = append(errs, err.Error())
+		} else if err := rulesHook(ctx, edgeRules); err != nil {
+			errs = append(errs, err.Error())
+		}
+	} else if edgeRules == nil && rulesHook != nil {
+		if err := rulesHook(ctx, nil); err != nil {
 			errs = append(errs, err.Error())
 		}
 	}
@@ -674,10 +710,13 @@ func syncConfigShadowHTTP(ctx context.Context, config MQTTGatewayConfig, shadow 
 	if err != nil {
 		return fmt.Errorf("pull gateway config shadow: %w", err)
 	}
-	pullBody, readErr := io.ReadAll(io.LimitReader(resp.Body, shadowSyncMaxBodyBytes))
+	pullBody, readErr := io.ReadAll(io.LimitReader(resp.Body, shadowSyncMaxBodyBytes+1))
 	_ = resp.Body.Close()
 	if readErr != nil {
 		return fmt.Errorf("read config shadow pull response: %w", readErr)
+	}
+	if int64(len(pullBody)) > shadowSyncMaxBodyBytes {
+		return fmt.Errorf("config shadow pull response exceeds %d bytes", shadowSyncMaxBodyBytes)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("pull gateway config shadow failed with HTTP %d", resp.StatusCode)

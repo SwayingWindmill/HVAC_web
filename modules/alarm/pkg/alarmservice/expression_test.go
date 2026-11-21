@@ -599,7 +599,7 @@ func TestSampleWindowJSONEncodingAndValidation(t *testing.T) {
 			t.Errorf("invalid sample window payload accepted: %s", raw)
 		}
 	}
-	overflow := make([]TimedSample, MaxSlopeSamplesPerRule+1)
+	overflow := make([]TimedSample, MaxWindowSamplesPerRule+1)
 	for i := range overflow {
 		overflow[i] = TimedSample{Input: "d/t", ObservedAt: "2026-11-17T10:00:00Z", Value: float64(i)}
 	}

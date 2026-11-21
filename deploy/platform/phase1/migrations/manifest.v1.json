@@ -142,7 +142,8 @@
         "infra/registry/postgres/init/accounting-config-delete-grants.sql",
         "infra/registry/postgres/init/device-hardware-replacements.sql",
         "infra/registry/postgres/init/optimization-multiloop-vfd-bounds.sql",
-        "infra/registry/postgres/init/optimization-recommendation-auxiliary-targets.sql"
+        "infra/registry/postgres/init/optimization-recommendation-auxiliary-targets.sql",
+        "infra/connectivity/postgres/init/gateway-shadow-edge-rules.sql"
       ]
     },
     {

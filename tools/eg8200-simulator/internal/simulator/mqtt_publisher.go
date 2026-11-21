@@ -138,6 +138,7 @@ type MQTTPublisher struct {
 	configShadow            *edgeConfigShadow
 	shadowClientMu          sync.Mutex
 	shadowHTTPClient        *http.Client
+	edgeEventSpoolMu        sync.Mutex
 	snapshotMu              sync.Mutex
 	snapshotInterval        time.Duration
 	lastFullSnapshotAt      time.Time
@@ -236,6 +237,12 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 			}
 		}
 		publisher.SetSnapshotInterval(effective.SnapshotInterval())
+		return nil
+	}
+	configShadow.applyEdgeRulesHook = func(_ context.Context, bundle *edgecontrol.EdgeRuleBundle) error {
+		if edgeRuntime != nil {
+			return edgeRuntime.ApplyEdgeRuleBundle(bundle)
+		}
 		return nil
 	}
 	if err := configShadow.reapplyPersisted(ctx); err != nil {
@@ -344,7 +351,6 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 			}
 			publisher.reconnectWatermark.Store(watermark)
 			publisher.hasReconnectWatermark.Store(true)
-			connected.Store(true)
 			if edgeRuntime != nil {
 				edgeRuntime.NotifyCloudContact(true, sessionTime)
 			}
@@ -370,6 +376,7 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 					})
 					eventCancel()
 				}
+				connected.Store(true)
 				flushContext, flushCancel := context.WithTimeout(ctx, 30*time.Second)
 				defer flushCancel()
 				publisher.flushAndSyncResend(flushContext)
@@ -493,13 +500,98 @@ func (publisher *MQTTPublisher) RefreshMetrics() error {
 	return nil
 }
 
+func (publisher *MQTTPublisher) PublishEdgeRuleEvents(ctx context.Context) error {
+	if publisher == nil || publisher.edgeRuntime == nil || publisher.evidenceSpool == nil {
+		return nil
+	}
+	queued, err := publisher.spoolEdgeRuleEvents(time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	if queued > 0 && publisher.connected != nil && publisher.connected.Load() {
+		flushContext, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		publisher.flushAndSyncResend(flushContext)
+	}
+	return nil
+}
+
+func (publisher *MQTTPublisher) spoolEdgeRuleEvents(now time.Time) (int, error) {
+	if publisher == nil || publisher.edgeRuntime == nil || publisher.evidenceSpool == nil {
+		return 0, nil
+	}
+	publisher.edgeEventSpoolMu.Lock()
+	defer publisher.edgeEventSpoolMu.Unlock()
+
+	events := publisher.edgeRuntime.PeekEdgeRuleEvents()
+	if len(events) == 0 {
+		return 0, nil
+	}
+	topic := mqttEventTopic(publisher.gatewayID)
+	queued := 0
+	defer func() {
+		if queued > 0 {
+			publisher.edgeRuntime.AckEdgeRuleEvents(queued)
+		}
+	}()
+	for _, ev := range events {
+		occurredAt, err := time.Parse(time.RFC3339Nano, ev.OccurredAt)
+		if err != nil || occurredAt.IsZero() {
+			occurredAt = now.UTC()
+		}
+		var seq uint64
+		if publisher.eventSequence != nil {
+			seq = publisher.eventSequence.Add(1)
+		}
+		rawData, err := json.Marshal(ev)
+		if err != nil {
+			return queued, fmt.Errorf("encode edge rule event data: %w", err)
+		}
+		msgID, err := newUUIDV7(occurredAt)
+		if err != nil {
+			return queued, fmt.Errorf("allocate edge rule event message id: %w", err)
+		}
+		severity := strings.TrimSpace(ev.Severity)
+		if ev.EventType == edgecontrol.EdgeRuleEventCleared || severity == "" {
+			severity = "INFO"
+		}
+		envelope := mqttEventEnvelope{
+			SchemaVersion: mqttTelemetryEnvelopeSchemaVersion,
+			MessageID:     msgID,
+			GatewayID:     publisher.gatewayID,
+			Timestamp:     occurredAt.UnixMilli(),
+			Sequence:      seq,
+			Payload: mqttEventPayload{
+				EventType:  ev.EventType,
+				SourceType: "EDGE_RULE",
+				SourceID:   ev.RuleID,
+				EventTime:  occurredAt.UnixMilli(),
+				Severity:   severity,
+				Data:       rawData,
+			},
+		}
+		payload, err := json.Marshal(envelope)
+		if err != nil {
+			return queued, fmt.Errorf("encode edge rule event envelope: %w", err)
+		}
+		if _, err := publisher.evidenceSpool.Enqueue(msgID, EvidenceAlarm, topic, payload); err != nil {
+			return queued, err
+		}
+		queued++
+	}
+	return queued, nil
+}
+
 func (publisher *MQTTPublisher) PublishMeasurements(ctx context.Context, measurements []Measurement) (err error) {
 	if publisher == nil || publisher.currentQoSPublisher() == nil {
 		return errors.New("MQTT publisher is unavailable")
 	}
+	// Best-effort alarm spooling: retain un-spooled tail in edgeRuntime on capacity limits
+	// so offline alarm bursts never block telemetry ingestion.
+	edgeEventsQueued, _ := publisher.spoolEdgeRuleEvents(time.Now().UTC())
 	allMeasurements := publisher.withShadowMeasurements(measurements)
 	if len(allMeasurements) == 0 {
-		if publisher.connected != nil && publisher.connected.Load() && publisher.resendQueue != nil && !publisher.resendQueue.IsSynced() {
+		if publisher.connected != nil && publisher.connected.Load() && (edgeEventsQueued > 0 || (publisher.resendQueue != nil && !publisher.resendQueue.IsSynced())) {
 			flushContext, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()
 			publisher.flushAndSyncResend(flushContext)
@@ -524,7 +616,7 @@ func (publisher *MQTTPublisher) PublishMeasurements(ctx context.Context, measure
 	}
 	if len(envelope.Payload.Devices) == 0 {
 		outcome = "throttled"
-		if publisher.connected != nil && publisher.connected.Load() && publisher.resendQueue != nil && !publisher.resendQueue.IsSynced() {
+		if publisher.connected != nil && publisher.connected.Load() && (edgeEventsQueued > 0 || (publisher.resendQueue != nil && !publisher.resendQueue.IsSynced())) {
 			flushContext, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()
 			publisher.flushAndSyncResend(flushContext)

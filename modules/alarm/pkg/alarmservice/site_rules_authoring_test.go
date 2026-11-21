@@ -193,14 +193,17 @@ func TestCompileDraftsPreservesPolicyIDAndRejectsCyclesAndOverDepth(t *testing.T
 }
 
 type stubAuthoringStore struct {
-	rules        []SiteRule
-	meta         SiteRuleBundleMeta
-	diffResult   SiteRuleDiffResult
-	publishErr   error
-	revisions    SiteRuleBundleRevisionList
-	rollbackErr  error
-	lastDraftLen int
-	lastRollback uint64
+	rules            []SiteRule
+	meta             SiteRuleBundleMeta
+	diffResult       SiteRuleDiffResult
+	publishErr       error
+	revisions        SiteRuleBundleRevisionList
+	rollbackErr      error
+	edgeCompileRes   EdgeRuleCompileResult
+	edgeCompileErr   error
+	lastDraftLen     int
+	lastRollback     uint64
+	lastCompileDraft bool
 }
 
 func (s *stubAuthoringStore) LatestSiteRuleBundleMeta(_ context.Context, _, _ string) (SiteRuleBundleMeta, error) {
@@ -256,6 +259,17 @@ func (s *stubAuthoringStore) RollbackSiteRules(_ context.Context, _, _ string, t
 		Graph:                  SiteRuleGraphView{Nodes: []SiteRuleGraphNodeView{}, Edges: []SiteRuleGraphEdgeView{}, TopologicalOrder: []string{}},
 		Items:                  []SiteRuleView{},
 	}, nil
+}
+
+func (s *stubAuthoringStore) CompileSiteRulesEdge(_ context.Context, _, siteID string, drafts *[]SiteRuleDraft, now time.Time) (EdgeRuleCompileResult, error) {
+	s.lastCompileDraft = drafts != nil
+	if s.edgeCompileErr != nil {
+		return EdgeRuleCompileResult{}, s.edgeCompileErr
+	}
+	if s.edgeCompileRes.SiteID != "" {
+		return s.edgeCompileRes, nil
+	}
+	return CompileSiteRulesForEdge(siteID, s.meta.BundleRevision, s.meta.BundleDigest, s.rules, now)
 }
 
 func TestAlarmHTTPAuthoringDiffPublishRollbackAndDraftSimulate(t *testing.T) {

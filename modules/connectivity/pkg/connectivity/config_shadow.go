@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 )
 
@@ -118,6 +119,7 @@ type GatewayDesiredConfig struct {
 	ConcentratorConfigs map[string]ConcentratorUnitShadow `json:"concentratorConfigs"`
 	DriverConfigs       []GatewayModbusDriverConfig       `json:"driverConfigs,omitempty"`
 	AutonomyPolicy      *GatewayAutonomyPolicy            `json:"autonomyPolicy,omitempty"`
+	EdgeRuleBundle      *edgecontrol.EdgeRuleBundle       `json:"edgeRuleBundle,omitempty"`
 	UpdatedBy           string                            `json:"updatedBy"`
 	Reason              string                            `json:"reason"`
 	CreatedAt           time.Time                         `json:"createdAt"`
@@ -132,6 +134,7 @@ type GatewayReportedConfig struct {
 	ConcentratorConfigs map[string]ConcentratorUnitShadow `json:"concentratorConfigs"`
 	DriverConfigs       []GatewayModbusDriverConfig       `json:"driverConfigs,omitempty"`
 	AutonomyPolicy      *GatewayAutonomyPolicy            `json:"autonomyPolicy,omitempty"`
+	EdgeRuleBundle      *edgecontrol.EdgeRuleBundle       `json:"edgeRuleBundle,omitempty"`
 	DriftDetails        []DriftDetail                     `json:"driftDetails"`
 	ErrorMessage        *string                           `json:"errorMessage,omitempty"`
 	ReportedAt          time.Time                         `json:"reportedAt"`
@@ -154,6 +157,7 @@ type UpdateDesiredConfigInput struct {
 	ConcentratorConfigs     *map[string]ConcentratorUnitShadow `json:"concentratorConfigs,omitempty"`
 	DriverConfigs           *[]GatewayModbusDriverConfig       `json:"driverConfigs,omitempty"`
 	AutonomyPolicy          OptionalAutonomyPolicy             `json:"autonomyPolicy,omitzero"`
+	EdgeRuleBundle          OptionalEdgeRuleBundle             `json:"edgeRuleBundle,omitzero"`
 	Reason                  string                             `json:"reason"`
 }
 
@@ -172,6 +176,7 @@ type GatewayShadowReportInput struct {
 	ConcentratorConfigs map[string]ConcentratorUnitShadow `json:"concentratorConfigs"`
 	DriverConfigs       []GatewayModbusDriverConfig       `json:"driverConfigs,omitempty"`
 	AutonomyPolicy      *GatewayAutonomyPolicy            `json:"autonomyPolicy,omitempty"`
+	EdgeRuleBundle      *edgecontrol.EdgeRuleBundle       `json:"edgeRuleBundle,omitempty"`
 	DriftDetails        []DriftDetail                     `json:"driftDetails,omitempty"`
 	ErrorMessage        *string                           `json:"errorMessage,omitempty"`
 	ReportedAt          *time.Time                        `json:"reportedAt,omitempty"`
@@ -246,12 +251,13 @@ func ValidateConcentratorShadowEIDSlots(slots []ConcentratorShadowEIDSlot) ([]Co
 }
 
 type validatedShadowSections struct {
-	mappings []GatewayPointMapping
-	policies []GatewaySamplingPolicy
-	units    map[string]ConcentratorUnitShadow
-	drivers  []GatewayModbusDriverConfig
-	autonomy *GatewayAutonomyPolicy
-	encoded  encodedShadowSections
+	mappings       []GatewayPointMapping
+	policies       []GatewaySamplingPolicy
+	units          map[string]ConcentratorUnitShadow
+	drivers        []GatewayModbusDriverConfig
+	autonomy       *GatewayAutonomyPolicy
+	edgeRuleBundle *edgecontrol.EdgeRuleBundle
+	encoded        encodedShadowSections
 }
 
 func normalizeAndValidateDesiredShadow(
@@ -260,6 +266,7 @@ func normalizeAndValidateDesiredShadow(
 	concentratorConfigs map[string]ConcentratorUnitShadow,
 	driverConfigs []GatewayModbusDriverConfig,
 	autonomyPolicy *GatewayAutonomyPolicy,
+	edgeRuleBundle *edgecontrol.EdgeRuleBundle,
 ) (validatedShadowSections, error) {
 	cleanedMappings, err := validatePointMappings(pointMappings)
 	if err != nil {
@@ -281,17 +288,22 @@ func normalizeAndValidateDesiredShadow(
 	if err != nil {
 		return validatedShadowSections{}, err
 	}
-	encoded, err := marshalShadowSections(cleanedMappings, cleanedPolicies, cleanedUnits, cleanedDrivers, cleanedAutonomy)
+	cleanedEdgeRules, err := validateEdgeRuleBundle(edgeRuleBundle)
+	if err != nil {
+		return validatedShadowSections{}, err
+	}
+	encoded, err := marshalShadowSections(cleanedMappings, cleanedPolicies, cleanedUnits, cleanedDrivers, cleanedAutonomy, cleanedEdgeRules)
 	if err != nil {
 		return validatedShadowSections{}, err
 	}
 	return validatedShadowSections{
-		mappings: cleanedMappings,
-		policies: cleanedPolicies,
-		units:    cleanedUnits,
-		drivers:  cleanedDrivers,
-		autonomy: cleanedAutonomy,
-		encoded:  encoded,
+		mappings:       cleanedMappings,
+		policies:       cleanedPolicies,
+		units:          cleanedUnits,
+		drivers:        cleanedDrivers,
+		autonomy:       cleanedAutonomy,
+		edgeRuleBundle: cleanedEdgeRules,
+		encoded:        encoded,
 	}, nil
 }
 
@@ -445,14 +457,16 @@ func validateConcentratorConfigs(input map[string]ConcentratorUnitShadow) (map[s
 	return out, nil
 }
 
-// estimatedPostgresJSONBTextBytes returns the octet length PostgreSQL produces
-// when formatting compact Go JSON via jsonb::text (one extra space after every
-// ':' and ',' token outside string literals).
+// estimatedPostgresJSONBTextBytes returns an upper bound on the octet length
+// PostgreSQL produces when formatting compact Go JSON via jsonb::text (one extra
+// space after every ':' and ',' token outside strings, plus scientific-exponent
+// decimal expansion for large/small floats).
 func estimatedPostgresJSONBTextBytes(compactJSON []byte) int {
-	extraSpaces := 0
+	extra := 0
 	inString := false
 	escaped := false
-	for _, b := range compactJSON {
+	for i := 0; i < len(compactJSON); i++ {
+		b := compactJSON[i]
 		if escaped {
 			escaped = false
 			continue
@@ -470,10 +484,31 @@ func estimatedPostgresJSONBTextBytes(compactJSON []byte) int {
 		case '"':
 			inString = true
 		case ':', ',':
-			extraSpaces++
+			extra++
+		case 'e', 'E':
+			// Account for PostgreSQL jsonb::text expanding Go scientific floats (e.g. 1e+30).
+			j := i + 1
+			if j < len(compactJSON) && (compactJSON[j] == '+' || compactJSON[j] == '-') {
+				j++
+			}
+			expStart := j
+			for j < len(compactJSON) && compactJSON[j] >= '0' && compactJSON[j] <= '9' {
+				j++
+			}
+			if j > expStart {
+				if expVal, err := strconv.Atoi(string(compactJSON[expStart:j])); err == nil {
+					if expVal < 0 {
+						expVal = -expVal
+					}
+					if expVal > 350 {
+						expVal = 350
+					}
+					extra += expVal + 8
+				}
+			}
 		}
 	}
-	return len(compactJSON) + extraSpaces
+	return len(compactJSON) + extra
 }
 
 func clampUTF8Runes(value string, maxRunes int) string {
@@ -568,6 +603,7 @@ type encodedShadowSections struct {
 	unitsJSON    []byte
 	driversJSON  []byte
 	autonomyArg  *string
+	edgeRulesArg *string
 }
 
 func marshalShadowSections(
@@ -576,6 +612,7 @@ func marshalShadowSections(
 	units map[string]ConcentratorUnitShadow,
 	drivers []GatewayModbusDriverConfig,
 	autonomy *GatewayAutonomyPolicy,
+	edgeRules *edgecontrol.EdgeRuleBundle,
 ) (encodedShadowSections, error) {
 	if mappings == nil {
 		mappings = []GatewayPointMapping{}
@@ -629,12 +666,25 @@ func marshalShadowSections(
 		encoded := string(autonomyBytes)
 		autonomyArg = &encoded
 	}
+	var edgeRulesArg *string
+	if edgeRules != nil {
+		edgeRulesBytes, err := json.Marshal(edgeRules)
+		if err != nil {
+			return encodedShadowSections{}, fmt.Errorf("%w: encode edgeRuleBundle: %v", ErrConfigShadowInvalid, err)
+		}
+		if estimatedPostgresJSONBTextBytes(edgeRulesBytes) > maxEdgeRuleBundleJSONBytes {
+			return encodedShadowSections{}, fmt.Errorf("%w: edgeRuleBundle exceeds %d bytes", ErrConfigShadowInvalid, maxEdgeRuleBundleJSONBytes)
+		}
+		encoded := string(edgeRulesBytes)
+		edgeRulesArg = &encoded
+	}
 	return encodedShadowSections{
 		mappingsJSON: mappingsBytes,
 		policiesJSON: policiesBytes,
 		unitsJSON:    unitsBytes,
 		driversJSON:  driversBytes,
 		autonomyArg:  autonomyArg,
+		edgeRulesArg: edgeRulesArg,
 	}, nil
 }
 
@@ -661,12 +711,14 @@ func computeConfigShadowDrift(desired *GatewayDesiredConfig, reported *GatewayRe
 	var desiredUnits, reportedUnits map[string]ConcentratorUnitShadow
 	var desiredDrivers, reportedDrivers []GatewayModbusDriverConfig
 	var desiredAutonomy, reportedAutonomy *GatewayAutonomyPolicy
+	var desiredEdgeRules, reportedEdgeRules *edgecontrol.EdgeRuleBundle
 	if desired != nil {
 		desiredMappings = desired.PointMappings
 		desiredPolicies = desired.SamplingPolicies
 		desiredUnits = desired.ConcentratorConfigs
 		desiredDrivers = desired.DriverConfigs
 		desiredAutonomy = desired.AutonomyPolicy
+		desiredEdgeRules = desired.EdgeRuleBundle
 	}
 	if reported != nil {
 		reportedMappings = reported.PointMappings
@@ -674,12 +726,14 @@ func computeConfigShadowDrift(desired *GatewayDesiredConfig, reported *GatewayRe
 		reportedUnits = reported.ConcentratorConfigs
 		reportedDrivers = reported.DriverConfigs
 		reportedAutonomy = reported.AutonomyPolicy
+		reportedEdgeRules = reported.EdgeRuleBundle
 	}
 	drift = append(drift, diffPointMappings(desiredMappings, reportedMappings)...)
 	drift = append(drift, diffSamplingPolicies(desiredPolicies, reportedPolicies)...)
 	drift = append(drift, diffConcentratorConfigs(desiredUnits, reportedUnits)...)
 	drift = append(drift, diffDriverConfigs(desiredDrivers, reportedDrivers)...)
 	drift = append(drift, diffAutonomyPolicy(desiredAutonomy, reportedAutonomy)...)
+	drift = append(drift, diffEdgeRuleBundle(desiredEdgeRules, reportedEdgeRules)...)
 	return drift
 }
 
@@ -970,7 +1024,7 @@ WHERE gateway_id = $1::uuid AND status = 'ACTIVE'
 func loadDesiredConfigInTx(ctx context.Context, tx pgx.Tx, tenantID, gatewayID string, forUpdate bool) (*GatewayDesiredConfig, error) {
 	query := `
 SELECT desired_revision, point_mappings, sampling_policies, concentrator_configs,
-       COALESCE(driver_configs, '[]'::jsonb), autonomy_policy,
+       COALESCE(driver_configs, '[]'::jsonb), autonomy_policy, edge_rule_bundle,
        updated_by::text, reason, created_at, updated_at
 FROM connectivity.gateway_desired_configs
 WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
@@ -979,10 +1033,10 @@ WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
 		query += "FOR UPDATE\n"
 	}
 	var cfg GatewayDesiredConfig
-	var mappingsJSON, policiesJSON, unitsJSON, driversJSON, autonomyJSON []byte
+	var mappingsJSON, policiesJSON, unitsJSON, driversJSON, autonomyJSON, edgeRulesJSON []byte
 	err := tx.QueryRow(ctx, query, tenantID, gatewayID).Scan(
 		&cfg.DesiredRevision, &mappingsJSON, &policiesJSON, &unitsJSON,
-		&driversJSON, &autonomyJSON,
+		&driversJSON, &autonomyJSON, &edgeRulesJSON,
 		&cfg.UpdatedBy, &cfg.Reason, &cfg.CreatedAt, &cfg.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -994,8 +1048,8 @@ WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
 	cfg.CreatedAt = cfg.CreatedAt.UTC()
 	cfg.UpdatedAt = cfg.UpdatedAt.UTC()
 	if err := decodeShadowConfigPayload(
-		mappingsJSON, policiesJSON, unitsJSON, driversJSON, autonomyJSON,
-		&cfg.PointMappings, &cfg.SamplingPolicies, &cfg.ConcentratorConfigs, &cfg.DriverConfigs, &cfg.AutonomyPolicy,
+		mappingsJSON, policiesJSON, unitsJSON, driversJSON, autonomyJSON, edgeRulesJSON,
+		&cfg.PointMappings, &cfg.SamplingPolicies, &cfg.ConcentratorConfigs, &cfg.DriverConfigs, &cfg.AutonomyPolicy, &cfg.EdgeRuleBundle,
 	); err != nil {
 		return nil, err
 	}
@@ -1005,7 +1059,7 @@ WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
 func loadReportedConfigInTx(ctx context.Context, tx pgx.Tx, tenantID, gatewayID string, forUpdate bool) (*GatewayReportedConfig, error) {
 	query := `
 SELECT reported_revision, applied_status, point_mappings, sampling_policies, concentrator_configs,
-       COALESCE(driver_configs, '[]'::jsonb), autonomy_policy,
+       COALESCE(driver_configs, '[]'::jsonb), autonomy_policy, edge_rule_bundle,
        drift_details, error_message, reported_at, updated_at
 FROM connectivity.gateway_reported_configs
 WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
@@ -1014,10 +1068,10 @@ WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
 		query += "FOR UPDATE\n"
 	}
 	var cfg GatewayReportedConfig
-	var mappingsJSON, policiesJSON, unitsJSON, driversJSON, autonomyJSON, driftJSON []byte
+	var mappingsJSON, policiesJSON, unitsJSON, driversJSON, autonomyJSON, edgeRulesJSON, driftJSON []byte
 	err := tx.QueryRow(ctx, query, tenantID, gatewayID).Scan(
 		&cfg.ReportedRevision, &cfg.AppliedStatus, &mappingsJSON, &policiesJSON, &unitsJSON,
-		&driversJSON, &autonomyJSON,
+		&driversJSON, &autonomyJSON, &edgeRulesJSON,
 		&driftJSON, &cfg.ErrorMessage, &cfg.ReportedAt, &cfg.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -1029,8 +1083,8 @@ WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
 	cfg.ReportedAt = cfg.ReportedAt.UTC()
 	cfg.UpdatedAt = cfg.UpdatedAt.UTC()
 	if err := decodeShadowConfigPayload(
-		mappingsJSON, policiesJSON, unitsJSON, driversJSON, autonomyJSON,
-		&cfg.PointMappings, &cfg.SamplingPolicies, &cfg.ConcentratorConfigs, &cfg.DriverConfigs, &cfg.AutonomyPolicy,
+		mappingsJSON, policiesJSON, unitsJSON, driversJSON, autonomyJSON, edgeRulesJSON,
+		&cfg.PointMappings, &cfg.SamplingPolicies, &cfg.ConcentratorConfigs, &cfg.DriverConfigs, &cfg.AutonomyPolicy, &cfg.EdgeRuleBundle,
 	); err != nil {
 		return nil, err
 	}
@@ -1047,12 +1101,13 @@ WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
 }
 
 func decodeShadowConfigPayload(
-	mappingsJSON, policiesJSON, unitsJSON, driversJSON, autonomyJSON []byte,
+	mappingsJSON, policiesJSON, unitsJSON, driversJSON, autonomyJSON, edgeRulesJSON []byte,
 	mappingsOut *[]GatewayPointMapping,
 	policiesOut *[]GatewaySamplingPolicy,
 	unitsOut *map[string]ConcentratorUnitShadow,
 	driversOut *[]GatewayModbusDriverConfig,
 	autonomyOut **GatewayAutonomyPolicy,
+	edgeRulesOut **edgecontrol.EdgeRuleBundle,
 ) error {
 	*mappingsOut = []GatewayPointMapping{}
 	if len(mappingsJSON) > 0 {
@@ -1097,6 +1152,14 @@ func decodeShadowConfigPayload(
 			return fmt.Errorf("decode autonomyPolicy: %w", err)
 		}
 		*autonomyOut = &parsed
+	}
+	*edgeRulesOut = nil
+	if trimmed := bytes.TrimSpace(edgeRulesJSON); len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null")) {
+		var parsed edgecontrol.EdgeRuleBundle
+		if err := json.Unmarshal(trimmed, &parsed); err != nil {
+			return fmt.Errorf("decode edgeRuleBundle: %w", err)
+		}
+		*edgeRulesOut = &parsed
 	}
 	return nil
 }
@@ -1155,12 +1218,12 @@ func persistDesiredConfigInTx(
 		if _, err := tx.Exec(ctx, `
 INSERT INTO connectivity.gateway_desired_configs (
   tenant_id, gateway_id, desired_revision, point_mappings, sampling_policies, concentrator_configs,
-  driver_configs, autonomy_policy, updated_by, reason, created_at, updated_at
+  driver_configs, autonomy_policy, edge_rule_bundle, updated_by, reason, created_at, updated_at
 ) VALUES (
-  $1::uuid, $2::uuid, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::uuid, $10, $11, $11
+  $1::uuid, $2::uuid, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10::uuid, $11, $12, $12
 )`, tenantID, gatewayID, desired.DesiredRevision,
 			string(encoded.mappingsJSON), string(encoded.policiesJSON), string(encoded.unitsJSON),
-			string(encoded.driversJSON), encoded.autonomyArg, desired.UpdatedBy, desired.Reason, desired.UpdatedAt); err != nil {
+			string(encoded.driversJSON), encoded.autonomyArg, encoded.edgeRulesArg, desired.UpdatedBy, desired.Reason, desired.UpdatedAt); err != nil {
 			return fmt.Errorf("insert gateway desired config: %w", err)
 		}
 		return nil
@@ -1173,13 +1236,14 @@ SET desired_revision = $3,
     concentrator_configs = $6::jsonb,
     driver_configs = $7::jsonb,
     autonomy_policy = $8::jsonb,
-    updated_by = $9::uuid,
-    reason = $10,
-    updated_at = $11
+    edge_rule_bundle = $9::jsonb,
+    updated_by = $10::uuid,
+    reason = $11,
+    updated_at = $12
 WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
 `, tenantID, gatewayID, desired.DesiredRevision,
 		string(encoded.mappingsJSON), string(encoded.policiesJSON), string(encoded.unitsJSON),
-		string(encoded.driversJSON), encoded.autonomyArg, desired.UpdatedBy, desired.Reason, desired.UpdatedAt); err != nil {
+		string(encoded.driversJSON), encoded.autonomyArg, encoded.edgeRulesArg, desired.UpdatedBy, desired.Reason, desired.UpdatedAt); err != nil {
 		return fmt.Errorf("update gateway desired config: %w", err)
 	}
 	return nil
@@ -1196,10 +1260,10 @@ func upsertReportedConfigInTx(
 	if _, err := tx.Exec(ctx, `
 INSERT INTO connectivity.gateway_reported_configs (
   tenant_id, gateway_id, reported_revision, applied_status,
-  point_mappings, sampling_policies, concentrator_configs, driver_configs, autonomy_policy, drift_details,
+  point_mappings, sampling_policies, concentrator_configs, driver_configs, autonomy_policy, edge_rule_bundle, drift_details,
   error_message, reported_at, updated_at
 ) VALUES (
-  $1::uuid, $2::uuid, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, $11, $12, $13
+  $1::uuid, $2::uuid, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, $11::jsonb, $12, $13, $14
 )
 ON CONFLICT (tenant_id, gateway_id) DO UPDATE SET
   reported_revision = EXCLUDED.reported_revision,
@@ -1209,13 +1273,14 @@ ON CONFLICT (tenant_id, gateway_id) DO UPDATE SET
   concentrator_configs = EXCLUDED.concentrator_configs,
   driver_configs = EXCLUDED.driver_configs,
   autonomy_policy = EXCLUDED.autonomy_policy,
+  edge_rule_bundle = EXCLUDED.edge_rule_bundle,
   drift_details = EXCLUDED.drift_details,
   error_message = EXCLUDED.error_message,
   reported_at = EXCLUDED.reported_at,
   updated_at = EXCLUDED.updated_at
 `, tenantID, gatewayID, reported.ReportedRevision, reported.AppliedStatus,
 		string(encoded.mappingsJSON), string(encoded.policiesJSON), string(encoded.unitsJSON),
-		string(encoded.driversJSON), encoded.autonomyArg, string(driftJSON),
+		string(encoded.driversJSON), encoded.autonomyArg, encoded.edgeRulesArg, string(driftJSON),
 		reported.ErrorMessage, reported.ReportedAt, reported.UpdatedAt); err != nil {
 		return fmt.Errorf("upsert gateway reported config: %w", err)
 	}
@@ -1268,9 +1333,19 @@ func (store *Store) UpdateGatewayDesiredConfig(ctx context.Context, claims regis
 			return GatewayConfigShadow{}, err
 		}
 	}
-	tenantID, err := store.ResolveGatewayScopeForOperator(ctx, claims, gatewayID)
+	var cleanedEdgeRules *edgecontrol.EdgeRuleBundle
+	if input.EdgeRuleBundle.Value != nil {
+		cleanedEdgeRules, err = validateEdgeRuleBundle(input.EdgeRuleBundle.Value)
+		if err != nil {
+			return GatewayConfigShadow{}, err
+		}
+	}
+	tenantID, siteID, err := store.resolveGatewayTenantAndSiteForOperator(ctx, claims, gatewayID)
 	if err != nil {
 		return GatewayConfigShadow{}, err
+	}
+	if cleanedEdgeRules != nil && !strings.EqualFold(cleanedEdgeRules.SiteID, siteID) {
+		return GatewayConfigShadow{}, fmt.Errorf("%w: edgeRuleBundle siteId does not match gateway site", ErrConfigShadowInvalid)
 	}
 	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
@@ -1321,7 +1396,14 @@ func (store *Store) UpdateGatewayDesiredConfig(ctx context.Context, claims regis
 		effectiveAutonomy = cloneAutonomyPolicy(existing.AutonomyPolicy)
 	}
 
-	encoded, err := marshalShadowSections(effectiveMappings, effectivePolicies, effectiveUnits, effectiveDrivers, effectiveAutonomy)
+	var effectiveEdgeRules *edgecontrol.EdgeRuleBundle
+	if input.EdgeRuleBundle.IsSet() {
+		effectiveEdgeRules = cleanedEdgeRules
+	} else if existing != nil {
+		effectiveEdgeRules = existing.EdgeRuleBundle.Clone()
+	}
+
+	encoded, err := marshalShadowSections(effectiveMappings, effectivePolicies, effectiveUnits, effectiveDrivers, effectiveAutonomy, effectiveEdgeRules)
 	if err != nil {
 		return GatewayConfigShadow{}, err
 	}
@@ -1339,6 +1421,7 @@ func (store *Store) UpdateGatewayDesiredConfig(ctx context.Context, claims regis
 			ConcentratorConfigs: effectiveUnits,
 			DriverConfigs:       effectiveDrivers,
 			AutonomyPolicy:      effectiveAutonomy,
+			EdgeRuleBundle:      effectiveEdgeRules,
 			UpdatedBy:           claims.PrincipalID,
 			Reason:              reason,
 			CreatedAt:           now,
@@ -1358,6 +1441,7 @@ func (store *Store) UpdateGatewayDesiredConfig(ctx context.Context, claims regis
 			ConcentratorConfigs: effectiveUnits,
 			DriverConfigs:       effectiveDrivers,
 			AutonomyPolicy:      effectiveAutonomy,
+			EdgeRuleBundle:      effectiveEdgeRules,
 			UpdatedBy:           claims.PrincipalID,
 			Reason:              reason,
 			CreatedAt:           existing.CreatedAt,
@@ -1434,7 +1518,7 @@ func validateReportDriftDetails(details []DriftDetail) ([]DriftDetail, []byte, e
 		target := strings.TrimSpace(item.Target)
 		detail := strings.TrimSpace(item.Detail)
 		switch section {
-		case DriftSectionPointMappings, DriftSectionSamplingPolicies, DriftSectionConcentrator, DriftSectionDriverConfigs, DriftSectionAutonomyPolicy:
+		case DriftSectionPointMappings, DriftSectionSamplingPolicies, DriftSectionConcentrator, DriftSectionDriverConfigs, DriftSectionAutonomyPolicy, DriftSectionEdgeRules:
 		default:
 			return nil, nil, fmt.Errorf("%w: driftDetails[%d].section %q is invalid", ErrConfigShadowInvalid, i, item.Section)
 		}
@@ -1531,6 +1615,10 @@ func (store *Store) ReportGatewayAppliedConfig(ctx context.Context, gatewayID st
 	if err != nil {
 		return GatewayConfigShadow{}, err
 	}
+	edgeRules, err := validateEdgeRuleBundle(input.EdgeRuleBundle)
+	if err != nil {
+		return GatewayConfigShadow{}, err
+	}
 	inputDrifts, _, err := validateReportDriftDetails(input.DriftDetails)
 	if err != nil {
 		return GatewayConfigShadow{}, err
@@ -1573,7 +1661,7 @@ func (store *Store) ReportGatewayAppliedConfig(ctx context.Context, gatewayID st
 	if existingReported != nil {
 		preservedUnits = cloneConcentratorUnits(existingReported.ConcentratorConfigs)
 	}
-	encoded, err := marshalShadowSections(mappings, policies, preservedUnits, drivers, autonomy)
+	encoded, err := marshalShadowSections(mappings, policies, preservedUnits, drivers, autonomy, edgeRules)
 	if err != nil {
 		return GatewayConfigShadow{}, err
 	}
@@ -1586,6 +1674,7 @@ func (store *Store) ReportGatewayAppliedConfig(ctx context.Context, gatewayID st
 		ConcentratorConfigs: preservedUnits,
 		DriverConfigs:       drivers,
 		AutonomyPolicy:      autonomy,
+		EdgeRuleBundle:      edgeRules,
 		ErrorMessage:        errMsg,
 		ReportedAt:          reportedAt,
 		UpdatedAt:           now,
@@ -1728,6 +1817,7 @@ func (store *Store) UpsertConcentratorShadowState(
 		desired.ConcentratorConfigs = cloneConcentratorUnits(desired.ConcentratorConfigs)
 		desired.DriverConfigs = cloneDriverConfigsList(desired.DriverConfigs)
 		desired.AutonomyPolicy = cloneAutonomyPolicy(desired.AutonomyPolicy)
+		desired.EdgeRuleBundle = desired.EdgeRuleBundle.Clone()
 	}
 
 	if !appliedToEdge && cleanedParams != nil && cleanedParams.ModbusID > 0 && cleanedParams.ModbusID != unitID {
@@ -1752,7 +1842,7 @@ func (store *Store) UpsertConcentratorShadowState(
 	}
 	desired.ConcentratorConfigs[targetUnitKey] = unitDesired
 
-	dEncoded, err := marshalShadowSections(desired.PointMappings, desired.SamplingPolicies, desired.ConcentratorConfigs, desired.DriverConfigs, desired.AutonomyPolicy)
+	dEncoded, err := marshalShadowSections(desired.PointMappings, desired.SamplingPolicies, desired.ConcentratorConfigs, desired.DriverConfigs, desired.AutonomyPolicy, desired.EdgeRuleBundle)
 	if err != nil {
 		return 0, err
 	}
@@ -1774,7 +1864,7 @@ func (store *Store) UpsertConcentratorShadowState(
 				ReportedAt:          now,
 				UpdatedAt:           now,
 			}
-			if len(desired.PointMappings) > 0 || len(desired.SamplingPolicies) > 0 || len(desired.DriverConfigs) > 0 || desired.AutonomyPolicy != nil {
+			if len(desired.PointMappings) > 0 || len(desired.SamplingPolicies) > 0 || len(desired.DriverConfigs) > 0 || desired.AutonomyPolicy != nil || desired.EdgeRuleBundle != nil {
 				reported.ReportedRevision = 0
 			}
 		} else {
@@ -1786,6 +1876,7 @@ func (store *Store) UpsertConcentratorShadowState(
 			}
 			reported.DriverConfigs = cloneDriverConfigsList(existingReported.DriverConfigs)
 			reported.AutonomyPolicy = cloneAutonomyPolicy(existingReported.AutonomyPolicy)
+			reported.EdgeRuleBundle = existingReported.EdgeRuleBundle.Clone()
 			if oldDesiredRev > 0 && existingReported.ReportedRevision == oldDesiredRev && existingReported.AppliedStatus == AppliedStatusApplied {
 				reported.ReportedRevision = desired.DesiredRevision
 			}
@@ -1816,7 +1907,7 @@ func (store *Store) UpsertConcentratorShadowState(
 			reported.ErrorMessage = nil
 		}
 
-		rEncoded, err := marshalShadowSections(reported.PointMappings, reported.SamplingPolicies, reported.ConcentratorConfigs, reported.DriverConfigs, reported.AutonomyPolicy)
+		rEncoded, err := marshalShadowSections(reported.PointMappings, reported.SamplingPolicies, reported.ConcentratorConfigs, reported.DriverConfigs, reported.AutonomyPolicy, reported.EdgeRuleBundle)
 		if err != nil {
 			return 0, err
 		}
@@ -1889,6 +1980,7 @@ func (store *Store) RecordConcentratorReconcileResult(
 		reported.ConcentratorConfigs = cloneConcentratorUnits(existingReported.ConcentratorConfigs)
 		reported.DriverConfigs = cloneDriverConfigsList(existingReported.DriverConfigs)
 		reported.AutonomyPolicy = cloneAutonomyPolicy(existingReported.AutonomyPolicy)
+		reported.EdgeRuleBundle = existingReported.EdgeRuleBundle.Clone()
 		reported.DriftDetails = slices.Clone(existingReported.DriftDetails)
 	}
 
@@ -1935,7 +2027,7 @@ func (store *Store) RecordConcentratorReconcileResult(
 		}
 		if desiredChanged {
 			desired.ConcentratorConfigs = rekeyedDesired
-			dEncoded, err := marshalShadowSections(desired.PointMappings, desired.SamplingPolicies, desired.ConcentratorConfigs, desired.DriverConfigs, desired.AutonomyPolicy)
+			dEncoded, err := marshalShadowSections(desired.PointMappings, desired.SamplingPolicies, desired.ConcentratorConfigs, desired.DriverConfigs, desired.AutonomyPolicy, desired.EdgeRuleBundle)
 			if err != nil {
 				return err
 			}
@@ -1972,8 +2064,8 @@ WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
 
 	if sameDesiredRev {
 		edgeCaughtUp := (existingReported != nil && existingReported.ReportedRevision == desiredRevision) ||
-			(len(desired.PointMappings) == 0 && len(desired.SamplingPolicies) == 0 && len(desired.DriverConfigs) == 0 && desired.AutonomyPolicy == nil &&
-				len(reported.PointMappings) == 0 && len(reported.SamplingPolicies) == 0 && len(reported.DriverConfigs) == 0 && reported.AutonomyPolicy == nil)
+			(len(desired.PointMappings) == 0 && len(desired.SamplingPolicies) == 0 && len(desired.DriverConfigs) == 0 && desired.AutonomyPolicy == nil && desired.EdgeRuleBundle == nil &&
+				len(reported.PointMappings) == 0 && len(reported.SamplingPolicies) == 0 && len(reported.DriverConfigs) == 0 && reported.AutonomyPolicy == nil && reported.EdgeRuleBundle == nil)
 
 		if len(failedDrifts) == 0 {
 			if edgeCaughtUp {
@@ -2039,7 +2131,7 @@ WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
 		}
 	}
 
-	rEncoded, err := marshalShadowSections(reported.PointMappings, reported.SamplingPolicies, reported.ConcentratorConfigs, reported.DriverConfigs, reported.AutonomyPolicy)
+	rEncoded, err := marshalShadowSections(reported.PointMappings, reported.SamplingPolicies, reported.ConcentratorConfigs, reported.DriverConfigs, reported.AutonomyPolicy, reported.EdgeRuleBundle)
 	if err != nil {
 		return err
 	}

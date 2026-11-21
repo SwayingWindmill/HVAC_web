@@ -64,7 +64,7 @@ func TestConfigShadowValidationRules(t *testing.T) {
 			EIDs:   []ConcentratorShadowEIDSlot{{Slot: 1, EID: 33661717}, {Slot: 2, EID: 0}},
 		},
 	}
-	if _, err := normalizeAndValidateDesiredShadow(validMappings, validPolicies, validUnits, nil, nil); err != nil {
+	if _, err := normalizeAndValidateDesiredShadow(validMappings, validPolicies, validUnits, nil, nil, nil); err != nil {
 		t.Fatalf("expected valid desired config to pass, got %v", err)
 	}
 
@@ -162,7 +162,7 @@ func TestConfigShadowValidationRules(t *testing.T) {
 
 	for _, tc := range invalidCases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := normalizeAndValidateDesiredShadow(tc.mappings, tc.policies, tc.units, nil, nil); !errors.Is(err, ErrConfigShadowInvalid) {
+			if _, err := normalizeAndValidateDesiredShadow(tc.mappings, tc.policies, tc.units, nil, nil, nil); !errors.Is(err, ErrConfigShadowInvalid) {
 				t.Fatalf("%s: expected ErrConfigShadowInvalid, got %v", tc.name, err)
 			}
 		})
@@ -484,7 +484,7 @@ func TestConfigShadowJSONBTextEstimateAndDriftBounds(t *testing.T) {
 	if len(compact) > maxSamplingPoliciesJSONBytes || estimatedPostgresJSONBTextBytes(compact) <= maxSamplingPoliciesJSONBytes {
 		t.Fatalf("failed to construct boundary payload: compact=%d est=%d", len(compact), estimatedPostgresJSONBTextBytes(compact))
 	}
-	if _, err := marshalShadowSections(nil, nearLimit, nil, nil, nil); !errors.Is(err, ErrConfigShadowInvalid) {
+	if _, err := marshalShadowSections(nil, nearLimit, nil, nil, nil, nil); !errors.Is(err, ErrConfigShadowInvalid) {
 		t.Fatalf("expected jsonb::text limit rejection, got %v", err)
 	}
 
@@ -520,7 +520,7 @@ func TestConfigShadowJSONBTextEstimateAndDriftBounds(t *testing.T) {
 	if len(compactDrivers) > maxDriverConfigsJSONBytes || estimatedPostgresJSONBTextBytes(compactDrivers) <= maxDriverConfigsJSONBytes {
 		t.Fatalf("failed to construct driverConfigs boundary payload: compact=%d est=%d", len(compactDrivers), estimatedPostgresJSONBTextBytes(compactDrivers))
 	}
-	if _, err := marshalShadowSections(nil, nil, nil, nearDrivers, nil); !errors.Is(err, ErrConfigShadowInvalid) {
+	if _, err := marshalShadowSections(nil, nil, nil, nearDrivers, nil, nil); !errors.Is(err, ErrConfigShadowInvalid) {
 		t.Fatalf("expected driverConfigs jsonb::text limit rejection, got %v", err)
 	}
 
@@ -657,7 +657,7 @@ func TestConfigShadowDriverAndAutonomyValidationAndCanonicalization(t *testing.T
 	drivers := sampleValidDriverConfigs()
 	autonomy := sampleValidAutonomyPolicy()
 
-	validated, err := normalizeAndValidateDesiredShadow(nil, nil, nil, drivers, autonomy)
+	validated, err := normalizeAndValidateDesiredShadow(nil, nil, nil, drivers, autonomy, nil)
 	if err != nil {
 		t.Fatalf("expected valid driverConfigs + autonomyPolicy to pass, got %v", err)
 	}

@@ -177,6 +177,9 @@ func main() {
 			return
 		}
 		if len(measurements) == 0 {
+			evCtx, evCancel := context.WithTimeout(ctx, 5*time.Second)
+			_ = publisher.PublishEdgeRuleEvents(evCtx)
+			evCancel()
 			return
 		}
 		if err := simulator.SaveMeasurementSequences(sequenceStatePath, scheduler.Sequences()); err != nil {

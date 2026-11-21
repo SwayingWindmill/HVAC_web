@@ -353,3 +353,79 @@ func TestEvaluationSnapshotInputCapAllowsExpandedSiteInputsAndRejectsOverflow(t 
 		t.Fatalf("snapshot exceeding MaxEvaluationSnapshotInputs (%d) unexpectedly passed validation", MaxEvaluationSnapshotInputs)
 	}
 }
+
+func TestEvaluatePolicyStreamingWindowAggregations(t *testing.T) {
+	t0 := time.Date(2026, 11, 22, 1, 0, 0, 0, time.UTC)
+	threshP95 := 12.0
+	p95Policy := validAlarmPolicy()
+	p95Policy.RuleKind = RuleKindWindow
+	p95Policy.ExecutionTarget = ExecutionTargetCloudAndEdge
+	p95Policy.QualityPolicy = EvaluationQualityValidOnly
+	p95Policy.FreshnessSeconds = 600
+	p95Policy.Raise = Condition{
+		Kind:          ConditionWindowAgg,
+		Input:         "supply",
+		Agg:           WindowAggP95,
+		WindowType:    WindowTypeSliding,
+		WindowSeconds: 180,
+		MinSamples:    3,
+		Operator:      CompareGTE,
+		Threshold:     &threshP95,
+	}
+	p95Policy.Clear = Condition{Kind: ConditionCompare, Input: "supply", Operator: CompareLTE, Value: NumberValue(8.0)}
+	sealAlarmPolicy(&p95Policy)
+
+	var st AlarmEvaluationState
+	// Sample 1 & 2 -> warm-up (< 3 samples), must stay NOT_MATCHED.
+	for i, val := range []float64{10.0, 14.0} {
+		at := t0.Add(time.Duration(i*30) * time.Second)
+		res, err := EvaluatePolicy(p95Policy, evaluationSnapshot("w-"+strconv.Itoa(i), at.Format(time.RFC3339Nano), NumberInput("supply", val, "GOOD", at.Format(time.RFC3339Nano))), st, at)
+		if err != nil || res.Effect != EvaluationEffectNone || res.Status != EvaluationNotMatched {
+			t.Fatalf("warm-up step %d unexpected: %#v err=%v", i, res, err)
+		}
+		st = res.State
+	}
+	// Sample 3: [10, 11, 14] -> P95 = 13.7 >= 12.0 -> PUBLISH!
+	at3 := t0.Add(60 * time.Second)
+	res3, err := EvaluatePolicy(p95Policy, evaluationSnapshot("w-3", at3.Format(time.RFC3339Nano), NumberInput("supply", 11.0, "GOOD", at3.Format(time.RFC3339Nano))), st, at3)
+	if err != nil || res3.Effect != EvaluationEffectPublish || res3.Status != EvaluationMatched {
+		t.Fatalf("P95 step 3 expected PUBLISH, got %#v err=%v", res3, err)
+	}
+
+	// Tumbling STDDEV policy resets on aligned bucket boundary and requires >= 2 samples.
+	stdThresh := 1.0
+	stdPolicy := validAlarmPolicy()
+	stdPolicy.AlarmType = "CHW_JITTER"
+	stdPolicy.SourceReference = "alarm-policy:chw-jitter"
+	stdPolicy.QualityPolicy = EvaluationQualityValidOnly
+	stdPolicy.FreshnessSeconds = 600
+	stdPolicy.Raise = Condition{
+		Kind:          ConditionWindowAgg,
+		Input:         "supply",
+		Agg:           WindowAggStdDev,
+		WindowType:    WindowTypeTumbling,
+		WindowSeconds: 60,
+		Operator:      CompareGT,
+		Threshold:     &stdThresh,
+	}
+	stdPolicy.Clear = Condition{Kind: ConditionCompare, Input: "supply", Operator: CompareLTE, Value: NumberValue(5.0)}
+	sealAlarmPolicy(&stdPolicy)
+
+	b1a := time.Date(2026, 11, 22, 1, 5, 10, 0, time.UTC)
+	d1, err := EvaluatePolicy(stdPolicy, evaluationSnapshot("std-1", b1a.Format(time.RFC3339Nano), NumberInput("supply", 8.0, "GOOD", b1a.Format(time.RFC3339Nano))), AlarmEvaluationState{}, b1a)
+	if err != nil || d1.Effect != EvaluationEffectNone {
+		t.Fatalf("tumbling 1 sample must not fire: %#v err=%v", d1, err)
+	}
+	// Jump to next aligned bucket 01:06:10 (only 1 sample in new tumbling bucket despite prior sample 60s earlier in previous bucket).
+	b2a := time.Date(2026, 11, 22, 1, 6, 10, 0, time.UTC)
+	d2, err := EvaluatePolicy(stdPolicy, evaluationSnapshot("std-2", b2a.Format(time.RFC3339Nano), NumberInput("supply", 20.0, "GOOD", b2a.Format(time.RFC3339Nano))), d1.State, b2a)
+	if err != nil || d2.Effect != EvaluationEffectNone {
+		t.Fatalf("new tumbling bucket with 1 sample must not combine prior bucket: %#v err=%v", d2, err)
+	}
+	// Second sample inside bucket 01:06:30 -> [20, 10], STDDEV = 5 > 1 -> PUBLISH!
+	b2b := time.Date(2026, 11, 22, 1, 6, 30, 0, time.UTC)
+	d3, err := EvaluatePolicy(stdPolicy, evaluationSnapshot("std-3", b2b.Format(time.RFC3339Nano), NumberInput("supply", 10.0, "GOOD", b2b.Format(time.RFC3339Nano))), d2.State, b2b)
+	if err != nil || d3.Effect != EvaluationEffectPublish {
+		t.Fatalf("tumbling bucket with 2 jittery samples did not publish: %#v err=%v", d3, err)
+	}
+}

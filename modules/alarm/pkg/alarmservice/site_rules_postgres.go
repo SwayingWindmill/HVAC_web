@@ -870,3 +870,69 @@ WHERE tenant_id = $1 AND site_id = $2 AND bundle_revision = $3`,
 		Items:                  views,
 	}, nil
 }
+
+// CompileSiteRulesEdge compiles either the currently active site rules (drafts == nil)
+// or a candidate set of drafts into a verified edge-rule bundle IR without persisting changes.
+func (store *PostgresStore) CompileSiteRulesEdge(
+	ctx context.Context,
+	tenantID, siteID string,
+	drafts *[]SiteRuleDraft,
+	now time.Time,
+) (EdgeRuleCompileResult, error) {
+	if store == nil || store.pool == nil {
+		return EdgeRuleCompileResult{}, ErrUnavailable
+	}
+	if !alarmmodel.IsUUIDv7(tenantID) || !alarmmodel.IsUUIDv7(siteID) {
+		return EdgeRuleCompileResult{}, ErrNotFound
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+
+	tx, err := store.beginTenantTransaction(ctx, tenantID, true)
+	if err != nil {
+		return EdgeRuleCompileResult{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	latestMeta, err := latestSiteRuleBundleMetaInTx(ctx, tx, tenantID, siteID)
+	if err != nil {
+		return EdgeRuleCompileResult{}, err
+	}
+	if drafts == nil {
+		active, err := siteRulesInTx(ctx, tx, tenantID, siteID)
+		if err != nil {
+			return EdgeRuleCompileResult{}, err
+		}
+		bundleDigest := latestMeta.BundleDigest
+		if bundleDigest == "" {
+			computed, err := computeSiteRuleBundleDigest(active)
+			if err != nil {
+				return EdgeRuleCompileResult{}, err
+			}
+			bundleDigest = computed
+		}
+		return CompileSiteRulesForEdge(siteID, latestMeta.BundleRevision, bundleDigest, active, now)
+	}
+
+	history, err := loadSiteRuleHistoryInTx(ctx, tx, tenantID, siteID)
+	if err != nil {
+		return EdgeRuleCompileResult{}, err
+	}
+	compiled, _, issues := compileDraftsAgainstHistory(*drafts, history, nil)
+	if len(issues) > 0 {
+		return EdgeRuleCompileResult{}, &RuleDraftValidationError{
+			Code:    validationErrorCodeForIssues(issues),
+			Message: issues[0].Message,
+			Issues:  issues,
+		}
+	}
+	result, err := CompileSiteRulesForEdge(siteID, latestMeta.BundleRevision, "", compiled, now)
+	if err != nil {
+		return EdgeRuleCompileResult{}, &RuleDraftValidationError{
+			Code:    "ALARM_RULE_DRAFT_INVALID",
+			Message: err.Error(),
+		}
+	}
+	return result, nil
+}

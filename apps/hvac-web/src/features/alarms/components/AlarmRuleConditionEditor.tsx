@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type KeyboardEvent } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -12,17 +12,21 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import type { SiteEquipmentIndex } from '@/features/assets/use-device-names';
+import { WINDOW_AGG_LABELS, WINDOW_TYPE_LABELS } from '../alarm-rule-dag';
 import type { AlarmRuleCondition, AlarmRuleReading } from '../alarm-rules';
 
 type ConditionKind = AlarmRuleCondition['kind'];
 type CompareOperator = NonNullable<AlarmRuleCondition['operator']>;
 type HysteresisDirection = NonNullable<AlarmRuleCondition['direction']>;
+type WindowAgg = NonNullable<AlarmRuleCondition['agg']>;
+type WindowType = NonNullable<AlarmRuleCondition['windowType']>;
 
 const KIND_OPTIONS: ReadonlyArray<{ readonly value: ConditionKind; readonly label: string }> = [
   { value: 'COMPARE', label: '单一阈值比较' },
   { value: 'HYSTERESIS', label: '回差死区' },
   { value: 'RANGE', label: '安全区间' },
   { value: 'SLOPE', label: '斜率突变' },
+  { value: 'WINDOW_AGG', label: '流式窗口聚合' },
   { value: 'EXPRESSION', label: '多点表达式' },
   { value: 'NO_DATA', label: '长期缺数' },
   { value: 'STALE', label: '读数过期' },
@@ -31,6 +35,22 @@ const KIND_OPTIONS: ReadonlyArray<{ readonly value: ConditionKind; readonly labe
   { value: 'REASONS', label: '诊断原因命中' },
   { value: 'AND', label: '全部满足（且）' },
   { value: 'OR', label: '任一满足（或）' },
+];
+
+const WINDOW_AGG_OPTIONS: ReadonlyArray<{ readonly value: WindowAgg; readonly label: string }> = [
+  { value: 'AVG', label: WINDOW_AGG_LABELS.AVG },
+  { value: 'MIN', label: WINDOW_AGG_LABELS.MIN },
+  { value: 'MAX', label: WINDOW_AGG_LABELS.MAX },
+  { value: 'SUM', label: WINDOW_AGG_LABELS.SUM },
+  { value: 'COUNT', label: WINDOW_AGG_LABELS.COUNT },
+  { value: 'STDDEV', label: WINDOW_AGG_LABELS.STDDEV },
+  { value: 'P95', label: WINDOW_AGG_LABELS.P95 },
+  { value: 'P99', label: WINDOW_AGG_LABELS.P99 },
+];
+
+const WINDOW_TYPE_OPTIONS: ReadonlyArray<{ readonly value: WindowType; readonly label: string }> = [
+  { value: 'SLIDING', label: WINDOW_TYPE_LABELS.SLIDING },
+  { value: 'TUMBLING', label: WINDOW_TYPE_LABELS.TUMBLING },
 ];
 
 const COMPARE_OP_OPTIONS: ReadonlyArray<{ readonly value: CompareOperator; readonly label: string }> = [
@@ -137,6 +157,17 @@ export function createConditionForKind(
       return { kind: 'HYSTERESIS', reading, direction: 'ABOVE', trigger: 12, reset: 10.5 };
     case 'SLOPE':
       return { kind: 'SLOPE', reading, operator: 'GT', delta: 2.5, windowSeconds: 300 };
+    case 'WINDOW_AGG':
+      return {
+        kind: 'WINDOW_AGG',
+        reading,
+        agg: 'AVG',
+        windowType: 'SLIDING',
+        windowSeconds: 300,
+        minSamples: 3,
+        operator: 'GT',
+        threshold: 12,
+      };
     case 'EXPRESSION':
       return {
         kind: 'EXPRESSION',
@@ -173,6 +204,12 @@ function parseCompareInputValue(raw: string): number | string | boolean {
   return raw;
 }
 
+export function preventImeEnterSubmit(event: KeyboardEvent<HTMLInputElement>) {
+  if (event.key === 'Enter' && (event.nativeEvent.isComposing || event.keyCode === 229)) {
+    event.preventDefault();
+  }
+}
+
 function NumericInput({
   ariaLabel,
   value,
@@ -206,6 +243,7 @@ function NumericInput({
       aria-label={ariaLabel}
       value={draft}
       placeholder={placeholder}
+      onKeyDown={preventImeEnterSubmit}
       onFocus={() => setFocused(true)}
       onChange={(e) => {
         const nextText = e.target.value;
@@ -301,6 +339,7 @@ function ReadingPicker({
           <Input
             aria-label={`${ariaPrefix}监测点位`}
             value={reading.pointCode}
+            onKeyDown={preventImeEnterSubmit}
             onChange={(e) => onChange({ ...reading, pointCode: e.target.value })}
             placeholder="输入监测点位标识"
           />
@@ -433,6 +472,7 @@ export function AlarmRuleConditionEditor({
               <Input
                 aria-label={`${label}目标阈值`}
                 value={value.value === undefined ? '' : String(value.value)}
+                onKeyDown={preventImeEnterSubmit}
                 onChange={(e) => onChange({ ...value, value: parseCompareInputValue(e.target.value) })}
                 placeholder="输入数值、运行状态或布尔值"
               />
@@ -571,11 +611,115 @@ export function AlarmRuleConditionEditor({
         </>
       ) : null}
 
+      {value.kind === 'WINDOW_AGG' ? (
+        <>
+          <ReadingPicker
+            ariaPrefix={label}
+            reading={currentReading}
+            equipmentOptions={equipmentOptions}
+            onChange={(nextReading) => onChange({ ...value, reading: nextReading })}
+          />
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            <div className="flex flex-col gap-1">
+              <span className="text-[11px] text-muted-foreground">聚合函数</span>
+              <Select
+                value={value.agg ?? 'AVG'}
+                onValueChange={(rawAgg) => {
+                  const matched = WINDOW_AGG_OPTIONS.find((opt) => opt.value === rawAgg);
+                  if (!matched) return;
+                  const nextMin = matched.value === 'STDDEV'
+                    ? Math.max(2, value.minSamples ?? 2)
+                    : (value.minSamples ?? 3);
+                  onChange({ ...value, agg: matched.value, minSamples: nextMin });
+                }}
+              >
+                <SelectTrigger className="w-full" aria-label={`${label}聚合函数`}><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {WINDOW_AGG_OPTIONS.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex flex-col gap-1">
+              <span className="text-[11px] text-muted-foreground">窗口类型</span>
+              <Select
+                value={value.windowType ?? 'SLIDING'}
+                onValueChange={(rawType) => {
+                  const matched = WINDOW_TYPE_OPTIONS.find((opt) => opt.value === rawType);
+                  if (matched) onChange({ ...value, windowType: matched.value });
+                }}
+              >
+                <SelectTrigger className="w-full" aria-label={`${label}窗口类型`}><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {WINDOW_TYPE_OPTIONS.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex flex-col gap-1">
+              <span className="text-[11px] text-muted-foreground">比较方式</span>
+              <Select
+                value={value.operator ?? 'GT'}
+                onValueChange={(rawOp) => {
+                  const matched = COMPARE_OP_OPTIONS.find((opt) => opt.value === rawOp);
+                  if (matched) onChange({ ...value, operator: matched.value });
+                }}
+              >
+                <SelectTrigger className="w-full" aria-label={`${label}窗口比较方式`}><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {COMPARE_OP_OPTIONS.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex flex-col gap-1">
+              <span className="text-[11px] text-muted-foreground">聚合阈值</span>
+              <NumericInput
+                ariaLabel={`${label}聚合阈值`}
+                value={value.threshold ?? 0}
+                placeholder="聚合阈值"
+                onCommit={(next) => onChange({ ...value, threshold: next })}
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <span className="text-[11px] text-muted-foreground">窗口时长 (秒)</span>
+              <NumericInput
+                ariaLabel={`${label}窗口时长秒数`}
+                value={value.windowSeconds ?? 300}
+                min={1}
+                max={86400}
+                integerOnly
+                placeholder="1 至 86400"
+                onCommit={(next) => onChange({ ...value, windowSeconds: next })}
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <span className="text-[11px] text-muted-foreground">
+                最小样本数{value.agg === 'STDDEV' ? ' (至少 2)' : ''}
+              </span>
+              <NumericInput
+                ariaLabel={`${label}最小样本数`}
+                value={value.minSamples ?? (value.agg === 'STDDEV' ? 2 : 3)}
+                min={value.agg === 'STDDEV' ? 2 : 1}
+                max={128}
+                integerOnly
+                placeholder="1 至 128"
+                onCommit={(next) => onChange({ ...value, minSamples: next })}
+              />
+            </div>
+          </div>
+        </>
+      ) : null}
+
       {value.kind === 'EXPRESSION' ? (
         <div className="flex flex-col gap-2">
           <Input
             aria-label={`${label}表达式`}
             value={value.expression ?? ''}
+            onKeyDown={preventImeEnterSubmit}
             onChange={(e) => onChange({ ...value, expression: e.target.value })}
             placeholder="例如：a - b > 3"
           />

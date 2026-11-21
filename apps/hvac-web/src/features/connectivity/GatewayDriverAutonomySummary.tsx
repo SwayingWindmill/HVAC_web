@@ -1,4 +1,5 @@
 import type {
+  EdgeRuleBundle,
   GatewayAutonomyPolicy,
   GatewayModbusDriverConfig,
   GatewayModbusRegisterMapping,
@@ -15,6 +16,7 @@ import {
   MODBUS_WRITE_FUNCTION_CODE_LABELS,
   formatModbusEnumMap,
   summarizeAutonomyPolicyState,
+  summarizeEdgeRuleBundle,
 } from './gateway-config-shadow-model';
 
 const PRIORITY_BADGE_CLASSES = {
@@ -247,6 +249,77 @@ export function AutonomyPolicySummaryBlock({
             </dd>
           </div>
         </dl>
+      )}
+    </div>
+  );
+}
+
+export function EdgeRuleBundleSummaryBlock({
+  edgeRuleBundle,
+}: {
+  readonly edgeRuleBundle: EdgeRuleBundle | null | undefined;
+}) {
+  const summary = summarizeEdgeRuleBundle(edgeRuleBundle);
+
+  return (
+    <div className="flex flex-col gap-2 border-t border-divider pt-2.5">
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-medium text-foreground">边缘规则包</span>
+        <span
+          className={cn(
+            'inline-flex h-5.5 shrink-0 items-center gap-1.5 rounded-md px-1.5 text-[11px] font-medium whitespace-nowrap',
+            summary.configured
+              ? 'bg-success-soft text-success-text'
+              : 'bg-secondary text-secondary-foreground',
+          )}
+        >
+          <span
+            className={cn('size-1.5 rounded-full', summary.configured ? 'bg-success' : 'bg-subtle-foreground')}
+            aria-hidden="true"
+          />
+          {summary.configured ? `已下发 ${summary.ruleCount} 条` : '未下发'}
+        </span>
+      </div>
+
+      {!edgeRuleBundle ? (
+        <p className="text-[11px] text-muted-foreground">
+          暂未下发云边统一编译的边缘规则包，可在「运维 → 告警 → 正在生效的规则 → 边缘编译下发」中一键推送。
+        </p>
+      ) : (
+        <div className="flex flex-col gap-2 rounded-md border bg-background p-2.5 text-[11px]">
+          <dl className="grid grid-cols-3 gap-x-3 gap-y-1">
+            <div>
+              <dt className="text-muted-foreground">来源版本</dt>
+              <dd className="mt-0.5 font-mono font-medium text-foreground tabular-nums">
+                v{summary.bundleRevision}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground">规则数</dt>
+              <dd className="mt-0.5 font-mono font-medium text-foreground tabular-nums">
+                {summary.ruleCount} 条
+              </dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground">边缘摘要</dt>
+              <dd className="mt-0.5 font-mono font-medium text-foreground">
+                {summary.shortDigest}
+              </dd>
+            </div>
+          </dl>
+          {edgeRuleBundle.rules.length > 0 ? (
+            <ul className="flex flex-col gap-1 border-t border-divider pt-1.5">
+              {edgeRuleBundle.rules.slice(0, 3).map((rule) => (
+                <li key={rule.ruleId} className="truncate text-foreground">
+                  {rule.title}
+                </li>
+              ))}
+              {edgeRuleBundle.rules.length > 3 ? (
+                <li className="text-muted-foreground">其余 {edgeRuleBundle.rules.length - 3} 条将在网关本地闭环执行</li>
+              ) : null}
+            </ul>
+          ) : null}
+        </div>
       )}
     </div>
   );

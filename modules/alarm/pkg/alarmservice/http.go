@@ -191,6 +191,12 @@ func (handler *httpHandler) ServeHTTP(writer http.ResponseWriter, request *http.
 		}
 		return
 	}
+	if siteID, matches := matchSiteRuleSubpath(request.URL.Path, "alarm-rules:compile-edge"); matches {
+		if claims, ok := handler.authorizeSiteRuleRoute(writer, request, siteID, http.MethodPost, "Site edge rule compile only supports POST.", "The Site edge rule compile is outside the authorized read scope."); ok {
+			handler.compileSiteRulesEdge(writer, request.WithContext(identitycontext.WithTenantID(request.Context(), claims.TenantID)), claims.TenantID, siteID)
+		}
+		return
+	}
 	if siteID, matches := matchSiteRuleRevisionsPath(request.URL.Path); matches {
 		if claims, ok := handler.authorizeSiteRuleRoute(writer, request, siteID, http.MethodGet, "Site rule revisions only support GET.", "The Site rule revisions are outside the authorized read scope."); ok {
 			handler.listSiteRuleRevisions(writer, request.WithContext(identitycontext.WithTenantID(request.Context(), claims.TenantID)), claims.TenantID, siteID)
