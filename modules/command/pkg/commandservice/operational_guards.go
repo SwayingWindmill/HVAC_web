@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -104,6 +106,9 @@ func (a *ControlAuthority) enforcePlantOperationalGuards(
 		}
 		if isChillerStart {
 			if err := checkChillerStartCooldowns(target.asset, chillerDevices, commands, now); err != nil {
+				return err
+			}
+			if err := a.enforceChillerStartHydraulicInterlock(ctx, operator, model, topo, target, now); err != nil {
 				return err
 			}
 		}
@@ -488,4 +493,325 @@ func toPlantTwinOperatingSchedule(schedule OperatingScheduleDTO, exceptions []Op
 		Slots:      slots,
 		Exceptions: approvedExceptions,
 	}
+}
+
+type hydraulicInterlockKind int
+
+const (
+	hydraulicCheckNone hydraulicInterlockKind = iota
+	hydraulicCheckValveOpen
+	hydraulicCheckFlowProven
+)
+
+const minButterflyValveOpenPct = 80.0
+
+type hydraulicInterlockCheck struct {
+	point         TelemetryPointDTO
+	kind          hydraulicInterlockKind
+	analogOpening bool
+}
+
+func (a *ControlAuthority) enforceChillerStartHydraulicInterlock(
+	ctx context.Context,
+	operator OperatorIdentity,
+	model SiteAssetModelDTO,
+	topo shutdownTopology,
+	target resolvedCommandPointTarget,
+	now time.Time,
+) error {
+	deviceIDs := collectChillerHydraulicDeviceIDs(model, topo, target.asset.ID, target.device.ID, now)
+	if len(deviceIDs) == 0 {
+		return nil
+	}
+
+	checks := make([]hydraulicInterlockCheck, 0)
+	for _, pt := range model.TelemetryPoints {
+		if !strings.EqualFold(pt.Status, "ACTIVE") ||
+			pt.TenantID != model.TenantID ||
+			pt.SiteID != model.SiteID ||
+			pt.PointType == "COMMAND" ||
+			!deviceIDs[pt.ReportingDeviceID] {
+			continue
+		}
+		kind, analogOpening := classifyHydraulicInterlockPoint(pt)
+		if kind == hydraulicCheckNone {
+			continue
+		}
+		checks = append(checks, hydraulicInterlockCheck{
+			point:         pt,
+			kind:          kind,
+			analogOpening: analogOpening,
+		})
+	}
+	if len(checks) == 0 {
+		return nil
+	}
+
+	sort.Slice(checks, func(i, j int) bool {
+		if checks[i].point.ReportingDeviceID != checks[j].point.ReportingDeviceID {
+			return checks[i].point.ReportingDeviceID < checks[j].point.ReportingDeviceID
+		}
+		if checks[i].point.PointCode != checks[j].point.PointCode {
+			return checks[i].point.PointCode < checks[j].point.PointCode
+		}
+		return checks[i].point.ID < checks[j].point.ID
+	})
+
+	chillerLabel := strings.TrimSpace(target.asset.Code)
+	if chillerLabel == "" {
+		chillerLabel = target.asset.ID
+	}
+
+	for _, chk := range checks {
+		if a.live == nil {
+			return hydraulicInterlockError(chillerLabel, chk.point.PointCode, chk.kind, "live telemetry reader unavailable")
+		}
+		obs, _, err := a.live.ReadLivePoint(ctx, operator.TenantID, target.asset.SiteID, chk.point.ReportingDeviceID, chk.point.PointCode)
+		if err != nil {
+			return hydraulicInterlockError(chillerLabel, chk.point.PointCode, chk.kind, "live telemetry read failed")
+		}
+		if !livePointSafe(obs) {
+			return hydraulicInterlockError(chillerLabel, chk.point.PointCode, chk.kind, "telemetry is stale, offline, or not good quality")
+		}
+		ok, observed := evaluateHydraulicInterlockObservation(chk.kind, chk.analogOpening, obs)
+		if !ok {
+			return hydraulicInterlockError(chillerLabel, chk.point.PointCode, chk.kind, fmt.Sprintf("observed %s", observed))
+		}
+	}
+	return nil
+}
+
+func hydraulicInterlockError(chillerLabel, pointCode string, kind hydraulicInterlockKind, reason string) *ControlError {
+	requirement := "hydraulic flow switch must be proven"
+	if kind == hydraulicCheckValveOpen {
+		requirement = "isolation butterfly valve must be open"
+	}
+	return &ControlError{
+		HTTPStatus: http.StatusConflict,
+		Code:       "CHILLER_HYDRAULIC_INTERLOCK_NOT_PROVEN",
+		Title:      "Chiller Hydraulic Interlock Not Proven",
+		Detail:     fmt.Sprintf("Cannot start chiller %s: %s (point %s: %s).", chillerLabel, requirement, pointCode, reason),
+	}
+}
+
+func collectChillerHydraulicDeviceIDs(
+	model SiteAssetModelDTO,
+	topo shutdownTopology,
+	chillerID, targetDeviceID string,
+	now time.Time,
+) map[string]bool {
+	out := map[string]bool{}
+	addAssetDevices := func(assetID string) {
+		for _, devID := range topo.boundDevicesByAsset[assetID] {
+			if strings.TrimSpace(devID) != "" {
+				out[devID] = true
+			}
+		}
+	}
+	addAssetDevices(chillerID)
+	if strings.TrimSpace(targetDeviceID) != "" {
+		out[targetDeviceID] = true
+	}
+
+	assetsByID := make(map[string]AssetDTO, len(model.Assets))
+	relatedAssets := map[string]bool{chillerID: true}
+	for _, asset := range model.Assets {
+		if strings.EqualFold(asset.Status, "ACTIVE") && asset.TenantID == model.TenantID && asset.SiteID == model.SiteID {
+			assetsByID[asset.ID] = asset
+		}
+	}
+	for _, aux := range topo.auxiliaries {
+		if !isPostStopCooldownPumpType(aux.AssetType) {
+			continue
+		}
+		if containsString(topo.servedChillersByAux[aux.ID], chillerID) {
+			relatedAssets[aux.ID] = true
+			addAssetDevices(aux.ID)
+		}
+	}
+
+	for _, rel := range model.Relationships {
+		if !commandRelationshipCurrent(rel, now) ||
+			!strings.EqualFold(rel.FromType, planttwin.SubjectTypeAsset) ||
+			!strings.EqualFold(rel.ToType, planttwin.SubjectTypeAsset) ||
+			!isHydraulicInterlockRelRole(rel.Role) {
+			continue
+		}
+		if relatedAssets[rel.FromID] {
+			if peer, ok := assetsByID[rel.ToID]; ok && isHydraulicValveAssetType(peer.AssetType) {
+				addAssetDevices(peer.ID)
+			}
+		}
+		if relatedAssets[rel.ToID] {
+			if peer, ok := assetsByID[rel.FromID]; ok && isHydraulicValveAssetType(peer.AssetType) {
+				addAssetDevices(peer.ID)
+			}
+		}
+	}
+	return out
+}
+
+func isHydraulicInterlockRelRole(role string) bool {
+	switch strings.ToUpper(strings.TrimSpace(role)) {
+	case planttwin.RelationshipServes, "CONTROLS", "MEASURES", "ATTACHED_TO":
+		return true
+	default:
+		return false
+	}
+}
+
+func isHydraulicValveAssetType(assetType string) bool {
+	switch strings.ToUpper(strings.TrimSpace(assetType)) {
+	case "VALVE", "BUTTERFLY_VALVE", "ISOLATION_VALVE", "CHILLED_WATER_VALVE", "COOLING_WATER_VALVE", "CHW_VALVE", "CW_VALVE":
+		return true
+	default:
+		return false
+	}
+}
+
+func classifyHydraulicInterlockPoint(pt TelemetryPointDTO) (hydraulicInterlockKind, bool) {
+	pointToken := normalizeHydraulicPointToken(pt.PointCode)
+	sourceSuffix := normalizeHydraulicPointToken(lastDotSegment(pt.SourceKey))
+	unitMeta, _ := pt.SourceMetadata["unit"].(string)
+	metaHint, _ := pt.SourceMetadata["hydraulicInterlock"].(string)
+	trimmedHint := strings.ToUpper(strings.TrimSpace(metaHint))
+
+	isAnalogValve := strings.Contains(pointToken, "position") ||
+		strings.Contains(pointToken, "opening") ||
+		strings.Contains(sourceSuffix, "position") ||
+		strings.Contains(sourceSuffix, "opening") ||
+		strings.TrimSpace(unitMeta) == "%"
+
+	switch trimmedHint {
+	case "VALVE_OPEN":
+		return hydraulicCheckValveOpen, isAnalogValve
+	case "FLOW_PROVEN":
+		return hydraulicCheckFlowProven, false
+	}
+
+	if isValveInterlockToken(pointToken) || isValveInterlockToken(sourceSuffix) {
+		return hydraulicCheckValveOpen, isAnalogValve
+	}
+	if isFlowInterlockToken(pointToken) || isFlowInterlockToken(sourceSuffix) {
+		return hydraulicCheckFlowProven, false
+	}
+	return hydraulicCheckNone, false
+}
+
+func isValveInterlockToken(token string) bool {
+	switch token {
+	case "valve_open",
+		"butterfly_valve_open",
+		"chw_valve_open",
+		"cw_valve_open",
+		"evap_valve_open",
+		"cond_valve_open",
+		"chilled_water_valve_open",
+		"cooling_water_valve_open",
+		"valve_status",
+		"butterfly_valve_status",
+		"chw_valve_status",
+		"cw_valve_status",
+		"valve_position",
+		"valve_opening",
+		"butterfly_valve_position",
+		"butterfly_valve_opening",
+		"chw_valve_position",
+		"cw_valve_position",
+		"chw_valve_opening",
+		"cw_valve_opening":
+		return true
+	default:
+		return false
+	}
+}
+
+func isFlowInterlockToken(token string) bool {
+	switch token {
+	case "flow_switch",
+		"water_flow_switch",
+		"chw_flow_switch",
+		"cw_flow_switch",
+		"evap_flow_switch",
+		"cond_flow_switch",
+		"chilled_water_flow_switch",
+		"cooling_water_flow_switch",
+		"flow_status",
+		"water_flow_status",
+		"chw_flow_status",
+		"cw_flow_status":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeHydraulicPointToken(raw string) string {
+	token := strings.ToLower(strings.TrimSpace(raw))
+	token = strings.ReplaceAll(token, "-", "_")
+	return token
+}
+
+func lastDotSegment(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if idx := strings.LastIndex(trimmed, "."); idx >= 0 && idx+1 < len(trimmed) {
+		return trimmed[idx+1:]
+	}
+	return trimmed
+}
+
+func evaluateHydraulicInterlockObservation(
+	kind hydraulicInterlockKind,
+	analogOpening bool,
+	obs *commandmodel.LivePointObservation,
+) (bool, string) {
+	val := obs.ReportedValue
+	if val.Boolean != nil {
+		return *val.Boolean, fmt.Sprintf("%t", *val.Boolean)
+	}
+	if val.Number != nil {
+		num := *val.Number
+		if math.IsNaN(num) || math.IsInf(num, 0) {
+			return false, "non-finite"
+		}
+		if kind == hydraulicCheckValveOpen && analogOpening {
+			return num >= minButterflyValveOpenPct, fmt.Sprintf("%.1f%%", num)
+		}
+		if kind == hydraulicCheckValveOpen {
+			return num >= 1.0, fmt.Sprintf("%.2f", num)
+		}
+		return num > 0, fmt.Sprintf("%.2f", num)
+	}
+	if val.Text != nil {
+		raw := strings.TrimSpace(*val.Text)
+		upper := strings.ToUpper(raw)
+		if kind == hydraulicCheckValveOpen {
+			switch upper {
+			case "OPEN", "OPENED", "ON", "TRUE":
+				return true, raw
+			case "CLOSED", "CLOSE", "OFF", "FALSE", "FAULT", "":
+				return false, raw
+			}
+			if parsed, err := strconv.ParseFloat(strings.TrimSuffix(upper, "%"), 64); err == nil && !math.IsNaN(parsed) && !math.IsInf(parsed, 0) {
+				if analogOpening {
+					return parsed >= minButterflyValveOpenPct, raw
+				}
+				return parsed >= 1.0, raw
+			}
+			return false, raw
+		}
+		if kind == hydraulicCheckFlowProven {
+			switch upper {
+			case "FLOW", "PROVEN", "NORMAL", "ON", "OPEN", "TRUE", "OK":
+				return true, raw
+			case "NO_FLOW", "NOFLOW", "FALSE", "OFF", "CLOSED", "FAULT", "":
+				return false, raw
+			}
+			if parsed, err := strconv.ParseFloat(upper, 64); err == nil && !math.IsNaN(parsed) && !math.IsInf(parsed, 0) {
+				return parsed > 0, raw
+			}
+			return false, raw
+		}
+	}
+	return false, "empty"
 }
