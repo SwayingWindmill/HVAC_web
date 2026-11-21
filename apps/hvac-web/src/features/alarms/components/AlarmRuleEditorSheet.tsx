@@ -1,5 +1,5 @@
-import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { AlertTriangle, Play, Plus, Save, Trash2 } from 'lucide-react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { AlertTriangle, CheckCircle2, Play, Plus, Save, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
@@ -23,6 +23,7 @@ import type { SiteEquipmentIndex } from '@/features/assets/use-device-names';
 import type { AlarmRuleAction, AlarmRuleActionKind, AlarmRuleActionTrigger, AlarmRuleDependencyGate } from '../alarm-operations';
 import {
   computeRuleDagLayout,
+  evaluateLocalEdgeEligibility,
   newRuleUuidV7,
 } from '../alarm-rule-dag';
 import type { AlarmRule, AlarmRuleCondition, AlarmRuleSeverity } from '../alarm-rules';
@@ -30,6 +31,7 @@ import {
   AlarmRuleConditionEditor,
   buildEquipmentOptions,
   createConditionForKind,
+  preventImeEnterSubmit,
 } from './AlarmRuleConditionEditor';
 
 const SEVERITY_OPTIONS: ReadonlyArray<{ readonly value: AlarmRuleSeverity; readonly label: string }> = [
@@ -43,7 +45,14 @@ const SEVERITY_OPTIONS: ReadonlyArray<{ readonly value: AlarmRuleSeverity; reado
 const RULE_KIND_OPTIONS: ReadonlyArray<{ readonly value: NonNullable<AlarmRule['ruleKind']>; readonly label: string }> = [
   { value: 'THRESHOLD', label: '阈值触发' },
   { value: 'SLOPE', label: '斜率变化' },
+  { value: 'WINDOW', label: '流式窗口' },
   { value: 'EXPRESSION', label: '多点表达式' },
+];
+
+const EXECUTION_TARGET_OPTIONS: ReadonlyArray<{ readonly value: NonNullable<AlarmRule['executionTarget']>; readonly label: string }> = [
+  { value: 'CLOUD', label: '仅云端执行' },
+  { value: 'EDGE', label: '仅边缘网关执行' },
+  { value: 'CLOUD_AND_EDGE', label: '云边协同执行' },
 ];
 
 const TRIGGER_MODE_OPTIONS: ReadonlyArray<{ readonly value: AlarmRule['triggerMode']; readonly label: string }> = [
@@ -98,12 +107,6 @@ const PROTECTION_CAPABILITY_OPTIONS: ReadonlyArray<{
   { value: 'SET_TEMPERATURE_SETPOINT', label: '设定温度目标', paramKey: 'setpointC', paramLabel: '设定温度 (°C)', defaultVal: 24, min: 16, max: 30, step: 0.5 },
 ];
 
-function preventImeEnterSubmit(event: KeyboardEvent<HTMLInputElement>) {
-  if (event.key === 'Enter' && (event.nativeEvent.isComposing || event.keyCode === 229)) {
-    event.preventDefault();
-  }
-}
-
 function validateConditionTree(prefix: string, cond: AlarmRuleCondition): string | null {
   switch (cond.kind) {
     case 'AND':
@@ -151,6 +154,19 @@ function validateConditionTree(prefix: string, cond: AlarmRuleCondition): string
       if (cond.delta === undefined || !Number.isFinite(cond.delta)) return `${prefix}需要填写有效的斜率变化幅度`;
       if (!cond.windowSeconds || cond.windowSeconds < 1 || cond.windowSeconds > 86400) {
         return `${prefix}的斜率时间窗必须在 1 至 86400 秒之间`;
+      }
+      return null;
+    }
+    case 'WINDOW_AGG': {
+      if (!cond.reading?.deviceId || !cond.reading.pointCode.trim()) return `${prefix}缺少监测设备或点位`;
+      if (!cond.agg || !cond.windowType || !cond.operator) return `${prefix}的窗口聚合参数不完整`;
+      if (cond.threshold === undefined || !Number.isFinite(cond.threshold)) return `${prefix}需要填写有效的聚合阈值`;
+      if (!cond.windowSeconds || !Number.isInteger(cond.windowSeconds) || cond.windowSeconds < 1 || cond.windowSeconds > 86400) {
+        return `${prefix}的窗口时长必须在 1 至 86400 秒之间`;
+      }
+      const minAllowed = cond.agg === 'STDDEV' ? 2 : 1;
+      if (!cond.minSamples || !Number.isInteger(cond.minSamples) || cond.minSamples < minAllowed || cond.minSamples > 128) {
+        return `${prefix}的最小样本数必须在 ${minAllowed} 至 128 之间`;
       }
       return null;
     }
@@ -228,6 +244,7 @@ export function AlarmRuleEditorSheet({
   const [title, setTitle] = useState('');
   const [severity, setSeverity] = useState<AlarmRuleSeverity>('MAJOR');
   const [ruleKind, setRuleKind] = useState<NonNullable<AlarmRule['ruleKind']>>('THRESHOLD');
+  const [executionTarget, setExecutionTarget] = useState<NonNullable<AlarmRule['executionTarget']>>('CLOUD');
   const [triggerMode, setTriggerMode] = useState<AlarmRule['triggerMode']>('DURATION');
   const [durationSeconds, setDurationSeconds] = useState(300);
   const [repeatCount, setRepeatCount] = useState(3);
@@ -254,6 +271,7 @@ export function AlarmRuleEditorSheet({
     setTitle(base.title);
     setSeverity(base.severity);
     setRuleKind(base.ruleKind ?? 'THRESHOLD');
+    setExecutionTarget(base.executionTarget ?? 'CLOUD');
     setTriggerMode(base.triggerMode);
     setDurationSeconds(base.durationSeconds ?? 300);
     setRepeatCount(base.repeatCount ?? 3);
@@ -270,12 +288,14 @@ export function AlarmRuleEditorSheet({
 
   const builtRule = useMemo<AlarmRule>(() => {
     const keepExplicitKind = initialRule?.ruleKind !== undefined || ruleKind !== 'THRESHOLD';
+    const keepExplicitTarget = initialRule?.executionTarget !== undefined || executionTarget !== 'CLOUD';
     return {
       ...(initialRule ?? {}),
       ruleId: ruleId || newRuleUuidV7(),
       title: title.trim() || '未命名规则',
       severity,
       ...(keepExplicitKind ? { ruleKind } : { ruleKind: undefined }),
+      ...(keepExplicitTarget ? { executionTarget } : { executionTarget: undefined }),
       triggerMode,
       ...(triggerMode === 'DURATION' ? { durationSeconds: Math.max(1, durationSeconds) } : { durationSeconds: undefined }),
       ...(triggerMode === 'REPEATING' ? { repeatCount: Math.max(1, repeatCount) } : { repeatCount: undefined }),
@@ -285,14 +305,16 @@ export function AlarmRuleEditorSheet({
       raise,
       clear,
     };
-  }, [initialRule, ruleId, title, severity, ruleKind, triggerMode, durationSeconds, repeatCount, dependsOnRuleIds, dependencyGate, actions, raise, clear]);
-
-  const dagPreview = useMemo(() => {
-    const others = allRules.filter((r) => r.ruleId !== builtRule.ruleId);
-    return computeRuleDagLayout([...others, builtRule]);
-  }, [allRules, builtRule]);
+  }, [initialRule, ruleId, title, severity, ruleKind, executionTarget, triggerMode, durationSeconds, repeatCount, dependsOnRuleIds, dependencyGate, actions, raise, clear]);
 
   const otherRules = useMemo(() => allRules.filter((r) => r.ruleId !== ruleId), [allRules, ruleId]);
+
+  const dagPreview = useMemo(() => computeRuleDagLayout([...otherRules, builtRule]), [otherRules, builtRule]);
+
+  const edgeEligibility = useMemo(
+    () => evaluateLocalEdgeEligibility(builtRule, [...otherRules, builtRule]),
+    [builtRule, otherRules],
+  );
 
   const validateBeforeCommit = (): string | null => {
     if (!title.trim()) return '请输入规则名称';
@@ -319,6 +341,9 @@ export function AlarmRuleEditorSheet({
       if (act.kind === 'WEBHOOK' && !(act.webhookUrl ?? '').startsWith('https://')) {
         return `第 ${i + 1} 个 Webhook 回调地址必须以 https:// 开头`;
       }
+    }
+    if (executionTarget !== 'CLOUD' && !edgeEligibility.eligible) {
+      return edgeEligibility.message ?? '当前规则不满足边缘执行约束，请调整条件、动作或改为仅云端执行';
     }
     return null;
   };
@@ -367,7 +392,7 @@ export function AlarmRuleEditorSheet({
             />
           </div>
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="flex flex-col gap-1">
               <span className="font-medium text-foreground">严重程度</span>
               <Select
@@ -421,7 +446,43 @@ export function AlarmRuleEditorSheet({
                 </SelectContent>
               </Select>
             </div>
+
+            <div className="flex flex-col gap-1">
+              <span className="font-medium text-foreground">执行位置</span>
+              <Select
+                value={executionTarget}
+                onValueChange={(raw) => {
+                  const matched = EXECUTION_TARGET_OPTIONS.find((opt) => opt.value === raw);
+                  if (matched) setExecutionTarget(matched.value);
+                }}
+              >
+                <SelectTrigger className="w-full" aria-label="执行位置"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {EXECUTION_TARGET_OPTIONS.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
+
+          {executionTarget !== 'CLOUD' ? (
+            edgeEligibility.eligible ? (
+              <div className="flex items-start gap-2 rounded-lg border border-success/35 bg-success-soft px-3 py-2 text-xs text-success-text">
+                <CheckCircle2 className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                <span>
+                  {executionTarget === 'EDGE'
+                    ? '符合边缘网关离线独立执行要求，将在边缘完成实时评估与保护控制指令联动，并在重连后同步告警事实。'
+                    : '符合云边协同执行要求，可同时编入边缘网关规则包（离在线均就近执行）与云端全量规则链路。'}
+                </span>
+              </div>
+            ) : (
+              <div role="alert" className="flex items-start gap-2 rounded-lg border border-warning/40 bg-warning-soft px-3 py-2 text-xs text-warning-text">
+                <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                <span>{edgeEligibility.message ?? '当前配置暂不满足边缘执行约束，请调整后再保存。'}</span>
+              </div>
+            )
+          ) : null}
 
           {triggerMode === 'DURATION' ? (
             <div className="flex items-center gap-2 rounded-lg border border-divider bg-muted/20 px-3 py-2">
@@ -432,6 +493,7 @@ export function AlarmRuleEditorSheet({
                 min={1}
                 max={31536000}
                 value={durationSeconds}
+                onKeyDown={preventImeEnterSubmit}
                 onChange={(e) => setDurationSeconds(Math.max(1, Number(e.target.value) || 1))}
               />
             </div>
@@ -445,6 +507,7 @@ export function AlarmRuleEditorSheet({
                 aria-label="连续命中采样次数"
                 min={1}
                 value={repeatCount}
+                onKeyDown={preventImeEnterSubmit}
                 onChange={(e) => setRepeatCount(Math.max(1, Number(e.target.value) || 1))}
               />
             </div>
@@ -678,6 +741,7 @@ export function AlarmRuleEditorSheet({
                                 max={capSpec.max}
                                 step={capSpec.step ?? 'any'}
                                 value={currentParamVal}
+                                onKeyDown={preventImeEnterSubmit}
                                 onChange={(e) => {
                                   const nextVal = Number(e.target.value);
                                   setActions((prev) => prev.map((item, i) => (i === idx ? {

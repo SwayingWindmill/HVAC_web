@@ -17,6 +17,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -962,5 +963,106 @@ func TestConfigShadowDriverDeleteRenamePolicyClearAndPartialPreservation(t *test
 	closeMu.Unlock()
 	if aux2Closes < 1 {
 		t.Fatalf("expected PLC-AUX-02 adapter closed on removal, got %d", aux2Closes)
+	}
+}
+
+func TestConfigShadowEdgeRuleBundleHotReloadRejectAndClear(t *testing.T) {
+	t.Parallel()
+
+	config := loadGeneratedCentralPlantConfig(t)
+	at := time.Date(2026, 11, 22, 2, 0, 0, 0, time.UTC)
+	plant := NewPlant(config.Plant, config.Scenario, at)
+	runtime, err := NewEdgeControlRuntime(config, plant)
+	if err != nil {
+		t.Fatalf("NewEdgeControlRuntime() error = %v", err)
+	}
+
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "config-shadow.v1.json")
+	shadow := newEdgeConfigShadow(statePath)
+	shadow.applyEdgeRulesHook = func(_ context.Context, bundle *edgecontrol.EdgeRuleBundle) error {
+		return runtime.ApplyEdgeRuleBundle(bundle)
+	}
+
+	trig := 45.0
+	rst := 43.0
+	validBundle := &edgecontrol.EdgeRuleBundle{
+		SchemaVersion:  edgecontrol.EdgeRuleSchemaVersion,
+		SiteID:         "0194f000-2000-7000-8000-000000000001",
+		BundleRevision: 9,
+		CompiledAt:     "2026-11-22T02:00:00Z",
+		Rules: []edgecontrol.CompiledEdgeRule{{
+			RuleID:           "0194f000-4000-7000-8000-000000000102",
+			Title:            "Chiller High Temp",
+			Severity:         "CRITICAL",
+			ExecutionTarget:  edgecontrol.EdgeTargetEdge,
+			QualityPolicy:    edgecontrol.EdgeQualityValidOnly,
+			FreshnessSeconds: 30,
+			TriggerMode:      edgecontrol.EdgeTriggerSimple,
+			Raise: edgecontrol.EdgeCondition{
+				Kind:      edgecontrol.EdgeConditionHysteresis,
+				Input:     config.Plant.Chiller.ID + "/leaving_chilled_water_temperature",
+				Direction: edgecontrol.EdgeDirectionAbove,
+				Trigger:   &trig,
+				Reset:     &rst,
+			},
+			Clear: edgecontrol.EdgeCondition{
+				Kind:     edgecontrol.EdgeConditionCompare,
+				Input:    config.Plant.Chiller.ID + "/leaving_chilled_water_temperature",
+				Operator: edgecontrol.EdgeCompareLTE,
+				Value:    &edgecontrol.EdgeTypedValue{Type: edgecontrol.EdgeValueNumber, Number: 43},
+			},
+		}},
+	}
+	digest, err := validBundle.ComputeDigest()
+	if err != nil {
+		t.Fatalf("ComputeDigest() error = %v", err)
+	}
+	validBundle.EdgeBundleDigest = digest
+
+	rep1, err := shadow.applyDesired(context.Background(), GatewayDesiredConfig{
+		DesiredRevision: 1,
+		EdgeRuleBundle:  validBundle,
+	})
+	if err != nil || rep1.AppliedStatus != shadowAppliedStatusApplied || rep1.EdgeRuleBundle == nil || rep1.EdgeRuleBundle.EdgeBundleDigest != digest {
+		t.Fatalf("expected APPLIED edgeRuleBundle report, got %+v err=%v", rep1, err)
+	}
+	if st, ok := runtime.EdgeRuleStatus(); !ok || st.RuleCount != 1 || st.EdgeBundleDigest != digest {
+		t.Fatalf("expected runtime loaded with 1 edge rule, got %+v ok=%v", st, ok)
+	}
+
+	// Reload from persisted disk state and reapply into fresh shadow instance.
+	reloaded := newEdgeConfigShadow(statePath)
+	if err := reloaded.load(); err != nil {
+		t.Fatalf("reloaded.load() error = %v", err)
+	}
+	if snap := reloaded.snapshot(); snap.EdgeRuleBundle == nil || snap.EdgeRuleBundle.EdgeBundleDigest != digest {
+		t.Fatalf("expected persisted edgeRuleBundle across reload, got %+v", snap)
+	}
+
+	// Tampered digest bundle is REJECTED with EDGE_RULES drift and retains previous active bundle.
+	tampered := validBundle.Clone()
+	tampered.EdgeBundleDigest = strings.Repeat("e", 64)
+	rep2, err := shadow.applyDesired(context.Background(), GatewayDesiredConfig{
+		DesiredRevision: 2,
+		EdgeRuleBundle:  tampered,
+	})
+	if err != nil || rep2.AppliedStatus != shadowAppliedStatusRejected || rep2.EdgeRuleBundle != nil || len(rep2.DriftDetails) != 1 || rep2.DriftDetails[0].Section != shadowDriftSectionEdgeRules || rep2.DriftDetails[0].Reason != shadowDriftReasonApplyFailed {
+		t.Fatalf("expected REJECTED with EDGE_RULES drift, got %+v err=%v", rep2, err)
+	}
+	if snap := shadow.snapshot(); snap.EdgeRuleBundle == nil || snap.EdgeRuleBundle.EdgeBundleDigest != digest {
+		t.Fatalf("expected prior valid edgeRuleBundle retained on REJECTED revision, got %+v", snap)
+	}
+
+	// Clearing desired edgeRuleBundle removes runtime rules cleanly.
+	rep3, err := shadow.applyDesired(context.Background(), GatewayDesiredConfig{
+		DesiredRevision: 3,
+		EdgeRuleBundle:  nil,
+	})
+	if err != nil || rep3.AppliedStatus != shadowAppliedStatusApplied || rep3.EdgeRuleBundle != nil {
+		t.Fatalf("expected APPLIED nil clear report, got %+v err=%v", rep3, err)
+	}
+	if st, ok := runtime.EdgeRuleStatus(); !ok || st.RuleCount != 0 {
+		t.Fatalf("expected 0 edge rules after clear, got %+v", st)
 	}
 }

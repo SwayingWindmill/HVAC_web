@@ -2445,6 +2445,25 @@
         }
       }
     },
+    "/api/v1/alarm-rules/compile-edge": {
+      "post": {
+        "operationId": "compileSiteAlarmRulesEdge",
+        "summary": "Compile eligible active or draft Site alarm rules into an edge execution bundle",
+        "parameters": [
+          { "name": "siteId", "in": "query", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "$ref": "#/components/parameters/CsrfToken" }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EdgeRuleCompileRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Per-rule edge eligibility and compiled EdgeRuleBundle IR.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EdgeRuleCompileEnvelope" } } } },
+          "4XX": { "$ref": "#/components/responses/Problem" },
+          "5XX": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
     "/api/v1/alarm-rules/simulate": {
       "post": {
         "operationId": "simulateSiteAlarmRule",
@@ -4148,7 +4167,7 @@
         "type": "object", "additionalProperties": false,
         "required": ["section", "target", "reason", "detail"],
         "properties": {
-          "section": {"type": "string", "enum": ["POINT_MAPPINGS", "SAMPLING_POLICIES", "CONCENTRATOR", "DRIVER_CONFIGS", "AUTONOMY_POLICY"]},
+          "section": {"type": "string", "enum": ["POINT_MAPPINGS", "SAMPLING_POLICIES", "CONCENTRATOR", "DRIVER_CONFIGS", "AUTONOMY_POLICY", "EDGE_RULES"]},
           "target": {"type": "string", "minLength": 1, "maxLength": 256},
           "reason": {"type": "string", "enum": ["VALUE_MISMATCH", "MISSING_ON_EDGE", "UNEXPECTED_ON_EDGE", "EDGE_APPLY_FAILED"]},
           "detail": {"type": "string", "minLength": 1, "maxLength": 512}
@@ -4213,6 +4232,7 @@
           "concentratorConfigs": {"type": "object", "additionalProperties": {"$ref": "#/components/schemas/ConcentratorUnitShadow"}},
           "driverConfigs": {"type": "array", "items": {"$ref": "#/components/schemas/GatewayModbusDriverConfig"}},
           "autonomyPolicy": {"oneOf": [{"$ref": "#/components/schemas/GatewayAutonomyPolicy"}, {"type": "null"}]},
+          "edgeRuleBundle": {"oneOf": [{"$ref": "#/components/schemas/EdgeRuleBundle"}, {"type": "null"}]},
           "updatedBy": {"$ref": "#/components/schemas/UUIDv7"},
           "reason": {"type": "string", "minLength": 1, "maxLength": 1000},
           "createdAt": {"type": "string", "format": "date-time"},
@@ -4230,6 +4250,7 @@
           "concentratorConfigs": {"type": "object", "additionalProperties": {"$ref": "#/components/schemas/ConcentratorUnitShadow"}},
           "driverConfigs": {"type": "array", "items": {"$ref": "#/components/schemas/GatewayModbusDriverConfig"}},
           "autonomyPolicy": {"oneOf": [{"$ref": "#/components/schemas/GatewayAutonomyPolicy"}, {"type": "null"}]},
+          "edgeRuleBundle": {"oneOf": [{"$ref": "#/components/schemas/EdgeRuleBundle"}, {"type": "null"}]},
           "driftDetails": {"type": "array", "items": {"$ref": "#/components/schemas/ConfigShadowDriftDetail"}},
           "errorMessage": {"type": ["string", "null"], "maxLength": 1024},
           "reportedAt": {"type": "string", "format": "date-time"},
@@ -4258,6 +4279,7 @@
           "concentratorConfigs": {"type": "object", "additionalProperties": {"$ref": "#/components/schemas/ConcentratorUnitShadow"}},
           "driverConfigs": {"type": "array", "items": {"$ref": "#/components/schemas/GatewayModbusDriverConfig"}},
           "autonomyPolicy": {"oneOf": [{"$ref": "#/components/schemas/GatewayAutonomyPolicy"}, {"type": "null"}]},
+          "edgeRuleBundle": {"oneOf": [{"$ref": "#/components/schemas/EdgeRuleBundle"}, {"type": "null"}]},
           "reason": {"type": "string", "minLength": 1, "maxLength": 1000}
         }
       },
@@ -5147,7 +5169,8 @@
           "alarmType": { "type": "string", "minLength": 1, "maxLength": 128 },
           "summary": { "type": "string", "minLength": 1, "maxLength": 2048 },
           "severity": { "type": "string", "enum": ["INFO", "WARNING", "MINOR", "MAJOR", "CRITICAL"] },
-          "ruleKind": { "type": "string", "enum": ["THRESHOLD", "SLOPE", "EXPRESSION"] },
+          "ruleKind": { "type": "string", "enum": ["THRESHOLD", "SLOPE", "WINDOW", "EXPRESSION"] },
+          "executionTarget": { "type": "string", "enum": ["CLOUD", "EDGE", "CLOUD_AND_EDGE"] },
           "templateKey": { "type": "string", "minLength": 1, "maxLength": 128 },
           "overriddenFields": { "type": "array", "maxItems": 32, "items": { "type": "string", "minLength": 1, "maxLength": 128 } },
           "dependsOnRuleIds": { "type": "array", "maxItems": 16, "items": { "$ref": "#/components/schemas/UUIDv7" } },
@@ -5173,7 +5196,8 @@
           "alarmType": { "type": "string", "minLength": 1, "maxLength": 128 },
           "summary": { "type": "string", "minLength": 1, "maxLength": 2048 },
           "severity": { "type": "string", "enum": ["INFO", "WARNING", "MINOR", "MAJOR", "CRITICAL"] },
-          "ruleKind": { "type": "string", "enum": ["THRESHOLD", "SLOPE", "EXPRESSION"] },
+          "ruleKind": { "type": "string", "enum": ["THRESHOLD", "SLOPE", "WINDOW", "EXPRESSION"] },
+          "executionTarget": { "type": "string", "enum": ["CLOUD", "EDGE", "CLOUD_AND_EDGE"] },
           "templateKey": { "type": "string", "minLength": 1, "maxLength": 128 },
           "overriddenFields": { "type": "array", "maxItems": 32, "items": { "type": "string", "minLength": 1, "maxLength": 128 } },
           "dependsOnRuleIds": { "type": "array", "maxItems": 16, "items": { "$ref": "#/components/schemas/UUIDv7" } },
@@ -5236,7 +5260,8 @@
           "ruleId": { "$ref": "#/components/schemas/UUIDv7" },
           "title": { "type": "string" },
           "severity": { "type": "string", "enum": ["INFO", "WARNING", "MINOR", "MAJOR", "CRITICAL"] },
-          "ruleKind": { "type": "string", "enum": ["THRESHOLD", "SLOPE", "EXPRESSION"] },
+          "ruleKind": { "type": "string", "enum": ["THRESHOLD", "SLOPE", "WINDOW", "EXPRESSION"] },
+          "executionTarget": { "type": "string", "enum": ["CLOUD", "EDGE", "CLOUD_AND_EDGE"] },
           "hopDepth": { "type": "integer", "minimum": 0, "maximum": 3 },
           "dependsOnRuleIds": { "type": "array", "items": { "$ref": "#/components/schemas/UUIDv7" } },
           "actionCount": { "type": "integer", "minimum": 0 },
@@ -5292,6 +5317,141 @@
         "required": ["data", "meta"],
         "properties": {
           "data": { "$ref": "#/components/schemas/AlarmRuleDiffResult" },
+          "meta": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["requestId"],
+            "properties": { "requestId": { "type": "string" } }
+          }
+        }
+      },
+      "EdgeRuleTypedValue": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type"],
+        "properties": {
+          "type": { "type": "string", "enum": ["NUMBER", "STRING", "BOOLEAN"] },
+          "number": { "type": "number" },
+          "string": { "type": "string", "maxLength": 256 },
+          "boolean": { "type": "boolean" }
+        }
+      },
+      "EdgeRuleCondition": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind"],
+        "properties": {
+          "kind": { "type": "string", "enum": ["COMPARE", "RANGE", "HYSTERESIS", "SLOPE", "WINDOW_AGG", "EXPRESSION", "AND", "OR"] },
+          "input": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "operator": { "type": "string", "enum": ["EQ", "NE", "GT", "GTE", "LT", "LTE"] },
+          "value": { "$ref": "#/components/schemas/EdgeRuleTypedValue" },
+          "minimum": { "type": "number" },
+          "maximum": { "type": "number" },
+          "direction": { "type": "string", "enum": ["ABOVE", "BELOW"] },
+          "trigger": { "type": "number" },
+          "reset": { "type": "number" },
+          "delta": { "type": "number" },
+          "windowSeconds": { "type": "integer", "minimum": 0, "maximum": 86400 },
+          "agg": { "type": "string", "enum": ["AVG", "MIN", "MAX", "SUM", "COUNT", "STDDEV", "P95", "P99"] },
+          "windowType": { "type": "string", "enum": ["SLIDING", "TUMBLING"] },
+          "minSamples": { "type": "integer", "minimum": 0, "maximum": 128 },
+          "threshold": { "type": "number" },
+          "expression": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "inputs": { "type": "object", "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 256 } },
+          "children": { "type": "array", "minItems": 2, "maxItems": 32, "items": { "$ref": "#/components/schemas/EdgeRuleCondition" } }
+        }
+      },
+      "EdgeRuleCompiledAction": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "targetDeviceId", "capability"],
+        "properties": {
+          "kind": { "type": "string", "enum": ["PROTECTION_COMMAND"] },
+          "triggerOn": { "type": "string", "enum": ["RAISE", "CLEAR", "BOTH"] },
+          "targetDeviceId": { "$ref": "#/components/schemas/UUIDv7" },
+          "targetPointCode": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "capability": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "parameters": { "type": "object", "additionalProperties": { "type": "number" } }
+        }
+      },
+      "CompiledEdgeRule": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ruleId", "title", "severity", "executionTarget", "qualityPolicy", "freshnessSeconds", "triggerMode", "raise", "clear"],
+        "properties": {
+          "ruleId": { "$ref": "#/components/schemas/UUIDv7" },
+          "alarmType": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "title": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "severity": { "type": "string", "enum": ["INFO", "WARNING", "MINOR", "MAJOR", "CRITICAL"] },
+          "executionTarget": { "type": "string", "enum": ["EDGE", "CLOUD_AND_EDGE"] },
+          "dependsOnRuleIds": { "type": "array", "maxItems": 16, "items": { "$ref": "#/components/schemas/UUIDv7" } },
+          "dependencyGate": { "type": "string", "enum": ["NONE", "ALL_ACTIVE", "ANY_ACTIVE"] },
+          "qualityPolicy": { "type": "string", "enum": ["VALID_ONLY", "USABLE"] },
+          "freshnessSeconds": { "type": "integer", "minimum": 1 },
+          "triggerMode": { "type": "string", "enum": ["SIMPLE", "DURATION", "REPEATING"] },
+          "durationSeconds": { "type": "integer", "minimum": 1 },
+          "repeatCount": { "type": "integer", "minimum": 1 },
+          "raise": { "$ref": "#/components/schemas/EdgeRuleCondition" },
+          "clear": { "$ref": "#/components/schemas/EdgeRuleCondition" },
+          "actions": { "type": "array", "maxItems": 4, "items": { "$ref": "#/components/schemas/EdgeRuleCompiledAction" } }
+        }
+      },
+      "EdgeRuleBundle": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schemaVersion", "siteId", "bundleRevision", "edgeBundleDigest", "rules"],
+        "properties": {
+          "schemaVersion": { "type": "integer", "minimum": 1 },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "bundleRevision": { "type": "integer", "minimum": 0 },
+          "bundleDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "edgeBundleDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "compiledAt": { "type": "string" },
+          "rules": { "type": "array", "maxItems": 128, "items": { "$ref": "#/components/schemas/CompiledEdgeRule" } }
+        }
+      },
+      "EdgeRuleEligibility": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ruleId", "title", "executionTarget", "compiled"],
+        "properties": {
+          "ruleId": { "$ref": "#/components/schemas/UUIDv7" },
+          "title": { "type": "string" },
+          "executionTarget": { "type": "string", "enum": ["CLOUD", "EDGE", "CLOUD_AND_EDGE"] },
+          "compiled": { "type": "boolean" },
+          "reasonCode": { "type": "string" },
+          "message": { "type": "string" }
+        }
+      },
+      "EdgeRuleCompileRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "rules": { "type": "array", "maxItems": 256, "items": { "$ref": "#/components/schemas/AlarmRuleDraft" } }
+        }
+      },
+      "EdgeRuleCompileResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["siteId", "bundleRevision", "edgeBundleDigest", "compiledAt", "edgeRuleCount", "cloudOnlyCount", "eligibility", "bundle"],
+        "properties": {
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "bundleRevision": { "type": "integer", "minimum": 0 },
+          "bundleDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "edgeBundleDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "compiledAt": { "type": "string" },
+          "edgeRuleCount": { "type": "integer", "minimum": 0 },
+          "cloudOnlyCount": { "type": "integer", "minimum": 0 },
+          "eligibility": { "type": "array", "items": { "$ref": "#/components/schemas/EdgeRuleEligibility" } },
+          "bundle": { "$ref": "#/components/schemas/EdgeRuleBundle" }
+        }
+      },
+      "EdgeRuleCompileEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["data", "meta"],
+        "properties": {
+          "data": { "$ref": "#/components/schemas/EdgeRuleCompileResult" },
           "meta": {
             "type": "object",
             "additionalProperties": false,
@@ -5424,9 +5584,9 @@
         "type": "object",
         "additionalProperties": false,
         "required": ["kind"],
-        "description": "AND and OR hold two to 32 children; EXPRESSION binds up to 16 named inputs; every other kind reads one reading. NO_DATA: no reading for ageSeconds. STALE: the reading is older than ageSeconds. UNCHANGED: a fresh reading has kept its value ageSeconds. CHANGED: it took its value less than ageSeconds ago. SLOPE: reading change delta over windowSeconds. REASONS: the point's health reasons.",
+        "description": "AND and OR hold two to 32 children; EXPRESSION binds up to 16 named inputs; every other kind reads one reading. NO_DATA: no reading for ageSeconds. STALE: the reading is older than ageSeconds. UNCHANGED: a fresh reading has kept its value ageSeconds. CHANGED: it took its value less than ageSeconds ago. SLOPE: reading change delta over windowSeconds. WINDOW_AGG: window statistical metric compared against threshold. REASONS: the point's health reasons.",
         "properties": {
-          "kind": { "type": "string", "enum": ["COMPARE", "RANGE", "HYSTERESIS", "NO_DATA", "STALE", "UNCHANGED", "CHANGED", "REASONS", "SLOPE", "EXPRESSION", "AND", "OR"] },
+          "kind": { "type": "string", "enum": ["COMPARE", "RANGE", "HYSTERESIS", "NO_DATA", "STALE", "UNCHANGED", "CHANGED", "REASONS", "SLOPE", "WINDOW_AGG", "EXPRESSION", "AND", "OR"] },
           "reading": { "$ref": "#/components/schemas/AlarmRuleReading" },
           "operator": { "type": "string", "enum": ["EQ", "NE", "GT", "GTE", "LT", "LTE"] },
           "value": { "type": ["number", "string", "boolean"] },
@@ -5438,6 +5598,10 @@
           "ageSeconds": { "type": "integer", "minimum": 1 },
           "delta": { "type": "number" },
           "windowSeconds": { "type": "integer", "minimum": 1, "maximum": 86400 },
+          "agg": { "type": "string", "enum": ["AVG", "MIN", "MAX", "SUM", "COUNT", "STDDEV", "P95", "P99"] },
+          "windowType": { "type": "string", "enum": ["SLIDING", "TUMBLING"] },
+          "minSamples": { "type": "integer", "minimum": 1, "maximum": 128 },
+          "threshold": { "type": "number" },
           "expression": { "type": "string", "minLength": 1, "maxLength": 512 },
           "inputs": { "type": "object", "maxProperties": 16, "additionalProperties": { "$ref": "#/components/schemas/AlarmRuleReading" } },
           "reasons": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "type": "string", "enum": ["OUT_OF_RANGE", "SPIKE", "SENTINEL", "FLATLINE", "DERIVED_INPUT", "LOW_CONFIDENCE", "SOURCE_UNTRUSTED", "PHYSICS_WET_BULB_DRY", "PHYSICS_WET_BULB_CONDENSER", "PHYSICS_POWER", "PHYSICS_COP", "PHYSICS_CHW_DIRECTION", "PHYSICS_CW_DIRECTION", "PHYSICS_HEAT_BALANCE", "PROBE_OFFSET"] } },

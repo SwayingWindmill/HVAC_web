@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"slices"
@@ -38,6 +39,7 @@ type SiteRuleView struct {
 	Summary          string                  `json:"summary,omitempty"`
 	Severity         alarmmodel.Severity     `json:"severity"`
 	RuleKind         RuleKind                `json:"ruleKind,omitempty"`
+	ExecutionTarget  ExecutionTarget         `json:"executionTarget,omitempty"`
 	TemplateKey      string                  `json:"templateKey,omitempty"`
 	OverriddenFields []string                `json:"overriddenFields,omitempty"`
 	DependsOnRuleIDs []string                `json:"dependsOnRuleIds,omitempty"`
@@ -68,6 +70,10 @@ type RuleCondition struct {
 	AgeSeconds    int64                  `json:"ageSeconds,omitempty"`
 	Delta         *float64               `json:"delta,omitempty"`
 	WindowSeconds int64                  `json:"windowSeconds,omitempty"`
+	Agg           WindowAggFunc          `json:"agg,omitempty"`
+	WindowType    WindowType             `json:"windowType,omitempty"`
+	MinSamples    int                    `json:"minSamples,omitempty"`
+	Threshold     *float64               `json:"threshold,omitempty"`
 	Expression    string                 `json:"expression,omitempty"`
 	Inputs        map[string]RuleReading `json:"inputs,omitempty"`
 	Children      []RuleCondition        `json:"children,omitempty"`
@@ -161,6 +167,7 @@ func siteRuleViewWithHopDepth(rule SiteRule, hopDepth int) (SiteRuleView, error)
 		Summary:          rule.Policy.Summary,
 		Severity:         rule.Policy.Severity,
 		RuleKind:         ruleKind,
+		ExecutionTarget:  rule.Policy.ExecutionTarget,
 		TemplateKey:      rule.Policy.TemplateKey,
 		OverriddenFields: slices.Clone(rule.Policy.OverriddenFields),
 		DependsOnRuleIDs: slices.Clone(rule.Policy.DependsOnRuleIDs),
@@ -208,6 +215,13 @@ func ruleCondition(condition Condition) (RuleCondition, error) {
 		}
 		delta := *condition.Delta
 		view.Operator, view.Delta, view.WindowSeconds = condition.Operator, &delta, condition.WindowSeconds
+	case ConditionWindowAgg:
+		if condition.Threshold == nil || math.IsNaN(*condition.Threshold) || math.IsInf(*condition.Threshold, 0) {
+			return RuleCondition{}, errors.New("site rule window_agg threshold is invalid")
+		}
+		threshold := *condition.Threshold
+		view.Agg, view.WindowType, view.WindowSeconds, view.MinSamples, view.Operator, view.Threshold =
+			condition.Agg, condition.WindowType, condition.WindowSeconds, condition.MinSamples, condition.Operator, &threshold
 	case ConditionExpression:
 		view.Expression = condition.Expression
 		if len(condition.ExprInputs) > 0 {
@@ -608,6 +622,8 @@ func simulationStepReasons(policy AlarmPolicyRevision, decision EvaluationDecisi
 		switch policy.EffectiveRuleKind() {
 		case RuleKindSlope:
 			reasons = append(reasons, "斜率变化达标")
+		case RuleKindWindow:
+			reasons = append(reasons, "窗口聚合统计达标")
 		case RuleKindExpression:
 			reasons = append(reasons, "表达式条件成立")
 		}
@@ -658,6 +674,62 @@ func (handler *httpHandler) recordRulePublishMetric(outcome string) {
 		map[string]string{"outcome": outcome},
 		1,
 	)
+}
+
+func (handler *httpHandler) recordEdgeCompileMetric(outcome string) {
+	if handler == nil || handler.metrics == nil {
+		return
+	}
+	_ = handler.metrics.AddCounter(
+		"hvac_alarm_edge_rule_compiles_total",
+		"Site edge rule bundle compilation outcomes.",
+		map[string]string{"outcome": outcome},
+		1,
+	)
+}
+
+func (handler *httpHandler) compileSiteRulesEdge(writer http.ResponseWriter, request *http.Request, tenantID, siteID string) {
+	if handler.authoring == nil {
+		handler.recordEdgeCompileMetric("failed")
+		handler.writeStoreFailure(writer, ErrUnavailable)
+		return
+	}
+	request.Body = http.MaxBytesReader(writer, request.Body, maxRuleBundleBodyBytes)
+	rawBody, err := io.ReadAll(request.Body)
+	if err != nil {
+		handler.recordEdgeCompileMetric("rejected")
+		handler.writeProblem(writer, http.StatusBadRequest, "ALARM_REQUEST_INVALID", "Alarm request invalid", "The edge rule compile request body could not be read.", false)
+		return
+	}
+	var input EdgeRuleCompileRequest
+	if len(strings.TrimSpace(string(rawBody))) > 0 {
+		if mediaType := strings.TrimSpace(strings.Split(request.Header.Get("Content-Type"), ";")[0]); mediaType != "application/json" {
+			handler.recordEdgeCompileMetric("rejected")
+			handler.writeProblem(writer, http.StatusUnsupportedMediaType, "ALARM_REQUEST_INVALID", "Alarm request invalid", "Edge rule compile requests must use application/json.", false)
+			return
+		}
+		decoder := json.NewDecoder(strings.NewReader(string(rawBody)))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&input) != nil || ensureJSONEOF(decoder) != nil {
+			handler.recordEdgeCompileMetric("rejected")
+			handler.writeProblem(writer, http.StatusBadRequest, "ALARM_REQUEST_INVALID", "Alarm request invalid", "The edge rule compile request is invalid.", false)
+			return
+		}
+	}
+	result, err := handler.authoring.CompileSiteRulesEdge(request.Context(), tenantID, siteID, input.Rules, handler.now().UTC())
+	if err != nil {
+		var draftErr *RuleDraftValidationError
+		if errors.As(err, &draftErr) {
+			handler.recordEdgeCompileMetric("rejected")
+			handler.writeProblem(writer, http.StatusUnprocessableEntity, draftErr.Code, "Alarm rule draft invalid", draftErr.Error(), false)
+			return
+		}
+		handler.recordEdgeCompileMetric("failed")
+		handler.writeStoreFailure(writer, err)
+		return
+	}
+	handler.recordEdgeCompileMetric("success")
+	writeJSON(writer, http.StatusOK, result)
 }
 
 func (handler *httpHandler) diffSiteRules(writer http.ResponseWriter, request *http.Request, tenantID, siteID string) {
@@ -825,6 +897,9 @@ func (list SiteRuleList) Validate() error {
 		if rule.RuleKind != "" && !validRuleKind(rule.RuleKind) {
 			return errors.New("site rule kind is invalid")
 		}
+		if rule.ExecutionTarget != "" && !validExecutionTarget(rule.ExecutionTarget) {
+			return errors.New("site rule executionTarget is invalid")
+		}
 		if rule.TemplateKey != "" && !boundedText(rule.TemplateKey, 128) {
 			return errors.New("site rule templateKey is invalid")
 		}
@@ -986,6 +1061,13 @@ func (condition RuleCondition) validate() error {
 		}
 	case ConditionSlope:
 		valid = validSlopeOperator(condition.Operator) && condition.Delta != nil && !math.IsNaN(*condition.Delta) && !math.IsInf(*condition.Delta, 0) && condition.WindowSeconds >= 1 && condition.WindowSeconds <= 86400
+	case ConditionWindowAgg:
+		valid = validWindowAggFunc(condition.Agg) &&
+			validWindowType(condition.WindowType) &&
+			condition.WindowSeconds >= 1 && condition.WindowSeconds <= 86400 &&
+			validCompareOperator(condition.Operator) &&
+			condition.Threshold != nil && !math.IsNaN(*condition.Threshold) && !math.IsInf(*condition.Threshold, 0) &&
+			condition.MinSamples >= 0 && condition.MinSamples <= MaxWindowSamplesPerInput
 	}
 	if !valid {
 		return errors.New("site rule condition is invalid")

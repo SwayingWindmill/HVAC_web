@@ -13,7 +13,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 )
 
-const maxConfigShadowRequestBodyBytes = 1 << 20
+const maxConfigShadowRequestBodyBytes = 2 << 20
 
 type GatewayPeerVerifier interface {
 	VerifyActiveCredential(ctx context.Context, peer *x509.Certificate) (string, error)

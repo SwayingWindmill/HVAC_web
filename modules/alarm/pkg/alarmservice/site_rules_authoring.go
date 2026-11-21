@@ -80,6 +80,7 @@ type SiteRuleDraft struct {
 	Summary          string                  `json:"summary,omitempty"`
 	Severity         alarmmodel.Severity     `json:"severity"`
 	RuleKind         RuleKind                `json:"ruleKind,omitempty"`
+	ExecutionTarget  ExecutionTarget         `json:"executionTarget,omitempty"`
 	TemplateKey      string                  `json:"templateKey,omitempty"`
 	OverriddenFields []string                `json:"overriddenFields,omitempty"`
 	DependsOnRuleIDs []string                `json:"dependsOnRuleIds,omitempty"`
@@ -119,6 +120,7 @@ type SiteRuleGraphNodeView struct {
 	Title            string              `json:"title"`
 	Severity         alarmmodel.Severity `json:"severity"`
 	RuleKind         RuleKind            `json:"ruleKind,omitempty"`
+	ExecutionTarget  ExecutionTarget     `json:"executionTarget,omitempty"`
 	HopDepth         int                 `json:"hopDepth"`
 	DependsOnRuleIDs []string            `json:"dependsOnRuleIds"`
 	ActionCount      int                 `json:"actionCount"`
@@ -218,6 +220,7 @@ type SiteRuleAuthoringStore interface {
 	PublishSiteRules(ctx context.Context, tenantID, siteID string, req SiteRulePublishRequest, actorID, actorName string, now time.Time) (SiteRulePublishResult, error)
 	ListSiteRuleBundleRevisions(ctx context.Context, tenantID, siteID string, limit int) (SiteRuleBundleRevisionList, error)
 	RollbackSiteRules(ctx context.Context, tenantID, siteID string, targetRevision uint64, req SiteRuleRollbackRequest, actorID, actorName string, now time.Time) (SiteRulePublishResult, error)
+	CompileSiteRulesEdge(ctx context.Context, tenantID, siteID string, drafts *[]SiteRuleDraft, now time.Time) (EdgeRuleCompileResult, error)
 }
 
 func parseRuleCondition(rc RuleCondition, depth int) (Condition, error) {
@@ -307,6 +310,28 @@ func parseRuleCondition(rc RuleCondition, depth int) (Condition, error) {
 		condition.Operator = rc.Operator
 		condition.Delta = cloneFloatPtr(rc.Delta)
 		condition.WindowSeconds = rc.WindowSeconds
+	case ConditionWindowAgg:
+		if !validWindowAggFunc(rc.Agg) {
+			return Condition{}, errors.New("window_agg condition agg is invalid")
+		}
+		if !validWindowType(rc.WindowType) {
+			return Condition{}, errors.New("window_agg condition windowType is invalid")
+		}
+		if rc.WindowSeconds <= 0 || rc.WindowSeconds > 86400 {
+			return Condition{}, errors.New("window_agg condition windowSeconds must be between 1 and 86400")
+		}
+		if rc.Threshold == nil || math.IsNaN(*rc.Threshold) || math.IsInf(*rc.Threshold, 0) {
+			return Condition{}, errors.New("window_agg condition threshold must be finite")
+		}
+		if rc.MinSamples < 0 || rc.MinSamples > MaxWindowSamplesPerInput {
+			return Condition{}, fmt.Errorf("window_agg condition minSamples must be between 0 and %d", MaxWindowSamplesPerInput)
+		}
+		condition.Agg = rc.Agg
+		condition.WindowType = rc.WindowType
+		condition.WindowSeconds = rc.WindowSeconds
+		condition.MinSamples = rc.MinSamples
+		condition.Operator = rc.Operator
+		condition.Threshold = cloneFloatPtr(rc.Threshold)
 	default:
 		return Condition{}, errors.New("site rule condition kind is unsupported")
 	}
@@ -405,6 +430,9 @@ func compileDraftsAgainstHistory(
 		issues = append(issues, graphErrorValidationIssue(err))
 		return nil, rulegraph.GraphReport{}, issues
 	}
+	if edgeIssues := validateDraftEdgeEligibility(compiled, report.Order); len(edgeIssues) > 0 {
+		return nil, rulegraph.GraphReport{}, edgeIssues
+	}
 	return compiled, report, nil
 }
 
@@ -470,6 +498,14 @@ func compileSingleRuleDraft(
 			Field:   "ruleKind",
 			Code:    "INVALID_RULE_KIND",
 			Message: "ruleKind is invalid",
+		})
+	}
+	if draft.ExecutionTarget != "" && !validExecutionTarget(draft.ExecutionTarget) {
+		issues = append(issues, SiteRuleValidationIssue{
+			RuleID:  ruleID,
+			Field:   "executionTarget",
+			Code:    "INVALID_EXECUTION_TARGET",
+			Message: "executionTarget must be CLOUD, EDGE, or CLOUD_AND_EDGE",
 		})
 	}
 	templateKey := strings.TrimSpace(draft.TemplateKey)
@@ -595,6 +631,7 @@ func compileSingleRuleDraft(
 		Summary:          title,
 		Severity:         draft.Severity,
 		RuleKind:         draft.RuleKind,
+		ExecutionTarget:  draft.ExecutionTarget,
 		TemplateKey:      templateKey,
 		OverriddenFields: slices.Clone(draft.OverriddenFields),
 		DependsOnRuleIDs: dependsOn,
@@ -760,6 +797,7 @@ func buildSiteRuleGraphView(rules []SiteRule, report rulegraph.GraphReport, chan
 			Title:            rule.Policy.Title,
 			Severity:         rule.Policy.Severity,
 			RuleKind:         ruleKind,
+			ExecutionTarget:  rule.Policy.EffectiveExecutionTarget(),
 			HopDepth:         report.Nodes[id].HopDepth,
 			DependsOnRuleIDs: deps,
 			ActionCount:      len(rule.Policy.Actions),
@@ -886,6 +924,9 @@ func diffRuleFields(before, after SiteRule) []string {
 	}
 	if before.Policy.EffectiveRuleKind() != after.Policy.EffectiveRuleKind() {
 		fields = append(fields, "ruleKind")
+	}
+	if before.Policy.EffectiveExecutionTarget() != after.Policy.EffectiveExecutionTarget() {
+		fields = append(fields, "executionTarget")
 	}
 	if before.Policy.TriggerMode != after.Policy.TriggerMode {
 		fields = append(fields, "triggerMode")

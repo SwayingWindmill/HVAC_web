@@ -43,6 +43,7 @@ type publicAlarmRoute struct {
 	// siteRules is the Site's rules in effect (#693), read with the same grant as its alarm list.
 	siteRules                bool
 	siteRulesDiff            bool
+	siteRulesCompileEdge     bool
 	siteRulesPublish         bool
 	siteRulesSimulate        bool
 	siteRuleRevisions        bool
@@ -126,7 +127,7 @@ func (a *directAlarmAdapter) ResolveScope(ctx context.Context, tenantID, alarmID
 }
 
 func (a *directAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Request, route publicAlarmRoute, _ string) ([]byte, int, *ownerFailure) {
-	if route.siteRules || route.siteRulesDiff || route.siteRulesPublish || route.siteRulesSimulate || route.siteRuleRevisions || route.siteRuleRollback {
+	if route.siteRules || route.siteRulesDiff || route.siteRulesCompileEdge || route.siteRulesPublish || route.siteRulesSimulate || route.siteRuleRevisions || route.siteRuleRollback {
 		failure := alarmUnavailable("Site rules are only served by the Alarm Service.")
 		return nil, http.StatusServiceUnavailable, &failure
 	}
@@ -398,6 +399,8 @@ func (a *httpAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Requ
 		path = internalSiteAlarmsPrefix + url.PathEscape(route.siteID) + "/alarm-rules"
 	case route.siteRulesDiff:
 		path = internalSiteAlarmsPrefix + url.PathEscape(route.siteID) + "/alarm-rules:diff"
+	case route.siteRulesCompileEdge:
+		path = internalSiteAlarmsPrefix + url.PathEscape(route.siteID) + "/alarm-rules:compile-edge"
 	case route.siteRulesSimulate:
 		path = internalSiteAlarmsPrefix + url.PathEscape(route.siteID) + "/alarm-rules:simulate"
 	case route.siteRuleRevisions:
@@ -443,6 +446,22 @@ func (a *httpAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Requ
 			return nil, 0, &failure
 		}
 		requestBody = bytes.NewReader(rawBody)
+	case route.siteRulesCompileEdge:
+		method = http.MethodPost
+		if publicRequest.Body != nil {
+			rawBody, err := readBoundedBody(publicRequest.Body, 256<<10)
+			if err != nil {
+				failure := alarmInvalid("The Alarm rule edge compile request body is invalid.")
+				return nil, 0, &failure
+			}
+			if len(bytes.TrimSpace(rawBody)) > 0 {
+				requestBody = bytes.NewReader(rawBody)
+			} else {
+				requestBody = bytes.NewReader([]byte("{}"))
+			}
+		} else {
+			requestBody = bytes.NewReader([]byte("{}"))
+		}
 	case route.siteRuleRollback:
 		method = http.MethodPost
 		if publicRequest.Body == nil {
@@ -510,7 +529,7 @@ func (a *httpAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Requ
 		return nil, 0, &failure
 	}
 	request.Header.Set("Accept", "application/json, application/problem+json")
-	if route.siteRulesSimulate || route.siteRulesDiff {
+	if route.siteRulesSimulate || route.siteRulesDiff || route.siteRulesCompileEdge {
 		request.Header.Set(alarmReadContextHeader, serviceContext)
 		if ct := strings.TrimSpace(publicRequest.Header.Get("Content-Type")); ct != "" {
 			request.Header.Set("Content-Type", ct)
@@ -597,6 +616,9 @@ func matchPublicAlarmRoute(path string) (publicAlarmRoute, bool) {
 	}
 	if path == "/api/v1/alarm-rules/diff" {
 		return publicAlarmRoute{template: "/api/v1/alarm-rules/diff", action: alarmauth.ActionRead, siteRulesDiff: true}, true
+	}
+	if path == "/api/v1/alarm-rules/compile-edge" {
+		return publicAlarmRoute{template: "/api/v1/alarm-rules/compile-edge", action: alarmauth.ActionRead, siteRulesCompileEdge: true}, true
 	}
 	if path == "/api/v1/alarm-rules/simulate" {
 		return publicAlarmRoute{template: "/api/v1/alarm-rules/simulate", action: alarmauth.ActionRead, siteRulesSimulate: true}, true
@@ -691,6 +713,10 @@ func dispatchAlarmRoute(h *handler, writer http.ResponseWriter, request *http.Re
 	}
 	if route.siteRulesDiff {
 		dispatchSiteRulesDiffRoute(h, writer, request, route)
+		return
+	}
+	if route.siteRulesCompileEdge {
+		dispatchSiteRulesCompileEdgeRoute(h, writer, request, route)
 		return
 	}
 	if route.siteRulesSimulate {
@@ -925,6 +951,29 @@ func dispatchSiteRulesDiffRoute(h *handler, writer http.ResponseWriter, request 
 	result, ok := response.value.(alarmservice.SiteRuleDiffResult)
 	if !ok {
 		failure := alarmUnavailable("Alarm Service returned an invalid Site rule diff.")
+		writeProblem(writer, request, failure.status, failure.code, failure.title, failure.detail, failure.retryable, nil)
+		return
+	}
+	writer.Header().Set("Cache-Control", "private, no-store")
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"data": result,
+		"meta": map[string]any{"requestId": requestIDFromContext(request.Context())},
+	})
+}
+
+func dispatchSiteRulesCompileEdgeRoute(h *handler, writer http.ResponseWriter, request *http.Request, route publicAlarmRoute) {
+	response, ok := executeSiteRulesGatewayCall(h, writer, request, route, http.MethodPost, "The Site rule edge compile query takes exactly one siteId.", true)
+	if !ok {
+		return
+	}
+	if response.status != http.StatusOK {
+		failure := alarmProblemFromUpstream(response.status, response.body, "Alarm Service could not compile Site rules for edge.")
+		writeProblem(writer, request, failure.status, failure.code, failure.title, failure.detail, failure.retryable, nil)
+		return
+	}
+	result, ok := response.value.(alarmservice.EdgeRuleCompileResult)
+	if !ok {
+		failure := alarmUnavailable("Alarm Service returned an invalid Edge rule compile result.")
 		writeProblem(writer, request, failure.status, failure.code, failure.title, failure.detail, failure.retryable, nil)
 		return
 	}
@@ -1642,6 +1691,12 @@ func validateAlarmResponse(scope ownerScope, call alarmCall, response ownerRespo
 			return nil, err
 		}
 		return diff, nil
+	case call.route.siteRulesCompileEdge:
+		var compiled alarmservice.EdgeRuleCompileResult
+		if err := decodeStrictAlarmJSON(response.body, &compiled); err != nil {
+			return nil, err
+		}
+		return compiled, compiled.Validate()
 	case call.route.siteRuleRevisions:
 		var revisions alarmservice.SiteRuleBundleRevisionList
 		if err := decodeStrictAlarmJSON(response.body, &revisions); err != nil {

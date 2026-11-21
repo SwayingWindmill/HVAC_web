@@ -1969,7 +1969,8 @@ export type GatewayConfigShadowDriftSection =
   | 'SAMPLING_POLICIES'
   | 'CONCENTRATOR'
   | 'DRIVER_CONFIGS'
-  | 'AUTONOMY_POLICY';
+  | 'AUTONOMY_POLICY'
+  | 'EDGE_RULES';
 export type GatewayConfigShadowDriftReason =
   | 'VALUE_MISMATCH'
   | 'MISSING_ON_EDGE'
@@ -2003,6 +2004,7 @@ export const CONFIG_SHADOW_SECTION_LABELS: Readonly<Record<GatewayConfigShadowDr
   CONCENTRATOR: '集中器配置',
   DRIVER_CONFIGS: '协议驱动点表',
   AUTONOMY_POLICY: '断网自治策略',
+  EDGE_RULES: '边缘规则包',
 };
 
 export const CONFIG_SHADOW_REASON_LABELS: Readonly<Record<GatewayConfigShadowDriftReason, string>> = {

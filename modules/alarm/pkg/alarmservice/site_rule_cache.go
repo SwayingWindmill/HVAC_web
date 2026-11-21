@@ -188,6 +188,7 @@ func cloneCondition(condition Condition) Condition {
 	cloned.Minimum = cloneFloatPtr(condition.Minimum)
 	cloned.Maximum = cloneFloatPtr(condition.Maximum)
 	cloned.Delta = cloneFloatPtr(condition.Delta)
+	cloned.Threshold = cloneFloatPtr(condition.Threshold)
 	cloned.Reasons = slices.Clone(condition.Reasons)
 	cloned.ExprInputs = maps.Clone(condition.ExprInputs)
 	if condition.Children != nil {

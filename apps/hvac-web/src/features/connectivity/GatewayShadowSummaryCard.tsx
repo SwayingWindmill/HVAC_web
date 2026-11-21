@@ -11,11 +11,13 @@ import {
   countDriverRegisters,
   formatPointCopyTargets,
   summarizeAutonomyPolicyState,
+  summarizeEdgeRuleBundle,
   type ConcentratorShadowUnitSummary,
 } from './gateway-config-shadow-model';
 import {
   AutonomyPolicySummaryBlock,
   DriverConfigsSummaryBlock,
+  EdgeRuleBundleSummaryBlock,
 } from './GatewayDriverAutonomySummary';
 
 const SHADOW_DATETIME = new Intl.DateTimeFormat('zh-CN', {
@@ -47,6 +49,7 @@ export function GatewayShadowSummaryCard({
   const registerCount = countDriverRegisters(desired?.driverConfigs);
   const autonomyState = summarizeAutonomyPolicyState(desired?.autonomyPolicy);
   const autonomyLabel = AUTONOMY_POLICY_STATE_PRESENTATION[autonomyState].label;
+  const edgeRuleSummary = summarizeEdgeRuleBundle(desired?.edgeRuleBundle);
 
   if (shadow.syncStatus === 'UNCONFIGURED' && !desired && !reported) {
     return (
@@ -101,6 +104,9 @@ export function GatewayShadowSummaryCard({
         <span className="rounded border bg-background px-2 py-0.5 font-mono tabular-nums">
           集中器暂存 {concentratorUnits.length} 个单元
         </span>
+        <span className="rounded border bg-background px-2 py-0.5 font-mono tabular-nums">
+          边缘规则包 {edgeRuleSummary.configured ? `${edgeRuleSummary.ruleCount} 条` : '未下发'}
+        </span>
       </div>
 
       {desired && desired.pointMappings.length > 0 ? (
@@ -125,6 +131,8 @@ export function GatewayShadowSummaryCard({
       <DriverConfigsSummaryBlock driverConfigs={desired?.driverConfigs} />
 
       <AutonomyPolicySummaryBlock autonomyPolicy={desired?.autonomyPolicy} />
+
+      <EdgeRuleBundleSummaryBlock edgeRuleBundle={desired?.edgeRuleBundle} />
 
       {concentratorUnits.length > 0 ? (
         <div className="flex flex-wrap gap-1.5 border-t border-divider pt-2 text-[11px]">

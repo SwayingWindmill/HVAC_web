@@ -31,6 +31,7 @@ func TestMatchPublicAlarmRoutesUsesDomainV1Shape(t *testing.T) {
 		{path: "/api/v1/alarms", template: "/api/v1/alarms", action: alarmauth.ActionRead},
 		{path: "/api/v1/alarm-rules", template: "/api/v1/alarm-rules", action: alarmauth.ActionRead},
 		{path: "/api/v1/alarm-rules/diff", template: "/api/v1/alarm-rules/diff", action: alarmauth.ActionRead},
+		{path: "/api/v1/alarm-rules/compile-edge", template: "/api/v1/alarm-rules/compile-edge", action: alarmauth.ActionRead},
 		{path: "/api/v1/alarm-rules/simulate", template: "/api/v1/alarm-rules/simulate", action: alarmauth.ActionRead},
 		{path: "/api/v1/alarm-rules/revisions", template: "/api/v1/alarm-rules/revisions", action: alarmauth.ActionRead},
 		{path: "/api/v1/alarm-rules/revisions/12/rollback", template: "/api/v1/alarm-rules/revisions/{revision}/rollback"},
@@ -293,6 +294,7 @@ func TestSafeLogPathNormalizesAlarmAndRoutingPaths(t *testing.T) {
 	cases := map[string]string{
 		"/api/v1/alarm-rules":                                                 "/api/v1/alarm-rules",
 		"/api/v1/alarm-rules/diff":                                            "/api/v1/alarm-rules/diff",
+		"/api/v1/alarm-rules/compile-edge":                                    "/api/v1/alarm-rules/compile-edge",
 		"/api/v1/alarm-rules/simulate":                                        "/api/v1/alarm-rules/simulate",
 		"/api/v1/alarm-rules/revisions":                                       "/api/v1/alarm-rules/revisions",
 		"/api/v1/alarm-rules/revisions/7/rollback":                            "/api/v1/alarm-rules/revisions/{revision}/rollback",

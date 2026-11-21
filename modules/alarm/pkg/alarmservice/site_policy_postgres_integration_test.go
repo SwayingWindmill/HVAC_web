@@ -550,4 +550,57 @@ func TestPostgresPublishDiffRollbackAndSiteRuleCacheLifecycle(t *testing.T) {
 	if wins != 1 || conflicts != 1 {
 		t.Fatalf("expected wins=1 conflicts=1, got wins=%d conflicts=%d", wins, conflicts)
 	}
+
+	// Publish a CLOUD_AND_EDGE WINDOW_AGG rule in v8 and verify Postgres CompileSiteRulesEdge round-trip.
+	winRuleID := "01910000-e510-7000-8000-000000000005"
+	winThresh := 12.5
+	winDraft := SiteRuleDraft{
+		RuleID:          winRuleID,
+		Title:           "冷冻水供水 P95 滑动窗口越限",
+		AlarmType:       "supply-window-p95",
+		Severity:        alarmmodel.SeverityMajor,
+		RuleKind:        RuleKindWindow,
+		ExecutionTarget: ExecutionTargetCloudAndEdge,
+		TriggerMode:     TriggerSimple,
+		Raise: RuleCondition{
+			Kind:          ConditionWindowAgg,
+			Reading:       &RuleReading{DeviceID: bundleDeviceID, PointCode: "supply_water_temperature"},
+			Agg:           WindowAggP95,
+			WindowType:    WindowTypeSliding,
+			WindowSeconds: 300,
+			MinSamples:    3,
+			Operator:      CompareGTE,
+			Threshold:     &winThresh,
+		},
+		Clear: RuleCondition{
+			Kind:     ConditionCompare,
+			Reading:  &RuleReading{DeviceID: bundleDeviceID, PointCode: "supply_water_temperature"},
+			Operator: CompareLTE,
+			Value:    10.0,
+		},
+		Actions: []RuleAction{{
+			Kind:           RuleActionProtectionCommand,
+			TriggerOn:      ActionTriggerRaise,
+			TargetDeviceID: "01910000-e520-7000-8000-000000000009",
+			Capability:     "STOP",
+		}},
+	}
+	pub8, err := store.PublishSiteRules(ctx, postgresTestTenantID, bundleSiteID, SiteRulePublishRequest{
+		ExpectedRevision: 7,
+		ChangeNote:       "启用边缘流式窗口规则",
+		Rules:            []SiteRuleDraft{holdDraft, retireDraft, durDraft, winDraft},
+	}, "principal:author-1", "值班工程师甲", t0.Add(37*time.Minute))
+	if err != nil || pub8.BundleRevision != 8 {
+		t.Fatalf("PublishSiteRules v8 failed: %v %#v", err, pub8)
+	}
+	compiledEdge, err := store.CompileSiteRulesEdge(ctx, postgresTestTenantID, bundleSiteID, nil, t0.Add(38*time.Minute))
+	if err != nil {
+		t.Fatalf("CompileSiteRulesEdge failed: %v", err)
+	}
+	if compiledEdge.BundleRevision != 8 || compiledEdge.EdgeRuleCount != 1 || compiledEdge.CloudOnlyCount != 3 || compiledEdge.Bundle.Rules[0].RuleID != winRuleID {
+		t.Fatalf("unexpected compiled edge bundle: %#v", compiledEdge)
+	}
+	if err := compiledEdge.Validate(); err != nil {
+		t.Fatalf("compiledEdge.Validate() error = %v", err)
+	}
 }

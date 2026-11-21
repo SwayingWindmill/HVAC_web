@@ -1,5 +1,6 @@
 import type {
   ConcentratorUnitShadow,
+  EdgeRuleBundle,
   GatewayAutonomyPolicy,
   GatewayConfigShadow,
   GatewayConfigShadowUpdateRequest,
@@ -1111,6 +1112,34 @@ export function buildValidatedShadowUpdateRequestFromDesired(
   };
 
   return { ok: true, request };
+}
+
+export interface EdgeRuleBundleSummary {
+  readonly configured: boolean;
+  readonly ruleCount: number;
+  readonly bundleRevision: number;
+  readonly shortDigest: string;
+  readonly compiledAt: string;
+}
+
+/** Summarizes a desired or reported edge rule bundle for gateway shadow cards and compilation sheets. */
+export function summarizeEdgeRuleBundle(bundle: EdgeRuleBundle | null | undefined): EdgeRuleBundleSummary {
+  if (!bundle) {
+    return {
+      configured: false,
+      ruleCount: 0,
+      bundleRevision: 0,
+      shortDigest: '',
+      compiledAt: '',
+    };
+  }
+  return {
+    configured: true,
+    ruleCount: bundle.rules.length,
+    bundleRevision: bundle.bundleRevision,
+    shortDigest: bundle.edgeBundleDigest.slice(0, 12),
+    compiledAt: bundle.compiledAt ?? '',
+  };
 }
 
 export function buildValidatedShadowUpdateRequest(

@@ -21,8 +21,13 @@ import {
   type AlarmRuleSimulationStep,
   type AlarmRuleSyncSummary,
   type AlarmRuleValidationIssue,
+  type EdgeRuleBundle,
+  type EdgeRuleCompileRequest,
+  type EdgeRuleCompileResult,
+  type EdgeRuleEligibility,
 } from '@/api/generated/platformGateway.gen';
 import { formatTelemetryDisplayValue, formatTelemetryUnit } from '@/domain/centralPlantTelemetry';
+import { WINDOW_AGG_LABELS, WINDOW_TYPE_LABELS } from './alarm-rule-dag';
 
 const client = createPlatformGatewayClient();
 
@@ -48,6 +53,10 @@ export type {
   AlarmRuleSimulationStep,
   AlarmRuleSyncSummary,
   AlarmRuleValidationIssue,
+  EdgeRuleBundle,
+  EdgeRuleCompileRequest,
+  EdgeRuleCompileResult,
+  EdgeRuleEligibility,
 };
 
 /** The rules the Site evaluates now. */
@@ -161,6 +170,18 @@ function predicate(condition: AlarmRuleCondition, unit: string | null | undefine
       }
       const phrases = { EQ: '等于', NE: '不等于', GT: '大于', GTE: '不低于', LT: '低于', LTE: '不高于' } as const;
       return `在 ${span}内变化${phrases[op]} ${formatValue(delta, unit)}`;
+    }
+    case 'WINDOW_AGG': {
+      const span = formatSeconds(condition.windowSeconds ?? 300);
+      const winType = WINDOW_TYPE_LABELS[condition.windowType ?? 'SLIDING'];
+      const agg = condition.agg ?? 'AVG';
+      const aggLabel = WINDOW_AGG_LABELS[agg];
+      const op = condition.operator ?? 'GT';
+      const phrases = { EQ: '等于', NE: '不等于', GT: '高于', GTE: '不低于', LT: '低于', LTE: '不高于' } as const;
+      const thresholdText = formatValue(condition.threshold, agg === 'COUNT' ? null : unit);
+      const minSamples = condition.minSamples ?? 1;
+      const minSuffix = minSamples > 1 ? `（至少 ${minSamples} 点）` : '';
+      return `近 ${span}${winType}${aggLabel}${phrases[op]} ${thresholdText}${minSuffix}`;
     }
     default:
       return '';
@@ -352,11 +373,13 @@ export function collectRuleReadings(rule: AlarmRule): AlarmRuleReading[] {
 const RULE_KIND_LABELS: Readonly<Record<NonNullable<AlarmRule['ruleKind']>, string>> = {
   THRESHOLD: '阈值规则',
   SLOPE: '斜率趋势',
+  WINDOW: '流式窗口',
   EXPRESSION: '多点表达式',
 };
 
 const OVERRIDDEN_FIELD_LABELS: Readonly<Record<string, string>> = {
   ruleKind: '规则类型',
+  executionTarget: '执行位置',
   title: '名称',
   summary: '说明',
   severity: '严重程度',
@@ -367,7 +390,11 @@ const OVERRIDDEN_FIELD_LABELS: Readonly<Record<string, string>> = {
   repeatCount: '连续次数',
   raise: '报警条件',
   'raise.delta': '变化幅度',
-  'raise.windowSeconds': '斜率窗口',
+  'raise.windowSeconds': '时间窗口',
+  'raise.agg': '聚合函数',
+  'raise.windowType': '窗口类型',
+  'raise.minSamples': '最小样本数',
+  'raise.threshold': '聚合阈值',
   'raise.value': '报警阈值',
   'raise.trigger': '触发阈值',
   clear: '恢复条件',
@@ -514,6 +541,23 @@ export async function rollbackSiteAlarmRules(
   }
 }
 
+export async function compileSiteAlarmRulesEdge(
+  siteId: string,
+  rules: readonly AlarmRuleDraft[] | undefined,
+  csrfToken: string,
+): Promise<EdgeRuleCompileResult> {
+  try {
+    const response = await client.compileSiteAlarmRulesEdge(
+      siteId,
+      rules ? { rules: [...rules] } : {},
+      csrfToken,
+    );
+    return response.data.data;
+  } catch (error) {
+    throw toAuthoringError(error, '边缘规则包编译失败，请检查规则配置后重试');
+  }
+}
+
 export const BUNDLE_SOURCE_LABELS: Readonly<Record<AlarmRuleBundleRevision['source'], string>> = {
   WEB_WORKBENCH: '工作台热发布',
   CLI_SYNC: '规则文件同步',
@@ -531,6 +575,7 @@ export const CHANGED_FIELD_LABELS: Readonly<Record<string, string>> = {
   title: '规则名称',
   severity: '严重级别',
   ruleKind: '规则类型',
+  executionTarget: '执行位置',
   triggerMode: '触发方式',
   durationSeconds: '持续时长',
   repeatCount: '连续次数',

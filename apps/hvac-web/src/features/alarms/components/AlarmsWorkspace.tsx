@@ -169,6 +169,8 @@ export function AlarmsWorkspace() {
   const deviceNames = useDeviceNames(site.id);
   const myId = principal.principalId;
   const canManage = principal.authorization.capabilities.includes('schedule.manage');
+  const canReadGatewayShadow = principal.authorization.capabilities.includes('device.read');
+  const canManageGatewayShadow = principal.authorization.capabilities.includes('device.write');
   const now = useNow(30_000);
   const { acknowledge } = useAlarmActions();
   const [searchDraft, setSearchDraft] = useState(search.q ?? '');
@@ -273,6 +275,8 @@ export function AlarmsWorkspace() {
             key={site.id}
             siteId={site.id}
             canManage={canManage}
+            canReadGatewayShadow={canReadGatewayShadow}
+            canManageGatewayShadow={canManageGatewayShadow}
             csrfToken={principal.session.csrfToken}
             timeZone={site.timezone}
           />

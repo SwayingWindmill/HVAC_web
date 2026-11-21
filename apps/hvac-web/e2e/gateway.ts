@@ -265,11 +265,199 @@ function digestAlarmRules(rules: readonly Json[]): string {
 
 function buildRuleDiffFields(before: Json, after: Json): string[] {
   const fields = [
-    'title', 'alarmType', 'summary', 'severity', 'ruleKind', 'dependsOnRuleIds',
+    'title', 'alarmType', 'summary', 'severity', 'ruleKind', 'executionTarget', 'dependsOnRuleIds',
     'dependencyGate', 'actions', 'qualityPolicy', 'freshnessSeconds', 'triggerMode',
     'durationSeconds', 'repeatCount', 'raise', 'clear',
   ];
   return fields.filter((field) => JSON.stringify(before[field] ?? null) !== JSON.stringify(after[field] ?? null));
+}
+
+function findUnsupportedEdgeConditionKindMock(cond: Json): string | null {
+  const kind = String(cond?.kind ?? '');
+  if (kind === 'AND' || kind === 'OR') {
+    for (const child of (Array.isArray(cond?.children) ? cond.children : [])) {
+      const bad = findUnsupportedEdgeConditionKindMock(child);
+      if (bad) return bad;
+    }
+    return null;
+  }
+  if (['COMPARE', 'RANGE', 'HYSTERESIS', 'SLOPE', 'WINDOW_AGG', 'EXPRESSION'].includes(kind)) {
+    return null;
+  }
+  return kind;
+}
+
+function compileEdgeConditionMock(cond: Json): Json {
+  const kind = String(cond?.kind ?? '');
+  if (kind === 'AND' || kind === 'OR') {
+    return {
+      kind,
+      children: (Array.isArray(cond?.children) ? cond.children : []).map(compileEdgeConditionMock),
+    };
+  }
+  if (kind === 'EXPRESSION') {
+    const inputs: Record<string, string> = {};
+    for (const [k, reading] of Object.entries((cond?.inputs ?? {}) as Record<string, Json>)) {
+      inputs[k] = `${reading.deviceId}/${reading.pointCode}`;
+    }
+    return { kind: 'EXPRESSION', expression: cond.expression, inputs };
+  }
+  const input = cond?.reading ? `${cond.reading.deviceId}/${cond.reading.pointCode}` : undefined;
+  if (kind === 'COMPARE') {
+    const v = cond.value;
+    const typed = typeof v === 'number'
+      ? { type: 'NUMBER', number: v }
+      : typeof v === 'boolean'
+        ? { type: 'BOOLEAN', boolean: v }
+        : { type: 'STRING', string: String(v ?? '') };
+    return { kind: 'COMPARE', input, operator: cond.operator, value: typed };
+  }
+  if (kind === 'RANGE') {
+    return { kind: 'RANGE', input, minimum: cond.minimum, maximum: cond.maximum };
+  }
+  if (kind === 'HYSTERESIS') {
+    return { kind: 'HYSTERESIS', input, direction: cond.direction ?? 'ABOVE', trigger: cond.trigger, reset: cond.reset };
+  }
+  if (kind === 'SLOPE') {
+    return { kind: 'SLOPE', input, operator: cond.operator, delta: cond.delta, windowSeconds: cond.windowSeconds };
+  }
+  return {
+    kind: 'WINDOW_AGG',
+    input,
+    agg: cond.agg,
+    windowType: cond.windowType,
+    windowSeconds: cond.windowSeconds,
+    minSamples: cond.minSamples ?? 1,
+    operator: cond.operator,
+    threshold: cond.threshold,
+  };
+}
+
+function compileSiteRulesEdgeMock(
+  siteId: string,
+  bundleRevision: number,
+  bundleDigest: string,
+  rules: readonly Json[],
+  now: string,
+): { readonly issues: Json[]; readonly result?: Json } {
+  const { compiled, graph, issues } = compileRuleHopDepths(rules);
+  if (issues.length > 0) {
+    return { issues };
+  }
+  const byId = new Map(compiled.map((r) => [String(r.ruleId), r]));
+  const compiledEdgeSet = new Set<string>();
+  const eligibility: Json[] = [];
+  const edgeRules: Json[] = [];
+
+  for (const ruleId of graph.topologicalOrder as string[]) {
+    const r = byId.get(ruleId);
+    if (!r) continue;
+    const target = (r.executionTarget as 'CLOUD' | 'EDGE' | 'CLOUD_AND_EDGE' | undefined) ?? 'CLOUD';
+    let compiledOk = true;
+    let reasonCode: string | undefined;
+    let message: string | undefined;
+
+    if (target === 'CLOUD') {
+      compiledOk = false;
+      reasonCode = 'CLOUD_ONLY_TARGET';
+      message = 'rule executionTarget is CLOUD';
+    } else {
+      const badRaise = findUnsupportedEdgeConditionKindMock(r.raise);
+      const badClear = findUnsupportedEdgeConditionKindMock(r.clear);
+      if (badRaise || badClear) {
+        compiledOk = false;
+        reasonCode = 'EDGE_UNSUPPORTED_CONDITION_KIND';
+        message = `condition kind ${badRaise ?? badClear} is not supported on edge runtime`;
+      } else if (target === 'EDGE' && Array.isArray(r.actions) && r.actions.some((a: Json) => a.kind !== 'PROTECTION_COMMAND')) {
+        compiledOk = false;
+        reasonCode = 'EDGE_CLOUD_ONLY_ACTION';
+        message = 'EDGE rule cannot declare cloud-only action';
+      } else if (
+        (r.dependencyGate === 'ALL_ACTIVE' || r.dependencyGate === 'ANY_ACTIVE')
+        && Array.isArray(r.dependsOnRuleIds)
+        && r.dependsOnRuleIds.some((dep: string) => !compiledEdgeSet.has(dep))
+      ) {
+        compiledOk = false;
+        reasonCode = 'EDGE_UPSTREAM_NOT_ON_EDGE';
+        message = 'upstream rule does not compile to edge';
+      } else if (edgeRules.length >= 128) {
+        compiledOk = false;
+        reasonCode = 'EDGE_BUNDLE_LIMIT_EXCEEDED';
+        message = 'edge rule bundle supports at most 128 rules';
+      }
+    }
+
+    eligibility.push({
+      ruleId,
+      title: r.title,
+      executionTarget: target,
+      compiled: compiledOk,
+      ...(reasonCode ? { reasonCode, message } : {}),
+    });
+    if (!compiledOk) continue;
+    compiledEdgeSet.add(ruleId);
+    const edgeDeps = (r.dependencyGate === 'ALL_ACTIVE' || r.dependencyGate === 'ANY_ACTIVE') && Array.isArray(r.dependsOnRuleIds)
+      ? [...r.dependsOnRuleIds.filter((dep: string) => compiledEdgeSet.has(dep))].sort()
+      : [];
+    const protActions = (Array.isArray(r.actions) ? r.actions : [])
+      .filter((a: Json) => a.kind === 'PROTECTION_COMMAND')
+      .map((a: Json) => ({
+        kind: 'PROTECTION_COMMAND',
+        ...(a.triggerOn ? { triggerOn: a.triggerOn } : {}),
+        targetDeviceId: a.targetDeviceId,
+        ...(a.targetPointCode ? { targetPointCode: a.targetPointCode } : {}),
+        capability: a.capability,
+        ...(a.parameters ? { parameters: a.parameters } : {}),
+      }));
+    edgeRules.push({
+      ruleId,
+      ...(r.alarmType ? { alarmType: r.alarmType } : {}),
+      title: r.title,
+      severity: r.severity,
+      executionTarget: target,
+      ...(edgeDeps.length > 0 ? { dependsOnRuleIds: edgeDeps, dependencyGate: r.dependencyGate } : {}),
+      qualityPolicy: r.qualityPolicy ?? 'VALID_ONLY',
+      freshnessSeconds: r.freshnessSeconds ?? 900,
+      triggerMode: r.triggerMode,
+      ...(r.triggerMode === 'DURATION' ? { durationSeconds: r.durationSeconds ?? 1 } : {}),
+      ...(r.triggerMode === 'REPEATING' ? { repeatCount: r.repeatCount ?? 1 } : {}),
+      raise: compileEdgeConditionMock(r.raise),
+      clear: compileEdgeConditionMock(r.clear),
+      ...(protActions.length > 0 ? { actions: protActions } : {}),
+    });
+  }
+
+  const digestRules = [...edgeRules]
+    .map((rule): Json => ({
+      ...rule,
+      ...(Array.isArray(rule.dependsOnRuleIds) ? { dependsOnRuleIds: [...rule.dependsOnRuleIds].sort() } : {}),
+    }))
+    .sort((a, b) => (a.ruleId < b.ruleId ? -1 : a.ruleId > b.ruleId ? 1 : 0));
+  const digestInput = { schemaVersion: 1, siteId, bundleRevision, ...(bundleDigest ? { bundleDigest } : {}), rules: digestRules };
+  const edgeBundleDigest = createHash('sha256').update(JSON.stringify(digestInput)).digest('hex');
+  const bundle: Json = {
+    schemaVersion: 1,
+    siteId,
+    bundleRevision,
+    ...(bundleDigest ? { bundleDigest } : {}),
+    edgeBundleDigest,
+    compiledAt: now,
+    rules: edgeRules,
+  };
+  return {
+    issues: [],
+    result: {
+      siteId,
+      bundleRevision,
+      ...(bundleDigest ? { bundleDigest } : {}),
+      edgeBundleDigest,
+      compiledAt: now,
+      edgeRuleCount: edgeRules.length,
+      cloudOnlyCount: rules.length - edgeRules.length,
+      eligibility,
+      bundle,
+    },
+  };
 }
 
 function compileRuleHopDepths(rules: readonly Json[]): {
@@ -336,6 +524,7 @@ function compileRuleHopDepths(rules: readonly Json[]): {
       title: r.title,
       severity: r.severity,
       ...(r.ruleKind ? { ruleKind: r.ruleKind } : {}),
+      executionTarget: r.executionTarget ?? 'CLOUD',
       hopDepth,
       dependsOnRuleIds: deps,
       actionCount: Array.isArray(r.actions) ? r.actions.length : 0,
@@ -2936,6 +3125,42 @@ export class Gateway {
       const { diff } = this.evaluateAlarmRuleBundleDraft(drafts);
       return { body: { data: diff, meta: { requestId: 'e2e' } } };
     }
+    if (method === 'POST' && path === '/api/v1/alarm-rules/compile-edge') {
+      const activePrincipal = this.principalOverride ?? principal;
+      const expectedCsrf = activePrincipal.session?.csrfToken ?? principal.session.csrfToken;
+      if (!csrfToken || csrfToken !== expectedCsrf) {
+        return { status: 403, body: { type: 'about:blank', title: 'Forbidden', status: 403, detail: 'CSRF token required.', instance: path, code: 'CSRF_INVALID', traceId: '0'.repeat(32), retryable: false } };
+      }
+      if (query.get('siteId') !== SITE_ID) {
+        return { status: 404, body: { type: 'about:blank', title: 'Not Found', status: 404, detail: 'Site not found.', instance: path, code: 'SITE_NOT_FOUND', traceId: '0'.repeat(32), retryable: false } };
+      }
+      const hasDrafts = Array.isArray(body?.rules);
+      const sourceRules = hasDrafts ? body.rules : this.alarmRules;
+      const compiled = compileSiteRulesEdgeMock(
+        SITE_ID,
+        this.alarmRuleBundleRevision,
+        hasDrafts ? '' : this.alarmRuleBundleDigest,
+        sourceRules,
+        now,
+      );
+      if (compiled.issues.length > 0) {
+        const hasGraphErr = (compiled.issues as Json[]).some((i) => ['RULE_CYCLE_DETECTED', 'UNKNOWN_DEPENDENCY', 'MAX_LINKAGE_HOPS_EXCEEDED'].includes(String(i.code)));
+        return {
+          status: 422,
+          body: {
+            type: 'about:blank',
+            title: 'Unprocessable Entity',
+            status: 422,
+            detail: String(compiled.issues[0]?.message ?? 'Invalid rule bundle draft.'),
+            instance: path,
+            code: hasGraphErr ? 'ALARM_RULE_GRAPH_INVALID' : 'ALARM_RULE_DRAFT_INVALID',
+            traceId: '0'.repeat(32),
+            retryable: false,
+          },
+        };
+      }
+      return { body: { data: compiled.result, meta: { requestId: 'e2e' } } };
+    }
     if (method === 'PUT' && path === '/api/v1/alarm-rules') {
       const denied = this.authorizeAlarmRulePublish(path, csrfToken);
       if (denied) return denied;
@@ -4030,6 +4255,27 @@ export class Gateway {
         if (err) return refuse(422, 'CONFIG_SHADOW_INVALID', err);
       }
 
+      const hasEdgeRuleBundle = Boolean(body && Object.prototype.hasOwnProperty.call(body, 'edgeRuleBundle') && body.edgeRuleBundle !== undefined);
+      if (hasEdgeRuleBundle && body?.edgeRuleBundle !== null) {
+        const bundleObj = body?.edgeRuleBundle;
+        if (
+          !bundleObj
+          || typeof bundleObj !== 'object'
+          || !Number.isInteger(bundleObj.schemaVersion)
+          || bundleObj.schemaVersion < 1
+          || !Number.isInteger(bundleObj.bundleRevision)
+          || bundleObj.bundleRevision < 0
+          || typeof bundleObj.siteId !== 'string'
+          || bundleObj.siteId.toLowerCase() !== SITE_ID
+          || !Array.isArray(bundleObj.rules)
+          || bundleObj.rules.length > 128
+          || typeof bundleObj.edgeBundleDigest !== 'string'
+          || !/^[a-f0-9]{64}$/.test(bundleObj.edgeBundleDigest)
+        ) {
+          return refuse(422, 'CONFIG_SHADOW_INVALID', 'edgeRuleBundle invalid');
+        }
+      }
+
       const nextRev = currentRev + 1;
       const nextDriverConfigs = hasDriverConfigs
         ? body!.driverConfigs
@@ -4039,6 +4285,11 @@ export class Gateway {
         : shadow.desired && Object.prototype.hasOwnProperty.call(shadow.desired, 'autonomyPolicy')
           ? shadow.desired.autonomyPolicy
           : undefined;
+      const nextEdgeRuleBundle = hasEdgeRuleBundle
+        ? body!.edgeRuleBundle
+        : shadow.desired && Object.prototype.hasOwnProperty.call(shadow.desired, 'edgeRuleBundle')
+          ? shadow.desired.edgeRuleBundle
+          : undefined;
 
       const desired: Json = {
         desiredRevision: nextRev,
@@ -4047,6 +4298,7 @@ export class Gateway {
         concentratorConfigs: body?.concentratorConfigs ?? shadow.desired?.concentratorConfigs ?? {},
         ...(nextDriverConfigs !== undefined ? { driverConfigs: nextDriverConfigs } : {}),
         ...(nextAutonomyPolicy !== undefined ? { autonomyPolicy: nextAutonomyPolicy } : {}),
+        ...(nextEdgeRuleBundle !== undefined ? { edgeRuleBundle: nextEdgeRuleBundle } : {}),
         updatedBy: activePrincipal.principalId,
         reason,
         createdAt: shadow.desired?.createdAt ?? now,

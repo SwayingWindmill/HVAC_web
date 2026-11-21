@@ -28,13 +28,14 @@ import {
   describePlannedActionSummary,
   summarizeRuleActions,
 } from '../alarm-operations';
-import { ruleToDraft } from '../alarm-rule-dag';
+import { EXECUTION_TARGET_LABELS, ruleToDraft } from '../alarm-rule-dag';
 import {
   collectRuleReadings,
   describeRuleLinkage,
   describeRuleOrigin,
   simulateSiteAlarmRule,
   type AlarmRule,
+  type AlarmRuleCondition,
   type AlarmRuleReading,
   type AlarmRuleSimulationResult,
   type ReadingNames,
@@ -65,9 +66,23 @@ interface SimulationStepDraft {
   readonly values: Record<string, string>;
 }
 
+function collectWindowThresholds(cond: AlarmRuleCondition, out: Map<string, number>): void {
+  if (cond.kind === 'WINDOW_AGG' && cond.reading && typeof cond.threshold === 'number' && Number.isFinite(cond.threshold)) {
+    const k = readingKey(cond.reading);
+    if (!out.has(k)) out.set(k, cond.threshold);
+  }
+  cond.children?.forEach((child) => collectWindowThresholds(child, out));
+}
+
 function defaultValuesForRule(rule: AlarmRule): Record<string, string> {
+  const windowThresholds = new Map<string, number>();
+  collectWindowThresholds(rule.raise, windowThresholds);
   const readings = collectRuleReadings(rule);
-  return Object.fromEntries(readings.map((reading) => [readingKey(reading), defaultReadingValue(reading)]));
+  return Object.fromEntries(readings.map((reading) => {
+    const key = readingKey(reading);
+    const threshold = windowThresholds.get(key);
+    return [key, threshold !== undefined ? String(threshold) : defaultReadingValue(reading)];
+  }));
 }
 
 function createStepDraft(counter: { current: number }, values: Record<string, string>): SimulationStepDraft {
@@ -236,7 +251,7 @@ export function AlarmRuleSimulateSheet({
           <SheetTitle>{rule ? `${isDraft ? '规则草稿模拟试算' : '规则模拟试算'}：${rule.title}` : '规则模拟试算'}</SheetTitle>
           <SheetDescription>
             {rule
-              ? `${isDraft ? '当前未发布草稿 · ' : ''}${describeRuleOrigin(rule)} · ${describeRuleLinkage(rule, titleByRuleId)}${actionsSummary ? ` · ${actionsSummary}` : ''}。在内存中推演连续采样序列，不产生真实告警。`
+              ? `${isDraft ? '当前未发布草稿 · ' : ''}${describeRuleOrigin(rule)} · ${EXECUTION_TARGET_LABELS[rule.executionTarget ?? 'CLOUD']} · ${describeRuleLinkage(rule, titleByRuleId)}${actionsSummary ? ` · ${actionsSummary}` : ''}。在内存中推演连续采样序列，不产生真实告警。`
               : '输入多步采样值验证规则触发与恢复条件。'}
           </SheetDescription>
         </SheetHeader>

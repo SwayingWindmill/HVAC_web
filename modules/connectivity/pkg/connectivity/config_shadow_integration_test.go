@@ -5,9 +5,11 @@ import (
 	"errors"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/connectivity"
 )
@@ -532,6 +534,141 @@ func TestConfigShadowPostgresRLSConcurrencyAndDrift(t *testing.T) {
 	})
 	if err != nil || removedRepeat.Changed || removedRepeat.Skipped || removedRepeat.Shadow.Desired.DesiredRevision != 15 {
 		t.Fatalf("expected idempotent repeat remove at rev 15, got %+v err=%v", removedRepeat, err)
+	}
+
+	// Edge rule bundle: PUT desired, Pull, Report SYNCED/DRIFTED, preserve on partial PUT & concentrator upsert, explicit null clear.
+	trig := 45.0
+	rst := 43.0
+	edgeBundle := &edgecontrol.EdgeRuleBundle{
+		SchemaVersion:  edgecontrol.EdgeRuleSchemaVersion,
+		SiteID:         siteA,
+		BundleRevision: 2,
+		BundleDigest:   strings.Repeat("b", 64),
+		CompiledAt:     "2026-11-22T00:00:00Z",
+		Rules: []edgecontrol.CompiledEdgeRule{{
+			RuleID:           "0194f000-4000-7000-8000-000000000001",
+			AlarmType:        "CHILLER_HIGH_TEMP",
+			Title:            "High Supply Temp",
+			Severity:         "CRITICAL",
+			ExecutionTarget:  edgecontrol.EdgeTargetCloudAndEdge,
+			QualityPolicy:    edgecontrol.EdgeQualityValidOnly,
+			FreshnessSeconds: 30,
+			TriggerMode:      edgecontrol.EdgeTriggerSimple,
+			Raise: edgecontrol.EdgeCondition{
+				Kind:      edgecontrol.EdgeConditionHysteresis,
+				Input:     "0194f000-5000-7000-8000-000000000001/chilled_water_supply_temperature",
+				Direction: edgecontrol.EdgeDirectionAbove,
+				Trigger:   &trig,
+				Reset:     &rst,
+			},
+			Clear: edgecontrol.EdgeCondition{
+				Kind:     edgecontrol.EdgeConditionCompare,
+				Input:    "0194f000-5000-7000-8000-000000000001/chilled_water_supply_temperature",
+				Operator: edgecontrol.EdgeCompareLTE,
+				Value:    &edgecontrol.EdgeTypedValue{Type: edgecontrol.EdgeValueNumber, Number: 43},
+			},
+		}},
+	}
+	bundleDigest, err := edgeBundle.ComputeDigest()
+	if err != nil {
+		t.Fatalf("ComputeDigest failed: %v", err)
+	}
+	edgeBundle.EdgeBundleDigest = bundleDigest
+
+	rev15 := int64(15)
+	wrongSiteBundle := edgeBundle.Clone()
+	wrongSiteBundle.SiteID = "0194f000-2000-7000-8000-000000000099"
+	wrongDigest, _ := wrongSiteBundle.ComputeDigest()
+	wrongSiteBundle.EdgeBundleDigest = wrongDigest
+	if _, err := store.UpdateGatewayDesiredConfig(ctx, claimsA, gatewayA, connectivity.UpdateDesiredConfigInput{
+		ExpectedDesiredRevision: &rev15,
+		EdgeRuleBundle:          connectivity.OptionalEdgeRuleBundle{Set: true, Value: wrongSiteBundle},
+		Reason:                  "reject cross-site edgeRuleBundle",
+	}); !errors.Is(err, connectivity.ErrConfigShadowInvalid) {
+		t.Fatalf("expected ErrConfigShadowInvalid for cross-site edgeRuleBundle, got %v", err)
+	}
+
+	edgePut, err := store.UpdateGatewayDesiredConfig(ctx, claimsA, gatewayA, connectivity.UpdateDesiredConfigInput{
+		ExpectedDesiredRevision: &rev15,
+		EdgeRuleBundle:          connectivity.OptionalEdgeRuleBundle{Set: true, Value: edgeBundle},
+		Reason:                  "set edgeRuleBundle",
+	})
+	if err != nil || edgePut.Desired == nil || edgePut.Desired.DesiredRevision != 16 || edgePut.Desired.EdgeRuleBundle == nil || edgePut.Desired.EdgeRuleBundle.EdgeBundleDigest != bundleDigest {
+		t.Fatalf("rev 16 edgeRuleBundle update = %+v, err=%v", edgePut, err)
+	}
+	pulledRev16, err := store.PullGatewayDesiredConfig(ctx, gatewayA, 15)
+	if err != nil || !pulledRev16.HasDelta || pulledRev16.Desired == nil || pulledRev16.Desired.EdgeRuleBundle == nil || len(pulledRev16.Desired.EdgeRuleBundle.Rules) != 1 {
+		t.Fatalf("PullGatewayDesiredConfig rev 16 = %+v, err=%v", pulledRev16, err)
+	}
+	rev16Partial, err := store.ReportGatewayAppliedConfig(ctx, gatewayA, connectivity.GatewayShadowReportInput{
+		ReportedRevision: 16,
+		AppliedStatus:    connectivity.AppliedStatusApplied,
+		PointMappings:    mappings,
+		SamplingPolicies: policies,
+		EdgeRuleBundle:   edgeBundle.Clone(),
+	})
+	if err != nil || rev16Partial.Reported == nil || rev16Partial.Reported.AppliedStatus != connectivity.AppliedStatusPartial || rev16Partial.SyncStatus != connectivity.ShadowSyncStatusDrifted {
+		t.Fatalf("expected rev 16 edge report downgraded to PARTIAL due to rev-10 concentrator delta, got %+v err=%v", rev16Partial, err)
+	}
+	if err := store.RecordConcentratorReconcileResult(ctx, tenantA, gatewayA, 16, pulledRev16.Desired.ConcentratorConfigs, nil, nil, nil, false); err != nil {
+		t.Fatalf("RecordConcentratorReconcileResult rev 16 failed: %v", err)
+	}
+	syncedRev16, err := store.GetGatewayConfigShadowForOperator(ctx, claimsA, gatewayA)
+	if err != nil || syncedRev16.SyncStatus != connectivity.ShadowSyncStatusSynced || len(syncedRev16.Drift) != 0 || syncedRev16.Reported == nil || syncedRev16.Reported.AppliedStatus != connectivity.AppliedStatusApplied || syncedRev16.Reported.EdgeRuleBundle == nil || syncedRev16.Reported.EdgeRuleBundle.EdgeBundleDigest != bundleDigest {
+		t.Fatalf("expected SYNCED with edgeRuleBundle preserved after concentrator reconcile, got %+v err=%v", syncedRev16, err)
+	}
+
+	driftedBundle := edgeBundle.Clone()
+	driftedBundle.BundleRevision = 1
+	driftedDigest, _ := driftedBundle.ComputeDigest()
+	driftedBundle.EdgeBundleDigest = driftedDigest
+	driftedErr := "edge rule mismatch"
+	driftedRev16, err := store.ReportGatewayAppliedConfig(ctx, gatewayA, connectivity.GatewayShadowReportInput{
+		ReportedRevision: 16,
+		AppliedStatus:    connectivity.AppliedStatusPartial,
+		PointMappings:    mappings,
+		SamplingPolicies: policies,
+		EdgeRuleBundle:   driftedBundle,
+		DriftDetails: []connectivity.DriftDetail{{
+			Section: connectivity.DriftSectionEdgeRules,
+			Target:  "edgeRuleBundle",
+			Reason:  connectivity.DriftReasonEdgeApplyFailed,
+			Detail:  "bundle reload failed",
+		}},
+		ErrorMessage: &driftedErr,
+	})
+	if err != nil || driftedRev16.SyncStatus != connectivity.ShadowSyncStatusDrifted || len(driftedRev16.Drift) != 2 || driftedRev16.Drift[0].Section != connectivity.DriftSectionEdgeRules || driftedRev16.Drift[1].Section != connectivity.DriftSectionEdgeRules {
+		t.Fatalf("expected DRIFTED with 2 EDGE_RULES entries for mismatched edgeRuleBundle, got %+v err=%v", driftedRev16, err)
+	}
+
+	rev16 := int64(16)
+	preservedRev17, err := store.UpdateGatewayDesiredConfig(ctx, claimsA, gatewayA, connectivity.UpdateDesiredConfigInput{
+		ExpectedDesiredRevision: &rev16,
+		Reason:                  "preserve edgeRuleBundle on partial PUT",
+	})
+	if err != nil || preservedRev17.Desired == nil || preservedRev17.Desired.DesiredRevision != 17 || preservedRev17.Desired.EdgeRuleBundle == nil || preservedRev17.Desired.EdgeRuleBundle.EdgeBundleDigest != bundleDigest {
+		t.Fatalf("partial PUT omitting edgeRuleBundle should preserve it, got %+v err=%v", preservedRev17, err)
+	}
+
+	paramsRev18 := paramsRename
+	paramsRev18.RfTxPower = 24
+	concRev18, err := store.UpsertConcentratorShadowState(ctx, tenantA, gatewayA, 7, &paramsRev18, nil, actorA, "preserve edgeRuleBundle on concentrator upsert", false)
+	if err != nil || concRev18 != 18 {
+		t.Fatalf("UpsertConcentratorShadowState rev=%d err=%v", concRev18, err)
+	}
+	afterConcEdge, err := store.GetGatewayConfigShadowForOperator(ctx, claimsA, gatewayA)
+	if err != nil || afterConcEdge.Desired == nil || afterConcEdge.Desired.EdgeRuleBundle == nil {
+		t.Fatalf("expected UpsertConcentratorShadowState to preserve edgeRuleBundle, got %+v err=%v", afterConcEdge, err)
+	}
+
+	rev18 := int64(18)
+	clearedEdge, err := store.UpdateGatewayDesiredConfig(ctx, claimsA, gatewayA, connectivity.UpdateDesiredConfigInput{
+		ExpectedDesiredRevision: &rev18,
+		EdgeRuleBundle:          connectivity.OptionalEdgeRuleBundle{Set: true, Value: nil},
+		Reason:                  "clear edgeRuleBundle",
+	})
+	if err != nil || clearedEdge.Desired == nil || clearedEdge.Desired.DesiredRevision != 19 || clearedEdge.Desired.EdgeRuleBundle != nil || len(clearedEdge.Desired.PointMappings) == 0 {
+		t.Fatalf("expected edgeRuleBundle cleared to nil while preserving mappings, got %+v err=%v", clearedEdge, err)
 	}
 
 	// Query without app.tenant_id returns 0 rows under FORCE ROW LEVEL SECURITY.

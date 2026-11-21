@@ -282,3 +282,107 @@ func TestEdgeControlRuntimeAutonomyPolicyAndOfflineYield(t *testing.T) {
 		t.Fatalf("expected cloud setpoint 9.5C after reconnect yield, got %v", got)
 	}
 }
+
+func TestEdgeControlRuntimeRuleEnginePriorityAndOfflineAlarmEvents(t *testing.T) {
+	t.Parallel()
+
+	config := loadGeneratedCentralPlantConfig(t)
+	at := time.Unix(5500, 0).UTC()
+	plant := NewPlant(config.Plant, config.Scenario, at)
+	runtime, err := NewEdgeControlRuntime(config, plant)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	initialTemp, ok := plant.Snapshot().Devices[config.Plant.Chiller.ID]["leavingChilledWaterTemperatureC"].(float64)
+	if !ok {
+		t.Fatalf("missing initial chiller leaving temperature in plant snapshot: %#v", plant.Snapshot().Devices[config.Plant.Chiller.ID])
+	}
+	thresh := initialTemp + 5.0
+	clearThresh := initialTemp + 6.0
+	bundle := &edgecontrol.EdgeRuleBundle{
+		SchemaVersion:  edgecontrol.EdgeRuleSchemaVersion,
+		SiteID:         "0194f000-2000-7000-8000-000000000001",
+		BundleRevision: 7,
+		CompiledAt:     "2026-11-22T00:00:00Z",
+		Rules: []edgecontrol.CompiledEdgeRule{{
+			RuleID:           "0194f000-4000-7000-8000-000000000101",
+			AlarmType:        "EDGE_WINDOW_PROTECTION",
+			Title:            "Chiller Leaving Temp Window Protection",
+			Severity:         "CRITICAL",
+			ExecutionTarget:  edgecontrol.EdgeTargetCloudAndEdge,
+			QualityPolicy:    edgecontrol.EdgeQualityValidOnly,
+			FreshnessSeconds: 30,
+			TriggerMode:      edgecontrol.EdgeTriggerSimple,
+			Raise: edgecontrol.EdgeCondition{
+				Kind:          edgecontrol.EdgeConditionWindowAgg,
+				Input:         config.Plant.Chiller.ID + "/leaving_chilled_water_temperature",
+				Agg:           edgecontrol.EdgeWindowAggAvg,
+				WindowType:    edgecontrol.EdgeWindowSliding,
+				WindowSeconds: 30,
+				MinSamples:    2,
+				Operator:      edgecontrol.EdgeCompareLT,
+				Threshold:     &thresh,
+			},
+			Clear: edgecontrol.EdgeCondition{
+				Kind:     edgecontrol.EdgeConditionCompare,
+				Input:    config.Plant.Chiller.ID + "/leaving_chilled_water_temperature",
+				Operator: edgecontrol.EdgeCompareGT,
+				Value:    &edgecontrol.EdgeTypedValue{Type: edgecontrol.EdgeValueNumber, Number: clearThresh},
+			},
+			Actions: []edgecontrol.EdgeRuleAction{{
+				Kind:           edgecontrol.EdgeRuleActionProtectionCommand,
+				TriggerOn:      edgecontrol.EdgeActionTriggerRaise,
+				TargetDeviceID: config.Plant.ChilledWaterPump.ID,
+				Capability:     "SET_FREQUENCY",
+				Parameters:     map[string]float64{"frequencyHz": 42.5},
+			}},
+		}},
+	}
+	digest, err := bundle.ComputeDigest()
+	if err != nil {
+		t.Fatalf("ComputeDigest() error = %v", err)
+	}
+	bundle.EdgeBundleDigest = digest
+
+	if err := runtime.ApplyEdgeRuleBundle(bundle); err != nil {
+		t.Fatalf("ApplyEdgeRuleBundle() error = %v", err)
+	}
+	runtime.NotifyCloudContact(false, at)
+
+	// Cycle 1 collects 1st sample (< minSamples=2) -> should not raise yet.
+	runtime.RunCycle(context.Background(), at.Add(time.Second))
+	if st, ok := runtime.EdgeRuleStatus(); !ok || st.ActiveRuleCount != 0 {
+		t.Fatalf("expected 0 active rules after 1 sample (< minSamples=2), got %+v", st)
+	}
+
+	// Advance plant clock so sample 2 has a distinct ObservedAt, then satisfy minSamples=2
+	// AND race with lower-priority cloud command (priority 100 vs 15).
+	plant.Tick(time.Second)
+	cloudRes := runEdgeCommand(t, runtime, at.Add(2*time.Second), "cmd-overridden-by-edge-rule", config.Plant.ChilledWaterPump.ID, "SET_FREQUENCY", map[string]float64{"frequencyHz": 31.0})
+	if cloudRes.WinnerControllerID != edgecontrol.DefaultEdgeRuleControllerID {
+		t.Fatalf("expected edge rule engine (priority 15) to override cloud intent (priority 100), got %+v", cloudRes)
+	}
+	plant.Tick(30 * time.Second)
+	if got := plant.Snapshot().Devices[config.Plant.ChilledWaterPump.ID]["frequencyHz"]; got != 42.5 {
+		t.Fatalf("expected pump driven to edge protection frequency 42.5Hz, got %v", got)
+	}
+	st, ok := runtime.EdgeRuleStatus()
+	if !ok || !st.Offline || st.RuleCount != 1 || st.ActiveRuleCount != 1 || st.EdgeBundleDigest != digest {
+		t.Fatalf("unexpected EdgeRuleStatus after firing: %+v (ok=%v)", st, ok)
+	}
+	events := runtime.DrainEdgeRuleEvents()
+	if len(events) != 1 || events[0].EventType != edgecontrol.EdgeRuleEventRaised || !events[0].Offline || len(events[0].TriggeredActions) != 1 {
+		t.Fatalf("expected 1 offline EDGE_RULE_ALARM_RAISED event with action, got %+v", events)
+	}
+
+	// Clearing edge rule bundle yields priority back to cloud commands.
+	if err := runtime.ApplyEdgeRuleBundle(nil); err != nil {
+		t.Fatalf("ApplyEdgeRuleBundle(nil) error = %v", err)
+	}
+	runtime.NotifyCloudContact(true, at.Add(4*time.Second))
+	cloudAllowed := runEdgeCommand(t, runtime, at.Add(4*time.Second), "cmd-after-rule-clear", config.Plant.ChilledWaterPump.ID, "SET_FREQUENCY", map[string]float64{"frequencyHz": 31.0})
+	if !cloudAllowed.Accepted || cloudAllowed.WinnerControllerID != "cloud-command-intent" {
+		t.Fatalf("expected cloud intent allowed after bundle clear, got %+v", cloudAllowed)
+	}
+}

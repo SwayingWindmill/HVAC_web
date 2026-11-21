@@ -644,7 +644,7 @@ func decodeSampleWindow(body []byte) ([]TimedSample, error) {
 	var samples []TimedSample
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&samples) != nil || ensureJSONEOF(decoder) != nil || len(samples) > MaxSlopeSamplesPerRule {
+	if decoder.Decode(&samples) != nil || ensureJSONEOF(decoder) != nil || len(samples) > MaxWindowSamplesPerRule {
 		return nil, errors.New("stored Alarm evaluation sample window is invalid")
 	}
 	for _, sample := range samples {

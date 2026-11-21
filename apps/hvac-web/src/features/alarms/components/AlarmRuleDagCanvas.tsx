@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils';
 import { describeDependencyGate, summarizeRuleActions } from '../alarm-operations';
 import { SeverityBadge } from '../alarm-presentation';
 import {
+  EXECUTION_TARGET_LABELS,
   computeRuleDagLayout,
   type RuleDraftDelta,
 } from '../alarm-rule-dag';
@@ -27,6 +28,7 @@ const HOP_TITLES: Readonly<Record<number, string>> = {
 const KIND_BADGE_LABELS: Readonly<Record<NonNullable<AlarmRule['ruleKind']>, string>> = {
   THRESHOLD: '阈值',
   SLOPE: '斜率',
+  WINDOW: '窗口',
   EXPRESSION: '表达式',
 };
 
@@ -199,6 +201,11 @@ export function AlarmRuleDagCanvas({
                     <Badge variant="outline" className="h-5 px-1.5 text-[11px] font-normal">
                       {kindLabel}
                     </Badge>
+                    {rule.executionTarget && rule.executionTarget !== 'CLOUD' ? (
+                      <Badge variant="outline" className="h-5 border-primary/35 bg-primary-soft px-1.5 text-[11px] font-normal text-primary">
+                        {EXECUTION_TARGET_LABELS[rule.executionTarget]}
+                      </Badge>
+                    ) : null}
                     {actionCount > 0 ? (
                       <Badge variant="outline" className="h-5 border-primary/35 bg-primary-soft px-1.5 text-[11px] font-normal text-primary">
                         {actionCount} 动作
@@ -225,6 +232,11 @@ export function AlarmRuleDagCanvas({
             <div className="flex flex-wrap items-center gap-2">
               <SeverityBadge severity={selectedRule.severity} />
               <span className="text-sm font-medium text-foreground">{selectedRule.title}</span>
+              {selectedRule.executionTarget && selectedRule.executionTarget !== 'CLOUD' ? (
+                <Badge variant="outline" className="h-5 border-primary/35 bg-primary-soft px-1.5 text-[11px] font-normal text-primary">
+                  {EXECUTION_TARGET_LABELS[selectedRule.executionTarget]}
+                </Badge>
+              ) : null}
               {(selectedRule.dependsOnRuleIds?.length ?? 0) > 0 ? (
                 <Badge variant="outline" className="h-5 px-1.5 text-[11px] font-normal">
                   {describeDependencyGate(selectedRule.dependencyGate)}

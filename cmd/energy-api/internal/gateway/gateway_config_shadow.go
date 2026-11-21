@@ -17,7 +17,10 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 )
 
-const maxGatewayConfigShadowBodyBytes = 1 << 20
+const (
+	maxGatewayConfigShadowRequestBodyBytes  = 2 << 20
+	maxGatewayConfigShadowResponseBodyBytes = 4 << 20
+)
 
 func matchConfigShadowRoute(method, rawPath string) (gatewayID string, writeOp bool, ok bool) {
 	parts := strings.Split(rawPath, "/")
@@ -88,7 +91,7 @@ func (h *handler) serveGatewayConfigShadow(w http.ResponseWriter, r *http.Reques
 
 	var reqBody io.Reader
 	if writeOp {
-		bodyBytes, err := readBoundedBody(r.Body, maxGatewayConfigShadowBodyBytes)
+		bodyBytes, err := readBoundedBody(r.Body, maxGatewayConfigShadowRequestBodyBytes)
 		if err != nil {
 			status := http.StatusBadRequest
 			code := "CONFIG_SHADOW_REQUEST_INVALID"
@@ -127,7 +130,7 @@ func (h *handler) serveGatewayConfigShadow(w http.ResponseWriter, r *http.Reques
 	}
 	defer drainAndCloseBody(response.Body)
 
-	body, err := readBoundedBody(response.Body, maxGatewayConfigShadowBodyBytes)
+	body, err := readBoundedBody(response.Body, maxGatewayConfigShadowResponseBodyBytes)
 	if err != nil {
 		writeProblem(w, r, http.StatusBadGateway, "CONNECTIVITY_RESPONSE_INVALID", "Config shadow response invalid", "Connectivity returned an invalid response.", true, nil)
 		return true

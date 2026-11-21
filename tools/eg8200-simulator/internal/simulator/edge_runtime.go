@@ -66,14 +66,15 @@ type EdgeControlRuntime struct {
 	mu       sync.Mutex
 	configMu sync.Mutex
 
-	config           Config
-	host             *edgecontrol.Host
-	intentStore      *edgecontrol.IntentStore
-	timedata         *edgecontrol.FileTimedata
-	autonomyPolicy   edgecontrol.AutonomyPolicyConfig
-	safetyController *edgePlantSafetyController
-	hydInterlock     *edgecontrol.HydraulicInterlockController
-	autonomyFallback *edgecontrol.AutonomousFallbackController
+	config             Config
+	host               *edgecontrol.Host
+	intentStore        *edgecontrol.IntentStore
+	timedata           *edgecontrol.FileTimedata
+	autonomyPolicy     edgecontrol.AutonomyPolicyConfig
+	safetyController   *edgePlantSafetyController
+	hydInterlock       *edgecontrol.HydraulicInterlockController
+	edgeRuleController *edgecontrol.EdgeRuleController
+	autonomyFallback   *edgecontrol.AutonomousFallbackController
 
 	driverTransportFactory func(edgecontrol.DeclarativeModbusProfile) (edgecontrol.ModbusRegisterTransport, error)
 	factoryClosersByDevice map[string]io.Closer
@@ -81,6 +82,7 @@ type EdgeControlRuntime struct {
 	bindingsByDevice        map[string]map[edgecontrol.SemanticChannel]string
 	commandByKey            map[string]edgeCommandBinding
 	addressByPointID        map[string]string
+	addressByDevicePoint    map[string]string
 	staticPointAddresses    map[string]struct{}
 	dynamicChannelsByDevice map[string][]edgecontrol.ChannelDescriptor
 	latestShadowSamples     []Measurement
@@ -133,6 +135,7 @@ func newEdgeControlRuntime(config Config, adapters []edgecontrol.DeviceAdapter, 
 	}
 	bindingsByDevice := make(map[string]map[edgecontrol.SemanticChannel]string, len(adapters))
 	addressByPointID := map[string]string{}
+	addressByDevicePoint := map[string]string{}
 	for _, adapter := range adapters {
 		if err := host.RegisterAdapter(adapter); err != nil {
 			return nil, err
@@ -140,8 +143,10 @@ func newEdgeControlRuntime(config Config, adapters []edgecontrol.DeviceAdapter, 
 		component := adapter.Component()
 		bindingsByDevice[component.ID] = cloneSemanticBindings(component.ChannelBindings)
 		for _, channel := range adapter.Channels() {
+			addr := channel.Address()
+			addressByDevicePoint[commandBindingKey(component.ID, channel.ChannelID)] = addr
 			if channel.PointID != "" {
-				addressByPointID[channel.PointID] = channel.Address()
+				addressByPointID[channel.PointID] = addr
 			}
 		}
 	}
@@ -158,6 +163,7 @@ func newEdgeControlRuntime(config Config, adapters []edgecontrol.DeviceAdapter, 
 		if mapped, ok := addressByPointID[point.PointID]; ok {
 			address = mapped
 		}
+		addressByDevicePoint[commandBindingKey(point.DeviceID, point.PointCode)] = address
 		staticPointAddresses[defaultAddress] = struct{}{}
 		staticPointAddresses[address] = struct{}{}
 		staleAfter, _ := time.ParseDuration(point.StaleAfter) // config.Validate already owns interval validation.
@@ -188,9 +194,28 @@ func newEdgeControlRuntime(config Config, adapters []edgecontrol.DeviceAdapter, 
 		return nil, err
 	}
 	autonomyPolicy := edgecontrol.DefaultAutonomyPolicyConfig()
+	runtime := &EdgeControlRuntime{
+		config:                  config,
+		host:                    host,
+		intentStore:             intentStore,
+		autonomyPolicy:          autonomyPolicy,
+		bindingsByDevice:        bindingsByDevice,
+		commandByKey:            commandByKey,
+		addressByPointID:        addressByPointID,
+		addressByDevicePoint:    addressByDevicePoint,
+		staticPointAddresses:    staticPointAddresses,
+		dynamicChannelsByDevice: map[string][]edgecontrol.ChannelDescriptor{},
+		leaseByAddress:          leaseByAddress,
+		pendingByAddress:        map[string]pendingEdgeCommand{},
+	}
+	edgeRuleController := edgecontrol.NewEdgeRuleController(edgecontrol.EdgeRuleControllerConfig{
+		ChannelResolver:        runtime.resolveEdgeRuleChannel,
+		CommandChannelResolver: runtime.resolveEdgeRuleCommandChannel,
+	})
 	limitController := &edgeLimitController{id: "capability-limits", limits: limits}
 	controllers := []edgecontrol.ControllerBinding{
 		{Priority: 10, Controller: limitController},
+		{Priority: 15, Controller: edgeRuleController},
 		{Priority: 100, Controller: intentController},
 	}
 	var safetyController *edgePlantSafetyController
@@ -223,6 +248,7 @@ func newEdgeControlRuntime(config Config, adapters []edgecontrol.DeviceAdapter, 
 			{Priority: 0, Controller: safetyController},
 			{Priority: 5, Controller: hydInterlock},
 			{Priority: 10, Controller: limitController},
+			{Priority: 15, Controller: edgeRuleController},
 			{Priority: 50, Controller: autonomyFallback},
 			{Priority: 100, Controller: intentController},
 		}
@@ -230,22 +256,11 @@ func newEdgeControlRuntime(config Config, adapters []edgecontrol.DeviceAdapter, 
 	if err := host.Start(controllers); err != nil {
 		return nil, err
 	}
-	return &EdgeControlRuntime{
-		config:                  config,
-		host:                    host,
-		intentStore:             intentStore,
-		autonomyPolicy:          autonomyPolicy,
-		safetyController:        safetyController,
-		hydInterlock:            hydInterlock,
-		autonomyFallback:        autonomyFallback,
-		bindingsByDevice:        bindingsByDevice,
-		commandByKey:            commandByKey,
-		addressByPointID:        addressByPointID,
-		staticPointAddresses:    staticPointAddresses,
-		dynamicChannelsByDevice: map[string][]edgecontrol.ChannelDescriptor{},
-		leaseByAddress:          leaseByAddress,
-		pendingByAddress:        map[string]pendingEdgeCommand{},
-	}, nil
+	runtime.safetyController = safetyController
+	runtime.hydInterlock = hydInterlock
+	runtime.edgeRuleController = edgeRuleController
+	runtime.autonomyFallback = autonomyFallback
+	return runtime, nil
 }
 
 func ATV630EdgeConfig(config Config) (Config, error) {
@@ -356,12 +371,156 @@ func (runtime *EdgeControlRuntime) SetDriverTransportFactory(factory func(edgeco
 	runtime.mu.Unlock()
 }
 
-// NotifyCloudContact updates the AutonomousFallbackController connection state.
+// NotifyCloudContact updates the AutonomousFallbackController and EdgeRuleController connection state.
 func (runtime *EdgeControlRuntime) NotifyCloudContact(connected bool, at time.Time) {
-	if runtime == nil || runtime.autonomyFallback == nil {
+	if runtime == nil {
 		return
 	}
-	runtime.autonomyFallback.SetCloudConnected(connected, at)
+	if runtime.autonomyFallback != nil {
+		runtime.autonomyFallback.SetCloudConnected(connected, at)
+	}
+	if runtime.edgeRuleController != nil {
+		runtime.edgeRuleController.SetOffline(!connected)
+	}
+}
+
+// ApplyEdgeRuleBundle validates and hot-swaps the active compiled edge rule bundle
+// without restarting the host or resetting unrelated rule durations/windows.
+func (runtime *EdgeControlRuntime) ApplyEdgeRuleBundle(bundle *edgecontrol.EdgeRuleBundle) error {
+	if runtime == nil || runtime.edgeRuleController == nil {
+		return errors.New("edge control runtime rule engine is unavailable")
+	}
+	runtime.configMu.Lock()
+	defer runtime.configMu.Unlock()
+	return runtime.edgeRuleController.UpdateBundle(bundle)
+}
+
+// EdgeRuleStatus returns the active compiled edge rule engine metrics and state.
+func (runtime *EdgeControlRuntime) EdgeRuleStatus() (edgecontrol.EdgeRuleEngineStatus, bool) {
+	if runtime == nil || runtime.edgeRuleController == nil {
+		return edgecontrol.EdgeRuleEngineStatus{}, false
+	}
+	return runtime.edgeRuleController.Status(), true
+}
+
+// PeekEdgeRuleEvents returns a snapshot of buffered edge rule alarm transitions without removing them.
+func (runtime *EdgeControlRuntime) PeekEdgeRuleEvents() []edgecontrol.EdgeRuleEvent {
+	if runtime == nil || runtime.edgeRuleController == nil {
+		return nil
+	}
+	return runtime.edgeRuleController.PeekEvents()
+}
+
+// AckEdgeRuleEvents removes the oldest count acknowledged edge rule events.
+func (runtime *EdgeControlRuntime) AckEdgeRuleEvents(count int) {
+	if runtime == nil || runtime.edgeRuleController == nil {
+		return
+	}
+	runtime.edgeRuleController.AckEvents(count)
+}
+
+// DrainEdgeRuleEvents atomically pops buffered edge rule alarm transitions.
+func (runtime *EdgeControlRuntime) DrainEdgeRuleEvents() []edgecontrol.EdgeRuleEvent {
+	if runtime == nil || runtime.edgeRuleController == nil {
+		return nil
+	}
+	return runtime.edgeRuleController.DrainEvents()
+}
+
+func (runtime *EdgeControlRuntime) resolveEdgeRuleChannel(deviceID, pointCode string) string {
+	dev := strings.TrimSpace(deviceID)
+	pt := strings.TrimSpace(pointCode)
+	if dev == "" || pt == "" {
+		return ""
+	}
+	if runtime != nil {
+		runtime.mu.Lock()
+		addr := runtime.addressByDevicePoint[commandBindingKey(dev, pt)]
+		runtime.mu.Unlock()
+		if addr != "" {
+			return addr
+		}
+	}
+	return dev + "/" + pt
+}
+
+func (runtime *EdgeControlRuntime) resolveEdgeRuleCommandChannel(deviceID, pointCode, capability string) (string, edgecontrol.DataType, string, bool) {
+	if runtime == nil {
+		return "", "", "", false
+	}
+	dev := strings.TrimSpace(deviceID)
+	capCode := strings.TrimSpace(capability)
+	pt := strings.TrimSpace(pointCode)
+	if capCode != "" {
+		runtime.mu.Lock()
+		binding, ok := runtime.commandByKey[commandBindingKey(dev, capCode)]
+		runtime.mu.Unlock()
+		if ok {
+			meta := parsedPointMetadata(binding.point)
+			dataType := edgecontrol.DataTypeBoolean
+			if meta.ControlKind == "NUMBER" {
+				dataType = edgecontrol.DataTypeDouble
+			}
+			if runtime.host != nil {
+				if desc, descOK := runtime.host.ChannelDescriptor(binding.address); descOK {
+					dataType = desc.DataType
+				}
+			}
+			return binding.address, dataType, meta.ParameterKey, true
+		}
+	}
+	if pt != "" {
+		addr := runtime.resolveEdgeRuleChannel(dev, pt)
+		if runtime.host != nil && addr != "" {
+			if desc, ok := runtime.host.ChannelDescriptor(addr); ok && desc.Access != edgecontrol.AccessReadOnly {
+				if derivedParamKey, allowed := validateDynamicCommandCapability(capCode, pt, desc.DataType); allowed {
+					return addr, desc.DataType, derivedParamKey, true
+				}
+			}
+		}
+	}
+	return "", "", "", false
+}
+
+func validateDynamicCommandCapability(capability, pointCode string, dataType edgecontrol.DataType) (string, bool) {
+	capUpper := strings.ToUpper(strings.TrimSpace(capability))
+	ptLower := strings.ToLower(strings.TrimSpace(pointCode))
+	if capUpper == "" || ptLower == "" {
+		return "", false
+	}
+	isNumeric := dataType == edgecontrol.DataTypeDouble ||
+		dataType == edgecontrol.DataTypeFloat ||
+		dataType == edgecontrol.DataTypeInteger ||
+		dataType == edgecontrol.DataTypeLong
+	switch capUpper {
+	case "STOP", "START", "RESET_FAULT":
+		if dataType != edgecontrol.DataTypeBoolean {
+			return "", false
+		}
+		suffix := strings.ToLower(capUpper)
+		return "", ptLower == suffix || strings.HasSuffix(ptLower, "_"+suffix)
+	case "SET_FREQUENCY":
+		if !isNumeric || strings.Contains(ptLower, "start") || strings.Contains(ptLower, "stop") {
+			return "", false
+		}
+		return "frequencyHz", true
+	case "SET_CHILLED_WATER_TEMPERATURE_SETPOINT", "SET_TEMPERATURE_SETPOINT":
+		if !isNumeric || strings.Contains(ptLower, "start") || strings.Contains(ptLower, "stop") {
+			return "", false
+		}
+		return "setpointC", true
+	case "SET_OPENING":
+		if !isNumeric || strings.Contains(ptLower, "start") || strings.Contains(ptLower, "stop") {
+			return "", false
+		}
+		return "openingPct", true
+	default:
+		if strings.HasPrefix(capUpper, "SET_") && isNumeric &&
+			(strings.HasPrefix(ptLower, "set_") || strings.HasSuffix(ptLower, "_sp") || strings.HasSuffix(ptLower, "_setpoint")) {
+			return "", true
+		}
+		return "", false
+	}
 }
 
 // AutonomyPolicy returns the active autonomy policy configuration.
@@ -424,11 +583,20 @@ func (runtime *EdgeControlRuntime) replaceOrRegisterDeviceLocked(adapter edgecon
 	if runtime.dynamicChannelsByDevice == nil {
 		runtime.dynamicChannelsByDevice = map[string][]edgecontrol.ChannelDescriptor{}
 	}
+	if runtime.addressByDevicePoint == nil {
+		runtime.addressByDevicePoint = map[string]string{}
+	}
 	runtime.bindingsByDevice[descriptor.ID] = cloneSemanticBindings(descriptor.ChannelBindings)
 	devicePrefix := descriptor.ID + "/"
+	devicePointPrefix := descriptor.ID + "\x00"
 	for pointID, addr := range runtime.addressByPointID {
 		if strings.HasPrefix(addr, devicePrefix) {
 			delete(runtime.addressByPointID, pointID)
+		}
+	}
+	for devPtKey := range runtime.addressByDevicePoint {
+		if strings.HasPrefix(devPtKey, devicePointPrefix) {
+			delete(runtime.addressByDevicePoint, devPtKey)
 		}
 	}
 	dynamicChannels := make([]edgecontrol.ChannelDescriptor, 0, len(channels))
@@ -436,6 +604,7 @@ func (runtime *EdgeControlRuntime) replaceOrRegisterDeviceLocked(adapter edgecon
 	for _, ch := range channels {
 		addr := ch.Address()
 		runtime.addressByPointID[ch.PointID] = addr
+		runtime.addressByDevicePoint[commandBindingKey(descriptor.ID, ch.ChannelID)] = addr
 		channelByID[ch.ChannelID] = ch
 		if ch.Access != edgecontrol.AccessWriteOnly {
 			if _, isStatic := runtime.staticPointAddresses[addr]; !isStatic {
@@ -459,6 +628,7 @@ func (runtime *EdgeControlRuntime) replaceOrRegisterDeviceLocked(adapter edgecon
 		if ch, ok := channelByID[pt.PointCode]; ok {
 			addr := ch.Address()
 			runtime.addressByPointID[pt.PointID] = addr
+			runtime.addressByDevicePoint[commandBindingKey(pt.DeviceID, pt.PointCode)] = addr
 			if pt.PointType == "COMMAND" {
 				if meta := parsedPointMetadata(pt); strings.TrimSpace(meta.Capability) != "" {
 					runtime.commandByKey[commandBindingKey(pt.DeviceID, meta.Capability)] = edgeCommandBinding{point: pt, address: addr}
@@ -494,6 +664,7 @@ func (runtime *EdgeControlRuntime) RemoveDriverProfile(deviceKey string) error {
 	runtime.host.UnregisterDevice(key)
 
 	devicePrefix := key + "/"
+	devicePointPrefix := key + "\x00"
 	runtime.mu.Lock()
 	delete(runtime.bindingsByDevice, key)
 	delete(runtime.dynamicChannelsByDevice, key)
@@ -501,6 +672,13 @@ func (runtime *EdgeControlRuntime) RemoveDriverProfile(deviceKey string) error {
 	for pointID, addr := range runtime.addressByPointID {
 		if strings.HasPrefix(addr, devicePrefix) {
 			delete(runtime.addressByPointID, pointID)
+		}
+	}
+	for devPtKey, addr := range runtime.addressByDevicePoint {
+		if strings.HasPrefix(devPtKey, devicePointPrefix) {
+			if _, isStatic := runtime.staticPointAddresses[addr]; !isStatic {
+				delete(runtime.addressByDevicePoint, devPtKey)
+			}
 		}
 	}
 	for cmdKey, binding := range runtime.commandByKey {
@@ -1030,7 +1208,7 @@ func (controller *edgePlantSafetyController) Run(_ context.Context, image edgeco
 			continue
 		}
 		for _, dependency := range []string{controller.plant.ChilledWaterPump.ID, controller.plant.CoolingWaterPump.ID, controller.plant.CoolingTower.ID} {
-			runAddress := controller.bindings[dependency][edgecontrol.SemanticRunState]
+			runAddress := bindingsSnapshot[dependency][edgecontrol.SemanticRunState]
 			runState, state := edgeTextValue(image, runAddress, controller.staleAfterByAddress[runAddress])
 			if state == "SAFETY_STATE_STALE" {
 				_, _ = plan.Deny(startAddress, controller.id, state)

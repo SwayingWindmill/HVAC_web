@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 64,
+  "registryRevision": 65,
   "routes": [
     {"method": "GET", "path": "/api/v1/sites/{siteId}/data-gaps", "owner": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
     {"method": "GET", "path": "/api/v1/iam/members", "owner": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "principal"]},
@@ -925,6 +925,7 @@
     {"method": "GET", "path": "/api/v1/alarm-rules", "owner": "alarm-service", "publicIngress": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
     {"method": "PUT", "path": "/api/v1/alarm-rules", "owner": "alarm-service", "publicIngress": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
     {"method": "POST", "path": "/api/v1/alarm-rules/diff", "owner": "alarm-service", "publicIngress": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
+    {"method": "POST", "path": "/api/v1/alarm-rules/compile-edge", "owner": "alarm-service", "publicIngress": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
     {"method": "POST", "path": "/api/v1/alarm-rules/simulate", "owner": "alarm-service", "publicIngress": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
     {"method": "GET", "path": "/api/v1/alarm-rules/revisions", "owner": "alarm-service", "publicIngress": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
     {"method": "POST", "path": "/api/v1/alarm-rules/revisions/{revision}/rollback", "owner": "alarm-service", "publicIngress": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},

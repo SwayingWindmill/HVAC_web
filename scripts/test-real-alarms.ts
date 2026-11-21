@@ -17,17 +17,20 @@ import {
   alarmRulePublishEnvelopeSchema,
   alarmRuleRevisionListEnvelopeSchema,
   devicePriorityLockStateSchema,
+  edgeRuleCompileEnvelopeSchema,
   siteAlarmRoutingEnvelopeSchema,
 } from '../apps/hvac-web/src/api/generated/platformGateway.gen.ts';
 import {
   computeDraftDelta,
   computeRuleDagLayout,
+  evaluateLocalEdgeEligibility,
   formatRuleValidationIssue,
   newRuleUuidV7,
   ruleDraftSignature,
   ruleToDraft,
 } from '../apps/hvac-web/src/features/alarms/alarm-rule-dag.ts';
 import type { AlarmRule } from '../apps/hvac-web/src/features/alarms/alarm-rules.ts';
+import { summarizeEdgeRuleBundle } from '../apps/hvac-web/src/features/connectivity/gateway-config-shadow-model.ts';
 import {
   describeDeadLetterError,
   describeDependencyGate,
@@ -433,7 +436,7 @@ test('Alarm operations formatters and Wave 4 routing/DLQ/priority-lock schemas v
       summary: { added: 1, changed: 0, unchanged: 1, retired: 0, addedRuleIds: [id2], changedRuleIds: [], unchangedRuleIds: [id1], retiredRuleIds: [] },
       changes: [{ ruleId: id2, title: '次级联动', change: 'ADDED', changedFields: [] }],
       graph: {
-        nodes: [{ ruleId: id1, title: '主规则', severity: 'MAJOR', hopDepth: 0, dependsOnRuleIds: [], actionCount: 0 }],
+        nodes: [{ ruleId: id1, title: '主规则', severity: 'MAJOR', executionTarget: 'CLOUD', hopDepth: 0, dependsOnRuleIds: [], actionCount: 0 }],
         edges: [],
         topologicalOrder: [id1],
         maxHopDepth: 0,
@@ -494,4 +497,149 @@ test('Alarm operations formatters and Wave 4 routing/DLQ/priority-lock schemas v
   );
   assert.ok(translated.includes('「次级联动」'));
   assert.ok(!/[0-9a-f]{8}-[0-9a-f]{4}-|raw English/.test(translated));
+});
+
+test('P2-3 streaming window aggregation schema, local edge eligibility and edge compile bundle validate', () => {
+  const deviceId = '018f3e00-4000-7000-8000-000000000001';
+  const upstreamId = newRuleUuidV7(1_760_000_001_000);
+  const windowRuleId = newRuleUuidV7(1_760_000_001_001);
+  const reading = { deviceId, pointCode: 'supply_water_temperature' };
+  const clearCond = { kind: 'COMPARE' as const, reading, operator: 'LT' as const, value: 9.5 };
+
+  const parsedWindow = alarmRuleListSchema.parse({
+    data: [{
+      ruleId: windowRuleId,
+      title: '1 号冷机供水窗口均值偏高',
+      severity: 'MAJOR',
+      ruleKind: 'WINDOW',
+      executionTarget: 'CLOUD_AND_EDGE',
+      triggerMode: 'SIMPLE',
+      raise: {
+        kind: 'WINDOW_AGG',
+        reading,
+        agg: 'P95',
+        windowType: 'SLIDING',
+        windowSeconds: 300,
+        minSamples: 5,
+        operator: 'GTE',
+        threshold: 12.5,
+      },
+      clear: clearCond,
+      actions: [{ kind: 'WORK_ORDER', triggerOn: 'RAISE', workOrderPriority: 'HIGH', workOrderTitle: '排查冷机窗口异常' }],
+    }],
+    meta: { requestId: 'req-window-1', bundleRevision: 3, bundleDigest: 'c'.repeat(64) },
+  });
+  const winRule = parsedWindow.data[0]!;
+  assert.equal(winRule.ruleKind, 'WINDOW');
+  assert.equal(winRule.executionTarget, 'CLOUD_AND_EDGE');
+  assert.equal(ruleToDraft(winRule).executionTarget, 'CLOUD_AND_EDGE');
+  assert.equal(
+    ruleDraftSignature({ ...winRule, executionTarget: undefined }),
+    ruleDraftSignature({ ...winRule, executionTarget: 'CLOUD' }),
+  );
+
+  // Local edge eligibility rules match Go compiler constraints.
+  assert.equal(evaluateLocalEdgeEligibility({ ...winRule, executionTarget: 'CLOUD' }, [winRule]).reasonCode, 'CLOUD_ONLY_TARGET');
+  assert.equal(
+    evaluateLocalEdgeEligibility(
+      { ...winRule, raise: { kind: 'NO_DATA', reading, ageSeconds: 300 } },
+      [winRule],
+    ).reasonCode,
+    'EDGE_UNSUPPORTED_CONDITION_KIND',
+  );
+  assert.equal(
+    evaluateLocalEdgeEligibility({ ...winRule, executionTarget: 'EDGE' }, [winRule]).reasonCode,
+    'EDGE_CLOUD_ONLY_ACTION',
+  );
+  assert.equal(evaluateLocalEdgeEligibility(winRule, [winRule]).eligible, true);
+
+  const cloudUpstream: AlarmRule = {
+    ruleId: upstreamId,
+    title: '云端前置规则',
+    severity: 'WARNING',
+    executionTarget: 'CLOUD',
+    triggerMode: 'SIMPLE',
+    raise: { kind: 'COMPARE', reading, operator: 'GT', value: 8 },
+    clear: clearCond,
+  };
+  const dependentEdge: AlarmRule = {
+    ...winRule,
+    dependsOnRuleIds: [upstreamId],
+    dependencyGate: 'ALL_ACTIVE',
+  };
+  assert.equal(
+    evaluateLocalEdgeEligibility(dependentEdge, [cloudUpstream, dependentEdge]).reasonCode,
+    'EDGE_UPSTREAM_NOT_ON_EDGE',
+  );
+  assert.equal(
+    evaluateLocalEdgeEligibility(dependentEdge, [{ ...cloudUpstream, executionTarget: 'EDGE' }, dependentEdge]).eligible,
+    true,
+  );
+
+  const compileEnv = edgeRuleCompileEnvelopeSchema.parse({
+    data: {
+      siteId,
+      bundleRevision: 3,
+      bundleDigest: 'c'.repeat(64),
+      edgeBundleDigest: 'd'.repeat(64),
+      compiledAt: '2026-11-22T00:00:00Z',
+      edgeRuleCount: 1,
+      cloudOnlyCount: 0,
+      eligibility: [{
+        ruleId: windowRuleId,
+        title: '1 号冷机供水窗口均值偏高',
+        executionTarget: 'CLOUD_AND_EDGE',
+        compiled: true,
+      }],
+      bundle: {
+        schemaVersion: 1,
+        siteId,
+        bundleRevision: 3,
+        bundleDigest: 'c'.repeat(64),
+        edgeBundleDigest: 'd'.repeat(64),
+        compiledAt: '2026-11-22T00:00:00Z',
+        rules: [{
+          ruleId: windowRuleId,
+          title: '1 号冷机供水窗口均值偏高',
+          severity: 'MAJOR',
+          executionTarget: 'CLOUD_AND_EDGE',
+          qualityPolicy: 'VALID_ONLY',
+          freshnessSeconds: 900,
+          triggerMode: 'SIMPLE',
+          raise: {
+            kind: 'WINDOW_AGG',
+            input: `${deviceId}/supply_water_temperature`,
+            agg: 'P95',
+            windowType: 'SLIDING',
+            windowSeconds: 300,
+            minSamples: 5,
+            operator: 'GTE',
+            threshold: 12.5,
+          },
+          clear: {
+            kind: 'COMPARE',
+            input: `${deviceId}/supply_water_temperature`,
+            operator: 'LT',
+            value: { type: 'NUMBER', number: 9.5 },
+          },
+        }],
+      },
+    },
+    meta: { requestId: 'req-compile-1' },
+  });
+  assert.equal(compileEnv.data.edgeRuleCount, 1);
+  assert.deepEqual(summarizeEdgeRuleBundle(compileEnv.data.bundle), {
+    configured: true,
+    ruleCount: 1,
+    bundleRevision: 3,
+    shortDigest: 'd'.repeat(12),
+    compiledAt: '2026-11-22T00:00:00Z',
+  });
+  assert.deepEqual(summarizeEdgeRuleBundle(null), {
+    configured: false,
+    ruleCount: 0,
+    bundleRevision: 0,
+    shortDigest: '',
+    compiledAt: '',
+  });
 });

@@ -46,6 +46,7 @@ type ruleTemplate struct {
 	Extends          string                                `json:"extends,omitempty"`
 	Template         string                                `json:"template,omitempty"`
 	RuleKind         alarmservice.RuleKind                 `json:"ruleKind,omitempty"`
+	ExecutionTarget  alarmservice.ExecutionTarget          `json:"executionTarget,omitempty"`
 	DependencyGate   *alarmservice.DependencyGateMode      `json:"dependencyGate,omitempty"`
 	Actions          *[]alarmservice.RuleAction            `json:"actions,omitempty"`
 	Title            *string                               `json:"title,omitempty"`
@@ -91,6 +92,7 @@ type rule struct {
 	Template         string                                `json:"template,omitempty"`
 	Device           string                                `json:"device,omitempty"`
 	RuleKind         alarmservice.RuleKind                 `json:"ruleKind,omitempty"`
+	ExecutionTarget  alarmservice.ExecutionTarget          `json:"executionTarget,omitempty"`
 	DependsOn        []string                              `json:"dependsOn,omitempty"`
 	DependencyGate   *alarmservice.DependencyGateMode      `json:"dependencyGate,omitempty"`
 	Actions          *[]alarmservice.RuleAction            `json:"actions,omitempty"`
@@ -553,6 +555,9 @@ func mergeTemplateOverrides(dst *ruleTemplate, src ruleTemplate) {
 	if src.RuleKind != "" {
 		dst.RuleKind = src.RuleKind
 	}
+	if src.ExecutionTarget != "" {
+		dst.ExecutionTarget = src.ExecutionTarget
+	}
 	if src.DependencyGate != nil {
 		v := *src.DependencyGate
 		dst.DependencyGate = &v
@@ -615,12 +620,17 @@ func compileRuleEntry(entry rule, templates map[string]ruleTemplate, devices map
 	}
 
 	policy := alarmservice.AlarmPolicyRevision{
-		RuleKind:    merged.RuleKind,
-		TemplateKey: entry.Template,
+		RuleKind:        merged.RuleKind,
+		ExecutionTarget: merged.ExecutionTarget,
+		TemplateKey:     entry.Template,
 	}
 	if entry.RuleKind != "" {
 		policy.RuleKind = entry.RuleKind
 		overridden = append(overridden, "ruleKind")
+	}
+	if entry.ExecutionTarget != "" {
+		policy.ExecutionTarget = entry.ExecutionTarget
+		overridden = append(overridden, "executionTarget")
 	}
 	if merged.Title != nil {
 		policy.Title = *merged.Title
@@ -768,9 +778,16 @@ func compileRuleEntry(entry rule, templates map[string]ruleTemplate, devices map
 	}
 	if policy.RuleKind != "" {
 		switch policy.RuleKind {
-		case alarmservice.RuleKindThreshold, alarmservice.RuleKindSlope, alarmservice.RuleKindExpression:
+		case alarmservice.RuleKindThreshold, alarmservice.RuleKindSlope, alarmservice.RuleKindWindow, alarmservice.RuleKindExpression:
 		default:
 			return alarmservice.AlarmPolicyRevision{}, fmt.Errorf("invalid ruleKind %q", policy.RuleKind)
+		}
+	}
+	if policy.ExecutionTarget != "" {
+		switch policy.ExecutionTarget {
+		case alarmservice.ExecutionTargetCloud, alarmservice.ExecutionTargetEdge, alarmservice.ExecutionTargetCloudAndEdge:
+		default:
+			return alarmservice.AlarmPolicyRevision{}, fmt.Errorf("invalid executionTarget %q", policy.ExecutionTarget)
 		}
 	}
 	if err := raise.Validate(); err != nil {
@@ -880,6 +897,10 @@ func cloneCondition(condition alarmservice.Condition) alarmservice.Condition {
 	if condition.Delta != nil {
 		v := *condition.Delta
 		cloned.Delta = &v
+	}
+	if condition.Threshold != nil {
+		v := *condition.Threshold
+		cloned.Threshold = &v
 	}
 	if condition.Reasons != nil {
 		cloned.Reasons = append([]string(nil), condition.Reasons...)
