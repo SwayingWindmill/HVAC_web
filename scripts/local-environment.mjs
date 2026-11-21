@@ -106,6 +106,7 @@ function up() {
   script('phase1-bootstrap-local-foundation.mjs');
   // One-shot tools are built from the checkout too, so a changed input contract never meets a stale image.
   run([launcher, 'run', '--rm', '--build', '-T', 'identity-reconciler'], { input: readFileSync(runtimePath('identity-reconcile.json'), 'utf8') });
+  ensureServiceDataDirectory('mqtt-crl');
   compose('--source-deploy', '--integration', '--intelligence', 'up', '-d');
   ensureServiceDataDirectory('data', 'eg8200');
   ensureServiceDataDirectory('data', 'eg8200-b');

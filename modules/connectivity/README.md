@@ -64,6 +64,7 @@ hvac/v1/{网关 id}/up/event
 | `CONNECTIVITY_TELEMETRY_URL` | `https://telemetry-runtime-service:8446` |
 | `CONNECTIVITY_TLS_CERT` / `CONNECTIVITY_TLS_KEY` | `/run/hvac/pki/mqtt-telemetry-adapter/tls.*` |
 | `CONNECTIVITY_CA` | `/run/hvac/pki/ca.crt` |
+| `GATEWAY_CRL_OUTPUT_FILE` | 空（Phase 1 Compose 挂载 `/var/lib/hvac/mqtt-crl/gateway-ca.crl.pem`；由 `connectivity` 在启动、吊销、`SharedSession` 重连与每 6 小时刷新时原子写出，并向 `$CONTROL/hvac-crl/v1` 发布指令联动 `mosquitto_hvac_crl.so` 即时踢连，Broker 另有 1 秒文件轮询兜底） |
 | `CONNECTIVITY_DATABASE_URL` | 必填 |
 | `COMMAND_RUNTIME_IN_PROCESS_ENABLED` | 默认关；`true` 打开控制指令功能 |
 | `COMMAND_DISPATCHER_CERT` / `COMMAND_DISPATCHER_KEY` | `/run/hvac/pki/command-dispatcher/tls.*`（MQTT、指令服务、下发安全检查） |
@@ -77,4 +78,6 @@ hvac/v1/{网关 id}/up/event
 ```text
 (cd modules/connectivity && go test ./...)
 node scripts/run-s1-registry-postgres-tests.mjs   # 含接入服务的数据存取和登记读取接口
+node scripts/run-mqtt-broker-acl-tests.mjs
+node --experimental-strip-types scripts/run-mqtt-broker-crl-kick-tests.ts
 ```
