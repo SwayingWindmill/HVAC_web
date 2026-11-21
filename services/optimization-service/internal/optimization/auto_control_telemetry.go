@@ -43,9 +43,12 @@ func autoControlHealthScope(siteCtx AutoControlSiteContext, targetDeviceID strin
 	if siteCtx.SetpointTarget != nil {
 		addDev(siteCtx.SetpointTarget.DeviceID)
 	}
+	for _, aux := range siteCtx.AuxiliaryTargets {
+		addDev(aux.Target.DeviceID)
+	}
 
-	keys := make([]string, 0, 16)
-	seenKey := make(map[string]struct{}, 16)
+	keys := make([]string, 0, 24)
+	seenKey := make(map[string]struct{}, 24)
 	addKey := func(raw string) {
 		clean := strings.TrimSpace(raw)
 		if clean == "" {
@@ -63,10 +66,20 @@ func autoControlHealthScope(siteCtx AutoControlSiteContext, targetDeviceID strin
 	if siteCtx.SetpointTarget != nil {
 		addKey(siteCtx.SetpointTarget.FeedbackPointKey)
 	}
+	for _, aux := range siteCtx.AuxiliaryTargets {
+		addKey(aux.Target.FeedbackPointKey)
+	}
 	for _, canonical := range []string{
 		"chilled_water_supply_temp",
 		"supply_temp_setpoint",
 		"chilled_water_supply_temp_sp",
+		"frequency_hz",
+		"frequency_feedback",
+		"vfd_frequency",
+		"frequency_setpoint",
+		"fan_speed_pct",
+		"fan_speed_feedback",
+		"fan_speed_setpoint",
 		"zone_temp",
 		"fault_code",
 		"alarm_active",
@@ -545,4 +558,108 @@ func hasAnyAssetLock(locks map[string]AssetControlLockInfo) bool {
 		}
 	}
 	return false
+}
+
+type auxiliaryTargetLiveState struct {
+	Feedback           *TelemetryLivePoint
+	Diagnostics        []TelemetryLivePoint
+	DeviceFaultActive  bool
+	CabinetLocalManual bool
+	DeviceOffline      bool
+}
+
+func auxiliaryFeedbackKeys(capability commandmodel.Capability, configuredKey string) []string {
+	keys := make([]string, 0, 5)
+	if clean := strings.TrimSpace(configuredKey); clean != "" {
+		keys = append(keys, clean)
+	}
+	switch capability {
+	case commandmodel.CapabilitySetFrequency:
+		keys = append(keys, "frequency_hz", "frequency_feedback", "vfd_frequency", "frequency_setpoint")
+	case commandmodel.CapabilitySetFanSpeed:
+		keys = append(keys, "fan_speed_pct", "fan_speed_feedback", "fan_speed_setpoint")
+	}
+	return keys
+}
+
+func extractAuxiliaryTargetLiveState(points []TelemetryLivePoint, aux AuxiliaryLoopTarget) auxiliaryTargetLiveState {
+	state := auxiliaryTargetLiveState{}
+	devID := strings.TrimSpace(aux.Target.DeviceID)
+	feedbackKeys := auxiliaryFeedbackKeys(aux.Capability, aux.Target.FeedbackPointKey)
+	if devID != "" {
+		state.Feedback = findDevicePointByKeys(points, devID, feedbackKeys...)
+	}
+	if state.Feedback != nil && isPointDeviceOffline(state.Feedback) {
+		state.DeviceOffline = true
+	}
+	for _, pt := range points {
+		if devID == "" || pt.DeviceID != devID {
+			continue
+		}
+		if isPointDeviceOffline(&pt) {
+			state.DeviceOffline = true
+		}
+		if pt.TextValue != nil && strings.EqualFold(strings.TrimSpace(*pt.TextValue), "FAULT") {
+			state.DeviceFaultActive = true
+		}
+		if commandmodel.IsFaultOrAlarmPointKey(pt.TelemetryKey) {
+			if livePointIndicatesFault(pt) {
+				state.DeviceFaultActive = true
+			}
+			state.Diagnostics = append(state.Diagnostics, pt)
+		}
+		if commandmodel.IsLocalManualPointKey(pt.TelemetryKey) {
+			if livePointIndicatesLocalManual(pt) {
+				state.CabinetLocalManual = true
+			}
+			state.Diagnostics = append(state.Diagnostics, pt)
+		}
+	}
+	return state
+}
+
+func buildAuxiliaryGuardrailPointSamples(
+	siteCtx AutoControlSiteContext,
+	liveState autoControlLiveState,
+	aux AuxiliaryLoopTarget,
+	auxLive auxiliaryTargetLiveState,
+) []commandmodel.GuardrailPointSample {
+	samples := make([]commandmodel.GuardrailPointSample, 0, len(auxLive.Diagnostics)+len(siteCtx.InputMapping.effectiveZoneKeys())+4)
+	seen := make(map[string]struct{}, 16)
+	addSample := func(pt TelemetryLivePoint) {
+		id := strings.TrimSpace(pt.DeviceID) + "\x00" + strings.TrimSpace(pt.TelemetryKey)
+		if _, exists := seen[id]; exists {
+			return
+		}
+		seen[id] = struct{}{}
+		present := !strings.EqualFold(strings.TrimSpace(pt.Freshness), "MISSING") &&
+			(!pt.SampledAt.IsZero() || pt.NumericValue != nil || pt.BoolValue != nil || pt.TextValue != nil)
+		samples = append(samples, commandmodel.GuardrailPointSample{
+			Key:         pt.TelemetryKey,
+			Value:       pt.NumericValue,
+			BoolValue:   pt.BoolValue,
+			StringValue: derefStringPtr(pt.TextValue),
+			Quality:     pt.Quality,
+			SampledAt:   pt.SampledAt.UTC(),
+			Present:     present,
+		})
+	}
+	if liveState.SupplyTemp != nil {
+		addSample(*liveState.SupplyTemp)
+	}
+	for _, zk := range siteCtx.InputMapping.effectiveZoneKeys() {
+		if zp, ok := liveState.ZoneTemps[zk]; ok {
+			addSample(zp)
+		}
+	}
+	if auxLive.Feedback != nil {
+		addSample(*auxLive.Feedback)
+	} else {
+		fallbackKey := firstNonEmptyString(strings.TrimSpace(aux.Target.FeedbackPointKey), fallbackVerificationKeyForCapability(aux.Capability, siteCtx.InputMapping))
+		samples = append(samples, commandmodel.GuardrailPointSample{Key: fallbackKey, Present: false})
+	}
+	for _, diagPt := range auxLive.Diagnostics {
+		addSample(diagPt)
+	}
+	return samples
 }

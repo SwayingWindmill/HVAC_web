@@ -17,7 +17,7 @@
     },
     "httpContract": {
       "path": "contracts/http/platform-gateway.openapi.yaml",
-      "sha256": "7bb3fd681943b8ea6c400a4777f8da84dc61f5946b3e4e57d9cdf14b553a5cf3"
+      "sha256": "47bffc9eb102e7a0190cd0eeb3b20ee468e91054c782cf28c86a4922d907c723"
     },
     "edgeReplicationContract": {
       "path": "contracts/mqtt/edge-replication-envelope.v1.schema.json",
@@ -26,7 +26,7 @@
   },
   "schemaContract": {
     "migrationManifest": "deploy/platform/phase1/migrations/manifest.v1.json",
-    "migrationManifestSha256": "cc4e85a23cc38a990386b3d9a68eb9bb0e941d33b7a56b27cf6c57c6b05d51a6",
+    "migrationManifestSha256": "7ac80dc1ea0fc67cd9b2d5e3580fd9b9e9c323791134f58e7a2062e8dc833014",
     "clickhouseMigrationManifest": "deploy/platform/phase1/clickhouse-migrations/clickhouse-manifest.v1.json",
     "clickhouseMigrationManifestSha256": "f7309ccc57ec6092143452be92ee9b9b5d758f381fb3ef678a106a05d15ba644",
     "compatibilityMode": "exact-product-and-manifest",

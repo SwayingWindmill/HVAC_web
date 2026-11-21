@@ -900,6 +900,14 @@ type armAutoControlLeasePublicRequest struct {
 	MinRunningChillers  *int     `json:"minRunningChillers,omitempty"`
 	MaxCommandsPerHour  *int     `json:"maxCommandsPerHour,omitempty"`
 	ExecutionMode       string   `json:"executionMode,omitempty"`
+	PumpFreqMinHz       *float64 `json:"pumpFreqMinHz,omitempty"`
+	PumpFreqMaxHz       *float64 `json:"pumpFreqMaxHz,omitempty"`
+	MaxFreqStepHz       *float64 `json:"maxFreqStepHz,omitempty"`
+	FreqDeadbandHz      *float64 `json:"freqDeadbandHz,omitempty"`
+	FanSpeedMinPct      *float64 `json:"fanSpeedMinPct,omitempty"`
+	FanSpeedMaxPct      *float64 `json:"fanSpeedMaxPct,omitempty"`
+	MaxFanStepPct       *float64 `json:"maxFanStepPct,omitempty"`
+	FanDeadbandPct      *float64 `json:"fanDeadbandPct,omitempty"`
 	Reason              string   `json:"reason"`
 	VerificationCode    string   `json:"verificationCode"`
 	ExpectedRevision    *int64   `json:"expectedRevision,omitempty"`
@@ -917,6 +925,14 @@ type armAutoControlLeaseCoreRequest struct {
 	MinRunningChillers  *int                `json:"minRunningChillers,omitempty"`
 	MaxCommandsPerHour  *int                `json:"maxCommandsPerHour,omitempty"`
 	ExecutionMode       string              `json:"executionMode,omitempty"`
+	PumpFreqMinHz       *float64            `json:"pumpFreqMinHz,omitempty"`
+	PumpFreqMaxHz       *float64            `json:"pumpFreqMaxHz,omitempty"`
+	MaxFreqStepHz       *float64            `json:"maxFreqStepHz,omitempty"`
+	FreqDeadbandHz      *float64            `json:"freqDeadbandHz,omitempty"`
+	FanSpeedMinPct      *float64            `json:"fanSpeedMinPct,omitempty"`
+	FanSpeedMaxPct      *float64            `json:"fanSpeedMaxPct,omitempty"`
+	MaxFanStepPct       *float64            `json:"maxFanStepPct,omitempty"`
+	FanDeadbandPct      *float64            `json:"fanDeadbandPct,omitempty"`
 	Reason              string              `json:"reason"`
 	Meta                controlRegistryMeta `json:"meta"`
 }
@@ -1067,6 +1083,14 @@ func (h *handler) serveAutoControlLeaseArm(writer http.ResponseWriter, request *
 		MinRunningChillers:  input.MinRunningChillers,
 		MaxCommandsPerHour:  input.MaxCommandsPerHour,
 		ExecutionMode:       input.ExecutionMode,
+		PumpFreqMinHz:       input.PumpFreqMinHz,
+		PumpFreqMaxHz:       input.PumpFreqMaxHz,
+		MaxFreqStepHz:       input.MaxFreqStepHz,
+		FreqDeadbandHz:      input.FreqDeadbandHz,
+		FanSpeedMinPct:      input.FanSpeedMinPct,
+		FanSpeedMaxPct:      input.FanSpeedMaxPct,
+		MaxFanStepPct:       input.MaxFanStepPct,
+		FanDeadbandPct:      input.FanDeadbandPct,
 		Reason:              reason,
 		Meta:                meta,
 	}

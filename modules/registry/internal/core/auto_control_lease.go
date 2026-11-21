@@ -77,6 +77,14 @@ type AutoControlLease struct {
 	MinRunningChillers  int      `json:"minRunningChillers"`
 	MaxCommandsPerHour  int      `json:"maxCommandsPerHour"`
 	ExecutionMode       string   `json:"executionMode"`
+	PumpFreqMinHz       *float64 `json:"pumpFreqMinHz,omitempty"`
+	PumpFreqMaxHz       *float64 `json:"pumpFreqMaxHz,omitempty"`
+	MaxFreqStepHz       *float64 `json:"maxFreqStepHz,omitempty"`
+	FreqDeadbandHz      *float64 `json:"freqDeadbandHz,omitempty"`
+	FanSpeedMinPct      *float64 `json:"fanSpeedMinPct,omitempty"`
+	FanSpeedMaxPct      *float64 `json:"fanSpeedMaxPct,omitempty"`
+	MaxFanStepPct       *float64 `json:"maxFanStepPct,omitempty"`
+	FanDeadbandPct      *float64 `json:"fanDeadbandPct,omitempty"`
 	TripReason          *string  `json:"tripReason,omitempty"`
 	ManualBackoffUntil  *string  `json:"manualBackoffUntil,omitempty"`
 	ManualBackoffReason string   `json:"manualBackoffReason,omitempty"`
@@ -106,6 +114,14 @@ type ArmAutoControlLeaseMutation struct {
 	MinRunningChillers  *int         `json:"minRunningChillers,omitempty"`
 	MaxCommandsPerHour  *int         `json:"maxCommandsPerHour,omitempty"`
 	ExecutionMode       string       `json:"executionMode,omitempty"`
+	PumpFreqMinHz       *float64     `json:"pumpFreqMinHz,omitempty"`
+	PumpFreqMaxHz       *float64     `json:"pumpFreqMaxHz,omitempty"`
+	MaxFreqStepHz       *float64     `json:"maxFreqStepHz,omitempty"`
+	FreqDeadbandHz      *float64     `json:"freqDeadbandHz,omitempty"`
+	FanSpeedMinPct      *float64     `json:"fanSpeedMinPct,omitempty"`
+	FanSpeedMaxPct      *float64     `json:"fanSpeedMaxPct,omitempty"`
+	MaxFanStepPct       *float64     `json:"maxFanStepPct,omitempty"`
+	FanDeadbandPct      *float64     `json:"fanDeadbandPct,omitempty"`
 	Reason              string       `json:"reason,omitempty"`
 	Meta                MutationMeta `json:"meta"`
 }
@@ -125,6 +141,8 @@ type OptimizationExecutionMonitor struct {
 	CommandIntentID         *string         `json:"commandIntentId"`
 	DeviceID                string          `json:"deviceId"`
 	TargetCapability        string          `json:"targetCapability"`
+	LoopKey                 string          `json:"loopKey,omitempty"`
+	TargetUnit              string          `json:"targetUnit,omitempty"`
 	BaselineSupplyTempC     *float64        `json:"baselineSupplyTempC,omitempty"`
 	AppliedSupplyTempC      *float64        `json:"appliedSupplyTempC,omitempty"`
 	RestoreSupplyTempC      *float64        `json:"restoreSupplyTempC,omitempty"`
@@ -156,16 +174,24 @@ type OptimizationExecutionMonitorList struct {
 }
 
 type normalizedAutoControlLeaseValues struct {
-	expiresAt     time.Time
-	capabilities  []string
-	maxStep       float64
-	deadbandC     float64
-	supplyMin     float64
-	supplyMax     float64
-	zoneMax       float64
-	minChillers   int
-	maxPerHour    int
-	executionMode string
+	expiresAt      time.Time
+	capabilities   []string
+	maxStep        float64
+	deadbandC      float64
+	supplyMin      float64
+	supplyMax      float64
+	zoneMax        float64
+	minChillers    int
+	maxPerHour     int
+	executionMode  string
+	pumpFreqMinHz  *float64
+	pumpFreqMaxHz  *float64
+	maxFreqStepHz  *float64
+	freqDeadbandHz *float64
+	fanSpeedMinPct *float64
+	fanSpeedMaxPct *float64
+	maxFanStepPct  *float64
+	fanDeadbandPct *float64
 }
 
 func (input ArmAutoControlLeaseMutation) normalizedValues(now time.Time) (normalizedAutoControlLeaseValues, error) {
@@ -258,18 +284,83 @@ func (input ArmAutoControlLeaseMutation) normalizedValues(now time.Time) (normal
 	default:
 		return normalizedAutoControlLeaseValues{}, ErrInvalidMutation
 	}
+	pumpFreqMinHz, err := validateOptionalFloatBound(input.PumpFreqMinHz, 20.0, 50.0, false)
+	if err != nil {
+		return normalizedAutoControlLeaseValues{}, err
+	}
+	pumpFreqMaxHz, err := validateOptionalFloatBound(input.PumpFreqMaxHz, 25.0, 60.0, false)
+	if err != nil {
+		return normalizedAutoControlLeaseValues{}, err
+	}
+	if pumpFreqMinHz != nil && pumpFreqMaxHz != nil && *pumpFreqMinHz > *pumpFreqMaxHz {
+		return normalizedAutoControlLeaseValues{}, ErrInvalidMutation
+	}
+	maxFreqStepHz, err := validateOptionalFloatBound(input.MaxFreqStepHz, 0.0, 10.0, true)
+	if err != nil {
+		return normalizedAutoControlLeaseValues{}, err
+	}
+	freqDeadbandHz, err := validateOptionalFloatBound(input.FreqDeadbandHz, 0.1, 5.0, false)
+	if err != nil {
+		return normalizedAutoControlLeaseValues{}, err
+	}
+	fanSpeedMinPct, err := validateOptionalFloatBound(input.FanSpeedMinPct, 15.0, 100.0, false)
+	if err != nil {
+		return normalizedAutoControlLeaseValues{}, err
+	}
+	fanSpeedMaxPct, err := validateOptionalFloatBound(input.FanSpeedMaxPct, 20.0, 100.0, false)
+	if err != nil {
+		return normalizedAutoControlLeaseValues{}, err
+	}
+	if fanSpeedMinPct != nil && fanSpeedMaxPct != nil && *fanSpeedMinPct > *fanSpeedMaxPct {
+		return normalizedAutoControlLeaseValues{}, ErrInvalidMutation
+	}
+	maxFanStepPct, err := validateOptionalFloatBound(input.MaxFanStepPct, 0.0, 25.0, true)
+	if err != nil {
+		return normalizedAutoControlLeaseValues{}, err
+	}
+	fanDeadbandPct, err := validateOptionalFloatBound(input.FanDeadbandPct, 0.5, 15.0, false)
+	if err != nil {
+		return normalizedAutoControlLeaseValues{}, err
+	}
 	return normalizedAutoControlLeaseValues{
-		expiresAt:     expiresAt,
-		capabilities:  capabilities,
-		maxStep:       maxStep,
-		deadbandC:     deadbandC,
-		supplyMin:     supplyMin,
-		supplyMax:     supplyMax,
-		zoneMax:       zoneMax,
-		minChillers:   minChillers,
-		maxPerHour:    maxPerHour,
-		executionMode: executionMode,
+		expiresAt:      expiresAt,
+		capabilities:   capabilities,
+		maxStep:        maxStep,
+		deadbandC:      deadbandC,
+		supplyMin:      supplyMin,
+		supplyMax:      supplyMax,
+		zoneMax:        zoneMax,
+		minChillers:    minChillers,
+		maxPerHour:     maxPerHour,
+		executionMode:  executionMode,
+		pumpFreqMinHz:  pumpFreqMinHz,
+		pumpFreqMaxHz:  pumpFreqMaxHz,
+		maxFreqStepHz:  maxFreqStepHz,
+		freqDeadbandHz: freqDeadbandHz,
+		fanSpeedMinPct: fanSpeedMinPct,
+		fanSpeedMaxPct: fanSpeedMaxPct,
+		maxFanStepPct:  maxFanStepPct,
+		fanDeadbandPct: fanDeadbandPct,
 	}, nil
+}
+
+func validateOptionalFloatBound(raw *float64, minVal, maxVal float64, strictMin bool) (*float64, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	v := *raw
+	if math.IsNaN(v) || math.IsInf(v, 0) || v > maxVal {
+		return nil, ErrInvalidMutation
+	}
+	if strictMin {
+		if v <= minVal {
+			return nil, ErrInvalidMutation
+		}
+	} else if v < minVal {
+		return nil, ErrInvalidMutation
+	}
+	copyVal := v
+	return &copyVal, nil
 }
 
 func (input RevokeAutoControlLeaseMutation) Validate() error {
@@ -329,8 +420,10 @@ WHERE id = $1::uuid AND NOT (id = ANY($2::uuid[]))
 const autoControlLeaseSelectColumns = `
 id::text, tenant_id::text, site_id::text, status, armed_by::text, armed_at, expires_at,
 allowed_capabilities, max_setpoint_step_c, deadband_c, supply_temp_min_c, supply_temp_max_c,
-zone_temp_max_c, min_running_chillers, max_commands_per_hour, execution_mode, trip_reason,
-manual_backoff_until, manual_backoff_reason, revision, created_at, updated_at`
+zone_temp_max_c, min_running_chillers, max_commands_per_hour, execution_mode,
+pump_freq_min_hz, pump_freq_max_hz, max_freq_step_hz, freq_deadband_hz,
+fan_speed_min_pct, fan_speed_max_pct, max_fan_step_pct, fan_deadband_pct,
+trip_reason, manual_backoff_until, manual_backoff_reason, revision, created_at, updated_at`
 
 func scanAutoControlLeaseRow(row pgx.Row) (AutoControlLease, time.Time, error) {
 	var lease AutoControlLease
@@ -339,8 +432,10 @@ func scanAutoControlLeaseRow(row pgx.Row) (AutoControlLease, time.Time, error) {
 	if err := row.Scan(
 		&lease.ID, &lease.TenantID, &lease.SiteID, &lease.Status, &lease.ArmedBy, &armedAt, &expiresAt,
 		&lease.AllowedCapabilities, &lease.MaxSetpointStepC, &lease.DeadbandC, &lease.SupplyTempMinC, &lease.SupplyTempMaxC,
-		&lease.ZoneTempMaxC, &lease.MinRunningChillers, &lease.MaxCommandsPerHour, &lease.ExecutionMode, &lease.TripReason,
-		&manualBackoffUntil, &lease.ManualBackoffReason, &lease.Revision, &createdAt, &updatedAt,
+		&lease.ZoneTempMaxC, &lease.MinRunningChillers, &lease.MaxCommandsPerHour, &lease.ExecutionMode,
+		&lease.PumpFreqMinHz, &lease.PumpFreqMaxHz, &lease.MaxFreqStepHz, &lease.FreqDeadbandHz,
+		&lease.FanSpeedMinPct, &lease.FanSpeedMaxPct, &lease.MaxFanStepPct, &lease.FanDeadbandPct,
+		&lease.TripReason, &manualBackoffUntil, &lease.ManualBackoffReason, &lease.Revision, &createdAt, &updatedAt,
 	); err != nil {
 		return AutoControlLease{}, time.Time{}, err
 	}
@@ -453,15 +548,21 @@ WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND id = $3::uuid
 INSERT INTO core_registry.site_auto_control_leases (
   id, tenant_id, site_id, status, armed_by, armed_at, expires_at,
   allowed_capabilities, max_setpoint_step_c, deadband_c, supply_temp_min_c, supply_temp_max_c,
-  zone_temp_max_c, min_running_chillers, max_commands_per_hour, execution_mode, trip_reason,
-  revision, created_at, updated_at
+  zone_temp_max_c, min_running_chillers, max_commands_per_hour, execution_mode,
+  pump_freq_min_hz, pump_freq_max_hz, max_freq_step_hz, freq_deadband_hz,
+  fan_speed_min_pct, fan_speed_max_pct, max_fan_step_pct, fan_deadband_pct,
+  trip_reason, revision, created_at, updated_at
 ) VALUES (
   $1::uuid, $2::uuid, $3::uuid, 'ACTIVE', $4::uuid, $5, $6,
   $7, $8, $9, $10, $11,
-  $12, $13, $14, $15, NULL,
-  1, $5, $5
+  $12, $13, $14, $15,
+  $16, $17, $18, $19,
+  $20, $21, $22, $23,
+  NULL, 1, $5, $5
 )`, leaseID, claims.TenantID, input.SiteID, claims.PrincipalID, now, values.expiresAt,
-			values.capabilities, values.maxStep, values.deadbandC, values.supplyMin, values.supplyMax, values.zoneMax, values.minChillers, values.maxPerHour, values.executionMode); err != nil {
+			values.capabilities, values.maxStep, values.deadbandC, values.supplyMin, values.supplyMax, values.zoneMax, values.minChillers, values.maxPerHour, values.executionMode,
+			values.pumpFreqMinHz, values.pumpFreqMaxHz, values.maxFreqStepHz, values.freqDeadbandHz,
+			values.fanSpeedMinPct, values.fanSpeedMaxPct, values.maxFanStepPct, values.fanDeadbandPct); err != nil {
 			return mutationRecord[SiteAutoControlLeaseState]{}, fmt.Errorf("insert auto control lease: %w", err)
 		}
 
@@ -482,6 +583,14 @@ INSERT INTO core_registry.site_auto_control_leases (
 			MinRunningChillers:  values.minChillers,
 			MaxCommandsPerHour:  values.maxPerHour,
 			ExecutionMode:       values.executionMode,
+			PumpFreqMinHz:       values.pumpFreqMinHz,
+			PumpFreqMaxHz:       values.pumpFreqMaxHz,
+			MaxFreqStepHz:       values.maxFreqStepHz,
+			FreqDeadbandHz:      values.freqDeadbandHz,
+			FanSpeedMinPct:      values.fanSpeedMinPct,
+			FanSpeedMaxPct:      values.fanSpeedMaxPct,
+			MaxFanStepPct:       values.maxFanStepPct,
+			FanDeadbandPct:      values.fanDeadbandPct,
 			Revision:            1,
 			CreatedAt:           formatInstant(now),
 			UpdatedAt:           formatInstant(now),
@@ -626,7 +735,7 @@ WHERE id = $1::uuid AND NOT (id = ANY($2::uuid[]))
 		rows, err := transaction.Query(ctx, `
 SELECT id::text, tenant_id::text, site_id::text, lease_id::text, recommendation_id::text,
        CASE WHEN command_intent_id IS NULL THEN NULL ELSE command_intent_id::text END,
-       device_id::text, target_capability,
+       device_id::text, target_capability, COALESCE(loop_key, 'PLANT'), COALESCE(target_unit, 'C'),
        baseline_supply_temp_c, applied_supply_temp_c, restore_supply_temp_c,
        supply_temp_min_c, zone_temp_max_c, supply_temp_max_c,
        raw_recommended_value, clamped_value, guardrail_verdict, guardrail_trace,
@@ -654,7 +763,7 @@ LIMIT 50
 			var guardrailTrace []byte
 			if err := rows.Scan(
 				&item.ID, &item.TenantID, &item.SiteID, &item.LeaseID, &item.RecommendationID,
-				&item.CommandIntentID, &item.DeviceID, &item.TargetCapability,
+				&item.CommandIntentID, &item.DeviceID, &item.TargetCapability, &item.LoopKey, &item.TargetUnit,
 				&item.BaselineSupplyTempC, &item.AppliedSupplyTempC, &item.RestoreSupplyTempC,
 				&item.SupplyTempMinC, &item.ZoneTempMaxC, &item.SupplyTempMaxC,
 				&item.RawRecommendedValue, &item.ClampedValue, &item.GuardrailVerdict, &guardrailTrace,

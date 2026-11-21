@@ -2872,6 +2872,32 @@ export class Gateway {
       const allowedCaps: string[] = Array.isArray(body?.allowedCapabilities) ? body.allowedCapabilities : [];
       const reason = String(body?.reason ?? '').trim();
 
+      const optNum = (key: string): number | undefined => {
+        const rawVal = body?.[key];
+        if (rawVal === undefined || rawVal === null) return undefined;
+        return Number(rawVal);
+      };
+      const pumpFreqMinHz = optNum('pumpFreqMinHz');
+      const pumpFreqMaxHz = optNum('pumpFreqMaxHz');
+      const maxFreqStepHz = optNum('maxFreqStepHz');
+      const freqDeadbandHz = optNum('freqDeadbandHz');
+      const fanSpeedMinPct = optNum('fanSpeedMinPct');
+      const fanSpeedMaxPct = optNum('fanSpeedMaxPct');
+      const maxFanStepPct = optNum('maxFanStepPct');
+      const fanDeadbandPct = optNum('fanDeadbandPct');
+
+      const optionalBoundsValid =
+        (pumpFreqMinHz === undefined || (Number.isFinite(pumpFreqMinHz) && pumpFreqMinHz >= 20 && pumpFreqMinHz <= 50))
+        && (pumpFreqMaxHz === undefined || (Number.isFinite(pumpFreqMaxHz) && pumpFreqMaxHz >= 25 && pumpFreqMaxHz <= 60))
+        && (pumpFreqMinHz === undefined || pumpFreqMaxHz === undefined || pumpFreqMinHz <= pumpFreqMaxHz)
+        && (maxFreqStepHz === undefined || (Number.isFinite(maxFreqStepHz) && maxFreqStepHz > 0 && maxFreqStepHz <= 10))
+        && (freqDeadbandHz === undefined || (Number.isFinite(freqDeadbandHz) && freqDeadbandHz >= 0.1 && freqDeadbandHz <= 5))
+        && (fanSpeedMinPct === undefined || (Number.isFinite(fanSpeedMinPct) && fanSpeedMinPct >= 15 && fanSpeedMinPct <= 100))
+        && (fanSpeedMaxPct === undefined || (Number.isFinite(fanSpeedMaxPct) && fanSpeedMaxPct >= 20 && fanSpeedMaxPct <= 100))
+        && (fanSpeedMinPct === undefined || fanSpeedMaxPct === undefined || fanSpeedMinPct <= fanSpeedMaxPct)
+        && (maxFanStepPct === undefined || (Number.isFinite(maxFanStepPct) && maxFanStepPct > 0 && maxFanStepPct <= 25))
+        && (fanDeadbandPct === undefined || (Number.isFinite(fanDeadbandPct) && fanDeadbandPct >= 0.5 && fanDeadbandPct <= 15));
+
       const valid =
         (executionMode === 'CLOSED_LOOP' || executionMode === 'SHADOW')
         && Number.isInteger(expiresInHours) && expiresInHours >= 1 && expiresInHours <= 24
@@ -2883,6 +2909,7 @@ export class Gateway {
         && Number.isFinite(zoneMax) && zoneMax >= 18 && zoneMax <= 32
         && Number.isInteger(minChillers) && minChillers >= 0
         && Number.isInteger(maxPerHour) && maxPerHour >= 1 && maxPerHour <= 6
+        && optionalBoundsValid
         && reason.length >= 1 && reason.length <= 1000;
       if (!valid) {
         return refuse(400, 'REGISTRY_MUTATION_INVALID', 'The auto control lease payload is invalid.');
@@ -2911,6 +2938,14 @@ export class Gateway {
         zoneTempMaxC: zoneMax,
         minRunningChillers: minChillers,
         maxCommandsPerHour: maxPerHour,
+        ...(pumpFreqMinHz !== undefined ? { pumpFreqMinHz } : {}),
+        ...(pumpFreqMaxHz !== undefined ? { pumpFreqMaxHz } : {}),
+        ...(maxFreqStepHz !== undefined ? { maxFreqStepHz } : {}),
+        ...(freqDeadbandHz !== undefined ? { freqDeadbandHz } : {}),
+        ...(fanSpeedMinPct !== undefined ? { fanSpeedMinPct } : {}),
+        ...(fanSpeedMaxPct !== undefined ? { fanSpeedMaxPct } : {}),
+        ...(maxFanStepPct !== undefined ? { maxFanStepPct } : {}),
+        ...(fanDeadbandPct !== undefined ? { fanDeadbandPct } : {}),
         revision: currentActive ? Number(currentActive.revision) + 1 : 1,
         createdAt: now,
         updatedAt: now,

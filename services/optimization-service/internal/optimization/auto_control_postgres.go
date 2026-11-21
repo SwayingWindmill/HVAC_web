@@ -34,7 +34,9 @@ SELECT id::text, tenant_id::text, site_id::text, status, armed_by::text, armed_a
        allowed_capabilities, max_setpoint_step_c, supply_temp_min_c, supply_temp_max_c,
        zone_temp_max_c, min_running_chillers, max_commands_per_hour,
        deadband_c, manual_backoff_until, manual_backoff_reason, revision,
-       COALESCE(execution_mode, 'CLOSED_LOOP')
+       COALESCE(execution_mode, 'CLOSED_LOOP'),
+       pump_freq_min_hz, pump_freq_max_hz, max_freq_step_hz, freq_deadband_hz,
+       fan_speed_min_pct, fan_speed_max_pct, max_fan_step_pct, fan_deadband_pct
 FROM core_registry.site_auto_control_leases
 WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND status = 'ACTIVE' AND expires_at > $3
 ORDER BY armed_at DESC, id DESC
@@ -45,6 +47,8 @@ LIMIT 1
 		&lease.ZoneTempMaxC, &lease.MinRunningChillers, &lease.MaxCommandsPerHour,
 		&lease.DeadbandC, &lease.ManualBackoffUntil, &lease.ManualBackoffReason, &lease.Revision,
 		&lease.ExecutionMode,
+		&lease.PumpFreqMinHz, &lease.PumpFreqMaxHz, &lease.MaxFreqStepHz, &lease.FreqDeadbandHz,
+		&lease.FanSpeedMinPct, &lease.FanSpeedMaxPct, &lease.MaxFanStepPct, &lease.FanDeadbandPct,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -128,18 +132,22 @@ LIMIT 1
 
 	var leaseExecutionMode string
 	var leaseDeadbandC float64
+	var leaseFreqDeadbandHz, leaseFanDeadbandPct *float64
 	err = tx.QueryRow(ctx, `
-SELECT COALESCE(execution_mode, 'CLOSED_LOOP'), COALESCE(deadband_c, 0)
+SELECT COALESCE(execution_mode, 'CLOSED_LOOP'), COALESCE(deadband_c, 0),
+       freq_deadband_hz, fan_deadband_pct
 FROM core_registry.site_auto_control_leases
 WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND status = 'ACTIVE' AND expires_at > $3
 ORDER BY armed_at DESC, id DESC
 LIMIT 1
-`, tenantID, siteID, at.UTC()).Scan(&leaseExecutionMode, &leaseDeadbandC)
+`, tenantID, siteID, at.UTC()).Scan(&leaseExecutionMode, &leaseDeadbandC, &leaseFreqDeadbandHz, &leaseFanDeadbandPct)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return AutoControlSiteContext{}, fmt.Errorf("load active lease execution mode: %w", err)
 	}
 	result.ExecutionMode = normalizeExecutionMode(leaseExecutionMode)
 	result.LeaseDeadbandC = leaseDeadbandC
+	result.LeaseFreqDeadbandHz = leaseFreqDeadbandHz
+	result.LeaseFanDeadbandPct = leaseFanDeadbandPct
 
 	if err = tx.QueryRow(ctx, `
 SELECT count(*)::int
@@ -164,16 +172,37 @@ WHERE tenant_id = $1::uuid
 	}
 
 	stalePendingCutoff := at.UTC().Add(-DefaultPendingSubmitStaleAge)
-	if err = tx.QueryRow(ctx, `
-SELECT EXISTS (
-  SELECT 1
-  FROM core_registry.optimization_execution_monitors
-  WHERE tenant_id = $1::uuid
-    AND site_id = $2::uuid
-    AND (status = 'OBSERVING' OR (status = 'PENDING_SUBMIT' AND started_at >= $3))
-)`, tenantID, siteID, stalePendingCutoff).Scan(&result.HasActiveMonitor); err != nil {
+	activeLoopRows, err := tx.Query(ctx, `
+SELECT COALESCE(loop_key, 'PLANT')
+FROM core_registry.optimization_execution_monitors
+WHERE tenant_id = $1::uuid
+  AND site_id = $2::uuid
+  AND (status = 'OBSERVING' OR (status = 'PENDING_SUBMIT' AND started_at >= $3))
+GROUP BY COALESCE(loop_key, 'PLANT')
+`, tenantID, siteID, stalePendingCutoff)
+	if err != nil {
 		return AutoControlSiteContext{}, fmt.Errorf("check active optimization monitors: %w", err)
 	}
+	activeLoops := make(map[string]bool)
+	for activeLoopRows.Next() {
+		var loopKey string
+		if scanErr := activeLoopRows.Scan(&loopKey); scanErr != nil {
+			activeLoopRows.Close()
+			return AutoControlSiteContext{}, scanErr
+		}
+		cleanLoop := strings.ToUpper(strings.TrimSpace(loopKey))
+		if cleanLoop == "" {
+			cleanLoop = LoopKeyPlant
+		}
+		activeLoops[cleanLoop] = true
+	}
+	if err = activeLoopRows.Err(); err != nil {
+		activeLoopRows.Close()
+		return AutoControlSiteContext{}, err
+	}
+	activeLoopRows.Close()
+	result.ActiveLoopMonitors = activeLoops
+	result.HasActiveMonitor = activeLoops[LoopKeyPlant]
 
 	rows, err := tx.Query(ctx, `
 SELECT tp.id::text, tp.reporting_device_id::text, tp.point_code,
@@ -221,11 +250,132 @@ LIMIT 2
 		target := targets[0]
 		result.SetpointTarget = &target
 	}
+	rows.Close()
+
+	auxTargets, err := loadAuxiliarySiteTargets(ctx, tx, tenantID, siteID, at.UTC(), topology.SiteControlMode)
+	if err != nil {
+		return AutoControlSiteContext{}, err
+	}
+	result.AuxiliaryTargets = auxTargets
 
 	if err = tx.Commit(ctx); err != nil {
 		return AutoControlSiteContext{}, err
 	}
 	return result, nil
+}
+
+func loadAuxiliarySiteTargets(
+	ctx context.Context,
+	tx pgx.Tx,
+	tenantID, siteID string,
+	at time.Time,
+	siteControlMode string,
+) ([]AuxiliaryLoopTarget, error) {
+	rows, err := tx.Query(ctx, `
+SELECT tp.id::text, tp.reporting_device_id::text, tp.point_code,
+       COALESCE(tp.source_metadata->>'capability', ''),
+       COALESCE(tp.source_metadata->>'feedbackPointKey', ''),
+       COALESCE(psb.asset_id::text, ''),
+       COALESCE(a.asset_type, ''),
+       EXISTS (
+         SELECT 1
+         FROM core_registry.device_bindings db
+         JOIN core_registry.asset_control_locks acl
+           ON acl.tenant_id = db.tenant_id AND acl.site_id = db.site_id AND acl.asset_id = db.asset_id
+         WHERE db.tenant_id = $1::uuid AND db.site_id = $2::uuid AND db.device_id = tp.reporting_device_id
+           AND db.status = 'ACTIVE' AND db.valid_to IS NULL AND acl.lock_mode <> 'UNLOCKED'
+       )
+FROM core_registry.telemetry_points tp
+JOIN core_registry.devices d
+  ON d.tenant_id = tp.tenant_id AND d.site_id = tp.site_id AND d.id = tp.reporting_device_id AND d.status = 'ACTIVE'
+LEFT JOIN core_registry.point_subject_bindings psb
+  ON psb.tenant_id = tp.tenant_id AND psb.site_id = tp.site_id
+ AND psb.point_id = tp.id AND psb.binding_role = 'CONTROLS'
+ AND psb.subject_type = 'ASSET' AND psb.status = 'ACTIVE'
+ AND psb.valid_from <= $3 AND (psb.valid_to IS NULL OR psb.valid_to > $3)
+LEFT JOIN core_registry.assets a
+  ON a.tenant_id = tp.tenant_id AND a.site_id = tp.site_id AND a.id = psb.asset_id
+WHERE tp.tenant_id = $1::uuid AND tp.site_id = $2::uuid
+  AND tp.point_type = 'COMMAND' AND tp.writable = true AND tp.status = 'ACTIVE'
+  AND tp.source_metadata->>'capability' IN ($4, $5)
+ORDER BY tp.point_code, tp.id
+`, tenantID, siteID, at, string(commandmodel.CapabilitySetFrequency), string(commandmodel.CapabilitySetFanSpeed))
+	if err != nil {
+		return nil, fmt.Errorf("lookup auxiliary loop command points: %w", err)
+	}
+	defer rows.Close()
+
+	grouped := make(map[string][]AuxiliaryLoopTarget)
+	for rows.Next() {
+		var target SetpointCommandTarget
+		var capRaw, assetType string
+		if scanErr := rows.Scan(
+			&target.PointID, &target.DeviceID, &target.PointCode,
+			&capRaw, &target.FeedbackPointKey, &target.AssetID, &assetType, &target.AssetLocked,
+		); scanErr != nil {
+			return nil, scanErr
+		}
+		target.SiteControlMode = siteControlMode
+		capName := commandmodel.Capability(strings.TrimSpace(capRaw))
+		loopKey, ok := resolveAuxiliaryLoopKey(capName, assetType, target.PointCode)
+		if !ok {
+			continue
+		}
+		groupKey := loopKey + "|" + string(capName)
+		grouped[groupKey] = append(grouped[groupKey], AuxiliaryLoopTarget{
+			LoopKey:    loopKey,
+			Capability: capName,
+			Target:     target,
+			AssetType:  strings.TrimSpace(assetType),
+		})
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	out := make([]AuxiliaryLoopTarget, 0, len(grouped))
+	for _, list := range grouped {
+		if len(list) == 1 {
+			out = append(out, list[0])
+		}
+	}
+	slices.SortFunc(out, func(a, b AuxiliaryLoopTarget) int {
+		if cmp := strings.Compare(a.LoopKey, b.LoopKey); cmp != 0 {
+			return cmp
+		}
+		return strings.Compare(string(a.Capability), string(b.Capability))
+	})
+	return out, nil
+}
+
+func resolveAuxiliaryLoopKey(capability commandmodel.Capability, assetType, pointCode string) (string, bool) {
+	cleanAssetType := strings.ToUpper(strings.TrimSpace(assetType))
+	switch capability {
+	case commandmodel.CapabilitySetFanSpeed:
+		return LoopKeyCoolingTowerFan, true
+	case commandmodel.CapabilitySetFrequency:
+		switch cleanAssetType {
+		case AssetTypeCHWP:
+			return LoopKeyChilledWaterPump, true
+		case AssetTypeCWP:
+			return LoopKeyCoolingWaterPump, true
+		case AssetTypeCoolingTower:
+			return LoopKeyCoolingTowerFan, true
+		}
+		lowerCode := strings.ToLower(strings.TrimSpace(pointCode))
+		switch {
+		case strings.Contains(lowerCode, "chwp") || strings.Contains(lowerCode, "chw") || strings.Contains(lowerCode, "chilled"):
+			return LoopKeyChilledWaterPump, true
+		case strings.Contains(lowerCode, "cwp") || strings.Contains(lowerCode, "cw") || strings.Contains(lowerCode, "cooling_water"):
+			return LoopKeyCoolingWaterPump, true
+		case strings.Contains(lowerCode, "tower") || strings.Contains(lowerCode, "fan"):
+			return LoopKeyCoolingTowerFan, true
+		default:
+			return "", false
+		}
+	default:
+		return "", false
+	}
 }
 
 // PreRegisterAutomatedDispatch atomically reserves a PENDING_SUBMIT monitor row under a site advisory lock
@@ -309,6 +459,13 @@ FOR UPDATE
 		return PreRegisterDispatchResult{SkipReason: "SHADOW_MODE_ACTIVE"}, nil
 	}
 
+	targetCap := reg.TargetCapability
+	if strings.TrimSpace(string(targetCap)) == "" {
+		targetCap = commandmodel.CapabilitySetChilledWaterTemperatureSetpoint
+	}
+	loopKey := normalizeMonitorLoopKey(reg.LoopKey, targetCap)
+	targetUnit := firstNonEmptyString(strings.TrimSpace(reg.TargetUnit), targetUnitForCapability(targetCap))
+
 	var approvalState string
 	var alreadyDispatched bool
 	err = tx.QueryRow(ctx, `
@@ -323,8 +480,26 @@ FOR UPDATE
 	if err != nil {
 		return PreRegisterDispatchResult{}, fmt.Errorf("lock optimization recommendation for dispatch: %w", err)
 	}
-	if alreadyDispatched {
+	if loopKey == LoopKeyPlant && alreadyDispatched {
 		return PreRegisterDispatchResult{SkipReason: "ALREADY_DISPATCHED"}, nil
+	}
+	if loopKey != LoopKeyPlant && !shadow {
+		var loopDup bool
+		if err = tx.QueryRow(ctx, `
+SELECT EXISTS (
+  SELECT 1
+  FROM core_registry.optimization_execution_monitors
+  WHERE tenant_id = $1::uuid
+    AND site_id = $2::uuid
+    AND recommendation_id = $3::uuid
+    AND COALESCE(loop_key, 'PLANT') = $4
+    AND status <> 'SUBMIT_FAILED'
+)`, reg.Recommendation.TenantID, reg.Recommendation.SiteID, reg.Recommendation.ID, loopKey).Scan(&loopDup); err != nil {
+			return PreRegisterDispatchResult{}, fmt.Errorf("check duplicate auxiliary monitor: %w", err)
+		}
+		if loopDup {
+			return PreRegisterDispatchResult{SkipReason: "ALREADY_DISPATCHED"}, nil
+		}
 	}
 	if approvalState == "REJECTED" {
 		return PreRegisterDispatchResult{SkipReason: "RECOMMENDATION_REJECTED"}, nil
@@ -354,9 +529,10 @@ SET status = 'SUBMIT_FAILED',
     updated_at = $3
 WHERE tenant_id = $1::uuid
   AND site_id = $2::uuid
+  AND COALESCE(loop_key, 'PLANT') = $5
   AND status = 'PENDING_SUBMIT'
   AND started_at < $4
-`, reg.Recommendation.TenantID, reg.Recommendation.SiteID, nowUTC, stalePendingCutoff); err != nil {
+`, reg.Recommendation.TenantID, reg.Recommendation.SiteID, nowUTC, stalePendingCutoff, loopKey); err != nil {
 			return PreRegisterDispatchResult{}, fmt.Errorf("sweep stale pending execution monitors: %w", err)
 		}
 
@@ -366,8 +542,9 @@ SELECT count(*)::int
 FROM core_registry.optimization_execution_monitors
 WHERE tenant_id = $1::uuid
   AND site_id = $2::uuid
+  AND COALESCE(loop_key, 'PLANT') = $3
   AND status IN ('PENDING_SUBMIT', 'OBSERVING')
-`, reg.Recommendation.TenantID, reg.Recommendation.SiteID).Scan(&activeMonitorCount); err != nil {
+`, reg.Recommendation.TenantID, reg.Recommendation.SiteID, loopKey).Scan(&activeMonitorCount); err != nil {
 			return PreRegisterDispatchResult{}, fmt.Errorf("check active execution monitors: %w", err)
 		}
 		if activeMonitorCount > 0 {
@@ -401,30 +578,35 @@ WHERE tenant_id = $1::uuid
 		executionMode = ExecutionModeShadow
 	}
 	windowEndsAt := nowUTC.Add(DefaultExecutionMonitorWindow)
-	supplyMinC := math.Max(DefaultSupplyTempHardFloorC, reg.SupplyMinC)
+	supplyMinC := reg.SupplyMinC
+	if targetCap == commandmodel.CapabilitySetChilledWaterTemperatureSetpoint || targetCap == commandmodel.CapabilitySetTemperatureSetpoint {
+		supplyMinC = math.Max(DefaultSupplyTempHardFloorC, reg.SupplyMinC)
+	}
 	if _, err := tx.Exec(ctx, `
 INSERT INTO core_registry.optimization_execution_monitors (
   id, tenant_id, site_id, lease_id, recommendation_id, command_intent_id,
-  device_id, target_capability, baseline_supply_temp_c, applied_supply_temp_c,
+  device_id, target_capability, loop_key, target_unit,
+  baseline_supply_temp_c, applied_supply_temp_c,
   restore_supply_temp_c, zone_temp_max_c, supply_temp_min_c, supply_temp_max_c,
   raw_recommended_value, clamped_value, guardrail_verdict, guardrail_trace,
   started_at, window_ends_at, last_checked_at, status,
   execution_mode, decision_id, trace_id, created_at, updated_at
 ) VALUES (
   $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, NULL,
-  $6::uuid, $7, $8, $9,
+  $6::uuid, $7, $24, $25,
+  $8, $9,
   $10, $11, $12, $13,
   $14, $15, $16, $17::jsonb,
   $18, $19, $18, $20,
   $21, $22::uuid, $23, $18, $18
 )`,
 		monitorID, reg.Recommendation.TenantID, reg.Recommendation.SiteID, reg.LeaseID, reg.Recommendation.ID,
-		reg.Target.DeviceID, string(commandmodel.CapabilitySetChilledWaterTemperatureSetpoint),
+		reg.Target.DeviceID, string(targetCap),
 		reg.BaselineSupplyC, reg.AppliedSupplyC,
 		reg.RestoreSupplyC, reg.ZoneMaxC, supplyMinC, reg.SupplyMaxC,
 		reg.RawRecommendedC, reg.ClampedC, reg.GuardrailVerdict, traceBytes,
 		nowUTC, windowEndsAt, status,
-		executionMode, decisionIDPtr, cleanTraceID,
+		executionMode, decisionIDPtr, cleanTraceID, loopKey, targetUnit,
 	); err != nil {
 		return PreRegisterDispatchResult{}, fmt.Errorf("insert optimization execution monitor (%s): %w", status, err)
 	}
@@ -441,7 +623,9 @@ INSERT INTO core_registry.optimization_execution_monitors (
 			LeaseID:             reg.LeaseID,
 			RecommendationID:    reg.Recommendation.ID,
 			DeviceID:            reg.Target.DeviceID,
-			TargetCapability:    string(commandmodel.CapabilitySetChilledWaterTemperatureSetpoint),
+			TargetCapability:    string(targetCap),
+			LoopKey:             loopKey,
+			TargetUnit:          targetUnit,
 			BaselineSupplyTempC: &reg.BaselineSupplyC,
 			AppliedSupplyTempC:  &reg.AppliedSupplyC,
 			RestoreSupplyTempC:  &reg.RestoreSupplyC,
@@ -489,6 +673,19 @@ func (store *PostgresStore) ActivateAutomatedDispatch(ctx context.Context, recom
 		return err
 	}
 
+	var monitorLoopKey string
+	if err = tx.QueryRow(ctx, `
+SELECT COALESCE(loop_key, 'PLANT')
+FROM core_registry.optimization_execution_monitors
+WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND id = $3::uuid
+FOR UPDATE
+`, recommendation.TenantID, recommendation.SiteID, monitorID).Scan(&monitorLoopKey); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errors.New("pending optimization execution monitor missing or already transitioned")
+		}
+		return fmt.Errorf("lock pending optimization execution monitor: %w", err)
+	}
+
 	tag, err := tx.Exec(ctx, `
 UPDATE core_registry.optimization_recommendations
 SET approval_state = 'APPROVED',
@@ -501,7 +698,7 @@ WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND id = $3::uuid AND command_
 	if err != nil {
 		return fmt.Errorf("record approved revalidated optimization recommendation: %w", err)
 	}
-	if tag.RowsAffected() != 1 {
+	if strings.EqualFold(strings.TrimSpace(monitorLoopKey), LoopKeyPlant) && tag.RowsAffected() != 1 {
 		return errors.New("optimization recommendation already dispatched or missing")
 	}
 
@@ -587,7 +784,7 @@ func scanExecutionMonitorRow(row pgx.Row) (OptimizationExecutionMonitorRecord, e
 	var decisionID *string
 	err := row.Scan(
 		&item.ID, &item.TenantID, &item.SiteID, &item.LeaseID, &item.RecommendationID,
-		&item.CommandIntentID, &item.DeviceID, &item.TargetCapability,
+		&item.CommandIntentID, &item.DeviceID, &item.TargetCapability, &item.LoopKey, &item.TargetUnit,
 		&item.BaselineSupplyTempC, &item.AppliedSupplyTempC, &item.RestoreSupplyTempC,
 		&item.ZoneTempMaxC, &item.SupplyTempMinC, &item.SupplyTempMaxC,
 		&item.RawRecommendedValue, &item.ClampedValue, &item.GuardrailVerdict, &item.GuardrailTrace,
@@ -631,6 +828,7 @@ func (store *PostgresStore) ClaimObservingExecutionMonitors(ctx context.Context,
 	rows, err := tx.Query(ctx, `
 SELECT m.id::text, m.tenant_id::text, m.site_id::text, m.lease_id::text, m.recommendation_id::text,
        COALESCE(m.command_intent_id::text, ''), m.device_id::text, m.target_capability,
+       COALESCE(m.loop_key, 'PLANT'), COALESCE(m.target_unit, 'C'),
        m.baseline_supply_temp_c, m.applied_supply_temp_c, m.restore_supply_temp_c,
        m.zone_temp_max_c, m.supply_temp_min_c, m.supply_temp_max_c,
        m.raw_recommended_value, m.clamped_value, m.guardrail_verdict, m.guardrail_trace,

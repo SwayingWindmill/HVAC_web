@@ -107,6 +107,14 @@ func (backend *memoryAutoLeaseBackend) ArmSiteAutoControlLease(_ context.Context
 		MinRunningChillers:  values.minChillers,
 		MaxCommandsPerHour:  values.maxPerHour,
 		ExecutionMode:       values.executionMode,
+		PumpFreqMinHz:       values.pumpFreqMinHz,
+		PumpFreqMaxHz:       values.pumpFreqMaxHz,
+		MaxFreqStepHz:       values.maxFreqStepHz,
+		FreqDeadbandHz:      values.freqDeadbandHz,
+		FanSpeedMinPct:      values.fanSpeedMinPct,
+		FanSpeedMaxPct:      values.fanSpeedMaxPct,
+		MaxFanStepPct:       values.maxFanStepPct,
+		FanDeadbandPct:      values.fanDeadbandPct,
 		Revision:            1,
 		CreatedAt:           formatInstant(now),
 		UpdatedAt:           formatInstant(now),
@@ -256,6 +264,39 @@ func TestAutoControlLeaseValidationBounds(t *testing.T) {
 	badCap.AllowedCapabilities = []string{"UNKNOWN_CAP"}
 	if _, err := badCap.normalizedValues(now); err == nil {
 		t.Fatal("expected unsupported capability to be rejected")
+	}
+
+	freqMin, freqMax, freqStep, freqDb := 30.0, 48.0, 2.5, 0.5
+	fanMin, fanMax, fanStep, fanDb := 35.0, 95.0, 10.0, 2.0
+	withMultiloop := valid
+	withMultiloop.AllowedCapabilities = []string{"SET_CHILLED_WATER_TEMPERATURE_SETPOINT", "SET_FREQUENCY", "SET_FAN_SPEED"}
+	withMultiloop.PumpFreqMinHz = &freqMin
+	withMultiloop.PumpFreqMaxHz = &freqMax
+	withMultiloop.MaxFreqStepHz = &freqStep
+	withMultiloop.FreqDeadbandHz = &freqDb
+	withMultiloop.FanSpeedMinPct = &fanMin
+	withMultiloop.FanSpeedMaxPct = &fanMax
+	withMultiloop.MaxFanStepPct = &fanStep
+	withMultiloop.FanDeadbandPct = &fanDb
+	gotMulti, err := withMultiloop.normalizedValues(now)
+	if err != nil {
+		t.Fatalf("expected valid VFD and fan bounds, got err=%v", err)
+	}
+	if gotMulti.pumpFreqMinHz == nil || *gotMulti.pumpFreqMinHz != 30.0 || gotMulti.fanSpeedMaxPct == nil || *gotMulti.fanSpeedMaxPct != 95.0 {
+		t.Fatalf("unexpected normalized VFD/fan bounds: %+v", gotMulti)
+	}
+
+	invertedFreq := withMultiloop
+	hiFreq := 49.0
+	invertedFreq.PumpFreqMinHz = &hiFreq
+	if _, err := invertedFreq.normalizedValues(now); err == nil {
+		t.Fatal("expected pumpFreqMinHz > pumpFreqMaxHz to be rejected")
+	}
+	badFanStep := withMultiloop
+	zeroStep := 0.0
+	badFanStep.MaxFanStepPct = &zeroStep
+	if _, err := badFanStep.normalizedValues(now); err == nil {
+		t.Fatal("expected maxFanStepPct <= 0 to be rejected")
 	}
 }
 
@@ -448,6 +489,7 @@ func TestOptimizationExecutionMonitorJSONSerialization(t *testing.T) {
 		ID: "01990000-8800-7000-8000-000000000010", TenantID: testTenantA, SiteID: testSiteA1,
 		LeaseID: "01990000-8800-7000-8000-000000000011", RecommendationID: "01990000-8800-7000-8000-000000000012",
 		DeviceID: "01990000-8800-7000-8000-000000000013", TargetCapability: "SET_CHILLED_WATER_TEMPERATURE_SETPOINT",
+		LoopKey: "PLANT", TargetUnit: "C",
 		SupplyTempMinC: 5.0, ZoneTempMaxC: 26.0, SupplyTempMaxC: 12.0,
 		ExecutionMode: ExecutionModeShadow, DecisionID: &decisionID, TraceID: traceID,
 		StartedAt: formatInstant(now), WindowEndsAt: formatInstant(now.Add(30 * time.Minute)),
@@ -458,7 +500,7 @@ func TestOptimizationExecutionMonitorJSONSerialization(t *testing.T) {
 		t.Fatal(err)
 	}
 	encodedWithTrace := string(rawWithTrace)
-	for _, needle := range []string{`"executionMode":"SHADOW"`, `"decisionId":"` + decisionID + `"`, `"traceId":"` + traceID + `"`} {
+	for _, needle := range []string{`"executionMode":"SHADOW"`, `"loopKey":"PLANT"`, `"targetUnit":"C"`, `"decisionId":"` + decisionID + `"`, `"traceId":"` + traceID + `"`} {
 		if !strings.Contains(encodedWithTrace, needle) {
 			t.Fatalf("expected %s in serialized monitor JSON: %s", needle, encodedWithTrace)
 		}
@@ -478,5 +520,19 @@ func TestOptimizationExecutionMonitorJSONSerialization(t *testing.T) {
 	}
 	if strings.Contains(encodedWithoutTrace, `"decisionId"`) || strings.Contains(encodedWithoutTrace, `"traceId"`) {
 		t.Fatalf("expected nil decisionId and empty traceId to be omitted, got %s", encodedWithoutTrace)
+	}
+
+	vfdMonitor := withTrace
+	vfdMonitor.TargetCapability = "SET_FREQUENCY"
+	vfdMonitor.LoopKey = "CHW_PUMP"
+	vfdMonitor.TargetUnit = "Hz"
+	rawVFD, err := json.Marshal(vfdMonitor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, needle := range []string{`"targetCapability":"SET_FREQUENCY"`, `"loopKey":"CHW_PUMP"`, `"targetUnit":"Hz"`} {
+		if !strings.Contains(string(rawVFD), needle) {
+			t.Fatalf("expected %s in serialized VFD monitor JSON: %s", needle, string(rawVFD))
+		}
 	}
 }

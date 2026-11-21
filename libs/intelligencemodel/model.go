@@ -181,6 +181,14 @@ type RecommendationVerificationPlan struct {
 	SuccessCriteria []string `json:"successCriteria,omitempty"`
 }
 
+type OptimizationAuxiliaryTarget struct {
+	LoopKey     string  `json:"loopKey"`
+	Capability  string  `json:"capability"`
+	TargetValue float64 `json:"targetValue"`
+	Unit        string  `json:"unit"`
+	Rationale   string  `json:"rationale,omitempty"`
+}
+
 type OptimizationRecommendation struct {
 	ID                 string                         `json:"id"`
 	TenantID           string                         `json:"tenantId"`
@@ -191,6 +199,7 @@ type OptimizationRecommendation struct {
 	Objective          RecommendationObjective        `json:"objective"`
 	Constraints        []RecommendationConstraint     `json:"constraints"`
 	Candidate          RecommendationCandidate        `json:"candidate"`
+	AuxiliaryTargets   []OptimizationAuxiliaryTarget  `json:"auxiliaryTargets,omitempty"`
 	ExpectedImpact     RecommendationExpectedImpact   `json:"expectedImpact"`
 	Uncertainty        RecommendationUncertainty      `json:"uncertainty"`
 	Risk               RecommendationRisk             `json:"risk"`

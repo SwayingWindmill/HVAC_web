@@ -34,11 +34,14 @@ import {
   formatGuardrailVerdict,
   formatMonitorDecisionTrace,
   formatMonitorExecutionMode,
+  formatMonitorLoopLabel,
+  formatMonitorNumericValue,
   initialArmLeaseValues,
   MONITOR_STATUS_PRESENTATION,
   resolveActiveLeaseBackoff,
   resolveAutoControlExecutionMode,
   resolveMonitorExecutionMode,
+  resolveMonitorUnit,
   validateArmLeaseForm,
 } from '../apps/hvac-web/src/features/optimization/auto-control-model.ts';
 import { stagingReason, stagingView } from '../apps/hvac-web/src/features/optimization/staging-model.ts';
@@ -695,4 +698,67 @@ test('negative sample inspector formatters and JSONL serializer produce plain Ch
   assert.equal(lines.length, 2);
   assert.equal(JSON.parse(lines[0]).id, '1');
   assert.equal(JSON.parse(lines[1]).sampleKind, 'MANUAL_OVERRIDE');
+});
+
+test('multi-loop VFD/fan lease bounds validate conditionally and monitor helpers format Hz and % cleanly', () => {
+  const base = {
+    ...initialArmLeaseValues(),
+    reason: '开启冷冻泵与冷却塔多回路变频闭环',
+    verificationCode: '123456',
+  };
+
+  // Without SET_FREQUENCY / SET_FAN_SPEED selected, VFD/fan bounds are omitted from payload.
+  const chwOnly = buildArmLeasePayload(base, 0);
+  assert.equal(chwOnly.ok, true);
+  if (chwOnly.ok) {
+    assert.equal(chwOnly.payload.pumpFreqMinHz, undefined);
+    assert.equal(chwOnly.payload.fanSpeedMinPct, undefined);
+  }
+
+  // Invalid inverted pump frequency bounds fail when SET_FREQUENCY is selected, even while CHW fields are valid.
+  const badFreq = validateArmLeaseForm({
+    ...base,
+    allowedCapabilities: ['SET_CHILLED_WATER_TEMPERATURE_SETPOINT', 'SET_FREQUENCY'],
+    pumpFreqMinHz: '49.0',
+    pumpFreqMaxHz: '45.0',
+    maxFreqStepHz: '12.0',
+  }, { includeSubmitOnly: true });
+  assert.ok(badFreq.pumpFreqMaxHz);
+  assert.ok(badFreq.maxFreqStepHz);
+
+  // Valid multi-loop payload preserves all 8 VFD & fan bounds.
+  const multiBuilt = buildArmLeasePayload({
+    ...base,
+    allowedCapabilities: ['SET_CHILLED_WATER_TEMPERATURE_SETPOINT', 'SET_FREQUENCY', 'SET_FAN_SPEED'],
+    pumpFreqMinHz: '30.0',
+    pumpFreqMaxHz: '48.0',
+    maxFreqStepHz: '2.5',
+    freqDeadbandHz: '0.5',
+    fanSpeedMinPct: '35',
+    fanSpeedMaxPct: '90',
+    maxFanStepPct: '10',
+    fanDeadbandPct: '2.0',
+  }, 1);
+  assert.equal(multiBuilt.ok, true);
+  if (multiBuilt.ok) {
+    assert.equal(multiBuilt.payload.pumpFreqMinHz, 30);
+    assert.equal(multiBuilt.payload.pumpFreqMaxHz, 48);
+    assert.equal(multiBuilt.payload.maxFreqStepHz, 2.5);
+    assert.equal(multiBuilt.payload.freqDeadbandHz, 0.5);
+    assert.equal(multiBuilt.payload.fanSpeedMinPct, 35);
+    assert.equal(multiBuilt.payload.fanSpeedMaxPct, 90);
+    assert.equal(multiBuilt.payload.maxFanStepPct, 10);
+    assert.equal(multiBuilt.payload.fanDeadbandPct, 2);
+  }
+
+  assert.equal(resolveMonitorUnit({ targetCapability: 'SET_CHILLED_WATER_TEMPERATURE_SETPOINT' }), 'C');
+  assert.equal(resolveMonitorUnit({ targetCapability: 'SET_FREQUENCY' }), 'Hz');
+  assert.equal(resolveMonitorUnit({ targetCapability: 'SET_FAN_SPEED', targetUnit: '%' }), '%');
+  assert.equal(formatMonitorLoopLabel('CHW_PUMP', 'SET_FREQUENCY'), '冷冻泵变频');
+  assert.equal(formatMonitorLoopLabel('CW_PUMP', 'SET_FREQUENCY'), '冷却泵变频');
+  assert.equal(formatMonitorLoopLabel('CT_FAN', 'SET_FAN_SPEED'), '冷却塔风机');
+  assert.equal(formatMonitorLoopLabel('PLANT', 'SET_CHILLED_WATER_TEMPERATURE_SETPOINT'), '冷冻水供水');
+  assert.equal(formatMonitorNumericValue(39.5, 'Hz'), '39.5 Hz');
+  assert.equal(formatMonitorNumericValue(66.0, '%'), '66.0%');
+  assert.equal(formatMonitorNumericValue(7.8, 'C'), '7.8 °C');
 });

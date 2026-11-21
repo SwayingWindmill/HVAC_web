@@ -60,6 +60,51 @@ export function resolveMonitorExecutionMode(
   return 'CLOSED_LOOP';
 }
 
+export type MonitorTargetUnit = 'C' | 'Hz' | '%';
+
+const MONITOR_LOOP_LABELS: Readonly<Record<string, string>> = {
+  PLANT: '冷冻水供水',
+  CHW_PUMP: '冷冻泵变频',
+  CW_PUMP: '冷却泵变频',
+  CT_FAN: '冷却塔风机',
+};
+
+export function resolveMonitorUnit(
+  monitor: Pick<OptimizationExecutionMonitor, 'targetCapability' | 'targetUnit'>,
+): MonitorTargetUnit {
+  if (monitor.targetUnit === 'Hz' || monitor.targetUnit === '%' || monitor.targetUnit === 'C') {
+    return monitor.targetUnit;
+  }
+  if (monitor.targetCapability === 'SET_FREQUENCY') return 'Hz';
+  if (monitor.targetCapability === 'SET_FAN_SPEED') return '%';
+  return 'C';
+}
+
+export function formatMonitorLoopLabel(
+  loopKey: string | null | undefined,
+  targetCapability?: string | null,
+): string {
+  const normalized = loopKey?.trim().toUpperCase() ?? '';
+  if (normalized && MONITOR_LOOP_LABELS[normalized]) {
+    return MONITOR_LOOP_LABELS[normalized];
+  }
+  if (targetCapability === 'SET_FREQUENCY') return '水泵变频';
+  if (targetCapability === 'SET_FAN_SPEED') return '冷却塔风机';
+  return '冷冻水供水';
+}
+
+export function formatMonitorNumericValue(
+  value: number | undefined,
+  unit: MonitorTargetUnit,
+  digits = 1,
+): string {
+  if (value === undefined || !Number.isFinite(value)) return '暂无';
+  const formatted = value.toFixed(digits);
+  if (unit === '%') return `${formatted}%`;
+  if (unit === 'Hz') return `${formatted} Hz`;
+  return `${formatted} °C`;
+}
+
 export function formatMonitorExecutionMode(mode: AutoControlExecutionMode): string {
   return EXECUTION_MODE_PRESENTATION[mode].monitorBadge;
 }
@@ -140,6 +185,7 @@ export const MONITOR_STATUS_PRESENTATION: Readonly<Record<
 function formatUnitsInMetrics(raw: string): string {
   return raw
     .replace(/(-?\d+(?:\.\d+)?)C\b/g, '$1 °C')
+    .replace(/(-?\d+(?:\.\d+)?)Hz\b/g, '$1 Hz')
     .replace(/(-?\d+(?:\.\d+)?)kW\b/g, '$1 kW')
     .replace(/\*/g, ' × ')
     .replace(/\s+/g, ' ')
@@ -293,6 +339,14 @@ export interface ArmLeaseFormValues {
   readonly zoneTempMaxC: string;
   readonly minRunningChillers: string;
   readonly maxCommandsPerHour: string;
+  readonly pumpFreqMinHz: string;
+  readonly pumpFreqMaxHz: string;
+  readonly maxFreqStepHz: string;
+  readonly freqDeadbandHz: string;
+  readonly fanSpeedMinPct: string;
+  readonly fanSpeedMaxPct: string;
+  readonly maxFanStepPct: string;
+  readonly fanDeadbandPct: string;
   readonly allowedCapabilities: readonly string[];
   readonly reason: string;
   readonly verificationCode: string;
@@ -306,7 +360,15 @@ export type ArmLeaseNumericField =
   | 'deadbandC'
   | 'zoneTempMaxC'
   | 'minRunningChillers'
-  | 'maxCommandsPerHour';
+  | 'maxCommandsPerHour'
+  | 'pumpFreqMinHz'
+  | 'pumpFreqMaxHz'
+  | 'maxFreqStepHz'
+  | 'freqDeadbandHz'
+  | 'fanSpeedMinPct'
+  | 'fanSpeedMaxPct'
+  | 'maxFanStepPct'
+  | 'fanDeadbandPct';
 
 export type ArmLeaseFieldName =
   | ArmLeaseNumericField
@@ -328,6 +390,14 @@ export function initialArmLeaseValues(seed?: AutoControlLeaseWithExecutionMode |
     zoneTempMaxC: seed ? String(seed.zoneTempMaxC) : '26.0',
     minRunningChillers: seed ? String(seed.minRunningChillers) : '1',
     maxCommandsPerHour: seed ? String(seed.maxCommandsPerHour) : '2',
+    pumpFreqMinHz: seed?.pumpFreqMinHz !== undefined ? String(seed.pumpFreqMinHz) : '28.0',
+    pumpFreqMaxHz: seed?.pumpFreqMaxHz !== undefined ? String(seed.pumpFreqMaxHz) : '50.0',
+    maxFreqStepHz: seed?.maxFreqStepHz !== undefined ? String(seed.maxFreqStepHz) : '2.5',
+    freqDeadbandHz: seed?.freqDeadbandHz !== undefined ? String(seed.freqDeadbandHz) : '0.5',
+    fanSpeedMinPct: seed?.fanSpeedMinPct !== undefined ? String(seed.fanSpeedMinPct) : '25.0',
+    fanSpeedMaxPct: seed?.fanSpeedMaxPct !== undefined ? String(seed.fanSpeedMaxPct) : '100.0',
+    maxFanStepPct: seed?.maxFanStepPct !== undefined ? String(seed.maxFanStepPct) : '10.0',
+    fanDeadbandPct: seed?.fanDeadbandPct !== undefined ? String(seed.fanDeadbandPct) : '2.0',
     allowedCapabilities:
       seed && seed.allowedCapabilities.length > 0
         ? [...seed.allowedCapabilities]
@@ -399,6 +469,54 @@ export function validateArmLeaseForm(
     errors.maxCommandsPerHour = '每小时指令上限需为 1 至 6 的整数';
   }
 
+  if (values.allowedCapabilities.includes('SET_FREQUENCY')) {
+    const freqMin = parseFinite(values.pumpFreqMinHz);
+    if (freqMin === null || freqMin < 20 || freqMin > 50) {
+      errors.pumpFreqMinHz = '水泵最低频率需在 20.0 至 50.0 Hz 之间';
+    }
+    const freqMax = parseFinite(values.pumpFreqMaxHz);
+    if (
+      freqMax === null
+      || freqMax < 25
+      || freqMax > 60
+      || (freqMin !== null && freqMax < freqMin)
+    ) {
+      errors.pumpFreqMaxHz = '水泵最高频率需不低于下限且在 25.0 至 60.0 Hz 之间';
+    }
+    const freqStep = parseFinite(values.maxFreqStepHz);
+    if (freqStep === null || freqStep <= 0 || freqStep > 10) {
+      errors.maxFreqStepHz = '水泵单次最大调频步长需大于 0 且不超过 10.0 Hz';
+    }
+    const freqDb = parseFinite(values.freqDeadbandHz);
+    if (freqDb === null || freqDb < 0.1 || freqDb > 5) {
+      errors.freqDeadbandHz = '水泵调频死区需在 0.1 至 5.0 Hz 之间';
+    }
+  }
+
+  if (values.allowedCapabilities.includes('SET_FAN_SPEED')) {
+    const fanMin = parseFinite(values.fanSpeedMinPct);
+    if (fanMin === null || fanMin < 15 || fanMin > 100) {
+      errors.fanSpeedMinPct = '风机最低转速需在 15.0% 至 100.0% 之间';
+    }
+    const fanMax = parseFinite(values.fanSpeedMaxPct);
+    if (
+      fanMax === null
+      || fanMax < 20
+      || fanMax > 100
+      || (fanMin !== null && fanMax < fanMin)
+    ) {
+      errors.fanSpeedMaxPct = '风机最高转速需不低于下限且在 20.0% 至 100.0% 之间';
+    }
+    const fanStep = parseFinite(values.maxFanStepPct);
+    if (fanStep === null || fanStep <= 0 || fanStep > 25) {
+      errors.maxFanStepPct = '风机单次最大调速步长需大于 0 且不超过 25.0%';
+    }
+    const fanDb = parseFinite(values.fanDeadbandPct);
+    if (fanDb === null || fanDb < 0.5 || fanDb > 15) {
+      errors.fanDeadbandPct = '风机调速死区需在 0.5% 至 15.0% 之间';
+    }
+  }
+
   if (values.allowedCapabilities.length === 0) {
     errors.allowedCapabilities = '请至少选择一项允许自动控制的能力';
   }
@@ -426,6 +544,8 @@ export function buildArmLeasePayload(
   if (Object.keys(errors).length > 0) {
     return { ok: false, errors };
   }
+  const hasFrequency = values.allowedCapabilities.includes('SET_FREQUENCY');
+  const hasFanSpeed = values.allowedCapabilities.includes('SET_FAN_SPEED');
   return {
     ok: true,
     payload: {
@@ -439,6 +559,18 @@ export function buildArmLeasePayload(
       zoneTempMaxC: Number(values.zoneTempMaxC.trim()),
       minRunningChillers: Number(values.minRunningChillers.trim()),
       maxCommandsPerHour: Number(values.maxCommandsPerHour.trim()),
+      ...(hasFrequency ? {
+        pumpFreqMinHz: Number(values.pumpFreqMinHz.trim()),
+        pumpFreqMaxHz: Number(values.pumpFreqMaxHz.trim()),
+        maxFreqStepHz: Number(values.maxFreqStepHz.trim()),
+        freqDeadbandHz: Number(values.freqDeadbandHz.trim()),
+      } : {}),
+      ...(hasFanSpeed ? {
+        fanSpeedMinPct: Number(values.fanSpeedMinPct.trim()),
+        fanSpeedMaxPct: Number(values.fanSpeedMaxPct.trim()),
+        maxFanStepPct: Number(values.maxFanStepPct.trim()),
+        fanDeadbandPct: Number(values.fanDeadbandPct.trim()),
+      } : {}),
       reason: values.reason.trim(),
       verificationCode: values.verificationCode,
       ...(expectedRevision !== undefined ? { expectedRevision } : {}),
