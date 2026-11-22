@@ -129,8 +129,8 @@
   --secondary:#f4f4f5;
   --secondary-foreground:#3f3f46;
   --muted:#f7f7f9;
-  --muted-foreground:#71717a;
-  --subtle-foreground:#a1a1aa;
+  --muted-foreground:#52525b;
+  --subtle-foreground:#6c6c75;
   --accent:#f4f4f5;
   --accent-foreground:#18181b;
   --border:#e7e7ea;
@@ -208,7 +208,7 @@
   --secondary-foreground:#d4d4d8;
   --muted:#1b1b20;
   --muted-foreground:#a1a1aa;
-  --subtle-foreground:#71717a;
+  --subtle-foreground:#8b8b96;
   --accent:#222228;
   --accent-foreground:#f4f4f5;
   --border:#27272c;
@@ -304,6 +304,11 @@
     font: inherit;
   }
 
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+
   ::selection {
     background: color-mix(in oklab, var(--chart-1) 24%, transparent);
   }
@@ -312,6 +317,12 @@
     scrollbar-width: thin;
     scrollbar-color: var(--border) transparent;
   }
+}
+
+.theme-switching *,
+.theme-switching *::before,
+.theme-switching *::after {
+  transition: none !important;
 }
 
 /* Printing shows the page's own document (the monthly report) without the application shell. */

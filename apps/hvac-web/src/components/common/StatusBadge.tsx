@@ -64,7 +64,7 @@ export function StatusBadge({
     >
       {shouldPulse ? (
         <span className="relative flex size-1.5 shrink-0" aria-hidden="true">
-          <span className={cn('absolute inline-flex size-full animate-ping rounded-full opacity-75', config.dot)} />
+          <span className={cn('absolute inline-flex size-full motion-safe:animate-ping rounded-full opacity-75', config.dot)} />
           <span className={cn('relative inline-flex size-1.5 rounded-full', config.dot)} />
         </span>
       ) : (

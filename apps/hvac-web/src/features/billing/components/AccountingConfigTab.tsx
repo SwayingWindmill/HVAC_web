@@ -37,6 +37,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { resolveTelemetryPointLabel } from '@/domain/centralPlantTelemetry';
 import { siteDayKey, wallTime } from '@/features/energy-analysis/consumption/model';
 import { siteInputValue } from '@/features/savings/savings-model';
 import { formatTime } from '@/lib/operator-format';
@@ -183,9 +184,10 @@ export function AccountingConfigTab({
       .filter((point) => point.status === 'ACTIVE')
       .map((point) => {
         const deviceName = deviceNames.get(point.reportingDeviceId) ?? '';
+        const pointLabel = resolveTelemetryPointLabel(point);
         return {
           id: point.id,
-          label: deviceName ? `${deviceName} · ${point.displayName}` : point.displayName,
+          label: deviceName ? `${deviceName} · ${pointLabel}` : pointLabel,
           sublabel: point.unit ? `${point.pointCode} · ${point.unit}` : point.pointCode,
           isCounter: point.pointType === 'COUNTER',
         };
@@ -508,7 +510,6 @@ export function AccountingConfigTab({
       <Panel role="region" aria-label="站点节假日日历">
         <PanelHeader
           title="站点节假日日历"
-          caption="覆盖常规工作日与周末，调整分时电价执行日类型"
           className="h-auto min-h-12 flex-wrap py-2"
           action={
             <div className="flex flex-wrap items-center gap-2">
@@ -534,7 +535,7 @@ export function AccountingConfigTab({
               </Select>
 
               {canManageBilling ? (
-                <Button type="button" size="sm" onClick={openCreateHolidayDialog}>
+                <Button type="button" size="sm" variant="outline" onClick={openCreateHolidayDialog}>
                   <Plus data-icon="inline-start" />
                   新增或更新节假日
                 </Button>
@@ -568,11 +569,7 @@ export function AccountingConfigTab({
                 {selectedYear} 年尚未配置节假日覆盖
               </h3>
             }
-            description={
-              canManageBilling
-                ? '站点默认按周一至周五为工作日、周六周日为周末匹配分时电价；遇到法定节假日或调休补班时，可在此新增覆盖日期。'
-                : '当前年度暂无覆盖日期，系统按默认工作日与周末匹配分时电价。'
-            }
+            description="默认按工作日与周末匹配分时电价"
           >
             {canManageBilling ? (
               <Button type="button" size="sm" variant="outline" onClick={openCreateHolidayDialog}>
@@ -664,7 +661,6 @@ export function AccountingConfigTab({
               </InfoTip>
             </span>
           }
-          caption="按测点与生效时段管理互感器变比及云端折算乘数"
           className="h-auto min-h-12 flex-wrap py-2"
           action={
             <div className="flex flex-wrap items-center gap-3">
@@ -681,7 +677,7 @@ export function AccountingConfigTab({
               </label>
 
               {canManageBilling ? (
-                <Button type="button" size="sm" onClick={openCreateRatioDialog}>
+                <Button type="button" size="sm" variant="outline" onClick={openCreateRatioDialog}>
                   <Plus data-icon="inline-start" />
                   新增倍率版本
                 </Button>
@@ -717,8 +713,8 @@ export function AccountingConfigTab({
             }
             description={
               includeSuperseded
-                ? '新增倍率版本后，系统将按生效时间段自动把原始电表读数折算为标准电量。'
-                : '可勾选上方「显示历史/已失效版本」查看已终止或已替代的历史版本，或新增倍率版本。'
+                ? '新增后将按生效时段自动折算电量'
+                : '可勾选上方开关查看历史版本'
             }
           >
             {canManageBilling ? (

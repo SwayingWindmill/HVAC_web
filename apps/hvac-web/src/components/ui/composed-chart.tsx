@@ -76,6 +76,8 @@ export interface ComposedChartProps
   yFormatter?: (value: number) => string
   rightYFormatter?: (value: number) => string
   barRadius?: number
+  /** Upper bound for bar thickness so sparse hourly views stay proportional. */
+  maxBarSize?: number
   /** Animate series after hydration and when their data changes. Respects reduced motion. */
   animate?: boolean
   animationDuration?: number
@@ -128,6 +130,7 @@ function ComposedChart({
   yFormatter,
   rightYFormatter,
   barRadius = 4,
+  maxBarSize = 36,
   animate = true,
   animationDuration = 500,
   yDomain = "zero",
@@ -290,6 +293,7 @@ function ComposedChart({
               <Bar
                 key={s.key}
                 {...common}
+                maxBarSize={maxBarSize}
                 fill={s.pattern === "hatched" ? `url(#${id}-hatch-${s.key})` : color}
                 stroke={s.pattern === "hatched" ? color : undefined}
                 strokeWidth={s.pattern === "hatched" ? 1 : 0}

@@ -231,9 +231,7 @@ export function AlarmRulesTable({
   const table = useDataTable({ key: `alarm-rules-${siteId}`, data: sorted, columns, paginate: false, getRowId: (rule) => rule.ruleId });
 
   return (
-    <DataTableBlock
-      description={bundleQuery.data ? `站点现在按这 ${activeRules.length} 条规则判断告警，可切换列表或拓扑画布编排联动关系并在线热发布。` : '站点现在按哪些规则判断告警'}
-    >
+    <DataTableBlock>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
           <div className="inline-flex rounded-md border border-divider bg-muted/30 p-0.5" role="group" aria-label="规则视图切换">
@@ -261,6 +259,9 @@ export function AlarmRulesTable({
           <Badge variant="outline" className="font-mono">
             {bundleRevision > 0 ? `生效版本 v${bundleRevision}` : '未归档基线'}
           </Badge>
+          {bundleQuery.data ? (
+            <Badge variant="outline" className="tabular-nums">{activeRules.length} 条规则</Badge>
+          ) : null}
           <Button type="button" variant="outline" size="sm" onClick={() => setRevisionsOpen(true)}>
             <History data-icon="inline-start" className="size-3.5" aria-hidden="true" />
             版本历史

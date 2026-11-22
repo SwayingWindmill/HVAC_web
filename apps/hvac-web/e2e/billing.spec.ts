@@ -437,7 +437,7 @@ test('billing config tab manages site calendar holidays, enforces meter ratio ov
   const createRatioDialog = page.getByRole('dialog');
   await expect(createRatioDialog).toBeVisible();
   await createRatioDialog.getByRole('combobox', { name: '测点 ID' }).click();
-  await page.getByRole('option', { name: /hvac meter energy/ }).click();
+  await page.getByRole('option', { name: /METER-HVAC-TOTAL.*累计电量/ }).click();
   await createRatioDialog.getByLabel('CT 变比').fill('60');
   await fillTemporalField(
     createRatioDialog.getByLabel('生效开始时间'),
@@ -467,7 +467,7 @@ test('billing config tab manages site calendar holidays, enforces meter ratio ov
   await ratioRegion.getByRole('button', { name: '新增倍率版本' }).click();
   await expect(createRatioDialog).toBeVisible();
   await createRatioDialog.getByRole('combobox', { name: '测点 ID' }).click();
-  await page.getByRole('option', { name: /hvac meter energy/ }).click();
+  await page.getByRole('option', { name: /METER-HVAC-TOTAL.*累计电量/ }).click();
   await createRatioDialog.getByLabel('CT 变比').fill('60');
   await fillTemporalField(
     createRatioDialog.getByLabel('生效开始时间'),
@@ -510,4 +510,29 @@ test('billing config tab manages site calendar holidays, enforces meter ratio ov
     'TARIFF_CHANGE',
     'TARIFF_CHANGE',
   ]);
+});
+
+test('billing budget overview shows honest empty state for TOU breakdown when monthly energy is empty', async ({
+  page,
+  gateway,
+}) => {
+  gateway.energySeriesHandler = () => ({
+    body: {
+      ...recordedElectricityFixture,
+      points: [],
+      metadata: {
+        ...recordedElectricityFixture.metadata,
+        requestedGranularity: 'day',
+        actualGranularity: 'day',
+        partial: true,
+        qualitySummary: { valid: 0, suspect: 0, invalid: 0 },
+      },
+    },
+  });
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`/energy-analysis/billing?site=${SITE_ID}&month=2026-10`);
+
+  await expect(page.getByText('2026 年 10 月暂无已定价分时电量')).toBeVisible();
+  await expect(page.getByText(/0 kWh · ¥0\.00/)).toHaveCount(0);
 });

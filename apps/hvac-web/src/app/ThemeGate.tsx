@@ -1,14 +1,18 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 export type ThemeMode = 'light' | 'dark' | 'system';
+
+const THEME_STORAGE_KEY = 'hvac-theme-mode';
 
 type ThemeContextValue = {
   mode: ThemeMode;
@@ -17,6 +21,24 @@ type ThemeContextValue = {
 };
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
+
+function readStoredThemeMode(): ThemeMode {
+  try {
+    const raw = window.localStorage.getItem(THEME_STORAGE_KEY);
+    return raw === 'light' || raw === 'dark' ? raw : 'system';
+  } catch {
+    return 'system';
+  }
+}
+
+function writeStoredThemeMode(mode: ThemeMode): void {
+  try {
+    if (mode === 'system') window.localStorage.removeItem(THEME_STORAGE_KEY);
+    else window.localStorage.setItem(THEME_STORAGE_KEY, mode);
+  } catch {
+    // Theme switching still works in memory when storage is unavailable.
+  }
+}
 
 function systemTheme(): 'light' | 'dark' {
   return typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: dark)').matches
@@ -31,31 +53,63 @@ export function ThemeGate({
   children: ReactNode;
   queryClient: QueryClient;
 }) {
-  const [mode, setMode] = useState<ThemeMode>('system');
+  const [mode, setModeState] = useState<ThemeMode>(readStoredThemeMode);
   const [systemMode, setSystemMode] = useState<'light' | 'dark'>(systemTheme);
+  const mountedRef = useRef(false);
+
+  const setMode = useCallback((next: ThemeMode) => {
+    setModeState(next);
+    writeStoredThemeMode(next);
+  }, []);
 
   useEffect(() => {
-    if (mode !== 'system') return;
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== THEME_STORAGE_KEY) return;
+      setModeState(event.newValue === 'light' || event.newValue === 'dark' ? event.newValue : 'system');
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
+
+  useEffect(() => {
     const query = window.matchMedia('(prefers-color-scheme: dark)');
     const update = () => setSystemMode(query.matches ? 'dark' : 'light');
+    update();
     query.addEventListener('change', update);
     return () => query.removeEventListener('change', update);
-  }, [mode]);
+  }, []);
 
   const resolvedMode = mode === 'system' ? systemMode : mode;
   const contextValue = useMemo<ThemeContextValue>(() => ({
     mode,
     resolvedMode,
     setMode,
-  }), [mode, resolvedMode]);
+  }), [mode, resolvedMode, setMode]);
 
   useEffect(() => {
-    document.documentElement.dataset.theme = resolvedMode;
-    document.documentElement.classList.toggle('dark', resolvedMode === 'dark');
+    const root = document.documentElement;
+    const isThemeSwitch = mountedRef.current;
+    mountedRef.current = true;
+    let frameId: number | null = null;
+    if (isThemeSwitch) {
+      root.classList.add('theme-switching');
+      void root.offsetHeight;
+    }
+    root.dataset.theme = resolvedMode;
+    root.classList.toggle('dark', resolvedMode === 'dark');
     document.querySelector('meta[name="color-scheme"]')?.setAttribute(
       'content',
       mode === 'system' ? 'light dark' : mode,
     );
+    if (isThemeSwitch) {
+      frameId = window.requestAnimationFrame(() => {
+        root.classList.remove('theme-switching');
+      });
+    }
+    return () => {
+      if (frameId !== null) window.cancelAnimationFrame(frameId);
+      root.classList.remove('theme-switching');
+    };
   }, [mode, resolvedMode]);
 
   return (

@@ -218,7 +218,6 @@ export function UtilityBillsTab({
   return (
     <DataTableBlock
       title="结算电费单"
-      description="按供电局实际抄表周期归档两部制结算电费单；同一账期与同一表计范围仅允许一张已确认归档单据"
       actions={
         <div className="flex flex-wrap items-center gap-2">
           <ToggleGroup
