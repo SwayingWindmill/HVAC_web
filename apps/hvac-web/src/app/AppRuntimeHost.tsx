@@ -2,6 +2,10 @@ import { useEffect, useMemo, useState } from 'react';
 import { RouterProvider } from '@tanstack/react-router';
 import type { QueryClient } from '@tanstack/react-query';
 import { createPlatformGatewayClient } from '@/api/generated/platformGateway.gen';
+import { BrandMark } from '@/components/brand-mark';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 import { createFrontendReviewPlatformClient } from './frontend-review-platform-client';
 import { useObservability } from './Observability';
 import { RouteLoading } from './RouteLoading';
@@ -18,16 +22,30 @@ const WEB_SHELL_MARKER = 'AUTHORITATIVE WEB SHELL';
 
 export function ConfigurationBlocked({ failures }: { failures: RuntimeConfigFailure[] }) {
   return (
-    <main className="real-shell-state" data-build-graph={WEB_GRAPH_MARKER} data-shell-state="UNAVAILABLE">
-      <section className="real-shell-card" aria-labelledby="real-config-title">
-        <p className="real-shell-eyebrow">无法启动</p>
-        <FocusHeading id="real-config-title">运行配置无效</FocusHeading>
-        <p>当前环境配置有误，无法打开页面，请联系管理员检查部署配置。</p>
-        <ul className="real-shell-failures">
+    <main
+      className="grid min-h-svh place-items-center bg-background p-6"
+      data-build-graph={WEB_GRAPH_MARKER}
+      data-shell-state="UNAVAILABLE"
+    >
+      <section
+        className="flex w-full max-w-md flex-col gap-4 rounded-xl border border-border bg-card p-6 shadow-xs"
+        aria-labelledby="real-config-title"
+      >
+        <div className="flex items-center gap-2.5 text-primary">
+          <BrandMark className="size-6 shrink-0" />
+          <p className="text-xs font-medium text-destructive-text">无法启动</p>
+        </div>
+        <div className="space-y-1">
+          <FocusHeading id="real-config-title" className="text-lg font-semibold tracking-tight text-foreground">
+            运行配置无效
+          </FocusHeading>
+          <p className="text-sm text-muted-foreground">请联系管理员检查当前部署配置。</p>
+        </div>
+        <ul className="divide-y divide-divider rounded-lg border border-border bg-muted/40">
           {failures.map((failure) => (
-            <li key={failure.code}>
-              <strong>{failure.code}</strong>
-              <span>{failure.detail}</span>
+            <li key={failure.code} className="flex flex-col gap-0.5 px-3.5 py-2.5">
+              <strong className="font-mono text-xs font-medium text-foreground">{failure.code}</strong>
+              <span className="text-xs text-muted-foreground">{failure.detail}</span>
             </li>
           ))}
         </ul>
@@ -65,18 +83,29 @@ function LoginRequiredState({ snapshot, beginLogin }: { snapshot: ShellSnapshot;
 
 function PrincipalUnavailableState({ config, snapshot, retry }: { config: RuntimeConfig; snapshot: ShellSnapshot; retry: () => void }) {
   return (
-    <section className="real-shell-card" aria-labelledby="real-unavailable-title" data-testid="real-shell-unavailable">
-      <p className="real-shell-eyebrow">登录身份</p>
-      <FocusHeading id="real-unavailable-title">无法确认登录身份</FocusHeading>
-      <p>暂时无法验证当前登录会话，请稍后重试。</p>
+    <section
+      className="flex w-full max-w-md flex-col gap-4 rounded-xl border border-border bg-card p-6 shadow-xs"
+      aria-labelledby="real-unavailable-title"
+      data-testid="real-shell-unavailable"
+    >
+      <div className="flex items-center gap-2.5 text-primary">
+        <BrandMark className="size-6 shrink-0" />
+        <p className="text-xs font-medium text-muted-foreground">登录身份</p>
+      </div>
+      <div className="space-y-1">
+        <FocusHeading id="real-unavailable-title" className="text-lg font-semibold tracking-tight text-foreground">
+          无法确认登录身份
+        </FocusHeading>
+        <p className="text-sm text-muted-foreground">暂时无法验证当前登录会话，请稍后重试。</p>
+      </div>
       {snapshot.failure ? (
-        <div className="real-shell-problem" role="alert" data-retryable={String(snapshot.failure.retryable)}>
-          <strong>身份服务暂时不可用</strong>
-          <span>连接恢复后点击重试即可继续使用。</span>
-        </div>
+        <Alert variant="destructive" data-retryable={String(snapshot.failure.retryable)}>
+          <AlertTitle>身份服务暂时不可用</AlertTitle>
+          <AlertDescription>连接恢复后点击重试即可继续使用。</AlertDescription>
+        </Alert>
       ) : null}
-      <div className="real-shell-actions">
-        <button type="button" onClick={retry}>重试</button>
+      <div className="flex items-center gap-2">
+        <Button type="button" onClick={retry}>重试</Button>
       </div>
       <RuntimeFacts config={config} />
     </section>
@@ -124,11 +153,15 @@ export function AppRuntimeHost({ config, queryClient }: { config: RuntimeConfig;
   const waitingForSites = snapshot.state === 'READY' && !showSignInPage && snapshot.sites?.state === 'checking';
   const bootstrapping = (snapshot.state === 'BOOTSTRAPPING' || waitingForSites) && !showSignInPage;
   const shellReady = snapshot.state === 'READY' && !waitingForSites && !showSignInPage;
+  const centeredUnavailable = snapshot.state === 'UNAVAILABLE' && !showSignInPage;
   // The authenticated shell's SidebarInset is the page's main landmark; other states are their own.
   const Root = shellReady ? 'div' : 'main';
   return (
     <Root
-      className={`real-shell-state${shellReady ? ' real-shell-state--authenticated' : ''}${showSignInPage ? ' real-shell-state--login' : ''}`}
+      className={cn(
+        'min-h-svh',
+        centeredUnavailable && 'grid place-items-center bg-background p-6',
+      )}
       aria-label={Root === 'main' ? WEB_SHELL_MARKER : undefined}
       data-build-graph={WEB_GRAPH_MARKER}
       data-shell-state={showSignInPage ? 'LOGIN_REQUIRED' : waitingForSites ? 'BOOTSTRAPPING' : snapshot.state}

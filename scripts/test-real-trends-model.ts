@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { resolveTelemetryPointLabel } from '../apps/hvac-web/src/domain/centralPlantTelemetry.ts';
 import type { SiteAssetModel } from '../apps/hvac-web/src/api/generated/platformGateway.gen.ts';
 import type { DeviceHistoryAggregateBucket } from '../apps/hvac-web/src/api/generated/s2Telemetry.gen.ts';
 import {
@@ -791,4 +792,47 @@ test('zone banquet temperature, cooling tower water 2, and wireless battery/RSSI
   assert.equal(concentrator.reading('acquisition.v1')?.unit, 'mV');
   assert.equal(concentrator.reading('acquisition.rssi1')?.display, '-62');
   assert.equal(concentrator.reading('acquisition.rssi1')?.unit, 'dBm');
+});
+
+test('resolveTelemetryPointLabel prefers Chinese labels and maps known English telemetry keys', () => {
+  assert.equal(
+    resolveTelemetryPointLabel({
+      sourceKey: 'chiller.run_state',
+      pointCode: 'run_state',
+      displayName: 'chiller run state',
+    }),
+    '运行状态',
+  );
+  assert.equal(
+    resolveTelemetryPointLabel({
+      sourceKey: 'btu_meter.return_water_temperature',
+      pointCode: 'return_water_temperature',
+      displayName: 'btu meter return water temperature',
+    }),
+    '回水温度',
+  );
+  assert.equal(
+    resolveTelemetryPointLabel({
+      sourceKey: 'hvac_meter.energy',
+      pointCode: 'energy',
+      displayName: '冷站主表有功电量',
+    }),
+    '冷站主表有功电量',
+  );
+  assert.equal(
+    resolveTelemetryPointLabel({
+      sourceKey: null,
+      pointCode: 'temperature',
+      displayName: '',
+    }),
+    '温度',
+  );
+  assert.equal(
+    resolveTelemetryPointLabel({
+      sourceKey: 'custom.metric',
+      pointCode: 'custom_metric',
+      displayName: '',
+    }),
+    'custom_metric',
+  );
 });

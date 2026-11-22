@@ -32,6 +32,7 @@ export const TOKEN_GROUPS: readonly TokenGroup[] = [
     tokens: [
       { name: 'foreground', role: '正文', against: 'background', use: 'text' },
       { name: 'muted-foreground', role: '辅助文字', against: 'background', use: 'text' },
+      { name: 'subtle-foreground', role: '次级说明、单位与时间戳', against: 'background', use: 'text' },
       { name: 'card-foreground', role: '卡片文字', against: 'card', use: 'text' },
       { name: 'sidebar-foreground', role: '侧栏文字', against: 'sidebar', use: 'text' },
       { name: 'secondary-foreground', role: '次要按钮文字', against: 'secondary', use: 'text' },

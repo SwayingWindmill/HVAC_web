@@ -189,5 +189,12 @@ test('empty period renders energy flow empty state without SVG NaN console error
 
   const flow = page.getByRole('region', { name: '用电去向' });
   await expect(flow).toContainText('所选时段暂无设备用电流向数据');
+  const energy = page.getByRole('region', { name: '期间用能' });
+  const copTab = energy.getByRole('tab', { name: /综合能效/ });
+  const costTab = energy.getByRole('tab', { name: /估算电费/ });
+  await expect(copTab).toContainText('—');
+  await expect(copTab).not.toContainText('--');
+  await expect(costTab).toContainText('—');
+  await expect(costTab).not.toContainText('¥0');
   expect(consoleErrors.filter((entry) => entry.includes('NaN'))).toEqual([]);
 });

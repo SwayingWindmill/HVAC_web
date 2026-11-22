@@ -4,6 +4,17 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
+    <script>
+      try {
+        var m = localStorage.getItem('hvac-theme-mode');
+        var stored = m === 'light' || m === 'dark' ? m : null;
+        var resolved = stored || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        document.documentElement.dataset.theme = resolved;
+        document.documentElement.classList.toggle('dark', resolved === 'dark');
+        var meta = document.querySelector('meta[name="color-scheme"]');
+        if (meta) meta.setAttribute('content', stored || 'light dark');
+      } catch (e) {}
+    </script>
     <link rel="icon" type="image/svg+xml" href="/quanlaihe-mark.svg" />
     <title>泉来禾智慧能源</title>
   </head>

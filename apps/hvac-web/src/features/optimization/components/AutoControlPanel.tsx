@@ -997,7 +997,7 @@ export function AutoControlPanel({
                   <Button
                     type="button"
                     size="sm"
-                    variant={isAuto ? 'outline' : 'default'}
+                    variant="outline"
                     onClick={() => setArmOpen(true)}
                   >
                     {isAuto ? '调整租约…' : '开启自动控制租约…'}
@@ -1170,7 +1170,6 @@ export function AutoControlPanel({
 
       <DataTableBlock
         title="30 分钟执行监护"
-        description="限时自动控制下发后每分钟巡检实时供水温度、室内温度、冷机功率占比与遥测健康；越界或断采超过 5 分钟自动回退并退出租约"
         className="w-full min-w-0"
       >
         {monitorsQuery.isError ? (
@@ -1188,7 +1187,7 @@ export function AutoControlPanel({
           <DataTable
             table={table}
             tableAriaLabel="30 分钟执行监护"
-            empty="还没有自动控制执行监护记录；开启租约并自动下发调温指令后会在此追踪 30 分钟观察窗口"
+            empty="暂无执行监护记录"
             getHeaderCellProps={(header) => ({
               className:
                 header.id === 'window'

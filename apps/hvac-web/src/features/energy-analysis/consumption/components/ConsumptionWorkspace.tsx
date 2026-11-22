@@ -193,7 +193,7 @@ export function ConsumptionWorkspace() {
     <Main>
       <PageHeader
         title="能耗分析"
-        description={`${site.displayName} · 用了多少电、用在哪台设备、花了多少钱`}
+        description={site.displayName}
         actions={
           <>
             <span className="text-xs text-muted-foreground">
@@ -246,10 +246,11 @@ export function ConsumptionWorkspace() {
                   <TabsTrigger value="anomalies" className="h-12 flex-none px-0 after:bottom-0!">异常清洗留痕</TabsTrigger>
                 </TabsList>
                 <span className="ml-auto flex min-w-0 items-center gap-1 truncate text-xs text-muted-foreground">
-                  {view === "trend" ? "未走完的时段以浅色显示"
-                    : view === "tou" ? (tariff.data ? <>{tariff.data.displayName}<InfoTip>按站点电价估算，正式电费以结算为准</InfoTip></> : null)
-                      : view === "anomalies" ? "记录异常跳过、零值过滤与换表归零过程"
-                        : "kWh · 最新在前"}
+                  {view === "tou"
+                    ? (tariff.data ? <>{tariff.data.displayName}<InfoTip>按站点电价估算，正式电费以结算为准</InfoTip></> : null)
+                    : view === "detail"
+                      ? "kWh · 最新在前"
+                      : null}
                 </span>
               </header>
               <TabsContent value="trend">
@@ -322,8 +323,8 @@ function PeriodChart({ comparison, pricing, previousLabel, metric, onMetricChang
   const scale = Math.max(current.electricityKWh ?? 0, current.coolingKWh ?? 0);
   const electricity = energy(current.electricityKWh, scale);
   const cooling = energy(current.coolingKWh, scale);
-  const beforeCop = (value: number | null) => `${previousLabel} ${value === null ? "--" : formatDecimal(value, 2)}`;
-  const previousEnergy = (value: number | null) => { const shown = energy(value, scale); return `${previousLabel} ${shown.value ?? "--"}${shown.value ? ` ${shown.unit}` : ""}`; };
+  const beforeCop = (value: number | null) => `${previousLabel} ${value === null ? "—" : formatDecimal(value, 2)}`;
+  const previousEnergy = (value: number | null) => { const shown = energy(value, scale); return `${previousLabel} ${shown.value ?? "—"}${shown.value ? ` ${shown.unit}` : ""}`; };
 
   // The running bucket holds partial values: drawn hatched apart from the complete ones.
   const split = (bucket: BucketComparison, key: string, value: number | null) =>
@@ -381,6 +382,11 @@ function PeriodChart({ comparison, pricing, previousLabel, metric, onMetricChang
         )
         : beforeCop(previous.cop);
 
+  const pricedEnergyKWh = pricing ? pricing.current.energyKWh - pricing.current.unpricedKWh : 0;
+  const previousPricedEnergyKWh = pricing ? pricing.previous.energyKWh - pricing.previous.unpricedKWh : 0;
+  const hasPricedEnergy = pricedEnergyKWh > 0;
+  const hasPreviousPricedEnergy = previousPricedEnergyKWh > 0;
+
   const metrics: MetricTab<ConsumptionMetric>[] = [
     {
       key: "electricityKWh", label: "空调用电", compareKey: "previousElectricityKWh", partialKey: "electricityKWhPartial",
@@ -396,7 +402,7 @@ function PeriodChart({ comparison, pricing, previousLabel, metric, onMetricChang
     {
       key: "cop", label: "综合能效", compareKey: "previousCop", partialKey: "copPartial",
       info: "期间总供冷量 ÷ 期间总空调用电（按有配对读数的时段合计）。冷机待机、低负荷、温差不确定度过大或读数超出合理范围时不计算。",
-      value: current.cop === null ? "--" : formatDecimal(current.cop, 2),
+      value: current.cop === null ? null : formatDecimal(current.cop, 2),
       ...(current.cop === null ? {} : { unit: "COP" }),
       fractionDigits: 2,
       delta: relativeChange(current.cop, previous.cop),
@@ -404,11 +410,12 @@ function PeriodChart({ comparison, pricing, previousLabel, metric, onMetricChang
     },
     ...(pricing ? [{
       key: "cost", label: "估算电费", compareKey: "previousCost", partialKey: "costPartial", info: "按站点电价估算，正式电费以结算为准",
-      value: `¥${formatDecimal(pricing.current.total, 0)}`, fractionDigits: 0, invertDelta: true,
-      delta: relativeChange(pricing.current.total, pricing.previous.total),
-      caption: pricing.current.energyKWh - pricing.current.unpricedKWh > 0
-        ? `均价 ${formatDecimal(pricing.current.total / (pricing.current.energyKWh - pricing.current.unpricedKWh), 3)} 元/kWh · 用电 ${formatDecimal(pricing.current.energyKWh, 0)} kWh`
-        : "所选时段暂无计量数据",
+      value: hasPricedEnergy ? `¥${formatDecimal(pricing.current.total, 0)}` : null,
+      fractionDigits: 0, invertDelta: true,
+      delta: hasPricedEnergy && hasPreviousPricedEnergy ? relativeChange(pricing.current.total, pricing.previous.total) : null,
+      caption: hasPricedEnergy
+        ? `均价 ${formatDecimal(pricing.current.total / pricedEnergyKWh, 3)} 元/kWh · 用电 ${formatDecimal(pricing.current.energyKWh, 0)} kWh`
+        : "暂无计量数据",
     } satisfies MetricTab<ConsumptionMetric>] : []),
   ];
   const active = metrics.find((candidate) => candidate.key === metric) ?? metrics[0];

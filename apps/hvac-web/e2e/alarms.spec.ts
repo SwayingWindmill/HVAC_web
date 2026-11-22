@@ -97,9 +97,10 @@ test('正在生效的规则 lists each rule with its devices, conditions and sev
   const rule = (title: string) => table.getByRole('row').filter({ has: page.getByRole('cell', { name: title, exact: true }) });
   await expect(table.getByRole('row')).toHaveCount(5);
   await expect(rule('冷冻水回水温度过低')).toContainText('CHILLER-01、BTU-METER-01');
-  await expect(rule('冷冻水回水温度过低')).toContainText('chiller run state 为运行，并且');
-  await expect(rule('冷冻水回水温度过低')).toContainText('btu meter return water temperature 不高于 10.5 °C，持续 5 分钟');
-  await expect(rule('冷冻水回水温度过低')).toContainText('btu meter return water temperature 不低于 11.5 °C，或者 CHILLER-01 的 chiller run state 不为运行');
+  await expect(rule('冷冻水回水温度过低')).toContainText('运行状态为运行，并且');
+  await expect(rule('冷冻水回水温度过低')).toContainText('回水温度不高于 10.5 °C，持续 5 分钟');
+  await expect(rule('冷冻水回水温度过低')).toContainText('回水温度不低于 11.5 °C，或者 CHILLER-01 的运行状态不为运行');
+  await expect(table).not.toContainText(/chiller run state|btu meter/i);
   await expect(rule('冷冻水回水温度过低')).toContainText('重要');
   await expect(rule('1 号冷机供水温度骤升')).toContainText('BTU-METER-01、CHILLER-01');
   await expect(rule('1 号冷机供水温度骤升')).toContainText('在 5 分钟内升高达到 2 °C');
@@ -155,11 +156,11 @@ test('模拟试算 dry-runs a multi-step sampling sequence without mutating alar
 
   const steps = sheet.locator('fieldset');
   await expect(steps).toHaveCount(2);
-  await steps.nth(0).getByLabel(/btu meter supply water temperature/).fill('7');
-  await steps.nth(1).getByLabel(/btu meter supply water temperature/).fill('10.5');
+  await steps.nth(0).getByLabel(/供水温度/).fill('7');
+  await steps.nth(1).getByLabel(/供水温度/).fill('10.5');
   await sheet.getByRole('button', { name: '添加采样步' }).click();
   await expect(steps).toHaveCount(3);
-  await steps.nth(2).getByLabel(/btu meter supply water temperature/).fill('6.8');
+  await steps.nth(2).getByLabel(/供水温度/).fill('6.8');
 
   // With ALL_ACTIVE gate and upstream unchecked, raise stays blocked until upstream is checked.
   await sheet.getByRole('button', { name: '运行模拟试算' }).click();
@@ -278,8 +279,8 @@ test('operators can edit rules on the DAG canvas, dry-run drafts, diff and hot-p
   const simSheet = page.getByRole('dialog', { name: /规则草稿模拟试算：1 号冷机供水温度骤升（已调优）/ });
   await expect(simSheet).toBeVisible();
   const draftSteps = simSheet.locator('fieldset');
-  await draftSteps.nth(0).getByLabel(/btu meter supply water temperature/).fill('7');
-  await draftSteps.nth(1).getByLabel(/btu meter supply water temperature/).fill('10.5');
+  await draftSteps.nth(0).getByLabel(/供水温度/).fill('7');
+  await draftSteps.nth(1).getByLabel(/供水温度/).fill('10.5');
   await simSheet.getByRole('checkbox', { name: '冷冻水回水温度过低' }).check();
   await simSheet.getByRole('button', { name: '运行模拟试算' }).click();
   await expect(simSheet.getByRole('table', { name: '试算结果明细' })).toContainText('触发告警');

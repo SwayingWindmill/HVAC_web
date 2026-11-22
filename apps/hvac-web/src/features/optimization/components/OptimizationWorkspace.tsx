@@ -21,6 +21,7 @@ import { GatewayRequestError } from '@/api/gateway-client';
 import type { WorkOrder } from '@/api/work-orders';
 import { PageHeader } from '@/blocks/page-header';
 import { Panel, PanelHeader } from '@/blocks/panel';
+import { StatusBadge } from '@/components/common/StatusBadge';
 import { InfoTip } from '@/components/info-tip';
 import { Main } from '@/components/layout/Main';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -49,6 +50,7 @@ import {
   findActiveRecommendationWorkOrder,
   formatAuxiliaryCapabilityLabel,
   formatAuxiliaryLoopLabel,
+  formatAuxiliaryRationale,
   formatAuxiliaryTargetValue,
   formatCelsius as celsius,
   formatSigned as signed,
@@ -340,7 +342,7 @@ export function OptimizationWorkspace() {
       <PageHeader
         title="优化建议"
         description={site.displayName}
-        actions={generateButton(recommendation ? 'outline' : 'default')}
+        actions={recommendation ? generateButton('outline') : undefined}
       />
 
       <Tabs
@@ -439,9 +441,6 @@ export function OptimizationWorkspace() {
                       </span>
                     </div>
                   ) : null}
-                  <p className="max-w-lg text-xs text-muted-foreground">
-                    建议依据最近一天的冷站用电与电费、最新负荷预测和实时供水、室内温度计算；用电与电费每天零点后结算，某天缺数据时不出电费，改用更早一天。
-                  </p>
                   <div className="mt-2">{generateButton('default')}</div>
                 </div>
               </Panel>
@@ -856,7 +855,7 @@ function Proposal({
       <Panel aria-label="约束">
         <PanelHeader
           title={<span className="flex items-center gap-1.5"><ShieldCheck className="size-4 text-primary" aria-hidden="true" />安全与舒适约束<InfoTip>舒适余量已扣除室内温度预测的不确定性</InfoTip></span>}
-          caption={`建议只在两条范围之内取值，每次调整不超过 ${celsius(supplyRange.maxStepC)}`}
+          caption={`单次调整 ≤ ${celsius(supplyRange.maxStepC)}`}
         />
         <ConstraintRow title="冷冻水供水温度" detail={`安全范围 ${formatDecimal(supplyRange.minC, 1)}–${celsius(supplyRange.maxC)} · ${change ? `调整 ${formatDecimal(Math.abs(candidate.supplyTempC - baseline.supplyTempC), 1)} °C` : '保持当前温度'}`}>
           <RangeTrack
@@ -889,14 +888,18 @@ function Proposal({
         <Panel aria-label="协同变频与风机建议">
           <PanelHeader
             title={<span className="flex items-center gap-1.5"><SlidersHorizontal className="size-4 text-primary" aria-hidden="true" />协同变频与风机建议</span>}
-            caption={confirmationMode === 'AUTO_WITH_LEASE'
-              ? '以下辅助回路目标由多回路策略协同生成；开启自动闭环后按授权边界执行，也可手动确认单回路下发'
-              : '以下辅助回路目标由多回路策略协同生成；人工确认模式下可逐回路确认下发'}
+            badge={
+              <StatusBadge
+                tone={confirmationMode === 'AUTO_WITH_LEASE' ? 'success' : 'neutral'}
+                label={confirmationMode === 'AUTO_WITH_LEASE' ? '自动闭环已授权' : '人工确认下发'}
+              />
+            }
           />
           <div className="grid grid-cols-1 divide-y divide-divider md:grid-cols-3 md:divide-x md:divide-y-0">
             {auxiliaryControls.map((binding) => {
               const { aux, matched, dispatchedValue, sent: auxSent } = binding;
               const loopLabel = formatAuxiliaryLoopLabel(aux.loopKey);
+              const rationaleText = formatAuxiliaryRationale(aux.rationale);
               const steppedCaption = matched && dispatchedValue !== null
                 ? Math.abs(dispatchedValue - aux.targetValue) >= 0.05
                   ? `按步长取整为 ${formatAuxiliaryTargetValue(dispatchedValue, matched.setting.unit ?? aux.unit)}`
@@ -913,8 +916,8 @@ function Proposal({
                   <span className="text-2xl leading-[30px] font-semibold tracking-[-0.03em] text-primary tabular-nums">
                     {formatAuxiliaryTargetValue(aux.targetValue, aux.unit)}
                   </span>
-                  {aux.rationale ? (
-                    <p className="text-xs leading-relaxed text-muted-foreground">{aux.rationale}</p>
+                  {rationaleText ? (
+                    <p className="text-xs leading-relaxed text-muted-foreground">{rationaleText}</p>
                   ) : null}
                   <div className="mt-auto pt-2">
                     {registryState === 'pending' ? (
@@ -956,7 +959,7 @@ function Proposal({
                         </div>
                       )
                     ) : (
-                      <span className="text-xs text-muted-foreground">当前站点未登记可写控制点，供现场参考</span>
+                      <span className="text-xs text-muted-foreground">未登记可写点位</span>
                     )}
                   </div>
                 </div>

@@ -34,6 +34,19 @@ const AUXILIARY_CAPABILITY_LABELS: Record<string, string> = {
   SET_FAN_SPEED: '风机转速调节',
 };
 
+const AUXILIARY_RATIONALE_LABELS: Record<string, string> = {
+  'CHW pump frequency coordinated with supply reset and comfort margin': '随供水温度重置与舒适余量协同调节',
+  'CW pump frequency coordinated for condenser heat rejection': '随冷凝散热负荷协同调节',
+  'Cooling tower fan speed balanced against wet-bulb heat rejection': '结合室外湿球温度平衡散热与风机能耗',
+};
+
+export function formatAuxiliaryRationale(rationale: string | undefined): string | null {
+  const trimmed = rationale?.trim() ?? '';
+  if (!trimmed) return null;
+  if (AUXILIARY_RATIONALE_LABELS[trimmed]) return AUXILIARY_RATIONALE_LABELS[trimmed];
+  return /[\u4e00-\u9fff]/.test(trimmed) ? trimmed : null;
+}
+
 export function formatAuxiliaryLoopLabel(loopKey: string): string {
   return AUXILIARY_LOOP_LABELS[loopKey] ?? loopKey;
 }

@@ -7,6 +7,7 @@ import {
   findActiveRecommendationWorkOrder,
   formatAuxiliaryCapabilityLabel,
   formatAuxiliaryLoopLabel,
+  formatAuxiliaryRationale,
   formatAuxiliaryTargetValue,
   matchAuxiliaryControlTarget,
   recommendedAuxiliaryValue,
@@ -847,4 +848,22 @@ test('recommendedAuxiliaryValue snaps to step and clamps bounds, and matchAuxili
 
   const unmatched = matchAuxiliaryControlTarget({ loopKey: 'chilled_water_pump_freq', capability: 'SET_FAN_SPEED', targetValue: 50, unit: '%' }, targets);
   assert.equal(unmatched, null);
+});
+
+test('formatAuxiliaryRationale translates known solver sentences, keeps Chinese copy, and hides raw English', () => {
+  assert.equal(
+    formatAuxiliaryRationale('CHW pump frequency coordinated with supply reset and comfort margin'),
+    '随供水温度重置与舒适余量协同调节',
+  );
+  assert.equal(
+    formatAuxiliaryRationale('CW pump frequency coordinated for condenser heat rejection'),
+    '随冷凝散热负荷协同调节',
+  );
+  assert.equal(
+    formatAuxiliaryRationale('Cooling tower fan speed balanced against wet-bulb heat rejection'),
+    '结合室外湿球温度平衡散热与风机能耗',
+  );
+  assert.equal(formatAuxiliaryRationale('按湿球温度动态调整风机频率'), '按湿球温度动态调整风机频率');
+  assert.equal(formatAuxiliaryRationale('raw internal solver text'), null);
+  assert.equal(formatAuxiliaryRationale(undefined), null);
 });

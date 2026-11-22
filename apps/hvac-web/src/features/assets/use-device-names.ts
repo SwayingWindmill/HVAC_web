@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { createPlatformGatewayClient } from '@/api/generated/platformGateway.gen';
+import { resolveTelemetryPointLabel } from '@/domain/centralPlantTelemetry';
 
 const client = createPlatformGatewayClient();
 
@@ -25,7 +26,12 @@ export function useSiteEquipment(siteId: string): SiteEquipmentIndex {
     const pointByReading = new Map<string, { name: string; unit: string | null }>();
     const data = model.data?.data;
     if (!data) return { nameByDevice, deviceByAsset, pointByReading };
-    for (const point of data.telemetryPoints) pointByReading.set(`${point.reportingDeviceId}/${point.pointCode}`, { name: point.displayName, unit: point.unit });
+    for (const point of data.telemetryPoints) {
+      pointByReading.set(`${point.reportingDeviceId}/${point.pointCode}`, {
+        name: resolveTelemetryPointLabel(point),
+        unit: point.unit,
+      });
+    }
     const assetNames = new Map(data.assets.map((asset) => [asset.id, asset.displayName]));
     for (const device of data.devices) nameByDevice.set(device.id, device.displayName);
     for (const relationship of data.relationships) {

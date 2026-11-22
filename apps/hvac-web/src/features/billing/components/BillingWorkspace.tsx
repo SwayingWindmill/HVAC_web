@@ -296,17 +296,12 @@ export function BillingWorkspace() {
       <PageHeader
         title="电费账单"
         meta={
-          <PageMeta>
-            {site.displayName} · {formatBillingMonthLabel(selectedMonth)}
-          </PageMeta>
-        }
-        description={
-          <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span>跟踪冷站月度电费预算进度，并按供电局抄表周期核对两部制结算电费单</span>
-            {!canManageBilling ? (
-              <span className="text-subtle-foreground">· 只读查看</span>
-            ) : null}
-          </span>
+          <>
+            <PageMeta>
+              {site.displayName} · {formatBillingMonthLabel(selectedMonth)}
+            </PageMeta>
+            {!canManageBilling ? <PageMeta>只读查看</PageMeta> : null}
+          </>
         }
         actions={
           <div className="flex flex-wrap items-center gap-2">
@@ -399,11 +394,13 @@ export function BillingWorkspace() {
         }}
         className="flex flex-col gap-4"
       >
-        <TabsList>
-          <TabsTrigger value="overview">预算进度</TabsTrigger>
-          <TabsTrigger value="bills">结算电费单核对</TabsTrigger>
-          <TabsTrigger value="config">计量与日历配置</TabsTrigger>
-        </TabsList>
+        <div className="border-b border-divider">
+          <TabsList variant="line">
+            <TabsTrigger value="overview">预算进度</TabsTrigger>
+            <TabsTrigger value="bills">结算电费单核对</TabsTrigger>
+            <TabsTrigger value="config">计量与日历配置</TabsTrigger>
+          </TabsList>
+        </div>
 
         <TabsContent value="overview" className="mt-0">
           <BudgetOverviewTab

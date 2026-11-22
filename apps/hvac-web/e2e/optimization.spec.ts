@@ -1139,6 +1139,8 @@ test('latest recommendation renders multi-loop auxiliary pump and tower fan targ
   await expect(auxPanel).toContainText('67.0%');
   await expect(auxPanel).toContainText('变频频率调节');
   await expect(auxPanel).toContainText('风机转速调节');
+  await expect(auxPanel).toContainText('随供水温度重置与舒适余量协同调节');
+  await expect(auxPanel).not.toContainText(/coordinated|heat rejection|CHW pump|CW pump/i);
 
   if (process.env.WAVE_D_AUX_SCREENSHOT) {
     await auxPanel.scrollIntoViewIfNeeded();

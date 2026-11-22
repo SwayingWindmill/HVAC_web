@@ -111,6 +111,19 @@ export function telemetryPointDefinition(key: string): TelemetryPointDefinition 
   return POINTS[key] ?? { key, label: key, precision: 2 };
 }
 
+/** Prefer existing Chinese labels; otherwise translate known central-plant point keys for operators. */
+export function resolveTelemetryPointLabel(point: {
+  readonly sourceKey?: string | null;
+  readonly pointCode?: string | null;
+  readonly displayName?: string | null;
+}): string {
+  const displayName = point.displayName?.trim() ?? '';
+  if (displayName && /[\u4e00-\u9fff]/.test(displayName)) return displayName;
+  if (point.sourceKey && POINTS[point.sourceKey]) return POINTS[point.sourceKey].label;
+  if (point.pointCode && POINTS[point.pointCode]) return POINTS[point.pointCode].label;
+  return displayName || point.pointCode?.trim() || point.sourceKey?.trim() || '未命名读数';
+}
+
 function formatNumber(value: number, precision: number): string {
   if (!Number.isFinite(value)) return String(value);
   if (Number.isInteger(value)) return String(value);

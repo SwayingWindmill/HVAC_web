@@ -96,7 +96,7 @@ export function BudgetOverviewTab({
     summary.cumulativeEstimatedCny !== null &&
     summary.cumulativeEstimatedCny > summary.budgetAmountCny;
 
-  let cumulativeNote = '按冷站电表有效读数与分时电价计算';
+  let cumulativeNote: string | null = null;
   if (isElectricityError) {
     cumulativeNote = electricityErrorMessage ?? '暂无法读取冷站能耗与估算电费';
   } else if (summary.pricingState === 'NO_DATA') {
@@ -110,7 +110,7 @@ export function BudgetOverviewTab({
     cumulativeNote = `已用月度预算 ${formatDecimal(summary.usageRatio * 100, 1)}%`;
   }
 
-  let projectedNote = '至少满 1 天有效读数后按日均线性外推';
+  let projectedNote: string | null = null;
   if (isPast && summary.cumulativeEstimatedCny !== null) {
     projectedNote = '自然月已结束，等于当月累计估算电费';
   } else if (summary.projectedOverrunCny !== null) {
@@ -139,7 +139,9 @@ export function BudgetOverviewTab({
                 {formatCurrency(summary.cumulativeEstimatedCny)}
               </span>
             )}
-            <span className="text-xs text-muted-foreground">{cumulativeNote}</span>
+            {cumulativeNote ? (
+              <span className="text-xs text-muted-foreground">{cumulativeNote}</span>
+            ) : null}
           </div>
         </Panel>
 
@@ -169,7 +171,9 @@ export function BudgetOverviewTab({
                 ) : null}
               </div>
             )}
-            <span className="text-xs text-muted-foreground">{projectedNote}</span>
+            {projectedNote ? (
+              <span className="text-xs text-muted-foreground">{projectedNote}</span>
+            ) : null}
           </div>
         </Panel>
 
@@ -261,17 +265,23 @@ export function BudgetOverviewTab({
             {isElectricityPending ? (
               <Skeleton className="h-[300px] w-full" />
             ) : summary.pricingState !== 'PRICED' ? (
-              <div className="flex h-[300px] flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border px-6 text-center">
+              <div className="flex h-[300px] flex-col items-center justify-center gap-2.5 rounded-lg border border-dashed border-border px-6 text-center">
                 <p className="text-sm font-medium text-foreground">
                   {summary.pricingState === 'NO_DATA'
                     ? `${monthText} 暂无可绘制的逐日估算电费曲线`
                     : '待分时电价完整覆盖全月时段后显示累计估算电费曲线'}
                 </p>
-                <p className="max-w-md text-xs text-muted-foreground">
-                  {budget
-                    ? `当前已设置月度电费预算 ¥${formatDecimal(budget.budgetAmountCny, 2)}。`
-                    : '你可以先为该月设置月度电费预算，或在收到供电局通知单后录入结算电费单。'}
-                </p>
+                {budget ? (
+                  <p className="text-xs text-muted-foreground tabular-nums">
+                    已设预算 ¥{formatDecimal(budget.budgetAmountCny, 2)}
+                  </p>
+                ) : canManageBilling ? (
+                  <div className="mt-1 flex flex-wrap items-center justify-center gap-2">
+                    <Button type="button" size="sm" variant="outline" onClick={onOpenBudgetDialog}>
+                      设置月度预算
+                    </Button>
+                  </div>
+                ) : null}
               </div>
             ) : seriesDisplayMode === 'table' ? (
               <div className="max-h-[300px] overflow-y-auto">
@@ -362,31 +372,41 @@ export function BudgetOverviewTab({
 
         <div className="flex flex-col gap-4">
           <Panel>
-            <PanelHeader title="峰平谷电度电费构成" caption="按冷站已定价电量统计" />
+            <PanelHeader title="峰平谷电度电费构成" />
             <div className="space-y-3 p-4">
-              {summary.touPeriods.map((period) => (
-                <div key={period.code} className="space-y-1">
-                  <div className="flex items-baseline justify-between gap-2 text-xs tabular-nums">
-                    <span className="font-medium text-foreground">{period.label}时段</span>
-                    <span className="text-muted-foreground">
-                      {formatDecimal(period.energyKWh, 0)} kWh ·{' '}
-                      <strong className="font-semibold text-foreground">
-                        ¥{formatDecimal(period.costCny, 2)}
-                      </strong>{' '}
-                      ({formatDecimal(period.shareRatio * 100, 1)}%)
-                    </span>
+              {summary.pricingState === 'NO_DATA' ||
+              summary.pricingState === 'UNPRICED' ||
+              summary.touPeriods.every((period) => period.energyKWh <= 0) ? (
+                <p className="py-6 text-center text-xs text-muted-foreground">
+                  {summary.pricingState === 'UNPRICED'
+                    ? '站点未配置分时电价'
+                    : `${monthText}暂无已定价分时电量`}
+                </p>
+              ) : (
+                summary.touPeriods.map((period) => (
+                  <div key={period.code} className="space-y-1">
+                    <div className="flex items-baseline justify-between gap-2 text-xs tabular-nums">
+                      <span className="font-medium text-foreground">{period.label}时段</span>
+                      <span className="text-muted-foreground">
+                        {formatDecimal(period.energyKWh, 0)} kWh ·{' '}
+                        <strong className="font-semibold text-foreground">
+                          ¥{formatDecimal(period.costCny, 2)}
+                        </strong>{' '}
+                        ({formatDecimal(period.shareRatio * 100, 1)}%)
+                      </span>
+                    </div>
+                    <div className="h-2 w-full overflow-hidden rounded-full bg-muted" aria-hidden="true">
+                      <div
+                        className="h-full rounded-full"
+                        style={{
+                          width: `${Math.min(100, Math.max(0, period.shareRatio * 100))}%`,
+                          backgroundColor: PERIOD_COLOR[period.code],
+                        }}
+                      />
+                    </div>
                   </div>
-                  <div className="h-2 w-full overflow-hidden rounded-full bg-muted" aria-hidden="true">
-                    <div
-                      className="h-full rounded-full"
-                      style={{
-                        width: `${Math.min(100, Math.max(0, period.shareRatio * 100))}%`,
-                        backgroundColor: PERIOD_COLOR[period.code],
-                      }}
-                    />
-                  </div>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           </Panel>
 
@@ -416,11 +436,6 @@ export function BudgetOverviewTab({
                         : `${monthText} 尚未录入结算电费单`}
                     </span>
                   </div>
-                  <p className="text-xs text-muted-foreground">
-                    {draftBills.length > 0
-                      ? '请前往「结算电费单核对」页签核对草稿并确认归档后，此处与月报将展示正式结算金额。'
-                      : '收到供电局电费发票或结算单后录入，可自动按抄表起止日期对齐平台电量并核对偏差或冷站分摊金额。'}
-                  </p>
                   {draftBills.length > 0 ? (
                     <Button
                       type="button"
