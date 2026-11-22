@@ -176,6 +176,14 @@ services:
       <<: *owner-env
       ALARM_SERVICE_ADDR: :8448
       ALARM_DIAGNOSTICS_ADDR: :19088
+      CONNECTIVITY_SERVICE_URL: ${CONNECTIVITY_SERVICE_URL:-https://connectivity:8448}
+      CONNECTIVITY_SERVICE_SERVER_NAME: ${CONNECTIVITY_SERVICE_SERVER_NAME:-connectivity}
+      CONNECTIVITY_SERVER_CA: ${CONNECTIVITY_SERVER_CA:-/run/hvac/gateway-ca/ca.crt}
+    volumes:
+      - ${INTERNAL_PKI_DIR:-./runtime/internal-pki}:/run/hvac/pki:ro
+      - ${INTERNAL_SECRETS_DIR:-./runtime/secrets}:/run/hvac/secrets:ro
+      - ${PHASE1_CONFIG_DIR:-./runtime/config}:/run/hvac/config:ro
+      - ${PHASE1_RUNTIME_DIR:-./runtime}/gateway-ca/ca.crt:/run/hvac/gateway-ca/ca.crt:ro
     expose: ["8448", "19088"]
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19088/health/ready"]

@@ -1255,7 +1255,20 @@ func newEmbeddedAlarmServer(ctx context.Context, logger *slog.Logger, alarmRef *
 		store.Close()
 		return nil, nil, func() {}, err
 	}
+	edgeDedupChecker, err := alarmservice.LoadConnectivityEdgeRuleSyncChecker(logger)
+	if err != nil {
+		_ = telemetry.Shutdown(ctx)
+		store.Close()
+		return nil, nil, func() {}, err
+	}
+	store.SetEdgeRuleSyncChecker(edgeDedupChecker)
 	controlEventsHandler, err := alarmservice.NewControlFailureHandler(store)
+	if err != nil {
+		_ = telemetry.Shutdown(ctx)
+		store.Close()
+		return nil, nil, func() {}, err
+	}
+	edgeEventsHandler, err := alarmservice.NewEdgeAlarmEventHandler(store)
 	if err != nil {
 		_ = telemetry.Shutdown(ctx)
 		store.Close()
@@ -1271,6 +1284,7 @@ func newEmbeddedAlarmServer(ctx context.Context, logger *slog.Logger, alarmRef *
 		GatewayHandler:       handler,
 		TelemetryHandler:     telemetryEvaluationHandler,
 		ControlEventsHandler: controlEventsHandler,
+		EdgeEventsHandler:    edgeEventsHandler,
 	})
 	if err != nil {
 		store.Close()

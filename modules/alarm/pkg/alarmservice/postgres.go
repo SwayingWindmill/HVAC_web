@@ -15,9 +15,18 @@ import (
 )
 
 type PostgresStore struct {
-	pool      *pgxpool.Pool
-	newID     idGenerator
-	ruleCache siteRuleCache
+	pool            *pgxpool.Pool
+	newID           idGenerator
+	ruleCache       siteRuleCache
+	edgeSyncChecker EdgeRuleSyncChecker
+}
+
+// SetEdgeRuleSyncChecker attaches a connectivity client used to avoid redundant
+// cloud evaluation of pure EDGE rules when the gateway is online and synced.
+func (store *PostgresStore) SetEdgeRuleSyncChecker(checker EdgeRuleSyncChecker) {
+	if store != nil {
+		store.edgeSyncChecker = checker
+	}
 }
 
 func OpenPostgresStore(ctx context.Context, databaseURL string) (*PostgresStore, error) {

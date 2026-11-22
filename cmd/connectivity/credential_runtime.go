@@ -343,7 +343,7 @@ func newCredentialRuntime(cfg credentialRuntimeConfig) (*http.Server, *tunnel.Hu
 			}
 			isGatewayOnline = presence.IsOnline
 		}
-		configShadowHandler = connectivity.NewConfigShadowHandlerWithPresence(store, service, authorize, onDesiredUpdated, onGatewaySeen)
+		configShadowHandler = connectivity.NewConfigShadowHandlerWithRuntimePresence(store, service, authorize, onDesiredUpdated, onGatewaySeen, isGatewayOnline)
 		diagnosticsHandler = connectivity.NewDiagnosticsHandler(store, tap, authorize)
 
 		otaStorage := cfg.OTAStorage

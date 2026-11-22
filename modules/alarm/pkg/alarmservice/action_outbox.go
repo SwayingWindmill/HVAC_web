@@ -898,6 +898,19 @@ func (store *PostgresStore) enqueueRuleActionsInTx(
 	triggerKind ActionTriggerOn,
 	occurredAt time.Time,
 ) error {
+	return store.enqueueRuleActionsWithFilterInTx(ctx, tx, tenantID, siteID, alarm, assigned, triggerKind, occurredAt, true)
+}
+
+func (store *PostgresStore) enqueueRuleActionsWithFilterInTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	tenantID, siteID string,
+	alarm alarmmodel.Alarm,
+	assigned assignedAlarmPolicy,
+	triggerKind ActionTriggerOn,
+	occurredAt time.Time,
+	includeProtectionCommands bool,
+) error {
 	if len(assigned.Policy.Actions) == 0 {
 		return nil
 	}
@@ -906,6 +919,9 @@ func (store *PostgresStore) enqueueRuleActionsInTx(
 		effect = EvaluationEffectClear
 	}
 	for index, action := range assigned.Policy.Actions {
+		if !includeProtectionCommands && action.Kind == RuleActionProtectionCommand {
+			continue
+		}
 		if !action.MatchesEffect(effect) {
 			continue
 		}

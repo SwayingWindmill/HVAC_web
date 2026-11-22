@@ -17,6 +17,7 @@ type OwnerRouterConfig struct {
 	GatewayHandler       http.Handler
 	TelemetryHandler     http.Handler
 	ControlEventsHandler http.Handler
+	EdgeEventsHandler    http.Handler
 }
 
 func NewOwnerRouter(config OwnerRouterConfig) (http.Handler, error) {
@@ -48,6 +49,14 @@ func NewOwnerRouter(config OwnerRouterConfig) (http.Handler, error) {
 				return
 			}
 			config.TelemetryHandler.ServeHTTP(writer, request)
+			return
+		}
+		if config.EdgeEventsHandler != nil && request.URL.Path == InternalEdgeAlarmEventsPath {
+			if peer != telemetrySPIFFE {
+				writeOwnerForbidden(writer, "ALARM_TELEMETRY_WORKLOAD_FORBIDDEN")
+				return
+			}
+			config.EdgeEventsHandler.ServeHTTP(writer, request)
 			return
 		}
 		if config.ControlEventsHandler != nil && request.URL.Path == InternalControlEventsPath {

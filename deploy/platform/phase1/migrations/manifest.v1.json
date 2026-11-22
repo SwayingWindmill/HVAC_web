@@ -172,7 +172,8 @@
         "infra/telemetry/postgres/init/alarm-evaluation-dead-letter.sql",
         "infra/telemetry/postgres/init/telemetry-history-dead-letter-and-retention.sql",
         "infra/telemetry/postgres/init/telemetry-runtime-unnest-and-indexes.sql",
-        "infra/telemetry/postgres/init/telemetry-accepted-point-sample-index.sql"
+        "infra/telemetry/postgres/init/telemetry-accepted-point-sample-index.sql",
+        "infra/telemetry/postgres/init/telemetry-edge-alarm-delivery.sql"
       ]
     },
     {
@@ -218,7 +219,8 @@
         "modules/alarm/migrations/alarm-suppression-notification-events.sql",
         "modules/alarm/migrations/alarm-evaluation-slope-window.sql",
         "modules/alarm/migrations/alarm-rule-action-outbox.sql",
-        "modules/alarm/migrations/alarm-site-rule-bundles.sql"
+        "modules/alarm/migrations/alarm-site-rule-bundles.sql",
+        "modules/alarm/migrations/alarm-edge-event-projection.sql"
       ]
     },
     {

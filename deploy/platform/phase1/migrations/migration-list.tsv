@@ -143,6 +143,7 @@ hvac_s2|infra/telemetry/postgres/init/alarm-evaluation-dead-letter.sql
 hvac_s2|infra/telemetry/postgres/init/telemetry-history-dead-letter-and-retention.sql
 hvac_s2|infra/telemetry/postgres/init/telemetry-runtime-unnest-and-indexes.sql
 hvac_s2|infra/telemetry/postgres/init/telemetry-accepted-point-sample-index.sql
+hvac_s2|infra/telemetry/postgres/init/telemetry-edge-alarm-delivery.sql
 hvac_s3|modules/command/migrations/001_s3_command_runtime.sql
 hvac_s3|modules/command/migrations/002_s3_target_runtime.sql
 hvac_s3|modules/command/migrations/003_s3_tenant_scope.sql
@@ -179,6 +180,7 @@ hvac_s4|modules/alarm/migrations/alarm-suppression-notification-events.sql
 hvac_s4|modules/alarm/migrations/alarm-evaluation-slope-window.sql
 hvac_s4|modules/alarm/migrations/alarm-rule-action-outbox.sql
 hvac_s4|modules/alarm/migrations/alarm-site-rule-bundles.sql
+hvac_s4|modules/alarm/migrations/alarm-edge-event-projection.sql
 hvac_s5|modules/workorder/migrations/001_s5_work_order_runtime.sql
 hvac_s5|modules/workorder/migrations/002_s5_work_order_create_assignment.sql
 hvac_s5|modules/workorder/migrations/003_s5_work_order_lifecycle.sql

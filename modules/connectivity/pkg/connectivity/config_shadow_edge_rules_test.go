@@ -1,12 +1,20 @@
 package connectivity
 
 import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
+	"github.com/quanlaihe/hvac-web/libs/registryauth"
 )
 
 func sampleValidEdgeRuleBundle() *edgecontrol.EdgeRuleBundle {
@@ -126,5 +134,99 @@ func TestConfigShadowEdgeRuleBundleValidationDriftAndTriState(t *testing.T) {
 	var unknownField UpdateDesiredConfigInput
 	if err := json.Unmarshal([]byte(`{"edgeRuleBundle":{"schemaVersion":1,"extraField":1},"reason":"bad"}`), &unknownField); err == nil {
 		t.Fatalf("expected unknown field inside edgeRuleBundle to be rejected")
+	}
+}
+
+type stubSiteEdgeRuleShadowStore struct {
+	status SiteEdgeRuleSyncStatus
+	err    error
+	calls  int
+}
+
+func (s *stubSiteEdgeRuleShadowStore) GetGatewayConfigShadowForOperator(context.Context, registryauth.GrantClaims, string) (GatewayConfigShadow, error) {
+	return GatewayConfigShadow{}, nil
+}
+func (s *stubSiteEdgeRuleShadowStore) UpdateGatewayDesiredConfig(context.Context, registryauth.GrantClaims, string, UpdateDesiredConfigInput) (GatewayConfigShadow, error) {
+	return GatewayConfigShadow{}, nil
+}
+func (s *stubSiteEdgeRuleShadowStore) PullGatewayDesiredConfig(context.Context, string, int64) (GatewayShadowPullResponse, error) {
+	return GatewayShadowPullResponse{}, nil
+}
+func (s *stubSiteEdgeRuleShadowStore) ReportGatewayAppliedConfig(context.Context, string, GatewayShadowReportInput) (GatewayConfigShadow, error) {
+	return GatewayConfigShadow{}, nil
+}
+func (s *stubSiteEdgeRuleShadowStore) GetSiteEdgeRuleSyncStatus(_ context.Context, tenantID, siteID string, isGatewayOnline func(string) bool) (SiteEdgeRuleSyncStatus, error) {
+	s.calls++
+	status := s.status
+	status.TenantID = tenantID
+	status.SiteID = siteID
+	if isGatewayOnline != nil {
+		for i := range status.Gateways {
+			status.Gateways[i].Online = isGatewayOnline(status.Gateways[i].GatewayID)
+		}
+	}
+	return status, s.err
+}
+
+func TestBuildGatewayEdgeRuleSyncSummaryAndInternalHTTPSPIFFE(t *testing.T) {
+	bundle := sampleValidEdgeRuleBundle()
+	edgeOnly := bundle.Rules[0]
+	edgeOnly.RuleID = "0194f000-4000-7000-8000-000000000002"
+	edgeOnly.ExecutionTarget = edgecontrol.EdgeTargetEdge
+	bundle.Rules = append(bundle.Rules, edgeOnly)
+	dig, _ := bundle.ComputeDigest()
+	bundle.EdgeBundleDigest = dig
+
+	summary := buildGatewayEdgeRuleSyncSummary(
+		"0194f000-1000-7000-8000-000000000001",
+		"0194f000-3000-7000-8000-000000000001",
+		&GatewayDesiredConfig{DesiredRevision: 2, EdgeRuleBundle: bundle},
+		&GatewayReportedConfig{ReportedRevision: 2, AppliedStatus: AppliedStatusApplied, EdgeRuleBundle: bundle.Clone()},
+		func(gw string) bool { return gw == "0194f000-3000-7000-8000-000000000001" },
+	)
+	if !summary.Online || !summary.EdgeRulesSynced || summary.DesiredBundleRevision != 3 || summary.ReportedBundleRevision != 3 {
+		t.Fatalf("unexpected synced summary: %+v", summary)
+	}
+	if !slices.Equal(summary.ReportedEdgeOnlyRuleIDs, []string{"0194f000-4000-7000-8000-000000000002"}) {
+		t.Fatalf("ReportedEdgeOnlyRuleIDs=%v", summary.ReportedEdgeOnlyRuleIDs)
+	}
+
+	rejected := buildGatewayEdgeRuleSyncSummary(
+		"0194f000-1000-7000-8000-000000000001",
+		"0194f000-3000-7000-8000-000000000001",
+		&GatewayDesiredConfig{DesiredRevision: 2, EdgeRuleBundle: bundle},
+		&GatewayReportedConfig{ReportedRevision: 2, AppliedStatus: AppliedStatusRejected, EdgeRuleBundle: bundle.Clone()},
+		nil,
+	)
+	if rejected.EdgeRulesSynced {
+		t.Fatalf("REJECTED report must not mark EdgeRulesSynced=true")
+	}
+
+	stub := &stubSiteEdgeRuleShadowStore{status: SiteEdgeRuleSyncStatus{SchemaVersion: 1, Gateways: []GatewayEdgeRuleSyncSummary{summary}}}
+	h := NewConfigShadowHandlerWithRuntimePresence(stub, nil, nil, nil, nil, func(string) bool { return true })
+
+	reqNoCert := httptest.NewRequest(http.MethodGet, "/internal/v1/sites/0194f000-2000-7000-8000-000000000001/edge-rule-sync-status?tenantId=0194f000-1000-7000-8000-000000000001", nil)
+	recNoCert := httptest.NewRecorder()
+	h.ServeHTTP(recNoCert, reqNoCert)
+	if recNoCert.Code != http.StatusForbidden {
+		t.Fatalf("missing cert status=%d want 403", recNoCert.Code)
+	}
+
+	wrongURI, _ := url.Parse("spiffe://hvac.local/platform-core-service")
+	reqWrongCert := reqNoCert.Clone(context.Background())
+	reqWrongCert.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{{URIs: []*url.URL{wrongURI}}}}}
+	recWrongCert := httptest.NewRecorder()
+	h.ServeHTTP(recWrongCert, reqWrongCert)
+	if recWrongCert.Code != http.StatusForbidden {
+		t.Fatalf("non-alarm cert status=%d want 403", recWrongCert.Code)
+	}
+
+	alarmURI, _ := url.Parse("spiffe://hvac.local/alarm-service")
+	reqOK := reqNoCert.Clone(context.Background())
+	reqOK.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{{URIs: []*url.URL{alarmURI}}}}}
+	recOK := httptest.NewRecorder()
+	h.ServeHTTP(recOK, reqOK)
+	if recOK.Code != http.StatusOK || stub.calls != 1 {
+		t.Fatalf("alarm cert status=%d calls=%d body=%s", recOK.Code, stub.calls, recOK.Body.String())
 	}
 }

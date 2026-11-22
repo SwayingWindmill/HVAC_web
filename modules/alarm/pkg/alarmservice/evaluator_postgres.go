@@ -165,6 +165,9 @@ func (store *PostgresStore) EvaluateClaim(ctx context.Context, claim EvaluationC
 	if !alarmmodel.IsUUIDv7(claim.TenantID) || !alarmmodel.IsUUIDv7(claim.SiteID) || !alarmmodel.IsUUIDv7(claim.AssignmentID) || !boundedText(claim.WorkerID, 256) || claim.Fence == 0 || claim.StateVersion == 0 {
 		return EvaluationDecision{}, ErrEvaluationClaimLost
 	}
+	if store.isSingleRuleEdgeDelegated(ctx, claim.TenantID, claim.SiteID, claim.AssignmentID) {
+		return store.deferDelegatedDueEvaluation(ctx, claim, now.UTC().Add(30*time.Second))
+	}
 	tx, err := store.beginTenantTransaction(ctx, claim.TenantID, false)
 	if err != nil {
 		return EvaluationDecision{}, err

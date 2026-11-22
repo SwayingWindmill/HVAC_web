@@ -831,3 +831,24 @@ func TestOpenTelemetryHistorySink(t *testing.T) {
 		}
 	})
 }
+
+func TestDeriveEdgeAlarmEventsURLAndShutdownDrainTarget(t *testing.T) {
+	got, err := telemetry.DeriveEdgeAlarmEventsURL("https://alarm-service:8448/internal/v1/alarm/evaluations/telemetry", "")
+	if err != nil || got != "https://alarm-service:8448/internal/v1/alarms/edge-events" {
+		t.Fatalf("DeriveEdgeAlarmEventsURL() = (%q, %v)", got, err)
+	}
+	got, err = telemetry.DeriveEdgeAlarmEventsURL("https://alarm-service:8448/internal/v1/alarm/evaluations/telemetry", "https://alarm-owner:8448/internal/v1/alarms/edge-events")
+	if err != nil || got != "https://alarm-owner:8448/internal/v1/alarms/edge-events" {
+		t.Fatalf("DeriveEdgeAlarmEventsURL(override) = (%q, %v)", got, err)
+	}
+	if _, err := telemetry.DeriveEdgeAlarmEventsURL("http://alarm-service:8448/x", ""); err == nil {
+		t.Fatal("expected non-https alarmEvalURL to fail")
+	}
+	var called []string
+	drainTelemetryRelays(t.Context(), telemetryRelayDrainTargets{
+		EdgeAlarm: &stubBatchDrainer{name: "edge_alarm", record: func(n string) { called = append(called, n) }},
+	}, nil)
+	if len(called) != 1 || called[0] != "edge_alarm" {
+		t.Fatalf("expected EdgeAlarm relay drain on shutdown, got %v", called)
+	}
+}

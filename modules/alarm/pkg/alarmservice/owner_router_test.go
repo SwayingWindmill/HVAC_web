@@ -134,3 +134,33 @@ func TestOwnerRouterLetsAReaderWorkloadOnlyListASitesAlarms(t *testing.T) {
 		}
 	}
 }
+
+func TestOwnerRouterRoutesEdgeAlarmEventsExclusivelyToTelemetryWorkload(t *testing.T) {
+	edgeCalls := 0
+	router, err := NewOwnerRouter(OwnerRouterConfig{
+		GatewaySPIFFE:    ownerRouterGatewaySPIFFE,
+		TelemetrySPIFFE:  ownerRouterTelemetrySPIFFE,
+		ReaderSPIFFE:     "spiffe://hvac.local/operations-agent-service",
+		GatewayHandler:   http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
+		TelemetryHandler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }),
+		EdgeEventsHandler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			edgeCalls++
+			w.WriteHeader(http.StatusOK)
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recOK := httptest.NewRecorder()
+	router.ServeHTTP(recOK, ownerRouterRequest(t, InternalEdgeAlarmEventsPath, ownerRouterTelemetrySPIFFE))
+	if recOK.Code != http.StatusOK || edgeCalls != 1 {
+		t.Fatalf("telemetry SPIFFE status=%d edgeCalls=%d", recOK.Code, edgeCalls)
+	}
+	for _, denied := range []string{ownerRouterGatewaySPIFFE, "spiffe://hvac.local/operations-agent-service", "spiffe://hvac.local/connectivity-service"} {
+		recDenied := httptest.NewRecorder()
+		router.ServeHTTP(recDenied, ownerRouterRequest(t, InternalEdgeAlarmEventsPath, denied))
+		if recDenied.Code != http.StatusForbidden || edgeCalls != 1 {
+			t.Fatalf("identity %q should be forbidden on edge events: code=%d edgeCalls=%d", denied, recDenied.Code, edgeCalls)
+		}
+	}
+}

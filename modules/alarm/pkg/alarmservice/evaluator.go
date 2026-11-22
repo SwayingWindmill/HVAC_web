@@ -466,19 +466,33 @@ func BooleanInput(key string, value bool, quality, observedAt string) InputFact 
 	return InputFact{Key: key, Present: true, Value: BooleanValue(value), Quality: quality, ObservedAt: observedAt, Evidence: []alarmmodel.EvidenceReference{}}
 }
 
+// EdgeEvaluationProvenance records metadata for an evaluation state advanced by an
+// edge rule alarm event replayed from telemetry.
+type EdgeEvaluationProvenance struct {
+	GatewayID        string `json:"gatewayId"`
+	EdgeEventID      string `json:"edgeEventId"`
+	EventType        string `json:"eventType"`
+	OccurredAt       string `json:"occurredAt"`
+	Offline          bool   `json:"offline"`
+	BundleRevision   int64  `json:"bundleRevision"`
+	EdgeBundleDigest string `json:"edgeBundleDigest,omitempty"`
+}
+
 type EvaluationSnapshot struct {
-	TenantID           string               `json:"tenantId"`
-	SiteID             string               `json:"siteId"`
-	SubjectType        string               `json:"subjectType"`
-	SubjectID          string               `json:"subjectId"`
-	DeviceID           *string              `json:"deviceId,omitempty"`
-	EventID            *string              `json:"eventId,omitempty"`
-	PointID            *string              `json:"pointId,omitempty"`
-	InputRevision      string               `json:"inputRevision"`
-	AsOf               string               `json:"asOf"`
-	Inputs             map[string]InputFact `json:"inputs"`
-	CorrelationID      string               `json:"correlationId"`
-	UpstreamRuleActive map[string]bool      `json:"-"`
+	TenantID           string                    `json:"tenantId"`
+	SiteID             string                    `json:"siteId"`
+	SubjectType        string                    `json:"subjectType"`
+	SubjectID          string                    `json:"subjectId"`
+	DeviceID           *string                   `json:"deviceId,omitempty"`
+	EventID            *string                   `json:"eventId,omitempty"`
+	PointID            *string                   `json:"pointId,omitempty"`
+	InputRevision      string                    `json:"inputRevision"`
+	AsOf               string                    `json:"asOf"`
+	Inputs             map[string]InputFact      `json:"inputs"`
+	CorrelationID      string                    `json:"correlationId"`
+	EdgeProvenance     *EdgeEvaluationProvenance `json:"edgeProvenance,omitempty"`
+	UpstreamRuleActive map[string]bool           `json:"-"`
+	ForceReevaluate    bool                      `json:"-"`
 }
 
 type AlarmEvaluationState struct {
@@ -538,7 +552,7 @@ func EvaluatePolicy(policy AlarmPolicyRevision, snapshot EvaluationSnapshot, pre
 		}
 	}
 	newInput := snapshot.InputRevision != state.LastInputRevision || policyChanged
-	if !newInput && !evaluationIsDue(state.NextEvaluationAt, now) {
+	if !newInput && !snapshot.ForceReevaluate && !evaluationIsDue(state.NextEvaluationAt, now) {
 		return EvaluationDecision{Status: state.Status, Effect: EvaluationEffectNone, Fingerprint: fingerprint, State: state}, nil
 	}
 	if newInput {
@@ -991,6 +1005,15 @@ func (snapshot EvaluationSnapshot) Validate() error {
 			if _, err := time.Parse(time.RFC3339Nano, input.ObservedAt); err != nil {
 				return errors.New("alarm evaluation input time is invalid")
 			}
+		}
+	}
+	if snapshot.EdgeProvenance != nil {
+		p := snapshot.EdgeProvenance
+		if !boundedText(p.GatewayID, 128) || !boundedText(p.EdgeEventID, 256) || !boundedText(p.EventType, 64) {
+			return errors.New("alarm evaluation edge provenance is invalid")
+		}
+		if _, err := time.Parse(time.RFC3339Nano, p.OccurredAt); err != nil {
+			return errors.New("alarm evaluation edge provenance time is invalid")
 		}
 	}
 	return nil
