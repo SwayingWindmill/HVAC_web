@@ -87,15 +87,15 @@ func (store *PostgresStore) List(ctx context.Context, tenantID, siteID string, f
 		cursorAlarmID = alarmID
 	}
 	rows, err := tx.Query(ctx, alarmSelect+`
-		WHERE tenant_id = $1 AND site_id = $2
-		  AND ($3 = '' OR condition = $3)
-		  AND ($4 = '' OR current_severity = $4)
-		  AND ($5::boolean IS NULL OR (acknowledged_at IS NOT NULL) = $5)
-		  AND ($6::boolean IS NULL OR (suppression IS NOT NULL) = $6)
-		  AND ($7::timestamptz IS NULL OR first_occurred_at < $7 OR (first_occurred_at = $7 AND alarm_id < $8::uuid))
-		  AND ($10::timestamptz IS NULL OR first_occurred_at <= $10)
-		  AND ($11::timestamptz IS NULL OR cleared_at IS NULL OR cleared_at >= $11)
-		ORDER BY first_occurred_at DESC, alarm_id DESC
+		WHERE ac.tenant_id = $1 AND ac.site_id = $2
+		  AND ($3 = '' OR ac.condition = $3)
+		  AND ($4 = '' OR ac.current_severity = $4)
+		  AND ($5::boolean IS NULL OR (ac.acknowledged_at IS NOT NULL) = $5)
+		  AND ($6::boolean IS NULL OR (ac.suppression IS NOT NULL) = $6)
+		  AND ($7::timestamptz IS NULL OR ac.first_occurred_at < $7 OR (ac.first_occurred_at = $7 AND ac.alarm_id < $8::uuid))
+		  AND ($10::timestamptz IS NULL OR ac.first_occurred_at <= $10)
+		  AND ($11::timestamptz IS NULL OR ac.cleared_at IS NULL OR ac.cleared_at >= $11)
+		ORDER BY ac.first_occurred_at DESC, ac.alarm_id DESC
 		LIMIT $9`, tenantID, siteID, string(filter.Condition), string(filter.Severity), filter.Acknowledged, filter.Suppressed, cursorTriggeredAt, cursorAlarmID, limit+1, filter.ActiveTo, filter.ActiveFrom)
 	if err != nil {
 		return alarmmodel.ListResponse{}, fmt.Errorf("list Alarms: %w", err)
@@ -191,12 +191,13 @@ func (store *PostgresStore) ListAlarmEvaluations(ctx context.Context, tenantID, 
 
 	var fingerprint string
 	var firstOccurredAt time.Time
+	var eventID *string
 	err = tx.QueryRow(ctx, `
-		SELECT fingerprint, first_occurred_at
+		SELECT fingerprint, first_occurred_at, event_id::text
 		FROM alarm_runtime.alarm_current
 		WHERE tenant_id = $1 AND site_id = $2 AND alarm_id = $3`,
 		tenantID, siteID, alarmID,
-	).Scan(&fingerprint, &firstOccurredAt)
+	).Scan(&fingerprint, &firstOccurredAt, &eventID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AlarmEvaluationList{}, ErrNotFound
 	}
@@ -215,13 +216,15 @@ func (store *PostgresStore) ListAlarmEvaluations(ctx context.Context, tenantID, 
 		    OR (
 		      active_alarm_id IS NULL
 		      AND fingerprint = $4
-		      AND evaluated_at >= ($5::timestamptz - interval '10 minutes')
-		      AND evaluated_at <= $5::timestamptz
+		      AND (
+		        (evaluated_at >= ($5::timestamptz - interval '10 minutes') AND evaluated_at <= $5::timestamptz)
+		        OR ($7::text IS NOT NULL AND snapshot->>'eventId' = $7::text)
+		      )
 		    )
 		  )
 		ORDER BY evaluated_at DESC, state_version DESC
 		LIMIT $6`,
-		tenantID, siteID, alarmID, fingerprint, firstOccurredAt.UTC(), limit,
+		tenantID, siteID, alarmID, fingerprint, firstOccurredAt.UTC(), limit, eventID,
 	)
 	if err != nil {
 		return AlarmEvaluationList{}, fmt.Errorf("query Alarm evaluation history: %w", err)
@@ -402,17 +405,19 @@ func (store *PostgresStore) beginTenantTransactionWithOptions(ctx context.Contex
 }
 
 const alarmSelect = `
-	SELECT alarm_id, tenant_id, site_id, device_id, event_id, point_id, alarm_type, fingerprint,
-	       incident_correlation_id, source_type, source_reference, rule_revision, title, summary,
-	       condition, current_severity, peak_severity, acknowledged_at, acknowledged_by, acknowledgement_comment,
-	       assignee_id, suppression, occurrence_count, first_occurred_at, last_occurred_at, cleared_at,
-	       evidence, links, version, created_at, updated_at
-	FROM alarm_runtime.alarm_current`
+	SELECT ac.alarm_id, ac.tenant_id, ac.site_id, ac.device_id, ac.event_id, ac.point_id, ac.alarm_type, ac.fingerprint,
+	       ac.incident_correlation_id, ac.source_type, ac.source_reference, ac.rule_revision, ac.title, ac.summary,
+	       ac.condition, ac.current_severity, ac.peak_severity, ac.acknowledged_at, ac.acknowledged_by, ac.acknowledgement_comment,
+	       ac.assignee_id, ac.suppression, ac.occurrence_count, ac.first_occurred_at, ac.last_occurred_at, ac.cleared_at,
+	       ac.evidence, ac.links, ac.version, ac.created_at, ac.updated_at, ev.metadata
+	FROM alarm_runtime.alarm_current AS ac
+	LEFT JOIN alarm_runtime.events AS ev
+	  ON ev.tenant_id = ac.tenant_id AND ev.site_id = ac.site_id AND ev.event_id = ac.event_id`
 
 func getAlarmRow(ctx context.Context, tx pgx.Tx, tenantID, siteID, alarmID string, lock bool) (alarmmodel.Alarm, error) {
-	query := alarmSelect + ` WHERE tenant_id = $1 AND site_id = $2 AND alarm_id = $3`
+	query := alarmSelect + ` WHERE ac.tenant_id = $1 AND ac.site_id = $2 AND ac.alarm_id = $3`
 	if lock {
-		query += ` FOR UPDATE`
+		query += ` FOR UPDATE OF ac`
 	}
 	alarm, err := scanAlarmBase(tx.QueryRow(ctx, query, tenantID, siteID, alarmID))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -431,9 +436,9 @@ func getAlarmRow(ctx context.Context, tx pgx.Tx, tenantID, siteID, alarmID strin
 }
 
 func getActiveByFingerprint(ctx context.Context, tx pgx.Tx, tenantID, siteID, fingerprint string, lock bool) (alarmmodel.Alarm, error) {
-	query := alarmSelect + ` WHERE tenant_id = $1 AND site_id = $2 AND fingerprint = $3 AND condition = 'ACTIVE'`
+	query := alarmSelect + ` WHERE ac.tenant_id = $1 AND ac.site_id = $2 AND ac.fingerprint = $3 AND ac.condition = 'ACTIVE'`
 	if lock {
-		query += ` FOR UPDATE`
+		query += ` FOR UPDATE OF ac`
 	}
 	alarm, err := scanAlarmBase(tx.QueryRow(ctx, query, tenantID, siteID, fingerprint))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -452,7 +457,7 @@ type alarmScanner interface{ Scan(...any) error }
 
 func scanAlarmBase(scanner alarmScanner) (alarmmodel.Alarm, error) {
 	var alarm alarmmodel.Alarm
-	var evidenceJSON, linksJSON []byte
+	var evidenceJSON, linksJSON, eventMetadataJSON []byte
 	var firstOccurredAt, lastOccurredAt, createdAt, updatedAt time.Time
 	var acknowledgedAt, clearedAt *time.Time
 	var suppressionJSON []byte
@@ -463,7 +468,7 @@ func scanAlarmBase(scanner alarmScanner) (alarmmodel.Alarm, error) {
 		&alarm.RuleRevision, &alarm.Title, &alarm.Summary, &alarm.Condition, &alarm.CurrentSeverity, &alarm.PeakSeverity,
 		&acknowledgedAt, &acknowledgedBy, &acknowledgementComment, &alarm.AssigneeID, &suppressionJSON,
 		&alarm.OccurrenceCount, &firstOccurredAt, &lastOccurredAt, &clearedAt, &evidenceJSON, &linksJSON,
-		&alarm.Version, &createdAt, &updatedAt,
+		&alarm.Version, &createdAt, &updatedAt, &eventMetadataJSON,
 	); err != nil {
 		return alarmmodel.Alarm{}, err
 	}
@@ -490,7 +495,93 @@ func scanAlarmBase(scanner alarmScanner) (alarmmodel.Alarm, error) {
 	if err := json.Unmarshal(linksJSON, &alarm.Links); err != nil {
 		return alarmmodel.Alarm{}, fmt.Errorf("decode Alarm links: %w", err)
 	}
+	alarm.EdgeProjection = decodeEdgeProjectionMetadata(eventMetadataJSON)
 	return alarm, nil
+}
+
+func decodeEdgeProjectionMetadata(raw []byte) *alarmmodel.EdgeProjection {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" || trimmed == "{}" {
+		return nil
+	}
+	var payload struct {
+		Source                string   `json:"source"`
+		ClearSource           string   `json:"clearSource"`
+		GatewayID             string   `json:"gatewayId"`
+		ClearGatewayID        string   `json:"clearGatewayId"`
+		Offline               bool     `json:"offline"`
+		BundleRevision        int64    `json:"bundleRevision"`
+		EdgeBundleDigest      string   `json:"edgeBundleDigest"`
+		OccurredAt            string   `json:"occurredAt"`
+		ReceivedAt            string   `json:"receivedAt"`
+		TriggeredActions      []string `json:"triggeredActions"`
+		ClearOffline          *bool    `json:"clearOffline"`
+		ClearOccurredAt       string   `json:"clearOccurredAt"`
+		ClearTriggeredActions []string `json:"clearTriggeredActions"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil
+	}
+	if strings.TrimSpace(payload.Source) != "EDGE_RULE" && strings.TrimSpace(payload.ClearSource) != "EDGE_RULE" {
+		return nil
+	}
+	gatewayID := firstNonEmptyEdgeString(payload.GatewayID, payload.ClearGatewayID)
+	if len(gatewayID) == 0 || len(gatewayID) > 128 {
+		return nil
+	}
+	bundleRevision := payload.BundleRevision
+	if bundleRevision < 0 {
+		bundleRevision = 0
+	}
+	digest := strings.ToLower(strings.TrimSpace(payload.EdgeBundleDigest))
+	if !digest64HexPattern.MatchString(digest) {
+		digest = ""
+	}
+	return &alarmmodel.EdgeProjection{
+		GatewayID:             gatewayID,
+		Offline:               payload.Offline,
+		BundleRevision:        bundleRevision,
+		EdgeBundleDigest:      digest,
+		OccurredAt:            normalizeOptionalRFC3339Nano(payload.OccurredAt),
+		ReceivedAt:            normalizeOptionalRFC3339Nano(payload.ReceivedAt),
+		TriggeredActions:      sanitizeEdgeProjectionActions(payload.TriggeredActions),
+		ClearOffline:          payload.ClearOffline,
+		ClearOccurredAt:       normalizeOptionalRFC3339Nano(payload.ClearOccurredAt),
+		ClearTriggeredActions: sanitizeEdgeProjectionActions(payload.ClearTriggeredActions),
+	}
+}
+
+func normalizeOptionalRFC3339Nano(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, trimmed)
+	if err != nil {
+		return ""
+	}
+	return parsed.UTC().Format(time.RFC3339Nano)
+}
+
+func sanitizeEdgeProjectionActions(items []string) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	cleaned := make([]string, 0, min(len(items), 32))
+	for _, item := range items {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" {
+			continue
+		}
+		cleaned = append(cleaned, truncateBounded(trimmed, 256))
+		if len(cleaned) >= 32 {
+			break
+		}
+	}
+	if len(cleaned) == 0 {
+		return nil
+	}
+	return cleaned
 }
 
 func loadTimeline(ctx context.Context, tx pgx.Tx, alarm *alarmmodel.Alarm) error {

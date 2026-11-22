@@ -587,6 +587,156 @@ export class Gateway {
   };
   readonly replayedControlAlarmDlqIds = new Set<string>();
   readonly replayedRuleDlqIds = new Set<string>();
+  readonly replayedEdgeAlarmEventIds = new Set<string>();
+  /** Seeds a completed offline edge alarm trigger + clear replay idempotently by eventId. */
+  ingestEdgeOfflineAlarmReplay(eventId = 'edge-rule:01910000-b000-7000-8000-00000000000f:2'): {
+    readonly alarmId: string;
+    readonly duplicated: boolean;
+  } {
+    const alarmId = '01990000-a950-7000-8000-000000000001';
+    if (this.replayedEdgeAlarmEventIds.has(eventId)) {
+      return { alarmId, duplicated: true };
+    }
+    this.replayedEdgeAlarmEventIds.add(eventId);
+    const gatewayId = '018f3e00-4000-7000-8000-000000000100';
+    const chillerId = '018f3e00-4000-7000-8000-000000000001';
+    const ruleId = '01910000-b000-7000-8000-00000000000f';
+    const eventUuid = '01990000-e950-7000-8000-000000000001';
+    const correlationId = '01990000-c950-7000-8000-000000000001';
+    const digest = 'a1b2c3d4'.repeat(8);
+    const occurredAt = '2026-10-02T01:10:00.000Z';
+    const clearedAt = '2026-10-02T01:18:00.000Z';
+    const receivedAt = '2026-10-02T01:25:00.000Z';
+    this.alarms.push({
+      schemaVersion: 2,
+      alarmId,
+      tenantId: principal.context.tenantId,
+      siteId: SITE_ID,
+      deviceId: chillerId,
+      eventId: eventUuid,
+      alarmType: 'CHILLER_HIGH_SUPPLY_TEMP_EDGE',
+      fingerprint: 'e'.repeat(64),
+      incidentCorrelationId: correlationId,
+      sourceType: 'SITE_RULE',
+      sourceReference: 'edge-rule:chiller-01-high-supply-temp',
+      ruleRevision: `${ruleId}#3`,
+      title: '冷机供水温度越限（边缘保护触发）',
+      summary: '网关离网期间判定冷机供水温度偏高并联动停机保护，重连后已自动补传触发与恢复记录。',
+      condition: 'CLEARED',
+      currentSeverity: 'CRITICAL',
+      peakSeverity: 'CRITICAL',
+      occurrenceCount: 1,
+      firstOccurredAt: occurredAt,
+      lastOccurredAt: occurredAt,
+      clearedAt,
+      edgeProjection: {
+        gatewayId,
+        offline: true,
+        bundleRevision: 3,
+        edgeBundleDigest: digest,
+        occurredAt,
+        receivedAt,
+        triggeredActions: [`STOP:${chillerId}@modbus:unit1:coil:0`],
+        clearOffline: true,
+        clearOccurredAt: clearedAt,
+      },
+      evidence: [{ kind: 'edge-rule-event', reference: eventId, capturedAt: occurredAt }],
+      links: [
+        { kind: 'DEVICE', targetId: chillerId },
+        { kind: 'EVENT', targetId: eventUuid },
+      ],
+      timeline: [
+        {
+          operation: 'PUBLISH',
+          condition: 'ACTIVE',
+          reason: 'ALARM_PUBLISHED',
+          actorType: 'WORKLOAD',
+          actorId: `edge-gateway:${gatewayId}`,
+          currentSeverity: 'CRITICAL',
+          policyRevision: `${ruleId}#3`,
+          correlationId,
+          occurredAt,
+          version: 1,
+        },
+        {
+          operation: 'CLEAR',
+          condition: 'CLEARED',
+          reason: 'CLEAR_PREDICATE_MATCHED',
+          actorType: 'WORKLOAD',
+          actorId: `edge-gateway:${gatewayId}`,
+          currentSeverity: 'CRITICAL',
+          policyRevision: `${ruleId}#3`,
+          correlationId: 'edge-rule:01910000-b000-7000-8000-00000000000f:3',
+          occurredAt: clearedAt,
+          version: 2,
+        },
+      ],
+      version: 2,
+      createdAt: occurredAt,
+      updatedAt: clearedAt,
+    });
+    this.alarmEvaluations[alarmId] = [
+      {
+        evaluatedAt: clearedAt,
+        policyRevisionId: ruleId,
+        assignmentId: ruleId,
+        inputRevision: 'edge-event:clear:3',
+        status: 'NOT_MATCHED',
+        effect: 'CLEAR',
+        snapshot: {
+          asOf: clearedAt,
+          siteId: SITE_ID,
+          tenantId: principal.context.tenantId,
+          subjectType: 'DEVICE',
+          subjectId: chillerId,
+          eventId: eventUuid,
+          correlationId: 'edge-rule:01910000-b000-7000-8000-00000000000f:3',
+          inputRevision: 'edge-event:clear:3',
+          inputs: {},
+          edgeProvenance: {
+            gatewayId,
+            edgeEventId: 'edge-rule:01910000-b000-7000-8000-00000000000f:3',
+            eventType: 'EDGE_RULE_ALARM_CLEARED',
+            occurredAt: clearedAt,
+            offline: true,
+            bundleRevision: 3,
+            edgeBundleDigest: digest,
+          },
+        },
+      },
+      {
+        evaluatedAt: occurredAt,
+        policyRevisionId: ruleId,
+        assignmentId: ruleId,
+        inputRevision: `edge-event:${eventId}`,
+        status: 'MATCHED',
+        effect: 'PUBLISH',
+        snapshot: {
+          asOf: occurredAt,
+          siteId: SITE_ID,
+          tenantId: principal.context.tenantId,
+          subjectType: 'DEVICE',
+          subjectId: chillerId,
+          eventId: eventUuid,
+          correlationId,
+          inputRevision: `edge-event:${eventId}`,
+          inputs: {},
+          edgeProvenance: {
+            gatewayId,
+            edgeEventId: eventId,
+            eventType: 'EDGE_RULE_ALARM_RAISED',
+            occurredAt,
+            offline: true,
+            bundleRevision: 3,
+            edgeBundleDigest: digest,
+          },
+        },
+        activeIncidentCorrelationId: correlationId,
+      },
+    ];
+    return { alarmId, duplicated: false };
+  }
+
   controlAlarmDeadLetters: Json[] = [
     {
       outboxId: '01910000-e100-7000-8000-000000000001',

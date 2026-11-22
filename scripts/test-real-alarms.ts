@@ -40,6 +40,14 @@ import {
   describeRoutingChannel,
   describeRoutingRouteName,
   describeRuleAction,
+  edgeSourceLabel,
+  formatEdgeActorName,
+  formatEdgeBundleTag,
+  formatEdgeEvaluationProvenance,
+  formatEdgeGatewayName,
+  formatEdgeTimelineNote,
+  formatEdgeTriggeredAction,
+  formatEdgeTriggeredActionsSummary,
   routingDigestPrefix,
   summarizeRuleActions,
 } from '../apps/hvac-web/src/features/alarms/alarm-operations.ts';
@@ -642,4 +650,84 @@ test('P2-3 streaming window aggregation schema, local edge eligibility and edge 
     shortDigest: '',
     compiledAt: '',
   });
+});
+
+test('Alarm contract & edge formatters translate offline edge projection without leaking raw IDs or enums', () => {
+  const gatewayId = '018f3e00-4000-7000-8000-000000000100';
+  const chillerId = '018f3e00-4000-7000-8000-000000000001';
+  const digest = 'a1b2c3d4'.repeat(8);
+  const deviceNames = new Map([
+    [gatewayId, 'EG8200-COMMERCIAL-001'],
+    [chillerId, 'CHILLER-01'],
+  ]);
+
+  const parsed = alarmSchema.parse(alarm({
+    condition: 'CLEARED',
+    clearedAt: '2026-07-31T09:10:00Z',
+    timeline: [
+      timelineEntry({ operation: 'PUBLISH', condition: 'ACTIVE', occurredAt: '2026-07-31T09:00:00Z', version: 1 }),
+      timelineEntry({ operation: 'CLEAR', condition: 'CLEARED', occurredAt: '2026-07-31T09:10:00Z', version: 2 }),
+    ],
+    version: 2,
+    updatedAt: '2026-07-31T09:10:00Z',
+    edgeProjection: {
+      gatewayId,
+      offline: true,
+      bundleRevision: 3,
+      edgeBundleDigest: digest,
+      occurredAt: '2026-07-31T09:00:00Z',
+      receivedAt: '2026-07-31T09:12:00Z',
+      triggeredActions: [`STOP:${chillerId}@modbus:unit1:coil:0`],
+      clearOffline: true,
+      clearOccurredAt: '2026-07-31T09:10:00Z',
+    },
+  }));
+  assert.equal(parsed.edgeProjection?.bundleRevision, 3);
+  assert.throws(() => alarmSchema.parse(alarm({
+    edgeProjection: {
+      gatewayId,
+      offline: true,
+      bundleRevision: -1,
+    },
+  })));
+  assert.throws(() => alarmSchema.parse(alarm({
+    edgeProjection: {
+      gatewayId,
+      offline: false,
+      bundleRevision: 1,
+      edgeBundleDigest: 'bad-digest',
+    },
+  })));
+
+  assert.equal(edgeSourceLabel(parsed.edgeProjection!), '离网补传');
+  assert.equal(edgeSourceLabel({ offline: false }), '边缘触发');
+  assert.equal(formatEdgeBundleTag(parsed.edgeProjection!), 'v3 · a1b2c3d4');
+  assert.equal(formatEdgeGatewayName(gatewayId, deviceNames), 'EG8200-COMMERCIAL-001');
+  assert.equal(formatEdgeGatewayName('018f3e00-9999-7000-8000-000000000999', deviceNames), '边缘网关');
+  assert.equal(formatEdgeTriggeredAction(`STOP:${chillerId}@modbus:unit1:coil:0`, deviceNames), 'CHILLER-01 停机保护');
+  assert.equal(formatEdgeTriggeredActionsSummary([`STOP:${chillerId}@modbus:unit1:coil:0`, 'STOP'], deviceNames), 'CHILLER-01 停机保护、停机保护');
+  assert.equal(formatEdgeActorName(`edge-gateway:${gatewayId}`, deviceNames), 'EG8200-COMMERCIAL-001（边缘）');
+  assert.equal(formatEdgeActorName('alarm-evaluator', deviceNames), null);
+
+  const publishNote = formatEdgeTimelineNote(
+    { operation: 'PUBLISH', actorId: `edge-gateway:${gatewayId}`, reason: 'ALARM_PUBLISHED' },
+    parsed.edgeProjection,
+    deviceNames,
+  );
+  assert.equal(publishNote, '离网触发后补传 · 规则包 v3 · a1b2c3d4 · 本地联动：CHILLER-01 停机保护');
+  const clearNote = formatEdgeTimelineNote(
+    { operation: 'CLEAR', actorId: `edge-gateway:${gatewayId}`, reason: 'CLEAR_PREDICATE_MATCHED' },
+    parsed.edgeProjection,
+    deviceNames,
+  );
+  assert.equal(clearNote, '离网恢复后补传 · 规则包 v3 · a1b2c3d4');
+  const evalProv = formatEdgeEvaluationProvenance({
+    offline: true,
+    bundleRevision: 3,
+    edgeBundleDigest: digest,
+  });
+  assert.equal(evalProv, '离网补传 · 规则包 v3 · a1b2c3d4');
+  for (const rendered of [publishNote ?? '', clearNote ?? '', evalProv ?? '']) {
+    assert.doesNotMatch(rendered, /[0-9a-f]{8}-[0-9a-f]{4}-|STOP|EDGE_RULE|edge-gateway:/);
+  }
 });

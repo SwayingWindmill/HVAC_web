@@ -1,9 +1,10 @@
 import { useEffect, useId, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, Link } from '@tanstack/react-router';
-import { Bell, BellOff, BellRing, CheckCheck, CircleCheck, EyeOff, LineChart, Link2, Plus, UserCheck, UserMinus, type LucideIcon } from 'lucide-react';
+import { Bell, BellOff, BellRing, CheckCheck, CircleCheck, Cpu, EyeOff, LineChart, Link2, Plus, UserCheck, UserMinus, WifiOff, type LucideIcon } from 'lucide-react';
 import { BrandMark } from '@/components/brand-mark';
 import { InfoTip } from '@/components/info-tip';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -34,6 +35,14 @@ import { workOrderKeys } from '@/features/work-orders/work-order-queries';
 import { formatTime, personLabel } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import { alarmDetailQuery, alarmEvaluationsQuery, type AlarmOperation, type AlarmSeverity } from '../alarm-api';
+import {
+  edgeSourceLabel,
+  formatEdgeActorName,
+  formatEdgeBundleTag,
+  formatEdgeGatewayName,
+  formatEdgeTimelineNote,
+  formatEdgeTriggeredActionsSummary,
+} from '../alarm-operations';
 import {
   alarmStatusLabel,
   EVALUATION_EFFECT_LABELS,
@@ -74,11 +83,16 @@ export const PRIORITY_BY_SEVERITY: Readonly<Record<AlarmSeverity, WorkOrderPrior
   INFO: 'LOW',
 };
 
-function Fact({ label, children }: { readonly label: string; readonly children: React.ReactNode }) {
+function Fact({ label, title, span, children }: {
+  readonly label: string;
+  readonly title?: string;
+  readonly span?: 1 | 2;
+  readonly children: React.ReactNode;
+}) {
   return (
-    <div className="flex min-w-0 flex-col gap-0.5">
+    <div className={cn('flex min-w-0 flex-col gap-0.5', span === 2 && 'col-span-2')}>
       <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className="truncate text-sm font-medium">{children}</dd>
+      <dd className="truncate text-sm font-medium" title={title}>{children}</dd>
     </div>
   );
 }
@@ -160,6 +174,11 @@ export function AlarmDetailPane({ alarmId, empty, deviceNames, creatingWorkOrder
   const suppressReasonTooLong = suppressReasonBytes > 256;
   const evaluationContext = { deviceNames: equipment.nameByDevice, pointByReading: equipment.pointByReading };
   const conditionTone = alarm.condition === 'CLEARED' ? 'bg-success' : alarm.acknowledgement ? 'bg-warning' : 'bg-destructive';
+  const edgeProjection = alarm.edgeProjection;
+  const edgeIsOffline = Boolean(edgeProjection && (edgeProjection.offline || edgeProjection.clearOffline));
+  const edgeBundleTag = edgeProjection ? formatEdgeBundleTag(edgeProjection) : null;
+  const edgeRaiseActions = edgeProjection ? formatEdgeTriggeredActionsSummary(edgeProjection.triggeredActions, deviceNames) : null;
+  const edgeClearActions = edgeProjection ? formatEdgeTriggeredActionsSummary(edgeProjection.clearTriggeredActions, deviceNames) : null;
 
   return (
     <section role="region" aria-label="告警详情" className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto">
@@ -171,6 +190,18 @@ export function AlarmDetailPane({ alarmId, empty, deviceNames, creatingWorkOrder
             {alarmStatusLabel(alarm)}
           </span>
           <span className="text-muted-foreground">· <span className="font-mono">{formatTime(alarm.firstOccurredAt, site.timezone)}</span> 起</span>
+          {edgeProjection ? (
+            <Badge
+              variant="outline"
+              className={cn(
+                'gap-1 border-transparent',
+                edgeIsOffline ? 'bg-warning-soft text-warning-text' : 'bg-primary-soft text-primary',
+              )}
+            >
+              {edgeIsOffline ? <WifiOff className="size-3" aria-hidden="true" /> : <Cpu className="size-3" aria-hidden="true" />}
+              {edgeSourceLabel(edgeProjection)}
+            </Badge>
+          ) : null}
           <Button
             variant="ghost"
             size="icon-sm"
@@ -355,9 +386,27 @@ export function AlarmDetailPane({ alarmId, empty, deviceNames, creatingWorkOrder
           {alarm.acknowledgement ? (
             <Fact label="确认">{personLabel(alarm.acknowledgement.acknowledgedBy, myId)} · <span className="font-mono">{formatTime(alarm.acknowledgement.acknowledgedAt, site.timezone)}</span></Fact>
           ) : null}
+          {edgeProjection ? (
+            <>
+              <Fact label="评估来源">{edgeProjection.offline ? '边缘网关 · 离网补传' : '边缘网关 · 在线触发'}</Fact>
+              <Fact label="上报网关" span={2} title={formatEdgeGatewayName(edgeProjection.gatewayId, deviceNames)}>
+                {formatEdgeGatewayName(edgeProjection.gatewayId, deviceNames)}
+              </Fact>
+              {edgeBundleTag ? <Fact label="边缘规则包"><span className="font-mono">{edgeBundleTag}</span></Fact> : null}
+              {edgeProjection.offline && edgeProjection.receivedAt ? (
+                <Fact label="云端补传时间"><span className="font-mono">{formatTime(edgeProjection.receivedAt, site.timezone)}</span></Fact>
+              ) : null}
+            </>
+          ) : null}
         </dl>
         {alarm.acknowledgement?.comment ? (
           <p className="rounded-lg bg-muted px-3 py-2 text-sm text-secondary-foreground">“{alarm.acknowledgement.comment}”</p>
+        ) : null}
+        {edgeRaiseActions || edgeClearActions ? (
+          <div className="rounded-lg border bg-muted/50 px-3 py-2 text-xs text-secondary-foreground">
+            {edgeRaiseActions ? <p>边缘侧已执行联动：{edgeRaiseActions}</p> : null}
+            {edgeClearActions ? <p className={edgeRaiseActions ? 'mt-1' : undefined}>恢复时边缘联动：{edgeClearActions}</p> : null}
+          </div>
         ) : null}
       </div>
 
@@ -367,6 +416,9 @@ export function AlarmDetailPane({ alarmId, empty, deviceNames, creatingWorkOrder
           <Timeline>
             {[...alarm.timeline].reverse().map((entry, index) => {
               const Icon = OPERATION_ICONS[entry.operation];
+              const edgeActor = formatEdgeActorName(entry.actorId, deviceNames);
+              const actorLabel = edgeActor ?? (entry.actorType === 'WORKLOAD' ? '系统' : personLabel(entry.actorId, myId));
+              const edgeNote = formatEdgeTimelineNote(entry, edgeProjection, deviceNames);
               return (
                 <TimelineItem key={entry.version} status={index === 0 ? 'current' : 'done'}>
                   <TimelineRail>
@@ -379,9 +431,10 @@ export function AlarmDetailPane({ alarmId, empty, deviceNames, creatingWorkOrder
                       <TimelineTime dateTime={entry.occurredAt} className="font-mono">{formatTime(entry.occurredAt, site.timezone)}</TimelineTime>
                     </TimelineHeader>
                     <p className="text-xs text-muted-foreground">
-                      {entry.actorType === 'WORKLOAD' ? '系统' : personLabel(entry.actorId, myId)}
+                      {actorLabel}
                       {recoveryReason(entry) ? ` · ${recoveryReason(entry)}` : ''} · {SEVERITY_LABELS[entry.currentSeverity]}
                     </p>
+                    {edgeNote ? <p className="mt-0.5 text-xs text-secondary-foreground">{edgeNote}</p> : null}
                   </TimelineContent>
                 </TimelineItem>
               );

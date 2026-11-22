@@ -63,6 +63,19 @@ const severityRank: Record<z.infer<typeof alarmSeveritySchema>, number> = {
   CRITICAL: 5,
 };
 
+export const alarmEdgeProjectionSchema = z.object({
+  gatewayId: z.string().min(1).max(128),
+  offline: z.boolean(),
+  bundleRevision: z.number().int().nonnegative(),
+  edgeBundleDigest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  occurredAt: z.string().datetime({ offset: true }).optional(),
+  receivedAt: z.string().datetime({ offset: true }).optional(),
+  triggeredActions: z.array(z.string().min(1).max(256)).max(32).optional(),
+  clearOffline: z.boolean().optional(),
+  clearOccurredAt: z.string().datetime({ offset: true }).optional(),
+  clearTriggeredActions: z.array(z.string().min(1).max(256)).max(32).optional(),
+}).strict();
+
 export const alarmSchema = z.object({
   schemaVersion: z.literal(2),
   alarmId: alarmUUIDv7Schema,
@@ -89,6 +102,7 @@ export const alarmSchema = z.object({
   firstOccurredAt: z.string().datetime({ offset: true }),
   lastOccurredAt: z.string().datetime({ offset: true }),
   clearedAt: z.string().datetime({ offset: true }).optional(),
+  edgeProjection: alarmEdgeProjectionSchema.optional(),
   evidence: z.array(alarmEvidenceReferenceSchema),
   links: z.array(alarmLinkSchema),
   timeline: z.array(alarmTimelineEntrySchema).min(1),
@@ -167,6 +181,7 @@ export type AlarmEvidenceReference = z.infer<typeof alarmEvidenceReferenceSchema
 export type AlarmAcknowledgement = z.infer<typeof alarmAcknowledgementSchema>;
 export type AlarmSuppression = z.infer<typeof alarmSuppressionSchema>;
 export type AlarmTimelineEntry = z.infer<typeof alarmTimelineEntrySchema>;
+export type AlarmEdgeProjection = z.infer<typeof alarmEdgeProjectionSchema>;
 export type AlarmLink = z.infer<typeof alarmLinkSchema>;
 export type Alarm = z.infer<typeof alarmSchema>;
 export type AlarmListResponse = z.infer<typeof alarmListResponseSchema>;

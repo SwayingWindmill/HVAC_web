@@ -3,6 +3,7 @@ package alarmmodel
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -308,5 +309,54 @@ func TestRepeatedOccurrenceDoesNotGrowTimeline(t *testing.T) {
 	}
 	if len(escalated.Timeline) != len(alarm.Timeline)+1 || escalated.Version != alarm.Version+1 {
 		t.Fatalf("severity change was not recorded: timeline=%d version=%d", len(escalated.Timeline), escalated.Version)
+	}
+}
+
+func TestEdgeProjectionValidationAndClonePreservation(t *testing.T) {
+	alarm := validAlarm(t)
+	clearOffline := true
+	alarm.EdgeProjection = &EdgeProjection{
+		GatewayID:             "018f3e00-4000-7000-8000-000000000100",
+		Offline:               true,
+		BundleRevision:        3,
+		EdgeBundleDigest:      strings.Repeat("a", 64),
+		OccurredAt:            "2026-07-31T08:55:00Z",
+		ReceivedAt:            "2026-07-31T09:00:00Z",
+		TriggeredActions:      []string{"STOP:018f3e00-4000-7000-8000-000000000001@coil:0"},
+		ClearOffline:          &clearOffline,
+		ClearOccurredAt:       "2026-07-31T09:10:00Z",
+		ClearTriggeredActions: []string{"RESET_FAULT:018f3e00-4000-7000-8000-000000000001@coil:1"},
+	}
+	if err := alarm.Validate(); err != nil {
+		t.Fatalf("expected valid edge projection, got %v", err)
+	}
+
+	acked, err := ApplyOperation(alarm, operationInput(OperationAcknowledge, alarm.Version, "2026-07-31T10:00:00Z"))
+	if err != nil {
+		t.Fatalf("ApplyOperation: %v", err)
+	}
+	if acked.EdgeProjection == nil || acked.EdgeProjection.BundleRevision != 3 || acked.EdgeProjection.ClearOffline == nil || !*acked.EdgeProjection.ClearOffline {
+		t.Fatalf("expected edge projection preserved across ApplyOperation: %#v", acked.EdgeProjection)
+	}
+	alarm.EdgeProjection.TriggeredActions[0] = "MUTATED"
+	*alarm.EdgeProjection.ClearOffline = false
+	if acked.EdgeProjection.TriggeredActions[0] == "MUTATED" || !*acked.EdgeProjection.ClearOffline {
+		t.Fatalf("expected deep-cloned edge projection, got %#v", acked.EdgeProjection)
+	}
+
+	for name, mutate := range map[string]func(*EdgeProjection){
+		"empty gatewayId":     func(p *EdgeProjection) { p.GatewayID = "   " },
+		"negative revision":   func(p *EdgeProjection) { p.BundleRevision = -1 },
+		"bad digest":          func(p *EdgeProjection) { p.EdgeBundleDigest = "not-hex" },
+		"bad occurredAt":      func(p *EdgeProjection) { p.OccurredAt = "not-a-time" },
+		"empty triggeredItem": func(p *EdgeProjection) { p.TriggeredActions = []string{" "} },
+		"too many actions":    func(p *EdgeProjection) { p.TriggeredActions = make([]string, 33) },
+	} {
+		candidate := validAlarm(t)
+		candidate.EdgeProjection = cloneEdgeProjection(acked.EdgeProjection)
+		mutate(candidate.EdgeProjection)
+		if err := candidate.Validate(); err == nil {
+			t.Fatalf("%s: expected validation error, got nil", name)
+		}
 	}
 }

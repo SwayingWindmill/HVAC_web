@@ -68,6 +68,19 @@ export interface AlarmTimelineEntry {
   version: number;
 }
 
+export interface AlarmEdgeProjection {
+  readonly gatewayId: string;
+  readonly offline: boolean;
+  readonly bundleRevision: number;
+  readonly edgeBundleDigest?: string;
+  readonly occurredAt?: string;
+  readonly receivedAt?: string;
+  readonly triggeredActions?: readonly string[];
+  readonly clearOffline?: boolean;
+  readonly clearOccurredAt?: string;
+  readonly clearTriggeredActions?: readonly string[];
+}
+
 export interface Alarm {
   alarmId: string;
   siteId: string;
@@ -85,6 +98,7 @@ export interface Alarm {
   firstOccurredAt: string;
   lastOccurredAt: string;
   clearedAt?: string;
+  edgeProjection?: AlarmEdgeProjection;
   timeline: AlarmTimelineEntry[];
   version: number;
 }
