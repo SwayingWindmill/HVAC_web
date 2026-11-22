@@ -141,6 +141,7 @@ function expectedDisplayState(snapshot: DeviceObservationSnapshot): DeviceObserv
   if (snapshot.presence.applicability === 'NOT_APPLICABLE') return null;
   if (snapshot.evaluationAvailability === 'UNAVAILABLE') return 'UNAVAILABLE';
   if (snapshot.presence.currentState === 'OFFLINE') return 'OFFLINE';
+  if (snapshot.presence.currentState === 'SLEEPING') return 'SLEEPING';
   if (snapshot.presence.currentState === null
     || snapshot.presence.currentState === 'UNKNOWN'
     || snapshot.telemetryReadiness === 'INCOMPLETE') return 'UNKNOWN';

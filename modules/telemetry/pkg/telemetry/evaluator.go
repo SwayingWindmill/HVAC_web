@@ -15,6 +15,7 @@ import (
 type PresencePolicy struct {
 	Revision            int64
 	OnlineWithin        time.Duration
+	SleepCycle          time.Duration
 	OfflineAfter        time.Duration
 	AcceptedSignalTypes []string
 }
@@ -195,7 +196,11 @@ func evaluatePresence(facts DeviceFacts, evaluatedAt time.Time) (telemetryapi.Pr
 	}
 
 	policy := facts.PresencePolicy
-	validPolicy := policy != nil && policy.Revision >= 1 && policy.OnlineWithin > 0 && policy.OfflineAfter > policy.OnlineWithin
+	validPolicy := policy != nil &&
+		policy.Revision >= 1 &&
+		policy.OnlineWithin > 0 &&
+		policy.OfflineAfter > policy.OnlineWithin &&
+		(policy.SleepCycle == 0 || (policy.SleepCycle >= policy.OnlineWithin && policy.OfflineAfter > policy.SleepCycle))
 	var lastSignal *PresenceSignal
 	if validPolicy {
 		lastSignal = greatestAcceptedSignal(facts.PresenceSignals, policy.AcceptedSignalTypes)
@@ -221,24 +226,36 @@ func evaluatePresence(facts DeviceFacts, evaluatedAt time.Time) (telemetryapi.Pr
 	presence.PolicyRevision = &policyRevision
 	state := telemetryapi.DevicePresenceStateUnknown
 	if lastSignal != nil {
-		if lastSignal.Type == "EXPLICIT_DISCONNECT" && signalTypeAllowed(lastSignal.Type, policy.AcceptedSignalTypes) {
+		age := evaluatedAt.Sub(lastSignal.ObservedAt)
+		switch {
+		case lastSignal.Type == "EXPLICIT_DISCONNECT" && signalTypeAllowed(lastSignal.Type, policy.AcceptedSignalTypes):
 			state = telemetryapi.DevicePresenceStateOffline
-		} else {
-			age := evaluatedAt.Sub(lastSignal.ObservedAt)
-			switch {
-			case age <= policy.OnlineWithin:
-				state = telemetryapi.DevicePresenceStateOnline
-			case age >= policy.OfflineAfter:
+		case lastSignal.Type == "EXPLICIT_SLEEP" && signalTypeAllowed(lastSignal.Type, policy.AcceptedSignalTypes):
+			if age >= policy.OfflineAfter {
 				decisionWindowStart := evaluatedAt.Add(-policy.OfflineAfter)
 				if facts.Coverage.ContinuousSince == nil || facts.Coverage.ContinuousSince.After(decisionWindowStart) {
 					return presence, telemetryapi.EvaluationAvailabilityUnavailable, []telemetryapi.AvailabilityReasonCode{telemetryapi.AvailabilityReasonCodeObservationCoverageGap}
 				}
 				state = telemetryapi.DevicePresenceStateOffline
+			} else {
+				state = telemetryapi.DevicePresenceStateSleeping
 			}
+		case age <= policy.OnlineWithin:
+			state = telemetryapi.DevicePresenceStateOnline
+		case age >= policy.OfflineAfter:
+			decisionWindowStart := evaluatedAt.Add(-policy.OfflineAfter)
+			if facts.Coverage.ContinuousSince == nil || facts.Coverage.ContinuousSince.After(decisionWindowStart) {
+				return presence, telemetryapi.EvaluationAvailabilityUnavailable, []telemetryapi.AvailabilityReasonCode{telemetryapi.AvailabilityReasonCodeObservationCoverageGap}
+			}
+			state = telemetryapi.DevicePresenceStateOffline
+		case policy.SleepCycle > 0:
+			state = telemetryapi.DevicePresenceStateSleeping
 		}
 	}
 	presence.CurrentState = &state
-	if state == telemetryapi.DevicePresenceStateOnline || state == telemetryapi.DevicePresenceStateOffline {
+	if state == telemetryapi.DevicePresenceStateOnline ||
+		state == telemetryapi.DevicePresenceStateSleeping ||
+		state == telemetryapi.DevicePresenceStateOffline {
 		lastSeen := lastSignal.ObservedAt
 		presence.LastKnown = currentLastKnown(state, &lastSeen, evaluatedAt, &policyRevision)
 	}
@@ -468,6 +485,8 @@ func deriveDisplay(applicability telemetryapi.PresenceApplicability, availabilit
 		state = telemetryapi.DeviceDisplayStateUnavailable
 	case presence != nil && *presence == telemetryapi.DevicePresenceStateOffline:
 		state = telemetryapi.DeviceDisplayStateOffline
+	case presence != nil && *presence == telemetryapi.DevicePresenceStateSleeping:
+		state = telemetryapi.DeviceDisplayStateSleeping
 	case presence == nil || *presence == telemetryapi.DevicePresenceStateUnknown || readiness == telemetryapi.TelemetryReadinessIncomplete:
 		state = telemetryapi.DeviceDisplayStateUnknown
 	case *presence == telemetryapi.DevicePresenceStateOnline && readiness == telemetryapi.TelemetryReadinessDegraded:

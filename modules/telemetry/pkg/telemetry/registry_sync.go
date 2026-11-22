@@ -28,12 +28,20 @@ type RegistrySyncRequest struct {
 	RetiredPoints []RegistryRetiredPoint `json:"retiredPoints,omitempty"`
 }
 
+// RegistryPresencePolicySync configures optional low-power wake/sleep presence windows for a device.
+type RegistryPresencePolicySync struct {
+	OnlineWithinSeconds int `json:"onlineWithinSeconds"`
+	SleepCycleSeconds   int `json:"sleepCycleSeconds"`
+	OfflineAfterSeconds int `json:"offlineAfterSeconds"`
+}
+
 // RegistryDeviceSync carries one Registry device's current lifecycle and non-command points.
 type RegistryDeviceSync struct {
-	DeviceID              string              `json:"deviceId"`
-	Status                string              `json:"status"`
-	PresenceApplicability string              `json:"presenceApplicability,omitempty"`
-	Points                []RegistryPointSync `json:"points,omitempty"`
+	DeviceID              string                      `json:"deviceId"`
+	Status                string                      `json:"status"`
+	PresenceApplicability string                      `json:"presenceApplicability,omitempty"`
+	PresencePolicy        *RegistryPresencePolicySync `json:"presencePolicy,omitempty"`
+	Points                []RegistryPointSync         `json:"points,omitempty"`
 }
 
 // RegistryPointSync describes a telemetry point policy derived from Registry metadata.
@@ -88,6 +96,12 @@ func (request RegistrySyncRequest) validate() error {
 		}
 		if app := strings.TrimSpace(dev.PresenceApplicability); app != "" && app != "APPLICABLE" && app != "NOT_APPLICABLE" {
 			return ErrRegistrySyncInvalid
+		}
+		if dev.PresencePolicy != nil {
+			p := dev.PresencePolicy
+			if p.OnlineWithinSeconds < 1 || p.SleepCycleSeconds < p.OnlineWithinSeconds || p.OfflineAfterSeconds <= p.SleepCycleSeconds || p.OfflineAfterSeconds > 604800 {
+				return fmt.Errorf("%w: invalid presencePolicy windows", ErrRegistrySyncInvalid)
+			}
 		}
 		for _, pt := range dev.Points {
 			if !telemetryKeyPattern.MatchString(strings.TrimSpace(pt.TelemetryKey)) {
@@ -277,19 +291,68 @@ ON CONFLICT (device_id) DO UPDATE SET
 			return RegistrySyncResult{}, fmt.Errorf("upsert telemetry device %s: %w", deviceID, err)
 		}
 
-		if _, err := tx.Exec(ctx, `
+		if dev.PresencePolicy != nil {
+			tag, execErr := tx.Exec(ctx, `
 INSERT INTO telemetry_runtime.presence_policies (
-  device_id, policy_revision, online_within_seconds, offline_after_seconds,
+  device_id, policy_revision, online_within_seconds, sleep_cycle_seconds, offline_after_seconds,
   coverage_required, accepted_signal_types, max_future_clock_skew_seconds,
   max_source_lag_seconds, updated_at
 ) VALUES (
-  $1::uuid, 1, 120, 300, true,
+  $1::uuid, 1, $2, $3, $4, true,
+  ARRAY['SOURCE_ACTIVITY', 'EXPLICIT_CONNECT', 'EXPLICIT_DISCONNECT', 'EXPLICIT_SLEEP']::text[],
+  60, 86400, $5
+)
+ON CONFLICT (device_id) DO UPDATE SET
+  policy_revision = telemetry_runtime.presence_policies.policy_revision + 1,
+  online_within_seconds = EXCLUDED.online_within_seconds,
+  sleep_cycle_seconds = EXCLUDED.sleep_cycle_seconds,
+  offline_after_seconds = EXCLUDED.offline_after_seconds,
+  accepted_signal_types = EXCLUDED.accepted_signal_types,
+  updated_at = EXCLUDED.updated_at
+WHERE (
+  telemetry_runtime.presence_policies.online_within_seconds,
+  telemetry_runtime.presence_policies.sleep_cycle_seconds,
+  telemetry_runtime.presence_policies.offline_after_seconds,
+  telemetry_runtime.presence_policies.accepted_signal_types
+) IS DISTINCT FROM (
+  EXCLUDED.online_within_seconds,
+  EXCLUDED.sleep_cycle_seconds,
+  EXCLUDED.offline_after_seconds,
+  EXCLUDED.accepted_signal_types
+)
+`, deviceID, dev.PresencePolicy.OnlineWithinSeconds, dev.PresencePolicy.SleepCycleSeconds, dev.PresencePolicy.OfflineAfterSeconds, now)
+			if execErr != nil {
+				return RegistrySyncResult{}, fmt.Errorf("upsert telemetry presence policy %s: %w", deviceID, execErr)
+			}
+			if tag.RowsAffected() > 0 {
+				devicesToEvaluate[deviceID] = true
+			}
+		} else {
+			tag, execErr := tx.Exec(ctx, `
+INSERT INTO telemetry_runtime.presence_policies (
+  device_id, policy_revision, online_within_seconds, sleep_cycle_seconds, offline_after_seconds,
+  coverage_required, accepted_signal_types, max_future_clock_skew_seconds,
+  max_source_lag_seconds, updated_at
+) VALUES (
+  $1::uuid, 1, 120, NULL, 300, true,
   ARRAY['SOURCE_ACTIVITY', 'EXPLICIT_CONNECT', 'EXPLICIT_DISCONNECT']::text[],
   60, 86400, $2
 )
-ON CONFLICT (device_id) DO NOTHING
-`, deviceID, now); err != nil {
-			return RegistrySyncResult{}, fmt.Errorf("ensure telemetry presence policy %s: %w", deviceID, err)
+ON CONFLICT (device_id) DO UPDATE SET
+  policy_revision = telemetry_runtime.presence_policies.policy_revision + 1,
+  online_within_seconds = EXCLUDED.online_within_seconds,
+  sleep_cycle_seconds = NULL,
+  offline_after_seconds = EXCLUDED.offline_after_seconds,
+  accepted_signal_types = EXCLUDED.accepted_signal_types,
+  updated_at = EXCLUDED.updated_at
+WHERE telemetry_runtime.presence_policies.sleep_cycle_seconds IS NOT NULL
+`, deviceID, now)
+			if execErr != nil {
+				return RegistrySyncResult{}, fmt.Errorf("ensure telemetry presence policy %s: %w", deviceID, execErr)
+			}
+			if tag.RowsAffected() > 0 {
+				devicesToEvaluate[deviceID] = true
+			}
 		}
 
 		if _, err := tx.Exec(ctx, `

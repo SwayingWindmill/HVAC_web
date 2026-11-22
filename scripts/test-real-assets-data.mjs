@@ -310,6 +310,20 @@ test('Current-state loader preserves per-item failures but rejects response orde
     }),
     /display-state evidence drifted/,
   );
+
+  const sleepingClient = {
+    batchGetDeviceObservationSnapshots: async (req) => ({
+      schemaVersion: 1,
+      items: req.requests.map((t) => {
+        const s = snapshot(t);
+        return { requestId: t.requestId, deviceId: t.deviceId, status: 'OK', snapshot: { ...s, presence: { ...s.presence, currentState: 'SLEEPING' }, displayState: 'SLEEPING' } };
+      }),
+    }),
+  };
+  const loadedSleeping = await loadAssetsCurrentState({
+    client: sleepingClient, devices: [devices[0]], telemetryPoints: [], tenantId, siteId, csrfToken: csrfCapability, currentRoutePolicyRevision: () => '12', signal: new AbortController().signal,
+  });
+  assert.equal(loadedSleeping.byDeviceId.get(devices[0].id).snapshot.displayState, 'SLEEPING');
 });
 
 test('Current-state loader rejects route-policy revision drift across bounded batches', async () => {

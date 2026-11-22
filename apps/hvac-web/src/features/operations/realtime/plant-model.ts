@@ -110,7 +110,7 @@ const CATEGORY_BY_DEVICE_TYPE: Readonly<Record<string, PlantCategory>> = {
 };
 
 export type RunState = 'RUNNING' | 'STOPPED' | 'FAULT' | 'UNKNOWN';
-export type ConnectionState = 'ONLINE' | 'OFFLINE' | 'UNKNOWN';
+export type ConnectionState = 'ONLINE' | 'SLEEPING' | 'OFFLINE' | 'UNKNOWN';
 
 export interface PlantReading {
   readonly label: string;
@@ -236,6 +236,7 @@ function readingFor(row: AssetsDeviceRow, sourceKey: string): PlantReading | nul
 function connectionOf(row: AssetsDeviceRow): ConnectionState {
   const state = row.operational.connection.state;
   if (state === 'ONLINE') return 'ONLINE';
+  if (state === 'SLEEPING') return 'SLEEPING';
   if (state === 'OFFLINE') return 'OFFLINE';
   return 'UNKNOWN';
 }
@@ -585,7 +586,7 @@ export function tileReadings(device: PlantDevice, preferredKeys: readonly string
 }
 
 export function isRunning(device: PlantDevice): boolean {
-  return device.connection !== 'OFFLINE' && device.runState === 'RUNNING';
+  return device.connection !== 'OFFLINE' && device.connection !== 'SLEEPING' && device.runState === 'RUNNING';
 }
 
 export interface EquipmentStatus {

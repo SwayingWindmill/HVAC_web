@@ -743,3 +743,26 @@ func TestPostgresOutboxRelayMaterializesTemplateDriverToBoundGateway(t *testing.
 		t.Fatalf("expected CloseOnly unbind to emit remove on gw2, got %+v", afterClose)
 	}
 }
+
+func TestDerivePresencePolicyFromDeviceTags(t *testing.T) {
+	for _, raw := range []string{"", "null", "{}", `{"other":"x"}`, `{"sleep_cycle_seconds":0}`, `{"sleep_cycle_seconds":1}`, `{"sleep_cycle_seconds":604800}`, `{"sleep_cycle_seconds":"abc"}`} {
+		if got := derivePresencePolicyFromDeviceTags([]byte(raw)); got != nil {
+			t.Fatalf("expected nil policy for tags=%s, got %+v", raw, got)
+		}
+	}
+
+	defaulted := derivePresencePolicyFromDeviceTags([]byte(`{"sleep_cycle_seconds":900}`))
+	if defaulted == nil || defaulted.OnlineWithinSeconds != 120 || defaulted.SleepCycleSeconds != 900 || defaulted.OfflineAfterSeconds != 1200 {
+		t.Fatalf("unexpected default derived policy: %+v", defaulted)
+	}
+
+	custom := derivePresencePolicyFromDeviceTags([]byte(`{"sleep_cycle_seconds":"60","online_within_seconds":"30","wake_grace_seconds":120}`))
+	if custom == nil || custom.OnlineWithinSeconds != 30 || custom.SleepCycleSeconds != 60 || custom.OfflineAfterSeconds != 180 {
+		t.Fatalf("unexpected custom derived policy: %+v", custom)
+	}
+
+	clamped := derivePresencePolicyFromDeviceTags([]byte(`{"sleep_cycle_seconds":90,"online_within_seconds":180,"wake_grace_seconds":900000}`))
+	if clamped == nil || clamped.OnlineWithinSeconds != 90 || clamped.SleepCycleSeconds != 90 || clamped.OfflineAfterSeconds != 604800 {
+		t.Fatalf("unexpected clamped derived policy: %+v", clamped)
+	}
+}

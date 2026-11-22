@@ -452,3 +452,130 @@ func equalPresence(left, right *telemetryapi.DevicePresenceState) bool {
 func equalDisplay(left, right *telemetryapi.DeviceDisplayState) bool {
 	return left == nil && right == nil || left != nil && right != nil && *left == *right
 }
+
+func TestEvaluateCanonicalLowPowerSleepingPresence(t *testing.T) {
+	now := time.Date(2026, 7, 24, 1, 0, 0, 0, time.UTC)
+	base := DeviceFacts{
+		DeviceID:      deviceA,
+		TenantID:      tenantA,
+		SiteID:        siteA,
+		Applicability: telemetryapi.PresenceApplicabilityApplicable,
+		PresencePolicy: &PresencePolicy{
+			Revision:            3,
+			OnlineWithin:        2 * time.Minute,
+			SleepCycle:          15 * time.Minute,
+			OfflineAfter:        20 * time.Minute,
+			AcceptedSignalTypes: []string{"SOURCE_ACTIVITY", "EXPLICIT_CONNECT", "EXPLICIT_SLEEP", "EXPLICIT_DISCONNECT"},
+		},
+		Coverage: Coverage{Available: true, ContinuousSince: ptrTime(now.Add(-30 * time.Minute))},
+		FreshnessPolicies: map[string]FreshnessPolicy{
+			"zone.temperature": {Revision: 5, FreshFor: 30 * time.Minute, Configured: true},
+		},
+		Latest: map[string]LatestObservation{
+			"zone.temperature": {
+				Value: json.RawMessage(`23.5`), ValueType: "NUMBER", Unit: ptrString("Cel"),
+				SampledAt: now.Add(-30 * time.Second), ReceivedAt: now.Add(-28 * time.Second),
+				Quality: telemetryapi.TelemetryQualityGood,
+			},
+		},
+	}
+
+	tests := []struct {
+		name         string
+		mutate       func(*DeviceFacts)
+		availability telemetryapi.EvaluationAvailability
+		presence     *telemetryapi.DevicePresenceState
+		display      *telemetryapi.DeviceDisplayState
+	}{
+		{
+			name: "recent activity within OnlineWithin stays ONLINE",
+			mutate: func(facts *DeviceFacts) {
+				facts.PresenceSignals = []PresenceSignal{{Type: "SOURCE_ACTIVITY", ObservedAt: now.Add(-1 * time.Minute)}}
+			},
+			availability: telemetryapi.EvaluationAvailabilityAvailable,
+			presence:     ptrPresence(telemetryapi.DevicePresenceStateOnline),
+			display:      ptrDisplay(telemetryapi.DeviceDisplayStateOnline),
+		},
+		{
+			name: "elapsed OnlineWithin inside SleepCycle becomes SLEEPING",
+			mutate: func(facts *DeviceFacts) {
+				facts.PresenceSignals = []PresenceSignal{{Type: "SOURCE_ACTIVITY", ObservedAt: now.Add(-5 * time.Minute)}}
+			},
+			availability: telemetryapi.EvaluationAvailabilityAvailable,
+			presence:     ptrPresence(telemetryapi.DevicePresenceStateSleeping),
+			display:      ptrDisplay(telemetryapi.DeviceDisplayStateSleeping),
+		},
+		{
+			name: "explicit sleep transitions immediately to SLEEPING even inside OnlineWithin",
+			mutate: func(facts *DeviceFacts) {
+				facts.PresenceSignals = []PresenceSignal{{Type: "EXPLICIT_SLEEP", ObservedAt: now.Add(-10 * time.Second)}}
+			},
+			availability: telemetryapi.EvaluationAvailabilityAvailable,
+			presence:     ptrPresence(telemetryapi.DevicePresenceStateSleeping),
+			display:      ptrDisplay(telemetryapi.DeviceDisplayStateSleeping),
+		},
+		{
+			name: "missed wakeup past OfflineAfter with continuous coverage becomes OFFLINE",
+			mutate: func(facts *DeviceFacts) {
+				facts.PresenceSignals = []PresenceSignal{{Type: "EXPLICIT_SLEEP", ObservedAt: now.Add(-21 * time.Minute)}}
+			},
+			availability: telemetryapi.EvaluationAvailabilityAvailable,
+			presence:     ptrPresence(telemetryapi.DevicePresenceStateOffline),
+			display:      ptrDisplay(telemetryapi.DeviceDisplayStateOffline),
+		},
+		{
+			name: "missed wakeup past OfflineAfter with coverage gap becomes UNAVAILABLE",
+			mutate: func(facts *DeviceFacts) {
+				facts.Coverage = Coverage{Available: true, ContinuousSince: ptrTime(now.Add(-10 * time.Minute))}
+				facts.PresenceSignals = []PresenceSignal{{Type: "EXPLICIT_SLEEP", ObservedAt: now.Add(-21 * time.Minute)}}
+			},
+			availability: telemetryapi.EvaluationAvailabilityUnavailable,
+			presence:     nil,
+			display:      ptrDisplay(telemetryapi.DeviceDisplayStateUnavailable),
+		},
+		{
+			name: "wakeup connect or activity after EXPLICIT_SLEEP restores ONLINE",
+			mutate: func(facts *DeviceFacts) {
+				facts.PresenceSignals = []PresenceSignal{
+					{Type: "EXPLICIT_SLEEP", ObservedAt: now.Add(-10 * time.Minute)},
+					{Type: "EXPLICIT_CONNECT", ObservedAt: now.Add(-5 * time.Second)},
+				}
+			},
+			availability: telemetryapi.EvaluationAvailabilityAvailable,
+			presence:     ptrPresence(telemetryapi.DevicePresenceStateOnline),
+			display:      ptrDisplay(telemetryapi.DeviceDisplayStateOnline),
+		},
+		{
+			name: "always-on device with SleepCycle 0 still evaluates UNKNOWN between OnlineWithin and OfflineAfter",
+			mutate: func(facts *DeviceFacts) {
+				facts.PresencePolicy.SleepCycle = 0
+				facts.PresenceSignals = []PresenceSignal{{Type: "SOURCE_ACTIVITY", ObservedAt: now.Add(-5 * time.Minute)}}
+			},
+			availability: telemetryapi.EvaluationAvailabilityAvailable,
+			presence:     ptrPresence(telemetryapi.DevicePresenceStateUnknown),
+			display:      ptrDisplay(telemetryapi.DeviceDisplayStateUnknown),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			facts := cloneFacts(base)
+			if test.mutate != nil {
+				test.mutate(&facts)
+			}
+			result, err := EvaluateCanonical(facts, 8, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Snapshot.EvaluationAvailability != test.availability {
+				t.Fatalf("availability=%s, want %s", result.Snapshot.EvaluationAvailability, test.availability)
+			}
+			if !equalPresence(result.Snapshot.Presence.CurrentState, test.presence) {
+				t.Fatalf("presence=%v, want %v", result.Snapshot.Presence.CurrentState, test.presence)
+			}
+			if !equalDisplay(result.Snapshot.DisplayState, test.display) {
+				t.Fatalf("display=%v, want %v", result.Snapshot.DisplayState, test.display)
+			}
+		})
+	}
+}

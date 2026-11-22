@@ -188,12 +188,12 @@ assert(schemas.DeviceObservationSnapshot.properties.values.maxItems === limits.m
 
 assert(exact(schemas.EvaluationAvailability.enum, ['AVAILABLE', 'UNAVAILABLE']), 'Evaluation Availability enum drifted');
 assert(exact(schemas.PresenceApplicability.enum, ['APPLICABLE', 'NOT_APPLICABLE']), 'Presence Applicability enum drifted');
-assert(exact(schemas.DevicePresenceState.enum, ['ONLINE', 'OFFLINE', 'UNKNOWN']), 'Device Presence enum drifted');
+assert(exact(schemas.DevicePresenceState.enum, ['ONLINE', 'SLEEPING', 'OFFLINE', 'UNKNOWN']), 'Device Presence enum drifted');
 assert(exact(schemas.TelemetryFreshness.enum, ['FRESH', 'STALE', 'MISSING']), 'Telemetry Freshness enum drifted');
 assert(exact(schemas.TelemetryQuality.enum, ['GOOD', 'PARTIAL', 'ESTIMATED', 'MANUAL', 'STALE', 'INVALID']), 'Telemetry Quality enum drifted');
 assert(exact(schemas.DeviceHistoryQuality.enum, ['GOOD', 'PARTIAL', 'ESTIMATED', 'MANUAL', 'STALE', 'INVALID']), 'Device History Quality enum drifted');
 assert(exact(schemas.TelemetryReadiness.enum, ['CURRENT', 'DEGRADED', 'INCOMPLETE', 'NOT_APPLICABLE']), 'Telemetry Readiness enum drifted');
-assert(exact(schemas.DeviceDisplayState.enum, ['ONLINE', 'OFFLINE', 'STALE', 'UNKNOWN', 'UNAVAILABLE', null]), 'Device Display State enum drifted');
+assert(exact(schemas.DeviceDisplayState.enum, ['ONLINE', 'SLEEPING', 'OFFLINE', 'STALE', 'UNKNOWN', 'UNAVAILABLE', null]), 'Device Display State enum drifted');
 
 assert(schemas.TelemetryPresentState?.properties?.state?.const === 'PRESENT', 'present key state discriminator drifted');
 assert(exactSet(schemas.TelemetryPresentState?.properties?.freshness?.enum, ['FRESH', 'STALE']), 'present key may only be fresh or stale');

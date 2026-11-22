@@ -28,7 +28,7 @@ import { buildTimeSlots, fillGaugeSlots } from '../../trends/timeline';
 
 const siteRoute = getRouteApi('/_app/_site');
 
-const CONNECTION_LABELS = { ONLINE: '在线', OFFLINE: '离线', UNKNOWN: '未知' } as const;
+const CONNECTION_LABELS = { ONLINE: '在线', SLEEPING: '休眠中', OFFLINE: '离线', UNKNOWN: '未知' } as const;
 
 /** What 解释 asks the assistant about a device: how it ran over the last day and whether its readings look wrong now. */
 const explainDeviceQuestion = (name: string) => `「${name}」最近 24 小时运行得怎么样？现在的读数有没有异常？`;
