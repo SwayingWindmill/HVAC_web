@@ -197,6 +197,7 @@ const PROTOCOL_LABELS: Readonly<Record<string, string>> = Object.freeze({
   MODBUS_RTU: 'Modbus RTU',
   MQTT: 'MQTT',
   BACNET_IP: 'BACnet/IP',
+  OPC_UA: 'OPC-UA',
   HTTP: 'HTTP',
   COPIES: '共享通道',
   PROVISIONAL: '临时换算',

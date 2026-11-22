@@ -8,12 +8,33 @@ import {
 } from '@/features/integrations/integrations-model';
 import {
   AUTONOMY_POLICY_STATE_PRESENTATION,
-  countDriverRegisters,
   formatPointCopyTargets,
   summarizeAutonomyPolicyState,
+  summarizeDriverPointCounts,
   summarizeEdgeRuleBundle,
   type ConcentratorShadowUnitSummary,
+  type DriverPointCountSummary,
 } from './gateway-config-shadow-model';
+
+function formatDriverSummaryLabel(summary: DriverPointCountSummary): string {
+  if (summary.driverCount === 0) {
+    return '协议驱动 0 台';
+  }
+  const activeProtocols =
+    (summary.modbusRegisterCount > 0 ? 1 : 0) +
+    (summary.bacnetObjectCount > 0 ? 1 : 0) +
+    (summary.opcuaNodeCount > 0 ? 1 : 0);
+  if (activeProtocols <= 1) {
+    if (summary.bacnetObjectCount > 0) {
+      return `协议驱动 ${summary.driverCount} 台 · ${summary.bacnetObjectCount} 个 BACnet 对象`;
+    }
+    if (summary.opcuaNodeCount > 0) {
+      return `协议驱动 ${summary.driverCount} 台 · ${summary.opcuaNodeCount} 个 OPC-UA 节点`;
+    }
+    return `协议驱动 ${summary.driverCount} 台 · ${summary.modbusRegisterCount} 寄存器`;
+  }
+  return `协议驱动 ${summary.driverCount} 台 · ${summary.totalPointCount} 项协议点位`;
+}
 import {
   AutonomyPolicySummaryBlock,
   DriverConfigsSummaryBlock,
@@ -45,8 +66,7 @@ export function GatewayShadowSummaryCard({
 }) {
   const desired = shadow.desired;
   const reported = shadow.reported;
-  const driverCount = desired?.driverConfigs?.length ?? 0;
-  const registerCount = countDriverRegisters(desired?.driverConfigs);
+  const driverSummary = summarizeDriverPointCounts(desired?.driverConfigs);
   const autonomyState = summarizeAutonomyPolicyState(desired?.autonomyPolicy);
   const autonomyLabel = AUTONOMY_POLICY_STATE_PRESENTATION[autonomyState].label;
   const edgeRuleSummary = summarizeEdgeRuleBundle(desired?.edgeRuleBundle);
@@ -96,7 +116,7 @@ export function GatewayShadowSummaryCard({
           采集周期 {desired?.samplingPolicies.length ?? 0} 条
         </span>
         <span className="rounded border bg-background px-2 py-0.5 font-mono tabular-nums">
-          协议驱动 {driverCount} 台{driverCount > 0 ? ` · ${registerCount} 寄存器` : ''}
+          {formatDriverSummaryLabel(driverSummary)}
         </span>
         <span className="rounded border bg-background px-2 py-0.5">
           断网自治 · {autonomyLabel}

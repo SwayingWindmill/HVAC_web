@@ -39,9 +39,24 @@ function shadowShot(fileName: string): string {
   return join(SHADOW_SHOT_DIR, fileName);
 }
 
+const ISSUE_959_SHOT_DIR = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '..',
+  '..',
+  '..',
+  '.scratch',
+  'verify',
+  'issue-959-web',
+);
+
 function p2AutonomyShot(fileName: string): string {
   mkdirSync(P2_AUTONOMY_SHOT_DIR, { recursive: true });
   return join(P2_AUTONOMY_SHOT_DIR, fileName);
+}
+
+function issue959Shot(fileName: string): string {
+  mkdirSync(ISSUE_959_SHOT_DIR, { recursive: true });
+  return join(ISSUE_959_SHOT_DIR, fileName);
 }
 
 function grantDeviceWritePrincipal() {
@@ -664,6 +679,165 @@ test('gateway config shadow edits Modbus driver table and autonomy policy, rende
   expect(shadowWrites[1]?.body?.autonomyPolicy?.enabled).toBe(false);
   expect(shadowWrites[2]?.body?.driverConfigs).toEqual([]);
   expect(shadowWrites[2]?.body?.autonomyPolicy).toBeNull();
+
+  expect(consoleErrors).toEqual([]);
+  expect(pageErrors).toEqual([]);
+});
+
+test('gateway config shadow supports BACnet/IP and OPC-UA multi-protocol driver authoring, validation, sync, and drift', async ({
+  page,
+  gateway,
+}) => {
+  const consoleErrors: string[] = [];
+  const pageErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text());
+  });
+  page.on('pageerror', (error) => {
+    pageErrors.push(error.message);
+  });
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  gateway.principalOverride = grantDeviceWritePrincipal();
+
+  await page.goto(`/settings/integrations?site=${SITE_ID}`);
+  await page.getByRole('button', { name: 'EG8200-COMMERCIAL-001' }).click();
+
+  const sheet = page.getByRole('dialog');
+  const shadowSection = sheet.getByRole('region', { name: '配置影子' });
+  await shadowSection.getByRole('button', { name: '初始化配置影子' }).click();
+
+  const editor = page.getByRole('dialog', { name: '编辑网关配置影子' });
+
+  // Driver 1: BACnet/IP AHU controller
+  await editor.getByRole('button', { name: '新增协议驱动' }).click();
+  const bacDriver = editor.getByRole('group', { name: '协议驱动 1' });
+  await bacDriver.getByLabel('本地设备标识').fill('ahu-bacnet-01');
+  await bacDriver.getByLabel('协议类型').click();
+  await page.getByRole('option', { name: 'BACnet/IP', exact: true }).click();
+  await bacDriver.getByLabel('采集地址').fill('192.168.10.30:47808');
+  await bacDriver.getByLabel('BACnet 设备实例号').fill('2048');
+  await bacDriver.getByLabel('写优先级 (1–16)').fill('8');
+
+  const bacObj1 = bacDriver.getByRole('group', { name: 'BACnet 对象 1' });
+  await bacObj1.getByLabel('点位编码').fill('supply_air_temp');
+  await expect(bacObj1.getByLabel('允许下发写入')).toBeDisabled();
+  await bacObj1.getByLabel('对象实例号').fill('1');
+  await bacObj1.getByLabel('轮询优先级').click();
+  await page.getByRole('option', { name: '高', exact: true }).click();
+  await bacObj1.getByLabel('单位（可选）').fill('°C');
+
+  await bacDriver.getByRole('button', { name: '新增 BACnet 对象' }).click();
+  const bacObj2 = bacDriver.getByRole('group', { name: 'BACnet 对象 2' });
+  await bacObj2.getByLabel('点位编码').fill('supply_air_temp_sp');
+  await bacObj2.getByLabel('对象类型').click();
+  await page.getByRole('option', { name: '模拟值 (AV)', exact: true }).click();
+  await bacObj2.getByLabel('对象实例号').fill('2');
+  await bacObj2.getByLabel('允许下发写入').check();
+  await bacObj2.getByLabel('启用 COV 订阅').check();
+  await bacObj2.getByLabel('单位（可选）').fill('°C');
+
+  // Driver 2: OPC-UA chiller server
+  await editor.getByRole('button', { name: '新增协议驱动' }).click();
+  const uaDriver = editor.getByRole('group', { name: '协议驱动 2' });
+  await uaDriver.getByLabel('本地设备标识').fill('chiller-opcua-01');
+  await uaDriver.getByLabel('协议类型').click();
+  await page.getByRole('option', { name: 'OPC-UA', exact: true }).click();
+  await uaDriver.getByLabel('采集地址').fill('opc.tcp://192.168.10.40:4840');
+  await uaDriver.getByLabel('安全策略').click();
+  await page.getByRole('option', { name: 'Basic256Sha256', exact: true }).click();
+  await expect(uaDriver.getByLabel('安全模式')).toContainText('签名并加密 (SignAndEncrypt)');
+  await uaDriver.getByLabel('认证方式').click();
+  await page.getByRole('option', { name: '用户名与凭据引用 (USERNAME)', exact: true }).click();
+  await uaDriver.getByLabel('用户名').fill('hvac_edge');
+
+  const uaNode1 = uaDriver.getByRole('group', { name: 'OPC-UA 节点 1' });
+  await uaNode1.getByLabel('点位编码').fill('chiller_power');
+  await uaNode1.getByLabel('节点 ID (NodeId)').fill('ns=2;s=Chiller1.Power');
+  await uaNode1.getByLabel('单位（可选）').fill('kW');
+  await uaNode1.getByLabel('开启节点订阅').check();
+
+  // Validation guard: USERNAME auth without credentialRef fails cleanly in-form before PUT.
+  await editor.getByLabel('变更原因（必填）').fill('下发 BACnet/IP 与 OPC-UA 南向协议驱动');
+  await editor.getByRole('button', { name: '保存期望配置' }).click();
+  await expect(editor.getByRole('alert')).toContainText('凭据引用');
+
+  await uaDriver.getByLabel(/凭据引用/).fill('edge-secret:opcua-chiller-01');
+  await editor.getByRole('button', { name: '保存期望配置' }).click();
+  await expect(editor).toHaveCount(0);
+
+  await expect(shadowSection).toContainText('待同步下发');
+  await expect(shadowSection).toContainText('协议驱动 2 台 · 3 项协议点位');
+  await expect(shadowSection).toContainText('192.168.10.30:47808');
+  await expect(shadowSection).toContainText('opc.tcp://192.168.10.40:4840');
+
+  const bacTableRegion = shadowSection.getByRole('region', { name: 'ahu-bacnet-01 BACnet 对象表' });
+  const uaTableRegion = shadowSection.getByRole('region', { name: 'chiller-opcua-01 OPC-UA 节点表' });
+  await expect(bacTableRegion).toContainText('supply_air_temp_sp');
+  await expect(bacTableRegion).toContainText('可写 · COV 订阅');
+  await expect(uaTableRegion).toContainText('ns=2;s=Chiller1.Power');
+  await expect(uaTableRegion).toContainText('订阅推送');
+
+  await shadowSection.scrollIntoViewIfNeeded();
+  expect(await bacTableRegion.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  expect(await uaTableRegion.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+
+  const shadowWrites = gateway.writes.filter(
+    (entry) => entry.method === 'PUT' && entry.path === `/api/v1/gateways/${GATEWAY_ID}/config-shadow`,
+  );
+  expect(shadowWrites).toHaveLength(1);
+  const writtenDrivers = shadowWrites[0]?.body?.driverConfigs as Array<Record<string, unknown>>;
+  expect(writtenDrivers).toHaveLength(2);
+  expect(writtenDrivers[0]?.driverType).toBe('BACNET_IP');
+  expect('unitId' in (writtenDrivers[0] ?? {})).toBe(false);
+  expect('registers' in (writtenDrivers[0] ?? {})).toBe(false);
+  expect(writtenDrivers[1]?.driverType).toBe('OPC_UA');
+  expect('unitId' in (writtenDrivers[1] ?? {})).toBe(false);
+  expect('registers' in (writtenDrivers[1] ?? {})).toBe(false);
+
+  // Sync transition: matching edge report moves shadow to SYNCED.
+  gateway.reportGatewayShadow(GATEWAY_ID, {
+    reportedRevision: 1,
+    appliedStatus: 'APPLIED',
+    pointMappings: [],
+    samplingPolicies: [],
+    concentratorConfigs: {},
+    driverConfigs: writtenDrivers,
+  });
+  await shadowSection.getByRole('button', { name: '刷新影子' }).click();
+  await expect(shadowSection).toContainText('云边已一致');
+  await page.screenshot({ path: issue959Shot('bacnet-opcua-synced-light.png') });
+
+  // Drift transition: edge reports mismatched OPC-UA NodeId -> DRIFTED.
+  const driftedDrivers = structuredClone(writtenDrivers);
+  const uaReported = driftedDrivers[1]?.opcua as Record<string, unknown>;
+  const uaNodes = uaReported.nodes as Array<Record<string, unknown>>;
+  uaNodes[0]!.nodeId = 'ns=2;s=Chiller1.WrongNode';
+  gateway.reportGatewayShadow(GATEWAY_ID, {
+    reportedRevision: 1,
+    appliedStatus: 'PARTIAL',
+    pointMappings: [],
+    samplingPolicies: [],
+    concentratorConfigs: {},
+    driverConfigs: driftedDrivers,
+  });
+  await shadowSection.getByRole('button', { name: '刷新影子' }).click();
+  await expect(shadowSection).toContainText('配置存在漂移');
+  await expect(shadowSection).toContainText('协议驱动点表 · chiller-opcua-01');
+
+  await page.keyboard.press('Escape');
+  await expect(sheet).toHaveCount(0);
+  await page.getByRole('radiogroup', { name: '外观' }).getByRole('radio', { name: '深色' }).click();
+  await expect
+    .poll(() => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme))
+    .toBe('dark');
+  await page.getByRole('button', { name: 'EG8200-COMMERCIAL-001' }).click();
+  const darkShadow = sheet.getByRole('region', { name: '配置影子' });
+  await expect(darkShadow).toContainText('配置存在漂移');
+  await darkShadow.scrollIntoViewIfNeeded();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: issue959Shot('bacnet-opcua-drifted-dark.png') });
 
   expect(consoleErrors).toEqual([]);
   expect(pageErrors).toEqual([]);
