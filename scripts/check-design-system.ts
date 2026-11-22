@@ -199,6 +199,10 @@ function validateColorSchemeSetup(indexHtml: string, globalCss: string, errors: 
   if (!/\bcolor-scheme\s*:\s*dark\s*;/.test(darkBlock)) {
     errors.push('apps/hvac-web/src/global.css .dark must declare color-scheme: dark;');
   }
+  const headBlock = /<head\b[^>]*>([\s\S]*?)<\/head>/i.exec(indexHtml)?.[1] ?? '';
+  if (!/localStorage\.getItem\(\s*['"]hvac-theme-mode['"]\s*\)/.test(headBlock) || !/classList\.toggle\(\s*['"]dark['"]/.test(headBlock)) {
+    errors.push('apps/hvac-web/index.html <head> must include the pre-paint hvac-theme-mode bootstrap script toggling the dark class to prevent theme FOUC');
+  }
 }
 
 function jsxOpeningTag(source: string, tagStartIndex: number): string {
@@ -399,6 +403,56 @@ function isJsonRoundTripClone(node: ts.CallExpression): boolean {
   return ts.isCallExpression(firstArg) && isMethodCallOnIdentifier(firstArg, 'JSON', 'stringify');
 }
 
+const INFINITE_ANIMATIONS: ReadonlySet<string> = new Set([
+  'animate-ping',
+  'animate-pulse',
+  'animate-bounce',
+  'animate-spin',
+]);
+
+function isInsideTestIdAttribute(node: ts.Node): boolean {
+  let current: ts.Node | undefined = node.parent;
+  while (current) {
+    if (ts.isJsxAttribute(current) && ts.isIdentifier(current.name)) {
+      return current.name.text === 'data-testid' || current.name.text === 'testId';
+    }
+    if (ts.isJsxOpeningLikeElement(current) || ts.isJsxElement(current)) return false;
+    current = current.parent;
+  }
+  return false;
+}
+
+function hasReducedMotionGuard(sourceFile: ts.SourceFile, node: ts.Node, text: string): boolean {
+  if (/\bmotion-reduce:animate-none\b/.test(text)) return true;
+  let current: ts.Node | undefined = node.parent;
+  while (current) {
+    if (ts.isJsxAttribute(current)) {
+      return /\bmotion-reduce:animate-none\b/.test(current.getText(sourceFile));
+    }
+    if (ts.isCallExpression(current) && ts.isIdentifier(current.expression) && current.expression.text === 'cn') {
+      if (/\bmotion-reduce:animate-none\b/.test(current.getText(sourceFile))) return true;
+    }
+    if (ts.isBlock(current) || ts.isSourceFile(current) || ts.isFunctionLike(current)) break;
+    current = current.parent;
+  }
+  return false;
+}
+
+function effectHookWithoutDeps(call: ts.CallExpression): string | null {
+  if (call.arguments.length >= 2) return null;
+  const expr = call.expression;
+  if (ts.isIdentifier(expr) && (expr.text === 'useEffect' || expr.text === 'useLayoutEffect')) {
+    return expr.text;
+  }
+  if (ts.isPropertyAccessExpression(expr)
+    && ts.isIdentifier(expr.expression)
+    && expr.expression.text === 'React'
+    && (expr.name.text === 'useEffect' || expr.name.text === 'useLayoutEffect')) {
+    return expr.name.text;
+  }
+  return null;
+}
+
 async function validateWebAstAndCopyGuardrails(root: string, errors: string[]): Promise<void> {
   const srcRoot = resolve(root, 'apps/hvac-web/src');
   if (!existsSync(srcRoot)) return;
@@ -466,6 +520,10 @@ async function validateWebAstAndCopyGuardrails(root: string, errors: string[]): 
         if (isJsonRoundTripClone(node)) {
           errors.push(`${relativePath}:${lineOfNode(sourceFile, node)} avoid JSON.parse(JSON.stringify(...)); use structuredClone(...) instead`);
         }
+        const hookName = effectHookWithoutDeps(node);
+        if (hookName) {
+          errors.push(`${relativePath}:${lineOfNode(sourceFile, node)} ${hookName}() must specify an explicit dependency array (\`[]\` or \`[deps]\`) to avoid re-running subscriptions/effects on every render`);
+        }
       }
 
       if (isFeatureOrRoute) {
@@ -500,6 +558,33 @@ async function validateWebAstAndCopyGuardrails(root: string, errors: string[]): 
         for (const rule of FORBIDDEN_COPY_RULES) {
           if (rule.pattern.test(text)) {
             errors.push(`${relativePath}:${lineOfNode(sourceFile, node)} UI copy uses deprecated term "${rule.label}"; use "${rule.replacement}" (DESIGN.md §1)`);
+          }
+        }
+        if (text.trim() === '--' || /(?:^|\s)--(?:\s|$)/.test(text)) {
+          errors.push(`${relativePath}:${lineOfNode(sourceFile, node)} UI placeholder uses ASCII \`--\`; use Chinese em dash \`—\` instead`);
+        }
+        if (!ts.isJsxText(node)) {
+          if (/\breal-shell-[a-z0-9-]+\b/.test(text) && !isInsideTestIdAttribute(node)) {
+            errors.push(`${relativePath}:${lineOfNode(sourceFile, node)} avoid dead legacy CSS class \`real-shell-*\`; use semantic Tailwind design tokens (data-testid / testId attributes remain allowed)`);
+          }
+          if (!isUiPrimitive && /(?:^|[\s:])transition-all(?=$|\s)/.test(text)) {
+            errors.push(`${relativePath}:${lineOfNode(sourceFile, node)} avoid \`transition-all\`; transition only specific properties (e.g. \`transition-colors\`, \`transition-opacity\`, or \`transition-[border-color,box-shadow]\`)`);
+          }
+          const viewportHeightCalcMatch = /calc\(\s*100[sdl]?vh[\s_]*-[\s_]*\d+(?:\.\d+)?(?:px|rem)\s*\)/i.exec(text);
+          if (viewportHeightCalcMatch) {
+            errors.push(`${relativePath}:${lineOfNode(sourceFile, node)} avoid hardcoded viewport height subtraction \`${viewportHeightCalcMatch[0]}\`; use \`<Main fixed>\` flex sizing (\`flex-1 min-h-0\`) or \`var(--header-height)\` instead`);
+          }
+          if (!hasReducedMotionGuard(sourceFile, node, text)) {
+            const flaggedAnimations = new Set<string>();
+            for (const token of text.trim().split(/\s+/)) {
+              const parts = token.split(':');
+              const base = parts[parts.length - 1] ?? '';
+              const variants = parts.slice(0, -1);
+              if (base && INFINITE_ANIMATIONS.has(base) && !variants.includes('motion-safe') && !flaggedAnimations.has(base)) {
+                flaggedAnimations.add(base);
+                errors.push(`${relativePath}:${lineOfNode(sourceFile, node)} infinite animation \`${base}\` must respect prefers-reduced-motion; use \`motion-safe:${base}\` (or pair with \`motion-reduce:animate-none\`)`);
+              }
+            }
           }
         }
       }

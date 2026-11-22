@@ -85,14 +85,14 @@ export function NotificationCenter() {
         meta={active.isSuccess ? <PageMeta dot={waiting > 0 ? 'warning' : 'idle'}>{waiting > 0 ? `${waiting} 条活动告警待确认` : '活动告警均已确认'}</PageMeta> : undefined}
         actions={(
           <Button variant="outline" size="sm" onClick={refresh} disabled={active.isFetching || cleared.isFetching}>
-            <RefreshCw data-icon="inline-start" className={active.isFetching || cleared.isFetching ? 'animate-spin' : undefined} />
+            <RefreshCw data-icon="inline-start" className={active.isFetching || cleared.isFetching ? 'motion-safe:animate-spin' : undefined} />
             刷新
           </Button>
         )}
       />
 
-      <Panel aria-label="通知" className="grid h-[calc(100svh-180px)] min-h-[520px] grid-cols-[420px_minmax(0,1fr)]">
-        <div className="flex min-h-0 flex-col border-r">
+      <Panel aria-label="通知" className="grid min-h-[520px] flex-1 grid-cols-1 @4xl/main:min-h-0 @4xl/main:grid-cols-[360px_minmax(0,1fr)] @6xl/main:grid-cols-[420px_minmax(0,1fr)]">
+        <div className="flex max-h-[380px] min-h-0 flex-col border-b @4xl/main:max-h-none @4xl/main:border-r @4xl/main:border-b-0">
           <ToggleGroup
             type="single"
             value={unacknowledgedOnly ? 'unack' : 'all'}

@@ -114,7 +114,7 @@ test('a machine without a sub-meter is shown unmetered and its energy stays unal
 
   const layered = page.getByRole('region', { name: '系统能效分层与计量校核' });
   await expect(layered).toContainText('■ 未计量差额偏大');
-  await expect(layered).toContainText('冷却塔电耗占比--');
+  await expect(layered).toContainText('冷却塔电耗占比—');
 });
 
 test('without a Tariff on its grid import, the Site energy is not priced', async ({ page, gateway }) => {

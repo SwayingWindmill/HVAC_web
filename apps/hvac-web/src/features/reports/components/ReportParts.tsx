@@ -475,7 +475,7 @@ export function EfficiencyAndAnchorsSection({
             <span>
               主配电平衡差额{' '}
               <strong className={cn('font-medium', balanceMeta.className)}>
-                {isFiniteNum(meterBalance.diffKWh) ? formatSignedDiff(meterBalance.diffKWh) : '--'}
+                {isFiniteNum(meterBalance.diffKWh) ? formatSignedDiff(meterBalance.diffKWh) : '—'}
                 {isFiniteNum(meterBalance.imbalanceRatio) ? `（${formatSignedRatio(meterBalance.imbalanceRatio)}）` : ''}
               </strong>
             </span>

@@ -178,7 +178,7 @@ export function AlarmRuleDagCanvas({
                 onClick={() => onSelectRule(rule.ruleId)}
                 style={{ left: `${node.x}px`, top: `${node.y}px`, width: `${node.width}px`, height: `${node.height}px` }}
                 className={cn(
-                  'absolute flex flex-col justify-between rounded-lg border bg-card p-3 text-left shadow-xs transition-all outline-none',
+                  'absolute flex flex-col justify-between rounded-lg border bg-card p-3 text-left shadow-xs transition-[border-color,background-color,box-shadow] outline-none',
                   'hover:border-primary/60 focus-visible:ring-2 focus-visible:ring-ring',
                   isSelected && 'border-primary ring-2 ring-primary/25',
                   !isSelected && isNeighbor && 'border-primary/45 bg-primary/5',

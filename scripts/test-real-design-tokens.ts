@@ -94,8 +94,56 @@ test('design system check passes on the repository and rejects violations across
       `"use client";\nexport const AllowedClient = () => <div />;\n`,
     );
     writeFileSync(
+      join(sandbox, 'apps/hvac-web/src/components/ui/AllowedTransition.tsx'),
+      `export const AllowedTransition = () => <div className="transition-all motion-safe:animate-pulse" />;\n`,
+    );
+    writeFileSync(
+      join(sandbox, 'apps/hvac-web/src/components/ui/BadUiMotion.tsx'),
+      `export const BadUiMotion = () => <div className="animate-pulse rounded-md" />;\n`,
+    );
+    writeFileSync(
       join(sandbox, 'apps/hvac-web/src/features/demo/BadClient.tsx'),
       `"use client";\nexport const BadClient = ({ active }: { active: boolean }) => (\n  <Button variant={active ? 'secondary' : 'outline'}>确定</Button>\n);\n`,
+    );
+    writeFileSync(
+      join(sandbox, 'apps/hvac-web/src/features/demo/BadWave2Guardrails.tsx'),
+      [
+        'import { useEffect } from "react";',
+        'export function BadWave2Guardrails() {',
+        '  useEffect(() => { window.addEventListener("keydown", () => {}); });',
+        '  return (',
+        '    <div className="real-shell-error">',
+        '      <button type="button" className="transition-all">切换</button>',
+        '      <span className="animate-ping" />',
+        '      <span className="animate-spin" />',
+        '      <div className="h-[calc(100svh-262px)]" />',
+        '      <span>--</span>',
+        '      <span>{"上月 --"}</span>',
+        '    </div>',
+        '  );',
+        '}',
+      ].join('\n') + '\n',
+    );
+    writeFileSync(
+      join(sandbox, 'apps/hvac-web/src/features/demo/GoodWave2Patterns.tsx'),
+      [
+        'import { useEffect } from "react";',
+        'export function GoodWave2Patterns({ flag }: { flag: boolean }) {',
+        '  useEffect(() => {}, []);',
+        '  return (',
+        '    <div data-testid="real-shell-site">',
+        '      <div testId="real-shell-bootstrapping" />',
+        '      <button type="button" className={flag ? "transition-colors motion-safe:animate-ping" : "animate-pulse motion-reduce:animate-none"}>',
+        '        确定',
+        '      </button>',
+        '      <div className="h-[calc(100svh-var(--header-height)-32px)] text-[var(--chart-1)]" />',
+        '      <span>—</span>',
+        '      <span>{"---"}</span>',
+        '      <span>{"--chart-1"}</span>',
+        '    </div>',
+        '  );',
+        '}',
+      ].join('\n') + '\n',
     );
     writeFileSync(
       join(sandbox, 'apps/hvac-web/src/features/demo/BadPatterns.tsx'),
@@ -133,11 +181,23 @@ test('design system check passes on the repository and rejects violations across
 
     const { errors } = await validateDesignSystem(sandbox);
     assert.equal(errors.some((entry: string) => entry.includes('AllowedClient.tsx')), false);
+    assert.equal(errors.some((entry: string) => entry.includes('AllowedTransition.tsx')), false);
+    assert.equal(errors.some((entry: string) => entry.includes('GoodWave2Patterns.tsx')), false);
+    assert.ok(errors.some((entry: string) => entry.includes('BadUiMotion.tsx:1 infinite animation `animate-pulse` must respect prefers-reduced-motion')));
+    assert.ok(errors.some((entry: string) => entry.includes('BadWave2Guardrails.tsx:3 useEffect() must specify an explicit dependency array')));
+    assert.ok(errors.some((entry: string) => entry.includes('BadWave2Guardrails.tsx:5 avoid dead legacy CSS class `real-shell-*`')));
+    assert.ok(errors.some((entry: string) => entry.includes('BadWave2Guardrails.tsx:6 avoid `transition-all`')));
+    assert.ok(errors.some((entry: string) => entry.includes('BadWave2Guardrails.tsx:7 infinite animation `animate-ping` must respect prefers-reduced-motion')));
+    assert.ok(errors.some((entry: string) => entry.includes('BadWave2Guardrails.tsx:8 infinite animation `animate-spin` must respect prefers-reduced-motion')));
+    assert.ok(errors.some((entry: string) => entry.includes('BadWave2Guardrails.tsx:9 avoid hardcoded viewport height subtraction `calc(100svh-262px)`')));
+    assert.ok(errors.some((entry: string) => entry.includes('BadWave2Guardrails.tsx:10 UI placeholder uses ASCII `--`')));
+    assert.ok(errors.some((entry: string) => entry.includes('BadWave2Guardrails.tsx:11 UI placeholder uses ASCII `--`')));
     assert.ok(errors.some((entry: string) => entry.includes('BadClient.tsx:1 avoid Next.js "use client" directives')));
     assert.ok(errors.some((entry: string) => entry.includes('BadClient.tsx:3 avoid <Button variant="secondary">')));
     assert.ok(errors.some((entry: string) => entry.includes('BadInput.tsx:2 text input Enter onKeyDown must guard IME composition')));
     assert.ok(errors.some((entry: string) => entry.includes('BadFactTile.tsx:2 FactTile does not accept className; pass valueClassName')));
     assert.ok(errors.some((entry: string) => entry.includes('apps/hvac-web/index.html must declare <meta name="color-scheme"')));
+    assert.ok(errors.some((entry: string) => entry.includes('apps/hvac-web/index.html <head> must include the pre-paint hvac-theme-mode bootstrap script toggling the dark class to prevent theme FOUC')));
     assert.ok(errors.some((entry: string) => entry.includes(':root must declare color-scheme: light dark;')));
     assert.ok(errors.some((entry: string) => entry.includes(':root[data-theme="light"] must declare color-scheme: light;')));
     assert.ok(errors.some((entry: string) => entry.includes('.dark must declare color-scheme: dark;')));

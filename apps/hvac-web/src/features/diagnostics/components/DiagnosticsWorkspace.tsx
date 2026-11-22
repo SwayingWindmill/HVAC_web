@@ -117,8 +117,8 @@ function RuleBar({ rule, current, target, reading, outcome, latest, timeZone, ru
   const revision = outcome?.rule ?? current.data;
   const threshold = revision?.minimumDeltaTC ?? null;
   return (
-    <Panel aria-label={rule.title}>
-      <div className="flex min-h-[72px] items-center gap-5 px-5 py-3">
+    <Panel aria-label={rule.title} className="shrink-0">
+      <div className="flex min-h-[72px] flex-wrap items-center gap-x-5 gap-y-3 px-5 py-3">
         <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary-soft text-primary"><Stethoscope className="size-[18px]" aria-hidden="true" /></span>
         <div className="flex min-w-0 flex-col gap-0.5">
           <span className="flex items-center gap-2 text-sm font-semibold whitespace-nowrap">
@@ -133,7 +133,7 @@ function RuleBar({ rule, current, target, reading, outcome, latest, timeZone, ru
             {revision ? ` · ${revision.windowMinutes} 分钟窗口` : current.isPending ? ' · 正在读取诊断规则…' : ' · 诊断规则暂不可用'}
           </span>
         </div>
-        <span className="h-9 w-px shrink-0 bg-divider" aria-hidden="true" />
+        <span className="hidden h-9 w-px shrink-0 bg-divider @4xl/main:block" aria-hidden="true" />
         <div className="flex shrink-0 flex-col gap-0.5">
           <span className="text-xs text-muted-foreground">当前温差</span>
           <span className="text-xl leading-6 font-semibold tabular-nums">
@@ -142,7 +142,7 @@ function RuleBar({ rule, current, target, reading, outcome, latest, timeZone, ru
           </span>
         </div>
         <ThresholdTrack rule={rule} threshold={threshold} value={live} />
-        <span className="h-9 w-px shrink-0 bg-divider" aria-hidden="true" />
+        <span className="hidden h-9 w-px shrink-0 bg-divider @4xl/main:block" aria-hidden="true" />
         <div className="flex shrink-0 flex-col gap-0.5">
           <span className="text-xs text-muted-foreground">{outcome ? '本次诊断' : '最近发现'}</span>
           {outcome ? (
@@ -283,8 +283,8 @@ function FindingDetail({ finding, assetName, plant, meterId, onCreate }: {
     void navigator.clipboard.writeText(window.location.href).then(() => toast.success('链接已复制'), () => toast.error('无法复制链接'));
   };
   return (
-    <section role="region" aria-label="诊断结论详情" className="grid min-h-0 min-w-0 grid-cols-[minmax(0,1fr)_240px]">
-      <div className="flex min-h-0 min-w-0 flex-col overflow-y-auto">
+    <section role="region" aria-label="诊断结论详情" className="flex min-h-0 min-w-0 flex-col overflow-y-auto @5xl/main:grid @5xl/main:grid-cols-[minmax(0,1fr)_240px] @5xl/main:overflow-hidden">
+      <div className="flex min-w-0 shrink-0 flex-col @5xl/main:min-h-0 @5xl/main:shrink @5xl/main:overflow-y-auto">
         <header className="flex flex-col gap-2 border-b border-divider px-6 pt-[18px] pb-4">
           <div className="flex items-center gap-2.5 text-xs">
             <FindingSeverityBadge finding={finding} />
@@ -341,7 +341,7 @@ function FindingDetail({ finding, assetName, plant, meterId, onCreate }: {
               <h3 className="font-semibold">说明</h3>
               <p className="leading-[22px] text-secondary-foreground">{rule.meaning}</p>
             </section>
-            <div className="grid grid-cols-2 gap-8">
+            <div className="grid grid-cols-1 gap-6 @3xl/main:grid-cols-2 @3xl/main:gap-8">
               <section className="flex flex-col gap-2">
                 <h3 className="font-semibold">常见原因</h3>
                 <ol className="flex flex-col gap-1.5">
@@ -359,7 +359,7 @@ function FindingDetail({ finding, assetName, plant, meterId, onCreate }: {
         ) : null}
       </div>
 
-      <aside aria-label="属性" className="flex min-h-0 flex-col overflow-y-auto border-l border-divider bg-muted/40 px-4 py-4">
+      <aside aria-label="属性" className="flex shrink-0 flex-col border-t border-divider bg-muted/40 px-4 py-4 @5xl/main:min-h-0 @5xl/main:overflow-y-auto @5xl/main:border-t-0 @5xl/main:border-l">
         <h3 className="mb-3 text-xs font-semibold text-muted-foreground">属性</h3>
         <dl className="flex flex-col">
           <Property label="规则">{rule?.title ?? '诊断结论'}</Property>
@@ -450,7 +450,7 @@ export function DiagnosticsWorkspace() {
     <Main fixed>
       <PageHeader title="故障诊断" description={site.displayName} />
 
-      {registry.isPending ? <Skeleton className="h-[72px] rounded-xl" /> : (
+      {registry.isPending ? <Skeleton className="h-[72px] shrink-0 rounded-xl" /> : (
         <RuleBar
           rule={LOW_DELTA_T}
           current={currentRule}
@@ -464,8 +464,8 @@ export function DiagnosticsWorkspace() {
         />
       )}
 
-      <Panel aria-label="诊断结论" className="grid h-[calc(100svh-262px)] min-h-[540px] grid-cols-[380px_minmax(0,1fr)]">
-        <div className="flex min-h-0 flex-col border-r">
+      <Panel aria-label="诊断结论" className="grid min-h-[540px] flex-1 grid-cols-1 @4xl/main:min-h-0 @4xl/main:grid-cols-[340px_minmax(0,1fr)] @6xl/main:grid-cols-[380px_minmax(0,1fr)]">
+        <div className="flex max-h-[360px] min-h-0 flex-col border-b @4xl/main:max-h-none @4xl/main:border-r @4xl/main:border-b-0">
           <ToggleGroup
             type="single"
             value={range}
