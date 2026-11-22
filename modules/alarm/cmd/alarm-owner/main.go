@@ -101,6 +101,12 @@ func run() int {
 		logger.Error("alarm_database_open_failed", "error_code", "ALARM_DATABASE_OPEN_FAILED")
 		return 1
 	}
+	checker, err := alarmservice.LoadConnectivityEdgeRuleSyncChecker(logger)
+	if err != nil {
+		logger.Error("alarm_edge_dedup_configuration_invalid", "error_code", "ALARM_EDGE_DEDUP_CONFIGURATION_INVALID")
+		return 1
+	}
+	store.SetEdgeRuleSyncChecker(checker)
 	gatewaySPIFFE := envOr("ALARM_GATEWAY_SPIFFE", alarmservice.DefaultGatewaySPIFFEID)
 	handler, err := alarmservice.NewHTTPHandler(alarmservice.HTTPConfig{
 		Store: store, Rules: store, Metrics: telemetry.Metrics, GatewayPublicKey: gatewayPublicKey, GatewaySPIFFEID: gatewaySPIFFE,
@@ -263,6 +269,9 @@ func alarmObservabilityRoute(request *http.Request) string {
 	if path == alarmservice.InternalControlEventsPath {
 		return "alarms.publish_control_event"
 	}
+	if path == alarmservice.InternalEdgeAlarmEventsPath {
+		return "alarms.ingest_edge_event"
+	}
 	if !strings.HasPrefix(path, alarmservice.InternalSiteAlarmsPrefix) {
 		return "unknown"
 	}
@@ -303,6 +312,13 @@ func buildAlarmOwnerRouter(store alarmservice.Store, gatewaySPIFFE string, gatew
 	if err != nil {
 		return nil, err
 	}
+	var edgeEventsHandler http.Handler
+	if ingestor, ok := store.(alarmservice.EdgeAlarmEventIngestor); ok {
+		edgeEventsHandler, err = alarmservice.NewEdgeAlarmEventHandler(ingestor)
+		if err != nil {
+			return nil, err
+		}
+	}
 	return alarmservice.NewOwnerRouter(alarmservice.OwnerRouterConfig{
 		GatewaySPIFFE:   gatewaySPIFFE,
 		TelemetrySPIFFE: envOr("ALARM_TELEMETRY_SPIFFE", "spiffe://hvac.local/telemetry-runtime-service"),
@@ -315,6 +331,7 @@ func buildAlarmOwnerRouter(store alarmservice.Store, gatewaySPIFFE string, gatew
 		GatewayHandler:       gatewayHandler,
 		TelemetryHandler:     telemetryHandler,
 		ControlEventsHandler: controlEventsHandler,
+		EdgeEventsHandler:    edgeEventsHandler,
 	})
 }
 

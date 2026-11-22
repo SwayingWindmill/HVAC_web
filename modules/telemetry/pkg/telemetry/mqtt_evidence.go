@@ -71,11 +71,17 @@ func (store *PostgresStore) acceptRuntimeEventOnce(ctx context.Context, evidence
 		"mqtt-gateway:"+evidence.TenantID+":"+evidence.GatewayID); err != nil {
 		return fmt.Errorf("lock gateway MQTT runtime event stream: %w", err)
 	}
+	var alarmDeliveryState, alarmAvailableAt any
+	if IsEdgeRuleAlarmEventType(evidence.EventType) {
+		alarmDeliveryState = "PENDING"
+		alarmAvailableAt = evidence.ReceivedAt.UTC()
+	}
 	tag, err := tx.Exec(ctx, `INSERT INTO telemetry_runtime.mqtt_runtime_events(
-message_id,tenant_id,site_id,gateway_id,event_type,source_type,source_id,event_time,severity,source_sequence,data,received_at,created_at)
-VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$12)
+message_id,tenant_id,site_id,gateway_id,event_type,source_type,source_id,event_time,severity,source_sequence,data,received_at,created_at,alarm_delivery_state,alarm_available_at)
+VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$12,$13,$14)
 ON CONFLICT (message_id) DO NOTHING`, evidence.MessageID, evidence.TenantID, evidence.SiteID, evidence.GatewayID,
-		evidence.EventType, evidence.SourceType, evidence.SourceID, evidence.EventTime, evidence.Severity, evidence.Sequence, evidence.Data, evidence.ReceivedAt)
+		evidence.EventType, evidence.SourceType, evidence.SourceID, evidence.EventTime, evidence.Severity, evidence.Sequence, evidence.Data, evidence.ReceivedAt,
+		alarmDeliveryState, alarmAvailableAt)
 	if err != nil {
 		return fmt.Errorf("persist MQTT runtime event: %w", err)
 	}
@@ -334,6 +340,20 @@ var (
 	lifecycleDisconnectEventTypes = []string{"GATEWAY_DISCONNECTED", "DEVICE_DISCONNECTED", "DISCONNECTED", "DISCONNECT", "OFFLINE", "SESSION_DISCONNECTED", "LWT", "LAST_WILL", "EXPLICIT_DISCONNECT"}
 	allLifecycleEventTypes        = append(slices.Clone(lifecycleConnectEventTypes), lifecycleDisconnectEventTypes...)
 )
+
+// IsEdgeRuleAlarmEventType reports whether an MQTT runtime event represents an
+// edge rule alarm transition that must be asynchronously projected into alarm_runtime.
+func IsEdgeRuleAlarmEventType(eventType string) bool {
+	switch strings.ToUpper(strings.TrimSpace(eventType)) {
+	case "EDGE_RULE_ALARM_RAISED",
+		"EDGE_RULE_ALARM_CLEARED",
+		"EDGE_RULE_EDGE_RULE_ALARM_RAISED",
+		"EDGE_RULE_EDGE_RULE_ALARM_CLEARED":
+		return true
+	default:
+		return false
+	}
+}
 
 func isLWTEventType(eventType string) bool {
 	switch strings.ToUpper(strings.TrimSpace(eventType)) {

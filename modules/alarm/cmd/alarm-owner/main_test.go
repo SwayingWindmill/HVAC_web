@@ -53,6 +53,9 @@ func TestBuildAlarmOwnerRouterWiresControlEventsEndpoint(t *testing.T) {
 	if got := alarmObservabilityRoute(httptest.NewRequest(http.MethodPost, alarmservice.InternalControlEventsPath, nil)); got != "alarms.publish_control_event" {
 		t.Fatalf("route=%q want alarms.publish_control_event", got)
 	}
+	if got := alarmObservabilityRoute(httptest.NewRequest(http.MethodPost, alarmservice.InternalEdgeAlarmEventsPath, nil)); got != "alarms.ingest_edge_event" {
+		t.Fatalf("route=%q want alarms.ingest_edge_event", got)
+	}
 	if got := alarmObservabilityRoute(httptest.NewRequest(http.MethodGet, alarmservice.InternalSiteAlarmsPrefix+"018f3e00-1000-7000-8000-000000000001/alarm-rules", nil)); got != "alarms.rules" {
 		t.Fatalf("route=%q want alarms.rules", got)
 	}

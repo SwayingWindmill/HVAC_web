@@ -306,6 +306,7 @@ func (store *PostgresStore) cascadeDownstreamSiteRules(
 		return nil, err
 	}
 	snapshot.UpstreamRuleActive = upstreamActive
+	snapshot.ForceReevaluate = true
 	decisions := make([]EvaluationDecision, 0, len(downstream))
 	for _, rule := range downstream {
 		decision, err := store.EvaluateAssignedSnapshot(ctx, rule.AssignmentID, snapshot, now.UTC())
@@ -403,7 +404,11 @@ ORDER BY current.site_id, current.assignment_id`, tenantID)
 				}
 			}
 		}
+		delegated := store.resolveEdgeDelegatedRules(ctx, tenantID, siteID, rules)
 		for _, assignmentID := range orderedAssignments {
+			if delegated[assignmentID] {
+				continue
+			}
 			decision, err := store.EvaluateAssignedSnapshot(ctx, assignmentID, snapshot, now.UTC())
 			if errors.Is(err, ErrRuleRetired) {
 				delete(upstreamActive, assignmentID)

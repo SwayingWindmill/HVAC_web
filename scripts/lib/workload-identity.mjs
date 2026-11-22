@@ -3,14 +3,15 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'no
 import path from 'node:path';
 
 // Internal CA mTLS workload identity; re-issues automatically if extensions change (#612).
-export function ensureWorkloadIdentity(pki, name, spiffeId, dns) {
+export function ensureWorkloadIdentity(pki, name, spiffeId, dns, extraSans = []) {
   const identity = path.join(pki, name);
   const file = (entry) => path.join(identity, entry);
+  const sans = [`URI:${spiffeId}`, ...(dns ? [`DNS:${dns}`] : []), ...extraSans];
   const extensions = [
     'basicConstraints=critical,CA:FALSE',
     'keyUsage=critical,digitalSignature',
     dns ? 'extendedKeyUsage=serverAuth,clientAuth' : 'extendedKeyUsage=clientAuth',
-    dns ? `subjectAltName=URI:${spiffeId},DNS:${dns}` : `subjectAltName=URI:${spiffeId}`,
+    `subjectAltName=${sans.join(',')}`,
     '',
   ].join('\n');
   if (existsSync(file('tls.crt')) && existsSync(file('extensions.cnf')) && readFileSync(file('extensions.cnf'), 'utf8') === extensions) {
@@ -44,5 +45,6 @@ export const workloadIdentities = Object.freeze([
   { name: 'forecast', spiffeId: 'spiffe://hvac.local/forecast-service', dns: 'forecast-service' },
   { name: 'optimization', spiffeId: 'spiffe://hvac.local/optimization-service', dns: 'optimization-service' },
   { name: 'mv', spiffeId: 'spiffe://hvac.local/mv-service', dns: 'mv-service' },
+  { name: 'alarm', spiffeId: 'spiffe://hvac.local/alarm-service', dns: 'alarm-service', extraSans: ['DNS:localhost', 'IP:127.0.0.1'] },
   { name: 'host-edge-proxy', spiffeId: 'spiffe://hvac.local/host-edge-proxy' },
 ]);

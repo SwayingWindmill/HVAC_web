@@ -110,8 +110,12 @@ func (store *PostgresStore) EvaluateTelemetrySnapshot(ctx context.Context, event
 		return nil, err
 	}
 	evaluationSnapshot.UpstreamRuleActive = upstreamActive
+	delegated := store.resolveEdgeDelegatedRules(ctx, string(snapshot.TenantId), string(snapshot.SiteId), relevant)
 	decisions := make([]EvaluationDecision, 0, len(relevant))
 	for _, rule := range relevant {
+		if delegated[rule.AssignmentID] {
+			continue
+		}
 		decision, err := store.EvaluateAssignedSnapshot(ctx, rule.AssignmentID, evaluationSnapshot, now.UTC())
 		if errors.Is(err, ErrRuleRetired) {
 			delete(upstreamActive, rule.AssignmentID)

@@ -170,6 +170,7 @@ func NewCredentialHandlerWithOTA(service *CredentialService, authorize Credentia
 		mux.Handle("GET /internal/v1/gateways/{gatewayId}/config-shadow", configShadowHandler)
 		mux.Handle("PUT /internal/v1/gateways/{gatewayId}/config-shadow", configShadowHandler)
 		mux.Handle("POST /internal/v1/gateways/{gatewayId}/config-shadow:upsert-template-driver", configShadowHandler)
+		mux.Handle("GET /internal/v1/sites/{siteId}/edge-rule-sync-status", configShadowHandler)
 	}
 	if diagnosticsHandler != nil {
 		mux.Handle("GET /internal/v1/gateways/{gatewayId}/quarantine", diagnosticsHandler)

@@ -449,6 +449,18 @@ func runTelemetryWorker() int {
 		})
 	}
 
+	edgeAlarmRelay, edgeAlarmPollInterval, edgeAlarmContext, edgeAlarmCancel, err := loadEdgeAlarmEventRelay(store, certificate, observabilityRuntime.Metrics)
+	if err != nil {
+		logger.Error("telemetry_edge_alarm_relay_configuration_invalid", "error_code", "TELEMETRY_EDGE_ALARM_RELAY_CONFIGURATION_INVALID")
+		return 1
+	}
+	if edgeAlarmCancel != nil {
+		workerCancels = append(workerCancels, edgeAlarmCancel)
+		runSupervised(edgeAlarmContext, &workersWG, observabilityRuntime, logger, "telemetry.edge_alarm_event_relay", func() {
+			runEdgeAlarmEventRelay(edgeAlarmContext, edgeAlarmRelay, edgeAlarmPollInterval, logger)
+		})
+	}
+
 	var drainTargets telemetryRelayDrainTargets
 	if latestRelay != nil {
 		drainTargets.LatestCache = latestRelay
@@ -458,6 +470,9 @@ func runTelemetryWorker() int {
 	}
 	if alarmRelay != nil {
 		drainTargets.Alarm = alarmRelay
+	}
+	if edgeAlarmRelay != nil {
+		drainTargets.EdgeAlarm = edgeAlarmRelay
 	}
 	if historyRelay != nil {
 		drainTargets.History = historyRelay
@@ -1222,6 +1237,7 @@ type telemetryRelayDrainTargets struct {
 	LatestCache telemetryRelayBatchDrainer
 	Realtime    telemetryRelayBatchDrainer
 	Alarm       telemetryRelayBatchDrainer
+	EdgeAlarm   telemetryRelayBatchDrainer
 	History     telemetryHistoryRelayDrainer
 }
 
@@ -1252,6 +1268,7 @@ func drainTelemetryRelays(ctx context.Context, targets telemetryRelayDrainTarget
 	drainBatchRelay(ctx, targets.LatestCache, "telemetry_latest_cache_shutdown_drain_failed", "TELEMETRY_LATEST_CACHE_DRAIN_FAILED", logger)
 	drainBatchRelay(ctx, targets.Realtime, "telemetry_realtime_shutdown_drain_failed", "TELEMETRY_REALTIME_DRAIN_FAILED", logger)
 	drainBatchRelay(ctx, targets.Alarm, "telemetry_alarm_shutdown_drain_failed", "TELEMETRY_ALARM_DRAIN_FAILED", logger)
+	drainBatchRelay(ctx, targets.EdgeAlarm, "telemetry_edge_alarm_shutdown_drain_failed", "TELEMETRY_EDGE_ALARM_DRAIN_FAILED", logger)
 	if targets.History != nil {
 		for pass := 0; pass < shutdownDrainMaxPasses && ctx.Err() == nil; pass++ {
 			published, err := targets.History.RelayOnce(ctx)
@@ -1482,25 +1499,36 @@ func runRevocationRelay(ctx context.Context, relay *telemetry.RevocationRelay, l
 	}
 }
 
-func loadAlarmEvaluationRelay(store *telemetry.PostgresStore, certificate tls.Certificate, metrics *observability.Registry) (*telemetry.AlarmEvaluationRelay, time.Duration, context.Context, context.CancelFunc, error) {
+type alarmRelayRuntimeSettings struct {
+	alarmEvalURL    string
+	httpClient      *http.Client
+	leaseDuration   time.Duration
+	retryDelay      time.Duration
+	maxAttempts     int
+	pollInterval    time.Duration
+	deliveryTimeout time.Duration
+	workerID        string
+}
+
+func loadAlarmRelayRuntimeSettings(certificate tls.Certificate) (alarmRelayRuntimeSettings, bool, error) {
 	if !strings.EqualFold(strings.TrimSpace(os.Getenv("TELEMETRY_ALARM_EVALUATION_ENABLED")), "true") {
-		return nil, 0, context.Background(), nil, nil
+		return alarmRelayRuntimeSettings{}, false, nil
 	}
 	alarmCAPath, err := requiredEnv("TELEMETRY_ALARM_CA")
 	if err != nil {
-		return nil, 0, nil, nil, err
+		return alarmRelayRuntimeSettings{}, false, err
 	}
 	alarmCAs, err := loadCertPool(alarmCAPath)
 	if err != nil {
-		return nil, 0, nil, nil, err
+		return alarmRelayRuntimeSettings{}, false, err
 	}
 	deliveryTimeout, err := durationEnv("TELEMETRY_ALARM_RELAY_DELIVERY_TIMEOUT", telemetry.DefaultAlarmEvaluationDeliveryTimeout, 100*time.Millisecond, time.Minute)
 	if err != nil {
-		return nil, 0, nil, nil, err
+		return alarmRelayRuntimeSettings{}, false, err
 	}
 	alarmEvalURL, err := requiredEnv("TELEMETRY_ALARM_EVALUATION_URL")
 	if err != nil {
-		return nil, 0, nil, nil, err
+		return alarmRelayRuntimeSettings{}, false, err
 	}
 	client := &http.Client{
 		Timeout:       deliveryTimeout,
@@ -1510,52 +1538,123 @@ func loadAlarmEvaluationRelay(store *telemetry.PostgresStore, certificate tls.Ce
 			ServerName: strings.TrimSpace(os.Getenv("TELEMETRY_ALARM_SERVER_NAME")),
 		}, true, false, deliveryTimeout),
 	}
-	transport, err := telemetry.NewHTTPAlarmEvaluationTransport(telemetry.HTTPAlarmEvaluationTransportConfig{
-		Endpoint: alarmEvalURL, HTTPClient: client,
-	})
-	if err != nil {
-		return nil, 0, nil, nil, err
-	}
 	leaseDuration, err := durationEnv("TELEMETRY_ALARM_RELAY_LEASE_DURATION", 30*time.Second, 5*time.Second, 5*time.Minute)
 	if err != nil {
-		return nil, 0, nil, nil, err
+		return alarmRelayRuntimeSettings{}, false, err
 	}
 	retryDelay, err := durationEnv("TELEMETRY_ALARM_RELAY_RETRY_DELAY", 5*time.Second, time.Second, time.Hour)
 	if err != nil {
-		return nil, 0, nil, nil, err
+		return alarmRelayRuntimeSettings{}, false, err
 	}
 	maxAttempts, err := integerEnv("TELEMETRY_ALARM_RELAY_MAX_ATTEMPTS", telemetry.DefaultAlarmEvaluationMaxAttempts, 1, 1000)
 	if err != nil {
-		return nil, 0, nil, nil, err
+		return alarmRelayRuntimeSettings{}, false, err
 	}
 	pollInterval, err := durationEnv("TELEMETRY_ALARM_RELAY_POLL_INTERVAL", 100*time.Millisecond, 25*time.Millisecond, time.Minute)
 	if err != nil {
-		return nil, 0, nil, nil, err
+		return alarmRelayRuntimeSettings{}, false, err
 	}
 	workerID := strings.TrimSpace(os.Getenv("TELEMETRY_ALARM_RELAY_WORKER_ID"))
 	if workerID == "" {
 		hostname, _ := os.Hostname()
 		workerID = "telemetry-alarm:" + hostname
 	}
+	return alarmRelayRuntimeSettings{
+		alarmEvalURL:    alarmEvalURL,
+		httpClient:      client,
+		leaseDuration:   leaseDuration,
+		retryDelay:      retryDelay,
+		maxAttempts:     maxAttempts,
+		pollInterval:    pollInterval,
+		deliveryTimeout: deliveryTimeout,
+		workerID:        workerID,
+	}, true, nil
+}
+
+func loadAlarmEvaluationRelay(store *telemetry.PostgresStore, certificate tls.Certificate, metrics *observability.Registry) (*telemetry.AlarmEvaluationRelay, time.Duration, context.Context, context.CancelFunc, error) {
+	settings, enabled, err := loadAlarmRelayRuntimeSettings(certificate)
+	if err != nil || !enabled {
+		return nil, 0, context.Background(), nil, err
+	}
+	transport, err := telemetry.NewHTTPAlarmEvaluationTransport(telemetry.HTTPAlarmEvaluationTransportConfig{
+		Endpoint: settings.alarmEvalURL, HTTPClient: settings.httpClient,
+	})
+	if err != nil {
+		return nil, 0, nil, nil, err
+	}
 	relay, err := telemetry.NewAlarmEvaluationRelay(telemetry.AlarmEvaluationRelayConfig{
 		Repository:      store,
 		Transport:       transport,
 		Metrics:         metrics,
-		WorkerID:        workerID,
-		LeaseDuration:   leaseDuration,
-		RetryDelay:      retryDelay,
-		MaxAttempts:     maxAttempts,
-		DeliveryTimeout: deliveryTimeout,
+		WorkerID:        settings.workerID,
+		LeaseDuration:   settings.leaseDuration,
+		RetryDelay:      settings.retryDelay,
+		MaxAttempts:     settings.maxAttempts,
+		DeliveryTimeout: settings.deliveryTimeout,
 	})
 	if err != nil {
 		return nil, 0, nil, nil, err
 	}
 	relayContext, relayCancel := context.WithCancel(context.Background())
-	return relay, pollInterval, relayContext, relayCancel, nil
+	return relay, settings.pollInterval, relayContext, relayCancel, nil
+}
+
+func loadEdgeAlarmEventRelay(store *telemetry.PostgresStore, certificate tls.Certificate, metrics *observability.Registry) (*telemetry.EdgeAlarmEventRelay, time.Duration, context.Context, context.CancelFunc, error) {
+	settings, enabled, err := loadAlarmRelayRuntimeSettings(certificate)
+	if err != nil || !enabled {
+		return nil, 0, context.Background(), nil, err
+	}
+	edgeEndpoint, err := telemetry.DeriveEdgeAlarmEventsURL(settings.alarmEvalURL, os.Getenv("TELEMETRY_ALARM_EDGE_EVENTS_URL"))
+	if err != nil {
+		return nil, 0, nil, nil, err
+	}
+	transport, err := telemetry.NewHTTPEdgeAlarmEventTransport(telemetry.HTTPEdgeAlarmEventTransportConfig{
+		Endpoint: edgeEndpoint, HTTPClient: settings.httpClient,
+	})
+	if err != nil {
+		return nil, 0, nil, nil, err
+	}
+	relay, err := telemetry.NewEdgeAlarmEventRelay(telemetry.EdgeAlarmEventRelayConfig{
+		Repository:      store,
+		Transport:       transport,
+		Metrics:         metrics,
+		WorkerID:        "edge-" + settings.workerID,
+		LeaseDuration:   settings.leaseDuration,
+		RetryDelay:      settings.retryDelay,
+		MaxAttempts:     settings.maxAttempts,
+		DeliveryTimeout: settings.deliveryTimeout,
+	})
+	if err != nil {
+		return nil, 0, nil, nil, err
+	}
+	relayContext, relayCancel := context.WithCancel(context.Background())
+	return relay, settings.pollInterval, relayContext, relayCancel, nil
 }
 
 func runAlarmEvaluationRelay(ctx context.Context, relay *telemetry.AlarmEvaluationRelay, pollInterval time.Duration, logger *slog.Logger) {
-	if relay == nil {
+	runBatchAlarmRelayLoop(ctx, relay, pollInterval, logger,
+		"telemetry_alarm_evaluation_relay_started",
+		"telemetry_alarm_evaluation_relay_failed", "TELEMETRY_ALARM_EVALUATION_RELAY_FAILED",
+		"telemetry_alarm_evaluation_batch_delivered", "publication_count",
+	)
+}
+
+func runEdgeAlarmEventRelay(ctx context.Context, relay *telemetry.EdgeAlarmEventRelay, pollInterval time.Duration, logger *slog.Logger) {
+	runBatchAlarmRelayLoop(ctx, relay, pollInterval, logger,
+		"telemetry_edge_alarm_event_relay_started",
+		"telemetry_edge_alarm_event_relay_failed", "TELEMETRY_EDGE_ALARM_EVENT_RELAY_FAILED",
+		"telemetry_edge_alarm_event_batch_delivered", "event_count",
+	)
+}
+
+func runBatchAlarmRelayLoop(
+	ctx context.Context,
+	drainer telemetryRelayBatchDrainer,
+	pollInterval time.Duration,
+	logger *slog.Logger,
+	startEvent, failEvent, failCode, deliveredEvent, countField string,
+) {
+	if drainer == nil {
 		return
 	}
 	if pollInterval <= 0 {
@@ -1564,24 +1663,24 @@ func runAlarmEvaluationRelay(ctx context.Context, relay *telemetry.AlarmEvaluati
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 	lastFailureLog := time.Time{}
-	logger.Info("telemetry_alarm_evaluation_relay_started", "poll_interval", pollInterval.String())
+	logger.Info(startEvent, "poll_interval", pollInterval.String())
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			relayContext, cancel := context.WithTimeout(ctx, 30*time.Second)
-			delivered, err := relay.RelayOnce(relayContext, 64)
+			delivered, err := drainer.RelayOnce(relayContext, 64)
 			cancel()
 			if err != nil {
 				if time.Since(lastFailureLog) >= time.Second {
-					logger.Warn("telemetry_alarm_evaluation_relay_failed", "error_code", "TELEMETRY_ALARM_EVALUATION_RELAY_FAILED")
+					logger.Warn(failEvent, "error_code", failCode)
 					lastFailureLog = time.Now()
 				}
 				continue
 			}
 			if delivered > 0 {
-				logger.Debug("telemetry_alarm_evaluation_batch_delivered", "publication_count", delivered)
+				logger.Debug(deliveredEvent, countField, delivered)
 			}
 		}
 	}

@@ -158,6 +158,7 @@ COPY infra/telemetry/postgres/init/telemetry-accepted-point-sample-index.sql /op
 
 FROM scratch AS sources-3
 
+COPY infra/telemetry/postgres/init/telemetry-edge-alarm-delivery.sql /opt/hvac/repo/infra/telemetry/postgres/init/telemetry-edge-alarm-delivery.sql
 COPY modules/command/migrations/001_s3_command_runtime.sql /opt/hvac/repo/modules/command/migrations/001_s3_command_runtime.sql
 COPY modules/command/migrations/002_s3_target_runtime.sql /opt/hvac/repo/modules/command/migrations/002_s3_target_runtime.sql
 COPY modules/command/migrations/003_s3_tenant_scope.sql /opt/hvac/repo/modules/command/migrations/003_s3_tenant_scope.sql
@@ -194,6 +195,7 @@ COPY modules/alarm/migrations/alarm-suppression-notification-events.sql /opt/hva
 COPY modules/alarm/migrations/alarm-evaluation-slope-window.sql /opt/hvac/repo/modules/alarm/migrations/alarm-evaluation-slope-window.sql
 COPY modules/alarm/migrations/alarm-rule-action-outbox.sql /opt/hvac/repo/modules/alarm/migrations/alarm-rule-action-outbox.sql
 COPY modules/alarm/migrations/alarm-site-rule-bundles.sql /opt/hvac/repo/modules/alarm/migrations/alarm-site-rule-bundles.sql
+COPY modules/alarm/migrations/alarm-edge-event-projection.sql /opt/hvac/repo/modules/alarm/migrations/alarm-edge-event-projection.sql
 COPY modules/workorder/migrations/001_s5_work_order_runtime.sql /opt/hvac/repo/modules/workorder/migrations/001_s5_work_order_runtime.sql
 COPY modules/workorder/migrations/002_s5_work_order_create_assignment.sql /opt/hvac/repo/modules/workorder/migrations/002_s5_work_order_create_assignment.sql
 COPY modules/workorder/migrations/003_s5_work_order_lifecycle.sql /opt/hvac/repo/modules/workorder/migrations/003_s5_work_order_lifecycle.sql

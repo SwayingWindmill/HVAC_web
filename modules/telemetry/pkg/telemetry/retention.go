@@ -108,6 +108,7 @@ WHERE message_id IN (
   SELECT message_id
   FROM telemetry_runtime.mqtt_runtime_events
   WHERE received_at < $1
+    AND (alarm_delivery_state IS NULL OR alarm_delivery_state <> 'PENDING')
   LIMIT $2
 )`
 	pruneIngestQuarantinesSQL = `

@@ -687,3 +687,126 @@ func TestConfigShadowPostgresRLSConcurrencyAndDrift(t *testing.T) {
 		}
 	}
 }
+
+func TestPostgresConfigShadowSiteEdgeRuleSyncStatus(t *testing.T) {
+	adminDSN, runtimeDSN := os.Getenv("CONNECTIVITY_ADMIN_DSN"), os.Getenv("CONNECTIVITY_POSTGRES_DSN")
+	if adminDSN == "" || runtimeDSN == "" {
+		t.Skip("CONNECTIVITY_ADMIN_DSN and CONNECTIVITY_POSTGRES_DSN required")
+	}
+	ctx := context.Background()
+	admin, err := pgxpool.New(ctx, adminDSN)
+	if err != nil {
+		t.Fatalf("open admin pool: %v", err)
+	}
+	defer admin.Close()
+
+	const tenantA = "0194f000-1000-7000-8000-000000000021"
+	const tenantB = "0194f000-1000-7000-8000-000000000022"
+	const siteA = "0194f000-2000-7000-8000-000000000021"
+	const gatewayA = "0194f000-3000-7000-8000-000000000021"
+	const actorA = "0194f000-4000-7000-8000-000000000021"
+
+	cleanup := func() {
+		for _, table := range []string{"gateway_reported_configs", "gateway_desired_configs", "gateway_enrollments", "gateway_credentials"} {
+			_, _ = admin.Exec(ctx, "DELETE FROM connectivity."+table+" WHERE gateway_id = $1::uuid", gatewayA)
+		}
+		_, _ = admin.Exec(ctx, "DELETE FROM core_registry.devices WHERE id = $1::uuid", gatewayA)
+		_, _ = admin.Exec(ctx, "DELETE FROM core_registry.sites WHERE id = $1::uuid", siteA)
+		_, _ = admin.Exec(ctx, "DELETE FROM iam.tenants WHERE id IN ($1::uuid, $2::uuid)", tenantA, tenantB)
+	}
+	cleanup()
+	t.Cleanup(cleanup)
+
+	for _, step := range []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO iam.tenants(id,code,display_name,timezone,currency,country,status,revision,created_at,updated_at) VALUES($1,'edge-sync-a','Edge Sync A','UTC','USD','US','ACTIVE',1,now(),now())`, []any{tenantA}},
+		{`INSERT INTO iam.tenants(id,code,display_name,timezone,currency,country,status,revision,created_at,updated_at) VALUES($1,'edge-sync-b','Edge Sync B','UTC','USD','US','ACTIVE',1,now(),now())`, []any{tenantB}},
+		{`INSERT INTO core_registry.sites(id,tenant_id,code,display_name,timezone,status,revision,created_at,updated_at) VALUES($2,$1,'edge-site-a','Edge Site A','UTC','ACTIVE',1,now(),now())`, []any{tenantA, siteA}},
+		{`INSERT INTO core_registry.devices(id,tenant_id,site_id,code,display_name,device_type,status,revision,created_at,updated_at) VALUES($3,$1,$2,'edge-gw-a','Edge GW A','GATEWAY','ACTIVE',1,now(),now())`, []any{tenantA, siteA, gatewayA}},
+	} {
+		if _, err := admin.Exec(ctx, step.sql, step.args...); err != nil {
+			t.Fatalf("seed %s: %v", step.sql, err)
+		}
+	}
+
+	store, err := connectivity.Open(ctx, runtimeDSN)
+	if err != nil {
+		t.Fatalf("open runtime store: %v", err)
+	}
+	defer store.Close()
+
+	claimsA := registryauth.GrantClaims{TenantID: tenantA, PrincipalID: actorA, AllowedSiteIDs: []string{siteA}}
+	trig, rst := 45.0, 43.0
+	bundle := &edgecontrol.EdgeRuleBundle{
+		SchemaVersion:  edgecontrol.EdgeRuleSchemaVersion,
+		SiteID:         siteA,
+		BundleRevision: 5,
+		BundleDigest:   strings.Repeat("b", 64),
+		CompiledAt:     "2026-11-22T00:00:00Z",
+		Rules: []edgecontrol.CompiledEdgeRule{
+			{
+				RuleID: "0194f000-4000-7000-8000-000000000101", AlarmType: "TEMP_HIGH", Title: "High Temp Edge Only",
+				Severity: "CRITICAL", ExecutionTarget: edgecontrol.EdgeTargetEdge, QualityPolicy: edgecontrol.EdgeQualityValidOnly,
+				FreshnessSeconds: 30, TriggerMode: edgecontrol.EdgeTriggerSimple,
+				Raise: edgecontrol.EdgeCondition{Kind: edgecontrol.EdgeConditionHysteresis, Input: "0194f000-5000-7000-8000-000000000001/temp", Direction: edgecontrol.EdgeDirectionAbove, Trigger: &trig, Reset: &rst},
+				Clear: edgecontrol.EdgeCondition{Kind: edgecontrol.EdgeConditionCompare, Input: "0194f000-5000-7000-8000-000000000001/temp", Operator: edgecontrol.EdgeCompareLTE, Value: &edgecontrol.EdgeTypedValue{Type: edgecontrol.EdgeValueNumber, Number: 43}},
+			},
+			{
+				RuleID: "0194f000-4000-7000-8000-000000000102", AlarmType: "TEMP_WARN", Title: "Temp Both",
+				Severity: "MINOR", ExecutionTarget: edgecontrol.EdgeTargetCloudAndEdge, QualityPolicy: edgecontrol.EdgeQualityValidOnly,
+				FreshnessSeconds: 30, TriggerMode: edgecontrol.EdgeTriggerSimple,
+				Raise: edgecontrol.EdgeCondition{Kind: edgecontrol.EdgeConditionHysteresis, Input: "0194f000-5000-7000-8000-000000000001/temp", Direction: edgecontrol.EdgeDirectionAbove, Trigger: &trig, Reset: &rst},
+				Clear: edgecontrol.EdgeCondition{Kind: edgecontrol.EdgeConditionCompare, Input: "0194f000-5000-7000-8000-000000000001/temp", Operator: edgecontrol.EdgeCompareLTE, Value: &edgecontrol.EdgeTypedValue{Type: edgecontrol.EdgeValueNumber, Number: 43}},
+			},
+		},
+	}
+	dig, err := bundle.ComputeDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle.EdgeBundleDigest = dig
+
+	revZero := int64(0)
+	if _, err := store.UpdateGatewayDesiredConfig(ctx, claimsA, gatewayA, connectivity.UpdateDesiredConfigInput{
+		ExpectedDesiredRevision: &revZero,
+		EdgeRuleBundle:          connectivity.OptionalEdgeRuleBundle{Set: true, Value: bundle},
+		Reason:                  "seed desired edge bundle",
+	}); err != nil {
+		t.Fatalf("UpdateGatewayDesiredConfig: %v", err)
+	}
+
+	beforeReport, err := store.GetSiteEdgeRuleSyncStatus(ctx, tenantA, siteA, func(string) bool { return true })
+	if err != nil || len(beforeReport.Gateways) != 1 || beforeReport.Gateways[0].EdgeRulesSynced {
+		t.Fatalf("expected EdgeRulesSynced=false before report, got %+v err=%v", beforeReport, err)
+	}
+
+	if _, err := store.ReportGatewayAppliedConfig(ctx, gatewayA, connectivity.GatewayShadowReportInput{
+		ReportedRevision:    1,
+		AppliedStatus:       connectivity.AppliedStatusApplied,
+		PointMappings:       []connectivity.GatewayPointMapping{},
+		SamplingPolicies:    []connectivity.GatewaySamplingPolicy{},
+		ConcentratorConfigs: map[string]connectivity.ConcentratorUnitShadow{},
+		EdgeRuleBundle:      bundle.Clone(),
+	}); err != nil {
+		t.Fatalf("ReportGatewayAppliedConfig: %v", err)
+	}
+
+	afterReport, err := store.GetSiteEdgeRuleSyncStatus(ctx, tenantA, siteA, func(gw string) bool { return gw == gatewayA })
+	if err != nil || len(afterReport.Gateways) != 1 {
+		t.Fatalf("GetSiteEdgeRuleSyncStatus: %+v err=%v", afterReport, err)
+	}
+	gw := afterReport.Gateways[0]
+	if !gw.Online || !gw.EdgeRulesSynced || gw.DesiredBundleRevision != 5 || gw.ReportedBundleRevision != 5 {
+		t.Fatalf("unexpected synced gateway summary: %+v", gw)
+	}
+	if !slices.Equal(gw.ReportedEdgeOnlyRuleIDs, []string{"0194f000-4000-7000-8000-000000000101"}) {
+		t.Fatalf("ReportedEdgeOnlyRuleIDs=%v", gw.ReportedEdgeOnlyRuleIDs)
+	}
+
+	crossTenant, err := store.GetSiteEdgeRuleSyncStatus(ctx, tenantB, siteA, nil)
+	if err != nil || len(crossTenant.Gateways) != 0 {
+		t.Fatalf("cross-tenant lookup leaked gateways: %+v err=%v", crossTenant, err)
+	}
+}

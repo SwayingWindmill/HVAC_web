@@ -32,6 +32,12 @@ type TemplateDriverShadowUpserter interface {
 	UpsertGatewayTemplateDriverConfig(ctx context.Context, gatewayID string, input TemplateDriverUpsertInput) (TemplateDriverUpsertResult, error)
 }
 
+// SiteEdgeRuleSyncStatusStore exposes read-only edge rule bundle convergence per Site
+// for cloud-edge dedup coordination in alarm-service.
+type SiteEdgeRuleSyncStatusStore interface {
+	GetSiteEdgeRuleSyncStatus(ctx context.Context, tenantID, siteID string, isGatewayOnline func(string) bool) (SiteEdgeRuleSyncStatus, error)
+}
+
 func NewConfigShadowHandler(
 	store ConfigShadowStore,
 	credentials GatewayPeerVerifier,
@@ -47,6 +53,17 @@ func NewConfigShadowHandlerWithPresence(
 	authorize CredentialAuthorizer,
 	onDesiredUpdated func(gatewayID string),
 	onGatewaySeen func(gatewayID string),
+) http.Handler {
+	return NewConfigShadowHandlerWithRuntimePresence(store, credentials, authorize, onDesiredUpdated, onGatewaySeen, nil)
+}
+
+func NewConfigShadowHandlerWithRuntimePresence(
+	store ConfigShadowStore,
+	credentials GatewayPeerVerifier,
+	authorize CredentialAuthorizer,
+	onDesiredUpdated func(gatewayID string),
+	onGatewaySeen func(gatewayID string),
+	isGatewayOnline func(gatewayID string) bool,
 ) http.Handler {
 	mux := http.NewServeMux()
 
@@ -190,15 +207,37 @@ func NewConfigShadowHandlerWithPresence(
 		writeShadowJSONResult(w, shadow, err)
 	})
 
+	mux.HandleFunc("GET /internal/v1/sites/{siteId}/edge-rule-sync-status", func(w http.ResponseWriter, r *http.Request) {
+		if !isAlarmServiceClientCert(r) {
+			writeShadowErrorJSON(w, http.StatusForbidden, "CREDENTIAL_FORBIDDEN", "alarm workload certificate required")
+			return
+		}
+		siteStore, ok := store.(SiteEdgeRuleSyncStatusStore)
+		if store == nil || !ok {
+			writeShadowErrorJSON(w, http.StatusServiceUnavailable, "CONFIG_SHADOW_UNAVAILABLE", "site edge rule sync status store unavailable")
+			return
+		}
+		status, err := siteStore.GetSiteEdgeRuleSyncStatus(r.Context(), r.URL.Query().Get("tenantId"), r.PathValue("siteId"), isGatewayOnline)
+		writeShadowJSONResult(w, status, err)
+	})
+
 	return mux
 }
 
 func isCoreServiceClientCert(r *http.Request) bool {
+	return hasVerifiedWorkloadSPIFFE(r, "spiffe://hvac.local/platform-core-service")
+}
+
+func isAlarmServiceClientCert(r *http.Request) bool {
+	return hasVerifiedWorkloadSPIFFE(r, "spiffe://hvac.local/alarm-service")
+}
+
+func hasVerifiedWorkloadSPIFFE(r *http.Request, spiffeID string) bool {
 	if r == nil || r.TLS == nil || len(r.TLS.VerifiedChains) == 0 || len(r.TLS.VerifiedChains[0]) == 0 {
 		return false
 	}
 	for _, uri := range r.TLS.VerifiedChains[0][0].URIs {
-		if uri.String() == "spiffe://hvac.local/platform-core-service" {
+		if uri.String() == spiffeID {
 			return true
 		}
 	}
