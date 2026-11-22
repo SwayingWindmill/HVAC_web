@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -109,11 +110,18 @@ type RelayTelemetrySyncRequest struct {
 	RetiredPoints []RelayTelemetryRetirePt `json:"retiredPoints,omitempty"`
 }
 
+type RelayTelemetryPresencePolicy struct {
+	OnlineWithinSeconds int `json:"onlineWithinSeconds"`
+	SleepCycleSeconds   int `json:"sleepCycleSeconds"`
+	OfflineAfterSeconds int `json:"offlineAfterSeconds"`
+}
+
 type RelayTelemetryDevice struct {
-	DeviceID              string                `json:"deviceId"`
-	Status                string                `json:"status"`
-	PresenceApplicability string                `json:"presenceApplicability,omitempty"`
-	Points                []RelayTelemetryPoint `json:"points,omitempty"`
+	DeviceID              string                        `json:"deviceId"`
+	Status                string                        `json:"status"`
+	PresenceApplicability string                        `json:"presenceApplicability,omitempty"`
+	PresencePolicy        *RelayTelemetryPresencePolicy `json:"presencePolicy,omitempty"`
+	Points                []RelayTelemetryPoint         `json:"points,omitempty"`
 }
 
 type RelayTelemetryPoint struct {
@@ -866,7 +874,61 @@ func derivePresenceApplicability(deviceStatus string, hasOwnActiveNonCommand boo
 	return "APPLICABLE"
 }
 
-func loadDeviceSyncEntryInTx(ctx context.Context, tx pgx.Tx, tenantID, siteID, deviceID, status string) (RelayTelemetryDevice, error) {
+func parsePositiveIntTag(tags map[string]any, key string) (int, bool) {
+	raw, exists := tags[key]
+	if !exists || raw == nil {
+		return 0, false
+	}
+	switch v := raw.(type) {
+	case float64:
+		if v > 0 && v == float64(int(v)) {
+			return int(v), true
+		}
+	case string:
+		parsed, err := strconv.Atoi(strings.TrimSpace(v))
+		if err == nil && parsed > 0 {
+			return parsed, true
+		}
+	}
+	return 0, false
+}
+
+func derivePresencePolicyFromDeviceTags(tagsRaw []byte) *RelayTelemetryPresencePolicy {
+	trimmed := bytes.TrimSpace(tagsRaw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) || bytes.Equal(trimmed, []byte("{}")) {
+		return nil
+	}
+	var tags map[string]any
+	if err := json.Unmarshal(trimmed, &tags); err != nil {
+		return nil
+	}
+	sleepCycle, ok := parsePositiveIntTag(tags, "sleep_cycle_seconds")
+	if !ok || sleepCycle <= 1 || sleepCycle >= 604800 {
+		return nil
+	}
+	onlineWithin := min(120, sleepCycle)
+	if tagOnline, hasOnline := parsePositiveIntTag(tags, "online_within_seconds"); hasOnline {
+		onlineWithin = min(tagOnline, sleepCycle)
+	}
+	if onlineWithin < 1 {
+		onlineWithin = 1
+	}
+	wakeGrace := max(300, sleepCycle/5)
+	if tagGrace, hasGrace := parsePositiveIntTag(tags, "wake_grace_seconds"); hasGrace {
+		wakeGrace = tagGrace
+	}
+	offlineAfter := min(604800, sleepCycle+wakeGrace)
+	if offlineAfter <= sleepCycle {
+		return nil
+	}
+	return &RelayTelemetryPresencePolicy{
+		OnlineWithinSeconds: onlineWithin,
+		SleepCycleSeconds:   sleepCycle,
+		OfflineAfterSeconds: offlineAfter,
+	}
+}
+
+func loadDeviceSyncEntryInTx(ctx context.Context, tx pgx.Tx, tenantID, siteID, deviceID, status string, tagsRaw []byte) (RelayTelemetryDevice, error) {
 	points, hasOwnActiveNonCommand, err := queryDevicePointsInTx(ctx, tx, tenantID, siteID, deviceID)
 	if err != nil {
 		return RelayTelemetryDevice{}, err
@@ -875,6 +937,7 @@ func loadDeviceSyncEntryInTx(ctx context.Context, tx pgx.Tx, tenantID, siteID, d
 		DeviceID:              deviceID,
 		Status:                status,
 		PresenceApplicability: derivePresenceApplicability(status, hasOwnActiveNonCommand),
+		PresencePolicy:        derivePresencePolicyFromDeviceTags(tagsRaw),
 		Points:                points,
 	}, nil
 }
@@ -884,11 +947,12 @@ func (r *OutboxRelay) loadDeviceSyncRequest(ctx context.Context, tenantID, siteI
 	found := false
 	err := r.withTenantWriterTx(ctx, tenantID, pgx.ReadOnly, func(tx pgx.Tx) error {
 		var status string
+		var tagsRaw []byte
 		err := tx.QueryRow(ctx, `
-SELECT status
+SELECT status, COALESCE(tags, '{}'::jsonb)
 FROM core_registry.devices
 WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND id = $3::uuid
-`, tenantID, siteID, deviceID).Scan(&status)
+`, tenantID, siteID, deviceID).Scan(&status, &tagsRaw)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
 		}
@@ -896,7 +960,7 @@ WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND id = $3::uuid
 			return err
 		}
 		found = true
-		entry, err := loadDeviceSyncEntryInTx(ctx, tx, tenantID, siteID, deviceID, status)
+		entry, err := loadDeviceSyncEntryInTx(ctx, tx, tenantID, siteID, deviceID, status, tagsRaw)
 		if err != nil {
 			return err
 		}
@@ -910,7 +974,7 @@ func (r *OutboxRelay) loadSiteSyncRequest(ctx context.Context, tenantID, siteID 
 	req := RelayTelemetrySyncRequest{TenantID: tenantID, SiteID: siteID}
 	err := r.withTenantWriterTx(ctx, tenantID, pgx.ReadOnly, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
-SELECT id::text, status
+SELECT id::text, status, COALESCE(tags, '{}'::jsonb)
 FROM core_registry.devices
 WHERE tenant_id = $1::uuid AND site_id = $2::uuid
 ORDER BY id
@@ -921,11 +985,12 @@ ORDER BY id
 		type devRow struct {
 			id     string
 			status string
+			tags   []byte
 		}
 		var devs []devRow
 		for rows.Next() {
 			var d devRow
-			if scanErr := rows.Scan(&d.id, &d.status); scanErr != nil {
+			if scanErr := rows.Scan(&d.id, &d.status, &d.tags); scanErr != nil {
 				rows.Close()
 				return scanErr
 			}
@@ -936,7 +1001,7 @@ ORDER BY id
 			return err
 		}
 		for _, d := range devs {
-			entry, err := loadDeviceSyncEntryInTx(ctx, tx, tenantID, siteID, d.id, d.status)
+			entry, err := loadDeviceSyncEntryInTx(ctx, tx, tenantID, siteID, d.id, d.status, d.tags)
 			if err != nil {
 				return err
 			}

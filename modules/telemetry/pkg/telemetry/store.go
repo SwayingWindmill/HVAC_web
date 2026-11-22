@@ -328,17 +328,25 @@ WHERE device_id = $1::uuid
 	facts.Applicability = telemetryapi.PresenceApplicability(applicability)
 
 	var onlineWithin, offlineAfter int
+	var sleepCycleSeconds *int
 	var policyRevision int64
 	var acceptedSignalTypes []string
 	err = tx.QueryRow(ctx, `
-SELECT policy_revision, online_within_seconds, offline_after_seconds, accepted_signal_types
+SELECT policy_revision, online_within_seconds, sleep_cycle_seconds, offline_after_seconds, accepted_signal_types
 FROM telemetry_runtime.presence_policies
 WHERE device_id = $1::uuid
-`, deviceID).Scan(&policyRevision, &onlineWithin, &offlineAfter, &acceptedSignalTypes)
+`, deviceID).Scan(&policyRevision, &onlineWithin, &sleepCycleSeconds, &offlineAfter, &acceptedSignalTypes)
 	if err == nil {
+		var sleepCycle time.Duration
+		if sleepCycleSeconds != nil && *sleepCycleSeconds > 0 {
+			sleepCycle = time.Duration(*sleepCycleSeconds) * time.Second
+		}
 		facts.PresencePolicy = &PresencePolicy{
-			Revision: policyRevision, OnlineWithin: time.Duration(onlineWithin) * time.Second,
-			OfflineAfter: time.Duration(offlineAfter) * time.Second, AcceptedSignalTypes: append([]string(nil), acceptedSignalTypes...),
+			Revision:            policyRevision,
+			OnlineWithin:        time.Duration(onlineWithin) * time.Second,
+			SleepCycle:          sleepCycle,
+			OfflineAfter:        time.Duration(offlineAfter) * time.Second,
+			AcceptedSignalTypes: append([]string(nil), acceptedSignalTypes...),
 		}
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return DeviceFacts{}, fmt.Errorf("load telemetry presence policy: %w", err)

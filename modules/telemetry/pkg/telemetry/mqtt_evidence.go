@@ -337,8 +337,9 @@ RETURNING signal_id::text
 
 var (
 	lifecycleConnectEventTypes    = []string{"GATEWAY_CONNECTED", "DEVICE_CONNECTED", "CONNECTED", "CONNECT", "ONLINE", "SESSION_CONNECTED", "EXPLICIT_CONNECT"}
+	lifecycleSleepEventTypes      = []string{"EXPLICIT_SLEEP", "SLEEPING", "DEVICE_SLEEPING", "ENTER_SLEEP"}
 	lifecycleDisconnectEventTypes = []string{"GATEWAY_DISCONNECTED", "DEVICE_DISCONNECTED", "DISCONNECTED", "DISCONNECT", "OFFLINE", "SESSION_DISCONNECTED", "LWT", "LAST_WILL", "EXPLICIT_DISCONNECT"}
-	allLifecycleEventTypes        = append(slices.Clone(lifecycleConnectEventTypes), lifecycleDisconnectEventTypes...)
+	allLifecycleEventTypes        = append(append(slices.Clone(lifecycleConnectEventTypes), lifecycleSleepEventTypes...), lifecycleDisconnectEventTypes...)
 )
 
 // IsEdgeRuleAlarmEventType reports whether an MQTT runtime event represents an
@@ -411,6 +412,8 @@ func classifyPresenceSignalType(eventType string) (string, bool) {
 	switch strings.ToUpper(strings.TrimSpace(eventType)) {
 	case "EXPLICIT_CONNECT", "CONNECTED", "CONNECT", "GATEWAY_CONNECTED", "DEVICE_CONNECTED", "ONLINE", "SESSION_CONNECTED":
 		return "EXPLICIT_CONNECT", true
+	case "EXPLICIT_SLEEP", "SLEEPING", "DEVICE_SLEEPING", "ENTER_SLEEP":
+		return "EXPLICIT_SLEEP", true
 	case "EXPLICIT_DISCONNECT", "DISCONNECTED", "DISCONNECT", "GATEWAY_DISCONNECTED", "DEVICE_DISCONNECTED", "LWT", "LAST_WILL", "OFFLINE", "SESSION_DISCONNECTED":
 		return "EXPLICIT_DISCONNECT", true
 	default:

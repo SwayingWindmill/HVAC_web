@@ -53,6 +53,7 @@ export const CATEGORY_ICONS: Partial<Record<PlantCategory, typeof Snowflake>> = 
 
 export function deviceStatus(device: PlantDevice): { tone: StatusTone; label: string } {
   if (device.connection === 'OFFLINE') return { tone: 'offline', label: '离线' };
+  if (device.connection === 'SLEEPING') return { tone: 'neutral', label: '休眠中' };
   if (device.runState === 'FAULT') return { tone: 'alarm', label: device.faultCode ? `故障 ${device.faultCode}` : '故障' };
   if (device.runState === 'RUNNING') return { tone: 'running', label: '运行' };
   if (device.runState === 'STOPPED') return { tone: 'neutral', label: '停机' };

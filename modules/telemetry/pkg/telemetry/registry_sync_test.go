@@ -96,6 +96,50 @@ func TestTelemetryHandlerRegistrySyncAuthAndValidation(t *testing.T) {
 	if syncer.lastReq.TenantID != tenantID || len(syncer.lastReq.Devices) != 1 || len(syncer.lastReq.RetiredPoints) != 1 {
 		t.Fatalf("unexpected syncer request: %#v", syncer.lastReq)
 	}
+
+	// Invalid sleep-cycle PresencePolicy ranges are rejected with 400.
+	for _, badPolicy := range []RegistryPresencePolicySync{
+		{OnlineWithinSeconds: 0, SleepCycleSeconds: 300, OfflineAfterSeconds: 600},
+		{OnlineWithinSeconds: 120, SleepCycleSeconds: 60, OfflineAfterSeconds: 300},
+		{OnlineWithinSeconds: 60, SleepCycleSeconds: 300, OfflineAfterSeconds: 300},
+	} {
+		badBytes, marshalErr := json.Marshal(RegistrySyncRequest{
+			TenantID: tenantID,
+			SiteID:   siteID,
+			Devices: []RegistryDeviceSync{{
+				DeviceID:       deviceID,
+				Status:         "ACTIVE",
+				PresencePolicy: &badPolicy,
+			}},
+		})
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, registrySyncRequestWithSPIFFE(t, http.MethodPost, "spiffe://hvac.local/platform-core-service", string(badBytes)))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for invalid PresencePolicy %+v, got %d", badPolicy, rec.Code)
+		}
+	}
+
+	// Valid sleep-cycle PresencePolicy passes validation and reaches syncer.
+	goodSleepBytes, err := json.Marshal(RegistrySyncRequest{
+		TenantID: tenantID,
+		SiteID:   siteID,
+		Devices: []RegistryDeviceSync{{
+			DeviceID:       deviceID,
+			Status:         "ACTIVE",
+			PresencePolicy: &RegistryPresencePolicySync{OnlineWithinSeconds: 60, SleepCycleSeconds: 900, OfflineAfterSeconds: 1200},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sleepRec := httptest.NewRecorder()
+	h.ServeHTTP(sleepRec, registrySyncRequestWithSPIFFE(t, http.MethodPost, "spiffe://hvac.local/platform-core-service", string(goodSleepBytes)))
+	if sleepRec.Code != http.StatusOK || syncer.lastReq.Devices[0].PresencePolicy == nil || syncer.lastReq.Devices[0].PresencePolicy.SleepCycleSeconds != 900 {
+		t.Fatalf("valid PresencePolicy sync failed: code=%d policy=%#v", sleepRec.Code, syncer.lastReq.Devices[0].PresencePolicy)
+	}
 }
 
 func TestPostgresApplyRegistrySyncUpsertsPoliciesPreservesQualityAndRetiresDevice(t *testing.T) {
@@ -285,5 +329,102 @@ WHERE device_id = $1::uuid AND telemetry_key = 'chw.supply_temp'
 	}
 	if snapApplicability != "NOT_APPLICABLE" {
 		t.Fatalf("expected device_presence applicability NOT_APPLICABLE after snapshot eval, got %q", snapApplicability)
+	}
+}
+
+func TestPostgresApplyRegistrySyncSleepCyclePolicy(t *testing.T) {
+	runtimeURL := os.Getenv("S2_TELEMETRY_TEST_DATABASE_URL")
+	adminURL := os.Getenv("S2_TELEMETRY_ADMIN_DATABASE_URL")
+	if runtimeURL == "" || adminURL == "" {
+		t.Skip("S2_TELEMETRY_TEST_DATABASE_URL and S2_TELEMETRY_ADMIN_DATABASE_URL are required")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	admin, err := pgxpool.New(ctx, adminURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+
+	store, err := OpenPostgresStore(ctx, runtimeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	tenantID := "0193f300-1000-7000-8000-000000000002"
+	siteID := "0193f300-2000-7000-8000-000000000002"
+	deviceID := "0193f300-3000-7000-8000-000000000002"
+	pointID := "0193f300-4000-7000-8000-000000000009"
+
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		for _, q := range []string{
+			`DELETE FROM telemetry_runtime.telemetry_publication_outbox WHERE device_id = $1::uuid`,
+			`DELETE FROM telemetry_runtime.device_observation_snapshots WHERE device_id = $1::uuid`,
+			`DELETE FROM telemetry_runtime.device_presence WHERE device_id = $1::uuid`,
+			`DELETE FROM telemetry_runtime.presence_signals WHERE device_id = $1::uuid`,
+			`DELETE FROM telemetry_runtime.observation_coverage WHERE device_id = $1::uuid`,
+			`DELETE FROM telemetry_runtime.freshness_policies WHERE device_id = $1::uuid`,
+			`DELETE FROM telemetry_runtime.presence_policies WHERE device_id = $1::uuid`,
+			`DELETE FROM telemetry_runtime.devices WHERE device_id = $1::uuid`,
+		} {
+			_, _ = admin.Exec(cleanupCtx, q, deviceID)
+		}
+	})
+
+	if _, err := store.ApplyRegistrySync(ctx, RegistrySyncRequest{
+		TenantID: tenantID,
+		SiteID:   siteID,
+		Devices: []RegistryDeviceSync{{
+			DeviceID:       deviceID,
+			Status:         "ACTIVE",
+			PresencePolicy: &RegistryPresencePolicySync{OnlineWithinSeconds: 60, SleepCycleSeconds: 900, OfflineAfterSeconds: 1200},
+			Points: []RegistryPointSync{
+				{PointID: pointID, TelemetryKey: "valve_position", PointType: "TELEMETRY", ValueType: "NUMBER", Unit: "%", SampleIntervalSeconds: 900, FreshWithinSeconds: 1800, Status: "ACTIVE"},
+			},
+		}},
+	}); err != nil {
+		t.Fatalf("sleep-cycle ApplyRegistrySync: %v", err)
+	}
+
+	var sleepSec *int
+	var hasExplicitSleep bool
+	if err := admin.QueryRow(ctx, `
+SELECT sleep_cycle_seconds, ('EXPLICIT_SLEEP' = ANY(accepted_signal_types))
+FROM telemetry_runtime.presence_policies
+WHERE device_id = $1::uuid`, deviceID).Scan(&sleepSec, &hasExplicitSleep); err != nil {
+		t.Fatal(err)
+	}
+	if sleepSec == nil || *sleepSec != 900 || !hasExplicitSleep {
+		t.Fatalf("expected sleep_cycle_seconds=900 and EXPLICIT_SLEEP allowed, got %v / %v", sleepSec, hasExplicitSleep)
+	}
+
+	// Clearing PresencePolicy restores sleep_cycle_seconds=NULL and drops EXPLICIT_SLEEP from accepted signals.
+	if _, err := store.ApplyRegistrySync(ctx, RegistrySyncRequest{
+		TenantID: tenantID,
+		SiteID:   siteID,
+		Devices: []RegistryDeviceSync{{
+			DeviceID: deviceID,
+			Status:   "ACTIVE",
+			Points: []RegistryPointSync{
+				{PointID: pointID, TelemetryKey: "valve_position", PointType: "TELEMETRY", ValueType: "NUMBER", Unit: "%", SampleIntervalSeconds: 60, FreshWithinSeconds: 300, Status: "ACTIVE"},
+			},
+		}},
+	}); err != nil {
+		t.Fatalf("clear sleep-cycle ApplyRegistrySync: %v", err)
+	}
+
+	if err := admin.QueryRow(ctx, `
+SELECT sleep_cycle_seconds, ('EXPLICIT_SLEEP' = ANY(accepted_signal_types))
+FROM telemetry_runtime.presence_policies
+WHERE device_id = $1::uuid`, deviceID).Scan(&sleepSec, &hasExplicitSleep); err != nil {
+		t.Fatal(err)
+	}
+	if sleepSec != nil || hasExplicitSleep {
+		t.Fatalf("expected sleep_cycle_seconds=NULL and EXPLICIT_SLEEP removed, got %v / %v", sleepSec, hasExplicitSleep)
 	}
 }

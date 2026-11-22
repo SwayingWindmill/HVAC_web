@@ -22,7 +22,12 @@ WITH candidates AS (
     CASE
       WHEN d.presence_applicability = 'NOT_APPLICABLE' THEN 'AVAILABLE'
       WHEN oc.device_id IS NULL OR NOT oc.available THEN 'UNAVAILABLE'
-      WHEN pp.device_id IS NULL OR pp.policy_revision < 1 OR pp.online_within_seconds <= 0 OR pp.offline_after_seconds <= pp.online_within_seconds THEN 'AVAILABLE'
+      WHEN pp.device_id IS NULL
+        OR pp.policy_revision < 1
+        OR pp.online_within_seconds <= 0
+        OR pp.offline_after_seconds <= pp.online_within_seconds
+        OR (pp.sleep_cycle_seconds IS NOT NULL AND (pp.sleep_cycle_seconds < pp.online_within_seconds OR pp.offline_after_seconds <= pp.sleep_cycle_seconds))
+        THEN 'AVAILABLE'
       WHEN sig.observed_at IS NOT NULL
         AND sig.signal_type <> 'EXPLICIT_DISCONNECT'
         AND sig.observed_at <= ($1::timestamptz - (pp.offline_after_seconds * interval '1 second'))
@@ -33,15 +38,30 @@ WITH candidates AS (
     CASE
       WHEN d.presence_applicability = 'NOT_APPLICABLE' THEN NULL::text
       WHEN oc.device_id IS NULL OR NOT oc.available THEN NULL::text
-      WHEN pp.device_id IS NULL OR pp.policy_revision < 1 OR pp.online_within_seconds <= 0 OR pp.offline_after_seconds <= pp.online_within_seconds THEN 'UNKNOWN'
+      WHEN pp.device_id IS NULL
+        OR pp.policy_revision < 1
+        OR pp.online_within_seconds <= 0
+        OR pp.offline_after_seconds <= pp.online_within_seconds
+        OR (pp.sleep_cycle_seconds IS NOT NULL AND (pp.sleep_cycle_seconds < pp.online_within_seconds OR pp.offline_after_seconds <= pp.sleep_cycle_seconds))
+        THEN 'UNKNOWN'
       WHEN sig.observed_at IS NULL THEN 'UNKNOWN'
       WHEN sig.signal_type = 'EXPLICIT_DISCONNECT' THEN 'OFFLINE'
+      WHEN sig.signal_type = 'EXPLICIT_SLEEP' THEN
+        CASE
+          WHEN sig.observed_at <= ($1::timestamptz - (pp.offline_after_seconds * interval '1 second')) THEN
+            CASE
+              WHEN oc.continuous_since IS NULL OR oc.continuous_since > ($1::timestamptz - (pp.offline_after_seconds * interval '1 second')) THEN NULL::text
+              ELSE 'OFFLINE'
+            END
+          ELSE 'SLEEPING'
+        END
       WHEN sig.observed_at >= ($1::timestamptz - (pp.online_within_seconds * interval '1 second')) THEN 'ONLINE'
       WHEN sig.observed_at <= ($1::timestamptz - (pp.offline_after_seconds * interval '1 second')) THEN
         CASE
           WHEN oc.continuous_since IS NULL OR oc.continuous_since > ($1::timestamptz - (pp.offline_after_seconds * interval '1 second')) THEN NULL::text
           ELSE 'OFFLINE'
         END
+      WHEN pp.sleep_cycle_seconds IS NOT NULL THEN 'SLEEPING'
       ELSE 'UNKNOWN'
     END AS expected_state
   FROM telemetry_runtime.devices d

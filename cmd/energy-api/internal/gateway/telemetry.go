@@ -818,7 +818,7 @@ func validSnapshotDisplayState(applicability s2telemetryapi.PresenceApplicabilit
 
 func validDisplayState(value s2telemetryapi.DeviceDisplayState) bool {
 	switch value {
-	case s2telemetryapi.DeviceDisplayStateOnline, s2telemetryapi.DeviceDisplayStateOffline, s2telemetryapi.DeviceDisplayStateStale, s2telemetryapi.DeviceDisplayStateUnknown, s2telemetryapi.DeviceDisplayStateUnavailable:
+	case s2telemetryapi.DeviceDisplayStateOnline, s2telemetryapi.DeviceDisplayStateSleeping, s2telemetryapi.DeviceDisplayStateOffline, s2telemetryapi.DeviceDisplayStateStale, s2telemetryapi.DeviceDisplayStateUnknown, s2telemetryapi.DeviceDisplayStateUnavailable:
 		return true
 	default:
 		return false
@@ -832,7 +832,11 @@ func validPresenceSnapshot(value s2telemetryapi.PresenceSnapshot) bool {
 	if value.Applicability == s2telemetryapi.PresenceApplicabilityNotApplicable && value.CurrentState != nil {
 		return false
 	}
-	if value.CurrentState != nil && *value.CurrentState != s2telemetryapi.DevicePresenceStateOnline && *value.CurrentState != s2telemetryapi.DevicePresenceStateOffline && *value.CurrentState != s2telemetryapi.DevicePresenceStateUnknown {
+	if value.CurrentState != nil &&
+		*value.CurrentState != s2telemetryapi.DevicePresenceStateOnline &&
+		*value.CurrentState != s2telemetryapi.DevicePresenceStateSleeping &&
+		*value.CurrentState != s2telemetryapi.DevicePresenceStateOffline &&
+		*value.CurrentState != s2telemetryapi.DevicePresenceStateUnknown {
 		return false
 	}
 	if value.LastSeenAt != nil {

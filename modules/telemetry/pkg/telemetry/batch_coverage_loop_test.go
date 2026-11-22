@@ -419,6 +419,11 @@ func TestClassifyPresenceSignalTypeAndCoverageReasonNormalization(t *testing.T) 
 	if sig, ok := classifyPresenceSignalType("LWT"); !ok || sig != "EXPLICIT_DISCONNECT" {
 		t.Fatalf("LWT -> (%q, %v)", sig, ok)
 	}
+	for _, evType := range []string{"EXPLICIT_SLEEP", "SLEEPING", "DEVICE_SLEEPING", "ENTER_SLEEP"} {
+		if sig, ok := classifyPresenceSignalType(evType); !ok || sig != "EXPLICIT_SLEEP" {
+			t.Fatalf("%s -> (%q, %v)", evType, sig, ok)
+		}
+	}
 	if _, ok := classifyPresenceSignalType("UNKNOWN_EVENT"); ok {
 		t.Fatal("UNKNOWN_EVENT must not map to a presence signal")
 	}

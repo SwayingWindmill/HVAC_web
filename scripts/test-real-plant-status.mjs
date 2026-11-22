@@ -141,3 +141,14 @@ test("a device without its role's key readings shows its own measurements, curre
   assert.equal(keyed.lead.sourceKey, 'chiller.power');
   assert.deepEqual(keyed.facts.map((reading) => reading.label), ['温度 2']);
 });
+
+test('sleeping devices stay non-running without counting as offline', () => {
+  assert.equal(isRunning(device('CHILLER', { connection: 'SLEEPING' })), false);
+  assert.deepEqual(
+    equipmentStatus(plant([device('CHILLER'), device('CHILLED_WATER_PUMP', { connection: 'SLEEPING', runState: 'UNKNOWN' })])),
+    { total: 2, running: 1, faults: 0, offline: 0, withoutData: 0, stale: 0 },
+  );
+  const baseRow = meterRow([{ key: 'valve_position', sourceKey: 'valve_position', value: 45 }]);
+  const view = buildPlantView([{ ...baseRow, operational: { ...baseRow.operational, connection: { state: 'SLEEPING' } } }]);
+  assert.equal(view.devices[0].connection, 'SLEEPING');
+});

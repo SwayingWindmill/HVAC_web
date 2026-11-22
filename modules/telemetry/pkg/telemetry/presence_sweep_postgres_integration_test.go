@@ -547,3 +547,153 @@ VALUES ($1::uuid, 'chw-sweep-test', $2::jsonb, $3)`, siteA, pairConfigJSON, base
 		t.Fatalf("expected PROBE_OFFSET suggestion reflected on snapshot after SweepProbeOffsets, got %#v", probeSnap.Values)
 	}
 }
+
+func TestPostgresLowPowerSleepingPresenceSweep(t *testing.T) {
+	runtimeURL, adminURL := postgresTestURLs(t)
+	ctx := t.Context()
+	admin, err := pgxpool.New(ctx, adminURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+
+	const (
+		sourceID  = "presence-sweep-sleeping-test"
+		partition = "presence-sweep-960"
+	)
+	sleepingDev := sweepDeviceID(7)
+	pointID := sweepPointID(7)
+
+	cleanup := func() {
+		_, _ = admin.Exec(ctx, `DELETE FROM telemetry_runtime.telemetry_history_outbox WHERE payload ->> 'source_partition' = $1`, partition)
+		_, _ = admin.Exec(ctx, `DELETE FROM telemetry_runtime.source_delivery_evidence WHERE source_partition = $1`, partition)
+		_, _ = admin.Exec(ctx, `DELETE FROM telemetry_runtime.source_observations WHERE source_partition = $1`, partition)
+		_, _ = admin.Exec(ctx, `DELETE FROM telemetry_runtime.source_positions WHERE source_id = $1`, sourceID)
+		_, _ = admin.Exec(ctx, `DELETE FROM telemetry_runtime.mqtt_runtime_events WHERE source_id = $1 OR gateway_id = $1`, sleepingDev)
+		_, _ = admin.Exec(ctx, `DELETE FROM telemetry_runtime.telemetry_publication_outbox WHERE device_id = $1::uuid`, sleepingDev)
+		_, _ = admin.Exec(ctx, `DELETE FROM telemetry_runtime.device_observation_snapshots WHERE device_id = $1::uuid`, sleepingDev)
+		_, _ = admin.Exec(ctx, `DELETE FROM telemetry_runtime.device_presence WHERE device_id = $1::uuid`, sleepingDev)
+		_, _ = admin.Exec(ctx, `DELETE FROM telemetry_runtime.latest_accepted_telemetry WHERE device_id = $1::uuid`, sleepingDev)
+		_, _ = admin.Exec(ctx, `DELETE FROM telemetry_runtime.presence_signals WHERE device_id = $1::uuid`, sleepingDev)
+		_, _ = admin.Exec(ctx, `DELETE FROM telemetry_runtime.observation_coverage WHERE device_id = $1::uuid`, sleepingDev)
+		_, _ = admin.Exec(ctx, `DELETE FROM telemetry_runtime.freshness_policies WHERE device_id = $1::uuid`, sleepingDev)
+		_, _ = admin.Exec(ctx, `DELETE FROM telemetry_runtime.presence_policies WHERE device_id = $1::uuid`, sleepingDev)
+		_, _ = admin.Exec(ctx, `DELETE FROM telemetry_runtime.points WHERE point_id = $1::uuid`, pointID)
+		_, _ = admin.Exec(ctx, `DELETE FROM telemetry_runtime.devices WHERE device_id = $1::uuid`, sleepingDev)
+	}
+	cleanup()
+	defer cleanup()
+
+	base := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	if _, err := admin.Exec(ctx, `
+INSERT INTO telemetry_runtime.devices (device_id, tenant_id, site_id, presence_applicability, updated_at)
+VALUES ($1::uuid, $2::uuid, $3::uuid, 'APPLICABLE', $4)`, sleepingDev, tenantA, siteA, base); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `
+INSERT INTO telemetry_runtime.presence_policies (
+  device_id, policy_revision, online_within_seconds, sleep_cycle_seconds, offline_after_seconds,
+  coverage_required, accepted_signal_types, max_future_clock_skew_seconds, max_source_lag_seconds, updated_at
+) VALUES ($1::uuid, 1, 60, 300, 360, true, ARRAY['SOURCE_ACTIVITY', 'EXPLICIT_CONNECT', 'EXPLICIT_SLEEP', 'EXPLICIT_DISCONNECT']::text[], 60, 86400, $2)`, sleepingDev, base); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `
+INSERT INTO telemetry_runtime.observation_coverage (device_id, available, continuous_since, reason_code, source_revision, updated_at)
+VALUES ($1::uuid, true, $2, NULL, 1, $3)`, sleepingDev, base.Add(-time.Hour), base); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `
+INSERT INTO telemetry_runtime.freshness_policies (
+  device_id, telemetry_key, policy_revision, fresh_within_seconds, configured,
+  expected_sample_interval_seconds, value_type, expected_unit, quality_checks, updated_at
+) VALUES ($1::uuid, 'valve_position', 1, 600, true, 300, 'NUMBER', '%', NULL, $2)`, sleepingDev, base); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := OpenPostgresStore(ctx, runtimeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	assertState := func(wantState, wantDisplay string) {
+		t.Helper()
+		var state, snapState, displayState *string
+		if err := admin.QueryRow(ctx, `
+SELECT dp.current_state, s.snapshot #>> '{presence,currentState}', s.snapshot ->> 'displayState'
+FROM telemetry_runtime.device_observation_snapshots s
+JOIN telemetry_runtime.device_presence dp USING (device_id)
+WHERE s.device_id = $1::uuid`, sleepingDev).Scan(&state, &snapState, &displayState); err != nil {
+			t.Fatal(err)
+		}
+		if state == nil || *state != wantState || snapState == nil || *snapState != wantState || displayState == nil || *displayState != wantDisplay {
+			t.Fatalf("device state=(%v,%v) display=%v, want %s/%s", state, snapState, displayState, wantState, wantDisplay)
+		}
+	}
+
+	var offset int64
+	sendObs := func(raw string, at time.Time) {
+		t.Helper()
+		offset++
+		unit := "%"
+		receipt, err := store.AcceptObservation(ctx, ObservationCandidate{
+			SourceID:           sourceID,
+			SourcePath:         SourcePathPush,
+			ExternalEntityType: "DEVICE",
+			ExternalID:         sleepingDev,
+			Device:             &ResolvedDevice{TenantID: tenantA, SiteID: siteA, DeviceID: sleepingDev},
+			Point:              &ResolvedPoint{PointID: pointID, PointType: "TELEMETRY", ValueType: "NUMBER", Unit: &unit, PointRevision: 1},
+			TelemetryKey:       "valve_position",
+			Value:              json.RawMessage(raw),
+			ValueType:          "NUMBER",
+			Unit:               &unit,
+			SampledAt:          at,
+			ReceivedAt:         at,
+			Position:           SourcePosition{Partition: partition, Offset: offset, EventID: sweepEventID(800 + int(offset))},
+		})
+		if err != nil || receipt.Status != ObservationAccepted {
+			t.Fatalf("AcceptObservation err=%v receipt=%#v", err, receipt)
+		}
+	}
+
+	sendObs("45", base)
+	assertState("ONLINE", "ONLINE")
+
+	if err := store.AcceptRuntimeEvent(ctx, RuntimeEventEvidence{
+		TenantID: tenantA, SiteID: siteA, GatewayID: sleepingDev,
+		MessageID: sweepEventID(951), Sequence: 1, EventType: "DEVICE_SLEEPING", SourceType: "DEVICE", SourceID: sleepingDev,
+		Device:    &ResolvedDevice{TenantID: tenantA, SiteID: siteA, DeviceID: sleepingDev},
+		EventTime: base.Add(10 * time.Second), Severity: "INFO", Data: json.RawMessage(`{}`), ReceivedAt: base.Add(11 * time.Second),
+	}); err != nil {
+		t.Fatalf("explicit sleep event: %v", err)
+	}
+	assertState("SLEEPING", "SLEEPING")
+
+	if err := store.AcceptRuntimeEvent(ctx, RuntimeEventEvidence{
+		TenantID: tenantA, SiteID: siteA, GatewayID: sleepingDev,
+		MessageID: sweepEventID(952), Sequence: 2, EventType: "DEVICE_CONNECTED", SourceType: "DEVICE", SourceID: sleepingDev,
+		Device:    &ResolvedDevice{TenantID: tenantA, SiteID: siteA, DeviceID: sleepingDev},
+		EventTime: base.Add(120 * time.Second), Severity: "INFO", Data: json.RawMessage(`{}`), ReceivedAt: base.Add(121 * time.Second),
+	}); err != nil {
+		t.Fatalf("wakeup connect event: %v", err)
+	}
+	assertState("ONLINE", "ONLINE")
+
+	// After online_within (60s) elapses without new activity, sweep puts low-power device into SLEEPING.
+	sweptSleep, err := store.SweepDuePresence(ctx, base.Add(190*time.Second), 64)
+	if err != nil || sweptSleep < 1 {
+		t.Fatalf("sweptSleep=%d err=%v, want >= 1", sweptSleep, err)
+	}
+	assertState("SLEEPING", "SLEEPING")
+
+	// Missed wake past offline_after (360s) transitions SLEEPING -> OFFLINE.
+	sweptOffline, err := store.SweepDuePresence(ctx, base.Add(490*time.Second), 64)
+	if err != nil || sweptOffline < 1 {
+		t.Fatalf("sweptOffline=%d err=%v, want >= 1", sweptOffline, err)
+	}
+	assertState("OFFLINE", "OFFLINE")
+
+	// Fresh wakeup observation transitions OFFLINE -> ONLINE.
+	sendObs("50", base.Add(500*time.Second))
+	assertState("ONLINE", "ONLINE")
+}

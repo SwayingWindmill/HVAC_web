@@ -30,9 +30,9 @@ const availabilityReasons: ReadonlySet<AvailabilityReasonCode> = new Set([
   'OWNER_DEPENDENCY_UNAVAILABLE',
 ]);
 const presenceApplicability: ReadonlySet<PresenceApplicability> = new Set(['APPLICABLE', 'NOT_APPLICABLE']);
-const presenceStates: ReadonlySet<DevicePresenceState> = new Set(['ONLINE', 'OFFLINE', 'UNKNOWN']);
+const presenceStates: ReadonlySet<DevicePresenceState> = new Set(['ONLINE', 'SLEEPING', 'OFFLINE', 'UNKNOWN']);
 const readinessStates: ReadonlySet<TelemetryReadiness> = new Set(['CURRENT', 'DEGRADED', 'INCOMPLETE', 'NOT_APPLICABLE']);
-const displayStates: ReadonlySet<Exclude<DeviceDisplayState, null>> = new Set(['ONLINE', 'OFFLINE', 'STALE', 'UNKNOWN', 'UNAVAILABLE']);
+const displayStates: ReadonlySet<Exclude<DeviceDisplayState, null>> = new Set(['ONLINE', 'SLEEPING', 'OFFLINE', 'STALE', 'UNKNOWN', 'UNAVAILABLE']);
 const freshnessStates: ReadonlySet<'FRESH' | 'STALE'> = new Set(['FRESH', 'STALE']);
 const qualityStates: ReadonlySet<TelemetryQuality> = new Set(['GOOD', 'PARTIAL', 'ESTIMATED', 'MANUAL', 'STALE', 'INVALID']);
 const qualityReasons: ReadonlySet<QualityReasonCode> = new Set([

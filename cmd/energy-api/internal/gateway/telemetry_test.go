@@ -870,6 +870,86 @@ func TestTelemetryGatewayNotApplicableDisplayStateContract(t *testing.T) {
 	}
 }
 
+func TestTelemetryGatewaySleepingDisplayStateContract(t *testing.T) {
+	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
+	sleepingPresence := s2telemetryapi.DevicePresenceStateSleeping
+	sleepingDisplay := s2telemetryapi.DeviceDisplayStateSleeping
+
+	for _, tc := range []struct {
+		name         string
+		currentState *s2telemetryapi.DevicePresenceState
+		displayState *s2telemetryapi.DeviceDisplayState
+		wantStatus   int
+	}{
+		{
+			name:         "applicable_sleeping_allows_200",
+			currentState: &sleepingPresence,
+			displayState: &sleepingDisplay,
+			wantStatus:   http.StatusOK,
+		},
+		{
+			name:         "applicable_sleeping_without_display_fails_503",
+			currentState: &sleepingPresence,
+			displayState: nil,
+			wantStatus:   http.StatusServiceUnavailable,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newTelemetryGatewayFixture(t, "")
+			fixture.runtimeHTTPClient.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				if request.URL.Path != internalTelemetryBatchPath {
+					t.Fatalf("unexpected runtime path %s", request.URL.Path)
+				}
+				snapshot := telemetrySnapshot(telemetryTestDeviceOne, []string{"valve_position"}, now)
+				snapshot.Presence.Applicability = s2telemetryapi.PresenceApplicabilityApplicable
+				snapshot.Presence.CurrentState = tc.currentState
+				snapshot.DisplayState = tc.displayState
+				return telemetryJSONResponse(http.StatusOK, s2telemetryapi.BatchGetObservationSnapshotsResponse{
+					SchemaVersion: 1,
+					Items: []s2telemetryapi.BatchObservationResult{{
+						Success: &s2telemetryapi.BatchObservationSuccess{
+							RequestId: "sleeping-device",
+							DeviceId:  telemetryTestDeviceOne,
+							Status:    "OK",
+							Snapshot:  snapshot,
+						},
+					}},
+				}), nil
+			})
+
+			body, _ := json.Marshal(s2telemetryapi.BatchGetObservationSnapshotsRequest{
+				Requests: []s2telemetryapi.ObservationSnapshotTarget{{
+					RequestId: "sleeping-device",
+					DeviceId:  telemetryTestDeviceOne,
+					Keys:      []s2telemetryapi.TelemetryKey{"valve_position"},
+				}},
+			})
+			request := httptest.NewRequest(http.MethodPost, s2telemetryapi.BatchGetDeviceObservationSnapshotsPath, bytes.NewReader(body))
+			fixture.authenticate(request)
+			request.Header.Set("Origin", "https://web.example.test")
+			request.Header.Set("X-CSRF-Token", telemetryTestCSRF)
+			recorder := httptest.NewRecorder()
+			fixture.handler.ServeHTTP(recorder, request)
+
+			if tc.wantStatus == http.StatusOK {
+				if recorder.Code != http.StatusOK {
+					t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+				}
+				var output s2telemetryapi.BatchGetObservationSnapshotsResponse
+				if err := json.NewDecoder(recorder.Body).Decode(&output); err != nil {
+					t.Fatal(err)
+				}
+				got := output.Items[0].Success.Snapshot
+				if got.Presence.CurrentState == nil || *got.Presence.CurrentState != sleepingPresence || got.DisplayState == nil || *got.DisplayState != sleepingDisplay {
+					t.Fatalf("unexpected sleeping snapshot fields: presence=%+v displayState=%v", got.Presence, got.DisplayState)
+				}
+				return
+			}
+			assertTelemetryProblem(t, recorder, tc.wantStatus, "TELEMETRY_UNAVAILABLE")
+		})
+	}
+}
+
 func TestTelemetryGatewayBatchAllowsPerItemUnavailableFailure(t *testing.T) {
 	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
 	fixture := newTelemetryGatewayFixture(t, "")

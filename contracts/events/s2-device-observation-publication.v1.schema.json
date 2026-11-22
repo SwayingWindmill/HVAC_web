@@ -75,10 +75,10 @@
     "TelemetryKey": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z][A-Za-z0-9_.:-]*$" },
     "EvaluationAvailability": { "type": "string", "enum": ["AVAILABLE", "UNAVAILABLE"] },
     "PresenceApplicability": { "type": "string", "enum": ["APPLICABLE", "NOT_APPLICABLE"] },
-    "DevicePresenceState": { "type": "string", "enum": ["ONLINE", "OFFLINE", "UNKNOWN"] },
+    "DevicePresenceState": { "type": "string", "enum": ["ONLINE", "SLEEPING", "OFFLINE", "UNKNOWN"] },
     "TelemetryQuality": { "type": "string", "enum": ["GOOD", "PARTIAL", "ESTIMATED", "MANUAL", "STALE", "INVALID"] },
     "TelemetryReadiness": { "type": "string", "enum": ["CURRENT", "DEGRADED", "INCOMPLETE", "NOT_APPLICABLE"] },
-    "DeviceDisplayState": { "type": ["string", "null"], "enum": ["ONLINE", "OFFLINE", "STALE", "UNKNOWN", "UNAVAILABLE", null] },
+    "DeviceDisplayState": { "type": ["string", "null"], "enum": ["ONLINE", "SLEEPING", "OFFLINE", "STALE", "UNKNOWN", "UNAVAILABLE", null] },
     "QualityReasonCode": {
       "type": "string",
       "pattern": "^[A-Z][A-Z0-9_]+$",
