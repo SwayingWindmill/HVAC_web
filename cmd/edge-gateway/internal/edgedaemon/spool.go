@@ -23,8 +23,12 @@ const (
 	EvidenceOTAResult         EvidenceClass = "OTA_RESULT"
 	EvidenceAudit             EvidenceClass = "AUDIT_EVIDENCE"
 	EvidenceTelemetryCritical EvidenceClass = "TELEMETRY_CRITICAL"
+	EvidenceTelemetryVeryHigh EvidenceClass = "TELEMETRY_VERY_HIGH"
+	EvidenceTelemetryHigh     EvidenceClass = "TELEMETRY_HIGH"
 	EvidenceConfigResult      EvidenceClass = "CONFIG_RESULT"
 	EvidenceTelemetryNormal   EvidenceClass = "TELEMETRY_NORMAL"
+	EvidenceTelemetryMedium   EvidenceClass = "TELEMETRY_MEDIUM"
+	EvidenceTelemetryLow      EvidenceClass = "TELEMETRY_LOW"
 	EvidenceDiagnostic        EvidenceClass = "DIAGNOSTIC"
 )
 
@@ -337,22 +341,26 @@ func evidencePriority(class EvidenceClass) int {
 	switch class {
 	case EvidenceDiagnostic:
 		return 0
-	case EvidenceTelemetryNormal:
+	case EvidenceTelemetryLow:
 		return 1
-	case EvidenceConfigResult:
+	case EvidenceTelemetryNormal, EvidenceTelemetryMedium:
 		return 2
-	case EvidenceTelemetryCritical:
+	case EvidenceConfigResult:
 		return 3
-	case EvidenceAudit:
+	case EvidenceTelemetryHigh:
 		return 4
-	case EvidenceOTAResult:
+	case EvidenceTelemetryCritical, EvidenceTelemetryVeryHigh:
 		return 5
-	case EvidenceAlarm:
+	case EvidenceAudit:
 		return 6
-	case EvidenceControl:
+	case EvidenceOTAResult:
 		return 7
-	case EvidenceSafety:
+	case EvidenceAlarm:
 		return 8
+	case EvidenceControl:
+		return 9
+	case EvidenceSafety:
+		return 10
 	default:
 		return -1
 	}

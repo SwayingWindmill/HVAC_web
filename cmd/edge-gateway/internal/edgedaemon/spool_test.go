@@ -66,3 +66,36 @@ func TestGradedSpoolPrioritySheddingAndRecovery(t *testing.T) {
 		t.Fatalf("UsedBytes after drain = %d, want 0", reopened.UsedBytes())
 	}
 }
+
+func TestGradedSpoolFourTierTelemetryPriorityOrder(t *testing.T) {
+	spool, err := OpenGradedSpool(t.TempDir(), 4096)
+	if err != nil {
+		t.Fatalf("OpenGradedSpool: %v", err)
+	}
+	for _, item := range []SpoolItem{
+		{ID: "low-1", Topic: "hvac/v1/gw/up/telemetry", QoS: 1, Class: EvidenceTelemetryLow, Payload: []byte("low")},
+		{ID: "med-1", Topic: "hvac/v1/gw/up/telemetry", QoS: 1, Class: EvidenceTelemetryMedium, Payload: []byte("med")},
+		{ID: "high-1", Topic: "hvac/v1/gw/up/telemetry", QoS: 1, Class: EvidenceTelemetryHigh, Payload: []byte("high")},
+		{ID: "vh-1", Topic: "hvac/v1/gw/up/telemetry", QoS: 1, Class: EvidenceTelemetryVeryHigh, Payload: []byte("vh")},
+		{ID: "alarm-1", Topic: "hvac/v1/gw/up/event", QoS: 1, Class: EvidenceAlarm, Payload: []byte("alarm")},
+	} {
+		if _, err := spool.Admit(item); err != nil {
+			t.Fatalf("admit %s: %v", item.ID, err)
+		}
+	}
+
+	var order []string
+	drained, err := spool.Drain(t.Context(), 10, func(_ context.Context, item SpoolItem) error {
+		order = append(order, item.ID)
+		return nil
+	})
+	if err != nil || drained != 5 {
+		t.Fatalf("Drain = (%d, %v), want (5, nil)", drained, err)
+	}
+	want := []string{"alarm-1", "vh-1", "high-1", "med-1", "low-1"}
+	for i, w := range want {
+		if order[i] != w {
+			t.Fatalf("drain order = %v, want %v", order, want)
+		}
+	}
+}

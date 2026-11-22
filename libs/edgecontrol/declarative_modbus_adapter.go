@@ -482,6 +482,15 @@ func readbackMatchesTarget(spec ModbusRegisterSpec, target, actual Value) bool {
 }
 
 func (adapter *DeclarativeModbusAdapter) prepareWriteValuesLocked(ctx context.Context, spec ModbusRegisterSpec, val Value) ([]uint16, string, error) {
+	if spec.WriteFunctionCode == ModbusFunctionWriteSingleCoil || spec.WriteFunctionCode == ModbusFunctionWriteMultipleCoils {
+		if val.Type != DataTypeBoolean {
+			return nil, "INVALID_WRITE_VALUE", nil
+		}
+		if val.Boolean {
+			return []uint16{1}, "", nil
+		}
+		return []uint16{0}, "", nil
+	}
 	if spec.RawType != ModbusRawBitBool {
 		values, code := encodeRegisterWrite(spec, val)
 		return values, code, nil

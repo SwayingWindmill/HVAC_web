@@ -112,13 +112,14 @@ func (r *ProtocolBridgeRegistry) sharedRTUBridge(profile edgecontrol.Declarative
 		timeout = 500 * time.Millisecond
 	}
 	bridge, err := edgecontrol.NewModbusRTUBridge(edgecontrol.ModbusRTUBridgeConfig{
-		Endpoint: endpoint,
-		Timeout:  timeout,
-		Retries:  profile.Retries,
-		Speed:    firstNonZeroUint(bus.Speed, defaultRTUBaudRate),
-		DataBits: firstNonZeroUint(bus.DataBits, defaultRTUDataBits),
-		Parity:   bus.Parity,
-		StopBits: firstNonZeroUint(bus.StopBits, defaultRTUStopBits),
+		Endpoint:        endpoint,
+		Timeout:         timeout,
+		Retries:         profile.Retries,
+		Speed:           firstNonZeroUint(bus.Speed, defaultRTUBaudRate),
+		DataBits:        firstNonZeroUint(bus.DataBits, defaultRTUDataBits),
+		Parity:          bus.Parity,
+		StopBits:        firstNonZeroUint(bus.StopBits, defaultRTUStopBits),
+		TurnaroundDelay: time.Duration(bus.TurnaroundDelayMS) * time.Millisecond,
 	})
 	if err != nil {
 		return nil, err

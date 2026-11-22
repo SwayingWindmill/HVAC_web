@@ -8,8 +8,10 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -59,12 +61,19 @@ type mqttUplinkEventEnvelope struct {
 }
 
 type mqttUplinkEventPayload struct {
-	EventType  string         `json:"eventType"`
-	SourceType string         `json:"sourceType"`
-	SourceID   string         `json:"sourceId"`
-	EventTime  int64          `json:"eventTime"`
-	Severity   string         `json:"severity"`
-	Data       map[string]any `json:"data,omitempty"`
+	EventType  string          `json:"eventType"`
+	SourceType string          `json:"sourceType"`
+	SourceID   string          `json:"sourceId"`
+	EventTime  int64           `json:"eventTime"`
+	Severity   string          `json:"severity"`
+	Data       json.RawMessage `json:"data,omitempty"`
+}
+
+var telemetryResendOrder = []edgecontrol.DataPriority{
+	edgecontrol.PriorityVeryHigh,
+	edgecontrol.PriorityHigh,
+	edgecontrol.PriorityMedium,
+	edgecontrol.PriorityLow,
 }
 
 // DaemonOptions configures optional runtime hooks such as OTA restart triggers.
@@ -77,31 +86,37 @@ type DaemonOptions struct {
 
 // Daemon owns the complete Linux edge runtime lifecycle on EG8200 gateways.
 type Daemon struct {
-	cfg           Config
-	obs           *observability.Runtime
-	logger        *slog.Logger
-	host          *edgecontrol.Host
-	registry      *ProtocolBridgeRegistry
-	interlock     *edgecontrol.HydraulicInterlockController
-	fallback      *edgecontrol.AutonomousFallbackController
-	ruleEngine    *edgecontrol.EdgeRuleController
-	spool         *GradedSpool
-	shadow        *ShadowManager
-	commands      *CommandAdapter
-	ota           *OTAAgent
-	tunnelClient  *TunnelClient
-	healthSrv     *http.Server
-	healthAddr    string
-	mqttSession   *mqttclient.SharedSession
-	onOTASwitch   func()
-	cmdSem        chan struct{}
-	cmdWG         sync.WaitGroup
-	sequence      atomic.Uint64
-	mqttConnected atomic.Bool
-	ready         atomic.Bool
-	now           func() time.Time
-	mu            sync.Mutex
-	closed        bool
+	cfg                 Config
+	obs                 *observability.Runtime
+	logger              *slog.Logger
+	host                *edgecontrol.Host
+	registry            *ProtocolBridgeRegistry
+	interlock           *edgecontrol.HydraulicInterlockController
+	fallback            *edgecontrol.AutonomousFallbackController
+	ruleEngine          *edgecontrol.EdgeRuleController
+	timedata            *edgecontrol.FileTimedata
+	deadband            *edgecontrol.DeadbandFilter
+	spool               *GradedSpool
+	shadow              *ShadowManager
+	commands            *CommandAdapter
+	ota                 *OTAAgent
+	tunnelClient        *TunnelClient
+	healthSrv           *http.Server
+	healthAddr          string
+	mqttSession         *mqttclient.SharedSession
+	onOTASwitch         func()
+	cmdSem              chan struct{}
+	cmdWG               sync.WaitGroup
+	sequence            atomic.Uint64
+	mqttConnected       atomic.Bool
+	connectedSessionGen atomic.Uint64
+	ready               atomic.Bool
+	now                 func() time.Time
+	sessionMu           sync.Mutex
+	sessionID           string
+	sessionStartedAt    time.Time
+	mu                  sync.Mutex
+	closed              bool
 }
 
 // NewDaemon initializes the edge host, controllers, spool, shadow, OTA agent,
@@ -167,6 +182,24 @@ func NewDaemon(cfg Config, opts DaemonOptions) (*Daemon, error) {
 		return nil, fmt.Errorf("open graded spool: %w", err)
 	}
 
+	timedata, err := edgecontrol.OpenFileTimedata(filepath.Join(cfg.StateDir, "timedata"), edgecontrol.PriorityLow)
+	if err != nil {
+		_ = registry.Close()
+		return nil, fmt.Errorf("open timedata store: %w", err)
+	}
+	if err := host.AttachTimedata(timedata); err != nil {
+		_ = registry.Close()
+		return nil, fmt.Errorf("attach timedata store: %w", err)
+	}
+
+	var deadband *edgecontrol.DeadbandFilter
+	if cfg.TelemetryDeadband > 0 {
+		deadband = edgecontrol.NewDeadbandFilter(
+			cfg.TelemetryDeadband,
+			time.Duration(cfg.TelemetryDeadbandMaxSilenceSec)*time.Second,
+		)
+	}
+
 	nowFn := opts.Now
 	if nowFn == nil {
 		nowFn = time.Now
@@ -201,6 +234,7 @@ func NewDaemon(cfg Config, opts DaemonOptions) (*Daemon, error) {
 		Logger:          logger,
 	})
 	if err != nil {
+		_ = commands.Close()
 		_ = registry.Close()
 		return nil, fmt.Errorf("create OTA agent: %w", err)
 	}
@@ -218,6 +252,7 @@ func NewDaemon(cfg Config, opts DaemonOptions) (*Daemon, error) {
 			Logger:             logger,
 		})
 		if err != nil {
+			_ = commands.Close()
 			_ = registry.Close()
 			return nil, fmt.Errorf("create tunnel client: %w", err)
 		}
@@ -232,6 +267,8 @@ func NewDaemon(cfg Config, opts DaemonOptions) (*Daemon, error) {
 		interlock:    interlock,
 		fallback:     fallback,
 		ruleEngine:   ruleEngine,
+		timedata:     timedata,
+		deadband:     deadband,
 		spool:        spool,
 		shadow:       shadow,
 		commands:     commands,
@@ -275,6 +312,11 @@ func (d *Daemon) OTAAgent() *OTAAgent {
 // Spool returns the managed GradedSpool.
 func (d *Daemon) Spool() *GradedSpool {
 	return d.spool
+}
+
+// Timedata returns the attached FileTimedata store.
+func (d *Daemon) Timedata() *edgecontrol.FileTimedata {
+	return d.timedata
 }
 
 // CommandAdapter returns the managed MQTT CommandAdapter.
@@ -403,6 +445,20 @@ func (d *Daemon) Close() error {
 		cancel()
 	}
 	if d.mqttSession != nil {
+		if d.mqttConnected.Load() {
+			sid, _ := d.currentSession()
+			if sid != "" {
+				if wire, err := d.buildGatewayLifecycleEventPayload("GATEWAY_DISCONNECTED", sid, d.now().UTC(), map[string]any{"clean": true}); err == nil {
+					pubCtx, pubCancel := context.WithTimeout(context.Background(), 2*time.Second)
+					_, _ = d.mqttSession.Publish(pubCtx, &paho.Publish{
+						Topic:   "hvac/v1/" + d.cfg.GatewayID + "/up/event",
+						QoS:     1,
+						Payload: wire,
+					})
+					pubCancel()
+				}
+			}
+		}
 		shutCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		_ = d.mqttSession.Close(shutCtx)
 		cancel()
@@ -550,10 +606,38 @@ func buildMQTTTLSConfig(cfg Config) *mqttclient.TLSConfig {
 
 func (d *Daemon) startMQTTSession(ctx context.Context) error {
 	tlsCfg := buildMQTTTLSConfig(d.cfg)
+	eventTopic := "hvac/v1/" + d.cfg.GatewayID + "/up/event"
+	initSid, initAt := d.rotateSession(d.now().UTC())
+	initWillPayload, err := d.buildGatewayLifecycleEventPayload("LWT", initSid, initAt, map[string]any{"reason": "broker_connection_lost"})
+	if err != nil {
+		return err
+	}
+	willMsg := &paho.WillMessage{
+		Retain:  false,
+		QoS:     1,
+		Topic:   eventTopic,
+		Payload: initWillPayload,
+	}
+
 	session, err := mqttclient.NewSharedSession(ctx, mqttclient.SharedSessionConfig{
-		BrokerURL: d.cfg.MQTTBrokerURL,
-		ClientID:  "edge-gateway-" + d.cfg.GatewayID,
-		TLS:       tlsCfg,
+		BrokerURL:   d.cfg.MQTTBrokerURL,
+		ClientID:    "edge-gateway-" + d.cfg.GatewayID,
+		TLS:         tlsCfg,
+		WillMessage: willMsg,
+		ConnectPacketBuilder: func(cp *paho.Connect, _ *url.URL) (*paho.Connect, error) {
+			sid, sidAt := d.rotateSession(d.now().UTC())
+			willPayload, buildErr := d.buildGatewayLifecycleEventPayload("LWT", sid, sidAt, map[string]any{"reason": "broker_connection_lost"})
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			cp.WillMessage = &paho.WillMessage{
+				Retain:  false,
+				QoS:     1,
+				Topic:   eventTopic,
+				Payload: willPayload,
+			}
+			return cp, nil
+		},
 	})
 	if err != nil {
 		return err
@@ -619,11 +703,24 @@ func (d *Daemon) startMQTTSession(ctx context.Context) error {
 		connected := state.Healthy()
 		d.mqttConnected.Store(connected)
 		if connected {
+			if state.Generation > 0 && d.connectedSessionGen.Swap(state.Generation) != state.Generation {
+				sid, sidAt := d.currentSession()
+				if sid != "" {
+					if wire, encErr := d.buildGatewayLifecycleEventPayload("GATEWAY_CONNECTED", sid, sidAt, nil); encErr == nil {
+						_, _ = session.Publish(ctx, &paho.Publish{
+							Topic:   eventTopic,
+							QoS:     1,
+							Payload: wire,
+						})
+					}
+				}
+			}
 			_, _ = d.spool.Drain(ctx, 200, func(pubCtx context.Context, item SpoolItem) error {
+				payload := markTelemetryEnvelopeReplay(item.Topic, item.Payload)
 				_, pubErr := session.Publish(pubCtx, &paho.Publish{
 					Topic:   item.Topic,
 					QoS:     item.QoS,
-					Payload: item.Payload,
+					Payload: payload,
 				})
 				return pubErr
 			})
@@ -638,10 +735,27 @@ func (d *Daemon) emitCycleTelemetry(ctx context.Context, img edgecontrol.Process
 	if len(snaps) == 0 {
 		return
 	}
-	byDevice := make(map[string][]mqttUplinkPoint)
+	byTier := make(map[edgecontrol.DataPriority]map[string][]mqttUplinkPoint)
 	for _, snap := range snaps {
 		if !snap.HasValue {
 			continue
+		}
+		observedAt := now.UTC()
+		if !snap.Sample.ObservedAt.IsZero() {
+			observedAt = snap.Sample.ObservedAt.UTC()
+		}
+		if d.deadband != nil {
+			sample := edgecontrol.DeadbandSample{
+				Key:        snap.Descriptor.Address(),
+				PointType:  pointTypeForDescriptor(snap.Descriptor),
+				ValueType:  valueTypeForDescriptor(snap.Descriptor),
+				Value:      snap.Sample.Value,
+				Quality:    snap.Sample.Quality,
+				ObservedAt: observedAt,
+			}
+			if !d.deadband.Allow(sample) {
+				continue
+			}
 		}
 		val, ok := valueToTelemetryJSON(snap.Sample.Value)
 		if !ok {
@@ -656,90 +770,245 @@ func (d *Daemon) emitCycleTelemetry(ctx context.Context, img edgecontrol.Process
 			u := snap.Descriptor.Unit
 			unitPtr = &u
 		}
-		byDevice[snap.Descriptor.ComponentID] = append(byDevice[snap.Descriptor.ComponentID], mqttUplinkPoint{
+		tier := normalizeTelemetryPriority(snap.Descriptor)
+		devMap := byTier[tier]
+		if devMap == nil {
+			devMap = make(map[string][]mqttUplinkPoint)
+			byTier[tier] = devMap
+		}
+		devMap[snap.Descriptor.ComponentID] = append(devMap[snap.Descriptor.ComponentID], mqttUplinkPoint{
 			Code:    snap.Descriptor.ChannelID,
 			Value:   val,
 			Quality: quality,
 			Unit:    unitPtr,
 		})
 	}
-	if len(byDevice) == 0 {
+	if len(byTier) == 0 {
 		return
 	}
 
-	devKeys := make([]string, 0, len(byDevice))
-	for k := range byDevice {
-		devKeys = append(devKeys, k)
-	}
-	sort.Strings(devKeys)
-
-	devices := make([]mqttUplinkDevice, 0, len(devKeys))
 	tsMs := max(now.UnixMilli(), 1)
-	for _, k := range devKeys {
-		devices = append(devices, mqttUplinkDevice{
-			DeviceID:        k,
-			DeviceTimestamp: tsMs,
-			Points:          byDevice[k],
+	tsStr := strconv.FormatInt(tsMs, 10)
+	topic := "hvac/v1/" + d.cfg.GatewayID + "/up/telemetry"
+
+	for _, tier := range telemetryResendOrder {
+		byDevice := byTier[tier]
+		if len(byDevice) == 0 {
+			continue
+		}
+		devKeys := make([]string, 0, len(byDevice))
+		for k := range byDevice {
+			devKeys = append(devKeys, k)
+		}
+		sort.Strings(devKeys)
+
+		keyParts := make([]string, 0, 3+len(devKeys)*4)
+		keyParts = append(keyParts, d.cfg.GatewayID, string(tier), tsStr)
+		devices := make([]mqttUplinkDevice, 0, len(devKeys))
+		for _, k := range devKeys {
+			pts := byDevice[k]
+			sort.Slice(pts, func(i, j int) bool {
+				return pts[i].Code < pts[j].Code
+			})
+			devices = append(devices, mqttUplinkDevice{
+				DeviceID:        k,
+				DeviceTimestamp: tsMs,
+				Points:          pts,
+			})
+			keyParts = append(keyParts, k)
+			for _, pt := range pts {
+				keyParts = append(keyParts, pt.Code)
+			}
+		}
+
+		msgID := edgecontrol.DeterministicReplicationUUIDv7(now, keyParts...)
+		seq := d.sequence.Add(1)
+		wire, err := json.Marshal(mqttUplinkTelemetryEnvelope{
+			SchemaVersion: "2.0",
+			MessageID:     msgID,
+			GatewayID:     d.cfg.GatewayID,
+			Timestamp:     tsMs,
+			Sequence:      seq,
+			Replay:        false,
+			Payload:       mqttUplinkDevicePayload{Devices: devices},
 		})
+		if err != nil {
+			continue
+		}
+		d.publishOrSpool(ctx, topic, 1, telemetryEvidenceClass(tier), wire)
 	}
-	msgID, err := edgecontrol.NewReplicationUUIDv7(now)
-	if err != nil {
-		return
-	}
-	seq := d.sequence.Add(1)
-	wire, err := json.Marshal(mqttUplinkTelemetryEnvelope{
-		SchemaVersion: "2.0",
-		MessageID:     msgID,
-		GatewayID:     d.cfg.GatewayID,
-		Timestamp:     tsMs,
-		Sequence:      seq,
-		Replay:        false,
-		Payload:       mqttUplinkDevicePayload{Devices: devices},
-	})
-	if err != nil {
-		return
-	}
-	d.publishOrSpool(ctx, "hvac/v1/"+d.cfg.GatewayID+"/up/telemetry", 1, EvidenceTelemetryNormal, wire)
 }
 
 func (d *Daemon) emitRuleEvents(ctx context.Context, now time.Time) {
 	events := d.ruleEngine.DrainEvents()
 	for _, ev := range events {
-		msgID, err := edgecontrol.NewReplicationUUIDv7(now)
+		occurredAt := now.UTC()
+		if parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(ev.OccurredAt)); err == nil && !parsed.IsZero() {
+			occurredAt = parsed.UTC()
+		}
+		rawData, err := json.Marshal(ev)
 		if err != nil {
 			continue
 		}
+		msgID := edgecontrol.DeterministicReplicationUUIDv7(occurredAt, d.cfg.GatewayID, ev.EventID, ev.RuleID, ev.EventType)
 		seq := d.sequence.Add(1)
 		severity := strings.ToUpper(strings.TrimSpace(ev.Severity))
-		if severity != "INFO" && severity != "WARNING" && severity != "CRITICAL" {
+		if ev.EventType == edgecontrol.EdgeRuleEventCleared || severity == "" {
+			severity = "INFO"
+		} else if severity != "INFO" && severity != "WARNING" && severity != "CRITICAL" {
 			severity = "WARNING"
 		}
+		tsMs := max(occurredAt.UnixMilli(), 1)
 		wire, err := json.Marshal(mqttUplinkEventEnvelope{
 			SchemaVersion: "2.0",
 			MessageID:     msgID,
 			GatewayID:     d.cfg.GatewayID,
-			Timestamp:     max(now.UnixMilli(), 1),
+			Timestamp:     tsMs,
 			Sequence:      seq,
 			Payload: mqttUplinkEventPayload{
-				EventType:  "EDGE_RULE_" + ev.EventType,
-				SourceType: "RULE",
+				EventType:  ev.EventType,
+				SourceType: "EDGE_RULE",
 				SourceID:   ev.RuleID,
-				EventTime:  max(now.UnixMilli(), 1),
+				EventTime:  tsMs,
 				Severity:   severity,
-				Data: map[string]any{
-					"title":            ev.Title,
-					"alarmType":        ev.AlarmType,
-					"bundleRevision":   ev.BundleRevision,
-					"edgeBundleDigest": ev.EdgeBundleDigest,
-					"offline":          ev.Offline,
-					"reason":           ev.Reason,
-				},
+				Data:       rawData,
 			},
 		})
 		if err != nil {
 			continue
 		}
 		d.publishOrSpool(ctx, "hvac/v1/"+d.cfg.GatewayID+"/up/event", 1, EvidenceAlarm, wire)
+	}
+}
+
+func (d *Daemon) rotateSession(now time.Time) (string, time.Time) {
+	ts := now.UTC()
+	if ts.IsZero() {
+		ts = time.Now().UTC()
+	}
+	sid, err := edgecontrol.NewReplicationUUIDv7(ts)
+	if err != nil {
+		sid = edgecontrol.DeterministicReplicationUUIDv7(ts, d.cfg.GatewayID, "session")
+	}
+	d.sessionMu.Lock()
+	d.sessionID = sid
+	d.sessionStartedAt = ts
+	d.sessionMu.Unlock()
+	return sid, ts
+}
+
+func (d *Daemon) currentSession() (string, time.Time) {
+	d.sessionMu.Lock()
+	defer d.sessionMu.Unlock()
+	return d.sessionID, d.sessionStartedAt
+}
+
+func (d *Daemon) buildGatewayLifecycleEventPayload(
+	eventType string,
+	sessionID string,
+	observedAt time.Time,
+	extra map[string]any,
+) ([]byte, error) {
+	ts := observedAt.UTC()
+	if ts.IsZero() {
+		ts = time.Now().UTC()
+	}
+	fields := make(map[string]any, len(extra)+1)
+	for k, v := range extra {
+		fields[k] = v
+	}
+	if strings.TrimSpace(sessionID) != "" {
+		fields["sessionId"] = strings.TrimSpace(sessionID)
+	}
+	rawData, err := json.Marshal(fields)
+	if err != nil {
+		return nil, err
+	}
+	msgID, err := edgecontrol.NewReplicationUUIDv7(ts)
+	if err != nil {
+		return nil, err
+	}
+	severity := "INFO"
+	if strings.EqualFold(strings.TrimSpace(eventType), "LWT") {
+		severity = "WARNING"
+	}
+	tsMs := max(ts.UnixMilli(), 1)
+	return json.Marshal(mqttUplinkEventEnvelope{
+		SchemaVersion: "2.0",
+		MessageID:     msgID,
+		GatewayID:     d.cfg.GatewayID,
+		Timestamp:     tsMs,
+		Sequence:      d.sequence.Add(1),
+		Payload: mqttUplinkEventPayload{
+			EventType:  eventType,
+			SourceType: "GATEWAY",
+			SourceID:   d.cfg.GatewayID,
+			EventTime:  tsMs,
+			Severity:   severity,
+			Data:       rawData,
+		},
+	})
+}
+
+func markTelemetryEnvelopeReplay(topic string, payload []byte) []byte {
+	if !strings.HasSuffix(topic, "/up/telemetry") {
+		return payload
+	}
+	var env mqttUplinkTelemetryEnvelope
+	if err := json.Unmarshal(payload, &env); err != nil {
+		return payload
+	}
+	if env.Replay {
+		return payload
+	}
+	env.Replay = true
+	rewritten, err := json.Marshal(env)
+	if err != nil {
+		return payload
+	}
+	return rewritten
+}
+
+func normalizeTelemetryPriority(desc edgecontrol.ChannelDescriptor) edgecontrol.DataPriority {
+	for _, candidate := range []edgecontrol.DataPriority{desc.ResendPriority, desc.PollPriority} {
+		switch candidate {
+		case edgecontrol.PriorityVeryHigh, edgecontrol.PriorityHigh, edgecontrol.PriorityMedium, edgecontrol.PriorityLow:
+			return candidate
+		}
+	}
+	return edgecontrol.PriorityMedium
+}
+
+func telemetryEvidenceClass(priority edgecontrol.DataPriority) EvidenceClass {
+	switch priority {
+	case edgecontrol.PriorityVeryHigh:
+		return EvidenceTelemetryVeryHigh
+	case edgecontrol.PriorityHigh:
+		return EvidenceTelemetryHigh
+	case edgecontrol.PriorityLow:
+		return EvidenceTelemetryLow
+	default:
+		return EvidenceTelemetryMedium
+	}
+}
+
+func pointTypeForDescriptor(desc edgecontrol.ChannelDescriptor) string {
+	switch desc.DataType {
+	case edgecontrol.DataTypeBoolean, edgecontrol.DataTypeString:
+		return "STATE"
+	default:
+		return "TELEMETRY"
+	}
+}
+
+func valueTypeForDescriptor(desc edgecontrol.ChannelDescriptor) string {
+	switch desc.DataType {
+	case edgecontrol.DataTypeBoolean:
+		return "BOOLEAN"
+	case edgecontrol.DataTypeString:
+		return "STRING"
+	default:
+		return "NUMBER"
 	}
 }
 

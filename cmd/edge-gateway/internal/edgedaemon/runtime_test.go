@@ -2,15 +2,18 @@ package edgedaemon
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
+	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
 	modbus "github.com/simonvetter/modbus"
 )
 
@@ -241,5 +244,323 @@ func TestBuildMQTTTLSConfigOverrideAndFallback(t *testing.T) {
 	})
 	if onlyMQTTCA == nil || onlyMQTTCA.CACertFile != "/tmp/broker-ca.crt" || onlyMQTTCA.ServerName != "mqtt-broker" {
 		t.Fatalf("expected mqttCaFile alone to build TLS config, got %+v", onlyMQTTCA)
+	}
+}
+
+func TestDaemonRuleEventAlignmentAndWireDecode(t *testing.T) {
+	endpoint, modHandler := func() (string, *fakeModbusServerHandler) {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		addr := ln.Addr().String()
+		_ = ln.Close()
+		h := &fakeModbusServerHandler{regs: map[uint16]uint16{100: 120}}
+		srv, err := modbus.NewServer(&modbus.ServerConfiguration{URL: "tcp://" + addr, Timeout: time.Second}, h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := srv.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = srv.Stop() })
+		return addr, h
+	}()
+
+	uid, timeoutMS, retries := 1, 500, 0
+	ruleID := "0193f000-3000-7000-8000-000000000099"
+	gwID := "0193f000-2000-7000-8000-000000000201"
+	curTime := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
+
+	bundle := edgecontrol.EdgeRuleBundle{
+		SchemaVersion:  1,
+		SiteID:         "0193f000-1000-7000-8000-000000000001",
+		BundleRevision: 3,
+		Rules: []edgecontrol.CompiledEdgeRule{{
+			RuleID:           ruleID,
+			AlarmType:        "CHW_HIGH_TEMP",
+			Title:            "Chilled water supply temp high",
+			Severity:         "CRITICAL",
+			ExecutionTarget:  edgecontrol.EdgeTargetEdge,
+			QualityPolicy:    edgecontrol.EdgeQualityValidOnly,
+			FreshnessSeconds: 60,
+			TriggerMode:      edgecontrol.EdgeTriggerSimple,
+			Raise: edgecontrol.EdgeCondition{
+				Kind:     edgecontrol.EdgeConditionCompare,
+				Input:    "chiller-01/chw_supply_temp",
+				Operator: edgecontrol.EdgeCompareGT,
+				Value:    &edgecontrol.EdgeTypedValue{Type: edgecontrol.EdgeValueNumber, Number: 10},
+			},
+			Clear: edgecontrol.EdgeCondition{
+				Kind:     edgecontrol.EdgeConditionCompare,
+				Input:    "chiller-01/chw_supply_temp",
+				Operator: edgecontrol.EdgeCompareLTE,
+				Value:    &edgecontrol.EdgeTypedValue{Type: edgecontrol.EdgeValueNumber, Number: 9},
+			},
+		}},
+	}
+	digest, err := bundle.ComputeDigest()
+	if err != nil {
+		t.Fatalf("bundle.ComputeDigest: %v", err)
+	}
+	bundle.EdgeBundleDigest = digest
+
+	cfg := Config{
+		GatewayID: gwID,
+		StateDir:  t.TempDir(),
+		Drivers: []edgecontrol.ModbusDriverInput{{
+			DeviceKey:  "chiller-01",
+			DriverType: "MODBUS_TCP",
+			Endpoint:   &endpoint,
+			UnitID:     &uid,
+			TimeoutMS:  &timeoutMS,
+			Retries:    &retries,
+			Registers: []edgecontrol.ModbusRegisterInput{{
+				PointCode:     "chw_supply_temp",
+				FunctionCode:  3,
+				Address:       100,
+				RegisterCount: 1,
+				RawType:       "UINT16",
+				ByteOrder:     "BIG_ENDIAN",
+				WordOrder:     "BIG_ENDIAN",
+				Scale:         0.1,
+				Offset:        0,
+				PollPriority:  "VERY_HIGH",
+			}},
+		}},
+		EdgeRuleBundle: &bundle,
+	}
+	cfg.ApplyDefaults("0.1.2")
+
+	daemon, err := NewDaemon(cfg, DaemonOptions{Now: func() time.Time { return curTime }})
+	if err != nil {
+		t.Fatalf("NewDaemon: %v", err)
+	}
+	defer func() { _ = daemon.Close() }()
+
+	if _, err := daemon.StepCycle(t.Context()); err != nil {
+		t.Fatalf("StepCycle raise: %v", err)
+	}
+	curTime = curTime.Add(5 * time.Second)
+	modHandler.mu.Lock()
+	modHandler.regs[100] = 80
+	modHandler.mu.Unlock()
+	if _, err := daemon.StepCycle(t.Context()); err != nil {
+		t.Fatalf("StepCycle clear: %v", err)
+	}
+
+	var eventItems []SpoolItem
+	for _, item := range daemon.Spool().Pending() {
+		if item.Class == EvidenceAlarm {
+			eventItems = append(eventItems, item)
+		}
+	}
+	if len(eventItems) != 2 {
+		t.Fatalf("expected 2 alarm events (RAISED + CLEARED), got %d", len(eventItems))
+	}
+
+	reg := adapter.DefaultCodecRegistry()
+	var decodedTypes []string
+	for _, item := range eventItems {
+		evt, err := reg.DecodeEvent(item.Payload, gwID)
+		if err != nil {
+			t.Fatalf("DecodeEvent failed: %v", err)
+		}
+		decodedTypes = append(decodedTypes, evt.Payload.EventType)
+		if evt.Payload.SourceType != "EDGE_RULE" || evt.Payload.SourceID != ruleID {
+			t.Fatalf("unexpected source fields: sourceType=%s sourceId=%s", evt.Payload.SourceType, evt.Payload.SourceID)
+		}
+		if strings.HasPrefix(evt.Payload.EventType, "EDGE_RULE_EDGE_RULE_") {
+			t.Fatalf("double prefix bug regressed: %s", evt.Payload.EventType)
+		}
+		var payload edgecontrol.EdgeRuleEvent
+		if err := json.Unmarshal(evt.Payload.Data, &payload); err != nil {
+			t.Fatalf("decode full EdgeRuleEvent payload: %v", err)
+		}
+		if payload.EventID == "" || payload.RuleID != ruleID || payload.OccurredAt == "" {
+			t.Fatalf("EdgeRuleEvent missing required metadata: %+v", payload)
+		}
+	}
+	if !slices.Contains(decodedTypes, edgecontrol.EdgeRuleEventRaised) || !slices.Contains(decodedTypes, edgecontrol.EdgeRuleEventCleared) {
+		t.Fatalf("expected RAISED and CLEARED event types, got %v", decodedTypes)
+	}
+}
+
+func TestDaemonDeadbandTimedataPriorityAndReplay(t *testing.T) {
+	endpoint, modHandler := func() (string, *fakeModbusServerHandler) {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		addr := ln.Addr().String()
+		_ = ln.Close()
+		h := &fakeModbusServerHandler{regs: map[uint16]uint16{100: 70, 101: 230}}
+		srv, err := modbus.NewServer(&modbus.ServerConfiguration{URL: "tcp://" + addr, Timeout: time.Second}, h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := srv.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = srv.Stop() })
+		return addr, h
+	}()
+
+	uid, timeoutMS, retries := 1, 500, 0
+	gwID := "0193f000-2000-7000-8000-000000000202"
+	curTime := time.Date(2026, 11, 22, 11, 0, 0, 0, time.UTC)
+
+	cfg := Config{
+		GatewayID:                      gwID,
+		StateDir:                       t.TempDir(),
+		TelemetryDeadband:              0.5,
+		TelemetryDeadbandMaxSilenceSec: 60,
+		Drivers: []edgecontrol.ModbusDriverInput{{
+			DeviceKey:  "chiller-01",
+			DriverType: "MODBUS_TCP",
+			Endpoint:   &endpoint,
+			UnitID:     &uid,
+			TimeoutMS:  &timeoutMS,
+			Retries:    &retries,
+			Registers: []edgecontrol.ModbusRegisterInput{
+				{PointCode: "chw_supply_temp", FunctionCode: 3, Address: 100, RegisterCount: 1, RawType: "UINT16", ByteOrder: "BIG_ENDIAN", WordOrder: "BIG_ENDIAN", Scale: 0.1, PollPriority: "VERY_HIGH"},
+				{PointCode: "ambient_temp", FunctionCode: 3, Address: 101, RegisterCount: 1, RawType: "UINT16", ByteOrder: "BIG_ENDIAN", WordOrder: "BIG_ENDIAN", Scale: 0.1, PollPriority: "LOW"},
+			},
+		}},
+	}
+	cfg.ApplyDefaults("0.1.2")
+
+	daemon, err := NewDaemon(cfg, DaemonOptions{Now: func() time.Time { return curTime }})
+	if err != nil {
+		t.Fatalf("NewDaemon: %v", err)
+	}
+	defer func() { _ = daemon.Close() }()
+
+	// Cycle 1: initial observations emit in VERY_HIGH + LOW tiers (2 spool items).
+	if _, err := daemon.StepCycle(t.Context()); err != nil {
+		t.Fatalf("StepCycle 1: %v", err)
+	}
+	if got := len(daemon.Spool().Pending()); got != 2 {
+		t.Fatalf("cycle 1 pending = %d, want 2 (VERY_HIGH + LOW)", got)
+	}
+
+	// Cycle 2 (+10s): small change < 0.5 deadband -> suppressed over MQTT spool, yet FileTimedata still records raw cycle.
+	curTime = curTime.Add(10 * time.Second)
+	modHandler.mu.Lock()
+	modHandler.regs[100] = 72
+	modHandler.regs[101] = 231
+	modHandler.mu.Unlock()
+	if _, err := daemon.StepCycle(t.Context()); err != nil {
+		t.Fatalf("StepCycle 2: %v", err)
+	}
+	if got := len(daemon.Spool().Pending()); got != 2 {
+		t.Fatalf("cycle 2 within deadband must not enqueue extra MQTT envelopes, got %d", got)
+	}
+	history, err := daemon.Timedata().History("chiller-01/chw_supply_temp", 10)
+	if err != nil || len(history) != 2 {
+		t.Fatalf("expected 2 full-resolution FileTimedata records despite deadband, got (%d, %v)", len(history), err)
+	}
+
+	// Cycles 3 & 4 (+20s, +30s): PriorityLow waits on cadence=4 and stays within MaxSilence.
+	for _, delta := range []time.Duration{10 * time.Second, 10 * time.Second} {
+		curTime = curTime.Add(delta)
+		if _, err := daemon.StepCycle(t.Context()); err != nil {
+			t.Fatalf("intermediate StepCycle: %v", err)
+		}
+		if got := len(daemon.Spool().Pending()); got != 2 {
+			t.Fatalf("intermediate cycle within MaxSilence must keep pending=2, got %d", got)
+		}
+	}
+
+	// Cycle 5 (+70s > MaxSilence 60s, pollCycle=4): both VERY_HIGH and LOW poll fresh and re-emit.
+	curTime = curTime.Add(40 * time.Second)
+	if _, err := daemon.StepCycle(t.Context()); err != nil {
+		t.Fatalf("StepCycle 5: %v", err)
+	}
+	pending := daemon.Spool().Pending()
+	if len(pending) != 4 {
+		t.Fatalf("cycle 5 post-MaxSilence pending = %d, want 4", len(pending))
+	}
+	historyAfter, err := daemon.Timedata().History("chiller-01/chw_supply_temp", 10)
+	if err != nil || len(historyAfter) != 5 {
+		t.Fatalf("expected 5 full-resolution FileTimedata records across 5 cycles, got (%d, %v)", len(historyAfter), err)
+	}
+	if pending[0].Class != EvidenceTelemetryVeryHigh || pending[len(pending)-1].Class != EvidenceTelemetryLow {
+		t.Fatalf("expected VERY_HIGH drained ahead of LOW, classes=%v/%v", pending[0].Class, pending[len(pending)-1].Class)
+	}
+
+	// Replayed payload flips replay=true, preserves deterministic messageId, and decodes via cloud TelemetryCodec.
+	replayed := markTelemetryEnvelopeReplay(pending[0].Topic, pending[0].Payload)
+	var liveEnv, replayEnv mqttUplinkTelemetryEnvelope
+	if err := json.Unmarshal(pending[0].Payload, &liveEnv); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(replayed, &replayEnv); err != nil {
+		t.Fatal(err)
+	}
+	if liveEnv.Replay || !replayEnv.Replay || liveEnv.MessageID != replayEnv.MessageID {
+		t.Fatalf("replay flag or deterministic messageId mismatch: live=(replay=%v id=%s) replay=(replay=%v id=%s)", liveEnv.Replay, liveEnv.MessageID, replayEnv.Replay, replayEnv.MessageID)
+	}
+	decoded, err := adapter.DefaultCodecRegistry().DecodeTelemetry(replayed, gwID)
+	if err != nil || !decoded.Envelope.Replay || decoded.Envelope.MessageID != liveEnv.MessageID {
+		t.Fatalf("cloud TelemetryCodec decode on replayed envelope failed: decoded=%+v err=%v", decoded, err)
+	}
+}
+
+func TestDaemonLifecycleLWTConnectedAndDisconnectedSessionID(t *testing.T) {
+	gwID := "0193f000-2000-7000-8000-000000000203"
+	ts := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+
+	cfg := Config{GatewayID: gwID, StateDir: t.TempDir()}
+	cfg.ApplyDefaults("0.1.2")
+	daemon, err := NewDaemon(cfg, DaemonOptions{Now: func() time.Time { return ts }})
+	if err != nil {
+		t.Fatalf("NewDaemon: %v", err)
+	}
+	defer func() { _ = daemon.Close() }()
+
+	sid, _ := daemon.rotateSession(ts)
+	lwtBytes, err := daemon.buildGatewayLifecycleEventPayload("LWT", sid, ts, map[string]any{"reason": "broker_connection_lost"})
+	if err != nil {
+		t.Fatalf("build LWT: %v", err)
+	}
+	connBytes, err := daemon.buildGatewayLifecycleEventPayload("GATEWAY_CONNECTED", sid, ts.Add(time.Second), nil)
+	if err != nil {
+		t.Fatalf("build GATEWAY_CONNECTED: %v", err)
+	}
+	discBytes, err := daemon.buildGatewayLifecycleEventPayload("GATEWAY_DISCONNECTED", sid, ts.Add(2*time.Second), map[string]any{"clean": true})
+	if err != nil {
+		t.Fatalf("build GATEWAY_DISCONNECTED: %v", err)
+	}
+
+	reg := adapter.DefaultCodecRegistry()
+	for _, tc := range []struct {
+		wantType string
+		raw      []byte
+	}{
+		{"LWT", lwtBytes},
+		{"GATEWAY_CONNECTED", connBytes},
+		{"GATEWAY_DISCONNECTED", discBytes},
+	} {
+		evt, decErr := reg.DecodeEvent(tc.raw, gwID)
+		if decErr != nil {
+			t.Fatalf("%s DecodeEvent failed: %v", tc.wantType, decErr)
+		}
+		if evt.Payload.EventType != tc.wantType || evt.Payload.SourceType != "GATEWAY" {
+			t.Fatalf("%s unexpected decoded event: %+v", tc.wantType, evt)
+		}
+		var dataMap map[string]any
+		if err := json.Unmarshal(evt.Payload.Data, &dataMap); err != nil {
+			t.Fatal(err)
+		}
+		if dataMap["sessionId"] != sid {
+			t.Fatalf("%s sessionId = %v, want %q", tc.wantType, dataMap["sessionId"], sid)
+		}
+	}
+
+	badDeadband := Config{GatewayID: gwID, StateDir: t.TempDir(), TelemetryDeadband: -0.1}
+	badDeadband.ApplyDefaults("0.1.2")
+	if err := badDeadband.Validate(); err == nil {
+		t.Fatal("expected negative telemetryDeadband validation error")
 	}
 }

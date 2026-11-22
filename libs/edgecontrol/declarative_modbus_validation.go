@@ -289,18 +289,30 @@ func validateRegisterInput(reg ModbusRegisterInput) (ModbusRegisterSpec, error) 
 	if !ValidSafetyBoundaryClass(safetyBoundary) {
 		return ModbusRegisterSpec{}, fmt.Errorf("unsupported safetyBoundary %q", reg.SafetyBoundary)
 	}
-	if reg.FunctionCode != int(ModbusFunctionReadHoldingRegisters) && reg.FunctionCode != int(ModbusFunctionReadInputRegisters) {
+	readFC := ModbusFunctionCode(reg.FunctionCode)
+	switch readFC {
+	case ModbusFunctionReadCoils, ModbusFunctionReadDiscreteInputs, ModbusFunctionReadHoldingRegisters, ModbusFunctionReadInputRegisters:
+	default:
 		return ModbusRegisterSpec{}, fmt.Errorf("unsupported read functionCode %d", reg.FunctionCode)
 	}
 	var writeFC ModbusFunctionCode
 	if reg.WriteFunctionCode != nil {
-		if *reg.WriteFunctionCode != int(ModbusFunctionWriteSingleRegister) && *reg.WriteFunctionCode != int(ModbusFunctionWriteMultipleRegisters) {
-			return ModbusRegisterSpec{}, fmt.Errorf("unsupported writeFunctionCode %d", *reg.WriteFunctionCode)
-		}
-		if reg.FunctionCode == int(ModbusFunctionReadInputRegisters) {
+		wf := ModbusFunctionCode(*reg.WriteFunctionCode)
+		switch readFC {
+		case ModbusFunctionReadInputRegisters:
 			return ModbusRegisterSpec{}, errors.New("input register (FC4) cannot declare writeFunctionCode")
+		case ModbusFunctionReadDiscreteInputs:
+			return ModbusRegisterSpec{}, errors.New("discrete input (FC2) cannot declare writeFunctionCode")
+		case ModbusFunctionReadCoils:
+			if wf != ModbusFunctionWriteSingleCoil && wf != ModbusFunctionWriteMultipleCoils {
+				return ModbusRegisterSpec{}, fmt.Errorf("coil register (FC1) requires writeFunctionCode 5 or 15, got %d", *reg.WriteFunctionCode)
+			}
+		case ModbusFunctionReadHoldingRegisters:
+			if wf != ModbusFunctionWriteSingleRegister && wf != ModbusFunctionWriteMultipleRegisters {
+				return ModbusRegisterSpec{}, fmt.Errorf("unsupported writeFunctionCode %d", *reg.WriteFunctionCode)
+			}
 		}
-		writeFC = ModbusFunctionCode(*reg.WriteFunctionCode)
+		writeFC = wf
 	}
 	effectiveBoundary := safetyBoundary
 	if effectiveBoundary != SafetyBoundaryHardRealtime {
@@ -319,6 +331,9 @@ func validateRegisterInput(reg ModbusRegisterInput) (ModbusRegisterSpec, error) 
 	expectedCount, err := expectedRegisterCount(rawType)
 	if err != nil {
 		return ModbusRegisterSpec{}, err
+	}
+	if (readFC == ModbusFunctionReadCoils || readFC == ModbusFunctionReadDiscreteInputs) && rawType != ModbusRawBitBool {
+		return ModbusRegisterSpec{}, fmt.Errorf("functionCode %d requires rawType BIT_BOOL, got %s", readFC, rawType)
 	}
 	if reg.RegisterCount != int(expectedCount) {
 		return ModbusRegisterSpec{}, fmt.Errorf("rawType %s requires registerCount %d, got %d", rawType, expectedCount, reg.RegisterCount)
@@ -341,10 +356,16 @@ func validateRegisterInput(reg ModbusRegisterInput) (ModbusRegisterSpec, error) 
 
 	bitIndex := 0
 	if rawType == ModbusRawBitBool {
-		if reg.BitIndex == nil || *reg.BitIndex < 0 || *reg.BitIndex > 15 {
-			return ModbusRegisterSpec{}, errors.New("bitIndex must be in [0,15] for BIT_BOOL")
+		if readFC == ModbusFunctionReadCoils || readFC == ModbusFunctionReadDiscreteInputs {
+			if reg.BitIndex != nil && *reg.BitIndex != 0 {
+				return ModbusRegisterSpec{}, fmt.Errorf("functionCode %d BIT_BOOL bitIndex must be 0 when specified, got %d", readFC, *reg.BitIndex)
+			}
+		} else {
+			if reg.BitIndex == nil || *reg.BitIndex < 0 || *reg.BitIndex > 15 {
+				return ModbusRegisterSpec{}, errors.New("bitIndex must be in [0,15] for BIT_BOOL")
+			}
+			bitIndex = *reg.BitIndex
 		}
-		bitIndex = *reg.BitIndex
 	} else if reg.BitIndex != nil {
 		return ModbusRegisterSpec{}, fmt.Errorf("bitIndex is only valid for BIT_BOOL, got %s", rawType)
 	}

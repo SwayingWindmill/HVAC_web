@@ -13,6 +13,7 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -895,6 +896,12 @@ func writeTestPKI(t *testing.T) testPKI {
 	}
 }
 
+type recordedConnectWill struct {
+	flag    bool
+	topic   string
+	payload string
+}
+
 type testMTLSBroker struct {
 	addr     string
 	listener net.Listener
@@ -904,6 +911,7 @@ type testMTLSBroker struct {
 	activeConn   net.Conn
 	activeWrite  sync.Mutex
 	tlsVersion   uint16
+	connectWills []recordedConnectWill
 	subCalls     [][]string
 	unsubTopics  []string
 	published    []string
@@ -973,6 +981,14 @@ func (b *testMTLSBroker) handleConn(conn net.Conn) {
 		}
 		switch pkt.Type {
 		case packets.CONNECT:
+			cp := pkt.Content.(*packets.Connect)
+			b.mu.Lock()
+			b.connectWills = append(b.connectWills, recordedConnectWill{
+				flag:    cp.WillFlag,
+				topic:   cp.WillTopic,
+				payload: string(cp.WillMessage),
+			})
+			b.mu.Unlock()
 			ca := &packets.Connack{
 				ReasonCode: 0x00,
 				Properties: &packets.Properties{},
@@ -1152,4 +1168,59 @@ func (b *testMTLSBroker) close() {
 	}
 	_ = b.listener.Close()
 	b.wg.Wait()
+}
+
+func TestSharedSessionWillMessageAndConnectPacketBuilder(t *testing.T) {
+	pki := writeTestPKI(t)
+	broker := startTestMTLSBroker(t, pki.serverTLS)
+	defer broker.close()
+
+	initialWill := &paho.WillMessage{
+		QoS:     1,
+		Topic:   "hvac/v1/gw-will/up/event",
+		Payload: []byte(`{"eventType":"LWT","data":{"sessionId":"init"}}`),
+	}
+	builderCalls := 0
+	session, err := NewSharedSession(context.Background(), SharedSessionConfig{
+		BrokerURL:            "mqtts://" + broker.addr,
+		ClientID:             "edge-gateway-gw-will",
+		TLSConfig:            pki.clientTLS,
+		KeepAlive:            30,
+		WillMessage:          initialWill,
+		ConnectRetryDelay:    20 * time.Millisecond,
+		SubscribeRetryDelays: []time.Duration{20 * time.Millisecond},
+		ConnectPacketBuilder: func(cp *paho.Connect, _ *url.URL) (*paho.Connect, error) {
+			builderCalls++
+			if cp.WillMessage == nil || cp.WillMessage.Topic != initialWill.Topic {
+				return nil, errors.New("expected initial WillMessage propagated to ConnectPacketBuilder")
+			}
+			cp.WillMessage = &paho.WillMessage{
+				QoS:     1,
+				Topic:   initialWill.Topic,
+				Payload: []byte(`{"eventType":"LWT","data":{"sessionId":"builder-updated"}}`),
+			}
+			return cp, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewSharedSession: %v", err)
+	}
+	defer func() { _ = session.Close(context.Background()) }()
+
+	awaitCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := session.AwaitConnection(awaitCtx); err != nil {
+		t.Fatalf("AwaitConnection: %v", err)
+	}
+
+	broker.mu.Lock()
+	wills := slices.Clone(broker.connectWills)
+	broker.mu.Unlock()
+	if builderCalls == 0 || len(wills) == 0 {
+		t.Fatalf("expected ConnectPacketBuilder invocation and CONNECT packet, builderCalls=%d wills=%+v", builderCalls, wills)
+	}
+	last := wills[len(wills)-1]
+	if !last.flag || last.topic != initialWill.Topic || !strings.Contains(last.payload, "builder-updated") {
+		t.Fatalf("unexpected CONNECT WillMessage on wire: %+v", last)
+	}
 }

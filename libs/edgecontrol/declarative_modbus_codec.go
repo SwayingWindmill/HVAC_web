@@ -10,6 +10,9 @@ import (
 func decodeRegisterSample(spec ModbusRegisterSpec, raw []uint16, at time.Time) Sample {
 	switch spec.RawType {
 	case ModbusRawBitBool:
+		if spec.FunctionCode == ModbusFunctionReadCoils || spec.FunctionCode == ModbusFunctionReadDiscreteInputs {
+			return Sample{Value: BooleanValue(raw[0] != 0), Quality: QualityGood, ObservedAt: at}
+		}
 		word := applyByteOrder16(raw[0], spec.ByteOrder)
 		bitSet := (word & (uint16(1) << spec.BitIndex)) != 0
 		return Sample{Value: BooleanValue(bitSet), Quality: QualityGood, ObservedAt: at}

@@ -992,3 +992,145 @@ func TestDeclarativeModbusImmediateLocalReadbackVerification(t *testing.T) {
 		}
 	})
 }
+
+func TestDeclarativeModbusCoilsAndDeterministicID(t *testing.T) {
+	t.Parallel()
+
+	t.Run("coils FC01/FC05 and discrete inputs FC02 work cleanly over loopback TCP", func(t *testing.T) {
+		endpoint, handler := startModbusTestServer(t)
+		handler.mu.Lock()
+		handler.coils[0] = false
+		handler.coils[1] = true
+		handler.discreteInputs[4] = true
+		handler.mu.Unlock()
+
+		profile := DeclarativeModbusProfile{
+			ComponentID: "ET1010-RELAY",
+			DriverType:  ModbusDriverTCP,
+			Endpoint:    endpoint,
+			UnitID:      31,
+			TimeoutMS:   500,
+			Retries:     0,
+			Registers: []ModbusRegisterSpec{
+				{
+					PointCode:         "pump_cmd_coil",
+					FunctionCode:      ModbusFunctionReadCoils,
+					WriteFunctionCode: ModbusFunctionWriteSingleCoil,
+					Address:           0,
+					RegisterCount:     1,
+					RawType:           ModbusRawBitBool,
+					ByteOrder:         ModbusByteOrderBigEndian,
+					WordOrder:         ModbusWordOrderBigEndian,
+					Scale:             1,
+					PollPriority:      PriorityVeryHigh,
+				},
+				{
+					PointCode:     "interlock_di",
+					FunctionCode:  ModbusFunctionReadDiscreteInputs,
+					Address:       4,
+					RegisterCount: 1,
+					RawType:       ModbusRawBitBool,
+					ByteOrder:     ModbusByteOrderBigEndian,
+					WordOrder:     ModbusWordOrderBigEndian,
+					Scale:         1,
+					PollPriority:  PriorityVeryHigh,
+				},
+			},
+		}
+
+		adapter, err := NewDeclarativeModbusAdapter(profile, nil)
+		if err != nil {
+			t.Fatalf("NewDeclarativeModbusAdapter error = %v", err)
+		}
+		t.Cleanup(func() { _ = adapter.Close() })
+
+		now := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
+		updates, err := adapter.Poll(context.Background(), now)
+		if err != nil || len(updates) != 2 {
+			t.Fatalf("Poll() = (%+v, %v), want 2 updates", updates, err)
+		}
+		if updates[0].Sample.Value.Boolean || !updates[1].Sample.Value.Boolean {
+			t.Fatalf("unexpected coil/DI samples: %+v", updates)
+		}
+
+		vTrue := BooleanValue(true)
+		results, err := adapter.Apply(context.Background(), ProcessImage{}, []Decision{
+			{Address: "ET1010-RELAY/pump_cmd_coil", ControllerID: "seq", Accepted: true, Effective: &vTrue},
+		})
+		if err != nil || len(results) != 1 || !results[0].Success || !results[0].ReadbackVerified {
+			t.Fatalf("coil Apply() failed: results=%+v err=%v", results, err)
+		}
+		handler.mu.Lock()
+		gotCoil := handler.coils[0]
+		handler.mu.Unlock()
+		if !gotCoil {
+			t.Fatal("expected coil 0 updated to true on Modbus server")
+		}
+	})
+
+	t.Run("coil and discrete input validation preserves safety and FC constraints", func(t *testing.T) {
+		endpoint := "127.0.0.1:5020"
+		uid, tm, ret := 31, 500, 0
+		fc5, fc6 := 5, 6
+		badCases := []struct {
+			name string
+			reg  ModbusRegisterInput
+		}{
+			{
+				name: "FC2 discrete input cannot declare writeFunctionCode",
+				reg: ModbusRegisterInput{
+					PointCode: "di_status", FunctionCode: 2, WriteFunctionCode: &fc5, Address: 0, RegisterCount: 1,
+					RawType: "BIT_BOOL", ByteOrder: "BIG_ENDIAN", WordOrder: "BIG_ENDIAN", Scale: 1, PollPriority: "HIGH",
+				},
+			},
+			{
+				name: "FC1 coil cannot declare FC6 register write",
+				reg: ModbusRegisterInput{
+					PointCode: "coil_cmd", FunctionCode: 1, WriteFunctionCode: &fc6, Address: 0, RegisterCount: 1,
+					RawType: "BIT_BOOL", ByteOrder: "BIG_ENDIAN", WordOrder: "BIG_ENDIAN", Scale: 1, PollPriority: "HIGH",
+				},
+			},
+			{
+				name: "FC3 holding register keeps rejecting FC5",
+				reg: ModbusRegisterInput{
+					PointCode: "hr_cmd", FunctionCode: 3, WriteFunctionCode: &fc5, Address: 0, RegisterCount: 1,
+					RawType: "UINT16", ByteOrder: "BIG_ENDIAN", WordOrder: "BIG_ENDIAN", Scale: 1, PollPriority: "HIGH",
+				},
+			},
+			{
+				name: "HARD_REALTIME coil rejects writeFunctionCode",
+				reg: ModbusRegisterInput{
+					PointCode: "safety_coil", SafetyBoundary: string(SafetyBoundaryHardRealtime), FunctionCode: 1, WriteFunctionCode: &fc5, Address: 2, RegisterCount: 1,
+					RawType: "BIT_BOOL", ByteOrder: "BIG_ENDIAN", WordOrder: "BIG_ENDIAN", Scale: 1, PollPriority: "VERY_HIGH",
+				},
+			},
+		}
+		for _, tc := range badCases {
+			_, err := ValidateModbusDriverInput(ModbusDriverInput{
+				DeviceKey: "et1010", DriverType: "MODBUS_TCP", Endpoint: &endpoint, UnitID: &uid, TimeoutMS: &tm, Retries: &ret,
+				Registers: []ModbusRegisterInput{tc.reg},
+			}, ModbusDriverValidationOptions{RequireDeviceKey: true, RequireGatewayBindings: true})
+			if err == nil {
+				t.Fatalf("%s: expected validation error", tc.name)
+			}
+		}
+	})
+
+	t.Run("DeterministicReplicationUUIDv7 is repeatable and sensitive to all keyParts", func(t *testing.T) {
+		at := time.Date(2026, 11, 22, 10, 5, 6, 789000000, time.UTC)
+		id1 := DeterministicReplicationUUIDv7(at, "gw-1", "VERY_HIGH", "dev-1/temp")
+		id2 := DeterministicReplicationUUIDv7(at, "gw-1", "VERY_HIGH", "dev-1/temp")
+		idDiffPart := DeterministicReplicationUUIDv7(at, "gw-1", "HIGH", "dev-1/temp")
+		idDiffTime := DeterministicReplicationUUIDv7(at.Add(time.Millisecond), "gw-1", "VERY_HIGH", "dev-1/temp")
+
+		if !IsReplicationUUID(id1) {
+			t.Fatalf("invalid deterministic UUID: %q", id1)
+		}
+		if id1 != id2 {
+			t.Fatalf("deterministic UUID changed for same inputs: %q vs %q", id1, id2)
+		}
+		if id1 == idDiffPart || id1 == idDiffTime {
+			t.Fatalf("deterministic UUID collided across distinct inputs: %q / %q / %q", id1, idDiffPart, idDiffTime)
+		}
+	})
+}

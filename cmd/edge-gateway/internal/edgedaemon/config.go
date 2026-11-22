@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -30,14 +31,16 @@ const (
 	defaultRTUBaudRate            uint = 9600
 	defaultRTUDataBits            uint = 8
 	defaultRTUStopBits            uint = 1
+	defaultDeadbandMaxSilenceSec       = 300
 )
 
 // SerialBusConfig configures UART framing for an RS-485 bus device such as /dev/ttyAS3.
 type SerialBusConfig struct {
-	Speed    uint   `json:"speed"`
-	DataBits uint   `json:"dataBits"`
-	Parity   string `json:"parity"`
-	StopBits uint   `json:"stopBits"`
+	Speed             uint   `json:"speed"`
+	DataBits          uint   `json:"dataBits"`
+	Parity            string `json:"parity"`
+	StopBits          uint   `json:"stopBits"`
+	TurnaroundDelayMS int    `json:"turnaroundDelayMs,omitempty"`
 }
 
 // TunnelConfig configures the outbound reverse tunnel client on the gateway.
@@ -58,33 +61,35 @@ type OTAConfig struct {
 
 // Config defines the runtime configuration for the standalone Linux edge daemon.
 type Config struct {
-	GatewayID                 string                            `json:"gatewayId"`
-	SiteID                    string                            `json:"siteId,omitempty"`
-	HardwareModel             string                            `json:"hardwareModel,omitempty"`
-	RuntimeVersion            string                            `json:"runtimeVersion,omitempty"`
-	TargetOS                  string                            `json:"targetOs,omitempty"`
-	TargetArch                string                            `json:"targetArch,omitempty"`
-	StateDir                  string                            `json:"stateDir"`
-	SpoolMaxBytes             int64                             `json:"spoolMaxBytes,omitempty"`
-	PlatformBaseURL           string                            `json:"platformBaseUrl,omitempty"`
-	MQTTBrokerURL             string                            `json:"mqttBrokerUrl,omitempty"`
-	ServerName                string                            `json:"serverName,omitempty"`
-	CAFile                    string                            `json:"caFile,omitempty"`
-	MQTTServerName            string                            `json:"mqttServerName,omitempty"`
-	MQTTCAFile                string                            `json:"mqttCaFile,omitempty"`
-	CertFile                  string                            `json:"certFile,omitempty"`
-	KeyFile                   string                            `json:"keyFile,omitempty"`
-	HealthListenAddr          string                            `json:"healthListenAddr,omitempty"`
-	CycleIntervalMS           int                               `json:"cycleIntervalMs,omitempty"`
-	ShadowPollIntervalSec     int                               `json:"shadowPollIntervalSec,omitempty"`
-	CertRenewCheckIntervalSec int                               `json:"certRenewCheckIntervalSec,omitempty"`
-	CertRenewThresholdDays    int                               `json:"certRenewThresholdDays,omitempty"`
-	Tunnel                    TunnelConfig                      `json:"tunnel"`
-	OTA                       OTAConfig                         `json:"ota"`
-	SerialBuses               map[string]SerialBusConfig        `json:"serialBuses,omitempty"`
-	Drivers                   []edgecontrol.ModbusDriverInput   `json:"drivers,omitempty"`
-	AutonomyPolicy            *edgecontrol.AutonomyPolicyConfig `json:"autonomyPolicy,omitempty"`
-	EdgeRuleBundle            *edgecontrol.EdgeRuleBundle       `json:"edgeRuleBundle,omitempty"`
+	GatewayID                      string                            `json:"gatewayId"`
+	SiteID                         string                            `json:"siteId,omitempty"`
+	HardwareModel                  string                            `json:"hardwareModel,omitempty"`
+	RuntimeVersion                 string                            `json:"runtimeVersion,omitempty"`
+	TargetOS                       string                            `json:"targetOs,omitempty"`
+	TargetArch                     string                            `json:"targetArch,omitempty"`
+	StateDir                       string                            `json:"stateDir"`
+	SpoolMaxBytes                  int64                             `json:"spoolMaxBytes,omitempty"`
+	PlatformBaseURL                string                            `json:"platformBaseUrl,omitempty"`
+	MQTTBrokerURL                  string                            `json:"mqttBrokerUrl,omitempty"`
+	ServerName                     string                            `json:"serverName,omitempty"`
+	CAFile                         string                            `json:"caFile,omitempty"`
+	MQTTServerName                 string                            `json:"mqttServerName,omitempty"`
+	MQTTCAFile                     string                            `json:"mqttCaFile,omitempty"`
+	CertFile                       string                            `json:"certFile,omitempty"`
+	KeyFile                        string                            `json:"keyFile,omitempty"`
+	HealthListenAddr               string                            `json:"healthListenAddr,omitempty"`
+	CycleIntervalMS                int                               `json:"cycleIntervalMs,omitempty"`
+	ShadowPollIntervalSec          int                               `json:"shadowPollIntervalSec,omitempty"`
+	CertRenewCheckIntervalSec      int                               `json:"certRenewCheckIntervalSec,omitempty"`
+	CertRenewThresholdDays         int                               `json:"certRenewThresholdDays,omitempty"`
+	TelemetryDeadband              float64                           `json:"telemetryDeadband,omitempty"`
+	TelemetryDeadbandMaxSilenceSec int                               `json:"telemetryDeadbandMaxSilenceSec,omitempty"`
+	Tunnel                         TunnelConfig                      `json:"tunnel"`
+	OTA                            OTAConfig                         `json:"ota"`
+	SerialBuses                    map[string]SerialBusConfig        `json:"serialBuses,omitempty"`
+	Drivers                        []edgecontrol.ModbusDriverInput   `json:"drivers,omitempty"`
+	AutonomyPolicy                 *edgecontrol.AutonomyPolicyConfig `json:"autonomyPolicy,omitempty"`
+	EdgeRuleBundle                 *edgecontrol.EdgeRuleBundle       `json:"edgeRuleBundle,omitempty"`
 }
 
 // LoadConfig reads, decodes strictly, applies defaults, and validates an edge daemon Config file.
@@ -170,6 +175,9 @@ func (c *Config) ApplyDefaults(defaultVersion string) {
 	if c.OTA.DefaultHealthCheckTimeoutSec == 0 {
 		c.OTA.DefaultHealthCheckTimeoutSec = defaultOTAHealthTimeoutSec
 	}
+	if c.TelemetryDeadband > 0 && c.TelemetryDeadbandMaxSilenceSec == 0 {
+		c.TelemetryDeadbandMaxSilenceSec = defaultDeadbandMaxSilenceSec
+	}
 }
 
 // Validate enforces all fail-closed configuration invariants.
@@ -194,6 +202,12 @@ func (c Config) Validate() error {
 	}
 	if c.CertRenewThresholdDays < 1 || c.CertRenewThresholdDays > 90 {
 		return fmt.Errorf("certRenewThresholdDays %d must be in [1,90]", c.CertRenewThresholdDays)
+	}
+	if math.IsNaN(c.TelemetryDeadband) || math.IsInf(c.TelemetryDeadband, 0) || c.TelemetryDeadband < 0 {
+		return errors.New("telemetryDeadband must be a finite non-negative number")
+	}
+	if c.TelemetryDeadbandMaxSilenceSec < 0 || c.TelemetryDeadbandMaxSilenceSec > 86400 {
+		return fmt.Errorf("telemetryDeadbandMaxSilenceSec %d must be in [0,86400]", c.TelemetryDeadbandMaxSilenceSec)
 	}
 	if strings.TrimSpace(c.HealthListenAddr) != "" {
 		if err := tunnel.ValidateLoopbackAddr(c.HealthListenAddr); err != nil {
@@ -248,6 +262,9 @@ func (c Config) Validate() error {
 		case "", "N", "NONE", "E", "EVEN", "O", "ODD":
 		default:
 			return fmt.Errorf("serialBuses[%q].parity %q is invalid", dev, bus.Parity)
+		}
+		if bus.TurnaroundDelayMS < 0 || bus.TurnaroundDelayMS > 5000 {
+			return fmt.Errorf("serialBuses[%q].turnaroundDelayMs %d must be in [0,5000]", dev, bus.TurnaroundDelayMS)
 		}
 	}
 	if c.AutonomyPolicy != nil {
