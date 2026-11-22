@@ -940,3 +940,140 @@ test('semanticRole and assetRelationships validate, compile idempotently, and de
   ];
   assert.deepEqual(checkSiteFile(extended, songyaxuanAlarmRules), []);
 });
+
+test('real-site closed-loop setpoint, VFD, fan, local_remote_mode, and butterfly valve / flow switch interlocks validate and compile', () => {
+  const closedLoop = copy(songyaxuan);
+  const chillerDev = closedLoop.devices.find((device) => device.code === 'ctrl-chiller-a');
+  const chwpDev = closedLoop.devices.find((device) => device.code === 'ctrl-chwp-1');
+  const towerDev = closedLoop.devices.find((device) => device.code === 'ctrl-tower-1');
+  if (!chillerDev || !chwpDev || !towerDev) throw new Error('ctrl devices missing');
+  const chillerAsset = chillerDev.asset ?? '01a14000-3000-7000-8000-000000000001';
+  const chwpAsset = chwpDev.asset ?? '01a14000-3000-7000-8000-000000000009';
+  const towerAsset = towerDev.asset ?? '01a14000-3000-7000-8000-000000000005';
+  const firstPoint = chillerDev.points[0];
+  if (!firstPoint) throw new Error('ctrl-chiller-a sample point missing');
+
+  chillerDev.points.push(
+    { code: 'chw_supply_sp_fb', unit: 'Cel', pointType: 'TELEMETRY', valueType: 'NUMBER', sourceMetadata: { register: 40101 } },
+    { code: 'chwp_freq_fb', unit: 'Hz', pointType: 'TELEMETRY', valueType: 'NUMBER' },
+    { code: 'ct_fan_fb', unit: '%', pointType: 'TELEMETRY', valueType: 'NUMBER' },
+    { code: 'chw_valve_open', unit: '', pointType: 'STATE', valueType: 'BOOLEAN', sourceMetadata: { hydraulicInterlock: 'VALVE_OPEN' } },
+    { code: 'chw_flow_switch', unit: '', pointType: 'STATE', valueType: 'BOOLEAN', sourceMetadata: { hydraulicInterlock: 'FLOW_PROVEN' } },
+    { code: 'local_remote_mode', unit: '', pointType: 'STATE', valueType: 'STRING' },
+    {
+      code: 'set_chw_supply_temp',
+      unit: 'Cel',
+      pointType: 'COMMAND',
+      valueType: 'NUMBER',
+      writable: true,
+      asset: chillerAsset,
+      sourceMetadata: {
+        capability: 'SET_CHILLED_WATER_TEMPERATURE_SETPOINT',
+        capabilityRevision: 'capability:set-chilled-water-temperature-setpoint:v1',
+        feedbackPointKey: 'chw_supply_sp_fb',
+        controlKind: 'NUMBER',
+        parameterKey: 'setpointC',
+        minimum: 5,
+        maximum: 12,
+        step: 0.5,
+      },
+    },
+    {
+      code: 'set_chwp_freq',
+      unit: 'Hz',
+      pointType: 'COMMAND',
+      valueType: 'NUMBER',
+      writable: true,
+      asset: chwpAsset,
+      sourceMetadata: {
+        capability: 'SET_FREQUENCY',
+        capabilityRevision: 'capability:set-frequency:v1',
+        feedbackPointKey: 'chwp_freq_fb',
+        controlKind: 'NUMBER',
+        parameterKey: 'frequencyHz',
+        minimum: 25,
+        maximum: 50,
+        step: 0.5,
+      },
+    },
+    {
+      code: 'set_ct_fan_speed',
+      unit: '%',
+      pointType: 'COMMAND',
+      valueType: 'NUMBER',
+      writable: true,
+      asset: towerAsset,
+      sourceMetadata: {
+        capability: 'SET_FAN_SPEED',
+        capabilityRevision: 'capability:set-fan-speed:v1',
+        feedbackPointKey: 'ct_fan_fb',
+        controlKind: 'NUMBER',
+        parameterKey: 'fanSpeedPct',
+        minimum: 30,
+        maximum: 100,
+        step: 1,
+      },
+    },
+    {
+      code: 'start_chiller_interlocked',
+      unit: '',
+      pointType: 'COMMAND',
+      valueType: 'BOOLEAN',
+      writable: true,
+      asset: chillerAsset,
+      sourceMetadata: {
+        ...structuredClone(firstPoint.sourceMetadata ?? {}),
+        capability: 'START',
+        capabilityRevision: 'capability:start:v1',
+        feedbackPointKey: 'run_state',
+        actuationMode: 'PULSE',
+        channel: 'DO1',
+        coilAddress: 17,
+        pulseDurationMs: 500,
+        interlocks: [
+          { device: 'ctrl-chiller-a', point: 'chw_valve_open', expected: 'OPEN', reason: '冷冻蝶阀未开到位禁止启动' },
+          { device: 'ctrl-chiller-a', point: 'chw_flow_switch', expected: 'FLOWING', reason: '冷冻水流开关未导通禁止启动' },
+        ],
+      },
+    },
+  );
+  assert.deepEqual(checkSiteFile(closedLoop, songyaxuanAlarmRules), []);
+
+  const compiledSql = buildOnboardingSql(closedLoop).registry;
+  assert.match(compiledSql, /set_chw_supply_temp/);
+  assert.match(compiledSql, /"hydraulicInterlock":"VALVE_OPEN"/);
+  assert.match(compiledSql, /"hydraulicInterlock":"FLOW_PROVEN"/);
+  assert.match(compiledSql, /"expected":"OPEN"/);
+  assert.match(compiledSql, /"expected":"FLOWING"/);
+
+  const invalid = copy(closedLoop);
+  const badDev = invalid.devices.find((device) => device.code === 'ctrl-chiller-a');
+  if (!badDev) throw new Error('ctrl-chiller-a missing');
+  const valvePt = badDev.points.find((point) => point.code === 'chw_valve_open');
+  const spPt = badDev.points.find((point) => point.code === 'set_chw_supply_temp');
+  if (!valvePt || !spPt) throw new Error('added points missing');
+  valvePt.sourceMetadata = { hydraulicInterlock: 'BOGUS_HINT' };
+  spPt.sourceMetadata = {
+    ...(spPt.sourceMetadata ?? {}),
+    minimum: 12,
+    maximum: 6,
+  };
+  badDev.points.push({
+    code: 'plc_estop_override',
+    unit: '',
+    pointType: 'COMMAND',
+    valueType: 'BOOLEAN',
+    writable: true,
+    asset: chillerAsset,
+    sourceMetadata: {
+      capability: 'STOP',
+      capabilityRevision: 'capability:stop:v1',
+      feedbackPointKey: 'run_state',
+      safetyBoundary: 'HARD_REALTIME_SAFETY',
+    },
+  });
+  const invalidProblems = checkSiteFile(invalid, songyaxuanAlarmRules).join('\n');
+  assert.match(invalidProblems, /unsupported hydraulicInterlock BOGUS_HINT/);
+  assert.match(invalidProblems, /minimum < maximum/);
+  assert.match(invalidProblems, /hard real-time safety points cannot be registered as writable COMMAND points/);
+});

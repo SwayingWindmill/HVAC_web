@@ -75,12 +75,24 @@ func (plant *Plant) ApplyCommand(command Command) CommandResult {
 	method := strings.TrimSpace(command.Method)
 	switch command.DeviceID {
 	case plant.config.Chiller.ID:
+		if plant.chiller.localRemoteMode == ControlCabinetModeLocal {
+			return CommandResult{Success: false, Code: "CABINET_LOCAL_MANUAL"}
+		}
 		return plant.applyChillerCommand(method, command.Params)
 	case plant.config.ChilledWaterPump.ID:
+		if plant.chilledWaterPump.localRemoteMode == ControlCabinetModeLocal {
+			return CommandResult{Success: false, Code: "CABINET_LOCAL_MANUAL"}
+		}
 		return applyPumpCommand(&plant.chilledWaterPump, method, command.Params)
 	case plant.config.CoolingWaterPump.ID:
+		if plant.coolingWaterPump.localRemoteMode == ControlCabinetModeLocal {
+			return CommandResult{Success: false, Code: "CABINET_LOCAL_MANUAL"}
+		}
 		return applyPumpCommand(&plant.coolingWaterPump, method, command.Params)
 	case plant.config.CoolingTower.ID:
+		if plant.coolingTower.localRemoteMode == ControlCabinetModeLocal {
+			return CommandResult{Success: false, Code: "CABINET_LOCAL_MANUAL"}
+		}
 		return plant.applyCoolingTowerCommand(method, command.Params)
 	default:
 		return CommandResult{Success: false, Code: "DEVICE_NOT_CONTROLLABLE"}
@@ -119,6 +131,9 @@ func (plant *Plant) applyChillerCommand(method string, params map[string]float64
 			!plant.coolingTower.runRequested || !plant.coolingTower.running || plant.coolingTower.faultCode != "" {
 			return CommandResult{Success: false, Code: "INTERLOCK_OPEN"}
 		}
+		if !plant.chwValveOpen || !plant.cwValveOpen || !plant.chwFlowSwitchProvenLocked() || !plant.cwFlowSwitchProvenLocked() {
+			return CommandResult{Success: false, Code: "CHILLER_HYDRAULIC_INTERLOCK_NOT_PROVEN"}
+		}
 		plant.chiller.runRequested = true
 		return CommandResult{Success: true, Code: "APPLIED"}
 	case "stop":
@@ -134,6 +149,9 @@ func (plant *Plant) applyChillerCommand(method string, params map[string]float64
 		if plant.chiller.faultCode != "" || plant.chilledWaterPump.faultCode != "" ||
 			plant.coolingWaterPump.faultCode != "" || plant.coolingTower.faultCode != "" {
 			return CommandResult{Success: false, Code: "FAULT_ACTIVE"}
+		}
+		if !plant.chwValveOpen || !plant.cwValveOpen || plant.chwFlowSwitchBlocked || plant.cwFlowSwitchBlocked {
+			return CommandResult{Success: false, Code: "CHILLER_HYDRAULIC_INTERLOCK_NOT_PROVEN"}
 		}
 		plant.chilledWaterPump.runRequested = true
 		plant.coolingWaterPump.runRequested = true

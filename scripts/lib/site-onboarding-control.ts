@@ -13,7 +13,16 @@ const CAPABILITY_REVISIONS: Record<string, string> = {
 };
 
 const VALID_ACTUATION_MODES = new Set(['LEVEL', 'PULSE', 'UNIT_SEQUENCE', 'EMERGENCY_DO_RELEASE']);
-const VALID_INTERLOCK_STATES = new Set(['RUNNING', 'STOPPED']);
+const VALID_INTERLOCK_STATES = new Set(['RUNNING', 'STOPPED', 'OPEN', 'CLOSED', 'TRUE', 'FALSE', 'FLOWING']);
+const VALID_HYDRAULIC_INTERLOCK_HINTS = new Set(['VALVE_OPEN', 'FLOW_PROVEN']);
+const NUMERIC_CAPABILITY_PARAM_KEYS: Record<string, string> = {
+  SET_TEMPERATURE_SETPOINT: 'setpointC',
+  SET_CHILLED_WATER_TEMPERATURE_SETPOINT: 'setpointC',
+  SET_FREQUENCY: 'frequencyHz',
+  SET_FAN_SPEED: 'fanSpeedPct',
+  SET_LOAD_LIMIT: 'loadLimitPct',
+  SET_OPENING: 'openingPct',
+};
 
 export interface ControlInterlockInput {
   device: string;
@@ -107,7 +116,14 @@ export function validateControlPoints(
 
   for (const device of devices) {
     for (const point of device.points) {
-      if ((point.status ?? 'ACTIVE') !== 'ACTIVE' || point.pointType !== 'COMMAND') continue;
+      if ((point.status ?? 'ACTIVE') !== 'ACTIVE') continue;
+      if (point.pointType !== 'COMMAND') {
+        const hint = point.sourceMetadata?.hydraulicInterlock;
+        if (hint != null && (typeof hint !== 'string' || !VALID_HYDRAULIC_INTERLOCK_HINTS.has(hint))) {
+          problems.push(`point ${device.code}/${point.code}: unsupported hydraulicInterlock ${String(hint)}`);
+        }
+        continue;
+      }
       const where = `${device.code}/${point.code}`;
       if (point.writable === false) {
         problems.push(`command point ${where}: writable cannot be false`);
@@ -121,12 +137,40 @@ export function validateControlPoints(
         problems.push(`command point ${where}: sourceMetadata is required`);
         continue;
       }
+      if (metadata.safetyBoundary === 'HARD_REALTIME_SAFETY' || metadata.hardRealtimeProtected === true) {
+        problems.push(`command point ${where}: hard real-time safety points cannot be registered as writable COMMAND points`);
+      }
       const capability = metadata.capability;
       const capabilityRevision = metadata.capabilityRevision;
       if (typeof capability !== 'string' || !(capability in CAPABILITY_REVISIONS)) {
         problems.push(`command point ${where}: unsupported capability ${String(capability)}`);
       } else if (capabilityRevision !== CAPABILITY_REVISIONS[capability]) {
         problems.push(`command point ${where}: capabilityRevision ${String(capabilityRevision)} does not match ${CAPABILITY_REVISIONS[capability]}`);
+      }
+      if (
+        metadata.controlKind === 'NUMBER' ||
+        metadata.parameterKey != null ||
+        metadata.minimum != null ||
+        metadata.maximum != null
+      ) {
+        const expectedParam = typeof capability === 'string' ? NUMERIC_CAPABILITY_PARAM_KEYS[capability] : undefined;
+        if (expectedParam != null && metadata.parameterKey != null && metadata.parameterKey !== expectedParam) {
+          problems.push(`command point ${where}: parameterKey ${String(metadata.parameterKey)} must match ${expectedParam}`);
+        }
+        if (metadata.minimum != null || metadata.maximum != null) {
+          if (
+            typeof metadata.minimum !== 'number' ||
+            !Number.isFinite(metadata.minimum) ||
+            typeof metadata.maximum !== 'number' ||
+            !Number.isFinite(metadata.maximum) ||
+            metadata.minimum >= metadata.maximum
+          ) {
+            problems.push(`command point ${where}: numeric minimum and maximum must be finite numbers with minimum < maximum`);
+          }
+        }
+        if (metadata.step != null && (typeof metadata.step !== 'number' || !Number.isFinite(metadata.step) || metadata.step <= 0)) {
+          problems.push(`command point ${where}: numeric step must be a positive finite number`);
+        }
       }
       const feedbackPointKey = metadata.feedbackPointKey;
       const devicePoints = pointByDeviceCode.get(device.code);
@@ -178,7 +222,7 @@ export function validateControlPoints(
             problems.push(`command point ${where}: interlock ${check.device}/${String(check.point)} must reference an active observed point`);
           }
           if (typeof check.expected !== 'string' || !VALID_INTERLOCK_STATES.has(check.expected)) {
-            problems.push(`command point ${where}: interlock expected state ${String(check.expected)} must be RUNNING or STOPPED`);
+            problems.push(`command point ${where}: interlock expected state ${String(check.expected)} is unsupported`);
           }
         }
       }
