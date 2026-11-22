@@ -94,7 +94,7 @@ func (store *Store) ListActiveManagedGatewayScopes(ctx context.Context) ([]adapt
 	}
 	defer tx.Rollback(ctx)
 	rows, err := tx.Query(ctx, `
-SELECT tenant_id::text, gateway_id::text
+SELECT tenant_id::text, gateway_id::text, device_type, connectivity_mode
 FROM core_registry.gateway_directory_v1
 WHERE status = 'ACTIVE'
 ORDER BY tenant_id::text, gateway_id::text
@@ -105,16 +105,23 @@ ORDER BY tenant_id::text, gateway_id::text
 	defer rows.Close()
 
 	tenantGateways := make(map[string][]string)
+	tenantDirectDevices := make(map[string][]string)
+	seenTenants := make(map[string]struct{})
 	tenantOrder := make([]string, 0)
 	for rows.Next() {
-		var tenantID, gatewayID string
-		if err := rows.Scan(&tenantID, &gatewayID); err != nil {
+		var tenantID, gatewayID, deviceType, connectivityMode string
+		if err := rows.Scan(&tenantID, &gatewayID, &deviceType, &connectivityMode); err != nil {
 			return nil, fmt.Errorf("scan active gateway: %w", err)
 		}
-		if _, exists := tenantGateways[tenantID]; !exists {
+		if _, seen := seenTenants[tenantID]; !seen {
+			seenTenants[tenantID] = struct{}{}
 			tenantOrder = append(tenantOrder, tenantID)
 		}
-		tenantGateways[tenantID] = append(tenantGateways[tenantID], gatewayID)
+		if deviceType != "GATEWAY" && connectivityMode == "DIRECT" {
+			tenantDirectDevices[tenantID] = append(tenantDirectDevices[tenantID], gatewayID)
+		} else {
+			tenantGateways[tenantID] = append(tenantGateways[tenantID], gatewayID)
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate active gateways: %w", err)
@@ -127,8 +134,10 @@ ORDER BY tenant_id::text, gateway_id::text
 	devicesByGateway := make(map[string][]string)
 	for _, tenantID := range tenantOrder {
 		gatewayIDs := tenantGateways[tenantID]
+		directIDs := tenantDirectDevices[tenantID]
 		err := store.readAsTenant(ctx, tenantID, func(tenantTx pgx.Tx) error {
-			devRows, err := tenantTx.Query(ctx, `
+			if len(gatewayIDs) > 0 {
+				devRows, err := tenantTx.Query(ctx, `
 SELECT DISTINCT k.gateway_id::text, k.device_id::text
 FROM core_registry.gateway_device_source_keys_v1 k
 WHERE k.gateway_id = ANY($1::uuid[])
@@ -142,18 +151,52 @@ WHERE k.gateway_id = ANY($1::uuid[])
   )
 ORDER BY k.gateway_id::text, k.device_id::text
 `, gatewayIDs, tenantID, now)
-			if err != nil {
-				return fmt.Errorf("list active managed gateway scopes for tenant %s: %w", tenantID, err)
-			}
-			defer devRows.Close()
-			for devRows.Next() {
-				var gatewayID, deviceID string
-				if err := devRows.Scan(&gatewayID, &deviceID); err != nil {
-					return fmt.Errorf("scan active managed gateway device: %w", err)
+				if err != nil {
+					return fmt.Errorf("list active managed gateway scopes for tenant %s: %w", tenantID, err)
 				}
-				devicesByGateway[gatewayID] = append(devicesByGateway[gatewayID], deviceID)
+				for devRows.Next() {
+					var gatewayID, deviceID string
+					if err := devRows.Scan(&gatewayID, &deviceID); err != nil {
+						devRows.Close()
+						return fmt.Errorf("scan active managed gateway device: %w", err)
+					}
+					devicesByGateway[gatewayID] = append(devicesByGateway[gatewayID], deviceID)
+				}
+				if err := devRows.Err(); err != nil {
+					devRows.Close()
+					return err
+				}
+				devRows.Close()
 			}
-			return devRows.Err()
+			if len(directIDs) > 0 {
+				directRows, err := tenantTx.Query(ctx, `
+SELECT DISTINCT c.gateway_id::text
+FROM connectivity.gateway_credentials c
+WHERE c.tenant_id = $1::uuid
+  AND c.gateway_id = ANY($2::uuid[])
+  AND c.status = 'ACTIVE'
+  AND c.valid_from <= $3
+  AND c.valid_until > $3
+ORDER BY c.gateway_id::text
+`, tenantID, directIDs, now)
+				if err != nil {
+					return fmt.Errorf("list active direct device scopes for tenant %s: %w", tenantID, err)
+				}
+				for directRows.Next() {
+					var directID string
+					if err := directRows.Scan(&directID); err != nil {
+						directRows.Close()
+						return fmt.Errorf("scan active direct device scope: %w", err)
+					}
+					devicesByGateway[directID] = append(devicesByGateway[directID], directID)
+				}
+				if err := directRows.Err(); err != nil {
+					directRows.Close()
+					return err
+				}
+				directRows.Close()
+			}
+			return nil
 		})
 		if err != nil {
 			return nil, err

@@ -30,11 +30,13 @@ type ProcessingResult struct {
 	Rejected    int
 }
 
-// Gateway is a Registry Gateway Device with the Tenant and Site it belongs to.
+// Gateway is a Registry Gateway Device (or standalone DIRECT Device) with its Tenant and Site.
 type Gateway struct {
-	ID       string
-	TenantID string
-	SiteID   string
+	ID           string
+	TenantID     string
+	SiteID       string
+	DirectDevice bool
+	DeviceCode   string
 }
 
 var (
@@ -992,8 +994,9 @@ func (processor *Processor) processEvent(ctx context.Context, gateway Gateway, t
 		span.SetStatus("ok", "")
 	}
 	processor.recordPacket("UPLINK", "EVENT", gateway.ID, topic, eventTraceID, rawPayload)
-	isDisconnect := isGatewayDisconnectEvent(event.EventType, event.SourceType)
-	isConnect := isGatewayConnectEvent(event.EventType, event.SourceType)
+	directSelf := gateway.DirectDevice && resolvedDevice != nil && strings.EqualFold(resolvedDevice.DeviceID, gateway.ID)
+	isDisconnect := isGatewayDisconnectEvent(event.EventType, event.SourceType) || (directSelf && isDeviceDisconnectEvent(event.EventType))
+	isConnect := isGatewayConnectEvent(event.EventType, event.SourceType) || (directSelf && isDeviceConnectEvent(event.EventType))
 	if isDisconnect || isConnect {
 		accepted := true
 		if sessions := processor.sessions(); sessions != nil {
@@ -1024,13 +1027,51 @@ func (processor *Processor) processEvent(ctx context.Context, gateway Gateway, t
 }
 
 func (processor *Processor) processStatus(ctx context.Context, gateway Gateway, topic string, rawPayload []byte, status StatusEnvelope) (ProcessingResult, error) {
-	_, statusTraceID, span := processor.ensureUplinkTrace(ctx, "mqtt.uplink.status", gateway.ID, status.MessageID, status.TraceID)
+	ctx, statusTraceID, span := processor.ensureUplinkTrace(ctx, "mqtt.uplink.status", gateway.ID, status.MessageID, status.TraceID)
 	if span != nil {
 		defer span.End()
 	}
 	accepted := true
 	if sessions := processor.sessions(); sessions != nil {
 		accepted = sessions.ApplyStatusAt(status, processor.nowUTC().UnixMilli(), true)
+	}
+	if accepted && gateway.DirectDevice && processor.runtime != nil {
+		eventType := "DEVICE_DISCONNECTED"
+		severity := "WARNING"
+		if status.Online {
+			eventType = "DEVICE_CONNECTED"
+			severity = "INFO"
+		}
+		eventTime := processor.nowUTC().Format(time.RFC3339Nano)
+		if status.HasEventTime && status.EventTime > 0 {
+			eventTime = unixMillisRFC3339(status.EventTime)
+		}
+		dataPayload := json.RawMessage(`{}`)
+		if trimmedSession := strings.TrimSpace(status.SessionID); trimmedSession != "" {
+			if rawSession, marshalErr := json.Marshal(map[string]string{"sessionId": trimmedSession}); marshalErr == nil {
+				dataPayload = rawSession
+			}
+		}
+		if err := processor.runtime.AcceptRuntimeEvent(ctx, RuntimeEventEvidence{
+			TenantID:   gateway.TenantID,
+			SiteID:     gateway.SiteID,
+			GatewayID:  gateway.ID,
+			MessageID:  status.MessageID,
+			Sequence:   status.Sequence,
+			EventType:  eventType,
+			SourceType: "DEVICE",
+			SourceID:   gateway.ID,
+			EventTime:  eventTime,
+			Severity:   severity,
+			Data:       dataPayload,
+			Device:     &ResolvedDevice{TenantID: gateway.TenantID, SiteID: gateway.SiteID, DeviceID: gateway.ID},
+			TraceID:    statusTraceID,
+		}); err != nil {
+			if span != nil {
+				span.SetStatus("error", "accept direct device status runtime event failed")
+			}
+			return ProcessingResult{}, fmt.Errorf("accept direct device status runtime event: %w", err)
+		}
 	}
 	if span != nil {
 		span.SetStatus("ok", "")
@@ -1073,6 +1114,24 @@ func isGatewayConnectEvent(rawEventType, rawSourceType string) bool {
 	}
 }
 
+func isDeviceConnectEvent(rawEventType string) bool {
+	switch strings.ToUpper(strings.TrimSpace(rawEventType)) {
+	case "DEVICE_CONNECTED", "EXPLICIT_CONNECT", "CONNECTED", "CONNECT", "SESSION_CONNECTED", "ONLINE":
+		return true
+	default:
+		return false
+	}
+}
+
+func isDeviceDisconnectEvent(rawEventType string) bool {
+	switch strings.ToUpper(strings.TrimSpace(rawEventType)) {
+	case "DEVICE_DISCONNECTED", "EXPLICIT_DISCONNECT", "DISCONNECTED", "DISCONNECT", "SESSION_DISCONNECTED", "OFFLINE", "LWT", "LAST_WILL":
+		return true
+	default:
+		return false
+	}
+}
+
 func (processor *Processor) resolveEventScope(ctx context.Context, gateway Gateway, event EventPayload) (*ResolvedDevice, []string, error) {
 	eventType := strings.ToUpper(strings.TrimSpace(event.EventType))
 	sourceType := strings.ToUpper(strings.TrimSpace(event.SourceType))
@@ -1087,6 +1146,8 @@ func (processor *Processor) resolveEventScope(ctx context.Context, gateway Gatew
 		if deviceID != "" {
 			resolvedDevice = &ResolvedDevice{TenantID: gateway.TenantID, SiteID: gateway.SiteID, DeviceID: deviceID}
 		}
+	} else if sourceType == "DEVICE" && sourceID == "" && gateway.DirectDevice {
+		resolvedDevice = &ResolvedDevice{TenantID: gateway.TenantID, SiteID: gateway.SiteID, DeviceID: gateway.ID}
 	} else if sourceType == "GATEWAY" {
 		lookupKey := sourceID
 		if lookupKey == "" {

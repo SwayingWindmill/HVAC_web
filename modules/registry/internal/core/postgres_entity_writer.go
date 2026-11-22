@@ -166,11 +166,15 @@ func (store *PostgresStore) SaveDevice(ctx context.Context, claims registryauth.
 			if err != nil {
 				return mutationRecord[Device]{}, err
 			}
+			connectivityMode := input.ConnectivityMode
+			if connectivityMode == "" {
+				connectivityMode = "GATEWAY_PROXIED"
+			}
 			row := tx.QueryRow(ctx, `
-INSERT INTO core_registry.devices (id, tenant_id, site_id, code, display_name, device_type, status, tags, revision, created_at, updated_at)
-VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $9::jsonb, 1, $8, $8)
+INSERT INTO core_registry.devices (id, tenant_id, site_id, code, display_name, device_type, status, tags, revision, created_at, updated_at, connectivity_mode)
+VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $9::jsonb, 1, $8, $8, $10)
 RETURNING `+deviceColumns+`
-`, id, claims.TenantID, input.SiteID, input.Code, input.DisplayName, input.DeviceType, input.Status, now, string(tagsJSON))
+`, id, claims.TenantID, input.SiteID, input.Code, input.DisplayName, input.DeviceType, input.Status, now, string(tagsJSON), connectivityMode)
 			created, err := scanDevice(row)
 			if err != nil {
 				return mutationRecord[Device]{}, fmt.Errorf("insert Registry Device: %w", err)
@@ -183,10 +187,10 @@ RETURNING `+deviceColumns+`
 		}
 		row := tx.QueryRow(ctx, `
 UPDATE core_registry.devices
-SET code = $5, display_name = $6, device_type = $7, status = $8, tags = COALESCE($10::jsonb, core_registry.devices.tags), revision = revision + 1, updated_at = $9
+SET code = $5, display_name = $6, device_type = $7, status = $8, tags = COALESCE($10::jsonb, core_registry.devices.tags), connectivity_mode = COALESCE(NULLIF($11, ''), core_registry.devices.connectivity_mode), revision = revision + 1, updated_at = $9
 WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND id = $3::uuid AND revision = $4
 RETURNING `+deviceColumns+`
-`, claims.TenantID, input.SiteID, input.ID, input.Meta.ExpectedRevision, input.Code, input.DisplayName, input.DeviceType, input.Status, now, tagsParam)
+`, claims.TenantID, input.SiteID, input.ID, input.Meta.ExpectedRevision, input.Code, input.DisplayName, input.DeviceType, input.Status, now, tagsParam, input.ConnectivityMode)
 		updated, err := scanDevice(row)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return mutationRecord[Device]{}, classifyRevisionMiss(ctx, tx, "DEVICE", input.ID)

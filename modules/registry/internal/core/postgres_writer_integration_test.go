@@ -537,3 +537,57 @@ func TestPostgresRegistryTemporalBindingCloseOnlySemantics(t *testing.T) {
 		t.Fatalf("second close err = %v, want ErrNotFound", err)
 	}
 }
+
+func TestPostgresDeviceConnectivityModePersistenceAndPreservation(t *testing.T) {
+	ctx, store := openRegistryWriterIntegrationStore(t)
+	siteClaims := writerIntegrationClaims(registryauth.ActionSiteWrite)
+	site, _, err := store.SaveSite(ctx, siteClaims, SiteMutation{
+		Code: "direct-mode-site", DisplayName: "Direct Mode Site", Timezone: "Asia/Shanghai", Status: "ACTIVE",
+		Meta: MutationMeta{IdempotencyKey: "direct-mode-site-01", Reason: "setup direct connectivity mode test"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	devClaims := writerIntegrationClaims(registryauth.ActionDeviceWrite, site.ID)
+	readClaims := writerIntegrationClaims(registryauth.ActionDeviceRead, site.ID)
+
+	proxied, _, err := store.SaveDevice(ctx, devClaims, DeviceMutation{
+		SiteID: site.ID, Code: "meter-default-mode", DisplayName: "Default Meter", DeviceType: "HVAC_POWER_METER", Status: "ACTIVE",
+		Meta: MutationMeta{IdempotencyKey: "direct-mode-dev-01", Reason: "verify default GATEWAY_PROXIED mode"},
+	})
+	if err != nil || proxied.ConnectivityMode != "GATEWAY_PROXIED" {
+		t.Fatalf("default ConnectivityMode=%q err=%v", proxied.ConnectivityMode, err)
+	}
+
+	direct, _, err := store.SaveDevice(ctx, devClaims, DeviceMutation{
+		SiteID: site.ID, Code: "thermostat-direct", DisplayName: "Direct Thermostat", DeviceType: "THERMOSTAT", Status: "ACTIVE",
+		ConnectivityMode: "DIRECT",
+		Meta:             MutationMeta{IdempotencyKey: "direct-mode-dev-02", Reason: "verify explicit DIRECT connectivity mode"},
+	})
+	if err != nil || direct.ConnectivityMode != "DIRECT" {
+		t.Fatalf("explicit DIRECT ConnectivityMode=%q err=%v", direct.ConnectivityMode, err)
+	}
+
+	loaded, err := store.GetDevice(ctx, readClaims, direct.ID)
+	if err != nil || loaded.ConnectivityMode != "DIRECT" {
+		t.Fatalf("GetDevice ConnectivityMode=%q err=%v", loaded.ConnectivityMode, err)
+	}
+
+	// Updating without ConnectivityMode must preserve existing DIRECT mode.
+	preserved, _, err := store.SaveDevice(ctx, devClaims, DeviceMutation{
+		ID: direct.ID, SiteID: site.ID, Code: direct.Code, DisplayName: "Direct Thermostat Renamed", DeviceType: direct.DeviceType, Status: direct.Status,
+		Meta: MutationMeta{ExpectedRevision: direct.Revision, IdempotencyKey: "direct-mode-dev-03", Reason: "update displayName while preserving DIRECT"},
+	})
+	if err != nil || preserved.ConnectivityMode != "DIRECT" {
+		t.Fatalf("preserved ConnectivityMode=%q err=%v", preserved.ConnectivityMode, err)
+	}
+
+	switched, _, err := store.SaveDevice(ctx, devClaims, DeviceMutation{
+		ID: direct.ID, SiteID: site.ID, Code: direct.Code, DisplayName: preserved.DisplayName, DeviceType: direct.DeviceType, Status: direct.Status,
+		ConnectivityMode: "GATEWAY_PROXIED",
+		Meta:             MutationMeta{ExpectedRevision: preserved.Revision, IdempotencyKey: "direct-mode-dev-04", Reason: "switch back to GATEWAY_PROXIED"},
+	})
+	if err != nil || switched.ConnectivityMode != "GATEWAY_PROXIED" {
+		t.Fatalf("switched ConnectivityMode=%q err=%v", switched.ConnectivityMode, err)
+	}
+}

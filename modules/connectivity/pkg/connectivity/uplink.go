@@ -115,7 +115,26 @@ func (store *Store) ResolveDevice(ctx context.Context, gateway adapter.Gateway, 
 	return store.resolveDeviceCached(ctx, gateway, sourceKey, store.resolveDeviceUncached)
 }
 
+func matchDirectDeviceSourceKey(gateway adapter.Gateway, sourceKey string) bool {
+	if !gateway.DirectDevice {
+		return false
+	}
+	trimmed := strings.TrimSpace(sourceKey)
+	if trimmed == "" {
+		return false
+	}
+	return strings.EqualFold(trimmed, gateway.ID) ||
+		strings.EqualFold(trimmed, "self") ||
+		(gateway.DeviceCode != "" && trimmed == gateway.DeviceCode)
+}
+
 func (store *Store) resolveDeviceUncached(ctx context.Context, gateway adapter.Gateway, sourceKey string) (string, error) {
+	if gateway.DirectDevice {
+		if matchDirectDeviceSourceKey(gateway, sourceKey) {
+			return gateway.ID, nil
+		}
+		return "", nil
+	}
 	var deviceID string
 	err := store.readAsTenant(ctx, gateway.TenantID, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `
@@ -153,7 +172,13 @@ func (store *Store) resolveBindingsUncached(
 	var resolvedTargets []resolvedPointTarget
 	err := store.readAsTenant(ctx, gateway.TenantID, func(tx pgx.Tx) error {
 		if len(missingSourceKeys) > 0 {
-			if _, err := queryGatewayDevices(ctx, tx, gateway.ID, missingSourceKeys, result.Devices); err != nil {
+			if gateway.DirectDevice {
+				for _, sk := range missingSourceKeys {
+					if matchDirectDeviceSourceKey(gateway, sk) {
+						result.Devices[sk] = gateway.ID
+					}
+				}
+			} else if _, err := queryGatewayDevices(ctx, tx, gateway.ID, missingSourceKeys, result.Devices); err != nil {
 				return err
 			}
 		}

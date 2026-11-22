@@ -6695,6 +6695,13 @@
           },
           "tags": {
             "$ref": "#/components/schemas/TagMap"
+          },
+          "connectivityMode": {
+            "type": "string",
+            "enum": [
+              "GATEWAY_PROXIED",
+              "DIRECT"
+            ]
           }
         }
       },

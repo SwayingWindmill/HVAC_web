@@ -74,6 +74,7 @@
           "deviceType": { "type": "string", "minLength": 1, "maxLength": 64 },
           "status": { "$ref": "#/components/schemas/ResourceStatus" },
           "tags": { "$ref": "#/components/schemas/TagMap" },
+          "connectivityMode": { "type": "string", "enum": ["GATEWAY_PROXIED", "DIRECT"] },
           "meta": { "$ref": "#/components/schemas/MutationMeta" }
         }
       },

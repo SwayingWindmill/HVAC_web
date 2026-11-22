@@ -227,6 +227,9 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 		if h.serveGatewayCredentials(writer, request) {
 			return
 		}
+		if h.serveGatewayProvisioning(writer, request) {
+			return
+		}
 		if h.serveGatewayConcentrator(writer, request) {
 			return
 		}
@@ -820,6 +823,9 @@ func safeLogPath(path string) string {
 			return template
 		}
 		if template, matches := matchGatewayCredentialPathTemplate(path); matches {
+			return template
+		}
+		if template, matches := matchGatewayProvisioningPathTemplate(path); matches {
 			return template
 		}
 		if template, matches := matchConcentratorPathTemplate(path); matches {

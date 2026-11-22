@@ -47,13 +47,13 @@ func NewCertificateAuthority(certificatePEM, keyPEM []byte, brokerURL string) (*
 	return &CertificateAuthority{cert, signer, string(certificatePEM), brokerURL}, nil
 }
 
-func parseGatewayCSR(csrPEM string) (*x509.CertificateRequest, error) {
+func parseAndValidateCSR(csrPEM string) (*x509.CertificateRequest, error) {
 	block, rest := pem.Decode([]byte(csrPEM))
 	if block == nil || block.Type != "CERTIFICATE REQUEST" || len(rest) != 0 {
 		return nil, ErrEnrollmentRejected
 	}
 	csr, err := x509.ParseCertificateRequest(block.Bytes)
-	if err != nil || csr.CheckSignature() != nil || !gatewayIDPattern.MatchString(csr.Subject.CommonName) {
+	if err != nil || csr.CheckSignature() != nil {
 		return nil, ErrEnrollmentRejected
 	}
 	switch key := csr.PublicKey.(type) {
@@ -66,6 +66,26 @@ func parseGatewayCSR(csrPEM string) (*x509.CertificateRequest, error) {
 			return nil, ErrEnrollmentRejected
 		}
 	default:
+		return nil, ErrEnrollmentRejected
+	}
+	return csr, nil
+}
+
+func parseGatewayCSR(csrPEM string) (*x509.CertificateRequest, error) {
+	csr, err := parseAndValidateCSR(csrPEM)
+	if err != nil || !gatewayIDPattern.MatchString(csr.Subject.CommonName) {
+		return nil, ErrEnrollmentRejected
+	}
+	return csr, nil
+}
+
+func parseJITPCSR(csrPEM, hardwareSerial, deviceID string) (*x509.CertificateRequest, error) {
+	csr, err := parseAndValidateCSR(csrPEM)
+	if err != nil {
+		return nil, ErrEnrollmentRejected
+	}
+	cn := strings.TrimSpace(csr.Subject.CommonName)
+	if cn == "" || (cn != hardwareSerial && !strings.EqualFold(cn, deviceID)) {
 		return nil, ErrEnrollmentRejected
 	}
 	return csr, nil
