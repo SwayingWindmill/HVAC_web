@@ -143,7 +143,7 @@ export function ShellChrome({ children }: { readonly children: ReactNode }) {
 
         {transition?.status === 'purging' ? <TransitionSurface state="purging" /> : null}
         {transition?.status === 'failed' ? <TransitionSurface state="failed" detail={transition.failure?.detail} retryHref={retryHref} /> : null}
-        {!transitionBlocksContent ? <div id="content" tabIndex={-1} className="min-w-0 flex-1 outline-none">{children}</div> : null}
+        {!transitionBlocksContent ? <div id="content" tabIndex={-1} className="@container/content flex min-w-0 flex-1 flex-col outline-none">{children}</div> : null}
       </SidebarInset>
       {assistantOpen && activeSite !== undefined && !transitionBlocksContent ? (
         <Suspense fallback={<AssistantPanelLoading />}>

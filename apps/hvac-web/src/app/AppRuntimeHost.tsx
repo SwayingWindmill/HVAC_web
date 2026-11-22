@@ -14,6 +14,7 @@ import { SignInForm, SignInNotice, readSignInRequest } from './SignInPage';
 import { FocusHeading } from './FocusHeading';
 import { ShellRuntimeProvider } from './ShellRuntimeContext';
 import { createBrowserShellEnvironment, createShellRuntime, type ShellSnapshot } from './shell-runtime';
+import { shouldInvalidateRouter } from './shell-policy';
 import { createHvacRouter } from './router';
 import type { RuntimeConfig, RuntimeConfigFailure } from './runtime-config';
 
@@ -138,9 +139,11 @@ export function AppRuntimeHost({ config, queryClient }: { config: RuntimeConfig;
   const [snapshot, setSnapshot] = useState<ShellSnapshot>(() => resources.runtime.current());
 
   useEffect(() => {
+    let previous = resources.runtime.current();
     const unsubscribe = resources.runtime.subscribe((next) => {
       setSnapshot(next);
-      if (next.state === 'READY' && next.sites?.state !== 'checking') void resources.router.invalidate();
+      if (shouldInvalidateRouter(previous, next)) void resources.router.invalidate();
+      previous = next;
     });
     void resources.runtime.bootstrap(window.location.href);
     return () => {

@@ -8,8 +8,14 @@ import ts from 'typescript';
 import type {
   createShellRuntime,
   ShellRuntime,
+  ShellSnapshot,
   TenantSwitchOutcome,
 } from '../apps/hvac-web/src/app/shell-runtime.ts';
+import type { shouldInvalidateRouter } from '../apps/hvac-web/src/app/shell-policy.ts';
+import type {
+  navCountQueryFlags,
+  navHref,
+} from '../apps/hvac-web/src/components/layout/app-navigation.ts';
 import type {
   currentPrincipalResponseSchema,
   CurrentPrincipalResponse,
@@ -57,7 +63,21 @@ function evaluateModule(
   return mod.exports;
 }
 
-const policy = evaluateModule(compileTsModule('apps/hvac-web/src/app/shell-policy.ts'));
+const policy = evaluateModule(compileTsModule('apps/hvac-web/src/app/shell-policy.ts')) as {
+  readonly shouldInvalidateRouter: typeof shouldInvalidateRouter;
+};
+const navExports = evaluateModule(
+  compileTsModule('apps/hvac-web/src/components/layout/app-navigation.ts'),
+  (specifier) => {
+    if (specifier === 'lucide-react') {
+      return new Proxy({}, { get: () => () => null });
+    }
+    throw new Error(`unexpected require: ${specifier}`);
+  },
+) as {
+  readonly navHref: typeof navHref;
+  readonly navCountQueryFlags: typeof navCountQueryFlags;
+};
 const routerPaths = evaluateModule(compileTsModule('apps/hvac-web/src/app/router-paths.ts'));
 const protectedScope = evaluateModule(compileTsModule('apps/hvac-web/src/app/protected-scope.ts'));
 const realtimeStatus = evaluateModule(
@@ -394,4 +414,112 @@ test('principal response validates availableTenants metadata and rejects malform
     }).success,
     false,
   );
+});
+
+test('shouldInvalidateRouter ignores realtime, protectedScope, logout, and transition noise once READY', async () => {
+  const siteA = sampleSite('01900000-0001-7000-8000-000000000001', TENANT_A);
+  const env = createEnv();
+  const runtime: ShellRuntime = runtimeExports.createShellRuntime(
+    createClient({
+      listSites: async () => ({
+        data: { items: [siteA], nextCursor: null, hasMore: false },
+        requestId: null,
+        traceparent: null,
+        auditMessageId: null,
+        routePolicyRevision: null,
+        location: null,
+      }),
+    }),
+    env.value,
+  );
+
+  let invalidations = 0;
+  let previous = runtime.current();
+  const unsubscribe = runtime.subscribe((next) => {
+    if (policy.shouldInvalidateRouter(previous, next)) invalidations += 1;
+    previous = next;
+  });
+
+  await runtime.bootstrap(`/overview?site=${siteA.id}`);
+  assert.equal(invalidations, 1);
+
+  invalidations = 0;
+  runtime.activateSiteScope(siteA.id);
+  const release = runtime.registerProtectedResource({ id: 'ws-1', kind: 'realtime', purge: () => {} });
+  runtime.publishRealtimeStatus({ source: 'overview', state: 'connecting', siteId: siteA.id });
+  runtime.publishRealtimeStatus({ source: 'overview', state: 'live', siteId: siteA.id });
+  runtime.releaseRealtimeStatus('overview');
+  release();
+  assert.equal(invalidations, 0);
+
+  const readySnapshot = runtime.current();
+  const nextLogout: ShellSnapshot = { ...readySnapshot, logout: { status: 'submitting' } };
+  assert.equal(policy.shouldInvalidateRouter(readySnapshot, nextLogout), false);
+  assert.equal(
+    policy.shouldInvalidateRouter(
+      { ...readySnapshot, platform: { state: 'checking' } },
+      { ...readySnapshot, platform: { state: 'available' } },
+    ),
+    true,
+  );
+  assert.equal(
+    policy.shouldInvalidateRouter(readySnapshot, {
+      ...readySnapshot,
+      principal: {
+        ...readySnapshot.principal!,
+        authorization: {
+          ...readySnapshot.principal!.authorization,
+          policyRevision: 'registry-read:8',
+        },
+      },
+    }),
+    true,
+  );
+  assert.equal(
+    policy.shouldInvalidateRouter(readySnapshot, {
+      ...readySnapshot,
+      principal: {
+        ...readySnapshot.principal!,
+        authorization: {
+          ...readySnapshot.principal!.authorization,
+          capabilities: ['site.list', 'site.read', 'alarm.list'],
+        },
+      },
+    }),
+    true,
+  );
+  assert.equal(policy.shouldInvalidateRouter(undefined, { state: 'BOOTSTRAPPING' }), false);
+  assert.equal(
+    policy.shouldInvalidateRouter(undefined, { state: 'READY', sites: { state: 'checking' } }),
+    false,
+  );
+
+  unsubscribe();
+  runtime.dispose();
+});
+
+test('navHref omits ?site= on platform routes and navCountQueryFlags gates queries by capability', () => {
+  const siteId = '01900000-0001-7000-8000-000000000001';
+  assert.equal(navExports.navHref({ path: '/overview', scope: 'site' }, siteId), `/overview?site=${siteId}`);
+  assert.equal(navExports.navHref({ path: '/operations/alarms' }, siteId), `/operations/alarms?site=${siteId}`);
+  assert.equal(navExports.navHref({ path: '/operations/control' }, undefined), '/operations/control');
+  assert.equal(navExports.navHref({ path: '/system', scope: 'platform' }, siteId), '/system');
+  assert.equal(navExports.navHref({ path: '/benchmark', scope: 'platform' }, siteId), '/benchmark');
+  assert.equal(navExports.navHref({ path: '/settings/integrations', scope: 'platform' }, siteId), '/settings/integrations');
+
+  assert.deepEqual({ ...navExports.navCountQueryFlags(undefined, ['alarm.list', 'work-order.list', 'site.read']) }, {
+    alarms: false,
+    workOrders: false,
+    commands: false,
+  });
+  assert.deepEqual({ ...navExports.navCountQueryFlags(siteId, ['site.read']) }, {
+    alarms: false,
+    workOrders: false,
+    commands: true,
+  });
+  assert.deepEqual({ ...navExports.navCountQueryFlags(siteId, ['alarm.list', 'work-order.list', 'site.read']) }, {
+    alarms: true,
+    workOrders: true,
+    commands: true,
+  });
 });

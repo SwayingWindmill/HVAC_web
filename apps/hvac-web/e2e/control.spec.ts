@@ -509,3 +509,27 @@ test('operators can acquire and release device priority locks and replay control
   await dlqDialog.getByRole('button', { name: 'Close' }).click();
   await expect(dlqDialog).toBeHidden();
 });
+
+test('sidebar shows live pending control count and layout stacks without horizontal overflow when assistant opens at 1280px', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto(`/operations/control?site=${SITE_ID}`);
+
+  const controlLink = page.getByRole('link', { name: /运行控制/ });
+  await expect(controlLink).toBeVisible();
+  await expect(controlLink).not.toContainText('需审批');
+
+  await page.getByRole('group', { name: 'CHWP-01' }).getByRole('button', { name: '停止' }).click();
+  const confirm = page.getByRole('alertdialog', { name: '停止 CHWP-01？' });
+  await confirm.getByRole('textbox', { name: '动态口令' }).fill('123456');
+  await confirm.getByRole('checkbox', { name: '我已和现场确认可以停' }).check();
+  await confirm.getByRole('button', { name: '提交停止' }).click();
+
+  await expect(page.getByRole('listitem').filter({ hasText: '停止冷冻水泵' })).toContainText('待审批');
+  await expect(controlLink.locator('..')).toContainText('1');
+
+  await page.getByRole('button', { name: 'AI 助手' }).click();
+  await expect(page.getByRole('complementary', { name: 'AI 助手' })).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth))
+    .toBe(true);
+});

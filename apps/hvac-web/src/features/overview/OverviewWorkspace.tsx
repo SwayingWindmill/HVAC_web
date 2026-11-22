@@ -189,8 +189,11 @@ export function OverviewWorkspace() {
   const queryClient = useQueryClient();
   const { plant, mode, registry, refresh } = useRealtimePlant();
   const deviceNames = useDeviceNames(site.id);
-  const alarms = useQuery(activeAlarmsQuery(site.id));
-  const workOrders = useQuery(openWorkOrdersQuery(site.id));
+  const capabilities = principal.authorization.capabilities;
+  const canListAlarms = capabilities.includes("alarm.list");
+  const canListWorkOrders = capabilities.includes("work-order.list");
+  const alarms = useQuery({ ...activeAlarmsQuery(site.id), enabled: canListAlarms });
+  const workOrders = useQuery({ ...openWorkOrdersQuery(site.id), enabled: canListWorkOrders });
   const findings = useQuery(siteFindingsQuery(site.id));
 
   const activeAlarms = sortAlarmsForOperators(alarms.data?.items ?? []);
@@ -216,8 +219,8 @@ export function OverviewWorkspace() {
                 refresh();
                 void queryClient.invalidateQueries({ queryKey: ["energy-series", site.id] });
                 void queryClient.invalidateQueries({ queryKey: dataGapsKeys.site(site.id) });
-                void alarms.refetch();
-                void workOrders.refetch();
+                if (canListAlarms) void alarms.refetch();
+                if (canListWorkOrders) void workOrders.refetch();
                 void findings.refetch();
               }}
             >
@@ -243,9 +246,17 @@ export function OverviewWorkspace() {
             siteId={site.id}
             timeZone={site.timezone}
             principalId={principal.principalId}
-            alarms={{ data: activeAlarms, isPending: alarms.isPending, isError: alarms.isError }}
+            alarms={{
+              data: canListAlarms ? activeAlarms : undefined,
+              isPending: canListAlarms && alarms.isPending,
+              isError: canListAlarms && alarms.isError,
+            }}
             findings={{ data: recentFindings, isPending: findings.isPending, isError: findings.isError }}
-            workOrders={{ data: openOrders, isPending: workOrders.isPending, isError: workOrders.isError }}
+            workOrders={{
+              data: canListWorkOrders ? openOrders : undefined,
+              isPending: canListWorkOrders && workOrders.isPending,
+              isError: canListWorkOrders && workOrders.isError,
+            }}
             deviceName={(deviceId) => deviceNames.get(deviceId) ?? "—"}
             assetName={assetName}
           />

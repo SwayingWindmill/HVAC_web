@@ -161,7 +161,7 @@ export function AlarmDetailPane({ alarmId, empty, deviceNames, creatingWorkOrder
   const conditionTone = alarm.condition === 'CLEARED' ? 'bg-success' : alarm.acknowledgement ? 'bg-warning' : 'bg-destructive';
 
   return (
-    <section role="region" aria-label="告警详情" className="flex min-w-0 flex-1 flex-col overflow-y-auto">
+    <section role="region" aria-label="告警详情" className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto">
       <header className="flex flex-col gap-2 border-b border-divider px-6 pt-[18px] pb-4">
         <div className="flex items-center gap-2.5 text-xs">
           <SeverityBadge severity={alarm.currentSeverity} />
