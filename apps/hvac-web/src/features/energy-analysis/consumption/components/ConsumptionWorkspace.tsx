@@ -1,8 +1,9 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getRouteApi, useNavigate, useSearch } from "@tanstack/react-router";
-import { Download, ReceiptText, RefreshCw, Sparkles, TriangleAlert } from "lucide-react";
+import { Download, ReceiptText, RefreshCw, TriangleAlert } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { SiteTariff } from "@/api/generated/platformGateway.gen";
+import { BrandMark } from "@/components/brand-mark";
 import { PageHeader } from "@/blocks/page-header";
 import { Panel } from "@/blocks/panel";
 import { InfoTip } from "@/components/info-tip";
@@ -465,7 +466,7 @@ function PeriodChart({ comparison, pricing, previousLabel, metric, onMetricChang
             ) : null}
             {explained ? (
               <Button variant="outline" size="sm" className="h-7 gap-1.5" onClick={() => explain(explainQuestion(explained, granularity, timeZone))}>
-                <Sparkles className="size-3.5 text-primary" aria-hidden="true" />
+                <BrandMark className="size-3.5 text-primary" />
                 分析 {explained.label}
               </Button>
             ) : null}
@@ -555,7 +556,7 @@ function DetailTable({ comparison, pricing, previousLabel, timeZone }: {
                         aria-label={`分析 ${row.label}`}
                         onClick={() => explain(explainQuestion(row, granularity, timeZone))}
                       >
-                        <Sparkles className="size-3" aria-hidden="true" />
+                        <BrandMark className="size-3 text-primary" />
                         分析原因
                       </Button>
                     ) : null}

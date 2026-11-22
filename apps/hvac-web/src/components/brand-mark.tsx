@@ -1,12 +1,12 @@
-import { useId } from 'react';
+import { useId, type ComponentProps } from 'react';
 
 // The 泉来禾 mark: four pinwheel blades parted by a thin cross, for moving air and clean energy. One colour,
 // the current text colour, so it reads on light and dark alike; public/quanlaihe-mark.svg is the same
 // drawing for the browser tab.
-export function BrandMark({ className }: { className?: string }) {
+export function BrandMark({ className, ...props }: ComponentProps<'svg'>) {
   const id = useId();
   return (
-    <svg viewBox="0 0 64 64" fill="currentColor" aria-hidden className={className}>
+    <svg viewBox="0 0 64 64" fill="currentColor" aria-hidden="true" className={className} {...props}>
       <defs>
         <mask id={`${id}-gap`}>
           <rect width="64" height="64" fill="#fff" />

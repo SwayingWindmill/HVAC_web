@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AssistantRuntimeProvider, useExternalStoreRuntime, type AppendMessage, type ThreadMessageLike } from '@assistant-ui/react';
-import { History, SquarePen, Sparkles, X } from 'lucide-react';
+import { History, SquarePen, X } from 'lucide-react';
+import { BrandMark } from '@/components/brand-mark';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { useSidebar } from '@/components/ui/sidebar';
@@ -81,7 +82,7 @@ export function AssistantPanel({ siteId, siteName, timezone, csrfToken }: {
     >
       <div className="flex h-[52px] shrink-0 items-center gap-2 border-b pr-3 pl-4">
         <span className="flex size-[26px] items-center justify-center rounded-[7px] bg-primary-soft text-primary" aria-hidden="true">
-          <Sparkles className="size-3.5" />
+          <BrandMark className="size-3.5" />
         </span>
         <span className="text-sm font-semibold">AI 助手</span>
         <span className="flex-1" />

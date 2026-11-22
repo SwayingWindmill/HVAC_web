@@ -2,6 +2,7 @@ import { Outlet, createFileRoute, redirect } from '@tanstack/react-router';
 import { z } from 'zod';
 import { RouteAccessError, requireSite } from '@/app/route-access';
 import type { ShellRuntime } from '@/app/shell-runtime';
+import { SiteRealtimeProvider } from '@/features/operations/realtime/site-realtime-context';
 
 // Global workspace entries (sidebar navigation) operate on one Registry Site at a time.
 // The Site travels in the `site` search parameter so links, history and the protected
@@ -13,6 +14,14 @@ const workspaceSiteSearchSchema = z.object({
 function defaultWorkspaceSiteId(runtime: ShellRuntime): string | undefined {
   const snapshot = runtime.current();
   return snapshot.protectedScope?.siteId ?? snapshot.sites?.items?.[0]?.id;
+}
+
+function SiteWorkspaceLayout() {
+  return (
+    <SiteRealtimeProvider>
+      <Outlet />
+    </SiteRealtimeProvider>
+  );
 }
 
 export const Route = createFileRoute('/_app/_site')({
@@ -27,5 +36,5 @@ export const Route = createFileRoute('/_app/_site')({
     }
     return requireSite(context.runtime, search.site);
   },
-  component: Outlet,
+  component: SiteWorkspaceLayout,
 });

@@ -10,8 +10,8 @@ import { Main } from '@/components/layout/Main';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { siteAssetModelQuery } from '@/api/site-asset-model';
 import { periodWindow, siteDayKey } from '@/features/energy-analysis/consumption/model';
-import { useRealtimePlant } from '@/features/operations/realtime/use-realtime-plant';
 import { siteTariffQuery } from '@/features/tariff/query';
 import { demandCharges, periodAt, periodRanges } from '@/features/tariff/tariff-model';
 import { useNow } from '@/hooks/use-now';
@@ -119,8 +119,8 @@ export function LoadWorkspace() {
   const now = useNow(60_000);
   const timeZone = site.timezone;
 
-  const { registry } = useRealtimePlant();
-  const point = useMemo(() => (registry.data ? plantPowerPoint(registry.data.assetModel) : null), [registry.data]);
+  const registry = useQuery(siteAssetModelQuery(site.id));
+  const point = useMemo(() => (registry.data ? plantPowerPoint(registry.data) : null), [registry.data]);
   const demand = useQuery(plantDemandQuery({ siteId: site.id, timezone: timeZone, csrfToken: principal.session.csrfToken, point, now: new Date(now) }));
   const forecast = useQuery(siteLoadForecastQuery(site.id));
   const tariff = useQuery(siteTariffQuery(site.id));

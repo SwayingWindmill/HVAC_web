@@ -11,7 +11,6 @@ import {
   Send,
   ShieldCheck,
   SlidersHorizontal,
-  Sparkles,
   TriangleAlert,
   Undo2,
 } from 'lucide-react';
@@ -21,7 +20,7 @@ import { GatewayRequestError } from '@/api/gateway-client';
 import type { WorkOrder } from '@/api/work-orders';
 import { PageHeader } from '@/blocks/page-header';
 import { Panel, PanelHeader } from '@/blocks/panel';
-import { StatusBadge } from '@/components/common/StatusBadge';
+import { StatusBadge } from '@/components/status-badge';
 import { InfoTip } from '@/components/info-tip';
 import { Main } from '@/components/layout/Main';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -332,7 +331,7 @@ export function OptimizationWorkspace() {
   const busy = request.isPending || waiting !== null;
   const generateButton = (variant: 'default' | 'outline') => (
     <Button variant={variant} size="sm" disabled={busy} onClick={() => request.mutate()}>
-      {busy ? <Spinner data-icon="inline-start" /> : <Sparkles data-icon="inline-start" />}
+      {busy ? <Spinner data-icon="inline-start" /> : <Lightbulb data-icon="inline-start" />}
       {busy ? '正在计算' : recommendation ? '重新生成' : '生成建议'}
     </Button>
   );

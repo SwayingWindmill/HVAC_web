@@ -1,7 +1,7 @@
 import { Link } from '@tanstack/react-router';
 import { Link2, Lock } from 'lucide-react';
 import { Panel, PanelHeader } from '@/blocks/panel';
-import { StatusBadge } from '@/components/common/StatusBadge';
+import { StatusBadge } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { SETTLED, type Command } from '@/features/control/command-api';

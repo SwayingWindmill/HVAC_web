@@ -1,9 +1,7 @@
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { createPlatformGatewayClient } from '@/api/generated/platformGateway.gen';
+import { siteAssetModelQuery } from '@/api/site-asset-model';
 import { resolveTelemetryPointLabel } from '@/domain/centralPlantTelemetry';
-
-const client = createPlatformGatewayClient();
 
 export interface SiteEquipmentIndex {
   /** Operator-facing device names: the bound asset's name (CHILLER-01), not the endpoint's. */
@@ -15,16 +13,12 @@ export interface SiteEquipmentIndex {
 }
 
 export function useSiteEquipment(siteId: string): SiteEquipmentIndex {
-  const model = useQuery({
-    queryKey: ['site-asset-model', siteId],
-    queryFn: ({ signal }) => client.getSiteAssetModel(siteId, { signal }),
-    staleTime: 5 * 60_000,
-  });
+  const model = useQuery(siteAssetModelQuery(siteId, { staleTime: 5 * 60_000 }));
   return useMemo(() => {
     const nameByDevice = new Map<string, string>();
     const deviceByAsset = new Map<string, { deviceId: string; name: string }>();
     const pointByReading = new Map<string, { name: string; unit: string | null }>();
-    const data = model.data?.data;
+    const data = model.data;
     if (!data) return { nameByDevice, deviceByAsset, pointByReading };
     for (const point of data.telemetryPoints) {
       pointByReading.set(`${point.reportingDeviceId}/${point.pointCode}`, {

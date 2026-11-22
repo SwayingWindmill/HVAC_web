@@ -32,10 +32,10 @@ import {
   type IntegrationsTabView,
   type SensorCalibrationFilter,
 } from './integrations-model';
+import { siteAssetModelQuery } from '@/api/site-asset-model';
 import {
   checkMetersHourlyQuery,
   siteHourlyEnergyPairQuery,
-  siteIntegrationsAssetModelQuery,
   siteIntegrationsSnapshotsQuery,
 } from './query';
 
@@ -89,7 +89,11 @@ export function IntegrationsWorkspace() {
   const sensorFilter: SensorCalibrationFilter = search.filter ?? 'ALL';
 
   const assetModelQuery = useQuery(
-    siteIntegrationsAssetModelQuery(siteId, needsGovernanceData && canReadAssets),
+    siteAssetModelQuery(siteId, {
+      enabled: needsGovernanceData && canReadAssets,
+      staleTime: 30_000,
+      retry: false,
+    }),
   );
 
   const snapshotsQuery = useQuery(

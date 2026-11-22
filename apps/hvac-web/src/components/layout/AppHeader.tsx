@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Bell, Search, Sparkles } from 'lucide-react';
+import { Bell, Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Kbd } from '@/components/ui/kbd';
 import { CommandSearch } from './CommandSearch';
@@ -84,7 +84,7 @@ export function AppHeader({
               aria-pressed={assistant.open}
               onClick={assistant.onToggle}
             >
-              <Sparkles className="size-3.5 text-primary" aria-hidden="true" />
+              <BrandMark className="size-3.5 text-primary" />
               AI 助手
             </Button>
           ) : null}

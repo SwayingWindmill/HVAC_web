@@ -1,7 +1,7 @@
 import { useEffect, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import type { CurrentPrincipalResponse, PlatformGatewayClient, Site } from '@/api/generated/platformGateway.gen';
-import { createPlatformGatewayClient } from '@/api/generated/platformGateway.gen';
+import type { CurrentPrincipalResponse, Site } from '@/api/generated/platformGateway.gen';
+import { siteAssetModelEnvelopeQuery, siteAssetModelQueryKey } from '@/api/site-asset-model';
 import type { HvacRouterContext } from '@/app/router-context';
 import {
   createFrontendReviewAssetsCurrentState,
@@ -9,9 +9,11 @@ import {
 } from '@/app/frontend-review-assets-data';
 import {
   assetsCurrentStateQueryKey,
+  assetsProtectedQueryRoot,
   assetsRegistryQueryKey,
   loadAssetsCurrentState,
   loadAssetsRegistry,
+  type AssetsRegistryClient,
 } from '@/features/assets/data';
 import { buildAssetsHierarchy, buildAssetsRows } from '@/features/assets/model';
 import { runAssetsProtectedRequest } from '@/features/assets/protected-request';
@@ -21,35 +23,59 @@ interface UseSiteAssetsDataInput {
   readonly site: Readonly<Site>;
   readonly principal: CurrentPrincipalResponse;
   readonly runtime: HvacRouterContext['runtime'];
+  /** When false, holds queries and protected resource registration idle until needed. Defaults to true. */
+  readonly enabled?: boolean;
   /** Re-read the current-state Snapshot on this interval; off by default. */
   readonly currentRefetchIntervalMs?: number | false;
 }
 
-export function useSiteAssetsData({ site, principal, runtime, currentRefetchIntervalMs = false }: UseSiteAssetsDataInput) {
+export function useSiteAssetsData({
+  site,
+  principal,
+  runtime,
+  enabled = true,
+  currentRefetchIntervalMs = false,
+}: UseSiteAssetsDataInput) {
   const queryClient = useQueryClient();
-  const platformClient = useMemo<Pick<PlatformGatewayClient, 'getSiteAssetModel'>>(() => createPlatformGatewayClient(), []);
+  const sharedRegistryClient = useMemo<AssetsRegistryClient>(
+    () => ({
+      getSiteAssetModel: (requestedSiteId, init) => {
+        if (init?.signal?.aborted) {
+          return Promise.reject(new DOMException('The operation was aborted.', 'AbortError'));
+        }
+        return queryClient.fetchQuery(siteAssetModelEnvelopeQuery(requestedSiteId, { staleTime: 60_000 }));
+      },
+    }),
+    [queryClient],
+  );
   const telemetryRuntime = useMemo(() => createAssetsTelemetryRuntime(), []);
   const protectedGeneration = runtime.current().protectedScope?.generation ?? 0;
   const tenantId = site.tenantId;
   const queryRoot = useMemo(
-    () => ['site-assets', protectedGeneration, tenantId, site.id] as const,
+    () => assetsProtectedQueryRoot(protectedGeneration, tenantId, site.id),
     [protectedGeneration, site.id, tenantId],
   );
 
   useEffect(() => {
+    if (!enabled) return undefined;
     const scope = runtime.current().protectedScope;
     if (!scope || scope.state !== 'idle' || scope.siteId !== site.id || scope.generation !== protectedGeneration) {
       return undefined;
     }
+    const assetModelRoot = siteAssetModelQueryKey(site.id);
     return runtime.registerProtectedResource({
       id: `site-assets:${protectedGeneration}:${site.id}`,
       kind: 'query-cache',
       purge: async () => {
-        await queryClient.cancelQueries({ queryKey: queryRoot });
+        await Promise.all([
+          queryClient.cancelQueries({ queryKey: queryRoot }),
+          queryClient.cancelQueries({ queryKey: assetModelRoot }),
+        ]);
         queryClient.removeQueries({ queryKey: queryRoot });
+        queryClient.removeQueries({ queryKey: assetModelRoot });
       },
     });
-  }, [protectedGeneration, queryClient, queryRoot, runtime, site.id]);
+  }, [enabled, protectedGeneration, queryClient, queryRoot, runtime, site.id]);
 
   const registry = useQuery({
     queryKey: assetsRegistryQueryKey(protectedGeneration, tenantId, site.id),
@@ -61,13 +87,14 @@ export function useSiteAssetsData({ site, principal, runtime, currentRefetchInte
         runtime.protectedRequestToken(),
         signal,
         (protectedSignal) => loadAssetsRegistry({
-          client: platformClient,
+          client: sharedRegistryClient,
           tenantId,
           siteId: site.id,
           signal: protectedSignal,
         }),
       );
     },
+    enabled,
     staleTime: 60_000,
     retry: 1,
   });
@@ -75,7 +102,7 @@ export function useSiteAssetsData({ site, principal, runtime, currentRefetchInte
   const devices = registry.data?.assetModel.devices ?? [];
   const telemetryPoints = registry.data?.assetModel.telemetryPoints ?? [];
   const canReadCurrent = principal.authorization.capabilities.includes('telemetry.batch.read');
-  const currentEnabled = registry.isSuccess && devices.length > 0 && canReadCurrent;
+  const currentEnabled = enabled && registry.isSuccess && devices.length > 0 && canReadCurrent;
 
   const current = useQuery({
     queryKey: assetsCurrentStateQueryKey(protectedGeneration, tenantId, site.id, devices, telemetryPoints),
@@ -100,7 +127,7 @@ export function useSiteAssetsData({ site, principal, runtime, currentRefetchInte
     },
     enabled: currentEnabled,
     staleTime: 15_000,
-    refetchInterval: currentRefetchIntervalMs,
+    refetchInterval: enabled ? currentRefetchIntervalMs : false,
     retry: 1,
   });
 
@@ -121,6 +148,7 @@ export function useSiteAssetsData({ site, principal, runtime, currentRefetchInte
     && (!canReadCurrent || current.isError);
 
   const refresh = () => {
+    void queryClient.invalidateQueries({ queryKey: siteAssetModelQueryKey(site.id), refetchType: 'none' });
     void registry.refetch();
     if (currentEnabled) void current.refetch();
   };

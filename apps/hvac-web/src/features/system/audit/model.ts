@@ -1,5 +1,5 @@
 import type { AuditSearchRecord } from '../../../api/generated/platformGateway.gen';
-import type { StatusTone } from '../../../components/common/StatusBadge';
+import type { StatusTone } from '../../../components/status-badge';
 
 export type AuditCategory =
   | 'all'

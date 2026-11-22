@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { wallTime } from '@/features/energy-analysis/consumption/model';
-import { siteAssetModelQuery } from '@/features/operations/trends/query';
+import { siteAssetModelQuery } from '@/api/site-asset-model';
 import { CreateWorkOrderDialog } from '@/features/work-orders/CreateWorkOrderDialog';
 import { workOrderKeys } from '@/features/work-orders/work-order-queries';
 import { useNow } from '@/hooks/use-now';

@@ -242,6 +242,14 @@ export async function loadAssetsCurrentState(input: LoadAssetsCurrentStateInput)
   };
 }
 
+export function assetsProtectedQueryRoot(
+  generation: number,
+  tenantId: string,
+  siteId: string,
+): readonly unknown[] {
+  return ['real-assets', generation, tenantId, siteId] as const;
+}
+
 export function assetsRegistryQueryKey(
   generation: number,
   tenantId: string,

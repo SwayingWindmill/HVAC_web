@@ -4,7 +4,7 @@ import {
   AirVent, ArrowDown, ArrowUp, Building2, ChevronRight, Droplet, Fan, Gauge, Globe, Home, Minus, Plus,
   RotateCcw, RotateCw, Snowflake, Thermometer, Waves, Waypoints, Wind, X, Zap, type LucideIcon,
 } from 'lucide-react';
-import { StatusBadge } from '@/components/common/StatusBadge';
+import { StatusBadge } from '@/components/status-badge';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { formatDecimal } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';

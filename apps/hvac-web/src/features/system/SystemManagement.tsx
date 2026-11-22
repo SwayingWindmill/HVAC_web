@@ -8,6 +8,7 @@ import type { ShellSnapshot } from '@/app/shell-runtime';
 import { PageHeader } from '@/blocks/page-header';
 import { Panel, PanelHeader } from '@/blocks/panel';
 import { Main } from '@/components/layout/Main';
+import { StatusBadge, type StatusTone } from '@/components/status-badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { CAPABILITY_GROUPS, capabilityGroups } from '@/lib/capability-labels';
@@ -23,25 +24,9 @@ import { UserAdministration } from './users/UserAdministration';
 
 const systemRouteApi = getRouteApi('/_app/system');
 
-type Health = 'good' | 'warn' | 'idle';
-const HEALTH: Record<Health, { readonly chip: string; readonly dot: string }> = {
-  good: { chip: 'bg-success-soft text-success-text', dot: 'bg-success' },
-  warn: { chip: 'bg-warning-soft text-warning-text', dot: 'bg-warning' },
-  idle: { chip: 'bg-secondary text-secondary-foreground', dot: 'bg-subtle-foreground' },
-};
-
 const PLATFORM_STATE = { checking: '检查中', available: '正常', degraded: '部分不可用', unavailable: '不可用' } as const;
 const DIRECTORY_STATE = { checking: '读取中', available: '已同步', forbidden: '无权读取', unavailable: '暂时读不到' } as const;
 const SITE_STATUS = { ACTIVE: '已启用', INACTIVE: '已停用', RETIRED: '已退役' } as const;
-
-function StateChip({ health, children }: { readonly health: Health; readonly children: ReactNode }) {
-  return (
-    <span className={cn('inline-flex h-5.5 items-center gap-1.5 rounded-md px-1.5 text-xs font-medium whitespace-nowrap', HEALTH[health].chip)}>
-      <span className={cn('size-1.5 rounded-full', HEALTH[health].dot)} aria-hidden="true" />
-      {children}
-    </span>
-  );
-}
 
 function Figure({ label, value, unit, children }: { readonly label: string; readonly value: ReactNode; readonly unit?: string; readonly children?: ReactNode }) {
   return (
@@ -77,9 +62,11 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: { readonly 
   const sites = useMemo(() => snapshot.sites?.items ?? [], [snapshot.sites?.items]);
   const activeTab = search.tab ?? 'overview';
   const platformState = platform ? (platform.status === 'ok' ? '正常' : '部分不可用') : PLATFORM_STATE[snapshot.platform?.state ?? 'checking'];
-  const platformHealth: Health = platform ? (platform.status === 'ok' ? 'good' : 'warn') : snapshot.platform?.state === 'unavailable' ? 'warn' : 'idle';
+  const platformTone: StatusTone = platform ? (platform.status === 'ok' ? 'success' : 'warning') : snapshot.platform?.state === 'unavailable' ? 'warning' : 'neutral';
+  const directoryTone: StatusTone = snapshot.sites?.state === 'available' ? 'success' : snapshot.sites?.state === 'checking' ? 'neutral' : 'warning';
   const directoryState = DIRECTORY_STATE[snapshot.sites?.state ?? 'checking'];
   const realtime = realtimeStatusPresentation(snapshot.realtime ?? createIdleRealtimeStatus());
+  const realtimeTone: StatusTone = realtime.code === 'CONNECTED' ? 'success' : realtime.code === 'NOT_SUBSCRIBED' ? 'neutral' : 'warning';
   const capabilities = principal.authorization.capabilities;
   const roles = roleLabels(principal.principal.roles).join('、');
 
@@ -95,7 +82,7 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: { readonly 
   const overview = (
     <div className="flex flex-col gap-[18px]">
       <Panel aria-label="系统概况" className="grid grid-cols-4 divide-x divide-divider">
-        <Figure label="平台状态" value={<StateChip health={platformHealth}>{platformState}</StateChip>}>
+        <Figure label="平台状态" value={<StatusBadge tone={platformTone}>{platformState}</StatusBadge>}>
           {platform?.version ? `版本 ${platform.version}` : '等待状态响应'}
         </Figure>
         <Figure label="授权站点" value={String(sites.length)} unit="个">{sites.map((site) => site.displayName).join('、') || '当前没有授权站点'}</Figure>
@@ -118,19 +105,19 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: { readonly 
               <TableRow className="hover:bg-transparent">
                 <TableCell className="pl-5 font-medium">平台网关</TableCell>
                 <TableCell className="text-muted-foreground">页面与接口的统一入口</TableCell>
-                <TableCell><StateChip health={platformHealth}>{platformState}</StateChip></TableCell>
+                <TableCell><StatusBadge tone={platformTone}>{platformState}</StatusBadge></TableCell>
                 <TableCell className="pr-5 font-mono text-xs">{platform?.version ?? '—'}</TableCell>
               </TableRow>
               <TableRow className="hover:bg-transparent">
                 <TableCell className="pl-5 font-medium">站点目录</TableCell>
                 <TableCell className="text-muted-foreground">授权站点与组织</TableCell>
-                <TableCell><StateChip health={snapshot.sites?.state === 'available' ? 'good' : snapshot.sites?.state === 'checking' ? 'idle' : 'warn'}>{directoryState}</StateChip></TableCell>
+                <TableCell><StatusBadge tone={directoryTone}>{directoryState}</StatusBadge></TableCell>
                 <TableCell className="pr-5 text-muted-foreground">—</TableCell>
               </TableRow>
               <TableRow className="hover:bg-transparent">
                 <TableCell className="pl-5 font-medium">实时推送</TableCell>
                 <TableCell className="text-muted-foreground">站点设备读数的推送通道</TableCell>
-                <TableCell><StateChip health={realtime.code === 'CONNECTED' ? 'good' : realtime.code === 'NOT_SUBSCRIBED' ? 'idle' : 'warn'}>{realtime.label}</StateChip></TableCell>
+                <TableCell><StatusBadge tone={realtimeTone}>{realtime.label}</StatusBadge></TableCell>
                 <TableCell className="pr-5 text-muted-foreground">—</TableCell>
               </TableRow>
             </TableBody>
@@ -186,7 +173,7 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: { readonly 
               </TableCell>
               <TableCell>{roles}</TableCell>
               <TableCell>{sites.length ? `${sites.length} 个授权站点` : '没有授权站点'}</TableCell>
-              <TableCell className="pr-5"><StateChip health="good">当前登录</StateChip></TableCell>
+              <TableCell className="pr-5"><StatusBadge tone="success">当前登录</StatusBadge></TableCell>
             </TableRow>
           </TableBody>
         </Table>
@@ -219,7 +206,7 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: { readonly 
         <Figure label="站点" value={String(sites.length)} unit="个">{sites.length ? `${sites.filter((site) => site.status === 'ACTIVE').length} 个已启用` : '当前没有授权站点'}</Figure>
         <Figure label="现场网关" value={total(gatewaysOf) === null ? '—' : String(total(gatewaysOf))} unit="个">{integrationsLink}</Figure>
         <Figure label="设备" value={total(devicesOf) === null ? '—' : String(total(devicesOf))} unit="台">{sites.length > 1 ? `${sites.length} 个站点合计` : '已登记的现场设备'}</Figure>
-        <Figure label="站点目录" value={<StateChip health={snapshot.sites?.state === 'available' ? 'good' : 'warn'}>{directoryState}</StateChip>}>授权站点由身份服务确定</Figure>
+        <Figure label="站点目录" value={<StatusBadge tone={snapshot.sites?.state === 'available' ? 'success' : 'warning'}>{directoryState}</StatusBadge>}>授权站点由身份服务确定</Figure>
       </Panel>
       <Panel aria-label="站点">
         <PanelHeader title="站点" caption="名称、时区、建筑面积和气候区在「设备与点位登记」里维护" />
@@ -252,7 +239,7 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: { readonly 
                   <TableCell className="text-right tabular-nums">{site.floorAreaM2 === null ? <span className="text-muted-foreground">未登记</span> : `${formatDecimal(site.floorAreaM2, 0)} m²`}</TableCell>
                   <TableCell>{site.climateZone ? CLIMATE_ZONE_LABEL[site.climateZone] : <span className="text-muted-foreground">未登记</span>}</TableCell>
                   <TableCell className="text-right tabular-nums">{devicesOf(site.id) === null ? '—' : `${devicesOf(site.id)} 台`}</TableCell>
-                  <TableCell><StateChip health={site.status === 'ACTIVE' ? 'good' : 'idle'}>{SITE_STATUS[site.status]}</StateChip></TableCell>
+                  <TableCell><StatusBadge tone={site.status === 'ACTIVE' ? 'success' : 'neutral'}>{SITE_STATUS[site.status]}</StatusBadge></TableCell>
                   <TableCell className="pr-5 text-right">
                     <button type="button" className="inline-flex items-center text-xs font-medium text-primary hover:underline" onClick={() => setTab('registry')}>
                       设备与点位登记<ChevronRight className="size-3.5" aria-hidden="true" />

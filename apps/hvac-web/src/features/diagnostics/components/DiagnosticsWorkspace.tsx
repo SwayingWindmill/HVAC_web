@@ -19,7 +19,7 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { plantReading, type PlantReading, type PlantView } from '@/features/operations/realtime/plant-model';
 import { useRealtimePlant } from '@/features/operations/realtime/use-realtime-plant';
 import { deviceSpanHistoryQuery } from '@/features/operations/systems-devices/device-history';
-import { siteAssetModelQuery } from '@/features/operations/trends/query';
+import { siteAssetModelQuery } from '@/api/site-asset-model';
 import { buildTrendCatalog } from '@/features/operations/trends/trends-model';
 import { buildFindingTrendSearch } from '@/features/operations/trends/trends-overlays';
 import { CreateWorkOrderDialog } from '@/features/work-orders/CreateWorkOrderDialog';

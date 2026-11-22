@@ -5,7 +5,7 @@ import { useId, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import type { SiteAutoControlLeaseState } from '@/api/generated/platformGateway.gen';
 import { Panel } from '@/blocks/panel';
-import { StatusBadge } from '@/components/common/StatusBadge';
+import { StatusBadge } from '@/components/status-badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import {

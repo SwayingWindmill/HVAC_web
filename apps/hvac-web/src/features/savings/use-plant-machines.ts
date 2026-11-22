@@ -1,11 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 import { getRouteApi } from '@tanstack/react-router';
 import { useMemo } from 'react';
-import { useSiteAssetsData } from '@/features/assets/use-site-assets-data';
-import { plantMachines } from '@/features/breakdown/query';
+import { siteAssetModelQuery } from '@/api/site-asset-model';
+import { plantMachinesFromAssetModel } from '@/features/breakdown/plant-machines';
 import type { Machine } from '@/features/breakdown/breakdown-model';
 import { useEnergyReader } from '@/features/energy-analysis/consumption/query';
-import { buildPlantView } from '@/features/operations/realtime/plant-model';
 
 const siteRoute = getRouteApi('/_app/_site');
 
@@ -13,13 +12,12 @@ const siteRoute = getRouteApi('/_app/_site');
 const METERED_LOOKBACK_MS = 7 * 24 * 3_600_000;
 
 /**
- * The plant's machines, named as the plant page names them, from the Registry asset model. The
- * asset model is a protected resource registered once per page, so a page calls this once.
+ * The plant's machines, named as the plant page names them, from the Site Asset Model cache.
  */
 export function usePlantMachines() {
-  const { site, principal, runtime } = siteRoute.useRouteContext();
-  const assets = useSiteAssetsData({ site, principal, runtime });
-  const machines = useMemo(() => (assets.registry.data ? plantMachines(buildPlantView(assets.rows).devices) : null), [assets.registry.data, assets.rows]);
+  const { site } = siteRoute.useRouteContext();
+  const assetModel = useQuery(siteAssetModelQuery(site.id));
+  const machines = useMemo(() => (assetModel.data ? plantMachinesFromAssetModel(assetModel.data) : null), [assetModel.data]);
   const names = useMemo(() => (machines ? new Map(machines.map((machine) => [machine.deviceId, machine.name])) : null), [machines]);
   return { machines, names };
 }

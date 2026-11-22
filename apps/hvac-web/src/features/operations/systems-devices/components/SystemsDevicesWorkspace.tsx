@@ -5,7 +5,7 @@ import { Main } from '@/components/layout/Main';
 import { useQuery } from '@tanstack/react-query';
 import { getRouteApi, useNavigate } from '@tanstack/react-router';
 import { ChevronRight, LayoutGrid, List, RefreshCw, Search } from 'lucide-react';
-import { StatusBadge } from '@/components/common/StatusBadge';
+import { StatusBadge } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';

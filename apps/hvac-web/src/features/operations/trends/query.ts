@@ -1,5 +1,4 @@
 import { queryOptions } from '@tanstack/react-query';
-import { createPlatformGatewayClient } from '@/api/generated/platformGateway.gen';
 import {
   S2TelemetryClientError,
   createS2TelemetryClient,
@@ -10,17 +9,7 @@ import { CommandRequestError, listCommands, type Command } from '@/features/cont
 import type { TrendGranularity } from './timeline';
 import { groupTrendDeviceRequests, type TrendPointItem } from './trends-model';
 
-const gatewayClient = createPlatformGatewayClient();
 const telemetryClient = createS2TelemetryClient();
-
-export function siteAssetModelQuery(siteId: string) {
-  return queryOptions({
-    queryKey: ['site-asset-model', siteId],
-    queryFn: ({ signal }) => gatewayClient.getSiteAssetModel(siteId, { signal }),
-    select: (response) => response.data,
-    staleTime: 5 * 60_000,
-  });
-}
 
 export class TrendHistoryPermissionError extends Error {
   readonly status: number;

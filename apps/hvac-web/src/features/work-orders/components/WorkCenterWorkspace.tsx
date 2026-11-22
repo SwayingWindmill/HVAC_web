@@ -3,7 +3,7 @@ import { PageHeader } from '@/blocks/page-header';
 import { Main } from '@/components/layout/Main';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, useNavigate } from '@tanstack/react-router';
-import { Bell, CalendarClock, Plus, RefreshCw, Server, Sparkles, User } from 'lucide-react';
+import { Bell, CalendarClock, Lightbulb, Plus, RefreshCw, Server, User } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -146,7 +146,7 @@ export function WorkCenterWorkspace() {
     const asset = workOrder.sourceReferences.find((source) => source.domain === 'ASSET');
     if (asset) return { icon: Server, text: `来自设备 · ${equipment.deviceByAsset.get(asset.resourceId)?.name ?? '—'}` };
     const optimization = workOrder.sourceReferences.find(isOptimizationRecommendationSource);
-    if (optimization) return { icon: Sparkles, text: '来自优化建议' };
+    if (optimization) return { icon: Lightbulb, text: '来自优化建议' };
     return { icon: User, text: '人工创建' };
   };
 
