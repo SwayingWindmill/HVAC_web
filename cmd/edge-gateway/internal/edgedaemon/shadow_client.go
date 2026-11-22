@@ -27,10 +27,13 @@ const (
 	shadowStatusPartial  = "PARTIAL"
 	shadowStatusRejected = "REJECTED"
 
-	shadowDriftSectionDriverConfigs  = "DRIVER_CONFIGS"
-	shadowDriftSectionAutonomyPolicy = "AUTONOMY_POLICY"
-	shadowDriftSectionEdgeRules      = "EDGE_RULES"
-	shadowDriftReasonApplyFailed     = "EDGE_APPLY_FAILED"
+	shadowDriftSectionDriverConfigs     = "DRIVER_CONFIGS"
+	shadowDriftSectionAutonomyPolicy    = "AUTONOMY_POLICY"
+	shadowDriftSectionEdgeRules         = "EDGE_RULES"
+	shadowDriftSectionAggregationPolicy = "AGGREGATION_POLICY"
+	shadowDriftSectionClusterPolicy     = "CLUSTER_POLICY"
+	shadowDriftSectionEnergySchedule    = "ENERGY_SCHEDULE"
+	shadowDriftReasonApplyFailed        = "EDGE_APPLY_FAILED"
 )
 
 // PointCopyTarget mirrors connectivity config shadow copy targets.
@@ -95,17 +98,20 @@ type ShadowDriftDetail struct {
 
 // GatewayDesiredConfig matches GET /gateway/v1/config-shadow desired payload.
 type GatewayDesiredConfig struct {
-	DesiredRevision     int64                             `json:"desiredRevision"`
-	PointMappings       []GatewayPointMapping             `json:"pointMappings"`
-	SamplingPolicies    []GatewaySamplingPolicy           `json:"samplingPolicies"`
-	ConcentratorConfigs map[string]ConcentratorUnitShadow `json:"concentratorConfigs"`
-	DriverConfigs       []edgecontrol.ModbusDriverInput   `json:"driverConfigs,omitempty"`
-	AutonomyPolicy      *edgecontrol.AutonomyPolicyConfig `json:"autonomyPolicy,omitempty"`
-	EdgeRuleBundle      *edgecontrol.EdgeRuleBundle       `json:"edgeRuleBundle,omitempty"`
-	UpdatedBy           string                            `json:"updatedBy,omitempty"`
-	Reason              string                            `json:"reason,omitempty"`
-	CreatedAt           *time.Time                        `json:"createdAt,omitempty"`
-	UpdatedAt           *time.Time                        `json:"updatedAt,omitempty"`
+	DesiredRevision     int64                              `json:"desiredRevision"`
+	PointMappings       []GatewayPointMapping              `json:"pointMappings"`
+	SamplingPolicies    []GatewaySamplingPolicy            `json:"samplingPolicies"`
+	ConcentratorConfigs map[string]ConcentratorUnitShadow  `json:"concentratorConfigs"`
+	DriverConfigs       []edgecontrol.ModbusDriverInput    `json:"driverConfigs,omitempty"`
+	AutonomyPolicy      *edgecontrol.AutonomyPolicyConfig  `json:"autonomyPolicy,omitempty"`
+	EdgeRuleBundle      *edgecontrol.EdgeRuleBundle        `json:"edgeRuleBundle,omitempty"`
+	AggregationPolicy   *edgecontrol.EdgeAggregationPolicy `json:"aggregationPolicy,omitempty"`
+	ClusterPolicy       *edgecontrol.ClusterControlPolicy  `json:"clusterPolicy,omitempty"`
+	EnergySchedule      *edgecontrol.EdgeEnergySchedule    `json:"energySchedule,omitempty"`
+	UpdatedBy           string                             `json:"updatedBy,omitempty"`
+	Reason              string                             `json:"reason,omitempty"`
+	CreatedAt           *time.Time                         `json:"createdAt,omitempty"`
+	UpdatedAt           *time.Time                         `json:"updatedAt,omitempty"`
 }
 
 // GatewayShadowPullResponse matches GET /gateway/v1/config-shadow response.
@@ -118,41 +124,51 @@ type GatewayShadowPullResponse struct {
 
 // GatewayShadowReportRequest matches POST /gateway/v1/config-shadow/report body.
 type GatewayShadowReportRequest struct {
-	ReportedRevision    int64                             `json:"reportedRevision"`
-	AppliedStatus       string                            `json:"appliedStatus"`
-	PointMappings       []GatewayPointMapping             `json:"pointMappings"`
-	SamplingPolicies    []GatewaySamplingPolicy           `json:"samplingPolicies"`
-	ConcentratorConfigs map[string]ConcentratorUnitShadow `json:"concentratorConfigs"`
-	DriverConfigs       []edgecontrol.ModbusDriverInput   `json:"driverConfigs,omitempty"`
-	AutonomyPolicy      *edgecontrol.AutonomyPolicyConfig `json:"autonomyPolicy,omitempty"`
-	EdgeRuleBundle      *edgecontrol.EdgeRuleBundle       `json:"edgeRuleBundle,omitempty"`
-	DriftDetails        []ShadowDriftDetail               `json:"driftDetails,omitempty"`
-	ErrorMessage        *string                           `json:"errorMessage,omitempty"`
-	ReportedAt          *time.Time                        `json:"reportedAt,omitempty"`
+	ReportedRevision    int64                              `json:"reportedRevision"`
+	AppliedStatus       string                             `json:"appliedStatus"`
+	PointMappings       []GatewayPointMapping              `json:"pointMappings"`
+	SamplingPolicies    []GatewaySamplingPolicy            `json:"samplingPolicies"`
+	ConcentratorConfigs map[string]ConcentratorUnitShadow  `json:"concentratorConfigs"`
+	DriverConfigs       []edgecontrol.ModbusDriverInput    `json:"driverConfigs,omitempty"`
+	AutonomyPolicy      *edgecontrol.AutonomyPolicyConfig  `json:"autonomyPolicy,omitempty"`
+	EdgeRuleBundle      *edgecontrol.EdgeRuleBundle        `json:"edgeRuleBundle,omitempty"`
+	AggregationPolicy   *edgecontrol.EdgeAggregationPolicy `json:"aggregationPolicy,omitempty"`
+	ClusterPolicy       *edgecontrol.ClusterControlPolicy  `json:"clusterPolicy,omitempty"`
+	EnergySchedule      *edgecontrol.EdgeEnergySchedule    `json:"energySchedule,omitempty"`
+	DriftDetails        []ShadowDriftDetail                `json:"driftDetails,omitempty"`
+	ErrorMessage        *string                            `json:"errorMessage,omitempty"`
+	ReportedAt          *time.Time                         `json:"reportedAt,omitempty"`
 }
 
 type persistedShadowState struct {
-	AppliedRevision     int64                             `json:"appliedRevision"`
-	PointMappings       []GatewayPointMapping             `json:"pointMappings"`
-	SamplingPolicies    []GatewaySamplingPolicy           `json:"samplingPolicies"`
-	ConcentratorConfigs map[string]ConcentratorUnitShadow `json:"concentratorConfigs"`
-	DriverConfigs       []edgecontrol.ModbusDriverInput   `json:"driverConfigs,omitempty"`
-	AutonomyPolicy      *edgecontrol.AutonomyPolicyConfig `json:"autonomyPolicy,omitempty"`
-	EdgeRuleBundle      *edgecontrol.EdgeRuleBundle       `json:"edgeRuleBundle,omitempty"`
+	AppliedRevision     int64                              `json:"appliedRevision"`
+	PointMappings       []GatewayPointMapping              `json:"pointMappings"`
+	SamplingPolicies    []GatewaySamplingPolicy            `json:"samplingPolicies"`
+	ConcentratorConfigs map[string]ConcentratorUnitShadow  `json:"concentratorConfigs"`
+	DriverConfigs       []edgecontrol.ModbusDriverInput    `json:"driverConfigs,omitempty"`
+	AutonomyPolicy      *edgecontrol.AutonomyPolicyConfig  `json:"autonomyPolicy,omitempty"`
+	EdgeRuleBundle      *edgecontrol.EdgeRuleBundle        `json:"edgeRuleBundle,omitempty"`
+	AggregationPolicy   *edgecontrol.EdgeAggregationPolicy `json:"aggregationPolicy,omitempty"`
+	ClusterPolicy       *edgecontrol.ClusterControlPolicy  `json:"clusterPolicy,omitempty"`
+	EnergySchedule      *edgecontrol.EdgeEnergySchedule    `json:"energySchedule,omitempty"`
 }
 
 // ShadowManager maintains persistent desired/reported edge configuration and
-// hot-reloads drivers, autonomy bounds, and edge rule bundles on the running Host.
+// hot-reloads drivers, autonomy bounds, edge rules, aggregation policies,
+// cluster policies, and energy schedules on the running Host.
 type ShadowManager struct {
-	gatewayID  string
-	statePath  string
-	host       *edgecontrol.Host
-	registry   *ProtocolBridgeRegistry
-	interlock  *edgecontrol.HydraulicInterlockController
-	fallback   *edgecontrol.AutonomousFallbackController
-	ruleEngine *edgecontrol.EdgeRuleController
-	logger     *slog.Logger
-	now        func() time.Time
+	gatewayID    string
+	statePath    string
+	host         *edgecontrol.Host
+	registry     *ProtocolBridgeRegistry
+	interlock    *edgecontrol.HydraulicInterlockController
+	fallback     *edgecontrol.AutonomousFallbackController
+	ruleEngine   *edgecontrol.EdgeRuleController
+	aggregator   *edgecontrol.WindowAggregator
+	scheduleCtrl *edgecontrol.EnergyScheduleController
+	clusterCtrl  *edgecontrol.ChillerPlantClusterController
+	logger       *slog.Logger
+	now          func() time.Time
 
 	mu    sync.Mutex
 	state persistedShadowState
@@ -191,6 +207,24 @@ func NewShadowManager(
 	}
 }
 
+// AttachPlantControllers attaches DATA-005 pre-aggregation, CTRL-003 energy schedule,
+// and CTRL-002 multi-chiller cluster controllers onto ShadowManager without altering
+// NewShadowManager's signature for existing callers.
+func (m *ShadowManager) AttachPlantControllers(
+	agg *edgecontrol.WindowAggregator,
+	sched *edgecontrol.EnergyScheduleController,
+	cluster *edgecontrol.ChillerPlantClusterController,
+) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.aggregator = agg
+	m.scheduleCtrl = sched
+	m.clusterCtrl = cluster
+}
+
 // LoadOrBootstrap recovers persisted config shadow state from disk and applies it,
 // or seeds initial static driver/autonomy/rule configs when no shadow file exists yet.
 func (m *ShadowManager) LoadOrBootstrap(cfg Config) error {
@@ -217,6 +251,9 @@ func (m *ShadowManager) LoadOrBootstrap(cfg Config) error {
 		DriverConfigs:       cloneDriverInputs(cfg.Drivers),
 		AutonomyPolicy:      cloneAutonomyPtr(cfg.AutonomyPolicy),
 		EdgeRuleBundle:      cfg.EdgeRuleBundle.Clone(),
+		AggregationPolicy:   cfg.AggregationPolicy.Clone(),
+		ClusterPolicy:       cfg.ClusterPolicy.Clone(),
+		EnergySchedule:      cfg.EnergySchedule.Clone(),
 	}
 	m.mu.Lock()
 	m.state = clonePersistedShadowState(seed)
@@ -244,6 +281,22 @@ func (m *ShadowManager) applyPersistedBootstrap(state persistedShadowState) erro
 			return err
 		}
 	}
+	if state.AggregationPolicy != nil {
+		if err := m.applyAggregationPolicy(state.AggregationPolicy); err != nil {
+			return err
+		}
+	}
+	if state.ClusterPolicy != nil {
+		if err := m.applyClusterPolicy(state.ClusterPolicy); err != nil {
+			return err
+		}
+	}
+	if state.EnergySchedule != nil {
+		if err := m.applyEnergySchedule(state.EnergySchedule); err != nil {
+			return err
+		}
+	}
+	m.syncRuleProtectedAddresses(state.EdgeRuleBundle)
 	m.refreshControllerBindings()
 	return nil
 }
@@ -456,21 +509,65 @@ func (m *ShadowManager) ApplyDesired(desired GatewayDesiredConfig) (GatewayShado
 		}
 	}
 
+	var reportedAgg *edgecontrol.EdgeAggregationPolicy
+	aggApplied := false
+	if desired.AggregationPolicy != nil {
+		if err := m.applyAggregationPolicy(desired.AggregationPolicy); err != nil {
+			msg := fmt.Sprintf("aggregationPolicy apply failed: %v", err)
+			drift = append(drift, ShadowDriftDetail{Section: shadowDriftSectionAggregationPolicy, Target: "aggregationPolicy", Reason: shadowDriftReasonApplyFailed, Detail: clampRunes(msg, 512)})
+			errMsgs = append(errMsgs, msg)
+		} else {
+			reportedAgg = desired.AggregationPolicy.Clone()
+			aggApplied = true
+		}
+	}
+
+	var reportedCluster *edgecontrol.ClusterControlPolicy
+	clusterApplied := false
+	if desired.ClusterPolicy != nil {
+		if err := m.applyClusterPolicy(desired.ClusterPolicy); err != nil {
+			msg := fmt.Sprintf("clusterPolicy apply failed: %v", err)
+			drift = append(drift, ShadowDriftDetail{Section: shadowDriftSectionClusterPolicy, Target: "clusterPolicy", Reason: shadowDriftReasonApplyFailed, Detail: clampRunes(msg, 512)})
+			errMsgs = append(errMsgs, msg)
+		} else {
+			reportedCluster = desired.ClusterPolicy.Clone()
+			clusterApplied = true
+		}
+	}
+
+	var reportedSchedule *edgecontrol.EdgeEnergySchedule
+	scheduleApplied := false
+	if desired.EnergySchedule != nil {
+		if err := m.applyEnergySchedule(desired.EnergySchedule); err != nil {
+			msg := fmt.Sprintf("energySchedule apply failed: %v", err)
+			drift = append(drift, ShadowDriftDetail{Section: shadowDriftSectionEnergySchedule, Target: "energySchedule", Reason: shadowDriftReasonApplyFailed, Detail: clampRunes(msg, 512)})
+			errMsgs = append(errMsgs, msg)
+		} else {
+			reportedSchedule = desired.EnergySchedule.Clone()
+			scheduleApplied = true
+		}
+	}
+
 	status := shadowStatusApplied
 	if len(drift) > 0 || len(errMsgs) > 0 {
 		requested := len(desired.DriverConfigs)
-		if desired.AutonomyPolicy != nil {
-			requested++
-		}
-		if desired.EdgeRuleBundle != nil {
-			requested++
-		}
 		succeeded := len(acceptedDrivers)
-		if autonomyApplied {
-			succeeded++
-		}
-		if rulesApplied {
-			succeeded++
+		for _, pair := range []struct {
+			present bool
+			ok      bool
+		}{
+			{desired.AutonomyPolicy != nil, autonomyApplied},
+			{desired.EdgeRuleBundle != nil, rulesApplied},
+			{desired.AggregationPolicy != nil, aggApplied},
+			{desired.ClusterPolicy != nil, clusterApplied},
+			{desired.EnergySchedule != nil, scheduleApplied},
+		} {
+			if pair.present {
+				requested++
+			}
+			if pair.ok {
+				succeeded++
+			}
 		}
 		if requested > 0 && succeeded == 0 && len(desired.PointMappings) == 0 && len(desired.SamplingPolicies) == 0 && len(desired.ConcentratorConfigs) == 0 {
 			status = shadowStatusRejected
@@ -489,6 +586,9 @@ func (m *ShadowManager) ApplyDesired(desired GatewayDesiredConfig) (GatewayShado
 		DriverConfigs:       cloneDriverInputs(acceptedDrivers),
 		AutonomyPolicy:      cloneAutonomyPtr(reportedPolicy),
 		EdgeRuleBundle:      reportedRules.Clone(),
+		AggregationPolicy:   reportedAgg.Clone(),
+		ClusterPolicy:       reportedCluster.Clone(),
+		EnergySchedule:      reportedSchedule.Clone(),
 		DriftDetails:        drift,
 		ReportedAt:          &now,
 	}
@@ -501,6 +601,9 @@ func (m *ShadowManager) ApplyDesired(desired GatewayDesiredConfig) (GatewayShado
 		report.DriverConfigs = cloneDriverInputs(m.state.DriverConfigs)
 		report.AutonomyPolicy = cloneAutonomyPtr(m.state.AutonomyPolicy)
 		report.EdgeRuleBundle = m.state.EdgeRuleBundle.Clone()
+		report.AggregationPolicy = m.state.AggregationPolicy.Clone()
+		report.ClusterPolicy = m.state.ClusterPolicy.Clone()
+		report.EnergySchedule = m.state.EnergySchedule.Clone()
 		return report, false, nil
 	}
 
@@ -525,6 +628,22 @@ func (m *ShadowManager) ApplyDesired(desired GatewayDesiredConfig) (GatewayShado
 	if desired.EdgeRuleBundle == nil && m.ruleEngine != nil {
 		_ = m.ruleEngine.UpdateBundle(nil)
 	}
+	if desired.AggregationPolicy == nil && m.aggregator != nil {
+		_ = m.aggregator.UpdatePolicy(edgecontrol.DefaultEdgeAggregationPolicy())
+	}
+	if desired.ClusterPolicy == nil && m.clusterCtrl != nil {
+		_ = m.clusterCtrl.UpdatePolicy(edgecontrol.DefaultClusterControlPolicy())
+	}
+	if desired.EnergySchedule == nil && m.scheduleCtrl != nil {
+		_ = m.scheduleCtrl.UpdateSchedule(nil)
+	}
+	activeRules := m.state.EdgeRuleBundle
+	if rulesApplied {
+		activeRules = reportedRules
+	} else if desired.EdgeRuleBundle == nil {
+		activeRules = nil
+	}
+	m.syncRuleProtectedAddresses(activeRules)
 	m.refreshControllerBindings()
 
 	m.state = normalizePersistedShadowState(persistedShadowState{
@@ -535,6 +654,9 @@ func (m *ShadowManager) ApplyDesired(desired GatewayDesiredConfig) (GatewayShado
 		DriverConfigs:       acceptedDrivers,
 		AutonomyPolicy:      reportedPolicy,
 		EdgeRuleBundle:      reportedRules,
+		AggregationPolicy:   reportedAgg,
+		ClusterPolicy:       reportedCluster,
+		EnergySchedule:      reportedSchedule,
 	})
 	if err := m.persistLocked(); err != nil {
 		return GatewayShadowReportRequest{}, false, err
@@ -562,6 +684,52 @@ func (m *ShadowManager) applyAutonomyPolicy(policy *edgecontrol.AutonomyPolicyCo
 	return nil
 }
 
+func (m *ShadowManager) applyAggregationPolicy(policy *edgecontrol.EdgeAggregationPolicy) error {
+	if policy == nil {
+		return nil
+	}
+	if err := policy.Validate(); err != nil {
+		return err
+	}
+	if m.aggregator != nil {
+		return m.aggregator.UpdatePolicy(*policy)
+	}
+	return nil
+}
+
+func (m *ShadowManager) applyClusterPolicy(policy *edgecontrol.ClusterControlPolicy) error {
+	if policy == nil {
+		return nil
+	}
+	if err := policy.Validate(); err != nil {
+		return err
+	}
+	if m.clusterCtrl != nil {
+		return m.clusterCtrl.UpdatePolicy(*policy)
+	}
+	return nil
+}
+
+func (m *ShadowManager) applyEnergySchedule(schedule *edgecontrol.EdgeEnergySchedule) error {
+	if schedule == nil {
+		return nil
+	}
+	if err := schedule.Validate(); err != nil {
+		return err
+	}
+	if m.scheduleCtrl != nil {
+		return m.scheduleCtrl.UpdateSchedule(schedule.Clone())
+	}
+	return nil
+}
+
+func (m *ShadowManager) syncRuleProtectedAddresses(bundle *edgecontrol.EdgeRuleBundle) {
+	if m.aggregator == nil {
+		return
+	}
+	m.aggregator.SetProtectedAddresses(edgecontrol.CollectEdgeRuleAddresses(bundle))
+}
+
 func (m *ShadowManager) persistLocked() error {
 	if err := os.MkdirAll(filepath.Dir(m.statePath), 0o750); err != nil {
 		return fmt.Errorf("create shadow state dir: %w", err)
@@ -582,6 +750,9 @@ func normalizePersistedShadowState(in persistedShadowState) persistedShadowState
 		DriverConfigs:       cloneDriverInputs(in.DriverConfigs),
 		AutonomyPolicy:      cloneAutonomyPtr(in.AutonomyPolicy),
 		EdgeRuleBundle:      in.EdgeRuleBundle.Clone(),
+		AggregationPolicy:   in.AggregationPolicy.Clone(),
+		ClusterPolicy:       in.ClusterPolicy.Clone(),
+		EnergySchedule:      in.EnergySchedule.Clone(),
 	}
 	return out
 }
@@ -711,10 +882,20 @@ func (m *ShadowManager) refreshControllerBindings() {
 	var pumpFreqAddrs []string
 	var fallbackChillers []edgecontrol.ChillerFallbackTarget
 	var fallbackPumps []edgecontrol.PumpFallbackTarget
+	var clusterChillers []edgecontrol.ClusterChillerBinding
+	var clusterPumps []edgecontrol.ClusterPumpBinding
+	var clusterTowers []edgecontrol.ClusterTowerBinding
+	var plantLoadAddr string
+	channelSemantics := make(map[string]edgecontrol.SemanticChannel)
 
 	for _, comp := range manifest.Components {
 		if !comp.Enabled {
 			continue
+		}
+		for sem, addr := range comp.ChannelBindings {
+			if trimmed := strings.TrimSpace(addr); trimmed != "" {
+				channelSemantics[trimmed] = sem
+			}
 		}
 		if hasCapabilityProfile(comp.Profiles, edgecontrol.ProfileChiller) {
 			chillers = append(chillers, edgecontrol.ChillerInterlockBinding{
@@ -724,22 +905,38 @@ func (m *ShadowManager) refreshControllerBindings() {
 				RunState:     comp.ChannelBindings[edgecontrol.SemanticRunState],
 				FaultChannel: comp.ChannelBindings[edgecontrol.SemanticFaultCode],
 			})
-			if sp := comp.ChannelBindings[edgecontrol.SemanticTemperatureSetpoint]; sp != "" {
+			spAddr := comp.ChannelBindings[edgecontrol.SemanticTemperatureSetpoint]
+			if spAddr != "" {
 				fallbackChillers = append(fallbackChillers, edgecontrol.ChillerFallbackTarget{
 					ComponentID:        comp.ID,
-					SupplySetpointAddr: sp,
+					SupplySetpointAddr: spAddr,
 					RunStateAddr:       comp.ChannelBindings[edgecontrol.SemanticRunState],
 					FaultAddr:          comp.ChannelBindings[edgecontrol.SemanticFaultCode],
 				})
 			}
+			clusterChillers = append(clusterChillers, edgecontrol.ClusterChillerBinding{
+				ComponentID:         comp.ID,
+				RatedCoolingKW:      parseComponentRatedCoolingKW(comp.Properties),
+				StartAddr:           comp.ChannelBindings[edgecontrol.SemanticStartCommand],
+				StopAddr:            comp.ChannelBindings[edgecontrol.SemanticStopCommand],
+				RunStateAddr:        comp.ChannelBindings[edgecontrol.SemanticRunState],
+				FaultAddr:           comp.ChannelBindings[edgecontrol.SemanticFaultCode],
+				SetpointAddr:        spAddr,
+				LoadLimitAddr:       comp.ChannelBindings[edgecontrol.SemanticLoadLimit],
+				CoolingCapacityAddr: comp.ChannelBindings[edgecontrol.SemanticCoolingCapacity],
+				PowerAddr:           comp.ChannelBindings[edgecontrol.SemanticPower],
+			})
 		}
 		if hasCapabilityProfile(comp.Profiles, edgecontrol.ProfileVariableSpeedPump) {
 			freqAddr := comp.ChannelBindings[edgecontrol.SemanticFrequencySetpoint]
+			runAddr := comp.ChannelBindings[edgecontrol.SemanticRunState]
+			flowAddr := comp.ChannelBindings[edgecontrol.SemanticFlow]
+			faultAddr := comp.ChannelBindings[edgecontrol.SemanticFaultCode]
 			pumps = append(pumps, edgecontrol.PumpInterlockBinding{
 				ComponentID:      comp.ID,
-				RunState:         comp.ChannelBindings[edgecontrol.SemanticRunState],
-				FlowFeedback:     comp.ChannelBindings[edgecontrol.SemanticFlow],
-				FaultChannel:     comp.ChannelBindings[edgecontrol.SemanticFaultCode],
+				RunState:         runAddr,
+				FlowFeedback:     flowAddr,
+				FaultChannel:     faultAddr,
 				FrequencyCommand: freqAddr,
 			})
 			if freqAddr != "" {
@@ -747,10 +944,28 @@ func (m *ShadowManager) refreshControllerBindings() {
 				fallbackPumps = append(fallbackPumps, edgecontrol.PumpFallbackTarget{
 					ComponentID:   comp.ID,
 					FrequencyAddr: freqAddr,
-					RunStateAddr:  comp.ChannelBindings[edgecontrol.SemanticRunState],
-					FaultAddr:     comp.ChannelBindings[edgecontrol.SemanticFaultCode],
+					RunStateAddr:  runAddr,
+					FaultAddr:     faultAddr,
 				})
 			}
+			clusterPumps = append(clusterPumps, edgecontrol.ClusterPumpBinding{
+				ComponentID:   comp.ID,
+				FrequencyAddr: freqAddr,
+				RunStateAddr:  runAddr,
+				FaultAddr:     faultAddr,
+				FlowAddr:      flowAddr,
+			})
+		}
+		if hasCapabilityProfile(comp.Profiles, edgecontrol.ProfileCoolingTower) {
+			clusterTowers = append(clusterTowers, edgecontrol.ClusterTowerBinding{
+				ComponentID:  comp.ID,
+				FanSpeedAddr: comp.ChannelBindings[edgecontrol.SemanticFanSpeedSetpoint],
+				RunStateAddr: comp.ChannelBindings[edgecontrol.SemanticRunState],
+				FaultAddr:    comp.ChannelBindings[edgecontrol.SemanticFaultCode],
+			})
+		}
+		if plantLoadAddr == "" && hasCapabilityProfile(comp.Profiles, edgecontrol.ProfileThermalEnergyMeter) {
+			plantLoadAddr = comp.ChannelBindings[edgecontrol.SemanticCoolingCapacity]
 		}
 	}
 
@@ -760,4 +975,28 @@ func (m *ShadowManager) refreshControllerBindings() {
 	if m.fallback != nil {
 		m.fallback.UpdateTargets(fallbackChillers, fallbackPumps)
 	}
+	if m.scheduleCtrl != nil {
+		m.scheduleCtrl.UpdateTargets(fallbackChillers, fallbackPumps, clusterTowers)
+	}
+	if m.clusterCtrl != nil {
+		m.clusterCtrl.UpdateBindings(clusterChillers, clusterPumps, clusterTowers, plantLoadAddr)
+	}
+	if m.aggregator != nil {
+		m.aggregator.SetChannelSemantics(channelSemantics)
+	}
+}
+
+func parseComponentRatedCoolingKW(props map[string]json.RawMessage) float64 {
+	if len(props) == 0 {
+		return 0
+	}
+	raw, ok := props["ratedCoolingKw"]
+	if !ok {
+		return 0
+	}
+	var val float64
+	if err := json.Unmarshal(raw, &val); err != nil || val <= 0 {
+		return 0
+	}
+	return val
 }

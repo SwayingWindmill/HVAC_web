@@ -526,6 +526,7 @@ type AutonomousFallbackController struct {
 	lastRunAt        time.Time
 	setpointRampRate float64
 	freqRampRate     float64
+	scheduleActiveFn func(time.Time) bool
 	currentSetpoints map[string]float64
 	currentFreqs     map[string]float64
 }
@@ -586,6 +587,14 @@ func (c *AutonomousFallbackController) UpdateTargets(chillers []ChillerFallbackT
 	defer c.mu.Unlock()
 	c.chillers = slices.Clone(chillers)
 	c.pumps = slices.Clone(pumps)
+}
+
+// SetScheduleActiveFn registers an optional callback indicating whether an authorized
+// local energy schedule governs plant operation while offline.
+func (c *AutonomousFallbackController) SetScheduleActiveFn(fn func(time.Time) bool) {
+	c.mu.Lock()
+	c.scheduleActiveFn = fn
+	c.mu.Unlock()
 }
 
 // RecordCloudContact records an explicit cloud heartbeat/command/telemetry exchange
@@ -682,6 +691,12 @@ func (c *AutonomousFallbackController) Run(_ context.Context, img ProcessImage, 
 		c.lastContactAt = now
 	}
 	if c.cloudConnected || !c.policy.Enabled {
+		c.fallbackActive = false
+		clear(c.currentSetpoints)
+		clear(c.currentFreqs)
+		return nil
+	}
+	if c.scheduleActiveFn != nil && c.scheduleActiveFn(now) {
 		c.fallbackActive = false
 		clear(c.currentSetpoints)
 		clear(c.currentFreqs)

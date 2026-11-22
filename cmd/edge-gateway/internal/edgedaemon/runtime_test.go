@@ -564,3 +564,249 @@ func TestDaemonLifecycleLWTConnectedAndDisconnectedSessionID(t *testing.T) {
 		t.Fatal("expected negative telemetryDeadband validation error")
 	}
 }
+
+func TestDaemonShadowAggregationClusterAndScheduleLifecycle(t *testing.T) {
+	endpoint, modHandler := func() (string, *fakeModbusServerHandler) {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		addr := ln.Addr().String()
+		_ = ln.Close()
+		h := &fakeModbusServerHandler{regs: map[uint16]uint16{
+			100: 70,  // chw_supply_temp 7.0
+			101: 200, // ambient_temp 20.0
+			102: 120, // rule_watch_temp 12.0
+		}}
+		srv, err := modbus.NewServer(&modbus.ServerConfiguration{URL: "tcp://" + addr, Timeout: time.Second}, h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := srv.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = srv.Stop() })
+		return addr, h
+	}()
+
+	gwID := "0193f000-2000-7000-8000-000000000204"
+	curTime := time.Date(2026, 11, 22, 11, 0, 0, 0, time.UTC)
+	uid, timeoutMS, retries := 1, 500, 0
+	drivers := []edgecontrol.ModbusDriverInput{
+		{
+			DeviceKey:  "chiller-01",
+			DriverType: "MODBUS_TCP",
+			Endpoint:   &endpoint,
+			UnitID:     &uid,
+			TimeoutMS:  &timeoutMS,
+			Retries:    &retries,
+			Registers: []edgecontrol.ModbusRegisterInput{
+				{PointCode: "chw_supply_temp", FunctionCode: 3, Address: 100, RegisterCount: 1, RawType: "UINT16", ByteOrder: "BIG_ENDIAN", WordOrder: "BIG_ENDIAN", Scale: 0.1, PollPriority: "VERY_HIGH"},
+				{PointCode: "rule_watch_temp", FunctionCode: 3, Address: 102, RegisterCount: 1, RawType: "UINT16", ByteOrder: "BIG_ENDIAN", WordOrder: "BIG_ENDIAN", Scale: 0.1, PollPriority: "HIGH"},
+			},
+		},
+		{
+			DeviceKey:  "weather-01",
+			DriverType: "MODBUS_TCP",
+			Endpoint:   &endpoint,
+			UnitID:     &uid,
+			TimeoutMS:  &timeoutMS,
+			Retries:    &retries,
+			Registers: []edgecontrol.ModbusRegisterInput{
+				{PointCode: "ambient_temp", FunctionCode: 3, Address: 101, RegisterCount: 1, RawType: "UINT16", ByteOrder: "BIG_ENDIAN", WordOrder: "BIG_ENDIAN", Scale: 0.1, PollPriority: "HIGH"},
+			},
+		},
+	}
+
+	cfg := Config{
+		GatewayID: gwID,
+		StateDir:  t.TempDir(),
+		Drivers:   drivers,
+	}
+	cfg.ApplyDefaults("0.1.2")
+
+	daemon, err := NewDaemon(cfg, DaemonOptions{Now: func() time.Time { return curTime }})
+	if err != nil {
+		t.Fatalf("NewDaemon: %v", err)
+	}
+	defer func() { _ = daemon.Close() }()
+
+	ruleBundle := &edgecontrol.EdgeRuleBundle{
+		SchemaVersion:  1,
+		SiteID:         "0193f000-2000-7000-8000-000000000299",
+		BundleRevision: 1,
+		CompiledAt:     curTime.Format(time.RFC3339),
+		Rules: []edgecontrol.CompiledEdgeRule{{
+			RuleID:           "0193f000-2000-7000-8000-000000000288",
+			AlarmType:        "WATCH_TEMP",
+			Title:            "Watch temp high",
+			Severity:         "CRITICAL",
+			ExecutionTarget:  edgecontrol.EdgeTargetEdge,
+			QualityPolicy:    edgecontrol.EdgeQualityValidOnly,
+			FreshnessSeconds: 60,
+			TriggerMode:      edgecontrol.EdgeTriggerSimple,
+			Raise: edgecontrol.EdgeCondition{
+				Kind:     edgecontrol.EdgeConditionCompare,
+				Input:    "chiller-01/rule_watch_temp",
+				Operator: edgecontrol.EdgeCompareGT,
+				Value:    &edgecontrol.EdgeTypedValue{Type: edgecontrol.EdgeValueNumber, Number: 25},
+			},
+			Clear: edgecontrol.EdgeCondition{
+				Kind:     edgecontrol.EdgeConditionCompare,
+				Input:    "chiller-01/rule_watch_temp",
+				Operator: edgecontrol.EdgeCompareLTE,
+				Value:    &edgecontrol.EdgeTypedValue{Type: edgecontrol.EdgeValueNumber, Number: 20},
+			},
+		}},
+	}
+	digest, err := ruleBundle.ComputeDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ruleBundle.EdgeBundleDigest = digest
+
+	autonomy := edgecontrol.DefaultAutonomyPolicyConfig()
+	autonomy.Enabled = true
+	autonomy.OfflineGraceSeconds = 60
+
+	aggPolicy := &edgecontrol.EdgeAggregationPolicy{
+		Enabled: true,
+		Points:  []edgecontrol.AggregationPointPolicy{{DeviceKey: "*", PointCode: "*", WindowSeconds: 60, EmitMinMax: true}},
+	}
+	clusterPolicy := edgecontrol.DefaultClusterControlPolicy()
+	clusterPolicy.Enabled = true
+
+	preCoolSP := 6.0
+	dayStart := time.Date(2026, 11, 22, 9, 0, 0, 0, time.UTC)
+	sched := &edgecontrol.EdgeEnergySchedule{
+		ScheduleID:                "sched-live-1",
+		Version:                   2,
+		IssuedAt:                  dayStart,
+		ValidFrom:                 dayStart,
+		ValidUntil:                dayStart.Add(7 * time.Hour),
+		LeaseExpiresAt:            time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC),
+		ContinueOfflineWhileValid: true,
+		Slots: []edgecontrol.EnergyScheduleSlot{
+			{SlotID: "slot-precool", StartMinute: 10 * 60, EndMinute: 14 * 60, Mode: edgecontrol.ScheduleModePreCool, SupplyTempSetpointC: &preCoolSP},
+		},
+	}
+
+	report, stale, err := daemon.Shadow().ApplyDesired(GatewayDesiredConfig{
+		DesiredRevision:   1,
+		DriverConfigs:     drivers,
+		AutonomyPolicy:    &autonomy,
+		EdgeRuleBundle:    ruleBundle,
+		AggregationPolicy: aggPolicy,
+		ClusterPolicy:     &clusterPolicy,
+		EnergySchedule:    sched,
+	})
+	if err != nil || stale || report.AppliedStatus != shadowStatusApplied {
+		t.Fatalf("ApplyDesired rev 1 failed: report=%+v stale=%v err=%v", report, stale, err)
+	}
+
+	// Version downgrade must be rejected and retain schedule version 2.
+	older := sched.Clone()
+	older.Version = 1
+	rejectReport, _, err := daemon.Shadow().ApplyDesired(GatewayDesiredConfig{
+		DesiredRevision: 2,
+		EnergySchedule:  older,
+	})
+	if err != nil || rejectReport.AppliedStatus != shadowStatusRejected {
+		t.Fatalf("expected REJECTED on schedule version downgrade, got status=%s err=%v", rejectReport.AppliedStatus, err)
+	}
+	if len(rejectReport.DriftDetails) != 1 || rejectReport.DriftDetails[0].Section != shadowDriftSectionEnergySchedule {
+		t.Fatalf("expected ENERGY_SCHEDULE drift detail, got %+v", rejectReport.DriftDetails)
+	}
+
+	// Cycles at 11:00:00, 11:00:20, 11:00:40: ambient_temp stays buffered, rule_watch_temp transmits raw.
+	ambients := []uint16{200, 260, 230}
+	for i, rawAmb := range ambients {
+		if i > 0 {
+			curTime = curTime.Add(20 * time.Second)
+		}
+		modHandler.mu.Lock()
+		modHandler.regs[101] = rawAmb
+		modHandler.mu.Unlock()
+		if _, err := daemon.StepCycle(t.Context()); err != nil {
+			t.Fatalf("StepCycle %d: %v", i, err)
+		}
+	}
+
+	seenPointsBeforeFlush := map[string][]float64{}
+	for _, item := range daemon.Spool().Pending() {
+		if !strings.HasSuffix(item.Topic, "/up/telemetry") {
+			continue
+		}
+		var env mqttUplinkTelemetryEnvelope
+		if err := json.Unmarshal(item.Payload, &env); err != nil {
+			t.Fatal(err)
+		}
+		for _, dev := range env.Payload.Devices {
+			for _, pt := range dev.Points {
+				if num, ok := pt.Value.(float64); ok {
+					seenPointsBeforeFlush[dev.DeviceID+"/"+pt.Code] = append(seenPointsBeforeFlush[dev.DeviceID+"/"+pt.Code], num)
+				}
+			}
+		}
+	}
+	if _, exists := seenPointsBeforeFlush["weather-01/ambient_temp"]; exists {
+		t.Fatalf("ambient_temp must not emit raw mid-window: %+v", seenPointsBeforeFlush)
+	}
+	if len(seenPointsBeforeFlush["chiller-01/rule_watch_temp"]) != 3 {
+		t.Fatalf("rule_watch_temp must transmit raw on every cycle, got %+v", seenPointsBeforeFlush["chiller-01/rule_watch_temp"])
+	}
+	rawHistory, err := daemon.Timedata().History("weather-01/ambient_temp", 10)
+	if err != nil || len(rawHistory) != 3 {
+		t.Fatalf("expected 3 full-resolution FileTimedata records before window flush, got (%d, %v)", len(rawHistory), err)
+	}
+
+	// Cycle at 11:01:00 flushes [11:00:00, 11:01:00) mean=23.0, min=20.0, max=26.0.
+	curTime = time.Date(2026, 11, 22, 11, 1, 0, 0, time.UTC)
+	modHandler.mu.Lock()
+	modHandler.regs[101] = 290
+	modHandler.mu.Unlock()
+	if _, err := daemon.StepCycle(t.Context()); err != nil {
+		t.Fatalf("StepCycle flush: %v", err)
+	}
+	aggVals := map[string]float64{}
+	for _, item := range daemon.Spool().Pending() {
+		if !strings.HasSuffix(item.Topic, "/up/telemetry") {
+			continue
+		}
+		var env mqttUplinkTelemetryEnvelope
+		if err := json.Unmarshal(item.Payload, &env); err != nil {
+			t.Fatal(err)
+		}
+		for _, dev := range env.Payload.Devices {
+			if dev.DeviceID != "weather-01" {
+				continue
+			}
+			for _, pt := range dev.Points {
+				if num, ok := pt.Value.(float64); ok {
+					aggVals[pt.Code] = num
+				}
+			}
+		}
+	}
+	if aggVals["ambient_temp"] != 23.0 || aggVals["ambient_temp_min"] != 20.0 || aggVals["ambient_temp_max"] != 26.0 {
+		t.Fatalf("unexpected flushed window telemetry: %+v", aggVals)
+	}
+
+	// Offline continuation at 11:05:00 keeps schedule active and fallback standby;
+	// at 12:05:00 after LeaseExpiresAt, fallback takes over cleanly.
+	curTime = time.Date(2026, 11, 22, 11, 5, 0, 0, time.UTC)
+	if _, err := daemon.StepCycle(t.Context()); err != nil {
+		t.Fatalf("StepCycle offline valid lease: %v", err)
+	}
+	if !daemon.ScheduleController().IsActiveAt(curTime) || daemon.fallback.StatusAt(curTime).FallbackActive {
+		t.Fatalf("expected schedule active and fallback standby during valid offline lease")
+	}
+
+	curTime = time.Date(2026, 11, 22, 12, 5, 0, 0, time.UTC)
+	if _, err := daemon.StepCycle(t.Context()); err != nil {
+		t.Fatalf("StepCycle expired lease: %v", err)
+	}
+	if daemon.ScheduleController().IsActiveAt(curTime) || !daemon.fallback.StatusAt(curTime).FallbackActive {
+		t.Fatalf("expected fallback active after schedule lease expiry")
+	}
+}
