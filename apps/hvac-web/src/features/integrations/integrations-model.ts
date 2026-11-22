@@ -25,7 +25,7 @@ import { buildTrendPointRef } from '../operations/trends/trends-model.ts';
 
 const HOUR_MS = 3_600_000;
 
-export type IntegrationsTabView = 'gateways' | 'concentrators' | 'meters' | 'sensors';
+export type IntegrationsTabView = 'gateways' | 'concentrators' | 'meters' | 'sensors' | 'ota';
 
 export type ReconciliationHourStatus = 'VALID' | 'SUSPECT' | 'MISSING' | 'IN_PROGRESS';
 

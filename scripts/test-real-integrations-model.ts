@@ -73,6 +73,30 @@ import {
   mergeConcentratorAudits,
   validateConcentratorParamsDraft,
 } from '../apps/hvac-web/src/features/integrations/integrations-model.ts';
+import {
+  OTA_ARCH_LABELS,
+  OTA_CAMPAIGN_STATUS_PRESENTATION,
+  OTA_COMPONENT_LABELS,
+  OTA_MAX_PACKAGE_BYTES,
+  OTA_PACKAGE_STATUS_PRESENTATION,
+  OTA_PAUSE_REASON_LABELS,
+  OTA_TASK_ACTION_LABELS,
+  OTA_TASK_STAGE_PRESENTATION,
+  OTA_TASK_WAVE_LABELS,
+  describeOtaError,
+  extractSuggestedTagsFromDevices,
+  formatByteSize,
+  formatOtaPauseReason,
+  isOTACampaignActive,
+  normalizeTargetTagDrafts,
+  parseHardwareModelsInput,
+  summarizeOtaWorkspace,
+  validateHardwareModelsInput,
+  validateOptionalSemver,
+  validateSemver,
+  validateSha256Hex,
+  validateSignaturePair,
+} from '../apps/hvac-web/src/features/integrations/ota-model.ts';
 
 const TENANT_ID = '018f3d00-0000-7000-8000-000000000001';
 const SITE_ID = '018f3e00-1000-7000-8000-000000000001';
@@ -1876,4 +1900,162 @@ test('gateway config shadow supports declarative driverConfigs, autonomyPolicy b
       assert.equal(clearBoth.request.autonomyPolicy, null);
     }
   }
+});
+
+test('OTA pure model dictionaries, validators, and error messages avoid banned words and cover all backend enums', () => {
+  const BANNED = ['回执', '台账', '核算', '待核对', '工况', '认领', '本期间', '通信端点'];
+  const allCopy: string[] = [
+    ...Object.values(OTA_COMPONENT_LABELS),
+    ...Object.values(OTA_ARCH_LABELS),
+    ...Object.values(OTA_PAUSE_REASON_LABELS),
+    ...Object.values(OTA_TASK_WAVE_LABELS),
+    ...Object.values(OTA_TASK_ACTION_LABELS),
+    ...Object.values(OTA_PACKAGE_STATUS_PRESENTATION).map((item) => item.label),
+    ...Object.values(OTA_CAMPAIGN_STATUS_PRESENTATION).map((item) => item.label),
+    ...Object.values(OTA_TASK_STAGE_PRESENTATION).map((item) => item.label),
+  ];
+
+  for (const label of allCopy) {
+    assert.ok(label.length > 0);
+    for (const banned of BANNED) {
+      assert.equal(label.includes(banned), false, `OTA copy ${label} must not contain banned term ${banned}`);
+    }
+  }
+
+  assert.equal(OTA_MAX_PACKAGE_BYTES, 64 * 1024 * 1024);
+  assert.equal(formatByteSize(512), '512 B');
+  assert.equal(formatByteSize(2048), '2.0 KiB');
+  assert.equal(formatByteSize(3 * 1024 * 1024), '3.00 MiB');
+
+  assert.equal(validateSemver('1.5.0'), null);
+  assert.equal(validateSemver('1.5.0-rc.1+build7'), null);
+  assert.notEqual(validateSemver('v1.5'), null);
+  assert.equal(validateOptionalSemver(''), null);
+  assert.notEqual(validateOptionalSemver('bad'), null);
+
+  assert.equal(validateSha256Hex(''), null);
+  assert.equal(validateSha256Hex('a'.repeat(64)), null);
+  assert.notEqual(validateSha256Hex('short'), null);
+
+  assert.deepEqual(parseHardwareModelsInput('EG8200, eg8200 ， EG8200-Pro '), ['EG8200', 'EG8200-Pro']);
+  assert.equal(validateHardwareModelsInput('EG8200'), null);
+
+  assert.equal(validateSignaturePair('', ''), null);
+  assert.notEqual(validateSignaturePair('key-1', ''), null);
+  assert.notEqual(validateSignaturePair('', 'a'.repeat(32)), null);
+  assert.equal(validateSignaturePair('key-1', 'a'.repeat(32)), null);
+
+  const validTags = normalizeTargetTagDrafts([
+    { key: 'env', value: 'pilot' },
+    { key: ' ', value: ' ' },
+  ]);
+  assert.equal(validTags.ok, true);
+  if (validTags.ok) {
+    assert.deepEqual(validTags.tags, { env: 'pilot' });
+  }
+  const dupTags = normalizeTargetTagDrafts([
+    { key: 'env', value: 'pilot' },
+    { key: 'env', value: 'prod' },
+  ]);
+  assert.equal(dupTags.ok, false);
+
+  assert.equal(isOTACampaignActive('CANARY_RUNNING'), true);
+  assert.equal(isOTACampaignActive('ROLLOUT_RUNNING'), true);
+  assert.equal(isOTACampaignActive('PAUSED'), false);
+  assert.equal(isOTACampaignActive('COMPLETED'), false);
+  assert.equal(
+    formatOtaPauseReason('FAILURE_RATE_THRESHOLD_EXCEEDED'),
+    '失败率达到熔断阈值，已自动暂停',
+  );
+
+  const summary = summarizeOtaWorkspace(
+    [
+      {
+        id: '0193f100-0000-7000-8000-000000000001',
+        tenantId: TENANT_ID,
+        component: 'EDGE_GATEWAY',
+        version: '1.4.0',
+        targetOs: 'linux',
+        targetArch: 'armv7l',
+        hardwareModels: ['EG8200'],
+        fileName: 'edge-gateway-1.4.0.tar.gz',
+        fileSizeBytes: 1024000,
+        sha256: 'a'.repeat(64),
+        signatureAlg: 'ED25519',
+        signingKeyId: 'platform-ota-key-1',
+        signatureB64: 'b'.repeat(64),
+        releaseNotes: 'base release',
+        status: 'ACTIVE',
+        uploadedBy: TENANT_ID,
+        createdAt: '2026-11-20T00:00:00Z',
+        updatedAt: '2026-11-20T00:00:00Z',
+      },
+    ],
+    [
+      {
+        id: '0193f200-0000-7000-8000-000000000001',
+        tenantId: TENANT_ID,
+        name: 'canary-1',
+        packageId: '0193f100-0000-7000-8000-000000000001',
+        packageVersion: '1.4.0',
+        component: 'EDGE_GATEWAY',
+        targetOs: 'linux',
+        targetArch: 'armv7l',
+        targetSiteIds: [SITE_ID],
+        targetTags: { env: 'pilot' },
+        canaryPercent: 20,
+        failureRateThresholdPct: 20,
+        healthCheckTimeoutSec: 180,
+        autoPromoteRollout: true,
+        status: 'PAUSED',
+        pauseReason: 'FAILURE_RATE_THRESHOLD_EXCEEDED',
+        reason: 'pilot rollout',
+        totalCount: 2,
+        pendingCount: 0,
+        inProgressCount: 0,
+        succeededCount: 1,
+        failedCount: 1,
+        rolledBackCount: 0,
+        cancelledCount: 0,
+        failureRatePct: 50,
+        createdBy: TENANT_ID,
+        updatedBy: TENANT_ID,
+        createdAt: '2026-11-20T01:00:00Z',
+        updatedAt: '2026-11-20T01:10:00Z',
+      },
+    ],
+  );
+  assert.equal(summary.activePackages, 1);
+  assert.equal(summary.pausedCampaigns, 1);
+  assert.equal(summary.circuitBrokenCampaigns, 1);
+
+  const assetModel = createSampleAssetModel();
+  const suggested = extractSuggestedTagsFromDevices([
+    {
+      ...assetModel.devices[0]!,
+      deviceType: 'GATEWAY',
+      tags: { env: 'pilot', zone: 'north' },
+    },
+  ]);
+  assert.deepEqual(suggested, [
+    { key: 'env', value: 'pilot' },
+    { key: 'zone', value: 'north' },
+  ]);
+
+  assert.equal(
+    describeOtaError(
+      new PlatformApiError({
+        type: 'about:blank',
+        title: 'Unprocessable',
+        status: 422,
+        detail: 'no matching gateways',
+        instance: '/api/v1/ota/campaigns',
+        code: 'OTA_NO_TARGETS',
+        traceId: '0'.repeat(32),
+        retryable: false,
+      }),
+      'fallback',
+    ),
+    '没有匹配到符合条件的在线或已登记网关，请调整站点或标签筛选条件。',
+  );
 });

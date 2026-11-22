@@ -22,6 +22,7 @@ import { GatewaysTab } from './components/GatewaysTab';
 import { ConcentratorsTab } from './components/ConcentratorsTab';
 import { MeterInspectionSheet } from './components/MeterInspectionSheet';
 import { MeterReconciliationTab } from './components/MeterReconciliationTab';
+import { OtaTab } from './components/OtaTab';
 import { SensorCalibrationTab } from './components/SensorCalibrationTab';
 import { SensorInspectionSheet } from './components/SensorInspectionSheet';
 import {
@@ -41,7 +42,7 @@ import {
 const route = getRouteApi('/_app/settings/integrations');
 
 const HOUR_MS = 3_600_000;
-const INTEGRATIONS_VIEWS = ['gateways', 'concentrators', 'meters', 'sensors'] as const satisfies readonly IntegrationsTabView[];
+const INTEGRATIONS_VIEWS = ['gateways', 'concentrators', 'meters', 'sensors', 'ota'] as const satisfies readonly IntegrationsTabView[];
 
 export function IntegrationsWorkspace() {
   const snapshot = useShellSnapshot();
@@ -78,7 +79,10 @@ export function IntegrationsWorkspace() {
   const csrfToken = principal.session.csrfToken;
 
   const activeView: IntegrationsTabView =
-    search.view === 'concentrators' || search.view === 'meters' || search.view === 'sensors'
+    search.view === 'concentrators' ||
+    search.view === 'meters' ||
+    search.view === 'sensors' ||
+    search.view === 'ota'
       ? search.view
       : 'gateways';
   const needsGovernanceData = activeView === 'meters' || activeView === 'sensors';
@@ -235,7 +239,7 @@ export function IntegrationsWorkspace() {
       <PageHeader
         title="集成管理"
         meta={siteName ? <PageMeta>{siteName}</PageMeta> : undefined}
-        description="核查现场网关证书、计量表计逐时数据连续性与传感器探头零点校准建议"
+        description="核查现场网关证书、边缘程序 OTA 升级、计量表计逐时数据连续性与传感器探头零点校准建议"
         actions={
           <>
             <Select
@@ -302,6 +306,7 @@ export function IntegrationsWorkspace() {
           <TabsTrigger value="concentrators">无线集中器</TabsTrigger>
           <TabsTrigger value="meters">电表数据核对</TabsTrigger>
           <TabsTrigger value="sensors">传感器校准</TabsTrigger>
+          <TabsTrigger value="ota">OTA 升级</TabsTrigger>
         </TabsList>
 
         <TabsContent value="gateways" className="mt-0">
@@ -393,6 +398,19 @@ export function IntegrationsWorkspace() {
               onInspectSensor={(inspectKey) => setInspect(inspectKey)}
             />
           )}
+        </TabsContent>
+
+        <TabsContent value="ota" className="mt-0">
+          <OtaTab
+            sites={sites}
+            activeSiteId={siteId}
+            allDevices={allDevices}
+            canRead={canReadDevices}
+            canWrite={canWriteDevices}
+            csrfToken={csrfToken}
+            inspectCampaignId={activeView === 'ota' ? search.inspect : undefined}
+            onInspectChange={setInspect}
+          />
         </TabsContent>
       </Tabs>
 
