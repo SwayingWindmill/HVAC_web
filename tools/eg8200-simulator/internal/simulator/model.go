@@ -1,9 +1,16 @@
 package simulator
 
 import (
+	"errors"
 	"math"
+	"strings"
 	"sync"
 	"time"
+)
+
+const (
+	ControlCabinetModeRemote = "REMOTE"
+	ControlCabinetModeLocal  = "LOCAL"
 )
 
 const (
@@ -51,11 +58,17 @@ type Plant struct {
 	scenarioElapsed time.Duration
 	inputs          ScenarioInputs
 	now             time.Time
+	chilledWaterLag time.Duration
 
 	chiller          chillerState
 	chilledWaterPump pumpState
 	coolingWaterPump pumpState
 	coolingTower     coolingTowerState
+
+	chwValveOpen         bool
+	cwValveOpen          bool
+	chwFlowSwitchBlocked bool
+	cwFlowSwitchBlocked  bool
 
 	zone zoneState
 
@@ -70,57 +83,73 @@ type zoneState struct {
 }
 
 type chillerState struct {
-	runRequested          bool
-	running               bool
-	setpointC             float64
-	loadLimitPct          float64
-	leavingChilledWaterC  float64
-	enteringChilledWaterC float64
-	leavingCoolingWaterC  float64
-	enteringCoolingWaterC float64
-	loadPct               float64
-	coolingCapacityKW     float64
-	powerKW               float64
-	energyKWh             float64
-	cop                   float64
-	faultCode             string
+	runRequested           bool
+	running                bool
+	setpointC              float64
+	loadLimitPct           float64
+	leavingChilledWaterC   float64
+	enteringChilledWaterC  float64
+	leavingCoolingWaterC   float64
+	enteringCoolingWaterC  float64
+	loadPct                float64
+	coolingCapacityKW      float64
+	powerKW                float64
+	energyKWh              float64
+	cop                    float64
+	faultCode              string
+	localRemoteMode        string
+	registerReadOnlyLocked bool
+	lockedFeedbackValue    float64
 }
 
 type pumpState struct {
-	runRequested        bool
-	running             bool
-	frequencySetpointHz float64
-	frequencyHz         float64
-	flowM3H             float64
-	powerKW             float64
-	energyKWh           float64
-	faultCode           string
-	stuckHigh           bool
+	runRequested           bool
+	running                bool
+	frequencySetpointHz    float64
+	frequencyHz            float64
+	flowM3H                float64
+	powerKW                float64
+	energyKWh              float64
+	faultCode              string
+	stuckHigh              bool
+	localRemoteMode        string
+	registerReadOnlyLocked bool
+	lockedFeedbackValue    float64
 }
 
 type coolingTowerState struct {
-	runRequested        bool
-	running             bool
-	fanSpeedSetpointPct float64
-	fanSpeedPct         float64
-	enteringWaterC      float64
-	leavingWaterC       float64
-	powerKW             float64
-	energyKWh           float64
-	faultCode           string
+	runRequested           bool
+	running                bool
+	fanSpeedSetpointPct    float64
+	fanSpeedPct            float64
+	enteringWaterC         float64
+	leavingWaterC          float64
+	powerKW                float64
+	energyKWh              float64
+	faultCode              string
+	localRemoteMode        string
+	registerReadOnlyLocked bool
+	lockedFeedbackValue    float64
 }
 
 func NewPlant(config PlantConfig, scenario Scenario, now time.Time) *Plant {
 	inputs := scenario.InputsFor(0, now)
 	initialTowerLeavingC := inputs.AmbientWetBulbC + 4
 	initialTowerEnteringC := initialTowerLeavingC + 4
+	chwLag := chilledWaterTimeConstant
+	if config.ThermalLagSeconds > 0 {
+		chwLag = time.Duration(config.ThermalLagSeconds) * time.Second
+	}
 	return &Plant{
-		config:         config,
-		scenario:       scenario,
-		inputs:         inputs,
-		now:            now.UTC(),
-		totalEnergyKWh: config.InitialEnergyKWh,
-		zone:           zoneState{temperatureC: zoneSetpointC},
+		config:          config,
+		scenario:        scenario,
+		inputs:          inputs,
+		now:             now.UTC(),
+		chilledWaterLag: chwLag,
+		chwValveOpen:    true,
+		cwValveOpen:     true,
+		totalEnergyKWh:  config.InitialEnergyKWh,
+		zone:            zoneState{temperatureC: zoneSetpointC},
 		chiller: chillerState{
 			runRequested:          config.Chiller.InitiallyRunning,
 			running:               config.Chiller.InitiallyRunning,
@@ -130,6 +159,7 @@ func NewPlant(config PlantConfig, scenario Scenario, now time.Time) *Plant {
 			enteringChilledWaterC: config.Chiller.InitialSetpointC + 6,
 			leavingCoolingWaterC:  initialTowerEnteringC,
 			enteringCoolingWaterC: initialTowerLeavingC,
+			localRemoteMode:       ControlCabinetModeRemote,
 		},
 		chilledWaterPump: pumpState{
 			runRequested:        config.ChilledWaterPump.InitiallyRunning,
@@ -137,6 +167,7 @@ func NewPlant(config PlantConfig, scenario Scenario, now time.Time) *Plant {
 			frequencySetpointHz: config.ChilledWaterPump.InitialFrequencyHz,
 			frequencyHz:         config.ChilledWaterPump.InitialFrequencyHz,
 			flowM3H:             initialPumpFlowM3H(config.ChilledWaterPump),
+			localRemoteMode:     ControlCabinetModeRemote,
 		},
 		coolingWaterPump: pumpState{
 			runRequested:        config.CoolingWaterPump.InitiallyRunning,
@@ -144,6 +175,7 @@ func NewPlant(config PlantConfig, scenario Scenario, now time.Time) *Plant {
 			frequencySetpointHz: config.CoolingWaterPump.InitialFrequencyHz,
 			frequencyHz:         config.CoolingWaterPump.InitialFrequencyHz,
 			flowM3H:             initialPumpFlowM3H(config.CoolingWaterPump),
+			localRemoteMode:     ControlCabinetModeRemote,
 		},
 		coolingTower: coolingTowerState{
 			runRequested:        config.CoolingTower.InitiallyRunning,
@@ -152,6 +184,7 @@ func NewPlant(config PlantConfig, scenario Scenario, now time.Time) *Plant {
 			fanSpeedPct:         config.CoolingTower.InitialFanSpeedPct,
 			enteringWaterC:      initialTowerEnteringC,
 			leavingWaterC:       initialTowerLeavingC,
+			localRemoteMode:     ControlCabinetModeRemote,
 		},
 	}
 }
@@ -236,6 +269,159 @@ func (plant *Plant) SetCHWPStuckHighDisturbance(active bool) {
 	plant.chilledWaterPump.stuckHigh = active
 }
 
+// SetThermalLag configures the chilled-water loop first-order response time constant.
+// Passing 0 resets to the default 3-minute time constant; non-zero values must be in [1m, 30m].
+func (plant *Plant) SetThermalLag(lag time.Duration) error {
+	if lag == 0 {
+		plant.mu.Lock()
+		plant.chilledWaterLag = chilledWaterTimeConstant
+		plant.mu.Unlock()
+		return nil
+	}
+	if lag < time.Minute || lag > 30*time.Minute {
+		return errors.New("thermal lag must be 0 or between 60s and 1800s")
+	}
+	plant.mu.Lock()
+	plant.chilledWaterLag = lag
+	plant.mu.Unlock()
+	return nil
+}
+
+// SetControlCabinetMode switches a controllable device between LOCAL manual and REMOTE auto mode.
+func (plant *Plant) SetControlCabinetMode(deviceID, mode string) bool {
+	normalized := strings.ToUpper(strings.TrimSpace(mode))
+	if normalized != ControlCabinetModeRemote && normalized != ControlCabinetModeLocal {
+		return false
+	}
+	plant.mu.Lock()
+	defer plant.mu.Unlock()
+	switch deviceID {
+	case plant.config.Chiller.ID:
+		plant.chiller.localRemoteMode = normalized
+	case plant.config.ChilledWaterPump.ID:
+		plant.chilledWaterPump.localRemoteMode = normalized
+	case plant.config.CoolingWaterPump.ID:
+		plant.coolingWaterPump.localRemoteMode = normalized
+	case plant.config.CoolingTower.ID:
+		plant.coolingTower.localRemoteMode = normalized
+	default:
+		return false
+	}
+	return true
+}
+
+// SetLocalManualTarget applies a local cabinet setpoint dial change directly in plant memory.
+func (plant *Plant) SetLocalManualTarget(deviceID string, value float64) bool {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return false
+	}
+	plant.mu.Lock()
+	defer plant.mu.Unlock()
+	switch deviceID {
+	case plant.config.Chiller.ID:
+		if value < 5 || value > 12 {
+			return false
+		}
+		plant.chiller.setpointC = value
+		if plant.chiller.registerReadOnlyLocked {
+			plant.chiller.lockedFeedbackValue = value
+		}
+	case plant.config.ChilledWaterPump.ID:
+		if value < 20 || value > 50 {
+			return false
+		}
+		plant.chilledWaterPump.frequencySetpointHz = value
+		if plant.chilledWaterPump.registerReadOnlyLocked {
+			plant.chilledWaterPump.lockedFeedbackValue = value
+		}
+	case plant.config.CoolingWaterPump.ID:
+		if value < 20 || value > 50 {
+			return false
+		}
+		plant.coolingWaterPump.frequencySetpointHz = value
+		if plant.coolingWaterPump.registerReadOnlyLocked {
+			plant.coolingWaterPump.lockedFeedbackValue = value
+		}
+	case plant.config.CoolingTower.ID:
+		if value < 20 || value > 100 {
+			return false
+		}
+		plant.coolingTower.fanSpeedSetpointPct = value
+		if plant.coolingTower.registerReadOnlyLocked {
+			plant.coolingTower.lockedFeedbackValue = value
+		}
+	default:
+		return false
+	}
+	return true
+}
+
+// SetRegisterReadOnlyLock freezes physical actuator feedback so remote writes ACK cleanly
+// while telemetry feedback refuses to converge until unlocked.
+func (plant *Plant) SetRegisterReadOnlyLock(deviceID string, active bool) bool {
+	plant.mu.Lock()
+	defer plant.mu.Unlock()
+	switch deviceID {
+	case plant.config.Chiller.ID:
+		if active && !plant.chiller.registerReadOnlyLocked {
+			plant.chiller.lockedFeedbackValue = plant.chiller.setpointC
+		}
+		plant.chiller.registerReadOnlyLocked = active
+	case plant.config.ChilledWaterPump.ID:
+		if active && !plant.chilledWaterPump.registerReadOnlyLocked {
+			plant.chilledWaterPump.lockedFeedbackValue = plant.chilledWaterPump.frequencyHz
+		}
+		plant.chilledWaterPump.registerReadOnlyLocked = active
+	case plant.config.CoolingWaterPump.ID:
+		if active && !plant.coolingWaterPump.registerReadOnlyLocked {
+			plant.coolingWaterPump.lockedFeedbackValue = plant.coolingWaterPump.frequencyHz
+		}
+		plant.coolingWaterPump.registerReadOnlyLocked = active
+	case plant.config.CoolingTower.ID:
+		if active && !plant.coolingTower.registerReadOnlyLocked {
+			plant.coolingTower.lockedFeedbackValue = plant.coolingTower.fanSpeedPct
+		}
+		plant.coolingTower.registerReadOnlyLocked = active
+	default:
+		return false
+	}
+	return true
+}
+
+// SetHydraulicInterlockFault injects butterfly-valve closure or flow-switch faults.
+func (plant *Plant) SetHydraulicInterlockFault(chwValveOpen, cwValveOpen, chwFlowSwitchBlocked, cwFlowSwitchBlocked bool) {
+	plant.mu.Lock()
+	defer plant.mu.Unlock()
+	plant.chwValveOpen = chwValveOpen
+	plant.cwValveOpen = cwValveOpen
+	plant.chwFlowSwitchBlocked = chwFlowSwitchBlocked
+	plant.cwFlowSwitchBlocked = cwFlowSwitchBlocked
+}
+
+func (plant *Plant) chwFlowSwitchProvenLocked() bool {
+	flowFrac := clamp(plant.chilledWaterPump.flowM3H/plant.config.ChilledWaterPump.RatedFlowM3H, 0, 1)
+	return plant.chwValveOpen && !plant.chwFlowSwitchBlocked && flowFrac >= 0.35
+}
+
+func (plant *Plant) cwFlowSwitchProvenLocked() bool {
+	flowFrac := clamp(plant.coolingWaterPump.flowM3H/plant.config.CoolingWaterPump.RatedFlowM3H, 0, 1)
+	return plant.cwValveOpen && !plant.cwFlowSwitchBlocked && flowFrac >= 0.35
+}
+
+func (plant *Plant) effectiveChillerSetpointLocked() float64 {
+	if plant.chiller.registerReadOnlyLocked {
+		return plant.chiller.lockedFeedbackValue
+	}
+	return plant.chiller.setpointC
+}
+
+func normalizedCabinetMode(mode string) string {
+	if mode == ControlCabinetModeLocal {
+		return ControlCabinetModeLocal
+	}
+	return ControlCabinetModeRemote
+}
+
 func (plant *Plant) updatePump(state *pumpState, config PumpConfig, elapsed time.Duration) {
 	if state.faultCode != "" {
 		state.running = false
@@ -248,6 +434,9 @@ func (plant *Plant) updatePump(state *pumpState, config PumpConfig, elapsed time
 	targetFrequencyHz := 0.0
 	if state.runRequested {
 		targetFrequencyHz = state.frequencySetpointHz
+		if state.registerReadOnlyLocked {
+			targetFrequencyHz = state.lockedFeedbackValue
+		}
 		if state.stuckHigh {
 			targetFrequencyHz = pumpNominalFrequencyHz
 		}
@@ -273,6 +462,9 @@ func (plant *Plant) updateCoolingTower(elapsed time.Duration) {
 	targetFanSpeedPct := 0.0
 	if state.runRequested {
 		targetFanSpeedPct = state.fanSpeedSetpointPct
+		if state.registerReadOnlyLocked {
+			targetFanSpeedPct = state.lockedFeedbackValue
+		}
 	}
 	state.fanSpeedPct = approach(state.fanSpeedPct, targetFanSpeedPct, elapsed, coolingTowerFanTimeConstant)
 	state.running = state.fanSpeedPct > 0.5
@@ -294,7 +486,8 @@ func (plant *Plant) updateChiller(elapsed time.Duration) {
 	state := &plant.chiller
 	chilledWaterFlowFraction := clamp(plant.chilledWaterPump.flowM3H/plant.config.ChilledWaterPump.RatedFlowM3H, 0, 1)
 	coolingWaterFlowFraction := clamp(plant.coolingWaterPump.flowM3H/plant.config.CoolingWaterPump.RatedFlowM3H, 0, 1)
-	flowReady := math.Min(chilledWaterFlowFraction, coolingWaterFlowFraction) >= 0.35
+	flowReady := math.Min(chilledWaterFlowFraction, coolingWaterFlowFraction) >= 0.35 &&
+		plant.chwValveOpen && plant.cwValveOpen && !plant.chwFlowSwitchBlocked && !plant.cwFlowSwitchBlocked
 	equipmentFault := state.faultCode != "" || plant.chilledWaterPump.faultCode != "" || plant.coolingWaterPump.faultCode != "" || plant.coolingTower.faultCode != ""
 	available := state.runRequested && !equipmentFault && flowReady && plant.coolingTower.running
 
@@ -328,7 +521,7 @@ func (plant *Plant) updateChiller(elapsed time.Duration) {
 	}
 	state.cop = clamp(
 		plant.config.Chiller.BaseCOP+
-			0.14*(state.setpointC-6.5)-
+			0.14*(plant.effectiveChillerSetpointLocked()-6.5)-
 			0.045*(state.enteringCoolingWaterC-28)-
 			lowLoadPenalty,
 		2.5,
@@ -368,8 +561,12 @@ func (plant *Plant) updateChilledWaterTemperatures(elapsed time.Duration) {
 
 	waterCapacityKWPerC := waterHeatCapacityKWPerM3HDeltaC * flowM3H
 	unmetLoadKW := math.Max(plant.zone.coolingDemandKW-state.coolingCapacityKW, 0)
-	supplyTargetC := state.setpointC + unmetLoadKW/waterCapacityKWPerC
-	state.leavingChilledWaterC = approach(state.leavingChilledWaterC, supplyTargetC, elapsed, chilledWaterTimeConstant)
+	supplyTargetC := plant.effectiveChillerSetpointLocked() + unmetLoadKW/waterCapacityKWPerC
+	lag := plant.chilledWaterLag
+	if lag <= 0 {
+		lag = chilledWaterTimeConstant
+	}
+	state.leavingChilledWaterC = approach(state.leavingChilledWaterC, supplyTargetC, elapsed, lag)
 	state.enteringChilledWaterC = state.leavingChilledWaterC + state.coolingCapacityKW/waterCapacityKWPerC
 }
 
@@ -382,7 +579,7 @@ func (plant *Plant) snapshotLocked() Snapshot {
 				"runState":                         runState(plant.chiller.running, plant.chiller.faultCode),
 				"leavingChilledWaterTemperatureC":  round(plant.chiller.leavingChilledWaterC, 3),
 				"enteringChilledWaterTemperatureC": round(plant.chiller.enteringChilledWaterC, 3),
-				"chilledWaterTemperatureSetpointC": round(plant.chiller.setpointC, 3),
+				"chilledWaterTemperatureSetpointC": round(plant.effectiveChillerSetpointLocked(), 3),
 				"leavingCoolingWaterTemperatureC":  round(plant.chiller.leavingCoolingWaterC, 3),
 				"enteringCoolingWaterTemperatureC": round(plant.chiller.enteringCoolingWaterC, 3),
 				"compressorLoadPct":                round(plant.chiller.loadPct, 3),
@@ -392,6 +589,11 @@ func (plant *Plant) snapshotLocked() Snapshot {
 				"cop":                              round(plant.chiller.cop, 3),
 				"loadLimitPct":                     round(plant.chiller.loadLimitPct, 3),
 				"faultCode":                        plant.chiller.faultCode,
+				"localRemoteMode":                  normalizedCabinetMode(plant.chiller.localRemoteMode),
+				"chwValveOpen":                     plant.chwValveOpen,
+				"cwValveOpen":                      plant.cwValveOpen,
+				"chwFlowSwitch":                    plant.chwFlowSwitchProvenLocked(),
+				"cwFlowSwitch":                     plant.cwFlowSwitchProvenLocked(),
 			},
 			plant.config.ChilledWaterPump.ID: pumpTelemetry(plant.chilledWaterPump),
 			plant.config.CoolingWaterPump.ID: pumpTelemetry(plant.coolingWaterPump),
@@ -405,6 +607,7 @@ func (plant *Plant) snapshotLocked() Snapshot {
 				"powerKw":                    round(plant.coolingTower.powerKW, 3),
 				"energyKwh":                  round(plant.coolingTower.energyKWh, 6),
 				"faultCode":                  plant.coolingTower.faultCode,
+				"localRemoteMode":            normalizedCabinetMode(plant.coolingTower.localRemoteMode),
 			},
 			plant.config.PowerMeterID: {
 				"activePowerKw": round(totalPowerKW, 3),
@@ -434,13 +637,14 @@ func (plant *Plant) snapshotLocked() Snapshot {
 
 func pumpTelemetry(state pumpState) DeviceTelemetry {
 	return DeviceTelemetry{
-		"runState":    runState(state.running, state.faultCode),
-		"frequencyHz": round(state.frequencyHz, 3),
-		"speedPct":    round(100*state.frequencyHz/pumpNominalFrequencyHz, 3),
-		"flowRateM3h": round(state.flowM3H, 3),
-		"powerKw":     round(state.powerKW, 3),
-		"energyKwh":   round(state.energyKWh, 6),
-		"faultCode":   state.faultCode,
+		"runState":        runState(state.running, state.faultCode),
+		"frequencyHz":     round(state.frequencyHz, 3),
+		"speedPct":        round(100*state.frequencyHz/pumpNominalFrequencyHz, 3),
+		"flowRateM3h":     round(state.flowM3H, 3),
+		"powerKw":         round(state.powerKW, 3),
+		"energyKwh":       round(state.energyKWh, 6),
+		"faultCode":       state.faultCode,
+		"localRemoteMode": normalizedCabinetMode(state.localRemoteMode),
 	}
 }
 

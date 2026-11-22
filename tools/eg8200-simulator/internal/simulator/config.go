@@ -26,15 +26,16 @@ type Config struct {
 }
 
 type PlantConfig struct {
-	InitialEnergyKWh float64            `json:"initialEnergyKwh,omitempty"`
-	Chiller          ChillerConfig      `json:"chiller"`
-	ChilledWaterPump PumpConfig         `json:"chilledWaterPump"`
-	CoolingWaterPump PumpConfig         `json:"coolingWaterPump"`
-	CoolingTower     CoolingTowerConfig `json:"coolingTower"`
-	PowerMeterID     string             `json:"powerMeterId"`
-	BTUMeterID       string             `json:"btuMeterId"`
-	WeatherStationID string             `json:"weatherStationId"`
-	ZoneSensorID     string             `json:"zoneSensorId"`
+	InitialEnergyKWh  float64            `json:"initialEnergyKwh,omitempty"`
+	ThermalLagSeconds int                `json:"thermalLagSeconds,omitempty"`
+	Chiller           ChillerConfig      `json:"chiller"`
+	ChilledWaterPump  PumpConfig         `json:"chilledWaterPump"`
+	CoolingWaterPump  PumpConfig         `json:"coolingWaterPump"`
+	CoolingTower      CoolingTowerConfig `json:"coolingTower"`
+	PowerMeterID      string             `json:"powerMeterId"`
+	BTUMeterID        string             `json:"btuMeterId"`
+	WeatherStationID  string             `json:"weatherStationId"`
+	ZoneSensorID      string             `json:"zoneSensorId"`
 }
 
 type ChillerConfig struct {
@@ -104,6 +105,9 @@ func (config Config) Validate() error {
 func (config PlantConfig) Validate() error {
 	if config.InitialEnergyKWh < 0 || math.IsNaN(config.InitialEnergyKWh) || math.IsInf(config.InitialEnergyKWh, 0) {
 		return errors.New("plant initialEnergyKwh must be a finite non-negative number")
+	}
+	if config.ThermalLagSeconds != 0 && (config.ThermalLagSeconds < 60 || config.ThermalLagSeconds > 1800) {
+		return errors.New("plant thermalLagSeconds must be 0 or between 60 and 1800")
 	}
 	if config.Chiller.RatedCoolingCapacityKW <= 0 || config.Chiller.BaseCOP < 2 || config.Chiller.BaseCOP > 9 || config.Chiller.InitialSetpointC < 5 || config.Chiller.InitialSetpointC > 12 || config.Chiller.InitialLoadLimitPct < 20 || config.Chiller.InitialLoadLimitPct > 100 {
 		return errors.New("chiller config is invalid")
