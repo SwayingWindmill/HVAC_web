@@ -1,0 +1,11 @@
+[Unit]
+Description=HVAC Gateway SSH Local Loopback Socket (18822)
+
+[Socket]
+ListenStream=127.0.0.1:18822
+Accept=yes
+Backlog=16
+ReusePort=false
+
+[Install]
+WantedBy=sockets.target

@@ -28,6 +28,7 @@ import {
   GatewayTunnelClient,
   MAX_FRAME_PAYLOAD,
   ProtectedFlowTabError,
+  SSH_TARGET_PORT,
   TUNNEL_PROTOCOL_NAME,
   validateProtectedFlowTabs,
   buildGatewayTunnelFlow,
@@ -1295,4 +1296,97 @@ test('buildGatewayPopHeaders signs verifiable ECDSA and Ed25519 PoP payloads and
     certPem: fs.readFileSync(certPath, 'utf8'),
     headers: tunnelReqHeaders,
   });
+});
+
+
+test('opt-in allowedTargetPorts forwards SSH 22 alongside 1880 while rejecting unsupported ports', async (t) => {
+  const gatewayId = '01a14000-4000-7000-8000-000000000188';
+  const pki = createTestPKI(gatewayId, 60);
+  const renewCalls: string[] = [];
+  const hub = await startNodeUpgradeHub(pki, renewCalls);
+
+  assert.throws(
+    () =>
+      new GatewayTunnelClient({
+        tunnelUrl: `https://127.0.0.1:${hub.port}/gateway/v1/tunnel`,
+        allowedTargetPorts: [ALLOWED_TARGET_PORT, 80],
+        loadCredentials: () => ({ certPem: pki.gwPem, keyPem: pki.gwKey, caPem: pki.caPem }),
+      }),
+    RangeError,
+  );
+
+  const mockHttp = http.createServer((_req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('nodered-ok');
+  });
+  await new Promise<void>((res) => mockHttp.listen(0, '127.0.0.1', res));
+  const httpPort = (mockHttp.address() as net.AddressInfo).port;
+
+  const mockSsh = net.createServer((sock) => {
+    sock.once('data', (chunk) => {
+      sock.end(Buffer.concat([Buffer.from('ssh-banner:'), chunk]));
+    });
+  });
+  await new Promise<void>((res) => mockSsh.listen(0, '127.0.0.1', res));
+  const sshPort = (mockSsh.address() as net.AddressInfo).port;
+
+  let dialCalls = 0;
+  const client = new GatewayTunnelClient({
+    tunnelUrl: `https://127.0.0.1:${hub.port}/gateway/v1/tunnel`,
+    targetHost: '127.0.0.1',
+    targetPort: httpPort,
+    allowedTargetPorts: [ALLOWED_TARGET_PORT, SSH_TARGET_PORT],
+    targetPortMap: { [SSH_TARGET_PORT]: sshPort },
+    pingIntervalMs: 40,
+    readTimeoutMs: 500,
+    dialTarget: (p, host) => {
+      dialCalls += 1;
+      return net.createConnection({ host, port: p, allowHalfOpen: true, noDelay: true });
+    },
+    loadCredentials: () => ({ certPem: pki.gwPem, keyPem: pki.gwKey, caPem: pki.caPem }),
+  });
+  client.start();
+
+  t.after(async () => {
+    await client.stop();
+    await hub.close();
+    mockHttp.closeAllConnections?.();
+    await new Promise<void>((res) => mockHttp.close(() => res()));
+    await new Promise<void>((res) => mockSsh.close(() => res()));
+  });
+
+  const sHttp = await hub.openStream(ALLOWED_TARGET_PORT);
+  const httpResp = await sendHttpOverTunnelStream(
+    sHttp,
+    'GET / HTTP/1.1\r\nHost: 127.0.0.1:18800\r\nConnection: close\r\n\r\n',
+  );
+  assert.equal(httpResp.status, 200);
+  assert.equal(httpResp.body.toString('utf8'), 'nodered-ok');
+
+  const sSsh = await hub.openStream(SSH_TARGET_PORT);
+  sSsh.write('SSH-2.0-client\r\n');
+  sSsh.end();
+  const sshEcho = (await sSsh.readUntilEnd()).toString('utf8');
+  assert.equal(sshEcho, 'ssh-banner:SSH-2.0-client\r\n');
+
+  const beforeForbiddenDials = dialCalls;
+  for (const forbidden of [80, 443, 1883, 5432]) {
+    const p = Buffer.allocUnsafe(2);
+    p.writeUInt16BE(forbidden, 0);
+    const errFrame = await hub.requestRawOpen(1100 + forbidden, p);
+    assert.equal(errFrame.type, FrameType.OPEN_ERR);
+    assert.match(errFrame.payload.toString('utf8'), /forbidden/);
+  }
+  assert.equal(dialCalls, beforeForbiddenDials);
+
+  const flowWithSsh = buildGatewayTunnelFlow({
+    tunnelUrl: 'https://hvac.swayingwindmill.online/gateway/v1/tunnel',
+    certPath: '/root/hvac-platform/gateway.crt',
+    keyPath: '/root/hvac-platform/gateway.key',
+    caPath: '/root/hvac-platform/broker-ca.crt',
+    allowSshPort: true,
+  });
+  const fnNode = flowWithSsh.find((n) => n.id === 'fn-platform-tunnel-client');
+  assert.ok(fnNode && typeof fnNode.func === 'string');
+  assert.match(fnNode.func, /allowedTargetPorts: \[1880, 22\]/);
 });

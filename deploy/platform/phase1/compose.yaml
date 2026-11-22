@@ -794,6 +794,7 @@ services:
       GATEWAY_BROKER_URL: ${GATEWAY_BROKER_URL:-tls://localhost:8883}
       GATEWAY_CRL_OUTPUT_FILE: ${GATEWAY_CRL_OUTPUT_FILE:-/var/lib/hvac/mqtt-crl/gateway-ca.crl.pem}
       CONNECTIVITY_IAM_URL: ${IAM_URL:-https://iam-service:8444}
+      CONNECTIVITY_TUNNEL_SSH_LOOPBACK_ADDR: ${CONNECTIVITY_TUNNEL_SSH_LOOPBACK_ADDR:-}
     volumes:
       - ${PHASE1_RUNTIME_DIR:-./runtime}/gateway-ca:/run/hvac/gateway-ca:ro
       - ${MQTT_CRL_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/mqtt-crl}:/var/lib/hvac/mqtt-crl

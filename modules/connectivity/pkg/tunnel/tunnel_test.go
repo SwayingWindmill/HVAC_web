@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -932,5 +933,165 @@ func TestTunnelRunEdgeConnWriteTimeoutClosesStalledConn(t *testing.T) {
 		}
 	case <-time.After(1 * time.Second):
 		t.Fatal("runEdgeConn hung past write timeout")
+	}
+}
+
+func TestTunnelHubWithAllowedTargetPortsAndSSHLoopback(t *testing.T) {
+	const gatewayID = "0193f000-2000-7000-8000-000000000301"
+	defaultHub := NewHub()
+	defer defaultHub.Close()
+	if _, err := defaultHub.StartLoopbackListenerForPort("127.0.0.1:18822", SSHTargetPort); !errors.Is(err, ErrPortForbidden) {
+		t.Fatalf("default hub StartLoopbackListenerForPort(22) expected ErrPortForbidden, got %v", err)
+	}
+
+	sink := &recordingAuditSink{}
+	hub := NewHub(
+		WithDefaultGateway(gatewayID),
+		WithAuditSink(sink),
+		WithAllowedTargetPorts(AllowedTargetPort, SSHTargetPort, 80, 5432),
+	)
+	defer hub.Close()
+
+	if _, err := hub.StartLoopbackListenerForPort("0.0.0.0:18822", SSHTargetPort); !errors.Is(err, ErrNonLoopbackAddress) {
+		t.Fatalf("expected ErrNonLoopbackAddress for 0.0.0.0:18822, got %v", err)
+	}
+	for _, forbidden := range []uint16{80, 443, 1883, 5432} {
+		if _, err := hub.OpenStream(context.Background(), "", forbidden); !errors.Is(err, ErrPortForbidden) {
+			t.Fatalf("port %d expected ErrPortForbidden even with option, got %v", forbidden, err)
+		}
+	}
+
+	sshMockLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sshMockLn.Close() }()
+	go func() {
+		for {
+			c, acceptErr := sshMockLn.Accept()
+			if acceptErr != nil {
+				return
+			}
+			go func(conn net.Conn) {
+				defer func() { _ = conn.Close() }()
+				buf := make([]byte, 64)
+				n, readErr := conn.Read(buf)
+				if readErr != nil || n == 0 {
+					return
+				}
+				_, _ = conn.Write(append([]byte("ssh-ack:"), buf[:n]...))
+			}(c)
+		}
+	}()
+
+	serverConn, edgeConn := net.Pipe()
+	defer func() {
+		_ = serverConn.Close()
+		_ = edgeConn.Close()
+	}()
+
+	sess := hub.registerSessionWithAddr(gatewayID, serverConn, "127.0.0.1:443")
+	if sess == nil {
+		t.Fatal("registerSessionWithAddr returned nil")
+	}
+	sess.markOpened(context.Background())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sessionDone := make(chan struct{})
+	go func() {
+		defer close(sessionDone)
+		sess.run(ctx)
+	}()
+	edgeErrCh := make(chan error, 1)
+	go func() {
+		edgeErrCh <- RunEdgeConnWithAllowedPorts(
+			ctx,
+			edgeConn,
+			func(dialCtx context.Context, port uint16) (net.Conn, error) {
+				if port != SSHTargetPort {
+					return nil, ErrPortForbidden
+				}
+				var d net.Dialer
+				return d.DialContext(dialCtx, "tcp", sshMockLn.Addr().String())
+			},
+			50*time.Millisecond,
+			AllowedTargetPort,
+			SSHTargetPort,
+		)
+	}()
+
+	var sshLoopbackLn net.Listener
+	var lastErr error
+	for range 5 {
+		probe, probeErr := net.Listen("tcp", "127.0.0.1:0")
+		if probeErr != nil {
+			lastErr = probeErr
+			continue
+		}
+		addr := probe.Addr().String()
+		_ = probe.Close()
+		ln, listenErr := hub.StartLoopbackListenerForPort(addr, SSHTargetPort)
+		if listenErr == nil {
+			sshLoopbackLn = ln
+			break
+		}
+		lastErr = listenErr
+	}
+	if sshLoopbackLn == nil {
+		t.Fatalf("StartLoopbackListenerForPort failed: %v", lastErr)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for len(hub.ActiveGateways()) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("gateway tunnel did not register in time")
+		}
+		runtime.Gosched()
+	}
+
+	clientConn, err := net.DialTimeout("tcp", sshLoopbackLn.Addr().String(), 2*time.Second)
+	if err != nil {
+		t.Fatalf("dial SSH loopback: %v", err)
+	}
+	if _, err := io.WriteString(clientConn, "SSH-2.0-test\r\n"); err != nil {
+		_ = clientConn.Close()
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(clientConn)
+	_ = clientConn.Close()
+	if err != nil {
+		t.Fatalf("read echoed SSH banner: %v", err)
+	}
+	if string(got) != "ssh-ack:SSH-2.0-test\r\n" {
+		t.Fatalf("unexpected SSH echo response: %q", string(got))
+	}
+
+	hub.CloseGateway(gatewayID)
+	select {
+	case <-edgeErrCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("edge loop did not exit after CloseGateway")
+	}
+	select {
+	case <-sessionDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("session loop did not exit after CloseGateway")
+	}
+
+	var seenSSHOpen, seenForbiddenReject, seenSessionClose bool
+	for _, ev := range sink.snapshot() {
+		if ev.EventType == AuditStreamOpened && ev.TargetPort != nil && *ev.TargetPort == SSHTargetPort {
+			seenSSHOpen = true
+		}
+		if ev.EventType == AuditStreamRejected && ev.TargetPort != nil && *ev.TargetPort == 80 {
+			seenForbiddenReject = true
+		}
+		if ev.EventType == AuditSessionClosed && ev.BytesTX > 0 && ev.BytesRX > 0 {
+			seenSessionClose = true
+		}
+	}
+	if !seenSSHOpen || !seenForbiddenReject || !seenSessionClose {
+		t.Fatalf("expected SSH port 22 stream audit, reject 80 audit, and session close bytes; open=%v reject80=%v close=%v", seenSSHOpen, seenForbiddenReject, seenSessionClose)
 	}
 }

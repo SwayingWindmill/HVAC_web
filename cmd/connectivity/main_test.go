@@ -37,6 +37,14 @@ func TestCredentialServerRejectsNonLoopbackTunnelAddressFailClosed(t *testing.T)
 	}
 }
 
+func TestCredentialServerRejectsNonLoopbackSSHTunnelAddressFailClosed(t *testing.T) {
+	t.Setenv("CONNECTIVITY_TUNNEL_SSH_LOOPBACK_ADDR", "0.0.0.0:18822")
+	_, _, err := credentialServer(nil)
+	if !errors.Is(err, tunnel.ErrNonLoopbackAddress) {
+		t.Fatalf("expected ErrNonLoopbackAddress for 0.0.0.0:18822, got %v", err)
+	}
+}
+
 func TestUplinkBatchConfigFromEnv(t *testing.T) {
 	defaults := uplinkConfig()
 	if err := defaults.Validate(); err != nil {
