@@ -26,16 +26,21 @@ import {
   buildValidatedShadowUpdateRequestFromDesired,
   countDriverRegisters,
   createDefaultAutonomyPolicyDraft,
+  createEmptyBACnetObjectDraft,
   createEmptyModbusDriverDraft,
   createEmptyModbusRegisterDraft,
+  createEmptyOPCUANodeDraft,
   createEmptySamplingPolicyDraft,
   createShadowEditorDraft,
   formatModbusEnumMap,
   formatPointCopyTargets,
+  isHardRealtimeProtectionPoint,
   parseModbusEnumMap,
+  parseOPCUANodeId,
   parsePointCopyTargets,
   summarizeAutonomyPolicyState,
   summarizeConcentratorShadowUnits,
+  summarizeDriverPointCounts,
   type GatewayConfigShadowEditorDraft,
   type GatewayModbusRegisterDraft,
 } from '../apps/hvac-web/src/features/connectivity/gateway-config-shadow-model.ts';
@@ -1713,8 +1718,8 @@ test('gateway config shadow supports declarative driverConfigs, autonomyPolicy b
     assert.equal(initReq.request.driverConfigs?.length, 1);
     assert.equal(initReq.request.driverConfigs?.[0]?.capabilityProfile, 'CHILLER');
     assert.equal(countDriverRegisters(initReq.request.driverConfigs), 3);
-    assert.equal(initReq.request.driverConfigs?.[0]?.registers[1]?.bitIndex, 3);
-    assert.deepEqual(initReq.request.driverConfigs?.[0]?.registers[2]?.enumMap, {
+    assert.equal(initReq.request.driverConfigs?.[0]?.registers?.[1]?.bitIndex, 3);
+    assert.deepEqual(initReq.request.driverConfigs?.[0]?.registers?.[2]?.enumMap, {
       '0': '停机',
       '1': '运行',
     });
@@ -1900,6 +1905,231 @@ test('gateway config shadow supports declarative driverConfigs, autonomyPolicy b
       assert.equal(clearBoth.request.autonomyPolicy, null);
     }
   }
+});
+
+test('gateway config shadow supports BACnet/IP and OPC-UA driver validation, EDGE-003 boundary, and canonical equality', () => {
+  const bacBase = createEmptyModbusDriverDraft();
+  const bacObjRead = createEmptyBACnetObjectDraft();
+  const bacObjWrite = {
+    ...createEmptyBACnetObjectDraft(),
+    pointCode: 'supply_air_temp_sp',
+    semanticChannel: 'SupplyTempSetpoint',
+    objectType: 'ANALOG_VALUE' as const,
+    objectInstance: '2',
+    propertyId: '85',
+    writable: true,
+    covSubscribe: true,
+    pollPriority: 'HIGH' as const,
+    unit: '°C',
+  };
+  const bacDriver = {
+    ...bacBase,
+    deviceKey: 'ahu-bacnet-01',
+    driverType: 'BACNET_IP' as const,
+    endpoint: '192.168.10.30:47808',
+    bacnet: {
+      ...bacBase.bacnet,
+      deviceInstance: '2048',
+      writePriority: '8',
+      covLifetimeSeconds: '300',
+      objects: [
+        {
+          ...bacObjRead,
+          pointCode: 'supply_air_temp',
+          semanticChannel: 'SupplyTemp',
+          objectType: 'ANALOG_INPUT' as const,
+          objectInstance: '1',
+          unit: '°C',
+        },
+        bacObjWrite,
+      ],
+    },
+  };
+
+  const uaBase = createEmptyModbusDriverDraft();
+  const uaNode = {
+    ...createEmptyOPCUANodeDraft(),
+    pointCode: 'chiller_power',
+    semanticChannel: 'PowerKW',
+    nodeId: 'ns=2;s=Chiller1.Power',
+    subscribe: true,
+    pollPriority: 'HIGH' as const,
+    unit: 'kW',
+  };
+  const uaDriver = {
+    ...uaBase,
+    deviceKey: 'chiller-opcua-01',
+    driverType: 'OPC_UA' as const,
+    endpoint: 'opc.tcp://192.168.10.40:4840',
+    opcua: {
+      securityPolicy: 'Basic256Sha256' as const,
+      securityMode: 'SignAndEncrypt' as const,
+      authMode: 'USERNAME' as const,
+      username: 'hvac_edge',
+      credentialRef: 'edge-secret:opcua-chiller-01',
+      subscriptionIntervalMs: '1000',
+      nodes: [uaNode],
+    },
+  };
+
+  const draft: GatewayConfigShadowEditorDraft = {
+    pointMappings: [],
+    samplingPolicies: [],
+    driverConfigs: [bacDriver, uaDriver],
+    autonomyPolicy: null,
+    reason: '新增 BACnet/IP 与 OPC-UA 南向协议驱动',
+  };
+
+  const built = buildValidatedShadowUpdateRequest(draft, undefined);
+  assert.equal(built.ok, true);
+  if (built.ok) {
+    assert.equal(built.request.driverConfigs?.length, 2);
+    const bacWire = built.request.driverConfigs?.[0];
+    const uaWire = built.request.driverConfigs?.[1];
+    assert.equal(bacWire?.unitId, undefined);
+    assert.equal(bacWire?.registers, undefined);
+    assert.equal(bacWire?.bacnet?.deviceInstance, 2048);
+    assert.equal(bacWire?.bacnet?.objects.length, 2);
+    assert.equal(uaWire?.unitId, undefined);
+    assert.equal(uaWire?.registers, undefined);
+    assert.equal(uaWire?.opcua?.securityPolicy, 'Basic256Sha256');
+    assert.equal(uaWire?.opcua?.nodes[0]?.namespaceIndex, 2);
+    assert.deepEqual(summarizeDriverPointCounts(built.request.driverConfigs), {
+      driverCount: 2,
+      modbusRegisterCount: 0,
+      bacnetObjectCount: 2,
+      opcuaNodeCount: 1,
+      totalPointCount: 3,
+    });
+    assert.equal(countDriverRegisters(built.request.driverConfigs), 3);
+
+    // Reorder objects + re-hydrate: unchanged driverConfigs must be omitted on partial PUT.
+    const existingShadow = {
+      tenantId: '018f3e00-0000-7000-8000-000000000001',
+      gatewayId: '018f3e00-4000-7000-8000-000000000100',
+      syncStatus: 'SYNCED' as const,
+      drift: [],
+      desired: {
+        desiredRevision: 2,
+        pointMappings: [],
+        samplingPolicies: [],
+        concentratorConfigs: {},
+        driverConfigs: built.request.driverConfigs,
+        autonomyPolicy: null,
+        edgeRuleBundle: null,
+        updatedBy: '018f3e00-0000-7000-8000-000000000002',
+        reason: '初始下发',
+        createdAt: '2026-11-22T00:00:00.000Z',
+        updatedAt: '2026-11-22T00:00:00.000Z',
+      },
+    };
+    const rehydrated = createShadowEditorDraft(existingShadow);
+    const reordered = {
+      ...rehydrated,
+      driverConfigs: [
+        rehydrated.driverConfigs[1]!,
+        {
+          ...rehydrated.driverConfigs[0]!,
+          bacnet: {
+            ...rehydrated.driverConfigs[0]!.bacnet,
+            objects: [...rehydrated.driverConfigs[0]!.bacnet.objects].reverse(),
+          },
+        },
+      ],
+      autonomyPolicy: createDefaultAutonomyPolicyDraft(),
+      reason: '仅启用自治策略',
+    };
+    const partialReq = buildValidatedShadowUpdateRequest(reordered, existingShadow);
+    assert.equal(partialReq.ok, true);
+    if (partialReq.ok) {
+      assert.equal('driverConfigs' in partialReq.request, false);
+    }
+  }
+
+  // BACnet & OPC-UA negative validation checks
+  const inputWritableRes = buildValidatedShadowUpdateRequest(
+    {
+      ...draft,
+      driverConfigs: [
+        {
+          ...bacDriver,
+          bacnet: {
+            ...bacDriver.bacnet,
+            objects: [{ ...bacObjRead, pointCode: 'supply_air_temp', objectType: 'ANALOG_INPUT', writable: true }],
+          },
+        },
+      ],
+    },
+    undefined,
+  );
+  assert.equal(inputWritableRes.ok, false, 'BACnet ANALOG_INPUT cannot be writable');
+
+  const bacnetSafetyBoundaryRes = buildValidatedShadowUpdateRequest(
+    {
+      ...draft,
+      driverConfigs: [
+        {
+          ...bacDriver,
+          bacnet: {
+            ...bacDriver.bacnet,
+            objects: [{ ...bacObjWrite, pointCode: 'plc_estop', writable: true }],
+          },
+        },
+      ],
+    },
+    undefined,
+  );
+  assert.equal(bacnetSafetyBoundaryRes.ok, false, 'EDGE-003 plc_estop cannot be writable');
+  assert.equal(isHardRealtimeProtectionPoint('fire_interlock_trip', '', ''), true);
+
+  const uaMismatchSecurityRes = buildValidatedShadowUpdateRequest(
+    {
+      ...draft,
+      driverConfigs: [
+        {
+          ...uaDriver,
+          opcua: { ...uaDriver.opcua, securityPolicy: 'None', securityMode: 'SignAndEncrypt' },
+        },
+      ],
+    },
+    undefined,
+  );
+  assert.equal(uaMismatchSecurityRes.ok, false, 'securityPolicy None requires securityMode None');
+
+  const uaMissingCredRes = buildValidatedShadowUpdateRequest(
+    {
+      ...draft,
+      driverConfigs: [
+        {
+          ...uaDriver,
+          opcua: { ...uaDriver.opcua, authMode: 'USERNAME', username: 'u', credentialRef: '' },
+        },
+      ],
+    },
+    undefined,
+  );
+  assert.equal(uaMissingCredRes.ok, false, 'OPC-UA USERNAME authMode requires credentialRef');
+
+  const uaBadNodeIdRes = buildValidatedShadowUpdateRequest(
+    {
+      ...draft,
+      driverConfigs: [
+        {
+          ...uaDriver,
+          opcua: {
+            ...uaDriver.opcua,
+            nodes: [{ ...uaNode, nodeId: 'bad-node-id' }],
+          },
+        },
+      ],
+    },
+    undefined,
+  );
+  assert.equal(uaBadNodeIdRes.ok, false, 'invalid OPC-UA NodeId rejected');
+
+  assert.equal(parseOPCUANodeId('i=85').ok, true);
+  assert.equal(parseOPCUANodeId('ns=3;g=12345678-1234-5678-9abc-1234567890ab').ok, true);
+  assert.equal(parseOPCUANodeId('ns=bad;s=x').ok, false);
 });
 
 test('OTA pure model dictionaries, validators, and error messages avoid banned words and cover all backend enums', () => {

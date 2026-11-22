@@ -199,6 +199,39 @@ test('DEVICE template summary parses optional modbusDriver metadata and preserve
       .modbusDriverSummary,
     null,
   );
+
+  const withBacnetDriver = {
+    deviceType: 'AHU',
+    driver: {
+      driverType: 'BACNET_IP',
+      bacnet: {
+        deviceInstance: 2048,
+        objects: [{ pointCode: 'supply_air_temp' }, { pointCode: 'supply_air_temp_sp' }],
+      },
+    },
+  };
+  assert.deepEqual(summarizeTemplatePayload('DEVICE', withBacnetDriver).modbusDriverSummary, {
+    driverType: 'BACNET_IP',
+    driverTypeLabel: 'BACnet/IP',
+    registerCount: 2,
+  });
+
+  const withOpcuaDriver = {
+    deviceType: 'CHILLER',
+    driver: {
+      driverType: 'OPC_UA',
+      opcua: {
+        securityPolicy: 'None',
+        securityMode: 'None',
+        nodes: [{ pointCode: 'chiller_power', nodeId: 'ns=2;s=Chiller1.Power' }],
+      },
+    },
+  };
+  assert.deepEqual(summarizeTemplatePayload('DEVICE', withOpcuaDriver).modbusDriverSummary, {
+    driverType: 'OPC_UA',
+    driverTypeLabel: 'OPC-UA',
+    registerCount: 1,
+  });
 });
 
 test('resource tags helpers enforce key format, filter syntax, and space subtree expansion', () => {

@@ -3,6 +3,7 @@ import { isOneOf, isPlainRecord } from '../../../lib/typed.ts';
 import {
   MODBUS_DRIVER_TYPES,
   MODBUS_DRIVER_TYPE_LABELS,
+  SOUTHBOUND_DRIVER_TYPES,
 } from '../../connectivity/gateway-config-shadow-model.ts';
 
 const POINT_CODE_PATTERN = /^[a-z][a-z0-9_]{0,127}$/;
@@ -481,7 +482,38 @@ export function parseDeviceTemplateModbusDriverSummary(
   kind: TemplateKind,
   payload: Record<string, unknown>,
 ): TemplateModbusDriverSummary | null {
-  if (kind !== 'DEVICE' || !isPlainRecord(payload.modbusDriver)) {
+  if (kind !== 'DEVICE') {
+    return null;
+  }
+  if (isPlainRecord(payload.driver)) {
+    const driver = payload.driver;
+    if (!isOneOf(SOUTHBOUND_DRIVER_TYPES, driver.driverType)) {
+      return null;
+    }
+    let registerCount: number;
+    if (driver.driverType === 'BACNET_IP') {
+      if (!isPlainRecord(driver.bacnet) || !Array.isArray(driver.bacnet.objects)) {
+        return null;
+      }
+      registerCount = driver.bacnet.objects.length;
+    } else if (driver.driverType === 'OPC_UA') {
+      if (!isPlainRecord(driver.opcua) || !Array.isArray(driver.opcua.nodes)) {
+        return null;
+      }
+      registerCount = driver.opcua.nodes.length;
+    } else {
+      if (!Array.isArray(driver.registers)) {
+        return null;
+      }
+      registerCount = driver.registers.length;
+    }
+    return {
+      driverType: driver.driverType,
+      driverTypeLabel: MODBUS_DRIVER_TYPE_LABELS[driver.driverType],
+      registerCount,
+    };
+  }
+  if (!isPlainRecord(payload.modbusDriver)) {
     return null;
   }
   const driver = payload.modbusDriver;

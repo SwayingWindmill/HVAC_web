@@ -4381,18 +4381,82 @@
           "enumMap": {"type": "object", "additionalProperties": {"type": "string", "minLength": 1, "maxLength": 64}}
         }
       },
+      "GatewayBACnetObjectMapping": {
+        "type": "object", "additionalProperties": false,
+        "required": ["pointCode", "objectType", "objectInstance", "pollPriority"],
+        "properties": {
+          "pointCode": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,127}$"},
+          "semanticChannel": {"type": "string", "minLength": 1, "maxLength": 64},
+          "safetyBoundary": {"type": "string", "enum": ["SOFT_REALTIME", "HARD_REALTIME_SAFETY"]},
+          "objectType": {"type": "string", "enum": ["ANALOG_INPUT", "ANALOG_OUTPUT", "ANALOG_VALUE", "BINARY_INPUT", "BINARY_OUTPUT", "BINARY_VALUE", "DEVICE", "MULTI_STATE_INPUT", "MULTI_STATE_OUTPUT", "MULTI_STATE_VALUE"]},
+          "objectInstance": {"type": "integer", "minimum": 0, "maximum": 4194302},
+          "propertyId": {"type": "integer", "minimum": 0, "maximum": 4194303},
+          "dataType": {"type": "string", "enum": ["DOUBLE", "BOOLEAN", "STRING", "INTEGER"]},
+          "writable": {"type": "boolean"},
+          "covSubscribe": {"type": "boolean"},
+          "scale": {"type": "number"},
+          "offset": {"type": "number"},
+          "pollPriority": {"type": "string", "enum": ["VERY_HIGH", "HIGH", "MEDIUM", "LOW"]},
+          "unit": {"type": "string", "maxLength": 32},
+          "enumMap": {"type": "object", "additionalProperties": {"type": "string", "minLength": 1, "maxLength": 64}}
+        }
+      },
+      "GatewayBACnetDriverSpec": {
+        "type": "object", "additionalProperties": false,
+        "required": ["deviceInstance", "objects"],
+        "properties": {
+          "deviceInstance": {"type": "integer", "minimum": 0, "maximum": 4194302},
+          "networkNumber": {"type": "integer", "minimum": 0, "maximum": 65534},
+          "covLifetimeSeconds": {"type": "integer", "minimum": 0, "maximum": 86400},
+          "writePriority": {"type": "integer", "minimum": 1, "maximum": 16},
+          "objects": {"type": "array", "minItems": 1, "maxItems": 256, "items": {"$ref": "#/components/schemas/GatewayBACnetObjectMapping"}}
+        }
+      },
+      "GatewayOPCUANodeMapping": {
+        "type": "object", "additionalProperties": false,
+        "required": ["pointCode", "nodeId", "pollPriority"],
+        "properties": {
+          "pointCode": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,127}$"},
+          "semanticChannel": {"type": "string", "minLength": 1, "maxLength": 64},
+          "safetyBoundary": {"type": "string", "enum": ["SOFT_REALTIME", "HARD_REALTIME_SAFETY"]},
+          "nodeId": {"type": "string", "minLength": 1, "maxLength": 512},
+          "namespaceIndex": {"type": "integer", "minimum": 0, "maximum": 65535},
+          "dataType": {"type": "string", "enum": ["DOUBLE", "BOOLEAN", "STRING", "INTEGER"]},
+          "writable": {"type": "boolean"},
+          "subscribe": {"type": "boolean"},
+          "scale": {"type": "number"},
+          "offset": {"type": "number"},
+          "pollPriority": {"type": "string", "enum": ["VERY_HIGH", "HIGH", "MEDIUM", "LOW"]},
+          "unit": {"type": "string", "maxLength": 32}
+        }
+      },
+      "GatewayOPCUADriverSpec": {
+        "type": "object", "additionalProperties": false,
+        "required": ["securityPolicy", "securityMode", "nodes"],
+        "properties": {
+          "securityPolicy": {"type": "string", "enum": ["None", "Basic256Sha256"]},
+          "securityMode": {"type": "string", "enum": ["None", "Sign", "SignAndEncrypt"]},
+          "authMode": {"type": "string", "enum": ["ANONYMOUS", "CERTIFICATE", "USERNAME"]},
+          "username": {"type": "string", "minLength": 1, "maxLength": 128},
+          "credentialRef": {"type": "string", "minLength": 1, "maxLength": 128},
+          "subscriptionIntervalMs": {"type": "integer", "minimum": 50, "maximum": 60000},
+          "nodes": {"type": "array", "minItems": 1, "maxItems": 256, "items": {"$ref": "#/components/schemas/GatewayOPCUANodeMapping"}}
+        }
+      },
       "GatewayModbusDriverConfig": {
         "type": "object", "additionalProperties": false,
-        "required": ["deviceKey", "driverType", "endpoint", "unitId", "timeoutMs", "retries", "registers"],
+        "required": ["deviceKey", "driverType", "endpoint", "timeoutMs", "retries"],
         "properties": {
           "deviceKey": {"type": "string", "minLength": 1, "maxLength": 128},
-          "driverType": {"type": "string", "enum": ["MODBUS_TCP", "MODBUS_RTU"]},
+          "driverType": {"type": "string", "enum": ["MODBUS_TCP", "MODBUS_RTU", "BACNET_IP", "OPC_UA"]},
           "endpoint": {"type": "string", "minLength": 1, "maxLength": 256},
           "unitId": {"type": "integer", "minimum": 1, "maximum": 247},
           "capabilityProfile": {"type": "string", "enum": ["VARIABLE_SPEED_PUMP", "CHILLER", "COOLING_TOWER", "ELECTRICITY_METER", "THERMAL_ENERGY_METER", "WEATHER_STATION", "ZONE_TEMPERATURE_SENSOR"]},
           "timeoutMs": {"type": "integer", "minimum": 100, "maximum": 30000},
           "retries": {"type": "integer", "minimum": 0, "maximum": 10},
-          "registers": {"type": "array", "minItems": 1, "maxItems": 256, "items": {"$ref": "#/components/schemas/GatewayModbusRegisterMapping"}}
+          "registers": {"type": "array", "minItems": 1, "maxItems": 256, "items": {"$ref": "#/components/schemas/GatewayModbusRegisterMapping"}},
+          "bacnet": {"$ref": "#/components/schemas/GatewayBACnetDriverSpec"},
+          "opcua": {"$ref": "#/components/schemas/GatewayOPCUADriverSpec"}
         }
       },
       "GatewayAutonomyPolicy": {

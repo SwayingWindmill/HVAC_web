@@ -8,12 +8,14 @@ import { TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/compon
 import { cn } from '@/lib/utils';
 import {
   AUTONOMY_POLICY_STATE_PRESENTATION,
+  BACNET_OBJECT_TYPE_LABELS,
   MODBUS_CAPABILITY_PROFILE_LABELS,
   MODBUS_DRIVER_TYPE_LABELS,
   MODBUS_FUNCTION_CODE_LABELS,
   MODBUS_POLL_PRIORITY_PRESENTATION,
   MODBUS_RAW_TYPE_LABELS,
   MODBUS_WRITE_FUNCTION_CODE_LABELS,
+  OPCUA_AUTH_MODE_LABELS,
   formatModbusEnumMap,
   summarizeAutonomyPolicyState,
   summarizeEdgeRuleBundle,
@@ -48,6 +50,273 @@ function PriorityChip({
   );
 }
 
+function formatDriverHeaderMeta(driver: GatewayModbusDriverConfig): string {
+  switch (driver.driverType) {
+    case 'BACNET_IP': {
+      const devInst = driver.bacnet?.deviceInstance ?? '—';
+      const prio = driver.bacnet?.writePriority ?? 8;
+      return `设备实例 ${devInst} · 写优先级 ${prio} · 超时 ${driver.timeoutMs} ms · 重试 ${driver.retries} 次`;
+    }
+    case 'OPC_UA': {
+      const policy = driver.opcua?.securityPolicy ?? 'None';
+      const mode = driver.opcua?.securityMode ?? 'None';
+      const interval = driver.opcua?.subscriptionIntervalMs ?? 1000;
+      return `${policy} / ${mode} · 订阅 ${interval} ms · 超时 ${driver.timeoutMs} ms`;
+    }
+    case 'MODBUS_TCP':
+    case 'MODBUS_RTU':
+      return `从站 UID ${driver.unitId ?? '—'} · 超时 ${driver.timeoutMs} ms · 重试 ${driver.retries} 次`;
+  }
+}
+
+function formatDriverPointCountLabel(driver: GatewayModbusDriverConfig): string {
+  switch (driver.driverType) {
+    case 'BACNET_IP':
+      return `BACnet 对象 ${driver.bacnet?.objects.length ?? 0} 项`;
+    case 'OPC_UA':
+      return `OPC-UA 节点 ${driver.opcua?.nodes.length ?? 0} 项`;
+    case 'MODBUS_TCP':
+    case 'MODBUS_RTU':
+      return `寄存器 ${driver.registers?.length ?? 0} 条`;
+  }
+}
+
+function ModbusRegistersSummaryTable({
+  driver,
+}: {
+  readonly driver: GatewayModbusDriverConfig;
+}) {
+  const registers = driver.registers ?? [];
+  return (
+    <div
+      role="region"
+      aria-label={`${driver.deviceKey} 协议驱动寄存器表`}
+      tabIndex={0}
+      className="relative w-full overflow-x-auto rounded border bg-card outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring-soft"
+    >
+      <table className="w-full caption-bottom text-xs">
+        <TableHeader>
+          <TableRow>
+            <TableHead scope="col" className="h-8 px-2 text-[11px]">
+              点位
+            </TableHead>
+            <TableHead scope="col" className="h-8 px-2 text-[11px]">
+              功能码
+            </TableHead>
+            <TableHead scope="col" className="h-8 px-2 text-[11px]">
+              地址
+            </TableHead>
+            <TableHead scope="col" className="h-8 px-2 text-[11px]">
+              类型
+            </TableHead>
+            <TableHead scope="col" className="h-8 px-2 text-[11px]">
+              倍率 / 偏置
+            </TableHead>
+            <TableHead scope="col" className="h-8 px-2 text-[11px]">
+              优先级
+            </TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {registers.map((reg, regIdx) => (
+            <TableRow key={`${reg.pointCode}-${reg.address}-${regIdx}`} className="text-[11px]">
+              <TableCell className="px-2 py-1.5 font-mono text-foreground">
+                <div className="whitespace-nowrap">{reg.pointCode}</div>
+                {reg.semanticChannel ? (
+                  <div className="whitespace-nowrap text-[10px] text-muted-foreground">
+                    {reg.semanticChannel}
+                  </div>
+                ) : null}
+              </TableCell>
+              <TableCell className="px-2 py-1.5 whitespace-nowrap text-foreground">
+                <div>{MODBUS_FUNCTION_CODE_LABELS[reg.functionCode]}</div>
+                {reg.writeFunctionCode ? (
+                  <div className="text-[10px] text-muted-foreground">
+                    {MODBUS_WRITE_FUNCTION_CODE_LABELS[reg.writeFunctionCode === 6 ? '6' : '16']}
+                  </div>
+                ) : null}
+              </TableCell>
+              <TableCell className="px-2 py-1.5 font-mono whitespace-nowrap text-foreground tabular-nums">
+                <div>{reg.address}</div>
+                <div className="text-[10px] text-muted-foreground">
+                  {reg.registerCount} 寄存器
+                </div>
+              </TableCell>
+              <TableCell className="px-2 py-1.5 text-foreground">
+                <div className="whitespace-nowrap">{MODBUS_RAW_TYPE_LABELS[reg.rawType]}</div>
+                {reg.rawType === 'BIT_BOOL' && reg.bitIndex !== undefined ? (
+                  <div className="font-mono text-[10px] text-muted-foreground tabular-nums">
+                    第 {reg.bitIndex} 位
+                  </div>
+                ) : reg.rawType === 'ENUM16' && reg.enumMap ? (
+                  <div className="text-[10px] text-muted-foreground">
+                    {formatModbusEnumMap(reg.enumMap)}
+                  </div>
+                ) : null}
+              </TableCell>
+              <TableCell className="px-2 py-1.5 font-mono whitespace-nowrap text-foreground tabular-nums">
+                ×{reg.scale} / {reg.offset >= 0 ? `+${reg.offset}` : reg.offset}
+              </TableCell>
+              <TableCell className="px-2 py-1.5 whitespace-nowrap">
+                <PriorityChip priority={reg.pollPriority} />
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </table>
+    </div>
+  );
+}
+
+function BACnetObjectsSummaryTable({
+  driver,
+}: {
+  readonly driver: GatewayModbusDriverConfig;
+}) {
+  const objects = driver.bacnet?.objects ?? [];
+  return (
+    <div
+      role="region"
+      aria-label={`${driver.deviceKey} BACnet 对象表`}
+      tabIndex={0}
+      className="relative w-full overflow-x-auto rounded border bg-card outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring-soft"
+    >
+      <table className="w-full caption-bottom text-xs">
+        <TableHeader>
+          <TableRow>
+            <TableHead scope="col" className="h-8 px-2 text-[11px]">
+              点位
+            </TableHead>
+            <TableHead scope="col" className="h-8 px-2 text-[11px]">
+              对象 / 实例
+            </TableHead>
+            <TableHead scope="col" className="h-8 px-2 text-[11px]">
+              模式 / 边界
+            </TableHead>
+            <TableHead scope="col" className="h-8 px-2 text-[11px]">
+              倍率 / 偏置
+            </TableHead>
+            <TableHead scope="col" className="h-8 px-2 text-[11px]">
+              优先级
+            </TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {objects.map((obj, idx) => (
+            <TableRow key={`${obj.pointCode}-${obj.objectInstance}-${idx}`} className="text-[11px]">
+              <TableCell className="px-2 py-1.5 font-mono text-foreground">
+                <div className="whitespace-nowrap">{obj.pointCode}</div>
+                {obj.semanticChannel ? (
+                  <div className="whitespace-nowrap text-[10px] text-muted-foreground">
+                    {obj.semanticChannel}
+                  </div>
+                ) : null}
+              </TableCell>
+              <TableCell className="px-2 py-1.5 text-foreground tabular-nums">
+                <div className="whitespace-nowrap">
+                  {BACNET_OBJECT_TYPE_LABELS[obj.objectType]} · #{obj.objectInstance}
+                </div>
+                <div className="font-mono text-[10px] text-muted-foreground">
+                  属性 {obj.propertyId ?? 85}
+                  {obj.unit ? ` · ${obj.unit}` : ''}
+                </div>
+              </TableCell>
+              <TableCell className="px-2 py-1.5 text-foreground">
+                <div className="whitespace-nowrap">
+                  {obj.writable ? '可写' : '只读'}
+                  {obj.covSubscribe ? ' · COV 订阅' : ' · 轮询'}
+                </div>
+                {obj.safetyBoundary === 'HARD_REALTIME_SAFETY' ? (
+                  <div className="text-[10px] text-warning-text">硬实时保护点位</div>
+                ) : null}
+              </TableCell>
+              <TableCell className="px-2 py-1.5 font-mono whitespace-nowrap text-foreground tabular-nums">
+                ×{obj.scale ?? 1} / {(obj.offset ?? 0) >= 0 ? `+${obj.offset ?? 0}` : obj.offset}
+              </TableCell>
+              <TableCell className="px-2 py-1.5 whitespace-nowrap">
+                <PriorityChip priority={obj.pollPriority} />
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </table>
+    </div>
+  );
+}
+
+function OPCUANodesSummaryTable({
+  driver,
+}: {
+  readonly driver: GatewayModbusDriverConfig;
+}) {
+  const nodes = driver.opcua?.nodes ?? [];
+  return (
+    <div
+      role="region"
+      aria-label={`${driver.deviceKey} OPC-UA 节点表`}
+      tabIndex={0}
+      className="relative w-full overflow-x-auto rounded border bg-card outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring-soft"
+    >
+      <table className="w-full caption-bottom text-xs">
+        <TableHeader>
+          <TableRow>
+            <TableHead scope="col" className="h-8 px-2 text-[11px]">
+              点位
+            </TableHead>
+            <TableHead scope="col" className="h-8 px-2 text-[11px]">
+              节点 ID (NodeId)
+            </TableHead>
+            <TableHead scope="col" className="h-8 px-2 text-[11px]">
+              模式 / 边界
+            </TableHead>
+            <TableHead scope="col" className="h-8 px-2 text-[11px]">
+              倍率 / 偏置
+            </TableHead>
+            <TableHead scope="col" className="h-8 px-2 text-[11px]">
+              优先级
+            </TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {nodes.map((node, idx) => (
+            <TableRow key={`${node.pointCode}-${idx}`} className="text-[11px]">
+              <TableCell className="px-2 py-1.5 font-mono text-foreground">
+                <div className="whitespace-nowrap">{node.pointCode}</div>
+                {node.semanticChannel ? (
+                  <div className="whitespace-nowrap text-[10px] text-muted-foreground">
+                    {node.semanticChannel}
+                  </div>
+                ) : null}
+              </TableCell>
+              <TableCell className="px-2 py-1.5 font-mono text-foreground">
+                <div className="whitespace-nowrap">{node.nodeId}</div>
+                {node.unit ? (
+                  <div className="text-[10px] text-muted-foreground">{node.unit}</div>
+                ) : null}
+              </TableCell>
+              <TableCell className="px-2 py-1.5 text-foreground">
+                <div className="whitespace-nowrap">
+                  {node.writable ? '可写' : '只读'}
+                  {node.subscribe ? ' · 订阅推送' : ' · 轮询'}
+                </div>
+                {node.safetyBoundary === 'HARD_REALTIME_SAFETY' ? (
+                  <div className="text-[10px] text-warning-text">硬实时保护点位</div>
+                ) : null}
+              </TableCell>
+              <TableCell className="px-2 py-1.5 font-mono whitespace-nowrap text-foreground tabular-nums">
+                ×{node.scale ?? 1} / {(node.offset ?? 0) >= 0 ? `+${node.offset ?? 0}` : node.offset}
+              </TableCell>
+              <TableCell className="px-2 py-1.5 whitespace-nowrap">
+                <PriorityChip priority={node.pollPriority} />
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </table>
+    </div>
+  );
+}
+
 export function DriverConfigsSummaryBlock({
   driverConfigs,
 }: {
@@ -66,13 +335,13 @@ export function DriverConfigsSummaryBlock({
 
       {drivers.length === 0 ? (
         <p className="text-[11px] text-muted-foreground">
-          暂未下发声明式协议驱动点表，可通过「编辑配置影子」为边缘网关配置串口或网络采集点表。
+          暂未下发声明式协议驱动点表，可通过「编辑配置影子」为边缘网关配置串口、Modbus、BACnet/IP 或 OPC-UA 采集点表。
         </p>
       ) : (
         <div className="flex flex-col gap-2.5">
           {drivers.map((driver, driverIdx) => (
             <div
-              key={`${driver.deviceKey}-${driver.unitId}-${driverIdx}`}
+              key={`${driver.deviceKey}-${driver.driverType}-${driverIdx}`}
               className="flex flex-col gap-2 rounded-md border bg-background p-2.5"
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -90,7 +359,7 @@ export function DriverConfigsSummaryBlock({
                   ) : null}
                 </div>
                 <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
-                  从站 UID {driver.unitId} · 超时 {driver.timeoutMs} ms · 重试 {driver.retries} 次
+                  {formatDriverHeaderMeta(driver)}
                 </span>
               </div>
 
@@ -98,87 +367,19 @@ export function DriverConfigsSummaryBlock({
                 <span>
                   采集地址 <span className="font-mono text-foreground">{driver.endpoint}</span>
                 </span>
-                <span className="tabular-nums">寄存器 {driver.registers.length} 条</span>
+                <span className="tabular-nums">{formatDriverPointCountLabel(driver)}</span>
+                {driver.driverType === 'OPC_UA' && driver.opcua ? (
+                  <span>{OPCUA_AUTH_MODE_LABELS[driver.opcua.authMode ?? 'ANONYMOUS']}</span>
+                ) : null}
               </div>
 
-              <div
-                role="region"
-                aria-label={`${driver.deviceKey} 协议驱动寄存器表`}
-                tabIndex={0}
-                className="relative w-full overflow-x-auto rounded border bg-card outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring-soft"
-              >
-                <table className="w-full caption-bottom text-xs">
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead scope="col" className="h-8 px-2 text-[11px]">
-                        点位
-                      </TableHead>
-                      <TableHead scope="col" className="h-8 px-2 text-[11px]">
-                        功能码
-                      </TableHead>
-                      <TableHead scope="col" className="h-8 px-2 text-[11px]">
-                        地址
-                      </TableHead>
-                      <TableHead scope="col" className="h-8 px-2 text-[11px]">
-                        类型
-                      </TableHead>
-                      <TableHead scope="col" className="h-8 px-2 text-[11px]">
-                        倍率 / 偏置
-                      </TableHead>
-                      <TableHead scope="col" className="h-8 px-2 text-[11px]">
-                        优先级
-                      </TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {driver.registers.map((reg, regIdx) => (
-                      <TableRow key={`${reg.pointCode}-${reg.address}-${regIdx}`} className="text-[11px]">
-                        <TableCell className="px-2 py-1.5 font-mono text-foreground">
-                          <div className="whitespace-nowrap">{reg.pointCode}</div>
-                          {reg.semanticChannel ? (
-                            <div className="whitespace-nowrap text-[10px] text-muted-foreground">
-                              {reg.semanticChannel}
-                            </div>
-                          ) : null}
-                        </TableCell>
-                        <TableCell className="px-2 py-1.5 whitespace-nowrap text-foreground">
-                          <div>{MODBUS_FUNCTION_CODE_LABELS[reg.functionCode]}</div>
-                          {reg.writeFunctionCode ? (
-                            <div className="text-[10px] text-muted-foreground">
-                              {MODBUS_WRITE_FUNCTION_CODE_LABELS[reg.writeFunctionCode === 6 ? '6' : '16']}
-                            </div>
-                          ) : null}
-                        </TableCell>
-                        <TableCell className="px-2 py-1.5 font-mono whitespace-nowrap text-foreground tabular-nums">
-                          <div>{reg.address}</div>
-                          <div className="text-[10px] text-muted-foreground">
-                            {reg.registerCount} 寄存器
-                          </div>
-                        </TableCell>
-                        <TableCell className="px-2 py-1.5 text-foreground">
-                          <div className="whitespace-nowrap">{MODBUS_RAW_TYPE_LABELS[reg.rawType]}</div>
-                          {reg.rawType === 'BIT_BOOL' && reg.bitIndex !== undefined ? (
-                            <div className="font-mono text-[10px] whitespace-nowrap text-muted-foreground tabular-nums">
-                              第 {reg.bitIndex} 位
-                            </div>
-                          ) : null}
-                          {reg.rawType === 'ENUM16' && reg.enumMap ? (
-                            <div className="max-w-[140px] text-[10px] break-words whitespace-normal text-muted-foreground">
-                              {formatModbusEnumMap(reg.enumMap)}
-                            </div>
-                          ) : null}
-                        </TableCell>
-                        <TableCell className="px-2 py-1.5 font-mono whitespace-nowrap text-muted-foreground tabular-nums">
-                          ×{reg.scale} / +{reg.offset}
-                        </TableCell>
-                        <TableCell className="px-2 py-1.5 whitespace-nowrap">
-                          <PriorityChip priority={reg.pollPriority} />
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </table>
-              </div>
+              {driver.driverType === 'BACNET_IP' ? (
+                <BACnetObjectsSummaryTable driver={driver} />
+              ) : driver.driverType === 'OPC_UA' ? (
+                <OPCUANodesSummaryTable driver={driver} />
+              ) : (
+                <ModbusRegistersSummaryTable driver={driver} />
+              )}
             </div>
           ))}
         </div>

@@ -61,8 +61,21 @@ import {
   type CapabilityProfileDraft,
   type StandardPointDraft,
   type StructuredDeviceTemplateDraft,
+  type TemplateModbusDriverSummary,
   type TemplateReferenceEntry,
 } from './template-model';
+
+function formatTemplateDriverSummary(summary: TemplateModbusDriverSummary): string {
+  switch (summary.driverType) {
+    case 'BACNET_IP':
+      return `协议驱动 (${summary.driverTypeLabel}) · ${summary.registerCount} 个 BACnet 对象`;
+    case 'OPC_UA':
+      return `协议驱动 (${summary.driverTypeLabel}) · ${summary.registerCount} 个 OPC-UA 节点`;
+    case 'MODBUS_TCP':
+    case 'MODBUS_RTU':
+      return `Modbus 驱动 (${summary.driverTypeLabel}) · ${summary.registerCount} 寄存器`;
+  }
+}
 
 interface Props {
   site: Site;
@@ -1366,8 +1379,7 @@ export function RegistryTemplateWorkbench({ site, model, capabilities, csrfToken
                   ) : null}
                   {previewSummary.modbusDriverSummary ? (
                     <span className="rounded border bg-background px-2 py-0.5 tabular-nums">
-                      Modbus 驱动 ({previewSummary.modbusDriverSummary.driverTypeLabel}) ·{' '}
-                      {previewSummary.modbusDriverSummary.registerCount} 寄存器
+                      {formatTemplateDriverSummary(previewSummary.modbusDriverSummary)}
                     </span>
                   ) : null}
                 </div>

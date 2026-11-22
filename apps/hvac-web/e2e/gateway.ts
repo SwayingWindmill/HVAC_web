@@ -2771,7 +2771,15 @@ export class Gateway {
         if (!rVal) {
           drift.push({ section: 'DRIVER_CONFIGS', target: key, reason: 'MISSING_ON_EDGE', detail: `协议驱动 ${key} 在边缘端缺失` });
         } else if (!areCanonicalDriverConfigsEqual(dVal, rVal)) {
-          drift.push({ section: 'DRIVER_CONFIGS', target: key, reason: 'VALUE_MISMATCH', detail: `协议驱动 ${key} 寄存器或地址配置与云端不一致` });
+          drift.push({
+            section: 'DRIVER_CONFIGS',
+            target: key,
+            reason: 'VALUE_MISMATCH',
+            detail:
+              dVal.driverType === 'BACNET_IP' || dVal.driverType === 'OPC_UA'
+                ? `协议驱动 ${key} 采集点位或协议参数与云端不一致`
+                : `协议驱动 ${key} 寄存器或地址配置与云端不一致`,
+          });
         }
       }
       for (const [key] of rDrivers) {
@@ -4587,6 +4595,17 @@ export class Gateway {
     const rawTypes = new Set(['UINT16', 'INT16', 'UINT32', 'INT32', 'FLOAT32', 'BIT_BOOL', 'ENUM16']);
     const endians = new Set(['BIG_ENDIAN', 'LITTLE_ENDIAN']);
     const priorities = new Set(['VERY_HIGH', 'HIGH', 'MEDIUM', 'LOW']);
+    const dataTypes = new Set(['DOUBLE', 'BOOLEAN', 'STRING', 'INTEGER']);
+    const boundaries = new Set(['SOFT_REALTIME', 'HARD_REALTIME_SAFETY']);
+    const bacnetTypes = new Set([
+      'ANALOG_INPUT', 'ANALOG_OUTPUT', 'ANALOG_VALUE',
+      'BINARY_INPUT', 'BINARY_OUTPUT', 'BINARY_VALUE',
+      'DEVICE',
+      'MULTI_STATE_INPUT', 'MULTI_STATE_OUTPUT', 'MULTI_STATE_VALUE',
+    ]);
+    const bacnetInputOnly = new Set([
+      'ANALOG_INPUT', 'BINARY_INPUT', 'MULTI_STATE_INPUT', 'DEVICE',
+    ]);
     const capabilityProfiles = new Set([
       'VARIABLE_SPEED_PUMP',
       'CHILLER',
@@ -4608,18 +4627,17 @@ export class Gateway {
         return `driverConfigs[${i}].deviceKey duplicate`;
       }
       seenDevices.add(deviceKey);
-      if (drv.driverType !== 'MODBUS_TCP' && drv.driverType !== 'MODBUS_RTU') {
+      if (
+        drv.driverType !== 'MODBUS_TCP' &&
+        drv.driverType !== 'MODBUS_RTU' &&
+        drv.driverType !== 'BACNET_IP' &&
+        drv.driverType !== 'OPC_UA'
+      ) {
         return `driverConfigs[${i}].driverType invalid`;
       }
       const endpoint = typeof drv.endpoint === 'string' ? drv.endpoint.trim() : '';
       if (!endpoint || endpoint.length > 256) {
         return `driverConfigs[${i}].endpoint invalid`;
-      }
-      if (drv.driverType === 'MODBUS_TCP' && !isValidModbusTcpEndpoint(endpoint)) {
-        return `driverConfigs[${i}].endpoint must be host:port`;
-      }
-      if (!Number.isInteger(drv.unitId) || drv.unitId < 1 || drv.unitId > 247) {
-        return `driverConfigs[${i}].unitId out of range`;
       }
       if (drv.capabilityProfile !== undefined) {
         if (typeof drv.capabilityProfile !== 'string' || !capabilityProfiles.has(drv.capabilityProfile.trim())) {
@@ -4631,6 +4649,149 @@ export class Gateway {
       }
       if (!Number.isInteger(drv.retries) || drv.retries < 0 || drv.retries > 10) {
         return `driverConfigs[${i}].retries out of range`;
+      }
+
+      if (drv.driverType === 'BACNET_IP') {
+        if (drv.unitId !== undefined || drv.registers !== undefined || drv.opcua !== undefined) {
+          return `driverConfigs[${i}] BACNET_IP cannot specify unitId, registers, or opcua`;
+        }
+        if (!isValidModbusTcpEndpoint(endpoint)) {
+          return `driverConfigs[${i}].endpoint must be host:port`;
+        }
+        const bac = drv.bacnet as Json | null;
+        if (!bac || typeof bac !== 'object') return `driverConfigs[${i}].bacnet required`;
+        if (!Number.isInteger(bac.deviceInstance) || bac.deviceInstance < 0 || bac.deviceInstance > 4194302) {
+          return `driverConfigs[${i}].bacnet.deviceInstance out of range`;
+        }
+        if (bac.networkNumber !== undefined && (!Number.isInteger(bac.networkNumber) || bac.networkNumber < 0 || bac.networkNumber > 65534)) {
+          return `driverConfigs[${i}].bacnet.networkNumber out of range`;
+        }
+        if (bac.covLifetimeSeconds !== undefined && (!Number.isInteger(bac.covLifetimeSeconds) || bac.covLifetimeSeconds < 0 || bac.covLifetimeSeconds > 86400)) {
+          return `driverConfigs[${i}].bacnet.covLifetimeSeconds out of range`;
+        }
+        if (bac.writePriority !== undefined && (!Number.isInteger(bac.writePriority) || bac.writePriority < 1 || bac.writePriority > 16)) {
+          return `driverConfigs[${i}].bacnet.writePriority out of range`;
+        }
+        if (!Array.isArray(bac.objects) || bac.objects.length < 1 || bac.objects.length > 256) {
+          return `driverConfigs[${i}].bacnet.objects must have 1..256 entries`;
+        }
+        const seenPoints = new Set<string>();
+        const seenObjs = new Set<string>();
+        for (let j = 0; j < bac.objects.length; j += 1) {
+          const obj = bac.objects[j] as Json | null;
+          if (!obj || typeof obj !== 'object') return `driverConfigs[${i}].bacnet.objects[${j}] must be an object`;
+          const pointCode = typeof obj.pointCode === 'string' ? obj.pointCode.trim() : '';
+          if (!pointPattern.test(pointCode) || seenPoints.has(pointCode)) {
+            return `driverConfigs[${i}].bacnet.objects[${j}].pointCode invalid`;
+          }
+          seenPoints.add(pointCode);
+          if (obj.safetyBoundary !== undefined && !boundaries.has(obj.safetyBoundary)) {
+            return `driverConfigs[${i}].bacnet.objects[${j}].safetyBoundary invalid`;
+          }
+          if (!bacnetTypes.has(obj.objectType)) {
+            return `driverConfigs[${i}].bacnet.objects[${j}].objectType invalid`;
+          }
+          if (!Number.isInteger(obj.objectInstance) || obj.objectInstance < 0 || obj.objectInstance > 4194302) {
+            return `driverConfigs[${i}].bacnet.objects[${j}].objectInstance out of range`;
+          }
+          const propId = obj.propertyId !== undefined ? obj.propertyId : 85;
+          if (!Number.isInteger(propId) || propId < 0 || propId > 4194303) {
+            return `driverConfigs[${i}].bacnet.objects[${j}].propertyId out of range`;
+          }
+          if (obj.writable) {
+            if (bacnetInputOnly.has(obj.objectType) || propId !== 85 || isShadowHardRealtimePoint(pointCode, obj.semanticChannel, obj.safetyBoundary)) {
+              return `driverConfigs[${i}].bacnet.objects[${j}].writable forbidden`;
+            }
+          }
+          const objKey = `${obj.objectType}:${obj.objectInstance}:${propId}`;
+          if (seenObjs.has(objKey)) {
+            return `driverConfigs[${i}].bacnet.objects[${j}] duplicate object mapping`;
+          }
+          seenObjs.add(objKey);
+          if (obj.dataType !== undefined && !dataTypes.has(obj.dataType)) {
+            return `driverConfigs[${i}].bacnet.objects[${j}].dataType invalid`;
+          }
+          if (!priorities.has(obj.pollPriority)) {
+            return `driverConfigs[${i}].bacnet.objects[${j}].pollPriority invalid`;
+          }
+        }
+        continue;
+      }
+
+      if (drv.driverType === 'OPC_UA') {
+        if (drv.unitId !== undefined || drv.registers !== undefined || drv.bacnet !== undefined) {
+          return `driverConfigs[${i}] OPC_UA cannot specify unitId, registers, or bacnet`;
+        }
+        if (!isValidOpcuaShadowEndpoint(endpoint)) {
+          return `driverConfigs[${i}].endpoint must use opc.tcp://host:port`;
+        }
+        const ua = drv.opcua as Json | null;
+        if (!ua || typeof ua !== 'object') return `driverConfigs[${i}].opcua required`;
+        if (ua.securityPolicy === 'None' && ua.securityMode !== 'None') {
+          return `driverConfigs[${i}].opcua securityMode must match None`;
+        }
+        if (ua.securityPolicy === 'Basic256Sha256') {
+          if (ua.securityMode !== 'Sign' && ua.securityMode !== 'SignAndEncrypt') {
+            return `driverConfigs[${i}].opcua securityMode invalid`;
+          }
+        } else if (ua.securityPolicy !== 'None') {
+          return `driverConfigs[${i}].opcua.securityPolicy invalid`;
+        }
+        const authMode = ua.authMode ?? 'ANONYMOUS';
+        if (authMode === 'ANONYMOUS' && ua.username) {
+          return `driverConfigs[${i}].opcua.username forbidden for ANONYMOUS`;
+        }
+        if (authMode === 'USERNAME' && (!ua.username || !ua.credentialRef)) {
+          return `driverConfigs[${i}].opcua USERNAME requires username and credentialRef`;
+        }
+        if (authMode !== 'ANONYMOUS' && authMode !== 'CERTIFICATE' && authMode !== 'USERNAME') {
+          return `driverConfigs[${i}].opcua.authMode invalid`;
+        }
+        if (ua.subscriptionIntervalMs !== undefined && (!Number.isInteger(ua.subscriptionIntervalMs) || ua.subscriptionIntervalMs < 50 || ua.subscriptionIntervalMs > 60000)) {
+          return `driverConfigs[${i}].opcua.subscriptionIntervalMs out of range`;
+        }
+        if (!Array.isArray(ua.nodes) || ua.nodes.length < 1 || ua.nodes.length > 256) {
+          return `driverConfigs[${i}].opcua.nodes must have 1..256 entries`;
+        }
+        const seenPoints = new Set<string>();
+        const seenNodeIds = new Set<string>();
+        for (let j = 0; j < ua.nodes.length; j += 1) {
+          const node = ua.nodes[j] as Json | null;
+          if (!node || typeof node !== 'object') return `driverConfigs[${i}].opcua.nodes[${j}] must be an object`;
+          const pointCode = typeof node.pointCode === 'string' ? node.pointCode.trim() : '';
+          if (!pointPattern.test(pointCode) || seenPoints.has(pointCode)) {
+            return `driverConfigs[${i}].opcua.nodes[${j}].pointCode invalid`;
+          }
+          seenPoints.add(pointCode);
+          if (node.safetyBoundary !== undefined && !boundaries.has(node.safetyBoundary)) {
+            return `driverConfigs[${i}].opcua.nodes[${j}].safetyBoundary invalid`;
+          }
+          if (node.writable && isShadowHardRealtimePoint(pointCode, node.semanticChannel, node.safetyBoundary)) {
+            return `driverConfigs[${i}].opcua.nodes[${j}].writable forbidden by EDGE-003`;
+          }
+          const canonNodeId = canonicalShadowOpcuaNodeId(typeof node.nodeId === 'string' ? node.nodeId : '');
+          if (!canonNodeId || seenNodeIds.has(canonNodeId)) {
+            return `driverConfigs[${i}].opcua.nodes[${j}].nodeId invalid or duplicate`;
+          }
+          seenNodeIds.add(canonNodeId);
+          if (node.dataType !== undefined && !dataTypes.has(node.dataType)) {
+            return `driverConfigs[${i}].opcua.nodes[${j}].dataType invalid`;
+          }
+          if (!priorities.has(node.pollPriority)) {
+            return `driverConfigs[${i}].opcua.nodes[${j}].pollPriority invalid`;
+          }
+        }
+        continue;
+      }
+
+      if (drv.bacnet !== undefined || drv.opcua !== undefined) {
+        return `driverConfigs[${i}] Modbus cannot specify bacnet or opcua`;
+      }
+      if (drv.driverType === 'MODBUS_TCP' && !isValidModbusTcpEndpoint(endpoint)) {
+        return `driverConfigs[${i}].endpoint must be host:port`;
+      }
+      if (!Number.isInteger(drv.unitId) || drv.unitId < 1 || drv.unitId > 247) {
+        return `driverConfigs[${i}].unitId out of range`;
       }
       if (!Array.isArray(drv.registers) || drv.registers.length < 1 || drv.registers.length > 256) {
         return `driverConfigs[${i}].registers must have 1..256 entries`;
@@ -6025,6 +6186,58 @@ function areEnumMapsEqual(left: unknown, right: unknown): boolean {
   return leftKeys.every((key) => leftObj[key] === rightObj[key]);
 }
 
+function isValidOpcuaShadowEndpoint(endpoint: string): boolean {
+  try {
+    const parsed = new URL(endpoint);
+    return parsed.protocol.toLowerCase() === 'opc.tcp:' && isValidModbusTcpEndpoint(parsed.host);
+  } catch {
+    return false;
+  }
+}
+
+function canonicalShadowOpcuaNodeId(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed.length > 512) return null;
+  let ns = 0;
+  let rest = trimmed;
+  if (rest.startsWith('ns=')) {
+    const semi = rest.indexOf(';');
+    if (semi <= 3 || semi === rest.length - 1) return null;
+    const nsStr = rest.slice(3, semi);
+    if (!/^\d+$/.test(nsStr)) return null;
+    ns = Number(nsStr);
+    if (!Number.isInteger(ns) || ns < 0 || ns > 65535) return null;
+    rest = rest.slice(semi + 1);
+  }
+  if (rest.length < 3 || rest[1] !== '=') return null;
+  const kind = rest[0];
+  const body = rest.slice(2);
+  if (kind === 'i' && /^(?:0|[1-9]\d*)$/.test(body) && Number(body) <= 4_294_967_295) {
+    return `ns=${ns};i=${Number(body)}`;
+  }
+  if (kind === 's' && body.length > 0 && [...body].length <= 256) {
+    return `ns=${ns};s=${body}`;
+  }
+  if (kind === 'g' && /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(body)) {
+    return `ns=${ns};g=${body.toLowerCase()}`;
+  }
+  if (kind === 'b') {
+    try {
+      const bin = atob(body);
+      if (bin.length > 0 && bin.length <= 256) return `ns=${ns};b=${btoa(bin)}`;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function isShadowHardRealtimePoint(pointCode: string, semanticChannel: unknown, safetyBoundary: unknown): boolean {
+  if (safetyBoundary === 'HARD_REALTIME_SAFETY') return true;
+  const joined = `${pointCode} ${typeof semanticChannel === 'string' ? semanticChannel : ''}`.toLowerCase();
+  return /(?:estop|e_stop|plc_emergency|fire_interlock|safety_trip|hard_trip|freezestat|freeze_protect|hard_realtime)/.test(joined);
+}
+
 function areCanonicalDriverConfigsEqual(left: Json, right: Json): boolean {
   const leftRegs = Array.isArray(left.registers) ? [...left.registers].sort(compareCanonicalRegisters) : [];
   const rightRegs = Array.isArray(right.registers) ? [...right.registers].sort(compareCanonicalRegisters) : [];
@@ -6032,7 +6245,7 @@ function areCanonicalDriverConfigsEqual(left: Json, right: Json): boolean {
     left.deviceKey !== right.deviceKey ||
     left.driverType !== right.driverType ||
     left.endpoint !== right.endpoint ||
-    left.unitId !== right.unitId ||
+    (left.unitId ?? 0) !== (right.unitId ?? 0) ||
     (left.capabilityProfile ?? '') !== (right.capabilityProfile ?? '') ||
     left.timeoutMs !== right.timeoutMs ||
     left.retries !== right.retries ||
@@ -6060,6 +6273,69 @@ function areCanonicalDriverConfigsEqual(left: Json, right: Json): boolean {
       !areEnumMapsEqual(a.enumMap, b.enumMap)
     ) {
       return false;
+    }
+  }
+  const leftBac = left.bacnet as Json | undefined;
+  const rightBac = right.bacnet as Json | undefined;
+  if (Boolean(leftBac) !== Boolean(rightBac)) return false;
+  if (leftBac && rightBac) {
+    if (
+      leftBac.deviceInstance !== rightBac.deviceInstance ||
+      (leftBac.networkNumber ?? 0) !== (rightBac.networkNumber ?? 0) ||
+      (leftBac.covLifetimeSeconds ?? 0) !== (rightBac.covLifetimeSeconds ?? 0) ||
+      (leftBac.writePriority ?? 8) !== (rightBac.writePriority ?? 8)
+    ) {
+      return false;
+    }
+    const lObjs = [...(leftBac.objects ?? [])].sort((a: Json, b: Json) => compareAscii(String(a.pointCode), String(b.pointCode)));
+    const rObjs = [...(rightBac.objects ?? [])].sort((a: Json, b: Json) => compareAscii(String(a.pointCode), String(b.pointCode)));
+    if (lObjs.length !== rObjs.length) return false;
+    for (let i = 0; i < lObjs.length; i += 1) {
+      const a = lObjs[i]!;
+      const b = rObjs[i]!;
+      if (
+        a.pointCode !== b.pointCode ||
+        a.objectType !== b.objectType ||
+        a.objectInstance !== b.objectInstance ||
+        (a.propertyId ?? 85) !== (b.propertyId ?? 85) ||
+        Boolean(a.writable) !== Boolean(b.writable) ||
+        Boolean(a.covSubscribe) !== Boolean(b.covSubscribe) ||
+        a.pollPriority !== b.pollPriority ||
+        !areEnumMapsEqual(a.enumMap, b.enumMap)
+      ) {
+        return false;
+      }
+    }
+  }
+  const leftUa = left.opcua as Json | undefined;
+  const rightUa = right.opcua as Json | undefined;
+  if (Boolean(leftUa) !== Boolean(rightUa)) return false;
+  if (leftUa && rightUa) {
+    if (
+      leftUa.securityPolicy !== rightUa.securityPolicy ||
+      leftUa.securityMode !== rightUa.securityMode ||
+      (leftUa.authMode ?? 'ANONYMOUS') !== (rightUa.authMode ?? 'ANONYMOUS') ||
+      (leftUa.username ?? '') !== (rightUa.username ?? '') ||
+      (leftUa.credentialRef ?? '') !== (rightUa.credentialRef ?? '') ||
+      (leftUa.subscriptionIntervalMs ?? 1000) !== (rightUa.subscriptionIntervalMs ?? 1000)
+    ) {
+      return false;
+    }
+    const lNodes = [...(leftUa.nodes ?? [])].sort((a: Json, b: Json) => compareAscii(String(a.pointCode), String(b.pointCode)));
+    const rNodes = [...(rightUa.nodes ?? [])].sort((a: Json, b: Json) => compareAscii(String(a.pointCode), String(b.pointCode)));
+    if (lNodes.length !== rNodes.length) return false;
+    for (let i = 0; i < lNodes.length; i += 1) {
+      const a = lNodes[i]!;
+      const b = rNodes[i]!;
+      if (
+        a.pointCode !== b.pointCode ||
+        a.nodeId !== b.nodeId ||
+        Boolean(a.writable) !== Boolean(b.writable) ||
+        Boolean(a.subscribe) !== Boolean(b.subscribe) ||
+        a.pollPriority !== b.pollPriority
+      ) {
+        return false;
+      }
     }
   }
   return true;
