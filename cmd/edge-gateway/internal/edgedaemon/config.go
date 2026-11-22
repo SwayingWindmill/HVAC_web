@@ -61,35 +61,38 @@ type OTAConfig struct {
 
 // Config defines the runtime configuration for the standalone Linux edge daemon.
 type Config struct {
-	GatewayID                      string                            `json:"gatewayId"`
-	SiteID                         string                            `json:"siteId,omitempty"`
-	HardwareModel                  string                            `json:"hardwareModel,omitempty"`
-	RuntimeVersion                 string                            `json:"runtimeVersion,omitempty"`
-	TargetOS                       string                            `json:"targetOs,omitempty"`
-	TargetArch                     string                            `json:"targetArch,omitempty"`
-	StateDir                       string                            `json:"stateDir"`
-	SpoolMaxBytes                  int64                             `json:"spoolMaxBytes,omitempty"`
-	PlatformBaseURL                string                            `json:"platformBaseUrl,omitempty"`
-	MQTTBrokerURL                  string                            `json:"mqttBrokerUrl,omitempty"`
-	ServerName                     string                            `json:"serverName,omitempty"`
-	CAFile                         string                            `json:"caFile,omitempty"`
-	MQTTServerName                 string                            `json:"mqttServerName,omitempty"`
-	MQTTCAFile                     string                            `json:"mqttCaFile,omitempty"`
-	CertFile                       string                            `json:"certFile,omitempty"`
-	KeyFile                        string                            `json:"keyFile,omitempty"`
-	HealthListenAddr               string                            `json:"healthListenAddr,omitempty"`
-	CycleIntervalMS                int                               `json:"cycleIntervalMs,omitempty"`
-	ShadowPollIntervalSec          int                               `json:"shadowPollIntervalSec,omitempty"`
-	CertRenewCheckIntervalSec      int                               `json:"certRenewCheckIntervalSec,omitempty"`
-	CertRenewThresholdDays         int                               `json:"certRenewThresholdDays,omitempty"`
-	TelemetryDeadband              float64                           `json:"telemetryDeadband,omitempty"`
-	TelemetryDeadbandMaxSilenceSec int                               `json:"telemetryDeadbandMaxSilenceSec,omitempty"`
-	Tunnel                         TunnelConfig                      `json:"tunnel"`
-	OTA                            OTAConfig                         `json:"ota"`
-	SerialBuses                    map[string]SerialBusConfig        `json:"serialBuses,omitempty"`
-	Drivers                        []edgecontrol.ModbusDriverInput   `json:"drivers,omitempty"`
-	AutonomyPolicy                 *edgecontrol.AutonomyPolicyConfig `json:"autonomyPolicy,omitempty"`
-	EdgeRuleBundle                 *edgecontrol.EdgeRuleBundle       `json:"edgeRuleBundle,omitempty"`
+	GatewayID                      string                             `json:"gatewayId"`
+	SiteID                         string                             `json:"siteId,omitempty"`
+	HardwareModel                  string                             `json:"hardwareModel,omitempty"`
+	RuntimeVersion                 string                             `json:"runtimeVersion,omitempty"`
+	TargetOS                       string                             `json:"targetOs,omitempty"`
+	TargetArch                     string                             `json:"targetArch,omitempty"`
+	StateDir                       string                             `json:"stateDir"`
+	SpoolMaxBytes                  int64                              `json:"spoolMaxBytes,omitempty"`
+	PlatformBaseURL                string                             `json:"platformBaseUrl,omitempty"`
+	MQTTBrokerURL                  string                             `json:"mqttBrokerUrl,omitempty"`
+	ServerName                     string                             `json:"serverName,omitempty"`
+	CAFile                         string                             `json:"caFile,omitempty"`
+	MQTTServerName                 string                             `json:"mqttServerName,omitempty"`
+	MQTTCAFile                     string                             `json:"mqttCaFile,omitempty"`
+	CertFile                       string                             `json:"certFile,omitempty"`
+	KeyFile                        string                             `json:"keyFile,omitempty"`
+	HealthListenAddr               string                             `json:"healthListenAddr,omitempty"`
+	CycleIntervalMS                int                                `json:"cycleIntervalMs,omitempty"`
+	ShadowPollIntervalSec          int                                `json:"shadowPollIntervalSec,omitempty"`
+	CertRenewCheckIntervalSec      int                                `json:"certRenewCheckIntervalSec,omitempty"`
+	CertRenewThresholdDays         int                                `json:"certRenewThresholdDays,omitempty"`
+	TelemetryDeadband              float64                            `json:"telemetryDeadband,omitempty"`
+	TelemetryDeadbandMaxSilenceSec int                                `json:"telemetryDeadbandMaxSilenceSec,omitempty"`
+	Tunnel                         TunnelConfig                       `json:"tunnel"`
+	OTA                            OTAConfig                          `json:"ota"`
+	SerialBuses                    map[string]SerialBusConfig         `json:"serialBuses,omitempty"`
+	Drivers                        []edgecontrol.ModbusDriverInput    `json:"drivers,omitempty"`
+	AutonomyPolicy                 *edgecontrol.AutonomyPolicyConfig  `json:"autonomyPolicy,omitempty"`
+	EdgeRuleBundle                 *edgecontrol.EdgeRuleBundle        `json:"edgeRuleBundle,omitempty"`
+	AggregationPolicy              *edgecontrol.EdgeAggregationPolicy `json:"aggregationPolicy,omitempty"`
+	ClusterPolicy                  *edgecontrol.ClusterControlPolicy  `json:"clusterPolicy,omitempty"`
+	EnergySchedule                 *edgecontrol.EdgeEnergySchedule    `json:"energySchedule,omitempty"`
 }
 
 // LoadConfig reads, decodes strictly, applies defaults, and validates an edge daemon Config file.
@@ -275,6 +278,21 @@ func (c Config) Validate() error {
 	if c.EdgeRuleBundle != nil {
 		if err := c.EdgeRuleBundle.Validate(); err != nil {
 			return fmt.Errorf("edgeRuleBundle: %w", err)
+		}
+	}
+	if c.AggregationPolicy != nil {
+		if err := c.AggregationPolicy.Validate(); err != nil {
+			return fmt.Errorf("aggregationPolicy: %w", err)
+		}
+	}
+	if c.ClusterPolicy != nil {
+		if err := c.ClusterPolicy.Validate(); err != nil {
+			return fmt.Errorf("clusterPolicy: %w", err)
+		}
+	}
+	if c.EnergySchedule != nil {
+		if err := c.EnergySchedule.Validate(); err != nil {
+			return fmt.Errorf("energySchedule: %w", err)
 		}
 	}
 	return nil

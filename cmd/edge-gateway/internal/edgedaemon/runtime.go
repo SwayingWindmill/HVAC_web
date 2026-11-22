@@ -94,6 +94,9 @@ type Daemon struct {
 	interlock           *edgecontrol.HydraulicInterlockController
 	fallback            *edgecontrol.AutonomousFallbackController
 	ruleEngine          *edgecontrol.EdgeRuleController
+	aggregator          *edgecontrol.WindowAggregator
+	scheduleController  *edgecontrol.EnergyScheduleController
+	clusterController   *edgecontrol.ChillerPlantClusterController
 	timedata            *edgecontrol.FileTimedata
 	deadband            *edgecontrol.DeadbandFilter
 	spool               *GradedSpool
@@ -161,6 +164,36 @@ func NewDaemon(cfg Config, opts DaemonOptions) (*Daemon, error) {
 		return nil, fmt.Errorf("create autonomous fallback: %w", err)
 	}
 	ruleEngine := edgecontrol.NewEdgeRuleController(edgecontrol.EdgeRuleControllerConfig{})
+	aggPolicy := edgecontrol.DefaultEdgeAggregationPolicy()
+	if cfg.AggregationPolicy != nil {
+		aggPolicy = *cfg.AggregationPolicy
+	}
+	aggregator, err := edgecontrol.NewWindowAggregator(aggPolicy)
+	if err != nil {
+		_ = registry.Close()
+		return nil, fmt.Errorf("create window aggregator: %w", err)
+	}
+	scheduleController := edgecontrol.NewEnergyScheduleController("")
+	if cfg.EnergySchedule != nil {
+		if err := scheduleController.UpdateSchedule(cfg.EnergySchedule); err != nil {
+			_ = registry.Close()
+			return nil, fmt.Errorf("apply bootstrap energy schedule: %w", err)
+		}
+	}
+	clusterPolicy := edgecontrol.DefaultClusterControlPolicy()
+	if cfg.ClusterPolicy != nil {
+		clusterPolicy = *cfg.ClusterPolicy
+	}
+	clusterController, err := edgecontrol.NewChillerPlantClusterController(edgecontrol.ClusterControllerConfig{
+		Policy: clusterPolicy,
+	})
+	if err != nil {
+		_ = registry.Close()
+		return nil, fmt.Errorf("create chiller plant cluster controller: %w", err)
+	}
+	fallback.SetScheduleActiveFn(scheduleController.IsActiveAt)
+	clusterController.SetScheduleOverrideFn(scheduleController.ActiveOverrideAt)
+
 	intentController, err := edgecontrol.NewIntentController("cloud-command", host.IntentStore())
 	if err != nil {
 		_ = registry.Close()
@@ -170,7 +203,9 @@ func NewDaemon(cfg Config, opts DaemonOptions) (*Daemon, error) {
 		{Priority: 10, Critical: true, Controller: interlock},
 		{Priority: 20, Controller: fallback},
 		{Priority: 30, Controller: ruleEngine},
-		{Priority: 100, Controller: intentController},
+		{Priority: 40, Controller: intentController},
+		{Priority: 50, Controller: scheduleController},
+		{Priority: 60, Controller: clusterController},
 	}); err != nil {
 		_ = registry.Close()
 		return nil, fmt.Errorf("start edgecontrol scheduler: %w", err)
@@ -206,6 +241,7 @@ func NewDaemon(cfg Config, opts DaemonOptions) (*Daemon, error) {
 	}
 
 	shadow := NewShadowManager(cfg.GatewayID, cfg.StateDir, host, registry, interlock, fallback, ruleEngine, logger)
+	shadow.AttachPlantControllers(aggregator, scheduleController, clusterController)
 	shadow.now = nowFn
 	if err := shadow.LoadOrBootstrap(cfg); err != nil {
 		_ = registry.Close()
@@ -259,24 +295,27 @@ func NewDaemon(cfg Config, opts DaemonOptions) (*Daemon, error) {
 	}
 
 	d := &Daemon{
-		cfg:          cfg,
-		obs:          obs,
-		logger:       logger,
-		host:         host,
-		registry:     registry,
-		interlock:    interlock,
-		fallback:     fallback,
-		ruleEngine:   ruleEngine,
-		timedata:     timedata,
-		deadband:     deadband,
-		spool:        spool,
-		shadow:       shadow,
-		commands:     commands,
-		ota:          ota,
-		tunnelClient: tunnelClient,
-		onOTASwitch:  opts.OnOTASwitchBoot,
-		cmdSem:       make(chan struct{}, 64),
-		now:          nowFn,
+		cfg:                cfg,
+		obs:                obs,
+		logger:             logger,
+		host:               host,
+		registry:           registry,
+		interlock:          interlock,
+		fallback:           fallback,
+		ruleEngine:         ruleEngine,
+		aggregator:         aggregator,
+		scheduleController: scheduleController,
+		clusterController:  clusterController,
+		timedata:           timedata,
+		deadband:           deadband,
+		spool:              spool,
+		shadow:             shadow,
+		commands:           commands,
+		ota:                ota,
+		tunnelClient:       tunnelClient,
+		onOTASwitch:        opts.OnOTASwitchBoot,
+		cmdSem:             make(chan struct{}, 64),
+		now:                nowFn,
 	}
 
 	if strings.TrimSpace(cfg.HealthListenAddr) != "" {
@@ -329,6 +368,21 @@ func (d *Daemon) Interlock() *edgecontrol.HydraulicInterlockController {
 	return d.interlock
 }
 
+// Aggregator returns the Daemon's DATA-005 edge time-window aggregator.
+func (d *Daemon) Aggregator() *edgecontrol.WindowAggregator {
+	return d.aggregator
+}
+
+// ScheduleController returns the Daemon's CTRL-003 versioned energy schedule controller.
+func (d *Daemon) ScheduleController() *edgecontrol.EnergyScheduleController {
+	return d.scheduleController
+}
+
+// ClusterController returns the Daemon's CTRL-002 multi-chiller plant cluster controller.
+func (d *Daemon) ClusterController() *edgecontrol.ChillerPlantClusterController {
+	return d.clusterController
+}
+
 // HandleCommandPayload validates a v2.0 cloud command envelope, registers its ControlIntent,
 // waits for the next cycle outcome, and returns the serialized CommandReplyWire payload.
 func (d *Daemon) HandleCommandPayload(ctx context.Context, payload []byte) ([]byte, bool) {
@@ -366,7 +420,11 @@ func (d *Daemon) CheckBootHealth(ctx context.Context) error {
 // and emits or spools telemetry and edge rule events.
 func (d *Daemon) StepCycle(ctx context.Context) (edgecontrol.HostCycleResult, error) {
 	now := d.now().UTC()
-	d.fallback.SetCloudConnected(d.mqttConnected.Load(), now)
+	connected := d.mqttConnected.Load()
+	d.fallback.SetCloudConnected(connected, now)
+	if d.scheduleController != nil {
+		d.scheduleController.SetCloudConnected(connected, now)
+	}
 	res, err := d.host.RunCycle(ctx, now)
 	if err != nil {
 		return res, err
@@ -732,10 +790,11 @@ func (d *Daemon) startMQTTSession(ctx context.Context) error {
 
 func (d *Daemon) emitCycleTelemetry(ctx context.Context, img edgecontrol.ProcessImage, now time.Time) {
 	snaps := img.Channels()
-	if len(snaps) == 0 {
+	if len(snaps) == 0 && d.aggregator == nil {
 		return
 	}
 	byTier := make(map[edgecontrol.DataPriority]map[string][]mqttUplinkPoint)
+	var aggOutputs []edgecontrol.AggregatedWindowOutput
 	for _, snap := range snaps {
 		if !snap.HasValue {
 			continue
@@ -743,6 +802,21 @@ func (d *Daemon) emitCycleTelemetry(ctx context.Context, img edgecontrol.Process
 		observedAt := now.UTC()
 		if !snap.Sample.ObservedAt.IsZero() {
 			observedAt = snap.Sample.ObservedAt.UTC()
+		}
+		if d.aggregator != nil {
+			passRaw, flushed := d.aggregator.Observe(edgecontrol.AggregationSample{
+				DeviceKey:  snap.Descriptor.ComponentID,
+				PointCode:  snap.Descriptor.ChannelID,
+				Address:    snap.Descriptor.Address(),
+				Descriptor: snap.Descriptor,
+				Value:      snap.Sample.Value,
+				Quality:    snap.Sample.Quality,
+				ObservedAt: observedAt,
+			})
+			aggOutputs = append(aggOutputs, flushed...)
+			if !passRaw {
+				continue
+			}
 		}
 		if d.deadband != nil {
 			sample := edgecontrol.DeadbandSample{
@@ -783,6 +857,10 @@ func (d *Daemon) emitCycleTelemetry(ctx context.Context, img edgecontrol.Process
 			Unit:    unitPtr,
 		})
 	}
+	if d.aggregator != nil {
+		aggOutputs = append(aggOutputs, d.aggregator.FlushDue(now)...)
+	}
+	appendAggregatedTelemetryPoints(byTier, aggOutputs)
 	if len(byTier) == 0 {
 		return
 	}
@@ -836,6 +914,37 @@ func (d *Daemon) emitCycleTelemetry(ctx context.Context, img edgecontrol.Process
 			continue
 		}
 		d.publishOrSpool(ctx, topic, 1, telemetryEvidenceClass(tier), wire)
+	}
+}
+
+func appendAggregatedTelemetryPoints(byTier map[edgecontrol.DataPriority]map[string][]mqttUplinkPoint, outputs []edgecontrol.AggregatedWindowOutput) {
+	for _, out := range outputs {
+		tier := out.Priority
+		if tier == "" {
+			tier = edgecontrol.PriorityMedium
+		}
+		devMap := byTier[tier]
+		if devMap == nil {
+			devMap = make(map[string][]mqttUplinkPoint)
+			byTier[tier] = devMap
+		}
+		var unitPtr *string
+		if strings.TrimSpace(out.Unit) != "" {
+			u := out.Unit
+			unitPtr = &u
+		}
+		devMap[out.DeviceKey] = append(devMap[out.DeviceKey], mqttUplinkPoint{
+			Code:    out.PointCode,
+			Value:   out.Mean,
+			Quality: 0,
+			Unit:    unitPtr,
+		})
+		if out.EmitMinMax {
+			devMap[out.DeviceKey] = append(devMap[out.DeviceKey],
+				mqttUplinkPoint{Code: out.PointCode + "_min", Value: out.Min, Quality: 0, Unit: unitPtr},
+				mqttUplinkPoint{Code: out.PointCode + "_max", Value: out.Max, Quality: 0, Unit: unitPtr},
+			)
+		}
 	}
 }
 

@@ -109,7 +109,7 @@
     {"id":"DATA-002","concern":"Local Edge Timedata","verdict":"OPENEMS","target":"Introduce local latest/history service independent from a failed MQTT publish queue.","implementation":"IMPLEMENTED","phase":"P1"},
     {"id":"DATA-003","concern":"Store and Forward / replay","verdict":"MERGE","target":"Keep current persistent queue semantics and integrate them with Edge Timedata/resend cursors.","implementation":"IMPLEMENTED","phase":"P1"},
     {"id":"DATA-004","concern":"Persistence priority","verdict":"OPENEMS","target":"Channels/Points carry persistence priority controlling regular Cloud transmission.","implementation":"IMPLEMENTED","phase":"P1"},
-    {"id":"DATA-005","concern":"Edge aggregation","verdict":"OPENEMS","target":"Perform selected time aggregation on Edge to reduce Cloud/database load while preserving raw policy for required points.","implementation":"MISSING","phase":"P2"},
+    {"id":"DATA-005","concern":"Edge aggregation","verdict":"OPENEMS","target":"Perform selected time aggregation on Edge to reduce Cloud/database load while preserving raw policy for required points.","implementation":"IMPLEMENTED","phase":"P2"},
     {"id":"DATA-006","concern":"Historic resend priority","verdict":"OPENEMS","target":"Replay prioritizes critical state/fault/control evidence over low-value diagnostics.","implementation":"IMPLEMENTED","phase":"P1"},
     {"id":"DATA-007","concern":"Change-based publication plus periodic full snapshot","verdict":"OPENEMS","target":"Publish changes promptly and periodically emit a complete snapshot for convergence/recovery.","implementation":"IMPLEMENTED","phase":"P1"},
     {"id":"DATA-008","concern":"Cloud historical telemetry and analytics authority","verdict":"HVAC","target":"Retain S2/ClickHouse/PostgreSQL split; OpenEMS Timedata does not replace Cloud analytical architecture.","implementation":"IMPLEMENTED","phase":"P1"},
@@ -120,9 +120,9 @@
     {"id":"SIM-004","concern":"Protocol-level simulation","verdict":"OPENEMS","target":"Device-driver tests can run against simulated Modbus/BACnet/etc endpoints, not only direct in-memory device models.","implementation":"PARTIAL","phase":"P1"},
 
     {"id":"CTRL-001","concern":"Per-equipment local control state machine","verdict":"OPENEMS","target":"Single-equipment controller owns local sequence/state transitions and device-specific control behavior.","implementation":"IMPLEMENTED","phase":"P1"},
-    {"id":"CTRL-002","concern":"Cluster Controller","verdict":"OPENEMS","target":"Plant/cluster controller allocates load/modes across equipment; single controllers remain responsible for individual equipment state machines.","implementation":"MISSING","phase":"P2"},
-    {"id":"CTRL-003","concern":"Time-slot Energy Scheduler","verdict":"OPENEMS","target":"Adopt scheduler concept for future HVAC mode scheduling, adapted to thermal/plant constraints rather than ESS-specific equations.","implementation":"MISSING","phase":"P3"},
-    {"id":"CTRL-004","concern":"Forecast/optimization placement","verdict":"MERGE","target":"Heavy forecasting/global optimization may run in Cloud; Edge executes versioned schedules and preserves local fallback/safety when disconnected.","implementation":"PARTIAL","phase":"P3"},
+    {"id":"CTRL-002","concern":"Cluster Controller","verdict":"OPENEMS","target":"Plant/cluster controller allocates load/modes across equipment; single controllers remain responsible for individual equipment state machines.","implementation":"IMPLEMENTED","phase":"P2"},
+    {"id":"CTRL-003","concern":"Time-slot Energy Scheduler","verdict":"OPENEMS","target":"Adopt scheduler concept for future HVAC mode scheduling, adapted to thermal/plant constraints rather than ESS-specific equations.","implementation":"IMPLEMENTED","phase":"P3"},
+    {"id":"CTRL-004","concern":"Forecast/optimization placement","verdict":"MERGE","target":"Heavy forecasting/global optimization may run in Cloud; Edge executes versioned schedules and preserves local fallback/safety when disconnected.","implementation":"IMPLEMENTED","phase":"P3"},
 
     {"id":"CLOUD-001","concern":"Tenant/IAM/RLS authorization model","verdict":"HVAC","target":"Retain Tenant/Site/Role/Policy IAM and database RLS as Cloud authorization authority.","implementation":"IMPLEMENTED","phase":"P1"},
     {"id":"CLOUD-002","concern":"Asset/Registry lifecycle model","verdict":"HVAC","target":"Retain Space/Asset/Device/Sensor/Point identity, binding history, calibration/provenance and product-facing Asset model.","implementation":"IMPLEMENTED","phase":"P1"},
@@ -140,6 +140,6 @@
   },
   "conformance": {
     "current": "PARTIAL",
-    "reason": "P1/P2 implements hard real-time safety boundaries (EDGE-003), MQTT Command Edge Adapter leased intent arbitration (EDGE-011) with immediate local register readback verification (EDGE-013) backed by crash-safe WAL/fencing, declarative Modbus bridge with Config Shadow hot-reload, local hydraulic interlock and offline autonomy fallback controllers, and priority-ordered FileTimedata resend cursors. P2 edge aggregation/multi-chiller staging and P3 forecast/scheduler items remain pending."
+    "reason": "P1/P2/P3 implements hard real-time safety boundaries (EDGE-003), MQTT Command Edge Adapter leased intent arbitration (EDGE-011) with immediate local register readback verification (EDGE-013) backed by crash-safe WAL/fencing, declarative Modbus bridge with Config Shadow hot-reload, local hydraulic interlock and offline autonomy fallback controllers, priority-ordered FileTimedata resend cursors, edge 1m/5m window pre-aggregation with raw fail-closed preservation (DATA-005), multi-chiller cluster staging/wear-leveling (CTRL-002), and versioned edge time-slot energy scheduling with offline lease fallback handoff (CTRL-003/CTRL-004). Non-Modbus protocol bridges (BACnet/IP, OPC-UA) and self-describing dynamic UI remain pending."
   }
 }
