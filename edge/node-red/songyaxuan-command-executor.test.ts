@@ -2,12 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Rs485BusLock } from './rs485-bus-lock.ts';
 import {
+  EVENT_TOPIC,
   SongyaxuanCommandExecutor,
   type CommandReplyEnvelope,
   type DownlinkCommandEnvelope,
   type ExecutorPersistedState,
   type ExecutorStateStore,
   type SequenceDiagnosticEvent,
+  type UplinkEventMessage,
 } from './songyaxuan-command-executor.ts';
 
 function createCommand(overrides: Partial<DownlinkCommandEnvelope>): DownlinkCommandEnvelope {
@@ -30,6 +32,7 @@ function createHarness(options: {
   busLock?: Rs485BusLock;
   sleepMs?: (durationMs: number, signal?: AbortSignal) => Promise<void>;
   onWriteCoil?: (coil: number, value: 0 | 1) => Promise<void> | void;
+  chillerPowerReader?: (unitCode: 'unit-a' | 'unit-b' | 'unit-c' | 'unit-d') => Promise<number | null>;
   sequenceTimings?: Partial<{
     pumpToCoolingPumpMs: number;
     coolingPumpToTowerMs: number;
@@ -41,6 +44,7 @@ function createHarness(options: {
   const writes: Array<{ unitId: number; coil: number; value: 0 | 1 }> = [];
   const replies: CommandReplyEnvelope[] = [];
   const diagnostics: SequenceDiagnosticEvent[] = [];
+  const events: UplinkEventMessage[] = [];
   const telemetries: Array<{ deviceId: string; code: string; value: number | string }> = [];
 
   const executor = new SongyaxuanCommandExecutor({
@@ -52,6 +56,7 @@ function createHarness(options: {
         writes.push({ unitId, coil, value });
       },
     },
+    chillerPowerReader: options.chillerPowerReader,
     publishReply(_topic, reply) {
       replies.push(reply);
     },
@@ -61,6 +66,10 @@ function createHarness(options: {
           telemetries.push({ deviceId: dev.deviceId, code: pt.code, value: pt.value });
         }
       }
+    },
+    publishEvent(msg) {
+      assert.equal(msg.topic, EVENT_TOPIC);
+      events.push(msg);
     },
     onDiagnostic(event) {
       diagnostics.push(event);
@@ -72,7 +81,7 @@ function createHarness(options: {
     nowMs: () => 1_763_120_001_000,
   });
 
-  return { executor, writes, replies, diagnostics, telemetries };
+  return { executor, writes, replies, diagnostics, events, telemetries };
 }
 
 test('defaultSleepMs clears pending timers immediately when unit sequence is aborted', async () => {
@@ -509,4 +518,66 @@ test('queued emitTelemetryEntries persistState during a failing admission save n
     executionFence: 42,
   }));
   assert.equal(retryReply.edgeStatus, 'EXECUTED');
+});
+
+test('STOP_UNIT_SEQUENCE stays fail-closed when chillerPowerReader returns null or throws and emits CRITICAL MQTT up/event', async () => {
+  let calls = 0;
+  const { executor, writes, diagnostics, events } = createHarness({
+    chillerPowerReader: async () => {
+      calls += 1;
+      if (calls === 2) throw new Error('meter read timeout');
+      return null;
+    },
+  });
+  await executor.initialize();
+  writes.length = 0;
+  events.length = 0;
+
+  const reply = await executor.handleCommand(createCommand({
+    commandId: 'cmd-stop-null-power',
+    deviceId: 'ctrl-chiller-a',
+    commandCode: 'STOP_UNIT_SEQUENCE',
+    actuationMode: 'UNIT_SEQUENCE',
+    channel: 'unit-a',
+    executionFence: 10,
+  }));
+  assert.equal(reply.edgeStatus, 'EXECUTED');
+  await executor.waitForActiveSequences();
+
+  assert.equal(calls, 3);
+  assert.deepEqual(writes.map((w) => [w.coil, w.value]), [[16, 1], [16, 0]]);
+  assert.ok(diagnostics.some((d) => d.code === 'CHILLER_STOP_POWER_UNAVAILABLE_AUX_HELD' && d.unitCode === 'unit-a'));
+  assert.ok(events.some((e) => e.payload.payload.eventType === 'CHILLER_STOP_POWER_UNAVAILABLE_AUX_HELD' && e.payload.payload.severity === 'CRITICAL'));
+});
+
+test('START_UNIT_SEQUENCE rolls back started auxiliaries in reverse order on failure and publishes MQTT up/event', async () => {
+  const { executor, writes, telemetries, diagnostics, events } = createHarness({
+    onWriteCoil: (coil, value) => {
+      if (coil === 2 && value === 1) throw new Error('tower coil write failed');
+    },
+  });
+  await executor.initialize();
+  writes.length = 0;
+  telemetries.length = 0;
+  events.length = 0;
+
+  const reply = await executor.handleCommand(createCommand({
+    commandId: 'cmd-start-tower-fail',
+    deviceId: 'ctrl-chiller-a',
+    traceId: '4bf92f3577b34da6a3ce929d0e0e4736',
+    commandCode: 'START_UNIT_SEQUENCE',
+    actuationMode: 'UNIT_SEQUENCE',
+    channel: 'unit-a',
+    executionFence: 1,
+  }));
+  assert.equal(reply.edgeStatus, 'EXECUTED');
+  await executor.waitForActiveSequences();
+
+  assert.deepEqual(writes.map((w) => [w.coil, w.value]), [[0, 1], [1, 1], [1, 0], [0, 0]]);
+  assert.ok(diagnostics.some((d) => d.code === 'START_SEQUENCE_FAILED_ROLLED_BACK' && d.unitCode === 'unit-a'));
+  assert.equal(events.length, 1);
+  assert.equal(events[0]?.payload.traceId, '4bf92f3577b34da6a3ce929d0e0e4736');
+  assert.equal(events[0]?.payload.payload.eventType, 'START_SEQUENCE_FAILED_ROLLED_BACK');
+  assert.equal(events[0]?.payload.payload.severity, 'CRITICAL');
+  assert.deepEqual(events[0]?.payload.payload.data?.rolledBackChannels, ['u12', 'u11']);
 });

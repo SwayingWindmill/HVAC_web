@@ -5,6 +5,7 @@ export const SONGYAXUAN_GATEWAY_ID = '01a14000-4000-7000-8000-000000000100';
 export const COMMAND_TOPIC = `hvac/v1/${SONGYAXUAN_GATEWAY_ID}/down/command`;
 export const REPLY_TOPIC = `hvac/v1/${SONGYAXUAN_GATEWAY_ID}/up/reply`;
 export const TELEMETRY_TOPIC = `hvac/v1/${SONGYAXUAN_GATEWAY_ID}/up/telemetry`;
+export const EVENT_TOPIC = `hvac/v1/${SONGYAXUAN_GATEWAY_ID}/up/event`;
 export const ET1010_UNIT_ID = 31;
 export const WINNER_CONTROLLER_ID = 'songyaxuan-et1010-uid31';
 export const DEFAULT_PULSE_DURATION_MS = 500;
@@ -100,6 +101,28 @@ export interface UplinkTelemetryMessage {
   };
 }
 
+export type UplinkEventSeverity = 'INFO' | 'WARNING' | 'CRITICAL';
+
+export interface UplinkEventMessage {
+  topic: string;
+  payload: {
+    schemaVersion: '2.0';
+    messageId: string;
+    gatewayId: string;
+    timestamp: number;
+    sequence: number;
+    traceId?: string;
+    payload: {
+      eventType: string;
+      sourceType: string;
+      sourceId: string;
+      eventTime: number;
+      severity: UplinkEventSeverity;
+      data?: Record<string, unknown>;
+    };
+  };
+}
+
 export interface ExecutorPersistedState {
   lastSequence: number;
   lastFenceByDevice: Record<string, number>;
@@ -131,6 +154,7 @@ export interface SongyaxuanCommandExecutorOptions {
   chillerStopPowerKw?: number;
   publishReply: (topic: string, reply: CommandReplyEnvelope) => Promise<void> | void;
   publishTelemetry?: (message: UplinkTelemetryMessage) => Promise<void> | void;
+  publishEvent?: (message: UplinkEventMessage) => Promise<void> | void;
   onDiagnostic?: (event: SequenceDiagnosticEvent) => void;
   stateStore?: ExecutorStateStore;
   busLock?: Rs485BusLock;
@@ -991,6 +1015,7 @@ export class SongyaxuanCommandExecutor {
       ? command.pulseDurationMs
       : this.pulseDurationMs;
     const isStart = command.commandCode === 'START_UNIT_SEQUENCE';
+    const startedAux: Array<{ deviceId: string; channel: string; coil: number }> = [];
     const checkAborted = () => {
       if (controller.signal.aborted) throw new SequenceAbortError(abortReasonText(controller.signal));
     };
@@ -1000,6 +1025,15 @@ export class SongyaxuanCommandExecutor {
       await this.emitTelemetryEntries([
         { deviceId: 'et1010', deviceTimestamp: this.nowMs(), points: [{ code: part.channel, value, quality: 0 }] },
         { deviceId: part.deviceId, deviceTimestamp: this.nowMs(), points: [{ code: 'run_state', value: value === 1 ? 'RUNNING' : 'STOPPED', quality: 0 }] },
+      ]);
+    };
+    const writeStartAuxStep = async (part: { deviceId: string; channel: string; coil: number }) => {
+      checkAborted();
+      await this.writeCoil(part.coil, 1);
+      startedAux.push(part);
+      await this.emitTelemetryEntries([
+        { deviceId: 'et1010', deviceTimestamp: this.nowMs(), points: [{ code: part.channel, value: 1, quality: 0 }] },
+        { deviceId: part.deviceId, deviceTimestamp: this.nowMs(), points: [{ code: 'run_state', value: 'RUNNING', quality: 0 }] },
       ]);
     };
     const waitStep = async (ms: number) => {
@@ -1015,26 +1049,74 @@ export class SongyaxuanCommandExecutor {
         checkAborted();
       }
       if (isStart) {
-        await writeStep(plan.chwp, 1);
+        await writeStartAuxStep(plan.chwp);
         checkAborted();
         tailLaunched = true;
-        this.launchSequenceTask(plan.unitCode, command.commandId, lifecycle, async () => {
-          await waitStep(this.sequenceTimings.pumpToCoolingPumpMs);
-          await writeStep(plan.cwp, 1);
-          await waitStep(this.sequenceTimings.coolingPumpToTowerMs);
-          await writeStep(plan.tower, 1);
-          await waitStep(this.sequenceTimings.towerToChillerPulseMs);
-          const allClosed = await this.verifyRequiredCoilsClosed(plan, command.commandId, controller.signal);
-          if (!allClosed) return;
-          checkAborted();
-          await this.executePulse(
-            plan.chillerStart.coil,
-            plan.chillerStart.channel,
-            pulseMs,
-            controller.signal,
-            { unitCode: plan.unitCode, commandId: command.commandId },
-          );
-        });
+        this.launchSequenceTask(
+          plan.unitCode,
+          command,
+          lifecycle,
+          async () => {
+            try {
+              await waitStep(this.sequenceTimings.pumpToCoolingPumpMs);
+              await writeStartAuxStep(plan.cwp);
+              await waitStep(this.sequenceTimings.coolingPumpToTowerMs);
+              await writeStartAuxStep(plan.tower);
+              await waitStep(this.sequenceTimings.towerToChillerPulseMs);
+              const allClosed = await this.verifyRequiredCoilsClosed(plan, command, controller.signal);
+              if (!allClosed) {
+                await this.rollbackStartedAuxiliaries(
+                  plan,
+                  command,
+                  startedAux,
+                  'PRE_PULSE_COIL_OPEN',
+                  'Required auxiliary coils were not closed before chiller start pulse',
+                  controller.signal,
+                );
+                return;
+              }
+              checkAborted();
+              await this.executePulse(
+                plan.chillerStart.coil,
+                plan.chillerStart.channel,
+                pulseMs,
+                controller.signal,
+                { unitCode: plan.unitCode, commandId: command.commandId },
+              );
+            } catch (error) {
+              if (error instanceof SequenceAbortError) {
+                throw error;
+              }
+              if (error instanceof PulseResetError) {
+                await this.publishDiagnosticEventMessage(
+                  {
+                    level: 'error',
+                    code: 'PULSE_RESET_FAILED',
+                    unitCode: plan.unitCode,
+                    commandId: command.commandId,
+                    message: `${plan.unitCode}: chiller start pulse reset failed; holding started auxiliaries ON: ${errorText(error)}`,
+                  },
+                  {
+                    sourceId: plan.chillerDeviceId,
+                    traceId: command.traceId,
+                    data: { auxiliariesHeld: true, failureCode: 'PULSE_RESET_FAILED' },
+                  },
+                );
+                return;
+              }
+              const failureCode = error instanceof StatePersistError ? 'STATE_PERSIST_FAILED' : 'SEQUENCE_STEP_FAILED';
+              await this.rollbackStartedAuxiliaries(
+                plan,
+                command,
+                startedAux,
+                failureCode,
+                errorText(error),
+                controller.signal,
+              );
+            }
+          },
+          { handleErrorsInRunner: false },
+        );
         return this.emitReply(command, 'EXECUTED', null, command.commandCode, `${plan.unitCode}:sequence-accepted`);
       }
 
@@ -1048,9 +1130,9 @@ export class SongyaxuanCommandExecutor {
       );
       checkAborted();
       tailLaunched = true;
-      this.launchSequenceTask(plan.unitCode, command.commandId, lifecycle, async () => {
+      this.launchSequenceTask(plan.unitCode, command, lifecycle, async () => {
         await waitStep(this.sequenceTimings.chillerStopCoastDownMs);
-        const stopConfirmed = await this.confirmChillerStoppedBeforeAuxShutdown(plan, command.commandId, controller.signal);
+        const stopConfirmed = await this.confirmChillerStoppedBeforeAuxShutdown(plan, command, controller.signal);
         if (!stopConfirmed) return;
         await writeStep(plan.tower, 0);
         await waitStep(this.sequenceTimings.auxiliaryStopStepMs);
@@ -1063,7 +1145,27 @@ export class SongyaxuanCommandExecutor {
       if (error instanceof SequenceAbortError) {
         return this.emitReply(command, 'REJECTED', error.reasonCode, command.commandCode, 'ABORTED');
       }
+      if (startedAux.length > 0) {
+        await this.rollbackStartedAuxiliaries(
+          plan,
+          command,
+          startedAux,
+          error instanceof StatePersistError ? 'STATE_PERSIST_FAILED' : 'SEQUENCE_STEP_FAILED',
+          errorText(error),
+          controller.signal,
+        );
+      }
       if (error instanceof PulseResetError) {
+        await this.publishDiagnosticEventMessage(
+          {
+            level: 'error',
+            code: 'PULSE_RESET_FAILED',
+            unitCode: plan.unitCode,
+            commandId: command.commandId,
+            message: `${plan.unitCode}: pulse coil reset failed on ${command.commandCode}`,
+          },
+          { sourceId: plan.chillerDeviceId, traceId: command.traceId },
+        );
         return this.emitReply(command, 'FAILED', 'PULSE_RESET_FAILED', command.commandCode, 'NOT_APPLIED');
       }
       if (error instanceof StatePersistError) {
@@ -1077,9 +1179,86 @@ export class SongyaxuanCommandExecutor {
     }
   }
 
+  private async rollbackStartedAuxiliaries(
+    plan: UnitCoilPlan,
+    command: DownlinkCommandEnvelope,
+    startedAux: ReadonlyArray<{ deviceId: string; channel: string; coil: number }>,
+    failureCode: string,
+    failureReason: string,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const rolledBackParts: Array<{ deviceId: string; channel: string; coil: number }> = [];
+    const rollbackFailedChannels: string[] = [];
+
+    for (const part of [...startedAux].reverse()) {
+      if (signal.aborted) break;
+      try {
+        await this.writeCoil(part.coil, 0, BUS_PRIORITY_PULSE_RESET);
+        rolledBackParts.push(part);
+      } catch (err) {
+        rollbackFailedChannels.push(`${part.channel}(coil=${part.coil}): ${errorText(err)}`);
+      }
+    }
+
+    if (rolledBackParts.length > 0) {
+      const now = this.nowMs();
+      try {
+        await this.emitTelemetryEntries([
+          ...rolledBackParts.map((part) => ({
+            deviceId: part.deviceId,
+            deviceTimestamp: now,
+            points: [{ code: 'run_state', value: 'STOPPED', quality: 0 }],
+          })),
+          {
+            deviceId: 'et1010',
+            deviceTimestamp: now,
+            points: rolledBackParts.map((part) => ({ code: part.channel, value: 0, quality: 0 })),
+          },
+        ]);
+      } catch (err) {
+        this.reportDiagnostic({
+          level: 'error',
+          code: 'ROLLBACK_TELEMETRY_FAILED',
+          unitCode: plan.unitCode,
+          commandId: command.commandId,
+          message: `${plan.unitCode}: failed to emit telemetry after auxiliary rollback: ${errorText(err)}`,
+        });
+      }
+    }
+
+    const rolledBackChannels = rolledBackParts.map((part) => part.channel);
+    const eventCode = rollbackFailedChannels.length > 0
+      ? 'START_SEQUENCE_ROLLBACK_FAILED'
+      : 'START_SEQUENCE_FAILED_ROLLED_BACK';
+    const rolledSummary = rolledBackChannels.length > 0 ? rolledBackChannels.join(', ') : 'none';
+    const message = rollbackFailedChannels.length > 0
+      ? `${plan.unitCode}: START_UNIT_SEQUENCE failed (${failureCode}: ${failureReason}); rolled back [${rolledSummary}], failed to roll back [${rollbackFailedChannels.join('; ')}]`
+      : `${plan.unitCode}: START_UNIT_SEQUENCE failed (${failureCode}: ${failureReason}); rolled back started auxiliaries [${rolledSummary}] in reverse order`;
+
+    await this.emitDiagnosticEvent(
+      {
+        level: 'error',
+        code: eventCode,
+        unitCode: plan.unitCode,
+        commandId: command.commandId,
+        message,
+      },
+      {
+        sourceId: plan.chillerDeviceId,
+        traceId: command.traceId,
+        data: {
+          failureCode,
+          failureReason,
+          rolledBackChannels,
+          rollbackFailedChannels,
+        },
+      },
+    );
+  }
+
   private async confirmChillerStoppedBeforeAuxShutdown(
     plan: UnitCoilPlan,
-    commandId: string,
+    command: DownlinkCommandEnvelope,
     signal: AbortSignal,
   ): Promise<boolean> {
     const reader = this.options.chillerPowerReader;
@@ -1087,13 +1266,18 @@ export class SongyaxuanCommandExecutor {
 
     const readPower = async (): Promise<number | null> => {
       if (signal.aborted) throw new SequenceAbortError(abortReasonText(signal));
-      const value = await reader(plan.unitCode);
-      if (signal.aborted) throw new SequenceAbortError(abortReasonText(signal));
-      return typeof value === 'number' && Number.isFinite(value) ? value : null;
+      try {
+        const value = await reader(plan.unitCode);
+        if (signal.aborted) throw new SequenceAbortError(abortReasonText(signal));
+        return typeof value === 'number' && Number.isFinite(value) ? value : null;
+      } catch (err) {
+        if (signal.aborted) throw new SequenceAbortError(abortReasonText(signal));
+        return null;
+      }
     };
 
     let power = await readPower();
-    if (power === null || power <= this.chillerStopPowerKw) return true;
+    if (power !== null && power <= this.chillerStopPowerKw) return true;
 
     for (let recheck = 0; recheck < CHILLER_STOP_RECHECK_LIMIT; recheck += 1) {
       await this.sleepAbortable(this.sequenceTimings.auxiliaryStopStepMs, signal);
@@ -1105,19 +1289,44 @@ export class SongyaxuanCommandExecutor {
       }
     }
 
-    this.reportDiagnostic({
-      level: 'error',
-      code: 'CHILLER_STOP_UNCONFIRMED_AUX_HELD',
-      unitCode: plan.unitCode,
-      commandId,
-      message: `${plan.unitCode}: aborted auxiliary shutdown because chiller power remained ${power} kW (> ${this.chillerStopPowerKw} kW)`,
-    });
+    if (power === null) {
+      await this.emitDiagnosticEvent(
+        {
+          level: 'error',
+          code: 'CHILLER_STOP_POWER_UNAVAILABLE_AUX_HELD',
+          unitCode: plan.unitCode,
+          commandId: command.commandId,
+          message: `${plan.unitCode}: aborted auxiliary shutdown because chiller meter power was unavailable (null) after ${CHILLER_STOP_RECHECK_LIMIT + 1} checks`,
+        },
+        {
+          sourceId: plan.chillerDeviceId,
+          traceId: command.traceId,
+          data: { stopThresholdKw: this.chillerStopPowerKw },
+        },
+      );
+      return false;
+    }
+
+    await this.emitDiagnosticEvent(
+      {
+        level: 'error',
+        code: 'CHILLER_STOP_UNCONFIRMED_AUX_HELD',
+        unitCode: plan.unitCode,
+        commandId: command.commandId,
+        message: `${plan.unitCode}: aborted auxiliary shutdown because chiller power remained ${power} kW (> ${this.chillerStopPowerKw} kW)`,
+      },
+      {
+        sourceId: plan.chillerDeviceId,
+        traceId: command.traceId,
+        data: { powerKw: power, stopThresholdKw: this.chillerStopPowerKw },
+      },
+    );
     return false;
   }
 
   private async verifyRequiredCoilsClosed(
     plan: UnitCoilPlan,
-    commandId: string,
+    command: DownlinkCommandEnvelope,
     signal: AbortSignal,
   ): Promise<boolean> {
     const required = [plan.chwp, plan.cwp, plan.tower];
@@ -1133,30 +1342,32 @@ export class SongyaxuanCommandExecutor {
     if (openParts.length === 0) return true;
 
     const channels = openParts.map((part) => `${part.channel}(coil=${part.coil})`).join(', ');
-    this.reportDiagnostic({
-      level: 'warn',
-      code: 'PRE_PULSE_COIL_OPEN',
-      unitCode: plan.unitCode,
-      commandId,
-      message: `${plan.unitCode}: aborted chiller start pulse because coils are open: ${channels}`,
-    });
-    const now = this.nowMs();
-    await this.emitTelemetryEntries(
-      openParts.flatMap((part) => [
-        { deviceId: 'et1010', deviceTimestamp: now, points: [{ code: part.channel, value: 0, quality: 0 }] },
-        { deviceId: part.deviceId, deviceTimestamp: now, points: [{ code: 'run_state', value: 'STOPPED', quality: 0 }] },
-      ]),
+    await this.emitDiagnosticEvent(
+      {
+        level: 'warn',
+        code: 'PRE_PULSE_COIL_OPEN',
+        unitCode: plan.unitCode,
+        commandId: command.commandId,
+        message: `${plan.unitCode}: aborted chiller start pulse because coils are open: ${channels}`,
+      },
+      {
+        sourceId: plan.chillerDeviceId,
+        traceId: command.traceId,
+        data: { openChannels: openParts.map((part) => part.channel) },
+      },
     );
     return false;
   }
 
   private launchSequenceTask(
     unitCode: UnitCoilPlan['unitCode'],
-    commandId: string,
+    command: DownlinkCommandEnvelope,
     lifecycle: { controller: AbortController; tracked: Promise<void>; resolveDone: () => void },
     runTail: () => Promise<void>,
+    options: { handleErrorsInRunner?: boolean } = {},
   ): void {
     const { controller, tracked, resolveDone } = lifecycle;
+    const handleErrorsInRunner = options.handleErrorsInRunner ?? true;
     void (async (): Promise<void> => {
       try {
         await waitNextTurn(controller.signal);
@@ -1164,19 +1375,98 @@ export class SongyaxuanCommandExecutor {
         await runTail();
       } catch (error) {
         if (error instanceof SequenceAbortError) return;
-        if (!(error instanceof PulseResetError)) {
-          this.reportDiagnostic({
-            level: 'error',
-            code: 'SEQUENCE_STEP_FAILED',
-            unitCode,
-            commandId,
-            message: `${unitCode}: background sequence failed: ${errorText(error)}`,
-          });
+        if (handleErrorsInRunner) {
+          if (error instanceof PulseResetError) {
+            await this.publishDiagnosticEventMessage(
+              {
+                level: 'error',
+                code: 'PULSE_RESET_FAILED',
+                unitCode,
+                commandId: command.commandId,
+                message: `${unitCode}: background pulse coil reset failed: ${errorText(error)}`,
+              },
+              { sourceId: UNIT_PLANS[unitCode].chillerDeviceId, traceId: command.traceId },
+            );
+          } else {
+            await this.emitDiagnosticEvent(
+              {
+                level: 'error',
+                code: 'SEQUENCE_STEP_FAILED',
+                unitCode,
+                commandId: command.commandId,
+                message: `${unitCode}: background sequence failed: ${errorText(error)}`,
+              },
+              { sourceId: UNIT_PLANS[unitCode].chillerDeviceId, traceId: command.traceId },
+            );
+          }
         }
       } finally {
         this.releaseSequenceLifecycle(unitCode, controller, tracked, resolveDone);
       }
     })();
+  }
+
+  private async emitDiagnosticEvent(
+    event: SequenceDiagnosticEvent,
+    options?: { sourceId?: string; traceId?: string; data?: Record<string, unknown> },
+  ): Promise<void> {
+    this.reportDiagnostic(event);
+    await this.publishDiagnosticEventMessage(event, options);
+  }
+
+  private async publishDiagnosticEventMessage(
+    event: SequenceDiagnosticEvent,
+    options?: { sourceId?: string; traceId?: string; data?: Record<string, unknown> },
+  ): Promise<void> {
+    if (!this.options.publishEvent) return;
+    const now = this.nowMs();
+    const nextSequence = Math.max(now * 1000, this.uplinkSeq + 1);
+    this.uplinkSeq = nextSequence;
+    try {
+      await this.persistState();
+    } catch (err) {
+      this.reportDiagnostic({
+        level: 'error',
+        code: 'STATE_PERSIST_FAILED',
+        message: `failed to persist event sequence state: ${errorText(err)}`,
+      });
+    }
+    const sourceId = options?.sourceId ?? (event.unitCode ? UNIT_PLANS[event.unitCode].chillerDeviceId : 'et1010');
+    try {
+      await this.options.publishEvent({
+        topic: EVENT_TOPIC,
+        payload: {
+          schemaVersion: '2.0',
+          messageId: this.uuidv7(),
+          gatewayId: SONGYAXUAN_GATEWAY_ID,
+          timestamp: now,
+          sequence: nextSequence,
+          ...(options?.traceId ? { traceId: options.traceId } : {}),
+          payload: {
+            eventType: event.code,
+            sourceType: 'COMMAND_EXECUTOR',
+            sourceId,
+            eventTime: now,
+            severity: event.level === 'error' ? 'CRITICAL' : 'WARNING',
+            data: {
+              code: event.code,
+              unitCode: event.unitCode ?? null,
+              commandId: event.commandId ?? null,
+              message: event.message,
+              ...(options?.data ?? {}),
+            },
+          },
+        },
+      });
+    } catch (err) {
+      this.reportDiagnostic({
+        level: 'error',
+        code: 'EVENT_PUBLISH_FAILED',
+        unitCode: event.unitCode,
+        commandId: event.commandId,
+        message: `failed to publish MQTT uplink event ${event.code}: ${errorText(err)}`,
+      });
+    }
   }
 
   private reportDiagnostic(event: SequenceDiagnosticEvent): void {
