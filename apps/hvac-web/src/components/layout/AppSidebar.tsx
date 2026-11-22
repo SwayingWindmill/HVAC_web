@@ -19,6 +19,7 @@ import {
   useSidebar,
 } from '@/components/ui/sidebar';
 import { useAppTheme, type ThemeMode } from '@/app/ThemeGate';
+import { useShellSnapshot } from '@/app/ShellRuntimeContext';
 import { activeAlarmsQuery } from '@/features/alarms/alarm-api';
 import { siteCommandsQuery } from '@/features/control/command-api';
 import { needsPerson } from '@/features/control/command-presentation';
@@ -29,6 +30,8 @@ import {
   APP_NAVIGATION_CONFIG,
   isNavActive,
   isSinglePageGroup,
+  navCountQueryFlags,
+  navHref,
   type AppNavigationGroup,
   type AppNavigationItem,
 } from './app-navigation';
@@ -39,27 +42,41 @@ interface AppSidebarProps {
 }
 
 /** What waits on the operator: active alarms, open work orders and commands awaiting approval or a site check, from the same queries their pages use. */
-function useNavCounts(siteId: string | undefined): Readonly<Record<string, number | undefined>> {
-  const alarms = useQuery({ ...activeAlarmsQuery(siteId ?? ''), enabled: Boolean(siteId) });
-  const workOrders = useQuery({ ...openWorkOrdersQuery(siteId ?? ''), enabled: Boolean(siteId) });
-  const commands = useQuery({ ...siteCommandsQuery(siteId ?? ''), enabled: Boolean(siteId) });
+function useNavCounts(
+  siteId: string | undefined,
+  capabilities: readonly string[] | undefined,
+): Readonly<Record<string, number | undefined>> {
+  const flags = navCountQueryFlags(siteId, capabilities);
+  const alarms = useQuery({ ...activeAlarmsQuery(siteId ?? ''), enabled: flags.alarms });
+  const workOrders = useQuery({ ...openWorkOrdersQuery(siteId ?? ''), enabled: flags.workOrders });
+  const commands = useQuery({ ...siteCommandsQuery(siteId ?? ''), enabled: flags.commands });
   return {
-    'operations-alarms': alarms.data?.items.length,
-    'operations-work-center': workOrders.data?.length,
-    'operations-control': commands.data?.filter(needsPerson).length,
+    'operations-alarms': flags.alarms ? alarms.data?.items.length : undefined,
+    'operations-work-center': flags.workOrders ? workOrders.data?.length : undefined,
+    'operations-control': flags.commands ? commands.data?.filter(needsPerson).length : undefined,
   };
 }
 
-/** Alarms waiting on someone are urgent; everything else is a plain count. */
-const URGENT_COUNTS = new Set(['operations-alarms']);
+type CountBadgeTone = 'urgent' | 'warning' | 'neutral';
 
-function CountBadge({ count, urgent }: { readonly count: number; readonly urgent: boolean }) {
+/** Alarms waiting on someone are urgent; pending control commands warn; everything else is neutral. */
+function countBadgeTone(itemId: string): CountBadgeTone {
+  if (itemId === 'operations-alarms') return 'urgent';
+  if (itemId === 'operations-control') return 'warning';
+  return 'neutral';
+}
+
+function CountBadge({ count, tone }: { readonly count: number; readonly tone: CountBadgeTone }) {
   return (
     <SidebarMenuBadge
       aria-label={`${count} 项待处理`}
       className={cn(
         'top-1/2! h-[18px] min-w-[18px] -translate-y-1/2 rounded-full px-1.5 font-mono text-[11px] font-semibold',
-        urgent ? 'bg-destructive-soft text-destructive-text!' : 'bg-secondary text-secondary-foreground!',
+        tone === 'urgent'
+          ? 'bg-destructive-soft text-destructive-text!'
+          : tone === 'warning'
+            ? 'bg-warning-soft text-warning-text!'
+            : 'bg-secondary text-secondary-foreground!',
       )}
     >
       {count > 99 ? '99+' : count}
@@ -70,9 +87,8 @@ function CountBadge({ count, urgent }: { readonly count: number; readonly urgent
 function useLink(onNavigate: (target: string) => void) {
   const { currentScope } = useScope();
   const { setOpenMobile } = useSidebar();
-  const siteQuery = currentScope ? `?site=${currentScope.siteId}` : '';
   return (item: AppNavigationItem) => {
-    const href = `${item.path}${siteQuery}`;
+    const href = navHref(item, currentScope?.siteId);
     return {
       href,
       onClick: (event: React.MouseEvent) => {
@@ -84,12 +100,11 @@ function useLink(onNavigate: (target: string) => void) {
   };
 }
 
-function SinglePageItem({ group, count, currentPath, link, trailing }: {
+function SinglePageItem({ group, count, currentPath, link }: {
   readonly group: AppNavigationGroup;
   readonly count: number | undefined;
   readonly currentPath: string;
   readonly link: ReturnType<typeof useLink>;
-  readonly trailing?: React.ReactNode;
 }) {
   const item = group.items[0];
   const active = isNavActive(item.path, currentPath);
@@ -100,10 +115,9 @@ function SinglePageItem({ group, count, currentPath, link, trailing }: {
         <a {...link(item)} aria-current={active ? 'page' : undefined}>
           <Icon aria-hidden="true" />
           <span>{group.label}</span>
-          {trailing}
         </a>
       </SidebarMenuButton>
-      {count ? <CountBadge count={count} urgent={URGENT_COUNTS.has(item.id)} /> : null}
+      {count ? <CountBadge count={count} tone={countBadgeTone(item.id)} /> : null}
     </SidebarMenuItem>
   );
 }
@@ -121,7 +135,7 @@ function GroupItem({ group, counts, currentPath, link }: {
   const expanded = open || Boolean(activeItem);
   const Icon = group.icon;
   const groupCount = items.reduce((sum, item) => sum + (counts[item.id] ?? 0), 0);
-  const groupUrgent = items.some((item) => URGENT_COUNTS.has(item.id) && (counts[item.id] ?? 0) > 0);
+  const groupUrgent = items.some((item) => countBadgeTone(item.id) === 'urgent' && (counts[item.id] ?? 0) > 0);
 
   // With the sidebar collapsed to icons the children are hidden, so the group icon goes straight to its page.
   if (state === 'collapsed') {
@@ -155,7 +169,7 @@ function GroupItem({ group, counts, currentPath, link }: {
             />
           </SidebarMenuButton>
         </CollapsibleTrigger>
-        {!expanded && groupCount > 0 ? <CountBadge count={groupCount} urgent={groupUrgent} /> : null}
+        {!expanded && groupCount > 0 ? <CountBadge count={groupCount} tone={groupUrgent ? 'urgent' : 'neutral'} /> : null}
         <CollapsibleContent>
           <SidebarMenuSub>
             {items.map((item) => {
@@ -168,7 +182,7 @@ function GroupItem({ group, counts, currentPath, link }: {
                       <span>{item.title}</span>
                     </a>
                   </SidebarMenuSubButton>
-                  {count ? <CountBadge count={count} urgent={URGENT_COUNTS.has(item.id)} /> : null}
+                  {count ? <CountBadge count={count} tone={countBadgeTone(item.id)} /> : null}
                 </SidebarMenuSubItem>
               );
             })}
@@ -226,7 +240,8 @@ export function AppSidebar({ className, onNavigate }: AppSidebarProps) {
   const location = useLocation();
   const currentPath = location.pathname;
   const { currentScope } = useScope();
-  const counts = useNavCounts(currentScope?.siteId);
+  const snapshot = useShellSnapshot();
+  const counts = useNavCounts(currentScope?.siteId, snapshot.principal?.authorization.capabilities);
   const link = useLink(onNavigate);
   const groups = (section: AppNavigationGroup['section']) => APP_NAVIGATION_CONFIG.filter((group) => group.section === section);
 
@@ -249,14 +264,9 @@ export function AppSidebar({ className, onNavigate }: AppSidebarProps) {
               <SinglePageItem
                 key={group.id}
                 group={group}
-                count={undefined}
+                count={counts[group.items[0].id]}
                 currentPath={currentPath}
                 link={link}
-                trailing={(
-                  <span className="ml-auto rounded-full border border-border px-[7px] text-[11px] leading-[18px] font-medium text-muted-foreground group-data-[collapsible=icon]:hidden">
-                    需审批
-                  </span>
-                )}
               />
             ))}
           </SidebarMenu>

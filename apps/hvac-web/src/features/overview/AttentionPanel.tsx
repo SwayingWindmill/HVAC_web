@@ -139,7 +139,7 @@ export function AttentionPanel({ siteId, timeZone, principalId, alarms, findings
         <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center">
           <span className="flex size-9 items-center justify-center rounded-xl bg-success-soft text-success-text"><CircleCheck className="size-[18px]" aria-hidden="true" /></span>
           <p className="text-sm font-semibold">{tab === 'all' ? '没有需要处理的事项' : `没有需要处理的${KIND_LABEL[tab]}`}</p>
-          <p className="text-xs text-muted-foreground">无活动告警 · 无未完成工单 · 近 7 天无诊断结论</p>
+          {quiet.length > 0 ? <p className="text-xs text-muted-foreground">{quiet.join(' · ')}</p> : null}
         </div>
       ) : (
         <ul className="flex flex-col" aria-label="需要处理的事项">

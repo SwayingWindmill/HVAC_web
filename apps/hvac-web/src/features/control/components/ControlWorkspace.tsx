@@ -215,7 +215,7 @@ export function ControlWorkspace() {
         />
       )}
 
-      <div className="grid grid-cols-[minmax(0,1fr)_352px] items-start gap-4">
+      <div className="grid grid-cols-1 items-start gap-4 @5xl/main:grid-cols-[minmax(0,1fr)_352px]">
         <Panel aria-label="机组与设备">
           <PanelHeader
             title={<span className="flex items-center gap-1.5">机组与设备<InfoTip>水路联锁：对应水泵和冷却塔都在运行才能开主机；主机停了才能停对应水泵和冷却塔。中高风险的指令要审批后才会下发。</InfoTip></span>}
@@ -224,7 +224,7 @@ export function ControlWorkspace() {
             ) : undefined}
           />
           {registry.isPending ? (
-            <div className="grid grid-cols-4 gap-4 p-4"><Skeleton className="h-64" /><Skeleton className="h-64" /><Skeleton className="h-64" /><Skeleton className="h-64" /></div>
+            <div className="grid grid-cols-1 gap-4 p-4 @2xl/main:grid-cols-2 @5xl/main:grid-cols-4"><Skeleton className="h-64" /><Skeleton className="h-64" /><Skeleton className="h-64" /><Skeleton className="h-64" /></div>
           ) : registry.isError ? (
             <div className="flex flex-col items-start gap-2 px-4 py-6">
               <p className="text-sm text-destructive-text">设备清单暂时读不到</p>
@@ -241,7 +241,7 @@ export function ControlWorkspace() {
           )}
         </Panel>
 
-        <Panel aria-label="指令记录" className="sticky top-4 max-h-[calc(100svh-var(--header-height)-140px)]">
+        <Panel aria-label="指令记录" className="max-h-[480px] @5xl/main:sticky @5xl/main:top-[calc(var(--header-height)+16px)] @5xl/main:max-h-[calc(100svh-var(--header-height)-32px)]">
           <PanelHeader title="指令记录" caption="近 50 条" />
           <ToggleGroup
             type="single"

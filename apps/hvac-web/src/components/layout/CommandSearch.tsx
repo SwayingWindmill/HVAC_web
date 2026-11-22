@@ -10,7 +10,7 @@ import {
 } from '@/components/ui/command';
 import { useSiteEquipment } from '@/features/assets/use-device-names';
 import { useScope } from '@/hooks/use-scope';
-import { APP_NAVIGATION_CONFIG } from './app-navigation';
+import { APP_NAVIGATION_CONFIG, navHref } from './app-navigation';
 
 interface CommandSearchProps {
   readonly open: boolean;
@@ -45,7 +45,6 @@ function EquipmentGroup({ siteId, onSelect }: { readonly siteId: string; readonl
 
 export function CommandSearch({ open, onOpenChange, onNavigate }: CommandSearchProps) {
   const { currentScope } = useScope();
-  const siteQuery = currentScope ? `?site=${currentScope.siteId}` : '';
 
   const go = (target: string) => {
     onNavigate(target);
@@ -62,7 +61,7 @@ export function CommandSearch({ open, onOpenChange, onNavigate }: CommandSearchP
             {group.items.map((item) => {
               const Icon = item.icon;
               return (
-                <CommandItem key={item.id} value={`${group.label} ${item.title}`} onSelect={() => go(`${item.path}${siteQuery}`)}>
+                <CommandItem key={item.id} value={`${group.label} ${item.title}`} onSelect={() => go(navHref(item, currentScope?.siteId))}>
                   <Icon className="text-muted-foreground" />
                   <span className="flex-1">{item.title}</span>
                   <ArrowRight className="text-muted-foreground/60" />

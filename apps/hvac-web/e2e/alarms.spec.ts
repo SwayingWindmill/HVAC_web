@@ -419,3 +419,23 @@ test('operators can author streaming window rules, compile edge bundles and push
   ).at(-1);
   expect(clearWrite?.body?.edgeRuleBundle).toBeNull();
 });
+
+test('keyboard shortcuts ignore IME composition and assistant panel keeps 1440px alarms layout free of horizontal overflow', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`/operations/alarms?site=${SITE_ID}&view=all`);
+  await expect(rows(page)).toHaveCount(2);
+  await expect(rows(page).nth(0)).toHaveAttribute('aria-current', 'true');
+
+  // IME composition confirmation (`isComposing` / `keyCode === 229`) must not trigger J/K navigation.
+  await page.evaluate(() => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'j', code: 'KeyJ', keyCode: 229, isComposing: true, bubbles: true, cancelable: true }));
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'j', code: 'KeyJ', keyCode: 229, isComposing: false, bubbles: true, cancelable: true }));
+  });
+  await expect(rows(page).nth(0)).toHaveAttribute('aria-current', 'true');
+
+  await page.getByRole('button', { name: 'AI 助手' }).click();
+  await expect(page.getByRole('complementary', { name: 'AI 助手' })).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth))
+    .toBe(true);
+});

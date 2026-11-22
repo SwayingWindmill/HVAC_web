@@ -38,6 +38,8 @@ export interface AppNavigationItem {
   readonly title: string;
   readonly path: string;
   readonly icon: LucideIcon;
+  /** Platform routes omit `?site=` so navigating to them cleanly exits Site scope; defaults to `'site'`. */
+  readonly scope?: 'site' | 'platform';
   /** Reached from elsewhere in the shell (the notification bell), so only the command palette lists it. */
   readonly sidebar?: false;
 }
@@ -77,7 +79,7 @@ export const APP_NAVIGATION_CONFIG: readonly AppNavigationGroup[] = [
       { id: 'analytics-consumption', title: '能耗分析', path: '/energy-analysis/consumption', icon: LineChart },
       { id: 'analytics-load', title: '用电负荷', path: '/energy-analysis/load', icon: Gauge },
       { id: 'analytics-billing', title: '电费账单', path: '/energy-analysis/billing', icon: Receipt },
-      { id: 'benchmark', title: '站点对标', path: '/benchmark', icon: Trophy },
+      { id: 'benchmark', title: '站点对标', path: '/benchmark', icon: Trophy, scope: 'platform' },
     ],
   },
   {
@@ -122,11 +124,34 @@ export const APP_NAVIGATION_CONFIG: readonly AppNavigationGroup[] = [
     icon: Settings,
     section: 'platform',
     items: [
-      { id: 'integrations', title: '集成管理', path: '/settings/integrations', icon: Plug },
-      { id: 'system', title: '系统管理', path: '/system', icon: Settings },
+      { id: 'integrations', title: '集成管理', path: '/settings/integrations', icon: Plug, scope: 'platform' },
+      { id: 'system', title: '系统管理', path: '/system', icon: Settings, scope: 'platform' },
     ],
   },
 ];
+
+export function navHref(
+  item: Pick<AppNavigationItem, 'path' | 'scope'>,
+  siteId: string | undefined,
+): string {
+  if (item.scope === 'platform' || !siteId) return item.path;
+  return `${item.path}?site=${siteId}`;
+}
+
+export function navCountQueryFlags(
+  siteId: string | undefined,
+  capabilities: readonly string[] | undefined,
+): { readonly alarms: boolean; readonly workOrders: boolean; readonly commands: boolean } {
+  if (!siteId || !capabilities) {
+    return { alarms: false, workOrders: false, commands: false };
+  }
+  const allowed = new Set(capabilities);
+  return {
+    alarms: allowed.has('alarm.list'),
+    workOrders: allowed.has('work-order.list'),
+    commands: allowed.has('site.read'),
+  };
+}
 
 export function isNavActive(itemPath: string, currentPath: string): boolean {
   if (itemPath === '/overview') {

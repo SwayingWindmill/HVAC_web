@@ -413,3 +413,49 @@ test('logical device hardware replacement preserves device identity and telemetr
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: p1Shot('p1-hardware-replace-dark.png') });
 });
+
+test('sidebar platform links omit the site query param and drop site scope cleanly', async ({ page }) => {
+  await page.goto(`/operations/alarms?site=${SITE_ID}`);
+  await expect(page.getByTestId('real-shell-site')).toHaveText('中央机房');
+
+  await page.getByRole('link', { name: '系统管理', exact: true }).click();
+  await expect(page).toHaveURL(/\/system$/);
+  await expect(page.getByTestId('real-shell-site')).toHaveText('平台范围');
+
+  await page.goto(`/operations/alarms?site=${SITE_ID}`);
+  await page.getByRole('button', { name: '能源，展开', exact: true }).click();
+  await page.getByRole('link', { name: '站点对标', exact: true }).click();
+  await expect(page).toHaveURL(/\/benchmark$/);
+  await expect(page.getByTestId('real-shell-site')).toHaveText('平台范围');
+
+  await page.goto(`/operations/alarms?site=${SITE_ID}`);
+  await page.getByRole('link', { name: '集成管理', exact: true }).click();
+  await expect(page).toHaveURL(/\/settings\/integrations$/);
+  await expect(page.getByTestId('real-shell-site')).toHaveText('平台范围');
+});
+
+test('shell sidebar and header skip alarm and work-order queries when capabilities are absent', async ({ page, gateway }) => {
+  const deniedCapabilities = principal.authorization.capabilities.filter(
+    (capability: string) => capability !== 'alarm.list' && capability !== 'work-order.list',
+  );
+  gateway.principalOverride = {
+    ...principal,
+    authorization: {
+      ...principal.authorization,
+      capabilities: deniedCapabilities,
+    },
+  };
+
+  const alarmOrWorkOrderRequests: string[] = [];
+  page.on('request', (request) => {
+    const pathname = new URL(request.url()).pathname;
+    if (pathname.endsWith('/alarms') || pathname.endsWith('/work-orders')) {
+      alarmOrWorkOrderRequests.push(pathname);
+    }
+  });
+
+  await page.goto(`/overview?site=${SITE_ID}`);
+  await expect(page.getByTestId('real-protected-shell')).toBeVisible();
+  await page.waitForTimeout(400);
+  expect(alarmOrWorkOrderRequests).toEqual([]);
+});

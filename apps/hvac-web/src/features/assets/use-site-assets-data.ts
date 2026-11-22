@@ -36,14 +36,20 @@ export function useSiteAssetsData({ site, principal, runtime, currentRefetchInte
     [protectedGeneration, site.id, tenantId],
   );
 
-  useEffect(() => runtime.registerProtectedResource({
-    id: `site-assets:${protectedGeneration}:${site.id}`,
-    kind: 'query-cache',
-    purge: async () => {
-      await queryClient.cancelQueries({ queryKey: queryRoot });
-      queryClient.removeQueries({ queryKey: queryRoot });
-    },
-  }), [protectedGeneration, queryClient, queryRoot, runtime, site.id]);
+  useEffect(() => {
+    const scope = runtime.current().protectedScope;
+    if (!scope || scope.state !== 'idle' || scope.siteId !== site.id || scope.generation !== protectedGeneration) {
+      return undefined;
+    }
+    return runtime.registerProtectedResource({
+      id: `site-assets:${protectedGeneration}:${site.id}`,
+      kind: 'query-cache',
+      purge: async () => {
+        await queryClient.cancelQueries({ queryKey: queryRoot });
+        queryClient.removeQueries({ queryKey: queryRoot });
+      },
+    });
+  }, [protectedGeneration, queryClient, queryRoot, runtime, site.id]);
 
   const registry = useQuery({
     queryKey: assetsRegistryQueryKey(protectedGeneration, tenantId, site.id),

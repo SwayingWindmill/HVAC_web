@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { getRouteApi, useNavigate } from '@tanstack/react-router';
 import { CircleCheck, RefreshCw, Search, X } from 'lucide-react';
@@ -89,7 +89,7 @@ function SummaryCell({ label, value, caption, children, className }: {
   readonly className?: string;
 }) {
   return (
-    <div className={cn('flex min-w-0 flex-col justify-center gap-1 border-r border-divider px-5 py-3 last:border-r-0', className)}>
+    <div className={cn('flex min-w-0 flex-col justify-center gap-1 px-5 py-3 @3xl/main:border-r @3xl/main:border-divider @3xl/main:last:border-r-0', className)}>
       <span className="text-xs text-muted-foreground">{label}</span>
       {value !== undefined ? <span className="text-lg leading-6 font-semibold tracking-[-0.02em] tabular-nums">{value}</span> : null}
       {children}
@@ -114,9 +114,9 @@ function AlarmSummary({ alarms, days, timeZone, now, deviceNames, onDevice }: {
   const total = (row: (typeof daily)[number]) => SEVERITY_ORDER.reduce((sum, severity) => sum + row[severity], 0);
   const peak = Math.max(1, ...daily.map(total));
   const today = daily.at(-1);
-  if (!alarms) return <Skeleton className="h-[74px] rounded-xl" />;
+  if (!alarms) return <Skeleton className="h-[74px] shrink-0 rounded-xl" />;
   return (
-    <Panel aria-label="告警概况" className="grid grid-cols-[minmax(0,0.8fr)_minmax(0,1.4fr)_minmax(0,1.2fr)]">
+    <Panel aria-label="告警概况" className="grid shrink-0 grid-cols-1 divide-y divide-divider @3xl/main:grid-cols-[minmax(0,0.8fr)_minmax(0,1.4fr)_minmax(0,1.2fr)] @3xl/main:divide-y-0">
       <SummaryCell
         label="平均恢复时长"
         value={mttr === null ? '—' : formatSpan(mttr)}
@@ -159,6 +159,7 @@ function AlarmSummary({ alarms, days, timeZone, now, deviceNames, onDevice }: {
 }
 
 const INITIAL_ALARM_CURSOR: string | undefined = undefined;
+const FILTER_AUTO_PAGE_LIMIT = 10;
 
 export function AlarmsWorkspace() {
   const { site, principal } = siteRoute.useRouteContext();
@@ -172,7 +173,7 @@ export function AlarmsWorkspace() {
   const canReadGatewayShadow = principal.authorization.capabilities.includes('device.read');
   const canManageGatewayShadow = principal.authorization.capabilities.includes('device.write');
   const now = useNow(30_000);
-  const { acknowledge } = useAlarmActions();
+  const { acknowledge, canCreateWorkOrder } = useAlarmActions();
   const [searchDraft, setSearchDraft] = useState(search.q ?? '');
   const [creatingWorkOrder, setCreatingWorkOrder] = useState(false);
 
@@ -189,8 +190,11 @@ export function AlarmsWorkspace() {
     refetchInterval: REFRESH_MS,
   });
 
-  const setSearch = (patch: Partial<Omit<typeof search, 'site'>>) =>
-    void navigate({ search: (previous) => ({ ...previous, ...patch }), replace: true });
+  const setSearch = useCallback(
+    (patch: Partial<Omit<typeof search, 'site'>>) =>
+      void navigate({ search: (previous) => ({ ...previous, ...patch }), replace: true }),
+    [navigate],
+  );
   const commitQuery = useDebouncedCallback((q: string) => setSearch({ q: q || undefined }), 250);
 
   const loaded = useMemo(() => sortAlarmsForOperators(list.data?.pages.flatMap((page) => page.items) ?? []), [list.data]);
@@ -212,16 +216,31 @@ export function AlarmsWorkspace() {
   const selectedId = search.inspect ?? ordered[0]?.alarmId;
   const selected = ordered.find((alarm) => alarm.alarmId === selectedId);
 
-  // Severity, device and text filters run over loaded rows, so a filtered view reads every page first.
-  useEffect(() => {
-    if (filtered && list.hasNextPage && !list.isFetchingNextPage) void list.fetchNextPage();
-  }, [filtered, list]);
+  const loadedPages = list.data?.pages.length ?? 0;
+  const { hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage } = list;
 
-  // J / K move through the list, A acknowledges, C raises a work order; typing in a field is left alone.
+  // Severity, device and text filters run over loaded rows, capped so deep histories never loop unboundedly.
+  useEffect(() => {
+    if (filtered && hasNextPage && !isFetchingNextPage && !isFetchNextPageError && loadedPages < FILTER_AUTO_PAGE_LIMIT) {
+      void fetchNextPage();
+    }
+  }, [filtered, hasNextPage, isFetchingNextPage, isFetchNextPageError, loadedPages, fetchNextPage]);
+
+  // J / K move through the list, A acknowledges, C raises a work order; typing in a field or IME composition is left alone.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target instanceof Element ? event.target : null;
-      if (showingRules || event.metaKey || event.ctrlKey || event.altKey || target?.closest('input, textarea, [contenteditable], [role="dialog"]')) return;
+      if (
+        showingRules
+        || event.isComposing
+        || event.keyCode === 229
+        || event.metaKey
+        || event.ctrlKey
+        || event.altKey
+        || target?.closest('input, textarea, select, [contenteditable], [role="dialog"], [role="alertdialog"]')
+      ) {
+        return;
+      }
       const index = ordered.findIndex((alarm) => alarm.alarmId === selectedId);
       const key = event.key.toLowerCase();
       if ((key === 'j' || key === 'k') && ordered.length > 0) {
@@ -232,16 +251,17 @@ export function AlarmsWorkspace() {
       } else if (key === 'a' && selected && !selected.acknowledgement && !acknowledge.isPending) {
         event.preventDefault();
         acknowledge.mutate({ alarm: selected, comment: '' });
-      } else if (key === 'c' && selected) {
+      } else if (key === 'c' && selected && canCreateWorkOrder) {
         event.preventDefault();
         setCreatingWorkOrder(true);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  });
+  }, [showingRules, ordered, selectedId, selected, setSearch, acknowledge.isPending, acknowledge.mutate, canCreateWorkOrder]);
 
-  const readingMore = filtered && list.hasNextPage;
+  const readingMore = filtered && hasNextPage && !isFetchNextPageError && loadedPages < FILTER_AUTO_PAGE_LIMIT;
+  const reachedAutoPageCap = filtered && hasNextPage && !isFetchNextPageError && loadedPages >= FILTER_AUTO_PAGE_LIMIT;
   const counts: Partial<Record<AlarmView, number>> = active.data
     ? { active: activeItems.length, unack: unacknowledged.length, suppressed: suppressedItems.length }
     : {};
@@ -259,7 +279,7 @@ export function AlarmsWorkspace() {
         )}
       />
 
-      <Tabs value={showingRules ? 'rules' : 'alarms'} onValueChange={(value) => setSearch({ tab: value === 'rules' ? 'rules' : undefined })}>
+      <Tabs value={showingRules ? 'rules' : 'alarms'} className="shrink-0" onValueChange={(value) => setSearch({ tab: value === 'rules' ? 'rules' : undefined })}>
         <TabsList variant="line" className="h-9 w-full justify-start gap-5 rounded-none border-b p-0">
           <TabsTrigger value="alarms" className="h-9 flex-none gap-1.5 px-0 after:bottom-[-1px]!">告警记录</TabsTrigger>
           <TabsTrigger value="rules" className="h-9 flex-none gap-1.5 px-0 after:bottom-[-1px]!">
@@ -304,8 +324,8 @@ export function AlarmsWorkspace() {
           onDevice={(device) => setSearch({ device, view: 'all', inspect: undefined })}
         />
 
-        <Panel aria-label="告警处理" className="grid h-[calc(100svh-354px)] min-h-[520px] grid-cols-[420px_minmax(0,1fr)]">
-          <div className="flex min-h-0 flex-col border-r">
+        <Panel aria-label="告警处理" className="grid min-h-[520px] flex-1 grid-cols-1 @4xl/main:min-h-0 @4xl/main:grid-cols-[360px_minmax(0,1fr)] @6xl/main:grid-cols-[420px_minmax(0,1fr)]">
+          <div className="flex max-h-[420px] min-h-0 flex-col border-b @4xl/main:max-h-none @4xl/main:border-r @4xl/main:border-b-0">
             <ToggleGroup
               type="single"
               value={view}
@@ -425,8 +445,19 @@ export function AlarmsWorkspace() {
                 </ul>
               )}
               {readingMore && alarms.length > 0 ? <p className="px-4 py-3 text-xs text-muted-foreground">正在读取全部记录以完成筛选…</p> : null}
-              {list.hasNextPage && !readingMore ? (
-                <div className="flex justify-center p-3">
+              {list.isFetchNextPageError ? (
+                <div className="flex flex-col items-center gap-2 p-3">
+                  <p className="text-center text-xs text-destructive-text">加载更早告警失败</p>
+                  <Button variant="outline" size="sm" disabled={list.isFetchingNextPage} onClick={() => void list.fetchNextPage()}>
+                    {list.isFetchingNextPage ? '正在重试…' : '重试加载'}
+                  </Button>
+                </div>
+              ) : null}
+              {list.hasNextPage && !readingMore && !list.isFetchNextPageError ? (
+                <div className="flex flex-col items-center gap-2 p-3">
+                  {reachedAutoPageCap ? (
+                    <p className="text-center text-xs text-muted-foreground">已检索前 {loadedPages} 页，还有更早记录</p>
+                  ) : null}
                   <Button variant="outline" size="sm" disabled={list.isFetchingNextPage} onClick={() => void list.fetchNextPage()}>
                     {list.isFetchingNextPage ? '正在读取…' : '加载更早的告警'}
                   </Button>

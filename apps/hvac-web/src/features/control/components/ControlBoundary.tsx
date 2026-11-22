@@ -79,7 +79,7 @@ export function ControlModeBar({ state, lockCount, pendingCount, myId, timeZone,
 }) {
   const presentation = MODE_PRESENTATION[state.controlMode];
   return (
-    <Panel aria-label="控制方式" className={cn('grid grid-cols-1 items-start gap-x-6 gap-y-3 px-4 py-3.5 lg:grid-cols-[240px_minmax(0,1fr)_auto_auto] lg:items-center', BAR_TONE[state.controlMode])}>
+    <Panel aria-label="控制方式" className={cn('grid grid-cols-1 items-start gap-x-6 gap-y-3 px-4 py-3.5 @5xl/main:grid-cols-[240px_minmax(0,1fr)_auto_auto] @5xl/main:items-center', BAR_TONE[state.controlMode])}>
       <div className="flex flex-col">
         <span className="text-xs text-muted-foreground">控制方式</span>
         <span className="flex items-center gap-2 text-xl leading-7 font-semibold tracking-[-0.02em]">
@@ -90,14 +90,14 @@ export function ControlModeBar({ state, lockCount, pendingCount, myId, timeZone,
       <div className="flex min-w-0 flex-col gap-0.5">
         <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
           {state.updatedAt ? (
-            <span className="flex items-baseline gap-1.5 text-sm">
+            <span className="flex items-baseline gap-1.5 text-sm whitespace-nowrap">
               <span className="text-xs text-muted-foreground">设定</span>
               <span className="font-semibold">{controlActorLabel(state, myId)}</span>
               <span className="font-mono text-xs text-muted-foreground">{formatCompactTime(state.updatedAt, timeZone)}</span>
             </span>
           ) : null}
-          <span className="flex items-baseline gap-1.5 text-sm"><span className="text-xs text-muted-foreground">锁定设备</span><span className="font-semibold tabular-nums">{lockCount} 台</span></span>
-          <span className="flex items-baseline gap-1.5 text-sm"><span className="text-xs text-muted-foreground">待处理指令</span><span className="font-semibold tabular-nums">{pendingCount} 条</span></span>
+          <span className="flex items-baseline gap-1.5 text-sm whitespace-nowrap"><span className="text-xs text-muted-foreground">锁定设备</span><span className="font-semibold tabular-nums">{lockCount} 台</span></span>
+          <span className="flex items-baseline gap-1.5 text-sm whitespace-nowrap"><span className="text-xs text-muted-foreground">待处理指令</span><span className="font-semibold tabular-nums">{pendingCount} 条</span></span>
         </div>
         {state.reason ? <span className="truncate text-xs text-muted-foreground" title={state.reason}>原因：{state.reason}</span> : null}
         {state.activeMaintenanceWindow ? (

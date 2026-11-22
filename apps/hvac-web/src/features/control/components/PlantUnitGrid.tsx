@@ -45,7 +45,13 @@ export interface PlantContext {
 }
 
 const BUTTON_LABEL = { START: '启动', STOP: '停止', START_UNIT_SEQUENCE: '一键启动', STOP_UNIT_SEQUENCE: '一键停机', RESET_FAULT: '复位' } as const;
-const COLUMNS = ['grid-cols-1', 'grid-cols-1', 'grid-cols-2', 'grid-cols-3', 'grid-cols-4'] as const;
+const COLUMNS = [
+  'grid-cols-1',
+  'grid-cols-1',
+  'grid-cols-1 @xl/plant-grid:grid-cols-2',
+  'grid-cols-1 @xl/plant-grid:grid-cols-2 @4xl/plant-grid:grid-cols-3',
+  'grid-cols-1 @xl/plant-grid:grid-cols-2 @4xl/plant-grid:grid-cols-3 @6xl/plant-grid:grid-cols-4',
+] as const;
 
 const ICON = { START: Play, STOP: Square, START_UNIT_SEQUENCE: Play, STOP_UNIT_SEQUENCE: Square, RESET_FAULT: RotateCcw } as const;
 
@@ -210,7 +216,7 @@ function UnitColumn({ unit, context }: { readonly unit: PlantUnit; readonly cont
   const startOrder = [...members.map((member) => member.assetName), '主机'];
   const stopOrder = ['主机', ...[...members].reverse().map((member) => member.assetName)];
   return (
-    <section aria-label={chiller.assetName} className="flex min-w-0 flex-col gap-2.5 border-r border-divider px-3.5 pt-3.5 pb-2.5 last:border-r-0">
+    <section aria-label={chiller.assetName} className="flex min-w-0 flex-col gap-2.5 border-r border-b border-divider px-3.5 pt-3.5 pb-2.5">
       <header className="flex min-w-0 items-center gap-2">
         <h3 className="truncate text-title font-semibold">{chiller.assetName}</h3>
         {status ? <StatusBadge tone={status.tone} label={status.label} /> : <span className="text-xs text-muted-foreground">暂无实时数据</span>}
@@ -278,16 +284,18 @@ export function PlantUnitGrid({ units, others, context }: {
 }) {
   const columns = units.length + (others.length > 0 ? 1 : 0);
   return (
-    <div className={cn('grid', COLUMNS[Math.min(columns, 4)])}>
-      {units.map((unit) => <UnitColumn key={unit.chiller.assetId} unit={unit} context={context} />)}
-      {others.length > 0 ? (
-        <section aria-label="其他设备" className="flex min-w-0 flex-col gap-2.5 border-r border-divider px-3.5 pt-3.5 pb-2.5 last:border-r-0">
-          <header className="flex h-5 items-center"><h3 className="text-title font-semibold">{units.length > 0 ? '其他设备' : '设备'}</h3></header>
-          <div className="flex flex-col border-t border-divider">
-            {others.map((target) => <DeviceRow key={target.assetId} target={target} label={target.assetName} context={context} />)}
-          </div>
-        </section>
-      ) : null}
+    <div className="@container/plant-grid overflow-hidden">
+      <div className={cn('-mr-px -mb-px grid', COLUMNS[Math.min(columns, 4)])}>
+        {units.map((unit) => <UnitColumn key={unit.chiller.assetId} unit={unit} context={context} />)}
+        {others.length > 0 ? (
+          <section aria-label="其他设备" className="flex min-w-0 flex-col gap-2.5 border-r border-b border-divider px-3.5 pt-3.5 pb-2.5">
+            <header className="flex h-5 items-center"><h3 className="text-title font-semibold">{units.length > 0 ? '其他设备' : '设备'}</h3></header>
+            <div className="flex flex-col border-t border-divider">
+              {others.map((target) => <DeviceRow key={target.assetId} target={target} label={target.assetName} context={context} />)}
+            </div>
+          </section>
+        ) : null}
+      </div>
     </div>
   );
 }
