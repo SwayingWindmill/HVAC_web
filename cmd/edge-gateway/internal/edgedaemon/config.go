@@ -70,6 +70,8 @@ type Config struct {
 	MQTTBrokerURL             string                            `json:"mqttBrokerUrl,omitempty"`
 	ServerName                string                            `json:"serverName,omitempty"`
 	CAFile                    string                            `json:"caFile,omitempty"`
+	MQTTServerName            string                            `json:"mqttServerName,omitempty"`
+	MQTTCAFile                string                            `json:"mqttCaFile,omitempty"`
 	CertFile                  string                            `json:"certFile,omitempty"`
 	KeyFile                   string                            `json:"keyFile,omitempty"`
 	HealthListenAddr          string                            `json:"healthListenAddr,omitempty"`

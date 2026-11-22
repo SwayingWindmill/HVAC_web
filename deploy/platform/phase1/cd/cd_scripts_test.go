@@ -2102,9 +2102,12 @@ func TestApplyBuildsConnectivityWithNonRootSpoolDir(t *testing.T) {
 	if !strings.Contains(connDF, "COPY --chown=65532:65532 spool /var/lib/hvac/connectivity-spool") {
 		t.Fatalf("connectivity Dockerfile missing non-root spool dir copy:\n%s", connDF)
 	}
+	if !strings.Contains(connDF, "COPY --chown=65532:65532 ota-packages /var/lib/hvac/ota-packages") {
+		t.Fatalf("connectivity Dockerfile missing non-root ota-packages dir copy:\n%s", connDF)
+	}
 	apiDF := string(mustRead(t, filepath.Join(store, "dockerfiles", "hvac_energy-api_candidate-20261121T030000Z")))
-	if strings.Contains(apiDF, "connectivity-spool") {
-		t.Fatalf("non-connectivity Go service must not copy connectivity-spool:\n%s", apiDF)
+	if strings.Contains(apiDF, "connectivity-spool") || strings.Contains(apiDF, "ota-packages") {
+		t.Fatalf("non-connectivity Go service must not copy connectivity dirs:\n%s", apiDF)
 	}
 }
 
@@ -2132,10 +2135,12 @@ fi
 				t.Fatalf("deploy.sh: %v\n%s", err, output)
 			}
 			calls := string(mustRead(t, log))
-			wantCmd := "docker run --rm --user 0 --entrypoint chown -v hvac-platform_connectivity-spool:/data postgres:16.4-bookworm -R 65532:65532 /data"
-			gotChown := strings.Contains(calls, wantCmd)
-			if gotChown != tc.wantChown {
-				t.Fatalf("connectivity-spool chown = %v, want %v\ncalls:\n%s", gotChown, tc.wantChown, calls)
+			for _, vol := range []string{"hvac-platform_connectivity-spool", "hvac-platform_connectivity-ota-packages"} {
+				wantCmd := "docker run --rm --user 0 --entrypoint chown -v " + vol + ":/data postgres:16.4-bookworm -R 65532:65532 /data"
+				gotChown := strings.Contains(calls, wantCmd)
+				if gotChown != tc.wantChown {
+					t.Fatalf("%s chown = %v, want %v\ncalls:\n%s", vol, gotChown, tc.wantChown, calls)
+				}
 			}
 		})
 	}

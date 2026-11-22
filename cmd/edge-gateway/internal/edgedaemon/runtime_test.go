@@ -175,3 +175,43 @@ func TestDaemonCycleHealthEndpointSpoolAndShadowUpdate(t *testing.T) {
 		t.Fatalf("Daemon.Run exit error: %v", err)
 	}
 }
+
+func TestBuildMQTTTLSConfigOverrideAndFallback(t *testing.T) {
+	override := buildMQTTTLSConfig(Config{
+		ServerName:     "hvac.example.com",
+		CAFile:         "/etc/ssl/certs/ca-certificates.crt",
+		MQTTServerName: "mqtt-broker",
+		MQTTCAFile:     "/root/hvac-platform/broker-ca.crt",
+		CertFile:       "/root/hvac-platform/gateway.crt",
+		KeyFile:        "/root/hvac-platform/gateway.key",
+	})
+	if override == nil {
+		t.Fatal("expected non-nil MQTT TLS config")
+	}
+	if override.CACertFile != "/root/hvac-platform/broker-ca.crt" || override.ServerName != "mqtt-broker" {
+		t.Fatalf("unexpected override TLS config: %+v", override)
+	}
+
+	fallback := buildMQTTTLSConfig(Config{
+		ServerName: "127.0.0.1",
+		CAFile:     "/tmp/ca.crt",
+		CertFile:   "/tmp/client.crt",
+		KeyFile:    "/tmp/client.key",
+	})
+	if fallback == nil {
+		t.Fatal("expected non-nil fallback MQTT TLS config")
+	}
+	if fallback.CACertFile != "/tmp/ca.crt" || fallback.ServerName != "127.0.0.1" {
+		t.Fatalf("unexpected fallback TLS config: %+v", fallback)
+	}
+
+	onlyMQTTCA := buildMQTTTLSConfig(Config{
+		MQTTServerName: "mqtt-broker",
+		MQTTCAFile:     "/tmp/broker-ca.crt",
+		CertFile:       "/tmp/client.crt",
+		KeyFile:        "/tmp/client.key",
+	})
+	if onlyMQTTCA == nil || onlyMQTTCA.CACertFile != "/tmp/broker-ca.crt" || onlyMQTTCA.ServerName != "mqtt-broker" {
+		t.Fatalf("expected mqttCaFile alone to build TLS config, got %+v", onlyMQTTCA)
+	}
+}
