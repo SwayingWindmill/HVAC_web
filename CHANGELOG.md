@@ -5,6 +5,92 @@
 
 ## 未发布
 
+### 2026-11-22
+
+#### 新增
+
+- 新增面向 Linux 边缘网关的独立守护进程 `cmd/edge-gateway` 与 ARMv7/`systemd`/容器部署模板，集成 `libs/edgecontrol`、共享串口总线 Modbus RTU/TCP（预留 BACnet 桥接扩展点）、分级磁盘断点续传队列、配置影子热更新、14 天证书自动续签、受控反向隧道客户端与支持断点续传/SHA-256/Ed25519 校验及启动自检自动回滚的 A/B OTA 代理；同时修复 `modules/connectivity/pkg/tunnel` 收到 `FrameOpenErr` 时 `Stream.resolveOpen` 递归调用 `sync.Once` 导致的会话读循环死锁。
+- 为现场网关反向隧道新增可选、仅绑定服务端本机回环的受控 SSH 运维通道（`CONNECTIVITY_TUNNEL_SSH_LOOPBACK_ADDR` 设为 `127.0.0.1:18822` 时生效，默认关闭），双端严格限制端口白名单并记录到 `gateway_tunnel_audit_events` 审计表，同时补充 `systemd` 按需启停模板。
+- 设备接入服务新增边端 OTA 升级包存储、Ed25519 签名校验、站点与设备标签筛选、`mTLS` 断点续传（HTTP `Range` `206`）、灰度放量与失败率熔断编排，以及 MQTT `down/ota` / `up/ota` 状态同步。
+- 平台网关 `energy-api` 与 OpenAPI 契约新增 `/api/v1/ota/packages` 与 `/api/v1/ota/campaigns` 等读写接口，并同步配置 Nginx 64 MiB 上传与 300 秒网关升级包下载代理超时。
+- **集成管理新增边缘网关 OTA 升级控制台（`?view=ota`）**：支持上传 64 MiB 以内 Linux 边缘程序及固件安装包（自动校验或生成 Ed25519 签名与 SHA-256）、按站点与标签筛选网关发起灰度发布、查看每台设备升级进度与异常说明，并在触发失败率自动熔断后执行暂停、继续放量或紧急回滚操作。
+- 新增告警规则流式时间窗口统计聚合条件（`WINDOW` 规则类型与 `WINDOW_AGG` 条件），支持滑动窗口（`SLIDING`）与滚动窗口（`TUMBLING`）下的平均值、最小值、最大值、求和、样本计数、标准差及 `P95`/`P99` 分位数评估，并配备防重复采样签名去重与单通道有界环形样本缓冲。
+- 新增云边统一规则中间表示（`libs/edgecontrol`）与站点边缘编译接口（`POST /api/v1/alarm-rules/compile-edge`），支持按 `executionTarget`（`CLOUD` / `EDGE` / `CLOUD_AND_EDGE`）与准入校验（条件类型、保护动作与上游 DAG 依赖）自动生成带 SHA-256 摘要校验的 `EdgeRuleBundle`，并将 `edgeRuleBundle` 接入网关云边配置影子（`config_shadow.go` 与 `gateway-shadow-edge-rules.sql` 迁移）。
+- 升级网关模拟器边缘运行态（`tools/eg8200-simulator`），在优先级 15 槽位启用边缘规则仲裁执行（严格低于优先级 10 硬件保护限值、高于优先级 50 断网自主控制与优先级 100 云端指令），支持断网期间本地规则评估、设备保护动作触发以及离网告警事实暂存重连续传；并在控制台新增流式窗口编辑器、执行位置标记与「边缘编译下发」工作流。
+
+#### 改进
+
+- 为网站配置异常、全局出错与登录状态失效页面补齐卡片与按钮样式，替换未生效的旧样式类。
+- 修复能耗分析与电费预算在缺少计量数据时显示 `¥0`、全零分时进度或 `--` 的问题，统一显示为 `—` 或空状态。
+- 将告警规则条件、规则试算、倍率点位选择和辅助回路优化建议中的英文点位名与英文说明转换为简体中文。
+- 修复按钮指针手势、脉冲动画的减弱动态效果偏好、主题切换持久化防闪烁、`--subtle-foreground` 双主题对比度（WCAG AA）以及少时段柱状图过宽的问题，并精简能耗、账单、优化与告警规则页的冗余说明文字。
+
+#### 修复
+
+- 减少登录会话状态、实时连接状态或页面作用域变化时不必要的整页路由重校验。
+- 侧栏、顶栏与总览待办面板的告警、工单和运行控制查询改为按当前账号权限按需发起，在控制入口直接显示待审批或待确认的实时数量，点击系统管理、站点对标或集成管理时不再保留 `?site=` 参数。
+- 限制告警筛选自动翻页深度并提供加载失败重试与手动继续加载按钮，修复告警快捷键监听在输入法选词期间误触及每帧重绑问题。
+- 为告警总控台、运行控制工作台与机组栅格补齐容器宽度自适应排版，避免打开 AI 助手侧栏或窄窗下出现内容挤压和横向溢出。
+
+### 2026-11-21
+
+#### 新增
+
+- 持久化优化建议的多回路协同目标并在发布打包流程纳管外部 Python 优化服务：在 `core_registry.optimization_recommendations` 新增 `auxiliary_targets` 数组字段并在服务读写中完整落库；在网页「当前建议」页面条件展示「协同变频与风机建议」面板，呈现冷冻水泵、冷却水泵与冷却塔风机建议目标；同时将 `ai-solver-service`（`python` / `optional`）接入 `deploy/platform/phase1/cd/` 发布清单与增量打包脚本。
+- 新增冷机启动前电动蝶阀开度与水流开关水路硬联锁拦截：当站点资产模型为冷机、其水路关联阀门或供水泵配置了蝶阀状态/开度或水流开关实时点位时，冷机启动前必须基于新鲜有效遥测确认蝶阀开启（状态开启或开度 ≥ 80%）且水流开关导通，未满足或遥测失鲜/离线时故障闭锁拦截（`409 CHILLER_HYDRAULIC_INTERLOCK_NOT_PROVEN`）。
+- 支持逻辑设备现场换机换表并保持历史用能、趋势曲线、点位与告警连续（#913）：新增 `device-hardware-replacements.sql` 迁移与 `POST /api/v1/sites/{siteId}/devices/{deviceId}/replace-hardware` 接口，事务性轮换设备外部序列号、通信地址与 `gateway_device_source_keys` 映射并写入审计记录；Web「系统管理 / 设备与点位登记」设备列表新增「更换硬件」操作弹窗。
+- 为微信小程序端新增站点自动控制租约状态与人工退避保护提示横幅，并增加外部 Python 算法服务离线校准与标定参数加载能力：
+  - 小程序「运行」实时视图与「设备详情」应急手调区并行拉取 `/api/v1/sites/:siteId/optimization/auto-control-lease`，自动展示「AI 自动托管中」「影子跟跑中」或优先级更高的「人工退避保护中」窗口与边界；
+  - `services/ai-solver-service` 新增 `python3 -m ai_solver.trainer` 离线标定命令行，可直接消费负样本 `.jsonl` 数据生成带硬边界钳位的参数文件并通过 `AI_SOLVER_PROFILE_PATH` 注入求解器（`/readyz` 上报当前加载的 `calibrationProfileId`）。
+- 补齐 MQTT Broker（Eclipse Mosquitto 2.1.2）网关证书吊销列表（CRL）校验与在线连接实时踢连闭环：新增 `mosquitto_hvac_crl.so` 插件支持双 CA 隔离、验签后切换、按证书指纹精准踢连与 1 秒文件轮询兜底；`connectivity` 在启动、吊销、`SharedSession` 重连与每 6 小时刷新时原子写出 CRL 并通过 `$CONTROL/hvac-crl/v1` 触发即时踢连；同步打通本地环境、生产零拉取发布及双 CA 集成测试。
+- 新增冷机停机水泵延时散热保护与多回路变频闭环安全调控：在冷机停机后 5 分钟内自动拦截对应冷冻水泵/冷却水泵停机指令；自动控制租约扩展水泵频率 (`SET_FREQUENCY`) 与冷却塔风机转速 (`SET_FAN_SPEED`) 独立上下限、单步限幅、防抖死区与影子试运行/自动回退监控，并在网页端提供按能力条件展开的变频边界配置与分回路多单位（`°C` / `Hz` / `%`）执行监护展示。
+- 新增站点控制回路灰度路由管理与安全护栏负样本明细排查导出工作流：支持按站点及控制回路（全冷站主回路、冷冻泵/冷却泵变频回路、冷却塔风机回路）查询、设置或一键切回默认策略，服务端严格校验外部求解服务白名单主机与控制权限；网页端「模型与负荷分析」页新增「管理灰度路由」弹窗与「查看负样本明细」侧栏抽屉，支持按类别与时间窗口筛选、展开逐级护栏判定轨迹与采集快照，并一键导出 `.jsonl` 离线纠偏数据集。
+- 为站点告警规则新增因果依赖 DAG 拓扑画布与在线编排工作台（`AlarmRuleDagCanvas`、`AlarmRuleEditorSheet`、`AlarmRuleConditionEditor`），支持规则新建、阈值/斜率/回差/多点表达式与联动动作编辑、未发布草稿实时试算，以及变更差异预检和一键热发布。
+- 为网关与告警模块新增 `PUT /api/v1/alarm-rules`、`POST /api/v1/alarm-rules/diff`、`GET /api/v1/alarm-rules/revisions` 与 `POST /api/v1/alarm-rules/revisions/{revision}/rollback` 接口及 `alarm_runtime.site_rule_bundle_revision` 不可变版本账本，采用站点顾问锁与乐观锁版本号（`409 Conflict`）并发控制，保留未改动规则的持续计时与采样状态并在规避回退时清理停用规则残留计时。
+- 为遥测告警计算引擎新增无锁 `atomic.Pointer` 站点规则快照缓存（`siteRuleCache`），并登记 `hvac_alarm_rule_publishes_total` 发布结果指标。
+- 补齐规则引擎与场景告警收尾闭环能力（覆盖 `modules/command`、`modules/alarm`、`modules/registry`、`services/notification-service`、`cmd/energy-api`、`apps/hvac-web` 与迁移 `control-alarm-dead-letter-inspect.sql`、`alarm-rule-action-outbox.sql`）：
+  - **设备级控制优先级锁与控制告警死信重投**：新增设备优先级锁定与解除接口，控制中心主机卡片展示实时锁定分级与到期倒计时，并支持在右滑抽屉中查看控制告警投递死信及按条幂等重投。
+  - **规则前置依赖门控、级联重算与联动动作死信**：告警规则支持前置规则依赖门控与下游级联重算；新增规则联动动作发件箱（自动创建工单、按控制优先级路径下发保护指令、经 SSRF 与密钥目录校验的外部回调）以及规则死信查询与幂等重投面板。
+  - **站点通知路由配置热重载与分组摘要**：支持从文件系统热加载站点分级通知路由及脱敏摘要查看，告警工作台展示通知路由状态、分组升级路径、中文路由名称与中文化仿真联动计划。
+- 在电费账单页新增「计量与日历配置」标签页，支持站点节假日与特殊调休日历的查询、新增/修改与删除，以及按测点分时段管理 CT/PT 互感器变比、附加乘数、应用层级、计量单位、生效区间重叠校验（409 提示）和终止生效操作，变更保存后自动将重算任务加入后台队列。
+- 在能耗分析页新增「异常清洗留痕」标签页（`/api/v1/sites/{siteId}/accounting/counter-audit`），基于 `telemetry_history.observations` 与累计表计清洗规则展示零值通信干扰、单步飞值尖峰、异常回退、换表归零和满量程翻转样本的前值、现值、清洗增量（kWh）及质量原因码。
+
+#### 改进
+
+- 将 Python `ai-solver-service` 单元测试纳入 CI `analytics` 门禁与部署环境变量配置，并在网页端「协同变频与风机建议」卡片增加按站点可写点位逐回路下发确认与指令追踪入口。
+- 补齐设备接入与下发控制网关的安全性、多租户调度与配置影子闭环能力（涉及 `modules/connectivity`、`modules/command`、`modules/registry`、`libs/commandmodel`、`libs/edgecontrol`、`cmd/connectivity`、`tools/eg8200-simulator`、`edge/node-red/`、`deploy/platform/phase1/nginx/`、`infra/telemetry/mqtt/` 与迁移 `command-due-work-tenants.sql`）：
+  - **MQTT 接入限流与最小权限收口**：在 `infra/telemetry/mqtt/mosquitto.conf` 配置单机最大连接数 `2048`、保活上限 `120` 秒、单连接在途消息上限 `32` 与系统日志主题输出；在 `infra/telemetry/mqtt/acl` 收紧 `mqtt-telemetry-adapter` 的订阅范围，移除控制回复主题 `hvac/v1/+/up/reply` 读权限并新增配置影子同步主题 `down/shadow`（写）与 `up/shadow`（读）及 `$SYS/broker/log/N`（读）。
+  - **代理断线通知、独立可选 mTLS 检查网关与客户端持有证明**：`modules/connectivity/pkg/adapter/broker_log.go` 解析 `$SYS/broker/log/N` 断线通知联动触发网关离线与超时清理；新增可选 `mqttguard` 检查服务（`CONNECTIVITY_MQTT_GUARD_ADDR`）向边缘网关签发并强制校验短暂上游凭证、在吊销证书时立即断开旧连接；`deploy/platform/phase1/nginx/nginx.conf`、`cert_pop.go`、`eg8200-simulator` 与 `edge/node-red/` 增加 `X-Gateway-Cert-Pop-*` 请求签名与防重放校验，并收紧 Nginx 代理头校验。
+  - **多租户控制指令唤醒与解耦执行池**：`modules/command` 与 `cmd/connectivity` 改用轻量租户发现视图与即时通知信号替代固定租户轮询，将指令下发线程池（`16` 并发）与读后核对线程池（`8` 并发）拆分解耦，并在 `mqttconnector` 中打通全链路 `Tracer` 追踪片段。
+  - **版本前向兼容、强类型元信息与模板自动生成影子驱动**：上行编解码对 `schemaVersion: "2.0"` 维持严格字段检查，同时放行 `2.1` 及以上小版本的未知扩展字段；用 `commandmodel.ParseCommandPointMetadata*` 与 `edgecontrol.ParseEdgePointSourceMetadata` 替代多处原始字典类型断言；模板激活支持将 `modbusDriver` 随 `registry.template-assignment.changed` 与 `registry.binding.rebound` 异步写入目标网关的期望配置影子（未变更不递增修订号）。
+  - **配置影子 MQTT 双向同步**：定义遵循 `edge-replication-envelope.v1.schema.json` 的 `CHANGE_BATCH`（`hvac/v1/{gatewayId}/down/shadow`）与 `CHANGE_ACK`（`hvac/v1/{gatewayId}/up/shadow`）报文及 `hvac_mqtt_shadow_replication_total` 监控指标；接入服务在期望配置更新后主动下发同步通知并在收到边缘结果后记录在线与指标，模拟器同步订阅下发主题完成校验、应用与结果上报。
+
+#### 修复
+
+- 修复 ClickHouse `025-clickhouse-complete-governance.sql` 在大规模历史遥测数据下回填 `observations_v2` 触发 1 GiB 内存上限（`MEMORY_LIMIT_EXCEEDED`）的问题：将 `DROP VIEW` 延后至 `EXCHANGE TABLES` 之前，并为 `INSERT INTO ... SELECT` 追加单线程低内存块与外部排序参数，避免已有千万级遥测库执行 `025` 迁移中断。
+- 收口 ClickHouse 全链路存储治理、冷归档保留期与 Native TCP 批量写入（覆盖 `infra/telemetry/clickhouse/init/025-clickhouse-complete-governance.sql`、`modules/telemetry`、`modules/metric`、`services/settlement-service`、`cmd/telemetry-worker`、`cmd/metric-worker`、`deploy/platform/phase1/` 与 `scripts/`）：
+  - **淘汰指标行级 `DELETE` 变更并补齐全表分区 TTL**：下线 `metric` 模块运行期逐行 `ALTER TABLE ... DELETE`（仅保留 PostgreSQL 清理墓碑标记），回收 `metric_engine_writer`/`metric_engine_runtime` 的 `ALTER DELETE` 权限，将 `analytics.metric_result_facts` 统一纳入 `ClickHouseRetentionPruner`（9 张保留清理表）与 `ColdArchiveExporter`（3 张先导出校验后清理表，默认 1825 天）并向 `analytics` 全部分区表补齐 `ttl_only_drop_parts = 1` 1825 天整块清理 TTL。
+  - **`observations` 升级 `ReplacingMergeTree` 与设备前置排序键**：通过原子 `EXCHANGE TABLES` 将 `telemetry_history.observations` 重建为 `ReplacingMergeTree(received_at)`、排序键改为 `(tenant_id, site_id, device_id, telemetry_key, point_id, sensor_id, sampled_at)` 并压缩 `unit` 为 `LowCardinality(Nullable(String))`，同步保持物化视图与计数器视图 `Nullable(String)` 兼容；在 `analytics.metric_result_facts` 新增 `metric_binding_id_bf` 跳数索引，并让 `settlement-service` 查询自动带入主键前导列 `metric_id`。
+  - **支持 ClickHouse Native TCP `PrepareBatch` 列式写入**：引入 `github.com/ClickHouse/clickhouse-go/v2` 实现 `ClickHouseNativeHistorySink`（`:9000` 列式二进制批量写入 + LZ4 压缩 + 确定性 `insert_deduplication_token` + `Code: 252` `TOO_MANY_PARTS` 退避），配置 `TELEMETRY_CLICKHOUSE_NATIVE_ADDR`（可选 `TELEMETRY_CLICKHOUSE_CA`）即可在 `telemetry-worker` 与 `telemetry-history-projector` 启用，未配置时保持平滑回退 HTTP `JSONEachRow` 并补齐 Docker `:9000` 集成回归测试。
+- 优化 ClickHouse `telemetry_history.counter_deltas_from` 视图为单遍线性扫描（避免多次自连接导致的 25 次基表扫描、内存激增与查询超时堆积），并补全 `analytics.energy_hourly_states` 只读权限以消除工况锚点投影 `Code: 497` 鉴权报错。
+- 在 ClickHouse 默认查询配置开启 `cancel_http_readonly_queries_on_client_close=1` 并在能耗 ClickHouse 读取客户端去重 `tenants`/`sites`/`points` 过滤数组，防止客户端超时断开后查询在服务端残留堆积。
+- 加固生产发布脚本中 `connectivity-spool` 命名卷及镜像层 `65532:65532` 权限，并自动检测 ClickHouse 单文件挂载 XML（如 `query-log-profile.xml`）的 inode 漂移并按需重建容器使配置生效。
+- 为 ClickHouse `025-clickhouse-complete-governance.sql` 补登记 PR #937 之前的线上等价校验和（`f3fd1233...`），避免已应用旧版 `025` 的生产服务器在部署包含 `#937` 的版本时因哈希漂移中止迁移；同时将 `clickhouse-migration-list.tsv` 纳入 `npm run migrations:freeze:check` 冻结门禁，拦截后续原地修改已注册 ClickHouse 迁移文件。
+- 自动开启 Phase 1 本机 ClickHouse Native TCP 批量写入并补充部署失败容器日志诊断（覆盖 `scripts/phase1-deployment-tier.ts`、`deploy/platform/phase1/` 与 `modules/telemetry`）：
+  - **本机模式默认开启 `:9000` Native TCP**：`resolvePhase1ClickHouseNativeAddr` 在 `PHASE1_CLICKHOUSE_MODE=local` 且未显式关闭时默认注入 `clickhouse:9000`（支持设置 `PHASE1_CLICKHOUSE_NATIVE_ADDR=off` 平滑回退 HTTP `JSONEachRow`），外部模式保持显式配置后再启用；`compose.yaml` 为 `telemetry-worker` 补齐 `TELEMETRY_CLICKHOUSE_NATIVE_ADDR`、`TELEMETRY_CLICKHOUSE_CA` 与 `TELEMETRY_CLICKHOUSE_PASSWORD` 透传，并在 `modules/telemetry` 集成测试中改用最小权限写角色 `telemetry_history_writer` 直连 `:9000` 验证 `PrepareBatch`。
+  - **`deploy.sh` 增加启动失败容器日志诊断**：Compose 拉起失败时自动打印核心服务状态及异常容器最近 60 行日志，便于快速定位启动失败原因。
+- 为 `deploy/platform/phase1/nginx/nginx.conf` 中含 `{8}` 等量词的 UUIDv7 网关客户端证书正则加上双引号，修复 Nginx 启动报 `unexpected "{"` 导致生产发布冒烟 502 回滚的问题，并在 `deployment:phase1:check` 增加未加引号 `{...}` 正则的静态拦截。
+- 修复能耗分析空态图表报错、月度报告无数据空态提示与本地调试启动体验问题：
+  - **能耗流向空态防护**：在 `EnergyDestination` 的 `EnergyFlow` / `FlowNodeShape` 增加有限坐标守卫并在无流向链路时显示「所选时段暂无设备用电流向数据」，消除无数据日触发的 Recharts `<text x="NaN">` 控制台报错。
+  - **月度报告骨架屏与空月提示**：为 `MonthlyReport` 与 `LiveMonthlyReport` 补充贴合纸面报告结构的加载骨架卡片；无计量数据时展示「所选月份暂无计量数据，待冷站表计读数接入后自动汇总。」状态提示，并在 `EnergyTrend` 无数据时展示空态说明而非空白图表。
+  - **本地 `command` mTLS 与 AI 服务条件启动**：为 `command-service` 身份补齐 `serverAuth,clientAuth` 双用途扩展并纳入 `issue-workload-identities.mjs`；本地 `local:up` 检测到未配置 `DEEPSEEK_API_KEY` 时自动跳过启动 `operations-agent-service`，避免无密钥时容器循环重启。
+
+### 2026-11-20
+
+#### 改进
+
+- 更新记录改为 `changelog.d/` 独立碎片文件模式：每个 PR 新增独立碎片文件并由 `npm run repo:check` 与 `npm run changelog:check` 校验格式及防直改规则，汇总发布时通过 `npm run changelog:release` 自动归并进 `CHANGELOG.md`，消除并行 PR 的高频合并冲突。
+
 ### 2026-11-19
 
 #### 新增与架构演进
