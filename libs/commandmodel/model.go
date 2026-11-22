@@ -349,12 +349,16 @@ type EdgeConstraintEvidence struct {
 }
 
 type EdgeExecutionEvidence struct {
-	Requested          ScalarValue              `json:"requested"`
-	Effective          *ScalarValue             `json:"effective,omitempty"`
-	Applied            *ScalarValue             `json:"applied,omitempty"`
-	Constraints        []EdgeConstraintEvidence `json:"constraints,omitempty"`
-	WinnerControllerID string                   `json:"winnerControllerId"`
-	Cycle              uint64                   `json:"cycle"`
+	Requested             ScalarValue              `json:"requested"`
+	Effective             *ScalarValue             `json:"effective,omitempty"`
+	Applied               *ScalarValue             `json:"applied,omitempty"`
+	Readback              *ScalarValue             `json:"readback,omitempty"`
+	LocalReadbackVerified *bool                    `json:"localReadbackVerified,omitempty"`
+	LocalReadbackAt       *int64                   `json:"localReadbackAt,omitempty"`
+	Constraints           []EdgeConstraintEvidence `json:"constraints,omitempty"`
+	WinnerControllerID    string                   `json:"winnerControllerId"`
+	Cycle                 uint64                   `json:"cycle"`
+	LeaseExpiresAt        *int64                   `json:"leaseExpiresAt,omitempty"`
 }
 
 func (e EdgeExecutionEvidence) Valid() bool {
@@ -365,6 +369,15 @@ func (e EdgeExecutionEvidence) Valid() bool {
 		return false
 	}
 	if e.Applied != nil && !e.Applied.Valid() {
+		return false
+	}
+	if e.Readback != nil && !e.Readback.Valid() {
+		return false
+	}
+	if e.LocalReadbackAt != nil && *e.LocalReadbackAt <= 0 {
+		return false
+	}
+	if e.LeaseExpiresAt != nil && *e.LeaseExpiresAt <= 0 {
 		return false
 	}
 	for _, constraint := range e.Constraints {

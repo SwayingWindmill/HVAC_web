@@ -17,6 +17,7 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/commandauth"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 )
 
 // MemoryAuthorityStore adapts the in-memory Service state machine to both AuthorityStore
@@ -711,6 +712,9 @@ func (f *FakePlantTwin) GetDispatchContext(_ context.Context, tenantID, siteID, 
 		}
 		for _, pt := range model.TelemetryPoints {
 			if pt.ID == pointID && pt.ReportingDeviceID == deviceID {
+				if _, protected := edgecontrol.ClassifyHardRealtimeProtection(pt.PointCode, "", pt.SourceMetadata); protected {
+					out.SafetyBoundary = string(edgecontrol.SafetyBoundaryHardRealtime)
+				}
 				if meta, err := commandmodel.ParseCommandPointMetadata(pt.SourceMetadata); err == nil {
 					if meta.ActuationMode != "" {
 						out.ActuationMode = meta.ActuationMode

@@ -70,6 +70,9 @@ func (plan *ControlPlan) Deny(address, controllerID, reason string) (bool, error
 	if err != nil {
 		return false, err
 	}
+	if IsHardRealtimeChannel(descriptor) {
+		return false, fmt.Errorf("%w: channel %s", ErrHardRealtimeSafetyBoundary, address)
+	}
 	if !writable(descriptor) {
 		return false, fmt.Errorf("channel %s is read-only", address)
 	}
@@ -91,6 +94,9 @@ func (plan *ControlPlan) ConstrainNumber(address, controllerID, reason string, m
 	state, descriptor, err := plan.target(address)
 	if err != nil {
 		return false, err
+	}
+	if IsHardRealtimeChannel(descriptor) {
+		return false, fmt.Errorf("%w: channel %s", ErrHardRealtimeSafetyBoundary, address)
 	}
 	if !writable(descriptor) {
 		return false, fmt.Errorf("channel %s is read-only", address)
@@ -146,6 +152,9 @@ func (plan *ControlPlan) Request(address, controllerID string, requested Value) 
 	state, descriptor, err := plan.target(address)
 	if err != nil {
 		return Decision{}, false, err
+	}
+	if IsHardRealtimeChannel(descriptor) {
+		return Decision{}, false, fmt.Errorf("%w: channel %s", ErrHardRealtimeSafetyBoundary, address)
 	}
 	if !writable(descriptor) {
 		return Decision{}, false, fmt.Errorf("channel %s is read-only", address)

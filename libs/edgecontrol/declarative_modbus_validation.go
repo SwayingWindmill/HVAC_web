@@ -16,6 +16,7 @@ import (
 type ModbusRegisterInput struct {
 	PointCode         string            `json:"pointCode"`
 	SemanticChannel   string            `json:"semanticChannel,omitempty"`
+	SafetyBoundary    string            `json:"safetyBoundary,omitempty"`
 	FunctionCode      int               `json:"functionCode"`
 	WriteFunctionCode *int              `json:"writeFunctionCode,omitempty"`
 	Address           int               `json:"address"`
@@ -105,6 +106,7 @@ func (profile DeclarativeModbusProfile) validateWithTransport(hasExternalTranspo
 		input.Registers[i] = ModbusRegisterInput{
 			PointCode:         spec.PointCode,
 			SemanticChannel:   string(spec.SemanticChannel),
+			SafetyBoundary:    string(spec.SafetyBoundary),
 			FunctionCode:      int(spec.FunctionCode),
 			WriteFunctionCode: writeFC,
 			Address:           int(spec.Address),
@@ -283,6 +285,10 @@ func validateRegisterInput(reg ModbusRegisterInput) (ModbusRegisterSpec, error) 
 		}
 		semantic = SemanticChannel(trimmed)
 	}
+	safetyBoundary := SafetyBoundaryClass(strings.ToUpper(strings.TrimSpace(reg.SafetyBoundary)))
+	if !ValidSafetyBoundaryClass(safetyBoundary) {
+		return ModbusRegisterSpec{}, fmt.Errorf("unsupported safetyBoundary %q", reg.SafetyBoundary)
+	}
 	if reg.FunctionCode != int(ModbusFunctionReadHoldingRegisters) && reg.FunctionCode != int(ModbusFunctionReadInputRegisters) {
 		return ModbusRegisterSpec{}, fmt.Errorf("unsupported read functionCode %d", reg.FunctionCode)
 	}
@@ -295,6 +301,15 @@ func validateRegisterInput(reg ModbusRegisterInput) (ModbusRegisterSpec, error) 
 			return ModbusRegisterSpec{}, errors.New("input register (FC4) cannot declare writeFunctionCode")
 		}
 		writeFC = ModbusFunctionCode(*reg.WriteFunctionCode)
+	}
+	effectiveBoundary := safetyBoundary
+	if effectiveBoundary != SafetyBoundaryHardRealtime {
+		if _, protected := ClassifyHardRealtimeProtection(reg.PointCode, string(semantic), nil); protected {
+			effectiveBoundary = SafetyBoundaryHardRealtime
+		}
+	}
+	if effectiveBoundary == SafetyBoundaryHardRealtime && writeFC != 0 {
+		return ModbusRegisterSpec{}, fmt.Errorf("%w: register %s cannot declare writeFunctionCode", ErrHardRealtimeSafetyBoundary, reg.PointCode)
 	}
 	if reg.Address < 0 || reg.Address > 65535 {
 		return ModbusRegisterSpec{}, fmt.Errorf("address %d out of range [0,65535]", reg.Address)
@@ -363,6 +378,7 @@ func validateRegisterInput(reg ModbusRegisterInput) (ModbusRegisterSpec, error) 
 	return ModbusRegisterSpec{
 		PointCode:         reg.PointCode,
 		SemanticChannel:   semantic,
+		SafetyBoundary:    effectiveBoundary,
 		FunctionCode:      ModbusFunctionCode(reg.FunctionCode),
 		WriteFunctionCode: writeFC,
 		Address:           uint16(reg.Address),
@@ -475,6 +491,7 @@ func (profile DeclarativeModbusProfile) ToDriverInput(includeGatewayBindings boo
 		regs[i] = ModbusRegisterInput{
 			PointCode:         reg.PointCode,
 			SemanticChannel:   string(reg.SemanticChannel),
+			SafetyBoundary:    string(reg.SafetyBoundary),
 			FunctionCode:      int(reg.FunctionCode),
 			WriteFunctionCode: writeFC,
 			Address:           int(reg.Address),

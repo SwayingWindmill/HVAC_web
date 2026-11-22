@@ -49,24 +49,25 @@ const (
 
 // ModbusRegisterSpec describes one declarative Modbus register-to-Channel mapping.
 type ModbusRegisterSpec struct {
-	PointCode         string             `json:"pointCode"`
-	PointID           string             `json:"pointId,omitempty"`
-	ChannelID         string             `json:"channelId,omitempty"`
-	Description       string             `json:"description,omitempty"`
-	Unit              string             `json:"unit,omitempty"`
-	SemanticChannel   SemanticChannel    `json:"semanticChannel,omitempty"`
-	FunctionCode      ModbusFunctionCode `json:"functionCode"`
-	WriteFunctionCode ModbusFunctionCode `json:"writeFunctionCode,omitzero"`
-	Address           uint16             `json:"address"`
-	RegisterCount     uint16             `json:"registerCount"`
-	RawType           ModbusRawType      `json:"rawType"`
-	ByteOrder         ModbusByteOrder    `json:"byteOrder"`
-	WordOrder         ModbusWordOrder    `json:"wordOrder"`
-	BitIndex          int                `json:"bitIndex,omitempty"`
-	Scale             float64            `json:"scale"`
-	Offset            float64            `json:"offset"`
-	PollPriority      DataPriority       `json:"pollPriority"`
-	EnumMap           map[string]string  `json:"enumMap,omitempty"`
+	PointCode         string              `json:"pointCode"`
+	PointID           string              `json:"pointId,omitempty"`
+	ChannelID         string              `json:"channelId,omitempty"`
+	Description       string              `json:"description,omitempty"`
+	Unit              string              `json:"unit,omitempty"`
+	SemanticChannel   SemanticChannel     `json:"semanticChannel,omitempty"`
+	SafetyBoundary    SafetyBoundaryClass `json:"safetyBoundary,omitempty"`
+	FunctionCode      ModbusFunctionCode  `json:"functionCode"`
+	WriteFunctionCode ModbusFunctionCode  `json:"writeFunctionCode,omitzero"`
+	Address           uint16              `json:"address"`
+	RegisterCount     uint16              `json:"registerCount"`
+	RawType           ModbusRawType       `json:"rawType"`
+	ByteOrder         ModbusByteOrder     `json:"byteOrder"`
+	WordOrder         ModbusWordOrder     `json:"wordOrder"`
+	BitIndex          int                 `json:"bitIndex,omitempty"`
+	Scale             float64             `json:"scale"`
+	Offset            float64             `json:"offset"`
+	PollPriority      DataPriority        `json:"pollPriority"`
+	EnumMap           map[string]string   `json:"enumMap,omitempty"`
 }
 
 // DeclarativeModbusProfile configures a declarative Modbus DeviceAdapter.
@@ -121,6 +122,7 @@ func (spec ModbusRegisterSpec) Validate() error {
 	_, err := validateRegisterInput(ModbusRegisterInput{
 		PointCode:         spec.PointCode,
 		SemanticChannel:   string(spec.SemanticChannel),
+		SafetyBoundary:    string(spec.SafetyBoundary),
 		FunctionCode:      int(spec.FunctionCode),
 		WriteFunctionCode: writeFC,
 		Address:           int(spec.Address),

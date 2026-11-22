@@ -88,6 +88,7 @@ type GateInput struct {
 	ActiveMaintenanceWindow *MaintenanceWindowSnapshot
 	PreconditionMode        PreconditionMode
 	BypassReason            string
+	HardRealtimeProtected   bool
 	TargetState             *LivePointObservation
 	Interlocks              []InterlockCheck
 	PeerStates              map[string]*LivePointObservation // keyed by deviceID + "\x00" + key
@@ -117,6 +118,22 @@ func EvaluateControlGate(in GateInput) (GateDecision, *GateRejection) {
 	phase := in.Phase
 	if phase == "" {
 		phase = GatePhaseSubmit
+	}
+	if in.HardRealtimeProtected {
+		if phase == GatePhasePreDispatch {
+			return GateDecision{}, &GateRejection{
+				HTTPStatus: http.StatusConflict,
+				Code:       "DISPATCH_SAFETY_HARD_REALTIME_BOUNDARY",
+				Title:      "Hard real-time safety boundary violation",
+				Detail:     "Soft real-time cloud/edge control cannot target PLC or hardware safety protection points.",
+			}
+		}
+		return GateDecision{}, &GateRejection{
+			HTTPStatus: http.StatusForbidden,
+			Code:       "HARD_REALTIME_SAFETY_BOUNDARY",
+			Title:      "Hard real-time safety boundary violation",
+			Detail:     "Soft real-time cloud/edge control cannot target PLC or hardware safety protection points.",
+		}
 	}
 	precond := in.PreconditionMode
 	if precond == "" {

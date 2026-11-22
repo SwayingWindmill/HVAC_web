@@ -397,6 +397,7 @@ type ControlDispatchContext struct {
 	AssetLocks              []AssetControlLockView        `json:"assetLocks"`
 	ActiveMaintenanceWindow *ActiveMaintenanceWindowView  `json:"activeMaintenanceWindow,omitempty"`
 	ActuationMode           string                        `json:"actuationMode,omitempty"`
+	SafetyBoundary          string                        `json:"safetyBoundary,omitempty"`
 	FeedbackPointKey        string                        `json:"feedbackPointKey"`
 	Interlocks              []commandmodel.InterlockCheck `json:"interlocks"`
 }

@@ -253,6 +253,14 @@ func (input PointMutation) Validate() error {
 	if _, err := edgecontrol.ParseEdgePointSourceMetadata(input.SourceMetadata); err != nil {
 		return ErrInvalidMutation
 	}
+	if err := edgecontrol.ValidatePointSafetyBoundary(input.PointCode, input.PointType, input.Writable, input.SourceMetadata); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidMutation, err)
+	}
+	if (input.Writable || input.PointType == "COMMAND" || input.PointType == "SETTING") && input.SourceKey != "" {
+		if err := edgecontrol.ValidatePointSafetyBoundary(input.SourceKey, input.PointType, input.Writable, input.SourceMetadata); err != nil {
+			return fmt.Errorf("%w: %w", ErrInvalidMutation, err)
+		}
+	}
 	if input.PointType == "COMMAND" {
 		if err := commandmodel.ValidateCommandPointMetadata(input.SourceMetadata); err != nil {
 			return ErrInvalidMutation

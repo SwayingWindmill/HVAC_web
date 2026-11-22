@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -111,6 +113,7 @@ func NewDeclarativeModbusAdapter(profile DeclarativeModbusProfile, transport Mod
 			PointID:                   pointID,
 			DataType:                  spec.channelDataType(),
 			Access:                    spec.channelAccess(),
+			SafetyBoundary:            spec.SafetyBoundary,
 			Description:               spec.Description,
 			Unit:                      unit,
 			Category:                  category,
@@ -355,6 +358,10 @@ func (adapter *DeclarativeModbusAdapter) Apply(ctx context.Context, _ ProcessIma
 			results = append(results, DeviceWriteResult{Address: decision.Address, Success: false, Code: "COMMAND_CHANNEL_INVALID"})
 			continue
 		}
+		if chIdx, idxOK := adapter.channelIdxByAddress[decision.Address]; idxOK && IsHardRealtimeChannel(adapter.channels[chIdx]) {
+			results = append(results, DeviceWriteResult{Address: decision.Address, Success: false, Code: ReasonHardRealtimeSafetyBoundary})
+			continue
+		}
 		if spec.WriteFunctionCode == 0 {
 			results = append(results, DeviceWriteResult{Address: decision.Address, Success: false, Code: "CHANNEL_READ_ONLY"})
 			continue
@@ -386,15 +393,92 @@ func (adapter *DeclarativeModbusAdapter) Apply(ctx context.Context, _ ProcessIma
 		}); err != nil {
 			return results, err
 		}
-		applied := *decision.Effective
+
+		readbackAt := time.Now().UTC()
+		readRegs, readErr := adapter.transport.Read(ctx, ModbusReadTask{
+			Name:         fmt.Sprintf("%s-%s-readback", adapter.component.ID, spec.PointCode),
+			UnitID:       adapter.profile.UnitID,
+			FunctionCode: spec.FunctionCode,
+			Address:      spec.Address,
+			Quantity:     spec.RegisterCount,
+		})
+		if readErr != nil || len(readRegs) != int(spec.RegisterCount) {
+			results = append(results, DeviceWriteResult{
+				Address:          decision.Address,
+				Success:          false,
+				Code:             "LOCAL_READBACK_FAILED",
+				ReadbackVerified: false,
+				ReadbackAt:       readbackAt,
+			})
+			continue
+		}
+		sample := decodeRegisterSample(spec, readRegs, readbackAt)
+		if sample.Quality != QualityGood {
+			valCopy := sample.Value
+			results = append(results, DeviceWriteResult{
+				Address:          decision.Address,
+				Success:          false,
+				Code:             "LOCAL_READBACK_BAD_QUALITY",
+				ReadbackVerified: false,
+				ReadbackValue:    &valCopy,
+				ReadbackAt:       readbackAt,
+			})
+			continue
+		}
+		valCopy := sample.Value
+		if !readbackMatchesTarget(spec, *decision.Effective, sample.Value) {
+			results = append(results, DeviceWriteResult{
+				Address:          decision.Address,
+				Success:          false,
+				Code:             "LOCAL_READBACK_MISMATCH",
+				AppliedValue:     &valCopy,
+				ReadbackVerified: false,
+				ReadbackValue:    &valCopy,
+				ReadbackAt:       readbackAt,
+			})
+			continue
+		}
+		applied := valCopy
+		readback := valCopy
 		results = append(results, DeviceWriteResult{
-			Address:      decision.Address,
-			Success:      true,
-			Code:         "APPLIED",
-			AppliedValue: &applied,
+			Address:          decision.Address,
+			Success:          true,
+			Code:             "APPLIED",
+			AppliedValue:     &applied,
+			ReadbackVerified: true,
+			ReadbackValue:    &readback,
+			ReadbackAt:       readbackAt,
 		})
 	}
 	return results, nil
+}
+
+func readbackMatchesTarget(spec ModbusRegisterSpec, target, actual Value) bool {
+	switch spec.RawType {
+	case ModbusRawBitBool:
+		return target.Type == DataTypeBoolean && actual.Type == DataTypeBoolean && actual.Boolean == target.Boolean
+	case ModbusRawEnum16:
+		if actual.Type != DataTypeString {
+			return false
+		}
+		if target.Type == DataTypeString {
+			return actual.String == target.String
+		}
+		num, ok := target.NumericFloat64()
+		if !ok || math.IsNaN(num) || math.IsInf(num, 0) || math.Trunc(num) != num || num < 0 || num > 65535 {
+			return false
+		}
+		expectedLabel, exists := spec.EnumMap[strconv.FormatUint(uint64(num), 10)]
+		return exists && actual.String == expectedLabel
+	default:
+		expected, ok1 := target.NumericFloat64()
+		got, ok2 := actual.NumericFloat64()
+		if !ok1 || !ok2 || math.IsNaN(expected) || math.IsNaN(got) || math.IsInf(expected, 0) || math.IsInf(got, 0) {
+			return false
+		}
+		tol := math.Max(math.Abs(spec.Scale)*0.55, 1e-5) + 1e-6*math.Abs(expected)
+		return math.Abs(got-expected) <= tol
+	}
 }
 
 func (adapter *DeclarativeModbusAdapter) prepareWriteValuesLocked(ctx context.Context, spec ModbusRegisterSpec, val Value) ([]uint16, string, error) {

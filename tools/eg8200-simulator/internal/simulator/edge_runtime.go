@@ -30,6 +30,10 @@ type EdgeCommandOutcome struct {
 	Requested          edgecontrol.Value
 	Effective          *edgecontrol.Value
 	AppliedValue       *edgecontrol.Value
+	ReadbackVerified   bool
+	ReadbackValue      *edgecontrol.Value
+	ReadbackAt         time.Time
+	LeaseExpiresAt     time.Time
 	ConstraintReasons  []edgecontrol.ConstraintEvidence
 	WinnerControllerID string
 	Cycle              uint64
@@ -875,6 +879,14 @@ func (runtime *EdgeControlRuntime) SubmitCommand(request EdgeCommandIntentReques
 	if !ok {
 		return nil, fmt.Errorf("device %s does not expose command capability %s", request.DeviceID, request.CommandCode)
 	}
+	if _, protected := edgecontrol.ClassifyHardRealtimeProtection(binding.point.PointCode, request.CommandCode, binding.point.SourceMetadata); protected {
+		return nil, fmt.Errorf("%w: point %s", edgecontrol.ErrHardRealtimeSafetyBoundary, binding.point.PointCode)
+	}
+	if runtime.host != nil {
+		if desc, descOK := runtime.host.ChannelDescriptor(binding.address); descOK && edgecontrol.IsHardRealtimeChannel(desc) {
+			return nil, fmt.Errorf("%w: channel %s", edgecontrol.ErrHardRealtimeSafetyBoundary, binding.address)
+		}
+	}
 	requested, err := requestedEdgeValue(binding.point, request.Params)
 	if err != nil {
 		return nil, err
@@ -1096,7 +1108,7 @@ func (runtime *EdgeControlRuntime) resolvePending(at time.Time, result edgecontr
 		outcome := EdgeCommandOutcome{
 			CommandID: pending.intentID, Address: address, Accepted: decision.Accepted, Requested: decision.Requested,
 			Effective: cloneEdgeValuePointer(decision.Effective), ConstraintReasons: append([]edgecontrol.ConstraintEvidence(nil), decision.ConstraintReasons...),
-			WinnerControllerID: winner, Cycle: result.Image.Cycle(),
+			WinnerControllerID: winner, Cycle: result.Image.Cycle(), LeaseExpiresAt: pending.expiresAt,
 		}
 		if !decision.Accepted {
 			outcome.Code = "CONTROL_DENIED"
@@ -1122,6 +1134,9 @@ func (runtime *EdgeControlRuntime) resolvePending(at time.Time, result edgecontr
 		outcome.Accepted = writeResult.Success
 		outcome.Code = writeResult.Code
 		outcome.AppliedValue = cloneEdgeValuePointer(writeResult.AppliedValue)
+		outcome.ReadbackVerified = writeResult.ReadbackVerified
+		outcome.ReadbackValue = cloneEdgeValuePointer(writeResult.ReadbackValue)
+		outcome.ReadbackAt = writeResult.ReadbackAt
 		revoke := !writeResult.Success || !runtime.leaseByAddress[address]
 		runtime.finishPendingLocked(pending, outcome, revoke)
 	}

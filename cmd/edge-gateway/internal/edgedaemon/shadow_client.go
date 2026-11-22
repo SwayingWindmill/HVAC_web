@@ -244,6 +244,7 @@ func (m *ShadowManager) applyPersistedBootstrap(state persistedShadowState) erro
 			return err
 		}
 	}
+	m.refreshControllerBindings()
 	return nil
 }
 
@@ -524,6 +525,7 @@ func (m *ShadowManager) ApplyDesired(desired GatewayDesiredConfig) (GatewayShado
 	if desired.EdgeRuleBundle == nil && m.ruleEngine != nil {
 		_ = m.ruleEngine.UpdateBundle(nil)
 	}
+	m.refreshControllerBindings()
 
 	m.state = normalizePersistedShadowState(persistedShadowState{
 		AppliedRevision:     desired.DesiredRevision,
@@ -684,4 +686,78 @@ func clampRunes(value string, maxRunes int) string {
 		count++
 	}
 	return trimmed
+}
+
+func hasCapabilityProfile(profiles []edgecontrol.CapabilityProfileID, target edgecontrol.CapabilityProfileID) bool {
+	for _, p := range profiles {
+		if p == target {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *ShadowManager) refreshControllerBindings() {
+	if m == nil || m.host == nil {
+		return
+	}
+	manifest, err := m.host.Manifest(m.gatewayID, "runtime", m.now().UTC())
+	if err != nil {
+		return
+	}
+
+	var chillers []edgecontrol.ChillerInterlockBinding
+	var pumps []edgecontrol.PumpInterlockBinding
+	var pumpFreqAddrs []string
+	var fallbackChillers []edgecontrol.ChillerFallbackTarget
+	var fallbackPumps []edgecontrol.PumpFallbackTarget
+
+	for _, comp := range manifest.Components {
+		if !comp.Enabled {
+			continue
+		}
+		if hasCapabilityProfile(comp.Profiles, edgecontrol.ProfileChiller) {
+			chillers = append(chillers, edgecontrol.ChillerInterlockBinding{
+				ComponentID:  comp.ID,
+				StartCommand: comp.ChannelBindings[edgecontrol.SemanticStartCommand],
+				StopCommand:  comp.ChannelBindings[edgecontrol.SemanticStopCommand],
+				RunState:     comp.ChannelBindings[edgecontrol.SemanticRunState],
+				FaultChannel: comp.ChannelBindings[edgecontrol.SemanticFaultCode],
+			})
+			if sp := comp.ChannelBindings[edgecontrol.SemanticTemperatureSetpoint]; sp != "" {
+				fallbackChillers = append(fallbackChillers, edgecontrol.ChillerFallbackTarget{
+					ComponentID:        comp.ID,
+					SupplySetpointAddr: sp,
+					RunStateAddr:       comp.ChannelBindings[edgecontrol.SemanticRunState],
+					FaultAddr:          comp.ChannelBindings[edgecontrol.SemanticFaultCode],
+				})
+			}
+		}
+		if hasCapabilityProfile(comp.Profiles, edgecontrol.ProfileVariableSpeedPump) {
+			freqAddr := comp.ChannelBindings[edgecontrol.SemanticFrequencySetpoint]
+			pumps = append(pumps, edgecontrol.PumpInterlockBinding{
+				ComponentID:      comp.ID,
+				RunState:         comp.ChannelBindings[edgecontrol.SemanticRunState],
+				FlowFeedback:     comp.ChannelBindings[edgecontrol.SemanticFlow],
+				FaultChannel:     comp.ChannelBindings[edgecontrol.SemanticFaultCode],
+				FrequencyCommand: freqAddr,
+			})
+			if freqAddr != "" {
+				pumpFreqAddrs = append(pumpFreqAddrs, freqAddr)
+				fallbackPumps = append(fallbackPumps, edgecontrol.PumpFallbackTarget{
+					ComponentID:   comp.ID,
+					FrequencyAddr: freqAddr,
+					RunStateAddr:  comp.ChannelBindings[edgecontrol.SemanticRunState],
+					FaultAddr:     comp.ChannelBindings[edgecontrol.SemanticFaultCode],
+				})
+			}
+		}
+	}
+
+	if m.interlock != nil {
+		m.interlock.UpdateBindings(chillers, pumps, pumpFreqAddrs)
+	}
+	if m.fallback != nil {
+		m.fallback.UpdateTargets(fallbackChillers, fallbackPumps)
+	}
 }

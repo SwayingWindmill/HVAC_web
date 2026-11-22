@@ -880,3 +880,115 @@ func TestHostReplaceOrRegisterDeviceConcurrentAndRollback(t *testing.T) {
 		t.Fatalf("expected unrelated DEV-B/keep_pt preserved = 50, got %+v (ok=%v)", snap, ok)
 	}
 }
+
+type readbackOverrideTransport struct {
+	*stubDeclarativeTransport
+	overrideAddr uint16
+	overrideVal  uint16
+	useOverride  bool
+	failReadback bool
+}
+
+func (r *readbackOverrideTransport) Read(ctx context.Context, task ModbusReadTask) ([]uint16, error) {
+	if r.failReadback && len(r.writes) > 0 && task.Address == r.overrideAddr {
+		return nil, errors.New("simulated readback transport error")
+	}
+	res, err := r.stubDeclarativeTransport.Read(ctx, task)
+	if err != nil {
+		return nil, err
+	}
+	if r.useOverride && len(r.writes) > 0 && task.Address == r.overrideAddr && len(res) > 0 {
+		res[0] = r.overrideVal
+	}
+	return res, nil
+}
+
+func TestDeclarativeModbusImmediateLocalReadbackVerification(t *testing.T) {
+	t.Parallel()
+
+	baseProfile := DeclarativeModbusProfile{
+		ComponentID: "PUMP-RB",
+		DriverType:  ModbusDriverTCP,
+		Endpoint:    "127.0.0.1:5020",
+		UnitID:      1,
+		TimeoutMS:   500,
+		Retries:     1,
+		Registers: []ModbusRegisterSpec{
+			{
+				PointCode:         "freq_sp",
+				SemanticChannel:   SemanticFrequencySetpoint,
+				FunctionCode:      ModbusFunctionReadHoldingRegisters,
+				WriteFunctionCode: ModbusFunctionWriteSingleRegister,
+				Address:           100,
+				RegisterCount:     1,
+				RawType:           ModbusRawUint16,
+				ByteOrder:         ModbusByteOrderBigEndian,
+				WordOrder:         ModbusWordOrderBigEndian,
+				Scale:             0.1,
+				PollPriority:      PriorityVeryHigh,
+			},
+		},
+	}
+
+	target := DoubleValue(42.5)
+	decision := Decision{Address: "PUMP-RB/freq_sp", ControllerID: "intent", Accepted: true, Effective: &target}
+
+	t.Run("readback matches target", func(t *testing.T) {
+		t.Parallel()
+		tr := newStubDeclarativeTransport()
+		adapter, err := NewDeclarativeModbusAdapter(baseProfile, tr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		results, err := adapter.Apply(context.Background(), ProcessImage{}, []Decision{decision})
+		if err != nil {
+			t.Fatalf("Apply() error = %v", err)
+		}
+		if len(results) != 1 || !results[0].Success || results[0].Code != "APPLIED" || !results[0].ReadbackVerified {
+			t.Fatalf("expected APPLIED with ReadbackVerified=true, got %+v", results)
+		}
+		if results[0].ReadbackValue == nil || results[0].ReadbackValue.Double != 42.5 || results[0].ReadbackAt.IsZero() {
+			t.Fatalf("expected ReadbackValue=42.5 and ReadbackAt populated, got %+v", results[0])
+		}
+	})
+
+	t.Run("readback I/O error fails explicitly", func(t *testing.T) {
+		t.Parallel()
+		tr := &readbackOverrideTransport{stubDeclarativeTransport: newStubDeclarativeTransport(), overrideAddr: 100, failReadback: true}
+		adapter, err := NewDeclarativeModbusAdapter(baseProfile, tr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		results, err := adapter.Apply(context.Background(), ProcessImage{}, []Decision{decision})
+		if err != nil {
+			t.Fatalf("Apply() unexpected err = %v", err)
+		}
+		if len(results) != 1 || results[0].Success || results[0].Code != "LOCAL_READBACK_FAILED" || results[0].ReadbackVerified {
+			t.Fatalf("expected LOCAL_READBACK_FAILED with ReadbackVerified=false, got %+v", results)
+		}
+	})
+
+	t.Run("stuck register mismatch fails explicitly", func(t *testing.T) {
+		t.Parallel()
+		tr := &readbackOverrideTransport{
+			stubDeclarativeTransport: newStubDeclarativeTransport(),
+			overrideAddr:             100,
+			overrideVal:              300, // 30.0 instead of 42.5
+			useOverride:              true,
+		}
+		adapter, err := NewDeclarativeModbusAdapter(baseProfile, tr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		results, err := adapter.Apply(context.Background(), ProcessImage{}, []Decision{decision})
+		if err != nil {
+			t.Fatalf("Apply() unexpected err = %v", err)
+		}
+		if len(results) != 1 || results[0].Success || results[0].Code != "LOCAL_READBACK_MISMATCH" || results[0].ReadbackVerified {
+			t.Fatalf("expected LOCAL_READBACK_MISMATCH, got %+v", results)
+		}
+		if results[0].ReadbackValue == nil || results[0].ReadbackValue.Double != 30.0 {
+			t.Fatalf("expected ReadbackValue=30.0 on mismatch, got %+v", results[0].ReadbackValue)
+		}
+	})
+}

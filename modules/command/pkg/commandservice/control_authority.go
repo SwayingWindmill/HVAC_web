@@ -15,6 +15,7 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/commandauth"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
@@ -316,6 +317,10 @@ func (a *ControlAuthority) evaluatePreDispatch(
 	}
 
 	locks, mw := toGateLocksAndWindow(dctx.AssetLocks, dctx.ActiveMaintenanceWindow)
+	_, hardProtected := edgecontrol.ClassifyHardRealtimeProtection(intent.PointID, string(intent.Capability), nil)
+	if strings.EqualFold(strings.TrimSpace(dctx.SafetyBoundary), string(edgecontrol.SafetyBoundaryHardRealtime)) {
+		hardProtected = true
+	}
 	decision, rejection := commandmodel.EvaluateControlGate(commandmodel.GateInput{
 		CommandID:               envelope.CommandID,
 		Phase:                   commandmodel.GatePhasePreDispatch,
@@ -331,6 +336,7 @@ func (a *ControlAuthority) evaluatePreDispatch(
 		ActiveMaintenanceWindow: mw,
 		PreconditionMode:        intent.PreconditionMode,
 		BypassReason:            intent.BypassReason,
+		HardRealtimeProtected:   hardProtected,
 		IdempotencyKey:          intent.IdempotencyKey,
 		PriorityTier:            intent.PriorityTier,
 		CommandSource:           intent.CommandSource,
@@ -482,6 +488,7 @@ func (a *ControlAuthority) SubmitOperatorCommand(
 	}
 
 	locks, mw := toGateLocksAndWindow(controlState.AssetLocks, controlState.ActiveMaintenanceWindow)
+	_, hardProtected := edgecontrol.ClassifyHardRealtimeProtection(target.point.PointCode, string(target.capability), target.point.SourceMetadata)
 	decision, rejection := commandmodel.EvaluateControlGate(commandmodel.GateInput{
 		Phase:                   commandmodel.GatePhaseSubmit,
 		AssetID:                 target.asset.ID,
@@ -499,6 +506,7 @@ func (a *ControlAuthority) SubmitOperatorCommand(
 		PriorityTier:            commandmodel.PriorityManualOverride,
 		CommandSource:           commandmodel.SourceOperator,
 		PreconditionMode:        commandmodel.PreconditionRequireCurrentState,
+		HardRealtimeProtected:   hardProtected,
 		TargetState:             targetObs,
 		Interlocks:              target.interlocks,
 		PeerStates:              peerObs,
@@ -897,6 +905,10 @@ func (a *ControlAuthority) SubmitProtectionRuleCommand(
 	}
 
 	locks, mw := toGateLocksAndWindow(dctx.AssetLocks, dctx.ActiveMaintenanceWindow)
+	_, hardProtected := edgecontrol.ClassifyHardRealtimeProtection(input.TargetPointCode, string(input.Capability), nil)
+	if strings.EqualFold(strings.TrimSpace(dctx.SafetyBoundary), string(edgecontrol.SafetyBoundaryHardRealtime)) {
+		hardProtected = true
+	}
 	decision, rejection := commandmodel.EvaluateControlGate(commandmodel.GateInput{
 		Phase:                   commandmodel.GatePhaseSubmit,
 		AssetID:                 dctx.AssetID,
@@ -914,6 +926,7 @@ func (a *ControlAuthority) SubmitProtectionRuleCommand(
 		ActiveMaintenanceWindow: mw,
 		IdempotencyKey:          idemKey,
 		PreconditionMode:        commandmodel.PreconditionRequireCurrentState,
+		HardRealtimeProtected:   hardProtected,
 		TargetState:             targetObs,
 		Interlocks:              dctx.Interlocks,
 		PeerStates:              peerObs,

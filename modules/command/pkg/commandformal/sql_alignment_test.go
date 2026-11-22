@@ -215,4 +215,7 @@ func TestPostgresPriorityArbitrationAndLockAlignment(t *testing.T) {
 	if !commandmodel.TerminalPreSendRejection("PRIORITY_PREEMPTED") {
 		t.Fatalf("PRIORITY_PREEMPTED must be a terminal pre-send rejection")
 	}
+	if !commandmodel.TerminalPreSendRejection("DISPATCH_SAFETY_HARD_REALTIME_BOUNDARY") {
+		t.Fatalf("DISPATCH_SAFETY_HARD_REALTIME_BOUNDARY must be a terminal pre-send rejection")
+	}
 }

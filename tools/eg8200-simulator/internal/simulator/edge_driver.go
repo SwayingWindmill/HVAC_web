@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -78,12 +79,17 @@ func newSimulatedDeviceAdapter(device DeviceEndpointConfig, profile edgecontrol.
 			return nil, fmt.Errorf("device %s point %s: %w", device.ID, point.PointCode, err)
 		}
 		persistencePriority := edgePersistencePriority(point)
+		var boundary edgecontrol.SafetyBoundaryClass
+		if _, protected := edgecontrol.ClassifyHardRealtimeProtection(point.PointCode, point.SourceKey, point.SourceMetadata); protected {
+			boundary = edgecontrol.SafetyBoundaryHardRealtime
+		}
 		descriptor := edgecontrol.ChannelDescriptor{
 			ComponentID:               device.ID,
 			ChannelID:                 point.PointCode,
 			PointID:                   point.PointID,
 			DataType:                  dataType,
 			Access:                    edgeAccessMode(point),
+			SafetyBoundary:            boundary,
 			Description:               point.Name,
 			Unit:                      point.Unit,
 			Category:                  edgecontrol.ChannelCategoryOpenemsType,
@@ -181,12 +187,36 @@ func (driver *simulatedDeviceAdapter) Apply(_ context.Context, _ edgecontrol.Pro
 		applied := driver.plant.ApplyCommand(Command{DeviceID: driver.component.ID, Method: point.SourceKey, Params: params})
 		writeResult := edgecontrol.DeviceWriteResult{Address: decision.Address, Success: applied.Success, Code: applied.Code}
 		if applied.Success {
+			var expected edgecontrol.Value
 			if controlKind(point) == "ACTION" {
-				value := edgecontrol.BooleanValue(true)
-				writeResult.AppliedValue = &value
+				expected = edgecontrol.BooleanValue(true)
 			} else {
-				value := edgecontrol.DoubleValue(applied.AppliedValue)
-				writeResult.AppliedValue = &value
+				expected = edgecontrol.DoubleValue(applied.AppliedValue)
+			}
+			appliedCopy := expected
+			writeResult.AppliedValue = &appliedCopy
+
+			rbVal, rbAt, hasRB := driver.plant.ReadCommandTarget(driver.component.ID, point.SourceKey)
+			if !hasRB {
+				rbVal = expected
+				rbAt = time.Now().UTC()
+			}
+			rbCopy := rbVal
+			writeResult.ReadbackValue = &rbCopy
+			writeResult.ReadbackAt = rbAt
+			matched := false
+			if expected.Type == edgecontrol.DataTypeBoolean {
+				matched = rbVal.Type == edgecontrol.DataTypeBoolean && rbVal.Boolean == expected.Boolean
+			} else {
+				got, ok := rbVal.NumericFloat64()
+				matched = ok && math.Abs(got-expected.Double) <= 1e-5
+			}
+			if !matched {
+				writeResult.Success = false
+				writeResult.Code = "LOCAL_READBACK_MISMATCH"
+				writeResult.ReadbackVerified = false
+			} else {
+				writeResult.ReadbackVerified = true
 			}
 		}
 		results = append(results, writeResult)
