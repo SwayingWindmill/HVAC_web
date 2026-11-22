@@ -20,6 +20,7 @@ import { useNow } from '@/hooks/use-now';
 import { isOneOf } from '@/lib/typed';
 import { GatewaysTab } from './components/GatewaysTab';
 import { ConcentratorsTab } from './components/ConcentratorsTab';
+import { CounterAnomalyAuditTab } from './components/CounterAnomalyAuditTab';
 import { MeterInspectionSheet } from './components/MeterInspectionSheet';
 import { MeterReconciliationTab } from './components/MeterReconciliationTab';
 import { OtaTab } from './components/OtaTab';
@@ -42,7 +43,7 @@ import {
 const route = getRouteApi('/_app/settings/integrations');
 
 const HOUR_MS = 3_600_000;
-const INTEGRATIONS_VIEWS = ['gateways', 'concentrators', 'meters', 'sensors', 'ota'] as const satisfies readonly IntegrationsTabView[];
+const INTEGRATIONS_VIEWS = ['gateways', 'concentrators', 'meters', 'anomalies', 'sensors', 'ota'] as const satisfies readonly IntegrationsTabView[];
 
 export function IntegrationsWorkspace() {
   const snapshot = useShellSnapshot();
@@ -81,6 +82,7 @@ export function IntegrationsWorkspace() {
   const activeView: IntegrationsTabView =
     search.view === 'concentrators' ||
     search.view === 'meters' ||
+    search.view === 'anomalies' ||
     search.view === 'sensors' ||
     search.view === 'ota'
       ? search.view
@@ -243,7 +245,6 @@ export function IntegrationsWorkspace() {
       <PageHeader
         title="集成管理"
         meta={siteName ? <PageMeta>{siteName}</PageMeta> : undefined}
-        description="核查现场网关证书、边缘程序 OTA 升级、计量表计逐时数据连续性与传感器探头零点校准建议"
         actions={
           <>
             <Select
@@ -309,6 +310,7 @@ export function IntegrationsWorkspace() {
           <TabsTrigger value="gateways">现场网关</TabsTrigger>
           <TabsTrigger value="concentrators">无线集中器</TabsTrigger>
           <TabsTrigger value="meters">电表数据核对</TabsTrigger>
+          <TabsTrigger value="anomalies">异常清洗留痕</TabsTrigger>
           <TabsTrigger value="sensors">传感器校准</TabsTrigger>
           <TabsTrigger value="ota">OTA 升级</TabsTrigger>
         </TabsList>
@@ -368,6 +370,17 @@ export function IntegrationsWorkspace() {
               }}
               onInspectMeter={(deviceCode) => setInspect(deviceCode)}
             />
+          )}
+        </TabsContent>
+
+        <TabsContent value="anomalies" className="mt-0">
+          {!canReadAssets ? (
+            <StateCard
+              title={<h2 className="text-base font-semibold">当前账号无权读取表计清洗记录</h2>}
+              description="查看累计表计异常清洗明细需要站点资产读取权限，请联系管理员分配相应角色。"
+            />
+          ) : (
+            <CounterAnomalyAuditTab siteId={siteId} timeZone={siteTimezone} />
           )}
         </TabsContent>
 

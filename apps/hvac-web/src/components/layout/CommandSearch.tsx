@@ -1,4 +1,5 @@
 import { ArrowRight, Cpu } from 'lucide-react';
+import { useShellSnapshot } from '@/app/ShellRuntimeContext';
 import {
   CommandDialog,
   CommandEmpty,
@@ -10,7 +11,7 @@ import {
 } from '@/components/ui/command';
 import { useSiteEquipment } from '@/features/assets/use-device-names';
 import { useScope } from '@/hooks/use-scope';
-import { APP_NAVIGATION_CONFIG, navHref } from './app-navigation';
+import { APP_NAVIGATION_CONFIG, filterNavigationGroups, navHref } from './app-navigation';
 
 interface CommandSearchProps {
   readonly open: boolean;
@@ -45,6 +46,8 @@ function EquipmentGroup({ siteId, onSelect }: { readonly siteId: string; readonl
 
 export function CommandSearch({ open, onOpenChange, onNavigate }: CommandSearchProps) {
   const { currentScope } = useScope();
+  const capabilities = useShellSnapshot().principal?.authorization.capabilities;
+  const visibleGroups = filterNavigationGroups(APP_NAVIGATION_CONFIG, capabilities);
 
   const go = (target: string) => {
     onNavigate(target);
@@ -56,7 +59,7 @@ export function CommandSearch({ open, onOpenChange, onNavigate }: CommandSearchP
       <CommandInput autoFocus placeholder="输入页面或设备名称，如 能耗、CHILLER-01…" />
       <CommandList className="max-h-[420px]">
         <CommandEmpty>没有匹配的页面或设备。</CommandEmpty>
-        {APP_NAVIGATION_CONFIG.map((group) => (
+        {visibleGroups.map((group) => (
           <CommandGroup key={group.id} heading={group.label}>
             {group.items.map((item) => {
               const Icon = item.icon;
@@ -70,7 +73,7 @@ export function CommandSearch({ open, onOpenChange, onNavigate }: CommandSearchP
             })}
           </CommandGroup>
         ))}
-        {currentScope ? <EquipmentGroup siteId={currentScope.siteId} onSelect={go} /> : null}
+        {currentScope && capabilities?.includes('device.list') ? <EquipmentGroup siteId={currentScope.siteId} onSelect={go} /> : null}
       </CommandList>
     </CommandDialog>
   );

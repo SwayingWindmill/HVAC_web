@@ -13,6 +13,9 @@ import type {
 } from '../apps/hvac-web/src/app/shell-runtime.ts';
 import type { shouldInvalidateRouter } from '../apps/hvac-web/src/app/shell-policy.ts';
 import type {
+  APP_NAVIGATION_CONFIG,
+  canAccessNavItem,
+  filterNavigationGroups,
   navCountQueryFlags,
   navHref,
 } from '../apps/hvac-web/src/components/layout/app-navigation.ts';
@@ -75,6 +78,9 @@ const navExports = evaluateModule(
     throw new Error(`unexpected require: ${specifier}`);
   },
 ) as {
+  readonly APP_NAVIGATION_CONFIG: typeof APP_NAVIGATION_CONFIG;
+  readonly canAccessNavItem: typeof canAccessNavItem;
+  readonly filterNavigationGroups: typeof filterNavigationGroups;
   readonly navHref: typeof navHref;
   readonly navCountQueryFlags: typeof navCountQueryFlags;
 };
@@ -522,4 +528,57 @@ test('navHref omits ?site= on platform routes and navCountQueryFlags gates queri
     workOrders: true,
     commands: true,
   });
+});
+
+test('filterNavigationGroups hides entries whose capabilities are missing, strips sidebar-only hidden items, and drops empty groups', () => {
+  const fullCapabilities = [
+    'site.list',
+    'site.read',
+    'device.list',
+    'device.read',
+    'asset.read',
+    'telemetry.snapshot.read',
+    'telemetry.history.read',
+    'alarm.list',
+    'work-order.list',
+  ];
+
+  const fullSidebarIds = navExports
+    .filterNavigationGroups(navExports.APP_NAVIGATION_CONFIG, fullCapabilities, { sidebarOnly: true })
+    .flatMap((group) => group.items.map((item) => item.id));
+  assert.ok(fullSidebarIds.includes('operations-alarms'));
+  assert.ok(fullSidebarIds.includes('operations-work-center'));
+  assert.ok(fullSidebarIds.includes('integrations'));
+  assert.equal(fullSidebarIds.includes('notifications'), false);
+
+  const commandSearchIds = navExports
+    .filterNavigationGroups(navExports.APP_NAVIGATION_CONFIG, fullCapabilities)
+    .flatMap((group) => group.items.map((item) => item.id));
+  assert.ok(commandSearchIds.includes('notifications'));
+
+  // Denying alarm.list and work-order.list keeps 故障诊断 under operations and drops alarms/notifications/work-center.
+  const withoutAlarmsAndOrders = navExports.filterNavigationGroups(
+    navExports.APP_NAVIGATION_CONFIG,
+    fullCapabilities.filter((cap) => cap !== 'alarm.list' && cap !== 'work-order.list'),
+  );
+  const opsGroup = withoutAlarmsAndOrders.find((group) => group.id === 'operations');
+  assert.deepEqual(
+    Array.from(opsGroup?.items ?? [], (item) => item.id),
+    ['operations-diagnostics'],
+  );
+
+  // Denying both device.read and asset.read hides 集成管理 (OR requirement).
+  const withoutIntegrations = navExports.filterNavigationGroups(
+    navExports.APP_NAVIGATION_CONFIG,
+    ['site.list', 'site.read'],
+    { sidebarOnly: true },
+  );
+  const platformIds = Array.from(withoutIntegrations)
+    .filter((group) => group.section === 'platform')
+    .flatMap((group) => Array.from(group.items, (item) => item.id));
+  assert.deepEqual(platformIds, ['system']);
+
+  // Empty capabilities drops all navigation groups cleanly.
+  assert.deepEqual(Array.from(navExports.filterNavigationGroups(navExports.APP_NAVIGATION_CONFIG, [])), []);
+  assert.equal(navExports.canAccessNavItem({ requiredCapabilities: ['site.read'] }, undefined), false);
 });

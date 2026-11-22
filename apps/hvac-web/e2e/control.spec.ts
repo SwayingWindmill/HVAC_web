@@ -496,18 +496,19 @@ test('operators can acquire and release device priority locks and replay control
   await expect(page.getByText('已解除 CHILLER-01 的优先级锁定')).toBeVisible();
   await expect(chillerCard).not.toContainText('安全联锁 · 剩余');
 
-  const dlqButton = page.getByRole('button', { name: /控制告警死信 \(1\)/ });
-  await dlqButton.click();
-  const dlqDialog = page.getByRole('dialog', { name: '控制告警投递死信' });
-  const dlqTable = dlqDialog.getByRole('table', { name: '控制告警投递死信列表' });
+  await expect(page.getByRole('button', { name: /控制告警死信/ })).toHaveCount(0);
+  const dlqNotice = page.getByRole('status', { name: '控制告警死信提示' });
+  await expect(dlqNotice).toContainText('有 1 条控制告警投递失败待重投');
+  await dlqNotice.getByRole('link', { name: '前往处理' }).click();
+  await expect(page).toHaveURL(/\/system\?.*tab=governance/);
+
+  const dlqTable = page.getByRole('table', { name: '控制告警投递死信列表' });
   await expect(dlqTable).toContainText('CHILLER-01');
   await expect(dlqTable).toContainText('执行结果未知');
   await expect(dlqTable).toContainText('下游告警服务通信失败');
   await dlqTable.getByRole('button', { name: '重新投递' }).click();
   await expect(page.getByText('已重新提交到控制告警投递队列')).toBeVisible();
-  await expect(dlqDialog).toContainText('当前没有待重投的控制告警死信记录');
-  await dlqDialog.getByRole('button', { name: 'Close' }).click();
-  await expect(dlqDialog).toBeHidden();
+  await expect(page.getByText('当前没有待重投的控制告警死信记录')).toBeVisible();
 });
 
 test('sidebar shows live pending control count and layout stacks without horizontal overflow when assistant opens at 1280px', async ({ page }) => {

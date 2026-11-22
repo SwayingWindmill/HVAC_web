@@ -6,7 +6,7 @@ import { IntegrationsWorkspace } from '@/features/integrations/IntegrationsWorks
 
 export const integrationsSearchSchema = z.object({
   site: z.string().uuid().optional().catch(undefined),
-  view: z.enum(['gateways', 'concentrators', 'meters', 'sensors', 'ota']).optional().catch(undefined),
+  view: z.enum(['gateways', 'concentrators', 'meters', 'anomalies', 'sensors', 'ota']).optional().catch(undefined),
   inspect: z.string().min(1).max(256).optional().catch(undefined),
   filter: z.enum(['ALL', 'ATTENTION', 'PROBE_OFFSET', 'CALIBRATION_DUE']).optional().catch(undefined),
 });

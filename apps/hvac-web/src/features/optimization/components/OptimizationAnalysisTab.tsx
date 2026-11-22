@@ -1,11 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
-import { FlaskConical, Gauge, ShieldAlert } from 'lucide-react';
+import { FlaskConical, Gauge } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { Area, CartesianGrid, ComposedChart, Line, XAxis, YAxis } from 'recharts';
 import { FactTile } from '@/blocks/fact-list';
 import { Panel, PanelHeader, PanelLink } from '@/blocks/panel';
 import { InfoTip } from '@/components/info-tip';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ChartContainer, ChartTooltip, type ChartConfig } from '@/components/ui/chart';
@@ -28,15 +27,13 @@ import {
   formatCelsius as celsius,
   formatSigned as signed,
   parseShadowEvaluation,
-  type GovernanceSolverSource,
   type OptimizationGovernanceSummary,
   type OptimizationRecommendation,
   type OptimizationShadowEvaluation,
   type PublishedShadowChillerFit,
 } from '../optimization-model';
 import { latestShadowEvaluationQuery, siteOptimizationGovernanceSummaryQuery } from '../query';
-import { CanaryBindingsDialog } from './CanaryBindingsDialog';
-import { NegativeSamplesDrawer } from './NegativeSamplesDrawer';
+import { SolverSourceBadge } from './SolverSourceBadge';
 
 const FORECAST_VIEW_OPTIONS: readonly PeriodOption<'chart' | 'table'>[] = [
   { value: 'chart', label: '曲线' },
@@ -55,12 +52,6 @@ const CHILLER_STATUS_CLASS: Record<PublishedShadowChillerFit['status'], string> 
   REJECTED: 'bg-warning-soft text-warning-text',
 };
 
-const SOLVER_SOURCE_BADGE_VARIANT: Record<GovernanceSolverSource, 'secondary' | 'success' | 'default'> = {
-  DEFAULT: 'secondary',
-  DEPLOYMENT_BINDING: 'success',
-  SITE_LOOP_CANARY: 'default',
-};
-
 function copUpliftClass(value: number | null): string {
   if (value === null || Math.abs(value) < 0.05) return 'text-muted-foreground';
   return value > 0 ? 'text-success-text' : 'text-warning-text';
@@ -72,17 +63,13 @@ export function OptimizationAnalysisTab({
   recommendation,
   active,
   canManageControl = false,
-  csrfToken = '',
 }: {
   readonly siteId: string;
   readonly timeZone: string;
   readonly recommendation: OptimizationRecommendation | null;
   readonly active: boolean;
   readonly canManageControl?: boolean;
-  readonly csrfToken?: string;
 }) {
-  const [canaryOpen, setCanaryOpen] = useState(false);
-  const [samplesOpen, setSamplesOpen] = useState(false);
   const nameByDevice = useDeviceNames(siteId);
   const governanceQuery = useQuery(siteOptimizationGovernanceSummaryQuery(siteId, active));
   const shadowQuery = useQuery(
@@ -100,38 +87,14 @@ export function OptimizationAnalysisTab({
 
   return (
     <div className="flex flex-col gap-4">
-      <Alert className="border-primary/25 bg-primary-soft/35">
-        <ShieldAlert className="text-primary" />
-        <AlertTitle>影子对照 · 只记录不发布，不作为控制指令下发</AlertTitle>
-        <AlertDescription>
-          冷机 COP 模型基于站点近 14 天 15 分钟读数拟合每台冷机的 COP 公式，仅用于对照验证当前策略求解器的设定点建议；本页签不提供远程控制指令或调温工单触发。
-        </AlertDescription>
-      </Alert>
-
-      <GovernanceSummaryPanel
+      <EffectComparisonPanel
+        siteId={siteId}
         timeZone={timeZone}
+        canManageControl={canManageControl}
         isPending={governanceQuery.isPending}
         isError={governanceQuery.isError}
         summary={governanceQuery.data ?? null}
         onRetry={() => void governanceQuery.refetch()}
-        onOpenCanary={() => setCanaryOpen(true)}
-        onOpenNegativeSamples={() => setSamplesOpen(true)}
-      />
-
-      <CanaryBindingsDialog
-        siteId={siteId}
-        timeZone={timeZone}
-        open={canaryOpen}
-        onOpenChange={setCanaryOpen}
-        canManage={canManageControl}
-        csrfToken={csrfToken}
-      />
-
-      <NegativeSamplesDrawer
-        siteId={siteId}
-        timeZone={timeZone}
-        open={samplesOpen}
-        onOpenChange={setSamplesOpen}
       />
 
       {recommendation === null ? (
@@ -192,34 +155,33 @@ export function OptimizationAnalysisTab({
   );
 }
 
-function GovernanceSummaryPanel({
+function EffectComparisonPanel({
+  siteId,
   timeZone,
+  canManageControl,
   isPending,
   isError,
   summary,
   onRetry,
-  onOpenCanary,
-  onOpenNegativeSamples,
 }: {
+  readonly siteId: string;
   readonly timeZone: string;
+  readonly canManageControl: boolean;
   readonly isPending: boolean;
   readonly isError: boolean;
   readonly summary: OptimizationGovernanceSummary | null;
   readonly onRetry: () => void;
-  readonly onOpenCanary: () => void;
-  readonly onOpenNegativeSamples: () => void;
 }) {
-  const governanceActions = (
-    <div className="flex flex-wrap items-center gap-2">
-      <Button type="button" variant="outline" size="sm" onClick={onOpenCanary}>
-        管理灰度路由
-      </Button>
-      <Button type="button" variant="outline" size="sm" onClick={onOpenNegativeSamples}>
-        查看负样本明细
-      </Button>
+  const headerAction = (
+    <div className="flex flex-wrap items-center gap-3">
       <InfoTip>
-        按室外湿球温度与冷负荷同步分箱对比 AI 闭环与规则基准能效，并汇总护栏限幅、安全拦截与自动回退负样本。
+        按室外湿球温度与冷负荷同步分箱对比 AI 闭环与规则基准能效，仅展示统计周期内的客观对照结果。
       </InfoTip>
+      {canManageControl ? (
+        <PanelLink to="/system" search={{ tab: 'governance', site: siteId, section: 'optimization' }}>
+          灰度与负样本
+        </PanelLink>
+      ) : null}
     </div>
   );
 
@@ -229,10 +191,10 @@ function GovernanceSummaryPanel({
 
   if (isError) {
     return (
-      <Panel aria-label="策略路由与运行治理">
-        <PanelHeader title="策略路由与运行治理" action={governanceActions} />
+      <Panel aria-label="运行效果对照">
+        <PanelHeader title="运行效果对照" action={headerAction} />
         <div className="flex flex-col items-start gap-2 px-5 py-8">
-          <p className="text-sm font-semibold">策略路由与运行治理统计暂时读不到</p>
+          <p className="text-sm font-semibold">运行效果对照统计暂时读不到</p>
           <Button variant="outline" size="sm" onClick={onRetry}>
             重试
           </Button>
@@ -243,15 +205,15 @@ function GovernanceSummaryPanel({
 
   if (!summary) {
     return (
-      <Panel aria-label="策略路由与运行治理">
-        <PanelHeader title="策略路由与运行治理" action={governanceActions} />
+      <Panel aria-label="运行效果对照">
+        <PanelHeader title="运行效果对照" action={headerAction} />
         <div className="flex flex-col items-center gap-2 px-6 py-10 text-center">
           <span className="flex size-9 items-center justify-center rounded-xl bg-muted text-muted-foreground">
             <Gauge className="size-[18px]" aria-hidden="true" />
           </span>
-          <p className="text-sm font-semibold">尚无近 14 天策略路由与运行效果统计</p>
+          <p className="text-sm font-semibold">尚无近 14 天运行效果对照统计</p>
           <p className="max-w-lg text-xs text-muted-foreground">
-            积累优化调度与自动控制周期后，此处将自动展示当前求解器路由、运行周期分布、同湿球与冷负荷分箱 COP 对照以及护栏负样本统计。
+            积累优化调度与自动控制周期后，此处将自动展示当前求解器策略、运行周期分布与同湿球温度分箱 COP 对照。
           </p>
         </div>
       </Panel>
@@ -259,16 +221,17 @@ function GovernanceSummaryPanel({
   }
 
   return (
-    <Panel aria-label="策略路由与运行治理">
+    <Panel aria-label="运行效果对照">
       <PanelHeader
-        title="策略路由与运行治理"
+        title="运行效果对照"
         badge={
-          <Badge variant={SOLVER_SOURCE_BADGE_VARIANT[summary.activeSolver.source]}>
-            {summary.activeSolver.sourceLabel}
-          </Badge>
+          <SolverSourceBadge
+            source={summary.activeSolver.source}
+            label={summary.activeSolver.sourceLabel}
+          />
         }
         caption={`近 ${summary.windowDays} 天统计 · 更新于 ${formatTime(summary.generatedAt, timeZone)}`}
-        action={governanceActions}
+        action={headerAction}
       />
 
       <dl className="grid grid-cols-2 gap-x-6 gap-y-4 border-b border-divider px-5 py-4 sm:grid-cols-3 lg:grid-cols-6">
@@ -308,67 +271,39 @@ function GovernanceSummaryPanel({
         </FactTile>
       </dl>
 
-      <div className="grid grid-cols-1 divide-y divide-divider border-b border-divider lg:grid-cols-2 lg:divide-x lg:divide-y-0">
-        <section aria-label={`近 ${summary.windowDays} 天运行周期分布`} className="flex flex-col gap-3 px-5 py-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h3 className="text-xs font-semibold text-foreground">近 {summary.windowDays} 天运行周期分布</h3>
-            <span className="text-xs text-muted-foreground tabular-nums">
-              共 {summary.tickCounts.totalTicks} 个周期
-            </span>
-          </div>
-          <dl className="grid grid-cols-2 gap-x-5 gap-y-3 sm:grid-cols-4">
-            <FactTile label="AI 闭环周期" valueClassName="text-base font-semibold text-primary">
-              {summary.tickCounts.aiClosedLoop}
-            </FactTile>
-            <FactTile label="AI 影子跟跑" valueClassName="text-base font-semibold text-foreground">
-              {summary.tickCounts.aiShadow}
-            </FactTile>
-            <FactTile label="规则基准周期" valueClassName="text-base font-semibold text-foreground">
-              {summary.tickCounts.ruleBaseline}
-            </FactTile>
-            <FactTile
-              label="人工接管周期"
-              valueClassName={
-                summary.tickCounts.manualOverride > 0
-                  ? 'text-base font-semibold text-warning-text'
-                  : 'text-base font-semibold text-muted-foreground'
-              }
-            >
-              {summary.tickCounts.manualOverride}
-            </FactTile>
-          </dl>
-        </section>
+      <section aria-label={`近 ${summary.windowDays} 天运行周期分布`} className="flex flex-col gap-3 border-b border-divider px-5 py-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-xs font-semibold text-foreground">近 {summary.windowDays} 天运行周期分布</h3>
+          <span className="text-xs text-muted-foreground tabular-nums">
+            共 {summary.tickCounts.totalTicks} 个周期
+          </span>
+        </div>
+        <dl className="grid grid-cols-2 gap-x-5 gap-y-3 sm:grid-cols-4">
+          <FactTile label="AI 闭环周期" valueClassName="text-base font-semibold text-primary">
+            {summary.tickCounts.aiClosedLoop}
+          </FactTile>
+          <FactTile label="AI 影子跟跑" valueClassName="text-base font-semibold text-foreground">
+            {summary.tickCounts.aiShadow}
+          </FactTile>
+          <FactTile label="规则基准周期" valueClassName="text-base font-semibold text-foreground">
+            {summary.tickCounts.ruleBaseline}
+          </FactTile>
+          <FactTile
+            label="人工接管周期"
+            valueClassName={
+              summary.tickCounts.manualOverride > 0
+                ? 'text-base font-semibold text-warning-text'
+                : 'text-base font-semibold text-muted-foreground'
+            }
+          >
+            {summary.tickCounts.manualOverride}
+          </FactTile>
+        </dl>
+      </section>
 
-        <section aria-label="安全护栏负样本飞轮" className="flex flex-col gap-3 px-5 py-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h3 className="text-xs font-semibold text-foreground">安全护栏负样本飞轮</h3>
-            <Badge variant={summary.flywheel.totalSamples > 0 ? 'warning' : 'secondary'}>
-              负样本 {summary.flywheel.totalSamples}
-            </Badge>
-          </div>
-          <dl className="grid grid-cols-2 gap-x-5 gap-y-3 sm:grid-cols-3">
-            {summary.flywheel.items.map((item) => (
-              <FactTile
-                key={item.key}
-                label={item.label}
-                valueClassName={
-                  item.count > 0
-                    ? 'text-base font-semibold text-foreground'
-                    : 'text-base font-semibold text-muted-foreground'
-                }
-              >
-                {item.count}
-              </FactTile>
-            ))}
-          </dl>
-        </section>
-      </div>
-
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-divider bg-muted/20 px-5 py-2.5">
+      <div className="flex flex-wrap items-center gap-1.5 border-b border-divider bg-muted/20 px-5 py-2.5">
         <h3 className="text-xs font-semibold text-foreground">同湿球温度与冷负荷分箱 COP 对照</h3>
-        <span className="text-xs text-muted-foreground">
-          仅展示同时覆盖 AI 闭环与规则基准周期的天气负荷分箱
-        </span>
+        <InfoTip>仅展示同时覆盖 AI 闭环与规则基准周期的天气负荷分箱。</InfoTip>
       </div>
 
       <Table aria-label="同湿球与冷负荷分箱 COP 对照">
@@ -426,7 +361,13 @@ function ShadowComparisonPanel({
     <Panel aria-label="求解器对照与候选步长">
       <PanelHeader
         title="求解器对照与候选步长"
+        badge={<Badge variant="secondary">只记录不发布</Badge>}
         caption={`评估于 ${formatTime(shadow.generatedAt, timeZone)}`}
+        action={
+          <InfoTip>
+            冷机 COP 模型基于站点近 14 天 15 分钟读数拟合，仅用于对照验证当前策略求解器的设定点建议，不作为控制指令下发。
+          </InfoTip>
+        }
       />
 
       <div className="grid grid-cols-2 divide-x divide-divider border-b border-divider">

@@ -6,7 +6,9 @@ import { useShellSnapshot } from '@/app/ShellRuntimeContext';
 import { useUnsavedDraftGuard } from '@/features/system/unsaved-drafts';
 
 const systemSearchSchema = z.object({
-  tab: z.enum(['overview', 'users', 'site', 'registry', 'audit', 'assistant']).catch('overview').optional(),
+  tab: z.enum(['overview', 'users', 'site', 'registry', 'audit', 'assistant', 'governance']).catch('overview').optional(),
+  site: z.string().uuid().optional().catch(undefined),
+  section: z.enum(['control', 'alarms', 'optimization']).optional().catch(undefined),
 });
 
 export const Route = createFileRoute('/_app/system')({

@@ -4,17 +4,11 @@ import type { ColumnDef } from '@tanstack/react-table';
 import { RefreshCw, RotateCcw } from 'lucide-react';
 import { toast } from 'sonner';
 import { DataTableBlock } from '@/blocks/data-table';
+import { PanelCount } from '@/blocks/panel';
 import { DataTable, type DataTableFeatures } from '@/components/data-table';
+import { InfoTip } from '@/components/info-tip';
 import { Alert, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetFooter,
-  SheetHeader,
-  SheetTitle,
-} from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useDataTable } from '@/hooks/use-data-table';
 import { formatTime } from '@/lib/operator-format';
@@ -28,29 +22,22 @@ import {
   type ControlAlarmDeadLetter,
 } from '../control-state';
 
-/** Inspect and replay control-plane alarm notifications that exhausted automatic retries. */
-export function ControlAlarmDeadLettersDialog({
-  open,
+/** Inline control-plane alarm outbox dead-letter inspection and replay panel for engineering governance. */
+export function ControlAlarmDeadLettersPanel({
   siteId,
   canManage,
   csrfToken,
   deviceNames,
   timeZone,
-  onClose,
 }: {
-  readonly open: boolean;
   readonly siteId: string;
   readonly canManage: boolean;
   readonly csrfToken: string;
   readonly deviceNames: ReadonlyMap<string, string>;
   readonly timeZone: string;
-  readonly onClose: () => void;
 }) {
   const queryClient = useQueryClient();
-  const deadLetters = useQuery({
-    ...controlAlarmDeadLettersQuery(siteId),
-    enabled: open,
-  });
+  const deadLetters = useQuery(controlAlarmDeadLettersQuery(siteId));
 
   const replay = useMutation({
     mutationFn: (outboxId: string) => replayControlAlarmDeadLetter(siteId, outboxId, csrfToken),
@@ -134,62 +121,55 @@ export function ControlAlarmDeadLettersDialog({
   });
 
   return (
-    <Sheet open={open} onOpenChange={(nextOpen) => { if (!nextOpen) onClose(); }}>
-      <SheetContent side="right" className="w-full overflow-y-auto data-[side=right]:sm:max-w-3xl">
-        <SheetHeader className="border-b border-divider">
-          <SheetTitle>控制告警投递死信</SheetTitle>
-          <SheetDescription>
-            执行结果未知、读回校验超时、安全下发拒收或设备锁定等安全事件若多次同步告警服务失败，会暂存于此队列供人工确认后重投。
-          </SheetDescription>
-        </SheetHeader>
-
-        <div className="flex flex-1 flex-col gap-4 p-4">
-          {deadLetters.isError ? (
-            <Alert variant="destructive">
-              <AlertTitle>控制告警死信队列暂时读取失败，请稍后刷新</AlertTitle>
-            </Alert>
-          ) : deadLetters.isPending ? (
-            <div className="flex flex-col gap-2">
-              <Skeleton className="h-12" />
-              <Skeleton className="h-12" />
-            </div>
-          ) : (
-            <DataTableBlock
-              title="待重投控制事件"
-              actions={(
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  disabled={deadLetters.isFetching}
-                  onClick={() => void deadLetters.refetch()}
-                >
-                  <RefreshCw data-icon="inline-start" />
-                  刷新
-                </Button>
-              )}
-            >
-              <DataTable
-                table={table}
-                tableAriaLabel="控制告警投递死信列表"
-                empty="当前没有待重投的控制告警死信记录"
-                getHeaderCellProps={(header) => ({
-                  className: header.id === 'device' || header.id === 'eventKind' || header.id === 'updatedAt' || header.id === 'action'
-                    ? 'whitespace-nowrap'
-                    : undefined,
-                })}
-                getCellProps={(cell) => ({
-                  className: cell.column.id === 'reason' ? 'whitespace-normal align-top' : 'whitespace-nowrap align-top',
-                })}
-              />
-            </DataTableBlock>
-          )}
+    <DataTableBlock
+      title={(
+        <span className="inline-flex items-center gap-1.5">
+          控制告警投递死信
+          <InfoTip>
+            执行结果未知、读回校验超时、安全下发拒收或设备锁定等安全事件若多次同步告警服务失败，会暂存于此队列供确认后重投。
+          </InfoTip>
+        </span>
+      )}
+      actions={(
+        <div className="flex items-center gap-2">
+          {items.length > 0 ? <PanelCount count={items.length} tone="urgent" /> : null}
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={deadLetters.isFetching}
+            onClick={() => void deadLetters.refetch()}
+          >
+            <RefreshCw data-icon="inline-start" />
+            刷新
+          </Button>
         </div>
-
-        <SheetFooter className="border-t border-divider">
-          <Button type="button" variant="outline" onClick={onClose}>关闭</Button>
-        </SheetFooter>
-      </SheetContent>
-    </Sheet>
+      )}
+    >
+      {deadLetters.isError ? (
+        <Alert variant="destructive">
+          <AlertTitle>控制告警死信队列暂时读取失败，请稍后刷新</AlertTitle>
+        </Alert>
+      ) : deadLetters.isPending ? (
+        <div className="flex flex-col gap-2">
+          <Skeleton className="h-12" />
+          <Skeleton className="h-12" />
+        </div>
+      ) : (
+        <DataTable
+          table={table}
+          tableAriaLabel="控制告警投递死信列表"
+          empty="当前没有待重投的控制告警死信记录"
+          getHeaderCellProps={(header) => ({
+            className: header.id === 'device' || header.id === 'eventKind' || header.id === 'updatedAt' || header.id === 'action'
+              ? 'whitespace-nowrap'
+              : undefined,
+          })}
+          getCellProps={(cell) => ({
+            className: cell.column.id === 'reason' ? 'whitespace-normal align-top' : 'whitespace-nowrap align-top',
+          })}
+        />
+      )}
+    </DataTableBlock>
   );
 }

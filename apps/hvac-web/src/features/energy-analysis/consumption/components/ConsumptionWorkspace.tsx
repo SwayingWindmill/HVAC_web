@@ -5,7 +5,7 @@ import { useMemo, useState } from "react";
 import type { SiteTariff } from "@/api/generated/platformGateway.gen";
 import { BrandMark } from "@/components/brand-mark";
 import { PageHeader } from "@/blocks/page-header";
-import { Panel } from "@/blocks/panel";
+import { Panel, PanelLink } from "@/blocks/panel";
 import { InfoTip } from "@/components/info-tip";
 import { MetricTabsChartCard, type MetricTab } from "@/components/metric-tabs-chart-card";
 import { Main } from "@/components/layout/Main";
@@ -21,7 +21,6 @@ import { useAssistantPanel } from "@/features/assistant/assistant-panel-store";
 import { useEnergyBreakdown } from "@/features/breakdown/query";
 import { DataGapBanner } from "@/features/data-gaps/DataGapBanner";
 import { dataGapsKeys } from "@/features/data-gaps/query";
-import { billingKeys } from "@/features/billing/query";
 import { TouCostDetail } from "@/features/tariff/components/TouCostDetail";
 import { siteTariffQuery } from "@/features/tariff/query";
 import {
@@ -49,7 +48,6 @@ import {
   type Granularity,
 } from "../model";
 import { useEnergyComparison } from "../query";
-import { CounterAnomalyAuditTab } from "./CounterAnomalyAuditTab";
 import { LayeredEfficiencyStrip } from "./LayeredEfficiencyStrip";
 
 const siteRoute = getRouteApi("/_app/_site");
@@ -62,8 +60,8 @@ const PREVIOUS_LABEL: Record<EnergyPeriod, string> = { today: "昨日同时段",
 const BUCKET_HEADER: Record<Granularity, string> = { hour: "时段", day: "日期", month: "月份" };
 
 type ConsumptionMetric = "electricityKWh" | "coolingKWh" | "cop" | "cost";
-type ConsumptionView = "trend" | "tou" | "detail" | "anomalies";
-const CONSUMPTION_VIEWS = ["trend", "tou", "detail", "anomalies"] as const satisfies readonly ConsumptionView[];
+type ConsumptionView = "trend" | "tou" | "detail";
+const CONSUMPTION_VIEWS = ["trend", "tou", "detail"] as const satisfies readonly ConsumptionView[];
 
 const GRANULARITY_COPY: Readonly<Record<Granularity, {
   readonly detailTitle: string;
@@ -206,7 +204,7 @@ export function ConsumptionWorkspace() {
               ) : null}
             </span>
             <PeriodTabs aria-label="统计期间" options={PERIOD_OPTIONS} value={period} onValueChange={(value) => setSearch({ period: value })} />
-            <Button variant="outline" size="icon" aria-label="刷新能耗" onClick={() => { void query.refetch(); void destination.query.refetch(); void destination.previous.refetch(); void queryClient.invalidateQueries({ queryKey: dataGapsKeys.site(site.id) }); void queryClient.invalidateQueries({ queryKey: billingKeys.counterAuditRoot(site.id) }); }}>
+            <Button variant="outline" size="icon" aria-label="刷新能耗" onClick={() => { void query.refetch(); void destination.query.refetch(); void destination.previous.refetch(); void queryClient.invalidateQueries({ queryKey: dataGapsKeys.site(site.id) }); }}>
               <RefreshCw />
             </Button>
             <Button variant="outline" disabled={!comparison?.buckets.length} onClick={exportCsv}>
@@ -216,7 +214,7 @@ export function ConsumptionWorkspace() {
           </>
         }
       />
-      <DataGapBanner siteId={site.id} timeZone={site.timezone} />
+      <DataGapBanner siteId={site.id} timeZone={site.timezone} context="consumption" />
       {query.isPending ? (
         <Skeleton className="h-[440px] rounded-xl" />
       ) : query.isError || !comparison ? (
@@ -229,7 +227,7 @@ export function ConsumptionWorkspace() {
         </Panel>
       ) : (
         <>
-          <IncompleteTelemetryNotice summary={comparison.current} />
+          <IncompleteTelemetryNotice summary={comparison.current} siteId={site.id} />
           <PeriodChart comparison={comparison} pricing={pricing} previousLabel={previousLabel} metric={metric} onMetricChange={(next) => setSearch({ metric: next })} timeZone={site.timezone} />
           <LayeredEfficiencyStrip
             summary={comparison.current}
@@ -244,7 +242,6 @@ export function ConsumptionWorkspace() {
                   <TabsTrigger value="trend" className="h-12 flex-none px-0 after:bottom-0!">分项趋势</TabsTrigger>
                   <TabsTrigger value="tou" className="h-12 flex-none px-0 after:bottom-0!">分时电费</TabsTrigger>
                   <TabsTrigger value="detail" className="h-12 flex-none px-0 after:bottom-0!">{GRANULARITY_COPY[comparison.current.granularity].detailTitle}</TabsTrigger>
-                  <TabsTrigger value="anomalies" className="h-12 flex-none px-0 after:bottom-0!">异常清洗留痕</TabsTrigger>
                 </TabsList>
                 <span className="ml-auto flex min-w-0 items-center gap-1 truncate text-xs text-muted-foreground">
                   {view === "tou"
@@ -263,9 +260,6 @@ export function ConsumptionWorkspace() {
               <TabsContent value="detail">
                 <DetailTable comparison={comparison} pricing={pricing} previousLabel={previousLabel} timeZone={site.timezone} />
               </TabsContent>
-              <TabsContent value="anomalies">
-                <CounterAnomalyAuditTab period={period} />
-              </TabsContent>
             </Tabs>
           </Panel>
         </>
@@ -282,7 +276,7 @@ interface Pricing {
   readonly codes: readonly PeriodCode[];
 }
 
-function IncompleteTelemetryNotice({ summary }: { readonly summary: EnergySummary }) {
+function IncompleteTelemetryNotice({ summary, siteId }: { readonly summary: EnergySummary; readonly siteId: string }) {
   if (summary.missingMeters.length === 0 && summary.incompleteBuckets === 0) return null;
   const scope = GRANULARITY_COPY[summary.granularity].incompleteScope;
   const detail = summary.missingMeters.length > 0
@@ -293,13 +287,16 @@ function IncompleteTelemetryNotice({ summary }: { readonly summary: EnergySummar
       role="status"
       aria-label="计量不完整提示"
       data-testid="consumption-incomplete-notice"
-      className="flex flex-wrap items-center gap-2 rounded-lg border border-warning-soft bg-warning-soft/45 px-4 py-2.5 text-xs text-foreground"
+      className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-warning-soft bg-warning-soft/45 px-4 py-2.5 text-xs text-foreground"
     >
-      <Badge variant="warning">▲ 不完整</Badge>
-      <span className="font-medium text-warning-text">{detail}</span>
-      <span className="text-muted-foreground">
-        空调用电未包含缺失设备，综合能效可能偏高，对比时请留意。
-      </span>
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge variant="warning">▲ 不完整</Badge>
+        <span className="font-medium text-warning-text">{detail}</span>
+        <span className="text-muted-foreground">未含缺失设备，能效可能偏高</span>
+      </div>
+      <PanelLink to="/settings/integrations" search={{ site: siteId, view: "anomalies" }}>
+        清洗留痕
+      </PanelLink>
     </div>
   );
 }

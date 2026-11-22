@@ -1,6 +1,6 @@
 import type { SiteDataGap } from '../../api/generated/platformGateway.gen.ts';
 
-export type DataGapBannerContext = 'overview' | 'general';
+export type DataGapBannerContext = 'overview' | 'general' | 'consumption';
 
 export interface DataGapSummary {
   readonly message: string;

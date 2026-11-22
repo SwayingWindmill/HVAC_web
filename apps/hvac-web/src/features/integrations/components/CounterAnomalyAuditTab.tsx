@@ -1,13 +1,13 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { getRouteApi } from '@tanstack/react-router';
 import { ShieldCheck } from 'lucide-react';
-import { uuidV7Schema } from '@/api/generated/platformGateway.gen';
-import { registryAssetModelQuery } from '@/api/registry';
+import { siteAssetModelQuery } from '@/api/site-asset-model';
+import { Panel } from '@/blocks/panel';
 import { StateCard } from '@/blocks/state/state-card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
+import { PeriodTabs, type PeriodOption } from '@/components/ui/period-tabs';
 import {
   Select,
   SelectContent,
@@ -33,14 +33,20 @@ import {
   formatCounterQualityReasons,
   type CounterTransitionFilterValue,
 } from '@/features/billing/accounting-config-model';
-import { describeAccountingConfigError } from '@/features/billing/query';
+import { describeAccountingConfigError, siteCounterAuditQuery } from '@/features/billing/query';
+import {
+  ENERGY_PERIODS,
+  periodWindow,
+  type EnergyPeriod,
+} from '@/features/energy-analysis/consumption/model';
+import { useNow } from '@/hooks/use-now';
 import { formatDecimal, formatTime } from '@/lib/operator-format';
 import { isOneOf } from '@/lib/typed';
 import { cn } from '@/lib/utils';
-import type { EnergyPeriod } from '../model';
-import { useCounterAnomalyAudit } from '../query';
 
-const siteRoute = getRouteApi('/_app/_site');
+const PERIOD_OPTIONS: readonly PeriodOption<EnergyPeriod>[] = (
+  ['today', '7d', 'month', 'year'] as const
+).map((value) => ({ value, label: ENERGY_PERIODS[value] }));
 
 const COUNTER_TRANSITION_FILTER_VALUES = [
   'ALL',
@@ -55,24 +61,38 @@ const COUNTER_TRANSITION_FILTER_VALUES = [
 ] as const satisfies readonly CounterTransitionFilterValue[];
 
 export interface CounterAnomalyAuditTabProps {
-  readonly period: EnergyPeriod;
+  readonly siteId: string | null;
+  readonly timeZone: string;
 }
 
-export function CounterAnomalyAuditTab({ period }: CounterAnomalyAuditTabProps) {
-  const { site } = siteRoute.useRouteContext();
+export function CounterAnomalyAuditTab({ siteId, timeZone }: CounterAnomalyAuditTabProps) {
+  const [period, setPeriod] = useState<EnergyPeriod>('today');
   const [anomaliesOnly, setAnomaliesOnly] = useState(true);
   const [transitionFilter, setTransitionFilter] = useState<CounterTransitionFilterValue>('ALL');
 
-  const auditQuery = useCounterAnomalyAudit(period, {
-    anomaliesOnly,
-    limit: 200,
-    enabled: true,
-  });
+  const nowMs = useNow(60_000);
+  const bucketNow = useMemo(() => new Date(Math.floor(nowMs / 60_000) * 60_000), [nowMs]);
+  const { from } = useMemo(() => periodWindow(period, bucketNow, timeZone), [period, bucketNow, timeZone]);
 
-  const assetModelQuery = useQuery({
-    ...registryAssetModelQuery(site.id, uuidV7Schema.safeParse(site.id).success),
-    retry: false,
-  });
+  const auditQuery = useQuery(
+    siteCounterAuditQuery(
+      siteId ?? '',
+      {
+        from: from.toISOString(),
+        to: bucketNow.toISOString(),
+        anomaliesOnly,
+        limit: 200,
+      },
+      Boolean(siteId),
+    ),
+  );
+
+  const assetModelQuery = useQuery(
+    siteAssetModelQuery(siteId, {
+      enabled: Boolean(siteId),
+      retry: false,
+    }),
+  );
 
   const { deviceById, pointById } = useMemo(() => {
     const model = assetModelQuery.data;
@@ -131,9 +151,21 @@ export function CounterAnomalyAuditTab({ period }: CounterAnomalyAuditTabProps) 
     };
   };
 
+  if (!siteId) {
+    return (
+      <Panel aria-label="异常清洗留痕" data-testid="counter-anomaly-audit">
+        <StateCard
+          icon={ShieldCheck}
+          title={<h3 className="text-base font-semibold">当前没有可选站点</h3>}
+          description="请先选择一个授权站点，再查看累计表计的异常清洗留痕。"
+        />
+      </Panel>
+    );
+  }
+
   if (auditQuery.isError) {
     return (
-      <div role="region" aria-label="异常清洗留痕" data-testid="counter-anomaly-audit">
+      <Panel aria-label="异常清洗留痕" data-testid="counter-anomaly-audit">
         <StateCard
           tone="danger"
           title={<h3 className="text-base font-semibold">无法读取表计异常清洗记录</h3>}
@@ -146,18 +178,16 @@ export function CounterAnomalyAuditTab({ period }: CounterAnomalyAuditTabProps) 
             重试
           </Button>
         </StateCard>
-      </div>
+      </Panel>
     );
   }
 
   return (
-    <div
-      role="region"
+    <Panel
       aria-label="异常清洗留痕"
       data-testid="counter-anomaly-audit"
       className="flex flex-col"
     >
-      {/* Compact 6-metric KPI strip */}
       {auditQuery.isPending || !auditData ? (
         <div className="grid grid-cols-2 divide-x divide-y divide-divider border-b border-divider sm:grid-cols-3 lg:grid-cols-6 lg:divide-y-0">
           {Array.from({ length: 6 }, (_, index) => (
@@ -191,9 +221,15 @@ export function CounterAnomalyAuditTab({ period }: CounterAnomalyAuditTabProps) 
         </div>
       )}
 
-      {/* Filter bar */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-divider bg-muted/20 px-5 py-3">
         <div className="flex flex-wrap items-center gap-4">
+          <PeriodTabs
+            aria-label="统计期间"
+            options={PERIOD_OPTIONS}
+            value={period}
+            onValueChange={setPeriod}
+          />
+
           <div className="flex items-center gap-2">
             <Switch
               id="counter-audit-anomalies-only"
@@ -249,7 +285,6 @@ export function CounterAnomalyAuditTab({ period }: CounterAnomalyAuditTabProps) 
         ) : null}
       </div>
 
-      {/* Audit items table */}
       {auditQuery.isPending || !auditData ? (
         <div className="p-5">
           <Skeleton className="h-44 w-full rounded-lg" />
@@ -299,18 +334,15 @@ export function CounterAnomalyAuditTab({ period }: CounterAnomalyAuditTabProps) 
           ) : null}
         </StateCard>
       ) : (
-        <Table
-          aria-label="表计异常清洗明细"
-          className="[&_td]:whitespace-nowrap [&_th]:whitespace-nowrap"
-        >
+        <Table aria-label="表计异常清洗明细">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead className="pl-5">时间窗口</TableHead>
-              <TableHead>测点与设备</TableHead>
-              <TableHead>清洗分类</TableHead>
-              <TableHead className="text-right">原始读数变化</TableHead>
-              <TableHead className="text-right">清洗后净增量</TableHead>
-              <TableHead className="pr-5">质量与判定原因</TableHead>
+              <TableHead className="whitespace-nowrap pl-5">时间窗口</TableHead>
+              <TableHead className="whitespace-nowrap">测点与设备</TableHead>
+              <TableHead className="whitespace-nowrap">清洗分类</TableHead>
+              <TableHead className="whitespace-nowrap text-right">原始读数变化</TableHead>
+              <TableHead className="whitespace-nowrap text-right">清洗后净增量</TableHead>
+              <TableHead className="whitespace-nowrap pr-5">质量与判定原因</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -323,12 +355,12 @@ export function CounterAnomalyAuditTab({ period }: CounterAnomalyAuditTabProps) 
                 <TableRow
                   key={`${item.pointId}-${item.periodEnd}-${item.transitionType}-${index}`}
                 >
-                  <TableCell className="pl-5 font-mono text-xs tabular-nums">
-                    <span>{item.periodStart ? formatTime(item.periodStart, site.timezone) : '—'}</span>
+                  <TableCell className="whitespace-nowrap pl-5 font-mono text-xs tabular-nums">
+                    <span>{item.periodStart ? formatTime(item.periodStart, timeZone) : '—'}</span>
                     <span className="mx-1 text-muted-foreground">→</span>
-                    <span>{formatTime(item.periodEnd, site.timezone)}</span>
+                    <span>{formatTime(item.periodEnd, timeZone)}</span>
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="min-w-36">
                     <div className="font-medium text-foreground">{target.title}</div>
                     {target.subtitle ? (
                       <div className="mt-0.5 font-mono text-xs text-muted-foreground">
@@ -336,12 +368,12 @@ export function CounterAnomalyAuditTab({ period }: CounterAnomalyAuditTabProps) 
                       </div>
                     ) : null}
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="whitespace-nowrap">
                     <Badge variant={transition.variant}>
                       {transition.marker} {transition.label}
                     </Badge>
                   </TableCell>
-                  <TableCell className="text-right font-mono text-xs tabular-nums">
+                  <TableCell className="whitespace-nowrap text-right font-mono text-xs tabular-nums">
                     <span>
                       {item.rawPrevious !== null ? formatDecimal(item.rawPrevious, 2) : '—'}
                     </span>
@@ -351,7 +383,7 @@ export function CounterAnomalyAuditTab({ period }: CounterAnomalyAuditTabProps) 
                     </span>
                     <span className="ml-1 text-subtle-foreground">{item.unit}</span>
                   </TableCell>
-                  <TableCell className="text-right font-mono font-medium tabular-nums">
+                  <TableCell className="whitespace-nowrap text-right font-mono font-medium tabular-nums">
                     {item.cleanedDeltaKWh !== null ? (
                       <>
                         {formatDecimal(item.cleanedDeltaKWh, 2)}
@@ -365,10 +397,17 @@ export function CounterAnomalyAuditTab({ period }: CounterAnomalyAuditTabProps) 
                   </TableCell>
                   <TableCell className="pr-5">
                     <div className="flex items-center gap-2">
-                      <Badge variant={quality.variant}>{quality.label}</Badge>
-                      <span className="max-w-xs truncate text-xs text-muted-foreground" title={reasonText}>
-                        {reasonText}
-                      </span>
+                      <Badge variant={quality.variant} className="shrink-0">
+                        {quality.label}
+                      </Badge>
+                      {reasonText ? (
+                        <span
+                          className="max-w-44 truncate text-xs text-muted-foreground"
+                          title={reasonText}
+                        >
+                          {reasonText}
+                        </span>
+                      ) : null}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -377,6 +416,6 @@ export function CounterAnomalyAuditTab({ period }: CounterAnomalyAuditTabProps) 
           </TableBody>
         </Table>
       )}
-    </div>
+    </Panel>
   );
 }
