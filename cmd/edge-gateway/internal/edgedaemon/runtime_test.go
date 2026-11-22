@@ -810,3 +810,132 @@ func TestDaemonShadowAggregationClusterAndScheduleLifecycle(t *testing.T) {
 		t.Fatalf("expected fallback active after schedule lease expiry")
 	}
 }
+
+func TestDaemonMixedModbusBACnetOPCUAShadowHotReload(t *testing.T) {
+	modEP := startLocalModbusTCP(t, map[uint16]uint16{100: 72})
+
+	bacConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = bacConn.Close() })
+	go func() {
+		buf := make([]byte, 2048)
+		for {
+			n, raddr, rErr := bacConn.ReadFromUDP(buf)
+			if rErr != nil {
+				return
+			}
+			pkt, dErr := edgecontrol.DecodeBACnetPacket(buf[:n])
+			if dErr != nil || pkt.PDUType != edgecontrol.BACnetAPDUTypeConfirmedRequest {
+				continue
+			}
+			if pkt.Service == edgecontrol.BACnetServiceReadProperty {
+				objID, propID, _ := edgecontrol.DecodeBACnetReadPropertyRequest(pkt.Payload)
+				ack, _ := edgecontrol.EncodeBACnetReadPropertyACK(objID, propID, edgecontrol.BACnetAppValue{Type: edgecontrol.DataTypeFloat, Real: 12.5})
+				resp, _ := edgecontrol.EncodeBACnetPacket(edgecontrol.BACnetPacket{PDUType: edgecontrol.BACnetAPDUTypeComplexACK, InvokeID: pkt.InvokeID, Service: pkt.Service, Payload: ack})
+				_, _ = bacConn.WriteToUDP(resp, raddr)
+			}
+		}
+	}()
+
+	uaLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = uaLn.Close() })
+	go func() {
+		for {
+			c, aErr := uaLn.Accept()
+			if aErr != nil {
+				return
+			}
+			go func(conn net.Conn) {
+				defer func() { _ = conn.Close() }()
+				for {
+					mType, frame, fErr := edgecontrol.ReadOPCUAFrame(conn)
+					if fErr != nil {
+						return
+					}
+					switch mType {
+					case edgecontrol.OPCUAMsgHello:
+						_, _ = conn.Write(edgecontrol.EncodeOPCUAAcknowledge())
+					case edgecontrol.OPCUAMsgOpenChannel:
+						opn, _ := edgecontrol.DecodeOPCUAOpenRequest(frame)
+						_, _ = conn.Write(edgecontrol.EncodeOPCUAOpenResponse(edgecontrol.OPCUAOpenChannelFrame{
+							SecurityPolicy: edgecontrol.OPCUASecurityPolicyNone, SeqNum: opn.SeqNum, RequestID: opn.RequestID, TokenChannelID: 11, TokenID: 1, RevisedLifetime: 3600000,
+						}))
+					case edgecontrol.OPCUAMsgMessage:
+						chID, tokID, seq, reqID, body, _ := edgecontrol.DecodeOPCUASecureMessage(frame, edgecontrol.OPCUASecurityModeNone, nil)
+						svc, _ := edgecontrol.PeekOPCUAServiceID(body)
+						var resp []byte
+						switch svc {
+						case edgecontrol.OPCUAServiceCreateSessionReq:
+							resp = edgecontrol.EncodeOPCUACreateSessionResponse(edgecontrol.OPCUAStatusGood, 21, nil)
+						case edgecontrol.OPCUAServiceActivateSessionReq:
+							resp = edgecontrol.EncodeOPCUAActivateSessionResponse(edgecontrol.OPCUAStatusGood)
+						case edgecontrol.OPCUAServiceReadReq:
+							resp = edgecontrol.EncodeOPCUAReadResponse(edgecontrol.OPCUAStatusGood, []edgecontrol.OPCUADataValue{{HasValue: true, Value: edgecontrol.DoubleValue(25.4), StatusCode: edgecontrol.OPCUAStatusGood}})
+						}
+						wire, _ := edgecontrol.EncodeOPCUASecureMessage(edgecontrol.OPCUAMsgMessage, chID, tokID, seq, reqID, resp, edgecontrol.OPCUASecurityModeNone, nil)
+						_, _ = conn.Write(wire)
+					}
+				}
+			}(c)
+		}
+	}()
+
+	now := time.Date(2026, 11, 22, 13, 0, 0, 0, time.UTC)
+	cfg := Config{GatewayID: "0193f000-2000-7000-8000-000000000299", StateDir: t.TempDir()}
+	cfg.ApplyDefaults("0.1.2")
+	daemon, err := NewDaemon(cfg, DaemonOptions{Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatalf("NewDaemon: %v", err)
+	}
+	defer func() { _ = daemon.Close() }()
+
+	uid, tmo, ret, devInst := 1, 500, 0, 501
+	bacEP := bacConn.LocalAddr().String()
+	uaEP := "opc.tcp://" + uaLn.Addr().String()
+	rep, stale, err := daemon.Shadow().ApplyDesired(GatewayDesiredConfig{
+		DesiredRevision: 1,
+		DriverConfigs: []edgecontrol.ModbusDriverInput{
+			{
+				DeviceKey: "chiller-mod", DriverType: "MODBUS_TCP", Endpoint: &modEP, UnitID: &uid, TimeoutMS: &tmo, Retries: &ret,
+				Registers: []edgecontrol.ModbusRegisterInput{{PointCode: "chw_temp", FunctionCode: 3, Address: 100, RegisterCount: 1, RawType: "UINT16", ByteOrder: "BIG_ENDIAN", WordOrder: "BIG_ENDIAN", Scale: 0.1, PollPriority: "HIGH"}},
+			},
+			{
+				DeviceKey: "ahu-bac", DriverType: edgecontrol.DriverTypeBACnetIP, Endpoint: &bacEP, TimeoutMS: &tmo, Retries: &ret,
+				BACnet: &edgecontrol.BACnetDriverSpecInput{DeviceInstance: &devInst, Objects: []edgecontrol.BACnetObjectInput{{PointCode: "sa_temp", ObjectType: "ANALOG_INPUT", ObjectInstance: 1, PollPriority: "HIGH"}}},
+			},
+			{
+				DeviceKey: "bms-ua", DriverType: edgecontrol.DriverTypeOPCUA, Endpoint: &uaEP, TimeoutMS: &tmo, Retries: &ret,
+				OPCUA: &edgecontrol.OPCUADriverSpecInput{SecurityPolicy: edgecontrol.OPCUASecurityPolicyNone, SecurityMode: edgecontrol.OPCUASecurityModeNone, Nodes: []edgecontrol.OPCUANodeInput{{PointCode: "oat_temp", NodeID: "ns=2;i=10", PollPriority: "HIGH"}}},
+			},
+		},
+	})
+	if err != nil || stale || rep.AppliedStatus != shadowStatusApplied || len(rep.DriverConfigs) != 3 {
+		t.Fatalf("ApplyDesired mixed protocols failed: rep=%+v stale=%v err=%v", rep, stale, err)
+	}
+
+	res, err := daemon.StepCycle(t.Context())
+	if err != nil {
+		t.Fatalf("StepCycle: %v", err)
+	}
+	for _, tc := range []struct {
+		addr string
+		want float64
+	}{
+		{"chiller-mod/chw_temp", 7.2},
+		{"ahu-bac/sa_temp", 12.5},
+		{"bms-ua/oat_temp", 25.4},
+	} {
+		snap, ok := res.Cycle.Image.Get(tc.addr)
+		if !ok || !snap.HasValue || snap.Sample.Quality != edgecontrol.QualityGood {
+			t.Fatalf("missing good sample for %s: %+v", tc.addr, snap)
+		}
+		if diff := snap.Sample.Value.Double - tc.want; diff < -0.01 || diff > 0.01 {
+			t.Fatalf("%s = %v, want %v", tc.addr, snap.Sample.Value.Double, tc.want)
+		}
+	}
+}

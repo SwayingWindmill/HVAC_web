@@ -274,17 +274,35 @@ ORDER BY sk.gateway_device_id ASC, sk.source_key ASC
 		return nil
 	}
 
-	tagEndpoint, tagUnitID, err := parseModbusTagOverrides(deviceTagsRaw)
+	overrides, err := parseDriverTagOverrides(deviceTagsRaw)
 	if err != nil {
 		return err
 	}
 	endpoint := driver.Endpoint
-	if endpoint == nil {
-		endpoint = tagEndpoint
-	}
 	unitID := driver.UnitID
-	if unitID == nil {
-		unitID = tagUnitID
+	bacnetSpec := driver.BACnet.Clone()
+	opcuaSpec := driver.OPCUA.Clone()
+
+	switch strings.ToUpper(strings.TrimSpace(driver.DriverType)) {
+	case edgecontrol.DriverTypeBACnetIP:
+		if endpoint == nil {
+			endpoint = overrides.bacnetEndpoint
+		}
+		if bacnetSpec != nil && bacnetSpec.DeviceInstance == nil && overrides.bacnetDeviceInstance != nil {
+			inst := *overrides.bacnetDeviceInstance
+			bacnetSpec.DeviceInstance = &inst
+		}
+	case edgecontrol.DriverTypeOPCUA:
+		if endpoint == nil {
+			endpoint = overrides.opcuaEndpoint
+		}
+	default:
+		if endpoint == nil {
+			endpoint = overrides.modbusEndpoint
+		}
+		if unitID == nil {
+			unitID = overrides.modbusUnitID
+		}
 	}
 
 	reason := "template:" + templateKey + "@" + revisionID
@@ -299,6 +317,8 @@ ORDER BY sk.gateway_device_id ASC, sk.source_key ASC
 			TimeoutMS:         driver.TimeoutMS,
 			Retries:           driver.Retries,
 			Registers:         edgecontrol.CloneModbusRegisters(driver.Registers),
+			BACnet:            bacnetSpec.Clone(),
+			OPCUA:             opcuaSpec.Clone(),
 			UpdatedBy:         strings.TrimSpace(causationEventID),
 			Reason:            reason,
 		}
@@ -309,48 +329,89 @@ ORDER BY sk.gateway_device_id ASC, sk.source_key ASC
 	return nil
 }
 
+type driverTagOverrides struct {
+	modbusEndpoint       *string
+	modbusUnitID         *int
+	bacnetEndpoint       *string
+	bacnetDeviceInstance *int
+	opcuaEndpoint        *string
+}
+
 func parseModbusTagOverrides(raw []byte) (*string, *int, error) {
+	parsed, err := parseDriverTagOverrides(raw)
+	if err != nil {
+		return nil, nil, err
+	}
+	return parsed.modbusEndpoint, parsed.modbusUnitID, nil
+}
+
+func parseDriverTagOverrides(raw []byte) (driverTagOverrides, error) {
+	var out driverTagOverrides
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-		return nil, nil, nil
+		return out, nil
 	}
 	var tags map[string]json.RawMessage
 	if err := json.Unmarshal(trimmed, &tags); err != nil {
-		return nil, nil, fmt.Errorf("parse device tags: %w", err)
+		return out, fmt.Errorf("parse device tags: %w", err)
 	}
-	var endpointPtr *string
-	if epRaw, ok := tags["modbus_endpoint"]; ok && !bytes.Equal(bytes.TrimSpace(epRaw), []byte("null")) {
-		var s string
-		if err := json.Unmarshal(epRaw, &s); err != nil {
-			return nil, nil, fmt.Errorf("modbus_endpoint tag must be a string: %w", err)
-		}
-		clean := strings.TrimSpace(s)
-		if clean == "" {
-			return nil, nil, errors.New("modbus_endpoint tag must not be blank")
-		}
-		endpointPtr = &clean
+	var err error
+	if out.modbusEndpoint, err = parseOptionalStringTag(tags, "modbus_endpoint"); err != nil {
+		return out, err
 	}
-	var unitPtr *int
-	if uRaw, ok := tags["modbus_unit_id"]; ok && !bytes.Equal(bytes.TrimSpace(uRaw), []byte("null")) {
-		parsed := 0
-		var uInt int
-		if err := json.Unmarshal(uRaw, &uInt); err == nil {
-			parsed = uInt
-		} else {
-			var uStr string
-			if strErr := json.Unmarshal(uRaw, &uStr); strErr != nil {
-				return nil, nil, fmt.Errorf("modbus_unit_id tag must be an integer or numeric string: %w", err)
-			}
-			v, parseErr := strconv.Atoi(strings.TrimSpace(uStr))
-			if parseErr != nil {
-				return nil, nil, fmt.Errorf("invalid modbus_unit_id tag %q: %w", uStr, parseErr)
-			}
-			parsed = v
-		}
-		if parsed < 1 || parsed > 247 {
-			return nil, nil, fmt.Errorf("modbus_unit_id tag %d out of range [1,247]", parsed)
-		}
-		unitPtr = &parsed
+	if out.modbusUnitID, err = parseOptionalIntTag(tags, "modbus_unit_id", 1, 247); err != nil {
+		return out, err
 	}
-	return endpointPtr, unitPtr, nil
+	if out.bacnetEndpoint, err = parseOptionalStringTag(tags, "bacnet_endpoint"); err != nil {
+		return out, err
+	}
+	if out.bacnetDeviceInstance, err = parseOptionalIntTag(tags, "bacnet_device_instance", 0, 4194302); err != nil {
+		return out, err
+	}
+	if out.opcuaEndpoint, err = parseOptionalStringTag(tags, "opcua_endpoint"); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+func parseOptionalStringTag(tags map[string]json.RawMessage, key string) (*string, error) {
+	rawVal, ok := tags[key]
+	if !ok || bytes.Equal(bytes.TrimSpace(rawVal), []byte("null")) {
+		return nil, nil
+	}
+	var s string
+	if err := json.Unmarshal(rawVal, &s); err != nil {
+		return nil, fmt.Errorf("%s tag must be a string: %w", key, err)
+	}
+	clean := strings.TrimSpace(s)
+	if clean == "" {
+		return nil, fmt.Errorf("%s tag must not be blank", key)
+	}
+	return &clean, nil
+}
+
+func parseOptionalIntTag(tags map[string]json.RawMessage, key string, minVal, maxVal int) (*int, error) {
+	rawVal, ok := tags[key]
+	if !ok || bytes.Equal(bytes.TrimSpace(rawVal), []byte("null")) {
+		return nil, nil
+	}
+	parsed := 0
+	var iVal int
+	if err := json.Unmarshal(rawVal, &iVal); err == nil {
+		parsed = iVal
+	} else {
+		var sVal string
+		if strErr := json.Unmarshal(rawVal, &sVal); strErr != nil {
+			return nil, fmt.Errorf("%s tag must be an integer or numeric string: %w", key, strErr)
+		}
+		v, parseErr := strconv.Atoi(strings.TrimSpace(sVal))
+		if parseErr != nil {
+			return nil, fmt.Errorf("invalid %s tag %q: %w", key, sVal, parseErr)
+		}
+		parsed = v
+	}
+	if parsed < minVal || parsed > maxVal {
+		return nil, fmt.Errorf("%s tag %d out of range [%d,%d]", key, parsed, minVal, maxVal)
+	}
+	return &parsed, nil
 }

@@ -762,25 +762,7 @@ func clonePersistedShadowState(in persistedShadowState) persistedShadowState {
 }
 
 func cloneDriverInput(in edgecontrol.ModbusDriverInput) edgecontrol.ModbusDriverInput {
-	cp := in
-	if in.Endpoint != nil {
-		v := *in.Endpoint
-		cp.Endpoint = &v
-	}
-	if in.UnitID != nil {
-		v := *in.UnitID
-		cp.UnitID = &v
-	}
-	if in.TimeoutMS != nil {
-		v := *in.TimeoutMS
-		cp.TimeoutMS = &v
-	}
-	if in.Retries != nil {
-		v := *in.Retries
-		cp.Retries = &v
-	}
-	cp.Registers = edgecontrol.CloneModbusRegisters(in.Registers)
-	return cp
+	return edgecontrol.CloneSouthboundDriverInput(in)
 }
 
 func cloneDriverInputs(src []edgecontrol.ModbusDriverInput) []edgecontrol.ModbusDriverInput {

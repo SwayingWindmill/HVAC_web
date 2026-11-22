@@ -39,14 +39,16 @@ type GatewayModbusRegisterMapping struct {
 }
 
 type GatewayModbusDriverConfig struct {
-	DeviceKey         string                         `json:"deviceKey"`
-	DriverType        string                         `json:"driverType"`
-	Endpoint          string                         `json:"endpoint"`
-	UnitID            int                            `json:"unitId"`
-	CapabilityProfile string                         `json:"capabilityProfile,omitempty"`
-	TimeoutMS         int                            `json:"timeoutMs"`
-	Retries           int                            `json:"retries"`
-	Registers         []GatewayModbusRegisterMapping `json:"registers"`
+	DeviceKey         string                             `json:"deviceKey"`
+	DriverType        string                             `json:"driverType"`
+	Endpoint          string                             `json:"endpoint"`
+	UnitID            int                                `json:"unitId,omitempty"`
+	CapabilityProfile string                             `json:"capabilityProfile,omitempty"`
+	TimeoutMS         int                                `json:"timeoutMs"`
+	Retries           int                                `json:"retries"`
+	Registers         []GatewayModbusRegisterMapping     `json:"registers,omitempty"`
+	BACnet            *edgecontrol.BACnetDriverSpecInput `json:"bacnet,omitempty"`
+	OPCUA             *edgecontrol.OPCUADriverSpecInput  `json:"opcua,omitempty"`
 }
 
 type GatewayAutonomyPolicy struct {
@@ -120,38 +122,51 @@ func validateDriverConfigs(input []GatewayModbusDriverConfig) ([]GatewayModbusDr
 	out := make([]GatewayModbusDriverConfig, 0, len(input))
 	for i, driver := range input {
 		endpoint := driver.Endpoint
-		unitID := driver.UnitID
 		timeoutMS := driver.TimeoutMS
 		retries := driver.Retries
-		regInputs := make([]edgecontrol.ModbusRegisterInput, len(driver.Registers))
-		for j, reg := range driver.Registers {
-			regInputs[j] = edgecontrol.ModbusRegisterInput{
-				PointCode:         reg.PointCode,
-				SemanticChannel:   reg.SemanticChannel,
-				FunctionCode:      reg.FunctionCode,
-				WriteFunctionCode: cloneOptionalInt(reg.WriteFunctionCode),
-				Address:           reg.Address,
-				RegisterCount:     reg.RegisterCount,
-				RawType:           reg.RawType,
-				ByteOrder:         reg.ByteOrder,
-				WordOrder:         reg.WordOrder,
-				BitIndex:          cloneOptionalInt(reg.BitIndex),
-				Scale:             reg.Scale,
-				Offset:            reg.Offset,
-				PollPriority:      reg.PollPriority,
-				EnumMap:           reg.EnumMap,
+		driverType := strings.ToUpper(strings.TrimSpace(driver.DriverType))
+
+		var unitIDPtr *int
+		isModbus := driverType == string(edgecontrol.ModbusDriverTCP) || driverType == string(edgecontrol.ModbusDriverRTU)
+		if isModbus || driver.UnitID != 0 {
+			u := driver.UnitID
+			unitIDPtr = &u
+		}
+
+		var regInputs []edgecontrol.ModbusRegisterInput
+		if len(driver.Registers) > 0 {
+			regInputs = make([]edgecontrol.ModbusRegisterInput, len(driver.Registers))
+			for j, reg := range driver.Registers {
+				regInputs[j] = edgecontrol.ModbusRegisterInput{
+					PointCode:         reg.PointCode,
+					SemanticChannel:   reg.SemanticChannel,
+					FunctionCode:      reg.FunctionCode,
+					WriteFunctionCode: cloneOptionalInt(reg.WriteFunctionCode),
+					Address:           reg.Address,
+					RegisterCount:     reg.RegisterCount,
+					RawType:           reg.RawType,
+					ByteOrder:         reg.ByteOrder,
+					WordOrder:         reg.WordOrder,
+					BitIndex:          cloneOptionalInt(reg.BitIndex),
+					Scale:             reg.Scale,
+					Offset:            reg.Offset,
+					PollPriority:      reg.PollPriority,
+					EnumMap:           reg.EnumMap,
+				}
 			}
 		}
 
-		profile, err := edgecontrol.ValidateModbusDriverInput(edgecontrol.ModbusDriverInput{
+		southbound, err := edgecontrol.ValidateSouthboundDriverInput(edgecontrol.ModbusDriverInput{
 			DeviceKey:         driver.DeviceKey,
 			DriverType:        driver.DriverType,
 			Endpoint:          &endpoint,
-			UnitID:            &unitID,
+			UnitID:            unitIDPtr,
 			CapabilityProfile: driver.CapabilityProfile,
 			TimeoutMS:         &timeoutMS,
 			Retries:           &retries,
 			Registers:         regInputs,
+			BACnet:            driver.BACnet.Clone(),
+			OPCUA:             driver.OPCUA.Clone(),
 		}, edgecontrol.ModbusDriverValidationOptions{
 			RequireDeviceKey:       true,
 			RequireGatewayBindings: true,
@@ -159,19 +174,58 @@ func validateDriverConfigs(input []GatewayModbusDriverConfig) ([]GatewayModbusDr
 		if err != nil {
 			return nil, fmt.Errorf("%w: driverConfigs[%d]: %v", ErrConfigShadowInvalid, i, err)
 		}
-		if _, dup := seenDevices[profile.ComponentID]; dup {
-			return nil, fmt.Errorf("%w: duplicate driverConfigs deviceKey %q", ErrConfigShadowInvalid, profile.ComponentID)
+		cleaned := driverConfigFromSouthboundProfile(southbound)
+		if _, dup := seenDevices[cleaned.DeviceKey]; dup {
+			return nil, fmt.Errorf("%w: duplicate driverConfigs deviceKey %q", ErrConfigShadowInvalid, cleaned.DeviceKey)
 		}
-		seenDevices[profile.ComponentID] = struct{}{}
+		seenDevices[cleaned.DeviceKey] = struct{}{}
 
-		cleaned := driverConfigFromEdgeProfile(profile)
 		slices.SortFunc(cleaned.Registers, compareRegisterMappings)
+		if cleaned.BACnet != nil {
+			slices.SortFunc(cleaned.BACnet.Objects, func(a, b edgecontrol.BACnetObjectInput) int {
+				return strings.Compare(a.PointCode, b.PointCode)
+			})
+		}
+		if cleaned.OPCUA != nil {
+			slices.SortFunc(cleaned.OPCUA.Nodes, func(a, b edgecontrol.OPCUANodeInput) int {
+				return strings.Compare(a.PointCode, b.PointCode)
+			})
+		}
 		out = append(out, cleaned)
 	}
 	slices.SortFunc(out, func(a, b GatewayModbusDriverConfig) int {
 		return strings.Compare(a.DeviceKey, b.DeviceKey)
 	})
 	return out, nil
+}
+
+func driverConfigFromSouthboundProfile(profile edgecontrol.SouthboundDriverProfile) GatewayModbusDriverConfig {
+	if profile.Kind == edgecontrol.SouthboundKindModbus && profile.Modbus != nil {
+		return driverConfigFromEdgeProfile(*profile.Modbus)
+	}
+	wire := profile.ToDriverInput(true)
+	ep := ""
+	if wire.Endpoint != nil {
+		ep = *wire.Endpoint
+	}
+	tmo := 1000
+	if wire.TimeoutMS != nil {
+		tmo = *wire.TimeoutMS
+	}
+	ret := 0
+	if wire.Retries != nil {
+		ret = *wire.Retries
+	}
+	return GatewayModbusDriverConfig{
+		DeviceKey:         wire.DeviceKey,
+		DriverType:        wire.DriverType,
+		Endpoint:          ep,
+		CapabilityProfile: wire.CapabilityProfile,
+		TimeoutMS:         tmo,
+		Retries:           ret,
+		BACnet:            wire.BACnet.Clone(),
+		OPCUA:             wire.OPCUA.Clone(),
+	}
 }
 
 func driverConfigFromEdgeProfile(profile edgecontrol.DeclarativeModbusProfile) GatewayModbusDriverConfig {
@@ -266,8 +320,10 @@ func cloneDriverConfigsList(src []GatewayModbusDriverConfig) []GatewayModbusDriv
 			}
 			out[i].Registers = regs
 		} else {
-			out[i].Registers = []GatewayModbusRegisterMapping{}
+			out[i].Registers = nil
 		}
+		out[i].BACnet = driver.BACnet.Clone()
+		out[i].OPCUA = driver.OPCUA.Clone()
 	}
 	return out
 }
@@ -323,6 +379,72 @@ func registerMappingsEqual(a, b GatewayModbusRegisterMapping) bool {
 		maps.Equal(a.EnumMap, b.EnumMap)
 }
 
+func bacnetSpecsEqual(a, b *edgecontrol.BACnetDriverSpecInput) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	if !equalOptionalInt(a.DeviceInstance, b.DeviceInstance) ||
+		!equalOptionalInt(a.NetworkNumber, b.NetworkNumber) ||
+		!equalOptionalInt(a.COVLifetimeSeconds, b.COVLifetimeSeconds) ||
+		!equalOptionalInt(a.WritePriority, b.WritePriority) ||
+		len(a.Objects) != len(b.Objects) {
+		return false
+	}
+	for i := range a.Objects {
+		oa, ob := a.Objects[i], b.Objects[i]
+		if oa.PointCode != ob.PointCode ||
+			oa.SemanticChannel != ob.SemanticChannel ||
+			oa.SafetyBoundary != ob.SafetyBoundary ||
+			oa.ObjectType != ob.ObjectType ||
+			oa.ObjectInstance != ob.ObjectInstance ||
+			!equalOptionalInt(oa.PropertyID, ob.PropertyID) ||
+			oa.DataType != ob.DataType ||
+			oa.Writable != ob.Writable ||
+			oa.COVSubscribe != ob.COVSubscribe ||
+			oa.Scale != ob.Scale ||
+			oa.Offset != ob.Offset ||
+			oa.PollPriority != ob.PollPriority ||
+			oa.Unit != ob.Unit ||
+			!maps.Equal(oa.EnumMap, ob.EnumMap) {
+			return false
+		}
+	}
+	return true
+}
+
+func opcuaSpecsEqual(a, b *edgecontrol.OPCUADriverSpecInput) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	if a.SecurityPolicy != b.SecurityPolicy ||
+		a.SecurityMode != b.SecurityMode ||
+		a.AuthMode != b.AuthMode ||
+		a.Username != b.Username ||
+		a.CredentialRef != b.CredentialRef ||
+		a.SubscriptionIntervalMS != b.SubscriptionIntervalMS ||
+		len(a.Nodes) != len(b.Nodes) {
+		return false
+	}
+	for i := range a.Nodes {
+		na, nb := a.Nodes[i], b.Nodes[i]
+		if na.PointCode != nb.PointCode ||
+			na.SemanticChannel != nb.SemanticChannel ||
+			na.SafetyBoundary != nb.SafetyBoundary ||
+			na.NodeID != nb.NodeID ||
+			!equalOptionalInt(na.NamespaceIndex, nb.NamespaceIndex) ||
+			na.DataType != nb.DataType ||
+			na.Writable != nb.Writable ||
+			na.Subscribe != nb.Subscribe ||
+			na.Scale != nb.Scale ||
+			na.Offset != nb.Offset ||
+			na.PollPriority != nb.PollPriority ||
+			na.Unit != nb.Unit {
+			return false
+		}
+	}
+	return true
+}
+
 func driverConfigsEqual(a, b GatewayModbusDriverConfig) bool {
 	if a.DeviceKey != b.DeviceKey ||
 		a.DriverType != b.DriverType ||
@@ -339,7 +461,7 @@ func driverConfigsEqual(a, b GatewayModbusDriverConfig) bool {
 			return false
 		}
 	}
-	return true
+	return bacnetSpecsEqual(a.BACnet, b.BACnet) && opcuaSpecsEqual(a.OPCUA, b.OPCUA)
 }
 
 func diffDriverConfigs(desired, reported []GatewayModbusDriverConfig) []DriftDetail {
@@ -353,6 +475,18 @@ func diffDriverConfigs(desired, reported []GatewayModbusDriverConfig) []DriftDet
 			slices.SortFunc(regs, compareRegisterMappings)
 			copied := item
 			copied.Registers = regs
+			copied.BACnet = item.BACnet.Clone()
+			if copied.BACnet != nil {
+				slices.SortFunc(copied.BACnet.Objects, func(a, b edgecontrol.BACnetObjectInput) int {
+					return strings.Compare(a.PointCode, b.PointCode)
+				})
+			}
+			copied.OPCUA = item.OPCUA.Clone()
+			if copied.OPCUA != nil {
+				slices.SortFunc(copied.OPCUA.Nodes, func(a, b edgecontrol.OPCUANodeInput) int {
+					return strings.Compare(a.PointCode, b.PointCode)
+				})
+			}
 			out[item.DeviceKey] = copied
 		}
 		return out

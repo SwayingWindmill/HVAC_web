@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 )
 
@@ -1144,5 +1145,84 @@ func TestConfigShadowTemplateDriverUpsertHTTPAndSPIFFEACL(t *testing.T) {
 	crossTenantOuter.ServeHTTP(crossRec, crossReq)
 	if crossRec.Code != http.StatusForbidden {
 		t.Fatalf("expected 403 for cross-tenant platform-gateway grant on upsert route, got %d (%s)", crossRec.Code, crossRec.Body.String())
+	}
+}
+
+func TestConfigShadowMultiProtocolBACnetIPAndOPCUAValidationAndDrift(t *testing.T) {
+	t.Parallel()
+
+	devInst, writePrio := 204, 8
+	multiDrivers := []GatewayModbusDriverConfig{
+		{
+			DeviceKey:  "ahu-bacnet-1",
+			DriverType: "BACNET_IP",
+			Endpoint:   "192.168.10.30:47808",
+			TimeoutMS:  1200,
+			Retries:    2,
+			BACnet: &edgecontrol.BACnetDriverSpecInput{
+				DeviceInstance: &devInst,
+				WritePriority:  &writePrio,
+				Objects: []edgecontrol.BACnetObjectInput{
+					{PointCode: "sa_temp", ObjectType: "ANALOG_INPUT", ObjectInstance: 1, DataType: "DOUBLE", COVSubscribe: true, PollPriority: "HIGH"},
+					{PointCode: "sa_sp", ObjectType: "ANALOG_OUTPUT", ObjectInstance: 2, DataType: "DOUBLE", Writable: true, PollPriority: "HIGH"},
+				},
+			},
+		},
+		{
+			DeviceKey:  "bms-opcua-1",
+			DriverType: "OPC_UA",
+			Endpoint:   "opc.tcp://192.168.10.40:4840/plant",
+			TimeoutMS:  1500,
+			Retries:    1,
+			OPCUA: &edgecontrol.OPCUADriverSpecInput{
+				SecurityPolicy: edgecontrol.OPCUASecurityPolicyBasic256Sha256,
+				SecurityMode:   edgecontrol.OPCUASecurityModeSignAndEncrypt,
+				AuthMode:       edgecontrol.OPCUAAuthAnonymous,
+				Nodes: []edgecontrol.OPCUANodeInput{
+					{PointCode: "chw_flow", NodeID: "ns=2;i=10", DataType: "DOUBLE", Subscribe: true, PollPriority: "HIGH"},
+				},
+			},
+		},
+	}
+
+	cleaned, err := validateDriverConfigs(multiDrivers)
+	if err != nil || len(cleaned) != 2 {
+		t.Fatalf("validateDriverConfigs mixed BACnet/OPC-UA failed: len=%d err=%v", len(cleaned), err)
+	}
+	if drift := ComputeConfigShadowDrift(
+		&GatewayDesiredConfig{DriverConfigs: cleaned},
+		&GatewayReportedConfig{DriverConfigs: []GatewayModbusDriverConfig{cleaned[1], cleaned[0]}},
+	); len(drift) != 0 {
+		t.Fatalf("expected zero order-independent multi-protocol drift, got %+v", drift)
+	}
+
+	// Reject EDGE-003 writable protection point in OPC-UA and input-only writable in BACnet/IP.
+	if _, err := validateDriverConfigs([]GatewayModbusDriverConfig{{
+		DeviceKey:  "bad-bac",
+		DriverType: "BACNET_IP",
+		Endpoint:   "192.168.10.30:47808",
+		TimeoutMS:  1000,
+		Retries:    1,
+		BACnet: &edgecontrol.BACnetDriverSpecInput{
+			DeviceInstance: &devInst,
+			Objects:        []edgecontrol.BACnetObjectInput{{PointCode: "sa_temp", ObjectType: "ANALOG_INPUT", ObjectInstance: 1, Writable: true, PollPriority: "HIGH"}},
+		},
+	}}); err == nil {
+		t.Fatal("expected read-only BACnet input object rejection")
+	}
+
+	if _, err := validateDriverConfigs([]GatewayModbusDriverConfig{{
+		DeviceKey:  "bad-ua-safety",
+		DriverType: "OPC_UA",
+		Endpoint:   "opc.tcp://192.168.10.40:4840",
+		TimeoutMS:  1000,
+		Retries:    1,
+		OPCUA: &edgecontrol.OPCUADriverSpecInput{
+			SecurityPolicy: edgecontrol.OPCUASecurityPolicyNone,
+			SecurityMode:   edgecontrol.OPCUASecurityModeNone,
+			Nodes:          []edgecontrol.OPCUANodeInput{{PointCode: "plc_estop_cmd", SafetyBoundary: "HARD_REALTIME_SAFETY", NodeID: "ns=2;i=99", Writable: true, PollPriority: "VERY_HIGH"}},
+		},
+	}}); err == nil {
+		t.Fatal("expected EDGE-003 hard real-time OPC-UA write rejection")
 	}
 }
