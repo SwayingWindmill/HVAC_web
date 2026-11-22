@@ -958,9 +958,8 @@ func (s *Session) emitCloseAudit(ctx context.Context, reason string) {
 }
 
 func (s *Session) closeWithReason(reason string) {
-	if s.closeTransport() {
-		s.emitCloseAudit(context.Background(), reason)
-	}
+	s.closeTransport()
+	s.emitCloseAudit(context.Background(), reason)
 }
 
 func (s *Session) openStream(ctx context.Context, targetPort uint16, timeout time.Duration) (*Stream, error) {

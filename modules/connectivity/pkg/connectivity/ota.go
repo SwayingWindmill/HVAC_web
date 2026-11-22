@@ -29,9 +29,9 @@ const (
 	OTACampaignStatusRolledBack     = "ROLLED_BACK"
 	OTACampaignStatusFailed         = "FAILED"
 
-	OTAPauseReasonManual                 = "MANUAL_PAUSE"
-	OTAPauseReasonFailureRateExceeded    = "FAILURE_RATE_THRESHOLD_EXCEEDED"
-	OTAPauseReasonCanaryAwaitingPromote  = "CANARY_AWAITING_PROMOTION"
+	OTAPauseReasonManual                = "MANUAL_PAUSE"
+	OTAPauseReasonFailureRateExceeded   = "FAILURE_RATE_THRESHOLD_EXCEEDED"
+	OTAPauseReasonCanaryAwaitingPromote = "CANARY_AWAITING_PROMOTION"
 
 	OTAWaveCanary  = "CANARY"
 	OTAWaveRollout = "ROLLOUT"
@@ -44,15 +44,15 @@ const (
 	MinOTAHealthCheckTimeoutSec     = 10
 	MaxOTAHealthCheckTimeoutSec     = 1800
 
-	maxOTATagCount        = 64
-	maxOTATagValueRunes   = 256
-	maxOTASiteIDsCount    = 256
-	maxOTAHardwareModels  = 32
-	maxOTAReasonRunes     = 1000
-	maxOTACampaignName    = 160
-	maxOTAReleaseNotes    = 2000
-	maxOTAErrorCodeRunes  = 128
-	maxOTAErrorMsgRunes   = 1024
+	maxOTATagCount       = 64
+	maxOTATagValueRunes  = 256
+	maxOTASiteIDsCount   = 256
+	maxOTAHardwareModels = 32
+	maxOTAReasonRunes    = 1000
+	maxOTACampaignName   = 160
+	maxOTAReleaseNotes   = 2000
+	maxOTAErrorCodeRunes = 128
+	maxOTAErrorMsgRunes  = 1024
 )
 
 var (
@@ -89,36 +89,36 @@ type OTAPackage struct {
 
 // OTACampaignSummary summarizes an OTA campaign configuration and live per-stage counters.
 type OTACampaignSummary struct {
-	ID                       string            `json:"id"`
-	TenantID                 string            `json:"tenantId"`
-	Name                     string            `json:"name"`
-	PackageID                string            `json:"packageId"`
-	PackageVersion           string            `json:"packageVersion"`
-	Component                string            `json:"component"`
-	TargetOS                 string            `json:"targetOs"`
-	TargetArch               string            `json:"targetArch"`
-	TargetSiteIDs            []string          `json:"targetSiteIds"`
-	TargetTags               map[string]string `json:"targetTags"`
-	CanaryPercent            int               `json:"canaryPercent"`
-	FailureRateThresholdPct  int               `json:"failureRateThresholdPct"`
-	HealthCheckTimeoutSec    int               `json:"healthCheckTimeoutSec"`
-	AutoPromoteRollout       bool              `json:"autoPromoteRollout"`
-	Status                   string            `json:"status"`
-	PauseReason              *string           `json:"pauseReason,omitempty"`
-	Reason                   string            `json:"reason"`
-	TotalCount               int               `json:"totalCount"`
-	PendingCount             int               `json:"pendingCount"`
-	InProgressCount          int               `json:"inProgressCount"`
-	SucceededCount           int               `json:"succeededCount"`
-	FailedCount              int               `json:"failedCount"`
-	RolledBackCount          int               `json:"rolledBackCount"`
-	CancelledCount           int               `json:"cancelledCount"`
-	FailureRatePct           int               `json:"failureRatePct"`
-	CreatedBy                string            `json:"createdBy"`
-	UpdatedBy                string            `json:"updatedBy"`
-	CreatedAt                time.Time         `json:"createdAt"`
-	UpdatedAt                time.Time         `json:"updatedAt"`
-	CompletedAt              *time.Time        `json:"completedAt,omitempty"`
+	ID                      string            `json:"id"`
+	TenantID                string            `json:"tenantId"`
+	Name                    string            `json:"name"`
+	PackageID               string            `json:"packageId"`
+	PackageVersion          string            `json:"packageVersion"`
+	Component               string            `json:"component"`
+	TargetOS                string            `json:"targetOs"`
+	TargetArch              string            `json:"targetArch"`
+	TargetSiteIDs           []string          `json:"targetSiteIds"`
+	TargetTags              map[string]string `json:"targetTags"`
+	CanaryPercent           int               `json:"canaryPercent"`
+	FailureRateThresholdPct int               `json:"failureRateThresholdPct"`
+	HealthCheckTimeoutSec   int               `json:"healthCheckTimeoutSec"`
+	AutoPromoteRollout      bool              `json:"autoPromoteRollout"`
+	Status                  string            `json:"status"`
+	PauseReason             *string           `json:"pauseReason,omitempty"`
+	Reason                  string            `json:"reason"`
+	TotalCount              int               `json:"totalCount"`
+	PendingCount            int               `json:"pendingCount"`
+	InProgressCount         int               `json:"inProgressCount"`
+	SucceededCount          int               `json:"succeededCount"`
+	FailedCount             int               `json:"failedCount"`
+	RolledBackCount         int               `json:"rolledBackCount"`
+	CancelledCount          int               `json:"cancelledCount"`
+	FailureRatePct          int               `json:"failureRatePct"`
+	CreatedBy               string            `json:"createdBy"`
+	UpdatedBy               string            `json:"updatedBy"`
+	CreatedAt               time.Time         `json:"createdAt"`
+	UpdatedAt               time.Time         `json:"updatedAt"`
+	CompletedAt             *time.Time        `json:"completedAt,omitempty"`
 }
 
 // OTADeviceTask represents the execution state of one gateway within an OTA campaign.
@@ -483,14 +483,14 @@ func EvaluateOTACampaignTransition(
 	}
 
 	var (
-		allTotal           int
-		allFailed          int
-		allTerminal        = true
-		waveTotal          int
-		waveFailed         int
-		canaryTerminal     = true
-		canaryCount        int
-		pendingRolloutIDs  []string
+		allTotal          int
+		allFailed         int
+		allTerminal       = true
+		waveTotal         int
+		waveFailed        int
+		canaryTerminal    = true
+		canaryCount       int
+		pendingRolloutIDs []string
 	)
 
 	for _, task := range tasks {

@@ -345,9 +345,9 @@ func TestGatewayOTAProxyUploadCampaignsAuditAndLimits(t *testing.T) {
 	}
 
 	for raw, want := range map[string]string{
-		"/api/v1/ota/packages":                             "/api/v1/ota/packages",
-		"/api/v1/ota/campaigns":                            "/api/v1/ota/campaigns",
-		"/api/v1/ota/campaigns/" + fix.campaignID:          "/api/v1/ota/campaigns/{campaignId}",
+		"/api/v1/ota/packages":                                  "/api/v1/ota/packages",
+		"/api/v1/ota/campaigns":                                 "/api/v1/ota/campaigns",
+		"/api/v1/ota/campaigns/" + fix.campaignID:               "/api/v1/ota/campaigns/{campaignId}",
 		"/api/v1/ota/campaigns/" + fix.campaignID + "/pause":    "/api/v1/ota/campaigns/{campaignId}/pause",
 		"/api/v1/ota/campaigns/" + fix.campaignID + "/resume":   "/api/v1/ota/campaigns/{campaignId}/resume",
 		"/api/v1/ota/campaigns/" + fix.campaignID + "/rollback": "/api/v1/ota/campaigns/{campaignId}/rollback",
