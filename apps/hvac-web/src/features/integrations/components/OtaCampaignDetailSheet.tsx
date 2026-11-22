@@ -335,7 +335,7 @@ export function OtaCampaignDetailSheet({
                   disabled={detailQuery.isFetching}
                   onClick={() => void detailQuery.refetch()}
                 >
-                  <RefreshCw data-icon="inline-start" className={detailQuery.isFetching ? 'animate-spin' : undefined} />
+                  <RefreshCw data-icon="inline-start" className={detailQuery.isFetching ? 'motion-safe:animate-spin' : undefined} />
                   刷新
                 </Button>
               </div>

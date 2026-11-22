@@ -234,7 +234,7 @@ function ArchivedMonthlyReport({ stored, span }: { readonly stored: StoredReport
   const generated = new Intl.DateTimeFormat('zh-CN', { timeZone: site.timezone, month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(stored.generatedAt));
   const before = previous.data?.report ?? null;
   const beforeMissing = previous.isError ? '上月存档暂不可用' : '上月未存档';
-  const beforeNote = (value: number | null, digits = 0) => (previous.isPending ? '…' : before === null ? beforeMissing : `上月 ${digits ? (value === null ? '--' : formatDecimal(value, digits)) : energyText(value)}`);
+  const beforeNote = (value: number | null, digits = 0) => (previous.isPending ? '…' : before === null ? beforeMissing : `上月 ${digits ? (value === null ? '—' : formatDecimal(value, digits)) : energyText(value)}`);
   const reportCopEval = sanitizeReportedCop(report.cop, report.coolingKWh, report.electricityKWh);
   const reportCop = reportCopEval.cop;
   const prevReportCop = before ? sanitizeReportedCop(before.cop, before.coolingKWh, before.electricityKWh).cop : null;
@@ -261,7 +261,7 @@ function ArchivedMonthlyReport({ stored, span }: { readonly stored: StoredReport
           <Figure
             label="综合能效"
             info="本月总供冷量 ÷ 本月总空调用电；冷机待机、低负荷或读数超出合理范围时不计算。"
-            value={reportCop === null ? '--' : formatDecimal(reportCop, 2)}
+            value={reportCop === null ? null : formatDecimal(reportCop, 2)}
             unit={reportCop === null ? undefined : 'COP'}
             delta={before ? relativeChange(reportCop, prevReportCop) : null}
             note={reportCop === null ? copUnavailableText(reportCopEval.unavailableReason) : beforeNote(prevReportCop, 2)}
@@ -376,7 +376,7 @@ function LiveMonthlyReport({ month, span, archiveUnavailable }: { readonly month
         </span>
       )
       : prevMonthCop === null
-        ? (previousHasEnergy ? '上月 --' : '上月没有数据')
+        ? (previousHasEnergy ? '上月 —' : '上月没有数据')
         : `上月 ${formatDecimal(prevMonthCop, 2)}`;
   const completenessValue = hasIncompleteTelemetry
     ? '不完整'
@@ -439,7 +439,7 @@ function LiveMonthlyReport({ month, span, archiveUnavailable }: { readonly month
           <Figure
             label="综合能效"
             info="本月总供冷量 ÷ 本月总空调用电（按有配对读数的日期合计）；冷机待机、低负荷或读数超出合理范围时不计算。"
-            value={monthCop === null ? '--' : formatDecimal(monthCop, 2)}
+            value={monthCop === null ? null : formatDecimal(monthCop, 2)}
             unit={monthCop === null ? undefined : 'COP'}
             delta={relativeChange(monthCop, prevMonthCop)}
             note={copNote}

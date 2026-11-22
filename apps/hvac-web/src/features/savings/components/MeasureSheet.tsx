@@ -157,13 +157,13 @@ function VerifiedDays({ measure }: { readonly measure: Measure }) {
               {hasConditionAnchors ? (
                 <>
                   <TableCell className="text-right tabular-nums">
-                    {row.meanWetBulbC != null ? `${formatDecimal(row.meanWetBulbC, 1)} °C` : '--'}
+                    {row.meanWetBulbC != null ? `${formatDecimal(row.meanWetBulbC, 1)} °C` : '—'}
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
-                    {row.meanLoadRatio != null ? `${formatDecimal(row.meanLoadRatio * 100, 0)}%` : '--'}
+                    {row.meanLoadRatio != null ? `${formatDecimal(row.meanLoadRatio * 100, 0)}%` : '—'}
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
-                    {row.aiClosedLoopShare != null ? `${formatDecimal(row.aiClosedLoopShare * 100, 0)}%` : '--'}
+                    {row.aiClosedLoopShare != null ? `${formatDecimal(row.aiClosedLoopShare * 100, 0)}%` : '—'}
                   </TableCell>
                 </>
               ) : null}

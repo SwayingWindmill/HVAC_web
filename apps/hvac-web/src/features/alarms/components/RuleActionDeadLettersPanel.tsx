@@ -119,7 +119,7 @@ export function RuleActionDeadLettersPanel({
             onClick={() => replay.mutate(row.original.outboxId)}
           >
             {isRowPending ? (
-              <RefreshCw data-icon="inline-start" className="animate-spin" />
+              <RefreshCw data-icon="inline-start" className="motion-safe:animate-spin" />
             ) : (
               <RotateCcw data-icon="inline-start" />
             )}

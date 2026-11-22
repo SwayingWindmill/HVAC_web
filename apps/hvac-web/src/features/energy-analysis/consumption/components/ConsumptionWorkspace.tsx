@@ -569,7 +569,7 @@ function DetailTable({ comparison, pricing, previousLabel, timeZone }: {
                   return <TableCell key={code} className={cn("text-right", !used && "text-muted-foreground")}>{used ? number(used, 0) : dash}</TableCell>;
                 })}
                 <TableCell className="text-right">{number(row.coolingKWh)}</TableCell>
-                <TableCell className="pr-5 text-right">{row.cop === null ? <span className="text-muted-foreground">--</span> : number(row.cop, 2)}</TableCell>
+                <TableCell className="pr-5 text-right">{row.cop === null ? dash : number(row.cop, 2)}</TableCell>
               </TableRow>
             );
           })}

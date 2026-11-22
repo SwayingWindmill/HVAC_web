@@ -421,7 +421,7 @@ export function ConcentratorsTab({
             >
               <RefreshCw
                 data-icon="inline-start"
-                className={statusQuery.isFetching || eidsQuery.isFetching ? 'animate-spin' : undefined}
+                className={statusQuery.isFetching || eidsQuery.isFetching ? 'motion-safe:animate-spin' : undefined}
               />
               刷新集中器读数
             </Button>

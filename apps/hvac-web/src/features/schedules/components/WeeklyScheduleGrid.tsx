@@ -387,7 +387,7 @@ function DayRow({
                 title={`计划外开机 ${timeText} · ${dev.runningDeviceNames.join('、')}`}
                 aria-label={`计划外开机：${day.date} ${day.label} ${timeText}，运行设备 ${dev.runningDeviceNames.join('、')}`}
                 className={cn(
-                  'absolute top-2 bottom-2 z-20 flex items-center justify-center gap-1 overflow-hidden rounded-md border px-1.5 text-[11px] font-semibold shadow-xs transition-all focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
+                  'absolute top-2 bottom-2 z-20 flex items-center justify-center gap-1 overflow-hidden rounded-md border px-1.5 text-[11px] font-semibold shadow-xs transition-[border-color,background-color,box-shadow,filter] focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
                   selected
                     ? 'border-warning bg-warning/25 text-warning-text ring-2 ring-warning'
                     : 'border-warning/80 bg-warning-soft text-warning-text hover:brightness-95',
@@ -448,7 +448,7 @@ function CoolingSlotButton({
       title={`${sourceLabel} ${rangeLabel}${tempLabel ? ` · 交接参考供水 ${tempLabel}` : ''}`}
       aria-label={`${slot.date} ${dayLabel} ${sourceLabel} ${rangeLabel}${tempLabel ? `，参考冷冻水供水温度 ${tempLabel}` : ''}`}
       className={cn(
-        'absolute top-2 bottom-2 z-10 flex items-center justify-between gap-1.5 overflow-hidden rounded-md border px-2 text-left text-xs transition-all focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
+        'absolute top-2 bottom-2 z-10 flex items-center justify-between gap-1.5 overflow-hidden rounded-md border px-2 text-left text-xs transition-[border-color,background-color,box-shadow] focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
         slot.source === 'EXCEPTION'
           ? selected
             ? 'border-dashed border-primary bg-primary/20 text-foreground ring-2 ring-ring-soft'

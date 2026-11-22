@@ -87,7 +87,7 @@ function EfficiencyTile({
         <span className="truncate">{label}</span>
       </span>
       <span className="text-[22px] leading-7 font-semibold tracking-[-0.02em] tabular-nums">
-        {value === null ? <span className="text-muted-foreground">--</span> : value}
+        {value === null ? <span className="text-muted-foreground">—</span> : value}
         {value !== null && unit ? (
           <span className="ml-1 text-xs font-medium tracking-normal text-subtle-foreground">
             {unit}

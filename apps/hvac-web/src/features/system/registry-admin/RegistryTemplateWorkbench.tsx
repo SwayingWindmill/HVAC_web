@@ -1392,7 +1392,7 @@ export function RegistryTemplateWorkbench({ site, model, capabilities, csrfToken
                   disabled={templatesQuery.isFetching}
                   onClick={() => void templatesQuery.refetch()}
                 >
-                  <RefreshCw className={templatesQuery.isFetching ? 'animate-spin' : undefined} />
+                  <RefreshCw className={templatesQuery.isFetching ? 'motion-safe:animate-spin' : undefined} />
                   刷新目录
                 </Button>
               </div>

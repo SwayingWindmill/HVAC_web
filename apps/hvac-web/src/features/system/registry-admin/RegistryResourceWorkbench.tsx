@@ -1246,7 +1246,7 @@ export function RegistryResourceWorkbench({ site, sites, model, capabilities, cs
                 onClick={() => void activeFilteredQuery.fetchNextPage()}
                 disabled={activeFilteredQuery.isFetchingNextPage}
               >
-                <RefreshCw className={activeFilteredQuery.isFetchingNextPage ? 'animate-spin' : undefined} />
+                <RefreshCw className={activeFilteredQuery.isFetchingNextPage ? 'motion-safe:animate-spin' : undefined} />
                 加载更多结果
               </Button>
             </div>
@@ -1268,7 +1268,7 @@ export function RegistryResourceWorkbench({ site, sites, model, capabilities, cs
               footer={<DataTablePagination table={pointTable} totalRows={devicePoints.length} />}
             />
           )}
-          {pointsQuery.hasNextPage ? <div className="flex justify-center"><Button variant="outline" onClick={() => void pointsQuery.fetchNextPage()} disabled={pointsQuery.isFetchingNextPage}><RefreshCw className={pointsQuery.isFetchingNextPage ? 'animate-spin' : undefined} />加载更多</Button></div> : null}
+          {pointsQuery.hasNextPage ? <div className="flex justify-center"><Button variant="outline" onClick={() => void pointsQuery.fetchNextPage()} disabled={pointsQuery.isFetchingNextPage}><RefreshCw className={pointsQuery.isFetchingNextPage ? 'motion-safe:animate-spin' : undefined} />加载更多</Button></div> : null}
         </DataTableBlock>
       ) : null}
 
