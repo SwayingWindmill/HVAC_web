@@ -895,4 +895,60 @@ func TestTemplateModbusDriverMaterializationAndTagOverrides(t *testing.T) {
 	if _, _, err := parseModbusTagOverrides([]byte(`{"modbus_unit_id":`)); err == nil {
 		t.Fatal("expected malformed device tags JSON to error")
 	}
+
+	// BACNET_IP and OPC_UA DEVICE templates via payload["driver"].
+	bacPayload := map[string]any{
+		"deviceType": "AHU",
+		"driver": map[string]any{
+			"driverType": "BACNET_IP",
+			"timeoutMs":  1200,
+			"retries":    2,
+			"bacnet": map[string]any{
+				"writePriority": 8,
+				"objects": []any{
+					map[string]any{"pointCode": "sa_temp", "objectType": "ANALOG_INPUT", "objectInstance": 1, "pollPriority": "HIGH"},
+					map[string]any{"pointCode": "sa_temp_sp", "objectType": "ANALOG_VALUE", "objectInstance": 2, "writable": true, "pollPriority": "HIGH"},
+				},
+			},
+		},
+	}
+	actBac, err := parseAndValidateTemplatePayload(TemplateDevice, bacPayload)
+	if err != nil || actBac == nil || actBac.ModbusDriver == nil || actBac.ModbusDriver.BACnet == nil || len(actBac.ModbusDriver.BACnet.Objects) != 2 {
+		t.Fatalf("expected valid BACNET_IP driver template activation, got (%+v, %v)", actBac, err)
+	}
+
+	uaPayload := map[string]any{
+		"deviceType": "CHILLER",
+		"driver": map[string]any{
+			"driverType": "OPC_UA",
+			"endpoint":   "opc.tcp://10.2.3.5:4840",
+			"opcua": map[string]any{
+				"securityPolicy": "Basic256Sha256",
+				"securityMode":   "SignAndEncrypt",
+				"authMode":       "USERNAME",
+				"username":       "edge-reader",
+				"credentialRef":  "vault://opcua/chiller",
+				"nodes": []any{
+					map[string]any{"pointCode": "chw_sp", "nodeId": "ns=2;i=1001", "writable": true, "pollPriority": "HIGH"},
+				},
+			},
+		},
+	}
+	actUA, err := parseAndValidateTemplatePayload(TemplateDevice, uaPayload)
+	if err != nil || actUA == nil || actUA.ModbusDriver == nil || actUA.ModbusDriver.OPCUA == nil {
+		t.Fatalf("expected valid OPC_UA driver template activation, got (%+v, %v)", actUA, err)
+	}
+
+	// Mutual exclusion: both driver and modbusDriver must fail.
+	if _, err := parseAndValidateTemplatePayload(TemplateDevice, map[string]any{
+		"driver":       bacPayload["driver"],
+		"modbusDriver": payload["modbusDriver"],
+	}); !errors.Is(err, ErrInvalidMutation) {
+		t.Fatalf("expected ErrInvalidMutation when both driver and modbusDriver present, got %v", err)
+	}
+
+	tagOv, err := parseDriverTagOverrides([]byte(`{"bacnet_endpoint":"192.168.1.99:47808","bacnet_device_instance":"305","opcua_endpoint":"opc.tcp://192.168.1.100:4840"}`))
+	if err != nil || tagOv.bacnetEndpoint == nil || *tagOv.bacnetEndpoint != "192.168.1.99:47808" || tagOv.bacnetDeviceInstance == nil || *tagOv.bacnetDeviceInstance != 305 || tagOv.opcuaEndpoint == nil || *tagOv.opcuaEndpoint != "opc.tcp://192.168.1.100:4840" {
+		t.Fatalf("unexpected BACnet/OPC-UA tag overrides: %+v err=%v", tagOv, err)
+	}
 }

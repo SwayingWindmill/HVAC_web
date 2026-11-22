@@ -123,8 +123,12 @@ func parseAndValidateTemplatePayload(kind TemplateKind, payload map[string]any) 
 	_, hasQuality := payload["qualityChecks"]
 	_, hasCapabilities := payload["capabilityProfiles"]
 	_, hasModbusDriver := payload["modbusDriver"]
-	if !hasDeviceType && !hasPoints && !hasQuality && !hasCapabilities && !hasModbusDriver {
+	_, hasDriver := payload["driver"]
+	if !hasDeviceType && !hasPoints && !hasQuality && !hasCapabilities && !hasModbusDriver && !hasDriver {
 		return nil, nil
+	}
+	if hasModbusDriver && hasDriver {
+		return nil, fmt.Errorf("%w: template payload cannot specify both driver and modbusDriver", ErrInvalidMutation)
 	}
 
 	out := &TemplatePayloadActivation{
@@ -215,9 +219,19 @@ func parseAndValidateTemplatePayload(kind TemplateKind, payload map[string]any) 
 		if kind != TemplateDevice {
 			return nil, fmt.Errorf("%w: modbusDriver is only valid on DEVICE templates", ErrInvalidMutation)
 		}
-		driver, err := validateTemplateModbusDriver(rawModbusDriver)
+		driver, err := validateTemplateDriver(rawModbusDriver, false)
 		if err != nil {
 			return nil, fmt.Errorf("%w: modbusDriver: %w", ErrInvalidMutation, err)
+		}
+		out.ModbusDriver = driver
+	}
+	if rawDriver, exists := payload["driver"]; exists {
+		if kind != TemplateDevice {
+			return nil, fmt.Errorf("%w: driver is only valid on DEVICE templates", ErrInvalidMutation)
+		}
+		driver, err := validateTemplateDriver(rawDriver, true)
+		if err != nil {
+			return nil, fmt.Errorf("%w: driver: %w", ErrInvalidMutation, err)
 		}
 		out.ModbusDriver = driver
 	}
@@ -487,19 +501,21 @@ func validateTemplateCapabilityProfile(profile TemplateCapabilityProfile) error 
 	return nil
 }
 
-// TemplateModbusDriver holds the validated declarative Modbus driver template payload
+// TemplateModbusDriver holds the validated declarative southbound driver template payload
 // stored on a RELEASED DEVICE TemplateRevision and materialized to bound gateways.
 type TemplateModbusDriver struct {
-	DriverType        string                            `json:"driverType"`
-	Endpoint          *string                           `json:"endpoint,omitempty"`
-	UnitID            *int                              `json:"unitId,omitempty"`
-	CapabilityProfile string                            `json:"capabilityProfile,omitempty"`
-	TimeoutMS         *int                              `json:"timeoutMs,omitempty"`
-	Retries           *int                              `json:"retries,omitempty"`
-	Registers         []edgecontrol.ModbusRegisterInput `json:"registers"`
+	DriverType        string                             `json:"driverType"`
+	Endpoint          *string                            `json:"endpoint,omitempty"`
+	UnitID            *int                               `json:"unitId,omitempty"`
+	CapabilityProfile string                             `json:"capabilityProfile,omitempty"`
+	TimeoutMS         *int                               `json:"timeoutMs,omitempty"`
+	Retries           *int                               `json:"retries,omitempty"`
+	Registers         []edgecontrol.ModbusRegisterInput  `json:"registers,omitempty"`
+	BACnet            *edgecontrol.BACnetDriverSpecInput `json:"bacnet,omitempty"`
+	OPCUA             *edgecontrol.OPCUADriverSpecInput  `json:"opcua,omitempty"`
 }
 
-func validateTemplateModbusDriver(raw any) (*TemplateModbusDriver, error) {
+func validateTemplateDriver(raw any, allowNonModbus bool) (*TemplateModbusDriver, error) {
 	obj, ok := raw.(map[string]any)
 	if !ok {
 		return nil, errors.New("must be an object")
@@ -521,7 +537,7 @@ func validateTemplateModbusDriver(raw any) (*TemplateModbusDriver, error) {
 			}
 		}
 	}
-	profile, err := edgecontrol.ValidateModbusDriverInput(edgecontrol.ModbusDriverInput{
+	southbound, err := edgecontrol.ValidateSouthboundDriverInput(edgecontrol.ModbusDriverInput{
 		DriverType:        parsed.DriverType,
 		Endpoint:          parsed.Endpoint,
 		UnitID:            parsed.UnitID,
@@ -529,6 +545,8 @@ func validateTemplateModbusDriver(raw any) (*TemplateModbusDriver, error) {
 		TimeoutMS:         parsed.TimeoutMS,
 		Retries:           parsed.Retries,
 		Registers:         parsed.Registers,
+		BACnet:            parsed.BACnet,
+		OPCUA:             parsed.OPCUA,
 	}, edgecontrol.ModbusDriverValidationOptions{
 		RequireDeviceKey:       false,
 		RequireGatewayBindings: false,
@@ -536,26 +554,39 @@ func validateTemplateModbusDriver(raw any) (*TemplateModbusDriver, error) {
 	if err != nil {
 		return nil, err
 	}
-	normalizedInput := profile.ToDriverInput(false)
+	if !allowNonModbus && southbound.Kind != edgecontrol.SouthboundKindModbus {
+		return nil, fmt.Errorf("modbusDriver only supports Modbus driverType, got %q", parsed.DriverType)
+	}
+	normalizedInput := southbound.ToDriverInput(false)
 	normalized := &TemplateModbusDriver{
 		DriverType:        normalizedInput.DriverType,
 		CapabilityProfile: normalizedInput.CapabilityProfile,
 		Registers:         normalizedInput.Registers,
+		BACnet:            normalizedInput.BACnet.Clone(),
+		OPCUA:             normalizedInput.OPCUA.Clone(),
 	}
 	if parsed.Endpoint != nil {
-		ep := profile.Endpoint
+		var ep string
+		switch southbound.Kind {
+		case edgecontrol.SouthboundKindModbus:
+			ep = southbound.Modbus.Endpoint
+		case edgecontrol.SouthboundKindBACnetIP:
+			ep = southbound.BACnet.Endpoint
+		case edgecontrol.SouthboundKindOPCUA:
+			ep = southbound.OPCUA.Endpoint
+		}
 		normalized.Endpoint = &ep
 	}
-	if parsed.UnitID != nil {
-		u := int(profile.UnitID)
+	if parsed.UnitID != nil && southbound.Modbus != nil {
+		u := int(southbound.Modbus.UnitID)
 		normalized.UnitID = &u
 	}
 	if parsed.TimeoutMS != nil {
-		tmo := profile.TimeoutMS
+		tmo := *parsed.TimeoutMS
 		normalized.TimeoutMS = &tmo
 	}
 	if parsed.Retries != nil {
-		ret := profile.Retries
+		ret := *parsed.Retries
 		normalized.Retries = &ret
 	}
 	return normalized, nil

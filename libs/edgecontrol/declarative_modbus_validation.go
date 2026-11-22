@@ -34,14 +34,16 @@ type ModbusRegisterInput struct {
 // ModbusDriverInput describes a wire/config-shadow/template Modbus driver
 // specification prior to narrowing into DeclarativeModbusProfile.
 type ModbusDriverInput struct {
-	DeviceKey         string                `json:"deviceKey"`
-	DriverType        string                `json:"driverType"`
-	Endpoint          *string               `json:"endpoint,omitempty"`
-	UnitID            *int                  `json:"unitId,omitempty"`
-	CapabilityProfile string                `json:"capabilityProfile,omitempty"`
-	TimeoutMS         *int                  `json:"timeoutMs,omitempty"`
-	Retries           *int                  `json:"retries,omitempty"`
-	Registers         []ModbusRegisterInput `json:"registers"`
+	DeviceKey         string                 `json:"deviceKey"`
+	DriverType        string                 `json:"driverType"`
+	Endpoint          *string                `json:"endpoint,omitempty"`
+	UnitID            *int                   `json:"unitId,omitempty"`
+	CapabilityProfile string                 `json:"capabilityProfile,omitempty"`
+	TimeoutMS         *int                   `json:"timeoutMs,omitempty"`
+	Retries           *int                   `json:"retries,omitempty"`
+	Registers         []ModbusRegisterInput  `json:"registers,omitempty"`
+	BACnet            *BACnetDriverSpecInput `json:"bacnet,omitempty"`
+	OPCUA             *OPCUADriverSpecInput  `json:"opcua,omitempty"`
 }
 
 // ModbusDriverValidationOptions controls whether deployment-specific gateway
@@ -130,6 +132,9 @@ func (profile DeclarativeModbusProfile) validateWithTransport(hasExternalTranspo
 }
 
 func validateDriverInput(input ModbusDriverInput, opts ModbusDriverValidationOptions, allowEmptyTransport bool) (DeclarativeModbusProfile, error) {
+	if input.BACnet != nil || input.OPCUA != nil {
+		return DeclarativeModbusProfile{}, errors.New("modbus driver cannot specify bacnet or opcua configuration")
+	}
 	var out DeclarativeModbusProfile
 
 	if opts.RequireDeviceKey {

@@ -19,18 +19,20 @@ const (
 // TemplateDriverUpsertInput merges or removes one Registry template modbusDriver definition
 // inside a gateway's desired driverConfigs while preserving device-specific bindings when omitted.
 type TemplateDriverUpsertInput struct {
-	TenantID          string                         `json:"tenantId"`
-	DeviceKey         string                         `json:"deviceKey"`
-	Remove            bool                           `json:"remove,omitempty"`
-	DriverType        string                         `json:"driverType,omitempty"`
-	Endpoint          *string                        `json:"endpoint,omitempty"`
-	UnitID            *int                           `json:"unitId,omitempty"`
-	CapabilityProfile string                         `json:"capabilityProfile,omitempty"`
-	TimeoutMS         *int                           `json:"timeoutMs,omitempty"`
-	Retries           *int                           `json:"retries,omitempty"`
-	Registers         []GatewayModbusRegisterMapping `json:"registers,omitempty"`
-	UpdatedBy         string                         `json:"updatedBy,omitempty"`
-	Reason            string                         `json:"reason"`
+	TenantID          string                             `json:"tenantId"`
+	DeviceKey         string                             `json:"deviceKey"`
+	Remove            bool                               `json:"remove,omitempty"`
+	DriverType        string                             `json:"driverType,omitempty"`
+	Endpoint          *string                            `json:"endpoint,omitempty"`
+	UnitID            *int                               `json:"unitId,omitempty"`
+	CapabilityProfile string                             `json:"capabilityProfile,omitempty"`
+	TimeoutMS         *int                               `json:"timeoutMs,omitempty"`
+	Retries           *int                               `json:"retries,omitempty"`
+	Registers         []GatewayModbusRegisterMapping     `json:"registers,omitempty"`
+	BACnet            *edgecontrol.BACnetDriverSpecInput `json:"bacnet,omitempty"`
+	OPCUA             *edgecontrol.OPCUADriverSpecInput  `json:"opcua,omitempty"`
+	UpdatedBy         string                             `json:"updatedBy,omitempty"`
+	Reason            string                             `json:"reason"`
 }
 
 // TemplateDriverUpsertResult reports the gateway desired shadow after upserting or removing a template driver.
@@ -125,20 +127,45 @@ func (store *Store) UpsertGatewayTemplateDriverConfig(ctx context.Context, gatew
 			}
 		}
 	} else {
+		driverType := strings.ToUpper(strings.TrimSpace(input.DriverType))
+		isModbus := driverType == string(edgecontrol.ModbusDriverTCP) || driverType == string(edgecontrol.ModbusDriverRTU)
+
 		endpoint := ""
 		if input.Endpoint != nil {
 			endpoint = strings.TrimSpace(*input.Endpoint)
 		} else if hasMatched {
 			endpoint = matchedDriver.Endpoint
 		}
-		unitID := 0
-		if input.UnitID != nil {
-			unitID = *input.UnitID
-		} else if hasMatched {
-			unitID = matchedDriver.UnitID
-		}
-		if endpoint == "" || unitID == 0 {
+		if endpoint == "" {
 			return TemplateDriverUpsertResult{Shadow: currentShadow, Changed: false, Skipped: true}, nil
+		}
+
+		unitID := 0
+		if isModbus {
+			if input.UnitID != nil {
+				unitID = *input.UnitID
+			} else if hasMatched {
+				unitID = matchedDriver.UnitID
+			}
+			if unitID == 0 {
+				return TemplateDriverUpsertResult{Shadow: currentShadow, Changed: false, Skipped: true}, nil
+			}
+		} else if input.UnitID != nil {
+			unitID = *input.UnitID
+		}
+
+		bacnetSpec := input.BACnet.Clone()
+		if driverType == edgecontrol.DriverTypeBACnetIP {
+			if bacnetSpec == nil {
+				return TemplateDriverUpsertResult{Shadow: currentShadow, Changed: false, Skipped: true}, nil
+			}
+			if bacnetSpec.DeviceInstance == nil && hasMatched && matchedDriver.BACnet != nil && matchedDriver.BACnet.DeviceInstance != nil {
+				v := *matchedDriver.BACnet.DeviceInstance
+				bacnetSpec.DeviceInstance = &v
+			}
+			if bacnetSpec.DeviceInstance == nil {
+				return TemplateDriverUpsertResult{Shadow: currentShadow, Changed: false, Skipped: true}, nil
+			}
 		}
 
 		timeoutMS := defaultTemplateDriverTimeoutMS
@@ -163,6 +190,8 @@ func (store *Store) UpsertGatewayTemplateDriverConfig(ctx context.Context, gatew
 			TimeoutMS:         timeoutMS,
 			Retries:           retries,
 			Registers:         cloneModbusRegisterMappings(input.Registers),
+			BACnet:            bacnetSpec,
+			OPCUA:             input.OPCUA.Clone(),
 		}
 
 		mergedDrivers := make([]GatewayModbusDriverConfig, 0, len(existingDrivers)+1)

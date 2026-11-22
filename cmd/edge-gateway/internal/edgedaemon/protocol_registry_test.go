@@ -117,3 +117,81 @@ func TestProtocolBridgeRegistrySharesRTUBusAndExtendsBACnet(t *testing.T) {
 		t.Fatal("expected negative turnaroundDelayMs to fail validation")
 	}
 }
+
+func TestProtocolBridgeRegistryBuildsAndPoolsBACnetIPAndOPCUA(t *testing.T) {
+	reg := NewProtocolBridgeRegistry(nil)
+	t.Cleanup(func() { _ = reg.Close() })
+
+	tmo, ret := 800, 1
+	bacEP := "127.0.0.1:47808"
+	dev1, dev2 := 101, 102
+	for _, tc := range []struct {
+		key  string
+		inst int
+	}{
+		{"ahu-bac-1", dev1},
+		{"ahu-bac-2", dev2},
+	} {
+		inst := tc.inst
+		ad, err := reg.BuildAdapter(edgecontrol.ModbusDriverInput{
+			DeviceKey:  tc.key,
+			DriverType: edgecontrol.DriverTypeBACnetIP,
+			Endpoint:   &bacEP,
+			TimeoutMS:  &tmo,
+			Retries:    &ret,
+			BACnet: &edgecontrol.BACnetDriverSpecInput{
+				DeviceInstance: &inst,
+				Objects: []edgecontrol.BACnetObjectInput{{
+					PointCode:      "supply_temp",
+					ObjectType:     "ANALOG_INPUT",
+					ObjectInstance: 1,
+					PollPriority:   "HIGH",
+				}},
+			},
+		})
+		if err != nil {
+			t.Fatalf("BuildAdapter BACNET_IP %s: %v", tc.key, err)
+		}
+		if ad.Component().FactoryID != edgecontrol.DeclarativeBACnetFactoryID {
+			t.Fatalf("unexpected FactoryID %s", ad.Component().FactoryID)
+		}
+	}
+	if got := reg.SharedBACnetBridgeCount(); got != 1 {
+		t.Fatalf("SharedBACnetBridgeCount = %d, want 1", got)
+	}
+
+	uaEP := "opc.tcp://127.0.0.1:4840/plant"
+	for _, key := range []string{"bms-ua-1", "bms-ua-2"} {
+		ad, err := reg.BuildAdapter(edgecontrol.ModbusDriverInput{
+			DeviceKey:  key,
+			DriverType: edgecontrol.DriverTypeOPCUA,
+			Endpoint:   &uaEP,
+			TimeoutMS:  &tmo,
+			Retries:    &ret,
+			OPCUA: &edgecontrol.OPCUADriverSpecInput{
+				SecurityPolicy: edgecontrol.OPCUASecurityPolicyBasic256Sha256,
+				SecurityMode:   edgecontrol.OPCUASecurityModeSignAndEncrypt,
+				Nodes: []edgecontrol.OPCUANodeInput{{
+					PointCode:    "chilled_flow",
+					NodeID:       "ns=2;i=10",
+					PollPriority: "HIGH",
+				}},
+			},
+		})
+		if err != nil {
+			t.Fatalf("BuildAdapter OPC_UA %s: %v", key, err)
+		}
+		if ad.Component().FactoryID != edgecontrol.DeclarativeOPCUAFactoryID {
+			t.Fatalf("unexpected OPC-UA FactoryID %s", ad.Component().FactoryID)
+		}
+	}
+	if got := reg.SharedOPCUABridgeCount(); got != 1 {
+		t.Fatalf("SharedOPCUABridgeCount = %d, want 1 pooled OPC-UA session", got)
+	}
+	if err := reg.Close(); err != nil {
+		t.Fatalf("reg.Close(): %v", err)
+	}
+	if reg.SharedBACnetBridgeCount() != 0 || reg.SharedOPCUABridgeCount() != 0 {
+		t.Fatal("expected pooled BACnet/OPC-UA bridges cleared on Close()")
+	}
+}

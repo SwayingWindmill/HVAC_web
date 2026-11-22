@@ -80,18 +80,20 @@ type ConnectivityTemplateDriverClient interface {
 
 // RelayGatewayTemplateDriverRequest mirrors connectivity.TemplateDriverUpsertInput across module boundaries.
 type RelayGatewayTemplateDriverRequest struct {
-	TenantID          string                            `json:"tenantId"`
-	DeviceKey         string                            `json:"deviceKey"`
-	Remove            bool                              `json:"remove,omitempty"`
-	DriverType        string                            `json:"driverType,omitempty"`
-	Endpoint          *string                           `json:"endpoint,omitempty"`
-	UnitID            *int                              `json:"unitId,omitempty"`
-	CapabilityProfile string                            `json:"capabilityProfile,omitempty"`
-	TimeoutMS         *int                              `json:"timeoutMs,omitempty"`
-	Retries           *int                              `json:"retries,omitempty"`
-	Registers         []edgecontrol.ModbusRegisterInput `json:"registers,omitempty"`
-	UpdatedBy         string                            `json:"updatedBy,omitempty"`
-	Reason            string                            `json:"reason"`
+	TenantID          string                             `json:"tenantId"`
+	DeviceKey         string                             `json:"deviceKey"`
+	Remove            bool                               `json:"remove,omitempty"`
+	DriverType        string                             `json:"driverType,omitempty"`
+	Endpoint          *string                            `json:"endpoint,omitempty"`
+	UnitID            *int                               `json:"unitId,omitempty"`
+	CapabilityProfile string                             `json:"capabilityProfile,omitempty"`
+	TimeoutMS         *int                               `json:"timeoutMs,omitempty"`
+	Retries           *int                               `json:"retries,omitempty"`
+	Registers         []edgecontrol.ModbusRegisterInput  `json:"registers,omitempty"`
+	BACnet            *edgecontrol.BACnetDriverSpecInput `json:"bacnet,omitempty"`
+	OPCUA             *edgecontrol.OPCUADriverSpecInput  `json:"opcua,omitempty"`
+	UpdatedBy         string                             `json:"updatedBy,omitempty"`
+	Reason            string                             `json:"reason"`
 }
 
 // CommandCancelClient notifies Command service to cancel pending commands for retired devices.

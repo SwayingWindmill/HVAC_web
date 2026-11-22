@@ -37,6 +37,10 @@ type ComponentDescriptor struct {
 	ChannelBindings map[SemanticChannel]string
 }
 
+func isDeclarativeFactoryID(id string) bool {
+	return id == DeclarativeModbusFactoryID || id == DeclarativeBACnetFactoryID || id == DeclarativeOPCUAFactoryID
+}
+
 func (descriptor ComponentDescriptor) validateBasics() error {
 	if strings.TrimSpace(descriptor.ID) == "" || strings.Contains(descriptor.ID, "/") {
 		return errors.New("component ID is required and must not contain '/'")
@@ -49,7 +53,7 @@ func (descriptor ComponentDescriptor) validateBasics() error {
 	default:
 		return fmt.Errorf("unsupported component kind %q", descriptor.Kind)
 	}
-	if (descriptor.Kind == ComponentDeviceDriver || descriptor.Kind == ComponentSimulator) && len(descriptor.Profiles) == 0 && descriptor.FactoryID != DeclarativeModbusFactoryID {
+	if (descriptor.Kind == ComponentDeviceDriver || descriptor.Kind == ComponentSimulator) && len(descriptor.Profiles) == 0 && !isDeclarativeFactoryID(descriptor.FactoryID) {
 		return errors.New("device driver or simulator must implement at least one capability profile")
 	}
 	return nil
@@ -130,7 +134,7 @@ func (registry *ComponentRegistry) Register(descriptor ComponentDescriptor) erro
 		}
 	}
 
-	isDeclarative := descriptor.FactoryID == DeclarativeModbusFactoryID
+	isDeclarative := isDeclarativeFactoryID(descriptor.FactoryID)
 	for semantic := range descriptor.ChannelBindings {
 		if _, exists := requirements[semantic]; !exists && len(descriptor.Profiles) > 0 {
 			return fmt.Errorf("component %s binds semantic channel %s not declared by its capability profiles", descriptor.ID, semantic)
