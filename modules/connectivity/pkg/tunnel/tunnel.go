@@ -107,10 +107,29 @@ func truncateAuditReason(reason string) string {
 const (
 	ProtocolName               = "hvac-gateway-tunnel/v1"
 	AllowedTargetPort   uint16 = 1880
+	SSHTargetPort       uint16 = 22
 	MaxFramePayload            = 64 * 1024
 	maxStreamBuffer            = 4 * 1024 * 1024
 	defaultWriteTimeout        = 15 * time.Second
 )
+
+// IsSupportedTargetPort reports whether port is in the hard-bounded gateway tunnel allowlist.
+func IsSupportedTargetPort(port uint16) bool {
+	return port == AllowedTargetPort || port == SSHTargetPort
+}
+
+func buildAllowedPortSet(ports ...uint16) map[uint16]struct{} {
+	allowed := make(map[uint16]struct{}, len(ports)+1)
+	for _, port := range ports {
+		if IsSupportedTargetPort(port) {
+			allowed[port] = struct{}{}
+		}
+	}
+	if len(allowed) == 0 {
+		allowed[AllowedTargetPort] = struct{}{}
+	}
+	return allowed
+}
 
 const (
 	FrameOpen    uint8 = 0x01
@@ -237,6 +256,14 @@ func WithDefaultGateway(gatewayID string) Option {
 	}
 }
 
+// WithAllowedTargetPorts restricts Hub to an explicit subset of IsSupportedTargetPort ports.
+func WithAllowedTargetPorts(ports ...uint16) Option {
+	allowed := buildAllowedPortSet(ports...)
+	return func(h *Hub) {
+		h.allowedPorts = allowed
+	}
+}
+
 // WithObservability attaches a logger and metrics registry to a tunnel Hub for panic recovery.
 func WithObservability(logger *slog.Logger, metrics *observability.Registry) Option {
 	return func(h *Hub) {
@@ -249,6 +276,7 @@ type Hub struct {
 	mu               sync.RWMutex
 	sessions         map[string]*Session
 	listeners        []net.Listener
+	allowedPorts     map[uint16]struct{}
 	defaultGatewayID string
 	pingInterval     time.Duration
 	readTimeout      time.Duration
@@ -258,6 +286,14 @@ type Hub struct {
 	logger           *slog.Logger
 	metrics          *observability.Registry
 	closed           atomic.Bool
+}
+
+func (h *Hub) isPortAllowed(port uint16) bool {
+	if h == nil || len(h.allowedPorts) == 0 {
+		return port == AllowedTargetPort
+	}
+	_, ok := h.allowedPorts[port]
+	return ok
 }
 
 func (h *Hub) log() *slog.Logger {
@@ -284,6 +320,7 @@ func (h *Hub) recordActiveTunnelsLocked() {
 func NewHub(options ...Option) *Hub {
 	h := &Hub{
 		sessions:     make(map[string]*Session),
+		allowedPorts: buildAllowedPortSet(AllowedTargetPort),
 		pingInterval: 25 * time.Second,
 		readTimeout:  75 * time.Second,
 		writeTimeout: defaultWriteTimeout,
@@ -444,7 +481,7 @@ func (h *Hub) resolveSession(gatewayID string) (*Session, error) {
 }
 
 func (h *Hub) OpenStream(ctx context.Context, gatewayID string, targetPort uint16) (*Stream, error) {
-	if targetPort != AllowedTargetPort {
+	if !h.isPortAllowed(targetPort) {
 		port := targetPort
 		resolvedID := strings.TrimSpace(gatewayID)
 		if resolvedID == "" {
@@ -636,8 +673,17 @@ func NewUpgradeHandler(hub *Hub, parsePeer PeerParser, verifyPeer PeerVerifier) 
 }
 
 func (h *Hub) StartLoopbackListener(addr string) (net.Listener, error) {
+	return h.StartLoopbackListenerForPort(addr, AllowedTargetPort)
+}
+
+// StartLoopbackListenerForPort binds a literal loopback address and forwards accepted connections
+// to targetPort through the active gateway tunnel, failing closed if addr or targetPort is disallowed.
+func (h *Hub) StartLoopbackListenerForPort(addr string, targetPort uint16) (net.Listener, error) {
 	if err := ValidateLoopbackAddr(addr); err != nil {
 		return nil, err
+	}
+	if !h.isPortAllowed(targetPort) {
+		return nil, fmt.Errorf("%w: port %d not allowed", ErrPortForbidden, targetPort)
 	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -651,26 +697,26 @@ func (h *Hub) StartLoopbackListener(addr string) (net.Listener, error) {
 	}
 	h.listeners = append(h.listeners, ln)
 	h.mu.Unlock()
-	go h.acceptLoop(ln)
+	go h.acceptLoopForPort(ln, targetPort)
 	return ln, nil
 }
 
-func (h *Hub) acceptLoop(ln net.Listener) {
+func (h *Hub) acceptLoopForPort(ln net.Listener, targetPort uint16) {
 	defer observability.Recover(h.log(), h.metricRegistry(), "connectivity.tunnel_loopback_accept")
 	for {
 		localConn, err := ln.Accept()
 		if err != nil {
 			return
 		}
-		go h.serveLoopbackConn(localConn)
+		go h.serveLoopbackConnForPort(localConn, targetPort)
 	}
 }
 
-func (h *Hub) serveLoopbackConn(localConn net.Conn) {
+func (h *Hub) serveLoopbackConnForPort(localConn net.Conn, targetPort uint16) {
 	defer func() { _ = localConn.Close() }()
 	defer observability.Recover(h.log(), h.metricRegistry(), "connectivity.tunnel_loopback_conn")
 	openCtx, cancel := context.WithTimeout(context.Background(), h.openTimeout)
-	stream, err := h.OpenStream(openCtx, "", AllowedTargetPort)
+	stream, err := h.OpenStream(openCtx, "", targetPort)
 	cancel()
 	if err != nil {
 		return
@@ -1254,7 +1300,23 @@ func RunEdgeConn(ctx context.Context, conn net.Conn, dialTarget func(context.Con
 	return runEdgeConn(ctx, conn, dialTarget, pingInterval, defaultWriteTimeout)
 }
 
+// RunEdgeConnWithAllowedPorts executes the edge side of the multiplexed tunnel while
+// restricting OPEN requests to an explicit subset of IsSupportedTargetPort.
+func RunEdgeConnWithAllowedPorts(
+	ctx context.Context,
+	conn net.Conn,
+	dialTarget func(context.Context, uint16) (net.Conn, error),
+	pingInterval time.Duration,
+	allowedPorts ...uint16,
+) error {
+	return runEdgeConnWithPorts(ctx, conn, dialTarget, pingInterval, defaultWriteTimeout, buildAllowedPortSet(allowedPorts...))
+}
+
 func runEdgeConn(ctx context.Context, conn net.Conn, dialTarget func(context.Context, uint16) (net.Conn, error), pingInterval, writeTimeout time.Duration) error {
+	return runEdgeConnWithPorts(ctx, conn, dialTarget, pingInterval, writeTimeout, buildAllowedPortSet(AllowedTargetPort))
+}
+
+func runEdgeConnWithPorts(ctx context.Context, conn net.Conn, dialTarget func(context.Context, uint16) (net.Conn, error), pingInterval, writeTimeout time.Duration, allowedPorts map[uint16]struct{}) error {
 	var writeMu sync.Mutex
 	send := func(frame Frame) error {
 		writeMu.Lock()
@@ -1322,7 +1384,7 @@ func runEdgeConn(ctx context.Context, conn net.Conn, dialTarget func(context.Con
 				continue
 			}
 			port := binary.BigEndian.Uint16(frame.Payload)
-			if port != AllowedTargetPort {
+			if _, ok := allowedPorts[port]; !ok {
 				_ = send(Frame{Type: FrameOpenErr, StreamID: frame.StreamID, Payload: []byte(ErrPortForbidden.Error())})
 				continue
 			}

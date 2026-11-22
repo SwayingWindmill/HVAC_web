@@ -142,6 +142,13 @@ func newCredentialRuntime(cfg credentialRuntimeConfig) (*http.Server, *tunnel.Hu
 			return nil, nil, nil, nil, err
 		}
 	}
+	sshLoopbackAddr := strings.TrimSpace(envOr("CONNECTIVITY_TUNNEL_SSH_LOOPBACK_ADDR", ""))
+	sshLoopbackEnabled := sshLoopbackAddr != "" && !strings.EqualFold(sshLoopbackAddr, "off")
+	if sshLoopbackEnabled {
+		if err := tunnel.ValidateLoopbackAddr(sshLoopbackAddr); err != nil {
+			return nil, nil, nil, nil, err
+		}
+	}
 	serverIdentity, err := tls.LoadX509KeyPair(envOr("CONNECTIVITY_SERVER_CERT", "/run/hvac/gateway-ca/connectivity.crt"), envOr("CONNECTIVITY_SERVER_KEY", "/run/hvac/gateway-ca/connectivity.key"))
 	if err != nil {
 		return nil, nil, nil, nil, err
@@ -224,6 +231,9 @@ func newCredentialRuntime(cfg credentialRuntimeConfig) (*http.Server, *tunnel.Hu
 		tunnel.WithDefaultGateway(envOr("CONNECTIVITY_TUNNEL_GATEWAY_ID", "")),
 		tunnel.WithAuditSink(store),
 	}, tunnelOptions...)
+	if sshLoopbackEnabled {
+		tunnelHubOpts = append(tunnelHubOpts, tunnel.WithAllowedTargetPorts(tunnel.AllowedTargetPort, tunnel.SSHTargetPort))
+	}
 	tunnelHub := tunnel.NewHub(tunnelHubOpts...)
 	service := connectivity.NewCredentialService(store, authority)
 	crlOutPath := strings.TrimSpace(os.Getenv("GATEWAY_CRL_OUTPUT_FILE"))
@@ -283,6 +293,13 @@ func newCredentialRuntime(cfg credentialRuntimeConfig) (*http.Server, *tunnel.Hu
 	crlCtrl := attachCredentialCRLControl(rootCtx, logger, metrics, presence, store, authority, service, tunnelHub, mqttGuard, coverageReporter, mqttSession, crlOutPath)
 	if loopbackAddr != "" && !strings.EqualFold(loopbackAddr, "off") {
 		if _, err := tunnelHub.StartLoopbackListener(loopbackAddr); err != nil {
+			crlCtrl.Close()
+			tunnelHub.Close()
+			return nil, nil, nil, nil, err
+		}
+	}
+	if sshLoopbackEnabled {
+		if _, err := tunnelHub.StartLoopbackListenerForPort(sshLoopbackAddr, tunnel.SSHTargetPort); err != nil {
 			crlCtrl.Close()
 			tunnelHub.Close()
 			return nil, nil, nil, nil, err

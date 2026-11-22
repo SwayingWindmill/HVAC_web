@@ -27,6 +27,12 @@ export function buildGatewayPopHeaders(
 
 export const TUNNEL_PROTOCOL_NAME = 'hvac-gateway-tunnel/v1';
 export const ALLOWED_TARGET_PORT = 1880;
+export const SSH_TARGET_PORT = 22;
+export const SUPPORTED_TARGET_PORTS = [ALLOWED_TARGET_PORT, SSH_TARGET_PORT] as const;
+
+export function isSupportedTargetPort(port: number): boolean {
+  return port === ALLOWED_TARGET_PORT || port === SSH_TARGET_PORT;
+}
 export const MAX_FRAME_PAYLOAD = 64 * 1024;
 export const DEFAULT_PING_INTERVAL_MS = 25_000;
 export const DEFAULT_READ_TIMEOUT_MS = 75_000;
@@ -70,6 +76,8 @@ export interface GatewayTunnelOptions {
   loadCredentials: () => Promise<TunnelCredentials> | TunnelCredentials;
   targetHost?: string;
   targetPort?: number;
+  allowedTargetPorts?: readonly number[];
+  targetPortMap?: Readonly<Record<number, number>>;
   dialTarget?: (port: number, host: string) => net.Socket;
   pingIntervalMs?: number;
   readTimeoutMs?: number;
@@ -173,8 +181,9 @@ export class GatewayTunnelClient {
       | 'rejectUnauthorized'
     >
   > &
-    Pick<GatewayTunnelOptions, 'dialTarget' | 'onConnected' | 'onDisconnected' | 'onLog'>;
+    Pick<GatewayTunnelOptions, 'dialTarget' | 'targetPortMap' | 'onConnected' | 'onDisconnected' | 'onLog'>;
 
+  private readonly allowedTargetPorts: ReadonlySet<number>;
   private stopped = false;
   private activeSocket: tls.TLSSocket | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
@@ -193,10 +202,23 @@ export class GatewayTunnelClient {
       maxReconnectDelayMs: options.maxReconnectDelayMs ?? 30_000,
       rejectUnauthorized: options.rejectUnauthorized ?? true,
       dialTarget: options.dialTarget,
+      targetPortMap: options.targetPortMap,
       onConnected: options.onConnected,
       onDisconnected: options.onDisconnected,
       onLog: options.onLog,
     };
+    const requestedPorts = options.allowedTargetPorts ?? [ALLOWED_TARGET_PORT];
+    const allowed = new Set<number>();
+    for (const port of requestedPorts) {
+      if (!isSupportedTargetPort(port)) {
+        throw new RangeError(`unsupported tunnel target port: ${port}`);
+      }
+      allowed.add(port);
+    }
+    if (allowed.size === 0) {
+      allowed.add(ALLOWED_TARGET_PORT);
+    }
+    this.allowedTargetPorts = allowed;
   }
 
   start(): void {
@@ -413,7 +435,7 @@ export class GatewayTunnelClient {
         return;
       }
       const requestedPort = frame.payload.readUInt16BE(0);
-      if (requestedPort !== ALLOWED_TARGET_PORT) {
+      if (!this.allowedTargetPorts.has(requestedPort)) {
         sendFrame({
           type: FrameType.OPEN_ERR,
           streamId: frame.streamId,
@@ -422,7 +444,10 @@ export class GatewayTunnelClient {
         return;
       }
 
-      const dialPort = this.options.targetPort;
+      const dialPort =
+        requestedPort === ALLOWED_TARGET_PORT
+          ? this.options.targetPort
+          : (this.options.targetPortMap?.[requestedPort] ?? requestedPort);
       const localSocket = this.options.dialTarget
         ? this.options.dialTarget(dialPort, this.options.targetHost)
         : net.createConnection({
@@ -552,11 +577,16 @@ export function buildGatewayTunnelFlow(config: {
   keyPath: string;
   caPath: string;
   modulePath?: string;
+  allowSshPort?: boolean;
 }): NodeRedFlowItem[] {
   const tabId = 'tab-platform-tunnel';
   const injectId = 'inject-platform-tunnel-start';
   const fnId = 'fn-platform-tunnel-client';
   const moduleRequire = config.modulePath ?? '/root/hvac-platform/gateway-nodered-tunnel.js';
+  const readyLabel = config.allowSshPort ? '1880/22 tunnel ready' : '1880 tunnel ready';
+  const allowedLine = config.allowSshPort
+    ? [`    allowedTargetPorts: [${ALLOWED_TARGET_PORT}, ${SSH_TARGET_PORT}],`]
+    : [];
   const funcLines = [
     `const fs = global.get('fs') || require('fs');`,
     `const { GatewayTunnelClient } = require(${JSON.stringify(moduleRequire)});`,
@@ -565,12 +595,13 @@ export function buildGatewayTunnelFlow(config: {
     `if (!client) {`,
     `  client = new GatewayTunnelClient({`,
     `    tunnelUrl: ${JSON.stringify(config.tunnelUrl)},`,
+    ...allowedLine,
     `    loadCredentials: () => ({`,
     `      certPem: fs.readFileSync(${JSON.stringify(config.certPath)}, 'utf8'),`,
     `      keyPem: fs.readFileSync(${JSON.stringify(config.keyPath)}, 'utf8'),`,
     `      caPem: fs.readFileSync(${JSON.stringify(config.caPath)}, 'utf8'),`,
     `    }),`,
-    `    onConnected: () => node.status({ fill: 'green', shape: 'dot', text: '1880 tunnel ready' }),`,
+    `    onConnected: () => node.status({ fill: 'green', shape: 'dot', text: ${JSON.stringify(readyLabel)} }),`,
     `    onDisconnected: (e) => node.status({ fill: 'red', shape: 'ring', text: e ? e.message : 'disconnected' }),`,
     `  });`,
     `  context.flow.set('hvacTunnelClient', client);`,

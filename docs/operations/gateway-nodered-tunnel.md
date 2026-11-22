@@ -32,7 +32,7 @@ node --experimental-strip-types scripts/sync-songyaxuan-nodered.ts --ssh ubuntu@
 
 ## 安全边界与断线规则
 
-- **只放行 `1880` 端口**：服务端 `OpenStream` 和网关侧 `GatewayTunnelClient` 都在建流阶段强制校验目标端口必须等于 `1880`。哪怕收到目标端口 `22`（SSH）或 `80`（HTTP）的 `OPEN` 帧，网关也会直接返回 `OPEN_ERR`，不会向本地套接字发起连接。
+- **严格限制白名单端口（默认只放行 `1880`，按需加开 `22`）**：默认情况下，服务端 `OpenStream` 和网关侧 `GatewayTunnelClient` 只放行 `1880`（Node-RED 管理端）。仅当服务端显式配置 `CONNECTIVITY_TUNNEL_SSH_LOOPBACK_ADDR=127.0.0.1:18822` 且网关侧启用 `allowedTargetPorts: [1880, 22]` 时，才额外允许通过独立回环监听向网关本机 `22`（SSH）建流；`80`、`443`、`1883`、`5432` 等其他端口永远拒绝。全部 `22` 端口建流、断开与字节统计都会记入 `connectivity.gateway_tunnel_audit_events`。
 - **只允许本机回环地址**：`StartLoopbackListener`、`RunStdioBridge` 以及 `CONNECTIVITY_TUNNEL_LOOPBACK_ADDR` 启动校验在遇到 `0.0.0.0:18800`、`:18800` 或局域网/公网 IP 时会立即报错退出，不允许绕过。
 - **吊销即刻踢下线**：在平台执行网关凭据吊销（`CredentialService.Revoke`）提交成功后，会立即调用 `Hub.CloseGateway(gatewayId)` 切断现役隧道连接，网关随后发起的任何重连都会被 `VerifyActiveCredential` 拒绝并返回 `401`。
 - **保护关键 Node-RED 页签**：通过 `validateProtectedFlowTabs` 发布流配置前检查 `ET1010·机组启停` 和 `平台·常驻隧道` 页签必须保持存在且启用，误删或禁用会直接拦截部署。
@@ -54,4 +54,16 @@ sudo cp deploy/platform/phase1/systemd/hvac-gateway-nodered-loopback.socket /etc
 sudo cp deploy/platform/phase1/systemd/hvac-gateway-nodered-loopback@.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now hvac-gateway-nodered-loopback.socket
+```
+
+如需在网关迁移或排障期间按需开通受控 SSH 回环通道（平时可直接 `systemctl stop hvac-gateway-ssh-loopback.socket` 关闭），在服务端运行环境变量写入 `CONNECTIVITY_TUNNEL_SSH_LOOPBACK_ADDR=127.0.0.1:18822` 并安装 SSH 回环单元后即可通过跳板登录：
+
+```bash
+sudo cp deploy/platform/phase1/systemd/hvac-gateway-ssh-loopback.socket /etc/systemd/system/
+sudo cp deploy/platform/phase1/systemd/hvac-gateway-ssh-loopback@.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now hvac-gateway-ssh-loopback.socket
+
+# 本地跳板登录现场网关（22 端口不暴露公网或 0.0.0.0）
+ssh -J <运维账号>@<平台服务器> -p 18822 root@127.0.0.1
 ```
