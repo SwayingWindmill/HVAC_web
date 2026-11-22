@@ -17,10 +17,13 @@ type ChannelUpdate struct {
 }
 
 type DeviceWriteResult struct {
-	Address      string
-	Success      bool
-	Code         string
-	AppliedValue *Value
+	Address          string
+	Success          bool
+	Code             string
+	AppliedValue     *Value
+	ReadbackVerified bool
+	ReadbackValue    *Value
+	ReadbackAt       time.Time
 }
 
 // DeviceAdapter is the production-facing device contract shared by physical and simulated drivers.
@@ -339,6 +342,10 @@ func cloneWriteResults(results []DeviceWriteResult) []DeviceWriteResult {
 		if result.AppliedValue != nil {
 			value := *result.AppliedValue
 			out[index].AppliedValue = &value
+		}
+		if result.ReadbackValue != nil {
+			value := *result.ReadbackValue
+			out[index].ReadbackValue = &value
 		}
 	}
 	return out

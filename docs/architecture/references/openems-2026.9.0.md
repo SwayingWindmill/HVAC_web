@@ -241,3 +241,9 @@ new FC3ReadRegistersTask(19068, Priority.LOW,
 9. **配置历史只在云端事后 diff**：应该用"期望配置版本 → 下发 → Edge 回报已生效版本"的对账模型，并支持回滚。证据：`MetadataOdoo.java:497-525`；`ComponentManagerImpl.java:614-617`。
 10. **一个驱动/电价源一个 bundle，所有控制器共用一个周期**：冷站设备种类有限，应该用数据驱动的点表模板加少量协议驱动；控制回路按时间尺度分层（秒级 PID、分钟级群控、15 分钟寻优），不要全塞进 1 秒周期。证据：`io.openems.edge.meter.*` / `io.openems.edge.timeofusetariff.*` 目录；`Cycle.java:17`。
 11. **云端告警只有"离线 + 整站状态"邮件**：OpenEMS 的云端定位是监控和转发，告警生命周期、工单、能效分析这些本平台的核心域要自己设计，不能指望从 OpenEMS 继承。证据：`io.openems.backend.alerting/…/Alerting.java:96-101`。
+
+## MQTT Command Edge Adapter 与 EDGE-003/011/013 对拍验证记录
+
+1. **硬实时安全边界门禁（`EDGE-003`）**：在 `libs/edgecontrol/hard_realtime_boundary.go` 建立统一保护点位分类与校验（`PLC_ESTOP`、`FIRE_INTERLOCK`、`HIGH_PRESSURE_TRIP`、`FREEZE_PROTECTION`、`HARDWARE_SAFETY_PROTECTION`，保留只读观测与 `emergency_stop_all` `EMERGENCY_DO_RELEASE` 白名单），并贯穿云端资产模型注册/模板激活（`modules/registry/internal/core`）、命令准入/派发前门禁（`libs/commandmodel/control_gate.go`、`modules/command/pkg/commandservice`）、边缘 Modbus 配置校验、`ControlPlan`、`IntentStore`、`EdgeRuleEngine`、`edge-gateway` 与模拟器。
+2. **指令周期仲裁租约（`EDGE-011`）与 MQTT Command Edge Adapter**：`cmd/edge-gateway/internal/edgedaemon/command_adapter.go` 将 `hvac/v1/{gatewayId}/down/command` `v2.0` 信封经 WAL 持久化、幂等和单调围栏校验后，转为带到期租约的 `edgecontrol.ControlIntent` 交由 `HydraulicInterlockController`（优先级 `10`）与 `IntentController`（优先级 `100`）在同一 `ProcessImage` 周期内仲裁执行；数值设定值在租约有效期内保持生效并在过期后释放回本地控制，并在 `ShadowManager` 启动加载与热重载时同步刷新控制器绑定。
+3. **写后即时本地回读核验（`EDGE-013`）**：`DeclarativeModbusAdapter.Apply` 与模拟器驱动在写入寄存器/状态后立即执行本地回读并校验质量与目标值（返回 `APPLIED` 或 `LOCAL_READBACK_FAILED` / `LOCAL_READBACK_BAD_QUALITY` / `LOCAL_READBACK_MISMATCH`），`CommandReplyWire` 通过扩展后的 `commandmodel.EdgeExecutionEvidence`（`readback`、`localReadbackVerified`、`localReadbackAt`、`leaseExpiresAt`）与 `modules/command/pkg/mqttconnector` 完成端到端对拍。

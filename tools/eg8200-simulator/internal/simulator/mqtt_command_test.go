@@ -3,12 +3,19 @@ package simulator
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
+	goruntime "runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/simonvetter/modbus"
+
+	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 )
 
 func testMQTTEvidenceSpool(t testing.TB) *mqttEvidenceSpool {
@@ -78,9 +85,14 @@ func TestEdgeMQTTCommandIsIdempotentAndFenced(t *testing.T) {
 	}
 	first := evaluateMQTTCommandWithEdgeCycle(t, handler, edgeRuntime, request, now)
 	if first.EdgeStatus != "EXECUTED" || first.ReasonCode != nil || first.ExecutionEvidence == nil ||
+		!first.ExecutionEvidence.ValidExecuted() ||
 		first.ExecutionEvidence.Applied == nil || first.ExecutionEvidence.Applied.Number == nil || *first.ExecutionEvidence.Applied.Number != 80 ||
+		first.ExecutionEvidence.Readback == nil || first.ExecutionEvidence.Readback.Number == nil || *first.ExecutionEvidence.Readback.Number != 80 ||
+		first.ExecutionEvidence.LocalReadbackVerified == nil || !*first.ExecutionEvidence.LocalReadbackVerified ||
+		first.ExecutionEvidence.LocalReadbackAt == nil || *first.ExecutionEvidence.LocalReadbackAt <= 0 ||
+		first.ExecutionEvidence.LeaseExpiresAt == nil || *first.ExecutionEvidence.LeaseExpiresAt != request.ExpireAt ||
 		first.ExecutionEvidence.WinnerControllerID != "cloud-command-intent" || first.ExecutionEvidence.Cycle == 0 {
-		t.Fatalf("expected governed Edge execution evidence, got %+v", first)
+		t.Fatalf("expected governed Edge execution evidence with local readback & lease, got %+v", first)
 	}
 	if got := plant.Snapshot().Devices[config.Plant.Chiller.ID]["loadLimitPct"]; got != 80.0 {
 		t.Fatalf("Edge runtime did not apply chiller load limit: %v", got)
@@ -598,5 +610,168 @@ func TestEdgeMQTTCommandWALCompactionPreservesNonTerminalAndMaxFences(t *testing
 	})
 	if staleResp.EdgeStatus != "REJECTED" || staleResp.ReasonCode == nil || *staleResp.ReasonCode != "STALE_FENCE" {
 		t.Fatalf("expected STALE_FENCE for evicted device fence 99, got %+v", staleResp)
+	}
+}
+
+type stuckSimModbusHandler struct {
+	mu    sync.Mutex
+	stuck map[uint16]uint16
+}
+
+func (h *stuckSimModbusHandler) HandleCoils(*modbus.CoilsRequest) ([]bool, error) {
+	return nil, modbus.ErrIllegalFunction
+}
+
+func (h *stuckSimModbusHandler) HandleDiscreteInputs(*modbus.DiscreteInputsRequest) ([]bool, error) {
+	return nil, modbus.ErrIllegalFunction
+}
+
+func (h *stuckSimModbusHandler) HandleInputRegisters(*modbus.InputRegistersRequest) ([]uint16, error) {
+	return nil, modbus.ErrIllegalFunction
+}
+
+func (h *stuckSimModbusHandler) HandleHoldingRegisters(req *modbus.HoldingRegistersRequest) ([]uint16, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if req.IsWrite {
+		return nil, nil // Ignore write to simulate stuck register readback mismatch.
+	}
+	out := make([]uint16, req.Quantity)
+	for i := range req.Quantity {
+		out[i] = h.stuck[req.Addr+uint16(i)]
+	}
+	return out, nil
+}
+
+func TestEdgeMQTTCommandRejectsHardRealtimeBoundaryAndMapsReadbackMismatch(t *testing.T) {
+	config := loadGeneratedCentralPlantConfig(t)
+	now := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	plant := NewPlant(config.Plant, config.Scenario, now)
+	edgeRT, err := NewEdgeControlRuntime(config, plant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := newEdgeCommandHandler(edgeRT, MQTTGatewayConfig{QueueDirectory: t.TempDir()}, config.Plant.DeviceIDs(), testMQTTEvidenceSpool(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.now = func() time.Time { return now }
+
+	// 1. EDGE-003 hard real-time point/command is rejected immediately.
+	hrResp := handler.evaluate(mqttCommandEnvelope{
+		SchemaVersion:  mqttCommandSchemaVersion,
+		MessageID:      "msg-sim-hr-1",
+		CommandID:      "cmd-sim-hr-1",
+		IssuedAt:       now.Add(-time.Second).UnixMilli(),
+		ExpireAt:       now.Add(time.Minute).UnixMilli(),
+		DeviceID:       config.Plant.Chiller.ID,
+		PointCode:      "plc_estop_trip",
+		CommandCode:    "STOP",
+		Params:         map[string]float64{},
+		Policy:         mqttCommandPolicy{RequiresReadback: true, VerificationWindowMS: 5000},
+		ExecutionFence: 10,
+		PayloadHash:    "hash-sim-hr",
+	})
+	if hrResp.EdgeStatus != "REJECTED" || hrResp.ReasonCode == nil || *hrResp.ReasonCode != edgecontrol.ReasonHardRealtimeSafetyBoundary {
+		t.Fatalf("expected REJECTED HARD_REALTIME_SAFETY_BOUNDARY, got %+v", hrResp)
+	}
+
+	// 2. Bind chiller's SET_LOAD_LIMIT point to a stuck Modbus TCP register -> LOCAL_READBACK_MISMATCH maps to FAILED.
+	var loadLimitPoint string
+	for _, pt := range config.Points {
+		if pt.DeviceID == config.Plant.Chiller.ID && pt.PointType == "COMMAND" && parsedPointMetadata(pt).Capability == "SET_LOAD_LIMIT" {
+			loadLimitPoint = pt.PointCode
+			break
+		}
+	}
+	if loadLimitPoint == "" {
+		t.Fatal("chiller SET_LOAD_LIMIT point not found in generated central plant config")
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint := ln.Addr().String()
+	_ = ln.Close()
+
+	srv, err := modbus.NewServer(&modbus.ServerConfiguration{URL: "tcp://" + endpoint, Timeout: time.Second}, &stuckSimModbusHandler{
+		stuck: map[uint16]uint16{200: 55},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = srv.Stop() })
+
+	if err := edgeRT.ApplyDriverProfile(edgecontrol.DeclarativeModbusProfile{
+		ComponentID: config.Plant.Chiller.ID,
+		DriverType:  edgecontrol.ModbusDriverTCP,
+		Endpoint:    endpoint,
+		UnitID:      1,
+		TimeoutMS:   500,
+		Retries:     0,
+		Registers: []edgecontrol.ModbusRegisterSpec{
+			{
+				PointCode:         loadLimitPoint,
+				SemanticChannel:   edgecontrol.SemanticLoadLimit,
+				FunctionCode:      edgecontrol.ModbusFunctionReadHoldingRegisters,
+				WriteFunctionCode: edgecontrol.ModbusFunctionWriteSingleRegister,
+				Address:           200,
+				RegisterCount:     1,
+				RawType:           edgecontrol.ModbusRawUint16,
+				ByteOrder:         edgecontrol.ModbusByteOrderBigEndian,
+				WordOrder:         edgecontrol.ModbusWordOrderBigEndian,
+				Scale:             1,
+				PollPriority:      edgecontrol.PriorityVeryHigh,
+			},
+		},
+	}); err != nil {
+		t.Fatalf("ApplyDriverProfile() error = %v", err)
+	}
+
+	loadAddr := config.Plant.Chiller.ID + "/" + loadLimitPoint
+	replies := make(chan mqttCommandReply, 1)
+	go func() {
+		replies <- handler.evaluate(mqttCommandEnvelope{
+			SchemaVersion:  mqttCommandSchemaVersion,
+			MessageID:      "msg-sim-mismatch-1",
+			CommandID:      "cmd-sim-mismatch-1",
+			IssuedAt:       now.Add(-time.Second).UnixMilli(),
+			ExpireAt:       now.Add(time.Minute).UnixMilli(),
+			DeviceID:       config.Plant.Chiller.ID,
+			CommandCode:    "SET_LOAD_LIMIT",
+			Params:         map[string]float64{"loadLimitPct": 85},
+			Policy:         mqttCommandPolicy{RequiresReadback: true, VerificationWindowMS: 5000},
+			ExecutionFence: 11,
+			PayloadHash:    "hash-sim-mismatch",
+		})
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		edgeRT.mu.Lock()
+		pending := edgeRT.pendingByAddress[loadAddr]
+		queued := pending.intentID == "cmd-sim-mismatch-1"
+		edgeRT.mu.Unlock()
+		if queued {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("command did not enter simulator pending queue")
+		}
+		goruntime.Gosched()
+	}
+
+	edgeRT.RunCycle(context.Background(), now)
+	resp := <-replies
+	if resp.EdgeStatus != "FAILED" || resp.ReasonCode == nil || *resp.ReasonCode != "LOCAL_READBACK_MISMATCH" {
+		t.Fatalf("expected FAILED LOCAL_READBACK_MISMATCH, got %+v", resp)
+	}
+	if resp.ExecutionEvidence == nil || resp.ExecutionEvidence.LocalReadbackVerified == nil || *resp.ExecutionEvidence.LocalReadbackVerified ||
+		resp.ExecutionEvidence.Readback == nil || resp.ExecutionEvidence.Readback.Number == nil || *resp.ExecutionEvidence.Readback.Number != 55 {
+		t.Fatalf("expected LocalReadbackVerified=false and Readback=55, got %+v", resp.ExecutionEvidence)
 	}
 }

@@ -12,16 +12,18 @@ var ErrInvalidPointMetadata = errors.New("invalid edge point source metadata")
 
 // EdgePointSourceMetadata holds strongly typed command and telemetry tuning fields from PointConfig.SourceMetadata.
 type EdgePointSourceMetadata struct {
-	Capability         string
-	CapabilityRevision string
-	FeedbackPointKey   string
-	ActuationMode      string
-	ControlKind        string
-	ParameterKey       string
-	Minimum            *float64
-	Maximum            *float64
-	Step               *float64
-	Deadband           *float64
+	Capability           string
+	CapabilityRevision   string
+	FeedbackPointKey     string
+	ActuationMode        string
+	ControlKind          string
+	ParameterKey         string
+	SafetyBoundary       SafetyBoundaryClass
+	HardRealtimeCategory HardRealtimeProtectionCategory
+	Minimum              *float64
+	Maximum              *float64
+	Step                 *float64
+	Deadband             *float64
 }
 
 // ParseEdgePointSourceMetadata validates and extracts typed metadata from an untyped map.
@@ -53,6 +55,24 @@ func ParseEdgePointSourceMetadata(raw map[string]any) (EdgePointSourceMetadata, 
 	}
 	if out.ParameterKey, err = edgeMetadataString(raw, "parameterKey"); err != nil {
 		return EdgePointSourceMetadata{}, err
+	}
+	if boundary, err := edgeMetadataString(raw, "safetyBoundary"); err != nil {
+		return EdgePointSourceMetadata{}, err
+	} else if boundary != "" {
+		normalized := SafetyBoundaryClass(strings.ToUpper(boundary))
+		if !ValidSafetyBoundaryClass(normalized) {
+			return EdgePointSourceMetadata{}, fmtError("unsupported safetyBoundary " + boundary)
+		}
+		out.SafetyBoundary = normalized
+	}
+	if category, err := edgeMetadataString(raw, "hardRealtimeCategory"); err != nil {
+		return EdgePointSourceMetadata{}, err
+	} else if category != "" {
+		normalized := HardRealtimeProtectionCategory(strings.ToUpper(category))
+		if !ValidHardRealtimeProtectionCategory(normalized) {
+			return EdgePointSourceMetadata{}, fmtError("unsupported hardRealtimeCategory " + category)
+		}
+		out.HardRealtimeCategory = normalized
 	}
 
 	if out.Minimum, err = edgeMetadataFiniteFloat(raw, "minimum"); err != nil {

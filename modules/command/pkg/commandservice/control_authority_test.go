@@ -858,3 +858,96 @@ func TestSubmitProtectionRuleCommandResolvesPointCodeAndEnforcesPriority(t *test
 		}
 	}
 }
+
+func TestControlAuthorityRejectsHardRealtimeSafetyBoundaryEvenWithEmergencyBypass(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
+	h, op := seedPlantHarness(t, now)
+	op.StepUpTOTPVerified = true
+	stopProfile, _ := commandmodel.CapabilityProfileFor(commandmodel.CapabilityStop)
+
+	// Register a hard real-time safety PLC trip point on an asset.
+	safetyPtID := "018f3e00-4000-7000-8000-000000000099"
+	model := h.Twin.Models[caSiteID]
+	model.TelemetryPoints = append(model.TelemetryPoints, TelemetryPointDTO{
+		ID:                safetyPtID,
+		TenantID:          caTenantID,
+		SiteID:            caSiteID,
+		ReportingDeviceID: caChillerDev,
+		PointCode:         "plc_estop_trip",
+		PointType:         "COMMAND",
+		ValueType:         "BOOLEAN",
+		Writable:          true,
+		Status:            "ACTIVE",
+		SourceMetadata: map[string]any{
+			"capability":         "STOP",
+			"capabilityRevision": stopProfile.Revision,
+			"safetyBoundary":     "HARD_REALTIME_SAFETY",
+			"feedbackPointKey":   "run_state",
+		},
+	})
+	model.Relationships = append(model.Relationships, AssetRelationshipDTO{
+		ID: "rel-safety-pt", TenantID: caTenantID, SiteID: caSiteID,
+		FromType: "POINT", FromID: safetyPtID, ToType: "ASSET", ToID: caChillerID,
+		Role: "CONTROLS", Status: "ACTIVE", ValidFrom: now.Add(-time.Hour).Format(time.RFC3339),
+	})
+	h.Twin.Models[caSiteID] = model
+	h.Live.Set(caChillerDev, "plc_estop_trip", healthyTextObs(now, "ARMED", 21), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000021")
+
+	_, err := h.Authority.SubmitOperatorCommand(context.Background(), op, SubmitOperatorCommandInput{
+		AssetID: caChillerID, CommandPointID: safetyPtID, IdempotencyKey: "k-hr-operator",
+	})
+	var ce *ControlError
+	if !errors.As(err, &ce) || ce.HTTPStatus != http.StatusForbidden || ce.Code != "HARD_REALTIME_SAFETY_BOUNDARY" {
+		t.Fatalf("expected 403 HARD_REALTIME_SAFETY_BOUNDARY on operator submit, got %v", err)
+	}
+	if h.IAM.CommandAuthorizeCalls != 0 {
+		t.Fatalf("hard-realtime rejection must consume 0 IAM grants, got %d", h.IAM.CommandAuthorizeCalls)
+	}
+
+	_, err = h.Authority.SubmitProtectionRuleCommand(context.Background(), ProtectionRuleCommandInput{
+		TenantID:        caTenantID,
+		SiteID:          caSiteID,
+		DeviceID:        caChillerDev,
+		TargetPointCode: "plc_estop_trip",
+		Capability:      commandmodel.CapabilityStop,
+		IdempotencyKey:  "alarm-rule-action:01910000-0000-7000-8000-000000000099",
+		OutboxID:        "01910000-0000-7000-8000-000000000099",
+		AssignmentID:    "01910000-7a02-7000-8000-000000000099",
+	})
+	if !errors.As(err, &ce) || ce.HTTPStatus != http.StatusForbidden || ce.Code != "HARD_REALTIME_SAFETY_BOUNDARY" {
+		t.Fatalf("expected 403 HARD_REALTIME_SAFETY_BOUNDARY on protection rule submit, got %v", err)
+	}
+
+	_, rej, _, evalErr := h.Authority.evaluatePreDispatch(
+		context.Background(),
+		commandmodel.DispatchEnvelope{CommandID: "018f3e00-5000-7000-8000-000000000099", ExecutionFence: 1},
+		commandmodel.CommandIntent{
+			ID:               "018f3e00-5000-7000-8000-000000000099",
+			TenantID:         caTenantID,
+			SiteID:           caSiteID,
+			DeviceID:         caChillerDev,
+			PointID:          "plc_estop_trip",
+			Capability:       commandmodel.CapabilityStop,
+			IdempotencyKey:   "alarm-rule-action:01910000-0000-7000-8000-000000000099",
+			PreconditionMode: commandmodel.PreconditionEmergencyBypass,
+			BypassReason:     "bypass hardware trip",
+			PriorityTier:     commandmodel.PrioritySafetyInterlock,
+			CommandSource:    commandmodel.SourceProtectionRule,
+		},
+		ControlDispatchContext{
+			TenantID:       caTenantID,
+			SiteID:         caSiteID,
+			DeviceID:       caChillerDev,
+			PointID:        safetyPtID,
+			ControlMode:    SiteControlModeRemoteAuto,
+			SafetyBoundary: "HARD_REALTIME_SAFETY",
+		},
+	)
+	if evalErr != nil {
+		t.Fatalf("evaluatePreDispatch error = %v", evalErr)
+	}
+	if rej == nil || rej.HTTPStatus != http.StatusConflict || rej.Code != "DISPATCH_SAFETY_HARD_REALTIME_BOUNDARY" {
+		t.Fatalf("expected 409 DISPATCH_SAFETY_HARD_REALTIME_BOUNDARY overriding emergency bypass, got %+v", rej)
+	}
+}

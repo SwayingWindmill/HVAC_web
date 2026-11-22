@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 )
 
@@ -251,6 +252,9 @@ func (server *server) writeMutationResult(writer http.ResponseWriter, request *h
 
 func (server *server) writeMutationError(writer http.ResponseWriter, request *http.Request, err error) int {
 	switch {
+	case errors.Is(err, edgecontrol.ErrHardRealtimeSafetyBoundary):
+		writeProblem(writer, request, http.StatusBadRequest, edgecontrol.ReasonHardRealtimeSafetyBoundary, "Hard real-time PLC/hardware safety protection points cannot be registered as writable or bound to soft real-time control.", false)
+		return http.StatusBadRequest
 	case errors.Is(err, ErrInvalidMutation):
 		writeProblem(writer, request, http.StatusBadRequest, "REGISTRY_MUTATION_INVALID", "The Registry mutation does not satisfy the canonical contract.", false)
 		return http.StatusBadRequest

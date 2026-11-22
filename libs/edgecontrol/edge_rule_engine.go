@@ -1182,8 +1182,14 @@ func (c *EdgeRuleController) applyActions(
 		if action.Kind != EdgeRuleActionProtectionCommand {
 			continue
 		}
+		if _, protected := ClassifyHardRealtimeProtection(action.TargetPointCode, action.Capability, nil); protected {
+			continue
+		}
 		addr, dataType, val, resolved := c.resolveProtectionCommandValue(action, image)
 		if !resolved {
+			continue
+		}
+		if snap, exists := image.Get(addr); exists && IsHardRealtimeChannel(snap.Descriptor) {
 			continue
 		}
 		decision, newlyAccepted, err := plan.Request(addr, c.id, val)

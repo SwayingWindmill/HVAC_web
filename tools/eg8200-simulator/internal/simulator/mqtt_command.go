@@ -543,6 +543,10 @@ func (handler *edgeCommandHandler) evaluate(request mqttCommandEnvelope) mqttCom
 	}
 	handler.mu.Unlock()
 
+	if _, protected := edgecontrol.ClassifyHardRealtimeProtection(request.PointCode, request.CommandCode, nil); protected {
+		return handler.finish(deviceID, request.PayloadHash, edgeRejected(base, edgecontrol.ReasonHardRealtimeSafetyBoundary))
+	}
+
 	outcomeCh, err := handler.edgeRuntime.SubmitCommand(EdgeCommandIntentRequest{
 		CommandID:   base.CommandID,
 		DeviceID:    deviceID,
@@ -553,7 +557,9 @@ func (handler *edgeCommandHandler) evaluate(request mqttCommandEnvelope) mqttCom
 	})
 	if err != nil {
 		reason := "COMMAND_INVALID"
-		if strings.Contains(err.Error(), "does not expose command capability") {
+		if errors.Is(err, edgecontrol.ErrHardRealtimeSafetyBoundary) {
+			reason = edgecontrol.ReasonHardRealtimeSafetyBoundary
+		} else if strings.Contains(err.Error(), "does not expose command capability") {
 			reason = "COMMAND_MAPPING_INVALID"
 		} else if strings.Contains(err.Error(), "in-flight") {
 			reason = "COMMAND_BUSY"
@@ -579,7 +585,7 @@ func (handler *edgeCommandHandler) evaluate(request mqttCommandEnvelope) mqttCom
 		base.ExecutionEvidence = edgeExecutionEvidence(outcome)
 		if !outcome.Accepted {
 			base.EdgeStatus = "REJECTED"
-			if strings.HasPrefix(outcome.Code, "DEVICE_WRITE_") {
+			if strings.HasPrefix(outcome.Code, "DEVICE_WRITE_") || strings.HasPrefix(outcome.Code, "LOCAL_READBACK_") {
 				base.EdgeStatus = "FAILED"
 			}
 			reason := strings.TrimSpace(outcome.Code)
@@ -641,6 +647,22 @@ func edgeExecutionEvidence(outcome EdgeCommandOutcome) *commandmodel.EdgeExecuti
 	if outcome.AppliedValue != nil {
 		value := commandScalar(*outcome.AppliedValue)
 		evidence.Applied = &value
+	}
+	if outcome.ReadbackValue != nil {
+		value := commandScalar(*outcome.ReadbackValue)
+		evidence.Readback = &value
+	}
+	if outcome.ReadbackVerified || !outcome.ReadbackAt.IsZero() || strings.HasPrefix(outcome.Code, "LOCAL_READBACK_") {
+		verified := outcome.ReadbackVerified
+		evidence.LocalReadbackVerified = &verified
+	}
+	if !outcome.ReadbackAt.IsZero() {
+		rbAt := outcome.ReadbackAt.UTC().UnixMilli()
+		evidence.LocalReadbackAt = &rbAt
+	}
+	if !outcome.LeaseExpiresAt.IsZero() {
+		leaseExp := outcome.LeaseExpiresAt.UTC().UnixMilli()
+		evidence.LeaseExpiresAt = &leaseExp
 	}
 	for _, constraint := range outcome.ConstraintReasons {
 		evidence.Constraints = append(evidence.Constraints, commandmodel.EdgeConstraintEvidence{

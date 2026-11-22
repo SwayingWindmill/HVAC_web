@@ -1,6 +1,73 @@
 package simulator
 
-import "strings"
+import (
+	"strings"
+	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
+)
+
+func (plant *Plant) ReadCommandTarget(deviceID, method string) (edgecontrol.Value, time.Time, bool) {
+	plant.mu.RLock()
+	defer plant.mu.RUnlock()
+	readAt := plant.now
+	if readAt.IsZero() {
+		readAt = time.Now().UTC()
+	}
+	method = strings.TrimSpace(method)
+	switch deviceID {
+	case plant.config.Chiller.ID:
+		switch method {
+		case "start":
+			return edgecontrol.BooleanValue(plant.chiller.runRequested), readAt, true
+		case "stop":
+			return edgecontrol.BooleanValue(!plant.chiller.runRequested), readAt, true
+		case "startUnitSequence":
+			allRequested := plant.chiller.runRequested && plant.chilledWaterPump.runRequested && plant.coolingWaterPump.runRequested && plant.coolingTower.runRequested
+			return edgecontrol.BooleanValue(allRequested), readAt, true
+		case "stopUnitSequence":
+			allStopped := !plant.chiller.runRequested && !plant.chilledWaterPump.runRequested && !plant.coolingWaterPump.runRequested && !plant.coolingTower.runRequested
+			return edgecontrol.BooleanValue(allStopped), readAt, true
+		case "setChilledWaterTemperatureSetpoint":
+			return edgecontrol.DoubleValue(plant.chiller.setpointC), readAt, true
+		case "setLoadLimit":
+			return edgecontrol.DoubleValue(plant.chiller.loadLimitPct), readAt, true
+		case "resetFault":
+			return edgecontrol.BooleanValue(plant.chiller.faultCode == ""), readAt, true
+		}
+	case plant.config.ChilledWaterPump.ID:
+		return readPumpCommandTarget(plant.chilledWaterPump, method, readAt)
+	case plant.config.CoolingWaterPump.ID:
+		return readPumpCommandTarget(plant.coolingWaterPump, method, readAt)
+	case plant.config.CoolingTower.ID:
+		switch method {
+		case "start":
+			return edgecontrol.BooleanValue(plant.coolingTower.runRequested), readAt, true
+		case "stop":
+			return edgecontrol.BooleanValue(!plant.coolingTower.runRequested), readAt, true
+		case "setFanSpeed":
+			return edgecontrol.DoubleValue(plant.coolingTower.fanSpeedSetpointPct), readAt, true
+		case "resetFault":
+			return edgecontrol.BooleanValue(plant.coolingTower.faultCode == ""), readAt, true
+		}
+	}
+	return edgecontrol.Value{}, time.Time{}, false
+}
+
+func readPumpCommandTarget(state pumpState, method string, readAt time.Time) (edgecontrol.Value, time.Time, bool) {
+	switch method {
+	case "start":
+		return edgecontrol.BooleanValue(state.runRequested), readAt, true
+	case "stop":
+		return edgecontrol.BooleanValue(!state.runRequested), readAt, true
+	case "setFrequency":
+		return edgecontrol.DoubleValue(state.frequencySetpointHz), readAt, true
+	case "resetFault":
+		return edgecontrol.BooleanValue(state.faultCode == ""), readAt, true
+	default:
+		return edgecontrol.Value{}, time.Time{}, false
+	}
+}
 
 func (plant *Plant) ApplyCommand(command Command) CommandResult {
 	plant.mu.Lock()

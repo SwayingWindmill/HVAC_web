@@ -64,21 +64,22 @@ const (
 )
 
 type ChannelDescriptor struct {
-	ComponentID               string            `json:"componentId"`
-	ChannelID                 string            `json:"channelId"`
-	PointID                   string            `json:"pointId"`
-	DataType                  DataType          `json:"dataType"`
-	Access                    AccessMode        `json:"access"`
-	Description               string            `json:"description,omitempty"`
-	Unit                      string            `json:"unit,omitempty"`
-	Category                  ChannelCategory   `json:"category"`
-	Options                   map[string]string `json:"options,omitempty"`
-	StateLevel                StateLevel        `json:"stateLevel,omitempty"`
-	PollPriority              DataPriority      `json:"pollPriority"`
-	LocalPersistencePriority  DataPriority      `json:"localPersistencePriority"`
-	RemotePersistencePriority DataPriority      `json:"remotePersistencePriority"`
-	AggregationPriority       DataPriority      `json:"aggregationPriority"`
-	ResendPriority            DataPriority      `json:"resendPriority"`
+	ComponentID               string              `json:"componentId"`
+	ChannelID                 string              `json:"channelId"`
+	PointID                   string              `json:"pointId"`
+	DataType                  DataType            `json:"dataType"`
+	Access                    AccessMode          `json:"access"`
+	SafetyBoundary            SafetyBoundaryClass `json:"safetyBoundary,omitempty"`
+	Description               string              `json:"description,omitempty"`
+	Unit                      string              `json:"unit,omitempty"`
+	Category                  ChannelCategory     `json:"category"`
+	Options                   map[string]string   `json:"options,omitempty"`
+	StateLevel                StateLevel          `json:"stateLevel,omitempty"`
+	PollPriority              DataPriority        `json:"pollPriority"`
+	LocalPersistencePriority  DataPriority        `json:"localPersistencePriority"`
+	RemotePersistencePriority DataPriority        `json:"remotePersistencePriority"`
+	AggregationPriority       DataPriority        `json:"aggregationPriority"`
+	ResendPriority            DataPriority        `json:"resendPriority"`
 }
 
 func (descriptor ChannelDescriptor) Address() string {
@@ -104,6 +105,12 @@ func (descriptor ChannelDescriptor) validate() error {
 	case AccessReadOnly, AccessReadWrite, AccessWriteOnly:
 	default:
 		return fmt.Errorf("unsupported access mode %q", descriptor.Access)
+	}
+	if !ValidSafetyBoundaryClass(descriptor.SafetyBoundary) {
+		return fmt.Errorf("unsupported safety boundary %q", descriptor.SafetyBoundary)
+	}
+	if IsHardRealtimeChannel(descriptor) && descriptor.Access != AccessReadOnly {
+		return fmt.Errorf("%w: channel %s must remain read-only", ErrHardRealtimeSafetyBoundary, descriptor.Address())
 	}
 	switch descriptor.Category {
 	case ChannelCategoryOpenemsType:

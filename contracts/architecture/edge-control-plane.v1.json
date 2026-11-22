@@ -69,13 +69,13 @@
       "Remote Intent Lease": "VERIFIED",
       "Edge Timedata": "VERIFIED",
       "Simulator Driver": "VERIFIED",
-      "MQTT Command Edge Adapter": "UNVERIFIED"
+      "MQTT Command Edge Adapter": "VERIFIED"
     }
   },
   "decisions": [
     {"id":"EDGE-001","concern":"On-site autonomous control ownership","verdict":"OPENEMS","target":"Edge owns fast local closed-loop control; Cloud owns policy, governance and long-horizon intent.","implementation":"IMPLEMENTED","phase":"P1"},
     {"id":"EDGE-002","concern":"Cloud failure isolation","verdict":"MERGE","target":"Keep current Cloud/Edge isolation and extend it so local controllers, schedules and safety continue without Cloud.","implementation":"IMPLEMENTED","phase":"P1"},
-    {"id":"EDGE-003","concern":"Hard real-time safety boundary","verdict":"OPENEMS","target":"Explicitly prohibit soft-real-time Edge software from replacing PLC, fire, trip or equipment protection logic.","implementation":"MISSING","phase":"P1"},
+    {"id":"EDGE-003","concern":"Hard real-time safety boundary","verdict":"OPENEMS","target":"Explicitly prohibit soft-real-time Edge software from replacing PLC, fire, trip or equipment protection logic.","implementation":"IMPLEMENTED","phase":"P1"},
     {"id":"EDGE-004","concern":"Input-Process-Output control cycle","verdict":"OPENEMS","target":"Adopt an explicit Input -> Process -> Output Edge cycle.","implementation":"IMPLEMENTED","phase":"P1"},
     {"id":"EDGE-005","concern":"Immutable Process Image per cycle","verdict":"OPENEMS","target":"All controllers in one cycle read the same immutable process image.","implementation":"IMPLEMENTED","phase":"P1"},
     {"id":"EDGE-006","concern":"Channel value/nextValue double buffer","verdict":"OPENEMS","target":"Asynchronous device reads update nextValue; cycle boundary promotes nextValue to value.","implementation":"IMPLEMENTED","phase":"P1"},
@@ -83,9 +83,9 @@
     {"id":"EDGE-008","concern":"Controller contract","verdict":"OPENEMS","target":"Introduce a reusable Edge Controller interface executed every cycle with bounded runtime and explicit failure state.","implementation":"IMPLEMENTED","phase":"P1"},
     {"id":"EDGE-009","concern":"Controller scheduling and priority","verdict":"OPENEMS","target":"Introduce deterministic ordered controller execution.","implementation":"IMPLEMENTED","phase":"P1"},
     {"id":"EDGE-010","concern":"Constraint composition / control arbitration","verdict":"OPENEMS","target":"Higher-priority controllers constrain feasible outputs; later controllers cannot overwrite established limits.","implementation":"IMPLEMENTED","phase":"P1"},
-    {"id":"EDGE-011","concern":"Cloud command semantics","verdict":"MERGE","target":"Keep durable Cloud Command lifecycle but treat dispatched commands as Edge intents that participate in local arbitration.","implementation":"PARTIAL","phase":"P1"},
+    {"id":"EDGE-011","concern":"Cloud command semantics","verdict":"MERGE","target":"Keep durable Cloud Command lifecycle but treat dispatched commands as Edge intents that participate in local arbitration.","implementation":"IMPLEMENTED","phase":"P1"},
     {"id":"EDGE-012","concern":"Durable command lifecycle, approval and audit","verdict":"HVAC","target":"Retain SUBMITTED/VALIDATING/APPROVAL/DISPATCH/VERIFY terminal lifecycle, IAM authorization and audit as Cloud authority.","implementation":"IMPLEMENTED","phase":"P1"},
-    {"id":"EDGE-013","concern":"Command feedback verification","verdict":"MERGE","target":"Edge performs immediate local readback/constraint verification; Cloud retains durable authoritative command outcome verification.","implementation":"PARTIAL","phase":"P1"},
+    {"id":"EDGE-013","concern":"Command feedback verification","verdict":"MERGE","target":"Edge performs immediate local readback/constraint verification; Cloud retains durable authoritative command outcome verification.","implementation":"IMPLEMENTED","phase":"P1"},
     {"id":"EDGE-014","concern":"Remote control lease / timeout","verdict":"OPENEMS","target":"Remote setpoints/intents have an expiry or lease; stale Cloud control must relinquish to local control.","implementation":"IMPLEMENTED","phase":"P1"},
     {"id":"EDGE-015","concern":"Local safety and interlocks","verdict":"MERGE","target":"Move dynamic safety/interlock enforcement to reusable local controllers while retaining Cloud policy/audit evidence.","implementation":"IMPLEMENTED","phase":"P1"},
 
@@ -140,6 +140,6 @@
   },
   "conformance": {
     "current": "PARTIAL",
-    "reason": "P2 implements the shared southbound MQTT session/codec/fencing/rate-limiting layer, declarative Modbus register bridge with Config Shadow hot-reload, local hydraulic interlock and offline autonomy fallback controllers, change-plus-snapshot publication, and priority-ordered FileTimedata resend cursors. P2 cluster/edge aggregation and P3 forecast/scheduler items remain pending."
+    "reason": "P1/P2 implements hard real-time safety boundaries (EDGE-003), MQTT Command Edge Adapter leased intent arbitration (EDGE-011) with immediate local register readback verification (EDGE-013) backed by crash-safe WAL/fencing, declarative Modbus bridge with Config Shadow hot-reload, local hydraulic interlock and offline autonomy fallback controllers, and priority-ordered FileTimedata resend cursors. P2 edge aggregation/multi-chiller staging and P3 forecast/scheduler items remain pending."
   }
 }

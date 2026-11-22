@@ -50,6 +50,9 @@ func (store *IntentStore) Put(intent ControlIntent) (bool, error) {
 	if !ok {
 		return false, fmt.Errorf("intent targets unknown channel %s", intent.Address)
 	}
+	if IsHardRealtimeChannel(descriptor) {
+		return false, fmt.Errorf("%w: channel %s", ErrHardRealtimeSafetyBoundary, intent.Address)
+	}
 	if !writable(descriptor) {
 		return false, fmt.Errorf("intent targets read-only channel %s", intent.Address)
 	}

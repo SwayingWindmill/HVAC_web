@@ -12,6 +12,7 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/commandauth"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 	"github.com/quanlaihe/hvac-web/libs/planttwin"
 )
 
@@ -478,6 +479,7 @@ func (a *ControlAuthority) dispatchShutdownTarget(
 		cleanBypassReason = "degraded safe shutdown dispatch"
 	}
 	locks, mw := toGateLocksAndWindow(stateView.AssetLocks, stateView.ActiveMaintenanceWindow)
+	_, hardProtected := edgecontrol.ClassifyHardRealtimeProtection(target.point.PointCode, string(target.capability), target.point.SourceMetadata)
 	_, rejection := commandmodel.EvaluateControlGate(commandmodel.GateInput{
 		Phase:                   commandmodel.GatePhaseSubmit,
 		AssetID:                 target.asset.ID,
@@ -493,6 +495,7 @@ func (a *ControlAuthority) dispatchShutdownTarget(
 		ActiveMaintenanceWindow: mw,
 		PreconditionMode:        precondMode,
 		BypassReason:            cleanBypassReason,
+		HardRealtimeProtected:   hardProtected,
 		TargetState:             obs,
 		Interlocks:              target.interlocks,
 		PeerStates:              peerObs,

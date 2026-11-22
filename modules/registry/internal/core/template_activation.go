@@ -164,7 +164,7 @@ func parseAndValidateTemplatePayload(kind TemplateKind, payload map[string]any) 
 			}
 			pt, err := validateStandardPoint(parsed)
 			if err != nil {
-				return nil, fmt.Errorf("%w: standardPoints[%d]: %v", ErrInvalidMutation, index, err)
+				return nil, fmt.Errorf("%w: standardPoints[%d]: %w", ErrInvalidMutation, index, err)
 			}
 			if _, duplicate := seenCodes[pt.PointCode]; duplicate {
 				return nil, fmt.Errorf("%w: duplicate standardPoints pointCode %q", ErrInvalidMutation, pt.PointCode)
@@ -217,7 +217,7 @@ func parseAndValidateTemplatePayload(kind TemplateKind, payload map[string]any) 
 		}
 		driver, err := validateTemplateModbusDriver(rawModbusDriver)
 		if err != nil {
-			return nil, fmt.Errorf("%w: modbusDriver: %v", ErrInvalidMutation, err)
+			return nil, fmt.Errorf("%w: modbusDriver: %w", ErrInvalidMutation, err)
 		}
 		out.ModbusDriver = driver
 	}
@@ -315,6 +315,14 @@ func validateStandardPoint(parsed templateStandardPointJSON) (TemplateStandardPo
 	}
 	if _, err := edgecontrol.ParseEdgePointSourceMetadata(meta); err != nil {
 		return TemplateStandardPoint{}, err
+	}
+	if err := edgecontrol.ValidatePointSafetyBoundary(parsed.PointCode, parsed.PointType, writable, meta); err != nil {
+		return TemplateStandardPoint{}, err
+	}
+	if (writable || parsed.PointType == "COMMAND" || parsed.PointType == "SETTING") && parsed.SourceKey != "" {
+		if err := edgecontrol.ValidatePointSafetyBoundary(parsed.SourceKey, parsed.PointType, writable, meta); err != nil {
+			return TemplateStandardPoint{}, err
+		}
 	}
 	if parsed.PointType == "COMMAND" {
 		if err := commandmodel.ValidateCommandPointMetadata(meta); err != nil {

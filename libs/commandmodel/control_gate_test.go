@@ -485,3 +485,92 @@ func TestAutoRollbackEmergencyPreconditionBypassScope(t *testing.T) {
 		}
 	})
 }
+
+func TestEvaluateControlGateHardRealtimeSafetyAndEvidenceValidation(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
+
+	t.Run("submit and pre-dispatch reject hard real-time protected points even under emergency bypass", func(t *testing.T) {
+		t.Parallel()
+		_, submitRej := EvaluateControlGate(GateInput{
+			Phase:                 GatePhaseSubmit,
+			CommandID:             "cmd-hr-submit",
+			DeviceID:              "plc-1",
+			Capability:            CapabilityStart,
+			SiteMode:              SiteControlModeRemoteAuto,
+			IdempotencyKey:        "hr-submit-1",
+			PriorityTier:          PrioritySafetyInterlock,
+			CommandSource:         SourceProtectionRule,
+			PreconditionMode:      PreconditionEmergencyBypass,
+			BypassReason:          "emergency trip override attempt",
+			HardRealtimeProtected: true,
+			TargetState:           safeStateObs(now, "STOPPED"),
+		})
+		if submitRej == nil || submitRej.HTTPStatus != 403 || submitRej.Code != "HARD_REALTIME_SAFETY_BOUNDARY" {
+			t.Fatalf("expected 403 HARD_REALTIME_SAFETY_BOUNDARY on submit, got %+v", submitRej)
+		}
+
+		_, dispatchRej := EvaluateControlGate(GateInput{
+			Phase:                 GatePhasePreDispatch,
+			CommandID:             "cmd-hr-dispatch",
+			DeviceID:              "plc-1",
+			Capability:            CapabilityStart,
+			SiteMode:              SiteControlModeRemoteAuto,
+			IdempotencyKey:        "hr-dispatch-1",
+			PriorityTier:          PrioritySafetyInterlock,
+			CommandSource:         SourceProtectionRule,
+			PreconditionMode:      PreconditionEmergencyBypass,
+			BypassReason:          "emergency trip override attempt",
+			HardRealtimeProtected: true,
+			TargetState:           safeStateObs(now, "STOPPED"),
+		})
+		if dispatchRej == nil || dispatchRej.HTTPStatus != 409 || dispatchRej.Code != "DISPATCH_SAFETY_HARD_REALTIME_BOUNDARY" {
+			t.Fatalf("expected 409 DISPATCH_SAFETY_HARD_REALTIME_BOUNDARY on pre-dispatch, got %+v", dispatchRej)
+		}
+	})
+
+	t.Run("execution evidence validates readback and lease fields", func(t *testing.T) {
+		t.Parallel()
+		verified := true
+		validAt := now.UnixMilli()
+		leaseExp := now.Add(time.Minute).UnixMilli()
+		rb := NumberScalar(42.5)
+		eff := NumberScalar(42.5)
+
+		validEv := EdgeExecutionEvidence{
+			Requested:             NumberScalar(42.5),
+			Effective:             &eff,
+			Applied:               &eff,
+			Readback:              &rb,
+			LocalReadbackVerified: &verified,
+			LocalReadbackAt:       &validAt,
+			WinnerControllerID:    "intent-controller",
+			Cycle:                 7,
+			LeaseExpiresAt:        &leaseExp,
+		}
+		if !validEv.ValidExecuted() {
+			t.Fatalf("expected ValidExecuted()=true for full readback/lease evidence: %+v", validEv)
+		}
+
+		zeroAt := int64(0)
+		badAt := validEv
+		badAt.LocalReadbackAt = &zeroAt
+		if badAt.Valid() {
+			t.Fatal("expected Valid()=false when LocalReadbackAt <= 0")
+		}
+
+		zeroLease := int64(0)
+		badLease := validEv
+		badLease.LeaseExpiresAt = &zeroLease
+		if badLease.Valid() {
+			t.Fatal("expected Valid()=false when LeaseExpiresAt <= 0")
+		}
+
+		badReadback := validEv
+		invalidScalar := ScalarValue{}
+		badReadback.Readback = &invalidScalar
+		if badReadback.Valid() {
+			t.Fatal("expected Valid()=false when Readback ScalarValue is empty")
+		}
+	})
+}

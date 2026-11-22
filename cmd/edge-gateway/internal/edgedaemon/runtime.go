@@ -72,6 +72,7 @@ type DaemonOptions struct {
 	Logger          *slog.Logger
 	ProbeBinary     func(context.Context, string) error
 	OnOTASwitchBoot func()
+	Now             func() time.Time
 }
 
 // Daemon owns the complete Linux edge runtime lifecycle on EG8200 gateways.
@@ -86,12 +87,15 @@ type Daemon struct {
 	ruleEngine    *edgecontrol.EdgeRuleController
 	spool         *GradedSpool
 	shadow        *ShadowManager
+	commands      *CommandAdapter
 	ota           *OTAAgent
 	tunnelClient  *TunnelClient
 	healthSrv     *http.Server
 	healthAddr    string
 	mqttSession   *mqttclient.SharedSession
 	onOTASwitch   func()
+	cmdSem        chan struct{}
+	cmdWG         sync.WaitGroup
 	sequence      atomic.Uint64
 	mqttConnected atomic.Bool
 	ready         atomic.Bool
@@ -163,10 +167,22 @@ func NewDaemon(cfg Config, opts DaemonOptions) (*Daemon, error) {
 		return nil, fmt.Errorf("open graded spool: %w", err)
 	}
 
+	nowFn := opts.Now
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+
 	shadow := NewShadowManager(cfg.GatewayID, cfg.StateDir, host, registry, interlock, fallback, ruleEngine, logger)
+	shadow.now = nowFn
 	if err := shadow.LoadOrBootstrap(cfg); err != nil {
 		_ = registry.Close()
 		return nil, fmt.Errorf("bootstrap config shadow: %w", err)
+	}
+
+	commands, err := NewCommandAdapter(cfg.GatewayID, cfg.StateDir, host, nowFn, logger)
+	if err != nil {
+		_ = registry.Close()
+		return nil, fmt.Errorf("init command adapter: %w", err)
 	}
 
 	ota, err := NewOTAAgent(OTAAgentOptions{
@@ -218,14 +234,17 @@ func NewDaemon(cfg Config, opts DaemonOptions) (*Daemon, error) {
 		ruleEngine:   ruleEngine,
 		spool:        spool,
 		shadow:       shadow,
+		commands:     commands,
 		ota:          ota,
 		tunnelClient: tunnelClient,
 		onOTASwitch:  opts.OnOTASwitchBoot,
-		now:          time.Now,
+		cmdSem:       make(chan struct{}, 64),
+		now:          nowFn,
 	}
 
 	if strings.TrimSpace(cfg.HealthListenAddr) != "" {
 		if err := d.startHealthServer(cfg.HealthListenAddr); err != nil {
+			_ = commands.Close()
 			_ = registry.Close()
 			return nil, err
 		}
@@ -256,6 +275,25 @@ func (d *Daemon) OTAAgent() *OTAAgent {
 // Spool returns the managed GradedSpool.
 func (d *Daemon) Spool() *GradedSpool {
 	return d.spool
+}
+
+// CommandAdapter returns the managed MQTT CommandAdapter.
+func (d *Daemon) CommandAdapter() *CommandAdapter {
+	return d.commands
+}
+
+// Interlock returns the Daemon's HydraulicInterlockController.
+func (d *Daemon) Interlock() *edgecontrol.HydraulicInterlockController {
+	return d.interlock
+}
+
+// HandleCommandPayload validates a v2.0 cloud command envelope, registers its ControlIntent,
+// waits for the next cycle outcome, and returns the serialized CommandReplyWire payload.
+func (d *Daemon) HandleCommandPayload(ctx context.Context, payload []byte) ([]byte, bool) {
+	if d == nil || d.commands == nil {
+		return nil, false
+	}
+	return d.commands.HandlePayload(ctx, payload)
 }
 
 // VerifyOTAOnBoot resolves any pending HEALTH_CHECKING OTA transition on startup,
@@ -290,6 +328,9 @@ func (d *Daemon) StepCycle(ctx context.Context) (edgecontrol.HostCycleResult, er
 	res, err := d.host.RunCycle(ctx, now)
 	if err != nil {
 		return res, err
+	}
+	if d.commands != nil {
+		d.commands.ResolveCycle(now, res.Cycle, res.WriteResults)
 	}
 	d.emitCycleTelemetry(ctx, res.Cycle.Image, now)
 	d.emitRuleEvents(ctx, now)
@@ -366,6 +407,10 @@ func (d *Daemon) Close() error {
 		_ = d.mqttSession.Close(shutCtx)
 		cancel()
 	}
+	if d.commands != nil {
+		_ = d.commands.Close()
+	}
+	d.cmdWG.Wait()
 	if err := d.registry.Close(); err != nil {
 		errs = append(errs, err)
 	}
@@ -543,6 +588,28 @@ func (d *Daemon) startMQTTSession(ctx context.Context) error {
 		})
 		if switchPending && d.onOTASwitch != nil {
 			d.onOTASwitch()
+		}
+	}); err != nil {
+		return err
+	}
+	if _, err := session.RegisterRoute("edge-command-downlink", []string{CommandDownlinkTopic(d.cfg.GatewayID)}, func(pkt *paho.Publish) {
+		payload := append([]byte(nil), pkt.Payload...)
+		select {
+		case d.cmdSem <- struct{}{}:
+			d.cmdWG.Add(1)
+			go func() {
+				defer func() {
+					<-d.cmdSem
+					d.cmdWG.Done()
+				}()
+				cmdCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+				defer cancel()
+				if replyBytes, ok := d.HandleCommandPayload(cmdCtx, payload); ok && len(replyBytes) > 0 {
+					d.publishOrSpool(ctx, CommandReplyUplinkTopic(d.cfg.GatewayID), 1, EvidenceControl, replyBytes)
+				}
+			}()
+		default:
+			d.logger.Warn("edge_command_queue_full")
 		}
 	}); err != nil {
 		return err

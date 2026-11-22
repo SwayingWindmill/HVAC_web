@@ -603,6 +603,9 @@ func (a EdgeRuleAction) validate() error {
 	if strings.TrimSpace(a.Capability) == "" || len(a.Capability) > 64 {
 		return errors.New("capability is required and must be at most 64 chars")
 	}
+	if cat, protected := ClassifyHardRealtimeProtection(a.TargetPointCode, a.Capability, nil); protected {
+		return fmt.Errorf("%w: edge rule action cannot target category=%s point=%q capability=%q", ErrHardRealtimeSafetyBoundary, cat, a.TargetPointCode, a.Capability)
+	}
 	for k, v := range a.Parameters {
 		if strings.TrimSpace(k) == "" || len(k) > 64 || !isFiniteFloat(v) {
 			return errors.New("action parameter must have valid key and finite value")

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 )
 
 const CommandDispatchContextPath = RegistryPathPrefix + "commands/dispatch-context"
@@ -32,6 +33,7 @@ type CommandDispatchContext struct {
 	AssetLocks              []AssetControlLockState    `json:"assetLocks"`
 	ActiveMaintenanceWindow *ActiveMaintenanceWindow   `json:"activeMaintenanceWindow,omitempty"`
 	ActuationMode           string                     `json:"actuationMode,omitempty"`
+	SafetyBoundary          string                     `json:"safetyBoundary,omitempty"`
 	FeedbackPointKey        string                     `json:"feedbackPointKey"`
 	Interlocks              []CommandDispatchInterlock `json:"interlocks"`
 }
@@ -242,9 +244,10 @@ LIMIT 1
 		result.AssetID = boundAssetID
 	}
 
+	var pointCode string
 	var rawMeta []byte
 	err = transaction.QueryRow(ctx, `
-SELECT COALESCE(source_metadata, '{}'::jsonb)
+SELECT point_code, COALESCE(source_metadata, '{}'::jsonb)
 FROM core_registry.telemetry_points
 WHERE tenant_id = $1::uuid
   AND site_id = $2::uuid
@@ -253,7 +256,7 @@ WHERE tenant_id = $1::uuid
   AND point_type = 'COMMAND'
   AND writable
   AND status = 'ACTIVE'
-`, tenantID, siteID, deviceID, pointID).Scan(&rawMeta)
+`, tenantID, siteID, deviceID, pointID).Scan(&pointCode, &rawMeta)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return CommandDispatchContext{}, fmt.Errorf("query command Point dispatch metadata: %w", err)
 	}
@@ -261,6 +264,14 @@ WHERE tenant_id = $1::uuid
 		var meta commandPointDispatchMeta
 		if err := json.Unmarshal(rawMeta, &meta); err != nil {
 			return CommandDispatchContext{}, fmt.Errorf("decode command Point dispatch metadata: %w", err)
+		}
+		var rawMetaMap map[string]any
+		if err := json.Unmarshal(rawMeta, &rawMetaMap); err == nil {
+			if _, protected := edgecontrol.ClassifyHardRealtimeProtection(pointCode, "", rawMetaMap); protected {
+				result.SafetyBoundary = string(edgecontrol.SafetyBoundaryHardRealtime)
+			}
+		} else if _, protected := edgecontrol.ClassifyHardRealtimeProtection(pointCode, "", nil); protected {
+			result.SafetyBoundary = string(edgecontrol.SafetyBoundaryHardRealtime)
 		}
 		result.ActuationMode = strings.ToUpper(strings.TrimSpace(meta.ActuationMode))
 		if feedbackKey := strings.TrimSpace(meta.FeedbackPointKey); feedbackKey != "" {
