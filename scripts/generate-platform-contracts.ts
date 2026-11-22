@@ -5,6 +5,63 @@ import { dirname, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
+type HttpMethod = 'get' | 'post' | 'put' | 'patch' | 'delete';
+type OpenAPISchemaRef = { $ref?: string };
+type OpenAPISchemaProperty = {
+  type?: string;
+  const?: unknown;
+  enum?: unknown[];
+  pattern?: string;
+  minLength?: number;
+  maxLength?: number;
+  minimum?: number;
+  uniqueItems?: boolean;
+  maxItems?: number;
+  items?: OpenAPISchemaRef;
+  format?: string;
+  'x-stable-codes'?: string[];
+};
+type OpenAPISchema = {
+  type?: string;
+  additionalProperties?: boolean;
+  required?: string[];
+  properties?: Record<string, OpenAPISchemaProperty>;
+  enum?: unknown[];
+  pattern?: string;
+  minimum?: number;
+};
+type OpenAPIResponse = {
+  content?: Record<string, { schema?: OpenAPISchemaRef }>;
+  headers?: Record<string, { schema?: { format?: string } }>;
+};
+type OpenAPIOperation = {
+  operationId?: string;
+  'x-architecture-status'?: string;
+  'x-shape-status'?: string;
+  'x-shape-source'?: string;
+  responses?: Record<string, OpenAPIResponse>;
+  requestBody?: { content?: Record<string, { schema?: OpenAPISchemaRef }> };
+};
+type OpenAPISpec = {
+  openapi?: string;
+  paths?: Record<string, Partial<Record<HttpMethod, OpenAPIOperation>>>;
+  components?: {
+    schemas?: Record<string, OpenAPISchema>;
+    responses?: Record<string, OpenAPIResponse>;
+  };
+};
+type ToolingLock = {
+  generator?: string;
+  generatorVersion?: string;
+  templates?: string[];
+  outputs?: string[];
+};
+type OperationEntry = {
+  path: string;
+  method: HttpMethod;
+  operation: OpenAPIOperation;
+};
+
 const generatorVersion = '7.1.0';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const specPath = resolve(root, 'contracts/http/platform-gateway.openapi.yaml');
@@ -16,7 +73,7 @@ const tsOutputPath = resolve(root, 'apps/hvac-web/src/api/generated/platformGate
 const checkOnly = process.argv.includes('--check');
 const gofmtBinary = process.env.GOFMT_BINARY ?? 'gofmt';
 
-const normalizeLineEndings = (value) => value.replace(/\r\n?/g, '\n');
+const normalizeLineEndings = (value: string): string => value.replace(/\r\n?/g, '\n');
 const [specSource, toolingLockSource, goTemplateSource, tsTemplateSource] = await Promise.all([
   readFile(specPath, 'utf8'),
   readFile(toolingLockPath, 'utf8'),
@@ -27,37 +84,38 @@ const specText = normalizeLineEndings(specSource);
 const toolingLockText = normalizeLineEndings(toolingLockSource);
 const goTemplate = normalizeLineEndings(goTemplateSource);
 const tsTemplate = normalizeLineEndings(tsTemplateSource);
-const spec = JSON.parse(specText);
-const toolingLock = JSON.parse(toolingLockText);
+const spec = JSON.parse(specText) as OpenAPISpec;
+const toolingLock = JSON.parse(toolingLockText) as ToolingLock;
 const digest = createHash('sha256').update(specText).digest('hex');
 
-function invariant(condition, message) {
+function invariant(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`Invalid platform Gateway OpenAPI contract: ${message}`);
 }
 
-function exactMembers(actual, expected) {
+function exactMembers(actual: unknown, expected: readonly string[]): boolean {
   return Array.isArray(actual) && actual.length === expected.length && expected.every((member) => actual.includes(member));
 }
 
-function exactKeys(value, expected) {
+function exactKeys(value: unknown, expected: readonly string[]): boolean {
   return value !== null && typeof value === 'object' && exactMembers(Object.keys(value), expected);
 }
 
-function operation(operationId) {
+function operation(operationId: string): OperationEntry | null {
   for (const [path, pathItem] of Object.entries(spec.paths ?? {})) {
-    for (const method of ['get', 'post', 'put', 'patch', 'delete']) {
-      if (pathItem?.[method]?.operationId === operationId) return { path, method, operation: pathItem[method] };
+    for (const method of ['get', 'post', 'put', 'patch', 'delete'] as const) {
+      const candidate = pathItem[method];
+      if (candidate?.operationId === operationId) return { path, method, operation: candidate };
     }
   }
   return null;
 }
 
-function schemaRef(operationValue, status, contentType = 'application/json') {
-  return operationValue?.responses?.[status]?.content?.[contentType]?.schema?.$ref;
+function schemaRef(operationValue: OpenAPIOperation, status: string, contentType = 'application/json'): string | undefined {
+  return operationValue.responses?.[status]?.content?.[contentType]?.schema?.$ref;
 }
 
 invariant(toolingLock.generatorVersion === generatorVersion, 'tooling lock generator version does not match this generator');
-invariant(toolingLock.generator === 'scripts/generate-platform-contracts.mjs', 'tooling lock generator path is invalid');
+invariant(toolingLock.generator === 'scripts/generate-platform-contracts.ts', 'tooling lock generator path is invalid');
 invariant(exactMembers(toolingLock.templates, [
   'contracts/http/templates/platformapi.go.tmpl',
   'contracts/http/templates/platformGateway.ts.tmpl',
@@ -73,7 +131,7 @@ const conc = `${gw}/concentrators/{unitId}`;
 const site = 'sites/{siteId}';
 const sav = `${site}/savings/measures`;
 const opt = `${site}/optimization`;
-const w4 = [
+const w4: ReadonlyArray<readonly [string, HttpMethod, string, string, string?]> = [
   ['listAlarmRuleDeadLetters', 'get', 'alarm-rules/dead-letters', 'AlarmRuleDeadLetterListEnvelope', '__ALARM_RULES_DEAD_LETTERS_PATH__'],
   ['replayAlarmRuleDeadLetter', 'post', 'alarm-rules/dead-letters/{outboxId}/replay', 'AlarmRuleDeadLetterReplayEnvelope', '__ALARM_RULES_DEAD_LETTER_REPLAY_PATH__'],
   ['putDevicePriorityLock', 'put', `${site}/devices/{deviceId}/priority-lock`, 'DevicePriorityLockState', '__DEVICE_PRIORITY_LOCK_PATH__'],
@@ -88,8 +146,8 @@ const w4 = [
   ['listSiteAlarmRuleRevisions', 'get', 'alarm-rules/revisions', 'AlarmRuleRevisionListEnvelope', '__ALARM_RULES_REVISIONS_PATH__'],
   ['rollbackSiteAlarmRules', 'post', 'alarm-rules/revisions/{revision}/rollback', 'AlarmRulePublishEnvelope', '__ALARM_RULES_ROLLBACK_PATH__'],
 ];
-const expectedOperations = {
-  ...Object.fromEntries(w4.map(([k, m, p]) => [k, [m, p]])),
+const expectedOperations: Record<string, readonly [HttpMethod, string]> = {
+  ...Object.fromEntries(w4.map(([k, m, p]) => [k, [m, p] as const])),
   getGatewayCredential: ['get', `${gw}/credential`],
   listGatewayCredentials: ['get', `${gw}/credentials`],
   revokeGatewayCertificate: ['post', `${gw}/credentials/{credentialId}/revoke`],
@@ -106,6 +164,14 @@ const expectedOperations = {
   getGatewayPacketCapture: ['get', `${gw}/packet-capture`],
   startGatewayPacketCapture: ['post', `${gw}/packet-capture/start`],
   stopGatewayPacketCapture: ['post', `${gw}/packet-capture/stop`],
+  listOTAPackages: ['get', 'ota/packages'],
+  uploadOTAPackage: ['post', 'ota/packages'],
+  listOTACampaigns: ['get', 'ota/campaigns'],
+  createOTACampaign: ['post', 'ota/campaigns'],
+  getOTACampaign: ['get', 'ota/campaigns/{campaignId}'],
+  pauseOTACampaign: ['post', 'ota/campaigns/{campaignId}/pause'],
+  resumeOTACampaign: ['post', 'ota/campaigns/{campaignId}/resume'],
+  rollbackOTACampaign: ['post', 'ota/campaigns/{campaignId}/rollback'],
   getHealth: ['get', 'health'],
   getVersion: ['get', 'version'],
   getPlatformStatus: ['get', 'platform/status'],
@@ -221,14 +287,14 @@ const expectedOperations = {
   deleteSiteOptimizationCanaryBinding: ['delete', `${opt}/canary-bindings/{loopKey}`],
   listSiteOptimizationNegativeSamples: ['get', `${opt}/negative-samples`],
 };
-const operations = {};
+const operations: Record<string, OperationEntry> = {};
 for (const [operationId, [method, subPath]] of Object.entries(expectedOperations)) {
   const value = operation(operationId);
-  invariant(value?.method === method && value?.path === `/api/v1/${subPath}`, `${operationId} method/path is unsupported by generator version 7.1`);
+  invariant(value?.method === method && value.path === `/api/v1/${subPath}`, `${operationId} method/path is unsupported by generator version 7.1`);
   operations[operationId] = value;
 }
 
-const expectedSuccessSchemas = {
+const expectedSuccessSchemas: Record<string, string> = {
   ...Object.fromEntries(w4.map(([k, , , s]) => [k, s])),
   getGatewayCredential: 'GatewayCredentialStatus',
   listGatewayCredentials: 'GatewayCredentialList',
@@ -246,6 +312,12 @@ const expectedSuccessSchemas = {
   getGatewayPacketCapture: 'GatewayPacketCaptureSnapshot',
   startGatewayPacketCapture: 'GatewayPacketCaptureSnapshot',
   stopGatewayPacketCapture: 'GatewayPacketCaptureSnapshot',
+  listOTAPackages: 'OTAPackageList',
+  listOTACampaigns: 'OTACampaignList',
+  getOTACampaign: 'OTACampaignDetail',
+  pauseOTACampaign: 'OTACampaignDetail',
+  resumeOTACampaign: 'OTACampaignDetail',
+  rollbackOTACampaign: 'OTACampaignDetail',
   getHealth: 'HealthResponse',
   getVersion: 'BuildInfo',
   getPlatformStatus: 'PlatformStatusResponse',
@@ -309,12 +381,14 @@ for (const [operationId, schemaName] of Object.entries(expectedSuccessSchemas)) 
 invariant(schemaRef(operations.recalculateSiteAccounting.operation, '202') === '#/components/schemas/AccountingRecalcJob', 'recalculateSiteAccounting accepted schema is unsupported');
 invariant(schemaRef(operations.createSiteMeterRatioVersion.operation, '201') === '#/components/schemas/MeterRatioVersion', 'createSiteMeterRatioVersion created schema is unsupported');
 invariant(schemaRef(operations.replaceDeviceHardware.operation, '201') === '#/components/schemas/ReplaceDeviceHardwareResult', 'replaceDeviceHardware success schema is unsupported');
+invariant(schemaRef(operations.uploadOTAPackage.operation, '201') === '#/components/schemas/OTAPackage', 'uploadOTAPackage created schema is unsupported');
+invariant(schemaRef(operations.createOTACampaign.operation, '201') === '#/components/schemas/OTACampaignDetail', 'createOTACampaign created schema is unsupported');
 invariant(schemaRef(operations.getTemplateRevision.operation, '200') === './s05-registry-writer.openapi.json#/components/schemas/TemplateRevision', 'getTemplateRevision success schema is unsupported');
 invariant(operations.logout.operation.responses?.['204'], 'logout must return 204');
 invariant(operations.logout.operation.responses?.['204']?.headers?.Location?.schema?.format === 'uri', 'logout must publish the provider end-session Location header');
 for (const operationId of ['listAlarmsV212', 'getAlarmV212', 'ackAlarmV212']) {
-  invariant(operations[operationId].operation?.['x-architecture-status'] === 'ACTIVE' && operations[operationId].operation?.['x-shape-status'] === 'READY', `${operationId} must be active with a synchronized Alarm shape`);
-  invariant(operations[operationId].operation?.['x-shape-source'] === 'contracts/http/s4-alarm-public.openapi.json', `${operationId} must use the S4 Alarm subordinate contract`);
+  invariant(operations[operationId].operation['x-architecture-status'] === 'ACTIVE' && operations[operationId].operation['x-shape-status'] === 'READY', `${operationId} must be active with a synchronized Alarm shape`);
+  invariant(operations[operationId].operation['x-shape-source'] === 'contracts/http/s4-alarm-public.openapi.json', `${operationId} must use the S4 Alarm subordinate contract`);
 }
 invariant(schemaRef(operations.listAlarmsV212.operation, '200') === './s4-alarm-public.openapi.json#/components/schemas/CursorAlarmListResponse', 'Alarm list success schema is unsupported');
 invariant(schemaRef(operations.getAlarmV212.operation, '200') === './s4-alarm-public.openapi.json#/components/schemas/AlarmEnvelope', 'Alarm detail success schema is unsupported');
@@ -322,7 +396,7 @@ invariant(schemaRef(operations.ackAlarmV212.operation, '200') === './s4-alarm-pu
 invariant(operations.ackAlarmV212.operation.requestBody?.content?.['application/json']?.schema?.$ref === './s4-alarm-public.openapi.json#/components/schemas/AckAlarmRequest', 'Alarm ACK request schema is unsupported');
 
 const schemas = spec.components?.schemas ?? {};
-const schemaRequirements = {
+const schemaRequirements: Record<string, readonly [readonly string[], (readonly string[])?]> = {
   BuildInfo: [['service', 'version', 'commit', 'builtAt']],
   HealthResponse: [['status', 'service', 'checkedAt'], ['build']],
   PlatformStatusResponse: [['status', 'service', 'implementation', 'version', 'checkedAt', 'routePolicyRevision', 'routeRevision', 'compatibilityMode']],
@@ -454,6 +528,14 @@ const schemaRequirements = {
   GatewayCapturedPacket: [['sequence', 'capturedAt', 'direction', 'channel', 'topic', 'payloadBytes', 'payloadSha256', 'payloadPreview', 'payloadEncoding', 'payloadTruncated'], ['traceId']],
   GatewayPacketCaptureSnapshot: [['gatewayId', 'active', 'maxPackets', 'droppedCount', 'items'], ['startedAt', 'expiresAt', 'durationSeconds']],
   GatewayPacketCaptureStartRequest: [[], ['durationSeconds']],
+  OTAPackage: [['id', 'tenantId', 'component', 'version', 'targetOs', 'targetArch', 'hardwareModels', 'fileName', 'fileSizeBytes', 'sha256', 'signatureAlg', 'signingKeyId', 'signatureB64', 'releaseNotes', 'status', 'uploadedBy', 'createdAt', 'updatedAt'], ['minCompatibleVersion']],
+  OTAPackageList: [['items']],
+  OTADeviceTask: [['id', 'tenantId', 'campaignId', 'packageId', 'gatewayId', 'siteId', 'gatewayCode', 'gatewayName', 'gatewayOnline', 'wave', 'desiredAction', 'stage', 'progressPct', 'currentVersion', 'targetVersion', 'createdAt', 'updatedAt'], ['errorCode', 'errorMessage', 'dispatchedAt', 'lastReportedAt', 'finishedAt']],
+  OTACampaignSummary: [['id', 'tenantId', 'name', 'packageId', 'packageVersion', 'component', 'targetOs', 'targetArch', 'targetSiteIds', 'targetTags', 'canaryPercent', 'failureRateThresholdPct', 'healthCheckTimeoutSec', 'autoPromoteRollout', 'status', 'reason', 'totalCount', 'pendingCount', 'inProgressCount', 'succeededCount', 'failedCount', 'rolledBackCount', 'cancelledCount', 'failureRatePct', 'createdBy', 'updatedBy', 'createdAt', 'updatedAt'], ['pauseReason', 'completedAt']],
+  OTACampaignList: [['items']],
+  OTACampaignDetail: [['id', 'tenantId', 'name', 'packageId', 'packageVersion', 'component', 'targetOs', 'targetArch', 'targetSiteIds', 'targetTags', 'canaryPercent', 'failureRateThresholdPct', 'healthCheckTimeoutSec', 'autoPromoteRollout', 'status', 'reason', 'totalCount', 'pendingCount', 'inProgressCount', 'succeededCount', 'failedCount', 'rolledBackCount', 'cancelledCount', 'failureRatePct', 'createdBy', 'updatedBy', 'createdAt', 'updatedAt', 'package', 'tasks'], ['pauseReason', 'completedAt']],
+  OTACampaignCreateRequest: [['name', 'packageId', 'canaryPercent', 'failureRateThresholdPct', 'reason'], ['targetSiteIds', 'targetTags', 'healthCheckTimeoutSec', 'autoPromoteRollout']],
+  OTACampaignActionRequest: [[], ['reason']],
   FieldError: [['field', 'message']],
   ProblemDetails: [['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable'], ['reason', 'fieldErrors']],
 };
@@ -465,13 +547,13 @@ for (const [name, [required, optional = []]] of Object.entries(schemaRequirement
   invariant(exactKeys(schema.properties, properties), `${name} properties are unsupported`);
 }
 
-invariant(schemas.BuildInfo.properties.service.const === 'platform-gateway', 'BuildInfo.service must be platform-gateway');
-invariant(schemas.HealthResponse.properties.status.const === 'ok', 'HealthResponse.status must be ok');
-invariant(schemas.PlatformStatusResponse.properties.service.const === 'platform-status', 'PlatformStatusResponse.service must be platform-status');
-invariant(exactMembers(schemas.PlatformStatusResponse.properties.implementation.enum, ['go']), 'PlatformStatusResponse implementation must be Go-only');
-invariant(exactMembers(schemas.PlatformStatusResponse.properties.compatibilityMode.enum, ['native']), 'PlatformStatusResponse compatibility mode must be native-only');
-invariant(schemas.ServicePrincipal.properties.service.const === 'platform-gateway', 'ServicePrincipal.service must be platform-gateway');
-invariant(schemas.PrincipalContext.properties.audience.const === 'iam-service', 'PrincipalContext.audience must be iam-service');
+invariant(schemas.BuildInfo.properties?.service?.const === 'platform-gateway', 'BuildInfo.service must be platform-gateway');
+invariant(schemas.HealthResponse.properties?.status?.const === 'ok', 'HealthResponse.status must be ok');
+invariant(schemas.PlatformStatusResponse.properties?.service?.const === 'platform-status', 'PlatformStatusResponse.service must be platform-status');
+invariant(exactMembers(schemas.PlatformStatusResponse.properties?.implementation?.enum, ['go']), 'PlatformStatusResponse implementation must be Go-only');
+invariant(exactMembers(schemas.PlatformStatusResponse.properties?.compatibilityMode?.enum, ['native']), 'PlatformStatusResponse compatibility mode must be native-only');
+invariant(schemas.ServicePrincipal.properties?.service?.const === 'platform-gateway', 'ServicePrincipal.service must be platform-gateway');
+invariant(schemas.PrincipalContext.properties?.audience?.const === 'iam-service', 'PrincipalContext.audience must be iam-service');
 invariant(schemas.Capability?.type === 'string' && exactMembers(schemas.Capability.enum, [
   'site.list',
   'site.read',
@@ -509,20 +591,20 @@ invariant(schemas.Capability?.type === 'string' && exactMembers(schemas.Capabili
   'schedule.manage',
   'billing.manage',
 ]), 'Capability vocabulary is unsupported');
-invariant(schemas.EffectiveAuthorization.properties.capabilitySetVersion.const === 14, 'EffectiveAuthorization capability set version must be 14');
-invariant(schemas.EffectiveAuthorization.properties.policyRevision.minLength === 1 && schemas.EffectiveAuthorization.properties.policyRevision.maxLength === 128, 'EffectiveAuthorization policy revision bounds are unsupported');
-invariant(schemas.EffectiveAuthorization.properties.capabilities.uniqueItems === true && schemas.EffectiveAuthorization.properties.capabilities.maxItems === schemas.Capability.enum.length, 'EffectiveAuthorization capabilities must be unique and bounded');
-invariant(schemas.EffectiveAuthorization.properties.capabilities.items?.$ref === '#/components/schemas/Capability', 'EffectiveAuthorization capabilities must use the public Capability vocabulary');
-invariant(schemas.AuditRecord.properties.schemaVersion.const === 1, 'AuditRecord.schemaVersion must be 1');
-invariant(schemas.AuditRecord.properties.aggregateType.const === 'bff-session', 'AuditRecord.aggregateType must be bff-session');
-invariant(schemas.AuditRecord.properties.executingService.const === 'platform-gateway', 'AuditRecord.executingService must be platform-gateway');
+invariant(schemas.EffectiveAuthorization.properties?.capabilitySetVersion?.const === 14, 'EffectiveAuthorization capability set version must be 14');
+invariant(schemas.EffectiveAuthorization.properties?.policyRevision?.minLength === 1 && schemas.EffectiveAuthorization.properties?.policyRevision?.maxLength === 128, 'EffectiveAuthorization policy revision bounds are unsupported');
+invariant(schemas.EffectiveAuthorization.properties?.capabilities?.uniqueItems === true && schemas.EffectiveAuthorization.properties?.capabilities?.maxItems === schemas.Capability.enum?.length, 'EffectiveAuthorization capabilities must be unique and bounded');
+invariant(schemas.EffectiveAuthorization.properties?.capabilities?.items?.$ref === '#/components/schemas/Capability', 'EffectiveAuthorization capabilities must use the public Capability vocabulary');
+invariant(schemas.AuditRecord.properties?.schemaVersion?.const === 1, 'AuditRecord.schemaVersion must be 1');
+invariant(schemas.AuditRecord.properties?.aggregateType?.const === 'bff-session', 'AuditRecord.aggregateType must be bff-session');
+invariant(schemas.AuditRecord.properties?.executingService?.const === 'platform-gateway', 'AuditRecord.executingService must be platform-gateway');
 invariant(schemas.UUIDv7?.pattern === '^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$', 'UUIDv7 pattern is unsupported');
 invariant(schemas.Revision?.minimum === 1, 'Revision minimum is unsupported');
 invariant(schemas.Instant?.pattern === '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$', 'Instant format must be RFC3339 UTC milliseconds');
 invariant(schemas.OpaqueCursor?.pattern === '^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$', 'OpaqueCursor format is unsupported');
-invariant(exactMembers(schemas.AssetRelationship.properties.fromType.enum, ['ASSET', 'DEVICE', 'SENSOR', 'POINT']), 'AssetRelationship.fromType vocabulary is stale');
-invariant(exactMembers(schemas.AssetRelationship.properties.toType.enum, ['SITE', 'SPACE', 'ASSET', 'DEVICE', 'SENSOR', 'POINT']), 'AssetRelationship.toType vocabulary is stale');
-invariant(exactMembers(schemas.ProblemDetails.properties.code['x-stable-codes'], [
+invariant(exactMembers(schemas.AssetRelationship.properties?.fromType?.enum, ['ASSET', 'DEVICE', 'SENSOR', 'POINT']), 'AssetRelationship.fromType vocabulary is stale');
+invariant(exactMembers(schemas.AssetRelationship.properties?.toType?.enum, ['SITE', 'SPACE', 'ASSET', 'DEVICE', 'SENSOR', 'POINT']), 'AssetRelationship.toType vocabulary is stale');
+invariant(exactMembers(schemas.ProblemDetails.properties?.code?.['x-stable-codes'], [
   'RESOURCE_NOT_FOUND',
   'CURSOR_INVALID',
   'REGISTRY_UNAVAILABLE',
@@ -530,18 +612,18 @@ invariant(exactMembers(schemas.ProblemDetails.properties.code['x-stable-codes'],
   'MAPPING_INVALID',
   'MAPPING_QUARANTINED',
 ]), 'Registry Problem Details codes are unsupported');
-invariant(exactMembers(schemas.ProblemDetails.properties.reason?.enum, [
+invariant(exactMembers(schemas.ProblemDetails.properties?.reason?.enum, [
   'CODE_INVALID',
   'CODE_REPLAYED',
   'MFA_NOT_CONFIGURED',
   'MFA_LOCKED',
 ]), 'ProblemDetails.reason enum is unsupported');
-invariant(schemas.ProblemDetails.properties.code.pattern === '^[A-Z][A-Z0-9_]+$', 'ProblemDetails.code pattern is unsupported');
-invariant(schemas.ProblemDetails.properties.traceId.pattern === '^[a-f0-9]{32}$', 'ProblemDetails.traceId pattern is unsupported');
+invariant(schemas.ProblemDetails.properties?.code?.pattern === '^[A-Z][A-Z0-9_]+$', 'ProblemDetails.code pattern is unsupported');
+invariant(schemas.ProblemDetails.properties?.traceId?.pattern === '^[a-f0-9]{32}$', 'ProblemDetails.traceId pattern is unsupported');
 invariant(spec.components?.responses?.Problem?.content?.['application/problem+json']?.schema?.$ref === '#/components/schemas/ProblemDetails', 'public Problem response must use application/problem+json');
 
 const banner = `Generator: platform-contracts@${generatorVersion}; Contract SHA-256: ${digest}`;
-const pathOps = {
+const pathOps: Record<string, string> = {
   __ALARMS_PATH__: 'listAlarmsV212',
   __ALARM_PATH__: 'getAlarmV212',
   __ALARM_ACK_PATH__: 'ackAlarmV212',
@@ -643,14 +725,20 @@ const pathOps = {
   __SITE_IMPORT_DRY_RUN_PATH__: 'planRegistryImport',
   __SITE_IMPORT_COMMIT_PATH__: 'commitRegistryImport',
   __SITE_RETIRE_PATH__: 'beginRegistryRetirement',
+  __OTA_PACKAGES_PATH__: 'listOTAPackages',
+  __OTA_CAMPAIGNS_PATH__: 'listOTACampaigns',
+  __OTA_CAMPAIGN_PATH__: 'getOTACampaign',
+  __OTA_CAMPAIGN_PAUSE_PATH__: 'pauseOTACampaign',
+  __OTA_CAMPAIGN_RESUME_PATH__: 'resumeOTACampaign',
+  __OTA_CAMPAIGN_ROLLBACK_PATH__: 'rollbackOTACampaign',
 };
-const replacements = {
+const replacements: Record<string, string> = {
   ...Object.fromEntries(w4.flatMap(([k, , , , r]) => (r ? [[r, operations[k].path]] : []))),
   ...Object.fromEntries(Object.entries(pathOps).map(([r, op]) => [r, operations[op].path])),
   __CONTRACT_BANNER__: banner,
 };
 
-function render(template) {
+function render(template: string): string {
   let output = template;
   for (const [placeholder, value] of Object.entries(replacements)) {
     if (output.includes(placeholder)) output = output.replaceAll(placeholder, value);
@@ -659,7 +747,7 @@ function render(template) {
   return output;
 }
 
-function formatGo(source) {
+function formatGo(source: string): string {
   const result = spawnSync(gofmtBinary, [], { input: source, encoding: 'utf8', windowsHide: true });
   invariant(!result.error, `gofmt could not start: ${result.error?.message ?? 'unknown error'}`);
   invariant(result.status === 0, `gofmt failed: ${result.stderr || `exit ${result.status}`}`);
@@ -667,12 +755,12 @@ function formatGo(source) {
   return result.stdout;
 }
 
-async function emit(path, content) {
-  let existing = null;
+async function emit(path: string, content: string): Promise<void> {
+  let existing: string | null = null;
   try {
     existing = await readFile(path, 'utf8');
   } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
+    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
   }
   if (checkOnly) {
     if (existing === null || normalizeLineEndings(existing) !== content) {

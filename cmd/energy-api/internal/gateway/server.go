@@ -236,6 +236,9 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 		if h.serveGatewayDiagnostics(writer, request) {
 			return
 		}
+		if h.serveGatewayOTA(writer, request) {
+			return
+		}
 		if registryRoute, id, matches := matchPublicRegistryRoute(request.Method, request.URL.Path); matches {
 			dispatchRegistryRoute(h, writer, request, registryRoute, id)
 			return
@@ -826,6 +829,9 @@ func safeLogPath(path string) string {
 			return template
 		}
 		if template, matches := matchGatewayDiagnosticsPathTemplate(path); matches {
+			return template
+		}
+		if template, matches := matchGatewayOTAPathTemplate(path); matches {
 			return template
 		}
 		if _, matches := matchSessionAuditPath(path); matches {

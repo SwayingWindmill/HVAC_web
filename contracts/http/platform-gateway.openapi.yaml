@@ -281,6 +281,194 @@
         }
       }
     },
+    "/api/v1/ota/packages": {
+      "get": {
+        "operationId": "listOTAPackages", "summary": "List registered OTA upgrade packages in the current tenant",
+        "x-owner": "connectivity", "x-public-ingress": "platform-gateway", "x-architecture-status": "ACTIVE", "x-shape-status": "READY",
+        "parameters": [
+          {"name": "component", "in": "query", "required": false, "schema": {"type": "string", "enum": ["EDGE_GATEWAY", "FIRMWARE"]}},
+          {"name": "targetArch", "in": "query", "required": false, "schema": {"type": "string", "enum": ["armv7l", "arm64", "amd64"]}},
+          {"name": "status", "in": "query", "required": false, "schema": {"type": "string", "enum": ["ACTIVE", "RETIRED"]}},
+          {"name": "limit", "in": "query", "required": false, "schema": {"type": "integer", "minimum": 1, "maximum": 100}}
+        ],
+        "responses": {
+          "200": {"description": "OTA package list", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OTAPackageList"}}}},
+          "400": {"$ref": "#/components/responses/Problem"},
+          "401": {"$ref": "#/components/responses/Problem"},
+          "403": {"$ref": "#/components/responses/Problem"},
+          "429": {"$ref": "#/components/responses/Problem"},
+          "502": {"$ref": "#/components/responses/Problem"},
+          "503": {"$ref": "#/components/responses/Problem"}
+        }
+      },
+      "post": {
+        "operationId": "uploadOTAPackage", "summary": "Upload and sign or verify a gateway OTA package artifact",
+        "x-owner": "connectivity", "x-public-ingress": "platform-gateway", "x-architecture-status": "ACTIVE", "x-shape-status": "READY",
+        "parameters": [
+          {"name": "X-CSRF-Token", "in": "header", "required": true, "schema": {"type": "string"}}
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["version", "targetArch", "file"],
+                "properties": {
+                  "version": {"type": "string"},
+                  "component": {"type": "string", "enum": ["EDGE_GATEWAY", "FIRMWARE"]},
+                  "targetOs": {"type": "string", "enum": ["linux"]},
+                  "targetArch": {"type": "string", "enum": ["armv7l", "arm64", "amd64"]},
+                  "hardwareModels": {"type": "string"},
+                  "minCompatibleVersion": {"type": "string"},
+                  "expectedSha256": {"type": "string"},
+                  "signingKeyId": {"type": "string"},
+                  "signatureB64": {"type": "string"},
+                  "releaseNotes": {"type": "string"},
+                  "file": {"type": "string", "format": "binary"}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {"description": "Registered OTA package", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OTAPackage"}}}},
+          "400": {"$ref": "#/components/responses/Problem"},
+          "401": {"$ref": "#/components/responses/Problem"},
+          "403": {"$ref": "#/components/responses/Problem"},
+          "409": {"$ref": "#/components/responses/Problem"},
+          "413": {"$ref": "#/components/responses/Problem"},
+          "422": {"$ref": "#/components/responses/Problem"},
+          "429": {"$ref": "#/components/responses/Problem"},
+          "502": {"$ref": "#/components/responses/Problem"},
+          "503": {"$ref": "#/components/responses/Problem"}
+        }
+      }
+    },
+    "/api/v1/ota/campaigns": {
+      "get": {
+        "operationId": "listOTACampaigns", "summary": "List OTA canary rollout campaigns in authorized sites",
+        "x-owner": "connectivity", "x-public-ingress": "platform-gateway", "x-architecture-status": "ACTIVE", "x-shape-status": "READY",
+        "parameters": [
+          {"name": "status", "in": "query", "required": false, "schema": {"type": "string", "enum": ["CANARY_RUNNING", "ROLLOUT_RUNNING", "PAUSED", "COMPLETED", "ROLLED_BACK", "FAILED"]}},
+          {"name": "limit", "in": "query", "required": false, "schema": {"type": "integer", "minimum": 1, "maximum": 100}}
+        ],
+        "responses": {
+          "200": {"description": "OTA campaign list", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OTACampaignList"}}}},
+          "400": {"$ref": "#/components/responses/Problem"},
+          "401": {"$ref": "#/components/responses/Problem"},
+          "403": {"$ref": "#/components/responses/Problem"},
+          "429": {"$ref": "#/components/responses/Problem"},
+          "502": {"$ref": "#/components/responses/Problem"},
+          "503": {"$ref": "#/components/responses/Problem"}
+        }
+      },
+      "post": {
+        "operationId": "createOTACampaign", "summary": "Create and dispatch an OTA canary rollout campaign",
+        "x-owner": "connectivity", "x-public-ingress": "platform-gateway", "x-architecture-status": "ACTIVE", "x-shape-status": "READY",
+        "parameters": [
+          {"name": "X-CSRF-Token", "in": "header", "required": true, "schema": {"type": "string"}}
+        ],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OTACampaignCreateRequest"}}}},
+        "responses": {
+          "201": {"description": "Created OTA campaign and dispatched canary tasks", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OTACampaignDetail"}}}},
+          "400": {"$ref": "#/components/responses/Problem"},
+          "401": {"$ref": "#/components/responses/Problem"},
+          "403": {"$ref": "#/components/responses/Problem"},
+          "404": {"$ref": "#/components/responses/Problem"},
+          "409": {"$ref": "#/components/responses/Problem"},
+          "422": {"$ref": "#/components/responses/Problem"},
+          "429": {"$ref": "#/components/responses/Problem"},
+          "502": {"$ref": "#/components/responses/Problem"},
+          "503": {"$ref": "#/components/responses/Problem"}
+        }
+      }
+    },
+    "/api/v1/ota/campaigns/{campaignId}": {
+      "get": {
+        "operationId": "getOTACampaign", "summary": "Read OTA campaign detail and per-gateway execution progress",
+        "x-owner": "connectivity", "x-public-ingress": "platform-gateway", "x-architecture-status": "ACTIVE", "x-shape-status": "READY",
+        "parameters": [
+          {"name": "campaignId", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/UUIDv7"}}
+        ],
+        "responses": {
+          "200": {"description": "OTA campaign detail", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OTACampaignDetail"}}}},
+          "400": {"$ref": "#/components/responses/Problem"},
+          "401": {"$ref": "#/components/responses/Problem"},
+          "403": {"$ref": "#/components/responses/Problem"},
+          "404": {"$ref": "#/components/responses/Problem"},
+          "429": {"$ref": "#/components/responses/Problem"},
+          "502": {"$ref": "#/components/responses/Problem"},
+          "503": {"$ref": "#/components/responses/Problem"}
+        }
+      }
+    },
+    "/api/v1/ota/campaigns/{campaignId}/pause": {
+      "post": {
+        "operationId": "pauseOTACampaign", "summary": "Pause an active OTA campaign",
+        "x-owner": "connectivity", "x-public-ingress": "platform-gateway", "x-architecture-status": "ACTIVE", "x-shape-status": "READY",
+        "parameters": [
+          {"name": "campaignId", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/UUIDv7"}},
+          {"name": "X-CSRF-Token", "in": "header", "required": true, "schema": {"type": "string"}}
+        ],
+        "requestBody": {"required": false, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OTACampaignActionRequest"}}}},
+        "responses": {
+          "200": {"description": "Paused OTA campaign", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OTACampaignDetail"}}}},
+          "400": {"$ref": "#/components/responses/Problem"},
+          "401": {"$ref": "#/components/responses/Problem"},
+          "403": {"$ref": "#/components/responses/Problem"},
+          "404": {"$ref": "#/components/responses/Problem"},
+          "409": {"$ref": "#/components/responses/Problem"},
+          "429": {"$ref": "#/components/responses/Problem"},
+          "502": {"$ref": "#/components/responses/Problem"},
+          "503": {"$ref": "#/components/responses/Problem"}
+        }
+      }
+    },
+    "/api/v1/ota/campaigns/{campaignId}/resume": {
+      "post": {
+        "operationId": "resumeOTACampaign", "summary": "Resume a paused OTA campaign or promote awaiting rollout wave",
+        "x-owner": "connectivity", "x-public-ingress": "platform-gateway", "x-architecture-status": "ACTIVE", "x-shape-status": "READY",
+        "parameters": [
+          {"name": "campaignId", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/UUIDv7"}},
+          {"name": "X-CSRF-Token", "in": "header", "required": true, "schema": {"type": "string"}}
+        ],
+        "requestBody": {"required": false, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OTACampaignActionRequest"}}}},
+        "responses": {
+          "200": {"description": "Resumed OTA campaign", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OTACampaignDetail"}}}},
+          "400": {"$ref": "#/components/responses/Problem"},
+          "401": {"$ref": "#/components/responses/Problem"},
+          "403": {"$ref": "#/components/responses/Problem"},
+          "404": {"$ref": "#/components/responses/Problem"},
+          "409": {"$ref": "#/components/responses/Problem"},
+          "429": {"$ref": "#/components/responses/Problem"},
+          "502": {"$ref": "#/components/responses/Problem"},
+          "503": {"$ref": "#/components/responses/Problem"}
+        }
+      }
+    },
+    "/api/v1/ota/campaigns/{campaignId}/rollback": {
+      "post": {
+        "operationId": "rollbackOTACampaign", "summary": "Roll back an OTA campaign and dispatch slot rollback directives",
+        "x-owner": "connectivity", "x-public-ingress": "platform-gateway", "x-architecture-status": "ACTIVE", "x-shape-status": "READY",
+        "parameters": [
+          {"name": "campaignId", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/UUIDv7"}},
+          {"name": "X-CSRF-Token", "in": "header", "required": true, "schema": {"type": "string"}}
+        ],
+        "requestBody": {"required": false, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OTACampaignActionRequest"}}}},
+        "responses": {
+          "200": {"description": "Rolled back OTA campaign", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OTACampaignDetail"}}}},
+          "400": {"$ref": "#/components/responses/Problem"},
+          "401": {"$ref": "#/components/responses/Problem"},
+          "403": {"$ref": "#/components/responses/Problem"},
+          "404": {"$ref": "#/components/responses/Problem"},
+          "409": {"$ref": "#/components/responses/Problem"},
+          "429": {"$ref": "#/components/responses/Problem"},
+          "502": {"$ref": "#/components/responses/Problem"},
+          "503": {"$ref": "#/components/responses/Problem"}
+        }
+      }
+    },
     "/api/v1/health": {
       "get": {
         "operationId": "getHealth",
@@ -4345,6 +4533,169 @@
         "required": [],
         "properties": {
           "durationSeconds": {"type": "integer", "minimum": 30, "maximum": 900}
+        }
+      },
+      "OTAPackage": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "tenantId", "component", "version", "targetOs", "targetArch", "hardwareModels", "fileName", "fileSizeBytes", "sha256", "signatureAlg", "signingKeyId", "signatureB64", "releaseNotes", "status", "uploadedBy", "createdAt", "updatedAt"],
+        "properties": {
+          "id": {"$ref": "#/components/schemas/UUIDv7"},
+          "tenantId": {"$ref": "#/components/schemas/UUIDv7"},
+          "component": {"type": "string", "enum": ["EDGE_GATEWAY", "FIRMWARE"]},
+          "version": {"type": "string", "minLength": 1, "maxLength": 64},
+          "targetOs": {"type": "string", "enum": ["linux"]},
+          "targetArch": {"type": "string", "enum": ["armv7l", "arm64", "amd64"]},
+          "hardwareModels": {"type": "array", "items": {"type": "string"}},
+          "minCompatibleVersion": {"type": ["string", "null"], "maxLength": 64},
+          "fileName": {"type": "string", "minLength": 1, "maxLength": 255},
+          "fileSizeBytes": {"type": "integer", "minimum": 1},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "signatureAlg": {"type": "string", "enum": ["ED25519"]},
+          "signingKeyId": {"type": "string", "minLength": 1, "maxLength": 128},
+          "signatureB64": {"type": "string", "minLength": 16, "maxLength": 512},
+          "releaseNotes": {"type": "string", "maxLength": 2000},
+          "status": {"type": "string", "enum": ["ACTIVE", "RETIRED"]},
+          "uploadedBy": {"$ref": "#/components/schemas/UUIDv7"},
+          "createdAt": {"type": "string", "format": "date-time"},
+          "updatedAt": {"type": "string", "format": "date-time"}
+        }
+      },
+      "OTAPackageList": {
+        "type": "object", "additionalProperties": false,
+        "required": ["items"],
+        "properties": {
+          "items": {"type": "array", "items": {"$ref": "#/components/schemas/OTAPackage"}}
+        }
+      },
+      "OTADeviceTask": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "tenantId", "campaignId", "packageId", "gatewayId", "siteId", "gatewayCode", "gatewayName", "gatewayOnline", "wave", "desiredAction", "stage", "progressPct", "currentVersion", "targetVersion", "createdAt", "updatedAt"],
+        "properties": {
+          "id": {"$ref": "#/components/schemas/UUIDv7"},
+          "tenantId": {"$ref": "#/components/schemas/UUIDv7"},
+          "campaignId": {"$ref": "#/components/schemas/UUIDv7"},
+          "packageId": {"$ref": "#/components/schemas/UUIDv7"},
+          "gatewayId": {"$ref": "#/components/schemas/UUIDv7"},
+          "siteId": {"$ref": "#/components/schemas/UUIDv7"},
+          "gatewayCode": {"type": "string", "maxLength": 128},
+          "gatewayName": {"type": "string", "maxLength": 256},
+          "gatewayOnline": {"type": "boolean"},
+          "wave": {"type": "string", "enum": ["CANARY", "ROLLOUT"]},
+          "desiredAction": {"type": "string", "enum": ["APPLY", "ROLLBACK"]},
+          "stage": {"type": "string", "enum": ["PENDING", "DISPATCHED", "DOWNLOADING", "VERIFYING", "APPLYING", "HEALTH_CHECKING", "SUCCEEDED", "FAILED", "ROLLED_BACK", "CANCELLED"]},
+          "progressPct": {"type": "integer", "minimum": 0, "maximum": 100},
+          "currentVersion": {"type": "string", "maxLength": 64},
+          "targetVersion": {"type": "string", "minLength": 1, "maxLength": 64},
+          "errorCode": {"type": ["string", "null"], "maxLength": 128},
+          "errorMessage": {"type": ["string", "null"], "maxLength": 1024},
+          "dispatchedAt": {"type": ["string", "null"], "format": "date-time"},
+          "lastReportedAt": {"type": ["string", "null"], "format": "date-time"},
+          "finishedAt": {"type": ["string", "null"], "format": "date-time"},
+          "createdAt": {"type": "string", "format": "date-time"},
+          "updatedAt": {"type": "string", "format": "date-time"}
+        }
+      },
+      "OTACampaignSummary": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "tenantId", "name", "packageId", "packageVersion", "component", "targetOs", "targetArch", "targetSiteIds", "targetTags", "canaryPercent", "failureRateThresholdPct", "healthCheckTimeoutSec", "autoPromoteRollout", "status", "reason", "totalCount", "pendingCount", "inProgressCount", "succeededCount", "failedCount", "rolledBackCount", "cancelledCount", "failureRatePct", "createdBy", "updatedBy", "createdAt", "updatedAt"],
+        "properties": {
+          "id": {"$ref": "#/components/schemas/UUIDv7"},
+          "tenantId": {"$ref": "#/components/schemas/UUIDv7"},
+          "name": {"type": "string", "minLength": 1, "maxLength": 160},
+          "packageId": {"$ref": "#/components/schemas/UUIDv7"},
+          "packageVersion": {"type": "string", "minLength": 1, "maxLength": 64},
+          "component": {"type": "string", "enum": ["EDGE_GATEWAY", "FIRMWARE"]},
+          "targetOs": {"type": "string", "enum": ["linux"]},
+          "targetArch": {"type": "string", "enum": ["armv7l", "arm64", "amd64"]},
+          "targetSiteIds": {"type": "array", "items": {"$ref": "#/components/schemas/UUIDv7"}},
+          "targetTags": {"type": "object", "additionalProperties": {"type": "string"}},
+          "canaryPercent": {"type": "integer", "minimum": 1, "maximum": 100},
+          "failureRateThresholdPct": {"type": "integer", "minimum": 1, "maximum": 100},
+          "healthCheckTimeoutSec": {"type": "integer", "minimum": 10, "maximum": 1800},
+          "autoPromoteRollout": {"type": "boolean"},
+          "status": {"type": "string", "enum": ["CANARY_RUNNING", "ROLLOUT_RUNNING", "PAUSED", "COMPLETED", "ROLLED_BACK", "FAILED"]},
+          "pauseReason": {"type": ["string", "null"], "maxLength": 256},
+          "reason": {"type": "string", "minLength": 1, "maxLength": 1000},
+          "totalCount": {"type": "integer", "minimum": 0},
+          "pendingCount": {"type": "integer", "minimum": 0},
+          "inProgressCount": {"type": "integer", "minimum": 0},
+          "succeededCount": {"type": "integer", "minimum": 0},
+          "failedCount": {"type": "integer", "minimum": 0},
+          "rolledBackCount": {"type": "integer", "minimum": 0},
+          "cancelledCount": {"type": "integer", "minimum": 0},
+          "failureRatePct": {"type": "integer", "minimum": 0, "maximum": 100},
+          "createdBy": {"$ref": "#/components/schemas/UUIDv7"},
+          "updatedBy": {"$ref": "#/components/schemas/UUIDv7"},
+          "createdAt": {"type": "string", "format": "date-time"},
+          "updatedAt": {"type": "string", "format": "date-time"},
+          "completedAt": {"type": ["string", "null"], "format": "date-time"}
+        }
+      },
+      "OTACampaignList": {
+        "type": "object", "additionalProperties": false,
+        "required": ["items"],
+        "properties": {
+          "items": {"type": "array", "items": {"$ref": "#/components/schemas/OTACampaignSummary"}}
+        }
+      },
+      "OTACampaignDetail": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "tenantId", "name", "packageId", "packageVersion", "component", "targetOs", "targetArch", "targetSiteIds", "targetTags", "canaryPercent", "failureRateThresholdPct", "healthCheckTimeoutSec", "autoPromoteRollout", "status", "reason", "totalCount", "pendingCount", "inProgressCount", "succeededCount", "failedCount", "rolledBackCount", "cancelledCount", "failureRatePct", "createdBy", "updatedBy", "createdAt", "updatedAt", "package", "tasks"],
+        "properties": {
+          "id": {"$ref": "#/components/schemas/UUIDv7"},
+          "tenantId": {"$ref": "#/components/schemas/UUIDv7"},
+          "name": {"type": "string", "minLength": 1, "maxLength": 160},
+          "packageId": {"$ref": "#/components/schemas/UUIDv7"},
+          "packageVersion": {"type": "string", "minLength": 1, "maxLength": 64},
+          "component": {"type": "string", "enum": ["EDGE_GATEWAY", "FIRMWARE"]},
+          "targetOs": {"type": "string", "enum": ["linux"]},
+          "targetArch": {"type": "string", "enum": ["armv7l", "arm64", "amd64"]},
+          "targetSiteIds": {"type": "array", "items": {"$ref": "#/components/schemas/UUIDv7"}},
+          "targetTags": {"type": "object", "additionalProperties": {"type": "string"}},
+          "canaryPercent": {"type": "integer", "minimum": 1, "maximum": 100},
+          "failureRateThresholdPct": {"type": "integer", "minimum": 1, "maximum": 100},
+          "healthCheckTimeoutSec": {"type": "integer", "minimum": 10, "maximum": 1800},
+          "autoPromoteRollout": {"type": "boolean"},
+          "status": {"type": "string", "enum": ["CANARY_RUNNING", "ROLLOUT_RUNNING", "PAUSED", "COMPLETED", "ROLLED_BACK", "FAILED"]},
+          "pauseReason": {"type": ["string", "null"], "maxLength": 256},
+          "reason": {"type": "string", "minLength": 1, "maxLength": 1000},
+          "totalCount": {"type": "integer", "minimum": 0},
+          "pendingCount": {"type": "integer", "minimum": 0},
+          "inProgressCount": {"type": "integer", "minimum": 0},
+          "succeededCount": {"type": "integer", "minimum": 0},
+          "failedCount": {"type": "integer", "minimum": 0},
+          "rolledBackCount": {"type": "integer", "minimum": 0},
+          "cancelledCount": {"type": "integer", "minimum": 0},
+          "failureRatePct": {"type": "integer", "minimum": 0, "maximum": 100},
+          "createdBy": {"$ref": "#/components/schemas/UUIDv7"},
+          "updatedBy": {"$ref": "#/components/schemas/UUIDv7"},
+          "createdAt": {"type": "string", "format": "date-time"},
+          "updatedAt": {"type": "string", "format": "date-time"},
+          "completedAt": {"type": ["string", "null"], "format": "date-time"},
+          "package": {"$ref": "#/components/schemas/OTAPackage"},
+          "tasks": {"type": "array", "items": {"$ref": "#/components/schemas/OTADeviceTask"}}
+        }
+      },
+      "OTACampaignCreateRequest": {
+        "type": "object", "additionalProperties": false,
+        "required": ["name", "packageId", "canaryPercent", "failureRateThresholdPct", "reason"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1, "maxLength": 160},
+          "packageId": {"$ref": "#/components/schemas/UUIDv7"},
+          "targetSiteIds": {"type": "array", "items": {"$ref": "#/components/schemas/UUIDv7"}},
+          "targetTags": {"type": "object", "additionalProperties": {"type": "string"}},
+          "canaryPercent": {"type": "integer", "minimum": 1, "maximum": 100},
+          "failureRateThresholdPct": {"type": "integer", "minimum": 1, "maximum": 100},
+          "healthCheckTimeoutSec": {"type": "integer", "minimum": 10, "maximum": 1800},
+          "autoPromoteRollout": {"type": "boolean"},
+          "reason": {"type": "string", "minLength": 1, "maxLength": 1000}
+        }
+      },
+      "OTACampaignActionRequest": {
+        "type": "object", "additionalProperties": false,
+        "required": [],
+        "properties": {
+          "reason": {"type": "string", "minLength": 1, "maxLength": 1000}
         }
       },
       "V212Meta": {

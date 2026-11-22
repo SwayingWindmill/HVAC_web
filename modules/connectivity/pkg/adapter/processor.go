@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
@@ -141,6 +142,12 @@ func WithShadowAckHook(hook func(context.Context, Gateway, ShadowChangeAckPayloa
 	}
 }
 
+func WithOTAResultHook(hook func(context.Context, Gateway, edgecontrol.OTAResultPayload) error) ProcessorOption {
+	return func(processor *Processor) {
+		processor.onOTAResult = hook
+	}
+}
+
 func WithProcessorTracer(tracer *observability.Tracer) ProcessorOption {
 	return func(processor *Processor) {
 		processor.tracer = tracer
@@ -193,6 +200,7 @@ type Processor struct {
 	onGatewayConnected func(context.Context, string)
 	onGatewayPresence  func(string, bool)
 	onShadowAck        func(context.Context, Gateway, ShadowChangeAckPayload)
+	onOTAResult        func(context.Context, Gateway, edgecontrol.OTAResultPayload) error
 	packetHook         func(direction, channel, gatewayID, topic, traceID string, payload []byte)
 	coverageRev        atomic.Int64
 }
@@ -216,6 +224,45 @@ func (processor *Processor) recordShadowMetric(outcome string) {
 		return
 	}
 	_ = processor.metrics.AddCounter(ShadowReplicationMetricName, ShadowReplicationMetricHelp, map[string]string{"outcome": outcome}, 1)
+}
+
+func (processor *Processor) recordOTAMetric(outcome string) {
+	if processor == nil || processor.metrics == nil {
+		return
+	}
+	_ = processor.metrics.AddCounter(OTAReplicationMetricName, OTAReplicationMetricHelp, map[string]string{"outcome": outcome}, 1)
+}
+
+func (processor *Processor) processOTAResult(ctx context.Context, gateway Gateway, quarantine UplinkQuarantine, msg UplinkMessage) ([]ProcessingOutcome, error) {
+	env, res, err := DecodeOTAResult(msg.Payload, gateway.ID)
+	if err != nil {
+		processor.recordOTAMetric("rejected")
+		return processor.quarantinedOutcome(ctx, quarantine, QuarantineMessageInvalid, err)
+	}
+	processor.recordPacket("UPLINK", "EVENT", gateway.ID, msg.Topic, env.MessageID, msg.Payload)
+	if processor.onGatewayPresence != nil {
+		processor.onGatewayPresence(gateway.ID, true)
+	}
+	if processor.onOTAResult != nil {
+		if err := processor.onOTAResult(ctx, gateway, res); err != nil {
+			if errors.Is(err, ErrOTAResultRejected) {
+				processor.recordOTAMetric("quarantined")
+				return processor.quarantinedOutcome(ctx, quarantine, QuarantineMessageInvalid, err)
+			}
+			processor.recordOTAMetric("failed")
+			return nil, err
+		}
+	}
+	processor.recordOTAMetric("accepted")
+	return []ProcessingOutcome{{
+		Result: ProcessingResult{
+			MessageID:   env.MessageID,
+			MessageType: MessageTypeOTA,
+			TraceID:     env.MessageID,
+			PointCount:  1,
+			Accepted:    1,
+		},
+	}}, nil
 }
 
 func (processor *Processor) processShadowAck(ctx context.Context, gateway Gateway, quarantine UplinkQuarantine, msg UplinkMessage) ([]ProcessingOutcome, error) {
@@ -468,6 +515,8 @@ func (processor *Processor) ProcessPrefix(ctx context.Context, messages []Uplink
 		return []ProcessingOutcome{{Result: result}}, nil
 	case MessageTypeShadow:
 		return processor.processShadowAck(ctx, gateway, quarantine, first)
+	case MessageTypeOTA:
+		return processor.processOTAResult(ctx, gateway, quarantine, first)
 	default:
 		envelope, err := processor.codecRegistry().DecodeEvent(first.Payload, gateway.ID)
 		if err != nil {

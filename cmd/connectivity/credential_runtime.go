@@ -111,6 +111,9 @@ type credentialRuntimeConfig struct {
 	EnableGuardFromEnv  bool
 	MQTTSession         *mqttclient.SharedSession
 	TunnelOptions       []tunnel.Option
+	OTAStorage          *connectivity.OTAArtifactStorage
+	OTASigner           *connectivity.OTASignerVerifier
+	OTAPublicBaseURL    string
 }
 
 func credentialServer(store *connectivity.Store) (*http.Server, *tunnel.Hub, error) {
@@ -330,19 +333,74 @@ func newCredentialRuntime(cfg credentialRuntimeConfig) (*http.Server, *tunnel.Hu
 	}
 	var configShadowHandler http.Handler
 	var diagnosticsHandler http.Handler
+	var otaHandler http.Handler
 	if store != nil {
 		var onGatewaySeen func(string)
+		var isGatewayOnline func(string) bool
 		if presence != nil {
 			onGatewaySeen = func(gatewayID string) {
 				presence.SetOnline(gatewayID, true)
 			}
+			isGatewayOnline = presence.IsOnline
 		}
 		configShadowHandler = connectivity.NewConfigShadowHandlerWithPresence(store, service, authorize, onDesiredUpdated, onGatewaySeen)
 		diagnosticsHandler = connectivity.NewDiagnosticsHandler(store, tap, authorize)
+
+		otaStorage := cfg.OTAStorage
+		if otaStorage == nil {
+			var storageErr error
+			otaStorage, storageErr = connectivity.NewOTAArtifactStorage(envOr("CONNECTIVITY_OTA_STORAGE_DIR", "/var/lib/hvac/ota-packages"))
+			if storageErr != nil {
+				crlCtrl.Close()
+				tunnelHub.Close()
+				if mqttGuard != nil {
+					shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+					_ = mqttGuard.Shutdown(shutdownCtx)
+					cancel()
+				}
+				return nil, nil, nil, nil, storageErr
+			}
+		}
+		otaSigner := cfg.OTASigner
+		if otaSigner == nil {
+			var signerErr error
+			otaSigner, signerErr = connectivity.LoadOTASignerVerifierFromEnv()
+			if signerErr != nil {
+				crlCtrl.Close()
+				tunnelHub.Close()
+				if mqttGuard != nil {
+					shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+					_ = mqttGuard.Shutdown(shutdownCtx)
+					cancel()
+				}
+				return nil, nil, nil, nil, signerErr
+			}
+		}
+		otaPublicBaseURL := strings.TrimSpace(cfg.OTAPublicBaseURL)
+		if otaPublicBaseURL == "" {
+			otaPublicBaseURL = strings.TrimSpace(os.Getenv("CONNECTIVITY_OTA_PUBLIC_BASE_URL"))
+		}
+		var onOTADispatch func([]connectivity.OTAStageDispatch)
+		if mqttSession != nil {
+			onOTADispatch = func(dispatches []connectivity.OTAStageDispatch) {
+				if len(dispatches) == 0 {
+					return
+				}
+				observability.GoSafe(logger, metrics, "connectivity.ota_stage_publish", func() {
+					publishGatewayOTAStages(rootCtx, mqttSession, logger, metrics, tap, otaPublicBaseURL, dispatches)
+				})
+			}
+		}
+		otaHandler = connectivity.NewOTAHandler(store, otaStorage, otaSigner, service, authorize, connectivity.OTAHandlerOptions{
+			PublicBaseURL:   otaPublicBaseURL,
+			OnDispatch:      onOTADispatch,
+			OnGatewaySeen:   onGatewaySeen,
+			IsGatewayOnline: isGatewayOnline,
+		})
 	}
 	return &http.Server{
 		Addr:    envOr("CONNECTIVITY_CREDENTIAL_ADDR", ":8448"),
-		Handler: connectivity.NewCredentialHandlerWithDiagnostics(service, authorize, tunnelHandler, concentratorHandler, configShadowHandler, diagnosticsHandler),
+		Handler: connectivity.NewCredentialHandlerWithOTA(service, authorize, tunnelHandler, concentratorHandler, configShadowHandler, diagnosticsHandler, otaHandler),
 		TLSConfig: &tls.Config{
 			MinVersion:   tls.VersionTLS13,
 			Certificates: []tls.Certificate{serverIdentity},
@@ -370,6 +428,67 @@ func recordShadowPublishMetric(metrics *observability.Registry, outcome string) 
 		return
 	}
 	_ = metrics.AddCounter(adapter.ShadowReplicationMetricName, adapter.ShadowReplicationMetricHelp, map[string]string{"outcome": outcome}, 1)
+}
+
+func recordOTAPublishMetric(metrics *observability.Registry, outcome string) {
+	if metrics == nil {
+		return
+	}
+	_ = metrics.AddCounter(adapter.OTAReplicationMetricName, adapter.OTAReplicationMetricHelp, map[string]string{"outcome": outcome}, 1)
+}
+
+func publishGatewayOTAStages(
+	rootCtx context.Context,
+	publisher shadowMQTTPublisher,
+	logger *slog.Logger,
+	metrics *observability.Registry,
+	tap *packettap.Manager,
+	publicBaseURL string,
+	dispatches []connectivity.OTAStageDispatch,
+) {
+	if publisher == nil || len(dispatches) == 0 {
+		return
+	}
+	if rootCtx == nil {
+		rootCtx = context.Background()
+	}
+	for _, item := range dispatches {
+		gwID := strings.TrimSpace(item.GatewayID)
+		if gwID == "" {
+			continue
+		}
+		stage := item.Stage
+		if base := strings.TrimSpace(publicBaseURL); base != "" || strings.TrimSpace(stage.DownloadURL) == "" {
+			stage.DownloadURL = connectivity.BuildOTAStageDownloadURL(base, stage.PackageID)
+		}
+		wireBytes, err := adapter.EncodeOTAStage(gwID, stage, time.Now().UTC())
+		if err != nil {
+			recordOTAPublishMetric(metrics, "failed")
+			if logger != nil {
+				logger.Warn("mqtt_ota_encode_failed", "gateway_id", gwID, "task_id", stage.TaskID, "error", err.Error())
+			}
+			continue
+		}
+		topic := adapter.OTADownlinkTopic(gwID)
+		if tap != nil {
+			tap.Record("DOWNLINK", "EVENT", gwID, topic, stage.TaskID, wireBytes)
+		}
+		ctx, cancel := context.WithTimeout(rootCtx, 10*time.Second)
+		_, pubErr := publisher.Publish(ctx, &paho.Publish{
+			Topic:   topic,
+			QoS:     1,
+			Payload: wireBytes,
+		})
+		cancel()
+		if pubErr != nil {
+			recordOTAPublishMetric(metrics, "failed")
+			if logger != nil {
+				logger.Warn("mqtt_ota_publish_failed", "gateway_id", gwID, "task_id", stage.TaskID, "topic", topic, "error", pubErr.Error())
+			}
+			continue
+		}
+		recordOTAPublishMetric(metrics, "success")
+	}
 }
 
 func publishGatewayDesiredShadow(

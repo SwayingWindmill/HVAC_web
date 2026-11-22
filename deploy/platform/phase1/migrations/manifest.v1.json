@@ -143,7 +143,9 @@
         "infra/registry/postgres/init/device-hardware-replacements.sql",
         "infra/registry/postgres/init/optimization-multiloop-vfd-bounds.sql",
         "infra/registry/postgres/init/optimization-recommendation-auxiliary-targets.sql",
-        "infra/connectivity/postgres/init/gateway-shadow-edge-rules.sql"
+        "infra/connectivity/postgres/init/gateway-shadow-edge-rules.sql",
+        "infra/registry/postgres/init/gateway-ota-targets-view.sql",
+        "infra/connectivity/postgres/init/gateway-ota-management.sql"
       ]
     },
     {

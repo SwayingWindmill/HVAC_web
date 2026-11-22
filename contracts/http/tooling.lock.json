@@ -1,5 +1,5 @@
 {
-  "generator": "scripts/generate-platform-contracts.mjs",
+  "generator": "scripts/generate-platform-contracts.ts",
   "generatorVersion": "7.1.0",
   "node": "22.22.0",
   "go": "1.27.4",
