@@ -29,17 +29,20 @@ EG8200 侧 Node-RED（`tab-platform-tunnel`）主动向平台 `:443/gateway/v1/t
 
 - **系统与 init**：`Ubuntu 20.04.5 LTS`（Focal），内核 `Linux IOTRouter 5.4.61 #19 SMP PREEMPT armv7l`，`PID 1` 为 `systemd 245`。
 - **CPU 与 Go 交叉编译目标**：双核 ARMv7 Cortex-A7（`vfpv3` / `vfpv4` / `neon` / `idiva` / `idivt`），编译边缘二进制固定使用 `GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0`。
-- **内存预算**：总计 `485 MiB`（`512 MB` DDR），`node-red` 单进程约占 `156 MiB` RSS，空余约 `173 MiB`。
-- **存储与关键挂载约束**：`/dev/root`（`mmcblk0p5`，`ext4 rw`）总容量 `3.3 GiB`、可用约 `1.2 GiB`，`/root`、`/root/hvac-platform`、`/opt` 可写；**`/etc` 为只读 bind 挂载（`ro`）**。
-- **在跑服务与账号**：`sshd.service`（`/usr/sbin/sshd -D`，`PermitRootLogin yes`，默认启用 `PubkeyAuthentication yes`）、`node-red.service`、`iotrouter.service`、`iotrouter-web.service`，`/etc/rc.local` 启动 `ZHCSharpMid`；登录账号为 `root` 与 `pi`，`/root/.ssh` 为 `0700 root:root`。
+- **内存预算**：总计 `485 MiB`（`512 MB` DDR），`node-red` 单进程约占 `157 MiB` RSS，空余约 `173 MiB`。
+- **存储与权限实况（重要纠偏）**：宿主机根分区 `/dev/mmcblk0p5`（`3.4 GiB` `ext4 rw`，`/etc/fstab` 为 `/dev/mmcblk0p5 / ext4 remount,rw 0 0`）可用约 `1.2 GiB`，**宿主机 SSH `root` 下 `/`、`/etc`、`/etc/systemd/system`、`/root`、`/opt` 与 `/home/pi/edge8000` 全部可读写（`lsblk` 确认 `RO=0`）**。此前通过 Node-RED 沙箱看到的 `/dev/root /etc ext4 ro,relatime` **仅存在于 `node-red.service` 的私有挂载命名空间内**（因其 `/lib/systemd/system/node-red.service` 配置了 `ReadOnlyDirectories=/etc/`）。
+- **在跑服务、自启链与账号**：
+  - `sshd.service`（`/usr/sbin/sshd -D`，`PermitRootLogin yes`，默认启用 `PubkeyAuthentication yes`）、`iotrouter.service`（`zh_node.app`）、`iotrouter-web.service`；登录账号为 `root` 与 `pi`，`/root/.ssh` 为 `0700 root:root`。
+  - `node-red.service` 在 systemd 中本身为 `disabled`，真正开机拉起它的是 `/etc/rc.local` 调起的 `/home/pi/edge8000/app/usr_service_auto_startup.sh`（重置 `eth0`/`networking` 并拉起 `iotrouter.service`、`influxdb.service`，随后执行 `systemctl restart node-red.service`，并用后台 3 秒巡检循环守护伴生进程 `ZHCSharpMid`）。因此停用 Node-RED 时需在独立进程接管反向隧道与串口后再执行 `systemctl stop node-red.service && systemctl mask node-red.service`（或清理 `usr_service_auto_startup.sh` 对应拉起段落），防止重启复活。
 - **现场串口总线**：`/dev/ttyAS3`（`9600 8N1`）由电表（`UID 2,3,4,5`）、水表（`UID 10`）、无线采集器（`UID 20`）和 ET1010（`UID 31`）共用。
 
 ## 3. 已开通站点的日常连接、按需开关与核验
 
-1. **通过平台跳板机直接 SSH 登录网关**（从 Windows PowerShell 或 WSL 均可执行，网关和服务器公网均不暴露 `22` 端口通道）：
+1. **通过平台跳板机非交互 SSH 登录或执行命令**（从 Windows PowerShell 或 WSL 均可执行，网关和服务器公网均不暴露 `22` 端口通道）：
    ```bash
-   ssh -o BatchMode=yes -o ConnectTimeout=8 -J <运维账号>@<平台服务器> -p 18822 root@127.0.0.1
+   ssh -n -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -J <运维账号>@<平台服务器> -p 18822 root@127.0.0.1 'uname -a'
    ```
+   如需进入交互式终端，去掉 `-n` 和远端命令参数即可。
 2. **在平台服务器按需关闭或重新开启 SSH 通道**（不影响 `1880` Node-RED 隧道）：
    ```bash
    sudo systemctl stop hvac-gateway-ssh-loopback.socket
@@ -83,8 +86,8 @@ EG8200 侧 Node-RED（`tab-platform-tunnel`）主动向平台 `:443/gateway/v1/t
 1. **Node-RED 函数沙箱没有全局 `process`**：不要直接引用 `process.pid` 或 `process.cwd()`，改用读取 `/proc/self/status`、`/proc/self/cmdline`、`os` 与 `fs.statfsSync`；所有临时 HTTP 函数节点外层必须包 `try / catch` 返回 HTTP `500` JSON，防止 `http response` 不触发导致请求死等超时。
 2. **严禁改动或整套重部署 Modbus / ET1010 页签**：不要触碰 `ET1010·机组启停` 及 `/dev/ttyAS3` 串口节点；临时探测一律局限在非串口、非隧道页签并用 `Node-RED-Deployment-Type: nodes` + `finally` 原样还原。
 3. **升级 `tab-platform-tunnel` 会切断当前响应连接**：看到 `http.client.RemoteDisconnected` 后不要盲目重试写入，先等 `2` 到 `5` 秒并用 `GET /flows` 核对是否已经生效。
-4. **PowerShell、WSL 与 SSH 引号防卡死规范**：禁止在 PowerShell 单行命令里嵌套多层引号调 WSL SSH；多步逻辑写成无 BOM 的 LF `.sh` 脚本再调单条 `wsl -e bash -lc`，或使用 PowerShell `@'...'@` 配合 Base64 传入只读 Python 脚本，且所有 `ssh` 调用固定带 `-o BatchMode=yes -o ConnectTimeout=8`。
-5. **`/etc` 为只读 bind 挂载**：自定义边缘二进制、配置与私钥/证书一律放到可写的 `/root/hvac-platform/` 或 `/opt/` 下，不要假设 `/etc/ssh/sshd_config` 或 `/etc/systemd/system` 可直接修改。
+4. **PowerShell、WSL 与 SSH 引号防卡死规范**：禁止在 PowerShell 单行命令里嵌套多层引号调 WSL SSH，尤其禁止在传给原生 `ssh.exe` 的单引号远程命令里混用双引号 `"`（Windows `CommandLineToArgvW` 会剥离裸 `"` 导致 `grep`/`cat` 等待 stdin 卡死）。非交互探测统一加 `-n -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=2`；复杂多步脚本写成无 BOM 的 LF `.sh` 或使用 PowerShell `@'...'@` 转 Base64 执行。
+5. **区分 Node-RED 挂载命名空间与宿主机 `root` 权限**：Node-RED 内部因 `ReadOnlyDirectories=/etc/` 无法写 `/etc`，但 SSH `root` 登录宿主机对 `/etc` 与 `/etc/systemd/system/` 完全可写，可直接安装标准 `systemd` 服务；同时切勿在未接管反向 SSH 隧道前停掉 `node-red.service`，也不要误改 `/home/pi/edge8000/app/usr_service_auto_startup.sh` 中的 `eth0`/`networking` 与 `iotrouter.service` 启动段。
 6. **代码与单测易错点**：
    - Go 侧 `ValidateLoopbackAddr` 拒绝 `:0` 端口，编写回环监听器拒接单测时需传入明确端口（如 `127.0.0.1:18822`）。
    - `connectivity.gateway_tunnel_audit` 只定义了 4 个事件类型，不存在 `STREAM_CLOSED`。

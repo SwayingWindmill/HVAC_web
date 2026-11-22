@@ -99,6 +99,7 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
         './libs/planttwin/...',
         './modules/command/...',
         './libs/edgecontrol/...',
+        './cmd/edge-gateway/...',
         './tools/eg8200-simulator/...',
       ),
       nodeRun('--experimental-strip-types', '--test', 'scripts/test-songyaxuan-command-executor.ts'),

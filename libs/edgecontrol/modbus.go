@@ -19,6 +19,10 @@ const (
 	ModbusFunctionReadInputRegisters     ModbusFunctionCode = 4
 	ModbusFunctionWriteSingleRegister    ModbusFunctionCode = 6
 	ModbusFunctionWriteMultipleRegisters ModbusFunctionCode = 16
+
+	defaultModbusRTUSpeed    uint = 9600
+	defaultModbusRTUDataBits uint = 8
+	defaultModbusRTUStopBits uint = 1
 )
 
 type ModbusTCPBridgeConfig struct {
@@ -31,6 +35,10 @@ type ModbusRTUBridgeConfig struct {
 	Endpoint string
 	Timeout  time.Duration
 	Retries  int
+	Speed    uint   // defaults to 9600 when 0
+	DataBits uint   // defaults to 8 when 0 (7 or 8)
+	Parity   string // "", "N", "E", "O" (defaults to "N")
+	StopBits uint   // defaults to 1 when 0 (1 or 2)
 }
 
 type ModbusReadTask struct {
@@ -49,19 +57,23 @@ type ModbusWriteTask struct {
 	Values       []uint16
 }
 
-// ModbusTCPBridge owns one Modbus/TCP master connection and serializes raw
-// register transactions across DeviceAdapters. DeviceAdapters retain register
+// ModbusTCPBridge owns one Modbus/TCP or Modbus/RTU master connection and serializes
+// raw register transactions across DeviceAdapters. DeviceAdapters retain register
 // meaning, scaling and semantic Channel conversion; the Bridge owns transport,
 // bounded request retries and reconnects after failed transactions.
 type ModbusTCPBridge struct {
-	mu       sync.Mutex
-	scheme   string
-	label    string
-	endpoint string
-	timeout  time.Duration
-	retries  int
-	client   *modbus.ModbusClient
-	open     bool
+	mu          sync.Mutex
+	scheme      string
+	label       string
+	endpoint    string
+	timeout     time.Duration
+	retries     int
+	rtuSpeed    uint
+	rtuDataBits uint
+	rtuParity   uint
+	rtuStopBits uint
+	client      *modbus.ModbusClient
+	open        bool
 }
 
 func NewModbusTCPBridge(config ModbusTCPBridgeConfig) (*ModbusTCPBridge, error) {
@@ -92,7 +104,52 @@ func NewModbusRTUBridge(config ModbusRTUBridgeConfig) (*ModbusTCPBridge, error) 
 	if config.Retries < 0 {
 		return nil, errors.New("modbus RTU retries cannot be negative")
 	}
-	return &ModbusTCPBridge{scheme: "rtu://", label: "modbus RTU", endpoint: endpoint, timeout: config.Timeout, retries: config.Retries}, nil
+	speed := config.Speed
+	if speed == 0 {
+		speed = defaultModbusRTUSpeed
+	}
+	dataBits := config.DataBits
+	if dataBits == 0 {
+		dataBits = defaultModbusRTUDataBits
+	}
+	if dataBits != 7 && dataBits != 8 {
+		return nil, fmt.Errorf("modbus RTU dataBits must be 7 or 8, got %d", dataBits)
+	}
+	stopBits := config.StopBits
+	if stopBits == 0 {
+		stopBits = defaultModbusRTUStopBits
+	}
+	if stopBits != 1 && stopBits != 2 {
+		return nil, fmt.Errorf("modbus RTU stopBits must be 1 or 2, got %d", stopBits)
+	}
+	parity, err := parseModbusRTUParity(config.Parity)
+	if err != nil {
+		return nil, err
+	}
+	return &ModbusTCPBridge{
+		scheme:      "rtu://",
+		label:       "modbus RTU",
+		endpoint:    endpoint,
+		timeout:     config.Timeout,
+		retries:     config.Retries,
+		rtuSpeed:    speed,
+		rtuDataBits: dataBits,
+		rtuParity:   parity,
+		rtuStopBits: stopBits,
+	}, nil
+}
+
+func parseModbusRTUParity(raw string) (uint, error) {
+	switch strings.ToUpper(strings.TrimSpace(raw)) {
+	case "", "N", "NONE":
+		return modbus.PARITY_NONE, nil
+	case "E", "EVEN":
+		return modbus.PARITY_EVEN, nil
+	case "O", "ODD":
+		return modbus.PARITY_ODD, nil
+	default:
+		return 0, fmt.Errorf("unsupported modbus RTU parity %q", raw)
+	}
 }
 
 func (bridge *ModbusTCPBridge) Close() error {
@@ -195,10 +252,17 @@ func (bridge *ModbusTCPBridge) openLocked() error {
 	if bridge.open {
 		return nil
 	}
-	client, err := modbus.NewClient(&modbus.ClientConfiguration{
+	cfg := &modbus.ClientConfiguration{
 		URL:     bridge.bridgeScheme() + bridge.endpoint,
 		Timeout: bridge.timeout,
-	})
+	}
+	if bridge.bridgeScheme() == "rtu://" {
+		cfg.Speed = bridge.rtuSpeed
+		cfg.DataBits = bridge.rtuDataBits
+		cfg.Parity = bridge.rtuParity
+		cfg.StopBits = bridge.rtuStopBits
+	}
+	client, err := modbus.NewClient(cfg)
 	if err != nil {
 		return err
 	}

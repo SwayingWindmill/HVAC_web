@@ -1,0 +1,17 @@
+[Unit]
+Description=HVAC Edge Gateway Daemon
+Documentation=https://github.com/SwayingWindmill/HVAC_web/tree/main/deploy/edge-gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/hvac-edge-gateway
+ExecStart=/opt/hvac-edge-gateway/ota/current --config /opt/hvac-edge-gateway/config.json
+Restart=always
+RestartSec=5
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

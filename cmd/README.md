@@ -8,5 +8,6 @@
 - `metric-worker`：按计划计算指标。
 - `scheduler`：扫描定时任务、分派给对应的服务。
 - `maintenance-worker`：证书到期检查、失败任务处理、退租户这类运维作业。
+- `edge-gateway`：部署于现场 Linux 工控机（如 EG8200 ARMv7）的独立边缘守护进程，集成 `libs/edgecontrol`、共享总线 Modbus TCP/RTU、配置影子热更新、14 天证书续签、受控反向隧道与 A/B OTA 代理。
 
 除 `wecom-alert-adapter` 外，其余进程与共享业务模块共用仓库根目录 `go.mod`（`github.com/quanlaihe/hvac-web`），`go.work` 仅保留根目录及少数独立底层契约/边缘模块。哪些进程在第一阶段默认运行，以 `deploy/platform/phase1/runtime-inventory.v1.json` 为准。

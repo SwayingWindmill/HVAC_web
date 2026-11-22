@@ -401,3 +401,42 @@ func (handler *modbusTestHandler) attemptCount() int {
 	defer handler.mu.Unlock()
 	return handler.readAttempts
 }
+
+func TestNewModbusRTUBridgeSerialParametersAndValidation(t *testing.T) {
+	bridge, err := NewModbusRTUBridge(ModbusRTUBridgeConfig{
+		Endpoint: "/dev/ttyAS3",
+		Timeout:  500 * time.Millisecond,
+		Retries:  1,
+	})
+	if err != nil {
+		t.Fatalf("unexpected default RTU bridge error: %v", err)
+	}
+	if bridge.rtuSpeed != 9600 || bridge.rtuDataBits != 8 || bridge.rtuParity != modbus.PARITY_NONE || bridge.rtuStopBits != 1 {
+		t.Fatalf("unexpected default RTU params: speed=%d data=%d parity=%d stop=%d", bridge.rtuSpeed, bridge.rtuDataBits, bridge.rtuParity, bridge.rtuStopBits)
+	}
+
+	custom, err := NewModbusRTUBridge(ModbusRTUBridgeConfig{
+		Endpoint: "/dev/ttyAS3",
+		Timeout:  300 * time.Millisecond,
+		Speed:    19200,
+		DataBits: 7,
+		Parity:   "e",
+		StopBits: 2,
+	})
+	if err != nil {
+		t.Fatalf("unexpected custom RTU bridge error: %v", err)
+	}
+	if custom.rtuSpeed != 19200 || custom.rtuDataBits != 7 || custom.rtuParity != modbus.PARITY_EVEN || custom.rtuStopBits != 2 {
+		t.Fatalf("unexpected custom RTU params: speed=%d data=%d parity=%d stop=%d", custom.rtuSpeed, custom.rtuDataBits, custom.rtuParity, custom.rtuStopBits)
+	}
+
+	for _, bad := range []ModbusRTUBridgeConfig{
+		{Endpoint: "/dev/ttyAS3", Timeout: time.Second, DataBits: 6},
+		{Endpoint: "/dev/ttyAS3", Timeout: time.Second, StopBits: 3},
+		{Endpoint: "/dev/ttyAS3", Timeout: time.Second, Parity: "MARK"},
+	} {
+		if _, err := NewModbusRTUBridge(bad); err == nil {
+			t.Fatalf("expected invalid RTU serial config %#v to fail", bad)
+		}
+	}
+}
