@@ -1,0 +1,687 @@
+package edgedaemon
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+	"unicode/utf8"
+
+	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
+)
+
+const (
+	maxShadowHTTPBodyBytes = 4 << 20
+
+	shadowStatusApplied  = "APPLIED"
+	shadowStatusPartial  = "PARTIAL"
+	shadowStatusRejected = "REJECTED"
+
+	shadowDriftSectionDriverConfigs  = "DRIVER_CONFIGS"
+	shadowDriftSectionAutonomyPolicy = "AUTONOMY_POLICY"
+	shadowDriftSectionEdgeRules      = "EDGE_RULES"
+	shadowDriftReasonApplyFailed     = "EDGE_APPLY_FAILED"
+)
+
+// PointCopyTarget mirrors connectivity config shadow copy targets.
+type PointCopyTarget struct {
+	DeviceKey string `json:"deviceKey"`
+	PointCode string `json:"pointCode"`
+}
+
+// GatewayPointMapping maps a gateway source channel to a canonical device point.
+type GatewayPointMapping struct {
+	SourceChannel    string            `json:"sourceChannel"`
+	PrimaryDeviceKey string            `json:"primaryDeviceKey"`
+	PrimaryPointCode string            `json:"primaryPointCode"`
+	CopyTargets      []PointCopyTarget `json:"copyTargets,omitempty"`
+}
+
+// GatewaySamplingPolicy configures poll/publish intervals for a device or point.
+type GatewaySamplingPolicy struct {
+	DeviceKey         string `json:"deviceKey"`
+	PointCode         string `json:"pointCode,omitempty"`
+	SampleIntervalMS  int    `json:"sampleIntervalMs"`
+	PublishIntervalMS int    `json:"publishIntervalMs"`
+}
+
+// ConcentratorShadowParams mirrors serial/LoRa concentrator parameters.
+type ConcentratorShadowParams struct {
+	ModbusID        int `json:"modbusId"`
+	BaudRateCode    int `json:"baudRateCode"`
+	OffLineTime     int `json:"offLineTime"`
+	DataUplinkCycle int `json:"dataUplinkCycle"`
+	LocalNet        int `json:"localNet"`
+	TimeMark        int `json:"timeMark"`
+	RfTxPower       int `json:"rfTxPower"`
+	RfFrequency     int `json:"rfFrequency"`
+	RfBandWidth     int `json:"rfBandWidth"`
+	RfSf            int `json:"rfSf"`
+	RfLeadCode      int `json:"rfLeadCode"`
+	TxTimeout       int `json:"txTimeout"`
+	RxTimeout       int `json:"rxTimeout"`
+	RssiOut         int `json:"rssiOut"`
+}
+
+// ConcentratorShadowEIDSlot assigns one EID slot on an RS-485 concentrator.
+type ConcentratorShadowEIDSlot struct {
+	Slot int    `json:"slot"`
+	EID  uint32 `json:"eid"`
+}
+
+// ConcentratorUnitShadow describes one concentrator's params and EID table.
+type ConcentratorUnitShadow struct {
+	Params *ConcentratorShadowParams   `json:"params,omitempty"`
+	EIDs   []ConcentratorShadowEIDSlot `json:"eids,omitempty"`
+}
+
+// ShadowDriftDetail reports section-level shadow rejection/drift facts.
+type ShadowDriftDetail struct {
+	Section string `json:"section"`
+	Target  string `json:"target"`
+	Reason  string `json:"reason"`
+	Detail  string `json:"detail"`
+}
+
+// GatewayDesiredConfig matches GET /gateway/v1/config-shadow desired payload.
+type GatewayDesiredConfig struct {
+	DesiredRevision     int64                             `json:"desiredRevision"`
+	PointMappings       []GatewayPointMapping             `json:"pointMappings"`
+	SamplingPolicies    []GatewaySamplingPolicy           `json:"samplingPolicies"`
+	ConcentratorConfigs map[string]ConcentratorUnitShadow `json:"concentratorConfigs"`
+	DriverConfigs       []edgecontrol.ModbusDriverInput   `json:"driverConfigs,omitempty"`
+	AutonomyPolicy      *edgecontrol.AutonomyPolicyConfig `json:"autonomyPolicy,omitempty"`
+	EdgeRuleBundle      *edgecontrol.EdgeRuleBundle       `json:"edgeRuleBundle,omitempty"`
+	UpdatedBy           string                            `json:"updatedBy,omitempty"`
+	Reason              string                            `json:"reason,omitempty"`
+	CreatedAt           *time.Time                        `json:"createdAt,omitempty"`
+	UpdatedAt           *time.Time                        `json:"updatedAt,omitempty"`
+}
+
+// GatewayShadowPullResponse matches GET /gateway/v1/config-shadow response.
+type GatewayShadowPullResponse struct {
+	GatewayID       string                `json:"gatewayId"`
+	DesiredRevision int64                 `json:"desiredRevision"`
+	HasDelta        bool                  `json:"hasDelta"`
+	Desired         *GatewayDesiredConfig `json:"desired,omitempty"`
+}
+
+// GatewayShadowReportRequest matches POST /gateway/v1/config-shadow/report body.
+type GatewayShadowReportRequest struct {
+	ReportedRevision    int64                             `json:"reportedRevision"`
+	AppliedStatus       string                            `json:"appliedStatus"`
+	PointMappings       []GatewayPointMapping             `json:"pointMappings"`
+	SamplingPolicies    []GatewaySamplingPolicy           `json:"samplingPolicies"`
+	ConcentratorConfigs map[string]ConcentratorUnitShadow `json:"concentratorConfigs"`
+	DriverConfigs       []edgecontrol.ModbusDriverInput   `json:"driverConfigs,omitempty"`
+	AutonomyPolicy      *edgecontrol.AutonomyPolicyConfig `json:"autonomyPolicy,omitempty"`
+	EdgeRuleBundle      *edgecontrol.EdgeRuleBundle       `json:"edgeRuleBundle,omitempty"`
+	DriftDetails        []ShadowDriftDetail               `json:"driftDetails,omitempty"`
+	ErrorMessage        *string                           `json:"errorMessage,omitempty"`
+	ReportedAt          *time.Time                        `json:"reportedAt,omitempty"`
+}
+
+type persistedShadowState struct {
+	AppliedRevision     int64                             `json:"appliedRevision"`
+	PointMappings       []GatewayPointMapping             `json:"pointMappings"`
+	SamplingPolicies    []GatewaySamplingPolicy           `json:"samplingPolicies"`
+	ConcentratorConfigs map[string]ConcentratorUnitShadow `json:"concentratorConfigs"`
+	DriverConfigs       []edgecontrol.ModbusDriverInput   `json:"driverConfigs,omitempty"`
+	AutonomyPolicy      *edgecontrol.AutonomyPolicyConfig `json:"autonomyPolicy,omitempty"`
+	EdgeRuleBundle      *edgecontrol.EdgeRuleBundle       `json:"edgeRuleBundle,omitempty"`
+}
+
+// ShadowManager maintains persistent desired/reported edge configuration and
+// hot-reloads drivers, autonomy bounds, and edge rule bundles on the running Host.
+type ShadowManager struct {
+	gatewayID  string
+	statePath  string
+	host       *edgecontrol.Host
+	registry   *ProtocolBridgeRegistry
+	interlock  *edgecontrol.HydraulicInterlockController
+	fallback   *edgecontrol.AutonomousFallbackController
+	ruleEngine *edgecontrol.EdgeRuleController
+	logger     *slog.Logger
+	now        func() time.Time
+
+	mu    sync.Mutex
+	state persistedShadowState
+}
+
+// NewShadowManager constructs a ShadowManager bound to the live Host and controllers.
+func NewShadowManager(
+	gatewayID string,
+	stateDir string,
+	host *edgecontrol.Host,
+	registry *ProtocolBridgeRegistry,
+	interlock *edgecontrol.HydraulicInterlockController,
+	fallback *edgecontrol.AutonomousFallbackController,
+	ruleEngine *edgecontrol.EdgeRuleController,
+	logger *slog.Logger,
+) *ShadowManager {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &ShadowManager{
+		gatewayID:  strings.TrimSpace(gatewayID),
+		statePath:  filepath.Join(strings.TrimSpace(stateDir), "config-shadow.json"),
+		host:       host,
+		registry:   registry,
+		interlock:  interlock,
+		fallback:   fallback,
+		ruleEngine: ruleEngine,
+		logger:     logger,
+		now:        time.Now,
+		state: persistedShadowState{
+			PointMappings:       []GatewayPointMapping{},
+			SamplingPolicies:    []GatewaySamplingPolicy{},
+			ConcentratorConfigs: map[string]ConcentratorUnitShadow{},
+			DriverConfigs:       []edgecontrol.ModbusDriverInput{},
+		},
+	}
+}
+
+// LoadOrBootstrap recovers persisted config shadow state from disk and applies it,
+// or seeds initial static driver/autonomy/rule configs when no shadow file exists yet.
+func (m *ShadowManager) LoadOrBootstrap(cfg Config) error {
+	raw, err := os.ReadFile(m.statePath)
+	if err == nil {
+		var saved persistedShadowState
+		if err := json.Unmarshal(raw, &saved); err != nil {
+			return fmt.Errorf("decode persisted config shadow %s: %w", m.statePath, err)
+		}
+		m.mu.Lock()
+		m.state = normalizePersistedShadowState(saved)
+		snapshot := clonePersistedShadowState(m.state)
+		m.mu.Unlock()
+		return m.applyPersistedBootstrap(snapshot)
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read config shadow %s: %w", m.statePath, err)
+	}
+
+	seed := persistedShadowState{
+		PointMappings:       []GatewayPointMapping{},
+		SamplingPolicies:    []GatewaySamplingPolicy{},
+		ConcentratorConfigs: map[string]ConcentratorUnitShadow{},
+		DriverConfigs:       cloneDriverInputs(cfg.Drivers),
+		AutonomyPolicy:      cloneAutonomyPtr(cfg.AutonomyPolicy),
+		EdgeRuleBundle:      cfg.EdgeRuleBundle.Clone(),
+	}
+	m.mu.Lock()
+	m.state = clonePersistedShadowState(seed)
+	m.mu.Unlock()
+	return m.applyPersistedBootstrap(seed)
+}
+
+func (m *ShadowManager) applyPersistedBootstrap(state persistedShadowState) error {
+	for _, drv := range state.DriverConfigs {
+		adapter, err := m.registry.BuildAdapter(drv)
+		if err != nil {
+			return fmt.Errorf("bootstrap driver %q: %w", drv.DeviceKey, err)
+		}
+		if err := m.host.ReplaceOrRegisterDevice(adapter); err != nil {
+			return fmt.Errorf("register bootstrap driver %q: %w", drv.DeviceKey, err)
+		}
+	}
+	if state.AutonomyPolicy != nil {
+		if err := m.applyAutonomyPolicy(state.AutonomyPolicy); err != nil {
+			return err
+		}
+	}
+	if state.EdgeRuleBundle != nil && m.ruleEngine != nil {
+		if err := m.ruleEngine.UpdateBundle(state.EdgeRuleBundle.Clone()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// AppliedRevision returns the latest committed shadow revision on the edge.
+func (m *ShadowManager) AppliedRevision() int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.state.AppliedRevision
+}
+
+// PointMappingsSnapshot returns a copy of current desired/applied point mappings.
+func (m *ShadowManager) PointMappingsSnapshot() []GatewayPointMapping {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return cloneGatewayPointMappings(m.state.PointMappings)
+}
+
+// PullAndSync pulls desired shadow changes from /gateway/v1/config-shadow and reports back.
+func (m *ShadowManager) PullAndSync(ctx context.Context, cfg Config) error {
+	client, id, err := newMTLSHTTPClient(cfg.CAFile, cfg.CertFile, cfg.KeyFile, cfg.ServerName, 20*time.Second)
+	if err != nil {
+		return err
+	}
+	now := m.now().UTC()
+	sinceRev := m.AppliedRevision()
+	baseURL := strings.TrimRight(strings.TrimSpace(cfg.PlatformBaseURL), "/")
+
+	pullURL := baseURL + "/gateway/v1/config-shadow?sinceRevision=" + strconv.FormatInt(sinceRev, 10)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pullURL, nil)
+	if err != nil {
+		return err
+	}
+	if err := signHTTPPoPIfPresent(req, id, now); err != nil {
+		return fmt.Errorf("sign config-shadow pull PoP: %w", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("pull config shadow: %w", err)
+	}
+	pullBytes, readErr := io.ReadAll(io.LimitReader(resp.Body, maxShadowHTTPBodyBytes+1))
+	_ = resp.Body.Close()
+	if readErr != nil {
+		return fmt.Errorf("read config shadow response: %w", readErr)
+	}
+	if int64(len(pullBytes)) > maxShadowHTTPBodyBytes {
+		return errors.New("config shadow pull response exceeds maximum size")
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("pull config shadow failed with HTTP %d", resp.StatusCode)
+	}
+
+	var pull GatewayShadowPullResponse
+	if err := json.Unmarshal(pullBytes, &pull); err != nil {
+		return fmt.Errorf("decode config shadow pull response: %w", err)
+	}
+	if !pull.HasDelta || pull.Desired == nil {
+		return nil
+	}
+
+	report, stale, err := m.ApplyDesired(*pull.Desired)
+	if err != nil || stale {
+		return err
+	}
+	reportBytes, err := json.Marshal(report)
+	if err != nil {
+		return err
+	}
+	reportURL := baseURL + "/gateway/v1/config-shadow/report"
+	postReq, err := http.NewRequestWithContext(ctx, http.MethodPost, reportURL, bytes.NewReader(reportBytes))
+	if err != nil {
+		return err
+	}
+	postReq.Header.Set("Content-Type", "application/json")
+	if err := signHTTPPoPIfPresent(postReq, id, now); err != nil {
+		return fmt.Errorf("sign config-shadow report PoP: %w", err)
+	}
+	postResp, err := client.Do(postReq)
+	if err != nil {
+		return fmt.Errorf("report config shadow: %w", err)
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(postResp.Body, maxShadowHTTPBodyBytes))
+	_ = postResp.Body.Close()
+	if postResp.StatusCode < 200 || postResp.StatusCode >= 300 {
+		return fmt.Errorf("report config shadow failed with HTTP %d", postResp.StatusCode)
+	}
+	return nil
+}
+
+// HandleMQTTChangeBatch decodes a CHANGE_BATCH replication message, applies any valid
+// desired payload, and returns the encoded CHANGE_ACK envelope.
+func (m *ShadowManager) HandleMQTTChangeBatch(payload []byte) ([]byte, error) {
+	_, batch, err := edgecontrol.DecodeShadowChangeBatch(payload, m.gatewayID)
+	if err != nil {
+		return nil, err
+	}
+	last := batch.Items[len(batch.Items)-1]
+	ack := edgecontrol.ShadowChangeAckPayload{
+		Cursor:        last.Cursor,
+		DeliveryID:    last.DeliveryID,
+		PayloadDigest: last.PayloadDigest,
+		Status:        edgecontrol.ShadowAckStatusAcked,
+	}
+
+	for _, item := range batch.Items {
+		if !item.Tombstone && !edgecontrol.VerifyShadowPayloadDigest(item.Payload, item.PayloadDigest) {
+			ack.Status = edgecontrol.ShadowAckStatusQuarantined
+			ack.Reason = "payload checksum mismatch"
+			return edgecontrol.EncodeShadowChangeAck(m.gatewayID, ack, m.now().UTC())
+		}
+		if item.Tombstone || len(bytes.TrimSpace(item.Payload)) == 0 {
+			continue
+		}
+		var desired GatewayDesiredConfig
+		if err := json.Unmarshal(item.Payload, &desired); err != nil {
+			ack.Status = edgecontrol.ShadowAckStatusQuarantined
+			ack.Reason = "invalid shadow payload JSON"
+			return edgecontrol.EncodeShadowChangeAck(m.gatewayID, ack, m.now().UTC())
+		}
+		if desired.DesiredRevision < 1 {
+			desired.DesiredRevision = item.SourceRevision
+		}
+		report, _, applyErr := m.ApplyDesired(desired)
+		if applyErr != nil || report.AppliedStatus == shadowStatusRejected {
+			ack.Status = edgecontrol.ShadowAckStatusQuarantined
+			if report.ErrorMessage != nil {
+				ack.Reason = *report.ErrorMessage
+			} else if applyErr != nil {
+				ack.Reason = applyErr.Error()
+			} else {
+				ack.Reason = "shadow desired config rejected by edge"
+			}
+			return edgecontrol.EncodeShadowChangeAck(m.gatewayID, ack, m.now().UTC())
+		}
+		rev := item.SourceRevision
+		ack.AppliedOwnerRevision = &rev
+	}
+	return edgecontrol.EncodeShadowChangeAck(m.gatewayID, ack, m.now().UTC())
+}
+
+// ApplyDesired atomically applies drivers, autonomy policy, and edge rules onto the runtime.
+func (m *ShadowManager) ApplyDesired(desired GatewayDesiredConfig) (GatewayShadowReportRequest, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if desired.DesiredRevision < m.state.AppliedRevision {
+		return GatewayShadowReportRequest{}, true, nil
+	}
+
+	var drift []ShadowDriftDetail
+	var errMsgs []string
+
+	acceptedDrivers := make([]edgecontrol.ModbusDriverInput, 0, len(desired.DriverConfigs))
+	seenKeys := make(map[string]struct{}, len(desired.DriverConfigs))
+	for _, cfg := range desired.DriverConfigs {
+		key := strings.TrimSpace(cfg.DeviceKey)
+		target := clampRunes("driver:"+key, 256)
+		if key != "" {
+			if _, dup := seenKeys[key]; dup {
+				msg := fmt.Sprintf("duplicate driverConfig deviceKey %q", key)
+				drift = append(drift, ShadowDriftDetail{Section: shadowDriftSectionDriverConfigs, Target: target, Reason: shadowDriftReasonApplyFailed, Detail: clampRunes(msg, 512)})
+				errMsgs = append(errMsgs, msg)
+				continue
+			}
+			seenKeys[key] = struct{}{}
+		}
+		adapter, buildErr := m.registry.BuildAdapter(cfg)
+		if buildErr != nil {
+			msg := fmt.Sprintf("driver %s validation/build failed: %v", key, buildErr)
+			drift = append(drift, ShadowDriftDetail{Section: shadowDriftSectionDriverConfigs, Target: target, Reason: shadowDriftReasonApplyFailed, Detail: clampRunes(msg, 512)})
+			errMsgs = append(errMsgs, msg)
+			continue
+		}
+		if regErr := m.host.ReplaceOrRegisterDevice(adapter); regErr != nil {
+			msg := fmt.Sprintf("driver %s registration failed: %v", key, regErr)
+			drift = append(drift, ShadowDriftDetail{Section: shadowDriftSectionDriverConfigs, Target: target, Reason: shadowDriftReasonApplyFailed, Detail: clampRunes(msg, 512)})
+			errMsgs = append(errMsgs, msg)
+			continue
+		}
+		acceptedDrivers = append(acceptedDrivers, cloneDriverInput(cfg))
+	}
+
+	var reportedPolicy *edgecontrol.AutonomyPolicyConfig
+	autonomyApplied := false
+	if desired.AutonomyPolicy != nil {
+		if err := m.applyAutonomyPolicy(desired.AutonomyPolicy); err != nil {
+			msg := fmt.Sprintf("autonomyPolicy apply failed: %v", err)
+			drift = append(drift, ShadowDriftDetail{Section: shadowDriftSectionAutonomyPolicy, Target: "autonomyPolicy", Reason: shadowDriftReasonApplyFailed, Detail: clampRunes(msg, 512)})
+			errMsgs = append(errMsgs, msg)
+		} else {
+			reportedPolicy = cloneAutonomyPtr(desired.AutonomyPolicy)
+			autonomyApplied = true
+		}
+	}
+
+	var reportedRules *edgecontrol.EdgeRuleBundle
+	rulesApplied := false
+	if desired.EdgeRuleBundle != nil {
+		if m.ruleEngine == nil {
+			msg := "edgeRuleBundle engine unavailable"
+			drift = append(drift, ShadowDriftDetail{Section: shadowDriftSectionEdgeRules, Target: "edgeRuleBundle", Reason: shadowDriftReasonApplyFailed, Detail: msg})
+			errMsgs = append(errMsgs, msg)
+		} else if err := m.ruleEngine.UpdateBundle(desired.EdgeRuleBundle.Clone()); err != nil {
+			msg := fmt.Sprintf("edgeRuleBundle apply failed: %v", err)
+			drift = append(drift, ShadowDriftDetail{Section: shadowDriftSectionEdgeRules, Target: "edgeRuleBundle", Reason: shadowDriftReasonApplyFailed, Detail: clampRunes(msg, 512)})
+			errMsgs = append(errMsgs, msg)
+		} else {
+			reportedRules = desired.EdgeRuleBundle.Clone()
+			rulesApplied = true
+		}
+	}
+
+	status := shadowStatusApplied
+	if len(drift) > 0 || len(errMsgs) > 0 {
+		requested := len(desired.DriverConfigs)
+		if desired.AutonomyPolicy != nil {
+			requested++
+		}
+		if desired.EdgeRuleBundle != nil {
+			requested++
+		}
+		succeeded := len(acceptedDrivers)
+		if autonomyApplied {
+			succeeded++
+		}
+		if rulesApplied {
+			succeeded++
+		}
+		if requested > 0 && succeeded == 0 && len(desired.PointMappings) == 0 && len(desired.SamplingPolicies) == 0 && len(desired.ConcentratorConfigs) == 0 {
+			status = shadowStatusRejected
+		} else {
+			status = shadowStatusPartial
+		}
+	}
+
+	now := m.now().UTC()
+	report := GatewayShadowReportRequest{
+		ReportedRevision:    desired.DesiredRevision,
+		AppliedStatus:       status,
+		PointMappings:       cloneGatewayPointMappings(desired.PointMappings),
+		SamplingPolicies:    cloneGatewaySamplingPolicies(desired.SamplingPolicies),
+		ConcentratorConfigs: cloneConcentratorMap(desired.ConcentratorConfigs),
+		DriverConfigs:       cloneDriverInputs(acceptedDrivers),
+		AutonomyPolicy:      cloneAutonomyPtr(reportedPolicy),
+		EdgeRuleBundle:      reportedRules.Clone(),
+		DriftDetails:        drift,
+		ReportedAt:          &now,
+	}
+	if len(errMsgs) > 0 {
+		joined := clampRunes(strings.Join(errMsgs, "; "), 1024)
+		report.ErrorMessage = &joined
+	}
+
+	if status == shadowStatusRejected {
+		report.DriverConfigs = cloneDriverInputs(m.state.DriverConfigs)
+		report.AutonomyPolicy = cloneAutonomyPtr(m.state.AutonomyPolicy)
+		report.EdgeRuleBundle = m.state.EdgeRuleBundle.Clone()
+		return report, false, nil
+	}
+
+	// Unregister drivers omitted in acceptedDesired
+	acceptedSet := make(map[string]struct{}, len(acceptedDrivers))
+	for _, d := range acceptedDrivers {
+		acceptedSet[strings.TrimSpace(d.DeviceKey)] = struct{}{}
+	}
+	for _, prev := range m.state.DriverConfigs {
+		prevKey := strings.TrimSpace(prev.DeviceKey)
+		if prevKey == "" {
+			continue
+		}
+		if _, keep := acceptedSet[prevKey]; !keep {
+			_ = m.host.UnregisterDevice(prevKey)
+		}
+	}
+	if desired.AutonomyPolicy == nil {
+		def := edgecontrol.DefaultAutonomyPolicyConfig()
+		_ = m.applyAutonomyPolicy(&def)
+	}
+	if desired.EdgeRuleBundle == nil && m.ruleEngine != nil {
+		_ = m.ruleEngine.UpdateBundle(nil)
+	}
+
+	m.state = normalizePersistedShadowState(persistedShadowState{
+		AppliedRevision:     desired.DesiredRevision,
+		PointMappings:       desired.PointMappings,
+		SamplingPolicies:    desired.SamplingPolicies,
+		ConcentratorConfigs: desired.ConcentratorConfigs,
+		DriverConfigs:       acceptedDrivers,
+		AutonomyPolicy:      reportedPolicy,
+		EdgeRuleBundle:      reportedRules,
+	})
+	if err := m.persistLocked(); err != nil {
+		return GatewayShadowReportRequest{}, false, err
+	}
+	return report, false, nil
+}
+
+func (m *ShadowManager) applyAutonomyPolicy(policy *edgecontrol.AutonomyPolicyConfig) error {
+	if policy == nil {
+		return nil
+	}
+	if err := policy.Validate(); err != nil {
+		return err
+	}
+	if m.interlock != nil {
+		if err := m.interlock.UpdatePolicy(*policy); err != nil {
+			return err
+		}
+	}
+	if m.fallback != nil {
+		if err := m.fallback.UpdatePolicy(*policy); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *ShadowManager) persistLocked() error {
+	if err := os.MkdirAll(filepath.Dir(m.statePath), 0o750); err != nil {
+		return fmt.Errorf("create shadow state dir: %w", err)
+	}
+	encoded, err := json.MarshalIndent(m.state, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal config shadow state: %w", err)
+	}
+	return writeFileAtomic(m.statePath, append(encoded, '\n'), 0o600)
+}
+
+func normalizePersistedShadowState(in persistedShadowState) persistedShadowState {
+	out := persistedShadowState{
+		AppliedRevision:     in.AppliedRevision,
+		PointMappings:       cloneGatewayPointMappings(in.PointMappings),
+		SamplingPolicies:    cloneGatewaySamplingPolicies(in.SamplingPolicies),
+		ConcentratorConfigs: cloneConcentratorMap(in.ConcentratorConfigs),
+		DriverConfigs:       cloneDriverInputs(in.DriverConfigs),
+		AutonomyPolicy:      cloneAutonomyPtr(in.AutonomyPolicy),
+		EdgeRuleBundle:      in.EdgeRuleBundle.Clone(),
+	}
+	return out
+}
+
+func clonePersistedShadowState(in persistedShadowState) persistedShadowState {
+	return normalizePersistedShadowState(in)
+}
+
+func cloneDriverInput(in edgecontrol.ModbusDriverInput) edgecontrol.ModbusDriverInput {
+	cp := in
+	if in.Endpoint != nil {
+		v := *in.Endpoint
+		cp.Endpoint = &v
+	}
+	if in.UnitID != nil {
+		v := *in.UnitID
+		cp.UnitID = &v
+	}
+	if in.TimeoutMS != nil {
+		v := *in.TimeoutMS
+		cp.TimeoutMS = &v
+	}
+	if in.Retries != nil {
+		v := *in.Retries
+		cp.Retries = &v
+	}
+	cp.Registers = edgecontrol.CloneModbusRegisters(in.Registers)
+	return cp
+}
+
+func cloneDriverInputs(src []edgecontrol.ModbusDriverInput) []edgecontrol.ModbusDriverInput {
+	if len(src) == 0 {
+		return []edgecontrol.ModbusDriverInput{}
+	}
+	out := make([]edgecontrol.ModbusDriverInput, len(src))
+	for i, d := range src {
+		out[i] = cloneDriverInput(d)
+	}
+	return out
+}
+
+func cloneAutonomyPtr(src *edgecontrol.AutonomyPolicyConfig) *edgecontrol.AutonomyPolicyConfig {
+	if src == nil {
+		return nil
+	}
+	cp := *src
+	return &cp
+}
+
+func cloneGatewayPointMappings(src []GatewayPointMapping) []GatewayPointMapping {
+	if len(src) == 0 {
+		return []GatewayPointMapping{}
+	}
+	out := make([]GatewayPointMapping, len(src))
+	for i, m := range src {
+		out[i] = m
+		if len(m.CopyTargets) > 0 {
+			out[i].CopyTargets = append([]PointCopyTarget(nil), m.CopyTargets...)
+		}
+	}
+	return out
+}
+
+func cloneGatewaySamplingPolicies(src []GatewaySamplingPolicy) []GatewaySamplingPolicy {
+	if len(src) == 0 {
+		return []GatewaySamplingPolicy{}
+	}
+	out := make([]GatewaySamplingPolicy, len(src))
+	copy(out, src)
+	return out
+}
+
+func cloneConcentratorMap(src map[string]ConcentratorUnitShadow) map[string]ConcentratorUnitShadow {
+	if len(src) == 0 {
+		return map[string]ConcentratorUnitShadow{}
+	}
+	out := make(map[string]ConcentratorUnitShadow, len(src))
+	for k, v := range src {
+		cp := ConcentratorUnitShadow{}
+		if v.Params != nil {
+			p := *v.Params
+			cp.Params = &p
+		}
+		if len(v.EIDs) > 0 {
+			cp.EIDs = append([]ConcentratorShadowEIDSlot(nil), v.EIDs...)
+		}
+		out[k] = cp
+	}
+	return out
+}
+
+func clampRunes(value string, maxRunes int) string {
+	trimmed := strings.TrimSpace(value)
+	if maxRunes <= 0 || utf8.RuneCountInString(trimmed) <= maxRunes {
+		return trimmed
+	}
+	count := 0
+	for idx := range trimmed {
+		if count == maxRunes {
+			return trimmed[:idx]
+		}
+		count++
+	}
+	return trimmed
+}

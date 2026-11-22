@@ -674,3 +674,16 @@ test('Python AI solver service changes run analytics unit tests cleanly without 
   const analyticsUnitCommands = runPlan('unit', ['analytics']).commands;
   assert.ok(analyticsUnitCommands.includes('npm run ai-solver:test'));
 });
+
+
+test('edge-gateway daemon and packaging changes stay scoped to command and go gates', () => {
+  const daemonGo = runClassification(['cmd/edge-gateway/main.go']);
+  assert.deepEqual(daemonGo.unitProfiles, ['command', 'go']);
+  assert.equal(daemonGo.broad, false);
+  assert.equal(daemonGo.unknown, false);
+
+  const daemonDeploy = runClassification(['deploy/edge-gateway/hvac-edge-gateway.service']);
+  assert.deepEqual(daemonDeploy.unitProfiles, ['command']);
+  assert.equal(daemonDeploy.broad, false);
+  assert.equal(daemonDeploy.unknown, false);
+});

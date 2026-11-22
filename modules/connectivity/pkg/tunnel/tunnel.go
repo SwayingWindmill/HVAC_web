@@ -1166,7 +1166,7 @@ func (st *Stream) signalRead() {
 func (st *Stream) resolveOpen(err error) {
 	st.openOnce.Do(func() {
 		if err != nil {
-			st.fail(err)
+			st.markFailed(err)
 		}
 		st.openCh <- err
 	})
@@ -1206,6 +1206,10 @@ func (st *Stream) fail(err error) {
 	st.openOnce.Do(func() {
 		st.openCh <- err
 	})
+	st.markFailed(err)
+}
+
+func (st *Stream) markFailed(err error) {
 	st.mu.Lock()
 	if st.readErr == nil {
 		st.readErr = err

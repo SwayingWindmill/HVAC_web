@@ -1095,3 +1095,81 @@ func TestTunnelHubWithAllowedTargetPortsAndSSHLoopback(t *testing.T) {
 		t.Fatalf("expected SSH port 22 stream audit, reject 80 audit, and session close bytes; open=%v reject80=%v close=%v", seenSSHOpen, seenForbiddenReject, seenSessionClose)
 	}
 }
+
+func TestTunnelFrameOpenErrDoesNotDeadlockSession(t *testing.T) {
+	const gatewayID = "0193f000-2000-7000-8000-000000000302"
+	hub := NewHub(
+		WithDefaultGateway(gatewayID),
+		WithAllowedTargetPorts(AllowedTargetPort, SSHTargetPort),
+		WithOpenTimeout(2*time.Second),
+		WithPingInterval(time.Minute),
+	)
+	defer hub.Close()
+
+	sshMockLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sshMockLn.Close() })
+	go func() {
+		for {
+			c, err := sshMockLn.Accept()
+			if err != nil {
+				return
+			}
+			go func(conn net.Conn) {
+				defer func() { _ = conn.Close() }()
+				_, _ = io.WriteString(conn, "pong")
+			}(c)
+		}
+	}()
+
+	hubConn, edgeConn := net.Pipe()
+	session := hub.registerSession(gatewayID, hubConn)
+	session.markOpened(context.Background())
+
+	sessionDone := make(chan struct{})
+	go func() {
+		session.run(context.Background())
+		close(sessionDone)
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	edgeErrCh := make(chan error, 1)
+	go func() {
+		edgeErrCh <- RunEdgeConnWithAllowedPorts(
+			ctx,
+			edgeConn,
+			func(dialCtx context.Context, port uint16) (net.Conn, error) {
+				if port != SSHTargetPort {
+					return nil, ErrPortForbidden
+				}
+				return (&net.Dialer{Timeout: 2 * time.Second}).DialContext(dialCtx, "tcp", sshMockLn.Addr().String())
+			},
+			time.Minute,
+			SSHTargetPort,
+		)
+	}()
+
+	// Port 1880 is allowed by Hub but rejected by edge FrameOpenErr: must return promptly, never deadlock.
+	if _, err := hub.OpenStream(context.Background(), gatewayID, AllowedTargetPort); err == nil || !strings.Contains(err.Error(), ErrPortForbidden.Error()) {
+		t.Fatalf("expected FrameOpenErr containing ErrPortForbidden, got %v", err)
+	}
+
+	// Subsequent OpenStream(22) must succeed on the same session, proving readLoop stayed alive.
+	stream, err := hub.OpenStream(context.Background(), gatewayID, SSHTargetPort)
+	if err != nil {
+		t.Fatalf("subsequent OpenStream(22) failed after FrameOpenErr: %v", err)
+	}
+	got, err := io.ReadAll(stream)
+	_ = stream.Close()
+	if err != nil || string(got) != "pong" {
+		t.Fatalf("stream response = %q, err=%v", string(got), err)
+	}
+
+	cancel()
+	hub.CloseGateway(gatewayID)
+	<-edgeErrCh
+	<-sessionDone
+}
