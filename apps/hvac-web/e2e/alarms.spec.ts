@@ -113,6 +113,20 @@ test('正在生效的规则 lists each rule with its devices, conditions and sev
   await expect(rule('网关上报中断')).toContainText('3 台设备的 5 个读数中任一个有新读数');
   // Operators see names, never the identifiers or enums behind them.
   await expect(table).not.toContainText(/[0-9a-f]{8}-[0-9a-f]{4}-|RUNNING|NO_DATA|MAJOR|SLOPE|EXPRESSION|ALL_ACTIVE|WORK_ORDER|PROTECTION_COMMAND/);
+  await expect(page.getByRole('table', { name: '规则动作投递死信' })).toHaveCount(0);
+  await expect(page.getByRole('region', { name: '分级路由与升级路径' })).toHaveCount(0);
+
+  const appearance = page.getByRole('radiogroup', { name: '外观' });
+  await appearance.getByRole('radio', { name: '浅色' }).click();
+  await expect.poll(() => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme)).toBe('light');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+
+  await appearance.getByRole('radio', { name: '深色' }).click();
+  await expect.poll(() => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme)).toBe('dark');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+
+  await page.getByRole('link', { name: '路由与动作死信' }).click();
+  await expect(page).toHaveURL(/\/system\?.*tab=governance.*section=alarms/);
 
   const dlqTable = page.getByRole('table', { name: '规则动作投递死信' });
   await expect(dlqTable).toContainText('回调外部接口');
@@ -131,15 +145,6 @@ test('正在生效的规则 lists each rule with its devices, conditions and sev
   await page.getByRole('button', { name: '热重载路由配置' }).click();
   await expect(page.getByText('站点通知路由配置已热更新并生效')).toBeVisible();
   await expect(page.getByText('1 次')).toBeVisible();
-
-  const appearance = page.getByRole('radiogroup', { name: '外观' });
-  await appearance.getByRole('radio', { name: '浅色' }).click();
-  await expect.poll(() => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme)).toBe('light');
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
-
-  await appearance.getByRole('radio', { name: '深色' }).click();
-  await expect.poll(() => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme)).toBe('dark');
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });
 
 test('模拟试算 dry-runs a multi-step sampling sequence without mutating alarms', async ({ page, gateway }) => {

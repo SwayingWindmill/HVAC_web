@@ -18,6 +18,7 @@ import { roleLabels } from '@/lib/role-labels';
 import { cn } from '@/lib/utils';
 import { AssistantUsage } from './assistant-usage/AssistantUsage';
 import { AuditLog } from './audit/AuditLog';
+import { EngineeringGovernanceTab } from './governance/EngineeringGovernanceTab';
 import { RegistryAdministration } from './registry-admin/RegistryAdministration';
 import type { RegisterUnsavedDraft } from './unsaved-drafts';
 import { UserAdministration } from './users/UserAdministration';
@@ -209,7 +210,7 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: { readonly 
         <Figure label="站点目录" value={<StatusBadge tone={snapshot.sites?.state === 'available' ? 'success' : 'warning'}>{directoryState}</StatusBadge>}>授权站点由身份服务确定</Figure>
       </Panel>
       <Panel aria-label="站点">
-        <PanelHeader title="站点" caption="名称、时区、建筑面积和气候区在「设备与点位登记」里维护" />
+        <PanelHeader title="站点" />
         {sites.length === 0 ? <p className="px-5 py-10 text-center text-sm text-muted-foreground">当前组织没有授权站点</p> : (
           <Table aria-label="授权站点">
             <TableHeader>
@@ -255,21 +256,54 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: { readonly 
   );
 
   const auditViewer = { subject: principal.principal.subject, displayName: principal.principal.displayName };
-  const items = [
+  const canManageGovernance = capabilities.some(
+    (cap) => cap === 'schedule.manage' || cap === 'iam.admin' || cap === 'audit.read' || cap === 'device.write',
+  );
+  const governanceSection = search.section ?? 'control';
+  const items: readonly {
+    readonly key: 'overview' | 'users' | 'site' | 'registry' | 'audit' | 'assistant' | 'governance';
+    readonly label: string;
+    readonly children: ReactNode;
+  }[] = [
     { key: 'overview', label: '系统概览', children: overview },
     { key: 'users', label: '用户与角色', children: users },
     { key: 'site', label: '站点与组织', children: siteTab },
     { key: 'registry', label: '设备与点位登记', children: <RegistryAdministration capabilities={capabilities} csrfToken={principal.session.csrfToken} registerUnsavedDraft={registerUnsavedDraft} /> },
     { key: 'audit', label: '操作记录', children: <AuditLog viewer={auditViewer} canRead={capabilities.includes('audit.read')} active={activeTab === 'audit'} /> },
     { key: 'assistant', label: 'AI 助手', children: <AssistantUsage sites={sites} canRead={capabilities.includes('audit.read')} active={activeTab === 'assistant'} /> },
-  ] as const;
+    ...(canManageGovernance
+      ? [{
+          key: 'governance' as const,
+          label: '工程治理',
+          children: (
+            <EngineeringGovernanceTab
+              sites={sites}
+              selectedSiteId={search.site}
+              section={governanceSection}
+              active={activeTab === 'governance'}
+              canManage={capabilities.includes('schedule.manage')}
+              csrfToken={principal.session.csrfToken}
+              onSiteChange={(siteId) => void navigate({ search: (previous) => ({ ...previous, tab: 'governance', site: siteId }), replace: true })}
+              onSectionChange={(section) => void navigate({
+                search: (previous) => ({ ...previous, tab: 'governance', section: section === 'control' ? undefined : section }),
+                replace: true,
+              })}
+            />
+          ),
+        }]
+      : []),
+  ];
   const normalizedActiveTab = items.some((item) => item.key === activeTab) ? activeTab : 'overview';
   function setTab(key: string) {
     const matched = items.find((item) => item.key === key);
     if (!matched) return;
     const nextTab = matched.key === 'overview' ? undefined : matched.key;
     void navigate({
-      search: (previous) => ({ ...previous, tab: nextTab }),
+      search: (previous) => ({
+        ...previous,
+        tab: nextTab,
+        ...(matched.key === 'governance' ? {} : { site: undefined, section: undefined }),
+      }),
       replace: true,
     });
   }

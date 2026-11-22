@@ -28,6 +28,7 @@ import { useScope } from '@/hooks/use-scope';
 import { cn } from '@/lib/utils';
 import {
   APP_NAVIGATION_CONFIG,
+  filterNavigationGroups,
   isNavActive,
   isSinglePageGroup,
   navCountQueryFlags,
@@ -108,13 +109,13 @@ function SinglePageItem({ group, count, currentPath, link }: {
 }) {
   const item = group.items[0];
   const active = isNavActive(item.path, currentPath);
-  const Icon = group.icon;
+  const Icon = item.icon;
   return (
     <SidebarMenuItem>
-      <SidebarMenuButton asChild isActive={active} tooltip={group.label}>
+      <SidebarMenuButton asChild isActive={active} tooltip={item.title}>
         <a {...link(item)} aria-current={active ? 'page' : undefined}>
           <Icon aria-hidden="true" />
-          <span>{group.label}</span>
+          <span>{item.title}</span>
         </a>
       </SidebarMenuButton>
       {count ? <CountBadge count={count} tone={countBadgeTone(item.id)} /> : null}
@@ -241,54 +242,65 @@ export function AppSidebar({ className, onNavigate }: AppSidebarProps) {
   const currentPath = location.pathname;
   const { currentScope } = useScope();
   const snapshot = useShellSnapshot();
-  const counts = useNavCounts(currentScope?.siteId, snapshot.principal?.authorization.capabilities);
+  const capabilities = snapshot.principal?.authorization.capabilities;
+  const counts = useNavCounts(currentScope?.siteId, capabilities);
   const link = useLink(onNavigate);
-  const groups = (section: AppNavigationGroup['section']) => APP_NAVIGATION_CONFIG.filter((group) => group.section === section);
+  const visibleGroups = filterNavigationGroups(APP_NAVIGATION_CONFIG, capabilities, { sidebarOnly: true });
+  const groups = (section: AppNavigationGroup['section']) => visibleGroups.filter((group) => group.section === section);
+  const mainGroups = groups('main');
+  const controlGroups = groups('control');
+  const platformItems = groups('platform').flatMap((group) => group.items);
 
   return (
     <Sidebar collapsible="icon" className={className}>
       <SidebarContent className="gap-0 px-2.5 pt-3.5">
-        <SidebarGroup className="p-0">
-          <SidebarMenu className="gap-0.5">
-            {groups('main').map((group) =>
-              isSinglePageGroup(group)
-                ? <SinglePageItem key={group.id} group={group} count={counts[group.items[0].id]} currentPath={currentPath} link={link} />
-                : <GroupItem key={group.id} group={group} counts={counts} currentPath={currentPath} link={link} />,
-            )}
-          </SidebarMenu>
-        </SidebarGroup>
-        <SidebarSeparator className="mx-1.5 my-3 bg-divider" />
-        <SidebarGroup className="p-0">
-          <SidebarMenu>
-            {groups('control').map((group) => (
-              <SinglePageItem
-                key={group.id}
-                group={group}
-                count={counts[group.items[0].id]}
-                currentPath={currentPath}
-                link={link}
-              />
-            ))}
-          </SidebarMenu>
-        </SidebarGroup>
+        {mainGroups.length > 0 ? (
+          <SidebarGroup className="p-0">
+            <SidebarMenu className="gap-0.5">
+              {mainGroups.map((group) =>
+                isSinglePageGroup(group)
+                  ? <SinglePageItem key={group.id} group={group} count={counts[group.items[0].id]} currentPath={currentPath} link={link} />
+                  : <GroupItem key={group.id} group={group} counts={counts} currentPath={currentPath} link={link} />,
+              )}
+            </SidebarMenu>
+          </SidebarGroup>
+        ) : null}
+        {mainGroups.length > 0 && controlGroups.length > 0 ? <SidebarSeparator className="mx-1.5 my-3 bg-divider" /> : null}
+        {controlGroups.length > 0 ? (
+          <SidebarGroup className="p-0">
+            <SidebarMenu>
+              {controlGroups.map((group) => (
+                <SinglePageItem
+                  key={group.id}
+                  group={group}
+                  count={counts[group.items[0].id]}
+                  currentPath={currentPath}
+                  link={link}
+                />
+              ))}
+            </SidebarMenu>
+          </SidebarGroup>
+        ) : null}
       </SidebarContent>
       <SidebarFooter className="gap-1 px-2.5 pb-2.5">
-        <SidebarMenu className="gap-0.5">
-          {groups('platform').flatMap((group) => group.items.filter((item) => item.sidebar !== false)).map((item) => {
-            const active = isNavActive(item.path, currentPath);
-            const Icon = item.icon;
-            return (
-              <SidebarMenuItem key={item.id}>
-                <SidebarMenuButton asChild isActive={active} tooltip={item.title} className={cn(!active && 'h-[30px] font-normal text-muted-foreground')}>
-                  <a {...link(item)} aria-current={active ? 'page' : undefined}>
-                    <Icon aria-hidden="true" className="size-[15px]!" />
-                    <span>{item.title}</span>
-                  </a>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            );
-          })}
-        </SidebarMenu>
+        {platformItems.length > 0 ? (
+          <SidebarMenu className="gap-0.5">
+            {platformItems.map((item) => {
+              const active = isNavActive(item.path, currentPath);
+              const Icon = item.icon;
+              return (
+                <SidebarMenuItem key={item.id}>
+                  <SidebarMenuButton asChild isActive={active} tooltip={item.title} className={cn(!active && 'h-[30px] font-normal text-muted-foreground')}>
+                    <a {...link(item)} aria-current={active ? 'page' : undefined}>
+                      <Icon aria-hidden="true" className="size-[15px]!" />
+                      <span>{item.title}</span>
+                    </a>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              );
+            })}
+          </SidebarMenu>
+        ) : null}
         <SidebarControls />
       </SidebarFooter>
     </Sidebar>

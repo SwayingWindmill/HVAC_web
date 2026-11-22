@@ -3,7 +3,7 @@ import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { getRouteApi, useNavigate } from '@tanstack/react-router';
 import { CircleCheck, RefreshCw, Search, X } from 'lucide-react';
 import { PageHeader } from '@/blocks/page-header';
-import { Panel } from '@/blocks/panel';
+import { Panel, PanelLink } from '@/blocks/panel';
 import { Main } from '@/components/layout/Main';
 import { SeverityMark } from '@/components/severity-mark';
 import { Button } from '@/components/ui/button';
@@ -51,9 +51,7 @@ import {
 import { useAlarmActions } from '../use-alarm-actions';
 import { AlarmDetailPane } from './AlarmDetailPane';
 import { AlarmGroupHeader, AlarmListRow } from './AlarmListRow';
-import { AlarmRoutingPanel } from './AlarmRoutingPanel';
 import { AlarmRulesTable } from './AlarmRulesTable';
-import { RuleActionDeadLettersPanel } from './RuleActionDeadLettersPanel';
 
 const siteRoute = getRouteApi('/_app/_site');
 const pageRoute = getRouteApi('/_app/_site/operations/alarms');
@@ -280,39 +278,32 @@ export function AlarmsWorkspace() {
       />
 
       <Tabs value={showingRules ? 'rules' : 'alarms'} className="shrink-0" onValueChange={(value) => setSearch({ tab: value === 'rules' ? 'rules' : undefined })}>
-        <TabsList variant="line" className="h-9 w-full justify-start gap-5 rounded-none border-b p-0">
-          <TabsTrigger value="alarms" className="h-9 flex-none gap-1.5 px-0 after:bottom-[-1px]!">告警记录</TabsTrigger>
-          <TabsTrigger value="rules" className="h-9 flex-none gap-1.5 px-0 after:bottom-[-1px]!">
-            正在生效的规则
-            {rules.data ? <span className="font-mono text-[11px] text-subtle-foreground">{rules.data.items.length}</span> : null}
-          </TabsTrigger>
-        </TabsList>
+        <div className="flex items-center justify-between gap-4 border-b">
+          <TabsList variant="line" className="h-9 justify-start gap-5 rounded-none border-0 p-0">
+            <TabsTrigger value="alarms" className="h-9 flex-none gap-1.5 px-0 after:bottom-[-1px]!">告警记录</TabsTrigger>
+            <TabsTrigger value="rules" className="h-9 flex-none gap-1.5 px-0 after:bottom-[-1px]!">
+              正在生效的规则
+              {rules.data ? <span className="font-mono text-[11px] text-subtle-foreground">{rules.data.items.length}</span> : null}
+            </TabsTrigger>
+          </TabsList>
+          {showingRules && canManage ? (
+            <PanelLink to="/system" search={{ tab: 'governance', site: site.id, section: 'alarms' }}>
+              路由与动作死信
+            </PanelLink>
+          ) : null}
+        </div>
       </Tabs>
 
       {showingRules ? (
-        <div className="flex flex-col gap-6">
-          <AlarmRulesTable
-            key={site.id}
-            siteId={site.id}
-            canManage={canManage}
-            canReadGatewayShadow={canReadGatewayShadow}
-            canManageGatewayShadow={canManageGatewayShadow}
-            csrfToken={principal.session.csrfToken}
-            timeZone={site.timezone}
-          />
-          <RuleActionDeadLettersPanel
-            siteId={site.id}
-            canManage={canManage}
-            csrfToken={principal.session.csrfToken}
-            timeZone={site.timezone}
-          />
-          <AlarmRoutingPanel
-            siteId={site.id}
-            canManage={canManage}
-            csrfToken={principal.session.csrfToken}
-            timeZone={site.timezone}
-          />
-        </div>
+        <AlarmRulesTable
+          key={site.id}
+          siteId={site.id}
+          canManage={canManage}
+          canReadGatewayShadow={canReadGatewayShadow}
+          canManageGatewayShadow={canManageGatewayShadow}
+          csrfToken={principal.session.csrfToken}
+          timeZone={site.timezone}
+        />
       ) : (
         <>
         <AlarmSummary

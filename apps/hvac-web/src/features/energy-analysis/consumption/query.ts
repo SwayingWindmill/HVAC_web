@@ -1,8 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { getRouteApi } from '@tanstack/react-router';
 import { createPlatformGatewayClient, type EnergySeriesQuery } from '../../../api/generated/platformGateway.gen';
-import { siteCounterAuditQuery } from '@/features/billing/query';
-import { useNow } from '@/hooks/use-now';
 import {
   comparePeriods,
   hourlyHeatmap,
@@ -105,32 +103,4 @@ export function useHourlyHeatmap(days: number) {
     refetchInterval: 5 * 60_000,
     retry: false,
   });
-}
-
-/** Reads cumulative meter counter anomaly & transition cleaning audit events for the selected period. */
-export function useCounterAnomalyAudit(
-  period: EnergyPeriod,
-  options: {
-    readonly anomaliesOnly?: boolean;
-    readonly limit?: number;
-    readonly enabled?: boolean;
-  } = {},
-) {
-  const { site } = useEnergyReader();
-  const nowMs = useNow(60_000);
-  const bucketNow = new Date(Math.floor(nowMs / 60_000) * 60_000);
-  const { from } = periodWindow(period, bucketNow, site.timezone);
-
-  return useQuery(
-    siteCounterAuditQuery(
-      site.id,
-      {
-        from: from.toISOString(),
-        to: bucketNow.toISOString(),
-        anomaliesOnly: options.anomaliesOnly ?? true,
-        limit: options.limit ?? 200,
-      },
-      options.enabled ?? true,
-    ),
-  );
 }

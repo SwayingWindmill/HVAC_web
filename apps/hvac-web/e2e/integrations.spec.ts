@@ -9,6 +9,9 @@ const HVAC_METER_DEVICE_ID = '018f3e00-4000-7000-8000-000000000005';
 const recordedBreakdown = JSON.parse(
   readFileSync(new URL('./fixtures/energy-breakdown.json', import.meta.url), 'utf8'),
 ).response;
+const recordedAt = JSON.parse(
+  readFileSync(new URL('./fixtures/energy-series.json', import.meta.url), 'utf8'),
+).electricity.metadata.dataWatermark;
 
 function refreshSnapshotsWithCalibrationSignals(
   snapshots: Record<string, any>,
@@ -281,8 +284,51 @@ test('integrations workspace degrades cleanly in Chinese for analytics denial, u
   await page.goto(`/settings/integrations?site=${SITE_ID}&view=meters`);
   await expect(page.getByRole('heading', { name: '当前账号无权读取表计配置' })).toBeVisible();
 
+  await page.getByRole('tab', { name: '异常清洗留痕' }).click();
+  await expect(
+    page.getByRole('heading', { name: '当前账号无权读取表计清洗记录' }),
+  ).toBeVisible();
+
   await page.getByRole('tab', { name: '传感器校准' }).click();
   await expect(
     page.getByRole('heading', { name: '当前账号无权读取传感器与点位配置' }),
   ).toBeVisible();
+});
+
+test('counter anomaly audit view on Integrations shows cleaning summary, anomalies by default, and reveals normal samples when toggled', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.clock.setFixedTime(new Date(recordedAt));
+  await page.goto(`/settings/integrations?site=${SITE_ID}&view=anomalies`);
+
+  const auditRegion = page.getByTestId('counter-anomaly-audit');
+  await expect(auditRegion).toBeVisible();
+  await expect(auditRegion).toContainText('5');
+  await expect(auditRegion).toContainText('4');
+
+  const table = auditRegion.getByRole('table', { name: '表计异常清洗明细' });
+  await expect(table).toBeVisible();
+
+  const dataRows = table.locator('tbody').getByRole('row');
+  await expect(dataRows).toHaveCount(4);
+
+  const hasOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > window.innerWidth,
+  );
+  expect(hasOverflow).toBe(false);
+  await expect(table).toContainText('零值通信干扰');
+  await expect(table).toContainText('单步飞值尖峰');
+  await expect(table).toContainText('换表归零');
+  await expect(table).toContainText('满量程翻转');
+  await expect(table).not.toContainText('正常递进');
+
+  const anomaliesToggle = auditRegion
+    .getByRole('switch', { name: /仅看异常/ })
+    .or(auditRegion.getByRole('checkbox', { name: /仅看异常/ }))
+    .or(auditRegion.getByRole('button', { name: /仅看异常/ }));
+  await anomaliesToggle.click();
+
+  await expect(dataRows).toHaveCount(5);
+  await expect(table).toContainText('正常递进');
 });

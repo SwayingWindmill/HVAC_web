@@ -124,45 +124,15 @@ test('without a Tariff on its grid import, the Site energy is not priced', async
   await expect(page.getByRole('region', { name: '分时电费' })).toContainText('站点还没有配置电价');
 });
 
-test('counter anomaly audit tab shows cleaning summary, anomalies by default, and reveals normal samples when toggled', async ({ page }) => {
-  await page.setViewportSize({ width: 1440, height: 900 });
+test('consumption detail tabs stay focused on operator energy views without counter cleaning audit', async ({ page }) => {
   await page.clock.setFixedTime(new Date(recordedAt));
   await page.goto(`/energy-analysis/consumption?site=${SITE_ID}`);
 
   const details = page.getByRole('region', { name: '能耗明细' });
-  await details.getByRole('tab', { name: '异常清洗留痕' }).click();
-
-  const auditRegion = page.getByTestId('counter-anomaly-audit');
-  await expect(auditRegion).toBeVisible();
-  await expect(details.getByRole('region', { name: '异常清洗留痕' })).toBeVisible();
-
-  await expect(auditRegion).toContainText('5');
-  await expect(auditRegion).toContainText('4');
-
-  const table = auditRegion.getByRole('table', { name: '表计异常清洗明细' });
-  await expect(table).toBeVisible();
-
-  const dataRows = table.locator('tbody').getByRole('row');
-  await expect(dataRows).toHaveCount(4);
-
-  const hasOverflow = await page.evaluate(
-    () => document.documentElement.scrollWidth > window.innerWidth,
-  );
-  expect(hasOverflow).toBe(false);
-  await expect(table).toContainText('零值通信干扰');
-  await expect(table).toContainText('单步飞值尖峰');
-  await expect(table).toContainText('换表归零');
-  await expect(table).toContainText('满量程翻转');
-  await expect(table).not.toContainText('正常递进');
-
-  const anomaliesToggle = auditRegion
-    .getByRole('switch', { name: /仅看异常/ })
-    .or(auditRegion.getByRole('checkbox', { name: /仅看异常/ }))
-    .or(auditRegion.getByRole('button', { name: /仅看异常/ }));
-  await anomaliesToggle.click();
-
-  await expect(dataRows).toHaveCount(5);
-  await expect(table).toContainText('正常递进');
+  await expect(details.getByRole('tab', { name: '分项趋势' })).toBeVisible();
+  await expect(details.getByRole('tab', { name: '分时电费' })).toBeVisible();
+  await expect(details.getByRole('tab', { name: '逐时明细' })).toBeVisible();
+  await expect(details.getByRole('tab', { name: '异常清洗留痕' })).toHaveCount(0);
 });
 
 test('empty period renders energy flow empty state without SVG NaN console errors', async ({ page, gateway }) => {

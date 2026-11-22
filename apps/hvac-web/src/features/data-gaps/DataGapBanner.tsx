@@ -62,12 +62,22 @@ export function DataGapBanner({
         <TriangleAlert className="size-3.5 shrink-0 text-warning-text" aria-hidden="true" />
         <span className="tabular-nums">{summary.message}</span>
       </div>
-      <PanelLink
-        to="/settings/integrations"
-        search={{ site: siteId, view: 'meters' }}
-      >
-        电表数据核对
-      </PanelLink>
+      <div className="flex shrink-0 items-center gap-3">
+        {context === 'consumption' ? (
+          <PanelLink
+            to="/settings/integrations"
+            search={{ site: siteId, view: 'anomalies' }}
+          >
+            清洗留痕
+          </PanelLink>
+        ) : null}
+        <PanelLink
+          to="/settings/integrations"
+          search={{ site: siteId, view: 'meters' }}
+        >
+          电表数据核对
+        </PanelLink>
+      </div>
     </div>
   );
 }

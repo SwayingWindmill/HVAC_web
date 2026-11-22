@@ -458,4 +458,28 @@ test('shell sidebar and header skip alarm and work-order queries when capabiliti
   await expect(page.getByTestId('real-protected-shell')).toBeVisible();
   await page.waitForTimeout(400);
   expect(alarmOrWorkOrderRequests).toEqual([]);
+
+  const sidebar = page.locator('[data-sidebar="sidebar"]');
+  await expect(sidebar.getByRole('link', { name: '故障诊断', exact: true })).toBeVisible();
+  await expect(sidebar.getByRole('link', { name: '告警', exact: true })).toHaveCount(0);
+  await expect(sidebar.getByRole('link', { name: '工单', exact: true })).toHaveCount(0);
+
+  await page.keyboard.press('Control+k');
+  const commandDialog = page.getByRole('dialog', { name: '搜索' });
+  await expect(commandDialog).toBeVisible();
+  await expect(commandDialog.getByRole('option', { name: /故障诊断/ })).toBeVisible();
+  await expect(commandDialog.getByRole('option', { name: /告警/ })).toHaveCount(0);
+  await expect(commandDialog.getByRole('option', { name: /工单/ })).toHaveCount(0);
+  await page.keyboard.press('Escape');
+
+  gateway.principalOverride = {
+    ...principal,
+    authorization: {
+      ...principal.authorization,
+      capabilities: ['site.list', 'site.read'],
+    },
+  };
+  await page.reload();
+  await expect(sidebar.getByRole('link', { name: '系统管理', exact: true })).toBeVisible();
+  await expect(sidebar.getByRole('link', { name: '集成管理', exact: true })).toHaveCount(0);
 });

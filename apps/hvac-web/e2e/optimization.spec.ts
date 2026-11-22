@@ -203,7 +203,7 @@ test('shadow evaluation is lazy-loaded only on the analysis tab and renders non-
   await expect.poll(() => gateway.shadowReads).toBe(1);
 
   const analysisPanel = page.getByRole('tabpanel', { name: '模型与负荷分析' });
-  await expect(analysisPanel.getByText('影子对照 · 只记录不发布，不作为控制指令下发')).toBeVisible();
+  await expect(analysisPanel.getByText('只记录不发布')).toBeVisible();
   await expect(analysisPanel.getByRole('button', { name: '按建议下发' })).toBeHidden();
   await expect(analysisPanel.getByRole('button', { name: '创建人工调温工单' })).toBeHidden();
 
@@ -827,7 +827,7 @@ test('governance summary lazy-loads on analysis tab without recommendation, show
   await expect.poll(() => gateway.governanceReads).toBe(1);
 
   const analysisPanel = page.getByRole('tabpanel', { name: '模型与负荷分析' });
-  const govPanel = analysisPanel.getByRole('region', { name: '策略路由与运行治理' });
+  const govPanel = analysisPanel.getByRole('region', { name: '运行效果对照' });
   await expect(govPanel).toBeVisible();
   await expect(govPanel).toContainText('回路灰度策略');
   await expect(govPanel).toContainText('冷机 COP 拟合策略');
@@ -837,6 +837,9 @@ test('governance summary lazy-loads on analysis tab without recommendation, show
   await expect(govPanel).not.toContainText('SITE_LOOP_CANARY');
   await expect(govPanel).not.toContainText('builtin://chiller-cop-model');
   await expect(govPanel).not.toContainText('01910000-0000-7000-8000-00000000000b');
+  await expect(govPanel.getByRole('button', { name: '管理灰度路由' })).toHaveCount(0);
+  await expect(govPanel.getByRole('button', { name: '查看负样本明细' })).toHaveCount(0);
+  await expect(analysisPanel.getByRole('region', { name: '安全护栏负样本飞轮' })).toHaveCount(0);
 
   const tickRegion = govPanel.getByRole('region', { name: '近 14 天运行周期分布' });
   await expect(tickRegion).toContainText('AI 闭环周期');
@@ -847,14 +850,6 @@ test('governance summary lazy-loads on analysis tab without recommendation, show
   await expect(tickRegion).toContainText('40');
   await expect(tickRegion).toContainText('人工接管周期');
   await expect(tickRegion).toContainText('4');
-
-  const flywheelRegion = govPanel.getByRole('region', { name: '安全护栏负样本飞轮' });
-  await expect(flywheelRegion).toContainText('负样本 9');
-  await expect(flywheelRegion).toContainText('护栏限幅修正');
-  await expect(flywheelRegion).toContainText('物理安全拦截');
-  await expect(flywheelRegion).toContainText('人工接管覆写');
-  await expect(flywheelRegion).toContainText('跟踪偏差回退');
-  await expect(flywheelRegion).toContainText('监控越界回退');
 
   const copTable = govPanel.getByRole('table', { name: '同湿球与冷负荷分箱 COP 对照' });
   await expect(copTable).toContainText('22.0 至 24.0 °C');
@@ -885,20 +880,54 @@ test('governance summary lazy-loads on analysis tab without recommendation, show
     },
   };
   await page.reload();
-  const reloadedGov = page.getByRole('region', { name: '策略路由与运行治理' });
+  const reloadedGov = page.getByRole('region', { name: '运行效果对照' });
   await expect(reloadedGov).toContainText('站点部署绑定');
   await expect(reloadedGov).toContainText('外部协同优化服务');
   await expect(reloadedGov).not.toContainText('https://external-optimizer.example/solve');
   await expect(reloadedGov).toContainText('尚无满足同湿球与同冷负荷分箱条件的对照周期，积累闭环与基准周期后将自动展示。');
 });
 
-test('canary bindings dialog manages loop routing and negative samples drawer inspects & exports flywheel', async ({ page, gateway }) => {
-  void gateway;
-  await page.goto(`/energy-analysis/optimization?site=${SITE_ID}`);
-  await page.getByRole('tab', { name: '模型与负荷分析' }).click();
+test('engineering governance hosts canary routing, flywheel stats, and negative samples drawer cleanly separated by role', async ({ page, gateway }) => {
+  gateway.optimizationGovernanceSummary = {
+    tenantId: principal.context.tenantId,
+    siteId: SITE_ID,
+    windowDays: 14,
+    generatedAt: '2026-10-12T06:00:00Z',
+    activeSolver: {
+      servingRef: 'builtin://chiller-cop-model',
+      source: 'SITE_LOOP_CANARY',
+      loopKey: 'chilled_water_supply_temp',
+      deploymentRevisionId: '01910000-0000-7000-8000-00000000000b',
+    },
+    tickCounts: { aiClosedLoop: 32, aiShadow: 18, ruleBaseline: 40, manualOverride: 4 },
+    copComparison: {
+      matchedBinCount: 0, matchedAiSamples: 0, matchedBaselineSamples: 0,
+      weightedBaselineCOP: null, weightedAiCOP: null, weightedCopUpliftPct: null, totalEstimatedSavedKWh: 0, cells: [],
+    },
+    flywheel: {
+      totalSamples: 9,
+      guardrailClamped: 3,
+      guardrailVetoed: 2,
+      manualOverride: 1,
+      monitorTripped: 1,
+      trackingDeviation: 2,
+    },
+  };
 
-  const govPanel = page.getByRole('region', { name: '策略路由与运行治理' });
+  await page.goto(`/energy-analysis/optimization?site=${SITE_ID}&view=analysis`);
+  const effectPanel = page.getByRole('region', { name: '运行效果对照' });
+  await effectPanel.getByRole('link', { name: '灰度与负样本' }).click();
+  await expect(page).toHaveURL(/\/system\?.*tab=governance.*section=optimization/);
+
+  const govPanel = page.getByRole('region', { name: '策略灰度与负样本' });
   await expect(govPanel).toBeVisible();
+  const flywheelRegion = govPanel.getByRole('region', { name: '安全护栏负样本飞轮' });
+  await expect(flywheelRegion).toContainText('负样本 9');
+  await expect(flywheelRegion).toContainText('护栏限幅修正');
+  await expect(flywheelRegion).toContainText('物理安全拦截');
+  await expect(flywheelRegion).toContainText('人工接管覆写');
+  await expect(flywheelRegion).toContainText('跟踪偏差回退');
+  await expect(flywheelRegion).toContainText('监控越界回退');
 
   // 1. Open CanaryBindingsDialog and test allowlist validation + CRUD.
   await govPanel.getByRole('button', { name: '管理灰度路由' }).click();
@@ -950,6 +979,19 @@ test('canary bindings dialog manages loop routing and negative samples drawer in
   await drawer.getByRole('button', { name: '导出 JSONL' }).click();
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toBe('negative-samples-14d.jsonl');
+
+  // 3. Non-manager principal does not see governance entry link or governance tab.
+  gateway.principalOverride = {
+    ...principal,
+    authorization: {
+      ...principal.authorization,
+      capabilities: principal.authorization.capabilities.filter((cap: string) => cap !== 'schedule.manage'),
+    },
+  };
+  await page.goto(`/energy-analysis/optimization?site=${SITE_ID}&view=analysis`);
+  await expect(page.getByRole('region', { name: '运行效果对照' }).getByRole('link', { name: '灰度与负样本' })).toHaveCount(0);
+  await page.goto('/system');
+  await expect(page.getByRole('tab', { name: '工程治理' })).toHaveCount(0);
 });
 
 test('multi-loop auto-control lease validates VFD and fan bounds conditionally and renders Hz/% execution monitors', async ({ page, gateway }) => {
