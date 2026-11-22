@@ -2,8 +2,10 @@ package edgedaemon
 
 import (
 	"context"
+	"io"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -127,6 +129,32 @@ func TestDaemonCycleHealthEndpointSpoolAndShadowUpdate(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		cancel()
 		t.Fatalf("/healthz status = %d, want 200", resp.StatusCode)
+	}
+
+	var readyStatus int
+	var readyBody string
+	deadline := time.Now().Add(2 * time.Second)
+	readyTicker := time.NewTicker(10 * time.Millisecond)
+	defer readyTicker.Stop()
+	for {
+		rResp, rErr := http.Get("http://" + daemon.HealthAddr() + "/readyz")
+		if rErr == nil {
+			b, _ := io.ReadAll(rResp.Body)
+			_ = rResp.Body.Close()
+			readyStatus = rResp.StatusCode
+			readyBody = string(b)
+			if readyStatus == http.StatusOK {
+				break
+			}
+		}
+		if !time.Now().Before(deadline) {
+			break
+		}
+		<-readyTicker.C
+	}
+	if readyStatus != http.StatusOK || !strings.Contains(readyBody, "ok") {
+		cancel()
+		t.Fatalf("/readyz status=%d body=%q, want 200 ok", readyStatus, readyBody)
 	}
 
 	cycleRes, err := daemon.StepCycle(ctx)

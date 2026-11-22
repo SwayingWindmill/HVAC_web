@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/quanlaihe/hvac-web/cmd/edge-gateway/internal/edgedaemon"
@@ -45,6 +46,23 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if *validateConfig {
 		_, err := fmt.Fprintln(stdout, "config valid")
 		return err
+	}
+
+	if *healthCheckOnly {
+		tmpStateDir, err := os.MkdirTemp("", "edge-gateway-health-check-*")
+		if err != nil {
+			return err
+		}
+		defer func() { _ = os.RemoveAll(tmpStateDir) }()
+		// Pre-switch OTA probes share the live config.json, so isolate runtime
+		// state, sockets, and hardware access away from the running daemon.
+		cfg.StateDir = tmpStateDir
+		cfg.OTA.Dir = filepath.Join(tmpStateDir, "ota")
+		cfg.HealthListenAddr = ""
+		cfg.Tunnel.Enabled = false
+		cfg.MQTTBrokerURL = ""
+		cfg.SerialBuses = nil
+		cfg.Drivers = nil
 	}
 
 	daemonCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
