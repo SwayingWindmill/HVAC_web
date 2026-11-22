@@ -15,14 +15,19 @@ import (
 type ModbusFunctionCode uint8
 
 const (
+	ModbusFunctionReadCoils              ModbusFunctionCode = 1
+	ModbusFunctionReadDiscreteInputs     ModbusFunctionCode = 2
 	ModbusFunctionReadHoldingRegisters   ModbusFunctionCode = 3
 	ModbusFunctionReadInputRegisters     ModbusFunctionCode = 4
+	ModbusFunctionWriteSingleCoil        ModbusFunctionCode = 5
 	ModbusFunctionWriteSingleRegister    ModbusFunctionCode = 6
+	ModbusFunctionWriteMultipleCoils     ModbusFunctionCode = 15
 	ModbusFunctionWriteMultipleRegisters ModbusFunctionCode = 16
 
-	defaultModbusRTUSpeed    uint = 9600
-	defaultModbusRTUDataBits uint = 8
-	defaultModbusRTUStopBits uint = 1
+	defaultModbusRTUSpeed           uint          = 9600
+	defaultModbusRTUDataBits        uint          = 8
+	defaultModbusRTUStopBits        uint          = 1
+	defaultModbusRTUTurnaroundDelay time.Duration = 45 * time.Millisecond
 )
 
 type ModbusTCPBridgeConfig struct {
@@ -32,13 +37,15 @@ type ModbusTCPBridgeConfig struct {
 }
 
 type ModbusRTUBridgeConfig struct {
-	Endpoint string
-	Timeout  time.Duration
-	Retries  int
-	Speed    uint   // defaults to 9600 when 0
-	DataBits uint   // defaults to 8 when 0 (7 or 8)
-	Parity   string // "", "N", "E", "O" (defaults to "N")
-	StopBits uint   // defaults to 1 when 0 (1 or 2)
+	Endpoint               string
+	Timeout                time.Duration
+	Retries                int
+	Speed                  uint          // defaults to 9600 when 0
+	DataBits               uint          // defaults to 8 when 0 (7 or 8)
+	Parity                 string        // "", "N", "E", "O" (defaults to "N")
+	StopBits               uint          // defaults to 1 when 0 (1 or 2)
+	TurnaroundDelay        time.Duration // defaults to 45ms when 0 unless DisableTurnaroundDelay is set
+	DisableTurnaroundDelay bool
 }
 
 type ModbusReadTask struct {
@@ -57,23 +64,114 @@ type ModbusWriteTask struct {
 	Values       []uint16
 }
 
+type busWaiter struct {
+	ch chan struct{}
+}
+
+type priorityBusLock struct {
+	mu            sync.Mutex
+	held          bool
+	highWaiters   []*busWaiter
+	normalWaiters []*busWaiter
+}
+
+func (l *priorityBusLock) lock(ctx context.Context, highPriority bool) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	l.mu.Lock()
+	if !l.held {
+		l.held = true
+		l.mu.Unlock()
+		return nil
+	}
+	w := &busWaiter{ch: make(chan struct{}, 1)}
+	if highPriority {
+		l.highWaiters = append(l.highWaiters, w)
+	} else {
+		l.normalWaiters = append(l.normalWaiters, w)
+	}
+	l.mu.Unlock()
+
+	select {
+	case <-w.ch:
+		return nil
+	case <-ctx.Done():
+		l.mu.Lock()
+		var removed bool
+		if highPriority {
+			l.highWaiters, removed = removeBusWaiter(l.highWaiters, w)
+		} else {
+			l.normalWaiters, removed = removeBusWaiter(l.normalWaiters, w)
+		}
+		if removed {
+			l.mu.Unlock()
+			return ctx.Err()
+		}
+		l.unlockLocked()
+		l.mu.Unlock()
+		return ctx.Err()
+	}
+}
+
+func (l *priorityBusLock) unlock() {
+	l.mu.Lock()
+	l.unlockLocked()
+	l.mu.Unlock()
+}
+
+func (l *priorityBusLock) unlockLocked() {
+	if len(l.highWaiters) > 0 {
+		next := l.highWaiters[0]
+		l.highWaiters[0] = nil
+		l.highWaiters = l.highWaiters[1:]
+		next.ch <- struct{}{}
+		return
+	}
+	if len(l.normalWaiters) > 0 {
+		next := l.normalWaiters[0]
+		l.normalWaiters[0] = nil
+		l.normalWaiters = l.normalWaiters[1:]
+		next.ch <- struct{}{}
+		return
+	}
+	l.held = false
+}
+
+func removeBusWaiter(waiters []*busWaiter, target *busWaiter) ([]*busWaiter, bool) {
+	for i, w := range waiters {
+		if w == target {
+			copy(waiters[i:], waiters[i+1:])
+			waiters[len(waiters)-1] = nil
+			return waiters[:len(waiters)-1], true
+		}
+	}
+	return waiters, false
+}
+
 // ModbusTCPBridge owns one Modbus/TCP or Modbus/RTU master connection and serializes
-// raw register transactions across DeviceAdapters. DeviceAdapters retain register
-// meaning, scaling and semantic Channel conversion; the Bridge owns transport,
-// bounded request retries and reconnects after failed transactions.
+// raw register/coil transactions across DeviceAdapters with priority arbitration so
+// control writes preempt queued telemetry reads on shared RS-485 serial buses.
 type ModbusTCPBridge struct {
-	mu          sync.Mutex
-	scheme      string
-	label       string
-	endpoint    string
-	timeout     time.Duration
-	retries     int
-	rtuSpeed    uint
-	rtuDataBits uint
-	rtuParity   uint
-	rtuStopBits uint
-	client      *modbus.ModbusClient
-	open        bool
+	bus             priorityBusLock
+	scheme          string
+	label           string
+	endpoint        string
+	timeout         time.Duration
+	retries         int
+	rtuSpeed        uint
+	rtuDataBits     uint
+	rtuParity       uint
+	rtuStopBits     uint
+	turnaroundDelay time.Duration
+	lastTxEnd       time.Time
+	nowFn           func() time.Time
+	waitFn          func(context.Context, time.Duration) error
+	client          *modbus.ModbusClient
+	open            bool
 }
 
 func NewModbusTCPBridge(config ModbusTCPBridgeConfig) (*ModbusTCPBridge, error) {
@@ -126,16 +224,24 @@ func NewModbusRTUBridge(config ModbusRTUBridgeConfig) (*ModbusTCPBridge, error) 
 	if err != nil {
 		return nil, err
 	}
+	if config.TurnaroundDelay < 0 {
+		return nil, fmt.Errorf("modbus RTU turnaroundDelay %s cannot be negative", config.TurnaroundDelay)
+	}
+	turnaroundDelay := config.TurnaroundDelay
+	if turnaroundDelay == 0 && !config.DisableTurnaroundDelay {
+		turnaroundDelay = defaultModbusRTUTurnaroundDelay
+	}
 	return &ModbusTCPBridge{
-		scheme:      "rtu://",
-		label:       "modbus RTU",
-		endpoint:    endpoint,
-		timeout:     config.Timeout,
-		retries:     config.Retries,
-		rtuSpeed:    speed,
-		rtuDataBits: dataBits,
-		rtuParity:   parity,
-		rtuStopBits: stopBits,
+		scheme:          "rtu://",
+		label:           "modbus RTU",
+		endpoint:        endpoint,
+		timeout:         config.Timeout,
+		retries:         config.Retries,
+		rtuSpeed:        speed,
+		rtuDataBits:     dataBits,
+		rtuParity:       parity,
+		rtuStopBits:     stopBits,
+		turnaroundDelay: turnaroundDelay,
 	}, nil
 }
 
@@ -153,8 +259,8 @@ func parseModbusRTUParity(raw string) (uint, error) {
 }
 
 func (bridge *ModbusTCPBridge) Close() error {
-	bridge.mu.Lock()
-	defer bridge.mu.Unlock()
+	_ = bridge.bus.lock(context.Background(), true)
+	defer bridge.bus.unlock()
 	return bridge.closeLocked()
 }
 
@@ -162,18 +268,37 @@ func (bridge *ModbusTCPBridge) Read(ctx context.Context, task ModbusReadTask) ([
 	if err := validateModbusReadTask(task); err != nil {
 		return nil, err
 	}
-	bridge.mu.Lock()
-	defer bridge.mu.Unlock()
-
-	registerType := modbus.HOLDING_REGISTER
-	if task.FunctionCode == ModbusFunctionReadInputRegisters {
-		registerType = modbus.INPUT_REGISTER
+	if err := bridge.bus.lock(ctx, false); err != nil {
+		return nil, fmt.Errorf("%s read wait endpoint=%s task=%s: %w", bridge.bridgeLabel(), bridge.endpoint, task.Name, err)
 	}
+	defer bridge.bus.unlock()
+
 	var registers []uint16
 	err := bridge.runLocked(ctx, task.UnitID, func(client *modbus.ModbusClient) error {
-		var err error
-		registers, err = client.ReadRegisters(task.Address, task.Quantity, registerType)
-		return err
+		switch task.FunctionCode {
+		case ModbusFunctionReadCoils:
+			bits, err := client.ReadCoils(task.Address, task.Quantity)
+			if err != nil {
+				return err
+			}
+			registers = boolsToUint16(bits)
+			return nil
+		case ModbusFunctionReadDiscreteInputs:
+			bits, err := client.ReadDiscreteInputs(task.Address, task.Quantity)
+			if err != nil {
+				return err
+			}
+			registers = boolsToUint16(bits)
+			return nil
+		case ModbusFunctionReadInputRegisters:
+			regs, err := client.ReadRegisters(task.Address, task.Quantity, modbus.INPUT_REGISTER)
+			registers = regs
+			return err
+		default:
+			regs, err := client.ReadRegisters(task.Address, task.Quantity, modbus.HOLDING_REGISTER)
+			registers = regs
+			return err
+		}
 	})
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -188,15 +313,21 @@ func (bridge *ModbusTCPBridge) Write(ctx context.Context, task ModbusWriteTask) 
 	if err := validateModbusWriteTask(task); err != nil {
 		return err
 	}
-	bridge.mu.Lock()
-	defer bridge.mu.Unlock()
+	if err := bridge.bus.lock(ctx, true); err != nil {
+		return fmt.Errorf("%s write wait endpoint=%s task=%s: %w", bridge.bridgeLabel(), bridge.endpoint, task.Name, err)
+	}
+	defer bridge.bus.unlock()
 
 	operation := func(client *modbus.ModbusClient) error {
-		return client.WriteRegisters(task.Address, task.Values)
-	}
-	if task.FunctionCode == ModbusFunctionWriteSingleRegister {
-		operation = func(client *modbus.ModbusClient) error {
+		switch task.FunctionCode {
+		case ModbusFunctionWriteSingleCoil:
+			return client.WriteCoil(task.Address, task.Values[0] != 0)
+		case ModbusFunctionWriteMultipleCoils:
+			return client.WriteCoils(task.Address, uint16ToBools(task.Values))
+		case ModbusFunctionWriteSingleRegister:
 			return client.WriteRegister(task.Address, task.Values[0])
+		default:
+			return client.WriteRegisters(task.Address, task.Values)
 		}
 	}
 	err := bridge.runLocked(ctx, task.UnitID, operation)
@@ -223,11 +354,42 @@ func (bridge *ModbusTCPBridge) bridgeScheme() string {
 	return bridge.scheme
 }
 
+func (bridge *ModbusTCPBridge) clockNow() time.Time {
+	if bridge.nowFn != nil {
+		return bridge.nowFn()
+	}
+	return time.Now()
+}
+
+func (bridge *ModbusTCPBridge) waitDelay(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	if bridge.waitFn != nil {
+		return bridge.waitFn(ctx, d)
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (bridge *ModbusTCPBridge) runLocked(ctx context.Context, unitID uint8, operation func(*modbus.ModbusClient) error) error {
 	var lastErr error
 	for attempt := 0; attempt <= bridge.retries; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		if bridge.turnaroundDelay > 0 && !bridge.lastTxEnd.IsZero() {
+			if remaining := bridge.turnaroundDelay - bridge.clockNow().Sub(bridge.lastTxEnd); remaining > 0 {
+				if err := bridge.waitDelay(ctx, remaining); err != nil {
+					return err
+				}
+			}
 		}
 		if err := bridge.openLocked(); err != nil {
 			lastErr = err
@@ -236,9 +398,12 @@ func (bridge *ModbusTCPBridge) runLocked(ctx context.Context, unitID uint8, oper
 		if err := bridge.client.SetUnitId(unitID); err != nil {
 			lastErr = err
 			_ = bridge.closeLocked()
+			bridge.lastTxEnd = bridge.clockNow()
 			continue
 		}
-		if err := operation(bridge.client); err != nil {
+		err := operation(bridge.client)
+		bridge.lastTxEnd = bridge.clockNow()
+		if err != nil {
 			lastErr = err
 			_ = bridge.closeLocked()
 			continue
@@ -292,7 +457,7 @@ func validateModbusReadTask(task ModbusReadTask) error {
 		return fmt.Errorf("modbus read task %s quantity must be positive", task.Name)
 	}
 	switch task.FunctionCode {
-	case ModbusFunctionReadHoldingRegisters, ModbusFunctionReadInputRegisters:
+	case ModbusFunctionReadCoils, ModbusFunctionReadDiscreteInputs, ModbusFunctionReadHoldingRegisters, ModbusFunctionReadInputRegisters:
 		return nil
 	default:
 		return fmt.Errorf("modbus read task %s uses unsupported function code %d", task.Name, task.FunctionCode)
@@ -307,13 +472,35 @@ func validateModbusWriteTask(task ModbusWriteTask) error {
 		return fmt.Errorf("modbus write task %s requires at least one register value", task.Name)
 	}
 	switch task.FunctionCode {
+	case ModbusFunctionWriteSingleCoil:
+		if len(task.Values) != 1 {
+			return fmt.Errorf("modbus write task %s function code 5 requires exactly one coil value", task.Name)
+		}
 	case ModbusFunctionWriteSingleRegister:
 		if len(task.Values) != 1 {
 			return fmt.Errorf("modbus write task %s function code 6 requires exactly one register value", task.Name)
 		}
-	case ModbusFunctionWriteMultipleRegisters:
+	case ModbusFunctionWriteMultipleCoils, ModbusFunctionWriteMultipleRegisters:
 	default:
 		return fmt.Errorf("modbus write task %s uses unsupported function code %d", task.Name, task.FunctionCode)
 	}
 	return nil
+}
+
+func boolsToUint16(bits []bool) []uint16 {
+	out := make([]uint16, len(bits))
+	for i, b := range bits {
+		if b {
+			out[i] = 1
+		}
+	}
+	return out
+}
+
+func uint16ToBools(values []uint16) []bool {
+	out := make([]bool, len(values))
+	for i, v := range values {
+		out[i] = v != 0
+	}
+	return out
 }

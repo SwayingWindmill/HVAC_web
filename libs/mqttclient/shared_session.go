@@ -72,6 +72,8 @@ type SharedSessionConfig struct {
 	SubscribeRetryDelays          []time.Duration
 	ConnectUsername               string
 	ConnectPassword               []byte
+	WillMessage                   *paho.WillMessage
+	ConnectPacketBuilder          func(*paho.Connect, *url.URL) (*paho.Connect, error)
 	OnConnectSuccess              func()
 	OnConnectError                func(error)
 	OnSubscribeError              func(error)
@@ -199,13 +201,17 @@ func NewSharedSession(ctx context.Context, cfg SharedSessionConfig) (*SharedSess
 		ReconnectBackoff:              reconnectBackoff,
 		ConnectUsername:               cfg.ConnectUsername,
 		ConnectPassword:               bytesClone(cfg.ConnectPassword),
-		ConnectPacketBuilder: func(cp *paho.Connect, _ *url.URL) (*paho.Connect, error) {
+		WillMessage:                   cfg.WillMessage,
+		ConnectPacketBuilder: func(cp *paho.Connect, u *url.URL) (*paho.Connect, error) {
 			if cfg.ReceiveMaximum > 0 {
 				if cp.Properties == nil {
 					cp.Properties = &paho.ConnectProperties{}
 				}
 				rm := cfg.ReceiveMaximum
 				cp.Properties.ReceiveMaximum = &rm
+			}
+			if cfg.ConnectPacketBuilder != nil {
+				return cfg.ConnectPacketBuilder(cp, u)
 			}
 			return cp, nil
 		},

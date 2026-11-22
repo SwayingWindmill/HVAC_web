@@ -3,6 +3,7 @@ package edgecontrol
 import (
 	"context"
 	"net"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -302,11 +303,13 @@ func (driver *modbusPumpDriver) Apply(ctx context.Context, _ ProcessImage, decis
 }
 
 type modbusTestHandler struct {
-	mu           sync.Mutex
-	registers    map[uint16]uint16
-	failReads    int
-	failWrites   int
-	readAttempts int
+	mu             sync.Mutex
+	registers      map[uint16]uint16
+	coils          map[uint16]bool
+	discreteInputs map[uint16]bool
+	failReads      int
+	failWrites     int
+	readAttempts   int
 }
 
 func startModbusTestServer(t *testing.T) (string, *modbusTestHandler) {
@@ -320,7 +323,11 @@ func startModbusTestServer(t *testing.T) (string, *modbusTestHandler) {
 		t.Fatal(err)
 	}
 
-	handler := &modbusTestHandler{registers: map[uint16]uint16{}}
+	handler := &modbusTestHandler{
+		registers:      map[uint16]uint16{},
+		coils:          map[uint16]bool{},
+		discreteInputs: map[uint16]bool{},
+	}
 	server, err := modbus.NewServer(&modbus.ServerConfiguration{
 		URL:     "tcp://" + address,
 		Timeout: time.Second,
@@ -335,12 +342,44 @@ func startModbusTestServer(t *testing.T) (string, *modbusTestHandler) {
 	return address, handler
 }
 
-func (handler *modbusTestHandler) HandleCoils(*modbus.CoilsRequest) ([]bool, error) {
-	return nil, modbus.ErrIllegalFunction
+func (handler *modbusTestHandler) HandleCoils(request *modbus.CoilsRequest) ([]bool, error) {
+	handler.mu.Lock()
+	defer handler.mu.Unlock()
+	if request.IsWrite {
+		if handler.failWrites > 0 {
+			handler.failWrites--
+			return nil, modbus.ErrServerDeviceFailure
+		}
+		for index, val := range request.Args {
+			handler.coils[request.Addr+uint16(index)] = val
+		}
+		return nil, nil
+	}
+	handler.readAttempts++
+	if handler.failReads > 0 {
+		handler.failReads--
+		return nil, modbus.ErrServerDeviceFailure
+	}
+	out := make([]bool, request.Quantity)
+	for index := range request.Quantity {
+		out[index] = handler.coils[request.Addr+uint16(index)]
+	}
+	return out, nil
 }
 
-func (handler *modbusTestHandler) HandleDiscreteInputs(*modbus.DiscreteInputsRequest) ([]bool, error) {
-	return nil, modbus.ErrIllegalFunction
+func (handler *modbusTestHandler) HandleDiscreteInputs(request *modbus.DiscreteInputsRequest) ([]bool, error) {
+	handler.mu.Lock()
+	defer handler.mu.Unlock()
+	handler.readAttempts++
+	if handler.failReads > 0 {
+		handler.failReads--
+		return nil, modbus.ErrServerDeviceFailure
+	}
+	out := make([]bool, request.Quantity)
+	for index := range request.Quantity {
+		out[index] = handler.discreteInputs[request.Addr+uint16(index)]
+	}
+	return out, nil
 }
 
 func (handler *modbusTestHandler) HandleHoldingRegisters(request *modbus.HoldingRegistersRequest) ([]uint16, error) {
@@ -411,32 +450,223 @@ func TestNewModbusRTUBridgeSerialParametersAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected default RTU bridge error: %v", err)
 	}
-	if bridge.rtuSpeed != 9600 || bridge.rtuDataBits != 8 || bridge.rtuParity != modbus.PARITY_NONE || bridge.rtuStopBits != 1 {
-		t.Fatalf("unexpected default RTU params: speed=%d data=%d parity=%d stop=%d", bridge.rtuSpeed, bridge.rtuDataBits, bridge.rtuParity, bridge.rtuStopBits)
+	if bridge.rtuSpeed != 9600 || bridge.rtuDataBits != 8 || bridge.rtuParity != modbus.PARITY_NONE || bridge.rtuStopBits != 1 || bridge.turnaroundDelay != 45*time.Millisecond {
+		t.Fatalf("unexpected default RTU params: speed=%d data=%d parity=%d stop=%d turnaround=%s", bridge.rtuSpeed, bridge.rtuDataBits, bridge.rtuParity, bridge.rtuStopBits, bridge.turnaroundDelay)
+	}
+
+	noDelay, err := NewModbusRTUBridge(ModbusRTUBridgeConfig{
+		Endpoint:               "/dev/ttyAS3",
+		Timeout:                500 * time.Millisecond,
+		DisableTurnaroundDelay: true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected disabled-turnaround RTU bridge error: %v", err)
+	}
+	if noDelay.turnaroundDelay != 0 {
+		t.Fatalf("expected turnaroundDelay=0 when disabled, got %s", noDelay.turnaroundDelay)
 	}
 
 	custom, err := NewModbusRTUBridge(ModbusRTUBridgeConfig{
-		Endpoint: "/dev/ttyAS3",
-		Timeout:  300 * time.Millisecond,
-		Speed:    19200,
-		DataBits: 7,
-		Parity:   "e",
-		StopBits: 2,
+		Endpoint:        "/dev/ttyAS3",
+		Timeout:         300 * time.Millisecond,
+		Speed:           19200,
+		DataBits:        7,
+		Parity:          "e",
+		StopBits:        2,
+		TurnaroundDelay: 60 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatalf("unexpected custom RTU bridge error: %v", err)
 	}
-	if custom.rtuSpeed != 19200 || custom.rtuDataBits != 7 || custom.rtuParity != modbus.PARITY_EVEN || custom.rtuStopBits != 2 {
-		t.Fatalf("unexpected custom RTU params: speed=%d data=%d parity=%d stop=%d", custom.rtuSpeed, custom.rtuDataBits, custom.rtuParity, custom.rtuStopBits)
+	if custom.rtuSpeed != 19200 || custom.rtuDataBits != 7 || custom.rtuParity != modbus.PARITY_EVEN || custom.rtuStopBits != 2 || custom.turnaroundDelay != 60*time.Millisecond {
+		t.Fatalf("unexpected custom RTU params: speed=%d data=%d parity=%d stop=%d turnaround=%s", custom.rtuSpeed, custom.rtuDataBits, custom.rtuParity, custom.rtuStopBits, custom.turnaroundDelay)
 	}
 
 	for _, bad := range []ModbusRTUBridgeConfig{
 		{Endpoint: "/dev/ttyAS3", Timeout: time.Second, DataBits: 6},
 		{Endpoint: "/dev/ttyAS3", Timeout: time.Second, StopBits: 3},
 		{Endpoint: "/dev/ttyAS3", Timeout: time.Second, Parity: "MARK"},
+		{Endpoint: "/dev/ttyAS3", Timeout: time.Second, TurnaroundDelay: -time.Millisecond},
 	} {
 		if _, err := NewModbusRTUBridge(bad); err == nil {
 			t.Fatalf("expected invalid RTU serial config %#v to fail", bad)
 		}
 	}
+}
+
+func TestModbusBridgeCoilsFC01FC02FC05FC15AndDiscreteInputs(t *testing.T) {
+	endpoint, handler := startModbusTestServer(t)
+	handler.mu.Lock()
+	handler.coils[10] = true
+	handler.coils[11] = false
+	handler.discreteInputs[20] = true
+	handler.discreteInputs[21] = false
+	handler.mu.Unlock()
+
+	bridge, err := NewModbusTCPBridge(ModbusTCPBridgeConfig{
+		Endpoint: endpoint,
+		Timeout:  500 * time.Millisecond,
+		Retries:  0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = bridge.Close() })
+
+	coils, err := bridge.Read(t.Context(), ModbusReadTask{
+		Name: "read-coils", UnitID: 31, FunctionCode: ModbusFunctionReadCoils, Address: 10, Quantity: 2,
+	})
+	if err != nil || !slices.Equal(coils, []uint16{1, 0}) {
+		t.Fatalf("FC01 ReadCoils = (%v, %v), want ([1 0], nil)", coils, err)
+	}
+
+	inputs, err := bridge.Read(t.Context(), ModbusReadTask{
+		Name: "read-di", UnitID: 31, FunctionCode: ModbusFunctionReadDiscreteInputs, Address: 20, Quantity: 2,
+	})
+	if err != nil || !slices.Equal(inputs, []uint16{1, 0}) {
+		t.Fatalf("FC02 ReadDiscreteInputs = (%v, %v), want ([1 0], nil)", inputs, err)
+	}
+
+	if err := bridge.Write(t.Context(), ModbusWriteTask{
+		Name: "write-single-coil", UnitID: 31, FunctionCode: ModbusFunctionWriteSingleCoil, Address: 11, Values: []uint16{1},
+	}); err != nil {
+		t.Fatalf("FC05 WriteCoil failed: %v", err)
+	}
+	if err := bridge.Write(t.Context(), ModbusWriteTask{
+		Name: "write-multi-coils", UnitID: 31, FunctionCode: ModbusFunctionWriteMultipleCoils, Address: 10, Values: []uint16{0, 1},
+	}); err != nil {
+		t.Fatalf("FC15 WriteCoils failed: %v", err)
+	}
+	after, err := bridge.Read(t.Context(), ModbusReadTask{
+		Name: "verify-coils", UnitID: 31, FunctionCode: ModbusFunctionReadCoils, Address: 10, Quantity: 2,
+	})
+	if err != nil || !slices.Equal(after, []uint16{0, 1}) {
+		t.Fatalf("post-FC15 ReadCoils = (%v, %v), want ([0 1], nil)", after, err)
+	}
+
+	if err := bridge.Write(t.Context(), ModbusWriteTask{
+		Name: "bad-fc5-multi", UnitID: 31, FunctionCode: ModbusFunctionWriteSingleCoil, Address: 10, Values: []uint16{1, 0},
+	}); err == nil {
+		t.Fatal("expected FC05 with 2 values to fail validation")
+	}
+}
+
+func TestModbusBridgePriorityBusLockAndTurnaroundDelay(t *testing.T) {
+	t.Run("writes preempt queued reads without starvation or leaked cancellation", func(t *testing.T) {
+		var bus priorityBusLock
+		if err := bus.lock(t.Context(), false); err != nil {
+			t.Fatal(err)
+		}
+
+		waiterCounts := func() (int, int) {
+			bus.mu.Lock()
+			defer bus.mu.Unlock()
+			return len(bus.highWaiters), len(bus.normalWaiters)
+		}
+
+		var orderMu sync.Mutex
+		var order []string
+		var wg sync.WaitGroup
+
+		for range 3 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if err := bus.lock(t.Context(), false); err != nil {
+					t.Errorf("reader lock error: %v", err)
+					return
+				}
+				orderMu.Lock()
+				order = append(order, "read")
+				orderMu.Unlock()
+				bus.unlock()
+			}()
+		}
+		for {
+			_, n := waiterCounts()
+			if n == 3 {
+				break
+			}
+			runtime.Gosched()
+		}
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := bus.lock(t.Context(), true); err != nil {
+				t.Errorf("writer lock error: %v", err)
+				return
+			}
+			orderMu.Lock()
+			order = append(order, "write")
+			orderMu.Unlock()
+			bus.unlock()
+		}()
+		for {
+			h, n := waiterCounts()
+			if h == 1 && n == 3 {
+				break
+			}
+			runtime.Gosched()
+		}
+
+		cancelCtx, cancel := context.WithCancel(t.Context())
+		cancelDone := make(chan error, 1)
+		go func() {
+			cancelDone <- bus.lock(cancelCtx, false)
+		}()
+		for {
+			_, n := waiterCounts()
+			if n == 4 {
+				break
+			}
+			runtime.Gosched()
+		}
+		cancel()
+		if err := <-cancelDone; err == nil {
+			t.Fatal("expected canceled reader to return context error")
+		}
+
+		bus.unlock()
+		wg.Wait()
+
+		if !slices.Equal(order, []string{"write", "read", "read", "read"}) {
+			t.Fatalf("expected high-priority write before queued reads, got %v", order)
+		}
+		if err := bus.lock(t.Context(), false); err != nil {
+			t.Fatalf("expected clean re-acquire after unlock/cancel, got %v", err)
+		}
+		bus.unlock()
+	})
+
+	t.Run("turnaround delay waits exact remainder between serial transactions", func(t *testing.T) {
+		endpoint, handler := startModbusTestServer(t)
+		handler.set(100, 123)
+		bridge, err := NewModbusTCPBridge(ModbusTCPBridgeConfig{Endpoint: endpoint, Timeout: 500 * time.Millisecond})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = bridge.Close() })
+
+		curTime := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
+		var waits []time.Duration
+		bridge.turnaroundDelay = 45 * time.Millisecond
+		bridge.nowFn = func() time.Time { return curTime }
+		bridge.waitFn = func(_ context.Context, d time.Duration) error {
+			waits = append(waits, d)
+			curTime = curTime.Add(d)
+			return nil
+		}
+
+		if _, err := bridge.Read(t.Context(), ModbusReadTask{Name: "tx1", UnitID: 1, FunctionCode: ModbusFunctionReadHoldingRegisters, Address: 100, Quantity: 1}); err != nil {
+			t.Fatal(err)
+		}
+		curTime = curTime.Add(10 * time.Millisecond)
+		if _, err := bridge.Read(t.Context(), ModbusReadTask{Name: "tx2", UnitID: 1, FunctionCode: ModbusFunctionReadHoldingRegisters, Address: 100, Quantity: 1}); err != nil {
+			t.Fatal(err)
+		}
+		if len(waits) != 1 || waits[0] != 35*time.Millisecond {
+			t.Fatalf("expected 35ms remainder turnaround wait, got %v", waits)
+		}
+	})
 }

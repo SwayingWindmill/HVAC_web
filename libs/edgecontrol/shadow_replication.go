@@ -340,6 +340,31 @@ func NewReplicationUUIDv7(now time.Time) (string, error) {
 	if _, err := rand.Read(raw[6:]); err != nil {
 		return "", fmt.Errorf("generate shadow replication UUID: %w", err)
 	}
+	return formatReplicationUUIDv7(raw), nil
+}
+
+// DeterministicReplicationUUIDv7 derives a deterministic RFC 9562 UUIDv7 from now
+// and canonical keyParts so offline telemetry replays preserve cloud idempotency keys.
+func DeterministicReplicationUUIDv7(now time.Time, keyParts ...string) string {
+	ms := uint64(max(now.UTC().UnixMilli(), 0))
+	h := sha256.New()
+	var lenBuf [8]byte
+	binary.BigEndian.PutUint64(lenBuf[:], ms)
+	_, _ = h.Write(lenBuf[:])
+	for _, part := range keyParts {
+		binary.BigEndian.PutUint64(lenBuf[:], uint64(len(part)))
+		_, _ = h.Write(lenBuf[:])
+		_, _ = h.Write([]byte(part))
+	}
+	sum := h.Sum(nil)
+
+	var raw [16]byte
+	binary.BigEndian.PutUint64(raw[:8], ms<<16)
+	copy(raw[6:], sum[:10])
+	return formatReplicationUUIDv7(raw)
+}
+
+func formatReplicationUUIDv7(raw [16]byte) string {
 	raw[6] = 0x70 | (raw[6] & 0x0f)
 	raw[8] = 0x80 | (raw[8] & 0x3f)
 	dst := make([]byte, 36)
@@ -352,5 +377,5 @@ func NewReplicationUUIDv7(now time.Time) (string, error) {
 	hex.Encode(dst[19:23], raw[8:10])
 	dst[23] = '-'
 	hex.Encode(dst[24:36], raw[10:16])
-	return string(dst), nil
+	return string(dst)
 }

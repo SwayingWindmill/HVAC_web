@@ -100,4 +100,20 @@ func TestProtocolBridgeRegistrySharesRTUBusAndExtendsBACnet(t *testing.T) {
 	if adapter.Component().ID != "ahu-01" || adapter.Component().Type != "BACNET" {
 		t.Fatalf("unexpected BACnet component: %+v", adapter.Component())
 	}
+
+	cfg := Config{
+		GatewayID: "gw-bus",
+		StateDir:  t.TempDir(),
+		SerialBuses: map[string]SerialBusConfig{
+			"/dev/ttyAS3": {Speed: 9600, DataBits: 8, Parity: "N", StopBits: 1, TurnaroundDelayMS: 45},
+		},
+	}
+	cfg.ApplyDefaults("0.1.2")
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid turnaroundDelayMs rejected: %v", err)
+	}
+	cfg.SerialBuses["/dev/ttyAS3"] = SerialBusConfig{TurnaroundDelayMS: -1}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected negative turnaroundDelayMs to fail validation")
+	}
 }
