@@ -1078,6 +1078,117 @@ export class Gateway {
   readonly gatewayCredentialsState = new Map<string, { revoked: boolean; enrollmentSeq: number; certSeq: number; records: Json[] }>();
   readonly gatewayQuarantineState = new Map<string, Json[]>();
   readonly gatewayPacketCaptureState = new Map<string, Json>();
+  readonly otaPackagesState: Json[] = [
+    {
+      id: '01995000-0000-7000-8000-000000000001',
+      tenantId: principal.context.tenantId,
+      component: 'EDGE_GATEWAY',
+      version: '1.4.0',
+      targetOs: 'linux',
+      targetArch: 'armv7l',
+      hardwareModels: ['EG8200'],
+      minCompatibleVersion: '1.2.0',
+      fileName: 'edge-gateway-1.4.0-linux-armv7l.tar.gz',
+      fileSizeBytes: 4_521_984,
+      sha256: '11'.repeat(32),
+      signatureAlg: 'ED25519',
+      signingKeyId: 'platform-ota-key-1',
+      signatureB64: 'cGxhdGZvcm0tb3RhLXNpZ25hdHVyZS0x',
+      releaseNotes: '支持离线配置影子断网自治策略与 A/B OTA 槽位切换。',
+      status: 'ACTIVE',
+      uploadedBy: MY_ID,
+      createdAt: '2026-11-20T08:00:00.000Z',
+      updatedAt: '2026-11-20T08:00:00.000Z',
+    },
+  ];
+  readonly otaCampaignsState: Json[] = [
+    {
+      id: '01995100-0000-7000-8000-000000000001',
+      tenantId: principal.context.tenantId,
+      name: '1.4.0 稳定基线发布（失败熔断示例）',
+      packageId: '01995000-0000-7000-8000-000000000001',
+      packageVersion: '1.4.0',
+      component: 'EDGE_GATEWAY',
+      targetOs: 'linux',
+      targetArch: 'armv7l',
+      targetSiteIds: [SITE_ID],
+      targetTags: { env: 'pilot' },
+      canaryPercent: 50,
+      failureRateThresholdPct: 20,
+      healthCheckTimeoutSec: 180,
+      autoPromoteRollout: true,
+      status: 'PAUSED',
+      pauseReason: 'FAILURE_RATE_THRESHOLD_EXCEEDED',
+      reason: '试点站 1.4.0 稳定版推送',
+      totalCount: 2,
+      pendingCount: 1,
+      inProgressCount: 0,
+      succeededCount: 0,
+      failedCount: 1,
+      rolledBackCount: 0,
+      cancelledCount: 0,
+      failureRatePct: 50,
+      createdBy: MY_ID,
+      updatedBy: MY_ID,
+      createdAt: '2026-11-21T02:00:00.000Z',
+      updatedAt: '2026-11-21T02:05:00.000Z',
+      completedAt: null,
+      package: null,
+      tasks: [
+        {
+          id: '01995200-0000-7000-8000-000000000001',
+          tenantId: principal.context.tenantId,
+          campaignId: '01995100-0000-7000-8000-000000000001',
+          packageId: '01995000-0000-7000-8000-000000000001',
+          gatewayId: '018f3e00-4000-7000-8000-000000000100',
+          siteId: SITE_ID,
+          gatewayCode: 'eg8200-commercial-001',
+          gatewayName: 'EG8200-COMMERCIAL-001',
+          gatewayOnline: true,
+          wave: 'CANARY',
+          desiredAction: 'APPLY',
+          stage: 'FAILED',
+          progressPct: 80,
+          currentVersion: '1.3.2',
+          targetVersion: '1.4.0',
+          errorCode: 'HEALTH_CHECK_TIMEOUT',
+          errorMessage: '新槽位健康检查超时，已自动回切 1.3.2',
+          dispatchedAt: '2026-11-21T02:00:10.000Z',
+          lastReportedAt: '2026-11-21T02:04:50.000Z',
+          finishedAt: '2026-11-21T02:04:55.000Z',
+          createdAt: '2026-11-21T02:00:00.000Z',
+          updatedAt: '2026-11-21T02:04:55.000Z',
+        },
+        {
+          id: '01995200-0000-7000-8000-000000000002',
+          tenantId: principal.context.tenantId,
+          campaignId: '01995100-0000-7000-8000-000000000001',
+          packageId: '01995000-0000-7000-8000-000000000001',
+          gatewayId: '018f3e00-4000-7000-8000-000000000101',
+          siteId: SITE_ID,
+          gatewayCode: 'eg8200-commercial-002',
+          gatewayName: 'EG8200-COMMERCIAL-002-备用机房长名称网关节点',
+          gatewayOnline: false,
+          wave: 'ROLLOUT',
+          desiredAction: 'APPLY',
+          stage: 'PENDING',
+          progressPct: 0,
+          currentVersion: '1.3.2',
+          targetVersion: '1.4.0',
+          errorCode: null,
+          errorMessage: null,
+          dispatchedAt: null,
+          lastReportedAt: null,
+          finishedAt: null,
+          createdAt: '2026-11-21T02:00:00.000Z',
+          updatedAt: '2026-11-21T02:00:00.000Z',
+        },
+      ],
+    },
+  ];
+  otaPackageSeq = 2;
+  otaCampaignSeq = 2;
+  otaTaskSeq = 10;
   readonly writes: RecordedRequest[] = [];
   readonly unexpected: string[] = [];
 
@@ -1091,10 +1202,11 @@ export class Gateway {
     const path = url.pathname;
     const method = request.method();
     const csrfToken = request.headers()['x-csrf-token'];
-    if (method !== 'GET') this.writes.push({ method, path, body: bodyOf(request), csrfToken });
-    const agent = this.assistant.respond(SITE_ID, method, path, bodyOf(request));
+    const parsedBody = requestPayloadOf(request);
+    if (method !== 'GET') this.writes.push({ method, path, body: parsedBody?.recorded ?? parsedBody, csrfToken });
+    const agent = this.assistant.respond(SITE_ID, method, path, parsedBody);
     if (agent?.stream !== undefined) return route.fulfill({ status: 200, contentType: 'text/event-stream; charset=utf-8', body: agent.stream });
-    const reply = agent ?? this.respond(method, path, url.searchParams, bodyOf(request), csrfToken);
+    const reply = agent ?? this.respond(method, path, url.searchParams, parsedBody, csrfToken);
     if (!reply) {
       this.unexpected.push(`${method} ${path}`);
       return route.fulfill({ status: 404, contentType: 'application/problem+json', body: JSON.stringify({ status: 404, code: 'ROUTE_NOT_FOUND', title: 'Not found' }) });
@@ -2810,6 +2922,8 @@ export class Gateway {
     if (gatewayDiagnosticsReply) return gatewayDiagnosticsReply;
     const concentratorReply = this.concentrators(method, path, body, csrfToken, now);
     if (concentratorReply) return concentratorReply;
+    const otaReply = this.otaRoutes(method, path, query, body, csrfToken, now);
+    if (otaReply) return otaReply;
     const assetModelMatch = method === 'GET' ? path.match(/^\/api\/v1\/sites\/([^/]+)\/asset-model$/) : null;
     if (assetModelMatch) {
       const targetSiteId = decodeURIComponent(assetModelMatch[1]!);
@@ -5305,6 +5419,333 @@ export class Gateway {
 
     return undefined;
   }
+
+  private summarizeOtaCampaign(campaign: Json): Json {
+    const tasks: Json[] = campaign.tasks ?? [];
+    let pendingCount = 0;
+    let inProgressCount = 0;
+    let succeededCount = 0;
+    let failedCount = 0;
+    let rolledBackCount = 0;
+    let cancelledCount = 0;
+
+    for (const t of tasks) {
+      if (t.stage === 'PENDING') pendingCount += 1;
+      else if (t.stage === 'SUCCEEDED') succeededCount += 1;
+      else if (t.stage === 'FAILED') failedCount += 1;
+      else if (t.stage === 'ROLLED_BACK') rolledBackCount += 1;
+      else if (t.stage === 'CANCELLED') cancelledCount += 1;
+      else inProgressCount += 1;
+    }
+
+    const totalCount = tasks.length;
+    const completedFailureNumerator = failedCount + rolledBackCount;
+    const failureRatePct = totalCount > 0 ? Math.round((completedFailureNumerator * 100) / totalCount) : 0;
+
+    const { package: _pkg, tasks: _tasks, ...summaryFields } = campaign;
+    return {
+      ...summaryFields,
+      totalCount,
+      pendingCount,
+      inProgressCount,
+      succeededCount,
+      failedCount,
+      rolledBackCount,
+      cancelledCount,
+      failureRatePct,
+    };
+  }
+
+  private detailOfOtaCampaign(campaign: Json): Json {
+    const summary = this.summarizeOtaCampaign(campaign);
+    const pkg = this.otaPackagesState.find((item) => item.id === campaign.packageId) ?? this.otaPackagesState[0]!;
+    return {
+      ...summary,
+      package: pkg,
+      tasks: campaign.tasks ?? [],
+    };
+  }
+
+  private otaRoutes(
+    method: string,
+    path: string,
+    query: URLSearchParams,
+    body: Json | null,
+    csrfToken: string | undefined,
+    now: string,
+  ): { status?: number; body: unknown } | undefined {
+    if (!path.startsWith('/api/v1/ota/')) return undefined;
+
+    const refuse = (status: number, code: string, detail: string) => ({
+      status,
+      body: { type: 'about:blank', title: detail, status, detail, instance: path, code, traceId: '0'.repeat(32), retryable: false },
+    });
+
+    const activePrincipal = this.principalOverride ?? principal;
+    const expectedCsrf = activePrincipal.session?.csrfToken ?? principal.session.csrfToken;
+    const caps = new Set<string>(activePrincipal.authorization?.capabilities ?? []);
+
+    if (method === 'GET' && !caps.has('device.read')) {
+      return refuse(403, 'CREDENTIAL_FORBIDDEN', 'device.read required');
+    }
+    if (method === 'POST') {
+      if (!caps.has('device.write')) {
+        return refuse(403, 'CREDENTIAL_FORBIDDEN', 'device.write required');
+      }
+      if (!csrfToken || csrfToken !== expectedCsrf) {
+        return refuse(403, 'CSRF_INVALID', 'CSRF token required');
+      }
+    }
+
+    if (method === 'GET' && path === '/api/v1/ota/packages') {
+      const component = query.get('component');
+      const targetArch = query.get('targetArch');
+      const status = query.get('status');
+      const items = this.otaPackagesState.filter((pkg) =>
+        (!component || pkg.component === component)
+        && (!targetArch || pkg.targetArch === targetArch)
+        && (!status || pkg.status === status),
+      );
+      return { body: { items } };
+    }
+
+    if (method === 'POST' && path === '/api/v1/ota/packages') {
+      const fields: Record<string, string> = body?.fields ?? {};
+      const file = body?.file as { fileName: string; fileSizeBytes: number; sha256: string } | undefined;
+      if (!file || file.fileSizeBytes <= 0) {
+        return refuse(400, 'OTA_REQUEST_INVALID', 'multipart file field is required');
+      }
+      if (file.fileSizeBytes > 64 * 1024 * 1024) {
+        return refuse(413, 'OTA_PACKAGE_TOO_LARGE', 'package exceeds 64 MiB limit');
+      }
+      const expectedSha = (fields.expectedSha256 ?? '').trim().toLowerCase();
+      if (expectedSha && expectedSha !== file.sha256) {
+        return refuse(422, 'OTA_CHECKSUM_MISMATCH', 'uploaded binary sha256 does not match expectedSha256');
+      }
+      const version = (fields.version ?? '').trim();
+      const component = (fields.component ?? 'EDGE_GATEWAY').trim();
+      const targetArch = (fields.targetArch ?? 'armv7l').trim();
+      if (!version || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)) {
+        return refuse(422, 'OTA_INVALID', 'version must be valid SemVer');
+      }
+      if (this.otaPackagesState.some((pkg) => pkg.component === component && pkg.version === version && pkg.targetArch === targetArch)) {
+        return refuse(409, 'OTA_CONFLICT', 'package version already exists for this component and arch');
+      }
+      const hwRaw = (fields.hardwareModels ?? '').trim();
+      const hardwareModels = hwRaw ? hwRaw.split(/[\s,]+/).filter(Boolean) : [];
+      const seq = this.otaPackageSeq++;
+      const created: Json = {
+        id: `01995000-0000-7000-8000-${String(seq).padStart(12, '0')}`,
+        tenantId: activePrincipal.context.tenantId,
+        component,
+        version,
+        targetOs: 'linux',
+        targetArch,
+        hardwareModels,
+        minCompatibleVersion: (fields.minCompatibleVersion ?? '').trim() || null,
+        fileName: file.fileName || `edge-gateway-${version}.tar.gz`,
+        fileSizeBytes: file.fileSizeBytes,
+        sha256: file.sha256,
+        signatureAlg: 'ED25519',
+        signingKeyId: (fields.signingKeyId ?? '').trim() || 'platform-ota-key-1',
+        signatureB64: (fields.signatureB64 ?? '').trim() || 'cGxhdGZvcm0tb3RhLXNpZ25hdHVyZS1lMmU=',
+        releaseNotes: (fields.releaseNotes ?? '').trim(),
+        status: 'ACTIVE',
+        uploadedBy: activePrincipal.principalId ?? MY_ID,
+        createdAt: now,
+        updatedAt: now,
+      };
+      this.otaPackagesState.unshift(created);
+      return { status: 201, body: created };
+    }
+
+    if (method === 'GET' && path === '/api/v1/ota/campaigns') {
+      const status = query.get('status');
+      const items = this.otaCampaignsState
+        .filter((campaign) => !status || campaign.status === status)
+        .map((campaign) => this.summarizeOtaCampaign(campaign));
+      return { body: { items } };
+    }
+
+    if (method === 'POST' && path === '/api/v1/ota/campaigns') {
+      const pkg = this.otaPackagesState.find((item) => item.id === body?.packageId);
+      if (!pkg) return refuse(404, 'OTA_NOT_FOUND', 'OTA package not found');
+      const targetSiteIds: string[] = Array.isArray(body?.targetSiteIds) && body.targetSiteIds.length > 0
+        ? body.targetSiteIds
+        : this.sites.map((s) => s.id);
+      const targetTags: Record<string, string> = body?.targetTags ?? {};
+      const gateways = (this.assetModel.devices as Json[]).filter((d) => d.deviceType === 'GATEWAY' && d.status === 'ACTIVE' && targetSiteIds.includes(d.siteId));
+      if (gateways.length === 0) {
+        return refuse(422, 'OTA_NO_TARGETS', 'No active gateways match target scope');
+      }
+      const seq = this.otaCampaignSeq++;
+      const campaignId = `01995100-0000-7000-8000-${String(seq).padStart(12, '0')}`;
+      const canaryPct = Number(body?.canaryPercent ?? 20);
+      const canaryCount = Math.max(1, Math.ceil((gateways.length * canaryPct) / 100));
+      const tasks: Json[] = gateways.map((gw, idx) => {
+        const isCanary = idx < canaryCount;
+        const taskSeq = this.otaTaskSeq++;
+        return {
+          id: `01995200-0000-7000-8000-${String(taskSeq).padStart(12, '0')}`,
+          tenantId: activePrincipal.context.tenantId,
+          campaignId,
+          packageId: pkg.id,
+          gatewayId: gw.id,
+          siteId: gw.siteId,
+          gatewayCode: gw.code,
+          gatewayName: gw.displayName,
+          gatewayOnline: true,
+          wave: isCanary ? 'CANARY' : 'ROLLOUT',
+          desiredAction: 'APPLY',
+          stage: isCanary ? 'DOWNLOADING' : 'PENDING',
+          progressPct: isCanary ? 45 : 0,
+          currentVersion: '1.4.0',
+          targetVersion: pkg.version,
+          errorCode: null,
+          errorMessage: null,
+          dispatchedAt: isCanary ? now : null,
+          lastReportedAt: isCanary ? now : null,
+          finishedAt: null,
+          createdAt: now,
+          updatedAt: now,
+        };
+      });
+      // Add a second rollout node so wave UI and pause/rollback actions exercise multi-node state.
+      const extraTaskSeq = this.otaTaskSeq++;
+      tasks.push({
+        id: `01995200-0000-7000-8000-${String(extraTaskSeq).padStart(12, '0')}`,
+        tenantId: activePrincipal.context.tenantId,
+        campaignId,
+        packageId: pkg.id,
+        gatewayId: '018f3e00-4000-7000-8000-000000000102',
+        siteId: targetSiteIds[0] ?? SITE_ID,
+        gatewayCode: 'eg8200-commercial-003',
+        gatewayName: 'EG8200-COMMERCIAL-003',
+        gatewayOnline: false,
+        wave: 'ROLLOUT',
+        desiredAction: 'APPLY',
+        stage: 'PENDING',
+        progressPct: 0,
+        currentVersion: '1.4.0',
+        targetVersion: pkg.version,
+        errorCode: null,
+        errorMessage: null,
+        dispatchedAt: null,
+        lastReportedAt: null,
+        finishedAt: null,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      const createdCampaign: Json = {
+        id: campaignId,
+        tenantId: activePrincipal.context.tenantId,
+        name: String(body?.name ?? '').trim(),
+        packageId: pkg.id,
+        packageVersion: pkg.version,
+        component: pkg.component,
+        targetOs: pkg.targetOs,
+        targetArch: pkg.targetArch,
+        targetSiteIds,
+        targetTags,
+        canaryPercent: canaryPct,
+        failureRateThresholdPct: Number(body?.failureRateThresholdPct ?? 20),
+        healthCheckTimeoutSec: Number(body?.healthCheckTimeoutSec ?? 180),
+        autoPromoteRollout: Boolean(body?.autoPromoteRollout ?? true),
+        status: 'CANARY_RUNNING',
+        pauseReason: null,
+        reason: String(body?.reason ?? '').trim(),
+        createdBy: activePrincipal.principalId ?? MY_ID,
+        updatedBy: activePrincipal.principalId ?? MY_ID,
+        createdAt: now,
+        updatedAt: now,
+        completedAt: null,
+        tasks,
+      };
+      this.otaCampaignsState.unshift(createdCampaign);
+      return { status: 201, body: this.detailOfOtaCampaign(createdCampaign) };
+    }
+
+    const detailMatch = path.match(/^\/api\/v1\/ota\/campaigns\/([^/]+)$/);
+    if (method === 'GET' && detailMatch) {
+      const id = decodeURIComponent(detailMatch[1]!);
+      const campaign = this.otaCampaignsState.find((item) => item.id === id);
+      if (!campaign) return refuse(404, 'OTA_NOT_FOUND', 'OTA campaign not found');
+      return { body: this.detailOfOtaCampaign(campaign) };
+    }
+
+    const actionMatch = path.match(/^\/api\/v1\/ota\/campaigns\/([^/]+)\/(pause|resume|rollback)$/);
+    if (method === 'POST' && actionMatch) {
+      const id = decodeURIComponent(actionMatch[1]!);
+      const op = actionMatch[2]!;
+      const campaign = this.otaCampaignsState.find((item) => item.id === id);
+      if (!campaign) return refuse(404, 'OTA_NOT_FOUND', 'OTA campaign not found');
+
+      if (op === 'pause') {
+        if (campaign.status !== 'CANARY_RUNNING' && campaign.status !== 'ROLLOUT_RUNNING') {
+          return refuse(409, 'OTA_CONFLICT', 'Campaign is not running');
+        }
+        campaign.status = 'PAUSED';
+        campaign.pauseReason = 'MANUAL_PAUSE';
+        campaign.updatedAt = now;
+        campaign.updatedBy = activePrincipal.principalId ?? MY_ID;
+        return { body: this.detailOfOtaCampaign(campaign) };
+      }
+
+      if (op === 'resume') {
+        if (campaign.status !== 'PAUSED') {
+          return refuse(409, 'OTA_CONFLICT', 'Campaign is not paused');
+        }
+        const tasks: Json[] = campaign.tasks ?? [];
+        let hasRollout = false;
+        for (const t of tasks) {
+          if (t.wave === 'ROLLOUT' && t.stage === 'PENDING') {
+            t.stage = 'DISPATCHED';
+            t.progressPct = 15;
+            t.dispatchedAt = now;
+            t.updatedAt = now;
+            hasRollout = true;
+          } else if (t.wave === 'CANARY' && t.stage === 'DOWNLOADING') {
+            t.stage = 'SUCCEEDED';
+            t.progressPct = 100;
+            t.currentVersion = t.targetVersion;
+            t.finishedAt = now;
+            t.updatedAt = now;
+          }
+        }
+        campaign.status = hasRollout ? 'ROLLOUT_RUNNING' : 'CANARY_RUNNING';
+        campaign.pauseReason = null;
+        campaign.updatedAt = now;
+        campaign.updatedBy = activePrincipal.principalId ?? MY_ID;
+        return { body: this.detailOfOtaCampaign(campaign) };
+      }
+
+      if (op === 'rollback') {
+        if (campaign.status === 'ROLLED_BACK') {
+          return refuse(409, 'OTA_CONFLICT', 'Campaign already rolled back');
+        }
+        for (const t of campaign.tasks ?? []) {
+          if (t.stage === 'PENDING') {
+            t.stage = 'CANCELLED';
+            t.updatedAt = now;
+          } else if (t.stage !== 'CANCELLED' && t.stage !== 'ROLLED_BACK') {
+            t.desiredAction = 'ROLLBACK';
+            t.stage = 'ROLLED_BACK';
+            t.progressPct = 100;
+            t.updatedAt = now;
+          }
+        }
+        campaign.status = 'ROLLED_BACK';
+        campaign.pauseReason = null;
+        campaign.updatedAt = now;
+        campaign.completedAt = now;
+        campaign.updatedBy = activePrincipal.principalId ?? MY_ID;
+        return { body: this.detailOfOtaCampaign(campaign) };
+      }
+    }
+
+    return undefined;
+  }
 }
 
 // As the owner totals them: a day several measures verified counts once, with the plant's electricity once.
@@ -5321,6 +5762,66 @@ function totalsOf(days: Json[]): Json {
 function bodyOf(request: Request): Json | null {
   const data = request.postData();
   return data ? JSON.parse(data) as Json : null;
+}
+
+function requestPayloadOf(request: Request): Json | null {
+  const ct = request.headers()['content-type'] ?? '';
+  if (!ct.toLowerCase().includes('multipart/form-data')) {
+    return bodyOf(request);
+  }
+  const boundaryMatch = ct.match(/boundary=(?:"([^"]+)"|([^;\s]+))/i);
+  const boundary = boundaryMatch?.[1] ?? boundaryMatch?.[2];
+  const raw = request.postDataBuffer();
+  if (!boundary || !raw) {
+    return { fields: {}, recorded: { multipart: true } };
+  }
+  const delimiter = Buffer.from(`--${boundary}`);
+  const fields: Record<string, string> = {};
+  let uploadedFile: { fileName: string; fileSizeBytes: number; sha256: string } | undefined;
+
+  let cursor = raw.indexOf(delimiter);
+  while (cursor !== -1) {
+    const afterDelim = cursor + delimiter.length;
+    if (raw.subarray(afterDelim, afterDelim + 2).toString() === '--') break;
+    const partStart = raw[afterDelim] === 0x0d && raw[afterDelim + 1] === 0x0a ? afterDelim + 2 : afterDelim;
+    const nextCursor = raw.indexOf(delimiter, partStart);
+    if (nextCursor === -1) break;
+    let partEnd = nextCursor;
+    if (partEnd >= 2 && raw[partEnd - 2] === 0x0d && raw[partEnd - 1] === 0x0a) {
+      partEnd -= 2;
+    }
+    const headerEnd = raw.indexOf('\r\n\r\n', partStart);
+    if (headerEnd !== -1 && headerEnd < partEnd) {
+      const headersText = raw.subarray(partStart, headerEnd).toString('utf8');
+      const contentBuf = raw.subarray(headerEnd + 4, partEnd);
+      const nameMatch = headersText.match(/name="([^"]+)"/i);
+      const fileMatch = headersText.match(/filename="([^"]*)"/i);
+      const fieldName = nameMatch?.[1];
+      if (fieldName) {
+        if (fileMatch) {
+          uploadedFile = {
+            fileName: fileMatch[1] || 'upload.bin',
+            fileSizeBytes: contentBuf.length,
+            sha256: createHash('sha256').update(contentBuf).digest('hex'),
+          };
+        } else {
+          fields[fieldName] = contentBuf.toString('utf8');
+        }
+      }
+    }
+    cursor = nextCursor;
+  }
+
+  return {
+    fields,
+    file: uploadedFile,
+    recorded: {
+      fields,
+      fileName: uploadedFile?.fileName ?? null,
+      fileSizeBytes: uploadedFile?.fileSizeBytes ?? 0,
+      sha256: uploadedFile?.sha256 ?? null,
+    },
+  };
 }
 
 function isValidModbusTcpEndpoint(endpoint: string): boolean {
