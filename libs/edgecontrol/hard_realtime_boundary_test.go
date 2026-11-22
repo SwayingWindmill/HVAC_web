@@ -10,12 +10,12 @@ func TestClassifyHardRealtimeProtectionAndEmergencyStopExclusion(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name     string
-		point    string
-		capCode  string
-		meta     map[string]any
-		wantOK   bool
-		wantCat  HardRealtimeProtectionCategory
+		name    string
+		point   string
+		capCode string
+		meta    map[string]any
+		wantOK  bool
+		wantCat HardRealtimeProtectionCategory
 	}{
 		{name: "plc estop", point: "plc_estop_trip", wantOK: true, wantCat: HardRealtimeCategoryPLCEStop},
 		{name: "fire interlock", point: "fire_interlock_shutdown", wantOK: true, wantCat: HardRealtimeCategoryFireInterlock},
@@ -72,7 +72,7 @@ func TestHardRealtimeBoundaryGuardsAcrossEdgeControl(t *testing.T) {
 	roSafety := ChannelDescriptor{
 		ComponentID: "PLC-1", ChannelID: "plc_estop_trip", PointID: "pt-estop", DataType: DataTypeBoolean,
 		Access: AccessReadOnly, SafetyBoundary: SafetyBoundaryHardRealtime,
-		Category: ChannelCategoryOpenemsType,
+		Category:     ChannelCategoryOpenemsType,
 		PollPriority: PriorityVeryHigh, LocalPersistencePriority: PriorityVeryHigh,
 		RemotePersistencePriority: PriorityVeryHigh, AggregationPriority: PriorityMedium, ResendPriority: PriorityVeryHigh,
 	}
@@ -89,7 +89,7 @@ func TestHardRealtimeBoundaryGuardsAcrossEdgeControl(t *testing.T) {
 	rt := NewRuntime()
 	if err := rt.Register(ChannelDescriptor{
 		ComponentID: "PLC-1", ChannelID: "fire_interlock_cmd", PointID: "pt-fire", DataType: DataTypeBoolean, Access: AccessReadWrite,
-		Category: ChannelCategoryOpenemsType,
+		Category:     ChannelCategoryOpenemsType,
 		PollPriority: PriorityVeryHigh, LocalPersistencePriority: PriorityVeryHigh,
 		RemotePersistencePriority: PriorityVeryHigh, AggregationPriority: PriorityMedium, ResendPriority: PriorityVeryHigh,
 	}); !errors.Is(err, ErrHardRealtimeSafetyBoundary) {
