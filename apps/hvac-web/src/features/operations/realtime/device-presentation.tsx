@@ -1,6 +1,6 @@
 import { PageMeta } from '@/blocks/page-header';
 import { Fan, Gauge, Snowflake, Thermometer, ThermometerSun, Waves } from 'lucide-react';
-import type { StatusTone } from '@/components/common/StatusBadge';
+import type { StatusTone } from '@/components/status-badge';
 import { MetricValue } from '@/blocks/metric-card';
 import { formatDecimal } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';

@@ -1,4 +1,4 @@
-import type { StatusTone } from '@/components/common/StatusBadge';
+import type { StatusTone } from '@/components/status-badge';
 import type { TwinState } from './twin-model';
 
 /** How each twin state shows in the shared status badge. */

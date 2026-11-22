@@ -1,9 +1,10 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { Download } from 'lucide-react';
 import { useMemo, type ReactNode } from 'react';
 import { Line, LineChart, ReferenceLine, YAxis } from 'recharts';
 import { createPlatformGatewayClient, PlatformApiError, type Site } from '@/api/generated/platformGateway.gen';
+import { siteAssetModelEnvelopeQuery } from '@/api/site-asset-model';
 import { createS2TelemetryClient } from '@/api/generated/s2Telemetry.gen';
 import type { ShellSnapshot } from '@/app/shell-runtime';
 import { PageHeader } from '@/blocks/page-header';
@@ -76,12 +77,13 @@ function useSiteSummaries(sites: readonly Site[], period: BenchmarkPeriod, csrfT
  * without one, 'unavailable' when its temperature could not be read, which leaves the other Sites compared.
  */
 function useOutdoorMeans(sites: readonly Site[], period: BenchmarkPeriod, csrfToken: string) {
+  const queryClient = useQueryClient();
   return useQuery({
     queryKey: ['benchmark', 'outdoor', period, sites.map((site) => site.id).join(',')],
     enabled: sites.length > 0,
     queryFn: async ({ signal }) => new Map(await Promise.all(sites.map(async (site): Promise<readonly [string, ReadonlyMap<string, number> | null | 'unavailable']> => {
       try {
-        const model = (await client.getSiteAssetModel(site.id, { signal })).data;
+        const model = (await queryClient.fetchQuery(siteAssetModelEnvelopeQuery(site.id))).data;
         const point = model.telemetryPoints.find((candidate) => candidate.sourceKey === DRY_BULB_SOURCE_KEY && candidate.status === 'ACTIVE');
         if (!point) return [site.id, null];
         const { from, to } = periodWindow(period, new Date(), site.timezone);

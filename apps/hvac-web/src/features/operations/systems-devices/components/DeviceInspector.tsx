@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react';
-import { Lock, Plus, Sparkles } from 'lucide-react';
+import { Lock, Plus } from 'lucide-react';
+import { BrandMark } from '@/components/brand-mark';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, Link } from '@tanstack/react-router';
 import { Area, CartesianGrid, ComposedChart, Line, XAxis, YAxis } from 'recharts';
 import { listWorkOrders } from '@/api/work-orders';
-import { StatusBadge } from '@/components/common/StatusBadge';
+import { StatusBadge } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
 import { ChartContainer, ChartEmptySlotTooltip, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
@@ -107,7 +108,7 @@ function DeviceDetail({ device, categoryLabel }: { readonly device: PlantDevice;
         <div className="flex items-start justify-between gap-3">
           <SheetTitle className="text-lg leading-[26px] font-semibold tracking-[-0.01em]">{device.name}</SheetTitle>
           <Button size="sm" variant="outline" className="shrink-0" onClick={() => explain(explainDeviceQuestion(device.name))}>
-            <Sparkles data-icon="inline-start" className="text-primary" />分析原因
+            <BrandMark data-icon="inline-start" className="size-3.5 text-primary" />分析原因
           </Button>
         </div>
         <SheetDescription className="sr-only">{categoryLabel}，{deviceLocation(device)}</SheetDescription>

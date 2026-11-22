@@ -185,7 +185,8 @@ test('transient UI states converge on quiet reusable loading surfaces', () => {
   assert.equal(loginStateSource.includes('RuntimeFacts'), false);
 
   assert.match(siteRouteSource, /return requireSite\(context\.runtime, search\.site\)/u);
-  assert.match(siteRouteSource, /component: Outlet/u);
+  assert.match(siteRouteSource, /component: SiteWorkspaceLayout/u);
+  assert.match(siteRouteSource, /<SiteRealtimeProvider>\s*<Outlet \/>\s*<\/SiteRealtimeProvider>/u);
 
 });
 

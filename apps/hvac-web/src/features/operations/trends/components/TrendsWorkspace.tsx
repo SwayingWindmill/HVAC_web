@@ -22,9 +22,9 @@ import { workOrderKeys } from '@/features/work-orders/work-order-queries';
 import { useNow } from '@/hooks/use-now';
 import { formatCompactTime } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
+import { siteAssetModelQuery } from '@/api/site-asset-model';
 import {
   TrendHistoryPermissionError,
-  siteAssetModelQuery,
   trendAggregateWindowQuery,
   trendCommandsQuery,
   trendOverlappingAlarmsQuery,

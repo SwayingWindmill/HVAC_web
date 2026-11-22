@@ -1,18 +1,12 @@
 import { useQuery } from '@tanstack/react-query';
 import { useMemo } from 'react';
+import { siteAssetModelQuery } from '@/api/site-asset-model';
 import { periodWindow, previousWindow, siteDayKey, type EnergyPeriod } from '@/features/energy-analysis/consumption/model';
 import { useEnergyReader } from '@/features/energy-analysis/consumption/query';
-import type { PlantDevice } from '@/features/operations/realtime/plant-model';
-import { useRealtimePlant } from '@/features/operations/realtime/use-realtime-plant';
-import { isOneOf } from '../../lib/typed.ts';
-import { energyBreakdown, EQUIPMENT_ORDER, type Machine } from './breakdown-model';
+import { energyBreakdown } from './breakdown-model';
+import { plantMachines, plantMachinesFromAssetModel } from './plant-machines';
 
-/** The plant's machines that use electricity, metered or not. */
-export function plantMachines(devices: readonly PlantDevice[]): Machine[] {
-  return devices.flatMap((device) => (isOneOf(EQUIPMENT_ORDER, device.category)
-    ? [{ deviceId: device.deviceId, name: device.name, category: device.category }]
-    : []));
-}
+export { plantMachines };
 
 /**
  * The HVAC total meter and each machine's sub-meter over a period and over the same span before
@@ -20,9 +14,9 @@ export function plantMachines(devices: readonly PlantDevice[]): Machine[] {
  */
 export function useEnergyBreakdown(period: EnergyPeriod) {
   const { site, read } = useEnergyReader();
-  const { plant, registry } = useRealtimePlant();
+  const registry = useQuery(siteAssetModelQuery(site.id));
   // The plant's devices come from the Registry asset model; until it loads there is no machine list.
-  const machines = useMemo(() => (registry.data ? plantMachines(plant.devices) : null), [registry.data, plant.devices]);
+  const machines = useMemo(() => (registry.data ? plantMachinesFromAssetModel(registry.data) : null), [registry.data]);
   const machineKey = machines?.map((machine) => machine.deviceId).join(',');
   const breakdownOf = (window: (period: EnergyPeriod, now: Date, timeZone: string) => { granularity: 'hour' | 'day' | 'month'; from: Date; to: Date }) =>
     async ({ signal }: { signal: AbortSignal }) => {

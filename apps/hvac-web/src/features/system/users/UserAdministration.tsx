@@ -17,7 +17,7 @@ import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Status, StatusIndicator } from '@/components/ui/status';
+import { StatusBadge } from '@/components/status-badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { PASSWORD_HINT } from '@/features/account/password';
 import { ROLE_SUMMARIES, roleLabel } from '@/lib/role-labels';
@@ -79,8 +79,8 @@ const clock = (value: string) => new Intl.DateTimeFormat('zh-CN', { month: '2-di
 const scopeOf = (siteId: string) => (siteId === ALL_SITES ? {} : { siteId });
 
 function MemberState({ member }: { readonly member: UserAdminMember }) {
-  const [variant, label] = !member.enabled ? ['default', '已停用'] as const : member.locked ? ['warning', '密码输错锁定中'] as const : ['success', '可登录'] as const;
-  return <Status variant={variant}><StatusIndicator />{label}</Status>;
+  const [tone, label] = !member.enabled ? ['neutral', '已停用'] as const : member.locked ? ['warning', '密码输错锁定中'] as const : ['success', '可登录'] as const;
+  return <StatusBadge tone={tone} label={label} />;
 }
 
 function MemberTwoFactor({ member }: { readonly member: UserAdminMember }) {

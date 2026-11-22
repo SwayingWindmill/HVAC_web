@@ -1,5 +1,5 @@
 import type { WorkOrder, WorkOrderPriority, WorkOrderStatus } from '@/api/work-orders';
-import { Status, StatusIndicator } from '@/components/ui/status';
+import { StatusBadge, type StatusTone } from '@/components/status-badge';
 import { cn } from '@/lib/utils';
 
 export const PRIORITY_LABELS: Readonly<Record<WorkOrderPriority, string>> = {
@@ -25,22 +25,17 @@ export const STATUS_LABELS: Readonly<Record<WorkOrderStatus, string>> = {
   CANCELLED: '已取消',
 };
 
-const STATUS_TONE: Readonly<Record<WorkOrderStatus, 'default' | 'info' | 'warning' | 'success'>> = {
-  DRAFT: 'default',
-  OPEN: 'default',
+const STATUS_TONE: Readonly<Record<WorkOrderStatus, StatusTone>> = {
+  DRAFT: 'neutral',
+  OPEN: 'neutral',
   IN_PROGRESS: 'info',
   BLOCKED: 'warning',
   COMPLETED: 'success',
-  CANCELLED: 'default',
+  CANCELLED: 'neutral',
 };
 
 export function WorkOrderStatusBadge({ status }: { readonly status: WorkOrderStatus }) {
-  return (
-    <Status variant={STATUS_TONE[status]}>
-      <StatusIndicator />
-      {STATUS_LABELS[status]}
-    </Status>
-  );
+  return <StatusBadge tone={STATUS_TONE[status]} label={STATUS_LABELS[status]} />;
 }
 
 export const OPEN_STATUSES: readonly WorkOrderStatus[] = ['OPEN', 'IN_PROGRESS', 'BLOCKED'];

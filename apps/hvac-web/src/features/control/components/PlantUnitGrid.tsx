@@ -1,6 +1,6 @@
 import { Link2, Lock, LockOpen, Play, RotateCcw, ShieldAlert, SlidersHorizontal, Square } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { StatusBadge, statusDotClass } from '@/components/common/StatusBadge';
+import { StatusBadge, statusDotClass } from '@/components/status-badge';
 import { deviceStatus, LowConfidenceBadge } from '@/features/operations/realtime/device-presentation';
 import type { PlantDevice } from '@/features/operations/realtime/plant-model';
 import { formatDecimal } from '@/lib/operator-format';

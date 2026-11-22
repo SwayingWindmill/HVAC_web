@@ -29,7 +29,7 @@ import {
   CONFIG_SHADOW_SYNC_PRESENTATION,
   describeGatewayConfigShadowError,
 } from '@/features/integrations/integrations-model';
-import { siteIntegrationsAssetModelQuery } from '@/features/integrations/query';
+import { siteAssetModelQuery } from '@/api/site-asset-model';
 import {
   EDGE_ELIGIBILITY_REASON_LABELS,
   EXECUTION_TARGET_LABELS,
@@ -84,7 +84,11 @@ export function AlarmRuleEdgeCompileSheet({
   const resetCompile = compileMutation.reset;
 
   const assetModelQuery = useQuery(
-    siteIntegrationsAssetModelQuery(siteId, open && canReadGatewayShadow),
+    siteAssetModelQuery(siteId, {
+      enabled: open && canReadGatewayShadow,
+      staleTime: 30_000,
+      retry: false,
+    }),
   );
 
   const gateways = (assetModelQuery.data?.devices ?? []).filter(

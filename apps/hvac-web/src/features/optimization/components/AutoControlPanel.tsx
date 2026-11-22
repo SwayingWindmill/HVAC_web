@@ -7,7 +7,7 @@ import { toast } from 'sonner';
 import { DataTableBlock } from '@/blocks/data-table';
 import { FactTile } from '@/blocks/fact-list';
 import { Panel, PanelHeader } from '@/blocks/panel';
-import { StatusBadge } from '@/components/common/StatusBadge';
+import { StatusBadge } from '@/components/status-badge';
 import { DataTable, type DataTableFeatures } from '@/components/data-table';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';

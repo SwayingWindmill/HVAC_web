@@ -1,7 +1,8 @@
 import { useEffect, useId, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, Link } from '@tanstack/react-router';
-import { Bell, BellOff, BellRing, CheckCheck, CircleCheck, EyeOff, LineChart, Link2, Plus, Sparkles, UserCheck, UserMinus, type LucideIcon } from 'lucide-react';
+import { Bell, BellOff, BellRing, CheckCheck, CircleCheck, EyeOff, LineChart, Link2, Plus, UserCheck, UserMinus, type LucideIcon } from 'lucide-react';
+import { BrandMark } from '@/components/brand-mark';
 import { InfoTip } from '@/components/info-tip';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -23,8 +24,8 @@ import {
 } from '@/components/ui/timeline';
 import { listWorkOrders, type WorkOrderPriority } from '@/api/work-orders';
 import { useAssistantPanel } from '@/features/assistant/assistant-panel-store';
+import { siteAssetModelQuery } from '@/api/site-asset-model';
 import { useSiteEquipment } from '@/features/assets/use-device-names';
-import { siteAssetModelQuery } from '@/features/operations/trends/query';
 import { buildTrendCatalog } from '@/features/operations/trends/trends-model';
 import { buildAlarmTrendSearch } from '@/features/operations/trends/trends-overlays';
 import { CreateWorkOrderDialog } from '@/features/work-orders/CreateWorkOrderDialog';
@@ -324,7 +325,7 @@ export function AlarmDetailPane({ alarmId, empty, deviceNames, creatingWorkOrder
             </Button>
           ) : null}
           <Button variant="outline" onClick={() => explain(explainAlarmQuestion(alarm.title, alarm.firstOccurredAt, alarm.condition === 'CLEARED', deviceName, site.timezone))}>
-            <Sparkles data-icon="inline-start" className="text-primary" />分析原因
+            <BrandMark data-icon="inline-start" className="size-3.5 text-primary" />分析原因
           </Button>
         </div>
         {alarm.condition === 'ACTIVE' && alarm.suppression ? (

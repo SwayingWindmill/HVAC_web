@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { FileUp, LayoutTemplate, Network, Plus } from 'lucide-react';
 import type { Capability } from '@/api/generated/platformGateway.gen';
+import { invalidateSiteAssetModel } from '@/api/site-asset-model';
 import {
   flattenRegistryPages,
   presentRegistryError,
@@ -40,6 +42,7 @@ interface Props {
 type RegistryTab = 'resources' | 'templates' | 'import-export';
 
 export function RegistryAdministration({ capabilities: capabilityList, csrfToken, registerUnsavedDraft }: Props) {
+  const queryClient = useQueryClient();
   const capabilities = useMemo(() => new Set(capabilityList), [capabilityList]);
   const sitesQuery = useRegistrySites(capabilities.has('site.list'));
   const sites = flattenRegistryPages(sitesQuery.data);
@@ -68,8 +71,9 @@ export function RegistryAdministration({ capabilities: capabilityList, csrfToken
       sitesQuery.refetch(),
       selectedSiteId ? siteQuery.refetch() : Promise.resolve(),
       selectedSiteId ? modelQuery.refetch() : Promise.resolve(),
+      invalidateSiteAssetModel(queryClient, selectedSiteId),
     ]);
-  }, [modelQuery, selectedSiteId, siteQuery, sitesQuery]);
+  }, [modelQuery, queryClient, selectedSiteId, siteQuery, sitesQuery]);
 
   const changeSite = (siteId: string) => {
     if (!confirmDiscardRegistryDraft(dirty)) return;

@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { getRouteApi } from '@tanstack/react-router';
-import { statusDotClass } from '@/components/common/StatusBadge';
+import { statusDotClass } from '@/components/status-badge';
 import { Sparkline } from '@/components/ui/sparkline';
 import { formatTelemetryUnit } from '@/domain/centralPlantTelemetry';
 import { formatDecimal } from '@/lib/operator-format';

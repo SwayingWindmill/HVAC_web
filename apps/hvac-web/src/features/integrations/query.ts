@@ -3,7 +3,6 @@ import {
   createPlatformGatewayClient,
   type Device,
   type EnergySeriesResponse,
-  type SiteAssetModel,
   type TelemetryPoint,
 } from '@/api/generated/platformGateway.gen';
 import {
@@ -27,7 +26,6 @@ export interface HourlyHistoryRow {
 }
 
 export const integrationsKeys = {
-  assetModel: (siteId: string) => ['integrations', 'asset-model', siteId] as const,
   snapshots: (siteId: string, deviceCount: number, pointCount: number) =>
     ['integrations', 'snapshots', siteId, deviceCount, pointCount] as const,
   hourlyEnergy: (
@@ -43,19 +41,6 @@ export const integrationsKeys = {
   checkMetersHourly: (siteId: string, targetsKey: string, fromIso: string, toIso: string) =>
     ['integrations', 'check-meters-hourly', siteId, targetsKey, fromIso, toIso] as const,
 };
-
-export function siteIntegrationsAssetModelQuery(siteId: string | null, enabled: boolean) {
-  return queryOptions({
-    queryKey: integrationsKeys.assetModel(siteId ?? 'NONE'),
-    queryFn: async ({ signal }): Promise<SiteAssetModel> => {
-      const response = await gatewayClient.getSiteAssetModel(siteId!, { signal });
-      return response.data;
-    },
-    enabled: Boolean(siteId) && enabled,
-    staleTime: 30_000,
-    retry: false,
-  });
-}
 
 export function siteIntegrationsSnapshotsQuery(input: {
   readonly tenantId: string | null;

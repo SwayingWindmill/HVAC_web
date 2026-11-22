@@ -4,12 +4,12 @@ import { z } from 'zod';
 import { gatewayPath, gatewayRequest, publishedValueOf, valueOf } from '@/api/gateway-client';
 import { intelligencePaths } from '@/api/generated/platformGateway.gen';
 import { createS2TelemetryClient } from '@/api/generated/s2Telemetry.gen';
+import { siteAssetModelQuery } from '@/api/site-asset-model';
 import { listAlarms, type Alarm } from '@/features/alarms/alarm-api';
 import { quarterHours } from '@/features/load/demand-model';
 import { plantPowerPoint } from '@/features/load/query';
 import { siteMidnight, wallTime } from '@/features/energy-analysis/consumption/model';
 import { useEnergyReader } from '@/features/energy-analysis/consumption/query';
-import { useRealtimePlant } from '@/features/operations/realtime/use-realtime-plant';
 import { siteTariffQuery } from '@/features/tariff/query';
 import { sumCosts } from '@/features/tariff/tariff-model';
 import { listView } from '@/features/work-orders/work-order-queries';
@@ -164,8 +164,8 @@ export function useMonthEnergy(month: string, span: ReportWindow, enabled = true
 /** The plant's quarter-hour demand over the month, from the HVAC total meter's power. */
 export function useMonthDemand(month: string, span: ReportWindow) {
   const { site, principal } = siteRoute.useRouteContext();
-  const { registry } = useRealtimePlant();
-  const meter = registry.data ? plantPowerPoint(registry.data.assetModel) : null;
+  const assetModel = useQuery(siteAssetModelQuery(site.id));
+  const meter = assetModel.data ? plantPowerPoint(assetModel.data) : null;
   const demand = useQuery({
     queryKey: ['monthly-report', site.id, month, span.to.getTime(), 'demand', meter?.deviceId],
     enabled: meter !== null,
