@@ -28,3 +28,28 @@ func TestFormatInstantUsesFrozenUTCMilliseconds(t *testing.T) {
 		})
 	}
 }
+
+func TestDeviceMutationConnectivityModeValidation(t *testing.T) {
+	base := DeviceMutation{
+		SiteID:      testSiteA1,
+		Code:        "thermostat-01",
+		DisplayName: "Thermostat 01",
+		DeviceType:  "THERMOSTAT",
+		Status:      "ACTIVE",
+		Meta:        MutationMeta{IdempotencyKey: "dev-mode-val-01", Reason: "validate connectivityMode"},
+	}
+	for _, validMode := range []string{"", "GATEWAY_PROXIED", "DIRECT"} {
+		m := base
+		m.ConnectivityMode = validMode
+		if err := m.Validate(); err != nil {
+			t.Fatalf("expected ConnectivityMode=%q to validate, got %v", validMode, err)
+		}
+	}
+	for _, badMode := range []string{"MQTT", "direct", "PROXIED"} {
+		m := base
+		m.ConnectivityMode = badMode
+		if err := m.Validate(); err != ErrInvalidMutation {
+			t.Fatalf("expected ErrInvalidMutation for ConnectivityMode=%q, got %v", badMode, err)
+		}
+	}
+}

@@ -106,6 +106,8 @@ services:
       - ../connectivity/postgres/init/gateway-shadow-edge-rules.sql:/docker-entrypoint-initdb.d/0950.sql:ro
       - ./postgres/init/gateway-ota-targets-view.sql:/docker-entrypoint-initdb.d/0960.sql:ro
       - ../connectivity/postgres/init/gateway-ota-management.sql:/docker-entrypoint-initdb.d/0970.sql:ro
+      - ./postgres/init/device-direct-connectivity-mode.sql:/docker-entrypoint-initdb.d/0980.sql:ro
+      - ../connectivity/postgres/init/gateway-jitp-provisioning.sql:/docker-entrypoint-initdb.d/0990.sql:ro
     ports:
       - "127.0.0.1:${S1_POSTGRES_HOST_PORT:-55432}:5432"
     healthcheck:

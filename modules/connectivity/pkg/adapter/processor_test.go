@@ -993,3 +993,182 @@ type eventErrorTelemetry struct {
 func (e *eventErrorTelemetry) AcceptRuntimeEvent(_ context.Context, _ RuntimeEventEvidence) error {
 	return e.err
 }
+
+type directFakeIdentities struct {
+	*fakeIdentities
+	directGateway Gateway
+	boundPoints   map[string]*ResolvedPoint
+}
+
+func (d *directFakeIdentities) ResolveGateway(_ context.Context, gatewayID string) (Gateway, error) {
+	if gatewayID == d.directGateway.ID {
+		return d.directGateway, nil
+	}
+	return d.fakeIdentities.ResolveGateway(context.Background(), gatewayID)
+}
+
+func (d *directFakeIdentities) ResolveDevice(_ context.Context, gateway Gateway, sourceKey string) (string, error) {
+	if gateway.DirectDevice {
+		trimmed := strings.TrimSpace(sourceKey)
+		if strings.EqualFold(trimmed, gateway.ID) || strings.EqualFold(trimmed, "self") || (gateway.DeviceCode != "" && trimmed == gateway.DeviceCode) {
+			return gateway.ID, nil
+		}
+		return "", nil
+	}
+	return d.fakeIdentities.ResolveDevice(context.Background(), gateway, sourceKey)
+}
+
+func (d *directFakeIdentities) ResolveBindings(_ context.Context, gateway Gateway, queries []DevicePointQuery) (ResolvedBindings, error) {
+	if !gateway.DirectDevice {
+		return d.fakeIdentities.ResolveBindings(context.Background(), gateway, queries)
+	}
+	out := ResolvedBindings{Devices: make(map[string]string), Points: make(map[string]*ResolvedPoint)}
+	for _, q := range queries {
+		trimmed := strings.TrimSpace(q.SourceKey)
+		if strings.EqualFold(trimmed, gateway.ID) || strings.EqualFold(trimmed, "self") || (gateway.DeviceCode != "" && trimmed == gateway.DeviceCode) {
+			out.Devices[q.SourceKey] = gateway.ID
+			if pt, ok := d.boundPoints[q.PointCode]; ok {
+				out.Points[PointBindingKey(gateway.ID, q.PointCode)] = pt
+			}
+		}
+	}
+	return out, nil
+}
+
+func TestDirectDeviceIsolationStatusAndEvents(t *testing.T) {
+	directID := "018f3e00-4000-7000-8000-000000000999"
+	ptID := "018f3e00-5000-7000-8000-000000000999"
+	identities := &directFakeIdentities{
+		fakeIdentities: newFakeIdentities(),
+		directGateway: Gateway{
+			ID:           directID,
+			TenantID:     testTenantID,
+			SiteID:       testSiteID,
+			DirectDevice: true,
+			DeviceCode:   "thermostat-direct-01",
+		},
+		boundPoints: map[string]*ResolvedPoint{
+			"zone_temp": {PointID: ptID, PointType: "TELEMETRY", ValueType: "NUMBER", PointRevision: 1},
+		},
+	}
+	telemetry := &fakeTelemetry{}
+	now := time.Date(2026, 11, 23, 0, 10, 0, 0, time.UTC)
+	processor, err := NewProcessor(identities, telemetry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	processor.now = func() time.Time { return now }
+
+	marshal := func(v any) []byte {
+		t.Helper()
+		b, marshalErr := json.Marshal(v)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		return b
+	}
+
+	telemetryPayload := marshal(map[string]any{
+		"schemaVersion": "2.0",
+		"messageId":     messageID(11),
+		"gatewayId":     directID,
+		"timestamp":     now.UnixMilli(),
+		"sequence":      1,
+		"replay":        false,
+		"payload": map[string]any{
+			"devices": []map[string]any{
+				{"deviceId": "thermostat-direct-01", "deviceTimestamp": now.UnixMilli(), "points": []map[string]any{{"code": "zone_temp", "value": 24.5, "quality": 0}}},
+				{"deviceId": "CHILLER-02", "deviceTimestamp": now.UnixMilli(), "points": []map[string]any{{"code": "zone_temp", "value": 99.9, "quality": 0}}},
+			},
+		},
+	})
+	if _, err := processor.Process(context.Background(), telemetryTopic(directID), telemetryPayload); err != nil {
+		t.Fatalf("direct device telemetry failed: %v", err)
+	}
+	accepted := telemetry.accepted()
+	if len(accepted) != 2 {
+		t.Fatalf("expected 2 observations sent to telemetry runtime, got %d", len(accepted))
+	}
+	if accepted[0].Device == nil || accepted[0].Device.DeviceID != directID || accepted[0].Point == nil || accepted[0].Point.PointID != ptID {
+		t.Fatalf("expected own DeviceCode resolved to %s/%s, got %#v", directID, ptID, accepted[0])
+	}
+	if accepted[1].Device != nil || accepted[1].Point != nil {
+		t.Fatalf("spoofed CHILLER-02 observation must stay unresolved, got %#v", accepted[1])
+	}
+
+	statusTopic := "hvac/v1/" + directID + "/up/status"
+	for _, step := range []struct {
+		seq    int64
+		online bool
+		wantEv string
+	}{
+		{seq: 1, online: true, wantEv: "DEVICE_CONNECTED"},
+		{seq: 2, online: false, wantEv: "DEVICE_DISCONNECTED"},
+	} {
+		payload := marshal(map[string]any{
+			"v":      "1.0",
+			"gw":     directID,
+			"sid":    "sess-direct-1",
+			"seq":    step.seq,
+			"ts":     now.Add(time.Duration(step.seq) * time.Second).Format(time.RFC3339),
+			"online": step.online,
+		})
+		if _, err := processor.Process(context.Background(), statusTopic, payload); err != nil {
+			t.Fatalf("direct status online=%v failed: %v", step.online, err)
+		}
+		evs := telemetry.recordedEvents()
+		last := evs[len(evs)-1]
+		if last.EventType != step.wantEv || last.SourceType != "DEVICE" || last.Device == nil || last.Device.DeviceID != directID {
+			t.Fatalf("direct status online=%v produced event=%#v, want %s for %s", step.online, last, step.wantEv, directID)
+		}
+	}
+
+	eventTopicPath := "hvac/v1/" + directID + "/up/event"
+	selfSleep := marshal(map[string]any{
+		"schemaVersion": "2.0",
+		"messageId":     messageID(14),
+		"gatewayId":     directID,
+		"timestamp":     now.Add(5 * time.Second).UnixMilli(),
+		"sequence":      3,
+		"payload": map[string]any{
+			"eventType":  "DEVICE_SLEEPING",
+			"sourceType": "DEVICE",
+			"sourceId":   "self",
+			"eventTime":  now.Add(5 * time.Second).UnixMilli(),
+			"severity":   "INFO",
+			"data":       map[string]any{},
+		},
+	})
+	if _, err := processor.Process(context.Background(), eventTopicPath, selfSleep); err != nil {
+		t.Fatalf("direct self sleep event failed: %v", err)
+	}
+	evs := telemetry.recordedEvents()
+	last := evs[len(evs)-1]
+	if last.EventType != "DEVICE_SLEEPING" || last.Device == nil || last.Device.DeviceID != directID {
+		t.Fatalf("expected direct DEVICE_SLEEPING scoped to %s, got %#v", directID, last)
+	}
+
+	spoofEvent := marshal(map[string]any{
+		"schemaVersion": "2.0",
+		"messageId":     messageID(15),
+		"gatewayId":     directID,
+		"timestamp":     now.Add(6 * time.Second).UnixMilli(),
+		"sequence":      4,
+		"payload": map[string]any{
+			"eventType":  "DEVICE_DISCONNECTED",
+			"sourceType": "DEVICE",
+			"sourceId":   "CHILLER-02",
+			"eventTime":  now.Add(6 * time.Second).UnixMilli(),
+			"severity":   "WARNING",
+			"data":       map[string]any{},
+		},
+	})
+	if _, err := processor.Process(context.Background(), eventTopicPath, spoofEvent); err != nil {
+		t.Fatalf("spoof event process failed: %v", err)
+	}
+	evs = telemetry.recordedEvents()
+	last = evs[len(evs)-1]
+	if last.Device != nil {
+		t.Fatalf("spoofed direct event must not resolve another Device, got %#v", last.Device)
+	}
+}

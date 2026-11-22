@@ -391,11 +391,16 @@ func (store *Store) resolveGatewayUncached(ctx context.Context, gatewayID string
 	}
 	defer tx.Rollback(ctx)
 	gateway := adapter.Gateway{ID: gatewayID}
+	var deviceType, connectivityMode, deviceCode string
 	err = tx.QueryRow(ctx, `
-SELECT tenant_id::text, site_id::text
+SELECT tenant_id::text, site_id::text, device_type, connectivity_mode, device_code
 FROM core_registry.gateway_directory_v1
 WHERE gateway_id = $1::uuid AND status = 'ACTIVE'
-`, gatewayID).Scan(&gateway.TenantID, &gateway.SiteID)
+`, gatewayID).Scan(&gateway.TenantID, &gateway.SiteID, &deviceType, &connectivityMode, &deviceCode)
+	if err == nil && deviceType != "GATEWAY" && connectivityMode == "DIRECT" {
+		gateway.DirectDevice = true
+		gateway.DeviceCode = strings.TrimSpace(deviceCode)
+	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return adapter.Gateway{}, time.Time{}, adapter.ErrGatewayUnknown
 	}

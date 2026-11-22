@@ -86,14 +86,15 @@ type AssetMutation struct {
 }
 
 type DeviceMutation struct {
-	ID          string            `json:"id,omitempty"`
-	SiteID      string            `json:"siteId"`
-	Code        string            `json:"code"`
-	DisplayName string            `json:"displayName"`
-	DeviceType  string            `json:"deviceType"`
-	Status      string            `json:"status"`
-	Tags        map[string]string `json:"tags,omitempty"`
-	Meta        MutationMeta      `json:"meta"`
+	ID               string            `json:"id,omitempty"`
+	SiteID           string            `json:"siteId"`
+	Code             string            `json:"code"`
+	DisplayName      string            `json:"displayName"`
+	DeviceType       string            `json:"deviceType"`
+	Status           string            `json:"status"`
+	Tags             map[string]string `json:"tags,omitempty"`
+	ConnectivityMode string            `json:"connectivityMode,omitempty"`
+	Meta             MutationMeta      `json:"meta"`
 }
 
 type SensorMutation struct {
@@ -203,6 +204,11 @@ func (input DeviceMutation) Validate() error {
 		return err
 	}
 	if strings.TrimSpace(input.DeviceType) == "" || len(input.DeviceType) > 64 {
+		return ErrInvalidMutation
+	}
+	switch input.ConnectivityMode {
+	case "", "GATEWAY_PROXIED", "DIRECT":
+	default:
 		return ErrInvalidMutation
 	}
 	return ValidateTags(input.Tags)

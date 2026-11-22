@@ -84,6 +84,12 @@ func NewCredentialHandlerWithOTA(service *CredentialService, authorize Credentia
 				status, code = 404, "GATEWAY_NOT_FOUND"
 			case errors.Is(err, ErrCRLSignUnsupported):
 				status, code = http.StatusConflict, "CRL_SIGN_UNSUPPORTED"
+			case errors.Is(err, ErrProvisioningInvalid):
+				status, code = http.StatusBadRequest, "PROVISIONING_INVALID"
+			case errors.Is(err, ErrProvisioningConflict):
+				status, code = http.StatusConflict, "PROVISIONING_CONFLICT"
+			case errors.Is(err, ErrProvisioningNotFound):
+				status, code = http.StatusNotFound, "PROVISIONING_NOT_FOUND"
 			}
 			w.WriteHeader(status)
 			_ = json.NewEncoder(w).Encode(map[string]string{"code": code})
@@ -114,19 +120,35 @@ func NewCredentialHandlerWithOTA(service *CredentialService, authorize Credentia
 		}
 		return nil
 	}
-	decode := func(w http.ResponseWriter, r *http.Request, value any) error {
-		r.Body = http.MaxBytesReader(w, r.Body, 32<<10)
+	decodeBounded := func(w http.ResponseWriter, r *http.Request, value any, limit int64, parseErr error) error {
+		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		decoder := json.NewDecoder(r.Body)
 		decoder.DisallowUnknownFields()
 		if decoder.Decode(value) != nil {
-			return ErrEnrollmentRejected
+			return parseErr
 		}
 		var extra any
 		if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-			return ErrEnrollmentRejected
+			return parseErr
 		}
 		return nil
 	}
+	decode := func(w http.ResponseWriter, r *http.Request, value any) error {
+		return decodeBounded(w, r, value, 32<<10, ErrEnrollmentRejected)
+	}
+	mux.HandleFunc("POST /gateway/v1/jitp/enroll", func(w http.ResponseWriter, r *http.Request) {
+		var input JITPEnrollRequest
+		if err := decode(w, r, &input); err != nil {
+			finish(w, nil, err)
+			return
+		}
+		if service == nil {
+			finish(w, nil, errors.New("credential service is not configured"))
+			return
+		}
+		value, err := service.EnrollJITP(r.Context(), input)
+		finish(w, value, err)
+	})
 	mux.HandleFunc("POST /gateway/v1/enroll", func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
 			EnrollmentCode string `json:"enrollmentCode"`
@@ -305,6 +327,84 @@ func NewCredentialHandlerWithOTA(service *CredentialService, authorize Credentia
 		}
 		value, err := service.RevokeCertificate(r.Context(), claims, r.PathValue("gatewayId"), r.PathValue("credentialId"), reason)
 		finish(w, value, err)
+	})
+	authorizeProvisioning := func(w http.ResponseWriter, r *http.Request, action registryauth.Action) (registryauth.GrantClaims, bool) {
+		if authorize == nil {
+			finish(w, nil, ErrCredentialForbidden)
+			return registryauth.GrantClaims{}, false
+		}
+		claims, err := authorize(r, action)
+		if err != nil {
+			finish(w, nil, err)
+			return registryauth.GrantClaims{}, false
+		}
+		if service == nil {
+			finish(w, nil, errors.New("credential service is not configured"))
+			return registryauth.GrantClaims{}, false
+		}
+		return claims, true
+	}
+	mux.HandleFunc("GET /internal/v1/provisioning/batches", func(w http.ResponseWriter, r *http.Request) {
+		claims, ok := authorizeProvisioning(w, r, registryauth.ActionDeviceRead)
+		if !ok {
+			return
+		}
+		batches, err := service.ListProvisioningBatches(r.Context(), claims, r.URL.Query().Get("siteId"))
+		if err != nil {
+			finish(w, nil, err)
+			return
+		}
+		finish(w, map[string]any{"items": batches}, nil)
+	})
+	mux.HandleFunc("POST /internal/v1/provisioning/batches", func(w http.ResponseWriter, r *http.Request) {
+		claims, ok := authorizeProvisioning(w, r, registryauth.ActionDeviceWrite)
+		if !ok {
+			return
+		}
+		var input CreateProvisioningBatchRequest
+		if err := decodeBounded(w, r, &input, 256<<10, ErrProvisioningInvalid); err != nil {
+			finish(w, nil, err)
+			return
+		}
+		created, err := service.CreateProvisioningBatch(r.Context(), claims, input)
+		finish(w, created, err)
+	})
+	mux.HandleFunc("GET /internal/v1/provisioning/batches/{batchId}", func(w http.ResponseWriter, r *http.Request) {
+		claims, ok := authorizeProvisioning(w, r, registryauth.ActionDeviceRead)
+		if !ok {
+			return
+		}
+		batch, devices, err := service.GetProvisioningBatch(r.Context(), claims, r.PathValue("batchId"))
+		if err != nil {
+			finish(w, nil, err)
+			return
+		}
+		finish(w, map[string]any{"batch": batch, "devices": devices}, nil)
+	})
+	mux.HandleFunc("POST /internal/v1/provisioning/batches/{batchId}/devices", func(w http.ResponseWriter, r *http.Request) {
+		claims, ok := authorizeProvisioning(w, r, registryauth.ActionDeviceWrite)
+		if !ok {
+			return
+		}
+		var input RegisterBatchDevicesRequest
+		if err := decodeBounded(w, r, &input, 256<<10, ErrProvisioningInvalid); err != nil {
+			finish(w, nil, err)
+			return
+		}
+		devices, err := service.RegisterBatchDevices(r.Context(), claims, r.PathValue("batchId"), input)
+		if err != nil {
+			finish(w, nil, err)
+			return
+		}
+		finish(w, map[string]any{"items": devices}, nil)
+	})
+	mux.HandleFunc("POST /internal/v1/provisioning/batches/{batchId}/revoke", func(w http.ResponseWriter, r *http.Request) {
+		claims, ok := authorizeProvisioning(w, r, registryauth.ActionDeviceWrite)
+		if !ok {
+			return
+		}
+		batch, err := service.RevokeProvisioningBatch(r.Context(), claims, r.PathValue("batchId"))
+		finish(w, batch, err)
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		allowCoreService := isGatewayRetireRequest(r) || isGatewayTemplateDriverUpsertRequest(r)

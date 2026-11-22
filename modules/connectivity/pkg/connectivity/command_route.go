@@ -23,9 +23,25 @@ FROM core_registry.gateway_device_source_keys_v1
 WHERE site_id = $1::uuid AND device_id = $2::uuid
 `, envelope.SiteID, envelope.DeviceID).Scan(&route.GatewayID, &route.ExternalDeviceID, &route.BindingRevision)
 		if errors.Is(err, pgx.ErrNoRows) {
-			return commandmodel.ErrCommandRouteNotFound
-		}
-		if err != nil {
+			var deviceCode string
+			directErr := tx.QueryRow(ctx, `
+SELECT device_code, revision
+FROM core_registry.gateway_directory_v1
+WHERE gateway_id = $1::uuid AND tenant_id = $2::uuid AND site_id = $3::uuid
+  AND status = 'ACTIVE' AND connectivity_mode = 'DIRECT'
+`, envelope.DeviceID, envelope.TenantID, envelope.SiteID).Scan(&deviceCode, &route.BindingRevision)
+			if errors.Is(directErr, pgx.ErrNoRows) {
+				return commandmodel.ErrCommandRouteNotFound
+			}
+			if directErr != nil {
+				return fmt.Errorf("resolve direct command Device directory: %w", directErr)
+			}
+			route.GatewayID = envelope.DeviceID
+			route.ExternalDeviceID = strings.TrimSpace(deviceCode)
+			if route.ExternalDeviceID == "" {
+				route.ExternalDeviceID = envelope.DeviceID
+			}
+		} else if err != nil {
 			return fmt.Errorf("resolve command Device source key: %w", err)
 		}
 		var pointCode string

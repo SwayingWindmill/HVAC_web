@@ -31,6 +31,7 @@ type EnrollmentCode struct {
 	ExpiresAt      time.Time `json:"expiresAt"`
 }
 type IssuedCredential struct {
+	DeviceID       string    `json:"deviceId,omitempty"`
 	CredentialID   string    `json:"credentialId,omitempty"`
 	SerialNumber   string    `json:"serialNumber,omitempty"`
 	CertificatePEM string    `json:"certificatePem"`

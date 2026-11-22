@@ -133,6 +133,8 @@ COPY infra/registry/postgres/init/optimization-recommendation-auxiliary-targets.
 COPY infra/connectivity/postgres/init/gateway-shadow-edge-rules.sql /opt/hvac/repo/infra/connectivity/postgres/init/gateway-shadow-edge-rules.sql
 COPY infra/registry/postgres/init/gateway-ota-targets-view.sql /opt/hvac/repo/infra/registry/postgres/init/gateway-ota-targets-view.sql
 COPY infra/connectivity/postgres/init/gateway-ota-management.sql /opt/hvac/repo/infra/connectivity/postgres/init/gateway-ota-management.sql
+COPY infra/registry/postgres/init/device-direct-connectivity-mode.sql /opt/hvac/repo/infra/registry/postgres/init/device-direct-connectivity-mode.sql
+COPY infra/connectivity/postgres/init/gateway-jitp-provisioning.sql /opt/hvac/repo/infra/connectivity/postgres/init/gateway-jitp-provisioning.sql
 COPY infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql /opt/hvac/repo/infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql
 COPY infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql /opt/hvac/repo/infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql
 COPY infra/telemetry/postgres/init/003-s2-telemetry-ingest.sql /opt/hvac/repo/infra/telemetry/postgres/init/003-s2-telemetry-ingest.sql
@@ -153,11 +155,11 @@ COPY infra/telemetry/postgres/init/013-schema-and-table-comments.sql /opt/hvac/r
 COPY infra/telemetry/postgres/init/mqtt-runtime-events.sql /opt/hvac/repo/infra/telemetry/postgres/init/mqtt-runtime-events.sql
 COPY infra/telemetry/postgres/init/alarm-evaluation-dead-letter.sql /opt/hvac/repo/infra/telemetry/postgres/init/alarm-evaluation-dead-letter.sql
 COPY infra/telemetry/postgres/init/telemetry-history-dead-letter-and-retention.sql /opt/hvac/repo/infra/telemetry/postgres/init/telemetry-history-dead-letter-and-retention.sql
-COPY infra/telemetry/postgres/init/telemetry-runtime-unnest-and-indexes.sql /opt/hvac/repo/infra/telemetry/postgres/init/telemetry-runtime-unnest-and-indexes.sql
-COPY infra/telemetry/postgres/init/telemetry-accepted-point-sample-index.sql /opt/hvac/repo/infra/telemetry/postgres/init/telemetry-accepted-point-sample-index.sql
 
 FROM scratch AS sources-3
 
+COPY infra/telemetry/postgres/init/telemetry-runtime-unnest-and-indexes.sql /opt/hvac/repo/infra/telemetry/postgres/init/telemetry-runtime-unnest-and-indexes.sql
+COPY infra/telemetry/postgres/init/telemetry-accepted-point-sample-index.sql /opt/hvac/repo/infra/telemetry/postgres/init/telemetry-accepted-point-sample-index.sql
 COPY infra/telemetry/postgres/init/telemetry-edge-alarm-delivery.sql /opt/hvac/repo/infra/telemetry/postgres/init/telemetry-edge-alarm-delivery.sql
 COPY infra/telemetry/postgres/init/telemetry-low-power-sleeping-presence.sql /opt/hvac/repo/infra/telemetry/postgres/init/telemetry-low-power-sleeping-presence.sql
 COPY modules/command/migrations/001_s3_command_runtime.sql /opt/hvac/repo/modules/command/migrations/001_s3_command_runtime.sql
