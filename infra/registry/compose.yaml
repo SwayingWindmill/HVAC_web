@@ -104,6 +104,8 @@ services:
       - ./postgres/init/optimization-multiloop-vfd-bounds.sql:/docker-entrypoint-initdb.d/0930.sql:ro
       - ./postgres/init/optimization-recommendation-auxiliary-targets.sql:/docker-entrypoint-initdb.d/0940.sql:ro
       - ../connectivity/postgres/init/gateway-shadow-edge-rules.sql:/docker-entrypoint-initdb.d/0950.sql:ro
+      - ./postgres/init/gateway-ota-targets-view.sql:/docker-entrypoint-initdb.d/0960.sql:ro
+      - ../connectivity/postgres/init/gateway-ota-management.sql:/docker-entrypoint-initdb.d/0970.sql:ro
     ports:
       - "127.0.0.1:${S1_POSTGRES_HOST_PORT:-55432}:5432"
     healthcheck:

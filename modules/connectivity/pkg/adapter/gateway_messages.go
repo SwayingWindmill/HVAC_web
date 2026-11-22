@@ -17,6 +17,7 @@ const (
 	MessageTypeEvent     = "event"
 	MessageTypeStatus    = "status"
 	MessageTypeShadow    = "shadow"
+	MessageTypeOTA       = "ota"
 )
 
 // UplinkTopicFilters are the Gateway uplinks Connectivity consumes (ADR 0015). The broker
@@ -26,6 +27,7 @@ var UplinkTopicFilters = []string{
 	"hvac/v1/+/up/" + MessageTypeEvent,
 	"hvac/v1/+/up/" + MessageTypeStatus,
 	"hvac/v1/+/up/" + MessageTypeShadow,
+	"hvac/v1/+/up/" + MessageTypeOTA,
 }
 
 type MessageTopic struct {
@@ -42,7 +44,7 @@ func ParseMessageTopic(topic string) (MessageTopic, error) {
 		return MessageTopic{}, errors.New("MQTT topic Gateway id is invalid")
 	}
 	switch parts[4] {
-	case MessageTypeTelemetry, MessageTypeEvent, MessageTypeStatus, MessageTypeShadow:
+	case MessageTypeTelemetry, MessageTypeEvent, MessageTypeStatus, MessageTypeShadow, MessageTypeOTA:
 	default:
 		return MessageTopic{}, errors.New("MQTT uplink message type is not accepted")
 	}

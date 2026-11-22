@@ -261,12 +261,14 @@ func TestRuntimeSubscribesWithSharedPrefixWhenConfigured(t *testing.T) {
 		"$share/connectivity/hvac/v1/+/up/event",
 		"$share/connectivity/hvac/v1/+/up/status",
 		"$share/connectivity/hvac/v1/+/up/shadow",
+		"$share/connectivity/hvac/v1/+/up/ota",
 	}
 	if len(conn.subscriptions) != len(want) ||
 		conn.subscriptions[0] != want[0] ||
 		conn.subscriptions[1] != want[1] ||
 		conn.subscriptions[2] != want[2] ||
-		conn.subscriptions[3] != want[3] {
+		conn.subscriptions[3] != want[3] ||
+		conn.subscriptions[4] != want[4] {
 		t.Fatalf("broker subscriptions=%v, want %v", conn.subscriptions, want)
 	}
 }

@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 65,
+  "registryRevision": 66,
   "routes": [
     {"method": "GET", "path": "/api/v1/sites/{siteId}/data-gaps", "owner": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
     {"method": "GET", "path": "/api/v1/iam/members", "owner": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "principal"]},
@@ -32,6 +32,14 @@
     {"method": "GET", "path": "/api/v1/gateways/{gatewayId}/packet-capture", "owner": "connectivity", "publicIngress": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
     {"method": "POST", "path": "/api/v1/gateways/{gatewayId}/packet-capture/start", "owner": "connectivity", "publicIngress": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
     {"method": "POST", "path": "/api/v1/gateways/{gatewayId}/packet-capture/stop", "owner": "connectivity", "publicIngress": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
+    {"method": "GET", "path": "/api/v1/ota/packages", "owner": "connectivity", "publicIngress": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
+    {"method": "POST", "path": "/api/v1/ota/packages", "owner": "connectivity", "publicIngress": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
+    {"method": "GET", "path": "/api/v1/ota/campaigns", "owner": "connectivity", "publicIngress": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
+    {"method": "POST", "path": "/api/v1/ota/campaigns", "owner": "connectivity", "publicIngress": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
+    {"method": "GET", "path": "/api/v1/ota/campaigns/{campaignId}", "owner": "connectivity", "publicIngress": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
+    {"method": "POST", "path": "/api/v1/ota/campaigns/{campaignId}/pause", "owner": "connectivity", "publicIngress": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
+    {"method": "POST", "path": "/api/v1/ota/campaigns/{campaignId}/resume", "owner": "connectivity", "publicIngress": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
+    {"method": "POST", "path": "/api/v1/ota/campaigns/{campaignId}/rollback", "owner": "connectivity", "publicIngress": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
     {
       "method": "GET",
       "path": "/api/v1/health",

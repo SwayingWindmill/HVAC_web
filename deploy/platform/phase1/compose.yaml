@@ -791,6 +791,11 @@ services:
       CONNECTIVITY_BATCH_WINDOW: ${CONNECTIVITY_BATCH_WINDOW:-100ms}
       CONNECTIVITY_DATABASE_URL: ${CONNECTIVITY_DATABASE_URL:-}
       CONNECTIVITY_OVERFLOW_DIR: ${CONNECTIVITY_OVERFLOW_DIR:-/var/lib/hvac/connectivity-spool}
+      CONNECTIVITY_OTA_STORAGE_DIR: ${CONNECTIVITY_OTA_STORAGE_DIR:-/var/lib/hvac/ota-packages}
+      CONNECTIVITY_OTA_PUBLIC_BASE_URL: ${CONNECTIVITY_OTA_PUBLIC_BASE_URL:-${PLATFORM_PUBLIC_ORIGIN:-}}
+      CONNECTIVITY_OTA_SIGNING_KEY_FILE: ${CONNECTIVITY_OTA_SIGNING_KEY_FILE:-}
+      CONNECTIVITY_OTA_SIGNING_KEY_ID: ${CONNECTIVITY_OTA_SIGNING_KEY_ID:-platform-ota-v1}
+      CONNECTIVITY_OTA_TRUSTED_KEYS_JSON: ${CONNECTIVITY_OTA_TRUSTED_KEYS_JSON:-}
       GATEWAY_BROKER_URL: ${GATEWAY_BROKER_URL:-tls://localhost:8883}
       GATEWAY_CRL_OUTPUT_FILE: ${GATEWAY_CRL_OUTPUT_FILE:-/var/lib/hvac/mqtt-crl/gateway-ca.crl.pem}
       CONNECTIVITY_IAM_URL: ${IAM_URL:-https://iam-service:8444}
@@ -799,6 +804,7 @@ services:
       - ${PHASE1_RUNTIME_DIR:-./runtime}/gateway-ca:/run/hvac/gateway-ca:ro
       - ${MQTT_CRL_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/mqtt-crl}:/var/lib/hvac/mqtt-crl
       - connectivity-spool:/var/lib/hvac/connectivity-spool
+      - connectivity-ota-packages:/var/lib/hvac/ota-packages
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
@@ -1450,3 +1456,4 @@ volumes:
   grafana-data: {}
   alertmanager-data: {}
   connectivity-spool: {}
+  connectivity-ota-packages: {}

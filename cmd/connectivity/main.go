@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 	"github.com/quanlaihe/hvac-web/libs/mqttclient"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
@@ -160,6 +161,7 @@ func run() int {
 	}
 	concentratorService := concentrator.NewService(connectivityStore, concentratorTransport)
 	presence := newGatewayOnlineTrackerWithMetrics(telemetry.Metrics)
+	otaPublicBaseURL := strings.TrimSpace(os.Getenv("CONNECTIVITY_OTA_PUBLIC_BASE_URL"))
 	credentials, tunnelHub, mqttGuard, crlCtrl, err := newCredentialRuntime(credentialRuntimeConfig{
 		RootCtx:             drainRootCtx,
 		Logger:              logger,
@@ -172,9 +174,10 @@ func run() int {
 		EnableGuardFromEnv:  true,
 		MQTTSession:         mqttSession,
 		TunnelOptions:       []tunnel.Option{tunnel.WithObservability(logger, telemetry.Metrics)},
+		OTAPublicBaseURL:    otaPublicBaseURL,
 	})
 	if err != nil {
-		logger.Error("connectivity_credentials_unavailable", "error_code", "CREDENTIAL_MODULE_UNAVAILABLE")
+		logger.Error("connectivity_credentials_unavailable", "error_code", "CREDENTIAL_MODULE_UNAVAILABLE", "error", err.Error())
 		return 1
 	}
 	if mqttGuard != nil {
@@ -208,18 +211,39 @@ func run() int {
 				"delivery_id", ack.DeliveryID,
 			)
 		}),
+		adapter.WithOTAResultHook(func(hookCtx context.Context, gw adapter.Gateway, res edgecontrol.OTAResultPayload) error {
+			_, dispatches, applyErr := connectivityStore.ApplyGatewayOTAResult(hookCtx, gw.ID, res)
+			if applyErr != nil {
+				if errors.Is(applyErr, connectivity.ErrNotFound) || errors.Is(applyErr, connectivity.ErrOTAInvalid) {
+					logger.Warn("mqtt_ota_result_rejected", "gateway_id", gw.ID, "task_id", res.TaskID, "error", applyErr.Error())
+					return fmt.Errorf("%w: %v", adapter.ErrOTAResultRejected, applyErr)
+				}
+				return applyErr
+			}
+			if len(dispatches) > 0 && mqttSession != nil {
+				observability.GoSafe(logger, telemetry.Metrics, "connectivity.ota_rollout_publish", func() {
+					publishGatewayOTAStages(drainRootCtx, mqttSession, logger, telemetry.Metrics, tap, otaPublicBaseURL, dispatches)
+				})
+			}
+			return nil
+		}),
 		adapter.WithGatewayConnectHook(func(_ context.Context, gatewayID string) {
 			bgMu.RLock()
 			if bgClosed || ingressCtx.Err() != nil {
 				bgMu.RUnlock()
 				return
 			}
-			bgWG.Add(1)
+			bgWG.Add(2)
 			bgMu.RUnlock()
 			go func() {
 				defer bgWG.Done()
 				defer observability.Recover(logger, telemetry.Metrics, "connectivity.concentrator_shadow_reconcile")
 				reconcileConcentratorShadowAsync(ingressCtx, concentratorService, logger, gatewayID)
+			}()
+			go func() {
+				defer bgWG.Done()
+				defer observability.Recover(logger, telemetry.Metrics, "connectivity.gateway_ota_reconcile")
+				reconcileGatewayOTAOnConnectAsync(ingressCtx, connectivityStore, mqttSession, logger, telemetry.Metrics, tap, otaPublicBaseURL, gatewayID)
 			}()
 		}),
 	)
@@ -769,6 +793,36 @@ func reconcileConcentratorShadowAsync(rootCtx context.Context, service *concentr
 	defer cancel()
 	if err := service.ReconcileConcentratorShadow(reconcileCtx, gatewayID); err != nil && logger != nil {
 		logger.Warn("concentrator_shadow_reconcile_failed", "gateway_id", gatewayID, "error", err.Error())
+	}
+}
+
+func reconcileGatewayOTAOnConnectAsync(
+	rootCtx context.Context,
+	store *connectivity.Store,
+	publisher shadowMQTTPublisher,
+	logger *slog.Logger,
+	metrics *observability.Registry,
+	tap *packettap.Manager,
+	publicBaseURL string,
+	gatewayID string,
+) {
+	if store == nil || publisher == nil || strings.TrimSpace(gatewayID) == "" {
+		return
+	}
+	lookupCtx, cancel := context.WithTimeout(rootCtx, 10*time.Second)
+	defer cancel()
+	stage, err := store.GetGatewayDesiredOTAStage(lookupCtx, gatewayID)
+	if err != nil {
+		if logger != nil {
+			logger.Warn("gateway_ota_reconnect_lookup_failed", "gateway_id", gatewayID, "error", err.Error())
+		}
+		return
+	}
+	if stage != nil {
+		publishGatewayOTAStages(rootCtx, publisher, logger, metrics, tap, publicBaseURL, []connectivity.OTAStageDispatch{{
+			GatewayID: gatewayID,
+			Stage:     *stage,
+		}})
 	}
 }
 

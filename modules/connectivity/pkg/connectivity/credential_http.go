@@ -60,6 +60,10 @@ func NewCredentialHandlerWithShadow(service *CredentialService, authorize Creden
 }
 
 func NewCredentialHandlerWithDiagnostics(service *CredentialService, authorize CredentialAuthorizer, tunnelHandler, concentratorHandler, configShadowHandler, diagnosticsHandler http.Handler) http.Handler {
+	return NewCredentialHandlerWithOTA(service, authorize, tunnelHandler, concentratorHandler, configShadowHandler, diagnosticsHandler, nil)
+}
+
+func NewCredentialHandlerWithOTA(service *CredentialService, authorize CredentialAuthorizer, tunnelHandler, concentratorHandler, configShadowHandler, diagnosticsHandler, otaHandler http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	if configShadowHandler == nil && service != nil && service.store != nil {
 		configShadowHandler = NewConfigShadowHandler(service.store, service, authorize, nil)
@@ -172,6 +176,10 @@ func NewCredentialHandlerWithDiagnostics(service *CredentialService, authorize C
 		mux.Handle("GET /internal/v1/gateways/{gatewayId}/packet-capture", diagnosticsHandler)
 		mux.Handle("POST /internal/v1/gateways/{gatewayId}/packet-capture/start", diagnosticsHandler)
 		mux.Handle("POST /internal/v1/gateways/{gatewayId}/packet-capture/stop", diagnosticsHandler)
+	}
+	if otaHandler != nil {
+		mux.Handle("/internal/v1/ota/", otaHandler)
+		mux.Handle("/gateway/v1/ota/", otaHandler)
 	}
 	mux.HandleFunc("POST /internal/v1/gateways/{target}", func(w http.ResponseWriter, r *http.Request) {
 		gatewayID, ok := strings.CutSuffix(r.PathValue("target"), ":retire")
