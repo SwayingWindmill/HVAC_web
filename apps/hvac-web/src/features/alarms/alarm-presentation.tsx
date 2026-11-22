@@ -1,6 +1,7 @@
 import { Badge } from '@/components/ui/badge';
 import { SeverityMark } from '@/components/severity-mark';
 import { SEVERITY_LEVEL_LABELS, type SeverityLevel } from '@/lib/operator-format';
+import { formatEdgeEvaluationProvenance } from './alarm-operations';
 import type {
   Alarm,
   AlarmEvaluationEffect,
@@ -160,6 +161,7 @@ const SNAPSHOT_METADATA_KEYS = new Set([
   'correlationId',
   'inputRevision',
   'inputs',
+  'edgeProvenance',
 ]);
 
 function readObjectField(obj: unknown, fieldName: string): unknown {
@@ -235,6 +237,7 @@ function formatInputFact(fallbackKey: string, rawFact: unknown, context?: Evalua
 
 export function formatEvaluationSnapshot(snapshot: Readonly<Record<string, unknown>>, context?: EvaluationDisplayContext): string {
   const parts: string[] = [];
+  const edgeProvenanceLabel = formatEdgeEvaluationProvenance(readObjectField(snapshot, 'edgeProvenance'));
   const rawInputs = readObjectField(snapshot, 'inputs');
   if (typeof rawInputs === 'object' && rawInputs !== null && !Array.isArray(rawInputs)) {
     for (const [key, fact] of Object.entries(rawInputs)) {
@@ -243,6 +246,9 @@ export function formatEvaluationSnapshot(snapshot: Readonly<Record<string, unkno
         parts.push(formatted);
       }
       if (parts.length >= 4) break;
+    }
+    if (edgeProvenanceLabel) {
+      return parts.length > 0 ? `${edgeProvenanceLabel} · ${parts.join(' · ')}` : edgeProvenanceLabel;
     }
     return parts.length > 0 ? parts.join(' · ') : '已采集现场读数';
   }
@@ -256,6 +262,9 @@ export function formatEvaluationSnapshot(snapshot: Readonly<Record<string, unkno
       parts.push(formatted);
     }
     if (parts.length >= 4) break;
+  }
+  if (edgeProvenanceLabel) {
+    return parts.length > 0 ? `${edgeProvenanceLabel} · ${parts.join(' · ')}` : edgeProvenanceLabel;
   }
   return parts.length > 0 ? parts.join(' · ') : '已采集现场读数';
 }

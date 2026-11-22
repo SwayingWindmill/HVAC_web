@@ -66,6 +66,35 @@ func TestAlarmRoutesMatchThePublicContract(t *testing.T) {
 	}
 }
 
+func TestAlarmEdgeProjectionConformsToPublicContract(t *testing.T) {
+	contract := loadAlarmContract(t)
+	fixture := newAlarmContractFixture(t, func(owner AlarmOperations) AlarmOperations {
+		return driftedAlarmOperations{
+			AlarmOperations: owner,
+			mutate: func(payload map[string]any) {
+				payload["edgeProjection"] = map[string]any{
+					"gatewayId":        "018f3e00-4000-7000-8000-000000000100",
+					"offline":          true,
+					"bundleRevision":   3,
+					"edgeBundleDigest": strings.Repeat("a", 64),
+					"occurredAt":       "2026-08-24T00:55:00Z",
+					"receivedAt":       "2026-08-24T01:00:00Z",
+					"triggeredActions": []string{"STOP:018f3e00-4000-7000-8000-000000000001@coil:0"},
+				}
+			},
+		}
+	})
+	alarm := fixture.publish(t)
+	recorder := fixture.serve(http.MethodGet, "/api/v1/alarms/"+alarm.AlarmID, "", "")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	contract.assertResponse(t, "edge-projection-detail", http.MethodGet, "/api/v1/alarms/{alarmId}", recorder)
+	if !strings.Contains(recorder.Body.String(), `"edgeProjection"`) {
+		t.Fatalf("expected edgeProjection in gateway detail response: %s", recorder.Body.String())
+	}
+}
+
 func TestAlarmAnswersConformToThePublicContract(t *testing.T) {
 	contract := loadAlarmContract(t)
 	fixture := newAlarmContractFixture(t, nil)
@@ -138,6 +167,14 @@ func TestAlarmAnswerOutsideTheContractIsWithheld(t *testing.T) {
 		},
 		"undeclared field":   func(alarm map[string]any) { alarm["internalNote"] = "owner-only" },
 		"invalid projection": func(alarm map[string]any) { alarm["currentSeverity"] = "UNHEARD_OF" },
+		"invalid edge digest": func(alarm map[string]any) {
+			alarm["edgeProjection"] = map[string]any{
+				"gatewayId":        "018f3e00-4000-7000-8000-000000000100",
+				"offline":          true,
+				"bundleRevision":   3,
+				"edgeBundleDigest": "not-hex",
+			}
+		},
 	}
 	for name, drift := range drifts {
 		fixture := newAlarmContractFixture(t, func(owner AlarmOperations) AlarmOperations {

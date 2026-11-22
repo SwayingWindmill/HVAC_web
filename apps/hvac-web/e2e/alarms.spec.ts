@@ -1,4 +1,6 @@
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { SITE_ID } from './gateway';
 import { expect, test } from './test';
 
@@ -438,4 +440,53 @@ test('keyboard shortcuts ignore IME composition and assistant panel keeps 1440px
   await expect
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth))
     .toBe(true);
+});
+
+test('offline edge alarm replay projects cleared history, bundle metadata, and local actions in light and dark themes', async ({ page, gateway }) => {
+  const first = gateway.ingestEdgeOfflineAlarmReplay();
+  const second = gateway.ingestEdgeOfflineAlarmReplay();
+  expect(first.duplicated).toBe(false);
+  expect(second.duplicated).toBe(true);
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`/operations/alarms?site=${SITE_ID}&view=cleared&inspect=${first.alarmId}`);
+
+  // Idempotency: original cleared alarm + single projected edge alarm (never 3).
+  await expect(rows(page)).toHaveCount(2);
+  const edgeRow = rows(page).filter({ hasText: '冷机供水温度越限（边缘保护触发）' });
+  await expect(edgeRow).toHaveCount(1);
+  await expect(edgeRow).toContainText('离网补传');
+
+  const detail = page.getByRole('region', { name: '告警详情' });
+  await expect(detail).toContainText('冷机供水温度越限（边缘保护触发）');
+  await expect(detail).toContainText('离网补传');
+  await expect(detail).toContainText('边缘网关 · 离网补传');
+  await expect(detail).toContainText('EG8200-COMMERCIAL-001');
+  await expect(detail).toContainText('v3 · a1b2c3d4');
+  await expect(detail).toContainText('边缘侧已执行联动：CHILLER-01 停机保护');
+  await expect(detail).toContainText('EG8200-COMMERCIAL-001（边缘）');
+  await expect(detail).toContainText('离网触发后补传');
+  await expect(detail).toContainText('离网恢复后补传');
+
+  const evalTable = detail.getByRole('table', { name: '规则评估明细表' });
+  await expect(evalTable).toContainText('触发告警');
+  await expect(evalTable).toContainText('自动恢复');
+  await expect(evalTable).toContainText('离网补传 · 规则包 v3 · a1b2c3d4');
+
+  // Strict sanitization: zero UUIDs, raw addresses, or internal enums.
+  await expect(detail).not.toContainText(/[0-9a-f]{8}-[0-9a-f]{4}-|EDGE_RULE|PROTECTION_COMMAND|CLEAR_PREDICATE_MATCHED|edge-gateway:|\bSTOP\b/);
+
+  const verifyDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '.scratch', 'verify', 'issue-950-edge-alarm-ui');
+  mkdirSync(verifyDir, { recursive: true });
+  const appearance = page.getByRole('radiogroup', { name: '外观' });
+
+  await appearance.getByRole('radio', { name: '浅色' }).click();
+  await expect.poll(() => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme)).toBe('light');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  await page.screenshot({ path: join(verifyDir, 'edge-alarm-detail-light.png'), fullPage: true });
+
+  await appearance.getByRole('radio', { name: '深色' }).click();
+  await expect.poll(() => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme)).toBe('dark');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  await page.screenshot({ path: join(verifyDir, 'edge-alarm-detail-dark.png'), fullPage: true });
 });

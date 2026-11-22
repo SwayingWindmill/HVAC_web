@@ -1,4 +1,5 @@
 import type { AlarmRule, SiteAlarmRoutingSummary } from '../../api/generated/platformGateway.gen.ts';
+import type { AlarmEdgeProjection, AlarmTimelineEntry } from './alarm-api.ts';
 
 export type AlarmRuleDependencyGate = NonNullable<AlarmRule['dependencyGate']>;
 export type AlarmRuleAction = NonNullable<AlarmRule['actions']>[number];
@@ -179,4 +180,135 @@ export function describeReloadError(code: string | undefined): string | null {
 export function routingDigestPrefix(digest: SiteAlarmRoutingSummary['configDigest']): string {
   const trimmed = digest.trim();
   return trimmed.length > 12 ? trimmed.slice(0, 12) : trimmed;
+}
+
+const EDGE_GATEWAY_ACTOR_PREFIX = 'edge-gateway:';
+const EDGE_DIGEST_HEX_PREFIX = /^[a-f0-9]{8,}$/;
+
+const EDGE_ACTION_CAPABILITY_LABELS: Readonly<Record<string, string>> = {
+  STOP: '停机保护',
+  START: '启动控制',
+  STOP_UNIT_SEQUENCE: '一键停机保护',
+  START_UNIT_SEQUENCE: '一键启动控制',
+  RESET_FAULT: '故障复位',
+  SET_TEMPERATURE_SETPOINT: '温度设定保护',
+  SET_PRESSURE_SETPOINT: '压力设定保护',
+  SET_FREQUENCY_HZ: '频率设定保护',
+  SET_VALVE_POSITION: '阀门开度保护',
+};
+
+export function edgeSourceLabel(projection: Pick<AlarmEdgeProjection, 'offline' | 'clearOffline'>): string {
+  return projection.offline || Boolean(projection.clearOffline) ? '离网补传' : '边缘触发';
+}
+
+export function shortEdgeDigest(digest: string | undefined): string | null {
+  const normalized = digest?.trim().toLowerCase() ?? '';
+  if (!EDGE_DIGEST_HEX_PREFIX.test(normalized)) {
+    return null;
+  }
+  return normalized.slice(0, 8);
+}
+
+export function formatEdgeBundleTag(projection: Pick<AlarmEdgeProjection, 'bundleRevision' | 'edgeBundleDigest'>): string | null {
+  const hasRevision = Number.isFinite(projection.bundleRevision) && projection.bundleRevision > 0;
+  const shortDigest = shortEdgeDigest(projection.edgeBundleDigest);
+  if (hasRevision && shortDigest) return `v${projection.bundleRevision} · ${shortDigest}`;
+  if (hasRevision) return `v${projection.bundleRevision}`;
+  if (shortDigest) return `摘要 ${shortDigest}`;
+  return null;
+}
+
+export function formatEdgeGatewayName(gatewayId: string, deviceNames?: ReadonlyMap<string, string>): string {
+  const resolved = deviceNames?.get(gatewayId.trim())?.trim();
+  return resolved || '边缘网关';
+}
+
+export function formatEdgeTriggeredAction(rawAction: string, deviceNames?: ReadonlyMap<string, string>): string {
+  const trimmed = rawAction.trim();
+  if (!trimmed) return '边缘保护动作';
+  const atIdx = trimmed.indexOf('@');
+  const head = atIdx >= 0 ? trimmed.slice(0, atIdx) : trimmed;
+  const colonIdx = head.indexOf(':');
+  const capability = (colonIdx >= 0 ? head.slice(0, colonIdx) : head).trim().toUpperCase();
+  const targetDeviceId = colonIdx >= 0 ? head.slice(colonIdx + 1).trim() : '';
+  const actionLabel = EDGE_ACTION_CAPABILITY_LABELS[capability] ?? '边缘保护动作';
+  const targetName = targetDeviceId ? deviceNames?.get(targetDeviceId)?.trim() : undefined;
+  return targetName ? `${targetName} ${actionLabel}` : actionLabel;
+}
+
+export function formatEdgeTriggeredActionsSummary(
+  actions: readonly string[] | undefined,
+  deviceNames?: ReadonlyMap<string, string>,
+): string | null {
+  if (!actions || actions.length === 0) return null;
+  const labels: string[] = [];
+  for (const action of actions) {
+    const label = formatEdgeTriggeredAction(action, deviceNames);
+    if (label && !labels.includes(label)) {
+      labels.push(label);
+    }
+  }
+  return labels.length > 0 ? labels.join('、') : null;
+}
+
+export function formatEdgeActorName(
+  actorId: string | undefined,
+  deviceNames?: ReadonlyMap<string, string>,
+): string | null {
+  const trimmed = actorId?.trim() ?? '';
+  if (!trimmed.startsWith(EDGE_GATEWAY_ACTOR_PREFIX)) {
+    return null;
+  }
+  const gatewayId = trimmed.slice(EDGE_GATEWAY_ACTOR_PREFIX.length).trim();
+  const gatewayName = gatewayId ? deviceNames?.get(gatewayId)?.trim() : undefined;
+  return gatewayName ? `${gatewayName}（边缘）` : '边缘网关';
+}
+
+export function formatEdgeTimelineNote(
+  entry: Pick<AlarmTimelineEntry, 'operation' | 'actorId' | 'reason'>,
+  projection: AlarmEdgeProjection | undefined,
+  deviceNames?: ReadonlyMap<string, string>,
+): string | null {
+  const isEdgeActor = Boolean(entry.actorId?.trim().startsWith(EDGE_GATEWAY_ACTOR_PREFIX));
+  const bundleTag = projection ? formatEdgeBundleTag(projection) : null;
+  if (entry.operation === 'PUBLISH' && (projection || isEdgeActor)) {
+    const parts = [projection?.offline ? '离网触发后补传' : '边缘侧本地触发'];
+    if (bundleTag) parts.push(`规则包 ${bundleTag}`);
+    const actionsSummary = formatEdgeTriggeredActionsSummary(projection?.triggeredActions, deviceNames);
+    if (actionsSummary) parts.push(`本地联动：${actionsSummary}`);
+    return parts.join(' · ');
+  }
+  if (
+    entry.operation === 'CLEAR'
+    && (isEdgeActor || projection?.clearOffline !== undefined || Boolean(projection?.clearOccurredAt))
+  ) {
+    const parts = [projection?.clearOffline ? '离网恢复后补传' : '边缘侧自动恢复'];
+    if (bundleTag) parts.push(`规则包 ${bundleTag}`);
+    const clearActionsSummary = formatEdgeTriggeredActionsSummary(projection?.clearTriggeredActions, deviceNames);
+    if (clearActionsSummary) parts.push(`本地联动：${clearActionsSummary}`);
+    return parts.join(' · ');
+  }
+  return null;
+}
+
+export function formatEdgeEvaluationProvenance(rawProvenance: unknown): string | null {
+  if (typeof rawProvenance !== 'object' || rawProvenance === null || Array.isArray(rawProvenance)) {
+    return null;
+  }
+  let offline = false;
+  let bundleRevision = 0;
+  let edgeBundleDigest: string | undefined;
+  for (const [key, value] of Object.entries(rawProvenance)) {
+    if (key === 'offline' && typeof value === 'boolean') {
+      offline = value;
+    } else if (key === 'bundleRevision' && typeof value === 'number' && Number.isFinite(value)) {
+      bundleRevision = value;
+    } else if (key === 'edgeBundleDigest' && typeof value === 'string') {
+      edgeBundleDigest = value;
+    }
+  }
+  const parts = [offline ? '离网补传' : '边缘评估'];
+  const bundleTag = formatEdgeBundleTag({ bundleRevision, edgeBundleDigest });
+  if (bundleTag) parts.push(`规则包 ${bundleTag}`);
+  return parts.join(' · ');
 }

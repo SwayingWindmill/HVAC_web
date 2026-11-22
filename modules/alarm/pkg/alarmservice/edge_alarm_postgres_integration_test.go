@@ -285,7 +285,7 @@ func TestPostgresEdgeAlarmEventProjectionLifecycleCascadeAndDedup(t *testing.T) 
 		Severity:       "INFO",
 		SourceSequence: 3,
 		ReceivedAt:     now.Add(-5 * time.Second).Format(time.RFC3339Nano),
-		Data:           json.RawMessage(`{"eventId":"edge-rule:` + edgeAssignID + `:3","eventType":"EDGE_RULE_ALARM_CLEARED","ruleId":"` + edgeAssignID + `","occurredAt":"` + now.Add(-10*time.Second).Format(time.RFC3339Nano) + `","bundleRevision":1,"reason":"temp dropped below 45C"}`),
+		Data:           json.RawMessage(`{"eventId":"edge-rule:` + edgeAssignID + `:3","eventType":"EDGE_RULE_ALARM_CLEARED","ruleId":"` + edgeAssignID + `","occurredAt":"` + now.Add(-10*time.Second).Format(time.RFC3339Nano) + `","bundleRevision":1,"offline":true,"reason":"temp dropped below 45C"}`),
 	}
 	clearRes, err := store.IngestEdgeAlarmEvent(ctx, clearReq, now.Add(-5*time.Second))
 	if err != nil || clearRes.Outcome != EdgeAlarmOutcomeCleared || clearRes.AlarmID != raiseRes.AlarmID {
@@ -294,6 +294,56 @@ func TestPostgresEdgeAlarmEventProjectionLifecycleCascadeAndDedup(t *testing.T) 
 	clearedAlarm, err := store.Get(ctx, tenantID, siteID, raiseRes.AlarmID)
 	if err != nil || clearedAlarm.Condition != alarmmodel.ConditionCleared {
 		t.Fatalf("expected CLEARED alarm, got %+v err=%v", clearedAlarm, err)
+	}
+	if clearedAlarm.EdgeProjection == nil ||
+		!clearedAlarm.EdgeProjection.Offline ||
+		clearedAlarm.EdgeProjection.BundleRevision != 1 ||
+		clearedAlarm.EdgeProjection.EdgeBundleDigest != strings.Repeat("c", 64) ||
+		clearedAlarm.EdgeProjection.GatewayID != gatewayID ||
+		len(clearedAlarm.EdgeProjection.TriggeredActions) != 1 ||
+		clearedAlarm.EdgeProjection.TriggeredActions[0] != "emergency-stop" ||
+		clearedAlarm.EdgeProjection.ClearOffline == nil || !*clearedAlarm.EdgeProjection.ClearOffline ||
+		clearedAlarm.EdgeProjection.ClearOccurredAt == "" {
+		t.Fatalf("expected full EdgeProjection on Get, got %+v", clearedAlarm.EdgeProjection)
+	}
+	listedCleared, err := store.List(ctx, tenantID, siteID, Filter{Condition: alarmmodel.ConditionCleared, Limit: 20})
+	if err != nil || len(listedCleared.Items) != 1 || listedCleared.Items[0].EdgeProjection == nil || !listedCleared.Items[0].EdgeProjection.Offline {
+		t.Fatalf("expected EdgeProjection in List, got %+v err=%v", listedCleared.Items, err)
+	}
+	ackedCleared, err := store.Apply(ctx, tenantID, siteID, raiseRes.AlarmID, Mutation{
+		Operation:       alarmmodel.OperationAcknowledge,
+		ExpectedVersion: clearedAlarm.Version,
+		Reason:          "checked edge replay",
+		ActorType:       "PRINCIPAL",
+		ActorID:         "operator-1",
+		PolicyRevision:  "alarm-access:1",
+		CorrelationID:   "ack-edge-proj-1",
+		IdempotencyKey:  "ack-edge-proj-1",
+		OccurredAt:      now.Format(time.RFC3339Nano),
+	})
+	if err != nil || ackedCleared.Alarm.EdgeProjection == nil || ackedCleared.Alarm.Acknowledgement == nil {
+		t.Fatalf("expected Acknowledge to succeed with FOR UPDATE OF ac and preserve EdgeProjection, got %+v err=%v", ackedCleared, err)
+	}
+	evalList, err := store.ListAlarmEvaluations(ctx, tenantID, siteID, raiseRes.AlarmID, 10)
+	if err != nil || len(evalList.Items) < 2 {
+		t.Fatalf("expected both PUBLISH and CLEAR evaluation snapshots, got %+v err=%v", evalList, err)
+	}
+	var seenPublishEdge, seenClearEdge bool
+	for _, evItem := range evalList.Items {
+		var snapMap map[string]any
+		if json.Unmarshal(evItem.Snapshot, &snapMap) == nil {
+			if _, hasProv := snapMap["edgeProvenance"]; hasProv {
+				if evItem.Effect == EvaluationEffectPublish {
+					seenPublishEdge = true
+				}
+				if evItem.Effect == EvaluationEffectClear {
+					seenClearEdge = true
+				}
+			}
+		}
+	}
+	if !seenPublishEdge || !seenClearEdge {
+		t.Fatalf("expected edgeProvenance on both PUBLISH and CLEAR evaluations, got %+v", evalList.Items)
 	}
 	listedActiveAfterClear, err := store.List(ctx, tenantID, siteID, Filter{Condition: alarmmodel.ConditionActive, Limit: 20})
 	if err != nil || len(listedActiveAfterClear.Items) != 2 {

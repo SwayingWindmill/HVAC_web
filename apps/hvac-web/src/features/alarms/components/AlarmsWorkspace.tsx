@@ -49,6 +49,7 @@ import {
   sortAlarmsForOperators,
 } from '../alarm-presentation';
 import { useAlarmActions } from '../use-alarm-actions';
+import { edgeSourceLabel } from '../alarm-operations';
 import { AlarmDetailPane } from './AlarmDetailPane';
 import { AlarmGroupHeader, AlarmListRow } from './AlarmListRow';
 import { AlarmRoutingPanel } from './AlarmRoutingPanel';
@@ -436,6 +437,7 @@ export function AlarmsWorkspace() {
                               {' · '}{alarm.assigneeId ? personLabel(alarm.assigneeId, myId) : '未分配'}
                               {' · '}{alarm.condition === 'CLEARED' ? '已恢复' : alarm.acknowledgement ? '已确认' : '未确认'}
                               {alarm.condition === 'ACTIVE' && alarm.suppression ? ' · 已抑制' : ''}
+                              {alarm.edgeProjection ? ` · ${edgeSourceLabel(alarm.edgeProjection)}` : ''}
                             </>}
                           />
                         ))}

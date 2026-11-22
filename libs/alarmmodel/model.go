@@ -100,6 +100,21 @@ type Suppression struct {
 	PolicyRevision string `json:"policyRevision"`
 }
 
+// EdgeProjection summarizes edge-rule origin metadata carried on alarms projected
+// from edge gateway events (including offline buffered trigger/clear replays).
+type EdgeProjection struct {
+	GatewayID             string   `json:"gatewayId"`
+	Offline               bool     `json:"offline"`
+	BundleRevision        int64    `json:"bundleRevision"`
+	EdgeBundleDigest      string   `json:"edgeBundleDigest,omitempty"`
+	OccurredAt            string   `json:"occurredAt,omitempty"`
+	ReceivedAt            string   `json:"receivedAt,omitempty"`
+	TriggeredActions      []string `json:"triggeredActions,omitempty"`
+	ClearOffline          *bool    `json:"clearOffline,omitempty"`
+	ClearOccurredAt       string   `json:"clearOccurredAt,omitempty"`
+	ClearTriggeredActions []string `json:"clearTriggeredActions,omitempty"`
+}
+
 type TimelineEntry struct {
 	Operation       Operation    `json:"operation"`
 	Condition       Condition    `json:"condition"`
@@ -141,6 +156,7 @@ type Alarm struct {
 	FirstOccurredAt       string              `json:"firstOccurredAt"`
 	LastOccurredAt        string              `json:"lastOccurredAt"`
 	ClearedAt             *string             `json:"clearedAt,omitempty"`
+	EdgeProjection        *EdgeProjection     `json:"edgeProjection,omitempty"`
 	Evidence              []EvidenceReference `json:"evidence"`
 	Links                 []Link              `json:"links"`
 	Timeline              []TimelineEntry     `json:"timeline"`
@@ -440,6 +456,11 @@ func (alarm Alarm) Validate() error {
 	if alarm.Suppression != nil {
 		if alarm.Condition != ConditionActive || validateSuppression(*alarm.Suppression) != nil {
 			return errors.New("alarm suppression is invalid")
+		}
+	}
+	if alarm.EdgeProjection != nil {
+		if err := validateEdgeProjection(*alarm.EdgeProjection); err != nil {
+			return err
 		}
 	}
 	for _, evidence := range alarm.Evidence {
@@ -777,6 +798,55 @@ func cloneSuppression(value *Suppression) *Suppression {
 	return &copyValue
 }
 
+func validateEdgeProjection(value EdgeProjection) error {
+	if !validBoundedText(value.GatewayID, 128) || value.BundleRevision < 0 {
+		return errors.New("alarm edge projection identity or revision is invalid")
+	}
+	if value.EdgeBundleDigest != "" && !fingerprintPattern.MatchString(value.EdgeBundleDigest) {
+		return errors.New("alarm edge projection digest is invalid")
+	}
+	for _, rawInstant := range []string{value.OccurredAt, value.ReceivedAt, value.ClearOccurredAt} {
+		if rawInstant == "" {
+			continue
+		}
+		if _, err := time.Parse(time.RFC3339Nano, rawInstant); err != nil {
+			return errors.New("alarm edge projection instant is invalid")
+		}
+	}
+	if len(value.TriggeredActions) > 32 || len(value.ClearTriggeredActions) > 32 {
+		return errors.New("alarm edge projection action count is invalid")
+	}
+	for _, action := range value.TriggeredActions {
+		if !validBoundedText(action, 256) {
+			return errors.New("alarm edge projection triggered action is invalid")
+		}
+	}
+	for _, action := range value.ClearTriggeredActions {
+		if !validBoundedText(action, 256) {
+			return errors.New("alarm edge projection clear triggered action is invalid")
+		}
+	}
+	return nil
+}
+
+func cloneEdgeProjection(value *EdgeProjection) *EdgeProjection {
+	if value == nil {
+		return nil
+	}
+	copied := *value
+	if value.ClearOffline != nil {
+		clearOffline := *value.ClearOffline
+		copied.ClearOffline = &clearOffline
+	}
+	if value.TriggeredActions != nil {
+		copied.TriggeredActions = append([]string(nil), value.TriggeredActions...)
+	}
+	if value.ClearTriggeredActions != nil {
+		copied.ClearTriggeredActions = append([]string(nil), value.ClearTriggeredActions...)
+	}
+	return &copied
+}
+
 func cloneAlarm(alarm Alarm) Alarm {
 	result := alarm
 	result.DeviceID = cloneString(alarm.DeviceID)
@@ -789,6 +859,7 @@ func cloneAlarm(alarm Alarm) Alarm {
 		value := *alarm.Acknowledgement
 		result.Acknowledgement = &value
 	}
+	result.EdgeProjection = cloneEdgeProjection(alarm.EdgeProjection)
 	result.Evidence = cloneEvidence(alarm.Evidence)
 	result.Links = append([]Link{}, alarm.Links...)
 	result.Timeline = append([]TimelineEntry(nil), alarm.Timeline...)
