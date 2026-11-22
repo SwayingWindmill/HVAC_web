@@ -59,3 +59,25 @@ func TestParseConfigDefaultsAndValidation(t *testing.T) {
 		t.Fatal("expected unknown JSON field to be rejected")
 	}
 }
+
+func TestParseConfigSeparateMQTTTLSFields(t *testing.T) {
+	raw := []byte(`{
+		"gatewayId": "0193f000-2000-7000-8000-000000000001",
+		"stateDir": "/opt/hvac-edge-gateway/state",
+		"platformBaseUrl": "https://hvac.example.com",
+		"mqttBrokerUrl": "tls://mqtt.example.com:8884",
+		"serverName": "hvac.example.com",
+		"caFile": "/etc/ssl/certs/ca-certificates.crt",
+		"mqttServerName": "mqtt-broker",
+		"mqttCaFile": "/root/hvac-platform/broker-ca.crt",
+		"certFile": "/root/hvac-platform/gateway.crt",
+		"keyFile": "/root/hvac-platform/gateway.key"
+	}`)
+	cfg, err := ParseConfig(raw, "0.1.0")
+	if err != nil {
+		t.Fatalf("ParseConfig: %v", err)
+	}
+	if cfg.MQTTServerName != "mqtt-broker" || cfg.MQTTCAFile != "/root/hvac-platform/broker-ca.crt" {
+		t.Fatalf("unexpected MQTT TLS fields: %+v", cfg)
+	}
+}

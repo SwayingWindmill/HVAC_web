@@ -57,9 +57,11 @@ docker run --rm --user 0 --entrypoint sh -v "$R:/runtime" postgres:16.4-bookworm
   chown -R 999:999 /runtime/backups/postgres
   chown -R 10001:10001 /runtime/data/otel-collector
 '
-if docker volume inspect "${HVAC_LOCAL_PROJECT}_connectivity-spool" >/dev/null 2>&1; then
-  docker run --rm --user 0 --entrypoint chown -v "${HVAC_LOCAL_PROJECT}_connectivity-spool:/data" postgres:16.4-bookworm -R 65532:65532 /data
-fi
+for vol in "${HVAC_LOCAL_PROJECT}_connectivity-spool" "${HVAC_LOCAL_PROJECT}_connectivity-ota-packages"; do
+  if docker volume inspect "$vol" >/dev/null 2>&1; then
+    docker run --rm --user 0 --entrypoint chown -v "${vol}:/data" postgres:16.4-bookworm -R 65532:65532 /data
+  fi
+done
 # Postgres requires 0700 on PGDATA; keep data/ untouched and restrict secret/PKI dirs to 0750.
 find "$R" -mindepth 1 -type d \
   ! \( -path "$R/data" -o -path "$R/data/*" \

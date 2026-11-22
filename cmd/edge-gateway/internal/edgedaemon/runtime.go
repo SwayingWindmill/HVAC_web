@@ -484,16 +484,25 @@ func (d *Daemon) runCertRenewLoop(ctx context.Context) {
 	}
 }
 
-func (d *Daemon) startMQTTSession(ctx context.Context) error {
-	var tlsCfg *mqttclient.TLSConfig
-	if strings.TrimSpace(d.cfg.CAFile) != "" && strings.TrimSpace(d.cfg.CertFile) != "" && strings.TrimSpace(d.cfg.KeyFile) != "" {
-		tlsCfg = &mqttclient.TLSConfig{
-			CACertFile:     d.cfg.CAFile,
-			ClientCertFile: d.cfg.CertFile,
-			ClientKeyFile:  d.cfg.KeyFile,
-			ServerName:     d.cfg.ServerName,
-		}
+// buildMQTTTLSConfig allows MQTT sessions to verify an internal broker CA and SNI
+// independently when HTTPS platform traffic terminates behind a public CA proxy.
+func buildMQTTTLSConfig(cfg Config) *mqttclient.TLSConfig {
+	caFile := firstNonEmpty(cfg.MQTTCAFile, cfg.CAFile)
+	certFile := strings.TrimSpace(cfg.CertFile)
+	keyFile := strings.TrimSpace(cfg.KeyFile)
+	if caFile == "" || certFile == "" || keyFile == "" {
+		return nil
 	}
+	return &mqttclient.TLSConfig{
+		CACertFile:     caFile,
+		ClientCertFile: certFile,
+		ClientKeyFile:  keyFile,
+		ServerName:     firstNonEmpty(cfg.MQTTServerName, cfg.ServerName),
+	}
+}
+
+func (d *Daemon) startMQTTSession(ctx context.Context) error {
+	tlsCfg := buildMQTTTLSConfig(d.cfg)
 	session, err := mqttclient.NewSharedSession(ctx, mqttclient.SharedSessionConfig{
 		BrokerURL: d.cfg.MQTTBrokerURL,
 		ClientID:  "edge-gateway-" + d.cfg.GatewayID,

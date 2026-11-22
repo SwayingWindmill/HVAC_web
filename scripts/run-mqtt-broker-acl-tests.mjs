@@ -10,7 +10,7 @@ const pkiDir = join(outDir, 'pki');
 const rpt = join(outDir, 'acl.json');
 const cf = ['-p', `hvac-mqtt-acl-${process.pid}`, '-f', resolve('infra/telemetry/mqtt/compose.yaml')];
 const [GW, ADP, CMD] = ['mqtt-gateway', 'mqtt-adapter', 'command-dispatcher'], GWB = `${GW}-b`;
-const [UT, UC, UR, US, DC, DN, DS] = ['up/telemetry', 'up/concentrator', 'up/reply', 'up/shadow', 'down/command', 'down/concentrator', 'down/shadow'];
+const [UT, UC, UR, US, UO, DC, DN, DS, DO] = ['up/telemetry', 'up/concentrator', 'up/reply', 'up/shadow', 'up/ota', 'down/command', 'down/concentrator', 'down/shadow', 'down/ota'];
 const tp = (n, s) => `hvac/v1/018f3e00-4000-7000-8000-000000000${n}00/${s}`;
 const env = { ...process.env, MQTT_PKI_DIR: pkiDir, MQTT_HOST_PORT: '0' };
 const now = () => new Date().toISOString();
@@ -88,6 +88,7 @@ try {
     [GWB, tp(2, 'up/event')],
     [GWB, tp(2, 'up/status')],
     [GW, tp(1, US)],
+    [GW, tp(1, UO)],
   ];
   const expected = uplinks.map(([, t]) => t).sort();
   const [s0] = await sub(ADP, `${base}/#`, expected.length, 15000);
@@ -98,10 +99,10 @@ try {
   }
   for (const [k, id, t, want] of [
     ['gatewayAOwnTopic', ...uplinks[0], 0], ['gatewayAOwnConcentrator', ...uplinks[1], 0], ['gatewayBOwnTopic', ...uplinks[2], 0],
-    ['gatewayBOwnStatus', ...uplinks[3], 0], ['gatewayAOwnShadow', ...uplinks[4], 0],
-    ['gatewayAIntoGatewayB', GW, tp(2, UT), 135], ['gatewayAConcIntoB', GW, tp(2, UC), 135], ['gatewayAIntoDownlink', GW, tp(1, DC), 135],
-    ['gatewayAIntoConcDown', GW, tp(1, DN), 135], ['adapterConcToGatewayB', ADP, tp(2, DN), 16], ['adapterShadowToGatewayB', ADP, tp(2, DS), 16],
-    ['commandsToGatewayB', CMD, tp(2, DC), 16], ['commandsIntoShadow', CMD, tp(2, DS), 135], ['commandsIntoUplink', CMD, tp(1, UT), 135],
+    ['gatewayBOwnStatus', ...uplinks[3], 0], ['gatewayAOwnShadow', ...uplinks[4], 0], ['gatewayAOwnOta', ...uplinks[5], 0],
+    ['gatewayAIntoGatewayB', GW, tp(2, UT), 135], ['gatewayAConcIntoB', GW, tp(2, UC), 135], ['gatewayAOtaIntoB', GW, tp(2, UO), 135], ['gatewayAIntoDownlink', GW, tp(1, DC), 135],
+    ['gatewayAIntoConcDown', GW, tp(1, DN), 135], ['gatewayAIntoOtaDown', GW, tp(1, DO), 135], ['adapterConcToGatewayB', ADP, tp(2, DN), 16], ['adapterShadowToGatewayB', ADP, tp(2, DS), 16], ['adapterOtaToGatewayB', ADP, tp(2, DO), 16],
+    ['commandsToGatewayB', CMD, tp(2, DC), 16], ['commandsIntoShadow', CMD, tp(2, DS), 135], ['commandsIntoOtaDown', CMD, tp(2, DO), 135], ['commandsIntoUplink', CMD, tp(1, UT), 135],
     ['gatewayAIntoControlCrl', GW, '$CONTROL/hvac-crl/v1', 135],
   ]) if ((a[k] = await pub(id, t)) !== want) throw new Error(`${k}: ${a[k]}`);
   eq(a.connectivityReceived = await s0, expected, 'uplinks');
@@ -123,6 +124,10 @@ try {
   const [sGwShadow] = await sub(GWB, tp(2, DS), 1, 5000);
   if ((a.adapterShadowDelivered = await pub(ADP, tp(2, DS))) !== 0) throw new Error(`adapterShadowDelivered: ${a.adapterShadowDelivered}`);
   eq(a.gatewayBShadowReceived = await sGwShadow, [tp(2, DS)], 'shadowDownlink');
+
+  const [sGwOta] = await sub(GWB, tp(2, DO), 1, 5000);
+  if ((a.adapterOtaDelivered = await pub(ADP, tp(2, DO))) !== 0) throw new Error(`adapterOtaDelivered: ${a.adapterOtaDelivered}`);
+  eq(a.gatewayBOtaReceived = await sGwOta, [tp(2, DO)], 'otaDownlink');
 
   const steals = await Promise.all([sUp, sRep, `$share/steal/${tp(2, 'down/#')}`].map((f) => sub(GW, f, 1, 1500)));
   for (const [id, t] of [...uplinks, [GWB, tp(2, UR)], [CMD, tp(2, DC)]]) await pub(id, t);

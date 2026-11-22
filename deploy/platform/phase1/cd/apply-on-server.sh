@@ -222,9 +222,10 @@ COPY --chown=65532:65532 service /service
 COPY --chown=65532:65532 healthcheck /healthcheck
 EOF
       if [[ "$service" == connectivity ]]; then
-        mkdir -p "$context/spool"
+        mkdir -p "$context/spool" "$context/ota-packages"
         cat >> "$context/Dockerfile" <<'EOF'
 COPY --chown=65532:65532 spool /var/lib/hvac/connectivity-spool
+COPY --chown=65532:65532 ota-packages /var/lib/hvac/ota-packages
 EOF
       fi
       ;;

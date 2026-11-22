@@ -16,7 +16,7 @@ COPY contracts ./contracts
 
 ARG SERVICE_PACKAGE
 RUN test -n "$SERVICE_PACKAGE"
-RUN mkdir -p /out/spool /out/mqtt-crl
+RUN mkdir -p /out/spool /out/mqtt-crl /out/ota-packages
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -buildvcs=false -ldflags="-s -w" -o /out/service "$SERVICE_PACKAGE"
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -buildvcs=false -ldflags="-s -w" -o /out/healthcheck ./tools/container-healthcheck/cmd/container-healthcheck/main.go
 
@@ -27,5 +27,6 @@ COPY --from=build --chown=65532:65532 /out/service /service
 COPY --from=build --chown=65532:65532 /out/healthcheck /healthcheck
 COPY --from=build --chown=65532:65532 /out/spool /var/lib/hvac/connectivity-spool
 COPY --from=build --chown=65532:65532 /out/mqtt-crl /var/lib/hvac/mqtt-crl
+COPY --from=build --chown=65532:65532 /out/ota-packages /var/lib/hvac/ota-packages
 USER 65532:65532
 ENTRYPOINT ["/service"]
