@@ -294,6 +294,10 @@ for (const file of files) {
     selectCommand(file, 'site onboarding manifest changed');
     selectAlarm(file, 'site onboarding manifest changed');
   });
+  match(file.startsWith('libs/alarmexpr/'), () => {
+    selectAlarm(file, 'Shared alarm expression evaluator changed', { integration: true });
+    selectCommand(file, 'Shared alarm expression evaluator changed');
+  });
   match(file.startsWith('libs/alarmauth/') || file.startsWith('libs/alarmmodel/') || file.startsWith('modules/alarm/') || file.startsWith('infra/alarm/'), () => selectAlarm(file, 'Alarm capability changed', { integration: true }));
   match(file.startsWith('libs/workorderauth/') || file.startsWith('libs/workordermodel/') || file.startsWith('modules/workorder/') || file.startsWith('infra/workorder/'), () => selectWorkOrder(file, 'Work Order capability changed', { integration: true }));
   match(file.startsWith('libs/measurement/') || file.startsWith('libs/nameplate/') || file.startsWith('libs/analyticsmodel/') || file.startsWith('libs/energyseries/') || file.startsWith('modules/telemetry/internal/analytics/') || file.startsWith('modules/telemetry/internal/cube/') || file.startsWith('modules/telemetry/internal/history/') || file.startsWith('modules/telemetry/internal/query/') || file.startsWith('modules/telemetry/pkg/queryservice/') || file.startsWith('modules/telemetry/cmd/telemetry-query-owner/') || file === 'modules/telemetry/go.mod' || file === 'modules/telemetry/go.sum' || file.startsWith('modules/energy/') || file.startsWith('deploy/analytics/') || file.startsWith('libs/intelligencemodel/') || file.startsWith('modules/metric/') || file.startsWith('modules/scheduler/') || file.startsWith('cmd/metric-worker/') || file.startsWith('services/forecast-service/') || file.startsWith('services/optimization-service/') || file.startsWith('services/fdd-service/') || file.startsWith('services/mv-service/') || file.startsWith('services/report-service/') || file.startsWith('libs/schedulerjob/') || file.startsWith('libs/tariffmodel/'), () => selectAnalytics(file, 'analytics capability changed', { integration: true }));

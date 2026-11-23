@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/alarmexpr"
 )
 
 type EdgeChannelResolver func(deviceID, pointCode string) string
@@ -939,229 +941,43 @@ func compareNumbers(actual float64, op EdgeCompareOperator, expected float64) bo
 	}
 }
 
-type edgeExprEvalResult struct {
-	indeterminate bool
-	valType       EdgeValueType
-	number        float64
-	str           string
-	boolean       bool
-}
-
 func (c *EdgeRuleController) evalEdgeExpression(rule CompiledEdgeRule, cond EdgeCondition, image ProcessImage, now time.Time) edgeEvalStatus {
-	root, err := parseAndValidateEdgeExpression(cond.Expression, cond.Inputs)
+	compiled, err := alarmexpr.ParseAndValidate(cond.Expression, cond.Inputs)
 	if err != nil {
 		return edgeEvalIndeterminate
 	}
-	res := c.evalEdgeExprNode(root, rule, cond.Inputs, image, now)
-	if res.indeterminate || res.valType != EdgeValueBoolean {
-		return edgeEvalIndeterminate
-	}
-	if res.boolean {
-		return edgeEvalMatched
-	}
-	return edgeEvalNotMatched
-}
-
-func (c *EdgeRuleController) evalEdgeExprNode(node *edgeExprNode, rule CompiledEdgeRule, inputs map[string]string, image ProcessImage, now time.Time) edgeExprEvalResult {
-	switch node.kind {
-	case edgeNodeNumber:
-		return edgeExprEvalResult{valType: EdgeValueNumber, number: node.number}
-	case edgeNodeBool:
-		return edgeExprEvalResult{valType: EdgeValueBoolean, boolean: node.boolean}
-	case edgeNodeString:
-		return edgeExprEvalResult{valType: EdgeValueString, str: node.str}
-	case edgeNodeIdent:
-		addr := c.resolveChannelAddress(inputs[node.str])
+	res := compiled.Evaluate(alarmexpr.EvalModeTwoValued, cond.Inputs, func(_, inputKey string) alarmexpr.InputResolution {
+		addr := c.resolveChannelAddress(inputKey)
 		snap, exists := image.Get(addr)
 		if !trustedEdgeSample(rule, snap, exists, now) {
-			return edgeExprEvalResult{indeterminate: true}
+			return alarmexpr.InputResolution{
+				Trusted: false,
+				Blocker: "UNTRUSTED_INPUT:" + inputKey,
+			}
 		}
 		switch snap.Sample.Value.Type {
 		case DataTypeBoolean:
-			return edgeExprEvalResult{valType: EdgeValueBoolean, boolean: snap.Sample.Value.Boolean}
+			return alarmexpr.InputResolution{Trusted: true, Value: alarmexpr.BooleanValue(snap.Sample.Value.Boolean)}
 		case DataTypeString:
-			return edgeExprEvalResult{valType: EdgeValueString, str: snap.Sample.Value.String}
+			return alarmexpr.InputResolution{Trusted: true, Value: alarmexpr.StringValue(snap.Sample.Value.String)}
 		default:
 			num, ok := snap.Sample.Value.NumericFloat64()
 			if !ok || !isFiniteFloat(num) {
-				return edgeExprEvalResult{indeterminate: true}
-			}
-			return edgeExprEvalResult{valType: EdgeValueNumber, number: num}
-		}
-	case edgeNodeUnary:
-		op := c.evalEdgeExprNode(node.left, rule, inputs, image, now)
-		if op.indeterminate {
-			return op
-		}
-		if node.op == edgeTokNot {
-			if op.valType != EdgeValueBoolean {
-				return edgeExprEvalResult{indeterminate: true}
-			}
-			return edgeExprEvalResult{valType: EdgeValueBoolean, boolean: !op.boolean}
-		}
-		if op.valType != EdgeValueNumber || !isFiniteFloat(-op.number) {
-			return edgeExprEvalResult{indeterminate: true}
-		}
-		return edgeExprEvalResult{valType: EdgeValueNumber, number: -op.number}
-	case edgeNodeCall:
-		vals := make([]float64, 0, len(node.args))
-		for _, arg := range node.args {
-			ev := c.evalEdgeExprNode(arg, rule, inputs, image, now)
-			if ev.indeterminate {
-				return ev
-			}
-			if ev.valType != EdgeValueNumber || !isFiniteFloat(ev.number) {
-				return edgeExprEvalResult{indeterminate: true}
-			}
-			vals = append(vals, ev.number)
-		}
-		var out float64
-		switch node.str {
-		case "abs":
-			out = math.Abs(vals[0])
-		case "min":
-			out = vals[0]
-			for _, v := range vals[1:] {
-				if v < out {
-					out = v
+				return alarmexpr.InputResolution{
+					Trusted: false,
+					Blocker: alarmexpr.BlockerInvalidPrefix + inputKey,
 				}
 			}
-		case "max":
-			out = vals[0]
-			for _, v := range vals[1:] {
-				if v > out {
-					out = v
-				}
-			}
+			return alarmexpr.InputResolution{Trusted: true, Value: alarmexpr.NumberValue(num)}
 		}
-		if !isFiniteFloat(out) {
-			return edgeExprEvalResult{indeterminate: true}
-		}
-		return edgeExprEvalResult{valType: EdgeValueNumber, number: out}
-	case edgeNodeBinary:
-		if node.op == edgeTokAnd {
-			left := c.evalEdgeExprNode(node.left, rule, inputs, image, now)
-			if !left.indeterminate {
-				if left.valType != EdgeValueBoolean {
-					return edgeExprEvalResult{indeterminate: true}
-				}
-				if !left.boolean {
-					return edgeExprEvalResult{valType: EdgeValueBoolean, boolean: false}
-				}
-			}
-			right := c.evalEdgeExprNode(node.right, rule, inputs, image, now)
-			if !right.indeterminate {
-				if right.valType != EdgeValueBoolean {
-					return edgeExprEvalResult{indeterminate: true}
-				}
-				if !right.boolean {
-					return edgeExprEvalResult{valType: EdgeValueBoolean, boolean: false}
-				}
-			}
-			if left.indeterminate || right.indeterminate {
-				return edgeExprEvalResult{indeterminate: true}
-			}
-			return edgeExprEvalResult{valType: EdgeValueBoolean, boolean: true}
-		}
-		if node.op == edgeTokOr {
-			left := c.evalEdgeExprNode(node.left, rule, inputs, image, now)
-			if !left.indeterminate {
-				if left.valType != EdgeValueBoolean {
-					return edgeExprEvalResult{indeterminate: true}
-				}
-				if left.boolean {
-					return edgeExprEvalResult{valType: EdgeValueBoolean, boolean: true}
-				}
-			}
-			right := c.evalEdgeExprNode(node.right, rule, inputs, image, now)
-			if !right.indeterminate {
-				if right.valType != EdgeValueBoolean {
-					return edgeExprEvalResult{indeterminate: true}
-				}
-				if right.boolean {
-					return edgeExprEvalResult{valType: EdgeValueBoolean, boolean: true}
-				}
-			}
-			if left.indeterminate || right.indeterminate {
-				return edgeExprEvalResult{indeterminate: true}
-			}
-			return edgeExprEvalResult{valType: EdgeValueBoolean, boolean: false}
-		}
-		left := c.evalEdgeExprNode(node.left, rule, inputs, image, now)
-		if left.indeterminate {
-			return left
-		}
-		right := c.evalEdgeExprNode(node.right, rule, inputs, image, now)
-		if right.indeterminate {
-			return right
-		}
-		switch node.op {
-		case edgeTokPlus, edgeTokMinus, edgeTokMul, edgeTokDiv:
-			if left.valType != EdgeValueNumber || right.valType != EdgeValueNumber {
-				return edgeExprEvalResult{indeterminate: true}
-			}
-			if node.op == edgeTokDiv && math.Abs(right.number) < edgeExprDivZeroEpsilon {
-				return edgeExprEvalResult{indeterminate: true}
-			}
-			var res float64
-			switch node.op {
-			case edgeTokPlus:
-				res = left.number + right.number
-			case edgeTokMinus:
-				res = left.number - right.number
-			case edgeTokMul:
-				res = left.number * right.number
-			case edgeTokDiv:
-				res = left.number / right.number
-			}
-			if !isFiniteFloat(res) {
-				return edgeExprEvalResult{indeterminate: true}
-			}
-			return edgeExprEvalResult{valType: EdgeValueNumber, number: res}
-		case edgeTokGT, edgeTokGTE, edgeTokLT, edgeTokLTE:
-			if left.valType != EdgeValueNumber || right.valType != EdgeValueNumber {
-				return edgeExprEvalResult{indeterminate: true}
-			}
-			return edgeExprEvalResult{valType: EdgeValueBoolean, boolean: compareNumbers(left.number, edgeTokToCompareOp(node.op), right.number)}
-		case edgeTokEQ, edgeTokNE:
-			if left.valType != right.valType {
-				return edgeExprEvalResult{indeterminate: true}
-			}
-			var eq bool
-			switch left.valType {
-			case EdgeValueNumber:
-				eq = left.number == right.number
-			case EdgeValueString:
-				eq = left.str == right.str
-			case EdgeValueBoolean:
-				eq = left.boolean == right.boolean
-			}
-			if node.op == edgeTokNE {
-				eq = !eq
-			}
-			return edgeExprEvalResult{valType: EdgeValueBoolean, boolean: eq}
-		}
+	})
+	if res.Indeterminate {
+		return edgeEvalIndeterminate
 	}
-	return edgeExprEvalResult{indeterminate: true}
-}
-
-func edgeTokToCompareOp(kind edgeExprTokenKind) EdgeCompareOperator {
-	switch kind {
-	case edgeTokEQ:
-		return EdgeCompareEQ
-	case edgeTokNE:
-		return EdgeCompareNE
-	case edgeTokGT:
-		return EdgeCompareGT
-	case edgeTokGTE:
-		return EdgeCompareGTE
-	case edgeTokLT:
-		return EdgeCompareLT
-	case edgeTokLTE:
-		return EdgeCompareLTE
-	default:
-		return ""
+	if res.Matched {
+		return edgeEvalMatched
 	}
+	return edgeEvalNotMatched
 }
 
 func (c *EdgeRuleController) applyActions(

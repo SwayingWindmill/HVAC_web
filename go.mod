@@ -44,6 +44,7 @@ require (
 	github.com/go-jose/go-jose/v4 v4.1.6
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/pquerna/otp v1.4.0
+	github.com/quanlaihe/hvac-web/libs/alarmexpr v0.0.0
 	github.com/quanlaihe/hvac-web/libs/commandmodel v0.0.0
 	github.com/quanlaihe/hvac-web/libs/edgecontrol v0.0.0
 	github.com/quanlaihe/hvac-web/libs/grant v0.0.0
@@ -82,6 +83,8 @@ require (
 	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 )
+
+replace github.com/quanlaihe/hvac-web/libs/alarmexpr => ./libs/alarmexpr
 
 replace github.com/quanlaihe/hvac-web/libs/commandmodel => ./libs/commandmodel
 

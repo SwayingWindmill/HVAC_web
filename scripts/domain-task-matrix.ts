@@ -95,6 +95,7 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
         'scripts/run-go.mjs',
         'test',
         './libs/commandauth/...',
+        './libs/alarmexpr/...',
         './libs/commandmodel/...',
         './libs/planttwin/...',
         './modules/command/...',
@@ -106,7 +107,7 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
       npmRun('command:formal'),
     ]),
     alarm: Object.freeze([
-      nodeRun('scripts/run-go.mjs', 'test', './libs/alarmauth/...', './libs/alarmmodel/...', './modules/alarm/...'),
+      nodeRun('scripts/run-go.mjs', 'test', './libs/alarmexpr/...', './libs/alarmauth/...', './libs/alarmmodel/...', './modules/alarm/...'),
       npmRun('alarm:test'),
     ]),
     workorder: Object.freeze([
