@@ -3,6 +3,7 @@ import test from 'node:test';
 import { PlatformApiError, type EnergySeriesResponse } from '../apps/hvac-web/src/api/generated/platformGateway.gen.ts';
 import {
   comparePeriods,
+  completedComparisonTotals,
   energyRetryDelay,
   completeOnly,
   copUnavailableText,
@@ -346,6 +347,47 @@ test('incomplete telemetry and missingMeters propagate cleanly across day and mo
   assert.equal(monthly.incompleteBuckets, 1);
   assert.deepEqual(monthly.missingMeters, ['2号电表（D机组）']);
   assert.equal(monthly.cop, 3.5);
+});
+
+test('completedComparisonTotals aggregates only finished hours and preserves energy-weighted COP', () => {
+  const mkHour = (iso: string, energyKWh: number, amountCNY: number) => ({
+    periodStart: iso,
+    periodEnd: iso,
+    energyKWh,
+    cost: { amountCNY, unpricedKWh: 0, periods: [{ periodCode: 'FLAT' as const, energyKWh, amountCNY }] },
+  });
+  const todayElec: EnergySeriesResponse = {
+    schemaVersion: 1,
+    points: [mkHour('2026-10-10T01:00:00Z', 100, 72), mkHour('2026-10-10T02:00:00Z', 200, 144), mkHour('2026-10-10T03:00:00Z', 40, 28)],
+    metadata: { requestedGranularity: 'hour', actualGranularity: 'hour', datasetRevision: 'r', partial: true, qualitySummary: { valid: 3, suspect: 0, invalid: 0 } },
+  };
+  const todayCool = series([['2026-10-10T01:00:00Z', 400], ['2026-10-10T02:00:00Z', 800], ['2026-10-10T03:00:00Z', 120]]);
+  const yesterdayElec: EnergySeriesResponse = {
+    schemaVersion: 1,
+    points: [mkHour('2026-10-09T01:00:00Z', 150, 108), mkHour('2026-10-09T02:00:00Z', 250, 180), mkHour('2026-10-09T03:00:00Z', 999, 719)],
+    metadata: { requestedGranularity: 'hour', actualGranularity: 'hour', datasetRevision: 'r', partial: false, qualitySummary: { valid: 3, suspect: 0, invalid: 0 } },
+  };
+  const yesterdayCool = series([['2026-10-09T01:00:00Z', 450], ['2026-10-09T02:00:00Z', 950], ['2026-10-09T03:00:00Z', 3000]]);
+
+  const hours = comparePeriods(
+    summarizeEnergy(todayElec, todayCool, 'hour', 'Asia/Shanghai'),
+    summarizeEnergy(yesterdayElec, yesterdayCool, 'hour', 'Asia/Shanghai'),
+    { from: new Date('2026-10-09T16:00:00Z'), previousFrom: new Date('2026-10-08T16:00:00Z'), now: new Date('2026-10-10T03:20:00Z'), timeZone: 'Asia/Shanghai' },
+  );
+  const totals = completedComparisonTotals(hours);
+  assert.equal(totals.current.electricityKWh, 300);
+  assert.equal(totals.current.coolingKWh, 1200);
+  assert.equal(totals.current.cop, 4);
+  assert.equal(sumCosts(totals.current.costBuckets).total, 216);
+  assert.equal(totals.previous.electricityKWh, 400);
+  assert.equal(totals.previous.coolingKWh, 1400);
+  assert.equal(totals.previous.cop, 3.5);
+  assert.equal(sumCosts(totals.previous.costBuckets).total, 288);
+
+  const empty = completedComparisonTotals(hours.map((row) => ({ ...row, complete: false })));
+  assert.equal(empty.current.electricityKWh, null);
+  assert.equal(empty.previous.electricityKWh, null);
+  assert.equal(empty.current.cop, null);
 });
 
 test('retryEnergyQuery retries transient 5xx/network failures up to twice and skips non-retryable 4xx', () => {

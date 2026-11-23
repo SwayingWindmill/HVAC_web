@@ -31,7 +31,7 @@ if (typeof window !== 'undefined') {
 
 const runtimeConfig = validateRuntimeConfig();
 const queryClient = new QueryClient({
-  defaultOptions: { queries: { refetchOnWindowFocus: false } },
+  defaultOptions: { queries: { refetchOnWindowFocus: false, staleTime: 15_000 } },
 });
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

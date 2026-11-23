@@ -6,7 +6,7 @@ import { StateCard } from '@/blocks/state/state-card';
 import ErrorBoundary from '@/components/ErrorBoundary';
 import { Skeleton } from '@/components/ui/skeleton';
 import { activeAlarmsQuery } from '@/features/alarms/alarm-api';
-import { useTodayAgainstYesterday } from '@/features/energy-analysis/consumption/query';
+import { useTodayEnergy } from '@/features/energy-analysis/consumption/query';
 import { openWorkOrdersQuery } from '@/features/work-orders/work-order-queries';
 import { formatDecimal } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
@@ -75,8 +75,8 @@ export function DigitalTwinWorkspace() {
   ];
 
   // The site card: today's energy, outdoor conditions, machine groups, what waits on someone.
-  const comparison = useTodayAgainstYesterday();
-  const today = comparison.data?.today;
+  const todayQuery = useTodayEnergy();
+  const today = todayQuery.data?.today;
   const alarms = useQuery(activeAlarmsQuery(site.id));
   const workOrders = useQuery(openWorkOrdersQuery(site.id));
   const activeAlarms = alarms.data?.items ?? [];

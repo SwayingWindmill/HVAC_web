@@ -232,7 +232,7 @@ function MetricTabsChartCard<K extends string = string>({
                   />
                 ) : null}
               </span>
-              {metric.caption ? <span className="text-muted-foreground truncate text-xs tabular-nums">{metric.caption}</span> : null}
+              {metric.caption ? <span className="text-muted-foreground line-clamp-2 text-xs leading-snug tabular-nums">{metric.caption}</span> : null}
             </button>
           )
         })}

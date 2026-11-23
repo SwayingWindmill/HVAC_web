@@ -333,7 +333,7 @@ export function activeAlarmsQuery(siteId: string) {
       }
       return { items, complete: false };
     },
-    refetchInterval: 15_000,
+    refetchInterval: 30_000,
   });
 }
 
@@ -346,7 +346,7 @@ export function recentlyClearedAlarmsQuery(siteId: string) {
       const clearedAt = (alarm: Alarm) => Date.parse(alarm.clearedAt ?? alarm.lastOccurredAt);
       return [...result.items].sort((left, right) => clearedAt(right) - clearedAt(left)).slice(0, 20);
     },
-    refetchInterval: 15_000,
+    refetchInterval: 30_000,
   });
 }
 

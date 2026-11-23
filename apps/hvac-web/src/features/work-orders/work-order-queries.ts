@@ -21,6 +21,6 @@ export function openWorkOrdersQuery(siteId: string) {
   return queryOptions({
     queryKey: workOrderKeys.view(siteId, OPEN_STATUSES),
     queryFn: ({ signal }) => listView(siteId, OPEN_STATUSES, undefined, signal),
-    refetchInterval: 15_000,
+    refetchInterval: 30_000,
   });
 }
