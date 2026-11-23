@@ -1,25 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
-import { zodResolver } from '@hookform/resolvers/zod';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { CheckCircle2, Lock, Pencil } from 'lucide-react';
-import { Controller, useForm, useWatch } from 'react-hook-form';
-import { toast } from 'sonner';
-import { z } from 'zod';
 import type { UtilityBill } from '@/api/generated/platformGateway.gen';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Checkbox } from '@/components/ui/checkbox';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import { Field, FieldError, FieldLabel } from '@/components/ui/field';
-import { Input } from '@/components/ui/input';
 import {
   Sheet,
   SheetContent,
@@ -40,25 +25,8 @@ import {
   resolveReadingDateWindow,
   UTILITY_BILL_STATUS_LABEL,
 } from '../billing-model';
-import {
-  billingGatewayClient,
-  billingKeys,
-  describeBillingApiError,
-  siteReadingWindowElectricityQuery,
-} from '../query';
-
-const confirmFormSchema = z.object({
-  reason: z
-    .string()
-    .trim()
-    .min(1, { message: '请填写确认归档原因' })
-    .max(500, { message: '确认原因不能超过 500 字' }),
-  acknowledged: z.boolean().refine((v) => v, {
-    message: '请勾选确认后再归档锁定该张结算电费单',
-  }),
-});
-
-type ConfirmFormValues = z.infer<typeof confirmFormSchema>;
+import { describeBillingApiError, siteReadingWindowElectricityQuery } from '../query';
+import { ConfirmArchiveBillDialog } from './ConfirmArchiveBillDialog';
 
 function formatSignedCurrency(amount: number | null): string {
   if (amount === null) return '—';
@@ -94,33 +62,7 @@ export function BillReconciliationSheet({
   onClose,
   onEditDraft,
 }: BillReconciliationSheetProps) {
-  const queryClient = useQueryClient();
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [confirmError, setConfirmError] = useState<string | null>(null);
-
-  const confirmForm = useForm<ConfirmFormValues>({
-    resolver: zodResolver(confirmFormSchema),
-    mode: 'onBlur',
-    defaultValues: {
-      reason: '已完成供电局抄表电量与电费核对，确认归档',
-      acknowledged: false,
-    },
-  });
-
-  const watchedAcknowledged = useWatch({
-    control: confirmForm.control,
-    name: 'acknowledged',
-  });
-
-  useEffect(() => {
-    if (confirmOpen) {
-      confirmForm.reset({
-        reason: '已完成供电局抄表电量与电费核对，确认归档',
-        acknowledged: false,
-      });
-      setConfirmError(null);
-    }
-  }, [confirmOpen, confirmForm]);
 
   const windowQuery = useQuery(
     siteReadingWindowElectricityQuery({
@@ -146,35 +88,6 @@ export function BillReconciliationSheet({
         : null,
     [bill, timezone],
   );
-
-  const confirmMutation = useMutation({
-    mutationFn: async (values: ConfirmFormValues) => {
-      if (!bill) throw new Error('Missing bill');
-      const res = await billingGatewayClient.confirmSiteUtilityBill(
-        siteId,
-        bill.id,
-        {
-          meta: {
-            expectedRevision: bill.revision,
-            idempotencyKey: crypto.randomUUID(),
-            reason: values.reason.trim(),
-          },
-        },
-        csrfToken,
-      );
-      return res.data;
-    },
-    onSuccess: async (confirmed) => {
-      await queryClient.invalidateQueries({ queryKey: billingKeys.billsRoot(siteId) });
-      toast.success(
-        `已确认归档 ${formatBillingMonthLabel(confirmed.billingMonth)}（${METER_SCOPE_LABEL[confirmed.meterScope]}）结算电费单`,
-      );
-      setConfirmOpen(false);
-    },
-    onError: (error) => {
-      setConfirmError(describeBillingApiError(error, '确认归档失败，请稍后重试'));
-    },
-  });
 
   const touSummaryText = useMemo(
     () => formatTouBreakdownSummary(bill?.touBreakdown),
@@ -513,92 +426,13 @@ export function BillReconciliationSheet({
         </SheetContent>
       </Sheet>
 
-      <Dialog
+      <ConfirmArchiveBillDialog
         open={confirmOpen}
-        onOpenChange={(next) => {
-          if (!confirmMutation.isPending) setConfirmOpen(next);
-        }}
-      >
-        <DialogContent
-          showCloseButton={!confirmMutation.isPending}
-          onEscapeKeyDown={(event) => {
-            if (confirmMutation.isPending) event.preventDefault();
-          }}
-          onPointerDownOutside={(event) => {
-            if (confirmMutation.isPending) event.preventDefault();
-          }}
-          className="sm:max-w-md"
-        >
-          <DialogHeader>
-            <DialogTitle>确认归档该张结算电费单吗？</DialogTitle>
-            <DialogDescription>
-              确认归档后，该张结算电费单将锁定为正式结算记录，不可再次编辑金额或抄表周期，并将同步展示在对应月份的能源报告中。
-            </DialogDescription>
-          </DialogHeader>
-
-          <form
-            className="space-y-4"
-            onSubmit={confirmForm.handleSubmit((values) => {
-              setConfirmError(null);
-              confirmMutation.mutate(values);
-            })}
-          >
-            {confirmError ? (
-              <Alert variant="destructive">
-                <AlertTitle>无法确认归档</AlertTitle>
-                <AlertDescription>{confirmError}</AlertDescription>
-              </Alert>
-            ) : null}
-
-            <Field data-invalid={Boolean(confirmForm.formState.errors.reason) || undefined}>
-              <FieldLabel htmlFor="confirm-bill-reason">归档说明</FieldLabel>
-              <Input
-                id="confirm-bill-reason"
-                disabled={confirmMutation.isPending}
-                {...confirmForm.register('reason')}
-              />
-              <FieldError errors={[confirmForm.formState.errors.reason]} />
-            </Field>
-
-            <Field data-invalid={Boolean(confirmForm.formState.errors.acknowledged) || undefined}>
-              <Controller
-                control={confirmForm.control}
-                name="acknowledged"
-                render={({ field }) => (
-                  <label
-                    htmlFor="confirm-bill-ack"
-                    className="flex cursor-pointer items-start gap-2.5 rounded-md border border-border bg-muted/30 p-3 text-xs text-foreground"
-                  >
-                    <Checkbox
-                      id="confirm-bill-ack"
-                      checked={field.value}
-                      disabled={confirmMutation.isPending}
-                      onCheckedChange={(checked) => field.onChange(checked === true)}
-                      className="mt-0.5"
-                    />
-                    <span>我已核对票面四项金额与抄表起止日期，知晓确认归档后永久锁定不可修改</span>
-                  </label>
-                )}
-              />
-              <FieldError errors={[confirmForm.formState.errors.acknowledged]} />
-            </Field>
-
-            <DialogFooter>
-              <Button
-                type="button"
-                variant="outline"
-                disabled={confirmMutation.isPending}
-                onClick={() => setConfirmOpen(false)}
-              >
-                取消
-              </Button>
-              <Button type="submit" disabled={confirmMutation.isPending || !watchedAcknowledged}>
-                {confirmMutation.isPending ? '正在归档…' : '确认归档'}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
+        onOpenChange={setConfirmOpen}
+        bill={bill}
+        siteId={siteId}
+        csrfToken={csrfToken}
+      />
     </>
   );
 }
