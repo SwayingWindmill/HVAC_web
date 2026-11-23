@@ -547,6 +547,9 @@ export class Gateway {
   readonly tenantPrincipals = new Map<string, Json>();
   readonly tenantSites = new Map<string, Json[]>();
   readonly tenantSwitchRequests: string[] = [];
+  readonly gatewayWaveformRules = new Map<string, Json[]>();
+  readonly gatewayWaveformCaptures = new Map<string, Json[]>();
+  readonly gatewayHostMetricsState = new Map<string, Json>();
   assetModel: Json = fixture<Json>('asset-model.json');
   readonly alarms = fixture<Json[]>('alarms.json');
   readonly alarmEvaluations: Record<string, Json[]> = {};
@@ -3177,6 +3180,8 @@ export class Gateway {
     const gatewayCredentialReply = this.gatewayCredentials(method, path, body, csrfToken, now);
     if (gatewayCredentialReply) return gatewayCredentialReply;
     const gatewayDiagnosticsReply = this.gatewayDiagnostics(method, path, query, body, csrfToken, now);
+    const gatewayWaveformReply = this.gatewayWaveformAndRemoteDiagnostics(method, path, query, body, csrfToken, now);
+    if (gatewayWaveformReply) return gatewayWaveformReply;
     if (gatewayDiagnosticsReply) return gatewayDiagnosticsReply;
     const concentratorReply = this.concentrators(method, path, body, csrfToken, now);
     if (concentratorReply) return concentratorReply;
@@ -4630,6 +4635,227 @@ export class Gateway {
     };
     this.gatewayPacketCaptureState.set(gatewayId, created);
     return created;
+  }
+
+  private gatewayWaveformAndRemoteDiagnostics(
+    method: string,
+    path: string,
+    query: URLSearchParams,
+    body: Json | null,
+    csrfToken: string | undefined,
+    now: string,
+  ): { status?: number; body: unknown } | undefined {
+    const match = path.match(/^\/api\/v1\/gateways\/([^/]+)\/(waveform-rules(?:\/([^/]+))?|waveform-captures(?:\/([^/]+))?|waveform-captures:trigger|diagnostics\/logs:pull|diagnostics\/host-metrics)$/);
+    if (!match) return undefined;
+
+    const gatewayId = decodeURIComponent(match[1]!);
+    const tail = match[2]!;
+    const subId = match[3] ? decodeURIComponent(match[3]) : match[4] ? decodeURIComponent(match[4]) : '';
+    const refuse = (status: number, code: string, detail: string) => ({
+      status,
+      body: { type: 'about:blank', title: detail, status, detail, instance: path, code, traceId: '0'.repeat(32), retryable: false },
+    });
+
+    const gatewayDevice = (this.assetModel.devices as Json[]).find((d) => d.id === gatewayId && d.deviceType === 'GATEWAY');
+    if (!gatewayDevice) return refuse(404, 'GATEWAY_NOT_FOUND', 'Gateway not found');
+
+    const activePrincipal = this.principalOverride ?? principal;
+    const caps = new Set<string>(activePrincipal.authorization?.capabilities ?? []);
+    if (method === 'GET' && !caps.has('device.read')) {
+      return refuse(403, 'CREDENTIAL_FORBIDDEN', 'device.read required');
+    }
+    if (method !== 'GET') {
+      if (!caps.has('device.write')) {
+        return refuse(403, 'CREDENTIAL_FORBIDDEN', 'device.write required');
+      }
+      if (!csrfToken) {
+        return refuse(403, 'CSRF_INVALID', 'CSRF token required');
+      }
+    }
+
+    const ensureRules = (): Json[] => {
+      let rules = this.gatewayWaveformRules.get(gatewayId);
+      if (!rules) {
+        rules = [
+          {
+            id: '0194f000-9100-7000-8000-000000000001',
+            tenantId: activePrincipal.principal?.tenantId ?? '018f3d00-0000-7000-8000-000000000001',
+            siteId: SITE_ID,
+            gatewayId,
+            ruleName: '冷冻水供温突变监测',
+            enabled: true,
+            deviceCode: 'chiller-01',
+            pointCode: 'chw_supply_temp',
+            triggerType: 'THRESHOLD_HIGH',
+            thresholdValue: 11.5,
+            deltaWindowSeconds: 5,
+            preSeconds: 30,
+            postSeconds: 60,
+            sampleRateHz: 1,
+            pointCodes: ['chiller-01.chw_supply_temp', 'chiller-01.compressor_current'],
+            cooldownSeconds: 120,
+            updatedBy: 'operator-1',
+            createdAt: now,
+            updatedAt: now,
+          },
+        ];
+        this.gatewayWaveformRules.set(gatewayId, rules);
+      }
+      return rules;
+    };
+
+    const ensureCaptures = (): Json[] => {
+      let capsList = this.gatewayWaveformCaptures.get(gatewayId);
+      if (!capsList) {
+        const t0 = Date.parse(now) - 20_000;
+        const samples = Array.from({ length: 12 }, (_, idx) => ({
+          sampledAtMs: t0 + idx * 1000,
+          values: {
+            'chiller-01.chw_supply_temp': Number((7.2 + (idx >= 5 ? (idx - 4) * 0.85 : idx * 0.05)).toFixed(2)),
+            'chiller-01.compressor_current': Number((182 + (idx >= 5 ? (idx - 4) * 14.5 : idx * 0.6)).toFixed(1)),
+          },
+        }));
+        capsList = [
+          {
+            captureId: '0194f000-9200-7000-8000-000000000001',
+            tenantId: activePrincipal.principal?.tenantId ?? '018f3d00-0000-7000-8000-000000000001',
+            siteId: SITE_ID,
+            gatewayId,
+            ruleId: '0194f000-9100-7000-8000-000000000001',
+            triggerSource: 'AUTO_RULE',
+            triggerReason: '冷冻水供温突变监测 触发高限阈值 (12.30 >= 11.50)',
+            status: 'COMPLETED',
+            triggeredAt: new Date(t0 + 5000).toISOString(),
+            windowStartAt: new Date(t0).toISOString(),
+            windowEndAt: new Date(t0 + 11_000).toISOString(),
+            sampleRateHz: 1,
+            sampleCount: samples.length,
+            samples,
+            requestedBy: 'edge-rule:chw_supply_temp',
+            createdAt: now,
+            completedAt: now,
+          },
+        ];
+        this.gatewayWaveformCaptures.set(gatewayId, capsList);
+      }
+      return capsList;
+    };
+
+    if (tail === 'waveform-rules' && method === 'GET') {
+      return { body: { gatewayId, items: ensureRules() } };
+    }
+    if (tail === 'waveform-rules' && method === 'POST') {
+      const rules = ensureRules();
+      const created: Json = {
+        id: `0194f000-9100-7000-8000-${String(rules.length + 10).padStart(12, '0')}`,
+        tenantId: activePrincipal.principal?.tenantId ?? '018f3d00-0000-7000-8000-000000000001',
+        siteId: SITE_ID,
+        gatewayId,
+        ruleName: String(body?.ruleName ?? '新触发规则'),
+        enabled: body?.enabled !== false,
+        deviceCode: String(body?.deviceCode ?? 'chiller-01'),
+        pointCode: String(body?.pointCode ?? 'compressor_current'),
+        triggerType: String(body?.triggerType ?? 'DELTA_JUMP'),
+        thresholdValue: Number(body?.thresholdValue ?? 20),
+        deltaWindowSeconds: Number(body?.deltaWindowSeconds ?? 5),
+        preSeconds: Number(body?.preSeconds ?? 30),
+        postSeconds: Number(body?.postSeconds ?? 60),
+        sampleRateHz: Number(body?.sampleRateHz ?? 1),
+        pointCodes: Array.isArray(body?.pointCodes) ? body.pointCodes : ['chiller-01.compressor_current'],
+        cooldownSeconds: Number(body?.cooldownSeconds ?? 120),
+        updatedBy: 'operator-1',
+        createdAt: now,
+        updatedAt: now,
+      };
+      rules.unshift(created);
+      return { status: 201, body: created };
+    }
+    if (tail.startsWith('waveform-rules/') && method === 'PUT') {
+      const rules = ensureRules();
+      const idx = rules.findIndex((r) => r.id === subId);
+      if (idx < 0) return refuse(404, 'RESOURCE_NOT_FOUND', 'rule not found');
+      const updated = { ...rules[idx], ...body, updatedAt: now };
+      rules[idx] = updated;
+      return { body: updated };
+    }
+    if (tail.startsWith('waveform-rules/') && method === 'DELETE') {
+      const rules = ensureRules();
+      const next = rules.filter((r) => r.id !== subId);
+      this.gatewayWaveformRules.set(gatewayId, next);
+      return { body: { deleted: true } };
+    }
+    if (tail === 'waveform-captures' && method === 'GET') {
+      const limit = Number(query.get('limit') ?? '20');
+      const list = ensureCaptures().slice(0, Number.isFinite(limit) && limit > 0 ? limit : 20);
+      return { body: { gatewayId, items: list } };
+    }
+    if (tail.startsWith('waveform-captures/') && method === 'GET') {
+      const found = ensureCaptures().find((c) => c.captureId === subId);
+      if (!found) return refuse(404, 'RESOURCE_NOT_FOUND', 'capture not found');
+      return { body: found };
+    }
+    if (tail === 'waveform-captures:trigger' && method === 'POST') {
+      const capsList = ensureCaptures();
+      const baseSamples = (capsList[0]?.samples as Json[]) ?? [];
+      const created: Json = {
+        captureId: `0194f000-9200-7000-8000-${String(capsList.length + 20).padStart(12, '0')}`,
+        tenantId: activePrincipal.principal?.tenantId ?? '018f3d00-0000-7000-8000-000000000001',
+        siteId: SITE_ID,
+        gatewayId,
+        triggerSource: 'MANUAL',
+        triggerReason: String(body?.triggerReason ?? '手动抓拍瞬态波形'),
+        status: 'COMPLETED',
+        triggeredAt: now,
+        windowStartAt: now,
+        windowEndAt: now,
+        sampleRateHz: Number(body?.sampleRateHz ?? 1),
+        sampleCount: baseSamples.length,
+        samples: baseSamples,
+        requestedBy: activePrincipal.principal?.id ?? 'operator-1',
+        createdAt: now,
+        completedAt: now,
+      };
+      capsList.unshift(created);
+      return { status: 201, body: created };
+    }
+    if (tail === 'diagnostics/logs:pull' && method === 'POST') {
+      const content = `${now} level=INFO gateway=${gatewayId} rs485_poll_ok
+${now} level=WARN header Authorization: Bearer [REDACTED] redacted_token=[REDACTED]
+`;
+      return {
+        body: {
+          requestId: '0194f000-8800-7000-8000-000000000099',
+          gatewayId,
+          status: 'SUCCEEDED',
+          content,
+          returnedBytes: content.length,
+          redactedCount: 2,
+          truncated: false,
+          collectedAt: now,
+        },
+      };
+    }
+    if (tail === 'diagnostics/host-metrics' && method === 'GET') {
+      const record: Json = this.gatewayHostMetricsState.get(gatewayId) ?? {
+        id: '0194f000-9300-7000-8000-000000000001',
+        gatewayId,
+        collectedAt: now,
+        cpuPercent: 18.4,
+        memoryUsedPercent: 42.1,
+        diskUsedPercent: 27.5,
+        uptimeSeconds: 86420,
+        rs485TxFrames: 42500,
+        rs485RxErrors: 3,
+        rs485ErrorRatePpm: 70.6,
+        mqttRttMs: 21.8,
+        mqttTlsVersion: 'TLSv1.3',
+        mqttReconnectCount: 1,
+        activeRingPoints: 24,
+        ringBufferBytes: 518144,
+      };
+      return { body: { gatewayId, latest: record, history: [record] } };
+    }
+    return undefined;
   }
 
   private gatewayDiagnostics(

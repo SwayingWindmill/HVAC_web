@@ -115,6 +115,7 @@ type credentialRuntimeConfig struct {
 	OTAStorage          *connectivity.OTAArtifactStorage
 	OTASigner           *connectivity.OTASignerVerifier
 	OTAPublicBaseURL    string
+	DiagnosticsBridge   *connectivity.DiagnosticsMQTTBridge
 }
 
 func credentialServer(store *connectivity.Store) (*http.Server, *tunnel.Hub, error) {
@@ -350,7 +351,21 @@ func newCredentialRuntime(cfg credentialRuntimeConfig) (*http.Server, *tunnel.Hu
 			isGatewayOnline = presence.IsOnline
 		}
 		configShadowHandler = connectivity.NewConfigShadowHandlerWithRuntimePresence(store, service, authorize, onDesiredUpdated, onGatewaySeen, isGatewayOnline)
-		diagnosticsHandler = connectivity.NewDiagnosticsHandler(store, tap, authorize)
+		if cfg.DiagnosticsBridge != nil && mqttSession != nil {
+			cfg.DiagnosticsBridge.AttachPublisher(func(pubCtx context.Context, gwID string, cmd edgecontrol.DiagnosticsDownlinkPayload) error {
+				wire, err := adapter.EncodeDiagnosticsDownlink(gwID, cmd, time.Now().UTC())
+				if err != nil {
+					return err
+				}
+				_, err = mqttSession.Publish(pubCtx, &paho.Publish{
+					Topic:   adapter.DiagnosticsDownlinkTopic(gwID),
+					QoS:     1,
+					Payload: wire,
+				})
+				return err
+			})
+		}
+		diagnosticsHandler = connectivity.NewDiagnosticsHandlerWithWaveform(store, tap, authorize, cfg.DiagnosticsBridge)
 
 		otaStorage := cfg.OTAStorage
 		if otaStorage == nil {

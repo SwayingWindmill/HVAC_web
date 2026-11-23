@@ -151,6 +151,24 @@ func WithOTAResultHook(hook func(context.Context, Gateway, edgecontrol.OTAResult
 }
 
 // WithFactoryResetAckHook registers a handler for edge FACTORY_RESET_ACK lifecycle uplinks.
+func WithWaveformBurstHook(hook func(context.Context, Gateway, edgecontrol.WaveformBurstPayload) error) ProcessorOption {
+	return func(processor *Processor) {
+		processor.onWaveformBurst = hook
+	}
+}
+
+func WithDiagnosticsReplyHook(hook func(context.Context, Gateway, edgecontrol.DiagnosticsLogReplyPayload) error) ProcessorOption {
+	return func(processor *Processor) {
+		processor.onDiagnosticsReply = hook
+	}
+}
+
+func WithHostMetricsHook(hook func(context.Context, Gateway, edgecontrol.GatewayHostMetricsPayload) error) ProcessorOption {
+	return func(processor *Processor) {
+		processor.onHostMetrics = hook
+	}
+}
+
 func WithFactoryResetAckHook(hook func(context.Context, string, edgecontrol.FactoryResetAckPayload) error) ProcessorOption {
 	return func(processor *Processor) {
 		processor.onFactoryResetAck = hook
@@ -217,6 +235,9 @@ type Processor struct {
 	onShadowAck        func(context.Context, Gateway, ShadowChangeAckPayload)
 	onOTAResult        func(context.Context, Gateway, edgecontrol.OTAResultPayload) error
 	onFactoryResetAck  func(context.Context, string, edgecontrol.FactoryResetAckPayload) error
+	onWaveformBurst    func(context.Context, Gateway, edgecontrol.WaveformBurstPayload) error
+	onDiagnosticsReply func(context.Context, Gateway, edgecontrol.DiagnosticsLogReplyPayload) error
+	onHostMetrics      func(context.Context, Gateway, edgecontrol.GatewayHostMetricsPayload) error
 	onDeviceActivity   func(context.Context, string, []string)
 	packetHook         func(direction, channel, gatewayID, topic, traceID string, payload []byte)
 	coverageRev        atomic.Int64
@@ -279,6 +300,81 @@ func (processor *Processor) processFactoryResetAck(ctx context.Context, gatewayI
 		Result: ProcessingResult{
 			MessageID:   env.MessageID,
 			MessageType: MessageTypeLifecycle,
+			TraceID:     env.MessageID,
+			PointCount:  1,
+			Accepted:    1,
+		},
+	}}, nil
+}
+
+func (processor *Processor) processWaveformBurst(ctx context.Context, gateway Gateway, quarantine UplinkQuarantine, msg UplinkMessage) ([]ProcessingOutcome, error) {
+	env, burst, err := edgecontrol.DecodeWaveformBurst(msg.Payload, gateway.ID)
+	if err != nil {
+		return processor.quarantinedOutcome(ctx, quarantine, QuarantineMessageInvalid, err)
+	}
+	processor.recordPacket("UPLINK", "EVENT", gateway.ID, msg.Topic, env.MessageID, msg.Payload)
+	if processor.onGatewayPresence != nil {
+		processor.onGatewayPresence(gateway.ID, true)
+	}
+	if processor.onWaveformBurst != nil {
+		if err := processor.onWaveformBurst(ctx, gateway, burst); err != nil {
+			return nil, err
+		}
+	}
+	return []ProcessingOutcome{{
+		Result: ProcessingResult{
+			MessageID:   env.MessageID,
+			MessageType: MessageTypeWaveform,
+			TraceID:     env.MessageID,
+			PointCount:  len(burst.Samples),
+			Accepted:    1,
+		},
+	}}, nil
+}
+
+func (processor *Processor) processDiagnosticsReply(ctx context.Context, gateway Gateway, quarantine UplinkQuarantine, msg UplinkMessage) ([]ProcessingOutcome, error) {
+	env, reply, err := edgecontrol.DecodeDiagnosticsLogReply(msg.Payload, gateway.ID)
+	if err != nil {
+		return processor.quarantinedOutcome(ctx, quarantine, QuarantineMessageInvalid, err)
+	}
+	processor.recordPacket("UPLINK", "EVENT", gateway.ID, msg.Topic, env.MessageID, msg.Payload)
+	if processor.onGatewayPresence != nil {
+		processor.onGatewayPresence(gateway.ID, true)
+	}
+	if processor.onDiagnosticsReply != nil {
+		if err := processor.onDiagnosticsReply(ctx, gateway, reply); err != nil {
+			return nil, err
+		}
+	}
+	return []ProcessingOutcome{{
+		Result: ProcessingResult{
+			MessageID:   env.MessageID,
+			MessageType: MessageTypeDiagnostics,
+			TraceID:     env.MessageID,
+			PointCount:  1,
+			Accepted:    1,
+		},
+	}}, nil
+}
+
+func (processor *Processor) processHostMetrics(ctx context.Context, gateway Gateway, quarantine UplinkQuarantine, msg UplinkMessage) ([]ProcessingOutcome, error) {
+	env, metrics, err := edgecontrol.DecodeHostMetrics(msg.Payload, gateway.ID)
+	if err != nil {
+		return processor.quarantinedOutcome(ctx, quarantine, QuarantineMessageInvalid, err)
+	}
+	processor.recordPacket("UPLINK", "STATUS", gateway.ID, msg.Topic, env.MessageID, msg.Payload)
+	if processor.onGatewayPresence != nil {
+		processor.onGatewayPresence(gateway.ID, true)
+	}
+	if processor.onHostMetrics != nil {
+		if err := processor.onHostMetrics(ctx, gateway, metrics); err != nil {
+			return nil, err
+		}
+	}
+	return []ProcessingOutcome{{
+		Result: ProcessingResult{
+			MessageID:   env.MessageID,
+			MessageType: MessageTypeMetrics,
 			TraceID:     env.MessageID,
 			PointCount:  1,
 			Accepted:    1,
@@ -578,6 +674,12 @@ func (processor *Processor) ProcessPrefix(ctx context.Context, messages []Uplink
 		return processor.processOTAResult(ctx, gateway, quarantine, first)
 	case MessageTypeLifecycle:
 		return processor.processFactoryResetAck(ctx, gateway.ID, quarantine, first)
+	case MessageTypeWaveform:
+		return processor.processWaveformBurst(ctx, gateway, quarantine, first)
+	case MessageTypeDiagnostics:
+		return processor.processDiagnosticsReply(ctx, gateway, quarantine, first)
+	case MessageTypeMetrics:
+		return processor.processHostMetrics(ctx, gateway, quarantine, first)
 	default:
 		envelope, err := processor.codecRegistry().DecodeEvent(first.Payload, gateway.ID)
 		if err != nil {

@@ -33,6 +33,7 @@ type diagnosticsGatewayFixture struct {
 	lastUpstreamBody        string
 	lastUpstreamTraceparent string
 	lastAuthAction          registryauth.Action
+	denyWrites              bool
 }
 
 func newDiagnosticsGatewayFixture(t *testing.T) *diagnosticsGatewayFixture {
@@ -46,7 +47,16 @@ func newDiagnosticsGatewayFixture(t *testing.T) *diagnosticsGatewayFixture {
 			{"method":"GET","path":"/api/v1/gateways/{gatewayId}/quarantine","owner":"connectivity","publicIngress":"platform-gateway","revision":1,"rollout":{"mode":"all"},"compatibilityMode":"native","allowedScopeDimensions":["tenant","site","principal"]},
 			{"method":"GET","path":"/api/v1/gateways/{gatewayId}/packet-capture","owner":"connectivity","publicIngress":"platform-gateway","revision":1,"rollout":{"mode":"all"},"compatibilityMode":"native","allowedScopeDimensions":["tenant","site","principal"]},
 			{"method":"POST","path":"/api/v1/gateways/{gatewayId}/packet-capture/start","owner":"connectivity","publicIngress":"platform-gateway","revision":1,"rollout":{"mode":"all"},"compatibilityMode":"native","allowedScopeDimensions":["tenant","site","principal"]},
-			{"method":"POST","path":"/api/v1/gateways/{gatewayId}/packet-capture/stop","owner":"connectivity","publicIngress":"platform-gateway","revision":1,"rollout":{"mode":"all"},"compatibilityMode":"native","allowedScopeDimensions":["tenant","site","principal"]}
+			{"method":"POST","path":"/api/v1/gateways/{gatewayId}/packet-capture/stop","owner":"connectivity","publicIngress":"platform-gateway","revision":1,"rollout":{"mode":"all"},"compatibilityMode":"native","allowedScopeDimensions":["tenant","site","principal"]},
+			{"method":"GET","path":"/api/v1/gateways/{gatewayId}/waveform-rules","owner":"connectivity","publicIngress":"platform-gateway","revision":1,"rollout":{"mode":"all"},"compatibilityMode":"native","allowedScopeDimensions":["tenant","site","principal"]},
+			{"method":"POST","path":"/api/v1/gateways/{gatewayId}/waveform-rules","owner":"connectivity","publicIngress":"platform-gateway","revision":1,"rollout":{"mode":"all"},"compatibilityMode":"native","allowedScopeDimensions":["tenant","site","principal"]},
+			{"method":"PUT","path":"/api/v1/gateways/{gatewayId}/waveform-rules/{ruleId}","owner":"connectivity","publicIngress":"platform-gateway","revision":1,"rollout":{"mode":"all"},"compatibilityMode":"native","allowedScopeDimensions":["tenant","site","principal"]},
+			{"method":"DELETE","path":"/api/v1/gateways/{gatewayId}/waveform-rules/{ruleId}","owner":"connectivity","publicIngress":"platform-gateway","revision":1,"rollout":{"mode":"all"},"compatibilityMode":"native","allowedScopeDimensions":["tenant","site","principal"]},
+			{"method":"GET","path":"/api/v1/gateways/{gatewayId}/waveform-captures","owner":"connectivity","publicIngress":"platform-gateway","revision":1,"rollout":{"mode":"all"},"compatibilityMode":"native","allowedScopeDimensions":["tenant","site","principal"]},
+			{"method":"GET","path":"/api/v1/gateways/{gatewayId}/waveform-captures/{captureId}","owner":"connectivity","publicIngress":"platform-gateway","revision":1,"rollout":{"mode":"all"},"compatibilityMode":"native","allowedScopeDimensions":["tenant","site","principal"]},
+			{"method":"POST","path":"/api/v1/gateways/{gatewayId}/waveform-captures:trigger","owner":"connectivity","publicIngress":"platform-gateway","revision":1,"rollout":{"mode":"all"},"compatibilityMode":"native","allowedScopeDimensions":["tenant","site","principal"]},
+			{"method":"POST","path":"/api/v1/gateways/{gatewayId}/diagnostics/logs:pull","owner":"connectivity","publicIngress":"platform-gateway","revision":1,"rollout":{"mode":"all"},"compatibilityMode":"native","allowedScopeDimensions":["tenant","site","principal"]},
+			{"method":"GET","path":"/api/v1/gateways/{gatewayId}/diagnostics/host-metrics","owner":"connectivity","publicIngress":"platform-gateway","revision":1,"rollout":{"mode":"all"},"compatibilityMode":"native","allowedScopeDimensions":["tenant","site","principal"]}
 		]
 	}`))
 	if err != nil {
@@ -78,8 +88,9 @@ func newDiagnosticsGatewayFixture(t *testing.T) *diagnosticsGatewayFixture {
 			DecisionReason: registryauth.ReasonAllowSiteRole, SessionID: parent.SessionID, ParentTokenID: parent.TokenID,
 			IssuedAt: now.Unix(), ExpiresAt: now.Add(30 * time.Second).Unix(), TokenID: randomURLToken(16),
 		}
+		allowed := !fix.denyWrites || input.Action != registryauth.ActionDeviceWrite
 		decision := registryauth.Decision{
-			Allowed: true, PrincipalID: base.principalID, SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject,
+			Allowed: allowed, PrincipalID: base.principalID, SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject,
 			TenantID: base.tenantID, AllowedSiteIDs: []string{base.siteID},
 			Actions: []registryauth.Action{input.Action}, PolicyRevision: "registry-read:1/iam:1",
 			ReasonCode: registryauth.ReasonAllowSiteRole, DecidedAt: now.Format(time.RFC3339Nano),
@@ -310,5 +321,71 @@ func TestGatewayDiagnosticsPropagatesTraceparent(t *testing.T) {
 	parsed, ok := observability.ParseTraceparent(fix.lastUpstreamTraceparent, "")
 	if !ok || parsed.TraceID != wantTraceID {
 		t.Fatalf("connectivity traceparent=%q (ok=%t), want traceId=%s", fix.lastUpstreamTraceparent, ok, wantTraceID)
+	}
+}
+
+func TestGatewayWaveformRulesCapturesAndRemoteLogPullProxyAndRBAC(t *testing.T) {
+	fix := newDiagnosticsGatewayFixture(t)
+	ruleID := "0194f000-9100-7000-8000-000000000001"
+	captureID := "0194f000-9200-7000-8000-000000000001"
+
+	// Unauthorized log pull must return 403 before calling connectivity upstream.
+	beforeCalls := fix.upstreamCalls.Load()
+	fix.denyWrites = true
+	denyReq := httptest.NewRequest(http.MethodPost, "/api/v1/gateways/"+fix.gatewayID+"/diagnostics/logs:pull", strings.NewReader(`{"maxBytes":4096,"sinceMinutes":30}`))
+	fix.authenticate(denyReq, true)
+	denyReq.Header.Set("Content-Type", "application/json")
+	denyRec := httptest.NewRecorder()
+	fix.handler.ServeHTTP(denyRec, denyReq)
+	if denyRec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for read-only log pull, got %d body=%s", denyRec.Code, denyRec.Body.String())
+	}
+	if fix.upstreamCalls.Load() != beforeCalls {
+		t.Fatal("denied log pull must not contact connectivity upstream")
+	}
+	fix.denyWrites = false
+
+	// Authorized routes proxy cleanly to internal connectivity endpoints.
+	checks := []struct {
+		method, pubPath, body, wantUp string
+		wantAction                    registryauth.Action
+	}{
+		{http.MethodGet, "/api/v1/gateways/" + fix.gatewayID + "/waveform-rules", "", "/internal/v1/gateways/" + fix.gatewayID + "/waveform-rules", registryauth.ActionDeviceRead},
+		{http.MethodPost, "/api/v1/gateways/" + fix.gatewayID + "/waveform-rules", `{"ruleName":"R1"}`, "/internal/v1/gateways/" + fix.gatewayID + "/waveform-rules", registryauth.ActionDeviceWrite},
+		{http.MethodPut, "/api/v1/gateways/" + fix.gatewayID + "/waveform-rules/" + ruleID, `{"ruleName":"R1"}`, "/internal/v1/gateways/" + fix.gatewayID + "/waveform-rules/" + ruleID, registryauth.ActionDeviceWrite},
+		{http.MethodDelete, "/api/v1/gateways/" + fix.gatewayID + "/waveform-rules/" + ruleID, "", "/internal/v1/gateways/" + fix.gatewayID + "/waveform-rules/" + ruleID, registryauth.ActionDeviceWrite},
+		{http.MethodGet, "/api/v1/gateways/" + fix.gatewayID + "/waveform-captures?limit=10", "", "/internal/v1/gateways/" + fix.gatewayID + "/waveform-captures", registryauth.ActionDeviceRead},
+		{http.MethodGet, "/api/v1/gateways/" + fix.gatewayID + "/waveform-captures/" + captureID, "", "/internal/v1/gateways/" + fix.gatewayID + "/waveform-captures/" + captureID, registryauth.ActionDeviceRead},
+		{http.MethodPost, "/api/v1/gateways/" + fix.gatewayID + "/waveform-captures:trigger", `{"triggerReason":"test"}`, "/internal/v1/gateways/" + fix.gatewayID + "/waveform-captures:trigger", registryauth.ActionDeviceWrite},
+		{http.MethodPost, "/api/v1/gateways/" + fix.gatewayID + "/diagnostics/logs:pull", `{"maxBytes":4096,"sinceMinutes":15}`, "/internal/v1/gateways/" + fix.gatewayID + "/diagnostics/logs:pull", registryauth.ActionDeviceWrite},
+		{http.MethodGet, "/api/v1/gateways/" + fix.gatewayID + "/diagnostics/host-metrics", "", "/internal/v1/gateways/" + fix.gatewayID + "/diagnostics/host-metrics", registryauth.ActionDeviceRead},
+	}
+	for _, tc := range checks {
+		fix.upstreamBody = `{"ok":true}`
+		req := httptest.NewRequest(tc.method, tc.pubPath, strings.NewReader(tc.body))
+		fix.authenticate(req, tc.method != http.MethodGet)
+		if tc.body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		rec := httptest.NewRecorder()
+		fix.handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK || fix.lastUpstreamPath != tc.wantUp || fix.lastAuthAction != tc.wantAction {
+			t.Fatalf("%s %s -> status=%d up=%s action=%s body=%s", tc.method, tc.pubPath, rec.Code, fix.lastUpstreamPath, fix.lastAuthAction, rec.Body.String())
+		}
+	}
+
+	// Verify path template normalization for observability & safe logging.
+	for path, want := range map[string]string{
+		"/api/v1/gateways/" + fix.gatewayID + "/waveform-rules":                 "/api/v1/gateways/{gatewayId}/waveform-rules",
+		"/api/v1/gateways/" + fix.gatewayID + "/waveform-rules/" + ruleID:       "/api/v1/gateways/{gatewayId}/waveform-rules/{ruleId}",
+		"/api/v1/gateways/" + fix.gatewayID + "/waveform-captures":              "/api/v1/gateways/{gatewayId}/waveform-captures",
+		"/api/v1/gateways/" + fix.gatewayID + "/waveform-captures/" + captureID: "/api/v1/gateways/{gatewayId}/waveform-captures/{captureId}",
+		"/api/v1/gateways/" + fix.gatewayID + "/waveform-captures:trigger":      "/api/v1/gateways/{gatewayId}/waveform-captures:trigger",
+		"/api/v1/gateways/" + fix.gatewayID + "/diagnostics/logs:pull":          "/api/v1/gateways/{gatewayId}/diagnostics/logs:pull",
+		"/api/v1/gateways/" + fix.gatewayID + "/diagnostics/host-metrics":       "/api/v1/gateways/{gatewayId}/diagnostics/host-metrics",
+	} {
+		if got := safeLogPath(path); got != want {
+			t.Fatalf("safeLogPath(%q) = %q, want %q", path, got, want)
+		}
 	}
 }

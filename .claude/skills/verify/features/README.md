@@ -1,6 +1,6 @@
 # HVAC Web verification map
 
-This directory indexes user-facing verification journeys for HVAC Web across all 23 operator surfaces and 26 Playwright E2E specs. Read the baseline rules here before running or extending any feature recipe.
+This directory indexes user-facing verification journeys for HVAC Web across all 23 operator surfaces and 27 Playwright E2E specs. Read the baseline rules here before running or extending any feature recipe.
 
 ## Baseline preconditions
 
@@ -38,7 +38,7 @@ This directory indexes user-facing verification journeys for HVAC Web across all
 - [Operations systems and devices](./operations-systems-devices.md) covers `/operations/systems-devices` card wall and table views, observed point counts, inspector drawers, and asset work orders (`e2e/systems-devices.spec.ts`).
 - [Operations digital twin](./operations-digital-twin.md) covers `/operations/digital-twin` WebGL plant scene, corner HUD metrics, `view=plant`, and equipment URL inspection (`e2e/digital-twin.spec.ts`).
 - [Operations alarms](./operations-alarms.md) covers `/operations/alarms` active/cleared views, acknowledgement persistence, alarm-origin work orders, and keyword filtering (`e2e/alarms.spec.ts`).
-- [Operations diagnostics](./operations-diagnostics.md) covers `/operations/diagnostics` FDD finding inspection, manual evaluation runs, and low-runtime gating (`e2e/diagnostics.spec.ts`).
+- [Operations diagnostics](./operations-diagnostics.md) covers `/operations/diagnostics` FDD finding inspection, manual evaluation runs, and low-runtime gating (`e2e/diagnostics.spec.ts`, `e2e/gateway-waveform-diagnostics.spec.ts`).
 - [Operations work center](./operations-work-center.md) covers `/operations/work-center` open/closed boards, claim-start-complete enforcement, and equipment backlinks (`e2e/work-center.spec.ts`).
 - [Operations control](./operations-control.md) covers `/operations/control` setpoint/stop confirmations, CJK IME `Enter` safety, approval timelines, and theme `color-scheme` sync (`e2e/control.spec.ts`).
 

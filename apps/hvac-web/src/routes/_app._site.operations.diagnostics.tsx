@@ -6,6 +6,7 @@ export const Route = createFileRoute('/_app/_site/operations/diagnostics')({
   validateSearch: z.object({
     range: z.enum(['7d', 'all']).optional().catch(undefined),
     inspect: z.string().optional().catch(undefined),
+    view: z.enum(['findings', 'waveforms']).optional().catch(undefined),
   }),
   staticData: { title: '故障诊断' },
   component: DiagnosticsWorkspace,

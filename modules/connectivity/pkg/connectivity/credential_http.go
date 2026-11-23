@@ -199,6 +199,15 @@ func NewCredentialHandlerWithOTA(service *CredentialService, authorize Credentia
 		mux.Handle("GET /internal/v1/gateways/{gatewayId}/packet-capture", diagnosticsHandler)
 		mux.Handle("POST /internal/v1/gateways/{gatewayId}/packet-capture/start", diagnosticsHandler)
 		mux.Handle("POST /internal/v1/gateways/{gatewayId}/packet-capture/stop", diagnosticsHandler)
+		mux.Handle("GET /internal/v1/gateways/{gatewayId}/waveform-rules", diagnosticsHandler)
+		mux.Handle("POST /internal/v1/gateways/{gatewayId}/waveform-rules", diagnosticsHandler)
+		mux.Handle("PUT /internal/v1/gateways/{gatewayId}/waveform-rules/{ruleId}", diagnosticsHandler)
+		mux.Handle("DELETE /internal/v1/gateways/{gatewayId}/waveform-rules/{ruleId}", diagnosticsHandler)
+		mux.Handle("GET /internal/v1/gateways/{gatewayId}/waveform-captures", diagnosticsHandler)
+		mux.Handle("GET /internal/v1/gateways/{gatewayId}/waveform-captures/{captureId}", diagnosticsHandler)
+		mux.Handle("POST /internal/v1/gateways/{gatewayId}/waveform-captures:trigger", diagnosticsHandler)
+		mux.Handle("POST /internal/v1/gateways/{gatewayId}/diagnostics/logs:pull", diagnosticsHandler)
+		mux.Handle("GET /internal/v1/gateways/{gatewayId}/diagnostics/host-metrics", diagnosticsHandler)
 	}
 	if otaHandler != nil {
 		mux.Handle("/internal/v1/ota/", otaHandler)

@@ -15,6 +15,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
+	"github.com/quanlaihe/hvac-web/modules/audit/pkg/auditserver"
 )
 
 const (
@@ -26,6 +27,7 @@ type gatewayDiagnosticsRoute struct {
 	template     string
 	gatewayID    string
 	upstreamPath string
+	auditAction  string
 	writeOp      bool
 	forwardBody  bool
 	forwardQuery bool
@@ -50,6 +52,44 @@ func matchGatewayDiagnosticsRoute(method, rawPath string) (gatewayDiagnosticsRou
 					forwardQuery: true,
 				}, true
 			}
+		case "waveform-rules":
+			if method == http.MethodGet {
+				return gatewayDiagnosticsRoute{
+					gatewayID:    gatewayID,
+					template:     "/api/v1/gateways/{gatewayId}/waveform-rules",
+					upstreamPath: "/internal/v1/gateways/" + escapedGatewayID + "/waveform-rules",
+				}, true
+			}
+			if method == http.MethodPost {
+				return gatewayDiagnosticsRoute{
+					gatewayID:    gatewayID,
+					template:     "/api/v1/gateways/{gatewayId}/waveform-rules",
+					upstreamPath: "/internal/v1/gateways/" + escapedGatewayID + "/waveform-rules",
+					writeOp:      true,
+					forwardBody:  true,
+					auditAction:  "WAVEFORM_RULE_UPSERT",
+				}, true
+			}
+		case "waveform-captures":
+			if method == http.MethodGet {
+				return gatewayDiagnosticsRoute{
+					gatewayID:    gatewayID,
+					template:     "/api/v1/gateways/{gatewayId}/waveform-captures",
+					upstreamPath: "/internal/v1/gateways/" + escapedGatewayID + "/waveform-captures",
+					forwardQuery: true,
+				}, true
+			}
+		case "waveform-captures:trigger":
+			if method == http.MethodPost {
+				return gatewayDiagnosticsRoute{
+					gatewayID:    gatewayID,
+					template:     "/api/v1/gateways/{gatewayId}/waveform-captures:trigger",
+					upstreamPath: "/internal/v1/gateways/" + escapedGatewayID + "/waveform-captures:trigger",
+					writeOp:      true,
+					forwardBody:  true,
+					auditAction:  "WAVEFORM_CAPTURE_TRIGGER",
+				}, true
+			}
 		case "packet-capture":
 			if method == http.MethodGet {
 				return gatewayDiagnosticsRoute{
@@ -62,6 +102,63 @@ func matchGatewayDiagnosticsRoute(method, rawPath string) (gatewayDiagnosticsRou
 		return gatewayDiagnosticsRoute{}, false
 	}
 
+	if len(parts) == 7 && parts[5] == "waveform-rules" {
+		ruleID := strings.TrimSpace(parts[6])
+		if !validConcentratorPathSegment(ruleID) {
+			return gatewayDiagnosticsRoute{}, false
+		}
+		escapedRuleID := url.PathEscape(ruleID)
+		switch method {
+		case http.MethodPut:
+			return gatewayDiagnosticsRoute{
+				gatewayID:    gatewayID,
+				template:     "/api/v1/gateways/{gatewayId}/waveform-rules/{ruleId}",
+				upstreamPath: "/internal/v1/gateways/" + escapedGatewayID + "/waveform-rules/" + escapedRuleID,
+				writeOp:      true,
+				forwardBody:  true,
+				auditAction:  "WAVEFORM_RULE_UPSERT",
+			}, true
+		case http.MethodDelete:
+			return gatewayDiagnosticsRoute{
+				gatewayID:    gatewayID,
+				template:     "/api/v1/gateways/{gatewayId}/waveform-rules/{ruleId}",
+				upstreamPath: "/internal/v1/gateways/" + escapedGatewayID + "/waveform-rules/" + escapedRuleID,
+				writeOp:      true,
+				auditAction:  "WAVEFORM_RULE_DELETE",
+			}, true
+		}
+	}
+	if len(parts) == 7 && parts[5] == "waveform-captures" && method == http.MethodGet {
+		captureID := strings.TrimSpace(parts[6])
+		if !validConcentratorPathSegment(captureID) {
+			return gatewayDiagnosticsRoute{}, false
+		}
+		return gatewayDiagnosticsRoute{
+			gatewayID:    gatewayID,
+			template:     "/api/v1/gateways/{gatewayId}/waveform-captures/{captureId}",
+			upstreamPath: "/internal/v1/gateways/" + escapedGatewayID + "/waveform-captures/" + url.PathEscape(captureID),
+		}, true
+	}
+	if len(parts) == 7 && parts[5] == "diagnostics" {
+		switch {
+		case parts[6] == "logs:pull" && method == http.MethodPost:
+			return gatewayDiagnosticsRoute{
+				gatewayID:    gatewayID,
+				template:     "/api/v1/gateways/{gatewayId}/diagnostics/logs:pull",
+				upstreamPath: "/internal/v1/gateways/" + escapedGatewayID + "/diagnostics/logs:pull",
+				writeOp:      true,
+				forwardBody:  true,
+				auditAction:  "GATEWAY_LOG_BUNDLE_PULL",
+			}, true
+		case parts[6] == "host-metrics" && method == http.MethodGet:
+			return gatewayDiagnosticsRoute{
+				gatewayID:    gatewayID,
+				template:     "/api/v1/gateways/{gatewayId}/diagnostics/host-metrics",
+				upstreamPath: "/internal/v1/gateways/" + escapedGatewayID + "/diagnostics/host-metrics",
+				forwardQuery: true,
+			}, true
+		}
+	}
 	if len(parts) == 7 && parts[5] == "packet-capture" && method == http.MethodPost {
 		switch parts[6] {
 		case "start":
@@ -85,7 +182,7 @@ func matchGatewayDiagnosticsRoute(method, rawPath string) (gatewayDiagnosticsRou
 }
 
 func matchGatewayDiagnosticsPathTemplate(rawPath string) (string, bool) {
-	for _, method := range []string{http.MethodGet, http.MethodPost} {
+	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete} {
 		if route, ok := matchGatewayDiagnosticsRoute(method, rawPath); ok {
 			return route.template, true
 		}
@@ -130,6 +227,16 @@ func (h *handler) serveGatewayDiagnostics(w http.ResponseWriter, r *http.Request
 
 	auth, failureAuth := h.authorizeRegistry(r.Context(), session, action)
 	if failureAuth != nil {
+		if route.auditAction != "" {
+			h.emitDomainAudit(r.Context(), r, session, domainAuditInput{
+				Category:      auditserver.AggregateTypeGatewayCredential,
+				TargetID:      route.gatewayID,
+				TargetLabel:   route.template,
+				Action:        route.auditAction,
+				Outcome:       auditOutcomeDenied,
+				ChangeSummary: map[string]any{"code": failureAuth.code, "status": failureAuth.status},
+			})
+		}
 		writeProblem(w, r, failureAuth.status, failureAuth.code, failureAuth.title, failureAuth.detail, failureAuth.retryable, nil)
 		return true
 	}
@@ -190,6 +297,16 @@ func (h *handler) serveGatewayDiagnostics(w http.ResponseWriter, r *http.Request
 	}
 
 	if response.StatusCode >= http.StatusBadRequest {
+		if route.auditAction != "" {
+			h.emitDomainAudit(r.Context(), r, session, domainAuditInput{
+				Category:      auditserver.AggregateTypeGatewayCredential,
+				TargetID:      route.gatewayID,
+				TargetLabel:   route.template,
+				Action:        route.auditAction,
+				Outcome:       auditOutcomeForStatus(response.StatusCode),
+				ChangeSummary: map[string]any{"upstreamStatus": response.StatusCode},
+			})
+		}
 		writeUpstreamDiagnosticsProblem(w, r, response.StatusCode, body)
 		return true
 	}
@@ -198,6 +315,15 @@ func (h *handler) serveGatewayDiagnostics(w http.ResponseWriter, r *http.Request
 		return true
 	}
 
+	if route.auditAction != "" {
+		h.emitDomainAudit(r.Context(), r, session, domainAuditInput{
+			Category:    auditserver.AggregateTypeGatewayCredential,
+			TargetID:    route.gatewayID,
+			TargetLabel: route.template,
+			Action:      route.auditAction,
+			Outcome:     auditOutcomeSucceeded,
+		})
+	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(response.StatusCode)

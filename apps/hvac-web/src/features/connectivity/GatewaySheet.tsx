@@ -19,6 +19,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 import { GatewayConfigShadowSection } from './GatewayConfigShadowSection';
 import { GatewayPacketCaptureSection, GatewayQuarantineSection } from './GatewayDiagnosticsSections';
+import { GatewayHostMetricsSection, GatewayLogPullSection } from './GatewayRemoteDiagnosticsSections';
 import { gatewayCredentialApi, gatewayCredentialKey, gatewayCredentialListKey } from './gateway-credentials';
 
 type CredentialState = GatewayCredentialStatus['status'];
@@ -448,6 +449,10 @@ function GatewayDetail({ gateway, siteName, csrfToken, canWrite }: {
       <GatewayPacketCaptureSection gatewayId={gateway.id} csrfToken={csrfToken} canWrite={canWrite} />
 
       <GatewayQuarantineSection gatewayId={gateway.id} />
+
+      <GatewayHostMetricsSection gatewayId={gateway.id} />
+
+      <GatewayLogPullSection gatewayId={gateway.id} csrfToken={csrfToken} canWrite={canWrite} />
 
       <section aria-label="危险操作" className="flex flex-col gap-3 px-6 py-4">
         <h3 className="text-sm font-semibold">危险操作</h3>

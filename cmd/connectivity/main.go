@@ -162,6 +162,7 @@ func run() int {
 	concentratorService := concentrator.NewService(connectivityStore, concentratorTransport)
 	presence := newGatewayOnlineTrackerWithMetrics(telemetry.Metrics)
 	otaPublicBaseURL := strings.TrimSpace(os.Getenv("CONNECTIVITY_OTA_PUBLIC_BASE_URL"))
+	diagBridge := connectivity.NewDiagnosticsMQTTBridge()
 	credentials, tunnelHub, mqttGuard, crlCtrl, err := newCredentialRuntime(credentialRuntimeConfig{
 		RootCtx:             drainRootCtx,
 		Logger:              logger,
@@ -175,6 +176,7 @@ func run() int {
 		MQTTSession:         mqttSession,
 		TunnelOptions:       []tunnel.Option{tunnel.WithObservability(logger, telemetry.Metrics)},
 		OTAPublicBaseURL:    otaPublicBaseURL,
+		DiagnosticsBridge:   diagBridge,
 	})
 	if err != nil {
 		logger.Error("connectivity_credentials_unavailable", "error_code", "CREDENTIAL_MODULE_UNAVAILABLE", "error", err.Error())
@@ -228,6 +230,16 @@ func run() int {
 				})
 			}
 			return nil
+		}),
+		adapter.WithWaveformBurstHook(func(hookCtx context.Context, gw adapter.Gateway, burst edgecontrol.WaveformBurstPayload) error {
+			return connectivityStore.RecordWaveformBurstUplink(hookCtx, gw.TenantID, gw.SiteID, gw.ID, burst)
+		}),
+		adapter.WithDiagnosticsReplyHook(func(hookCtx context.Context, gw adapter.Gateway, reply edgecontrol.DiagnosticsLogReplyPayload) error {
+			diagBridge.CompleteLogReply(hookCtx, gw.ID, reply)
+			return nil
+		}),
+		adapter.WithHostMetricsHook(func(hookCtx context.Context, gw adapter.Gateway, metrics edgecontrol.GatewayHostMetricsPayload) error {
+			return connectivityStore.RecordGatewayHostMetrics(hookCtx, gw.TenantID, gw.SiteID, gw.ID, metrics)
 		}),
 		adapter.WithFactoryResetAckHook(func(hookCtx context.Context, gatewayID string, ack edgecontrol.FactoryResetAckPayload) error {
 			_, ackErr := connectivityStore.RecordFactoryResetAck(hookCtx, gatewayID, ack)

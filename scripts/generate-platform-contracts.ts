@@ -169,6 +169,15 @@ const expectedOperations: Record<string, readonly [HttpMethod, string]> = {
   getGatewayPacketCapture: ['get', `${gw}/packet-capture`],
   startGatewayPacketCapture: ['post', `${gw}/packet-capture/start`],
   stopGatewayPacketCapture: ['post', `${gw}/packet-capture/stop`],
+  listGatewayWaveformRules: ['get', `${gw}/waveform-rules`],
+  createGatewayWaveformRule: ['post', `${gw}/waveform-rules`],
+  updateGatewayWaveformRule: ['put', `${gw}/waveform-rules/{ruleId}`],
+  deleteGatewayWaveformRule: ['delete', `${gw}/waveform-rules/{ruleId}`],
+  listGatewayWaveformCaptures: ['get', `${gw}/waveform-captures`],
+  getGatewayWaveformCapture: ['get', `${gw}/waveform-captures/{captureId}`],
+  triggerGatewayWaveformCapture: ['post', `${gw}/waveform-captures:trigger`],
+  pullGatewayDiagnosticsLogs: ['post', `${gw}/diagnostics/logs:pull`],
+  getGatewayHostMetrics: ['get', `${gw}/diagnostics/host-metrics`],
   listOTAPackages: ['get', 'ota/packages'],
   uploadOTAPackage: ['post', 'ota/packages'],
   listOTACampaigns: ['get', 'ota/campaigns'],
@@ -327,6 +336,13 @@ const expectedSuccessSchemas: Record<string, string> = {
   getGatewayPacketCapture: 'GatewayPacketCaptureSnapshot',
   startGatewayPacketCapture: 'GatewayPacketCaptureSnapshot',
   stopGatewayPacketCapture: 'GatewayPacketCaptureSnapshot',
+  listGatewayWaveformRules: 'GatewayWaveformRuleList',
+  updateGatewayWaveformRule: 'GatewayWaveformRule',
+  deleteGatewayWaveformRule: 'GatewayWaveformRuleDeleteResult',
+  listGatewayWaveformCaptures: 'GatewayWaveformCaptureList',
+  getGatewayWaveformCapture: 'GatewayWaveformCapture',
+  pullGatewayDiagnosticsLogs: 'GatewayLogBundleResult',
+  getGatewayHostMetrics: 'GatewayHostMetricsSummary',
   listOTAPackages: 'OTAPackageList',
   listOTACampaigns: 'OTACampaignList',
   getOTACampaign: 'OTACampaignDetail',
@@ -406,6 +422,8 @@ invariant(schemaRef(operations.replaceDeviceHardware.operation, '201') === '#/co
 invariant(schemaRef(operations.transferSiteDevice.operation, '201') === '#/components/schemas/TransferDeviceResult', 'transferSiteDevice success schema is unsupported');
 invariant(schemaRef(operations.uploadOTAPackage.operation, '201') === '#/components/schemas/OTAPackage', 'uploadOTAPackage created schema is unsupported');
 invariant(schemaRef(operations.createOTACampaign.operation, '201') === '#/components/schemas/OTACampaignDetail', 'createOTACampaign created schema is unsupported');
+invariant(schemaRef(operations.createGatewayWaveformRule.operation, '201') === '#/components/schemas/GatewayWaveformRule', 'createGatewayWaveformRule created schema is unsupported');
+invariant(schemaRef(operations.triggerGatewayWaveformCapture.operation, '201') === '#/components/schemas/GatewayWaveformCapture', 'triggerGatewayWaveformCapture created schema is unsupported');
 invariant(schemaRef(operations.getTemplateRevision.operation, '200') === './s05-registry-writer.openapi.json#/components/schemas/TemplateRevision', 'getTemplateRevision success schema is unsupported');
 invariant(operations.logout.operation.responses?.['204'], 'logout must return 204');
 invariant(operations.logout.operation.responses?.['204']?.headers?.Location?.schema?.format === 'uri', 'logout must publish the provider end-session Location header');
@@ -589,6 +607,18 @@ const schemaRequirements: Record<string, readonly [readonly string[], (readonly 
   GatewayCapturedPacket: [['sequence', 'capturedAt', 'direction', 'channel', 'topic', 'payloadBytes', 'payloadSha256', 'payloadPreview', 'payloadEncoding', 'payloadTruncated'], ['traceId']],
   GatewayPacketCaptureSnapshot: [['gatewayId', 'active', 'maxPackets', 'droppedCount', 'items'], ['startedAt', 'expiresAt', 'durationSeconds']],
   GatewayPacketCaptureStartRequest: [[], ['durationSeconds']],
+  GatewayWaveformRule: [['id', 'tenantId', 'siteId', 'gatewayId', 'ruleName', 'enabled', 'deviceCode', 'pointCode', 'triggerType', 'thresholdValue', 'deltaWindowSeconds', 'preSeconds', 'postSeconds', 'sampleRateHz', 'pointCodes', 'cooldownSeconds', 'updatedBy', 'createdAt', 'updatedAt']],
+  GatewayWaveformRuleList: [['gatewayId', 'items']],
+  GatewayWaveformRuleUpsertRequest: [['ruleName', 'enabled', 'deviceCode', 'pointCode', 'triggerType', 'thresholdValue'], ['deltaWindowSeconds', 'preSeconds', 'postSeconds', 'sampleRateHz', 'pointCodes', 'cooldownSeconds']],
+  GatewayWaveformRuleDeleteResult: [['deleted']],
+  WaveformSampleRow: [['sampledAtMs', 'values'], ['flags']],
+  GatewayWaveformCapture: [['captureId', 'tenantId', 'siteId', 'gatewayId', 'triggerSource', 'triggerReason', 'status', 'triggeredAt', 'windowStartAt', 'windowEndAt', 'sampleRateHz', 'sampleCount', 'samples', 'requestedBy', 'createdAt'], ['ruleId', 'errorMessage', 'completedAt']],
+  GatewayWaveformCaptureList: [['gatewayId', 'items']],
+  TriggerWaveformCaptureRequest: [[], ['ruleId', 'deviceCode', 'pointCode', 'pointCodes', 'preSeconds', 'postSeconds', 'sampleRateHz', 'triggerReason']],
+  PullGatewayLogsRequest: [[], ['maxBytes', 'sinceMinutes']],
+  GatewayLogBundleResult: [['requestId', 'gatewayId', 'status', 'content', 'returnedBytes', 'redactedCount', 'truncated', 'collectedAt'], ['errorMessage']],
+  GatewayHostMetricsRecord: [['id', 'gatewayId', 'collectedAt', 'cpuPercent', 'memoryUsedPercent', 'diskUsedPercent', 'uptimeSeconds', 'rs485TxFrames', 'rs485RxErrors', 'rs485ErrorRatePpm', 'mqttRttMs', 'mqttTlsVersion', 'mqttReconnectCount', 'activeRingPoints', 'ringBufferBytes']],
+  GatewayHostMetricsSummary: [['gatewayId', 'history'], ['latest']],
   OTAPackage: [['id', 'tenantId', 'component', 'version', 'targetOs', 'targetArch', 'hardwareModels', 'fileName', 'fileSizeBytes', 'sha256', 'signatureAlg', 'signingKeyId', 'signatureB64', 'releaseNotes', 'status', 'uploadedBy', 'createdAt', 'updatedAt'], ['minCompatibleVersion']],
   OTAPackageList: [['items']],
   OTADeviceTask: [['id', 'tenantId', 'campaignId', 'packageId', 'gatewayId', 'siteId', 'gatewayCode', 'gatewayName', 'gatewayOnline', 'wave', 'desiredAction', 'stage', 'progressPct', 'currentVersion', 'targetVersion', 'createdAt', 'updatedAt'], ['errorCode', 'errorMessage', 'dispatchedAt', 'lastReportedAt', 'finishedAt']],
