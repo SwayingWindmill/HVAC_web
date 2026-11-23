@@ -3,6 +3,10 @@ package gateway
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/platformapi"
@@ -201,5 +205,111 @@ func TestRegistryTelemetryPointCommandWriteInvariant(t *testing.T) {
 	point.PointType = "COMMAND"
 	if err := validateTelemetryPoint(point, registryTestSiteID); err != nil {
 		t.Fatalf("writable COMMAND Point rejected: %v", err)
+	}
+}
+
+func TestGatewayRegistryAcceptsDeviceConnectivityMode(t *testing.T) {
+	now := "2026-11-23T06:00:00.000Z"
+	makeDevice := func(mode string) platformapi.Device {
+		return platformapi.Device{
+			ID: registryTestDeviceID, TenantID: registryTestTenantID, SiteID: registryTestSiteID,
+			Code: "chiller-gateway-01", DisplayName: "1#冷机采集网关", DeviceType: "GATEWAY",
+			Status: "ACTIVE", Revision: 1, CreatedAt: now, UpdatedAt: now,
+			ConnectivityMode: mode,
+		}
+	}
+	for _, mode := range []string{"", "GATEWAY_PROXIED", "DIRECT"} {
+		device := makeDevice(mode)
+		deviceRaw, err := json.Marshal(device)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := canonicalRegistrySuccess(registryauth.ActionDeviceRead, registryTestSiteID, deviceRaw); err != nil {
+			t.Fatalf("ActionDeviceRead rejected ConnectivityMode=%q: %v", mode, err)
+		}
+		listRaw, err := json.Marshal(platformapi.DeviceCollection{Items: []platformapi.Device{device}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := canonicalRegistrySuccess(registryauth.ActionDeviceList, registryTestSiteID, listRaw); err != nil {
+			t.Fatalf("ActionDeviceList rejected ConnectivityMode=%q: %v", mode, err)
+		}
+		modelRaw, err := json.Marshal(platformapi.SiteAssetModel{
+			SchemaVersion: 2, TenantID: registryTestTenantID, SiteID: registryTestSiteID,
+			Spaces: []platformapi.Space{}, Assets: []platformapi.Asset{},
+			Devices: []platformapi.Device{device}, Sensors: []platformapi.Sensor{},
+			TelemetryPoints: []platformapi.TelemetryPoint{}, Relationships: []platformapi.AssetRelationship{},
+			Counts: platformapi.AssetModelCounts{DeviceEndpoints: 1},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := canonicalRegistrySuccess(registryauth.ActionAssetModelRead, registryTestSiteID, modelRaw); err != nil {
+			t.Fatalf("ActionAssetModelRead rejected ConnectivityMode=%q: %v", mode, err)
+		}
+	}
+
+	badRaw, err := json.Marshal(makeDevice("UNSUPPORTED"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := canonicalRegistrySuccess(registryauth.ActionDeviceRead, registryTestSiteID, badRaw); err == nil {
+		t.Fatal("unsupported Device ConnectivityMode was accepted")
+	}
+}
+
+func TestPlatformAPIRegistryStructsMatchOpenAPI(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "contracts", "http", "platform-gateway.openapi.yaml"))
+	if err != nil {
+		t.Fatalf("read platform-gateway OpenAPI contract: %v", err)
+	}
+	var spec struct {
+		Components struct {
+			Schemas map[string]struct {
+				Properties map[string]json.RawMessage `json:"properties"`
+			} `json:"schemas"`
+		} `json:"components"`
+	}
+	if err := json.Unmarshal(raw, &spec); err != nil {
+		t.Fatalf("parse platform-gateway OpenAPI contract: %v", err)
+	}
+
+	schemaTypes := map[string]reflect.Type{
+		"Site":              reflect.TypeOf(platformapi.Site{}),
+		"Asset":             reflect.TypeOf(platformapi.Asset{}),
+		"Device":            reflect.TypeOf(platformapi.Device{}),
+		"DeviceBinding":     reflect.TypeOf(platformapi.DeviceBinding{}),
+		"Space":             reflect.TypeOf(platformapi.Space{}),
+		"Sensor":            reflect.TypeOf(platformapi.Sensor{}),
+		"TelemetryPoint":    reflect.TypeOf(platformapi.TelemetryPoint{}),
+		"AssetRelationship": reflect.TypeOf(platformapi.AssetRelationship{}),
+		"AssetModelCounts":  reflect.TypeOf(platformapi.AssetModelCounts{}),
+		"SiteAssetModel":    reflect.TypeOf(platformapi.SiteAssetModel{}),
+	}
+
+	for schemaName, structType := range schemaTypes {
+		schema, ok := spec.Components.Schemas[schemaName]
+		if !ok {
+			t.Fatalf("OpenAPI contract missing schema %s", schemaName)
+		}
+		structFields := make(map[string]struct{}, structType.NumField())
+		for i := 0; i < structType.NumField(); i++ {
+			tag := structType.Field(i).Tag.Get("json")
+			jsonName := strings.Split(tag, ",")[0]
+			if jsonName == "" || jsonName == "-" {
+				continue
+			}
+			structFields[jsonName] = struct{}{}
+		}
+		for prop := range schema.Properties {
+			if _, exists := structFields[prop]; !exists {
+				t.Errorf("platformapi.%s missing OpenAPI field %q", schemaName, prop)
+			}
+		}
+		for jsonName := range structFields {
+			if _, exists := schema.Properties[jsonName]; !exists {
+				t.Errorf("platformapi.%s has extra field %q not in OpenAPI schema", schemaName, jsonName)
+			}
+		}
 	}
 }
