@@ -243,6 +243,85 @@ export function unitActivePower(meter: Pick<PlantDevice, 'reading'> | undefined)
   return null;
 }
 
+export interface InlineControlReading {
+  readonly key: string;
+  readonly shortLabel: string;
+  readonly reading: PlantReading;
+}
+
+interface InlineSpec {
+  readonly key: string;
+  readonly shortLabel: string;
+}
+
+const VALVE_SPECS: readonly InlineSpec[] = [{ key: 'valve.position_feedback', shortLabel: '开度' }];
+
+const INLINE_SPECS_BY_ASSET_TYPE: Readonly<Record<string, readonly InlineSpec[]>> = {
+  CHILLER: [
+    { key: 'chiller.leaving_chilled_water_temperature', shortLabel: '出水' },
+    { key: 'chiller.chilled_water_temperature_setpoint', shortLabel: '设定' },
+    { key: 'chiller.compressor_load', shortLabel: '负载' },
+    { key: 'chiller.power', shortLabel: '功率' },
+    { key: 'chiller.cop', shortLabel: 'COP' },
+  ],
+  CHILLED_WATER_PUMP: [
+    { key: 'chwp.frequency', shortLabel: '频率' },
+    { key: 'chwp.flow_rate', shortLabel: '流量' },
+    { key: 'chwp.power', shortLabel: '功率' },
+    { key: 'chwp.speed', shortLabel: '转速' },
+  ],
+  COOLING_WATER_PUMP: [
+    { key: 'cwp.frequency', shortLabel: '频率' },
+    { key: 'cwp.flow_rate', shortLabel: '流量' },
+    { key: 'cwp.power', shortLabel: '功率' },
+    { key: 'cwp.speed', shortLabel: '转速' },
+  ],
+  COOLING_TOWER: [
+    { key: 'cooling_tower.fan_speed', shortLabel: '转速' },
+    { key: 'cooling_tower.leaving_water_temperature', shortLabel: '出塔' },
+    { key: 'cooling_tower.power', shortLabel: '功率' },
+    { key: 'cooling_tower.approach_temperature', shortLabel: '逼近' },
+  ],
+  ISOLATION_VALVE: VALVE_SPECS,
+  MOTORIZED_VALVE: VALVE_SPECS,
+};
+
+/**
+ * Curated live telemetry readings shown inline on each device row so operators inspect operating
+ * points directly alongside controls without opening dialogs or switching views.
+ */
+export function deviceInlineReadings(
+  target: Pick<ControlTarget, 'assetType' | 'settings'>,
+  device: Pick<PlantDevice, 'reading'> | undefined,
+  maxCount = 4,
+): InlineControlReading[] {
+  if (!device || maxCount <= 0) return [];
+  const candidates: readonly { readonly key: string; readonly shortLabel?: string }[] = [
+    ...(INLINE_SPECS_BY_ASSET_TYPE[target.assetType] ?? []),
+    { key: 'vfd.frequency_feedback', shortLabel: '频率' },
+    ...target.settings
+      .map((setting) => setting.feedbackSourceKey)
+      .filter((key): key is string => Boolean(key))
+      .map((key) => ({ key })),
+  ];
+
+  const seen = new Set<string>();
+  const results: InlineControlReading[] = [];
+  for (const candidate of candidates) {
+    if (seen.has(candidate.key)) continue;
+    seen.add(candidate.key);
+    const reading = device.reading(candidate.key);
+    if (!reading || reading.state !== 'PRESENT') continue;
+    results.push({
+      key: candidate.key,
+      shortLabel: candidate.shortLabel ?? reading.label,
+      reading,
+    });
+    if (results.length >= maxCount) break;
+  }
+  return results;
+}
+
 /** The interlocks that would stop this action now, given each device's run state by device code. */
 export function blockingInterlocks(action: ControlAction, runStateByDeviceCode: ReadonlyMap<string, string>): Interlock[] {
   return action.interlocks.filter((interlock) => runStateByDeviceCode.get(interlock.deviceCode) !== interlock.expected);
