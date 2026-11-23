@@ -8,11 +8,39 @@ export type EnergyCost = NonNullable<EnergySeriesResponse['points'][number]['cos
 
 interface WallTime { year: number; month: number; day: number; hour: number; minute: number }
 
+const wallTimeFormatters = new Map<string, Intl.DateTimeFormat>();
+
+function wallTimeFormatter(timeZone: string): Intl.DateTimeFormat {
+  let formatter = wallTimeFormatters.get(timeZone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: 'numeric',
+      hourCycle: 'h23',
+    });
+    wallTimeFormatters.set(timeZone, formatter);
+  }
+  return formatter;
+}
+
 export function wallTime(instant: Date, timeZone: string): WallTime {
-  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
-    timeZone, year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', hourCycle: 'h23',
-  }).formatToParts(instant).map((part) => [part.type, Number(part.value)]));
-  return { year: parts.year, month: parts.month, day: parts.day, hour: parts.hour, minute: parts.minute };
+  let year = 0;
+  let month = 0;
+  let day = 0;
+  let hour = 0;
+  let minute = 0;
+  for (const part of wallTimeFormatter(timeZone).formatToParts(instant)) {
+    if (part.type === 'year') year = Number(part.value);
+    else if (part.type === 'month') month = Number(part.value);
+    else if (part.type === 'day') day = Number(part.value);
+    else if (part.type === 'hour') hour = Number(part.value);
+    else if (part.type === 'minute') minute = Number(part.value);
+  }
+  return { year, month, day, hour, minute };
 }
 
 /** The instant at which the Site's wall clock shows the given local midnight. */
@@ -438,6 +466,81 @@ export function explainQuestion(bucket: BucketComparison, granularity: Granulari
 /** Buckets for a chart: a bucket still running holds partial energy that would read as a drop, so its current values are left out. */
 export function completeOnly(buckets: readonly BucketComparison[]): BucketComparison[] {
   return buckets.map((bucket) => (bucket.complete ? bucket : { ...bucket, electricityKWh: null, coolingKWh: null, cop: null }));
+}
+
+export interface CompletedPeriodTotals {
+  readonly electricityKWh: number | null;
+  readonly coolingKWh: number | null;
+  readonly cop: number | null;
+  readonly costBuckets: readonly { readonly electricityKWh: number | null; readonly cost: EnergyCost | null }[];
+}
+
+function summarizeCompletedSide(
+  rows: readonly BucketComparison[],
+  pick: (row: BucketComparison) => {
+    readonly electricityKWh: number | null;
+    readonly coolingKWh: number | null;
+    readonly cost: EnergyCost | null;
+  },
+): CompletedPeriodTotals {
+  let electricitySum = 0;
+  let hasElectricity = false;
+  let coolingSum = 0;
+  let hasCooling = false;
+  let pairedElecSum = 0;
+  let pairedCoolSum = 0;
+  let hasPaired = false;
+  const costBuckets: { readonly electricityKWh: number | null; readonly cost: EnergyCost | null }[] = [];
+
+  for (const row of rows) {
+    const value = pick(row);
+    if (value.electricityKWh !== null && Number.isFinite(value.electricityKWh)) {
+      electricitySum += value.electricityKWh;
+      hasElectricity = true;
+    }
+    if (value.coolingKWh !== null && Number.isFinite(value.coolingKWh)) {
+      coolingSum += value.coolingKWh;
+      hasCooling = true;
+    }
+    if (
+      value.electricityKWh !== null &&
+      value.coolingKWh !== null &&
+      Number.isFinite(value.electricityKWh) &&
+      Number.isFinite(value.coolingKWh)
+    ) {
+      pairedElecSum += value.electricityKWh;
+      pairedCoolSum += value.coolingKWh;
+      hasPaired = true;
+    }
+    costBuckets.push({ electricityKWh: value.electricityKWh, cost: value.cost });
+  }
+
+  return {
+    electricityKWh: hasElectricity ? electricitySum : null,
+    coolingKWh: hasCooling ? coolingSum : null,
+    cop: hasPaired ? evaluatePlantCop(pairedCoolSum, pairedElecSum).cop : null,
+    costBuckets,
+  };
+}
+
+/** Totals across completed buckets only, so today's KPI deltas compare identical full hours with yesterday. */
+export function completedComparisonTotals(hours: readonly BucketComparison[]): {
+  readonly current: CompletedPeriodTotals;
+  readonly previous: CompletedPeriodTotals;
+} {
+  const completed = hours.filter((row) => row.complete);
+  return {
+    current: summarizeCompletedSide(completed, (row) => ({
+      electricityKWh: row.electricityKWh,
+      coolingKWh: row.coolingKWh,
+      cost: row.cost,
+    })),
+    previous: summarizeCompletedSide(completed, (row) => ({
+      electricityKWh: row.previousElectricityKWh,
+      coolingKWh: row.previousCoolingKWh,
+      cost: row.previousCost,
+    })),
+  };
 }
 
 /** The fractional change from `previous` to `current`; null when either is unknown or the base is zero. */

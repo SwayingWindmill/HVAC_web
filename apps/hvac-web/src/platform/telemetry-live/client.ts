@@ -1,6 +1,7 @@
 import {
   createS2TelemetryClient,
   S2TelemetryClientError,
+  type BatchObservationResult,
   type ClientSubscriptionId,
   type RecoveryCursorCheckpointResult,
   type S2TelemetryClient,
@@ -129,10 +130,14 @@ class LiveSession implements TelemetryLiveSession {
   private readonly onClosed: () => void;
   private readonly active: ActiveSubscription[] = [];
   private readonly listeners = new Set<(states: ReadonlyArray<TelemetryLiveState>) => void>();
+  private readonly pendingSnapshots = new Map<ActiveSubscription, TelemetryLiveUnavailableReason>();
   private transport: TelemetryTransportConnection | null = null;
   private interval: ReturnType<typeof globalThis.setInterval> | null = null;
   private closed = false;
   private refreshCapabilityPromise: Promise<string> | null = null;
+  private csrfToken: string | null = null;
+  private snapshotFlushScheduled = false;
+  private snapshotBatchSeq = 0;
 
   constructor(dependencies: LiveClientDependencies, targets: TelemetryLiveTarget[], onClosed: () => void) {
     this.dependencies = dependencies;
@@ -177,7 +182,9 @@ class LiveSession implements TelemetryLiveSession {
   }
 
   async refresh(): Promise<void> {
-    await Promise.all(this.active.map((item) => this.loadSnapshot(item, 'snapshot-unavailable')));
+    await this.loadSnapshotsBatch(
+      this.active.map((item) => ({ item, reason: 'snapshot-unavailable' })),
+    );
   }
 
   async checkpoint(): Promise<void> {
@@ -201,6 +208,9 @@ class LiveSession implements TelemetryLiveSession {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.csrfToken = null;
+    this.pendingSnapshots.clear();
+    this.snapshotFlushScheduled = false;
     if (this.interval !== null) this.dependencies.clearInterval(this.interval);
     this.interval = null;
     for (const item of this.active) {
@@ -251,7 +261,7 @@ class LiveSession implements TelemetryLiveSession {
       let item: ActiveSubscription;
       const machine = new SubscriptionStateMachine(target, descriptor, {
         onStateChanged: () => this.emit(),
-        onSnapshotFallback: (reason) => { void this.loadSnapshot(item, reason); },
+        onSnapshotFallback: (reason) => { this.scheduleSnapshot(item, reason); },
         onScopeViolation: () => this.revoke(item),
       }, this.dependencies.now);
       item = { target, descriptor, machine, transport: null };
@@ -269,7 +279,7 @@ class LiveSession implements TelemetryLiveSession {
       onSubscribed: (context) => {
         item.machine.onSubscribed(context);
         if (item.descriptor.recoveryMode === 'SNAPSHOT_THEN_LIVE' && item.machine.getState().snapshot === null) {
-          void this.loadSnapshot(item, 'snapshot-unavailable');
+          this.scheduleSnapshot(item, 'snapshot-unavailable');
         }
       },
       onPublication: (context) => item.machine.onPublication(context),
@@ -281,21 +291,109 @@ class LiveSession implements TelemetryLiveSession {
     });
   }
 
-  private async loadSnapshot(item: ActiveSubscription, reason: TelemetryLiveUnavailableReason): Promise<void> {
+  private scheduleSnapshot(item: ActiveSubscription, reason: TelemetryLiveUnavailableReason): void {
     if (this.closed || item.machine.getState().status === 'revoked') return;
-    try {
-      const snapshot = await this.dependencies.telemetry.getDeviceObservationSnapshot(
-        item.target.deviceId,
-        [...item.target.keys],
-      );
-      item.machine.installAuthoritativeSnapshot(snapshot);
-    } catch (error) {
-      if (error instanceof S2TelemetryClientError && error.problem.code === 'RESOURCE_NOT_FOUND') {
-        this.revoke(item);
+    this.pendingSnapshots.set(item, reason);
+    if (this.snapshotFlushScheduled) return;
+    this.snapshotFlushScheduled = true;
+    queueMicrotask(() => {
+      this.snapshotFlushScheduled = false;
+      if (this.closed || this.pendingSnapshots.size === 0) {
+        this.pendingSnapshots.clear();
         return;
       }
-      item.machine.markUnavailable(reason, true);
+      const entries = [...this.pendingSnapshots.entries()].map(([subscription, pendingReason]) => ({
+        item: subscription,
+        reason: pendingReason,
+      }));
+      this.pendingSnapshots.clear();
+      void this.loadSnapshotsBatch(entries);
+    });
+  }
+
+  private async loadSnapshotsBatch(
+    entries: ReadonlyArray<{ readonly item: ActiveSubscription; readonly reason: TelemetryLiveUnavailableReason }>,
+  ): Promise<void> {
+    const activeEntries = entries.filter((entry) => !this.closed && entry.item.machine.getState().status !== 'revoked');
+    if (activeEntries.length === 0) return;
+
+    let csrf = this.csrfToken;
+    if (!csrf) {
+      try {
+        csrf = await this.csrf();
+      } catch {
+        for (const entry of activeEntries) {
+          if (!this.closed && entry.item.machine.getState().status !== 'revoked') {
+            entry.item.machine.markUnavailable(entry.reason, true);
+          }
+        }
+        return;
+      }
+      if (this.closed) return;
     }
+
+    const chunks: Array<Array<{ readonly item: ActiveSubscription; readonly reason: TelemetryLiveUnavailableReason }>> = [];
+    let currentChunk: Array<{ readonly item: ActiveSubscription; readonly reason: TelemetryLiveUnavailableReason }> = [];
+    let keyCount = 0;
+    for (const entry of activeEntries) {
+      const keysCount = entry.item.target.keys.length;
+      if (currentChunk.length > 0 && (currentChunk.length >= maximumSubscriptions || keyCount + keysCount > maximumTotalKeySelections)) {
+        chunks.push(currentChunk);
+        currentChunk = [];
+        keyCount = 0;
+      }
+      currentChunk.push(entry);
+      keyCount += keysCount;
+    }
+    if (currentChunk.length > 0) chunks.push(currentChunk);
+
+    await Promise.all(chunks.map(async (chunk) => {
+      const batchId = ++this.snapshotBatchSeq;
+      const prepared = chunk.map((entry, index) => ({
+        ...entry,
+        requestId: `live-${batchId}-${index}`,
+      }));
+      try {
+        const response = await this.dependencies.telemetry.batchGetDeviceObservationSnapshots(
+          {
+            requests: prepared.map((entry) => ({
+              requestId: entry.requestId,
+              deviceId: entry.item.target.deviceId,
+              keys: [...entry.item.target.keys],
+            })),
+          },
+          { csrfToken: csrf },
+        );
+        if (this.closed) return;
+        if (response.schemaVersion !== 1 || response.items.length !== prepared.length) {
+          throw new Error('Telemetry batch snapshot returned an unsupported or incomplete envelope');
+        }
+        const byRequestId = new Map<string, BatchObservationResult>(response.items.map((result) => [result.requestId, result]));
+        for (const entry of prepared) {
+          if (this.closed || entry.item.machine.getState().status === 'revoked') continue;
+          const result = byRequestId.get(entry.requestId);
+          if (!result || result.deviceId !== entry.item.target.deviceId) {
+            entry.item.machine.markUnavailable(entry.reason, true);
+            continue;
+          }
+          if (result.status === 'OK') {
+            entry.item.machine.installAuthoritativeSnapshot(result.snapshot);
+          } else if (result.problem.code === 'RESOURCE_NOT_FOUND') {
+            this.revoke(entry.item);
+          } else {
+            entry.item.machine.markUnavailable(entry.reason, true);
+          }
+        }
+      } catch (error) {
+        if (this.closed) return;
+        const notFound = error instanceof S2TelemetryClientError && error.problem.code === 'RESOURCE_NOT_FOUND';
+        for (const entry of prepared) {
+          if (entry.item.machine.getState().status === 'revoked') continue;
+          if (notFound) this.revoke(entry.item);
+          else entry.item.machine.markUnavailable(entry.reason, true);
+        }
+      }
+    }));
   }
 
   private revoke(item: ActiveSubscription): void {
@@ -354,9 +452,11 @@ class LiveSession implements TelemetryLiveSession {
   }
 
   private async csrf(signal?: AbortSignal): Promise<string> {
+    if (this.csrfToken) return this.csrfToken;
     const principal = await this.dependencies.platform.getCurrentPrincipal({ signal });
     const csrf = principal.data.session.csrfToken;
     if (!csrf) throw new Error('Authenticated Session omitted CSRF capability');
+    this.csrfToken = csrf;
     return csrf;
   }
 

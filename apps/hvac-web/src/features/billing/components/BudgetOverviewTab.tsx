@@ -133,15 +133,20 @@ export function BudgetOverviewTab({
               </InfoTip>
             </span>
             {isElectricityPending ? (
-              <Skeleton className="h-8 w-36" />
+              <>
+                <Skeleton className="h-8 w-36" />
+                <Skeleton className="h-4 w-28" />
+              </>
             ) : (
-              <span className="text-2xl font-semibold tracking-tight text-foreground tabular-nums">
-                {formatCurrency(summary.cumulativeEstimatedCny)}
-              </span>
+              <>
+                <span className="text-2xl font-semibold tracking-tight text-foreground tabular-nums">
+                  {formatCurrency(summary.cumulativeEstimatedCny)}
+                </span>
+                {cumulativeNote ? (
+                  <span className="min-h-4 text-xs text-muted-foreground">{cumulativeNote}</span>
+                ) : null}
+              </>
             )}
-            {cumulativeNote ? (
-              <span className="text-xs text-muted-foreground">{cumulativeNote}</span>
-            ) : null}
           </div>
         </Panel>
 
@@ -154,26 +159,31 @@ export function BudgetOverviewTab({
               </InfoTip>
             </span>
             {isElectricityPending ? (
-              <Skeleton className="h-8 w-36" />
+              <>
+                <Skeleton className="h-8 w-36" />
+                <Skeleton className="h-4 w-28" />
+              </>
             ) : (
-              <div className="flex flex-wrap items-baseline gap-2">
-                <span className="text-2xl font-semibold tracking-tight text-foreground tabular-nums">
-                  {formatCurrency(summary.projectedMonthEndCny)}
-                </span>
-                {summary.projectedOverrunCny !== null ? (
-                  alreadyExceeded ? (
-                    <Badge variant="destructive">◆ 已超月度预算</Badge>
-                  ) : summary.projectedOverrunCny > 0 ? (
-                    <Badge variant="warning">▲ 预计超预算</Badge>
-                  ) : (
-                    <Badge variant="success">○ 预计在预算内</Badge>
-                  )
+              <>
+                <div className="flex flex-wrap items-baseline gap-2">
+                  <span className="text-2xl font-semibold tracking-tight text-foreground tabular-nums">
+                    {formatCurrency(summary.projectedMonthEndCny)}
+                  </span>
+                  {summary.projectedOverrunCny !== null ? (
+                    alreadyExceeded ? (
+                      <Badge variant="destructive">◆ 已超月度预算</Badge>
+                    ) : summary.projectedOverrunCny > 0 ? (
+                      <Badge variant="warning">▲ 预计超预算</Badge>
+                    ) : (
+                      <Badge variant="success">○ 预计在预算内</Badge>
+                    )
+                  ) : null}
+                </div>
+                {projectedNote ? (
+                  <span className="min-h-4 text-xs text-muted-foreground">{projectedNote}</span>
                 ) : null}
-              </div>
+              </>
             )}
-            {projectedNote ? (
-              <span className="text-xs text-muted-foreground">{projectedNote}</span>
-            ) : null}
           </div>
         </Panel>
 
@@ -374,7 +384,17 @@ export function BudgetOverviewTab({
           <Panel>
             <PanelHeader title="峰平谷电度电费构成" />
             <div className="space-y-3 p-4">
-              {summary.pricingState === 'NO_DATA' ||
+              {isElectricityPending ? (
+                Array.from({ length: 5 }, (_, index) => (
+                  <div key={index} className="space-y-1" aria-hidden="true">
+                    <div className="flex items-center justify-between gap-2">
+                      <Skeleton className="h-[18px] w-14" />
+                      <Skeleton className="h-[18px] w-32" />
+                    </div>
+                    <Skeleton className="h-2 w-full rounded-full" />
+                  </div>
+                ))
+              ) : summary.pricingState === 'NO_DATA' ||
               summary.pricingState === 'UNPRICED' ||
               summary.touPeriods.every((period) => period.energyKWh <= 0) ? (
                 <p className="py-6 text-center text-xs text-muted-foreground">

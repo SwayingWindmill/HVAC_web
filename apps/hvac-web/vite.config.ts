@@ -25,6 +25,7 @@ function manualChunks(id: string) {
   if (!normalized.includes('node_modules')) return undefined;
 
   if (/node_modules\/(react|react-dom|scheduler)\//.test(normalized)) return 'vendor-react';
+  if (/node_modules\/(?:clsx|tailwind-merge|class-variance-authority)\//.test(normalized)) return 'vendor-react';
   if (/node_modules\/@tanstack\/(?:react-router|router-core|history)\//.test(normalized)) return 'vendor-router';
   if (/node_modules\/@tanstack\//.test(normalized)) return 'vendor-query';
   if (/node_modules\/(?:@radix-ui|radix-ui)\//.test(normalized)) return 'vendor-radix';

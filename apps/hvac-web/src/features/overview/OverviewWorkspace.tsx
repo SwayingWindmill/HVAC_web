@@ -67,10 +67,11 @@ function TodayAgainstYesterday({ metric, onMetricChange }: { readonly metric: Ov
       </Panel>
     );
   }
-  const { today, yesterday, wholeYesterday, hours } = comparison.data;
+  const { today, wholeYesterday, hours, completed } = comparison.data;
   // A day none of whose electricity was priced (no Tariff) has no cost tab; a partly priced one says so.
   const todayCost = sumCosts(summaryCostBuckets(today));
-  const yesterdayCost = sumCosts(summaryCostBuckets(yesterday));
+  const todayCompletedCost = sumCosts(completed.current.costBuckets);
+  const yesterdayCompletedCost = sumCosts(completed.previous.costBuckets);
   const priced = todayCost.energyKWh > todayCost.unpricedKWh
     ? { today: costsByLabel(today.rows), yesterday: costsByLabel(wholeYesterday.rows) }
     : null;
@@ -81,7 +82,7 @@ function TodayAgainstYesterday({ metric, onMetricChange }: { readonly metric: Ov
       label: "今日空调用电",
       compareKey: "previousElectricityKWh",
       value: known(today.electricityKWh, 1),
-      delta: relativeChange(today.electricityKWh, yesterday.electricityKWh),
+      delta: relativeChange(completed.current.electricityKWh, completed.previous.electricityKWh),
       unit: "kWh",
       fractionDigits: 1,
       invertDelta: true,
@@ -92,7 +93,7 @@ function TodayAgainstYesterday({ metric, onMetricChange }: { readonly metric: Ov
       label: "今日供冷量",
       compareKey: "previousCoolingKWh",
       value: known(today.coolingKWh, 1),
-      delta: relativeChange(today.coolingKWh, yesterday.coolingKWh),
+      delta: relativeChange(completed.current.coolingKWh, completed.previous.coolingKWh),
       unit: "kWh",
       fractionDigits: 1,
       neutralDelta: true,
@@ -102,7 +103,7 @@ function TodayAgainstYesterday({ metric, onMetricChange }: { readonly metric: Ov
       label: "今日综合能效",
       compareKey: "previousCop",
       value: known(today.cop, 2),
-      delta: relativeChange(today.cop, yesterday.cop),
+      delta: relativeChange(completed.current.cop, completed.previous.cop),
       unit: "COP",
       fractionDigits: 2,
     },
@@ -112,8 +113,8 @@ function TodayAgainstYesterday({ metric, onMetricChange }: { readonly metric: Ov
       compareKey: "previousCost",
       value: todayCost.energyKWh > 0 ? formatDecimal(todayCost.total, 0) : null,
       delta: relativeChange(
-        todayCost.energyKWh > 0 ? todayCost.total : null,
-        yesterdayCost.energyKWh > 0 ? yesterdayCost.total : null,
+        todayCompletedCost.energyKWh > 0 ? todayCompletedCost.total : null,
+        yesterdayCompletedCost.energyKWh > 0 ? yesterdayCompletedCost.total : null,
       ),
       unit: "元",
       fractionDigits: 0,

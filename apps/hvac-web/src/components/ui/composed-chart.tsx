@@ -132,7 +132,7 @@ function ComposedChart({
   barRadius = 4,
   maxBarSize = 36,
   animate = true,
-  animationDuration = 500,
+  animationDuration = 180,
   yDomain = "zero",
   onPointClick,
   className,

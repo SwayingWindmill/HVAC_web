@@ -104,7 +104,23 @@ export class FakeTelemetry {
         if (!item) throw new Error(`No Snapshot fixture for ${deviceId}`);
         return item.promise;
       },
-      batchGetDeviceObservationSnapshots: async () => ({ schemaVersion: 1, items: [] }),
+      batchGetDeviceObservationSnapshots: async (request) => {
+        const pending = request.requests.map((target) => {
+          this.snapshotCalls.push({ deviceId: target.deviceId, keys: [...target.keys] });
+          const item = this.queues.get(target.deviceId)?.shift();
+          if (!item) throw new Error(`No Snapshot fixture for ${target.deviceId}`);
+          return { target, promise: item.promise };
+        });
+        const items = await Promise.all(
+          pending.map(async ({ target, promise }) => ({
+            requestId: target.requestId,
+            deviceId: target.deviceId,
+            status: 'OK' as const,
+            snapshot: await promise,
+          })),
+        );
+        return { schemaVersion: 1 as const, items };
+      },
       bootstrapTelemetrySubscriptions: async (request: SubscriptionBootstrapRequest) => {
         this.bootstrapRequests.push(structuredClone(request));
         const recovering = request.subscriptions.every((item) => Boolean(item.recoveryCursor));

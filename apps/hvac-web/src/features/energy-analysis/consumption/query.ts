@@ -1,8 +1,10 @@
+import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { getRouteApi } from '@tanstack/react-router';
 import { createPlatformGatewayClient, type EnergySeriesQuery } from '../../../api/generated/platformGateway.gen';
 import {
   comparePeriods,
+  completedComparisonTotals,
   hourlyHeatmap,
   periodWindow,
   previousWindow,
@@ -44,7 +46,7 @@ export function useEnergyReader() {
 export function useEnergyComparison(period: EnergyPeriod) {
   const { site, summary } = useEnergyReader();
   return useQuery({
-    queryKey: ['energy-series', site.id, period],
+    queryKey: ['energy-series', site.id, 'comparison', period],
     queryFn: async ({ signal }) => {
       const now = new Date();
       const current = periodWindow(period, now, site.timezone);
@@ -65,29 +67,76 @@ export function useEnergyComparison(period: EnergyPeriod) {
   });
 }
 
-/**
- * Today by Site-local hour against yesterday: `yesterday` covers the same hours up to now, for
- * a like-for-like change; `hours` draws the whole of yesterday as the reference line.
- */
-export function useTodayAgainstYesterday() {
+/** Today's cumulative Site-local hour energy, shared between overview and digital twin. */
+export function useTodayEnergy() {
   const { site, summary } = useEnergyReader();
   return useQuery({
-    queryKey: ['energy-series', site.id, 'today-against-yesterday'],
+    queryKey: ['energy-series', site.id, 'today-summary'],
     queryFn: async ({ signal }) => {
       const now = new Date();
       const { from, to } = periodWindow('today', now, site.timezone);
-      const before = previousWindow('today', now, site.timezone);
-      const [today, yesterday, wholeYesterday] = await Promise.all([
-        summary('hour', from, to, signal),
-        summary('hour', before.from, before.to, signal),
-        summary('hour', before.from, from, signal),
-      ]);
-      return { today, yesterday, wholeYesterday, hours: comparePeriods(today, wholeYesterday, { from, previousFrom: before.from, now, timeZone: site.timezone }) };
+      const today = await summary('hour', from, to, signal);
+      return { today, from, now };
     },
     refetchInterval: 60_000,
     staleTime: 30_000,
     retry: false,
   });
+}
+
+function useWholeYesterdayEnergy() {
+  const { site, summary } = useEnergyReader();
+  const yesterdayKey = siteDays(new Date(), site.timezone, 2)[0];
+  return useQuery({
+    queryKey: ['energy-series', site.id, 'whole-yesterday', yesterdayKey],
+    queryFn: async ({ signal }) => {
+      const now = new Date();
+      const { from: todayStart } = periodWindow('today', now, site.timezone);
+      const before = previousWindow('today', now, site.timezone);
+      const wholeYesterday = await summary('hour', before.from, todayStart, signal);
+      return { wholeYesterday, from: before.from };
+    },
+    staleTime: 30 * 60_000,
+    gcTime: 60 * 60_000,
+    retry: false,
+  });
+}
+
+/**
+ * Today by Site-local hour against yesterday: `completed` aligns complete hours for a like-for-like
+ * delta without extra mid-hour queries, and `hours` draws the whole of yesterday as the reference line.
+ */
+export function useTodayAgainstYesterday() {
+  const { site } = useEnergyReader();
+  const todayQuery = useTodayEnergy();
+  const yesterdayQuery = useWholeYesterdayEnergy();
+  const todayData = todayQuery.data;
+  const yesterdayData = yesterdayQuery.data;
+  const data = useMemo(() => {
+    if (!todayData || !yesterdayData) return undefined;
+    const hours = comparePeriods(todayData.today, yesterdayData.wholeYesterday, {
+      from: todayData.from,
+      previousFrom: yesterdayData.from,
+      now: todayData.now,
+      timeZone: site.timezone,
+    });
+    return {
+      today: todayData.today,
+      wholeYesterday: yesterdayData.wholeYesterday,
+      hours,
+      completed: completedComparisonTotals(hours),
+    };
+  }, [site.timezone, todayData, yesterdayData]);
+
+  const refetch = () => Promise.all([todayQuery.refetch(), yesterdayQuery.refetch()]);
+
+  if (todayQuery.isError || yesterdayQuery.isError) {
+    return { data: undefined, isPending: false as const, isError: true as const, refetch };
+  }
+  if (todayQuery.isPending || yesterdayQuery.isPending || !data) {
+    return { data: undefined, isPending: true as const, isError: false as const, refetch };
+  }
+  return { data, isPending: false as const, isError: false as const, refetch };
 }
 
 /** Hourly HVAC electricity over the last `days` Site-local days, as a day-by-hour grid. */

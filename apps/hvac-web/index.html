@@ -17,9 +17,86 @@
     </script>
     <link rel="icon" type="image/svg+xml" href="/quanlaihe-mark.svg" />
     <title>泉来禾智慧能源</title>
+    <style>
+      :root {
+        --boot-bg: #f7f7f8;
+        --boot-card: #ffffff;
+        --boot-border: #e7e7ea;
+        --boot-block: #ececef;
+      }
+      .dark {
+        --boot-bg: #0b0b0d;
+        --boot-card: #141417;
+        --boot-border: #27272c;
+        --boot-block: #1b1b20;
+      }
+      body {
+        margin: 0;
+        background: var(--boot-bg);
+      }
+      .boot-shell {
+        min-height: 100svh;
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+        padding: 22px 28px 24px;
+        background: var(--boot-bg);
+      }
+      .boot-head {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .boot-card {
+        border: 1px solid var(--boot-border);
+        border-radius: 12px;
+        background: var(--boot-card);
+        padding: 20px;
+      }
+      .boot-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 16px;
+      }
+      .boot-col {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .boot-stack {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .boot-bar {
+        border-radius: 6px;
+        background: var(--boot-block);
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="boot-shell" aria-hidden="true">
+        <div class="boot-head">
+          <div class="boot-bar" style="height: 32px; width: 160px;"></div>
+          <div class="boot-bar" style="height: 16px; width: 96px;"></div>
+        </div>
+        <div class="boot-card boot-grid">
+          <div class="boot-col"><div class="boot-bar" style="height: 12px; width: 64px;"></div><div class="boot-bar" style="height: 28px; width: 96px;"></div></div>
+          <div class="boot-col"><div class="boot-bar" style="height: 12px; width: 64px;"></div><div class="boot-bar" style="height: 28px; width: 96px;"></div></div>
+          <div class="boot-col"><div class="boot-bar" style="height: 12px; width: 64px;"></div><div class="boot-bar" style="height: 28px; width: 96px;"></div></div>
+          <div class="boot-col"><div class="boot-bar" style="height: 12px; width: 64px;"></div><div class="boot-bar" style="height: 28px; width: 96px;"></div></div>
+        </div>
+        <div class="boot-card boot-stack">
+          <div class="boot-bar" style="height: 16px; width: 128px;"></div>
+          <div class="boot-bar" style="height: 36px;"></div>
+          <div class="boot-bar" style="height: 36px;"></div>
+          <div class="boot-bar" style="height: 36px;"></div>
+          <div class="boot-bar" style="height: 36px;"></div>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/app/main.tsx"></script>
   </body>
 </html>
