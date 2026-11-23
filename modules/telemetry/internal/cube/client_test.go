@@ -786,9 +786,12 @@ func TestClientFailsWhenContinueWaitExceedsContextDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.continueWaitDelay = func(int) time.Duration { return 5 * time.Millisecond }
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	client.continueWaitDelay = func(int) time.Duration {
+		cancel()
+		return time.Hour
+	}
 	_, err = client.load(ctx, "cube-token", buildSeriesQuery(validCubeEnergyQuery(), time.UTC))
 	if err == nil || !strings.Contains(err.Error(), "continue wait") {
 		t.Fatalf("load() error = %v, want continue wait timeout", err)

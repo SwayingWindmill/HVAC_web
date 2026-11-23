@@ -208,6 +208,9 @@ func (client *Client) load(ctx context.Context, token string, query cubeQuery) (
 	for attempt := 0; ; attempt++ {
 		decoded, err := client.loadOnce(ctx, token, body)
 		if err != nil {
+			if attempt > 0 && ctx.Err() != nil {
+				return loadResponse{}, fmt.Errorf("cube query continue wait timed out: %w", ctx.Err())
+			}
 			return loadResponse{}, err
 		}
 		if !isContinueWaitError(decoded.Error) {
