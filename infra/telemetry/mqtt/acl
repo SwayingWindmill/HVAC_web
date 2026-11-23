@@ -12,11 +12,15 @@ topic read hvac/v1/+/up/event
 topic read hvac/v1/+/up/status
 topic read hvac/v1/+/up/concentrator
 topic read hvac/v1/+/up/shadow
+topic read hvac/v1/+/up/waveform
+topic read hvac/v1/+/up/diagnostics
+topic read hvac/v1/+/up/metrics
 topic read hvac/v1/+/up/ota
 topic read $SYS/broker/log/N
 topic write hvac/v1/+/down/concentrator
 topic write hvac/v1/+/down/shadow
 topic write hvac/v1/+/down/ota
+topic write hvac/v1/+/down/diagnostics
 topic write $CONTROL/hvac-crl/v1
 
 # Connectivity's command connection sends to every Gateway and reads every reply.

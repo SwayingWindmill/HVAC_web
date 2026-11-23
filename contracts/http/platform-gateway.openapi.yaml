@@ -9523,6 +9523,580 @@
           }
         }
       }
+    },
+    "/api/v1/gateways/{gatewayId}/waveform-rules": {
+      "get": {
+        "operationId": "listGatewayWaveformRules",
+        "summary": "List high-frequency waveform capture trigger rules for a Gateway",
+        "x-owner": "connectivity",
+        "x-public-ingress": "platform-gateway",
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "parameters": [
+          {
+            "name": "gatewayId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Waveform trigger rules",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GatewayWaveformRuleList"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "429": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "502": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createGatewayWaveformRule",
+        "summary": "Create a high-frequency waveform capture trigger rule for a Gateway",
+        "x-owner": "connectivity",
+        "x-public-ingress": "platform-gateway",
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "name": "gatewayId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GatewayWaveformRuleUpsertRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created waveform trigger rule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GatewayWaveformRule"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "429": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "502": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/gateways/{gatewayId}/waveform-rules/{ruleId}": {
+      "put": {
+        "operationId": "updateGatewayWaveformRule",
+        "summary": "Update an existing high-frequency waveform capture trigger rule",
+        "x-owner": "connectivity",
+        "x-public-ingress": "platform-gateway",
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "name": "gatewayId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          },
+          {
+            "name": "ruleId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GatewayWaveformRuleUpsertRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated waveform trigger rule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GatewayWaveformRule"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "429": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "502": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteGatewayWaveformRule",
+        "summary": "Delete a high-frequency waveform capture trigger rule",
+        "x-owner": "connectivity",
+        "x-public-ingress": "platform-gateway",
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "name": "gatewayId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          },
+          {
+            "name": "ruleId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deletion confirmation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GatewayWaveformRuleDeleteResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "429": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "502": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/gateways/{gatewayId}/waveform-captures": {
+      "get": {
+        "operationId": "listGatewayWaveformCaptures",
+        "summary": "List recent high-frequency waveform burst captures for a Gateway",
+        "x-owner": "connectivity",
+        "x-public-ingress": "platform-gateway",
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "parameters": [
+          {
+            "name": "gatewayId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recent waveform burst captures",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GatewayWaveformCaptureList"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "429": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "502": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/gateways/{gatewayId}/waveform-captures/{captureId}": {
+      "get": {
+        "operationId": "getGatewayWaveformCapture",
+        "summary": "Read full high-frequency transient sample series for a waveform capture",
+        "x-owner": "connectivity",
+        "x-public-ingress": "platform-gateway",
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "parameters": [
+          {
+            "name": "gatewayId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          },
+          {
+            "name": "captureId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Full waveform capture samples",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GatewayWaveformCapture"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "429": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "502": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/gateways/{gatewayId}/waveform-captures:trigger": {
+      "post": {
+        "operationId": "triggerGatewayWaveformCapture",
+        "summary": "Manually trigger an on-demand high-frequency waveform capture on a Gateway",
+        "x-owner": "connectivity",
+        "x-public-ingress": "platform-gateway",
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "name": "gatewayId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TriggerWaveformCaptureRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Triggered waveform capture task",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GatewayWaveformCapture"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "429": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "502": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/gateways/{gatewayId}/diagnostics/logs:pull": {
+      "post": {
+        "operationId": "pullGatewayDiagnosticsLogs",
+        "summary": "Pull bounded, redacted daemon diagnostics logs from a Gateway with audit",
+        "x-owner": "connectivity",
+        "x-public-ingress": "platform-gateway",
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "name": "gatewayId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PullGatewayLogsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Redacted diagnostics log bundle",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GatewayLogBundleResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "429": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "502": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/gateways/{gatewayId}/diagnostics/host-metrics": {
+      "get": {
+        "operationId": "getGatewayHostMetrics",
+        "summary": "Read Gateway host CPU/memory/disk, RS485 bus, and MQTT link RTT metrics",
+        "x-owner": "connectivity",
+        "x-public-ingress": "platform-gateway",
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "parameters": [
+          {
+            "name": "gatewayId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 60,
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Gateway host and link health metrics",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GatewayHostMetricsSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "429": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "502": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -22993,6 +23567,541 @@
             "type": "boolean"
           }
         }
+      },
+      "WaveformTriggerType": {
+        "type": "string",
+        "enum": [
+          "THRESHOLD_HIGH",
+          "THRESHOLD_LOW",
+          "DELTA_JUMP",
+          "TRIP_STATE"
+        ]
+      },
+      "GatewayWaveformRule": {
+        "type": "object",
+        "required": [
+          "id",
+          "tenantId",
+          "siteId",
+          "gatewayId",
+          "ruleName",
+          "enabled",
+          "deviceCode",
+          "pointCode",
+          "triggerType",
+          "thresholdValue",
+          "deltaWindowSeconds",
+          "preSeconds",
+          "postSeconds",
+          "sampleRateHz",
+          "pointCodes",
+          "cooldownSeconds",
+          "updatedBy",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "tenantId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "siteId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "gatewayId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "ruleName": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "deviceCode": {
+            "type": "string"
+          },
+          "pointCode": {
+            "type": "string"
+          },
+          "triggerType": {
+            "$ref": "#/components/schemas/WaveformTriggerType"
+          },
+          "thresholdValue": {
+            "type": "number"
+          },
+          "deltaWindowSeconds": {
+            "type": "integer"
+          },
+          "preSeconds": {
+            "type": "integer"
+          },
+          "postSeconds": {
+            "type": "integer"
+          },
+          "sampleRateHz": {
+            "type": "integer"
+          },
+          "pointCodes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "cooldownSeconds": {
+            "type": "integer"
+          },
+          "updatedBy": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "GatewayWaveformRuleList": {
+        "type": "object",
+        "required": [
+          "gatewayId",
+          "items"
+        ],
+        "properties": {
+          "gatewayId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GatewayWaveformRule"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "GatewayWaveformRuleUpsertRequest": {
+        "type": "object",
+        "required": [
+          "ruleName",
+          "enabled",
+          "deviceCode",
+          "pointCode",
+          "triggerType",
+          "thresholdValue"
+        ],
+        "properties": {
+          "ruleName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "deviceCode": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "pointCode": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "triggerType": {
+            "$ref": "#/components/schemas/WaveformTriggerType"
+          },
+          "thresholdValue": {
+            "type": "number"
+          },
+          "deltaWindowSeconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 300
+          },
+          "preSeconds": {
+            "type": "integer",
+            "minimum": 5,
+            "maximum": 300
+          },
+          "postSeconds": {
+            "type": "integer",
+            "minimum": 5,
+            "maximum": 300
+          },
+          "sampleRateHz": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10
+          },
+          "pointCodes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "cooldownSeconds": {
+            "type": "integer",
+            "minimum": 5,
+            "maximum": 3600
+          }
+        },
+        "additionalProperties": false
+      },
+      "GatewayWaveformRuleDeleteResult": {
+        "type": "object",
+        "required": [
+          "deleted"
+        ],
+        "properties": {
+          "deleted": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WaveformSampleRow": {
+        "type": "object",
+        "required": [
+          "sampledAtMs",
+          "values"
+        ],
+        "properties": {
+          "sampledAtMs": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "values": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number"
+            }
+          },
+          "flags": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "GatewayWaveformCapture": {
+        "type": "object",
+        "required": [
+          "captureId",
+          "tenantId",
+          "siteId",
+          "gatewayId",
+          "triggerSource",
+          "triggerReason",
+          "status",
+          "triggeredAt",
+          "windowStartAt",
+          "windowEndAt",
+          "sampleRateHz",
+          "sampleCount",
+          "samples",
+          "requestedBy",
+          "createdAt"
+        ],
+        "properties": {
+          "captureId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "tenantId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "siteId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "gatewayId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "ruleId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "triggerSource": {
+            "type": "string",
+            "enum": [
+              "AUTO_RULE",
+              "MANUAL"
+            ]
+          },
+          "triggerReason": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "COMPLETED",
+              "FAILED"
+            ]
+          },
+          "triggeredAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "windowStartAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "windowEndAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "sampleRateHz": {
+            "type": "integer"
+          },
+          "sampleCount": {
+            "type": "integer"
+          },
+          "samples": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WaveformSampleRow"
+            }
+          },
+          "requestedBy": {
+            "type": "string"
+          },
+          "errorMessage": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "completedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "GatewayWaveformCaptureList": {
+        "type": "object",
+        "required": [
+          "gatewayId",
+          "items"
+        ],
+        "properties": {
+          "gatewayId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GatewayWaveformCapture"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "TriggerWaveformCaptureRequest": {
+        "type": "object",
+        "properties": {
+          "ruleId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "deviceCode": {
+            "type": "string"
+          },
+          "pointCode": {
+            "type": "string"
+          },
+          "pointCodes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "preSeconds": {
+            "type": "integer",
+            "minimum": 5,
+            "maximum": 300
+          },
+          "postSeconds": {
+            "type": "integer",
+            "minimum": 5,
+            "maximum": 300
+          },
+          "sampleRateHz": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10
+          },
+          "triggerReason": {
+            "type": "string",
+            "maxLength": 512
+          }
+        },
+        "additionalProperties": false,
+        "required": []
+      },
+      "PullGatewayLogsRequest": {
+        "type": "object",
+        "properties": {
+          "maxBytes": {
+            "type": "integer",
+            "minimum": 1024,
+            "maximum": 262144
+          },
+          "sinceMinutes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1440
+          }
+        },
+        "additionalProperties": false,
+        "required": []
+      },
+      "GatewayLogBundleResult": {
+        "type": "object",
+        "required": [
+          "requestId",
+          "gatewayId",
+          "status",
+          "content",
+          "returnedBytes",
+          "redactedCount",
+          "truncated",
+          "collectedAt"
+        ],
+        "properties": {
+          "requestId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "gatewayId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "status": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          },
+          "returnedBytes": {
+            "type": "integer"
+          },
+          "redactedCount": {
+            "type": "integer"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "collectedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "errorMessage": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "GatewayHostMetricsRecord": {
+        "type": "object",
+        "required": [
+          "id",
+          "gatewayId",
+          "collectedAt",
+          "cpuPercent",
+          "memoryUsedPercent",
+          "diskUsedPercent",
+          "uptimeSeconds",
+          "rs485TxFrames",
+          "rs485RxErrors",
+          "rs485ErrorRatePpm",
+          "mqttRttMs",
+          "mqttTlsVersion",
+          "mqttReconnectCount",
+          "activeRingPoints",
+          "ringBufferBytes"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "gatewayId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "collectedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "cpuPercent": {
+            "type": "number"
+          },
+          "memoryUsedPercent": {
+            "type": "number"
+          },
+          "diskUsedPercent": {
+            "type": "number"
+          },
+          "uptimeSeconds": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "rs485TxFrames": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "rs485RxErrors": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "rs485ErrorRatePpm": {
+            "type": "number"
+          },
+          "mqttRttMs": {
+            "type": "number"
+          },
+          "mqttTlsVersion": {
+            "type": "string"
+          },
+          "mqttReconnectCount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "activeRingPoints": {
+            "type": "integer"
+          },
+          "ringBufferBytes": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
+      "GatewayHostMetricsSummary": {
+        "type": "object",
+        "required": [
+          "gatewayId",
+          "history"
+        ],
+        "properties": {
+          "gatewayId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "latest": {
+            "$ref": "#/components/schemas/GatewayHostMetricsRecord"
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GatewayHostMetricsRecord"
+            }
+          }
+        },
+        "additionalProperties": false
       }
     }
   }

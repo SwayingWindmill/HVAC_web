@@ -31,6 +31,7 @@ import { cn } from '@/lib/utils';
 import { LOW_DELTA_T, lowDeltaTTarget, meterOf, operatingCondition, ruleFor, severity, type DiagnosticRule, type Finding, type RuleRevision } from '../diagnostics-model';
 import { FindingSeverityBadge, SEVERITY } from '../finding-presentation';
 import { diagnosticsKeys, evaluateRule, lowDeltaTRuleQuery, siteFindingsQuery, type EvaluationOutcome } from '../query';
+import { DiagnosticsViewToggle, WaveformCapturePanel } from './WaveformCapturePanel';
 
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
@@ -420,7 +421,8 @@ export function DiagnosticsWorkspace() {
   const model = registry.data?.assetModel;
   const target = useMemo(() => (model ? lowDeltaTTarget(model) : null), [model]);
   const assetName = (assetId: string) => model?.assets.find((asset) => asset.id === assetId)?.displayName ?? '未登记设备';
-  const setSearch = (next: { range?: Range; inspect?: string }) => void navigate({ search: (previous) => ({ ...previous, ...next }), replace: true });
+  const setSearch = (next: { range?: Range; inspect?: string; view?: 'findings' | 'waveforms' }) => void navigate({ search: (previous) => ({ ...previous, ...next }), replace: true });
+  const view = search.view ?? 'findings';
 
   const run = useMutation({
     mutationFn: () => evaluateRule(site.id, principal.session.csrfToken, target!),
@@ -448,8 +450,21 @@ export function DiagnosticsWorkspace() {
 
   return (
     <Main fixed>
-      <PageHeader title="故障诊断" description={site.displayName} />
+      <PageHeader
+        title="故障诊断"
+        description={site.displayName}
+        actions={<DiagnosticsViewToggle view={view} onChange={(next) => setSearch({ view: next })} />}
+      />
 
+      {view === 'waveforms' ? (
+        <WaveformCapturePanel
+          devices={model?.devices ?? []}
+          canRead={principal.authorization.capabilities.includes('device.read')}
+          canWrite={principal.authorization.capabilities.includes('device.write')}
+          csrfToken={principal.session.csrfToken}
+          timeZone={site.timezone}
+        />
+      ) : (<>
       {registry.isPending ? <Skeleton className="h-[72px] shrink-0 rounded-xl" /> : (
         <RuleBar
           rule={LOW_DELTA_T}
@@ -576,7 +591,7 @@ export function DiagnosticsWorkspace() {
             void queryClient.invalidateQueries({ queryKey: workOrderKeys.all(site.id) });
           }}
         />
-      ) : null}
+      ) : null}</>)}
     </Main>
   );
 }

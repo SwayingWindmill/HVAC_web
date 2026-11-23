@@ -99,6 +99,9 @@ type Daemon struct {
 	scheduleController  *edgecontrol.EnergyScheduleController
 	clusterController   *edgecontrol.ChillerPlantClusterController
 	modelManager        *EdgeModelManager
+	waveformRing        *WaveformRingBuffer
+	remoteDiag          *RemoteDiagnosticsCollector
+	lastMetricsSent     time.Time
 	timedata            *edgecontrol.FileTimedata
 	deadband            *edgecontrol.DeadbandFilter
 	spool               *GradedSpool
@@ -250,6 +253,8 @@ func NewDaemon(cfg Config, opts DaemonOptions) (*Daemon, error) {
 	}
 
 	modelManager := NewEdgeModelManager(cfg.OTA.TrustedPublicKeys, logger)
+	waveformRing := NewWaveformRingBuffer(defaultWaveformRingHorizon)
+	remoteDiag := NewRemoteDiagnosticsCollector(cfg.StateDir, nowFn())
 	shadow := NewShadowManager(cfg.GatewayID, cfg.StateDir, host, registry, interlock, fallback, ruleEngine, logger)
 	shadow.AttachPlantControllers(aggregator, scheduleController, clusterController)
 	shadow.AttachModelManager(modelManager)
@@ -318,6 +323,9 @@ func NewDaemon(cfg Config, opts DaemonOptions) (*Daemon, error) {
 		scheduleController: scheduleController,
 		clusterController:  clusterController,
 		modelManager:       modelManager,
+		waveformRing:       waveformRing,
+		remoteDiag:         remoteDiag,
+		lastMetricsSent:    nowFn().UTC(),
 		timedata:           timedata,
 		deadband:           deadband,
 		spool:              spool,
@@ -480,6 +488,77 @@ func (d *Daemon) ModelManager() *EdgeModelManager {
 	return d.modelManager
 }
 
+// WaveformRing returns the Daemon's pre-deadband 1Hz waveform capture ring buffer.
+func (d *Daemon) WaveformRing() *WaveformRingBuffer {
+	return d.waveformRing
+}
+
+// RemoteDiagnostics returns the Daemon's bounded remote diagnostics and host metrics collector.
+func (d *Daemon) RemoteDiagnostics() *RemoteDiagnosticsCollector {
+	return d.remoteDiag
+}
+
+// HandleDiagnosticsDownlink executes validated TRIGGER_WAVEFORM or PULL_LOG_BUNDLE commands.
+func (d *Daemon) HandleDiagnosticsDownlink(ctx context.Context, payload []byte) error {
+	_, cmd, err := edgecontrol.DecodeDiagnosticsDownlink(payload, d.cfg.GatewayID)
+	if err != nil {
+		return err
+	}
+	now := d.now().UTC()
+	switch cmd.Action {
+	case edgecontrol.DiagnosticsActionTriggerWaveform:
+		immediate, burst := d.waveformRing.TriggerManual(cmd, now)
+		if immediate && burst != nil {
+			if wire, encErr := edgecontrol.EncodeWaveformBurst(d.cfg.GatewayID, *burst, now); encErr == nil {
+				d.publishOrSpool(ctx, edgecontrol.WaveformUplinkTopic(d.cfg.GatewayID), 1, EvidenceDiagnostic, wire)
+			}
+		}
+	case edgecontrol.DiagnosticsActionPullLogBundle:
+		reply := d.remoteDiag.PullRedactedLogs(cmd, now)
+		if wire, encErr := edgecontrol.EncodeDiagnosticsLogReply(d.cfg.GatewayID, reply, now); encErr == nil {
+			d.publishOrSpool(ctx, edgecontrol.DiagnosticsUplinkTopic(d.cfg.GatewayID), 1, EvidenceDiagnostic, wire)
+		}
+	}
+	return nil
+}
+
+// PublishHostMetricsOnce samples host, RS485 bus, and MQTT link metrics and publishes them.
+func (d *Daemon) PublishHostMetricsOnce(ctx context.Context) error {
+	if d == nil || d.remoteDiag == nil {
+		return nil
+	}
+	now := d.now().UTC()
+	d.lastMetricsSent = now
+	hostMetrics := d.remoteDiag.SampleHostMetrics(now, d.waveformRing)
+	wire, err := edgecontrol.EncodeHostMetrics(d.cfg.GatewayID, hostMetrics, now)
+	if err != nil {
+		return err
+	}
+	d.publishOrSpool(ctx, edgecontrol.MetricsUplinkTopic(d.cfg.GatewayID), 1, EvidenceDiagnostic, wire)
+	return nil
+}
+
+func (d *Daemon) evaluateWaveformAndMetrics(ctx context.Context, img edgecontrol.ProcessImage, now time.Time) {
+	if d.waveformRing != nil {
+		bursts := d.waveformRing.ObserveSnapshots(now, img)
+		for _, burst := range bursts {
+			if wire, err := edgecontrol.EncodeWaveformBurst(d.cfg.GatewayID, burst, now); err == nil {
+				d.publishOrSpool(ctx, edgecontrol.WaveformUplinkTopic(d.cfg.GatewayID), 1, EvidenceDiagnostic, wire)
+			}
+		}
+	}
+	if d.remoteDiag != nil {
+		snaps := img.Channels()
+		var errCount int64
+		for _, snap := range snaps {
+			if !snap.HasValue {
+				errCount++
+			}
+		}
+		d.remoteDiag.RecordCycleBusStats(int64(len(snaps)), errCount)
+	}
+}
+
 // HandleCommandPayload validates a v2.0 cloud command envelope, registers its ControlIntent,
 // waits for the next cycle outcome, and returns the serialized CommandReplyWire payload.
 func (d *Daemon) HandleCommandPayload(ctx context.Context, payload []byte) ([]byte, bool) {
@@ -540,6 +619,7 @@ func (d *Daemon) StepCycle(ctx context.Context) (edgecontrol.HostCycleResult, er
 	if d.modelManager != nil {
 		d.modelManager.EvaluateCycle(now, res.Cycle.Image)
 	}
+	d.evaluateWaveformAndMetrics(ctx, res.Cycle.Image, now)
 	d.emitCycleTelemetry(ctx, res.Cycle.Image, now)
 	d.emitRuleEvents(ctx, now)
 	return res, nil
@@ -721,6 +801,9 @@ func (d *Daemon) runCycleLoop(ctx context.Context) {
 			if _, err := d.StepCycle(ctx); err != nil && ctx.Err() == nil {
 				d.logger.Warn("edge_cycle_error", "error", err.Error())
 			}
+			if d.now().UTC().Sub(d.lastMetricsSent) >= 30*time.Second {
+				_ = d.PublishHostMetricsOnce(ctx)
+			}
 		}
 	}
 }
@@ -894,6 +977,14 @@ func (d *Daemon) startMQTTSession(ctx context.Context) error {
 		}); err != nil {
 			return err
 		}
+	}
+	if _, err := session.RegisterRoute("edge-diagnostics-downlink", []string{edgecontrol.DiagnosticsDownlinkTopic(d.cfg.GatewayID)}, func(pkt *paho.Publish) {
+		payload := append([]byte(nil), pkt.Payload...)
+		if err := d.HandleDiagnosticsDownlink(ctx, payload); err != nil {
+			d.logger.Warn("edge_diagnostics_downlink_invalid", "error", err.Error())
+		}
+	}); err != nil {
+		return err
 	}
 	if _, err := session.RegisterRoute("edge-command-downlink", []string{CommandDownlinkTopic(d.cfg.GatewayID)}, func(pkt *paho.Publish) {
 		payload := append([]byte(nil), pkt.Payload...)
