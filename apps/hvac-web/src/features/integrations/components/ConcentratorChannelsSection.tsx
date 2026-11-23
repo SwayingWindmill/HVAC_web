@@ -14,7 +14,7 @@ import {
   formatConcentratorEidDisplay,
   type ConcentratorChannelFilter,
   type ConcentratorChannelRow,
-} from '../integrations-model';
+} from '../concentrator-model';
 import { GovernanceBadge } from './GovernanceShared';
 
 const CHANNEL_FILTERS: readonly {

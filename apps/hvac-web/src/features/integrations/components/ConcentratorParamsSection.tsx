@@ -38,10 +38,10 @@ import type {
 import {
   CONCENTRATOR_PARAM_SPECS,
   buildConcentratorParamsDiff,
-  describeConcentratorError,
   validateConcentratorParamsDraft,
   type ConcentratorParamFieldSpec,
-} from '../integrations-model';
+} from '../concentrator-config-model';
+import { describeConcentratorError } from '../concentrator-model';
 
 export interface ConcentratorParamsSectionProps {
   readonly params: ConcentratorParams | null;

@@ -35,17 +35,19 @@ import type {
   ConcentratorEidSlot,
 } from '@/api/generated/platformGateway.gen';
 import {
+  applyConcentratorEidBatchFill,
+  buildConcentratorEidDiff,
+  detectDuplicateNonZeroEids,
+} from '../concentrator-config-model';
+import {
   CONCENTRATOR_AUDIT_OPERATION_LABELS,
   CONCENTRATOR_AUDIT_OUTCOME_PRESENTATION,
   MAX_CONCENTRATOR_EID,
-  applyConcentratorEidBatchFill,
-  buildConcentratorEidDiff,
   describeConcentratorError,
-  detectDuplicateNonZeroEids,
   formatConcentratorEidDisplay,
   type ConcentratorChannelRow,
-  type GovernanceStatusPresentation,
-} from '../integrations-model';
+} from '../concentrator-model';
+import type { GovernanceStatusPresentation } from '../governance-shared-model';
 import { GovernanceBadge } from './GovernanceShared';
 
 type EidSlotFilter = 'ALL' | 'BOUND' | 'EMPTY' | 'CONFLICT';

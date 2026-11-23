@@ -45,7 +45,7 @@ import {
   isProtectedConcentratorUid,
   mergeConcentratorAudits,
   type ConcentratorChannelRow,
-} from '../integrations-model';
+} from '../concentrator-model';
 import { ConcentratorChannelsSection } from './ConcentratorChannelsSection';
 import { ConcentratorEidSection } from './ConcentratorEidSection';
 import { ConcentratorParamsSection } from './ConcentratorParamsSection';

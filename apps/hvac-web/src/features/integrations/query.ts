@@ -11,7 +11,7 @@ import {
 } from '@/api/generated/s2Telemetry.gen';
 import { listWorkOrders } from '@/api/work-orders';
 import { loadAssetsCurrentState } from '@/features/assets/data';
-import type { CheckMeterHourlySeries } from './integrations-model';
+import type { CheckMeterHourlySeries } from './meter-reconciliation-model';
 
 const gatewayClient = createPlatformGatewayClient();
 const telemetryClient = createS2TelemetryClient();

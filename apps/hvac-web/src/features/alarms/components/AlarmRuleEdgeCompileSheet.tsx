@@ -28,7 +28,7 @@ import { summarizeEdgeRuleBundle } from '@/features/connectivity/gateway-config-
 import {
   CONFIG_SHADOW_SYNC_PRESENTATION,
   describeGatewayConfigShadowError,
-} from '@/features/integrations/integrations-model';
+} from '@/features/connectivity/gateway-config-shadow-labels';
 import { siteAssetModelQuery } from '@/api/site-asset-model';
 import {
   EDGE_ELIGIBILITY_REASON_LABELS,

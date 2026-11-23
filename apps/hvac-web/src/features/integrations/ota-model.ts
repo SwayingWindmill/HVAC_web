@@ -5,7 +5,7 @@ import {
   type OTADeviceTask,
   type OTAPackage,
 } from '../../api/generated/platformGateway.gen.ts';
-import type { GovernanceStatusPresentation } from './integrations-model.ts';
+import type { GovernanceStatusPresentation } from './governance-shared-model.ts';
 import { MAX_TAG_VALUE_LENGTH, TAG_KEY_PATTERN, type TagEntryDraft } from '../system/registry-admin/tags-model.ts';
 
 export const OTA_MAX_PACKAGE_BYTES = 64 * 1024 * 1024;

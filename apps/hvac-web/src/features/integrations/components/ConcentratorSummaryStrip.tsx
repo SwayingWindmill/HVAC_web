@@ -5,7 +5,7 @@ import type { ConcentratorParams } from '@/api/generated/platformGateway.gen';
 import {
   formatConcentratorBaudRate,
   type ConcentratorSummary,
-} from '../integrations-model';
+} from '../concentrator-model';
 
 function formatResponseTimestamp(iso: string | null): string {
   if (!iso) return '—';

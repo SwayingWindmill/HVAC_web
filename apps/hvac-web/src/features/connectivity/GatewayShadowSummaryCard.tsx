@@ -5,7 +5,7 @@ import {
   CONFIG_SHADOW_APPLIED_LABELS,
   CONFIG_SHADOW_REASON_LABELS,
   CONFIG_SHADOW_SECTION_LABELS,
-} from '@/features/integrations/integrations-model';
+} from './gateway-config-shadow-labels';
 import {
   AUTONOMY_POLICY_STATE_PRESENTATION,
   formatPointCopyTargets,
