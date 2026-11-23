@@ -23,6 +23,8 @@ import (
 
 const (
 	defaultCoverageReportInterval     = 60 * time.Second
+	coverageHeartbeatTimeout          = 15 * time.Second
+	coverageDisconnectTimeout         = 5 * time.Second
 	MaximumCoverageBatchSize          = 2048
 	defaultGatewayIdleTimeout         = 5 * time.Minute
 	defaultDrainTimeout               = 10 * time.Second
@@ -734,12 +736,25 @@ func (runtime *Runtime) reportCoverage(ctx context.Context, available bool, reas
 		runtime.coverageClosed = true
 	}
 
-	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	deviceIDs, scopes, err := runtime.loadCoverageTargets(callCtx, available)
+	opTimeout := coverageDisconnectTimeout
+	if available && !force {
+		opTimeout = coverageHeartbeatTimeout
+	}
+	listStart := time.Now()
+	listCtx, cancelList := context.WithTimeout(ctx, opTimeout)
+	deviceIDs, scopes, err := runtime.loadCoverageTargets(listCtx, available)
+	listCtxErr := listCtx.Err()
+	cancelList()
 	if err != nil {
 		if runtime.logger != nil {
-			runtime.logger.Warn("mqtt_coverage_device_list_failed", "error_code", "MQTT_COVERAGE_DEVICE_LIST_FAILED", "error", err.Error())
+			runtime.logger.Warn(
+				"mqtt_coverage_device_list_failed",
+				"available", available,
+				"failure_class", classifyCoverageError(listCtxErr, err),
+				"duration_ms", time.Since(listStart).Milliseconds(),
+				"error_code", "MQTT_COVERAGE_DEVICE_LIST_FAILED",
+				"error", err.Error(),
+			)
 		}
 		return
 	}
@@ -756,6 +771,9 @@ func (runtime *Runtime) reportCoverage(ctx context.Context, available bool, reas
 	}
 	observedAt := runtime.now().UTC().Format(time.RFC3339Nano)
 	for start := 0; start < len(deviceIDs); start += MaximumCoverageBatchSize {
+		if ctx.Err() != nil {
+			return
+		}
 		end := min(start+MaximumCoverageBatchSize, len(deviceIDs))
 		batchDeviceIDs := deviceIDs[start:end]
 		var batchScopes []GatewayCoverageScope
@@ -772,9 +790,38 @@ func (runtime *Runtime) reportCoverage(ctx context.Context, available bool, reas
 			ObservedAt:     observedAt,
 			SourceRevision: rev,
 		}
-		if err := runtime.coverageReporter.ReportSourceCoverage(callCtx, report); err != nil && runtime.logger != nil {
-			runtime.logger.Warn("mqtt_coverage_report_failed", "available", available, "error_code", "MQTT_COVERAGE_REPORT_FAILED", "error", err.Error())
+		callStart := time.Now()
+		callCtx, cancelCall := context.WithTimeout(ctx, opTimeout)
+		err := runtime.coverageReporter.ReportSourceCoverage(callCtx, report)
+		callCtxErr := callCtx.Err()
+		cancelCall()
+		if err != nil && runtime.logger != nil {
+			runtime.logger.Warn(
+				"mqtt_coverage_report_failed",
+				"available", available,
+				"failure_class", classifyCoverageError(callCtxErr, err),
+				"duration_ms", time.Since(callStart).Milliseconds(),
+				"device_count", len(batchDeviceIDs),
+				"gateway_count", len(batchScopes),
+				"error_code", "MQTT_COVERAGE_REPORT_FAILED",
+				"error", err.Error(),
+			)
 		}
+	}
+}
+
+func classifyCoverageError(ctxErr, err error) string {
+	switch {
+	case errors.Is(ctxErr, context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case errors.Is(ctxErr, context.Canceled) || errors.Is(err, context.Canceled):
+		return "canceled"
+	case errors.Is(err, ErrTelemetryRateLimited):
+		return "rate_limited"
+	case errors.Is(err, ErrTelemetryRequestInvalid):
+		return "request_invalid"
+	default:
+		return "upstream_error"
 	}
 }
 

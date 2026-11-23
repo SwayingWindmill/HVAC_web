@@ -178,7 +178,8 @@
         "infra/telemetry/postgres/init/telemetry-runtime-unnest-and-indexes.sql",
         "infra/telemetry/postgres/init/telemetry-accepted-point-sample-index.sql",
         "infra/telemetry/postgres/init/telemetry-edge-alarm-delivery.sql",
-        "infra/telemetry/postgres/init/telemetry-low-power-sleeping-presence.sql"
+        "infra/telemetry/postgres/init/telemetry-low-power-sleeping-presence.sql",
+        "infra/telemetry/postgres/init/telemetry-coverage-disconnect-lookup-indexes.sql"
       ]
     },
     {

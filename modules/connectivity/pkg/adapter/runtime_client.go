@@ -327,6 +327,13 @@ func (client *TelemetryRuntimeClient) postJSON(ctx context.Context, path, label 
 	observability.InjectHTTP(ctx, request.Header)
 	response, err := client.httpClient.Do(request)
 	if err != nil {
+		var netErr net.Error
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) {
+			return nil, fmt.Errorf("%s request failed: %w", label, context.DeadlineExceeded)
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+			return nil, fmt.Errorf("%s request failed: %w", label, context.Canceled)
+		}
 		return nil, fmt.Errorf("%s request failed", label)
 	}
 	defer response.Body.Close()

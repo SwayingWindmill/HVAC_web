@@ -164,6 +164,7 @@ COPY infra/telemetry/postgres/init/telemetry-runtime-unnest-and-indexes.sql /opt
 COPY infra/telemetry/postgres/init/telemetry-accepted-point-sample-index.sql /opt/hvac/repo/infra/telemetry/postgres/init/telemetry-accepted-point-sample-index.sql
 COPY infra/telemetry/postgres/init/telemetry-edge-alarm-delivery.sql /opt/hvac/repo/infra/telemetry/postgres/init/telemetry-edge-alarm-delivery.sql
 COPY infra/telemetry/postgres/init/telemetry-low-power-sleeping-presence.sql /opt/hvac/repo/infra/telemetry/postgres/init/telemetry-low-power-sleeping-presence.sql
+COPY infra/telemetry/postgres/init/telemetry-coverage-disconnect-lookup-indexes.sql /opt/hvac/repo/infra/telemetry/postgres/init/telemetry-coverage-disconnect-lookup-indexes.sql
 COPY modules/command/migrations/001_s3_command_runtime.sql /opt/hvac/repo/modules/command/migrations/001_s3_command_runtime.sql
 COPY modules/command/migrations/002_s3_target_runtime.sql /opt/hvac/repo/modules/command/migrations/002_s3_target_runtime.sql
 COPY modules/command/migrations/003_s3_tenant_scope.sql /opt/hvac/repo/modules/command/migrations/003_s3_tenant_scope.sql

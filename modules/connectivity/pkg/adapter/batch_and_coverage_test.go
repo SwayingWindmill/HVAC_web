@@ -1,15 +1,18 @@
 package adapter
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -430,5 +433,177 @@ func TestRuntimeGatewayScopedCoverageEmissionAndChunkSlicing(t *testing.T) {
 		if rep.Available || len(rep.GatewayScopes) != 0 {
 			t.Fatalf("unavailable report[%d] unexpectedly included GatewayScopes: %+v", i, rep.GatewayScopes)
 		}
+	}
+}
+
+type deadlineProbeLister struct {
+	scopes    []GatewayCoverageScope
+	deviceIDs []string
+	deadlines []time.Duration
+	listErr   error
+}
+
+func (l *deadlineProbeLister) ListAllActiveManagedDeviceIDs(ctx context.Context) ([]string, error) {
+	if deadline, ok := ctx.Deadline(); ok {
+		l.deadlines = append(l.deadlines, time.Until(deadline))
+	}
+	if l.listErr != nil {
+		return nil, l.listErr
+	}
+	return append([]string(nil), l.deviceIDs...), nil
+}
+
+func (l *deadlineProbeLister) ListActiveManagedGatewayScopes(ctx context.Context) ([]GatewayCoverageScope, error) {
+	if deadline, ok := ctx.Deadline(); ok {
+		l.deadlines = append(l.deadlines, time.Until(deadline))
+	}
+	if l.listErr != nil {
+		return nil, l.listErr
+	}
+	return l.scopes, nil
+}
+
+type deadlineProbeReporter struct {
+	deadlines []time.Duration
+	err       error
+}
+
+func (r *deadlineProbeReporter) ReportSourceCoverage(ctx context.Context, _ SourceCoverageReport) error {
+	if deadline, ok := ctx.Deadline(); ok {
+		r.deadlines = append(r.deadlines, time.Until(deadline))
+	}
+	return r.err
+}
+
+func TestRuntimeCoverageTimeoutBudgetsAndFailureClassification(t *testing.T) {
+	identities := newFakeIdentities()
+	processor, err := NewProcessor(identities, &fakeTelemetry{})
+	if err != nil {
+		t.Fatalf("NewProcessor: %v", err)
+	}
+
+	lister := &deadlineProbeLister{
+		deviceIDs: []string{testDeviceID, "018f3e00-4000-7000-8000-000000000011"},
+		scopes: []GatewayCoverageScope{
+			{GatewayID: testGatewayA, DeviceIDs: []string{testDeviceID, "018f3e00-4000-7000-8000-000000000011"}},
+		},
+	}
+	reporter := &deadlineProbeReporter{}
+	var logBuf bytes.Buffer
+	rt, err := NewRuntime(
+		Config{
+			MQTT: MQTTConfig{
+				BrokerURL: "tls://localhost:8883", ClientID: "connectivity-timeout-test",
+				CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "mqtt.local",
+			},
+			TelemetryRuntime: TelemetryRuntimeConfig{
+				BaseURL: "https://telemetry.local",
+				CAFile:  "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "telemetry.local",
+			},
+			QueueCapacity: 4,
+		},
+		processor,
+		slog.New(slog.NewJSONHandler(&logBuf, nil)),
+		nil,
+		WithCoverageReporter(lister, reporter),
+	)
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+	rt.recordConnectionState(nil, true, true, nil)
+
+	// Routine available heartbeat (available=true, force=false) receives ~15s budget.
+	rt.reportCoverage(context.Background(), true, "", 0, false)
+	if len(lister.deadlines) != 1 || lister.deadlines[0] <= 10*time.Second || lister.deadlines[0] > coverageHeartbeatTimeout+time.Second {
+		t.Fatalf("heartbeat lister deadline = %v, want (10s, %v]", lister.deadlines, coverageHeartbeatTimeout)
+	}
+	if len(reporter.deadlines) != 1 || reporter.deadlines[0] <= 10*time.Second || reporter.deadlines[0] > coverageHeartbeatTimeout+time.Second {
+		t.Fatalf("heartbeat reporter deadline = %v, want (10s, %v]", reporter.deadlines, coverageHeartbeatTimeout)
+	}
+
+	// Classify each non-secret failure_class cleanly in mqtt_coverage_report_failed logs.
+	cases := []struct {
+		name      string
+		err       error
+		wantClass string
+	}{
+		{name: "timeout", err: fmt.Errorf("MQTT coverage request failed: %w", context.DeadlineExceeded), wantClass: "timeout"},
+		{name: "rate_limited", err: &RateLimitedError{Label: "MQTT coverage", RetryAfter: 5 * time.Second}, wantClass: "rate_limited"},
+		{name: "request_invalid", err: &RequestInvalidError{Label: "MQTT coverage", StatusCode: http.StatusBadRequest}, wantClass: "request_invalid"},
+		{name: "upstream_error", err: errors.New("MQTT coverage returned 503"), wantClass: "upstream_error"},
+	}
+	for _, tc := range cases {
+		logBuf.Reset()
+		reporter.err = tc.err
+		rt.reportCoverage(context.Background(), true, "", 0, false)
+		var entry map[string]any
+		if err := json.Unmarshal(bytes.TrimSpace(logBuf.Bytes()), &entry); err != nil {
+			t.Fatalf("%s: unmarshal log JSON (%q): %v", tc.name, logBuf.String(), err)
+		}
+		if entry["msg"] != "mqtt_coverage_report_failed" {
+			t.Fatalf("%s: msg = %v, want mqtt_coverage_report_failed", tc.name, entry["msg"])
+		}
+		if entry["failure_class"] != tc.wantClass {
+			t.Fatalf("%s: failure_class = %v, want %q", tc.name, entry["failure_class"], tc.wantClass)
+		}
+		if gotCount, ok := entry["device_count"].(float64); !ok || int(gotCount) != 2 {
+			t.Fatalf("%s: device_count = %v, want 2", tc.name, entry["device_count"])
+		}
+		if gotGW, ok := entry["gateway_count"].(float64); !ok || int(gotGW) != 1 {
+			t.Fatalf("%s: gateway_count = %v, want 1", tc.name, entry["gateway_count"])
+		}
+		if dur, ok := entry["duration_ms"].(float64); !ok || dur < 0 {
+			t.Fatalf("%s: duration_ms = %v, want non-negative number", tc.name, entry["duration_ms"])
+		}
+	}
+
+	// Forced shutdown disconnect report (available=false, force=true) stays bounded at <= 5s.
+	lister.deadlines = nil
+	reporter.deadlines = nil
+	reporter.err = nil
+	rt.reportCoverage(context.Background(), false, "SOURCE_UNAVAILABLE", 0, true)
+	if len(lister.deadlines) != 1 || lister.deadlines[0] <= 0 || lister.deadlines[0] > coverageDisconnectTimeout+time.Second {
+		t.Fatalf("disconnect lister deadline = %v, want (0, %v]", lister.deadlines, coverageDisconnectTimeout)
+	}
+	if len(reporter.deadlines) != 1 || reporter.deadlines[0] <= 0 || reporter.deadlines[0] > coverageDisconnectTimeout+time.Second {
+		t.Fatalf("disconnect reporter deadline = %v, want (0, %v]", reporter.deadlines, coverageDisconnectTimeout)
+	}
+}
+
+func TestTelemetryRuntimeClientReportCoverageTimeoutHidesURL(t *testing.T) {
+	release := make(chan struct{})
+	server := httptest.NewTLSServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer server.Close()
+	defer close(release)
+
+	roots := x509.NewCertPool()
+	roots.AddCert(server.Certificate())
+	client := &TelemetryRuntimeClient{
+		baseURL: server.URL,
+		httpClient: &http.Client{
+			Timeout: 40 * time.Millisecond,
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{RootCAs: roots},
+			},
+		},
+	}
+
+	err := client.ReportSourceCoverage(context.Background(), SourceCoverageReport{
+		SourceID:       "connectivity-test",
+		DeviceIDs:      []string{testDeviceID},
+		Available:      true,
+		ObservedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+		SourceRevision: 1,
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("ReportSourceCoverage err = %v, want errors.Is(context.DeadlineExceeded)", err)
+	}
+	if strings.Contains(err.Error(), server.URL) || strings.Contains(err.Error(), "127.0.0.1") {
+		t.Fatalf("ReportSourceCoverage error leaked URL: %q", err.Error())
 	}
 }
