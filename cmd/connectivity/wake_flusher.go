@@ -13,11 +13,11 @@ import (
 )
 
 const (
-	defaultWakeDebounce           = 25 * time.Millisecond
-	defaultWakeRPCTimeout         = 5 * time.Second
-	maxWakePendingTenants         = 64
+	defaultWakeDebounce            = 25 * time.Millisecond
+	defaultWakeRPCTimeout          = 5 * time.Second
+	maxWakePendingTenants          = 64
 	maxWakePendingDevicesPerTenant = 512
-	maxWakePendingGateways        = 128
+	maxWakePendingGateways         = 128
 )
 
 type deferredCommandWakeFunc func(ctx context.Context, tenantID string, deviceIDs []string) (int, error)

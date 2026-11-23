@@ -15,13 +15,13 @@ import (
 )
 
 type createSiteCommandBatchRequest struct {
-	Capability       commandmodel.Capability                `json:"capability"`
-	Parameters       commandmodel.CommandParameters         `json:"parameters,omitempty"`
-	DeliveryMode     commandmodel.DeliveryMode              `json:"deliveryMode,omitempty"`
-	TTLSeconds       *int                                   `json:"ttlSeconds,omitempty"`
-	Reason           string                                 `json:"reason,omitempty"`
+	Capability       commandmodel.Capability                  `json:"capability"`
+	Parameters       commandmodel.CommandParameters           `json:"parameters,omitempty"`
+	DeliveryMode     commandmodel.DeliveryMode                `json:"deliveryMode,omitempty"`
+	TTLSeconds       *int                                     `json:"ttlSeconds,omitempty"`
+	Reason           string                                   `json:"reason,omitempty"`
 	Targets          []commandservice.CommandBatchTargetInput `json:"targets"`
-	VerificationCode string                                 `json:"verificationCode,omitempty"`
+	VerificationCode string                                   `json:"verificationCode,omitempty"`
 }
 
 func (h *handler) createSiteCommandBatch(writer http.ResponseWriter, request *http.Request, session bffSession, route publicControlExitRoute) {
@@ -79,9 +79,9 @@ func (h *handler) createSiteCommandBatch(writer http.ResponseWriter, request *ht
 	)
 	if failure != nil {
 		h.emitBatchAudit(request, session, targetID, "COMMAND_BATCH_SUBMITTED", auditOutcomeForStatus(failure.status), map[string]any{
-			"capability": string(input.Capability),
+			"capability":  string(input.Capability),
 			"targetCount": len(input.Targets),
-			"reasonCode": failure.code,
+			"reasonCode":  failure.code,
 		})
 		h.writeCommandFailure(writer, request, *failure)
 		return
