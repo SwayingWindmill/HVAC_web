@@ -2,6 +2,10 @@
     <!-- ClickHouse's own diagnostic logs write millions of rows a day and keep merging them. On the
          single-server tiers that cost competes with telemetry ingestion for the same cores and memory;
          the platform's metrics come from Prometheus, so only query_log stays. -->
+    <!-- Default config.xml logs at trace level (~800-950 lines per query, burning 0.35-1.5s CPU on 2 vCPU). -->
+    <logger>
+        <level>warning</level>
+    </logger>
     <trace_log remove="1"/>
     <text_log remove="1"/>
     <processors_profile_log remove="1"/>

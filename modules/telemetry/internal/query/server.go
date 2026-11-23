@@ -224,10 +224,19 @@ func (server *handler) ServeHTTP(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 
+	queryStarted := server.now()
 	response, err := server.engine.QueryEnergySeries(request.Context(), analytics.CallerContext{
 		PrincipalID: claims.PrincipalID, PolicyRevision: claims.PolicyRevision,
 	}, query)
 	if err != nil {
+		server.logger.WarnContext(request.Context(), "analytics_energy_series_failed",
+			"site_id", query.SiteID,
+			"energy_type", query.EnergyType,
+			"granularity", query.Granularity,
+			"failure_class", classifyAnalyticsError(err),
+			"duration_ms", server.now().Sub(queryStarted).Milliseconds(),
+			"trace_id", observability.TraceID(request.Context()),
+		)
 		writeProblem(writer, http.StatusServiceUnavailable, "ANALYTICS_ENGINE_UNAVAILABLE", "The semantic query engine could not complete the request.", true)
 		return
 	}
@@ -273,12 +282,21 @@ func (server *handler) serveSemanticQuery(writer http.ResponseWriter, request *h
 		writeProblem(writer, http.StatusForbidden, "ANALYTICS_DELEGATION_REJECTED", "The analytics delegation grant is not authorized for this query.", false)
 		return
 	}
+	queryStarted := server.now()
 	response, err := server.engine.QuerySemantic(request.Context(), analytics.CallerContext{PrincipalID: claims.PrincipalID, PolicyRevision: claims.PolicyRevision}, query)
 	if errors.Is(err, analyticsmodel.ErrSemanticRowLimit) {
 		writeProblem(writer, http.StatusUnprocessableEntity, "ANALYTICS_RESULT_TOO_LARGE", "The semantic query returns more rows than allowed; ask for fewer dimensions or a shorter range.", false)
 		return
 	}
 	if err != nil {
+		server.logger.WarnContext(request.Context(), "analytics_semantic_query_failed",
+			"site_id", query.SiteID,
+			"view", query.View,
+			"granularity", query.Granularity,
+			"failure_class", classifyAnalyticsError(err),
+			"duration_ms", server.now().Sub(queryStarted).Milliseconds(),
+			"trace_id", observability.TraceID(request.Context()),
+		)
 		writeProblem(writer, http.StatusServiceUnavailable, "ANALYTICS_ENGINE_UNAVAILABLE", "The semantic query engine could not complete the request.", true)
 		return
 	}
@@ -526,4 +544,23 @@ func writeJSON(writer http.ResponseWriter, status int, payload any) {
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(payload)
+}
+
+func classifyAnalyticsError(err error) string {
+	if errors.Is(err, context.Canceled) {
+		return "canceled"
+	}
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, "continue wait"):
+		return "continue_wait_timeout"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case strings.Contains(message, "cube returned "):
+		return "cube_http_error"
+	case strings.Contains(message, "cube query failed:"):
+		return "cube_query_error"
+	default:
+		return "engine_error"
+	}
 }

@@ -19,13 +19,27 @@ views:
           - valid_count
           - suspect_count
           - invalid_count
-          - missing_count
           - synthesized_total
           - max_data_watermark
           - max_dataset_revision
           - site_id
           - energy_type
           - quality
+          - period_end
+    access_policy:
+      - group: analytics_reader
+        member_level:
+          includes: "*"
+
+  - name: site_energy_missing
+    title: 站点缺失分表
+    description: 合成总表站点在统计时段内缺少有效读数的分表记录。
+    cubes:
+      - join_path: site_energy_missing_facts
+        includes:
+          - missing_count
+          - site_id
+          - energy_type
           - missing_meter
           - period_end
     access_policy:

@@ -108,6 +108,34 @@ func q() string {
   assert.equal(checkGoFmtVerbMix(validFormat), false);
 });
 
+test('CH-ALIAS-SHADOW catches unqualified period_end shadowing inside Cube YAML sql blocks', () => {
+  const buggyCubeYml = `
+cubes:
+  - name: site_energy_facts
+    sql: >
+      SELECT tenant_id, site_id, addMilliseconds(period_end, -1) AS period_end, energy_kwh
+      FROM analytics.energy_interval_facts_cube
+      WHERE {FILTER_PARAMS.site_energy_facts.period_end.filter('addMilliseconds(period_end, -1)')}
+        AND {FILTER_PARAMS.site_energy_facts.period_end.filter(lambda f, t: f"(period_end >= parseDateTime64BestEffort({f}, 3, 'UTC'))")}
+`;
+  const violations = findClickHouseViolationsInSource('energy_facts.yml', buggyCubeYml);
+  assert.ok(
+    violations.some((v) => v.rule === 'CH-ALIAS-SHADOW' && v.message.includes('period_end')),
+    `expected CH-ALIAS-SHADOW on Cube YAML period_end, got: ${JSON.stringify(violations)}`,
+  );
+
+  const fixedCubeYml = `
+cubes:
+  - name: site_energy_facts
+    sql: >
+      SELECT e.tenant_id AS tenant_id, e.site_id AS site_id, addMilliseconds(e.period_end, -1) AS period_end, e.energy_kwh AS energy_kwh
+      FROM analytics.energy_interval_facts_cube AS e
+      WHERE {FILTER_PARAMS.site_energy_facts.period_end.filter('addMilliseconds(e.period_end, -1)')}
+        AND {FILTER_PARAMS.site_energy_facts.period_end.filter(lambda f, t: f"(e.period_end >= parseDateTime64BestEffort({f}, 3, 'UTC'))")}
+`;
+  assert.deepEqual(findClickHouseViolationsInSource('energy_facts.yml', fixedCubeYml), []);
+});
+
 test('current repository ClickHouse SQL files and Go clients pass with zero violations', () => {
   const violations = checkClickHouseSqlRepository(resolve(process.cwd()));
   assert.deepEqual(violations, []);

@@ -269,7 +269,7 @@ try {
   // Only the views are public, and every member carries a Chinese title and description for operators and the Agent.
   const meta = await cubeMeta(cubeToken());
   const published = (meta.cubes ?? []).map((cube) => cube.name).sort();
-  if (published.join(',') !== 'equipment_energy,site_energy,site_energy_cost,site_meter_balance,thermal_cop_asof') throw new Error(`Cube publishes ${published.join(',')}`);
+  if (published.join(',') !== 'equipment_energy,site_energy,site_energy_cost,site_energy_missing,site_meter_balance,thermal_cop_asof') throw new Error(`Cube publishes ${published.join(',')}`);
   for (const view of meta.cubes) {
     for (const member of [...view.measures, ...view.dimensions]) {
       if (!/[\u4e00-\u9fff]/u.test(member.title ?? '') || !/[\u4e00-\u9fff]/u.test(member.description ?? '')) {
@@ -280,6 +280,7 @@ try {
   }
   for (const internal of [
     'site_energy_facts.energy_valid_kwh',
+    'site_energy_missing_facts.missing_count',
     'equipment_energy_facts.energy_valid_kwh',
     'site_energy_cost_facts.cost_valid_cny',
     'site_meter_balance_facts.site_kwh',

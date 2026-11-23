@@ -145,141 +145,68 @@ cubes:
     extends: energy_facts
     public: false
     title: 站点总能耗
-    description: 站点总表的能耗区间（或合成总表的各分表之和），以及跨缺口电量与缺失分表标记。
+    description: 站点总表的能耗区间（或合成总表的各分表之和）以及跨缺口电量。
     sql: >
-      SELECT tenant_id, site_id, energy_type, quality, load_device_id, hour AS period_end,
-             energy_kwh, interval_count, data_watermark, dataset_revision,
-             toUInt8(0) AS is_cross_gap, '' AS missing_meter,
-             toUInt8(energy_type = 'electricity' AND accounting_scope = 'BRANCH') AS is_synthesized
-      FROM analytics.energy_hourly_effective
-      WHERE {FILTER_PARAMS.site_energy_facts.tenant_id.filter('tenant_id')}
-        AND {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')}
-        AND {FILTER_PARAMS.site_energy_facts.energy_type.filter('energy_type')}
-        AND {FILTER_PARAMS.site_energy_facts.quality.filter('quality')}
-        AND {FILTER_PARAMS.site_energy_facts.period_end.filter('hour')}
-        AND {FILTER_PARAMS.site_energy_facts.period_end.filter('addSeconds(hour, 3599)')}
-        AND (
-          (energy_type != 'electricity' AND accounting_scope = 'SITE')
-          OR (energy_type = 'electricity' AND accounting_scope = 'SITE'
-            AND (tenant_id, site_id) NOT IN (SELECT tenant_id, site_id FROM analytics.site_total_submeters_visible WHERE {FILTER_PARAMS.site_energy_facts.tenant_id.filter('tenant_id')} AND {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')}))
-          OR (energy_type = 'electricity' AND accounting_scope = 'BRANCH'
-            AND (tenant_id, site_id, point_id) IN (SELECT tenant_id, site_id, point_id FROM analytics.site_total_submeters_visible WHERE {FILTER_PARAMS.site_energy_facts.tenant_id.filter('tenant_id')} AND {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')}))
-        )
-      UNION ALL
-      SELECT tenant_id, site_id, energy_type, quality, load_device_id,
-             addMilliseconds(period_end, -1) AS period_end,
-             energy_kwh, toInt64(1) AS interval_count, data_watermark, dataset_revision,
-             toUInt8(0) AS is_cross_gap, '' AS missing_meter,
-             toUInt8(energy_type = 'electricity' AND accounting_scope = 'BRANCH') AS is_synthesized
-      FROM analytics.energy_interval_facts_cube
-      WHERE dateDiff('millisecond', period_start, period_end) <= 3600000
-        AND {FILTER_PARAMS.site_energy_facts.tenant_id.filter('tenant_id')}
-        AND {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')}
-        AND {FILTER_PARAMS.site_energy_facts.energy_type.filter('energy_type')}
-        AND {FILTER_PARAMS.site_energy_facts.quality.filter('quality')}
-        AND {FILTER_PARAMS.site_energy_facts.period_end.filter('addMilliseconds(period_end, -1)')}
-        AND {FILTER_PARAMS.site_energy_facts.period_end.filter(lambda f, t: f"((period_end >= addMilliseconds(parseDateTime64BestEffort({f}, 3, 'UTC'), 1) AND period_end <= if(toDateTime64(toStartOfHour(parseDateTime64BestEffort({f}, 3, 'UTC')), 3, 'UTC') < parseDateTime64BestEffort({f}, 3, 'UTC'), toDateTime64(addHours(toStartOfHour(parseDateTime64BestEffort({f}, 3, 'UTC')), 1), 3, 'UTC'), toDateTime64(0, 3, 'UTC'))) OR (period_end > toDateTime64(toStartOfHour(parseDateTime64BestEffort({t}, 3, 'UTC')), 3, 'UTC') AND period_end <= if(toDateTime64(addSeconds(toStartOfHour(parseDateTime64BestEffort({t}, 3, 'UTC')), 3599), 3, 'UTC') > parseDateTime64BestEffort({t}, 3, 'UTC'), addMilliseconds(parseDateTime64BestEffort({t}, 3, 'UTC'), 1), toDateTime64(0, 3, 'UTC'))))")}
-        AND NOT ({FILTER_PARAMS.site_energy_facts.period_end.filter('toStartOfHour(addMilliseconds(period_end, -1))')}
-          AND {FILTER_PARAMS.site_energy_facts.period_end.filter('addSeconds(toStartOfHour(addMilliseconds(period_end, -1)), 3599)')})
-        AND (
-          (energy_type != 'electricity' AND accounting_scope = 'SITE')
-          OR (energy_type = 'electricity' AND accounting_scope = 'SITE'
-            AND (tenant_id, site_id) NOT IN (SELECT tenant_id, site_id FROM analytics.site_total_submeters_visible WHERE {FILTER_PARAMS.site_energy_facts.tenant_id.filter('tenant_id')} AND {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')}))
-          OR (energy_type = 'electricity' AND accounting_scope = 'BRANCH'
-            AND (tenant_id, site_id, point_id) IN (SELECT tenant_id, site_id, point_id FROM analytics.site_total_submeters_visible WHERE {FILTER_PARAMS.site_energy_facts.tenant_id.filter('tenant_id')} AND {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')}))
-        )
-      UNION ALL
-      SELECT tenant_id, site_id, energy_type, quality, load_device_id,
-             addMilliseconds(period_end, -1) AS period_end,
-             energy_kwh, toInt64(0) AS interval_count, data_watermark, dataset_revision,
-             toUInt8(1) AS is_cross_gap, '' AS missing_meter,
-             toUInt8(energy_type = 'electricity' AND accounting_scope = 'BRANCH') AS is_synthesized
-      FROM analytics.energy_cross_gap_facts_visible
-      WHERE {FILTER_PARAMS.site_energy_facts.tenant_id.filter('tenant_id')}
-        AND {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')}
-        AND {FILTER_PARAMS.site_energy_facts.energy_type.filter('energy_type')}
-        AND {FILTER_PARAMS.site_energy_facts.quality.filter('quality')}
-        AND {FILTER_PARAMS.site_energy_facts.period_end.filter('addMilliseconds(period_end, -1)')}
-        AND (
-          (energy_type != 'electricity' AND accounting_scope = 'SITE')
-          OR (energy_type = 'electricity' AND accounting_scope = 'SITE'
-            AND (tenant_id, site_id) NOT IN (SELECT tenant_id, site_id FROM analytics.site_total_submeters_visible WHERE {FILTER_PARAMS.site_energy_facts.tenant_id.filter('tenant_id')} AND {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')}))
-          OR (energy_type = 'electricity' AND accounting_scope = 'BRANCH'
-            AND (tenant_id, site_id, point_id) IN (SELECT tenant_id, site_id, point_id FROM analytics.site_total_submeters_visible WHERE {FILTER_PARAMS.site_energy_facts.tenant_id.filter('tenant_id')} AND {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')}))
-        )
-      UNION ALL
-      SELECT active_hours.tenant_id AS tenant_id, active_hours.site_id AS site_id,
-             CAST('electricity', 'LowCardinality(String)') AS energy_type,
-             CAST('MISSING', 'LowCardinality(String)') AS quality,
-             CAST(NULL, 'Nullable(UUID)') AS load_device_id,
-             active_hours.hour AS period_end,
-             toFloat64(0) AS energy_kwh, toInt64(0) AS interval_count,
-             toDateTime64(0, 3, 'UTC') AS data_watermark, toUInt64(0) AS dataset_revision,
-             toUInt8(0) AS is_cross_gap, sub.meter_name AS missing_meter,
-             toUInt8(1) AS is_synthesized
+      SELECT u.tenant_id AS tenant_id, u.site_id AS site_id, u.energy_type AS energy_type,
+             u.quality AS quality, u.load_device_id AS load_device_id, u.period_end AS period_end,
+             u.energy_kwh AS energy_kwh, u.interval_count AS interval_count,
+             u.data_watermark AS data_watermark, u.dataset_revision AS dataset_revision,
+             u.is_cross_gap AS is_cross_gap, u.is_synthesized AS is_synthesized
       FROM (
-        SELECT tenant_id, site_id, hour, groupUniqArrayIf(point_id, quality = 'VALID') AS valid_points
+        SELECT tenant_id, site_id, energy_type, quality, load_device_id, hour AS period_end,
+               accounting_scope, point_id,
+               energy_kwh, interval_count, data_watermark, dataset_revision,
+               toUInt8(0) AS is_cross_gap,
+               toUInt8(energy_type = 'electricity' AND accounting_scope = 'BRANCH') AS is_synthesized
         FROM analytics.energy_hourly_effective
-        WHERE accounting_scope = 'BRANCH' AND energy_type = 'electricity'
-          AND {FILTER_PARAMS.site_energy_facts.tenant_id.filter('tenant_id')}
+        WHERE {FILTER_PARAMS.site_energy_facts.tenant_id.filter('tenant_id')}
           AND {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')}
-          AND {FILTER_PARAMS.site_energy_facts.energy_type.filter("'electricity'")}
-          AND {FILTER_PARAMS.site_energy_facts.quality.filter("'MISSING'")}
+          AND {FILTER_PARAMS.site_energy_facts.energy_type.filter('energy_type')}
+          AND {FILTER_PARAMS.site_energy_facts.quality.filter('quality')}
           AND {FILTER_PARAMS.site_energy_facts.period_end.filter('hour')}
           AND {FILTER_PARAMS.site_energy_facts.period_end.filter('addSeconds(hour, 3599)')}
-          AND (tenant_id, site_id, point_id) IN (SELECT tenant_id, site_id, point_id FROM analytics.site_total_submeters_visible WHERE {FILTER_PARAMS.site_energy_facts.tenant_id.filter('tenant_id')} AND {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')})
-        GROUP BY tenant_id, site_id, hour
-        HAVING notEmpty(valid_points)
-      ) AS active_hours
-      INNER JOIN (
-        SELECT tenant_id, site_id, point_id, meter_name
-        FROM analytics.site_total_submeters_visible
-        WHERE {FILTER_PARAMS.site_energy_facts.tenant_id.filter('tenant_id')}
-          AND {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')}
-          AND {FILTER_PARAMS.site_energy_facts.energy_type.filter("'electricity'")}
-          AND {FILTER_PARAMS.site_energy_facts.quality.filter("'MISSING'")}
-      ) AS sub
-        ON active_hours.tenant_id = sub.tenant_id AND active_hours.site_id = sub.site_id
-      WHERE NOT has(active_hours.valid_points, sub.point_id)
-      UNION ALL
-      SELECT cut_hours.tenant_id AS tenant_id, cut_hours.site_id AS site_id,
-             CAST('electricity', 'LowCardinality(String)') AS energy_type,
-             CAST('MISSING', 'LowCardinality(String)') AS quality,
-             CAST(NULL, 'Nullable(UUID)') AS load_device_id,
-             cut_hours.sample_period_end AS period_end,
-             toFloat64(0) AS energy_kwh, toInt64(0) AS interval_count,
-             toDateTime64(0, 3, 'UTC') AS data_watermark, toUInt64(0) AS dataset_revision,
-             toUInt8(0) AS is_cross_gap, sub.meter_name AS missing_meter,
-             toUInt8(1) AS is_synthesized
-      FROM (
-        SELECT tenant_id, site_id, toStartOfHour(addMilliseconds(period_end, -1)) AS hour,
-               max(addMilliseconds(period_end, -1)) AS sample_period_end,
-               groupUniqArrayIf(point_id, quality = 'VALID') AS valid_points
-        FROM analytics.energy_interval_facts_cube
-        WHERE accounting_scope = 'BRANCH' AND energy_type = 'electricity'
-          AND dateDiff('millisecond', period_start, period_end) <= 3600000
-          AND {FILTER_PARAMS.site_energy_facts.tenant_id.filter('tenant_id')}
-          AND {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')}
-          AND {FILTER_PARAMS.site_energy_facts.energy_type.filter("'electricity'")}
-          AND {FILTER_PARAMS.site_energy_facts.quality.filter("'MISSING'")}
-          AND {FILTER_PARAMS.site_energy_facts.period_end.filter('addMilliseconds(period_end, -1)')}
-          AND {FILTER_PARAMS.site_energy_facts.period_end.filter(lambda f, t: f"((period_end >= addMilliseconds(parseDateTime64BestEffort({f}, 3, 'UTC'), 1) AND period_end <= if(toDateTime64(toStartOfHour(parseDateTime64BestEffort({f}, 3, 'UTC')), 3, 'UTC') < parseDateTime64BestEffort({f}, 3, 'UTC'), toDateTime64(addHours(toStartOfHour(parseDateTime64BestEffort({f}, 3, 'UTC')), 1), 3, 'UTC'), toDateTime64(0, 3, 'UTC'))) OR (period_end > toDateTime64(toStartOfHour(parseDateTime64BestEffort({t}, 3, 'UTC')), 3, 'UTC') AND period_end <= if(toDateTime64(addSeconds(toStartOfHour(parseDateTime64BestEffort({t}, 3, 'UTC')), 3599), 3, 'UTC') > parseDateTime64BestEffort({t}, 3, 'UTC'), addMilliseconds(parseDateTime64BestEffort({t}, 3, 'UTC'), 1), toDateTime64(0, 3, 'UTC'))))")}
-          AND NOT ({FILTER_PARAMS.site_energy_facts.period_end.filter('toStartOfHour(addMilliseconds(period_end, -1))')}
-            AND {FILTER_PARAMS.site_energy_facts.period_end.filter('addSeconds(toStartOfHour(addMilliseconds(period_end, -1)), 3599)')})
-          AND (tenant_id, site_id, point_id) IN (SELECT tenant_id, site_id, point_id FROM analytics.site_total_submeters_visible WHERE {FILTER_PARAMS.site_energy_facts.tenant_id.filter('tenant_id')} AND {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')})
-        GROUP BY tenant_id, site_id, hour
-        HAVING notEmpty(valid_points)
-      ) AS cut_hours
-      INNER JOIN (
-        SELECT tenant_id, site_id, point_id, meter_name
-        FROM analytics.site_total_submeters_visible
-        WHERE {FILTER_PARAMS.site_energy_facts.tenant_id.filter('tenant_id')}
-          AND {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')}
-          AND {FILTER_PARAMS.site_energy_facts.energy_type.filter("'electricity'")}
-          AND {FILTER_PARAMS.site_energy_facts.quality.filter("'MISSING'")}
-      ) AS sub
-        ON cut_hours.tenant_id = sub.tenant_id AND cut_hours.site_id = sub.site_id
-      WHERE NOT has(cut_hours.valid_points, sub.point_id)
+        UNION ALL
+        SELECT e.tenant_id AS tenant_id, e.site_id AS site_id, e.energy_type AS energy_type,
+               e.quality AS quality, e.load_device_id AS load_device_id,
+               addMilliseconds(e.period_end, -1) AS period_end,
+               e.accounting_scope AS accounting_scope, e.point_id AS point_id,
+               e.energy_kwh AS energy_kwh, toInt64(1) AS interval_count,
+               e.data_watermark AS data_watermark, e.dataset_revision AS dataset_revision,
+               toUInt8(0) AS is_cross_gap,
+               toUInt8(e.energy_type = 'electricity' AND e.accounting_scope = 'BRANCH') AS is_synthesized
+        FROM analytics.energy_interval_facts_cube AS e
+        WHERE dateDiff('millisecond', e.period_start, e.period_end) <= 3600000
+          AND {FILTER_PARAMS.site_energy_facts.tenant_id.filter('e.tenant_id')}
+          AND {FILTER_PARAMS.site_energy_facts.site_id.filter('e.site_id')}
+          AND {FILTER_PARAMS.site_energy_facts.energy_type.filter('e.energy_type')}
+          AND {FILTER_PARAMS.site_energy_facts.quality.filter('e.quality')}
+          AND {FILTER_PARAMS.site_energy_facts.period_end.filter('addMilliseconds(e.period_end, -1)')}
+          AND {FILTER_PARAMS.site_energy_facts.period_end.filter(lambda f, t: f"((e.period_end >= addMilliseconds(parseDateTime64BestEffort({f}, 3, 'UTC'), 1) AND e.period_end <= if(toDateTime64(toStartOfHour(parseDateTime64BestEffort({f}, 3, 'UTC')), 3, 'UTC') < parseDateTime64BestEffort({f}, 3, 'UTC'), toDateTime64(addHours(toStartOfHour(parseDateTime64BestEffort({f}, 3, 'UTC')), 1), 3, 'UTC'), toDateTime64(0, 3, 'UTC'))) OR (e.period_end > toDateTime64(toStartOfHour(parseDateTime64BestEffort({t}, 3, 'UTC')), 3, 'UTC') AND e.period_end <= if(toDateTime64(addSeconds(toStartOfHour(parseDateTime64BestEffort({t}, 3, 'UTC')), 3599), 3, 'UTC') > parseDateTime64BestEffort({t}, 3, 'UTC'), addMilliseconds(parseDateTime64BestEffort({t}, 3, 'UTC'), 1), toDateTime64(0, 3, 'UTC'))))")}
+          AND NOT ({FILTER_PARAMS.site_energy_facts.period_end.filter('toStartOfHour(addMilliseconds(e.period_end, -1))')}
+            AND {FILTER_PARAMS.site_energy_facts.period_end.filter('addSeconds(toStartOfHour(addMilliseconds(e.period_end, -1)), 3599)')})
+        UNION ALL
+        SELECT g.tenant_id AS tenant_id, g.site_id AS site_id, g.energy_type AS energy_type,
+               g.quality AS quality, g.load_device_id AS load_device_id,
+               addMilliseconds(g.period_end, -1) AS period_end,
+               g.accounting_scope AS accounting_scope, g.point_id AS point_id,
+               g.energy_kwh AS energy_kwh, toInt64(0) AS interval_count,
+               g.data_watermark AS data_watermark, g.dataset_revision AS dataset_revision,
+               toUInt8(1) AS is_cross_gap,
+               toUInt8(g.energy_type = 'electricity' AND g.accounting_scope = 'BRANCH') AS is_synthesized
+        FROM analytics.energy_cross_gap_facts_visible AS g
+        WHERE {FILTER_PARAMS.site_energy_facts.tenant_id.filter('g.tenant_id')}
+          AND {FILTER_PARAMS.site_energy_facts.site_id.filter('g.site_id')}
+          AND {FILTER_PARAMS.site_energy_facts.energy_type.filter('g.energy_type')}
+          AND {FILTER_PARAMS.site_energy_facts.quality.filter('g.quality')}
+          AND {FILTER_PARAMS.site_energy_facts.period_end.filter('addMilliseconds(g.period_end, -1)')}
+      ) AS u
+      WHERE (
+        (u.energy_type != 'electricity' AND u.accounting_scope = 'SITE')
+        OR (u.energy_type = 'electricity' AND u.accounting_scope = 'SITE'
+          AND (u.tenant_id, u.site_id) NOT IN (SELECT tenant_id, site_id FROM analytics.site_total_submeters_visible WHERE {FILTER_PARAMS.site_energy_facts.tenant_id.filter('tenant_id')} AND {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')}))
+        OR (u.energy_type = 'electricity' AND u.accounting_scope = 'BRANCH'
+          AND (u.tenant_id, u.site_id, u.point_id) IN (SELECT tenant_id, site_id, point_id FROM analytics.site_total_submeters_visible WHERE {FILTER_PARAMS.site_energy_facts.tenant_id.filter('tenant_id')} AND {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')}))
+      )
 
     measures:
       - name: electricity_valid_kwh
@@ -304,24 +231,115 @@ cubes:
         sql: "{cooling_valid_kwh} / NULLIF({electricity_valid_kwh}, 0)"
         type: number
 
-      - name: missing_count
-        title: 缺失分表数
-        description: 合成总表站点在时段内缺少有效读数的分表记录条数。
-        sql: "toInt64(countIf({CUBE}.quality = 'MISSING'))"
-        type: number
-
       - name: synthesized_total
         title: 合成总表标记
         description: 站点总表由各分表合成时为 1，物理总表为 0。
         sql: is_synthesized
         type: max
 
+  # Missing sub-meters for synthesized Site electricity (#798): queried only when synthesized_total = 1
+  # so regular site_energy series/metadata queries avoid sub-meter join compilation and execution.
+  - name: site_energy_missing_facts
+    public: false
+    title: 站点缺失分表
+    description: 合成总表站点在时段内缺少有效读数的分表记录。
+    sql: >
+      SELECT h.tenant_id AS tenant_id,
+             h.site_id AS site_id,
+             CAST('electricity', 'LowCardinality(String)') AS energy_type,
+             h.sample_period_end AS period_end,
+             sub.meter_name AS missing_meter
+      FROM (
+        SELECT tenant_id, site_id, hour AS sample_period_end,
+               groupUniqArrayIf(point_id, quality = 'VALID') AS valid_points
+        FROM analytics.energy_hourly_effective
+        WHERE accounting_scope = 'BRANCH' AND energy_type = 'electricity'
+          AND {FILTER_PARAMS.site_energy_missing_facts.tenant_id.filter('tenant_id')}
+          AND {FILTER_PARAMS.site_energy_missing_facts.site_id.filter('site_id')}
+          AND {FILTER_PARAMS.site_energy_missing_facts.energy_type.filter("'electricity'")}
+          AND {FILTER_PARAMS.site_energy_missing_facts.period_end.filter('hour')}
+          AND {FILTER_PARAMS.site_energy_missing_facts.period_end.filter('addSeconds(hour, 3599)')}
+          AND (tenant_id, site_id, point_id) IN (SELECT tenant_id, site_id, point_id FROM analytics.site_total_submeters_visible WHERE {FILTER_PARAMS.site_energy_missing_facts.tenant_id.filter('tenant_id')} AND {FILTER_PARAMS.site_energy_missing_facts.site_id.filter('site_id')})
+        GROUP BY tenant_id, site_id, hour
+        HAVING notEmpty(valid_points)
+        UNION ALL
+        SELECT e.tenant_id AS tenant_id, e.site_id AS site_id,
+               max(addMilliseconds(e.period_end, -1)) AS sample_period_end,
+               groupUniqArrayIf(e.point_id, e.quality = 'VALID') AS valid_points
+        FROM analytics.energy_interval_facts_cube AS e
+        WHERE e.accounting_scope = 'BRANCH' AND e.energy_type = 'electricity'
+          AND dateDiff('millisecond', e.period_start, e.period_end) <= 3600000
+          AND {FILTER_PARAMS.site_energy_missing_facts.tenant_id.filter('e.tenant_id')}
+          AND {FILTER_PARAMS.site_energy_missing_facts.site_id.filter('e.site_id')}
+          AND {FILTER_PARAMS.site_energy_missing_facts.energy_type.filter("'electricity'")}
+          AND {FILTER_PARAMS.site_energy_missing_facts.period_end.filter('addMilliseconds(e.period_end, -1)')}
+          AND {FILTER_PARAMS.site_energy_missing_facts.period_end.filter(lambda f, t: f"((e.period_end >= addMilliseconds(parseDateTime64BestEffort({f}, 3, 'UTC'), 1) AND e.period_end <= if(toDateTime64(toStartOfHour(parseDateTime64BestEffort({f}, 3, 'UTC')), 3, 'UTC') < parseDateTime64BestEffort({f}, 3, 'UTC'), toDateTime64(addHours(toStartOfHour(parseDateTime64BestEffort({f}, 3, 'UTC')), 1), 3, 'UTC'), toDateTime64(0, 3, 'UTC'))) OR (e.period_end > toDateTime64(toStartOfHour(parseDateTime64BestEffort({t}, 3, 'UTC')), 3, 'UTC') AND e.period_end <= if(toDateTime64(addSeconds(toStartOfHour(parseDateTime64BestEffort({t}, 3, 'UTC')), 3599), 3, 'UTC') > parseDateTime64BestEffort({t}, 3, 'UTC'), addMilliseconds(parseDateTime64BestEffort({t}, 3, 'UTC'), 1), toDateTime64(0, 3, 'UTC'))))")}
+          AND NOT ({FILTER_PARAMS.site_energy_missing_facts.period_end.filter('toStartOfHour(addMilliseconds(e.period_end, -1))')}
+            AND {FILTER_PARAMS.site_energy_missing_facts.period_end.filter('addSeconds(toStartOfHour(addMilliseconds(e.period_end, -1)), 3599)')})
+          AND (e.tenant_id, e.site_id, e.point_id) IN (SELECT tenant_id, site_id, point_id FROM analytics.site_total_submeters_visible WHERE {FILTER_PARAMS.site_energy_missing_facts.tenant_id.filter('tenant_id')} AND {FILTER_PARAMS.site_energy_missing_facts.site_id.filter('site_id')})
+        GROUP BY e.tenant_id, e.site_id, toStartOfHour(addMilliseconds(e.period_end, -1))
+        HAVING notEmpty(valid_points)
+      ) AS h
+      INNER JOIN (
+        SELECT tenant_id, site_id, point_id, meter_name
+        FROM analytics.site_total_submeters_visible
+        WHERE {FILTER_PARAMS.site_energy_missing_facts.tenant_id.filter('tenant_id')}
+          AND {FILTER_PARAMS.site_energy_missing_facts.site_id.filter('site_id')}
+          AND {FILTER_PARAMS.site_energy_missing_facts.energy_type.filter("'electricity'")}
+      ) AS sub
+        ON h.tenant_id = sub.tenant_id AND h.site_id = sub.site_id
+      WHERE NOT has(h.valid_points, sub.point_id)
+
+    measures:
+      - name: missing_count
+        title: 缺失分表数
+        description: 合成总表站点在时段内缺少有效读数的分表记录条数。
+        sql: "toInt64(count())"
+        type: number
+
     dimensions:
+      - name: tenant_id
+        title: 租户
+        description: 数据所属租户的编号，用于访问控制。
+        sql: tenant_id
+        type: string
+
+      - name: site_id
+        title: 站点
+        description: 站点编号；每个查询只能看到被授权的站点。
+        sql: site_id
+        type: string
+
+      - name: energy_type
+        title: 能源类型
+        description: 用电量或供冷量，都以 kWh 计。
+        sql: energy_type
+        type: string
+
       - name: missing_meter
         title: 缺失分表
         description: 合成总表站点在该小时缺少有效读数的分表名称；完整小时为空字符串。
         sql: missing_meter
         type: string
+
+      - name: period_end
+        title: 时段
+        description: 缺失分表对应的统计时间。
+        sql: period_end
+        type: time
+
+    access_policy:
+      - group: analytics_reader
+        member_level:
+          includes: "*"
+        row_level:
+          filters:
+            - member: tenant_id
+              operator: equals
+              values: ["{ securityContext.tenantId }"]
+            - member: site_id
+              operator: equals
+              values: ["{ securityContext.siteId }"]
 
   # Equipment sub-meters: BRANCH facts, already inside the Site's total.
   - name: equipment_energy_facts
@@ -341,31 +359,37 @@ cubes:
         AND {FILTER_PARAMS.equipment_energy_facts.period_end.filter('hour')}
         AND {FILTER_PARAMS.equipment_energy_facts.period_end.filter('addSeconds(hour, 3599)')}
       UNION ALL
-      SELECT tenant_id, site_id, energy_type, quality, load_device_id,
-             addMilliseconds(period_end, -1) AS period_end,
-             energy_kwh, toInt64(1) AS interval_count, data_watermark, dataset_revision, toUInt8(0) AS is_cross_gap
-      FROM analytics.energy_interval_facts_cube
-      WHERE accounting_scope = 'BRANCH'
-        AND dateDiff('millisecond', period_start, period_end) <= 3600000
-        AND {FILTER_PARAMS.equipment_energy_facts.tenant_id.filter('tenant_id')}
-        AND {FILTER_PARAMS.equipment_energy_facts.site_id.filter('site_id')}
-        AND {FILTER_PARAMS.equipment_energy_facts.energy_type.filter('energy_type')}
-        AND {FILTER_PARAMS.equipment_energy_facts.quality.filter('quality')}
-        AND {FILTER_PARAMS.equipment_energy_facts.period_end.filter('addMilliseconds(period_end, -1)')}
-        AND {FILTER_PARAMS.equipment_energy_facts.period_end.filter(lambda f, t: f"((period_end >= addMilliseconds(parseDateTime64BestEffort({f}, 3, 'UTC'), 1) AND period_end <= if(toDateTime64(toStartOfHour(parseDateTime64BestEffort({f}, 3, 'UTC')), 3, 'UTC') < parseDateTime64BestEffort({f}, 3, 'UTC'), toDateTime64(addHours(toStartOfHour(parseDateTime64BestEffort({f}, 3, 'UTC')), 1), 3, 'UTC'), toDateTime64(0, 3, 'UTC'))) OR (period_end > toDateTime64(toStartOfHour(parseDateTime64BestEffort({t}, 3, 'UTC')), 3, 'UTC') AND period_end <= if(toDateTime64(addSeconds(toStartOfHour(parseDateTime64BestEffort({t}, 3, 'UTC')), 3599), 3, 'UTC') > parseDateTime64BestEffort({t}, 3, 'UTC'), addMilliseconds(parseDateTime64BestEffort({t}, 3, 'UTC'), 1), toDateTime64(0, 3, 'UTC'))))")}
-        AND NOT ({FILTER_PARAMS.equipment_energy_facts.period_end.filter('toStartOfHour(addMilliseconds(period_end, -1))')}
-          AND {FILTER_PARAMS.equipment_energy_facts.period_end.filter('addSeconds(toStartOfHour(addMilliseconds(period_end, -1)), 3599)')})
+      SELECT e.tenant_id AS tenant_id, e.site_id AS site_id, e.energy_type AS energy_type,
+             e.quality AS quality, e.load_device_id AS load_device_id,
+             addMilliseconds(e.period_end, -1) AS period_end,
+             e.energy_kwh AS energy_kwh, toInt64(1) AS interval_count,
+             e.data_watermark AS data_watermark, e.dataset_revision AS dataset_revision,
+             toUInt8(0) AS is_cross_gap
+      FROM analytics.energy_interval_facts_cube AS e
+      WHERE e.accounting_scope = 'BRANCH'
+        AND dateDiff('millisecond', e.period_start, e.period_end) <= 3600000
+        AND {FILTER_PARAMS.equipment_energy_facts.tenant_id.filter('e.tenant_id')}
+        AND {FILTER_PARAMS.equipment_energy_facts.site_id.filter('e.site_id')}
+        AND {FILTER_PARAMS.equipment_energy_facts.energy_type.filter('e.energy_type')}
+        AND {FILTER_PARAMS.equipment_energy_facts.quality.filter('e.quality')}
+        AND {FILTER_PARAMS.equipment_energy_facts.period_end.filter('addMilliseconds(e.period_end, -1)')}
+        AND {FILTER_PARAMS.equipment_energy_facts.period_end.filter(lambda f, t: f"((e.period_end >= addMilliseconds(parseDateTime64BestEffort({f}, 3, 'UTC'), 1) AND e.period_end <= if(toDateTime64(toStartOfHour(parseDateTime64BestEffort({f}, 3, 'UTC')), 3, 'UTC') < parseDateTime64BestEffort({f}, 3, 'UTC'), toDateTime64(addHours(toStartOfHour(parseDateTime64BestEffort({f}, 3, 'UTC')), 1), 3, 'UTC'), toDateTime64(0, 3, 'UTC'))) OR (e.period_end > toDateTime64(toStartOfHour(parseDateTime64BestEffort({t}, 3, 'UTC')), 3, 'UTC') AND e.period_end <= if(toDateTime64(addSeconds(toStartOfHour(parseDateTime64BestEffort({t}, 3, 'UTC')), 3599), 3, 'UTC') > parseDateTime64BestEffort({t}, 3, 'UTC'), addMilliseconds(parseDateTime64BestEffort({t}, 3, 'UTC'), 1), toDateTime64(0, 3, 'UTC'))))")}
+        AND NOT ({FILTER_PARAMS.equipment_energy_facts.period_end.filter('toStartOfHour(addMilliseconds(e.period_end, -1))')}
+          AND {FILTER_PARAMS.equipment_energy_facts.period_end.filter('addSeconds(toStartOfHour(addMilliseconds(e.period_end, -1)), 3599)')})
       UNION ALL
-      SELECT tenant_id, site_id, energy_type, quality, load_device_id,
-             addMilliseconds(period_end, -1) AS period_end,
-             energy_kwh, toInt64(0) AS interval_count, data_watermark, dataset_revision, toUInt8(1) AS is_cross_gap
-      FROM analytics.energy_cross_gap_facts_visible
-      WHERE accounting_scope = 'BRANCH'
-        AND {FILTER_PARAMS.equipment_energy_facts.tenant_id.filter('tenant_id')}
-        AND {FILTER_PARAMS.equipment_energy_facts.site_id.filter('site_id')}
-        AND {FILTER_PARAMS.equipment_energy_facts.energy_type.filter('energy_type')}
-        AND {FILTER_PARAMS.equipment_energy_facts.quality.filter('quality')}
-        AND {FILTER_PARAMS.equipment_energy_facts.period_end.filter('addMilliseconds(period_end, -1)')}
+      SELECT g.tenant_id AS tenant_id, g.site_id AS site_id, g.energy_type AS energy_type,
+             g.quality AS quality, g.load_device_id AS load_device_id,
+             addMilliseconds(g.period_end, -1) AS period_end,
+             g.energy_kwh AS energy_kwh, toInt64(0) AS interval_count,
+             g.data_watermark AS data_watermark, g.dataset_revision AS dataset_revision,
+             toUInt8(1) AS is_cross_gap
+      FROM analytics.energy_cross_gap_facts_visible AS g
+      WHERE g.accounting_scope = 'BRANCH'
+        AND {FILTER_PARAMS.equipment_energy_facts.tenant_id.filter('g.tenant_id')}
+        AND {FILTER_PARAMS.equipment_energy_facts.site_id.filter('g.site_id')}
+        AND {FILTER_PARAMS.equipment_energy_facts.energy_type.filter('g.energy_type')}
+        AND {FILTER_PARAMS.equipment_energy_facts.quality.filter('g.quality')}
+        AND {FILTER_PARAMS.equipment_energy_facts.period_end.filter('addMilliseconds(g.period_end, -1)')}
 
     dimensions:
       - name: equipment_id
@@ -389,110 +413,101 @@ cubes:
              if(price.window_end > price.window_start AND fact.period_end >= price.window_start AND fact.period_end < price.window_end, price.period_code, '') AS tariff_period,
              if(price.window_end > price.window_start AND fact.period_end >= price.window_start AND fact.period_end < price.window_end, price.energy_rate_per_kwh, NULL) AS energy_rate_per_kwh
       FROM (
-        SELECT tenant_id, site_id, hour AS period_end, quality, energy_kwh, toUInt8(0) AS is_cross_gap
-        FROM analytics.energy_hourly_effective
-        WHERE energy_type = 'electricity'
-          AND {FILTER_PARAMS.site_energy_cost_facts.tenant_id.filter('tenant_id')}
-          AND {FILTER_PARAMS.site_energy_cost_facts.site_id.filter('site_id')}
-          AND {FILTER_PARAMS.site_energy_cost_facts.period_end.filter('hour')}
-          AND {FILTER_PARAMS.site_energy_cost_facts.period_end.filter('addSeconds(hour, 3599)')}
-          AND (tenant_id, site_id, hour) NOT IN (
-            SELECT tenant_id, site_id, toDateTime64(toStartOfHour(window_start), 3, 'UTC') AS split_hour
-            FROM analytics.tariff_price_windows_visible
-            WHERE {FILTER_PARAMS.site_energy_cost_facts.tenant_id.filter('tenant_id')}
-              AND {FILTER_PARAMS.site_energy_cost_facts.site_id.filter('site_id')}
-              AND window_start != toStartOfHour(window_start)
-            UNION DISTINCT
-            SELECT tenant_id, site_id, toDateTime64(toStartOfHour(window_end), 3, 'UTC') AS split_hour
-            FROM analytics.tariff_price_windows_visible
-            WHERE {FILTER_PARAMS.site_energy_cost_facts.tenant_id.filter('tenant_id')}
-              AND {FILTER_PARAMS.site_energy_cost_facts.site_id.filter('site_id')}
-              AND window_end != toStartOfHour(window_end)
-          )
-          AND (
-            (accounting_scope = 'SITE'
-              AND (tenant_id, site_id) NOT IN (SELECT tenant_id, site_id FROM analytics.site_total_submeters_visible WHERE {FILTER_PARAMS.site_energy_cost_facts.tenant_id.filter('tenant_id')} AND {FILTER_PARAMS.site_energy_cost_facts.site_id.filter('site_id')}))
-            OR (accounting_scope = 'BRANCH'
-              AND (tenant_id, site_id, point_id) IN (SELECT tenant_id, site_id, point_id FROM analytics.site_total_submeters_visible WHERE {FILTER_PARAMS.site_energy_cost_facts.tenant_id.filter('tenant_id')} AND {FILTER_PARAMS.site_energy_cost_facts.site_id.filter('site_id')}))
-          )
-        UNION ALL
-        SELECT tenant_id, site_id, addMilliseconds(period_end, -1) AS period_end, quality, energy_kwh,
-               toUInt8(0) AS is_cross_gap
-        FROM analytics.energy_interval_facts_cube
-        WHERE energy_type = 'electricity'
-          AND dateDiff('millisecond', period_start, period_end) <= 3600000
-          AND {FILTER_PARAMS.site_energy_cost_facts.tenant_id.filter('tenant_id')}
-          AND {FILTER_PARAMS.site_energy_cost_facts.site_id.filter('site_id')}
-          AND {FILTER_PARAMS.site_energy_cost_facts.period_end.filter('addMilliseconds(period_end, -1)')}
-          AND {FILTER_PARAMS.site_energy_cost_facts.period_end.filter(lambda f, t: f"((period_end >= addMilliseconds(parseDateTime64BestEffort({f}, 3, 'UTC'), 1) AND period_end <= if(toDateTime64(toStartOfHour(parseDateTime64BestEffort({f}, 3, 'UTC')), 3, 'UTC') < parseDateTime64BestEffort({f}, 3, 'UTC'), toDateTime64(addHours(toStartOfHour(parseDateTime64BestEffort({f}, 3, 'UTC')), 1), 3, 'UTC'), toDateTime64(0, 3, 'UTC'))) OR (period_end > toDateTime64(toStartOfHour(parseDateTime64BestEffort({t}, 3, 'UTC')), 3, 'UTC') AND period_end <= if(toDateTime64(addSeconds(toStartOfHour(parseDateTime64BestEffort({t}, 3, 'UTC')), 3599), 3, 'UTC') > parseDateTime64BestEffort({t}, 3, 'UTC'), addMilliseconds(parseDateTime64BestEffort({t}, 3, 'UTC'), 1), toDateTime64(0, 3, 'UTC'))))")}
-          AND NOT ({FILTER_PARAMS.site_energy_cost_facts.period_end.filter('toStartOfHour(addMilliseconds(period_end, -1))')}
-            AND {FILTER_PARAMS.site_energy_cost_facts.period_end.filter('addSeconds(toStartOfHour(addMilliseconds(period_end, -1)), 3599)')})
-          AND (
-            (accounting_scope = 'SITE'
-              AND (tenant_id, site_id) NOT IN (SELECT tenant_id, site_id FROM analytics.site_total_submeters_visible WHERE {FILTER_PARAMS.site_energy_cost_facts.tenant_id.filter('tenant_id')} AND {FILTER_PARAMS.site_energy_cost_facts.site_id.filter('site_id')}))
-            OR (accounting_scope = 'BRANCH'
-              AND (tenant_id, site_id, point_id) IN (SELECT tenant_id, site_id, point_id FROM analytics.site_total_submeters_visible WHERE {FILTER_PARAMS.site_energy_cost_facts.tenant_id.filter('tenant_id')} AND {FILTER_PARAMS.site_energy_cost_facts.site_id.filter('site_id')}))
-          )
-        UNION ALL
-        SELECT tenant_id, site_id, addMilliseconds(period_end, -1) AS period_end, quality, energy_kwh,
-               toUInt8(0) AS is_cross_gap
-        FROM analytics.energy_interval_facts_cube
-        WHERE energy_type = 'electricity'
-          AND dateDiff('millisecond', period_start, period_end) <= 3600000
-          AND {FILTER_PARAMS.site_energy_cost_facts.tenant_id.filter('tenant_id')}
-          AND {FILTER_PARAMS.site_energy_cost_facts.site_id.filter('site_id')}
-          AND {FILTER_PARAMS.site_energy_cost_facts.period_end.filter('addMilliseconds(period_end, -1)')}
-          AND {FILTER_PARAMS.site_energy_cost_facts.period_end.filter('toStartOfHour(addMilliseconds(period_end, -1))')}
-          AND {FILTER_PARAMS.site_energy_cost_facts.period_end.filter('addSeconds(toStartOfHour(addMilliseconds(period_end, -1)), 3599)')}
-          AND period_end <= (
-            SELECT if(count() > 0, addHours(max(split_hour), 1), toDateTime64(0, 3, 'UTC'))
-            FROM (
-              SELECT toDateTime64(toStartOfHour(window_start), 3, 'UTC') AS split_hour
-              FROM analytics.tariff_price_windows_visible
-              WHERE {FILTER_PARAMS.site_energy_cost_facts.tenant_id.filter('tenant_id')}
-                AND {FILTER_PARAMS.site_energy_cost_facts.site_id.filter('site_id')}
-                AND window_start != toStartOfHour(window_start)
-              UNION DISTINCT
-              SELECT toDateTime64(toStartOfHour(window_end), 3, 'UTC') AS split_hour
-              FROM analytics.tariff_price_windows_visible
-              WHERE {FILTER_PARAMS.site_energy_cost_facts.tenant_id.filter('tenant_id')}
-                AND {FILTER_PARAMS.site_energy_cost_facts.site_id.filter('site_id')}
-                AND window_end != toStartOfHour(window_end)
+        SELECT raw_fact.tenant_id AS tenant_id, raw_fact.site_id AS site_id, raw_fact.period_end AS period_end,
+               raw_fact.quality AS quality, raw_fact.energy_kwh AS energy_kwh, raw_fact.is_cross_gap AS is_cross_gap
+        FROM (
+          SELECT tenant_id, site_id, hour AS period_end, quality, energy_kwh, toUInt8(0) AS is_cross_gap,
+                 accounting_scope, point_id
+          FROM analytics.energy_hourly_effective
+          WHERE energy_type = 'electricity'
+            AND {FILTER_PARAMS.site_energy_cost_facts.tenant_id.filter('tenant_id')}
+            AND {FILTER_PARAMS.site_energy_cost_facts.site_id.filter('site_id')}
+            AND {FILTER_PARAMS.site_energy_cost_facts.period_end.filter('hour')}
+            AND {FILTER_PARAMS.site_energy_cost_facts.period_end.filter('addSeconds(hour, 3599)')}
+            AND (tenant_id, site_id, hour) NOT IN (
+              SELECT tenant_id, site_id, assumeNotNull(split_hour) AS split_hour
+              FROM (
+                SELECT tenant_id, site_id,
+                       arrayJoin([
+                         if(window_start != toStartOfHour(window_start), toNullable(toDateTime64(toStartOfHour(window_start), 3, 'UTC')), NULL),
+                         if(window_end != toStartOfHour(window_end), toNullable(toDateTime64(toStartOfHour(window_end), 3, 'UTC')), NULL)
+                       ]) AS split_hour
+                FROM analytics.tariff_price_windows_visible
+                WHERE {FILTER_PARAMS.site_energy_cost_facts.tenant_id.filter('tenant_id')}
+                  AND {FILTER_PARAMS.site_energy_cost_facts.site_id.filter('site_id')}
+                  AND (window_start != toStartOfHour(window_start) OR window_end != toStartOfHour(window_end))
+              )
+              WHERE split_hour IS NOT NULL
             )
-          )
-          AND (tenant_id, site_id, toDateTime64(toStartOfHour(addMilliseconds(period_end, -1)), 3, 'UTC')) IN (
-            SELECT tenant_id, site_id, toDateTime64(toStartOfHour(window_start), 3, 'UTC') AS split_hour
-            FROM analytics.tariff_price_windows_visible
-            WHERE {FILTER_PARAMS.site_energy_cost_facts.tenant_id.filter('tenant_id')}
-              AND {FILTER_PARAMS.site_energy_cost_facts.site_id.filter('site_id')}
-              AND window_start != toStartOfHour(window_start)
-            UNION DISTINCT
-            SELECT tenant_id, site_id, toDateTime64(toStartOfHour(window_end), 3, 'UTC') AS split_hour
-            FROM analytics.tariff_price_windows_visible
-            WHERE {FILTER_PARAMS.site_energy_cost_facts.tenant_id.filter('tenant_id')}
-              AND {FILTER_PARAMS.site_energy_cost_facts.site_id.filter('site_id')}
-              AND window_end != toStartOfHour(window_end)
-          )
-          AND (
-            (accounting_scope = 'SITE'
-              AND (tenant_id, site_id) NOT IN (SELECT tenant_id, site_id FROM analytics.site_total_submeters_visible WHERE {FILTER_PARAMS.site_energy_cost_facts.tenant_id.filter('tenant_id')} AND {FILTER_PARAMS.site_energy_cost_facts.site_id.filter('site_id')}))
-            OR (accounting_scope = 'BRANCH'
-              AND (tenant_id, site_id, point_id) IN (SELECT tenant_id, site_id, point_id FROM analytics.site_total_submeters_visible WHERE {FILTER_PARAMS.site_energy_cost_facts.tenant_id.filter('tenant_id')} AND {FILTER_PARAMS.site_energy_cost_facts.site_id.filter('site_id')}))
-          )
-        UNION ALL
-        SELECT tenant_id, site_id, addMilliseconds(period_end, -1) AS period_end, quality, energy_kwh,
-               toUInt8(1) AS is_cross_gap
-        FROM analytics.energy_cross_gap_facts_visible
-        WHERE energy_type = 'electricity'
-          AND {FILTER_PARAMS.site_energy_cost_facts.tenant_id.filter('tenant_id')}
-          AND {FILTER_PARAMS.site_energy_cost_facts.site_id.filter('site_id')}
-          AND {FILTER_PARAMS.site_energy_cost_facts.period_end.filter('addMilliseconds(period_end, -1)')}
-          AND (
-            (accounting_scope = 'SITE'
-              AND (tenant_id, site_id) NOT IN (SELECT tenant_id, site_id FROM analytics.site_total_submeters_visible WHERE {FILTER_PARAMS.site_energy_cost_facts.tenant_id.filter('tenant_id')} AND {FILTER_PARAMS.site_energy_cost_facts.site_id.filter('site_id')}))
-            OR (accounting_scope = 'BRANCH'
-              AND (tenant_id, site_id, point_id) IN (SELECT tenant_id, site_id, point_id FROM analytics.site_total_submeters_visible WHERE {FILTER_PARAMS.site_energy_cost_facts.tenant_id.filter('tenant_id')} AND {FILTER_PARAMS.site_energy_cost_facts.site_id.filter('site_id')}))
-          )
+          UNION ALL
+          SELECT e.tenant_id AS tenant_id, e.site_id AS site_id, addMilliseconds(e.period_end, -1) AS period_end,
+                 e.quality AS quality, e.energy_kwh AS energy_kwh, toUInt8(0) AS is_cross_gap,
+                 e.accounting_scope AS accounting_scope, e.point_id AS point_id
+          FROM analytics.energy_interval_facts_cube AS e
+          WHERE e.energy_type = 'electricity'
+            AND dateDiff('millisecond', e.period_start, e.period_end) <= 3600000
+            AND {FILTER_PARAMS.site_energy_cost_facts.tenant_id.filter('e.tenant_id')}
+            AND {FILTER_PARAMS.site_energy_cost_facts.site_id.filter('e.site_id')}
+            AND {FILTER_PARAMS.site_energy_cost_facts.period_end.filter('addMilliseconds(e.period_end, -1)')}
+            AND {FILTER_PARAMS.site_energy_cost_facts.period_end.filter(lambda f, t: f"((e.period_end >= addMilliseconds(parseDateTime64BestEffort({f}, 3, 'UTC'), 1) AND e.period_end <= if(toDateTime64(toStartOfHour(parseDateTime64BestEffort({f}, 3, 'UTC')), 3, 'UTC') < parseDateTime64BestEffort({f}, 3, 'UTC'), toDateTime64(addHours(toStartOfHour(parseDateTime64BestEffort({f}, 3, 'UTC')), 1), 3, 'UTC'), toDateTime64(0, 3, 'UTC'))) OR (e.period_end > toDateTime64(toStartOfHour(parseDateTime64BestEffort({t}, 3, 'UTC')), 3, 'UTC') AND e.period_end <= if(toDateTime64(addSeconds(toStartOfHour(parseDateTime64BestEffort({t}, 3, 'UTC')), 3599), 3, 'UTC') > parseDateTime64BestEffort({t}, 3, 'UTC'), addMilliseconds(parseDateTime64BestEffort({t}, 3, 'UTC'), 1), toDateTime64(0, 3, 'UTC'))))")}
+            AND NOT ({FILTER_PARAMS.site_energy_cost_facts.period_end.filter('toStartOfHour(addMilliseconds(e.period_end, -1))')}
+              AND {FILTER_PARAMS.site_energy_cost_facts.period_end.filter('addSeconds(toStartOfHour(addMilliseconds(e.period_end, -1)), 3599)')})
+          UNION ALL
+          SELECT e.tenant_id AS tenant_id, e.site_id AS site_id, addMilliseconds(e.period_end, -1) AS period_end,
+                 e.quality AS quality, e.energy_kwh AS energy_kwh, toUInt8(0) AS is_cross_gap,
+                 e.accounting_scope AS accounting_scope, e.point_id AS point_id
+          FROM analytics.energy_interval_facts_cube AS e
+          WHERE e.energy_type = 'electricity'
+            AND dateDiff('millisecond', e.period_start, e.period_end) <= 3600000
+            AND {FILTER_PARAMS.site_energy_cost_facts.tenant_id.filter('e.tenant_id')}
+            AND {FILTER_PARAMS.site_energy_cost_facts.site_id.filter('e.site_id')}
+            AND {FILTER_PARAMS.site_energy_cost_facts.period_end.filter('addMilliseconds(e.period_end, -1)')}
+            AND {FILTER_PARAMS.site_energy_cost_facts.period_end.filter('toStartOfHour(addMilliseconds(e.period_end, -1))')}
+            AND {FILTER_PARAMS.site_energy_cost_facts.period_end.filter('addSeconds(toStartOfHour(addMilliseconds(e.period_end, -1)), 3599)')}
+            AND e.period_end <= (
+              SELECT if(
+                countIf(window_start != toStartOfHour(window_start) OR window_end != toStartOfHour(window_end)) > 0,
+                greatest(
+                  maxIf(addHours(toDateTime64(toStartOfHour(window_start), 3, 'UTC'), 1), window_start != toStartOfHour(window_start)),
+                  maxIf(addHours(toDateTime64(toStartOfHour(window_end), 3, 'UTC'), 1), window_end != toStartOfHour(window_end))
+                ),
+                toDateTime64(0, 3, 'UTC')
+              )
+              FROM analytics.tariff_price_windows_visible
+              WHERE {FILTER_PARAMS.site_energy_cost_facts.tenant_id.filter('tenant_id')}
+                AND {FILTER_PARAMS.site_energy_cost_facts.site_id.filter('site_id')}
+            )
+            AND (e.tenant_id, e.site_id, toDateTime64(toStartOfHour(addMilliseconds(e.period_end, -1)), 3, 'UTC')) IN (
+              SELECT tenant_id, site_id, assumeNotNull(split_hour) AS split_hour
+              FROM (
+                SELECT tenant_id, site_id,
+                       arrayJoin([
+                         if(window_start != toStartOfHour(window_start), toNullable(toDateTime64(toStartOfHour(window_start), 3, 'UTC')), NULL),
+                         if(window_end != toStartOfHour(window_end), toNullable(toDateTime64(toStartOfHour(window_end), 3, 'UTC')), NULL)
+                       ]) AS split_hour
+                FROM analytics.tariff_price_windows_visible
+                WHERE {FILTER_PARAMS.site_energy_cost_facts.tenant_id.filter('tenant_id')}
+                  AND {FILTER_PARAMS.site_energy_cost_facts.site_id.filter('site_id')}
+                  AND (window_start != toStartOfHour(window_start) OR window_end != toStartOfHour(window_end))
+              )
+              WHERE split_hour IS NOT NULL
+            )
+          UNION ALL
+          SELECT g.tenant_id AS tenant_id, g.site_id AS site_id, addMilliseconds(g.period_end, -1) AS period_end,
+                 g.quality AS quality, g.energy_kwh AS energy_kwh, toUInt8(1) AS is_cross_gap,
+                 g.accounting_scope AS accounting_scope, g.point_id AS point_id
+          FROM analytics.energy_cross_gap_facts_visible AS g
+          WHERE g.energy_type = 'electricity'
+            AND {FILTER_PARAMS.site_energy_cost_facts.tenant_id.filter('g.tenant_id')}
+            AND {FILTER_PARAMS.site_energy_cost_facts.site_id.filter('g.site_id')}
+            AND {FILTER_PARAMS.site_energy_cost_facts.period_end.filter('addMilliseconds(g.period_end, -1)')}
+        ) AS raw_fact
+        WHERE (
+          (raw_fact.accounting_scope = 'SITE'
+            AND (raw_fact.tenant_id, raw_fact.site_id) NOT IN (SELECT tenant_id, site_id FROM analytics.site_total_submeters_visible WHERE {FILTER_PARAMS.site_energy_cost_facts.tenant_id.filter('tenant_id')} AND {FILTER_PARAMS.site_energy_cost_facts.site_id.filter('site_id')}))
+          OR (raw_fact.accounting_scope = 'BRANCH'
+            AND (raw_fact.tenant_id, raw_fact.site_id, raw_fact.point_id) IN (SELECT tenant_id, site_id, point_id FROM analytics.site_total_submeters_visible WHERE {FILTER_PARAMS.site_energy_cost_facts.tenant_id.filter('tenant_id')} AND {FILTER_PARAMS.site_energy_cost_facts.site_id.filter('site_id')}))
+        )
       ) AS fact
       ASOF LEFT JOIN (
         SELECT tenant_id, site_id, window_start, window_end, period_code, energy_rate_per_kwh

@@ -12,9 +12,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -711,5 +714,50 @@ func TestHandlerServesCounterAudit(t *testing.T) {
 	auditEngine.auditErr = errors.New("clickhouse unavailable")
 	if rec := postAudit(payload, grant); rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("engine error status = %d, want 503", rec.Code)
+	}
+}
+
+type lockedLogBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func TestHandlerLogsClassifiedFailureOn503(t *testing.T) {
+	now := time.Date(2026, 7, 29, 8, 0, 0, 0, time.UTC)
+	signer, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logBuf := &lockedLogBuffer{}
+	engine := &engineStub{err: fmt.Errorf("cube query continue wait timed out: %w", context.DeadlineExceeded)}
+	handler := NewHandler(ServerConfig{
+		Engine:                 engine,
+		HistoryEngine:          &historyEngineStub{},
+		DelegationPublicKey:    signer.Public(),
+		AllowedPresenterSPIFFE: testPresenter,
+		Audience:               testAudience,
+		Logger:                 slog.New(slog.NewJSONHandler(logBuf, nil)),
+		Now:                    func() time.Time { return now },
+	})
+	harness := serverHarness{handler: handler, signer: signer, now: now}
+	rec := harness.serve(t, validEnergyQuery(), nil, analyticsmodel.EnergySeriesAction)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+	logged := logBuf.String()
+	if !strings.Contains(logged, "analytics_energy_series_failed") || !strings.Contains(logged, "continue_wait_timeout") {
+		t.Fatalf("logs = %s", logged)
 	}
 }

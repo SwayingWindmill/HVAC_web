@@ -3,9 +3,11 @@ import { getRouteApi } from '@tanstack/react-router';
 import { createPlatformGatewayClient, type EnergySeriesQuery } from '../../../api/generated/platformGateway.gen';
 import {
   comparePeriods,
+  energyRetryDelay,
   hourlyHeatmap,
   periodWindow,
   previousWindow,
+  retryEnergyQuery,
   siteDays,
   summarizeEnergy,
   type EnergyPeriod,
@@ -61,7 +63,8 @@ export function useEnergyComparison(period: EnergyPeriod) {
     },
     refetchInterval: 60_000,
     staleTime: 30_000,
-    retry: false,
+    retry: retryEnergyQuery,
+    retryDelay: energyRetryDelay,
   });
 }
 
@@ -86,7 +89,8 @@ export function useTodayAgainstYesterday() {
     },
     refetchInterval: 60_000,
     staleTime: 30_000,
-    retry: false,
+    retry: retryEnergyQuery,
+    retryDelay: energyRetryDelay,
   });
 }
 
@@ -104,6 +108,7 @@ export function useHourlyHeatmap(days: number) {
     },
     refetchInterval: 5 * 60_000,
     staleTime: 30_000,
-    retry: false,
+    retry: retryEnergyQuery,
+    retryDelay: energyRetryDelay,
   });
 }
