@@ -2,6 +2,8 @@ import {
   OwnerReadError,
   type EnergyAnalyticsReadRequest,
   type EnergyAnalyticsReader,
+  type EnergyCost,
+  type EnergyCrossGap,
   type EnergyGranularity as OwnerEnergyGranularity,
   type EnergyQualityPolicy as OwnerEnergyQualityPolicy,
   type EnergyQualitySummary,
@@ -13,6 +15,7 @@ import {
 } from '../../application/index.js';
 import {
   hasExactKeys,
+  hasRequiredAndAllowedKeys,
   isInstant,
   isNonEmptyString,
   isRecord,
@@ -23,6 +26,7 @@ import {
 
 export type EnergyGranularity = OwnerEnergyGranularity;
 export type EnergyQualityPolicy = OwnerEnergyQualityPolicy;
+export type EnergyCrossGapDto = EnergyCrossGap;
 export type EnergySeriesPointDto = EnergySeriesPoint;
 export type EnergyQualitySummaryDto = EnergyQualitySummary;
 export type EnergySeriesMetadataDto = EnergySeriesMetadata;
@@ -30,11 +34,16 @@ export type EnergySeriesResponseDto = EnergySeries;
 
 export type EnergyAnalyticsOwnerReaderConfig = OwnerReaderHttpConfig;
 
-const responseKeys = ['schemaVersion', 'points', 'metadata'] as const;
-const breakdownResponseKeys = ['schemaVersion', 'points', 'devices', 'metadata'] as const;
-const deviceSeriesKeys = ['deviceId', 'points'] as const;
-const pointKeys = ['periodStart', 'periodEnd', 'energyKWh'] as const;
-const pricedPointKeys = [...pointKeys, 'cost'] as const;
+const responseRequiredKeys = ['schemaVersion', 'points', 'metadata'] as const;
+const responseAllowedKeys = [...responseRequiredKeys, 'crossGap'] as const;
+const breakdownResponseRequiredKeys = ['schemaVersion', 'points', 'devices', 'metadata'] as const;
+const breakdownResponseAllowedKeys = [...breakdownResponseRequiredKeys, 'crossGap'] as const;
+const deviceSeriesRequiredKeys = ['deviceId', 'points'] as const;
+const deviceSeriesAllowedKeys = [...deviceSeriesRequiredKeys, 'crossGapKWh'] as const;
+const pointRequiredKeys = ['periodStart', 'periodEnd', 'energyKWh'] as const;
+const pointAllowedKeys = [...pointRequiredKeys, 'cost', 'crossGapKWh', 'incomplete', 'missingMeters'] as const;
+const crossGapRequiredKeys = ['energyKWh'] as const;
+const crossGapAllowedKeys = ['energyKWh', 'cost'] as const;
 const costKeys = ['amountCNY', 'unpricedKWh', 'periods'] as const;
 const periodCostKeys = ['periodCode', 'energyKWh', 'amountCNY'] as const;
 const periodCodes = new Set(['SUPER_PEAK', 'PEAK', 'FLAT', 'VALLEY', 'DEEP_VALLEY']);
@@ -50,6 +59,7 @@ const metadataAllowedKeys = [
   ...metadataRequiredKeys,
   'dataWatermark',
   'aggregateWatermark',
+  'synthesized',
 ] as const;
 const maximumPoints = 10_000;
 const maximumRangeMs = 366 * 24 * 60 * 60 * 1_000;
@@ -112,7 +122,7 @@ const isAmount = (value: unknown): value is number => (
   typeof value === 'number' && Number.isFinite(value) && value >= 0
 );
 
-const isCost = (value: unknown): boolean => (
+const isCost = (value: unknown): value is EnergyCost => (
   isRecord(value)
   && hasExactKeys(value, costKeys)
   && isAmount(value.amountCNY)
@@ -126,18 +136,24 @@ const isCost = (value: unknown): boolean => (
     && isAmount(period.amountCNY))
 );
 
+const isOptionalMissingMeters = (value: unknown): value is readonly string[] | undefined => (
+  value === undefined || (Array.isArray(value) && value.every((meter) => isNonEmptyString(meter)))
+);
+
 const decodePoint = (
   value: unknown,
   query: EnergyAnalyticsReadRequest['input'],
   previousEnd: number | null,
 ): { readonly point: EnergySeriesPointDto; readonly end: number } => {
   if (!isRecord(value)
-    || !(hasExactKeys(value, pointKeys) || (hasExactKeys(value, pricedPointKeys) && isCost(value.cost)))
+    || !hasRequiredAndAllowedKeys(value, pointRequiredKeys, pointAllowedKeys)
     || !isInstant(value.periodStart)
     || !isInstant(value.periodEnd)
-    || typeof value.energyKWh !== 'number'
-    || !Number.isFinite(value.energyKWh)
-    || value.energyKWh < 0) {
+    || !isAmount(value.energyKWh)
+    || (value.crossGapKWh !== undefined && !isAmount(value.crossGapKWh))
+    || (value.cost !== undefined && !isCost(value.cost))
+    || (value.incomplete !== undefined && typeof value.incomplete !== 'boolean')
+    || !isOptionalMissingMeters(value.missingMeters)) {
     throw new OwnerReadError(
       'OWNER_RESPONSE_INVALID',
       'The Energy Series Owner returned an invalid point.',
@@ -154,7 +170,32 @@ const decodePoint = (
       'The Energy Series Owner returned an out-of-range or overlapping point.',
     );
   }
-  return { point: value as unknown as EnergySeriesPointDto, end };
+  const point: EnergySeriesPointDto = {
+    periodStart: value.periodStart,
+    periodEnd: value.periodEnd,
+    energyKWh: value.energyKWh,
+    ...(value.crossGapKWh === undefined ? {} : { crossGapKWh: value.crossGapKWh }),
+    ...(value.cost === undefined ? {} : { cost: value.cost }),
+    ...(value.incomplete === undefined ? {} : { incomplete: value.incomplete }),
+    ...(value.missingMeters === undefined ? {} : { missingMeters: value.missingMeters }),
+  };
+  return { point, end };
+};
+
+const decodeCrossGap = (value: unknown): EnergyCrossGapDto => {
+  if (!isRecord(value)
+    || !hasRequiredAndAllowedKeys(value, crossGapRequiredKeys, crossGapAllowedKeys)
+    || !isAmount(value.energyKWh)
+    || (value.cost !== undefined && !isCost(value.cost))) {
+    throw new OwnerReadError(
+      'OWNER_RESPONSE_INVALID',
+      'The Energy Series Owner returned an invalid cross-gap summary.',
+    );
+  }
+  return {
+    energyKWh: value.energyKWh,
+    ...(value.cost === undefined ? {} : { cost: value.cost }),
+  };
 };
 
 const decodeQualitySummary = (value: unknown): EnergyQualitySummaryDto => {
@@ -181,16 +222,14 @@ const decodeMetadata = (
       'The Energy Series metadata is invalid.',
     );
   }
-  const actualKeys = Object.keys(value);
-  if (metadataRequiredKeys.some((key) => !(key in value))
-    || actualKeys.some((key) => !metadataAllowedKeys.includes(
-      key as typeof metadataAllowedKeys[number],
-    ))
+
+  if (!hasRequiredAndAllowedKeys(value, metadataRequiredKeys, metadataAllowedKeys)
     || value.requestedGranularity !== query.granularity
     || value.actualGranularity !== query.granularity
     || !isNonEmptyString(value.datasetRevision)
     || value.datasetRevision.length > 256
-    || typeof value.partial !== 'boolean') {
+    || typeof value.partial !== 'boolean'
+    || (value.synthesized !== undefined && typeof value.synthesized !== 'boolean')) {
     throw new OwnerReadError(
       'OWNER_RESPONSE_INVALID',
       'The Energy Series metadata contradicts the fixed request.',
@@ -223,6 +262,7 @@ const decodeMetadata = (
     ...(aggregateWatermark === undefined ? {} : { aggregateWatermark }),
     datasetRevision: value.datasetRevision,
     partial: value.partial,
+    ...(value.synthesized === undefined ? {} : { synthesized: value.synthesized }),
     qualitySummary,
   };
 };
@@ -246,16 +286,21 @@ const decodeDeviceSeries = (
   query: EnergyAnalyticsReadRequest['input'],
 ): NonNullable<EnergySeriesResponseDto['devices']>[number] => {
   if (!isRecord(value)
-    || !hasExactKeys(value, deviceSeriesKeys)
+    || !hasRequiredAndAllowedKeys(value, deviceSeriesRequiredKeys, deviceSeriesAllowedKeys)
     || !isNonEmptyString(value.deviceId)
     || !Array.isArray(value.points)
-    || value.points.length > maximumPoints) {
+    || value.points.length > maximumPoints
+    || (value.crossGapKWh !== undefined && !isAmount(value.crossGapKWh))) {
     throw new OwnerReadError(
       'OWNER_RESPONSE_INVALID',
       'The Energy Series Owner returned an invalid device series.',
     );
   }
-  return { deviceId: value.deviceId, points: decodePoints(value.points, query) };
+  return {
+    deviceId: value.deviceId,
+    points: decodePoints(value.points, query),
+    ...(value.crossGapKWh === undefined ? {} : { crossGapKWh: value.crossGapKWh }),
+  };
 };
 
 const decodeEnergySeries = (
@@ -263,8 +308,10 @@ const decodeEnergySeries = (
   query: EnergyAnalyticsReadRequest['input'],
 ): EnergySeriesResponseDto => {
   const breakdown = query.breakdown === 'device';
+  const required = breakdown ? breakdownResponseRequiredKeys : responseRequiredKeys;
+  const allowed = breakdown ? breakdownResponseAllowedKeys : responseAllowedKeys;
   if (!isRecord(value)
-    || !hasExactKeys(value, breakdown ? breakdownResponseKeys : responseKeys)
+    || !hasRequiredAndAllowedKeys(value, required, allowed)
     || value.schemaVersion !== 1
     || !Array.isArray(value.points)
     || value.points.length > maximumPoints
@@ -275,6 +322,7 @@ const decodeEnergySeries = (
     );
   }
   const points = decodePoints(value.points, query);
+  const crossGap = value.crossGap === undefined ? undefined : decodeCrossGap(value.crossGap);
   const devices = breakdown
     ? (value.devices as unknown[]).map((device) => decodeDeviceSeries(device, query))
     : undefined;
@@ -288,6 +336,7 @@ const decodeEnergySeries = (
   return {
     schemaVersion: 1,
     points,
+    ...(crossGap === undefined ? {} : { crossGap }),
     ...(devices === undefined ? {} : { devices }),
     metadata,
   };
