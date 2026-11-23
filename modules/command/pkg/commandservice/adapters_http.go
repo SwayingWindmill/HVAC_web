@@ -23,8 +23,8 @@ import (
 )
 
 const (
-	iamRegistryDecisionPath       = "/internal/v1/iam/decisions/registry"
-	iamCommandDecisionPath        = "/internal/v1/iam/decisions/command"
+	iamRegistryDecisionPath       = "/internal/v1/registry/decision"
+	iamCommandDecisionPath        = "/internal/v1/command/decision"
 	telemetryReportedStatePath    = "/internal/v1/commands/reported-state"
 	registryDispatchContextPath   = "/internal/v1/registry/commands/dispatch-context"
 	maximumUpstreamResponseBytes  = int64(4 << 20)

@@ -546,6 +546,7 @@ func newEmbeddedIAMServer(ctx context.Context, logger *slog.Logger) (*http.Serve
 		RegistryGrantAudience:    envOr("IAM_REGISTRY_GRANT_AUDIENCE", "platform-core-service"),
 		AllowedRegistryGrantPresenters: []string{
 			envOr("IAM_OPERATIONS_AGENT_SPIFFE", "spiffe://hvac.local/operations-agent-service"),
+			envOr("IAM_COMMAND_AUTHORITY_SPIFFE", "spiffe://hvac.local/command-service"),
 		},
 		// report-service reads the Site's energy as its own Workload Principal (ADR 0017, ADR 0023).
 		AnalyticsGrantAudience: envOr("QUERY_AUDIENCE", "telemetry-query-service"),

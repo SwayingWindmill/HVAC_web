@@ -742,6 +742,33 @@ func TestIAMCommandAuthoritySPIFFEDelegationScope(t *testing.T) {
 		t.Fatalf("grant presenter=%q, want %q", grant.Presenter, commandServiceSPIFFE)
 	}
 
+	selfPresenterRec := sendAsCmdService(
+		iam.RegistryDecisionPath,
+		registryAuthorize,
+		`{"tenantId":"`+iam.S1FixtureTenantAID+`","action":"`+string(registryauth.ActionSiteRead)+`","grantPresenter":"`+commandServiceSPIFFE+`"}`,
+	)
+	if selfPresenterRec.Code != http.StatusOK {
+		t.Fatalf("self-presenter registry decision status=%d body=%s", selfPresenterRec.Code, selfPresenterRec.Body.String())
+	}
+	var selfPresenterResp registryauth.DecisionResponse
+	if json.NewDecoder(selfPresenterRec.Body).Decode(&selfPresenterResp) != nil || !selfPresenterResp.Decision.Allowed {
+		t.Fatalf("unexpected self-presenter registry decision response: %+v", selfPresenterResp)
+	}
+	selfGrant, err := registryauth.VerifyGrant(harness.iamSigner.Public(), selfPresenterResp.DelegationGrant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selfGrant.Presenter != commandServiceSPIFFE {
+		t.Fatalf("self-presenter grant presenter=%q, want %q", selfGrant.Presenter, commandServiceSPIFFE)
+	}
+
+	thirdPartyRec := sendAsCmdService(
+		iam.RegistryDecisionPath,
+		registryAuthorize,
+		`{"tenantId":"`+iam.S1FixtureTenantAID+`","action":"`+string(registryauth.ActionSiteRead)+`","grantPresenter":"spiffe://hvac.local/untrusted-service"}`,
+	)
+	assertIAMProblem(t, thirdPartyRec, http.StatusForbidden, "IAM_REGISTRY_GRANT_PRESENTER_REJECTED")
+
 	principalRec := sendAsCmdService(iam.CurrentPrincipalPath, "principal:read", "")
 	assertIAMProblem(t, principalRec, http.StatusUnauthorized, "IAM_WORKLOAD_IDENTITY_INVALID")
 }
