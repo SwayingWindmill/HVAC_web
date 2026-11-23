@@ -182,7 +182,7 @@ function PlantTrendPanel({ plant, metric, window, onMetric, onWindow, timeZone }
             xKey="at"
             xType="number"
             xDomain={[history.fromMs, history.toMs]}
-            xFormatter={(value) => clock.format(new Date(Number(value)))}
+            xFormatter={(value) => { const ms = typeof value === 'string' && value.trim() === '' ? NaN : Number(value); return Number.isFinite(ms) ? clock.format(new Date(ms)) : ''; }}
             series={[{ key: 'value', label: titles[metric], type: 'area', color: 'var(--chart-1)' }]}
             showGrid
             showYAxis
@@ -221,8 +221,9 @@ function RecentEvents({ plant, siteId, myId, timeZone, assetModel }: {
   const labels = useMemo(() => (assetModel ? commandLabels(controlTargets(assetModel, new Date())) : new Map()), [assetModel]);
   const assetName = (assetId: string) => assetModel?.assets.find((asset) => asset.id === assetId)?.displayName ?? '设备';
   const deviceName = (deviceId: string | undefined) => (deviceId ? plant.devices.find((device) => device.deviceId === deviceId)?.name ?? '设备' : '站点');
-  const today = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-  const isToday = (value: string) => new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(value)) === today;
+  const dayFmt = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' });
+  const today = dayFmt.format(new Date());
+  const isToday = (value: string) => { const ms = Date.parse(value); return Number.isFinite(ms) && dayFmt.format(new Date(ms)) === today; };
 
   const events: PlantEvent[] = [
     ...(alarms.data?.alarms ?? []).flatMap((alarm) => alarm.timeline
@@ -266,7 +267,7 @@ function RecentEvents({ plant, siteId, myId, timeZone, assetModel }: {
     })),
     ...plant.devices.filter((device) => device.hasStaleData || device.connection === 'OFFLINE').map((device): PlantEvent => ({
       key: `data-${device.deviceId}`,
-      at: device.latestSampleAt ?? new Date().toISOString(),
+      at: device.latestSampleAt || new Date().toISOString(),
       mark: <svg viewBox="0 0 10 10" className="size-2.5 shrink-0" aria-hidden="true"><path d="M1.5 1.5h7v7h-7z" fill="none" strokeWidth="1.5" className="stroke-warning" /></svg>,
       title: `${device.name} · ${device.connection === 'OFFLINE' ? '通信离线' : '读数中断'}`,
       detail: device.connection === 'OFFLINE' ? '设备离线' : '通信在线，没有新数据',

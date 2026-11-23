@@ -1,7 +1,15 @@
 import { useQuery } from '@tanstack/react-query';
 import { useMemo } from 'react';
 import { siteAssetModelQuery } from '@/api/site-asset-model';
-import { periodWindow, previousWindow, siteDayKey, type EnergyPeriod } from '@/features/energy-analysis/consumption/model';
+import {
+  energyQueryNow,
+  energyRetryDelay,
+  periodWindow,
+  previousWindow,
+  retryEnergyQuery,
+  siteDayKey,
+  type EnergyPeriod,
+} from '@/features/energy-analysis/consumption/model';
 import { useEnergyReader } from '@/features/energy-analysis/consumption/query';
 import { energyBreakdown } from './breakdown-model';
 import { plantMachines, plantMachinesFromAssetModel } from './plant-machines';
@@ -20,7 +28,7 @@ export function useEnergyBreakdown(period: EnergyPeriod) {
   const machineKey = machines?.map((machine) => machine.deviceId).join(',');
   const breakdownOf = (window: (period: EnergyPeriod, now: Date, timeZone: string) => { granularity: 'hour' | 'day' | 'month'; from: Date; to: Date }) =>
     async ({ signal }: { signal: AbortSignal }) => {
-      const { granularity, from, to } = window(period, new Date(), site.timezone);
+      const { granularity, from, to } = window(period, energyQueryNow(site.timezone), site.timezone);
       const data = await read('electricity', granularity, from, to, signal, 'device');
       const bucketKey = granularity === 'hour'
         ? (periodStart: string) => new Date(periodStart).toISOString()
@@ -39,14 +47,17 @@ export function useEnergyBreakdown(period: EnergyPeriod) {
     enabled: machines !== null,
     queryFn: breakdownOf(periodWindow),
     refetchInterval: 5 * 60_000,
-    retry: false,
+    staleTime: 30_000,
+    retry: retryEnergyQuery,
+    retryDelay: energyRetryDelay,
   });
   const previous = useQuery({
     queryKey: ['energy-breakdown', site.id, period, 'previous', machineKey],
     enabled: machines !== null,
     queryFn: breakdownOf(previousWindow),
     staleTime: 30 * 60_000,
-    retry: false,
+    retry: retryEnergyQuery,
+    retryDelay: energyRetryDelay,
   });
   return { machines, registry, query, previous };
 }

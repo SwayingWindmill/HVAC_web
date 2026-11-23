@@ -248,6 +248,10 @@ function DayTrend({ device }: { readonly device: PlantDevice }) {
   const point = device.row.telemetryPoints.find((candidate) => candidate.pointCode === selected);
   const unit = formatTelemetryUnit(point?.unit);
   const hour = new Intl.DateTimeFormat('zh-CN', { timeZone: site.timezone, hour: '2-digit', minute: '2-digit', hour12: false });
+  const formatHour = (value: unknown) => {
+    const ms = typeof value === 'string' && value.trim() === '' ? NaN : Number(value);
+    return Number.isFinite(ms) ? hour.format(new Date(ms)) : '';
+  };
   const recorded = history.data?.get(selected) ?? [];
   const slots = buildTimeSlots({
     fromMs: window.fromMs,
@@ -308,14 +312,14 @@ function DayTrend({ device }: { readonly device: PlantDevice }) {
                   (entry) => entry.value !== null && entry.value !== undefined,
                 );
               if (tooltipProps.active && !hasValue && tooltipProps.label !== undefined) {
-                return <ChartEmptySlotTooltip label={hour.format(new Date(Number(tooltipProps.label)))} />;
+                return <ChartEmptySlotTooltip label={formatHour(tooltipProps.label)} />;
               }
                 return (
                   <ChartTooltipContent
                     active={tooltipProps.active}
                     payload={tooltipProps.payload}
                     label={tooltipProps.label}
-                    labelFormatter={(value) => hour.format(new Date(Number(value)))}
+                    labelFormatter={formatHour}
                   />
                 );
               }}

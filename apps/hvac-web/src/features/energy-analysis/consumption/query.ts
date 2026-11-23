@@ -5,6 +5,7 @@ import { createPlatformGatewayClient, type EnergySeriesQuery } from '../../../ap
 import {
   comparePeriods,
   completedComparisonTotals,
+  energyQueryNow,
   energyRetryDelay,
   hourlyHeatmap,
   periodWindow,
@@ -50,7 +51,7 @@ export function useEnergyComparison(period: EnergyPeriod) {
   return useQuery({
     queryKey: ['energy-series', site.id, 'comparison', period],
     queryFn: async ({ signal }) => {
-      const now = new Date();
+      const now = energyQueryNow(site.timezone);
       const current = periodWindow(period, now, site.timezone);
       const before = previousWindow(period, now, site.timezone);
       const [currentSummary, previousSummary] = await Promise.all([
@@ -76,7 +77,7 @@ export function useTodayEnergy() {
   return useQuery({
     queryKey: ['energy-series', site.id, 'today-summary'],
     queryFn: async ({ signal }) => {
-      const now = new Date();
+      const now = energyQueryNow(site.timezone);
       const { from, to } = periodWindow('today', now, site.timezone);
       const today = await summary('hour', from, to, signal);
       return { today, from, now };
@@ -150,7 +151,7 @@ export function useHourlyHeatmap(days: number) {
   return useQuery({
     queryKey: ['energy-series', site.id, 'hourly-heatmap', days],
     queryFn: async ({ signal }) => {
-      const now = new Date();
+      const now = energyQueryNow(site.timezone);
       const dayKeys = siteDays(now, site.timezone, days);
       const { from } = periodWindow('today', new Date(now.getTime() - (days - 1) * DAY_MS), site.timezone);
       const electricity = await read('electricity', 'hour', from, now, signal);
