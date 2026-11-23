@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Asset, AssetRelationship, Device, TelemetryPoint } from '../apps/hvac-web/src/api/generated/platformGateway.gen.ts';
 import type { PlantReading } from '../apps/hvac-web/src/features/operations/realtime/plant-model.ts';
-import { blockingInterlocks, controlTargets, plantUnits, unitActivePower } from '../apps/hvac-web/src/features/control/control-model.ts';
+import { blockingInterlocks, controlTargets, deviceInlineReadings, plantUnits, unitActivePower } from '../apps/hvac-web/src/features/control/control-model.ts';
 import { controlErrorMessage, stepUpErrorPresentation } from '../apps/hvac-web/src/features/control/control-errors.ts';
 import {
   activePriorityLocks,
@@ -257,4 +257,123 @@ test('activePriorityLocks filters expired locks and formats remaining countdown 
   assert.equal(describeControlAlarmError('VERIFY_TIMEOUT'), '设备状态读回超时未确认');
   assert.equal(describeControlAlarmError('DISPATCH_REJECTED'), '安全校验未通过导致下发拒收');
   assert.equal(describeControlAlarmError('CONTROL_ALARM_HTTP_FAILED'), '下游告警服务通信失败');
+});
+
+test('deviceInlineReadings returns curated present readings up to maxCount, preserves stale/low-confidence readings, and supports fallback keys', () => {
+  const mkReading = (label: string, overrides: Partial<PlantReading> = {}): PlantReading => ({
+    label,
+    display: '7.0',
+    unit: '°C',
+    numeric: 7.0,
+    current: true,
+    lowConfidence: false,
+    measurement: null,
+    probeOffsets: [],
+    state: 'PRESENT',
+    freshness: 'FRESH',
+    sampledAt: '2026-10-11T00:00:00.000Z',
+    ...overrides,
+  });
+
+  assert.deepEqual(deviceInlineReadings({ assetType: 'CHILLER', settings: [] }, undefined), []);
+
+  const chillerValues: Readonly<Record<string, PlantReading>> = {
+    'chiller.leaving_chilled_water_temperature': mkReading('冷冻水出水温度', { display: '7.0', unit: '°C' }),
+    'chiller.chilled_water_temperature_setpoint': mkReading('冷冻水设定温度', { state: 'MISSING', display: '—', numeric: null, current: false }),
+    'chiller.compressor_load': mkReading('压缩机负载', { display: '72', unit: '%', freshness: 'STALE', current: false }),
+    'chiller.power': mkReading('主机功率', { display: '155.7', unit: 'kW', current: false, lowConfidence: true }),
+    'chiller.cop': mkReading('主机 COP', { display: '5.55', unit: null }),
+  };
+  const chillerReadings = deviceInlineReadings(
+    { assetType: 'CHILLER', settings: [] },
+    { reading: (key) => chillerValues[key] ?? null },
+  );
+  assert.deepEqual(
+    chillerReadings.map((item) => [item.key, item.shortLabel]),
+    [
+      ['chiller.leaving_chilled_water_temperature', '出水'],
+      ['chiller.compressor_load', '负载'],
+      ['chiller.power', '功率'],
+      ['chiller.cop', 'COP'],
+    ],
+  );
+  assert.equal(chillerReadings[1].reading.freshness, 'STALE');
+  assert.equal(chillerReadings[2].reading.lowConfidence, true);
+
+  const pumpValues: Readonly<Record<string, PlantReading>> = {
+    'chwp.frequency': mkReading('运行频率', { display: '30', unit: 'Hz' }),
+    'chwp.flow_rate': mkReading('冷冻水流量', { display: '132', unit: 'm³/h' }),
+    'chwp.power': mkReading('水泵功率', { display: '9.7', unit: 'kW' }),
+  };
+  assert.deepEqual(
+    deviceInlineReadings(
+      { assetType: 'CHILLED_WATER_PUMP', settings: [] },
+      { reading: (key) => pumpValues[key] ?? null },
+    ).map((item) => [item.key, item.shortLabel]),
+    [
+      ['chwp.frequency', '频率'],
+      ['chwp.flow_rate', '流量'],
+      ['chwp.power', '功率'],
+    ],
+  );
+
+  const towerValues: Readonly<Record<string, PlantReading>> = {
+    'cooling_tower.fan_speed': mkReading('风机转速', { display: '80', unit: '%' }),
+    'cooling_tower.leaving_water_temperature': mkReading('出塔水温', { display: '30.7', unit: '°C' }),
+    'cooling_tower.power': mkReading('冷却塔功率', { display: '9.5', unit: 'kW' }),
+  };
+  assert.deepEqual(
+    deviceInlineReadings(
+      { assetType: 'COOLING_TOWER', settings: [] },
+      { reading: (key) => towerValues[key] ?? null },
+    ).map((item) => [item.key, item.shortLabel]),
+    [
+      ['cooling_tower.fan_speed', '转速'],
+      ['cooling_tower.leaving_water_temperature', '出塔'],
+      ['cooling_tower.power', '功率'],
+    ],
+  );
+
+  const customValues: Readonly<Record<string, PlantReading>> = {
+    'vfd.frequency_feedback': mkReading('变频运行频率', { display: '42', unit: 'Hz' }),
+    'valve.custom_target': mkReading('阀门反馈开度', { display: '55', unit: '%' }),
+  };
+  assert.deepEqual(
+    deviceInlineReadings(
+      {
+        assetType: 'CUSTOM_CONTROLLER',
+        settings: [
+          {
+            assetId: 'a-1',
+            pointId: 'p-1',
+            capability: 'SET_FREQUENCY',
+            label: '频率设定',
+            parameterKey: 'hz',
+            unit: 'Hz',
+            minimum: 20,
+            maximum: 50,
+            step: 1,
+            feedbackSourceKey: 'vfd.frequency_feedback',
+          },
+          {
+            assetId: 'a-1',
+            pointId: 'p-2',
+            capability: 'SET_OPENING',
+            label: '开度设定',
+            parameterKey: 'open',
+            unit: '%',
+            minimum: 0,
+            maximum: 100,
+            step: 5,
+            feedbackSourceKey: 'valve.custom_target',
+          },
+        ],
+      },
+      { reading: (key) => customValues[key] ?? null },
+    ).map((item) => [item.key, item.shortLabel]),
+    [
+      ['vfd.frequency_feedback', '频率'],
+      ['valve.custom_target', '阀门反馈开度'],
+    ],
+  );
 });

@@ -95,7 +95,7 @@ export function CommandLog({ commands, labels, timeZone, selectedId, filtered, a
       <div className="flex flex-col items-center gap-2 px-6 py-12 text-center">
         <span className="flex size-9 items-center justify-center rounded-xl bg-muted text-muted-foreground"><Terminal className="size-[18px]" aria-hidden="true" /></span>
         <p className="text-sm font-semibold">{filtered ? '没有这类指令' : '还没有指令'}</p>
-        <p className="text-xs text-muted-foreground">{filtered ? '切到「全部」看历史记录' : '从左侧下发的指令会记在这里'}</p>
+        <p className="text-xs text-muted-foreground">{filtered ? '切到「全部」看历史记录' : '下发的控制指令会记在这里'}</p>
       </div>
     );
   }

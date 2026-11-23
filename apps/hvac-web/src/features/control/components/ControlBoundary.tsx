@@ -79,81 +79,92 @@ export function ControlModeBar({ state, lockCount, pendingCount, myId, timeZone,
 }) {
   const presentation = MODE_PRESENTATION[state.controlMode];
   return (
-    <Panel aria-label="控制方式" className={cn('grid grid-cols-1 items-start gap-x-6 gap-y-3 px-4 py-3.5 @5xl/main:grid-cols-[240px_minmax(0,1fr)_auto_auto] @5xl/main:items-center', BAR_TONE[state.controlMode])}>
-      <div className="flex flex-col">
-        <span className="text-xs text-muted-foreground">控制方式</span>
-        <span className="flex items-center gap-2 text-xl leading-7 font-semibold tracking-[-0.02em]">
-          <ModeGlyph mode={state.controlMode} className="text-sm" />
-          {presentation.label}
-        </span>
-      </div>
-      <div className="flex min-w-0 flex-col gap-0.5">
-        <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
-          {state.updatedAt ? (
-            <span className="flex items-baseline gap-1.5 text-sm whitespace-nowrap">
-              <span className="text-xs text-muted-foreground">设定</span>
-              <span className="font-semibold">{controlActorLabel(state, myId)}</span>
-              <span className="font-mono text-xs text-muted-foreground">{formatCompactTime(state.updatedAt, timeZone)}</span>
+    <Panel
+      aria-label="控制方式"
+      className={cn(
+        'flex flex-col gap-3 px-4 py-3.5 @4xl/main:flex-row @4xl/main:items-center @4xl/main:justify-between @4xl/main:gap-6',
+        BAR_TONE[state.controlMode],
+      )}
+    >
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-6 gap-y-2">
+        <div className="flex shrink-0 flex-col">
+          <span className="text-xs text-muted-foreground">控制方式</span>
+          <span className="flex items-center gap-2 text-xl leading-7 font-semibold tracking-[-0.02em]">
+            <ModeGlyph mode={state.controlMode} className="text-sm" />
+            {presentation.label}
+          </span>
+        </div>
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+            {state.updatedAt ? (
+              <span className="flex items-baseline gap-1.5 text-sm whitespace-nowrap">
+                <span className="text-xs text-muted-foreground">设定</span>
+                <span className="font-semibold">{controlActorLabel(state, myId)}</span>
+                <span className="font-mono text-xs text-muted-foreground">{formatCompactTime(state.updatedAt, timeZone)}</span>
+              </span>
+            ) : null}
+            <span className="flex items-baseline gap-1.5 text-sm whitespace-nowrap"><span className="text-xs text-muted-foreground">锁定设备</span><span className="font-semibold tabular-nums">{lockCount} 台</span></span>
+            <span className="flex items-baseline gap-1.5 text-sm whitespace-nowrap"><span className="text-xs text-muted-foreground">待处理指令</span><span className="font-semibold tabular-nums">{pendingCount} 条</span></span>
+          </div>
+          {state.reason ? <span className="truncate text-xs text-muted-foreground" title={state.reason}>原因：{state.reason}</span> : null}
+          {state.activeMaintenanceWindow ? (
+            <span className="truncate text-xs text-warning-text" title={state.activeMaintenanceWindow.reason || undefined}>
+              检修窗口「{state.activeMaintenanceWindow.title}」{state.activeMaintenanceWindow.startDate} 至 {state.activeMaintenanceWindow.endDate}，只能停机和复位
             </span>
           ) : null}
-          <span className="flex items-baseline gap-1.5 text-sm whitespace-nowrap"><span className="text-xs text-muted-foreground">锁定设备</span><span className="font-semibold tabular-nums">{lockCount} 台</span></span>
-          <span className="flex items-baseline gap-1.5 text-sm whitespace-nowrap"><span className="text-xs text-muted-foreground">待处理指令</span><span className="font-semibold tabular-nums">{pendingCount} 条</span></span>
-        </div>
-        {state.reason ? <span className="truncate text-xs text-muted-foreground" title={state.reason}>原因：{state.reason}</span> : null}
-        {state.activeMaintenanceWindow ? (
-          <span className="truncate text-xs text-warning-text" title={state.activeMaintenanceWindow.reason || undefined}>
-            检修窗口「{state.activeMaintenanceWindow.title}」{state.activeMaintenanceWindow.startDate} 至 {state.activeMaintenanceWindow.endDate}，只能停机和复位
-          </span>
-        ) : null}
-        {autoControlLease?.confirmationMode === 'AUTO_WITH_LEASE' && autoControlLease.activeLease ? (
-          <span className="mt-0.5 flex flex-wrap items-center gap-2 text-xs">
-            <StatusBadge tone="info" label="自动控制租约生效中" />
-            <span className="text-secondary-foreground">
-              有效期至 <span className="font-mono">{formatCompactTime(autoControlLease.activeLease.expiresAt, timeZone)}</span>
+          {autoControlLease?.confirmationMode === 'AUTO_WITH_LEASE' && autoControlLease.activeLease ? (
+            <span className="mt-0.5 flex flex-wrap items-center gap-2 text-xs">
+              <StatusBadge tone="info" label="自动控制租约生效中" />
+              <span className="text-secondary-foreground">
+                有效期至 <span className="font-mono">{formatCompactTime(autoControlLease.activeLease.expiresAt, timeZone)}</span>
+              </span>
+              <Link
+                to="/energy-analysis/optimization"
+                search={{ site: autoControlLease.siteId }}
+                className="font-medium text-primary hover:underline"
+              >
+                管理自动租约 ›
+              </Link>
             </span>
-            <Link
-              to="/energy-analysis/optimization"
-              search={{ site: autoControlLease.siteId }}
-              className="font-medium text-primary hover:underline"
-            >
-              管理自动租约 ›
-            </Link>
-          </span>
-        ) : null}
+          ) : null}
+        </div>
       </div>
-      <div role="group" aria-label="切换控制方式" className={cn('inline-flex gap-0.5 rounded-lg p-0.5', state.controlMode === 'REMOTE_AUTO' ? 'bg-secondary' : 'bg-card')}>
-        {MODE_ORDER.map((mode) => {
-          const current = mode === state.controlMode;
-          return (
-            <button
-              key={mode}
-              type="button"
-              aria-pressed={current}
-              disabled={!current && !canManage}
-              title={!current && !canManage ? '你没有切换控制方式的权限' : undefined}
-              onClick={() => { if (!current) onPick(mode); }}
-              className={cn(
-                'inline-flex h-[30px] items-center gap-1.5 rounded-md border border-transparent px-3 text-sm font-medium text-secondary-foreground transition-colors duration-100 outline-none hover:text-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring-soft disabled:cursor-not-allowed disabled:opacity-50',
-                current && 'border-border bg-card text-foreground shadow-xs',
-                current && state.controlMode !== 'REMOTE_AUTO' && 'bg-secondary',
-              )}
-            >
-              <ModeGlyph mode={mode} />
-              {MODE_PRESENTATION[mode].short}
-            </button>
-          );
-        })}
+      <div className="flex shrink-0 flex-wrap items-center gap-3">
+        <div role="group" aria-label="切换控制方式" className={cn('inline-flex gap-0.5 rounded-lg p-0.5', state.controlMode === 'REMOTE_AUTO' ? 'bg-secondary' : 'bg-card')}>
+          {MODE_ORDER.map((mode) => {
+            const current = mode === state.controlMode;
+            return (
+              <button
+                key={mode}
+                type="button"
+                aria-pressed={current}
+                disabled={!current && !canManage}
+                title={!current && !canManage ? '你没有切换控制方式的权限' : undefined}
+                onClick={() => { if (!current) onPick(mode); }}
+                className={cn(
+                  'inline-flex h-[30px] items-center gap-1.5 rounded-md border border-transparent px-3 text-sm font-medium text-secondary-foreground transition-colors duration-100 outline-none hover:text-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring-soft disabled:cursor-not-allowed disabled:opacity-50',
+                  current && 'border-border bg-card text-foreground shadow-xs',
+                  current && state.controlMode !== 'REMOTE_AUTO' && 'bg-secondary',
+                )}
+              >
+                <ModeGlyph mode={mode} />
+                {MODE_PRESENTATION[mode].short}
+              </button>
+            );
+          })}
+        </div>
+        <span className="hidden h-6 w-px bg-divider sm:inline-block" aria-hidden="true" />
+        <Button
+          variant="outline"
+          size="sm"
+          className="w-fit shrink-0 border-destructive/35 bg-destructive-soft/45 text-destructive-text hover:border-destructive/60 hover:bg-destructive-soft hover:text-destructive-text"
+          disabled={!canManage}
+          title={canManage ? undefined : '你没有停机的权限'}
+          onClick={onShutdown}
+        >
+          <Power data-icon="inline-start" />停机…
+        </Button>
       </div>
-      <Button
-        variant="outline"
-        size="sm"
-        className="text-destructive-text hover:text-destructive-text"
-        disabled={!canManage}
-        title={canManage ? undefined : '你没有停机的权限'}
-        onClick={onShutdown}
-      >
-        <Power data-icon="inline-start" />停机…
-      </Button>
     </Panel>
   );
 }

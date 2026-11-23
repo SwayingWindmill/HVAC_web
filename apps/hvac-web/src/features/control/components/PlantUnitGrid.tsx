@@ -1,13 +1,29 @@
-import { Link2, Lock, LockOpen, Play, RotateCcw, ShieldAlert, SlidersHorizontal, Square } from 'lucide-react';
+import { ChevronDown, Link2, Lock, LockOpen, Play, RotateCcw, ShieldAlert, SlidersHorizontal, Square } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { StatusBadge, statusDotClass } from '@/components/status-badge';
-import { deviceStatus, LowConfidenceBadge } from '@/features/operations/realtime/device-presentation';
+import { deviceStatus, LowConfidenceBadge, ReadingValue } from '@/features/operations/realtime/device-presentation';
 import type { PlantDevice } from '@/features/operations/realtime/plant-model';
 import { formatDecimal } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import { WITHDRAWABLE, type Command } from '../command-api';
 import { ACTION_VERB, CODE_AT_SUBMIT, STATUS_PRESENTATION } from '../command-presentation';
-import { blockingInterlocks, unitActivePower, type ControlAction, type ControlTarget, type Interlock, type PlantUnit } from '../control-model';
+import {
+  blockingInterlocks,
+  deviceInlineReadings,
+  unitActivePower,
+  type ControlAction,
+  type ControlTarget,
+  type Interlock,
+  type PlantUnit,
+} from '../control-model';
 import {
   DEVICE_PRIORITY_TIER_LABEL,
   formatLockRemaining,
@@ -103,7 +119,11 @@ function DeviceRow({ target, label, context }: { readonly target: ControlTarget;
   const status = device ? deviceStatus(device) : null;
   const lock = context.locks.get(target.assetId);
   const priorityLock = context.priorityLocks.get(target.deviceId);
+  const hasAnyLock = Boolean(lock) || Boolean(priorityLock);
+  const isCriticalLock = lock?.lockMode === 'MAINTENANCE_LOCK' || priorityLock?.lockedPriority === 'SAFETY_INTERLOCK';
+  const isWarningLock = !isCriticalLock && lock?.lockMode === 'MANUAL_LOCK';
   const action = primaryAction(target, device);
+  const inlineReadings = deviceInlineReadings(target, device);
   const open = openOn(context.commands, target.actions.filter((item) => item.capability !== 'START_UNIT_SEQUENCE' && item.capability !== 'STOP_UNIT_SEQUENCE').map((item) => item.pointId).concat(target.settings.map((setting) => setting.pointId)));
   const blocked = action ? blockingInterlocks(action, context.runStateByDeviceCode) : [];
   const hint = interlockHint(blocked, context.nameByDeviceCode);
@@ -116,17 +136,45 @@ function DeviceRow({ target, label, context }: { readonly target: ControlTarget;
           : !action ? '读不到运行状态，不能远程启停'
             : '';
   const Icon = action ? ICON[action.capability] : Square;
+  const hasActiveLockBadge = Boolean(lock && lock.lockMode !== 'UNLOCKED') || Boolean(priorityLock);
+  const hasBadges = hasActiveLockBadge || Boolean(open) || Boolean(auto && !lock && !open && hint);
+
   return (
-    <div role="group" aria-label={target.assetName} className={cn('grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 gap-y-0.5 border-b border-divider py-2.5 last:border-b-0', lock && '-mx-3.5 bg-[repeating-linear-gradient(135deg,transparent_0_6px,var(--muted)_6px_12px)] px-3.5')}>
-      <span className="flex min-w-0 items-center gap-[7px] text-sm font-medium">
-        <span className={cn('size-2 shrink-0 rounded-full', status ? statusDotClass(status.tone) : 'border border-dashed border-muted-foreground')} aria-hidden="true" />
-        <span className="truncate">{label}</span>
-      </span>
-      <span className="row-span-2 flex items-center gap-1">
+    <div
+      role="group"
+      aria-label={target.assetName}
+      className={cn(
+        'flex flex-col gap-2 border-b border-divider py-3 last:border-b-0',
+        lock && '-mx-3.5 bg-[repeating-linear-gradient(135deg,transparent_0_6px,var(--muted)_6px_12px)] px-3.5',
+      )}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="flex min-w-0 items-center gap-2">
+          <span
+            className={cn(
+              'size-2 shrink-0 rounded-full',
+              status ? statusDotClass(status.tone) : 'border border-dashed border-muted-foreground',
+            )}
+            aria-hidden="true"
+          />
+          <span className="truncate text-sm font-medium">{label}</span>
+          <span
+            className={cn(
+              'shrink-0 text-xs',
+              status?.tone === 'alarm' ? 'font-medium text-destructive-text' : 'text-muted-foreground',
+            )}
+          >
+            {status?.label ?? '暂无实时数据'}
+          </span>
+        </span>
         {action ? (
           <Button
             variant="outline"
             size="sm"
+            className={cn(
+              'shrink-0',
+              action.capability === 'STOP' && 'hover:border-destructive/40 hover:text-destructive-text',
+            )}
             disabled={why !== ''}
             title={why || undefined}
             onClick={() => context.onCommand(confirmation(target, action, device, `${ACTION_VERB[action.capability]} ${target.assetName}？`))}
@@ -135,63 +183,158 @@ function DeviceRow({ target, label, context }: { readonly target: ControlTarget;
             {BUTTON_LABEL[action.capability]}
           </Button>
         ) : null}
+      </div>
+
+      {inlineReadings.length > 0 ? (
+        <dl
+          aria-label={`${target.assetName} 实时读数`}
+          className="flex flex-wrap items-baseline gap-x-3.5 gap-y-1 pl-4 text-xs"
+        >
+          {inlineReadings.map(({ key, shortLabel, reading }) => (
+            <div key={key} className="inline-flex items-baseline gap-1 whitespace-nowrap">
+              <dt className="text-muted-foreground">{shortLabel}</dt>
+              <dd className="font-medium text-foreground">
+                <ReadingValue reading={reading} />
+              </dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+
+      {hasBadges ? (
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5 pl-4 text-xs">
+          {lock && lock.lockMode !== 'UNLOCKED' ? (
+            <StatusBadge
+              tone={lock.lockMode === 'MAINTENANCE_LOCK' ? 'destructive' : 'warning'}
+              label={LOCK_PRESENTATION[lock.lockMode].label}
+            />
+          ) : null}
+          {priorityLock ? (
+            <span title={`${priorityLock.lockedByName ?? '系统规则'}：${priorityLock.reason}`}>
+              <StatusBadge
+                tone={priorityLock.lockedPriority === 'SAFETY_INTERLOCK' ? 'destructive' : 'info'}
+                label={`${DEVICE_PRIORITY_TIER_LABEL[priorityLock.lockedPriority]} · ${formatLockRemaining(priorityLock.lockedUntil, context.nowMs)}`}
+              />
+            </span>
+          ) : null}
+          {open ? (
+            <button
+              type="button"
+              className="rounded-sm outline-none hover:underline focus-visible:ring-3 focus-visible:ring-ring-soft"
+              onClick={() => context.onInspect(open.commandId)}
+            >
+              <StatusBadge tone="warning" label={STATUS_PRESENTATION[open.status].label} />
+            </button>
+          ) : null}
+          {auto && !lock && !open && hint ? (
+            <span className="inline-flex items-center gap-1 text-warning-text">
+              <Link2 className="size-3 shrink-0" aria-hidden="true" />
+              {hint}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className="flex flex-wrap items-center gap-1.5 pl-4">
         {target.settings.length > 0 ? (
-          <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={`调整 ${target.assetName} 的设定值`} title={!auto || lock ? why : context.maintenance ? MAINTENANCE_BLOCKED : '调整设定值'} disabled={!auto || Boolean(lock) || context.maintenance !== null} onClick={() => context.onSettings(target)}>
-            <SlidersHorizontal />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            aria-label={`调整 ${target.assetName} 的设定值`}
+            title={!auto || lock ? why : context.maintenance ? MAINTENANCE_BLOCKED : undefined}
+            disabled={!auto || Boolean(lock) || context.maintenance !== null}
+            onClick={() => context.onSettings(target)}
+          >
+            <SlidersHorizontal data-icon="inline-start" />
+            设定值
           </Button>
         ) : null}
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          className={priorityLock ? 'text-primary' : 'text-muted-foreground'}
-          aria-label={priorityLock ? `管理 ${target.assetName} 优先级锁定` : `设置 ${target.assetName} 优先级锁定`}
-          title={
-            context.canLock
-              ? priorityLock
-                ? `已启用${DEVICE_PRIORITY_TIER_LABEL[priorityLock.lockedPriority]}锁定，点击调整或解除`
-                : '设置设备优先级仲裁锁'
-              : '你没有设置优先级锁定的权限'
-          }
-          disabled={!context.canLock}
-          onClick={() => context.onPriorityLock(target)}
-        >
-          <ShieldAlert />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          className="text-muted-foreground"
-          aria-label={lock ? `解除锁定 ${target.assetName}` : `锁定 ${target.assetName}`}
-          title={context.canLock ? (lock ? '解除或修改锁定' : '锁定这台设备') : '你没有锁定设备的权限'}
-          disabled={!context.canLock}
-          onClick={() => context.onLock(target)}
-        >
-          {lock ? <Lock /> : <LockOpen />}
-        </Button>
-      </span>
-      <span className="flex min-w-0 flex-wrap items-center gap-1.5 pl-[15px] text-xs text-muted-foreground">
-        <span>{status?.label ?? '暂无实时数据'}</span>
-        {lock && lock.lockMode !== 'UNLOCKED' ? (
-          <StatusBadge tone={lock.lockMode === 'MAINTENANCE_LOCK' ? 'destructive' : 'warning'} label={LOCK_PRESENTATION[lock.lockMode].label} />
-        ) : null}
-        {priorityLock ? (
-          <span title={`${priorityLock.lockedByName ?? '系统规则'}：${priorityLock.reason}`}>
-            <StatusBadge
-              tone={priorityLock.lockedPriority === 'SAFETY_INTERLOCK' ? 'destructive' : 'info'}
-              label={`${DEVICE_PRIORITY_TIER_LABEL[priorityLock.lockedPriority]} · ${formatLockRemaining(priorityLock.lockedUntil, context.nowMs)}`}
-            />
-          </span>
-        ) : null}
-        {open ? (
-          <button type="button" className="rounded-sm outline-none hover:underline focus-visible:ring-3 focus-visible:ring-ring-soft" onClick={() => context.onInspect(open.commandId)}>
-            <StatusBadge tone="warning" label={STATUS_PRESENTATION[open.status].label} />
-          </button>
-        ) : null}
-        {auto && !lock && !open && hint ? (
-          <span className="inline-flex items-center gap-1 text-warning-text"><Link2 className="size-3" aria-hidden="true" />{hint}</span>
-        ) : null}
-      </span>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant={hasAnyLock ? 'outline' : 'ghost'}
+              size="sm"
+              className={cn(
+                !hasAnyLock && 'border-border/60 text-secondary-foreground hover:border-border hover:bg-muted',
+                isCriticalLock && 'border-destructive/40 bg-destructive-soft/55 text-destructive-text hover:bg-destructive-soft hover:text-destructive-text',
+                isWarningLock && 'border-warning/50 bg-warning-soft/65 text-warning-text hover:bg-warning-soft hover:text-warning-text',
+                hasAnyLock && !isCriticalLock && !isWarningLock && 'border-primary/40 bg-primary-soft text-primary hover:bg-primary-soft',
+              )}
+              aria-label={hasAnyLock ? `管理 ${target.assetName} 已锁定` : `管理 ${target.assetName} 锁定`}
+              title={context.canLock ? undefined : '你没有锁定设备的权限'}
+              disabled={!context.canLock}
+            >
+              {hasAnyLock ? <Lock data-icon="inline-start" /> : <LockOpen data-icon="inline-start" />}
+              {hasAnyLock ? '已锁定' : '锁定'}
+              <ChevronDown data-icon="inline-end" className="opacity-65" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-64">
+            <DropdownMenuLabel>安全保护与锁定</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              className="h-auto items-start py-2"
+              onSelect={() => context.onLock(target)}
+            >
+              {lock ? <Lock className="mt-0.5 text-foreground" /> : <LockOpen className="mt-0.5 text-muted-foreground" />}
+              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <div className="flex items-center gap-1.5">
+                  <span className="font-medium text-foreground">
+                    {lock ? '解除或修改设备锁定' : '设备锁定'}
+                  </span>
+                  {lock && lock.lockMode !== 'UNLOCKED' ? (
+                    <span
+                      className={cn(
+                        'ml-auto shrink-0 rounded-sm px-1.5 py-0.5 text-[11px] leading-none font-medium',
+                        lock.lockMode === 'MAINTENANCE_LOCK'
+                          ? 'bg-destructive-soft text-destructive-text'
+                          : 'bg-warning-soft text-warning-text',
+                      )}
+                    >
+                      {LOCK_PRESENTATION[lock.lockMode].label}
+                    </span>
+                  ) : null}
+                </div>
+                <span className="text-xs text-muted-foreground">
+                  {lock ? '恢复平台下发或切换锁机类型' : '人工或检修锁机，暂停远程指令'}
+                </span>
+              </div>
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              className="h-auto items-start py-2"
+              onSelect={() => context.onPriorityLock(target)}
+            >
+              <ShieldAlert className={cn('mt-0.5', priorityLock ? 'text-primary' : 'text-muted-foreground')} />
+              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <div className="flex items-center gap-1.5">
+                  <span className="font-medium text-foreground">
+                    {priorityLock ? '管理优先级仲裁锁' : '优先级仲裁锁'}
+                  </span>
+                  {priorityLock ? (
+                    <span
+                      className={cn(
+                        'ml-auto shrink-0 rounded-sm px-1.5 py-0.5 text-[11px] leading-none font-medium',
+                        priorityLock.lockedPriority === 'SAFETY_INTERLOCK'
+                          ? 'bg-destructive-soft text-destructive-text'
+                          : 'bg-primary-soft text-primary',
+                      )}
+                    >
+                      {DEVICE_PRIORITY_TIER_LABEL[priorityLock.lockedPriority]}
+                    </span>
+                  ) : null}
+                </div>
+                <span className="text-xs text-muted-foreground">
+                  {priorityLock
+                    ? formatLockRemaining(priorityLock.lockedUntil, context.nowMs)
+                    : '限定控制来源优先级与锁定时长'}
+                </span>
+              </div>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
     </div>
   );
 }
@@ -222,11 +365,12 @@ function UnitColumn({ unit, context }: { readonly unit: PlantUnit; readonly cont
         {status ? <StatusBadge tone={status.tone} label={status.label} /> : <span className="text-xs text-muted-foreground">暂无实时数据</span>}
         {power && power.numeric !== null ? (
           <span className="ml-auto inline-flex shrink-0 items-baseline text-xs font-medium tabular-nums">
+            <span className="mr-1 font-normal text-muted-foreground">电表</span>
             {formatDecimal(power.numeric, 1)} kW
             {power.lowConfidence ? <LowConfidenceBadge /> : null}
           </span>
         ) : (
-          <span className="ml-auto shrink-0 text-xs text-muted-foreground">暂无读数</span>
+          <span className="ml-auto shrink-0 text-xs text-muted-foreground">电表 暂无读数</span>
         )}
       </header>
       {startSeq || stopSeq ? (
@@ -243,6 +387,7 @@ function UnitColumn({ unit, context }: { readonly unit: PlantUnit; readonly cont
           <Button
             variant="outline"
             size="sm"
+            className="hover:border-destructive/40 hover:text-destructive-text"
             disabled={!stopSeq || why !== '' || stopped}
             title={why || (stopped ? '主机已停' : undefined)}
             onClick={() => stopSeq && context.onCommand(confirmation(chiller, stopSeq, device, `一键停机 ${chiller.assetName}？`, stopOrder))}

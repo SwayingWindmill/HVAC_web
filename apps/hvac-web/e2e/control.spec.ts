@@ -120,7 +120,8 @@ test('locking a device withdraws its pending command and greys its controls unti
   await confirm.getByRole('button', { name: '提交停止' }).click();
   await expect(pump).toContainText('待审批');
 
-  await pump.getByRole('button', { name: '锁定 CWP-01' }).click();
+  await pump.getByRole('button', { name: '管理 CWP-01 锁定' }).click();
+  await page.getByRole('menuitem', { name: /设备锁定/ }).click();
   const dialog = page.getByRole('dialog', { name: '锁定 CWP-01？' });
   await dialog.getByText('检修锁定', { exact: true }).click();
   await expect(dialog).toContainText('锁定后会撤回这台设备 1 条还没下发的指令');
@@ -133,7 +134,8 @@ test('locking a device withdraws its pending command and greys its controls unti
   await expect(pump.getByRole('button', { name: '停止' })).toBeDisabled();
   await expect(page.getByRole('region', { name: '控制方式' })).toContainText('锁定设备1 台');
 
-  await pump.getByRole('button', { name: '解除锁定 CWP-01' }).click();
+  await pump.getByRole('button', { name: '管理 CWP-01 已锁定' }).click();
+  await page.getByRole('menuitem', { name: /解除或修改设备锁定/ }).click();
   const unlock = page.getByRole('dialog', { name: '解除 CWP-01 的锁定？' });
   await expect(unlock).toContainText('轴承异响，等维保');
   await unlock.getByRole('textbox', { name: '原因' }).fill('维保完成');
@@ -286,7 +288,8 @@ test('control mode and asset locks show operator display names without fallback 
   const modeRegion = page.getByRole('region', { name: '控制方式' });
   await expect(modeRegion).toContainText(/设定\s*周敏/);
   await expect(modeRegion).not.toContainText('其他人员');
-  await page.getByRole('group', { name: 'CHWP-01' }).getByRole('button', { name: '解除锁定 CHWP-01' }).click();
+  await page.getByRole('group', { name: 'CHWP-01' }).getByRole('button', { name: '管理 CHWP-01 已锁定' }).click();
+  await page.getByRole('menuitem', { name: /解除或修改设备锁定/ }).click();
   const lockDialog = page.getByRole('dialog', { name: '解除 CHWP-01 的锁定？' });
   await expect(lockDialog).toContainText('周敏');
   await lockDialog.getByRole('button', { name: '取消' }).click();
@@ -470,7 +473,8 @@ test('operators can acquire and release device priority locks and replay control
   await page.goto(`/operations/control?site=${SITE_ID}`);
 
   const chillerCard = page.getByRole('group', { name: 'CHILLER-01' });
-  await chillerCard.getByRole('button', { name: '设置 CHILLER-01 优先级锁定' }).click();
+  await chillerCard.getByRole('button', { name: '管理 CHILLER-01 锁定' }).click();
+  await page.getByRole('menuitem', { name: /优先级仲裁锁/ }).click();
   const lockDialog = page.getByRole('dialog', { name: /CHILLER-01 优先级仲裁锁/ });
   await lockDialog.getByText('安全联锁', { exact: true }).click();
   await lockDialog.getByRole('button', { name: '30 分钟' }).click();
@@ -488,7 +492,8 @@ test('operators can acquire and release device priority locks and replay control
     reason: '冷凝器压差高，高优先级保护锁机',
   });
 
-  await chillerCard.getByRole('button', { name: '管理 CHILLER-01 优先级锁定' }).click();
+  await chillerCard.getByRole('button', { name: '管理 CHILLER-01 已锁定' }).click();
+  await page.getByRole('menuitem', { name: /管理优先级仲裁锁/ }).click();
   const editDialog = page.getByRole('dialog', { name: /CHILLER-01 优先级仲裁锁/ });
   await expect(editDialog).toContainText('冷凝器压差高，高优先级保护锁机');
   await editDialog.getByRole('textbox', { name: '更新或解除原因' }).fill('压差恢复正常');
@@ -518,6 +523,25 @@ test('sidebar shows live pending control count and layout stacks without horizon
   const controlLink = page.getByRole('link', { name: /运行控制/ });
   await expect(controlLink).toBeVisible();
   await expect(controlLink).not.toContainText('需审批');
+
+  const chillerRow = page.getByRole('group', { name: 'CHILLER-01' });
+  await expect(chillerRow).toContainText('出水');
+  await expect(chillerRow).toContainText(/7\s*°C/);
+  await expect(chillerRow).toContainText('负载');
+  await expect(chillerRow).toContainText(/72\s*%/);
+  await expect(chillerRow).toContainText('功率');
+  await expect(chillerRow).toContainText(/155\.7\s*kW/);
+  await expect(chillerRow.getByRole('button', { name: '调整 CHILLER-01 的设定值' })).toContainText('设定值');
+
+  const chwpRow = page.getByRole('group', { name: 'CHWP-01' });
+  await expect(chwpRow).toContainText('频率');
+  await expect(chwpRow).toContainText(/30\s*Hz/);
+  await expect(chwpRow).toContainText('流量');
+  await expect(chwpRow).toContainText(/132\s*m³\/h/);
+
+  const shutdownBtnBox = await page.getByRole('region', { name: '控制方式' }).getByRole('button', { name: '停机…' }).boundingBox();
+  expect(shutdownBtnBox).not.toBeNull();
+  expect(shutdownBtnBox!.width).toBeLessThan(200);
 
   await page.getByRole('group', { name: 'CHWP-01' }).getByRole('button', { name: '停止' }).click();
   const confirm = page.getByRole('alertdialog', { name: '停止 CHWP-01？' });
