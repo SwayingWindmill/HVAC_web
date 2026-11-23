@@ -5,6 +5,7 @@ import {
   normalizeAssistantMarkdown,
   withMissingTableDividers,
 } from '../apps/hvac-web/src/features/assistant/answer-markdown.ts';
+import { deduplicateFindingKeyFigures } from '../apps/hvac-web/src/features/assistant/finding-dedup.ts';
 
 test('a pipe table written without its GFM divider row gets a matching divider inserted (#669)', () => {
   const raw = [
@@ -118,4 +119,99 @@ test('multiple tables, escaped pipes, and tables immediately after prose normali
     normalizeAssistantMarkdown('**电费已核对。**| 日期 | 电费 |\n| 10 月 20 日 | 1423.48 元 |'),
     '**电费已核对。**\n\n| 日期 | 电费 |\n| --- | --- |\n| 10 月 20 日 | 1423.48 元 |',
   );
+});
+
+test('deduplicateFindingKeyFigures suppresses values repeated in markdown tables or matching charts', () => {
+  const tableAnswer = [
+    '**今天（10 月 21 日）到 10:41 为止的电费是 230.09 元。**',
+    '',
+    '| 日期 | 用电量 | 估算电费 |',
+    '| 10 月 20 日（全天） | 1691 kWh | 1423.48 元 |',
+    '| 10 月 21 日（到 10:41） | 403 kWh | 230.09 元 |',
+  ].join('\n');
+
+  // 1. Table repeats all keyFigures -> all suppressed, compact card mode enabled.
+  const fullTableDedup = deduplicateFindingKeyFigures({
+    answerText: tableAnswer,
+    finding: {
+      keyFigures: [
+        { label: '今日电费', value: '230.09', unit: '元' },
+        { label: '昨日全天', value: '1423.48', unit: '元' },
+      ],
+    },
+  });
+  assert.deepEqual(fullTableDedup, { visibleKeyFigures: [], suppressedCount: 2, compact: true });
+
+  // 2. Table with an extra non-tabulated figure keeps only the non-duplicated one.
+  const partialTableDedup = deduplicateFindingKeyFigures({
+    answerText: tableAnswer,
+    finding: {
+      keyFigures: [
+        { label: '今日电费', value: '230.09', unit: '元' },
+        { label: '昨日全天', value: '1423.48', unit: '元' },
+        { label: '平均 COP', value: '4.25' },
+      ],
+    },
+  });
+  assert.deepEqual(partialTableDedup, {
+    visibleKeyFigures: [{ label: '平均 COP', value: '4.25' }],
+    suppressedCount: 2,
+    compact: false,
+  });
+
+  // 3. Prose + chart keeps signed delta and cross-unit metrics intact (DEFAULT_REPLY shape).
+  const proseWithChart = deduplicateFindingKeyFigures({
+    answerText: '这一小时比前一天同一时段多用电 18 kWh，主要来自 2 号机组。',
+    finding: {
+      chart: { unit: 'kWh', series: [{ values: [229, 247] }] },
+      keyFigures: [
+        { label: '多用电', value: '+18', unit: 'kWh' },
+        { label: '综合能效', value: '3.5' },
+      ],
+    },
+  });
+  assert.deepEqual(proseWithChart, {
+    visibleKeyFigures: [
+      { label: '多用电', value: '+18', unit: 'kWh' },
+      { label: '综合能效', value: '3.5' },
+    ],
+    suppressedCount: 0,
+    compact: false,
+  });
+
+  // 4. Chart answer with non-delta keyFigures matching plotted values & unit suppresses duplicates only.
+  const chartDuplicate = deduplicateFindingKeyFigures({
+    answerText: '1 号冷机今天用电显著高于 2 号冷机。',
+    finding: {
+      chart: { unit: 'kWh', series: [{ values: [812, 420] }] },
+      keyFigures: [
+        { label: '1 号冷机', value: '812', unit: 'kWh' },
+        { label: '2 号冷机', value: '420', unit: 'kWh' },
+        { label: '平均 COP', value: '4.12' },
+      ],
+    },
+  });
+  assert.deepEqual(chartDuplicate, {
+    visibleKeyFigures: [{ label: '平均 COP', value: '4.12' }],
+    suppressedCount: 2,
+    compact: false,
+  });
+
+  // 5. Date/time digits inside table cells (e.g. 10月20日, 10:41) never suppress independent KPI figures.
+  const dateClockTable = [
+    '| 时段 | 负荷 |',
+    '| --- | --- |',
+    '| 10 月 20 日 10:41 | 310 kW |',
+  ].join('\n');
+  const dateSafe = deduplicateFindingKeyFigures({
+    answerText: dateClockTable,
+    finding: {
+      keyFigures: [
+        { label: '参考负荷', value: '20', unit: 'kW' },
+        { label: '采样点', value: '10' },
+      ],
+    },
+  });
+  assert.equal(dateSafe.suppressedCount, 0);
+  assert.equal(dateSafe.visibleKeyFigures.length, 2);
 });

@@ -25,12 +25,14 @@ import { DataGapBanner } from '@/features/data-gaps/DataGapBanner';
 import { dataGapsKeys } from '@/features/data-gaps/query';
 import { formatCompactTime, formatDecimal } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
-import { coolingUncertaintyText, copUncertaintyText, equipmentStatus, loopDifferentialPressure, plantReading, probeOffsetText, type ParallelBranch, type PlantDevice, type PlantReading, type PlantView, type WaterLoopKind } from '../plant-model';
+import { coolingUncertaintyText, copUncertaintyText, equipmentStatus, loopDifferentialPressure, PLANT_CATEGORY_LABELS, plantReading, probeOffsetText, type ParallelBranch, type PlantDevice, type PlantReading, type PlantView, type WaterLoopKind } from '../plant-model';
 import { useRealtimePlant } from '../use-realtime-plant';
 import { usePlantHistory } from '../use-plant-history';
 import { copSeries, COOLING_KEY, hourAgo, POWER_KEY } from '../plant-trend';
 import { deviceStatus, formatClock, LiveIndicator, LowConfidenceBadge, ReadingMetric, ReadingValue } from '../device-presentation';
 import { buildTimeSlots, fillGaugeSlots, fillScalarSlots } from '../../trends/timeline';
+import { DeviceInspector } from '../../systems-devices/components/DeviceInspector';
+import { PlantHydraulicSchematic } from './PlantHydraulicSchematic';
 
 const pageRoute = getRouteApi('/_app/_site/operations/realtime');
 const siteRoute = getRouteApi('/_app/_site');
@@ -373,7 +375,7 @@ function branchDeviceBadge(device: PlantDevice): { readonly toneClass: string; r
   return { toneClass, label: status.label };
 }
 
-function ParallelBranchCard({ branch }: { readonly branch: ParallelBranch }) {
+function ParallelBranchCard({ branch, onInspect }: { readonly branch: ParallelBranch; readonly onInspect: (deviceId: string) => void }) {
   const dotTone = branch.waterLoop === 'CONDENSER_WATER' ? 'bg-chart-2' : 'bg-chart-1';
   const summary = branch.equipmentCount > 0
     ? `${branch.runningCount} / ${branch.equipmentCount} 台运行`
@@ -396,7 +398,12 @@ function ParallelBranchCard({ branch }: { readonly branch: ParallelBranch }) {
           const badge = branchDeviceBadge(device);
           const readings = branchDeviceReadings(device);
           return (
-            <div key={device.deviceId} className="flex items-center justify-between gap-3 py-2 first:pt-0.5 last:pb-0">
+            <button
+              key={device.deviceId}
+              type="button"
+              onClick={() => onInspect(device.deviceId)}
+              className="flex w-full cursor-pointer items-center justify-between gap-3 rounded-md px-1 py-2 text-left transition-colors outline-none first:pt-1 last:pb-1 hover:bg-accent/50 focus-visible:ring-3 focus-visible:ring-ring-soft"
+            >
               <div className="flex min-w-0 items-center gap-2">
                 <span className="truncate text-xs font-medium">{device.name}</span>
                 <span className={cn('shrink-0 rounded px-1.5 py-0.5 text-[11px] leading-4 font-medium', badge.toneClass)}>{badge.label}</span>
@@ -409,7 +416,7 @@ function ParallelBranchCard({ branch }: { readonly branch: ParallelBranch }) {
                   </span>
                 ))}
               </div>
-            </div>
+            </button>
           );
         })}
       </div>
@@ -417,14 +424,14 @@ function ParallelBranchCard({ branch }: { readonly branch: ParallelBranch }) {
   );
 }
 
-function ParallelBranchesPanel({ plant }: { readonly plant: PlantView }) {
+function ParallelBranchesPanel({ plant, onInspect }: { readonly plant: PlantView; readonly onInspect: (deviceId: string) => void }) {
   if (plant.branches.length === 0) return null;
   return (
     <Panel role="region" aria-label="水力并联支路">
       <PanelHeader title="水力并联支路" action={<span className="text-xs text-muted-foreground tabular-nums">{plant.branches.length} 条支路</span>} />
       <div className="grid grid-cols-1 gap-3 p-4 @4xl/main:grid-cols-2">
         {plant.branches.map((branch) => (
-          <ParallelBranchCard key={branch.key} branch={branch} />
+          <ParallelBranchCard key={branch.key} branch={branch} onInspect={onInspect} />
         ))}
       </div>
     </Panel>
@@ -500,7 +507,8 @@ export function RealtimeWorkspace() {
   const equipment = equipmentStatus(plant);
   const controlState = useQuery(siteControlStateQuery(site.id));
   const lockCount = activeLocks(controlState.data).size;
-  const setSearch = (patch: { metric?: Metric; window?: Window }) => void navigate({ search: (previous) => ({ ...previous, ...patch }), replace: true });
+  const inspected = search.inspect ? plant.devices.find((device) => device.deviceId === search.inspect) : undefined;
+  const setSearch = (patch: { metric?: Metric; window?: Window; inspect?: string }) => void navigate({ search: (previous) => ({ ...previous, ...patch }), replace: true });
 
   return (
     <Main>
@@ -566,10 +574,22 @@ export function RealtimeWorkspace() {
             />
             <RecentEvents plant={plant} siteId={site.id} myId={principal.principalId} timeZone={site.timezone} assetModel={registry.data?.assetModel} />
           </div>
+          <PlantHydraulicSchematic
+            plant={plant}
+            siteId={site.id}
+            selectedDeviceId={search.inspect}
+            onInspect={(deviceId) => setSearch({ inspect: deviceId })}
+          />
           <LoopsTable plant={plant} timeZone={site.timezone} />
-          <ParallelBranchesPanel plant={plant} />
+          <ParallelBranchesPanel plant={plant} onInspect={(deviceId) => setSearch({ inspect: deviceId })} />
         </>
       ) : null}
+
+      <DeviceInspector
+        device={inspected}
+        categoryLabel={inspected ? PLANT_CATEGORY_LABELS[inspected.category] : ''}
+        onClose={() => setSearch({ inspect: undefined })}
+      />
     </Main>
   );
 }

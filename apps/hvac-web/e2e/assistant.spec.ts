@@ -152,6 +152,14 @@ test('pipe table without a GFM divider row still renders as a table in the assis
   await panel.getByRole('button', { name: '发送' }).click();
 
   await expect(panel.getByTestId('assistant-finding')).toHaveCount(1);
+  const finding = panel.getByTestId('assistant-finding');
+  await expect(finding).toHaveAttribute('data-compact', 'true');
+  await expect(finding).not.toContainText('今日电费');
+  await expect(finding).not.toContainText('昨日全天');
+  await expect(finding).toContainText('有数据依据');
+  await expect(finding.getByRole('link', { name: '能耗分析' })).toBeVisible();
+  await expect(finding).toContainText('今天尚未过完');
+
   const answer = panel.locator('[data-role="assistant"]').last();
   await expect(answer).toContainText('今天（10 月 21 日）到 10:41 为止的电费是 230.09 元');
 

@@ -324,3 +324,41 @@ test('delayed site discovery waits before mounting router without throwing SITE_
   await expect(page.getByRole('region', { name: '冷站运行' })).toBeVisible();
   await expect(page.getByRole('link', { name: /主要设备/ })).toBeVisible();
 });
+
+test('renders 2D hydraulic schematic with live loop readings, inspector sheet, and zero-flow anomaly cue', async ({ page, gateway }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`/operations/realtime?site=${SITE_ID}`);
+
+  const schematic = page.getByRole('region', { name: '冷站水力回路' });
+  await expect(schematic).toBeVisible();
+  await expect(schematic).toContainText('CT-01');
+  await expect(schematic).toContainText('CWP-01');
+  await expect(schematic).toContainText('CHILLER-01');
+  await expect(schematic).toContainText('CHWP-01');
+  await expect(schematic).toContainText('ZONE-SENSOR-01');
+  await expect(schematic).toContainText(/供水\s*7\s*°C/);
+  await expect(schematic).toContainText('12.6');
+  await expect(schematic).toContainText('132');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+
+  await schematic.getByRole('button', { name: /CHILLER-01/ }).click();
+  await expect(page).toHaveURL(/inspect=018f3e00-4000-7000-8000-000000000001/);
+  const inspector = page.getByRole('dialog');
+  await expect(inspector).toContainText('CHILLER-01');
+  await inspector.getByRole('button', { name: 'Close' }).click();
+  await expect(inspector).toHaveCount(0);
+  await expect(page).not.toHaveURL(/inspect=/);
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await expect(schematic).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+
+  const btuSnap = gateway.snapshots.items.find((item: { deviceId: string }) => item.deviceId === '018f3e00-4000-7000-8000-000000000006');
+  expect(btuSnap).toBeTruthy();
+  const flowPoint = btuSnap.snapshot.values.find((entry: { key: string }) => entry.key === 'flow_rate');
+  expect(flowPoint).toBeTruthy();
+  flowPoint.value = 0;
+
+  await page.reload();
+  await expect(page.getByRole('region', { name: '冷站水力回路' })).toContainText('冷冻水泵运行但流量接近零');
+});
