@@ -34,7 +34,7 @@
 - `setData` 只传页面要显示的内容；总览只在显示时每分钟刷新，切到后台就停。
 - 站点列表每次登录只读一次，切换站点页和下拉刷新时再读，页面定时刷新不重读（`lib/site.ts`）。
 - 不靠手机的时区：今天从哪一刻开始、本月是哪几天，都从平台按站点时区切好的「天」里推出来（`lib/today.ts`、`lib/savings.ts`）。数字格式也自己写（`lib/format.ts`），不用 `toLocaleString`。
-- 冷站的分类、运行状态和读数规则和网页「实时运行」一致（`lib/plant.ts` 对照 `apps/hvac-web/src/features/operations/realtime/plant-model.ts`）。点位的中文名、单位和小数位从网页的 `src/domain/centralPlantTelemetry.ts` 复制到 `miniprogram/shared/`（微信只编译 `miniprogram/` 里的文件）：改了网页那份后跑 `npm -w @hvac/miniprogram run sync`，测试会检查两份是否一致。
+- 冷站的分类、水环路、支路归并与运行状态规则通过网页 `src/domain/plantTopology.ts` 共享，点位中文名、单位和小数位通过网页 `src/domain/centralPlantTelemetry.ts` 共享，两者统一复制到 `miniprogram/shared/`（微信只编译 `miniprogram/` 里的文件）：改了网页那份后跑 `npm -w @hvac/miniprogram run sync`，测试会检查两份是否一致。
 - 助手的对话整理规则（`thread-model.ts`）、查询步骤的名称（`tool-labels.ts`）和加粗结论的修正（`answer-markdown.ts`）也这样从网页的 `src/features/assistant/` 复制过来；对话数据的类型由小程序自己写（`lib/agent-types.ts`），测试检查它和网页按接口生成的类型一致。
 - 助手的回答是一个字一个字推过来的。微信没有 `EventSource` 和 `TextDecoder`，所以用 `wx.request` 的分块接收（`enableChunked`），自己拼字、拆事件（`lib/utf8.ts`、`lib/agent-stream.ts`）。回答里的 Markdown（加粗结论、段落、列表）转成 `rich-text` 的节点，表格单独画成能左右滑动的表（`lib/answer-nodes.ts`）；都按数据拼，不拼 HTML，所以回答里的文字不会变成标签。没有引入第三方 Markdown 组件：要在开发者工具里另外「构建 npm」，而助手的写法是规定好的那几种。结论卡片不带网页上的「依据」链接（那些是网页的页面）。
 - 时间按站点的钟点和日期显示，也是从站点「今天」的起点推出来的（`lib/today.ts`）：比如那个起点是 UTC 16:00，站点就在 UTC+8，10 月 1 日 01:26 UTC 写成「10/1 09:26」。

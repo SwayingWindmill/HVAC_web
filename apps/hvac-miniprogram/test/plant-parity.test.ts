@@ -2,8 +2,28 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 // The web's own pipeline: the device rows the 实时运行 and 设备 pages build, then the plant view.
 import { buildAssetsRows } from '../../hvac-web/src/features/assets/model.ts';
-import { buildPlantView } from '../../hvac-web/src/features/operations/realtime/plant-model.ts';
-import { buildPlant } from '../miniprogram/lib/plant.ts';
+import {
+  EQUIPMENT_CATEGORIES as WEB_EQUIPMENT_CATEGORIES,
+  PLANT_CATEGORY_LABELS as WEB_CATEGORY_LABELS,
+  PLANT_CATEGORY_ORDER as WEB_CATEGORY_ORDER,
+  WATER_LOOP_LABELS as WEB_LOOP_LABELS,
+  WATER_LOOP_ORDER as WEB_LOOP_ORDER,
+  buildPlantView,
+} from '../../hvac-web/src/features/operations/realtime/plant-model.ts';
+import {
+  cleanBranchCode,
+  classifyPlantCategory,
+  isPlantDeviceRunning,
+  parseRunState,
+  parseWaterLoop,
+} from '../../hvac-web/src/domain/plantTopology.ts';
+import {
+  CATEGORY_LABELS as PHONE_CATEGORY_LABELS,
+  EQUIPMENT_CATEGORIES as PHONE_EQUIPMENT_CATEGORIES,
+  WATER_LOOP_LABELS as PHONE_LOOP_LABELS,
+  WATER_LOOP_ORDER as PHONE_LOOP_ORDER,
+  buildPlant,
+} from '../miniprogram/lib/plant.ts';
 import { assetModel, recordedAt, snapshots } from './recorded.ts';
 
 const now = recordedAt;
@@ -243,4 +263,28 @@ test('the web and mini program group chilled and condenser parallel branches, in
   assert.deepEqual(phone.branches.map(branchShape), web.branches.map(branchShape));
   assert.equal(web.branches[0].devices.length, 3);
   assert.equal(web.branches[0].devices[2].deviceId, valveDeviceId);
+});
+
+test('web and mini program share identical plant taxonomy, water-loop dictionaries, and helper guards', () => {
+  assert.deepEqual(PHONE_CATEGORY_LABELS, WEB_CATEGORY_LABELS);
+  assert.deepEqual([...WEB_CATEGORY_ORDER].sort(), Object.keys(WEB_CATEGORY_LABELS).sort());
+  assert.deepEqual(PHONE_LOOP_ORDER, WEB_LOOP_ORDER);
+  assert.deepEqual(PHONE_LOOP_LABELS, WEB_LOOP_LABELS);
+  assert.deepEqual([...PHONE_EQUIPMENT_CATEGORIES], [...WEB_EQUIPMENT_CATEGORIES]);
+
+  assert.equal(classifyPlantCategory({ assetType: 'CHILLER', sourceKeys: [], deviceType: 'OTHER' }), 'CHILLER');
+  assert.equal(classifyPlantCategory({ assetType: null, sourceKeys: ['dp_sensor.differential_pressure'], deviceType: 'UNKNOWN' }), 'METER');
+  assert.equal(classifyPlantCategory({ assetType: null, sourceKeys: ['custom.value'], deviceType: 'ISOLATION_VALVE' }), 'ACQUISITION');
+  assert.equal(classifyPlantCategory({ assetType: null, sourceKeys: ['custom.value'], deviceType: 'UNKNOWN' }), 'OTHER');
+
+  assert.equal(parseWaterLoop('CHILLED_WATER'), 'CHILLED_WATER');
+  assert.equal(parseWaterLoop('UNKNOWN'), null);
+  assert.equal(cleanBranchCode('  CH-A  '), 'CH-A');
+  assert.equal(cleanBranchCode('   '), null);
+  assert.equal(parseRunState('RUNNING'), 'RUNNING');
+  assert.equal(parseRunState('STARTING'), 'UNKNOWN');
+
+  assert.equal(isPlantDeviceRunning({ connection: 'ONLINE', runState: 'RUNNING' }), true);
+  assert.equal(isPlantDeviceRunning({ connection: 'SLEEPING', runState: 'RUNNING' }), false);
+  assert.equal(isPlantDeviceRunning({ connection: 'OFFLINE', runState: 'RUNNING' }), false);
 });

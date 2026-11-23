@@ -14,15 +14,12 @@
     "apps/hvac-web/src/features/integrations/components/ConcentratorEidSection.tsx": 773,
     "apps/hvac-web/src/features/integrations/components/MeterReconciliationTab.tsx": 661,
     "apps/hvac-web/src/features/operations/realtime/components/PlantHydraulicSchematic.tsx": 680,
-    "apps/hvac-web/src/features/operations/realtime/plant-model.ts": 618,
     "apps/hvac-web/src/features/operations/trends/components/TrendsWorkspace.tsx": 806,
     "apps/hvac-web/src/features/operations/trends/trends-model.ts": 991,
     "apps/hvac-web/src/features/optimization/auto-control-model.ts": 604,
     "apps/hvac-web/src/features/optimization/components/OptimizationAnalysisTab.tsx": 786,
     "apps/hvac-web/src/features/optimization/components/OptimizationWorkspace.tsx": 982,
     "apps/hvac-web/src/features/optimization/optimization-model.ts": 1192,
-    "apps/hvac-web/src/features/schedules/schedule-model.ts": 862,
-    "apps/hvac-web/src/features/system/registry-admin/RegistryResourceWorkbench.tsx": 1446,
-    "apps/hvac-web/src/features/system/registry-admin/RegistryTemplateWorkbench.tsx": 1545
+    "apps/hvac-web/src/features/schedules/schedule-model.ts": 862
   }
 }

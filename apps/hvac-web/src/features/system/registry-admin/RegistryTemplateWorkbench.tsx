@@ -1,7 +1,7 @@
-import { useEffect, useId, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
-import { History, LayoutTemplate, Plus, RefreshCw, Send, Trash2 } from 'lucide-react';
+import { History } from 'lucide-react';
 import type {
   Capability,
   Site,
@@ -14,8 +14,8 @@ import type {
 import {
   flattenRegistryPages,
   presentRegistryError,
-  registryTemplateKeys,
   registryAdminApi,
+  registryTemplateKeys,
   useRegistrySiteTemplateAssignments,
   useRegistryTemplateRevision,
   useRegistryTemplates,
@@ -25,57 +25,33 @@ import { DataTable, DataTablePagination, type DataTableFeatures } from '@/compon
 import { StatusBadge } from '@/components/status-badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Checkbox } from '@/components/ui/checkbox';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import { Textarea } from '@/components/ui/textarea';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { useDataTable } from '@/hooks/use-data-table';
-import { isOneOf, isPlainRecord } from '@/lib/typed';
+import { isOneOf } from '@/lib/typed';
 import { makeRegistryMutationMeta, newRegistryIdempotencyKey } from './model';
 import {
-  CAPABILITY_APPROVAL_POLICIES,
-  CAPABILITY_RISK_LEVELS,
-  CAPABILITY_STATUSES,
-  STANDARD_POINT_TYPES,
-  STANDARD_VALUE_TYPES,
-  TEMPLATE_COUNTER_DECREASE_MODES,
   buildReleaseReferencesFromEntries,
   createDefaultReferenceEntries,
-  createEmptyCapabilityProfileDraft,
-  createEmptyStandardPointDraft,
   createEmptyStructuredDeviceDraft,
   parseStructuredDevicePayload,
   releaseReferencesToEntries,
   serializeStructuredDevicePayload,
   summarizeTemplatePayload,
-  type CapabilityProfileDraft,
-  type StandardPointDraft,
   type StructuredDeviceTemplateDraft,
-  type TemplateModbusDriverSummary,
   type TemplateReferenceEntry,
 } from './template-model';
-
-function formatTemplateDriverSummary(summary: TemplateModbusDriverSummary): string {
-  switch (summary.driverType) {
-    case 'BACNET_IP':
-      return `协议驱动 (${summary.driverTypeLabel}) · ${summary.registerCount} 个 BACnet 对象`;
-    case 'OPC_UA':
-      return `协议驱动 (${summary.driverTypeLabel}) · ${summary.registerCount} 个 OPC-UA 节点`;
-    case 'MODBUS_TCP':
-    case 'MODBUS_RTU':
-      return `Modbus 驱动 (${summary.driverTypeLabel}) · ${summary.registerCount} 寄存器`;
-  }
-}
+import { TemplateCatalogAssignCard } from './TemplateCatalogAssignCard';
+import { TemplateReleaseCard } from './TemplateReleaseCard';
+import {
+  ASSIGNMENT_FILTER_KINDS,
+  formatTimestamp,
+  kindLabel,
+  parseObject,
+  type AssignmentDraft,
+  type PayloadEditorMode,
+  type ReleaseDraft,
+  type RevisionOption,
+} from './template-workbench-types';
 
 interface Props {
   site: Site;
@@ -86,67 +62,8 @@ interface Props {
   onRefresh: () => Promise<void>;
 }
 
-type PayloadEditorMode = 'structured' | 'json';
-
-type ReleaseDraft = {
-  templateKey: string;
-  templateKind: TemplateKind;
-  payloadJson: string;
-  reason: string;
-};
-
-type AssignmentDraft = {
-  targetType: TemplateKind;
-  targetId: string;
-  templateRevisionId: string;
-  reason: string;
-};
-
-const TEMPLATE_KINDS = ['ASSET', 'DEVICE', 'POINT'] as const satisfies readonly TemplateKind[];
-const ASSIGNMENT_FILTER_KINDS = ['ALL', 'ASSET', 'DEVICE', 'POINT'] as const;
-
-function parseObject(source: string, label: string): Record<string, unknown> {
-  const parsed: unknown = JSON.parse(source);
-  if (!isPlainRecord(parsed)) throw new Error(`${label}格式有误，请填写键值对形式的 JSON（以 { 开头）。`);
-  return parsed;
-}
-
-function kindLabel(kind: TemplateKind): string {
-  if (kind === 'ASSET') return '资产';
-  if (kind === 'DEVICE') return '设备';
-  return '点位';
-}
-
-function approvalPolicyLabel(policy: string): string {
-  if (policy === 'SINGLE_APPROVER') return '单人审批';
-  if (policy === 'TWO_PERSON') return '双人复核';
-  return '无需审批';
-}
-
-function riskLevelLabel(level: string): string {
-  if (level === 'CRITICAL') return '严重风险';
-  if (level === 'HIGH') return '高风险';
-  if (level === 'MEDIUM') return '中风险';
-  return '低风险';
-}
-
-const ASSIGNMENT_TIME = new Intl.DateTimeFormat('zh-CN', {
-  month: '2-digit',
-  day: '2-digit',
-  hour: '2-digit',
-  minute: '2-digit',
-  hour12: false,
-});
-
-function formatTimestamp(value: string): string {
-  const ms = Date.parse(value);
-  if (Number.isNaN(ms)) return value;
-  return ASSIGNMENT_TIME.format(ms);
-}
-
 export function RegistryTemplateWorkbench({ site, model, capabilities, csrfToken, onDirtyChange, onRefresh }: Props) {
   const queryClient = useQueryClient();
-  const structuredGroupId = useId();
   const [payloadMode, setPayloadMode] = useState<PayloadEditorMode>('structured');
   const [releaseDraft, setReleaseDraft] = useState<ReleaseDraft>({
     templateKey: '',
@@ -232,7 +149,7 @@ export function RegistryTemplateWorkbench({ site, model, capabilities, csrfToken
   );
 
   const revisionOptions = useMemo(() => {
-    const options = new Map<string, { id: string; label: string; kind: TemplateKind }>();
+    const options = new Map<string, RevisionOption>();
     for (const tpl of templates) {
       if (!tpl.latestRevisionId || !tpl.latestRevisionNumber) continue;
       options.set(tpl.latestRevisionId, {
@@ -518,22 +435,6 @@ export function RegistryTemplateWorkbench({ site, model, capabilities, csrfToken
     ? summarizeTemplatePayload(previewRevision.templateKind, previewRevision.payload)
     : null;
 
-  const updatePoint = (index: number, patch: Partial<StandardPointDraft>) => {
-    setStructuredDraft((current) => ({
-      ...current,
-      standardPoints: current.standardPoints.map((row, i) => (i === index ? { ...row, ...patch } : row)),
-    }));
-    setReleaseDirty(true);
-  };
-
-  const updateCapability = (index: number, patch: Partial<CapabilityProfileDraft>) => {
-    setStructuredDraft((current) => ({
-      ...current,
-      capabilityProfiles: current.capabilityProfiles.map((row, i) => (i === index ? { ...row, ...patch } : row)),
-    }));
-    setReleaseDirty(true);
-  };
-
   return (
     <div className="space-y-4">
       {!allowed ? (
@@ -556,934 +457,69 @@ export function RegistryTemplateWorkbench({ site, model, capabilities, csrfToken
       </Alert>
 
       <div className="grid gap-4 xl:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <LayoutTemplate className="size-4" />
-              发布模板版本
-            </CardTitle>
-            <CardDescription>
-              设备模板支持结构化配置标准点位、质量检查与控制能力，也可切换为高级 JSON 编辑。
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid gap-4 sm:grid-cols-2">
-              <label className="grid gap-1.5 text-sm">
-                <span>模板名称</span>
-                <Input
-                  disabled={!allowed}
-                  value={releaseDraft.templateKey}
-                  placeholder="chiller-standard"
-                  onChange={(event) => {
-                    const value = event.currentTarget.value;
-                    setReleaseDraft((current) => ({ ...current, templateKey: value }));
-                    setReleaseDirty(true);
-                  }}
-                />
-              </label>
-              <label className="grid gap-1.5 text-sm">
-                <span>适用对象</span>
-                <Select
-                  disabled={!allowed}
-                  value={releaseDraft.templateKind}
-                  onValueChange={(value) => {
-                    if (!isOneOf(TEMPLATE_KINDS, value)) return;
-                    setReleaseDraft((current) => ({ ...current, templateKind: value }));
-                    if (value !== 'DEVICE') setPayloadMode('json');
-                    setReleaseDirty(true);
-                  }}
-                >
-                  <SelectTrigger aria-label="适用对象">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      {TEMPLATE_KINDS.map((kind) => (
-                        <SelectItem key={kind} value={kind}>
-                          {kindLabel(kind)}
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-              </label>
-            </div>
+        <TemplateReleaseCard
+          allowed={allowed}
+          working={working}
+          payloadMode={payloadMode}
+          releaseDraft={releaseDraft}
+          structuredDraft={structuredDraft}
+          referenceEntries={referenceEntries}
+          onTemplateKeyChange={(value) => {
+            setReleaseDraft((current) => ({ ...current, templateKey: value }));
+            setReleaseDirty(true);
+          }}
+          onTemplateKindChange={(value) => {
+            setReleaseDraft((current) => ({ ...current, templateKind: value }));
+            if (value !== 'DEVICE') setPayloadMode('json');
+            setReleaseDirty(true);
+          }}
+          onSwitchPayloadMode={switchPayloadMode}
+          onStructuredDraftChange={(next) => {
+            setStructuredDraft(next);
+            setReleaseDirty(true);
+          }}
+          onPayloadJsonChange={(value) => {
+            setReleaseDraft((current) => ({ ...current, payloadJson: value }));
+            setReleaseDirty(true);
+          }}
+          onReferenceEntriesChange={(next) => {
+            setReferenceEntries(next);
+            setReleaseDirty(true);
+          }}
+          onReasonChange={(value) => {
+            setReleaseDraft((current) => ({ ...current, reason: value }));
+            setReleaseDirty(true);
+          }}
+          onRelease={() => void releaseTemplate()}
+        />
 
-            {releaseDraft.templateKind === 'DEVICE' ? (
-              <div className="flex items-center justify-between gap-2 border-y border-divider py-2">
-                <span id={structuredGroupId} className="text-xs font-medium text-muted-foreground">
-                  模板内容格式
-                </span>
-                <ToggleGroup
-                  type="single"
-                  variant="outline"
-                  size="sm"
-                  value={payloadMode}
-                  onValueChange={(val) => {
-                    if (val === 'structured' || val === 'json') switchPayloadMode(val);
-                  }}
-                  aria-labelledby={structuredGroupId}
-                >
-                  <ToggleGroupItem value="structured" className="text-xs">
-                    结构化配置
-                  </ToggleGroupItem>
-                  <ToggleGroupItem value="json" className="text-xs">
-                    高级 JSON
-                  </ToggleGroupItem>
-                </ToggleGroup>
-              </div>
-            ) : null}
-
-            {releaseDraft.templateKind === 'DEVICE' && payloadMode === 'structured' ? (
-              <div className="space-y-4">
-                <label className="grid gap-1.5 text-sm">
-                  <span>适用设备类型（deviceType，可选）</span>
-                  <Input
-                    disabled={!allowed}
-                    value={structuredDraft.deviceType}
-                    placeholder="CHILLER"
-                    className="font-mono text-xs"
-                    onChange={(event) => {
-                      const value = event.currentTarget.value;
-                      setStructuredDraft((current) => ({ ...current, deviceType: value }));
-                      setReleaseDirty(true);
-                    }}
-                  />
-                </label>
-
-                <div className="space-y-2.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold text-foreground">
-                      标准点位定义（{structuredDraft.standardPoints.length} 项）
-                    </span>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      disabled={!allowed}
-                      onClick={() => {
-                        setStructuredDraft((current) => ({
-                          ...current,
-                          standardPoints: [...current.standardPoints, createEmptyStandardPointDraft()],
-                        }));
-                        setReleaseDirty(true);
-                      }}
-                    >
-                      <Plus data-icon="inline-start" />
-                      新增标准点位
-                    </Button>
-                  </div>
-
-                  {structuredDraft.standardPoints.length === 0 ? (
-                    <p className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
-                      未配置标准点位；点击「新增标准点位」后，模板应用到设备时会自动物化点位登记与质量规则。
-                    </p>
-                  ) : (
-                    <div className="space-y-2.5">
-                      {structuredDraft.standardPoints.map((pt, index) => (
-                        <div key={index} className="space-y-2 rounded-lg border bg-muted/30 p-3">
-                          <div className="flex items-center justify-between">
-                            <span className="text-xs font-medium text-muted-foreground">点位 #{index + 1}</span>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon-xs"
-                              disabled={!allowed}
-                              aria-label={`删除标准点位 ${index + 1}`}
-                              onClick={() => {
-                                setStructuredDraft((current) => ({
-                                  ...current,
-                                  standardPoints: current.standardPoints.filter((_, i) => i !== index),
-                                }));
-                                setReleaseDirty(true);
-                              }}
-                            >
-                              <Trash2 className="size-3.5" />
-                            </Button>
-                          </div>
-                          <div className="grid gap-2 sm:grid-cols-3">
-                            <label className="grid gap-1 text-xs">
-                              <span className="text-muted-foreground">点位编码 (pointCode)</span>
-                              <Input
-                                disabled={!allowed}
-                                value={pt.pointCode}
-                                placeholder="chw_supply_temp"
-                                className="h-8 font-mono text-xs"
-                                onChange={(e) => updatePoint(index, { pointCode: e.currentTarget.value })}
-                              />
-                            </label>
-                            <label className="grid gap-1 text-xs">
-                              <span className="text-muted-foreground">显示名称</span>
-                              <Input
-                                disabled={!allowed}
-                                value={pt.displayName}
-                                placeholder="冷冻水供水温度"
-                                className="h-8 text-xs"
-                                onChange={(e) => updatePoint(index, { displayName: e.currentTarget.value })}
-                              />
-                            </label>
-                            <label className="grid gap-1 text-xs">
-                              <span className="text-muted-foreground">来源键（可选）</span>
-                              <Input
-                                disabled={!allowed}
-                                value={pt.sourceKey}
-                                placeholder="chw_supply_temp"
-                                className="h-8 font-mono text-xs"
-                                onChange={(e) => updatePoint(index, { sourceKey: e.currentTarget.value })}
-                              />
-                            </label>
-                          </div>
-                          <div className="grid gap-2 sm:grid-cols-4">
-                            <label className="grid gap-1 text-xs">
-                              <span className="text-muted-foreground">点位分类</span>
-                              <Select
-                                disabled={!allowed}
-                                value={pt.pointType}
-                                onValueChange={(value) => {
-                                  if (!isOneOf(STANDARD_POINT_TYPES, value)) return;
-                                  updatePoint(index, {
-                                    pointType: value,
-                                    writable: value === 'COMMAND' ? true : value === 'SETTING' ? pt.writable : false,
-                                    valueType: value === 'COUNTER' ? 'NUMBER' : pt.valueType,
-                                    counterDecreaseMode: value === 'COUNTER' ? pt.counterDecreaseMode || 'RESET_TO_ZERO' : '',
-                                  });
-                                }}
-                              >
-                                <SelectTrigger className="h-8 text-xs">
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {STANDARD_POINT_TYPES.map((t) => (
-                                    <SelectItem key={t} value={t} className="text-xs">
-                                      {t}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                            </label>
-                            <label className="grid gap-1 text-xs">
-                              <span className="text-muted-foreground">值类型</span>
-                              <Select
-                                disabled={!allowed || pt.pointType === 'COUNTER'}
-                                value={pt.valueType}
-                                onValueChange={(value) => {
-                                  if (!isOneOf(STANDARD_VALUE_TYPES, value)) return;
-                                  updatePoint(index, { valueType: value });
-                                }}
-                              >
-                                <SelectTrigger className="h-8 text-xs">
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {STANDARD_VALUE_TYPES.map((vt) => (
-                                    <SelectItem key={vt} value={vt} className="text-xs">
-                                      {vt}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                            </label>
-                            <label className="grid gap-1 text-xs">
-                              <span className="text-muted-foreground">单位（可选）</span>
-                              <Input
-                                disabled={!allowed}
-                                value={pt.unit}
-                                placeholder="degC"
-                                className="h-8 font-mono text-xs"
-                                onChange={(e) => updatePoint(index, { unit: e.currentTarget.value })}
-                              />
-                            </label>
-                            <div className="flex items-end pb-1">
-                              <div className="flex items-center gap-2">
-                                <Checkbox
-                                  id={`point-writable-${index}`}
-                                  checked={pt.pointType === 'COMMAND' ? true : pt.writable}
-                                  disabled={!allowed || pt.pointType !== 'SETTING'}
-                                  onCheckedChange={(checked) => updatePoint(index, { writable: checked === true })}
-                                />
-                                <Label htmlFor={`point-writable-${index}`} className="text-xs font-normal">
-                                  允许写入
-                                </Label>
-                              </div>
-                            </div>
-                          </div>
-                          {pt.pointType === 'COUNTER' ? (
-                            <div className="grid gap-2 sm:grid-cols-2">
-                              <label className="grid gap-1 text-xs">
-                                <span className="text-muted-foreground">累计量下降处理</span>
-                                <Select
-                                  disabled={!allowed}
-                                  value={pt.counterDecreaseMode || 'RESET_TO_ZERO'}
-                                  onValueChange={(value) => {
-                                    if (!isOneOf(TEMPLATE_COUNTER_DECREASE_MODES, value)) return;
-                                    updatePoint(index, { counterDecreaseMode: value });
-                                  }}
-                                >
-                                  <SelectTrigger className="h-8 text-xs">
-                                    <SelectValue />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="RESET_TO_ZERO">RESET_TO_ZERO</SelectItem>
-                                    <SelectItem value="ROLLOVER">ROLLOVER</SelectItem>
-                                    <SelectItem value="INVALID">INVALID</SelectItem>
-                                  </SelectContent>
-                                </Select>
-                              </label>
-                              <label className="grid gap-1 text-xs">
-                                <span className="text-muted-foreground">回绕模数（ROLLOVER 必填）</span>
-                                <Input
-                                  type="number"
-                                  disabled={!allowed || pt.counterDecreaseMode !== 'ROLLOVER'}
-                                  value={pt.counterRolloverModulus}
-                                  className="h-8 font-mono text-xs tabular-nums"
-                                  onChange={(e) => updatePoint(index, { counterRolloverModulus: e.currentTarget.value })}
-                                />
-                              </label>
-                            </div>
-                          ) : null}
-                          <div className="grid gap-2 sm:grid-cols-3">
-                            <label className="grid gap-1 text-xs">
-                              <span className="text-muted-foreground">采样 ms</span>
-                              <Input
-                                type="number"
-                                min={100}
-                                disabled={!allowed}
-                                value={pt.sampleIntervalMs}
-                                className="h-8 font-mono text-xs tabular-nums"
-                                onChange={(e) => updatePoint(index, { sampleIntervalMs: e.currentTarget.value })}
-                              />
-                            </label>
-                            <label className="grid gap-1 text-xs">
-                              <span className="text-muted-foreground">发布 ms</span>
-                              <Input
-                                type="number"
-                                min={100}
-                                disabled={!allowed}
-                                value={pt.publishIntervalMs}
-                                className="h-8 font-mono text-xs tabular-nums"
-                                onChange={(e) => updatePoint(index, { publishIntervalMs: e.currentTarget.value })}
-                              />
-                            </label>
-                            <label className="grid gap-1 text-xs">
-                              <span className="text-muted-foreground">陈旧 ms</span>
-                              <Input
-                                type="number"
-                                min={100}
-                                disabled={!allowed}
-                                value={pt.staleAfterMs}
-                                className="h-8 font-mono text-xs tabular-nums"
-                                onChange={(e) => updatePoint(index, { staleAfterMs: e.currentTarget.value })}
-                              />
-                            </label>
-                          </div>
-                          <div className="grid gap-2 sm:grid-cols-3">
-                            <label className="grid gap-1 text-xs">
-                              <span className="text-muted-foreground">数值下限（可选）</span>
-                              <Input
-                                inputMode="decimal"
-                                disabled={!allowed || pt.valueType !== 'NUMBER'}
-                                value={pt.minimumNumber}
-                                placeholder="0"
-                                className="h-8 font-mono text-xs tabular-nums"
-                                onChange={(e) => updatePoint(index, { minimumNumber: e.currentTarget.value })}
-                              />
-                            </label>
-                            <label className="grid gap-1 text-xs">
-                              <span className="text-muted-foreground">数值上限（可选）</span>
-                              <Input
-                                inputMode="decimal"
-                                disabled={!allowed || pt.valueType !== 'NUMBER'}
-                                value={pt.maximumNumber}
-                                placeholder="100"
-                                className="h-8 font-mono text-xs tabular-nums"
-                                onChange={(e) => updatePoint(index, { maximumNumber: e.currentTarget.value })}
-                              />
-                            </label>
-                            <label className="grid gap-1 text-xs">
-                              <span className="text-muted-foreground">卡死告警秒数（可选）</span>
-                              <Input
-                                type="number"
-                                min={60}
-                                disabled={!allowed}
-                                value={pt.flatlineSeconds}
-                                placeholder="300"
-                                className="h-8 font-mono text-xs tabular-nums"
-                                onChange={(e) => updatePoint(index, { flatlineSeconds: e.currentTarget.value })}
-                              />
-                            </label>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                <div className="space-y-2.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold text-foreground">
-                      控制能力规格（{structuredDraft.capabilityProfiles.length} 项）
-                    </span>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      disabled={!allowed}
-                      onClick={() => {
-                        setStructuredDraft((current) => ({
-                          ...current,
-                          capabilityProfiles: [...current.capabilityProfiles, createEmptyCapabilityProfileDraft()],
-                        }));
-                        setReleaseDirty(true);
-                      }}
-                    >
-                      <Plus data-icon="inline-start" />
-                      新增控制能力
-                    </Button>
-                  </div>
-
-                  {structuredDraft.capabilityProfiles.length === 0 ? (
-                    <p className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
-                      未配置控制能力规格；适用于仅采集遥测而不下发写指令的设备。
-                    </p>
-                  ) : (
-                    <div className="space-y-2.5">
-                      {structuredDraft.capabilityProfiles.map((cap, index) => (
-                        <div key={index} className="space-y-2 rounded-lg border bg-muted/30 p-3">
-                          <div className="flex items-center justify-between">
-                            <span className="text-xs font-medium text-muted-foreground">能力 #{index + 1}</span>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon-xs"
-                              disabled={!allowed}
-                              aria-label={`删除控制能力 ${index + 1}`}
-                              onClick={() => {
-                                setStructuredDraft((current) => ({
-                                  ...current,
-                                  capabilityProfiles: current.capabilityProfiles.filter((_, i) => i !== index),
-                                }));
-                                setReleaseDirty(true);
-                              }}
-                            >
-                              <Trash2 className="size-3.5" />
-                            </Button>
-                          </div>
-                          <div className="grid gap-2 sm:grid-cols-3">
-                            <label className="grid gap-1 text-xs">
-                              <span className="text-muted-foreground">能力名称</span>
-                              <Input
-                                disabled={!allowed}
-                                value={cap.capabilityName}
-                                placeholder="set_chw_setpoint"
-                                className="h-8 font-mono text-xs"
-                                onChange={(e) => updateCapability(index, { capabilityName: e.currentTarget.value })}
-                              />
-                            </label>
-                            <label className="grid gap-1 text-xs">
-                              <span className="text-muted-foreground">能力版本</span>
-                              <Input
-                                disabled={!allowed}
-                                value={cap.capabilityRevision}
-                                placeholder="v1"
-                                className="h-8 font-mono text-xs"
-                                onChange={(e) => updateCapability(index, { capabilityRevision: e.currentTarget.value })}
-                              />
-                            </label>
-                            <label className="grid gap-1 text-xs">
-                              <span className="text-muted-foreground">连接器类型</span>
-                              <Input
-                                disabled={!allowed}
-                                value={cap.connectorKind}
-                                placeholder="MODBUS_TCP"
-                                className="h-8 font-mono text-xs"
-                                onChange={(e) => updateCapability(index, { connectorKind: e.currentTarget.value })}
-                              />
-                            </label>
-                          </div>
-                          <div className="grid gap-2 sm:grid-cols-4">
-                            <label className="grid gap-1 text-xs">
-                              <span className="text-muted-foreground">规范单位</span>
-                              <Input
-                                disabled={!allowed}
-                                value={cap.canonicalUnit}
-                                placeholder="degC"
-                                className="h-8 font-mono text-xs"
-                                onChange={(e) => updateCapability(index, { canonicalUnit: e.currentTarget.value })}
-                              />
-                            </label>
-                            <label className="grid gap-1 text-xs">
-                              <span className="text-muted-foreground">最小值</span>
-                              <Input
-                                inputMode="decimal"
-                                disabled={!allowed}
-                                value={cap.minimumValue}
-                                className="h-8 font-mono text-xs tabular-nums"
-                                onChange={(e) => updateCapability(index, { minimumValue: e.currentTarget.value })}
-                              />
-                            </label>
-                            <label className="grid gap-1 text-xs">
-                              <span className="text-muted-foreground">最大值</span>
-                              <Input
-                                inputMode="decimal"
-                                disabled={!allowed}
-                                value={cap.maximumValue}
-                                className="h-8 font-mono text-xs tabular-nums"
-                                onChange={(e) => updateCapability(index, { maximumValue: e.currentTarget.value })}
-                              />
-                            </label>
-                            <label className="grid gap-1 text-xs">
-                              <span className="text-muted-foreground">最大步长</span>
-                              <Input
-                                inputMode="decimal"
-                                disabled={!allowed}
-                                value={cap.maximumDelta}
-                                className="h-8 font-mono text-xs tabular-nums"
-                                onChange={(e) => updateCapability(index, { maximumDelta: e.currentTarget.value })}
-                              />
-                            </label>
-                          </div>
-                          <div className="grid gap-2 sm:grid-cols-3">
-                            <label className="grid gap-1 text-xs">
-                              <span className="text-muted-foreground">状态</span>
-                              <Select
-                                disabled={!allowed}
-                                value={cap.status}
-                                onValueChange={(value) => {
-                                  if (isOneOf(CAPABILITY_STATUSES, value)) updateCapability(index, { status: value });
-                                }}
-                              >
-                                <SelectTrigger className="h-8 text-xs">
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  <SelectItem value="VERIFIED">VERIFIED</SelectItem>
-                                  <SelectItem value="DRAFT">DRAFT</SelectItem>
-                                </SelectContent>
-                              </Select>
-                            </label>
-                            <label className="grid gap-1 text-xs">
-                              <span className="text-muted-foreground">风险等级</span>
-                              <Select
-                                disabled={!allowed}
-                                value={cap.riskLevel}
-                                onValueChange={(value) => {
-                                  if (isOneOf(CAPABILITY_RISK_LEVELS, value)) updateCapability(index, { riskLevel: value });
-                                }}
-                              >
-                                <SelectTrigger className="h-8 text-xs">
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {CAPABILITY_RISK_LEVELS.map((lv) => (
-                                    <SelectItem key={lv} value={lv}>
-                                      {riskLevelLabel(lv)} ({lv})
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                            </label>
-                            <label className="grid gap-1 text-xs">
-                              <span className="text-muted-foreground">审批策略</span>
-                              <Select
-                                disabled={!allowed}
-                                value={cap.approvalPolicy}
-                                onValueChange={(value) => {
-                                  if (isOneOf(CAPABILITY_APPROVAL_POLICIES, value)) {
-                                    updateCapability(index, { approvalPolicy: value });
-                                  }
-                                }}
-                              >
-                                <SelectTrigger className="h-8 text-xs">
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {CAPABILITY_APPROVAL_POLICIES.map((ap) => (
-                                    <SelectItem key={ap} value={ap}>
-                                      {approvalPolicyLabel(ap)}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                            </label>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <label className="grid gap-1.5 text-sm">
-                <span>模板内容 JSON</span>
-                <Textarea
-                  disabled={!allowed}
-                  rows={8}
-                  className="font-mono text-xs"
-                  value={releaseDraft.payloadJson}
-                  onChange={(event) => {
-                    const value = event.currentTarget.value;
-                    setReleaseDraft((current) => ({ ...current, payloadJson: value }));
-                    setReleaseDirty(true);
-                  }}
-                />
-              </label>
-            )}
-
-            <div className="space-y-2 border-t border-divider pt-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-foreground">发布引用（Key-Value）</span>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={!allowed}
-                  onClick={() => {
-                    setReferenceEntries((current) => [...current, { key: '', value: '' }]);
-                    setReleaseDirty(true);
-                  }}
-                >
-                  <Plus data-icon="inline-start" />
-                  添加引用
-                </Button>
-              </div>
-              <div className="space-y-1.5">
-                {referenceEntries.map((entry, index) => (
-                  <div key={index} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-2">
-                    <Input
-                      disabled={!allowed}
-                      aria-label={`发布引用键 ${index + 1}`}
-                      placeholder="registrySchema"
-                      value={entry.key}
-                      className="h-8 font-mono text-xs"
-                      onChange={(event) => {
-                        const val = event.currentTarget.value;
-                        setReferenceEntries((current) =>
-                          current.map((item, i) => (i === index ? { ...item, key: val } : item)),
-                        );
-                        setReleaseDirty(true);
-                      }}
-                    />
-                    <Input
-                      disabled={!allowed}
-                      aria-label={`发布引用值 ${index + 1}`}
-                      placeholder="v1"
-                      value={entry.value}
-                      className="h-8 font-mono text-xs"
-                      onChange={(event) => {
-                        const val = event.currentTarget.value;
-                        setReferenceEntries((current) =>
-                          current.map((item, i) => (i === index ? { ...item, value: val } : item)),
-                        );
-                        setReleaseDirty(true);
-                      }}
-                    />
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-sm"
-                      disabled={!allowed || referenceEntries.length <= 1}
-                      aria-label={`删除发布引用 ${index + 1}`}
-                      onClick={() => {
-                        setReferenceEntries((current) => current.filter((_, i) => i !== index));
-                        setReleaseDirty(true);
-                      }}
-                    >
-                      <Trash2 className="size-3.5" />
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <label className="grid gap-1.5 text-sm">
-              <span>发布原因</span>
-              <Textarea
-                disabled={!allowed}
-                rows={2}
-                value={releaseDraft.reason}
-                onChange={(event) => {
-                  const value = event.currentTarget.value;
-                  setReleaseDraft((current) => ({ ...current, reason: value }));
-                  setReleaseDirty(true);
-                }}
-              />
-            </label>
-            <Button
-              disabled={!allowed || working || !releaseDraft.templateKey.trim() || !releaseDraft.reason.trim()}
-              onClick={() => void releaseTemplate()}
-            >
-              {working ? '正在处理…' : '发布新版本'}
-            </Button>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Send className="size-4" />
-              模板目录与应用
-            </CardTitle>
-            <CardDescription>
-              从持久化模板目录选择已发布版本预览详情并应用到当前站点的资产、设备或点位。
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <label className="grid gap-1.5 text-sm">
-              <span>对象类型</span>
-              <Select
-                disabled={!allowed}
-                value={assignmentDraft.targetType}
-                onValueChange={(value) => {
-                  if (!isOneOf(TEMPLATE_KINDS, value)) return;
-                  setAssignmentDraft((current) => ({ ...current, targetType: value, targetId: '' }));
-                  setAssignmentDirty(true);
-                }}
-              >
-                <SelectTrigger aria-label="应用对象类型">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    {TEMPLATE_KINDS.map((kind) => (
-                      <SelectItem key={kind} value={kind}>
-                        {kindLabel(kind)}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            </label>
-
-            <label className="grid gap-1.5 text-sm">
-              <span>应用对象</span>
-              <Select
-                disabled={!allowed || targets.length === 0}
-                value={assignmentDraft.targetId || undefined}
-                onValueChange={(value) => {
-                  setAssignmentDraft((current) => ({ ...current, targetId: value }));
-                  setAssignmentDirty(true);
-                }}
-              >
-                <SelectTrigger aria-label="选择应用对象">
-                  <SelectValue placeholder="选择对象" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    {targets.map((target) => (
-                      <SelectItem key={target.value} value={target.value}>
-                        {target.label}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            </label>
-
-            <label className="grid gap-1.5 text-sm">
-              <span>已发布模板版本</span>
-              <Select
-                disabled={!allowed || revisionOptions.length === 0}
-                value={assignmentDraft.templateRevisionId || undefined}
-                onValueChange={(value) => {
-                  const opt = revisionOptions.find((item) => item.id === value);
-                  setSelectedCatalogRevisionId(value);
-                  setAssignmentDraft((current) => ({
-                    ...current,
-                    templateRevisionId: value,
-                    targetType: opt?.kind ?? current.targetType,
-                  }));
-                  setAssignmentDirty(true);
-                }}
-              >
-                <SelectTrigger aria-label="选择模板版本">
-                  <SelectValue placeholder="选择已发布版本" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    {revisionOptions.map((option) => (
-                      <SelectItem key={option.id} value={option.id}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            </label>
-
-            <label className="grid gap-1.5 text-sm">
-              <span>应用原因</span>
-              <Textarea
-                disabled={!allowed}
-                rows={2}
-                value={assignmentDraft.reason}
-                onChange={(event) => {
-                  const value = event.currentTarget.value;
-                  setAssignmentDraft((current) => ({ ...current, reason: value }));
-                  setAssignmentDirty(true);
-                }}
-              />
-            </label>
-
-            <Button
-              disabled={
-                !allowed ||
-                working ||
-                !assignmentDraft.targetId ||
-                !assignmentDraft.templateRevisionId ||
-                !assignmentDraft.reason.trim()
-              }
-              onClick={() => void assignTemplate()}
-            >
-              {working ? '正在处理…' : '从现在起应用'}
-            </Button>
-
-            {previewRevision && previewSummary ? (
-              <div className="space-y-2 rounded-lg border bg-muted/30 p-3 text-xs">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <strong className="font-mono text-foreground">
-                    {previewRevision.templateKey} · 第 {previewRevision.revisionNumber} 版
-                  </strong>
-                  <div className="flex items-center gap-1.5">
-                    <span className="font-mono text-muted-foreground tabular-nums">
-                      {formatTimestamp(previewRevision.releasedAt)}
-                    </span>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      disabled={!allowed}
-                      onClick={() => loadRevisionIntoReleaseDraft(previewRevision)}
-                    >
-                      载入到发布草稿
-                    </Button>
-                  </div>
-                </div>
-                <div className="flex flex-wrap gap-1.5">
-                  <span className="rounded bg-background px-2 py-0.5 border">
-                    {kindLabel(previewRevision.templateKind)}
-                  </span>
-                  {previewSummary.deviceType ? (
-                    <span className="rounded bg-background px-2 py-0.5 border font-mono">
-                      {previewSummary.deviceType}
-                    </span>
-                  ) : null}
-                  {previewSummary.standardPointCount > 0 ? (
-                    <span className="rounded bg-background px-2 py-0.5 border tabular-nums">
-                      标准点位 {previewSummary.standardPointCount} 项
-                    </span>
-                  ) : null}
-                  {previewSummary.capabilityCount > 0 ? (
-                    <span className="rounded bg-background px-2 py-0.5 border tabular-nums">
-                      控制能力 {previewSummary.capabilityCount} 项
-                    </span>
-                  ) : null}
-                  {previewSummary.modbusDriverSummary ? (
-                    <span className="rounded border bg-background px-2 py-0.5 tabular-nums">
-                      {formatTemplateDriverSummary(previewSummary.modbusDriverSummary)}
-                    </span>
-                  ) : null}
-                </div>
-                <div className="text-muted-foreground">
-                  发布引用：
-                  {Object.entries(previewRevision.releaseReferences)
-                    .map(([k, v]) => `${k}=${v}`)
-                    .join(' · ')}
-                </div>
-              </div>
-            ) : null}
-
-            <div className="space-y-2 border-t border-divider pt-3">
-              <div className="flex items-center justify-between">
-                <p className="text-xs text-muted-foreground">
-                  租户模板目录（{templates.length} 项）
-                </p>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  disabled={templatesQuery.isFetching}
-                  onClick={() => void templatesQuery.refetch()}
-                >
-                  <RefreshCw className={templatesQuery.isFetching ? 'motion-safe:animate-spin' : undefined} />
-                  刷新目录
-                </Button>
-              </div>
-              {templatesQuery.isLoading ? (
-                <div className="rounded-md border p-4 text-xs text-muted-foreground">正在读取模板目录…</div>
-              ) : templates.length === 0 ? (
-                <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
-                  当前租户尚未发布模板版本
-                </div>
-              ) : (
-                <div className="max-h-60 space-y-2 overflow-y-auto pr-1">
-                  {templates.map((tpl) => {
-                    const revId = tpl.latestRevisionId;
-                    const selected = Boolean(revId && previewRevisionId === revId);
-                    return (
-                      <div
-                        key={tpl.id}
-                        className="flex items-center justify-between gap-3 rounded-md border p-2.5"
-                      >
-                        <div className="min-w-0">
-                          <strong className="block truncate font-mono text-xs">{tpl.templateKey}</strong>
-                          <span className="text-xs text-muted-foreground tabular-nums">
-                            {tpl.latestRevisionNumber ? `最新第 ${tpl.latestRevisionNumber} 版` : '待发布'} · {kindLabel(tpl.templateKind)}
-                          </span>
-                        </div>
-                        <div className="flex shrink-0 items-center gap-1">
-                          {revId ? (
-                            <>
-                              <Button
-                                type="button"
-                                variant={selected ? 'outline' : 'ghost'}
-                                size="sm"
-                                onClick={() => setSelectedCatalogRevisionId(revId)}
-                              >
-                                预览
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                disabled={!allowed}
-                                onClick={() => {
-                                  setSelectedCatalogRevisionId(revId);
-                                  setAssignmentDraft((current) => ({
-                                    ...current,
-                                    targetType: tpl.templateKind,
-                                    targetId: current.targetType === tpl.templateKind ? current.targetId : '',
-                                    templateRevisionId: revId,
-                                    reason: `应用 ${tpl.templateKey} 第 ${tpl.latestRevisionNumber ?? 1} 版`,
-                                  }));
-                                  setAssignmentDirty(true);
-                                }}
-                              >
-                                选用
-                              </Button>
-                            </>
-                          ) : null}
-                        </div>
-                      </div>
-                    );
-                  })}
-                  {templatesQuery.hasNextPage ? (
-                    <div className="flex justify-center pt-1">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        disabled={templatesQuery.isFetchingNextPage}
-                        onClick={() => void templatesQuery.fetchNextPage()}
-                      >
-                        加载更多模板
-                      </Button>
-                    </div>
-                  ) : null}
-                </div>
-              )}
-            </div>
-          </CardContent>
-        </Card>
+        <TemplateCatalogAssignCard
+          allowed={allowed}
+          working={working}
+          assignmentDraft={assignmentDraft}
+          targets={targets}
+          revisionOptions={revisionOptions}
+          previewRevision={previewRevision}
+          previewSummary={previewSummary}
+          previewRevisionId={previewRevisionId}
+          templates={templates}
+          templatesLoading={templatesQuery.isLoading}
+          templatesFetching={templatesQuery.isFetching}
+          hasNextTemplatesPage={templatesQuery.hasNextPage}
+          isFetchingNextTemplates={templatesQuery.isFetchingNextPage}
+          onAssignmentDraftChange={(patch, selectedRevisionId) => {
+            if (selectedRevisionId !== undefined) {
+              setSelectedCatalogRevisionId(selectedRevisionId);
+            }
+            setAssignmentDraft((current) => ({ ...current, ...patch }));
+            setAssignmentDirty(true);
+          }}
+          onAssign={() => void assignTemplate()}
+          onLoadRevisionIntoReleaseDraft={loadRevisionIntoReleaseDraft}
+          onSelectPreviewRevision={setSelectedCatalogRevisionId}
+          onRefreshTemplates={() => void templatesQuery.refetch()}
+          onFetchNextTemplates={() => void templatesQuery.fetchNextPage()}
+        />
       </div>
 
       <DataTableBlock

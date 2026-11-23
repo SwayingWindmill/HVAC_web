@@ -1,22 +1,38 @@
 import { formatTelemetryDisplayValue, formatTelemetryUnit, telemetryPointDefinition } from '../shared/centralPlantTelemetry';
+import {
+  buildParallelBranchGroups,
+  cleanBranchCode,
+  classifyPlantCategory,
+  EQUIPMENT_CATEGORIES,
+  findLoopDifferentialPressure,
+  inferHydraulicAssetIndex,
+  isPlantDeviceRunning,
+  parseRunState,
+  parseWaterLoop,
+  PLANT_CATEGORY_LABELS as CATEGORY_LABELS,
+  PLANT_CATEGORY_ORDER as CATEGORY_ORDER,
+  RUN_STATE_NAMESPACE_BY_CATEGORY,
+  WATER_LOOP_LABELS,
+  WATER_LOOP_ORDER,
+  type HydraulicAssetMeta,
+  type PlantCategory,
+  type RunState,
+  type WaterLoopKind,
+} from '../shared/plantTopology';
 import { GatewayError, type Gateway } from './gateway';
 
 // The plant as the web's 实时运行 and 设备 pages read it (apps/hvac-web/src/features/operations/realtime/plant-model.ts
-// over features/assets): the same equipment roles, run states and readings from the Site's asset model and the
-// devices' current snapshots. test/plant-parity.test.ts runs both over the same recorded data.
+// over shared/plantTopology.ts): identical equipment roles, run states, hydraulic branches and readings.
+// test/plant-parity.test.ts runs both over the same recorded data.
 
-export type WaterLoopKind = 'CHILLED_WATER' | 'CONDENSER_WATER' | 'COOLING_TOWER_LOOP';
-
-export const WATER_LOOP_ORDER: readonly WaterLoopKind[] = [
-  'CHILLED_WATER',
-  'CONDENSER_WATER',
-  'COOLING_TOWER_LOOP',
-];
-
-export const WATER_LOOP_LABELS: Readonly<Record<WaterLoopKind, string>> = {
-  CHILLED_WATER: '冷冻水环路',
-  CONDENSER_WATER: '冷却水环路',
-  COOLING_TOWER_LOOP: '冷却塔外循环',
+export {
+  CATEGORY_LABELS,
+  EQUIPMENT_CATEGORIES,
+  WATER_LOOP_LABELS,
+  WATER_LOOP_ORDER,
+  type PlantCategory,
+  type RunState,
+  type WaterLoopKind,
 };
 
 export interface AssetModel {
@@ -85,77 +101,6 @@ export interface SnapshotsResponse {
   readonly items: readonly { readonly deviceId: string; readonly status: string; readonly snapshot?: Snapshot }[];
 }
 
-export type PlantCategory =
-  | 'CHILLER' | 'CHILLED_WATER_PUMP' | 'COOLING_WATER_PUMP' | 'COOLING_TOWER'
-  | 'ZONE' | 'METER' | 'WEATHER' | 'ACQUISITION' | 'OTHER';
-
-const CATEGORY_ORDER: readonly PlantCategory[] = [
-  'CHILLER', 'CHILLED_WATER_PUMP', 'COOLING_WATER_PUMP', 'COOLING_TOWER', 'ZONE', 'METER', 'WEATHER', 'ACQUISITION', 'OTHER',
-];
-
-export const CATEGORY_LABELS: Readonly<Record<PlantCategory, string>> = {
-  CHILLER: '冷水机组',
-  CHILLED_WATER_PUMP: '冷冻水泵',
-  COOLING_WATER_PUMP: '冷却水泵',
-  COOLING_TOWER: '冷却塔',
-  ZONE: '室内环境',
-  METER: '计量',
-  WEATHER: '室外环境',
-  ACQUISITION: '采集与控制',
-  OTHER: '其他设备',
-};
-
-const CATEGORY_BY_ASSET_TYPE: Readonly<Record<string, PlantCategory>> = {
-  CHILLER: 'CHILLER',
-  CHILLED_WATER_PUMP: 'CHILLED_WATER_PUMP',
-  COOLING_WATER_PUMP: 'COOLING_WATER_PUMP',
-  COOLING_TOWER: 'COOLING_TOWER',
-  ISOLATION_VALVE: 'ACQUISITION',
-  MOTORIZED_VALVE: 'ACQUISITION',
-  DIFFERENTIAL_PRESSURE_SENSOR: 'METER',
-  HVAC_POWER_METER: 'METER',
-  POWER_METER: 'METER',
-  BTU_METER: 'METER',
-  WEATHER_STATION: 'WEATHER',
-  ZONE_TEMPERATURE_SENSOR: 'ZONE',
-};
-
-const CATEGORY_BY_SOURCE_NAMESPACE: Readonly<Record<string, PlantCategory>> = {
-  chiller: 'CHILLER',
-  chwp: 'CHILLED_WATER_PUMP',
-  cwp: 'COOLING_WATER_PUMP',
-  cooling_tower: 'COOLING_TOWER',
-  valve: 'ACQUISITION',
-  vfd: 'ACQUISITION',
-  dp_sensor: 'METER',
-  header: 'METER',
-  branch: 'METER',
-  hvac_meter: 'METER',
-  btu_meter: 'METER',
-  weather: 'WEATHER',
-  zone: 'ZONE',
-};
-
-const CATEGORY_BY_DEVICE_TYPE: Readonly<Record<string, PlantCategory>> = {
-  ISOLATION_VALVE: 'ACQUISITION',
-  MOTORIZED_VALVE: 'ACQUISITION',
-  DIFFERENTIAL_PRESSURE_SENSOR: 'METER',
-  HVAC_POWER_METER: 'METER',
-  POWER_METER: 'METER',
-  BTU_METER: 'METER',
-  FLOW_METER: 'METER',
-  TEMPERATURE_MODULE: 'ACQUISITION',
-  CONTROL_MODULE: 'ACQUISITION',
-};
-
-const RUN_STATE_NAMESPACE: Partial<Record<PlantCategory, string>> = {
-  CHILLER: 'chiller', CHILLED_WATER_PUMP: 'chwp', COOLING_WATER_PUMP: 'cwp', COOLING_TOWER: 'cooling_tower',
-};
-
-/** The plant's moving equipment; meters and the weather station never run. */
-export const EQUIPMENT_CATEGORIES: ReadonlySet<PlantCategory> = new Set<PlantCategory>(['CHILLER', 'CHILLED_WATER_PUMP', 'COOLING_WATER_PUMP', 'COOLING_TOWER']);
-
-export type RunState = 'RUNNING' | 'STOPPED' | 'FAULT' | 'UNKNOWN';
 export type Connection = 'ONLINE' | 'OFFLINE' | 'UNKNOWN';
 
 export interface PlantReading {
@@ -286,125 +231,11 @@ function presentValue(snapshot: Snapshot | undefined, available: boolean, point:
   return value && value.state === 'PRESENT' ? value.value : undefined;
 }
 
-function parseWaterLoop(value: string | null | undefined): WaterLoopKind | null {
-  if (value === 'CHILLED_WATER' || value === 'CONDENSER_WATER' || value === 'COOLING_TOWER_LOOP') return value;
-  return null;
-}
-
-function cleanBranchCode(value: string | null | undefined): string | null {
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
-}
-
-interface HydraulicAssetMeta {
-  readonly waterLoop: WaterLoopKind | null;
-  readonly branchCode: string | null;
-}
-
 function buildHydraulicAssetIndex(model: AssetModel, now: Date): Map<string, HydraulicAssetMeta> {
-  const byAssetId = new Map<string, HydraulicAssetMeta>();
-  for (const asset of model.assets) {
-    byAssetId.set(asset.id, {
-      waterLoop: parseWaterLoop(asset.waterLoop),
-      branchCode: cleanBranchCode(asset.branchCode),
-    });
-  }
-  const branchTargets = new Map<string, { waterLoop: WaterLoopKind | null; branchCode: string }[]>();
-  const loopTargets = new Map<string, WaterLoopKind[]>();
-  for (const rel of model.relationships) {
-    if (!isCurrentRelationship(rel, now) || rel.fromType !== 'ASSET' || rel.toType !== 'ASSET') continue;
-    const role = rel.role ?? '';
-    if (role !== 'ISOLATES' && role !== 'SERVES' && role !== 'FEEDS_HEADER') continue;
-    const toMeta = byAssetId.get(rel.toId);
-    if (!toMeta) continue;
-    if (toMeta.waterLoop) {
-      const list = loopTargets.get(rel.fromId) ?? [];
-      list.push(toMeta.waterLoop);
-      loopTargets.set(rel.fromId, list);
-    }
-    if ((role === 'ISOLATES' || role === 'SERVES') && toMeta.branchCode) {
-      const list = branchTargets.get(rel.fromId) ?? [];
-      list.push({ waterLoop: toMeta.waterLoop, branchCode: toMeta.branchCode });
-      branchTargets.set(rel.fromId, list);
-    }
-  }
-  for (const [assetId, meta] of byAssetId.entries()) {
-    let waterLoop = meta.waterLoop;
-    let branchCode = meta.branchCode;
-    if (!branchCode) {
-      const candidates = branchTargets.get(assetId) ?? [];
-      const keys = new Set(candidates.map((item) => `${item.waterLoop ?? ''}::${item.branchCode}`));
-      if (keys.size === 1 && candidates[0]) {
-        branchCode = candidates[0].branchCode;
-        waterLoop ??= candidates[0].waterLoop;
-      }
-    }
-    if (!waterLoop) {
-      const candidates = new Set(loopTargets.get(assetId) ?? []);
-      if (candidates.size === 1) [waterLoop] = [...candidates];
-    }
-    byAssetId.set(assetId, { waterLoop, branchCode });
-  }
-  return byAssetId;
-}
-
-function branchDeviceOrder(device: PlantDevice): number {
-  if (device.category === 'CHILLER') return 0;
-  if (device.category === 'CHILLED_WATER_PUMP') return 1;
-  if (device.category === 'COOLING_WATER_PUMP') return 2;
-  if (device.category === 'COOLING_TOWER') return 3;
-  if (device.assetType === 'MOTORIZED_VALVE' || device.assetType === 'ISOLATION_VALVE'
-    || device.reading('valve.open_state') !== null || device.reading('valve.position_feedback') !== null) {
-    return 4;
-  }
-  if (device.category === 'METER') return 5;
-  return 6;
-}
-
-function buildParallelBranches(devices: readonly PlantDevice[]): {
-  branches: readonly ParallelBranch[];
-  loopBranches: Readonly<Partial<Record<WaterLoopKind, number>>>;
-} {
-  const grouped = new Map<string, { waterLoop: WaterLoopKind | null; branchCode: string; devices: PlantDevice[] }>();
-  for (const device of devices) {
-    if (!device.branchCode) continue;
-    const key = `${device.waterLoop ?? 'UNSPECIFIED'}::${device.branchCode}`;
-    const existing = grouped.get(key);
-    if (existing) existing.devices.push(device);
-    else grouped.set(key, { waterLoop: device.waterLoop, branchCode: device.branchCode, devices: [device] });
-  }
-  const branches: ParallelBranch[] = [...grouped.entries()]
-    .map(([key, group]) => {
-      const sortedDevices = [...group.devices].sort((left, right) => {
-        const rank = branchDeviceOrder(left) - branchDeviceOrder(right);
-        if (rank !== 0) return rank;
-        const byName = left.name.localeCompare(right.name, 'zh-CN');
-        return byName !== 0 ? byName : left.deviceId.localeCompare(right.deviceId);
-      });
-      const equipment = sortedDevices.filter((device) => EQUIPMENT_CATEGORIES.has(device.category));
-      return {
-        key,
-        waterLoop: group.waterLoop,
-        loopLabel: group.waterLoop ? WATER_LOOP_LABELS[group.waterLoop] : '水系统',
-        branchCode: group.branchCode,
-        devices: sortedDevices,
-        equipmentCount: equipment.length,
-        runningCount: equipment.filter(isRunning).length,
-        hasAlert: sortedDevices.some((device) => device.connection === 'OFFLINE' || device.runState === 'FAULT' || device.hasStaleData),
-      };
-    })
-    .sort((left, right) => {
-      const leftRank = left.waterLoop ? WATER_LOOP_ORDER.indexOf(left.waterLoop) : 99;
-      const rightRank = right.waterLoop ? WATER_LOOP_ORDER.indexOf(right.waterLoop) : 99;
-      if (leftRank !== rightRank) return leftRank - rightRank;
-      return left.branchCode.localeCompare(right.branchCode, 'zh-CN', { numeric: true });
-    });
-  const loopCounts: Partial<Record<WaterLoopKind, number>> = {};
-  for (const branch of branches) {
-    if (branch.waterLoop) loopCounts[branch.waterLoop] = (loopCounts[branch.waterLoop] ?? 0) + 1;
-  }
-  return { branches, loopBranches: loopCounts };
+  return inferHydraulicAssetIndex(
+    model.assets,
+    model.relationships.filter((rel) => isCurrentRelationship(rel, now)),
+  );
 }
 
 function toDevice(
@@ -423,14 +254,13 @@ function toDevice(
   const readings = active.filter((point) => point.pointType !== 'COMMAND')
     .map((point) => readingOf(point, valueByKey.get(point.pointCode), available));
 
-  let category: PlantCategory | undefined = asset ? CATEGORY_BY_ASSET_TYPE[asset.assetType] : undefined;
-  for (const point of points) {
-    if (category) break;
-    category = CATEGORY_BY_SOURCE_NAMESPACE[point.sourceKey.split('.')[0]];
-  }
-  category ??= CATEGORY_BY_DEVICE_TYPE[device.deviceType] ?? 'OTHER';
+  const category = classifyPlantCategory({
+    assetType: asset?.assetType ?? null,
+    sourceKeys: points.map((point) => point.sourceKey),
+    deviceType: device.deviceType,
+  });
 
-  const namespace = RUN_STATE_NAMESPACE[category];
+  const namespace = RUN_STATE_NAMESPACE_BY_CATEGORY[category];
   const runValue = namespace ? presentValue(snapshot, available, points.find((point) => point.sourceKey === `${namespace}.run_state`)) : undefined;
   const faultValue = presentValue(snapshot, available, points.find((point) => point.sourceKey.endsWith('.fault_code')));
   const presence = available && snapshot && snapshot.presence.applicability === 'APPLICABLE' ? snapshot.presence.currentState : null;
@@ -448,7 +278,7 @@ function toDevice(
     waterLoop: meta?.waterLoop ?? null,
     branchCode: meta?.branchCode ?? null,
     connection: presence === 'ONLINE' || presence === 'OFFLINE' ? presence : 'UNKNOWN',
-    runState: runValue === 'RUNNING' || runValue === 'STOPPED' || runValue === 'FAULT' ? runValue : 'UNKNOWN',
+    runState: parseRunState(runValue),
     faultCode: typeof faultValue === 'string' && faultValue.trim() ? faultValue.trim() : null,
     latestSampleAt: latest(readings.map((reading) => reading.sampledAt)),
     hasStaleData: readings.some((reading) => reading.stale),
@@ -498,7 +328,7 @@ export function buildPlant(model: AssetModel, snapshots: SnapshotsResponse, now:
     }))
     .filter((group) => group.devices.length > 0);
   const devices = groups.flatMap((group) => group.devices);
-  const { branches, loopBranches } = buildParallelBranches(devices);
+  const { branches, loopBranches } = buildParallelBranchGroups(devices);
   const totalPower = firstReading(devices, 'hvac_meter.active_power');
   const coolingCapacity = firstReading(devices, 'btu_meter.instant_cooling_capacity');
   const plantCop = totalPower?.current && (coolingCapacity?.current || coolingCapacity?.lowConfidence)
@@ -521,7 +351,7 @@ export function buildPlant(model: AssetModel, snapshots: SnapshotsResponse, now:
 
 /** Running means reporting RUNNING while not offline: an offline device is offline whatever it last reported. */
 export function isRunning(device: PlantDevice): boolean {
-  return device.connection !== 'OFFLINE' && device.runState === 'RUNNING';
+  return isPlantDeviceRunning(device);
 }
 
 /** The first device of the plant that reports this point. */
@@ -530,20 +360,7 @@ export function plantReading(plant: Plant, sourceKey: string): PlantReading | nu
 }
 
 export function loopDifferentialPressure(plant: Plant, waterLoop: WaterLoopKind): PlantReading | null {
-  const keys = ['dp_sensor.differential_pressure', 'header.differential_pressure'];
-  const scoped = plant.devices.filter((device) => device.waterLoop === waterLoop);
-  for (const key of keys) {
-    const reading = firstReading(scoped, key);
-    if (reading) return reading;
-  }
-  if (waterLoop === 'CHILLED_WATER') {
-    const fallback = plant.devices.filter((device) => device.waterLoop === null);
-    for (const key of keys) {
-      const reading = firstReading(fallback, key);
-      if (reading) return reading;
-    }
-  }
-  return null;
+  return findLoopDifferentialPressure<PlantReading>(plant.devices, waterLoop);
 }
 
 export interface SnapshotRequest {
