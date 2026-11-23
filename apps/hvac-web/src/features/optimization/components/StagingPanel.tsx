@@ -155,7 +155,9 @@ export function StagingPanel({ siteId, timeZone, state, view, evaluatedAt, mode,
           <Button variant="outline" size="sm" onClick={onRetry}>重试</Button>
         </div>
       ) : !view ? (
-        <p className="px-4 py-8 text-center text-sm text-muted-foreground">这个站点还没有做过减台评估</p>
+        <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-3 text-xs text-muted-foreground">
+          <span>这个站点还没有做过减台评估</span>
+        </div>
       ) : (
         <>
           {view.totals ? (
@@ -194,9 +196,9 @@ export function StagingPanel({ siteId, timeZone, state, view, evaluatedAt, mode,
               ))}
             </ul>
           ) : (
-            <div className="flex flex-col items-center gap-1 px-6 py-8 text-center">
-              <p className="text-sm font-semibold">现在没有可以停的设备</p>
-              {view.stageDownIdle ? <p className="text-xs text-muted-foreground">{view.stageDownIdle}</p> : null}
+            <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-3 text-xs">
+              <span className="font-medium text-foreground">现在没有可以停的设备</span>
+              {view.stageDownIdle ? <span className="text-muted-foreground">{view.stageDownIdle}</span> : null}
             </div>
           )}
           {view.paused.length > 0 ? (

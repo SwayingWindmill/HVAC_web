@@ -1254,3 +1254,143 @@ test('operator can manually dispatch a matching auxiliary pump frequency recomme
     await page.screenshot({ path: process.env.WAVE_G_AUX_DISPATCH_SCREENSHOT });
   }
 });
+
+test('prioritizes supply proposal above idle staging at 1280px, routes focus to first invalid lease field, and filters execution monitors', async ({ page, gateway }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  gateway.optimization = fixture('optimization-latest.json');
+  gateway.staging = {
+    tenantId: principal.context.tenantId,
+    siteId: SITE_ID,
+    evaluatedAt: new Date().toISOString(),
+    confirmationMode: 'MANUAL_CONFIRM',
+    siteControlMode: 'REMOTE_AUTO',
+    recommendations: [],
+    diagnostics: [],
+  };
+
+  await page.goto(`/energy-analysis/optimization?site=${SITE_ID}`);
+
+  const proposalRegion = page.getByRole('region', { name: '当前建议' });
+  const stagingRegion = page.getByRole('region', { name: '减台与辅机停机' });
+  await expect(proposalRegion).toBeVisible();
+  await expect(stagingRegion).toContainText('现在没有可以停的设备');
+
+  const proposalBox = await proposalRegion.boundingBox();
+  const stagingBox = await stagingRegion.boundingBox();
+  expect(proposalBox).not.toBeNull();
+  expect(stagingBox).not.toBeNull();
+  expect(proposalBox!.y).toBeLessThan(stagingBox!.y);
+  expect(stagingBox!.height).toBeLessThan(140);
+
+  // First invalid field receives keyboard focus on failed lease submission.
+  const leasePanel = page.getByRole('region', { name: '自动控制租约' });
+  await leasePanel.getByRole('button', { name: '开启自动控制租约…' }).click();
+  const dialog = page.getByRole('dialog', { name: '开启限时自动控制租约' });
+  const supplyMin = dialog.getByLabel('供水温度下限');
+  await supplyMin.fill('4.5');
+  await dialog.getByLabel('原因').fill('验证失败焦点路由');
+  await dialog.getByRole('textbox', { name: '动态口令' }).fill('123456');
+  await dialog.getByRole('button', { name: '确认开启租约' }).click();
+  await expect(dialog).toContainText('供水温度下限需在 5.0 至 20.0 °C 之间');
+  await expect(supplyMin).toBeFocused();
+  await dialog.getByRole('button', { name: '取消' }).click();
+
+  // Monitor status filter segments active, tripped, and shadow traces cleanly at 1280px.
+  const now = Date.now();
+  gateway.optimizationExecutionMonitors = [
+    {
+      id: '01990000-7700-7000-8000-000000000101',
+      tenantId: principal.context.tenantId,
+      siteId: SITE_ID,
+      leaseId: '01990000-8800-7000-8000-000000000001',
+      recommendationId: '01a12bdc-97d7-7e50-bc97-f14cb86800ba',
+      commandIntentId: '01990000-8800-7000-8000-000000000601',
+      deviceId: '018f3e00-4000-7000-8000-000000000001',
+      targetCapability: 'SET_CHILLED_WATER_TEMPERATURE_SETPOINT',
+      baselineSupplyTempC: 7.1,
+      appliedSupplyTempC: 7.9,
+      restoreSupplyTempC: 7.1,
+      zoneTempMaxC: 26.0,
+      supplyTempMaxC: 12.0,
+      executionMode: 'CLOSED_LOOP',
+      startedAt: new Date(now - 5 * 60_000).toISOString(),
+      windowEndsAt: new Date(now + 25 * 60_000).toISOString(),
+      status: 'OBSERVING',
+      createdAt: new Date(now - 5 * 60_000).toISOString(),
+      updatedAt: new Date(now - 2 * 60_000).toISOString(),
+    },
+    {
+      id: '01990000-7700-7000-8000-000000000102',
+      tenantId: principal.context.tenantId,
+      siteId: SITE_ID,
+      leaseId: '01990000-8800-7000-8000-000000000001',
+      recommendationId: '01a12bdc-97d7-7e50-bc97-f14cb86800bb',
+      commandIntentId: '01990000-8800-7000-8000-000000000602',
+      deviceId: '018f3e00-4000-7000-8000-000000000001',
+      targetCapability: 'SET_CHILLED_WATER_TEMPERATURE_SETPOINT',
+      baselineSupplyTempC: 7.5,
+      appliedSupplyTempC: 8.5,
+      restoreSupplyTempC: 7.5,
+      zoneTempMaxC: 26.0,
+      supplyTempMaxC: 12.0,
+      executionMode: 'CLOSED_LOOP',
+      startedAt: new Date(now - 45 * 60_000).toISOString(),
+      windowEndsAt: new Date(now - 15 * 60_000).toISOString(),
+      status: 'TRIPPED_ROLLED_BACK',
+      tripReason: 'setpoint_tracking_deviation',
+      rollbackCommandIntentId: '01990000-8800-7000-8000-000000000603',
+      createdAt: new Date(now - 45 * 60_000).toISOString(),
+      updatedAt: new Date(now - 15 * 60_000).toISOString(),
+    },
+    {
+      id: '01990000-7700-7000-8000-000000000103',
+      tenantId: principal.context.tenantId,
+      siteId: SITE_ID,
+      leaseId: '01990000-8800-7000-8000-000000000001',
+      recommendationId: '01a12bdc-97d7-7e50-bc97-f14cb86800bc',
+      commandIntentId: null,
+      deviceId: '018f3e00-4000-7000-8000-000000000001',
+      targetCapability: 'SET_CHILLED_WATER_TEMPERATURE_SETPOINT',
+      baselineSupplyTempC: 7.1,
+      appliedSupplyTempC: 8.1,
+      restoreSupplyTempC: 7.1,
+      zoneTempMaxC: 26.0,
+      supplyTempMaxC: 12.0,
+      executionMode: 'SHADOW',
+      startedAt: new Date(now - 12 * 60_000).toISOString(),
+      windowEndsAt: new Date(now + 18 * 60_000).toISOString(),
+      status: 'SHADOW_RECORDED',
+      createdAt: new Date(now - 12 * 60_000).toISOString(),
+      updatedAt: new Date(now - 12 * 60_000).toISOString(),
+    },
+  ];
+  await page.reload();
+
+  const filterGroup = page.getByRole('radiogroup', { name: '监护记录筛选' });
+  const monitorsTable = page.getByRole('table', { name: '30 分钟执行监护' });
+  await expect(monitorsTable).toContainText('观察中');
+  await expect(monitorsTable).toContainText('已自动回退');
+  await expect(monitorsTable).toContainText('影子跟跑记录');
+
+  await filterGroup.getByRole('radio', { name: /观察中/ }).click();
+  await expect(monitorsTable).toContainText('观察中');
+  await expect(monitorsTable).not.toContainText('已自动回退');
+  await expect(monitorsTable).not.toContainText('影子跟跑记录');
+
+  await filterGroup.getByRole('radio', { name: /异常回退/ }).click();
+  await expect(monitorsTable).toContainText('已自动回退');
+  await expect(monitorsTable).not.toContainText('影子跟跑记录');
+
+  await filterGroup.getByRole('radio', { name: /影子/ }).click();
+  await expect(monitorsTable).toContainText('影子跟跑记录');
+  await expect(monitorsTable).not.toContainText('已自动回退');
+
+  await filterGroup.getByRole('radio', { name: /全部/ }).click();
+  await expect(monitorsTable).toContainText('观察中');
+  await expect(monitorsTable).toContainText('已自动回退');
+  await expect(monitorsTable).toContainText('影子跟跑记录');
+
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth))
+    .toBe(true);
+});
