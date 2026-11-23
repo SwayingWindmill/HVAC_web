@@ -63,7 +63,8 @@ func TestHealthCheckDoesNotCollideWithLiveHealthPortOrStateDir(t *testing.T) {
 		"mqttBrokerUrl": "tls://127.0.0.1:1",
 		"healthListenAddr": %q,
 		"tunnel": {"enabled": true, "allowedTargetPorts": [22]},
-		"ota": {"enabled": true, "dir": %q}
+		"ota": {"enabled": true, "dir": %q},
+		"songyaxuanPlant": {"enabled": true, "serialPort": "/dev/ttyNonExistentOTAProbe"}
 	}`, filepath.ToSlash(liveStateDir), ln.Addr().String(), filepath.ToSlash(liveOTADir))
 	if err := os.WriteFile(cfgPath, []byte(cfgJSON), 0o600); err != nil {
 		t.Fatal(err)
