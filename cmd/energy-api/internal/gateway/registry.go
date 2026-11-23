@@ -947,8 +947,11 @@ func decodeCanonical[T any](raw []byte, validate func(T) error) ([]byte, error) 
 	var value T
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&value); err != nil || ensureRegistryJSONEOF(decoder) != nil {
-		return nil, errors.New("invalid Registry response")
+	if err := decoder.Decode(&value); err != nil {
+		return nil, fmt.Errorf("invalid Registry response: %w", err)
+	}
+	if err := ensureRegistryJSONEOF(decoder); err != nil {
+		return nil, errors.New("invalid Registry response: trailing data")
 	}
 	if err := validate(value); err != nil {
 		return nil, err
@@ -1435,7 +1438,8 @@ func validateAsset(value platformapi.Asset) error {
 }
 
 func validateDevice(value platformapi.Device) error {
-	if !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.TenantID) || !isLowerUUIDv7(value.SiteID) || !validRegistryString(value.Code, 128) || !validRegistryString(value.DisplayName, 256) || !validRegistryString(value.DeviceType, 128) || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED") || value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) || validateRegistryTags(value.Tags) != nil {
+	invalidConnectivityMode := value.ConnectivityMode != "" && !oneOf(value.ConnectivityMode, "GATEWAY_PROXIED", "DIRECT")
+	if invalidConnectivityMode || !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.TenantID) || !isLowerUUIDv7(value.SiteID) || !validRegistryString(value.Code, 128) || !validRegistryString(value.DisplayName, 256) || !validRegistryString(value.DeviceType, 128) || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED") || value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) || validateRegistryTags(value.Tags) != nil {
 		return errors.New("invalid Device response")
 	}
 	return nil

@@ -877,6 +877,7 @@ export const deviceSchema = z.object({
   externalId: z.string().min(1).max(256).optional(),
   protocolAddress: z.record(z.string(), z.unknown()).optional(),
   tags: tagMapSchema.optional(),
+  connectivityMode: z.enum(['GATEWAY_PROXIED', 'DIRECT']).optional(),
 }).strict();
 export const deviceBindingSchema = z.object({
   id: uuidV7Schema,

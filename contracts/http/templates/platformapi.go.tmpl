@@ -259,9 +259,10 @@ type Device struct {
 	Revision        int64             `json:"revision"`
 	CreatedAt       string            `json:"createdAt"`
 	UpdatedAt       string            `json:"updatedAt"`
-	ExternalID      *string           `json:"externalId,omitempty"`
-	ProtocolAddress map[string]any    `json:"protocolAddress,omitempty"`
-	Tags            map[string]string `json:"tags,omitempty"`
+	ExternalID       *string           `json:"externalId,omitempty"`
+	ProtocolAddress  map[string]any    `json:"protocolAddress,omitempty"`
+	Tags             map[string]string `json:"tags,omitempty"`
+	ConnectivityMode string            `json:"connectivityMode,omitempty"`
 }
 
 type Template struct {
