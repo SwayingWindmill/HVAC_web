@@ -33,6 +33,7 @@ const (
 	shadowDriftSectionAggregationPolicy = "AGGREGATION_POLICY"
 	shadowDriftSectionClusterPolicy     = "CLUSTER_POLICY"
 	shadowDriftSectionEnergySchedule    = "ENERGY_SCHEDULE"
+	shadowDriftSectionEdgeModels        = "EDGE_MODELS"
 	shadowDriftReasonApplyFailed        = "EDGE_APPLY_FAILED"
 )
 
@@ -108,6 +109,7 @@ type GatewayDesiredConfig struct {
 	AggregationPolicy   *edgecontrol.EdgeAggregationPolicy `json:"aggregationPolicy,omitempty"`
 	ClusterPolicy       *edgecontrol.ClusterControlPolicy  `json:"clusterPolicy,omitempty"`
 	EnergySchedule      *edgecontrol.EdgeEnergySchedule    `json:"energySchedule,omitempty"`
+	EdgeModels          []edgecontrol.EdgeModelBundle      `json:"edgeModels,omitempty"`
 	UpdatedBy           string                             `json:"updatedBy,omitempty"`
 	Reason              string                             `json:"reason,omitempty"`
 	CreatedAt           *time.Time                         `json:"createdAt,omitempty"`
@@ -124,20 +126,22 @@ type GatewayShadowPullResponse struct {
 
 // GatewayShadowReportRequest matches POST /gateway/v1/config-shadow/report body.
 type GatewayShadowReportRequest struct {
-	ReportedRevision    int64                              `json:"reportedRevision"`
-	AppliedStatus       string                             `json:"appliedStatus"`
-	PointMappings       []GatewayPointMapping              `json:"pointMappings"`
-	SamplingPolicies    []GatewaySamplingPolicy            `json:"samplingPolicies"`
-	ConcentratorConfigs map[string]ConcentratorUnitShadow  `json:"concentratorConfigs"`
-	DriverConfigs       []edgecontrol.ModbusDriverInput    `json:"driverConfigs,omitempty"`
-	AutonomyPolicy      *edgecontrol.AutonomyPolicyConfig  `json:"autonomyPolicy,omitempty"`
-	EdgeRuleBundle      *edgecontrol.EdgeRuleBundle        `json:"edgeRuleBundle,omitempty"`
-	AggregationPolicy   *edgecontrol.EdgeAggregationPolicy `json:"aggregationPolicy,omitempty"`
-	ClusterPolicy       *edgecontrol.ClusterControlPolicy  `json:"clusterPolicy,omitempty"`
-	EnergySchedule      *edgecontrol.EdgeEnergySchedule    `json:"energySchedule,omitempty"`
-	DriftDetails        []ShadowDriftDetail                `json:"driftDetails,omitempty"`
-	ErrorMessage        *string                            `json:"errorMessage,omitempty"`
-	ReportedAt          *time.Time                         `json:"reportedAt,omitempty"`
+	ReportedRevision    int64                                `json:"reportedRevision"`
+	AppliedStatus       string                               `json:"appliedStatus"`
+	PointMappings       []GatewayPointMapping                `json:"pointMappings"`
+	SamplingPolicies    []GatewaySamplingPolicy              `json:"samplingPolicies"`
+	ConcentratorConfigs map[string]ConcentratorUnitShadow    `json:"concentratorConfigs"`
+	DriverConfigs       []edgecontrol.ModbusDriverInput      `json:"driverConfigs,omitempty"`
+	AutonomyPolicy      *edgecontrol.AutonomyPolicyConfig    `json:"autonomyPolicy,omitempty"`
+	EdgeRuleBundle      *edgecontrol.EdgeRuleBundle          `json:"edgeRuleBundle,omitempty"`
+	AggregationPolicy   *edgecontrol.EdgeAggregationPolicy   `json:"aggregationPolicy,omitempty"`
+	ClusterPolicy       *edgecontrol.ClusterControlPolicy    `json:"clusterPolicy,omitempty"`
+	EnergySchedule      *edgecontrol.EdgeEnergySchedule      `json:"energySchedule,omitempty"`
+	EdgeModels          []edgecontrol.EdgeModelBundle        `json:"edgeModels,omitempty"`
+	EdgeModelStatuses   []edgecontrol.EdgeModelRuntimeStatus `json:"edgeModelStatuses,omitempty"`
+	DriftDetails        []ShadowDriftDetail                  `json:"driftDetails,omitempty"`
+	ErrorMessage        *string                              `json:"errorMessage,omitempty"`
+	ReportedAt          *time.Time                           `json:"reportedAt,omitempty"`
 }
 
 type persistedShadowState struct {
@@ -151,6 +155,7 @@ type persistedShadowState struct {
 	AggregationPolicy   *edgecontrol.EdgeAggregationPolicy `json:"aggregationPolicy,omitempty"`
 	ClusterPolicy       *edgecontrol.ClusterControlPolicy  `json:"clusterPolicy,omitempty"`
 	EnergySchedule      *edgecontrol.EdgeEnergySchedule    `json:"energySchedule,omitempty"`
+	EdgeModels          []edgecontrol.EdgeModelBundle      `json:"edgeModels,omitempty"`
 }
 
 // ShadowManager maintains persistent desired/reported edge configuration and
@@ -167,6 +172,7 @@ type ShadowManager struct {
 	aggregator   *edgecontrol.WindowAggregator
 	scheduleCtrl *edgecontrol.EnergyScheduleController
 	clusterCtrl  *edgecontrol.ChillerPlantClusterController
+	modelManager *EdgeModelManager
 	logger       *slog.Logger
 	now          func() time.Time
 
@@ -223,6 +229,16 @@ func (m *ShadowManager) AttachPlantControllers(
 	m.aggregator = agg
 	m.scheduleCtrl = sched
 	m.clusterCtrl = cluster
+}
+
+// AttachModelManager attaches signed edge model & hyperparam governance onto ShadowManager.
+func (m *ShadowManager) AttachModelManager(mgr *EdgeModelManager) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.modelManager = mgr
 }
 
 // LoadOrBootstrap recovers persisted config shadow state from disk and applies it,
@@ -293,6 +309,11 @@ func (m *ShadowManager) applyPersistedBootstrap(state persistedShadowState) erro
 	}
 	if state.EnergySchedule != nil {
 		if err := m.applyEnergySchedule(state.EnergySchedule); err != nil {
+			return err
+		}
+	}
+	if len(state.EdgeModels) > 0 && m.modelManager != nil {
+		if _, _, err := m.modelManager.ApplyBundles(state.EdgeModels); err != nil {
 			return err
 		}
 	}
@@ -548,6 +569,25 @@ func (m *ShadowManager) ApplyDesired(desired GatewayDesiredConfig) (GatewayShado
 		}
 	}
 
+	var reportedModels []edgecontrol.EdgeModelBundle
+	modelsApplied := false
+	if len(desired.EdgeModels) > 0 {
+		if m.modelManager == nil {
+			msg := "edgeModels manager unavailable"
+			drift = append(drift, ShadowDriftDetail{Section: shadowDriftSectionEdgeModels, Target: "edgeModels", Reason: shadowDriftReasonApplyFailed, Detail: msg})
+			errMsgs = append(errMsgs, msg)
+		} else {
+			appliedBundles, modelDrifts, applyErr := m.modelManager.ApplyBundles(desired.EdgeModels)
+			if applyErr != nil {
+				drift = append(drift, modelDrifts...)
+				errMsgs = append(errMsgs, applyErr.Error())
+			} else {
+				reportedModels = appliedBundles
+				modelsApplied = true
+			}
+		}
+	}
+
 	status := shadowStatusApplied
 	if len(drift) > 0 || len(errMsgs) > 0 {
 		requested := len(desired.DriverConfigs)
@@ -561,6 +601,7 @@ func (m *ShadowManager) ApplyDesired(desired GatewayDesiredConfig) (GatewayShado
 			{desired.AggregationPolicy != nil, aggApplied},
 			{desired.ClusterPolicy != nil, clusterApplied},
 			{desired.EnergySchedule != nil, scheduleApplied},
+			{len(desired.EdgeModels) > 0, modelsApplied},
 		} {
 			if pair.present {
 				requested++
@@ -589,6 +630,8 @@ func (m *ShadowManager) ApplyDesired(desired GatewayDesiredConfig) (GatewayShado
 		AggregationPolicy:   reportedAgg.Clone(),
 		ClusterPolicy:       reportedCluster.Clone(),
 		EnergySchedule:      reportedSchedule.Clone(),
+		EdgeModels:          cloneEdgeModelSlice(reportedModels),
+		EdgeModelStatuses:   m.modelManager.Statuses(),
 		DriftDetails:        drift,
 		ReportedAt:          &now,
 	}
@@ -604,6 +647,8 @@ func (m *ShadowManager) ApplyDesired(desired GatewayDesiredConfig) (GatewayShado
 		report.AggregationPolicy = m.state.AggregationPolicy.Clone()
 		report.ClusterPolicy = m.state.ClusterPolicy.Clone()
 		report.EnergySchedule = m.state.EnergySchedule.Clone()
+		report.EdgeModels = cloneEdgeModelSlice(m.state.EdgeModels)
+		report.EdgeModelStatuses = m.modelManager.Statuses()
 		return report, false, nil
 	}
 
@@ -637,6 +682,9 @@ func (m *ShadowManager) ApplyDesired(desired GatewayDesiredConfig) (GatewayShado
 	if desired.EnergySchedule == nil && m.scheduleCtrl != nil {
 		_ = m.scheduleCtrl.UpdateSchedule(nil)
 	}
+	if len(desired.EdgeModels) == 0 && m.modelManager != nil {
+		_, _, _ = m.modelManager.ApplyBundles(nil)
+	}
 	activeRules := m.state.EdgeRuleBundle
 	if rulesApplied {
 		activeRules = reportedRules
@@ -657,6 +705,7 @@ func (m *ShadowManager) ApplyDesired(desired GatewayDesiredConfig) (GatewayShado
 		AggregationPolicy:   reportedAgg,
 		ClusterPolicy:       reportedCluster,
 		EnergySchedule:      reportedSchedule,
+		EdgeModels:          cloneEdgeModelSlice(reportedModels),
 	})
 	if err := m.persistLocked(); err != nil {
 		return GatewayShadowReportRequest{}, false, err
@@ -753,6 +802,7 @@ func normalizePersistedShadowState(in persistedShadowState) persistedShadowState
 		AggregationPolicy:   in.AggregationPolicy.Clone(),
 		ClusterPolicy:       in.ClusterPolicy.Clone(),
 		EnergySchedule:      in.EnergySchedule.Clone(),
+		EdgeModels:          cloneEdgeModelSlice(in.EdgeModels),
 	}
 	return out
 }

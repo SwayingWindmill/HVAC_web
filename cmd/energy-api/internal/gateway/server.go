@@ -840,6 +840,9 @@ func safeLogPath(path string) string {
 		if template, matches := matchGatewayOTAPathTemplate(path); matches {
 			return template
 		}
+		if template, matches := matchEdgeModelPathTemplate(path); matches {
+			return template
+		}
 		if _, matches := matchSessionAuditPath(path); matches {
 			return platformapi.GetSessionAuditEventPathTemplate
 		}

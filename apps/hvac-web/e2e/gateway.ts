@@ -897,6 +897,106 @@ export class Gateway {
   };
   governanceReads = 0;
   allowedSolverHosts: string[] = ['ai-solver-service:8090'];
+  edgeModelsState: {
+    artifacts: Json[];
+    approvals: Json[];
+    deployments: Json[];
+    evaluations: Json[];
+    driftObservations: Json[];
+    rollbacks: Json[];
+    desiredBundles: Json[];
+  } = {
+    artifacts: [
+      {
+        id: '019a0000-0001-7000-8000-000000000001',
+        versionId: '019a0000-0001-7000-8000-000000000101',
+        domain: 'EDGE_CONTROL',
+        modelKey: 'chiller-cop-opt',
+        version: '1.0.0',
+        name: '冷机 COP 基准参数集',
+        description: '松雅轩一期冷站基准控制超参',
+        objectUri: 'edge-bundle://EDGE_CONTROL/chiller-cop-opt/1.0.0',
+        checksumSha256: 'a1'.repeat(32),
+        maxShadowDeviation: 1.5,
+        hyperparams: {
+          copCoefficients: [3.8, 0.06, -0.002],
+          supplyTempSetpointMinC: 6.5,
+          supplyTempSetpointMaxC: 10.5,
+          pumpFrequencyMinHz: 28,
+          pumpFrequencyMaxHz: 50,
+          stageUpLoadPct: 82,
+          stageDownLoadPct: 45,
+          targetPointCodes: ['CHW_SUPPLY_TEMP_SP'],
+        },
+        gatewayId: '018f3e00-4000-7000-8000-000000000100',
+        signed: true,
+        approvalStatus: 'APPROVED',
+        latestApprovalReason: '基线验收通过',
+        latestEvaluation: 'PASSED',
+        createdAt: '2026-11-20T08:00:00.000Z',
+      },
+    ],
+    approvals: [
+      {
+        id: '019a0000-0002-7000-8000-000000000001',
+        artifactId: '019a0000-0001-7000-8000-000000000001',
+        versionId: '019a0000-0001-7000-8000-000000000101',
+        domain: 'EDGE_CONTROL',
+        modelKey: 'chiller-cop-opt',
+        version: '1.0.0',
+        evaluationId: null,
+        decision: 'APPROVED',
+        actorType: 'USER',
+        actorId: MY_ID,
+        reason: '基线验收通过',
+        policyRevision: 'edge-mlops-v1',
+        decidedAt: '2026-11-20T08:05:00.000Z',
+      },
+    ],
+    deployments: [
+      {
+        id: '019a0000-0003-7000-8000-000000000001',
+        artifactId: '019a0000-0001-7000-8000-000000000001',
+        versionId: '019a0000-0001-7000-8000-000000000101',
+        domain: 'EDGE_CONTROL',
+        modelKey: 'chiller-cop-opt',
+        version: '1.0.0',
+        approvalId: '019a0000-0002-7000-8000-000000000001',
+        environment: 'PRODUCTION',
+        status: 'ACTIVE',
+        servingRef: 'edge-gateway://018f3e00-4000-7000-8000-000000000100',
+        gatewayId: '018f3e00-4000-7000-8000-000000000100',
+        revision: 1,
+        effectiveFrom: '2026-11-20T08:10:00.000Z',
+        effectiveTo: null,
+        hyperparams: {
+          copCoefficients: [3.8, 0.06, -0.002],
+          supplyTempSetpointMinC: 6.5,
+          supplyTempSetpointMaxC: 10.5,
+          pumpFrequencyMinHz: 28,
+          pumpFrequencyMaxHz: 50,
+          stageUpLoadPct: 82,
+          stageDownLoadPct: 45,
+          targetPointCodes: ['CHW_SUPPLY_TEMP_SP'],
+        },
+      },
+    ],
+    evaluations: [],
+    driftObservations: [
+      {
+        id: '019a0000-0004-7000-8000-000000000001',
+        deploymentId: '019a0000-0003-7000-8000-000000000001',
+        metricCode: 'SHADOW_MAX_ABS_DEVIATION',
+        observedValue: 0.35,
+        threshold: 1.5,
+        driftStatus: 'NORMAL',
+        evidence: { modelKey: 'chiller-cop-opt', version: '1.0.0', sampleCount: 120, meanAbsDeviation: 0.14 },
+        observedAt: '2026-11-22T10:00:00.000Z',
+      },
+    ],
+    rollbacks: [],
+    desiredBundles: [],
+  };
   optimizationCanaryBindings: Json[] = [
     {
       id: '01990000-2200-7000-8000-000000000001',
@@ -3278,6 +3378,175 @@ export class Gateway {
         }
         return { body: { deleted: true, siteId: SITE_ID, loopKey } };
       }
+    }
+    if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/edge-models`) {
+      return {
+        body: {
+          tenantId: principal.context.tenantId,
+          siteId: SITE_ID,
+          generatedAt: now,
+          ...this.edgeModelsState,
+        },
+      };
+    }
+    if (method === 'POST' && path === `/api/v1/sites/${SITE_ID}/edge-models/artifacts`) {
+      const hp = (body?.hyperparams ?? {}) as Json;
+      const sMin = Number(hp.supplyTempSetpointMinC ?? 6.5);
+      const pts: string[] = Array.isArray(hp.targetPointCodes) ? hp.targetPointCodes : [];
+      if (sMin < 4 || sMin > 18 || pts.some((p) => /HIGH_PRESSURE_TRIP|ESTOP/i.test(p))) {
+        return {
+          status: 422,
+          body: {
+            type: 'about:blank',
+            title: 'Edge model validation failed',
+            status: 422,
+            detail: '超参越出设备安全物理边界（4–18°C）或尝试接管硬实时安全点位',
+            instance: path,
+            code: 'EDGE_MODEL_VALIDATION_FAILED',
+            traceId: '0'.repeat(32),
+            retryable: false,
+          },
+        };
+      }
+      const seq = this.edgeModelsState.artifacts.length + 1;
+      const art = {
+        id: `019a0000-0001-7000-8000-${String(seq).padStart(12, '0')}`,
+        versionId: `019a0000-0001-7000-8000-${String(seq + 100).padStart(12, '0')}`,
+        domain: String(body?.domain ?? 'EDGE_CONTROL'),
+        modelKey: String(body?.modelKey ?? 'chiller-cop-opt'),
+        version: String(body?.version ?? '1.2.0'),
+        name: String(body?.name ?? `${body?.modelKey ?? 'model'}@${body?.version ?? '1.2.0'}`),
+        objectUri: `edge-bundle://${body?.domain}/${body?.modelKey}/${body?.version}`,
+        checksumSha256: 'b2'.repeat(32),
+        maxShadowDeviation: Number(body?.maxShadowDeviation ?? 1.2),
+        hyperparams: hp,
+        gatewayId: typeof body?.gatewayId === 'string' ? body.gatewayId : undefined,
+        signed: true,
+        approvalStatus: 'PENDING',
+        createdAt: now,
+      };
+      this.edgeModelsState.artifacts.unshift(art);
+      return { status: 201, body: art };
+    }
+    const approveMatch = method === 'POST' ? path.match(new RegExp(`^/api/v1/sites/${SITE_ID}/edge-models/artifacts/([^/]+)/approve$`)) : null;
+    if (approveMatch) {
+      const art = this.edgeModelsState.artifacts.find((a) => a.id === approveMatch[1]);
+      if (!art) return { status: 404, body: { status: 404, code: 'RESOURCE_NOT_FOUND', title: 'Not found' } };
+      const decision = String(body?.decision ?? 'APPROVED');
+      art.approvalStatus = decision;
+      art.latestApprovalReason = String(body?.reason ?? '');
+      const rec = {
+        id: `019a0000-0002-7000-8000-${String(this.edgeModelsState.approvals.length + 1).padStart(12, '0')}`,
+        artifactId: art.id,
+        versionId: art.versionId,
+        domain: art.domain,
+        modelKey: art.modelKey,
+        version: art.version,
+        evaluationId: null,
+        decision,
+        actorType: 'USER',
+        actorId: MY_ID,
+        reason: String(body?.reason ?? ''),
+        policyRevision: 'edge-mlops-v1',
+        decidedAt: now,
+      };
+      this.edgeModelsState.approvals.unshift(rec);
+      return { body: rec };
+    }
+    if (method === 'POST' && path === `/api/v1/sites/${SITE_ID}/edge-models/deployments`) {
+      const art = this.edgeModelsState.artifacts.find((a) => a.id === body?.artifactId);
+      if (!art) return { status: 404, body: { status: 404, code: 'RESOURCE_NOT_FOUND', title: 'Not found' } };
+      const env = String(body?.environment ?? 'SHADOW');
+      for (const prev of this.edgeModelsState.deployments) {
+        if (prev.status === 'ACTIVE' && prev.environment === env && prev.modelKey === art.modelKey) {
+          prev.status = 'RETIRED';
+          prev.effectiveTo = now;
+        }
+      }
+      const seq = this.edgeModelsState.deployments.length + 1;
+      const gwId = String(body?.gatewayId || art.gatewayId || '018f3e00-4000-7000-8000-000000000100');
+      const dep = {
+        id: `019a0000-0003-7000-8000-${String(seq).padStart(12, '0')}`,
+        artifactId: art.id,
+        versionId: art.versionId,
+        domain: art.domain,
+        modelKey: art.modelKey,
+        version: art.version,
+        approvalId: '019a0000-0002-7000-8000-000000000001',
+        environment: env,
+        status: 'ACTIVE',
+        servingRef: `edge-gateway://${gwId}`,
+        gatewayId: gwId,
+        revision: seq,
+        effectiveFrom: now,
+        effectiveTo: null,
+        hyperparams: art.hyperparams,
+      };
+      this.edgeModelsState.deployments.unshift(dep);
+      return {
+        body: {
+          deployment: dep,
+          gatewayId: gwId,
+          desiredBundles: [],
+          shadowSyncStatus: 'SYNCED',
+          shadowDesiredRevision: seq + 10,
+        },
+      };
+    }
+    const rbMatch = method === 'POST' ? path.match(new RegExp(`^/api/v1/sites/${SITE_ID}/edge-models/deployments/([^/]+)/rollback$`)) : null;
+    if (rbMatch) {
+      const dep = this.edgeModelsState.deployments.find((d) => d.id === rbMatch[1]);
+      if (!dep) return { status: 404, body: { status: 404, code: 'RESOURCE_NOT_FOUND', title: 'Not found' } };
+      dep.status = 'ROLLED_BACK';
+      dep.effectiveTo = now;
+      const prevArt = this.edgeModelsState.artifacts.find((a) => a.versionId !== dep.versionId && a.approvalStatus === 'APPROVED') ?? null;
+      let restored = null;
+      if (prevArt) {
+        const seq = this.edgeModelsState.deployments.length + 1;
+        restored = {
+          id: `019a0000-0003-7000-8000-${String(seq).padStart(12, '0')}`,
+          artifactId: prevArt.id,
+          versionId: prevArt.versionId,
+          domain: prevArt.domain,
+          modelKey: prevArt.modelKey,
+          version: prevArt.version,
+          approvalId: '019a0000-0002-7000-8000-000000000001',
+          environment: dep.environment,
+          status: 'ACTIVE',
+          servingRef: dep.servingRef,
+          gatewayId: dep.gatewayId,
+          revision: seq,
+          effectiveFrom: now,
+          effectiveTo: null,
+          hyperparams: prevArt.hyperparams,
+        };
+        this.edgeModelsState.deployments.unshift(restored);
+      }
+      const rb = {
+        id: `019a0000-0005-7000-8000-${String(this.edgeModelsState.rollbacks.length + 1).padStart(12, '0')}`,
+        deploymentId: dep.id,
+        fromVersionId: dep.versionId,
+        toVersionId: restored ? restored.versionId : dep.versionId,
+        fromVersion: dep.version,
+        toVersion: restored ? restored.version : '',
+        reason: String(body?.reason ?? '回退'),
+        actorType: 'USER',
+        actorId: MY_ID,
+        status: 'APPLIED',
+        requestedAt: now,
+        appliedAt: now,
+      };
+      this.edgeModelsState.rollbacks.unshift(rb);
+      return {
+        body: {
+          rollback: rb,
+          restoredDeployment: restored,
+          gatewayId: dep.gatewayId,
+          desiredBundles: [],
+          shadowSyncStatus: 'SYNCED',
+          shadowDesiredRevision: 99,
+        },
+      };
     }
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/optimization/negative-samples`) {
       const windowDays = Number(query.get('windowDays') ?? '14');

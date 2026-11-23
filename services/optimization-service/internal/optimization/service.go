@@ -153,6 +153,8 @@ type Service struct {
 	flywheelStore      GovernanceFlywheelStore
 	siteVisibility     SiteVisibilityChecker
 	canaryStore        CanaryBindingStore
+	edgeModelStore     EdgeModelStore
+	edgeModelSigner    *edgeModelSigner
 	allowedSolverHosts []string
 }
 

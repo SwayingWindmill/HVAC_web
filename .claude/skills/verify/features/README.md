@@ -1,6 +1,6 @@
 # HVAC Web verification map
 
-This directory indexes user-facing verification journeys for HVAC Web across all 23 operator surfaces and 25 Playwright E2E specs. Read the baseline rules here before running or extending any feature recipe.
+This directory indexes user-facing verification journeys for HVAC Web across all 23 operator surfaces and 26 Playwright E2E specs. Read the baseline rules here before running or extending any feature recipe.
 
 ## Baseline preconditions
 
@@ -56,4 +56,4 @@ This directory indexes user-facing verification journeys for HVAC Web across all
 
 - [Integrations workspace](./integrations-workspace.md) covers `/settings/integrations` tabs (`现场网关`, `无线集中器`, `电表数据核对`, `传感器校准`), enrollment-code disposal on `Escape`, permanent gateway revocation, and concentrator RF/EID Flash writes (`e2e/integrations.spec.ts`, `e2e/gateway-credentials.spec.ts`, `e2e/concentrators.spec.ts`).
 - [System users and roles](./system-users-and-roles.md) covers `/system?tab=users` user administration, role summaries, password change, and capability group rendering without unnamed keys (`e2e/users.spec.ts`, `e2e/system.spec.ts`).
-- [System governance and audit log](./system-governance-and-audit.md) covers `/system` platform overview, `站点与组织`, `设备与点位登记` unsaved draft guard, `操作记录` (`audit.read` + translated facts), and `AI 助手` usage (`e2e/system.spec.ts`).
+- [System governance and audit log](./system-governance-and-audit.md) covers `/system` platform overview, `站点与组织`, `设备与点位登记` unsaved draft guard, `操作记录` (`audit.read` + translated facts), and `AI 助手` usage (`e2e/system.spec.ts`, `e2e/edge-models.spec.ts`).

@@ -57,6 +57,12 @@ func NewHTTPHandler(service *Service, preparer *Preparer, auth AuthConfig) (http
 	mux.HandleFunc("PUT /v1/sites/{siteId}/optimization/canary-bindings/{loopKey}", handler.guard(WriteAction, handler.handleUpsertCanaryBinding))
 	mux.HandleFunc("DELETE /v1/sites/{siteId}/optimization/canary-bindings/{loopKey}", handler.guard(WriteAction, handler.handleDeleteCanaryBinding))
 	mux.HandleFunc("GET /v1/sites/{siteId}/optimization/negative-samples", handler.guard(ReadAction, handler.handleListNegativeSamples))
+	mux.HandleFunc("GET /v1/sites/{siteId}/edge-models", handler.guard(ReadAction, handler.handleGetEdgeModelWorkspace))
+	mux.HandleFunc("POST /v1/sites/{siteId}/edge-models/artifacts", handler.guard(WriteAction, handler.handleCreateEdgeModelArtifact))
+	mux.HandleFunc("POST /v1/sites/{siteId}/edge-models/artifacts/{artifactId}/approve", handler.guard(WriteAction, handler.handleApproveEdgeModelArtifact))
+	mux.HandleFunc("POST /v1/sites/{siteId}/edge-models/deployments", handler.guard(WriteAction, handler.handleDeployEdgeModelArtifact))
+	mux.HandleFunc("POST /v1/sites/{siteId}/edge-models/deployments/{deploymentId}/rollback", handler.guard(WriteAction, handler.handleRollbackEdgeModelDeployment))
+	mux.HandleFunc("POST /v1/sites/{siteId}/edge-models/evaluations", handler.guard(WriteAction, handler.handleRecordEdgeModelEvaluation))
 	return mux, nil
 }
 

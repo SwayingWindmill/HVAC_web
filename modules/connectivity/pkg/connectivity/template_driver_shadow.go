@@ -222,15 +222,17 @@ func (store *Store) UpsertGatewayTemplateDriverConfig(ctx context.Context, gatew
 	effectiveUnits := map[string]ConcentratorUnitShadow{}
 	var effectiveAutonomy *GatewayAutonomyPolicy
 	var effectiveEdgeRules *edgecontrol.EdgeRuleBundle
+	var effectiveEdgeModels []edgecontrol.EdgeModelBundle
 	if existing != nil {
 		effectiveMappings = clonePointMappingsList(existing.PointMappings)
 		effectivePolicies = cloneSamplingPoliciesList(existing.SamplingPolicies)
 		effectiveUnits = cloneConcentratorUnits(existing.ConcentratorConfigs)
 		effectiveAutonomy = cloneAutonomyPolicy(existing.AutonomyPolicy)
 		effectiveEdgeRules = existing.EdgeRuleBundle.Clone()
+		effectiveEdgeModels = cloneEdgeModelBundles(existing.EdgeModels)
 	}
 
-	encoded, err := marshalShadowSections(effectiveMappings, effectivePolicies, effectiveUnits, cleanedDrivers, effectiveAutonomy, effectiveEdgeRules)
+	encoded, err := marshalShadowSections(effectiveMappings, effectivePolicies, effectiveUnits, cleanedDrivers, effectiveAutonomy, effectiveEdgeRules, effectiveEdgeModels, nil)
 	if err != nil {
 		return TemplateDriverUpsertResult{}, err
 	}
@@ -251,6 +253,7 @@ func (store *Store) UpsertGatewayTemplateDriverConfig(ctx context.Context, gatew
 		DriverConfigs:       cleanedDrivers,
 		AutonomyPolicy:      effectiveAutonomy,
 		EdgeRuleBundle:      effectiveEdgeRules,
+		EdgeModels:          effectiveEdgeModels,
 		UpdatedBy:           updatedBy,
 		Reason:              reason,
 		CreatedAt:           createdAt,
