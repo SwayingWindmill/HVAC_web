@@ -118,6 +118,8 @@ type Daemon struct {
 	cmdWG               sync.WaitGroup
 	sequence            atomic.Uint64
 	mqttConnected       atomic.Bool
+	mqttHealthyGen      atomic.Uint64
+	mqttNotifyCh        chan struct{}
 	connectedSessionGen atomic.Uint64
 	ready               atomic.Bool
 	now                 func() time.Time
@@ -320,6 +322,7 @@ func NewDaemon(cfg Config, opts DaemonOptions) (*Daemon, error) {
 		ota:                ota,
 		tunnelClient:       tunnelClient,
 		onOTASwitch:        opts.OnOTASwitchBoot,
+		mqttNotifyCh:       make(chan struct{}, 1),
 		cmdSem:             make(chan struct{}, 64),
 		now:                nowFn,
 	}
@@ -553,6 +556,14 @@ func (d *Daemon) Run(ctx context.Context) error {
 		defer wg.Done()
 		d.runCycleLoop(ctx)
 	}()
+
+	if d.mqttSession != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			d.runMQTTMaintenanceLoop(ctx)
+		}()
+	}
 
 	if d.songyaxuanPlant != nil {
 		wg.Add(1)
@@ -897,33 +908,90 @@ func (d *Daemon) startMQTTSession(ctx context.Context) error {
 
 	session.AddObserver(func(state mqttclient.SessionState) {
 		connected := state.Healthy()
+		if connected && state.Generation > 0 {
+			d.mqttHealthyGen.Store(state.Generation)
+		}
 		d.mqttConnected.Store(connected)
 		if connected {
-			if state.Generation > 0 && d.connectedSessionGen.Swap(state.Generation) != state.Generation {
-				sid, sidAt := d.currentSession()
-				if sid != "" {
-					if wire, encErr := d.buildGatewayLifecycleEventPayload("GATEWAY_CONNECTED", sid, sidAt, nil); encErr == nil {
-						_, _ = session.Publish(ctx, &paho.Publish{
-							Topic:   eventTopic,
-							QoS:     1,
-							Payload: wire,
-						})
-					}
-				}
-			}
-			_, _ = d.spool.Drain(ctx, 200, func(pubCtx context.Context, item SpoolItem) error {
-				payload := markTelemetryEnvelopeReplay(item.Topic, item.Payload)
-				_, pubErr := session.Publish(pubCtx, &paho.Publish{
-					Topic:   item.Topic,
-					QoS:     item.QoS,
-					Payload: payload,
-				})
-				return pubErr
-			})
+			d.notifyMQTTMaintenance()
 		}
 	})
 	d.mqttSession = session
 	return nil
+}
+
+func (d *Daemon) notifyMQTTMaintenance() {
+	if d == nil || d.mqttNotifyCh == nil {
+		return
+	}
+	select {
+	case d.mqttNotifyCh <- struct{}{}:
+	default:
+	}
+}
+
+func (d *Daemon) runMQTTMaintenanceLoop(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	d.maintainMQTTOnce(ctx)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-d.mqttNotifyCh:
+			d.maintainMQTTOnce(ctx)
+		case <-ticker.C:
+			d.maintainMQTTOnce(ctx)
+		}
+	}
+}
+
+func (d *Daemon) maintainMQTTOnce(ctx context.Context) {
+	if d == nil || d.mqttSession == nil || !d.mqttConnected.Load() {
+		return
+	}
+	d.maintainMQTTWithPublisher(ctx, func(pubCtx context.Context, msg *paho.Publish) error {
+		_, err := d.mqttSession.Publish(pubCtx, msg)
+		return err
+	})
+}
+
+func (d *Daemon) maintainMQTTWithPublisher(ctx context.Context, publish func(context.Context, *paho.Publish) error) {
+	if d == nil || publish == nil || !d.mqttConnected.Load() {
+		return
+	}
+	if gen := d.mqttHealthyGen.Load(); gen > 0 && d.connectedSessionGen.Load() != gen {
+		sid, sidAt := d.currentSession()
+		if sid != "" {
+			if wire, encErr := d.buildGatewayLifecycleEventPayload("GATEWAY_CONNECTED", sid, sidAt, nil); encErr == nil {
+				pubCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				pubErr := publish(pubCtx, &paho.Publish{
+					Topic:   "hvac/v1/" + d.cfg.GatewayID + "/up/event",
+					QoS:     1,
+					Payload: wire,
+				})
+				cancel()
+				if pubErr == nil {
+					d.connectedSessionGen.Store(gen)
+				} else if ctx.Err() == nil {
+					d.logger.Warn("edge_gateway_connected_publish_failed", "error", pubErr.Error())
+				}
+			}
+		}
+	}
+	_, drainErr := d.spool.Drain(ctx, 200, func(itemCtx context.Context, item SpoolItem) error {
+		payload := markTelemetryEnvelopeReplay(item.Topic, item.Payload)
+		pubCtx, cancel := context.WithTimeout(itemCtx, 10*time.Second)
+		defer cancel()
+		return publish(pubCtx, &paho.Publish{
+			Topic:   item.Topic,
+			QoS:     item.QoS,
+			Payload: payload,
+		})
+	})
+	if drainErr != nil && ctx.Err() == nil {
+		d.logger.Warn("edge_spool_drain_failed", "error", drainErr.Error())
+	}
 }
 
 func (d *Daemon) emitCycleTelemetry(ctx context.Context, img edgecontrol.ProcessImage, now time.Time) {
@@ -1261,11 +1329,14 @@ func valueTypeForDescriptor(desc edgecontrol.ChannelDescriptor) string {
 
 func (d *Daemon) publishOrSpool(ctx context.Context, topic string, qos byte, class EvidenceClass, payload []byte) {
 	if d.mqttSession != nil && d.mqttConnected.Load() {
-		if _, err := d.mqttSession.Publish(ctx, &paho.Publish{
+		pubCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		_, err := d.mqttSession.Publish(pubCtx, &paho.Publish{
 			Topic:   topic,
 			QoS:     qos,
 			Payload: payload,
-		}); err == nil {
+		})
+		cancel()
+		if err == nil {
 			return
 		}
 	}

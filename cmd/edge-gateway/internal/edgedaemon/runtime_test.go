@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eclipse/paho.golang/paho"
 	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
 	modbus "github.com/simonvetter/modbus"
@@ -988,5 +989,61 @@ func TestDaemonRoutesET1010AndSharesRTUBusWithConcentrator(t *testing.T) {
 	}
 	if rep.EdgeStatus != "EXPIRED" || rep.ExecutionEvidence == nil || rep.ExecutionEvidence.WinnerControllerID != et1010WinnerControllerID {
 		t.Fatalf("unexpected ET1010 reply: %+v", rep)
+	}
+}
+
+func TestDaemonMQTTMaintenanceDrainsSpoolWithoutObserverRecursion(t *testing.T) {
+	now := time.Date(2026, 11, 23, 8, 30, 0, 0, time.UTC)
+	cfg := Config{
+		GatewayID: "01a14000-4000-7000-8000-000000000100",
+		StateDir:  t.TempDir(),
+	}
+	cfg.ApplyDefaults("0.1.4")
+	daemon, err := NewDaemon(cfg, DaemonOptions{Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatalf("NewDaemon: %v", err)
+	}
+	defer func() { _ = daemon.Close() }()
+
+	if _, err := daemon.Spool().Admit(SpoolItem{
+		ID:      "01a20780-0a5f-78d6-8d0e-d6249ce8370e",
+		Topic:   "hvac/v1/" + cfg.GatewayID + "/up/telemetry",
+		QoS:     1,
+		Class:   EvidenceTelemetryHigh,
+		Payload: []byte(`{"schemaVersion":"2.0","replay":false,"payload":{"devices":[]}}`),
+	}); err != nil {
+		t.Fatalf("Admit: %v", err)
+	}
+	daemon.rotateSession(now)
+	daemon.mqttHealthyGen.Store(1)
+	daemon.mqttConnected.Store(true)
+
+	var topics []string
+	daemon.maintainMQTTWithPublisher(t.Context(), func(pubCtx context.Context, msg *paho.Publish) error {
+		if _, hasDeadline := pubCtx.Deadline(); !hasDeadline {
+			t.Fatal("expected publish context to carry timeout deadline")
+		}
+		topics = append(topics, msg.Topic)
+		// Simulate ConnTracker.RecordSuccess() synchronously notifying observers on Publish().
+		daemon.notifyMQTTMaintenance()
+		return nil
+	})
+	// Second maintenance cycle on same generation must not re-publish GATEWAY_CONNECTED or re-send drained spool.
+	daemon.maintainMQTTWithPublisher(t.Context(), func(_ context.Context, msg *paho.Publish) error {
+		topics = append(topics, msg.Topic)
+		return nil
+	})
+
+	if len(topics) != 2 {
+		t.Fatalf("published topics count = %d (%v), want 2 (GATEWAY_CONNECTED + 1 drained spool)", len(topics), topics)
+	}
+	if !strings.HasSuffix(topics[0], "/up/event") || !strings.HasSuffix(topics[1], "/up/telemetry") {
+		t.Fatalf("unexpected publish order: %v", topics)
+	}
+	if daemon.connectedSessionGen.Load() != 1 {
+		t.Fatalf("connectedSessionGen = %d, want 1", daemon.connectedSessionGen.Load())
+	}
+	if len(daemon.Spool().Pending()) != 0 {
+		t.Fatalf("expected spool empty after maintenance drain, got %d", len(daemon.Spool().Pending()))
 	}
 }
