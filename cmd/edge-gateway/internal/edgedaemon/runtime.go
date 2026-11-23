@@ -98,6 +98,7 @@ type Daemon struct {
 	aggregator          *edgecontrol.WindowAggregator
 	scheduleController  *edgecontrol.EnergyScheduleController
 	clusterController   *edgecontrol.ChillerPlantClusterController
+	modelManager        *EdgeModelManager
 	timedata            *edgecontrol.FileTimedata
 	deadband            *edgecontrol.DeadbandFilter
 	spool               *GradedSpool
@@ -248,8 +249,10 @@ func NewDaemon(cfg Config, opts DaemonOptions) (*Daemon, error) {
 		nowFn = time.Now
 	}
 
+	modelManager := NewEdgeModelManager(cfg.OTA.TrustedPublicKeys, logger)
 	shadow := NewShadowManager(cfg.GatewayID, cfg.StateDir, host, registry, interlock, fallback, ruleEngine, logger)
 	shadow.AttachPlantControllers(aggregator, scheduleController, clusterController)
+	shadow.AttachModelManager(modelManager)
 	shadow.now = nowFn
 	if err := shadow.LoadOrBootstrap(cfg); err != nil {
 		_ = registry.Close()
@@ -314,6 +317,7 @@ func NewDaemon(cfg Config, opts DaemonOptions) (*Daemon, error) {
 		aggregator:         aggregator,
 		scheduleController: scheduleController,
 		clusterController:  clusterController,
+		modelManager:       modelManager,
 		timedata:           timedata,
 		deadband:           deadband,
 		spool:              spool,
@@ -471,6 +475,11 @@ func (d *Daemon) ClusterController() *edgecontrol.ChillerPlantClusterController 
 	return d.clusterController
 }
 
+// ModelManager returns the Daemon's edge AI model & hyperparam governance manager.
+func (d *Daemon) ModelManager() *EdgeModelManager {
+	return d.modelManager
+}
+
 // HandleCommandPayload validates a v2.0 cloud command envelope, registers its ControlIntent,
 // waits for the next cycle outcome, and returns the serialized CommandReplyWire payload.
 func (d *Daemon) HandleCommandPayload(ctx context.Context, payload []byte) ([]byte, bool) {
@@ -527,6 +536,9 @@ func (d *Daemon) StepCycle(ctx context.Context) (edgecontrol.HostCycleResult, er
 	}
 	if d.commands != nil {
 		d.commands.ResolveCycle(now, res.Cycle, res.WriteResults)
+	}
+	if d.modelManager != nil {
+		d.modelManager.EvaluateCycle(now, res.Cycle.Image)
 	}
 	d.emitCycleTelemetry(ctx, res.Cycle.Image, now)
 	d.emitRuleEvents(ctx, now)

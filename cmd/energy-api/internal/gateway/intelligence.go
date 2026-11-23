@@ -81,6 +81,7 @@ type publicIntelligenceRoute struct {
 	siteID     string
 	findingID  string
 	loopKey    string
+	resourceID string
 	target     string
 	method     string
 	publicPath string
@@ -172,6 +173,9 @@ func matchPublicIntelligenceRoute(method, path string) (publicIntelligenceRoute,
 	}
 	if siteID, ok := matchSinglePathParameter(path, "/api/v1/sites/{siteId}/optimization/negative-samples", "{siteId}"); ok {
 		return publicIntelligenceRoute{owner: ownershipregistry.OwnerOptimization, siteID: siteID, target: "optimization-negative-samples", method: http.MethodGet, publicPath: "/api/v1/sites/{siteId}/optimization/negative-samples"}, method == http.MethodGet
+	}
+	if matched, ok := matchEdgeModelIntelligenceRoute(method, path); ok {
+		return matched, true
 	}
 	if siteID, ok := matchSinglePathParameter(path, "/api/v1/sites/{siteId}/optimization/auto-control-lease", "{siteId}"); ok {
 		switch method {
@@ -330,6 +334,10 @@ func dispatchIntelligenceRoute(h *handler, writer http.ResponseWriter, request *
 	}
 	if route.target == "optimization-negative-samples" {
 		h.serveOptimizationNegativeSamplesRead(writer, request, session, route)
+		return
+	}
+	if strings.HasPrefix(route.target, "edge-models-") {
+		h.serveEdgeModelRoute(writer, request, session, route)
 		return
 	}
 	h.createOptimizationRun(writer, request, session)

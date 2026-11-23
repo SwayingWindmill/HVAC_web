@@ -149,7 +149,9 @@
         "infra/registry/postgres/init/device-direct-connectivity-mode.sql",
         "infra/connectivity/postgres/init/gateway-jitp-provisioning.sql",
         "infra/registry/postgres/init/device-ownership-transfers.sql",
-        "infra/connectivity/postgres/init/gateway-factory-reset.sql"
+        "infra/connectivity/postgres/init/gateway-factory-reset.sql",
+        "infra/registry/postgres/init/mlops-edge-domains.sql",
+        "infra/connectivity/postgres/init/gateway-shadow-edge-models.sql"
       ]
     },
     {

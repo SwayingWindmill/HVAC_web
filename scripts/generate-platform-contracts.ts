@@ -292,6 +292,12 @@ const expectedOperations: Record<string, readonly [HttpMethod, string]> = {
   upsertSiteOptimizationCanaryBinding: ['put', `${opt}/canary-bindings/{loopKey}`],
   deleteSiteOptimizationCanaryBinding: ['delete', `${opt}/canary-bindings/{loopKey}`],
   listSiteOptimizationNegativeSamples: ['get', `${opt}/negative-samples`],
+  getSiteEdgeModelWorkspace: ['get', `${site}/edge-models`],
+  createSiteEdgeModelArtifact: ['post', `${site}/edge-models/artifacts`],
+  approveSiteEdgeModelArtifact: ['post', `${site}/edge-models/artifacts/{artifactId}/approve`],
+  deploySiteEdgeModelArtifact: ['post', `${site}/edge-models/deployments`],
+  rollbackSiteEdgeModelDeployment: ['post', `${site}/edge-models/deployments/{deploymentId}/rollback`],
+  recordSiteEdgeModelEvaluation: ['post', `${site}/edge-models/evaluations`],
   createSiteCommandBatch: ['post', `${site}/command-batches`],
 };
 const operations: Record<string, OperationEntry> = {};
@@ -383,12 +389,18 @@ const expectedSuccessSchemas: Record<string, string> = {
   upsertSiteOptimizationCanaryBinding: 'OptimizationCanaryBindingRecord',
   deleteSiteOptimizationCanaryBinding: 'OptimizationCanaryBindingDeleteResult',
   listSiteOptimizationNegativeSamples: 'OptimizationNegativeSamplePage',
+  getSiteEdgeModelWorkspace: 'EdgeModelWorkspace',
+  approveSiteEdgeModelArtifact: 'EdgeModelApprovalView',
+  deploySiteEdgeModelArtifact: 'EdgeModelDeploymentResult',
+  rollbackSiteEdgeModelDeployment: 'EdgeModelRollbackResult',
 };
 for (const [operationId, schemaName] of Object.entries(expectedSuccessSchemas)) {
   invariant(schemaRef(operations[operationId].operation, '200') === `#/components/schemas/${schemaName}`, `${operationId} success schema is unsupported`);
 }
 invariant(schemaRef(operations.recalculateSiteAccounting.operation, '202') === '#/components/schemas/AccountingRecalcJob', 'recalculateSiteAccounting accepted schema is unsupported');
 invariant(schemaRef(operations.createSiteCommandBatch.operation, '202') === '#/components/schemas/CommandBatchView', 'createSiteCommandBatch accepted schema is unsupported');
+invariant(schemaRef(operations.createSiteEdgeModelArtifact.operation, '201') === '#/components/schemas/EdgeModelArtifactView', 'createSiteEdgeModelArtifact created schema is unsupported');
+invariant(schemaRef(operations.recordSiteEdgeModelEvaluation.operation, '201') === '#/components/schemas/EdgeModelEvaluationResult', 'recordSiteEdgeModelEvaluation created schema is unsupported');
 invariant(schemaRef(operations.createSiteMeterRatioVersion.operation, '201') === '#/components/schemas/MeterRatioVersion', 'createSiteMeterRatioVersion created schema is unsupported');
 invariant(schemaRef(operations.replaceDeviceHardware.operation, '201') === '#/components/schemas/ReplaceDeviceHardwareResult', 'replaceDeviceHardware success schema is unsupported');
 invariant(schemaRef(operations.transferSiteDevice.operation, '201') === '#/components/schemas/TransferDeviceResult', 'transferSiteDevice success schema is unsupported');
@@ -546,10 +558,30 @@ const schemaRequirements: Record<string, readonly [readonly string[], (readonly 
   GatewayOPCUADriverSpec: [['securityPolicy', 'securityMode', 'nodes'], ['authMode', 'username', 'credentialRef', 'subscriptionIntervalMs']],
   GatewayModbusDriverConfig: [['deviceKey', 'driverType', 'endpoint', 'timeoutMs', 'retries'], ['unitId', 'capabilityProfile', 'registers', 'bacnet', 'opcua']],
   GatewayAutonomyPolicy: [['enabled', 'offlineGraceSeconds', 'defaultChilledWaterSupplySetpointC', 'defaultPumpFrequencyHz', 'minPumpFrequencyHz', 'maxPumpFrequencyHz', 'minRunSeconds', 'minStopSeconds', 'snapshotIntervalSeconds']],
-  GatewayDesiredConfig: [['desiredRevision', 'pointMappings', 'samplingPolicies', 'concentratorConfigs', 'updatedBy', 'reason', 'createdAt', 'updatedAt'], ['driverConfigs', 'autonomyPolicy', 'edgeRuleBundle']],
-  GatewayReportedConfig: [['reportedRevision', 'appliedStatus', 'pointMappings', 'samplingPolicies', 'concentratorConfigs', 'driftDetails', 'reportedAt', 'updatedAt'], ['driverConfigs', 'autonomyPolicy', 'edgeRuleBundle', 'errorMessage']],
+  GatewayDesiredConfig: [['desiredRevision', 'pointMappings', 'samplingPolicies', 'concentratorConfigs', 'updatedBy', 'reason', 'createdAt', 'updatedAt'], ['driverConfigs', 'autonomyPolicy', 'edgeRuleBundle', 'edgeModels']],
+  GatewayReportedConfig: [['reportedRevision', 'appliedStatus', 'pointMappings', 'samplingPolicies', 'concentratorConfigs', 'driftDetails', 'reportedAt', 'updatedAt'], ['driverConfigs', 'autonomyPolicy', 'edgeRuleBundle', 'edgeModels', 'edgeModelStatuses', 'errorMessage']],
   GatewayConfigShadow: [['tenantId', 'gatewayId', 'syncStatus', 'drift'], ['desired', 'reported']],
-  GatewayConfigShadowUpdateRequest: [['reason'], ['expectedDesiredRevision', 'pointMappings', 'samplingPolicies', 'concentratorConfigs', 'driverConfigs', 'autonomyPolicy', 'edgeRuleBundle']],
+  GatewayConfigShadowUpdateRequest: [['reason'], ['expectedDesiredRevision', 'pointMappings', 'samplingPolicies', 'concentratorConfigs', 'driverConfigs', 'autonomyPolicy', 'edgeRuleBundle', 'edgeModels']],
+  EdgeModelHyperparams: [[], ['copCoefficients', 'chillerStartPowerKw', 'chillerStopPowerKw', 'supplyTempSetpointMinC', 'supplyTempSetpointMaxC', 'pumpFrequencyMinHz', 'pumpFrequencyMaxHz', 'towerFanSpeedMinPct', 'towerFanSpeedMaxPct', 'pidKp', 'pidKi', 'pidKd', 'stageUpLoadPct', 'stageDownLoadPct', 'fddDeltaTMinK', 'fddAnomalyZScore', 'targetPointCodes']],
+  EdgeModelBundle: [['bundleId', 'domain', 'modelKey', 'version', 'rolloutMode', 'artifactSha256', 'maxShadowDeviation', 'hyperparams'], ['keyId', 'signature', 'updatedAt']],
+  EdgeModelRuntimeStatus: [['modelKey', 'domain', 'shadowSampleCount', 'shadowMeanAbsDeviation', 'shadowMaxAbsDeviation', 'rollbackCount'], ['activeBundleId', 'activeVersion', 'shadowBundleId', 'shadowVersion', 'lastRollbackReason', 'lastEvaluatedAt']],
+  EdgeModelArtifactView: [['id', 'versionId', 'domain', 'modelKey', 'version', 'name', 'objectUri', 'checksumSha256', 'maxShadowDeviation', 'hyperparams', 'signed', 'approvalStatus', 'createdAt'], ['description', 'gatewayId', 'latestApprovalReason', 'latestEvaluation']],
+  EdgeModelApprovalView: [['id', 'versionId', 'domain', 'modelKey', 'version', 'decision', 'actorType', 'actorId', 'reason', 'policyRevision', 'decidedAt'], ['artifactId', 'evaluationId']],
+  EdgeModelDeploymentView: [['id', 'versionId', 'domain', 'modelKey', 'version', 'approvalId', 'environment', 'status', 'servingRef', 'revision', 'effectiveFrom', 'hyperparams'], ['artifactId', 'gatewayId', 'effectiveTo']],
+  EdgeModelEvaluationMetrics: [['modelKey', 'version', 'sampleCount', 'meanAbsDeviation', 'maxAbsDeviation', 'thresholdValue'], ['baselineCop', 'candidateCop', 'energySavingPct', 'notes']],
+  EdgeModelEvaluationView: [['id', 'versionId', 'domain', 'modelKey', 'version', 'evaluationType', 'outcome', 'evaluator', 'metrics', 'evaluatedAt'], ['artifactId']],
+  EdgeModelDriftEvidence: [['modelKey', 'version', 'sampleCount', 'meanAbsDeviation'], ['evaluationId', 'notes']],
+  EdgeModelDriftView: [['id', 'deploymentId', 'metricCode', 'observedValue', 'threshold', 'driftStatus', 'evidence', 'observedAt']],
+  EdgeModelRollbackView: [['id', 'deploymentId', 'fromVersionId', 'toVersionId', 'reason', 'actorType', 'actorId', 'status', 'requestedAt'], ['fromVersion', 'toVersion', 'appliedAt']],
+  EdgeModelWorkspace: [['tenantId', 'siteId', 'generatedAt', 'artifacts', 'approvals', 'deployments', 'evaluations', 'driftObservations', 'rollbacks', 'desiredBundles']],
+  CreateEdgeModelArtifactRequest: [['domain', 'modelKey', 'version', 'hyperparams'], ['name', 'description', 'maxShadowDeviation', 'artifactSha256', 'gatewayId']],
+  ApproveEdgeModelRequest: [['decision', 'reason'], ['evaluationId', 'policyRevision']],
+  DeployEdgeModelRequest: [['artifactId', 'environment'], ['gatewayId', 'reason']],
+  EdgeModelDeploymentResult: [['deployment', 'desiredBundles'], ['gatewayId', 'shadowSyncStatus', 'shadowDesiredRevision', 'shadowSyncError']],
+  RollbackEdgeModelRequest: [['reason'], ['targetArtifactId', 'gatewayId']],
+  EdgeModelRollbackResult: [['rollback', 'desiredBundles'], ['restoredDeployment', 'gatewayId', 'shadowSyncStatus', 'shadowDesiredRevision', 'shadowSyncError']],
+  RecordEdgeModelEvaluationRequest: [['artifactId', 'evaluationType', 'sampleCount', 'meanAbsDeviation', 'maxAbsDeviation'], ['deploymentId', 'baselineCop', 'candidateCop', 'energySavingPct', 'outcome', 'notes']],
+  EdgeModelEvaluationResult: [['evaluation', 'breached'], ['driftObservation']],
   AlarmRuleGraphNode: [['ruleId', 'title', 'severity', 'hopDepth', 'dependsOnRuleIds', 'actionCount'], ['ruleKind', 'executionTarget', 'change']],
   EdgeRuleCompileResult: [['siteId', 'bundleRevision', 'edgeBundleDigest', 'compiledAt', 'edgeRuleCount', 'cloudOnlyCount', 'eligibility', 'bundle'], ['bundleDigest']],
   GatewayQuarantineRecord: [['id', 'gatewayId', 'topic', 'reasonCode', 'detail', 'payloadSha256', 'payloadBytes', 'payloadPreview', 'payloadEncoding', 'payloadTruncated', 'occurrenceCount', 'receivedAt', 'lastSeenAt']],
@@ -718,6 +750,12 @@ const pathOps: Record<string, string> = {
   __SITE_OPTIMIZATION_CANARY_BINDINGS_PATH__: 'listSiteOptimizationCanaryBindings',
   __SITE_OPTIMIZATION_CANARY_BINDING_PATH__: 'upsertSiteOptimizationCanaryBinding',
   __SITE_OPTIMIZATION_NEGATIVE_SAMPLES_PATH__: 'listSiteOptimizationNegativeSamples',
+  __SITE_EDGE_MODELS_PATH__: 'getSiteEdgeModelWorkspace',
+  __SITE_EDGE_MODEL_ARTIFACTS_PATH__: 'createSiteEdgeModelArtifact',
+  __SITE_EDGE_MODEL_APPROVE_PATH__: 'approveSiteEdgeModelArtifact',
+  __SITE_EDGE_MODEL_DEPLOYMENTS_PATH__: 'deploySiteEdgeModelArtifact',
+  __SITE_EDGE_MODEL_ROLLBACK_PATH__: 'rollbackSiteEdgeModelDeployment',
+  __SITE_EDGE_MODEL_EVALUATIONS_PATH__: 'recordSiteEdgeModelEvaluation',
   __HEALTH_PATH__: 'getHealth',
   __VERSION_PATH__: 'getVersion',
   __PLATFORM_STATUS_PATH__: 'getPlatformStatus',
