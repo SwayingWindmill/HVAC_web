@@ -3,7 +3,7 @@
 
 import { grouped } from './format';
 import { siteClock, type DayPoint } from './today';
-import { CATEGORY_LABELS, EQUIPMENT_CATEGORIES, isRunning, loopDifferentialPressure, plantReading, type ParallelBranch, type Plant, type PlantCategory, type PlantDevice, type PlantReading, type WaterLoopKind } from './plant';
+import { CATEGORY_LABELS, EQUIPMENT_CATEGORIES, isRunning, loopDifferentialPressure, plantReading, toStandaloneUnit, type ParallelBranch, type Plant, type PlantCategory, type PlantDevice, type PlantReading, type PlantUnit, type WaterLoopKind } from './plant';
 
 export type StatusTone = 'running' | 'stopped' | 'fault' | 'offline' | 'neutral';
 
@@ -59,22 +59,23 @@ export function withUnit(reading: PlantReading): string {
  * The devices the mini program shows and counts: the gateway's temperature and control modules are
  * of no use to duty staff and are left out (#677); their trouble reaches 通知 as alarms.
  */
-const listed = (plant: Plant) => plant.devices.filter((device) => device.category !== 'ACQUISITION');
+const unitsOf = (plant: Plant): readonly PlantUnit[] => plant.units ?? plant.devices.map(toStandaloneUnit);
+const listed = (plant: Plant) => unitsOf(plant).filter((unit) => unit.category !== 'ACQUISITION');
 
 function equipment(plant: Plant) {
-  const devices = plant.devices.filter((device) => EQUIPMENT_CATEGORIES.has(device.category));
+  const machines = unitsOf(plant).filter((unit) => EQUIPMENT_CATEGORIES.has(unit.category));
   return {
-    total: devices.length,
-    running: devices.filter(isRunning).length,
-    faults: devices.filter((device) => device.connection !== 'OFFLINE' && device.runState === 'FAULT').length,
+    total: machines.length,
+    running: machines.filter(isRunning).length,
+    faults: machines.filter((unit) => unit.connection !== 'OFFLINE' && unit.runState === 'FAULT').length,
   };
 }
 
 function deviceSummary(plant: Plant): string {
   const { total, running } = equipment(plant);
-  // Counted over the listed devices, not plant.onlineCount (kept for parity with the web's plant).
-  const devices = listed(plant);
-  return `${running} / ${total} 台运行 · ${devices.filter((device) => device.connection === 'ONLINE').length} / ${devices.length} 在线`;
+  // Running counts physical equipment units; online counts non-acquisition communication devices.
+  const endpoints = plant.devices.filter((device) => device.category !== 'ACQUISITION');
+  return `${running} / ${total} 台运行 · ${endpoints.filter((device) => device.connection === 'ONLINE').length} / ${endpoints.length} 在线`;
 }
 
 function plantStatus(plant: Plant) {
@@ -402,7 +403,11 @@ export function deviceStatus(device: PlantDevice): { readonly label: string; rea
 }
 
 /** Offline, faulty, or reporting late: what an operator should look at. */
-export const needsAttention = (device: PlantDevice) => device.connection === 'OFFLINE' || device.runState === 'FAULT' || device.hasStaleData;
+export const needsAttention = (device: PlantUnit | PlantDevice) =>
+  device.connection === 'OFFLINE'
+  || ('offlineMemberCount' in device && device.offlineMemberCount > 0)
+  || device.runState === 'FAULT'
+  || device.hasStaleData;
 
 // The reading a row leads with: a machine's power (a pump without a power reading, its flow), else the first of its role's key readings (the web's KEY_READINGS).
 const LEAD_KEYS: Readonly<Record<PlantCategory, readonly string[]>> = {
@@ -410,7 +415,7 @@ const LEAD_KEYS: Readonly<Record<PlantCategory, readonly string[]>> = {
   CHILLED_WATER_PUMP: ['chwp.power', 'chwp.flow_rate', 'chwp.frequency'],
   COOLING_WATER_PUMP: ['cwp.power', 'cwp.flow_rate', 'cwp.frequency'],
   COOLING_TOWER: ['cooling_tower.power'],
-  METER: ['hvac_meter.active_power', 'btu_meter.instant_cooling_capacity', 'btu_meter.flow_rate', 'dp_sensor.differential_pressure', 'header.differential_pressure', 'branch.flow_rate'],
+  METER: ['hvac_meter.active_power', 'btu_meter.instant_cooling_capacity', 'btu_meter.flow_rate', 'dp_sensor.differential_pressure', 'header.differential_pressure', 'branch.flow_rate', 'chwp.flow_rate', 'cooling_tower.leaving_water_temperature'],
   WEATHER: ['weather.ambient_dry_bulb_temperature'],
   ZONE: ['zone.temperature', 'zone.banquet_temperature'],
   ACQUISITION: ['valve.open_state', 'valve.position_feedback', 'vfd.frequency_feedback'],
@@ -424,7 +429,7 @@ const DETAIL_KEYS: Partial<Record<PlantCategory, readonly string[]>> = {
   COOLING_WATER_PUMP: ['cwp.flow_rate', 'cwp.frequency'],
   COOLING_TOWER: ['cooling_tower.leaving_water_temperature', 'cooling_tower.fan_speed'],
   ACQUISITION: ['valve.position_feedback', 'vfd.frequency_feedback'],
-  METER: ['branch.flow_rate', 'dp_sensor.differential_pressure'],
+  METER: ['branch.flow_rate', 'dp_sensor.differential_pressure', 'cooling_tower.entering_water_temperature'],
 };
 
 /** A point the device has never reported (or reported only rejected values for). */
@@ -469,7 +474,7 @@ function deviceRow(device: PlantDevice) {
 
 export type DeviceFilter = 'all' | 'running' | 'stopped' | 'attention';
 
-const FILTERS: readonly { readonly key: DeviceFilter; readonly label: string; readonly keeps: (device: PlantDevice) => boolean }[] = [
+const FILTERS: readonly { readonly key: DeviceFilter; readonly label: string; readonly keeps: (device: PlantUnit) => boolean }[] = [
   { key: 'all', label: '全部', keeps: () => true },
   { key: 'running', label: '运行', keeps: isRunning },
   { key: 'stopped', label: '停机', keeps: (device) => device.connection !== 'OFFLINE' && device.runState === 'STOPPED' },
@@ -480,11 +485,11 @@ const FILTERS: readonly { readonly key: DeviceFilter; readonly label: string; re
 export function presentDevices(plant: Plant, filter: DeviceFilter) {
   const { keeps, label } = FILTERS.find((each) => each.key === filter)!;
   const devices = listed(plant);
-  const rawGroups: { readonly title: string; readonly caption: string; readonly devices: readonly PlantDevice[] }[] = [];
+  const rawGroups: { readonly title: string; readonly caption: string; readonly devices: readonly PlantUnit[] }[] = [];
   if (plant.branches.length > 0) {
     const branchedIds = new Set<string>();
     for (const branch of plant.branches) {
-      for (const device of branch.devices) branchedIds.add(device.deviceId);
+      for (const device of branch.devices) branchedIds.add(device.unitId);
       const caption = branch.equipmentCount > 0
         ? `${branch.devices.length} 台 · ${branch.runningCount} 台运行`
         : `${branch.devices.length} 台设备`;
@@ -494,8 +499,8 @@ export function presentDevices(plant: Plant, filter: DeviceFilter) {
         devices: branch.devices,
       });
     }
-    const unbranchedEquip = devices.filter((device) => !branchedIds.has(device.deviceId) && EQUIPMENT_CATEGORIES.has(device.category));
-    const unbranchedOthers = devices.filter((device) => !branchedIds.has(device.deviceId) && !EQUIPMENT_CATEGORIES.has(device.category));
+    const unbranchedEquip = devices.filter((device) => !branchedIds.has(device.unitId) && EQUIPMENT_CATEGORIES.has(device.category));
+    const unbranchedOthers = devices.filter((device) => !branchedIds.has(device.unitId) && !EQUIPMENT_CATEGORIES.has(device.category));
     if (unbranchedEquip.length > 0) {
       rawGroups.push({
         title: '冷站主设备',

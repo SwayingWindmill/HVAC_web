@@ -8,7 +8,7 @@ import { formatDecimal } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import { pointIsTrusted } from '@/features/assets/operational-projection';
 import { CATEGORY_ICONS, deviceStatus, formatClock, KEY_READINGS, POWER_KEY, ReadingValue } from '../../realtime/device-presentation';
-import { PLANT_CATEGORY_LABELS, tileReadings, type PlantDevice } from '../../realtime/plant-model';
+import { PLANT_CATEGORY_LABELS, tileReadings, unitPoints, unitPointTarget, type PlantUnit } from '../../realtime/plant-model';
 import { dayHistoryWindow, deviceDayHistoryQuery } from '../device-history';
 import { buildTimeSlots, fillGaugeSlots } from '../../trends/timeline';
 
@@ -19,7 +19,7 @@ const siteRoute = getRouteApi('/_app/_site');
  * shape, two more readings, and whether its points, data and work are in order.
  */
 export function DeviceTile({ device, openWorkOrders, selected, onOpen }: {
-  readonly device: PlantDevice;
+  readonly device: PlantUnit;
   readonly openWorkOrders: number;
   readonly selected: boolean;
   readonly onOpen: () => void;
@@ -31,20 +31,27 @@ export function DeviceTile({ device, openWorkOrders, selected, onOpen }: {
     [POWER_KEY[device.category], ...KEY_READINGS[device.category]].filter((key): key is string => Boolean(key)),
     KEY_READINGS[device.category],
   );
-  const pointCode = lead ? device.row.telemetryPoints.find((point) => point.sourceKey === lead.sourceKey)?.pointCode : undefined;
-  const window = useMemo(() => dayHistoryWindow(), [device.deviceId]);
+  const historyTarget = lead ? unitPointTarget(device, lead.sourceKey) : null;
+  const window = useMemo(() => dayHistoryWindow(), [historyTarget?.deviceId ?? device.deviceId]);
   const history = useQuery({
-    ...deviceDayHistoryQuery({ siteId: site.id, deviceId: device.deviceId, keys: pointCode ? [pointCode] : [], timezone: site.timezone, csrfToken: principal.session.csrfToken, window }),
-    enabled: Boolean(pointCode) && principal.authorization.capabilities.includes('telemetry.history.read'),
+    ...deviceDayHistoryQuery({
+      siteId: site.id,
+      deviceId: historyTarget?.deviceId ?? device.deviceId,
+      keys: historyTarget ? [historyTarget.pointCode] : [],
+      timezone: site.timezone,
+      csrfToken: principal.session.csrfToken,
+      window,
+    }),
+    enabled: Boolean(historyTarget) && principal.authorization.capabilities.includes('telemetry.history.read'),
   });
-  const series = pointCode ? history.data?.get(pointCode) ?? [] : [];
+  const series = historyTarget ? history.data?.get(historyTarget.pointCode) ?? [] : [];
   const slots = buildTimeSlots({ fromMs: window.fromMs, toMs: window.toMs, granularity: 'HOUR', timeZone: site.timezone });
   const values = fillGaugeSlots(slots, series).map((point) => point.average);
   const unit = lead?.reading.unit ?? formatTelemetryUnit(undefined);
-  const points = device.row.operational.points;
-  const healthy = points.filter((point) => pointIsTrusted(point)).length;
+  const points = unitPoints(device);
+  const healthy = points.filter((entry) => pointIsTrusted(entry.point)).length;
   const Icon = CATEGORY_ICONS[device.category];
-  const stale = device.hasStaleData || device.connection === 'OFFLINE';
+  const stale = device.hasStaleData || device.connection === 'OFFLINE' || device.offlineMemberCount > 0;
 
   return (
     <button
@@ -66,7 +73,7 @@ export function DeviceTile({ device, openWorkOrders, selected, onOpen }: {
         </span>
       </span>
       <span className="truncate px-4 pt-1 text-xs text-muted-foreground">
-        {PLANT_CATEGORY_LABELS[device.category]}{lead ? ` · ${lead.reading.label}` : ''}
+        {PLANT_CATEGORY_LABELS[device.category]}{device.members.length > 1 ? ` · ${device.members.length} 个接入设备` : ''}{lead ? ` · ${lead.reading.label}` : ''}
       </span>
       <span className={cn('px-4 pt-1 text-[26px] leading-8 font-semibold tracking-[-0.03em] tabular-nums', stale && 'text-muted-foreground')}>
         {lead ? <ReadingValue reading={lead.reading} /> : <span className="text-muted-foreground">—</span>}
@@ -85,7 +92,7 @@ export function DeviceTile({ device, openWorkOrders, selected, onOpen }: {
         {series.length > 1 ? (
           <Sparkline data={values} color={stale ? 'var(--muted-foreground)' : 'var(--chart-1)'} animate={false} className="h-9" />
         ) : (
-          <span className="flex h-9 items-center text-xs text-subtle-foreground">{history.isPending && pointCode ? '' : '近 24 小时没有记录'}</span>
+          <span className="flex h-9 items-center text-xs text-subtle-foreground">{history.isPending && historyTarget ? '' : '近 24 小时没有记录'}</span>
         )}
         {series.length > 1 ? (
           <span className="flex justify-between text-[11px] text-subtle-foreground">

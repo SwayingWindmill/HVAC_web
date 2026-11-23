@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { SITE_ID } from './gateway';
 import { expect, test } from './test';
 
@@ -416,4 +417,78 @@ test('hovering the realtime trend chart formats numeric timestamps without crash
   await expect(tooltip).toContainText(/\b\d{2}:\d{2}\b/);
   await expect(tooltip).toContainText('冷站总功率');
   await expect(page.getByText('页面暂时无法显示')).toHaveCount(0);
+});
+
+test('deduplicates dual-bound chiller assets and excludes PROVISIONAL_READINGS headers across realtime, overview, and device pages', async ({ page, gateway }) => {
+  gateway.optimization = JSON.parse(readFileSync(new URL('./fixtures/optimization-latest.json', import.meta.url), 'utf8'));
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const nowIso = new Date().toISOString();
+  const chillerAsset = gateway.assetModel.assets.find((asset: { assetType: string }) => asset.assetType === 'CHILLER');
+  const templateDevice = gateway.assetModel.devices.find((device: { deviceType: string }) => device.deviceType === 'CHILLER_CONTROLLER');
+  const basePoint = gateway.assetModel.telemetryPoints[0];
+  const baseSnap = gateway.snapshots.items.find((item: { status: string }) => item.status === 'OK')?.snapshot;
+  expect(chillerAsset && templateDevice && basePoint && baseSnap).toBeTruthy();
+
+  const ctrlChillerId = '018f3e00-4000-7000-8000-000000000095';
+  const provTowerId = '018f3e00-4000-7000-8000-000000000096';
+  const provChwpId = '018f3e00-4000-7000-8000-000000000097';
+
+  const nextDevices = [
+    ...gateway.assetModel.devices,
+    { ...templateDevice, id: ctrlChillerId, code: 'ctrl-chiller-a', displayName: '1# 螺杆主机控制器', deviceType: 'CHILLER_CONTROLLER' },
+    { ...templateDevice, id: provTowerId, code: 'cooling-tower', displayName: '冷却塔（总管代理）', deviceType: 'PROVISIONAL_READINGS' },
+    { ...templateDevice, id: provChwpId, code: 'chwp-main', displayName: '冷冻水泵（总管）', deviceType: 'PROVISIONAL_READINGS' },
+  ];
+  const nextPoints = [
+    ...gateway.assetModel.telemetryPoints,
+    { ...basePoint, id: '018f3e00-5000-7000-8000-000000000095', reportingDeviceId: ctrlChillerId, pointCode: 'run_state', sourceKey: 'run_state', displayName: '1# 主机运行状态', pointType: 'STATE', valueType: 'STRING', unit: null, writable: false, status: 'ACTIVE' },
+    { ...basePoint, id: '018f3e00-5000-7000-8000-000000000096', reportingDeviceId: provTowerId, pointCode: 'leaving_temp', sourceKey: 'cooling_tower.leaving_water_temperature', displayName: '冷却塔出水温度', pointType: 'TELEMETRY', valueType: 'NUMBER', unit: 'Cel', writable: false, status: 'ACTIVE' },
+    { ...basePoint, id: '018f3e00-5000-7000-8000-000000000097', reportingDeviceId: provChwpId, pointCode: 'run_state', sourceKey: 'chwp.run_state', displayName: '运行状态', pointType: 'STATE', valueType: 'STRING', unit: null, writable: false, status: 'ACTIVE' },
+    { ...basePoint, id: '018f3e00-5000-7000-8000-000000000098', reportingDeviceId: provChwpId, pointCode: 'flow_rate', sourceKey: 'chwp.flow_rate', displayName: '冷冻水流量', pointType: 'TELEMETRY', valueType: 'NUMBER', unit: 'm3/h', writable: false, status: 'ACTIVE' },
+  ];
+  const nextRelationships = [
+    ...gateway.assetModel.relationships,
+    { id: '018f3e00-6400-7000-8000-000000000095', tenantId: chillerAsset.tenantId, siteId: chillerAsset.siteId, fromType: 'DEVICE', fromId: ctrlChillerId, toType: 'ASSET', toId: chillerAsset.id, role: 'PRIMARY_CONTROLLER', status: 'ACTIVE', validFrom: nowIso, validTo: null, revision: 1, createdAt: nowIso, updatedAt: nowIso },
+  ];
+  gateway.assetModel = {
+    ...gateway.assetModel,
+    devices: nextDevices,
+    telemetryPoints: nextPoints,
+    relationships: nextRelationships,
+    counts: { ...gateway.assetModel.counts, deviceEndpoints: nextDevices.length, points: nextPoints.length },
+  };
+  const sampleVal = baseSnap.values[0];
+  gateway.snapshots.items.push(
+    { requestId: 'e2e-ctrl-ch', deviceId: ctrlChillerId, status: 'OK', snapshot: { ...baseSnap, deviceId: ctrlChillerId, values: [{ ...sampleVal, key: 'run_state', value: 'RUNNING', valueType: 'STRING', unit: null }] } },
+    { requestId: 'e2e-prov-ct', deviceId: provTowerId, status: 'OK', snapshot: { ...baseSnap, deviceId: provTowerId, values: [{ ...sampleVal, key: 'leaving_temp', value: 23.7, valueType: 'NUMBER', unit: 'Cel' }] } },
+    { requestId: 'e2e-prov-chwp', deviceId: provChwpId, status: 'OK', snapshot: { ...baseSnap, deviceId: provChwpId, values: [{ ...sampleVal, key: 'run_state', value: 'RUNNING', valueType: 'STRING', unit: null }, { ...sampleVal, key: 'flow_rate', value: 132, valueType: 'NUMBER', unit: 'm3/h' }] } },
+  );
+
+  // 1. Realtime hydraulic schematic: CHILLER-01 appears once, no provisional pump/tower cards.
+  await page.goto(`/operations/realtime?site=${SITE_ID}`);
+  await expect(page.getByRole('link', { name: /主要设备 4 \/ 4 运行/ })).toBeVisible();
+  const schematic = page.getByRole('region', { name: '冷站水力回路' });
+  await expect(schematic).toBeVisible();
+  await expect(schematic.getByRole('button', { name: /CHILLER-01/ })).toHaveCount(1);
+  await expect(schematic.getByRole('button', { name: /冷却塔（总管代理）/ })).toHaveCount(0);
+  await expect(schematic.getByRole('button', { name: /冷冻水泵（总管）/ })).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+
+  await schematic.getByRole('button', { name: /CHILLER-01/ }).click();
+  const inspector = page.getByRole('dialog');
+  await expect(inspector.getByRole('region', { name: '接入设备' })).toContainText('1# 螺杆主机控制器');
+  await expect(inspector).toContainText('12 个点位');
+
+  // 2. Overview card: 4 physical machines running out of 4, while online count reflects all 11 endpoints.
+  await page.goto(`/overview?site=${SITE_ID}`);
+  const overviewPlant = page.getByRole('region', { name: '冷站实时' });
+  await expect(overviewPlant.getByRole('region', { name: '主要设备' })).toContainText('4 / 4 台运行');
+  await expect(overviewPlant).toContainText('11 / 11 在线');
+
+  // 3. Systems & Devices wall: single CHILLER-01 tile showing 2 bound devices under 冷站主设备.
+  await page.goto(`/operations/systems-devices?site=${SITE_ID}`);
+  const mainSection = page.getByRole('region', { name: '冷站主设备' });
+  await expect(mainSection).toContainText('4 台');
+  await expect(mainSection.getByRole('button', { name: /CHILLER-01/ })).toHaveCount(1);
+  await expect(mainSection.getByRole('button', { name: /CHILLER-01/ })).toContainText('2 个接入设备');
 });

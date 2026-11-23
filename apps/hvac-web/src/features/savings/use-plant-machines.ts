@@ -18,7 +18,16 @@ export function usePlantMachines() {
   const { site } = siteRoute.useRouteContext();
   const assetModel = useQuery(siteAssetModelQuery(site.id));
   const machines = useMemo(() => (assetModel.data ? plantMachinesFromAssetModel(assetModel.data) : null), [assetModel.data]);
-  const names = useMemo(() => (machines ? new Map(machines.map((machine) => [machine.deviceId, machine.name])) : null), [machines]);
+  const names = useMemo(() => {
+    if (!machines) return null;
+    const entries: [string, string][] = [];
+    for (const machine of machines) {
+      for (const deviceId of machine.deviceIds ?? [machine.deviceId]) {
+        entries.push([deviceId, machine.name]);
+      }
+    }
+    return new Map(entries);
+  }, [machines]);
   return { machines, names };
 }
 
@@ -40,7 +49,12 @@ export function useMeteredMachines(machines: readonly Machine[] | null, enabled:
     retry: false,
   });
   return {
-    machines: machines && metered.data ? machines.filter((machine) => metered.data.has(machine.deviceId)) : null,
+    machines: machines && metered.data
+      ? machines.flatMap((machine) => {
+        const matchedId = (machine.deviceIds ?? [machine.deviceId]).find((id) => metered.data!.has(id));
+        return matchedId ? [{ ...machine, deviceId: matchedId }] : [];
+      })
+      : null,
     isPending: machines === null || metered.isPending,
     isError: metered.isError,
   };

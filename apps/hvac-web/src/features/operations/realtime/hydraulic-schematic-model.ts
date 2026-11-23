@@ -2,10 +2,13 @@ import {
   isRunning,
   loopDifferentialPressure,
   plantReading,
+  plantUnits,
+  provisionalHeaderReading,
   soleReading,
   type PlantCategory,
   type PlantDevice,
   type PlantReading,
+  type PlantUnit,
   type PlantView,
 } from './plant-model.ts';
 
@@ -18,7 +21,7 @@ export interface HydraulicValveChip {
 }
 
 export interface HydraulicNodeView {
-  readonly device: PlantDevice;
+  readonly device: PlantUnit;
   readonly primaryReading: PlantReading | null;
   readonly secondaryReading: PlantReading | null;
   readonly branchCode: string | null;
@@ -73,7 +76,7 @@ export interface HydraulicSchematicModel {
   readonly chillers: readonly HydraulicNodeView[];
   readonly chilledPumps: readonly HydraulicNodeView[];
   readonly zones: readonly HydraulicNodeView[];
-  readonly weather: PlantDevice | null;
+  readonly weather: PlantUnit | null;
   readonly chilled: ChilledLoopSummary;
   readonly condenser: CondenserLoopSummary;
   readonly ambient: AmbientSummary;
@@ -160,18 +163,18 @@ function formatReadingWithUnit(reading: PlantReading): string {
 function toNodeList(
   plant: PlantView,
   category: PlantCategory,
-  valvesByDevice: ReadonlyMap<string, readonly HydraulicValveChip[]>,
+  valvesByUnit: ReadonlyMap<string, readonly HydraulicValveChip[]>,
 ): readonly HydraulicNodeView[] {
-  return plant.devices
-    .filter((device) => device.category === category)
+  return plantUnits(plant)
+    .filter((unit) => unit.category === category)
     .sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'))
-    .map((device) => ({
-      device,
-      primaryReading: firstPresentReading(device, PRIMARY_KEYS[category]),
-      secondaryReading: firstPresentReading(device, SECONDARY_KEYS[category]),
-      branchCode: device.branchCode,
-      valves: valvesByDevice.get(device.deviceId) ?? [],
-      hasIssue: device.connection === 'OFFLINE' || device.runState === 'FAULT' || device.hasStaleData,
+    .map((unit) => ({
+      device: unit,
+      primaryReading: firstPresentReading(unit, PRIMARY_KEYS[category]),
+      secondaryReading: firstPresentReading(unit, SECONDARY_KEYS[category]),
+      branchCode: unit.branchCode,
+      valves: valvesByUnit.get(unit.unitId) ?? [],
+      hasIssue: unit.connection === 'OFFLINE' || unit.offlineMemberCount > 0 || unit.runState === 'FAULT' || unit.hasStaleData,
     }));
 }
 
@@ -185,7 +188,7 @@ export function buildHydraulicSchematic(plant: PlantView): HydraulicSchematicMod
     const chips = parsedValves.map((entry) => entry.parsed.chip);
     for (const member of branch.devices) {
       if (isValveDevice(member)) continue;
-      valvesByDevice.set(member.deviceId, chips);
+      valvesByDevice.set(member.unitId, chips);
     }
     if (branch.runningCount > 0) {
       const closedEntry = parsedValves.find((entry) => entry.parsed.strictlyClosed);
@@ -206,8 +209,8 @@ export function buildHydraulicSchematic(plant: PlantView): HydraulicSchematicMod
   const chillers = toNodeList(plant, 'CHILLER', valvesByDevice);
   const chilledPumps = toNodeList(plant, 'CHILLED_WATER_PUMP', valvesByDevice);
   const zones = toNodeList(plant, 'ZONE', valvesByDevice);
-  const weather = plant.devices
-    .filter((device) => device.category === 'WEATHER')
+  const weather = plantUnits(plant)
+    .filter((unit) => unit.category === 'WEATHER')
     .sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'))[0] ?? null;
 
   const chilled: ChilledLoopSummary = {
@@ -217,7 +220,8 @@ export function buildHydraulicSchematic(plant: PlantView): HydraulicSchematicMod
       ?? soleReading(plant, 'CHILLER', 'chiller.entering_chilled_water_temperature'),
     deltaT: plantReading(plant, 'btu_meter.temperature_difference'),
     flowRate: plantReading(plant, 'btu_meter.flow_rate')
-      ?? soleReading(plant, 'CHILLED_WATER_PUMP', 'chwp.flow_rate'),
+      ?? soleReading(plant, 'CHILLED_WATER_PUMP', 'chwp.flow_rate')
+      ?? provisionalHeaderReading(plant, 'chwp.flow_rate'),
     differentialPressure: loopDifferentialPressure(plant, 'CHILLED_WATER'),
   };
 

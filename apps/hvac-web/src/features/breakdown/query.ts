@@ -25,7 +25,7 @@ export function useEnergyBreakdown(period: EnergyPeriod) {
   const registry = useQuery(siteAssetModelQuery(site.id));
   // The plant's devices come from the Registry asset model; until it loads there is no machine list.
   const machines = useMemo(() => (registry.data ? plantMachinesFromAssetModel(registry.data) : null), [registry.data]);
-  const machineKey = machines?.map((machine) => machine.deviceId).join(',');
+  const machineKey = machines?.map((machine) => (machine.deviceIds ?? [machine.deviceId]).join('|')).join(',');
   const breakdownOf = (window: (period: EnergyPeriod, now: Date, timeZone: string) => { granularity: 'hour' | 'day' | 'month'; from: Date; to: Date }) =>
     async ({ signal }: { signal: AbortSignal }) => {
       const { granularity, from, to } = window(period, energyQueryNow(site.timezone), site.timezone);

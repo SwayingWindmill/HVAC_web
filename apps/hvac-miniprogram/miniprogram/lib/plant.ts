@@ -1,19 +1,22 @@
 import { formatTelemetryDisplayValue, formatTelemetryUnit, telemetryPointDefinition } from '../shared/centralPlantTelemetry';
 import {
+  aggregatePlantUnits,
   buildParallelBranchGroups,
   cleanBranchCode,
   classifyPlantCategory,
   EQUIPMENT_CATEGORIES,
+  findFaultCodePoint,
   findLoopDifferentialPressure,
+  findRunStatePoint,
   inferHydraulicAssetIndex,
   isPlantDeviceRunning,
   parseRunState,
   parseWaterLoop,
   PLANT_CATEGORY_LABELS as CATEGORY_LABELS,
   PLANT_CATEGORY_ORDER as CATEGORY_ORDER,
-  RUN_STATE_NAMESPACE_BY_CATEGORY,
   WATER_LOOP_LABELS,
   WATER_LOOP_ORDER,
+  type AggregatedPlantUnitMeta,
   type HydraulicAssetMeta,
   type PlantCategory,
   type RunState,
@@ -138,6 +141,14 @@ export interface PlantDevice {
   reading(sourceKey: string): PlantReading | null;
 }
 
+/** Physical plant machine (or standalone unbound device) aggregating all devices bound to the same Asset. */
+export interface PlantUnit extends PlantDevice {
+  readonly unitId: string;
+  readonly members: readonly PlantDevice[];
+  readonly deviceIds: readonly string[];
+  readonly offlineMemberCount: number;
+}
+
 export interface PlantGroup {
   readonly category: PlantCategory;
   readonly label: string;
@@ -149,7 +160,7 @@ export interface ParallelBranch {
   readonly waterLoop: WaterLoopKind | null;
   readonly loopLabel: string;
   readonly branchCode: string;
-  readonly devices: readonly PlantDevice[];
+  readonly devices: readonly PlantUnit[];
   readonly equipmentCount: number;
   readonly runningCount: number;
   readonly hasAlert: boolean;
@@ -157,8 +168,10 @@ export interface ParallelBranch {
 
 export interface Plant {
   readonly groups: readonly PlantGroup[];
-  /** The groups' devices in order. */
+  /** Raw communication devices (excluding GATEWAY): used for online counts and header reads. */
   readonly devices: readonly PlantDevice[];
+  /** Asset-grouped physical plant units: used for equipment counts, device wall, and branches. */
+  readonly units: readonly PlantUnit[];
   readonly branches: readonly ParallelBranch[];
   readonly loopBranches: Readonly<Partial<Record<WaterLoopKind, number>>>;
   readonly onlineCount: number;
@@ -260,9 +273,8 @@ function toDevice(
     deviceType: device.deviceType,
   });
 
-  const namespace = RUN_STATE_NAMESPACE_BY_CATEGORY[category];
-  const runValue = namespace ? presentValue(snapshot, available, points.find((point) => point.sourceKey === `${namespace}.run_state`)) : undefined;
-  const faultValue = presentValue(snapshot, available, points.find((point) => point.sourceKey.endsWith('.fault_code')));
+  const runValue = presentValue(snapshot, available, findRunStatePoint(points, category));
+  const faultValue = presentValue(snapshot, available, findFaultCodePoint(points));
   const presence = available && snapshot && snapshot.presence.applicability === 'APPLICABLE' ? snapshot.presence.currentState : null;
   const meta = asset ? (hydraulicByAsset?.get(asset.id) ?? {
     waterLoop: parseWaterLoop(asset.waterLoop),
@@ -311,6 +323,51 @@ function mergeDeviceSnapshots(snapshots: readonly Snapshot[]): Snapshot | undefi
   };
 }
 
+function mergeUnitReadings(
+  members: readonly PlantDevice[],
+  pickReading: (sourceKey: string) => PlantReading | null,
+): PlantReading[] {
+  if (members.length === 1) return [...members[0].readings];
+  const seen = new Set<string>();
+  const merged: PlantReading[] = [];
+  for (const member of members) {
+    for (const reading of member.readings) {
+      if (seen.has(reading.sourceKey)) continue;
+      seen.add(reading.sourceKey);
+      merged.push(pickReading(reading.sourceKey) ?? reading);
+    }
+  }
+  return merged;
+}
+
+function toPlantUnit(meta: AggregatedPlantUnitMeta<PlantDevice, PlantReading>): PlantUnit {
+  const { primary, members, deviceIds, unitId, offlineMemberCount, connection, runState, faultCode, latestSampleAt, hasStaleData, pickReading } = meta;
+  return {
+    ...primary,
+    unitId,
+    members,
+    deviceIds,
+    offlineMemberCount,
+    connection: connection === 'ONLINE' || connection === 'OFFLINE' ? connection : 'UNKNOWN',
+    runState,
+    faultCode,
+    latestSampleAt,
+    hasStaleData,
+    readings: mergeUnitReadings(members, pickReading),
+    reading: (sourceKey) => pickReading(sourceKey),
+  };
+}
+
+export function toStandaloneUnit(device: PlantDevice): PlantUnit {
+  return {
+    ...device,
+    unitId: device.assetId ?? device.deviceId,
+    members: [device],
+    deviceIds: [device.deviceId],
+    offlineMemberCount: device.connection === 'OFFLINE' ? 1 : 0,
+  };
+}
+
 export function buildPlant(model: AssetModel, snapshots: SnapshotsResponse, now: Date): Plant {
   const snapshotByDevice = new Map(snapshots.items
     .filter((item) => item.status === 'OK' && item.snapshot)
@@ -328,7 +385,9 @@ export function buildPlant(model: AssetModel, snapshots: SnapshotsResponse, now:
     }))
     .filter((group) => group.devices.length > 0);
   const devices = groups.flatMap((group) => group.devices);
-  const { branches, loopBranches } = buildParallelBranchGroups(devices);
+  const units = aggregatePlantUnits<PlantDevice, PlantReading>(devices, { observedPointCount: (device) => device.readings.length })
+    .map(toPlantUnit);
+  const { branches, loopBranches } = buildParallelBranchGroups(units);
   const totalPower = firstReading(devices, 'hvac_meter.active_power');
   const coolingCapacity = firstReading(devices, 'btu_meter.instant_cooling_capacity');
   const plantCop = totalPower?.current && (coolingCapacity?.current || coolingCapacity?.lowConfidence)
@@ -338,6 +397,7 @@ export function buildPlant(model: AssetModel, snapshots: SnapshotsResponse, now:
   return {
     groups,
     devices,
+    units,
     branches,
     loopBranches,
     onlineCount: devices.filter((device) => device.connection === 'ONLINE').length,
@@ -439,24 +499,41 @@ export async function fetchPlantDevice(
   deviceId: string,
   fresh = false,
   now: Date = new Date(),
-): Promise<PlantDevice | null> {
+): Promise<PlantUnit | null> {
   const model = await readAssetModel(client, siteId, fresh);
   const device = model.devices.find((candidate) => candidate.id === deviceId);
   if (device === undefined || device.deviceType === 'GATEWAY') return null;
 
-  const batches = deviceSnapshotKeyBatches(model, deviceId);
-  const basePath = `/api/v1/devices/${encodeURIComponent(deviceId)}/observation-snapshot`;
-  const snapshots = await Promise.all(
-    batches.map(async (keys): Promise<Snapshot | null> => {
-      const path = keys.length > 0 ? `${basePath}?keys=${encodeURIComponent(keys.join(','))}` : basePath;
-      try {
-        return await client.get<Snapshot>(path);
-      } catch (error) {
-        if (error instanceof GatewayError && error.status === 404) return null;
-        throw error;
-      }
+  const asset = boundAsset(model, deviceId, now);
+  const peerIds = asset
+    ? model.devices
+      .filter((candidate) => candidate.deviceType !== 'GATEWAY'
+        && (candidate.id === deviceId || boundAsset(model, candidate.id, now)?.id === asset.id))
+      .map((candidate) => candidate.id)
+    : [deviceId];
+
+  const peerDevices = (await Promise.all(
+    peerIds.map(async (peerId) => {
+      const batches = deviceSnapshotKeyBatches(model, peerId);
+      const basePath = `/api/v1/devices/${encodeURIComponent(peerId)}/observation-snapshot`;
+      const snapshots = await Promise.all(
+        batches.map(async (keys): Promise<Snapshot | null> => {
+          const path = keys.length > 0 ? `${basePath}?keys=${encodeURIComponent(keys.join(','))}` : basePath;
+          try {
+            return await client.get<Snapshot>(path);
+          } catch (error) {
+            if (error instanceof GatewayError && error.status === 404) return null;
+            throw error;
+          }
+        }),
+      );
+      const present = snapshots.filter((snapshot): snapshot is Snapshot => snapshot !== null);
+      return buildPlantDevice(model, peerId, mergeDeviceSnapshots(present), now);
     }),
-  );
-  const present = snapshots.filter((snapshot): snapshot is Snapshot => snapshot !== null);
-  return buildPlantDevice(model, deviceId, mergeDeviceSnapshots(present), now);
+  )).filter((item): item is PlantDevice => item !== null);
+
+  if (peerDevices.length === 0) return null;
+  const units = aggregatePlantUnits<PlantDevice, PlantReading>(peerDevices, { observedPointCount: (item) => item.readings.length })
+    .map(toPlantUnit);
+  return units[0] ?? null;
 }

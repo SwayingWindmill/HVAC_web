@@ -23,7 +23,18 @@ import {
   POWER_KEY,
   ReadingValue,
 } from '../../realtime/device-presentation';
-import { EQUIPMENT_CATEGORIES, equipmentStatus, PLANT_CATEGORY_LABELS, type PlantCategory, type PlantDevice } from '../../realtime/plant-model';
+import {
+  EQUIPMENT_CATEGORIES,
+  equipmentStatus,
+  findPlantUnit,
+  isRunning,
+  PLANT_CATEGORY_LABELS,
+  PLANT_CATEGORY_ORDER,
+  plantUnits,
+  unitPoints,
+  type PlantCategory,
+  type PlantUnit,
+} from '../../realtime/plant-model';
 import { useRealtimePlant } from '../../realtime/use-realtime-plant';
 import { boundAssetId, deviceLocation, deviceTagTokens, needsAttention } from '../device-ledger';
 import { DeviceInspector } from './DeviceInspector';
@@ -40,22 +51,28 @@ const STATUS_FILTERS: readonly { readonly value: StatusFilter | 'all'; readonly 
 
 const pageRoute = getRouteApi('/_app/_site/operations/systems-devices');
 
-function matchesStatus(device: PlantDevice, status: StatusFilter | 'all' | undefined): boolean {
-  if (status === 'running') return device.runState === 'RUNNING';
-  if (status === 'stopped') return device.runState === 'STOPPED';
-  if (status === 'attention') return needsAttention(device);
+function matchesStatus(unit: PlantUnit, status: StatusFilter | 'all' | undefined): boolean {
+  if (status === 'running') return isRunning(unit);
+  if (status === 'stopped') return unit.connection !== 'OFFLINE' && unit.runState === 'STOPPED';
+  if (status === 'attention') return needsAttention(unit);
   return true;
 }
 
 /** How a section is doing, said in its header: everything fine, or what is not. */
-function sectionSummary(devices: readonly PlantDevice[], equipment: boolean): string {
-  const stale = devices.filter((device) => device.hasStaleData).length;
-  const offline = devices.filter((device) => device.connection === 'OFFLINE').length;
-  const faults = devices.filter((device) => device.runState === 'FAULT').length;
-  const running = devices.filter((device) => device.runState === 'RUNNING').length;
-  const issues = [faults ? `${faults} 台故障` : '', offline ? `${offline} 台离线` : '', stale ? `${stale} 台读数过期` : ''].filter(Boolean);
+function sectionSummary(units: readonly PlantUnit[], equipment: boolean): string {
+  const stale = units.filter((unit) => unit.hasStaleData).length;
+  const offline = units.filter((unit) => unit.connection === 'OFFLINE').length;
+  const partialOffline = units.filter((unit) => unit.connection !== 'OFFLINE' && unit.offlineMemberCount > 0).length;
+  const faults = units.filter((unit) => unit.connection !== 'OFFLINE' && unit.runState === 'FAULT').length;
+  const running = units.filter(isRunning).length;
+  const issues = [
+    faults ? `${faults} 台故障` : '',
+    offline ? `${offline} 台离线` : '',
+    partialOffline ? `${partialOffline} 台部分离线` : '',
+    stale ? `${stale} 台读数过期` : '',
+  ].filter(Boolean);
   if (issues.length > 0) return issues.join(' · ');
-  return equipment ? (running === devices.length ? '全部运行' : `${running} 台运行`) : '全部在线';
+  return equipment ? (running === units.length ? '全部运行' : `${running} 台运行`) : '全部在线';
 }
 
 export function SystemsDevicesWorkspace() {
@@ -81,37 +98,45 @@ export function SystemsDevicesWorkspace() {
     }
     return counts;
   }, [workOrders.data]);
-  const openFor = (device: PlantDevice) => {
+  const openFor = (device: PlantUnit) => {
     const assetId = boundAssetId(device);
     return assetId ? openWorkOrdersByAsset.get(assetId) ?? 0 : 0;
   };
 
+  const units = plantUnits(plant);
+  const categoryOptions = useMemo(() => {
+    const present = new Set(units.map((unit) => unit.category));
+    return PLANT_CATEGORY_ORDER.filter((category) => present.has(category));
+  }, [units]);
   const availableTags = useMemo(() => {
     const tokens = new Set<string>();
-    for (const device of plant.devices) {
-      for (const token of deviceTagTokens(device)) tokens.add(token);
+    for (const unit of units) {
+      for (const token of deviceTagTokens(unit)) tokens.add(token);
     }
     if (search.tag) tokens.add(search.tag);
     return Array.from(tokens).sort((left, right) => left.localeCompare(right));
-  }, [plant.devices, search.tag]);
+  }, [units, search.tag]);
 
   const query = search.q?.trim().toLowerCase() ?? '';
-  const visible = plant.devices.filter((device) =>
-    (!search.category || device.category === search.category)
-    && matchesStatus(device, search.status)
-    && (!search.tag || deviceTagTokens(device).includes(search.tag))
-    && (!query || device.name.toLowerCase().includes(query) || deviceLocation(device).toLowerCase().includes(query)));
+  const visible = units.filter((unit) =>
+    (!search.category || unit.category === search.category)
+    && matchesStatus(unit, search.status)
+    && (!search.tag || deviceTagTokens(unit).includes(search.tag))
+    && (!query
+      || unit.name.toLowerCase().includes(query)
+      || deviceLocation(unit).toLowerCase().includes(query)
+      || unit.members.some((member) => member.row.device.displayName.toLowerCase().includes(query))));
   const sections = [
-    { key: 'equipment', title: '冷站主设备', equipment: true, devices: visible.filter((device) => EQUIPMENT_CATEGORIES.has(device.category)) },
-    { key: 'environment', title: '计量与环境', equipment: false, devices: visible.filter((device) => !EQUIPMENT_CATEGORIES.has(device.category)) },
+    { key: 'equipment', title: '冷站主设备', equipment: true, devices: visible.filter((unit) => EQUIPMENT_CATEGORIES.has(unit.category)) },
+    { key: 'environment', title: '计量与环境', equipment: false, devices: visible.filter((unit) => !EQUIPMENT_CATEGORIES.has(unit.category)) },
   ].filter((section) => section.devices.length > 0);
   const counts: Readonly<Record<StatusFilter | 'all', number>> = {
-    all: plant.devices.length,
-    running: plant.devices.filter((device) => matchesStatus(device, 'running')).length,
-    stopped: plant.devices.filter((device) => matchesStatus(device, 'stopped')).length,
-    attention: plant.devices.filter(needsAttention).length,
+    all: units.length,
+    running: units.filter((unit) => matchesStatus(unit, 'running')).length,
+    stopped: units.filter((unit) => matchesStatus(unit, 'stopped')).length,
+    attention: units.filter(needsAttention).length,
   };
-  const inspected = plant.devices.find((device) => device.deviceId === search.inspect);
+  const inspected = findPlantUnit(plant, search.inspect);
   const equipment = equipmentStatus(plant);
 
   const setSearch = (patch: { q?: string; category?: PlantCategory; status?: StatusFilter; tag?: string; inspect?: string; layout?: 'cards' | 'table' }) =>
@@ -190,14 +215,14 @@ export function SystemsDevicesWorkspace() {
                     setSearch({ category: undefined });
                     return;
                   }
-                  const matched = plant.groups.find((group) => group.category === value);
-                  if (matched) setSearch({ category: matched.category });
+                  const matched = categoryOptions.find((category) => category === value);
+                  if (matched) setSearch({ category: matched });
                 }}
               >
                 <SelectTrigger className="h-8 w-32" aria-label="设备类型"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="ALL">全部类型</SelectItem>
-                  {plant.groups.map((group) => <SelectItem key={group.category} value={group.category}>{group.label}</SelectItem>)}
+                  {categoryOptions.map((category) => <SelectItem key={category} value={category}>{PLANT_CATEGORY_LABELS[category]}</SelectItem>)}
                 </SelectContent>
               </Select>
               {availableTags.length > 0 ? (
@@ -244,10 +269,10 @@ export function SystemsDevicesWorkspace() {
               <div className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-3.5">
                 {section.devices.map((device) => (
                   <DeviceTile
-                    key={device.deviceId}
+                    key={device.unitId}
                     device={device}
                     openWorkOrders={openFor(device)}
-                    selected={search.inspect === device.deviceId}
+                    selected={Boolean(search.inspect && (search.inspect === device.unitId || device.deviceIds.includes(search.inspect)))}
                     onOpen={() => setSearch({ inspect: device.deviceId })}
                   />
                 ))}
@@ -278,14 +303,15 @@ export function SystemsDevicesWorkspace() {
                     ...section.devices.map((device) => {
                       const status = deviceStatus(device);
                       const powerKey = POWER_KEY[device.category];
-                      const points = device.row.operational.points;
-                      const healthy = points.filter((point) => pointIsTrusted(point)).length;
+                      const points = unitPoints(device);
+                      const healthy = points.filter((entry) => pointIsTrusted(entry.point)).length;
                       const Icon = CATEGORY_ICONS[device.category];
+                      const rowSelected = Boolean(search.inspect && (search.inspect === device.unitId || device.deviceIds.includes(search.inspect)));
                       return (
                         <TableRow
-                          key={device.deviceId}
+                          key={device.unitId}
                           className="cursor-pointer"
-                          data-state={search.inspect === device.deviceId ? 'selected' : undefined}
+                          data-state={rowSelected ? 'selected' : undefined}
                           onClick={() => setSearch({ inspect: device.deviceId })}
                         >
                           <TableCell className="pl-4">

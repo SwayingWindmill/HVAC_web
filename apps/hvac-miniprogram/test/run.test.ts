@@ -427,3 +427,45 @@ test('实时运行与设备页在配置水力环路和并联支路后按支路�
   assert.equal(grouped.groups[0].title, '冷冻水环路 · 支路 CH-A');
   assert.equal(grouped.groups[0].devices.length, 3);
 });
+
+test('run presentation deduplicates dual-bound chillers while keeping full endpoint online counts', () => {
+  const base = buildPlant(assetModel, snapshots, now);
+  const chillerAsset = assetModel.assets.find((asset: { assetType: string }) => asset.assetType === 'CHILLER');
+  const templateDevice = assetModel.devices.find((device: { deviceType: string }) => device.deviceType === 'CHILLER_CONTROLLER');
+  const firstPoint = assetModel.telemetryPoints[0];
+  const firstSnap = snapshots.items.find((item: { status: string }) => item.status === 'OK').snapshot;
+  const ctrlId = '018f3e00-4000-7000-8000-000000000711';
+  const chwpHeaderId = '018f3e00-4000-7000-8000-000000000712';
+
+  const clonedModel = structuredClone(assetModel);
+  const clonedSnapshots = structuredClone(snapshots);
+  clonedModel.devices.push(
+    { ...templateDevice, id: ctrlId, code: 'ctrl-ch-1', displayName: '冷机控制器', deviceType: 'CHILLER_CONTROLLER' },
+    { ...templateDevice, id: chwpHeaderId, code: 'chwp-main', displayName: '冷冻水泵（总管）', deviceType: 'PROVISIONAL_READINGS' },
+  );
+  clonedModel.relationships.push({
+    id: '018f3e00-6400-7000-8000-000000000711',
+    fromType: 'DEVICE', fromId: ctrlId, toType: 'ASSET', toId: chillerAsset.id,
+    role: 'PRIMARY_CONTROLLER', status: 'ACTIVE', validFrom: recordedAt.toISOString(), revision: 1,
+  });
+  clonedModel.telemetryPoints.push(
+    { ...firstPoint, id: 'p-run-1', reportingDeviceId: ctrlId, pointCode: 'run_state', sourceKey: 'run_state', displayName: '运行状态', pointType: 'STATE', valueType: 'STRING', unit: null, status: 'ACTIVE' },
+    { ...firstPoint, id: 'p-run-2', reportingDeviceId: chwpHeaderId, pointCode: 'flow_rate', sourceKey: 'chwp.flow_rate', displayName: '冷冻水流量', pointType: 'TELEMETRY', valueType: 'NUMBER', unit: 'm3/h', status: 'ACTIVE' },
+  );
+  const sampleVal = firstSnap.values[0];
+  clonedSnapshots.items.push(
+    { requestId: 'r-run-1', deviceId: ctrlId, status: 'OK', snapshot: { ...firstSnap, deviceId: ctrlId, values: [{ ...sampleVal, key: 'run_state', value: 'RUNNING', valueType: 'STRING', unit: null }] } },
+    { requestId: 'r-run-2', deviceId: chwpHeaderId, status: 'OK', snapshot: { ...firstSnap, deviceId: chwpHeaderId, values: [{ ...sampleVal, key: 'flow_rate', value: 132, valueType: 'NUMBER', unit: 'm3/h' }] } },
+  );
+
+  const mergedPlant = buildPlant(clonedModel, clonedSnapshots, now);
+  const rt = presentRealtime(mergedPlant);
+  const overview = presentPlantNow(mergedPlant);
+  const list = presentDevices(mergedPlant, 'all');
+
+  assert.equal(base.devices.length + 2, mergedPlant.devices.length);
+  assert.equal(rt.status?.detail, '主要设备 4 / 4 台运行');
+  assert.equal(overview?.summary, '4 / 4 台运行 · 10 / 10 在线');
+  assert.equal(list.groups.find((g) => g.title === '冷站主设备')?.devices.length, 4);
+  assert.equal(list.groups.find((g) => g.title === '计量和环境')?.devices.some((d) => d.deviceId === chwpHeaderId && d.value === '132'), true);
+});
