@@ -81,3 +81,27 @@ func TestParseConfigSeparateMQTTTLSFields(t *testing.T) {
 		t.Fatalf("unexpected MQTT TLS fields: %+v", cfg)
 	}
 }
+
+func TestParseConfigSongyaxuanPlantDefaultsAndValidation(t *testing.T) {
+	raw := []byte(`{
+		"gatewayId": "01a14000-4000-7000-8000-000000000100",
+		"stateDir": "/opt/hvac-edge-gateway/state",
+		"songyaxuanPlant": {
+			"enabled": true,
+			"serialPort": "/dev/ttyAS3"
+		}
+	}`)
+	cfg, err := ParseConfig(raw, "0.1.3")
+	if err != nil {
+		t.Fatalf("ParseConfig: %v", err)
+	}
+	if cfg.SongyaxuanPlant == nil || cfg.SongyaxuanPlant.StopPowerKW() != 5.0 || cfg.SongyaxuanPlant.ConcentratorUnitID != 20 || cfg.SongyaxuanPlant.ET1010UnitID != 31 {
+		t.Fatalf("unexpected songyaxuanPlant defaults: %+v", cfg.SongyaxuanPlant)
+	}
+	if bus := cfg.SerialBuses["/dev/ttyAS3"]; bus.Speed != 9600 || bus.TurnaroundDelayMS != 45 {
+		t.Fatalf("expected /dev/ttyAS3 default bus config, got %+v", bus)
+	}
+	if _, err := ParseConfig([]byte(`{"gatewayId":"g1","stateDir":"/tmp/s","songyaxuanPlant":{"enabled":true}}`), "0.1.3"); err == nil {
+		t.Fatal("expected missing songyaxuanPlant.serialPort to fail")
+	}
+}

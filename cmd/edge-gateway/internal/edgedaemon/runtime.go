@@ -57,6 +57,7 @@ type mqttUplinkEventEnvelope struct {
 	GatewayID     string                 `json:"gatewayId"`
 	Timestamp     int64                  `json:"timestamp"`
 	Sequence      uint64                 `json:"sequence"`
+	TraceID       string                 `json:"traceId,omitempty"`
 	Payload       mqttUplinkEventPayload `json:"payload"`
 }
 
@@ -102,6 +103,11 @@ type Daemon struct {
 	spool               *GradedSpool
 	shadow              *ShadowManager
 	commands            *CommandAdapter
+	et1010              *ET1010Executor
+	concentratorRPC     *ConcentratorRPCExecutor
+	songyaxuanPlant     *SongyaxuanPlantRunner
+	lifecycleCtx        context.Context
+	lifecycleCancel     context.CancelFunc
 	ota                 *OTAAgent
 	tunnelClient        *TunnelClient
 	healthSrv           *http.Server
@@ -318,6 +324,85 @@ func NewDaemon(cfg Config, opts DaemonOptions) (*Daemon, error) {
 		now:                nowFn,
 	}
 
+	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
+	d.lifecycleCtx = lifecycleCtx
+	d.lifecycleCancel = lifecycleCancel
+
+	if cfg.SongyaxuanPlant != nil && cfg.SongyaxuanPlant.Enabled {
+		plantCfg := *cfg.SongyaxuanPlant
+		rtuBridge, bridgeErr := registry.SharedRTUBridge(
+			plantCfg.SerialPort,
+			time.Duration(plantCfg.RequestTimeoutMS)*time.Millisecond,
+			plantCfg.Retries,
+		)
+		if bridgeErr != nil {
+			lifecycleCancel()
+			_ = commands.Close()
+			_ = registry.Close()
+			return nil, fmt.Errorf("create songyaxuan RTU bridge: %w", bridgeErr)
+		}
+		plantRunner, plantErr := NewSongyaxuanPlantRunner(SongyaxuanPlantOptions{
+			GatewayID: cfg.GatewayID,
+			StateDir:  cfg.StateDir,
+			Config:    plantCfg,
+			Bus:       ModbusSongyaxuanPlantBus{Bridge: rtuBridge},
+			PublishTelemetry: func(pubCtx context.Context, payload []byte) {
+				d.publishOrSpool(pubCtx, "hvac/v1/"+cfg.GatewayID+"/up/telemetry", 1, EvidenceTelemetryMedium, payload)
+			},
+			Now:    nowFn,
+			Logger: logger,
+		})
+		if plantErr != nil {
+			lifecycleCancel()
+			_ = commands.Close()
+			_ = registry.Close()
+			return nil, fmt.Errorf("init songyaxuan plant runner: %w", plantErr)
+		}
+		d.songyaxuanPlant = plantRunner
+		if plantCfg.IsConcentratorEnabled() {
+			concRPC, concErr := NewConcentratorRPCExecutor(ConcentratorExecutorOptions{
+				GatewayID: cfg.GatewayID,
+				Bus:       ModbusConcentratorBus{Bridge: rtuBridge},
+				Now:       nowFn,
+			})
+			if concErr != nil {
+				lifecycleCancel()
+				_ = commands.Close()
+				_ = registry.Close()
+				return nil, fmt.Errorf("init concentrator RPC executor: %w", concErr)
+			}
+			d.concentratorRPC = concRPC
+		}
+		if plantCfg.IsET1010Enabled() {
+			etExec, etErr := NewET1010Executor(ET1010ExecutorOptions{
+				GatewayID:          cfg.GatewayID,
+				UnitID:             plantCfg.ET1010UnitID,
+				StateDir:           cfg.StateDir,
+				CoilBus:            ModbusET1010CoilBus{Bridge: rtuBridge},
+				ChillerPowerReader: plantRunner.ReadChillerPowerKW,
+				ChillerStopPowerKW: plantCfg.StopPowerKW(),
+				PulseDurationMS:    plantCfg.PulseDurationMS,
+				SequenceTimings:    plantCfg.EffectiveSequenceTimings(),
+				PublishTelemetry: func(pubCtx context.Context, payload []byte) {
+					d.publishOrSpool(pubCtx, "hvac/v1/"+cfg.GatewayID+"/up/telemetry", 1, EvidenceTelemetryHigh, payload)
+				},
+				PublishEvent: func(pubCtx context.Context, payload []byte) {
+					d.publishOrSpool(pubCtx, "hvac/v1/"+cfg.GatewayID+"/up/event", 1, EvidenceAlarm, payload)
+				},
+				Now:             nowFn,
+				Logger:          logger,
+				SequenceContext: lifecycleCtx,
+			})
+			if etErr != nil {
+				lifecycleCancel()
+				_ = commands.Close()
+				_ = registry.Close()
+				return nil, fmt.Errorf("init ET1010 executor: %w", etErr)
+			}
+			d.et1010 = etExec
+		}
+	}
+
 	if strings.TrimSpace(cfg.HealthListenAddr) != "" {
 		if err := d.startHealthServer(cfg.HealthListenAddr); err != nil {
 			_ = commands.Close()
@@ -386,7 +471,15 @@ func (d *Daemon) ClusterController() *edgecontrol.ChillerPlantClusterController 
 // HandleCommandPayload validates a v2.0 cloud command envelope, registers its ControlIntent,
 // waits for the next cycle outcome, and returns the serialized CommandReplyWire payload.
 func (d *Daemon) HandleCommandPayload(ctx context.Context, payload []byte) ([]byte, bool) {
-	if d == nil || d.commands == nil {
+	if d == nil {
+		return nil, false
+	}
+	if d.et1010 != nil {
+		if env, ok := decodeStrictCommandEnvelope(payload); ok && IsSongyaxuanET1010Command(env) {
+			return d.et1010.HandlePayload(ctx, payload)
+		}
+	}
+	if d.commands == nil {
 		return nil, false
 	}
 	return d.commands.HandlePayload(ctx, payload)
@@ -448,12 +541,26 @@ func (d *Daemon) Run(ctx context.Context) error {
 	d.ready.Store(true)
 	d.obs.MarkReady()
 
+	if d.et1010 != nil {
+		if initErr := d.et1010.Initialize(ctx); initErr != nil && ctx.Err() == nil {
+			d.logger.Warn("edge_et1010_init_failed", "error", initErr.Error())
+		}
+	}
+
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		d.runCycleLoop(ctx)
 	}()
+
+	if d.songyaxuanPlant != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = d.songyaxuanPlant.Run(ctx)
+		}()
+	}
 
 	if strings.TrimSpace(d.cfg.PlatformBaseURL) != "" {
 		wg.Add(1)
@@ -520,6 +627,12 @@ func (d *Daemon) Close() error {
 		shutCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		_ = d.mqttSession.Close(shutCtx)
 		cancel()
+	}
+	if d.lifecycleCancel != nil {
+		d.lifecycleCancel()
+	}
+	if d.et1010 != nil {
+		d.et1010.Close()
 	}
 	if d.commands != nil {
 		_ = d.commands.Close()
@@ -733,6 +846,31 @@ func (d *Daemon) startMQTTSession(ctx context.Context) error {
 		}
 	}); err != nil {
 		return err
+	}
+	if d.concentratorRPC != nil {
+		if _, err := session.RegisterRoute("edge-concentrator-downlink", []string{ConcentratorDownlinkTopic(d.cfg.GatewayID)}, func(pkt *paho.Publish) {
+			topic := pkt.Topic
+			payload := append([]byte(nil), pkt.Payload...)
+			select {
+			case d.cmdSem <- struct{}{}:
+				d.cmdWG.Add(1)
+				go func() {
+					defer func() {
+						<-d.cmdSem
+						d.cmdWG.Done()
+					}()
+					rpcCtx, cancel := context.WithTimeout(ctx, 18*time.Second)
+					defer cancel()
+					if replyBytes, ok := d.concentratorRPC.HandlePayload(rpcCtx, topic, payload); ok && len(replyBytes) > 0 {
+						d.publishOrSpool(ctx, ConcentratorUplinkTopic(d.cfg.GatewayID), 1, EvidenceControl, replyBytes)
+					}
+				}()
+			default:
+				d.logger.Warn("edge_concentrator_rpc_queue_full")
+			}
+		}); err != nil {
+			return err
+		}
 	}
 	if _, err := session.RegisterRoute("edge-command-downlink", []string{CommandDownlinkTopic(d.cfg.GatewayID)}, func(pkt *paho.Publish) {
 		payload := append([]byte(nil), pkt.Payload...)

@@ -184,6 +184,21 @@ func (r *ProtocolBridgeRegistry) sharedOPCUABridge(profile edgecontrol.Declarati
 	return bridge, nil
 }
 
+// SharedRTUBridge returns the pooled Modbus RTU transport bridge for the given serial endpoint.
+func (r *ProtocolBridgeRegistry) SharedRTUBridge(endpoint string, timeout time.Duration, retries int) (*edgecontrol.ModbusTCPBridge, error) {
+	if r == nil {
+		return nil, errors.New("protocol bridge registry is nil")
+	}
+	if retries < 0 {
+		retries = 0
+	}
+	return r.sharedRTUBridge(edgecontrol.DeclarativeModbusProfile{
+		Endpoint: strings.TrimSpace(endpoint),
+		Timeout:  timeout,
+		Retries:  retries,
+	})
+}
+
 func (r *ProtocolBridgeRegistry) sharedRTUBridge(profile edgecontrol.DeclarativeModbusProfile) (*edgecontrol.ModbusTCPBridge, error) {
 	endpoint := strings.TrimSpace(profile.Endpoint)
 	r.mu.Lock()
