@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -130,6 +132,14 @@ func TestTunnelClientAllowsConfiguredPortRejectsForbiddenAndReloads(t *testing.T
 	case <-connectedCh:
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for tunnel connection")
+	}
+
+	regDeadline := time.Now().Add(5 * time.Second)
+	for !slices.Contains(hub.ActiveGateways(), gwID) {
+		if time.Now().After(regDeadline) {
+			t.Fatal("timed out waiting for hub gateway registration")
+		}
+		runtime.Gosched()
 	}
 
 	// Open allowed SSH stream via Hub

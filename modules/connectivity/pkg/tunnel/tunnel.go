@@ -944,13 +944,17 @@ func (s *Session) emitCloseAudit(ctx context.Context, reason string) {
 		return
 	}
 	s.closeAuditOnce.Do(func() {
+		// Synchronize with sendFrame so BytesTX reflects frames written before closeTransport closed the socket.
+		s.writeMu.Lock()
+		bytesTX := s.bytesTX.Load()
+		s.writeMu.Unlock()
 		s.hub.recordAudit(ctx, AuditEvent{
 			GatewayID:  s.gatewayID,
 			SessionID:  s.sessionID,
 			EventType:  AuditSessionClosed,
 			RemoteAddr: s.remoteAddr,
 			Reason:     reason,
-			BytesTX:    s.bytesTX.Load(),
+			BytesTX:    bytesTX,
 			BytesRX:    s.bytesRX.Load(),
 			OccurredAt: time.Now().UTC(),
 		})
