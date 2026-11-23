@@ -63,10 +63,27 @@ export function AssistantThread(surface: ThreadSurface) {
   );
 }
 
+const WELCOME_PROMPTS = [
+  '今天冷站用电和昨天比怎么样？',
+  '现在哪台设备用电最多？',
+  '最近 24 小时冷站能效有没有异常？',
+] as const;
+
 const ThreadWelcome: FC = () => (
-  <div className="flex flex-1 flex-col justify-center gap-1.5 pb-10">
+  <div className="flex flex-1 flex-col justify-center gap-3 pb-10">
     <p className="m-0 text-base font-medium">想了解这个站点的什么？</p>
-    <p className="m-0 text-sm leading-relaxed text-muted-foreground">可以问用电为什么偏高、哪台机组用得多、某段时间的运行情况。在能耗分析的图上点「分析原因」也会带着日期来问。</p>
+    <div className="flex flex-col items-start gap-1.5">
+      {WELCOME_PROMPTS.map((prompt) => (
+        <ThreadPrimitive.Suggestion
+          key={prompt}
+          prompt={prompt}
+          send
+          className="cursor-pointer rounded-lg border border-border bg-muted/40 px-3 py-2 text-left text-xs text-foreground transition-colors hover:border-input-hover hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring-soft focus-visible:outline-none"
+        >
+          {prompt}
+        </ThreadPrimitive.Suggestion>
+      ))}
+    </div>
   </div>
 );
 
@@ -88,6 +105,7 @@ const AssistantMessage: FC = () => {
   const failed = useAuiState((state) => state.message.status?.type === 'incomplete' && state.message.status.reason === 'error');
   const cancelled = useAuiState((state) => state.message.status?.type === 'incomplete' && state.message.status.reason === 'cancelled');
   const isLast = useAuiState((state) => state.message.isLast);
+  const answerText = useAuiState((state) => state.message.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('\n'));
 
   return (
     <MessagePrimitive.Root className="flex flex-col gap-3 text-sm leading-relaxed" data-role="assistant">
@@ -101,7 +119,7 @@ const AssistantMessage: FC = () => {
             case 'text':
               return <div className="text-foreground"><MarkdownText /></div>;
             case 'data':
-              if (part.name === 'finding') return <FindingCard {...part.data} siteId={siteId} />;
+              if (part.name === 'finding') return <FindingCard {...part.data} siteId={siteId} answerText={answerText} />;
               if (part.name === 'input-request') return <InputRequestCard request={part.data} onAnswer={onAnswer} open={isLast && answering} />;
               return null;
             case 'indicator':

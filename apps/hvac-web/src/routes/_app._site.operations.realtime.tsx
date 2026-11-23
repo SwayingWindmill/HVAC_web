@@ -6,6 +6,7 @@ export const Route = createFileRoute('/_app/_site/operations/realtime')({
   validateSearch: z.object({
     metric: z.enum(['power', 'cooling', 'cop']).optional().catch(undefined),
     window: z.enum(['6h', '24h']).optional().catch(undefined),
+    inspect: z.string().optional().catch(undefined),
   }),
   staticData: { title: '实时运行' },
   component: RealtimeWorkspace,

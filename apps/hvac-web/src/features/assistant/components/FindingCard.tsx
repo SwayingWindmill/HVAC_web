@@ -2,32 +2,62 @@ import { Link } from '@tanstack/react-router';
 import { ArrowUpRight, Info } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { formatTelemetryUnit } from '@/domain/centralPlantTelemetry';
+import { cn } from '@/lib/utils';
+import { deduplicateFindingKeyFigures } from '../finding-dedup';
 import type { AssistantPart } from '../thread-model';
 import { toolPresentation } from '../tool-labels';
 import { FindingChart } from './FindingChart';
 
 type FindingData = Extract<AssistantPart, { type: 'data-finding' }>['data'];
 
-/** Under the answer: whether the data supports it, the numbers it rests on, what the data could not tell, and where to look. */
-export function FindingCard({ finding, evidenceTools, siteId }: FindingData & { readonly siteId: string }) {
+/** Under the answer: whether the data supports it, the non-duplicated figures it rests on, what the data could not tell, and where to look. */
+export function FindingCard({ finding, evidenceTools, siteId, answerText = '' }: FindingData & {
+  readonly siteId: string;
+  readonly answerText?: string;
+}) {
   const supported = finding.outcome === 'SUPPORTED_FINDING';
   const pages = [...new Map(evidenceTools.flatMap((tool) => {
     const page = toolPresentation(tool).page;
     return page === null ? [] : [[page.to, page] as const];
   })).values()];
+  const { visibleKeyFigures, compact } = deduplicateFindingKeyFigures({ answerText, finding });
 
   return (
-    <section aria-label="回答依据" className="flex flex-col gap-3 rounded-lg border bg-card p-3.5" data-testid="assistant-finding">
-      <div className="flex items-center gap-2">
+    <section
+      aria-label="回答依据"
+      className={cn(
+        'flex flex-col rounded-lg border',
+        compact ? 'gap-2 bg-muted/40 px-3 py-2.5' : 'gap-2.5 bg-card p-3.5',
+      )}
+      data-compact={compact ? 'true' : undefined}
+      data-testid="assistant-finding"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <Badge variant={supported ? 'secondary' : 'outline'}>{supported ? '有数据依据' : '数据不足以下结论'}</Badge>
+        {pages.length > 0 ? (
+          <div className="flex flex-wrap items-center gap-1.5 text-xs">
+            <span className="text-muted-foreground">依据</span>
+            {pages.map((page) => (
+              <Link
+                key={page.to}
+                to={page.to}
+                search={{ site: siteId }}
+                className="inline-flex items-center gap-0.5 rounded-sm px-1 text-primary hover:text-primary-hover focus-visible:ring-3 focus-visible:ring-ring-soft focus-visible:outline-none"
+              >
+                {page.label}
+                <ArrowUpRight className="size-3" aria-hidden="true" />
+              </Link>
+            ))}
+          </div>
+        ) : null}
       </div>
       {finding.chart === undefined ? null : <FindingChart chart={finding.chart} />}
-      {finding.keyFigures !== undefined && finding.keyFigures.length > 0 ? (
-        <dl className="m-0 grid grid-cols-2 gap-2">
-          {finding.keyFigures.map((figure) => (
-            <div key={figure.label} className="flex flex-col gap-0.5 rounded-md bg-muted px-2.5 py-2">
+      {visibleKeyFigures.length > 0 ? (
+        <dl className="m-0 grid grid-cols-2 gap-1.5">
+          {visibleKeyFigures.map((figure) => (
+            <div key={figure.label} className="flex flex-col gap-0.5 rounded-md bg-muted/70 px-2.5 py-1.5">
               <dt className="text-xs text-muted-foreground">{figure.label}</dt>
-              <dd className="m-0 text-base font-semibold tabular-nums">
+              <dd className="m-0 text-sm font-semibold tabular-nums">
                 {figure.value}
                 {figure.unit === undefined ? null : <span className="ml-1 text-xs font-normal text-muted-foreground">{formatTelemetryUnit(figure.unit) ?? figure.unit}</span>}
               </dd>
@@ -41,22 +71,6 @@ export function FindingCard({ finding, evidenceTools, siteId }: FindingData & { 
           <span>{limitation}</span>
         </p>
       ))}
-      {pages.length > 0 ? (
-        <div className="flex flex-wrap items-center gap-1.5 text-xs">
-          <span className="text-muted-foreground">依据</span>
-          {pages.map((page) => (
-            <Link
-              key={page.to}
-              to={page.to}
-              search={{ site: siteId }}
-              className="inline-flex items-center gap-0.5 rounded-sm px-1 text-primary hover:text-primary-hover focus-visible:ring-3 focus-visible:ring-ring-soft focus-visible:outline-none"
-            >
-              {page.label}
-              <ArrowUpRight className="size-3" aria-hidden="true" />
-            </Link>
-          ))}
-        </div>
-      ) : null}
     </section>
   );
 }
