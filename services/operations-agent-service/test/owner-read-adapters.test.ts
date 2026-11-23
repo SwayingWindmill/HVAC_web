@@ -958,3 +958,152 @@ test('Registry asset model reader accepts optional relationship role and semanti
     context,
   }), 'OWNER_RESPONSE_INVALID');
 });
+
+test('Registry reader accepts optional Asset nameplate and hydraulic fields while failing closed on malformed or unknown keys', async () => {
+  const richAsset = {
+    ...assetDto,
+    ratedPower: 185.5,
+    ratedCapacity: 1050,
+    tags: { circuit: 'CHW-1', floor: 'B1' },
+    waterLoop: 'CHILLED_WATER',
+    branchCode: 'CH-A',
+  };
+  const reader = createRegistryOwnerReader({
+    baseUrl: 'https://platform-core.internal',
+    fetchImplementation: async (url) => {
+      if (String(url).includes('/asset-model')) {
+        return jsonResponse({ ...assetModelDto, assets: [richAsset] });
+      }
+      return jsonResponse({ items: [richAsset], nextCursor: null, hasMore: false });
+    },
+  });
+
+  const listed = await reader.read({
+    request: { requestId: 'read-rich-assets-001', tool: 'registry.listSiteAssets', input: { siteId } },
+    context,
+  });
+  assert.deepEqual(listed.payload.assets, [richAsset]);
+
+  const model = await reader.read({
+    request: { requestId: 'read-rich-model-001', tool: 'registry.getSiteAssetModel', input: { siteId } },
+    context,
+  });
+  assert.deepEqual(model.payload.model.assets, [richAsset]);
+
+  for (const invalidAsset of [
+    { ...richAsset, unexpected: true },
+    { ...richAsset, ratedPower: -1 },
+    { ...richAsset, tags: { circuit: 123 } },
+    { ...richAsset, waterLoop: '' },
+  ]) {
+    const failing = createRegistryOwnerReader({
+      baseUrl: 'https://platform-core.internal',
+      fetchImplementation: async () => jsonResponse({ items: [invalidAsset], nextCursor: null, hasMore: false }),
+    });
+    await expectOwnerError(() => failing.read({
+      request: { requestId: 'read-invalid-asset', tool: 'registry.listSiteAssets', input: { siteId } },
+      context,
+    }), 'OWNER_RESPONSE_INVALID');
+  }
+});
+
+test('Energy reader accepts synthesized metadata, incomplete hours, missingMeters and crossGap while failing closed on unknown or malformed fields', async () => {
+  const synthesizedResponse = {
+    schemaVersion: 1,
+    points: [{
+      periodStart: '2026-07-28T15:00:00.000Z',
+      periodEnd: '2026-07-28T16:00:00.000Z',
+      energyKWh: 128.5,
+      crossGapKWh: 12.5,
+      cost: {
+        amountCNY: 112.4,
+        unpricedKWh: 0,
+        periods: [{ periodCode: 'PEAK', energyKWh: 128.5, amountCNY: 112.4 }],
+      },
+      incomplete: true,
+      missingMeters: ['冷水机组1号电表'],
+    }],
+    crossGap: {
+      energyKWh: 12.5,
+      cost: {
+        amountCNY: 10.2,
+        unpricedKWh: 0,
+        periods: [{ periodCode: 'FLAT', energyKWh: 12.5, amountCNY: 10.2 }],
+      },
+    },
+    devices: [{
+      deviceId,
+      points: [{
+        periodStart: '2026-07-28T15:00:00.000Z',
+        periodEnd: '2026-07-28T16:00:00.000Z',
+        energyKWh: 128.5,
+        crossGapKWh: 12.5,
+      }],
+      crossGapKWh: 12.5,
+    }],
+    metadata: {
+      requestedGranularity: 'hour',
+      actualGranularity: 'hour',
+      dataWatermark: '2026-07-29T15:00:00.000Z',
+      aggregateWatermark: '2026-07-29T15:00:00.000Z',
+      datasetRevision: 'energy-interval:v1:1842',
+      partial: true,
+      synthesized: true,
+      qualitySummary: { valid: 24, suspect: 0, invalid: 0 },
+    },
+  };
+  const breakdownRequest = { ...energyRequest, input: { ...energyRequest.input, breakdown: 'device' } };
+  const reader = createEnergyAnalyticsOwnerReader({
+    baseUrl: 'https://telemetry-query.internal',
+    fetchImplementation: async () => jsonResponse(synthesizedResponse),
+  });
+  const result = await reader.read({ request: breakdownRequest, context: energyContext });
+  assert.deepEqual(result.payload, synthesizedResponse);
+
+  const nonBreakdownCopy = { ...synthesizedResponse };
+  delete nonBreakdownCopy.devices;
+  const nonBreakdownReader = createEnergyAnalyticsOwnerReader({
+    baseUrl: 'https://telemetry-query.internal',
+    fetchImplementation: async () => jsonResponse(nonBreakdownCopy),
+  });
+  const nonBreakdownResult = await nonBreakdownReader.read({ request: energyRequest, context: energyContext });
+  assert.deepEqual(nonBreakdownResult.payload, nonBreakdownCopy);
+
+  for (const invalidPayload of [
+    { ...nonBreakdownCopy, points: [{ ...nonBreakdownCopy.points[0], unexpected: true }] },
+    { ...nonBreakdownCopy, points: [{ ...nonBreakdownCopy.points[0], crossGapKWh: -1 }] },
+    { ...nonBreakdownCopy, points: [{ ...nonBreakdownCopy.points[0], missingMeters: [''] }] },
+    { ...nonBreakdownCopy, crossGap: { energyKWh: 5, unexpected: true } },
+    { ...nonBreakdownCopy, metadata: { ...nonBreakdownCopy.metadata, synthesized: 'yes' } },
+    { ...synthesizedResponse, devices: [{ ...synthesizedResponse.devices[0], crossGapKWh: -5 }] },
+  ]) {
+    const failing = createEnergyAnalyticsOwnerReader({
+      baseUrl: 'https://telemetry-query.internal',
+      fetchImplementation: async () => jsonResponse(invalidPayload),
+    });
+    const req = invalidPayload === synthesizedResponse || 'devices' in invalidPayload ? breakdownRequest : energyRequest;
+    await expectOwnerError(() => failing.read({ request: req, context: energyContext }), 'OWNER_RESPONSE_INVALID');
+  }
+});
+
+test('Device Telemetry reader accepts SLEEPING displayState', async () => {
+  const sleepingSnapshot = {
+    ...telemetryResponse,
+    telemetryReadiness: 'CURRENT',
+    displayState: 'SLEEPING',
+    presence: {
+      applicability: 'APPLICABLE',
+      currentState: 'SLEEPING',
+      lastSeenAt: '2026-07-30T06:50:00.000Z',
+      policyRevision: 3,
+      lastKnown: null,
+    },
+  };
+  const reader = createDeviceTelemetryOwnerReader({
+    baseUrl: 'https://telemetry-runtime.internal',
+    fetchImplementation: async () => jsonResponse(sleepingSnapshot),
+  });
+  const result = await reader.read({ request: telemetryRequest, context: telemetryContext });
+  assert.equal(result.payload.displayState, 'SLEEPING');
+  assert.equal(result.quality, 'STALE');
+});

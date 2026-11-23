@@ -381,6 +381,16 @@ export const hasExactKeys = (
   return actual.length === keys.length && actual.every((key) => keys.includes(key));
 };
 
+export const hasRequiredAndAllowedKeys = (
+  value: Record<string, unknown>,
+  required: readonly string[],
+  allowed: readonly string[],
+): boolean => {
+  const actual = Object.keys(value);
+  return required.every((key) => key in value)
+    && actual.every((key) => allowed.includes(key));
+};
+
 export const isNonEmptyString = (value: unknown): value is string => (
   typeof value === 'string' && value.trim().length > 0
 );

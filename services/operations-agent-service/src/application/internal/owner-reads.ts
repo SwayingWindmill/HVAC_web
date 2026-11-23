@@ -240,7 +240,15 @@ export interface EnergySeriesPoint {
   readonly periodStart: string;
   readonly periodEnd: string;
   readonly energyKWh: number;
+  readonly crossGapKWh?: number;
   /** Electricity's estimated energy charge at the Site's import Tariff; cooling has none. */
+  readonly cost?: EnergyCost;
+  readonly incomplete?: boolean;
+  readonly missingMeters?: readonly string[];
+}
+
+export interface EnergyCrossGap {
+  readonly energyKWh: number;
   readonly cost?: EnergyCost;
 }
 
@@ -264,14 +272,20 @@ export interface EnergySeriesMetadata {
   readonly aggregateWatermark?: string;
   readonly datasetRevision: string;
   readonly partial: boolean;
+  readonly synthesized?: boolean;
   readonly qualitySummary: EnergyQualitySummary;
 }
 
 export interface EnergySeries {
   readonly schemaVersion: 1;
   readonly points: readonly EnergySeriesPoint[];
+  readonly crossGap?: EnergyCrossGap;
   /** Present when the request asked for the device breakdown. */
-  readonly devices?: readonly { readonly deviceId: string; readonly points: readonly EnergySeriesPoint[] }[];
+  readonly devices?: readonly {
+    readonly deviceId: string;
+    readonly points: readonly EnergySeriesPoint[];
+    readonly crossGapKWh?: number;
+  }[];
   readonly metadata: EnergySeriesMetadata;
 }
 

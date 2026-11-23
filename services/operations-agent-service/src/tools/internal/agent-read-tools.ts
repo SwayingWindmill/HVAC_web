@@ -728,7 +728,7 @@ const readAssets = async (
 };
 
 const DEVICE_STATE_WORDS: Readonly<Record<string, string>> = Object.freeze({
-  ONLINE: '在线', OFFLINE: '离线', STALE: '读数过期', UNKNOWN: '状态不明', UNAVAILABLE: '暂时读不到',
+  ONLINE: '在线', SLEEPING: '休眠中', OFFLINE: '离线', STALE: '读数过期', UNKNOWN: '状态不明', UNAVAILABLE: '暂时读不到',
 });
 
 const valueState = (value: DeviceObservationSnapshotDto['values'][number]): string => {
