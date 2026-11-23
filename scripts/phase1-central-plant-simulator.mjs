@@ -656,7 +656,7 @@ ON CONFLICT (device_id, telemetry_key) DO UPDATE SET policy_revision=EXCLUDED.po
 
 INSERT INTO telemetry_runtime.observation_coverage (device_id, available, continuous_since, reason_code, source_revision, updated_at) VALUES
 ${coverage}
-ON CONFLICT (device_id) DO UPDATE SET available=true, reason_code=NULL, source_revision=EXCLUDED.source_revision, updated_at=clock_timestamp();
+ON CONFLICT (device_id) DO UPDATE SET available=true, continuous_since=COALESCE(telemetry_runtime.observation_coverage.continuous_since, EXCLUDED.continuous_since), reason_code=NULL, source_revision=EXCLUDED.source_revision, updated_at=clock_timestamp();
 RESET ROLE;
 COMMIT;`;
 }

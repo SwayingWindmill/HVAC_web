@@ -508,7 +508,7 @@ ON CONFLICT (device_id, telemetry_key) ${updateWhenChanged('freshness_policies',
 
 INSERT INTO telemetry_runtime.observation_coverage (device_id, available, continuous_since, reason_code, source_revision, updated_at) VALUES
 ${coverage}
-ON CONFLICT (device_id) ${updateWhenChanged('observation_coverage', [['available', 'true'], ['reason_code', 'NULL']], { revision: false })};
+ON CONFLICT (device_id) DO NOTHING;
 ${probePairs}RESET ROLE;
 COMMIT;`;
   return { registry, telemetry, energy: buildEnergySql(profile, devices, points), intelligence: buildIntelligenceSql(profile), deviceCount: devices.length, pointCount: points.length };
