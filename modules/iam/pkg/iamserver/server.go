@@ -11,10 +11,18 @@ const (
 	CurrentPrincipalPath = iam.CurrentPrincipalPath
 	PrincipalNamesPath   = iam.PrincipalNamesPath
 	RegistryDecisionPath = iam.RegistryDecisionPath
+	CommandDecisionPath  = iam.CommandDecisionPath
 )
 
 type Config = iam.Config
 type AuthorizationStore = iam.AuthorizationStore
+type CommandAuthorizationStore = iam.CommandAuthorizationStore
+type CommandAuthorizationLookup = iam.CommandAuthorizationLookup
+type CommandAuthorizationFacts = iam.CommandAuthorizationFacts
+type AuthorizationFacts = iam.AuthorizationFacts
+type PrincipalRecord = iam.PrincipalRecord
+type TenantMembership = iam.TenantMembership
+type RoleAssignment = iam.RoleAssignment
 type TenantPrincipalNameStore = iam.TenantPrincipalNameStore
 type TenantPrincipalNamesRequest = iam.TenantPrincipalNamesRequest
 type TenantPrincipalNamesResponse = iam.TenantPrincipalNamesResponse
@@ -39,6 +47,7 @@ type AdminRole = iam.AdminRole
 const (
 	BindingEffectAllow = iam.BindingEffectAllow
 	BindingEffectDeny  = iam.BindingEffectDeny
+	FactStatusActive   = iam.FactStatusActive
 )
 
 func NewHandler(config Config) http.Handler {

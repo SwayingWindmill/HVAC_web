@@ -59,7 +59,7 @@ export interface DeviceObservationSnapshotDto {
   readonly availabilityReasons: readonly string[];
   readonly presence: Readonly<Record<string, unknown>>;
   readonly telemetryReadiness: 'CURRENT' | 'DEGRADED' | 'INCOMPLETE' | 'NOT_APPLICABLE';
-  readonly displayState: 'ONLINE' | 'OFFLINE' | 'STALE' | 'UNKNOWN' | 'UNAVAILABLE' | null;
+  readonly displayState: 'ONLINE' | 'SLEEPING' | 'OFFLINE' | 'STALE' | 'UNKNOWN' | 'UNAVAILABLE' | null;
   readonly values: readonly DeviceTelemetryKeyStateDto[];
 }
 
@@ -96,7 +96,7 @@ const telemetryKey = /^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/u;
 const maximumPointKeys = 16;
 const presentQualities = new Set(['GOOD', 'PARTIAL', 'ESTIMATED', 'MANUAL', 'STALE', 'INVALID']);
 const readinessValues = new Set(['CURRENT', 'DEGRADED', 'INCOMPLETE', 'NOT_APPLICABLE']);
-const displayStates = new Set(['ONLINE', 'OFFLINE', 'STALE', 'UNKNOWN', 'UNAVAILABLE']);
+const displayStates = new Set(['ONLINE', 'SLEEPING', 'OFFLINE', 'STALE', 'UNKNOWN', 'UNAVAILABLE']);
 const valueTypes = new Set(['NUMBER', 'STRING', 'BOOLEAN', 'JSON']);
 const missingReasons = new Set(['NEVER_OBSERVED', 'ONLY_REJECTED_CANDIDATES', 'POLICY_NOT_CONFIGURED']);
 

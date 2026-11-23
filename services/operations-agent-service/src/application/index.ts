@@ -42,6 +42,7 @@ export {
   type EnergyAnalyticsReadRequest,
   type EnergyAnalyticsReader,
   type EnergyCost,
+  type EnergyCrossGap,
   type EnergyGranularity,
   type EnergyQualityPolicy,
   type EnergyQualitySummary,

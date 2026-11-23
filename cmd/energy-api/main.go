@@ -214,7 +214,7 @@ func run() int {
 		TLSConfig:         serverTLSConfig,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      10 * time.Second,
+		WriteTimeout:      25 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
 	diagnostics := &http.Server{
@@ -626,7 +626,7 @@ func loadGatewayInternalServer(handler http.Handler) (*http.Server, error) {
 		},
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      10 * time.Second,
+		WriteTimeout:      25 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}, nil
 }
@@ -849,9 +849,9 @@ func loadAnalyticsConfig(certificate *tls.Certificate) (*gateway.AnalyticsConfig
 	return &gateway.AnalyticsConfig{
 		QueryBaseURL:     queryURL,
 		QueryAudience:    envOr("TELEMETRY_QUERY_AUDIENCE", "telemetry-query-service"),
-		Timeout:          8 * time.Second,
+		Timeout:          16 * time.Second,
 		MaxResponseBytes: 8 << 20,
-		QueryHTTPClient:  &http.Client{Timeout: 15 * time.Second, Transport: workloadTransport(roots, certificate, envOr("TELEMETRY_QUERY_SERVER_NAME", "localhost"))},
+		QueryHTTPClient:  &http.Client{Timeout: 20 * time.Second, Transport: workloadTransport(roots, certificate, envOr("TELEMETRY_QUERY_SERVER_NAME", "localhost"))},
 	}, nil
 }
 
@@ -1026,7 +1026,7 @@ func defaultLimitPolicy() *limitpolicy.Policy {
 		Limits: []limitpolicy.Limit{
 			{Dimension: limitpolicy.DimensionRest, Window: time.Minute, Burst: 600, FailClosed: false},
 			{Dimension: limitpolicy.DimensionCommandWrite, Window: time.Minute, Burst: 60, FailClosed: true},
-			{Dimension: limitpolicy.DimensionExpensiveQuery, Window: time.Minute, Burst: 30, FailClosed: false},
+			{Dimension: limitpolicy.DimensionExpensiveQuery, Window: time.Minute, Burst: 120, FailClosed: false},
 			{Dimension: limitpolicy.DimensionOperationsAgent, Window: time.Minute, Burst: 30, FailClosed: true},
 		},
 	}

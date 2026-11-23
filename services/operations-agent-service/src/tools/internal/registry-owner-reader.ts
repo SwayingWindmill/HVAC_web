@@ -9,6 +9,7 @@ import {
 } from '../../application/index.js';
 import {
   hasExactKeys,
+  hasRequiredAndAllowedKeys,
   isInstant,
   isNonEmptyString,
   isRecord,
@@ -44,6 +45,11 @@ export interface RegistryAssetDto {
   readonly revision: number;
   readonly createdAt: string;
   readonly updatedAt: string;
+  readonly ratedPower?: number;
+  readonly ratedCapacity?: number;
+  readonly tags?: Readonly<Record<string, string>>;
+  readonly waterLoop?: string;
+  readonly branchCode?: string;
 }
 
 /** The parts of the Registry's Site asset model the Agent reads: equipment, its machines and points. */
@@ -116,6 +122,15 @@ const assetKeys = [
   'updatedAt',
 ] as const;
 
+const assetAllowedKeys = [
+  ...assetKeys,
+  'ratedPower',
+  'ratedCapacity',
+  'tags',
+  'waterLoop',
+  'branchCode',
+] as const;
+
 const collectionKeys = ['items', 'nextCursor', 'hasMore'] as const;
 const maximumPages = 10;
 const pageLimit = 200;
@@ -162,9 +177,21 @@ const decodeSite = (value: unknown): RegistrySiteDto => {
   return value as unknown as RegistrySiteDto;
 };
 
+const isOptionalNonNegativeNumber = (value: unknown): value is number | undefined => (
+  value === undefined || (typeof value === 'number' && Number.isFinite(value) && value >= 0)
+);
+
+const isOptionalStringMap = (value: unknown): value is Readonly<Record<string, string>> | undefined => (
+  value === undefined || (isRecord(value) && Object.values(value).every((item) => typeof item === 'string'))
+);
+
+const isOptionalNonEmptyString = (value: unknown): value is string | undefined => (
+  value === undefined || isNonEmptyString(value)
+);
+
 const decodeAsset = (value: unknown): RegistryAssetDto => {
   if (!isRecord(value)
-    || !hasExactKeys(value, assetKeys)
+    || !hasRequiredAndAllowedKeys(value, assetKeys, assetAllowedKeys)
     || !isUuidV7(value.id)
     || !isUuidV7(value.tenantId)
     || !isUuidV7(value.siteId)
@@ -175,13 +202,34 @@ const decodeAsset = (value: unknown): RegistryAssetDto => {
     || !isRevision(value.revision)
     || !isInstant(value.createdAt)
     || !isInstant(value.updatedAt)
-    || Date.parse(value.createdAt) > Date.parse(value.updatedAt)) {
+    || Date.parse(value.createdAt) > Date.parse(value.updatedAt)
+    || !isOptionalNonNegativeNumber(value.ratedPower)
+    || !isOptionalNonNegativeNumber(value.ratedCapacity)
+    || !isOptionalStringMap(value.tags)
+    || !isOptionalNonEmptyString(value.waterLoop)
+    || !isOptionalNonEmptyString(value.branchCode)) {
     throw new OwnerReadError(
       'OWNER_RESPONSE_INVALID',
       'The Registry Owner returned an invalid Asset representation.',
     );
   }
-  return value as unknown as RegistryAssetDto;
+  return {
+    id: value.id,
+    tenantId: value.tenantId,
+    siteId: value.siteId,
+    code: value.code,
+    displayName: value.displayName,
+    assetType: value.assetType,
+    status: value.status,
+    revision: value.revision,
+    createdAt: value.createdAt,
+    updatedAt: value.updatedAt,
+    ...(value.ratedPower === undefined ? {} : { ratedPower: value.ratedPower }),
+    ...(value.ratedCapacity === undefined ? {} : { ratedCapacity: value.ratedCapacity }),
+    ...(value.tags === undefined ? {} : { tags: value.tags }),
+    ...(value.waterLoop === undefined ? {} : { waterLoop: value.waterLoop }),
+    ...(value.branchCode === undefined ? {} : { branchCode: value.branchCode }),
+  };
 };
 
 const assertSiteScope = (

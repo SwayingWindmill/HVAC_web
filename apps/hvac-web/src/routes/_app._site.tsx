@@ -8,12 +8,12 @@ import { SiteRealtimeProvider } from '@/features/operations/realtime/site-realti
 // The Site travels in the `site` search parameter so links, history and the protected
 // Site scope agree on which Site the page shows.
 const workspaceSiteSearchSchema = z.object({
-  site: z.string().optional(),
+  site: z.string().optional().catch(undefined),
 });
 
 function defaultWorkspaceSiteId(runtime: ShellRuntime): string | undefined {
   const snapshot = runtime.current();
-  return snapshot.protectedScope?.siteId ?? snapshot.sites?.items?.[0]?.id;
+  return snapshot.protectedScope?.siteId ?? snapshot.lastSiteId ?? snapshot.sites?.items?.[0]?.id;
 }
 
 function SiteWorkspaceLayout() {

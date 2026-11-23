@@ -8,9 +8,9 @@ export const Route = createFileRoute('/_app/benchmark')({
   beforeLoad: ({ context }) => requirePlatform(context.runtime),
   staticData: { title: '站点对标', scope: 'platform', requiresPlatform: true },
   validateSearch: z.object({
-    period: z.enum(['7d', 'month']).optional(),
-    rank: z.enum(['cop', 'intensity', 'climate']).optional(),
-    site: z.string().optional(),
+    period: z.enum(['7d', 'month']).optional().catch(undefined),
+    rank: z.enum(['cop', 'intensity', 'climate']).optional().catch(undefined),
+    site: z.string().optional().catch(undefined),
   }),
   component: BenchmarkRoute,
 });

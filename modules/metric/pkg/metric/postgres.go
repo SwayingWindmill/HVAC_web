@@ -179,6 +179,9 @@ WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND metric_id=$3::uuid
 		binding.TenantID, binding.SiteID, dependency.MetricID, binding.SubjectType, binding.SubjectID, binding.Granularity, start.UTC(), end.UTC()).Scan(
 		&resultID, &revision, &actualVersionID, &unit, &value, &quality, &completeness,
 	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Input{}, fmt.Errorf("%w: %w", ErrMissingMetricDependency, err)
+		}
 		return Input{}, fmt.Errorf("load current Metric dependency result: %w", err)
 	}
 	if actualVersionID != expectedVersionID {

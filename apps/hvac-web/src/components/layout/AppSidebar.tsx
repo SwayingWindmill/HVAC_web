@@ -87,9 +87,11 @@ function CountBadge({ count, tone }: { readonly count: number; readonly tone: Co
 
 function useLink(onNavigate: (target: string) => void) {
   const { currentScope } = useScope();
+  const snapshot = useShellSnapshot();
   const { setOpenMobile } = useSidebar();
+  const siteId = currentScope?.siteId ?? snapshot.lastSiteId;
   return (item: AppNavigationItem) => {
-    const href = navHref(item, currentScope?.siteId);
+    const href = navHref(item, siteId);
     return {
       href,
       onClick: (event: React.MouseEvent) => {

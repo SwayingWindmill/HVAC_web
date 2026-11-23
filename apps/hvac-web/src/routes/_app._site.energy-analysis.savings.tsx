@@ -4,7 +4,7 @@ import { SavingsWorkspace } from '@/features/savings/components/SavingsWorkspace
 
 export const Route = createFileRoute('/_app/_site/energy-analysis/savings')({
   validateSearch: z.object({
-    inspect: z.string().optional(),
+    inspect: z.string().optional().catch(undefined),
   }),
   staticData: { title: '节能项目' },
   component: SavingsWorkspace,

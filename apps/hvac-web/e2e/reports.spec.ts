@@ -138,3 +138,56 @@ test('an empty month shows clear empty-month notice and chart empty state withou
   expect(consoleErrors).toEqual([]);
   expect(pageErrors).toEqual([]);
 });
+
+test('switching to another site keeps that site selected after visiting benchmark and opening reports', async ({ page, gateway }) => {
+  const secondSiteId = '018f3e00-2000-7000-8000-000000000002';
+  gateway.addCrossSiteSample({
+    id: secondSiteId,
+    tenantId: '018f3d00-0000-7000-8000-000000000001',
+    code: 'songyaxuan',
+    displayName: '松雅轩',
+    timezone: 'Asia/Shanghai',
+    status: 'ACTIVE',
+    revision: 1,
+    createdAt: '2026-09-28T07:11:40.006Z',
+    updatedAt: '2026-09-29T08:51:35.732Z',
+    floorAreaM2: 18000,
+    climateZone: 'HOT_SUMMER_COLD_WINTER',
+  });
+
+  await page.route(`**/api/v1/sites/${secondSiteId}**`, async (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (pathname === `/api/v1/sites/${secondSiteId}/asset-model`) {
+      await route.fallback();
+      return;
+    }
+    if (pathname === `/api/v1/sites/${secondSiteId}/control-state`) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ controlMode: 'MONITOR_ONLY', updatedAt: '2026-10-10T00:00:00.000Z' }) });
+      return;
+    }
+    if (pathname.endsWith('/tariff')) {
+      await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ status: 404, code: 'RESOURCE_NOT_FOUND', title: 'Not found' }) });
+      return;
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [] }) });
+  });
+
+  await page.goto(`/overview?site=${secondSiteId}`);
+  await expect(page.getByRole('combobox', { name: /当前站点：松雅轩/ })).toBeVisible();
+
+  await page.getByRole('button', { name: '能源，展开', exact: true }).click();
+  await page.getByRole('link', { name: '站点对标', exact: true }).click();
+  await expect(page).toHaveURL(/\/benchmark$/);
+
+  await page.getByRole('link', { name: '报告', exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/reports\\?site=${secondSiteId}`));
+  await expect(page.getByRole('combobox', { name: /当前站点：松雅轩/ })).toBeVisible();
+});
+
+test('malformed search parameters recover instead of crashing the route', async ({ page }) => {
+  await page.goto(`/reports?site=${SITE_ID}&view=invalid&year=not-a-number`);
+
+  await expect(page.getByRole('article', { name: /能源报告/ })).toBeVisible();
+  await expect(page.getByText('Something went wrong!')).toHaveCount(0);
+  await expect(page.getByTestId('real-route-unexpected-error')).toHaveCount(0);
+});

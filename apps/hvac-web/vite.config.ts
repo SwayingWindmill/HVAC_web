@@ -27,9 +27,13 @@ function manualChunks(id: string) {
   if (/node_modules\/(react|react-dom|scheduler)\//.test(normalized)) return 'vendor-react';
   if (/node_modules\/@tanstack\/(?:react-router|router-core|history)\//.test(normalized)) return 'vendor-router';
   if (/node_modules\/@tanstack\//.test(normalized)) return 'vendor-query';
+  if (/node_modules\/(?:@radix-ui|radix-ui)\//.test(normalized)) return 'vendor-radix';
+  if (/node_modules\/lucide-react\//.test(normalized)) return 'vendor-icons';
+  if (/node_modules\/(?:recharts|d3-[a-z-]+|victory-vendor)\//.test(normalized)) return 'vendor-charts';
+  if (/node_modules\/zod\//.test(normalized)) return 'vendor-zod';
   if (/node_modules\/zustand\//.test(normalized)) return 'vendor-state';
   // The digital twin's 3D stack loads only with its route (docs/specs/digital-twin.md).
-  if (/node_modules\/(?:three|three-stdlib|@react-three|camera-controls|troika-[a-z-]+|maath|meshline|stats-gl|detect-gpu)\//.test(normalized)) return 'vendor-three';
+  if (/node_modules\/(?:three|three-stdlib|@react-three|camera-controls|troika-[a-z-]+|maath|meshline|stats-gl|detect-gpu|postprocessing|n8ao)\//.test(normalized)) return 'vendor-three';
 
   return undefined;
 }

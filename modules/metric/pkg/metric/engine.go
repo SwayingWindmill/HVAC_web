@@ -23,6 +23,15 @@ type Dependency struct {
 	Required bool
 }
 
+var (
+	// ErrNoNumericObservations signals that a required point dependency had no quality-eligible numeric samples in the window.
+	ErrNoNumericObservations = errors.New("metric point dependency has no numeric observations")
+	// ErrEmptyPointDependency signals that zero observations fell inside the requested evaluation window.
+	ErrEmptyPointDependency = errors.New("metric point dependency is empty")
+	// ErrMissingMetricDependency signals that an upstream metric dependency has no published result for the window.
+	ErrMissingMetricDependency = errors.New("load current Metric dependency result")
+)
+
 type Binding struct {
 	TenantID          string
 	SiteID            string
@@ -1045,7 +1054,7 @@ func (e *Engine) readBoundPoints(ctx context.Context, binding Binding, pointIDs 
 		if lastErr != nil {
 			return Input{}, lastErr
 		}
-		return Input{}, errors.New("metric point dependency has no numeric observations")
+		return Input{}, ErrNoNumericObservations
 	}
 	if reported == len(pointIDs) && allGood {
 		combined.Quality = "GOOD"

@@ -119,7 +119,9 @@ export function AppRuntimeHost({ config, queryClient }: { config: RuntimeConfig;
     const client = __HVAC_WEB_FRONTEND_REVIEW__
       ? createFrontendReviewPlatformClient()
       : createPlatformGatewayClient();
-    let routerNavigate: (target: string) => void = (target) => window.location.assign(target);
+    let routerNavigate: (target: string) => void | Promise<unknown> = (target) => {
+      window.location.assign(target);
+    };
     const runtime = createShellRuntime(client, createBrowserShellEnvironment({
       navigate: (target) => routerNavigate(target),
     }));
@@ -131,9 +133,7 @@ export function AppRuntimeHost({ config, queryClient }: { config: RuntimeConfig;
       });
     };
     const router = createHvacRouter({ config, queryClient, runtime, publishRealtimeStatus });
-    routerNavigate = (target) => {
-      void router.navigate({ href: target, ignoreBlocker: true });
-    };
+    routerNavigate = (target) => router.navigate({ href: target, ignoreBlocker: true });
     return { runtime, router };
   }, [config, observability, queryClient]);
   const [snapshot, setSnapshot] = useState<ShellSnapshot>(() => resources.runtime.current());

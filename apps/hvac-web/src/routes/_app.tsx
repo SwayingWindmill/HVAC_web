@@ -1,4 +1,4 @@
-import { Outlet, createFileRoute, defaultStringifySearch, useBlocker } from '@tanstack/react-router';
+import { Outlet, createFileRoute, defaultStringifySearch, useBlocker, type ErrorComponentProps } from '@tanstack/react-router';
 import { ShellChrome } from '@/app/ShellChrome';
 import { requireCapabilities } from '@/app/route-access';
 import { siteIdFromLocation } from '@/app/router-paths';
@@ -12,10 +12,10 @@ export const Route = createFileRoute('/_app')({
   errorComponent: AppRouteError,
 });
 
-function AppRouteError({ error }: { error: unknown }) {
+function AppRouteError({ error, reset }: ErrorComponentProps) {
   return (
     <ShellChrome>
-      <RouteErrorSurface error={error} />
+      <RouteErrorSurface error={error} reset={reset} />
     </ShellChrome>
   );
 }

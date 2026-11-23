@@ -1,5 +1,7 @@
 import { createRouter } from '@tanstack/react-router';
 import type { HvacRouterContext } from './router-context';
+import { DefaultRoutePending } from './RouteLoading';
+import { RouteErrorSurface } from './RouteSurfaces';
 import { routeTree } from '../routeTree.gen';
 
 export function createHvacRouter(context: HvacRouterContext) {
@@ -11,6 +13,9 @@ export function createHvacRouter(context: HvacRouterContext) {
     context,
     defaultPreload: 'intent',
     defaultPreloadStaleTime: 0,
+    defaultErrorComponent: RouteErrorSurface,
+    defaultPendingComponent: DefaultRoutePending,
+    defaultPendingMs: 250,
     scrollRestoration: ({ location }) => {
       const samePage = location.pathname === renderedPath;
       renderedPath = location.pathname;

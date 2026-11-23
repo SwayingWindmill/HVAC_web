@@ -11,6 +11,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+
+	"github.com/quanlaihe/hvac-web/libs/alarmexpr"
 )
 
 const (
@@ -30,6 +32,11 @@ const (
 	MaxEdgeRuleSamplesPerRule    = 256
 	MaxEdgeRuleSamplesPerInput   = 128
 	MaxEdgeRuleEventQueue        = 256
+
+	MaxEdgeExprASTNodes = alarmexpr.MaxASTNodes
+	MaxEdgeExprDepth    = alarmexpr.MaxDepth
+	MaxEdgeExprLength   = alarmexpr.MaxLength
+	MaxEdgeExprInputs   = alarmexpr.MaxInputs
 )
 
 var (
@@ -707,7 +714,7 @@ func (c EdgeCondition) validate(depth int) error {
 				return fmt.Errorf("expression input key %q is invalid", k)
 			}
 		}
-		if _, err := parseAndValidateEdgeExpression(c.Expression, c.Inputs); err != nil {
+		if err := alarmexpr.Validate(c.Expression, c.Inputs); err != nil {
 			return err
 		}
 		return nil

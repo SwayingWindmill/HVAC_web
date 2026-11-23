@@ -3,9 +3,9 @@ import { z } from "zod";
 import { ConsumptionWorkspace } from "@/features/energy-analysis/consumption/components/ConsumptionWorkspace";
 export const Route = createFileRoute("/_app/_site/energy-analysis/consumption")({
   validateSearch: z.object({
-    period: z.enum(["today", "7d", "month", "year"]).optional(),
-    metric: z.enum(["electricityKWh", "coolingKWh", "cop", "cost"]).optional(),
-    view: z.enum(["trend", "tou", "detail"]).optional(),
+    period: z.enum(["today", "7d", "month", "year"]).optional().catch(undefined),
+    metric: z.enum(["electricityKWh", "coolingKWh", "cop", "cost"]).optional().catch(undefined),
+    view: z.enum(["trend", "tou", "detail"]).optional().catch(undefined),
   }),
   component: ConsumptionWorkspace,
 });

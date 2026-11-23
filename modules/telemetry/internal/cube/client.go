@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
@@ -112,22 +113,56 @@ func (client *Client) QueryEnergySeries(ctx context.Context, caller analytics.Ca
 	if err != nil {
 		return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("create Cube token: %w", err)
 	}
-	series, err := client.load(queryContext, token, buildSeriesQuery(productQuery, location))
-	if err != nil {
-		return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("query Cube energy series: %w", err)
+	runContext, cancelRun := context.WithCancel(queryContext)
+	defer cancelRun()
+
+	var (
+		series    loadResponse
+		seriesErr error
+		metadata  loadResponse
+		metaErr   error
+		costs     loadResponse
+		costsErr  error
+		devices   loadResponse
+		devErr    error
+		wg        sync.WaitGroup
+	)
+	runParallel := func(dest *loadResponse, destErr *error, query cubeQuery) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			res, err := client.load(runContext, token, query)
+			if err != nil {
+				*destErr = err
+				cancelRun()
+				return
+			}
+			*dest = res
+		}()
 	}
-	metadata, err := client.load(queryContext, token, buildMetadataQuery(productQuery, location))
-	if err != nil {
-		return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("query Cube energy metadata: %w", err)
+	runParallel(&series, &seriesErr, buildSeriesQuery(productQuery, location))
+	runParallel(&metadata, &metaErr, buildMetadataQuery(productQuery, location))
+	if productQuery.EnergyType == analyticsmodel.EnergyTypeElectricity {
+		runParallel(&costs, &costsErr, buildCostQuery(productQuery, location))
+	}
+	if productQuery.Breakdown == analyticsmodel.EnergyBreakdownDevice {
+		runParallel(&devices, &devErr, buildDeviceBreakdownQuery(productQuery, location))
+	}
+	wg.Wait()
+
+	if seriesErr != nil {
+		return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("query Cube energy series: %w", seriesErr)
+	}
+	if metaErr != nil {
+		return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("query Cube energy metadata: %w", metaErr)
 	}
 	response, err := mapEnergySeries(series, metadata, productQuery, location, client.datasetRevision)
 	if err != nil {
 		return analyticsmodel.EnergySeriesResponse{}, err
 	}
 	if productQuery.EnergyType == analyticsmodel.EnergyTypeElectricity {
-		costs, err := client.load(queryContext, token, buildCostQuery(productQuery, location))
-		if err != nil {
-			return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("query Cube energy cost: %w", err)
+		if costsErr != nil {
+			return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("query Cube energy cost: %w", costsErr)
 		}
 		if err := attachCosts(&response, costs, productQuery, location); err != nil {
 			return analyticsmodel.EnergySeriesResponse{}, err
@@ -145,9 +180,8 @@ func (client *Client) QueryEnergySeries(ctx context.Context, caller analytics.Ca
 	if productQuery.Breakdown != analyticsmodel.EnergyBreakdownDevice {
 		return response, nil
 	}
-	devices, err := client.load(queryContext, token, buildDeviceBreakdownQuery(productQuery, location))
-	if err != nil {
-		return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("query Cube energy breakdown: %w", err)
+	if devErr != nil {
+		return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("query Cube energy breakdown: %w", devErr)
 	}
 	response.Devices, err = mapDeviceBreakdown(devices, productQuery, location)
 	if err != nil {
