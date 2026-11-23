@@ -258,7 +258,7 @@ func (s *ClickHouseStore) ReadPoint(ctx context.Context, b Binding, pointID stri
 	parts := strings.Split(strings.TrimSpace(string(body)), "\t")
 	// An aggregate over no quality-eligible rows is NULL, which TabSeparated writes as \N.
 	if len(parts) != 11 || parts[0] == "nan" || parts[0] == "" || parts[0] == `\N` || parts[3] == `\N` || parts[4] == `\N` {
-		return Input{}, errors.New("metric point dependency has no numeric observations")
+		return Input{}, ErrNoNumericObservations
 	}
 	v, err := parseFiniteFloat(parts[0])
 	if err != nil {
@@ -266,11 +266,11 @@ func (s *ClickHouseStore) ReadPoint(ctx context.Context, b Binding, pointID stri
 	}
 	n, err := strconv.ParseInt(parts[1], 10, 64)
 	if err != nil || n <= 0 {
-		return Input{}, errors.New("metric point dependency is empty")
+		return Input{}, ErrEmptyPointDependency
 	}
 	good, err := parseFiniteFloat(parts[2])
 	if err != nil || good <= 0 {
-		return Input{}, errors.New("metric point dependency has no numeric observations")
+		return Input{}, ErrNoNumericObservations
 	}
 	first, err := parseFiniteFloat(parts[3])
 	if err != nil {

@@ -76,6 +76,7 @@ export interface ShellSnapshot {
   platform?: ShellPlatformView;
   sites?: ShellSitesView;
   protectedScope?: ProtectedScopeSnapshot;
+  lastSiteId?: string;
   siteTransition?: ShellSiteTransitionView;
   realtime?: RealtimeStatusSnapshot;
   loginUrl?: string;
@@ -126,11 +127,38 @@ export interface ShellRuntime {
 export interface ShellRuntimeEnvironment {
   origin: string;
   now(): number;
-  navigate(target: string): void;
+  navigate(target: string): void | Promise<unknown>;
   postNavigate(target: string): void;
   setTimer(handler: () => void, delayMs: number): unknown;
   clearTimer(handle: unknown): void;
   listenForUserActivity?(handler: () => void): () => void;
+}
+
+const LAST_SITE_STORAGE_PREFIX = 'hvac:last-site:';
+
+function readStoredSiteId(tenantId: string): string | undefined {
+  if (!tenantId || typeof sessionStorage === 'undefined') return undefined;
+  try {
+    const raw = sessionStorage.getItem(`${LAST_SITE_STORAGE_PREFIX}${tenantId}`);
+    const trimmed = raw?.trim();
+    return trimmed ? trimmed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeStoredSiteId(tenantId: string, siteId?: string): void {
+  if (!tenantId || typeof sessionStorage === 'undefined') return;
+  const key = `${LAST_SITE_STORAGE_PREFIX}${tenantId}`;
+  try {
+    if (siteId) {
+      sessionStorage.setItem(key, siteId);
+    } else {
+      sessionStorage.removeItem(key);
+    }
+  } catch {
+    // Ignore storage quota or restricted context errors.
+  }
 }
 
 type ShellRuntimeClient = Pick<
@@ -268,6 +296,7 @@ class BrowserShellRuntime implements ShellRuntime {
   };
   private readonly listeners = new Set<(snapshot: ShellSnapshot) => void>();
   private readonly realtimeSources = new Map<string, RealtimeSubscriptionState>();
+  private readonly lastSiteByTenant = new Map<string, string>();
   private protectedPrincipal?: CurrentPrincipalResponse;
   private currentUrl = '/';
   private returnTo = '/';
@@ -369,6 +398,7 @@ class BrowserShellRuntime implements ShellRuntime {
     if (this.snapshot.state !== 'READY' || !this.protectedPrincipal) return;
     this.protectedScope.activate(siteId);
     this.realtimeSources.clear();
+    this.rememberSiteForTenant(this.protectedPrincipal.context.tenantId, siteId);
     this.publish({
       ...this.snapshot,
       realtime: createRealtimeStatus({ state: 'idle', siteId }),
@@ -593,8 +623,16 @@ class BrowserShellRuntime implements ShellRuntime {
     }
 
     this.currentUrl = target;
-    this.environment.navigate(target);
-    this.publishReadyTransition(undefined);
+    try {
+      await this.environment.navigate(target);
+    } finally {
+      if (this.isCurrent(sequence) && this.protectedPrincipal === principal && this.snapshot.state === 'READY') {
+        this.publishReadyTransition(undefined);
+      }
+    }
+    if (!this.isCurrent(sequence) || this.protectedPrincipal !== principal || this.snapshot.state !== 'READY') {
+      return 'interrupted';
+    }
     return 'navigated';
   }
 
@@ -627,12 +665,56 @@ class BrowserShellRuntime implements ShellRuntime {
     return !this.disposed && sequence === this.sequence;
   }
 
+  private rememberSiteForTenant(tenantId: string, siteId: string): void {
+    const trimmed = siteId.trim();
+    if (!tenantId || !trimmed) return;
+    this.lastSiteByTenant.set(tenantId, trimmed);
+    writeStoredSiteId(tenantId, trimmed);
+  }
+
+  private resolveRememberedSiteId(
+    tenantId: string,
+    sites?: ReadonlyArray<{ readonly id: string }>,
+  ): string | undefined {
+    if (!tenantId) return undefined;
+    const candidate = this.lastSiteByTenant.get(tenantId) ?? readStoredSiteId(tenantId);
+    if (!candidate) return undefined;
+    if (sites && !sites.some((site) => site.id === candidate)) {
+      this.lastSiteByTenant.delete(tenantId);
+      writeStoredSiteId(tenantId, undefined);
+      return undefined;
+    }
+    this.lastSiteByTenant.set(tenantId, candidate);
+    return candidate;
+  }
+
+  private clearRememberedSiteForTenant(tenantId?: string): void {
+    if (tenantId) {
+      this.lastSiteByTenant.delete(tenantId);
+      writeStoredSiteId(tenantId, undefined);
+      return;
+    }
+    for (const key of this.lastSiteByTenant.keys()) {
+      writeStoredSiteId(key, undefined);
+    }
+    this.lastSiteByTenant.clear();
+  }
+
   private publish(snapshot: ShellSnapshot): void {
     if (this.disposed) return;
+    const tenantId = snapshot.principal?.context.tenantId ?? this.protectedPrincipal?.context.tenantId;
+    const visibleSites = snapshot.sites?.state === 'available' ? snapshot.sites.items : undefined;
+    const activeSiteId = this.protectedScope.current()?.siteId;
+    const lastSiteId = snapshot.state === 'READY' && tenantId
+      ? (activeSiteId && (!visibleSites || visibleSites.some((site) => site.id === activeSiteId))
+          ? activeSiteId
+          : this.resolveRememberedSiteId(tenantId, visibleSites))
+      : undefined;
     const published = snapshot.state === 'READY'
       ? {
         ...snapshot,
         protectedScope: this.protectedScope.current(),
+        lastSiteId,
         realtime: snapshot.realtime ?? this.snapshot.realtime ?? createIdleRealtimeStatus(),
       }
       : snapshot;
@@ -641,6 +723,9 @@ class BrowserShellRuntime implements ShellRuntime {
   }
 
   private enterLoginRequired(reason: string, navigate: boolean): void {
+    if (this.protectedPrincipal) {
+      this.clearRememberedSiteForTenant(this.protectedPrincipal.context.tenantId);
+    }
     void this.startProtectedPurge('SESSION_LOSS');
     this.bootstrapController?.abort();
     this.bootstrapController = undefined;
@@ -653,6 +738,7 @@ class BrowserShellRuntime implements ShellRuntime {
   }
 
   private completeLogout(reason: string): void {
+    this.clearRememberedSiteForTenant();
     void this.startProtectedPurge('LOGOUT');
     this.sequence += 1;
     this.enterLoginRequired(reason, false);

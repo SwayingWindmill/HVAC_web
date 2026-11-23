@@ -443,7 +443,7 @@ function LoopsTable({ plant, timeZone }: { readonly plant: PlantView; readonly t
   return (
     <Panel role="region" aria-label="水系统与室内外环境">
       <PanelHeader title="水系统与室内外环境" />
-      <div role="table" aria-label="水系统与室内外环境" className="grid grid-cols-[110px_170px_minmax(0,1fr)_150px_96px]">
+      <div role="table" aria-label="水系统与室内外环境" className="grid grid-cols-[110px_170px_minmax(0,1fr)_150px_148px]">
         <div role="row" className="contents text-xs font-medium text-muted-foreground">
           {['系统', '主读数', '其他读数', '近 6 小时', '数据时间'].map((title, index) => (
             <span key={title} role="columnheader" className={cn('flex h-9 items-center border-b bg-muted px-4', index === 4 && 'justify-end')}>{title}</span>
@@ -478,8 +478,8 @@ function LoopsTable({ plant, timeZone }: { readonly plant: PlantView; readonly t
               <span role="cell" className="flex h-[42px] items-center border-b border-divider px-4">
                 {recorded.length > 1 ? <Sparkline data={values} variant="line" animate={false} color={stale ? 'var(--muted-foreground)' : 'var(--chart-1)'} className="h-6 w-full" /> : <span className="text-xs text-subtle-foreground">—</span>}
               </span>
-              <span role="cell" className={cn('flex h-[42px] items-center justify-end gap-1.5 border-b border-divider px-4 font-mono text-xs', stale ? 'text-warning-text' : 'text-secondary-foreground')}>
-                {stale ? <span className="rounded-md bg-warning-soft px-1.5 font-sans text-[11px] leading-[18px] font-medium">读数过期</span> : null}
+              <span role="cell" className={cn('flex h-[42px] items-center justify-end gap-1.5 border-b border-divider px-4 font-mono text-xs whitespace-nowrap', stale ? 'text-warning-text' : 'text-secondary-foreground')}>
+                {stale ? <span className="shrink-0 whitespace-nowrap rounded-md bg-warning-soft px-1.5 font-sans text-[11px] leading-[18px] font-medium">读数过期</span> : null}
                 {formatClock(reading?.sampledAt ?? null, timeZone)}
               </span>
             </div>

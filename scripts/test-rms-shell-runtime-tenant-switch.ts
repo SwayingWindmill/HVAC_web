@@ -582,3 +582,71 @@ test('filterNavigationGroups hides entries whose capabilities are missing, strip
   assert.deepEqual(Array.from(navExports.filterNavigationGroups(navExports.APP_NAVIGATION_CONFIG, [])), []);
   assert.equal(navExports.canAccessNavItem({ requiredCapabilities: ['site.read'] }, undefined), false);
 });
+
+test('remembered lastSiteId survives leaving site scope for platform routes and clears on logout', async () => {
+  const siteA = sampleSite('01900000-0001-7000-8000-000000000001', TENANT_A);
+  const siteB = sampleSite('01900000-0002-7000-8000-000000000002', TENANT_A);
+  const runtime = runtimeExports.createShellRuntime(
+    createClient({
+      listSites: async () => ({
+        data: { items: [siteA, siteB], nextCursor: null, hasMore: false },
+        requestId: null,
+        traceparent: null,
+        auditMessageId: null,
+        routePolicyRevision: null,
+        location: null,
+      }),
+    }),
+    createEnv().value,
+  );
+  await runtime.bootstrap(`/overview?site=${siteB.id}`);
+  runtime.activateSiteScope(siteB.id);
+  assert.equal(runtime.current().lastSiteId, siteB.id);
+
+  const outcome = await runtime.requestSiteNavigation('/benchmark');
+  assert.equal(outcome, 'navigated');
+  assert.equal(runtime.current().protectedScope?.siteId, undefined);
+  assert.equal(runtime.current().lastSiteId, siteB.id);
+
+  await runtime.logout();
+  assert.equal(runtime.current().lastSiteId, undefined);
+});
+
+test('performSiteNavigation keeps purging state until an async environment.navigate resolves', async () => {
+  const siteA = sampleSite('01900000-0001-7000-8000-000000000001', TENANT_A);
+  const siteB = sampleSite('01900000-0002-7000-8000-000000000002', TENANT_A);
+  let resolveNavigate: (() => void) | undefined;
+  const pendingNavigate = new Promise<void>((resolve) => {
+    resolveNavigate = resolve;
+  });
+  const baseEnv = createEnv();
+  const runtime = runtimeExports.createShellRuntime(
+    createClient({
+      listSites: async () => ({
+        data: { items: [siteA, siteB], nextCursor: null, hasMore: false },
+        requestId: null,
+        traceparent: null,
+        auditMessageId: null,
+        routePolicyRevision: null,
+        location: null,
+      }),
+    }),
+    {
+      ...baseEnv.value,
+      navigate: async (target) => {
+        baseEnv.navigations.push(target);
+        await pendingNavigate;
+      },
+    },
+  );
+  await runtime.bootstrap(`/overview?site=${siteA.id}`);
+  runtime.activateSiteScope(siteA.id);
+
+  const navigation = runtime.requestSiteNavigation(`/overview?site=${siteB.id}`);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(runtime.current().siteTransition?.status, 'purging');
+
+  resolveNavigate?.();
+  assert.equal(await navigation, 'navigated');
+  assert.equal(runtime.current().siteTransition, undefined);
+});

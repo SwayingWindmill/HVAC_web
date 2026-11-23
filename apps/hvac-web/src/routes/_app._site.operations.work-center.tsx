@@ -4,8 +4,8 @@ import { WorkCenterWorkspace } from '@/features/work-orders/components/WorkCente
 
 export const Route = createFileRoute('/_app/_site/operations/work-center')({
   validateSearch: z.object({
-    view: z.enum(['open', 'mine', 'done', 'all']).optional(),
-    inspect: z.string().optional(),
+    view: z.enum(['open', 'mine', 'done', 'all']).optional().catch(undefined),
+    inspect: z.string().optional().catch(undefined),
   }),
   staticData: { title: '工单' },
   component: WorkCenterWorkspace,

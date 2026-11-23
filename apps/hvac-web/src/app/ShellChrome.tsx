@@ -100,6 +100,7 @@ export function ShellChrome({ children }: { readonly children: ReactNode }) {
       <NavigationProgress />
       <AppHeader
         siteId={activeSite?.id}
+        preferredSiteId={snapshot.lastSiteId ?? snapshot.sites?.items?.[0]?.id}
         principalName={principal.principal.displayName}
         principalRole={principalRole}
         csrfToken={principal.session.csrfToken}

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -26,7 +27,10 @@ func (fixedTokenFactory) Token(context.Context, analytics.CallerContext, string,
 }
 
 func TestClientReadsTheSiteTotalFromTheSiteEnergyView(t *testing.T) {
-	var captured []loadRequest
+	var (
+		mu       sync.Mutex
+		captured []cubeQuery
+	)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/cubejs-api/v1/load" || request.Method != http.MethodPost {
 			t.Fatalf("request = %s %s", request.Method, request.URL.Path)
@@ -41,7 +45,9 @@ func TestClientReadsTheSiteTotalFromTheSiteEnergyView(t *testing.T) {
 		if err := json.NewDecoder(request.Body).Decode(&decoded); err != nil {
 			t.Fatal(err)
 		}
-		captured = append(captured, decoded)
+		mu.Lock()
+		captured = append(captured, decoded.Query)
+		mu.Unlock()
 		writer.Header().Set("Content-Type", "application/json")
 		if answeredCostQuery(writer, decoded) {
 			return
@@ -77,8 +83,21 @@ func TestClientReadsTheSiteTotalFromTheSiteEnergyView(t *testing.T) {
 	if len(captured) != 3 {
 		t.Fatalf("Cube request count = %d", len(captured))
 	}
-	seriesQuery := captured[0].Query
-	metadataQuery := captured[1].Query
+	var seriesQuery, metadataQuery cubeQuery
+	var foundSeries, foundMetadata bool
+	for _, query := range captured {
+		switch query.Measures[0] {
+		case "site_energy.energy_valid_kwh":
+			seriesQuery = query
+			foundSeries = true
+		case "site_energy.max_data_watermark":
+			metadataQuery = query
+			foundMetadata = true
+		}
+	}
+	if !foundSeries || !foundMetadata {
+		t.Fatalf("missing expected queries in %#v", captured)
+	}
 	if len(seriesQuery.Measures) != 5 || seriesQuery.Measures[0] != "site_energy.energy_valid_kwh" || seriesQuery.Measures[1] != "site_energy.cross_gap_valid_kwh" {
 		t.Fatalf("series measures = %#v", seriesQuery.Measures)
 	}
@@ -132,7 +151,10 @@ func TestClientReadsTheSiteTotalFromTheSiteEnergyView(t *testing.T) {
 func TestClientBreaksTheSiteDownByMeteredDevice(t *testing.T) {
 	const chiller = "018f1e00-4000-7000-8000-000000000011"
 	const pump = "018f1e00-4000-7000-8000-000000000012"
-	var breakdownQuery *cubeQuery
+	var (
+		breakdownMu    sync.Mutex
+		breakdownQuery *cubeQuery
+	)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		var decoded loadRequest
 		if err := json.NewDecoder(request.Body).Decode(&decoded); err != nil {
@@ -146,7 +168,10 @@ func TestClientBreaksTheSiteDownByMeteredDevice(t *testing.T) {
 		case decoded.Query.Measures[0] == "site_energy.max_data_watermark":
 			_, _ = writer.Write([]byte(`{"data":[{"site_energy.max_data_watermark":"2026-08-01T00:00:00.000Z","site_energy.max_dataset_revision":"1"}]}`))
 		case len(decoded.Query.Dimensions) == 1:
-			breakdownQuery = &decoded.Query
+			q := decoded.Query
+			breakdownMu.Lock()
+			breakdownQuery = &q
+			breakdownMu.Unlock()
 			_, _ = writer.Write([]byte(`{"data":[
 				{"equipment_energy.equipment_id":"` + pump + `","equipment_energy.period_end.day":"2026-07-01T00:00:00.000","equipment_energy.energy_valid_kwh":"20","equipment_energy.cross_gap_valid_kwh":"5"},
 				{"equipment_energy.equipment_id":"` + chiller + `","equipment_energy.period_end.day":"2026-07-02T00:00:00.000","equipment_energy.energy_valid_kwh":"70","equipment_energy.cross_gap_valid_kwh":null},

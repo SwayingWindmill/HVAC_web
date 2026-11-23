@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { getRouteApi } from '@tanstack/react-router';
 import { Gauge, Snowflake, Zap } from 'lucide-react';
 import { StateCard } from '@/blocks/state/state-card';
+import ErrorBoundary from '@/components/ErrorBoundary';
 import { Skeleton } from '@/components/ui/skeleton';
 import { activeAlarmsQuery } from '@/features/alarms/alarm-api';
 import { useTodayAgainstYesterday } from '@/features/energy-analysis/consumption/query';
@@ -190,18 +191,31 @@ export function DigitalTwinWorkspace() {
     <div className="relative h-[calc(100svh-var(--header-height))] min-h-[640px] w-full overflow-hidden bg-background">
       <h1 className="sr-only">数字孪生 · {site.displayName}</h1>
       {twin ? (
-        <TwinScene
-          plant={twin}
-          plan={plan}
-          palette={palette}
-          view={view}
-          cut={cut}
-          shell={search.shell !== 'off'}
-          emphasis={search.pipes === 'on'}
-          selectedId={selected?.assetId ?? null}
-          onSelect={select}
-          camera={camera}
-        />
+        <ErrorBoundary
+          fallback={(
+            <div className="flex h-full items-center justify-center p-6" data-testid="digital-twin-webgl-fallback">
+              <StateCard
+                role="alert"
+                tone="warning"
+                title={<h2 className="text-base font-semibold">3D 机房视图暂时无法渲染</h2>}
+                description="当前浏览器或设备未能初始化 WebGL 三维视图，页面其余运行数据与控制摘要仍可正常查看。"
+              />
+            </div>
+          )}
+        >
+          <TwinScene
+            plant={twin}
+            plan={plan}
+            palette={palette}
+            view={view}
+            cut={cut}
+            shell={search.shell !== 'off'}
+            emphasis={search.pipes === 'on'}
+            selectedId={selected?.assetId ?? null}
+            onSelect={select}
+            camera={camera}
+          />
+        </ErrorBoundary>
       ) : registry.isError ? (
         <StateCard className="h-full justify-center" title={<h2 className="text-title font-semibold">设备登记读取失败</h2>} description="刷新页面重试；仍然失败时检查网络或稍后再来。" />
       ) : (
