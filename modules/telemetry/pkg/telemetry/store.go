@@ -227,6 +227,35 @@ func lockDevice(ctx context.Context, tx pgx.Tx, deviceID string) error {
 	return nil
 }
 
+// lockDevices acquires per-device advisory transaction locks in slice order
+// within a single batch round-trip while preserving identical deadlock ordering.
+func lockDevices(ctx context.Context, tx pgx.Tx, deviceIDs []string) error {
+	if len(deviceIDs) == 0 {
+		return nil
+	}
+	if len(deviceIDs) == 1 {
+		return lockDevice(ctx, tx, deviceIDs[0])
+	}
+	batch := &pgx.Batch{}
+	for _, deviceID := range deviceIDs {
+		batch.Queue(`SELECT pg_advisory_xact_lock(hashtextextended('telemetry-device:' || $1, 0))`, deviceID)
+	}
+	results := tx.SendBatch(ctx, batch)
+	var execErr error
+	for range deviceIDs {
+		if _, err := results.Exec(); err != nil && execErr == nil {
+			execErr = err
+		}
+	}
+	if err := results.Close(); err != nil && execErr == nil {
+		execErr = err
+	}
+	if execErr != nil {
+		return fmt.Errorf("lock telemetry Device: %w", execErr)
+	}
+	return nil
+}
+
 func (store *PostgresStore) evaluateAndPersistDevice(ctx context.Context, tx pgx.Tx, deviceID string, requestedKeys []string, evaluatedAt time.Time) (SnapshotCommit, error) {
 	return store.evaluateAndPersistDeviceWithOptions(ctx, tx, deviceID, requestedKeys, evaluatedAt, false)
 }

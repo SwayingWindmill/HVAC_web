@@ -675,6 +675,25 @@ func TestPostgresCoverageHeartbeatDoesNotOverwriteDisconnectedGateway(t *testing
 	store, adminPool, _ := openP0TelemetryPostgresFixture(t)
 	ctx := context.Background()
 
+	for _, indexName := range []string{
+		"source_observations_source_accepted_received_idx",
+		"mqtt_runtime_events_gateway_received_idx",
+	} {
+		var valid bool
+		if err := adminPool.QueryRow(ctx, `
+SELECT i.indisvalid
+FROM pg_index i
+JOIN pg_class idx ON idx.oid = i.indexrelid
+JOIN pg_namespace ns ON ns.oid = idx.relnamespace
+WHERE ns.nspname = 'telemetry_runtime'
+  AND idx.relname = $1`, indexName).Scan(&valid); err != nil {
+			t.Fatalf("check telemetry index %s: %v", indexName, err)
+		}
+		if !valid {
+			t.Fatalf("telemetry index %s is not valid", indexName)
+		}
+	}
+
 	const gw2 = "0199a000-2000-7000-8000-000000000002"
 	sourceIDs := []string{p0TestGateway, gw2}
 	cleanupExtra := func() {

@@ -85,10 +85,8 @@ func (store *PostgresStore) reportSourceCoverageOnce(ctx context.Context, report
 	if len(existingIDs) == 0 {
 		return tx.Commit(ctx)
 	}
-	for _, deviceID := range existingIDs {
-		if err := lockDevice(ctx, tx, deviceID); err != nil {
-			return err
-		}
+	if err := lockDevices(ctx, tx, existingIDs); err != nil {
+		return err
 	}
 	changedIDs, err := applyObservationCoverage(ctx, tx, existingIDs, report.Available, report.ReasonCode, report.ObservedAt, report.SourceRevision)
 	if err != nil {
@@ -378,17 +376,23 @@ func applyObservationCoverage(
 		sourceRevision = 1
 	}
 	observedAt = observedAt.UTC()
-	var continuousSince any
+	var continuousSince *time.Time
 	if available {
-		continuousSince = observedAt
+		continuousSince = &observedAt
 	}
-	changed := make([]string, 0, len(existingLockedDeviceIDs))
-	for _, deviceID := range existingLockedDeviceIDs {
-		var updatedID string
-		err := tx.QueryRow(ctx, `
+	rows, err := tx.Query(ctx, `
 INSERT INTO telemetry_runtime.observation_coverage (
   device_id, available, continuous_since, reason_code, source_revision, updated_at
-) VALUES ($1::uuid, $2, $3, $4, $5, $6)
+)
+SELECT
+  u.device_id,
+  $2::boolean,
+  $3::timestamptz,
+  $4::text,
+  $5::bigint,
+  $6::timestamptz
+FROM unnest($1::uuid[]) WITH ORDINALITY AS u(device_id, ord)
+ORDER BY u.ord
 ON CONFLICT (device_id) DO UPDATE SET
   available = EXCLUDED.available,
   continuous_since = CASE
@@ -402,15 +406,23 @@ WHERE telemetry_runtime.observation_coverage.updated_at <= EXCLUDED.updated_at
   AND (telemetry_runtime.observation_coverage.available, telemetry_runtime.observation_coverage.reason_code)
   IS DISTINCT FROM (EXCLUDED.available, EXCLUDED.reason_code)
 RETURNING device_id::text
-`, deviceID, available, continuousSince, reasonCode, sourceRevision, observedAt).Scan(&updatedID)
-		if err == nil {
-			changed = append(changed, updatedID)
-			continue
-		}
-		if !errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("upsert telemetry observation coverage: %w", err)
-		}
+`, existingLockedDeviceIDs, available, continuousSince, reasonCode, sourceRevision, observedAt)
+	if err != nil {
+		return nil, fmt.Errorf("upsert telemetry observation coverage: %w", err)
 	}
+	defer rows.Close()
+	changed := make([]string, 0, len(existingLockedDeviceIDs))
+	for rows.Next() {
+		var updatedID string
+		if err := rows.Scan(&updatedID); err != nil {
+			return nil, fmt.Errorf("scan updated telemetry observation coverage device: %w", err)
+		}
+		changed = append(changed, updatedID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate updated telemetry observation coverage devices: %w", err)
+	}
+	slices.Sort(changed)
 	return changed, nil
 }
 
