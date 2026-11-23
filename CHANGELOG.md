@@ -5,10 +5,92 @@
 
 ## 未发布
 
+### 2026-11-23
+
+#### 新增
+
+- 新增跨站点告警规则基准模板库与受控下发工作台（`/system?tab=governance&section=alarm-templates`）：支持按设备类型/物模型维护基准告警规则、发布不可变模板版本、绑定冷站同步范围、执行多站点差异预检（自动保留站点个性 `overriddenFields` 并高亮冲突），并在批次下发后按 `TEMPLATE_ROLLOUT` 记入各站规则包版本账本。
+- 在告警规则页（`/operations/alarms?tab=rules`）新增「模板偏离核对」抽屉，支持对比单站派生规则与模板最新基准参数，并一键重置回模板默认值。
+- 新增站级批量群控指令接口（`POST /api/v1/sites/{siteId}/command-batches`、`GET` 列表与详情、`POST .../cancel`），支持同站最多 100 个目标点位独立校验与鉴权，高风险批量控制保持一步式 TOTP 确认与人工冷却锁约束。
+- 新增 `QUEUE_IF_OFFLINE` 离线排队投递策略与活跃设备即时唤醒：设定值/模拟量调节指令可为离线或 `SLEEPING` 设备排队并延迟重试，上行遥测、上线或非休眠事件到达时主动提前唤醒派发；停机、启停机序列及紧急安全指令强制保持 `FAIL_FAST`。
+- 补齐云边端到端 `ttlSeconds`（60 秒至 24 小时）与 `expiresAt` 到期防线：云端入队前、派发前与边缘执行器/模拟器均拦截超期与超时指令（`COMMAND_TTL_EXPIRED` / `TTL_EXCEEDS_MAX`），避免设备重新上线后执行过时控制动作。
+- 支持物理设备跨站点与跨租户过户（`POST /api/v1/sites/{siteId}/devices/{deviceId}/transfer`）：过户时强制先清理原绑定与点位依赖、退役原逻辑设备并在目标站点生成全新的逻辑设备主键（UUIDv7），严格隔离新旧租户历史遥测、告警与工单数据边界。
+- 支持过户后立即吊销原租户接入凭据并向边缘下发出厂安全清除指令（`FACTORY_RESET` / `FACTORY_RESET_ACK`），清理端侧本地 mTLS 证书与私钥、配置影子及离线/时序重传缓存，同时开放网关或直连设备的运维手动清除与记录查询接口（`POST /api/v1/gateways/{gatewayId}/factory-reset`、`GET /api/v1/gateways/{gatewayId}/factory-resets`）。
+- 为 Linux 边缘守护进程 `cmd/edge-gateway` 补齐松雅轩站级 RS-485 采集、ET1010 顺序控制与安全回滚防线（#955）以及 UID 20 无线集中器 MQTT RPC 能力，支持零业务中断替代 Node-RED（#951）。
+- 新增端侧 AI 模型与控制超参版本托管及热更新工作台：在 `core_registry.mlops_*` 扩展 `EDGE_CONTROL` 与 `EDGE_FDD` 元数据域及隔离策略，打通版本登记物理边界校验、审批流、通过网关配置影子下发与异常自动回退闭环，并在 `/system?tab=governance&section=edge-models` 提供结构化超参对比、审批发布与一键回退操作。
+- 新增边缘运行条件触发式高频波形抓拍回流与受控远程诊断增强：边缘守护进程在死区与窗口聚合前保留 15 分钟 1Hz 环形缓存并按触发规则或手动指令回流瞬态波形；网关抽屉新增宿主及 RS485/MQTT 链路自监控与脱敏日志按需拉取（受 `403` 权限拦截、字节/时间窗上限与完整操作审计约束），诊断工作台新增高频波形曲线查看与 CSV/JSON 导出。
+- 新增设备「一型一密」JITP 预注册与动态激活能力：管理员可为站点创建产品级预注册批次（仅落库 `productSecret` 的 SHA-256 摘要），产线或现场设备首次携带产品凭证与硬件序列号发起激活即可原子换取以云端设备 ID 为 `CN` 的独立 mTLS 证书。
+- 新增直连单品设备独立接入认证（`connectivityMode = 'DIRECT'`）：支持非网关类单品直接持 mTLS 证书接入 MQTT（沿用 `hvac/v1/{deviceId}/up|down/#` 主题隔离），上行遥测/状态/事件严格限定为本设备自身范围防伪造，支持直接下行控制路由。
+- 为周期休眠/低功耗设备新增 `SLEEPING`（休眠中）在网状态：数据库与 S2 遥测契约支持 `sleep_cycle_seconds` 与 `EXPLICIT_SLEEP` 信号，设备标签设置 `sleep_cycle_seconds` 后可自动同步休眠窗口并在运行监视页面展示为「休眠中」，不再误判为离线或异常，超时未唤醒再转离线。
+
+#### 改进
+
+- **收敛云边告警表达式求值内核至 `libs/alarmexpr`**：抽取共享词法分析、递归下降 AST 解析、复杂度与嵌套深度上限校验、静态类型检查与求值引擎至无外部依赖共享包 `libs/alarmexpr`，替换云端 `modules/alarm/pkg/alarmservice/expression.go` 与边缘重复实现并删除 `libs/edgecontrol/edge_expression.go`；通过 `EvalModeThreeValued` 与 `EvalModeTwoValued` 显式区分 Kleene 三值吸收与边缘前置质量/新鲜度确定性二值短路，补充属性/模糊/云边对拍测试并接入 PR 域门禁与静态漏洞扫描。
+- 优化网页端首屏加载、数据查询与数字孪生三维渲染性能：
+  - 将 `clsx`、`tailwind-merge` 等基础样式工具移出图表分包，避免登录页及非图表页面在首屏预加载并执行 `450 KB` 图表依赖包；为 `index.html` 增加跟随当前浅色/深色主题的静态首屏骨架。
+  - 为前端全局查询启用 `15s` 短缓存窗口、将告警与工单后台轮询间隔调整为 `30s`，并复用「今日用能」查询及整日缓存「昨日全天」读数，消除总览与数字孪生页面重复请求及跨整点回查。
+  - 缓存 `wallTime` 时区格式化器，并将实时订阅客户端的快照补齐改为 `batchGetDeviceObservationSnapshots` 微批请求及会话级 CSRF 缓存，减少单设备请求放大。
+  - 将数字孪生三维场景定时器改为逐帧完成后续排程、切到后台标签页时暂停绘制，并在识别软件 WebGL 渲染器或连续慢帧时立即降级后处理，消除离开数字孪生页面时的主线程卡顿；补齐电费账单分时电价构成骨架高度以消除布局抖动。
+- 运行控制工作台支持在主机、水泵与冷却塔控制行直接内联展示实时关键读数（出水温度、设定值、负载、频率、流量与功率），无需切换页面即可边看边控。
+- 将设备设定值与锁定操作改为清晰可扫描的文字标签按钮，并将设备锁定与优先级仲裁锁统一收敛到「锁定」安全下拉菜单，同时优化控制方式栏在 1280px 及侧栏展开下的紧凑排版。
+- 优化建议工作台按运行收益重排板块顺序（无待确认停机建议时「当前建议」直接置顶并将空闲「减台与辅机停机」收拢为紧凑状态条），减少首屏滚动干扰。
+- 拆分 1,234 行的自动控制面板为独立租约弹窗、撤回弹窗与 30 分钟执行监护表，按语义分组护栏表单并在校验失败时自动聚焦首个错误字段，同时为执行监护表补充状态筛选切换且修复 1280px 下表格列宽换行问题。
+- 实时运行页新增冷站 2D 水力回路示意图与水力异常提醒，按冷却塔、冷却水泵、冷水机组、冷冻水泵和建筑末端展示环路水温、流量与压差，并支持点击设备直接打开详情侧栏。
+- 优化 AI 助手结论卡片排版与重复数字去重：回答正文表格或附图已列出的数据指标不再在结论卡重复堆砌，并将空闲引导收拢为可直接点击的常见提问。
+- 按域拆分接入与治理前端纯模型（电表计量核对、传感器标定、无线集中器状态与配置、共享治理字典与网关配置影子文案），消除两千行单体模型文件并提升按模块维护性。
+- 将自动控制租约弹窗（`ArmLeaseDialog`）迁回 `react-hook-form` 与 `@/components/ui/field`，统一失焦后校验与输入修正清错，补齐 `aria-invalid` / `aria-describedby` 与失败聚焦路由。
+- 新增 `nuqs` 仅限 `DataTable` 高级筛选内部使用的静态检查，以及前端源码单文件 600 行上限与存量文件行数棘轮门禁。
+- 拆分电费账单页面中的超长组件（`AccountingConfigTab.tsx`、`UtilityBillDialog.tsx`、`BillReconciliationSheet.tsx`）为职责单一的子模块，使账单功能目录全部组件文件控制在 600 行以内，并同步收紧 `scripts/web-file-lines-baseline.json` 棘轮基线（24 降至 21）。
+- 将站点节假日配置、新增电表倍率版本与终止倍率版本弹窗统一接入 `react-hook-form` 与字段级无障碍错误联动（失焦校验、修改即清错、`aria-invalid` 与仅在报错时挂载 `aria-describedby`），并补充结算电费单表单契约单元测试。
+- 设备登记资源管理与模板管理工作台拆分为职责明确的组件与纯模型模块，补充编码/标识输入字段防自动纠错属性，保持全部交互流程、筛选标签与并发版本校验行为不变。
+- 将冷站水路、设备分类、运行态解析及水力支路推断等共享领域规则沉淀到平台共用模块并同步至运维小程序，确保网页端与小程序端展示一致。
+
+#### 变更
+
+- 完成松雅轩现场 EG8200 向独立 Go 边缘守护进程 `hvac-edge-gateway` `0.1.4` 切流并下线 `node-red.service` 与 `ZHCSharpMid`，同步更新现场基线文档与接入运维技能说明。
+
+#### 修复
+
+- 修复控制服务（`commandservice`）调用 IAM 决策接口的内部路径（由错误路径修正为 `/internal/v1/registry/decision` 与 `/internal/v1/command/decision`），并在 IAM 允许已认证调用方将自身 SPIFFE 身份声明为 `grantPresenter`（同时在默认配置中收录 `command-service`），解决 `GET /api/v1/commands` 与 `GET /api/v1/sites/{siteId}/control-state` 持续返回 `503 IAM_UNAVAILABLE` 的问题。
+- 修复总览页「今日用能」反复出现「今日能耗暂时读不到」（`POST /api/v1/analytics/energy-series` 返回 503）的慢性故障：
+  - 在 `semantic/cube/model/cubes/energy_facts.yml` 消除 `period_end` 别名遮蔽并拆分缺表检测视图 `site_energy_missing`，恢复 ClickHouse 分区/主键裁剪并大幅减少子查询与扫描行数；
+  - 将 ClickHouse 运行日志级别从默认 `trace` 调整为 `warning`，减少每条查询的日志开销；
+  - 为 Go Cube 客户端补齐官方 `Continue wait` 有界轮询协议并记录 503 失败分类日志，同时为前端能耗查询补充有限退避重试。
+- 修复 `hvac-edge-gateway` MQTT 连接状态回调内同步调用 `spool.Drain` 引发的无限重入发布风暴，避免离线缓存存在积压时阻塞冷站 RS-485 轮询循环。
+- 修复实时运行页与设备详情页在数值时间轴图表上悬停提示时的格式化崩溃，避免进入页面几秒后触发「页面暂时无法显示」。
+- 对齐首页「今日用能」与能耗分析页、分项能流查询的 30 秒时间窗并增加客户端复用与并行预取，减少重复 ClickHouse 查询以缩短页面首屏加载耗时；同步提高 PostgreSQL 连接上限与 Cube CPU 配额以消除高并发下的连接耗尽 503。
+- **修复平台网关与档案库 `Device.connectivityMode` 契约漂移导致的站点总览与设备页面 `503` 中断**：补齐 `contracts/http/templates/` 中的 Go（`platformapi.Device`）与 TypeScript（`deviceSchema`）生成的 `connectivityMode` 字段并补充 OpenAPI 与网关结构体字段一致性回归测试，使 `asset-model`、`devices` 与 `data-gaps` 接口恢复正常返回，消除总览、实时运行、运行计划、用电负荷、站点对标及运行控制页设备清单不可用与无限等待问题。
+- **消除能源语义层整月回退扫描，显著加快月报与能耗查询**：在 `semantic/cube/model/cubes/energy_facts.yml` 的 `site_energy_facts`、`equipment_energy_facts` 与 `site_energy_cost_facts` 中将 `tenant_id` 下推至全部 `UNION ALL` 分支及子查询，并将明细表 `energy_interval_facts_cube` 残余时段回退收敛为严格的起止边界小时与分时跨越小时分支，避免 ClickHouse 因 `NOT (整点判断)` 无法剪枝而整月重复扫描。
+- 修复智能运维助手（`operations-agent-service`）资产查询、设备列表、能耗序列与设备实时快照适配器，兼容并严格校验核心台账可选铭牌与水路字段（`ratedPower`、`ratedCapacity`、`tags`、`waterLoop`、`branchCode`）、合成总表能耗诊断字段（`synthesized`、`crossGap`、`crossGapKWh`、`incomplete`、`missingMeters`）及低功耗设备 `SLEEPING` 状态，消除 `TOOL_OWNER_RESPONSE_INVALID` 误报。
+- **修复站点重复注册与生产滚动发布时 `observation_coverage_check` 约束冲突**：将 `scripts/site-onboarding.mjs` 中 `telemetry_runtime.observation_coverage` 的冲突策略对齐 `modules/telemetry/pkg/telemetry/registry_sync.go` 改为 `ON CONFLICT (device_id) DO NOTHING;`，保留实时离线/断流覆盖状态且避免在 `continuous_since` 为 `NULL` 时触发检查约束失败；同步在 `scripts/phase1-central-plant-simulator.mjs` 的 `DO UPDATE` 中以 `COALESCE` 补全 `continuous_since`，并补充回归测试。
+- 修复网关覆盖率心跳上报在遥测观察记录达到百万级时因全表扫描与超时预算过短触发 `mqtt_coverage_report_failed` 的问题：
+  - 为 `telemetry_runtime.source_observations` 与 `telemetry_runtime.mqtt_runtime_events` 增加网关断联排查索引（`telemetry-coverage-disconnect-lookup-indexes.sql`），避免每次心跳全表扫描。
+  - 将 `modules/telemetry` 覆盖率接口的逐设备锁和逐行写入合并为批量操作，并将 `connectivity` 在线心跳超时预算从 `5s` 对齐到 `15s`（同步放宽 `telemetry-worker` 写超时到 `20s`），同时为失败日志补充非敏 `failure_class`、`duration_ms`、`device_count` 与 `gateway_count` 定位字段。
+- 修复反代隧道（`tunnel.Session`）关闭审计事件与发送帧计数之间的并发竞争（在采集 `BytesTX` 前与 `sendFrame` 写锁同步），防止快速断连时 `SESSION_CLOSED` 审计记录偶发漏计已发送字节；同步消除 `edgedaemon` 隧道客户端测试等待 Hub 会话就绪的竞态条件。
+- 加速松雅轩等站点能耗分析、概览用能与月报查询：在 ClickHouse 新增跨缺口小时聚合表与站点时间投影，优化 Cube 预计算与分段电价查询，并改为网关并发查询后放宽超时与限流突发上限。
+- 修复切换站点后经过站点对标等平台页再点击报告时跳回默认站点的问题，改由壳运行时按租户记住最近站点并透传至侧边栏、页头标徽与通知入口。
+- 修复前端路由错误兜底与分包碎片问题：将未捕获路由异常与 chunk 加载失败统一收口为可恢复中文状态页、全路由 query 参数容错，并将 UI/图标/图表/Zod 收敛为共享 vendor 包。
+- 修复控制指令查询快速失败策略、静默时段能效指标重算失败中止以及实时运行「读数过期」标签竖排挤压问题。
+
 ### 2026-11-22
 
 #### 新增
 
+- 告警中心详情面板与处理时间线新增边缘规则来源、离网补传标识、规则包版本号与边缘本地联动动作展示。
+- 新增边缘规则告警事件闭环投影与纯边缘规则云端去重评估（#950）：telemetry-worker 异步中继边缘规则触发与恢复事件至 alarm-service 完成幂等去重、乱序拦截、事件与告警投影、联动动作过滤及下游级联；当网关在线且边缘规则包版本同步一致时跳过纯边缘规则（`EDGE`）重复云端评估，离线或失步时自动无缝回退云端接管。
+- 新增纯 Go 南向 **BACnet/IP**（ASHRAE 135 Annex J UDP：设备发现 `Who-Is`/`I-Am`、属性读写、`SubscribeCOV` 异步通知与即时读回核验）与 **OPC-UA**（IEC 62541 二进制 TCP 通道、支持 `None` 及 `Basic256Sha256` `Sign`/`SignAndEncrypt` 实时密钥协商与报文校验、节点读写与订阅断线重连）协议桥及声明式适配器（`libs/edgecontrol`）。
+- 扩展云边统一驱动模型 `ValidateSouthboundDriverInput` 与硬实时安全边界（`EDGE-003`）校验，`connectivity` 网关配置影子、`registry` 设备模板激活（支持 `driver` / 设备标签 `bacnet_endpoint` / `bacnet_device_instance` / `opcua_endpoint`）及 `edge-gateway` 守护进程热加载池化连接桥。
+- 配套纯 Go 协议级仿真服务端 `VirtualBACnetServer` 与 `VirtualOPCUAServer`（对齐 `SIM-004`），并补齐协议级发现、读写校验、故障隔离与重连回归测试。
+- 网关端新增 `1 分钟` / `5 分钟` 滚动时间窗口预聚合器（`DATA-005`）：非关键辅助模拟量可按站点配置影子聚合为均值与最小/最大值，同时强制保留控制指令通道、极高优先级与硬实时点、告警规则输入点、状态量、异常品质点及冷量/电表累进点原始全量上传，并持续把全分辨率原始读数写入本地 `FileTimedata`。
+- 新增多冷机冷站群控器（`CTRL-002`），按实时冷负荷、累计运行小时负载均衡、启停防抖驻留时间与滞回阈值自动完成冷机加减机、负荷限值与冷冻水泵/冷却塔风机联动调节，且始终服从本地水力联锁强制优先门禁。
+- 新增版本化边缘时间片能耗调度器（`CTRL-003` / `CTRL-004`），支持 `NORMAL`、`ECO`、`PRE_COOL`、`PEAK_SHAVE`、`STANDBY` 分时策略与租约/离线续航评估，云端失联且授权租约失效后自动交棒给本地离线自治回退控制器接管；所有新配置段均已接入 `edge-gateway` 配置影子热更新与架构契约。
+- 边缘和云端控制链路新增硬件安全边界校验，禁止把 PLC 急停、消防联动、高压和防冻等保护点位配置成可写或由软件直接下发动作，同时保留只读状态采集和全站 `emergency_stop_all` 紧急停机释放通路。
+- 边缘网关 `edge-gateway` 接入 `v2.0` MQTT 指令适配器和本地崩溃恢复账本，将云端控制指令转为带到期租约的控制意图，交由本地水力联锁控制器统一仲裁并产出完整控制证据。
+- 边缘驱动写入设备后立即执行本地寄存器回读校验，并在控制回执中补充真实回读值、回读结果、校验时间和租约到期时间。
+- 模拟器 `eg8200-simulator` 新增 5–15 分钟冷冻水系统热滞后配置与控制、现场控制柜 `LOCAL` / `REMOTE` 切换、寄存器只读锁死以及冷机启动前「电动蝶阀开到位 + 水流开关导通」故障注入接口与验证。
+- 站点接入清单校验支持真实冷站可写供水温度设定、水泵变频与风机转速点位范围校验，以及电动蝶阀、水流开关、`HARD_REALTIME_SAFETY` 与控制柜手自动状态校验。
+- 新增基于模拟器故障演练的云端 `AutoController` 30 分钟执行监护、人工接管退避与只读锁死不收敛自动回滚全链路测试。
+- 网页端「集成接入 → 网关详情 → 配置影子」新增 BACnet/IP 与 OPC-UA 协议驱动编辑与校验能力，支持对象类型、属性 ID、COV 订阅、安全策略与节点 ID 配置，并同步更新设备模板协议摘要预览。
 - 新增面向 Linux 边缘网关的独立守护进程 `cmd/edge-gateway` 与 ARMv7/`systemd`/容器部署模板，集成 `libs/edgecontrol`、共享串口总线 Modbus RTU/TCP（预留 BACnet 桥接扩展点）、分级磁盘断点续传队列、配置影子热更新、14 天证书自动续签、受控反向隧道客户端与支持断点续传/SHA-256/Ed25519 校验及启动自检自动回滚的 A/B OTA 代理；同时修复 `modules/connectivity/pkg/tunnel` 收到 `FrameOpenErr` 时 `Stream.resolveOpen` 递归调用 `sync.Once` 导致的会话读循环死锁。
 - 为现场网关反向隧道新增可选、仅绑定服务端本机回环的受控 SSH 运维通道（`CONNECTIVITY_TUNNEL_SSH_LOOPBACK_ADDR` 设为 `127.0.0.1:18822` 时生效，默认关闭），双端严格限制端口白名单并记录到 `gateway_tunnel_audit_events` 审计表，同时补充 `systemd` 按需启停模板。
 - 设备接入服务新增边端 OTA 升级包存储、Ed25519 签名校验、站点与设备标签筛选、`mTLS` 断点续传（HTTP `Range` `206`）、灰度放量与失败率熔断编排，以及 MQTT `down/ota` / `up/ota` 状态同步。
@@ -20,6 +102,19 @@
 
 #### 改进
 
+- 边缘网关 `cmd/edge-gateway` 与 `libs/edgecontrol` 新增 Modbus 线圈与离散量输入功能码（`FC01` / `FC02` / `FC05` / `FC15`）、共享串口 `45ms` 默认转向间隔与控制写优先于周期读的 RS-485 总线锁。
+- 网关运行时接入 `FileTimedata` 与模拟量 `DeadbandFilter`，实现 `VERY_HIGH -> LOW` 四级优先级断网续传与 `replay: true` 重放标记、`DeterministicReplicationUUIDv7` 幂等键及 `LWT` / `GATEWAY_CONNECTED` / `GATEWAY_DISCONNECTED`（含 `sessionId`）生命周期事件上报。
+- 修复 `edge-gateway` `emitRuleEvents` 边缘规则事件载荷对齐 `#950`：移除重复 `"EDGE_RULE_"` 事件名前缀，统一 `sourceType: "EDGE_RULE"`，按 `occurredAt` 设置事件时间并序列化完整 `EdgeRuleEvent`（保留 `eventId`、`ruleId`、`severity`、`triggeredActions`）。
+- 网页：
+  - 将诊断结论与通知页面的分栏布局改为容器自适应高度，打开右侧 AI 助手或收窄内容区时不再硬编码视口扣减高度。
+  - 为骨架屏、旋转加载图标及列表刷新图标补充 `motion-safe:` 动效保护，在系统开启「减少动态效果」时停止无限循环动画。
+  - 将能效详情表、月报与节能举措表内残留的 ASCII `--` 缺失值统一改为中文破折号 `—`，并在前端设计系统静态守卫中固化上述规则（同步拦截死类名 `.real-shell-*`、`components/ui/` 外的 `transition-all`、无依赖数组的 `useEffect`/`useLayoutEffect` 与首屏主题防闪烁脚本缺失）。
+- 网页：
+  - 将全站重复的站点设备模型查询收口到同一缓存键，并修复受保护缓存清理前缀不匹配的问题；仅需静态设备清单的用能、负荷、报表与节能页面不再触发快照或实时推送连接。
+  - 在站点工作区挂载按需单例 `SiteRealtimeProvider`，切换冷站实时/控制/总览等实时页面时复用同一路快照轮询与实时连接，避免重复建连与闪烁。
+  - 将重复的状态徽章组件统一收口到 `status-badge.tsx`，移除未使用的 `react-resizable-panels` 依赖，并把 AI 助手按钮与图标统一替换为品牌标识、优化建议统一为灯泡图标。
+- 侧边栏与 `Ctrl K` 搜索按当前账号能力自动隐藏无权访问的页面及设备列表。
+- 将控制告警死信、告警规则联动死信与路由热重载、AI 策略灰度与负样本飞轮统一收口至「系统管理 - 工程治理」，并将表计异常清洗留痕迁至「集成管理」，保持一线值班页面简洁清晰。
 - 为网站配置异常、全局出错与登录状态失效页面补齐卡片与按钮样式，替换未生效的旧样式类。
 - 修复能耗分析与电费预算在缺少计量数据时显示 `¥0`、全零分时进度或 `--` 的问题，统一显示为 `—` 或空状态。
 - 将告警规则条件、规则试算、倍率点位选择和辅助回路优化建议中的英文点位名与英文说明转换为简体中文。
@@ -27,6 +122,12 @@
 
 #### 修复
 
+- 隔离 `edge-gateway --health-check` OTA 预检的运行态目录、监听端口、串口总线与外部连接，避免与现场运行中的旧版本守护进程发生端口与状态目录冲突。
+- 修复 `edge-gateway` 回环健康服务 `/readyz` 在就绪后透传到无该路由的诊断处理器导致返回 404 的问题，现正确返回 `200 ok`。
+- 修复松雅轩 ET1010 边缘顺序执行器的停泵功率丢失盲停缺陷与开机顺控中途失败缺少逆序停泵回滚、MQTT 告警事件上报问题：电表读数返回空或异常且重查仍无法确认主机已停机时阻断关停辅机并上报 `CRITICAL` 事件；`START_UNIT_SEQUENCE` 在脉冲发出前失败或遇闭合校验不通过时逆序关停已开启水泵与风机并同步上报状态与诊断事件。
+- 补齐 Mosquitto ACL 中 `mqtt-telemetry-adapter` 对 `hvac/v1/+/up/ota` 与 `hvac/v1/+/down/ota` 的收发授权，使生产与本地环境启用 OTA 后 MQTT 适配器可正常订阅并下发分片升级指令。
+- 在 Phase 1 容器构建脚本与部署脚本中为 `connectivity` 镜像和既有 `connectivity-ota-packages` 卷统一设置 `65532:65532` 属主，避免非 root 进程写入 OTA 安装包目录时触发权限拒绝。
+- 为 `edge-gateway` 新增可选的 `mqttCaFile` 与 `mqttServerName` 配置项并在未填写时回退到 `caFile`/`serverName`，支持 HTTPS 公网证书与 MQTT 内部 CA 分离的场景。
 - 减少登录会话状态、实时连接状态或页面作用域变化时不必要的整页路由重校验。
 - 侧栏、顶栏与总览待办面板的告警、工单和运行控制查询改为按当前账号权限按需发起，在控制入口直接显示待审批或待确认的实时数量，点击系统管理、站点对标或集成管理时不再保留 `?site=` 参数。
 - 限制告警筛选自动翻页深度并提供加载失败重试与手动继续加载按钮，修复告警快捷键监听在输入法选词期间误触及每帧重绑问题。
