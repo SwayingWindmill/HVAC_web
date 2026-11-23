@@ -2,9 +2,14 @@ package connectivity
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
+	"math/big"
 	"os"
 	"slices"
 	"sync"
@@ -94,8 +99,28 @@ func TestPostgresTransferDecommissionRevocationAndFactoryResetLifecycle(t *testi
 	defer store.Close()
 	store.now = func() time.Time { return now }
 
-	caCertPEM, caKeyPEM := credentialTestCA(t, now)
-	authority, err := NewCertificateAuthority(caCertPEM, caKeyPEM, "tls://mqtt-broker:8883")
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caTpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "Transfer CRL Test CA"},
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(365 * 24 * time.Hour),
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTpl, caTpl, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caPriv, err := x509.MarshalPKCS8PrivateKey(caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, err := NewCertificateAuthority(
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}),
+		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: caPriv}),
+		"tls://mqtt-broker:8883",
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,15 +230,24 @@ func TestPostgresTransferDecommissionRevocationAndFactoryResetLifecycle(t *testi
 	}
 	mu.Unlock()
 
-	// Immediate revocation: old cert rejected by VerifyActiveCredential, ResolveGateway, Renew, and present in CRL.
-	if _, err := service.VerifyActiveCredential(ctx, cert); !errors.Is(err, ErrCredentialRevoked) {
-		t.Fatalf("VerifyActiveCredential after transfer decommission=%v, want ErrCredentialRevoked", err)
+	// Retired source device is rejected by VerifyActiveCredential/ResolveGateway/Renew, credentials+enrollment are
+	// immediately REVOKED in PostgreSQL, and revoked serial is present in CRL.
+	if _, err := service.VerifyActiveCredential(ctx, cert); !errors.Is(err, ErrEnrollmentRejected) {
+		t.Fatalf("VerifyActiveCredential after retired transfer decommission=%v, want ErrEnrollmentRejected", err)
 	}
-	if _, err := store.ResolveGateway(ctx, gateway); !errors.Is(err, adapter.ErrGatewayCredentialInactive) {
-		t.Fatalf("ResolveGateway after transfer decommission=%v, want ErrGatewayCredentialInactive", err)
+	if _, err := store.ResolveGateway(ctx, gateway); !errors.Is(err, adapter.ErrGatewayUnknown) {
+		t.Fatalf("ResolveGateway after retired transfer decommission=%v, want ErrGatewayUnknown", err)
 	}
-	if _, err := service.Renew(ctx, cert, credentialTestCSR(t, gateway)); !errors.Is(err, ErrCredentialRevoked) {
-		t.Fatalf("Renew after transfer decommission=%v, want ErrCredentialRevoked", err)
+	if _, err := service.Renew(ctx, cert, credentialTestCSR(t, gateway)); !errors.Is(err, ErrEnrollmentRejected) {
+		t.Fatalf("Renew after retired transfer decommission=%v, want ErrEnrollmentRejected", err)
+	}
+	var credStatus string
+	if err := admin.QueryRow(ctx, `SELECT status FROM connectivity.gateway_credentials WHERE gateway_id=$1::uuid LIMIT 1`, gateway).Scan(&credStatus); err != nil || credStatus != "REVOKED" {
+		t.Fatalf("gateway_credentials.status=%q err=%v, want REVOKED", credStatus, err)
+	}
+	var enrollmentRevoked bool
+	if err := admin.QueryRow(ctx, `SELECT revoked_at IS NOT NULL FROM connectivity.gateway_enrollments WHERE gateway_id=$1::uuid`, gateway).Scan(&enrollmentRevoked); err != nil || !enrollmentRevoked {
+		t.Fatalf("gateway_enrollments.revoked_at IS NOT NULL=%v err=%v", enrollmentRevoked, err)
 	}
 	crlPEM, err := service.ExportCRL(ctx)
 	if err != nil {
@@ -333,7 +367,20 @@ func TestPostgresTransferDecommissionRevocationAndFactoryResetLifecycle(t *testi
 		t.Fatalf("ListFactoryResets=%+v err=%v", listed, err)
 	}
 
-	// DIRECT mode device is also eligible for transfer decommission.
+	// DIRECT mode device is eligible for transfer decommission and while still ACTIVE rejects old cert with ErrCredentialRevoked / ErrGatewayCredentialInactive.
+	directCode, err := service.GenerateEnrollmentCode(ctx, claims, directDevice)
+	if err != nil {
+		t.Fatalf("GenerateEnrollmentCode direct: %v", err)
+	}
+	directIssued, err := service.Enroll(ctx, directCode.EnrollmentCode, credentialTestCSR(t, directDevice))
+	if err != nil {
+		t.Fatalf("Enroll direct: %v", err)
+	}
+	directBlock, _ := pem.Decode([]byte(directIssued.CertificatePEM))
+	directCert, err := x509.ParseCertificate(directBlock.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 	directRes, err := service.DecommissionTransferredGateway(ctx, directDevice, DecommissionTransferInput{
 		TenantID:     tenant,
 		TransferID:   otherTransfer,
@@ -343,5 +390,14 @@ func TestPostgresTransferDecommissionRevocationAndFactoryResetLifecycle(t *testi
 	})
 	if err != nil || !directRes.CredentialsRevoked || directRes.FactoryReset != nil {
 		t.Fatalf("direct transfer decommission=%+v err=%v", directRes, err)
+	}
+	if _, err := service.VerifyActiveCredential(ctx, directCert); !errors.Is(err, ErrCredentialRevoked) {
+		t.Fatalf("VerifyActiveCredential after active transfer decommission=%v, want ErrCredentialRevoked", err)
+	}
+	if _, err := store.ResolveGateway(ctx, directDevice); !errors.Is(err, adapter.ErrGatewayCredentialInactive) {
+		t.Fatalf("ResolveGateway after active transfer decommission=%v, want ErrGatewayCredentialInactive", err)
+	}
+	if _, err := service.Renew(ctx, directCert, credentialTestCSR(t, directDevice)); !errors.Is(err, ErrCredentialRevoked) {
+		t.Fatalf("Renew after active transfer decommission=%v, want ErrCredentialRevoked", err)
 	}
 }

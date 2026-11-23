@@ -522,10 +522,13 @@ func (processor *Processor) ProcessPrefix(ctx context.Context, messages []Uplink
 	gateway, err := processor.identities.ResolveGateway(ctx, messageTopic.GatewayID)
 	switch {
 	case errors.Is(err, ErrGatewayUnknown):
+		if messageTopic.MessageType == MessageTypeLifecycle && processor.onFactoryResetAck != nil {
+			return processor.processFactoryResetAck(ctx, messageTopic.GatewayID, quarantine, first)
+		}
 		return processor.quarantinedOutcome(ctx, quarantine, QuarantineGatewayUnknown, err)
 	case errors.Is(err, ErrGatewayCredentialInactive):
 		quarantine.TenantID = gateway.TenantID
-		if messageTopic.MessageType == MessageTypeLifecycle && strings.TrimSpace(gateway.TenantID) != "" {
+		if messageTopic.MessageType == MessageTypeLifecycle && processor.onFactoryResetAck != nil && strings.TrimSpace(gateway.TenantID) != "" {
 			return processor.processFactoryResetAck(ctx, messageTopic.GatewayID, quarantine, first)
 		}
 		return processor.quarantinedOutcome(ctx, quarantine, QuarantineGatewayCredentialInactive, err)
