@@ -250,6 +250,26 @@ interface WebAsCastBaseline {
   maxNonConstAsCasts: number;
 }
 
+interface WebFileLinesBaseline {
+  readonly schemaVersion: number;
+  readonly policy: string;
+  readonly maxLinesPerFile: number;
+  readonly legacyFileCaps: Readonly<Record<string, number>>;
+}
+
+const NUQS_ALLOWED_FILES = new Set([
+  'apps/hvac-web/src/routes/__root.tsx',
+  'apps/hvac-web/src/components/data-table/data-table-filter-list.tsx',
+  'apps/hvac-web/src/lib/parsers.ts',
+]);
+
+export function countSourceLines(source: string): number {
+  const normalized = source.replaceAll('\r\n', '\n');
+  if (normalized.length === 0) return 0;
+  const trimmed = normalized.endsWith('\n') ? normalized.slice(0, -1) : normalized;
+  return trimmed.length === 0 ? 0 : trimmed.split('\n').length;
+}
+
 const FORBIDDEN_COPY_RULES: ReadonlyArray<{ label: string; pattern: RegExp; replacement: string }> = [
   { label: '台账', pattern: /(?<!平)台账/u, replacement: '设备清单 / 安装清单' },
   { label: '核算', pattern: /核算/u, replacement: '统计 / 核对 / 计算' },
@@ -486,6 +506,21 @@ async function validateWebAstAndCopyGuardrails(root: string, errors: string[]): 
       }
     }
 
+    if (!NUQS_ALLOWED_FILES.has(relativePath)) {
+      for (const statement of sourceFile.statements) {
+        if ((ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement))
+          && statement.moduleSpecifier
+          && ts.isStringLiteralLike(statement.moduleSpecifier)) {
+          const specifier = statement.moduleSpecifier.text;
+          if (specifier === 'nuqs' || specifier.startsWith('nuqs/')) {
+            errors.push(
+              `${relativePath}:${lineOfNode(sourceFile, statement)} avoid \`nuqs\` outside DataTable filter internals; declare route search params in TanStack Router validateSearch instead`,
+            );
+          }
+        }
+      }
+    }
+
     const seenCommentStarts = new Set<number>();
     const checkCommentsAt = (ranges: readonly ts.CommentRange[] | undefined): void => {
       if (!ranges) return;
@@ -607,6 +642,50 @@ async function validateWebAstAndCopyGuardrails(root: string, errors: string[]): 
   }
 }
 
+async function validateWebFileLinesRatchet(root: string, errors: string[]): Promise<void> {
+  const srcRoot = resolve(root, 'apps/hvac-web/src');
+  if (!existsSync(srcRoot)) return;
+
+  const baselinePath = resolve(root, 'scripts/web-file-lines-baseline.json');
+  if (!existsSync(baselinePath)) {
+    errors.push('scripts/web-file-lines-baseline.json is missing; add the frontend file-line baseline file');
+    return;
+  }
+
+  const baseline = JSON.parse(await readFile(baselinePath, 'utf8')) as WebFileLinesBaseline;
+  const sourcePaths = (await collectFeatureSources(srcRoot))
+    .filter((path) => !path.endsWith('.gen.ts') && !path.endsWith('.d.ts'))
+    .sort();
+  const lineCounts = new Map<string, number>();
+
+  for (const path of sourcePaths) {
+    const relativePath = repoRelative(root, path);
+    if (relativePath.startsWith('apps/hvac-web/src/components/ui/')) continue;
+    const source = await readFile(path, 'utf8');
+    const lines = countSourceLines(source);
+    lineCounts.set(relativePath, lines);
+
+    const cap = baseline.legacyFileCaps[relativePath];
+    if (cap === undefined) {
+      if (lines > baseline.maxLinesPerFile) {
+        errors.push(`${relativePath} has ${lines} lines (limit ${baseline.maxLinesPerFile}); split it into cohesive modules instead of growing oversized files`);
+      }
+    } else if (cap <= baseline.maxLinesPerFile) {
+      errors.push(`scripts/web-file-lines-baseline.json: stale cap ${cap} for ${relativePath} (already <= ${baseline.maxLinesPerFile}); remove it`);
+    } else if (lines > cap) {
+      errors.push(`${relativePath} grew from ${cap} to ${lines} lines (scripts/web-file-lines-baseline.json); split it instead of expanding legacy oversized files`);
+    } else if (lines <= baseline.maxLinesPerFile) {
+      errors.push(`scripts/web-file-lines-baseline.json: stale entry for ${relativePath} (${lines} <= ${baseline.maxLinesPerFile}); remove it`);
+    }
+  }
+
+  for (const legacyPath of Object.keys(baseline.legacyFileCaps)) {
+    if (!lineCounts.has(legacyPath)) {
+      errors.push(`scripts/web-file-lines-baseline.json: stale entry for missing/exempt file ${legacyPath}; remove it`);
+    }
+  }
+}
+
 async function validateRouteTreeFreshness(root: string, errors: string[]): Promise<void> {
   const webRoot = resolve(root, 'apps/hvac-web');
   const routesDir = resolve(webRoot, 'src/routes');
@@ -694,6 +773,7 @@ export async function validateDesignSystem(rawRoot = defaultRoot): Promise<{ err
   await validateImeSafeEnterHandlers(root, errors);
   await validateFactTileProps(root, errors);
   await validateWebAstAndCopyGuardrails(root, errors);
+  await validateWebFileLinesRatchet(root, errors);
   await validateRouteTreeFreshness(root, errors);
 
   const componentsJson = await readFile(resolve(root, 'apps/hvac-web/components.json'), 'utf8');

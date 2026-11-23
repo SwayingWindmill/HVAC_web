@@ -28,13 +28,13 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { useDataTable } from '@/hooks/use-data-table';
 import { formatDecimal } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
-import {
-  describeIntegrationsError,
-  type HourlyReconciliationBucket,
-  type MeterReconciliationModel,
-  type MeterReconciliationRow,
-  type ReconciliationHourStatus,
-} from '../integrations-model';
+import { describeIntegrationsError } from '../governance-shared-model';
+import type {
+  HourlyReconciliationBucket,
+  MeterReconciliationModel,
+  MeterReconciliationRow,
+  ReconciliationHourStatus,
+} from '../meter-reconciliation-model';
 import { GovernanceBadge } from './GovernanceShared';
 
 const RECONCILIATION_CHART_CONFIG = {

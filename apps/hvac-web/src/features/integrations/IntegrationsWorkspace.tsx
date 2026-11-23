@@ -26,13 +26,15 @@ import { MeterReconciliationTab } from './components/MeterReconciliationTab';
 import { OtaTab } from './components/OtaTab';
 import { SensorCalibrationTab } from './components/SensorCalibrationTab';
 import { SensorInspectionSheet } from './components/SensorInspectionSheet';
+import { type IntegrationsTabView } from './governance-shared-model';
 import {
   buildMeterReconciliationModel,
-  buildSensorCalibrationModel,
   findMainElectricityCounterDevices,
-  type IntegrationsTabView,
+} from './meter-reconciliation-model';
+import {
+  buildSensorCalibrationModel,
   type SensorCalibrationFilter,
-} from './integrations-model';
+} from './sensor-calibration-model';
 import { siteAssetModelQuery } from '@/api/site-asset-model';
 import {
   checkMetersHourlyQuery,

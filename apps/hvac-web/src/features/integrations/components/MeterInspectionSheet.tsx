@@ -16,8 +16,8 @@ import { formatDecimal } from '@/lib/operator-format';
 import {
   findOpenExternalWorkOrder,
   formatSlotDateTime,
-  type MeterReconciliationRow,
-} from '../integrations-model';
+} from '../governance-shared-model';
+import type { MeterReconciliationRow } from '../meter-reconciliation-model';
 import {
   devicePointHourlyHistoryQuery,
   externalSourceWorkOrdersQuery,

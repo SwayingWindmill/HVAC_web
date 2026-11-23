@@ -20,7 +20,7 @@ import { cn } from '@/lib/utils';
 import {
   CONFIG_SHADOW_SYNC_PRESENTATION,
   describeGatewayConfigShadowError,
-} from '@/features/integrations/integrations-model';
+} from './gateway-config-shadow-labels';
 import {
   buildValidatedShadowUpdateRequestFromDesired,
   createShadowEditorDraft,

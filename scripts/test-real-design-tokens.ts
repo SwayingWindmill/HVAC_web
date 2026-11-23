@@ -74,6 +74,7 @@ test('design system check passes on the repository and rejects violations across
       'apps/hvac-web/src/styles/shadcn-tailwind.css',
       'scripts/shadcn-cli.mjs',
       'scripts/web-as-cast-baseline.json',
+      'scripts/web-file-lines-baseline.json',
     ]) {
       cpSync(join(repoRoot, rel), join(sandbox, rel));
     }
@@ -174,6 +175,40 @@ test('design system check passes on the repository and rejects violations across
       join(sandbox, 'scripts/web-as-cast-baseline.json'),
       JSON.stringify({ schemaVersion: 1, policy: 'web-non-const-as-cast-ratchet', maxNonConstAsCasts: 0 }),
     );
+    writeFileSync(
+      join(sandbox, 'scripts/web-file-lines-baseline.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        policy: 'web-file-lines-ratchet',
+        maxLinesPerFile: 20,
+        legacyFileCaps: {
+          'apps/hvac-web/src/features/demo/TooLongLegacy.tsx': 22,
+          'apps/hvac-web/src/features/demo/ShrunkLegacy.tsx': 25,
+          'apps/hvac-web/src/features/demo/MissingLegacy.tsx': 25,
+        },
+      }),
+    );
+    writeFileSync(
+      join(sandbox, 'apps/hvac-web/src/features/demo/TooLongNew.tsx'),
+      Array.from({ length: 22 }, (_, i) => `export const n${i} = ${i};`).join('\n') + '\n',
+    );
+    writeFileSync(
+      join(sandbox, 'apps/hvac-web/src/features/demo/TooLongLegacy.tsx'),
+      Array.from({ length: 24 }, (_, i) => `export const l${i} = ${i};`).join('\n') + '\n',
+    );
+    writeFileSync(
+      join(sandbox, 'apps/hvac-web/src/features/demo/ShrunkLegacy.tsx'),
+      'export const shrunk = 1;\n',
+    );
+    writeFileSync(
+      join(sandbox, 'apps/hvac-web/src/features/demo/BadNuqs.tsx'),
+      `import { parseAsString } from 'nuqs';\nexport const badQuery = parseAsString;\n`,
+    );
+    mkdirSync(join(sandbox, 'apps/hvac-web/src/lib'), { recursive: true });
+    writeFileSync(
+      join(sandbox, 'apps/hvac-web/src/lib/parsers.ts'),
+      `import { createParser } from 'nuqs/server';\nexport const allowedParser = createParser;\n`,
+    );
     mkdirSync(join(sandbox, 'apps/hvac-web/src/routes'), { recursive: true });
     writeFileSync(join(sandbox, 'apps/hvac-web/src/routes/__root.tsx'), 'import { createRootRoute } from "@tanstack/react-router";\nexport const Route = createRootRoute({});\n');
     writeFileSync(join(sandbox, 'apps/hvac-web/src/routes/index.tsx'), 'import { createFileRoute } from "@tanstack/react-router";\nexport const Route = createFileRoute("/")({});\n');
@@ -183,6 +218,12 @@ test('design system check passes on the repository and rejects violations across
     assert.equal(errors.some((entry: string) => entry.includes('AllowedClient.tsx')), false);
     assert.equal(errors.some((entry: string) => entry.includes('AllowedTransition.tsx')), false);
     assert.equal(errors.some((entry: string) => entry.includes('GoodWave2Patterns.tsx')), false);
+    assert.equal(errors.some((entry: string) => entry.includes('apps/hvac-web/src/lib/parsers.ts')), false);
+    assert.ok(errors.some((entry: string) => entry.includes('BadNuqs.tsx:1 avoid `nuqs` outside DataTable filter internals')));
+    assert.ok(errors.some((entry: string) => entry.includes('TooLongNew.tsx has 22 lines (limit 20)')));
+    assert.ok(errors.some((entry: string) => entry.includes('TooLongLegacy.tsx grew from 22 to 24 lines')));
+    assert.ok(errors.some((entry: string) => entry.includes('stale entry for apps/hvac-web/src/features/demo/ShrunkLegacy.tsx (1 <= 20)')));
+    assert.ok(errors.some((entry: string) => entry.includes('stale entry for missing/exempt file apps/hvac-web/src/features/demo/MissingLegacy.tsx')));
     assert.ok(errors.some((entry: string) => entry.includes('BadUiMotion.tsx:1 infinite animation `animate-pulse` must respect prefers-reduced-motion')));
     assert.ok(errors.some((entry: string) => entry.includes('BadWave2Guardrails.tsx:3 useEffect() must specify an explicit dependency array')));
     assert.ok(errors.some((entry: string) => entry.includes('BadWave2Guardrails.tsx:5 avoid dead legacy CSS class `real-shell-*`')));

@@ -16,8 +16,8 @@ import { formatDecimal } from '@/lib/operator-format';
 import {
   findOpenExternalWorkOrder,
   formatSlotDateTime,
-  type SensorCalibrationRow,
-} from '../integrations-model';
+} from '../governance-shared-model';
+import type { SensorCalibrationRow } from '../sensor-calibration-model';
 import {
   devicePointHourlyHistoryQuery,
   externalSourceWorkOrdersQuery,

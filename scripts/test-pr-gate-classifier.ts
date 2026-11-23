@@ -342,6 +342,7 @@ test('repository governance enforces 1:1 skill parity, required hook files, and 
       'scripts/hooks/pre-tool-guard.ts',
       'tsconfig.scripts.json',
       'scripts/web-as-cast-baseline.json',
+      'scripts/web-file-lines-baseline.json',
       'scripts/coverage-baseline.json',
       'scripts/check-coverage-regression.ts',
       'scripts/verify-live-web.ts',
@@ -364,7 +365,7 @@ test('repository governance enforces 1:1 skill parity, required hook files, and 
     ]).length,
     0,
   );
-  assert.equal(findRequiredGuardrailFileViolations(['.agents/hooks.json']).length, 23);
+  assert.equal(findRequiredGuardrailFileViolations(['.agents/hooks.json']).length, 24);
 
   const verifyMapSandbox = mkdtempSync(join(tmpdir(), 'hvac-verify-map-'));
   try {
@@ -437,6 +438,7 @@ test('repository governance enforces 1:1 skill parity, required hook files, and 
     'scripts/test-pre-tool-guard.ts',
     'scripts/javascript-tooling-baseline.json',
     'scripts/web-as-cast-baseline.json',
+    'scripts/web-file-lines-baseline.json',
     'scripts/coverage-baseline.json',
     'scripts/check-coverage-regression.ts',
     'scripts/sync-phase1-migrations.ts',

@@ -205,6 +205,7 @@ const requiredGuardrailFiles = Object.freeze([
   'scripts/hooks/pre-tool-guard.ts',
   'tsconfig.scripts.json',
   'scripts/web-as-cast-baseline.json',
+  'scripts/web-file-lines-baseline.json',
   'scripts/coverage-baseline.json',
   'scripts/check-coverage-regression.ts',
   'scripts/verify-live-web.ts',

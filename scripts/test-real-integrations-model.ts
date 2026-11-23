@@ -49,35 +49,45 @@ import {
   CONFIG_SHADOW_REASON_LABELS,
   CONFIG_SHADOW_SECTION_LABELS,
   CONFIG_SHADOW_SYNC_PRESENTATION,
+  describeGatewayConfigShadowError,
+} from '../apps/hvac-web/src/features/connectivity/gateway-config-shadow-labels.ts';
+import {
   CONCENTRATOR_AUDIT_OPERATION_LABELS,
   CONCENTRATOR_AUDIT_OUTCOME_PRESENTATION,
   PROTECTED_RS485_UIDS,
-  QUALITY_REASON_EXPLANATIONS,
-  applyConcentratorEidBatchFill,
-  buildConcentratorChannelRow,
-  buildConcentratorEidDiff,
-  buildConcentratorParamsDiff,
-  buildConcentratorSummary,
-  buildMeterReconciliationModel,
-  buildSensorCalibrationModel,
   classifyConcentratorBattery,
   describeConcentratorError,
-  describeGatewayConfigShadowError,
-  describeIntegrationsError,
-  detectDuplicateNonZeroEids,
-  explainQualityReason,
   filterConcentratorChannels,
-  findMainElectricityCounterDevices,
-  inferDefaultConcentratorUid,
   formatConcentratorBaudRate,
   formatConcentratorBandwidth,
   formatConcentratorEidDisplay,
-  formatProbePairLabel,
-  formatSourceChannel,
+  inferDefaultConcentratorUid,
   isProtectedConcentratorUid,
   mergeConcentratorAudits,
+  buildConcentratorChannelRow,
+  buildConcentratorSummary,
+} from '../apps/hvac-web/src/features/integrations/concentrator-model.ts';
+import {
+  applyConcentratorEidBatchFill,
+  buildConcentratorEidDiff,
+  buildConcentratorParamsDiff,
+  detectDuplicateNonZeroEids,
   validateConcentratorParamsDraft,
-} from '../apps/hvac-web/src/features/integrations/integrations-model.ts';
+} from '../apps/hvac-web/src/features/integrations/concentrator-config-model.ts';
+import {
+  QUALITY_REASON_EXPLANATIONS,
+  describeIntegrationsError,
+  explainQualityReason,
+  formatSourceChannel,
+} from '../apps/hvac-web/src/features/integrations/governance-shared-model.ts';
+import {
+  buildMeterReconciliationModel,
+  findMainElectricityCounterDevices,
+} from '../apps/hvac-web/src/features/integrations/meter-reconciliation-model.ts';
+import {
+  buildSensorCalibrationModel,
+  formatProbePairLabel,
+} from '../apps/hvac-web/src/features/integrations/sensor-calibration-model.ts';
 import {
   OTA_ARCH_LABELS,
   OTA_CAMPAIGN_STATUS_PRESENTATION,

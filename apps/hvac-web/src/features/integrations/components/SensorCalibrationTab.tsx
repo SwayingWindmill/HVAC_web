@@ -11,13 +11,13 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { useDataTable } from '@/hooks/use-data-table';
 import { cn } from '@/lib/utils';
+import { describeIntegrationsError } from '../governance-shared-model';
 import {
-  describeIntegrationsError,
   filterSensorCalibrationRows,
   type SensorCalibrationFilter,
   type SensorCalibrationModel,
   type SensorCalibrationRow,
-} from '../integrations-model';
+} from '../sensor-calibration-model';
 import { GovernanceBadge } from './GovernanceShared';
 
 const CALIBRATION_FILTERS: readonly {

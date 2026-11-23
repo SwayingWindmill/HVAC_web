@@ -347,7 +347,10 @@ for (const file of files) {
       'scripts/test-go-test-hygiene.ts',
       'scripts/run-preflight.ts',
     ].includes(file), () => addReason(file, 'repository governance baseline or pre-tool hook guard changed (verified in static gate)'));
-    scriptMatch(file === 'scripts/web-as-cast-baseline.json', () => selectWeb(file, 'web type-cast baseline changed'));
+    scriptMatch(
+      file === 'scripts/web-as-cast-baseline.json' || file === 'scripts/web-file-lines-baseline.json',
+      () => selectWeb(file, 'web static guardrail baseline changed'),
+    );
     scriptMatch(lower.includes('rms') || lower.includes('browser-audit') || lower.includes('design-system') || lower.includes('verify-runtime') || lower.includes('verify-live') || lower.includes('local-administrator-browser') || lower.startsWith('scripts/test-real-'), () => selectWeb(file, 'browser, RMS or Web model test automation changed'));
     scriptMatch(lower.includes('s0-') || lower.includes('durable'), () => selectPlatform(file, 'platform automation changed', { integration: lower.includes('postgres') }));
     scriptMatch(lower.includes('s1-') || lower.includes('registry'), () => selectRegistry(file, 'registry automation changed', { integration: lower.includes('postgres') }));

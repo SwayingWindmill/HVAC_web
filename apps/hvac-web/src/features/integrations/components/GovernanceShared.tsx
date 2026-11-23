@@ -23,7 +23,7 @@ import {
   formatHourSlotLabel,
   formatSlotDateTime,
   type GovernanceStatusPresentation,
-} from '../integrations-model';
+} from '../governance-shared-model';
 import type { HourlyHistoryRow } from '../query';
 
 const BADGE_VARIANTS: Readonly<
