@@ -23,6 +23,7 @@ func RunAll(hooks FaultHooks) (FullReport, error) {
 		CheckMultiCommandDeviceExclusivity,
 		CheckReplyRecoveryQueueDrain,
 		CheckPriorityArbitrationAndLocks,
+		CheckOfflineQueueAndTTLSafety,
 	}
 	report := FullReport{
 		Passed: true,
@@ -33,6 +34,8 @@ func RunAll(hooks FaultHooks) (FullReport, error) {
 			PropertyP4,
 			PropertyP5,
 			PropertyP6,
+			PropertyP7,
+			PropertyP8,
 		},
 		Suites: make([]SuiteReport, 0, len(suites)),
 	}

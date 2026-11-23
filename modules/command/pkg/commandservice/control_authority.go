@@ -169,7 +169,9 @@ func (a *ControlAuthority) ClaimDispatch(ctx context.Context, tenantID, leaseOwn
 				FailureCode: rejection.Code,
 				EvidenceID:  evID,
 			})
-			if commandmodel.TerminalPreSendRejection(rejection.Code) {
+			if commandmodel.TerminalPreSendRejection(rejection.Code) ||
+				(commandmodel.NormalizeDeliveryMode(intent.DeliveryMode) == commandmodel.DeliveryModeQueueIfOffline &&
+					commandmodel.IsDeferrableOfflinePreSendCode(rejection.Code)) {
 				continue
 			}
 			return commandmodel.DispatchEnvelope{}, ErrNoDispatchAvailable
@@ -201,6 +203,16 @@ func (a *ControlAuthority) CompleteConnectorEvidence(ctx context.Context, eviden
 
 func (a *ControlAuthority) CancelPending(ctx context.Context, request commandmodel.CancelPendingRequest) ([]string, error) {
 	return a.store.CancelPending(ctx, request)
+}
+
+func (a *ControlAuthority) WakeDeferredDispatches(ctx context.Context, tenantID string, deviceIDs []string) (int, error) {
+	if waker, ok := a.runtime.(DeferredDispatchWaker); ok {
+		return waker.WakeDeferredDispatches(ctx, tenantID, deviceIDs)
+	}
+	if waker, ok := a.store.(DeferredDispatchWaker); ok {
+		return waker.WakeDeferredDispatches(ctx, tenantID, deviceIDs)
+	}
+	return 0, nil
 }
 
 // ClaimAnyDispatch scans tenants with due dispatchable work via DueTenantLister,
@@ -340,6 +352,10 @@ func (a *ControlAuthority) evaluatePreDispatch(
 		IdempotencyKey:          intent.IdempotencyKey,
 		PriorityTier:            intent.PriorityTier,
 		CommandSource:           intent.CommandSource,
+		DeliveryMode:            intent.DeliveryMode,
+		TTLSeconds:              intent.TTLSeconds,
+		ExpiresAt:               intent.ExpiresAt,
+		Now:                     a.now().UTC(),
 		TargetState:             targetObs,
 		Interlocks:              dctx.Interlocks,
 		PeerStates:              peerObs,
@@ -473,6 +489,11 @@ func (a *ControlAuthority) SubmitOperatorCommand(
 	if ctrlErr != nil {
 		return SubmitOperatorCommandOutput{}, ctrlErr
 	}
+	now := a.now().UTC()
+	deliveryMode, ttlSeconds, expiresAt, deliveryErr := commandmodel.ValidateDeliveryAndTTL(target.capability, input.DeliveryMode, input.TTLSeconds, nil, now)
+	if deliveryErr != nil {
+		return SubmitOperatorCommandOutput{}, controlErrorFromStore(deliveryErr, deliveryErr.Error())
+	}
 
 	controlState, err := a.twin.GetSiteControlState(ctx, operator, asset.SiteID)
 	if err != nil {
@@ -505,6 +526,10 @@ func (a *ControlAuthority) SubmitOperatorCommand(
 		IdempotencyKey:          strings.TrimSpace(input.IdempotencyKey),
 		PriorityTier:            commandmodel.PriorityManualOverride,
 		CommandSource:           commandmodel.SourceOperator,
+		DeliveryMode:            deliveryMode,
+		TTLSeconds:              ttlSeconds,
+		ExpiresAt:               expiresAt,
+		Now:                     now,
 		PreconditionMode:        commandmodel.PreconditionRequireCurrentState,
 		HardRealtimeProtected:   hardProtected,
 		TargetState:             targetObs,
@@ -530,7 +555,8 @@ func (a *ControlAuthority) SubmitOperatorCommand(
 		ctx, operator, asset.SiteID, target.device.ID, target.point.ID,
 		strings.TrimSpace(input.IdempotencyKey), traceID, target.capability, target.profile,
 		input.Parameters, target.feedbackPoint.PointCode,
-		commandmodel.PreconditionRequireCurrentState, "", "", "", targetObs,
+		commandmodel.PreconditionRequireCurrentState, "", "", "",
+		deliveryMode, ttlSeconds, expiresAt, nil, nil, targetObs,
 	)
 	if err != nil {
 		return SubmitOperatorCommandOutput{}, err
@@ -1445,6 +1471,11 @@ func (a *ControlAuthority) mintGrantAndSubmit(
 	bypassReason string,
 	priorityTier commandmodel.PriorityTier,
 	commandSource commandmodel.CommandSource,
+	deliveryMode commandmodel.DeliveryMode,
+	ttlSeconds *int,
+	expiresAt *time.Time,
+	batchID *string,
+	batchItemIndex *int,
 	obs *commandmodel.LivePointObservation,
 ) (SubmitResult, error) {
 	riskLevel, _, ok := commandmodel.EvaluateRiskLevel(capability, parameters, liveObservationCurrentValue(obs))
@@ -1489,6 +1520,11 @@ func (a *ControlAuthority) mintGrantAndSubmit(
 		BypassReason:         bypassReason,
 		PriorityTier:         priorityTier,
 		CommandSource:        commandSource,
+		DeliveryMode:         deliveryMode,
+		TTLSeconds:           cloneIntPtr(ttlSeconds),
+		ExpiresAt:            cloneTimePtr(expiresAt),
+		BatchID:              cloneStringPtr(batchID),
+		BatchItemIndex:       cloneIntPtr(batchItemIndex),
 		CurrentState:         currentState,
 		Authorization:        commandauth.Snapshot(claims),
 	})

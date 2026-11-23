@@ -71,6 +71,9 @@ func (store *PostgresStore) claimDispatchOnce(ctx context.Context, tenantID stri
 	if err := store.expireUnapprovedCommands(ctx, tx, tenantID, now); err != nil {
 		return commandmodel.DispatchEnvelope{}, err
 	}
+	if err := store.expireTTLExpiredCommands(ctx, tx, tenantID, now); err != nil {
+		return commandmodel.DispatchEnvelope{}, err
+	}
 	if err := store.rejectPriorityLockedQueued(ctx, tx, tenantID, now); err != nil {
 		return commandmodel.DispatchEnvelope{}, err
 	}
@@ -78,11 +81,13 @@ func (store *PostgresStore) claimDispatchOnce(ctx context.Context, tenantID stri
 	var outboxID string
 	var intent commandmodel.CommandIntent
 	var capability string
+	var deliveryMode string
 	var parameters []byte
 	err = tx.QueryRow(ctx, fmt.Sprintf(`
 SELECT o.outbox_id::text,
        i.command_id::text, i.tenant_id::text, i.site_id::text, i.device_id::text, i.point_id::text,
        i.capability_name, i.capability_revision,
+       i.delivery_mode, i.ttl_seconds, i.expires_at,
        i.canonical_parameters,
        i.payload_hash, i.device_command_sequence, i.version, i.trace_id
 FROM command_runtime.command_dispatch_outbox o
@@ -94,6 +99,8 @@ WHERE o.tenant_id = $1::uuid
   AND o.available_at <= $2
   AND (o.lease_until IS NULL OR o.lease_until <= $2)
   AND i.status = 'QUEUED'
+  AND (i.expires_at IS NULL OR i.expires_at > $2)
+  AND (i.next_dispatch_after IS NULL OR i.next_dispatch_after <= $2)
   AND NOT (d.frozen_control_groups ? $3)
   AND NOT EXISTS (
         SELECT 1
@@ -118,8 +125,11 @@ WHERE o.tenant_id = $1::uuid
           AND EXISTS (
             SELECT 1 FROM command_runtime.command_authorization_snapshots s
             WHERE s.command_id = i.command_id
-              AND s.expires_at > $2
               AND s.authorization_purpose = 'COMMAND_SUBMIT'
+              AND (
+                s.expires_at > $2
+                OR (i.delivery_mode = 'QUEUE_IF_OFFLINE' AND i.expires_at IS NOT NULL AND i.expires_at > $2)
+              )
           )
         )
       )
@@ -143,7 +153,7 @@ FOR UPDATE OF o SKIP LOCKED
 LIMIT 1
 `, priorityRankSQLExpr("i.priority_tier"), priorityRankSQLExpr("l.locked_priority"), priorityRankSQLExpr("earlier.priority_tier")), tenantID, now, setpointControlGroup).Scan(
 		&outboxID, &intent.ID, &intent.TenantID, &intent.SiteID, &intent.DeviceID, &intent.PointID,
-		&capability, &intent.CapabilityRevision, &parameters,
+		&capability, &intent.CapabilityRevision, &deliveryMode, &intent.TTLSeconds, &intent.ExpiresAt, &parameters,
 		&intent.PayloadHash, &intent.DeviceCommandSequence, &intent.Version, &intent.TraceID,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -214,7 +224,7 @@ INSERT INTO command_runtime.command_attempts (
 	newVersion := intent.Version + 1
 	if _, err := tx.Exec(ctx, `
 UPDATE command_runtime.command_intents
-SET status = 'DISPATCHING', version = $3, active_execution_fence = $4, updated_at = $5
+SET status = 'DISPATCHING', next_dispatch_after = NULL, version = $3, active_execution_fence = $4, updated_at = $5
 WHERE tenant_id = $1::uuid AND command_id = $2::uuid AND status = 'QUEUED'
 `, tenantID, intent.ID, newVersion, executionFence, now); err != nil {
 		return commandmodel.DispatchEnvelope{}, fmt.Errorf("mark command dispatching: %w", err)
@@ -245,7 +255,10 @@ WHERE tenant_id = $1::uuid AND outbox_id = $2::uuid AND delivered_at IS NULL
 		SiteID: intent.SiteID, DeviceID: intent.DeviceID, PointID: intent.PointID,
 		TraceID: commandmodel.NormalizeTraceID(intent.TraceID), Capability: intent.Capability,
 		CapabilityRevision: intent.CapabilityRevision, Parameters: cloneParameters(intent.Parameters),
-		PayloadHash: intent.PayloadHash, ExecutionFence: executionFence,
+		DeliveryMode: commandmodel.NormalizeDeliveryMode(commandmodel.DeliveryMode(deliveryMode)),
+		TTLSeconds:   cloneIntPtr(intent.TTLSeconds),
+		ExpiresAt:    cloneTimePtr(intent.ExpiresAt),
+		PayloadHash:  intent.PayloadHash, ExecutionFence: executionFence,
 		DeviceCommandSequence: intent.DeviceCommandSequence, LeaseOwner: leaseOwner, LeaseUntil: leaseUntil,
 	}, nil
 }
@@ -294,7 +307,9 @@ func (store *PostgresStore) resolveDispatchOnce(ctx context.Context, envelope co
 	}
 	var intent commandmodel.CommandIntent
 	var capability string
+	var deliveryMode string
 	var attemptStatus string
+	var attemptNumber int
 	var attemptVersion uint64
 	var activeFence uint64
 	var attemptFence uint64
@@ -303,8 +318,9 @@ func (store *PostgresStore) resolveDispatchOnce(ctx context.Context, envelope co
 	var outboxID string
 	err = tx.QueryRow(ctx, `
 SELECT i.command_id::text, i.tenant_id::text, i.site_id::text, i.device_id::text, i.point_id::text,
-       i.capability_name, i.payload_hash, i.version, i.active_execution_fence, i.status,
-       a.status, a.version, a.execution_fence, a.payload_hash, a.lease_owner, a.lease_until,
+       i.capability_name, i.delivery_mode, i.ttl_seconds, i.expires_at,
+       i.payload_hash, i.version, i.active_execution_fence, i.status,
+       a.attempt_number, a.status, a.version, a.execution_fence, a.payload_hash, a.lease_owner, a.lease_until,
        o.outbox_id::text
 FROM command_runtime.command_intents i
 JOIN command_runtime.command_attempts a ON a.command_id = i.command_id
@@ -314,8 +330,9 @@ WHERE i.tenant_id = $1::uuid AND i.command_id = $2::uuid AND a.attempt_id = $3::
 FOR UPDATE OF i, a, o
 `, envelope.TenantID, envelope.CommandID, envelope.AttemptID).Scan(
 		&intent.ID, &intent.TenantID, &intent.SiteID, &intent.DeviceID, &intent.PointID,
-		&capability, &intent.PayloadHash, &intent.Version, &activeFence, &intent.Status,
-		&attemptStatus, &attemptVersion, &attemptFence, &attemptPayloadHash, &leaseOwner, &leaseUntil,
+		&capability, &deliveryMode, &intent.TTLSeconds, &intent.ExpiresAt,
+		&intent.PayloadHash, &intent.Version, &activeFence, &intent.Status,
+		&attemptNumber, &attemptStatus, &attemptVersion, &attemptFence, &attemptPayloadHash, &leaseOwner, &leaseUntil,
 		&outboxID,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -363,7 +380,13 @@ FOR UPDATE
 	}
 
 	intent.Capability = commandmodel.Capability(capability)
-	decision, err := DecideDispatchResolution(intent.Capability, result, now)
+	intent.DeliveryMode = commandmodel.NormalizeDeliveryMode(commandmodel.DeliveryMode(deliveryMode))
+	var decision DispatchResolutionDecision
+	if intent.DeliveryMode == commandmodel.DeliveryModeQueueIfOffline || intent.ExpiresAt != nil || commandmodel.IsTTLExpiredFailureCode(result.FailureCode) {
+		decision, err = DecideDispatchResolutionForIntent(intent, result, attemptNumber, now)
+	} else {
+		decision, err = DecideDispatchResolution(intent.Capability, result, now)
+	}
 	if err != nil {
 		return ErrInvalidRequest
 	}
@@ -372,6 +395,7 @@ FOR UPDATE
 	reason := decision.Reason
 	freeze := decision.FreezeControlGroup
 	retry := decision.RequeueForRetry
+	nextDispatchAfter := decision.NextDispatchAfter
 	acknowledgedAt := decision.AcknowledgedAt
 	verificationDeadline := decision.VerificationDeadline
 
@@ -397,9 +421,9 @@ WHERE tenant_id = $1::uuid AND command_id = $2::uuid AND attempt_id = $3::uuid
 	}
 	if _, err := tx.Exec(ctx, `
 UPDATE command_runtime.command_intents
-SET status = $3, version = $4, updated_at = $5
+SET status = $3, next_dispatch_after = $4, version = $5, updated_at = $6
 WHERE tenant_id = $1::uuid AND command_id = $2::uuid
-`, envelope.TenantID, envelope.CommandID, intentFinal, newVersion, now); err != nil {
+`, envelope.TenantID, envelope.CommandID, intentFinal, nextDispatchAfter, newVersion, now); err != nil {
 		return fmt.Errorf("resolve command intent: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
@@ -432,18 +456,26 @@ WHERE tenant_id = $1::uuid AND device_id = $2::uuid
 		if err != nil {
 			return fmt.Errorf("allocate pre-send retry outbox identifier: %w", err)
 		}
+		availableAt := now
+		if nextDispatchAfter != nil {
+			availableAt = nextDispatchAfter.UTC()
+		}
+		retryReason := "PROVABLY_NOT_SENT"
+		if nextDispatchAfter != nil {
+			retryReason = reason
+		}
 		payload, _ := json.Marshal(map[string]any{
 			"schemaVersion": 1, "commandId": intent.ID, "tenantId": intent.TenantID,
 			"siteId": intent.SiteID, "deviceId": intent.DeviceID, "payloadHash": intent.PayloadHash,
-			"retryReason": "PROVABLY_NOT_SENT", "previousAttemptId": envelope.AttemptID,
+			"retryReason": retryReason, "previousAttemptId": envelope.AttemptID,
 		})
 		if _, err := tx.Exec(ctx, `
 INSERT INTO command_runtime.command_dispatch_outbox (
   outbox_id, command_id, tenant_id, site_id, device_id, command_version,
   available_at, lease_owner, lease_until, delivered_at, attempt_count, payload, created_at
-) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6, $7, NULL, NULL, NULL, 0, $8::jsonb, $7)
+) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6, $7, NULL, NULL, NULL, 0, $8::jsonb, $9)
 `, newOutboxID, intent.ID, intent.TenantID, intent.SiteID, intent.DeviceID,
-			newVersion, now, payload); err != nil {
+			newVersion, availableAt, payload, now); err != nil {
 			return fmt.Errorf("insert safe pre-send retry outbox: %w", err)
 		}
 	}
@@ -464,10 +496,12 @@ INSERT INTO command_runtime.command_dispatch_outbox (
 		return fmt.Errorf("commit dispatch resolution: %w", err)
 	}
 	if retry {
-		switch result.FailureCode {
-		case "DISPATCH_SAFETY_EVALUATION_FAILED", "DISPATCH_SAFETY_UNAVAILABLE":
-		default:
-			store.notifyDispatchWork()
+		if nextDispatchAfter == nil {
+			switch result.FailureCode {
+			case "DISPATCH_SAFETY_EVALUATION_FAILED", "DISPATCH_SAFETY_UNAVAILABLE":
+			default:
+				store.notifyDispatchWork()
+			}
 		}
 	} else if intentFinal == commandmodel.IntentDispatching && attemptFinal == commandmodel.AttemptAcknowledged {
 		store.notifyVerificationWork()
@@ -614,8 +648,11 @@ WHERE i.tenant_id = $1::uuid AND i.status = 'QUEUED'
       AND NOT EXISTS (
         SELECT 1 FROM command_runtime.command_authorization_snapshots s
         WHERE s.command_id = i.command_id
-          AND s.expires_at > $2
           AND s.authorization_purpose = 'COMMAND_SUBMIT'
+          AND (
+            s.expires_at > $2
+            OR (i.delivery_mode = 'QUEUE_IF_OFFLINE' AND i.expires_at IS NOT NULL AND i.expires_at > $2)
+          )
       )
     )
   )
@@ -650,7 +687,7 @@ LIMIT 50
 		}
 		if _, err := tx.Exec(ctx, `
 UPDATE command_runtime.command_intents
-SET status = 'EXPIRED', version = $3, updated_at = $4
+SET status = 'EXPIRED', next_dispatch_after = NULL, version = $3, updated_at = $4
 WHERE tenant_id = $1::uuid AND command_id = $2::uuid AND status = 'QUEUED'
 `, tenantID, item.CommandID, item.Version+1, now); err != nil {
 			return fmt.Errorf("expire governance-invalid command: %w", err)
@@ -727,6 +764,79 @@ WHERE tenant_id = $1::uuid AND command_id = $2::uuid
 		}
 		if err := insertDispatchAudit(ctx, tx, auditID, intent, "COMMAND_APPROVAL_WINDOW_EXPIRED", map[string]any{
 			"reason": "APPROVAL_WINDOW_EXPIRED",
+		}, now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (store *PostgresStore) expireTTLExpiredCommands(ctx context.Context, tx pgx.Tx, tenantID string, now time.Time) error {
+	type expiredTTLCommand struct {
+		CommandID, SiteID, DeviceID, PayloadHash string
+		Status                                   commandmodel.IntentStatus
+		Version                                  uint64
+	}
+	rows, err := tx.Query(ctx, `
+SELECT i.command_id::text, i.site_id::text, i.device_id::text, i.payload_hash, i.status, i.version
+FROM command_runtime.command_intents i
+WHERE i.tenant_id = $1::uuid
+  AND i.status IN ('AWAITING_APPROVAL', 'QUEUED')
+  AND i.expires_at IS NOT NULL
+  AND i.expires_at <= $2
+FOR UPDATE OF i SKIP LOCKED
+LIMIT 50
+`, tenantID, now)
+	if err != nil {
+		return fmt.Errorf("select ttl-expired commands: %w", err)
+	}
+	expired := make([]expiredTTLCommand, 0)
+	for rows.Next() {
+		var item expiredTTLCommand
+		var status string
+		if err := rows.Scan(&item.CommandID, &item.SiteID, &item.DeviceID, &item.PayloadHash, &status, &item.Version); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan ttl-expired command: %w", err)
+		}
+		item.Status = commandmodel.IntentStatus(status)
+		expired = append(expired, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("iterate ttl-expired commands: %w", err)
+	}
+	rows.Close()
+	for _, item := range expired {
+		transitionID, err := store.newID(now)
+		if err != nil {
+			return err
+		}
+		auditID, err := store.newID(now)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+UPDATE command_runtime.command_intents
+SET status = 'EXPIRED', next_dispatch_after = NULL, version = $3, updated_at = $4
+WHERE tenant_id = $1::uuid AND command_id = $2::uuid AND status IN ('AWAITING_APPROVAL', 'QUEUED')
+`, tenantID, item.CommandID, item.Version+1, now); err != nil {
+			return fmt.Errorf("expire ttl-expired command: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+UPDATE command_runtime.command_dispatch_outbox
+SET delivered_at = $3, lease_until = NULL
+WHERE tenant_id = $1::uuid AND command_id = $2::uuid AND delivered_at IS NULL
+`, tenantID, item.CommandID, now); err != nil {
+			return fmt.Errorf("retire ttl-expired outbox: %w", err)
+		}
+		intent := commandmodel.CommandIntent{ID: item.CommandID, TenantID: tenantID, SiteID: item.SiteID, DeviceID: item.DeviceID, PayloadHash: item.PayloadHash, Version: item.Version}
+		if err := insertDispatchTransition(ctx, tx, transitionID, intent, item.Version+1,
+			item.Status, commandmodel.IntentExpired,
+			"COMMAND_TTL_EXPIRED", "command-service", item.CommandID, "", now); err != nil {
+			return err
+		}
+		if err := insertDispatchAudit(ctx, tx, auditID, intent, "COMMAND_TTL_EXPIRED", map[string]any{
+			"reason": "COMMAND_TTL_EXPIRED",
 		}, now); err != nil {
 			return err
 		}
@@ -832,6 +942,91 @@ INSERT INTO command_runtime.command_audit_intents (
 		return fmt.Errorf("insert dispatch audit intent: %w", err)
 	}
 	return nil
+}
+
+// WakeDeferredDispatches accelerates deferred QUEUE_IF_OFFLINE intents for recently
+// active devices so woken devices receive pending setpoints without waiting for backoff.
+func (store *PostgresStore) WakeDeferredDispatches(ctx context.Context, tenantID string, deviceIDs []string) (int, error) {
+	if store == nil || store.pool == nil {
+		return 0, errors.New("command store is closed")
+	}
+	if !commandmodel.IsUUIDv7(tenantID) {
+		return 0, ErrInvalidRequest
+	}
+	uniqueIDs := make([]string, 0, len(deviceIDs))
+	seen := make(map[string]struct{}, len(deviceIDs))
+	for _, rawID := range deviceIDs {
+		trimmed := strings.TrimSpace(rawID)
+		if !commandmodel.IsUUIDv7(trimmed) {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		uniqueIDs = append(uniqueIDs, trimmed)
+	}
+	if len(uniqueIDs) == 0 {
+		return 0, nil
+	}
+
+	now := store.now().UTC()
+	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return 0, fmt.Errorf("begin wake deferred dispatches transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := activateTenant(ctx, tx, tenantID); err != nil {
+		return 0, err
+	}
+
+	rows, err := tx.Query(ctx, `
+UPDATE command_runtime.command_intents
+SET next_dispatch_after = NULL, updated_at = $3
+WHERE tenant_id = $1::uuid
+  AND device_id = ANY($2::uuid[])
+  AND status = 'QUEUED'
+  AND delivery_mode = 'QUEUE_IF_OFFLINE'
+  AND next_dispatch_after IS NOT NULL
+  AND (expires_at IS NULL OR expires_at > $3)
+RETURNING command_id::text
+`, tenantID, uniqueIDs, now)
+	if err != nil {
+		return 0, fmt.Errorf("wake deferred queued intents: %w", err)
+	}
+	wokenIDs := make([]string, 0)
+	for rows.Next() {
+		var commandID string
+		if scanErr := rows.Scan(&commandID); scanErr != nil {
+			rows.Close()
+			return 0, fmt.Errorf("scan woken command id: %w", scanErr)
+		}
+		wokenIDs = append(wokenIDs, commandID)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		rows.Close()
+		return 0, fmt.Errorf("iterate woken command ids: %w", rowsErr)
+	}
+	rows.Close()
+
+	if len(wokenIDs) > 0 {
+		if _, err := tx.Exec(ctx, `
+UPDATE command_runtime.command_dispatch_outbox
+SET available_at = LEAST(available_at, $3)
+WHERE tenant_id = $1::uuid
+  AND command_id = ANY($2::uuid[])
+  AND delivered_at IS NULL
+`, tenantID, wokenIDs, now); err != nil {
+			return 0, fmt.Errorf("accelerate woken command dispatch outbox: %w", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("commit wake deferred dispatches: %w", err)
+	}
+	if len(wokenIDs) > 0 {
+		store.notifyDispatchWork()
+	}
+	return len(wokenIDs), nil
 }
 
 // DueDispatchTenants lists distinct tenants currently holding due dispatchable work.

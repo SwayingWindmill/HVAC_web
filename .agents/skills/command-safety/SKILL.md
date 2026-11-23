@@ -7,7 +7,7 @@ description: Exhaustively model-check command intent, execution fence, MQTT comm
 
 Run the exhaustive explicit-state model checker (`modules/command/pkg/commandformal`) against real production transition decisions in `commandservice`, `mqttconnector`, and aligned SQL predicates in `postgres_*.go` / `connectivity/store.go`.
 
-- **Base syncCommit**: `7a51a55b7b5a0045d6fe4a11fa551caea747b3f9`
+- **Base syncCommit**: `492c2f31f885770268627cd53a3bdc539794a310`
 
 ## Quick Run
 
@@ -23,7 +23,7 @@ npm run command:formal -- --json
 
 If any invariant or mutation test fails, the runner prints the shortest failing BFS trace (`[Suite/Property] <summary>; trace: step1 -> step2 -> ...`) and exits non-zero.
 
-## Properties Verified (`P1`-`P7`)
+## Properties Verified (`P1`-`P8`)
 
 | ID | Plain-sentence invariant | Verified production symbols |
 | --- | --- | --- |
@@ -34,6 +34,7 @@ If any invariant or mutation test fails, the runner prints the shortest failing 
 | **P5** | Post-`VerificationDeadline` telemetry cannot succeed even with `VERIFIED` outcome, and stale-fence, post-abort, or already-settled resolutions return `ErrStaleFence`. | `commandservice.Service.ResolveDispatch`, `commandservice.Service.ResolveVerification`, `commandservice.DecideVerificationResolution` |
 | **P6** | Persisted `REPLIED` correlations whose attempts are fenced or missing advance to `RESOLVED`, `DrainTenantReplies` loops beyond `LIMIT 50` so stale rows cannot starve trailing live `EXECUTED` replies, and `EvidenceStore.Complete` errors propagate instead of fabricating `OUTCOME_UNKNOWN`. | `mqttconnector.Connector.DrainTenantReplies`, `mqttconnector.Connector.RecoverTenantReplies`, `mqttconnector.Connector.ResolveCorrelationReply`, `connectivity.Store.RecoverCommandReplies` |
 | **P7** | Device priority locks (`PriorityLockBlocking`) and active higher-priority intents (`ActiveHigherPriorityBlocking`) block lower-priority `Submit` (`ErrDevicePriorityLocked`) and `ClaimDispatch` (`CanClaimQueuedIntentWithPriority`), while higher-priority intents preempt or abort queued/active lower-priority peers (`PriorityLockPreempts`, SQL `rejectPriorityLockedQueued`). | `commandmodel.PriorityTier`, `commandmodel.DevicePriorityLock`, `commandservice.PriorityLockBlocking`, `commandservice.ActiveHigherPriorityBlocking`, `commandservice.CanClaimQueuedIntentWithPriority`, `commandservice.Service.AcquireDevicePriorityLock` |
+| **P8** | Only setpoint/analog adjustment capabilities may use `QUEUE_IF_OFFLINE` (`FAIL_FAST` remains mandatory for `START`/`STOP`/unit-sequence/`RESET_FAULT`); offline/sleeping targets defer cleanly with `nextDispatchAfter > now`, respect backoff unless woken via `WakeDeferredDispatches` (without ever overriding `OUTCOME_UNKNOWN` freezes), and expire terminally to `EXPIRED` once `now >= expiresAt`. | `commandmodel.ValidateDeliveryAndTTL`, `commandmodel.EvaluateControlGate`, `commandservice.DecideDispatchResolutionForIntent`, `commandservice.CanClaimQueuedIntentWithPriority`, `commandservice.Service.WakeDeferredDispatches`, `mqttconnector.Connector.Execute` |
 
 ## Suites Covered
 
@@ -41,25 +42,28 @@ If any invariant or mutation test fails, the runner prints the shortest failing 
 2. **`CheckMultiCommandDeviceExclusivity` (`P1`, `P3`)**: Exhaustive BFS over two queued commands targeting one `(tenant, device)` pair, proving single-flight dispatch, pre-send safety retry vs terminal rejection, and `OUTCOME_UNKNOWN` freeze containment.
 3. **`CheckReplyRecoveryQueueDrain` (`P6`)**: Bounded (`limit=2`), batch (`limit=50`), and looped multi-batch (`stale=120`, `limit=50`) queue-drain verification over `mqttconnector.RecoverTenantReplies`, `mqttconnector.DrainTenantReplies`, and `commandservice.Service`.
 4. **`CheckPriorityArbitrationAndLocks` (`P7`)**: Exhaustive BFS over `PriorityAIOptimization`, `PriorityManualOverride`, and `PrioritySafetyInterlock` intents plus `DevicePriorityLock` preemption and `AbortActiveSequences` driving `commandservice.Service` and `commandservice` pure helpers.
-5. **`TestFormalPropertiesCanFailOnBrokenTransitions`**: Mutation suite injecting single-guard failures (`FaultHooks`) to prove every invariant `P1`-`P7` fails when broken.
-6. **`sql_alignment_test.go`**: Verifies `postgres.go` (`rejectPriorityLockedQueued`), `postgres_dispatch.go` (`resolveDispatchOnce` `AND o.delivered_at IS NULL` + `expireGovernanceInvalidQueued` outbox retirement), `postgres_verification.go`, `postgres_reconcile.go`, `postgres_cancel.go` (`abortActiveSequences` / `IsActiveAbortableSequence`), `libs/commandmodel/model.go` (`TerminalPreSendRejection`), `connectivity/store.go`, and `mqttconnector/connector.go` (`DrainTenantReplies` + `completeRecoveredReply`) remain aligned with the formal model.
+5. **`CheckOfflineQueueAndTTLSafety` (`P8`)**: Exhaustive BFS and service verification over `QUEUE_IF_OFFLINE` capability restriction, offline deferral backoff (`nextDispatchAfter`), `WakeDeferredDispatches` wake-up under freezes, and TTL expiry boundaries (`expiresAt` -> `EXPIRED`).
+6. **`TestFormalPropertiesCanFailOnBrokenTransitions`**: Mutation suite injecting single-guard failures (`FaultHooks`) to prove every invariant `P1`-`P8` fails when broken.
+7. **`sql_alignment_test.go`**: Verifies `postgres.go` (`rejectPriorityLockedQueued`), `postgres_dispatch.go` (`resolveDispatchOnce` `AND o.delivered_at IS NULL`, `expireGovernanceInvalidQueued`, `expireTTLExpiredCommands`, `WakeDeferredDispatches`), `postgres_batch.go` (`lowerUUIDPattern.MatchString(batchID)`), `postgres_verification.go`, `postgres_reconcile.go`, `postgres_cancel.go` (`abortActiveSequences` / `IsActiveAbortableSequence`), `libs/commandmodel/model.go` (`TerminalPreSendRejection`), `connectivity/store.go`, `mqttconnector/connector.go` (`DrainTenantReplies` + `completeRecoveredReply`), and `modules/command/migrations/command-batch-offline-queue-ttl.sql` remain aligned with the formal model.
 
 ## Covered Code Map
 
 | File | Verified symbols & invariants |
 | --- | --- |
-| `libs/commandmodel/model.go` | Command enums, `PriorityTier`, `CommandSource`, `DevicePriorityLock`, `PriorityRank`, `PriorityLockPreempts`, `CapabilityProfileFor`, `EvaluateRiskLevel`, `EdgeExecutionEvidence.ValidExecuted`, `CorrelationState`, `ErrCommandCorrelationNotFound`, `ErrCommandCorrelationMismatch`, `TerminalPreSendRejection`, `NormalizeTraceID` |
-| `modules/command/pkg/commandservice/service.go` | `Submit`, `Approve`, `Cancel`, `CancelPending`, `PrepareDispatch`, `ResolveDispatch`, `PrepareVerification`, `ResolveVerification`, `AcquireDevicePriorityLock`, `ReleaseDevicePriorityLock`, `Close` (`controlFailureQueue` drain) |
+| `libs/commandmodel/model.go` | Command enums, `DeliveryMode`, `ValidateDeliveryAndTTL`, `IsDeferrableOfflinePreSendCode`, `IsTTLExpiredFailureCode`, `PriorityTier`, `CommandSource`, `DevicePriorityLock`, `PriorityRank`, `PriorityLockPreempts`, `CapabilityProfileFor`, `EvaluateRiskLevel`, `EdgeExecutionEvidence.ValidExecuted`, `CorrelationState`, `ErrCommandCorrelationNotFound`, `ErrCommandCorrelationMismatch`, `TerminalPreSendRejection`, `NormalizeTraceID` |
+| `modules/command/pkg/commandservice/service.go` | `Submit`, `Approve`, `Cancel`, `CancelPending`, `PrepareDispatch`, `ResolveDispatch`, `WakeDeferredDispatches`, `PrepareVerification`, `ResolveVerification`, `AcquireDevicePriorityLock`, `ReleaseDevicePriorityLock`, `Close` (`controlFailureQueue` drain) |
 | `modules/command/pkg/commandservice/governance.go` | `evaluateGovernance`, `approvalPolicyForRisk`, `validateApproval`, `validateExecutionGovernance` |
-| `modules/command/pkg/commandservice/transitions.go` | `BlockingEarlierIntentStatuses`, `CanClaimQueuedIntent`, `CanClaimQueuedIntentWithPriority`, `PriorityLockBlocking`, `ActiveHigherPriorityBlocking`, `DecideCommandCancel`, `DecideDispatchResolution`, `DecideVerificationResolution`, `DecideOperatorReconcile`, `IsActiveAbortableSequence` |
-| `modules/command/pkg/commandservice/postgres_dispatch.go` | `ClaimDispatch` (`claimDispatchOnce`) SQL blocking statuses & device freeze check, `ResolveDispatch` (`resolveDispatchOnce` `AND o.delivered_at IS NULL`), `expireGovernanceInvalidQueued`, `DispatchEnvelope.TraceID` projection, transactional `insertControlAlarmOutbox` |
+| `modules/command/pkg/commandservice/transitions.go` | `BlockingEarlierIntentStatuses`, `CanClaimQueuedIntent`, `CanClaimQueuedIntentWithPriority`, `PriorityLockBlocking`, `ActiveHigherPriorityBlocking`, `DecideCommandCancel`, `DecideDispatchResolution`, `DecideDispatchResolutionForIntent`, `DecideVerificationResolution`, `DecideOperatorReconcile`, `IsActiveAbortableSequence` |
+| `modules/command/pkg/commandservice/postgres_dispatch.go` | `ClaimDispatch` (`claimDispatchOnce`) SQL blocking statuses & device freeze check, `ResolveDispatch` (`resolveDispatchOnce` `AND o.delivered_at IS NULL`), `expireGovernanceInvalidQueued`, `expireTTLExpiredCommands`, `WakeDeferredDispatches`, `DispatchEnvelope.TraceID` projection, transactional `insertControlAlarmOutbox` |
+| `modules/command/pkg/commandservice/batch_control.go` | `ControlAuthority.SubmitOperatorCommandBatch`, `GetOperatorCommandBatch`, `ListOperatorCommandBatches`, `CancelOperatorCommandBatch` |
+| `modules/command/pkg/commandservice/postgres_batch.go` | `PostgresStore.GetCommandBatchByIdempotencyKey`, `CreateCommandBatch`, `FinalizeCommandBatch`, `GetCommandBatch`, `ListCommandBatches`, `UpdateCommandBatchItemsStatus` |
 | `modules/command/pkg/commandservice/postgres_cancel.go` | `Cancel` (`cancelOnce`) & `CancelPending` delegation to `DecideCommandCancel` and `IsActiveAbortableSequence`, outbox retirement (`delivered_at = $3, lease_until = NULL`) |
 | `modules/command/pkg/commandservice/postgres_verification.go` | `ClaimVerification` (`VerificationEnvelope.TraceID` projection), `ResolveVerification` delegation to `DecideVerificationResolutionWithEdge`, transactional `insertControlAlarmOutbox` |
 | `modules/command/pkg/commandservice/control_alarm_outbox.go` | Durable `command_runtime.control_alarm_outbox` enqueue/claim/deliver/fail/dead-letter transitions & `ControlAlarmRelay` |
 | `modules/command/pkg/commandservice/postgres.go` | `PostgresStore`, `Submit`, `Close`, `commitAndNotifyFailures`, `replayIdempotentCommand`, `SyncCapabilityProfiles` |
 | `modules/command/pkg/commandservice/shutdown.go` | `ControlAuthority.ExecuteSiteControlShutdown`, `executeAbortUnitSequence`, `releaseOrDeferHoldingAuxiliaries`, `dispatchShutdownTarget`, `reconcileOutcomeUnknownDeviceCommands` |
 | `modules/command/pkg/commandservice/postgres_reconcile.go` | `reconcileOnce` delegation to `DecideOperatorReconcile` |
-| `modules/command/pkg/mqttconnector/connector.go` | `EnableManualAcknowledgment`, `SubscriptionTopicFilter`, `checkSubackReasons`, `CrossReplicaPollInterval`, sharded `onReply` custody worker pool, `ResumeActionForCorrelation`, `DrainTenantReplies`, `RecoverTenantReplies`, `ResolveCorrelationReply`, `ReplyBackedResult`, `completeRecoveredReply`, `buildCommandEnvelope` `traceId`, `withCommandTraceContext` structured trace logs, `recoverReplies` panic guard |
+| `modules/command/pkg/mqttconnector/connector.go` | `EnableManualAcknowledgment`, `SubscriptionTopicFilter`, `checkSubackReasons`, `CrossReplicaPollInterval`, sharded `onReply` custody worker pool, `ResumeActionForCorrelation`, `DrainTenantReplies`, `RecoverTenantReplies`, `ResolveCorrelationReply`, `ReplyBackedResult`, `completeRecoveredReply`, `buildCommandEnvelope` `traceId`, `capCommandExpireAt`, `withCommandTraceContext` structured trace logs, `recoverReplies` panic guard |
 | `modules/connectivity/pkg/connectivity/store.go` | `PrepareCommandCorrelation` / `scanCorrelation` `trace_id` persistence & `sameCorrelationIdentity`, `RecoverCommandReplies` (`state = 'REPLIED'`, `ORDER BY replied_at, attempt_id LIMIT $2`), `LoadCommandCorrelation`, `runSerializableTenantOp` (`40001`/`40P01` retry) |
 
 ## Keeping the Verifier Synchronized
@@ -67,7 +71,7 @@ If any invariant or mutation test fails, the runner prints the shortest failing 
 When modifying any covered file, inspect changes since `syncCommit`:
 
 ```bash
-git diff 06c8407622219d0153da5656e705abcae49b2d53 -- libs/commandmodel/ modules/command/pkg/commandservice/ modules/command/pkg/mqttconnector/connector.go modules/connectivity/pkg/connectivity/store.go
+git diff 492c2f31f885770268627cd53a3bdc539794a310 -- libs/commandmodel/ modules/command/pkg/commandservice/ modules/command/pkg/mqttconnector/connector.go modules/connectivity/pkg/connectivity/store.go
 ```
 
 If transitions, SQL guards, or recovery batch limits change:

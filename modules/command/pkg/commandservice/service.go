@@ -48,8 +48,11 @@ type Service struct {
 	now func() time.Time
 
 	nextCommandID   uint64
+	nextBatchID     uint64
 	intents         map[string]*commandmodel.CommandIntent
 	idempotency     map[string]idempotencyRecord
+	batches         map[string]*CommandBatchRecord
+	batchIdemp      map[string]string
 	deviceSequence  map[string]uint64
 	deviceFence     map[string]uint64
 	priorityLocks   map[string]*commandmodel.DevicePriorityLock
@@ -157,6 +160,8 @@ func New(now func() time.Time) *Service {
 		now:            now,
 		intents:        make(map[string]*commandmodel.CommandIntent),
 		idempotency:    make(map[string]idempotencyRecord),
+		batches:        make(map[string]*CommandBatchRecord),
+		batchIdemp:     make(map[string]string),
 		deviceSequence: make(map[string]uint64),
 		deviceFence:    make(map[string]uint64),
 		priorityLocks:  make(map[string]*commandmodel.DevicePriorityLock),
@@ -181,6 +186,10 @@ func (s *Service) Submit(request commandmodel.SubmitRequest) (SubmitResult, erro
 	}
 
 	now := s.now().UTC()
+	deliveryMode, ttlSeconds, expiresAt, err := commandmodel.ValidateDeliveryAndTTL(request.Capability, request.DeliveryMode, request.TTLSeconds, request.ExpiresAt, now)
+	if err != nil {
+		return SubmitResult{}, err
+	}
 	preconditionMode, bypassReason := normalizedPrecondition(request)
 	risk, approvalPolicy, err := evaluateGovernance(request, now)
 	if err != nil {
@@ -238,6 +247,11 @@ func (s *Service) Submit(request commandmodel.SubmitRequest) (SubmitResult, erro
 		BypassReason:          bypassReason,
 		PriorityTier:          priorityTier,
 		CommandSource:         commandSource,
+		DeliveryMode:          deliveryMode,
+		TTLSeconds:            ttlSeconds,
+		ExpiresAt:             expiresAt,
+		BatchID:               cloneStringPtr(request.BatchID),
+		BatchItemIndex:        cloneIntPtr(request.BatchItemIndex),
 		SnapshotRevision:      request.CurrentState.BusinessRevision,
 		DeviceCommandSequence: s.deviceSequence[request.DeviceID],
 		Status:                commandmodel.IntentSubmitted,
@@ -400,6 +414,13 @@ func (s *Service) PrepareDispatch(commandID, leaseOwner string, leaseUntil time.
 		return commandmodel.DispatchEnvelope{}, ErrCommandNotDispatchable
 	}
 	now := s.now().UTC()
+	if intent.ExpiresAt != nil && !now.Before(intent.ExpiresAt.UTC()) {
+		transition(intent, commandmodel.IntentExpired, "COMMAND_TTL_EXPIRED", "command-service", now, intent.ID, "")
+		return commandmodel.DispatchEnvelope{}, ErrCommandTTLExpired
+	}
+	if intent.NextDispatchAfter != nil && intent.NextDispatchAfter.After(now) {
+		return commandmodel.DispatchEnvelope{}, ErrCommandNotDispatchable
+	}
 	if err := validateExecutionGovernance(*intent, now); err != nil {
 		return commandmodel.DispatchEnvelope{}, err
 	}
@@ -438,6 +459,7 @@ func (s *Service) PrepareDispatch(commandID, leaseOwner string, leaseUntil time.
 	}
 	intent.Attempts = append(intent.Attempts, attempt)
 	intent.ActiveFence = fence
+	intent.NextDispatchAfter = nil
 	transition(intent, commandmodel.IntentDispatching, "DISPATCH_ATTEMPT_PREPARED", leaseOwner, now, attemptID, "")
 
 	return commandmodel.DispatchEnvelope{
@@ -451,6 +473,9 @@ func (s *Service) PrepareDispatch(commandID, leaseOwner string, leaseUntil time.
 		Capability:            intent.Capability,
 		CapabilityRevision:    intent.CapabilityRevision,
 		Parameters:            cloneParameters(intent.Parameters),
+		DeliveryMode:          commandmodel.NormalizeDeliveryMode(intent.DeliveryMode),
+		TTLSeconds:            cloneIntPtr(intent.TTLSeconds),
+		ExpiresAt:             cloneTimePtr(intent.ExpiresAt),
 		PayloadHash:           intent.PayloadHash,
 		ExecutionFence:        fence,
 		DeviceCommandSequence: intent.DeviceCommandSequence,
@@ -498,13 +523,14 @@ func (s *Service) ResolveDispatch(envelope commandmodel.DispatchEnvelope, result
 	}
 
 	now := s.now().UTC()
-	decision, err := DecideDispatchResolution(intent.Capability, result, now)
+	decision, err := DecideDispatchResolutionForIntent(*intent, result, len(intent.Attempts), now)
 	if err != nil {
 		return err
 	}
 	attempt.Version++
 	attempt.UpdatedAt = now
 	attempt.Status = decision.AttemptFinal
+	intent.NextDispatchAfter = cloneTimePtr(decision.NextDispatchAfter)
 	if result.Phase == commandmodel.ConnectorAcknowledged {
 		attempt.ConnectorEvidenceID = result.EvidenceID
 		attempt.EdgeExecution = cloneEdgeExecutionEvidence(result.EdgeExecution)
@@ -516,6 +542,50 @@ func (s *Service) ResolveDispatch(envelope commandmodel.DispatchEnvelope, result
 		s.failureQueue.enqueue(s.failureNotifier, event)
 	}
 	return nil
+}
+
+// WakeDeferredDispatches accelerates deferred QUEUE_IF_OFFLINE intents for recently
+// active devices when those devices wake up before backoff expires.
+func (s *Service) WakeDeferredDispatches(_ context.Context, tenantID string, deviceIDs []string) (int, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		return 0, ErrInvalidRequest
+	}
+	wanted := make(map[string]struct{}, len(deviceIDs))
+	for _, raw := range deviceIDs {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed != "" {
+			wanted[trimmed] = struct{}{}
+		}
+	}
+	if len(wanted) == 0 {
+		return 0, nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now().UTC()
+	woken := 0
+	for _, intent := range s.intents {
+		if intent.TenantID != tenantID {
+			continue
+		}
+		if _, ok := wanted[intent.DeviceID]; !ok {
+			continue
+		}
+		if intent.Status != commandmodel.IntentQueued ||
+			commandmodel.NormalizeDeliveryMode(intent.DeliveryMode) != commandmodel.DeliveryModeQueueIfOffline ||
+			intent.NextDispatchAfter == nil {
+			continue
+		}
+		if intent.ExpiresAt != nil && !now.Before(intent.ExpiresAt.UTC()) {
+			continue
+		}
+		intent.NextDispatchAfter = nil
+		intent.UpdatedAt = now
+		woken++
+	}
+	return woken, nil
 }
 
 func (s *Service) PrepareVerification(commandID, leaseOwner string, leaseUntil time.Time) (commandmodel.VerificationEnvelope, error) {
@@ -654,6 +724,21 @@ func validateAndHash(request commandmodel.SubmitRequest) (string, commandmodel.P
 		strings.TrimSpace(request.IdempotencyKey) == "" || strings.TrimSpace(request.VerificationPointKey) == "" {
 		return "", "", "", ErrInvalidRequest
 	}
+	deliveryMode := commandmodel.NormalizeDeliveryMode(request.DeliveryMode)
+	switch deliveryMode {
+	case commandmodel.DeliveryModeFailFast, commandmodel.DeliveryModeQueueIfOffline:
+	default:
+		return "", "", "", commandmodel.ErrInvalidDeliveryMode
+	}
+	if deliveryMode == commandmodel.DeliveryModeQueueIfOffline && !commandmodel.CapabilityAllowsOfflineQueue(request.Capability) {
+		return "", "", "", commandmodel.ErrOfflineQueueUnsupported
+	}
+	if request.TTLSeconds != nil && (*request.TTLSeconds < commandmodel.MinCommandTTLSeconds || *request.TTLSeconds > commandmodel.MaxCommandTTLSeconds) {
+		return "", "", "", commandmodel.ErrInvalidTTLSeconds
+	}
+	if deliveryMode == commandmodel.DeliveryModeQueueIfOffline && request.TTLSeconds == nil && (request.ExpiresAt == nil || request.ExpiresAt.IsZero()) {
+		return "", "", "", commandmodel.ErrInvalidTTLSeconds
+	}
 	priorityTier, commandSource, err := commandmodel.ResolveCommandPriority(request)
 	if err != nil {
 		return "", "", "", ErrInvalidRequest
@@ -673,12 +758,18 @@ func validateAndHash(request commandmodel.SubmitRequest) (string, commandmodel.P
 	}
 	if preconditionMode == commandmodel.PreconditionRequireCurrentState {
 		state := request.CurrentState
-		if state.EvaluationAvailability != "AVAILABLE" || state.Presence != "ONLINE" ||
-			state.Readiness != "CURRENT" || state.Quality != "GOOD" || state.BusinessRevision == 0 ||
-			state.ObservedAt.IsZero() {
+		liveOnline := state.EvaluationAvailability == "AVAILABLE" && state.Presence == "ONLINE" &&
+			state.Readiness == "CURRENT" && state.Quality == "GOOD" && state.BusinessRevision != 0 &&
+			!state.ObservedAt.IsZero()
+		if deliveryMode == commandmodel.DeliveryModeQueueIfOffline {
+			if state.EvaluationAvailability == "AVAILABLE" && state.Presence == "ONLINE" &&
+				state.Readiness == "CURRENT" && state.Quality != "GOOD" {
+				return "", "", "", ErrCurrentStateUnsafe
+			}
+		} else if !liveOnline {
 			return "", "", "", ErrCurrentStateUnsafe
 		}
-		if profile.ParameterKey != "" {
+		if profile.ParameterKey != "" && (deliveryMode != commandmodel.DeliveryModeQueueIfOffline || liveOnline) {
 			value, _ := commandmodel.ParameterValue(request.Capability, request.Parameters)
 			if state.CurrentValue == nil || absolute(value-*state.CurrentValue) > profile.MaximumDelta {
 				return "", "", "", ErrCapabilityDenied
@@ -700,6 +791,12 @@ func validateAndHash(request commandmodel.SubmitRequest) (string, commandmodel.P
 	}
 	if preconditionMode == commandmodel.PreconditionEmergencyBypass {
 		canonicalParts = append(canonicalParts, string(preconditionMode), bypassReason)
+	}
+	if deliveryMode != commandmodel.DeliveryModeFailFast || request.TTLSeconds != nil {
+		canonicalParts = append(canonicalParts, string(deliveryMode))
+		if request.TTLSeconds != nil {
+			canonicalParts = append(canonicalParts, "ttl="+strconv.Itoa(*request.TTLSeconds))
+		}
 	}
 	canonical := strings.Join(canonicalParts, "|")
 	digest := sha256.Sum256([]byte(canonical))
@@ -762,6 +859,11 @@ func appendTransition(intent *commandmodel.CommandIntent, from, to commandmodel.
 
 func cloneIntent(intent commandmodel.CommandIntent) commandmodel.CommandIntent {
 	intent.Parameters = cloneParameters(intent.Parameters)
+	intent.TTLSeconds = cloneIntPtr(intent.TTLSeconds)
+	intent.ExpiresAt = cloneTimePtr(intent.ExpiresAt)
+	intent.NextDispatchAfter = cloneTimePtr(intent.NextDispatchAfter)
+	intent.BatchID = cloneStringPtr(intent.BatchID)
+	intent.BatchItemIndex = cloneIntPtr(intent.BatchItemIndex)
 	intent.Transitions = append([]commandmodel.Transition(nil), intent.Transitions...)
 	intent.Attempts = append([]commandmodel.CommandAttempt(nil), intent.Attempts...)
 	for index := range intent.Attempts {
@@ -771,6 +873,30 @@ func cloneIntent(intent commandmodel.CommandIntent) commandmodel.CommandIntent {
 	intent.Authorizations = append([]commandmodel.AuthorizationSnapshot(nil), intent.Authorizations...)
 	intent.RiskSnapshot.Reasons = append([]string(nil), intent.RiskSnapshot.Reasons...)
 	return intent
+}
+
+func cloneIntPtr(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	copied := *value
+	return &copied
+}
+
+func cloneStringPtr(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	copied := *value
+	return &copied
+}
+
+func cloneTimePtr(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	copied := value.UTC()
+	return &copied
 }
 
 func cloneParameters(parameters commandmodel.CommandParameters) commandmodel.CommandParameters {

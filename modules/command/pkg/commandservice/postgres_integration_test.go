@@ -326,6 +326,8 @@ TRUNCATE TABLE
   command_runtime.device_priority_locks,
   command_runtime.command_grant_uses,
   command_runtime.command_audit_intents,
+  command_runtime.batch_items,
+  command_runtime.batches,
   command_runtime.control_alarm_outbox,
   command_runtime.command_dispatch_outbox,
   command_runtime.command_transitions,

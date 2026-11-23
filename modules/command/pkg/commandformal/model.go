@@ -40,10 +40,12 @@ const (
 	PropertyP4 PropertyID = "P4"
 	PropertyP5 PropertyID = "P5"
 	PropertyP6 PropertyID = "P6"
+	PropertyP7 PropertyID = "P7"
+	PropertyP8 PropertyID = "P8"
 )
 
 // FaultHooks allows negative tests to inject single-guard regressions and prove every invariant
-// P1-P6 is capable of failing with an explicit counterexample trace.
+// P1-P8 is capable of failing with an explicit counterexample trace.
 type FaultHooks struct {
 	BypassExpiredGrantOnClaim          bool
 	AllowPostArmRepublish              bool
@@ -58,6 +60,9 @@ type FaultHooks struct {
 	AllowSubmitUnderHigherPriorityLock bool
 	BypassPriorityLockOnClaim          bool
 	SkipSafetyInterlockPreemption      bool
+	AllowShutdownOfflineQueue          bool
+	BypassTTLExpiryOnClaim             bool
+	BypassDeferralBackoffOnClaim       bool
 }
 
 // Counterexample captures the failing invariant, suite name, and shortest BFS trace from initial state.

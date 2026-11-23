@@ -346,6 +346,11 @@ func (m *MemoryAuthorityStore) ClaimDispatch(_ context.Context, tenantID, leaseO
 	now := m.now().UTC()
 	leaseUntil := now.Add(leaseFor)
 	for _, candidate := range candidates {
+		intent, gErr := m.svc.Get(candidate.id)
+		if gErr == nil && intent.ExpiresAt != nil && !now.Before(intent.ExpiresAt.UTC()) {
+			_, _ = m.svc.PrepareDispatch(candidate.id, leaseOwner, leaseUntil)
+			continue
+		}
 		if !m.svc.canClaimQueuedIntent(candidate.id, now) {
 			continue
 		}
@@ -363,10 +368,12 @@ func (m *MemoryAuthorityStore) ResolveDispatch(_ context.Context, env commandmod
 	if err == nil {
 		if intent, gErr := m.svc.Get(env.CommandID); gErr == nil {
 			if intent.Status == commandmodel.IntentQueued {
-				switch res.FailureCode {
-				case "DISPATCH_SAFETY_EVALUATION_FAILED", "DISPATCH_SAFETY_UNAVAILABLE":
-				default:
-					m.dispatchSignal.Notify()
+				if intent.NextDispatchAfter == nil {
+					switch res.FailureCode {
+					case "DISPATCH_SAFETY_EVALUATION_FAILED", "DISPATCH_SAFETY_UNAVAILABLE":
+					default:
+						m.dispatchSignal.Notify()
+					}
 				}
 			} else if intent.Status == commandmodel.IntentDispatching && res.Phase == commandmodel.ConnectorAcknowledged {
 				m.verificationSignal.Notify()
@@ -374,6 +381,38 @@ func (m *MemoryAuthorityStore) ResolveDispatch(_ context.Context, env commandmod
 		}
 	}
 	return err
+}
+
+func (m *MemoryAuthorityStore) WakeDeferredDispatches(ctx context.Context, tenantID string, deviceIDs []string) (int, error) {
+	woken, err := m.svc.WakeDeferredDispatches(ctx, tenantID, deviceIDs)
+	if err == nil && woken > 0 {
+		m.dispatchSignal.Notify()
+	}
+	return woken, err
+}
+
+func (m *MemoryAuthorityStore) GetCommandBatchByIdempotencyKey(ctx context.Context, tenantID, siteID, key, requestHash string) (CommandBatchView, bool, error) {
+	return m.svc.GetCommandBatchByIdempotencyKey(ctx, tenantID, siteID, key, requestHash)
+}
+
+func (m *MemoryAuthorityStore) CreateCommandBatch(ctx context.Context, record CommandBatchRecord) (CommandBatchView, bool, error) {
+	return m.svc.CreateCommandBatch(ctx, record)
+}
+
+func (m *MemoryAuthorityStore) FinalizeCommandBatch(ctx context.Context, tenantID, batchID string, items []CommandBatchItemRecord, acceptedCount, rejectedCount int, status string) (CommandBatchView, error) {
+	return m.svc.FinalizeCommandBatch(ctx, tenantID, batchID, items, acceptedCount, rejectedCount, status)
+}
+
+func (m *MemoryAuthorityStore) GetCommandBatch(ctx context.Context, tenantID, siteID, batchID string) (CommandBatchView, error) {
+	return m.svc.GetCommandBatch(ctx, tenantID, siteID, batchID)
+}
+
+func (m *MemoryAuthorityStore) ListCommandBatches(ctx context.Context, tenantID, siteID string, limit int) ([]CommandBatchView, error) {
+	return m.svc.ListCommandBatches(ctx, tenantID, siteID, limit)
+}
+
+func (m *MemoryAuthorityStore) UpdateCommandBatchItemsStatus(ctx context.Context, tenantID, batchID string, commandIDs []string, status string) error {
+	return m.svc.UpdateCommandBatchItemsStatus(ctx, tenantID, batchID, commandIDs, status)
 }
 
 func (m *MemoryAuthorityStore) SubscribeDispatchWork() <-chan struct{} {

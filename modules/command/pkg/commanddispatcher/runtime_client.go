@@ -47,6 +47,15 @@ type runtimeDispatchResolveRequest struct {
 	Result   commandmodel.ConnectorResult  `json:"result"`
 }
 
+type runtimeDispatchWakeRequest struct {
+	TenantID  string   `json:"tenantId"`
+	DeviceIDs []string `json:"deviceIds"`
+}
+
+type runtimeDispatchWakeResponse struct {
+	WokenCount int `json:"wokenCount"`
+}
+
 type runtimeVerificationResolveRequest struct {
 	Envelope commandmodel.VerificationEnvelope `json:"envelope"`
 	Result   commandmodel.VerificationResult   `json:"result"`
@@ -157,6 +166,20 @@ func (client *RuntimeClient) Prepare(ctx context.Context, evidence commandmodel.
 func (client *RuntimeClient) Complete(ctx context.Context, evidence commandmodel.CompletedConnectorEvidence) error {
 	_, err := client.post(ctx, commandservice.InternalConnectorCompletePath, evidence, nil)
 	return err
+}
+
+func (client *RuntimeClient) WakeDeferredDispatches(ctx context.Context, tenantID string, deviceIDs []string) (int, error) {
+	if client == nil || client.httpClient == nil {
+		return 0, errors.New("command runtime client is not configured")
+	}
+	var out runtimeDispatchWakeResponse
+	if _, err := client.post(ctx, commandservice.InternalDispatchWakePath, runtimeDispatchWakeRequest{
+		TenantID:  strings.TrimSpace(tenantID),
+		DeviceIDs: deviceIDs,
+	}, &out); err != nil {
+		return 0, err
+	}
+	return out.WokenCount, nil
 }
 
 func (client *RuntimeClient) post(ctx context.Context, path string, input, output any) (int, error) {

@@ -44,12 +44,19 @@ func CanClaimQueuedIntent(intent commandmodel.CommandIntent, controlGroupFrozen 
 	if intent.Status != commandmodel.IntentQueued || controlGroupFrozen {
 		return false
 	}
+	nowUTC := now.UTC()
+	if intent.ExpiresAt != nil && !nowUTC.Before(intent.ExpiresAt.UTC()) {
+		return false
+	}
+	if intent.NextDispatchAfter != nil && intent.NextDispatchAfter.After(nowUTC) {
+		return false
+	}
 	for _, status := range earlierStatuses {
 		if IsBlockingEarlierIntentStatus(status) {
 			return false
 		}
 	}
-	return validateExecutionGovernance(intent, now) == nil
+	return validateExecutionGovernance(intent, nowUTC) == nil
 }
 
 // QueuedPeerState describes another active intent on the same Device for priority-aware claim arbitration.
@@ -106,7 +113,14 @@ func CanClaimQueuedIntentWithPriority(
 	if intent.Status != commandmodel.IntentQueued || controlGroupFrozen {
 		return false
 	}
-	if PriorityLockBlocking(intent.PriorityTier, lock, now) {
+	nowUTC := now.UTC()
+	if intent.ExpiresAt != nil && !nowUTC.Before(intent.ExpiresAt.UTC()) {
+		return false
+	}
+	if intent.NextDispatchAfter != nil && intent.NextDispatchAfter.After(nowUTC) {
+		return false
+	}
+	if PriorityLockBlocking(intent.PriorityTier, lock, nowUTC) {
 		return false
 	}
 	intentRank := commandmodel.PriorityRank(intent.PriorityTier)
@@ -125,7 +139,7 @@ func CanClaimQueuedIntentWithPriority(
 			return false
 		}
 	}
-	return validateExecutionGovernance(intent, now) == nil
+	return validateExecutionGovernance(intent, nowUTC) == nil
 }
 
 // DispatchResolutionDecision is the pure state-transition decision for ResolveDispatch.
@@ -135,8 +149,57 @@ type DispatchResolutionDecision struct {
 	Reason               string
 	FreezeControlGroup   bool
 	RequeueForRetry      bool
+	NextDispatchAfter    *time.Time
 	AcknowledgedAt       *time.Time
 	VerificationDeadline *time.Time
+}
+
+// DecideDispatchResolutionForIntent extends DecideDispatchResolution with TTL expiration and
+// bounded offline-queue deferrals when deliveryMode is QUEUE_IF_OFFLINE.
+func DecideDispatchResolutionForIntent(intent commandmodel.CommandIntent, result commandmodel.ConnectorResult, attemptNumber int, now time.Time) (DispatchResolutionDecision, error) {
+	nowUTC := now.UTC()
+	switch result.Phase {
+	case commandmodel.ConnectorPreSendRejected:
+		code := strings.TrimSpace(result.FailureCode)
+		if commandmodel.IsTTLExpiredFailureCode(code) || (intent.ExpiresAt != nil && !nowUTC.Before(intent.ExpiresAt.UTC())) {
+			reason := code
+			if !commandmodel.IsTTLExpiredFailureCode(reason) {
+				reason = "COMMAND_TTL_EXPIRED"
+			}
+			return DispatchResolutionDecision{
+				AttemptFinal: commandmodel.AttemptNotSent,
+				IntentFinal:  commandmodel.IntentExpired,
+				Reason:       reason,
+			}, nil
+		}
+		if commandmodel.NormalizeDeliveryMode(intent.DeliveryMode) == commandmodel.DeliveryModeQueueIfOffline &&
+			commandmodel.IsDeferrableOfflinePreSendCode(code) {
+			nextAt := nowUTC.Add(commandmodel.OfflineDeferBackoff(attemptNumber))
+			if intent.ExpiresAt != nil && nextAt.After(intent.ExpiresAt.UTC()) {
+				nextAt = intent.ExpiresAt.UTC()
+			}
+			return DispatchResolutionDecision{
+				AttemptFinal:      commandmodel.AttemptNotSent,
+				IntentFinal:       commandmodel.IntentQueued,
+				Reason:            "OFFLINE_DEFERRED_" + code,
+				RequeueForRetry:   true,
+				NextDispatchAfter: &nextAt,
+			}, nil
+		}
+		return DecideDispatchResolution(intent.Capability, result, nowUTC)
+	case commandmodel.ConnectorExecutionRejected:
+		code := strings.TrimSpace(result.FailureCode)
+		if commandmodel.IsTTLExpiredFailureCode(code) {
+			return DispatchResolutionDecision{
+				AttemptFinal: commandmodel.AttemptFailed,
+				IntentFinal:  commandmodel.IntentExpired,
+				Reason:       code,
+			}, nil
+		}
+		return DecideDispatchResolution(intent.Capability, result, nowUTC)
+	default:
+		return DecideDispatchResolution(intent.Capability, result, nowUTC)
+	}
 }
 
 // DecideDispatchResolution computes the command attempt, command intent, retry, and device-freeze

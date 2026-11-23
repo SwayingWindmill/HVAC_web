@@ -106,7 +106,41 @@ func matchPublicControlExitRoute(path string) (publicControlExitRoute, bool) {
 						internalPath: internalOperatorPrefix + "/sites/" + url.PathEscape(siteID) + "/control-shutdown",
 						method:       http.MethodPost,
 					}, true
+				case "command-batches":
+					return publicControlExitRoute{
+						template:       "/api/v1/sites/{siteId}/command-batches",
+						kind:           "site-command-batches",
+						resourceID:     siteID,
+						internalPath:   internalOperatorPrefix + "/sites/" + url.PathEscape(siteID) + "/command-batches",
+						allowedMethods: []string{http.MethodGet, http.MethodPost},
+					}, true
 				}
+			}
+		} else if len(segments) == 3 && segments[1] == "command-batches" {
+			siteID, siteErr := url.PathUnescape(segments[0])
+			batchID, batchErr := url.PathUnescape(segments[2])
+			if siteErr == nil && batchErr == nil && siteID != "" && batchID != "" {
+				return publicControlExitRoute{
+					template:     "/api/v1/sites/{siteId}/command-batches/{batchId}",
+					kind:         "site-command-batch",
+					resourceID:   siteID,
+					secondaryID:  batchID,
+					internalPath: internalOperatorPrefix + "/sites/" + url.PathEscape(siteID) + "/command-batches/" + url.PathEscape(batchID),
+					method:       http.MethodGet,
+				}, true
+			}
+		} else if len(segments) == 4 && segments[1] == "command-batches" && segments[3] == "cancel" {
+			siteID, siteErr := url.PathUnescape(segments[0])
+			batchID, batchErr := url.PathUnescape(segments[2])
+			if siteErr == nil && batchErr == nil && siteID != "" && batchID != "" {
+				return publicControlExitRoute{
+					template:     "/api/v1/sites/{siteId}/command-batches/{batchId}/cancel",
+					kind:         "site-command-batch-cancel",
+					resourceID:   siteID,
+					secondaryID:  batchID,
+					internalPath: internalOperatorPrefix + "/sites/" + url.PathEscape(siteID) + "/command-batches/" + url.PathEscape(batchID) + "/cancel",
+					method:       http.MethodPost,
+				}, true
 			}
 		} else if len(segments) == 4 && segments[1] == "devices" && segments[3] == "priority-lock" {
 			siteID, siteErr := url.PathUnescape(segments[0])
@@ -193,7 +227,11 @@ func dispatchControlExitRoute(h *handler, writer http.ResponseWriter, request *h
 	if requireWrite && !h.allowRateLimitedTenant(writer, request, limitpolicy.DimensionCommandWrite, session.TenantID) {
 		return
 	}
-	if !isLowerUUIDv7(route.resourceID) || (route.secondaryID != "" && !isLowerUUIDv7(route.secondaryID)) {
+	validSecondaryID := route.secondaryID == "" || isLowerUUIDv7(route.secondaryID)
+	if (route.kind == "site-command-batch" || route.kind == "site-command-batch-cancel") && route.secondaryID != "" {
+		validSecondaryID = isLowerUUID(route.secondaryID)
+	}
+	if !isLowerUUIDv7(route.resourceID) || !validSecondaryID {
 		if requireWrite {
 			targetID, targetLabel, action := controlExitRouteAuditMeta(route, request.Method)
 			h.emitControlExitAudit(request, session, targetID, targetLabel, action, auditOutcomeRejected, map[string]any{"reasonCode": "RESOURCE_NOT_FOUND"})
@@ -228,6 +266,16 @@ func dispatchControlExitRoute(h *handler, writer http.ResponseWriter, request *h
 		h.listControlAlarmDeadLetters(writer, request, session, route)
 	case "site-control-alarm-dead-letter-replay":
 		h.replayControlAlarmDeadLetter(writer, request, session, route)
+	case "site-command-batches":
+		if request.Method == http.MethodPost {
+			h.createSiteCommandBatch(writer, request, session, route)
+			return
+		}
+		h.listSiteCommandBatches(writer, request, session, route)
+	case "site-command-batch":
+		h.getSiteCommandBatch(writer, request, session, route)
+	case "site-command-batch-cancel":
+		h.cancelSiteCommandBatch(writer, request, session, route)
 	default:
 		writeProblem(writer, request, http.StatusNotFound, "ROUTE_NOT_FOUND", "Route not found", "The requested public API route does not exist.", false, nil)
 	}
@@ -704,6 +752,10 @@ func controlExitRouteAuditMeta(route publicControlExitRoute, method string) (str
 		return "device:" + route.secondaryID, "设备优先级锁定", "DEVICE_PRIORITY_LOCK_UPDATED"
 	case "site-control-alarm-dead-letter-replay":
 		return "outbox:" + route.secondaryID, "控制告警死信重投", "CONTROL_ALARM_DEAD_LETTER_REPLAYED"
+	case "site-command-batches":
+		return "site:" + route.resourceID, "批量群控指令", "COMMAND_BATCH_SUBMITTED"
+	case "site-command-batch-cancel":
+		return "command-batch:" + route.secondaryID, "批量群控指令", "COMMAND_BATCH_CANCELLED"
 	default:
 		return "site:" + route.resourceID, "站点控制模式", "SITE_CONTROL_MODE_UPDATED"
 	}

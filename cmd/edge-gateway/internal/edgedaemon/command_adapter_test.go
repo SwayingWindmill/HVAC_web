@@ -436,3 +436,120 @@ func TestCommandAdapterLeasedExecutionHydraulicArbitrationReadbackAndWAL(t *test
 		t.Fatalf("expected FAILED EDGE_OUTCOME_UNKNOWN for MAY_EXECUTE WAL entry, got %+v", crashReply)
 	}
 }
+
+func TestCommandAdapterEnforcesTTLExpiryAndMaxTTL(t *testing.T) {
+	endpoint, modbusHandler := startAdapterTestModbusTCP(t, map[uint16]uint16{
+		10: 0,
+		11: 0,
+		12: 300,
+	})
+	uid := 1
+	timeoutMS := 500
+	retries := 0
+	writeFC6 := 6
+	policy := edgecontrol.DefaultAutonomyPolicyConfig()
+	stateDir := t.TempDir()
+
+	var clockMu sync.Mutex
+	curNow := time.Date(2026, 11, 23, 3, 15, 0, 0, time.UTC)
+	nowFn := func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return curNow
+	}
+
+	cfg := Config{
+		GatewayID:      "0193f000-2000-7000-8000-000000000960",
+		StateDir:       stateDir,
+		AutonomyPolicy: &policy,
+		Drivers: []edgecontrol.ModbusDriverInput{
+			{
+				DeviceKey:         "pump-01",
+				DriverType:        "MODBUS_TCP",
+				Endpoint:          &endpoint,
+				UnitID:            &uid,
+				CapabilityProfile: string(edgecontrol.ProfileVariableSpeedPump),
+				TimeoutMS:         &timeoutMS,
+				Retries:           &retries,
+				Registers: []edgecontrol.ModbusRegisterInput{
+					{PointCode: "run_state", SemanticChannel: string(edgecontrol.SemanticRunState), FunctionCode: 3, Address: 10, RegisterCount: 1, RawType: "ENUM16", EnumMap: map[string]string{"0": "STOPPED", "1": "RUNNING"}, ByteOrder: "BIG_ENDIAN", WordOrder: "BIG_ENDIAN", Scale: 1, PollPriority: "VERY_HIGH"},
+					{PointCode: "flow_m3h", SemanticChannel: string(edgecontrol.SemanticFlow), FunctionCode: 3, Address: 11, RegisterCount: 1, RawType: "UINT16", ByteOrder: "BIG_ENDIAN", WordOrder: "BIG_ENDIAN", Scale: 0.1, PollPriority: "HIGH"},
+					{PointCode: "freq_sp", SemanticChannel: string(edgecontrol.SemanticFrequencySetpoint), FunctionCode: 3, WriteFunctionCode: &writeFC6, Address: 12, RegisterCount: 1, RawType: "UINT16", ByteOrder: "BIG_ENDIAN", WordOrder: "BIG_ENDIAN", Scale: 0.1, PollPriority: "VERY_HIGH"},
+				},
+			},
+		},
+	}
+	cfg.ApplyDefaults("1.0.0")
+	daemon, err := NewDaemon(cfg, DaemonOptions{Now: nowFn})
+	if err != nil {
+		t.Fatalf("NewDaemon() error = %v", err)
+	}
+	defer func() { _ = daemon.Close() }()
+
+	// 1. Already-expired command returns COMMAND_EXPIRED immediately with 0 writes.
+	expiredEnv := CommandEnvelopeWire{
+		SchemaVersion:  commandSchemaVersion,
+		MessageID:      "msg-expired",
+		CommandID:      "cmd-expired",
+		IssuedAt:       nowFn().Add(-2 * time.Minute).UnixMilli(),
+		ExpireAt:       nowFn().Add(-time.Second).UnixMilli(),
+		DeviceID:       "pump-01",
+		CommandCode:    "SET_FREQUENCY",
+		Params:         map[string]float64{"frequencyHz": 40},
+		Policy:         CommandEnvelopePolicy{RequiresReadback: true, VerificationWindowMS: 5000},
+		ExecutionFence: 1,
+		PayloadHash:    "hash-expired",
+	}
+	rawExpired, _ := json.Marshal(expiredEnv)
+	rawReply, ok := daemon.HandleCommandPayload(t.Context(), rawExpired)
+	if !ok {
+		t.Fatal("expected immediate reply for already-expired command")
+	}
+	var expiredReply CommandReplyWire
+	if err := json.Unmarshal(rawReply, &expiredReply); err != nil {
+		t.Fatal(err)
+	}
+	if expiredReply.EdgeStatus != "EXPIRED" || expiredReply.ReasonCode == nil || *expiredReply.ReasonCode != "COMMAND_EXPIRED" {
+		t.Fatalf("expected EXPIRED COMMAND_EXPIRED, got %+v", expiredReply)
+	}
+
+	// 2. Command with TTL > 24h returns TTL_EXCEEDS_MAX immediately with 0 writes.
+	tooLongEnv := expiredEnv
+	tooLongEnv.MessageID = "msg-too-long"
+	tooLongEnv.CommandID = "cmd-too-long"
+	tooLongEnv.IssuedAt = nowFn().UnixMilli()
+	tooLongEnv.ExpireAt = nowFn().Add(24*time.Hour + time.Minute).UnixMilli()
+	tooLongEnv.ExecutionFence = 2
+	tooLongEnv.PayloadHash = "hash-too-long"
+	rawTooLong, _ := json.Marshal(tooLongEnv)
+	rawLongReply, ok := daemon.HandleCommandPayload(t.Context(), rawTooLong)
+	if !ok {
+		t.Fatal("expected immediate reply for >24h TTL command")
+	}
+	var longReply CommandReplyWire
+	if err := json.Unmarshal(rawLongReply, &longReply); err != nil {
+		t.Fatal(err)
+	}
+	if longReply.EdgeStatus != "EXPIRED" || longReply.ReasonCode == nil || *longReply.ReasonCode != "TTL_EXCEEDS_MAX" {
+		t.Fatalf("expected EXPIRED TTL_EXCEEDS_MAX, got %+v", longReply)
+	}
+	if modbusHandler.writes.Load() != 0 {
+		t.Fatalf("expired/over-TTL commands must perform 0 writes, got %d", modbusHandler.writes.Load())
+	}
+
+	// 3. Pending command whose clock advances past expireAt before StepCycle expires cleanly with 0 writes.
+	cycleExpireEnv := tooLongEnv
+	cycleExpireEnv.MessageID = "msg-cycle-expire"
+	cycleExpireEnv.CommandID = "cmd-cycle-expire"
+	cycleExpireEnv.IssuedAt = nowFn().UnixMilli()
+	cycleExpireEnv.ExpireAt = nowFn().Add(5 * time.Second).UnixMilli()
+	cycleExpireEnv.ExecutionFence = 3
+	cycleExpireEnv.PayloadHash = "hash-cycle-expire"
+	cycleReply := dispatchViaDaemonCycle(t, daemon, &clockMu, &curNow, 10*time.Second, cycleExpireEnv)
+	if cycleReply.EdgeStatus != "EXPIRED" || cycleReply.ReasonCode == nil || *cycleReply.ReasonCode != "COMMAND_EXPIRED" {
+		t.Fatalf("expected pending expired reply COMMAND_EXPIRED, got %+v", cycleReply)
+	}
+	if modbusHandler.writes.Load() != 0 {
+		t.Fatalf("expired cycle command must perform 0 writes, got %d", modbusHandler.writes.Load())
+	}
+}

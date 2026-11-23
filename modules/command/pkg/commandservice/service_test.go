@@ -1526,3 +1526,79 @@ func TestPrepareVerificationPreservesNormalizedTraceID(t *testing.T) {
 		t.Fatalf("verification.TraceID=%q want %q", verification.TraceID, want)
 	}
 }
+
+func TestServiceOfflineQueueDeferralWakeAndTTLExpiration(t *testing.T) {
+	baseNow := fixedClock()()
+	now := baseNow
+	svc := New(func() time.Time { return now })
+
+	ttl := 90
+	req := validRequest()
+	req.IdempotencyKey = "offline-queue-1"
+	req.DeliveryMode = commandmodel.DeliveryModeQueueIfOffline
+	req.TTLSeconds = &ttl
+	req.CurrentState = commandmodel.CurrentStateEvidence{
+		EvaluationAvailability: "AVAILABLE",
+		Presence:               "SLEEPING",
+		Readiness:              "CURRENT",
+		BusinessRevision:       0,
+		ObservedAt:             now.Add(-time.Minute),
+	}
+
+	created, err := svc.Submit(req)
+	if err != nil {
+		t.Fatalf("expected QUEUE_IF_OFFLINE submit for SLEEPING device to succeed, got %v", err)
+	}
+	if created.Intent.DeliveryMode != commandmodel.DeliveryModeQueueIfOffline ||
+		created.Intent.TTLSeconds == nil || *created.Intent.TTLSeconds != 90 ||
+		created.Intent.ExpiresAt == nil || !created.Intent.ExpiresAt.Equal(baseNow.Add(90*time.Second)) {
+		t.Fatalf("unexpected created offline intent fields: %+v", created.Intent)
+	}
+
+	env1, err := svc.PrepareDispatch(created.Intent.ID, "dispatcher-a", now.Add(30*time.Second))
+	if err != nil {
+		t.Fatalf("PrepareDispatch 1 failed: %v", err)
+	}
+	if env1.DeliveryMode != commandmodel.DeliveryModeQueueIfOffline || env1.ExpiresAt == nil {
+		t.Fatalf("expected DeliveryMode/ExpiresAt propagated on DispatchEnvelope, got %+v", env1)
+	}
+
+	if err := svc.ResolveDispatch(env1, commandmodel.ConnectorResult{
+		Phase:       commandmodel.ConnectorPreSendRejected,
+		FailureCode: "DISPATCH_SAFETY_DEVICE_SLEEPING",
+	}); err != nil {
+		t.Fatalf("ResolveDispatch sleeping deferral failed: %v", err)
+	}
+	deferred, err := svc.Get(created.Intent.ID)
+	if err != nil || deferred.Status != commandmodel.IntentQueued || deferred.NextDispatchAfter == nil || !deferred.NextDispatchAfter.After(now) {
+		t.Fatalf("expected QUEUED with future NextDispatchAfter, got err=%v intent=%+v", err, deferred)
+	}
+	if _, err := svc.PrepareDispatch(created.Intent.ID, "dispatcher-a", now.Add(30*time.Second)); !errors.Is(err, ErrCommandNotDispatchable) {
+		t.Fatalf("expected ErrCommandNotDispatchable while in backoff window, got %v", err)
+	}
+
+	now = now.Add(time.Second)
+	woken, err := svc.WakeDeferredDispatches(context.Background(), created.Intent.TenantID, []string{created.Intent.DeviceID})
+	if err != nil || woken != 1 {
+		t.Fatalf("WakeDeferredDispatches got (%d, %v), want (1, nil)", woken, err)
+	}
+	env2, err := svc.PrepareDispatch(created.Intent.ID, "dispatcher-a", now.Add(30*time.Second))
+	if err != nil {
+		t.Fatalf("PrepareDispatch after wake failed: %v", err)
+	}
+	if err := svc.ResolveDispatch(env2, commandmodel.ConnectorResult{
+		Phase:       commandmodel.ConnectorPreSendRejected,
+		FailureCode: "DISPATCH_SAFETY_DEVICE_NOT_ONLINE",
+	}); err != nil {
+		t.Fatalf("ResolveDispatch 2 failed: %v", err)
+	}
+
+	now = baseNow.Add(91 * time.Second)
+	if _, err := svc.PrepareDispatch(created.Intent.ID, "dispatcher-a", now.Add(30*time.Second)); !errors.Is(err, ErrCommandTTLExpired) {
+		t.Fatalf("expected ErrCommandTTLExpired after TTL elapsed, got %v", err)
+	}
+	expired, err := svc.Get(created.Intent.ID)
+	if err != nil || expired.Status != commandmodel.IntentExpired {
+		t.Fatalf("expected IntentExpired after TTL expiry, got err=%v intent=%+v", err, expired)
+	}
+}

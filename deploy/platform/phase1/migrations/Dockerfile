@@ -179,6 +179,7 @@ COPY modules/command/migrations/command-priority-and-locks.sql /opt/hvac/repo/mo
 COPY modules/command/migrations/command-audit-immutability.sql /opt/hvac/repo/modules/command/migrations/command-audit-immutability.sql
 COPY modules/command/migrations/command-due-work-tenants.sql /opt/hvac/repo/modules/command/migrations/command-due-work-tenants.sql
 COPY modules/command/migrations/control-alarm-dead-letter-inspect.sql /opt/hvac/repo/modules/command/migrations/control-alarm-dead-letter-inspect.sql
+COPY modules/command/migrations/command-batch-offline-queue-ttl.sql /opt/hvac/repo/modules/command/migrations/command-batch-offline-queue-ttl.sql
 COPY modules/alarm/migrations/001_s4_alarm_runtime.sql /opt/hvac/repo/modules/alarm/migrations/001_s4_alarm_runtime.sql
 COPY modules/alarm/migrations/002_s4_alarm_lifecycle.sql /opt/hvac/repo/modules/alarm/migrations/002_s4_alarm_lifecycle.sql
 COPY modules/alarm/migrations/003_s4_tenant_scope.sql /opt/hvac/repo/modules/alarm/migrations/003_s4_tenant_scope.sql

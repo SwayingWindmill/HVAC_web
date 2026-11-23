@@ -14,6 +14,7 @@ var (
 	ErrAuthorizationDenied = errors.New("command authorization snapshot is invalid")
 	ErrApprovalRequired    = errors.New("command approval is required")
 	ErrApprovalInvalid     = errors.New("command approval evidence is invalid")
+	ErrCommandTTLExpired   = errors.New("command TTL expired")
 )
 
 func evaluateGovernance(request commandmodel.SubmitRequest, now time.Time) (commandmodel.RiskSnapshot, commandmodel.ApprovalPolicy, error) {
@@ -21,15 +22,23 @@ func evaluateGovernance(request commandmodel.SubmitRequest, now time.Time) (comm
 	if !ok {
 		priorityTier, commandSource, err := commandmodel.ResolveCommandPriority(request)
 		preconditionMode, bypassReason := normalizedPrecondition(request)
-		if err == nil &&
-			((preconditionMode == commandmodel.PreconditionEmergencyBypass &&
+		deliveryMode := commandmodel.NormalizeDeliveryMode(request.DeliveryMode)
+		if err == nil {
+			if (preconditionMode == commandmodel.PreconditionEmergencyBypass &&
 				request.CurrentState.CurrentValue == nil &&
 				commandmodel.AllowsEmergencyPreconditionBypass(request.Capability, priorityTier, commandSource, request.IdempotencyKey, bypassReason)) ||
 				(priorityTier == commandmodel.PriorityProtectionRule &&
 					commandSource == commandmodel.SourceProtectionRule &&
 					request.Capability == commandmodel.CapabilitySetChilledWaterTemperatureSetpoint &&
-					strings.HasPrefix(request.IdempotencyKey, "auto-rollback:"))) {
-			return evaluateBypassFallbackGovernance(request, now)
+					strings.HasPrefix(request.IdempotencyKey, "auto-rollback:")) {
+				return evaluateBypassFallbackGovernance(request, now, "EMERGENCY_PRECONDITION_BYPASS")
+			}
+			if deliveryMode == commandmodel.DeliveryModeQueueIfOffline &&
+				request.CurrentState.CurrentValue == nil &&
+				commandmodel.CapabilityAllowsOfflineQueue(request.Capability) &&
+				commandmodel.ParametersValid(request.Capability, request.Parameters) {
+				return evaluateBypassFallbackGovernance(request, now, "OFFLINE_QUEUE_DEFERRED_PRECONDITION")
+			}
 		}
 		return commandmodel.RiskSnapshot{}, "", ErrCapabilityDenied
 	}
@@ -41,15 +50,18 @@ func evaluateGovernance(request commandmodel.SubmitRequest, now time.Time) (comm
 	}, now)
 }
 
-func evaluateBypassFallbackGovernance(request commandmodel.SubmitRequest, now time.Time) (commandmodel.RiskSnapshot, commandmodel.ApprovalPolicy, error) {
+func evaluateBypassFallbackGovernance(request commandmodel.SubmitRequest, now time.Time, reasonCode string) (commandmodel.RiskSnapshot, commandmodel.ApprovalPolicy, error) {
 	profile, ok := commandmodel.CapabilityProfileFor(request.Capability)
 	if !ok {
 		return commandmodel.RiskSnapshot{}, "", ErrCapabilityDenied
 	}
+	if strings.TrimSpace(reasonCode) == "" {
+		reasonCode = "EMERGENCY_PRECONDITION_BYPASS"
+	}
 	return finalizeRiskGovernance(request, commandmodel.RiskSnapshot{
 		Level:        profile.BaseRisk,
 		RuleRevision: riskRuleRevision,
-		Reasons:      []string{"EMERGENCY_PRECONDITION_BYPASS"},
+		Reasons:      []string{reasonCode},
 		EvaluatedAt:  now,
 	}, now)
 }
@@ -161,10 +173,22 @@ func validateApproval(intent commandmodel.CommandIntent, approval commandmodel.A
 }
 
 func validateExecutionGovernance(intent commandmodel.CommandIntent, now time.Time) error {
+	nowUTC := now.UTC()
+	if intent.ExpiresAt != nil && !nowUTC.Before(intent.ExpiresAt.UTC()) {
+		return ErrCommandTTLExpired
+	}
 	if intent.ApprovalPolicy == commandmodel.ApprovalNone {
+		authNow := nowUTC
+		if commandmodel.NormalizeDeliveryMode(intent.DeliveryMode) == commandmodel.DeliveryModeQueueIfOffline &&
+			intent.ExpiresAt != nil &&
+			!intent.Authorization.IssuedAt.IsZero() &&
+			intent.Authorization.ExpiresAt.After(intent.Authorization.IssuedAt) &&
+			nowUTC.Before(intent.ExpiresAt.UTC()) {
+			authNow = intent.Authorization.IssuedAt
+		}
 		return validateAuthorizationScope(intent.Authorization, commandmodel.AuthorizationCommandSubmit,
 			intent.PrincipalID, intent.TenantID, intent.SiteID, intent.DeviceID,
-			intent.Capability, intent.CapabilityRevision, intent.Risk, now)
+			intent.Capability, intent.CapabilityRevision, intent.Risk, authNow)
 	}
 	if len(intent.Approvals) < requiredApprovalCount(intent.ApprovalPolicy) {
 		return ErrApprovalRequired
@@ -172,12 +196,12 @@ func validateExecutionGovernance(intent commandmodel.CommandIntent, now time.Tim
 	for _, approval := range intent.Approvals {
 		if approval.Policy != intent.ApprovalPolicy || approval.PayloadHash != intent.PayloadHash ||
 			approval.CapabilityRevision != intent.CapabilityRevision || approval.Risk != intent.Risk ||
-			approval.RiskRuleRevision != intent.RiskSnapshot.RuleRevision || !approval.ExpiresAt.After(now) {
+			approval.RiskRuleRevision != intent.RiskSnapshot.RuleRevision || !approval.ExpiresAt.After(nowUTC) {
 			return ErrApprovalInvalid
 		}
 		if err := validateAuthorizationScope(approval.Authorization, commandmodel.AuthorizationCommandApprove,
 			approval.ApproverID, intent.TenantID, intent.SiteID, intent.DeviceID,
-			intent.Capability, intent.CapabilityRevision, intent.Risk, now); err != nil {
+			intent.Capability, intent.CapabilityRevision, intent.Risk, nowUTC); err != nil {
 			return ErrAuthorizationDenied
 		}
 	}

@@ -26,6 +26,7 @@ const (
 	InternalConnectorCompletePath      = "/internal/v1/connector-evidence:complete"
 	InternalCommandCancelRetiredPath   = "/internal/v1/commands:cancelRetiredTarget"
 	InternalCapabilityProfilesSyncPath = "/internal/v1/capability-profiles:sync"
+	InternalDispatchWakePath           = "/internal/v1/command/runtime/dispatches/wake"
 	maximumRuntimeRequestBody          = int64(256 << 10)
 )
 
@@ -65,6 +66,12 @@ type AnyTenantRuntimeStore interface {
 	RuntimeStore
 	ClaimAnyDispatch(ctx context.Context, leaseOwner string, leaseFor, waitDuration time.Duration) (commandmodel.DispatchEnvelope, error)
 	ClaimAnyVerification(ctx context.Context, leaseOwner string, leaseFor, waitDuration time.Duration) (commandmodel.VerificationEnvelope, error)
+}
+
+// DeferredDispatchWaker is an optional RuntimeStore extension that wakes deferred
+// QUEUE_IF_OFFLINE dispatches when offline/sleeping devices resume activity.
+type DeferredDispatchWaker interface {
+	WakeDeferredDispatches(ctx context.Context, tenantID string, deviceIDs []string) (int, error)
 }
 
 // RuntimeHTTPConfig names the one dispatcher and the one verifier workload. Each serves
@@ -120,6 +127,15 @@ type runtimeCancelRetiredRequest struct {
 type runtimeDispatchResolveRequest struct {
 	Envelope commandmodel.DispatchEnvelope `json:"envelope"`
 	Result   commandmodel.ConnectorResult  `json:"result"`
+}
+
+type runtimeDispatchWakeRequest struct {
+	TenantID  string   `json:"tenantId"`
+	DeviceIDs []string `json:"deviceIds"`
+}
+
+type runtimeDispatchWakeResponse struct {
+	WokenCount int `json:"wokenCount"`
 }
 
 type runtimeVerificationResolveRequest struct {
@@ -182,7 +198,7 @@ func (handler *runtimeHTTPHandler) ServeHTTP(writer http.ResponseWriter, request
 	}
 	var workload string
 	switch request.URL.Path {
-	case InternalDispatchClaimPath, InternalDispatchClaimAnyPath, InternalDispatchResolvePath, InternalConnectorPreparePath, InternalConnectorCompletePath:
+	case InternalDispatchClaimPath, InternalDispatchClaimAnyPath, InternalDispatchResolvePath, InternalDispatchWakePath, InternalConnectorPreparePath, InternalConnectorCompletePath:
 		workload = handler.dispatcher
 	case InternalVerificationClaimPath, InternalVerificationClaimAnyPath, InternalVerificationResolvePath:
 		workload = handler.verifier
@@ -202,6 +218,8 @@ func (handler *runtimeHTTPHandler) ServeHTTP(writer http.ResponseWriter, request
 		handler.claimAnyDispatch(writer, request)
 	case InternalDispatchResolvePath:
 		handler.resolveDispatch(writer, request)
+	case InternalDispatchWakePath:
+		handler.wakeDeferredDispatches(writer, request)
 	case InternalVerificationClaimPath:
 		handler.claimVerification(writer, request)
 	case InternalVerificationClaimAnyPath:
@@ -213,6 +231,43 @@ func (handler *runtimeHTTPHandler) ServeHTTP(writer http.ResponseWriter, request
 	case InternalConnectorCompletePath:
 		handler.completeConnectorEvidence(writer, request)
 	}
+}
+
+func (handler *runtimeHTTPHandler) wakeDeferredDispatches(writer http.ResponseWriter, request *http.Request) {
+	var input runtimeDispatchWakeRequest
+	if !decodeRuntimeJSON(writer, request, &input) {
+		return
+	}
+	tenantID := strings.TrimSpace(input.TenantID)
+	if !commandmodel.IsUUIDv7(tenantID) || len(input.DeviceIDs) == 0 || len(input.DeviceIDs) > 500 {
+		writeRuntimeProblem(writer, http.StatusBadRequest, "COMMAND_RUNTIME_REQUEST_INVALID", false)
+		return
+	}
+	deviceIDs := make([]string, 0, len(input.DeviceIDs))
+	seen := make(map[string]struct{}, len(input.DeviceIDs))
+	for _, rawID := range input.DeviceIDs {
+		trimmed := strings.TrimSpace(rawID)
+		if !commandmodel.IsUUIDv7(trimmed) {
+			writeRuntimeProblem(writer, http.StatusBadRequest, "COMMAND_RUNTIME_REQUEST_INVALID", false)
+			return
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		deviceIDs = append(deviceIDs, trimmed)
+	}
+	waker, ok := handler.store.(DeferredDispatchWaker)
+	if !ok {
+		writeRuntimeJSON(writer, http.StatusOK, runtimeDispatchWakeResponse{WokenCount: 0})
+		return
+	}
+	wokenCount, err := waker.WakeDeferredDispatches(request.Context(), tenantID, deviceIDs)
+	if err != nil {
+		writeRuntimeStoreError(writer, err)
+		return
+	}
+	writeRuntimeJSON(writer, http.StatusOK, runtimeDispatchWakeResponse{WokenCount: wokenCount})
 }
 
 func (handler *runtimeHTTPHandler) cancelRetiredTarget(writer http.ResponseWriter, request *http.Request) {

@@ -328,6 +328,11 @@ type SubmitRequest struct {
 	BypassReason         string
 	PriorityTier         PriorityTier  `json:"priorityTier,omitempty"`
 	CommandSource        CommandSource `json:"commandSource,omitempty"`
+	DeliveryMode         DeliveryMode  `json:"deliveryMode,omitempty"`
+	TTLSeconds           *int          `json:"ttlSeconds,omitempty"`
+	ExpiresAt            *time.Time    `json:"expiresAt,omitempty"`
+	BatchID              *string       `json:"batchId,omitempty"`
+	BatchItemIndex       *int          `json:"batchItemIndex,omitempty"`
 	CurrentState         CurrentStateEvidence
 	Authorization        AuthorizationSnapshot
 }
@@ -497,6 +502,12 @@ type CommandIntent struct {
 	BypassReason          string
 	PriorityTier          PriorityTier  `json:"priorityTier,omitempty"`
 	CommandSource         CommandSource `json:"commandSource,omitempty"`
+	DeliveryMode          DeliveryMode  `json:"deliveryMode,omitempty"`
+	TTLSeconds            *int          `json:"ttlSeconds,omitempty"`
+	ExpiresAt             *time.Time    `json:"expiresAt,omitempty"`
+	NextDispatchAfter     *time.Time    `json:"nextDispatchAfter,omitempty"`
+	BatchID               *string       `json:"batchId,omitempty"`
+	BatchItemIndex        *int          `json:"batchItemIndex,omitempty"`
 	PayloadHash           string
 	SnapshotRevision      uint64
 	DeviceCommandSequence uint64
@@ -565,6 +576,9 @@ type DispatchEnvelope struct {
 	Capability            Capability
 	CapabilityRevision    string
 	Parameters            CommandParameters
+	DeliveryMode          DeliveryMode `json:"deliveryMode,omitempty"`
+	TTLSeconds            *int         `json:"ttlSeconds,omitempty"`
+	ExpiresAt             *time.Time   `json:"expiresAt,omitempty"`
 	PayloadHash           string
 	ExecutionFence        uint64
 	DeviceCommandSequence uint64
@@ -714,8 +728,154 @@ func RouteFailureCode(err error) string {
 
 // TerminalPreSendRejection reports whether a command refused before send must end
 // rejected rather than be dispatched again.
+// DeliveryMode selects how dispatch handles offline or sleeping target devices.
+type DeliveryMode string
+
+const (
+	DeliveryModeFailFast       DeliveryMode = "FAIL_FAST"
+	DeliveryModeQueueIfOffline DeliveryMode = "QUEUE_IF_OFFLINE"
+)
+
+const (
+	MinCommandTTLSeconds     = 1
+	MaxCommandTTLSeconds     = 86400
+	MaxCommandTTL            = time.Duration(MaxCommandTTLSeconds) * time.Second
+	MaxBatchCommandTargets   = 100
+	InitialOfflineDeferDelay = 5 * time.Second
+	MaxOfflineDeferDelay     = 60 * time.Second
+)
+
+var (
+	ErrInvalidDeliveryMode     = errors.New("command delivery mode must be FAIL_FAST or QUEUE_IF_OFFLINE")
+	ErrOfflineQueueUnsupported = errors.New("capability does not support QUEUE_IF_OFFLINE delivery mode")
+	ErrInvalidTTLSeconds       = errors.New("command ttlSeconds must be between 1 and 86400 seconds and is required for QUEUE_IF_OFFLINE")
+)
+
+func NormalizeDeliveryMode(mode DeliveryMode) DeliveryMode {
+	trimmed := strings.ToUpper(strings.TrimSpace(string(mode)))
+	if trimmed == "" {
+		return DeliveryModeFailFast
+	}
+	return DeliveryMode(trimmed)
+}
+
+func CapabilityAllowsOfflineQueue(capability Capability) bool {
+	switch capability {
+	case CapabilitySetTemperatureSetpoint,
+		CapabilitySetChilledWaterTemperatureSetpoint,
+		CapabilitySetFrequency,
+		CapabilitySetFanSpeed,
+		CapabilitySetLoadLimit,
+		CapabilitySetOpening:
+		return true
+	default:
+		return false
+	}
+}
+
+func ValidateDeliveryAndTTL(capability Capability, rawMode DeliveryMode, ttlSeconds *int, rawExpiresAt *time.Time, now time.Time) (DeliveryMode, *int, *time.Time, error) {
+	mode := NormalizeDeliveryMode(rawMode)
+	switch mode {
+	case DeliveryModeFailFast, DeliveryModeQueueIfOffline:
+	default:
+		return "", nil, nil, ErrInvalidDeliveryMode
+	}
+	if mode == DeliveryModeQueueIfOffline && !CapabilityAllowsOfflineQueue(capability) {
+		return "", nil, nil, ErrOfflineQueueUnsupported
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	} else {
+		now = now.UTC()
+	}
+
+	var normalizedTTL *int
+	if ttlSeconds != nil {
+		if *ttlSeconds < MinCommandTTLSeconds || *ttlSeconds > MaxCommandTTLSeconds {
+			return "", nil, nil, ErrInvalidTTLSeconds
+		}
+		v := *ttlSeconds
+		normalizedTTL = &v
+	}
+
+	var normalizedExpires *time.Time
+	if rawExpiresAt != nil && !rawExpiresAt.IsZero() {
+		exp := rawExpiresAt.UTC()
+		remaining := exp.Sub(now)
+		if remaining <= 0 || remaining > MaxCommandTTL {
+			return "", nil, nil, ErrInvalidTTLSeconds
+		}
+		normalizedExpires = &exp
+		if normalizedTTL == nil {
+			secs := int((remaining + time.Second - 1) / time.Second)
+			if secs < MinCommandTTLSeconds {
+				secs = MinCommandTTLSeconds
+			}
+			if secs > MaxCommandTTLSeconds {
+				secs = MaxCommandTTLSeconds
+			}
+			normalizedTTL = &secs
+		}
+	} else if normalizedTTL != nil {
+		exp := now.Add(time.Duration(*normalizedTTL) * time.Second)
+		normalizedExpires = &exp
+	}
+
+	if mode == DeliveryModeQueueIfOffline && normalizedExpires == nil {
+		return "", nil, nil, ErrInvalidTTLSeconds
+	}
+	return mode, normalizedTTL, normalizedExpires, nil
+}
+
+func IsDeferrableOfflinePreSendCode(failureCode string) bool {
+	switch strings.TrimSpace(failureCode) {
+	case "DISPATCH_SAFETY_DEVICE_NOT_ONLINE",
+		"DISPATCH_SAFETY_DEVICE_OFFLINE",
+		"DISPATCH_SAFETY_DEVICE_SLEEPING",
+		"DISPATCH_SAFETY_STATE_UNAVAILABLE",
+		"DISPATCH_SAFETY_STATE_NOT_CURRENT",
+		"DISPATCH_SAFETY_STATE_NOT_FRESH",
+		"DISPATCH_SAFETY_EVALUATION_FAILED",
+		"DISPATCH_SAFETY_TELEMETRY_STALE",
+		"COMMAND_ROUTE_TEMPORARILY_UNAVAILABLE",
+		"MQTT_GATEWAY_DISCONNECTED":
+		return true
+	default:
+		return false
+	}
+}
+
+func IsTTLExpiredFailureCode(failureCode string) bool {
+	switch strings.TrimSpace(failureCode) {
+	case "COMMAND_TTL_EXPIRED", "MQTT_EDGE_EXPIRED", "EXPIRED", "MQTT_EDGE_TTL_EXCEEDS_MAX":
+		return true
+	default:
+		return false
+	}
+}
+
+func OfflineDeferBackoff(deferredAttempts int) time.Duration {
+	if deferredAttempts <= 1 {
+		return InitialOfflineDeferDelay
+	}
+	delay := InitialOfflineDeferDelay
+	for step := 1; step < deferredAttempts; step++ {
+		if delay >= MaxOfflineDeferDelay {
+			return MaxOfflineDeferDelay
+		}
+		delay *= 2
+	}
+	if delay > MaxOfflineDeferDelay {
+		return MaxOfflineDeferDelay
+	}
+	return delay
+}
+
 func TerminalPreSendRejection(failureCode string) bool {
 	code := strings.TrimSpace(failureCode)
+	if IsTTLExpiredFailureCode(code) {
+		return true
+	}
 	switch code {
 	case "COMMAND_ROUTE_NOT_FOUND", "COMMAND_CONTROL_DISABLED", "COMMAND_GATEWAY_CREDENTIAL_INACTIVE",
 		"DISPATCH_SAFETY_CONTROL_LOCKED", "DISPATCH_SAFETY_MAINTENANCE_WINDOW",

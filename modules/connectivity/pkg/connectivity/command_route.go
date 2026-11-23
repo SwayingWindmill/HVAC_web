@@ -154,3 +154,51 @@ SELECT DISTINCT tenant_id::text FROM core_registry.gateway_directory_v1 ORDER BY
 	}
 	return tenants, rows.Err()
 }
+
+// GatewayDeviceIDs returns the owning tenant ID and all deduplicated target Device IDs
+// associated with gatewayID (registered child devices behind the gateway, plus gatewayID
+// itself when registered as a DIRECT non-GATEWAY device).
+func (store *Store) GatewayDeviceIDs(ctx context.Context, gatewayID string) (string, []string, error) {
+	if store == nil || store.pool == nil {
+		return "", nil, errors.New("connectivity store is closed")
+	}
+	trimmed := strings.TrimSpace(gatewayID)
+	if trimmed == "" {
+		return "", nil, fmt.Errorf("%w: empty gateway id", ErrNotFound)
+	}
+	var tenantID, deviceType, connectivityMode string
+	err := store.pool.QueryRow(ctx, `
+SELECT tenant_id::text, COALESCE(device_type, ''), COALESCE(connectivity_mode, '')
+FROM core_registry.gateway_directory_v1
+WHERE gateway_id = $1::uuid
+`, trimmed).Scan(&tenantID, &deviceType, &connectivityMode)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil, fmt.Errorf("%w: %w", ErrNotFound, commandmodel.ErrCommandCorrelationNotFound)
+	}
+	if err != nil {
+		return "", nil, fmt.Errorf("read Registry gateway directory: %w", err)
+	}
+	childIDs, err := store.ListGatewayChildDeviceIDs(ctx, trimmed)
+	if err != nil {
+		return "", nil, err
+	}
+	seen := make(map[string]struct{}, len(childIDs)+1)
+	deviceIDs := make([]string, 0, len(childIDs)+1)
+	for _, id := range childIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		deviceIDs = append(deviceIDs, id)
+	}
+	if strings.ToUpper(strings.TrimSpace(deviceType)) != "GATEWAY" && strings.ToUpper(strings.TrimSpace(connectivityMode)) == "DIRECT" {
+		if _, ok := seen[trimmed]; !ok {
+			deviceIDs = append(deviceIDs, trimmed)
+		}
+	}
+	return tenantID, deviceIDs, nil
+}

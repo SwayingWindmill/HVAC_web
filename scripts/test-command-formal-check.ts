@@ -44,6 +44,19 @@ test('command-formal output parser extracts passing suites and counterexamples',
   assert.deepEqual(failSummary.failedTests, ['TestSingleCommandProtocolInvariants']);
   assert.equal(failSummary.counterexamples.length, 1);
   assert.match(failSummary.counterexamples[0], /\[SingleCommandProtocol\/P2\]/);
+
+  const failP8Summary = summarizeCommandFormalOutput(
+    [
+      '=== RUN   TestOfflineQueueAndTTLSafetyInvariants',
+      '    formal_test.go:68: CheckOfflineQueueAndTTLSafety failed: [OfflineQueueAndTTLSafety/P8] expired command claimed at or after expiresAt TTL deadline; trace: AdvanceTime',
+      '--- FAIL: TestOfflineQueueAndTTLSafetyInvariants (0.01s)',
+      'FAIL',
+    ].join('\n'),
+    1,
+  );
+  assert.equal(failP8Summary.ok, false);
+  assert.equal(failP8Summary.counterexamples.length, 1);
+  assert.match(failP8Summary.counterexamples[0], /\[OfflineQueueAndTTLSafety\/P8\]/);
 });
 
 test('command-safety skill exists in mirror parity and references existing covered files', () => {

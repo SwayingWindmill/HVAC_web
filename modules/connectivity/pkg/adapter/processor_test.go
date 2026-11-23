@@ -1306,3 +1306,110 @@ func TestRevokedGatewayFactoryResetAckAllowedWhileTelemetryQuarantined(t *testin
 		t.Fatalf("expected telemetry quarantined with %s, quarantines=%+v", QuarantineGatewayUnknown, identities.quarantines)
 	}
 }
+
+func TestProcessorDeviceActivityHookExcludesSleepAndDisconnectEvents(t *testing.T) {
+	now := time.Date(2026, 11, 23, 2, 0, 0, 0, time.UTC)
+	identities := newFakeIdentities()
+	telemetry := &fakeTelemetry{}
+
+	type activityNotice struct {
+		tenantID  string
+		deviceIDs []string
+	}
+	var notices []activityNotice
+	processor, err := NewProcessor(
+		identities,
+		telemetry,
+		WithDeviceActivityHook(func(_ context.Context, tenantID string, deviceIDs []string) {
+			notices = append(notices, activityNotice{
+				tenantID:  tenantID,
+				deviceIDs: append([]string(nil), deviceIDs...),
+			})
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	processor.now = func() time.Time { return now }
+
+	// 1. Accepted telemetry notifies active resolved device(s).
+	if _, err := processor.Process(context.Background(), telemetryTopic(testGatewayB), telemetryPayload(testGatewayB, testMessageID, 1, "METER-01", "active_power")); err != nil {
+		t.Fatalf("Process telemetry failed: %v", err)
+	}
+	if len(notices) != 1 || notices[0].tenantID != testTenantID || len(notices[0].deviceIDs) != 1 || notices[0].deviceIDs[0] != testDeviceID {
+		t.Fatalf("telemetry activity notices=%+v, want tenant=%s device=%s", notices, testTenantID, testDeviceID)
+	}
+
+	// 2. Sleep and disconnect events must never trigger wake activity, while DEVICE_CONNECTED does.
+	notices = nil
+	eventPayload := func(seq int, eventType string) []byte {
+		return []byte(fmt.Sprintf(`{"schemaVersion":"2.0","messageId":%q,"gatewayId":%q,"timestamp":%d,"sequence":%d,"payload":{"eventType":%q,"sourceType":"DEVICE","sourceId":"METER-01","eventTime":%d,"severity":"INFO","data":{}}}`,
+			messageID(seq), testGatewayB, now.UnixMilli(), seq, eventType, now.UnixMilli()))
+	}
+	for _, tc := range []struct {
+		seq       int
+		eventType string
+		wantWake  bool
+	}{
+		{seq: 10, eventType: "DEVICE_SLEEPING", wantWake: false},
+		{seq: 11, eventType: "EXPLICIT_SLEEP", wantWake: false},
+		{seq: 12, eventType: "DEVICE_DISCONNECTED", wantWake: false},
+		{seq: 13, eventType: "DEVICE_CONNECTED", wantWake: true},
+	} {
+		notices = nil
+		if _, err := processor.Process(context.Background(), "hvac/v1/"+testGatewayB+"/up/event", eventPayload(tc.seq, tc.eventType)); err != nil {
+			t.Fatalf("Process event %s failed: %v", tc.eventType, err)
+		}
+		if tc.wantWake && len(notices) != 1 {
+			t.Fatalf("event %s expected wake notice, got %+v", tc.eventType, notices)
+		}
+		if !tc.wantWake && len(notices) != 0 {
+			t.Fatalf("event %s must not trigger wake notice, got %+v", tc.eventType, notices)
+		}
+	}
+
+	// 3. Direct-device online status notifies direct device; offline status does not.
+	directID := "018f3e00-4000-7000-8000-000000000999"
+	directIdentities := &directFakeIdentities{
+		fakeIdentities: newFakeIdentities(),
+		directGateway: Gateway{
+			ID:           directID,
+			TenantID:     testTenantID,
+			SiteID:       testSiteID,
+			DirectDevice: true,
+			DeviceCode:   "thermostat-direct-01",
+		},
+	}
+	var directNotices []activityNotice
+	directProcessor, err := NewProcessor(
+		directIdentities,
+		&fakeTelemetry{},
+		WithDeviceActivityHook(func(_ context.Context, tenantID string, deviceIDs []string) {
+			directNotices = append(directNotices, activityNotice{
+				tenantID:  tenantID,
+				deviceIDs: append([]string(nil), deviceIDs...),
+			})
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directProcessor.now = func() time.Time { return now }
+
+	statusPayload := func(seq int, online bool) []byte {
+		return []byte(fmt.Sprintf(`{"v":"1.0","gw":%q,"sid":"sess-direct-1","seq":%d,"ts":%q,"online":%t}`,
+			directID, seq, now.Add(time.Duration(seq)*time.Second).Format(time.RFC3339), online))
+	}
+	if _, err := directProcessor.Process(context.Background(), "hvac/v1/"+directID+"/up/status", statusPayload(1, false)); err != nil {
+		t.Fatalf("Process offline status failed: %v", err)
+	}
+	if len(directNotices) != 0 {
+		t.Fatalf("offline status must not trigger wake notice, got %+v", directNotices)
+	}
+	if _, err := directProcessor.Process(context.Background(), "hvac/v1/"+directID+"/up/status", statusPayload(2, true)); err != nil {
+		t.Fatalf("Process online status failed: %v", err)
+	}
+	if len(directNotices) != 1 || len(directNotices[0].deviceIDs) != 1 || directNotices[0].deviceIDs[0] != directID {
+		t.Fatalf("online direct-device status notices=%+v, want device=%s", directNotices, directID)
+	}
+}

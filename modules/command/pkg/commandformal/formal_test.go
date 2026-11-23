@@ -60,6 +60,19 @@ func TestPriorityArbitrationAndLocksInvariants(t *testing.T) {
 	}
 }
 
+func TestOfflineQueueAndTTLSafetyInvariants(t *testing.T) {
+	report, err := CheckOfflineQueueAndTTLSafety(FaultHooks{})
+	if err != nil {
+		t.Fatalf("CheckOfflineQueueAndTTLSafety errored: %v", err)
+	}
+	if !report.Passed {
+		t.Fatalf("CheckOfflineQueueAndTTLSafety failed: %s", report.Counterexample.Error())
+	}
+	if report.VisitedStates == 0 || report.Transitions == 0 {
+		t.Fatalf("expected non-empty offline queue & TTL exploration: states=%d transitions=%d", report.VisitedStates, report.Transitions)
+	}
+}
+
 func TestFormalPropertiesCanFailOnBrokenTransitions(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -130,6 +143,21 @@ func TestFormalPropertiesCanFailOnBrokenTransitions(t *testing.T) {
 			name:     "P3 SAFETY_INTERLOCK leaving lower-priority queued intent unpreempted must fail",
 			wantProp: PropertyP3,
 			hooks:    FaultHooks{SkipSafetyInterlockPreemption: true},
+		},
+		{
+			name:     "P8 SHUTDOWN/STOP capability admitted to offline queue must fail",
+			wantProp: PropertyP8,
+			hooks:    FaultHooks{AllowShutdownOfflineQueue: true},
+		},
+		{
+			name:     "P8 claiming expired QUEUE_IF_OFFLINE command after TTL must fail",
+			wantProp: PropertyP8,
+			hooks:    FaultHooks{BypassTTLExpiryOnClaim: true},
+		},
+		{
+			name:     "P8 claiming deferred command before nextDispatchAfter backoff must fail",
+			wantProp: PropertyP8,
+			hooks:    FaultHooks{BypassDeferralBackoffOnClaim: true},
 		},
 	}
 

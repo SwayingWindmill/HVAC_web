@@ -555,3 +555,44 @@ func TestPriorityHierarchyAndDerivation(t *testing.T) {
 		t.Fatalf("expected PRIORITY_PREEMPTED to be terminal pre-send rejection")
 	}
 }
+
+func TestDeliveryModeTTLValidationAndClassification(t *testing.T) {
+	now := time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)
+	intPtr := func(v int) *int { return &v }
+
+	mode, ttl, exp, err := ValidateDeliveryAndTTL(CapabilitySetTemperatureSetpoint, "", nil, nil, now)
+	if err != nil || mode != DeliveryModeFailFast || ttl != nil || exp != nil {
+		t.Fatalf("default validate got (%s, %v, %v, %v)", mode, ttl, exp, err)
+	}
+
+	mode, ttl, exp, err = ValidateDeliveryAndTTL(CapabilitySetTemperatureSetpoint, DeliveryModeQueueIfOffline, intPtr(300), nil, now)
+	if err != nil || mode != DeliveryModeQueueIfOffline || ttl == nil || *ttl != 300 || exp == nil || !exp.Equal(now.Add(300*time.Second)) {
+		t.Fatalf("queue validate got (%s, %v, %v, %v)", mode, ttl, exp, err)
+	}
+
+	if _, _, _, err := ValidateDeliveryAndTTL(CapabilitySetTemperatureSetpoint, DeliveryModeQueueIfOffline, nil, nil, now); !errors.Is(err, ErrInvalidTTLSeconds) {
+		t.Fatalf("expected ErrInvalidTTLSeconds when QUEUE_IF_OFFLINE omits ttlSeconds, got %v", err)
+	}
+	if _, _, _, err := ValidateDeliveryAndTTL(CapabilitySetTemperatureSetpoint, DeliveryModeQueueIfOffline, intPtr(86401), nil, now); !errors.Is(err, ErrInvalidTTLSeconds) {
+		t.Fatalf("expected ErrInvalidTTLSeconds for ttlSeconds>86400, got %v", err)
+	}
+	if _, _, _, err := ValidateDeliveryAndTTL(CapabilityStart, DeliveryModeQueueIfOffline, intPtr(300), nil, now); !errors.Is(err, ErrOfflineQueueUnsupported) {
+		t.Fatalf("expected ErrOfflineQueueUnsupported for START, got %v", err)
+	}
+	if _, _, _, err := ValidateDeliveryAndTTL(CapabilityStop, DeliveryModeQueueIfOffline, intPtr(300), nil, now); !errors.Is(err, ErrOfflineQueueUnsupported) {
+		t.Fatalf("expected ErrOfflineQueueUnsupported for STOP, got %v", err)
+	}
+	if _, _, _, err := ValidateDeliveryAndTTL(CapabilitySetTemperatureSetpoint, DeliveryMode("BOGUS"), nil, nil, now); !errors.Is(err, ErrInvalidDeliveryMode) {
+		t.Fatalf("expected ErrInvalidDeliveryMode, got %v", err)
+	}
+
+	if !IsDeferrableOfflinePreSendCode("DISPATCH_SAFETY_DEVICE_SLEEPING") || !IsDeferrableOfflinePreSendCode("DISPATCH_SAFETY_DEVICE_NOT_ONLINE") || IsDeferrableOfflinePreSendCode("DISPATCH_SAFETY_CONTROL_LOCKED") {
+		t.Fatal("unexpected IsDeferrableOfflinePreSendCode classification")
+	}
+	if !IsTTLExpiredFailureCode("COMMAND_TTL_EXPIRED") || !IsTTLExpiredFailureCode("MQTT_EDGE_EXPIRED") || !TerminalPreSendRejection("COMMAND_TTL_EXPIRED") {
+		t.Fatal("expected TTL expiry codes to be terminal pre-send rejections")
+	}
+	if OfflineDeferBackoff(1) != 5*time.Second || OfflineDeferBackoff(2) != 10*time.Second || OfflineDeferBackoff(5) != 60*time.Second {
+		t.Fatalf("unexpected OfflineDeferBackoff progression: 1=%v 2=%v 5=%v", OfflineDeferBackoff(1), OfflineDeferBackoff(2), OfflineDeferBackoff(5))
+	}
+}

@@ -3795,6 +3795,68 @@
         }
       }
     },
+    "/api/v1/sites/{siteId}/command-batches": {
+      "get": {
+        "operationId": "listSiteCommandBatches",
+        "summary": "List recent grouped batch control submissions for a Site",
+        "parameters": [
+          { "$ref": "#/components/parameters/SiteId" },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 100 } }
+        ],
+        "responses": {
+          "200": { "description": "Grouped batch control submissions.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CommandBatchListView" } } } },
+          "4XX": { "$ref": "#/components/responses/Problem" },
+          "5XX": { "$ref": "#/components/responses/Problem" }
+        }
+      },
+      "post": {
+        "operationId": "createSiteCommandBatch",
+        "summary": "Submit a governed grouped batch control request for up to 100 targets on a Site",
+        "parameters": [
+          { "$ref": "#/components/parameters/SiteId" },
+          { "$ref": "#/components/parameters/CsrfToken" },
+          { "name": "Idempotency-Key", "in": "header", "required": true, "schema": { "type": "string", "minLength": 8, "maxLength": 128 } }
+        ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CommandBatchCreateRequest" } } } },
+        "responses": {
+          "202": { "description": "Accepted Command batch summary and per-target items.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CommandBatchView" } } } },
+          "4XX": { "$ref": "#/components/responses/Problem" },
+          "5XX": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/command-batches/{batchId}": {
+      "get": {
+        "operationId": "getSiteCommandBatch",
+        "summary": "Read a grouped batch control submission and per-target command states",
+        "parameters": [
+          { "$ref": "#/components/parameters/SiteId" },
+          { "name": "batchId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } }
+        ],
+        "responses": {
+          "200": { "description": "Grouped batch control detail.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CommandBatchView" } } } },
+          "4XX": { "$ref": "#/components/responses/Problem" },
+          "5XX": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/command-batches/{batchId}/cancel": {
+      "post": {
+        "operationId": "cancelSiteCommandBatch",
+        "summary": "Cancel remaining queued or awaiting-approval Commands in a batch",
+        "parameters": [
+          { "$ref": "#/components/parameters/SiteId" },
+          { "name": "batchId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "$ref": "#/components/parameters/CsrfToken" }
+        ],
+        "requestBody": { "required": false, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CommandBatchCancelRequest" } } } },
+        "responses": {
+          "200": { "description": "Updated Command batch and cancelled Command IDs.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CommandBatchCancelResponse" } } } },
+          "4XX": { "$ref": "#/components/responses/Problem" },
+          "5XX": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
     "/api/v1/sites/{siteId}/alarm-routing": {
       "get": {
         "operationId": "getSiteAlarmRouting",
@@ -7813,6 +7875,102 @@
         "properties": {
           "replayed": { "type": "boolean" },
           "outboxId": { "$ref": "#/components/schemas/UUIDv7" }
+        }
+      },
+      "CommandBatchTargetInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["deviceId", "pointId"],
+        "properties": {
+          "deviceId": { "$ref": "#/components/schemas/UUIDv7" },
+          "pointId": { "$ref": "#/components/schemas/UUIDv7" },
+          "parameters": { "type": "object", "maxProperties": 1, "additionalProperties": { "type": "number" } }
+        }
+      },
+      "CommandBatchCreateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["capability", "targets"],
+        "properties": {
+          "capability": {
+            "type": "string",
+            "enum": ["START", "STOP", "START_UNIT_SEQUENCE", "STOP_UNIT_SEQUENCE", "RESET_FAULT", "SET_TEMPERATURE_SETPOINT", "SET_CHILLED_WATER_TEMPERATURE_SETPOINT", "SET_FREQUENCY", "SET_FAN_SPEED", "SET_LOAD_LIMIT", "SET_OPENING"]
+          },
+          "parameters": { "type": "object", "maxProperties": 1, "additionalProperties": { "type": "number" } },
+          "deliveryMode": { "type": "string", "enum": ["FAIL_FAST", "QUEUE_IF_OFFLINE"] },
+          "ttlSeconds": { "type": "integer", "minimum": 60, "maximum": 86400 },
+          "reason": { "type": "string", "maxLength": 1000 },
+          "targets": { "type": "array", "minItems": 1, "maxItems": 100, "items": { "$ref": "#/components/schemas/CommandBatchTargetInput" } },
+          "verificationCode": { "type": "string", "pattern": "^[0-9]{6}$" }
+        }
+      },
+      "CommandBatchCancelRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [],
+        "properties": {
+          "reason": { "type": "string", "maxLength": 256 }
+        }
+      },
+      "CommandBatchItemView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["itemIndex", "deviceId", "pointId", "admitted", "status"],
+        "properties": {
+          "itemIndex": { "type": "integer", "minimum": 0 },
+          "deviceId": { "$ref": "#/components/schemas/UUIDv7" },
+          "pointId": { "$ref": "#/components/schemas/UUIDv7" },
+          "commandId": { "$ref": "#/components/schemas/UUIDv7" },
+          "admitted": { "type": "boolean" },
+          "status": { "type": "string" },
+          "rejectionCode": { "type": "string" },
+          "rejectionReason": { "type": "string" },
+          "expiresAt": { "type": "string" },
+          "nextDispatchAfter": { "type": "string" }
+        }
+      },
+      "CommandBatchView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "tenantId", "siteId", "idempotencyKey", "capability", "commandSource", "deliveryMode", "targetCount", "acceptedCount", "rejectedCount", "status", "initiatedByPrincipalId", "traceId", "reason", "createdAt", "updatedAt", "replayed", "items"],
+        "properties": {
+          "id": { "$ref": "#/components/schemas/UUIDv7" },
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "idempotencyKey": { "type": "string" },
+          "capability": { "type": "string" },
+          "commandSource": { "type": "string" },
+          "deliveryMode": { "type": "string", "enum": ["FAIL_FAST", "QUEUE_IF_OFFLINE"] },
+          "ttlSeconds": { "type": "integer", "minimum": 60, "maximum": 86400 },
+          "expiresAt": { "type": "string" },
+          "targetCount": { "type": "integer", "minimum": 0 },
+          "acceptedCount": { "type": "integer", "minimum": 0 },
+          "rejectedCount": { "type": "integer", "minimum": 0 },
+          "status": { "type": "string" },
+          "initiatedByPrincipalId": { "type": "string" },
+          "traceId": { "type": "string" },
+          "reason": { "type": "string" },
+          "createdAt": { "type": "string" },
+          "updatedAt": { "type": "string" },
+          "replayed": { "type": "boolean" },
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/CommandBatchItemView" } }
+        }
+      },
+      "CommandBatchListView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items"],
+        "properties": {
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/CommandBatchView" } }
+        }
+      },
+      "CommandBatchCancelResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["batch", "cancelledCommandIds"],
+        "properties": {
+          "batch": { "$ref": "#/components/schemas/CommandBatchView" },
+          "cancelledCommandIds": { "type": "array", "items": { "$ref": "#/components/schemas/UUIDv7" } }
         }
       },
       "AlarmRoutingQuietHours": {

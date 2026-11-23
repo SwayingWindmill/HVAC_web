@@ -574,3 +574,129 @@ func TestEvaluateControlGateHardRealtimeSafetyAndEvidenceValidation(t *testing.T
 		}
 	})
 }
+
+func TestEvaluateControlGateSleepingOfflineQueueAndTTLExpiry(t *testing.T) {
+	now := time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)
+	ttl := 120
+	exp := now.Add(120 * time.Second)
+
+	sleepingObs := &LivePointObservation{
+		EvaluationAvailability: "AVAILABLE",
+		Presence:               "SLEEPING",
+		Readiness:              "CURRENT",
+		Freshness:              "STALE",
+		Quality:                "GOOD",
+		BusinessRevision:       21,
+		ObservedAt:             now.Add(-2 * time.Minute),
+	}
+
+	t.Run("FAIL_FAST rejects SLEEPING target at submit", func(t *testing.T) {
+		_, rej := EvaluateControlGate(GateInput{
+			Phase:        GatePhaseSubmit,
+			DeviceID:     "dev-sleep-1",
+			Capability:   CapabilitySetTemperatureSetpoint,
+			ParameterKey: ParameterSetpointC,
+			Parameters:   CommandParameters{ParameterSetpointC: 24},
+			SiteMode:     SiteControlModeRemoteAuto,
+			TargetState:  sleepingObs,
+			DeliveryMode: DeliveryModeFailFast,
+			Now:          now,
+		})
+		if rej == nil || rej.Code != "COMMAND_CURRENT_STATE_UNSAFE" {
+			t.Fatalf("expected COMMAND_CURRENT_STATE_UNSAFE for SLEEPING under FAIL_FAST, got %+v", rej)
+		}
+	})
+
+	t.Run("QUEUE_IF_OFFLINE admits SLEEPING setpoint but blocks when locked or out of range", func(t *testing.T) {
+		decision, rej := EvaluateControlGate(GateInput{
+			Phase:        GatePhaseSubmit,
+			DeviceID:     "dev-sleep-1",
+			Capability:   CapabilitySetTemperatureSetpoint,
+			ParameterKey: ParameterSetpointC,
+			Parameters:   CommandParameters{ParameterSetpointC: 24},
+			SiteMode:     SiteControlModeRemoteAuto,
+			TargetState:  sleepingObs,
+			DeliveryMode: DeliveryModeQueueIfOffline,
+			TTLSeconds:   &ttl,
+			ExpiresAt:    &exp,
+			Now:          now,
+		})
+		if rej != nil || decision.Risk != RiskLow {
+			t.Fatalf("expected QUEUE_IF_OFFLINE admit for SLEEPING, got decision=%+v rej=%+v", decision, rej)
+		}
+
+		_, outOfBoundsRej := EvaluateControlGate(GateInput{
+			Phase:        GatePhaseSubmit,
+			DeviceID:     "dev-sleep-1",
+			Capability:   CapabilitySetTemperatureSetpoint,
+			ParameterKey: ParameterSetpointC,
+			Parameters:   CommandParameters{ParameterSetpointC: 999},
+			SiteMode:     SiteControlModeRemoteAuto,
+			TargetState:  sleepingObs,
+			DeliveryMode: DeliveryModeQueueIfOffline,
+			TTLSeconds:   &ttl,
+			ExpiresAt:    &exp,
+			Now:          now,
+		})
+		if outOfBoundsRej == nil || outOfBoundsRej.Code != "COMMAND_REQUEST_INVALID" {
+			t.Fatalf("expected out-of-range setpoint rejection while offline, got %+v", outOfBoundsRej)
+		}
+
+		_, lockRej := EvaluateControlGate(GateInput{
+			Phase:        GatePhaseSubmit,
+			AssetID:      "asset-1",
+			DeviceID:     "dev-sleep-1",
+			Capability:   CapabilitySetTemperatureSetpoint,
+			ParameterKey: ParameterSetpointC,
+			Parameters:   CommandParameters{ParameterSetpointC: 24},
+			SiteMode:     SiteControlModeRemoteAuto,
+			AssetLocks:   []ControlLockSnapshot{{AssetID: "asset-1", LockMode: AssetControlLockManual, BoundDeviceIDs: []string{"dev-sleep-1"}}},
+			TargetState:  sleepingObs,
+			DeliveryMode: DeliveryModeQueueIfOffline,
+			TTLSeconds:   &ttl,
+			ExpiresAt:    &exp,
+			Now:          now,
+		})
+		if lockRej == nil || lockRej.Code != "COMMAND_CONTROL_LOCKED" {
+			t.Fatalf("expected lock to still block QUEUE_IF_OFFLINE at submit, got %+v", lockRej)
+		}
+	})
+
+	t.Run("pre-dispatch returns DISPATCH_SAFETY_DEVICE_SLEEPING before expiry and COMMAND_TTL_EXPIRED after expiry", func(t *testing.T) {
+		_, sleepRej := EvaluateControlGate(GateInput{
+			Phase:        GatePhasePreDispatch,
+			CommandID:    "cmd-sleep-1",
+			DeviceID:     "dev-sleep-1",
+			Capability:   CapabilitySetTemperatureSetpoint,
+			ParameterKey: ParameterSetpointC,
+			Parameters:   CommandParameters{ParameterSetpointC: 24},
+			SiteMode:     SiteControlModeRemoteAuto,
+			TargetState:  sleepingObs,
+			DeliveryMode: DeliveryModeQueueIfOffline,
+			TTLSeconds:   &ttl,
+			ExpiresAt:    &exp,
+			Now:          now.Add(10 * time.Second),
+		})
+		if sleepRej == nil || sleepRej.Code != "DISPATCH_SAFETY_DEVICE_SLEEPING" {
+			t.Fatalf("expected DISPATCH_SAFETY_DEVICE_SLEEPING at pre-dispatch, got %+v", sleepRej)
+		}
+
+		_, expRej := EvaluateControlGate(GateInput{
+			Phase:        GatePhasePreDispatch,
+			CommandID:    "cmd-sleep-1",
+			DeviceID:     "dev-sleep-1",
+			Capability:   CapabilitySetTemperatureSetpoint,
+			ParameterKey: ParameterSetpointC,
+			Parameters:   CommandParameters{ParameterSetpointC: 24},
+			SiteMode:     SiteControlModeRemoteAuto,
+			TargetState:  sleepingObs,
+			DeliveryMode: DeliveryModeQueueIfOffline,
+			TTLSeconds:   &ttl,
+			ExpiresAt:    &exp,
+			Now:          exp,
+		})
+		if expRej == nil || expRej.Code != "COMMAND_TTL_EXPIRED" {
+			t.Fatalf("expected COMMAND_TTL_EXPIRED once ExpiresAt reached, got %+v", expRej)
+		}
+	})
+}

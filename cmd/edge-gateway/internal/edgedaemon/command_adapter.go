@@ -30,6 +30,7 @@ const (
 	commandWALFileName       = "command-ledger.wal"
 	commandWALMaxScanBytes   = 4 * 1024 * 1024
 	commandMaxVerifyWindowMS = int64((10 * time.Minute) / time.Millisecond)
+	commandMaxTTL            = 24 * time.Hour
 )
 
 // CommandDownlinkTopic returns the canonical MQTT topic for cloud commands targeting gatewayID.
@@ -321,6 +322,11 @@ func (a *CommandAdapter) Handle(ctx context.Context, payload []byte) (CommandRep
 		reply := expiredReply(base, "COMMAND_EXPIRED")
 		return a.persistImmediateTerminal(env, reply), true
 	}
+	issuedAt := time.UnixMilli(env.IssuedAt).UTC()
+	if expiresAt.Sub(issuedAt) > commandMaxTTL || expiresAt.Sub(now) > commandMaxTTL {
+		reply := expiredReply(base, "TTL_EXCEEDS_MAX")
+		return a.persistImmediateTerminal(env, reply), true
+	}
 	if _, protected := edgecontrol.ClassifyHardRealtimeProtection(env.PointCode, env.CommandCode, nil); protected {
 		reply := rejectedReply(base, edgecontrol.ReasonHardRealtimeSafetyBoundary)
 		return a.persistImmediateTerminal(env, reply), true
@@ -539,13 +545,14 @@ func (a *CommandAdapter) ResolveCycle(now time.Time, cycle edgecontrol.CycleResu
 
 	for _, id := range ids {
 		entry := a.pendingByID[id]
+		if !now.Before(entry.expiresAt) && !hasWriteResult(writesByAddr, entry.address) {
+			reply := expiredReply(entry.base, "COMMAND_EXPIRED")
+			reply.EventTime = now.UnixMilli()
+			a.completePendingLocked(entry, reply, true)
+			continue
+		}
 		decision, hasDecision := decisionsByAddr[entry.address]
 		if !hasDecision {
-			if !now.Before(entry.expiresAt) {
-				reply := expiredReply(entry.base, "COMMAND_EXPIRED")
-				reply.EventTime = now.UnixMilli()
-				a.completePendingLocked(entry, reply, true)
-			}
 			continue
 		}
 

@@ -22,6 +22,7 @@ services:
       - ../../modules/command/migrations/command-audit-immutability.sql:/docker-entrypoint-initdb.d/013_command_audit_immutability.sql:ro
       - ../../modules/command/migrations/command-due-work-tenants.sql:/docker-entrypoint-initdb.d/014_command_due_work_tenants.sql:ro
       - ../../modules/command/migrations/control-alarm-dead-letter-inspect.sql:/docker-entrypoint-initdb.d/015_control_alarm_dead_letter_inspect.sql:ro
+      - ../../modules/command/migrations/command-batch-offline-queue-ttl.sql:/docker-entrypoint-initdb.d/016_command_batch_offline_queue_ttl.sql:ro
     ports:
       - "127.0.0.1:${S3_POSTGRES_HOST_PORT:-57432}:5432"
     healthcheck:

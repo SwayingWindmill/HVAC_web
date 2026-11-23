@@ -20,7 +20,10 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 )
 
-const mqttCommandSchemaVersion = "2.0"
+const (
+	mqttCommandSchemaVersion = "2.0"
+	mqttCommandMaxTTL        = 24 * time.Hour
+)
 
 type mqttCommandPolicy struct {
 	RequiresReadback     bool  `json:"requiresReadback"`
@@ -508,6 +511,14 @@ func (handler *edgeCommandHandler) evaluate(request mqttCommandEnvelope) mqttCom
 		base.ReasonCode = &reason
 		return base
 	}
+	issuedAt := time.UnixMilli(request.IssuedAt).UTC()
+	expiresAt := time.UnixMilli(request.ExpireAt).UTC()
+	if expiresAt.Sub(issuedAt) > mqttCommandMaxTTL || expiresAt.Sub(now) > mqttCommandMaxTTL {
+		base.EdgeStatus = "EXPIRED"
+		reason := "TTL_EXCEEDS_MAX"
+		base.ReasonCode = &reason
+		return base
+	}
 	if request.Policy.VerificationWindowMS < 0 || request.Policy.VerificationWindowMS > int64((10*time.Minute)/time.Millisecond) {
 		return edgeRejected(base, "POLICY_INVALID")
 	}
@@ -567,7 +578,7 @@ func (handler *edgeCommandHandler) evaluate(request mqttCommandEnvelope) mqttCom
 		return handler.finish(deviceID, request.PayloadHash, edgeRejected(base, reason))
 	}
 
-	waitDuration := time.UnixMilli(request.ExpireAt).Sub(now)
+	waitDuration := time.UnixMilli(request.ExpireAt).Sub(handler.now().UTC())
 	if waitDuration > 25*time.Second {
 		waitDuration = 25 * time.Second
 	}

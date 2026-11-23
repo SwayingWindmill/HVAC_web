@@ -25,6 +25,7 @@ import (
 type commandRuntime struct {
 	store               *connectivity.Store
 	dispatcher          *commanddispatcher.DurableDispatcher
+	dispatcherClient    *commanddispatcher.RuntimeClient
 	dispatcherWorker    string
 	verifier            *commanddispatcher.DurableVerificationWorker
 	verifierWorker      string
@@ -106,6 +107,7 @@ func loadCommandRuntime(ctx context.Context, store *connectivity.Store, logger *
 	return &commandRuntime{
 		store:               store,
 		dispatcher:          dispatcher,
+		dispatcherClient:    dispatcherRuntimeClient,
 		dispatcherWorker:    dispatcherWorkerID,
 		verifier:            verifier,
 		verifierWorker:      verifierWorkerID,

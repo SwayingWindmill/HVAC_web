@@ -95,7 +95,35 @@ func (h *OperatorHTTPHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 				case "control-shutdown":
 					h.dispatchMethod(writer, request, http.MethodPost, func() { h.handlePostSiteControlShutdown(writer, request, operator, siteID) })
 					return
+				case "command-batches":
+					switch request.Method {
+					case http.MethodPost:
+						h.handleCreateCommandBatch(writer, request, operator, siteID)
+					case http.MethodGet:
+						h.handleListCommandBatches(writer, request, operator, siteID)
+					default:
+						writer.Header().Set("Allow", "GET, POST")
+						writeControlProblem(writer, request, &ControlError{
+							HTTPStatus: http.StatusMethodNotAllowed, Code: "COMMAND_METHOD_NOT_ALLOWED",
+							Title: "Method not allowed", Detail: "Unsupported HTTP method for operator command batches.",
+						})
+					}
+					return
 				}
+			}
+		} else if len(segments) == 3 && segments[1] == "command-batches" {
+			siteID, siteErr := url.PathUnescape(segments[0])
+			batchID, batchErr := url.PathUnescape(segments[2])
+			if siteErr == nil && batchErr == nil && siteID != "" && batchID != "" {
+				h.dispatchMethod(writer, request, http.MethodGet, func() { h.handleGetCommandBatch(writer, request, operator, siteID, batchID) })
+				return
+			}
+		} else if len(segments) == 4 && segments[1] == "command-batches" && segments[3] == "cancel" {
+			siteID, siteErr := url.PathUnescape(segments[0])
+			batchID, batchErr := url.PathUnescape(segments[2])
+			if siteErr == nil && batchErr == nil && siteID != "" && batchID != "" {
+				h.dispatchMethod(writer, request, http.MethodPost, func() { h.handleCancelCommandBatch(writer, request, operator, siteID, batchID) })
+				return
 			}
 		} else if len(segments) == 4 && segments[1] == "devices" && segments[3] == "priority-lock" {
 			siteID, siteErr := url.PathUnescape(segments[0])
@@ -517,6 +545,88 @@ func (h *OperatorHTTPHandler) handleReplayControlAlarmDeadLetter(writer http.Res
 		return
 	}
 	resp, err := h.config.Authority.ReplayControlAlarmDeadLetter(request.Context(), operator, siteID, outboxID)
+	if err != nil {
+		writeControlError(writer, request, err)
+		return
+	}
+	writer.Header().Set("Cache-Control", "private, no-store")
+	writeCommandJSON(writer, http.StatusOK, resp)
+}
+
+func (h *OperatorHTTPHandler) handleCreateCommandBatch(writer http.ResponseWriter, request *http.Request, operator OperatorIdentity, siteID string) {
+	var input SubmitCommandBatchInput
+	if !decodeStrictOperatorJSON(writer, request, &input, maximumInternalRequestBody) {
+		writeControlProblem(writer, request, &ControlError{
+			HTTPStatus: http.StatusBadRequest, Code: "COMMAND_REQUEST_INVALID",
+			Title: "Command request invalid", Detail: "The Command batch request payload is invalid.",
+		})
+		return
+	}
+	input.SiteID = siteID
+	if strings.TrimSpace(input.IdempotencyKey) == "" {
+		input.IdempotencyKey = strings.TrimSpace(request.Header.Get("Idempotency-Key"))
+	}
+	input.TraceID = commandmodel.NormalizeTraceID(input.TraceID)
+	if input.TraceID == "" {
+		input.TraceID = traceIDFromHTTPRequest(request)
+	}
+	view, err := h.config.Authority.SubmitOperatorCommandBatch(request.Context(), operator, input)
+	if err != nil {
+		writeControlError(writer, request, err)
+		return
+	}
+	writer.Header().Set("Location", "/api/v1/sites/"+url.PathEscape(siteID)+"/command-batches/"+url.PathEscape(view.ID))
+	writer.Header().Set("Cache-Control", "private, no-store")
+	writeCommandJSON(writer, http.StatusAccepted, view)
+}
+
+func (h *OperatorHTTPHandler) handleListCommandBatches(writer http.ResponseWriter, request *http.Request, operator OperatorIdentity, siteID string) {
+	limit := 50
+	if raw := strings.TrimSpace(request.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > MaximumListedCommands {
+			writeControlProblem(writer, request, &ControlError{
+				HTTPStatus: http.StatusBadRequest, Code: "COMMAND_LIST_REQUEST_INVALID",
+				Title: "Command batch list request invalid", Detail: "limit must be between 1 and 100.",
+			})
+			return
+		}
+		limit = parsed
+	}
+	view, err := h.config.Authority.ListOperatorCommandBatches(request.Context(), operator, siteID, limit)
+	if err != nil {
+		writeControlError(writer, request, err)
+		return
+	}
+	writer.Header().Set("Cache-Control", "private, no-store")
+	writeCommandJSON(writer, http.StatusOK, view)
+}
+
+func (h *OperatorHTTPHandler) handleGetCommandBatch(writer http.ResponseWriter, request *http.Request, operator OperatorIdentity, siteID, batchID string) {
+	view, err := h.config.Authority.GetOperatorCommandBatch(request.Context(), operator, siteID, batchID)
+	if err != nil {
+		writeControlError(writer, request, err)
+		return
+	}
+	writer.Header().Set("Cache-Control", "private, no-store")
+	writeCommandJSON(writer, http.StatusOK, view)
+}
+
+func (h *OperatorHTTPHandler) handleCancelCommandBatch(writer http.ResponseWriter, request *http.Request, operator OperatorIdentity, siteID, batchID string) {
+	var body CommandBatchCancelInput
+	present, ok := decodeOptionalStrictOperatorJSON(request, &body, 4096)
+	if !ok {
+		writeControlProblem(writer, request, &ControlError{
+			HTTPStatus: http.StatusBadRequest, Code: "COMMAND_CANCEL_REQUEST_INVALID",
+			Title: "Command batch cancel invalid", Detail: "The Command batch cancel request payload is invalid.",
+		})
+		return
+	}
+	reason := ""
+	if present {
+		reason = strings.TrimSpace(body.Reason)
+	}
+	resp, err := h.config.Authority.CancelOperatorCommandBatch(request.Context(), operator, siteID, batchID, reason)
 	if err != nil {
 		writeControlError(writer, request, err)
 		return

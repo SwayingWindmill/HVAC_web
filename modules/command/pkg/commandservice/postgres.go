@@ -260,6 +260,10 @@ func (store *PostgresStore) submitOnce(ctx context.Context, request commandmodel
 	preconditionMode, bypassReason := normalizedPrecondition(request)
 
 	now := store.now().UTC()
+	deliveryMode, ttlSeconds, expiresAt, err := commandmodel.ValidateDeliveryAndTTL(request.Capability, request.DeliveryMode, request.TTLSeconds, request.ExpiresAt, now)
+	if err != nil {
+		return SubmitResult{}, err
+	}
 	ids, err := store.commandIDs(now)
 	if err != nil {
 		return SubmitResult{}, fmt.Errorf("allocate command identifiers: %w", err)
@@ -384,6 +388,11 @@ WHERE tenant_id = $1::uuid AND device_id = $2::uuid
 		BypassReason:          bypassReason,
 		PriorityTier:          priorityTier,
 		CommandSource:         commandSource,
+		DeliveryMode:          deliveryMode,
+		TTLSeconds:            ttlSeconds,
+		ExpiresAt:             expiresAt,
+		BatchID:               cloneStringPtr(request.BatchID),
+		BatchItemIndex:        cloneIntPtr(request.BatchItemIndex),
 		SnapshotRevision:      request.CurrentState.BusinessRevision,
 		DeviceCommandSequence: sequence,
 		Status:                finalStatus,
@@ -397,19 +406,22 @@ INSERT INTO command_runtime.command_intents (
   command_id, tenant_id, site_id, device_id, principal_id, idempotency_key,
   capability_name, capability_revision, risk_level, risk_rule_revision, approval_policy,
   retry_policy, canonical_parameters, verification_point_key, payload_hash, precondition_mode, bypass_reason, snapshot_revision, device_command_sequence,
-  status, version, active_execution_fence, created_at, updated_at, point_id, trace_id, priority_tier, command_source
+  status, version, active_execution_fence, created_at, updated_at, point_id, trace_id, priority_tier, command_source,
+  delivery_mode, ttl_seconds, expires_at, next_dispatch_after, batch_id, batch_item_index
 ) VALUES (
   $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6,
   $7, $8, $9, $10, $11,
   $12, $13::jsonb, $14, $15, $16, $17,
-  $18, $19, $20, $21, 0, $22, $22, $23::uuid, $24, $25, $26
+  $18, $19, $20, $21, 0, $22, $22, $23::uuid, $24, $25, $26,
+  $27, $28, $29, NULL, $30::uuid, $31
 )
 `, intent.ID, intent.TenantID, intent.SiteID, intent.DeviceID, intent.PrincipalID,
 		intent.IdempotencyKey, intent.Capability, intent.CapabilityRevision, intent.Risk,
 		intent.RiskSnapshot.RuleRevision, intent.ApprovalPolicy, intent.RetryPolicy, parameters,
 		intent.VerificationPointKey, intent.PayloadHash, string(intent.PreconditionMode), intent.BypassReason,
 		intent.SnapshotRevision, intent.DeviceCommandSequence,
-		intent.Status, intent.Version, now, intent.PointID, intent.TraceID, string(intent.PriorityTier), string(intent.CommandSource)); err != nil {
+		intent.Status, intent.Version, now, intent.PointID, intent.TraceID, string(intent.PriorityTier), string(intent.CommandSource),
+		string(intent.DeliveryMode), intent.TTLSeconds, intent.ExpiresAt, intent.BatchID, intent.BatchItemIndex); err != nil {
 		return SubmitResult{}, classifyCommandWriteError("insert command intent", err)
 	}
 	if _, err := tx.Exec(ctx, `
@@ -721,14 +733,15 @@ WHERE tenant_id = $1::uuid AND device_id = $2::uuid AND idempotency_key = $3
 
 func loadIntent(ctx context.Context, tx pgx.Tx, tenantID, commandID string) (commandmodel.CommandIntent, error) {
 	var intent commandmodel.CommandIntent
-	var capability, risk, retry, status, approvalPolicy, preconditionMode, priorityTier, commandSource string
+	var capability, risk, retry, status, approvalPolicy, preconditionMode, priorityTier, commandSource, deliveryMode string
 	var parameters []byte
 	err := tx.QueryRow(ctx, `
 SELECT command_id::text, tenant_id::text, site_id::text, device_id::text, principal_id::text,
        idempotency_key, trace_id, capability_name, capability_revision, risk_level, risk_rule_revision,
        approval_policy, retry_policy, canonical_parameters, verification_point_key,
        payload_hash, precondition_mode, bypass_reason, snapshot_revision, device_command_sequence, status, version,
-       active_execution_fence, created_at, updated_at, point_id::text, priority_tier, command_source
+       active_execution_fence, created_at, updated_at, point_id::text, priority_tier, command_source,
+       delivery_mode, ttl_seconds, expires_at, next_dispatch_after, batch_id::text, batch_item_index
 FROM command_runtime.command_intents
 WHERE tenant_id = $1::uuid AND command_id = $2::uuid
 `, tenantID, commandID).Scan(
@@ -738,6 +751,7 @@ WHERE tenant_id = $1::uuid AND command_id = $2::uuid
 		&intent.PayloadHash, &preconditionMode, &intent.BypassReason, &intent.SnapshotRevision, &intent.DeviceCommandSequence,
 		&status, &intent.Version, &intent.ActiveFence, &intent.CreatedAt, &intent.UpdatedAt, &intent.PointID,
 		&priorityTier, &commandSource,
+		&deliveryMode, &intent.TTLSeconds, &intent.ExpiresAt, &intent.NextDispatchAfter, &intent.BatchID, &intent.BatchItemIndex,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return commandmodel.CommandIntent{}, ErrCommandNotFound
@@ -756,6 +770,7 @@ WHERE tenant_id = $1::uuid AND command_id = $2::uuid
 	intent.PreconditionMode = commandmodel.PreconditionMode(preconditionMode)
 	intent.PriorityTier = commandmodel.PriorityTier(priorityTier)
 	intent.CommandSource = commandmodel.CommandSource(commandSource)
+	intent.DeliveryMode = commandmodel.NormalizeDeliveryMode(commandmodel.DeliveryMode(deliveryMode))
 	intent.Status = commandmodel.IntentStatus(status)
 	intent.TraceID = commandmodel.NormalizeTraceID(intent.TraceID)
 

@@ -92,6 +92,10 @@ type GateInput struct {
 	TargetState             *LivePointObservation
 	Interlocks              []InterlockCheck
 	PeerStates              map[string]*LivePointObservation // keyed by deviceID + "\x00" + key
+	DeliveryMode            DeliveryMode
+	TTLSeconds              *int
+	ExpiresAt               *time.Time
+	Now                     time.Time
 	RequireStepUp           bool
 	StepUpVerified          bool
 }
@@ -269,6 +273,19 @@ func isAutomatedWorkloadWithoutOverride(in GateInput, precond PreconditionMode) 
 
 func evaluateSubmitGate(in GateInput, profile CapabilityProfile, precond PreconditionMode) (GateDecision, *GateRejection) {
 	reason := strings.TrimSpace(in.BypassReason)
+	mode, _, _, deliveryErr := ValidateDeliveryAndTTL(in.Capability, in.DeliveryMode, in.TTLSeconds, in.ExpiresAt, in.Now)
+	if deliveryErr != nil {
+		return GateDecision{}, &GateRejection{
+			HTTPStatus: http.StatusBadRequest,
+			Code:       "COMMAND_REQUEST_INVALID",
+			Title:      "Command request invalid",
+			Detail:     deliveryErr.Error(),
+		}
+	}
+
+	onlineLive := isSubmitStateOnline(in.TargetState)
+	deferredOffline := false
+
 	switch precond {
 	case PreconditionEmergencyBypass:
 		if !AllowsEmergencyPreconditionBypass(in.Capability, in.PriorityTier, in.CommandSource, in.IdempotencyKey, reason) {
@@ -280,19 +297,28 @@ func evaluateSubmitGate(in GateInput, profile CapabilityProfile, precond Precond
 			}
 		}
 	case PreconditionRequireCurrentState:
-		if rejection := validateSubmitLiveState(in.TargetState); rejection != nil {
+		if mode == DeliveryModeQueueIfOffline && !onlineLive {
+			if isOnlineBadQualityState(in.TargetState) {
+				if rejection := validateSubmitLiveState(in.TargetState); rejection != nil {
+					return GateDecision{}, rejection
+				}
+			}
+			deferredOffline = true
+		} else if rejection := validateSubmitLiveState(in.TargetState); rejection != nil {
 			return GateDecision{}, rejection
 		}
 	default:
 		return GateDecision{}, rejectInvalidParameters(GatePhaseSubmit)
 	}
 
-	if rejection := evaluatePeerInterlocks(in, GatePhaseSubmit); rejection != nil {
-		return GateDecision{}, rejection
+	if !deferredOffline {
+		if rejection := evaluatePeerInterlocks(in, GatePhaseSubmit); rejection != nil {
+			return GateDecision{}, rejection
+		}
 	}
 
 	var currentVal *float64
-	if in.TargetState != nil {
+	if onlineLive && in.TargetState != nil {
 		currentVal = in.TargetState.CurrentValue
 	}
 	risk, _, ok := EvaluateRiskLevel(in.Capability, in.Parameters, currentVal)
@@ -300,6 +326,11 @@ func evaluateSubmitGate(in GateInput, profile CapabilityProfile, precond Precond
 		if precond == PreconditionEmergencyBypass &&
 			AllowsEmergencyPreconditionBypass(in.Capability, in.PriorityTier, in.CommandSource, in.IdempotencyKey, reason) &&
 			currentVal == nil {
+			risk = profile.BaseRisk
+		} else if deferredOffline && currentVal == nil {
+			if !validateStaticSetpointBounds(profile, in.Parameters) {
+				return GateDecision{}, rejectInvalidParameters(GatePhaseSubmit)
+			}
 			risk = profile.BaseRisk
 		} else {
 			return GateDecision{}, rejectInvalidParameters(GatePhaseSubmit)
@@ -315,6 +346,21 @@ func evaluateSubmitGate(in GateInput, profile CapabilityProfile, precond Precond
 }
 
 func evaluatePreDispatchGate(in GateInput, profile CapabilityProfile, precond PreconditionMode, actuation string) (GateDecision, *GateRejection) {
+	checkNow := in.Now
+	if checkNow.IsZero() {
+		checkNow = time.Now().UTC()
+	} else {
+		checkNow = checkNow.UTC()
+	}
+	if in.ExpiresAt != nil && !in.ExpiresAt.IsZero() && !checkNow.Before(in.ExpiresAt.UTC()) {
+		return GateDecision{}, &GateRejection{
+			HTTPStatus: http.StatusConflict,
+			Code:       "COMMAND_TTL_EXPIRED",
+			Title:      "Command TTL expired",
+			Detail:     "Command survival TTL elapsed before dispatch.",
+		}
+	}
+
 	if in.Capability == CapabilityStop && len(in.Interlocks) == 0 && actuation == "EMERGENCY_DO_RELEASE" {
 		return GateDecision{
 			PreconditionMode: precond,
@@ -376,6 +422,41 @@ func evaluatePreDispatchGate(in GateInput, profile CapabilityProfile, precond Pr
 	}, nil
 }
 
+func isSubmitStateOnline(state *LivePointObservation) bool {
+	if state == nil {
+		return false
+	}
+	return state.EvaluationAvailability == "AVAILABLE" &&
+		state.Presence == "ONLINE" &&
+		state.Readiness == "CURRENT" &&
+		state.Freshness == "FRESH" &&
+		state.Quality == "GOOD" &&
+		state.BusinessRevision != 0 &&
+		!state.ObservedAt.IsZero()
+}
+
+func isOnlineBadQualityState(state *LivePointObservation) bool {
+	if state == nil {
+		return false
+	}
+	return state.EvaluationAvailability == "AVAILABLE" &&
+		state.Presence == "ONLINE" &&
+		state.Readiness == "CURRENT" &&
+		state.Freshness == "FRESH" &&
+		state.Quality != "GOOD"
+}
+
+func validateStaticSetpointBounds(profile CapabilityProfile, params CommandParameters) bool {
+	if profile.ParameterKey == "" {
+		return true
+	}
+	val, ok := params[profile.ParameterKey]
+	if !ok {
+		return false
+	}
+	return val >= profile.Minimum && val <= profile.Maximum
+}
+
 func validateSubmitLiveState(state *LivePointObservation) *GateRejection {
 	if state == nil {
 		return &GateRejection{
@@ -386,14 +467,16 @@ func validateSubmitLiveState(state *LivePointObservation) *GateRejection {
 			Retryable:  true,
 		}
 	}
-	if state.EvaluationAvailability != "AVAILABLE" || state.Presence != "ONLINE" ||
-		state.Readiness != "CURRENT" || state.Freshness != "FRESH" ||
-		state.Quality != "GOOD" || state.BusinessRevision == 0 || state.ObservedAt.IsZero() {
+	if !isSubmitStateOnline(state) {
+		detail := "The current Device state does not satisfy the control preconditions."
+		if strings.EqualFold(strings.TrimSpace(state.Presence), "SLEEPING") {
+			detail = "Target Device is currently SLEEPING; use deliveryMode=QUEUE_IF_OFFLINE with ttlSeconds or retry after wake-up."
+		}
 		return &GateRejection{
 			HTTPStatus: http.StatusConflict,
 			Code:       "COMMAND_CURRENT_STATE_UNSAFE",
 			Title:      "Current state unsafe",
-			Detail:     "The current Device state does not satisfy the control preconditions.",
+			Detail:     detail,
 		}
 	}
 	return nil
@@ -406,6 +489,8 @@ func preDispatchStateFailureCode(state *LivePointObservation) string {
 	switch {
 	case state.EvaluationAvailability != "AVAILABLE":
 		return "DISPATCH_SAFETY_STATE_UNAVAILABLE"
+	case strings.EqualFold(strings.TrimSpace(state.Presence), "SLEEPING"):
+		return "DISPATCH_SAFETY_DEVICE_SLEEPING"
 	case state.Presence != "ONLINE":
 		return "DISPATCH_SAFETY_DEVICE_NOT_ONLINE"
 	case state.Readiness != "CURRENT":

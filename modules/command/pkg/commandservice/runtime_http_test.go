@@ -40,6 +40,10 @@ type runtimeStoreStub struct {
 	syncTenantID         string
 	syncedProfiles       []CapabilityProfileSyncItem
 	syncErr              error
+	wakeTenantID         string
+	wakeDeviceIDs        []string
+	wakeCount            int
+	wakeErr              error
 }
 
 func (stub *runtimeStoreStub) ClaimDispatch(_ context.Context, tenantID string, _ string, _ time.Duration) (commandmodel.DispatchEnvelope, error) {
@@ -92,6 +96,15 @@ func (stub *runtimeStoreStub) SyncCapabilityProfiles(_ context.Context, tenantID
 	stub.syncTenantID = tenantID
 	stub.syncedProfiles = append([]CapabilityProfileSyncItem(nil), profiles...)
 	return len(profiles), nil
+}
+
+func (stub *runtimeStoreStub) WakeDeferredDispatches(_ context.Context, tenantID string, deviceIDs []string) (int, error) {
+	if stub.wakeErr != nil {
+		return 0, stub.wakeErr
+	}
+	stub.wakeTenantID = tenantID
+	stub.wakeDeviceIDs = append([]string(nil), deviceIDs...)
+	return stub.wakeCount, nil
 }
 
 func TestRuntimeHTTPDispatcherClaimsWithinTheNamedTenantAndResolves(t *testing.T) {
@@ -349,5 +362,52 @@ func TestRuntimeHTTPClaimAnyDispatchAndVerificationRoutes(t *testing.T) {
 	handler.ServeHTTP(transientRec, runtimeRequest(t, http.MethodPost, InternalDispatchClaimAnyPath, body, "spiffe://hvac.local/command-dispatcher"))
 	if transientRec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("transient safety eval claim-any status=%d, want 503", transientRec.Code)
+	}
+}
+
+func TestRuntimeHTTPWakeDeferredDispatchesAuthorizationAndValidation(t *testing.T) {
+	stub := &runtimeStoreStub{wakeCount: 3}
+	handler, err := NewRuntimeHTTPHandler(RuntimeHTTPConfig{
+		Store: stub, DispatcherSPIFFE: "spiffe://hvac.local/command-dispatcher", VerifierSPIFFE: "spiffe://hvac.local/command-verifier",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	payload := fmt.Sprintf(`{"tenantId":"%s","deviceIds":["%s","%s"]}`, runtimeTestOrganization, runtimeTestDevice, runtimeTestDevice)
+	forbiddenRec := httptest.NewRecorder()
+	handler.ServeHTTP(forbiddenRec, runtimeRequest(t, http.MethodPost, InternalDispatchWakePath, payload, "spiffe://hvac.local/command-verifier"))
+	if forbiddenRec.Code != http.StatusForbidden {
+		t.Fatalf("wrong SPIFFE status=%d, want 403", forbiddenRec.Code)
+	}
+
+	badRec := httptest.NewRecorder()
+	handler.ServeHTTP(badRec, runtimeRequest(t, http.MethodPost, InternalDispatchWakePath, `{"tenantId":"bad","deviceIds":["`+runtimeTestDevice+`"]}`, "spiffe://hvac.local/command-dispatcher"))
+	if badRec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid tenant status=%d, want 400", badRec.Code)
+	}
+
+	okRec := httptest.NewRecorder()
+	handler.ServeHTTP(okRec, runtimeRequest(t, http.MethodPost, InternalDispatchWakePath, payload, "spiffe://hvac.local/command-dispatcher"))
+	if okRec.Code != http.StatusOK || stub.wakeTenantID != runtimeTestOrganization || len(stub.wakeDeviceIDs) != 1 || stub.wakeDeviceIDs[0] != runtimeTestDevice {
+		t.Fatalf("ok wake response=%d body=%s stub=(%s %v)", okRec.Code, okRec.Body.String(), stub.wakeTenantID, stub.wakeDeviceIDs)
+	}
+
+	// Verify ControlAuthority delegates DeferredDispatchWaker to underlying runtime store.
+	now := time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)
+	authorityHarness, err := NewControlAuthorityForTest(func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrappedHandler, err := NewRuntimeHTTPHandler(RuntimeHTTPConfig{
+		Store: authorityHarness.Authority, DispatcherSPIFFE: "spiffe://hvac.local/command-dispatcher", VerifierSPIFFE: "spiffe://hvac.local/command-verifier",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrappedRec := httptest.NewRecorder()
+	wrappedHandler.ServeHTTP(wrappedRec, runtimeRequest(t, http.MethodPost, InternalDispatchWakePath, payload, "spiffe://hvac.local/command-dispatcher"))
+	if wrappedRec.Code != http.StatusOK {
+		t.Fatalf("wrapped authority wake status=%d body=%s", wrappedRec.Code, wrappedRec.Body.String())
 	}
 }
