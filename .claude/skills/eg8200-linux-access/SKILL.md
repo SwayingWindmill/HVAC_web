@@ -9,7 +9,7 @@ description: "Establish, operate, and troubleshoot SSH Linux access to EG8200 ed
 
 ## 1. 架构与代码定位
 
-EG8200 侧 Node-RED（`tab-platform-tunnel`）主动向平台 `:443/gateway/v1/tunnel` 发起 `Upgrade: hvac-gateway-tunnel/v1` 双向 TLS 长连接 -> 平台 `nginx` 校验网关证书并通过 `X-Gateway-Client-Cert` 转发给 `connectivity:8448` -> 宿主机 `systemd` 回环套接字按需桥接至网关本机端口：
+EG8200 侧 `hvac-edge-gateway` 守护进程（或在未退场网关上的 Node-RED `tab-platform-tunnel`）主动向平台 `:443/gateway/v1/tunnel` 发起 `Upgrade: hvac-gateway-tunnel/v1` 双向 TLS 长连接 -> 平台 `nginx` 校验网关证书并通过 `X-Gateway-Client-Cert` 转发给 `connectivity:8448` -> 宿主机 `systemd` 回环套接字按需桥接至网关本机端口：
 
 - `127.0.0.1:18800` -> 网关 `127.0.0.1:1880`（Node-RED 管理端，常开）
 - `127.0.0.1:18822` -> 网关 `127.0.0.1:22`（SSH，默认关闭，需双端同时放行后才可用）
@@ -19,7 +19,7 @@ EG8200 侧 Node-RED（`tab-platform-tunnel`）主动向平台 `:443/gateway/v1/t
 | 服务端隧道白名单与回环监听器 | `modules/connectivity/pkg/tunnel/tunnel.go`（`AllowedTargetPort = 1880`、`SSHTargetPort = 22`、`IsSupportedTargetPort`、`WithAllowedTargetPorts`、`StartLoopbackListenerForPort`） | 仅允许 `{1880, 22}`；`OpenStream` 按允许集合 fail-closed 拦截其他端口 |
 | 运行时开关与回环地址校验 | `cmd/connectivity/credential_runtime.go`（`CONNECTIVITY_TUNNEL_SSH_LOOPBACK_ADDR`、`ValidateLoopbackAddr`） | 环境变量默认留空关闭；启用时拒绝 `0.0.0.0` 与 `:0` |
 | Compose 与主机 systemd 模板 | `deploy/platform/phase1/compose.yaml`、`deploy/platform/phase1/systemd/hvac-gateway-ssh-loopback.{socket,@.service}` | 透传环境变量并限定仅宿主机 `127.0.0.1:18822` 拉起 `-tunnel-stdio 127.0.0.1:18822` |
-| 网关侧隧道客户端 | `edge/node-red/gateway-nodered-tunnel.ts`（`SSH_TARGET_PORT = 22`、`allowedTargetPorts: [1880, 22]`、`buildGatewayTunnelFlow`） | 网关本机端口映射表，拒绝白名单外端口并避免发往本机无效建连 |
+| 网关侧隧道客户端 | `cmd/edge-gateway/internal/edgedaemon/tunnel_client.go`（`AllowedTargetPorts: [22]`）；过渡期遗留 Node-RED 参考 `edge/node-red/gateway-nodered-tunnel.ts` | 网关本机端口映射表，拒绝白名单外端口并避免发往本机无效建连 |
 | SSH 建流审计表 | `infra/connectivity/postgres/init/gateway-tunnel-audit.sql`（`connectivity.gateway_tunnel_audit`） | 记录 `SESSION_OPENED`、`SESSION_CLOSED`、`STREAM_OPENED`、`STREAM_REJECTED`（含 `target_port` 与流量字节数） |
 | 1880 隧道与证书续签说明 | `docs/operations/gateway-nodered-tunnel.md` | 节点流同步脚本与 14 天双向 TLS 证书自动续签规范 |
 
@@ -29,11 +29,11 @@ EG8200 侧 Node-RED（`tab-platform-tunnel`）主动向平台 `:443/gateway/v1/t
 
 - **系统与 init**：`Ubuntu 20.04.5 LTS`（Focal），内核 `Linux IOTRouter 5.4.61 #19 SMP PREEMPT armv7l`，`PID 1` 为 `systemd 245`。
 - **CPU 与 Go 交叉编译目标**：双核 ARMv7 Cortex-A7（`vfpv3` / `vfpv4` / `neon` / `idiva` / `idivt`），编译边缘二进制固定使用 `GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0`。
-- **内存预算**：总计 `485 MiB`（`512 MB` DDR），`node-red` 单进程约占 `157 MiB` RSS，空余约 `173 MiB`。
+- **内存与进程实况（松雅轩已切流 Go 进程）**：总计 `485 MiB`（`512 MB` DDR）；原 `node-red` 单进程约占 `157 MiB` RSS，2026-11-23 切流 Go `hvac-edge-gateway` `0.1.4` 并 `systemctl mask node-red.service` + 停用 `ZHCSharpMid` 后，单进程兼管 `/dev/ttyAS3` + `:8884` MQTT + `:18822` SSH 反向隧道仅占约 `12–14 MiB` RSS。
 - **存储与权限实况（重要纠偏）**：宿主机根分区 `/dev/mmcblk0p5`（`3.4 GiB` `ext4 rw`，`/etc/fstab` 为 `/dev/mmcblk0p5 / ext4 remount,rw 0 0`）可用约 `1.2 GiB`，**宿主机 SSH `root` 下 `/`、`/etc`、`/etc/systemd/system`、`/root`、`/opt` 与 `/home/pi/edge8000` 全部可读写（`lsblk` 确认 `RO=0`）**。此前通过 Node-RED 沙箱看到的 `/dev/root /etc ext4 ro,relatime` **仅存在于 `node-red.service` 的私有挂载命名空间内**（因其 `/lib/systemd/system/node-red.service` 配置了 `ReadOnlyDirectories=/etc/`）。
 - **在跑服务、自启链与账号**：
   - `sshd.service`（`/usr/sbin/sshd -D`，`PermitRootLogin yes`，默认启用 `PubkeyAuthentication yes`）、`iotrouter.service`（`zh_node.app`）、`iotrouter-web.service`；登录账号为 `root` 与 `pi`，`/root/.ssh` 为 `0700 root:root`。
-  - `node-red.service` 在 systemd 中本身为 `disabled`，真正开机拉起它的是 `/etc/rc.local` 调起的 `/home/pi/edge8000/app/usr_service_auto_startup.sh`（重置 `eth0`/`networking` 并拉起 `iotrouter.service`、`influxdb.service`，随后执行 `systemctl restart node-red.service`，并用后台 3 秒巡检循环守护伴生进程 `ZHCSharpMid`）。因此停用 Node-RED 时需在独立进程接管反向隧道与串口后再执行 `systemctl stop node-red.service && systemctl mask node-red.service`（或清理 `usr_service_auto_startup.sh` 对应拉起段落），防止重启复活。
+  - `node-red.service` 在 systemd 中本身为 `disabled`，旧链路由 `/etc/rc.local` 调起 `/home/pi/edge8000/app/usr_service_auto_startup.sh`（重置 `eth0`/`networking` 并拉起 `iotrouter.service`、`influxdb.service`，随后执行 `systemctl restart node-red.service`，并用后台 3 秒巡检循环守护 `ZHCSharpMid`）。松雅轩现场已完成切流：`hvac-edge-gateway.service` 运行于 `/opt/hvac-edge-gateway/ota/current`（A/B 槽位），`node-red.service` 已 `mask`，`usr_service_auto_startup.sh` 仅注释掉 `ZHCSharpMid` 的 `monitor_program` 行（保留 `.bak-pre-cutover` 备份，原 `eth0`/`iotrouter.service` 段保持不变）。
 - **现场串口总线**：`/dev/ttyAS3`（`9600 8N1`）由电表（`UID 2,3,4,5`）、水表（`UID 10`）、无线采集器（`UID 20`）和 ET1010（`UID 31`）共用。
 
 ## 3. 已开通站点的日常连接、按需开关与核验
@@ -58,7 +58,7 @@ EG8200 侧 Node-RED（`tab-platform-tunnel`）主动向平台 `:443/gateway/v1/t
    LIMIT 20;
    ```
 
-## 4. 从零开通流程（仅有 1880 Node-RED 隧道、无 EG8200 SSH 凭据）
+## 4. 从零开通新网关流程（仅当新网关尚未切换 Go 进程、仅有 1880 Node-RED 隧道且无 SSH 凭据时使用）
 
 前提：修改现网网关或生产主机前必须取得当前会话明确授权；严禁读取、打印或写入任何文件中的口令、私钥、Bearer Token、`server.runtime.env` 全文或 `/opt/hvac-platform/runtime/secrets/songyaxuan-nodered-admin` 内容。
 
