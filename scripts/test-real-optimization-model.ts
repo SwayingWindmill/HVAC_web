@@ -34,6 +34,7 @@ import {
 } from '../apps/hvac-web/src/features/optimization/optimization-model.ts';
 import {
   buildArmLeasePayload,
+  filterExecutionMonitors,
   formatAutoControlCapability,
   formatAutoControlExecutionMode,
   formatAutoControlTripReason,
@@ -51,7 +52,7 @@ import {
   validateArmLeaseForm,
 } from '../apps/hvac-web/src/features/optimization/auto-control-model.ts';
 import { stagingReason, stagingView } from '../apps/hvac-web/src/features/optimization/staging-model.ts';
-import type { StagingEvaluation } from '../apps/hvac-web/src/api/generated/platformGateway.gen.ts';
+import type { OptimizationExecutionMonitor, StagingEvaluation } from '../apps/hvac-web/src/api/generated/platformGateway.gen.ts';
 
 const publishedFixture = JSON.parse(
   readFileSync(new URL('../apps/hvac-web/e2e/fixtures/optimization-latest.json', import.meta.url), 'utf8'),
@@ -866,4 +867,56 @@ test('formatAuxiliaryRationale translates known solver sentences, keeps Chinese 
   assert.equal(formatAuxiliaryRationale('按湿球温度动态调整风机频率'), '按湿球温度动态调整风机频率');
   assert.equal(formatAuxiliaryRationale('raw internal solver text'), null);
   assert.equal(formatAuxiliaryRationale(undefined), null);
+});
+
+test('filterExecutionMonitors segments observing/pending, tripped/rollback, and shadow traces accurately', () => {
+  const mkMonitor = (
+    id: string,
+    status: OptimizationExecutionMonitor['status'],
+    executionMode?: 'CLOSED_LOOP' | 'SHADOW',
+  ): OptimizationExecutionMonitor => ({
+    id,
+    tenantId: 't-1',
+    siteId: 's-1',
+    leaseId: 'l-1',
+    recommendationId: 'r-1',
+    commandIntentId: executionMode === 'SHADOW' ? null : `cmd-${id}`,
+    deviceId: 'd-1',
+    targetCapability: 'SET_CHILLED_WATER_TEMPERATURE_SETPOINT',
+    baselineSupplyTempC: 7.0,
+    appliedSupplyTempC: 8.0,
+    restoreSupplyTempC: 7.0,
+    zoneTempMaxC: 26.0,
+    supplyTempMaxC: 12.0,
+    startedAt: '2026-11-23T00:00:00Z',
+    windowEndsAt: '2026-11-23T00:30:00Z',
+    status,
+    createdAt: '2026-11-23T00:00:00Z',
+    updatedAt: '2026-11-23T00:05:00Z',
+    ...(executionMode ? { executionMode } : {}),
+  });
+
+  const sample: OptimizationExecutionMonitor[] = [
+    mkMonitor('m-observing', 'OBSERVING', 'CLOSED_LOOP'),
+    mkMonitor('m-pending', 'PENDING_SUBMIT', 'CLOSED_LOOP'),
+    mkMonitor('m-verified', 'VERIFIED', 'CLOSED_LOOP'),
+    mkMonitor('m-tripped', 'TRIPPED_ROLLED_BACK', 'CLOSED_LOOP'),
+    mkMonitor('m-manual', 'MANUAL_OVERRIDE', 'CLOSED_LOOP'),
+    mkMonitor('m-shadow-rec', 'SHADOW_RECORDED'),
+    mkMonitor('m-shadow-mode', 'VERIFIED', 'SHADOW'),
+  ];
+
+  assert.equal(filterExecutionMonitors(sample, 'all').length, 7);
+  assert.deepEqual(
+    filterExecutionMonitors(sample, 'active').map((item) => item.id),
+    ['m-observing', 'm-pending'],
+  );
+  assert.deepEqual(
+    filterExecutionMonitors(sample, 'tripped').map((item) => item.id),
+    ['m-tripped', 'm-manual'],
+  );
+  assert.deepEqual(
+    filterExecutionMonitors(sample, 'shadow').map((item) => item.id),
+    ['m-shadow-rec', 'm-shadow-mode'],
+  );
 });

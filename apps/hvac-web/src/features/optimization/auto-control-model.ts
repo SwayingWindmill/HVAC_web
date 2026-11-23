@@ -577,3 +577,28 @@ export function buildArmLeasePayload(
     },
   };
 }
+
+export type ExecutionMonitorFilter = 'all' | 'active' | 'tripped' | 'shadow';
+
+const TRIPPED_MONITOR_STATUSES = new Set<ExecutionMonitorStatus>([
+  'TRIPPED',
+  'TRIPPED_ROLLED_BACK',
+  'ROLLED_BACK',
+  'ROLLBACK_FAILED',
+  'SUBMIT_FAILED',
+  'MANUAL_OVERRIDE',
+]);
+
+export function filterExecutionMonitors(
+  items: readonly OptimizationExecutionMonitor[],
+  filter: ExecutionMonitorFilter,
+): OptimizationExecutionMonitor[] {
+  if (filter === 'all') return [...items];
+  if (filter === 'active') {
+    return items.filter((item) => item.status === 'OBSERVING' || item.status === 'PENDING_SUBMIT');
+  }
+  if (filter === 'tripped') {
+    return items.filter((item) => TRIPPED_MONITOR_STATUSES.has(item.status));
+  }
+  return items.filter((item) => resolveMonitorExecutionMode(item) === 'SHADOW');
+}

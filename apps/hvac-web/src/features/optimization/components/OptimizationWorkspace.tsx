@@ -144,7 +144,7 @@ function RangeTrack({ label, axis, band, bandLabel, markers }: {
 
 function ConstraintRow({ title, detail, children }: { readonly title: string; readonly detail: ReactNode; readonly children: ReactNode }) {
   return (
-    <div className="flex flex-col gap-3 border-b border-divider px-5 py-4 last:border-b-0 sm:flex-row sm:items-center sm:gap-8">
+    <div className="flex flex-col gap-3 border-b border-divider px-5 py-3.5 last:border-b-0 sm:flex-row sm:items-center sm:gap-8">
       <span className="flex shrink-0 flex-col gap-0.5 sm:w-72">
         <span className="text-sm font-semibold">{title}</span>
         <span className="text-xs text-muted-foreground">{detail}</span>
@@ -336,6 +336,123 @@ export function OptimizationWorkspace() {
     </Button>
   );
 
+  const stagingActive = Boolean(stagingResult && stagingResult.cards.length > 0);
+  const stagingPanel = (
+    <StagingPanel
+      siteId={site.id}
+      timeZone={site.timezone}
+      state={staging.isPending ? 'pending' : staging.isError ? 'error' : 'ready'}
+      view={stagingResult}
+      evaluatedAt={staging.data?.evaluatedAt ?? null}
+      mode={controlState.data?.controlMode ?? staging.data?.siteControlMode ?? 'REMOTE_AUTO'}
+      targets={targets}
+      commands={commands.data ?? []}
+      onConfirm={setPending}
+      onRetry={() => void staging.refetch()}
+    />
+  );
+
+  const supplyOptimizationSection = (
+    <>
+      {notice ? (
+        <Alert>
+          <TriangleAlert />
+          <AlertTitle>{notice.title}</AlertTitle>
+          <AlertDescription>{notice.detail}</AlertDescription>
+        </Alert>
+      ) : null}
+
+      {staleRecommendation ? (
+        <Alert>
+          <TriangleAlert />
+          <AlertTitle>最近一次定时计算没有生成新建议</AlertTitle>
+          <AlertDescription>{firedAt ? `${firedAt}：` : ''}{scheduleProblem}。下面是上一条建议。</AlertDescription>
+        </Alert>
+      ) : null}
+
+      {recommendation !== null && readinessReasons.length > 0 ? (
+        <Alert>
+          <TriangleAlert />
+          <AlertTitle>当前站点供水温度优化条件尚未完全就绪</AlertTitle>
+          <AlertDescription>{readinessReasons.join('、')}。</AlertDescription>
+        </Alert>
+      ) : null}
+
+      {latest.isPending ? (
+        <Skeleton className="h-64 rounded-xl" />
+      ) : latest.isError ? (
+        <Panel aria-label="当前建议">
+          <div className="flex flex-col items-start gap-2 px-5 py-8">
+            <h2 className="text-sm font-semibold">优化建议暂时读不到</h2>
+            <Button variant="outline" size="sm" onClick={() => void latest.refetch()}>重试</Button>
+          </div>
+        </Panel>
+      ) : !recommendation ? (
+        <>
+          <Panel aria-label="当前建议">
+            <div className="flex flex-col items-center gap-2 px-6 py-10 text-center">
+              <span className="flex size-9 items-center justify-center rounded-xl bg-primary-soft text-primary"><Lightbulb className="size-[18px]" aria-hidden="true" /></span>
+              <h2 className="text-sm font-semibold">还没有优化建议</h2>
+              {scheduleProblem ? (
+                <p className="max-w-lg text-sm text-secondary-foreground">
+                  最近一次定时计算{firedAt ? <>（<span className="font-mono">{firedAt}</span>）</> : null}没有生成建议：{scheduleProblem}。
+                </p>
+              ) : preparation.isSuccess && unscheduledReady ? (
+                <p className="max-w-lg text-sm text-secondary-foreground">站点还没有配置定时优化，建议只能手动生成。</p>
+              ) : null}
+              {readinessReasons.length > 0 ? (
+                <div className="mt-1 flex max-w-lg flex-col gap-1.5 rounded-lg border border-divider bg-muted px-4 py-3 text-left text-xs text-secondary-foreground">
+                  <span className="font-semibold text-foreground">当前站点暂未启用供水温度优化，原因如下：</span>
+                  <ul className="list-inside list-disc space-y-1">
+                    {preparation.data?.responseCoefficient.status === 'NOT_CALIBRATED' ? (
+                      <li>响应系数还没标定：尚未完成供水温度变化对能耗与室温影响的站点标定</li>
+                    ) : null}
+                    {preparation.data?.tenantStrategy.status === 'PENDING' ? (
+                      <li>共享租户策略还没确认：适用策略、必填点位映射或模型部署尚未确认启用</li>
+                    ) : null}
+                  </ul>
+                  <span className="text-muted-foreground">
+                    {preparation.data?.status === 'NOT_SCHEDULED' ? '站点也还没有配置定时优化任务；' : ''}同页的「减台与辅机停机」不受影响，可独立评估与执行。
+                  </span>
+                </div>
+              ) : null}
+              <div className="mt-2">{generateButton('default')}</div>
+            </div>
+          </Panel>
+          <ReadinessDisclosure readiness={readiness} recommendation={null} />
+        </>
+      ) : (
+        <Proposal
+          recommendation={recommendation}
+          readiness={readiness}
+          timeZone={site.timezone}
+          siteId={site.id}
+          setpoint={setpoint}
+          setting={supply?.setting ?? null}
+          confirmationMode={confirmationMode}
+          registryState={registry.isPending ? 'pending' : registry.isError ? 'error' : 'ready'}
+          workOrdersState={
+            !manualWorkOrderMode || !canListWorkOrders
+              ? 'ready'
+              : recommendationWorkOrders.isPending
+                ? 'pending'
+                : recommendationWorkOrders.isError
+                  ? 'error'
+                  : 'ready'
+          }
+          sent={sent}
+          auxiliaryControls={auxiliaryControls}
+          activeWorkOrder={activeWorkOrder}
+          canCreateWorkOrder={canCreateWorkOrder}
+          onDispatch={dispatch}
+          onDispatchAuxiliary={dispatchAuxiliary}
+          onCreateWorkOrder={() => setCreatingWorkOrder(true)}
+          onRetryWorkOrders={() => void recommendationWorkOrders.refetch()}
+        />
+      )}
+    </>
+  );
+
   return (
     <Main>
       <PageHeader
@@ -364,116 +481,8 @@ export function OptimizationWorkspace() {
         </div>
 
         <TabsContent value="proposal" className="flex w-full min-w-0 flex-col gap-4">
-          <StagingPanel
-            siteId={site.id}
-            timeZone={site.timezone}
-            state={staging.isPending ? 'pending' : staging.isError ? 'error' : 'ready'}
-            view={stagingResult}
-            evaluatedAt={staging.data?.evaluatedAt ?? null}
-            mode={controlState.data?.controlMode ?? staging.data?.siteControlMode ?? 'REMOTE_AUTO'}
-            targets={targets}
-            commands={commands.data ?? []}
-            onConfirm={setPending}
-            onRetry={() => void staging.refetch()}
-          />
-
-          <h2 className="mt-2 text-title font-semibold">供水温度优化</h2>
-          {notice ? (
-            <Alert>
-              <TriangleAlert />
-              <AlertTitle>{notice.title}</AlertTitle>
-              <AlertDescription>{notice.detail}</AlertDescription>
-            </Alert>
-          ) : null}
-
-          {staleRecommendation ? (
-            <Alert>
-              <TriangleAlert />
-              <AlertTitle>最近一次定时计算没有生成新建议</AlertTitle>
-              <AlertDescription>{firedAt ? `${firedAt}：` : ''}{scheduleProblem}。下面是上一条建议。</AlertDescription>
-            </Alert>
-          ) : null}
-
-          {recommendation !== null && readinessReasons.length > 0 ? (
-            <Alert>
-              <TriangleAlert />
-              <AlertTitle>当前站点供水温度优化条件尚未完全就绪</AlertTitle>
-              <AlertDescription>{readinessReasons.join('、')}。</AlertDescription>
-            </Alert>
-          ) : null}
-
-          {latest.isPending ? (
-            <Skeleton className="h-64 rounded-xl" />
-          ) : latest.isError ? (
-            <Panel aria-label="当前建议">
-              <div className="flex flex-col items-start gap-2 px-5 py-8">
-                <p className="text-sm font-semibold">优化建议暂时读不到</p>
-                <Button variant="outline" size="sm" onClick={() => void latest.refetch()}>重试</Button>
-              </div>
-            </Panel>
-          ) : !recommendation ? (
-            <>
-              <Panel aria-label="当前建议">
-                <div className="flex flex-col items-center gap-2 px-6 py-12 text-center">
-                  <span className="flex size-9 items-center justify-center rounded-xl bg-primary-soft text-primary"><Lightbulb className="size-[18px]" aria-hidden="true" /></span>
-                  <p className="text-sm font-semibold">还没有优化建议</p>
-                  {scheduleProblem ? (
-                    <p className="max-w-lg text-sm text-secondary-foreground">
-                      最近一次定时计算{firedAt ? <>（<span className="font-mono">{firedAt}</span>）</> : null}没有生成建议：{scheduleProblem}。
-                    </p>
-                  ) : preparation.isSuccess && unscheduledReady ? (
-                    <p className="max-w-lg text-sm text-secondary-foreground">站点还没有配置定时优化，建议只能手动生成。</p>
-                  ) : null}
-                  {readinessReasons.length > 0 ? (
-                    <div className="mt-1 flex max-w-lg flex-col gap-1.5 rounded-lg border border-divider bg-muted px-4 py-3 text-left text-xs text-secondary-foreground">
-                      <span className="font-semibold text-foreground">当前站点暂未启用供水温度优化，原因如下：</span>
-                      <ul className="list-inside list-disc space-y-1">
-                        {preparation.data?.responseCoefficient.status === 'NOT_CALIBRATED' ? (
-                          <li>响应系数还没标定：尚未完成供水温度变化对能耗与室温影响的站点标定</li>
-                        ) : null}
-                        {preparation.data?.tenantStrategy.status === 'PENDING' ? (
-                          <li>共享租户策略还没确认：适用策略、必填点位映射或模型部署尚未确认启用</li>
-                        ) : null}
-                      </ul>
-                      <span className="text-muted-foreground">
-                        {preparation.data?.status === 'NOT_SCHEDULED' ? '站点也还没有配置定时优化任务；' : ''}上方的「减台与辅机停机」不受影响，可独立评估与执行。
-                      </span>
-                    </div>
-                  ) : null}
-                  <div className="mt-2">{generateButton('default')}</div>
-                </div>
-              </Panel>
-              <ReadinessDisclosure readiness={readiness} recommendation={null} />
-            </>
-          ) : (
-            <Proposal
-              recommendation={recommendation}
-              readiness={readiness}
-              timeZone={site.timezone}
-              siteId={site.id}
-              setpoint={setpoint}
-              setting={supply?.setting ?? null}
-              confirmationMode={confirmationMode}
-              registryState={registry.isPending ? 'pending' : registry.isError ? 'error' : 'ready'}
-              workOrdersState={
-                !manualWorkOrderMode || !canListWorkOrders
-                  ? 'ready'
-                  : recommendationWorkOrders.isPending
-                    ? 'pending'
-                    : recommendationWorkOrders.isError
-                      ? 'error'
-                      : 'ready'
-              }
-              sent={sent}
-              auxiliaryControls={auxiliaryControls}
-              activeWorkOrder={activeWorkOrder}
-              canCreateWorkOrder={canCreateWorkOrder}
-              onDispatch={dispatch}
-              onDispatchAuxiliary={dispatchAuxiliary}
-              onCreateWorkOrder={() => setCreatingWorkOrder(true)}
-              onRetryWorkOrders={() => void recommendationWorkOrders.refetch()}
-            />
-          )}
+          {stagingActive ? stagingPanel : supplyOptimizationSection}
+          {stagingActive ? supplyOptimizationSection : stagingPanel}
 
           <AutoControlPanel
             siteId={site.id}
@@ -741,11 +750,11 @@ function Proposal({
     <>
       <Panel aria-label="当前建议" className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
         <div className="flex flex-col gap-3 border-b border-divider px-6 py-5 lg:border-r lg:border-b-0">
-          <span className="flex flex-wrap items-center gap-2 text-xs">
-            <span className="text-title font-semibold">当前建议</span>
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <h2 className="text-title font-semibold">当前建议</h2>
             <span className={cn('rounded-md px-1.5 leading-5 font-medium', risk.className)}>{risk.label}</span>
             <span className="text-muted-foreground">{TRIGGER_LABEL[recommendation.trigger]}于 <span className="font-mono">{formatTime(recommendation.createdAt, timeZone)}</span></span>
-          </span>
+          </div>
           <span className="flex flex-col gap-1">
             <span className="text-xs text-muted-foreground">冷冻水供水温度</span>
             {change ? (
@@ -834,7 +843,7 @@ function Proposal({
             )
           ) : null}
         </div>
-        <section role="region" aria-label="预计效果" className="flex flex-col gap-5 px-6 py-5">
+        <section role="region" aria-label="预计效果" className="flex flex-col gap-4 bg-muted/20 px-6 py-5">
           <span className="text-xs font-medium text-muted-foreground">预计效果</span>
           <Effect
             label="预计日节电"
