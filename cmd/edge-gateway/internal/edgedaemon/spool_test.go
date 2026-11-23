@@ -99,3 +99,41 @@ func TestGradedSpoolFourTierTelemetryPriorityOrder(t *testing.T) {
 		}
 	}
 }
+
+func TestGradedSpoolDrainPreventsReentrancy(t *testing.T) {
+	spool, err := OpenGradedSpool(t.TempDir(), 4096)
+	if err != nil {
+		t.Fatalf("OpenGradedSpool: %v", err)
+	}
+	if _, err := spool.Admit(SpoolItem{
+		ID:      "tel-reentrant",
+		Topic:   "hvac/v1/gw/up/telemetry",
+		QoS:     1,
+		Class:   EvidenceTelemetryHigh,
+		Payload: []byte(`{"test":1}`),
+	}); err != nil {
+		t.Fatalf("Admit: %v", err)
+	}
+
+	calls := 0
+	drained, err := spool.Drain(t.Context(), 10, func(ctx context.Context, _ SpoolItem) error {
+		calls++
+		nestedDrained, nestedErr := spool.Drain(ctx, 10, func(context.Context, SpoolItem) error {
+			calls++
+			return nil
+		})
+		if nestedErr != nil || nestedDrained != 0 {
+			t.Fatalf("nested Drain = (%d, %v), want (0, nil)", nestedDrained, nestedErr)
+		}
+		return nil
+	})
+	if err != nil || drained != 1 {
+		t.Fatalf("Drain = (%d, %v), want (1, nil)", drained, err)
+	}
+	if calls != 1 {
+		t.Fatalf("publish calls = %d, want 1", calls)
+	}
+	if len(spool.Pending()) != 0 {
+		t.Fatalf("expected spool empty after drain, got %d", len(spool.Pending()))
+	}
+}

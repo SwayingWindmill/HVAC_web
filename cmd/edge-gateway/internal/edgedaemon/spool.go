@@ -67,6 +67,7 @@ type spoolDiskState struct {
 // command, alarm, OTA, and audit items ahead of sheddable diagnostic/normal telemetry.
 type GradedSpool struct {
 	mu       sync.Mutex
+	drainMu  sync.Mutex
 	stateDir string
 	capacity int64
 	used     int64
@@ -218,6 +219,10 @@ func (s *GradedSpool) Drain(ctx context.Context, maxItems int, publish func(cont
 	if s == nil || publish == nil {
 		return 0, nil
 	}
+	if !s.drainMu.TryLock() {
+		return 0, nil
+	}
+	defer s.drainMu.Unlock()
 	pending := s.Pending()
 	if maxItems > 0 && len(pending) > maxItems {
 		pending = pending[:maxItems]

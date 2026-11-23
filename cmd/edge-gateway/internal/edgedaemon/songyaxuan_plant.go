@@ -266,15 +266,26 @@ func (r *SongyaxuanPlantRunner) Run(ctx context.Context) error {
 		"et1010_sec", r.cfg.ET1010PollIntervalSec,
 	)
 
-	_ = r.PollET1010Once(ctx)
-	_ = r.PollFlowOnce(ctx)
+	if err := r.PollET1010Once(ctx); err != nil && ctx.Err() == nil {
+		r.logger.Warn("songyaxuan_et1010_poll_failed", "error", err.Error())
+	}
+	if err := r.PollFlowOnce(ctx); err != nil && ctx.Err() == nil {
+		r.logger.Warn("songyaxuan_flow_poll_failed", "error", err.Error())
+	}
 	for _, spec := range songyaxuanMeterSpecs {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		_ = r.pollAmmeterSpec(ctx, spec)
+		if err := r.pollAmmeterSpec(ctx, spec); err != nil && ctx.Err() == nil {
+			r.logger.Warn("songyaxuan_meter_poll_failed", "device", spec.deviceID, "uid", spec.unitID, "error", err.Error())
+		}
 	}
-	_ = r.PollTemperaturesOnce(ctx)
+	if err := r.PollTemperaturesOnce(ctx); err != nil && ctx.Err() == nil {
+		r.logger.Warn("songyaxuan_temp_poll_failed", "error", err.Error())
+	}
+	if ctx.Err() == nil {
+		r.logger.Info("songyaxuan_initial_poll_complete")
+	}
 
 	tempTicker := time.NewTicker(time.Duration(r.cfg.TempPollIntervalSec) * time.Second)
 	flowTicker := time.NewTicker(time.Duration(r.cfg.FlowPollIntervalSec) * time.Second)
