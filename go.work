@@ -3,6 +3,7 @@ go 1.27.4
 use (
 	.
 	./cmd/wecom-alert-adapter
+	./libs/alarmexpr
 	./libs/commandmodel
 	./libs/edgecontrol
 	./libs/grant
