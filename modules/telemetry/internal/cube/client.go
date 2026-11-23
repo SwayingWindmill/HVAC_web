@@ -39,10 +39,26 @@ type Config struct {
 }
 
 type Client struct {
-	endpoint        *url.URL
-	datasetRevision string
-	tokenFactory    TokenFactory
-	httpClient      *http.Client
+	endpoint          *url.URL
+	datasetRevision   string
+	tokenFactory      TokenFactory
+	httpClient        *http.Client
+	continueWaitDelay func(attempt int) time.Duration
+}
+
+func defaultContinueWaitDelay(attempt int) time.Duration {
+	switch {
+	case attempt <= 0:
+		return 150 * time.Millisecond
+	case attempt == 1:
+		return 300 * time.Millisecond
+	default:
+		return 500 * time.Millisecond
+	}
+}
+
+func isContinueWaitError(msg string) bool {
+	return strings.EqualFold(strings.TrimSpace(msg), "Continue wait")
 }
 
 type loadRequest struct {
@@ -93,6 +109,7 @@ func NewClient(config Config) (*Client, error) {
 	}
 	return &Client{
 		endpoint: parsed, datasetRevision: config.DatasetRevision, tokenFactory: config.TokenFactory, httpClient: client,
+		continueWaitDelay: defaultContinueWaitDelay,
 	}, nil
 }
 
@@ -184,6 +201,32 @@ func (client *Client) load(ctx context.Context, token string, query cubeQuery) (
 	if err != nil {
 		return loadResponse{}, fmt.Errorf("encode Cube query: %w", err)
 	}
+	delayFn := client.continueWaitDelay
+	if delayFn == nil {
+		delayFn = defaultContinueWaitDelay
+	}
+	for attempt := 0; ; attempt++ {
+		decoded, err := client.loadOnce(ctx, token, body)
+		if err != nil {
+			return loadResponse{}, err
+		}
+		if !isContinueWaitError(decoded.Error) {
+			if strings.TrimSpace(decoded.Error) != "" {
+				return loadResponse{}, fmt.Errorf("cube query failed: %s", decoded.Error)
+			}
+			return decoded, nil
+		}
+		timer := time.NewTimer(delayFn(attempt))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return loadResponse{}, fmt.Errorf("cube query continue wait timed out: %w", ctx.Err())
+		case <-timer.C:
+		}
+	}
+}
+
+func (client *Client) loadOnce(ctx context.Context, token string, body []byte) (loadResponse, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.endpoint.String(), bytes.NewReader(body))
 	if err != nil {
 		return loadResponse{}, fmt.Errorf("create Cube request: %w", err)
@@ -218,9 +261,6 @@ func (client *Client) load(ctx context.Context, token string, query cubeQuery) (
 	if err := json.Unmarshal(payload, &decoded); err != nil {
 		return loadResponse{}, fmt.Errorf("decode Cube response: %w", err)
 	}
-	if strings.TrimSpace(decoded.Error) != "" {
-		return loadResponse{}, fmt.Errorf("cube query failed: %s", decoded.Error)
-	}
 	return decoded, nil
 }
 
@@ -232,6 +272,7 @@ const cubeWallTime = "2006-01-02T15:04:05.000"
 // total, equipment_energy its equipment sub-meters, each already scoped by its cube.
 const (
 	siteView      = "site_energy"
+	missingView   = "site_energy_missing"
 	equipmentView = "equipment_energy"
 	costView      = "site_energy_cost"
 )
@@ -282,12 +323,10 @@ func buildCostQuery(productQuery analyticsmodel.EnergySeriesQuery, location *tim
 
 func buildMissingMetersQuery(productQuery analyticsmodel.EnergySeriesQuery, location *time.Location) cubeQuery {
 	return cubeQuery{
-		Measures: []string{member(siteView, "missing_count")},
-		Filters: append(energyFilters(siteView, productQuery), cubeFilter{
-			Member: member(siteView, "quality"), Operator: "equals", Values: []string{"MISSING"},
-		}),
-		Dimensions:     []string{member(siteView, "missing_meter")},
-		TimeDimensions: periodDimension(siteView, productQuery, location),
+		Measures:       []string{member(missingView, "missing_count")},
+		Filters:        energyFilters(missingView, productQuery),
+		Dimensions:     []string{member(missingView, "missing_meter")},
+		TimeDimensions: periodDimension(missingView, productQuery, location),
 		Timezone:       productQuery.Timezone,
 		Limit:          10000,
 	}
@@ -406,14 +445,14 @@ func attachMissingMeters(response *analyticsmodel.EnergySeriesResponse, decoded 
 	if len(decoded.Data) == 0 {
 		return nil
 	}
-	period := periodMember(siteView, granularity)
+	period := periodMember(missingView, granularity)
 	byStart := make(map[int64]int, len(response.Points))
 	for index := range response.Points {
 		byStart[response.Points[index].PeriodStart.UTC().UnixNano()] = index
 	}
 	seenByIndex := make(map[int]map[string]struct{})
 	for _, row := range decoded.Data {
-		count, err := optionalFloat(row[member(siteView, "missing_count")])
+		count, err := optionalFloat(row[member(missingView, "missing_count")])
 		if err != nil {
 			return fmt.Errorf("decode Cube missing submeter count: %w", err)
 		}
@@ -432,7 +471,7 @@ func attachMissingMeters(response *analyticsmodel.EnergySeriesResponse, decoded 
 		if !ok {
 			continue
 		}
-		meterName, err := scalarString(row[member(siteView, "missing_meter")])
+		meterName, err := scalarString(row[member(missingView, "missing_meter")])
 		if err != nil {
 			return fmt.Errorf("decode Cube missing submeter name: %w", err)
 		}
