@@ -362,3 +362,58 @@ test('renders 2D hydraulic schematic with live loop readings, inspector sheet, a
   await page.reload();
   await expect(page.getByRole('region', { name: '冷站水力回路' })).toContainText('冷冻水泵运行但流量接近零');
 });
+
+test('hovering the realtime trend chart formats numeric timestamps without crashing the page', async ({ page, gateway }) => {
+  gateway.aggregateHandler = (query) => {
+    if (query.granularity !== 'QUARTER_HOUR' || !query.keys.includes('active_power')) return undefined;
+    const fromMs = Date.parse(query.from);
+    const quarterMs = 15 * 60_000;
+    const buckets = Array.from({ length: 24 }, (_, index) => ({
+      telemetryKey: 'active_power',
+      pointId: '01910000-0000-7000-8000-000000000035',
+      pointRevision: 1,
+      pointType: 'TELEMETRY',
+      unit: 'kW',
+      periodStart: new Date(fromMs + index * quarterMs).toISOString(),
+      periodEnd: new Date(fromMs + (index + 1) * quarterMs).toISOString(),
+      quality: { good: 60, partial: 0, estimated: 0, stale: 0, invalid: 0 },
+      completeness: 1,
+      gauge: { average: 210 + index, minimum: 200, maximum: 240, first: 210, last: 215, sampleCount: 60 },
+    }));
+    return {
+      body: {
+        schemaVersion: 1,
+        tenantId: '018f3d00-0000-7000-8000-000000000001',
+        siteId: SITE_ID,
+        deviceId: query.deviceId,
+        buckets,
+        metadata: {
+          requestedFrom: query.from,
+          requestedTo: query.to,
+          granularity: 'QUARTER_HOUR',
+          timezone: query.timezone,
+          qualityPolicy: query.qualityPolicy,
+          projectionWatermark: query.to,
+          returnedBuckets: buckets.length,
+        },
+      },
+    };
+  };
+
+  await page.goto(`/operations/realtime?site=${SITE_ID}&metric=power`);
+  const plant = page.getByRole('region', { name: '冷站运行' });
+  const chart = plant.locator('[data-slot="composed-chart"]');
+  await expect(chart.locator('path.recharts-area-curve').first()).toBeVisible();
+
+  const surface = chart.locator('.recharts-wrapper');
+  const box = await surface.boundingBox();
+  expect(box).toBeTruthy();
+  const tooltip = chart.locator('.recharts-tooltip-wrapper');
+  for (const ratio of [0.25, 0.5, 0.75]) {
+    await page.mouse.move(box!.x + box!.width * ratio, box!.y + box!.height * 0.5, { steps: 3 });
+  }
+  await expect(tooltip).toBeVisible();
+  await expect(tooltip).toContainText(/\b\d{2}:\d{2}\b/);
+  await expect(tooltip).toContainText('冷站总功率');
+  await expect(page.getByText('页面暂时无法显示')).toHaveCount(0);
+});

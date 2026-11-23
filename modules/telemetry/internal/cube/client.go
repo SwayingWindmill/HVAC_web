@@ -22,9 +22,12 @@ import (
 )
 
 const (
-	loadPath                 = "/cubejs-api/v1/load"
-	maximumCubeQueryDuration = 16 * time.Second
-	maximumCubeResponseSize  = int64(8 << 20)
+	loadPath                       = "/cubejs-api/v1/load"
+	maximumCubeQueryDuration       = 16 * time.Second
+	maximumCubeResponseSize        = int64(8 << 20)
+	currentWindowMetadataTolerance = 60 * time.Second
+	synthesizedHintTTL             = 60 * time.Second
+	maximumSynthesizedHintEntries  = 1024
 )
 
 type TokenFactory interface {
@@ -38,12 +41,20 @@ type Config struct {
 	HTTPClient      *http.Client
 }
 
+type synthesizedHintEntry struct {
+	synthesized bool
+	expiresAt   time.Time
+}
+
 type Client struct {
 	endpoint          *url.URL
 	datasetRevision   string
 	tokenFactory      TokenFactory
 	httpClient        *http.Client
 	continueWaitDelay func(attempt int) time.Duration
+	now               func() time.Time
+	synthesizedHintMu sync.RWMutex
+	synthesizedHints  map[string]synthesizedHintEntry
 }
 
 func defaultContinueWaitDelay(attempt int) time.Duration {
@@ -110,7 +121,58 @@ func NewClient(config Config) (*Client, error) {
 	return &Client{
 		endpoint: parsed, datasetRevision: config.DatasetRevision, tokenFactory: config.TokenFactory, httpClient: client,
 		continueWaitDelay: defaultContinueWaitDelay,
+		now:               time.Now,
+		synthesizedHints:  make(map[string]synthesizedHintEntry),
 	}, nil
+}
+
+func (client *Client) clock() time.Time {
+	if client != nil && client.now != nil {
+		return client.now()
+	}
+	return time.Now()
+}
+
+func siteHintKey(tenantID, siteID string) string {
+	return tenantID + "\x00" + siteID
+}
+
+func (client *Client) isSiteSynthesizedHinted(tenantID, siteID string) bool {
+	if client == nil {
+		return false
+	}
+	now := client.clock()
+	key := siteHintKey(tenantID, siteID)
+	client.synthesizedHintMu.RLock()
+	entry, ok := client.synthesizedHints[key]
+	client.synthesizedHintMu.RUnlock()
+	return ok && entry.synthesized && now.Before(entry.expiresAt)
+}
+
+func (client *Client) recordSiteSynthesizedHint(tenantID, siteID string, synthesized bool) {
+	if client == nil {
+		return
+	}
+	now := client.clock()
+	client.synthesizedHintMu.Lock()
+	defer client.synthesizedHintMu.Unlock()
+	if client.synthesizedHints == nil {
+		client.synthesizedHints = make(map[string]synthesizedHintEntry)
+	}
+	if len(client.synthesizedHints) >= maximumSynthesizedHintEntries {
+		for key, entry := range client.synthesizedHints {
+			if !now.Before(entry.expiresAt) {
+				delete(client.synthesizedHints, key)
+			}
+		}
+		if len(client.synthesizedHints) >= maximumSynthesizedHintEntries {
+			client.synthesizedHints = make(map[string]synthesizedHintEntry)
+		}
+	}
+	client.synthesizedHints[siteHintKey(tenantID, siteID)] = synthesizedHintEntry{
+		synthesized: synthesized,
+		expiresAt:   now.Add(synthesizedHintTTL),
+	}
 }
 
 func (client *Client) QueryEnergySeries(ctx context.Context, caller analytics.CallerContext, productQuery analyticsmodel.EnergySeriesQuery) (analyticsmodel.EnergySeriesResponse, error) {
@@ -138,10 +200,14 @@ func (client *Client) QueryEnergySeries(ctx context.Context, caller analytics.Ca
 		metadata loadResponse
 		costs    loadResponse
 		devices  loadResponse
+		missing  loadResponse
 		firstErr error
 		errOnce  sync.Once
 		wg       sync.WaitGroup
 	)
+	isCurrentWindow := !productQuery.To.Before(client.clock().Add(-currentWindowMetadataTolerance))
+	prefetchedMissing := productQuery.EnergyType == analyticsmodel.EnergyTypeElectricity &&
+		client.isSiteSynthesizedHinted(productQuery.TenantID, productQuery.SiteID)
 	runParallel := func(label string, dest *loadResponse, query cubeQuery) {
 		wg.Add(1)
 		go func() {
@@ -156,9 +222,14 @@ func (client *Client) QueryEnergySeries(ctx context.Context, caller analytics.Ca
 		}()
 	}
 	runParallel("query Cube energy series", &series, buildSeriesQuery(productQuery, location))
-	runParallel("query Cube energy metadata", &metadata, buildMetadataQuery(productQuery, location))
+	if !isCurrentWindow {
+		runParallel("query Cube energy metadata", &metadata, buildMetadataQuery(productQuery, location))
+	}
 	if productQuery.EnergyType == analyticsmodel.EnergyTypeElectricity {
 		runParallel("query Cube energy cost", &costs, buildCostQuery(productQuery, location))
+		if prefetchedMissing {
+			runParallel("query Cube missing submeters", &missing, buildMissingMetersQuery(productQuery, location))
+		}
 	}
 	if productQuery.Breakdown == analyticsmodel.EnergyBreakdownDevice {
 		runParallel("query Cube energy breakdown", &devices, buildDeviceBreakdownQuery(productQuery, location))
@@ -168,18 +239,38 @@ func (client *Client) QueryEnergySeries(ctx context.Context, caller analytics.Ca
 	if firstErr != nil {
 		return analyticsmodel.EnergySeriesResponse{}, firstErr
 	}
-	response, err := mapEnergySeries(series, metadata, productQuery, location, client.datasetRevision)
+	var response analyticsmodel.EnergySeriesResponse
+	if isCurrentWindow {
+		seriesWatermark, seriesRevision, seriesSynthesized, hasSeriesMeta, metaErr := extractSeriesMetadata(series)
+		if metaErr != nil {
+			return analyticsmodel.EnergySeriesResponse{}, metaErr
+		}
+		if hasSeriesMeta {
+			response, err = mapEnergySeriesWithMetadata(series, seriesWatermark, seriesRevision, seriesSynthesized, productQuery, location, client.datasetRevision)
+		} else {
+			metadata, metaErr = client.load(queryContext, token, buildMetadataQuery(productQuery, location))
+			if metaErr != nil {
+				return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("query Cube energy metadata: %w", metaErr)
+			}
+			response, err = mapEnergySeries(series, metadata, productQuery, location, client.datasetRevision)
+		}
+	} else {
+		response, err = mapEnergySeries(series, metadata, productQuery, location, client.datasetRevision)
+	}
 	if err != nil {
 		return analyticsmodel.EnergySeriesResponse{}, err
 	}
 	if productQuery.EnergyType == analyticsmodel.EnergyTypeElectricity {
+		client.recordSiteSynthesizedHint(productQuery.TenantID, productQuery.SiteID, response.Metadata.Synthesized)
 		if err := attachCosts(&response, costs, productQuery, location); err != nil {
 			return analyticsmodel.EnergySeriesResponse{}, err
 		}
 		if response.Metadata.Synthesized && len(response.Points) > 0 {
-			missing, err := client.load(queryContext, token, buildMissingMetersQuery(productQuery, location))
-			if err != nil {
-				return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("query Cube missing submeters: %w", err)
+			if !prefetchedMissing {
+				missing, err = client.load(queryContext, token, buildMissingMetersQuery(productQuery, location))
+				if err != nil {
+					return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("query Cube missing submeters: %w", err)
+				}
 			}
 			if err := attachMissingMeters(&response, missing, productQuery.Granularity, location); err != nil {
 				return analyticsmodel.EnergySeriesResponse{}, err
@@ -294,6 +385,9 @@ func buildSeriesQuery(productQuery analyticsmodel.EnergySeriesQuery, location *t
 			member(siteView, "valid_count"),
 			member(siteView, "suspect_count"),
 			member(siteView, "invalid_count"),
+			member(siteView, "max_data_watermark"),
+			member(siteView, "max_dataset_revision"),
+			member(siteView, "synthesized_total"),
 		},
 		Filters:        energyFilters(siteView, productQuery),
 		TimeDimensions: periodDimension(siteView, productQuery, location),
@@ -645,6 +739,14 @@ func crossGapMeasure(view string, policy analyticsmodel.QualityPolicy) string {
 }
 
 func mapEnergySeries(series, metadata loadResponse, productQuery analyticsmodel.EnergySeriesQuery, location *time.Location, datasetRevision string) (analyticsmodel.EnergySeriesResponse, error) {
+	maximumWatermark, maximumDatasetRevision, synthesized, err := mapEnergyMetadata(metadata)
+	if err != nil {
+		return analyticsmodel.EnergySeriesResponse{}, err
+	}
+	return mapEnergySeriesWithMetadata(series, maximumWatermark, maximumDatasetRevision, synthesized, productQuery, location, datasetRevision)
+}
+
+func mapEnergySeriesWithMetadata(series loadResponse, maximumWatermark time.Time, maximumDatasetRevision uint64, synthesized bool, productQuery analyticsmodel.EnergySeriesQuery, location *time.Location, datasetRevision string) (analyticsmodel.EnergySeriesResponse, error) {
 	period := periodMember(siteView, productQuery.Granularity)
 	points := make([]analyticsmodel.EnergySeriesPoint, 0, len(series.Data))
 	quality := analyticsmodel.QualitySummary{}
@@ -713,10 +815,6 @@ func mapEnergySeries(series, metadata loadResponse, productQuery analyticsmodel.
 	if crossGapKWh > 0 {
 		crossGap = &analyticsmodel.EnergyCrossGap{EnergyKWh: crossGapKWh}
 	}
-	maximumWatermark, maximumDatasetRevision, synthesized, err := mapEnergyMetadata(metadata)
-	if err != nil {
-		return analyticsmodel.EnergySeriesResponse{}, err
-	}
 	resolvedDatasetRevision := datasetRevision + ":empty"
 	partial := true
 	var dataWatermark *time.Time
@@ -778,38 +876,57 @@ func bucketStart(value time.Time, granularity analyticsmodel.Granularity) time.T
 }
 
 func mapEnergyMetadata(decoded loadResponse) (time.Time, uint64, bool, error) {
-	if len(decoded.Data) == 0 {
-		return time.Time{}, 0, false, nil
+	watermark, revision, synthesized, _, err := extractSeriesMetadata(decoded)
+	return watermark, revision, synthesized, err
+}
+
+func extractSeriesMetadata(decoded loadResponse) (time.Time, uint64, bool, bool, error) {
+	var (
+		maxWatermark time.Time
+		maxRevision  uint64
+		synthesized  bool
+		present      bool
+	)
+	for _, row := range decoded.Data {
+		synthesizedVal, err := optionalFloat(row[member(siteView, "synthesized_total")])
+		if err != nil {
+			return time.Time{}, 0, false, false, fmt.Errorf("decode Cube synthesized flag: %w", err)
+		}
+		if synthesizedVal > 0 {
+			synthesized = true
+		}
+		watermarkValue, hasWatermark, err := optionalScalarString(row[member(siteView, "max_data_watermark")])
+		if err != nil {
+			return time.Time{}, 0, false, false, fmt.Errorf("decode Cube data watermark: %w", err)
+		}
+		revisionValue, hasRevision, err := optionalScalarString(row[member(siteView, "max_dataset_revision")])
+		if err != nil {
+			return time.Time{}, 0, false, false, fmt.Errorf("decode Cube dataset revision: %w", err)
+		}
+		if !hasWatermark && !hasRevision {
+			continue
+		}
+		if !hasWatermark || !hasRevision {
+			return time.Time{}, 0, false, false, errors.New("cube energy metadata is incomplete")
+		}
+		watermark, err := parseCubeTime(watermarkValue, time.UTC)
+		if err != nil {
+			return time.Time{}, 0, false, false, fmt.Errorf("decode Cube data watermark: %w", err)
+		}
+		revision, err := strconv.ParseUint(revisionValue, 10, 64)
+		if err != nil {
+			return time.Time{}, 0, false, false, fmt.Errorf("decode Cube dataset revision: %w", err)
+		}
+		watermark = watermark.UTC()
+		if watermark.After(maxWatermark) {
+			maxWatermark = watermark
+		}
+		if revision > maxRevision {
+			maxRevision = revision
+		}
+		present = true
 	}
-	row := decoded.Data[0]
-	synthesizedVal, err := optionalFloat(row[member(siteView, "synthesized_total")])
-	if err != nil {
-		return time.Time{}, 0, false, fmt.Errorf("decode Cube synthesized flag: %w", err)
-	}
-	synthesized := synthesizedVal > 0
-	watermarkValue, hasWatermark, err := optionalScalarString(row[member(siteView, "max_data_watermark")])
-	if err != nil {
-		return time.Time{}, 0, false, fmt.Errorf("decode Cube data watermark: %w", err)
-	}
-	revisionValue, hasRevision, err := optionalScalarString(row[member(siteView, "max_dataset_revision")])
-	if err != nil {
-		return time.Time{}, 0, false, fmt.Errorf("decode Cube dataset revision: %w", err)
-	}
-	if !hasWatermark && !hasRevision {
-		return time.Time{}, 0, synthesized, nil
-	}
-	if !hasWatermark || !hasRevision {
-		return time.Time{}, 0, false, errors.New("cube energy metadata is incomplete")
-	}
-	watermark, err := parseCubeTime(watermarkValue, time.UTC)
-	if err != nil {
-		return time.Time{}, 0, false, fmt.Errorf("decode Cube data watermark: %w", err)
-	}
-	revision, err := strconv.ParseUint(revisionValue, 10, 64)
-	if err != nil {
-		return time.Time{}, 0, false, fmt.Errorf("decode Cube dataset revision: %w", err)
-	}
-	return watermark.UTC(), revision, synthesized, nil
+	return maxWatermark, maxRevision, synthesized, present, nil
 }
 
 // An offset-less Cube time is wall time in location: the query timezone for time

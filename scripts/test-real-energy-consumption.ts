@@ -4,6 +4,7 @@ import { PlatformApiError, type EnergySeriesResponse } from '../apps/hvac-web/sr
 import {
   comparePeriods,
   completedComparisonTotals,
+  energyQueryNow,
   energyRetryDelay,
   completeOnly,
   copUnavailableText,
@@ -421,4 +422,23 @@ test('retryEnergyQuery retries transient 5xx/network failures up to twice and sk
   assert.equal(energyRetryDelay(0), 1000);
   assert.equal(energyRetryDelay(1), 2000);
   assert.equal(energyRetryDelay(5), 4000);
+});
+
+test('energyQueryNow snaps instants within a 30s bucket and stays strictly past Site midnight', () => {
+  const first = energyQueryNow('Asia/Shanghai', Date.parse('2026-10-10T06:30:01.123Z'));
+  const second = energyQueryNow('Asia/Shanghai', Date.parse('2026-10-10T06:30:29.999Z'));
+  assert.equal(first.toISOString(), '2026-10-10T06:30:00.000Z');
+  assert.equal(second.toISOString(), first.toISOString());
+
+  // 00:00:12 in Asia/Shanghai (UTC+8): snapping to 00:00:00 equals Site midnight, so `now` stays > from.
+  const justAfterMidnight = energyQueryNow('Asia/Shanghai', Date.parse('2026-10-09T16:00:12.000Z'));
+  const todayFromMidnight = periodWindow('today', justAfterMidnight, 'Asia/Shanghai');
+  assert.equal(justAfterMidnight.toISOString(), '2026-10-09T16:00:12.000Z');
+  assert.ok(todayFromMidnight.to.getTime() > todayFromMidnight.from.getTime());
+
+  // At exact Site midnight (00:00:00.000), `to` advances by 1s so `to > from` still holds.
+  const exactMidnight = energyQueryNow('Asia/Shanghai', Date.parse('2026-10-09T16:00:00.000Z'));
+  const todayAtExactMidnight = periodWindow('today', exactMidnight, 'Asia/Shanghai');
+  assert.equal(exactMidnight.toISOString(), '2026-10-09T16:00:01.000Z');
+  assert.ok(todayAtExactMidnight.to.getTime() > todayAtExactMidnight.from.getTime());
 });

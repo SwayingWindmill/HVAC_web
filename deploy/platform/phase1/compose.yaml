@@ -894,6 +894,8 @@ services:
       - -c
       - archive_command=test ! -f /var/lib/postgresql/wal-archive/%f && cp %p /var/lib/postgresql/wal-archive/%f
       - -c
+      - max_connections=${POSTGRES_MAX_CONNECTIONS:-300}
+      - -c
       - timezone=UTC
     environment:
       TZ: ${TZ:-Asia/Shanghai}
@@ -1109,7 +1111,7 @@ services:
       - ../../../semantic/cube:/cube/conf:ro
     expose: ["4000"]
     networks: [data]
-    cpus: ${CUBE_CPUS:-0.75}
+    cpus: ${CUBE_CPUS:-1.00}
     mem_limit: ${CUBE_MEMORY_LIMIT:-768m}
     mem_reservation: ${CUBE_MEMORY_RESERVATION:-256m}
     logging: *default-logging

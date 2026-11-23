@@ -98,7 +98,7 @@ func TestClientReadsTheSiteTotalFromTheSiteEnergyView(t *testing.T) {
 	if !foundSeries || !foundMetadata {
 		t.Fatalf("missing expected queries in %#v", captured)
 	}
-	if len(seriesQuery.Measures) != 5 || seriesQuery.Measures[0] != "site_energy.energy_valid_kwh" || seriesQuery.Measures[1] != "site_energy.cross_gap_valid_kwh" {
+	if len(seriesQuery.Measures) != 8 || seriesQuery.Measures[0] != "site_energy.energy_valid_kwh" || seriesQuery.Measures[1] != "site_energy.cross_gap_valid_kwh" || seriesQuery.Measures[5] != "site_energy.max_data_watermark" || seriesQuery.Measures[6] != "site_energy.max_dataset_revision" || seriesQuery.Measures[7] != "site_energy.synthesized_total" {
 		t.Fatalf("series measures = %#v", seriesQuery.Measures)
 	}
 	if len(seriesQuery.TimeDimensions) != 1 || seriesQuery.TimeDimensions[0].Granularity != "day" || seriesQuery.TimeDimensions[0].Dimension != "site_energy.period_end" {
@@ -795,5 +795,203 @@ func TestClientFailsWhenContinueWaitExceedsContextDeadline(t *testing.T) {
 	_, err = client.load(ctx, "cube-token", buildSeriesQuery(validCubeEnergyQuery(), time.UTC))
 	if err == nil || !strings.Contains(err.Error(), "continue wait") {
 		t.Fatalf("load() error = %v, want continue wait timeout", err)
+	}
+}
+
+func TestClientReusesSeriesMetadataOnCurrentWindowWithoutMetadataQuery(t *testing.T) {
+	var metadataQueries atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var decoded loadRequest
+		if err := json.NewDecoder(request.Body).Decode(&decoded); err != nil {
+			t.Fatal(err)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		if answeredCostQuery(writer, decoded) {
+			return
+		}
+		if decoded.Query.Measures[0] == "site_energy.max_data_watermark" {
+			metadataQueries.Add(1)
+			_, _ = writer.Write([]byte(`{"data":[]}`))
+			return
+		}
+		_, _ = writer.Write([]byte(`{"data":[
+			{"site_energy.period_end.hour":"2026-11-23T18:00:00.000","site_energy.energy_valid_kwh":"100","site_energy.cross_gap_valid_kwh":null,"site_energy.valid_count":"4","site_energy.suspect_count":"0","site_energy.invalid_count":"0","site_energy.max_data_watermark":"2026-11-23T10:59:00.000Z","site_energy.max_dataset_revision":"41","site_energy.synthesized_total":"0"},
+			{"site_energy.period_end.hour":"2026-11-23T19:00:00.000","site_energy.energy_valid_kwh":"80","site_energy.cross_gap_valid_kwh":null,"site_energy.valid_count":"3","site_energy.suspect_count":"0","site_energy.invalid_count":"0","site_energy.max_data_watermark":"2026-11-23T11:25:00.000Z","site_energy.max_dataset_revision":"45","site_energy.synthesized_total":"0"}
+		]}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{BaseURL: server.URL, DatasetRevision: "energy:v1", TokenFactory: fixedTokenFactory{}, HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	location, _ := time.LoadLocation("Asia/Shanghai")
+	fixedNow := time.Date(2026, 11, 23, 19, 30, 0, 0, location).UTC()
+	client.now = func() time.Time { return fixedNow }
+
+	response, err := client.QueryEnergySeries(context.Background(), analytics.CallerContext{PrincipalID: "user-1", PolicyRevision: "policy-1"}, analyticsmodel.EnergySeriesQuery{
+		TenantID: testCubeTenantID, SiteID: testCubeSiteID, EnergyType: analyticsmodel.EnergyTypeCooling, Granularity: analyticsmodel.GranularityHour,
+		Timezone: "Asia/Shanghai", From: time.Date(2026, 11, 23, 18, 0, 0, 0, location).UTC(), To: fixedNow, QualityPolicy: analyticsmodel.QualityPolicyValidOnly,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadataQueries.Load() != 0 {
+		t.Fatalf("metadata queries = %d, want 0 when series rows include metadata", metadataQueries.Load())
+	}
+	if response.Metadata.DatasetRevision != "energy:v1:45" || response.Metadata.DataWatermark == nil ||
+		!response.Metadata.DataWatermark.Equal(time.Date(2026, 11, 23, 11, 25, 0, 0, time.UTC)) {
+		t.Fatalf("metadata = %#v", response.Metadata)
+	}
+}
+
+func TestClientFallsBackToMetadataQueryWhenCurrentWindowSeriesIsEmpty(t *testing.T) {
+	var metadataQueries atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var decoded loadRequest
+		if err := json.NewDecoder(request.Body).Decode(&decoded); err != nil {
+			t.Fatal(err)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		if answeredCostQuery(writer, decoded) {
+			return
+		}
+		if decoded.Query.Measures[0] == "site_energy.max_data_watermark" {
+			metadataQueries.Add(1)
+			_, _ = writer.Write([]byte(`{"data":[{"site_energy.max_data_watermark":"2026-11-23T11:30:00.000Z","site_energy.max_dataset_revision":"52","site_energy.synthesized_total":"0"}]}`))
+			return
+		}
+		_, _ = writer.Write([]byte(`{"data":[]}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{BaseURL: server.URL, DatasetRevision: "energy:v1", TokenFactory: fixedTokenFactory{}, HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	location, _ := time.LoadLocation("Asia/Shanghai")
+	fixedNow := time.Date(2026, 11, 23, 19, 30, 0, 0, location).UTC()
+	client.now = func() time.Time { return fixedNow }
+
+	response, err := client.QueryEnergySeries(context.Background(), analytics.CallerContext{PrincipalID: "user-1", PolicyRevision: "policy-1"}, analyticsmodel.EnergySeriesQuery{
+		TenantID: testCubeTenantID, SiteID: testCubeSiteID, EnergyType: analyticsmodel.EnergyTypeElectricity, Granularity: analyticsmodel.GranularityHour,
+		Timezone: "Asia/Shanghai", From: time.Date(2026, 11, 23, 18, 0, 0, 0, location).UTC(), To: fixedNow, QualityPolicy: analyticsmodel.QualityPolicyValidOnly,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadataQueries.Load() != 1 {
+		t.Fatalf("metadata queries = %d, want 1 fallback when series rows are empty", metadataQueries.Load())
+	}
+	if response.Metadata.DatasetRevision != "energy:v1:52" || response.Metadata.DataWatermark == nil {
+		t.Fatalf("metadata = %#v", response.Metadata)
+	}
+}
+
+func TestClientPrefetchesMissingSubmetersInParallelForSynthesizedSite(t *testing.T) {
+	var (
+		barrierActive  atomic.Bool
+		arrivedCount   atomic.Int32
+		missingQueries atomic.Int32
+		release        = make(chan struct{})
+		releaseOnce    sync.Once
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var decoded loadRequest
+		if err := json.NewDecoder(request.Body).Decode(&decoded); err != nil {
+			t.Fatal(err)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		if answeredCostQuery(writer, decoded) {
+			return
+		}
+		switch decoded.Query.Measures[0] {
+		case "site_energy_missing.missing_count":
+			missingQueries.Add(1)
+			if barrierActive.Load() {
+				if arrivedCount.Add(1) >= 2 {
+					releaseOnce.Do(func() { close(release) })
+				}
+				select {
+				case <-release:
+				case <-request.Context().Done():
+					t.Errorf("missing submeters query did not run in parallel with series query")
+					return
+				}
+			}
+			_, _ = writer.Write([]byte(`{"data":[{"site_energy_missing.period_end.hour":"2026-11-23T18:00:00.000","site_energy_missing.missing_meter":"2号电表","site_energy_missing.missing_count":"1"}]}`))
+		case "site_energy.max_data_watermark":
+			_, _ = writer.Write([]byte(`{"data":[{"site_energy.max_data_watermark":"2026-11-23T11:30:00.000Z","site_energy.max_dataset_revision":"9","site_energy.synthesized_total":"1"}]}`))
+		default:
+			if barrierActive.Load() {
+				if arrivedCount.Add(1) >= 2 {
+					releaseOnce.Do(func() { close(release) })
+				}
+				select {
+				case <-release:
+				case <-request.Context().Done():
+					t.Errorf("series query did not observe concurrent missing submeters query")
+					return
+				}
+			}
+			_, _ = writer.Write([]byte(`{"data":[{"site_energy.period_end.hour":"2026-11-23T18:00:00.000","site_energy.energy_valid_kwh":"60","site_energy.cross_gap_valid_kwh":null,"site_energy.valid_count":"4","site_energy.suspect_count":"0","site_energy.invalid_count":"0","site_energy.max_data_watermark":"2026-11-23T11:30:00.000Z","site_energy.max_dataset_revision":"9","site_energy.synthesized_total":"1"}]}`))
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{BaseURL: server.URL, DatasetRevision: "energy:v1", TokenFactory: fixedTokenFactory{}, HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	location, _ := time.LoadLocation("Asia/Shanghai")
+	fixedNow := time.Date(2026, 11, 23, 19, 30, 0, 0, location).UTC()
+	client.now = func() time.Time { return fixedNow }
+	query := analyticsmodel.EnergySeriesQuery{
+		TenantID: testCubeTenantID, SiteID: testCubeSiteID, EnergyType: analyticsmodel.EnergyTypeElectricity, Granularity: analyticsmodel.GranularityHour,
+		Timezone: "Asia/Shanghai", From: time.Date(2026, 11, 23, 18, 0, 0, 0, location).UTC(), To: fixedNow, QualityPolicy: analyticsmodel.QualityPolicyValidOnly,
+	}
+
+	if _, err := client.QueryEnergySeries(context.Background(), analytics.CallerContext{PrincipalID: "user-1", PolicyRevision: "policy-1"}, query); err != nil {
+		t.Fatal(err)
+	}
+
+	barrierActive.Store(true)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	second, err := client.QueryEnergySeries(ctx, analytics.CallerContext{PrincipalID: "user-1", PolicyRevision: "policy-1"}, query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if missingQueries.Load() != 2 || len(second.Points) != 1 || !second.Points[0].Incomplete || second.Points[0].MissingMeters[0] != "2号电表" {
+		t.Fatalf("missingQueries=%d second=%#v", missingQueries.Load(), second)
+	}
+
+	// A non-synthesized site does not warm the prefetch hint and never triggers missing-submeter queries.
+	nonSynthServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var decoded loadRequest
+		if err := json.NewDecoder(request.Body).Decode(&decoded); err != nil {
+			t.Fatal(err)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		if answeredCostQuery(writer, decoded) {
+			return
+		}
+		if decoded.Query.Measures[0] == "site_energy_missing.missing_count" {
+			t.Errorf("unexpected missing submeters query for non-synthesized site")
+			http.Error(writer, "unexpected missing submeters query", http.StatusInternalServerError)
+			return
+		}
+		_, _ = writer.Write([]byte(`{"data":[{"site_energy.period_end.hour":"2026-11-23T18:00:00.000","site_energy.energy_valid_kwh":"60","site_energy.cross_gap_valid_kwh":null,"site_energy.valid_count":"4","site_energy.suspect_count":"0","site_energy.invalid_count":"0","site_energy.max_data_watermark":"2026-11-23T11:30:00.000Z","site_energy.max_dataset_revision":"9","site_energy.synthesized_total":"0"}]}`))
+	}))
+	defer nonSynthServer.Close()
+	nonSynthClient, err := NewClient(Config{BaseURL: nonSynthServer.URL, DatasetRevision: "energy:v1", TokenFactory: fixedTokenFactory{}, HTTPClient: nonSynthServer.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonSynthClient.now = func() time.Time { return fixedNow }
+	for range 2 {
+		if _, err := nonSynthClient.QueryEnergySeries(context.Background(), analytics.CallerContext{PrincipalID: "user-1", PolicyRevision: "policy-1"}, query); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

@@ -51,6 +51,12 @@ export function siteMidnight(year: number, month: number, day: number, timeZone:
   return new Date(guess - offset);
 }
 
+/** Snap `now` to 30s boundaries while staying past Site midnight so `to > from` always holds. */
+export function energyQueryNow(timeZone: string, nowMs = Date.now(), bucketMs = 30_000): Date {
+  const snapped = Math.floor(nowMs / bucketMs) * bucketMs, { year, month, day } = wallTime(new Date(nowMs), timeZone), midnight = siteMidnight(year, month, day, timeZone).getTime();
+  return new Date(snapped > midnight ? snapped : Math.max(nowMs, midnight + 1000));
+}
+
 /** Site-local window of a period, ending now; buckets are hours today, days within a month, months within a year. */
 export function periodWindow(period: EnergyPeriod, now: Date, timeZone: string): { granularity: Granularity; from: Date; to: Date } {
   const today = wallTime(now, timeZone);
