@@ -14,16 +14,18 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { AlarmRoutingPanel } from '@/features/alarms/components/AlarmRoutingPanel';
 import { RuleActionDeadLettersPanel } from '@/features/alarms/components/RuleActionDeadLettersPanel';
 import { ControlAlarmDeadLettersPanel } from '@/features/control/components/ControlAlarmDeadLettersPanel';
+import { AlarmTemplatesWorkbench } from '@/features/alarms/components/AlarmTemplatesWorkbench';
 import { EdgeModelsGovernancePanel } from './EdgeModelsGovernancePanel';
 import { OptimizationGovernancePanel } from './OptimizationGovernancePanel';
 
-export type GovernanceSection = 'control' | 'alarms' | 'optimization' | 'edge-models';
+export type GovernanceSection = 'control' | 'alarms' | 'optimization' | 'edge-models' | 'alarm-templates';
 
 const GOVERNANCE_SECTIONS: readonly { readonly value: GovernanceSection; readonly label: string }[] = [
   { value: 'control', label: '控制告警死信' },
   { value: 'alarms', label: '告警通道与死信' },
   { value: 'optimization', label: '策略灰度与负样本' },
   { value: 'edge-models', label: '端侧模型与超参' },
+  { value: 'alarm-templates', label: '告警规则模板库' },
 ];
 
 export function EngineeringGovernanceTab({
@@ -93,9 +95,8 @@ export function EngineeringGovernanceTab({
           type="single"
           value={section}
           onValueChange={(value) => {
-            if (value === 'control' || value === 'alarms' || value === 'optimization') {
-              onSectionChange(value);
-            }
+            const matched = GOVERNANCE_SECTIONS.find((option) => option.value === value);
+            if (matched) onSectionChange(matched.value);
           }}
           aria-label="工程治理分类"
           className="rounded-lg border border-divider bg-muted p-0.5"
@@ -135,7 +136,7 @@ export function EngineeringGovernanceTab({
             timeZone={site.timezone}
           />
         </div>
-      ) : (
+      ) : section === 'optimization' ? (
         <OptimizationGovernancePanel
           siteId={site.id}
           timeZone={site.timezone}
@@ -143,13 +144,20 @@ export function EngineeringGovernanceTab({
           canManage={canManage}
           csrfToken={csrfToken}
         />
-      )}
-      {section === 'edge-models' && (
+      ) : section === 'edge-models' ? (
         <EdgeModelsGovernancePanel
           siteId={site.id}
           timeZone={site.timezone}
           gateways={(assetModelQuery.data?.devices ?? []).filter((d) => d.deviceType === 'GATEWAY' && d.status === 'ACTIVE').map((d) => ({ id: d.id, name: d.displayName || d.code }))}
           active={active && section === 'edge-models'}
+          canManage={canManage}
+          csrfToken={csrfToken}
+        />
+      ) : (
+        <AlarmTemplatesWorkbench
+          sites={sites}
+          timeZone={site.timezone}
+          active={active && section === 'alarm-templates'}
           canManage={canManage}
           csrfToken={csrfToken}
         />

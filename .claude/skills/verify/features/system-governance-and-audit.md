@@ -10,6 +10,8 @@ The `/system` route hosts platform-wide tabs outside Site scope: `系统概览` 
 - `system-edge-model-hot-reload` (`/system?tab=governance&section=edge-models`) registers physical-bound-validated `EDGE_CONTROL` / `EDGE_FDD` hyperparam bundles, inspects structured diffs, enforces approval before shadow/production config-shadow deployment, and executes one-click rollback.
 - `system-audit-and-assistant` (`/system?tab=audit` and `/system?tab=assistant`) gate on `audit.read`, translate audit actor/action/resource/outcome into Chinese business facts with zero raw UUIDs or enums, and list per-day AI assistant step failures in plain copy.
 
+- **跨站点告警规则模板库**: Maintain reusable device-model alarm baseline templates, publish immutable releases, preview diffs with conflict highlighting, and roll out to bound sites (`e2e/alarm-templates.spec.ts`).
+
 ## How to get to it (user POV)
 
 - Open the user menu in the top-right header, click `系统管理`, or navigate directly to `/system?tab=<overview|site|registry|audit|assistant>`.
@@ -26,6 +28,8 @@ Preconditions:
 - **Verify template catalog, structured activation, tags CRUD, and multi-dimensional search.** In `/system?tab=registry`, confirm `模板版本` renders persistent catalog entries + revision summary, releases a structured `DEVICE` template with standard points/capability profiles, assigns a revision, and persists across page reload in `站点已应用模板`. Under `资源与绑定`, add key-value tags (`vendor:carrier`) on a device, filter by tag (`按标签筛选`), filter by recursive `空间层级`, and toggle `全部授权站点` (`所属站点` column) at `1440×900` light and dark themes with zero overflow.
 - **Verify edge model hot-reload governance (`e2e/edge-models.spec.ts`).** Open `/system?tab=governance&section=edge-models`, confirm 1440×900 light/dark overflow=0 and zero raw UUID/enum leaks, verify physical-bound validation rejection (`2.0°C`), register valid candidate `1.2.0`, inspect structured hyperparam diff, approve, deploy, and trigger one-click rollback restoring `1.0.0`.
 - **Proof.** Capture pass output and `1440×900` PNGs under `.scratch/verify/<slug>/`.
+
+- Switch to `/system?tab=governance&section=alarm-templates`, create template / publish new release, inspect diff preview conflicts, and execute controlled rollout (`e2e/alarm-templates.spec.ts`).
 
 ## Gotchas
 

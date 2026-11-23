@@ -10097,6 +10097,466 @@
           }
         }
       }
+    },
+    "/api/v1/alarm-rule-templates": {
+      "get": {
+        "operationId": "listAlarmRuleTemplates",
+        "summary": "List cross-site alarm rule baseline templates",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ACTIVE",
+                "ARCHIVED"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlarmRuleTemplateListEnvelope"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createAlarmRuleTemplate",
+        "summary": "Create a cross-site alarm rule baseline template",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAlarmRuleTemplateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlarmRuleTemplateDetailEnvelope"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/alarm-rule-templates/{templateId}": {
+      "get": {
+        "operationId": "getAlarmRuleTemplate",
+        "summary": "Get one baseline template with release history",
+        "parameters": [
+          {
+            "name": "templateId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlarmRuleTemplateDetailEnvelope"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "put": {
+        "operationId": "updateAlarmRuleTemplate",
+        "summary": "Update baseline template metadata",
+        "parameters": [
+          {
+            "name": "templateId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAlarmRuleTemplateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlarmRuleTemplateEnvelope"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/alarm-rule-templates/{templateId}/releases": {
+      "get": {
+        "operationId": "listAlarmRuleTemplateReleases",
+        "summary": "List immutable baseline template releases",
+        "parameters": [
+          {
+            "name": "templateId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlarmRuleTemplateReleaseListEnvelope"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "publishAlarmRuleTemplateRelease",
+        "summary": "Publish a new immutable baseline template version",
+        "parameters": [
+          {
+            "name": "templateId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishAlarmRuleTemplateReleaseRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlarmRuleTemplateReleaseEnvelope"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/alarm-rule-templates/{templateId}/sites": {
+      "put": {
+        "operationId": "updateAlarmRuleTemplateSites",
+        "summary": "Update bound sites for a baseline template",
+        "parameters": [
+          {
+            "name": "templateId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAlarmRuleTemplateSitesRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlarmRuleTemplateEnvelope"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/alarm-rule-templates/{templateId}/preview-rollout": {
+      "post": {
+        "operationId": "previewAlarmRuleTemplateRollout",
+        "summary": "Preview multi-site baseline template rollout preserving site overrides",
+        "parameters": [
+          {
+            "name": "templateId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AlarmRuleTemplateRolloutRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlarmRuleTemplateRolloutPreviewEnvelope"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/alarm-rule-templates/{templateId}/rollout": {
+      "post": {
+        "operationId": "executeAlarmRuleTemplateRollout",
+        "summary": "Roll out a baseline template release to bound or target sites",
+        "parameters": [
+          {
+            "name": "templateId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AlarmRuleTemplateRolloutRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlarmRuleTemplateRolloutEnvelope"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/alarm-rules/template-drift": {
+      "get": {
+        "operationId": "getSiteAlarmRuleTemplateDrift",
+        "summary": "Compare active site alarm rules against their baseline templates",
+        "parameters": [
+          {
+            "name": "siteId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteAlarmRuleTemplateDriftEnvelope"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/alarm-rules/{ruleId}/reset-template": {
+      "post": {
+        "operationId": "resetSiteAlarmRuleToTemplate",
+        "summary": "Reset overridden fields of a site alarm rule back to its baseline template defaults",
+        "parameters": [
+          {
+            "name": "ruleId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          },
+          {
+            "name": "siteId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetSiteAlarmRuleToTemplateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlarmRulePublishEnvelope"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -14930,7 +15390,8 @@
             "enum": [
               "WEB_WORKBENCH",
               "CLI_SYNC",
-              "ROLLBACK"
+              "ROLLBACK",
+              "TEMPLATE_ROLLOUT"
             ]
           },
           "changed": {
@@ -15020,7 +15481,8 @@
             "enum": [
               "WEB_WORKBENCH",
               "CLI_SYNC",
-              "ROLLBACK"
+              "ROLLBACK",
+              "TEMPLATE_ROLLOUT"
             ]
           },
           "rolledBackFromRevision": {
@@ -24102,6 +24564,1169 @@
           }
         },
         "additionalProperties": false
+      },
+      "AlarmRuleTemplateCondition": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "pointCode": {
+            "type": "string"
+          },
+          "operator": {
+            "type": "string"
+          },
+          "value": {
+            "oneOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "minimum": {
+            "type": "number"
+          },
+          "maximum": {
+            "type": "number"
+          },
+          "direction": {
+            "type": "string"
+          },
+          "trigger": {
+            "type": "number"
+          },
+          "reset": {
+            "type": "number"
+          },
+          "ageSeconds": {
+            "type": "integer"
+          },
+          "delta": {
+            "type": "number"
+          },
+          "windowSeconds": {
+            "type": "integer"
+          },
+          "agg": {
+            "type": "string"
+          },
+          "windowType": {
+            "type": "string"
+          },
+          "minSamples": {
+            "type": "integer"
+          },
+          "threshold": {
+            "type": "number"
+          },
+          "expression": {
+            "type": "string"
+          },
+          "inputs": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AlarmRuleTemplateCondition"
+            }
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "match": {
+            "type": "string"
+          }
+        }
+      },
+      "AlarmRuleTemplateSpec": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "title",
+          "severity",
+          "executionTarget",
+          "triggerMode",
+          "raise",
+          "clear"
+        ],
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "alarmType": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "INFO",
+              "WARNING",
+              "MINOR",
+              "MAJOR",
+              "CRITICAL"
+            ]
+          },
+          "ruleKind": {
+            "type": "string",
+            "enum": [
+              "THRESHOLD",
+              "SLOPE",
+              "WINDOW",
+              "EXPRESSION"
+            ]
+          },
+          "executionTarget": {
+            "type": "string",
+            "enum": [
+              "CLOUD",
+              "EDGE",
+              "CLOUD_AND_EDGE"
+            ]
+          },
+          "qualityPolicy": {
+            "type": "string",
+            "enum": [
+              "VALID_ONLY",
+              "USABLE"
+            ]
+          },
+          "freshnessSeconds": {
+            "type": "integer"
+          },
+          "triggerMode": {
+            "type": "string",
+            "enum": [
+              "SIMPLE",
+              "DURATION",
+              "REPEATING"
+            ]
+          },
+          "durationSeconds": {
+            "type": "integer"
+          },
+          "repeatCount": {
+            "type": "integer"
+          },
+          "raise": {
+            "$ref": "#/components/schemas/AlarmRuleTemplateCondition"
+          },
+          "clear": {
+            "$ref": "#/components/schemas/AlarmRuleTemplateCondition"
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AlarmRuleAction"
+            }
+          }
+        }
+      },
+      "AlarmRuleBaselineTemplate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "templateId",
+          "templateKey",
+          "displayName",
+          "deviceType",
+          "alarmType",
+          "ruleKind",
+          "defaultSeverity",
+          "defaultExecutionTarget",
+          "boundSiteIds",
+          "latestVersion",
+          "status",
+          "createdBy",
+          "updatedBy",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "templateId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "templateKey": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "deviceType": {
+            "type": "string"
+          },
+          "thingModelCode": {
+            "type": "string"
+          },
+          "alarmType": {
+            "type": "string"
+          },
+          "ruleKind": {
+            "type": "string",
+            "enum": [
+              "THRESHOLD",
+              "SLOPE",
+              "WINDOW",
+              "EXPRESSION"
+            ]
+          },
+          "defaultSeverity": {
+            "type": "string",
+            "enum": [
+              "INFO",
+              "WARNING",
+              "MINOR",
+              "MAJOR",
+              "CRITICAL"
+            ]
+          },
+          "defaultExecutionTarget": {
+            "type": "string",
+            "enum": [
+              "CLOUD",
+              "EDGE",
+              "CLOUD_AND_EDGE"
+            ]
+          },
+          "boundSiteIds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          },
+          "latestVersion": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "latestSpec": {
+            "$ref": "#/components/schemas/AlarmRuleTemplateSpec"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "ARCHIVED"
+            ]
+          },
+          "createdBy": {
+            "type": "string"
+          },
+          "updatedBy": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        }
+      },
+      "AlarmRuleTemplateRelease": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "releaseId",
+          "templateId",
+          "version",
+          "ruleSpec",
+          "publishedBy",
+          "publishedAt"
+        ],
+        "properties": {
+          "releaseId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "templateId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "ruleSpec": {
+            "$ref": "#/components/schemas/AlarmRuleTemplateSpec"
+          },
+          "changeNote": {
+            "type": "string"
+          },
+          "publishedBy": {
+            "type": "string"
+          },
+          "publishedByName": {
+            "type": "string"
+          },
+          "publishedAt": {
+            "type": "string"
+          }
+        }
+      },
+      "AlarmRuleTemplateDetail": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "template",
+          "releases"
+        ],
+        "properties": {
+          "template": {
+            "$ref": "#/components/schemas/AlarmRuleBaselineTemplate"
+          },
+          "releases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AlarmRuleTemplateRelease"
+            }
+          }
+        }
+      },
+      "AlarmRuleTemplateList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AlarmRuleBaselineTemplate"
+            }
+          }
+        }
+      },
+      "AlarmRuleTemplateReleaseList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AlarmRuleTemplateRelease"
+            }
+          }
+        }
+      },
+      "CreateAlarmRuleTemplateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "templateKey",
+          "displayName",
+          "deviceType",
+          "defaultSeverity",
+          "defaultExecutionTarget"
+        ],
+        "properties": {
+          "templateKey": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "deviceType": {
+            "type": "string"
+          },
+          "thingModelCode": {
+            "type": "string"
+          },
+          "alarmType": {
+            "type": "string"
+          },
+          "ruleKind": {
+            "type": "string",
+            "enum": [
+              "THRESHOLD",
+              "SLOPE",
+              "WINDOW",
+              "EXPRESSION"
+            ]
+          },
+          "defaultSeverity": {
+            "type": "string",
+            "enum": [
+              "INFO",
+              "WARNING",
+              "MINOR",
+              "MAJOR",
+              "CRITICAL"
+            ]
+          },
+          "defaultExecutionTarget": {
+            "type": "string",
+            "enum": [
+              "CLOUD",
+              "EDGE",
+              "CLOUD_AND_EDGE"
+            ]
+          },
+          "boundSiteIds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          },
+          "initialSpec": {
+            "$ref": "#/components/schemas/AlarmRuleTemplateSpec"
+          },
+          "changeNote": {
+            "type": "string"
+          }
+        }
+      },
+      "UpdateAlarmRuleTemplateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "displayName",
+          "deviceType",
+          "defaultSeverity",
+          "defaultExecutionTarget"
+        ],
+        "properties": {
+          "displayName": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "deviceType": {
+            "type": "string"
+          },
+          "thingModelCode": {
+            "type": "string"
+          },
+          "defaultSeverity": {
+            "type": "string",
+            "enum": [
+              "INFO",
+              "WARNING",
+              "MINOR",
+              "MAJOR",
+              "CRITICAL"
+            ]
+          },
+          "defaultExecutionTarget": {
+            "type": "string",
+            "enum": [
+              "CLOUD",
+              "EDGE",
+              "CLOUD_AND_EDGE"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "ARCHIVED"
+            ]
+          }
+        }
+      },
+      "PublishAlarmRuleTemplateReleaseRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ruleSpec"
+        ],
+        "properties": {
+          "ruleSpec": {
+            "$ref": "#/components/schemas/AlarmRuleTemplateSpec"
+          },
+          "changeNote": {
+            "type": "string"
+          }
+        }
+      },
+      "UpdateAlarmRuleTemplateSitesRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "siteIds"
+        ],
+        "properties": {
+          "siteIds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          }
+        }
+      },
+      "AlarmRuleTemplateRolloutTarget": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "siteId"
+        ],
+        "properties": {
+          "siteId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "deviceId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          }
+        }
+      },
+      "AlarmRuleTemplateRolloutRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "siteIds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          },
+          "targets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AlarmRuleTemplateRolloutTarget"
+            }
+          },
+          "changeNote": {
+            "type": "string"
+          }
+        }
+      },
+      "AlarmRuleTemplateFieldConflict": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ruleId",
+          "ruleTitle",
+          "field",
+          "fieldLabel",
+          "siteValue",
+          "templateValue",
+          "resolution"
+        ],
+        "properties": {
+          "ruleId": {
+            "type": "string"
+          },
+          "ruleTitle": {
+            "type": "string"
+          },
+          "field": {
+            "type": "string"
+          },
+          "fieldLabel": {
+            "type": "string"
+          },
+          "siteValue": {
+            "type": "string"
+          },
+          "templateValue": {
+            "type": "string"
+          },
+          "resolution": {
+            "type": "string"
+          }
+        }
+      },
+      "AlarmRuleTemplateSiteRuleDiff": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ruleId",
+          "ruleTitle",
+          "action",
+          "changedFields",
+          "preservedOverrides",
+          "conflicts"
+        ],
+        "properties": {
+          "ruleId": {
+            "type": "string"
+          },
+          "ruleTitle": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "UPDATE",
+              "CREATE",
+              "UNCHANGED",
+              "SKIPPED"
+            ]
+          },
+          "changedFields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "preservedOverrides": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "conflicts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AlarmRuleTemplateFieldConflict"
+            }
+          }
+        }
+      },
+      "AlarmRuleTemplateSitePreview": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "siteId",
+          "bundleRevision",
+          "matchedRuleCount",
+          "willUpdateCount",
+          "willCreateCount",
+          "preservedOverrideCount",
+          "conflictCount",
+          "ruleDiffs"
+        ],
+        "properties": {
+          "siteId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "bundleRevision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "matchedRuleCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "willUpdateCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "willCreateCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "preservedOverrideCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "conflictCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "ruleDiffs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AlarmRuleTemplateSiteRuleDiff"
+            }
+          },
+          "note": {
+            "type": "string"
+          }
+        }
+      },
+      "AlarmRuleTemplateRolloutPreview": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "templateId",
+          "templateKey",
+          "displayName",
+          "templateVersion",
+          "sites",
+          "totalChangedSites",
+          "totalPreservedOverrides",
+          "totalConflicts"
+        ],
+        "properties": {
+          "templateId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "templateKey": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "templateVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "sites": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AlarmRuleTemplateSitePreview"
+            }
+          },
+          "totalChangedSites": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "totalPreservedOverrides": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "totalConflicts": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "AlarmRuleTemplateSiteOutcome": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "siteId",
+          "status",
+          "preservedOverrideCount",
+          "conflictCount",
+          "changedRuleCount",
+          "createdRuleCount"
+        ],
+        "properties": {
+          "siteId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "APPLIED",
+              "SKIPPED",
+              "FAILED"
+            ]
+          },
+          "bundleRevision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "preservedOverrideCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "conflictCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "changedRuleCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "createdRuleCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "detail": {
+            "type": "string"
+          }
+        }
+      },
+      "AlarmRuleTemplateRolloutResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "batchId",
+          "templateId",
+          "templateVersion",
+          "createdBy",
+          "createdAt",
+          "outcomes",
+          "totalAppliedSites",
+          "totalPreservedOverrides",
+          "totalConflicts"
+        ],
+        "properties": {
+          "batchId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "templateId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "templateVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "createdBy": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "outcomes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AlarmRuleTemplateSiteOutcome"
+            }
+          },
+          "totalAppliedSites": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "totalPreservedOverrides": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "totalConflicts": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "SiteAlarmRuleTemplateFieldDiff": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "field",
+          "label",
+          "siteValue",
+          "templateValue",
+          "isOverridden",
+          "drifted"
+        ],
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "siteValue": {
+            "type": "string"
+          },
+          "templateValue": {
+            "type": "string"
+          },
+          "isOverridden": {
+            "type": "boolean"
+          },
+          "drifted": {
+            "type": "boolean"
+          }
+        }
+      },
+      "SiteAlarmRuleTemplateDriftItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ruleId",
+          "ruleTitle",
+          "templateId",
+          "templateKey",
+          "templateName",
+          "templateVersion",
+          "overriddenFields",
+          "driftedFields",
+          "diffs"
+        ],
+        "properties": {
+          "ruleId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "ruleTitle": {
+            "type": "string"
+          },
+          "templateId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "templateKey": {
+            "type": "string"
+          },
+          "templateName": {
+            "type": "string"
+          },
+          "templateVersion": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "overriddenFields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "driftedFields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "diffs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SiteAlarmRuleTemplateFieldDiff"
+            }
+          }
+        }
+      },
+      "SiteAlarmRuleTemplateDriftReport": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "siteId",
+          "bundleRevision",
+          "items"
+        ],
+        "properties": {
+          "siteId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "bundleRevision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SiteAlarmRuleTemplateDriftItem"
+            }
+          }
+        }
+      },
+      "ResetSiteAlarmRuleToTemplateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "changeNote": {
+            "type": "string"
+          }
+        }
+      },
+      "AlarmRuleTemplateListEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/AlarmRuleTemplateList"
+          },
+          "meta": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "requestId"
+            ],
+            "properties": {
+              "requestId": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "AlarmRuleTemplateDetailEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/AlarmRuleTemplateDetail"
+          },
+          "meta": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "requestId"
+            ],
+            "properties": {
+              "requestId": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "AlarmRuleTemplateEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/AlarmRuleBaselineTemplate"
+          },
+          "meta": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "requestId"
+            ],
+            "properties": {
+              "requestId": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "AlarmRuleTemplateReleaseListEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/AlarmRuleTemplateReleaseList"
+          },
+          "meta": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "requestId"
+            ],
+            "properties": {
+              "requestId": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "AlarmRuleTemplateReleaseEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/AlarmRuleTemplateRelease"
+          },
+          "meta": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "requestId"
+            ],
+            "properties": {
+              "requestId": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "AlarmRuleTemplateRolloutPreviewEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/AlarmRuleTemplateRolloutPreview"
+          },
+          "meta": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "requestId"
+            ],
+            "properties": {
+              "requestId": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "AlarmRuleTemplateRolloutEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/AlarmRuleTemplateRolloutResult"
+          },
+          "meta": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "requestId"
+            ],
+            "properties": {
+              "requestId": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "SiteAlarmRuleTemplateDriftEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/SiteAlarmRuleTemplateDriftReport"
+          },
+          "meta": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "requestId"
+            ],
+            "properties": {
+              "requestId": {
+                "type": "string"
+              }
+            }
+          }
+        }
       }
     }
   }

@@ -206,6 +206,7 @@ COPY modules/alarm/migrations/alarm-evaluation-slope-window.sql /opt/hvac/repo/m
 COPY modules/alarm/migrations/alarm-rule-action-outbox.sql /opt/hvac/repo/modules/alarm/migrations/alarm-rule-action-outbox.sql
 COPY modules/alarm/migrations/alarm-site-rule-bundles.sql /opt/hvac/repo/modules/alarm/migrations/alarm-site-rule-bundles.sql
 COPY modules/alarm/migrations/alarm-edge-event-projection.sql /opt/hvac/repo/modules/alarm/migrations/alarm-edge-event-projection.sql
+COPY modules/alarm/migrations/rule-baseline-templates.sql /opt/hvac/repo/modules/alarm/migrations/rule-baseline-templates.sql
 COPY modules/workorder/migrations/001_s5_work_order_runtime.sql /opt/hvac/repo/modules/workorder/migrations/001_s5_work_order_runtime.sql
 COPY modules/workorder/migrations/002_s5_work_order_create_assignment.sql /opt/hvac/repo/modules/workorder/migrations/002_s5_work_order_create_assignment.sql
 COPY modules/workorder/migrations/003_s5_work_order_lifecycle.sql /opt/hvac/repo/modules/workorder/migrations/003_s5_work_order_lifecycle.sql

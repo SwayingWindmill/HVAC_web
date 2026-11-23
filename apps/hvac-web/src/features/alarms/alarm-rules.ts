@@ -562,6 +562,7 @@ export const BUNDLE_SOURCE_LABELS: Readonly<Record<AlarmRuleBundleRevision['sour
   WEB_WORKBENCH: '工作台热发布',
   CLI_SYNC: '规则文件同步',
   ROLLBACK: '历史版本回滚',
+  TEMPLATE_ROLLOUT: '跨站模板下发',
 };
 
 export const RULE_CHANGE_LABELS: Readonly<Record<AlarmRuleChangeEntry['change'], string>> = {

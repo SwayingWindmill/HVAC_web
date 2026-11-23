@@ -191,6 +191,7 @@ hvac_s4|modules/alarm/migrations/alarm-evaluation-slope-window.sql
 hvac_s4|modules/alarm/migrations/alarm-rule-action-outbox.sql
 hvac_s4|modules/alarm/migrations/alarm-site-rule-bundles.sql
 hvac_s4|modules/alarm/migrations/alarm-edge-event-projection.sql
+hvac_s4|modules/alarm/migrations/rule-baseline-templates.sql
 hvac_s5|modules/workorder/migrations/001_s5_work_order_runtime.sql
 hvac_s5|modules/workorder/migrations/002_s5_work_order_create_assignment.sql
 hvac_s5|modules/workorder/migrations/003_s5_work_order_lifecycle.sql

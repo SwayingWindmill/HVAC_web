@@ -30,6 +30,7 @@ import { AlarmRuleEditorSheet } from './AlarmRuleEditorSheet';
 import { AlarmRulePublishDiffDialog } from './AlarmRulePublishDiffDialog';
 import { AlarmRuleRevisionsSheet } from './AlarmRuleRevisionsSheet';
 import { AlarmRuleSimulateSheet } from './AlarmRuleSimulateSheet';
+import { AlarmRuleTemplateDriftSheet } from './AlarmRuleTemplateDriftSheet';
 
 /** Site alarm rules workbench: list view, interactive causal DAG canvas, draft authoring, dry-run diff, hot-publish and rollback. */
 export function AlarmRulesTable({
@@ -60,6 +61,7 @@ export function AlarmRulesTable({
   const [diffDialogOpen, setDiffDialogOpen] = useState(false);
   const [revisionsOpen, setRevisionsOpen] = useState(false);
   const [edgeCompileOpen, setEdgeCompileOpen] = useState(false);
+  const [driftSheetOpen, setDriftSheetOpen] = useState(false);
   const [publishNotice, setPublishNotice] = useState<string | null>(null);
 
   const bundleQuery = useQuery(siteAlarmRulesBundleQuery(siteId));
@@ -270,6 +272,9 @@ export function AlarmRulesTable({
             <Cpu data-icon="inline-start" className="size-3.5" aria-hidden="true" />
             边缘编译下发
           </Button>
+          <Button type="button" variant="outline" size="sm" onClick={() => setDriftSheetOpen(true)}>
+            模板偏离核对
+          </Button>
         </div>
 
         {canManage ? (
@@ -405,6 +410,17 @@ export function AlarmRulesTable({
         draftRules={delta.dirty ? activeRules : undefined}
         publishedBundleRevision={bundleRevision}
         onClose={() => setEdgeCompileOpen(false)}
+      />
+      <AlarmRuleTemplateDriftSheet
+        open={driftSheetOpen}
+        siteId={siteId}
+        canManage={canManage}
+        csrfToken={csrfToken}
+        onClose={() => setDriftSheetOpen(false)}
+        onResetCompleted={() => {
+          void queryClient.invalidateQueries({ queryKey: ['alarms', siteId, 'rules'] });
+          void queryClient.invalidateQueries({ queryKey: ['alarms', siteId, 'rule-revisions'] });
+        }}
       />
     </DataTableBlock>
   );

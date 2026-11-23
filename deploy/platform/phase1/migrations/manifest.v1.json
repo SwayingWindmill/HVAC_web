@@ -230,7 +230,8 @@
         "modules/alarm/migrations/alarm-evaluation-slope-window.sql",
         "modules/alarm/migrations/alarm-rule-action-outbox.sql",
         "modules/alarm/migrations/alarm-site-rule-bundles.sql",
-        "modules/alarm/migrations/alarm-edge-event-projection.sql"
+        "modules/alarm/migrations/alarm-edge-event-projection.sql",
+        "modules/alarm/migrations/rule-baseline-templates.sql"
       ]
     },
     {

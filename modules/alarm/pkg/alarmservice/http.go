@@ -42,6 +42,7 @@ type HTTPConfig struct {
 	Store            Store
 	Rules            SiteRuleReader
 	Authoring        SiteRuleAuthoringStore
+	Templates        RuleTemplateStore
 	DeadLetters      RuleActionDeadLetterStore
 	Metrics          *observability.Registry
 	GatewayPublicKey crypto.PublicKey
@@ -55,6 +56,7 @@ type httpHandler struct {
 	store            Store
 	rules            SiteRuleReader
 	authoring        SiteRuleAuthoringStore
+	templates        RuleTemplateStore
 	deadLetters      RuleActionDeadLetterStore
 	metrics          *observability.Registry
 	gatewayPublicKey crypto.PublicKey
@@ -123,8 +125,14 @@ func NewHTTPHandler(config HTTPConfig) (http.Handler, error) {
 			authoring = rulesAuthoring
 		}
 	}
+	templates := config.Templates
+	if templates == nil {
+		if storeTemplates, ok := config.Store.(RuleTemplateStore); ok {
+			templates = storeTemplates
+		}
+	}
 	return &httpHandler{
-		store: config.Store, rules: config.Rules, authoring: authoring, deadLetters: deadLetters, metrics: config.Metrics,
+		store: config.Store, rules: config.Rules, authoring: authoring, templates: templates, deadLetters: deadLetters, metrics: config.Metrics,
 		gatewayPublicKey: config.GatewayPublicKey, now: config.Now,
 		gatewaySPIFFEID: config.GatewaySPIFFEID, audience: config.Audience, maxListLimit: config.MaxListLimit,
 	}, nil
@@ -160,6 +168,9 @@ func (handler *httpHandler) ServeHTTP(writer http.ResponseWriter, request *http.
 			return
 		}
 		writeJSON(writer, http.StatusOK, scope)
+		return
+	}
+	if handler.handleRuleTemplateHTTP(writer, request) {
 		return
 	}
 	if siteID, matches := matchSiteRuleSubpath(request.URL.Path, "alarm-rules"); matches {

@@ -26,6 +26,8 @@ const (
 	RuleBundleSourceCLISync = "CLI_SYNC"
 	// RuleBundleSourceRollback records a bundle revision restored from a previous snapshot.
 	RuleBundleSourceRollback = "ROLLBACK"
+	// RuleBundleSourceTemplateRollout records a bundle revision updated via baseline template rollout or reset.
+	RuleBundleSourceTemplateRollout = "TEMPLATE_ROLLOUT"
 
 	defaultRuleBundleRevisionLimit = 20
 	maxRuleBundleRevisionLimit     = 100
