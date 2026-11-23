@@ -27,6 +27,14 @@ import {
   validateRecalculateWindow,
   type BillingElectricitySeriesInput,
 } from '../apps/hvac-web/src/features/billing/billing-model.ts';
+import {
+  buildUtilityBillInitialValues,
+  buildUtilityBillMutationPayload,
+  formatIsoCalendarDate,
+  hasExtraTicketDetails,
+  parseIsoCalendarDate,
+  utilityBillFormSchema,
+} from '../apps/hvac-web/src/features/billing/utility-bill-form.ts';
 import type { CostPeriod } from '../apps/hvac-web/src/features/tariff/tariff-model.ts';
 
 const SITE_ID = '018f3e00-1000-7000-8000-000000000001';
@@ -615,4 +623,124 @@ test('recalculation window validation, defaults, label formatting, and gateway e
     'fallback',
   );
   assert.equal(routeMissingMsg, '此功能尚未在服务器上启用');
+});
+
+test('parseIsoCalendarDate and formatIsoCalendarDate validate leap days and reject calendar rollover', () => {
+  const leap = parseIsoCalendarDate('2028-02-29');
+  assert.ok(leap instanceof Date);
+  assert.equal(formatIsoCalendarDate(leap), '2028-02-29');
+
+  assert.equal(parseIsoCalendarDate('2026-02-29'), undefined);
+  assert.equal(parseIsoCalendarDate('2026-04-31'), undefined);
+  assert.equal(parseIsoCalendarDate('2026-10-1'), undefined);
+});
+
+test('utility-bill form defaults, schema validation, and payload builder preserve TOU, overrides, and rounding', () => {
+  const createDefaults = buildUtilityBillInitialValues(null, '2026-02');
+  assert.equal(createDefaults.billingMonth, '2026-02');
+  assert.equal(createDefaults.readingStartDate, '2026-02-01');
+  assert.equal(createDefaults.readingEndDate, '2026-02-28');
+  assert.equal(createDefaults.meterScope, 'CHILLER_PLANT');
+  assert.equal(hasExtraTicketDetails(null), false);
+
+  const editSource = makeBill({
+    meterScope: 'WHOLE_BUILDING',
+    chillerShareOverrideRatio: 0.35,
+    utilityAccountNo: '0800123456',
+    standardPowerFactor: 0.9,
+    actualPowerFactor: 0.95,
+    touBreakdown: { sharpKwh: 40000, peakKwh: 120000, deepValleyKwh: 15000.5 },
+  });
+  assert.equal(hasExtraTicketDetails(editSource), true);
+  assert.equal(
+    hasExtraTicketDetails(
+      makeBill({
+        utilityAccountNo: '',
+        standardPowerFactor: null,
+        actualPowerFactor: null,
+        touBreakdown: undefined,
+      }),
+    ),
+    false,
+  );
+
+  const editDefaults = buildUtilityBillInitialValues(editSource, '2026-10');
+  assert.equal(editDefaults.chillerShareOverridePercentInput, '35');
+  assert.equal(editDefaults.touSuperPeakKwhInput, '40000');
+  assert.equal(editDefaults.touDeepValleyKwhInput, '15000.5');
+
+  const validForm = utilityBillFormSchema.safeParse({
+    ...createDefaults,
+    meterScope: 'WHOLE_BUILDING',
+    readingStartDate: '2026-01-25',
+    readingEndDate: '2026-02-24',
+    billedEnergyInput: '400000',
+    touSuperPeakKwhInput: '40000',
+    touDeepValleyKwhInput: '1234.56',
+    energyChargeInput: '310000',
+    basicChargeMode: 'MAX_DEMAND_KW',
+    basicChargeQuantityInput: '1800',
+    basicChargeInput: '50900',
+    standardPowerFactorInput: '0.90',
+    actualPowerFactorInput: '0.95',
+    powerFactorAdjustmentInput: '-1257',
+    otherChargesInput: '357',
+    chillerShareOverridePercentInput: '35',
+    utilityAccountNo: ' 0800123456 ',
+    invoiceNo: ' GD-202610-WB01 ',
+    note: '  ',
+    reason: '录入供电局月度结算电费单',
+  });
+  assert.equal(validForm.success, true);
+  if (validForm.success) {
+    const payload = buildUtilityBillMutationPayload(validForm.data, {
+      expectedRevision: 2,
+      idempotencyKey: 'idem-bill-1',
+    });
+    assert.equal(payload.totalPayableCny, 360000);
+    assert.equal(payload.chillerShareOverrideRatio, 0.35);
+    assert.deepEqual(payload.touBreakdown, { sharpKwh: 40000, deepValleyKwh: 1234.56 });
+    assert.equal(payload.utilityAccountNo, '0800123456');
+    assert.equal(payload.invoiceNo, 'GD-202610-WB01');
+    assert.equal(payload.note, undefined);
+    assert.equal(payload.meta.expectedRevision, 2);
+  }
+
+  const singlePart = utilityBillFormSchema.safeParse({
+    ...createDefaults,
+    billedEnergyInput: '10000',
+    energyChargeInput: '8000',
+    basicChargeMode: 'NONE',
+    basicChargeQuantityInput: '',
+    basicChargeInput: '0',
+    powerFactorAdjustmentInput: '0',
+    otherChargesInput: '0',
+  });
+  assert.equal(singlePart.success, true);
+  if (singlePart.success) {
+    const payload = buildUtilityBillMutationPayload(singlePart.data, {
+      expectedRevision: 0,
+      idempotencyKey: 'idem-bill-2',
+    });
+    assert.equal(payload.basicChargeQuantity, undefined);
+    assert.equal(payload.basicChargeCny, 0);
+  }
+
+  for (const invalidCase of [
+    { readingStartDate: '2026-02-20', readingEndDate: '2026-02-10' },
+    { basicChargeMode: 'NONE', basicChargeInput: '100' },
+    { basicChargeMode: 'MAX_DEMAND_KW', basicChargeQuantityInput: '0', basicChargeInput: '1000' },
+    { meterScope: 'WHOLE_BUILDING', chillerShareOverridePercentInput: '120' },
+    { energyChargeInput: '100', basicChargeInput: '0', powerFactorAdjustmentInput: '-200', otherChargesInput: '0' },
+  ] as const) {
+    const res = utilityBillFormSchema.safeParse({
+      ...createDefaults,
+      billedEnergyInput: '10000',
+      energyChargeInput: '8000',
+      basicChargeQuantityInput: '500',
+      basicChargeInput: '1000',
+      ...invalidCase,
+    });
+    assert.equal(res.success, false);
+  }
 });
