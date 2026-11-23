@@ -53,6 +53,7 @@ type publicAlarmRoute struct {
 	bundleRevision           uint64
 	outboxID                 string
 	evaluations              bool
+	templateRoute            *alarmTemplateRoute
 	now                      time.Time
 }
 
@@ -133,6 +134,18 @@ func (a *directAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Re
 	}
 	if route.siteRuleDeadLetters || route.siteRuleDeadLetterReplay {
 		failure := alarmUnavailable("Site rule dead letters are only served by the Alarm Service.")
+		return nil, http.StatusServiceUnavailable, &failure
+	}
+	if route.templateRoute != nil {
+		failure := alarmUnavailable("Alarm rule baseline templates are only served by the Alarm Service.")
+		return nil, http.StatusServiceUnavailable, &failure
+	}
+	if route.templateRoute != nil {
+		failure := alarmUnavailable("Alarm rule baseline templates are only served by the Alarm Service.")
+		return nil, http.StatusServiceUnavailable, &failure
+	}
+	if route.templateRoute != nil {
+		failure := alarmUnavailable("Alarm rule baseline templates are only served by the Alarm Service.")
 		return nil, http.StatusServiceUnavailable, &failure
 	}
 	query := publicRequest.URL.Query()
@@ -414,6 +427,9 @@ func (a *httpAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Requ
 	}
 	method := http.MethodGet
 	var requestBody io.Reader
+	if route.templateRoute != nil {
+		return a.executeTemplateRequest(callCtx, publicRequest, route.templateRoute, serviceContext)
+	}
 	if route.alarmID != "" {
 		path += "/" + url.PathEscape(route.alarmID)
 		if route.evaluations {
@@ -608,6 +624,15 @@ func newAlarmController(config *AlarmConfig) *alarmController {
 }
 
 func matchPublicAlarmRoute(path string) (publicAlarmRoute, bool) {
+	if tmplRoute, ok := matchPublicAlarmTemplateRoute(path); ok {
+		return publicAlarmRoute{template: tmplRoute.template, templateRoute: tmplRoute}, true
+	}
+	if tmplRoute, ok := matchPublicAlarmTemplateRoute(path); ok {
+		return publicAlarmRoute{template: tmplRoute.template, templateRoute: tmplRoute}, true
+	}
+	if tmplRoute, ok := matchPublicAlarmTemplateRoute(path); ok {
+		return publicAlarmRoute{template: tmplRoute.template, templateRoute: tmplRoute}, true
+	}
 	if path == "/api/v1/alarms" {
 		return publicAlarmRoute{template: "/api/v1/alarms", action: alarmauth.ActionRead}, true
 	}
@@ -707,6 +732,18 @@ func matchPublicAlarmRoute(path string) (publicAlarmRoute, bool) {
 }
 
 func dispatchAlarmRoute(h *handler, writer http.ResponseWriter, request *http.Request, route publicAlarmRoute) {
+	if route.templateRoute != nil {
+		dispatchAlarmTemplateRoute(h, writer, request, route)
+		return
+	}
+	if route.templateRoute != nil {
+		dispatchAlarmTemplateRoute(h, writer, request, route)
+		return
+	}
+	if route.templateRoute != nil {
+		dispatchAlarmTemplateRoute(h, writer, request, route)
+		return
+	}
 	if route.siteRules {
 		dispatchSiteRulesRoute(h, writer, request, route)
 		return

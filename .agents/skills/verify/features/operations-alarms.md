@@ -9,6 +9,8 @@ The `/operations/alarms` route displays active and cleared site alarms (`告警�
 - `alarms-work-order-origin` opens `创建工单` from `告警详情` (`由告警创建工单`) and links back with `sourceReferences` `{ domain: 'ALARM', relationship: 'ORIGIN' }`.
 - `alarms-search-and-filter` syncs `q=` and shows `没有符合条件的告警` plus `清除筛选` when filters match zero rows.
 
+- **模板偏离核对与一键重置**: Check local template-derived rules against latest baseline release and reset overridden thresholds (`e2e/alarm-templates.spec.ts`).
+
 ## How to get to it (user POV)
 
 - Open `运维` → `告警` in the sidebar, click an alarm in Overview's `需要处理` queue, or visit `/operations/alarms?site=<SITE_ID>`.
@@ -22,6 +24,8 @@ Preconditions:
 - **Verify default active view and cleared toggle.** Open `/operations/alarms?site=${SITE_ID}`, assert `告警记录` shows `冷冻水回水温度过低` (`未确认`), click radio `已恢复`, and assert `view=cleared`.
 - **Acknowledge, create work order, and filter.** Submit `已到现场查看` via `确认告警`, verify CSRF-tagged ack payload, raise a high-priority work order from `告警详情`, and exercise `搜索告警` + `清除筛选`.
 - **Proof.** Capture pass output and `1440×900` screenshot under `.scratch/verify/<slug>/`.
+
+- Click `模板偏离核对` on `/operations/alarms?tab=rules`, verify conflicted overrides, and trigger `重置为模板默认值` (`e2e/alarm-templates.spec.ts`).
 
 ## Gotchas
 

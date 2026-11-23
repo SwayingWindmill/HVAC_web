@@ -148,6 +148,15 @@ const w4: ReadonlyArray<readonly [string, HttpMethod, string, string, string?]> 
   ['publishSiteAlarmRules', 'put', 'alarm-rules', 'AlarmRulePublishEnvelope'],
   ['listSiteAlarmRuleRevisions', 'get', 'alarm-rules/revisions', 'AlarmRuleRevisionListEnvelope', '__ALARM_RULES_REVISIONS_PATH__'],
   ['rollbackSiteAlarmRules', 'post', 'alarm-rules/revisions/{revision}/rollback', 'AlarmRulePublishEnvelope', '__ALARM_RULES_ROLLBACK_PATH__'],
+  ['listAlarmRuleTemplates', 'get', 'alarm-rule-templates', 'AlarmRuleTemplateListEnvelope', '__ALARM_RULE_TEMPLATES_PATH__'],
+  ['getAlarmRuleTemplate', 'get', 'alarm-rule-templates/{templateId}', 'AlarmRuleTemplateDetailEnvelope', '__ALARM_RULE_TEMPLATE_PATH__'],
+  ['updateAlarmRuleTemplate', 'put', 'alarm-rule-templates/{templateId}', 'AlarmRuleTemplateEnvelope'],
+  ['listAlarmRuleTemplateReleases', 'get', 'alarm-rule-templates/{templateId}/releases', 'AlarmRuleTemplateReleaseListEnvelope', '__ALARM_RULE_TEMPLATE_RELEASES_PATH__'],
+  ['updateAlarmRuleTemplateSites', 'put', 'alarm-rule-templates/{templateId}/sites', 'AlarmRuleTemplateEnvelope', '__ALARM_RULE_TEMPLATE_SITES_PATH__'],
+  ['previewAlarmRuleTemplateRollout', 'post', 'alarm-rule-templates/{templateId}/preview-rollout', 'AlarmRuleTemplateRolloutPreviewEnvelope', '__ALARM_RULE_TEMPLATE_PREVIEW_ROLLOUT_PATH__'],
+  ['executeAlarmRuleTemplateRollout', 'post', 'alarm-rule-templates/{templateId}/rollout', 'AlarmRuleTemplateRolloutEnvelope', '__ALARM_RULE_TEMPLATE_ROLLOUT_PATH__'],
+  ['getSiteAlarmRuleTemplateDrift', 'get', 'alarm-rules/template-drift', 'SiteAlarmRuleTemplateDriftEnvelope', '__ALARM_RULES_TEMPLATE_DRIFT_PATH__'],
+  ['resetSiteAlarmRuleToTemplate', 'post', 'alarm-rules/{ruleId}/reset-template', 'AlarmRulePublishEnvelope', '__ALARM_RULE_RESET_TEMPLATE_PATH__'],
 ];
 const expectedOperations: Record<string, readonly [HttpMethod, string]> = {
   ...Object.fromEntries(w4.map(([k, m, p]) => [k, [m, p] as const])),
@@ -244,6 +253,8 @@ const expectedOperations: Record<string, readonly [HttpMethod, string]> = {
   listAlarmEvaluationsV212: ['get', 'alarms/{alarmId}/evaluations'],
   listSiteAlarmRules: ['get', 'alarm-rules'],
   simulateSiteAlarmRule: ['post', 'alarm-rules/simulate'],
+  createAlarmRuleTemplate: ['post', 'alarm-rule-templates'],
+  publishAlarmRuleTemplateRelease: ['post', 'alarm-rule-templates/{templateId}/releases'],
   listCommandsV212: ['get', 'commands'],
   getCommandV212: ['get', 'commands/{commandId}'],
   approveCommandV212: ['post', 'commands/{commandId}/approve'],
@@ -421,6 +432,8 @@ invariant(schemaRef(operations.createSiteMeterRatioVersion.operation, '201') ===
 invariant(schemaRef(operations.replaceDeviceHardware.operation, '201') === '#/components/schemas/ReplaceDeviceHardwareResult', 'replaceDeviceHardware success schema is unsupported');
 invariant(schemaRef(operations.transferSiteDevice.operation, '201') === '#/components/schemas/TransferDeviceResult', 'transferSiteDevice success schema is unsupported');
 invariant(schemaRef(operations.uploadOTAPackage.operation, '201') === '#/components/schemas/OTAPackage', 'uploadOTAPackage created schema is unsupported');
+invariant(schemaRef(operations.createAlarmRuleTemplate.operation, '201') === '#/components/schemas/AlarmRuleTemplateDetailEnvelope', 'createAlarmRuleTemplate created schema is unsupported');
+invariant(schemaRef(operations.publishAlarmRuleTemplateRelease.operation, '201') === '#/components/schemas/AlarmRuleTemplateReleaseEnvelope', 'publishAlarmRuleTemplateRelease created schema is unsupported');
 invariant(schemaRef(operations.createOTACampaign.operation, '201') === '#/components/schemas/OTACampaignDetail', 'createOTACampaign created schema is unsupported');
 invariant(schemaRef(operations.createGatewayWaveformRule.operation, '201') === '#/components/schemas/GatewayWaveformRule', 'createGatewayWaveformRule created schema is unsupported');
 invariant(schemaRef(operations.triggerGatewayWaveformCapture.operation, '201') === '#/components/schemas/GatewayWaveformCapture', 'triggerGatewayWaveformCapture created schema is unsupported');

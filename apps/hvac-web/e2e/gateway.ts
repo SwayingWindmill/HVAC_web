@@ -580,6 +580,85 @@ export class Gateway {
       publishedByName: principal.principal.displayName,
     },
   ];
+  alarmRuleTemplateSeq = 10;
+  alarmRuleTemplates: Json[] = [
+    {
+      templateId: '01930000-0000-7000-8000-000000000001',
+      templateKey: 'chiller-slope-rise',
+      displayName: '冷机供水温度骤升基准模板',
+      description: '监测冷机供水温度短时快速温升，默认云端评估并按站点覆写保留温升幅度。',
+      deviceType: 'CHILLER',
+      thingModelCode: 'chiller.standard',
+      alarmType: 'rule_slope/chiller_supply_rise',
+      ruleKind: 'SLOPE',
+      defaultSeverity: 'WARNING',
+      defaultExecutionTarget: 'CLOUD',
+      boundSiteIds: [SITE_ID],
+      latestVersion: 1,
+      latestSpec: {
+        title: '冷机供水温度骤升',
+        summary: '供水温度 5 分钟内骤升触发预警。',
+        alarmType: 'rule_slope/chiller_supply_rise',
+        severity: 'WARNING',
+        ruleKind: 'SLOPE',
+        executionTarget: 'CLOUD',
+        triggerMode: 'SIMPLE',
+        raise: {
+          kind: 'SLOPE',
+          pointCode: 'supply_water_temperature',
+          operator: 'GTE',
+          delta: 3,
+          windowSeconds: 300,
+        },
+        clear: {
+          kind: 'COMPARE',
+          pointCode: 'supply_water_temperature',
+          operator: 'LTE',
+          value: 12.0,
+        },
+      },
+      status: 'ACTIVE',
+      createdBy: MY_ID,
+      updatedBy: MY_ID,
+      createdAt: '2026-10-01T08:00:00Z',
+      updatedAt: '2026-10-01T08:00:00Z',
+    },
+  ];
+  alarmRuleTemplateReleases: Record<string, Json[]> = {
+    '01930000-0000-7000-8000-000000000001': [
+      {
+        releaseId: '01930000-0000-7000-8000-000000000101',
+        templateId: '01930000-0000-7000-8000-000000000001',
+        version: 1,
+        ruleSpec: {
+          title: '冷机供水温度骤升',
+          summary: '供水温度 5 分钟内骤升触发预警。',
+          alarmType: 'rule_slope/chiller_supply_rise',
+          severity: 'WARNING',
+          ruleKind: 'SLOPE',
+          executionTarget: 'CLOUD',
+          triggerMode: 'SIMPLE',
+          raise: {
+            kind: 'SLOPE',
+            pointCode: 'supply_water_temperature',
+            operator: 'GTE',
+            delta: 3,
+            windowSeconds: 300,
+          },
+          clear: {
+            kind: 'COMPARE',
+            pointCode: 'supply_water_temperature',
+            operator: 'LTE',
+            value: 12.0,
+          },
+        },
+        changeNote: '初始标准冷机供温骤升模板',
+        publishedBy: MY_ID,
+        publishedByName: principal.displayName ?? '值班工程师',
+        publishedAt: '2026-10-01T08:00:00Z',
+      },
+    ],
+  };
   readonly workOrders = fixture<Json[]>('work-orders.json');
   readonly snapshots = fixture<Json>('snapshots.json');
   readonly commands: Json[] = [];
@@ -1466,6 +1545,238 @@ export class Gateway {
     }
     if (reply.status === 204) return route.fulfill({ status: 204 });
     return route.fulfill({ status: reply.status ?? 200, contentType: 'application/json', body: JSON.stringify(reply.body) });
+  }
+
+  private nextTemplateUuid(prefix = '01930000-0000-7000-8000-'): string {
+    this.alarmRuleTemplateSeq += 1;
+    return `${prefix}${String(this.alarmRuleTemplateSeq).padStart(12, '0')}`;
+  }
+
+  private authorizeAlarmTemplateWrite(path: string, csrfToken: string | undefined): { status: number; body: Json } | null {
+    const activePrincipal = this.principalOverride ?? principal;
+    const expectedCsrf = activePrincipal.session?.csrfToken ?? principal.session.csrfToken;
+    if (!csrfToken || csrfToken !== expectedCsrf) {
+      return { status: 403, body: { type: 'about:blank', title: 'Forbidden', status: 403, detail: 'CSRF token required.', instance: path, code: 'CSRF_INVALID', traceId: '0'.repeat(32), retryable: false } };
+    }
+    const caps: readonly string[] = activePrincipal.authorization?.capabilities ?? [];
+    if (!caps.includes('schedule.manage')) {
+      return { status: 403, body: { type: 'about:blank', title: 'Forbidden', status: 403, detail: 'Missing schedule.manage capability.', instance: path, code: 'FORBIDDEN', traceId: '0'.repeat(32), retryable: false } };
+    }
+    return null;
+  }
+
+  private formatConditionValue(cond: Json | undefined): string {
+    if (!cond) return '—';
+    if (cond.kind === 'SLOPE') {
+      return `${cond.delta ?? 0} °C / ${Math.round((cond.windowSeconds ?? 300) / 60)} 分钟`;
+    }
+    if (cond.kind === 'COMPARE') {
+      return `${cond.pointCode ?? cond.reading?.pointCode ?? ''} ${cond.operator ?? ''} ${cond.value ?? ''}`.trim();
+    }
+    return JSON.stringify(cond);
+  }
+
+  private templateSpecEqualsRuleRaise(ruleRaise: Json | undefined, tmplRaise: Json | undefined): boolean {
+    if (!ruleRaise || !tmplRaise) return false;
+    if (ruleRaise.kind === 'SLOPE' && tmplRaise.kind === 'SLOPE') {
+      return Number(ruleRaise.delta) === Number(tmplRaise.delta)
+        && Number(ruleRaise.windowSeconds ?? 300) === Number(tmplRaise.windowSeconds ?? 300)
+        && ruleRaise.operator === tmplRaise.operator;
+    }
+    if (ruleRaise.kind === 'COMPARE' && tmplRaise.kind === 'COMPARE') {
+      return Number(ruleRaise.value) === Number(tmplRaise.value) && ruleRaise.operator === tmplRaise.operator;
+    }
+    return JSON.stringify(ruleRaise) === JSON.stringify(tmplRaise);
+  }
+
+  private isFieldOverridden(overridden: readonly string[], field: string): boolean {
+    return overridden.some((entry) => entry === field || entry.startsWith(`${field}.`));
+  }
+
+  private buildTemplateRolloutPreview(tmpl: Json, release: Json, siteIds: string[]): Json {
+    const spec = release.ruleSpec;
+    const sitesPreview: Json[] = [];
+    let totalChangedSites = 0;
+    let totalPreservedOverrides = 0;
+    let totalConflicts = 0;
+
+    for (const siteId of siteIds) {
+      if (siteId !== SITE_ID) {
+        sitesPreview.push({
+          siteId,
+          bundleRevision: 0,
+          matchedRuleCount: 0,
+          willUpdateCount: 0,
+          willCreateCount: 0,
+          preservedOverrideCount: 0,
+          conflictCount: 0,
+          ruleDiffs: [],
+          note: '目标站点暂未匹配到该物模型模板派生规则。',
+        });
+        continue;
+      }
+
+      const matched = this.alarmRules.filter((r: Json) => r.templateKey === tmpl.templateKey);
+      const ruleDiffs: Json[] = [];
+      let willUpdate = 0;
+      let preservedSite = 0;
+      let conflictSite = 0;
+
+      for (const rule of matched) {
+        const overridden: string[] = Array.isArray(rule.overriddenFields) ? rule.overriddenFields : [];
+        const changedFields: string[] = [];
+        const preservedOverrides: string[] = [];
+        const conflicts: Json[] = [];
+
+        if (rule.severity !== spec.severity) {
+          if (this.isFieldOverridden(overridden, 'severity')) {
+            preservedOverrides.push('severity');
+          } else {
+            changedFields.push('severity');
+          }
+        }
+        if ((rule.executionTarget ?? 'CLOUD') !== spec.executionTarget) {
+          if (this.isFieldOverridden(overridden, 'executionTarget')) {
+            preservedOverrides.push('executionTarget');
+          } else {
+            changedFields.push('executionTarget');
+          }
+        }
+        if (!this.templateSpecEqualsRuleRaise(rule.raise, spec.raise)) {
+          if (this.isFieldOverridden(overridden, 'raise')) {
+            preservedOverrides.push('raise');
+            conflicts.push({
+              ruleId: rule.ruleId,
+              ruleTitle: rule.title,
+              field: 'raise',
+              fieldLabel: '触发条件',
+              siteValue: this.formatConditionValue(rule.raise),
+              templateValue: this.formatConditionValue(spec.raise),
+              resolution: 'PRESERVED_SITE_OVERRIDE',
+            });
+          } else {
+            changedFields.push('raise');
+          }
+        }
+
+        if (changedFields.length > 0) willUpdate += 1;
+        preservedSite += preservedOverrides.length;
+        conflictSite += conflicts.length;
+        ruleDiffs.push({
+          ruleId: rule.ruleId,
+          ruleTitle: rule.title,
+          action: changedFields.length > 0 ? 'UPDATE' : 'UNCHANGED',
+          changedFields,
+          preservedOverrides,
+          conflicts,
+        });
+      }
+
+      if (willUpdate > 0) totalChangedSites += 1;
+      totalPreservedOverrides += preservedSite;
+      totalConflicts += conflictSite;
+      sitesPreview.push({
+        siteId,
+        bundleRevision: this.alarmRuleBundleRevision,
+        matchedRuleCount: matched.length,
+        willUpdateCount: willUpdate,
+        willCreateCount: 0,
+        preservedOverrideCount: preservedSite,
+        conflictCount: conflictSite,
+        ruleDiffs,
+      });
+    }
+
+    return {
+      templateId: tmpl.templateId,
+      templateKey: tmpl.templateKey,
+      displayName: tmpl.displayName,
+      templateVersion: release.version,
+      sites: sitesPreview,
+      totalChangedSites,
+      totalPreservedOverrides,
+      totalConflicts,
+    };
+  }
+
+  private applyConditionSpecToRule(existingCond: Json, specCond: Json): Json {
+    const reading = existingCond?.reading ?? {
+      deviceId: existingCond?.reading?.deviceId ?? '018f3e00-4000-7000-8000-000000000006',
+      pointCode: specCond.pointCode ?? existingCond?.pointCode ?? 'supply_water_temperature',
+    };
+    const next: Json = { ...existingCond, kind: specCond.kind, reading };
+    if (specCond.operator !== undefined) next.operator = specCond.operator;
+    if (specCond.delta !== undefined) next.delta = specCond.delta;
+    if (specCond.windowSeconds !== undefined) next.windowSeconds = specCond.windowSeconds;
+    if (specCond.value !== undefined) next.value = specCond.value;
+    return next;
+  }
+
+  private computeAlarmRulePublishResult(activePrincipal: Json, changedRuleIds: string[], changeNote: string): Json {
+    this.alarmRuleBundleRevision += 1;
+    const bundleDigest = createHash('sha256').update(JSON.stringify(this.alarmRules)).digest('hex');
+    this.alarmRuleBundleDigest = bundleDigest;
+    const unchangedRuleIds = this.alarmRules
+      .map((r: Json) => r.ruleId)
+      .filter((id: string) => !changedRuleIds.includes(id));
+    const summary = {
+      added: 0,
+      changed: changedRuleIds.length,
+      unchanged: unchangedRuleIds.length,
+      retired: 0,
+      addedRuleIds: [],
+      changedRuleIds,
+      unchangedRuleIds,
+      retiredRuleIds: [],
+    };
+    const nowIso = '2026-11-23T12:15:00Z';
+    const by = activePrincipal.principalId ?? MY_ID;
+    const byName = activePrincipal.displayName ?? '值班工程师';
+    this.alarmRuleRevisions.unshift({
+      bundleRevision: this.alarmRuleBundleRevision,
+      bundleDigest,
+      changeNote,
+      source: 'TEMPLATE_ROLLOUT',
+      summary,
+      ruleCount: this.alarmRules.length,
+      publishedAt: nowIso,
+      publishedBy: by,
+      publishedByName: byName,
+    });
+    const nodes = this.alarmRules.map((r: Json) => ({
+      ruleId: r.ruleId,
+      title: r.title,
+      severity: r.severity,
+      ruleKind: r.ruleKind,
+      executionTarget: r.executionTarget ?? 'CLOUD',
+      hopDepth: Array.isArray(r.dependsOnRuleIds) && r.dependsOnRuleIds.length > 0 ? 1 : 0,
+      dependsOnRuleIds: Array.isArray(r.dependsOnRuleIds) ? r.dependsOnRuleIds : [],
+      actionCount: Array.isArray(r.actions) ? r.actions.length : 0,
+    }));
+    const edges = this.alarmRules.flatMap((r: Json) =>
+      (Array.isArray(r.dependsOnRuleIds) ? r.dependsOnRuleIds : []).map((depId: string) => ({
+        fromRuleId: depId,
+        toRuleId: r.ruleId,
+      })),
+    );
+    return {
+      bundleRevision: this.alarmRuleBundleRevision,
+      bundleDigest,
+      source: 'TEMPLATE_ROLLOUT',
+      changed: changedRuleIds.length > 0,
+      changeNote,
+      publishedAt: nowIso,
+      publishedBy: by,
+      publishedByName: byName,
+      summary,
+      graph: {
+        nodes,
+        edges,
+        topologicalOrder: this.alarmRules.map((r: Json) => r.ruleId),
+        maxHopDepth: edges.length > 0 ? 1 : 0,
+      },
+      items: structuredClone(this.alarmRules),
+    };
   }
 
   private authorizeAlarmRulePublish(path: string, csrfToken: string | undefined): { status: number; body: Json } | null {
@@ -3642,6 +3953,323 @@ export class Gateway {
         && (!activeTo || Date.parse(alarm.firstOccurredAt) <= Date.parse(activeTo))
         && (!activeFrom || alarm.condition === 'ACTIVE' || !alarm.clearedAt || Date.parse(alarm.clearedAt) >= Date.parse(activeFrom)));
       return { body: { data: items, meta: { nextCursor: null, hasMore: false, limit: 100, requestId: 'e2e' } } };
+    }
+    if (path === '/api/v1/alarm-rule-templates') {
+      if (method === 'GET') {
+        const statusFilter = query.get('status');
+        const items = this.alarmRuleTemplates.filter((t) => !statusFilter || t.status === statusFilter);
+        return { body: { data: { items: structuredClone(items) }, meta: { requestId: 'e2e' } } };
+      }
+      if (method === 'POST') {
+        const authErr = this.authorizeAlarmTemplateWrite(path, csrfToken);
+        if (authErr) return authErr;
+        if (this.alarmRuleTemplates.some((t) => t.templateKey === body?.templateKey)) {
+          return { status: 409, body: { type: 'about:blank', title: 'Conflict', status: 409, detail: 'Template key exists.', instance: path, code: 'ALARM_TEMPLATE_CONFLICT', traceId: '0'.repeat(32), retryable: false } };
+        }
+        const activePrincipal = this.principalOverride ?? principal;
+        const tid = this.nextTemplateUuid('01930000-0000-7000-8000-');
+        const rid = this.nextTemplateUuid('01930000-0000-7001-8000-');
+        const nowIso = '2026-11-23T12:05:00Z';
+        const hasInitial = Boolean(body?.initialSpec);
+        const latestSpec = body?.initialSpec ? structuredClone(body.initialSpec) : undefined;
+        const tmpl: Json = {
+          templateId: tid,
+          templateKey: String(body?.templateKey ?? ''),
+          displayName: String(body?.displayName ?? ''),
+          ...(body?.description ? { description: String(body.description) } : {}),
+          deviceType: String(body?.deviceType ?? 'CHILLER'),
+          ...(body?.thingModelCode ? { thingModelCode: String(body.thingModelCode) } : {}),
+          alarmType: String(body?.alarmType ?? `template/${body?.templateKey ?? 'rule'}`),
+          ruleKind: body?.ruleKind ?? 'THRESHOLD',
+          defaultSeverity: body?.defaultSeverity ?? 'WARNING',
+          defaultExecutionTarget: body?.defaultExecutionTarget ?? 'CLOUD',
+          boundSiteIds: Array.isArray(body?.boundSiteIds) ? [...body.boundSiteIds] : [SITE_ID],
+          latestVersion: hasInitial ? 1 : 0,
+          ...(latestSpec ? { latestSpec } : {}),
+          status: 'ACTIVE',
+          createdBy: activePrincipal.principalId ?? MY_ID,
+          updatedBy: activePrincipal.principalId ?? MY_ID,
+          createdAt: nowIso,
+          updatedAt: nowIso,
+        };
+        this.alarmRuleTemplates.unshift(tmpl);
+        const releases: Json[] = hasInitial
+          ? [{
+              releaseId: rid,
+              templateId: tid,
+              version: 1,
+              ruleSpec: structuredClone(latestSpec),
+              ...(body?.changeNote ? { changeNote: String(body.changeNote) } : {}),
+              publishedBy: activePrincipal.principalId ?? MY_ID,
+              publishedByName: activePrincipal.displayName ?? '值班工程师',
+              publishedAt: nowIso,
+            }]
+          : [];
+        this.alarmRuleTemplateReleases[tid] = releases;
+        return { status: 201, body: { data: { template: structuredClone(tmpl), releases: structuredClone(releases) }, meta: { requestId: 'e2e' } } };
+      }
+    }
+    const tmplSubMatch = path.match(/^\/api\/v1\/alarm-rule-templates\/([^/]+)(?:\/(releases|sites|preview-rollout|rollout))?$/);
+    if (tmplSubMatch) {
+      const templateId = decodeURIComponent(tmplSubMatch[1] ?? '');
+      const sub = tmplSubMatch[2] ?? '';
+      const tmpl = this.alarmRuleTemplates.find((t) => t.templateId === templateId);
+      if (!tmpl) {
+        return { status: 404, body: { type: 'about:blank', title: 'Not Found', status: 404, detail: 'Template not found.', instance: path, code: 'NOT_FOUND', traceId: '0'.repeat(32), retryable: false } };
+      }
+      if (!sub && method === 'GET') {
+        const releases = this.alarmRuleTemplateReleases[templateId] ?? [];
+        return { body: { data: { template: structuredClone(tmpl), releases: structuredClone(releases) }, meta: { requestId: 'e2e' } } };
+      }
+      if (!sub && method === 'PUT') {
+        const authErr = this.authorizeAlarmTemplateWrite(path, csrfToken);
+        if (authErr) return authErr;
+        tmpl.displayName = String(body?.displayName ?? tmpl.displayName);
+        if (body?.description !== undefined) tmpl.description = String(body.description);
+        tmpl.deviceType = String(body?.deviceType ?? tmpl.deviceType);
+        if (body?.thingModelCode !== undefined) tmpl.thingModelCode = String(body.thingModelCode);
+        tmpl.defaultSeverity = body?.defaultSeverity ?? tmpl.defaultSeverity;
+        tmpl.defaultExecutionTarget = body?.defaultExecutionTarget ?? tmpl.defaultExecutionTarget;
+        if (body?.status) tmpl.status = body.status;
+        tmpl.updatedAt = '2026-11-23T12:08:00Z';
+        return { body: { data: structuredClone(tmpl), meta: { requestId: 'e2e' } } };
+      }
+      if (sub === 'releases' && method === 'GET') {
+        return { body: { data: { items: structuredClone(this.alarmRuleTemplateReleases[templateId] ?? []) }, meta: { requestId: 'e2e' } } };
+      }
+      if (sub === 'releases' && method === 'POST') {
+        const authErr = this.authorizeAlarmTemplateWrite(path, csrfToken);
+        if (authErr) return authErr;
+        const activePrincipal = this.principalOverride ?? principal;
+        const nextVer = Number(tmpl.latestVersion ?? 0) + 1;
+        const rel: Json = {
+          releaseId: this.nextTemplateUuid('01930000-0000-7002-8000-'),
+          templateId,
+          version: nextVer,
+          ruleSpec: structuredClone(body?.ruleSpec),
+          ...(body?.changeNote ? { changeNote: String(body.changeNote) } : {}),
+          publishedBy: activePrincipal.principalId ?? MY_ID,
+          publishedByName: activePrincipal.displayName ?? '值班工程师',
+          publishedAt: '2026-11-23T12:10:00Z',
+        };
+        this.alarmRuleTemplateReleases[templateId] = [rel, ...(this.alarmRuleTemplateReleases[templateId] ?? [])];
+        tmpl.latestVersion = nextVer;
+        tmpl.latestSpec = structuredClone(body?.ruleSpec);
+        tmpl.defaultSeverity = body?.ruleSpec?.severity ?? tmpl.defaultSeverity;
+        tmpl.defaultExecutionTarget = body?.ruleSpec?.executionTarget ?? tmpl.defaultExecutionTarget;
+        tmpl.updatedAt = '2026-11-23T12:10:00Z';
+        return { status: 201, body: { data: structuredClone(rel), meta: { requestId: 'e2e' } } };
+      }
+      if (sub === 'sites' && method === 'PUT') {
+        const authErr = this.authorizeAlarmTemplateWrite(path, csrfToken);
+        if (authErr) return authErr;
+        tmpl.boundSiteIds = Array.isArray(body?.siteIds) ? [...body.siteIds] : [];
+        tmpl.updatedAt = '2026-11-23T12:11:00Z';
+        return { body: { data: structuredClone(tmpl), meta: { requestId: 'e2e' } } };
+      }
+      if (sub === 'preview-rollout' && method === 'POST') {
+        const releases = this.alarmRuleTemplateReleases[templateId] ?? [];
+        const targetVer = body?.version ?? tmpl.latestVersion;
+        const rel = releases.find((r) => r.version === targetVer) ?? releases[0];
+        if (!rel) {
+          return { status: 400, body: { type: 'about:blank', title: 'Bad Request', status: 400, detail: 'Template has no release.', instance: path, code: 'ALARM_TEMPLATE_NO_RELEASE', traceId: '0'.repeat(32), retryable: false } };
+        }
+        const targetSites: string[] = Array.isArray(body?.siteIds) && body.siteIds.length > 0 ? body.siteIds : (tmpl.boundSiteIds ?? [SITE_ID]);
+        const preview = this.buildTemplateRolloutPreview(tmpl, rel, targetSites);
+        return { body: { data: preview, meta: { requestId: 'e2e' } } };
+      }
+      if (sub === 'rollout' && method === 'POST') {
+        const authErr = this.authorizeAlarmTemplateWrite(path, csrfToken);
+        if (authErr) return authErr;
+        const activePrincipal = this.principalOverride ?? principal;
+        const releases = this.alarmRuleTemplateReleases[templateId] ?? [];
+        const targetVer = body?.version ?? tmpl.latestVersion;
+        const rel = releases.find((r) => r.version === targetVer) ?? releases[0];
+        if (!rel) {
+          return { status: 400, body: { type: 'about:blank', title: 'Bad Request', status: 400, detail: 'Template has no release.', instance: path, code: 'ALARM_TEMPLATE_NO_RELEASE', traceId: '0'.repeat(32), retryable: false } };
+        }
+        const targetSites: string[] = Array.isArray(body?.siteIds) && body.siteIds.length > 0 ? body.siteIds : (tmpl.boundSiteIds ?? [SITE_ID]);
+        const preview = this.buildTemplateRolloutPreview(tmpl, rel, targetSites);
+        const spec = rel.ruleSpec;
+        const outcomes: Json[] = [];
+        let totalAppliedSites = 0;
+        let totalPreservedOverrides = 0;
+        let totalConflicts = 0;
+
+        for (const sp of preview.sites) {
+          if (sp.siteId !== SITE_ID || sp.matchedRuleCount === 0) {
+            outcomes.push({
+              siteId: sp.siteId,
+              status: 'SKIPPED',
+              preservedOverrideCount: 0,
+              conflictCount: 0,
+              changedRuleCount: 0,
+              createdRuleCount: 0,
+              detail: '未匹配模板派生规则。',
+            });
+            continue;
+          }
+          const changedRuleIds: string[] = [];
+          for (const rule of this.alarmRules) {
+            if (rule.templateKey !== tmpl.templateKey) continue;
+            const overridden: string[] = Array.isArray(rule.overriddenFields) ? rule.overriddenFields : [];
+            let touched = false;
+            if (!this.isFieldOverridden(overridden, 'severity') && rule.severity !== spec.severity) {
+              rule.severity = spec.severity;
+              touched = true;
+            }
+            if (!this.isFieldOverridden(overridden, 'executionTarget') && (rule.executionTarget ?? 'CLOUD') !== spec.executionTarget) {
+              rule.executionTarget = spec.executionTarget;
+              touched = true;
+            }
+            if (!this.isFieldOverridden(overridden, 'raise') && !this.templateSpecEqualsRuleRaise(rule.raise, spec.raise)) {
+              rule.raise = this.applyConditionSpecToRule(rule.raise, spec.raise);
+              touched = true;
+            }
+            if (touched) changedRuleIds.push(rule.ruleId);
+          }
+          let newRev = this.alarmRuleBundleRevision;
+          if (changedRuleIds.length > 0) {
+            const pub = this.computeAlarmRulePublishResult(activePrincipal, changedRuleIds, body?.changeNote ?? `模板 ${tmpl.displayName} v${rel.version} 下发同步`);
+            newRev = pub.bundleRevision;
+          }
+          totalAppliedSites += 1;
+          totalPreservedOverrides += sp.preservedOverrideCount;
+          totalConflicts += sp.conflictCount;
+          outcomes.push({
+            siteId: sp.siteId,
+            status: 'APPLIED',
+            bundleRevision: newRev,
+            preservedOverrideCount: sp.preservedOverrideCount,
+            conflictCount: sp.conflictCount,
+            changedRuleCount: changedRuleIds.length,
+            createdRuleCount: 0,
+          });
+        }
+        return {
+          body: {
+            data: {
+              batchId: this.nextTemplateUuid('01930000-0000-7003-8000-'),
+              templateId: tmpl.templateId,
+              templateVersion: rel.version,
+              createdBy: activePrincipal.principalId ?? MY_ID,
+              createdAt: '2026-11-23T12:12:00Z',
+              outcomes,
+              totalAppliedSites,
+              totalPreservedOverrides,
+              totalConflicts,
+            },
+            meta: { requestId: 'e2e' },
+          },
+        };
+      }
+    }
+    if (method === 'GET' && path === '/api/v1/alarm-rules/template-drift') {
+      if (query.get('siteId') !== SITE_ID) {
+        return { body: { data: { siteId: query.get('siteId') ?? SITE_ID, bundleRevision: 0, items: [] }, meta: { requestId: 'e2e' } } };
+      }
+      const items: Json[] = [];
+      for (const rule of this.alarmRules) {
+        if (!rule.templateKey) continue;
+        const tmpl = this.alarmRuleTemplates.find((t) => t.templateKey === rule.templateKey);
+        if (!tmpl || !tmpl.latestSpec) continue;
+        const spec = tmpl.latestSpec;
+        const overridden: string[] = Array.isArray(rule.overriddenFields) ? rule.overriddenFields : [];
+        const diffs: Json[] = [];
+        const driftedFields: string[] = [];
+
+        const severityOver = this.isFieldOverridden(overridden, 'severity');
+        const severityDrift = rule.severity !== spec.severity;
+        if (severityOver || severityDrift) {
+          driftedFields.push('severity');
+          diffs.push({
+            field: 'severity',
+            label: '严重程度',
+            siteValue: rule.severity,
+            templateValue: spec.severity,
+            isOverridden: severityOver,
+            drifted: severityDrift,
+          });
+        }
+        const targetOver = this.isFieldOverridden(overridden, 'executionTarget');
+        const targetDrift = (rule.executionTarget ?? 'CLOUD') !== spec.executionTarget;
+        if (targetOver || targetDrift) {
+          driftedFields.push('executionTarget');
+          diffs.push({
+            field: 'executionTarget',
+            label: '执行位置',
+            siteValue: rule.executionTarget ?? 'CLOUD',
+            templateValue: spec.executionTarget,
+            isOverridden: targetOver,
+            drifted: targetDrift,
+          });
+        }
+        const raiseOver = this.isFieldOverridden(overridden, 'raise');
+        const raiseDrift = !this.templateSpecEqualsRuleRaise(rule.raise, spec.raise);
+        if (raiseOver || raiseDrift) {
+          driftedFields.push('raise');
+          diffs.push({
+            field: 'raise',
+            label: '触发条件',
+            siteValue: this.formatConditionValue(rule.raise),
+            templateValue: this.formatConditionValue(spec.raise),
+            isOverridden: raiseOver,
+            drifted: raiseDrift,
+          });
+        }
+
+        if (diffs.length > 0 || overridden.length > 0) {
+          items.push({
+            ruleId: rule.ruleId,
+            ruleTitle: rule.title,
+            templateId: tmpl.templateId,
+            templateKey: tmpl.templateKey,
+            templateName: tmpl.displayName,
+            templateVersion: tmpl.latestVersion,
+            overriddenFields: [...overridden],
+            driftedFields,
+            diffs,
+          });
+        }
+      }
+      return {
+        body: {
+          data: { siteId: SITE_ID, bundleRevision: this.alarmRuleBundleRevision, items },
+          meta: { requestId: 'e2e' },
+        },
+      };
+    }
+    const resetTmplMatch = method === 'POST' ? path.match(/^\/api\/v1\/alarm-rules\/([^/]+)\/reset-template$/) : null;
+    if (resetTmplMatch) {
+      const authErr = this.authorizeAlarmTemplateWrite(path, csrfToken);
+      if (authErr) return authErr;
+      if (query.get('siteId') !== SITE_ID) {
+        return { status: 404, body: { type: 'about:blank', title: 'Not Found', status: 404, detail: 'Site not found.', instance: path, code: 'SITE_NOT_FOUND', traceId: '0'.repeat(32), retryable: false } };
+      }
+      const ruleId = decodeURIComponent(resetTmplMatch[1] ?? '');
+      const rule = this.alarmRules.find((r: Json) => r.ruleId === ruleId);
+      if (!rule || !rule.templateKey) {
+        return { status: 404, body: { type: 'about:blank', title: 'Not Found', status: 404, detail: 'Rule or template binding not found.', instance: path, code: 'NOT_FOUND', traceId: '0'.repeat(32), retryable: false } };
+      }
+      const tmpl = this.alarmRuleTemplates.find((t) => t.templateKey === rule.templateKey);
+      if (!tmpl?.latestSpec) {
+        return { status: 400, body: { type: 'about:blank', title: 'Bad Request', status: 400, detail: 'Template has no release.', instance: path, code: 'ALARM_TEMPLATE_NO_RELEASE', traceId: '0'.repeat(32), retryable: false } };
+      }
+      const spec = tmpl.latestSpec;
+      const fieldsFilter: string[] | null = Array.isArray(body?.fields) && body.fields.length > 0 ? body.fields : null;
+      const shouldReset = (name: string) => !fieldsFilter || fieldsFilter.some((f) => f === name || f.startsWith(`${name}.`));
+      if (shouldReset('severity')) rule.severity = spec.severity;
+      if (shouldReset('executionTarget')) rule.executionTarget = spec.executionTarget;
+      if (shouldReset('raise')) rule.raise = this.applyConditionSpecToRule(rule.raise, spec.raise);
+      if (!fieldsFilter) {
+        rule.overriddenFields = [];
+      } else {
+        rule.overriddenFields = (Array.isArray(rule.overriddenFields) ? rule.overriddenFields : [])
+          .filter((f: string) => !fieldsFilter.some((t) => f === t || f.startsWith(`${t}.`)));
+      }
+      const activePrincipal = this.principalOverride ?? principal;
+      const pub = this.computeAlarmRulePublishResult(activePrincipal, [rule.ruleId], body?.changeNote ?? '一键还原为基准模板默认值');
+      return { body: { data: pub, meta: { requestId: 'e2e' } } };
     }
     if (method === 'GET' && path === '/api/v1/alarm-rules') {
       if (query.get('siteId') === SITE_ID) {

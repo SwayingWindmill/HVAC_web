@@ -1,6 +1,6 @@
 # HVAC Web verification map
 
-This directory indexes user-facing verification journeys for HVAC Web across all 23 operator surfaces and 27 Playwright E2E specs. Read the baseline rules here before running or extending any feature recipe.
+This directory indexes user-facing verification journeys for HVAC Web across all 23 operator surfaces and 29 Playwright E2E specs. Read the baseline rules here before running or extending any feature recipe.
 
 ## Baseline preconditions
 
@@ -37,7 +37,7 @@ This directory indexes user-facing verification journeys for HVAC Web across all
 - [Operations schedules](./operations-schedules.md) covers `/operations/schedules` weekly slot configuration (including cross-midnight intervals), overtime exceptions, and unscheduled-running work orders (`e2e/schedules.spec.ts`).
 - [Operations systems and devices](./operations-systems-devices.md) covers `/operations/systems-devices` card wall and table views, observed point counts, inspector drawers, and asset work orders (`e2e/systems-devices.spec.ts`).
 - [Operations digital twin](./operations-digital-twin.md) covers `/operations/digital-twin` WebGL plant scene, corner HUD metrics, `view=plant`, and equipment URL inspection (`e2e/digital-twin.spec.ts`).
-- [Operations alarms](./operations-alarms.md) covers `/operations/alarms` active/cleared views, acknowledgement persistence, alarm-origin work orders, and keyword filtering (`e2e/alarms.spec.ts`).
+- [Operations alarms](./operations-alarms.md) covers `/operations/alarms` active/cleared views, acknowledgement persistence, alarm-origin work orders, and keyword filtering (`e2e/alarms.spec.ts`, `e2e/alarm-templates.spec.ts`).
 - [Operations diagnostics](./operations-diagnostics.md) covers `/operations/diagnostics` FDD finding inspection, manual evaluation runs, and low-runtime gating (`e2e/diagnostics.spec.ts`, `e2e/gateway-waveform-diagnostics.spec.ts`).
 - [Operations work center](./operations-work-center.md) covers `/operations/work-center` open/closed boards, claim-start-complete enforcement, and equipment backlinks (`e2e/work-center.spec.ts`).
 - [Operations control](./operations-control.md) covers `/operations/control` setpoint/stop confirmations, CJK IME `Enter` safety, approval timelines, and theme `color-scheme` sync (`e2e/control.spec.ts`).
@@ -56,4 +56,4 @@ This directory indexes user-facing verification journeys for HVAC Web across all
 
 - [Integrations workspace](./integrations-workspace.md) covers `/settings/integrations` tabs (`现场网关`, `无线集中器`, `电表数据核对`, `传感器校准`), enrollment-code disposal on `Escape`, permanent gateway revocation, and concentrator RF/EID Flash writes (`e2e/integrations.spec.ts`, `e2e/gateway-credentials.spec.ts`, `e2e/concentrators.spec.ts`).
 - [System users and roles](./system-users-and-roles.md) covers `/system?tab=users` user administration, role summaries, password change, and capability group rendering without unnamed keys (`e2e/users.spec.ts`, `e2e/system.spec.ts`).
-- [System governance and audit log](./system-governance-and-audit.md) covers `/system` platform overview, `站点与组织`, `设备与点位登记` unsaved draft guard, `操作记录` (`audit.read` + translated facts), and `AI 助手` usage (`e2e/system.spec.ts`, `e2e/edge-models.spec.ts`).
+- [System governance and audit log](./system-governance-and-audit.md) covers `/system` platform overview, `站点与组织`, `设备与点位登记` unsaved draft guard, `操作记录` (`audit.read` + translated facts), and `AI 助手` usage (`e2e/system.spec.ts`, `e2e/edge-models.spec.ts`, `e2e/alarm-templates.spec.ts`).

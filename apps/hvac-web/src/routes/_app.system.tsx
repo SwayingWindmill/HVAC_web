@@ -8,7 +8,7 @@ import { useUnsavedDraftGuard } from '@/features/system/unsaved-drafts';
 const systemSearchSchema = z.object({
   tab: z.enum(['overview', 'users', 'site', 'registry', 'audit', 'assistant', 'governance']).catch('overview').optional(),
   site: z.string().uuid().optional().catch(undefined),
-  section: z.enum(['control', 'alarms', 'optimization', 'edge-models']).optional().catch(undefined),
+  section: z.enum(['control', 'alarms', 'optimization', 'edge-models', 'alarm-templates']).optional().catch(undefined),
 });
 
 export const Route = createFileRoute('/_app/system')({
