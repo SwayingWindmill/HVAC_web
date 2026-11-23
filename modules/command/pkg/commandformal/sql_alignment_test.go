@@ -219,3 +219,41 @@ func TestPostgresPriorityArbitrationAndLockAlignment(t *testing.T) {
 		t.Fatalf("DISPATCH_SAFETY_HARD_REALTIME_BOUNDARY must be a terminal pre-send rejection")
 	}
 }
+
+func TestPostgresOfflineQueueBatchAndTTLExpiryAlignment(t *testing.T) {
+	dispatchSrc := readRepoSource(t, filepath.Join("..", "commandservice", "postgres_dispatch.go"))
+	for _, snippet := range []string{
+		"expireTTLExpiredCommands(",
+		"WakeDeferredDispatches(",
+		"next_dispatch_after",
+		"expires_at",
+		"DecideDispatchResolutionForIntent(",
+	} {
+		if !strings.Contains(dispatchSrc, snippet) {
+			t.Fatalf("postgres_dispatch.go missing expected offline queue / TTL guard %q", snippet)
+		}
+	}
+
+	batchSrc := readRepoSource(t, filepath.Join("..", "commandservice", "postgres_batch.go"))
+	for _, snippet := range []string{
+		"lowerUUIDPattern.MatchString(batchID)",
+		"command_runtime.batches",
+		"command_runtime.batch_items",
+	} {
+		if !strings.Contains(batchSrc, snippet) {
+			t.Fatalf("postgres_batch.go missing expected batch persistence guard %q", snippet)
+		}
+	}
+
+	migrationSrc := readRepoSource(t, filepath.Join("..", "..", "migrations", "command-batch-offline-queue-ttl.sql"))
+	for _, snippet := range []string{
+		"command_runtime.batches",
+		"command_runtime.batch_items",
+		"command_runtime.tenants_with_due_dispatch",
+		"QUEUE_IF_OFFLINE",
+	} {
+		if !strings.Contains(migrationSrc, snippet) {
+			t.Fatalf("command-batch-offline-queue-ttl.sql missing expected schema object %q", snippet)
+		}
+	}
+}

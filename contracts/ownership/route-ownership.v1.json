@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 68,
+  "registryRevision": 69,
   "routes": [
     {
       "method": "GET",
@@ -2978,6 +2978,70 @@
     {
       "method": "POST",
       "path": "/api/v1/sites/{siteId}/control-alarms/dead-letters/{outboxId}/replay",
+      "owner": "command-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sites/{siteId}/command-batches",
+      "owner": "command-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sites/{siteId}/command-batches",
+      "owner": "command-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sites/{siteId}/command-batches/{batchId}",
+      "owner": "command-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sites/{siteId}/command-batches/{batchId}/cancel",
       "owner": "command-service",
       "publicIngress": "platform-gateway",
       "revision": 1,

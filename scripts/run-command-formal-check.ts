@@ -44,7 +44,7 @@ export const summarizeCommandFormalOutput = (rawOutput: string, exitCode: number
       continue;
     }
     const trimmed = line.trim();
-    if (/\[(SingleCommandProtocol|MultiCommandDeviceExclusivity|ReplyRecoveryQueueDrain)\/P[1-6]\]/u.test(trimmed)) {
+    if (/\[(SingleCommandProtocol|MultiCommandDeviceExclusivity|ReplyRecoveryQueueDrain|PriorityArbitrationAndLocks|OfflineQueueAndTTLSafety)\/P[1-8]\]/u.test(trimmed)) {
       counterexamples.push(trimmed);
     }
   }

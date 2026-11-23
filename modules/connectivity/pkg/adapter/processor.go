@@ -157,6 +157,12 @@ func WithFactoryResetAckHook(hook func(context.Context, string, edgecontrol.Fact
 	}
 }
 
+func WithDeviceActivityHook(hook func(context.Context, string, []string)) ProcessorOption {
+	return func(processor *Processor) {
+		processor.onDeviceActivity = hook
+	}
+}
+
 func WithProcessorTracer(tracer *observability.Tracer) ProcessorOption {
 	return func(processor *Processor) {
 		processor.tracer = tracer
@@ -211,6 +217,7 @@ type Processor struct {
 	onShadowAck        func(context.Context, Gateway, ShadowChangeAckPayload)
 	onOTAResult        func(context.Context, Gateway, edgecontrol.OTAResultPayload) error
 	onFactoryResetAck  func(context.Context, string, edgecontrol.FactoryResetAckPayload) error
+	onDeviceActivity   func(context.Context, string, []string)
 	packetHook         func(direction, channel, gatewayID, topic, traceID string, payload []byte)
 	coverageRev        atomic.Int64
 }
@@ -687,6 +694,7 @@ func (processor *Processor) processTelemetryBatch(ctx context.Context, gateway G
 	for index, bound := range bounds {
 		processor.recordPacket("UPLINK", "TELEMETRY", gateway.ID, messages[index].Topic, bound.traceID, messages[index].Payload)
 	}
+	processor.notifyDeviceActivity(ctx, gateway.TenantID, dedupedObservationDeviceIDs(observations))
 	return outcomes, nil
 }
 
@@ -751,6 +759,7 @@ func (processor *Processor) isolateInvalidTelemetryBatch(
 				sessions.ObserveTelemetryAt(gateway.ID, decodedFrames[index].SessionID, decodedFrames[index].Envelope.Timestamp, processor.nowUTC().UnixMilli(), true)
 			}
 			processor.recordPacket("UPLINK", "TELEMETRY", gateway.ID, messages[index].Topic, bound.traceID, messages[index].Payload)
+			processor.notifyDeviceActivity(ctx, gateway.TenantID, dedupedObservationDeviceIDs(observations[bound.start:bound.end]))
 			continue
 		}
 		if errors.Is(msgErr, ErrTelemetryRequestInvalid) {
@@ -1049,6 +1058,7 @@ func (processor *Processor) processEvent(ctx context.Context, gateway Gateway, t
 	directSelf := gateway.DirectDevice && resolvedDevice != nil && strings.EqualFold(resolvedDevice.DeviceID, gateway.ID)
 	isDisconnect := isGatewayDisconnectEvent(event.EventType, event.SourceType) || (directSelf && isDeviceDisconnectEvent(event.EventType))
 	isConnect := isGatewayConnectEvent(event.EventType, event.SourceType) || (directSelf && isDeviceConnectEvent(event.EventType))
+	acceptedTransition := true
 	if isDisconnect || isConnect {
 		accepted := true
 		if sessions := processor.sessions(); sessions != nil {
@@ -1064,6 +1074,7 @@ func (processor *Processor) processEvent(ctx context.Context, gateway Gateway, t
 				Online:        isConnect,
 			})
 		}
+		acceptedTransition = accepted
 		if accepted {
 			if processor.onGatewayPresence != nil {
 				processor.onGatewayPresence(gateway.ID, isConnect)
@@ -1074,6 +1085,9 @@ func (processor *Processor) processEvent(ctx context.Context, gateway Gateway, t
 		}
 	} else if processor.onGatewayPresence != nil {
 		processor.onGatewayPresence(gateway.ID, true)
+	}
+	if acceptedTransition && resolvedDevice != nil && resolvedDevice.DeviceID != "" && !isDisconnect && !isDeviceDisconnectEvent(event.EventType) && !isSleepEventType(event.EventType) {
+		processor.notifyDeviceActivity(ctx, gateway.TenantID, []string{resolvedDevice.DeviceID})
 	}
 	return ProcessingResult{MessageID: envelope.MessageID, MessageType: MessageTypeEvent, TraceID: eventTraceID}, nil
 }
@@ -1133,8 +1147,13 @@ func (processor *Processor) processStatus(ctx context.Context, gateway Gateway, 
 		if processor.onGatewayPresence != nil {
 			processor.onGatewayPresence(gateway.ID, status.Online)
 		}
-		if status.Online && processor.onGatewayConnected != nil {
-			processor.onGatewayConnected(ctx, gateway.ID)
+		if status.Online {
+			if processor.onGatewayConnected != nil {
+				processor.onGatewayConnected(ctx, gateway.ID)
+			}
+			if gateway.DirectDevice {
+				processor.notifyDeviceActivity(ctx, gateway.TenantID, []string{gateway.ID})
+			}
 		}
 	}
 	return ProcessingResult{MessageID: status.MessageID, MessageType: MessageTypeStatus, TraceID: statusTraceID}, nil
@@ -1182,6 +1201,49 @@ func isDeviceDisconnectEvent(rawEventType string) bool {
 	default:
 		return false
 	}
+}
+
+func isSleepEventType(rawEventType string) bool {
+	switch strings.ToUpper(strings.TrimSpace(rawEventType)) {
+	case "DEVICE_SLEEPING", "EXPLICIT_SLEEP", "SLEEPING", "ENTER_SLEEP":
+		return true
+	default:
+		return false
+	}
+}
+
+func dedupedObservationDeviceIDs(observations []Observation) []string {
+	if len(observations) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(observations))
+	deviceIDs := make([]string, 0, len(observations))
+	for _, obs := range observations {
+		if obs.Device == nil {
+			continue
+		}
+		deviceID := strings.TrimSpace(obs.Device.DeviceID)
+		if deviceID == "" {
+			continue
+		}
+		if _, ok := seen[deviceID]; ok {
+			continue
+		}
+		seen[deviceID] = struct{}{}
+		deviceIDs = append(deviceIDs, deviceID)
+	}
+	return deviceIDs
+}
+
+func (processor *Processor) notifyDeviceActivity(ctx context.Context, tenantID string, deviceIDs []string) {
+	if processor == nil || processor.onDeviceActivity == nil || len(deviceIDs) == 0 {
+		return
+	}
+	trimmedTenant := strings.TrimSpace(tenantID)
+	if trimmedTenant == "" {
+		return
+	}
+	processor.onDeviceActivity(ctx, trimmedTenant, deviceIDs)
 }
 
 func (processor *Processor) resolveEventScope(ctx context.Context, gateway Gateway, event EventPayload) (*ResolvedDevice, []string, error) {

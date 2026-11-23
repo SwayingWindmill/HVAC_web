@@ -951,3 +951,137 @@ func TestControlAuthorityRejectsHardRealtimeSafetyBoundaryEvenWithEmergencyBypas
 		t.Fatalf("expected 409 DISPATCH_SAFETY_HARD_REALTIME_BOUNDARY overriding emergency bypass, got %+v", rej)
 	}
 }
+
+func TestControlAuthorityBatchSubmitPartialReplayStepUpCancelAndClaimSkip(t *testing.T) {
+	now := time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)
+	h, op := seedPlantHarness(t, now)
+
+	// Configure a second setpoint point on pump device so batch targets two distinct devices.
+	spProfile, _ := commandmodel.CapabilityProfileFor(commandmodel.CapabilitySetTemperatureSetpoint)
+	pumpSetpointPt := "018f3e00-4000-7000-8000-000000000088"
+	model := h.Twin.Models[caSiteID]
+	model.TelemetryPoints = append(model.TelemetryPoints,
+		TelemetryPointDTO{
+			ID: "018f3e00-4100-7000-8000-000000000088", TenantID: caTenantID, SiteID: caSiteID, ReportingDeviceID: caPumpDev,
+			PointCode: "zone_temperature", PointType: "TELEMETRY", ValueType: "NUMBER", Status: "ACTIVE",
+		},
+		TelemetryPointDTO{
+			ID: pumpSetpointPt, TenantID: caTenantID, SiteID: caSiteID, ReportingDeviceID: caPumpDev,
+			PointCode: "pump_temp_sp", PointType: "COMMAND", ValueType: "NUMBER", Writable: true, Status: "ACTIVE",
+			SourceMetadata: map[string]any{"capability": "SET_TEMPERATURE_SETPOINT", "capabilityRevision": spProfile.Revision, "feedbackPointKey": "zone_temperature"},
+		},
+	)
+	model.Relationships = append(model.Relationships, AssetRelationshipDTO{
+		ID: "rel-pump-sp", TenantID: caTenantID, SiteID: caSiteID,
+		FromType: "POINT", FromID: pumpSetpointPt, ToType: "ASSET", ToID: caPumpID,
+		Role: "CONTROLS", Status: "ACTIVE", ValidFrom: now.Add(-time.Hour).Format(time.RFC3339),
+	})
+	h.Twin.Models[caSiteID] = model
+
+	val22 := 22.0
+	h.Live.Set(caChillerDev, "zone_temperature", &commandmodel.LivePointObservation{
+		EvaluationAvailability: "AVAILABLE", Presence: "SLEEPING", Readiness: "CURRENT", Freshness: "STALE", Quality: "GOOD",
+		BusinessRevision: 15, ObservedAt: now.Add(-time.Minute),
+	}, "s2:sleep")
+	h.Live.Set(caPumpDev, "zone_temperature", &commandmodel.LivePointObservation{
+		EvaluationAvailability: "AVAILABLE", Presence: "ONLINE", Readiness: "CURRENT", Freshness: "FRESH", Quality: "GOOD",
+		BusinessRevision: 16, CurrentValue: &val22, ReportedValue: commandmodel.NumberScalar(22), ObservedAt: now,
+	}, "s2:online")
+
+	// 1. Fail-closed TOTP check BEFORE writing any batch or child command when START targets need step-up.
+	h.Live.Set(caChillerDev, "run_state", &commandmodel.LivePointObservation{
+		EvaluationAvailability: "AVAILABLE", Presence: "ONLINE", Readiness: "CURRENT", Freshness: "FRESH", Quality: "GOOD",
+		BusinessRevision: 10, ReportedValue: commandmodel.TextScalar("STOPPED"), ObservedAt: now,
+	}, "s2:run-stop")
+	h.Live.Set(caPumpDev, "run_state", &commandmodel.LivePointObservation{
+		EvaluationAvailability: "AVAILABLE", Presence: "ONLINE", Readiness: "CURRENT", Freshness: "FRESH", Quality: "GOOD",
+		BusinessRevision: 11, ReportedValue: commandmodel.TextScalar("RUNNING"), ObservedAt: now,
+	}, "s2:run-ok")
+	op.StepUpTOTPVerified = false
+	_, err := h.Authority.SubmitOperatorCommandBatch(context.Background(), op, SubmitCommandBatchInput{
+		SiteID: caSiteID, Capability: commandmodel.CapabilityStart, IdempotencyKey: "batch-totp-precheck",
+		Targets: []CommandBatchTargetInput{{DeviceID: caChillerDev, PointID: caStartPt}},
+	})
+	var ce *ControlError
+	if !errors.As(err, &ce) || ce.HTTPStatus != 428 || ce.Code != "STEP_UP_REQUIRED" {
+		t.Fatalf("expected 428 STEP_UP_REQUIRED before writes, got %v", err)
+	}
+	listedAfterStepUp, _ := h.Authority.ListOperatorCommandBatches(context.Background(), op, caSiteID, 10)
+	if len(listedAfterStepUp.Items) != 0 {
+		t.Fatalf("expected zero persisted batches when step-up fails pre-check, got %d", len(listedAfterStepUp.Items))
+	}
+
+	// 2. Partial batch: caChillerDev (SLEEPING) + caPumpDev (ONLINE) + bad target -> 2 admitted, 1 rejected.
+	ttl := 300
+	batchInput := SubmitCommandBatchInput{
+		SiteID:         caSiteID,
+		Capability:     commandmodel.CapabilitySetTemperatureSetpoint,
+		DeliveryMode:   commandmodel.DeliveryModeQueueIfOffline,
+		TTLSeconds:     &ttl,
+		IdempotencyKey: "batch-sp-001",
+		Reason:         "Night setback group broadcast",
+		Targets: []CommandBatchTargetInput{
+			{DeviceID: caChillerDev, PointID: caSetpointPt, Parameters: commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 24}},
+			{DeviceID: caPumpDev, PointID: pumpSetpointPt, Parameters: commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 23}},
+			{DeviceID: caEmergDev, PointID: "018f3e00-4000-7000-8000-000000000999", Parameters: commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 23}},
+		},
+	}
+	created, err := h.Authority.SubmitOperatorCommandBatch(context.Background(), op, batchInput)
+	if err != nil {
+		t.Fatalf("SubmitOperatorCommandBatch failed: %v", err)
+	}
+	if created.AcceptedCount != 2 || created.RejectedCount != 1 || created.Status != "PENDING" || len(created.Items) != 3 {
+		t.Fatalf("unexpected batch counts/status: %+v", created)
+	}
+
+	// 3. Idempotent replay returns replayed=true without duplicating commands; conflict returns 409.
+	replayed, err := h.Authority.SubmitOperatorCommandBatch(context.Background(), op, batchInput)
+	if err != nil || !replayed.Replayed || replayed.ID != created.ID {
+		t.Fatalf("expected idempotent replay, got replayed=%+v err=%v", replayed, err)
+	}
+	conflictInput := batchInput
+	conflictInput.Reason = "Changed payload"
+	if _, err := h.Authority.SubmitOperatorCommandBatch(context.Background(), op, conflictInput); !errors.As(err, &ce) || ce.HTTPStatus != http.StatusConflict {
+		t.Fatalf("expected 409 conflict on reused key with changed payload, got %v", err)
+	}
+
+	// 4. ClaimDispatch skips sleeping chiller (deferring it) and claims online pump on the same ClaimDispatch call!
+	h.Live.Set(caChillerDev, "run_state", &commandmodel.LivePointObservation{
+		EvaluationAvailability: "AVAILABLE", Presence: "SLEEPING", Readiness: "CURRENT", Freshness: "STALE", Quality: "GOOD",
+		BusinessRevision: 15, ObservedAt: now.Add(-time.Minute),
+	}, "s2:sleep")
+	h.Live.Set(caPumpDev, "run_state", &commandmodel.LivePointObservation{
+		EvaluationAvailability: "AVAILABLE", Presence: "ONLINE", Readiness: "CURRENT", Freshness: "FRESH", Quality: "GOOD",
+		BusinessRevision: 16, CurrentValue: &val22, ReportedValue: commandmodel.NumberScalar(22), ObservedAt: now,
+	}, "s2:online")
+
+	claimedEnv, err := h.Authority.ClaimDispatch(context.Background(), caTenantID, "dispatcher-batch-test", 15*time.Second)
+	if err != nil {
+		t.Fatalf("expected ClaimDispatch to skip sleeping chiller and claim online pump, got err=%v", err)
+	}
+	if claimedEnv.DeviceID != caPumpDev {
+		t.Fatalf("expected online caPumpDev to be claimed, got %s", claimedEnv.DeviceID)
+	}
+
+	// 5. Cancel remaining QUEUED sleeping command in the batch + test OperatorHTTPHandler routes + ObservabilityRoute.
+	cancelResp, err := h.Authority.CancelOperatorCommandBatch(context.Background(), op, caSiteID, created.ID, "cancel remaining")
+	if err != nil {
+		t.Fatalf("CancelOperatorCommandBatch failed: %v", err)
+	}
+	if len(cancelResp.CancelledCommandIDs) != 1 || cancelResp.CancelledCommandIDs[0] != *created.Items[0].CommandID {
+		t.Fatalf("expected only sleeping item 0 cancelled, got %+v", cancelResp)
+	}
+
+	getBatchReq := httptest.NewRequest(http.MethodGet, InternalOperatorPrefix+"/sites/"+caSiteID+"/command-batches/"+created.ID, nil)
+	if got := ObservabilityRoute(getBatchReq); got != "command-batches.get" {
+		t.Fatalf("ObservabilityRoute(get batch) = %q, want command-batches.get", got)
+	}
+	postBatchReq := httptest.NewRequest(http.MethodPost, InternalOperatorPrefix+"/sites/"+caSiteID+"/command-batches", nil)
+	if got := ObservabilityRoute(postBatchReq); got != "command-batches.create" {
+		t.Fatalf("ObservabilityRoute(post batch) = %q, want command-batches.create", got)
+	}
+	wakeReq := httptest.NewRequest(http.MethodPost, InternalDispatchWakePath, nil)
+	if got := ObservabilityRoute(wakeReq); got != "dispatch.wake" {
+		t.Fatalf("ObservabilityRoute(wake) = %q, want dispatch.wake", got)
+	}
+}

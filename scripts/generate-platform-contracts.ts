@@ -138,6 +138,9 @@ const w4: ReadonlyArray<readonly [string, HttpMethod, string, string, string?]> 
   ['deleteDevicePriorityLock', 'delete', `${site}/devices/{deviceId}/priority-lock`, 'DevicePriorityLockReleaseResponse'],
   ['listControlAlarmDeadLetters', 'get', `${site}/control-alarms/dead-letters`, 'ControlAlarmDeadLetterListEnvelope', '__CONTROL_ALARM_DEAD_LETTERS_PATH__'],
   ['replayControlAlarmDeadLetter', 'post', `${site}/control-alarms/dead-letters/{outboxId}/replay`, 'ControlAlarmDeadLetterReplayResponse', '__CONTROL_ALARM_DEAD_LETTER_REPLAY_PATH__'],
+  ['listSiteCommandBatches', 'get', `${site}/command-batches`, 'CommandBatchListView'],
+  ['getSiteCommandBatch', 'get', `${site}/command-batches/{batchId}`, 'CommandBatchView'],
+  ['cancelSiteCommandBatch', 'post', `${site}/command-batches/{batchId}/cancel`, 'CommandBatchCancelResponse'],
   ['getSiteAlarmRouting', 'get', `${site}/alarm-routing`, 'SiteAlarmRoutingEnvelope', '__SITE_ALARM_ROUTING_PATH__'],
   ['reloadSiteAlarmRouting', 'post', `${site}/alarm-routing/reload`, 'SiteAlarmRoutingReloadEnvelope', '__SITE_ALARM_ROUTING_RELOAD_PATH__'],
   ['diffSiteAlarmRules', 'post', 'alarm-rules/diff', 'AlarmRuleDiffEnvelope', '__ALARM_RULES_DIFF_PATH__'],
@@ -289,6 +292,7 @@ const expectedOperations: Record<string, readonly [HttpMethod, string]> = {
   upsertSiteOptimizationCanaryBinding: ['put', `${opt}/canary-bindings/{loopKey}`],
   deleteSiteOptimizationCanaryBinding: ['delete', `${opt}/canary-bindings/{loopKey}`],
   listSiteOptimizationNegativeSamples: ['get', `${opt}/negative-samples`],
+  createSiteCommandBatch: ['post', `${site}/command-batches`],
 };
 const operations: Record<string, OperationEntry> = {};
 for (const [operationId, [method, subPath]] of Object.entries(expectedOperations)) {
@@ -384,6 +388,7 @@ for (const [operationId, schemaName] of Object.entries(expectedSuccessSchemas)) 
   invariant(schemaRef(operations[operationId].operation, '200') === `#/components/schemas/${schemaName}`, `${operationId} success schema is unsupported`);
 }
 invariant(schemaRef(operations.recalculateSiteAccounting.operation, '202') === '#/components/schemas/AccountingRecalcJob', 'recalculateSiteAccounting accepted schema is unsupported');
+invariant(schemaRef(operations.createSiteCommandBatch.operation, '202') === '#/components/schemas/CommandBatchView', 'createSiteCommandBatch accepted schema is unsupported');
 invariant(schemaRef(operations.createSiteMeterRatioVersion.operation, '201') === '#/components/schemas/MeterRatioVersion', 'createSiteMeterRatioVersion created schema is unsupported');
 invariant(schemaRef(operations.replaceDeviceHardware.operation, '201') === '#/components/schemas/ReplaceDeviceHardwareResult', 'replaceDeviceHardware success schema is unsupported');
 invariant(schemaRef(operations.transferSiteDevice.operation, '201') === '#/components/schemas/TransferDeviceResult', 'transferSiteDevice success schema is unsupported');
@@ -562,6 +567,13 @@ const schemaRequirements: Record<string, readonly [readonly string[], (readonly 
   OTACampaignActionRequest: [[], ['reason']],
   FieldError: [['field', 'message']],
   ProblemDetails: [['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable'], ['reason', 'fieldErrors']],
+  CommandBatchTargetInput: [['deviceId', 'pointId'], ['parameters']],
+  CommandBatchCreateRequest: [['capability', 'targets'], ['parameters', 'deliveryMode', 'ttlSeconds', 'reason', 'verificationCode']],
+  CommandBatchCancelRequest: [[], ['reason']],
+  CommandBatchItemView: [['itemIndex', 'deviceId', 'pointId', 'admitted', 'status'], ['commandId', 'rejectionCode', 'rejectionReason', 'expiresAt', 'nextDispatchAfter']],
+  CommandBatchView: [['id', 'tenantId', 'siteId', 'idempotencyKey', 'capability', 'commandSource', 'deliveryMode', 'targetCount', 'acceptedCount', 'rejectedCount', 'status', 'initiatedByPrincipalId', 'traceId', 'reason', 'createdAt', 'updatedAt', 'replayed', 'items'], ['ttlSeconds', 'expiresAt']],
+  CommandBatchListView: [['items']],
+  CommandBatchCancelResponse: [['batch', 'cancelledCommandIds']],
 };
 for (const [name, [required, optional = []]] of Object.entries(schemaRequirements)) {
   const properties = optional.length > 0 ? [...new Set([...required, ...optional])] : required;

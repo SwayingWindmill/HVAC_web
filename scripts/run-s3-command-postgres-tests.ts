@@ -90,7 +90,7 @@ try {
     JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'command_runtime' AND c.relkind = 'r'
   `);
-  expectEqual(tableState, '15|14|14', 'table/RLS baseline');
+  expectEqual(tableState, '17|16|16', 'table/RLS baseline');
   report.assertions.tableRlsState = tableState;
 
   const capabilityState = psql(`

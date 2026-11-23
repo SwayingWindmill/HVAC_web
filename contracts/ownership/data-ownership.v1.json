@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 24,
+  "registryRevision": 25,
   "resources": [
     {
       "kind": "schema",
@@ -323,6 +323,18 @@
       "name": "command-dispatch-outbox",
       "writer": "command-service",
       "relay": "command-dispatcher",
+      "revision": 1
+    },
+    {
+      "kind": "table",
+      "name": "command-batch",
+      "writer": "command-service",
+      "revision": 1
+    },
+    {
+      "kind": "table",
+      "name": "command-batch-item",
+      "writer": "command-service",
       "revision": 1
     },
     {

@@ -138,6 +138,12 @@ type CommandView struct {
 	ApprovalPolicy        commandmodel.ApprovalPolicy    `json:"approvalPolicy"`
 	PriorityTier          commandmodel.PriorityTier      `json:"priorityTier,omitempty"`
 	CommandSource         commandmodel.CommandSource     `json:"commandSource,omitempty"`
+	DeliveryMode          commandmodel.DeliveryMode      `json:"deliveryMode,omitempty"`
+	TTLSeconds            *int                           `json:"ttlSeconds,omitempty"`
+	ExpiresAt             *string                        `json:"expiresAt,omitempty"`
+	NextDispatchAfter     *string                        `json:"nextDispatchAfter,omitempty"`
+	BatchID               *string                        `json:"batchId,omitempty"`
+	BatchItemIndex        *int                           `json:"batchItemIndex,omitempty"`
 	ApprovalCount         int                            `json:"approvalCount"`
 	RequiredApprovalCount int                            `json:"requiredApprovalCount"`
 	Parameters            commandmodel.CommandParameters `json:"parameters"`
@@ -601,11 +607,22 @@ func commandView(intent commandmodel.CommandIntent) CommandView {
 		Capability: intent.Capability, CapabilityRevision: intent.CapabilityRevision,
 		Status: intent.Status, Risk: intent.Risk, ApprovalPolicy: intent.ApprovalPolicy,
 		PriorityTier: intent.PriorityTier, CommandSource: intent.CommandSource,
+		DeliveryMode: commandmodel.NormalizeDeliveryMode(intent.DeliveryMode), TTLSeconds: cloneIntPtr(intent.TTLSeconds),
+		ExpiresAt: formatTimePtr(intent.ExpiresAt), NextDispatchAfter: formatTimePtr(intent.NextDispatchAfter),
+		BatchID: cloneStringPtr(intent.BatchID), BatchItemIndex: cloneIntPtr(intent.BatchItemIndex),
 		ApprovalCount: len(intent.Approvals), RequiredApprovalCount: requiredApprovalCount(intent.ApprovalPolicy),
 		Parameters: cloneParameters(intent.Parameters), DeviceCommandSequence: intent.DeviceCommandSequence,
 		Version: intent.Version, SnapshotRevision: intent.SnapshotRevision, Transitions: transitions,
 		CreatedAt: intent.CreatedAt.UTC(), UpdatedAt: intent.UpdatedAt.UTC(),
 	}
+}
+
+func formatTimePtr(value *time.Time) *string {
+	if value == nil || value.IsZero() {
+		return nil
+	}
+	formatted := value.UTC().Format(time.RFC3339Nano)
+	return &formatted
 }
 
 func writeAuthorityError(writer http.ResponseWriter, err error) {
@@ -626,6 +643,12 @@ func writeAuthorityError(writer http.ResponseWriter, err error) {
 		writeCommandProblem(writer, http.StatusConflict, "COMMAND_IDEMPOTENCY_CONFLICT", false)
 	case errors.Is(err, ErrDevicePriorityLocked):
 		writeCommandProblem(writer, http.StatusConflict, "DEVICE_PRIORITY_LOCKED", false)
+	case errors.Is(err, ErrCommandTTLExpired):
+		writeCommandProblem(writer, http.StatusConflict, "COMMAND_TTL_EXPIRED", false)
+	case errors.Is(err, commandmodel.ErrInvalidDeliveryMode),
+		errors.Is(err, commandmodel.ErrOfflineQueueUnsupported),
+		errors.Is(err, commandmodel.ErrInvalidTTLSeconds):
+		writeCommandProblem(writer, http.StatusBadRequest, "COMMAND_REQUEST_INVALID", false)
 	default:
 		writeCommandProblem(writer, http.StatusServiceUnavailable, "COMMAND_UNAVAILABLE", true)
 	}
@@ -728,6 +751,8 @@ func ObservabilityRoute(request *http.Request) string {
 		return "dispatch.claim-any"
 	case InternalDispatchResolvePath:
 		return "dispatch.resolve"
+	case InternalDispatchWakePath:
+		return "dispatch.wake"
 	case InternalVerificationClaimPath:
 		return "verification.claim"
 	case InternalVerificationClaimAnyPath:
@@ -757,7 +782,25 @@ func ObservabilityRoute(request *http.Request) string {
 				return "control.mode"
 			case "control-shutdown":
 				return "control.shutdown"
+			case "command-batches":
+				if request.Method == http.MethodPost {
+					return "command-batches.create"
+				}
+				if request.Method == http.MethodGet {
+					return "command-batches.list"
+				}
+				return "unknown"
 			}
+		} else if len(segments) == 3 && segments[0] != "" && segments[1] == "command-batches" && segments[2] != "" {
+			if request.Method == http.MethodGet {
+				return "command-batches.get"
+			}
+			return "unknown"
+		} else if len(segments) == 4 && segments[0] != "" && segments[1] == "command-batches" && segments[2] != "" && segments[3] == "cancel" {
+			if request.Method == http.MethodPost {
+				return "command-batches.cancel"
+			}
+			return "unknown"
 		} else if len(segments) == 4 && segments[0] != "" && segments[1] == "devices" && segments[2] != "" && segments[3] == "priority-lock" {
 			return "control.lock"
 		} else if len(segments) == 3 && segments[0] != "" && segments[1] == "control-alarms" && segments[2] == "dead-letters" {

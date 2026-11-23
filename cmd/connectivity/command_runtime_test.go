@@ -253,3 +253,61 @@ func TestCommandRuntimeDecoupledWorkerPoolsExecuteConcurrently(t *testing.T) {
 		t.Fatalf("unexpected concurrency stats dispMax=%d verCalls=%d", dispMax.Load(), verCalls.Load())
 	}
 }
+
+func TestDeferredCommandWakeFlusherDebouncesDevicesAndResolvesGateways(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	flusher := newDeferredCommandWakeFlusher(logger, nil, 15*time.Millisecond)
+	defer flusher.Close()
+
+	// No-op before Start (e.g. when command runtime is disabled).
+	flusher.NotifyDevices(context.Background(), "tenant-1", []string{"dev-before"})
+	flusher.NotifyGateway("gw-before")
+
+	type wakeCall struct {
+		tenantID  string
+		deviceIDs []string
+	}
+	var (
+		mu    sync.Mutex
+		calls []wakeCall
+	)
+	flushed := make(chan struct{}, 4)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	flusher.Start(
+		ctx,
+		func(_ context.Context, tenantID string, deviceIDs []string) (int, error) {
+			mu.Lock()
+			calls = append(calls, wakeCall{tenantID: tenantID, deviceIDs: append([]string(nil), deviceIDs...)})
+			mu.Unlock()
+			flushed <- struct{}{}
+			return len(deviceIDs), nil
+		},
+		func(_ context.Context, gatewayID string) (string, []string, error) {
+			if gatewayID == "gw-1" {
+				return "tenant-1", []string{"dev-2", "dev-3"}, nil
+			}
+			return "", nil, errors.New("missing")
+		},
+	)
+
+	flusher.NotifyDevices(context.Background(), "tenant-1", []string{"dev-1", "dev-2"})
+	flusher.NotifyDevices(context.Background(), "tenant-1", []string{"dev-1"})
+	flusher.NotifyGateway("gw-1")
+
+	select {
+	case <-flushed:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for debounced wake flush")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(calls) != 1 {
+		t.Fatalf("calls len=%d, want 1 coalesced call; calls=%+v", len(calls), calls)
+	}
+	if calls[0].tenantID != "tenant-1" || strings.Join(calls[0].deviceIDs, ",") != "dev-1,dev-2,dev-3" {
+		t.Fatalf("unexpected wake call=%+v", calls[0])
+	}
+}

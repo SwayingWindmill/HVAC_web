@@ -775,3 +775,35 @@ func TestEdgeMQTTCommandRejectsHardRealtimeBoundaryAndMapsReadbackMismatch(t *te
 		t.Fatalf("expected LocalReadbackVerified=false and Readback=55, got %+v", resp.ExecutionEvidence)
 	}
 }
+
+func TestEdgeMQTTCommandRejectsTTLOver24HoursWithoutActuation(t *testing.T) {
+	config := loadGeneratedCentralPlantConfig(t)
+	now := time.Date(2026, 11, 23, 3, 0, 0, 0, time.UTC)
+	plant := NewPlant(config.Plant, config.Scenario, now)
+	edgeRuntime, err := NewEdgeControlRuntime(config, plant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := newEdgeCommandHandler(edgeRuntime, MQTTGatewayConfig{QueueDirectory: t.TempDir()}, config.Plant.DeviceIDs(), testMQTTEvidenceSpool(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.now = func() time.Time { return now }
+
+	excessive := mqttCommandEnvelope{
+		SchemaVersion:  mqttCommandSchemaVersion,
+		MessageID:      "018f3e00-9000-7000-8000-000000000201",
+		CommandID:      "018f3e00-9000-7000-8000-000000000202",
+		IssuedAt:       now.UnixMilli(),
+		ExpireAt:       now.Add(24*time.Hour + time.Minute).UnixMilli(),
+		DeviceID:       config.Plant.Chiller.ID,
+		CommandCode:    "START",
+		Params:         map[string]float64{},
+		ExecutionFence: 1,
+		PayloadHash:    "hash-ttl-over-24h",
+	}
+	reply := handler.evaluate(excessive)
+	if reply.EdgeStatus != "EXPIRED" || reply.ReasonCode == nil || *reply.ReasonCode != "TTL_EXCEEDS_MAX" {
+		t.Fatalf("expected EXPIRED TTL_EXCEEDS_MAX, got %+v", reply)
+	}
+}

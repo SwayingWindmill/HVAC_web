@@ -2290,3 +2290,83 @@ func TestConnectorExportsSpansToConfiguredTracer(t *testing.T) {
 		t.Fatalf("expected mqtt.command.publish and mqtt.command.reply spans, got %+v", spans)
 	}
 }
+
+func TestExecuteEnforcesCommandExpiresAtBoundAndPreSendExpiry(t *testing.T) {
+	now := time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)
+	route := commandmodel.DeviceRoute{GatewayID: "01900000-0000-7000-8000-000000000101", ExternalDeviceID: "CHILLER-02", BindingRevision: 1}
+	transport := &routeAndReplyTransportState{
+		fakeTransportState: fakeTransportState{correlations: make(map[string]commandmodel.CommandCorrelation)},
+		route:              route,
+	}
+
+	var published []*paho.Publish
+	connector, err := NewOffline(Config{
+		TransportState: transport,
+		EvidenceStore:  fakeEvidenceStore{},
+		ReplyTimeout:   25 * time.Second,
+		Now:            func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connector.rootContext = context.Background()
+	requested := commandmodel.NumberScalar(24)
+	edgeExec := &commandmodel.EdgeExecutionEvidence{
+		Requested: requested, Effective: &requested, Applied: &requested,
+		WinnerControllerID: "cloud-command-intent", Cycle: 1,
+	}
+	connector.publish = func(_ context.Context, pub *paho.Publish) (*paho.PublishResponse, error) {
+		published = append(published, pub)
+		var env commandEnvelope
+		if err := json.Unmarshal(pub.Payload, &env); err != nil {
+			return nil, err
+		}
+		key := replyKey(env.CommandID, env.ExecutionFence)
+		connector.mu.Lock()
+		waiter := connector.waiters[key]
+		connector.mu.Unlock()
+		waiter <- commandmodel.CommandCorrelation{
+			Envelope: commandmodel.DispatchEnvelope{
+				CommandID: env.CommandID, AttemptID: env.MessageID, TenantID: "tenant-1",
+				SiteID: "site-1", DeviceID: "device-1", ExecutionFence: env.ExecutionFence,
+			},
+			State: commandmodel.CorrelationReplied, ReplyStatus: "EXECUTED",
+			ReplyEventTime: now, RepliedAt: now, EdgeExecution: edgeExec,
+		}
+		return &paho.PublishResponse{}, nil
+	}
+
+	// 1. Shorter command ExpiresAt caps wire ExpireAt below ReplyTimeout (25s).
+	cmdExpiry := now.Add(7 * time.Second)
+	res, err := connector.Execute(context.Background(), commandmodel.DispatchEnvelope{
+		CommandID: "cmd-exp-cap", AttemptID: "att-exp-cap", TenantID: "tenant-1", SiteID: "site-1", DeviceID: "device-1",
+		Capability: commandmodel.CapabilitySetTemperatureSetpoint, CapabilityRevision: "capability:set-temperature-setpoint:v1",
+		Parameters: commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 24}, PayloadHash: "h1",
+		ExecutionFence: 1, LeaseUntil: now.Add(45 * time.Second), ExpiresAt: &cmdExpiry,
+	})
+	if err != nil || !res.Acknowledged || len(published) != 1 {
+		t.Fatalf("capped Execute failed: res=%#v err=%v published=%d", res, err, len(published))
+	}
+	var wire commandEnvelope
+	if err := json.Unmarshal(published[0].Payload, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if wire.ExpireAt != cmdExpiry.UnixMilli() {
+		t.Fatalf("wire.ExpireAt=%d, want %d", wire.ExpireAt, cmdExpiry.UnixMilli())
+	}
+
+	// 2. Expired command TTL returns ConnectorPreSendRejected COMMAND_TTL_EXPIRED without publishing.
+	pastExpiry := now.Add(-1 * time.Second)
+	expiredRes, err := connector.Execute(context.Background(), commandmodel.DispatchEnvelope{
+		CommandID: "cmd-expired", AttemptID: "att-expired", TenantID: "tenant-1", SiteID: "site-1", DeviceID: "device-1",
+		Capability: commandmodel.CapabilitySetTemperatureSetpoint, CapabilityRevision: "capability:set-temperature-setpoint:v1",
+		Parameters: commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 24}, PayloadHash: "h2",
+		ExecutionFence: 2, LeaseUntil: now.Add(45 * time.Second), ExpiresAt: &pastExpiry,
+	})
+	if err != nil || expiredRes.Phase != commandmodel.ConnectorPreSendRejected || expiredRes.FailureCode != "COMMAND_TTL_EXPIRED" {
+		t.Fatalf("expected ConnectorPreSendRejected COMMAND_TTL_EXPIRED, got res=%#v err=%v", expiredRes, err)
+	}
+	if len(published) != 1 {
+		t.Fatalf("expired command must never publish, published=%d", len(published))
+	}
+}

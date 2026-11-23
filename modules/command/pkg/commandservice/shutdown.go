@@ -515,7 +515,8 @@ func (a *ControlAuthority) dispatchShutdownTarget(
 	res, err := a.mintGrantAndSubmit(
 		ctx, operator, target.device.SiteID, target.device.ID, target.point.ID,
 		idemKey, "", target.capability, target.profile, commandmodel.CommandParameters{},
-		target.feedbackPoint.PointCode, precondMode, cleanBypassReason, priorityTier, commandSource, obs,
+		target.feedbackPoint.PointCode, precondMode, cleanBypassReason, priorityTier, commandSource,
+		commandmodel.DeliveryModeFailFast, nil, nil, nil, nil, obs,
 	)
 	if err != nil {
 		return "", err

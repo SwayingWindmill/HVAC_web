@@ -305,3 +305,52 @@ func TestLeasedMediumRiskEntersQueuedDirectlyWhileHumanRequiresApproval(t *testi
 		t.Fatalf("expected queued leased command to be dispatchable, err=%v", err)
 	}
 }
+
+func TestOfflineQueuedIntentSurvivesGrantExpiryUntilTTLAndThenExpires(t *testing.T) {
+	baseNow := fixedClock()()
+	now := baseNow
+	service := New(func() time.Time { return now })
+
+	ttl := 600
+	req := validRequest()
+	req.IdempotencyKey = "offline-grant-lifetime"
+	req.DeliveryMode = commandmodel.DeliveryModeQueueIfOffline
+	req.TTLSeconds = &ttl
+	req.CurrentState = commandmodel.CurrentStateEvidence{
+		EvaluationAvailability: "AVAILABLE",
+		Presence:               "OFFLINE",
+		Readiness:              "CURRENT",
+		ObservedAt:             now,
+	}
+
+	created, err := service.Submit(req)
+	if err != nil {
+		t.Fatalf("offline submit failed: %v", err)
+	}
+
+	// Advance past the 30s IAM COMMAND_SUBMIT grant window while remaining well inside 600s TTL.
+	now = baseNow.Add(120 * time.Second)
+	env, err := service.PrepareDispatch(created.Intent.ID, "dispatcher-a", now.Add(30*time.Second))
+	if err != nil {
+		t.Fatalf("expected QUEUE_IF_OFFLINE command to survive 30s grant expiry inside 600s TTL, got %v", err)
+	}
+	if err := service.ResolveDispatch(env, commandmodel.ConnectorResult{
+		Phase:       commandmodel.ConnectorPreSendRejected,
+		FailureCode: "DISPATCH_SAFETY_DEVICE_NOT_ONLINE",
+	}); err != nil {
+		t.Fatalf("resolve offline deferral failed: %v", err)
+	}
+
+	// Advance past 600s TTL -> validateExecutionGovernance and PrepareDispatch fail with ErrCommandTTLExpired.
+	now = baseNow.Add(601 * time.Second)
+	loaded, err := service.Get(created.Intent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if govErr := validateExecutionGovernance(loaded, now); !errors.Is(govErr, ErrCommandTTLExpired) {
+		t.Fatalf("expected ErrCommandTTLExpired after TTL elapsed, got %v", govErr)
+	}
+	if _, err := service.PrepareDispatch(created.Intent.ID, "dispatcher-a", now.Add(30*time.Second)); !errors.Is(err, ErrCommandTTLExpired) {
+		t.Fatalf("expected PrepareDispatch ErrCommandTTLExpired, got %v", err)
+	}
+}

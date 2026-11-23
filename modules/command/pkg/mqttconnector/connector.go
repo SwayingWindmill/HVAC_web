@@ -347,7 +347,13 @@ func (connector *Connector) Execute(ctx context.Context, envelope commandmodel.D
 		return commandmodel.ConnectorResult{}, err
 	}
 	now := connector.config.Now().UTC()
-	expireAt := capCommandExpireAt(now, envelope.LeaseUntil.UTC(), connector.config.ReplyTimeout)
+	if envelope.ExpiresAt != nil && !envelope.ExpiresAt.IsZero() && !now.Before(envelope.ExpiresAt.UTC()) {
+		return commandmodel.ConnectorResult{
+			Phase:       commandmodel.ConnectorPreSendRejected,
+			FailureCode: "COMMAND_TTL_EXPIRED",
+		}, nil
+	}
+	expireAt := capCommandExpireAt(now, envelope.LeaseUntil.UTC(), connector.config.ReplyTimeout, envelope.ExpiresAt)
 	if expireAt.IsZero() || !expireAt.After(now) {
 		return commandmodel.ConnectorResult{}, errors.New("command dispatch lease is expired")
 	}
@@ -409,6 +415,12 @@ func (connector *Connector) Execute(ctx context.Context, envelope commandmodel.D
 	}()
 
 	armedAt := connector.config.Now().UTC()
+	if envelope.ExpiresAt != nil && !envelope.ExpiresAt.IsZero() && !armedAt.Before(envelope.ExpiresAt.UTC()) {
+		return commandmodel.ConnectorResult{
+			Phase:       commandmodel.ConnectorPreSendRejected,
+			FailureCode: "COMMAND_TTL_EXPIRED",
+		}, nil
+	}
 	if err := connector.config.TransportState.ArmCommandCorrelation(ctx, envelope.TenantID, envelope.AttemptID, envelope.ExecutionFence, armedAt); err != nil {
 		return commandmodel.ConnectorResult{}, errors.New("MQTT command publish commit-point arm failed")
 	}
@@ -532,7 +544,7 @@ func (connector *Connector) publishCommand(ctx context.Context, publish *paho.Pu
 	return connector.manager.Publish(ctx, publish)
 }
 
-func capCommandExpireAt(now, leaseUntil time.Time, replyTimeout time.Duration) time.Time {
+func capCommandExpireAt(now, leaseUntil time.Time, replyTimeout time.Duration, commandExpiresAt *time.Time) time.Time {
 	if leaseUntil.IsZero() {
 		return time.Time{}
 	}
@@ -540,6 +552,12 @@ func capCommandExpireAt(now, leaseUntil time.Time, replyTimeout time.Duration) t
 	if replyTimeout > 0 {
 		if replyDeadline := now.UTC().Add(replyTimeout); replyDeadline.Before(expireAt) {
 			expireAt = replyDeadline
+		}
+	}
+	if commandExpiresAt != nil && !commandExpiresAt.IsZero() {
+		cmdDeadline := commandExpiresAt.UTC()
+		if cmdDeadline.Before(expireAt) {
+			expireAt = cmdDeadline
 		}
 	}
 	return expireAt

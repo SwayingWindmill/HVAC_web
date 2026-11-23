@@ -61,6 +61,8 @@ type createCommandRequest struct {
 	AssetID          string                         `json:"assetId"`
 	CommandPointID   string                         `json:"commandPointId"`
 	Parameters       commandmodel.CommandParameters `json:"parameters"`
+	DeliveryMode     commandmodel.DeliveryMode      `json:"deliveryMode,omitempty"`
+	TTLSeconds       *int                           `json:"ttlSeconds,omitempty"`
 	VerificationCode string                         `json:"verificationCode,omitempty"`
 }
 
@@ -132,6 +134,12 @@ type commandView struct {
 	Risk                  commandmodel.RiskLevel         `json:"risk"`
 	PriorityTier          commandmodel.PriorityTier      `json:"priorityTier,omitempty"`
 	CommandSource         commandmodel.CommandSource     `json:"commandSource,omitempty"`
+	DeliveryMode          commandmodel.DeliveryMode      `json:"deliveryMode,omitempty"`
+	TTLSeconds            *int                           `json:"ttlSeconds,omitempty"`
+	ExpiresAt             *string                        `json:"expiresAt,omitempty"`
+	NextDispatchAfter     *string                        `json:"nextDispatchAfter,omitempty"`
+	BatchID               *string                        `json:"batchId,omitempty"`
+	BatchItemIndex        *int                           `json:"batchItemIndex,omitempty"`
 	ApprovalPolicy        commandmodel.ApprovalPolicy    `json:"approvalPolicy"`
 	ApprovalCount         int                            `json:"approvalCount"`
 	RequiredApprovalCount int                            `json:"requiredApprovalCount"`
@@ -328,6 +336,8 @@ func (h *handler) createCommand(writer http.ResponseWriter, request *http.Reques
 		AssetID:        input.AssetID,
 		CommandPointID: input.CommandPointID,
 		Parameters:     input.Parameters,
+		DeliveryMode:   input.DeliveryMode,
+		TTLSeconds:     input.TTLSeconds,
 		IdempotencyKey: idempotencyKey,
 	}
 	status, rawBody, failure := h.callOperatorCommandBackend(
@@ -1036,6 +1046,7 @@ func validCommandView(view commandView) bool {
 		!validCommandIntentStatus(view.Status) || !validCommandRisk(view.Risk) ||
 		(view.PriorityTier != "" && !view.PriorityTier.Valid()) ||
 		(view.CommandSource != "" && !view.CommandSource.Valid()) ||
+		(view.DeliveryMode != "" && view.DeliveryMode != commandmodel.DeliveryModeFailFast && view.DeliveryMode != commandmodel.DeliveryModeQueueIfOffline) ||
 		!validCommandApprovalPolicy(view.ApprovalPolicy, view.ApprovalCount, view.RequiredApprovalCount) ||
 		view.DeviceCommandSequence == 0 || view.Version == 0 ||
 		view.CreatedAt.IsZero() || view.UpdatedAt.IsZero() || view.UpdatedAt.Before(view.CreatedAt) ||

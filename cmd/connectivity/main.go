@@ -190,9 +190,10 @@ func run() int {
 	addCloser(tunnelHub.Close)
 	addCloser(crlCtrl.Close)
 	var (
-		bgMu     sync.RWMutex
-		bgClosed bool
-		bgWG     sync.WaitGroup
+		bgMu        sync.RWMutex
+		bgClosed    bool
+		bgWG        sync.WaitGroup
+		wakeFlusher = newDeferredCommandWakeFlusher(logger, telemetry.Metrics, defaultWakeDebounce)
 	)
 	processor, err := adapter.NewProcessor(
 		connectivityStore,
@@ -203,6 +204,7 @@ func run() int {
 		adapter.WithAutoBackfillLagThreshold(config.AutoBackfillLagThreshold),
 		adapter.WithProcessorPacketHook(tap.Record),
 		adapter.WithGatewayPresenceHook(presence.SetOnline),
+		adapter.WithDeviceActivityHook(wakeFlusher.NotifyDevices),
 		adapter.WithShadowAckHook(func(_ context.Context, gw adapter.Gateway, ack adapter.ShadowChangeAckPayload) {
 			logger.Info("mqtt_shadow_change_ack",
 				"gateway_id", gw.ID,
@@ -239,6 +241,7 @@ func run() int {
 			return nil
 		}),
 		adapter.WithGatewayConnectHook(func(_ context.Context, gatewayID string) {
+			wakeFlusher.NotifyGateway(gatewayID)
 			bgMu.RLock()
 			if bgClosed || ingressCtx.Err() != nil {
 				bgMu.RUnlock()
@@ -318,10 +321,12 @@ func run() int {
 			return 1
 		}
 		addCloser(func() {
+			wakeFlusher.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			_ = commands.Close(ctx)
 		})
+		wakeFlusher.Start(drainRootCtx, commands.dispatcherClient.WakeDeferredDispatches, connectivityStore.GatewayDeviceIDs)
 	}
 	telemetry.MarkReady()
 	diagnostics := diagnosticsServer(*diagnosticsAddress, runtime, telemetry, &shuttingDown)

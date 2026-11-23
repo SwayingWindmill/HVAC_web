@@ -69,12 +69,12 @@ func controlErrorFromStore(err error, defaultDetail string) error {
 		return ce
 	}
 	switch {
-	case errors.Is(err, ErrCommandNotFound):
+	case errors.Is(err, ErrCommandNotFound), errors.Is(err, ErrCommandBatchNotFound):
 		return &ControlError{
 			HTTPStatus: http.StatusNotFound,
 			Code:       "RESOURCE_NOT_FOUND",
 			Title:      "Resource not found",
-			Detail:     "The requested Command was not found.",
+			Detail:     "The requested Command resource was not found.",
 		}
 	case errors.Is(err, ErrControlAlarmNotFound):
 		return &ControlError{
@@ -111,7 +111,7 @@ func controlErrorFromStore(err error, defaultDetail string) error {
 			Title:      "Command approval invalid",
 			Detail:     "The Command is not awaiting another approval.",
 		}
-	case errors.Is(err, ErrIdempotencyConflict):
+	case errors.Is(err, ErrIdempotencyConflict), errors.Is(err, ErrCommandBatchConflict):
 		return &ControlError{
 			HTTPStatus: http.StatusConflict,
 			Code:       "COMMAND_IDEMPOTENCY_CONFLICT",
@@ -132,8 +132,24 @@ func controlErrorFromStore(err error, defaultDetail string) error {
 			Title:      "Device priority locked",
 			Detail:     "The Device is locked or reserved at a higher Command priority.",
 		}
-	case errors.Is(err, ErrInvalidRequest), errors.Is(err, ErrCapabilityDenied):
+	case errors.Is(err, ErrCommandTTLExpired):
+		return &ControlError{
+			HTTPStatus: http.StatusConflict,
+			Code:       "COMMAND_TTL_EXPIRED",
+			Title:      "Command TTL expired",
+			Detail:     "The Command survival TTL elapsed before dispatch.",
+		}
+	case errors.Is(err, ErrInvalidRequest),
+		errors.Is(err, ErrCapabilityDenied),
+		errors.Is(err, commandmodel.ErrInvalidDeliveryMode),
+		errors.Is(err, commandmodel.ErrOfflineQueueUnsupported),
+		errors.Is(err, commandmodel.ErrInvalidTTLSeconds):
 		detail := defaultDetail
+		if errors.Is(err, commandmodel.ErrInvalidDeliveryMode) ||
+			errors.Is(err, commandmodel.ErrOfflineQueueUnsupported) ||
+			errors.Is(err, commandmodel.ErrInvalidTTLSeconds) {
+			detail = err.Error()
+		}
 		if detail == "" {
 			detail = "The Command request is invalid."
 		}
@@ -416,6 +432,8 @@ type SubmitOperatorCommandInput struct {
 	Parameters     commandmodel.CommandParameters `json:"parameters"`
 	IdempotencyKey string                         `json:"idempotencyKey"`
 	TraceID        string                         `json:"traceId,omitempty"`
+	DeliveryMode   commandmodel.DeliveryMode      `json:"deliveryMode,omitempty"`
+	TTLSeconds     *int                           `json:"ttlSeconds,omitempty"`
 }
 
 type SubmitOperatorCommandOutput struct {
