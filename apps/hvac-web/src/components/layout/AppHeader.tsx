@@ -15,6 +15,8 @@ import { TenantSwitcher } from '@/components/layout/TenantSwitcher';
 interface AppHeaderProps {
   /** The Site the operator works in; the bell counts its alarms happening now that nobody acknowledged. */
   readonly siteId?: string;
+  /** Remembered workspace Site when currently viewing a platform-wide route. */
+  readonly preferredSiteId?: string;
   readonly principalName: string;
   readonly principalRole: string;
   readonly csrfToken: string;
@@ -24,9 +26,14 @@ interface AppHeaderProps {
   readonly assistant?: { readonly open: boolean; readonly onToggle: () => void };
 }
 
+function siteTarget(path: string, siteId?: string): string {
+  return siteId ? `${path}?site=${encodeURIComponent(siteId)}` : path;
+}
+
 /** The top bar across the whole window: product mark and Site on the left, search, notifications and the user on the right. */
 export function AppHeader({
   siteId,
+  preferredSiteId,
   principalName,
   principalRole,
   csrfToken,
@@ -36,6 +43,9 @@ export function AppHeader({
 }: AppHeaderProps) {
   const [commandOpen, setCommandOpen] = useState(false);
   const waiting = useWaitingAlarmCount(siteId);
+  const linkSiteId = siteId ?? preferredSiteId;
+  const overviewHref = siteTarget('/overview', linkSiteId);
+  const notificationsHref = siteTarget('/notifications', linkSiteId);
 
   useEffect(() => {
     const handleShortcut = (event: globalThis.KeyboardEvent) => {
@@ -52,11 +62,11 @@ export function AppHeader({
     <>
       <header className="sticky top-0 z-40 flex h-(--header-height) w-full shrink-0 items-center gap-2 border-b bg-card pr-4 pl-[18px] print:hidden">
         <a
-          href="/overview"
+          href={overviewHref}
           aria-label="泉来禾智慧能源，回到总览"
           onClick={(event) => {
             event.preventDefault();
-            onNavigate('/overview');
+            onNavigate(overviewHref);
           }}
           className="flex shrink-0 rounded-[7px] outline-none focus-visible:ring-3 focus-visible:ring-ring-soft"
         >
@@ -93,7 +103,7 @@ export function AppHeader({
             size="icon"
             className="relative text-muted-foreground"
             aria-label={waiting > 0 ? `通知，${waiting} 条告警待确认` : '通知'}
-            onClick={() => onNavigate('/notifications')}
+            onClick={() => onNavigate(notificationsHref)}
           >
             <Bell className="size-[15px]" />
             {waiting > 0 ? (

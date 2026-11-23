@@ -4,11 +4,11 @@ import { DigitalTwinWorkspace } from '@/features/operations/digital-twin/compone
 
 export const Route = createFileRoute('/_app/_site/operations/digital-twin')({
   validateSearch: z.object({
-    view: z.enum(['overview', 'plant', 'terminal']).optional(),
-    floor: z.number().int().min(1).max(9).optional(),
-    shell: z.literal('off').optional(),
-    pipes: z.literal('on').optional(),
-    inspect: z.string().optional(),
+    view: z.enum(['overview', 'plant', 'terminal']).optional().catch(undefined),
+    floor: z.number().int().min(1).max(9).optional().catch(undefined),
+    shell: z.literal('off').optional().catch(undefined),
+    pipes: z.literal('on').optional().catch(undefined),
+    inspect: z.string().optional().catch(undefined),
   }),
   staticData: { title: '数字孪生' },
   component: DigitalTwinWorkspace,

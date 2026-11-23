@@ -60,6 +60,7 @@ export function useEnergyComparison(period: EnergyPeriod) {
       };
     },
     refetchInterval: 60_000,
+    staleTime: 30_000,
     retry: false,
   });
 }
@@ -84,6 +85,7 @@ export function useTodayAgainstYesterday() {
       return { today, yesterday, wholeYesterday, hours: comparePeriods(today, wholeYesterday, { from, previousFrom: before.from, now, timeZone: site.timezone }) };
     },
     refetchInterval: 60_000,
+    staleTime: 30_000,
     retry: false,
   });
 }
@@ -101,6 +103,7 @@ export function useHourlyHeatmap(days: number) {
       return hourlyHeatmap(electricity, site.timezone, dayKeys);
     },
     refetchInterval: 5 * 60_000,
+    staleTime: 30_000,
     retry: false,
   });
 }

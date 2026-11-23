@@ -110,6 +110,7 @@ export function siteCommandsQuery(siteId: string) {
   return queryOptions({
     queryKey: commandKeys.site(siteId),
     queryFn: ({ signal }) => listCommands(siteId, signal),
+    retry: false,
     refetchInterval: (query) => (query.state.data?.some((command) => !SETTLED.has(command.status)) ? 3_000 : 30_000),
   });
 }

@@ -350,11 +350,20 @@ func (w *RecalcWorker) processSpan(ctx context.Context, span coalescedDirtySpan,
 	executed := 0
 	for _, req := range requests {
 		if _, execErr := w.executor.Execute(ctx, req); execErr != nil {
+			if isNoDataMetricError(execErr) {
+				continue
+			}
 			return executed, fmt.Errorf("execute binding %s [%s,%s): %w", req.BindingID, req.PeriodStart.Format(time.RFC3339), req.PeriodEnd.Format(time.RFC3339), execErr)
 		}
 		executed++
 	}
 	return executed, nil
+}
+
+func isNoDataMetricError(err error) bool {
+	return errors.Is(err, ErrNoNumericObservations) ||
+		errors.Is(err, ErrEmptyPointDependency) ||
+		errors.Is(err, ErrMissingMetricDependency)
 }
 
 func granularityMatchesDirtyWindow(windowGranularity, bindingGranularity string) bool {

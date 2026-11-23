@@ -144,7 +144,13 @@ export function SiteDiscoveryUnavailableSurface() {
   );
 }
 
-export function RouteErrorSurface({ error }: { error: unknown }) {
+function isChunkLoadError(error: unknown): boolean {
+  if (!error) return false;
+  const message = error instanceof Error ? `${error.name} ${error.message}` : String(error);
+  return /dynamically imported module|ChunkLoadError|Importing a module script failed|Unable to preload CSS/i.test(message);
+}
+
+export function RouteErrorSurface({ error, reset }: { error: unknown; reset?: () => void }) {
   if (error instanceof RouteAccessError) {
     switch (error.code) {
       case 'FORBIDDEN':
@@ -161,7 +167,30 @@ export function RouteErrorSurface({ error }: { error: unknown }) {
         return <SiteDiscoveryUnavailableSurface />;
     }
   }
-  throw error;
+  const chunkError = isChunkLoadError(error);
+  return (
+    <Frame>
+      <StateCard
+        icon={TriangleAlert}
+        tone="danger"
+        data-testid="real-route-unexpected-error"
+        data-route-state="ERROR"
+        title={<Heading>{chunkError ? '页面资源需要刷新' : '页面暂时无法显示'}</Heading>}
+        description={
+          chunkError
+            ? '系统版本刚刚更新或网络波动导致页面资源未完整加载，刷新页面即可恢复。'
+            : '刚才在加载或显示这个页面时遇到异常，你可以重试当前操作或刷新页面。'
+        }
+      >
+        {!chunkError && reset ? (
+          <Button size="sm" onClick={() => { reset(); }}>重试</Button>
+        ) : null}
+        <Button variant={!chunkError && reset ? 'outline' : 'default'} size="sm" onClick={() => window.location.reload()}>
+          刷新页面
+        </Button>
+      </StateCard>
+    </Frame>
+  );
 }
 
 /** Opens the header's page and device search, as Ctrl K does. */
@@ -170,7 +199,9 @@ function openSearch() {
 }
 
 function NotFoundContent() {
-  const site = useShellSnapshot().sites?.items?.[0];
+  const snapshot = useShellSnapshot();
+  const preferredSiteId = snapshot.protectedScope?.siteId ?? snapshot.lastSiteId;
+  const site = (preferredSiteId ? snapshot.sites?.items?.find((item) => item.id === preferredSiteId) : undefined) ?? snapshot.sites?.items?.[0];
   const links = site
     ? ([['实时运行', '/operations/realtime'], ['告警', '/operations/alarms'], ['能耗分析', '/energy-analysis/consumption'], ['报告', '/reports']] as const)
     : [];

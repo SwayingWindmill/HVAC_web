@@ -9,6 +9,11 @@ interface RouteLoadingProps {
   variant?: 'route' | 'shell';
 }
 
+/** Default route pending surface used by TanStack Router while lazy route chunks load. */
+export function DefaultRoutePending() {
+  return <RouteLoading label="正在加载页面" />;
+}
+
 /** A page-shaped skeleton while a route or the shell loads: title, a figure strip and a panel of rows. */
 export function RouteLoading({
   label,

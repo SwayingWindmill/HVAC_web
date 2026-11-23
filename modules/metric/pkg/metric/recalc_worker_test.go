@@ -242,6 +242,66 @@ func TestRecalcWorkerMarksFailedWhenExecutionOrBoundFails(t *testing.T) {
 	}
 }
 
+type fakeSilentHourExecutor struct {
+	requests  []RunRequest
+	noDataErr error
+}
+
+func (f *fakeSilentHourExecutor) Execute(_ context.Context, req RunRequest) (Result, error) {
+	f.requests = append(f.requests, req)
+	if req.PeriodStart.Hour() == 10 {
+		return Result{}, f.noDataErr
+	}
+	return Result{RunID: "run-ok", ResultID: "res-ok"}, nil
+}
+
+func TestRecalcWorkerSkipsSilentNoObservationPeriodsWithoutFailingSpan(t *testing.T) {
+	now := time.Date(2026, 7, 29, 15, 0, 0, 0, time.UTC)
+	tenant := "018f4d00-0000-7000-8000-000000000001"
+	site := "018f4e00-1000-7000-8000-000000000001"
+	baseEff := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	store := &fakeDirtyWindowStore{
+		due: []DirtyWindowRecord{
+			{
+				ID:          "win-silent",
+				TenantID:    tenant,
+				SiteID:      site,
+				Granularity: "HOUR",
+				WindowStart: time.Date(2026, 7, 29, 10, 0, 0, 0, time.UTC),
+				WindowEnd:   time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
+				Status:      "PENDING",
+				AvailableAt: now.Add(-time.Second),
+				Source:      "MANUAL",
+			},
+		},
+		bindings: map[string][]BackfillBinding{
+			tenant + "|" + site: {{
+				TenantID: tenant, SiteID: site, BindingID: "bind-cooling", Granularity: "HOUR", Timezone: "UTC", EffectiveFrom: baseEff, VersionFrom: baseEff,
+			}},
+		},
+	}
+	exec := &fakeSilentHourExecutor{
+		noDataErr: errors.Join(ErrNoNumericObservations),
+	}
+	worker, err := NewRecalcWorker(RecalcWorkerConfig{
+		Store:    store,
+		Executor: exec,
+		Now:      func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := worker.ProcessOnce(context.Background())
+	if err != nil {
+		t.Fatalf("ProcessOnce() unexpected error for silent hour: %v", err)
+	}
+	if stats.ExecutedRuns != 1 || stats.Succeeded != 1 || stats.Failed != 0 || len(store.completed) != 1 || len(store.failed) != 0 {
+		t.Fatalf("unexpected stats/store for silent hour: stats=%+v completed=%v failed=%v", stats, store.completed, store.failed)
+	}
+}
+
 func TestReconcileStalePublicationsScansAllScopes(t *testing.T) {
 	lister := &fakePublicationScopeLister{
 		scopes: []TenantSiteScope{

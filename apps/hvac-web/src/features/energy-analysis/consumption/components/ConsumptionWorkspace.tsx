@@ -216,7 +216,15 @@ export function ConsumptionWorkspace() {
       />
       <DataGapBanner siteId={site.id} timeZone={site.timezone} context="consumption" />
       {query.isPending ? (
-        <Skeleton className="h-[440px] rounded-xl" />
+        <Panel aria-label="期间用能" className="space-y-4 p-5">
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+            <Skeleton className="h-14 rounded-lg" />
+            <Skeleton className="h-14 rounded-lg" />
+            <Skeleton className="h-14 rounded-lg" />
+            <Skeleton className="h-14 rounded-lg" />
+          </div>
+          <Skeleton className="h-[340px] rounded-lg" />
+        </Panel>
       ) : query.isError || !comparison ? (
         <Panel aria-label="期间用能">
           <div className="flex flex-col items-start gap-2 px-5 py-8">
