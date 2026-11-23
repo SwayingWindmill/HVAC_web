@@ -115,6 +115,13 @@ WHERE (observation_coverage.available) IS DISTINCT FROM (true)`);
 WHERE (presence_policies.online_within_seconds) IS DISTINCT FROM (EXCLUDED.online_within_seconds)`);
 });
 
+test('rerunning site onboarding preserves existing runtime observation_coverage state', () => {
+  const { telemetry } = buildOnboardingSql(songyaxuan);
+  assert.match(telemetry, /INSERT INTO telemetry_runtime\.observation_coverage [\s\S]*?ON CONFLICT \(device_id\) DO NOTHING;/);
+  const coverageUpserts = upserts(telemetry).filter(({ table }) => table === 'observation_coverage');
+  assert.equal(coverageUpserts.length, 0);
+});
+
 test('a policy that changes gets a new policy_revision; the inserted revision stays 1', () => {
   const { telemetry } = buildOnboardingSql(songyaxuan);
   const policies = upserts(telemetry).filter(({ table }) => POLICY_TABLES.has(table));
