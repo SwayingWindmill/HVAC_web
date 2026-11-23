@@ -103,11 +103,6 @@ export const semanticCatalog = {
           "name": "quality",
           "title": "数据质量",
           "description": "有效、可疑或无效。"
-        },
-        {
-          "name": "missing_meter",
-          "title": "缺失分表",
-          "description": "合成总表站点在该小时缺少有效读数的分表名称；完整小时为空字符串。"
         }
       ]
     },

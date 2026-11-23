@@ -1,4 +1,4 @@
-import type { EnergySeriesQuery, EnergySeriesResponse } from '../../../api/generated/platformGateway.gen';
+import { PlatformApiError, type EnergySeriesQuery, type EnergySeriesResponse } from '../../../api/generated/platformGateway.gen.ts';
 
 export const ENERGY_PERIODS = { today: '今日', '7d': '近 7 天', month: '本月', year: '本年' } as const;
 export type EnergyPeriod = keyof typeof ENERGY_PERIODS;
@@ -580,4 +580,14 @@ export function siteDayKey(instant: Date, timeZone: string): string {
 
 export function siteDays(now: Date, timeZone: string, count: number): string[] {
   return Array.from({ length: count }, (_, index) => siteDayKey(new Date(now.getTime() - (count - 1 - index) * 86_400_000), timeZone));
+}
+
+export function retryEnergyQuery(failureCount: number, error: Error): boolean {
+  if (failureCount >= 2) return false;
+  if (error instanceof PlatformApiError) return error.problem.retryable;
+  return true;
+}
+
+export function energyRetryDelay(attempt: number): number {
+  return Math.min(1000 * 2 ** attempt, 4000);
 }

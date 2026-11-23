@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import yaml from 'js-yaml';
 
 export type ClickHouseSqlRuleId =
   | 'CH-ALIAS-SHADOW'
@@ -317,6 +318,31 @@ interface AggregateAlias {
   itemIndex: number;
 }
 
+function isSimpleColumnPassthrough(exprTokens: SqlToken[]): boolean {
+  if (exprTokens.length === 1 && exprTokens[0].kind === 'word' && !exprTokens[0].quoted && !/^[0-9]/u.test(exprTokens[0].text)) {
+    return true;
+  }
+  if (
+    exprTokens.length === 3 &&
+    exprTokens[0].kind === 'word' &&
+    exprTokens[1].text === '.' &&
+    exprTokens[2].kind === 'word'
+  ) {
+    return true;
+  }
+  if (
+    exprTokens.length >= 4 &&
+    exprTokens[0].kind === 'word' &&
+    !exprTokens[0].quoted &&
+    exprTokens[0].lower === 'assumenotnull' &&
+    exprTokens[1].text === '(' &&
+    exprTokens[exprTokens.length - 1].text === ')'
+  ) {
+    return isSimpleColumnPassthrough(exprTokens.slice(2, -1));
+  }
+  return false;
+}
+
 function containsTopScopeAggregate(tokens: SqlToken[]): boolean {
   for (let i = 0; i < tokens.length - 1; i += 1) {
     const token = tokens[i];
@@ -342,8 +368,18 @@ interface IdentifierRef {
   line: number;
 }
 
-function collectIdentifierRefs(tokens: SqlToken[]): IdentifierRef[] {
-  const refs: IdentifierRef[] = [];
+function isNullCheckFollower(tokens: SqlToken[], index: number): boolean {
+  const next = tokens[index + 1];
+  if (!next || next.kind !== 'word' || next.quoted || next.lower !== 'is') return false;
+  const afterIs = tokens[index + 2];
+  if (!afterIs || afterIs.kind !== 'word' || afterIs.quoted) return false;
+  if (afterIs.lower === 'null') return true;
+  const afterNot = tokens[index + 3];
+  return afterIs.lower === 'not' && afterNot?.kind === 'word' && !afterNot.quoted && afterNot.lower === 'null';
+}
+
+function collectIdentifierRefs(tokens: SqlToken[]): Array<IdentifierRef & { isNullPredicate: boolean }> {
+  const refs: Array<IdentifierRef & { isNullPredicate: boolean }> = [];
   const parenKinds: Array<'agg' | 'subquery' | 'other'> = [];
   let aggDepth = 0;
 
@@ -384,6 +420,7 @@ function collectIdentifierRefs(tokens: SqlToken[]): IdentifierRef[] {
       lower: token.lower,
       qualified: isQualified,
       insideAggregate: aggDepth > 0,
+      isNullPredicate: !isQualified && isNullCheckFollower(tokens, i),
       line: token.line,
     });
   }
@@ -568,6 +605,7 @@ function analyzeSelectScopes(
 
     const selectItems = splitTopLevelCommas(stmt.slice(projStart, projEnd));
     const aggAliases = new Map<string, AggregateAlias>();
+    const exprAliases = new Map<string, AggregateAlias>();
     const parsedItems: Array<{ exprTokens: SqlToken[]; aliasLower?: string; itemIndex: number }> = [];
 
     selectItems.forEach((itemTokens, itemIndex) => {
@@ -591,8 +629,12 @@ function analyzeSelectScopes(
       }
 
       parsedItems.push({ exprTokens, aliasLower, itemIndex });
-      if (aliasLower && aliasRaw && containsTopScopeAggregate(exprTokens)) {
-        aggAliases.set(aliasLower, { aliasLower, aliasRaw, line: aliasLine, itemIndex });
+      if (aliasLower && aliasRaw) {
+        if (containsTopScopeAggregate(exprTokens)) {
+          aggAliases.set(aliasLower, { aliasLower, aliasRaw, line: aliasLine, itemIndex });
+        } else if (!isSimpleColumnPassthrough(exprTokens)) {
+          exprAliases.set(aliasLower, { aliasLower, aliasRaw, line: aliasLine, itemIndex });
+        }
       }
     });
 
@@ -657,24 +699,27 @@ function analyzeSelectScopes(
         }
         const clauseTokens = stmt.slice(k + 1, clauseEnd);
         for (const ref of collectIdentifierRefs(clauseTokens)) {
-          const shadowed = aggAliases.get(ref.lower);
+          const aggShadowed = aggAliases.get(ref.lower);
           if (clauseKeyword === 'having') {
-            if (shadowed && ref.insideAggregate) {
+            if (aggShadowed && ref.insideAggregate) {
               violations.push({
                 file,
                 line: ref.line,
                 rule: 'CH-ALIAS-SHADOW',
-                message: `HAVING aggregate references "${shadowed.aliasRaw}" which collides with aggregate alias "AS ${shadowed.aliasRaw}" in SELECT (ClickHouse Code: 184 ILLEGAL_AGGREGATION); drop or rename the SELECT alias.`,
+                message: `HAVING aggregate references "${aggShadowed.aliasRaw}" which collides with aggregate alias "AS ${aggShadowed.aliasRaw}" in SELECT (ClickHouse Code: 184 ILLEGAL_AGGREGATION); drop or rename the SELECT alias.`,
               });
             }
             continue;
           }
-          if (shadowed && !ref.qualified) {
+          const exprShadowed = aggShadowed ?? (!ref.isNullPredicate ? exprAliases.get(ref.lower) : undefined);
+          if (exprShadowed && !ref.qualified) {
+            const kind = aggShadowed ? 'aggregate alias' : 'expression alias';
+            const detail = aggShadowed ? 'ClickHouse Code: 184' : 'shadows base column and breaks ClickHouse index pruning';
             violations.push({
               file,
               line: ref.line,
               rule: 'CH-ALIAS-SHADOW',
-              message: `WHERE/PREWHERE references unqualified "${shadowed.aliasRaw}", which resolves to SELECT aggregate alias "AS ${shadowed.aliasRaw}" (ClickHouse Code: 184); qualify with table alias or rename the SELECT alias.`,
+              message: `WHERE/PREWHERE references unqualified "${exprShadowed.aliasRaw}", which resolves to SELECT ${kind} "AS ${exprShadowed.aliasRaw}" (${detail}); qualify with table alias or rename the SELECT alias.`,
             });
           }
           const withAgg = withAggMacros.get(ref.lower);
@@ -731,7 +776,7 @@ export function checkGoFmtVerbMix(formatText: string): boolean {
 function sanitizeGoFmtForSql(text: string): string {
   return text
     .replace(/%%/gu, '%')
-    .replace(/%(?:\[\d+\])?[+#\-0 *]*(?:\.\d+|\*)?[bcdeEfFgGoqsStTvUxX]/gu, 'ch_fmt_param');
+    .replace(/%(?:\[\d+\])?[+#\-0 *]*(?:\.\d+|\*)?[bcdeEfFgGoqsStTvUxX]/gu, ' ch_fmt_param');
 }
 
 function looksLikeClickHouseSql(text: string): boolean {
@@ -814,10 +859,82 @@ export function extractGoClickHouseSqlLiterals(goSource: string): ExtractedGoStr
   return results;
 }
 
+export function expandCubeSqlTemplates(sql: string): string {
+  let out = '';
+  let i = 0;
+  while (i < sql.length) {
+    if (sql[i] !== '{') {
+      out += sql[i];
+      i += 1;
+      continue;
+    }
+    const start = i;
+    let depth = 1;
+    i += 1;
+    while (i < sql.length && depth > 0) {
+      if (sql[i] === "'" || sql[i] === '"') {
+        const quote = sql[i];
+        i += 1;
+        while (i < sql.length && sql[i] !== quote) {
+          if (sql[i] === '\\') i += 2;
+          else i += 1;
+        }
+        i += 1;
+        continue;
+      }
+      if (sql[i] === '{') depth += 1;
+      else if (sql[i] === '}') depth -= 1;
+      i += 1;
+    }
+    const raw = sql.slice(start + 1, i - 1).trim();
+    const lambdaMatch = raw.match(/\.filter\(\s*lambda\s+[^:]+:\s*f?(["'])([\s\S]*)\1\s*\)$/u);
+    if (lambdaMatch) {
+      const body = lambdaMatch[2].replace(/\{[A-Za-z_][A-Za-z0-9_]*\}/gu, "'2026-01-01T00:00:00.000Z'");
+      out += `(${body})`;
+      continue;
+    }
+    const argMatch = raw.match(/\.filter\(\s*(["'])([\s\S]*)\1\s*\)$/u);
+    if (argMatch) {
+      const expr = argMatch[2].trim();
+      out += /^'.*'$/u.test(expr) ? `(${expr} = '')` : `(${expr} >= '')`;
+      continue;
+    }
+    out += "'cube_param'";
+  }
+  return out;
+}
+
+export function extractCubeYamlSqlBlocks(content: string): Array<{ sql: string; line: number }> {
+  const parsed = yaml.load(content) as { cubes?: Array<{ name?: string; sql?: unknown }> } | undefined;
+  const cubes = Array.isArray(parsed?.cubes) ? parsed.cubes : [];
+  const lines = content.split(/\r?\n/u);
+  const blocks: Array<{ sql: string; line: number }> = [];
+  for (const cube of cubes) {
+    if (typeof cube?.sql !== 'string' || !looksLikeClickHouseSql(cube.sql)) continue;
+    let baseLine = 1;
+    if (cube.name) {
+      const nameIdx = lines.findIndex((line) => new RegExp(`^\\s*-\\s*name:\\s*${cube.name}\\b`, 'u').test(line));
+      if (nameIdx >= 0) {
+        const sqlOffset = lines.slice(nameIdx).findIndex((line) => /^\s+sql:\s*/u.test(line));
+        if (sqlOffset >= 0) baseLine = nameIdx + sqlOffset + 1;
+      }
+    }
+    blocks.push({ sql: expandCubeSqlTemplates(cube.sql), line: baseLine });
+  }
+  return blocks;
+}
+
 export function findClickHouseViolationsInSource(file: string, content: string): ClickHouseSqlViolation[] {
   const violations: ClickHouseSqlViolation[] = [];
   if (file.endsWith('.sql')) {
     return findClickHouseSqlViolations(file, content, 1);
+  }
+  if (file.endsWith('.yml')) {
+    const ymlViolations: ClickHouseSqlViolation[] = [];
+    for (const block of extractCubeYamlSqlBlocks(content)) {
+      ymlViolations.push(...findClickHouseSqlViolations(file, block.sql, block.line));
+    }
+    return ymlViolations;
   }
   if (file.endsWith('.sh')) {
     const queryMatches = content.matchAll(/(?:query|\$\([^)]*)\s*"([^"]*)"/gsu);
@@ -846,7 +963,7 @@ export function findClickHouseViolationsInSource(file: string, content: string):
 }
 
 export function collectClickHouseCandidateFiles(root: string): string[] {
-  const tracked = execFileSync('git', ['ls-files', '--', 'infra/telemetry/clickhouse', 'modules', 'services', 'cmd'], {
+  const tracked = execFileSync('git', ['ls-files', '--', 'infra/telemetry/clickhouse', 'semantic/cube/model/cubes', 'modules', 'services', 'cmd'], {
     cwd: root,
     encoding: 'utf8',
     maxBuffer: 16 << 20,
@@ -857,6 +974,7 @@ export function collectClickHouseCandidateFiles(root: string): string[] {
   return tracked.filter((file) => {
     if (file.endsWith('.sql') && file.startsWith('infra/telemetry/clickhouse/')) return true;
     if (file.endsWith('.sh') && file.startsWith('infra/telemetry/clickhouse/')) return true;
+    if (file.endsWith('.yml') && file.startsWith('semantic/cube/model/cubes/')) return true;
     if (!file.endsWith('.go') || file.endsWith('_test.go')) return false;
     if (file.toLowerCase().includes('clickhouse') || file.endsWith('/history/aggregate.go')) return true;
     const body = readFileSync(resolve(root, file), 'utf8');

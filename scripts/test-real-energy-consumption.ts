@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { EnergySeriesResponse } from '../apps/hvac-web/src/api/generated/platformGateway.gen.ts';
+import { PlatformApiError, type EnergySeriesResponse } from '../apps/hvac-web/src/api/generated/platformGateway.gen.ts';
 import {
   comparePeriods,
   completedComparisonTotals,
+  energyRetryDelay,
   completeOnly,
   copUnavailableText,
   type EnergyPeriod,
@@ -13,6 +14,7 @@ import {
   periodWindow,
   previousWindow,
   relativeChange,
+  retryEnergyQuery,
   sanitizeReportedCop,
   siteDays,
   summarizeEnergy,
@@ -386,4 +388,37 @@ test('completedComparisonTotals aggregates only finished hours and preserves ene
   assert.equal(empty.current.electricityKWh, null);
   assert.equal(empty.previous.electricityKWh, null);
   assert.equal(empty.current.cop, null);
+});
+
+test('retryEnergyQuery retries transient 5xx/network failures up to twice and skips non-retryable 4xx', () => {
+  const retryableProblem = new PlatformApiError({
+    type: 'https://example.invalid/problem',
+    title: 'Unavailable',
+    status: 503,
+    code: 'ANALYTICS_ENGINE_UNAVAILABLE',
+    detail: 'Temporary overload',
+    instance: '/api/v1/analytics/energy-series',
+    retryable: true,
+    traceId: 'trace-1',
+  });
+  const nonRetryableProblem = new PlatformApiError({
+    type: 'https://example.invalid/problem',
+    title: 'Bad Request',
+    status: 400,
+    code: 'ANALYTICS_QUERY_INVALID',
+    detail: 'Invalid query',
+    instance: '/api/v1/analytics/energy-series',
+    retryable: false,
+    traceId: 'trace-2',
+  });
+
+  assert.equal(retryEnergyQuery(0, retryableProblem), true);
+  assert.equal(retryEnergyQuery(1, retryableProblem), true);
+  assert.equal(retryEnergyQuery(2, retryableProblem), false);
+  assert.equal(retryEnergyQuery(0, nonRetryableProblem), false);
+  assert.equal(retryEnergyQuery(0, new Error('Failed to fetch')), true);
+  assert.equal(retryEnergyQuery(2, new Error('Failed to fetch')), false);
+  assert.equal(energyRetryDelay(0), 1000);
+  assert.equal(energyRetryDelay(1), 2000);
+  assert.equal(energyRetryDelay(5), 4000);
 });

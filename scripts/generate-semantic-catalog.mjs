@@ -44,7 +44,7 @@ const views = load('views', 'views').map((view) => {
     measures: members.filter((each) => each.kind === 'measure' && operatorFigure(each)).map(describe),
     dimensions: members.filter((each) => each.kind === 'dimension' && !forced.has(each.name)).map(describe),
   };
-}).sort((left, right) => left.name.localeCompare(right.name));
+}).filter((view) => view.measures.length > 0).sort((left, right) => left.name.localeCompare(right.name));
 
 const catalog = { schemaVersion: 1, timeDimension, views };
 const json = `${JSON.stringify(catalog, null, 2)}\n`;

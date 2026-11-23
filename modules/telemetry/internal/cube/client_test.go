@@ -442,9 +442,9 @@ func TestClientMapsIncompleteSynthesizedHoursAndCrossGapEnergy(t *testing.T) {
 			]}`))
 		case decoded.Query.Measures[0] == "site_energy.max_data_watermark":
 			_, _ = writer.Write([]byte(`{"data":[{"site_energy.max_data_watermark":"2026-11-12T04:00:00.000Z","site_energy.max_dataset_revision":"9","site_energy.synthesized_total":"1"}]}`))
-		case decoded.Query.Measures[0] == "site_energy.missing_count":
+		case decoded.Query.Measures[0] == "site_energy_missing.missing_count":
 			_, _ = writer.Write([]byte(`{"data":[
-				{"site_energy.period_end.hour":"2026-11-12T11:00:00.000","site_energy.missing_meter":"2号电表（D机组）","site_energy.missing_count":"1"}
+				{"site_energy_missing.period_end.hour":"2026-11-12T11:00:00.000","site_energy_missing.missing_meter":"2号电表（D机组）","site_energy_missing.missing_count":"1"}
 			]}`))
 		default:
 			_, _ = writer.Write([]byte(`{"data":[
@@ -504,7 +504,7 @@ func TestClientIncludesCrossGapInMonthlyBuckets(t *testing.T) {
 			]}`))
 		case decoded.Query.Measures[0] == "site_energy.max_data_watermark":
 			_, _ = writer.Write([]byte(`{"data":[{"site_energy.max_data_watermark":"2026-11-12T04:00:00.000Z","site_energy.max_dataset_revision":"9","site_energy.synthesized_total":"1"}]}`))
-		case decoded.Query.Measures[0] == "site_energy.missing_count":
+		case decoded.Query.Measures[0] == "site_energy_missing.missing_count":
 			_, _ = writer.Write([]byte(`{"data":[]}`))
 		default:
 			_, _ = writer.Write([]byte(`{"data":[
@@ -566,9 +566,9 @@ func TestClientMapsIncompleteSynthesizedDaysAndMonths(t *testing.T) {
 				{"site_energy.period_end.day":"2026-11-11T00:00:00.000","site_energy.energy_valid_kwh":"60","site_energy.cross_gap_valid_kwh":null,"site_energy.valid_count":"18","site_energy.suspect_count":"0","site_energy.invalid_count":"0"}
 			]}`,
 			missingRows: `{"data":[
-				{"site_energy.period_end.day":"2026-11-11T00:00:00.000","site_energy.missing_meter":"2号电表（D机组）","site_energy.missing_count":"3"},
-				{"site_energy.period_end.day":"2026-11-11T00:00:00.000","site_energy.missing_meter":"1号电表（B机组）","site_energy.missing_count":"1"},
-				{"site_energy.period_end.day":"2026-11-10T00:00:00.000","site_energy.missing_meter":"3号电表（A机组）","site_energy.missing_count":"0"}
+				{"site_energy_missing.period_end.day":"2026-11-11T00:00:00.000","site_energy_missing.missing_meter":"2号电表（D机组）","site_energy_missing.missing_count":"3"},
+				{"site_energy_missing.period_end.day":"2026-11-11T00:00:00.000","site_energy_missing.missing_meter":"1号电表（B机组）","site_energy_missing.missing_count":"1"},
+				{"site_energy_missing.period_end.day":"2026-11-10T00:00:00.000","site_energy_missing.missing_meter":"3号电表（A机组）","site_energy_missing.missing_count":"0"}
 			]}`,
 			wantLen:     2,
 			wantBadIdx:  1,
@@ -584,8 +584,8 @@ func TestClientMapsIncompleteSynthesizedDaysAndMonths(t *testing.T) {
 				{"site_energy.period_end.month":"2026-11-01T00:00:00.000","site_energy.energy_valid_kwh":"3000","site_energy.cross_gap_valid_kwh":null,"site_energy.valid_count":"500","site_energy.suspect_count":"0","site_energy.invalid_count":"0"}
 			]}`,
 			missingRows: `{"data":[
-				{"site_energy.period_end.month":"2026-11-01T00:00:00.000","site_energy.missing_meter":"2号电表（D机组）","site_energy.missing_count":"2"},
-				{"site_energy.period_end.month":"2026-11-01T00:00:00.000","site_energy.missing_meter":"1号电表（B机组）","site_energy.missing_count":"1"}
+				{"site_energy_missing.period_end.month":"2026-11-01T00:00:00.000","site_energy_missing.missing_meter":"2号电表（D机组）","site_energy_missing.missing_count":"2"},
+				{"site_energy_missing.period_end.month":"2026-11-01T00:00:00.000","site_energy_missing.missing_meter":"1号电表（B机组）","site_energy_missing.missing_count":"1"}
 			]}`,
 			wantLen:     1,
 			wantBadIdx:  0,
@@ -605,7 +605,7 @@ func TestClientMapsIncompleteSynthesizedDaysAndMonths(t *testing.T) {
 					_, _ = writer.Write([]byte(`{"data":[]}`))
 				case decoded.Query.Measures[0] == "site_energy.max_data_watermark":
 					_, _ = writer.Write([]byte(`{"data":[{"site_energy.max_data_watermark":"` + testCase.watermark + `","site_energy.max_dataset_revision":"9","site_energy.synthesized_total":"1"}]}`))
-				case decoded.Query.Measures[0] == "site_energy.missing_count":
+				case decoded.Query.Measures[0] == "site_energy_missing.missing_count":
 					q := decoded.Query
 					missingQuery = &q
 					_, _ = writer.Write([]byte(testCase.missingRows))
@@ -740,5 +740,60 @@ func TestClientSortsFiveTierTariffPeriodsWithDeepValleyLast(t *testing.T) {
 	if response.CrossGap == nil || response.CrossGap.Cost == nil || len(response.CrossGap.Cost.Periods) != 2 ||
 		response.CrossGap.Cost.Periods[0].PeriodCode != "SUPER_PEAK" || response.CrossGap.Cost.Periods[1].PeriodCode != "DEEP_VALLEY" {
 		t.Fatalf("crossGap cost periods = %#v", response.CrossGap)
+	}
+}
+
+func TestClientPollsCubeContinueWaitUntilReady(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		_, _ = io.Copy(io.Discard, request.Body)
+		writer.Header().Set("Content-Type", "application/json")
+		if attempts.Add(1) <= 2 {
+			_, _ = writer.Write([]byte(`{"error":"Continue wait"}`))
+			return
+		}
+		_, _ = writer.Write([]byte(`{"data":[{"site_energy.period_end.day":"2026-07-01T00:00:00.000","site_energy.energy_valid_kwh":"42.5"}]}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		BaseURL: server.URL, DatasetRevision: "energy-daily:v1", TokenFactory: fixedTokenFactory{}, HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.continueWaitDelay = func(int) time.Duration { return time.Millisecond }
+	decoded, err := client.load(context.Background(), "cube-token", buildSeriesQuery(validCubeEnergyQuery(), time.UTC))
+	if err != nil {
+		t.Fatalf("load() error = %v", err)
+	}
+	if attempts.Load() != 3 || len(decoded.Data) != 1 {
+		t.Fatalf("attempts=%d data=%#v", attempts.Load(), decoded.Data)
+	}
+}
+
+func TestClientFailsWhenContinueWaitExceedsContextDeadline(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		_, _ = io.Copy(io.Discard, request.Body)
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"error":"Continue wait"}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		BaseURL: server.URL, DatasetRevision: "energy-daily:v1", TokenFactory: fixedTokenFactory{}, HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client.continueWaitDelay = func(int) time.Duration {
+		cancel()
+		return time.Hour
+	}
+	_, err = client.load(ctx, "cube-token", buildSeriesQuery(validCubeEnergyQuery(), time.UTC))
+	if err == nil || !strings.Contains(err.Error(), "continue wait") {
+		t.Fatalf("load() error = %v, want continue wait timeout", err)
 	}
 }

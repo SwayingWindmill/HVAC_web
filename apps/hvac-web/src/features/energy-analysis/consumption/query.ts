@@ -5,9 +5,11 @@ import { createPlatformGatewayClient, type EnergySeriesQuery } from '../../../ap
 import {
   comparePeriods,
   completedComparisonTotals,
+  energyRetryDelay,
   hourlyHeatmap,
   periodWindow,
   previousWindow,
+  retryEnergyQuery,
   siteDays,
   summarizeEnergy,
   type EnergyPeriod,
@@ -63,7 +65,8 @@ export function useEnergyComparison(period: EnergyPeriod) {
     },
     refetchInterval: 60_000,
     staleTime: 30_000,
-    retry: false,
+    retry: retryEnergyQuery,
+    retryDelay: energyRetryDelay,
   });
 }
 
@@ -80,7 +83,8 @@ export function useTodayEnergy() {
     },
     refetchInterval: 60_000,
     staleTime: 30_000,
-    retry: false,
+    retry: retryEnergyQuery,
+    retryDelay: energyRetryDelay,
   });
 }
 
@@ -98,7 +102,8 @@ function useWholeYesterdayEnergy() {
     },
     staleTime: 30 * 60_000,
     gcTime: 60 * 60_000,
-    retry: false,
+    retry: retryEnergyQuery,
+    retryDelay: energyRetryDelay,
   });
 }
 
@@ -153,6 +158,7 @@ export function useHourlyHeatmap(days: number) {
     },
     refetchInterval: 5 * 60_000,
     staleTime: 30_000,
-    retry: false,
+    retry: retryEnergyQuery,
+    retryDelay: energyRetryDelay,
   });
 }
