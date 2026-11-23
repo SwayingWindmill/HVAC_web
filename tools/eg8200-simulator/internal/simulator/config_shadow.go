@@ -619,6 +619,62 @@ func (s *edgeConfigShadow) markAttemptIfDue(minInterval time.Duration, now time.
 	return true
 }
 
+// Reset removes persisted config shadow state, clears in-memory mappings, and unloads applied drivers/policies/rules.
+func (s *edgeConfigShadow) Reset(ctx context.Context) error {
+	if s == nil {
+		return nil
+	}
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+
+	s.mu.Lock()
+	drivers := cloneDriverConfigs(s.driverConfigs)
+	removeDriverHook := s.removeDriverHook
+	autonomyHook := s.applyAutonomyHook
+	rulesHook := s.applyEdgeRulesHook
+	statePath := s.statePath
+	s.appliedRevision = 0
+	s.pointMappings = nil
+	s.samplingPolicies = nil
+	s.concentratorConfigs = map[string]ConcentratorUnitShadow{}
+	s.driverConfigs = nil
+	s.autonomyPolicy = nil
+	s.edgeRuleBundle = nil
+	s.lastPublished = map[string]time.Time{}
+	s.lastSyncAttempt = time.Time{}
+	s.mu.Unlock()
+
+	var errs []string
+	if statePath != "" {
+		for _, target := range []string{statePath, statePath + ".tmp"} {
+			if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+				errs = append(errs, err.Error())
+			}
+		}
+	}
+	if removeDriverHook != nil {
+		for _, cfg := range drivers {
+			if err := removeDriverHook(ctx, cfg.DeviceKey); err != nil {
+				errs = append(errs, err.Error())
+			}
+		}
+	}
+	if autonomyHook != nil {
+		if err := autonomyHook(ctx, nil); err != nil {
+			errs = append(errs, err.Error())
+		}
+	}
+	if rulesHook != nil {
+		if err := rulesHook(ctx, nil); err != nil {
+			errs = append(errs, err.Error())
+		}
+	}
+	if len(errs) > 0 {
+		return errors.New(strings.Join(errs, "; "))
+	}
+	return nil
+}
+
 func (publisher *MQTTPublisher) ConfigShadowState() (appliedRevision int64, pointMappings []GatewayPointMapping, samplingPolicies []GatewaySamplingPolicy, concentrators map[string]ConcentratorUnitShadow) {
 	if publisher == nil || publisher.configShadow == nil {
 		return 0, []GatewayPointMapping{}, []GatewaySamplingPolicy{}, map[string]ConcentratorUnitShadow{}

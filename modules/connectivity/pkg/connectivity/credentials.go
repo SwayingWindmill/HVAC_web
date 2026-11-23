@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 )
 
@@ -56,11 +57,12 @@ type GatewayCredentialRecord struct {
 	CreatedAt         time.Time  `json:"createdAt"`
 }
 type CredentialService struct {
-	store               *Store
-	authority           *CertificateAuthority
-	revokeMu            sync.RWMutex
-	onRevoke            func(gatewayID string)
-	onCertificateRevoke func(gatewayID, fingerprintSHA256 string, hasRemainingActive bool)
+	store                  *Store
+	authority              *CertificateAuthority
+	revokeMu               sync.RWMutex
+	onRevoke               func(gatewayID string)
+	onCertificateRevoke    func(gatewayID, fingerprintSHA256 string, hasRemainingActive bool)
+	onFactoryResetDispatch func(gatewayID string, reset edgecontrol.FactoryResetPayload) error
 }
 
 func NewCredentialService(store *Store, authority *CertificateAuthority) *CredentialService {
@@ -72,6 +74,14 @@ func (service *CredentialService) SetRevokeHook(hook func(gatewayID string)) {
 	service.revokeMu.Lock()
 	defer service.revokeMu.Unlock()
 	service.onRevoke = hook
+}
+
+// SetFactoryResetDispatchHook registers a callback invoked after persisting a factory-reset
+// instruction to publish the downlink MQTT FACTORY_RESET command to an online edge node.
+func (service *CredentialService) SetFactoryResetDispatchHook(hook func(gatewayID string, reset edgecontrol.FactoryResetPayload) error) {
+	service.revokeMu.Lock()
+	defer service.revokeMu.Unlock()
+	service.onFactoryResetDispatch = hook
 }
 
 // SetCertificateRevokeHook registers a callback invoked right after a single Gateway certificate
@@ -507,19 +517,40 @@ func (service *CredentialService) RevokeRetiredGateway(ctx context.Context, tena
 }
 
 func (service *CredentialService) revokeGatewayInTx(ctx context.Context, tx pgx.Tx, tenantID, gatewayID, actorID string) error {
+	return service.revokeGatewayWithAuditInTx(ctx, tx, tenantID, gatewayID, actorID, "REVOKED", "")
+}
+
+func (service *CredentialService) revokeGatewayWithAuditInTx(ctx context.Context, tx pgx.Tx, tenantID, gatewayID, actorID, auditAction, certRevocationReason string) error {
 	if err := acquireEnrollmentAdvisoryLock(ctx, tx, gatewayID); err != nil {
 		return err
+	}
+	if auditAction == "TRANSFER_REVOKED" {
+		var alreadyRevoked bool
+		if err := tx.QueryRow(ctx, `
+SELECT EXISTS(SELECT 1 FROM connectivity.gateway_enrollments WHERE tenant_id=$1::uuid AND gateway_id=$2::uuid AND revoked_at IS NOT NULL)
+   AND NOT EXISTS(SELECT 1 FROM connectivity.gateway_credentials WHERE tenant_id=$1::uuid AND gateway_id=$2::uuid AND status='ACTIVE')
+`, tenantID, gatewayID).Scan(&alreadyRevoked); err != nil {
+			return err
+		}
+		if alreadyRevoked {
+			return tx.Commit(ctx)
+		}
 	}
 	now := service.store.clock().UTC()
 	_, err := tx.Exec(ctx, `INSERT INTO connectivity.gateway_enrollments(tenant_id,gateway_id,revoked_at,created_at,updated_at) VALUES($1,$2,$3,$3,$3) ON CONFLICT(tenant_id,gateway_id) DO UPDATE SET revoked_at=EXCLUDED.revoked_at,code_sha256=NULL,expires_at=NULL,consumed_at=NULL,updated_at=EXCLUDED.updated_at`, tenantID, gatewayID, now)
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `UPDATE connectivity.gateway_credentials SET status='REVOKED',revoked_at=$2,updated_at=$2 WHERE gateway_id=$1::uuid AND status='ACTIVE'`, gatewayID, now)
+	trimmedReason := clampUTF8Runes(strings.TrimSpace(certRevocationReason), 512)
+	var reasonPtr *string
+	if trimmedReason != "" {
+		reasonPtr = &trimmedReason
+	}
+	_, err = tx.Exec(ctx, `UPDATE connectivity.gateway_credentials SET status='REVOKED',revoked_at=$2,revocation_reason=COALESCE($3,revocation_reason),updated_at=$2 WHERE gateway_id=$1::uuid AND status='ACTIVE'`, gatewayID, now, reasonPtr)
 	if err != nil {
 		return err
 	}
-	if err = credentialAudit(ctx, tx, tenantID, gatewayID, actorID, "REVOKED", now); err != nil {
+	if err = credentialAudit(ctx, tx, tenantID, gatewayID, actorID, auditAction, now); err != nil {
 		return err
 	}
 	if err = tx.Commit(ctx); err != nil {

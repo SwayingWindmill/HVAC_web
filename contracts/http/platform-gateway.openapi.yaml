@@ -67,6 +67,23 @@
         "responses": {"200": {"description": "One-time code shown once while keeping existing active certificates valid", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GatewayEnrollmentCode"}}}}}
       }
     },
+    "/api/v1/gateways/{gatewayId}/factory-reset": {
+      "post": {
+        "operationId": "issueGatewayFactoryReset", "summary": "Issue an edge factory-reset wipe command for credentials, config shadow, and offline buffers",
+        "x-owner": "connectivity", "x-public-ingress": "platform-gateway", "x-architecture-status": "ACTIVE", "x-shape-status": "READY",
+        "parameters": [{"name": "gatewayId", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/UUIDv7"}}, {"name": "X-CSRF-Token", "in": "header", "required": true, "schema": {"type": "string"}}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GatewayFactoryResetRequest"}}}},
+        "responses": {"200": {"description": "Persisted and dispatched factory-reset record", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GatewayFactoryResetRecord"}}}}}
+      }
+    },
+    "/api/v1/gateways/{gatewayId}/factory-resets": {
+      "get": {
+        "operationId": "listGatewayFactoryResets", "summary": "List factory-reset wipe records issued for this Gateway or direct device",
+        "x-owner": "connectivity", "x-public-ingress": "platform-gateway", "x-architecture-status": "ACTIVE", "x-shape-status": "READY",
+        "parameters": [{"name": "gatewayId", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/UUIDv7"}}],
+        "responses": {"200": {"description": "Factory-reset wipe records ordered newest first", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GatewayFactoryResetList"}}}}}
+      }
+    },
     "/api/v1/gateways/{gatewayId}/concentrators/{unitId}/status": {
       "get": {
         "operationId": "getGatewayConcentratorStatus", "summary": "Read wireless concentrator parameters, live channels, and audit entries",
@@ -2414,6 +2431,14 @@
         "responses": { "201": { "description": "Replaced hardware on the logical Device.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ReplaceDeviceHardwareResult" } } } }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
     },
+    "/api/v1/sites/{siteId}/devices/{deviceId}/transfer": {
+      "post": {
+        "operationId": "transferSiteDevice", "summary": "Transfer a physical Device across Sites or Tenants while retiring the source logical Device and triggering edge credential revocation and wipe", "x-architecture-status": "ACTIVE", "x-shape-source": "contracts/http/s05-registry-writer.openapi.json",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/DeviceId" }, { "$ref": "#/components/parameters/CsrfToken" }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "./s05-registry-writer.openapi.json#/components/schemas/TransferDeviceRequest" } } } },
+        "responses": { "201": { "description": "Transferred physical Device ownership and isolated historical boundary.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TransferDeviceResult" } } } }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
     "/api/v1/sites/{siteId}/sensors": {
       "post": {
         "operationId": "createSiteSensor", "summary": "Create an independently traceable PhysicalSensor", "x-architecture-status": "ACTIVE", "x-shape-source": "contracts/http/s05-registry-writer.openapi.json",
@@ -4168,6 +4193,42 @@
       "GatewayCertificateRevokeRequest": {
         "type": "object", "additionalProperties": false, "required": [],
         "properties": {"reason": {"type": "string", "minLength": 1, "maxLength": 512}}
+      },
+      "GatewayFactoryResetRequest": {
+        "type": "object", "additionalProperties": false, "required": ["reason"],
+        "properties": {
+          "wipeCredentials": {"type": "boolean"},
+          "wipeConfigShadow": {"type": "boolean"},
+          "wipeOfflineBuffer": {"type": "boolean"},
+          "revokeCredentials": {"type": "boolean"},
+          "reason": {"type": "string", "minLength": 1, "maxLength": 512}
+        }
+      },
+      "GatewayFactoryResetRecord": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "tenantId", "gatewayId", "wipeCredentials", "wipeConfigShadow", "wipeOfflineBuffer", "reason", "status", "issuedBy", "wipedArtifacts", "createdAt", "updatedAt"],
+        "properties": {
+          "id": {"$ref": "#/components/schemas/UUIDv7"},
+          "tenantId": {"$ref": "#/components/schemas/UUIDv7"},
+          "gatewayId": {"$ref": "#/components/schemas/UUIDv7"},
+          "transferId": {"oneOf": [{"$ref": "#/components/schemas/UUIDv7"}, {"type": "null"}]},
+          "wipeCredentials": {"type": "boolean"},
+          "wipeConfigShadow": {"type": "boolean"},
+          "wipeOfflineBuffer": {"type": "boolean"},
+          "reason": {"type": "string", "minLength": 1, "maxLength": 512},
+          "status": {"type": "string", "enum": ["PENDING", "DISPATCHED", "ACKNOWLEDGED", "FAILED"]},
+          "issuedBy": {"$ref": "#/components/schemas/UUIDv7"},
+          "dispatchedAt": {"type": ["string", "null"], "format": "date-time"},
+          "acknowledgedAt": {"type": ["string", "null"], "format": "date-time"},
+          "wipedArtifacts": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 64}},
+          "errorMessage": {"type": ["string", "null"], "maxLength": 1024},
+          "createdAt": {"type": "string", "format": "date-time"},
+          "updatedAt": {"type": "string", "format": "date-time"}
+        }
+      },
+      "GatewayFactoryResetList": {
+        "type": "object", "additionalProperties": false, "required": ["items"],
+        "properties": {"items": {"type": "array", "items": {"$ref": "#/components/schemas/GatewayFactoryResetRecord"}}}
       },
       "ConcentratorParams": {
         "type": "object", "additionalProperties": false,
@@ -6743,6 +6804,50 @@
           "replacedAt": { "$ref": "#/components/schemas/Instant" },
           "device": { "$ref": "#/components/schemas/Device" },
           "replayed": { "type": "boolean" }
+        }
+      },
+      "TransferDeviceResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "transferId",
+          "transferScope",
+          "sourceTenantId",
+          "sourceSiteId",
+          "sourceDeviceId",
+          "sourceDeviceRevision",
+          "targetTenantId",
+          "targetSiteId",
+          "targetDeviceId",
+          "wipeRequired",
+          "reason",
+          "transferredBy",
+          "transferredAt",
+          "sourceDevice",
+          "targetDevice",
+          "replayed"
+        ],
+        "properties": {
+          "transferId": { "$ref": "#/components/schemas/UUIDv7" },
+          "transferScope": { "type": "string", "enum": ["CROSS_SITE", "CROSS_TENANT"] },
+          "sourceTenantId": { "$ref": "#/components/schemas/UUIDv7" },
+          "sourceSiteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "sourceDeviceId": { "$ref": "#/components/schemas/UUIDv7" },
+          "sourceDeviceRevision": { "$ref": "#/components/schemas/Revision" },
+          "targetTenantId": { "$ref": "#/components/schemas/UUIDv7" },
+          "targetSiteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "targetDeviceId": { "$ref": "#/components/schemas/UUIDv7" },
+          "hardwareExternalId": { "type": ["string", "null"], "minLength": 1, "maxLength": 256 },
+          "wipeRequired": { "type": "boolean" },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 1000 },
+          "transferredBy": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "transferredAt": { "$ref": "#/components/schemas/Instant" },
+          "sourceDevice": { "$ref": "#/components/schemas/Device" },
+          "targetDevice": { "$ref": "#/components/schemas/Device" },
+          "replayed": { "type": "boolean" },
+          "oldCredentialsRevoked": { "type": "boolean" },
+          "factoryResetId": { "$ref": "#/components/schemas/UUIDv7" },
+          "factoryResetStatus": { "type": "string", "enum": ["PENDING", "DISPATCHED", "ACKNOWLEDGED", "FAILED"] }
         }
       },
       "DeviceBinding": {

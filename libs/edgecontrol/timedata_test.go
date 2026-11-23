@@ -288,3 +288,41 @@ func TestFileTimedataQueryAfterSequenceBatchedAndLookup(t *testing.T) {
 		t.Fatalf("expected LookupSequence hit for 100s observation, got seq=%d ok=%v", seq, ok)
 	}
 }
+
+func TestFileTimedataPurgeClearsMemoryAndDisk(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenFileTimedata(dir, PriorityLow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := NewRuntime()
+	desc := timedataDescriptor("chiller01", "Power", "point-power", PriorityHigh, AccessReadOnly)
+	if err := runtime.Register(desc); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Unix(8000, 0).UTC()
+	_ = runtime.PublishNext(desc.Address(), Sample{Value: DoubleValue(42.5), Quality: QualityGood, ObservedAt: at, Sequence: 1})
+	if _, err := store.RecordImage(runtime.SwitchProcessImage(at)); err != nil {
+		t.Fatal(err)
+	}
+	if store.LatestSequence() == 0 {
+		t.Fatal("expected non-zero LatestSequence before Purge")
+	}
+
+	if err := store.Purge(); err != nil {
+		t.Fatalf("Purge failed: %v", err)
+	}
+	if store.LatestSequence() != 0 {
+		t.Fatalf("expected LatestSequence=0 after Purge, got %d", store.LatestSequence())
+	}
+	if _, ok := store.Latest(desc.Address()); ok {
+		t.Fatal("expected Latest to miss after Purge")
+	}
+	reopened, err := OpenFileTimedata(dir, PriorityLow)
+	if err != nil {
+		t.Fatalf("OpenFileTimedata after Purge failed: %v", err)
+	}
+	if reopened.LatestSequence() != 0 {
+		t.Fatalf("expected clean disk reopen LatestSequence=0, got %d", reopened.LatestSequence())
+	}
+}

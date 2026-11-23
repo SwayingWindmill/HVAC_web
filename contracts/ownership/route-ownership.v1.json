@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 67,
+  "registryRevision": 68,
   "routes": [
     {
       "method": "GET",
@@ -244,6 +244,40 @@
       "allowedScopeDimensions": [
         "tenant",
         "site",
+        "principal"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/gateways/{gatewayId}/factory-reset",
+      "owner": "connectivity",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "device",
+        "principal"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/gateways/{gatewayId}/factory-resets",
+      "owner": "connectivity",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "device",
         "principal"
       ]
     },
@@ -1224,6 +1258,23 @@
     {
       "method": "POST",
       "path": "/api/v1/sites/{siteId}/devices/{deviceId}/replace-hardware",
+      "owner": "platform-core-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "device",
+        "principal"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sites/{siteId}/devices/{deviceId}/transfer",
       "owner": "platform-core-service",
       "publicIngress": "platform-gateway",
       "revision": 1,

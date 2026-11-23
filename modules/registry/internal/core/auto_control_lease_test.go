@@ -181,6 +181,10 @@ func (backend *memoryAutoLeaseBackend) ListOptimizationExecutionMonitors(_ conte
 	}, nil
 }
 
+func (*memoryAutoLeaseBackend) TransferDevice(context.Context, registryauth.GrantClaims, *registryauth.GrantClaims, TransferDeviceRequest) (TransferDeviceResult, error) {
+	return TransferDeviceResult{}, ErrInvalidMutation
+}
+
 func TestAutoControlLeaseValidationBounds(t *testing.T) {
 	now := time.Date(2026, 11, 16, 4, 0, 0, 0, time.UTC)
 	valid := ArmAutoControlLeaseMutation{

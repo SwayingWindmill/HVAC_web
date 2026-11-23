@@ -227,6 +227,17 @@ func run() int {
 			}
 			return nil
 		}),
+		adapter.WithFactoryResetAckHook(func(hookCtx context.Context, gatewayID string, ack edgecontrol.FactoryResetAckPayload) error {
+			_, ackErr := connectivityStore.RecordFactoryResetAck(hookCtx, gatewayID, ack)
+			if ackErr != nil {
+				if errors.Is(ackErr, connectivity.ErrNotFound) || errors.Is(ackErr, connectivity.ErrEnrollmentRejected) {
+					logger.Warn("mqtt_factory_reset_ack_rejected", "gateway_id", gatewayID, "reset_id", ack.ResetID, "error", ackErr.Error())
+					return fmt.Errorf("%w: %v", adapter.ErrFactoryResetAckRejected, ackErr)
+				}
+				return ackErr
+			}
+			return nil
+		}),
 		adapter.WithGatewayConnectHook(func(_ context.Context, gatewayID string) {
 			bgMu.RLock()
 			if bgClosed || ingressCtx.Err() != nil {

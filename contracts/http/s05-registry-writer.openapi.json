@@ -89,6 +89,18 @@
           "meta": { "$ref": "#/components/schemas/MutationMeta" }
         }
       },
+      "TransferDeviceRequest": {
+        "type": "object", "additionalProperties": false,
+        "required": ["targetSiteId", "meta"],
+        "properties": {
+          "targetTenantId": { "$ref": "#/components/schemas/UUIDv7" },
+          "targetSiteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "newCode": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+          "newDisplayName": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "wipeEdgeCache": { "type": "boolean" },
+          "meta": { "$ref": "#/components/schemas/MutationMeta" }
+        }
+      },
       "SensorMutation": {
         "type": "object", "additionalProperties": false,
         "required": ["code", "displayName", "sensorType", "metadata", "status", "meta"],

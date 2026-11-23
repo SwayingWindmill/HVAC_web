@@ -108,6 +108,8 @@ services:
       - ../connectivity/postgres/init/gateway-ota-management.sql:/docker-entrypoint-initdb.d/0970.sql:ro
       - ./postgres/init/device-direct-connectivity-mode.sql:/docker-entrypoint-initdb.d/0980.sql:ro
       - ../connectivity/postgres/init/gateway-jitp-provisioning.sql:/docker-entrypoint-initdb.d/0990.sql:ro
+      - ./postgres/init/device-ownership-transfers.sql:/docker-entrypoint-initdb.d/1000.sql:ro
+      - ../connectivity/postgres/init/gateway-factory-reset.sql:/docker-entrypoint-initdb.d/1010.sql:ro
     ports:
       - "127.0.0.1:${S1_POSTGRES_HOST_PORT:-55432}:5432"
     healthcheck:

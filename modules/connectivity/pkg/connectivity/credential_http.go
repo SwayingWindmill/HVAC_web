@@ -205,27 +205,41 @@ func NewCredentialHandlerWithOTA(service *CredentialService, authorize Credentia
 		mux.Handle("/gateway/v1/ota/", otaHandler)
 	}
 	mux.HandleFunc("POST /internal/v1/gateways/{target}", func(w http.ResponseWriter, r *http.Request) {
-		gatewayID, ok := strings.CutSuffix(r.PathValue("target"), ":retire")
-		if !ok || strings.TrimSpace(gatewayID) == "" {
-			http.NotFound(w, r)
+		target := r.PathValue("target")
+		if gatewayID, ok := strings.CutSuffix(target, ":retire"); ok && strings.TrimSpace(gatewayID) != "" {
+			var input struct {
+				TenantID string `json:"tenantId"`
+			}
+			if err := decode(w, r, &input); err != nil {
+				finish(w, nil, err)
+				return
+			}
+			if service == nil {
+				finish(w, nil, errors.New("credential service is not configured"))
+				return
+			}
+			if err := service.RevokeRetiredGateway(r.Context(), input.TenantID, gatewayID); err != nil {
+				finish(w, nil, err)
+				return
+			}
+			finish(w, map[string]any{"gatewayId": gatewayID, "revoked": true}, nil)
 			return
 		}
-		var input struct {
-			TenantID string `json:"tenantId"`
-		}
-		if err := decode(w, r, &input); err != nil {
-			finish(w, nil, err)
+		if gatewayID, ok := strings.CutSuffix(target, ":transfer-decommission"); ok && strings.TrimSpace(gatewayID) != "" {
+			var input DecommissionTransferInput
+			if err := decode(w, r, &input); err != nil {
+				finish(w, nil, err)
+				return
+			}
+			if service == nil {
+				finish(w, nil, errors.New("credential service is not configured"))
+				return
+			}
+			res, err := service.DecommissionTransferredGateway(r.Context(), gatewayID, input)
+			finish(w, res, err)
 			return
 		}
-		if service == nil {
-			finish(w, nil, errors.New("credential service is not configured"))
-			return
-		}
-		if err := service.RevokeRetiredGateway(r.Context(), input.TenantID, gatewayID); err != nil {
-			finish(w, nil, err)
-			return
-		}
-		finish(w, map[string]any{"gatewayId": gatewayID, "revoked": true}, nil)
+		http.NotFound(w, r)
 	})
 	mux.HandleFunc("GET /internal/v1/gateways/ca.crl", func(w http.ResponseWriter, r *http.Request) {
 		if authorize != nil && strings.TrimSpace(r.Header.Get("X-Delegation-Grant")) != "" {
@@ -328,6 +342,49 @@ func NewCredentialHandlerWithOTA(service *CredentialService, authorize Credentia
 		value, err := service.RevokeCertificate(r.Context(), claims, r.PathValue("gatewayId"), r.PathValue("credentialId"), reason)
 		finish(w, value, err)
 	})
+	mux.HandleFunc("POST /internal/v1/gateways/{gatewayId}/factory-reset", func(w http.ResponseWriter, r *http.Request) {
+		if authorize == nil {
+			finish(w, nil, ErrCredentialForbidden)
+			return
+		}
+		claims, err := authorize(r, registryauth.ActionDeviceWrite)
+		if err != nil {
+			finish(w, nil, err)
+			return
+		}
+		if service == nil {
+			finish(w, nil, errors.New("credential service is not configured"))
+			return
+		}
+		var input IssueFactoryResetInput
+		if err := decode(w, r, &input); err != nil {
+			finish(w, nil, err)
+			return
+		}
+		value, err := service.IssueFactoryReset(r.Context(), claims, r.PathValue("gatewayId"), input)
+		finish(w, value, err)
+	})
+	mux.HandleFunc("GET /internal/v1/gateways/{gatewayId}/factory-resets", func(w http.ResponseWriter, r *http.Request) {
+		if authorize == nil {
+			finish(w, nil, ErrCredentialForbidden)
+			return
+		}
+		claims, err := authorize(r, registryauth.ActionDeviceRead)
+		if err != nil {
+			finish(w, nil, err)
+			return
+		}
+		if service == nil {
+			finish(w, nil, errors.New("credential service is not configured"))
+			return
+		}
+		items, err := service.ListFactoryResets(r.Context(), claims, r.PathValue("gatewayId"))
+		if err != nil {
+			finish(w, nil, err)
+			return
+		}
+		finish(w, map[string]any{"items": items}, nil)
+	})
 	authorizeProvisioning := func(w http.ResponseWriter, r *http.Request, action registryauth.Action) (registryauth.GrantClaims, bool) {
 		if authorize == nil {
 			finish(w, nil, ErrCredentialForbidden)
@@ -407,7 +464,7 @@ func NewCredentialHandlerWithOTA(service *CredentialService, authorize Credentia
 		finish(w, batch, err)
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		allowCoreService := isGatewayRetireRequest(r) || isGatewayTemplateDriverUpsertRequest(r)
+		allowCoreService := isGatewayRetireRequest(r) || isGatewayTransferDecommissionRequest(r) || isGatewayTemplateDriverUpsertRequest(r)
 		trusted := false
 		if r.TLS != nil && len(r.TLS.VerifiedChains) > 0 && len(r.TLS.VerifiedChains[0]) > 0 {
 			for _, uri := range r.TLS.VerifiedChains[0][0].URIs {
@@ -433,7 +490,7 @@ func NewCredentialHandlerWithOTA(service *CredentialService, authorize Credentia
 	})
 }
 
-func isGatewayRetireRequest(r *http.Request) bool {
+func isGatewayActionSuffixRequest(r *http.Request, suffix string) bool {
 	if r == nil || r.Method != http.MethodPost {
 		return false
 	}
@@ -441,8 +498,16 @@ func isGatewayRetireRequest(r *http.Request) bool {
 	if !ok || strings.Contains(rest, "/") {
 		return false
 	}
-	gatewayID, ok := strings.CutSuffix(rest, ":retire")
+	gatewayID, ok := strings.CutSuffix(rest, suffix)
 	return ok && strings.TrimSpace(gatewayID) != ""
+}
+
+func isGatewayRetireRequest(r *http.Request) bool {
+	return isGatewayActionSuffixRequest(r, ":retire")
+}
+
+func isGatewayTransferDecommissionRequest(r *http.Request) bool {
+	return isGatewayActionSuffixRequest(r, ":transfer-decommission")
 }
 
 func isGatewayTemplateDriverUpsertRequest(r *http.Request) bool {

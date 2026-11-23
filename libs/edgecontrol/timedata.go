@@ -491,3 +491,30 @@ func TimedataAge(record TimedataRecord, now time.Time) time.Duration {
 	}
 	return now.Sub(record.Sample.ObservedAt)
 }
+
+// Purge wipes all in-memory samples and deletes persisted history/snapshot files on disk.
+func (store *FileTimedata) Purge() error {
+	if store == nil {
+		return errors.New("edge timedata is nil")
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	store.latest = map[string]TimedataRecord{}
+	store.records = nil
+	store.nextSequence = 0
+
+	latestPath := filepath.Join(store.directory, "latest.json")
+	var errs []error
+	for _, candidate := range []string{
+		store.historyPath(),
+		store.historyPath() + ".tmp",
+		latestPath,
+		latestPath + ".tmp",
+	} {
+		if err := os.Remove(candidate); err != nil && !errors.Is(err, os.ErrNotExist) {
+			errs = append(errs, fmt.Errorf("remove %s: %w", candidate, err))
+		}
+	}
+	return errors.Join(errs...)
+}

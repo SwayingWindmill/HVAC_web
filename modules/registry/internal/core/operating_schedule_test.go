@@ -291,6 +291,9 @@ func (*memoryScheduleBackend) SaveDevice(context.Context, registryauth.GrantClai
 func (*memoryScheduleBackend) ReplaceDeviceHardware(context.Context, registryauth.GrantClaims, ReplaceDeviceHardwareRequest) (ReplaceDeviceHardwareResult, error) {
 	return ReplaceDeviceHardwareResult{}, ErrInvalidMutation
 }
+func (*memoryScheduleBackend) TransferDevice(context.Context, registryauth.GrantClaims, *registryauth.GrantClaims, TransferDeviceRequest) (TransferDeviceResult, error) {
+	return TransferDeviceResult{}, ErrInvalidMutation
+}
 func (*memoryScheduleBackend) SaveSensor(context.Context, registryauth.GrantClaims, SensorMutation) (Sensor, bool, error) {
 	return Sensor{}, false, ErrInvalidMutation
 }

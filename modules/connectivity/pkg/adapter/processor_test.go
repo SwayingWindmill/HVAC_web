@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
@@ -1170,5 +1171,106 @@ func TestDirectDeviceIsolationStatusAndEvents(t *testing.T) {
 	last = evs[len(evs)-1]
 	if last.Device != nil {
 		t.Fatalf("spoofed direct event must not resolve another Device, got %#v", last.Device)
+	}
+}
+
+func TestRevokedGatewayFactoryResetAckAllowedWhileTelemetryQuarantined(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 11, 23, 1, 20, 0, 0, time.UTC)
+	const resetID = "0195f300-6000-7000-8000-000000000001"
+
+	identities := newFakeIdentities()
+	identities.inactiveCredential[testGatewayA] = true
+	telemetry := &fakeTelemetry{}
+	metrics := observability.NewRegistry()
+
+	var (
+		presenceCalls int
+		acked         []edgecontrol.FactoryResetAckPayload
+		hookErr       error
+	)
+	processor, err := NewProcessor(
+		identities,
+		telemetry,
+		WithProcessorMetrics(metrics),
+		WithGatewayPresenceHook(func(string, bool) { presenceCalls++ }),
+		WithFactoryResetAckHook(func(_ context.Context, gwID string, ack edgecontrol.FactoryResetAckPayload) error {
+			if gwID != testGatewayA {
+				t.Fatalf("unexpected gatewayId in ack hook: %s", gwID)
+			}
+			if hookErr != nil {
+				return hookErr
+			}
+			acked = append(acked, ack)
+			return nil
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	processor.now = func() time.Time { return now }
+
+	validAckBytes, err := edgecontrol.EncodeFactoryResetAck(testGatewayA, edgecontrol.FactoryResetAckPayload{
+		ResetID:        resetID,
+		Status:         edgecontrol.FactoryResetAckStatusWiped,
+		WipedArtifacts: []string{"credentials", "config_shadow", "offline_buffer"},
+		OccurredAt:     now.UnixMilli(),
+	}, now)
+	if err != nil {
+		t.Fatalf("EncodeFactoryResetAck: %v", err)
+	}
+
+	// 1. Revoked gateway valid up/lifecycle FACTORY_RESET_ACK is delivered without marking presence online.
+	res, err := processor.Process(context.Background(), LifecycleUplinkTopic(testGatewayA), validAckBytes)
+	if err != nil {
+		t.Fatalf("valid FACTORY_RESET_ACK failed: %v", err)
+	}
+	if res.Accepted != 1 || res.MessageType != MessageTypeLifecycle {
+		t.Fatalf("unexpected result=%+v", res)
+	}
+	if len(acked) != 1 || acked[0].ResetID != resetID || acked[0].Status != edgecontrol.FactoryResetAckStatusWiped {
+		t.Fatalf("unexpected recorded ack=%+v", acked)
+	}
+	if presenceCalls != 0 {
+		t.Fatalf("revoked lifecycle ACK must not trigger presence online, got presenceCalls=%d", presenceCalls)
+	}
+	if len(identities.quarantines) != 0 {
+		t.Fatalf("expected 0 quarantines for valid ACK, got %+v", identities.quarantines)
+	}
+
+	// 2. Spoofed / invalid up/lifecycle envelope is permanently quarantined.
+	badBytes, err := edgecontrol.EncodeFactoryResetAck(testGatewayB, edgecontrol.FactoryResetAckPayload{
+		ResetID:        resetID,
+		Status:         edgecontrol.FactoryResetAckStatusWiped,
+		WipedArtifacts: []string{"credentials"},
+		OccurredAt:     now.UnixMilli(),
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := processor.Process(context.Background(), LifecycleUplinkTopic(testGatewayA), badBytes); !isPermanentMessageError(err) {
+		t.Fatalf("mismatched gateway ACK err=%v, want permanent", err)
+	}
+	if len(identities.quarantines) != 1 || identities.quarantines[0].ReasonCode != QuarantineMessageInvalid {
+		t.Fatalf("expected QuarantineMessageInvalid, got %+v", identities.quarantines)
+	}
+
+	// 3. Permanent rejection by hook quarantines message.
+	hookErr = ErrFactoryResetAckRejected
+	if _, err := processor.Process(context.Background(), LifecycleUplinkTopic(testGatewayA), validAckBytes); !isPermanentMessageError(err) {
+		t.Fatalf("rejected ACK hook err=%v, want permanent", err)
+	}
+	if len(identities.quarantines) != 2 || identities.quarantines[1].ReasonCode != QuarantineMessageInvalid {
+		t.Fatalf("expected second quarantine INVALID, got %+v", identities.quarantines)
+	}
+	hookErr = nil
+
+	// 4. Telemetry from the same revoked gateway remains strictly quarantined.
+	if _, err := processor.Process(context.Background(), telemetryTopic(testGatewayA), telemetryPayload(testGatewayA, testMessageID, 2, "METER-01", "active_power")); !isPermanentMessageError(err) {
+		t.Fatalf("revoked telemetry err=%v, want permanent", err)
+	}
+	if len(telemetry.accepted()) != 0 || len(identities.quarantines) != 3 || identities.quarantines[2].ReasonCode != QuarantineGatewayCredentialInactive {
+		t.Fatalf("expected telemetry quarantined with %s, quarantines=%+v", QuarantineGatewayCredentialInactive, identities.quarantines)
 	}
 }
