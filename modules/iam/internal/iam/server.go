@@ -647,7 +647,7 @@ func (h *handler) handleRegistryDecision(writer http.ResponseWriter, request *ht
 	}
 
 	grantPresenter := presenter
-	if decisionRequest.GrantPresenter != "" {
+	if decisionRequest.GrantPresenter != "" && decisionRequest.GrantPresenter != presenter {
 		if _, allowed := h.allowedRegistryGrantPresenters[decisionRequest.GrantPresenter]; !allowed {
 			writeProblem(writer, http.StatusForbidden, "IAM_REGISTRY_GRANT_PRESENTER_REJECTED", "The requested Registry grant presenter is not trusted.")
 			return http.StatusForbidden

@@ -212,6 +212,7 @@ func run() int {
 			RegistryGrantAudience:  envOr("IAM_REGISTRY_GRANT_AUDIENCE", "platform-core-service"),
 			AllowedRegistryGrantPresenters: []string{
 				envOr("IAM_OPERATIONS_AGENT_SPIFFE", "spiffe://hvac.local/operations-agent-service"),
+				envOr("IAM_COMMAND_AUTHORITY_SPIFFE", "spiffe://hvac.local/command-service"),
 			},
 			RegistryGrantStatus:         grantStatusStore,
 			TelemetryAuthorizationStore: telemetryAuthorizationStore,
