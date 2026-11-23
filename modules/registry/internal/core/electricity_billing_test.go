@@ -283,6 +283,9 @@ func (*memoryBillingBackend) SaveDevice(context.Context, registryauth.GrantClaim
 func (*memoryBillingBackend) ReplaceDeviceHardware(context.Context, registryauth.GrantClaims, ReplaceDeviceHardwareRequest) (ReplaceDeviceHardwareResult, error) {
 	return ReplaceDeviceHardwareResult{}, ErrInvalidMutation
 }
+func (*memoryBillingBackend) TransferDevice(context.Context, registryauth.GrantClaims, *registryauth.GrantClaims, TransferDeviceRequest) (TransferDeviceResult, error) {
+	return TransferDeviceResult{}, ErrInvalidMutation
+}
 func (*memoryBillingBackend) SaveSensor(context.Context, registryauth.GrantClaims, SensorMutation) (Sensor, bool, error) {
 	return Sensor{}, false, ErrInvalidMutation
 }

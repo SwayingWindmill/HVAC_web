@@ -35,6 +35,10 @@ func (c *captureConnectivityClient) RetireGateway(context.Context, string, strin
 	return nil
 }
 
+func (c *captureConnectivityClient) DecommissionTransferredGateway(context.Context, string, RelayGatewayTransferDecommissionRequest) error {
+	return nil
+}
+
 type captureCommandClient struct{}
 
 func (c *captureCommandClient) CancelRetiredTarget(context.Context, RelayCommandCancelRequest) error {

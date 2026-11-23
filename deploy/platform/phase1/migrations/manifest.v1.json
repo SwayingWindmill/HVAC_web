@@ -147,7 +147,9 @@
         "infra/registry/postgres/init/gateway-ota-targets-view.sql",
         "infra/connectivity/postgres/init/gateway-ota-management.sql",
         "infra/registry/postgres/init/device-direct-connectivity-mode.sql",
-        "infra/connectivity/postgres/init/gateway-jitp-provisioning.sql"
+        "infra/connectivity/postgres/init/gateway-jitp-provisioning.sql",
+        "infra/registry/postgres/init/device-ownership-transfers.sql",
+        "infra/connectivity/postgres/init/gateway-factory-reset.sql"
       ]
     },
     {

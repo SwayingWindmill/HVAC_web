@@ -135,6 +135,8 @@ COPY infra/registry/postgres/init/gateway-ota-targets-view.sql /opt/hvac/repo/in
 COPY infra/connectivity/postgres/init/gateway-ota-management.sql /opt/hvac/repo/infra/connectivity/postgres/init/gateway-ota-management.sql
 COPY infra/registry/postgres/init/device-direct-connectivity-mode.sql /opt/hvac/repo/infra/registry/postgres/init/device-direct-connectivity-mode.sql
 COPY infra/connectivity/postgres/init/gateway-jitp-provisioning.sql /opt/hvac/repo/infra/connectivity/postgres/init/gateway-jitp-provisioning.sql
+COPY infra/registry/postgres/init/device-ownership-transfers.sql /opt/hvac/repo/infra/registry/postgres/init/device-ownership-transfers.sql
+COPY infra/connectivity/postgres/init/gateway-factory-reset.sql /opt/hvac/repo/infra/connectivity/postgres/init/gateway-factory-reset.sql
 COPY infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql /opt/hvac/repo/infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql
 COPY infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql /opt/hvac/repo/infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql
 COPY infra/telemetry/postgres/init/003-s2-telemetry-ingest.sql /opt/hvac/repo/infra/telemetry/postgres/init/003-s2-telemetry-ingest.sql
@@ -153,11 +155,11 @@ COPY infra/telemetry/postgres/init/011-point-quality.sql /opt/hvac/repo/infra/te
 COPY infra/telemetry/postgres/init/012-measurement-uncertainty.sql /opt/hvac/repo/infra/telemetry/postgres/init/012-measurement-uncertainty.sql
 COPY infra/telemetry/postgres/init/013-schema-and-table-comments.sql /opt/hvac/repo/infra/telemetry/postgres/init/013-schema-and-table-comments.sql
 COPY infra/telemetry/postgres/init/mqtt-runtime-events.sql /opt/hvac/repo/infra/telemetry/postgres/init/mqtt-runtime-events.sql
-COPY infra/telemetry/postgres/init/alarm-evaluation-dead-letter.sql /opt/hvac/repo/infra/telemetry/postgres/init/alarm-evaluation-dead-letter.sql
-COPY infra/telemetry/postgres/init/telemetry-history-dead-letter-and-retention.sql /opt/hvac/repo/infra/telemetry/postgres/init/telemetry-history-dead-letter-and-retention.sql
 
 FROM scratch AS sources-3
 
+COPY infra/telemetry/postgres/init/alarm-evaluation-dead-letter.sql /opt/hvac/repo/infra/telemetry/postgres/init/alarm-evaluation-dead-letter.sql
+COPY infra/telemetry/postgres/init/telemetry-history-dead-letter-and-retention.sql /opt/hvac/repo/infra/telemetry/postgres/init/telemetry-history-dead-letter-and-retention.sql
 COPY infra/telemetry/postgres/init/telemetry-runtime-unnest-and-indexes.sql /opt/hvac/repo/infra/telemetry/postgres/init/telemetry-runtime-unnest-and-indexes.sql
 COPY infra/telemetry/postgres/init/telemetry-accepted-point-sample-index.sql /opt/hvac/repo/infra/telemetry/postgres/init/telemetry-accepted-point-sample-index.sql
 COPY infra/telemetry/postgres/init/telemetry-edge-alarm-delivery.sql /opt/hvac/repo/infra/telemetry/postgres/init/telemetry-edge-alarm-delivery.sql

@@ -357,3 +357,20 @@ func evidencePriority(class EvidenceClass) int {
 		return -1
 	}
 }
+
+// Purge discards all buffered offline items in memory and removes persisted disk files.
+func (buffer *OfflineBuffer) Purge() error {
+	if buffer == nil {
+		return nil
+	}
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+	buffer.state = offlineDiskState{Items: map[string]OfflineItem{}}
+	buffer.used = 0
+	for _, target := range []string{buffer.statePath(), buffer.statePath() + ".tmp"} {
+		if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
+}

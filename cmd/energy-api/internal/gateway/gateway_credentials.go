@@ -80,6 +80,23 @@ func matchGatewayCredentialRoute(method, path string) (gatewayCredentialRoute, b
 					action:       registryauth.ActionDeviceWrite,
 				}, true
 			}
+		case "factory-reset":
+			if method == http.MethodPost {
+				return gatewayCredentialRoute{
+					template:     "/api/v1/gateways/{gatewayId}/factory-reset",
+					upstreamPath: "/internal/v1/gateways/" + url.PathEscape(parts[4]) + "/factory-reset",
+					action:       registryauth.ActionDeviceWrite,
+					forwardBody:  true,
+				}, true
+			}
+		case "factory-resets":
+			if method == http.MethodGet {
+				return gatewayCredentialRoute{
+					template:     "/api/v1/gateways/{gatewayId}/factory-resets",
+					upstreamPath: "/internal/v1/gateways/" + url.PathEscape(parts[4]) + "/factory-resets",
+					action:       registryauth.ActionDeviceRead,
+				}, true
+			}
 		}
 		return gatewayCredentialRoute{}, false
 	}
@@ -225,6 +242,10 @@ func buildGatewayCredentialAuditInput(
 		action = "GATEWAY_CERTIFICATE_REVOKED"
 		targetLabel = "网关客户端证书"
 		credentialKind = "CERTIFICATE"
+	case "/api/v1/gateways/{gatewayId}/factory-reset":
+		action = "GATEWAY_FACTORY_RESET_ISSUED"
+		targetLabel = "网关出厂安全清除"
+		credentialKind = "FACTORY_RESET"
 	}
 	summary := map[string]any{
 		"credentialKind": credentialKind,

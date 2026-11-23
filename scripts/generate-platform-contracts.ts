@@ -154,6 +154,8 @@ const expectedOperations: Record<string, readonly [HttpMethod, string]> = {
   generateGatewayEnrollmentCode: ['post', `${gw}/enrollment-code`],
   revokeGatewayCredential: ['post', `${gw}/revoke`],
   rotateGatewayEnrollment: ['post', `${gw}/rotate`],
+  issueGatewayFactoryReset: ['post', `${gw}/factory-reset`],
+  listGatewayFactoryResets: ['get', `${gw}/factory-resets`],
   getGatewayConcentratorStatus: ['get', `${conc}/status`],
   updateGatewayConcentratorParams: ['put', `${conc}/params`],
   getGatewayConcentratorEids: ['get', `${conc}/eids`],
@@ -209,6 +211,7 @@ const expectedOperations: Record<string, readonly [HttpMethod, string]> = {
   createSiteDevice: ['post', `${site}/devices`],
   updateSiteDevice: ['patch', `${site}/devices/{deviceId}`],
   replaceDeviceHardware: ['post', `${site}/devices/{deviceId}/replace-hardware`],
+  transferSiteDevice: ['post', `${site}/devices/{deviceId}/transfer`],
   createSiteSensor: ['post', `${site}/sensors`],
   updateSiteSensor: ['patch', `${site}/sensors/{sensorId}`],
   createSitePoint: ['post', `${site}/points`],
@@ -302,6 +305,8 @@ const expectedSuccessSchemas: Record<string, string> = {
   generateGatewayEnrollmentCode: 'GatewayEnrollmentCode',
   revokeGatewayCredential: 'GatewayCredentialStatus',
   rotateGatewayEnrollment: 'GatewayEnrollmentCode',
+  issueGatewayFactoryReset: 'GatewayFactoryResetRecord',
+  listGatewayFactoryResets: 'GatewayFactoryResetList',
   getGatewayConcentratorStatus: 'ConcentratorStatus',
   updateGatewayConcentratorParams: 'ConcentratorParamsWriteResult',
   getGatewayConcentratorEids: 'ConcentratorEidTable',
@@ -381,6 +386,7 @@ for (const [operationId, schemaName] of Object.entries(expectedSuccessSchemas)) 
 invariant(schemaRef(operations.recalculateSiteAccounting.operation, '202') === '#/components/schemas/AccountingRecalcJob', 'recalculateSiteAccounting accepted schema is unsupported');
 invariant(schemaRef(operations.createSiteMeterRatioVersion.operation, '201') === '#/components/schemas/MeterRatioVersion', 'createSiteMeterRatioVersion created schema is unsupported');
 invariant(schemaRef(operations.replaceDeviceHardware.operation, '201') === '#/components/schemas/ReplaceDeviceHardwareResult', 'replaceDeviceHardware success schema is unsupported');
+invariant(schemaRef(operations.transferSiteDevice.operation, '201') === '#/components/schemas/TransferDeviceResult', 'transferSiteDevice success schema is unsupported');
 invariant(schemaRef(operations.uploadOTAPackage.operation, '201') === '#/components/schemas/OTAPackage', 'uploadOTAPackage created schema is unsupported');
 invariant(schemaRef(operations.createOTACampaign.operation, '201') === '#/components/schemas/OTACampaignDetail', 'createOTACampaign created schema is unsupported');
 invariant(schemaRef(operations.getTemplateRevision.operation, '200') === './s05-registry-writer.openapi.json#/components/schemas/TemplateRevision', 'getTemplateRevision success schema is unsupported');
@@ -423,6 +429,14 @@ const schemaRequirements: Record<string, readonly [readonly string[], (readonly 
     'previousGatewayDeviceId', 'newGatewayDeviceId', 'previousProtocolAddress', 'newProtocolAddress',
     'reason', 'replacedBy', 'replacedAt', 'device', 'replayed',
   ]],
+  TransferDeviceResult: [
+    [
+      'transferId', 'transferScope', 'sourceTenantId', 'sourceSiteId', 'sourceDeviceId', 'sourceDeviceRevision',
+      'targetTenantId', 'targetSiteId', 'targetDeviceId', 'wipeRequired', 'reason', 'transferredBy', 'transferredAt',
+      'sourceDevice', 'targetDevice', 'replayed',
+    ],
+    ['hardwareExternalId', 'oldCredentialsRevoked', 'factoryResetId', 'factoryResetStatus'],
+  ],
   Template: [['id', 'tenantId', 'templateKey', 'templateKind', 'createdAt'], ['latestRevisionId', 'latestRevisionNumber', 'releasedAt']],
   TemplateCollection: [['items', 'nextCursor', 'hasMore']],
   TemplateAssignmentCollection: [['items', 'nextCursor', 'hasMore']],
@@ -509,6 +523,12 @@ const schemaRequirements: Record<string, readonly [readonly string[], (readonly 
   GatewayCredentialRecord: [['id', 'gatewayId', 'fingerprintSha256', 'status', 'validFrom', 'validUntil', 'createdAt'], ['serialNumber', 'revokedAt', 'revocationReason']],
   GatewayCredentialList: [['items']],
   GatewayCertificateRevokeRequest: [[], ['reason']],
+  GatewayFactoryResetRequest: [['reason'], ['wipeCredentials', 'wipeConfigShadow', 'wipeOfflineBuffer', 'revokeCredentials']],
+  GatewayFactoryResetRecord: [
+    ['id', 'tenantId', 'gatewayId', 'wipeCredentials', 'wipeConfigShadow', 'wipeOfflineBuffer', 'reason', 'status', 'issuedBy', 'wipedArtifacts', 'createdAt', 'updatedAt'],
+    ['transferId', 'dispatchedAt', 'acknowledgedAt', 'errorMessage'],
+  ],
+  GatewayFactoryResetList: [['items']],
   PointCopyTarget: [['deviceKey', 'pointCode']],
   GatewayPointMapping: [['sourceChannel', 'primaryDeviceKey', 'primaryPointCode'], ['copyTargets']],
   GatewaySamplingPolicy: [['deviceKey', 'sampleIntervalMs', 'publishIntervalMs'], ['pointCode']],

@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -9,8 +11,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/eclipse/paho.golang/paho"
+	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/connectivity"
@@ -207,6 +211,77 @@ func TestPublishGatewayDesiredShadowEmitsChangeBatchAndMetrics(t *testing.T) {
 	for _, want := range []string{
 		`hvac_mqtt_shadow_replication_total{outcome="success"} 1`,
 		`hvac_mqtt_shadow_replication_total{outcome="failed"} 1`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected metric %q in:\n%s", want, body)
+		}
+	}
+}
+
+type fakeFactoryResetPublisher struct {
+	published []*paho.Publish
+	err       error
+}
+
+func (f *fakeFactoryResetPublisher) Publish(_ context.Context, pub *paho.Publish) (*paho.PublishResponse, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	f.published = append(f.published, pub)
+	return &paho.PublishResponse{}, nil
+}
+
+func TestPublishGatewayFactoryResetPublishesLifecycleEnvelopeAndMetrics(t *testing.T) {
+	t.Parallel()
+
+	const gatewayID = "0195f300-3000-7000-8000-000000000099"
+	const resetID = "0195f300-6000-7000-8000-000000000099"
+	const transferID = "0195f300-5000-7000-8000-000000000099"
+	reset := edgecontrol.FactoryResetPayload{
+		ResetID:           resetID,
+		TransferID:        transferID,
+		WipeCredentials:   true,
+		WipeConfigShadow:  true,
+		WipeOfflineBuffer: true,
+		Reason:            "ownership transfer cleanup",
+		IssuedAt:          time.Date(2026, 11, 23, 1, 30, 0, 0, time.UTC).UnixMilli(),
+	}
+
+	metrics := observability.NewRegistry()
+	pub := &fakeFactoryResetPublisher{}
+	if err := publishGatewayFactoryReset(context.Background(), pub, nil, metrics, nil, gatewayID, reset); err != nil {
+		t.Fatalf("publishGatewayFactoryReset success failed: %v", err)
+	}
+	if len(pub.published) != 1 {
+		t.Fatalf("published count=%d, want 1", len(pub.published))
+	}
+	msg := pub.published[0]
+	if msg.Topic != adapter.LifecycleDownlinkTopic(gatewayID) || msg.QoS != 1 || msg.Retain {
+		t.Fatalf("unexpected publish packet: topic=%q qos=%d retain=%v", msg.Topic, msg.QoS, msg.Retain)
+	}
+	env, decoded, err := edgecontrol.DecodeFactoryReset(msg.Payload, gatewayID)
+	if err != nil {
+		t.Fatalf("DecodeFactoryReset: %v", err)
+	}
+	if env.Type != edgecontrol.ShadowReplicationTypeFactoryReset || decoded.ResetID != resetID || decoded.TransferID != transferID || !decoded.WipeCredentials || !decoded.WipeConfigShadow || !decoded.WipeOfflineBuffer {
+		t.Fatalf("decoded mismatch: env=%+v payload=%+v", env, decoded)
+	}
+	var envMap map[string]any
+	if err := json.Unmarshal(msg.Payload, &envMap); err != nil || envMap["type"] != "FACTORY_RESET" {
+		t.Fatalf("unexpected raw envelope=%s err=%v", string(msg.Payload), err)
+	}
+
+	failPub := &fakeFactoryResetPublisher{err: errors.New("broker disconnected")}
+	if err := publishGatewayFactoryReset(context.Background(), failPub, nil, metrics, nil, gatewayID, reset); err == nil {
+		t.Fatal("expected publishGatewayFactoryReset failure error")
+	}
+
+	rec := httptest.NewRecorder()
+	metrics.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := rec.Body.String()
+	for _, want := range []string{
+		adapter.LifecycleReplicationMetricName + `{outcome="success"} 1`,
+		adapter.LifecycleReplicationMetricName + `{outcome="failed"} 1`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected metric %q in:\n%s", want, body)

@@ -302,8 +302,22 @@ func (h *handler) authorizeRegistryForPresenter(
 	action registryauth.Action,
 	presenterSPIFFE string,
 ) (registryAuthorization, *registryAuthorizationFailure) {
+	return h.authorizeRegistryForTenant(ctx, session, session.TenantID, action, presenterSPIFFE)
+}
+
+func (h *handler) authorizeRegistryForTenant(
+	ctx context.Context,
+	session bffSession,
+	targetTenantID string,
+	action registryauth.Action,
+	presenterSPIFFE string,
+) (registryAuthorization, *registryAuthorizationFailure) {
 	if h.identity == nil || strings.TrimSpace(presenterSPIFFE) == "" {
 		return registryAuthorization{}, &registryAuthorizationFailure{http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "IAM authorization is not configured.", true}
+	}
+	effectiveTenantID := strings.TrimSpace(targetTenantID)
+	if effectiveTenantID == "" {
+		effectiveTenantID = session.TenantID
 	}
 	now := h.identity.now().UTC()
 	expiresAt := now.Add(h.identity.config.DelegationTTL)
@@ -333,7 +347,7 @@ func (h *handler) authorizeRegistryForPresenter(
 		return registryAuthorization{}, &registryAuthorizationFailure{http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "The Registry authorization request could not be signed.", true}
 	}
 	body, err := json.Marshal(registryauth.DecisionRequest{
-		TenantID:       session.TenantID,
+		TenantID:       effectiveTenantID,
 		Action:         action,
 		GrantPresenter: presenterSPIFFE,
 	})
@@ -375,7 +389,7 @@ func (h *handler) authorizeRegistryForPresenter(
 	if !decision.Decision.Allowed {
 		return registryAuthorization{}, &registryAuthorizationFailure{http.StatusForbidden, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Registry resource was not found.", false}
 	}
-	if decision.Decision.TenantID != session.TenantID || decision.Decision.Subject != session.Principal.Subject || decision.Decision.SubjectIssuer != session.Principal.Issuer || decision.Decision.PrincipalID == "" || strings.TrimSpace(decision.Decision.PolicyRevision) == "" || !registryauth.IsAllowReason(decision.Decision.ReasonCode) || len(decision.Decision.Actions) != 1 || decision.Decision.Actions[0] != action || decision.DelegationGrant == "" || len(decision.DelegationGrant) > registryauth.MaximumEncodedGrantSize {
+	if decision.Decision.TenantID != effectiveTenantID || decision.Decision.Subject != session.Principal.Subject || decision.Decision.SubjectIssuer != session.Principal.Issuer || decision.Decision.PrincipalID == "" || strings.TrimSpace(decision.Decision.PolicyRevision) == "" || !registryauth.IsAllowReason(decision.Decision.ReasonCode) || len(decision.Decision.Actions) != 1 || decision.Decision.Actions[0] != action || decision.DelegationGrant == "" || len(decision.DelegationGrant) > registryauth.MaximumEncodedGrantSize {
 		return registryAuthorization{}, &registryAuthorizationFailure{http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "IAM returned a Registry decision outside the authenticated boundary.", true}
 	}
 	if !structurallyValidRegistryGrant(decision.DelegationGrant) {
@@ -798,6 +812,13 @@ func matchPublicRegistryRoute(method, path string) (publicRegistryRoute, string,
 				return publicRegistryRoute{}, "", false
 			}
 			return publicRegistryRoute{template: "/api/v1/sites/{siteId}/devices/{deviceId}/replace-hardware", internalPath: "/internal/v1/registry/sites/" + siteID + "/devices/" + deviceID + "/replace-hardware", resource: "device-replace-hardware", action: registryauth.ActionDeviceWrite, scopeID: siteID, write: true}, siteID, true
+		}
+		if segments[2] == "devices" && segments[4] == "transfer" && method == http.MethodPost {
+			deviceID := segments[3]
+			if !isLowerUUIDv7(deviceID) {
+				return publicRegistryRoute{}, "", false
+			}
+			return publicRegistryRoute{template: "/api/v1/sites/{siteId}/devices/{deviceId}/transfer", internalPath: "/internal/v1/registry/sites/" + siteID + "/devices/" + deviceID + "/transfer", resource: "device-transfer", action: registryauth.ActionDeviceWrite, scopeID: siteID, write: true}, siteID, true
 		}
 	case len(segments) == 2 && segments[0] == "templates" && method == http.MethodPost:
 		if segments[1] == "revisions" {

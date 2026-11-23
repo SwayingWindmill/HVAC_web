@@ -358,12 +358,14 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 			_ = metrics.AddCounter("hvac_edge_mqtt_connections_total", "Edge MQTT connection attempts by outcome.", map[string]string{"outcome": "success"}, 1)
 			commandTopic := mqttCommandTopic(config)
 			shadowTopic := mqttShadowDownlinkTopic(config.GatewayID)
+			lifecycleTopic := edgecontrol.LifecycleDownlinkTopic(config.GatewayID)
 			go func() {
 				subscribeContext, cancel := context.WithTimeout(ctx, 10*time.Second)
 				defer cancel()
 				if _, err := manager.Subscribe(subscribeContext, &paho.Subscribe{Subscriptions: []paho.SubscribeOptions{
 					{Topic: commandTopic, QoS: 1},
 					{Topic: shadowTopic, QoS: 1},
+					{Topic: lifecycleTopic, QoS: 1},
 				}}); err != nil {
 					return
 				}
@@ -397,6 +399,13 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 			OnPublishReceived: []func(paho.PublishReceived) (bool, error){func(recv paho.PublishReceived) (bool, error) {
 				if edgeRuntime != nil {
 					edgeRuntime.NotifyCloudContact(true, time.Now().UTC())
+				}
+				if strings.TrimSpace(recv.Packet.Topic) == edgecontrol.LifecycleDownlinkTopic(config.GatewayID) {
+					raw := append([]byte(nil), recv.Packet.Payload...)
+					go func() {
+						_ = publisher.handleDownlinkFactoryResetMessage(ctx, raw)
+					}()
+					return true, nil
 				}
 				if strings.TrimSpace(recv.Packet.Topic) == mqttShadowDownlinkTopic(config.GatewayID) {
 					raw := append([]byte(nil), recv.Packet.Payload...)

@@ -150,6 +150,13 @@ func WithOTAResultHook(hook func(context.Context, Gateway, edgecontrol.OTAResult
 	}
 }
 
+// WithFactoryResetAckHook registers a handler for edge FACTORY_RESET_ACK lifecycle uplinks.
+func WithFactoryResetAckHook(hook func(context.Context, string, edgecontrol.FactoryResetAckPayload) error) ProcessorOption {
+	return func(processor *Processor) {
+		processor.onFactoryResetAck = hook
+	}
+}
+
 func WithProcessorTracer(tracer *observability.Tracer) ProcessorOption {
 	return func(processor *Processor) {
 		processor.tracer = tracer
@@ -203,6 +210,7 @@ type Processor struct {
 	onGatewayPresence  func(string, bool)
 	onShadowAck        func(context.Context, Gateway, ShadowChangeAckPayload)
 	onOTAResult        func(context.Context, Gateway, edgecontrol.OTAResultPayload) error
+	onFactoryResetAck  func(context.Context, string, edgecontrol.FactoryResetAckPayload) error
 	packetHook         func(direction, channel, gatewayID, topic, traceID string, payload []byte)
 	coverageRev        atomic.Int64
 }
@@ -233,6 +241,42 @@ func (processor *Processor) recordOTAMetric(outcome string) {
 		return
 	}
 	_ = processor.metrics.AddCounter(OTAReplicationMetricName, OTAReplicationMetricHelp, map[string]string{"outcome": outcome}, 1)
+}
+
+func (processor *Processor) recordLifecycleMetric(outcome string) {
+	if processor == nil || processor.metrics == nil {
+		return
+	}
+	_ = processor.metrics.AddCounter(LifecycleReplicationMetricName, LifecycleReplicationMetricHelp, map[string]string{"outcome": outcome}, 1)
+}
+
+func (processor *Processor) processFactoryResetAck(ctx context.Context, gatewayID string, quarantine UplinkQuarantine, msg UplinkMessage) ([]ProcessingOutcome, error) {
+	env, ack, err := DecodeFactoryResetAck(msg.Payload, gatewayID)
+	if err != nil {
+		processor.recordLifecycleMetric("rejected")
+		return processor.quarantinedOutcome(ctx, quarantine, QuarantineMessageInvalid, err)
+	}
+	processor.recordPacket("UPLINK", "EVENT", gatewayID, msg.Topic, env.MessageID, msg.Payload)
+	if processor.onFactoryResetAck != nil {
+		if err := processor.onFactoryResetAck(ctx, gatewayID, ack); err != nil {
+			if errors.Is(err, ErrFactoryResetAckRejected) {
+				processor.recordLifecycleMetric("quarantined")
+				return processor.quarantinedOutcome(ctx, quarantine, QuarantineMessageInvalid, err)
+			}
+			processor.recordLifecycleMetric("failed")
+			return nil, err
+		}
+	}
+	processor.recordLifecycleMetric("accepted")
+	return []ProcessingOutcome{{
+		Result: ProcessingResult{
+			MessageID:   env.MessageID,
+			MessageType: MessageTypeLifecycle,
+			TraceID:     env.MessageID,
+			PointCount:  1,
+			Accepted:    1,
+		},
+	}}, nil
 }
 
 func (processor *Processor) processOTAResult(ctx context.Context, gateway Gateway, quarantine UplinkQuarantine, msg UplinkMessage) ([]ProcessingOutcome, error) {
@@ -478,9 +522,15 @@ func (processor *Processor) ProcessPrefix(ctx context.Context, messages []Uplink
 	gateway, err := processor.identities.ResolveGateway(ctx, messageTopic.GatewayID)
 	switch {
 	case errors.Is(err, ErrGatewayUnknown):
+		if messageTopic.MessageType == MessageTypeLifecycle && processor.onFactoryResetAck != nil {
+			return processor.processFactoryResetAck(ctx, messageTopic.GatewayID, quarantine, first)
+		}
 		return processor.quarantinedOutcome(ctx, quarantine, QuarantineGatewayUnknown, err)
 	case errors.Is(err, ErrGatewayCredentialInactive):
 		quarantine.TenantID = gateway.TenantID
+		if messageTopic.MessageType == MessageTypeLifecycle && processor.onFactoryResetAck != nil && strings.TrimSpace(gateway.TenantID) != "" {
+			return processor.processFactoryResetAck(ctx, messageTopic.GatewayID, quarantine, first)
+		}
 		return processor.quarantinedOutcome(ctx, quarantine, QuarantineGatewayCredentialInactive, err)
 	case err != nil:
 		return nil, fmt.Errorf("resolve MQTT Gateway: %w", err)
@@ -519,6 +569,8 @@ func (processor *Processor) ProcessPrefix(ctx context.Context, messages []Uplink
 		return processor.processShadowAck(ctx, gateway, quarantine, first)
 	case MessageTypeOTA:
 		return processor.processOTAResult(ctx, gateway, quarantine, first)
+	case MessageTypeLifecycle:
+		return processor.processFactoryResetAck(ctx, gateway.ID, quarantine, first)
 	default:
 		envelope, err := processor.codecRegistry().DecodeEvent(first.Payload, gateway.ID)
 		if err != nil {

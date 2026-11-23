@@ -6,11 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
+	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/modules/audit/pkg/auditserver"
 )
 
@@ -43,9 +46,13 @@ func (h *handler) serveRegistryMutation(writer http.ResponseWriter, request *htt
 	}
 	authorization, failure := h.authorizeRegistry(request.Context(), session, route.action)
 	if failure != nil {
-		if failure.status == http.StatusForbidden && route.resource == "device-replace-hardware" {
+		if failure.status == http.StatusForbidden && (route.resource == "device-replace-hardware" || route.resource == "device-transfer") {
 			h.emitDomainAudit(request.Context(), request, session, buildRegistryAuditInput(route, request, nil, nil, auditOutcomeDenied, failure.code))
-			writeProblem(writer, request, http.StatusForbidden, "AUTHORIZATION_DENIED", "Device hardware replacement forbidden", "The authenticated Principal is not allowed to replace Device hardware.", false, nil)
+			title, detail := "Device hardware replacement forbidden", "The authenticated Principal is not allowed to replace Device hardware."
+			if route.resource == "device-transfer" {
+				title, detail = "Device transfer forbidden", "The authenticated Principal is not allowed to transfer Devices."
+			}
+			writeProblem(writer, request, http.StatusForbidden, "AUTHORIZATION_DENIED", title, detail, false, nil)
 			return
 		}
 		if failure.status == http.StatusForbidden || failure.status == http.StatusNotFound {
@@ -80,7 +87,18 @@ func (h *handler) serveRegistryMutation(writer http.ResponseWriter, request *htt
 		writeProblem(writer, request, status, code, "Registry mutation invalid", "The Registry mutation payload is unreadable or exceeds the supported size.", false, nil)
 		return
 	}
-	result := h.executeCoreRegistryMutation(request.Context(), route, request.Method, body, authorization.coreGrant, decision)
+	var extraHeaders map[string]string
+	if route.resource == "device-transfer" {
+		headers, ok := h.authorizeDeviceTransferTarget(writer, request, session, route, body, authorization)
+		if !ok {
+			return
+		}
+		extraHeaders = headers
+	}
+	result := h.executeCoreRegistryMutationWithHeaders(request.Context(), route, request.Method, body, authorization.coreGrant, extraHeaders, decision)
+	if route.resource == "device-transfer" && (result.status == http.StatusOK || result.status == http.StatusCreated) {
+		result = h.enrichTransferredGatewayDecommission(request.Context(), session.TenantID, authorization.principalID, result)
+	}
 	outcome := registryResultOutcome(result)
 	h.emitDomainAudit(request.Context(), request, session, buildRegistryAuditInput(route, request, body, result.body, outcome, result.code))
 	writer.Header().Set("X-Route-Policy-Revision", formatRevision(decision.RegistryRevision))
@@ -123,8 +141,10 @@ func buildRegistryAuditInput(
 		defaultLabel,
 	)
 	targetID := firstNonEmpty(
+		stringValue(respMap, "transferId"),
 		stringValue(respMap, "id"),
 		stringValue(respMap, "deviceId"),
+		stringValue(respMap, "targetDeviceId"),
 		stringValue(respMap, "bindingId"),
 		stringValue(respMap, "resourceId"),
 		stringValue(respMap, "sagaId"),
@@ -148,6 +168,16 @@ func buildRegistryAuditInput(
 			}
 		}
 	}
+	if route.resource == "device-transfer" {
+		for _, key := range []string{"transferId", "transferScope", "sourceDeviceId", "targetTenantId", "targetSiteId", "targetDeviceId", "factoryResetId", "factoryResetStatus"} {
+			if value := firstNonEmpty(stringValue(respMap, key), stringValue(reqMap, key)); value != "" {
+				summary[key] = value
+			}
+		}
+		if revoked, ok := respMap["oldCredentialsRevoked"].(bool); ok {
+			summary["oldCredentialsRevoked"] = revoked
+		}
+	}
 	if changed := changedJSONKeys(reqMap); len(changed) > 0 {
 		summary["changedFields"] = changed
 	}
@@ -165,7 +195,7 @@ func buildRegistryAuditInput(
 }
 
 func routeDeviceID(route publicRegistryRoute) string {
-	if route.resource != "device-replace-hardware" {
+	if route.resource != "device-replace-hardware" && route.resource != "device-transfer" {
 		return ""
 	}
 	parts := strings.Split(strings.TrimPrefix(route.internalPath, "/internal/v1/registry/"), "/")
@@ -187,6 +217,8 @@ func registryAuditMeta(resource, _ string) (string, string) {
 		return "REGISTRY_DEVICE_MUTATED", "采集设备"
 	case "device-replace-hardware":
 		return "REGISTRY_DEVICE_HARDWARE_REPLACED", "采集设备硬件"
+	case "device-transfer":
+		return "REGISTRY_DEVICE_TRANSFERRED", "设备归属过户"
 	case "sensor-write":
 		return "REGISTRY_SENSOR_MUTATED", "传感器"
 	case "point-write":
@@ -261,7 +293,15 @@ func changedJSONKeys(obj map[string]any) []string {
 	return keys
 }
 
-func (h *handler) executeCoreRegistryMutation(ctx context.Context, route publicRegistryRoute, method string, body []byte, grant string, decision ownershipregistry.Decision) registryBackendResult {
+func (h *handler) executeCoreRegistryMutationWithHeaders(
+	ctx context.Context,
+	route publicRegistryRoute,
+	method string,
+	body []byte,
+	grant string,
+	extraHeaders map[string]string,
+	decision ownershipregistry.Decision,
+) registryBackendResult {
 	if h.registry == nil || h.registry.coreBaseURL == "" || h.registry.coreHTTPClient == nil {
 		return unavailableRegistryResult(ownershipregistry.OwnerCore, http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE")
 	}
@@ -276,6 +316,11 @@ func (h *handler) executeCoreRegistryMutation(ctx context.Context, route publicR
 	request.Header.Set("X-Delegation-Grant", grant)
 	request.Header.Set("X-Route-Policy-Revision", formatRevision(decision.RegistryRevision))
 	request.Header.Set("X-Request-ID", requestIDFromContext(ctx))
+	for k, v := range extraHeaders {
+		if strings.TrimSpace(k) != "" && strings.TrimSpace(v) != "" {
+			request.Header.Set(k, v)
+		}
+	}
 	observability.InjectHTTP(ctx, request.Header)
 	response, err := h.registry.coreHTTPClient.Do(request)
 	if err != nil {
@@ -286,4 +331,138 @@ func (h *handler) executeCoreRegistryMutation(ctx context.Context, route publicR
 	}
 	defer drainAndCloseBody(response.Body)
 	return h.decodeRegistryBackendResponse(ownershipregistry.OwnerCore, response, route)
+}
+
+func (h *handler) authorizeDeviceTransferTarget(
+	writer http.ResponseWriter,
+	request *http.Request,
+	session bffSession,
+	route publicRegistryRoute,
+	body []byte,
+	sourceAuth registryAuthorization,
+) (map[string]string, bool) {
+	reqMap := decodeFlatJSONObject(body)
+	targetTenantID := stringValue(reqMap, "targetTenantId")
+	targetSiteID := stringValue(reqMap, "targetSiteId")
+	if targetTenantID != "" && targetTenantID != session.TenantID {
+		if !isLowerUUIDv7(targetTenantID) {
+			return nil, true
+		}
+		presenterSPIFFE := ""
+		if h.identity != nil {
+			presenterSPIFFE = h.identity.config.ExecutingWorkloadSPIFFE
+		}
+		targetAuth, failure := h.authorizeRegistryForTenant(request.Context(), session, targetTenantID, registryauth.ActionDeviceWrite, presenterSPIFFE)
+		if failure != nil {
+			outcome := auditOutcomeForStatus(failure.status)
+			reasonCode := failure.code
+			if failure.status == http.StatusForbidden || failure.status == http.StatusNotFound {
+				outcome = auditOutcomeDenied
+				reasonCode = "REGISTRY_TRANSFER_FORBIDDEN"
+			}
+			h.emitDomainAudit(request.Context(), request, session, buildRegistryAuditInput(route, request, body, nil, outcome, reasonCode))
+			if failure.status == http.StatusForbidden || failure.status == http.StatusNotFound {
+				writeProblem(writer, request, http.StatusForbidden, "REGISTRY_TRANSFER_FORBIDDEN", "Cross-tenant device transfer forbidden", "The authenticated Principal is not authorized to transfer a Device into the destination tenant.", false, nil)
+				return nil, false
+			}
+			writeProblem(writer, request, failure.status, failure.code, failure.title, failure.detail, failure.retryable, nil)
+			return nil, false
+		}
+		if targetSiteID != "" && isLowerUUIDv7(targetSiteID) {
+			if _, allowed := targetAuth.allowedSiteIDs[targetSiteID]; !allowed {
+				h.emitDomainAudit(request.Context(), request, session, buildRegistryAuditInput(route, request, body, nil, auditOutcomeDenied, "REGISTRY_TRANSFER_FORBIDDEN"))
+				writeProblem(writer, request, http.StatusForbidden, "REGISTRY_TRANSFER_FORBIDDEN", "Cross-tenant device transfer forbidden", "The authenticated Principal is not allowed to transfer a Device into the destination Site.", false, nil)
+				return nil, false
+			}
+		}
+		return map[string]string{"X-Target-Delegation-Grant": targetAuth.coreGrant}, true
+	}
+	if targetSiteID != "" && isLowerUUIDv7(targetSiteID) {
+		if _, allowed := sourceAuth.allowedSiteIDs[targetSiteID]; !allowed {
+			h.emitDomainAudit(request.Context(), request, session, buildRegistryAuditInput(route, request, body, nil, auditOutcomeDenied, "REGISTRY_TRANSFER_FORBIDDEN"))
+			writeProblem(writer, request, http.StatusForbidden, "REGISTRY_TRANSFER_FORBIDDEN", "Device transfer forbidden", "The authenticated Principal is not allowed to transfer a Device to the destination Site.", false, nil)
+			return nil, false
+		}
+	}
+	return nil, true
+}
+
+func (h *handler) enrichTransferredGatewayDecommission(ctx context.Context, fallbackTenantID, actorID string, result registryBackendResult) registryBackendResult {
+	if h.connectivity == nil || strings.TrimSpace(h.connectivity.BaseURL) == "" || h.connectivity.HTTPClient == nil {
+		return result
+	}
+	var resp map[string]any
+	if json.Unmarshal(result.body, &resp) != nil || len(resp) == 0 {
+		return result
+	}
+	sourceDevice, _ := resp["sourceDevice"].(map[string]any)
+	deviceType := strings.ToUpper(stringValue(sourceDevice, "deviceType"))
+	connectivityMode := strings.ToUpper(stringValue(sourceDevice, "connectivityMode"))
+	if deviceType != "GATEWAY" && connectivityMode != "DIRECT" {
+		return result
+	}
+	sourceDeviceID := stringValue(resp, "sourceDeviceId")
+	transferID := stringValue(resp, "transferId")
+	if !isLowerUUIDv7(sourceDeviceID) || !isLowerUUIDv7(transferID) {
+		return result
+	}
+	tenantID := firstNonEmpty(stringValue(resp, "sourceTenantId"), fallbackTenantID)
+	wipeRequired := true
+	if val, ok := resp["wipeRequired"].(bool); ok {
+		wipeRequired = val
+	}
+	payloadBytes, err := json.Marshal(map[string]any{
+		"tenantId":     tenantID,
+		"transferId":   transferID,
+		"wipeRequired": wipeRequired,
+		"reason":       firstNonEmpty(stringValue(resp, "reason"), "ownership_transfer:"+transferID),
+		"actorId":      actorID,
+	})
+	if err != nil {
+		return result
+	}
+	decommCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	endpoint := strings.TrimRight(h.connectivity.BaseURL, "/") + "/internal/v1/gateways/" + url.PathEscape(sourceDeviceID) + ":transfer-decommission"
+	req, err := http.NewRequestWithContext(decommCtx, http.MethodPost, endpoint, bytes.NewReader(payloadBytes))
+	if err != nil {
+		return result
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-Request-ID", requestIDFromContext(ctx))
+	observability.InjectHTTP(decommCtx, req.Header)
+	response, err := h.connectivity.HTTPClient.Do(req)
+	if err != nil {
+		return result
+	}
+	defer drainAndCloseBody(response.Body)
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return result
+	}
+	decommRaw, err := readBoundedBody(response.Body, 32<<10)
+	if err != nil {
+		return result
+	}
+	var decommResp map[string]any
+	if json.Unmarshal(decommRaw, &decommResp) != nil {
+		return result
+	}
+	if revoked, ok := decommResp["credentialsRevoked"].(bool); ok {
+		resp["oldCredentialsRevoked"] = revoked
+	}
+	if resetMap, ok := decommResp["factoryReset"].(map[string]any); ok {
+		if resetID := stringValue(resetMap, "id"); resetID != "" {
+			resp["factoryResetId"] = resetID
+		}
+		if resetStatus := stringValue(resetMap, "status"); resetStatus != "" {
+			resp["factoryResetStatus"] = resetStatus
+		}
+	}
+	enriched, err := json.Marshal(resp)
+	if err != nil {
+		return result
+	}
+	result.body = enriched
+	return result
 }

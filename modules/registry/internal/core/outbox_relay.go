@@ -29,6 +29,7 @@ const (
 	outboxTelemetrySyncPath             = "/internal/v1/telemetry/registry-sync:apply"
 	outboxCommandCancelPath             = "/internal/v1/commands:cancelRetiredTarget"
 	outboxConnectivityRetireFmt         = "/internal/v1/gateways/%s:retire"
+	outboxConnectivityDecommissionFmt   = "/internal/v1/gateways/%s:transfer-decommission"
 	outboxConnectivityTemplateDriverFmt = "/internal/v1/gateways/%s/config-shadow:upsert-template-driver"
 )
 
@@ -54,6 +55,7 @@ var relayedOutboxEventTypes = []string{
 	"registry.device.created",
 	"registry.device.updated",
 	"registry.device.hardware_replaced",
+	"registry.device.transferred",
 	"registry.point.created",
 	"registry.point.updated",
 	"registry.import.committed",
@@ -69,9 +71,20 @@ type TelemetrySyncClient interface {
 	SyncRegistry(ctx context.Context, request RelayTelemetrySyncRequest) error
 }
 
-// ConnectivityRetireClient notifies Connectivity to revoke retired gateways.
+// RelayGatewayTransferDecommissionRequest instructs Connectivity to revoke old-tenant credentials
+// and dispatch an edge factory-reset wipe when a GATEWAY or DIRECT Device transfers away.
+type RelayGatewayTransferDecommissionRequest struct {
+	TenantID     string `json:"tenantId"`
+	TransferID   string `json:"transferId"`
+	WipeRequired bool   `json:"wipeRequired"`
+	Reason       string `json:"reason"`
+	ActorID      string `json:"actorId,omitempty"`
+}
+
+// ConnectivityRetireClient notifies Connectivity to revoke retired or transferred gateways and direct devices.
 type ConnectivityRetireClient interface {
 	RetireGateway(ctx context.Context, tenantID, gatewayID string) error
+	DecommissionTransferredGateway(ctx context.Context, gatewayID string, request RelayGatewayTransferDecommissionRequest) error
 }
 
 // ConnectivityTemplateDriverClient materializes template Modbus driver configs onto bound gateway shadows.
@@ -588,6 +601,8 @@ func (r *OutboxRelay) deliverEvent(ctx context.Context, event claimedOutboxEvent
 	switch event.EventType {
 	case "registry.device.created", "registry.device.updated", "registry.device.hardware_replaced":
 		return r.deliverDeviceSync(ctx, event)
+	case "registry.device.transferred":
+		return r.deliverDeviceTransfer(ctx, event)
 	case "registry.point.created", "registry.point.updated":
 		deviceID, pointKey, err := r.lookupPointDevice(ctx, event.TenantID, event.SubjectID)
 		if err != nil {
@@ -757,6 +772,68 @@ func (r *OutboxRelay) deliverSiteSync(ctx context.Context, tenantID, siteID stri
 	return r.telemetry.SyncRegistry(ctx, req)
 }
 
+func isEdgeCredentialedDevice(deviceType, connectivityMode string) bool {
+	return strings.ToUpper(strings.TrimSpace(deviceType)) == "GATEWAY" ||
+		strings.ToUpper(strings.TrimSpace(connectivityMode)) == "DIRECT"
+}
+
+func (r *OutboxRelay) deliverDeviceTransfer(ctx context.Context, event claimedOutboxEvent) error {
+	deviceID := strings.TrimSpace(event.SubjectID)
+	if deviceID == "" {
+		deviceID = payloadString(event.Payload, "sourceDeviceId")
+	}
+	siteID := event.SiteID
+	if siteID == "" || deviceID == "" {
+		return nil
+	}
+	req, found, err := r.loadDeviceSyncRequest(ctx, event.TenantID, siteID, deviceID)
+	if err != nil {
+		return err
+	}
+	if r.telemetry != nil && found {
+		if err := r.telemetry.SyncRegistry(ctx, req); err != nil {
+			return err
+		}
+	}
+	if r.command != nil {
+		if err := r.command.CancelRetiredTarget(ctx, RelayCommandCancelRequest{
+			TenantID:    event.TenantID,
+			SiteID:      siteID,
+			DeviceIDs:   []string{deviceID},
+			CausationID: event.EventID,
+		}); err != nil {
+			return err
+		}
+	}
+	if r.connectivity == nil && r.connectivityDriver == nil {
+		return nil
+	}
+	deviceType := payloadString(event.Payload, "deviceType")
+	connectivityMode := payloadString(event.Payload, "connectivityMode")
+	if deviceType == "" && connectivityMode == "" {
+		deviceType, connectivityMode, err = r.lookupDeviceTypeAndConnectivityMode(ctx, event.TenantID, siteID, deviceID)
+		if err != nil {
+			return err
+		}
+	}
+	if isEdgeCredentialedDevice(deviceType, connectivityMode) {
+		if r.connectivity != nil {
+			return r.connectivity.DecommissionTransferredGateway(ctx, deviceID, RelayGatewayTransferDecommissionRequest{
+				TenantID:     event.TenantID,
+				TransferID:   payloadString(event.Payload, "transferId"),
+				WipeRequired: payloadBool(event.Payload, "wipeRequired", true),
+				Reason:       payloadString(event.Payload, "reason"),
+				ActorID:      payloadString(event.Payload, "principalId"),
+			})
+		}
+		return nil
+	}
+	if r.connectivityDriver != nil {
+		return r.removeDeviceTemplateDriversFromBoundGateways(ctx, event.TenantID, siteID, deviceID, event.EventID, "device-transferred:"+event.EventID)
+	}
+	return nil
+}
+
 func (r *OutboxRelay) retireDeviceDownstream(ctx context.Context, tenantID, siteID, deviceID, causationID string) error {
 	if r.command != nil {
 		if err := r.command.CancelRetiredTarget(ctx, RelayCommandCancelRequest{
@@ -769,11 +846,11 @@ func (r *OutboxRelay) retireDeviceDownstream(ctx context.Context, tenantID, site
 		}
 	}
 	if r.connectivity != nil || r.connectivityDriver != nil {
-		deviceType, err := r.lookupDeviceType(ctx, tenantID, siteID, deviceID)
+		deviceType, connectivityMode, err := r.lookupDeviceTypeAndConnectivityMode(ctx, tenantID, siteID, deviceID)
 		if err != nil {
 			return err
 		}
-		if strings.ToUpper(deviceType) == "GATEWAY" {
+		if isEdgeCredentialedDevice(deviceType, connectivityMode) {
 			if r.connectivity != nil {
 				if err := r.connectivity.RetireGateway(ctx, tenantID, deviceID); err != nil {
 					return err
@@ -1074,27 +1151,27 @@ WHERE tenant_id = $1::uuid AND id = $2::uuid
 	return deviceID, pointCode, pointType, err
 }
 
-func (r *OutboxRelay) lookupDeviceType(ctx context.Context, tenantID, siteID, deviceID string) (string, error) {
-	var deviceType string
+func (r *OutboxRelay) lookupDeviceTypeAndConnectivityMode(ctx context.Context, tenantID, siteID, deviceID string) (string, string, error) {
+	var deviceType, connectivityMode string
 	err := r.withTenantWriterTx(ctx, tenantID, pgx.ReadOnly, func(tx pgx.Tx) error {
 		qErr := tx.QueryRow(ctx, `
-SELECT device_type
+SELECT device_type, connectivity_mode
 FROM core_registry.devices
 WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND id = $3::uuid
-`, tenantID, siteID, deviceID).Scan(&deviceType)
+`, tenantID, siteID, deviceID).Scan(&deviceType, &connectivityMode)
 		if errors.Is(qErr, pgx.ErrNoRows) {
 			return nil
 		}
 		return qErr
 	})
-	return deviceType, err
+	return deviceType, connectivityMode, err
 }
 
 func (r *OutboxRelay) listSiteDeviceIDs(ctx context.Context, tenantID, siteID string) ([]string, []string, error) {
 	var deviceIDs, gatewayIDs []string
 	err := r.withTenantWriterTx(ctx, tenantID, pgx.ReadOnly, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
-SELECT id::text, device_type
+SELECT id::text, device_type, connectivity_mode
 FROM core_registry.devices
 WHERE tenant_id = $1::uuid AND site_id = $2::uuid
 ORDER BY id
@@ -1104,12 +1181,12 @@ ORDER BY id
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var id, dt string
-			if scanErr := rows.Scan(&id, &dt); scanErr != nil {
+			var id, dt, cm string
+			if scanErr := rows.Scan(&id, &dt, &cm); scanErr != nil {
 				return scanErr
 			}
 			deviceIDs = append(deviceIDs, id)
-			if strings.ToUpper(dt) == "GATEWAY" {
+			if isEdgeCredentialedDevice(dt, cm) {
 				gatewayIDs = append(gatewayIDs, id)
 			}
 		}
@@ -1129,6 +1206,10 @@ func (c *httpDownstreamClient) SyncRegistry(ctx context.Context, request RelayTe
 
 func (c *httpDownstreamClient) RetireGateway(ctx context.Context, tenantID, gatewayID string) error {
 	return c.postJSON(ctx, fmt.Sprintf(outboxConnectivityRetireFmt, gatewayID), map[string]string{"tenantId": tenantID})
+}
+
+func (c *httpDownstreamClient) DecommissionTransferredGateway(ctx context.Context, gatewayID string, request RelayGatewayTransferDecommissionRequest) error {
+	return c.postJSON(ctx, fmt.Sprintf(outboxConnectivityDecommissionFmt, gatewayID), request)
 }
 
 func (c *httpDownstreamClient) UpsertGatewayTemplateDriver(ctx context.Context, gatewayID string, request RelayGatewayTemplateDriverRequest) error {
@@ -1206,6 +1287,21 @@ func payloadString(payload map[string]any, key string) string {
 		return ""
 	}
 	return strings.TrimSpace(s)
+}
+
+func payloadBool(payload map[string]any, key string, fallback bool) bool {
+	if payload == nil {
+		return fallback
+	}
+	val, ok := payload[key]
+	if !ok || val == nil {
+		return fallback
+	}
+	b, ok := val.(bool)
+	if !ok {
+		return fallback
+	}
+	return b
 }
 
 func newDefaultOutboxHTTPClient(timeout time.Duration) *http.Client {

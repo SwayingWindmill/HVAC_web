@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
@@ -62,6 +63,26 @@ func (server *server) handleAuthorizedWrite(writer http.ResponseWriter, request 
 		}
 		input.SiteID, input.DeviceID = route.parentID, route.id
 		value, err := server.writer.ReplaceDeviceHardware(request.Context(), claims, input)
+		return server.writeMutationResult(writer, request, value, value.Replayed, true, err)
+	case "device-transfer":
+		var input TransferDeviceRequest
+		if !decodeRegistryMutation(writer, request, &input) {
+			return http.StatusBadRequest
+		}
+		input.SourceSiteID, input.DeviceID = route.parentID, route.id
+		var targetClaimsPtr *registryauth.GrantClaims
+		if rawTargetGrant := strings.TrimSpace(request.Header.Get("X-Target-Delegation-Grant")); rawTargetGrant != "" {
+			peerSPIFFE, _ := verifiedPeerSPIFFE(request)
+			targetClaims, errStatus, errCode, errDetail, retryable := server.authorizeDelegationGrant(request, peerSPIFFE, rawTargetGrant, func(registryauth.GrantClaims) registryauth.Action {
+				return registryauth.ActionDeviceWrite
+			})
+			if errStatus != 0 {
+				writeProblem(writer, request, errStatus, errCode, errDetail, retryable)
+				return errStatus
+			}
+			targetClaimsPtr = &targetClaims
+		}
+		value, err := server.writer.TransferDevice(request.Context(), claims, targetClaimsPtr, input)
 		return server.writeMutationResult(writer, request, value, value.Replayed, true, err)
 	case "sensor-write":
 		var input SensorMutation
@@ -261,6 +282,12 @@ func (server *server) writeMutationError(writer http.ResponseWriter, request *ht
 	case errors.Is(err, ErrMutationForbidden):
 		writeProblem(writer, request, http.StatusForbidden, "OPERATING_EXCEPTION_FORBIDDEN", "The authenticated Principal is not allowed to perform this Operating Exception action.", false)
 		return http.StatusForbidden
+	case errors.Is(err, ErrTransferForbidden):
+		writeProblem(writer, request, http.StatusForbidden, "REGISTRY_TRANSFER_FORBIDDEN", "The authenticated Principal is not allowed to transfer Devices to the target Tenant or Site.", false)
+		return http.StatusForbidden
+	case errors.Is(err, ErrTransferBlocked):
+		writeProblem(writer, request, http.StatusConflict, "REGISTRY_TRANSFER_BLOCKED", "The Device cannot be transferred while active asset bindings, points, or sub-device source keys exist.", false)
+		return http.StatusConflict
 	case errors.Is(err, ErrNotFound):
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "The requested Registry resource was not found in the authorized scope.", false)
 		return http.StatusNotFound

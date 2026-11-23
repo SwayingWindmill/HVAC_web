@@ -44,7 +44,9 @@
         "RELEASE_STAGE",
         "RELEASE_RESULT",
         "OTA_STAGE",
-        "OTA_RESULT"
+        "OTA_RESULT",
+        "FACTORY_RESET",
+        "FACTORY_RESET_ACK"
       ]
     },
     "payload": {
@@ -416,6 +418,112 @@
               "errorCode": {
                 "type": "string",
                 "maxLength": 64
+              },
+              "errorMessage": {
+                "type": "string",
+                "maxLength": 1024
+              },
+              "occurredAt": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "FACTORY_RESET"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "resetId",
+              "wipeCredentials",
+              "wipeConfigShadow",
+              "wipeOfflineBuffer",
+              "reason",
+              "issuedAt"
+            ],
+            "properties": {
+              "resetId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "transferId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "wipeCredentials": {
+                "type": "boolean"
+              },
+              "wipeConfigShadow": {
+                "type": "boolean"
+              },
+              "wipeOfflineBuffer": {
+                "type": "boolean"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "issuedAt": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "FACTORY_RESET_ACK"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "resetId",
+              "status",
+              "wipedArtifacts",
+              "occurredAt"
+            ],
+            "properties": {
+              "resetId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "status": {
+                "enum": [
+                  "WIPED",
+                  "FAILED"
+                ]
+              },
+              "wipedArtifacts": {
+                "type": "array",
+                "maxItems": 32,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                }
               },
               "errorMessage": {
                 "type": "string",

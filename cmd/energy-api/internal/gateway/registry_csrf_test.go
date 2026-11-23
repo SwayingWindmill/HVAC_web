@@ -158,6 +158,7 @@ func (fix *registryCSRFFixture) writeCases() []registryWriteCase {
 		{name: "createSiteDevice", method: http.MethodPost, path: sitePrefix + "/devices", template: "/api/v1/sites/{siteId}/devices", expectedStatus: http.StatusCreated},
 		{name: "updateSiteDevice", method: http.MethodPatch, path: sitePrefix + "/devices/" + fix.deviceID, template: "/api/v1/sites/{siteId}/devices/{deviceId}", expectedStatus: http.StatusOK},
 		{name: "replaceDeviceHardware", method: http.MethodPost, path: sitePrefix + "/devices/" + fix.deviceID + "/replace-hardware", template: "/api/v1/sites/{siteId}/devices/{deviceId}/replace-hardware", expectedStatus: http.StatusCreated},
+		{name: "transferSiteDevice", method: http.MethodPost, path: sitePrefix + "/devices/" + fix.deviceID + "/transfer", template: "/api/v1/sites/{siteId}/devices/{deviceId}/transfer", expectedStatus: http.StatusCreated},
 		{name: "createSiteSensor", method: http.MethodPost, path: sitePrefix + "/sensors", template: "/api/v1/sites/{siteId}/sensors", expectedStatus: http.StatusCreated},
 		{name: "updateSiteSensor", method: http.MethodPatch, path: sitePrefix + "/sensors/" + fix.sensorID, template: "/api/v1/sites/{siteId}/sensors/{sensorId}", expectedStatus: http.StatusOK},
 		{name: "createSitePoint", method: http.MethodPost, path: sitePrefix + "/points", template: "/api/v1/sites/{siteId}/points", expectedStatus: http.StatusCreated},
@@ -188,8 +189,8 @@ func assertRegistryProblem(t *testing.T, recorder *httptest.ResponseRecorder, wa
 func TestRegistryWriteRoutesEnforceOriginAndCSRF(t *testing.T) {
 	fix := newRegistryCSRFFixture(t)
 	cases := fix.writeCases()
-	if len(cases) != 19 {
-		t.Fatalf("expected 19 Registry write cases, got %d", len(cases))
+	if len(cases) != 20 {
+		t.Fatalf("expected 20 Registry write cases, got %d", len(cases))
 	}
 
 	serve := func(method, path string, configure func(*http.Request)) *httptest.ResponseRecorder {
@@ -285,7 +286,7 @@ func TestRegistryWriteRoutesInvariantNoCSRFBypass(t *testing.T) {
 		"{versionId}", "018f3e00-9000-7000-8000-000000000001",
 	)
 
-	expectedByKey := make(map[string]registryWriteCase, 19)
+	expectedByKey := make(map[string]registryWriteCase, 20)
 	for _, tc := range fix.writeCases() {
 		expectedByKey[tc.method+" "+tc.template] = tc
 	}

@@ -86,3 +86,13 @@ func (spool *mqttEvidenceSpool) UsedBytes() int64 {
 	}
 	return spool.buffer.UsedBytes()
 }
+
+// Purge clears all spooled evidence in memory and on disk.
+func (spool *mqttEvidenceSpool) Purge() error {
+	if spool == nil || spool.buffer == nil {
+		return nil
+	}
+	spool.flush.Lock()
+	defer spool.flush.Unlock()
+	return spool.buffer.Purge()
+}

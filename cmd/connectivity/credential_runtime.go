@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/eclipse/paho.golang/paho"
+	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 	"github.com/quanlaihe/hvac-web/libs/mqttclient"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
@@ -294,6 +295,11 @@ func newCredentialRuntime(cfg credentialRuntimeConfig) (*http.Server, *tunnel.Hu
 		}
 	}
 	crlCtrl := attachCredentialCRLControl(rootCtx, logger, metrics, presence, store, authority, service, tunnelHub, mqttGuard, coverageReporter, mqttSession, crlOutPath)
+	if mqttSession != nil {
+		service.SetFactoryResetDispatchHook(func(gatewayID string, reset edgecontrol.FactoryResetPayload) error {
+			return publishGatewayFactoryReset(rootCtx, mqttSession, logger, metrics, tap, gatewayID, reset)
+		})
+	}
 	if loopbackAddr != "" && !strings.EqualFold(loopbackAddr, "off") {
 		if _, err := tunnelHub.StartLoopbackListener(loopbackAddr); err != nil {
 			crlCtrl.Close()
@@ -435,6 +441,61 @@ func recordOTAPublishMetric(metrics *observability.Registry, outcome string) {
 		return
 	}
 	_ = metrics.AddCounter(adapter.OTAReplicationMetricName, adapter.OTAReplicationMetricHelp, map[string]string{"outcome": outcome}, 1)
+}
+
+func recordLifecyclePublishMetric(metrics *observability.Registry, outcome string) {
+	if metrics == nil {
+		return
+	}
+	_ = metrics.AddCounter(adapter.LifecycleReplicationMetricName, adapter.LifecycleReplicationMetricHelp, map[string]string{"outcome": outcome}, 1)
+}
+
+func publishGatewayFactoryReset(
+	rootCtx context.Context,
+	publisher shadowMQTTPublisher,
+	logger *slog.Logger,
+	metrics *observability.Registry,
+	tap *packettap.Manager,
+	gatewayID string,
+	reset edgecontrol.FactoryResetPayload,
+) error {
+	if publisher == nil {
+		return errors.New("MQTT factory-reset publisher is unavailable")
+	}
+	gwID := strings.TrimSpace(gatewayID)
+	if gwID == "" {
+		return errors.New("factory-reset gatewayId is required")
+	}
+	if rootCtx == nil {
+		rootCtx = context.Background()
+	}
+	wireBytes, err := adapter.EncodeFactoryReset(gwID, reset, time.Now().UTC())
+	if err != nil {
+		recordLifecyclePublishMetric(metrics, "failed")
+		if logger != nil {
+			logger.Warn("mqtt_factory_reset_encode_failed", "gateway_id", gwID, "reset_id", reset.ResetID, "error", err.Error())
+		}
+		return err
+	}
+	topic := adapter.LifecycleDownlinkTopic(gwID)
+	if tap != nil {
+		tap.Record("DOWNLINK", "EVENT", gwID, topic, reset.ResetID, wireBytes)
+	}
+	ctx, cancel := context.WithTimeout(rootCtx, 5*time.Second)
+	defer cancel()
+	if _, pubErr := publisher.Publish(ctx, &paho.Publish{
+		Topic:   topic,
+		QoS:     1,
+		Payload: wireBytes,
+	}); pubErr != nil {
+		recordLifecyclePublishMetric(metrics, "failed")
+		if logger != nil {
+			logger.Warn("mqtt_factory_reset_publish_failed", "gateway_id", gwID, "reset_id", reset.ResetID, "topic", topic, "error", pubErr.Error())
+		}
+		return pubErr
+	}
+	recordLifecyclePublishMetric(metrics, "success")
+	return nil
 }
 
 func publishGatewayOTAStages(

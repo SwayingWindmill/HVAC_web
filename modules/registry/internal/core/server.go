@@ -184,18 +184,26 @@ func (server *server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 		writeProblem(writer, request, statusCode, "CORE_WORKLOAD_IDENTITY_INVALID", "The calling workload identity is not trusted.", false)
 		return
 	}
-	claims, err := registryauth.VerifyGrant(server.grantPublicKey, request.Header.Get("X-Delegation-Grant"))
-	if err != nil {
-		statusCode = http.StatusUnauthorized
-		writeProblem(writer, request, statusCode, "CORE_REGISTRY_GRANT_INVALID", "The Registry delegation grant is invalid.", false)
+	claims, errStatus, errCode, errDetail, retryable := server.authorizeDelegationGrant(request, peerSPIFFE, request.Header.Get("X-Delegation-Grant"), func(c registryauth.GrantClaims) registryauth.Action {
+		return requiredCoreActionForRoute(route, c)
+	})
+	if errStatus != 0 {
+		statusCode = errStatus
+		writeProblem(writer, request, statusCode, errCode, errDetail, retryable)
 		return
+	}
+	statusCode = server.handleAuthorized(writer, request, route, claims)
+}
+
+func (server *server) authorizeDelegationGrant(request *http.Request, peerSPIFFE, rawGrant string, resolveAction func(registryauth.GrantClaims) registryauth.Action) (registryauth.GrantClaims, int, string, string, bool) {
+	claims, err := registryauth.VerifyGrant(server.grantPublicKey, rawGrant)
+	if err != nil {
+		return registryauth.GrantClaims{}, http.StatusUnauthorized, "CORE_REGISTRY_GRANT_INVALID", "The Registry delegation grant is invalid.", false
 	}
 	if err := validateGrantScopeIDs(claims); err != nil {
-		statusCode = http.StatusForbidden
-		writeProblem(writer, request, statusCode, "CORE_REGISTRY_GRANT_REJECTED", "The Registry delegation grant is not authorized for this query.", false)
-		return
+		return registryauth.GrantClaims{}, http.StatusForbidden, "CORE_REGISTRY_GRANT_REJECTED", "The Registry delegation grant is not authorized for this query.", false
 	}
-	requiredAction := requiredCoreActionForRoute(route, claims)
+	requiredAction := resolveAction(claims)
 	if err := registryauth.ValidateGrant(claims, registryauth.GrantValidation{
 		Now:                   server.now(),
 		Issuer:                server.grantIssuer,
@@ -205,15 +213,11 @@ func (server *server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 		CurrentPolicyRevision: claims.PolicyRevision,
 		IsRevoked:             func(string) (bool, error) { return false, nil },
 	}); err != nil {
-		statusCode = http.StatusForbidden
-		writeProblem(writer, request, statusCode, "CORE_REGISTRY_GRANT_REJECTED", "The Registry delegation grant is not authorized for this query.", false)
-		return
+		return registryauth.GrantClaims{}, http.StatusForbidden, "CORE_REGISTRY_GRANT_REJECTED", "The Registry delegation grant is not authorized for this query.", false
 	}
 	grantStatus, err := server.grantStatus.Lookup(request.Context(), claims)
 	if err != nil {
-		statusCode = http.StatusServiceUnavailable
-		writeProblem(writer, request, statusCode, "CORE_GRANT_STATUS_UNAVAILABLE", "IAM grant status is temporarily unavailable.", true)
-		return
+		return registryauth.GrantClaims{}, http.StatusServiceUnavailable, "CORE_GRANT_STATUS_UNAVAILABLE", "IAM grant status is temporarily unavailable.", true
 	}
 	if err := registryauth.ValidateGrant(claims, registryauth.GrantValidation{
 		Now:                   server.now(),
@@ -226,11 +230,9 @@ func (server *server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 			return grantStatus.Revoked, nil
 		},
 	}); err != nil {
-		statusCode = http.StatusForbidden
-		writeProblem(writer, request, statusCode, "CORE_REGISTRY_GRANT_REJECTED", "The Registry delegation grant is not authorized for this query.", false)
-		return
+		return registryauth.GrantClaims{}, http.StatusForbidden, "CORE_REGISTRY_GRANT_REJECTED", "The Registry delegation grant is not authorized for this query.", false
 	}
-	statusCode = server.handleAuthorized(writer, request, route, claims)
+	return claims, 0, "", "", false
 }
 
 func (server *server) handleAuthorized(writer http.ResponseWriter, request *http.Request, route registryRoute, claims registryauth.GrantClaims) int {
@@ -1018,6 +1020,8 @@ func parseRegistryRoute(method, path string) (registryRoute, bool) {
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/devices/{deviceId}", resource: "device-write", parentID: segments[1], id: segments[3], action: registryauth.ActionDeviceWrite, write: true}, true
 	case method == http.MethodPost && len(segments) == 5 && segments[0] == "sites" && segments[2] == "devices" && segments[4] == "replace-hardware":
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/devices/{deviceId}/replace-hardware", resource: "device-replace-hardware", parentID: segments[1], id: segments[3], action: registryauth.ActionDeviceWrite, write: true}, true
+	case method == http.MethodPost && len(segments) == 5 && segments[0] == "sites" && segments[2] == "devices" && segments[4] == "transfer":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/devices/{deviceId}/transfer", resource: "device-transfer", parentID: segments[1], id: segments[3], action: registryauth.ActionDeviceWrite, write: true}, true
 	case method == http.MethodPost && len(segments) == 3 && segments[0] == "sites" && segments[2] == "spaces":
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/spaces", resource: "space-write", parentID: segments[1], action: registryauth.ActionSpaceWrite, write: true}, true
 	case method == http.MethodPatch && len(segments) == 4 && segments[0] == "sites" && segments[2] == "spaces":

@@ -699,3 +699,30 @@ func cloneResendCursorState(src ResendCursorState) ResendCursorState {
 	}
 	return out
 }
+
+// Purge clears the resend queue's underlying timedata ring, in-memory state, and persisted cursor file.
+func (q *TimedataResendQueue) Purge() error {
+	if q == nil {
+		return nil
+	}
+	q.drainMu.Lock()
+	defer q.drainMu.Unlock()
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.timedata != nil {
+		if err := q.timedata.Purge(); err != nil {
+			return err
+		}
+	}
+	q.cursor = defaultResendCursorState()
+	q.ackedSeqs = make(map[uint64]edgecontrol.DataPriority)
+	q.onlineSynced = false
+	if q.cursorPath != "" {
+		for _, target := range []string{q.cursorPath, q.cursorPath + ".tmp"} {
+			if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+		}
+	}
+	return nil
+}
