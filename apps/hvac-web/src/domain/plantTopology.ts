@@ -101,6 +101,7 @@ export const CATEGORY_BY_DEVICE_TYPE: Readonly<Record<string, PlantCategory>> = 
   FLOW_METER: 'METER',
   TEMPERATURE_MODULE: 'ACQUISITION',
   CONTROL_MODULE: 'ACQUISITION',
+  PROVISIONAL_READINGS: 'METER',
 };
 
 export const RUN_STATE_NAMESPACE_BY_CATEGORY: Readonly<Partial<Record<PlantCategory, string>>> = {
@@ -127,11 +128,17 @@ export function classifyPlantCategory(input: {
     const fromAsset = CATEGORY_BY_ASSET_TYPE[input.assetType];
     if (fromAsset) return fromAsset;
   }
+  const isProvisionalUnbound = !input.assetType && input.deviceType === 'PROVISIONAL_READINGS';
   for (const sourceKey of input.sourceKeys) {
     const namespace = sourceKey.split('.')[0];
     if (namespace) {
       const fromSource = CATEGORY_BY_SOURCE_NAMESPACE[namespace];
-      if (fromSource) return fromSource;
+      if (fromSource) {
+        // Unbound PROVISIONAL_READINGS devices carry loop/header points (for example cooling-tower,
+        // chwp-main) rather than physical equipment instances; ambient channels remain WEATHER/ZONE.
+        if (isProvisionalUnbound && EQUIPMENT_CATEGORIES.has(fromSource)) return 'METER';
+        return fromSource;
+      }
     }
   }
   return input.deviceType ? (CATEGORY_BY_DEVICE_TYPE[input.deviceType] ?? 'OTHER') : 'OTHER';
@@ -350,4 +357,198 @@ export function findLoopDifferentialPressure<TReading>(
     return firstOf(devices.filter((device) => device.waterLoop === null));
   }
   return null;
+}
+
+export interface RunStatePointCandidate {
+  readonly sourceKey: string;
+  readonly pointCode: string;
+  readonly pointType?: string;
+  readonly status?: string;
+}
+
+const EQUIPMENT_RUN_STATE_KEYS: ReadonlySet<string> = new Set(
+  Object.values(RUN_STATE_NAMESPACE_BY_CATEGORY).map((namespace) => `${namespace}.run_state`),
+);
+
+export function findRunStatePoint<TPoint extends RunStatePointCandidate>(
+  points: readonly TPoint[],
+  category: PlantCategory,
+): TPoint | undefined {
+  const active = points.filter(
+    (point) => point.status !== 'INACTIVE' && point.status !== 'RETIRED' && point.pointType !== 'COMMAND',
+  );
+  const namespace = RUN_STATE_NAMESPACE_BY_CATEGORY[category];
+  if (!namespace) {
+    // Non-equipment carriers (such as PROVISIONAL_READINGS chwp-main for interlocks) only match
+    // explicit equipment-namespaced run_state keys, never bare run_state (such as ET1010 DO state).
+    return active.find((point) => EQUIPMENT_RUN_STATE_KEYS.has(point.sourceKey));
+  }
+  const namespaced = `${namespace}.run_state`;
+  return active.find((point) => point.sourceKey === namespaced)
+    ?? active.find((point) => point.sourceKey === 'run_state' || point.pointCode === 'run_state');
+}
+
+export function findFaultCodePoint<TPoint extends RunStatePointCandidate>(
+  points: readonly TPoint[],
+): TPoint | undefined {
+  const active = points.filter(
+    (point) => point.status !== 'INACTIVE' && point.status !== 'RETIRED' && point.pointType !== 'COMMAND',
+  );
+  return active.find((point) => point.sourceKey.endsWith('.fault_code'))
+    ?? active.find((point) => point.sourceKey === 'fault_code' || point.pointCode === 'fault_code');
+}
+
+export interface AggregatableReadingLike {
+  readonly current: boolean;
+  readonly lowConfidence?: boolean;
+  readonly state?: string;
+  readonly sampledAt?: string | null;
+}
+
+export interface AggregatableDeviceLike<TReading extends AggregatableReadingLike> extends BranchDeviceLike {
+  readonly assetId: string | null;
+  readonly faultCode: string | null;
+  readonly latestSampleAt: string | null;
+  reading(sourceKey: string): TReading | null;
+}
+
+export interface AggregatedPlantUnitMeta<
+  TDevice extends AggregatableDeviceLike<TReading>,
+  TReading extends AggregatableReadingLike,
+> {
+  readonly unitId: string;
+  readonly primary: TDevice;
+  readonly members: readonly TDevice[];
+  readonly deviceIds: readonly string[];
+  readonly offlineMemberCount: number;
+  readonly connection: ConnectionState;
+  readonly runState: RunState;
+  readonly faultCode: string | null;
+  readonly latestSampleAt: string | null;
+  readonly hasStaleData: boolean;
+  pickReading(sourceKey: string): TReading | null;
+}
+
+export function readingQualityRank(reading: AggregatableReadingLike): number {
+  if (reading.current) return 3;
+  if (reading.lowConfidence) return 2;
+  if (reading.state !== undefined) return reading.state === 'PRESENT' ? 1 : 0;
+  return reading.sampledAt != null ? 1 : 0;
+}
+
+const RUN_STATE_PRIORITY: readonly RunState[] = ['FAULT', 'RUNNING', 'STOPPED', 'UNKNOWN'];
+
+function latestIsoTimestamp(values: readonly (string | null)[]): string | null {
+  let result: string | null = null;
+  let resultMs = Number.NEGATIVE_INFINITY;
+  for (const value of values) {
+    if (!value) continue;
+    const ms = Date.parse(value);
+    if (Number.isFinite(ms) && ms > resultMs) {
+      result = value;
+      resultMs = ms;
+    }
+  }
+  return result;
+}
+
+function aggregateConnectionState(members: readonly { readonly connection: ConnectionState }[]): ConnectionState {
+  if (members.some((member) => member.connection === 'ONLINE')) return 'ONLINE';
+  if (members.some((member) => member.connection === 'SLEEPING')) return 'SLEEPING';
+  if (members.some((member) => member.connection === 'OFFLINE')) return 'OFFLINE';
+  return 'UNKNOWN';
+}
+
+function aggregateRunStateAndFault(
+  members: readonly { readonly connection: ConnectionState; readonly runState: RunState; readonly faultCode: string | null }[],
+): { readonly runState: RunState; readonly faultCode: string | null } {
+  const active = members.filter((member) => member.connection !== 'OFFLINE' && member.connection !== 'SLEEPING');
+  const pool = active.length > 0 ? active : members;
+  let runState: RunState = 'UNKNOWN';
+  for (const candidate of RUN_STATE_PRIORITY) {
+    if (pool.some((member) => member.runState === candidate)) {
+      runState = candidate;
+      break;
+    }
+  }
+  const faultCode = pool.find((member) => member.runState === 'FAULT' && member.faultCode)?.faultCode
+    ?? pool.find((member) => member.faultCode)?.faultCode
+    ?? members.find((member) => member.faultCode)?.faultCode
+    ?? null;
+  return { runState, faultCode };
+}
+
+/**
+ * Collapses multiple communication devices bound to the same physical Asset into one operational
+ * unit while keeping unbound devices standalone.
+ */
+export function aggregatePlantUnits<
+  TDevice extends AggregatableDeviceLike<TReading>,
+  TReading extends AggregatableReadingLike,
+>(
+  devices: readonly TDevice[],
+  options: { readonly observedPointCount: (device: TDevice) => number },
+): AggregatedPlantUnitMeta<TDevice, TReading>[] {
+  const grouped = new Map<string, TDevice[]>();
+  for (const device of devices) {
+    const key = device.assetId ? `asset:${device.assetId}` : `device:${device.deviceId}`;
+    const bucket = grouped.get(key);
+    if (bucket) bucket.push(device);
+    else grouped.set(key, [device]);
+  }
+
+  const compareMembers = (left: TDevice, right: TDevice): number => {
+    const pointDiff = options.observedPointCount(right) - options.observedPointCount(left);
+    if (pointDiff !== 0) return pointDiff;
+    const knownDiff = (right.runState !== 'UNKNOWN' ? 1 : 0) - (left.runState !== 'UNKNOWN' ? 1 : 0);
+    if (knownDiff !== 0) return knownDiff;
+    const onlineDiff = (right.connection === 'ONLINE' ? 1 : 0) - (left.connection === 'ONLINE' ? 1 : 0);
+    if (onlineDiff !== 0) return onlineDiff;
+    return left.deviceId.localeCompare(right.deviceId);
+  };
+
+  const units: AggregatedPlantUnitMeta<TDevice, TReading>[] = [];
+  for (const rawMembers of grouped.values()) {
+    const members = [...rawMembers].sort(compareMembers);
+    const primary = members[0];
+    const unitId = primary.assetId ?? primary.deviceId;
+    const { runState, faultCode } = aggregateRunStateAndFault(members);
+    units.push({
+      unitId,
+      primary,
+      members,
+      deviceIds: members.map((member) => member.deviceId),
+      offlineMemberCount: members.filter((member) => member.connection === 'OFFLINE').length,
+      connection: aggregateConnectionState(members),
+      runState,
+      faultCode,
+      latestSampleAt: latestIsoTimestamp(members.map((member) => member.latestSampleAt)),
+      hasStaleData: members.some((member) => member.hasStaleData),
+      pickReading: (sourceKey) => {
+        let best: TReading | null = null;
+        let bestRank = -1;
+        for (const member of members) {
+          const candidate = member.reading(sourceKey);
+          if (!candidate) continue;
+          const rank = readingQualityRank(candidate);
+          if (best === null || rank > bestRank) {
+            best = candidate;
+            bestRank = rank;
+          }
+        }
+        return best;
+      },
+    });
+  }
+
+  const categoryRank = (category: PlantCategory): number => {
+    const index = PLANT_CATEGORY_ORDER.indexOf(category);
+    return index === -1 ? PLANT_CATEGORY_ORDER.length : index;
+  };
+  return units.sort((left, right) => {
+    const catDiff = categoryRank(left.primary.category) - categoryRank(right.primary.category);
+    if (catDiff !== 0) return catDiff;
+    const byName = left.primary.name.localeCompare(right.primary.name, 'zh-CN');
+    return byName !== 0 ? byName : left.unitId.localeCompare(right.unitId);
+  });
 }

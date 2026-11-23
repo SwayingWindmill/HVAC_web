@@ -25,7 +25,7 @@ import { DataGapBanner } from '@/features/data-gaps/DataGapBanner';
 import { dataGapsKeys } from '@/features/data-gaps/query';
 import { formatCompactTime, formatDecimal } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
-import { coolingUncertaintyText, copUncertaintyText, equipmentStatus, loopDifferentialPressure, PLANT_CATEGORY_LABELS, plantReading, probeOffsetText, type ParallelBranch, type PlantDevice, type PlantReading, type PlantView, type WaterLoopKind } from '../plant-model';
+import { coolingUncertaintyText, copUncertaintyText, equipmentStatus, findPlantUnit, loopDifferentialPressure, PLANT_CATEGORY_LABELS, plantReading, probeOffsetText, type ParallelBranch, type PlantDevice, type PlantReading, type PlantView, type WaterLoopKind } from '../plant-model';
 import { useRealtimePlant } from '../use-realtime-plant';
 import { usePlantHistory } from '../use-plant-history';
 import { copSeries, COOLING_KEY, hourAgo, POWER_KEY } from '../plant-trend';
@@ -269,7 +269,7 @@ function RecentEvents({ plant, siteId, myId, timeZone, assetModel }: {
       key: `data-${device.deviceId}`,
       at: device.latestSampleAt || new Date().toISOString(),
       mark: <svg viewBox="0 0 10 10" className="size-2.5 shrink-0" aria-hidden="true"><path d="M1.5 1.5h7v7h-7z" fill="none" strokeWidth="1.5" className="stroke-warning" /></svg>,
-      title: `${device.name} · ${device.connection === 'OFFLINE' ? '通信离线' : '读数中断'}`,
+      title: `${device.row.device.displayName !== device.name ? `${device.name}（${device.row.device.displayName}）` : device.name} · ${device.connection === 'OFFLINE' ? '通信离线' : '读数中断'}`,
       detail: device.connection === 'OFFLINE' ? '设备离线' : '通信在线，没有新数据',
     })),
   ].sort((left, right) => Date.parse(right.at) - Date.parse(left.at)).slice(0, 7);
@@ -400,7 +400,7 @@ function ParallelBranchCard({ branch, onInspect }: { readonly branch: ParallelBr
           const readings = branchDeviceReadings(device);
           return (
             <button
-              key={device.deviceId}
+              key={device.unitId}
               type="button"
               onClick={() => onInspect(device.deviceId)}
               className="flex w-full cursor-pointer items-center justify-between gap-3 rounded-md px-1 py-2 text-left transition-colors outline-none first:pt-1 last:pb-1 hover:bg-accent/50 focus-visible:ring-3 focus-visible:ring-ring-soft"
@@ -508,7 +508,7 @@ export function RealtimeWorkspace() {
   const equipment = equipmentStatus(plant);
   const controlState = useQuery(siteControlStateQuery(site.id));
   const lockCount = activeLocks(controlState.data).size;
-  const inspected = search.inspect ? plant.devices.find((device) => device.deviceId === search.inspect) : undefined;
+  const inspected = findPlantUnit(plant, search.inspect);
   const setSearch = (patch: { metric?: Metric; window?: Window; inspect?: string }) => void navigate({ search: (previous) => ({ ...previous, ...patch }), replace: true });
 
   return (

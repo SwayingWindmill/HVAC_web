@@ -15,7 +15,7 @@ import {
   fetchPlantDevice,
   snapshotBatches,
   type Plant,
-  type PlantDevice,
+  type PlantUnit,
   type SnapshotsResponse,
 } from './plant';
 import { gateway, registerSignOutHandler, sessionToken } from './platform';
@@ -81,7 +81,7 @@ export async function loadPlant(site: Site, fresh = false): Promise<Plant> {
 }
 
 /** One device's current readings via the single-device observation-snapshot endpoint. */
-export function loadPlantDevice(site: Site, deviceId: string, fresh = false): Promise<PlantDevice | null> {
+export function loadPlantDevice(site: Site, deviceId: string, fresh = false): Promise<PlantUnit | null> {
   const assetModelPath = `/api/v1/sites/${site.id}/asset-model`;
   const client: Pick<Gateway, 'get'> = {
     get: <T>(path: string) => (

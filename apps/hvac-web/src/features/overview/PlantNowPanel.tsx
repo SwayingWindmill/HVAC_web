@@ -11,9 +11,10 @@ import {
   coolingUncertaintyText,
   copUncertaintyText,
   plantReading,
+  plantUnits,
   probeOffsetText,
-  type PlantDevice,
   type PlantReading,
+  type PlantUnit,
   type PlantView,
 } from '@/features/operations/realtime/plant-model';
 import { formatDecimal } from '@/lib/operator-format';
@@ -21,7 +22,7 @@ import { cn } from '@/lib/utils';
 
 type DeviceState = 'running' | 'stopped' | 'fault' | 'offline';
 
-function deviceState(device: PlantDevice): DeviceState {
+function deviceState(device: PlantUnit): DeviceState {
   if (device.connection === 'OFFLINE') return 'offline';
   if (device.runState === 'FAULT') return 'fault';
   return isRunning(device) ? 'running' : 'stopped';
@@ -30,7 +31,7 @@ function deviceState(device: PlantDevice): DeviceState {
 const STATE_LABEL: Readonly<Record<DeviceState, string>> = { running: '运行', stopped: '停机', fault: '故障', offline: '离线' };
 
 /** One device as a shape: ● running, ○ stopped, ▲ fault, a dashed ring offline. */
-function DeviceDot({ device }: { readonly device: PlantDevice }) {
+function DeviceDot({ device }: { readonly device: PlantUnit }) {
   const state = deviceState(device);
   const label = `${device.name} ${STATE_LABEL[state]}`;
   return (
@@ -79,8 +80,9 @@ export function PlantNowPanel({ plant, registryState, siteId, timeZone }: {
   const power = plant.totalPower;
   const cooling = plant.coolingCapacity;
   const max = Math.max(current(power) ?? 0, current(cooling) ?? 0);
+  const units = plantUnits(plant);
   const groups = PLANT_CATEGORY_ORDER.filter((category) => EQUIPMENT_CATEGORIES.has(category))
-    .map((category) => ({ category, devices: plant.devices.filter((device) => device.category === category) }))
+    .map((category) => ({ category, devices: units.filter((unit) => unit.category === category) }))
     .filter((group) => group.devices.length > 0);
   const issues = [status.faults > 0 ? `${status.faults} 台故障` : null, status.offline > 0 ? `${status.offline} 台离线` : null].filter(Boolean);
 
@@ -125,7 +127,7 @@ export function PlantNowPanel({ plant, registryState, siteId, timeZone }: {
             {groups.map((group) => (
               <span key={group.category} className="flex items-center gap-2 text-muted-foreground">
                 {PLANT_CATEGORY_LABELS[group.category]}
-                <span className="flex items-center gap-[3px]">{group.devices.map((device) => <DeviceDot key={device.deviceId} device={device} />)}</span>
+                <span className="flex items-center gap-[3px]">{group.devices.map((device) => <DeviceDot key={device.unitId} device={device} />)}</span>
               </span>
             ))}
             <span className="ml-auto flex items-center gap-3">

@@ -288,3 +288,94 @@ test('web and mini program share identical plant taxonomy, water-loop dictionari
   assert.equal(isPlantDeviceRunning({ connection: 'SLEEPING', runState: 'RUNNING' }), false);
   assert.equal(isPlantDeviceRunning({ connection: 'OFFLINE', runState: 'RUNNING' }), false);
 });
+
+test('web and mini program produce identical PlantUnit aggregation for dual-bound chillers, bare run_state, and PROVISIONAL_READINGS headers', () => {
+  const clonedModel = structuredClone(assetModel);
+  const clonedSnapshots = structuredClone(snapshots);
+  const ts = recordedAt.toISOString();
+
+  const chillerAsset = clonedModel.assets.find((asset: { assetType: string }) => asset.assetType === 'CHILLER');
+  const templateDevice = clonedModel.devices.find((device: { deviceType: string }) => device.deviceType === 'CHILLER_CONTROLLER');
+  const firstPoint = clonedModel.telemetryPoints[0];
+  const firstSnap = clonedSnapshots.items.find((item: { status: string }) => item.status === 'OK').snapshot;
+
+  chillerAsset.waterLoop = 'CHILLED_WATER';
+  chillerAsset.branchCode = 'CH-A';
+
+  const ctrlId = '018f3e00-4000-7000-8000-000000000701';
+  const chwpMainId = '018f3e00-4000-7000-8000-000000000702';
+  const ctHeaderId = '018f3e00-4000-7000-8000-000000000703';
+
+  clonedModel.devices.push(
+    { ...templateDevice, id: ctrlId, code: 'ctrl-chiller-a', displayName: '1# 螺杆主机控制器', deviceType: 'CHILLER_CONTROLLER' },
+    { ...templateDevice, id: chwpMainId, code: 'chwp-main', displayName: '冷冻水泵（总管）', deviceType: 'PROVISIONAL_READINGS' },
+    { ...templateDevice, id: ctHeaderId, code: 'cooling-tower', displayName: '冷却塔', deviceType: 'PROVISIONAL_READINGS' },
+  );
+  clonedModel.relationships.push({
+    id: '018f3e00-6400-7000-8000-000000000701',
+    tenantId: chillerAsset.tenantId,
+    siteId: chillerAsset.siteId,
+    fromType: 'DEVICE',
+    fromId: ctrlId,
+    toType: 'ASSET',
+    toId: chillerAsset.id,
+    role: 'PRIMARY_CONTROLLER',
+    status: 'ACTIVE',
+    validFrom: ts,
+    validTo: null,
+    revision: 1,
+    createdAt: ts,
+    updatedAt: ts,
+  });
+  clonedModel.telemetryPoints.push(
+    { ...firstPoint, id: '018f3e00-5000-7000-8000-000000000701', reportingDeviceId: ctrlId, pointCode: 'run_state', sourceKey: 'run_state', displayName: '1# 主机运行状态', pointType: 'STATE', valueType: 'STRING', unit: null, writable: false, status: 'ACTIVE' },
+    { ...firstPoint, id: '018f3e00-5000-7000-8000-000000000702', reportingDeviceId: chwpMainId, pointCode: 'run_state', sourceKey: 'chwp.run_state', displayName: '运行状态', pointType: 'STATE', valueType: 'STRING', unit: null, writable: false, status: 'ACTIVE' },
+    { ...firstPoint, id: '018f3e00-5000-7000-8000-000000000703', reportingDeviceId: chwpMainId, pointCode: 'flow_rate', sourceKey: 'chwp.flow_rate', displayName: '冷冻水流量', pointType: 'TELEMETRY', valueType: 'NUMBER', unit: 'm3/h', writable: false, status: 'ACTIVE' },
+    { ...firstPoint, id: '018f3e00-5000-7000-8000-000000000704', reportingDeviceId: ctHeaderId, pointCode: 'leaving_water_temperature', sourceKey: 'cooling_tower.leaving_water_temperature', displayName: '冷却塔出水温度', pointType: 'TELEMETRY', valueType: 'NUMBER', unit: 'Cel', writable: false, status: 'ACTIVE' },
+  );
+  const sampleVal = firstSnap.values[0];
+  clonedSnapshots.items.push(
+    {
+      requestId: 'req-ctrl',
+      deviceId: ctrlId,
+      status: 'OK',
+      snapshot: { ...firstSnap, deviceId: ctrlId, values: [{ ...sampleVal, key: 'run_state', value: 'RUNNING', valueType: 'STRING', unit: null }] },
+    },
+    {
+      requestId: 'req-chwp-main',
+      deviceId: chwpMainId,
+      status: 'OK',
+      snapshot: { ...firstSnap, deviceId: chwpMainId, values: [
+        { ...sampleVal, key: 'run_state', value: 'RUNNING', valueType: 'STRING', unit: null },
+        { ...sampleVal, key: 'flow_rate', value: 132, valueType: 'NUMBER', unit: 'm3/h' },
+      ] },
+    },
+    {
+      requestId: 'req-ct-hdr',
+      deviceId: ctHeaderId,
+      status: 'OK',
+      snapshot: { ...firstSnap, deviceId: ctHeaderId, values: [{ ...sampleVal, key: 'leaving_water_temperature', value: 23.7, valueType: 'NUMBER', unit: 'Cel' }] },
+    },
+  );
+
+  const byDeviceId = new Map(clonedSnapshots.items.map((item: { deviceId: string; status: string; snapshot: unknown; problem: unknown }) => [
+    item.deviceId, item.status === 'OK' ? { status: 'ok', snapshot: item.snapshot } : { status: 'error', problem: item.problem },
+  ]));
+  const web = buildPlantView(buildAssetsRows({ assetModel: clonedModel, snapshots: byDeviceId as never, now }), clonedModel);
+  const phone = buildPlant(clonedModel, clonedSnapshots, now);
+
+  const unitSummary = (unit: { unitId: string; category: string; runState: string; deviceIds: readonly string[]; connection: string }) => ({
+    unitId: unit.unitId,
+    category: unit.category,
+    runState: unit.runState,
+    deviceIds: unit.deviceIds,
+    connection: unit.connection,
+  });
+  assert.deepEqual(phone.units.map(unitSummary), web.units.map(unitSummary));
+  assert.equal(web.units.filter((u) => u.category === 'CHILLER').length, 1);
+  assert.equal(web.units.find((u) => u.unitId === chillerAsset.id)?.deviceIds.length, 2);
+  assert.equal(web.branches[0].equipmentCount, 1);
+  assert.equal(phone.branches[0].equipmentCount, 1);
+  assert.equal(web.devices.find((d) => d.deviceId === chwpMainId)?.category, 'METER');
+  assert.equal(phone.devices.find((d) => d.deviceId === chwpMainId)?.runState, 'RUNNING');
+});

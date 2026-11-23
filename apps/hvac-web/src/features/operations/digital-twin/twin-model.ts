@@ -1,5 +1,5 @@
 import type { Asset } from '@/api/generated/platformGateway.gen';
-import { isRunning, plantReading, type PlantDevice, type PlantReading, type PlantView } from '../realtime/plant-model.ts';
+import { isRunning, plantReading, plantUnits, type PlantDevice, type PlantReading, type PlantUnit, type PlantView } from '../realtime/plant-model.ts';
 
 // The cold side of the digital twin, built from what the Registry has: every chiller, cooling tower and
 // pump asset is drawn, live when a device is bound to it and「未接入」when none is. Nothing is placed
@@ -20,7 +20,7 @@ export interface TwinEquipment {
   readonly kind: TwinKind;
   readonly state: TwinState;
   /** The bound device, whose side sheet opens on selection. */
-  readonly device: PlantDevice | null;
+  readonly device: PlantUnit | PlantDevice | null;
   readonly readings: readonly TwinReading[];
   /** The same readings by source key, for labels placed on the part they measure. */
   readonly values: Readonly<Record<string, TwinReading>>;
@@ -63,7 +63,7 @@ const READING_KEYS: Readonly<Record<TwinKind, readonly string[]>> = {
   vav: [],
 };
 
-function stateOf(device: PlantDevice | null): TwinState {
+function stateOf(device: PlantUnit | PlantDevice | null): TwinState {
   if (!device) return 'unconnected';
   if (device.connection === 'OFFLINE') return 'offline';
   if (device.runState === 'RUNNING') return 'running';
@@ -72,7 +72,7 @@ function stateOf(device: PlantDevice | null): TwinState {
   return 'unknown';
 }
 
-function valuesOf(device: PlantDevice | null, kind: TwinKind): Record<string, TwinReading> {
+function valuesOf(device: PlantUnit | PlantDevice | null, kind: TwinKind): Record<string, TwinReading> {
   if (!device) return {};
   return Object.fromEntries(READING_KEYS[kind].flatMap((sourceKey) => {
     const reading = device.reading(sourceKey);
@@ -81,8 +81,9 @@ function valuesOf(device: PlantDevice | null, kind: TwinKind): Record<string, Tw
 }
 
 export function buildTwinPlant(assets: readonly Asset[], plant: PlantView): TwinPlant {
-  const deviceFor = (assetId: string) => plant.devices.find((device) =>
-    device.row.binding.state === 'bound' && device.row.binding.asset.id === assetId) ?? null;
+  const units = plantUnits(plant);
+  const deviceFor = (assetId: string) => units.find((unit) =>
+    unit.assetId === assetId || (unit.row?.binding?.state === 'bound' && unit.row.binding.asset.id === assetId)) ?? null;
   const equipment = assets
     .filter((asset) => asset.status === 'ACTIVE' && KIND_BY_ASSET_TYPE[asset.assetType])
     .sort((left, right) => left.code.localeCompare(right.code))
@@ -93,7 +94,7 @@ export function buildTwinPlant(assets: readonly Asset[], plant: PlantView): Twin
       return { assetId: asset.id, name: asset.displayName, kind, state: stateOf(device), device, readings: Object.values(values), values };
     });
   const ofKind = (kind: TwinKind) => equipment.filter((item) => item.kind === kind);
-  const runningIn = (category: PlantDevice['category']) => plant.devices.some((device) => device.category === category && isRunning(device));
+  const runningIn = (category: PlantDevice['category']) => units.some((unit) => unit.category === category && isRunning(unit));
   return {
     chillers: ofKind('chiller'),
     towers: ofKind('tower'),

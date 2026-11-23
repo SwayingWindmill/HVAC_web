@@ -20,8 +20,9 @@ import { activeLocks, controlActorLabel, LOCK_PRESENTATION, siteControlStateQuer
 import { formatCompactTime, formatTime } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import { pointIsTrusted } from '@/features/assets/operational-projection';
+import { assetsDeviceTypeLabel } from '@/features/assets/model';
 import { deviceStatus, KEY_READINGS, POWER_KEY } from '../../realtime/device-presentation';
-import type { PlantDevice } from '../../realtime/plant-model';
+import { unitPoints, type PlantDevice, type PlantUnit } from '../../realtime/plant-model';
 import { dayHistoryWindow, deviceDayHistoryQuery, MAX_HISTORY_KEYS } from '../device-history';
 import { boundAssetId, deviceLocation, deviceTagTokens } from '../device-ledger';
 import { buildTimeSlots, fillGaugeSlots } from '../../trends/timeline';
@@ -33,18 +34,39 @@ const CONNECTION_LABELS = { ONLINE: '在线', SLEEPING: '休眠中', OFFLINE: '�
 /** What 解释 asks the assistant about a device: how it ran over the last day and whether its readings look wrong now. */
 const explainDeviceQuestion = (name: string) => `「${name}」最近 24 小时运行得怎么样？现在的读数有没有异常？`;
 
-/** Numeric measurements worth a trend, the role's key readings first. */
-function trendKeys(device: PlantDevice): string[] {
+interface TrendTarget {
+  readonly id: string;
+  readonly deviceId: string;
+  readonly pointCode: string;
+  readonly label: string;
+  readonly unit: string | null;
+}
+
+/** Numeric measurements worth a trend across all bound devices of a unit, key readings first. */
+function trendTargets(device: PlantUnit): TrendTarget[] {
   const preferred = [POWER_KEY[device.category], ...KEY_READINGS[device.category]].filter((key): key is string => Boolean(key));
   const rank = (sourceKey: string) => {
     const index = preferred.indexOf(sourceKey);
     return index === -1 ? preferred.length : index;
   };
-  return device.row.telemetryPoints
-    .filter((point) => point.status === 'ACTIVE' && point.pointType === 'TELEMETRY' && point.valueType === 'NUMBER')
-    .sort((left, right) => rank(left.sourceKey) - rank(right.sourceKey))
+  const candidates: { readonly member: PlantDevice; readonly point: PlantDevice['row']['telemetryPoints'][number] }[] = [];
+  for (const member of device.members) {
+    for (const point of member.row.telemetryPoints) {
+      if (point.status === 'ACTIVE' && point.pointType === 'TELEMETRY' && point.valueType === 'NUMBER') {
+        candidates.push({ member, point });
+      }
+    }
+  }
+  return candidates
+    .sort((left, right) => rank(left.point.sourceKey) - rank(right.point.sourceKey))
     .slice(0, MAX_HISTORY_KEYS)
-    .map((point) => point.pointCode);
+    .map(({ member, point }) => ({
+      id: `${member.deviceId}:${point.pointCode}`,
+      deviceId: member.deviceId,
+      pointCode: point.pointCode,
+      label: member.row.operational.points.find((candidate) => candidate.key === point.pointCode)?.label ?? point.pointCode,
+      unit: formatTelemetryUnit(point.unit),
+    }));
 }
 
 /** The asset's control lock, owned by the control page: shown here only as a summary with the way there. */
@@ -68,20 +90,20 @@ function ControlLockSummary({ siteId, assetId, myId, timeZone }: { readonly site
 }
 
 export function DeviceInspector({ device, categoryLabel, onClose }: {
-  readonly device: PlantDevice | undefined;
+  readonly device: PlantUnit | undefined;
   readonly categoryLabel: string;
   readonly onClose: () => void;
 }) {
   return (
     <Sheet modal={false} open={Boolean(device)} onOpenChange={(open) => { if (!open) onClose(); }}>
       <SheetContent showOverlay={false} className="overflow-y-auto">
-        {device ? <DeviceDetail key={device.deviceId} device={device} categoryLabel={categoryLabel} /> : null}
+        {device ? <DeviceDetail key={device.unitId} device={device} categoryLabel={categoryLabel} /> : null}
       </SheetContent>
     </Sheet>
   );
 }
 
-function DeviceDetail({ device, categoryLabel }: { readonly device: PlantDevice; readonly categoryLabel: string }) {
+function DeviceDetail({ device, categoryLabel }: { readonly device: PlantUnit; readonly categoryLabel: string }) {
   const { site, principal } = siteRoute.useRouteContext();
   const queryClient = useQueryClient();
   const explain = useAssistantPanel((state) => state.explain);
@@ -90,7 +112,7 @@ function DeviceDetail({ device, categoryLabel }: { readonly device: PlantDevice;
   const status = deviceStatus(device);
   const assetId = boundAssetId(device);
   const tags = deviceTagTokens(device);
-  const points = device.row.operational.points;
+  const points = unitPoints(device);
 
   const workOrders = useQuery({
     queryKey: workOrderKeys.source(site.id, 'ASSET', assetId ?? ''),
@@ -117,7 +139,7 @@ function DeviceDetail({ device, categoryLabel }: { readonly device: PlantDevice;
       <div className="flex flex-col gap-5 px-5 py-4">
         <dl className="grid grid-cols-3 divide-x divide-divider rounded-lg border border-divider bg-muted py-2.5">
           {([
-            ['通信', CONNECTION_LABELS[device.connection]],
+            ['通信', device.offlineMemberCount > 0 && device.connection !== 'OFFLINE' ? `部分离线（${device.offlineMemberCount}/${device.members.length}）` : CONNECTION_LABELS[device.connection]],
             ['最近数据', formatTime(device.latestSampleAt ?? undefined, site.timezone)],
             ['登记时间', formatTime(device.row.device.createdAt, site.timezone)],
           ] as const).map(([label, value]) => (
@@ -144,20 +166,47 @@ function DeviceDetail({ device, categoryLabel }: { readonly device: PlantDevice;
 
         {assetId ? <ControlLockSummary siteId={site.id} assetId={assetId} myId={principal.principalId} timeZone={site.timezone} /> : null}
 
+        {device.members.length > 1 ? (
+          <section aria-label="接入设备" className="flex flex-col gap-2">
+            <h3 className="text-sm font-semibold">接入设备<span className="ml-2 text-xs font-normal text-muted-foreground">{device.members.length} 台合并展示</span></h3>
+            <ul className="divide-y divide-divider rounded-lg border border-divider bg-muted/40">
+              {device.members.map((member) => {
+                const memberStatus = deviceStatus(member);
+                return (
+                  <li key={member.deviceId} className="flex items-center justify-between gap-2 px-3 py-2 text-xs">
+                    <div className="min-w-0">
+                      <p className="truncate font-medium text-foreground">{member.row.device.displayName}</p>
+                      <p className="truncate text-[11px] text-muted-foreground">
+                        {assetsDeviceTypeLabel(member.row.device.deviceType)} · {member.row.operational.points.length} 个点位
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <StatusBadge tone={memberStatus.tone} label={memberStatus.label} />
+                      <span className="font-mono text-[11px] text-muted-foreground">
+                        {formatCompactTime(member.latestSampleAt ?? undefined, site.timezone)}
+                      </span>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        ) : null}
+
         <section className="flex flex-col gap-2.5">
           <h3 className="text-sm font-semibold">当前读数<span className="ml-2 text-xs font-normal text-muted-foreground">{points.length} 个点位</span></h3>
           {points.length === 0 ? (
             <p className="text-sm text-muted-foreground">该设备还没有登记点位</p>
           ) : (
             <dl className="grid grid-cols-2 gap-2">
-              {points.map((point) => {
+              {points.map(({ device: member, point }) => {
                 const current = pointIsTrusted(point);
                 const healthBadges = { SUSPECT: ['可疑', 'warning'], BAD: ['无效', 'destructive'], STALE: ['过期', 'neutral'] } as const;
                 const health = point.health && point.health.status !== 'HEALTHY'
                   ? healthBadges[point.health.status]
                   : null;
                 return (
-                  <div key={point.key} className="flex min-w-0 flex-col gap-0.5 rounded-lg border border-divider bg-muted px-3 py-2">
+                  <div key={`${member.deviceId}:${point.key}`} className="flex min-w-0 flex-col gap-0.5 rounded-lg border border-divider bg-muted px-3 py-2">
                     <dt className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
                       <span className="truncate">{point.label}</span>
                       {health ? <StatusBadge tone={health[1]} label={health[0]} /> : null}
@@ -166,6 +215,9 @@ function DeviceDetail({ device, categoryLabel }: { readonly device: PlantDevice;
                       {point.state === 'PRESENT' ? point.displayValue : '—'}
                       {point.state === 'PRESENT' && point.unit ? <span className="ml-1 text-xs font-medium text-subtle-foreground">{point.unit}</span> : null}
                     </dd>
+                    {device.members.length > 1 ? (
+                      <p className="truncate text-[11px] text-subtle-foreground">{member.row.device.displayName}</p>
+                    ) : null}
                     {point.measurement ? (
                       <p className="text-xs text-muted-foreground">
                         {point.measurement.lowConfidence ? '低置信 · ' : ''}不确定度 ±{(point.measurement.relative * 100).toFixed(point.measurement.relative >= 0.1 ? 0 : 1)}%
@@ -226,33 +278,35 @@ function DeviceDetail({ device, categoryLabel }: { readonly device: PlantDevice;
   );
 }
 
-function DayTrend({ device }: { readonly device: PlantDevice }) {
+function DayTrend({ device }: { readonly device: PlantUnit }) {
   const { site, principal } = siteRoute.useRouteContext();
-  const keys = trendKeys(device);
-  const [selected, setSelected] = useState(keys[0]);
-  const window = useMemo(() => dayHistoryWindow(), [device.deviceId]);
+  const targets = trendTargets(device);
+  const [selectedId, setSelectedId] = useState(targets[0]?.id ?? '');
+  const activeTarget = targets.find((target) => target.id === selectedId) ?? targets[0];
+  const deviceKeys = activeTarget
+    ? targets.filter((target) => target.deviceId === activeTarget.deviceId).map((target) => target.pointCode)
+    : [];
+  const window = useMemo(() => dayHistoryWindow(), [activeTarget?.deviceId ?? device.unitId]);
   const history = useQuery({
     ...deviceDayHistoryQuery({
       siteId: site.id,
-      deviceId: device.deviceId,
-      keys,
+      deviceId: activeTarget?.deviceId ?? device.deviceId,
+      keys: deviceKeys,
       timezone: site.timezone,
       csrfToken: principal.session.csrfToken,
       window,
     }),
-    enabled: keys.length > 0 && principal.authorization.capabilities.includes('telemetry.history.read'),
+    enabled: Boolean(activeTarget) && principal.authorization.capabilities.includes('telemetry.history.read'),
   });
-  if (keys.length === 0) return null;
+  if (!activeTarget) return null;
 
-  const labelOf = (key: string) => device.row.operational.points.find((point) => point.key === key)?.label ?? key;
-  const point = device.row.telemetryPoints.find((candidate) => candidate.pointCode === selected);
-  const unit = formatTelemetryUnit(point?.unit);
+  const unit = activeTarget.unit;
   const hour = new Intl.DateTimeFormat('zh-CN', { timeZone: site.timezone, hour: '2-digit', minute: '2-digit', hour12: false });
   const formatHour = (value: unknown) => {
     const ms = typeof value === 'string' && value.trim() === '' ? NaN : Number(value);
     return Number.isFinite(ms) ? hour.format(new Date(ms)) : '';
   };
-  const recorded = history.data?.get(selected) ?? [];
+  const recorded = history.data?.get(activeTarget.pointCode) ?? [];
   const slots = buildTimeSlots({
     fromMs: window.fromMs,
     toMs: window.toMs,
@@ -271,10 +325,10 @@ function DayTrend({ device }: { readonly device: PlantDevice }) {
     <section className="flex flex-col gap-3">
       <div className="flex items-center justify-between gap-3">
         <h3 className="text-sm font-semibold">最近 24 小时<span className="ml-2 text-xs font-normal text-muted-foreground">每小时平均值与范围</span></h3>
-        <Select value={selected} onValueChange={setSelected}>
-          <SelectTrigger className="h-8 w-40" aria-label="趋势读数"><SelectValue /></SelectTrigger>
+        <Select value={activeTarget.id} onValueChange={setSelectedId}>
+          <SelectTrigger className="h-8 w-44" aria-label="趋势读数"><SelectValue /></SelectTrigger>
           <SelectContent>
-            {keys.map((key) => <SelectItem key={key} value={key}>{labelOf(key)}</SelectItem>)}
+            {targets.map((target) => <SelectItem key={target.id} value={target.id}>{target.label}</SelectItem>)}
           </SelectContent>
         </Select>
       </div>

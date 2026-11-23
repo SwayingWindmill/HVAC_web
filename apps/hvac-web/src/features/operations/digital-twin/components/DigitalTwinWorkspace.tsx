@@ -48,7 +48,13 @@ export function DigitalTwinWorkspace() {
   const view: CameraView = search.view ?? 'overview';
   const cut = plan && search.floor && search.floor <= plan.floors.length ? search.floor : null;
   const all = twin ? [...twin.chillers, ...twin.towers, ...twin.chilledPumps, ...twin.coolingPumps, ...terminals.map((terminal) => terminal.equipment)] : [];
-  const selected = search.inspect ? all.find((item) => item.device?.deviceId === search.inspect || item.assetId === search.inspect) ?? null : null;
+  const inspectId = search.inspect;
+  const selected = inspectId
+    ? all.find((item) =>
+      item.assetId === inspectId
+      || item.device?.deviceId === inspectId
+      || (item.device && 'deviceIds' in item.device && item.device.deviceIds.includes(inspectId))) ?? null
+    : null;
 
   const setSearch = (patch: Partial<typeof search>) => void navigate({ search: (previous) => ({ ...previous, ...patch }), replace: true });
   const select = (item: TwinEquipment | null) => setSearch({ inspect: item ? item.device?.deviceId ?? item.assetId : undefined });

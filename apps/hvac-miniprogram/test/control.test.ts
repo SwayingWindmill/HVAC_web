@@ -675,3 +675,23 @@ test('auto-control lease banner presents closed-loop, shadow, manual backoff pre
   const missingResult = await fetchSiteAutoControlLease(notFoundGw, 'site-1');
   assert.equal(missingResult, null);
 });
+
+test('parseDeviceControlTargets aggregates commands from a sibling controller bound to the same Asset', () => {
+  const base = sampleAssetModel();
+  const extended: RawSiteAssetModel = {
+    ...base,
+    devices: [
+      ...base.devices,
+      { id: 'meter-chiller-1', code: 'meter-chiller-1', displayName: '1 号冷机电表', deviceType: 'HVAC_POWER_METER', status: 'ACTIVE' },
+    ],
+    relationships: [
+      ...base.relationships,
+      { id: 'r-bind-ctrl', fromType: 'DEVICE', fromId: 'dev-chiller-1', toType: 'ASSET', toId: 'asset-chiller-1', role: 'PRIMARY_CONTROLLER', status: 'ACTIVE', validFrom: '2026-01-01T00:00:00Z', revision: 1 },
+      { id: 'r-bind-meter', fromType: 'DEVICE', fromId: 'meter-chiller-1', toType: 'ASSET', toId: 'asset-chiller-1', role: 'MEASURES', status: 'ACTIVE', validFrom: '2026-01-01T00:00:00Z', revision: 1 },
+    ],
+  };
+  const targets = parseDeviceControlTargets(extended, 'meter-chiller-1', new Date('2026-11-18T10:00:00Z'));
+  assert.equal(targets.length, 1);
+  assert.equal(targets[0].deviceId, 'dev-chiller-1');
+  assert.deepEqual(targets[0].actions.map((item) => item.capability), ['START', 'STOP', 'RESET_FAULT']);
+});

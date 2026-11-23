@@ -29,7 +29,7 @@ import {
   type SiteControlState,
 } from '../../lib/control';
 import { electricityByDevice, siteTodayStart } from '../../lib/energy';
-import type { PlantDevice } from '../../lib/plant';
+import type { PlantUnit } from '../../lib/plant';
 import { loadPlant, loadPlantDevice, loadSiteAssetModel } from '../../lib/plant-load';
 import { gateway, requireSession } from '../../lib/platform';
 import { whileShown } from '../../lib/refresh';
@@ -52,7 +52,7 @@ let deviceId = '';
 let isVisible = false;
 let pageGeneration = 0;
 let currentSiteRef: Site | null = null;
-let currentDeviceRef: PlantDevice | null = null;
+let currentDeviceRef: PlantUnit | null = null;
 let currentTargets: DeviceControlTarget[] = [];
 let draftValues: Record<string, number> = {};
 let inputDraftText: Record<string, string> = {};
@@ -68,13 +68,13 @@ function stopCommandPolling(): void {
 }
 
 /** Today's electricity of the Site and of this device's own meter; a failed read leaves the chart out with a note. */
-async function loadToday(site: Site, dayStart: PromiseSettledResult<string | null>, now: Date): Promise<{ today: DeviceToday | null; note: string }> {
+async function loadToday(site: Site, dayStart: PromiseSettledResult<string | null>, now: Date, matchIds: readonly string[]): Promise<{ today: DeviceToday | null; note: string }> {
   if (dayStart.status === 'rejected') return { today: null, note: ELECTRICITY_UNREADABLE };
   const start = dayStart.value;
   if (start === null) return { today: null, note: '' };
   try {
     const series = await electricityByDevice(site, { from: start, to: now.toISOString() });
-    const own = series.devices?.find((device) => device.deviceId === deviceId);
+    const own = series.devices?.find((item) => matchIds.includes(item.deviceId));
     return { today: { start, now, site: series.points, device: own?.points ?? null }, note: '' };
   } catch {
     return { today: { start, now, site: [], device: null }, note: ELECTRICITY_UNREADABLE };
@@ -187,9 +187,9 @@ Page({
       const hasControllablePoints = targets.length > 0;
       const canControl = hasControllablePoints && canSubmitCommands(principal);
 
-      const runStateByDeviceId = new Map<string, string>([
-        [device.deviceId, device.connection === 'OFFLINE' ? 'OFFLINE' : device.runState],
-      ]);
+      const runStateByDeviceId = new Map<string, string>(
+        device.deviceIds.map((id) => [id, device.connection === 'OFFLINE' ? 'OFFLINE' : device.runState]),
+      );
       const nameByDeviceId = new Map<string, string>(
         (rawModel?.devices ?? []).map((item) => [item.id, item.displayName]),
       );
@@ -210,9 +210,13 @@ Page({
 
       let openStatus: PresentedCommandStatus | null = null;
       const controlTargets: ControlTargetView[] = targets.map((target) => {
+        const targetController = device.members.find((member) => member.deviceId === target.deviceId);
+        const deviceForGuard = targetController && targetController.connection === 'OFFLINE'
+          ? { ...device, connection: targetController.connection }
+          : device;
         const evaluated = evaluateControlGuards({
           target,
-          device,
+          device: deviceForGuard,
           controlState,
           commands,
           runStateByDeviceId,
@@ -231,7 +235,7 @@ Page({
         };
       });
 
-      const { today, note } = await loadToday(site, dayStart[0], now);
+      const { today, note } = await loadToday(site, dayStart[0], now, device.deviceIds);
       if (generation !== pageGeneration) return;
       currentSiteRef = site;
       currentDeviceRef = device;

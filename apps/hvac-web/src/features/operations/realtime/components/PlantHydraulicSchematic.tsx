@@ -148,7 +148,7 @@ function NodeCard({
 }) {
   const { device, primaryReading, secondaryReading, branchCode, valves, hasIssue } = node;
   const running = isRunning(device);
-  const selected = selectedDeviceId === device.deviceId;
+  const selected = Boolean(selectedDeviceId && (device.unitId === selectedDeviceId || device.deviceIds.includes(selectedDeviceId)));
   const status = deviceStatus(device);
 
   const dotClass = status.tone === 'running'
@@ -275,7 +275,7 @@ function StageColumn({
         <div className="flex flex-col gap-1.5">
           {nodes.map((node) => (
             <NodeCard
-              key={node.device.deviceId}
+              key={node.device.unitId}
               node={node}
               selectedDeviceId={selectedDeviceId}
               onInspect={onInspect}
@@ -497,7 +497,7 @@ export function PlantHydraulicSchematic({
                     <div className="flex flex-col gap-1.5">
                       {schematic.zones.map((node) => (
                         <NodeCard
-                          key={node.device.deviceId}
+                          key={node.device.unitId}
                           node={node}
                           selectedDeviceId={selectedDeviceId}
                           onInspect={onInspect}
@@ -662,7 +662,7 @@ export function PlantHydraulicSchematic({
                   <div className="flex flex-col gap-1.5">
                     {schematic.zones.map((node) => (
                       <NodeCard
-                        key={node.device.deviceId}
+                        key={node.device.unitId}
                         node={node}
                         selectedDeviceId={selectedDeviceId}
                         onInspect={onInspect}

@@ -381,14 +381,17 @@ export function normalizeTotpCode(raw: string): string {
   return raw.replace(/\D+/g, '').slice(0, 6);
 }
 
-function isRelationshipActive(rel: RawSiteAssetModel['relationships'][number], at: Date): boolean {
-  if (rel.status !== 'ACTIVE' || rel.role !== 'CONTROLS') return false;
-  if (rel.fromType !== 'POINT' || rel.toType !== 'ASSET') return false;
+function isRelationshipValidAt(rel: RawSiteAssetModel['relationships'][number], at: Date): boolean {
+  if (rel.status !== 'ACTIVE') return false;
   const start = new Date(rel.validFrom);
   if (Number.isNaN(start.getTime()) || start > at) return false;
   if (rel.validTo === undefined || rel.validTo === null) return true;
   const end = new Date(rel.validTo);
   return !Number.isNaN(end.getTime()) && end > at;
+}
+
+function isRelationshipActive(rel: RawSiteAssetModel['relationships'][number], at: Date): boolean {
+  return rel.role === 'CONTROLS' && rel.fromType === 'POINT' && rel.toType === 'ASSET' && isRelationshipValidAt(rel, at);
 }
 
 function parseInterlocks(
@@ -425,24 +428,40 @@ export function parseDeviceControlTargets(
 ): DeviceControlTarget[] {
   const assetsById = new Map(model.assets.map((asset) => [asset.id, asset]));
   const deviceCodeById = new Map(model.devices.map((device) => [device.id, device.code ?? device.displayName]));
+  const boundAssetIdsForDevice = (id: string): Set<string> => new Set(
+    model.relationships
+      .filter((rel) => rel.fromType === 'DEVICE' && rel.fromId === id && rel.toType === 'ASSET' && isRelationshipValidAt(rel, at))
+      .map((rel) => rel.toId),
+  );
+  const directAssets = boundAssetIdsForDevice(deviceId);
+  const singleAssetId = directAssets.size === 1 ? [...directAssets][0] : null;
+  const targetDeviceIds = new Set<string>([deviceId]);
+  if (singleAssetId) {
+    for (const candidate of model.devices) {
+      if (candidate.id !== deviceId && boundAssetIdsForDevice(candidate.id).has(singleAssetId)) {
+        targetDeviceIds.add(candidate.id);
+      }
+    }
+  }
   const activePointsById = new Map(
     model.telemetryPoints
-      .filter((point) => point.reportingDeviceId === deviceId && point.status === 'ACTIVE')
+      .filter((point) => targetDeviceIds.has(point.reportingDeviceId) && point.status === 'ACTIVE')
       .map((point) => [point.id, point]),
   );
 
-  const grouped = new Map<string, { actions: DeviceControlAction[]; settings: DeviceControlSetting[] }>();
+  const grouped = new Map<string, { controllerDeviceId: string; actions: DeviceControlAction[]; settings: DeviceControlSetting[] }>();
   for (const rel of model.relationships) {
     if (!isRelationshipActive(rel, at)) continue;
     const point = activePointsById.get(rel.fromId);
     if (!point || point.pointType !== 'COMMAND' || point.writable !== true) continue;
+    if (singleAssetId && point.reportingDeviceId !== deviceId && rel.toId !== singleAssetId) continue;
     const asset = assetsById.get(rel.toId);
     if (!asset || (asset.status !== undefined && asset.status !== 'ACTIVE')) continue;
 
     const meta = metadataRecord(point);
     if (meta.actuationMode === 'EMERGENCY_DO_RELEASE') continue;
     const capability = typeof meta.capability === 'string' ? meta.capability : '';
-    const bucket = grouped.get(asset.id) ?? { actions: [], settings: [] };
+    const bucket = grouped.get(asset.id) ?? { controllerDeviceId: point.reportingDeviceId, actions: [], settings: [] };
     grouped.set(asset.id, bucket);
 
     if (isActionCapability(capability)) {
@@ -472,7 +491,7 @@ export function parseDeviceControlTargets(
     const feedback = feedbackCode === null
       ? undefined
       : model.telemetryPoints.find((candidate) => (
-        candidate.reportingDeviceId === deviceId
+        (candidate.reportingDeviceId === point.reportingDeviceId || targetDeviceIds.has(candidate.reportingDeviceId))
         && candidate.pointType !== 'COMMAND'
         && candidate.pointCode === feedbackCode
       ));
@@ -498,7 +517,7 @@ export function parseDeviceControlTargets(
         assetId,
         assetName: asset.displayName,
         assetType: asset.assetType,
-        deviceId,
+        deviceId: bucket.controllerDeviceId,
         actions: [...bucket.actions].sort(
           (left, right) => ACTION_ORDER.indexOf(left.capability) - ACTION_ORDER.indexOf(right.capability),
         ),

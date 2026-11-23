@@ -1,20 +1,24 @@
 import type { SiteAssetModel } from '@/api/generated/platformGateway.gen';
 import type { AssetsDeviceRow, AssetsPointView } from '@/features/assets/model';
 import {
+  aggregatePlantUnits,
   buildParallelBranchGroups,
   cleanBranchCode,
   classifyPlantCategory,
   EQUIPMENT_CATEGORIES,
+  findFaultCodePoint,
   findLoopDifferentialPressure,
+  findRunStatePoint,
   inferHydraulicAssetIndex,
   isPlantDeviceRunning,
   parseRunState,
   parseWaterLoop,
   PLANT_CATEGORY_LABELS,
   PLANT_CATEGORY_ORDER,
-  RUN_STATE_NAMESPACE_BY_CATEGORY,
+  readingQualityRank,
   WATER_LOOP_LABELS,
   WATER_LOOP_ORDER,
+  type AggregatedPlantUnitMeta,
   type ConnectionState,
   type HydraulicAssetInput,
   type HydraulicAssetMeta,
@@ -80,6 +84,14 @@ export interface PlantDevice {
   reading(sourceKey: string): PlantReading | null;
 }
 
+/** Physical plant machine (or standalone unbound device) aggregating all devices bound to the same Asset. */
+export interface PlantUnit extends PlantDevice {
+  readonly unitId: string;
+  readonly members: readonly PlantDevice[];
+  readonly deviceIds: readonly string[];
+  readonly offlineMemberCount: number;
+}
+
 export interface PlantGroup {
   readonly category: PlantCategory;
   readonly label: string;
@@ -91,7 +103,7 @@ export interface ParallelBranch {
   readonly waterLoop: WaterLoopKind | null;
   readonly loopLabel: string;
   readonly branchCode: string;
-  readonly devices: readonly PlantDevice[];
+  readonly devices: readonly PlantUnit[];
   readonly equipmentCount: number;
   readonly runningCount: number;
   readonly hasAlert: boolean;
@@ -99,7 +111,10 @@ export interface ParallelBranch {
 
 export interface PlantView {
   readonly groups: readonly PlantGroup[];
+  /** Raw communication devices (excluding GATEWAY): used for online counts, history queries, and header/probe reads. */
   readonly devices: readonly PlantDevice[];
+  /** Asset-grouped physical plant units: used for equipment counts, schematic nodes, branches, twin, and ledger. */
+  readonly units: readonly PlantUnit[];
   readonly branches: readonly ParallelBranch[];
   readonly loopBranches: Readonly<Partial<Record<WaterLoopKind, number>>>;
   readonly onlineCount: number;
@@ -172,15 +187,13 @@ function connectionOf(row: AssetsDeviceRow): ConnectionState {
 }
 
 function runStateOf(row: AssetsDeviceRow, category: PlantCategory): RunState {
-  const namespace = RUN_STATE_NAMESPACE_BY_CATEGORY[category];
-  if (!namespace) return 'UNKNOWN';
-  const point = row.telemetryPoints.find((candidate) => candidate.sourceKey === `${namespace}.run_state`);
+  const point = findRunStatePoint(row.telemetryPoints, category);
   const value = point ? snapshotValue(row, point.pointCode) : undefined;
   return parseRunState(value);
 }
 
 function faultCodeOf(row: AssetsDeviceRow): string | null {
-  const point = row.telemetryPoints.find((candidate) => candidate.sourceKey.endsWith('.fault_code'));
+  const point = findFaultCodePoint(row.telemetryPoints);
   const value = point ? snapshotValue(row, point.pointCode) : undefined;
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
@@ -238,6 +251,88 @@ function firstReading(devices: readonly PlantDevice[], sourceKey: string): Plant
   return null;
 }
 
+function toPlantUnit(meta: AggregatedPlantUnitMeta<PlantDevice, PlantReading>): PlantUnit {
+  const { primary, members, deviceIds, unitId, offlineMemberCount, connection, runState, faultCode, latestSampleAt, hasStaleData, pickReading } = meta;
+  return {
+    ...primary,
+    unitId,
+    members,
+    deviceIds,
+    offlineMemberCount,
+    connection,
+    runState,
+    faultCode,
+    latestSampleAt,
+    hasStaleData,
+    reading: (sourceKey) => pickReading(sourceKey),
+  };
+}
+
+export function toStandaloneUnit(device: PlantDevice): PlantUnit {
+  return {
+    ...device,
+    unitId: device.assetId ?? device.deviceId,
+    members: [device],
+    deviceIds: [device.deviceId],
+    offlineMemberCount: device.connection === 'OFFLINE' ? 1 : 0,
+  };
+}
+
+export function plantUnits(
+  view: Pick<PlantView, 'devices'> & { readonly units?: readonly PlantUnit[] },
+): readonly PlantUnit[] {
+  return view.units ?? view.devices.map(toStandaloneUnit);
+}
+
+export function findPlantUnit(
+  view: Pick<PlantView, 'devices'> & { readonly units?: readonly PlantUnit[] },
+  id: string | undefined,
+): PlantUnit | undefined {
+  if (!id) return undefined;
+  return plantUnits(view).find(
+    (unit) => unit.unitId === id || unit.deviceId === id || unit.assetId === id || unit.deviceIds.includes(id),
+  );
+}
+
+export interface UnitPointEntry {
+  readonly device: PlantDevice;
+  readonly point: AssetsPointView;
+}
+
+export function unitPoints(unit: PlantUnit | PlantDevice): readonly UnitPointEntry[] {
+  const members = 'members' in unit ? unit.members : [unit];
+  return members.flatMap((member) => member.row.operational.points.map((point) => ({ device: member, point })));
+}
+
+export function unitPointTarget(
+  unit: PlantUnit | PlantDevice,
+  sourceKey: string,
+): { readonly deviceId: string; readonly pointCode: string } | null {
+  const members = 'members' in unit ? unit.members : [unit];
+  let best: { readonly deviceId: string; readonly pointCode: string; readonly rank: number } | null = null;
+  for (const member of members) {
+    const point = member.row.telemetryPoints.find(
+      (candidate) => candidate.sourceKey === sourceKey && candidate.status === 'ACTIVE',
+    );
+    if (!point) continue;
+    const reading = member.reading(sourceKey);
+    const rank = reading ? readingQualityRank(reading) : -1;
+    if (!best || rank > best.rank) {
+      best = { deviceId: member.deviceId, pointCode: point.pointCode, rank };
+    }
+  }
+  return best ? { deviceId: best.deviceId, pointCode: best.pointCode } : null;
+}
+
+export function provisionalHeaderReading(view: Pick<PlantView, 'devices'>, sourceKey: string): PlantReading | null {
+  for (const device of view.devices) {
+    if (device.assetId !== null || device.row?.device?.deviceType !== 'PROVISIONAL_READINGS') continue;
+    const reading = device.reading(sourceKey);
+    if (reading) return reading;
+  }
+  return null;
+}
+
 export function buildPlantView(
   rows: readonly AssetsDeviceRow[],
   assetModel?: Pick<SiteAssetModel, 'assets' | 'relationships'>,
@@ -254,7 +349,9 @@ export function buildPlantView(
         .sort((left, right) => left.name.localeCompare(right.name, 'zh-CN')),
     }))
     .filter((group) => group.devices.length > 0);
-  const { branches, loopBranches } = buildParallelBranchGroups(devices);
+  const units = aggregatePlantUnits<PlantDevice, PlantReading>(devices, { observedPointCount: (device) => device.row.operational.points.length })
+    .map(toPlantUnit);
+  const { branches, loopBranches } = buildParallelBranchGroups(units);
   const totalPower = firstReading(devices, 'hvac_meter.active_power');
   const coolingCapacity = firstReading(devices, 'btu_meter.instant_cooling_capacity');
   const plantCop = totalPower?.current && (coolingCapacity?.current || coolingCapacity?.lowConfidence)
@@ -264,6 +361,7 @@ export function buildPlantView(
   return {
     groups,
     devices,
+    units,
     branches,
     loopBranches,
     onlineCount: devices.filter((device) => device.connection === 'ONLINE').length,
@@ -353,7 +451,7 @@ export interface TileReadings {
  * its role's other key readings. A device without any of them (a Gateway-wired meter or acquisition
  * module) shows its own numeric measurements instead, current ones first, so its tile is never blank.
  */
-export function tileReadings(device: PlantDevice, preferredKeys: readonly string[], factKeys: readonly string[]): TileReadings {
+export function tileReadings(device: PlantUnit | PlantDevice, preferredKeys: readonly string[], factKeys: readonly string[]): TileReadings {
   const pick = (keys: readonly string[]) => keys
     .map((sourceKey) => ({ sourceKey, reading: device.reading(sourceKey) }))
     .filter((entry): entry is { sourceKey: string; reading: PlantReading } => Boolean(entry.reading));
@@ -362,9 +460,18 @@ export function tileReadings(device: PlantDevice, preferredKeys: readonly string
     const lead = preferred[0];
     return { lead, facts: pick(factKeys).filter((entry) => entry.sourceKey !== lead.sourceKey).map((entry) => entry.reading).slice(0, 2) };
   }
-  const own = pick(device.row.telemetryPoints
-    .filter((point) => point.status === 'ACTIVE' && point.pointType === 'TELEMETRY' && point.valueType === 'NUMBER')
-    .map((point) => point.sourceKey));
+  const members = 'members' in device ? device.members : [device];
+  const ownKeys: string[] = [];
+  const seen = new Set<string>();
+  for (const member of members) {
+    for (const point of member.row.telemetryPoints) {
+      if (point.status === 'ACTIVE' && point.pointType === 'TELEMETRY' && point.valueType === 'NUMBER' && !seen.has(point.sourceKey)) {
+        seen.add(point.sourceKey);
+        ownKeys.push(point.sourceKey);
+      }
+    }
+  }
+  const own = pick(ownKeys);
   const ordered = [...own.filter((entry) => entry.reading.current), ...own.filter((entry) => !entry.reading.current)];
   return { lead: ordered[0] ?? null, facts: ordered.slice(1, 3).map((entry) => entry.reading) };
 }
@@ -383,20 +490,24 @@ export interface EquipmentStatus {
   readonly stale: number;
 }
 
-export function equipmentStatus(view: PlantView): EquipmentStatus {
-  const equipment = view.devices.filter((device) => EQUIPMENT_CATEGORIES.has(device.category));
+export function equipmentStatus(view: Pick<PlantView, 'devices'> & { readonly units?: readonly PlantUnit[] }): EquipmentStatus {
+  const equipment = plantUnits(view).filter((unit) => EQUIPMENT_CATEGORIES.has(unit.category));
   return {
     total: equipment.length,
     running: equipment.filter(isRunning).length,
-    faults: equipment.filter((device) => device.connection !== 'OFFLINE' && device.runState === 'FAULT').length,
+    faults: equipment.filter((unit) => unit.connection !== 'OFFLINE' && unit.runState === 'FAULT').length,
     offline: view.devices.filter((device) => device.connection === 'OFFLINE').length,
     withoutData: view.devices.filter((device) => device.latestSampleAt === null).length,
     stale: view.devices.filter((device) => device.hasStaleData).length,
   };
 }
 
-/** A device probe read as its pipe's value only when the category has one device; with several, each node shows its own. */
-export function soleReading(view: PlantView, category: PlantCategory, sourceKey: string): PlantReading | null {
-  const devices = view.devices.filter((device) => device.category === category);
-  return devices.length === 1 ? devices[0].reading(sourceKey) : null;
+/** A machine probe read as its pipe's value only when the category has one physical unit; with several, each node shows its own. */
+export function soleReading(
+  view: Pick<PlantView, 'devices'> & { readonly units?: readonly PlantUnit[] },
+  category: PlantCategory,
+  sourceKey: string,
+): PlantReading | null {
+  const units = plantUnits(view).filter((unit) => unit.category === category);
+  return units.length === 1 ? units[0].reading(sourceKey) : null;
 }

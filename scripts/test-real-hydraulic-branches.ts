@@ -366,3 +366,148 @@ test('buildHydraulicSchematic projects loop topology, telemetry, and anomalies c
   assert.ok(closedAnomaly);
   assert.equal(closedAnomaly.deviceId, ids.valveDev);
 });
+
+import { equipmentStatus, soleReading } from '../apps/hvac-web/src/features/operations/realtime/plant-model.ts';
+import type { AssetsDeviceRow } from '../apps/hvac-web/src/features/assets/model.ts';
+
+test('buildHydraulicSchematic deduplicates multi-device assets, keeps bare controller run_state, and excludes PROVISIONAL_READINGS headers from machine columns', () => {
+  const now = new Date('2026-11-18T00:05:00.000Z');
+  const ids = {
+    chAsset: '018f3e00-3000-7000-8000-000000000201',
+    chwpAsset: '018f3e00-3000-7000-8000-000000000202',
+    ctAsset: '018f3e00-3000-7000-8000-000000000203',
+    meterChDev: '018f3e00-4000-7000-8000-000000000201',
+    ctrlChDev: '018f3e00-4000-7000-8000-000000000202',
+    chwpDev: '018f3e00-4000-7000-8000-000000000203',
+    ctDev: '018f3e00-4000-7000-8000-000000000204',
+    provTowerDev: '018f3e00-4000-7000-8000-000000000205',
+    provChwpDev: '018f3e00-4000-7000-8000-000000000206',
+    provOutdoorDev: '018f3e00-4000-7000-8000-000000000207',
+    provRoomDev: '018f3e00-4000-7000-8000-000000000208',
+    et1010Dev: '018f3e00-4000-7000-8000-000000000209',
+  };
+
+  const assetModel: SiteAssetModel = {
+    schemaVersion: 2,
+    tenantId: TENANT_ID,
+    siteId: SITE_ID,
+    spaces: [],
+    assets: [
+      makeAsset(ids.chAsset, 'chiller-a', 'A 机组', 'CHILLER', { waterLoop: 'CHILLED_WATER', branchCode: 'CH-A' }),
+      makeAsset(ids.chwpAsset, 'chwp-1', '1 号冷冻泵', 'CHILLED_WATER_PUMP', { waterLoop: 'CHILLED_WATER', branchCode: 'CH-A' }),
+      makeAsset(ids.ctAsset, 'tower-1', '1 号冷却塔', 'COOLING_TOWER'),
+    ],
+    devices: [
+      makeDevice(ids.ctrlChDev, 'ctrl-chiller-a', '1# 螺杆主机控制器', 'CHILLER_CONTROLLER'),
+      makeDevice(ids.meterChDev, 'meter-uid4', 'A 机组电表', 'HVAC_POWER_METER'),
+      makeDevice(ids.chwpDev, 'ctrl-chwp-1', '1# 冻水泵控制器', 'PUMP_CONTROLLER'),
+      makeDevice(ids.ctDev, 'ctrl-tower-1', '1# 冷却塔控制器', 'COOLING_TOWER_CONTROLLER'),
+      makeDevice(ids.provTowerDev, 'cooling-tower', '冷却塔', 'PROVISIONAL_READINGS'),
+      makeDevice(ids.provChwpDev, 'chwp-main', '冷冻水泵（总管）', 'PROVISIONAL_READINGS'),
+      makeDevice(ids.provOutdoorDev, 'outdoor', '室外环境', 'PROVISIONAL_READINGS'),
+      makeDevice(ids.provRoomDev, 'room', '房间', 'PROVISIONAL_READINGS'),
+      makeDevice(ids.et1010Dev, 'et1010-uid31', 'ET1010 控制模块', 'CONTROL_MODULE'),
+    ],
+    sensors: [],
+    telemetryPoints: [
+      makePoint('p-201', ids.meterChDev, 'power_total', 'chiller.power', '有功功率', 'kW'),
+      makePoint('p-202', ids.meterChDev, 'chw_out', 'chiller.leaving_chilled_water_temperature', '冷冻出水', 'Cel'),
+      makePoint('p-203', ids.meterChDev, 'run_state', 'chiller.run_state', '运行状态', null, 'STRING'),
+      makePoint('p-204', ids.ctrlChDev, 'run_state', 'run_state', '1# 主机运行状态', null, 'STRING'),
+      makePoint('p-205', ids.chwpDev, 'run_state', 'run_state', '1# 冻水泵运行状态', null, 'STRING'),
+      makePoint('p-206', ids.ctDev, 'run_state', 'run_state', '1# 冷却塔运行状态', null, 'STRING'),
+      makePoint('p-207', ids.provTowerDev, 'leaving_water_temperature', 'cooling_tower.leaving_water_temperature', '冷却塔出水温度', 'Cel'),
+      makePoint('p-208', ids.provChwpDev, 'run_state', 'chwp.run_state', '运行状态', null, 'STRING'),
+      makePoint('p-209', ids.provChwpDev, 'flow_rate', 'chwp.flow_rate', '冷冻水流量', 'm3/h'),
+      makePoint('p-210', ids.provOutdoorDev, 'ambient_temp', 'weather.ambient_dry_bulb_temperature', '室外温度', 'Cel'),
+      makePoint('p-211', ids.provRoomDev, 'room_temp', 'zone.temperature', '室内温度', 'Cel'),
+      makePoint('p-212', ids.et1010Dev, 'run_state', 'run_state', '保持通道状态', null, 'STRING'),
+    ],
+    relationships: [
+      makeRel('r-201', 'DEVICE', ids.meterChDev, ids.chAsset, 'MEASURES'),
+      makeRel('r-202', 'DEVICE', ids.ctrlChDev, ids.chAsset, 'PRIMARY_CONTROLLER'),
+      makeRel('r-203', 'DEVICE', ids.chwpDev, ids.chwpAsset, 'PRIMARY_CONTROLLER'),
+      makeRel('r-204', 'DEVICE', ids.ctDev, ids.ctAsset, 'PRIMARY_CONTROLLER'),
+    ],
+    counts: { spaces: 0, assets: 3, deviceEndpoints: 9, physicalSensors: 0, points: 12 },
+  };
+
+  const makeCtrlSnap = (off: boolean): AssetsSnapshotResult => {
+    const base = makeSnapshotEntry(ids.ctrlChDev, [{ key: 'run_state', value: 'UNKNOWN', unit: null, valueType: 'STRING' }]);
+    if (base.status !== 'ok') return base;
+    return {
+      status: 'ok',
+      snapshot: {
+        ...base.snapshot,
+        presence: {
+          applicability: 'APPLICABLE' as const,
+          currentState: off ? ('OFFLINE' as const) : ('ONLINE' as const),
+          lastSeenAt: TS,
+          policyRevision: 1,
+          lastKnown: null,
+        },
+      },
+    };
+  };
+
+  const buildWithCtrl = (ctrlOffline: boolean) => {
+    const snapshots = new Map<string, AssetsSnapshotResult>([
+      [ids.meterChDev, makeSnapshotEntry(ids.meterChDev, [
+        { key: 'power_total', value: 115, unit: 'kW' },
+        { key: 'chw_out', value: 7.1, unit: 'Cel' },
+        { key: 'run_state', value: 'RUNNING', unit: null, valueType: 'STRING' },
+      ])],
+      [ids.ctrlChDev, ctrlOffline ? makeCtrlSnap(true) : makeSnapshotEntry(ids.ctrlChDev, [{ key: 'run_state', value: 'RUNNING', unit: null, valueType: 'STRING' }])],
+      [ids.chwpDev, makeSnapshotEntry(ids.chwpDev, [{ key: 'run_state', value: 'RUNNING', unit: null, valueType: 'STRING' }])],
+      [ids.ctDev, makeSnapshotEntry(ids.ctDev, [{ key: 'run_state', value: 'RUNNING', unit: null, valueType: 'STRING' }])],
+      [ids.provTowerDev, makeSnapshotEntry(ids.provTowerDev, [{ key: 'leaving_water_temperature', value: 23.7, unit: 'Cel' }])],
+      [ids.provChwpDev, makeSnapshotEntry(ids.provChwpDev, [
+        { key: 'run_state', value: 'RUNNING', unit: null, valueType: 'STRING' },
+        { key: 'flow_rate', value: 118, unit: 'm3/h' },
+      ])],
+      [ids.provOutdoorDev, makeSnapshotEntry(ids.provOutdoorDev, [{ key: 'ambient_temp', value: 20.8, unit: 'Cel' }])],
+      [ids.provRoomDev, makeSnapshotEntry(ids.provRoomDev, [{ key: 'room_temp', value: 24.0, unit: 'Cel' }])],
+      [ids.et1010Dev, makeSnapshotEntry(ids.et1010Dev, [{ key: 'run_state', value: 'RUNNING', unit: null, valueType: 'STRING' }])],
+    ]);
+    const rows: readonly AssetsDeviceRow[] = buildAssetsRows({ assetModel, snapshots, now });
+    return buildPlantView(rows, assetModel);
+  };
+
+  const plant = buildWithCtrl(false);
+  const schematic = buildHydraulicSchematic(plant);
+
+  assert.equal(schematic.chillers.length, 1);
+  assert.equal(schematic.chillers[0].device.name, 'A 机组');
+  assert.deepEqual(schematic.chillers[0].device.deviceIds, [ids.meterChDev, ids.ctrlChDev]);
+  assert.equal(schematic.chillers[0].device.runState, 'RUNNING');
+  assert.equal(schematic.chillers[0].primaryReading?.numeric, 115);
+  assert.equal(schematic.chillers[0].secondaryReading?.numeric, 7.1);
+  assert.equal(soleReading(plant, 'CHILLER', 'chiller.leaving_chilled_water_temperature')?.numeric, 7.1);
+  assert.equal(schematic.towers.length, 1);
+  assert.equal(schematic.chilledPumps.length, 1);
+  assert.equal(schematic.zones.length, 1);
+  assert.equal(schematic.weather?.deviceId, ids.provOutdoorDev);
+  assert.equal(schematic.condenser.leavingTowerTemp?.numeric, 23.7);
+  assert.equal(schematic.chilled.flowRate?.numeric, 118);
+  assert.equal(schematic.chilledFlowActive, true);
+  assert.equal(plant.branches.length, 1);
+  assert.equal(plant.branches[0].equipmentCount, 2);
+  assert.equal(plant.branches[0].runningCount, 2);
+  assert.deepEqual(equipmentStatus(plant), { total: 3, running: 3, faults: 0, offline: 0, withoutData: 0, stale: 0 });
+
+  // Unbound PROVISIONAL_READINGS classify as METER while keeping chwp.run_state for interlocks;
+  // CONTROL_MODULE bare run_state stays UNKNOWN.
+  const chwpMain = plant.devices.find((device) => device.deviceId === ids.provChwpDev);
+  assert.equal(chwpMain?.category, 'METER');
+  assert.equal(chwpMain?.runState, 'RUNNING');
+  assert.equal(plant.devices.find((device) => device.deviceId === ids.provTowerDev)?.category, 'METER');
+  assert.equal(plant.devices.find((device) => device.deviceId === ids.et1010Dev)?.runState, 'UNKNOWN');
+
+  // Partial offline sibling: A 机组 stays ONLINE & RUNNING via its meter, while flagging hasIssue / offlineMemberCount.
+  const partialPlant = buildWithCtrl(true);
+  const partialSchematic = buildHydraulicSchematic(partialPlant);
+  assert.equal(partialSchematic.chillers[0].device.connection, 'ONLINE');
+  assert.equal(partialSchematic.chillers[0].device.offlineMemberCount, 1);
+  assert.equal(partialSchematic.chillers[0].hasIssue, true);
+  assert.equal(equipmentStatus(partialPlant).offline, 1);
+});

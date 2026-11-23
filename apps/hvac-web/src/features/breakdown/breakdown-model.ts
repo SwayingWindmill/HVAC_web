@@ -8,6 +8,7 @@ export type EquipmentCategory = (typeof EQUIPMENT_ORDER)[number];
 
 export interface Machine {
   readonly deviceId: string;
+  readonly deviceIds?: readonly string[];
   readonly name: string;
   readonly category: EquipmentCategory;
 }
@@ -64,12 +65,26 @@ export function energyBreakdown(
   siteCrossGapKWh = 0,
 ): Breakdown {
   const deviceById = new Map(devices.map((device) => [device.deviceId, device]));
-  const metered = machines.filter((machine) => deviceById.has(machine.deviceId));
+  const matchedEnergyDevices = (machine: Machine): DeviceEnergy[] => {
+    const ids = machine.deviceIds ?? [machine.deviceId];
+    const seen = new Set<string>();
+    const matched: DeviceEnergy[] = [];
+    for (const id of ids) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const found = deviceById.get(id);
+      if (found) matched.push(found);
+    }
+    return matched;
+  };
+  const matchedByMachine = new Map(machines.map((machine) => [machine.deviceId, matchedEnergyDevices(machine)]));
+  const metered = machines.filter((machine) => (matchedByMachine.get(machine.deviceId)?.length ?? 0) > 0);
   const totalKWh = total.length === 0 && siteCrossGapKWh <= 0 ? null : sum(total) + siteCrossGapKWh;
   const energies = new Map(
     metered.map((machine) => {
-      const device = deviceById.get(machine.deviceId)!;
-      return [machine.deviceId, sum(device.points) + (device.crossGapKWh ?? 0)];
+      const matched = matchedByMachine.get(machine.deviceId)!;
+      const value = matched.reduce((acc, device) => acc + sum(device.points) + (device.crossGapKWh ?? 0), 0);
+      return [machine.deviceId, value];
     }),
   );
   const subMeteredKWh = [...energies.values()].reduce((left, right) => left + right, 0);
@@ -89,17 +104,19 @@ export function energyBreakdown(
         energyKWh,
         share: share(energyKWh),
         metered: metered.filter((machine) => machine.category === category).length,
-        unmetered: machines.filter((machine) => machine.category === category && !deviceById.has(machine.deviceId)).length,
+        unmetered: machines.filter((machine) => machine.category === category && (matchedByMachine.get(machine.deviceId)?.length ?? 0) === 0).length,
       };
     });
 
   const rows = new Map<string, Record<EquipmentCategory, number>>();
   for (const machine of metered) {
-    for (const point of deviceById.get(machine.deviceId)!.points) {
-      const key = bucketKey(point.periodStart);
-      const row = rows.get(key) ?? { CHILLER: 0, CHILLED_WATER_PUMP: 0, COOLING_WATER_PUMP: 0, COOLING_TOWER: 0 };
-      row[machine.category] += point.energyKWh;
-      rows.set(key, row);
+    for (const device of matchedByMachine.get(machine.deviceId)!) {
+      for (const point of device.points) {
+        const key = bucketKey(point.periodStart);
+        const row = rows.get(key) ?? { CHILLER: 0, CHILLED_WATER_PUMP: 0, COOLING_WATER_PUMP: 0, COOLING_TOWER: 0 };
+        row[machine.category] += point.energyKWh;
+        rows.set(key, row);
+      }
     }
   }
 
@@ -108,7 +125,7 @@ export function energyBreakdown(
     subMeteredKWh,
     unallocatedKWh: totalKWh === null ? null : totalKWh - subMeteredKWh,
     items,
-    unmetered: machines.filter((machine) => !deviceById.has(machine.deviceId)),
+    unmetered: machines.filter((machine) => (matchedByMachine.get(machine.deviceId)?.length ?? 0) === 0),
     categories,
     rows: [...rows.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([key, row]) => ({ key, ...row })),
   };
