@@ -142,6 +142,37 @@ func (store *Store) Ping(ctx context.Context) error {
 	return store.pool.Ping(ctx)
 }
 
+// ReadLoginContext returns the active login step ("password" or "totp") for a non-expired authorization challenge.
+func (store *Store) ReadLoginContext(ctx context.Context, challengeHash []byte, now time.Time) (string, error) {
+	if store == nil || store.pool == nil {
+		return "", errors.New("identity store is unavailable")
+	}
+	if len(challengeHash) == 0 {
+		return "", ErrAuthorizationRequestExpired
+	}
+	var userID *string
+	var expiresAt time.Time
+	var attemptCount int
+	err := store.pool.QueryRow(ctx, `
+		SELECT user_id::text, expires_at, attempt_count
+		FROM identity.authorization_requests
+		WHERE challenge_hash = $1
+	`, challengeHash).Scan(&userID, &expiresAt, &attemptCount)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrAuthorizationRequestExpired
+		}
+		return "", err
+	}
+	if !resolveIdentityTime(now).Before(expiresAt) || attemptCount >= 10 {
+		return "", ErrAuthorizationRequestExpired
+	}
+	if userID != nil && *userID != "" {
+		return "totp", nil
+	}
+	return "password", nil
+}
+
 func (store *Store) CurrentUser(ctx context.Context) (string, error) {
 	var role string
 	if err := store.pool.QueryRow(ctx, `SELECT current_user`).Scan(&role); err != nil {
