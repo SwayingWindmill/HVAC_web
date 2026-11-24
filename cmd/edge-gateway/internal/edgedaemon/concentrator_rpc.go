@@ -36,10 +36,7 @@ const (
 	concRegRSSIBase       uint16 = 0x9089
 )
 
-var (
-	concentratorProtectedUIDs = map[uint8]struct{}{2: {}, 3: {}, 4: {}, 5: {}, 10: {}, 31: {}}
-	concentratorUUIDv7Pattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
-)
+var concentratorUUIDv7Pattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
 // ConcentratorDownlinkTopic returns the canonical MQTT RPC downlink topic for UID 20 concentrator operations.
 func ConcentratorDownlinkTopic(gatewayID string) string {
@@ -188,22 +185,24 @@ type concDirtyEIDChunk struct {
 	eids         []uint32
 }
 
-// ConcentratorRPCExecutor executes UID 20 wireless concentrator RPC operations on RS-485.
+// ConcentratorRPCExecutor executes wireless concentrator RPC operations on RS-485.
 type ConcentratorRPCExecutor struct {
-	gatewayID string
-	bus       ConcentratorModbusBus
-	settle    time.Duration
-	now       func() time.Time
-	sleep     func(context.Context, time.Duration) error
+	gatewayID     string
+	bus           ConcentratorModbusBus
+	settle        time.Duration
+	protectedUIDs map[uint8]struct{}
+	now           func() time.Time
+	sleep         func(context.Context, time.Duration) error
 }
 
 // ConcentratorExecutorOptions configures a ConcentratorRPCExecutor.
 type ConcentratorExecutorOptions struct {
-	GatewayID string
-	Bus       ConcentratorModbusBus
-	SettleMS  int
-	Now       func() time.Time
-	Sleep     func(context.Context, time.Duration) error
+	GatewayID     string
+	Bus           ConcentratorModbusBus
+	SettleMS      int
+	ProtectedUIDs []uint8
+	Now           func() time.Time
+	Sleep         func(context.Context, time.Duration) error
 }
 
 // NewConcentratorRPCExecutor constructs a ConcentratorRPCExecutor.
@@ -225,14 +224,21 @@ func NewConcentratorRPCExecutor(opts ConcentratorExecutorOptions) (*Concentrator
 	}
 	sleepFn := opts.Sleep
 	if sleepFn == nil {
-		sleepFn = defaultET1010Sleep
+		sleepFn = defaultEdgeSleep
+	}
+	protected := make(map[uint8]struct{}, len(opts.ProtectedUIDs))
+	for _, uid := range opts.ProtectedUIDs {
+		if uid > 0 {
+			protected[uid] = struct{}{}
+		}
 	}
 	return &ConcentratorRPCExecutor{
-		gatewayID: gwID,
-		bus:       opts.Bus,
-		settle:    time.Duration(settleMS) * time.Millisecond,
-		now:       nowFn,
-		sleep:     sleepFn,
+		gatewayID:     gwID,
+		bus:           opts.Bus,
+		settle:        time.Duration(settleMS) * time.Millisecond,
+		protectedUIDs: protected,
+		now:           nowFn,
+		sleep:         sleepFn,
 	}, nil
 }
 
@@ -285,7 +291,7 @@ func (e *ConcentratorRPCExecutor) Execute(ctx context.Context, req ConcentratorR
 		return base("REJECTED", "CONCENTRATOR_REQUEST_INVALID", fmt.Sprintf("unitId=%d out of [1,247]", req.UnitID))
 	}
 	unitID := uint8(req.UnitID)
-	if _, protected := concentratorProtectedUIDs[unitID]; protected {
+	if e.isProtectedUID(unitID) {
 		return base("REJECTED", "CONCENTRATOR_UID_PROTECTED", fmt.Sprintf("unitId %d is protected on RS485 bus", req.UnitID))
 	}
 	if req.ExpireAt <= 0 || (req.IssuedAt > 0 && req.ExpireAt <= req.IssuedAt) || e.now().UTC().UnixMilli() >= req.ExpireAt {
@@ -294,7 +300,7 @@ func (e *ConcentratorRPCExecutor) Execute(ctx context.Context, req ConcentratorR
 
 	switch req.Operation {
 	case "WRITE_PARAMS":
-		entries, code, msg := validateConcentratorParamsPatch(req.Params)
+		entries, code, msg := e.validateParamsPatch(req.Params)
 		if code != "" {
 			return base("REJECTED", code, msg)
 		}
@@ -580,7 +586,23 @@ type concParamEntry struct {
 	value   int
 }
 
-func validateConcentratorParamsPatch(patch map[string]int) ([]concParamEntry, string, string) {
+func (e *ConcentratorRPCExecutor) isProtectedUID(unitID uint8) bool {
+	if e == nil || len(e.protectedUIDs) == 0 {
+		return false
+	}
+	_, protected := e.protectedUIDs[unitID]
+	return protected
+}
+
+func (e *ConcentratorRPCExecutor) validateParamsPatch(patch map[string]int) ([]concParamEntry, string, string) {
+	var protected map[uint8]struct{}
+	if e != nil {
+		protected = e.protectedUIDs
+	}
+	return validateConcentratorParamsPatch(patch, protected)
+}
+
+func validateConcentratorParamsPatch(patch map[string]int, protectedUIDs map[uint8]struct{}) ([]concParamEntry, string, string) {
 	if len(patch) == 0 {
 		return nil, "CONCENTRATOR_PARAMS_INVALID", "at least one parameter must be provided"
 	}
@@ -608,7 +630,7 @@ func validateConcentratorParamsPatch(patch map[string]int) ([]concParamEntry, st
 			return nil, "CONCENTRATOR_PARAMS_INVALID", fmt.Sprintf("%s=%d out of range [%d,%d]", k, v, spec.min, spec.max)
 		}
 		if k == "modbusId" {
-			if _, protected := concentratorProtectedUIDs[uint8(v)]; protected {
+			if _, protected := protectedUIDs[uint8(v)]; protected {
 				return nil, "CONCENTRATOR_UID_PROTECTED", fmt.Sprintf("modbusId %d is protected on RS485 bus", v)
 			}
 		}

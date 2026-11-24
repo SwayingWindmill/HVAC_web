@@ -59,83 +59,6 @@ type OTAConfig struct {
 	DefaultHealthCheckTimeoutSec int               `json:"defaultHealthCheckTimeoutSec,omitempty"`
 }
 
-// ET1010SequenceTimings configures step and coast-down delays for Songyaxuan chiller sequences.
-type ET1010SequenceTimings struct {
-	PumpToCoolingPumpMS    int `json:"pumpToCoolingPumpMs,omitempty"`
-	CoolingPumpToTowerMS   int `json:"coolingPumpToTowerMs,omitempty"`
-	TowerToChillerPulseMS  int `json:"towerToChillerPulseMs,omitempty"`
-	ChillerStopCoastDownMS int `json:"chillerStopCoastDownMs,omitempty"`
-	AuxiliaryStopStepMS    int `json:"auxiliaryStopStepMs,omitempty"`
-}
-
-// SongyaxuanPlantConfig enables native Go RS-485 polling, ET1010 sequential control,
-// and UID 20 wireless concentrator MQTT RPC over the shared Modbus RTU bus.
-type SongyaxuanPlantConfig struct {
-	Enabled               bool                   `json:"enabled"`
-	SerialPort            string                 `json:"serialPort"`
-	RequestTimeoutMS      int                    `json:"requestTimeoutMs,omitempty"`
-	Retries               int                    `json:"retries,omitempty"`
-	TempPollIntervalSec   int                    `json:"tempPollIntervalSec,omitempty"`
-	FlowPollIntervalSec   int                    `json:"flowPollIntervalSec,omitempty"`
-	MeterPollIntervalSec  int                    `json:"meterPollIntervalSec,omitempty"`
-	ET1010PollIntervalSec int                    `json:"et1010PollIntervalSec,omitempty"`
-	PulseDurationMS       int                    `json:"pulseDurationMs,omitempty"`
-	ChillerStopPowerKW    *float64               `json:"chillerStopPowerKw,omitempty"`
-	ConcentratorUnitID    uint8                  `json:"concentratorUnitId,omitempty"`
-	ConcentratorEnabled   *bool                  `json:"concentratorEnabled,omitempty"`
-	ET1010UnitID          uint8                  `json:"et1010UnitId,omitempty"`
-	ET1010Enabled         *bool                  `json:"et1010Enabled,omitempty"`
-	SequenceTimings       *ET1010SequenceTimings `json:"sequenceTimings,omitempty"`
-}
-
-// IsConcentratorEnabled reports whether UID 20 wireless concentrator RPC handling is active.
-func (c SongyaxuanPlantConfig) IsConcentratorEnabled() bool {
-	return c.Enabled && (c.ConcentratorEnabled == nil || *c.ConcentratorEnabled)
-}
-
-// IsET1010Enabled reports whether ET1010 DO command execution and polling are active.
-func (c SongyaxuanPlantConfig) IsET1010Enabled() bool {
-	return c.Enabled && (c.ET1010Enabled == nil || *c.ET1010Enabled)
-}
-
-// StopPowerKW returns the chiller stop verification threshold in kW (defaults to 5 kW).
-func (c SongyaxuanPlantConfig) StopPowerKW() float64 {
-	if c.ChillerStopPowerKW == nil {
-		return 5
-	}
-	return *c.ChillerStopPowerKW
-}
-
-// EffectiveSequenceTimings fills omitted sequence delays with production defaults.
-func (c SongyaxuanPlantConfig) EffectiveSequenceTimings() ET1010SequenceTimings {
-	out := ET1010SequenceTimings{
-		PumpToCoolingPumpMS:    30000,
-		CoolingPumpToTowerMS:   30000,
-		TowerToChillerPulseMS:  60000,
-		ChillerStopCoastDownMS: 30000,
-		AuxiliaryStopStepMS:    10000,
-	}
-	if c.SequenceTimings == nil {
-		return out
-	}
-	if c.SequenceTimings.PumpToCoolingPumpMS > 0 {
-		out.PumpToCoolingPumpMS = c.SequenceTimings.PumpToCoolingPumpMS
-	}
-	if c.SequenceTimings.CoolingPumpToTowerMS > 0 {
-		out.CoolingPumpToTowerMS = c.SequenceTimings.CoolingPumpToTowerMS
-	}
-	if c.SequenceTimings.TowerToChillerPulseMS > 0 {
-		out.TowerToChillerPulseMS = c.SequenceTimings.TowerToChillerPulseMS
-	}
-	if c.SequenceTimings.ChillerStopCoastDownMS > 0 {
-		out.ChillerStopCoastDownMS = c.SequenceTimings.ChillerStopCoastDownMS
-	}
-	if c.SequenceTimings.AuxiliaryStopStepMS > 0 {
-		out.AuxiliaryStopStepMS = c.SequenceTimings.AuxiliaryStopStepMS
-	}
-	return out
-}
-
 // Config defines the runtime configuration for the standalone Linux edge daemon.
 type Config struct {
 	GatewayID                      string                             `json:"gatewayId"`
@@ -170,10 +93,11 @@ type Config struct {
 	AggregationPolicy              *edgecontrol.EdgeAggregationPolicy `json:"aggregationPolicy,omitempty"`
 	ClusterPolicy                  *edgecontrol.ClusterControlPolicy  `json:"clusterPolicy,omitempty"`
 	EnergySchedule                 *edgecontrol.EdgeEnergySchedule    `json:"energySchedule,omitempty"`
-	SongyaxuanPlant                *SongyaxuanPlantConfig             `json:"songyaxuanPlant,omitempty"`
+	FieldPlant                     *FieldPlantConfig                  `json:"fieldPlant,omitempty"`
+	FieldPlantFile                 string                             `json:"fieldPlantFile,omitempty"`
 }
 
-// LoadConfig reads, decodes strictly, applies defaults, and validates an edge daemon Config file.
+// LoadConfig reads, decodes strictly, resolves fieldPlantFile if configured, applies defaults, and validates.
 func LoadConfig(path string, defaultVersion string) (Config, error) {
 	trimmedPath := strings.TrimSpace(path)
 	if trimmedPath == "" {
@@ -183,11 +107,49 @@ func LoadConfig(path string, defaultVersion string) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("read edge-gateway config %s: %w", trimmedPath, err)
 	}
-	return ParseConfig(raw, defaultVersion)
+	cfg, err := parseConfigRaw(raw)
+	if err != nil {
+		return Config{}, err
+	}
+	if cfg.FieldPlant != nil && strings.TrimSpace(cfg.FieldPlantFile) != "" {
+		return Config{}, errors.New("fieldPlant and fieldPlantFile are mutually exclusive")
+	}
+	if plantFile := strings.TrimSpace(cfg.FieldPlantFile); plantFile != "" {
+		resolved := plantFile
+		if !filepath.IsAbs(resolved) {
+			resolved = filepath.Join(filepath.Dir(trimmedPath), resolved)
+		}
+		fp, err := LoadFieldPlantConfigFile(resolved)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.FieldPlant = &fp
+		cfg.FieldPlantFile = resolved
+	}
+	cfg.ApplyDefaults(defaultVersion)
+	if err := cfg.Validate(); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
 }
 
 // ParseConfig parses JSON config bytes, rejects unknown fields, applies defaults, and validates.
 func ParseConfig(raw []byte, defaultVersion string) (Config, error) {
+	cfg, err := parseConfigRaw(raw)
+	if err != nil {
+		return Config{}, err
+	}
+	if cfg.FieldPlant != nil && strings.TrimSpace(cfg.FieldPlantFile) != "" {
+		return Config{}, errors.New("fieldPlant and fieldPlantFile are mutually exclusive")
+	}
+	cfg.ApplyDefaults(defaultVersion)
+	if err := cfg.Validate(); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+func parseConfigRaw(raw []byte) (Config, error) {
 	dec := json.NewDecoder(bytes.NewReader(bytes.TrimSpace(raw)))
 	dec.DisallowUnknownFields()
 	var cfg Config
@@ -197,10 +159,6 @@ func ParseConfig(raw []byte, defaultVersion string) (Config, error) {
 	var trailing any
 	if err := dec.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return Config{}, errors.New("edge-gateway config contains trailing JSON")
-	}
-	cfg.ApplyDefaults(defaultVersion)
-	if err := cfg.Validate(); err != nil {
-		return Config{}, err
 	}
 	return cfg, nil
 }
@@ -256,51 +214,14 @@ func (c *Config) ApplyDefaults(defaultVersion string) {
 	if c.OTA.DefaultHealthCheckTimeoutSec == 0 {
 		c.OTA.DefaultHealthCheckTimeoutSec = defaultOTAHealthTimeoutSec
 	}
-	if c.SongyaxuanPlant != nil && c.SongyaxuanPlant.Enabled {
-		p := c.SongyaxuanPlant
-		p.SerialPort = strings.TrimSpace(p.SerialPort)
-		if p.RequestTimeoutMS == 0 {
-			p.RequestTimeoutMS = 1000
-		}
-		if p.TempPollIntervalSec == 0 {
-			p.TempPollIntervalSec = 60
-		}
-		if p.FlowPollIntervalSec == 0 {
-			p.FlowPollIntervalSec = 60
-		}
-		if p.MeterPollIntervalSec == 0 {
-			p.MeterPollIntervalSec = 300
-		}
-		if p.ET1010PollIntervalSec == 0 {
-			p.ET1010PollIntervalSec = 60
-		}
-		if p.PulseDurationMS == 0 {
-			p.PulseDurationMS = 500
-		}
-		if p.ChillerStopPowerKW == nil {
-			defKW := 5.0
-			p.ChillerStopPowerKW = &defKW
-		}
-		if p.ConcentratorUnitID == 0 {
-			p.ConcentratorUnitID = 20
-		}
-		if p.ConcentratorEnabled == nil {
-			en := true
-			p.ConcentratorEnabled = &en
-		}
-		if p.ET1010UnitID == 0 {
-			p.ET1010UnitID = 31
-		}
-		if p.ET1010Enabled == nil {
-			en := true
-			p.ET1010Enabled = &en
-		}
-		if p.SerialPort != "" {
+	if c.FieldPlant != nil && c.FieldPlant.Enabled {
+		c.FieldPlant.ApplyDefaults()
+		if c.FieldPlant.SerialPort != "" {
 			if c.SerialBuses == nil {
 				c.SerialBuses = map[string]SerialBusConfig{}
 			}
-			if _, exists := c.SerialBuses[p.SerialPort]; !exists {
-				c.SerialBuses[p.SerialPort] = SerialBusConfig{
+			if _, exists := c.SerialBuses[c.FieldPlant.SerialPort]; !exists {
+				c.SerialBuses[c.FieldPlant.SerialPort] = SerialBusConfig{
 					Speed:             9600,
 					DataBits:          8,
 					Parity:            "N",
@@ -422,52 +343,9 @@ func (c Config) Validate() error {
 			return fmt.Errorf("clusterPolicy: %w", err)
 		}
 	}
-	if c.SongyaxuanPlant != nil && c.SongyaxuanPlant.Enabled {
-		p := c.SongyaxuanPlant
-		if strings.TrimSpace(p.SerialPort) == "" {
-			return errors.New("songyaxuanPlant.serialPort is required when enabled")
-		}
-		if p.RequestTimeoutMS < 50 || p.RequestTimeoutMS > 10000 {
-			return fmt.Errorf("songyaxuanPlant.requestTimeoutMs %d must be in [50,10000]", p.RequestTimeoutMS)
-		}
-		if p.Retries < 0 || p.Retries > 5 {
-			return fmt.Errorf("songyaxuanPlant.retries %d must be in [0,5]", p.Retries)
-		}
-		for label, sec := range map[string]int{
-			"tempPollIntervalSec":   p.TempPollIntervalSec,
-			"flowPollIntervalSec":   p.FlowPollIntervalSec,
-			"meterPollIntervalSec":  p.MeterPollIntervalSec,
-			"et1010PollIntervalSec": p.ET1010PollIntervalSec,
-		} {
-			if sec < 1 || sec > 86400 {
-				return fmt.Errorf("songyaxuanPlant.%s %d must be in [1,86400]", label, sec)
-			}
-		}
-		if p.PulseDurationMS < 50 || p.PulseDurationMS > 10000 {
-			return fmt.Errorf("songyaxuanPlant.pulseDurationMs %d must be in [50,10000]", p.PulseDurationMS)
-		}
-		kw := p.StopPowerKW()
-		if math.IsNaN(kw) || math.IsInf(kw, 0) || kw < 0 {
-			return errors.New("songyaxuanPlant.chillerStopPowerKw must be finite and >= 0")
-		}
-		if p.ConcentratorUnitID < 1 || p.ConcentratorUnitID > 247 {
-			return fmt.Errorf("songyaxuanPlant.concentratorUnitId %d must be in [1,247]", p.ConcentratorUnitID)
-		}
-		if p.ET1010UnitID < 1 || p.ET1010UnitID > 247 {
-			return fmt.Errorf("songyaxuanPlant.et1010UnitId %d must be in [1,247]", p.ET1010UnitID)
-		}
-		if p.SequenceTimings != nil {
-			for label, ms := range map[string]int{
-				"pumpToCoolingPumpMs":    p.SequenceTimings.PumpToCoolingPumpMS,
-				"coolingPumpToTowerMs":   p.SequenceTimings.CoolingPumpToTowerMS,
-				"towerToChillerPulseMs":  p.SequenceTimings.TowerToChillerPulseMS,
-				"chillerStopCoastDownMs": p.SequenceTimings.ChillerStopCoastDownMS,
-				"auxiliaryStopStepMs":    p.SequenceTimings.AuxiliaryStopStepMS,
-			} {
-				if ms < 0 || ms > 3600000 {
-					return fmt.Errorf("songyaxuanPlant.sequenceTimings.%s %d must be in [0,3600000]", label, ms)
-				}
-			}
+	if c.FieldPlant != nil {
+		if err := c.FieldPlant.Validate(); err != nil {
+			return err
 		}
 	}
 	if c.EnergySchedule != nil {

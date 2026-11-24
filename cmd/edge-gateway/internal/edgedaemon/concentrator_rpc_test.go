@@ -87,11 +87,12 @@ func TestConcentratorRPCExecutorAllOperationsAndGuards(t *testing.T) {
 	bus.input[20][concRegRSSIBase+7] = uint16(0x10000 - 62)
 
 	exec, err := NewConcentratorRPCExecutor(ConcentratorExecutorOptions{
-		GatewayID: gwID,
-		Bus:       bus,
-		SettleMS:  1,
-		Now:       func() time.Time { return fixedNow },
-		Sleep:     func(_ context.Context, _ time.Duration) error { return nil },
+		GatewayID:     gwID,
+		Bus:           bus,
+		SettleMS:      1,
+		ProtectedUIDs: []uint8{2, 3, 4, 5, 10, 31},
+		Now:           func() time.Time { return fixedNow },
+		Sleep:         func(_ context.Context, _ time.Duration) error { return nil },
 	})
 	if err != nil {
 		t.Fatalf("NewConcentratorRPCExecutor: %v", err)
@@ -103,6 +104,13 @@ func TestConcentratorRPCExecutorAllOperationsAndGuards(t *testing.T) {
 	})
 	if protResp.Status != "REJECTED" || protResp.ErrorCode != "CONCENTRATOR_UID_PROTECTED" {
 		t.Fatalf("expected protected UID rejection, got %+v", protResp)
+	}
+	wpProt := exec.Execute(t.Context(), ConcentratorRPCRequest{
+		SchemaVersion: "1.0", RequestID: reqID, GatewayID: gwID, UnitID: 20, Operation: "WRITE_PARAMS", IssuedAt: nowMs - 10, ExpireAt: nowMs + 10000,
+		Params: map[string]int{"modbusId": 10},
+	})
+	if wpProt.Status != "REJECTED" || wpProt.ErrorCode != "CONCENTRATOR_UID_PROTECTED" {
+		t.Fatalf("expected WRITE_PARAMS modbusId=10 protected UID rejection, got %+v", wpProt)
 	}
 
 	reqBytes, _ := json.Marshal(ConcentratorRPCRequest{

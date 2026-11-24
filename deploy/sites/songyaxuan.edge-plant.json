@@ -1,0 +1,292 @@
+{
+  "enabled": true,
+  "serialPort": "/dev/ttyAS3",
+  "requestTimeoutMs": 1000,
+  "concentratorRpc": {
+    "enabled": true,
+    "settleMs": 300
+  },
+  "meters": {
+    "pollIntervalSec": 300,
+    "freshWindowSec": 900,
+    "devices": [
+      {
+        "unitId": 5,
+        "deviceKey": "ammeter-unit1",
+        "controllerDeviceKey": "ctrl-chiller-c",
+        "powerRegisterAddr": 36,
+        "powerScale": 0.1,
+        "energyRegisterAddr": 60,
+        "energyScale": 1,
+        "combinedFeed": true,
+        "sharedAuxKw": {
+          "u31": 15,
+          "u32": 15,
+          "u33": 4
+        },
+        "startKw": 12.75,
+        "stopKw": 5,
+        "combinedNoAuxStartKw": 57.75,
+        "combinedNoAuxStopKw": 45
+      },
+      {
+        "unitId": 2,
+        "deviceKey": "ammeter-unit2",
+        "controllerDeviceKey": "ctrl-chiller-d",
+        "powerRegisterAddr": 36,
+        "powerScale": 0.1,
+        "energyRegisterAddr": 60,
+        "energyScale": 1,
+        "combinedFeed": true,
+        "sharedAuxKw": {
+          "u41": 15,
+          "u42": 15,
+          "u43": 4
+        },
+        "startKw": 12.75,
+        "stopKw": 5,
+        "combinedNoAuxStartKw": 57.75,
+        "combinedNoAuxStopKw": 45
+      },
+      {
+        "unitId": 3,
+        "deviceKey": "ammeter-unit3",
+        "controllerDeviceKey": "ctrl-chiller-b",
+        "powerRegisterAddr": 36,
+        "powerScale": 0.1,
+        "energyRegisterAddr": 60,
+        "energyScale": 1,
+        "startKw": 12.75,
+        "stopKw": 5
+      },
+      {
+        "unitId": 4,
+        "deviceKey": "ammeter-unit4",
+        "controllerDeviceKey": "ctrl-chiller-a",
+        "powerRegisterAddr": 36,
+        "powerScale": 0.1,
+        "energyRegisterAddr": 60,
+        "energyScale": 1,
+        "energyBaselineKwh": 76938,
+        "startKw": 12.75,
+        "stopKw": 5
+      }
+    ],
+    "synthesizedTotal": {
+      "deviceKey": "ammeter-total",
+      "sourceDeviceKeys": [
+        "ammeter-unit1",
+        "ammeter-unit2",
+        "ammeter-unit3",
+        "ammeter-unit4"
+      ]
+    }
+  },
+  "flowMeter": {
+    "pollIntervalSec": 60,
+    "freshWindowSec": 180,
+    "unitId": 10,
+    "deviceKey": "waterflow",
+    "registerBase": 1,
+    "registerCount": 5,
+    "flowRegisterOffset": 0,
+    "flowScale": 1,
+    "flowDivisor": 35.315,
+    "velocityRegisterOffset": 4,
+    "velocityScale": 0.3048,
+    "velocityDivisor": 3600,
+    "pumpMirror": {
+      "deviceKey": "chwp-main",
+      "flowPointCode": "flow_rate",
+      "runningThreshold": 10
+    }
+  },
+  "concentrator": {
+    "pollIntervalSec": 60,
+    "unitId": 20,
+    "activeChannels": [
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+      53, 54, 55
+    ],
+    "tempDeviceKey": "temperature",
+    "voltageDeviceKey": "temperature-voltage",
+    "rssiDeviceKey": "temperature-rssi",
+    "statusDeviceKey": "temperature-status",
+    "lowBatteryMv": 2700,
+    "copyRoutes": [
+      {
+        "sourceKey": "t1",
+        "targets": [{ "deviceKey": "ammeter-unit4", "pointCode": "chw_leaving_temperature" }]
+      },
+      {
+        "sourceKey": "t6",
+        "targets": [{ "deviceKey": "ammeter-unit4", "pointCode": "cw_leaving_temperature" }]
+      },
+      {
+        "sourceKey": "t2",
+        "targets": [{ "deviceKey": "ammeter-unit3", "pointCode": "chw_leaving_temperature" }]
+      },
+      {
+        "sourceKey": "t7",
+        "targets": [{ "deviceKey": "ammeter-unit3", "pointCode": "cw_leaving_temperature" }]
+      },
+      {
+        "sourceKey": "t3",
+        "targets": [{ "deviceKey": "ammeter-unit1", "pointCode": "chw_leaving_temperature" }]
+      },
+      {
+        "sourceKey": "t8",
+        "targets": [{ "deviceKey": "ammeter-unit1", "pointCode": "cw_leaving_temperature" }]
+      },
+      {
+        "sourceKey": "t4",
+        "targets": [{ "deviceKey": "ammeter-unit2", "pointCode": "chw_leaving_temperature" }]
+      },
+      {
+        "sourceKey": "t9",
+        "targets": [{ "deviceKey": "ammeter-unit2", "pointCode": "cw_leaving_temperature" }]
+      },
+      {
+        "sourceKey": "t10",
+        "targets": [{ "deviceKey": "ammeter-unit4", "pointCode": "chw_entering_temperature_branch" }]
+      },
+      {
+        "sourceKey": "t16",
+        "targets": [
+          { "deviceKey": "ammeter-unit1", "pointCode": "chw_entering_temperature" },
+          { "deviceKey": "ammeter-unit2", "pointCode": "chw_entering_temperature" },
+          { "deviceKey": "ammeter-unit3", "pointCode": "chw_entering_temperature" },
+          { "deviceKey": "ammeter-unit4", "pointCode": "chw_entering_temperature" }
+        ]
+      },
+      {
+        "sourceKey": "t5",
+        "targets": [
+          { "deviceKey": "ammeter-unit1", "pointCode": "cw_entering_temperature" },
+          { "deviceKey": "ammeter-unit2", "pointCode": "cw_entering_temperature" },
+          { "deviceKey": "ammeter-unit3", "pointCode": "cw_entering_temperature" },
+          { "deviceKey": "ammeter-unit4", "pointCode": "cw_entering_temperature" }
+        ]
+      },
+      {
+        "sourceKey": "t55",
+        "targets": [{ "deviceKey": "cooling-tower", "pointCode": "cooling_tower_leaving_temperature" }]
+      },
+      {
+        "sourceKey": "t12",
+        "targets": [{ "deviceKey": "cooling-tower", "pointCode": "cooling_tower_leaving_temperature" }]
+      },
+      {
+        "sourceKey": "t13",
+        "targets": [{ "deviceKey": "cooling-tower", "pointCode": "cooling_tower_entering_temperature" }]
+      },
+      {
+        "sourceKey": "t15",
+        "targets": [{ "deviceKey": "outdoor", "pointCode": "ambient_temperature" }]
+      },
+      {
+        "sourceKey": "t53",
+        "targets": [{ "deviceKey": "room", "pointCode": "room_temperature" }]
+      },
+      {
+        "sourceKey": "t54",
+        "targets": [{ "deviceKey": "room", "pointCode": "banquet_room_temperature" }]
+      }
+    ]
+  },
+  "btuCalculator": {
+    "deviceKey": "btu-calc",
+    "supplyTempKey": "t18",
+    "returnTempKey": "t16",
+    "specificHeatFactor": 1.163,
+    "minPlantPowerKw": 20,
+    "integrationMaxGapSec": 600
+  },
+  "doControl": {
+    "enabled": true,
+    "deviceKey": "et1010",
+    "winnerControllerId": "songyaxuan-et1010-uid31",
+    "unitId": 31,
+    "pollIntervalSec": 60,
+    "pulseDurationMs": 500,
+    "chillerStopPowerKw": 5,
+    "timings": {
+      "auxStartStepDelayMs": 30000,
+      "preStartPulseDelayMs": 60000,
+      "chillerStopCoastDownMs": 30000,
+      "auxiliaryStopStepMs": 10000
+    },
+    "coils": [
+      { "channel": "u11", "coil": 0 },
+      { "channel": "u12", "coil": 1 },
+      { "channel": "u13", "coil": 2 },
+      { "channel": "u14", "coil": 3 },
+      { "channel": "u21", "coil": 4 },
+      { "channel": "u22", "coil": 5 },
+      { "channel": "u23", "coil": 6 },
+      { "channel": "u24", "coil": 7 },
+      { "channel": "u31", "coil": 8 },
+      { "channel": "u32", "coil": 9 },
+      { "channel": "u33", "coil": 10 },
+      { "channel": "u34", "coil": 11 },
+      { "channel": "u41", "coil": 12 },
+      { "channel": "u42", "coil": 13 },
+      { "channel": "u43", "coil": 14 },
+      { "channel": "u44", "coil": 15 },
+      { "channel": "u51", "coil": 16 },
+      { "channel": "u52", "coil": 17 },
+      { "channel": "u53", "coil": 18 },
+      { "channel": "u54", "coil": 19 }
+    ],
+    "units": [
+      {
+        "unitCode": "unit-a",
+        "chillerDeviceKey": "ctrl-chiller-a",
+        "meterDeviceKey": "ammeter-unit4",
+        "auxiliaries": [
+          { "role": "chwp", "deviceKey": "ctrl-chwp-1", "channel": "u11", "coil": 0 },
+          { "role": "cwp", "deviceKey": "ctrl-cwp-1", "channel": "u12", "coil": 1 },
+          { "role": "tower", "deviceKey": "ctrl-tower-1", "channel": "u13", "coil": 2 }
+        ],
+        "startPulse": { "channel": "u14", "coil": 3 },
+        "stopPulse": { "channel": "u51", "coil": 16 }
+      },
+      {
+        "unitCode": "unit-b",
+        "chillerDeviceKey": "ctrl-chiller-b",
+        "meterDeviceKey": "ammeter-unit3",
+        "auxiliaries": [
+          { "role": "chwp", "deviceKey": "ctrl-chwp-2", "channel": "u21", "coil": 4 },
+          { "role": "cwp", "deviceKey": "ctrl-cwp-2", "channel": "u22", "coil": 5 },
+          { "role": "tower", "deviceKey": "ctrl-tower-2", "channel": "u23", "coil": 6 }
+        ],
+        "startPulse": { "channel": "u24", "coil": 7 },
+        "stopPulse": { "channel": "u52", "coil": 17 }
+      },
+      {
+        "unitCode": "unit-c",
+        "chillerDeviceKey": "ctrl-chiller-c",
+        "meterDeviceKey": "ammeter-unit1",
+        "auxiliaries": [
+          { "role": "chwp", "deviceKey": "ctrl-chwp-3", "channel": "u31", "coil": 8 },
+          { "role": "cwp", "deviceKey": "ctrl-cwp-3", "channel": "u32", "coil": 9 },
+          { "role": "tower", "deviceKey": "ctrl-tower-3", "channel": "u33", "coil": 10 }
+        ],
+        "startPulse": { "channel": "u34", "coil": 11 },
+        "stopPulse": { "channel": "u53", "coil": 18 }
+      },
+      {
+        "unitCode": "unit-d",
+        "chillerDeviceKey": "ctrl-chiller-d",
+        "meterDeviceKey": "ammeter-unit2",
+        "auxiliaries": [
+          { "role": "chwp", "deviceKey": "ctrl-chwp-4", "channel": "u41", "coil": 12 },
+          { "role": "cwp", "deviceKey": "ctrl-cwp-4", "channel": "u42", "coil": 13 },
+          { "role": "tower", "deviceKey": "ctrl-tower-4", "channel": "u43", "coil": 14 }
+        ],
+        "startPulse": { "channel": "u44", "coil": 15 },
+        "stopPulse": { "channel": "u54", "coil": 19 }
+      }
+    ]
+  }
+}

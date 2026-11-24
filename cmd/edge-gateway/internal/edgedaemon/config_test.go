@@ -3,6 +3,9 @@ package edgedaemon
 import (
 	"crypto/ed25519"
 	"encoding/base64"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -82,26 +85,51 @@ func TestParseConfigSeparateMQTTTLSFields(t *testing.T) {
 	}
 }
 
-func TestParseConfigSongyaxuanPlantDefaultsAndValidation(t *testing.T) {
+func TestParseConfigFieldPlantDefaultsAndFileResolution(t *testing.T) {
 	raw := []byte(`{
 		"gatewayId": "01a14000-4000-7000-8000-000000000100",
 		"stateDir": "/opt/hvac-edge-gateway/state",
-		"songyaxuanPlant": {
+		"fieldPlant": {
 			"enabled": true,
 			"serialPort": "/dev/ttyAS3"
 		}
 	}`)
-	cfg, err := ParseConfig(raw, "0.1.3")
+	cfg, err := ParseConfig(raw, "0.2.0")
 	if err != nil {
 		t.Fatalf("ParseConfig: %v", err)
 	}
-	if cfg.SongyaxuanPlant == nil || cfg.SongyaxuanPlant.StopPowerKW() != 5.0 || cfg.SongyaxuanPlant.ConcentratorUnitID != 20 || cfg.SongyaxuanPlant.ET1010UnitID != 31 {
-		t.Fatalf("unexpected songyaxuanPlant defaults: %+v", cfg.SongyaxuanPlant)
+	if cfg.FieldPlant == nil || cfg.FieldPlant.RequestTimeoutMS != 1000 {
+		t.Fatalf("unexpected fieldPlant defaults: %+v", cfg.FieldPlant)
 	}
 	if bus := cfg.SerialBuses["/dev/ttyAS3"]; bus.Speed != 9600 || bus.TurnaroundDelayMS != 45 {
 		t.Fatalf("expected /dev/ttyAS3 default bus config, got %+v", bus)
 	}
-	if _, err := ParseConfig([]byte(`{"gatewayId":"g1","stateDir":"/tmp/s","songyaxuanPlant":{"enabled":true}}`), "0.1.3"); err == nil {
-		t.Fatal("expected missing songyaxuanPlant.serialPort to fail")
+	if _, err := ParseConfig([]byte(`{"gatewayId":"g1","stateDir":"/tmp/s","fieldPlant":{"enabled":true}}`), "0.2.0"); err == nil {
+		t.Fatal("expected missing fieldPlant.serialPort to fail")
+	}
+
+	dir := t.TempDir()
+	plantPath := filepath.Join(dir, "site.edge-plant.json")
+	if err := os.WriteFile(plantPath, []byte(`{"enabled":true,"serialPort":"/dev/ttyS1"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(dir, "config.json")
+	cfgBytes := fmt.Appendf(nil, `{
+		"gatewayId": "g2",
+		"stateDir": %q,
+		"fieldPlantFile": "site.edge-plant.json"
+	}`, filepath.ToSlash(filepath.Join(dir, "state")))
+	if err := os.WriteFile(cfgPath, cfgBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadConfig(cfgPath, "0.2.0")
+	if err != nil {
+		t.Fatalf("LoadConfig with relative fieldPlantFile: %v", err)
+	}
+	if loaded.FieldPlant == nil || loaded.FieldPlant.SerialPort != "/dev/ttyS1" {
+		t.Fatalf("expected resolved fieldPlant from file, got %+v", loaded.FieldPlant)
+	}
+	if _, err := ParseConfig([]byte(`{"gatewayId":"g3","stateDir":"/tmp/s","fieldPlant":{"enabled":true,"serialPort":"/dev/ttyS1"},"fieldPlantFile":"other.json"}`), "0.2.0"); err == nil {
+		t.Fatal("expected mutually exclusive fieldPlant and fieldPlantFile to fail")
 	}
 }
