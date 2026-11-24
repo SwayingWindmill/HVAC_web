@@ -32,7 +32,7 @@ export PHASE1_DEPLOYMENT_TIER=single-lite
 export HVAC_LOCAL_PROJECT=hvac-platform
 # Same 12-character id build-release.sh bakes into the web dist.
 export HVAC_WEB_BUILD_ID="${revision:0:12}"
-export PLATFORM_PUBLIC_ORIGIN=https://hvac.swayingwindmill.online
+export PLATFORM_PUBLIC_ORIGIN=https://hvac.qlhtech.com
 R=$PHASE1_RUNTIME_DIR
 L="node scripts/phase1-wsl-compose.mjs"
 step() { echo "== $* $(date -Is)"; }

@@ -98,9 +98,9 @@ scrape_configs:
       module: [http_2xx]
     static_configs:
       - targets:
-          - https://hvac.swayingwindmill.online/healthz
-          - https://hvac.swayingwindmill.online/sign-in
-          - https://hvac.swayingwindmill.online/identity/.well-known/openid-configuration
+          - https://hvac.qlhtech.com/healthz
+          - https://hvac.qlhtech.com/sign-in
+          - https://hvac.qlhtech.com/identity/.well-known/openid-configuration
     relabel_configs:
       - source_labels: [__address__]
         target_label: __param_target

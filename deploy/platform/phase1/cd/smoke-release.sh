@@ -4,8 +4,8 @@
 # From GitHub Actions, leave both unset so this hits the real public address.
 set -euo pipefail
 
-origin="${HVAC_PUBLIC_ORIGIN:-https://hvac.swayingwindmill.online}"
-host="${HVAC_PUBLIC_HOST:-hvac.swayingwindmill.online}"
+origin="${HVAC_PUBLIC_ORIGIN:-https://hvac.qlhtech.com}"
+host="${HVAC_PUBLIC_HOST:-hvac.qlhtech.com}"
 attempts="${SMOKE_ATTEMPTS:-12}"
 pause="${SMOKE_SLEEP:-10}"
 resolve="${SMOKE_RESOLVE_IP:-}"

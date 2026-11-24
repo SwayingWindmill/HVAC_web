@@ -1,14 +1,15 @@
 # 证书续期
 
-对外的 HTTPS 证书是 Let's Encrypt，签给 `hvac.swayingwindmill.online`。浏览器和网关看到的是主机 nginx，它再转到本机 `127.0.0.1:18443` 上的容器 nginx。续期换的是主机 nginx 用的那一对，不是容器里的网页镜像。
+对外的 HTTPS 证书是 Let's Encrypt，主站签给 `hvac.qlhtech.com`（由服务器上的 `python3-certbot-dns-cloudflare` 通过 `/etc/letsencrypt/cloudflare-qlhtech.ini` 走 Cloudflare DNS-01 自动签发和续期）；兼容过渡期的旧域名 `hvac.swayingwindmill.online` 仍继续由本机 `certbot` 经 `nginx` 插件自动续期，为微信小程序 `/api/` 与松雅轩网关 `/gateway/v1/*` 提供接入。浏览器和网关看到的是主机 nginx（`hvac.qlhtech.com` 经 Cloudflare Tunnel 回源至 `127.0.0.1:443`），它再转到本机 `127.0.0.1:18443` 上的容器 nginx。续期换的是主机 nginx 用的那一对，不是容器里的网页镜像。
 
-仓库里没有 certbot 的配置。续期命令以这台机器上已经在跑的定时任务为准。
+仓库里没有 certbot 的配置或凭据文件。续期命令以这台机器上已经在跑的定时任务为准（`certbot.timer`）。
 
 ## 看到期日
 
 剩下不到 14 天会告警，不到 3 天是严重。也可以直接看：
 
 ```bash
+echo | openssl s_client -servername hvac.qlhtech.com -connect 127.0.0.1:443 2>/dev/null | openssl x509 -noout -subject -enddate
 echo | openssl s_client -servername hvac.swayingwindmill.online -connect 127.0.0.1:443 2>/dev/null | openssl x509 -noout -subject -enddate
 ```
 
@@ -21,11 +22,11 @@ sudo nginx -T 2>/dev/null | grep -E 'ssl_certificate|server_name'
 systemctl list-timers --all | grep -Ei 'cert|acme|letsencrypt'
 ```
 
-`ssl_certificate` 那一行是全链文件，旁边的 `ssl_certificate_key` 是私钥。私钥不要拷进仓库，也不要贴进工单。
+`ssl_certificate` 那一行是全链文件，旁边的 `ssl_certificate_key` 是私钥。私钥和 `/etc/letsencrypt/cloudflare-qlhtech.ini` 不要拷进仓库，也不要贴进工单。
 
 ## 续期
 
-用上面查到的定时任务或它的服务再跑一次（常见的是 `certbot renew`）。跑完看文件的修改时间已经变了，再用上一节的 `openssl` 命令确认新的到期日。
+用上面查到的定时任务或它的服务再跑一次（常见的是 `sudo certbot renew`；`hvac.qlhtech.com` 会在 `--deploy-hook` 自动校验并重载 nginx）。跑完看文件的修改时间已经变了，再用上一节的 `openssl` 命令确认新的到期日。
 
 然后只重载主机 nginx，不需要重新部署应用：
 
@@ -36,6 +37,7 @@ sudo nginx -t && sudo systemctl reload nginx
 重载后从外面看一次：
 
 ```bash
+curl -fsS https://hvac.qlhtech.com/healthz
 curl -fsS https://hvac.swayingwindmill.online/healthz
 ```
 
