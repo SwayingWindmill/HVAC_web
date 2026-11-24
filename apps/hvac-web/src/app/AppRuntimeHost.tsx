@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { RouterProvider } from '@tanstack/react-router';
 import type { QueryClient } from '@tanstack/react-query';
 import { createPlatformGatewayClient } from '@/api/generated/platformGateway.gen';
+import { fetchLoginContext, type LoginContextResponse } from '@/api/identity-sign-in';
 import { BrandMark } from '@/components/brand-mark';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -10,7 +11,7 @@ import { createFrontendReviewPlatformClient } from './frontend-review-platform-c
 import { useObservability } from './Observability';
 import { RouteLoading } from './RouteLoading';
 import { RuntimeFacts } from './RuntimeFacts';
-import { SignInForm, SignInNotice, readSignInRequest } from './SignInPage';
+import { SignInForm, SignInNotice, signInRequestFromContext } from './SignInPage';
 import { FocusHeading } from './FocusHeading';
 import { ShellRuntimeProvider } from './ShellRuntimeContext';
 import { createBrowserShellEnvironment, createShellRuntime, type ShellSnapshot } from './shell-runtime';
@@ -55,22 +56,93 @@ export function ConfigurationBlocked({ failures }: { failures: RuntimeConfigFail
   );
 }
 
-function LoginRequiredState({ snapshot, beginLogin }: { snapshot: ShellSnapshot; beginLogin: () => void }) {
-  if (window.location.pathname === '/sign-in') {
-    const request = readSignInRequest(window.location.search);
-    if (request.kind === 'form') return <SignInForm request={request} />;
-    if (request.kind === 'expired') {
-      return <SignInNotice title="登录已超时" description="登录页打开太久了，请重新登录。" action="重新登录" onAction={beginLogin} />;
-    }
+const AUTO_START_KEY = 'hvac.sign-in.auto-start';
+const AUTO_START_WINDOW_MS = 10_000;
+
+function clearAutoStartAttempt(): void {
+  try {
+    window.sessionStorage.removeItem(AUTO_START_KEY);
+  } catch {
+    // Ignore storage unavailability; cookies determine login state on the server.
   }
+}
+
+function markAutoStartAttempt(now: number): boolean {
+  try {
+    const raw = window.sessionStorage.getItem(AUTO_START_KEY);
+    const previous = raw !== null ? Number(raw) : Number.NaN;
+    if (!Number.isNaN(previous) && now >= previous && now - previous < AUTO_START_WINDOW_MS) {
+      return false;
+    }
+    window.sessionStorage.setItem(AUTO_START_KEY, String(now));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function LoginRequiredState({ snapshot, beginLogin }: { snapshot: ShellSnapshot; beginLogin: () => void }) {
+  const isSignInPath = window.location.pathname === '/sign-in';
+  const skipContextLookup = snapshot.reason === 'LOGOUT_COMPLETED' || snapshot.reason === 'SESSION_ALREADY_INVALID';
+  const [loginContext, setLoginContext] = useState<LoginContextResponse | null>(null);
+  const [autoStartThrottled, setAutoStartThrottled] = useState(false);
+  const autoStartTriggeredRef = useRef(false);
+
+  useEffect(() => {
+    if (!isSignInPath || skipContextLookup) return;
+    let active = true;
+    void fetchLoginContext().then((next) => {
+      if (!active) return;
+      setLoginContext(next);
+      if (next.status === 'ready') {
+        clearAutoStartAttempt();
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [isSignInPath, skipContextLookup]);
+
+  useEffect(() => {
+    if (!isSignInPath || skipContextLookup || autoStartTriggeredRef.current) return;
+    if (loginContext?.status !== 'none') return;
+    if (snapshot.state !== 'LOGIN_REQUIRED') return;
+    if (!markAutoStartAttempt(Date.now())) {
+      setAutoStartThrottled(true);
+      return;
+    }
+    autoStartTriggeredRef.current = true;
+    beginLogin();
+  }, [isSignInPath, skipContextLookup, loginContext, snapshot.state, beginLogin]);
+
   if (snapshot.reason === 'LOGOUT_COMPLETED') {
     return <SignInNotice title="已退出登录" description="这台电脑上的业务数据已经清除。" action="重新登录" onAction={beginLogin} />;
   }
   if (snapshot.reason === 'SESSION_ALREADY_INVALID') {
     return <SignInNotice title="登录已失效" description="请重新登录后继续使用。" action="重新登录" onAction={beginLogin} />;
   }
-  if (window.location.pathname === '/sign-in' && snapshot.state === 'LOGIN_REQUIRED') {
-    return <SignInNotice title="登录" description="使用平台账号登录。" action="登录" onAction={beginLogin} />;
+  if (isSignInPath) {
+    if (loginContext === null) {
+      return (
+        <RouteLoading
+          label="正在前往登录"
+          testId="real-shell-auth-redirect"
+          routeState="LOGIN_REQUIRED"
+          variant="shell"
+        />
+      );
+    }
+    const request = signInRequestFromContext(loginContext);
+    if (request.kind === 'form') return <SignInForm request={request} />;
+    if (request.kind === 'expired') {
+      return <SignInNotice title="登录已超时" description="登录页打开太久了，请重新登录。" action="重新登录" onAction={beginLogin} />;
+    }
+    if (request.kind === 'unavailable') {
+      return <SignInNotice title="登录服务暂时不可用" description="暂时无法取得登录状态，请稍后重试。" action="重试" onAction={beginLogin} />;
+    }
+    if (autoStartThrottled && snapshot.state === 'LOGIN_REQUIRED') {
+      return <SignInNotice title="登录" description="使用平台账号登录。" action="登录" onAction={beginLogin} />;
+    }
   }
   return (
     <RouteLoading
@@ -152,6 +224,16 @@ export function AppRuntimeHost({ config, queryClient }: { config: RuntimeConfig;
     };
   }, [resources]);
 
+  const beginLogin = useCallback(() => {
+    resources.runtime.beginLogin();
+  }, [resources]);
+
+  useEffect(() => {
+    if (snapshot.reason === 'LOGOUT_COMPLETED' && (window.location.pathname !== '/sign-in' || window.location.search !== '')) {
+      window.history.replaceState(null, '', '/sign-in');
+    }
+  }, [snapshot.reason]);
+
   const showSignInPage = window.location.pathname === '/sign-in' || snapshot.state === 'LOGIN_REQUIRED';
   const waitingForSites = snapshot.state === 'READY' && !showSignInPage && snapshot.sites?.state === 'checking';
   const bootstrapping = (snapshot.state === 'BOOTSTRAPPING' || waitingForSites) && !showSignInPage;
@@ -173,7 +255,7 @@ export function AppRuntimeHost({ config, queryClient }: { config: RuntimeConfig;
       {bootstrapping ? (
         <RouteLoading label="正在加载系统" testId="real-shell-bootstrapping" routeState="BOOTSTRAPPING" variant="shell" />
       ) : null}
-      {showSignInPage ? <LoginRequiredState snapshot={snapshot} beginLogin={() => resources.runtime.beginLogin()} /> : null}
+      {showSignInPage ? <LoginRequiredState snapshot={snapshot} beginLogin={beginLogin} /> : null}
       {snapshot.state === 'UNAVAILABLE' && !showSignInPage ? (
         <PrincipalUnavailableState config={config} snapshot={snapshot} retry={() => { void resources.runtime.retry(); }} />
       ) : null}

@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react';
+import type { LoginContextResponse } from '@/api/identity-sign-in';
 import { BrandMark } from '@/components/brand-mark';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -23,23 +24,27 @@ const OUTCOME_MESSAGES: Record<string, string> = {
 };
 
 export type SignInRequest =
-  | { kind: 'form'; challenge: string; step: 'password' | 'totp'; message?: string }
+  | { kind: 'form'; csrfToken: string; step: 'password' | 'totp'; message?: string }
   | { kind: 'expired' }
+  | { kind: 'unavailable' }
   | { kind: 'start' };
 
-export function readSignInRequest(search: string): SignInRequest {
-  const query = new URLSearchParams(search);
-  const challenge = query.get('login_challenge');
-  const error = query.get('error');
-  if (challenge) {
+export function signInRequestFromContext(context: LoginContextResponse): SignInRequest {
+  if (context.status === 'ready') {
     return {
       kind: 'form',
-      challenge,
-      step: query.get('step') === 'totp' ? 'totp' : 'password',
-      message: error ? OUTCOME_MESSAGES[error] ?? OUTCOME_MESSAGES.unavailable : undefined,
+      csrfToken: context.csrfToken,
+      step: context.step,
+      message: context.error ? OUTCOME_MESSAGES[context.error] ?? OUTCOME_MESSAGES.unavailable : undefined,
     };
   }
-  return error === 'expired' ? { kind: 'expired' } : { kind: 'start' };
+  if (context.status === 'expired') {
+    return { kind: 'expired' };
+  }
+  if (context.status === 'unavailable') {
+    return { kind: 'unavailable' };
+  }
+  return { kind: 'start' };
 }
 
 function storedUsername(storage: () => Storage, key: string): string {
@@ -137,7 +142,7 @@ export function SignInForm({ request }: { request: Extract<SignInRequest, { kind
           setSubmitting(true);
         }}
       >
-        <input type="hidden" name="challenge" value={request.challenge} />
+        <input type="hidden" name="csrf_token" value={request.csrfToken} />
         <FieldGroup>
           <SignInHeading title={totp ? '安全确认' : '欢迎回来'} description={totp ? '请输入认证器上的 6 位验证码' : '使用平台账号登录'} />
           {request.message ? (

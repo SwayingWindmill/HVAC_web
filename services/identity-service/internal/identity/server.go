@@ -138,6 +138,7 @@ func (server *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /.well-known/openid-configuration", server.discovery)
 	mux.HandleFunc("GET /jwks", server.jwks)
 	mux.HandleFunc("GET /authorize", server.authorize)
+	mux.HandleFunc("GET /login-context", server.loginContext)
 	mux.HandleFunc("POST /login", server.login)
 	mux.HandleFunc("POST /mfa/totp", server.completeTOTP)
 	mux.HandleFunc("POST /token", server.token)
@@ -208,81 +209,100 @@ func (server *Server) authorize(writer http.ResponseWriter, request *http.Reques
 		writeOAuthError(writer, http.StatusServiceUnavailable, "temporarily_unavailable", "identity service is unavailable")
 		return
 	}
-	http.SetCookie(writer, &http.Cookie{
-		Name: loginCookieName, Value: challenge, Path: "/", HttpOnly: true, Secure: true,
-		SameSite: http.SameSiteLaxMode, MaxAge: 600,
-	})
-	server.redirectToSignIn(writer, request, challenge, "", "")
+	setLoginCookie(writer, challenge)
+	clearLoginErrorCookie(writer)
+	server.redirectToSignIn(writer, request)
 }
 
 func (server *Server) login(writer http.ResponseWriter, request *http.Request) {
+	if !server.isAllowedBrowserOrigin(request) {
+		http.Error(writer, "cross-origin request rejected", http.StatusForbidden)
+		return
+	}
 	request.Body = http.MaxBytesReader(writer, request.Body, 16<<10)
 	if err := request.ParseForm(); err != nil {
-		server.redirectToSignIn(writer, request, "", "", "expired")
+		setLoginErrorCookie(writer, "expired")
+		server.redirectToSignIn(writer, request)
 		return
 	}
-	challenge := request.Form.Get("challenge")
 	cookie, err := request.Cookie(loginCookieName)
-	if err != nil || challenge == "" || !subtleStringCompare(challenge, cookie.Value) {
-		server.redirectToSignIn(writer, request, "", "", "expired")
+	csrfToken := request.Form.Get("csrf_token")
+	if err != nil || cookie.Value == "" || csrfToken == "" || !subtleStringCompare(csrfToken, deriveLoginCSRF(cookie.Value)) {
+		setLoginErrorCookie(writer, "expired")
+		server.redirectToSignIn(writer, request)
 		return
 	}
-	result, err := server.store.CompleteLogin(request.Context(), hashOpaque(challenge), request.Form.Get("username"), request.Form.Get("password"), server.now().UTC())
+	result, err := server.store.CompleteLogin(request.Context(), hashOpaque(cookie.Value), request.Form.Get("username"), request.Form.Get("password"), server.now().UTC())
 	if errors.Is(err, ErrInvalidCredentials) {
-		server.redirectToSignIn(writer, request, challenge, "", "invalid_credentials")
+		setLoginErrorCookie(writer, "invalid_credentials")
+		server.redirectToSignIn(writer, request)
 		return
 	}
 	if errors.Is(err, ErrMFAEnrollmentRequired) {
-		server.redirectToSignIn(writer, request, challenge, "", "mfa_enrollment_required")
+		setLoginErrorCookie(writer, "mfa_enrollment_required")
+		server.redirectToSignIn(writer, request)
 		return
 	}
 	if errors.Is(err, ErrMFARequired) && result.MFARequired {
-		server.redirectToSignIn(writer, request, challenge, "totp", "")
+		clearLoginErrorCookie(writer)
+		server.redirectToSignIn(writer, request)
 		return
 	}
 	if errors.Is(err, ErrAuthorizationRequestExpired) {
-		http.SetCookie(writer, &http.Cookie{Name: loginCookieName, Value: "", Path: "/", HttpOnly: true, Secure: true, MaxAge: -1})
-		server.redirectToSignIn(writer, request, "", "", "expired")
+		clearLoginCookie(writer)
+		setLoginErrorCookie(writer, "expired")
+		server.redirectToSignIn(writer, request)
 		return
 	}
 	if err != nil {
-		server.redirectToSignIn(writer, request, challenge, "", "unavailable")
+		setLoginErrorCookie(writer, "unavailable")
+		server.redirectToSignIn(writer, request)
 		return
 	}
 	server.redirectAuthorizationGrant(writer, request, result.Grant)
 }
 
 func (server *Server) completeTOTP(writer http.ResponseWriter, request *http.Request) {
+	if !server.isAllowedBrowserOrigin(request) {
+		http.Error(writer, "cross-origin request rejected", http.StatusForbidden)
+		return
+	}
 	request.Body = http.MaxBytesReader(writer, request.Body, 4<<10)
 	if err := request.ParseForm(); err != nil {
-		server.redirectToSignIn(writer, request, "", "", "expired")
+		setLoginErrorCookie(writer, "expired")
+		server.redirectToSignIn(writer, request)
 		return
 	}
-	challenge := request.Form.Get("challenge")
 	cookie, err := request.Cookie(loginCookieName)
-	if err != nil || challenge == "" || !subtleStringCompare(challenge, cookie.Value) {
-		server.redirectToSignIn(writer, request, "", "", "expired")
+	csrfToken := request.Form.Get("csrf_token")
+	if err != nil || cookie.Value == "" || csrfToken == "" || !subtleStringCompare(csrfToken, deriveLoginCSRF(cookie.Value)) {
+		setLoginErrorCookie(writer, "expired")
+		server.redirectToSignIn(writer, request)
 		return
 	}
-	grant, err := server.store.CompleteTOTP(request.Context(), hashOpaque(challenge), request.Form.Get("code"), server.mfaProtector, server.now().UTC())
+	grant, err := server.store.CompleteTOTP(request.Context(), hashOpaque(cookie.Value), request.Form.Get("code"), server.mfaProtector, server.now().UTC())
 	if errors.Is(err, ErrMFAInvalid) {
-		server.redirectToSignIn(writer, request, challenge, "totp", "totp_invalid")
+		setLoginErrorCookie(writer, "totp_invalid")
+		server.redirectToSignIn(writer, request)
 		return
 	}
 	if errors.Is(err, ErrAuthorizationRequestExpired) {
-		http.SetCookie(writer, &http.Cookie{Name: loginCookieName, Value: "", Path: "/", HttpOnly: true, Secure: true, MaxAge: -1})
-		server.redirectToSignIn(writer, request, "", "", "expired")
+		clearLoginCookie(writer)
+		setLoginErrorCookie(writer, "expired")
+		server.redirectToSignIn(writer, request)
 		return
 	}
 	if err != nil {
-		server.redirectToSignIn(writer, request, challenge, "totp", "unavailable")
+		setLoginErrorCookie(writer, "unavailable")
+		server.redirectToSignIn(writer, request)
 		return
 	}
 	server.redirectAuthorizationGrant(writer, request, grant)
 }
 
 func (server *Server) redirectAuthorizationGrant(writer http.ResponseWriter, request *http.Request, grant LoginGrant) {
-	http.SetCookie(writer, &http.Cookie{Name: loginCookieName, Value: "", Path: "/", HttpOnly: true, Secure: true, MaxAge: -1})
+	clearLoginCookie(writer)
+	clearLoginErrorCookie(writer)
 	callback, _ := url.Parse(grant.RedirectURI)
 	values := callback.Query()
 	values.Set("code", grant.Code)
@@ -342,24 +362,10 @@ func (server *Server) endSession(writer http.ResponseWriter, request *http.Reque
 	http.Redirect(writer, request, server.postLogoutRedirectURI, http.StatusFound)
 }
 
-// redirectToSignIn sends the browser to the sign-in page with the login request, the step and the outcome.
-// The username never goes into the address; the page keeps what was typed itself.
-func (server *Server) redirectToSignIn(writer http.ResponseWriter, request *http.Request, challenge, step, code string) {
-	http.Redirect(writer, request, server.signInLocation(challenge, step, code), http.StatusSeeOther)
-}
-
-func (server *Server) signInLocation(challenge, step, code string) string {
-	query := url.Values{}
-	if challenge != "" {
-		query.Set("login_challenge", challenge)
-	}
-	if step != "" {
-		query.Set("step", step)
-	}
-	if code != "" {
-		query.Set("error", code)
-	}
-	return server.signInURL + "?" + query.Encode()
+// redirectToSignIn sends the browser to the bare sign-in page without challenge or outcome query parameters.
+// Both challenge and flash error live in same-origin HttpOnly cookies read by GET /identity/login-context.
+func (server *Server) redirectToSignIn(writer http.ResponseWriter, request *http.Request) {
+	http.Redirect(writer, request, server.signInURL, http.StatusSeeOther)
 }
 
 func scopeContains(scope, expected string) bool {
