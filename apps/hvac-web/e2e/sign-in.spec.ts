@@ -1,62 +1,174 @@
-import type { Page } from '@playwright/test';
-import { expect, test } from './test';
+import { expect, test, type Page } from '@playwright/test';
 
-// Signed out: the Gateway answers the principal bootstrap with 401, as it does before login.
-async function signedOut(page: Page) {
-  await page.route('**/api/v1/principal', (route) => route.fulfill({
-    status: 401, contentType: 'application/problem+json',
-    body: JSON.stringify({ status: 401, code: 'AUTHENTICATION_REQUIRED', title: 'Authentication required', detail: 'Sign in.', retryable: false }),
-  }));
+interface StubLoginContext {
+  status: 'ready' | 'expired' | 'none';
+  step?: 'password' | 'totp';
+  csrfToken?: string;
+  error?: string;
 }
 
-// Stands in for the identity service: records the posted form and redirects like it does.
-async function identityService(page: Page, location: string) {
-  const posts: { path: string; form: URLSearchParams }[] = [];
-  await page.route('**/identity/**', (route) => {
-    const request = route.request();
-    posts.push({ path: new URL(request.url()).pathname, form: new URLSearchParams(request.postData() ?? '') });
-    return route.fulfill({ status: 303, headers: { Location: location } });
+interface CapturedPost {
+  pathname: string;
+  body: string;
+}
+
+async function stubSignedOutSignIn(
+  page: Page,
+  initialContext: StubLoginContext,
+  options: {
+    onPost?: (pathname: string, params: URLSearchParams) => StubLoginContext;
+    onAuthLogin?: () => StubLoginContext;
+  } = {},
+): Promise<{ posts: CapturedPost[]; getAuthLoginCount: () => number }> {
+  let currentContext: StubLoginContext = { ...initialContext };
+  const posts: CapturedPost[] = [];
+  let authLoginCount = 0;
+
+  await page.route('**/api/v1/principal', async (route) => {
+    await route.fulfill({
+      status: 401,
+      contentType: 'application/problem+json',
+      body: JSON.stringify({
+        type: 'about:blank',
+        title: 'Authentication required',
+        status: 401,
+        detail: 'Authentication required.',
+        instance: '/api/v1/principal',
+        code: 'AUTHENTICATION_REQUIRED',
+        traceId: '00000000000000000000000000000001',
+        retryable: false,
+      }),
+    });
   });
-  return posts;
+
+  await page.route('**/api/v1/auth/login*', async (route) => {
+    authLoginCount += 1;
+    if (options.onAuthLogin) {
+      currentContext = options.onAuthLogin();
+    }
+    await route.fulfill({ status: 303, headers: { location: '/sign-in' } });
+  });
+
+  await page.route('**/identity/login-context', async (route) => {
+    const responseBody = { ...currentContext };
+    if (currentContext.error) {
+      currentContext = { ...currentContext, error: undefined };
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      headers: { 'cache-control': 'no-store' },
+      body: JSON.stringify(responseBody),
+    });
+  });
+
+  await page.route('**/identity/{login,mfa/totp}', async (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    const body = route.request().postData() ?? '';
+    posts.push({ pathname, body });
+    if (options.onPost) {
+      currentContext = options.onPost(pathname, new URLSearchParams(body));
+    }
+    await route.fulfill({ status: 303, headers: { location: '/sign-in' } });
+  });
+
+  return {
+    posts,
+    getAuthLoginCount: () => authLoginCount,
+  };
 }
 
-test('the password goes straight to the identity service, and a wrong one comes back with the name kept', async ({ page }) => {
-  await signedOut(page);
-  const posts = await identityService(page, '/sign-in?login_challenge=chal-1&error=invalid_credentials');
-  await page.goto('/sign-in?login_challenge=chal-1');
-  await expect(page.getByText('使用平台账号登录')).toBeVisible();
+function assertBareSignInURL(rawUrl: string): void {
+  const parsed = new URL(rawUrl);
+  expect(parsed.pathname).toBe('/sign-in');
+  expect(parsed.search).toBe('');
+}
 
-  await page.getByLabel('用户名', { exact: true }).fill('zhou.min');
-  await page.getByLabel('密码').fill('wrong password');
-  await page.getByRole('button', { name: '登录', exact: true }).click();
+test('wrong password preserves username while keeping /sign-in URL clean', async ({ page }) => {
+  const { posts } = await stubSignedOutSignIn(
+    page,
+    { status: 'ready', step: 'password', csrfToken: 'csrf-step-1' },
+    {
+      onPost: () => ({
+        status: 'ready',
+        step: 'password',
+        csrfToken: 'csrf-step-1',
+        error: 'invalid_credentials',
+      }),
+    },
+  );
 
-  await expect(page.getByRole('alert')).toHaveText('用户名或密码不对，请重新输入。');
+  await page.goto('/sign-in');
+  assertBareSignInURL(page.url());
+  await page.getByRole('textbox', { name: '用户名' }).fill('operator-1');
+  await page.getByRole('textbox', { name: '密码' }).fill('wrong-password');
+  await page.getByRole('button', { name: '登录' }).click();
+
+  await expect(page.getByRole('alert')).toContainText('用户名或密码不对，请重新输入。');
   expect(posts).toHaveLength(1);
-  expect(posts[0].path).toBe('/identity/login');
-  expect(Object.fromEntries(posts[0].form)).toEqual({ challenge: 'chal-1', username: 'zhou.min', password: 'wrong password' });
-  await expect(page.getByLabel('用户名', { exact: true })).toHaveValue('zhou.min');
-  await expect(page.getByLabel('密码')).toHaveValue('');
-  expect(page.url()).not.toContain('zhou.min');
+  expect(posts[0].pathname).toBe('/identity/login');
+  const submitted = new URLSearchParams(posts[0].body);
+  expect(submitted.get('csrf_token')).toBe('csrf-step-1');
+  expect(submitted.get('challenge')).toBeNull();
+  expect(submitted.get('username')).toBe('operator-1');
+  await expect(page.getByRole('textbox', { name: '用户名' })).toHaveValue('operator-1');
+  await expect(page.getByRole('textbox', { name: '密码' })).toHaveValue('');
+  assertBareSignInURL(page.url());
 });
 
-test('the one-time code step posts the code to the identity service', async ({ page }) => {
-  await signedOut(page);
-  const posts = await identityService(page, '/sign-in?login_challenge=chal-2&step=totp&error=totp_invalid');
-  await page.goto('/sign-in?login_challenge=chal-2&step=totp');
-  await expect(page.getByText('安全确认')).toBeVisible();
+test('TOTP step submits csrf_token to /identity/mfa/totp without URL parameters', async ({ page }) => {
+  const { posts } = await stubSignedOutSignIn(
+    page,
+    { status: 'ready', step: 'totp', csrfToken: 'csrf-step-2' },
+    {
+      onPost: () => ({
+        status: 'ready',
+        step: 'totp',
+        csrfToken: 'csrf-step-2',
+        error: 'totp_invalid',
+      }),
+    },
+  );
 
+  await page.goto('/sign-in');
+  assertBareSignInURL(page.url());
+  await expect(page.getByRole('heading', { name: '安全确认' })).toBeVisible();
   await page.getByLabel('一次性验证码').fill('123456');
-  await page.getByRole('button', { name: '确认', exact: true }).click();
+  await page.getByRole('button', { name: '确认' }).click();
 
-  await expect(page.getByRole('alert')).toHaveText('验证码不对或已经用过，请输入认证器上新的验证码。');
-  expect(posts[0].path).toBe('/identity/mfa/totp');
-  expect(Object.fromEntries(posts[0].form)).toEqual({ challenge: 'chal-2', code: '123456' });
+  await expect(page.getByRole('alert')).toContainText('验证码不对或已经用过，请输入认证器上新的验证码。');
+  expect(posts).toHaveLength(1);
+  expect(posts[0].pathname).toBe('/identity/mfa/totp');
+  const submitted = new URLSearchParams(posts[0].body);
+  expect(submitted.get('csrf_token')).toBe('csrf-step-2');
+  expect(submitted.get('challenge')).toBeNull();
+  expect(submitted.get('code')).toBe('123456');
+  assertBareSignInURL(page.url());
 });
 
-test('an expired login request offers to start again', async ({ page }) => {
-  await signedOut(page);
-  await page.goto('/sign-in?error=expired');
-  const notice = page.getByTestId('sign-in-notice');
-  await expect(notice).toContainText('登录已超时');
-  await expect(notice.getByRole('button', { name: '重新登录' })).toBeVisible();
+test('expired challenge and logout landing render notices at a clean /sign-in URL', async ({ page }) => {
+  await stubSignedOutSignIn(page, { status: 'expired' });
+  await page.goto('/sign-in');
+  await expect(page.getByTestId('sign-in-notice')).toContainText('登录已超时');
+  assertBareSignInURL(page.url());
+
+  await page.goto('/?logged_out=1');
+  await expect(page.getByTestId('sign-in-notice')).toContainText('已退出登录');
+  await expect(page).toHaveURL(/\/sign-in$/);
+  assertBareSignInURL(page.url());
+});
+
+test('direct bookmark visit to /sign-in without cookie auto-starts OIDC login once', async ({ page }) => {
+  const { getAuthLoginCount } = await stubSignedOutSignIn(
+    page,
+    { status: 'none' },
+    {
+      onAuthLogin: () => ({ status: 'ready', step: 'password', csrfToken: 'csrf-fresh' }),
+    },
+  );
+
+  await page.goto('/sign-in');
+  await expect(page.getByRole('textbox', { name: '用户名' })).toBeVisible();
+  expect(getAuthLoginCount()).toBe(1);
+  assertBareSignInURL(page.url());
 });

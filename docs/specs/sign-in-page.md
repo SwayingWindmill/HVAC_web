@@ -17,17 +17,17 @@
 
 ## 流程
 
-1. 网关把浏览器送到 `/identity/authorize`。身份服务创建登录请求，设置只有它能读的 `__Host-hvac_idp_login` cookie，然后 303 跳到 `/sign-in?login_challenge=<编号>`。
-2. `/sign-in` 显示用户名和密码表单，表单 POST 到 `/identity/login`，带上隐藏的 `challenge`。编号必须和 cookie 一致（防止跨站伪造登录）。
+1. 网关把浏览器送到 `/identity/authorize`。身份服务创建登录请求，设置只有它能读的 `__Host-hvac_idp_login` cookie，然后 303 跳到不带查询参数的 `/sign-in`。网页挂载后同源请求 `GET /identity/login-context` 获取当前步骤和派生 `csrfToken`；若直接打开 `/sign-in` 且尚无登录会话（`status: "none"`），自动发起一次 `/api/v1/auth/login`（10 秒内失败则退回「登录」按钮防循环）。
+2. `/sign-in` 显示用户名和密码表单，表单 POST 到 `/identity/login`，带上隐藏的 `csrf_token`（由 `__Host-hvac_idp_login` 派生并经 `Origin`/`Sec-Fetch-Site` 同源校验，防止跨站伪造登录）。
 3. 身份服务的处理结果：
    - 成功：跳回网关回调，和现在一样。
-   - 用户名或密码错：跳到 `/sign-in?login_challenge=<编号>&error=invalid_credentials`。
-   - 需要一次性验证码：跳到 `/sign-in?login_challenge=<编号>&step=totp`，页面显示验证码表单，POST 到 `/identity/mfa/totp`。验证码错：`&step=totp&error=totp_invalid`。
+   - 用户名或密码错：写一次性 `__Host-hvac_idp_error=invalid_credentials` cookie 并 303 跳回 `/sign-in`。
+   - 需要一次性验证码：清除错误 cookie 并 303 跳回 `/sign-in`（`GET /identity/login-context` 返回 `step: "totp"`），页面显示验证码表单，连同 `csrf_token` POST 到 `/identity/mfa/totp`。验证码错：写一次性 `__Host-hvac_idp_error=totp_invalid` cookie 并 303 跳回 `/sign-in`。
    - 需要先配置两步验证：`&error=mfa_enrollment_required`。
-   - 请求过期或无效：`/sign-in?error=expired`，页面提示过期，并提供「重新登录」按钮（重新发起登录）。
+   - 请求过期或无效：写一次性 `__Host-hvac_idp_error=expired` cookie（或 `login-context` 查验失效）并 303 跳回 `/sign-in`，页面提示过期，并提供「重新登录」按钮（重新发起登录）。
    - 身份服务出错：`&error=unavailable`。
 4. 用户名不放进地址。页面提交前把用户名存进本标签页的 `sessionStorage`，出错回来时填回去。
-5. 地址里没有 `login_challenge` 也没有 `error` 时，`/sign-in` 保持现有行为（已退出、登录已失效）。
+5. 退出登录后落到 `/?logged_out=1` 时，前端用 `history.replaceState` 将地址栏清理为 `/sign-in` 并保持「已退出登录」提示；会话失效则显示「登录已失效」。
 
 ## 界面
 
