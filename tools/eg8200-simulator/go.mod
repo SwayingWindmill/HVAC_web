@@ -17,8 +17,8 @@ replace github.com/quanlaihe/hvac-web/libs/observability => ../../libs/observabi
 
 require (
 	github.com/goburrow/serial v0.1.0 // indirect
+	github.com/gorilla/websocket v1.5.4-0.20240701034025-d67f41855da4 // indirect
 	github.com/quanlaihe/hvac-web/libs/alarmexpr v0.0.0 // indirect
-	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/stretchr/testify v1.12.1 // indirect
 	golang.org/x/net v0.62.0 // indirect
 )
