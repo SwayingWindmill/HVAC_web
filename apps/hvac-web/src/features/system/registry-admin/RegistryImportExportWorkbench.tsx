@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
+import { ConfirmDiscardDialog } from '@/components/confirm-discard-dialog';
 import { DataTable, DataTablePagination, type DataTableFeatures } from '@/components/data-table';
 import { StatusBadge } from '@/components/status-badge';
 import { useDataTable } from '@/hooks/use-data-table';
@@ -29,9 +30,9 @@ const EXAMPLE_IMPORT = JSON.stringify({
   rows: [{
     rowNumber: 1,
     resourceType: 'ASSET',
-    externalId: 'ahu-01',
+    externalId: 'chw-pump-03',
     expectedRevision: 0,
-    payload: { code: 'ahu-01', displayName: 'AHU 01', assetType: 'AHU', status: 'ACTIVE' },
+    payload: { code: 'chw-pump-03', displayName: '3# 冷冻水泵', assetType: 'CHILLED_WATER_PUMP', status: 'ACTIVE' },
   }],
 }, null, 2);
 
@@ -47,6 +48,7 @@ export function RegistryImportExportWorkbench({ site, model, capabilities, csrfT
   const [source, setSource] = useState(EXAMPLE_IMPORT);
   const [dirty, setDirty] = useState(false);
   const [plan, setPlan] = useState<ImportPlan | null>(null);
+  const [confirmCommitOpen, setConfirmCommitOpen] = useState(false);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [commitMessage, setCommitMessage] = useState<string | null>(null);
@@ -82,9 +84,11 @@ export function RegistryImportExportWorkbench({ site, model, capabilities, csrfT
       const committed = result.results.filter((row) => row.status === 'COMMITTED').length;
       setCommitMessage(`导入完成，共提交 ${committed} 条登记记录。`);
       setPlan(null);
+      setConfirmCommitOpen(false);
       await onRefresh();
     } catch (reason) {
       setError(reason);
+      setConfirmCommitOpen(false);
     } finally {
       setWorking(false);
     }
@@ -167,7 +171,7 @@ export function RegistryImportExportWorkbench({ site, model, capabilities, csrfT
             <Textarea value={source} onChange={(event) => { setSource(event.target.value); setDirty(true); setPlan(null); }} rows={16} className="font-mono text-xs" disabled={!allowed} aria-label="登记导入 JSON" />
             <div className="flex flex-wrap gap-2">
               <Button disabled={!allowed || working} onClick={() => void dryRun()}>{working ? '正在校验…' : '校验导入内容'}</Button>
-              <Button variant="destructive" disabled={!allowed || working || !canCommitImportPlan(plan)} onClick={() => void commit()}>提交已复核计划</Button>
+              <Button variant="destructive" disabled={!allowed || working || !canCommitImportPlan(plan)} onClick={() => setConfirmCommitOpen(true)}>提交已复核计划</Button>
             </div>
           </CardContent>
         </Card>
@@ -210,6 +214,18 @@ export function RegistryImportExportWorkbench({ site, model, capabilities, csrfT
           />
         </DataTableBlock>
       ) : null}
+
+      <ConfirmDiscardDialog
+        open={confirmCommitOpen}
+        onOpenChange={setConfirmCommitOpen}
+        busy={working}
+        title="确认正式写入设备登记？"
+        description={`即将把 ${plan?.results.length ?? 0} 条记录正式写入站点「${site.displayName}」的设备与点位登记。`}
+        keepLabel="再检查一下"
+        discardLabel="确认写入"
+        busyLabel="正在提交…"
+        onConfirmDiscard={() => void commit()}
+      />
     </div>
   );
 }

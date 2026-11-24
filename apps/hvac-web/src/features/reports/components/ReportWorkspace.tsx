@@ -59,6 +59,18 @@ export function ReportWorkspace() {
   const year = search.year && years.includes(search.year) ? search.year : currentYear;
   const span = useMemo(() => reportWindow(month, now, site.timezone), [month, now, site.timezone]);
 
+  const handlePrint = () => {
+    const previousTitle = document.title;
+    document.title = view === 'year'
+      ? `${site.displayName} - ${year} 年能源报告`
+      : `${site.displayName} - ${monthLabel(month)}能源报告`;
+    try {
+      globalThis.print();
+    } finally {
+      document.title = previousTitle;
+    }
+  };
+
   return (
     <Main>
       <PageHeader
@@ -100,14 +112,14 @@ export function ReportWorkspace() {
                 <SelectContent>{years.map((option) => <SelectItem key={option} value={String(option)}>{option} 年</SelectItem>)}</SelectContent>
               </Select>
             )}
-            <Button variant="outline" size="sm" onClick={() => globalThis.print()}>
+            <Button variant="outline" size="sm" onClick={handlePrint}>
               <Printer data-icon="inline-start" />
               导出 PDF
             </Button>
           </div>
         )}
       />
-      <DataGapBanner siteId={site.id} timeZone={site.timezone} className={sheetFrame} />
+      {view === 'month' && !span.complete ? <DataGapBanner siteId={site.id} timeZone={site.timezone} className={sheetFrame} /> : null}
       {view === 'year' ? <YearlyReport key={year} year={year} now={now} /> : <MonthlyReport key={month} month={month} span={span} />}
     </Main>
   );
@@ -266,7 +278,12 @@ function ArchivedMonthlyReport({ stored, span }: { readonly stored: StoredReport
             delta={before ? relativeChange(reportCop, prevReportCop) : null}
             note={reportCop === null ? copUnavailableText(reportCopEval.unavailableReason) : beforeNote(prevReportCop, 2)}
           />
-          <Figure label="电度电费" value={report.energyCostCNY === null ? null : `¥${formatDecimal(report.energyCostCNY, 0)}`} note={report.energyCostCNY === null ? `${costMissing}，未计` : '按分时电价计算，不含需量电费'} />
+          <Figure
+            label="电度电费"
+            info="仅统计分时电量电费，不含基本（需量/容量）电费；正式电费以供电局结算单为准"
+            value={report.energyCostCNY === null ? null : `¥${formatDecimal(report.energyCostCNY, 0)}`}
+            note={report.energyCostCNY === null ? `${costMissing}，未计` : '按分时电价计算，不含需量电费'}
+          />
           <Figure label="日均用电" value={report.daysWithData ? formatDecimal(report.electricityKWh / report.daysWithData, 0) : null} unit="kWh" note={`${report.daysWithData} / ${report.daysInMonth} 天有计量`} />
           <Figure label="用电最多的一天" value={peak ? formatDecimal(peak.electricityKWh, 0) : null} unit="kWh" note={peak?.label ?? '—'} />
           <Figure label="最大需量" value={peakDemand ? formatDecimal(peakDemand.demandKW, 1) : null} unit="kW" note={peakDemand ? `${range.format(new Date(peakDemand.at))} · ${NOT_ARCHIVED}` : meter ? NOT_ARCHIVED : '没有总电表'} />
@@ -298,7 +315,7 @@ function ArchivedMonthlyReport({ stored, span }: { readonly stored: StoredReport
         <ConfirmedUtilityBillsSidecar siteId={site.id} month={report.month} />
       </Section>
 
-      <Section index={4} title="节能成效" description="对比没做措施时的预计用电（按实际供冷量调整），IPMVP 选项 C">
+      <Section index={4} title="节能成效" description="对比没做措施时的预计用电（按实际供冷量与气候调整）">
         <SavingsGrid totals={report.savings} daysNote={`本月 ${report.daysInMonth} 天`} />
       </Section>
 
@@ -358,7 +375,12 @@ function LiveMonthlyReport({ month, span, archiveUnavailable }: { readonly month
 
   if (energy.isPending) return <ReportSheetSkeleton />;
   if (energy.isError || !energy.data) {
-    return <div className={`${sheetFrame} rounded-xl border bg-card py-16 text-center text-sm text-muted-foreground`}>报告所需的能耗数据暂时读不到</div>;
+    return (
+      <div className={`${sheetFrame} flex flex-col items-center gap-3 rounded-xl border bg-card px-6 py-16 text-center text-sm text-muted-foreground`}>
+        <span>报告所需的能耗数据暂时读不到</span>
+        <Button type="button" variant="outline" size="sm" onClick={() => void energy.refetch()}>重试</Button>
+      </div>
+    );
   }
 
   const { current, previous } = energy.data;
@@ -444,7 +466,12 @@ function LiveMonthlyReport({ month, span, archiveUnavailable }: { readonly month
             delta={relativeChange(monthCop, prevMonthCop)}
             note={copNote}
           />
-          <Figure label="估算电费" value={totalCost === null ? null : `¥${formatDecimal(totalCost, 0)}`} note={totalCost === null ? `${costMissing}，未计` : '按分时电价估算，以结算为准'} />
+          <Figure
+            label="估算电费"
+            info="按站点分时电价估算电度电费并计入当前需量估算，正式电费以供电局结算单为准"
+            value={totalCost === null ? null : `¥${formatDecimal(totalCost, 0)}`}
+            note={totalCost === null ? `${costMissing}，未计` : '按分时电价估算，以结算为准'}
+          />
           <Figure label="日均用电" value={days.length ? formatDecimal((current.electricityKWh ?? 0) / days.length, 0) : null} unit="kWh" note={`${days.length} / ${span.days} 天有计量`} />
           <Figure label="用电最多的一天" value={current.peak ? formatDecimal(current.peak.electricityKWh!, 0) : null} unit="kWh" note={current.peak?.label ?? '—'} />
           <Figure label="最大需量" value={peakDemand ? formatDecimal(peakDemand.demandKW, 1) : null} unit="kW" note={peakDemand ? range.format(new Date(peakDemand.at)) : meter ? '本月统计未满 15 分钟' : '没有总电表'} />
@@ -491,7 +518,7 @@ function LiveMonthlyReport({ month, span, archiveUnavailable }: { readonly month
         <ConfirmedUtilityBillsSidecar siteId={site.id} month={month} />
       </Section>
 
-      <Section index={4} title="节能成效" description="对比没做措施时的预计用电（按实际供冷量调整），IPMVP 选项 C">
+      <Section index={4} title="节能成效" description="对比没做措施时的预计用电（按实际供冷量与气候调整）">
         <LiveSavings siteId={site.id} month={month} span={span} timeZone={timeZone} />
       </Section>
 

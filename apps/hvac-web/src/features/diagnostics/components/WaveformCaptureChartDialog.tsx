@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Skeleton } from '@/components/ui/skeleton';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import {
   WAVEFORM_SOURCE_LABELS,
   WAVEFORM_STATUS_LABELS,
@@ -41,7 +42,14 @@ export function WaveformCaptureChartDialog({
     enabled: Boolean(captureId),
   });
 
+  const [prevCaptureId, setPrevCaptureId] = useState(captureId);
   const [hiddenSeries, setHiddenSeries] = useState<ReadonlySet<string>>(() => new Set());
+  const [scaleMode, setScaleMode] = useState<'independent' | 'unified'>('independent');
+
+  if (captureId !== prevCaptureId) {
+    setPrevCaptureId(captureId);
+    setHiddenSeries(new Set());
+  }
 
   const capture = detailQuery.data ?? null;
   const seriesKeys = useMemo<readonly string[]>(() => {
@@ -53,10 +61,33 @@ export function WaveformCaptureChartDialog({
     return Array.from(set).sort();
   }, [capture]);
 
+  const seriesBounds = useMemo(() => {
+    const bounds = new Map<string, { readonly min: number; readonly max: number; readonly axisMin: number; readonly axisSpan: number }>();
+    if (!capture) return bounds;
+    for (const key of seriesKeys) {
+      let min = Infinity;
+      let max = -Infinity;
+      for (const row of capture.samples) {
+        const val = row.values[key];
+        if (val !== undefined && Number.isFinite(val)) {
+          if (val < min) min = val;
+          if (val > max) max = val;
+        }
+      }
+      if (!Number.isFinite(min) || !Number.isFinite(max)) continue;
+      const axisMin = min === max ? min - 1 : min;
+      const axisMax = min === max ? max + 1 : max;
+      bounds.set(key, { min, max, axisMin, axisSpan: axisMax - axisMin });
+    }
+    return bounds;
+  }, [capture, seriesKeys]);
+
   const activeKeys = useMemo(
     () => seriesKeys.filter((k) => !hiddenSeries.has(k)),
     [seriesKeys, hiddenSeries],
   );
+
+  const normalized = scaleMode === 'independent' && activeKeys.length > 1;
 
   const chartGeometry = useMemo(() => {
     if (!capture || capture.samples.length === 0 || activeKeys.length === 0) return null;
@@ -75,14 +106,11 @@ export function WaveformCaptureChartDialog({
 
     let minY = Infinity;
     let maxY = -Infinity;
-    for (const row of capture.samples) {
-      for (const key of activeKeys) {
-        const val = row.values[key];
-        if (val !== undefined && Number.isFinite(val)) {
-          if (val < minY) minY = val;
-          if (val > maxY) maxY = val;
-        }
-      }
+    for (const key of activeKeys) {
+      const stat = seriesBounds.get(key);
+      if (!stat) continue;
+      if (stat.min < minY) minY = stat.min;
+      if (stat.max > maxY) maxY = stat.max;
     }
     if (!Number.isFinite(minY) || !Number.isFinite(maxY)) return null;
     if (minY === maxY) {
@@ -96,22 +124,26 @@ export function WaveformCaptureChartDialog({
         ? padLeft + ((triggerMs - minMs) / spanMs) * plotW
         : null;
 
-    const paths = activeKeys.map((key, idx) => {
+    const paths = activeKeys.map((key) => {
+      const colorIdx = seriesKeys.indexOf(key);
+      const stat = seriesBounds.get(key);
+      const localMin = normalized && stat ? stat.axisMin : minY;
+      const localSpan = normalized && stat ? stat.axisSpan : ySpan;
       const points = capture.samples
         .map((row) => {
           const val = row.values[key];
           if (val === undefined || !Number.isFinite(val)) return null;
           const x = padLeft + ((row.sampledAtMs - minMs) / spanMs) * plotW;
-          const y = padTop + (1 - (val - minY) / ySpan) * plotH;
+          const y = padTop + (1 - (val - localMin) / localSpan) * plotH;
           return `${x.toFixed(1)},${y.toFixed(1)}`;
         })
         .filter((pt): pt is string => pt !== null)
         .join(' ');
-      return { key, color: SERIES_COLORS[idx % SERIES_COLORS.length]!, points };
+      return { key, color: SERIES_COLORS[(colorIdx >= 0 ? colorIdx : 0) % SERIES_COLORS.length]!, points };
     });
 
     return { width, height, padLeft, padTop, plotW, plotH, minY, maxY, minMs, maxMs, triggerX, paths };
-  }, [capture, activeKeys]);
+  }, [capture, activeKeys, seriesBounds, seriesKeys, normalized]);
 
   const formatTimeLabel = (ms: number) =>
     new Intl.DateTimeFormat('zh-CN', {
@@ -152,32 +184,54 @@ export function WaveformCaptureChartDialog({
             </div>
 
             {seriesKeys.length > 0 ? (
-              <div className="flex flex-wrap items-center gap-2">
-                {seriesKeys.map((key, idx) => {
-                  const active = !hiddenSeries.has(key);
-                  return (
-                    <button
-                      key={key}
-                      type="button"
-                      onClick={() =>
-                        setHiddenSeries((prev) => {
-                          const next = new Set(prev);
-                          if (next.has(key)) next.delete(key);
-                          else next.add(key);
-                          return next;
-                        })
-                      }
-                      className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-mono transition-colors ${active ? 'bg-background text-foreground' : 'bg-muted/40 text-muted-foreground opacity-60'}`}
-                    >
-                      <span
-                        className="size-2 rounded-full"
-                        style={{ backgroundColor: SERIES_COLORS[idx % SERIES_COLORS.length] }}
-                        aria-hidden="true"
-                      />
-                      {key}
-                    </button>
-                  );
-                })}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  {seriesKeys.map((key, idx) => {
+                    const active = !hiddenSeries.has(key);
+                    const stat = seriesBounds.get(key);
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        aria-pressed={active}
+                        onClick={() =>
+                          setHiddenSeries((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(key)) next.delete(key);
+                            else next.add(key);
+                            return next;
+                          })
+                        }
+                        className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-mono transition-colors ${active ? 'bg-background text-foreground' : 'bg-muted/40 text-muted-foreground opacity-60'}`}
+                      >
+                        <span
+                          className="size-2 rounded-full"
+                          style={{ backgroundColor: SERIES_COLORS[idx % SERIES_COLORS.length] }}
+                          aria-hidden="true"
+                        />
+                        <span>{key}</span>
+                        {stat ? (
+                          <span className="text-[11px] text-muted-foreground tabular-nums">
+                            ({stat.min.toFixed(1)}–{stat.max.toFixed(1)})
+                          </span>
+                        ) : null}
+                      </button>
+                    );
+                  })}
+                </div>
+                {activeKeys.length > 1 ? (
+                  <ToggleGroup
+                    type="single"
+                    value={scaleMode}
+                    onValueChange={(value) => {
+                      if (value === 'independent' || value === 'unified') setScaleMode(value);
+                    }}
+                    aria-label="纵轴缩放方式"
+                  >
+                    <ToggleGroupItem value="independent">独立缩放</ToggleGroupItem>
+                    <ToggleGroupItem value="unified">统一坐标</ToggleGroupItem>
+                  </ToggleGroup>
+                ) : null}
               </div>
             ) : null}
 
@@ -206,10 +260,10 @@ export function WaveformCaptureChartDialog({
                     strokeWidth="1"
                   />
                   <text x={4} y={chartGeometry.padTop + 10} fill="var(--muted-foreground)" fontSize="11">
-                    {chartGeometry.maxY.toFixed(1)}
+                    {normalized ? '100%' : chartGeometry.maxY.toFixed(1)}
                   </text>
                   <text x={4} y={chartGeometry.padTop + chartGeometry.plotH} fill="var(--muted-foreground)" fontSize="11">
-                    {chartGeometry.minY.toFixed(1)}
+                    {normalized ? '0%' : chartGeometry.minY.toFixed(1)}
                   </text>
                   <text x={chartGeometry.padLeft} y={chartGeometry.height - 6} fill="var(--muted-foreground)" fontSize="11">
                     {formatTimeLabel(chartGeometry.minMs)}

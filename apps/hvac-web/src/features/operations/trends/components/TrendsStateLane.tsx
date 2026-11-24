@@ -54,7 +54,7 @@ export function TrendsStateLane({
           <span className="font-semibold text-foreground">设备启停状态</span>
           {hoverAt !== null ? (
             <span className="font-mono text-muted-foreground tabular-nums">
-              游标 {formatTime(new Date(hoverAt).toISOString(), timezone).slice(-5)}
+              时间 {formatTime(new Date(hoverAt).toISOString(), timezone).slice(-5)}
             </span>
           ) : null}
         </div>

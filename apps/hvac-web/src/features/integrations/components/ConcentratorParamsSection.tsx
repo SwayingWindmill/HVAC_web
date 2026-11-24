@@ -14,14 +14,9 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Spinner } from '@/components/ui/spinner';
 import {
   Table,
   TableBody,
@@ -298,7 +293,19 @@ export function ConcentratorParamsSection({
           if (!submitting) setConfirmOpen(open);
         }}
       >
-        <DialogContent className="sm:max-w-xl">
+        <DialogContent
+          className="sm:max-w-xl"
+          showCloseButton={!submitting}
+          onEscapeKeyDown={(event) => {
+            if (submitting) event.preventDefault();
+          }}
+          onPointerDownOutside={(event) => {
+            if (submitting) event.preventDefault();
+          }}
+          onInteractOutside={(event) => {
+            if (submitting) event.preventDefault();
+          }}
+        >
           <DialogHeader>
             <DialogTitle>确认下发串口与射频参数到集中器 Flash？</DialogTitle>
             <DialogDescription>
@@ -306,6 +313,14 @@ export function ConcentratorParamsSection({
               永久保存。如修改从站地址或串口波特率，请确认现场网关轮询配置同步调整。
             </DialogDescription>
           </DialogHeader>
+
+          {diff?.changes.some((item) => item.key === 'modbusId' || item.key === 'baudRateCode') ? (
+            <Alert variant="destructive">
+              <AlertDescription>
+                本次调整包含「站号 / 从站地址」或「串口波特率」，写入后现场通信参数会立即改变，若未同步修改网关驱动配置将导致集中器失联。
+              </AlertDescription>
+            </Alert>
+          ) : null}
 
           {diff && diff.changes.length > 0 ? (
             <div className="max-h-60 overflow-y-auto rounded-md border">
@@ -387,6 +402,7 @@ export function ConcentratorParamsSection({
               disabled={!canWrite || submitting || reason.trim().length === 0 || !diff?.hasChanges}
               onClick={() => void handleConfirmSubmit()}
             >
+              {submitting ? <Spinner data-icon="inline-start" /> : null}
               {submitting ? '正在提交…' : stageIfOffline ? '确认写入或离线暂存' : '确认写入 Flash'}
             </Button>
           </DialogFooter>

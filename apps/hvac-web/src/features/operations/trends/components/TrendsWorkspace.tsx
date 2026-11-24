@@ -2,7 +2,6 @@ import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, Link, useNavigate } from '@tanstack/react-router';
 import { AlertCircle, CalendarClock, LineChart, RefreshCw, ShieldAlert, X } from 'lucide-react';
-import { toast } from 'sonner';
 import { PageHeader, PageMeta } from '@/blocks/page-header';
 import { Panel } from '@/blocks/panel';
 import { StateCard } from '@/blocks/state/state-card';
@@ -525,7 +524,7 @@ export function TrendsWorkspace() {
                       key={item.value}
                       value={item.value}
                       disabled={!allowed}
-                      title={!allowed ? '当前时间跨度下该粒度超过 720 桶上限' : undefined}
+                      title={!allowed ? '所选时间跨度较长，请选择更粗的聚合粒度' : undefined}
                       className="h-7 px-2 text-xs"
                     >
                       {item.label}
@@ -721,6 +720,9 @@ export function TrendsWorkspace() {
                   siteId={site.id}
                   timezone={site.timezone}
                   overlays={overlaysModel}
+                  isPending={(showAlarmsActive && alarmsOverlayQuery.isPending) || (showCommandsActive && commandsOverlayQuery.isPending)}
+                  isError={(showAlarmsActive && alarmsOverlayQuery.isError) || (showCommandsActive && commandsOverlayQuery.isError)}
+                  onRetry={() => { if (showAlarmsActive && alarmsOverlayQuery.isError) void alarmsOverlayQuery.refetch(); if (showCommandsActive && commandsOverlayQuery.isError) void commandsOverlayQuery.refetch(); }}
                   canCreateWorkOrder={canCreateWorkOrder}
                   onCreateWorkOrderForAlarm={(alarm) => setWorkOrderAlarm(alarm)}
                 />
@@ -771,34 +773,15 @@ export function TrendsWorkspace() {
       {workOrderAlarm ? (
         <CreateWorkOrderDialog
           open={Boolean(workOrderAlarm)}
-          onOpenChange={(open) => {
-            if (!open) setWorkOrderAlarm(null);
-          }}
+          onOpenChange={(open) => { if (!open) setWorkOrderAlarm(null); }}
           title="由告警创建工单"
           initial={{
             title: workOrderAlarm.title,
             priority: PRIORITY_BY_SEVERITY[workOrderAlarm.currentSeverity],
-            description: [
-              workOrderAlarm.summary,
-              `趋势时段：${rangeText}`,
-              selectedPoints.length > 0
-                ? `排查点位：${selectedPoints.map((p) => p.seriesLabel).join('、')}`
-                : '',
-            ]
-              .filter(Boolean)
-              .join('\n'),
+            description: [workOrderAlarm.summary, `趋势时段：${rangeText}`, selectedPoints.length > 0 ? `排查点位：${selectedPoints.map((p) => p.seriesLabel).join('、')}` : ''].filter(Boolean).join('\n'),
           }}
-          sourceReferences={[
-            {
-              domain: 'ALARM',
-              resourceId: workOrderAlarm.alarmId,
-              relationship: 'ORIGIN',
-            },
-          ]}
-          onCreated={() => {
-            void queryClient.invalidateQueries({ queryKey: workOrderKeys.all(site.id) });
-            toast.success('工单已创建');
-          }}
+          sourceReferences={[{ domain: 'ALARM', resourceId: workOrderAlarm.alarmId, relationship: 'ORIGIN' }]}
+          onCreated={() => void queryClient.invalidateQueries({ queryKey: workOrderKeys.all(site.id) })}
         />
       ) : null}
     </Main>

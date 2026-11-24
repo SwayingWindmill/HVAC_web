@@ -4,6 +4,7 @@ import { AlertCircle, AlertTriangle, CheckCircle2, Cpu, RefreshCw, Trash2, Uploa
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { ConfirmDiscardDialog } from '@/components/confirm-discard-dialog';
 import {
   Select,
   SelectContent,
@@ -68,6 +69,7 @@ export function AlarmRuleEdgeCompileSheet({
   const [compileResult, setCompileResult] = useState<EdgeRuleCompileResult | null>(null);
   const [selectedGatewayId, setSelectedGatewayId] = useState('');
   const [pushSuccessNotice, setPushSuccessNotice] = useState<string | null>(null);
+  const [confirmClearOpen, setConfirmClearOpen] = useState(false);
 
   const compileMutation = useMutation({
     mutationFn: () => compileSiteAlarmRulesEdge(
@@ -135,6 +137,7 @@ export function AlarmRuleEdgeCompileSheet({
         );
       }
     },
+    onSettled: () => setConfirmClearOpen(false),
   });
   const resetPush = pushShadowMutation.reset;
 
@@ -392,12 +395,7 @@ export function AlarmRuleEdgeCompileSheet({
                                 disabled={pushShadowMutation.isPending}
                                 onClick={() => {
                                   setPushSuccessNotice(null);
-                                  pushShadowMutation.mutate({
-                                    gatewayId: activeGatewayId,
-                                    expectedDesiredRevision: shadowQuery.data?.desired?.desiredRevision ?? 0,
-                                    edgeRuleBundle: null,
-                                    reason: '告警规则工作台清空边缘规则包',
-                                  });
+                                  setConfirmClearOpen(true);
                                 }}
                               >
                                 <Trash2 data-icon="inline-start" className="size-3.5" aria-hidden="true" />
@@ -432,11 +430,32 @@ export function AlarmRuleEdgeCompileSheet({
         </div>
 
         <SheetFooter className="border-t border-divider pt-3">
-          <Button type="button" variant="outline" onClick={onClose}>
+          <Button type="button" variant="outline" disabled={pushShadowMutation.isPending} onClick={onClose}>
             关闭
           </Button>
         </SheetFooter>
       </SheetContent>
+      <ConfirmDiscardDialog
+        open={confirmClearOpen}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setConfirmClearOpen(false);
+        }}
+        busy={pushShadowMutation.isPending}
+        title="确认清空目标网关配置影子中的边缘规则包？"
+        description="清空后网关本地将停止独立评估与下发边缘告警规则，直到重新下发或切换恢复。"
+        keepLabel="取消"
+        discardLabel="确认清空"
+        busyLabel="清空中…"
+        onConfirmDiscard={() => {
+          if (!activeGatewayId) return;
+          pushShadowMutation.mutate({
+            gatewayId: activeGatewayId,
+            expectedDesiredRevision: shadowQuery.data?.desired?.desiredRevision ?? 0,
+            edgeRuleBundle: null,
+            reason: '告警规则工作台清空边缘规则包',
+          });
+        }}
+      />
     </Sheet>
   );
 }

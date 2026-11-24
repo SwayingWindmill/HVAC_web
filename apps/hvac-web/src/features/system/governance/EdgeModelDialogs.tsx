@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, Plus, RotateCcw, Rocket } from 'lucide-react';
-import { useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { toast } from 'sonner';
 import type {
   EdgeModelArtifactView,
@@ -9,6 +9,7 @@ import type {
 } from '@/api/generated/platformGateway.gen';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog,
   DialogContent,
@@ -19,6 +20,7 @@ import {
 } from '@/components/ui/dialog';
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import {
   Select,
   SelectContent,
@@ -26,6 +28,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Spinner } from '@/components/ui/spinner';
 import {
   approveEdgeModelArtifact,
   createEdgeModelArtifact,
@@ -51,6 +54,26 @@ function parseNumList(raw: string): number[] | undefined {
   if (parts.length === 0) return undefined;
   const nums = parts.map((s) => Number(s));
   return nums.every((n) => Number.isFinite(n)) ? nums : undefined;
+}
+
+const APPROVE_DEFAULT_REASON = '离线基准与物理安全护栏检查均已达标';
+const SHADOW_DEFAULT_REASON = '开启端侧并行影子试运行验证';
+const PRODUCTION_DEFAULT_REASON = '提升为端侧正式运行版本';
+const ROLLBACK_DEFAULT_REASON = '人工评估异常，一键回退上一稳定版本';
+
+function lockedDialogProps(busy: boolean) {
+  return {
+    showCloseButton: !busy,
+    onEscapeKeyDown: (event: { preventDefault: () => void }) => {
+      if (busy) event.preventDefault();
+    },
+    onPointerDownOutside: (event: { preventDefault: () => void }) => {
+      if (busy) event.preventDefault();
+    },
+    onInteractOutside: (event: { preventDefault: () => void }) => {
+      if (busy) event.preventDefault();
+    },
+  } as const;
 }
 
 export function RegisterEdgeModelDialog({
@@ -83,6 +106,21 @@ export function RegisterEdgeModelDialog({
   const [targetPoints, setTargetPoints] = useState('CHW_SUPPLY_TEMP_SP');
   const [gatewayId, setGatewayId] = useState(gateways[0]?.id ?? '');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const wasOpenRef = useRef(false);
+
+  useEffect(() => {
+    if (open && !wasOpenRef.current) {
+      setErrorMsg(null);
+      setGatewayId(gateways[0]?.id ?? '');
+    }
+    wasOpenRef.current = open;
+  }, [open, gateways]);
+
+  useEffect(() => {
+    if (open && !gatewayId && gateways[0]?.id) {
+      setGatewayId(gateways[0].id);
+    }
+  }, [open, gatewayId, gateways]);
 
   const mutation = useMutation({
     mutationFn: () => createEdgeModelArtifact(
@@ -134,8 +172,8 @@ export function RegisterEdgeModelDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
+    <Dialog open={open} onOpenChange={(nextOpen) => { if (!mutation.isPending) onOpenChange(nextOpen); }}>
+      <DialogContent className="sm:max-w-2xl" {...lockedDialogProps(mutation.isPending)}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Plus className="size-4 text-primary" aria-hidden="true" />
@@ -156,7 +194,7 @@ export function RegisterEdgeModelDialog({
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field>
             <FieldLabel htmlFor="em-domain">算法域</FieldLabel>
-            <Select value={domain} onValueChange={handleDomainChange}>
+            <Select value={domain} disabled={mutation.isPending} onValueChange={handleDomainChange}>
               <SelectTrigger id="em-domain"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="EDGE_CONTROL">端侧节能寻优</SelectItem>
@@ -166,7 +204,7 @@ export function RegisterEdgeModelDialog({
           </Field>
           <Field>
             <FieldLabel htmlFor="em-gateway">默认目标网关</FieldLabel>
-            <Select value={gatewayId} onValueChange={setGatewayId}>
+            <Select value={gatewayId} disabled={mutation.isPending} onValueChange={setGatewayId}>
               <SelectTrigger id="em-gateway"><SelectValue placeholder="站点全量网关" /></SelectTrigger>
               <SelectContent>
                 {gateways.map((gw) => (
@@ -177,62 +215,63 @@ export function RegisterEdgeModelDialog({
           </Field>
           <Field>
             <FieldLabel htmlFor="em-key">模型标识</FieldLabel>
-            <Input id="em-key" value={modelKey} onChange={(e) => setModelKey(e.target.value)} onKeyDown={handleKeyDown} />
+            <Input id="em-key" disabled={mutation.isPending} value={modelKey} onChange={(e) => setModelKey(e.target.value)} onKeyDown={handleKeyDown} />
           </Field>
           <Field>
             <FieldLabel htmlFor="em-version">版本号</FieldLabel>
-            <Input id="em-version" value={version} onChange={(e) => setVersion(e.target.value)} onKeyDown={handleKeyDown} />
+            <Input id="em-version" disabled={mutation.isPending} value={version} onChange={(e) => setVersion(e.target.value)} onKeyDown={handleKeyDown} />
           </Field>
           <Field>
             <FieldLabel htmlFor="em-name">版本说明</FieldLabel>
-            <Input id="em-name" value={name} onChange={(e) => setName(e.target.value)} onKeyDown={handleKeyDown} />
+            <Input id="em-name" disabled={mutation.isPending} value={name} onChange={(e) => setName(e.target.value)} onKeyDown={handleKeyDown} />
           </Field>
           <Field>
             <FieldLabel htmlFor="em-dev">影子偏差熔断阈值</FieldLabel>
-            <Input id="em-dev" type="number" step="0.1" value={maxDeviation} onChange={(e) => setMaxDeviation(e.target.value)} onKeyDown={handleKeyDown} />
+            <Input id="em-dev" type="number" step="0.1" disabled={mutation.isPending} value={maxDeviation} onChange={(e) => setMaxDeviation(e.target.value)} onKeyDown={handleKeyDown} />
           </Field>
           <Field>
             <FieldLabel htmlFor="em-smin">供水温度下限 (°C)</FieldLabel>
-            <Input id="em-smin" type="number" step="0.5" value={supplyMin} onChange={(e) => setSupplyMin(e.target.value)} onKeyDown={handleKeyDown} />
+            <Input id="em-smin" type="number" step="0.5" disabled={mutation.isPending} value={supplyMin} onChange={(e) => setSupplyMin(e.target.value)} onKeyDown={handleKeyDown} />
           </Field>
           <Field>
             <FieldLabel htmlFor="em-smax">供水温度上限 (°C)</FieldLabel>
-            <Input id="em-smax" type="number" step="0.5" value={supplyMax} onChange={(e) => setSupplyMax(e.target.value)} onKeyDown={handleKeyDown} />
+            <Input id="em-smax" type="number" step="0.5" disabled={mutation.isPending} value={supplyMax} onChange={(e) => setSupplyMax(e.target.value)} onKeyDown={handleKeyDown} />
           </Field>
           <Field>
             <FieldLabel htmlFor="em-pmin">水泵最低频率 (Hz)</FieldLabel>
-            <Input id="em-pmin" type="number" value={pumpMin} onChange={(e) => setPumpMin(e.target.value)} onKeyDown={handleKeyDown} />
+            <Input id="em-pmin" type="number" disabled={mutation.isPending} value={pumpMin} onChange={(e) => setPumpMin(e.target.value)} onKeyDown={handleKeyDown} />
           </Field>
           <Field>
             <FieldLabel htmlFor="em-pmax">水泵最高频率 (Hz)</FieldLabel>
-            <Input id="em-pmax" type="number" value={pumpMax} onChange={(e) => setPumpMax(e.target.value)} onKeyDown={handleKeyDown} />
+            <Input id="em-pmax" type="number" disabled={mutation.isPending} value={pumpMax} onChange={(e) => setPumpMax(e.target.value)} onKeyDown={handleKeyDown} />
           </Field>
           <Field>
             <FieldLabel htmlFor="em-up">加机负荷阈值 (%)</FieldLabel>
-            <Input id="em-up" type="number" value={stageUp} onChange={(e) => setStageUp(e.target.value)} onKeyDown={handleKeyDown} />
+            <Input id="em-up" type="number" disabled={mutation.isPending} value={stageUp} onChange={(e) => setStageUp(e.target.value)} onKeyDown={handleKeyDown} />
           </Field>
           <Field>
             <FieldLabel htmlFor="em-down">减机负荷阈值 (%)</FieldLabel>
-            <Input id="em-down" type="number" value={stageDown} onChange={(e) => setStageDown(e.target.value)} onKeyDown={handleKeyDown} />
+            <Input id="em-down" type="number" disabled={mutation.isPending} value={stageDown} onChange={(e) => setStageDown(e.target.value)} onKeyDown={handleKeyDown} />
           </Field>
           <Field>
             <FieldLabel htmlFor="em-cop">COP 拟合系数（逗号分隔）</FieldLabel>
-            <Input id="em-cop" value={copCoeffs} onChange={(e) => setCopCoeffs(e.target.value)} onKeyDown={handleKeyDown} />
+            <Input id="em-cop" disabled={mutation.isPending} value={copCoeffs} onChange={(e) => setCopCoeffs(e.target.value)} onKeyDown={handleKeyDown} />
           </Field>
           <Field>
             <FieldLabel htmlFor="em-fdd">诊断最小温差阈值 (K)</FieldLabel>
-            <Input id="em-fdd" type="number" step="0.1" value={fddDeltaT} onChange={(e) => setFddDeltaT(e.target.value)} onKeyDown={handleKeyDown} />
+            <Input id="em-fdd" type="number" step="0.1" disabled={mutation.isPending} value={fddDeltaT} onChange={(e) => setFddDeltaT(e.target.value)} onKeyDown={handleKeyDown} />
           </Field>
           <Field className="sm:col-span-2">
             <FieldLabel htmlFor="em-pts">目标调控点位（逗号分隔）</FieldLabel>
-            <Input id="em-pts" value={targetPoints} onChange={(e) => setTargetPoints(e.target.value)} onKeyDown={handleKeyDown} />
+            <Input id="em-pts" disabled={mutation.isPending} value={targetPoints} onChange={(e) => setTargetPoints(e.target.value)} onKeyDown={handleKeyDown} />
             <FieldDescription>禁止包含高压保护、水流联锁、急停等硬实时安全点位。</FieldDescription>
           </Field>
         </div>
 
         <DialogFooter>
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>取消</Button>
+          <Button type="button" variant="outline" disabled={mutation.isPending} onClick={() => onOpenChange(false)}>取消</Button>
           <Button type="button" disabled={mutation.isPending} onClick={() => mutation.mutate()}>
+            {mutation.isPending ? <Spinner data-icon="inline-start" /> : null}
             {mutation.isPending ? '提交中...' : '保存并计算校验摘要'}
           </Button>
         </DialogFooter>
@@ -256,8 +295,15 @@ export function ApproveEdgeModelDialog({
 }) {
   const queryClient = useQueryClient();
   const [decision, setDecision] = useState<'APPROVED' | 'REJECTED'>('APPROVED');
-  const [reason, setReason] = useState('离线基准与物理安全护栏检查均已达标');
+  const [reason, setReason] = useState(APPROVE_DEFAULT_REASON);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setDecision('APPROVED');
+    setReason(APPROVE_DEFAULT_REASON);
+    setErrorMsg(null);
+  }, [open, artifact?.id]);
 
   const mutation = useMutation({
     mutationFn: () => {
@@ -274,12 +320,18 @@ export function ApproveEdgeModelDialog({
   });
 
   function handleDecisionChange(next: string) {
-    if (next === 'APPROVED' || next === 'REJECTED') setDecision(next);
+    if (next !== 'APPROVED' && next !== 'REJECTED') return;
+    setDecision(next);
+    if (next === 'REJECTED' && reason.trim() === APPROVE_DEFAULT_REASON) {
+      setReason('');
+    } else if (next === 'APPROVED' && reason.trim() === '') {
+      setReason(APPROVE_DEFAULT_REASON);
+    }
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+    <Dialog open={open} onOpenChange={(nextOpen) => { if (!mutation.isPending) onOpenChange(nextOpen); }}>
+      <DialogContent className="sm:max-w-lg" {...lockedDialogProps(mutation.isPending)}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <CheckCircle2 className="size-4 text-primary" aria-hidden="true" />
@@ -293,7 +345,7 @@ export function ApproveEdgeModelDialog({
         <div className="space-y-3">
           <Field>
             <FieldLabel htmlFor="approve-decision">审批结论</FieldLabel>
-            <Select value={decision} onValueChange={handleDecisionChange}>
+            <Select value={decision} disabled={mutation.isPending} onValueChange={handleDecisionChange}>
               <SelectTrigger id="approve-decision"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="APPROVED">批准上线</SelectItem>
@@ -303,12 +355,19 @@ export function ApproveEdgeModelDialog({
           </Field>
           <Field>
             <FieldLabel htmlFor="approve-reason">审批意见</FieldLabel>
-            <Input id="approve-reason" value={reason} onChange={(e) => setReason(e.target.value)} />
+            <Input
+              id="approve-reason"
+              disabled={mutation.isPending}
+              placeholder={decision === 'REJECTED' ? '请说明驳回原因或需要调整的边界参数' : undefined}
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+            />
           </Field>
         </div>
         <DialogFooter>
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>取消</Button>
+          <Button type="button" variant="outline" disabled={mutation.isPending} onClick={() => onOpenChange(false)}>取消</Button>
           <Button type="button" disabled={mutation.isPending || !reason.trim()} onClick={() => mutation.mutate()}>
+            {mutation.isPending ? <Spinner data-icon="inline-start" /> : null}
             {mutation.isPending ? '提交中...' : '确认提交审批'}
           </Button>
         </DialogFooter>
@@ -335,8 +394,32 @@ export function DeployEdgeModelDialog({
   const queryClient = useQueryClient();
   const [environment, setEnvironment] = useState<'SHADOW' | 'PRODUCTION'>('SHADOW');
   const [gatewayId, setGatewayId] = useState(artifact?.gatewayId ?? gateways[0]?.id ?? '');
-  const [reason, setReason] = useState('开启端侧并行影子试运行验证');
+  const [reason, setReason] = useState(SHADOW_DEFAULT_REASON);
+  const [confirmedProduction, setConfirmedProduction] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const initKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!open) {
+      initKeyRef.current = null;
+      return;
+    }
+    const nextKey = artifact?.id ?? '__none__';
+    if (initKeyRef.current !== nextKey) {
+      initKeyRef.current = nextKey;
+      setEnvironment('SHADOW');
+      setGatewayId(artifact?.gatewayId ?? gateways[0]?.id ?? '');
+      setReason(SHADOW_DEFAULT_REASON);
+      setConfirmedProduction(false);
+      setErrorMsg(null);
+    }
+  }, [open, artifact?.id, artifact?.gatewayId, gateways]);
+
+  useEffect(() => {
+    if (open && !gatewayId && (artifact?.gatewayId || gateways[0]?.id)) {
+      setGatewayId(artifact?.gatewayId ?? gateways[0]?.id ?? '');
+    }
+  }, [open, gatewayId, artifact?.gatewayId, gateways]);
 
   const mutation = useMutation({
     mutationFn: () => {
@@ -360,13 +443,14 @@ export function DeployEdgeModelDialog({
   function handleEnvChange(next: string) {
     if (next === 'SHADOW' || next === 'PRODUCTION') {
       setEnvironment(next);
-      setReason(next === 'PRODUCTION' ? '提升为端侧正式运行版本' : '开启端侧并行影子试运行验证');
+      setConfirmedProduction(false);
+      setReason(next === 'PRODUCTION' ? PRODUCTION_DEFAULT_REASON : SHADOW_DEFAULT_REASON);
     }
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+    <Dialog open={open} onOpenChange={(nextOpen) => { if (!mutation.isPending) onOpenChange(nextOpen); }}>
+      <DialogContent className="sm:max-w-lg" {...lockedDialogProps(mutation.isPending)}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Rocket className="size-4 text-primary" aria-hidden="true" />
@@ -380,7 +464,7 @@ export function DeployEdgeModelDialog({
         <div className="space-y-3">
           <Field>
             <FieldLabel htmlFor="deploy-env">运行模式</FieldLabel>
-            <Select value={environment} onValueChange={handleEnvChange}>
+            <Select value={environment} disabled={mutation.isPending} onValueChange={handleEnvChange}>
               <SelectTrigger id="deploy-env"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="SHADOW">影子试运行（并行对照不上控制总线）</SelectItem>
@@ -388,10 +472,29 @@ export function DeployEdgeModelDialog({
               </SelectContent>
             </Select>
           </Field>
+          {environment === 'PRODUCTION' ? (
+            <Alert variant="destructive">
+              <AlertDescription className="space-y-2">
+                <p>即将原子切换现场正式运行模型，生效后将直接参与冷站运行调节。</p>
+                <div className="flex items-start gap-2">
+                  <Checkbox
+                    id="deploy-production-confirm"
+                    checked={confirmedProduction}
+                    disabled={mutation.isPending}
+                    onCheckedChange={(checked) => setConfirmedProduction(checked === true)}
+                    className="mt-0.5"
+                  />
+                  <Label htmlFor="deploy-production-confirm" className="cursor-pointer text-xs font-normal text-foreground">
+                    我已确认影子验证结果，确认切换为正式运行版本
+                  </Label>
+                </div>
+              </AlertDescription>
+            </Alert>
+          ) : null}
           {gateways.length > 0 ? (
             <Field>
               <FieldLabel htmlFor="deploy-gw">目标网关节点</FieldLabel>
-              <Select value={gatewayId || gateways[0]!.id} onValueChange={setGatewayId}>
+              <Select value={gatewayId || gateways[0]!.id} disabled={mutation.isPending} onValueChange={setGatewayId}>
                 <SelectTrigger id="deploy-gw"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {gateways.map((gw) => (
@@ -403,12 +506,17 @@ export function DeployEdgeModelDialog({
           ) : null}
           <Field>
             <FieldLabel htmlFor="deploy-reason">变更说明</FieldLabel>
-            <Input id="deploy-reason" value={reason} onChange={(e) => setReason(e.target.value)} />
+            <Input id="deploy-reason" disabled={mutation.isPending} value={reason} onChange={(e) => setReason(e.target.value)} />
           </Field>
         </div>
         <DialogFooter>
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>取消</Button>
-          <Button type="button" disabled={mutation.isPending} onClick={() => mutation.mutate()}>
+          <Button type="button" variant="outline" disabled={mutation.isPending} onClick={() => onOpenChange(false)}>取消</Button>
+          <Button
+            type="button"
+            disabled={mutation.isPending || !reason.trim() || (environment === 'PRODUCTION' && !confirmedProduction)}
+            onClick={() => mutation.mutate()}
+          >
+            {mutation.isPending ? <Spinner data-icon="inline-start" /> : null}
             {mutation.isPending ? '下发中...' : '确认下发'}
           </Button>
         </DialogFooter>
@@ -431,8 +539,14 @@ export function RollbackEdgeModelDialog({
   readonly csrfToken: string;
 }) {
   const queryClient = useQueryClient();
-  const [reason, setReason] = useState('人工评估异常，一键回退上一稳定版本');
+  const [reason, setReason] = useState(ROLLBACK_DEFAULT_REASON);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setReason(ROLLBACK_DEFAULT_REASON);
+    setErrorMsg(null);
+  }, [open, deployment?.id]);
 
   const mutation = useMutation({
     mutationFn: () => {
@@ -450,8 +564,8 @@ export function RollbackEdgeModelDialog({
   });
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+    <Dialog open={open} onOpenChange={(nextOpen) => { if (!mutation.isPending) onOpenChange(nextOpen); }}>
+      <DialogContent className="sm:max-w-lg" {...lockedDialogProps(mutation.isPending)}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <RotateCcw className="size-4 text-destructive" aria-hidden="true" />
@@ -464,11 +578,12 @@ export function RollbackEdgeModelDialog({
         {errorMsg ? <Alert variant="destructive"><AlertTitle>回退失败</AlertTitle><AlertDescription>{errorMsg}</AlertDescription></Alert> : null}
         <Field>
           <FieldLabel htmlFor="rb-reason">回退原因</FieldLabel>
-          <Input id="rb-reason" value={reason} onChange={(e) => setReason(e.target.value)} />
+          <Input id="rb-reason" disabled={mutation.isPending} value={reason} onChange={(e) => setReason(e.target.value)} />
         </Field>
         <DialogFooter>
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>取消</Button>
+          <Button type="button" variant="outline" disabled={mutation.isPending} onClick={() => onOpenChange(false)}>取消</Button>
           <Button type="button" variant="destructive" disabled={mutation.isPending || !reason.trim()} onClick={() => mutation.mutate()}>
+            {mutation.isPending ? <Spinner data-icon="inline-start" /> : null}
             {mutation.isPending ? '回退中...' : '立即执行回退'}
           </Button>
         </DialogFooter>

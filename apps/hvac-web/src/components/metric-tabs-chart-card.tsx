@@ -11,6 +11,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { ComposedChart, type ComposedChartProps } from "@/components/ui/composed-chart"
 import { DeltaBadge } from "@/components/ui/delta-badge"
 import { MetricValue } from "@/components/ui/metric-value"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 
 export interface MetricTab<K extends string = string> {
   /** Key of this metric in each data row. */
@@ -193,6 +194,7 @@ function MetricTabsChartCard<K extends string = string>({
               role="tab"
               aria-selected={isSelected}
               aria-controls={`${id}-panel`}
+              aria-description={metric.info}
               tabIndex={isSelected ? 0 : -1}
               data-slot="metric-tab"
               data-state={isSelected ? "active" : "inactive"}
@@ -208,9 +210,18 @@ function MetricTabsChartCard<K extends string = string>({
               <span className={cn("flex items-center gap-1 text-xs font-medium whitespace-nowrap", isSelected ? "text-primary" : "text-muted-foreground")}>
                 {metric.label}
                 {metric.info ? (
-                  <span title={metric.info} className="text-subtle-foreground inline-flex cursor-help">
-                    <Info className="size-3.5" aria-hidden="true" />
-                  </span>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span
+                        aria-hidden="true"
+                        onClick={(event) => event.stopPropagation()}
+                        className="text-subtle-foreground inline-flex cursor-help rounded-full hover:text-muted-foreground"
+                      >
+                        <Info className="size-3.5" aria-hidden="true" />
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent className="max-w-64 leading-5">{metric.info}</TooltipContent>
+                  </Tooltip>
                 ) : null}
               </span>
               <span className="flex items-center justify-between gap-3">
@@ -219,6 +230,7 @@ function MetricTabsChartCard<K extends string = string>({
                   format={metric.format}
                   currency={metric.currency}
                   maximumFractionDigits={metric.fractionDigits}
+                  focusableTooltip={false}
                   suffix={metric.unit && value !== null ? <span className="text-subtle-foreground ml-1 text-xs font-medium">{metric.unit}</span> : undefined}
                   className="text-2xl leading-[29px] font-semibold tracking-[-0.03em]"
                 />

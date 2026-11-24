@@ -23,6 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Spinner } from '@/components/ui/spinner';
 import { siteInputValue } from '@/features/savings/savings-model';
 import { isOneOf } from '@/lib/typed';
 import {
@@ -52,7 +53,7 @@ function isPositiveNumericString(raw: string): boolean {
 function createRatioFormSchema(timezone: string) {
   return z
     .object({
-      pointId: z.string().trim().min(1, { message: '请选择或填写测点 ID' }),
+      pointId: z.string().trim().min(1, { message: '请选择或填写点位 ID' }),
       ctRatio: z
         .string()
         .trim()
@@ -258,7 +259,9 @@ export function CreateMeterRatioDialog({
 
           <Field data-invalid={Boolean(errors.pointId) || undefined}>
             <div className="flex items-center justify-between gap-2">
-              <FieldLabel htmlFor="ratio-point-id">测点 ID</FieldLabel>
+              <FieldLabel htmlFor="ratio-point-id">
+                {!manualPointMode && pointOptions.length > 0 ? '计量点位' : '点位编号'}
+              </FieldLabel>
               {pointOptions.length > 0 ? (
                 <Button
                   type="button"
@@ -267,7 +270,7 @@ export function CreateMeterRatioDialog({
                   disabled={createRatioMutation.isPending}
                   onClick={() => setManualPointMode((prev) => !prev)}
                 >
-                  {manualPointMode ? '从站点测点选择' : '手动填写测点 ID'}
+                  {manualPointMode ? '从站点点位选择' : '手动填写编号'}
                 </Button>
               ) : null}
             </div>
@@ -287,12 +290,12 @@ export function CreateMeterRatioDialog({
                   >
                     <SelectTrigger
                       id="ratio-point-id"
-                      aria-label="测点 ID"
+                      aria-label="点位 ID"
                       aria-invalid={errors.pointId ? 'true' : 'false'}
                       aria-describedby={errors.pointId ? 'ratio-point-id-error' : undefined}
                       className="w-full"
                     >
-                      <SelectValue placeholder="请选择电表或冷量测点" />
+                      <SelectValue placeholder="请选择电表或冷量点位" />
                     </SelectTrigger>
                     <SelectContent>
                       {pointOptions.map((option) => (
@@ -308,7 +311,7 @@ export function CreateMeterRatioDialog({
               <Input
                 id="ratio-point-id"
                 type="text"
-                placeholder="请输入测点编号（UUID）"
+                placeholder="请输入点位编号"
                 autoCorrect="off"
                 autoCapitalize="none"
                 spellCheck={false}
@@ -525,6 +528,7 @@ export function CreateMeterRatioDialog({
               取消
             </Button>
             <Button type="submit" disabled={createRatioMutation.isPending}>
+              {createRatioMutation.isPending ? <Spinner data-icon="inline-start" /> : null}
               {createRatioMutation.isPending ? '正在创建…' : '创建倍率版本'}
             </Button>
           </DialogFooter>

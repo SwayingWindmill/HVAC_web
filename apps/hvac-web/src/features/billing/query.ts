@@ -186,6 +186,8 @@ export function siteMonthlyBudgetQuery(siteId: string, billingMonth: string) {
       ),
     select: (response) => response.data.items[0] ?? null,
     staleTime: 30_000,
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey[1] === siteId ? previousData : undefined,
   });
 }
 
@@ -203,6 +205,8 @@ export function siteUtilityBillsQuery(
       billingGatewayClient.listSiteUtilityBills(siteId, params, { signal }),
     select: (response) => response.data.items,
     staleTime: 30_000,
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey[1] === siteId ? previousData : undefined,
   });
 }
 

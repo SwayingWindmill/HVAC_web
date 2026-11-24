@@ -14,7 +14,7 @@ export function InfoTip({ children, className }: { readonly children: React.Reac
         <button
           type="button"
           aria-label={label ?? '说明'}
-          className={cn('inline-flex shrink-0 cursor-help rounded-full text-subtle-foreground outline-none hover:text-muted-foreground focus-visible:ring-3 focus-visible:ring-ring-soft', className)}
+          className={cn('-m-1 inline-flex size-6 shrink-0 cursor-help items-center justify-center rounded-full text-subtle-foreground outline-none hover:text-muted-foreground focus-visible:ring-3 focus-visible:ring-ring-soft', className)}
         >
           <Info className="size-3.5" aria-hidden="true" />
         </button>

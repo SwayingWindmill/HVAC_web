@@ -419,28 +419,28 @@ function DataTableFilterItem<TData extends RowData>({
       >
         <div className="min-w-18 text-center">
           {index === 0 ? (
-            <span className="text-sm text-muted-foreground">Where</span>
+            <span className="text-sm text-muted-foreground">当</span>
           ) : index === 1 ? (
             <Select
               value={joinOperator}
               onValueChange={(value: JoinOperator) => setJoinOperator(value)}
             >
               <SelectTrigger
-                aria-label="Select join operator"
+                aria-label="选择组合方式"
                 aria-controls={joinOperatorListboxId}
-                className="rounded lowercase"
+                className="rounded"
               >
-                <SelectValue placeholder={joinOperator} />
+                <SelectValue placeholder={joinOperator === "and" ? "且" : "或"} />
               </SelectTrigger>
               <SelectContent
                 id={joinOperatorListboxId}
                 position="popper"
-                className="min-w-(--radix-select-trigger-width) lowercase"
+                className="min-w-(--radix-select-trigger-width)"
               >
                 <SelectGroup>
                   {dataTableConfig.joinOperators.map((operator) => (
                     <SelectItem key={operator} value={operator}>
-                      {operator}
+                      {operator === "and" ? "且" : "或"}
                     </SelectItem>
                   ))}
                 </SelectGroup>
@@ -448,7 +448,7 @@ function DataTableFilterItem<TData extends RowData>({
             </Select>
           ) : (
             <span className="text-sm text-muted-foreground">
-              {joinOperator}
+              {joinOperator === "and" ? "且" : "或"}
             </span>
           )}
         </div>
@@ -461,7 +461,7 @@ function DataTableFilterItem<TData extends RowData>({
             >
               <span className="truncate">
                 {columns.find((candidate) => candidate.id === filter.id)
-                  ?.columnDef.meta?.label ?? "Select field"}
+                  ?.columnDef.meta?.label ?? "选择字段"}
               </span>
               <ChevronsUpDown className="opacity-50" />
             </Button>
@@ -472,9 +472,9 @@ function DataTableFilterItem<TData extends RowData>({
             className="w-40 p-0"
           >
             <Command>
-              <CommandInput placeholder="Search fields..." />
+              <CommandInput placeholder="搜索字段…" />
               <CommandList>
-                <CommandEmpty>No fields found.</CommandEmpty>
+                <CommandEmpty>未找到匹配字段</CommandEmpty>
                 <CommandGroup>
                   {columns.map((candidate) => (
                     <CommandItem
@@ -527,7 +527,7 @@ function DataTableFilterItem<TData extends RowData>({
         >
           <SelectTrigger
             aria-controls={operatorListboxId}
-            className="w-32 rounded lowercase"
+            className="w-32 rounded"
           >
             <div className="truncate">
               <SelectValue placeholder={filter.operator} />
@@ -539,7 +539,6 @@ function DataTableFilterItem<TData extends RowData>({
                 <SelectItem
                   key={operator.value}
                   value={operator.value}
-                  className="lowercase"
                 >
                   {operator.label}
                 </SelectItem>
@@ -560,6 +559,7 @@ function DataTableFilterItem<TData extends RowData>({
         </div>
         <Button
           aria-controls={filterItemId}
+          aria-label="移除此筛选条件"
           variant="outline"
           size="icon"
           className="size-8 rounded"
@@ -568,7 +568,7 @@ function DataTableFilterItem<TData extends RowData>({
           <Trash2 />
         </Button>
         <SortableItemHandle asChild>
-          <Button variant="outline" size="icon" className="size-8 rounded">
+          <Button aria-label="拖动调整筛选顺序" variant="outline" size="icon" className="size-8 rounded">
             <GripVertical />
           </Button>
         </SortableItemHandle>
@@ -602,8 +602,8 @@ function onFilterInputRender<TData extends RowData>({
       <div
         id={inputId}
         role="status"
-        aria-label={`${columnMeta?.label} filter is ${
-          filter.operator === "isEmpty" ? "empty" : "not empty"
+        aria-label={`${columnMeta?.label ?? '字段'} 筛选为${
+          filter.operator === "isEmpty" ? "空" : "非空"
         }`}
         aria-live="polite"
         className="h-8 w-full rounded border bg-transparent dark:bg-input/30"
@@ -636,10 +636,10 @@ function onFilterInputRender<TData extends RowData>({
         <Input
           id={inputId}
           type={isNumber ? "number" : filter.variant}
-          aria-label={`${columnMeta?.label} filter value`}
+          aria-label={`${columnMeta?.label ?? '字段'} 筛选值`}
           aria-describedby={`${inputId}-description`}
           inputMode={isNumber ? "numeric" : undefined}
-          placeholder={columnMeta?.placeholder ?? "Enter a value..."}
+          placeholder={columnMeta?.placeholder ?? "输入值…"}
           className="h-8 w-full rounded"
           defaultValue={
             typeof filter.value === "string" ? filter.value : undefined
@@ -672,15 +672,15 @@ function onFilterInputRender<TData extends RowData>({
           <SelectTrigger
             id={inputId}
             aria-controls={inputListboxId}
-            aria-label={`${columnMeta?.label} boolean filter`}
+            aria-label={`${columnMeta?.label ?? '字段'} 布尔筛选`}
             className="w-full rounded"
           >
-            <SelectValue placeholder={filter.value ? "True" : "False"} />
+            <SelectValue placeholder={filter.value === "true" ? "是" : filter.value === "false" ? "否" : "请选择"} />
           </SelectTrigger>
           <SelectContent id={inputListboxId}>
             <SelectGroup>
-              <SelectItem value="true">True</SelectItem>
-              <SelectItem value="false">False</SelectItem>
+              <SelectItem value="true">是</SelectItem>
+              <SelectItem value="false">否</SelectItem>
             </SelectGroup>
           </SelectContent>
         </Select>
@@ -716,9 +716,7 @@ function onFilterInputRender<TData extends RowData>({
             <Button
               id={inputId}
               aria-controls={inputListboxId}
-              aria-label={`${columnMeta?.label} filter value${
-                multiple ? "s" : ""
-              }`}
+              aria-label={`${columnMeta?.label ?? '字段'} 筛选选项`}
               variant="outline"
               className="w-full rounded font-normal"
             >
@@ -726,18 +724,18 @@ function onFilterInputRender<TData extends RowData>({
                 options={columnMeta?.options}
                 placeholder={
                   columnMeta?.placeholder ??
-                  `Select option${multiple ? "s" : ""}...`
+                  "选择选项…"
                 }
               />
             </Button>
           </FacetedTrigger>
           <FacetedContent id={inputListboxId} className="w-50">
             <FacetedInput
-              aria-label={`Search ${columnMeta?.label} options`}
-              placeholder={columnMeta?.placeholder ?? "Search options..."}
+              aria-label={`搜索 ${columnMeta?.label ?? ''} 选项`}
+              placeholder={columnMeta?.placeholder ?? "搜索选项…"}
             />
             <FacetedList>
-              <FacetedEmpty>No options found.</FacetedEmpty>
+              <FacetedEmpty>未找到匹配选项</FacetedEmpty>
               <FacetedGroup>
                 {columnMeta?.options?.map((option) => (
                   <FacetedItem key={option.value} value={option.value}>
@@ -787,7 +785,7 @@ function onFilterInputRender<TData extends RowData>({
             )}`
           : startDate
             ? formatDate(startDate, { month: "short" })
-            : "Pick a date";
+            : "选择日期";
 
       return (
         <Popover open={showValueSelector} onOpenChange={setShowValueSelector}>
@@ -795,7 +793,7 @@ function onFilterInputRender<TData extends RowData>({
             <Button
               id={inputId}
               aria-controls={inputListboxId}
-              aria-label={`${columnMeta?.label} date filter`}
+              aria-label={`${columnMeta?.label ?? '字段'} 日期筛选`}
               variant="outline"
               className={cn(
                 "w-full justify-start rounded text-left font-normal",
@@ -813,7 +811,7 @@ function onFilterInputRender<TData extends RowData>({
           >
             {filter.operator === "isBetween" ? (
               <Calendar
-                aria-label={`Select ${columnMeta?.label} date range`}
+                aria-label={`选择${columnMeta?.label ?? ''}日期范围`}
                 autoFocus
                 captionLayout="dropdown"
                 mode="range"
@@ -841,7 +839,7 @@ function onFilterInputRender<TData extends RowData>({
               />
             ) : (
               <Calendar
-                aria-label={`Select ${columnMeta?.label} date`}
+                aria-label={`选择${columnMeta?.label ?? ''}日期`}
                 autoFocus
                 captionLayout="dropdown"
                 mode="single"

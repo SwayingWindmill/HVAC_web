@@ -163,12 +163,32 @@ export interface FailureMessages {
   readonly notPublished?: string;
 }
 
+const HAS_CHINESE_RE = /[\u4e00-\u9fff]/;
+
+function refusedMessage(problem: GatewayProblem, messages: FailureMessages): string {
+  const custom = messages.refused?.(problem);
+  if (custom) return custom;
+  if (problem.detail && HAS_CHINESE_RE.test(problem.detail)) return problem.detail;
+  switch (problem.status) {
+    case 401:
+      return '登录已失效，请重新登录';
+    case 403:
+      return '当前账号没有这项操作的权限';
+    case 409:
+      return '数据刚刚有更新，请刷新后再试';
+    case 429:
+      return '操作过于频繁，请稍后再试';
+    default:
+      return messages.unavailable;
+  }
+}
+
 export function failureMessage(failure: GatewayFailure, messages: FailureMessages): string {
   switch (failure.kind) {
     case 'routeMissing':
       return ROUTE_MISSING_MESSAGE;
     case 'refused':
-      return messages.refused?.(failure.problem) ?? failure.problem.detail ?? messages.unavailable;
+      return refusedMessage(failure.problem, messages);
     case 'notPublished':
       return messages.notPublished ?? messages.unavailable;
     case 'unavailable':

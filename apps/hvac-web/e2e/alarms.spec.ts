@@ -312,7 +312,7 @@ test('operators can edit rules on the DAG canvas, dry-run drafts, diff and hot-p
   await expect(page.getByRole('button', { name: /1 号冷机供水温度骤升（已调优）/ })).toBeVisible();
 
   await page.getByRole('button', { name: '版本历史' }).click();
-  const revSheet = page.getByRole('dialog', { name: '规则版本账本' });
+  const revSheet = page.getByRole('dialog', { name: '规则版本记录' });
   await expect(revSheet).toContainText('工作台热发布');
   await expect(revSheet).toContainText('当前生效');
   await expect(revSheet).toContainText('更新规则显示名称并校验试算结果');
@@ -337,11 +337,13 @@ test('operators can edit rules on the DAG canvas, dry-run drafts, diff and hot-p
   await createEditor.getByRole('button', { name: '保存至草稿' }).click();
   await expect(page.getByText('未发布草稿：新增 1 条 · 修改 0 条 · 停用 0 条')).toBeVisible();
   await page.getByRole('button', { name: '放弃草稿' }).click();
+  await page.getByRole('alertdialog').getByRole('button', { name: '确认放弃' }).click();
   await expect(page.getByText('未发布草稿：')).toHaveCount(0);
 
   // Select upstream rule 冷冻水回水温度过低 & retire it cleanly without dangling ALL_ACTIVE 422 error.
   await page.getByRole('button', { name: /冷冻水回水温度过低/ }).click();
   await page.getByRole('button', { name: '停用规则' }).click();
+  await page.getByRole('alertdialog').getByRole('button', { name: '确认停用' }).click();
   await expect(page.getByText('未发布草稿：新增 0 条 · 修改 1 条 · 停用 1 条')).toBeVisible();
   await page.getByRole('button', { name: '预览差异并热发布' }).click();
   await expect(diffDialog).toContainText('停用将自动恢复活动告警');
@@ -420,6 +422,7 @@ test('operators can author streaming window rules, compile edge bundles and push
   expect(shadowWrite?.body?.edgeRuleBundle?.edgeBundleDigest).toMatch(/^[a-f0-9]{64}$/);
 
   await edgeSheet.getByRole('button', { name: '清空边缘规则包' }).click();
+  await page.getByRole('alertdialog').getByRole('button', { name: '确认清空' }).click();
   await expect(edgeSheet).toContainText('已清空目标网关配置影子中的边缘规则包');
   const clearWrite = gateway.writes.filter(
     (entry) => entry.method === 'PUT' && entry.path === '/api/v1/gateways/018f3e00-4000-7000-8000-000000000100/config-shadow',

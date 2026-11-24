@@ -1,4 +1,4 @@
-import { useQueries } from '@tanstack/react-query';
+import { keepPreviousData, useQueries } from '@tanstack/react-query';
 import { getRouteApi } from '@tanstack/react-router';
 import { deviceRecentHistoryQuery, recentHistoryWindow, type HourlyPoint } from '../systems-devices/device-history';
 import type { PlantView } from './plant-model';
@@ -10,8 +10,10 @@ export interface PlantHistory {
   readonly toMs: number;
   /** Quarter-hour points per source key, oldest first; absent when nothing was recorded. */
   readonly series: ReadonlyMap<string, readonly HourlyPoint[]>;
+  readonly allowed: boolean;
   readonly isPending: boolean;
   readonly isError: boolean;
+  readonly refetch: () => void;
 }
 
 /**
@@ -49,6 +51,7 @@ export function usePlantHistory(plant: PlantView, sourceKeys: readonly string[],
         window,
       }),
       enabled: allowed,
+      placeholderData: keepPreviousData,
     })),
   });
 
@@ -63,7 +66,11 @@ export function usePlantHistory(plant: PlantView, sourceKeys: readonly string[],
     fromMs: window.fromMs,
     toMs: window.toMs,
     series,
+    allowed,
     isPending: allowed && results.some((result) => result.isPending),
     isError: results.some((result) => result.isError),
+    refetch: () => {
+      for (const result of results) void result.refetch();
+    },
   };
 }

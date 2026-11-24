@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Bell, Search } from 'lucide-react';
+import { useShellSnapshot } from '@/app/ShellRuntimeContext';
 import { Button } from '@/components/ui/button';
 import { Kbd } from '@/components/ui/kbd';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { CommandSearch } from './CommandSearch';
 import { NavUser } from './NavUser';
 import { ScopeSwitcher } from './ScopeSwitcher';
@@ -22,6 +24,7 @@ interface AppHeaderProps {
   readonly csrfToken: string;
   readonly onNavigate: (target: string) => void;
   readonly onLogout: () => void;
+  readonly loggingOut?: boolean;
   /** Present on Site pages, where the assistant has a Site to answer about. */
   readonly assistant?: { readonly open: boolean; readonly onToggle: () => void };
 }
@@ -39,9 +42,12 @@ export function AppHeader({
   csrfToken,
   onNavigate,
   onLogout,
+  loggingOut,
   assistant,
 }: AppHeaderProps) {
   const [commandOpen, setCommandOpen] = useState(false);
+  const snapshot = useShellSnapshot();
+  const canListAlarms = snapshot.principal?.authorization.capabilities.includes('alarm.list') ?? false;
   const waiting = useWaitingAlarmCount(siteId);
   const linkSiteId = siteId ?? preferredSiteId;
   const overviewHref = siteTarget('/overview', linkSiteId);
@@ -65,6 +71,7 @@ export function AppHeader({
           href={overviewHref}
           aria-label="泉来禾智慧能源，回到总览"
           onClick={(event) => {
+            if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
             event.preventDefault();
             onNavigate(overviewHref);
           }}
@@ -98,23 +105,45 @@ export function AppHeader({
               AI 助手
             </Button>
           ) : null}
-          <Button
-            variant="outline"
-            size="icon"
-            className="relative text-muted-foreground"
-            aria-label={waiting > 0 ? `通知，${waiting} 条告警待确认` : '通知'}
-            onClick={() => onNavigate(notificationsHref)}
-          >
-            <Bell className="size-[15px]" />
-            {waiting > 0 ? (
-              <span className="absolute top-1.5 right-[7px] size-[7px] rounded-full bg-primary ring-2 ring-card" aria-hidden="true" />
-            ) : null}
-          </Button>
-          <NavUser name={principalName} role={principalRole} csrfToken={csrfToken} onNavigate={onNavigate} onLogout={onLogout} />
+          {linkSiteId && canListAlarms ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="relative text-muted-foreground"
+                  aria-label={waiting > 0 ? `通知，${waiting} 条告警待确认` : '通知'}
+                  onClick={() => onNavigate(notificationsHref)}
+                >
+                  <Bell className="size-[15px]" />
+                  {waiting > 0 ? (
+                    <span className="absolute top-1.5 right-[7px] size-[7px] rounded-full bg-primary ring-2 ring-card" aria-hidden="true" />
+                  ) : null}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                {waiting > 0 ? `通知 · ${waiting} 条告警待确认` : '查看通知'}
+              </TooltipContent>
+            </Tooltip>
+          ) : null}
+          <NavUser
+            name={principalName}
+            role={principalRole}
+            csrfToken={csrfToken}
+            onNavigate={onNavigate}
+            onLogout={onLogout}
+            loggingOut={loggingOut}
+          />
         </div>
       </header>
 
-      <CommandSearch open={commandOpen} onOpenChange={setCommandOpen} onNavigate={onNavigate} />
+      <CommandSearch
+        open={commandOpen}
+        onOpenChange={setCommandOpen}
+        onNavigate={onNavigate}
+        onToggleAssistant={assistant?.onToggle}
+        assistantOpen={assistant?.open}
+      />
     </>
   );
 }

@@ -18,6 +18,7 @@ Page({
     loading: true,
     noSite: false,
     failed: '',
+    refreshError: '',
     siteName: '',
     unacknowledgedOnly: false,
     feed: null as ReturnType<typeof presentFeed> | null,
@@ -49,7 +50,7 @@ Page({
       const site = await currentSite(rereadSites);
       if (site === null) {
         read = null;
-        this.setData({ loading: false, noSite: true, siteName: '', feed: null, partial: false });
+        this.setData({ loading: false, noSite: true, failed: '', refreshError: '', siteName: '', feed: null, partial: false });
         return;
       }
       const [active, cleared, todayStart] = await Promise.all([
@@ -59,11 +60,16 @@ Page({
         siteTodayStart(site, new Date()).catch(() => null),
       ]);
       read = { active: active.alarms, cleared: cleared.alarms, complete: active.complete, todayStart };
-      this.setData({ loading: false, noSite: false, failed: '', siteName: site.displayName });
+      this.setData({ loading: false, noSite: false, failed: '', refreshError: '', siteName: site.displayName });
       this.render();
     } catch (error) {
+      if (this.data.feed !== null) {
+        this.setData({ loading: false, refreshError: '上次刷新失败，当前显示稍早数据，下拉可重试' });
+        return;
+      }
       this.setData({
         loading: false,
+        refreshError: '',
         failed: error instanceof GatewayError && error.code === 'NETWORK_UNAVAILABLE' ? NETWORK_TEXT : '告警暂时读不到，下拉刷新再试。',
       });
     }

@@ -60,7 +60,7 @@ const RESOURCE_PURGE_ORDER: readonly ProtectedScopeResourceKind[] = [
 
 const PURGE_FAILURE: ProtectedScopeFailure = Object.freeze({
   code: 'PROTECTED_SCOPE_PURGE_FAILED',
-  detail: 'One or more protected Site resources could not complete cleanup.',
+  detail: '部分页面资源未能及时清理，请重新尝试。',
   retryable: false,
 });
 

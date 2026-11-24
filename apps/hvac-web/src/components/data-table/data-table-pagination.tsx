@@ -35,6 +35,8 @@ export function DataTablePagination<TData extends RowData>({
   const pageCount = Math.max(1, table.getPageCount());
   const canPreviousPage = table.getCanPreviousPage();
   const canNextPage = table.getCanNextPage();
+  const showPageSize = total > Math.min(...pageSizeOptions);
+  const showPager = pageCount > 1;
 
   return (
     <div className="flex w-full flex-col gap-3 px-2 py-1 text-xs sm:flex-row sm:items-center sm:justify-between">
@@ -42,80 +44,88 @@ export function DataTablePagination<TData extends RowData>({
         {selectedCount > 0 ? (
           <>
             已选 <span className="mx-1 font-medium text-foreground tabular-nums">{selectedCount}</span>
-            / {total} 行
+            / 共 {total} 条
           </>
         ) : (
-          <>{total} 行</>
+          <>共 {total} 条</>
         )}
       </div>
 
-      <div className="flex flex-wrap items-center gap-4 sm:justify-end">
-        <div className="flex items-center gap-2">
-          <span className="whitespace-nowrap font-medium text-foreground">每页行数</span>
-          <Select
-            value={String(pageSize)}
-            onValueChange={(value) => table.setPageSize(Number(value))}
-          >
-            <SelectTrigger className="h-8 w-[70px] bg-background text-xs tabular-nums">
-              <SelectValue placeholder={pageSize} />
-            </SelectTrigger>
-            <SelectContent side="top"><SelectGroup>
-              {pageSizeOptions.map((size) => (
-                <SelectItem key={size} value={String(size)} className="text-xs tabular-nums">
-                  {size}
-                </SelectItem>
-              ))}
-            </SelectGroup></SelectContent>
-          </Select>
-        </div>
+      {showPageSize || showPager ? (
+        <div className="flex flex-wrap items-center gap-4 sm:justify-end">
+          {showPageSize ? (
+            <div className="flex items-center gap-2">
+              <span className="whitespace-nowrap font-medium text-foreground">每页条数</span>
+              <Select
+                value={String(pageSize)}
+                onValueChange={(value) => table.setPageSize(Number(value))}
+              >
+                <SelectTrigger aria-label="每页条数" className="h-8 w-[70px] bg-background text-xs tabular-nums">
+                  <SelectValue placeholder={pageSize} />
+                </SelectTrigger>
+                <SelectContent side="top"><SelectGroup>
+                  {pageSizeOptions.map((size) => (
+                    <SelectItem key={size} value={String(size)} className="text-xs tabular-nums">
+                      {size}
+                    </SelectItem>
+                  ))}
+                </SelectGroup></SelectContent>
+              </Select>
+            </div>
+          ) : null}
 
-        <div className="min-w-[88px] text-center font-medium text-foreground tabular-nums">
-          第 {pageIndex + 1} / {pageCount} 页
-        </div>
+          {showPager ? (
+            <>
+              <div className="min-w-[88px] text-center font-medium text-foreground tabular-nums">
+                第 {pageIndex + 1} / {pageCount} 页
+              </div>
 
-        <div className="flex items-center gap-1">
-          <Button
-            variant="outline"
-            size="icon"
-            className="hidden size-8 lg:inline-flex"
-            onClick={() => table.setPageIndex(0)}
-            disabled={!canPreviousPage}
-            aria-label="第一页"
-          >
-            <ChevronsLeft className="size-4" />
-          </Button>
-          <Button
-            variant="outline"
-            size="icon"
-            className="size-8"
-            onClick={() => table.previousPage()}
-            disabled={!canPreviousPage}
-            aria-label="上一页"
-          >
-            <ChevronLeft className="size-4" />
-          </Button>
-          <Button
-            variant="outline"
-            size="icon"
-            className="size-8"
-            onClick={() => table.nextPage()}
-            disabled={!canNextPage}
-            aria-label="下一页"
-          >
-            <ChevronRight className="size-4" />
-          </Button>
-          <Button
-            variant="outline"
-            size="icon"
-            className="hidden size-8 lg:inline-flex"
-            onClick={() => table.setPageIndex(pageCount - 1)}
-            disabled={!canNextPage}
-            aria-label="最后一页"
-          >
-            <ChevronsRight className="size-4" />
-          </Button>
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="hidden size-8 lg:inline-flex"
+                  onClick={() => table.setPageIndex(0)}
+                  disabled={!canPreviousPage}
+                  aria-label="第一页"
+                >
+                  <ChevronsLeft className="size-4" />
+                </Button>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="size-8"
+                  onClick={() => table.previousPage()}
+                  disabled={!canPreviousPage}
+                  aria-label="上一页"
+                >
+                  <ChevronLeft className="size-4" />
+                </Button>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="size-8"
+                  onClick={() => table.nextPage()}
+                  disabled={!canNextPage}
+                  aria-label="下一页"
+                >
+                  <ChevronRight className="size-4" />
+                </Button>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="hidden size-8 lg:inline-flex"
+                  onClick={() => table.setPageIndex(pageCount - 1)}
+                  disabled={!canNextPage}
+                  aria-label="最后一页"
+                >
+                  <ChevronsRight className="size-4" />
+                </Button>
+              </div>
+            </>
+          ) : null}
         </div>
-      </div>
+      ) : null}
     </div>
   );
 }

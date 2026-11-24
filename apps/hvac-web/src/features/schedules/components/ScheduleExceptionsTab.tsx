@@ -347,12 +347,7 @@ export function ScheduleExceptionsTab({
                                     size="sm"
                                     variant="default"
                                     disabled={decideMutation.isPending}
-                                    onClick={() =>
-                                      decideMutation.mutate({
-                                        item,
-                                        decision: 'APPROVE',
-                                      })
-                                    }
+                                    onClick={() => setPendingDecision({ item, decision: 'APPROVE' })}
                                   >
                                     <Check data-icon="inline-start" />
                                     审批通过
@@ -430,18 +425,30 @@ export function ScheduleExceptionsTab({
           }
         }}
       >
-        <DialogContent className="sm:max-w-md">
+        <DialogContent
+          className="sm:max-w-md"
+          onEscapeKeyDown={(event) => {
+            if (decideMutation.isPending) event.preventDefault();
+          }}
+          onInteractOutside={(event) => {
+            if (decideMutation.isPending) event.preventDefault();
+          }}
+        >
           <DialogHeader>
             <DialogTitle>
-              {pendingDecision?.decision === 'REJECT'
-                ? '确认驳回该运行例外申请吗？'
-                : '确认撤回该运行例外吗？'}
+              {pendingDecision?.decision === 'APPROVE'
+                ? '确认审批通过该运行例外申请吗？'
+                : pendingDecision?.decision === 'REJECT'
+                  ? '确认驳回该运行例外申请吗？'
+                  : '确认撤回该运行例外吗？'}
             </DialogTitle>
             <DialogDescription>
               {pendingDecision ? `目标例外：${pendingDecision.item.title}。` : ''}
-              {pendingDecision?.decision === 'REJECT'
-                ? '驳回后该例外不会覆盖周运行计划，申请人可在此查看处理备注。'
-                : '撤回后该日期范围将恢复执行常规周运行计划，并释放日期占用。'}
+              {pendingDecision?.decision === 'APPROVE'
+                ? '审批通过后，该例外将按设定日期覆盖常规周运行计划并生效执行。'
+                : pendingDecision?.decision === 'REJECT'
+                  ? '驳回后该例外不会覆盖周运行计划，申请人可在此查看处理备注。'
+                  : '撤回后该日期范围将恢复执行常规周运行计划，并释放日期占用。'}
             </DialogDescription>
           </DialogHeader>
 

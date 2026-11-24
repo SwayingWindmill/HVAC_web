@@ -112,6 +112,13 @@ Page({
 
   async signOut() {
     if (this.data.signingOut) return;
+    const { confirm } = await wx.showModal({
+      title: '退出当前账号？',
+      content: '退出后需重新输入密码或使用微信一键登录。',
+      confirmText: '退出登录',
+      confirmColor: '#d92d20',
+    });
+    if (!confirm) return;
     this.setData({ signingOut: true });
     try {
       // Ends the Session on the platform; the mini program forgets it either way.

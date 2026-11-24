@@ -157,6 +157,8 @@ export function useMonthEnergy(month: string, span: ReportWindow, enabled = true
       ]);
       return { current, previous };
     },
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey[1] === site.id ? previousData : undefined,
     retry: false,
   });
 }
@@ -233,6 +235,8 @@ export function useYearLive(year: number, now: Date) {
       }
       return live;
     },
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey[1] === site.id ? previousData : undefined,
     retry: false,
   });
 }

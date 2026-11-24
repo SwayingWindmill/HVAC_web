@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import { StateCard } from '@/blocks/state/state-card';
 import { Button } from '@/components/ui/button';
 import { Kbd } from '@/components/ui/kbd';
+import { canAccessNavItem } from '@/components/layout/app-navigation';
 import { primaryRoleLabel } from '@/lib/role-labels';
 import { FocusHeading } from './FocusHeading';
 import { RouteAccessError } from './route-access';
@@ -25,6 +26,10 @@ function Frame({ children }: { readonly children: ReactNode }) {
 export function ForbiddenSurface() {
   const snapshot = useShellSnapshot();
   const roles = snapshot.principal?.principal.roles ?? [];
+  const capabilities = snapshot.principal?.authorization.capabilities;
+  const preferredSiteId = snapshot.protectedScope?.siteId ?? snapshot.lastSiteId ?? snapshot.sites?.items?.[0]?.id;
+  const canOverview = canAccessNavItem({ requiredCapabilities: ['site.read'] }, capabilities) && Boolean(preferredSiteId);
+  const canSystem = canAccessNavItem({ requiredCapabilities: ['site.list'] }, capabilities);
   return (
     <Frame>
       <StateCard
@@ -35,7 +40,11 @@ export function ForbiddenSurface() {
         description="当前账号不能打开这个页面，需要平台管理员开通。"
       >
         <span className="text-xs text-muted-foreground">当前角色：{primaryRoleLabel(roles)}</span>
-        <Button variant="outline" size="sm" asChild><Link to="/">回到总览</Link></Button>
+        {canOverview ? (
+          <Button variant="outline" size="sm" asChild><Link to="/">回到总览</Link></Button>
+        ) : canSystem ? (
+          <Button variant="outline" size="sm" asChild><Link to="/system">前往系统管理</Link></Button>
+        ) : null}
       </StateCard>
     </Frame>
   );
@@ -82,8 +91,10 @@ function PlatformUnavailableSurface() {
 }
 
 function PlatformDegradedSurface() {
+  const runtime = useShellRuntime();
   const snapshot = useShellSnapshot();
   const status = snapshot.platform?.status;
+  const canOpenSystem = canAccessNavItem({ requiredCapabilities: ['site.list'] }, snapshot.principal?.authorization.capabilities);
   return (
     <Frame>
       <StateCard
@@ -95,7 +106,8 @@ function PlatformDegradedSurface() {
         description="服务器报告部分功能暂时不可用；受影响的数据会标出来，不会显示成空的。"
       >
         {status ? <span className="text-xs text-muted-foreground">版本 {status.version}</span> : null}
-        <Button variant="outline" size="sm" asChild><Link to="/system">查看平台服务</Link></Button>
+        <Button size="sm" onClick={() => { void runtime.retry(); }}>重新检查</Button>
+        {canOpenSystem ? <Button variant="outline" size="sm" asChild><Link to="/system">查看平台服务</Link></Button> : null}
       </StateCard>
     </Frame>
   );
@@ -150,6 +162,23 @@ function isChunkLoadError(error: unknown): boolean {
   return /dynamically imported module|ChunkLoadError|Importing a module script failed|Unable to preload CSS/i.test(message);
 }
 
+function SiteScopeMismatchSurface() {
+  return (
+    <Frame>
+      <StateCard
+        icon={Compass}
+        tone="warning"
+        data-testid="real-site-scope-mismatch"
+        data-route-state="UNAVAILABLE"
+        title={<Heading>站点上下文已切换</Heading>}
+        description="当前页面关联的站点和刚才打开的站点不一致，重新载入后即可恢复。"
+      >
+        <Button size="sm" onClick={() => window.location.reload()}>重新加载</Button>
+      </StateCard>
+    </Frame>
+  );
+}
+
 export function RouteErrorSurface({ error, reset }: { error: unknown; reset?: () => void }) {
   if (error instanceof RouteAccessError) {
     switch (error.code) {
@@ -164,7 +193,7 @@ export function RouteErrorSurface({ error, reset }: { error: unknown; reset?: ()
       case 'SITE_NOT_VISIBLE':
         return <SiteNotVisibleSurface />;
       case 'SITE_SCOPE_MISMATCH':
-        return <SiteDiscoveryUnavailableSurface />;
+        return <SiteScopeMismatchSurface />;
     }
   }
   const chunkError = isChunkLoadError(error);
@@ -200,31 +229,36 @@ function openSearch() {
 
 function NotFoundContent() {
   const snapshot = useShellSnapshot();
+  const capabilities = snapshot.principal?.authorization.capabilities;
   const preferredSiteId = snapshot.protectedScope?.siteId ?? snapshot.lastSiteId;
   const site = (preferredSiteId ? snapshot.sites?.items?.find((item) => item.id === preferredSiteId) : undefined) ?? snapshot.sites?.items?.[0];
   const links = site
-    ? ([['实时运行', '/operations/realtime'], ['告警', '/operations/alarms'], ['能耗分析', '/energy-analysis/consumption'], ['报告', '/reports']] as const)
+    ? ([
+      ['实时运行', '/operations/realtime', ['site.read'], ['telemetry.snapshot.read', 'telemetry.batch.read']],
+      ['告警', '/operations/alarms', ['site.read', 'alarm.list'], undefined],
+      ['能耗分析', '/energy-analysis/consumption', ['site.read'], undefined],
+      ['报告', '/reports', ['site.read'], undefined],
+    ] as const).filter(([, , requiredCapabilities, anyCapabilities]) =>
+      canAccessNavItem({ requiredCapabilities, anyCapabilities }, capabilities),
+    )
     : [];
+  const canOverview = canAccessNavItem({ requiredCapabilities: ['site.read'] }, capabilities) && Boolean(site);
   return (
     <Frame>
       <StateCard
+        icon={Compass}
         data-testid="real-route-not-found"
         data-route-state="NOT_FOUND"
-        title={(
-          <>
-            <span className="font-mono text-5xl leading-none font-semibold tracking-tight text-subtle-foreground" aria-hidden="true">404</span>
-            <Heading>没有找到这个页面</Heading>
-          </>
-        )}
+        title={<Heading>没有找到这个页面</Heading>}
         description="链接可能已过期，或这个对象已被删除。可以从下面的常用页面继续。"
       >
-        <Button size="sm" asChild><Link to="/">回到总览</Link></Button>
-        <Button variant="outline" size="sm" onClick={openSearch}>
+        {canOverview ? <Button size="sm" asChild><Link to="/">回到总览</Link></Button> : null}
+        <Button variant={canOverview ? 'outline' : 'default'} size="sm" onClick={openSearch}>
           <Search data-icon="inline-start" />
           搜索页面与设备
           <Kbd>Ctrl K</Kbd>
         </Button>
-        {site ? (
+        {site && links.length > 0 ? (
           <nav aria-label="常用页面" className="mt-3 flex w-full justify-center gap-4 text-sm">
             {links.map(([label, to]) => (
               <Link key={to} to={to} search={{ site: site.id }} className="text-primary hover:underline">{label}</Link>

@@ -15,7 +15,7 @@ export const Route = createFileRoute('/_app/system')({
   validateSearch: systemSearchSchema,
   beforeLoad: ({ context }) => {
     requireCapabilities(context.runtime, ['site.list']);
-    requirePlatform(context.runtime);
+    requirePlatform(context.runtime, { allowDegraded: true });
   },
   staticData: {
     title: '系统管理',

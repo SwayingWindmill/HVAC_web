@@ -78,7 +78,6 @@ export function trendAggregateWindowQuery(input: {
       return new Map(entries);
     },
     staleTime: 30_000,
-    placeholderData: (previous) => previous,
     retry: (failureCount, error) => {
       if (error instanceof TrendHistoryPermissionError) return false;
       return failureCount < 1;

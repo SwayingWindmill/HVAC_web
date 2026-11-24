@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { getRouteApi } from '@tanstack/react-router';
 import { useMemo } from 'react';
 import { InfoTip } from '@/components/info-tip';
+import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { formatDecimal } from '@/lib/operator-format';
 import { useYearLive, yearSnapshotsQuery } from '../query';
@@ -22,7 +23,22 @@ export function YearlyReport({ year, now }: { readonly year: number; readonly no
 
   if (snapshots.isPending || live.isPending) return <Skeleton className="mx-auto h-[900px] w-full max-w-[1040px] rounded-xl" />;
   if (snapshots.isError || live.isError) {
-    return <div className="mx-auto w-full max-w-[1040px] rounded-xl border bg-card py-16 text-center text-sm text-muted-foreground">年度报告所需的数据暂时读不到</div>;
+    return (
+      <div className="mx-auto flex w-full max-w-[1040px] flex-col items-center gap-3 rounded-xl border bg-card px-6 py-16 text-center text-sm text-muted-foreground">
+        <span>年度报告所需的数据暂时读不到</span>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            if (snapshots.isError) void snapshots.refetch();
+            if (live.isError) void live.refetch();
+          }}
+        >
+          重试
+        </Button>
+      </div>
+    );
   }
 
   const rows = yearRows(months, snapshots.data, live.data);
@@ -56,7 +72,12 @@ export function YearlyReport({ year, now }: { readonly year: number; readonly no
           <Figure label="空调用电" value={totals.electricityKWh === null ? null : formatDecimal(totals.electricityKWh, 0)} unit="kWh" note={monthly(totals.electricityKWh)} />
           <Figure label="供冷量" value={totals.coolingKWh === null ? null : formatDecimal(totals.coolingKWh, 0)} unit="kWh" note={monthly(totals.coolingKWh)} />
           <Figure label="综合能效" value={totals.cop === null ? null : formatDecimal(totals.cop, 2)} unit="COP" note="全年供冷量 ÷ 全年空调用电" />
-          <Figure label="电度电费" value={totals.energyCost === null ? null : `¥${formatDecimal(totals.energyCost, 0)}`} note={totals.energyCost === null ? '有月份没有电价，全年未计' : '按分时电价逐时计算，不含需量电费'} />
+          <Figure
+            label="电度电费"
+            info="仅汇总各月分时电量电费，不含基本（需量/容量）电费；正式电费以供电局结算单为准"
+            value={totals.energyCost === null ? null : `¥${formatDecimal(totals.energyCost, 0)}`}
+            note={totals.energyCost === null ? '有月份没有电价，全年未计' : '按分时电价逐时计算，不含需量电费'}
+          />
         </FigureGrid>
       </Section>
 

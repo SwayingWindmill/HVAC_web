@@ -94,7 +94,7 @@ export function AlarmRuleRevisionsSheet({
         <SheetHeader className="border-b border-divider">
           <SheetTitle className="flex items-center gap-2">
             <History className="size-4" aria-hidden="true" />
-            <span>规则版本账本</span>
+            <span>规则版本记录</span>
           </SheetTitle>
           <SheetDescription>
             每次热发布、文件同步或版本回滚均生成不可变规则快照。回滚操作支持按版本号无损恢复并保留未改动规则状态。

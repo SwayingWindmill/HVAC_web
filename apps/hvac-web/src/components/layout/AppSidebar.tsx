@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useLocation } from '@tanstack/react-router';
 import { ChevronDown, PanelLeft } from 'lucide-react';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
   Sidebar,
   SidebarContent,
@@ -18,6 +19,7 @@ import {
   SidebarSeparator,
   useSidebar,
 } from '@/components/ui/sidebar';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useAppTheme, type ThemeMode } from '@/app/ThemeGate';
 import { useShellSnapshot } from '@/app/ShellRuntimeContext';
 import { activeAlarmsQuery } from '@/features/alarms/alarm-api';
@@ -46,25 +48,35 @@ interface AppSidebarProps {
 function useNavCounts(
   siteId: string | undefined,
   capabilities: readonly string[] | undefined,
-): Readonly<Record<string, number | undefined>> {
+): { readonly counts: Readonly<Record<string, number | undefined>>; readonly hasWaitingAlarms: boolean } {
   const flags = navCountQueryFlags(siteId, capabilities);
   const alarms = useQuery({ ...activeAlarmsQuery(siteId ?? ''), enabled: flags.alarms });
   const workOrders = useQuery({ ...openWorkOrdersQuery(siteId ?? ''), enabled: flags.workOrders });
   const commands = useQuery({ ...siteCommandsQuery(siteId ?? ''), enabled: flags.commands });
+  const hasWaitingAlarms = flags.alarms ? (alarms.data?.items.some((alarm) => !alarm.acknowledgement) ?? false) : false;
   return {
-    'operations-alarms': flags.alarms ? alarms.data?.items.length : undefined,
-    'operations-work-center': flags.workOrders ? workOrders.data?.length : undefined,
-    'operations-control': flags.commands ? commands.data?.filter(needsPerson).length : undefined,
+    counts: {
+      'operations-alarms': flags.alarms ? alarms.data?.items.length : undefined,
+      'operations-work-center': flags.workOrders ? workOrders.data?.length : undefined,
+      'operations-control': flags.commands ? commands.data?.filter(needsPerson).length : undefined,
+    },
+    hasWaitingAlarms,
   };
 }
 
 type CountBadgeTone = 'urgent' | 'warning' | 'neutral';
 
-/** Alarms waiting on someone are urgent; pending control commands warn; everything else is neutral. */
-function countBadgeTone(itemId: string): CountBadgeTone {
-  if (itemId === 'operations-alarms') return 'urgent';
+/** Red only when alarms are unacknowledged; amber for pending control commands; neutral otherwise. */
+function countBadgeTone(itemId: string, hasWaitingAlarms: boolean): CountBadgeTone {
+  if (itemId === 'operations-alarms') return hasWaitingAlarms ? 'urgent' : 'neutral';
   if (itemId === 'operations-control') return 'warning';
   return 'neutral';
+}
+
+function toneClasses(tone: CountBadgeTone): string {
+  if (tone === 'urgent') return 'bg-destructive-soft text-destructive-text!';
+  if (tone === 'warning') return 'bg-warning-soft text-warning-text!';
+  return 'bg-secondary text-secondary-foreground!';
 }
 
 function CountBadge({ count, tone }: { readonly count: number; readonly tone: CountBadgeTone }) {
@@ -73,11 +85,7 @@ function CountBadge({ count, tone }: { readonly count: number; readonly tone: Co
       aria-label={`${count} 项待处理`}
       className={cn(
         'top-1/2! h-[18px] min-w-[18px] -translate-y-1/2 rounded-full px-1.5 font-mono text-[11px] font-semibold',
-        tone === 'urgent'
-          ? 'bg-destructive-soft text-destructive-text!'
-          : tone === 'warning'
-            ? 'bg-warning-soft text-warning-text!'
-            : 'bg-secondary text-secondary-foreground!',
+        toneClasses(tone),
       )}
     >
       {count > 99 ? '99+' : count}
@@ -95,6 +103,7 @@ function useLink(onNavigate: (target: string) => void) {
     return {
       href,
       onClick: (event: React.MouseEvent) => {
+        if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
         event.preventDefault();
         setOpenMobile(false);
         onNavigate(href);
@@ -103,9 +112,10 @@ function useLink(onNavigate: (target: string) => void) {
   };
 }
 
-function SinglePageItem({ group, count, currentPath, link }: {
+function SinglePageItem({ group, count, hasWaitingAlarms, currentPath, link }: {
   readonly group: AppNavigationGroup;
   readonly count: number | undefined;
+  readonly hasWaitingAlarms: boolean;
   readonly currentPath: string;
   readonly link: ReturnType<typeof useLink>;
 }) {
@@ -120,59 +130,111 @@ function SinglePageItem({ group, count, currentPath, link }: {
           <span>{item.title}</span>
         </a>
       </SidebarMenuButton>
-      {count ? <CountBadge count={count} tone={countBadgeTone(item.id)} /> : null}
+      {count ? <CountBadge count={count} tone={countBadgeTone(item.id, hasWaitingAlarms)} /> : null}
     </SidebarMenuItem>
   );
 }
 
-function GroupItem({ group, counts, currentPath, link }: {
+function GroupItem({ group, counts, hasWaitingAlarms, currentPath, link }: {
   readonly group: AppNavigationGroup;
   readonly counts: Readonly<Record<string, number | undefined>>;
+  readonly hasWaitingAlarms: boolean;
   readonly currentPath: string;
   readonly link: ReturnType<typeof useLink>;
 }) {
   const { state } = useSidebar();
   const items = group.items.filter((item) => item.sidebar !== false);
   const activeItem = items.find((item) => isNavActive(item.path, currentPath));
-  const [open, setOpen] = useState(Boolean(activeItem));
-  const expanded = open || Boolean(activeItem);
+  const hasActive = Boolean(activeItem);
+  const [prevHasActive, setPrevHasActive] = useState(hasActive);
+  const [open, setOpen] = useState(hasActive);
+  if (hasActive !== prevHasActive) {
+    setPrevHasActive(hasActive);
+    if (hasActive) setOpen(true);
+  }
+  const [flyoutOpen, setFlyoutOpen] = useState(false);
   const Icon = group.icon;
   const groupCount = items.reduce((sum, item) => sum + (counts[item.id] ?? 0), 0);
-  const groupUrgent = items.some((item) => countBadgeTone(item.id) === 'urgent' && (counts[item.id] ?? 0) > 0);
+  const groupUrgent = items.some((item) => countBadgeTone(item.id, hasWaitingAlarms) === 'urgent' && (counts[item.id] ?? 0) > 0);
 
-  // With the sidebar collapsed to icons the children are hidden, so the group icon goes straight to its page.
   if (state === 'collapsed') {
-    const target = activeItem ?? items[0];
     return (
       <SidebarMenuItem>
-        <SidebarMenuButton asChild isActive={Boolean(activeItem)} tooltip={group.label}>
-          <a {...link(target)}>
-            <Icon aria-hidden="true" />
-            <span>{group.label}</span>
-          </a>
-        </SidebarMenuButton>
+        <Popover open={flyoutOpen} onOpenChange={setFlyoutOpen}>
+          <PopoverTrigger asChild>
+            <SidebarMenuButton isActive={hasActive} tooltip={group.label} aria-label={group.label} className="relative">
+              <Icon aria-hidden="true" />
+              <span>{group.label}</span>
+              {groupCount > 0 ? (
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    'absolute top-1.5 right-1.5 size-1.5 rounded-full ring-2 ring-sidebar',
+                    groupUrgent ? 'bg-destructive' : 'bg-primary',
+                  )}
+                />
+              ) : null}
+            </SidebarMenuButton>
+          </PopoverTrigger>
+          <PopoverContent side="right" align="start" sideOffset={8} className="w-48 p-1.5">
+            <p className="px-2 py-1 text-xs font-medium text-muted-foreground">{group.label}</p>
+            <div className="flex flex-col gap-0.5">
+              {items.map((item) => {
+                const active = item === activeItem;
+                const count = counts[item.id];
+                const itemProps = link(item);
+                return (
+                  <a
+                    key={item.id}
+                    href={itemProps.href}
+                    aria-current={active ? 'page' : undefined}
+                    onClick={(event) => {
+                      itemProps.onClick(event);
+                      setFlyoutOpen(false);
+                    }}
+                    className={cn(
+                      'flex items-center justify-between rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-accent hover:text-accent-foreground',
+                      active && 'bg-primary-soft font-medium text-primary',
+                    )}
+                  >
+                    <span>{item.title}</span>
+                    {count ? (
+                      <span className={cn('inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1.5 font-mono text-[11px] font-semibold', toneClasses(countBadgeTone(item.id, hasWaitingAlarms)))}>
+                        {count > 99 ? '99+' : count}
+                      </span>
+                    ) : null}
+                  </a>
+                );
+              })}
+            </div>
+          </PopoverContent>
+        </Popover>
       </SidebarMenuItem>
     );
   }
 
   return (
-    <Collapsible asChild open={expanded} onOpenChange={setOpen}>
+    <Collapsible asChild open={open} onOpenChange={setOpen}>
       <SidebarMenuItem>
         <CollapsibleTrigger asChild>
           <SidebarMenuButton
             tooltip={group.label}
             className={cn(activeItem && 'font-semibold text-foreground')}
-            aria-label={`${group.label}，${expanded ? '收起' : '展开'}`}
+            aria-label={`${group.label}，${open ? '收起' : '展开'}`}
           >
             <Icon aria-hidden="true" />
-            <span>{group.label}</span>
+            <span className="flex-1 truncate">{group.label}</span>
+            {!open && groupCount > 0 ? (
+              <span className={cn('inline-flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full px-1.5 font-mono text-[11px] font-semibold', toneClasses(groupUrgent ? 'urgent' : 'neutral'))}>
+                {groupCount > 99 ? '99+' : groupCount}
+              </span>
+            ) : null}
             <ChevronDown
               aria-hidden="true"
-              className={cn('ml-auto size-3.5! text-subtle-foreground transition-transform duration-200', !expanded && '-rotate-90')}
+              className={cn('size-3.5! shrink-0 text-subtle-foreground transition-transform duration-200', !open && '-rotate-90')}
             />
           </SidebarMenuButton>
         </CollapsibleTrigger>
-        {!expanded && groupCount > 0 ? <CountBadge count={groupCount} tone={groupUrgent ? 'urgent' : 'neutral'} /> : null}
         <CollapsibleContent>
           <SidebarMenuSub>
             {items.map((item) => {
@@ -185,7 +247,7 @@ function GroupItem({ group, counts, currentPath, link }: {
                       <span>{item.title}</span>
                     </a>
                   </SidebarMenuSubButton>
-                  {count ? <CountBadge count={count} tone={countBadgeTone(item.id)} /> : null}
+                  {count ? <CountBadge count={count} tone={countBadgeTone(item.id, hasWaitingAlarms)} /> : null}
                 </SidebarMenuSubItem>
               );
             })}
@@ -227,14 +289,21 @@ function SidebarControls() {
           ))}
         </div>
       )}
-      <button
-        type="button"
-        onClick={toggleSidebar}
-        aria-label={collapsed ? '展开侧栏' : '收起侧栏'}
-        className="inline-flex size-7 items-center justify-center rounded-md text-subtle-foreground transition-colors hover:bg-accent hover:text-foreground"
-      >
-        <PanelLeft className="size-[15px]" aria-hidden="true" />
-      </button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            onClick={toggleSidebar}
+            aria-label={collapsed ? '展开侧栏' : '收起侧栏'}
+            className="inline-flex size-7 items-center justify-center rounded-md text-subtle-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <PanelLeft className="size-[15px]" aria-hidden="true" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="right">
+          {collapsed ? '展开侧栏 (Ctrl+B)' : '收起侧栏 (Ctrl+B)'}
+        </TooltipContent>
+      </Tooltip>
     </div>
   );
 }
@@ -245,7 +314,7 @@ export function AppSidebar({ className, onNavigate }: AppSidebarProps) {
   const { currentScope } = useScope();
   const snapshot = useShellSnapshot();
   const capabilities = snapshot.principal?.authorization.capabilities;
-  const counts = useNavCounts(currentScope?.siteId, capabilities);
+  const { counts, hasWaitingAlarms } = useNavCounts(currentScope?.siteId, capabilities);
   const link = useLink(onNavigate);
   const visibleGroups = filterNavigationGroups(APP_NAVIGATION_CONFIG, capabilities, { sidebarOnly: true });
   const groups = (section: AppNavigationGroup['section']) => visibleGroups.filter((group) => group.section === section);
@@ -261,8 +330,8 @@ export function AppSidebar({ className, onNavigate }: AppSidebarProps) {
             <SidebarMenu className="gap-0.5">
               {mainGroups.map((group) =>
                 isSinglePageGroup(group)
-                  ? <SinglePageItem key={group.id} group={group} count={counts[group.items[0].id]} currentPath={currentPath} link={link} />
-                  : <GroupItem key={group.id} group={group} counts={counts} currentPath={currentPath} link={link} />,
+                  ? <SinglePageItem key={group.id} group={group} count={counts[group.items[0].id]} hasWaitingAlarms={hasWaitingAlarms} currentPath={currentPath} link={link} />
+                  : <GroupItem key={group.id} group={group} counts={counts} hasWaitingAlarms={hasWaitingAlarms} currentPath={currentPath} link={link} />,
               )}
             </SidebarMenu>
           </SidebarGroup>
@@ -276,6 +345,7 @@ export function AppSidebar({ className, onNavigate }: AppSidebarProps) {
                   key={group.id}
                   group={group}
                   count={counts[group.items[0].id]}
+                  hasWaitingAlarms={hasWaitingAlarms}
                   currentPath={currentPath}
                   link={link}
                 />

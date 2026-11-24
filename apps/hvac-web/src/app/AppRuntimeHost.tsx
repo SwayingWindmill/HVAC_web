@@ -5,6 +5,7 @@ import { createPlatformGatewayClient } from '@/api/generated/platformGateway.gen
 import { BrandMark } from '@/components/brand-mark';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import { createFrontendReviewPlatformClient } from './frontend-review-platform-client';
 import { useObservability } from './Observability';
@@ -44,9 +45,8 @@ export function ConfigurationBlocked({ failures }: { failures: RuntimeConfigFail
         </div>
         <ul className="divide-y divide-divider rounded-lg border border-border bg-muted/40">
           {failures.map((failure) => (
-            <li key={failure.code} className="flex flex-col gap-0.5 px-3.5 py-2.5">
-              <strong className="font-mono text-xs font-medium text-foreground">{failure.code}</strong>
-              <span className="text-xs text-muted-foreground">{failure.detail}</span>
+            <li key={failure.code} className="px-3.5 py-2.5 text-xs text-muted-foreground">
+              {failure.detail}
             </li>
           ))}
         </ul>
@@ -58,7 +58,7 @@ export function ConfigurationBlocked({ failures }: { failures: RuntimeConfigFail
 function LoginRequiredState({ snapshot, beginLogin }: { snapshot: ShellSnapshot; beginLogin: () => void }) {
   if (window.location.pathname === '/sign-in') {
     const request = readSignInRequest(window.location.search);
-    if (request.kind === 'form') return <SignInForm request={request} />;
+    if (request.kind === 'form') return <SignInForm request={request} onRestart={beginLogin} />;
     if (request.kind === 'expired') {
       return <SignInNotice title="登录已超时" description="登录页打开太久了，请重新登录。" action="重新登录" onAction={beginLogin} />;
     }
@@ -83,6 +83,7 @@ function LoginRequiredState({ snapshot, beginLogin }: { snapshot: ShellSnapshot;
 }
 
 function PrincipalUnavailableState({ config, snapshot, retry }: { config: RuntimeConfig; snapshot: ShellSnapshot; retry: () => void }) {
+  const [retrying, setRetrying] = useState(false);
   return (
     <section
       className="flex w-full max-w-md flex-col gap-4 rounded-xl border border-border bg-card p-6 shadow-xs"
@@ -106,9 +107,15 @@ function PrincipalUnavailableState({ config, snapshot, retry }: { config: Runtim
         </Alert>
       ) : null}
       <div className="flex items-center gap-2">
-        <Button type="button" onClick={retry}>重试</Button>
+        <Button type="button" disabled={retrying} onClick={() => { setRetrying(true); retry(); }}>
+          {retrying ? <Spinner /> : null}
+          {retrying ? '重试中…' : '重试'}
+        </Button>
       </div>
-      <RuntimeFacts config={config} />
+      <details className="text-xs text-muted-foreground">
+        <summary className="cursor-pointer py-1 hover:text-foreground">查看诊断信息</summary>
+        <div className="mt-2"><RuntimeFacts config={config} /></div>
+      </details>
     </section>
   );
 }

@@ -151,16 +151,8 @@ function NodeCard({
   const selected = Boolean(selectedDeviceId && (device.unitId === selectedDeviceId || device.deviceIds.includes(selectedDeviceId)));
   const status = deviceStatus(device);
 
-  const dotClass = status.tone === 'running'
-    ? 'bg-success'
-    : status.tone === 'alarm' || status.tone === 'offline'
-      ? 'bg-destructive'
-      : 'bg-muted-foreground/50';
-  const badgeClass = status.tone === 'running'
-    ? 'bg-success-soft text-success-text'
-    : status.tone === 'alarm' || status.tone === 'offline'
-      ? 'bg-destructive-soft text-destructive-text'
-      : 'bg-secondary text-secondary-foreground';
+  const dotClass = status.tone === 'running' ? 'bg-success' : status.tone === 'alarm' ? 'bg-destructive' : 'bg-muted-foreground/45';
+  const badgeClass = status.tone === 'running' ? 'bg-success-soft text-success-text' : status.tone === 'alarm' ? 'bg-destructive-soft text-destructive-text' : 'bg-muted text-muted-foreground';
 
   return (
     <div className="flex flex-col gap-1">
@@ -172,11 +164,13 @@ function NodeCard({
           'flex min-h-[44px] w-full cursor-pointer flex-col gap-1.5 rounded-lg border px-2.5 py-2 text-left transition-[border-color,background-color,box-shadow] outline-none focus-visible:ring-3 focus-visible:ring-ring-soft',
           selected
             ? 'border-primary bg-primary-soft/50 ring-1 ring-primary'
-            : hasIssue
+            : hasIssue && status.tone === 'alarm'
               ? 'border-destructive/40 bg-destructive-soft/20 hover:bg-destructive-soft/30'
-              : running
-                ? 'border-border bg-card shadow-xs hover:border-input-hover hover:bg-accent/50'
-                : 'border-divider bg-muted/50 text-muted-foreground hover:bg-accent/40',
+              : hasIssue
+                ? 'border-warning/40 bg-warning-soft/20 hover:bg-warning-soft/30'
+                : running
+                  ? 'border-border bg-card shadow-xs hover:border-input-hover hover:bg-accent/50'
+                  : 'border-divider bg-muted/50 text-muted-foreground hover:bg-accent/40',
           accent === 'chiller-bridge' && !selected && 'border-r-2 border-r-chart-1 border-l-2 border-l-chart-2',
         )}
       >
@@ -225,7 +219,7 @@ function NodeCard({
                   valveSelected
                     ? 'border-primary bg-primary-soft text-primary'
                     : valve.closed
-                      ? 'border-destructive/30 bg-destructive-soft text-destructive-text'
+                      ? 'border-border bg-muted text-muted-foreground'
                       : valve.open
                         ? 'border-success/25 bg-success-soft text-success-text'
                         : 'border-divider bg-card text-secondary-foreground',

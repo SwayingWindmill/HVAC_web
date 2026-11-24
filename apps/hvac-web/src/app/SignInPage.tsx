@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { BrandMark } from '@/components/brand-mark';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -99,11 +99,30 @@ function BrandPanel() {
 }
 
 export function SignInNotice({ title, description, action, onAction }: { title: string; description: string; action: string; onAction: () => void }) {
+  const [pending, setPending] = useState(false);
+
+  useEffect(() => {
+    const resetPending = () => setPending(false);
+    window.addEventListener('pageshow', resetPending);
+    return () => window.removeEventListener('pageshow', resetPending);
+  }, []);
+
   return (
     <SignInLayout>
       <div data-testid="sign-in-notice" className="flex flex-col gap-6">
         <SignInHeading title={title} description={description} />
-        <Button type="button" className="w-full" onClick={onAction}>{action}</Button>
+        <Button
+          type="button"
+          className="w-full"
+          disabled={pending}
+          onClick={() => {
+            setPending(true);
+            onAction();
+          }}
+        >
+          {pending ? <Spinner /> : null}
+          {action}
+        </Button>
       </div>
     </SignInLayout>
   );
@@ -120,11 +139,20 @@ function SignInHeading({ title, description }: { title: string; description: str
   );
 }
 
-export function SignInForm({ request }: { request: Extract<SignInRequest, { kind: 'form' }> }) {
+export function SignInForm({ request, onRestart }: { request: Extract<SignInRequest, { kind: 'form' }>; onRestart?: () => void }) {
   const [submitting, setSubmitting] = useState(false);
+  const [totpCode, setTotpCode] = useState('');
   const [rememberedName] = useState(() => storedUsername(() => window.localStorage, REMEMBERED_USERNAME_KEY));
+  const [initialUsername] = useState(() => storedUsername(() => window.sessionStorage, USERNAME_KEY) || storedUsername(() => window.localStorage, REMEMBERED_USERNAME_KEY));
   const [remember, setRemember] = useState(rememberedName !== '');
   const totp = request.step === 'totp';
+
+  useEffect(() => {
+    const resetSubmitting = () => setSubmitting(false);
+    window.addEventListener('pageshow', resetSubmitting);
+    return () => window.removeEventListener('pageshow', resetSubmitting);
+  }, []);
+
   return (
     <SignInLayout>
       <form
@@ -148,17 +176,49 @@ export function SignInForm({ request }: { request: Extract<SignInRequest, { kind
           {totp ? (
             <Field>
               <FieldLabel htmlFor="code">一次性验证码</FieldLabel>
-              <Input id="code" name="code" className={INPUT} placeholder="6 位数字" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" minLength={6} maxLength={6} required autoFocus />
+              <Input
+                id="code"
+                name="code"
+                className={INPUT}
+                placeholder="6 位数字"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                pattern="[0-9]{6}"
+                minLength={6}
+                maxLength={6}
+                value={totpCode}
+                onChange={(event) => setTotpCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
+                required
+                autoFocus
+              />
             </Field>
           ) : (
             <>
               <Field>
                 <FieldLabel htmlFor="username">用户名</FieldLabel>
-                <Input id="username" name="username" className={INPUT} placeholder="请输入用户名" autoComplete="username" defaultValue={storedUsername(() => window.sessionStorage, USERNAME_KEY) || rememberedName} required autoFocus />
+                <Input
+                  id="username"
+                  name="username"
+                  className={INPUT}
+                  placeholder="请输入用户名"
+                  autoComplete="username"
+                  defaultValue={initialUsername}
+                  required
+                  autoFocus={!initialUsername}
+                />
               </Field>
               <Field>
                 <FieldLabel htmlFor="password">密码</FieldLabel>
-                <Input id="password" name="password" type="password" className={INPUT} placeholder="请输入密码" autoComplete="current-password" required />
+                <Input
+                  id="password"
+                  name="password"
+                  type="password"
+                  className={INPUT}
+                  placeholder="请输入密码"
+                  autoComplete="current-password"
+                  required
+                  autoFocus={Boolean(initialUsername)}
+                />
               </Field>
               <Field orientation="horizontal">
                 <Checkbox id="remember" checked={remember} onCheckedChange={(checked) => setRemember(checked === true)} />
@@ -166,11 +226,16 @@ export function SignInForm({ request }: { request: Extract<SignInRequest, { kind
               </Field>
             </>
           )}
-          <Field>
+          <Field className="gap-2">
             <Button type="submit" size="lg" className="h-11 text-base" disabled={submitting}>
               {submitting ? <Spinner /> : null}
               {totp ? '确认' : '登录'}
             </Button>
+            {totp && onRestart ? (
+              <Button type="button" variant="outline" className="h-10 text-sm" disabled={submitting} onClick={onRestart}>
+                返回重新登录
+              </Button>
+            ) : null}
           </Field>
         </FieldGroup>
       </form>

@@ -135,7 +135,7 @@ function FacetedBadgeList(props: FacetedBadgeListProps) {
   const {
     options = [],
     max = 2,
-    placeholder = 'Select options...',
+    placeholder = '选择选项…',
     className,
     badgeClassName,
     ...badgeListProps
@@ -176,7 +176,7 @@ function FacetedBadgeList(props: FacetedBadgeListProps) {
           variant="secondary"
           className={cn('rounded-sm px-1 font-normal', badgeClassName)}
         >
-          {values.length} selected
+          已选 {values.length} 项
         </Badge>
       ) : (
         values.map((value) => (

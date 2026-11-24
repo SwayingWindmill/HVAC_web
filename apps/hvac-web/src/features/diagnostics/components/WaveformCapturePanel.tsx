@@ -2,8 +2,9 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Activity, LineChart, Plus, Radio, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
-import type { Device, GatewayWaveformRule, WaveformTriggerType } from '@/api/generated/platformGateway.gen';
+import type { Device, GatewayWaveformRule, TelemetryPoint, WaveformTriggerType } from '@/api/generated/platformGateway.gen';
 import { Panel } from '@/blocks/panel';
+import { ConfirmDiscardDialog } from '@/components/confirm-discard-dialog';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -11,6 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import {
@@ -60,12 +62,14 @@ export function DiagnosticsViewToggle({
 
 export function WaveformCapturePanel({
   devices,
+  telemetryPoints = [],
   canRead,
   canWrite,
   csrfToken,
   timeZone,
 }: {
   readonly devices: readonly Device[];
+  readonly telemetryPoints?: readonly TelemetryPoint[];
   readonly canRead: boolean;
   readonly canWrite: boolean;
   readonly csrfToken: string;
@@ -75,6 +79,23 @@ export function WaveformCapturePanel({
     () => devices.filter((d) => d.deviceType === 'GATEWAY' && d.status === 'ACTIVE'),
     [devices],
   );
+  const targetDevices = useMemo(
+    () => devices.filter((d) => d.deviceType !== 'GATEWAY' && d.status === 'ACTIVE'),
+    [devices],
+  );
+  const pointsByDeviceCode = useMemo(() => {
+    const idToCode = new Map(devices.map((d) => [d.id, d.code]));
+    const map = new Map<string, TelemetryPoint[]>();
+    for (const pt of telemetryPoints) {
+      if (pt.status !== 'ACTIVE') continue;
+      const code = idToCode.get(pt.reportingDeviceId);
+      if (!code) continue;
+      const list = map.get(code) ?? [];
+      list.push(pt);
+      map.set(code, list);
+    }
+    return map;
+  }, [devices, telemetryPoints]);
   const queryClient = useQueryClient();
   const [selectedGatewayId, setSelectedGatewayId] = useState(() => gateways[0]?.id ?? '');
   const activeGatewayId = gateways.some((g) => g.id === selectedGatewayId)
@@ -82,22 +103,29 @@ export function WaveformCapturePanel({
     : (gateways[0]?.id ?? '');
 
   const [ruleDialogOpen, setRuleDialogOpen] = useState(false);
-  const [editingRule, setEditingRule] = useState<GatewayWaveformRule | null>(null);
   const [triggerDialogOpen, setTriggerDialogOpen] = useState(false);
+  const [pendingDeleteRule, setPendingDeleteRule] = useState<GatewayWaveformRule | null>(null);
   const [inspectCaptureId, setInspectCaptureId] = useState<string | null>(null);
 
+  const defaultDeviceCode = targetDevices[0]?.code ?? 'chiller-01';
+  const defaultPointCode = (pointsByDeviceCode.get(defaultDeviceCode)?.[0]?.pointCode) ?? 'compressor_current';
   const [ruleName, setRuleName] = useState('');
-  const [deviceCode, setDeviceCode] = useState('chiller-01');
-  const [pointCode, setPointCode] = useState('compressor_current');
+  const [deviceCode, setDeviceCode] = useState(defaultDeviceCode);
+  const [pointCode, setPointCode] = useState(defaultPointCode);
   const [triggerType, setTriggerType] = useState<WaveformTriggerType>('DELTA_JUMP');
   const [thresholdValue, setThresholdValue] = useState('20');
   const [preSeconds, setPreSeconds] = useState('30');
   const [postSeconds, setPostSeconds] = useState('60');
   const [sampleRateHz, setSampleRateHz] = useState('1');
-  const [pointCodesText, setPointCodesText] = useState('chiller-01.compressor_current, chiller-01.chw_supply_temp');
+  const [rulePointCodesText, setRulePointCodesText] = useState(
+    `${defaultDeviceCode}.${defaultPointCode}, ${defaultDeviceCode}.chw_supply_temp`,
+  );
   const [triggerReason, setTriggerReason] = useState('手动抓取压缩机电流与供水瞬态过程');
   const [triggerPre, setTriggerPre] = useState('30');
   const [triggerPost, setTriggerPost] = useState('30');
+  const [triggerPointCodesText, setTriggerPointCodesText] = useState(
+    `${defaultDeviceCode}.${defaultPointCode}, ${defaultDeviceCode}.chw_supply_temp`,
+  );
 
   const rulesQuery = useQuery({
     queryKey: gatewayWaveformRulesKey(activeGatewayId),
@@ -113,7 +141,7 @@ export function WaveformCapturePanel({
 
   const saveRuleMutation = useMutation({
     mutationFn: () => {
-      const pointCodes = pointCodesText
+      const pointCodes = rulePointCodesText
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean);
@@ -131,15 +159,11 @@ export function WaveformCapturePanel({
         pointCodes,
         cooldownSeconds: 120,
       };
-      if (editingRule) {
-        return gatewayRemoteDiagApi.updateWaveformRule(activeGatewayId, editingRule.id, body, csrfToken);
-      }
       return gatewayRemoteDiagApi.createWaveformRule(activeGatewayId, body, csrfToken);
     },
     onSuccess: () => {
-      toast.success(editingRule ? '波形抓拍触发规则已更新' : '波形抓拍触发规则已新增');
+      toast.success('波形抓拍触发规则已新增');
       setRuleDialogOpen(false);
-      setEditingRule(null);
       void queryClient.invalidateQueries({ queryKey: gatewayWaveformRulesKey(activeGatewayId) });
     },
     onError: (err) => toast.error(describeRemoteDiagError(err, '触发规则保存失败')),
@@ -149,9 +173,13 @@ export function WaveformCapturePanel({
     mutationFn: (ruleId: string) => gatewayRemoteDiagApi.deleteWaveformRule(activeGatewayId, ruleId, csrfToken),
     onSuccess: () => {
       toast.success('触发规则已删除');
+      setPendingDeleteRule(null);
       void queryClient.invalidateQueries({ queryKey: gatewayWaveformRulesKey(activeGatewayId) });
     },
-    onError: (err) => toast.error(describeRemoteDiagError(err, '删除触发规则失败')),
+    onError: (err) => {
+      setPendingDeleteRule(null);
+      toast.error(describeRemoteDiagError(err, '删除触发规则失败'));
+    },
   });
 
   const toggleRuleMutation = useMutation({
@@ -188,7 +216,7 @@ export function WaveformCapturePanel({
           postSeconds: Number(triggerPost),
           sampleRateHz: 1,
           triggerReason: triggerReason.trim(),
-          pointCodes: pointCodesText.split(',').map((s) => s.trim()).filter(Boolean),
+          pointCodes: triggerPointCodesText.split(',').map((s) => s.trim()).filter(Boolean),
         },
         csrfToken,
       ),
@@ -200,17 +228,31 @@ export function WaveformCapturePanel({
     onError: (err) => toast.error(describeRemoteDiagError(err, '手动抓拍下发失败')),
   });
 
+  const buildDefaultPointsForDevice = (code: string, primaryPoint: string) => {
+    const devPts = pointsByDeviceCode.get(code) ?? [];
+    if (devPts.length === 0) return `${code}.${primaryPoint}`;
+    return devPts.slice(0, 3).map((p) => `${code}.${p.pointCode}`).join(', ');
+  };
+
   const openCreateRule = () => {
-    setEditingRule(null);
     setRuleName('冷机电流突发突变抓拍');
-    setDeviceCode('chiller-01');
-    setPointCode('compressor_current');
+    setDeviceCode(defaultDeviceCode);
+    setPointCode(defaultPointCode);
     setTriggerType('DELTA_JUMP');
     setThresholdValue('20');
     setPreSeconds('30');
     setPostSeconds('60');
     setSampleRateHz('1');
+    setRulePointCodesText(buildDefaultPointsForDevice(defaultDeviceCode, defaultPointCode));
     setRuleDialogOpen(true);
+  };
+
+  const openTriggerDialog = () => {
+    setTriggerReason('手动抓取压缩机电流与供水瞬态过程');
+    setTriggerPre('30');
+    setTriggerPost('30');
+    setTriggerPointCodesText(buildDefaultPointsForDevice(defaultDeviceCode, defaultPointCode));
+    setTriggerDialogOpen(true);
   };
 
   const gatewayOptions = useMemo(
@@ -265,7 +307,7 @@ export function WaveformCapturePanel({
                 </SelectContent>
               </Select>
             ) : null}
-            <Button type="button" variant="outline" size="sm" disabled={!canWrite} onClick={() => setTriggerDialogOpen(true)}>
+            <Button type="button" variant="outline" size="sm" disabled={!canWrite} onClick={openTriggerDialog}>
               <Activity data-icon="inline-start" aria-hidden="true" />
               手动发起抓拍
             </Button>
@@ -316,7 +358,7 @@ export function WaveformCapturePanel({
                       size="sm"
                       aria-label={`删除规则 ${rule.ruleName}`}
                       disabled={!canWrite || deleteRuleMutation.isPending}
-                      onClick={() => deleteRuleMutation.mutate(rule.id)}
+                      onClick={() => setPendingDeleteRule(rule)}
                     >
                       <Trash2 className="size-3.5 text-destructive-text" aria-hidden="true" />
                     </Button>
@@ -380,10 +422,23 @@ export function WaveformCapturePanel({
         </div>
       </Panel>
 
-      <Dialog open={ruleDialogOpen} onOpenChange={setRuleDialogOpen}>
-        <DialogContent className="sm:max-w-[520px]">
+      <Dialog
+        open={ruleDialogOpen}
+        onOpenChange={(open) => {
+          if (!open && !saveRuleMutation.isPending) setRuleDialogOpen(false);
+        }}
+      >
+        <DialogContent
+          className="sm:max-w-[520px]"
+          onEscapeKeyDown={(event) => {
+            if (saveRuleMutation.isPending) event.preventDefault();
+          }}
+          onInteractOutside={(event) => {
+            if (saveRuleMutation.isPending) event.preventDefault();
+          }}
+        >
           <DialogHeader>
-            <DialogTitle>{editingRule ? '编辑波形触发规则' : '新增波形触发规则'}</DialogTitle>
+            <DialogTitle>新增波形触发规则</DialogTitle>
             <DialogDescription>当端侧运行条件触发阈值时，从本地 15 分钟环形缓存回流秒级波形。</DialogDescription>
           </DialogHeader>
           <div className="grid grid-cols-2 gap-3 text-xs">
@@ -392,12 +447,45 @@ export function WaveformCapturePanel({
               <Input id="wf-rule-name" value={ruleName} onChange={(e) => setRuleName(e.target.value)} />
             </div>
             <div className="flex flex-col gap-1">
-              <label htmlFor="wf-device-code" className="font-medium">设备编码</label>
-              <Input id="wf-device-code" value={deviceCode} onChange={(e) => setDeviceCode(e.target.value)} />
+              <span className="font-medium">目标设备</span>
+              {targetDevices.length > 0 ? (
+                <Select
+                  value={deviceCode}
+                  onValueChange={(nextCode) => {
+                    setDeviceCode(nextCode);
+                    const nextPoints = pointsByDeviceCode.get(nextCode) ?? [];
+                    const firstPoint = nextPoints[0]?.pointCode ?? pointCode;
+                    setPointCode(firstPoint);
+                    setRulePointCodesText(buildDefaultPointsForDevice(nextCode, firstPoint));
+                  }}
+                >
+                  <SelectTrigger aria-label="设备编码"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {targetDevices.map((d) => (
+                      <SelectItem key={d.id} value={d.code}>{d.displayName || d.code}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <Input id="wf-device-code" value={deviceCode} onChange={(e) => setDeviceCode(e.target.value)} />
+              )}
             </div>
             <div className="flex flex-col gap-1">
-              <label htmlFor="wf-point-code" className="font-medium">判定点位编码</label>
-              <Input id="wf-point-code" value={pointCode} onChange={(e) => setPointCode(e.target.value)} />
+              <span className="font-medium">判定点位</span>
+              {(pointsByDeviceCode.get(deviceCode) ?? []).length > 0 ? (
+                <Select value={pointCode} onValueChange={setPointCode}>
+                  <SelectTrigger aria-label="判定点位编码"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {(pointsByDeviceCode.get(deviceCode) ?? []).map((pt) => (
+                      <SelectItem key={pt.id} value={pt.pointCode}>
+                        {pt.displayName ? `${pt.displayName} (${pt.pointCode})` : pt.pointCode}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <Input id="wf-point-code" value={pointCode} onChange={(e) => setPointCode(e.target.value)} />
+              )}
             </div>
             <div className="flex flex-col gap-1">
               <span className="font-medium">触发条件类型</span>
@@ -424,20 +512,34 @@ export function WaveformCapturePanel({
             </div>
             <div className="col-span-2 flex flex-col gap-1">
               <label htmlFor="wf-points-list" className="font-medium">连带回流点位清单（逗号分隔）</label>
-              <Input id="wf-points-list" value={pointCodesText} onChange={(e) => setPointCodesText(e.target.value)} />
+              <Input id="wf-points-list" value={rulePointCodesText} onChange={(e) => setRulePointCodesText(e.target.value)} />
             </div>
           </div>
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setRuleDialogOpen(false)}>取消</Button>
+            <Button type="button" variant="outline" disabled={saveRuleMutation.isPending} onClick={() => setRuleDialogOpen(false)}>取消</Button>
             <Button type="button" disabled={saveRuleMutation.isPending} onClick={() => saveRuleMutation.mutate()}>
+              {saveRuleMutation.isPending ? <Spinner data-icon="inline-start" /> : null}
               {saveRuleMutation.isPending ? '正在保存…' : '保存触发规则'}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      <Dialog open={triggerDialogOpen} onOpenChange={setTriggerDialogOpen}>
-        <DialogContent className="sm:max-w-[460px]">
+      <Dialog
+        open={triggerDialogOpen}
+        onOpenChange={(open) => {
+          if (!open && !triggerMutation.isPending) setTriggerDialogOpen(false);
+        }}
+      >
+        <DialogContent
+          className="sm:max-w-[460px]"
+          onEscapeKeyDown={(event) => {
+            if (triggerMutation.isPending) event.preventDefault();
+          }}
+          onInteractOutside={(event) => {
+            if (triggerMutation.isPending) event.preventDefault();
+          }}
+        >
           <DialogHeader>
             <DialogTitle>手动下发瞬态波形抓拍</DialogTitle>
             <DialogDescription>下发后网关将在目标窗口结束时把高频样本回流至当前任务列表。</DialogDescription>
@@ -455,15 +557,36 @@ export function WaveformCapturePanel({
               <label htmlFor="wf-manual-post" className="font-medium">后延窗口 (秒)</label>
               <Input id="wf-manual-post" type="number" value={triggerPost} onChange={(e) => setTriggerPost(e.target.value)} />
             </div>
+            <div className="col-span-2 flex flex-col gap-1">
+              <label htmlFor="wf-manual-points" className="font-medium">抓拍点位清单（逗号分隔）</label>
+              <Input id="wf-manual-points" value={triggerPointCodesText} onChange={(e) => setTriggerPointCodesText(e.target.value)} />
+            </div>
           </div>
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setTriggerDialogOpen(false)}>取消</Button>
+            <Button type="button" variant="outline" disabled={triggerMutation.isPending} onClick={() => setTriggerDialogOpen(false)}>取消</Button>
             <Button type="button" disabled={triggerMutation.isPending} onClick={() => triggerMutation.mutate()}>
+              {triggerMutation.isPending ? <Spinner data-icon="inline-start" /> : null}
               {triggerMutation.isPending ? '正在下发…' : '确认下发抓拍'}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDiscardDialog
+        open={pendingDeleteRule !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDeleteRule(null);
+        }}
+        busy={deleteRuleMutation.isPending}
+        title={pendingDeleteRule ? `确认删除波形触发规则「${pendingDeleteRule.ruleName}」？` : ''}
+        description="删除后网关将停止按此规则自动回流秒级波形，已回流的波形记录不受影响。"
+        keepLabel="取消"
+        discardLabel="删除规则"
+        busyLabel="正在删除…"
+        onConfirmDiscard={() => {
+          if (pendingDeleteRule) deleteRuleMutation.mutate(pendingDeleteRule.id);
+        }}
+      />
 
       <WaveformCaptureChartDialog
         gatewayId={activeGatewayId}

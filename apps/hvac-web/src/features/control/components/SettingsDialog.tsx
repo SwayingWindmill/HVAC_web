@@ -26,7 +26,15 @@ function SettingRow({ setting, reading, onSubmit }: {
     && Math.abs(steps - Math.round(steps)) < 1e-6;
   const base = value ?? (reading?.numeric ?? setting.minimum);
   const nudge = (direction: 1 | -1) => {
-    const next = Math.min(setting.maximum, Math.max(setting.minimum, base + direction * setting.step));
+    const rawSteps = (base - setting.minimum) / setting.step;
+    const isOnGrid = Math.abs(rawSteps - Math.round(rawSteps)) < 1e-6;
+    const nextStepIndex = isOnGrid
+      ? Math.round(rawSteps) + direction
+      : direction > 0
+        ? Math.ceil(rawSteps)
+        : Math.floor(rawSteps);
+    const rawNext = setting.minimum + nextStepIndex * setting.step;
+    const next = Math.min(setting.maximum, Math.max(setting.minimum, Number(rawNext.toFixed(6))));
     setDraft(String(Number(next.toFixed(6))));
   };
   const submit = () => { if (valid && value !== null) onSubmit(value); };

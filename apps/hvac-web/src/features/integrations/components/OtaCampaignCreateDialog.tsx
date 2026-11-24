@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Rocket, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -31,6 +31,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Spinner } from '@/components/ui/spinner';
 import { Textarea } from '@/components/ui/textarea';
 import type { TagEntryDraft } from '@/features/system/registry-admin/tags-model';
 import {
@@ -107,19 +108,33 @@ export function OtaCampaignCreateDialog({
   const [canaryPercent, setCanaryPercent] = useState('20');
   const [failureRateThresholdPct, setFailureRateThresholdPct] = useState('20');
   const [healthCheckTimeoutSec, setHealthCheckTimeoutSec] = useState('180');
-  const [autoPromoteRollout, setAutoPromoteRollout] = useState(true);
+  const [autoPromoteRollout, setAutoPromoteRollout] = useState(false);
   const [reason, setReason] = useState('');
   const [errors, setErrors] = useState<CampaignFormErrors>({});
+  const prevOpenRef = useRef(open);
 
   useEffect(() => {
+    const justOpened = open && !prevOpenRef.current;
+    prevOpenRef.current = open;
     if (!open) return;
     if (!packageId || !activePackages.some((pkg) => pkg.id === packageId)) {
       setPackageId(activePackages[0]?.id ?? '');
     }
-    if (selectedSiteIds.length === 0 && activeSiteId) {
+    if (justOpened && activeSiteId) {
       setSelectedSiteIds([activeSiteId]);
     }
-  }, [open, packageId, activePackages, activeSiteId, selectedSiteIds.length]);
+  }, [open, packageId, activePackages, activeSiteId]);
+
+  const matchedGatewayCount = useMemo(() => {
+    const normalized = normalizeTargetTagDrafts(tagEntries);
+    const requiredTags = normalized.ok ? Object.entries(normalized.tags) : [];
+    const siteSet = selectedSiteIds.length > 0 ? new Set(selectedSiteIds) : null;
+    return allDevices.filter((device) => {
+      if (device.deviceType !== 'GATEWAY' || device.status !== 'ACTIVE') return false;
+      if (siteSet && !siteSet.has(device.siteId)) return false;
+      return requiredTags.every(([k, v]) => device.tags?.[k] === v);
+    }).length;
+  }, [allDevices, selectedSiteIds, tagEntries]);
 
   const resetForm = () => {
     setPackageId(activePackages[0]?.id ?? '');
@@ -129,7 +144,7 @@ export function OtaCampaignCreateDialog({
     setCanaryPercent('20');
     setFailureRateThresholdPct('20');
     setHealthCheckTimeoutSec('180');
-    setAutoPromoteRollout(true);
+    setAutoPromoteRollout(false);
     setReason('');
     setErrors({});
   };
@@ -239,7 +254,19 @@ export function OtaCampaignCreateDialog({
         onOpenChange(nextOpen);
       }}
     >
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+      <DialogContent
+        className="max-h-[90vh] overflow-y-auto sm:max-w-2xl"
+        showCloseButton={!createMutation.isPending}
+        onEscapeKeyDown={(event) => {
+          if (createMutation.isPending) event.preventDefault();
+        }}
+        onPointerDownOutside={(event) => {
+          if (createMutation.isPending) event.preventDefault();
+        }}
+        onInteractOutside={(event) => {
+          if (createMutation.isPending) event.preventDefault();
+        }}
+      >
         <DialogHeader>
           <DialogTitle>发起灰度发布任务？</DialogTitle>
           <DialogDescription>
@@ -321,6 +348,12 @@ export function OtaCampaignCreateDialog({
               <p className="text-[11px] leading-5 text-muted-foreground">
                 不勾选任何站点时，将面向当前账号全部授权站点筛选目标网关。
               </p>
+            </div>
+
+            <div className={selectedSiteIds.length === 0 ? 'rounded-md border border-warning/40 bg-warning-soft/50 px-3 py-2 text-xs text-warning-text' : 'rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground'}>
+              {selectedSiteIds.length === 0
+                ? `未勾选站点：将面向全部授权站点筛选，预计匹配 ${matchedGatewayCount} 台激活网关。`
+                : `已选 ${selectedSiteIds.length} 个站点，预计匹配 ${matchedGatewayCount} 台激活网关。`}
             </div>
 
             <div className="space-y-2 border-t border-divider pt-3">
@@ -541,7 +574,7 @@ export function OtaCampaignCreateDialog({
               取消
             </Button>
             <Button type="submit" disabled={createMutation.isPending || activePackages.length === 0}>
-              <Rocket data-icon="inline-start" />
+              {createMutation.isPending ? <Spinner data-icon="inline-start" /> : <Rocket data-icon="inline-start" />}
               {createMutation.isPending ? '正在发起…' : '发起灰度发布'}
             </Button>
           </DialogFooter>

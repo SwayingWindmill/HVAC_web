@@ -3,6 +3,7 @@ import { getRouteApi, useLocation, useRouter } from '@tanstack/react-router';
 import type { Site } from '@/api/generated/platformGateway.gen';
 import { siteIdFromLocation, workspaceLocationForSite } from '@/app/router-paths';
 import { useShellSnapshot } from '@/app/ShellRuntimeContext';
+import { APP_NAVIGATION_CONFIG, isNavActive } from '@/components/layout/app-navigation';
 
 export interface ScopeItem {
   /** Stable query-key scope for the Site, `site:<siteId>`. */
@@ -25,6 +26,10 @@ function siteScope(site: Readonly<Site>): ScopeItem {
   };
 }
 
+const PLATFORM_PATHS = APP_NAVIGATION_CONFIG.flatMap((group) => group.items)
+  .filter((item) => item.scope === 'platform')
+  .map((item) => item.path);
+
 /** Registry Sites visible to the principal and the Site the current location is scoped to. */
 export function useScope() {
   const router = useRouter();
@@ -37,7 +42,9 @@ export function useScope() {
 
   const setScope = useCallback((nextSiteId: string) => {
     if (nextSiteId === currentScope?.siteId) return;
-    void router.navigate({ href: workspaceLocationForSite(location.pathname, nextSiteId) });
+    const onPlatformRoute = PLATFORM_PATHS.some((path) => isNavActive(path, location.pathname));
+    const targetPath = onPlatformRoute ? '/overview' : location.pathname;
+    void router.navigate({ href: workspaceLocationForSite(targetPath, nextSiteId) });
   }, [currentScope?.siteId, location.pathname, router]);
 
   return { currentScope, availableScopes, setScope };

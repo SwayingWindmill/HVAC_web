@@ -37,7 +37,7 @@ export type BaselineReason = 'TOO_FEW_HOURS' | 'LOW_COVERAGE' | 'POOR_FIT';
 export const REASON_TEXT: Record<BaselineReason, string> = {
   TOO_FEW_HOURS: `对比基线期完整小时不足 72 小时`,
   LOW_COVERAGE: '对比基线期数据完整度低于 90%',
-  POOR_FIT: '对比基线未通过 ASHRAE Guideline 14 检验',
+  POOR_FIT: '对比基线拟合度未达标，请换一段运行稳定、数据完整的时段重新拟合',
 };
 
 export interface SavingsTotals {

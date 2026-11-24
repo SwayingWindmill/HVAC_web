@@ -121,6 +121,7 @@ function DeviceRow({ target, label, context }: { readonly target: ControlTarget;
   const priorityLock = context.priorityLocks.get(target.deviceId);
   const hasAnyLock = Boolean(lock) || Boolean(priorityLock);
   const isCriticalLock = lock?.lockMode === 'MAINTENANCE_LOCK' || priorityLock?.lockedPriority === 'SAFETY_INTERLOCK';
+  const safetyLocked = priorityLock?.lockedPriority === 'SAFETY_INTERLOCK';
   const isWarningLock = !isCriticalLock && lock?.lockMode === 'MANUAL_LOCK';
   const action = primaryAction(target, device);
   const inlineReadings = deviceInlineReadings(target, device);
@@ -130,11 +131,14 @@ function DeviceRow({ target, label, context }: { readonly target: ControlTarget;
   const auto = context.mode === 'REMOTE_AUTO';
   const why = !auto ? `${MODE_PRESENTATION[context.mode].label}中，平台不下发指令`
     : lock ? '已锁定，先解锁'
-      : context.maintenance && action && !MAINTENANCE_PERMITTED.has(action.capability) ? MAINTENANCE_BLOCKED
-        : open ? '已有指令还没结束'
-        : hint ? `水路联锁：${blocked.map((item) => item.reason).filter(Boolean).join('；') || hint}`
-          : !action ? '读不到运行状态，不能远程启停'
-            : '';
+      : safetyLocked ? '安全联锁锁定中，不能人工操作'
+        : !device ? '读不到运行状态，不能远程启停'
+          : device.connection === 'OFFLINE' ? '设备离线，不能远程启停'
+            : context.maintenance && action && !MAINTENANCE_PERMITTED.has(action.capability) ? MAINTENANCE_BLOCKED
+              : open ? '已有指令还没结束'
+                : hint ? `水路联锁：${blocked.map((item) => item.reason).filter(Boolean).join('；') || hint}`
+                  : !action ? '读不到运行状态，不能远程启停'
+                    : '';
   const Icon = action ? ICON[action.capability] : Square;
   const hasActiveLockBadge = Boolean(lock && lock.lockMode !== 'UNLOCKED') || Boolean(priorityLock);
   const hasBadges = hasActiveLockBadge || Boolean(open) || Boolean(auto && !lock && !open && hint);
@@ -242,8 +246,8 @@ function DeviceRow({ target, label, context }: { readonly target: ControlTarget;
             variant="outline"
             size="sm"
             aria-label={`调整 ${target.assetName} 的设定值`}
-            title={!auto || lock ? why : context.maintenance ? MAINTENANCE_BLOCKED : undefined}
-            disabled={!auto || Boolean(lock) || context.maintenance !== null}
+            title={!auto || lock || safetyLocked || !device || device.connection === 'OFFLINE' ? why : context.maintenance ? MAINTENANCE_BLOCKED : undefined}
+            disabled={!auto || Boolean(lock) || safetyLocked || !device || device.connection === 'OFFLINE' || context.maintenance !== null}
             onClick={() => context.onSettings(target)}
           >
             <SlidersHorizontal data-icon="inline-start" />
@@ -349,11 +353,23 @@ function UnitColumn({ unit, context }: { readonly unit: PlantUnit; readonly cont
   const stopSeq = sequence('STOP_UNIT_SEQUENCE');
   const everyone = [chiller, ...members];
   const locked = everyone.some((target) => context.locks.has(target.assetId));
-  const open = openOn(context.commands, [startSeq?.pointId, stopSeq?.pointId].filter((id): id is string => Boolean(id)));
+  const safetyLocked = everyone.some((target) => context.priorityLocks.get(target.deviceId)?.lockedPriority === 'SAFETY_INTERLOCK');
+  const openSeq = openOn(context.commands, [startSeq?.pointId, stopSeq?.pointId].filter((id): id is string => Boolean(id)));
+  const openMember = openOn(
+    context.commands,
+    everyone.flatMap((target) => [
+      ...target.actions.map((item) => item.pointId),
+      ...target.settings.map((setting) => setting.pointId),
+    ]),
+  );
   const why = context.mode !== 'REMOTE_AUTO' ? `${MODE_PRESENTATION[context.mode].label}中，平台不下发指令`
     : locked ? '这组有设备锁定，不能整组启停'
-      : open ? '这组已有一键启停指令还没结束'
-        : '';
+      : safetyLocked ? '这组有设备处于安全联锁锁定，不能整组启停'
+        : !device ? '读不到主机状态，不能整组启停'
+          : device.connection === 'OFFLINE' ? '主机离线，不能整组启停'
+            : openSeq ? '这组已有一键启停指令还没结束'
+              : openMember ? '这组已有设备指令还没结束'
+                : '';
   const running = device?.runState === 'RUNNING';
   const stopped = device?.runState === 'STOPPED';
   const startOrder = [...members.map((member) => member.assetName), '主机'];
@@ -396,10 +412,10 @@ function UnitColumn({ unit, context }: { readonly unit: PlantUnit; readonly cont
           </Button>
         </div>
       ) : null}
-      {open ? (
+      {openSeq ? (
         <div className="flex items-center justify-between gap-2">
-          <button type="button" className="rounded-sm text-xs outline-none hover:underline focus-visible:ring-3 focus-visible:ring-ring-soft" onClick={() => context.onInspect(open.commandId)}>
-            <StatusBadge tone="warning" label={`一键启停 · ${STATUS_PRESENTATION[open.status].label}`} />
+          <button type="button" className="rounded-sm text-xs outline-none hover:underline focus-visible:ring-3 focus-visible:ring-ring-soft" onClick={() => context.onInspect(openSeq.commandId)}>
+            <StatusBadge tone="warning" label={`一键启停 · ${STATUS_PRESENTATION[openSeq.status].label}`} />
           </button>
           <Button
             variant="ghost"

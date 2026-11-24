@@ -57,7 +57,10 @@ test('edge AI models and hyperparams lifecycle works cleanly at 1440x900 light a
   await candidateRow.getByRole('button', { name: '下发', exact: true }).click();
   await page.getByRole('dialog').getByLabel('运行模式').click();
   await page.getByRole('option', { name: /正式运行/ }).click();
-  await page.getByRole('dialog').getByRole('button', { name: '确认下发' }).click();
+  const deployDialog = page.getByRole('dialog');
+  await expect(deployDialog.getByRole('button', { name: '确认下发' })).toBeDisabled();
+  await deployDialog.getByRole('checkbox', { name: '我已确认影子验证结果，确认切换为正式运行版本' }).check();
+  await deployDialog.getByRole('button', { name: '确认下发' }).click();
   await expect(page.getByRole('table', { name: '端侧部署记录' })).toContainText('1.2.0');
 
   const activeDeployRow = page.getByRole('row', { name: /chiller-cop-opt .*1\.2\.0.*正式运行/ });

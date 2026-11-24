@@ -8,6 +8,7 @@ import { Panel } from '@/blocks/panel';
 import { StatusBadge } from '@/components/status-badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog,
   DialogContent,
@@ -221,31 +222,50 @@ export function ControlModeDialog({ siteId, csrfToken, state, initial, commands,
   readonly onClose: () => void;
   readonly onShowUnsettled: () => void;
 }) {
+  const [busy, setBusy] = useState(false);
   return (
-    <Dialog open={initial !== null} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <DialogContent className="sm:max-w-[560px]">
+    <Dialog open={initial !== null} onOpenChange={(open) => { if (!open && !busy) onClose(); }}>
+      <DialogContent
+        className="sm:max-w-[560px]"
+        onEscapeKeyDown={(event) => { if (busy) event.preventDefault(); }}
+        onInteractOutside={(event) => { if (busy) event.preventDefault(); }}
+      >
         {initial !== null ? (
-          <ModeForm key={initial} siteId={siteId} csrfToken={csrfToken} state={state} initial={initial} commands={commands} describe={describe} onClose={onClose} onShowUnsettled={onShowUnsettled} />
+          <ModeForm
+            key={initial}
+            siteId={siteId}
+            csrfToken={csrfToken}
+            state={state}
+            initial={initial}
+            commands={commands}
+            describe={describe}
+            onBusyChange={setBusy}
+            onClose={onClose}
+            onShowUnsettled={onShowUnsettled}
+          />
         ) : null}
       </DialogContent>
     </Dialog>
   );
 }
 
-function ModeForm({ siteId, csrfToken, state, initial, commands, describe, onClose, onShowUnsettled }: {
+function ModeForm({ siteId, csrfToken, state, initial, commands, describe, onBusyChange, onClose, onShowUnsettled }: {
   readonly siteId: string;
   readonly csrfToken: string;
   readonly state: SiteControlState;
   readonly initial: SiteControlMode;
   readonly commands: readonly Command[];
   readonly describe: (command: Command) => string;
+  readonly onBusyChange: (busy: boolean) => void;
   readonly onClose: () => void;
   readonly onShowUnsettled: () => void;
 }) {
   const queryClient = useQueryClient();
   const reasonId = useId();
+  const safeExitId = useId();
   const [target, setTarget] = useState<SiteControlMode>(initial);
   const [reason, setReason] = useState('');
+  const [safeExitConfirmed, setSafeExitConfirmed] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
   const withdrawn = state.controlMode === 'REMOTE_AUTO' && target !== 'REMOTE_AUTO'
     ? commands.filter((command) => WITHDRAWABLE.has(command.status))
@@ -256,6 +276,8 @@ function ModeForm({ siteId, csrfToken, state, initial, commands, describe, onClo
     : [];
   const save = useMutation({
     mutationFn: () => updateSiteControlMode(siteId, { controlMode: target, reason: reason.trim(), expectedRevision: state.revision }, csrfToken),
+    onMutate: () => onBusyChange(true),
+    onSettled: () => onBusyChange(false),
     onSuccess: ({ cancelledCommandIds, ...next }) => {
       queryClient.setQueryData(controlStateKeys.site(siteId), next);
       void queryClient.invalidateQueries({ queryKey: commandKeys.site(siteId) });
@@ -275,16 +297,29 @@ function ModeForm({ siteId, csrfToken, state, initial, commands, describe, onClo
     },
   });
   const unchanged = target === state.controlMode;
+  const needsSafeExitConfirm = target === 'SAFE_SHUTDOWN_EXIT';
+  const canSubmit = !save.isPending && !unchanged && Boolean(reason.trim()) && unsettled.length === 0 && (!needsSafeExitConfirm || safeExitConfirmed);
   return (
     <form
       className="flex flex-col gap-4"
-      onSubmit={(event) => { event.preventDefault(); if (!unchanged && reason.trim() && unsettled.length === 0) save.mutate(); }}
+      onSubmit={(event) => { event.preventDefault(); if (canSubmit) save.mutate(); }}
     >
       <DialogHeader>
         <DialogTitle>切换到{MODE_PRESENTATION[target].label}？</DialogTitle>
         <DialogDescription className="sr-only">选择控制方式并填写原因</DialogDescription>
       </DialogHeader>
-      <RadioGroup value={target} onValueChange={(value) => { if (isOneOf(MODE_ORDER, value)) { setTarget(value); setRefusal(null); } }} aria-label="控制方式" className="gap-2">
+      <RadioGroup
+        value={target}
+        onValueChange={(value) => {
+          if (isOneOf(MODE_ORDER, value)) {
+            setTarget(value);
+            setSafeExitConfirmed(false);
+            setRefusal(null);
+          }
+        }}
+        aria-label="控制方式"
+        className="gap-2"
+      >
         {MODE_ORDER.map((mode) => (
           <ChoiceCard key={mode} value={mode} title={MODE_PRESENTATION[mode].label} hint={MODE_PRESENTATION[mode].hint} current={mode === state.controlMode}>
             <ModeGlyph mode={mode} />
@@ -292,6 +327,19 @@ function ModeForm({ siteId, csrfToken, state, initial, commands, describe, onClo
         ))}
       </RadioGroup>
       <ReasonField id={reasonId} value={reason} onChange={setReason} placeholder="例如：夜班人工巡检，暂停远程启停" />
+      {needsSafeExitConfirm ? (
+        <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive-soft/35 p-3">
+          <Checkbox
+            id={safeExitId}
+            checked={safeExitConfirmed}
+            onCheckedChange={(value) => setSafeExitConfirmed(value === true)}
+            className="mt-0.5"
+          />
+          <Label htmlFor={safeExitId} className="text-sm font-normal">
+            我确认进入安全退出模式，停止平台远程及自动控制并撤回待下发指令
+          </Label>
+        </div>
+      ) : null}
       {withdrawn.length > 0 ? (
         <div className="flex flex-col gap-1.5 rounded-lg border border-divider bg-muted p-3">
           <span className="text-xs font-medium text-secondary-foreground">切换后会撤回 {withdrawn.length} 条还没下发的指令</span>
@@ -316,7 +364,7 @@ function ModeForm({ siteId, csrfToken, state, initial, commands, describe, onClo
         <Button
           type="submit"
           variant={target === 'SAFE_SHUTDOWN_EXIT' ? 'destructive' : 'default'}
-          disabled={save.isPending || unchanged || !reason.trim() || unsettled.length > 0}
+          disabled={!canSubmit}
         >
           {save.isPending ? <Spinner data-icon="inline-start" /> : null}
           {save.isPending ? '正在切换' : unchanged ? '已是当前方式' : `切换到${MODE_PRESENTATION[target].label}`}
@@ -343,21 +391,27 @@ export function AssetLockDialog({ siteId, csrfToken, subject, myId, timeZone, on
   readonly timeZone: string;
   readonly onClose: () => void;
 }) {
+  const [busy, setBusy] = useState(false);
   return (
-    <Dialog open={subject !== null} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <DialogContent className="sm:max-w-[440px]">
-        {subject ? <LockForm key={subject.assetId} siteId={siteId} csrfToken={csrfToken} subject={subject} myId={myId} timeZone={timeZone} onClose={onClose} /> : null}
+    <Dialog open={subject !== null} onOpenChange={(open) => { if (!open && !busy) onClose(); }}>
+      <DialogContent
+        className="sm:max-w-[440px]"
+        onEscapeKeyDown={(event) => { if (busy) event.preventDefault(); }}
+        onInteractOutside={(event) => { if (busy) event.preventDefault(); }}
+      >
+        {subject ? <LockForm key={subject.assetId} siteId={siteId} csrfToken={csrfToken} subject={subject} myId={myId} timeZone={timeZone} onBusyChange={setBusy} onClose={onClose} /> : null}
       </DialogContent>
     </Dialog>
   );
 }
 
-function LockForm({ siteId, csrfToken, subject, myId, timeZone, onClose }: {
+function LockForm({ siteId, csrfToken, subject, myId, timeZone, onBusyChange, onClose }: {
   readonly siteId: string;
   readonly csrfToken: string;
   readonly subject: LockSubject;
   readonly myId: string;
   readonly timeZone: string;
+  readonly onBusyChange: (busy: boolean) => void;
   readonly onClose: () => void;
 }) {
   const queryClient = useQueryClient();
@@ -370,6 +424,8 @@ function LockForm({ siteId, csrfToken, subject, myId, timeZone, onClose }: {
   const [reason, setReason] = useState('');
   const save = useMutation({
     mutationFn: () => updateAssetControlLock(subject.assetId, { lockMode: mode, reason: reason.trim(), expectedRevision: current?.revision }, csrfToken),
+    onMutate: () => onBusyChange(true),
+    onSettled: () => onBusyChange(false),
     onSuccess: ({ cancelledCommandIds }) => {
       void queryClient.invalidateQueries({ queryKey: controlStateKeys.site(siteId) });
       void queryClient.invalidateQueries({ queryKey: commandKeys.site(siteId) });

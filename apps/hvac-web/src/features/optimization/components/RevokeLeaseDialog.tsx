@@ -37,15 +37,26 @@ export function RevokeLeaseDialog({
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
 }) {
+  const [busy, setBusy] = useState(false);
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[480px]">
+    <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen && !busy) onOpenChange(false); else if (nextOpen) onOpenChange(true); }}>
+      <DialogContent
+        showCloseButton={!busy}
+        onEscapeKeyDown={(event) => {
+          if (busy) event.preventDefault();
+        }}
+        onInteractOutside={(event) => {
+          if (busy) event.preventDefault();
+        }}
+        className="sm:max-w-[480px]"
+      >
         {open && leaseState.activeLease ? (
           <RevokeLeaseForm
             siteId={siteId}
             csrfToken={csrfToken}
             timeZone={timeZone}
             activeLease={leaseState.activeLease}
+            onBusyChange={setBusy}
             onClose={() => onOpenChange(false)}
           />
         ) : null}
@@ -59,12 +70,14 @@ function RevokeLeaseForm({
   csrfToken,
   timeZone,
   activeLease,
+  onBusyChange,
   onClose,
 }: {
   readonly siteId: string;
   readonly csrfToken: string;
   readonly timeZone: string;
   readonly activeLease: NonNullable<SiteAutoControlLeaseState['activeLease']>;
+  readonly onBusyChange: (busy: boolean) => void;
   readonly onClose: () => void;
 }) {
   const queryClient = useQueryClient();
@@ -79,6 +92,8 @@ function RevokeLeaseForm({
         { reason: reason.trim(), expectedRevision: activeLease.revision },
         csrfToken,
       ),
+    onMutate: () => onBusyChange(true),
+    onSettled: () => onBusyChange(false),
     onSuccess: (next) => {
       queryClient.setQueryData(autoControlKeys.lease(siteId), next);
       void queryClient.invalidateQueries({ queryKey: autoControlKeys.lease(siteId) });

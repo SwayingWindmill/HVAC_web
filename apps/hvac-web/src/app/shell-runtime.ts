@@ -120,6 +120,7 @@ export interface ShellRuntime {
   handlePolicyRevision(policyRevision: string): Promise<'unchanged' | 'reloaded' | 'failed'>;
   switchTenant(tenantId: string, options?: SwitchTenantOptions): Promise<TenantSwitchOutcome>;
   logout(): Promise<LogoutOutcome>;
+  clearLogoutError(): void;
   purge(reason: string, beginLogin?: boolean): void;
   dispose(): void;
 }
@@ -194,12 +195,8 @@ function problemFrom(error: unknown): ShellProblem | undefined {
 }
 
 function failureFrom(problem: ShellProblem | undefined, fallbackCode: string, fallbackDetail: string): ShellFailureView {
-  return {
-    code: problem?.code ?? fallbackCode,
-    detail: problem?.detail ?? fallbackDetail,
-    traceId: problem?.traceId,
-    retryable: problem?.retryable ?? true,
-  };
+  const detail = problem?.detail && /[\u4e00-\u9fff]/.test(problem.detail) ? problem.detail : fallbackDetail;
+  return { code: problem?.code ?? fallbackCode, detail, traceId: problem?.traceId, retryable: problem?.retryable ?? true };
 }
 
 function isLoggedOutLanding(candidate: string, origin: string): boolean {
@@ -481,7 +478,7 @@ class BrowserShellRuntime implements ShellRuntime {
         ? outcome.failure
         : {
           code: 'PROTECTED_SCOPE_PURGE_FAILED' as const,
-          detail: 'Protected scope purge is already in progress.',
+          detail: '正在切换权限范围，请稍候。',
           retryable: false as const,
         };
       this.publish({
@@ -535,26 +532,22 @@ class BrowserShellRuntime implements ShellRuntime {
         this.completeLogout('SESSION_ALREADY_INVALID');
         return 'completed';
       }
-      const failure = failureFrom(
-        problem,
-        'LOGOUT_FAILED',
-        '服务器还没确认退出登录，请重试。',
-      );
+      const failure = failureFrom(problem, 'LOGOUT_FAILED', '服务器还没确认退出登录，请重试。');
       this.publish({
         state: 'READY',
         principal,
         platform,
         sites,
         siteTransition: this.snapshot.siteTransition,
-        logout: {
-          status: 'failed',
-          code: failure.code,
-          detail: failure.detail,
-          traceId: failure.traceId,
-          retryable: failure.retryable,
-        },
+        logout: { status: 'failed', code: failure.code, detail: failure.detail, traceId: failure.traceId, retryable: failure.retryable },
       });
       return 'failed';
+    }
+  }
+
+  clearLogoutError(): void {
+    if (this.snapshot.state === 'READY' && this.snapshot.logout?.status === 'failed') {
+      this.publish({ ...this.snapshot, logout: { status: 'idle' } });
     }
   }
 

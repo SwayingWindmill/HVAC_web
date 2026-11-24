@@ -165,10 +165,20 @@ export function ArmLeaseDialog({
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
 }) {
+  const [busy, setBusy] = useState(false);
   const seed = leaseState.activeLease ?? leaseState.latestLease;
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90dvh] overflow-y-auto p-5 sm:max-w-[600px]">
+    <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen && !busy) onOpenChange(false); else if (nextOpen) onOpenChange(true); }}>
+      <DialogContent
+        showCloseButton={!busy}
+        onEscapeKeyDown={(event) => {
+          if (busy) event.preventDefault();
+        }}
+        onInteractOutside={(event) => {
+          if (busy) event.preventDefault();
+        }}
+        className="max-h-[90dvh] overflow-y-auto p-5 sm:max-w-[600px]"
+      >
         {open ? (
           <ArmLeaseForm
             key={seed?.id ?? 'new'}
@@ -177,6 +187,7 @@ export function ArmLeaseDialog({
             activeRevision={leaseState.activeLease?.revision}
             seed={seed}
             isUpdate={leaseState.activeLease !== null}
+            onBusyChange={setBusy}
             onClose={() => onOpenChange(false)}
           />
         ) : null}
@@ -191,6 +202,7 @@ function ArmLeaseForm({
   activeRevision,
   seed,
   isUpdate,
+  onBusyChange,
   onClose,
 }: {
   readonly siteId: string;
@@ -198,6 +210,7 @@ function ArmLeaseForm({
   readonly activeRevision: number | undefined;
   readonly seed: SiteAutoControlLeaseState['activeLease'];
   readonly isUpdate: boolean;
+  readonly onBusyChange: (busy: boolean) => void;
   readonly onClose: () => void;
 }) {
   const queryClient = useQueryClient();
@@ -226,6 +239,8 @@ function ArmLeaseForm({
   const mutation = useMutation({
     mutationFn: (payload: Parameters<typeof armSiteAutoControlLease>[1]) =>
       armSiteAutoControlLease(siteId, payload, csrfToken),
+    onMutate: () => onBusyChange(true),
+    onSettled: () => onBusyChange(false),
     onSuccess: (next, submitted) => {
       queryClient.setQueryData(autoControlKeys.lease(siteId), next);
       void queryClient.invalidateQueries({ queryKey: autoControlKeys.lease(siteId) });

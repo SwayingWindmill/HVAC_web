@@ -93,10 +93,10 @@ export function formatDelta(delta: number, locale = "zh-CN"): string {
 }
 
 /**
- * Fractional change between two values. Returns 0 when there is no baseline.
+ * Fractional change between two values. Returns null when there is no valid baseline.
  */
-export function computeDelta(current: number, previous: number): number {
-  if (!previous) return 0
+export function computeDelta(current: number, previous: number): number | null {
+  if (!Number.isFinite(current) || !Number.isFinite(previous) || previous === 0) return null
   return (current - previous) / Math.abs(previous)
 }
 

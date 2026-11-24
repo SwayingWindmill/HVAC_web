@@ -8,7 +8,7 @@ import { StatusBadge } from '@/components/status-badge';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { formatDecimal } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
-import { formatClock } from '../../realtime/device-presentation';
+import { formatClock, LowConfidenceBadge } from '../../realtime/device-presentation';
 import type { PlantReading } from '../../realtime/plant-model';
 import type { TwinBuildingPlan } from '../twin-building';
 import { TWIN_STATE_LABELS, type TwinEquipment, type TwinKind } from '../twin-model';
@@ -61,7 +61,9 @@ export function Value({ value, unit, className }: { readonly value: string | nul
   return <span className={cn('tabular-nums', className)}>{value}{unit ? <span className="ml-1 text-xs font-medium text-subtle-foreground">{unit}</span> : null}</span>;
 }
 
-export const present = (reading: PlantReading | null | undefined) => (reading && reading.state === 'PRESENT' ? reading : null);
+export const present = (reading: PlantReading | null | undefined) => (
+  reading && reading.state === 'PRESENT' && (reading.current || reading.lowConfidence) ? reading : null
+);
 
 // ── Top left: the plant's three headline figures ──────────────────────────────────────────────────
 
@@ -70,18 +72,22 @@ export interface KpiFigure {
   readonly label: string;
   readonly value: string | null;
   readonly unit?: string;
+  readonly lowConfidence?: boolean;
   readonly caption: ReactNode;
 }
 
 export function TwinKpis({ figures }: { readonly figures: readonly KpiFigure[] }) {
   return (
-    <dl aria-label="冷站关键指标" className="pointer-events-auto m-0 flex gap-2.5">
+    <dl aria-label="冷站关键指标" className="pointer-events-auto m-0 flex flex-wrap gap-2.5">
       {figures.map((figure) => (
-        <div key={figure.label} className={cn(FLOATING, 'flex w-[188px] items-start gap-2.5 px-3.5 py-3')}>
+        <div key={figure.label} className={cn(FLOATING, 'flex w-[166px] items-start gap-2.5 px-3 py-2.5 @[1120px]/twin:w-[188px] @[1120px]/twin:px-3.5 @[1120px]/twin:py-3')}>
           <IconChip icon={figure.icon} />
           <div className="min-w-0">
             <dt className="text-xs text-muted-foreground">{figure.label}</dt>
-            <dd className="mt-0.5 text-xl leading-[26px] font-semibold tracking-[-0.02em]"><Value value={figure.value} unit={figure.unit} /></dd>
+            <dd className="mt-0.5 flex flex-wrap items-baseline gap-1 text-xl leading-[26px] font-semibold tracking-[-0.02em]">
+              <Value value={figure.value} unit={figure.unit} />
+              {figure.lowConfidence ? <LowConfidenceBadge /> : null}
+            </dd>
             <div className="mt-0.5 truncate text-xs text-muted-foreground">{figure.caption}</div>
           </div>
         </div>
@@ -199,14 +205,24 @@ export function SiteCard({ siteId, siteName, sampledAt, timeZone, today, outdoor
 }) {
   const machines = groups.flatMap((group) => group.items);
   const running = machines.filter((item) => item.state === 'running').length;
+  const fault = machines.filter((item) => item.state === 'fault').length;
+  const offline = machines.filter((item) => item.state === 'offline').length;
   const stopped = machines.filter((item) => item.state === 'stopped').length;
   const unconnected = machines.filter((item) => item.state === 'unconnected').length;
-  const summary = [`${running} 台运行`, stopped ? `${stopped} 台停机` : null, unconnected ? `${unconnected} 台未接入` : null].filter(Boolean).join(' · ');
+  const summary = [
+    running ? `${running} 台运行` : null,
+    fault ? `${fault} 台故障` : null,
+    offline ? `${offline} 台离线` : null,
+    stopped ? `${stopped} 台停机` : null,
+    unconnected ? `${unconnected} 台未接入` : null,
+  ].filter(Boolean).join(' · ') || '0 台运行';
+  const siteTone = running > 0 ? 'running' : fault > 0 ? 'alarm' : offline > 0 && stopped === 0 ? 'offline' : 'neutral';
+  const siteStatusLabel = running > 0 ? '运行中' : fault > 0 ? '故障' : offline > 0 && stopped === 0 ? '离线' : '停机';
   return (
     <>
       <CardHeader icon={Home} eyebrow={`空调机房 · ${siteName}`} title="冷站" caption={sampledAt ? <>实时 <span className="font-mono">{formatClock(sampledAt, timeZone)}</span></> : '还没有读数'} />
       <div className="flex items-center gap-2 px-3.5 pb-2.5 text-xs text-muted-foreground">
-        <StatusBadge tone={running > 0 ? 'running' : 'neutral'} label={running > 0 ? '运行中' : '停机'} />
+        <StatusBadge tone={siteTone} label={siteStatusLabel} />
         <span className="truncate">{summary}</span>
       </div>
       <dl className="m-0 grid grid-cols-2 gap-2 px-3.5 pb-2.5">
@@ -219,14 +235,19 @@ export function SiteCard({ siteId, siteName, sampledAt, timeZone, today, outdoor
         <div className="flex h-[30px] items-center text-xs font-semibold">设备<span className="ml-auto font-normal text-muted-foreground">运行 / 台数</span></div>
         {groups.map((group) => {
           const groupRunning = group.items.filter((item) => item.state === 'running').length;
+          const groupFault = group.items.filter((item) => item.state === 'fault').length;
+          const groupOffline = group.items.filter((item) => item.state === 'offline').length;
+          const groupStopped = group.items.filter((item) => item.state === 'stopped').length;
           const connected = group.items.some((item) => item.state !== 'unconnected');
+          const groupTone = !connected ? 'neutral' : groupFault > 0 ? 'alarm' : groupRunning > 0 ? 'running' : groupOffline > 0 && groupStopped === 0 ? 'offline' : 'neutral';
+          const groupLabel = !connected ? '未接入' : groupFault > 0 ? '故障' : groupRunning > 0 ? '运行' : groupOffline > 0 && groupStopped === 0 ? '离线' : '停机';
           return (
             <div key={group.label} className="grid grid-cols-[26px_minmax(0,1fr)_auto] items-center gap-2.5 py-1.5 text-sm">
               <IconChip icon={KIND_ICONS[group.kind]} size="sm" muted={!connected} />
               <span className="truncate">{group.label}</span>
               <span className="flex items-center gap-2">
                 <span className={cn('tabular-nums', connected ? 'font-semibold' : 'text-muted-foreground')}>{connected ? groupRunning : '—'} / {group.items.length}</span>
-                <StatusBadge tone={connected ? (groupRunning > 0 ? 'running' : 'neutral') : 'neutral'} label={connected ? (groupRunning > 0 ? '运行' : '停机') : '未接入'} />
+                <StatusBadge tone={groupTone} label={groupLabel} />
               </span>
             </div>
           );
@@ -384,7 +405,7 @@ export function TwinLoop({ title, flow, nodes, difference, siteId }: {
   const last = nodes.reduce((found, node, index) => (node.state !== 'idle' ? index : found), -1);
   const centre = (index: number) => `${((index + 0.5) / nodes.length) * 100}%`;
   return (
-    <section aria-label={title} className={cn(FLOATING, 'pointer-events-auto flex w-[640px] overflow-hidden')}>
+    <section aria-label={title} className={cn(FLOATING, 'pointer-events-auto flex w-full max-w-[540px] overflow-hidden @[1120px]/twin:max-w-[640px]')}>
       <div className="min-w-0 flex-1 px-3.5 pt-2.5 pb-3">
         <div className="flex h-[26px] items-center gap-2">
           <Droplet className="size-4 text-primary" aria-hidden="true" />
@@ -416,7 +437,7 @@ export function TwinLoop({ title, flow, nodes, difference, siteId }: {
           })}
         </ol>
       </div>
-      <Link to="/operations/realtime" search={{ site: siteId }} className="m-2 flex w-[170px] shrink-0 flex-col gap-1 rounded-lg border border-divider bg-muted px-3 py-2.5 outline-none hover:border-input-hover focus-visible:border-ring">
+      <Link to="/operations/realtime" search={{ site: siteId }} className="m-2 flex w-[138px] shrink-0 flex-col gap-1 rounded-lg border border-divider bg-muted px-3 py-2.5 outline-none hover:border-input-hover focus-visible:border-ring @[1120px]/twin:w-[170px]">
         <span className="flex items-center gap-1.5 text-xs text-muted-foreground"><Thermometer className="size-3.5" aria-hidden="true" />供回水温差</span>
         <span className="text-xl leading-[26px] font-semibold"><Value value={difference} unit="°C" /></span>
         <span className="flex items-center text-xs font-medium text-primary">实时运行<ChevronRight className="ml-auto size-3.5" aria-hidden="true" /></span>
@@ -445,20 +466,18 @@ export interface ListRow {
   readonly load: number | null;
 }
 
-const LIST_LIMIT = 5;
-
 export function TwinList({ tabs, scope, selectedId, onSelect }: {
   readonly tabs: readonly ListTab[];
   readonly scope: string;
   readonly selectedId: string | null;
-  readonly onSelect: (item: TwinEquipment) => void;
+  readonly onSelect: (item: TwinEquipment | null) => void;
 }) {
   const [active, setActive] = useState(tabs[0]?.key);
   const tab = tabs.find((candidate) => candidate.key === active) ?? tabs[0];
   if (!tab) return null;
-  const rows = tab.rows.slice(0, LIST_LIMIT);
+  const showLoad = tab.rows.some((row) => row.load !== null);
   return (
-    <section aria-label="设备列表" className={cn(FLOATING, 'pointer-events-auto w-[360px] overflow-hidden')}>
+    <section aria-label="设备列表" className={cn(FLOATING, 'pointer-events-auto w-[320px] overflow-hidden @[1120px]/twin:w-[360px]')}>
       <div role="tablist" aria-label="设备类型" className="flex gap-4 border-b border-divider px-3.5">
         {tabs.map((candidate) => (
           <button
@@ -474,17 +493,21 @@ export function TwinList({ tabs, scope, selectedId, onSelect }: {
         ))}
         <span className="ml-auto self-center text-xs text-muted-foreground">{scope}</span>
       </div>
-      <div role="tabpanel">
-        {rows.map((row) => {
+      <div role="tabpanel" className="max-h-[220px] overflow-y-auto [scrollbar-width:thin]">
+        {tab.rows.map((row) => {
           const selected = row.item.assetId === selectedId;
           const live = row.item.state === 'running';
           return (
             <button
               key={row.key}
               type="button"
-              onClick={() => onSelect(row.item)}
+              onClick={() => onSelect(selected ? null : row.item)}
               aria-pressed={selected}
-              className={cn('grid h-11 w-full grid-cols-[26px_minmax(0,1fr)_auto_52px_14px] items-center gap-2 border-t border-divider pr-3 pl-3.5 text-left text-sm outline-none first:border-t-0 hover:bg-accent focus-visible:bg-accent', selected && 'bg-primary-soft hover:bg-primary-soft')}
+              className={cn(
+                'grid h-11 w-full items-center gap-2 border-t border-divider pr-3 pl-3.5 text-left text-sm outline-none first:border-t-0 hover:bg-accent focus-visible:bg-accent',
+                showLoad ? 'grid-cols-[26px_minmax(0,1fr)_auto_52px_14px]' : 'grid-cols-[26px_minmax(0,1fr)_auto_14px]',
+                selected && 'bg-primary-soft hover:bg-primary-soft',
+              )}
             >
               <IconChip icon={row.icon} size="sm" muted={!live && !selected} solid={selected} />
               <span className="min-w-0">
@@ -492,22 +515,21 @@ export function TwinList({ tabs, scope, selectedId, onSelect }: {
                 <span className="block truncate text-xs text-muted-foreground">{row.caption}</span>
               </span>
               <StatusBadge tone={TWIN_STATUS_TONE[row.item.state]} label={TWIN_STATE_LABELS[row.item.state]} />
-              <span>
-                {row.load === null ? <span className="text-xs text-subtle-foreground">—</span> : (
-                  <>
-                    <span className="block h-1 overflow-hidden rounded-full bg-divider"><span className="block h-full rounded-full bg-primary" style={{ width: `${Math.max(0, Math.min(100, row.load))}%` }} /></span>
-                    <span className="text-micro text-muted-foreground tabular-nums">{formatDecimal(row.load, 0)}%</span>
-                  </>
-                )}
-              </span>
+              {showLoad ? (
+                <span>
+                  {row.load === null ? <span className="text-xs text-subtle-foreground">—</span> : (
+                    <>
+                      <span className="block h-1 overflow-hidden rounded-full bg-divider"><span className="block h-full rounded-full bg-primary" style={{ width: `${Math.max(0, Math.min(100, row.load))}%` }} /></span>
+                      <span className="text-micro text-muted-foreground tabular-nums">{formatDecimal(row.load, 0)}%</span>
+                    </>
+                  )}
+                </span>
+              ) : null}
               <ChevronRight className={cn('size-3.5', selected ? 'text-primary' : 'text-subtle-foreground')} aria-hidden="true" />
             </button>
           );
         })}
       </div>
-      {tab.rows.length > LIST_LIMIT ? (
-        <div className="border-t border-divider px-3.5 py-2 text-xs text-muted-foreground">还有 {tab.rows.length - LIST_LIMIT} 台</div>
-      ) : null}
     </section>
   );
 }

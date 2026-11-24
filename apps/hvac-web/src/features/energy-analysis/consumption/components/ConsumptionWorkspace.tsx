@@ -11,10 +11,8 @@ import { MetricTabsChartCard, type MetricTab } from "@/components/metric-tabs-ch
 import { Main } from "@/components/layout/Main";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { DeltaBadge } from "@/components/ui/delta-badge";
 import { PeriodTabs, type PeriodOption } from "@/components/ui/period-tabs";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CategoryTrend, destinationCsv, EnergyDestination } from "@/features/breakdown/components/EnergyDestination";
 import { useAssistantPanel } from "@/features/assistant/assistant-panel-store";
@@ -33,7 +31,6 @@ import {
 } from "@/features/tariff/tariff-model";
 import { formatDecimal, formatTime } from "@/lib/operator-format";
 import { isOneOf } from "@/lib/typed";
-import { cn } from "@/lib/utils";
 import {
   copUnavailableText,
   ENERGY_PERIODS,
@@ -48,6 +45,7 @@ import {
   type Granularity,
 } from "../model";
 import { useEnergyComparison } from "../query";
+import { ConsumptionDetailTable } from "./ConsumptionDetailTable";
 import { LayeredEfficiencyStrip } from "./LayeredEfficiencyStrip";
 
 const siteRoute = getRouteApi("/_app/_site");
@@ -120,8 +118,10 @@ function energy(value: number | null, scale = value ?? 0): { value: string | nul
   return scale >= 10_000 ? { value: formatDecimal(value / 1000, 2), unit: "MWh" } : { value: formatDecimal(value, 1), unit: "kWh" };
 }
 
-const dash = <span className="text-muted-foreground">—</span>;
-const number = (value: number | null | undefined, digits = 1) => (value === null || value === undefined ? dash : <span className="tabular-nums">{formatDecimal(value, digits)}</span>);
+const csvCell = (cell: string | number) => {
+  const raw = String(cell);
+  return /[",\r\n]/.test(raw) ? `"${raw.replace(/"/g, '""')}"` : raw;
+};
 
 function rangeLabel(period: EnergyPeriod, timeZone: string): string {
   const now = new Date();
@@ -180,7 +180,7 @@ export function ConsumptionWorkspace() {
       }),
       ...destinationCsv(destination, previousLabel),
     ];
-    const url = URL.createObjectURL(new Blob(["﻿" + lines.map((line) => line.join(",")).join("\n")], { type: "text/csv;charset=utf-8" }));
+    const url = URL.createObjectURL(new Blob(["\uFEFF" + lines.map((line) => line.map(csvCell).join(",")).join("\n")], { type: "text/csv;charset=utf-8" }));
     const link = document.createElement("a");
     link.href = url;
     link.download = `${site.displayName}-能耗-${ENERGY_PERIODS[period]}.csv`;
@@ -263,10 +263,18 @@ export function ConsumptionWorkspace() {
                 <CategoryTrend result={destination} granularity={comparison.current.granularity} timeZone={site.timezone} />
               </TabsContent>
               <TabsContent value="tou">
-                <TouSection tariff={tariff} pricing={pricing} pending={tariff.isPending} timeZone={site.timezone} />
+                <TouSection tariff={tariff} pricing={pricing} pending={tariff.isPending} timeZone={site.timezone} isCurrentDay={period === "today"} />
               </TabsContent>
               <TabsContent value="detail">
-                <DetailTable comparison={comparison} pricing={pricing} previousLabel={previousLabel} timeZone={site.timezone} />
+                <ConsumptionDetailTable
+                  comparison={comparison}
+                  pricing={pricing}
+                  previousLabel={previousLabel}
+                  timeZone={site.timezone}
+                  title={GRANULARITY_COPY[comparison.current.granularity].detailTitle}
+                  bucketHeader={BUCKET_HEADER[comparison.current.granularity]}
+                  crossGapNote={GRANULARITY_COPY[comparison.current.granularity].crossGapNote}
+                />
               </TabsContent>
             </Tabs>
           </Panel>
@@ -285,6 +293,9 @@ interface Pricing {
 }
 
 function IncompleteTelemetryNotice({ summary, siteId }: { readonly summary: EnergySummary; readonly siteId: string }) {
+  const { principal } = siteRoute.useRouteContext();
+  const capabilities = principal.authorization.capabilities;
+  const canOpenIntegrations = capabilities.includes("site.list") && (capabilities.includes("device.read") || capabilities.includes("asset.read"));
   if (summary.missingMeters.length === 0 && summary.incompleteBuckets === 0) return null;
   const scope = GRANULARITY_COPY[summary.granularity].incompleteScope;
   const detail = summary.missingMeters.length > 0
@@ -302,9 +313,11 @@ function IncompleteTelemetryNotice({ summary, siteId }: { readonly summary: Ener
         <span className="font-medium text-warning-text">{detail}</span>
         <span className="text-muted-foreground">未含缺失设备，能效可能偏高</span>
       </div>
-      <PanelLink to="/settings/integrations" search={{ site: siteId, view: "anomalies" }}>
-        清洗留痕
-      </PanelLink>
+      {canOpenIntegrations ? (
+        <PanelLink to="/settings/integrations" search={{ site: siteId, view: "anomalies" }}>
+          异常清洗留痕
+        </PanelLink>
+      ) : null}
     </div>
   );
 }
@@ -430,6 +443,25 @@ function PeriodChart({ comparison, pricing, previousLabel, metric, onMetricChang
   const meteredElectricityKWh = metered.reduce((sum, row) => sum + row.electricityKWh!, 0);
   const granularityCopy = GRANULARITY_COPY[granularity];
 
+  const meteredCooling = current.rows.filter((row) => row.coolingKWh !== null);
+  const coolingPeak = meteredCooling.reduce<typeof meteredCooling[number] | null>(
+    (best, row) => (!best || (row.coolingKWh ?? 0) > (best.coolingKWh ?? 0) ? row : best),
+    null,
+  );
+  const meteredCoolingKWh = meteredCooling.reduce((sum, row) => sum + (row.coolingKWh ?? 0), 0);
+  const copValues = current.rows.map((row) => row.cop).filter((value): value is number => value !== null);
+  const copMax = copValues.length > 0 ? Math.max(...copValues) : null;
+  const copMin = copValues.length > 0 ? Math.min(...copValues) : null;
+  const costEntries = pricing
+    ? buckets.map((bucket) => ({ label: bucket.label, cost: pricing.byLabel.get(bucket.label)?.total ?? null }))
+      .filter((entry): entry is { label: string; cost: number } => entry.cost !== null && entry.cost > 0)
+    : [];
+  const costPeak = costEntries.reduce<{ label: string; cost: number } | null>(
+    (best, entry) => (!best || entry.cost > best.cost ? entry : best),
+    null,
+  );
+  const costTotal = costEntries.reduce((sum, entry) => sum + entry.cost, 0);
+
   return (
     <MetricTabsChartCard
       role="region"
@@ -454,8 +486,26 @@ function PeriodChart({ comparison, pricing, previousLabel, metric, onMetricChang
           <span className="font-semibold">{CHART_TITLE[granularity][active.key]}</span>
           <span className="text-xs text-muted-foreground">{unit}</span>
           <span className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
-            {current.peak ? <span>{granularityCopy.peakLabel} <span className="font-medium text-foreground">{current.peak.label}</span> {formatDecimal(current.peak.electricityKWh!, 1)} kWh</span> : null}
-            {metered.length > 0 ? <span>{granularityCopy.averageLabel} {formatDecimal(meteredElectricityKWh / metered.length, 1)} kWh</span> : null}
+            {active.key === "electricityKWh" ? (
+              <>
+                {current.peak ? <span>{granularityCopy.peakLabel} <span className="font-medium text-foreground">{current.peak.label}</span> {formatDecimal(current.peak.electricityKWh!, 1)} kWh</span> : null}
+                {metered.length > 0 ? <span>{granularityCopy.averageLabel} {formatDecimal(meteredElectricityKWh / metered.length, 1)} kWh</span> : null}
+              </>
+            ) : active.key === "coolingKWh" ? (
+              <>
+                {coolingPeak ? <span>最高供冷 <span className="font-medium text-foreground">{coolingPeak.label}</span> {formatDecimal(coolingPeak.coolingKWh!, 1)} kWh</span> : null}
+                {meteredCooling.length > 0 ? <span>平均供冷 {formatDecimal(meteredCoolingKWh / meteredCooling.length, 1)} kWh</span> : null}
+              </>
+            ) : active.key === "cop" ? (
+              <>
+                {copMax !== null && copMin !== null ? <span>波动范围 {formatDecimal(copMin, 2)} – {formatDecimal(copMax, 2)} COP</span> : null}
+              </>
+            ) : active.key === "cost" ? (
+              <>
+                {costPeak ? <span>费用峰值 <span className="font-medium text-foreground">{costPeak.label}</span> ¥{formatDecimal(costPeak.cost, 0)}</span> : null}
+                {costEntries.length > 0 ? <span>段均 ¥{formatDecimal(costTotal / costEntries.length, 0)}</span> : null}
+              </>
+            ) : null}
             {current.crossGapElectricityKWh > 0 ? (
               <span className="flex items-center gap-1 text-foreground">
                 跨缺口电量 <span className="font-medium tabular-nums">{formatDecimal(current.crossGapElectricityKWh, 1)} kWh</span>
@@ -482,11 +532,12 @@ function PeriodChart({ comparison, pricing, previousLabel, metric, onMetricChang
   );
 }
 
-function TouSection({ tariff, pricing, pending, timeZone }: {
+function TouSection({ tariff, pricing, pending, timeZone, isCurrentDay }: {
   readonly tariff: { readonly data?: SiteTariff | null; readonly isError: boolean };
   readonly pricing: Pricing | null;
   readonly pending: boolean;
   readonly timeZone: string;
+  readonly isCurrentDay: boolean;
 }) {
   if (pending) return <Skeleton className="m-5 h-[140px] rounded-lg" />;
   if (tariff.data === null) {
@@ -501,85 +552,5 @@ function TouSection({ tariff, pricing, pending, timeZone }: {
   if (tariff.isError || !tariff.data || !pricing) {
     return <p role="region" aria-label="分时电费" className="px-5 py-8 text-center text-sm text-muted-foreground">电价暂时读不到</p>;
   }
-  return <TouCostDetail tariff={tariff.data} cost={pricing.current} timeZone={timeZone} />;
-}
-
-function DetailTable({ comparison, pricing, previousLabel, timeZone }: {
-  readonly comparison: NonNullable<ReturnType<typeof useEnergyComparison>["data"]>;
-  readonly pricing: Pricing | null;
-  readonly previousLabel: string;
-  readonly timeZone: string;
-}) {
-  const granularity = comparison.current.granularity;
-  const explain = useAssistantPanel((state) => state.explain);
-  const title = GRANULARITY_COPY[granularity].detailTitle;
-  const codes = pricing?.codes ?? [];
-  // Newest first: the bucket still running leads.
-  const rows = [...comparison.buckets].filter((bucket) => bucket.electricityKWh !== null || bucket.coolingKWh !== null || bucket.complete).reverse();
-  return (
-    <Table aria-label={title} className="[&_td]:whitespace-nowrap [&_th]:whitespace-nowrap">
-        <TableHeader>
-          <TableRow className="hover:bg-transparent">
-            <TableHead className="pl-5">{BUCKET_HEADER[granularity]}</TableHead>
-            <TableHead className="text-right">空调用电</TableHead>
-            <TableHead className="text-right">{previousLabel}</TableHead>
-            <TableHead className="text-right">变化</TableHead>
-            {codes.map((code) => <TableHead key={code} className="text-right">{PERIOD_LABEL[code]}</TableHead>)}
-            <TableHead className="text-right">供冷量</TableHead>
-            <TableHead className="pr-5 text-right">综合能效</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {granularity !== "month" && comparison.current.crossGapElectricityKWh > 0 ? (
-            <TableRow className="bg-muted/25 hover:bg-muted/25">
-              <TableCell colSpan={6 + codes.length} className="pl-5 pr-5 py-2 text-xs text-muted-foreground">
-                {GRANULARITY_COPY[granularity].crossGapNote}
-              </TableCell>
-            </TableRow>
-          ) : null}
-          {rows.length === 0 && comparison.current.crossGapElectricityKWh <= 0 ? (
-            <TableRow className="hover:bg-transparent"><TableCell colSpan={6 + codes.length} className="py-8 text-center text-muted-foreground">所选时段暂无计量数据</TableCell></TableRow>
-          ) : rows.map((row) => {
-            const change = relativeChange(row.electricityKWh, row.previousElectricityKWh);
-            const cost = pricing?.byLabel.get(row.label);
-            return (
-              <TableRow key={row.label} className="group">
-                <TableCell className="pl-5">
-                  <span className="flex items-center gap-2">
-                    <span className="font-medium">{row.label}</span>
-                    {!row.complete ? <Badge>进行中</Badge> : null}
-                    {row.incomplete || row.missingMeters.length > 0 ? (
-                      <Badge variant="warning">
-                        {row.missingMeters.length > 0 ? `▲ 不完整，缺 ${row.missingMeters.join("、")}` : "▲ 数据不完整"}
-                      </Badge>
-                    ) : null}
-                    {row.complete && row.electricityKWh !== null ? (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-6 gap-1 px-1.5 text-xs text-primary opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-                        aria-label={`分析 ${row.label}`}
-                        onClick={() => explain(explainQuestion(row, granularity, timeZone))}
-                      >
-                        <BrandMark className="size-3 text-primary" />
-                        分析原因
-                      </Button>
-                    ) : null}
-                  </span>
-                </TableCell>
-                <TableCell className="text-right font-medium">{number(row.electricityKWh)}</TableCell>
-                <TableCell className="text-right text-muted-foreground">{number(row.previousElectricityKWh)}</TableCell>
-                <TableCell className="text-right">{change === null ? dash : <DeltaBadge delta={change} invert variant="text" showIcon={false} />}</TableCell>
-                {codes.map((code) => {
-                  const used = cost?.byPeriod.find((usage) => usage.code === code)?.energyKWh;
-                  return <TableCell key={code} className={cn("text-right", !used && "text-muted-foreground")}>{used ? number(used, 0) : dash}</TableCell>;
-                })}
-                <TableCell className="text-right">{number(row.coolingKWh)}</TableCell>
-                <TableCell className="pr-5 text-right">{row.cop === null ? dash : number(row.cop, 2)}</TableCell>
-              </TableRow>
-            );
-          })}
-        </TableBody>
-    </Table>
-  );
+  return <TouCostDetail tariff={tariff.data} cost={pricing.current} timeZone={timeZone} isCurrentDay={isCurrentDay} />;
 }

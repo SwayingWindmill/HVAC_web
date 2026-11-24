@@ -6,6 +6,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { useSidebar } from '@/components/ui/sidebar';
 import { Spinner } from '@/components/ui/spinner';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useAssistantPanel } from '../assistant-panel-store';
 import type { AssistantMessage } from '../thread-model';
 import { useAssistantSession } from '../use-assistant-session';
@@ -44,11 +45,19 @@ export function AssistantPanel({ siteId, siteName, timezone, csrfToken }: {
   readonly csrfToken: string;
 }) {
   const close = useAssistantPanel((state) => state.close);
+  const draft = useAssistantPanel((state) => state.draft);
   const { thread, history, loading, error, ask, answer, cancel, startNew, open } = useAssistantSession(siteId, csrfToken);
   useFoldedNavigation();
   const pending = thread.pendingInput;
   // 历史 shows my conversations in place of the open one; choosing one opens it.
   const [showingHistory, setShowingHistory] = useState(false);
+
+  // An inline "分析原因" trigger must always bring the user back to the active composer with a clean slate if an unrelated question is pending.
+  useEffect(() => {
+    if (draft === null) return;
+    setShowingHistory(false);
+    if (pending !== null) startNew();
+  }, [draft, pending, startNew]);
   const threads = useMemo(() => history.map(({ id, question }) => ({ id, status: 'regular' as const, title: question })), [history]);
 
   const runtime = useExternalStoreRuntime<AssistantMessage>({
@@ -86,32 +95,47 @@ export function AssistantPanel({ siteId, siteName, timezone, csrfToken }: {
         </span>
         <span className="text-sm font-semibold">AI 助手</span>
         <span className="flex-1" />
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-[30px] text-muted-foreground aria-pressed:bg-muted aria-pressed:text-foreground"
-          aria-label="历史对话"
-          aria-pressed={showingHistory}
-          onClick={() => setShowingHistory((shown) => !shown)}
-        >
-          <History className="size-4" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-[30px] text-muted-foreground"
-          aria-label="新对话"
-          onClick={() => {
-            startNew();
-            setShowingHistory(false);
-          }}
-          disabled={thread.isRunning}
-        >
-          <SquarePen className="size-4" />
-        </Button>
-        <Button variant="ghost" size="icon" className="size-[30px] text-muted-foreground" aria-label="收起助手" onClick={close}>
-          <X className="size-4" />
-        </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-[30px] text-muted-foreground aria-pressed:bg-muted aria-pressed:text-foreground"
+              aria-label="历史对话"
+              aria-pressed={showingHistory}
+              onClick={() => setShowingHistory((shown) => !shown)}
+            >
+              <History className="size-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>历史对话</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-[30px] text-muted-foreground"
+              aria-label="新对话"
+              onClick={() => {
+                startNew();
+                setShowingHistory(false);
+              }}
+              disabled={thread.isRunning}
+            >
+              <SquarePen className="size-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>新对话</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button variant="ghost" size="icon" className="size-[30px] text-muted-foreground" aria-label="收起助手" onClick={close}>
+              <X className="size-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>收起助手</TooltipContent>
+        </Tooltip>
       </div>
       {error !== null ? (
         <Alert variant="destructive" className="mx-4 mt-3 w-auto" data-testid="assistant-error">
@@ -132,7 +156,9 @@ export function AssistantPanel({ siteId, siteName, timezone, csrfToken }: {
               siteId={siteId}
               siteName={siteName}
               answering={pending !== null}
+              answeringKind={pending?.request.response.kind ?? null}
               onAnswer={(value) => { void answer(value); }}
+              onRetry={(prompt) => { void ask(prompt); }}
             />
           )}
         </AssistantRuntimeProvider>

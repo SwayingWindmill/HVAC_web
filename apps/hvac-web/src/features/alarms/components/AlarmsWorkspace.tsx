@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { getRouteApi, useNavigate } from '@tanstack/react-router';
 import { CircleCheck, RefreshCw, Search, X } from 'lucide-react';
 import { PageHeader } from '@/blocks/page-header';
@@ -98,8 +98,10 @@ function SummaryCell({ label, value, caption, children, className }: {
 }
 
 /** Recent history at a glance: how fast alarms clear, how many arrive each day and where they come from. */
-function AlarmSummary({ alarms, days, timeZone, now, deviceNames, onDevice }: {
+function AlarmSummary({ alarms, isError, onRetry, days, timeZone, now, deviceNames, onDevice }: {
   readonly alarms: readonly Alarm[] | undefined;
+  readonly isError: boolean;
+  readonly onRetry: () => void;
   readonly days: number;
   readonly timeZone: string;
   readonly now: number;
@@ -113,6 +115,14 @@ function AlarmSummary({ alarms, days, timeZone, now, deviceNames, onDevice }: {
   const total = (row: (typeof daily)[number]) => SEVERITY_ORDER.reduce((sum, severity) => sum + row[severity], 0);
   const peak = Math.max(1, ...daily.map(total));
   const today = daily.at(-1);
+  if (isError && !alarms) {
+    return (
+      <Panel aria-label="告警概况" className="flex h-[74px] shrink-0 items-center justify-between gap-3 px-5 py-3">
+        <span className="text-sm text-destructive-text">近 {days} 天告警概况暂时读不到</span>
+        <Button type="button" variant="outline" size="sm" onClick={onRetry}>重试</Button>
+      </Panel>
+    );
+  }
   if (!alarms) return <Skeleton className="h-[74px] shrink-0 rounded-xl" />;
   return (
     <Panel aria-label="告警概况" className="grid shrink-0 grid-cols-1 divide-y divide-divider @3xl/main:grid-cols-[minmax(0,0.8fr)_minmax(0,1.4fr)_minmax(0,1.2fr)] @3xl/main:divide-y-0">
@@ -186,6 +196,7 @@ export function AlarmsWorkspace() {
     queryFn: ({ pageParam, signal }) => listAlarms(site.id, filter, pageParam, signal),
     initialPageParam: INITIAL_ALARM_CURSOR,
     getNextPageParam: (page) => (page.hasMore ? page.nextCursor ?? undefined : undefined),
+    placeholderData: keepPreviousData,
     refetchInterval: REFRESH_MS,
   });
 
@@ -309,6 +320,8 @@ export function AlarmsWorkspace() {
         <>
         <AlarmSummary
           alarms={windowed}
+          isError={history.isError}
+          onRetry={() => void history.refetch()}
           days={days}
           timeZone={site.timezone}
           now={now}

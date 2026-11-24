@@ -1,5 +1,5 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate, useSearch } from '@tanstack/react-router';
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link, useNavigate, useSearch } from '@tanstack/react-router';
 import { Download } from 'lucide-react';
 import { useMemo, type ReactNode } from 'react';
 import { Line, LineChart, ReferenceLine, YAxis } from 'recharts';
@@ -45,12 +45,17 @@ const DRY_BULB_SOURCE_KEY = 'weather.ambient_dry_bulb_temperature';
 const SITE_COLORS = ['var(--chart-1)', 'var(--chart-3)', 'var(--chart-2)', 'var(--chart-4)', 'var(--chart-5)'];
 
 const energy = (value: number | null) => (value === null ? '—' : value >= 10_000 ? `${formatDecimal(value / 1000, 2)} MWh` : `${formatDecimal(value, 0)} kWh`);
+const csvCell = (cell: string | number) => {
+  const raw = String(cell);
+  return /[",\r\n]/.test(raw) ? `"${raw.replace(/"/g, '""')}"` : raw;
+};
 
 /** Each authorized Site's daily electricity and cooling over the period, on its own clock. */
 function useSiteSummaries(sites: readonly Site[], period: BenchmarkPeriod, csrfToken: string) {
   return useQuery({
     queryKey: ['benchmark', period, sites.map((site) => site.id).join(',')],
     enabled: sites.length > 0,
+    placeholderData: keepPreviousData,
     queryFn: async ({ signal }) => Promise.all(sites.map(async (site) => {
       const profile = { siteId: site.id, name: site.displayName, floorAreaM2: site.floorAreaM2, climateZone: site.climateZone };
       const { from, to } = periodWindow(period, new Date(), site.timezone);
@@ -81,6 +86,7 @@ function useOutdoorMeans(sites: readonly Site[], period: BenchmarkPeriod, csrfTo
   return useQuery({
     queryKey: ['benchmark', 'outdoor', period, sites.map((site) => site.id).join(',')],
     enabled: sites.length > 0,
+    placeholderData: keepPreviousData,
     queryFn: async ({ signal }) => new Map(await Promise.all(sites.map(async (site): Promise<readonly [string, ReadonlyMap<string, number> | null | 'unavailable']> => {
       try {
         const model = (await queryClient.fetchQuery(siteAssetModelEnvelopeQuery(site.id))).data;
@@ -116,7 +122,7 @@ function Figure({ label, value, unit, info, children }: { readonly label: string
 }
 
 /** One row of what the page can and cannot compare yet. */
-function Dimension({ label, detail, connected }: { readonly label: string; readonly detail: ReactNode; readonly connected: boolean | null }) {
+function Dimension({ label, detail, connected }: { readonly label: ReactNode; readonly detail: ReactNode; readonly connected: boolean | null }) {
   return (
     <div className="flex items-center justify-between gap-4 border-b border-divider px-5 py-3 last:border-b-0">
       <span className="flex min-w-0 flex-col gap-0.5">
@@ -194,7 +200,7 @@ export function BenchmarkWorkspace({ snapshot }: { readonly snapshot: ShellSnaps
       ]),
       ...denied.map((site) => [site.name, '没有能耗分析权限']),
     ];
-    const url = URL.createObjectURL(new Blob(['﻿' + lines.map((line) => line.join(',')).join('\n')], { type: 'text/csv;charset=utf-8' }));
+    const url = URL.createObjectURL(new Blob(['\uFEFF' + lines.map((line) => line.map(csvCell).join(',')).join('\n')], { type: 'text/csv;charset=utf-8' }));
     const link = document.createElement('a');
     link.href = url;
     link.download = `站点对标-${PERIODS.find((option) => option.value === period)!.label}.csv`;
@@ -212,7 +218,9 @@ export function BenchmarkWorkspace({ snapshot }: { readonly snapshot: ShellSnaps
       <TableCell>
         <span className="flex items-center gap-2 font-medium whitespace-nowrap">
           <span className="size-2 rounded-[2px]" style={{ background: colorOf(site.siteId) }} aria-hidden="true" />
-          {site.name}
+          <Link to="/overview" search={{ site: site.siteId }} className="hover:text-primary hover:underline">
+            {site.name}
+          </Link>
         </span>
         <span className="block pl-4 text-xs whitespace-nowrap text-muted-foreground">
           {site.climateZone ? CLIMATE_ZONE_LABEL[site.climateZone] : '气候区未登记'}
@@ -347,7 +355,9 @@ export function BenchmarkWorkspace({ snapshot }: { readonly snapshot: ShellSnaps
                       <div key={site.siteId} className="flex flex-col gap-1.5 rounded-lg border border-divider px-4 py-3">
                         <span className="flex items-center gap-2 text-sm">
                           <span className="size-2 rounded-[2px]" style={{ background: colorOf(site.siteId) }} aria-hidden="true" />
-                          <span className="font-medium">{site.name}</span>
+                          <Link to="/overview" search={{ site: site.siteId }} className="font-medium hover:text-primary hover:underline">
+                            {site.name}
+                          </Link>
                           <span className="ml-auto text-xs text-muted-foreground tabular-nums">
                             {values.length ? `${formatDecimal(Math.min(...values), 2)} – ${formatDecimal(Math.max(...values), 2)}` : '—'}
                           </span>
@@ -375,9 +385,14 @@ export function BenchmarkWorkspace({ snapshot }: { readonly snapshot: ShellSnaps
               <PanelHeader title={<span className="flex items-center gap-1.5">更多对比项<InfoTip>站点档案在系统管理的注册中心里维护；外部数据接入后在此对比</InfoTip></span>} />
               <Dimension label="单位面积用电" detail={`${withArea} / ${result.sites.length} 个站点登记了建筑面积`} connected />
               <Dimension
-                label="气候修正"
+                label={
+                  <span className="inline-flex items-center gap-1">
+                    气温折算对比
+                    <InfoTip>{`以室外日均气温高于 ${DEGREE_DAY_BASE_C} °C 的累计温差（CDD${DEGREE_DAY_BASE_C}）标化各站制冷负荷差异，便于不同气候地区的站点横向对比`}</InfoTip>
+                  </span>
+                }
                 detail={outdoor.data
-                  ? `${withStation} / ${result.sites.length} 个站点有气象站，按冷却度日（CDD${DEGREE_DAY_BASE_C}）修正${unreadStations ? `；${unreadStations} 个站点气温暂不可用` : ''}`
+                  ? `${withStation} / ${result.sites.length} 个站点有气象站，按室外累计温差（CDD${DEGREE_DAY_BASE_C}）标化${unreadStations ? `；${unreadStations} 个站点气温暂不可用` : ''}`
                   : '正在读取各站点的气象站'}
                 connected={outdoor.data ? withStation > 0 : null}
               />

@@ -183,7 +183,7 @@ export function AlarmTemplatesWorkbench({
                   <div className="flex flex-col gap-2">
                     <div className="flex items-center gap-1.5 font-semibold">
                       <GitBranch className="size-3.5 text-primary" aria-hidden="true" />
-                      不可变发布版本账本
+                      不可变发布版本记录
                     </div>
                     {detailQuery.isPending ? (
                       <Skeleton className="h-20 rounded-md" />

@@ -70,6 +70,8 @@ test('a requested run publishes a recommendation that is dispatched as a confirm
   await expect(confirm).toContainText('向 CHILLER-01 下发指令？');
   await expect(confirm).toContainText('8.0 °C');
   await expect(confirm).toContainText('下发后观察 30 分钟');
+  await expect(confirm.getByRole('button', { name: '确认下发' })).toBeDisabled();
+  await confirm.getByRole('checkbox', { name: '我已核实当前冷机负荷与运行状态，确认按此建议下发' }).check();
   await confirm.getByRole('button', { name: '确认下发' }).click();
   await expect(page.getByText('已提交，正在下发')).toBeVisible();
   // The proposal now follows the command it was sent as.
@@ -946,12 +948,14 @@ test('engineering governance hosts canary routing, flywheel stats, and negative 
   // Click the allowlisted host badge to fill http://ai-solver-service:8090 and save.
   await canaryDialog.getByRole('button', { name: 'ai-solver-service:8090' }).click();
   await canaryDialog.getByRole('button', { name: '保存灰度绑定' }).click();
+  await page.getByRole('alertdialog').getByRole('button', { name: '确认启用绑定' }).click();
   await expect(canaryDialog).toContainText('全冷站主回路');
   await expect(canaryDialog).toContainText('外部 Python 优化服务');
 
   // Revert PLANT back to default.
   const plantRow = canaryDialog.getByRole('row', { name: /全冷站主回路/ });
   await plantRow.getByRole('button', { name: '切回默认' }).click();
+  await page.getByRole('alertdialog').getByRole('button', { name: '确认切回默认' }).click();
   await expect(canaryDialog.getByRole('row', { name: /全冷站主回路/ })).toHaveCount(0);
 
   await canaryDialog.getByRole('button', { name: '关闭' }).click();
@@ -1234,6 +1238,8 @@ test('operator can manually dispatch a matching auxiliary pump frequency recomme
   const confirm = page.getByRole('alertdialog');
   await expect(confirm).toContainText('向 CHWP-01 下发指令？');
   await expect(confirm).toContainText('38.5 Hz');
+  await expect(confirm.getByRole('button', { name: '确认下发' })).toBeDisabled();
+  await confirm.getByRole('checkbox', { name: '我已核实当前辅机回路运行状态，确认按此建议下发' }).check();
   await confirm.getByRole('button', { name: '确认下发' }).click();
 
   await expect(page.getByText('已提交，正在下发')).toBeVisible();

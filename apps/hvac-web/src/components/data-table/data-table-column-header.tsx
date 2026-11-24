@@ -1,6 +1,6 @@
 import type { HTMLAttributes } from 'react';
 import type { RowData, Table } from '@tanstack/react-table';
-import { ArrowDown, ArrowUp, ChevronsUpDown, EyeOff } from 'lucide-react';
+import { ArrowDown, ArrowUp, Check, ChevronsUpDown, EyeOff, RotateCcw } from 'lucide-react';
 
 import type { DataTableFeatures } from './data-table-features';
 import { cn } from '@/lib/utils';
@@ -57,12 +57,20 @@ export function DataTableColumnHeader<TData extends RowData>({
           <DropdownMenuGroup>
             <DropdownMenuItem onClick={() => column.toggleSorting(false)}>
               <ArrowUp className="mr-2 h-3.5 w-3.5 text-muted-foreground/70" />
-              升序
+              <span className="flex-1">升序</span>
+              {isSorted === 'asc' ? <Check className="ml-2 h-3.5 w-3.5 text-primary" aria-hidden="true" /> : null}
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => column.toggleSorting(true)}>
               <ArrowDown className="mr-2 h-3.5 w-3.5 text-muted-foreground/70" />
-              降序
+              <span className="flex-1">降序</span>
+              {isSorted === 'desc' ? <Check className="ml-2 h-3.5 w-3.5 text-primary" aria-hidden="true" /> : null}
             </DropdownMenuItem>
+            {isSorted ? (
+              <DropdownMenuItem onClick={() => column.clearSorting()}>
+                <RotateCcw className="mr-2 h-3.5 w-3.5 text-muted-foreground/70" />
+                恢复默认排序
+              </DropdownMenuItem>
+            ) : null}
           </DropdownMenuGroup>
           {column.getCanHide() ? (
             <>

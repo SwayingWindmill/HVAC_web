@@ -131,6 +131,35 @@ export type WorkOrderLifecycleInput = {
   completionEvidence?: WorkOrderEvidenceReference[];
 };
 
+const HAS_CHINESE_RE = /[\u4e00-\u9fff]/;
+
+const WORK_ORDER_CODE_MESSAGES: Readonly<Record<string, string>> = {
+  AUTHENTICATION_REQUIRED: '登录已失效，请重新登录。',
+  SESSION_INVALID: '登录已失效，请重新登录。',
+  CSRF_REQUIRED: '安全校验未通过，请刷新页面后再试。',
+  CSRF_INVALID: '安全校验未通过，请刷新页面后再试。',
+  FORBIDDEN: '当前账号没有这项工单操作权限，请联系管理员开通。',
+  WORK_ORDER_NOT_FOUND: '找不到这条工单，可能已被更新或删除。',
+  RESOURCE_NOT_FOUND: '找不到这条工单，可能已被更新或删除。',
+  WORK_ORDER_VERSION_CONFLICT: '这条工单刚刚被其他人更新了，请刷新后再操作。',
+  CONFLICT: '这条工单刚刚有变动，请刷新后再试。',
+  WORK_ORDER_TASKS_INCOMPLETE: '还有未完成的现场检查项，请完成全部检查后再结单。',
+  WORK_ORDER_INVALID: '填写的内容不完整或不符合要求，请检查后再试。',
+  VALIDATION_FAILED: '填写的内容不完整或不符合要求，请检查后再试。',
+};
+
+function translateWorkOrderError(status: number, code: string, detail?: string): string {
+  if (detail && HAS_CHINESE_RE.test(detail)) return detail;
+  if (WORK_ORDER_CODE_MESSAGES[code]) return WORK_ORDER_CODE_MESSAGES[code];
+  if (status === 401) return '登录已失效，请重新登录。';
+  if (status === 403) return '当前账号没有这项工单操作权限，请联系管理员开通。';
+  if (status === 404) return '找不到这条工单，请刷新列表后再试。';
+  if (status === 409) return '这条工单刚刚被其他人更新了，请刷新后再试。';
+  if (status === 422 || status === 400) return '填写的内容不符合要求，请检查后再试。';
+  if (status === 429) return '操作过于频繁，请稍后再试。';
+  return '工单服务暂时不可用，请稍后再试。';
+}
+
 // Responses come from our own Work Order owner; their shape is the typed contract and
 // is not re-validated here.
 async function request<T>(path: string, init: RequestInit): Promise<T> {
@@ -139,7 +168,9 @@ async function request<T>(path: string, init: RequestInit): Promise<T> {
   if (!response.ok) {
     const parsed = problemSchema.safeParse(payload);
     const problem = parsed.success ? parsed.data : {};
-    throw new WorkOrderApiError(response.status, problem.code ?? 'WORK_ORDER_UNAVAILABLE', problem.detail ?? problem.title ?? '工单服务暂时不可用', problem.retryable ?? false);
+    const code = problem.code ?? 'WORK_ORDER_UNAVAILABLE';
+    const message = translateWorkOrderError(response.status, code, problem.detail);
+    throw new WorkOrderApiError(response.status, code, message, problem.retryable ?? false);
   }
   return payload as T;
 }

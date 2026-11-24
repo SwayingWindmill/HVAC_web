@@ -1,6 +1,6 @@
 import type { RowData, Table } from "@tanstack/react-table";
 
-import { Settings2 } from "lucide-react";
+import { Check, Settings2 } from "lucide-react";
 import { cn } from "cn";
 import * as React from "react";
 
@@ -65,19 +65,21 @@ export function DataTableViewOptions<TData extends RowData>({
           <CommandList>
             <CommandEmpty>没有可配置的列</CommandEmpty>
             <CommandGroup>
-              {columns.map((column) => (
-                <CommandItem
-                  key={column.id}
-                  data-checked={column.getIsVisible()}
-                  onSelect={() =>
-                    column.toggleVisibility(!column.getIsVisible())
-                  }
-                >
-                  <span className="truncate">
-                    {column.columnDef.meta?.label ?? column.id}
-                  </span>
-                </CommandItem>
-              ))}
+              {columns.map((column) => {
+                const visible = column.getIsVisible();
+                return (
+                  <CommandItem
+                    key={column.id}
+                    data-checked={visible}
+                    onSelect={() => column.toggleVisibility(!visible)}
+                  >
+                    <span className="flex-1 truncate">
+                      {column.columnDef.meta?.label ?? column.id}
+                    </span>
+                    <Check className={cn("ml-auto size-3.5 text-primary", visible ? "opacity-100" : "opacity-0")} aria-hidden="true" />
+                  </CommandItem>
+                );
+              })}
             </CommandGroup>
           </CommandList>
         </Command>

@@ -830,7 +830,7 @@ export function buildDeviationWorkOrderDraft(
         `核查时段：${windowLabel}（共 ${deviation.durationMinutes} 分钟，已排除预冷提前窗与停机余冷滞后窗）。`,
         `运行设备：${devicesText}。`,
         powerSentence,
-        '请现场核实是否为未登记的加班供冷、自控未按时停机或现场手动启机；若属临时加班供冷，可在「运行计划 → 例外日程」补登运行例外。',
+        '请现场核实是否为未登记的加班供冷、自控未按时停机或现场手动启机；若属临时加班供冷，可在「运行计划 → 运行例外」补登运行例外。',
       ].join('\n'),
       priority: 'MEDIUM',
     },

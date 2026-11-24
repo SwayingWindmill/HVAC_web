@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useForm, useWatch } from 'react-hook-form';
 import { toast } from 'sonner';
 import type { UtilityBill } from '@/api/generated/platformGateway.gen';
@@ -23,7 +23,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Spinner } from '@/components/ui/spinner';
 import { Textarea } from '@/components/ui/textarea';
+import { siteTariffQuery } from '@/features/tariff/query';
 import { isOneOf } from '@/lib/typed';
 import { formatBillingMonthLabel, METER_SCOPE_LABEL } from '../billing-model';
 import {
@@ -35,6 +37,7 @@ import {
 import {
   buildUtilityBillInitialValues,
   buildUtilityBillMutationPayload,
+  defaultCycleDates,
   hasExtraTicketDetails,
   METER_SCOPES,
   utilityBillFormSchema,
@@ -69,6 +72,7 @@ export function UtilityBillDialog({
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [revisionConflict, setRevisionConflict] = useState(false);
   const [extraDetailsOpen, setExtraDetailsOpen] = useState(false);
+  const tariffQuery = useQuery({ ...siteTariffQuery(siteId), enabled: open && !editingBill });
 
   const form = useForm<UtilityBillFormValues>({
     resolver: zodResolver(utilityBillFormSchema),
@@ -85,6 +89,15 @@ export function UtilityBillDialog({
       setExtraDetailsOpen(hasExtraTicketDetails(editingBill));
     }
   }, [open, editingBill, defaultBillingMonth, form]);
+
+  useEffect(() => {
+    if (!open || editingBill || !tariffQuery.data) return;
+    if (form.getFieldState('basicChargeMode').isDirty) return;
+    const inferred = tariffQuery.data.periods.some((period) => period.demandRatePerKW > 0)
+      ? 'MAX_DEMAND_KW'
+      : 'NONE';
+    form.setValue('basicChargeMode', inferred);
+  }, [open, editingBill, tariffQuery.data, form]);
 
   const watchedMeterScope = useWatch({ control: form.control, name: 'meterScope' });
   const watchedBillingMonth = useWatch({ control: form.control, name: 'billingMonth' });
@@ -152,7 +165,7 @@ export function UtilityBillDialog({
       >
         <DialogHeader>
           <DialogTitle>
-            {editingBill ? '如何修改结算电费单草稿？' : '如何录入供电局结算电费单？'}
+            {editingBill ? '修改结算电费单草稿' : '录入供电局结算电费单'}
           </DialogTitle>
           <DialogDescription>
             按供电局发票或电费结算通知单填写抄表周期与四项电费构成。保存后为草稿状态，可在右侧核对抽屉对比平台电表读数后再确认归档。
@@ -186,9 +199,21 @@ export function UtilityBillDialog({
               <Select
                 value={watchedBillingMonth}
                 disabled={mutation.isPending}
-                onValueChange={(value) =>
-                  form.setValue('billingMonth', value, { shouldValidate: true })
-                }
+                onValueChange={(value) => {
+                  const prevMonth = form.getValues('billingMonth');
+                  form.setValue('billingMonth', value, { shouldValidate: true });
+                  if (!editingBill) {
+                    const prevCycle = defaultCycleDates(prevMonth);
+                    if (
+                      form.getValues('readingStartDate') === prevCycle.start &&
+                      form.getValues('readingEndDate') === prevCycle.end
+                    ) {
+                      const nextCycle = defaultCycleDates(value);
+                      form.setValue('readingStartDate', nextCycle.start, { shouldValidate: true });
+                      form.setValue('readingEndDate', nextCycle.end, { shouldValidate: true });
+                    }
+                  }
+                }}
               >
                 <SelectTrigger
                   id="bill-month-select"
@@ -390,6 +415,7 @@ export function UtilityBillDialog({
               取消
             </Button>
             <Button type="submit" disabled={mutation.isPending}>
+              {mutation.isPending ? <Spinner data-icon="inline-start" /> : null}
               {mutation.isPending
                 ? '正在保存…'
                 : editingBill
