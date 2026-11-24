@@ -1,3 +1,5 @@
+import { getDateTimeFormatter } from "@/lib/operator-format"
+
 export type NumberFormat = "number" | "compact" | "currency" | "percent"
 
 export interface FormatNumberOptions {
@@ -107,7 +109,7 @@ export function formatDate(
 ) {
   if (!date) return '';
   try {
-    return new Intl.DateTimeFormat('zh-CN', {
+    return getDateTimeFormatter('zh-CN', {
       month: opts.month ?? 'numeric',
       day: opts.day ?? 'numeric',
       year: opts.year ?? 'numeric',

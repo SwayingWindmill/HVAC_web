@@ -2,7 +2,7 @@ import { PageMeta } from '@/blocks/page-header';
 import { Fan, Gauge, Snowflake, Thermometer, ThermometerSun, Waves } from 'lucide-react';
 import type { StatusTone } from '@/components/status-badge';
 import { MetricValue } from '@/blocks/metric-card';
-import { formatDecimal } from '@/lib/operator-format';
+import { formatDecimal, getDateTimeFormatter } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import { LOW_CONFIDENCE_LABEL, type PlantCategory, type PlantDevice, type PlantReading } from './plant-model';
 import type { PlantLiveMode } from './use-realtime-plant';
@@ -63,13 +63,15 @@ export function deviceStatus(device: PlantDevice): { tone: StatusTone; label: st
 
 export function formatClock(value: string | null, timezone: string): string {
   if (!value) return '—';
-  return new Intl.DateTimeFormat('zh-CN', {
+  const ms = Date.parse(value);
+  if (!Number.isFinite(ms)) return '—';
+  return getDateTimeFormatter('zh-CN', {
     timeZone: timezone,
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
     hour12: false,
-  }).format(new Date(value));
+  }).format(new Date(ms));
 }
 
 export function LiveIndicator({ mode }: { readonly mode: PlantLiveMode }) {

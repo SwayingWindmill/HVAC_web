@@ -57,10 +57,6 @@ function exactArray(left: readonly string[], right: readonly string[]): boolean 
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
-function cloneSnapshot(snapshot: DeviceObservationSnapshot): DeviceObservationSnapshot {
-  return structuredClone(snapshot);
-}
-
 export const REAL_ASSETS_REALTIME_KEY_LIMIT = 64;
 
 export type AssetsRealtimeSubscriptionEligibility =
@@ -187,7 +183,7 @@ export function projectAssetsRealtimeRow(
     };
   }
   return {
-    row: withSnapshotResult(row, { status: 'ok', snapshot: cloneSnapshot(realtime) }),
+    row: withSnapshotResult(row, { status: 'ok', snapshot: realtime }),
     source: 'realtime', baselineRevision, realtimeRevision,
     realtimeOlderThanBaseline: false, suppressedByRevocation: false,
   };

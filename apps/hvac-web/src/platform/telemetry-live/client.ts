@@ -129,6 +129,7 @@ class LiveSession implements TelemetryLiveSession {
   private readonly targets: TelemetryLiveTarget[];
   private readonly onClosed: () => void;
   private readonly active: ActiveSubscription[] = [];
+  private readonly activeById = new Map<ClientSubscriptionId, ActiveSubscription>();
   private readonly listeners = new Set<(states: ReadonlyArray<TelemetryLiveState>) => void>();
   private readonly pendingSnapshots = new Map<ActiveSubscription, TelemetryLiveUnavailableReason>();
   private transport: TelemetryTransportConnection | null = null;
@@ -168,7 +169,7 @@ class LiveSession implements TelemetryLiveSession {
   }
 
   getState(clientSubscriptionId: ClientSubscriptionId): TelemetryLiveState | undefined {
-    return this.active.find((item) => item.target.clientSubscriptionId === clientSubscriptionId)?.machine.getState();
+    return this.activeById.get(clientSubscriptionId)?.machine.getState();
   }
 
   getStates(): ReadonlyArray<TelemetryLiveState> {
@@ -256,6 +257,7 @@ class LiveSession implements TelemetryLiveSession {
 
   private installBootstrap(bootstrap: SubscriptionBootstrapResponse): void {
     this.active.length = 0;
+    this.activeById.clear();
     bootstrap.subscriptions.forEach((descriptor, index) => {
       const target = this.targets[index];
       let item: ActiveSubscription;
@@ -268,6 +270,7 @@ class LiveSession implements TelemetryLiveSession {
       const persisted = this.dependencies.recoveryStore.load(target);
       if (descriptor.recoveryMode === 'ATTEMPT_RECOVERY' && persisted) machine.installPersistedSnapshot(persisted.snapshot);
       this.active.push(item);
+      this.activeById.set(target.clientSubscriptionId, item);
     });
     this.emit();
   }
@@ -461,6 +464,7 @@ class LiveSession implements TelemetryLiveSession {
   }
 
   private emit(): void {
+    if (this.listeners.size === 0) return;
     const states = this.getStates();
     for (const listener of this.listeners) listener(states);
   }

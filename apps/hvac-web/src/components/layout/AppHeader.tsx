@@ -1,10 +1,9 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { Bell, Search } from 'lucide-react';
 import { useShellSnapshot } from '@/app/ShellRuntimeContext';
 import { Button } from '@/components/ui/button';
 import { Kbd } from '@/components/ui/kbd';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { CommandSearch } from './CommandSearch';
 import { NavUser } from './NavUser';
 import { ScopeSwitcher } from './ScopeSwitcher';
 import { useWaitingAlarmCount } from '@/features/alarms/use-waiting-alarm-count';
@@ -13,6 +12,10 @@ import { BrandMark } from '@/components/brand-mark';
 import { cn } from '@/lib/utils';
 
 import { TenantSwitcher } from '@/components/layout/TenantSwitcher';
+
+const LazyCommandSearch = lazy(() =>
+  import('./CommandSearch').then((mod) => ({ default: mod.CommandSearch })),
+);
 
 interface AppHeaderProps {
   /** The Site the operator works in; the bell counts its alarms happening now that nobody acknowledged. */
@@ -46,12 +49,17 @@ export function AppHeader({
   assistant,
 }: AppHeaderProps) {
   const [commandOpen, setCommandOpen] = useState(false);
+  const [commandMounted, setCommandMounted] = useState(false);
   const snapshot = useShellSnapshot();
   const canListAlarms = snapshot.principal?.authorization.capabilities.includes('alarm.list') ?? false;
   const waiting = useWaitingAlarmCount(siteId);
   const linkSiteId = siteId ?? preferredSiteId;
   const overviewHref = siteTarget('/overview', linkSiteId);
   const notificationsHref = siteTarget('/notifications', linkSiteId);
+
+  useEffect(() => {
+    if (commandOpen) setCommandMounted(true);
+  }, [commandOpen]);
 
   useEffect(() => {
     const handleShortcut = (event: globalThis.KeyboardEvent) => {
@@ -137,13 +145,17 @@ export function AppHeader({
         </div>
       </header>
 
-      <CommandSearch
-        open={commandOpen}
-        onOpenChange={setCommandOpen}
-        onNavigate={onNavigate}
-        onToggleAssistant={assistant?.onToggle}
-        assistantOpen={assistant?.open}
-      />
+      {commandMounted ? (
+        <Suspense fallback={null}>
+          <LazyCommandSearch
+            open={commandOpen}
+            onOpenChange={setCommandOpen}
+            onNavigate={onNavigate}
+            onToggleAssistant={assistant?.onToggle}
+            assistantOpen={assistant?.open}
+          />
+        </Suspense>
+      ) : null}
     </>
   );
 }

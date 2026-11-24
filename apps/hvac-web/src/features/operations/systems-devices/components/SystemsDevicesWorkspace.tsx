@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { PageHeader } from '@/blocks/page-header';
 import { Panel } from '@/blocks/panel';
 import { Main } from '@/components/layout/Main';
@@ -37,8 +37,11 @@ import {
 } from '../../realtime/plant-model';
 import { useRealtimePlant } from '../../realtime/use-realtime-plant';
 import { boundAssetId, deviceLocation, deviceTagTokens, needsAttention } from '../device-ledger';
-import { DeviceInspector } from './DeviceInspector';
 import { DeviceTile } from './DeviceTile';
+
+const LazyDeviceInspector = lazy(() =>
+  import('./DeviceInspector').then((mod) => ({ default: mod.DeviceInspector })),
+);
 
 type StatusFilter = 'running' | 'stopped' | 'attention';
 
@@ -138,9 +141,18 @@ export function SystemsDevicesWorkspace() {
   };
   const inspected = findPlantUnit(plant, search.inspect);
   const equipment = equipmentStatus(plant);
+  const [inspectorMounted, setInspectorMounted] = useState(() => Boolean(search.inspect));
+  useEffect(() => {
+    if (search.inspect) setInspectorMounted(true);
+  }, [search.inspect]);
 
-  const setSearch = (patch: { q?: string; category?: PlantCategory; status?: StatusFilter; tag?: string; inspect?: string; layout?: 'cards' | 'table' }) =>
-    void navigate({ search: (previous) => ({ ...previous, ...patch }) });
+  const setSearch = useCallback(
+    (patch: { q?: string; category?: PlantCategory; status?: StatusFilter; tag?: string; inspect?: string; layout?: 'cards' | 'table' }) =>
+      void navigate({ search: (previous) => ({ ...previous, ...patch }) }),
+    [navigate],
+  );
+  const handleOpenDevice = useCallback((deviceId: string) => setSearch({ inspect: deviceId }), [setSearch]);
+  const handleCloseInspector = useCallback(() => setSearch({ inspect: undefined }), [setSearch]);
 
   return (
     <Main>
@@ -273,7 +285,7 @@ export function SystemsDevicesWorkspace() {
                     device={device}
                     openWorkOrders={openFor(device)}
                     selected={Boolean(search.inspect && (search.inspect === device.unitId || device.deviceIds.includes(search.inspect)))}
-                    onOpen={() => setSearch({ inspect: device.deviceId })}
+                    onOpen={handleOpenDevice}
                   />
                 ))}
               </div>
@@ -348,11 +360,15 @@ export function SystemsDevicesWorkspace() {
         </>
       ) : null}
 
-      <DeviceInspector
-        device={inspected}
-        categoryLabel={inspected ? PLANT_CATEGORY_LABELS[inspected.category] : ''}
-        onClose={() => setSearch({ inspect: undefined })}
-      />
+      {inspectorMounted ? (
+        <Suspense fallback={null}>
+          <LazyDeviceInspector
+            device={inspected}
+            categoryLabel={inspected ? PLANT_CATEGORY_LABELS[inspected.category] : ''}
+            onClose={handleCloseInspector}
+          />
+        </Suspense>
+      ) : null}
     </Main>
   );
 }

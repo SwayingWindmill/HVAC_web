@@ -5,7 +5,6 @@ import type {
   TransportPosition,
 } from '@/api/generated/s2Telemetry.gen';
 import {
-  cloneSnapshot,
   parsePublication,
   parseSnapshot,
   TelemetryContractError,
@@ -44,26 +43,20 @@ function nowInstant(now: () => Date): string {
   return now().toISOString();
 }
 
-function cloneState(state: TelemetryLiveState): TelemetryLiveState {
-  return state.snapshot === null
-    ? { ...state, keys: [...state.keys] }
-    : { ...state, keys: [...state.keys], snapshot: cloneSnapshot(state.snapshot) };
-}
-
 function applyPublication(snapshot: DeviceObservationSnapshot, publication: DeviceObservationPublication): DeviceObservationSnapshot {
   const valueByKey = new Map(snapshot.values.map((value) => [value.key, value]));
   for (const change of publication.telemetryChanges) valueByKey.set(change.key, change);
   const values = snapshot.values.map((value) => valueByKey.get(value.key) ?? value);
   return {
-    ...cloneSnapshot(snapshot),
+    ...snapshot,
     businessRevision: publication.revision,
     evaluatedAt: publication.evaluatedAt,
     evaluationAvailability: publication.evaluationAvailability,
     availabilityReasons: [...publication.availabilityReasons],
-    presence: structuredClone(publication.presence),
+    presence: { ...publication.presence },
     telemetryReadiness: publication.telemetryReadiness,
     displayState: publication.displayState,
-    values: values.map((value) => structuredClone(value)),
+    values,
   };
 }
 
@@ -110,7 +103,7 @@ export class SubscriptionStateMachine {
   }
 
   getState(): TelemetryLiveState {
-    return cloneState(this.state);
+    return this.state;
   }
 
   installPersistedSnapshot(value: unknown): void {
@@ -122,7 +115,7 @@ export class SubscriptionStateMachine {
         clientSubscriptionId: this.target.clientSubscriptionId,
         deviceId: this.target.deviceId,
         keys: [...this.target.keys],
-        snapshot: cloneSnapshot(this.snapshot),
+        snapshot: this.snapshot,
         reason: 'recovering',
         updatedAt: nowInstant(this.now),
       };
@@ -149,7 +142,7 @@ export class SubscriptionStateMachine {
         clientSubscriptionId: this.target.clientSubscriptionId,
         deviceId: this.target.deviceId,
         keys: [...this.target.keys],
-        snapshot: cloneSnapshot(this.snapshot),
+        snapshot: this.snapshot,
         updatedAt: nowInstant(this.now),
       };
       this.state = this.subscribed
@@ -170,7 +163,7 @@ export class SubscriptionStateMachine {
         clientSubscriptionId: this.target.clientSubscriptionId,
         deviceId: this.target.deviceId,
         keys: [...this.target.keys],
-        snapshot: cloneSnapshot(this.snapshot),
+        snapshot: this.snapshot,
         reason: this.everSubscribed ? 'reconnecting' : 'recovering',
         updatedAt: nowInstant(this.now),
       };
@@ -244,7 +237,7 @@ export class SubscriptionStateMachine {
         clientSubscriptionId: this.target.clientSubscriptionId,
         deviceId: this.target.deviceId,
         keys: [...this.target.keys],
-        snapshot: cloneSnapshot(this.snapshot),
+        snapshot: this.snapshot,
         reason: 'reconnecting',
         updatedAt: nowInstant(this.now),
       };
@@ -259,7 +252,7 @@ export class SubscriptionStateMachine {
       clientSubscriptionId: this.target.clientSubscriptionId,
       deviceId: this.target.deviceId,
       keys: [...this.target.keys],
-      snapshot: this.snapshot ? cloneSnapshot(this.snapshot) : null,
+      snapshot: this.snapshot,
       reason,
       retryable,
       updatedAt: nowInstant(this.now),
@@ -291,7 +284,7 @@ export class SubscriptionStateMachine {
       subscriptionId: this.descriptor.subscriptionId,
       businessRevision: this.snapshot.businessRevision,
       transportPosition: { ...this.currentPosition },
-      snapshot: cloneSnapshot(this.snapshot),
+      snapshot: this.snapshot,
     };
   }
 
@@ -346,7 +339,7 @@ export class SubscriptionStateMachine {
     if (this.state.status === 'live') {
       this.state = {
         ...this.state,
-        snapshot: cloneSnapshot(this.snapshot),
+        snapshot: this.snapshot,
         updatedAt: nowInstant(this.now),
       };
       this.callbacks.onStateChanged();
@@ -373,7 +366,7 @@ export class SubscriptionStateMachine {
       clientSubscriptionId: this.target.clientSubscriptionId,
       deviceId: this.target.deviceId,
       keys: [...this.target.keys],
-      snapshot: cloneSnapshot(this.snapshot),
+      snapshot: this.snapshot,
       recovered: recovered || this.recoveryWasUsed,
       updatedAt: nowInstant(this.now),
     };

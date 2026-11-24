@@ -17,7 +17,7 @@ import { CreateWorkOrderDialog } from '@/features/work-orders/CreateWorkOrderDia
 import { STATUS_LABELS } from '@/features/work-orders/work-order-presentation';
 import { workOrderKeys } from '@/features/work-orders/work-order-queries';
 import { activeLocks, controlActorLabel, LOCK_PRESENTATION, siteControlStateQuery } from '@/features/control/control-state';
-import { formatCompactTime, formatTime } from '@/lib/operator-format';
+import { formatCompactTime, formatTime, getDateTimeFormatter } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import { pointIsTrusted } from '@/features/assets/operational-projection';
 import { assetsDeviceTypeLabel } from '@/features/assets/model';
@@ -301,7 +301,7 @@ function DayTrend({ device }: { readonly device: PlantUnit }) {
   if (!activeTarget) return null;
 
   const unit = activeTarget.unit;
-  const hour = new Intl.DateTimeFormat('zh-CN', { timeZone: site.timezone, hour: '2-digit', minute: '2-digit', hour12: false });
+  const hour = getDateTimeFormatter('zh-CN', { timeZone: site.timezone, hour: '2-digit', minute: '2-digit', hour12: false });
   const formatHour = (value: unknown) => {
     const ms = typeof value === 'string' && value.trim() === '' ? NaN : Number(value);
     return Number.isFinite(ms) ? hour.format(new Date(ms)) : '';

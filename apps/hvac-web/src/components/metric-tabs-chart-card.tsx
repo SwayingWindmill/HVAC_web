@@ -154,6 +154,38 @@ function MetricTabsChartCard<K extends string = string>({
     [active?.format, active?.currency, active?.fractionDigits]
   )
 
+  const chartSeries = React.useMemo(
+    () =>
+      !active
+        ? []
+        : chartType === "bar"
+          ? [
+              ...(active.compareKey
+                ? [{ key: active.compareKey, label: compareLabel, type: "bar" as const, color: compareColor }]
+                : []),
+              // A bucket is either complete or running, so the two share a slot and both keep the rounded top.
+              { key: active.key, label: active.label, type: "bar" as const, color, stackId: "current", rounded: true },
+              ...(active.partialKey
+                ? [{ key: active.partialKey, label: "进行中", type: "bar" as const, color, stackId: "current", rounded: true, pattern: "hatched" as const }]
+                : []),
+            ]
+          : [
+              ...(active.compareKey
+                ? [
+                    {
+                      key: active.compareKey,
+                      label: compareLabel,
+                      type: "line" as const,
+                      color: compareColor,
+                      dashed: true,
+                    },
+                  ]
+                : []),
+              { key: active.key, label: active.label, type: "area" as const, color, dots },
+            ],
+    [active, chartType, color, compareColor, compareLabel, dots]
+  )
+
   if (!active) return null
 
   return (
@@ -257,29 +289,7 @@ function MetricTabsChartCard<K extends string = string>({
         <ComposedChart
           data={data}
           xKey={xKey}
-          series={chartType === "bar" ? [
-            ...(active.compareKey
-              ? [{ key: active.compareKey, label: compareLabel, type: "bar" as const, color: compareColor }]
-              : []),
-            // A bucket is either complete or running, so the two share a slot and both keep the rounded top.
-            { key: active.key, label: active.label, type: "bar" as const, color, stackId: "current", rounded: true },
-            ...(active.partialKey
-              ? [{ key: active.partialKey, label: "进行中", type: "bar" as const, color, stackId: "current", rounded: true, pattern: "hatched" as const }]
-              : []),
-          ] : [
-            ...(active.compareKey
-              ? [
-                  {
-                    key: active.compareKey,
-                    label: compareLabel,
-                    type: "line" as const,
-                    color: compareColor,
-                    dashed: true,
-                  },
-                ]
-              : []),
-            { key: active.key, label: active.label, type: "area" as const, color, dots },
-          ]}
+          series={chartSeries}
           showGrid={showYAxis}
           showYAxis={showYAxis}
           showLegend={showLegend}
@@ -287,6 +297,7 @@ function MetricTabsChartCard<K extends string = string>({
           xFormatter={xFormatter}
           yFormatter={yFormatter}
           onPointClick={onPointClick}
+          animate={false}
           className={cn("h-40", chartClassName)}
         />
         )}
