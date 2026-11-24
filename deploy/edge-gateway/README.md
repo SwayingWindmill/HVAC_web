@@ -6,9 +6,30 @@
 
 现场网关默认部署目录（均位于可写 `/opt`）：
 
-- `/opt/hvac-edge-gateway/config.json`：运行配置（网关 ID、双向 TLS 路径、串口 `/dev/ttyAS3`、`OTA` 受信任 Ed25519 公钥、反向隧道开关）
-- `/opt/hvac-edge-gateway/state/`：配置影子快照与分级断点续传磁盘队列（`mqtt-spool.json`）
+- `/opt/hvac-edge-gateway/config.json`：运行配置（网关 ID、双向 TLS 路径、串口 `/dev/ttyAS3`、现场冷站声明式采集与顺控配置 `fieldPlant` / `fieldPlantFile`、`OTA` 受信任 Ed25519 公钥、反向隧道开关）
+- `/opt/hvac-edge-gateway/field-plant.json`：可选独立现场冷站声明式配置文件（由 `config.json` 中的 `fieldPlantFile` 引用；如松雅轩站点直接复用 [songyaxuan.edge-plant.json](../../deploy/sites/songyaxuan.edge-plant.json)），新站点接入只需编写 JSON，无需修改 `cmd/edge-gateway` Go 代码
+- `/opt/hvac-edge-gateway/state/`：配置影子快照与分级断点续传磁盘队列（`mqtt-spool.json`、`field-plant-state.json`、`do-executor-state.json`）
 - `/opt/hvac-edge-gateway/ota/slots/{slot-a,slot-b}`：A/B 双槽位可执行文件，`ota/current` 符号链接指向当前生效版本，`ota/previous` 指向回退版本
+
+## 2. 声明式现场冷站接入（`fieldPlant` / `fieldPlantFile`）
+
+新站点部署只需在 `config.json` 指定以下二选一：
+
+```json
+{
+  "fieldPlantFile": "/opt/hvac-edge-gateway/field-plant.json"
+}
+```
+
+（相对路径按 `config.json` 所在目录解析，也可直接内联为 `"fieldPlant": { ... }`，二者互斥。）
+
+声明式文件完整定义四类站点差异，零 Go 代码改动即可复制到新现场：
+
+- `meters` + `flowMeter` + `btuCalculator`：电表/合并馈线阈值与迟滞、冷量虚拟公式、电量基线与 `synthesizedTotal` 汇总电表；
+- `concentrator` + `concentratorRpc`：无线测温集中器激活通道、点位转发 `copyRoutes`（支持通过平台配置影子 `pointMappings` 在线热更新，清空后自动回落到本地基线路由）以及受保护不可修改的 RS-485 从站 UID 集合；
+- `doControl`：DO 模块寄存器映射、`winnerControllerId`、任意长度辅机顺控链与失压自检回滚/停机功耗校验。
+
+参考模板见 [songyaxuan.edge-plant.json](../../deploy/sites/songyaxuan.edge-plant.json)。
 
 ## 2. 交叉编译（ARMv7）
 

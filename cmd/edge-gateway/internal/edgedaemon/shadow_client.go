@@ -173,6 +173,7 @@ type ShadowManager struct {
 	scheduleCtrl *edgecontrol.EnergyScheduleController
 	clusterCtrl  *edgecontrol.ChillerPlantClusterController
 	modelManager *EdgeModelManager
+	fieldPlant   *FieldPlantRunner
 	logger       *slog.Logger
 	now          func() time.Time
 
@@ -239,6 +240,20 @@ func (m *ShadowManager) AttachModelManager(mgr *EdgeModelManager) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.modelManager = mgr
+}
+
+// AttachFieldPlant attaches the declarative field plant runner so config-shadow PointMappings hot-reload live.
+func (m *ShadowManager) AttachFieldPlant(runner *FieldPlantRunner) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.fieldPlant = runner
+	mappings := append([]GatewayPointMapping(nil), m.state.PointMappings...)
+	m.mu.Unlock()
+	if runner != nil && len(mappings) > 0 {
+		runner.UpdatePointMappings(mappings)
+	}
 }
 
 // LoadOrBootstrap recovers persisted config shadow state from disk and applies it,
@@ -319,6 +334,12 @@ func (m *ShadowManager) applyPersistedBootstrap(state persistedShadowState) erro
 	}
 	m.syncRuleProtectedAddresses(state.EdgeRuleBundle)
 	m.refreshControllerBindings()
+	m.mu.Lock()
+	fp := m.fieldPlant
+	m.mu.Unlock()
+	if fp != nil {
+		fp.UpdatePointMappings(state.PointMappings)
+	}
 	return nil
 }
 
@@ -709,6 +730,9 @@ func (m *ShadowManager) ApplyDesired(desired GatewayDesiredConfig) (GatewayShado
 	})
 	if err := m.persistLocked(); err != nil {
 		return GatewayShadowReportRequest{}, false, err
+	}
+	if m.fieldPlant != nil {
+		m.fieldPlant.UpdatePointMappings(m.state.PointMappings)
 	}
 	return report, false, nil
 }

@@ -107,9 +107,9 @@ type Daemon struct {
 	spool               *GradedSpool
 	shadow              *ShadowManager
 	commands            *CommandAdapter
-	et1010              *ET1010Executor
+	doExecutor          *DOSequenceExecutor
 	concentratorRPC     *ConcentratorRPCExecutor
-	songyaxuanPlant     *SongyaxuanPlantRunner
+	fieldPlant          *FieldPlantRunner
 	lifecycleCtx        context.Context
 	lifecycleCancel     context.CancelFunc
 	ota                 *OTAAgent
@@ -343,8 +343,9 @@ func NewDaemon(cfg Config, opts DaemonOptions) (*Daemon, error) {
 	d.lifecycleCtx = lifecycleCtx
 	d.lifecycleCancel = lifecycleCancel
 
-	if cfg.SongyaxuanPlant != nil && cfg.SongyaxuanPlant.Enabled {
-		plantCfg := *cfg.SongyaxuanPlant
+	if cfg.FieldPlant != nil && cfg.FieldPlant.Enabled {
+		plantCfg := cloneFieldPlantConfig(*cfg.FieldPlant)
+		plantCfg.ApplyDefaults()
 		rtuBridge, bridgeErr := registry.SharedRTUBridge(
 			plantCfg.SerialPort,
 			time.Duration(plantCfg.RequestTimeoutMS)*time.Millisecond,
@@ -354,13 +355,13 @@ func NewDaemon(cfg Config, opts DaemonOptions) (*Daemon, error) {
 			lifecycleCancel()
 			_ = commands.Close()
 			_ = registry.Close()
-			return nil, fmt.Errorf("create songyaxuan RTU bridge: %w", bridgeErr)
+			return nil, fmt.Errorf("create field plant RTU bridge: %w", bridgeErr)
 		}
-		plantRunner, plantErr := NewSongyaxuanPlantRunner(SongyaxuanPlantOptions{
+		plantRunner, plantErr := NewFieldPlantRunner(FieldPlantOptions{
 			GatewayID: cfg.GatewayID,
 			StateDir:  cfg.StateDir,
 			Config:    plantCfg,
-			Bus:       ModbusSongyaxuanPlantBus{Bridge: rtuBridge},
+			Bus:       ModbusFieldPlantBus{Bridge: rtuBridge},
 			PublishTelemetry: func(pubCtx context.Context, payload []byte) {
 				d.publishOrSpool(pubCtx, "hvac/v1/"+cfg.GatewayID+"/up/telemetry", 1, EvidenceTelemetryMedium, payload)
 			},
@@ -371,14 +372,18 @@ func NewDaemon(cfg Config, opts DaemonOptions) (*Daemon, error) {
 			lifecycleCancel()
 			_ = commands.Close()
 			_ = registry.Close()
-			return nil, fmt.Errorf("init songyaxuan plant runner: %w", plantErr)
+			return nil, fmt.Errorf("init field plant runner: %w", plantErr)
 		}
-		d.songyaxuanPlant = plantRunner
-		if plantCfg.IsConcentratorEnabled() {
+		d.fieldPlant = plantRunner
+		shadow.AttachFieldPlant(plantRunner)
+
+		if plantCfg.IsConcentratorRPCEnabled() {
 			concRPC, concErr := NewConcentratorRPCExecutor(ConcentratorExecutorOptions{
-				GatewayID: cfg.GatewayID,
-				Bus:       ModbusConcentratorBus{Bridge: rtuBridge},
-				Now:       nowFn,
+				GatewayID:     cfg.GatewayID,
+				Bus:           ModbusConcentratorBus{Bridge: rtuBridge},
+				SettleMS:      plantCfg.ConcentratorRPC.SettleMS,
+				ProtectedUIDs: plantCfg.ProtectedRS485UnitIDs(),
+				Now:           nowFn,
 			})
 			if concErr != nil {
 				lifecycleCancel()
@@ -388,16 +393,13 @@ func NewDaemon(cfg Config, opts DaemonOptions) (*Daemon, error) {
 			}
 			d.concentratorRPC = concRPC
 		}
-		if plantCfg.IsET1010Enabled() {
-			etExec, etErr := NewET1010Executor(ET1010ExecutorOptions{
+		if plantCfg.IsDOControlEnabled() {
+			doExec, doErr := NewDOSequenceExecutor(DOSequenceExecutorOptions{
 				GatewayID:          cfg.GatewayID,
-				UnitID:             plantCfg.ET1010UnitID,
 				StateDir:           cfg.StateDir,
-				CoilBus:            ModbusET1010CoilBus{Bridge: rtuBridge},
-				ChillerPowerReader: plantRunner.ReadChillerPowerKW,
-				ChillerStopPowerKW: plantCfg.StopPowerKW(),
-				PulseDurationMS:    plantCfg.PulseDurationMS,
-				SequenceTimings:    plantCfg.EffectiveSequenceTimings(),
+				Config:             *plantCfg.DOControl,
+				CoilBus:            ModbusDOCoilBus{Bridge: rtuBridge},
+				ChillerPowerReader: plantRunner.ReadDevicePowerKW,
 				PublishTelemetry: func(pubCtx context.Context, payload []byte) {
 					d.publishOrSpool(pubCtx, "hvac/v1/"+cfg.GatewayID+"/up/telemetry", 1, EvidenceTelemetryHigh, payload)
 				},
@@ -408,13 +410,13 @@ func NewDaemon(cfg Config, opts DaemonOptions) (*Daemon, error) {
 				Logger:          logger,
 				SequenceContext: lifecycleCtx,
 			})
-			if etErr != nil {
+			if doErr != nil {
 				lifecycleCancel()
 				_ = commands.Close()
 				_ = registry.Close()
-				return nil, fmt.Errorf("init ET1010 executor: %w", etErr)
+				return nil, fmt.Errorf("init DO sequence executor: %w", doErr)
 			}
-			d.et1010 = etExec
+			d.doExecutor = doExec
 		}
 	}
 
@@ -565,9 +567,9 @@ func (d *Daemon) HandleCommandPayload(ctx context.Context, payload []byte) ([]by
 	if d == nil {
 		return nil, false
 	}
-	if d.et1010 != nil {
-		if env, ok := decodeStrictCommandEnvelope(payload); ok && IsSongyaxuanET1010Command(env) {
-			return d.et1010.HandlePayload(ctx, payload)
+	if d.doExecutor != nil {
+		if env, ok := decodeStrictCommandEnvelope(payload); ok && d.doExecutor.HandlesCommand(env) {
+			return d.doExecutor.HandlePayload(ctx, payload)
 		}
 	}
 	if d.commands == nil {
@@ -636,9 +638,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 	d.ready.Store(true)
 	d.obs.MarkReady()
 
-	if d.et1010 != nil {
-		if initErr := d.et1010.Initialize(ctx); initErr != nil && ctx.Err() == nil {
-			d.logger.Warn("edge_et1010_init_failed", "error", initErr.Error())
+	if d.doExecutor != nil {
+		if initErr := d.doExecutor.Initialize(ctx); initErr != nil && ctx.Err() == nil {
+			d.logger.Warn("edge_do_executor_init_failed", "error", initErr.Error())
 		}
 	}
 
@@ -657,11 +659,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 		}()
 	}
 
-	if d.songyaxuanPlant != nil {
+	if d.fieldPlant != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_ = d.songyaxuanPlant.Run(ctx)
+			_ = d.fieldPlant.Run(ctx)
 		}()
 	}
 
@@ -734,8 +736,8 @@ func (d *Daemon) Close() error {
 	if d.lifecycleCancel != nil {
 		d.lifecycleCancel()
 	}
-	if d.et1010 != nil {
-		d.et1010.Close()
+	if d.doExecutor != nil {
+		d.doExecutor.Close()
 	}
 	if d.commands != nil {
 		_ = d.commands.Close()

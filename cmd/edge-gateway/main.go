@@ -63,7 +63,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		cfg.MQTTBrokerURL = ""
 		cfg.SerialBuses = nil
 		cfg.Drivers = nil
-		cfg.SongyaxuanPlant = nil
+		cfg.FieldPlant = nil
+		cfg.FieldPlantFile = ""
 	}
 
 	daemonCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

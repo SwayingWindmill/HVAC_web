@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -941,35 +942,40 @@ func TestDaemonMixedModbusBACnetOPCUAShadowHotReload(t *testing.T) {
 	}
 }
 
-func TestDaemonRoutesET1010AndSharesRTUBusWithConcentrator(t *testing.T) {
+func TestDaemonRoutesDOExecutorAndSharesRTUBusWithConcentrator(t *testing.T) {
 	now := time.Date(2026, 11, 23, 9, 0, 0, 0, time.UTC)
-	cfg := Config{
-		GatewayID: "01a14000-4000-7000-8000-000000000100",
-		StateDir:  t.TempDir(),
-		SongyaxuanPlant: &SongyaxuanPlantConfig{
-			Enabled:    true,
-			SerialPort: "/dev/ttyNonExistentUnitTest",
-		},
+	plantCfg, err := LoadFieldPlantConfigFile(filepath.Join("..", "..", "..", "..", "deploy", "sites", "songyaxuan.edge-plant.json"))
+	if err != nil {
+		t.Fatalf("LoadFieldPlantConfigFile: %v", err)
 	}
-	cfg.ApplyDefaults("0.1.3")
+	plantCfg.SerialPort = "/dev/ttyNonExistentUnitTest"
+	cfg := Config{
+		GatewayID:  "01a14000-4000-7000-8000-000000000100",
+		StateDir:   t.TempDir(),
+		FieldPlant: &plantCfg,
+	}
+	cfg.ApplyDefaults("0.2.0")
 	daemon, err := NewDaemon(cfg, DaemonOptions{Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatalf("NewDaemon: %v", err)
 	}
 	defer func() { _ = daemon.Close() }()
 
-	if daemon.et1010 == nil || daemon.concentratorRPC == nil || daemon.songyaxuanPlant == nil {
-		t.Fatal("expected songyaxuan runtime subsystems to be initialized")
+	if daemon.doExecutor == nil || daemon.concentratorRPC == nil || daemon.fieldPlant == nil {
+		t.Fatal("expected declarative fieldPlant runtime subsystems to be initialized")
+	}
+	if !daemon.concentratorRPC.isProtectedUID(31) || !daemon.concentratorRPC.isProtectedUID(10) {
+		t.Fatal("expected concentratorRPC protectedUIDs to include configured meter/flow/DO UIDs")
 	}
 	if got := daemon.registry.SharedRTUBridgeCount(); got != 1 {
 		t.Fatalf("SharedRTUBridgeCount = %d, want 1 shared RS485 bus bridge", got)
 	}
 
-	// Verify expired ET1010 envelope routes to ET1010 executor cleanly and produces EXPIRED reply without touching serial port.
+	// Verify expired DO sequence envelope routes to DOSequenceExecutor cleanly and produces EXPIRED reply without touching serial port.
 	expiredPayload, _ := json.Marshal(CommandEnvelopeWire{
 		SchemaVersion:  "2.0",
 		MessageID:      "0194f000-0000-7000-8000-000000000099",
-		CommandID:      "cmd-expired-et1010",
+		CommandID:      "cmd-expired-do",
 		IssuedAt:       now.Add(-2 * time.Minute).UnixMilli(),
 		ExpireAt:       now.Add(-1 * time.Minute).UnixMilli(),
 		DeviceID:       "ctrl-chiller-a",
@@ -981,14 +987,14 @@ func TestDaemonRoutesET1010AndSharesRTUBusWithConcentrator(t *testing.T) {
 	})
 	replyBytes, ok := daemon.HandleCommandPayload(t.Context(), expiredPayload)
 	if !ok {
-		t.Fatal("expected HandleCommandPayload to route ctrl-chiller-a to ET1010 executor")
+		t.Fatal("expected HandleCommandPayload to route ctrl-chiller-a to DOSequenceExecutor")
 	}
 	var rep CommandReplyWire
 	if err := json.Unmarshal(replyBytes, &rep); err != nil {
 		t.Fatal(err)
 	}
-	if rep.EdgeStatus != "EXPIRED" || rep.ExecutionEvidence == nil || rep.ExecutionEvidence.WinnerControllerID != et1010WinnerControllerID {
-		t.Fatalf("unexpected ET1010 reply: %+v", rep)
+	if rep.EdgeStatus != "EXPIRED" || rep.ExecutionEvidence == nil || rep.ExecutionEvidence.WinnerControllerID != plantCfg.DOControl.WinnerControllerID {
+		t.Fatalf("unexpected DOSequenceExecutor reply: %+v", rep)
 	}
 }
 
