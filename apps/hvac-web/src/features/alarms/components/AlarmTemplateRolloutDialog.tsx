@@ -201,7 +201,7 @@ export function AlarmTemplateRolloutDialog({
             <Alert>
               <CheckCircle2 className="size-4 text-primary" />
               <AlertDescription>
-                下发批次已完成：已同步 {rolloutResult.totalAppliedSites} 个站点（保留 {rolloutResult.totalPreservedOverrides} 处覆写），版本账本均已记入「跨站模板下发」。
+                下发批次已完成：已同步 {rolloutResult.totalAppliedSites} 个站点（保留 {rolloutResult.totalPreservedOverrides} 处覆写），版本记录均已记入「跨站模板下发」。
               </AlertDescription>
             </Alert>
           ) : null}

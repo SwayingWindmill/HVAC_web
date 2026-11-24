@@ -31,12 +31,14 @@ export function requireCapabilities(runtime: ShellRuntime, capabilities: readonl
   return principal;
 }
 
-export function requirePlatform(runtime: ShellRuntime): void {
+export function requirePlatform(runtime: ShellRuntime, options: { readonly allowDegraded?: boolean } = {}): void {
   const platform = runtime.current().platform;
   if (!platform || platform.state === 'checking' || platform.state === 'unavailable') {
     throw new RouteAccessError('PLATFORM_UNAVAILABLE');
   }
-  if (platform.state === 'degraded') throw new RouteAccessError('PLATFORM_DEGRADED');
+  if (platform.state === 'degraded' && !options.allowDegraded) {
+    throw new RouteAccessError('PLATFORM_DEGRADED');
+  }
 }
 
 export function requireSite(runtime: ShellRuntime, siteId: string): { principal: CurrentPrincipalResponse; site: Readonly<Site> } {

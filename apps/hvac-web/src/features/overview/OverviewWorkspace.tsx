@@ -251,12 +251,21 @@ export function OverviewWorkspace() {
               data: canListAlarms ? activeAlarms : undefined,
               isPending: canListAlarms && alarms.isPending,
               isError: canListAlarms && alarms.isError,
+              allowed: canListAlarms,
+              onRetry: () => { void alarms.refetch(); },
             }}
-            findings={{ data: recentFindings, isPending: findings.isPending, isError: findings.isError }}
+            findings={{
+              data: recentFindings,
+              isPending: findings.isPending,
+              isError: findings.isError,
+              onRetry: () => { void findings.refetch(); },
+            }}
             workOrders={{
               data: canListWorkOrders ? openOrders : undefined,
               isPending: canListWorkOrders && workOrders.isPending,
               isError: canListWorkOrders && workOrders.isError,
+              allowed: canListWorkOrders,
+              onRetry: () => { void workOrders.refetch(); },
             }}
             deviceName={(deviceId) => deviceNames.get(deviceId) ?? "—"}
             assetName={assetName}

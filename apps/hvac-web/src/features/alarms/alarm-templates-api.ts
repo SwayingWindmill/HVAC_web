@@ -14,6 +14,7 @@ import {
   type SiteAlarmRuleTemplateDriftReport,
   type UpdateAlarmRuleTemplateRequest,
 } from '@/api/generated/platformGateway.gen';
+import { SEVERITY_LABELS } from './alarm-presentation';
 
 const client = createPlatformGatewayClient();
 
@@ -68,13 +69,7 @@ export const alarmTemplatesApi = {
     (await client.resetSiteAlarmRuleToTemplate(siteId, ruleId, body, csrfToken)).data.data,
 };
 
-export const TEMPLATE_SEVERITY_LABELS: Readonly<Record<'INFO' | 'WARNING' | 'MINOR' | 'MAJOR' | 'CRITICAL', string>> = {
-  INFO: '提示',
-  WARNING: '告警',
-  MINOR: '一般',
-  MAJOR: '重要',
-  CRITICAL: '紧急',
-};
+export const TEMPLATE_SEVERITY_LABELS: Readonly<Record<'INFO' | 'WARNING' | 'MINOR' | 'MAJOR' | 'CRITICAL', string>> = SEVERITY_LABELS;
 
 export const TEMPLATE_EXECUTION_LABELS: Readonly<Record<'CLOUD' | 'EDGE' | 'CLOUD_AND_EDGE', string>> = {
   CLOUD: '云端评估',
@@ -98,7 +93,7 @@ export const TEMPLATE_FIELD_LABELS: Readonly<Record<string, string>> = {
 };
 
 const TEMPLATE_ERRORS: Readonly<Record<string, string>> = {
-  FORBIDDEN: '当前账号缺少告警规则管理权限或跨站点操作权限（403）。',
+  FORBIDDEN: '当前账号缺少告警规则管理权限或跨站点操作权限。',
   CSRF_INVALID: '安全令牌已失效，请刷新页面重试。',
   ALARM_TEMPLATE_CONFLICT: '模板编码已存在或状态发生并发冲突。',
   ALARM_TEMPLATE_INVALID: '模板规格参数不完整或校验失败，请核对输入。',
@@ -108,7 +103,7 @@ const TEMPLATE_ERRORS: Readonly<Record<string, string>> = {
 export function describeAlarmTemplateError(error: unknown, fallback: string): string {
   if (error instanceof PlatformApiError) {
     if (error.problem.status === 403) {
-      return '当前账号缺少告警规则模板治理或跨站点授权（403 已拒绝）。';
+      return '当前账号缺少告警规则模板治理或跨站点授权。';
     }
     const mapped = TEMPLATE_ERRORS[error.problem.code];
     if (mapped) return mapped;

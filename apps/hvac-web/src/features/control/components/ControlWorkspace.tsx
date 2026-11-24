@@ -28,6 +28,7 @@ import { commandSummary, IN_FLIGHT, needsPerson, STATUS_PRESENTATION } from '../
 import { commandLabels, controlTargets, hasEmergencyRelease, plantUnits, type ControlTarget, type PlantUnit } from '../control-model';
 import { activeLocks, activePriorityLocks, controlAlarmDeadLettersQuery, siteControlStateQuery, type SiteControlMode } from '../control-state';
 import { siteAutoControlLeaseQuery } from '@/features/optimization/auto-control-api';
+import { CommandActionConfirmDialog, type PendingCommandAction } from './CommandActionConfirmDialog';
 import { CommandLog, CommandSheet, StepUpDialog, type CommandActions } from './CommandLog';
 import { commandFailure, ConfirmCommand, type PendingCommand } from './CommandConfirmation';
 import { AssetLockDialog, ControlModeBar, ControlModeDialog, type LockSubject } from './ControlBoundary';
@@ -65,6 +66,7 @@ export function ControlWorkspace() {
     enabled: principal.authorization.capabilities.includes('site.read'),
   });
   const [pending, setPending] = useState<PendingCommand | null>(null);
+  const [pendingAction, setPendingAction] = useState<PendingCommandAction | null>(null);
   const [modeTarget, setModeTarget] = useState<SiteControlMode | null>(null);
   const [lockTarget, setLockTarget] = useState<ControlTarget | null>(null);
   const [priorityLockTarget, setPriorityLockTarget] = useState<ControlTarget | null>(null);
@@ -93,8 +95,13 @@ export function ControlWorkspace() {
   };
   const approve = useMutation({
     mutationFn: (command: Command) => approveCommand(command.commandId, csrfToken),
-    onSuccess: () => { toast.success('已批准'); void settle(); },
+    onSuccess: () => {
+      setPendingAction(null);
+      toast.success('已批准');
+      void settle();
+    },
     onError: (error, command) => {
+      setPendingAction(null);
       if (error instanceof CommandRequestError && error.code === 'STEP_UP_REQUIRED') { setStepUp(command); return; }
       commandFailure(error);
       void settle();
@@ -107,15 +114,26 @@ export function ControlWorkspace() {
   });
   const reconcile = useMutation({
     mutationFn: ({ commandId, outcome }: { commandId: string; outcome: ReconciledOutcome }) => reconcileCommand(commandId, outcome, csrfToken),
-    onSuccess: () => { toast.success('已记录现场确认结果'); void settle(); },
-    onError: commandFailure,
+    onSuccess: () => {
+      setPendingAction(null);
+      toast.success('已记录现场确认结果');
+      void settle();
+    },
+    onError: (error) => {
+      setPendingAction(null);
+      commandFailure(error);
+    },
   });
   const actions: CommandActions = {
     busy: approve.isPending || cancel.isPending || reconcile.isPending,
     canApprove: mode === 'REMOTE_AUTO',
-    onApprove: (command) => approve.mutate(command),
+    onApprove: (command) => setPendingAction({ kind: 'approve', command }),
     onCancel: (command) => cancel.mutate(command),
-    onReconcile: (commandId, outcome) => reconcile.mutate({ commandId, outcome }),
+    onReconcile: (commandId, outcome) => {
+      const command = list.find((item) => item.commandId === commandId);
+      if (command) setPendingAction({ kind: 'reconcile', command, outcome });
+      else reconcile.mutate({ commandId, outcome });
+    },
   };
 
   const setSearch = (next: { status?: LogFilter; inspect?: string }) => void navigate({ search: (previous) => ({ ...previous, ...next }), replace: true });
@@ -289,9 +307,22 @@ export function ControlWorkspace() {
           commands={list}
           describe={describe}
           onClose={() => setModeTarget(null)}
-          onShowUnsettled={() => { setModeTarget(null); setSearch({ status: 'unknown' }); }}
+          onShowUnsettled={() => {
+            setModeTarget(null);
+            setSearch({ status: list.some((command) => command.status === 'OUTCOME_UNKNOWN') ? 'unknown' : 'inflight' });
+          }}
         />
       ) : null}
+      <CommandActionConfirmDialog
+        pendingAction={pendingAction}
+        summary={pendingAction ? describe(pendingAction.command) : undefined}
+        busy={approve.isPending || reconcile.isPending}
+        onConfirm={(action) => {
+          if (action.kind === 'approve') approve.mutate(action.command);
+          else reconcile.mutate({ commandId: action.command.commandId, outcome: action.outcome });
+        }}
+        onClose={() => setPendingAction(null)}
+      />
       {controlState.data ? (
         <SiteShutdownDialog siteId={site.id} csrfToken={csrfToken} state={controlState.data} subject={shutdown} onClose={() => setShutdown(null)} />
       ) : null}

@@ -346,7 +346,7 @@ test('renders 2D hydraulic schematic with live loop readings, inspector sheet, a
   await expect(page).toHaveURL(/inspect=018f3e00-4000-7000-8000-000000000001/);
   const inspector = page.getByRole('dialog');
   await expect(inspector).toContainText('CHILLER-01');
-  await inspector.getByRole('button', { name: 'Close' }).click();
+  await inspector.getByRole('button', { name: '关闭' }).click();
   await expect(inspector).toHaveCount(0);
   await expect(page).not.toHaveURL(/inspect=/);
 

@@ -35,12 +35,18 @@ export function TrendsEventRail({
   siteId,
   timezone,
   overlays,
+  isPending = false,
+  isError = false,
+  onRetry,
   canCreateWorkOrder,
   onCreateWorkOrderForAlarm,
 }: {
   readonly siteId: string;
   readonly timezone: string;
   readonly overlays: TrendOverlaysModel;
+  readonly isPending?: boolean;
+  readonly isError?: boolean;
+  readonly onRetry?: () => void;
   readonly canCreateWorkOrder: boolean;
   readonly onCreateWorkOrderForAlarm: (alarm: TrendOverlayAlarmInput) => void;
 }) {
@@ -68,12 +74,25 @@ export function TrendsEventRail({
             <ChevronDown className="size-3.5 text-muted-foreground" aria-hidden="true" />
           )}
           <span>事件时间轴</span>
-          <span className="font-normal text-muted-foreground">
-            · 告警 {alarmCount} 条 · 控制指令 {commandCount} 条
-          </span>
+          {isPending && overlays.railItems.length === 0 ? null : (
+            <span className="font-normal text-muted-foreground">
+              · 告警 {alarmCount} 条 · 控制指令 {commandCount} 条
+            </span>
+          )}
         </button>
 
-        {!collapsed && overlays.railItems.length === 0 ? (
+        {!collapsed && isPending && overlays.railItems.length === 0 ? (
+          <span className="text-muted-foreground">正在加载关联事件…</span>
+        ) : !collapsed && isError && overlays.railItems.length === 0 ? (
+          <span className="flex items-center gap-2 text-destructive-text">
+            <span>关联事件暂时读不到</span>
+            {onRetry ? (
+              <button type="button" onClick={onRetry} className="font-medium text-primary hover:underline">
+                重试
+              </button>
+            ) : null}
+          </span>
+        ) : !collapsed && overlays.railItems.length === 0 ? (
           <span className="text-muted-foreground">所选时段内无关联告警或控制指令</span>
         ) : null}
       </div>
@@ -212,7 +231,7 @@ export function TrendsEventRail({
                           <p className="text-xs font-medium text-foreground">{mark.summaryLabel}</p>
                           <Link
                             to="/operations/control"
-                            search={{ site: siteId }}
+                            search={{ site: siteId, inspect: mark.command.commandId }}
                             className="text-xs font-medium text-primary hover:underline"
                           >
                             查看运行调节 ›

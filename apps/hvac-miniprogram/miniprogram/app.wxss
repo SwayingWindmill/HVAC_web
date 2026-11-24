@@ -344,3 +344,13 @@ button.button-outline::after {
   font-weight: 500;
   color: var(--subtle-foreground);
 }
+
+/* Non-destructive banner when background polling fails after content has loaded. */
+.stale-banner {
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--warning-soft);
+  color: var(--warning-text);
+  font-size: 13px;
+  line-height: 18px;
+}

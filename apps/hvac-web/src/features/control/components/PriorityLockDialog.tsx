@@ -15,6 +15,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { RadioGroup } from '@/components/ui/radio-group';
+import { Spinner } from '@/components/ui/spinner';
 import { Textarea } from '@/components/ui/textarea';
 import { formatTime } from '@/lib/operator-format';
 import { isOneOf } from '@/lib/typed';
@@ -66,9 +67,14 @@ export function PriorityLockDialog({
   readonly nowMs: number;
   readonly onClose: () => void;
 }) {
+  const [busy, setBusy] = useState(false);
   return (
-    <Dialog open={target !== null} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <DialogContent className="sm:max-w-[560px]">
+    <Dialog open={target !== null} onOpenChange={(open) => { if (!open && !busy) onClose(); }}>
+      <DialogContent
+        className="sm:max-w-[560px]"
+        onEscapeKeyDown={(event) => { if (busy) event.preventDefault(); }}
+        onInteractOutside={(event) => { if (busy) event.preventDefault(); }}
+      >
         {target ? (
           <PriorityLockForm
             key={`${target.deviceId}-${activeLock?.updatedAt ?? 'none'}`}
@@ -78,6 +84,7 @@ export function PriorityLockDialog({
             csrfToken={csrfToken}
             timeZone={timeZone}
             nowMs={nowMs}
+            onBusyChange={setBusy}
             onClose={onClose}
           />
         ) : null}
@@ -93,6 +100,7 @@ function PriorityLockForm({
   csrfToken,
   timeZone,
   nowMs,
+  onBusyChange,
   onClose,
 }: {
   readonly target: ControlTarget;
@@ -101,6 +109,7 @@ function PriorityLockForm({
   readonly csrfToken: string;
   readonly timeZone: string;
   readonly nowMs: number;
+  readonly onBusyChange: (busy: boolean) => void;
   readonly onClose: () => void;
 }) {
   const queryClient = useQueryClient();
@@ -134,6 +143,8 @@ function PriorityLockForm({
   const lockMutation = useMutation({
     mutationFn: (input: { readonly lockedPriority: MutableDevicePriorityTier; readonly durationMinutes: number; readonly reason: string }) =>
       putDevicePriorityLock(siteId, target.deviceId, input, csrfToken),
+    onMutate: () => onBusyChange(true),
+    onSettled: () => onBusyChange(false),
     onSuccess: (saved) => {
       toast.success(`已为 ${target.assetName} 设置${DEVICE_PRIORITY_TIER_LABEL[saved.lockedPriority]}锁定`);
       void refreshState();
@@ -147,6 +158,8 @@ function PriorityLockForm({
 
   const releaseMutation = useMutation({
     mutationFn: (releaseReason: string) => deleteDevicePriorityLock(siteId, target.deviceId, releaseReason, csrfToken),
+    onMutate: () => onBusyChange(true),
+    onSettled: () => onBusyChange(false),
     onSuccess: () => {
       toast.success(`已解除 ${target.assetName} 的优先级锁定`);
       void refreshState();
@@ -314,21 +327,22 @@ function PriorityLockForm({
       <DialogFooter className="gap-2 sm:justify-between">
         <div>
           {activeLock ? (
-            <Button
+              <Button
               type="button"
               variant="destructive"
               disabled={busy}
               onClick={submitRelease}
             >
-              <Unlock data-icon="inline-start" />
-              {releaseMutation.isPending ? '解除中...' : '解除锁定'}
+              {releaseMutation.isPending ? <Spinner data-icon="inline-start" /> : <Unlock data-icon="inline-start" />}
+              {releaseMutation.isPending ? '解除中…' : '解除锁定'}
             </Button>
           ) : null}
         </div>
         <div className="flex items-center gap-2">
           <Button type="button" variant="outline" disabled={busy} onClick={onClose}>取消</Button>
           <Button type="submit" disabled={busy}>
-            {lockMutation.isPending ? '提交中...' : activeLock ? '更新锁定' : '确认锁定'}
+            {lockMutation.isPending ? <Spinner data-icon="inline-start" /> : null}
+            {lockMutation.isPending ? '提交中…' : activeLock ? '更新锁定' : '确认锁定'}
           </Button>
         </div>
       </DialogFooter>

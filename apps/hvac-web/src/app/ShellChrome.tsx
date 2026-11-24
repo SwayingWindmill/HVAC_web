@@ -106,6 +106,7 @@ export function ShellChrome({ children }: { readonly children: ReactNode }) {
         csrfToken={principal.session.csrfToken}
         onNavigate={navigate}
         onLogout={() => { void runtime.logout(); }}
+        loggingOut={snapshot.logout?.status === 'submitting'}
         assistant={activeSite === undefined ? undefined : { open: assistantOpen, onToggle: toggleAssistant }}
       />
       <div className="flex flex-1">
@@ -138,7 +139,13 @@ export function ShellChrome({ children }: { readonly children: ReactNode }) {
         {snapshot.logout?.status === 'failed' ? (
           <Alert variant="destructive" className="mx-4 mt-4 w-auto" data-testid="real-logout-failure">
             <AlertTitle>退出登录失败</AlertTitle>
-            <AlertDescription>{snapshot.logout.detail}</AlertDescription>
+            <AlertDescription className="flex flex-wrap items-center justify-between gap-2">
+              <span>{snapshot.logout.detail ?? '服务器尚未确认退出登录，你可以重试或关闭此提示。'}</span>
+              <span className="flex items-center gap-2">
+                <Button type="button" size="sm" variant="outline" onClick={() => { void runtime.logout(); }}>重试退出</Button>
+                <Button type="button" size="sm" variant="ghost" onClick={() => runtime.clearLogoutError()}>关闭</Button>
+              </span>
+            </AlertDescription>
           </Alert>
         ) : null}
 

@@ -25,35 +25,46 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { ConfirmDiscardDialog } from '@/components/confirm-discard-dialog';
 import { cn } from '@/lib/utils';
 import { RegistryImportExportWorkbench } from './RegistryImportExportWorkbench';
 import { RegistryResourceWorkbench } from './RegistryResourceWorkbench';
 import { RegistryTemplateWorkbench } from './RegistryTemplateWorkbench';
 import { makeRegistryMutationMeta, newRegistryIdempotencyKey } from './model';
 import type { RegisterUnsavedDraft } from '../unsaved-drafts';
-import { confirmDiscardRegistryDraft } from './confirmDiscard';
 
 interface Props {
   capabilities: readonly Capability[];
+  initialSiteId?: string;
   csrfToken: string;
   registerUnsavedDraft: RegisterUnsavedDraft;
 }
 
 type RegistryTab = 'resources' | 'templates' | 'import-export';
+type PendingNavigationAction =
+  | { readonly kind: 'site'; readonly siteId: string }
+  | { readonly kind: 'tab'; readonly key: RegistryTab };
 
-export function RegistryAdministration({ capabilities: capabilityList, csrfToken, registerUnsavedDraft }: Props) {
+export function RegistryAdministration({ capabilities: capabilityList, initialSiteId, csrfToken, registerUnsavedDraft }: Props) {
   const queryClient = useQueryClient();
   const capabilities = useMemo(() => new Set(capabilityList), [capabilityList]);
   const sitesQuery = useRegistrySites(capabilities.has('site.list'));
   const sites = flattenRegistryPages(sitesQuery.data);
-  const [selectedSiteId, setSelectedSiteId] = useState<string | null>(null);
+  const [selectedSiteId, setSelectedSiteId] = useState<string | null>(initialSiteId ?? null);
   const [activeTab, setActiveTab] = useState<RegistryTab>('resources');
   const [dirty, setDirty] = useState(false);
+  const [pendingAction, setPendingAction] = useState<PendingNavigationAction | null>(null);
   const [creatingSite, setCreatingSite] = useState(false);
   const [mutationError, setMutationError] = useState<unknown>(null);
   const [createDraft, setCreateDraft] = useState({ code: '', displayName: '', timezone: 'Asia/Shanghai', reason: '创建首个站点' });
   const siteQuery = useRegistrySite(selectedSiteId);
   const modelQuery = useRegistryAssetModel(selectedSiteId);
+
+  useEffect(() => {
+    if (initialSiteId && sites.some((site) => site.id === initialSiteId)) {
+      setSelectedSiteId((current) => current ?? initialSiteId);
+    }
+  }, [initialSiteId, sites]);
 
   useEffect(() => {
     if (!selectedSiteId && sites.length) setSelectedSiteId(sites[0].id);
@@ -75,14 +86,28 @@ export function RegistryAdministration({ capabilities: capabilityList, csrfToken
     ]);
   }, [modelQuery, queryClient, selectedSiteId, siteQuery, sitesQuery]);
 
+  const applyPendingAction = (action: PendingNavigationAction) => {
+    setDirty(false);
+    if (action.kind === 'site') setSelectedSiteId(action.siteId);
+    else setActiveTab(action.key);
+  };
+
   const changeSite = (siteId: string) => {
-    if (!confirmDiscardRegistryDraft(dirty)) return;
+    if (siteId === selectedSiteId) return;
+    if (dirty) {
+      setPendingAction({ kind: 'site', siteId });
+      return;
+    }
     setDirty(false);
     setSelectedSiteId(siteId);
   };
 
   const changeTab = (key: RegistryTab) => {
-    if (!confirmDiscardRegistryDraft(dirty)) return;
+    if (key === activeTab) return;
+    if (dirty) {
+      setPendingAction({ kind: 'tab', key });
+      return;
+    }
     setDirty(false);
     setActiveTab(key);
   };
@@ -183,6 +208,20 @@ export function RegistryAdministration({ capabilities: capabilityList, csrfToken
           {activeTab === 'import-export' ? <RegistryImportExportWorkbench site={site} model={model} capabilities={capabilities} csrfToken={csrfToken} onDirtyChange={setDirty} onRefresh={refresh} /> : null}
         </div>
       )}
+      <ConfirmDiscardDialog
+        open={Boolean(pendingAction)}
+        onOpenChange={(open) => {
+          if (!open) setPendingAction(null);
+        }}
+        title="切换前先丢弃未保存修改？"
+        description="当前登记页有还没保存的修改，切换站点或标签页会丢失这些未提交内容。"
+        keepLabel="留在本页"
+        discardLabel="丢弃并切换"
+        onConfirmDiscard={() => {
+          if (pendingAction) applyPendingAction(pendingAction);
+          setPendingAction(null);
+        }}
+      />
     </div>
   );
 }

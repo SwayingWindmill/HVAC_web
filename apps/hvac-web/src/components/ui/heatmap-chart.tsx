@@ -168,13 +168,16 @@ function HeatmapChart({
               {columns.map((column, c) => {
                 const reading = row.values[c]
                 if (reading === null || reading === undefined) {
+                  const isEmptyActive = active?.row === r && active?.column === c
                   return (
                     <div
                       key={c}
                       data-slot="heatmap-chart-cell"
                       data-empty="true"
+                      data-active={isEmptyActive}
                       aria-hidden="true"
-                      className="aspect-square w-full rounded-sm ring-1 ring-inset ring-border/60"
+                      onPointerEnter={() => setActive({ row: r, column: c })}
+                      className="aspect-square w-full rounded-sm ring-1 ring-inset ring-border/60 data-[active=true]:ring-foreground/35"
                     />
                   )
                 }

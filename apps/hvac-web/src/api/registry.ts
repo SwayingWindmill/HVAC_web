@@ -85,6 +85,13 @@ const INITIAL_CURSOR: string | undefined = undefined;
 export const flattenRegistryPages = <T>(data: { pages: Array<{ items: T[] }> } | undefined): T[] =>
   data?.pages.flatMap((page) => page.items) ?? [];
 
+const HAS_CHINESE_RE = /[\u4e00-\u9fff]/;
+
+function registryDescription(detail: string | undefined, fallback: string): string {
+  if (detail && HAS_CHINESE_RE.test(detail)) return detail;
+  return fallback;
+}
+
 export function presentRegistryError(error: unknown): RegistryErrorPresentation {
   if (error instanceof ZodError) {
     return {
@@ -95,32 +102,38 @@ export function presentRegistryError(error: unknown): RegistryErrorPresentation 
     };
   }
   if (error instanceof PlatformApiError) {
-    const { code, detail, retryable, traceId } = error.problem;
+    const { code, detail, retryable, traceId, status } = error.problem;
+    if (status === 401 || code === 'AUTHENTICATION_REQUIRED' || code === 'SESSION_INVALID') {
+      return { kind: 'unavailable', title: '登录已失效', description: '请重新登录后继续操作。', retryable: false, traceId };
+    }
+    if (status === 403 || code === 'FORBIDDEN') {
+      return { kind: 'unknown', title: '没有这项操作权限', description: registryDescription(detail, '当前账号无权修改登记信息，请联系管理员开通。'), retryable: false, traceId };
+    }
     switch (code) {
       case 'RESOURCE_NOT_FOUND':
-        return { kind: 'not-found', title: '资源不可见或不存在', description: detail, retryable, traceId };
+        return { kind: 'not-found', title: '资源不可见或不存在', description: registryDescription(detail, '找不到这条登记记录，可能已被停用或你没有查看权限。'), retryable, traceId };
       case 'CURSOR_INVALID':
-        return { kind: 'invalid-cursor', title: '列表已更新，请刷新重试', description: detail, retryable, traceId };
+        return { kind: 'invalid-cursor', title: '列表已更新，请刷新重试', description: registryDescription(detail, '当前翻页位置已失效，请重新加载列表。'), retryable, traceId };
       case 'REGISTRY_UNAVAILABLE':
-        return { kind: 'unavailable', title: '设备登记服务暂不可用', description: detail, retryable, traceId };
+        return { kind: 'unavailable', title: '设备登记服务暂不可用', description: registryDescription(detail, '暂时无法读取或保存登记数据，请稍后再试。'), retryable, traceId };
       case 'REGISTRY_TIMEOUT':
-        return { kind: 'timeout', title: '读取设备登记超时', description: detail, retryable, traceId };
+        return { kind: 'timeout', title: '读取设备登记超时', description: registryDescription(detail, '请求响应超时，请稍后重试。'), retryable, traceId };
       case 'MAPPING_INVALID':
       case 'MAPPING_QUARANTINED':
-        return { kind: 'mapping', title: '点位映射尚未就绪', description: detail, retryable, traceId };
+        return { kind: 'mapping', title: '点位映射尚未就绪', description: registryDescription(detail, '点位对应关系还未配置好，请先核对点位绑定。'), retryable, traceId };
       case 'REGISTRY_REVISION_CONFLICT':
         return { kind: 'revision-conflict', title: '资源已被其他操作更新', description: '你改的是旧版本。请刷新后再决定要不要重新修改。', retryable: false, traceId };
       case 'REGISTRY_BINDING_CONFLICT':
-        return { kind: 'binding-conflict', title: '绑定变更冲突', description: detail, retryable: false, traceId };
+        return { kind: 'binding-conflict', title: '绑定变更冲突', description: registryDescription(detail, '目标对象已有冲突绑定或正在被引用，请先调整关联关系。'), retryable: false, traceId };
       case 'REGISTRY_IMPORT_PLAN_INVALID':
         return { kind: 'import-conflict', title: '导入计划已失效', description: '请重新校验导入内容后再提交。', retryable: false, traceId };
       case 'REGISTRY_MUTATION_INVALID':
-        return { kind: 'invalid-request', title: '输入校验未通过', description: detail, retryable: false, traceId };
+        return { kind: 'invalid-request', title: '输入校验未通过', description: registryDescription(detail, '填写的内容格式有误或与现有编码重复，请核对后再保存。'), retryable: false, traceId };
       case 'REGISTRY_IDEMPOTENCY_CONFLICT':
       case 'TEMPLATE_REVISION_IMMUTABLE':
-        return { kind: 'mutation-conflict', title: '登记保存冲突', description: detail, retryable: false, traceId };
+        return { kind: 'mutation-conflict', title: '登记保存冲突', description: registryDescription(detail, '已发布的版本或同批次请求不能重复修改，请刷新后查看最新状态。'), retryable: false, traceId };
       default:
-        return { kind: 'unknown', title: '设备登记操作失败', description: detail, retryable, traceId };
+        return { kind: 'unknown', title: '设备登记操作失败', description: registryDescription(detail, '请求未能完成，请检查输入或稍后重试。'), retryable, traceId };
     }
   }
   return {

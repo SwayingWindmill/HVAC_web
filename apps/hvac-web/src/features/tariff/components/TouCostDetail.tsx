@@ -52,10 +52,11 @@ function ratesOn(tariff: SiteTariffWithCalendar, now: Date, timeZone: string): M
  * The period's metered HVAC electricity priced by the Site's time-of-use Tariff, split by
  * period, beside today's periods. An estimate at published rates; the bill is Settlement's.
  */
-export function TouCostDetail({ tariff, cost, timeZone }: {
+export function TouCostDetail({ tariff, cost, timeZone, isCurrentDay = true }: {
   readonly tariff: SiteTariffWithCalendar;
   readonly cost: TouCost;
   readonly timeZone: string;
+  readonly isCurrentDay?: boolean;
 }) {
   const now = new Date();
   const rates = ratesOn(tariff, now, timeZone);
@@ -66,7 +67,9 @@ export function TouCostDetail({ tariff, cost, timeZone }: {
     <div role="region" aria-label="分时电费">
       <div className="grid grid-cols-[260px_minmax(0,1fr)] gap-8 px-5 py-4">
         <div className="flex flex-col gap-3">
-          <span className="text-xs text-muted-foreground">今日电价时段</span>
+          <span className="text-xs text-muted-foreground">
+            {isCurrentDay ? '今日电价时段' : '参考分时电价时段（今日）'}
+          </span>
           <TariffDayBand tariff={tariff} timeZone={timeZone} now={now} />
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
             {legendCodes.map((code) => (

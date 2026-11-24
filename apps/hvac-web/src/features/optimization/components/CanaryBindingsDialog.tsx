@@ -3,6 +3,7 @@ import { GitBranch, RotateCcw } from 'lucide-react';
 import { useState, type KeyboardEvent } from 'react';
 import { toast } from 'sonner';
 import { FactTile } from '@/blocks/fact-list';
+import { ConfirmDiscardDialog } from '@/components/confirm-discard-dialog';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -23,6 +24,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Spinner } from '@/components/ui/spinner';
 import {
   Table,
   TableBody,
@@ -101,6 +103,11 @@ export function CanaryBindingsDialog({
   const [externalUrl, setExternalUrl] = useState('');
   const [status, setStatus] = useState<OptimizationCanaryBindingStatus>('ACTIVE');
   const [formError, setFormError] = useState<string | null>(null);
+  const [pendingConfirm, setPendingConfirm] = useState<
+    | { readonly kind: 'reset'; readonly loopKey: string }
+    | { readonly kind: 'save'; readonly targetLoop: string; readonly servingRef: string; readonly nextStatus: OptimizationCanaryBindingStatus }
+    | null
+  >(null);
 
   const saveMutation = useMutation({
     mutationFn: ({ targetLoop, servingRef, nextStatus }: {
@@ -117,6 +124,7 @@ export function CanaryBindingsDialog({
     onError: (err) => {
       setFormError(err instanceof Error ? err.message : '保存灰度路由失败，请稍后重试');
     },
+    onSettled: () => setPendingConfirm(null),
   });
 
   const deleteMutation = useMutation({
@@ -130,7 +138,10 @@ export function CanaryBindingsDialog({
     onError: (err) => {
       setFormError(err instanceof Error ? err.message : '重置灰度路由失败，请稍后重试');
     },
+    onSettled: () => setPendingConfirm(null),
   });
+
+  const busy = saveMutation.isPending || deleteMutation.isPending;
 
   function populateFromBinding(item: OptimizationCanaryBindingRecord) {
     setFormError(null);
@@ -156,7 +167,26 @@ export function CanaryBindingsDialog({
         setFormError('请填写外部 Python 优化服务地址');
         return;
       }
+      let parsed: URL;
+      try {
+        parsed = new URL(trimmed);
+      } catch {
+        setFormError('求解服务地址格式无效，请检查后重试');
+        return;
+      }
+      if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || parsed.username || parsed.password || parsed.search || parsed.hash) {
+        setFormError('求解服务地址仅支持无查询参数、无认证信息的 HTTP/HTTPS 地址');
+        return;
+      }
+      if (data && data.allowedSolverHosts.length > 0 && !data.allowedSolverHosts.some((host) => parsed.host === host || parsed.hostname === host)) {
+        setFormError('外部优化服务地址不在允许名单内，请联系平台管理员在服务配置中添加白名单主机');
+        return;
+      }
       servingRef = trimmed;
+    }
+    if (status === 'ACTIVE') {
+      setPendingConfirm({ kind: 'save', targetLoop: loopKey, servingRef, nextStatus: status });
+      return;
     }
     saveMutation.mutate({ targetLoop: loopKey, servingRef, nextStatus: status });
   }
@@ -172,8 +202,17 @@ export function CanaryBindingsDialog({
   const data = bindingsQuery.data;
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
+    <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen && !busy) onOpenChange(false); else if (nextOpen) onOpenChange(true); }}>
+      <DialogContent
+        showCloseButton={!busy}
+        onEscapeKeyDown={(event) => {
+          if (busy) event.preventDefault();
+        }}
+        onInteractOutside={(event) => {
+          if (busy) event.preventDefault();
+        }}
+        className="sm:max-w-2xl"
+      >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <GitBranch className="size-4 text-primary" aria-hidden="true" />
@@ -278,8 +317,8 @@ export function CanaryBindingsDialog({
                                 type="button"
                                 variant="outline"
                                 size="sm"
-                                disabled={deleteMutation.isPending}
-                                onClick={() => deleteMutation.mutate(item.loopKey)}
+                                disabled={busy}
+                                onClick={() => setPendingConfirm({ kind: 'reset', loopKey: item.loopKey })}
                               >
                                 <RotateCcw className="mr-1 size-3.5" aria-hidden="true" />
                                 切回默认
@@ -395,10 +434,11 @@ export function CanaryBindingsDialog({
                 <div className="flex justify-end">
                   <Button
                     type="button"
-                    disabled={saveMutation.isPending}
+                    disabled={busy}
                     onClick={handleSubmit}
                   >
-                    {saveMutation.isPending ? '保存中...' : '保存灰度绑定'}
+                    {saveMutation.isPending ? <Spinner data-icon="inline-start" /> : null}
+                    {saveMutation.isPending ? '保存中…' : '保存灰度绑定'}
                   </Button>
                 </div>
               </div>
@@ -406,6 +446,38 @@ export function CanaryBindingsDialog({
           </div>
         ) : null}
       </DialogContent>
+      <ConfirmDiscardDialog
+        open={pendingConfirm !== null}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setPendingConfirm(null);
+        }}
+        busy={busy}
+        title={pendingConfirm?.kind === 'reset'
+          ? `确认将「${formatLoopKey(pendingConfirm.loopKey)}」切回默认策略？`
+          : pendingConfirm
+            ? `确认启用「${formatLoopKey(pendingConfirm.targetLoop)}」灰度策略？`
+            : ''}
+        description={pendingConfirm?.kind === 'reset'
+          ? '切回后将删除该回路的自定义灰度路由，按部署默认策略继续计算优化建议。'
+          : pendingConfirm
+            ? `保存后该回路将切换至「${formatSolverRef(pendingConfirm.servingRef)}」求解策略并在下次优化建议生成时生效。`
+            : ''}
+        keepLabel="取消"
+        discardLabel={pendingConfirm?.kind === 'reset' ? '确认切回默认' : '确认启用绑定'}
+        busyLabel={pendingConfirm?.kind === 'reset' ? '切回中…' : '保存中…'}
+        onConfirmDiscard={() => {
+          if (!pendingConfirm) return;
+          if (pendingConfirm.kind === 'reset') {
+            deleteMutation.mutate(pendingConfirm.loopKey);
+            return;
+          }
+          saveMutation.mutate({
+            targetLoop: pendingConfirm.targetLoop,
+            servingRef: pendingConfirm.servingRef,
+            nextStatus: pendingConfirm.nextStatus,
+          });
+        }}
+      />
     </Dialog>
   );
 }

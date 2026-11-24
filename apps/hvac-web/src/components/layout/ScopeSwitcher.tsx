@@ -17,6 +17,20 @@ export function ScopeSwitcher() {
   const { currentScope, availableScopes, setScope } = useScope();
   const label = currentScope?.name ?? (availableScopes.length === 0 ? '暂无可访问站点' : '平台范围');
 
+  // Inside a single-site tenant, rendering a non-interactive label avoids a useless 1-option menu;
+  // on platform routes (!currentScope) the combobox stays active so the operator can jump into that site.
+  if (currentScope && availableScopes.length === 1) {
+    return (
+      <div
+        aria-label={`当前站点：${label}`}
+        className="flex h-8 min-w-0 items-center gap-1.5 px-2 text-sm font-semibold text-foreground"
+      >
+        <MapPin className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <span className="truncate">{label}</span>
+      </div>
+    );
+  }
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>

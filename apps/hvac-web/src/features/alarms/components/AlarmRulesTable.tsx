@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
 import { Cpu, GitBranch, History, List, Pencil, Plus, Rocket, RotateCcw, Trash2 } from 'lucide-react';
 import { DataTableBlock } from '@/blocks/data-table';
+import { ConfirmDiscardDialog } from '@/components/confirm-discard-dialog';
 import { DataTable, type DataTableFeatures } from '@/components/data-table';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -62,6 +63,11 @@ export function AlarmRulesTable({
   const [revisionsOpen, setRevisionsOpen] = useState(false);
   const [edgeCompileOpen, setEdgeCompileOpen] = useState(false);
   const [driftSheetOpen, setDriftSheetOpen] = useState(false);
+  const [discardDraftConfirmOpen, setDiscardDraftConfirmOpen] = useState(false);
+  const [pendingRetireRule, setPendingRetireRule] = useState<{
+    readonly rule: AlarmRule;
+    readonly dependents: readonly string[];
+  } | null>(null);
   const [publishNotice, setPublishNotice] = useState<string | null>(null);
 
   const bundleQuery = useQuery(siteAlarmRulesBundleQuery(siteId));
@@ -106,7 +112,7 @@ export function AlarmRulesTable({
     setEditorState({ open: false, mode: 'create', rule: null });
   }, [publishedRules]);
 
-  const handleRetireRule = useCallback((ruleId: string) => {
+  const applyRetireRule = useCallback((ruleId: string) => {
     setPublishNotice(null);
     setDraftRules((prev) => {
       const base = prev ?? [...publishedRules];
@@ -123,6 +129,15 @@ export function AlarmRulesTable({
         });
     });
   }, [publishedRules]);
+
+  const handleRetireRule = useCallback((ruleId: string) => {
+    const target = activeRules.find((r) => r.ruleId === ruleId);
+    if (!target) return;
+    const dependents = activeRules
+      .filter((r) => r.ruleId !== ruleId && r.dependsOnRuleIds?.includes(ruleId))
+      .map((r) => r.title);
+    setPendingRetireRule({ rule: target, dependents });
+  }, [activeRules]);
 
   const handleOpenSimulate = useCallback((rule: AlarmRule) => {
     const isDraftRule = delta.addedIds.has(rule.ruleId) || delta.changedIds.has(rule.ruleId);
@@ -298,7 +313,7 @@ export function AlarmRulesTable({
             未发布草稿：新增 {delta.addedCount} 条 · 修改 {delta.changedCount} 条 · 停用 {delta.retiredCount} 条
           </span>
           <div className="flex flex-wrap items-center gap-2">
-            <Button type="button" variant="outline" size="sm" onClick={() => setDraftRules(null)}>
+            <Button type="button" variant="outline" size="sm" onClick={() => setDiscardDraftConfirmOpen(true)}>
               <RotateCcw data-icon="inline-start" className="size-3.5" aria-hidden="true" />
               放弃草稿
             </Button>
@@ -420,6 +435,34 @@ export function AlarmRulesTable({
         onResetCompleted={() => {
           void queryClient.invalidateQueries({ queryKey: ['alarms', siteId, 'rules'] });
           void queryClient.invalidateQueries({ queryKey: ['alarms', siteId, 'rule-revisions'] });
+        }}
+      />
+      <ConfirmDiscardDialog
+        open={discardDraftConfirmOpen}
+        onOpenChange={setDiscardDraftConfirmOpen}
+        title="确认放弃未发布的规则草稿吗？"
+        description={`当前草稿包含新增 ${delta.addedCount} 条、修改 ${delta.changedCount} 条、停用 ${delta.retiredCount} 条改动，放弃后将恢复至已发布版本。`}
+        keepLabel="继续编辑"
+        discardLabel="确认放弃"
+        onConfirmDiscard={() => {
+          setDraftRules(null);
+          setDiscardDraftConfirmOpen(false);
+        }}
+      />
+      <ConfirmDiscardDialog
+        open={pendingRetireRule !== null}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setPendingRetireRule(null);
+        }}
+        title={pendingRetireRule ? `确认停用规则「${pendingRetireRule.rule.title}」？` : ''}
+        description={pendingRetireRule && pendingRetireRule.dependents.length > 0
+          ? `停用后将在草稿中移除该规则，并同步解除以下下游规则的前置依赖：${pendingRetireRule.dependents.join('、')}。`
+          : '停用后将在草稿中移除该规则；热发布生效前可随时通过放弃草稿恢复。'}
+        keepLabel="取消"
+        discardLabel="确认停用"
+        onConfirmDiscard={() => {
+          if (pendingRetireRule) applyRetireRule(pendingRetireRule.rule.ruleId);
+          setPendingRetireRule(null);
         }}
       />
     </DataTableBlock>

@@ -2,17 +2,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, Link, useNavigate } from '@tanstack/react-router';
 import {
   ArrowRight,
-  CheckCircle2,
-  ChevronDown,
   ChevronRight,
-  CircleDashed,
   ClipboardList,
   Lightbulb,
   Send,
   ShieldCheck,
   SlidersHorizontal,
   TriangleAlert,
-  Undo2,
 } from 'lucide-react';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
@@ -32,7 +28,7 @@ import { siteCommandsQuery, type Command } from '@/features/control/command-api'
 import { APPROVAL_LABEL, STATUS_PRESENTATION } from '@/features/control/command-presentation';
 import { CommandMark } from '@/features/control/components/CommandMark';
 import { ConfirmCommand, type PendingCommand } from '@/features/control/components/CommandConfirmation';
-import { siteControlStateQuery } from '@/features/control/control-state';
+import { MODE_PRESENTATION, siteControlStateQuery, type SiteControlMode } from '@/features/control/control-state';
 import { controlTargets, type ControlSetting, type ControlTarget } from '@/features/control/control-model';
 import { useRealtimePlant } from '@/features/operations/realtime/use-realtime-plant';
 import { CreateWorkOrderDialog } from '@/features/work-orders/CreateWorkOrderDialog';
@@ -52,7 +48,6 @@ import {
   formatAuxiliaryRationale,
   formatAuxiliaryTargetValue,
   formatCelsius as celsius,
-  formatSigned as signed,
   isUnscheduledReady,
   matchAuxiliaryControlTarget,
   preparationProblem,
@@ -62,8 +57,6 @@ import {
   TRIGGER_LABEL,
   type OptimizationAuxiliaryTarget,
   type OptimizationRecommendation,
-  type ReadinessItem,
-  type ReadinessStatus,
   type ReadinessSummary,
   type RecommendationRisk,
 } from '../optimization-model';
@@ -79,6 +72,7 @@ import {
 import { stagingView } from '../staging-model';
 import { AutoControlPanel } from './AutoControlPanel';
 import { OptimizationAnalysisTab } from './OptimizationAnalysisTab';
+import { ReadinessDisclosure } from './OptimizationReadinessDisclosure';
 import { StagingPanel } from './StagingPanel';
 
 const siteRoute = getRouteApi('/_app/_site');
@@ -289,12 +283,15 @@ export function OptimizationWorkspace() {
   const sent = recommendation && supply
     ? commands.data?.find((command) => command.pointId === supply.setting.pointId && Date.parse(command.createdAt) >= Date.parse(recommendation.createdAt))
     : undefined;
+  const controlMode: SiteControlMode = controlState.data?.controlMode ?? staging.data?.siteControlMode ?? 'REMOTE_AUTO';
+
   const dispatch = () => {
-    if (!recommendation || !supply || setpoint === null) return;
+    if (!recommendation || !supply || setpoint === null || controlMode !== 'REMOTE_AUTO') return;
     setPending({
       target: supply.target, label: supply.setting.label, pointId: supply.setting.pointId,
       parameters: { [supply.setting.parameterKey]: setpoint },
       change: { from: supplyReading, to: setpoint, unit: supply.setting.unit },
+      acknowledgement: '我已核实当前冷机负荷与运行状态，确认按此建议下发',
       facts: [
         {
           label: '观察与回退',
@@ -304,7 +301,7 @@ export function OptimizationWorkspace() {
     });
   };
   const dispatchAuxiliary = (binding: AuxiliaryControlBinding) => {
-    if (!recommendation || !binding.matched || binding.dispatchedValue === null) return;
+    if (!recommendation || !binding.matched || binding.dispatchedValue === null || controlMode !== 'REMOTE_AUTO') return;
     const { aux, matched, dispatchedValue } = binding;
     const reading = matched.setting.feedbackSourceKey
       ? plant.devices.find((device) => device.deviceId === matched.target.deviceId)?.reading(matched.setting.feedbackSourceKey) ?? null
@@ -315,6 +312,7 @@ export function OptimizationWorkspace() {
       pointId: matched.setting.pointId,
       parameters: { [matched.setting.parameterKey]: dispatchedValue },
       change: { from: reading, to: dispatchedValue, unit: matched.setting.unit },
+      acknowledgement: '我已核实当前辅机回路运行状态，确认按此建议下发',
       facts: [
         {
           label: '协同回路',
@@ -344,7 +342,7 @@ export function OptimizationWorkspace() {
       state={staging.isPending ? 'pending' : staging.isError ? 'error' : 'ready'}
       view={stagingResult}
       evaluatedAt={staging.data?.evaluatedAt ?? null}
-      mode={controlState.data?.controlMode ?? staging.data?.siteControlMode ?? 'REMOTE_AUTO'}
+      mode={controlMode}
       targets={targets}
       commands={commands.data ?? []}
       onConfirm={setPending}
@@ -427,6 +425,7 @@ export function OptimizationWorkspace() {
           readiness={readiness}
           timeZone={site.timezone}
           siteId={site.id}
+          controlMode={controlMode}
           setpoint={setpoint}
           setting={supply?.setting ?? null}
           confirmationMode={confirmationMode}
@@ -512,7 +511,6 @@ export function OptimizationWorkspace() {
           initial={workOrderDraft.initial}
           sourceReferences={workOrderDraft.sourceReferences}
           onCreated={(created) => {
-            toast.success('已创建人工调温工单');
             const sourceKey = workOrderKeys.source(site.id, 'EXTERNAL', workOrderDraft.sourceReferences[0].resourceId);
             queryClient.setQueryData(sourceKey, {
               schemaVersion: 1,
@@ -530,179 +528,12 @@ export function OptimizationWorkspace() {
   );
 }
 
-const READINESS_STATUS: Record<ReadinessStatus, { readonly badge: string; readonly className: string; readonly icon: typeof CheckCircle2 }> = {
-  ready: { badge: '就绪', className: 'bg-success-soft text-success-text', icon: CheckCircle2 },
-  manual: { badge: '人工工单', className: 'bg-primary-soft text-primary', icon: ClipboardList },
-  blocked: { badge: '未就绪', className: 'bg-warning-soft text-warning-text', icon: TriangleAlert },
-  unknown: { badge: '待核验', className: 'bg-muted text-muted-foreground', icon: CircleDashed },
-};
-
-function ReadinessRow({ item }: { readonly item: ReadinessItem }) {
-  const presentation = READINESS_STATUS[item.status];
-  const Icon = presentation.icon;
-  return (
-    <li className="flex items-start gap-2.5 rounded-lg border border-divider bg-muted/20 px-3.5 py-2.5">
-      <Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="flex flex-wrap items-center gap-2">
-          <span className="text-sm font-medium">{item.label}</span>
-          <span className={cn('rounded px-1.5 py-0.5 text-[11px] leading-4 font-medium', presentation.className)}>
-            {presentation.badge}
-          </span>
-        </span>
-        <span className="text-xs text-muted-foreground">{item.detail}</span>
-      </span>
-    </li>
-  );
-}
-
-function ReadinessDisclosure({
-  readiness,
-  recommendation,
-}: {
-  readonly readiness: ReadinessSummary;
-  readonly recommendation: OptimizationRecommendation | null;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const hasBlocked = readiness.items.some((item) => item.status === 'blocked');
-  const SummaryIcon = hasBlocked
-    ? TriangleAlert
-    : readiness.readyCount >= 5
-      ? CheckCircle2
-      : CircleDashed;
-
-  return (
-    <Panel>
-      <button
-        type="button"
-        aria-expanded={expanded}
-        onClick={() => setExpanded((prev) => !prev)}
-        className="flex w-full items-center justify-between gap-4 px-5 py-3.5 text-left outline-none hover:bg-muted/30 focus-visible:ring-3 focus-visible:ring-ring-soft"
-      >
-        <span className="flex min-w-0 items-center gap-2.5">
-          <SummaryIcon
-            className={cn(
-              'size-4 shrink-0',
-              hasBlocked ? 'text-warning' : readiness.readyCount >= 5 ? 'text-success' : 'text-muted-foreground',
-            )}
-            aria-hidden="true"
-          />
-          <span className="truncate text-sm font-semibold">{readiness.headline}</span>
-        </span>
-        <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-          <span>{expanded ? '收起核验与依据' : '查看核验与依据'}</span>
-          <ChevronDown className={cn('size-4 transition-transform', expanded && 'rotate-180')} aria-hidden="true" />
-        </span>
-      </button>
-
-      {expanded ? (
-        <section role="region" aria-label="前置与安全条件" className="flex flex-col gap-4 border-t border-divider px-5 py-4">
-          <ul className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-            {readiness.items.map((item) => (
-              <ReadinessRow key={item.key} item={item} />
-            ))}
-          </ul>
-
-          {readiness.responseCoefficient || readiness.tenantStrategy ? (
-            <div className="grid grid-cols-1 gap-2.5 border-t border-divider pt-4 sm:grid-cols-2">
-              {readiness.responseCoefficient ? (
-                <div className="flex items-start gap-2.5 rounded-lg border border-divider bg-muted/20 px-3.5 py-2.5">
-                  {readiness.responseCoefficient.status === 'CALIBRATED' ? (
-                    <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-success" aria-hidden="true" />
-                  ) : (
-                    <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
-                  )}
-                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                    <span className="flex flex-wrap items-center gap-2">
-                      <span className="text-sm font-medium">响应系数标定</span>
-                      <span className={cn(
-                        'rounded px-1.5 py-0.5 text-[11px] leading-4 font-medium',
-                        readiness.responseCoefficient.status === 'CALIBRATED'
-                          ? 'bg-success-soft text-success-text'
-                          : 'bg-warning-soft text-warning-text',
-                      )}
-                      >
-                        {readiness.responseCoefficient.label}
-                      </span>
-                    </span>
-                    <span className="text-xs text-muted-foreground">{readiness.responseCoefficient.detail}</span>
-                  </span>
-                </div>
-              ) : null}
-              {readiness.tenantStrategy ? (
-                <div className="flex items-start gap-2.5 rounded-lg border border-divider bg-muted/20 px-3.5 py-2.5">
-                  {readiness.tenantStrategy.status === 'CONFIRMED' ? (
-                    <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-success" aria-hidden="true" />
-                  ) : (
-                    <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
-                  )}
-                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                    <span className="flex flex-wrap items-center gap-2">
-                      <span className="text-sm font-medium">共享租户策略</span>
-                      <span className={cn(
-                        'rounded px-1.5 py-0.5 text-[11px] leading-4 font-medium',
-                        readiness.tenantStrategy.status === 'CONFIRMED'
-                          ? 'bg-success-soft text-success-text'
-                          : 'bg-warning-soft text-warning-text',
-                      )}
-                      >
-                        {readiness.tenantStrategy.label}
-                      </span>
-                    </span>
-                    <span className="text-xs text-muted-foreground">{readiness.tenantStrategy.detail}</span>
-                  </span>
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-
-          {recommendation ? (
-            <div className="grid grid-cols-1 items-start gap-6 border-t border-divider pt-4 sm:grid-cols-2">
-              <div className="flex flex-col gap-1.5">
-                <span className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
-                  策略响应与基线依据
-                  <InfoTip>标「人工设定」的响应系数由人在优化策略里填写，不是从站点运行数据拟合的</InfoTip>
-                </span>
-                <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-5">
-                  {([
-                    ['最近一天冷站用电', `${formatDecimal(recommendation.baseline.dailyEnergyKWh, 0)} kWh · ¥${formatDecimal(recommendation.baseline.dailyCost, 0)}`],
-                    ['供水每升高 1 °C 日用电', `${signed(recommendation.response.energyKWhPerSupplyC, 0)} kWh · 人工设定`],
-                    ['供水每升高 1 °C 室内温度', `${signed(recommendation.response.zoneCPerSupplyC, 1)} °C · 人工设定`],
-                  ] as const).map(([label, value]) => (
-                    <div key={label} className="col-span-2 grid grid-cols-subgrid border-b border-divider py-1.5 last:border-b-0">
-                      <dt className="text-xs leading-5 text-muted-foreground">{label}</dt>
-                      <dd className="text-xs leading-5 font-medium tabular-nums">{value}</dd>
-                    </div>
-                  ))}
-                </dl>
-              </div>
-
-              <div className="flex flex-col gap-2">
-                <span className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
-                  <Undo2 className="size-3.5 text-primary" aria-hidden="true" />
-                  观察与回退规则
-                </span>
-                <p className="text-xs text-muted-foreground">
-                  调整后需同时保持室内温度在 {formatDecimal(recommendation.comfortRange.minC, 0)}–{formatDecimal(recommendation.comfortRange.maxC, 0)} °C 舒适范围内，且冷站负荷不高于调整前（最近一天冷站用电 {formatDecimal(recommendation.baseline.dailyEnergyKWh, 0)} kWh）。
-                </p>
-                <p className="rounded-md bg-muted/40 px-3 py-2 text-xs text-secondary-foreground">
-                  下发后观察 {recommendation.verificationMinutes} 分钟；任一条件不满足，将供水温度恢复为{' '}
-                  <b className="font-semibold text-foreground">{celsius(recommendation.restoreSupplyTempC)}</b>
-                </p>
-              </div>
-            </div>
-          ) : null}
-        </section>
-      ) : null}
-    </Panel>
-  );
-}
-
 function Proposal({
   recommendation,
   readiness,
   timeZone,
   siteId,
+  controlMode,
   setpoint,
   setting,
   confirmationMode,
@@ -721,6 +552,7 @@ function Proposal({
   readonly readiness: ReadinessSummary;
   readonly timeZone: string;
   readonly siteId: string;
+  readonly controlMode: SiteControlMode;
   readonly setpoint: number | null;
   readonly setting: ControlSetting | null;
   readonly confirmationMode: AutoControlConfirmationMode;
@@ -739,9 +571,11 @@ function Proposal({
   const change = changesSupply(recommendation);
   const risk = RISK[recommendation.risk];
   const share = baseline.dailyEnergyKWh > 0 ? recommendation.saving.energyKWhPerDay / baseline.dailyEnergyKWh : null;
-  const executionNote = confirmationMode === 'AUTO_WITH_LEASE'
+  const autoMode = controlMode === 'REMOTE_AUTO';
+  const controlBlockedHint = !autoMode ? `${MODE_PRESENTATION[controlMode].label}中，平台不下发指令` : undefined;
+  const executionNote = controlBlockedHint ?? (confirmationMode === 'AUTO_WITH_LEASE'
     ? '自动控制租约生效中，满足实时安全复核后将自动下发并观察'
-    : '建议不会自动执行';
+    : '建议不会自动执行');
   const stepNote = setting && setpoint !== null && Math.abs(setpoint - candidate.supplyTempC) >= 0.05
     ? `冷机只能按 ${formatDecimal(setting.step, 1)} °C 调整，实际下发 ${celsius(setpoint)}；${executionNote}`
     : `下发为 ${celsius(setpoint ?? candidate.supplyTempC)}；${executionNote}`;
@@ -799,7 +633,7 @@ function Proposal({
                 </Link>
               ) : (
                 <div className="flex flex-wrap items-center gap-3">
-                  <Button disabled={setpoint === null} onClick={onDispatch}>
+                  <Button disabled={setpoint === null || !autoMode} title={controlBlockedHint} onClick={onDispatch}>
                     <Send data-icon="inline-start" />
                     按建议下发
                   </Button>
@@ -955,12 +789,16 @@ function Proposal({
                             size="sm"
                             variant="outline"
                             aria-label={`按建议下发${loopLabel}`}
+                            disabled={!autoMode}
+                            title={controlBlockedHint}
                             onClick={() => onDispatchAuxiliary(binding)}
                           >
                             <Send data-icon="inline-start" />
                             按建议下发
                           </Button>
-                          {steppedCaption ? (
+                          {controlBlockedHint ? (
+                            <span className="text-xs text-muted-foreground">{controlBlockedHint}</span>
+                          ) : steppedCaption ? (
                             <span className="text-xs text-muted-foreground">{steppedCaption}</span>
                           ) : null}
                         </div>

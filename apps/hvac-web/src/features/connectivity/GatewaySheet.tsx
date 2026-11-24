@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { KeyRound, Link2, RefreshCw, RotateCw, ShieldCheck, ShieldX } from 'lucide-react';
+import { Copy, KeyRound, Link2, RefreshCw, RotateCw, ShieldCheck, ShieldX } from 'lucide-react';
 import { toast } from 'sonner';
 import type {
   Device,
@@ -13,9 +13,11 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import { GatewayConfigShadowSection } from './GatewayConfigShadowSection';
 import { GatewayPacketCaptureSection, GatewayQuarantineSection } from './GatewayDiagnosticsSections';
@@ -85,10 +87,22 @@ export function GatewaySheet({ gateway, siteName, csrfToken, canWrite, onClose }
   readonly canWrite: boolean;
   readonly onClose: () => void;
 }) {
+  const [detailWorking, setDetailWorking] = useState(false);
+
+  useEffect(() => {
+    if (!gateway) setDetailWorking(false);
+  }, [gateway?.id]);
+
   return (
-    <Sheet open={Boolean(gateway)} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <SheetContent className="overflow-y-auto data-[side=right]:sm:max-w-[640px]">
-        {gateway ? <GatewayDetail key={gateway.id} gateway={gateway} siteName={siteName} csrfToken={csrfToken} canWrite={canWrite} /> : null}
+    <Sheet open={Boolean(gateway)} onOpenChange={(open) => { if (!open && !detailWorking) onClose(); }}>
+      <SheetContent
+        showCloseButton={!detailWorking}
+        onEscapeKeyDown={(event) => { if (detailWorking) event.preventDefault(); }}
+        onPointerDownOutside={(event) => { if (detailWorking) event.preventDefault(); }}
+        onInteractOutside={(event) => { if (detailWorking) event.preventDefault(); }}
+        className="overflow-y-auto data-[side=right]:sm:max-w-[640px]"
+      >
+        {gateway ? <GatewayDetail key={gateway.id} gateway={gateway} siteName={siteName} csrfToken={csrfToken} canWrite={canWrite} onWorkingChange={setDetailWorking} /> : null}
       </SheetContent>
     </Sheet>
   );
@@ -135,8 +149,9 @@ function CertificateRecordItem({ record, canWrite, working, onRevoke }: {
   );
 }
 
-function RevokeCertificateDialog({ certificate, reason, pending, working, error, onReasonChange, onClose, onConfirm }: {
+function RevokeCertificateDialog({ certificate, isLastActiveCert, reason, pending, working, error, onReasonChange, onClose, onConfirm }: {
   readonly certificate: GatewayCredentialRecord | null;
+  readonly isLastActiveCert: boolean;
   readonly reason: string;
   readonly pending: boolean;
   readonly working: boolean;
@@ -145,15 +160,47 @@ function RevokeCertificateDialog({ certificate, reason, pending, working, error,
   readonly onClose: () => void;
   readonly onConfirm: () => void;
 }) {
+  const [confirmedCertId, setConfirmedCertId] = useState<string | null>(null);
+  const confirmedLastActive = Boolean(certificate && confirmedCertId === certificate.id);
+
+  useEffect(() => {
+    setConfirmedCertId(null);
+  }, [certificate?.id]);
+
   return (
-    <AlertDialog open={Boolean(certificate)} onOpenChange={(open) => { if (!open && !working) onClose(); }}>
-      <AlertDialogContent>
+    <AlertDialog
+      open={Boolean(certificate)}
+      onOpenChange={(open) => {
+        if (!open && !working) {
+          setConfirmedCertId(null);
+          onClose();
+        }
+      }}
+    >
+      <AlertDialogContent onEscapeKeyDown={(event) => { if (working) event.preventDefault(); }}>
         <AlertDialogHeader>
           <AlertDialogTitle>吊销这张网关证书？</AlertDialogTitle>
           <AlertDialogDescription>
             将立即吊销{certificate ? ` ${formatCertificateIdentifier(certificate)}` : '所选证书'}。吊销后仅这张证书立即失效，同网关上其他仍在有效期内的轮换证书会继续工作；如果这是最后一张有效证书，网关将停止上报数据，直到使用新接入码领取证书。
           </AlertDialogDescription>
         </AlertDialogHeader>
+        {isLastActiveCert ? (
+          <Alert variant="destructive">
+            <AlertDescription className="space-y-2">
+              <p className="font-medium">这是当前网关唯一有效的证书，吊销后将立即断线停报！</p>
+              <label htmlFor="gateway-cert-revoke-confirm" className="flex cursor-pointer items-start gap-2 text-xs font-normal text-foreground">
+                <Checkbox
+                  id="gateway-cert-revoke-confirm"
+                  checked={confirmedLastActive}
+                  disabled={working}
+                  onCheckedChange={(checked) => setConfirmedCertId(checked === true && certificate ? certificate.id : null)}
+                  className="mt-0.5"
+                />
+                <span>我已确认这会让该网关立刻断线停报，并需要重新用一次性接入码恢复连接</span>
+              </label>
+            </AlertDescription>
+          </Alert>
+        ) : null}
         <div className="flex flex-col gap-1.5">
           <label htmlFor="gateway-cert-revoke-reason" className="text-xs font-medium">吊销原因（可选）</label>
           <Input
@@ -182,12 +229,13 @@ function RevokeCertificateDialog({ certificate, reason, pending, working, error,
           <AlertDialogCancel disabled={working}>取消</AlertDialogCancel>
           <AlertDialogAction
             variant="destructive"
-            disabled={working || !certificate}
+            disabled={working || !certificate || (isLastActiveCert && !confirmedLastActive)}
             onClick={(event) => {
               event.preventDefault();
               onConfirm();
             }}
           >
+            {pending ? <Spinner data-icon="inline-start" /> : null}
             {pending ? '正在吊销…' : '确认吊销'}
           </AlertDialogAction>
         </AlertDialogFooter>
@@ -207,7 +255,7 @@ function StopGatewayDialog({ open, gatewayName, pending, working, error, onOpenC
 }) {
   return (
     <AlertDialog open={open} onOpenChange={(nextOpen) => { if (!working) onOpenChange(nextOpen); }}>
-      <AlertDialogContent>
+      <AlertDialogContent onEscapeKeyDown={(event) => { if (working) event.preventDefault(); }}>
         <AlertDialogHeader>
           <AlertDialogTitle>停用这个网关？</AlertDialogTitle>
           <AlertDialogDescription>
@@ -229,6 +277,7 @@ function StopGatewayDialog({ open, gatewayName, pending, working, error, onOpenC
               onConfirm();
             }}
           >
+            {pending ? <Spinner data-icon="inline-start" /> : null}
             {pending ? '正在停用…' : '停用此网关'}
           </AlertDialogAction>
         </AlertDialogFooter>
@@ -237,11 +286,12 @@ function StopGatewayDialog({ open, gatewayName, pending, working, error, onOpenC
   );
 }
 
-function GatewayDetail({ gateway, siteName, csrfToken, canWrite }: {
+function GatewayDetail({ gateway, siteName, csrfToken, canWrite, onWorkingChange }: {
   readonly gateway: Device;
   readonly siteName: string;
   readonly csrfToken: string;
   readonly canWrite: boolean;
+  readonly onWorkingChange?: (working: boolean) => void;
 }) {
   const queryClient = useQueryClient();
   const [confirmingStop, setConfirmingStop] = useState(false);
@@ -307,6 +357,12 @@ function GatewayDetail({ gateway, siteName, csrfToken, canWrite }: {
   });
 
   const working = code.isPending || rotate.isPending || stop.isPending || revokeCert.isPending;
+
+  useEffect(() => {
+    onWorkingChange?.(working);
+  }, [working, onWorkingChange]);
+
+  useEffect(() => () => onWorkingChange?.(false), [onWorkingChange]);
   const stopped = status.data?.status === 'REVOKED';
   const activeEnrollmentCode = rotate.data ?? code.data;
   const refreshAll = () => {
@@ -407,14 +463,35 @@ function GatewayDetail({ gateway, siteName, csrfToken, canWrite }: {
         {activeEnrollmentCode ? (
           <div className="flex flex-col gap-2 rounded-lg border bg-muted/40 p-3">
             <label htmlFor="gateway-enrollment-code" className="text-xs font-medium">一次性接入码</label>
-            <Input
-              id="gateway-enrollment-code"
-              readOnly
-              value={activeEnrollmentCode.enrollmentCode}
-              autoComplete="off"
-              className="font-mono text-xs"
-              onFocus={(event) => event.currentTarget.select()}
-            />
+            <div className="flex items-center gap-2">
+              <Input
+                id="gateway-enrollment-code"
+                readOnly
+                value={activeEnrollmentCode.enrollmentCode}
+                autoComplete="off"
+                className="font-mono text-xs"
+                onFocus={(event) => event.currentTarget.select()}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="shrink-0"
+                onClick={() => {
+                  if (!navigator.clipboard?.writeText) {
+                    toast.error('复制失败，请手动选中复制');
+                    return;
+                  }
+                  void navigator.clipboard.writeText(activeEnrollmentCode.enrollmentCode).then(
+                    () => toast.success('一次性接入码已复制'),
+                    () => toast.error('复制失败，请手动选中复制'),
+                  );
+                }}
+              >
+                <Copy data-icon="inline-start" />
+                复制接入码
+              </Button>
+            </div>
             <p className="text-xs text-muted-foreground">有效至 <span className="font-mono tabular-nums">{time(activeEnrollmentCode.expiresAt)}</span>。请安全交给现场人员。</p>
           </div>
         ) : null}
@@ -426,18 +503,18 @@ function GatewayDetail({ gateway, siteName, csrfToken, canWrite }: {
         {stopped ? (
           <div>
             <Button size="sm" disabled={!canWrite || working} onClick={() => rotate.mutate(true)}>
-              <RotateCw data-icon="inline-start" />
+              {rotate.isPending ? <Spinner data-icon="inline-start" /> : <RotateCw data-icon="inline-start" />}
               {rotate.isPending ? '正在重新启用…' : '重新启用并生成接入码'}
             </Button>
           </div>
         ) : (
           <div className="flex flex-wrap gap-2">
             <Button size="sm" disabled={!canWrite || working || !status.data} onClick={() => code.mutate()}>
-              <KeyRound data-icon="inline-start" />
+              {code.isPending ? <Spinner data-icon="inline-start" /> : <KeyRound data-icon="inline-start" />}
               {code.isPending ? '正在生成…' : '生成接入码'}
             </Button>
             <Button variant="outline" size="sm" disabled={!canWrite || working || !status.data} onClick={() => rotate.mutate(false)}>
-              <RotateCw data-icon="inline-start" />
+              {rotate.isPending ? <Spinner data-icon="inline-start" /> : <RotateCw data-icon="inline-start" />}
               {rotate.isPending ? '正在轮换…' : '轮换密钥'}
             </Button>
           </div>
@@ -490,6 +567,11 @@ function GatewayDetail({ gateway, siteName, csrfToken, canWrite }: {
 
       <RevokeCertificateDialog
         certificate={certToRevoke}
+        isLastActiveCert={Boolean(
+          certToRevoke &&
+            certToRevoke.status === 'ACTIVE' &&
+            (credentials.data?.items.filter((c) => c.status === 'ACTIVE').length ?? 0) <= 1,
+        )}
         reason={revokeReason}
         pending={revokeCert.isPending}
         working={working}

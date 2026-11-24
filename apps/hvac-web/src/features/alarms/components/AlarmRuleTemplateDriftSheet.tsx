@@ -1,6 +1,8 @@
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { RotateCcw } from 'lucide-react';
 import { toast } from 'sonner';
+import { ConfirmDiscardDialog } from '@/components/confirm-discard-dialog';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -38,6 +40,7 @@ export function AlarmRuleTemplateDriftSheet({
 }) {
   const queryClient = useQueryClient();
   const driftQuery = useQuery(siteAlarmRuleTemplateDriftQuery(siteId, open));
+  const [pendingReset, setPendingReset] = useState<{ readonly ruleId: string; readonly ruleTitle: string } | null>(null);
 
   const resetMutation = useMutation({
     mutationFn: ({ ruleId, fields }: { readonly ruleId: string; readonly fields?: string[] }) =>
@@ -48,11 +51,15 @@ export function AlarmRuleTemplateDriftSheet({
         csrfToken,
       ),
     onSuccess: () => {
-      toast.success('已将该规则恢复为模板默认值并同步版本账本');
+      setPendingReset(null);
+      toast.success('已将该规则恢复为模板默认值并同步版本记录');
       void queryClient.invalidateQueries({ queryKey: alarmTemplateKeys.siteDrift(siteId) });
       onResetCompleted();
     },
-    onError: (err) => toast.error(describeAlarmTemplateError(err, '恢复模板默认值失败')),
+    onError: (err) => {
+      setPendingReset(null);
+      toast.error(describeAlarmTemplateError(err, '恢复模板默认值失败'));
+    },
   });
 
   const items = driftQuery.data?.items ?? [];
@@ -96,7 +103,7 @@ export function AlarmRuleTemplateDriftSheet({
                     size="sm"
                     variant="outline"
                     disabled={!canManage || resetMutation.isPending}
-                    onClick={() => resetMutation.mutate({ ruleId: item.ruleId })}
+                    onClick={() => setPendingReset({ ruleId: item.ruleId, ruleTitle: item.ruleTitle })}
                   >
                     <RotateCcw data-icon="inline-start" aria-hidden="true" />
                     重置为模板默认值
@@ -136,6 +143,21 @@ export function AlarmRuleTemplateDriftSheet({
           )}
         </div>
       </SheetContent>
+      <ConfirmDiscardDialog
+        open={pendingReset !== null}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setPendingReset(null);
+        }}
+        busy={resetMutation.isPending}
+        title={pendingReset ? `确认将「${pendingReset.ruleTitle}」重置为模板默认值？` : ''}
+        description="重置后将覆盖本站点针对该规则的个性化阈值设定，并生成新的规则版本记录。"
+        keepLabel="取消"
+        discardLabel="确认重置"
+        busyLabel="重置中…"
+        onConfirmDiscard={() => {
+          if (pendingReset) resetMutation.mutate({ ruleId: pendingReset.ruleId });
+        }}
+      />
     </Sheet>
   );
 }

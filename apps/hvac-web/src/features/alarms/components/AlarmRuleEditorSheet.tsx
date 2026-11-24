@@ -21,6 +21,7 @@ import {
 } from '@/components/ui/sheet';
 import type { SiteEquipmentIndex } from '@/features/assets/use-device-names';
 import type { AlarmRuleAction, AlarmRuleActionKind, AlarmRuleActionTrigger, AlarmRuleDependencyGate } from '../alarm-operations';
+import { SEVERITY_LABELS, SEVERITY_ORDER } from '../alarm-presentation';
 import {
   computeRuleDagLayout,
   evaluateLocalEdgeEligibility,
@@ -34,13 +35,7 @@ import {
   preventImeEnterSubmit,
 } from './AlarmRuleConditionEditor';
 
-const SEVERITY_OPTIONS: ReadonlyArray<{ readonly value: AlarmRuleSeverity; readonly label: string }> = [
-  { value: 'CRITICAL', label: '紧急' },
-  { value: 'MAJOR', label: '重要' },
-  { value: 'MINOR', label: '次要' },
-  { value: 'WARNING', label: '预警' },
-  { value: 'INFO', label: '提示' },
-];
+const SEVERITY_OPTIONS = SEVERITY_ORDER.map((value) => ({ value, label: SEVERITY_LABELS[value] }));
 
 const RULE_KIND_OPTIONS: ReadonlyArray<{ readonly value: NonNullable<AlarmRule['ruleKind']>; readonly label: string }> = [
   { value: 'THRESHOLD', label: '阈值触发' },

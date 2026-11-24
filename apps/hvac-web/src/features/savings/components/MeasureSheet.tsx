@@ -33,6 +33,12 @@ const dayConfig = {
 const kwh = (value: number) => `${formatDecimal(value, 0)} kWh`;
 const yuan = (value: number) => `¥${formatDecimal(value, 0)}`;
 
+const FIT_CHECK_TIPS: Readonly<Record<string, string>> = {
+  '预测误差 CV(RMSE)': '小时预测值与实测用电量的均方根误差比例，越低说明对比基线越贴近实际负荷规律。',
+  '总体偏差 NMBE': '整个基线期内预测总用电相对实测值的平均偏差比例，越接近 0% 说明无明显系统性偏高或偏低。',
+  '决定系数 R²': '对比基线能解释实际用电波动的程度（最大为 1.00），越接近 1 说明相关性越强。',
+};
+
 function BaselineSection({ measure, timeZone }: { readonly measure: Measure; readonly timeZone: string }) {
   const baseline = measure.baseline;
   if (!baseline) {
@@ -59,7 +65,12 @@ function BaselineSection({ measure, timeZone }: { readonly measure: Measure; rea
         <TableBody>
           {fitChecks(baseline).map((check) => (
             <TableRow key={check.label} className="hover:bg-transparent">
-              <TableCell className="font-medium">{check.label}</TableCell>
+              <TableCell className="font-medium">
+                <span className="inline-flex items-center gap-1">
+                  {check.label}
+                  {FIT_CHECK_TIPS[check.label] ? <InfoTip>{FIT_CHECK_TIPS[check.label]}</InfoTip> : null}
+                </span>
+              </TableCell>
               <TableCell className="text-muted-foreground tabular-nums">{check.limit}</TableCell>
               <TableCell className="text-right tabular-nums">{check.value}</TableCell>
               <TableCell>
@@ -233,17 +244,36 @@ export function MeasureSheet({ measureId, names, canManage, onClose }: {
 
   const now = siteInputValue(new Date(), tz);
   const implementedAt = measure?.implementedAt ? new Date(measure.implementedAt) : null;
-  const dialogs: Record<MeasureAction, { title: string; description: string; confirm: string; fields: { id: string; label: string; initial: string }[] }> = {
+  const dialogs: Record<MeasureAction, {
+    title: string;
+    description: string;
+    confirm: string;
+    acknowledgement?: string;
+    validate?: (values: Record<string, string>) => string | null;
+    fields: { id: string; label: string; initial: string }[];
+  }> = {
     implement: {
       title: '确认实施',
       description: '按站点当地时间填写措施实际生效的时间。系统用此前 14 天的逐时数据算出对比基线，之后不再变动；同一块电表同一时间只能统计一项措施。',
       confirm: '确认实施并拟合基线',
+      acknowledgement: '我确认措施实际生效时间无误，提交后将固定此前 14 天的对比基线',
       fields: [{ id: 'at', label: '实施时间', initial: now }],
     },
     refit: {
       title: '重新拟合基线',
       description: '换一段实施前、运行稳定且数据完整的时段，至少 72 个小时。发布第一天统计结果后对比基线固定，不能再改。',
       confirm: '重新拟合',
+      validate: (values) => {
+        const fromAt = instantFromSiteInput(values.from, tz).getTime();
+        const toAt = instantFromSiteInput(values.to, tz).getTime();
+        if (!Number.isFinite(fromAt) || !Number.isFinite(toAt) || toAt <= fromAt) {
+          return '基线结束时间须晚于开始时间';
+        }
+        if (toAt - fromAt < 72 * 3_600_000) {
+          return '对比基线时段至少须包含 72 小时';
+        }
+        return null;
+      },
       fields: [
         { id: 'from', label: '基线开始', initial: implementedAt ? siteInputValue(new Date(implementedAt.getTime() - 7 * 86_400_000), tz) : now },
         { id: 'to', label: '基线结束', initial: implementedAt ? siteInputValue(implementedAt, tz) : now },
@@ -253,6 +283,7 @@ export function MeasureSheet({ measureId, names, canManage, onClose }: {
       title: '结束措施',
       description: '结束后不再统计节电，已发布的每日结果保留。之后可以实施下一项措施。',
       confirm: '结束措施',
+      acknowledgement: '我确认停止本项节能措施的后续每日节电统计',
       fields: [{ id: 'at', label: '结束时间', initial: now }],
     },
   };
@@ -263,7 +294,7 @@ export function MeasureSheet({ measureId, names, canManage, onClose }: {
   };
 
   return (
-    <Sheet open={Boolean(measureId)} onOpenChange={(open) => { if (!open) onClose(); }}>
+    <Sheet open={Boolean(measureId)} onOpenChange={(open) => { if (!open && !step.isPending) onClose(); }}>
       <SheetContent className="overflow-y-auto data-[side=right]:sm:max-w-[640px]">
         {detail.isPending ? (
           <div className="flex flex-col gap-4 p-6"><Skeleton className="h-8 w-2/3" /><Skeleton className="h-64" /></div>
@@ -316,8 +347,10 @@ export function MeasureSheet({ measureId, names, canManage, onClose }: {
                       {measure.baseline.trusted ? '通过' : '未通过'}
                     </span>
                   ) : null}
-                  <InfoTip>实施后，系统用实施前 14 天的用电与供冷数据，算出“没做这项措施时会用多少电”作为对比基线，之后不再变动</InfoTip>
-                  <span className="ml-auto text-xs font-normal text-muted-foreground">{ipmvpOption(measure.boundaryDeviceId)} · {boundaryLabel(measure.boundaryDeviceId, names)}</span>
+                  <InfoTip>
+                    实施后，系统用实施前 14 天的用电与供冷数据，算出「没做这项措施时会用多少电」作为对比基线（{ipmvpOption(measure.boundaryDeviceId)} 口径），之后不再变动
+                  </InfoTip>
+                  <span className="ml-auto text-xs font-normal text-muted-foreground">{boundaryLabel(measure.boundaryDeviceId, names)}</span>
                 </h3>
                 <BaselineSection measure={measure} timeZone={tz} />
               </section>
@@ -354,6 +387,8 @@ export function MeasureSheet({ measureId, names, canManage, onClose }: {
                 title={dialog.title}
                 description={dialog.description}
                 fields={dialog.fields}
+                acknowledgement={dialog.acknowledgement}
+                validate={dialog.validate}
                 confirmLabel={dialog.confirm}
                 pending={step.isPending}
                 error={step.isError ? (step.error instanceof SavingsRequestError ? step.error.message : '节能统计服务暂时不可用，请稍后重试') : null}

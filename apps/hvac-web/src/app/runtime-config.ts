@@ -35,18 +35,18 @@ export function validateRuntimeConfig(): RuntimeConfigResult {
   const realtimeProtocol = __HVAC_WEB_REALTIME_PROTOCOL__.trim();
 
   if (!buildId) {
-    failures.push({ code: 'MISSING_BUILD_ID', detail: 'HVAC_WEB_BUILD_ID is required for the Web artifact.' });
+    failures.push({ code: 'MISSING_BUILD_ID', detail: '缺少前端构建版本标识，请联系管理员重新打包部署。' });
   }
   if (!gatewayBasePath || !isSameOriginRelativePath(gatewayBasePath) || gatewayBasePath !== '/api/v1') {
     failures.push({
       code: 'INVALID_GATEWAY_BASE_PATH',
-      detail: 'HVAC_WEB_GATEWAY_BASE_PATH must be the same-origin public Gateway path /api/v1.',
+      detail: '平台接口地址配置有误（必须使用同源路径 /api/v1），请联系管理员检查部署配置。',
     });
   }
   if (realtimeProtocol !== SUPPORTED_REALTIME_PROTOCOL) {
     failures.push({
       code: 'UNSUPPORTED_REALTIME_PROTOCOL',
-      detail: `HVAC_WEB_REALTIME_PROTOCOL must be ${SUPPORTED_REALTIME_PROTOCOL}.`,
+      detail: '实时推送协议配置不受当前页面支持，请联系管理员核对版本。',
     });
   }
 

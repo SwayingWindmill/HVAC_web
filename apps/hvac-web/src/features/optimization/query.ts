@@ -1,4 +1,4 @@
-import { queryOptions } from '@tanstack/react-query';
+import { keepPreviousData, queryOptions } from '@tanstack/react-query';
 import { z } from 'zod';
 import { gatewayPath, gatewayRequest, publishedValueOf, valueOf, type GatewayProblem } from '@/api/gateway-client';
 import {
@@ -418,6 +418,7 @@ export function siteOptimizationNegativeSamplesQuery(
     queryKey: optimizationKeys.negativeSamples(siteId, params),
     queryFn: ({ signal }) => fetchSiteOptimizationNegativeSamples(siteId, params, signal),
     enabled: Boolean(siteId) && enabled,
+    placeholderData: keepPreviousData,
     retry: false,
   });
 }

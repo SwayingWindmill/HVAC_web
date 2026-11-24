@@ -3,6 +3,7 @@
   <view wx:if="{{loading}}" class="state">正在读取…</view>
   <view wx:elif="{{failed}}" class="state">{{failed}}</view>
   <block wx:elif="{{view}}">
+    <view wx:if="{{refreshError}}" class="stale-banner" role="status">{{refreshError}}</view>
     <view class="head">
       <text class="badge badge-{{view.status.tone}}">{{view.status.label}}</text>
       <text class="caption">{{view.kind}}</text>

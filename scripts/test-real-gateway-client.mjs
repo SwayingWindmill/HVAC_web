@@ -83,7 +83,11 @@ test('values and messages: nothing yet is null, a missing route says so, a refus
   assert.throws(() => valueOf({ kind: 'notPublished', problem: { status: 404 } }, messages), { message: '服务暂时不可用' });
   assert.throws(() => publishedValueOf({ kind: 'routeMissing', status: 404 }, messages), (error) => error instanceof GatewayRequestError && error.message === ROUTE_MISSING_MESSAGE && error.failure.kind === 'routeMissing');
   assert.equal(failureMessage({ kind: 'refused', problem: { status: 502, retryable: true } }, messages), '稍后再试');
-  assert.equal(failureMessage({ kind: 'refused', problem: { status: 409, detail: 'd' } }, { unavailable: 'u' }), 'd');
+  const refused = (status, detail) => failureMessage({ kind: 'refused', problem: { status, detail } }, { unavailable: 'u' });
+  assert.equal(refused(409, '该名称已被使用'), '该名称已被使用');
+  assert.equal(refused(409, 'Conflict'), '数据刚刚有更新，请刷新后再试');
+  assert.equal(refused(401, 'Sign in'), '登录已失效，请重新登录');
+  assert.equal(refused(422, 'Invalid input'), 'u');
   assert.equal(failureMessage({ kind: 'unavailable', status: null }, messages), '服务暂时不可用');
 });
 

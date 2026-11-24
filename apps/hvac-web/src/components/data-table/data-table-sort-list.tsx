@@ -345,9 +345,9 @@ function DataTableSortItem({
             className="w-(--radix-popover-trigger-width) p-0"
           >
             <Command>
-              <CommandInput placeholder="Search fields..." />
+              <CommandInput placeholder="搜索字段…" />
               <CommandList>
-                <CommandEmpty>No fields found.</CommandEmpty>
+                <CommandEmpty>未找到匹配字段</CommandEmpty>
                 <CommandGroup>
                   {columns.map((column) => (
                     <CommandItem
@@ -392,6 +392,7 @@ function DataTableSortItem({
         </Select>
         <Button
           aria-controls={sortItemId}
+          aria-label="移除排序条件"
           variant="outline"
           size="icon"
           className="size-8 shrink-0 rounded"
@@ -401,6 +402,7 @@ function DataTableSortItem({
         </Button>
         <SortableItemHandle asChild>
           <Button
+            aria-label="拖动调整排序顺序"
             variant="outline"
             size="icon"
             className="size-8 shrink-0 rounded"

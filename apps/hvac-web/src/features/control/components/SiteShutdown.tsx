@@ -55,20 +55,26 @@ export function SiteShutdownDialog({ siteId, csrfToken, state, subject, onClose 
   readonly subject: ShutdownSubject | null;
   readonly onClose: () => void;
 }) {
+  const [busy, setBusy] = useState(false);
   return (
-    <Dialog open={subject !== null} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <DialogContent className="sm:max-w-[560px]">
-        {subject ? <ShutdownForm siteId={siteId} csrfToken={csrfToken} state={state} subject={subject} onClose={onClose} /> : null}
+    <Dialog open={subject !== null} onOpenChange={(open) => { if (!open && !busy) onClose(); }}>
+      <DialogContent
+        className="sm:max-w-[560px]"
+        onEscapeKeyDown={(event) => { if (busy) event.preventDefault(); }}
+        onInteractOutside={(event) => { if (busy) event.preventDefault(); }}
+      >
+        {subject ? <ShutdownForm siteId={siteId} csrfToken={csrfToken} state={state} subject={subject} onBusyChange={setBusy} onClose={onClose} /> : null}
       </DialogContent>
     </Dialog>
   );
 }
 
-function ShutdownForm({ siteId, csrfToken, state, subject, onClose }: {
+function ShutdownForm({ siteId, csrfToken, state, subject, onBusyChange, onClose }: {
   readonly siteId: string;
   readonly csrfToken: string;
   readonly state: SiteControlState;
   readonly subject: ShutdownSubject;
+  readonly onBusyChange: (busy: boolean) => void;
   readonly onClose: () => void;
 }) {
   const queryClient = useQueryClient();
@@ -97,6 +103,8 @@ function ShutdownForm({ siteId, csrfToken, state, subject, onClose }: {
       ...(subject.kind === 'unit' ? { unitCode: subject.unitCode } : {}),
       ...(emergency ? { confirmEmergencyDoRelease: true } : {}),
     }, idempotencyKey, csrfToken),
+    onMutate: () => onBusyChange(true),
+    onSettled: () => onBusyChange(false),
     onSuccess: (response) => {
       queryClient.setQueryData(controlStateKeys.site(siteId), response.siteControlState);
       void queryClient.invalidateQueries({ queryKey: commandKeys.site(siteId) });

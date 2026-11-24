@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { TriangleAlert } from 'lucide-react';
+import { useShellSnapshot } from '@/app/ShellRuntimeContext';
 import { PanelLink } from '@/blocks/panel';
 import { cn } from '@/lib/utils';
 import { summarizeDataGaps, type DataGapBannerContext } from './model';
@@ -18,6 +19,12 @@ export function DataGapBanner({
   context = 'general',
   className,
 }: DataGapBannerProps) {
+  const snapshot = useShellSnapshot();
+  const capabilities = snapshot.principal?.authorization.capabilities;
+  const canOpenIntegrations = Boolean(
+    capabilities?.includes('site.list') && (capabilities?.includes('device.read') || capabilities?.includes('asset.read')),
+  );
+  const canOpenDevices = Boolean(capabilities?.includes('site.read') && capabilities?.includes('device.list'));
   const query = useQuery(siteDataGapsQuery(siteId));
 
   if (query.isError) {
@@ -48,6 +55,9 @@ export function DataGapBanner({
     return null;
   }
 
+  const hasMeterImpact = (query.data ?? []).some((item) => item.excludesDeviceFromTotal || item.affectedFigures.length === 0);
+  const firstGapDeviceId = query.data?.[0]?.deviceId;
+
   return (
     <div
       role="status"
@@ -63,20 +73,21 @@ export function DataGapBanner({
         <span className="tabular-nums">{summary.message}</span>
       </div>
       <div className="flex shrink-0 items-center gap-3">
-        {context === 'consumption' ? (
+        {canOpenIntegrations && hasMeterImpact ? (
           <PanelLink
             to="/settings/integrations"
-            search={{ site: siteId, view: 'anomalies' }}
+            search={{ site: siteId, view: 'meters' }}
           >
-            清洗留痕
+            电表数据核对
+          </PanelLink>
+        ) : canOpenDevices ? (
+          <PanelLink
+            to="/operations/systems-devices"
+            search={{ site: siteId, inspect: firstGapDeviceId }}
+          >
+            查看设备状态
           </PanelLink>
         ) : null}
-        <PanelLink
-          to="/settings/integrations"
-          search={{ site: siteId, view: 'meters' }}
-        >
-          电表数据核对
-        </PanelLink>
       </div>
     </div>
   );

@@ -110,7 +110,7 @@ test('empty state configures weekly schedule (with cross-midnight slot), detects
   const slotSheet = page.getByRole('dialog', { name: '2026-10-12（周一）供冷时段' });
   await expect(slotSheet).toBeVisible();
   await expect(slotSheet.getByText(/仅作冷站值班交接参考，平台不会据此自动下发设备启停或设定值指令/)).toBeVisible();
-  await slotSheet.getByRole('button', { name: 'Close' }).click();
+  await slotSheet.getByRole('button', { name: '关闭' }).click();
   await expect(slotSheet).toBeHidden();
 
   // 3. Click the UNSCHEDULED_RUNNING deviation block -> L2 Drawer -> verify Trends link & create deduplicated EXTERNAL work order
@@ -132,7 +132,7 @@ test('empty state configures weekly schedule (with cross-midnight slot), detects
 
   // Button switches to deduplicated 查看关联工单!
   await expect(devSheet.getByRole('link', { name: /查看关联工单/ })).toBeVisible();
-  await devSheet.getByRole('button', { name: 'Close' }).click();
+  await devSheet.getByRole('button', { name: '关闭' }).click();
 
   // 4. Switch to L3 运行例外 -> submit PENDING_APPROVAL OVERTIME_COOLING for 2026-10-13 -> approve it -> verify deviation clears!
   await page.getByRole('tab', { name: /运行例外/ }).click();
@@ -158,6 +158,9 @@ test('empty state configures weekly schedule (with cross-midnight slot), detects
   await expect(excRow).toContainText('待审批');
   await expect(excRow).toContainText('值班工程师');
   await excRow.getByRole('button', { name: '审批通过' }).click();
+  const approveExcDialog = page.getByRole('dialog', { name: '确认审批通过该运行例外申请吗？' });
+  await approveExcDialog.getByRole('button', { name: '审批通过' }).click();
+  await expect(approveExcDialog).toBeHidden();
   await expect(excRow).toContainText('已生效');
 
   // Verify overlapping approved exception returns explicit 409 conflict message

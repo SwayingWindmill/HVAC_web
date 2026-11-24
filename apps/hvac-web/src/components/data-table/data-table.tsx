@@ -9,6 +9,7 @@ import {
 } from '@tanstack/react-table';
 
 import { Inbox } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { Empty, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
 import type { DataTableFeatures } from './data-table-features';
 import {
@@ -31,6 +32,8 @@ interface DataTableProps<TData extends RowData>
   readonly children?: React.ReactNode;
   readonly footer?: React.ReactNode;
   readonly empty?: React.ReactNode;
+  readonly filteredEmpty?: React.ReactNode;
+  readonly onResetFilters?: () => void;
   readonly tableClassName?: string;
   readonly tableAriaLabel?: string;
   readonly getHeaderRowProps?: (
@@ -50,6 +53,8 @@ export function DataTable<TData extends RowData>({
   children,
   footer,
   empty,
+  filteredEmpty,
+  onResetFilters,
   className,
   tableClassName,
   tableAriaLabel,
@@ -60,6 +65,8 @@ export function DataTable<TData extends RowData>({
   ...props
 }: DataTableProps<TData>) {
   const rows = table.getRowModel().rows;
+  const hasFilters = table.store.state.columnFilters.length > 0;
+  const resetFilters = onResetFilters ?? (hasFilters ? () => table.resetColumnFilters() : undefined);
 
   return (
     <div
@@ -127,7 +134,15 @@ export function DataTable<TData extends RowData>({
             ) : (
               <TableRow>
                 <TableCell colSpan={table.getVisibleLeafColumns().length} className="p-0">
-                  {typeof empty === 'string' || empty === undefined ? <TableEmpty>{empty ?? '暂无数据'}</TableEmpty> : empty}
+                  {hasFilters ? (
+                    filteredEmpty ?? (
+                      <TableEmpty action={resetFilters ? <Button type="button" variant="outline" size="sm" onClick={resetFilters}>清除筛选</Button> : undefined}>
+                        没有符合筛选条件的记录
+                      </TableEmpty>
+                    )
+                  ) : typeof empty === 'string' || empty === undefined ? (
+                    <TableEmpty>{empty ?? '暂无数据'}</TableEmpty>
+                  ) : empty}
                 </TableCell>
               </TableRow>
             )}
@@ -140,13 +155,14 @@ export function DataTable<TData extends RowData>({
 }
 
 /** An empty table says so plainly, with the same mark everywhere. */
-export function TableEmpty({ children }: { readonly children: React.ReactNode }) {
+export function TableEmpty({ children, action }: { readonly children: React.ReactNode; readonly action?: React.ReactNode }) {
   return (
     <Empty className="py-12">
       <EmptyHeader>
         <EmptyMedia variant="icon"><Inbox /></EmptyMedia>
         <EmptyTitle className="font-normal text-muted-foreground">{children}</EmptyTitle>
       </EmptyHeader>
+      {action ? <div className="mt-2">{action}</div> : null}
     </Empty>
   );
 }

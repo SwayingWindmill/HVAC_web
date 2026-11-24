@@ -30,14 +30,8 @@ export function BarList({
     <div data-slot="bar-list" className={cn('flex flex-col gap-2', className)} {...props}>
       {items.map((item) => {
         const width = maximum > 0 ? (item.value / maximum) * 100 : 0;
-        return (
-          <button
-            key={item.key ?? item.name}
-            type="button"
-            disabled={!onItemClick}
-            onClick={onItemClick ? () => onItemClick(item) : undefined}
-            className="group flex w-full items-center gap-3 text-left text-sm disabled:cursor-default"
-          >
+        const inner = (
+          <>
             <span className="relative flex h-9 min-w-0 flex-1 items-center overflow-hidden rounded-md">
               <span
                 aria-hidden="true"
@@ -53,6 +47,23 @@ export function BarList({
               <span className="block font-medium tabular-nums">{valueFormatter(item.value)}</span>
               {item.meta ? <span className="block text-xs text-muted-foreground">{item.meta}</span> : null}
             </span>
+          </>
+        );
+        if (!onItemClick) {
+          return (
+            <div key={item.key ?? item.name} className="flex w-full items-center gap-3 text-left text-sm">
+              {inner}
+            </div>
+          );
+        }
+        return (
+          <button
+            key={item.key ?? item.name}
+            type="button"
+            onClick={() => onItemClick(item)}
+            className="group flex w-full items-center gap-3 text-left text-sm"
+          >
+            {inner}
           </button>
         );
       })}

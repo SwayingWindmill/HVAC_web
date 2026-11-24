@@ -7,25 +7,12 @@ import { DataTable, DataTablePagination, type DataTableFeatures } from '@/compon
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
+import { Spinner } from '@/components/ui/spinner';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { useDataTable } from '@/hooks/use-data-table';
@@ -672,7 +659,19 @@ export function ConcentratorEidSection({
           if (!submitting) setConfirmOpen(open);
         }}
       >
-        <DialogContent className="sm:max-w-xl">
+        <DialogContent
+          className="sm:max-w-xl"
+          showCloseButton={!submitting}
+          onEscapeKeyDown={(event) => {
+            if (submitting) event.preventDefault();
+          }}
+          onPointerDownOutside={(event) => {
+            if (submitting) event.preventDefault();
+          }}
+          onInteractOutside={(event) => {
+            if (submitting) event.preventDefault();
+          }}
+        >
           <DialogHeader>
             <DialogTitle>确认写入 EID 槽位映射并持久化到 Flash？</DialogTitle>
             <DialogDescription>
@@ -759,10 +758,8 @@ export function ConcentratorEidSection({
             >
               取消
             </Button>
-            <Button
-              disabled={!canCommit || reason.trim().length === 0}
-              onClick={() => void handleConfirmCommit()}
-            >
+            <Button disabled={!canCommit || submitting || reason.trim().length === 0} onClick={() => void handleConfirmCommit()}>
+              {submitting ? <Spinner data-icon="inline-start" /> : null}
               {submitting ? '正在提交…' : stageIfOffline ? '确认写入或离线暂存' : '确认写入 EID 到 Flash'}
             </Button>
           </DialogFooter>

@@ -8,6 +8,7 @@
   <view wx:elif="{{noSite}}" class="state">这个账号还看不到任何站点，请管理员在网页「系统管理」里分配站点。</view>
   <view wx:elif="{{failed}}" class="state">站点列表暂时读不到，下拉刷新再试。</view>
   <block wx:elif="{{view}}">
+    <view wx:if="{{refreshError}}" class="stale-banner" role="status">{{refreshError}}</view>
     <view class="card hero" aria-label="本月节省">
       <view class="hero-label">
         <image class="leaf" src="/assets/leaf.svg" mode="aspectFit" aria-hidden="true" />
@@ -84,7 +85,7 @@
       </view>
     </view>
 
-    <view wx:else class="card card-pad caption">这个站点还没有登记冷站设备，在网页「系统管理 → 资产与点位」登记后，这里显示冷站在不在运行。</view>
+    <view wx:else class="card card-pad caption">这个站点还没有登记冷站设备，在网页「系统管理 → 设备与点位登记」登记后，这里显示冷站在不在运行。</view>
 
     <view wx:if="{{charts}}" class="card card-pad chart" aria-label="今天每小时能效">
       <view class="energy-head">

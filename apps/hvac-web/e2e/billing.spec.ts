@@ -106,7 +106,7 @@ test('budget overview, cross-month whole-building allocation, chiller-plant vari
 
   // 2. Create WHOLE_BUILDING draft utility bill with cross-month reading dates, negative power-factor reward, and optional ticket details
   await page.getByRole('button', { name: '录入结算电费单' }).first().click();
-  const createDialog = page.getByRole('dialog', { name: '如何录入供电局结算电费单？' });
+  const createDialog = page.getByRole('dialog', { name: '录入供电局结算电费单' });
   await expect(createDialog).toBeVisible();
 
   await createDialog.getByRole('combobox', { name: '供电局表计范围' }).click();
@@ -152,7 +152,7 @@ test('budget overview, cross-month whole-building allocation, chiller-plant vari
 
   // 4. Edit draft to apply a 35% finance override — verify optional fields are preserved
   await sheet.getByRole('button', { name: '编辑草稿' }).click();
-  const editDialog = page.getByRole('dialog', { name: '如何修改结算电费单草稿？' });
+  const editDialog = page.getByRole('dialog', { name: '修改结算电费单草稿' });
   await expect(editDialog).toBeVisible();
   await editDialog.getByLabel('财务指定冷站分摊比例（%，选填）').fill('35');
   await editDialog.getByRole('button', { name: '保存草稿修改' }).click();
@@ -189,7 +189,7 @@ test('budget overview, cross-month whole-building allocation, chiller-plant vari
   expect(hasOverflowBills).toBe(false);
 
   await page.getByRole('button', { name: '录入结算电费单' }).click();
-  const plantDialog = page.getByRole('dialog', { name: '如何录入供电局结算电费单？' });
+  const plantDialog = page.getByRole('dialog', { name: '录入供电局结算电费单' });
   await plantDialog.getByRole('textbox', { name: '抄表起始日期' }).fill('2026-10-01');
   await plantDialog.getByRole('textbox', { name: '抄表截止日期（含当日）' }).fill('2026-10-30');
   // 30 days * 4,000 kWh = 120,000 kWh, 30 * 3,200 = 96,000 CNY estimated energy charge
@@ -436,7 +436,7 @@ test('billing config tab manages site calendar holidays, enforces meter ratio ov
   await ratioRegion.getByRole('button', { name: '新增倍率版本' }).click();
   const createRatioDialog = page.getByRole('dialog');
   await expect(createRatioDialog).toBeVisible();
-  await createRatioDialog.getByRole('combobox', { name: '测点 ID' }).click();
+  await createRatioDialog.getByRole('combobox', { name: '点位 ID' }).click();
   await page.getByRole('option', { name: /METER-HVAC-TOTAL.*累计电量/ }).click();
   await createRatioDialog.getByLabel('CT 变比').fill('60');
   await fillTemporalField(
@@ -466,7 +466,7 @@ test('billing config tab manages site calendar holidays, enforces meter ratio ov
 
   await ratioRegion.getByRole('button', { name: '新增倍率版本' }).click();
   await expect(createRatioDialog).toBeVisible();
-  await createRatioDialog.getByRole('combobox', { name: '测点 ID' }).click();
+  await createRatioDialog.getByRole('combobox', { name: '点位 ID' }).click();
   await page.getByRole('option', { name: /METER-HVAC-TOTAL.*累计电量/ }).click();
   await createRatioDialog.getByLabel('CT 变比').fill('60');
   await fillTemporalField(

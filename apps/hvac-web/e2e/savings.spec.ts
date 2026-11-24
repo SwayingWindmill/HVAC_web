@@ -28,6 +28,8 @@ test('a measure is registered on the Site clock and implemented, and a baseline 
 
   await sheet.getByRole('button', { name: '确认实施' }).click();
   await page.getByLabel('实施时间').fill('2026-10-12T15:17');
+  await expect(page.getByRole('button', { name: '确认实施并拟合基线' })).toBeDisabled();
+  await page.getByRole('checkbox', { name: '我确认措施实际生效时间无误，提交后将固定此前 14 天的对比基线' }).check();
   await page.getByRole('button', { name: '确认实施并拟合基线' }).click();
 
   await expect(sheet).toContainText('对比基线不可靠，暂不统计');
@@ -54,6 +56,7 @@ test('a measure on the plant meter reports alone, and the owner says so', async 
     await page.getByRole('button', { name: '登记', exact: true }).click();
     const sheet = page.getByRole('dialog');
     await sheet.getByRole('button', { name: '确认实施' }).click();
+    await page.getByRole('checkbox', { name: '我确认措施实际生效时间无误，提交后将固定此前 14 天的对比基线' }).check();
     await page.getByRole('button', { name: '确认实施并拟合基线' }).click();
     if (name === '冷却塔风机变频') {
       await expect(page.getByRole('dialog', { name: '确认实施' })).toContainText('也不能和单台设备的措施同时统计');
@@ -92,8 +95,9 @@ test("measures on two machines' sub-meters report side by side", async ({ page, 
     await page.getByRole('option', { name: `${machine} 电表（IPMVP 选项 B）` }).click();
     await page.getByRole('button', { name: '登记', exact: true }).click();
     const sheet = page.getByRole('dialog');
-    await expect(sheet).toContainText(`IPMVP 选项 B · ${machine} 电表`);
+    await expect(sheet).toContainText(`计量电表${machine} 电表`);
     await sheet.getByRole('button', { name: '确认实施' }).click();
+    await page.getByRole('checkbox', { name: '我确认措施实际生效时间无误，提交后将固定此前 14 天的对比基线' }).check();
     await page.getByRole('button', { name: '确认实施并拟合基线' }).click();
     await expect(sheet).toContainText('对比基线不可靠');
     await page.keyboard.press('Escape');
@@ -164,7 +168,8 @@ test("a measure verified on a machine's sub-meter fits that machine against plan
 
   const sheet = page.getByRole('dialog');
   await expect(sheet).toContainText('计量电表CHWP-01 电表');
-  await expect(sheet).toContainText('IPMVP 选项 B · CHWP-01 电表');
+  await expect(sheet).toContainText('对比基线');
+  await expect(sheet).toContainText('CHWP-01 电表');
   await expect(sheet).toContainText('设备用电 = 45.0 + 0.000 × 冷站供冷量');
   await expect(sheet).toContainText('累计节电1,646 kWh');
   await expect(sheet).toContainText('节电率27.1%');

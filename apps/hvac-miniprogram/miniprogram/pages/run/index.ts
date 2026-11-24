@@ -42,6 +42,7 @@ Page({
     loading: true,
     noSite: false,
     failed: false,
+    refreshError: '',
     realtime: null as ReturnType<typeof presentRealtime> | null,
     devices: null as ReturnType<typeof presentDevices> | null,
     deviceCount: 0,
@@ -72,7 +73,7 @@ Page({
       const site = await currentSite(rereadEquipment);
       if (site === null) {
         plant = null;
-        this.setData({ loading: false, noSite: true, siteName: '', updatedAt: '', realtime: null, devices: null, deviceCount: 0, chart: null, chartNote: '', autoLeaseBanner: null });
+        this.setData({ loading: false, noSite: true, failed: false, refreshError: '', siteName: '', updatedAt: '', realtime: null, devices: null, deviceCount: 0, chart: null, chartNote: '', autoLeaseBanner: null });
         return;
       }
       const now = new Date();
@@ -82,8 +83,12 @@ Page({
         fetchSiteAutoControlLease(gateway, site.id),
       ]);
       if (plantRead.status === 'rejected') {
+        if (this.data.realtime !== null) {
+          this.setData({ loading: false, refreshError: '上次刷新失败，当前显示稍早数据，下拉可重试' });
+          return;
+        }
         plant = null;
-        this.setData({ siteName: site.displayName, loading: false, noSite: false, failed: true, autoLeaseBanner: null });
+        this.setData({ siteName: site.displayName, loading: false, noSite: false, failed: true, refreshError: '', autoLeaseBanner: null });
         return;
       }
       plant = plantRead.value;
@@ -98,6 +103,7 @@ Page({
         loading: false,
         noSite: false,
         failed: false,
+        refreshError: '',
         realtime: presentRealtime(plant),
         devices,
         // The 设备 tab counts what its list shows: 全部, without the gateway's modules.
@@ -107,8 +113,12 @@ Page({
         autoLeaseBanner: presentAutoControlLease(leaseState, now, site.timezone),
       });
     } catch {
+      if (this.data.realtime !== null) {
+        this.setData({ loading: false, refreshError: '上次刷新失败，当前显示稍早数据，下拉可重试' });
+        return;
+      }
       // The Site list itself could not be read; signed-out failures already went to the sign-in page.
-      this.setData({ loading: false, failed: true });
+      this.setData({ loading: false, failed: true, refreshError: '' });
     }
   },
 

@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, type FC } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, type FC } from 'react';
 import {
   AuiIf,
   ComposerPrimitive,
@@ -8,7 +8,7 @@ import {
   useAui,
   useAuiState,
 } from '@assistant-ui/react';
-import { ArrowDown, ArrowUp, Square } from 'lucide-react';
+import { ArrowDown, ArrowUp, Check, Copy, RotateCcw, Square } from 'lucide-react';
 import { MarkdownText } from '@/components/assistant-ui/elements/markdown-text';
 import { TooltipIconButton } from '@/components/assistant-ui/elements/tooltip-icon-button';
 import { Button } from '@/components/ui/button';
@@ -25,7 +25,9 @@ interface ThreadSurface {
   readonly siteId: string;
   readonly siteName: string;
   readonly answering: boolean;
+  readonly answeringKind?: 'TEXT' | 'SINGLE_SELECT' | null;
   readonly onAnswer: (value: string) => void;
+  readonly onRetry?: (prompt: string) => void;
 }
 
 const ThreadSurfaceContext = createContext<ThreadSurface | null>(null);
@@ -101,11 +103,43 @@ const UserMessage: FC = () => (
 );
 
 const AssistantMessage: FC = () => {
-  const { siteId, answering, onAnswer } = useThreadSurface();
+  const { siteId, answering, onAnswer, onRetry } = useThreadSurface();
+  const [copied, setCopied] = useState(false);
   const failed = useAuiState((state) => state.message.status?.type === 'incomplete' && state.message.status.reason === 'error');
   const cancelled = useAuiState((state) => state.message.status?.type === 'incomplete' && state.message.status.reason === 'cancelled');
+  const isRunning = useAuiState((state) => state.thread.isRunning);
   const isLast = useAuiState((state) => state.message.isLast);
   const answerText = useAuiState((state) => state.message.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('\n'));
+  const retryPrompt = useAuiState((state) => {
+    const messages = state.thread.messages;
+    const index = state.message.index;
+    for (let i = index - 1; i >= 0; i -= 1) {
+      const candidate = messages[i];
+      if (candidate?.role === 'user') {
+        const text = candidate.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('\n').trim();
+        if (text) return text;
+      }
+    }
+    return null;
+  });
+
+  const copyTimerRef = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current);
+  }, []);
+
+  const handleCopy = () => {
+    if (!answerText.trim() || !navigator.clipboard?.writeText) return;
+    void navigator.clipboard.writeText(answerText).then(() => {
+      if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current);
+      setCopied(true);
+      copyTimerRef.current = window.setTimeout(() => {
+        copyTimerRef.current = null;
+        setCopied(false);
+      }, 1800);
+    }, () => {});
+  };
 
   return (
     <MessagePrimitive.Root className="flex flex-col gap-3 text-sm leading-relaxed" data-role="assistant">
@@ -129,7 +163,25 @@ const AssistantMessage: FC = () => {
           }
         }}
       </MessagePrimitive.GroupedParts>
-      {failed ? <p className="m-0 text-xs text-destructive-text">这次没有答完，可以换个问法再问一次。</p> : null}
+      {!isRunning && answerText.trim().length > 0 ? (
+        <div className="flex items-center gap-1">
+          <Button type="button" variant="ghost" size="sm" onClick={handleCopy} className="h-6 gap-1 px-1.5 text-xs text-muted-foreground">
+            {copied ? <Check className="size-3 text-success" aria-hidden="true" /> : <Copy className="size-3" aria-hidden="true" />}
+            {copied ? '已复制' : '复制'}
+          </Button>
+        </div>
+      ) : null}
+      {failed ? (
+        <div className="flex items-center gap-2 text-xs text-destructive-text">
+          <span>这次没有答完，可以重新提问或换个问法。</span>
+          {retryPrompt && onRetry && !isRunning ? (
+            <Button type="button" variant="outline" size="sm" onClick={() => onRetry(retryPrompt)} className="h-6 gap-1 px-2 text-xs">
+              <RotateCcw className="size-3" aria-hidden="true" />
+              重试
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
       {cancelled ? <p className="m-0 text-xs text-muted-foreground">已停止。</p> : null}
       {isLast ? <FollowUps /> : null}
     </MessagePrimitive.Root>
@@ -159,7 +211,7 @@ const FollowUps: FC = () => (
 );
 
 const Composer: FC = () => {
-  const { siteName, answering } = useThreadSurface();
+  const { siteName, answering, answeringKind } = useThreadSurface();
   const aui = useAui();
   const draft = useAssistantPanel((state) => state.draft);
   const clearDraft = useAssistantPanel((state) => state.clearDraft);
@@ -175,7 +227,11 @@ const Composer: FC = () => {
       <ComposerPrimitive.Input
         rows={1}
         autoFocus
-        placeholder={answering ? '回答助手的问题' : '问问这个站点的用电、负荷或设备'}
+        placeholder={
+          answering
+            ? (answeringKind === 'SINGLE_SELECT' ? '请点击上方选项回答，或输入新问题' : '回答助手的问题')
+            : '问问这个站点的用电、负荷或设备'
+        }
         aria-label="向助手提问"
         className="max-h-40 min-h-6 w-full resize-none bg-transparent text-sm leading-6 outline-none placeholder:text-subtle-foreground"
       />

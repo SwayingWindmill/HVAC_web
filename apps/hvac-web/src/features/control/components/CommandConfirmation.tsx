@@ -147,22 +147,28 @@ export function ConfirmCommand({ pending, siteId, csrfToken, onClose }: {
   readonly csrfToken: string;
   readonly onClose: () => void;
 }) {
+  const submit = useSubmitCommand(siteId, csrfToken);
   return (
-    <AlertDialog open={Boolean(pending)} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <AlertDialogContent>
-        {pending ? <ConfirmBody key={pending.pointId + JSON.stringify(pending.parameters)} pending={pending} siteId={siteId} csrfToken={csrfToken} onClose={onClose} /> : null}
+    <AlertDialog open={Boolean(pending)} onOpenChange={(open) => { if (!open && !submit.isPending) onClose(); }}>
+      <AlertDialogContent onEscapeKeyDown={(event) => { if (submit.isPending) event.preventDefault(); }}>
+        {pending ? (
+          <ConfirmBody
+            key={pending.pointId + JSON.stringify(pending.parameters)}
+            pending={pending}
+            submit={submit}
+            onClose={onClose}
+          />
+        ) : null}
       </AlertDialogContent>
     </AlertDialog>
   );
 }
 
-function ConfirmBody({ pending, siteId, csrfToken, onClose }: {
+function ConfirmBody({ pending, submit, onClose }: {
   readonly pending: PendingCommand;
-  readonly siteId: string;
-  readonly csrfToken: string;
+  readonly submit: ReturnType<typeof useSubmitCommand>;
   readonly onClose: () => void;
 }) {
-  const submit = useSubmitCommand(siteId, csrfToken);
   const codeId = useId();
   const ackId = useId();
   const [askCode, setAskCode] = useState(pending.requiresCode === true);

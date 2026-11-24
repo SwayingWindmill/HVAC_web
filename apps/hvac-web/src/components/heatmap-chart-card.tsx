@@ -74,11 +74,12 @@ function HeatmapChartCard({
   }, [rows])
 
   const hoveredRow = active ? rows[active.row] : undefined
+  const hoveredValue = active && hoveredRow ? hoveredRow.values[active.column] : undefined
   const hovered =
-    active && hoveredRow && hoveredRow.values[active.column] != null
+    active && hoveredRow
       ? {
-          value: hoveredRow.values[active.column] ?? 0,
-          label: `${hoveredRow.label} · ${columns[active.column] ?? ""}`,
+          value: hoveredValue ?? null,
+          label: `${hoveredRow.label} · ${columns[active.column] ?? ""}${hoveredValue == null ? " · 无读数" : ""}`,
         }
       : null
 
@@ -87,10 +88,10 @@ function HeatmapChartCard({
       <div className="flex h-12 items-center gap-3 border-b border-divider px-4">
         <h2 className="text-sm font-semibold whitespace-nowrap">{title}</h2>
         <MetricValue
-          value={hovered ? hovered.value : (value ?? total ?? "—")}
+          value={hovered ? (hovered.value ?? "—") : (value ?? total ?? "—")}
           format={format}
           currency={currency}
-          suffix={unit && (hovered || value !== undefined || total !== null) ? <span className="text-subtle-foreground ml-1 text-xs font-medium">{unit}</span> : undefined}
+          suffix={unit && (hovered ? hovered.value !== null : value !== undefined || total !== null) ? <span className="text-subtle-foreground ml-1 text-xs font-medium">{unit}</span> : undefined}
           className="text-sm font-semibold tabular-nums"
         />
         {delta !== undefined && !hovered ? <DeltaBadge delta={delta} invert={invertDelta} /> : null}

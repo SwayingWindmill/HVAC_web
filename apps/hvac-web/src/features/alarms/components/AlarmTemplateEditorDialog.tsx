@@ -7,6 +7,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Spinner } from '@/components/ui/spinner';
 import {
   TEMPLATE_EXECUTION_LABELS,
   TEMPLATE_SEVERITY_LABELS,
@@ -105,12 +106,14 @@ export function AlarmTemplateEditorDialog({
               operator,
               value: raiseNum,
             },
-        clear: existingSpec?.clear ?? {
-          kind: 'COMPARE',
-          pointCode: pointCode.trim(),
-          operator: operator === 'LT' || operator === 'LTE' ? 'GT' : 'LTE',
-          value: clearNum,
-        },
+        clear: isSlope && existingSpec?.clear.kind === 'SLOPE'
+          ? { ...existingSpec.clear, pointCode: pointCode.trim() }
+          : {
+              kind: 'COMPARE',
+              pointCode: pointCode.trim(),
+              operator: operator === 'LT' || operator === 'LTE' ? 'GT' : 'LTE',
+              value: clearNum,
+            },
       };
 
       if (mode === 'create') {
@@ -156,8 +159,16 @@ export function AlarmTemplateEditorDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={(next) => { if (!next) onClose(); }}>
-      <DialogContent className="sm:max-w-[580px]">
+    <Dialog open={open} onOpenChange={(next) => { if (!next && !mutation.isPending) onClose(); }}>
+      <DialogContent
+        className="sm:max-w-[580px]"
+        onEscapeKeyDown={(event) => {
+          if (mutation.isPending) event.preventDefault();
+        }}
+        onInteractOutside={(event) => {
+          if (mutation.isPending) event.preventDefault();
+        }}
+      >
         <DialogHeader>
           <DialogTitle>{mode === 'create' ? '新建跨站基准告警模板' : `发布模板新版本 · ${template?.displayName ?? ''}`}</DialogTitle>
           <DialogDescription>
@@ -291,8 +302,9 @@ export function AlarmTemplateEditorDialog({
         </div>
 
         <DialogFooter>
-          <Button type="button" variant="outline" onClick={onClose}>取消</Button>
+          <Button type="button" variant="outline" disabled={mutation.isPending} onClick={onClose}>取消</Button>
           <Button type="button" disabled={mutation.isPending} onClick={() => mutation.mutate()}>
+            {mutation.isPending ? <Spinner data-icon="inline-start" /> : null}
             {mutation.isPending ? '正在发布…' : mode === 'create' ? '创建并发布 v1' : '发布新基准版本'}
           </Button>
         </DialogFooter>

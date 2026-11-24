@@ -11,7 +11,7 @@ import {
   METER_BALANCE_LABEL,
   type MeterBalanceStatus,
 } from '../layered-efficiency';
-import { copUnavailableText, type EnergySummary } from '../model';
+import type { EnergySummary } from '../model';
 
 interface BalancePresentation {
   readonly badgeText: string;
@@ -137,15 +137,6 @@ export function LayeredEfficiencyStrip({
 
   const tiles = [
     {
-      key: 'plantCop',
-      label: '冷站综合 COP',
-      value: efficiency.plantCop === null ? null : formatDecimal(efficiency.plantCop, 2),
-      unit: 'COP',
-      note: efficiency.plantCop === null
-        ? copUnavailableText(summary.copUnavailableReason, summary.missingMeters)
-        : '供冷量 ÷ 整站空调用电',
-    },
-    {
       key: 'chillerCop',
       label: '冷机 COP',
       value: efficiency.chillerCop === null ? null : formatDecimal(efficiency.chillerCop, 2),
@@ -190,14 +181,14 @@ export function LayeredEfficiencyStrip({
           <span className="flex items-center gap-1.5">
             系统能效分层与计量校核
             <InfoTip>
-              分层查看冷站整体与冷机、水泵、冷却塔的运行能效，并核对冷站主计量与各设备计量之和的偏差（超过 ±5% 时提示核对）
+              分层查看冷机、水泵、冷却塔的运行能效，并核对冷站主计量与各设备计量之和的偏差（超过 ±5% 时提示核对）
             </InfoTip>
           </span>
         )}
         badge={<Badge variant={balanceMeta.variant}>{balanceMeta.badgeText}</Badge>}
         caption={METER_BALANCE_LABEL[balance.status]}
       />
-      <div className="grid grid-cols-5 divide-x divide-divider border-b border-divider">
+      <div className="grid grid-cols-2 divide-x divide-y divide-divider border-b border-divider lg:grid-cols-4 lg:divide-y-0">
         {tiles.map((tile) => (
           <EfficiencyTile
             key={tile.key}

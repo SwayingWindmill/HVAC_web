@@ -20,6 +20,7 @@ Page({
     loading: true,
     noSite: false,
     failed: false,
+    refreshError: '',
     view: null as ReturnType<typeof presentOverview> | null,
     plant: { failed: false, now: null } as { failed: boolean; now: ReturnType<typeof presentPlantNow> },
     charts: null as OverviewCharts | null,
@@ -83,15 +84,20 @@ Page({
     try {
       const site = await currentSite(rereadSites);
       if (site === null) {
-        this.setData({ loading: false, noSite: true, siteName: '', updatedAt: '', view: null, plant: { failed: false, now: null }, charts: null });
+        this.setData({ loading: false, noSite: true, failed: false, refreshError: '', siteName: '', updatedAt: '', view: null, plant: { failed: false, now: null }, charts: null });
         return;
       }
       const { inputs, plant, waiting, charts } = await loadOverview({ gateway, loadPlant }, site, new Date());
       if (waiting !== null) showAttention(this, waiting);
-      this.setData({ siteName: site.displayName, updatedAt: clock(new Date()), loading: false, noSite: false, failed: false, view: presentOverview(inputs), plant, charts });
+      this.setData({ siteName: site.displayName, updatedAt: clock(new Date()), loading: false, noSite: false, failed: false, refreshError: '', view: presentOverview(inputs), plant, charts });
     } catch {
+      // Keep the previously loaded view intact during background polling failures so operators don't lose context.
+      if (this.data.view !== null) {
+        this.setData({ loading: false, refreshError: '上次刷新失败，当前显示稍早数据，下拉可重试' });
+        return;
+      }
       // The Site list itself could not be read; signed-out failures already went to the sign-in page.
-      this.setData({ loading: false, failed: true });
+      this.setData({ loading: false, failed: true, refreshError: '' });
     }
   },
 });

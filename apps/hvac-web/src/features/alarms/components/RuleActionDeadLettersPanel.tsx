@@ -1,10 +1,11 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
 import { RefreshCw, RotateCcw } from 'lucide-react';
 import { toast } from 'sonner';
 import { DataTableBlock } from '@/blocks/data-table';
 import { PanelCount } from '@/blocks/panel';
+import { ConfirmDiscardDialog } from '@/components/confirm-discard-dialog';
 import { DataTable, type DataTableFeatures } from '@/components/data-table';
 import { Alert, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -52,6 +53,7 @@ export function RuleActionDeadLettersPanel({
 }) {
   const queryClient = useQueryClient();
   const deadLetters = useQuery(alarmRuleDeadLettersQuery(siteId));
+  const [pendingReplay, setPendingReplay] = useState<AlarmRuleDeadLetter | null>(null);
   const replay = useMutation({
     mutationFn: (outboxId: string) => replayAlarmRuleDeadLetter(siteId, outboxId, csrfToken),
     onSuccess: (result) => {
@@ -65,6 +67,7 @@ export function RuleActionDeadLettersPanel({
     onError: (error) => {
       toast.error(error instanceof AlarmRequestError ? error.message : '重投规则动作失败，请稍后重试');
     },
+    onSettled: () => setPendingReplay(null),
   });
 
   const activeOutboxId = replay.isPending ? (replay.variables ?? null) : null;
@@ -116,7 +119,13 @@ export function RuleActionDeadLettersPanel({
             size="sm"
             variant="outline"
             disabled={!canManage || activeOutboxId !== null}
-            onClick={() => replay.mutate(row.original.outboxId)}
+            onClick={() => {
+              if (row.original.actionKind === 'PROTECTION_COMMAND') {
+                setPendingReplay(row.original);
+                return;
+              }
+              replay.mutate(row.original.outboxId);
+            }}
           >
             {isRowPending ? (
               <RefreshCw data-icon="inline-start" className="motion-safe:animate-spin" />
@@ -177,6 +186,21 @@ export function RuleActionDeadLettersPanel({
           })}
         />
       )}
+      <ConfirmDiscardDialog
+        open={pendingReplay !== null}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setPendingReplay(null);
+        }}
+        busy={replay.isPending}
+        title="确认重新投递设备保护控制指令？"
+        description="该动作将重新提交设备保护控制指令，若现场控制条件允许可能立即触发设备停机或参数调整，请先确认现场设备状态安全。"
+        keepLabel="取消"
+        discardLabel="确认重投"
+        busyLabel="重投中…"
+        onConfirmDiscard={() => {
+          if (pendingReplay) replay.mutate(pendingReplay.outboxId);
+        }}
+      />
     </DataTableBlock>
   );
 }

@@ -76,7 +76,9 @@ function valuesOf(device: PlantUnit | PlantDevice | null, kind: TwinKind): Recor
   if (!device) return {};
   return Object.fromEntries(READING_KEYS[kind].flatMap((sourceKey) => {
     const reading = device.reading(sourceKey);
-    return reading && reading.state === 'PRESENT' ? [[sourceKey, { label: reading.label, display: reading.display, unit: reading.unit }]] : [];
+    return reading && reading.state === 'PRESENT' && (reading.current || reading.lowConfidence)
+      ? [[sourceKey, { label: reading.label, display: reading.display, unit: reading.unit }]]
+      : [];
   }));
 }
 

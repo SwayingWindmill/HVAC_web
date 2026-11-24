@@ -7,7 +7,6 @@ import { formatNumber, type NumberFormat } from "@/lib/format"
 import {
   Tooltip,
   TooltipContent,
-  TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 
@@ -24,6 +23,8 @@ export interface MetricValueProps extends Omit<React.ComponentProps<"span">, "ch
   compactFrom?: number
   /** Text after the number, e.g. a unit. */
   suffix?: React.ReactNode
+  /** Set false when rendered inside an outer interactive button/tab to avoid nested focus stops. */
+  focusableTooltip?: boolean
 }
 
 /** A formatted number. Large values are abbreviated and reveal the full value on hover. */
@@ -34,6 +35,7 @@ function MetricValue({
   maximumFractionDigits,
   compactFrom = DEFAULT_COMPACT_FROM,
   suffix,
+  focusableTooltip = true,
   className,
   ...props
 }: MetricValueProps) {
@@ -60,25 +62,24 @@ function MetricValue({
   }
 
   return (
-    <TooltipProvider>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <span
-            data-slot="metric-value"
-            data-compact=""
-            className={cn(classes, "cursor-default")}
-            {...props}
-          >
-            {formatNumber(value, { format, currency, compact: true })}
-            {suffix}
-          </span>
-        </TooltipTrigger>
-        <TooltipContent className="tabular-nums">
-          {full}
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          data-slot="metric-value"
+          data-compact=""
+          tabIndex={focusableTooltip ? 0 : undefined}
+          className={cn(classes, focusableTooltip && "cursor-default rounded-xs outline-none focus-visible:ring-3 focus-visible:ring-ring-soft")}
+          {...props}
+        >
+          {formatNumber(value, { format, currency, compact: true })}
           {suffix}
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent className="tabular-nums">
+        {full}
+        {suffix}
+      </TooltipContent>
+    </Tooltip>
   )
 }
 

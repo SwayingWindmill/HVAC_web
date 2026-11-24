@@ -2,9 +2,11 @@ import { useState } from 'react';
 import { ChevronRight, UserCheck } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, Link } from '@tanstack/react-router';
+import { ConfirmDiscardDialog } from '@/components/confirm-discard-dialog';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Spinner } from '@/components/ui/spinner';
 import { Textarea } from '@/components/ui/textarea';
 import {
   assignWorkOrder,
@@ -30,16 +32,16 @@ type Transition = 'start' | 'block' | 'resume' | 'complete' | 'cancel' | 'reopen
 const ACTIONS: Readonly<Record<string, readonly { transition: Transition; label: string; note?: string; primary?: boolean }[]>> = {
   OPEN: [
     { transition: 'start', label: '开始处理', primary: true },
-    { transition: 'cancel', label: '取消工单', note: '取消原因' },
+    { transition: 'cancel', label: '作废工单', note: '作废原因' },
   ],
   IN_PROGRESS: [
     { transition: 'complete', label: '完成', note: '处理结果，例如：已更换冷冻水泵变频器并验证频率可调', primary: true },
     { transition: 'block', label: '标记受阻', note: '受阻原因，例如：等待备件' },
-    { transition: 'cancel', label: '取消工单', note: '取消原因' },
+    { transition: 'cancel', label: '作废工单', note: '作废原因' },
   ],
   BLOCKED: [
     { transition: 'resume', label: '恢复处理', primary: true },
-    { transition: 'cancel', label: '取消工单', note: '取消原因' },
+    { transition: 'cancel', label: '作废工单', note: '作废原因' },
   ],
   COMPLETED: [{ transition: 'reopen', label: '重新打开', note: '重新打开的原因' }],
   CANCELLED: [{ transition: 'reopen', label: '重新打开', note: '重新打开的原因' }],
@@ -76,8 +78,16 @@ export function WorkOrderInspector({ workOrderId, onClose }: {
 }) {
   const { site, principal } = siteRoute.useRouteContext();
   const queryClient = useQueryClient();
+  const [prevWorkOrderId, setPrevWorkOrderId] = useState(workOrderId);
   const [pending, setPending] = useState<Transition | null>(null);
   const [note, setNote] = useState('');
+  const [confirmCancel, setConfirmCancel] = useState(false);
+  if (workOrderId !== prevWorkOrderId) {
+    setPrevWorkOrderId(workOrderId);
+    setPending(null);
+    setNote('');
+    setConfirmCancel(false);
+  }
   const equipment = useSiteEquipment(site.id);
   const myId = principal.principalId;
   const capabilities = principal.authorization.capabilities;
@@ -93,6 +103,7 @@ export function WorkOrderInspector({ workOrderId, onClose }: {
     void queryClient.invalidateQueries({ queryKey: workOrderKeys.all(site.id) });
     setPending(null);
     setNote('');
+    setConfirmCancel(false);
   };
   const claim = useMutation({
     mutationFn: (workOrder: WorkOrder) => assignWorkOrder(workOrder.workOrderId, {
@@ -110,6 +121,7 @@ export function WorkOrderInspector({ workOrderId, onClose }: {
           : {}),
       }, options),
     onSuccess: applyUpdate,
+    onError: () => setConfirmCancel(false),
   });
 
   const workOrder = detail.data;
@@ -122,6 +134,7 @@ export function WorkOrderInspector({ workOrderId, onClose }: {
   const error = claim.error ?? transition.error;
   const tasksIncomplete = workOrder ? workOrder.tasks.completed < workOrder.tasks.total : false;
   const step = workOrder ? (workOrder.status === 'OPEN' ? 0 : workOrder.status === 'IN_PROGRESS' || workOrder.status === 'BLOCKED' ? 1 : 2) : 0;
+  const busy = transition.isPending || claim.isPending;
 
   const run = (action: Transition, needsNote: boolean) => {
     if (!workOrder) return;
@@ -129,11 +142,15 @@ export function WorkOrderInspector({ workOrderId, onClose }: {
       setPending(action);
       return;
     }
+    if (action === 'cancel') {
+      setConfirmCancel(true);
+      return;
+    }
     transition.mutate({ workOrder, action, text: note.trim() });
   };
 
   return (
-    <Sheet modal={false} open={Boolean(workOrderId)} onOpenChange={(open) => { if (!open) onClose(); }}>
+    <Sheet modal={false} open={Boolean(workOrderId)} onOpenChange={(open) => { if (!open && !busy) onClose(); }}>
       <SheetContent showOverlay={false} className="overflow-y-auto">
         {!workOrder ? (
           <div className="p-5">
@@ -166,8 +183,9 @@ export function WorkOrderInspector({ workOrderId, onClose }: {
               ) : null}
               <div className="flex flex-wrap gap-2">
                 {capabilities.includes('work-order.assign') && workOrder.assigneeId !== myId && (workOrder.status === 'OPEN' || workOrder.status === 'IN_PROGRESS' || workOrder.status === 'BLOCKED') ? (
-                  <Button variant={workOrder.assigneeId ? 'outline' : 'default'} disabled={claim.isPending} onClick={() => claim.mutate(workOrder)}>
-                    <UserCheck data-icon="inline-start" />由我负责
+                  <Button variant={workOrder.assigneeId ? 'outline' : 'default'} disabled={busy} onClick={() => claim.mutate(workOrder)}>
+                    {claim.isPending ? <Spinner data-icon="inline-start" /> : <UserCheck data-icon="inline-start" />}
+                    {claim.isPending ? '指派中…' : '由我负责'}
                   </Button>
                 ) : null}
                 {actions.map((action) => {
@@ -180,7 +198,7 @@ export function WorkOrderInspector({ workOrderId, onClose }: {
                       key={action.transition}
                       variant={action.primary || pending === action.transition ? 'default' : destructive ? 'ghost' : 'outline'}
                       className={cn(destructive && pending !== action.transition && 'text-destructive-text hover:text-destructive-text')}
-                      disabled={transition.isPending || blocked}
+                      disabled={busy || blocked}
                       title={action.transition === 'start' && !workOrder.assigneeId ? '开始处理前需要先确定负责人' : undefined}
                       onClick={() => run(action.transition, Boolean(action.note))}
                     >
@@ -188,10 +206,29 @@ export function WorkOrderInspector({ workOrderId, onClose }: {
                     </Button>
                   );
                 })}
-                {pending ? <Button variant="ghost" onClick={() => { setPending(null); setNote(''); }}>取消</Button> : null}
+                {pending ? <Button variant="ghost" disabled={busy} onClick={() => { setPending(null); setNote(''); }}>放弃输入</Button> : null}
               </div>
               {workOrder.status === 'OPEN' && !workOrder.assigneeId ? <p className="text-xs text-muted-foreground">需先指定负责人</p> : null}
-              {workOrder.status === 'IN_PROGRESS' && tasksIncomplete ? <p className="text-xs text-muted-foreground">勾完所有检查项后才能结单</p> : null}
+              {workOrder.status === 'IN_PROGRESS' && tasksIncomplete ? (
+                <p className="text-xs text-muted-foreground">
+                  当前还有 {workOrder.tasks.total - workOrder.tasks.completed} 项检查未在移动端/现场勾选完成，完成后方可结单
+                </p>
+              ) : null}
+              <ConfirmDiscardDialog
+                open={confirmCancel}
+                onOpenChange={(nextOpen) => {
+                  if (!nextOpen) setConfirmCancel(false);
+                }}
+                busy={transition.isPending}
+                title={`确认作废工单「${workOrder.title}」？`}
+                description="作废后工单将进入已取消状态；如需恢复处理可后续点击「重新打开」。"
+                keepLabel="取消"
+                discardLabel="确认作废"
+                busyLabel="作废中…"
+                onConfirmDiscard={() => {
+                  transition.mutate({ workOrder, action: 'cancel', text: note.trim() });
+                }}
+              />
               {error ? <p className="text-sm text-destructive-text">{workOrderErrorMessage(error)}</p> : null}
             </section>
 

@@ -11,11 +11,12 @@ test('energy consumption compares the period with the same span before it, per S
 
   const energy = page.getByRole('region', { name: '期间用能' });
   await expect(energy.getByRole('tab', { name: /空调用电/ })).toContainText('918.9kWh');
+  await expect(energy).toContainText('用电最高时段 11:00');
   await expect(energy.getByRole('tab', { name: /供冷量/ })).toContainText('3,198.5kWh');
   await expect(energy.getByRole('tab', { name: /综合能效/ })).toContainText('3.48COP');
   await energy.getByRole('tab', { name: /综合能效/ }).click();
   await expect(page).toHaveURL(/metric=cop/);
-  await expect(energy).toContainText('用电最高时段 11:00');
+  await expect(energy).toContainText('COP波动范围 3.42 – 3.50 COP');
   await expect(page.getByTestId('energy-freshness')).toHaveText(' · 数据截至 10/10 15:06');
 
   // The owner prices each hour: 10:00 and 13:00 in peak periods, 11:00 and 12:00 in a flat one,
@@ -75,7 +76,6 @@ test('the same page splits the plant\'s electricity by machine from each one\'s 
 
   const layered = page.getByRole('region', { name: '系统能效分层与计量校核' });
   await expect(layered).toBeVisible();
-  await expect(layered).toContainText('冷站综合 COP');
   await expect(layered).toContainText('冷机 COP');
   await expect(layered).toContainText('冷冻泵输送系数 WTF');
   await expect(layered).toContainText('冷却泵输送系数 WTF');

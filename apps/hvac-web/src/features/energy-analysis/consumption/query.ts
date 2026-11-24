@@ -66,6 +66,8 @@ export function useEnergyComparison(period: EnergyPeriod) {
     },
     refetchInterval: 60_000,
     staleTime: 30_000,
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey[1] === site.id ? previousData : undefined,
     retry: retryEnergyQuery,
     retryDelay: energyRetryDelay,
   });
@@ -84,6 +86,8 @@ export function useTodayEnergy() {
     },
     refetchInterval: 60_000,
     staleTime: 30_000,
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey[1] === site.id ? previousData : undefined,
     retry: retryEnergyQuery,
     retryDelay: energyRetryDelay,
   });
@@ -159,6 +163,8 @@ export function useHourlyHeatmap(days: number) {
     },
     refetchInterval: 5 * 60_000,
     staleTime: 30_000,
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey[1] === site.id ? previousData : undefined,
     retry: retryEnergyQuery,
     retryDelay: energyRetryDelay,
   });

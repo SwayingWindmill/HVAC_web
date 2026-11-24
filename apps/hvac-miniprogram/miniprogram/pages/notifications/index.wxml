@@ -3,6 +3,7 @@
   <view wx:elif="{{noSite}}" class="state">这个账号还看不到任何站点，请管理员在网页「系统管理」里分配站点。</view>
   <view wx:elif="{{failed}}" class="state">{{failed}}</view>
   <block wx:else>
+    <view wx:if="{{refreshError}}" class="stale-banner" role="status">{{refreshError}}</view>
     <view class="filter-bar">
       <text class="caption">{{siteName}} · 告警</text>
       <label class="filter">

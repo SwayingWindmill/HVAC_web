@@ -89,7 +89,7 @@ test('bottom 设备启停状态 lane renders run/stop segments and updates two-w
 
   // Hover over the STOPPED segment and verify two-way synchronized cursor readout on both state lane and gauge chart
   await stateRegion.locator('[data-state-kind="STOPPED"]').first().hover();
-  await expect(stateRegion).toContainText(/游标 \d{2}:\d{2}/);
+  await expect(stateRegion).toContainText(/时间 \d{2}:\d{2}/);
   await expect(stateRegion.getByTestId('state-readout-CHILLER-01')).toHaveText('停止');
   await expect(powerRegion).toContainText(/\d+\.\d+ kW/);
 });

@@ -95,7 +95,7 @@ export function UtilityBillChargesSection({
               disabled={disabled}
               onValueChange={(value) => {
                 if (!isOneOf(BASIC_CHARGE_MODES, value)) return;
-                form.setValue('basicChargeMode', value, { shouldValidate: true });
+                form.setValue('basicChargeMode', value, { shouldValidate: true, shouldDirty: true });
                 if (value === 'NONE') {
                   form.setValue('basicChargeInput', '0', { shouldValidate: true });
                   form.setValue('basicChargeQuantityInput', '');

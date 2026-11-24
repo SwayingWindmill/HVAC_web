@@ -120,12 +120,22 @@ export function AlarmDetailPane({ alarmId, empty, deviceNames, creatingWorkOrder
 }) {
   const { site, principal } = siteRoute.useRouteContext();
   const queryClient = useQueryClient();
+  const [prevAlarmId, setPrevAlarmId] = useState(alarmId);
   const [comment, setComment] = useState('');
   const [ackOpen, setAckOpen] = useState(false);
   const [suppressOpen, setSuppressOpen] = useState(false);
   const [suppressHours, setSuppressHours] = useState<string>('4');
   const [suppressReason, setSuppressReason] = useState('');
   const [copied, setCopied] = useState(false);
+  if (alarmId !== prevAlarmId) {
+    setPrevAlarmId(alarmId);
+    setComment('');
+    setAckOpen(false);
+    setSuppressOpen(false);
+    setSuppressHours('4');
+    setSuppressReason('');
+    setCopied(false);
+  }
   const suppressionNoteId = useId();
   const suppressPresetPrefix = useId();
   const suppressReasonId = useId();

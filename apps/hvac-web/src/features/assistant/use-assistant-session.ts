@@ -57,6 +57,7 @@ export function useAssistantSession(siteId: string, csrfToken: string): Assistan
   const [live, setLive] = useState<{ readonly sessionId: string; readonly events: readonly AgentSessionEvent[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const following = useRef<{ readonly sessionId: string; readonly close: () => void } | null>(null);
+  const inFlightRef = useRef(false);
 
   const selectedHere = selected?.siteId === siteId ? selected : undefined;
   const snapshot = useMemo(() => {
@@ -110,6 +111,8 @@ export function useAssistantSession(siteId: string, csrfToken: string): Assistan
   }, [queryClient, siteId]);
 
   const run = useCallback(async (action: () => Promise<AgentSessionSnapshot>) => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     setError(null);
     try {
       const next = await action();
@@ -118,6 +121,8 @@ export function useAssistantSession(siteId: string, csrfToken: string): Assistan
     } catch (failure) {
       setError(assistantErrorText(failure));
       await queryClient.invalidateQueries({ queryKey: sessionsKey(siteId) });
+    } finally {
+      inFlightRef.current = false;
     }
   }, [follow, queryClient, siteId, store]);
 

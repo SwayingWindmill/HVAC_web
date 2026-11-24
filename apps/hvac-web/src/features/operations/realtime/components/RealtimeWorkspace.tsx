@@ -1,29 +1,20 @@
 import { useMemo } from 'react';
-import type { SiteAssetModel } from '@/api/generated/platformGateway.gen';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, Link, useNavigate } from '@tanstack/react-router';
-import { ChevronRight, CircleCheck, Lock, RefreshCw } from 'lucide-react';
+import { ChevronRight, Lock, RefreshCw } from 'lucide-react';
 import { PageHeader } from '@/blocks/page-header';
 import { Panel, PanelHeader } from '@/blocks/panel';
 import { InfoTip } from '@/components/info-tip';
 import { Main } from '@/components/layout/Main';
-import { SeverityMark } from '@/components/severity-mark';
 import { Button } from '@/components/ui/button';
 import { ComposedChart } from '@/components/ui/composed-chart';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Sparkline } from '@/components/ui/sparkline';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
-import { alarmHistoryQuery } from '@/features/alarms/alarm-api';
-import { operationLabel, SEVERITY_LABELS, SEVERITY_LEVEL } from '@/features/alarms/alarm-presentation';
-import { siteCommandsQuery } from '@/features/control/command-api';
-import { commandSummary, STATUS_PRESENTATION } from '@/features/control/command-presentation';
-import { CommandMark } from '@/features/control/components/CommandMark';
-import { ModeGlyph } from '@/features/control/components/ControlBoundary';
-import { commandLabels, controlTargets } from '@/features/control/control-model';
-import { activeLocks, controlActorLabel, LOCK_PRESENTATION, MODE_PRESENTATION, siteControlStateQuery } from '@/features/control/control-state';
+import { activeLocks, siteControlStateQuery } from '@/features/control/control-state';
 import { DataGapBanner } from '@/features/data-gaps/DataGapBanner';
 import { dataGapsKeys } from '@/features/data-gaps/query';
-import { formatCompactTime, formatDecimal } from '@/lib/operator-format';
+import { formatDecimal } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import { coolingUncertaintyText, copUncertaintyText, equipmentStatus, findPlantUnit, loopDifferentialPressure, PLANT_CATEGORY_LABELS, plantReading, probeOffsetText, type ParallelBranch, type PlantDevice, type PlantReading, type PlantView, type WaterLoopKind } from '../plant-model';
 import { useRealtimePlant } from '../use-realtime-plant';
@@ -33,6 +24,7 @@ import { deviceStatus, formatClock, LiveIndicator, LowConfidenceBadge, ReadingMe
 import { buildTimeSlots, fillGaugeSlots, fillScalarSlots } from '../../trends/timeline';
 import { DeviceInspector } from '../../systems-devices/components/DeviceInspector';
 import { PlantHydraulicSchematic } from './PlantHydraulicSchematic';
+import { RecentEvents } from './RecentEventsPanel';
 
 const pageRoute = getRouteApi('/_app/_site/operations/realtime');
 const siteRoute = getRouteApi('/_app/_site');
@@ -169,8 +161,13 @@ function PlantTrendPanel({ plant, metric, window, onMetric, onWindow, timeZone }
             <ToggleGroupItem value="24h" className="h-7 px-2.5 text-xs">24 小时</ToggleGroupItem>
           </ToggleGroup>
         </div>
-        {history.isPending ? <Skeleton className="h-[230px]" /> : history.isError ? (
-          <p className="flex h-[230px] items-center justify-center text-sm text-muted-foreground">历史读数暂时读不到</p>
+        {!history.allowed ? (
+          <p className="flex h-[230px] items-center justify-center text-sm text-muted-foreground">当前账号没有历史读数查看权限</p>
+        ) : history.isPending ? <Skeleton className="h-[230px]" /> : history.isError ? (
+          <div className="flex h-[230px] flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
+            <span>历史读数暂时读不到</span>
+            <Button variant="outline" size="sm" onClick={history.refetch}>重试</Button>
+          </div>
         ) : selected.length < 2 ? (
           <p className="flex h-[230px] items-center justify-center text-sm text-muted-foreground">这段时间没有记录</p>
         ) : (
@@ -193,122 +190,6 @@ function PlantTrendPanel({ plant, metric, window, onMetric, onWindow, timeZone }
           />
         )}
       </div>
-    </Panel>
-  );
-}
-
-interface PlantEvent {
-  readonly key: string;
-  readonly at: string;
-  readonly mark: React.ReactNode;
-  readonly title: string;
-  readonly detail: string;
-  readonly to?: { readonly path: '/operations/alarms' | '/operations/control'; readonly inspect?: string };
-}
-
-/** Today at the plant, newest first: alarms, commands and devices whose data stopped. */
-function RecentEvents({ plant, siteId, myId, timeZone, assetModel }: {
-  readonly plant: PlantView;
-  readonly siteId: string;
-  readonly myId: string;
-  readonly timeZone: string;
-  readonly assetModel: (Parameters<typeof controlTargets>[0] & Pick<SiteAssetModel, 'assets'>) | undefined;
-}) {
-  const alarms = useQuery(alarmHistoryQuery(siteId));
-  const commands = useQuery(siteCommandsQuery(siteId));
-  const controlState = useQuery(siteControlStateQuery(siteId));
-  const modeState = controlState.data;
-  const labels = useMemo(() => (assetModel ? commandLabels(controlTargets(assetModel, new Date())) : new Map()), [assetModel]);
-  const assetName = (assetId: string) => assetModel?.assets.find((asset) => asset.id === assetId)?.displayName ?? '设备';
-  const deviceName = (deviceId: string | undefined) => (deviceId ? plant.devices.find((device) => device.deviceId === deviceId)?.name ?? '设备' : '站点');
-  const dayFmt = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' });
-  const today = dayFmt.format(new Date());
-  const isToday = (value: string) => { const ms = Date.parse(value); return Number.isFinite(ms) && dayFmt.format(new Date(ms)) === today; };
-
-  const events: PlantEvent[] = [
-    ...(alarms.data?.alarms ?? []).flatMap((alarm) => alarm.timeline
-      .filter((entry) => isToday(entry.occurredAt) && (entry.operation === 'PUBLISH' || entry.operation === 'ACKNOWLEDGE' || entry.operation === 'CLEAR'))
-      .map((entry): PlantEvent => ({
-        key: `alarm-${alarm.alarmId}-${entry.version}`,
-        at: entry.occurredAt,
-        mark: entry.operation === 'CLEAR'
-          ? <CircleCheck className="size-3 text-success" aria-hidden="true" />
-          : <SeverityMark level={SEVERITY_LEVEL[entry.currentSeverity]} label="" />,
-        title: `${deviceName(alarm.deviceId)} · ${alarm.title}`,
-        detail: `${SEVERITY_LABELS[entry.currentSeverity]}告警 · ${operationLabel(entry.operation)}`,
-        to: { path: '/operations/alarms', inspect: alarm.alarmId },
-      }))),
-    ...(commands.data ?? []).filter((command) => isToday(command.updatedAt)).map((command): PlantEvent => {
-      const summary = commandSummary(command, labels);
-      return {
-        key: `command-${command.commandId}`,
-        at: command.updatedAt,
-        mark: <CommandMark status={command.status} />,
-        title: `${summary.target} · ${summary.title}`,
-        detail: `指令 · ${STATUS_PRESENTATION[command.status].label}`,
-        to: { path: '/operations/control', inspect: command.commandId },
-      };
-    }),
-    ...(modeState?.updatedAt && isToday(modeState.updatedAt) ? [{
-      key: `control-mode-${modeState.revision}`,
-      at: modeState.updatedAt,
-      mark: <ModeGlyph mode={modeState.controlMode} />,
-      title: `控制方式改为${MODE_PRESENTATION[modeState.controlMode].label}`,
-      detail: [controlActorLabel(modeState, myId), modeState.reason || '控制方式'].join(' · '),
-      to: { path: '/operations/control' },
-    } satisfies PlantEvent] : []),
-    ...[...activeLocks(controlState.data).values()].filter((lock) => lock.updatedAt && isToday(lock.updatedAt)).map((lock): PlantEvent => ({
-      key: `control-lock-${lock.assetId}-${lock.revision}`,
-      at: lock.updatedAt ?? '',
-      mark: <Lock className="size-3 text-muted-foreground" aria-hidden="true" />,
-      title: `${assetName(lock.assetId)} · ${lock.lockMode === 'UNLOCKED' ? '解除锁定' : LOCK_PRESENTATION[lock.lockMode].label}`,
-      detail: [controlActorLabel(lock, myId), lock.reason || '设备锁定'].join(' · '),
-      to: { path: '/operations/control' },
-    })),
-    ...plant.devices.filter((device) => device.hasStaleData || device.connection === 'OFFLINE').map((device): PlantEvent => ({
-      key: `data-${device.deviceId}`,
-      at: device.latestSampleAt || new Date().toISOString(),
-      mark: <svg viewBox="0 0 10 10" className="size-2.5 shrink-0" aria-hidden="true"><path d="M1.5 1.5h7v7h-7z" fill="none" strokeWidth="1.5" className="stroke-warning" /></svg>,
-      title: `${device.row.device.displayName !== device.name ? `${device.name}（${device.row.device.displayName}）` : device.name} · ${device.connection === 'OFFLINE' ? '通信离线' : '读数中断'}`,
-      detail: device.connection === 'OFFLINE' ? '设备离线' : '通信在线，没有新数据',
-    })),
-  ].sort((left, right) => Date.parse(right.at) - Date.parse(left.at)).slice(0, 7);
-
-  const pending = alarms.isPending || commands.isPending;
-  return (
-    <Panel role="region" aria-label="最近事件" className="min-h-0">
-      <PanelHeader title="最近事件" caption="今天" />
-      {pending ? <div className="flex flex-col gap-2 p-4"><Skeleton className="h-10" /><Skeleton className="h-10" /><Skeleton className="h-10" /></div> : events.length === 0 ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center">
-          <CircleCheck className="size-5 text-success" aria-hidden="true" />
-          <p className="text-sm font-semibold">今天没有告警、指令和控制变更</p>
-          <p className="text-xs text-muted-foreground">设备数据均为最新</p>
-        </div>
-      ) : (
-        <ul className="flex flex-col py-1">
-          {events.map((event) => {
-            const body = (
-              <>
-                <span className="font-mono text-[11px] leading-5 text-subtle-foreground">{formatCompactTime(event.at, timeZone)}</span>
-                <span className="mt-[5px] flex justify-center">{event.mark}</span>
-                <span className="flex min-w-0 flex-col">
-                  <span className="truncate text-[13px] font-semibold">{event.title}</span>
-                  <span className="truncate text-xs text-muted-foreground">{event.detail}</span>
-                </span>
-              </>
-            );
-            const className = 'grid grid-cols-[52px_12px_minmax(0,1fr)] gap-x-2.5 px-4 py-2 outline-none';
-            return (
-              <li key={event.key}>
-                {event.to ? (
-                  <Link to={event.to.path} search={{ site: siteId, inspect: event.to.inspect }} className={cn(className, 'hover:bg-accent focus-visible:bg-accent')}>{body}</Link>
-                ) : <div className={className}>{body}</div>}
-              </li>
-            );
-          })}
-        </ul>
-      )}
-      {alarms.isError || commands.isError ? <p className="px-4 pb-3 text-xs text-muted-foreground">{alarms.isError ? '告警' : '指令'}记录暂时读不到</p> : null}
     </Panel>
   );
 }
@@ -573,7 +454,15 @@ export function RealtimeWorkspace() {
               onWindow={(window) => setSearch({ window })}
               timeZone={site.timezone}
             />
-            <RecentEvents plant={plant} siteId={site.id} myId={principal.principalId} timeZone={site.timezone} assetModel={registry.data?.assetModel} />
+            <RecentEvents
+              plant={plant}
+              siteId={site.id}
+              myId={principal.principalId}
+              timeZone={site.timezone}
+              assetModel={registry.data?.assetModel}
+              canListAlarms={principal.authorization.capabilities.includes('alarm.list')}
+              onInspect={(deviceId) => setSearch({ inspect: deviceId })}
+            />
           </div>
           <PlantHydraulicSchematic
             plant={plant}

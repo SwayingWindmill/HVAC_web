@@ -95,6 +95,7 @@ Page({
   data: {
     loading: true,
     failed: '',
+    refreshError: '',
     view: null as ReturnType<typeof presentDevice> | null,
     energyNote: '',
     hasControllablePoints: false,
@@ -244,6 +245,7 @@ Page({
       this.setData({
         loading: false,
         failed: '',
+        refreshError: '',
         view: presentDevice(device, today),
         energyNote: note,
         hasControllablePoints,
@@ -257,7 +259,11 @@ Page({
       });
     } catch {
       if (generation !== pageGeneration) return;
-      this.setData({ loading: false, failed: '这台设备的读数暂时读不到，下拉刷新再试。' });
+      if (this.data.view !== null) {
+        this.setData({ loading: false, refreshError: '上次刷新失败，当前显示稍早数据，下拉可重试' });
+        return;
+      }
+      this.setData({ loading: false, failed: '这台设备的读数暂时读不到，下拉刷新再试。', refreshError: '' });
     }
   },
 

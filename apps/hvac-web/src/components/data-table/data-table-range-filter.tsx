@@ -92,7 +92,7 @@ export function DataTableRangeFilter<TData extends RowData>({
       <Input
         id={`${inputId}-min`}
         type="number"
-        aria-label={`${meta?.label} minimum value`}
+        aria-label={`${meta?.label ?? '字段'} 最小值`}
         aria-valuemin={min}
         aria-valuemax={max}
         data-slot="range-min"
@@ -104,11 +104,11 @@ export function DataTableRangeFilter<TData extends RowData>({
         defaultValue={value[0]}
         onChange={(event) => onRangeValueChange(event.target.value, true)}
       />
-      <span className="sr-only shrink-0 text-muted-foreground">to</span>
+      <span className="sr-only shrink-0 text-muted-foreground">至</span>
       <Input
         id={`${inputId}-max`}
         type="number"
-        aria-label={`${meta?.label} maximum value`}
+        aria-label={`${meta?.label ?? '字段'} 最大值`}
         aria-valuemin={min}
         aria-valuemax={max}
         data-slot="range-max"

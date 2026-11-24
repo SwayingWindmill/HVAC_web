@@ -9,9 +9,9 @@ export interface PeriodOption<T extends string = string> {
 }
 
 export const defaultPeriods: PeriodOption[] = [
-  { value: "week", label: "Week" },
-  { value: "month", label: "Month" },
-  { value: "year", label: "Year" },
+  { value: "week", label: "本周" },
+  { value: "month", label: "本月" },
+  { value: "year", label: "本年" },
 ]
 
 export interface PeriodTabsProps<T extends string = string>

@@ -242,7 +242,7 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: { readonly 
                   <TableCell className="text-right tabular-nums">{devicesOf(site.id) === null ? '—' : `${devicesOf(site.id)} 台`}</TableCell>
                   <TableCell><StatusBadge tone={site.status === 'ACTIVE' ? 'success' : 'neutral'}>{SITE_STATUS[site.status]}</StatusBadge></TableCell>
                   <TableCell className="pr-5 text-right">
-                    <button type="button" className="inline-flex items-center text-xs font-medium text-primary hover:underline" onClick={() => setTab('registry')}>
+                    <button type="button" className="inline-flex items-center text-xs font-medium text-primary hover:underline" onClick={() => setTab('registry', site.id)}>
                       设备与点位登记<ChevronRight className="size-3.5" aria-hidden="true" />
                     </button>
                   </TableCell>
@@ -268,7 +268,7 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: { readonly 
     { key: 'overview', label: '系统概览', children: overview },
     { key: 'users', label: '用户与角色', children: users },
     { key: 'site', label: '站点与组织', children: siteTab },
-    { key: 'registry', label: '设备与点位登记', children: <RegistryAdministration capabilities={capabilities} csrfToken={principal.session.csrfToken} registerUnsavedDraft={registerUnsavedDraft} /> },
+    { key: 'registry', label: '设备与点位登记', children: <RegistryAdministration capabilities={capabilities} initialSiteId={search.site} csrfToken={principal.session.csrfToken} registerUnsavedDraft={registerUnsavedDraft} /> },
     { key: 'audit', label: '操作记录', children: <AuditLog viewer={auditViewer} canRead={capabilities.includes('audit.read')} active={activeTab === 'audit'} /> },
     { key: 'assistant', label: 'AI 助手', children: <AssistantUsage sites={sites} canRead={capabilities.includes('audit.read')} active={activeTab === 'assistant'} /> },
     ...(canManageGovernance
@@ -294,7 +294,7 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: { readonly 
       : []),
   ];
   const normalizedActiveTab = items.some((item) => item.key === activeTab) ? activeTab : 'overview';
-  function setTab(key: string) {
+  function setTab(key: string, siteId?: string) {
     const matched = items.find((item) => item.key === key);
     if (!matched) return;
     const nextTab = matched.key === 'overview' ? undefined : matched.key;
@@ -302,7 +302,9 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: { readonly 
       search: (previous) => ({
         ...previous,
         tab: nextTab,
-        ...(matched.key === 'governance' ? {} : { site: undefined, section: undefined }),
+        ...(matched.key === 'governance' || matched.key === 'registry'
+          ? (siteId ? { site: siteId } : {})
+          : { site: undefined, section: undefined }),
       }),
       replace: true,
     });

@@ -52,14 +52,16 @@ test('stopping a pump asks for the one-time code and a site check, and approving
   const submitted = gateway.writes.find((write) => write.path === '/api/v1/commands');
   expect(submitted?.body).toMatchObject({ parameters: {}, verificationCode: '123456' });
 
-  // The session has no fresh two-step sign-in: the approval is refused and the page offers to verify.
+  // The session has no fresh two-step sign-in: confirming the approval dialog hits STEP_UP_REQUIRED and offers to verify.
   await stop.getByRole('button', { name: '批准' }).click();
+  await page.getByRole('alertdialog', { name: '确认批准下发该控制指令？' }).getByRole('button', { name: '确认批准' }).click();
   const stepUp = page.getByRole('dialog', { name: '批准前要再验证一次身份' });
   await expect(stepUp).toContainText('CHWP-01 · 停止冷冻水泵');
   await stepUp.getByRole('button', { name: '取消' }).click();
 
   gateway.stepUpFresh = true;
   await stop.getByRole('button', { name: '批准' }).click();
+  await page.getByRole('alertdialog', { name: '确认批准下发该控制指令？' }).getByRole('button', { name: '确认批准' }).click();
   await expect(stop).toContainText('已执行');
 
   await stop.getByRole('button', { name: /停止冷冻水泵/ }).click();

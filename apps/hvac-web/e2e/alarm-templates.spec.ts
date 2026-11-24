@@ -84,6 +84,7 @@ test('alarm rule baseline templates rollout preserves overrides and single-site 
   await expect(driftSheet).toContainText('2 °C / 5 分钟');
   await expect(driftSheet).toContainText('3 °C / 5 分钟');
   await driftSheet.getByRole('button', { name: '重置为模板默认值' }).click();
+  await page.getByRole('alertdialog').getByRole('button', { name: '确认重置' }).click();
   await expect(driftSheet).toContainText('当前站点模板派生规则均与所属基准模板保持一致，无偏离项');
   await page.keyboard.press('Escape');
 

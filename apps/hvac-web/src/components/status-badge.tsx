@@ -32,13 +32,13 @@ const NEUTRAL = { badge: 'bg-secondary text-secondary-foreground', dot: 'bg-subt
 const toneMap: Readonly<Record<StatusTone, { badge: string; dot: string; defaultLabel: string }>> = {
   success: { ...SUCCESS, defaultLabel: '正常' },
   running: { ...SUCCESS, defaultLabel: '运行中' },
-  warning: { ...WARNING, defaultLabel: '警告' },
-  standby: { ...WARNING, defaultLabel: '待机' },
+  warning: { ...WARNING, defaultLabel: '注意' },
+  standby: { ...NEUTRAL, defaultLabel: '待机' },
   destructive: { ...DANGER, defaultLabel: '故障' },
   alarm: { ...DANGER, defaultLabel: '告警中' },
   'in-progress': { ...INFO, defaultLabel: '处理中' },
   info: { ...INFO, defaultLabel: '信息' },
-  neutral: { ...NEUTRAL, defaultLabel: '未定义' },
+  neutral: { ...NEUTRAL, defaultLabel: '未知' },
   offline: { badge: 'bg-secondary text-muted-foreground', dot: 'border border-dashed border-muted-foreground bg-transparent', defaultLabel: '离线' },
 };
 

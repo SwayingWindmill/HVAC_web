@@ -62,6 +62,10 @@ export function EngineeringGovernanceTab({
     () => new Map((assetModelQuery.data?.devices ?? []).map((device) => [device.id, device.displayName])),
     [assetModelQuery.data?.devices],
   );
+  const activeGateways = useMemo(
+    () => (assetModelQuery.data?.devices ?? []).filter((d) => d.deviceType === 'GATEWAY' && d.status === 'ACTIVE').map((d) => ({ id: d.id, name: d.displayName || d.code })),
+    [assetModelQuery.data?.devices],
+  );
 
   if (!site) {
     return (
@@ -148,7 +152,7 @@ export function EngineeringGovernanceTab({
         <EdgeModelsGovernancePanel
           siteId={site.id}
           timeZone={site.timezone}
-          gateways={(assetModelQuery.data?.devices ?? []).filter((d) => d.deviceType === 'GATEWAY' && d.status === 'ACTIVE').map((d) => ({ id: d.id, name: d.displayName || d.code }))}
+          gateways={activeGateways}
           active={active && section === 'edge-models'}
           canManage={canManage}
           csrfToken={csrfToken}

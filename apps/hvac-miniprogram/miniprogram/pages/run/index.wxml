@@ -8,9 +8,11 @@
   <view wx:if="{{loading}}" class="state">正在读取…</view>
   <view wx:elif="{{noSite}}" class="state">这个账号还看不到任何站点，请管理员在网页「系统管理」里分配站点。</view>
   <view wx:elif="{{failed}}" class="state">冷站的读数暂时读不到，下拉刷新再试。</view>
-  <view wx:elif="{{!deviceCount}}" class="state">这个站点还没有登记设备。在网页「系统管理 → 资产与点位」登记冷站设备后，这里显示实时运行情况。</view>
+  <view wx:elif="{{!deviceCount}}" class="state">这个站点还没有登记设备。在网页「系统管理 → 设备与点位登记」登记冷站设备后，这里显示实时运行情况。</view>
 
-  <block wx:elif="{{segment === 'realtime'}}">
+  <block wx:else>
+    <view wx:if="{{refreshError}}" class="stale-banner" role="status">{{refreshError}}</view>
+    <block wx:if="{{segment === 'realtime'}}">
     <view class="meta">
       <text class="caption">{{siteName}}</text>
       <text wx:if="{{updatedAt}}" class="caption">数据 <text class="mono">{{updatedAt}}</text></text>
@@ -129,5 +131,6 @@
         </view>
       </view>
     </view>
+  </block>
   </block>
 </view>

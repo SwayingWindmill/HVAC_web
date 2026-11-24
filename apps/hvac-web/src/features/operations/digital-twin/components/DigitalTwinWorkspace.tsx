@@ -69,11 +69,12 @@ export function DigitalTwinWorkspace() {
   const copChange = plant.plantCop !== null && copAgo !== null ? plant.plantCop - copAgo : null;
   const figures: KpiFigure[] = [
     { icon: Zap, label: '冷站功率', value: fixed(plant.totalPower, 1), unit: 'kW', caption: powerAgo === null ? '空调总电表' : `1 小时前 ${formatDecimal(powerAgo, 1)}` },
-    { icon: Snowflake, label: '瞬时制冷量', value: fixed(plant.coolingCapacity, 0), unit: 'kW', caption: [coolingAgo === null ? '冷量计' : `1 小时前 ${formatDecimal(coolingAgo, 0)}`, coolingUncertaintyText(plant.coolingCapacity)].filter(Boolean).join(' · ') },
+    { icon: Snowflake, label: '瞬时制冷量', value: fixed(plant.coolingCapacity, 0), unit: 'kW', lowConfidence: Boolean(plant.coolingCapacity?.lowConfidence), caption: [coolingAgo === null ? '冷量计' : `1 小时前 ${formatDecimal(coolingAgo, 0)}`, coolingUncertaintyText(plant.coolingCapacity)].filter(Boolean).join(' · ') },
     {
       icon: Gauge,
       label: '冷站 COP',
       value: plant.plantCop === null ? null : formatDecimal(plant.plantCop, 2),
+      lowConfidence: plant.plantCopLowConfidence,
       caption: copUncertaintyText(plant) ?? (copChange === null ? '制冷量 ÷ 功率' : (
         <><span className={cn(copChange >= 0 ? 'text-success-text' : 'text-destructive-text')}>{copChange >= 0 ? '↑' : '↓'} {formatDecimal(Math.abs(copChange), 2)}</span> 较 1 小时前</>
       )),
@@ -194,7 +195,7 @@ export function DigitalTwinWorkspace() {
   };
 
   return (
-    <div className="relative h-[calc(100svh-var(--header-height))] min-h-[640px] w-full overflow-hidden bg-background">
+    <div className="@container/twin relative h-[calc(100svh-var(--header-height))] min-h-[640px] w-full overflow-hidden bg-background">
       <h1 className="sr-only">数字孪生 · {site.displayName}</h1>
       {twin ? (
         <ErrorBoundary
@@ -229,29 +230,33 @@ export function DigitalTwinWorkspace() {
       )}
 
       {twin ? (
-        <div className="pointer-events-none absolute inset-0">
-          <div className="absolute top-4 left-4"><TwinKpis figures={figures} /></div>
-          <div className="absolute top-4 right-4 flex items-start gap-2.5">
-            <TwinToolbar
-              view={view}
-              views={plan ? ['overview', 'plant', 'terminal'] : ['overview', 'plant']}
-              shell={plan ? search.shell !== 'off' : null}
-              emphasis={search.pipes === 'on'}
-              onCamera={onCamera}
-              onView={(next) => setSearch({ view: next, inspect: undefined, floor: next === 'terminal' ? search.floor : undefined })}
-              onShell={(on) => setSearch({ shell: on ? undefined : 'off' })}
-              onEmphasis={(on) => setSearch({ pipes: on ? 'on' : undefined })}
-            />
-            <aside aria-label={selected ? selected.name : '冷站'} className={cn(FLOATING, 'pointer-events-auto w-[300px] overflow-hidden')}>{card}</aside>
-          </div>
-          <div className="absolute bottom-4 left-4">
-            <TwinLoop title={cut ? `冷冻水到 ${cut}F` : '冷冻水环路'} flow={fixed(twin.flow, 0)} nodes={nodes} difference={difference} siteId={site.id} />
-          </div>
-          {tabs.length ? (
-            <div className="absolute right-4 bottom-4">
-              <TwinList key={view} tabs={tabs} scope={view === 'terminal' && plan ? (cut ? `${cut}F` : plan.name) : '空调机房'} selectedId={selected?.assetId ?? null} onSelect={select} />
+        <div className="pointer-events-none absolute inset-0 flex flex-col justify-between gap-3 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0"><TwinKpis figures={figures} /></div>
+            <div className="ml-auto flex items-start gap-2.5">
+              <TwinToolbar
+                view={view}
+                views={plan ? ['overview', 'plant', 'terminal'] : ['overview', 'plant']}
+                shell={plan ? search.shell !== 'off' : null}
+                emphasis={search.pipes === 'on'}
+                onCamera={onCamera}
+                onView={(next) => setSearch({ view: next, inspect: undefined, floor: next === 'terminal' ? search.floor : undefined })}
+                onShell={(on) => setSearch({ shell: on ? undefined : 'off' })}
+                onEmphasis={(on) => setSearch({ pipes: on ? 'on' : undefined })}
+              />
+              <aside aria-label={selected ? selected.name : '冷站'} className={cn(FLOATING, 'pointer-events-auto w-[280px] overflow-hidden @[1120px]/twin:w-[300px]')}>{card}</aside>
             </div>
-          ) : null}
+          </div>
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div className="min-w-0 max-w-full flex-1">
+              <TwinLoop title={cut ? `冷冻水到 ${cut}F` : '冷冻水环路'} flow={fixed(twin.flow, 0)} nodes={nodes} difference={difference} siteId={site.id} />
+            </div>
+            {tabs.length ? (
+              <div className="ml-auto shrink-0">
+                <TwinList key={view} tabs={tabs} scope={view === 'terminal' && plan ? (cut ? `${cut}F` : plan.name) : '空调机房'} selectedId={selected?.assetId ?? null} onSelect={select} />
+              </div>
+            ) : null}
+          </div>
         </div>
       ) : null}
     </div>

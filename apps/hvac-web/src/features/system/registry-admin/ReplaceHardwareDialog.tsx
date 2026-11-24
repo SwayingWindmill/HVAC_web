@@ -25,7 +25,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { confirmDiscardRegistryDraft } from './confirmDiscard';
+import { ConfirmDiscardDialog } from '@/components/confirm-discard-dialog';
+import { Spinner } from '@/components/ui/spinner';
 import { makeRegistryMutationMeta, newRegistryIdempotencyKey } from './model';
 
 const KEEP_GATEWAY = '__keep__';
@@ -68,12 +69,14 @@ export function ReplaceHardwareDialog({
   const [reason, setReason] = useState(DEFAULT_REPLACE_REASON);
   const [attemptKey, setAttemptKey] = useState(() => newRegistryIdempotencyKey('replace-hardware'));
   const [dirty, setDirty] = useState(false);
+  const [confirmDiscardOpen, setConfirmDiscardOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<unknown>(null);
 
   useEffect(() => {
     if (!open || !device) {
       setDirty(false);
+      setConfirmDiscardOpen(false);
       onDirtyChange(false);
       return;
     }
@@ -85,6 +88,7 @@ export function ReplaceHardwareDialog({
     setAttemptKey(newRegistryIdempotencyKey('replace-hardware'));
     setSubmitError(null);
     setDirty(false);
+    setConfirmDiscardOpen(false);
     onDirtyChange(false);
   }, [open, device, onDirtyChange]);
 
@@ -121,12 +125,23 @@ export function ReplaceHardwareDialog({
     setAttemptKey(newRegistryIdempotencyKey('replace-hardware'));
   };
 
+  const discardAndClose = () => {
+    setDirty(false);
+    setConfirmDiscardOpen(false);
+    setSubmitError(null);
+    onDirtyChange(false);
+    onOpenChange(false);
+  };
+
   const handleOpenChange = (nextOpen: boolean) => {
     if (submitting) return;
-    if (!nextOpen && !confirmDiscardRegistryDraft(dirty)) return;
+    if (!nextOpen && dirty) {
+      setConfirmDiscardOpen(true);
+      return;
+    }
     if (!nextOpen) {
-      setDirty(false);
-      onDirtyChange(false);
+      discardAndClose();
+      return;
     }
     onOpenChange(nextOpen);
   };
@@ -169,8 +184,21 @@ export function ReplaceHardwareDialog({
   };
 
   return (
+    <>
     <Dialog open={open && Boolean(device)} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent
+        className="sm:max-w-lg"
+        showCloseButton={!submitting}
+        onEscapeKeyDown={(event) => {
+          if (submitting) event.preventDefault();
+        }}
+        onPointerDownOutside={(event) => {
+          if (submitting) event.preventDefault();
+        }}
+        onInteractOutside={(event) => {
+          if (submitting) event.preventDefault();
+        }}
+      >
         <DialogHeader>
           <DialogTitle>更换这台设备的现场硬件？</DialogTitle>
           <DialogDescription>
@@ -320,10 +348,18 @@ export function ReplaceHardwareDialog({
             disabled={!canSubmit}
             onClick={() => void handleConfirm()}
           >
+            {submitting ? <Spinner data-icon="inline-start" /> : null}
             {submitting ? '正在更换…' : '确认更换硬件'}
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
+
+    <ConfirmDiscardDialog
+      open={confirmDiscardOpen}
+      onOpenChange={setConfirmDiscardOpen}
+      onConfirmDiscard={discardAndClose}
+    />
+    </>
   );
 }

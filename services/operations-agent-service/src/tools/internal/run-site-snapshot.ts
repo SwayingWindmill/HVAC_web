@@ -70,6 +70,7 @@ const POINT_KIND_WORDS: Readonly<Record<string, string>> = Object.freeze({
 // Units as the device page writes them (formatTelemetryUnit in the Web): Registry stores UCUM codes.
 const UNIT_WORDS: Readonly<Record<string, string>> = Object.freeze({
   Cel: '°C',
+  degC: '°C',
   'm3/h': 'm³/h',
 });
 

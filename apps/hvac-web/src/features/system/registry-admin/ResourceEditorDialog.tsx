@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import type { Site, SiteAssetModel } from '@/api/generated/platformGateway.gen';
-import { registryAdminApi } from '@/api/registry';
+import { presentRegistryError, registryAdminApi } from '@/api/registry';
+import { ConfirmDiscardDialog } from '@/components/confirm-discard-dialog';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import {
@@ -21,10 +22,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Spinner } from '@/components/ui/spinner';
 import { Textarea } from '@/components/ui/textarea';
 import { CLIMATE_ZONE_LABEL } from '@/lib/climate-zone';
 import { isOneOf } from '@/lib/typed';
-import { confirmDiscardRegistryDraft } from './confirmDiscard';
 import { makeRegistryMutationMeta, newRegistryIdempotencyKey } from './model';
 import { ResourcePointEditorFields } from './ResourcePointEditorFields';
 import {
@@ -63,9 +64,13 @@ export function ResourceEditorDialog({
 }: ResourceEditorDialogProps) {
   const [editDraft, setEditDraft] = useState<EditDraft>(() => defaultEditDraft({ type: 'SPACE' }));
   const [editDirty, setEditDirty] = useState(false);
+  const [confirmDiscardOpen, setConfirmDiscardOpen] = useState(false);
+  const [editError, setEditError] = useState<unknown>(null);
   const [working, setWorking] = useState(false);
 
   useEffect(() => {
+    setEditError(null);
+    setConfirmDiscardOpen(false);
     if (!editTarget) {
       setEditDirty(false);
       onDirtyChange(false);
@@ -77,11 +82,21 @@ export function ResourceEditorDialog({
     onDirtyChange(false);
   }, [editTarget, onDirtyChange, onError]);
 
-  const closeEdit = () => {
-    if (!confirmDiscardRegistryDraft(editDirty)) return;
+  const discardAndCloseEdit = () => {
     setEditDirty(false);
+    setConfirmDiscardOpen(false);
+    setEditError(null);
     onDirtyChange(false);
     onClose();
+  };
+
+  const closeEdit = () => {
+    if (working) return;
+    if (editDirty) {
+      setConfirmDiscardOpen(true);
+      return;
+    }
+    discardAndCloseEdit();
   };
 
   const updateEdit = <K extends keyof EditDraft>(key: K, value: EditDraft[K]) => {
@@ -121,7 +136,7 @@ export function ResourceEditorDialog({
     if (editTarget.type === 'ASSET' || editTarget.type === 'DEVICE') {
       const tagRes = validateAndBuildTagMap(editDraft.tagEntries);
       if (!tagRes.ok) {
-        onError(new Error(tagRes.error));
+        setEditError(new Error(tagRes.error));
         return;
       }
       validatedTags = tagRes.tags;
@@ -133,6 +148,7 @@ export function ResourceEditorDialog({
       newRegistryIdempotencyKey(`${editTarget.type.toLowerCase()}-${editTarget.entity ? 'update' : 'create'}`),
     );
     setWorking(true);
+    setEditError(null);
     onError(null);
     try {
       let createdSiteId: string | null = null;
@@ -212,21 +228,44 @@ export function ResourceEditorDialog({
       onDirtyChange(false);
       await onSaved(message, createdSiteId);
     } catch (reason) {
-      onError(reason);
+      setEditError(reason);
     } finally {
       setWorking(false);
     }
   };
 
   const tagCheck = validateAndBuildTagMap(editDraft.tagEntries);
+  const presentedEditError = (() => {
+    if (!editError) return null;
+    if (editError instanceof Error && !('problem' in editError)) {
+      return {
+        title: '输入校验未通过',
+        description: editError.message,
+      };
+    }
+    return presentRegistryError(editError);
+  })();
 
   return (
-    <Dialog open={Boolean(editTarget)} onOpenChange={(open) => { if (!open) closeEdit(); }}>
-      <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>{editTarget ? (editTarget.entity ? RESOURCE_COPY[editTarget.type].editTitle : RESOURCE_COPY[editTarget.type].createLabel) : ''}</DialogTitle>
-          <DialogDescription>保存时服务端会再次检查权限、对象状态和并发版本。</DialogDescription>
-        </DialogHeader>
+    <>
+      <Dialog open={Boolean(editTarget)} onOpenChange={(open) => { if (!open) closeEdit(); }}>
+        <DialogContent
+          className="max-h-[88vh] overflow-y-auto sm:max-w-2xl"
+          showCloseButton={!working}
+          onEscapeKeyDown={(event) => { if (working) event.preventDefault(); }}
+          onPointerDownOutside={(event) => { if (working) event.preventDefault(); }}
+          onInteractOutside={(event) => { if (working) event.preventDefault(); }}
+        >
+          <DialogHeader>
+            <DialogTitle>{editTarget ? (editTarget.entity ? RESOURCE_COPY[editTarget.type].editTitle : RESOURCE_COPY[editTarget.type].createLabel) : ''}</DialogTitle>
+            <DialogDescription>保存时服务端会再次检查权限、对象状态和并发版本。</DialogDescription>
+          </DialogHeader>
+          {presentedEditError ? (
+            <Alert variant="destructive">
+              <AlertTitle>{presentedEditError.title}</AlertTitle>
+              <AlertDescription>{presentedEditError.description}</AlertDescription>
+            </Alert>
+          ) : null}
         {editTarget ? (
           <div className="grid gap-4">
             {editTarget.type !== 'POINT' ? (
@@ -435,10 +474,20 @@ export function ResourceEditorDialog({
           </div>
         ) : null}
         <DialogFooter>
-          <Button variant="outline" onClick={closeEdit}>取消</Button>
-          <Button disabled={!editValid || working} onClick={() => void runEdit()}>{working ? '正在保存…' : '保存'}</Button>
+          <Button variant="outline" disabled={working} onClick={closeEdit}>取消</Button>
+          <Button disabled={!editValid || working} onClick={() => void runEdit()}>
+            {working ? <Spinner data-icon="inline-start" /> : null}
+            {working ? '正在保存…' : '保存'}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
+
+    <ConfirmDiscardDialog
+      open={confirmDiscardOpen}
+      onOpenChange={setConfirmDiscardOpen}
+      onConfirmDiscard={discardAndCloseEdit}
+    />
+    </>
   );
 }

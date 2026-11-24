@@ -26,7 +26,7 @@ export function Sparkline({
   color = 'var(--primary)',
   curve = 'monotone',
   strokeWidth = 1.5,
-  animate = true,
+  animate = false,
   animationDuration = 500,
   className,
   ...props

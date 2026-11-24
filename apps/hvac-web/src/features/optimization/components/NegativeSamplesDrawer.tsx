@@ -22,6 +22,7 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Spinner } from '@/components/ui/spinner';
 import {
   Table,
   TableBody,
@@ -196,8 +197,8 @@ export function NegativeSamplesDrawer({
               disabled={exporting || samplesQuery.isPending || !data || data.total === 0}
               onClick={() => void handleExportJsonl()}
             >
-              <Download className="mr-1.5 size-3.5" aria-hidden="true" />
-              {exporting ? '导出中...' : '导出 JSONL'}
+              {exporting ? <Spinner data-icon="inline-start" /> : <Download data-icon="inline-start" aria-hidden="true" />}
+              {exporting ? '导出中…' : '导出 JSONL'}
             </Button>
           </div>
 
@@ -250,6 +251,10 @@ export function NegativeSamplesDrawer({
                                   size="icon-sm"
                                   aria-label={expanded ? '收起护栏判定细节' : '展开护栏判定细节'}
                                   aria-expanded={expanded}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    setExpandedId(expanded ? null : item.id);
+                                  }}
                                 >
                                   {expanded
                                     ? <ChevronDown className="size-3.5" aria-hidden="true" />
@@ -267,7 +272,10 @@ export function NegativeSamplesDrawer({
                               <TableCell className="text-xs font-medium">
                                 {formatNegativeSampleReason(item.reasonCode)}
                               </TableCell>
-                              <TableCell className="text-xs text-muted-foreground">
+                              <TableCell
+                                className="max-w-[200px] truncate text-xs text-muted-foreground"
+                                title={formatSolverRef(item.solverServingRef)}
+                              >
                                 {formatSolverRef(item.solverServingRef)}
                               </TableCell>
                               <TableCell className="whitespace-nowrap pr-4 text-right font-mono text-xs tabular-nums">

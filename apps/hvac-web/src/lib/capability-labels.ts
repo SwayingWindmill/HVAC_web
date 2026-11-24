@@ -34,13 +34,13 @@ export const CAPABILITY_CATALOG: Readonly<Record<KnownCapability, { readonly gro
   'space.write': { group: '管理', label: '空间结构' },
   'asset.write': { group: '管理', label: '资产' },
   'device.write': { group: '管理', label: '设备与网关' },
-  'sensor.write': { group: '管理', label: '传感器' },
+  'sensor.write': { group: '管理', label: '物理传感器' },
   'point.write': { group: '管理', label: '点位' },
   'binding.write': { group: '管理', label: '点位绑定' },
   'template.manage': { group: '管理', label: '模板版本' },
   'registry.import': { group: '管理', label: '登记导入' },
   'registry.retire': { group: '管理', label: '停用登记资源' },
-  'session.revoke': { group: '管理', label: '吊销会话' },
+  'session.revoke': { group: '管理', label: '强制下线' },
   'iam.admin': { group: '管理', label: '用户与权限' },
 };
 
