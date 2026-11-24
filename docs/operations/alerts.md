@@ -318,10 +318,10 @@ Prometheus 的告警规则在 `infra/observability/alerts/`，每条规则的 `r
 
 告警：`Phase1PublicEndpointDown`（`/healthz`、`/sign-in` 或 `/identity/.well-known/openid-configuration` 两分钟没有 200）、`Phase1TlsCertificateExpiring`（证书剩余不到 14 天）、`Phase1TlsCertificateExpiresSoon`（不到 3 天）。
 
-探测从 `blackbox-exporter` 访问 `https://hvac.swayingwindmill.online`。登录页是 `/sign-in`，不是 `/login`。
+探测从 `blackbox-exporter` 访问 `https://hvac.qlhtech.com`。登录页是 `/sign-in`，不是 `/login`。
 
-1. 在服务器上 `curl -fsS --resolve hvac.swayingwindmill.online:443:127.0.0.1 https://hvac.swayingwindmill.online/healthz`，期望正文是 `ok`。
-2. 证书是 Let's Encrypt。看到期日：`echo | openssl s_client -servername hvac.swayingwindmill.online -connect 127.0.0.1:443 2>/dev/null | openssl x509 -noout -enddate`。
+1. 在服务器上 `curl -fsS --resolve hvac.qlhtech.com:443:127.0.0.1 https://hvac.qlhtech.com/healthz`，期望正文是 `ok`。
+2. 证书是 Let's Encrypt（Cloudflare DNS-01 自动续期）。看到期日：`echo | openssl s_client -servername hvac.qlhtech.com -connect 127.0.0.1:443 2>/dev/null | openssl x509 -noout -enddate`。
 3. 续期由主机上的证书工具完成（仓库里没有 certbot 配置）。续期后把新的 `fullchain.pem` 和私钥放到主机 nginx 正在用的目录，再重载主机 nginx。不要把私钥提交进仓库。
 4. 只换了容器里的网页、没动主机 nginx 时，公网探测失败要先看主机 nginx 到 `127.0.0.1:18443` 的转发。
 
