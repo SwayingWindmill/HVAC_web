@@ -5,6 +5,19 @@
 
 ## 未发布
 
+### 2026-11-24
+
+#### 改进
+
+- 登录页地址精简为纯 `/sign-in`：身份服务将 `login_challenge` 与一次性失败提示保存在同源 `HttpOnly` Cookie 中，前端通过 `GET /identity/login-context` 读取当前登录步骤（密码或一次性验证码）与派生的 `csrfToken`；退出登录落到 `/?logged_out=1` 后由前端清理为 `/sign-in`。
+- 优化全站关键与破坏性操作确认流程：在设备与点位登记、告警规则与模板、网关证书吊销、生产环境边缘模型部署、系统用户角色调整及微信小程序退出登录等流程中，移除浏览器原生确认框并改为受控的应用内确认对话框（高风险动作要求显式勾选确认），提交期间锁定关闭与重复触发。
+- 减少人工重复输入并完善页内就地校验：从系统管理冷站列表跳转「设备与点位登记」时自动带入当前冷站；OTA 发布任务默认关闭自动全量推进并展示实时目标网关预览；外部求解器绑定在弹窗确认前先行校验地址语法与白名单；网关接入码提供一键复制并显示明确反馈。
+- 统一提示表达、辅助功能与异常恢复体验：修正图表指标说明的无障碍朗读关联以免干扰标签名称匹配；微信小程序在后台刷新失败时保留已有界面并在顶部提示数据可能过期；AI 助手站点快照统一将 `degC` 单位显示为 `°C`。
+
+#### 变更
+
+- 平台网页公网主入口切换至 `https://hvac.qlhtech.com`（通过 Cloudflare Tunnel 与 DNS-01 自动续期证书提供访问），并在过渡期内保留原域名 `https://hvac.swayingwindmill.online` 的微信小程序 `/api/` 与现场网关 `/gateway/v1/` 接口兼容（浏览器访问自动 301 跳转至新域名）。
+
 ### 2026-11-23
 
 #### 新增
@@ -51,6 +64,8 @@
 
 #### 修复
 
+- 修复同一台冷站设备同时接入电表与控制器时，在实时运行水力回路、总览、设备页面、数字孪生、能耗分析和微信小程序中被重复显示为多台设备的问题：按物理设备归并多接入设备的状态与读数，并在设备详情中列明关联的电表、控制器与点位来源。
+- 修复未绑定具体机台的总管转发读数（`PROVISIONAL_READINGS`）被误算进冷却塔或冷冻水泵台数的问题，并支持控制器裸点位 `run_state` 正确解析运行与停机状态。
 - 修复控制服务（`commandservice`）调用 IAM 决策接口的内部路径（由错误路径修正为 `/internal/v1/registry/decision` 与 `/internal/v1/command/decision`），并在 IAM 允许已认证调用方将自身 SPIFFE 身份声明为 `grantPresenter`（同时在默认配置中收录 `command-service`），解决 `GET /api/v1/commands` 与 `GET /api/v1/sites/{siteId}/control-state` 持续返回 `503 IAM_UNAVAILABLE` 的问题。
 - 修复总览页「今日用能」反复出现「今日能耗暂时读不到」（`POST /api/v1/analytics/energy-series` 返回 503）的慢性故障：
   - 在 `semantic/cube/model/cubes/energy_facts.yml` 消除 `period_end` 别名遮蔽并拆分缺表检测视图 `site_energy_missing`，恢复 ClickHouse 分区/主键裁剪并大幅减少子查询与扫描行数；
