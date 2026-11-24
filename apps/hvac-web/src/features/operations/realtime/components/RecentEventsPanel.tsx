@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { memo, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { AlertCircle, CircleCheck, Lock } from 'lucide-react';
@@ -15,7 +15,7 @@ import { CommandMark } from '@/features/control/components/CommandMark';
 import { ModeGlyph } from '@/features/control/components/ControlBoundary';
 import { commandLabels, controlTargets } from '@/features/control/control-model';
 import { activeLocks, controlActorLabel, LOCK_PRESENTATION, MODE_PRESENTATION, siteControlStateQuery } from '@/features/control/control-state';
-import { formatCompactTime } from '@/lib/operator-format';
+import { formatCompactTime, getDateTimeFormatter } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import type { PlantView } from '../plant-model';
 
@@ -30,7 +30,7 @@ interface PlantEvent {
 }
 
 /** Today at the plant, newest first: alarms, commands and devices whose data stopped. */
-export function RecentEvents({ plant, siteId, myId, timeZone, assetModel, canListAlarms, onInspect }: {
+export const RecentEvents = memo(function RecentEvents({ plant, siteId, myId, timeZone, assetModel, canListAlarms, onInspect }: {
   readonly plant: PlantView;
   readonly siteId: string;
   readonly myId: string;
@@ -44,62 +44,86 @@ export function RecentEvents({ plant, siteId, myId, timeZone, assetModel, canLis
   const controlState = useQuery(siteControlStateQuery(siteId));
   const modeState = controlState.data;
   const labels = useMemo(() => (assetModel ? commandLabels(controlTargets(assetModel, new Date())) : new Map()), [assetModel]);
-  const assetName = (assetId: string) => assetModel?.assets.find((asset) => asset.id === assetId)?.displayName ?? '设备';
-  const deviceName = (deviceId: string | undefined) => (deviceId ? plant.devices.find((device) => device.deviceId === deviceId)?.name ?? '设备' : '站点');
-  const dayFmt = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' });
-  const today = dayFmt.format(new Date());
-  const isToday = (value: string) => { const ms = Date.parse(value); return Number.isFinite(ms) && dayFmt.format(new Date(ms)) === today; };
-  const sortTs = (at: string) => { const ms = Date.parse(at); return Number.isFinite(ms) ? ms : 0; };
+  const staleKey = plant.devices
+    .filter((device) => device.hasStaleData || device.connection === 'OFFLINE')
+    .map((device) => [
+      device.deviceId,
+      device.row.device.displayName !== device.name ? `${device.name}（${device.row.device.displayName}）` : device.name,
+      device.connection === 'OFFLINE' ? 'OFFLINE' : 'STALE',
+      device.latestSampleAt ?? '',
+    ].join('\t'))
+    .join('\n');
+  const deviceNamesKey = plant.devices.map((device) => `${device.deviceId}\t${device.name}`).join('\n');
 
-  const events: PlantEvent[] = [
-    ...(canListAlarms ? alarms.data?.alarms ?? [] : []).flatMap((alarm) => alarm.timeline
-      .filter((entry) => isToday(entry.occurredAt) && (entry.operation === 'PUBLISH' || entry.operation === 'ACKNOWLEDGE' || entry.operation === 'CLEAR'))
-      .map((entry): PlantEvent => ({
-        key: `alarm-${alarm.alarmId}-${entry.version}`,
-        at: entry.occurredAt,
-        mark: entry.operation === 'CLEAR'
-          ? <CircleCheck className="size-3 text-success" aria-hidden="true" />
-          : <SeverityMark level={SEVERITY_LEVEL[entry.currentSeverity]} label="" />,
-        title: `${deviceName(alarm.deviceId)} · ${alarm.title}`,
-        detail: `${SEVERITY_LABELS[entry.currentSeverity]}告警 · ${operationLabel(entry.operation)}`,
-        to: { path: '/operations/alarms', inspect: alarm.alarmId },
-      }))),
-    ...(commands.data ?? []).filter((command) => isToday(command.updatedAt)).map((command): PlantEvent => {
-      const summary = commandSummary(command, labels);
-      return {
-        key: `command-${command.commandId}`,
-        at: command.updatedAt,
-        mark: <CommandMark status={command.status} />,
-        title: `${summary.target} · ${summary.title}`,
-        detail: `指令 · ${STATUS_PRESENTATION[command.status].label}`,
-        to: { path: '/operations/control', inspect: command.commandId },
-      };
-    }),
-    ...(modeState?.updatedAt && isToday(modeState.updatedAt) ? [{
-      key: `control-mode-${modeState.revision}`,
-      at: modeState.updatedAt,
-      mark: <ModeGlyph mode={modeState.controlMode} />,
-      title: `控制方式改为${MODE_PRESENTATION[modeState.controlMode].label}`,
-      detail: [controlActorLabel(modeState, myId), modeState.reason || '控制方式'].join(' · '),
-      to: { path: '/operations/control' },
-    } satisfies PlantEvent] : []),
-    ...[...activeLocks(controlState.data).values()].filter((lock) => lock.updatedAt && isToday(lock.updatedAt)).map((lock): PlantEvent => ({
-      key: `control-lock-${lock.assetId}-${lock.revision}`,
-      at: lock.updatedAt ?? '',
-      mark: <Lock className="size-3 text-muted-foreground" aria-hidden="true" />,
-      title: `${assetName(lock.assetId)} · ${lock.lockMode === 'UNLOCKED' ? '解除锁定' : LOCK_PRESENTATION[lock.lockMode].label}`,
-      detail: [controlActorLabel(lock, myId), lock.reason || '设备锁定'].join(' · '),
-      to: { path: '/operations/control' },
-    })),
-    ...plant.devices.filter((device) => device.hasStaleData || device.connection === 'OFFLINE').map((device): PlantEvent => ({
-      key: `data-${device.deviceId}`,
-      at: device.latestSampleAt ?? '',
-      mark: <svg viewBox="0 0 10 10" className="size-2.5 shrink-0" aria-hidden="true"><path d="M1.5 1.5h7v7h-7z" fill="none" strokeWidth="1.5" className="stroke-warning" /></svg>,
-      title: `${device.row.device.displayName !== device.name ? `${device.name}（${device.row.device.displayName}）` : device.name} · ${device.connection === 'OFFLINE' ? '通信离线' : '读数中断'}`,
-      detail: device.connection === 'OFFLINE' ? '设备离线' : '通信在线，没有新数据',
-      inspectDeviceId: device.deviceId,
-    })),
-  ].sort((left, right) => sortTs(right.at) - sortTs(left.at)).slice(0, 7);
+  const events: PlantEvent[] = useMemo(() => {
+    const assetName = (assetId: string) => assetModel?.assets.find((asset) => asset.id === assetId)?.displayName ?? '设备';
+    const nameMap = new Map<string, string>();
+    for (const line of deviceNamesKey ? deviceNamesKey.split('\n') : []) {
+      const sep = line.indexOf('\t');
+      if (sep > 0) nameMap.set(line.slice(0, sep), line.slice(sep + 1));
+    }
+    const deviceName = (deviceId: string | undefined) => (deviceId ? nameMap.get(deviceId) ?? '设备' : '站点');
+    const staleItems = staleKey
+      ? staleKey.split('\n').map((line) => {
+        const [deviceId = '', displayName = '', status = 'STALE', at = ''] = line.split('\t');
+        return { deviceId, displayName, offline: status === 'OFFLINE', at };
+      })
+      : [];
+    const dayFmt = getDateTimeFormatter('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' });
+    const today = dayFmt.format(new Date());
+    const isToday = (value: string) => { const ms = Date.parse(value); return Number.isFinite(ms) && dayFmt.format(new Date(ms)) === today; };
+    const sortTs = (at: string) => { const ms = Date.parse(at); return Number.isFinite(ms) ? ms : 0; };
+
+    return [
+      ...(canListAlarms ? alarms.data?.alarms ?? [] : []).flatMap((alarm) => alarm.timeline
+        .filter((entry) => isToday(entry.occurredAt) && (entry.operation === 'PUBLISH' || entry.operation === 'ACKNOWLEDGE' || entry.operation === 'CLEAR'))
+        .map((entry): PlantEvent => ({
+          key: `alarm-${alarm.alarmId}-${entry.version}`,
+          at: entry.occurredAt,
+          mark: entry.operation === 'CLEAR'
+            ? <CircleCheck className="size-3 text-success" aria-hidden="true" />
+            : <SeverityMark level={SEVERITY_LEVEL[entry.currentSeverity]} label="" />,
+          title: `${deviceName(alarm.deviceId)} · ${alarm.title}`,
+          detail: `${SEVERITY_LABELS[entry.currentSeverity]}告警 · ${operationLabel(entry.operation)}`,
+          to: { path: '/operations/alarms', inspect: alarm.alarmId },
+        }))),
+      ...(commands.data ?? []).filter((command) => isToday(command.updatedAt)).map((command): PlantEvent => {
+        const summary = commandSummary(command, labels);
+        return {
+          key: `command-${command.commandId}`,
+          at: command.updatedAt,
+          mark: <CommandMark status={command.status} />,
+          title: `${summary.target} · ${summary.title}`,
+          detail: `指令 · ${STATUS_PRESENTATION[command.status].label}`,
+          to: { path: '/operations/control', inspect: command.commandId },
+        };
+      }),
+      ...(modeState?.updatedAt && isToday(modeState.updatedAt) ? [{
+        key: `control-mode-${modeState.revision}`,
+        at: modeState.updatedAt,
+        mark: <ModeGlyph mode={modeState.controlMode} />,
+        title: `控制方式改为${MODE_PRESENTATION[modeState.controlMode].label}`,
+        detail: [controlActorLabel(modeState, myId), modeState.reason || '控制方式'].join(' · '),
+        to: { path: '/operations/control' },
+      } satisfies PlantEvent] : []),
+      ...[...activeLocks(controlState.data).values()].filter((lock) => lock.updatedAt && isToday(lock.updatedAt)).map((lock): PlantEvent => ({
+        key: `control-lock-${lock.assetId}-${lock.revision}`,
+        at: lock.updatedAt ?? '',
+        mark: <Lock className="size-3 text-muted-foreground" aria-hidden="true" />,
+        title: `${assetName(lock.assetId)} · ${lock.lockMode === 'UNLOCKED' ? '解除锁定' : LOCK_PRESENTATION[lock.lockMode].label}`,
+        detail: [controlActorLabel(lock, myId), lock.reason || '设备锁定'].join(' · '),
+        to: { path: '/operations/control' },
+      })),
+      ...staleItems.map((item): PlantEvent => ({
+        key: `data-${item.deviceId}`,
+        at: item.at,
+        mark: <svg viewBox="0 0 10 10" className="size-2.5 shrink-0" aria-hidden="true"><path d="M1.5 1.5h7v7h-7z" fill="none" strokeWidth="1.5" className="stroke-warning" /></svg>,
+        title: `${item.displayName} · ${item.offline ? '通信离线' : '读数中断'}`,
+        detail: item.offline ? '设备离线' : '通信在线，没有新数据',
+        inspectDeviceId: item.deviceId,
+      })),
+    ].sort((left, right) => sortTs(right.at) - sortTs(left.at)).slice(0, 7);
+  }, [alarms.data, assetModel, canListAlarms, commands.data, controlState.data, deviceNamesKey, labels, modeState, myId, staleKey, timeZone]);
 
   const pending = (canListAlarms && alarms.isPending) || commands.isPending;
   const hasError = (canListAlarms && alarms.isError) || commands.isError;
@@ -147,4 +171,4 @@ export function RecentEvents({ plant, siteId, myId, timeZone, assetModel, canLis
       {hasError && events.length > 0 ? <p className="px-4 pb-3 text-xs text-muted-foreground">{canListAlarms && alarms.isError ? '告警' : '指令'}记录暂时读不到</p> : null}
     </Panel>
   );
-}
+});

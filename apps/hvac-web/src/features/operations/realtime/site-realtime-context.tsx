@@ -1,6 +1,7 @@
-import { createContext, useCallback, useContext, useEffect, useId, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { getRouteApi } from '@tanstack/react-router';
-import { projectAssetsRealtimeRow } from '@/features/assets/realtime';
+import type { AssetsDeviceRow } from '@/features/assets/model';
+import { projectAssetsRealtimeRow, type AssetsRealtimeState } from '@/features/assets/realtime';
 import { siteDevicesRealtimeShellState } from '@/features/assets/realtime-shell-status';
 import { useSiteAssetsData } from '@/features/assets/use-site-assets-data';
 import { useSiteDevicesRealtime } from '@/features/assets/useSiteDevicesRealtime';
@@ -84,16 +85,40 @@ function SiteRealtimeHost({ children }: { readonly children: ReactNode }) {
   }, [publishRealtimeStatus, runtime, shellState, site.id, statusSource]);
   useEffect(() => () => runtime.releaseRealtimeStatus(statusSource), [runtime, statusSource]);
 
-  const rows = useMemo(
-    () => assets.rows.map((row) => projectAssetsRealtimeRow(row, realtime.states.get(row.device.id) ?? null).row),
-    [assets.rows, realtime.states],
-  );
+  const projectionCacheRef = useRef(new Map<string, {
+    readonly base: AssetsDeviceRow;
+    readonly state: AssetsRealtimeState | null;
+    readonly row: AssetsDeviceRow;
+  }>());
+  const rows = useMemo(() => {
+    const cache = projectionCacheRef.current;
+    const nextKeys = new Set<string>();
+    const nextRows = assets.rows.map((baseRow) => {
+      const deviceId = baseRow.device.id;
+      const state = realtime.states.get(deviceId) ?? null;
+      nextKeys.add(deviceId);
+      const cached = cache.get(deviceId);
+      if (cached && cached.base === baseRow && cached.state === state) {
+        return cached.row;
+      }
+      const projected = projectAssetsRealtimeRow(baseRow, state).row;
+      cache.set(deviceId, { base: baseRow, state, row: projected });
+      return projected;
+    });
+    for (const key of cache.keys()) {
+      if (!nextKeys.has(key)) cache.delete(key);
+    }
+    return nextRows;
+  }, [assets.rows, realtime.states]);
   const plant = useMemo(
     () => buildPlantView(rows, assets.registry.data?.assetModel),
     [assets.registry.data?.assetModel, rows],
   );
 
-  const liveCount = [...realtime.states.values()].filter((state) => state.status === 'live').length;
+  let liveCount = 0;
+  for (const state of realtime.states.values()) {
+    if (state.status === 'live') liveCount += 1;
+  }
   const mode: PlantLiveMode = realtime.phase === 'active' && liveCount > 0
     ? 'live'
     : realtime.phase === 'opening' ? 'connecting' : 'polling';

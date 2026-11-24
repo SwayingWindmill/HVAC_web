@@ -115,7 +115,7 @@ function defaultXFormatter(value: unknown) {
   return String(value)
 }
 
-function ComposedChart({
+const ComposedChart = React.memo(function ComposedChart({
   data,
   xKey,
   xType = "category",
@@ -131,7 +131,7 @@ function ComposedChart({
   rightYFormatter,
   barRadius = 4,
   maxBarSize = 36,
-  animate = true,
+  animate = false,
   animationDuration = 180,
   yDomain = "zero",
   onPointClick,
@@ -144,27 +144,35 @@ function ComposedChart({
     getReducedMotionSnapshot,
     getReducedMotionServerSnapshot
   )
-  const config = Object.fromEntries(
-    series.map((s, index) => [
-      s.key,
-      { label: s.label, color: s.color ?? `var(--chart-${(index % 5) + 1})` },
-    ])
-  ) satisfies ChartConfig
+  const config = React.useMemo(
+    () =>
+      Object.fromEntries(
+        series.map((s, index) => [
+          s.key,
+          { label: s.label, color: s.color ?? `var(--chart-${(index % 5) + 1})` },
+        ])
+      ) satisfies ChartConfig,
+    [series]
+  )
   const hasRightAxis = series.some((s) => s.axis === "right")
   const domain =
     yDomain === "auto" ? (["auto", "auto"] as const) : yDomain === "zero" ? undefined : yDomain
 
-  const maxPoints = series
-    .filter((s) => s.highlightMax)
-    .map((s) => {
-      let best: { x: unknown; y: number } | null = null
-      for (const row of data) {
-        const y = Number(row[s.key])
-        if (Number.isFinite(y) && (!best || y > best.y)) best = { x: row[xKey], y }
-      }
-      return best ? { ...best, key: s.key, axis: s.axis ?? "left" } : null
-    })
-    .filter((p): p is NonNullable<typeof p> => p !== null)
+  const maxPoints = React.useMemo(
+    () =>
+      series
+        .filter((s) => s.highlightMax)
+        .map((s) => {
+          let best: { x: unknown; y: number } | null = null
+          for (const row of data) {
+            const y = Number(row[s.key])
+            if (Number.isFinite(y) && (!best || y > best.y)) best = { x: row[xKey], y }
+          }
+          return best ? { ...best, key: s.key, axis: s.axis ?? "left" } : null
+        })
+        .filter((p): p is NonNullable<typeof p> => p !== null),
+    [data, series, xKey]
+  )
 
   return (
     <ChartContainer
@@ -366,6 +374,6 @@ function ComposedChart({
       </RechartsComposedChart>
     </ChartContainer>
   )
-}
+})
 
 export { ComposedChart }

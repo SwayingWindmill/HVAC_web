@@ -17,7 +17,7 @@ import { FocusHeading } from './FocusHeading';
 import { ShellRuntimeProvider } from './ShellRuntimeContext';
 import { createBrowserShellEnvironment, createShellRuntime, type ShellSnapshot } from './shell-runtime';
 import { shouldInvalidateRouter } from './shell-policy';
-import { createHvacRouter } from './router';
+import { createHvacRouter, preloadPathChunks } from './router';
 import type { RuntimeConfig, RuntimeConfigFailure } from './runtime-config';
 
 const WEB_GRAPH_MARKER = 'HVAC_WEB_AUTHORITATIVE_GRAPH_V1';
@@ -224,6 +224,10 @@ export function AppRuntimeHost({ config, queryClient }: { config: RuntimeConfig;
       if (shouldInvalidateRouter(previous, next)) void resources.router.invalidate();
       previous = next;
     });
+    if (window.location.pathname !== '/sign-in') {
+      const initialTarget = window.location.pathname === '/' ? '/overview' : window.location.pathname;
+      preloadPathChunks(resources.router, initialTarget);
+    }
     void resources.runtime.bootstrap(window.location.href);
     return () => {
       unsubscribe();

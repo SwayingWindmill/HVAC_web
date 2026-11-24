@@ -26,6 +26,18 @@ export function createHvacRouter(context: HvacRouterContext) {
 
 export type HvacRouter = ReturnType<typeof createHvacRouter>;
 
+/** Preload route code chunks for a pathname without running route loaders or guards. */
+export function preloadPathChunks(
+  router: Pick<HvacRouter, 'getMatchedRoutes' | 'loadRouteChunk'>,
+  targetHrefOrPath: string,
+): void {
+  const pathname = targetHrefOrPath.split(/[?#]/)[0] || '/';
+  const [matchedRoutes] = router.getMatchedRoutes(pathname);
+  for (const route of matchedRoutes) {
+    void Promise.resolve(router.loadRouteChunk(route)).catch(() => undefined);
+  }
+}
+
 declare module '@tanstack/react-router' {
   interface Register {
     router: HvacRouter;

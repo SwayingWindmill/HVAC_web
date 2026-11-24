@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { ChevronDown, KeyRound, LogOut, ShieldCheck } from 'lucide-react';
 import { useShellSnapshot } from '@/app/ShellRuntimeContext';
 import {
@@ -22,7 +22,10 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Spinner } from '@/components/ui/spinner';
-import { ChangePasswordDialog } from '@/features/account/ChangePasswordDialog';
+
+const LazyChangePasswordDialog = lazy(() =>
+  import('@/features/account/ChangePasswordDialog').then((mod) => ({ default: mod.ChangePasswordDialog })),
+);
 
 interface NavUserProps {
   readonly name: string;
@@ -36,10 +39,15 @@ interface NavUserProps {
 /** The signed-in user at the right of the top bar: who they are, and the way out. */
 export function NavUser({ name, role, csrfToken, onNavigate, onLogout, loggingOut = false }: NavUserProps) {
   const [changingPassword, setChangingPassword] = useState(false);
+  const [passwordMounted, setPasswordMounted] = useState(false);
   const [confirmLogout, setConfirmLogout] = useState(false);
   const wasLoggingOut = useRef(false);
   const snapshot = useShellSnapshot();
   const canOpenSystem = snapshot.principal?.authorization.capabilities.includes('site.list') ?? false;
+
+  useEffect(() => {
+    if (changingPassword) setPasswordMounted(true);
+  }, [changingPassword]);
 
   useEffect(() => {
     if (wasLoggingOut.current && !loggingOut) {
@@ -89,7 +97,11 @@ export function NavUser({ name, role, csrfToken, onNavigate, onLogout, loggingOu
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
-    <ChangePasswordDialog open={changingPassword} onOpenChange={setChangingPassword} csrfToken={csrfToken} />
+    {passwordMounted ? (
+      <Suspense fallback={null}>
+        <LazyChangePasswordDialog open={changingPassword} onOpenChange={setChangingPassword} csrfToken={csrfToken} />
+      </Suspense>
+    ) : null}
     <AlertDialog open={confirmLogout} onOpenChange={(next) => { if (!loggingOut) setConfirmLogout(next); }}>
       <AlertDialogContent onEscapeKeyDown={(event) => { if (loggingOut) event.preventDefault(); }}>
         <AlertDialogHeader>

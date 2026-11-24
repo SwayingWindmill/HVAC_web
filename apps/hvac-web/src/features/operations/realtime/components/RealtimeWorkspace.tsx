@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, Link, useNavigate } from '@tanstack/react-router';
 import { ChevronRight, Lock, RefreshCw } from 'lucide-react';
@@ -14,7 +14,7 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { activeLocks, siteControlStateQuery } from '@/features/control/control-state';
 import { DataGapBanner } from '@/features/data-gaps/DataGapBanner';
 import { dataGapsKeys } from '@/features/data-gaps/query';
-import { formatDecimal } from '@/lib/operator-format';
+import { formatDecimal, getDateTimeFormatter } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import { coolingUncertaintyText, copUncertaintyText, equipmentStatus, findPlantUnit, loopDifferentialPressure, PLANT_CATEGORY_LABELS, plantReading, probeOffsetText, type ParallelBranch, type PlantDevice, type PlantReading, type PlantView, type WaterLoopKind } from '../plant-model';
 import { useRealtimePlant } from '../use-realtime-plant';
@@ -22,9 +22,12 @@ import { usePlantHistory } from '../use-plant-history';
 import { copSeries, COOLING_KEY, hourAgo, POWER_KEY } from '../plant-trend';
 import { deviceStatus, formatClock, LiveIndicator, LowConfidenceBadge, ReadingMetric, ReadingValue } from '../device-presentation';
 import { buildTimeSlots, fillGaugeSlots, fillScalarSlots } from '../../trends/timeline';
-import { DeviceInspector } from '../../systems-devices/components/DeviceInspector';
 import { PlantHydraulicSchematic } from './PlantHydraulicSchematic';
 import { RecentEvents } from './RecentEventsPanel';
+
+const LazyDeviceInspector = lazy(() =>
+  import('../../systems-devices/components/DeviceInspector').then((mod) => ({ default: mod.DeviceInspector })),
+);
 
 const pageRoute = getRouteApi('/_app/_site/operations/realtime');
 const siteRoute = getRouteApi('/_app/_site');
@@ -32,7 +35,11 @@ const siteRoute = getRouteApi('/_app/_site');
 type Metric = 'power' | 'cooling' | 'cop';
 type Window = '6h' | '24h';
 
-function MetricTab({ label, selected, onSelect, value, unit, values, hasTrend, caption, info }: {
+const PLANT_TREND_KEYS: readonly string[] = [POWER_KEY, COOLING_KEY];
+const METRIC_TITLES: Readonly<Record<Metric, string>> = { power: '冷站总功率', cooling: '瞬时制冷量', cop: '冷站 COP' };
+const METRIC_UNITS: Readonly<Record<Metric, string>> = { power: 'kW', cooling: 'kW', cop: '' };
+
+const MetricTab = memo(function MetricTab({ label, selected, onSelect, value, unit, values, hasTrend, caption, info }: {
   readonly label: string;
   readonly selected: boolean;
   readonly onSelect: () => void;
@@ -70,9 +77,62 @@ function MetricTab({ label, selected, onSelect, value, unit, values, hasTrend, c
       <span className="truncate text-xs text-muted-foreground">{caption}</span>
     </button>
   );
-}
+});
 
-function PlantTrendPanel({ plant, metric, window, onMetric, onWindow, timeZone }: {
+const PlantHistoryChart = memo(function PlantHistoryChart({
+  slots,
+  metric,
+  title,
+  fromMs,
+  toMs,
+  timeZone,
+}: {
+  readonly slots: ReturnType<typeof fillScalarSlots>;
+  readonly metric: Metric;
+  readonly title: string;
+  readonly fromMs: number;
+  readonly toMs: number;
+  readonly timeZone: string;
+}) {
+  const digits = metric === 'cop' ? 2 : 1;
+  const chartData = useMemo(
+    () => slots.map((slot) => ({
+      at: slot.startMs,
+      value: slot.value === null ? null : Number(slot.value.toFixed(digits)),
+    })),
+    [digits, slots],
+  );
+  const xDomain = useMemo<readonly [number, number]>(() => [fromMs, toMs], [fromMs, toMs]);
+  const chartSeries = useMemo(
+    () => [{ key: 'value', label: title, type: 'area' as const, color: 'var(--chart-1)' }],
+    [title],
+  );
+  const xFormatter = useCallback((value: unknown) => {
+    const ms = typeof value === 'string' && value.trim() === '' ? NaN : Number(value);
+    if (!Number.isFinite(ms)) return '';
+    return getDateTimeFormatter('zh-CN', { timeZone, hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(ms));
+  }, [timeZone]);
+  const yFormatter = useCallback((value: number) => formatDecimal(value, metric === 'cop' ? 2 : 0), [metric]);
+
+  return (
+    <ComposedChart
+      data={chartData}
+      xKey="at"
+      xType="number"
+      xDomain={xDomain}
+      xFormatter={xFormatter}
+      series={chartSeries}
+      showGrid
+      showYAxis
+      yDomain={metric === 'cop' ? 'auto' : 'zero'}
+      yFormatter={yFormatter}
+      animate={false}
+      className="h-[230px]"
+    />
+  );
+});
+
+const PlantTrendPanel = memo(function PlantTrendPanel({ plant, metric, window, onMetric, onWindow, timeZone }: {
   readonly plant: PlantView;
   readonly metric: Metric;
   readonly window: Window;
@@ -80,7 +140,7 @@ function PlantTrendPanel({ plant, metric, window, onMetric, onWindow, timeZone }
   readonly onWindow: (window: Window) => void;
   readonly timeZone: string;
 }) {
-  const history = usePlantHistory(plant, [POWER_KEY, COOLING_KEY], window === '24h' ? 24 : 6);
+  const history = usePlantHistory(plant, PLANT_TREND_KEYS, window === '24h' ? 24 : 6);
   const series = useMemo(() => {
     const power = history.series.get(POWER_KEY) ?? [];
     const cooling = history.series.get(COOLING_KEY) ?? [];
@@ -102,14 +162,17 @@ function PlantTrendPanel({ plant, metric, window, onMetric, onWindow, timeZone }
     }),
     [slots, series],
   );
-  const clock = new Intl.DateTimeFormat('zh-CN', { timeZone, hour: '2-digit', minute: '2-digit', hour12: false });
+  const powerValues = useMemo(() => filled.power.map((point) => point.value), [filled.power]);
+  const coolingValues = useMemo(() => filled.cooling.map((point) => point.value), [filled.cooling]);
+  const copValues = useMemo(() => filled.cop.map((point) => point.value), [filled.cop]);
+  const selectPower = useCallback(() => onMetric('power'), [onMetric]);
+  const selectCooling = useCallback(() => onMetric('cooling'), [onMetric]);
+  const selectCop = useCallback(() => onMetric('cop'), [onMetric]);
   const selected = series[metric];
   const selectedSlots = filled[metric];
   const powerAgo = hourAgo(series.power);
   const coolingAgo = hourAgo(series.cooling);
   const copPeak = series.cop.length > 0 ? Math.max(...series.cop.map((point) => point.value)) : null;
-  const titles: Readonly<Record<Metric, string>> = { power: '冷站总功率', cooling: '瞬时制冷量', cop: '冷站 COP' };
-  const units: Readonly<Record<Metric, string>> = { power: 'kW', cooling: 'kW', cop: '' };
 
   return (
     <Panel role="region" aria-label="冷站运行">
@@ -117,27 +180,27 @@ function PlantTrendPanel({ plant, metric, window, onMetric, onWindow, timeZone }
         <MetricTab
           label="冷站总功率"
           selected={metric === 'power'}
-          onSelect={() => onMetric('power')}
+          onSelect={selectPower}
           value={<ReadingMetric reading={plant.totalPower} digits={1} unit="kW" />}
-          values={filled.power.map((point) => point.value)}
+          values={powerValues}
           hasTrend={series.power.length > 1}
           caption={powerAgo === null ? '空调总电表' : `1 小时前 ${formatDecimal(powerAgo, 1)} kW`}
         />
         <MetricTab
           label="瞬时制冷量"
           selected={metric === 'cooling'}
-          onSelect={() => onMetric('cooling')}
+          onSelect={selectCooling}
           value={<ReadingMetric reading={plant.coolingCapacity} digits={0} unit="kW" />}
-          values={filled.cooling.map((point) => point.value)}
+          values={coolingValues}
           hasTrend={series.cooling.length > 1}
           caption={[coolingAgo === null ? '冷量表' : `1 小时前 ${formatDecimal(coolingAgo, 0)} kW`, coolingUncertaintyText(plant.coolingCapacity)].filter(Boolean).join(' · ')}
         />
         <MetricTab
           label="冷站 COP"
           selected={metric === 'cop'}
-          onSelect={() => onMetric('cop')}
+          onSelect={selectCop}
           value={plant.plantCop === null ? <span className="text-muted-foreground">—</span> : <>{formatDecimal(plant.plantCop, 2)}{plant.plantCopLowConfidence ? <LowConfidenceBadge /> : null}</>}
-          values={filled.cop.map((point) => point.value)}
+          values={copValues}
           hasTrend={series.cop.length > 1}
           caption={[copPeak === null ? '制冷量 ÷ 总功率' : `近 ${window === '24h' ? 24 : 6} 小时最高 ${formatDecimal(copPeak, 2)}`, copUncertaintyText(plant)].filter(Boolean).join(' · ')}
           info="冷站瞬时制冷量 ÷ 冷站总功率。温差相对探头误差过小时照常计算，标「低可信」并给出区间，这段不计入能效均值、故障诊断和节能验证。任一读数过期或不可信时不计算。"
@@ -146,8 +209,8 @@ function PlantTrendPanel({ plant, metric, window, onMetric, onWindow, timeZone }
       {probeOffsetText(plant) ? <p className="border-b border-divider px-5 py-2 text-xs text-muted-foreground">{probeOffsetText(plant)}</p> : null}
       <div className="flex flex-col gap-2 px-5 pt-3.5 pb-3">
         <div className="flex items-center gap-2.5">
-          <span className="text-sm font-semibold">{titles[metric]}</span>
-          <span className="text-xs text-muted-foreground">近 {window === '24h' ? 24 : 6} 小时 · 15 分钟平均{units[metric] ? ` · ${units[metric]}` : ''}</span>
+          <span className="text-sm font-semibold">{METRIC_TITLES[metric]}</span>
+          <span className="text-xs text-muted-foreground">近 {window === '24h' ? 24 : 6} 小时 · 15 分钟平均{METRIC_UNITS[metric] ? ` · ${METRIC_UNITS[metric]}` : ''}</span>
           <ToggleGroup
             type="single"
             variant="outline"
@@ -171,28 +234,19 @@ function PlantTrendPanel({ plant, metric, window, onMetric, onWindow, timeZone }
         ) : selected.length < 2 ? (
           <p className="flex h-[230px] items-center justify-center text-sm text-muted-foreground">这段时间没有记录</p>
         ) : (
-          <ComposedChart
-            data={selectedSlots.map((slot) => ({
-              at: slot.startMs,
-              value: slot.value === null ? null : Number(slot.value.toFixed(metric === 'cop' ? 2 : 1)),
-            }))}
-            xKey="at"
-            xType="number"
-            xDomain={[history.fromMs, history.toMs]}
-            xFormatter={(value) => { const ms = typeof value === 'string' && value.trim() === '' ? NaN : Number(value); return Number.isFinite(ms) ? clock.format(new Date(ms)) : ''; }}
-            series={[{ key: 'value', label: titles[metric], type: 'area', color: 'var(--chart-1)' }]}
-            showGrid
-            showYAxis
-            yDomain={metric === 'cop' ? 'auto' : 'zero'}
-            yFormatter={(value) => formatDecimal(value, metric === 'cop' ? 2 : 0)}
-            animate={false}
-            className="h-[230px]"
+          <PlantHistoryChart
+            slots={selectedSlots}
+            metric={metric}
+            title={METRIC_TITLES[metric]}
+            fromMs={history.fromMs}
+            toMs={history.toMs}
+            timeZone={timeZone}
           />
         )}
       </div>
     </Panel>
   );
-}
+});
 
 const LOOPS: readonly {
   readonly name: string;
@@ -306,6 +360,31 @@ function ParallelBranchCard({ branch, onInspect }: { readonly branch: ParallelBr
   );
 }
 
+const LOOP_SOURCE_KEYS: readonly string[] = LOOPS.map((loop) => loop.main[1]);
+const LOOP_HEADERS = ['系统', '主读数', '其他读数', '近 6 小时', '数据时间'] as const;
+
+const LoopSparklineCell = memo(function LoopSparklineCell({
+  slots,
+  recorded,
+  stale,
+}: {
+  readonly slots: ReturnType<typeof buildTimeSlots>;
+  readonly recorded: Parameters<typeof fillGaugeSlots>[1];
+  readonly stale: boolean;
+}) {
+  const values = useMemo(() => fillGaugeSlots(slots, recorded).map((slot) => slot.average), [slots, recorded]);
+  if (recorded.length <= 1) return <span className="text-xs text-subtle-foreground">—</span>;
+  return (
+    <Sparkline
+      data={values}
+      variant="line"
+      animate={false}
+      color={stale ? 'var(--muted-foreground)' : 'var(--chart-1)'}
+      className="h-6 w-full"
+    />
+  );
+});
+
 function ParallelBranchesPanel({ plant, onInspect }: { readonly plant: PlantView; readonly onInspect: (deviceId: string) => void }) {
   if (plant.branches.length === 0) return null;
   return (
@@ -320,9 +399,11 @@ function ParallelBranchesPanel({ plant, onInspect }: { readonly plant: PlantView
   );
 }
 
+const ParallelBranchesSection = memo(ParallelBranchesPanel);
+
 /** The two water loops and the air they serve, each led by the reading an operator checks first. */
-function LoopsTable({ plant, timeZone }: { readonly plant: PlantView; readonly timeZone: string }) {
-  const history = usePlantHistory(plant, LOOPS.map((loop) => loop.main[1]), 6);
+const LoopsTable = memo(function LoopsTable({ plant, timeZone }: { readonly plant: PlantView; readonly timeZone: string }) {
+  const history = usePlantHistory(plant, LOOP_SOURCE_KEYS, 6);
   const slots = useMemo(
     () => buildTimeSlots({ fromMs: history.fromMs, toMs: history.toMs, granularity: 'QUARTER_HOUR', timeZone }),
     [history.fromMs, history.toMs, timeZone],
@@ -334,14 +415,13 @@ function LoopsTable({ plant, timeZone }: { readonly plant: PlantView; readonly t
       <PanelHeader title="水系统与室内外环境" />
       <div role="table" aria-label="水系统与室内外环境" className="grid grid-cols-[110px_170px_minmax(0,1fr)_150px_148px]">
         <div role="row" className="contents text-xs font-medium text-muted-foreground">
-          {['系统', '主读数', '其他读数', '近 6 小时', '数据时间'].map((title, index) => (
+          {LOOP_HEADERS.map((title, index) => (
             <span key={title} role="columnheader" className={cn('flex h-9 items-center border-b bg-muted px-4', index === 4 && 'justify-end')}>{title}</span>
           ))}
         </div>
         {rows.map(({ loop, reading }) => {
           const stale = reading ? !reading.current : false;
           const recorded = history.series.get(loop.main[1]) ?? [];
-          const values = fillGaugeSlots(slots, recorded).map((slot) => slot.average);
           const loopDp = loop.waterLoop ? loopDifferentialPressure(plant, loop.waterLoop) : null;
           const branchCount = loop.waterLoop ? (plant.loopBranches[loop.waterLoop] ?? 0) : 0;
           const extraOthers: readonly (readonly [string, PlantReading | null])[] = [
@@ -365,7 +445,7 @@ function LoopsTable({ plant, timeZone }: { readonly plant: PlantView; readonly t
                 ))}
               </span>
               <span role="cell" className="flex h-[42px] items-center border-b border-divider px-4">
-                {recorded.length > 1 ? <Sparkline data={values} variant="line" animate={false} color={stale ? 'var(--muted-foreground)' : 'var(--chart-1)'} className="h-6 w-full" /> : <span className="text-xs text-subtle-foreground">—</span>}
+                <LoopSparklineCell slots={slots} recorded={recorded} stale={stale} />
               </span>
               <span role="cell" className={cn('flex h-[42px] items-center justify-end gap-1.5 border-b border-divider px-4 font-mono text-xs whitespace-nowrap', stale ? 'text-warning-text' : 'text-secondary-foreground')}>
                 {stale ? <span className="shrink-0 whitespace-nowrap rounded-md bg-warning-soft px-1.5 font-sans text-[11px] leading-[18px] font-medium">读数过期</span> : null}
@@ -377,7 +457,7 @@ function LoopsTable({ plant, timeZone }: { readonly plant: PlantView; readonly t
       </div>
     </Panel>
   );
-}
+});
 
 export function RealtimeWorkspace() {
   const { principal } = siteRoute.useRouteContext();
@@ -390,7 +470,19 @@ export function RealtimeWorkspace() {
   const controlState = useQuery(siteControlStateQuery(site.id));
   const lockCount = activeLocks(controlState.data).size;
   const inspected = findPlantUnit(plant, search.inspect);
-  const setSearch = (patch: { metric?: Metric; window?: Window; inspect?: string }) => void navigate({ search: (previous) => ({ ...previous, ...patch }), replace: true });
+  const [inspectorMounted, setInspectorMounted] = useState(() => Boolean(search.inspect));
+  useEffect(() => {
+    if (search.inspect) setInspectorMounted(true);
+  }, [search.inspect]);
+  const setSearch = useCallback(
+    (patch: { metric?: Metric; window?: Window; inspect?: string }) => void navigate({ search: (previous) => ({ ...previous, ...patch }), replace: true }),
+    [navigate],
+  );
+  const handleInspect = useCallback((deviceId: string) => setSearch({ inspect: deviceId }), [setSearch]);
+  const handleMetric = useCallback((metric: Metric) => setSearch({ metric }), [setSearch]);
+  const handleWindow = useCallback((window: Window) => setSearch({ window }), [setSearch]);
+  const handleCloseInspector = useCallback(() => setSearch({ inspect: undefined }), [setSearch]);
+  const canListAlarms = principal.authorization.capabilities.includes('alarm.list');
 
   return (
     <Main>
@@ -450,8 +542,8 @@ export function RealtimeWorkspace() {
               plant={plant}
               metric={search.metric ?? 'cop'}
               window={search.window ?? '6h'}
-              onMetric={(metric) => setSearch({ metric })}
-              onWindow={(window) => setSearch({ window })}
+              onMetric={handleMetric}
+              onWindow={handleWindow}
               timeZone={site.timezone}
             />
             <RecentEvents
@@ -460,26 +552,30 @@ export function RealtimeWorkspace() {
               myId={principal.principalId}
               timeZone={site.timezone}
               assetModel={registry.data?.assetModel}
-              canListAlarms={principal.authorization.capabilities.includes('alarm.list')}
-              onInspect={(deviceId) => setSearch({ inspect: deviceId })}
+              canListAlarms={canListAlarms}
+              onInspect={handleInspect}
             />
           </div>
           <PlantHydraulicSchematic
             plant={plant}
             siteId={site.id}
             selectedDeviceId={search.inspect}
-            onInspect={(deviceId) => setSearch({ inspect: deviceId })}
+            onInspect={handleInspect}
           />
           <LoopsTable plant={plant} timeZone={site.timezone} />
-          <ParallelBranchesPanel plant={plant} onInspect={(deviceId) => setSearch({ inspect: deviceId })} />
+          <ParallelBranchesSection plant={plant} onInspect={handleInspect} />
         </>
       ) : null}
 
-      <DeviceInspector
-        device={inspected}
-        categoryLabel={inspected ? PLANT_CATEGORY_LABELS[inspected.category] : ''}
-        onClose={() => setSearch({ inspect: undefined })}
-      />
+      {inspectorMounted ? (
+        <Suspense fallback={null}>
+          <LazyDeviceInspector
+            device={inspected}
+            categoryLabel={inspected ? PLANT_CATEGORY_LABELS[inspected.category] : ''}
+            onClose={handleCloseInspector}
+          />
+        </Suspense>
+      ) : null}
     </Main>
   );
 }

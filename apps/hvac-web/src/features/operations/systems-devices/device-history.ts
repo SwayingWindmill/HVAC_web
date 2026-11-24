@@ -1,7 +1,9 @@
 import { queryOptions } from '@tanstack/react-query';
 import { createS2TelemetryClient, type DeviceHistoryAggregateBucket } from '@/api/generated/s2Telemetry.gen';
+import { createConcurrencyLimiter } from '@/lib/concurrency-limiter';
 
 const client = createS2TelemetryClient();
+const dayHistoryLimiter = createConcurrencyLimiter(4);
 const HOUR_MS = 3_600_000;
 
 /** The history owner accepts at most eight keys per query. */
@@ -45,18 +47,19 @@ export function deviceDayHistoryQuery(input: {
   const { fromMs, toMs } = input.window ?? dayHistoryWindow();
   return queryOptions({
     queryKey: ['device-history', input.siteId, input.deviceId, input.keys, toMs],
-    queryFn: async ({ signal }) => {
-      const response = await client.queryDeviceHistoryAggregate({
-        deviceId: input.deviceId,
-        keys: [...input.keys],
-        from: new Date(fromMs).toISOString(),
-        to: new Date(toMs).toISOString(),
-        granularity: 'HOUR',
-        timezone: input.timezone,
-        qualityPolicy: 'USABLE',
-      }, { csrfToken: input.csrfToken, signal });
-      return groupByKey(response.buckets);
-    },
+    queryFn: ({ signal }) =>
+      dayHistoryLimiter.run(async () => {
+        const response = await client.queryDeviceHistoryAggregate({
+          deviceId: input.deviceId,
+          keys: [...input.keys],
+          from: new Date(fromMs).toISOString(),
+          to: new Date(toMs).toISOString(),
+          granularity: 'HOUR',
+          timezone: input.timezone,
+          qualityPolicy: 'USABLE',
+        }, { csrfToken: input.csrfToken, signal });
+        return groupByKey(response.buckets);
+      }, signal),
     staleTime: 5 * 60_000,
   });
 }

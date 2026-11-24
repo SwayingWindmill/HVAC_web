@@ -9,12 +9,12 @@ import {
   type AssetsRealtimeScope,
   type AssetsRealtimeState,
 } from './realtime.ts';
-import { createBoundedRealtimePublisher } from './realtime-publisher.ts';
 import type { AssetsTelemetryLiveSession, AssetsTelemetryRuntime } from './telemetry-runtime.ts';
 
 // Public subscription limits of the telemetry stream (one session per page).
 const MAX_SUBSCRIPTIONS = 100;
 const MAX_TOTAL_KEYS = 2048;
+const REALTIME_COMMIT_INTERVAL_MS = 400;
 
 export type SiteDevicesRealtimePhase =
   | 'closed'
@@ -118,30 +118,37 @@ export function useSiteDevicesRealtime({
       if (purge) runtime.live.purge();
     };
 
+    let rafId: number | null = null;
+    let timerId: number | null = null;
+    let lastCommitAt = -Infinity;
+    let hasCommitted = false;
+    const validatedByDevice = new Map<string, {
+      readonly state: ReturnType<AssetsTelemetryLiveSession['getState']>;
+      readonly validated: AssetsRealtimeState;
+    }>();
+
+    const cancelScheduled = () => {
+      if (rafId !== null) {
+        window.cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+      if (timerId !== null) {
+        window.clearTimeout(timerId);
+        timerId = null;
+      }
+    };
+
     const fail = (error: unknown) => {
-      publisher.cancel();
+      cancelScheduled();
       close(true);
       scopeGuard.commit(() => setResult({ phase: 'error', states: NO_STATES, error: errorValue(error) }));
     };
-
-    const publisher = createBoundedRealtimePublisher<ReadonlyMap<string, AssetsRealtimeState>>(
-      (callback) => window.requestAnimationFrame(callback),
-      (handle) => window.cancelAnimationFrame(handle),
-      (states) => {
-        if (!active) return;
-        if (!scopeGuard.commit(() => setResult({ phase: 'active', states, error: null }))) {
-          close(false);
-          return;
-        }
-        if ([...states.values()].some((state) => state.status === 'revoked')) runtime.live.purge();
-      },
-    );
 
     const unregister = registerProtectedResource({
       id: `site-devices-realtime:${protectedGeneration}`,
       kind: 'realtime',
       purge: () => {
-        publisher.cancel();
+        cancelScheduled();
         close(true);
         setResult({ phase: 'purged', states: NO_STATES, error: null });
       },
@@ -154,21 +161,77 @@ export function useSiteDevicesRealtime({
         return;
       }
       session = opened;
-      const publish = () => {
+
+      let lastCommittedSize = 0;
+      const flush = () => {
+        rafId = null;
+        if (timerId !== null) {
+          window.clearTimeout(timerId);
+          timerId = null;
+        }
+        if (!active) return;
         const states = new Map<string, AssetsRealtimeState>();
+        let anyChanged = false;
         try {
           for (const scope of scopes) {
             const state = opened.getState(scope.clientSubscriptionId);
-            if (state) states.set(scope.deviceId, validateAssetsRealtimeState(state, scope));
+            if (!state) continue;
+            const cached = validatedByDevice.get(scope.deviceId);
+            if (cached && cached.state === state) {
+              states.set(scope.deviceId, cached.validated);
+            } else {
+              const validated = validateAssetsRealtimeState(state, scope);
+              validatedByDevice.set(scope.deviceId, { state, validated });
+              states.set(scope.deviceId, validated);
+              anyChanged = true;
+            }
           }
         } catch (error) {
           fail(error);
           return;
         }
-        publisher.push(states);
+        if (hasCommitted && !anyChanged && states.size === lastCommittedSize) {
+          return;
+        }
+        if (!scopeGuard.commit(() => setResult({ phase: 'active', states, error: null }))) {
+          close(false);
+          return;
+        }
+        hasCommitted = true;
+        lastCommittedSize = states.size;
+        lastCommitAt = performance.now();
+        for (const state of states.values()) {
+          if (state.status === 'revoked') {
+            runtime.live.purge();
+            break;
+          }
+        }
       };
-      publish();
-      unsubscribe = opened.subscribe(publish);
+
+      const scheduleFlush = (urgent: boolean) => {
+        if (!active) return;
+        const now = performance.now();
+        const elapsed = now - lastCommitAt;
+        if (urgent || !hasCommitted || elapsed >= REALTIME_COMMIT_INTERVAL_MS) {
+          if (timerId !== null) {
+            window.clearTimeout(timerId);
+            timerId = null;
+          }
+          if (rafId === null) rafId = window.requestAnimationFrame(flush);
+          return;
+        }
+        if (rafId !== null || timerId !== null) return;
+        timerId = window.setTimeout(() => {
+          timerId = null;
+          if (!active) return;
+          if (rafId === null) rafId = window.requestAnimationFrame(flush);
+        }, REALTIME_COMMIT_INTERVAL_MS - elapsed);
+      };
+
+      scheduleFlush(true);
+      unsubscribe = opened.subscribe((rawStates) => {
+        scheduleFlush(rawStates.some((state) => state.status === 'revoked'));
+      });
     }).catch((error: unknown) => {
       if (!active || controller.signal.aborted) return;
       scopeGuard.commit(() => setResult({ phase: 'error', states: NO_STATES, error: errorValue(error) }));
@@ -176,7 +239,7 @@ export function useSiteDevicesRealtime({
 
     return () => {
       unregister();
-      publisher.cancel();
+      cancelScheduled();
       scopeGuard.signal.removeEventListener('abort', abortFromScope);
       close(false);
     };

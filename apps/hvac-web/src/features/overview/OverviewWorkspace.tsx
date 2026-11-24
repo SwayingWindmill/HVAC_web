@@ -1,3 +1,4 @@
+import { memo, useCallback, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getRouteApi, useNavigate } from "@tanstack/react-router";
 import { RefreshCw } from "lucide-react";
@@ -8,7 +9,7 @@ import { Panel, PanelHeader, PanelLink } from "@/blocks/panel";
 import { Main } from "@/components/layout/Main";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useDeviceNames } from "@/features/assets/use-device-names";
+import { useSiteEquipment } from "@/features/assets/use-device-names";
 import { DataGapBanner } from "@/features/data-gaps/DataGapBanner";
 import { dataGapsKeys } from "@/features/data-gaps/query";
 import { siteFindingsQuery } from "@/features/diagnostics/query";
@@ -21,7 +22,7 @@ import { costsByLabel, sumCosts } from "@/features/tariff/tariff-model";
 import { useRealtimePlant } from "@/features/operations/realtime/use-realtime-plant";
 import { sortWorkOrdersForOperators } from "@/features/work-orders/work-order-presentation";
 import { openWorkOrdersQuery } from "@/features/work-orders/work-order-queries";
-import { formatDecimal } from "@/lib/operator-format";
+import { formatDecimal, getDateTimeFormatter } from "@/lib/operator-format";
 import { AttentionPanel } from "./AttentionPanel";
 import { PlantNowPanel } from "./PlantNowPanel";
 import { SavingsPanel } from "./SavingsPanel";
@@ -42,18 +43,35 @@ const HOURLY_METRIC_TITLE: Readonly<Record<OverviewMetric, string>> = {
 };
 
 function todayLabel(timeZone: string): string {
-  return new Intl.DateTimeFormat("zh-CN", { timeZone, month: "long", day: "numeric", weekday: "short" }).format(new Date()).replace("日", " 日 ").replace("月", " 月 ").replace(/\s+/g, " ").trim();
+  return getDateTimeFormatter("zh-CN", { timeZone, month: "long", day: "numeric", weekday: "short" }).format(new Date()).replace("日", " 日 ").replace("月", " 月 ").replace(/\s+/g, " ").trim();
 }
 
 /** The Site's UTC offset as operators write it, e.g. UTC+8. */
 function offsetLabel(timeZone: string): string {
-  const part = new Intl.DateTimeFormat("en-US", { timeZone, timeZoneName: "shortOffset" }).formatToParts(new Date()).find((piece) => piece.type === "timeZoneName");
+  const part = getDateTimeFormatter("en-US", { timeZone, timeZoneName: "shortOffset" }).formatToParts(new Date()).find((piece) => piece.type === "timeZoneName");
   return (part?.value ?? "GMT").replace("GMT", "UTC").replace(/^UTC$/, "UTC+0");
 }
 
-function TodayAgainstYesterday({ metric, onMetricChange }: { readonly metric: OverviewMetric; readonly onMetricChange: (metric: OverviewMetric) => void }) {
+const TodayAgainstYesterday = memo(function TodayAgainstYesterday({ metric, onMetricChange }: { readonly metric: OverviewMetric; readonly onMetricChange: (metric: OverviewMetric) => void }) {
   const { site } = siteRoute.useRouteContext();
   const comparison = useTodayAgainstYesterday();
+  const priced = useMemo(() => {
+    if (!comparison.data) return null;
+    const { today, wholeYesterday } = comparison.data;
+    const todayCost = sumCosts(summaryCostBuckets(today));
+    return todayCost.energyKWh > todayCost.unpricedKWh
+      ? { today: costsByLabel(today.rows), yesterday: costsByLabel(wholeYesterday.rows) }
+      : null;
+  }, [comparison.data]);
+  const chartData = useMemo(() => {
+    if (!comparison.data) return [];
+    return completeOnly(comparison.data.hours).map((hour) => ({
+      ...hour,
+      cost: hour.electricityKWh === null ? null : priced?.today.get(hour.label) ?? null,
+      previousCost: priced?.yesterday.get(hour.label) ?? null,
+    }));
+  }, [comparison.data, priced]);
+
   if (comparison.isPending || comparison.isError) {
     return (
       <Panel role="region" aria-label="今日用能">
@@ -67,14 +85,11 @@ function TodayAgainstYesterday({ metric, onMetricChange }: { readonly metric: Ov
       </Panel>
     );
   }
-  const { today, wholeYesterday, hours, completed } = comparison.data;
+  const { today, completed } = comparison.data;
   // A day none of whose electricity was priced (no Tariff) has no cost tab; a partly priced one says so.
   const todayCost = sumCosts(summaryCostBuckets(today));
   const todayCompletedCost = sumCosts(completed.current.costBuckets);
   const yesterdayCompletedCost = sumCosts(completed.previous.costBuckets);
-  const priced = todayCost.energyKWh > todayCost.unpricedKWh
-    ? { today: costsByLabel(today.rows), yesterday: costsByLabel(wholeYesterday.rows) }
-    : null;
   const incompleteCaption = today.missingMeters.length > 0 ? `不完整，缺 ${today.missingMeters.join("、")}` : undefined;
   const metrics: MetricTab<OverviewMetric>[] = [
     {
@@ -127,14 +142,10 @@ function TodayAgainstYesterday({ metric, onMetricChange }: { readonly metric: Ov
       role="region"
       aria-label="今日用能"
       title="今日用能"
-      caption={`累计 · 00:00 至 ${new Intl.DateTimeFormat("zh-CN", { timeZone: site.timezone, hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date())}`}
+      caption={`累计 · 00:00 至 ${getDateTimeFormatter("zh-CN", { timeZone: site.timezone, hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date())}`}
       action={<PanelLink to="/energy-analysis/consumption" search={{ site: site.id }}>能耗分析</PanelLink>}
       chartTitle={<><span className="font-semibold">{HOURLY_METRIC_TITLE[metric]}</span><span className="text-xs text-muted-foreground">按站点当地时间，与昨日同时段对比</span></>}
-      data={completeOnly(hours).map((hour) => ({
-        ...hour,
-        cost: hour.electricityKWh === null ? null : priced?.today.get(hour.label) ?? null,
-        previousCost: priced?.yesterday.get(hour.label) ?? null,
-      }))}
+      data={chartData}
       xKey="label"
       selected={metric}
       onSelectedChange={onMetricChange}
@@ -150,10 +161,16 @@ function TodayAgainstYesterday({ metric, onMetricChange }: { readonly metric: Ov
       metrics={metrics}
     />
   );
-}
+});
 
-function HourlyElectricity() {
+const formatHeatmapKWh = (value: number) => formatDecimal(value, 1);
+
+const HourlyElectricity = memo(function HourlyElectricity() {
   const heatmap = useHourlyHeatmap(HEATMAP_DAYS);
+  const rows = useMemo(
+    () => (heatmap.data ?? []).map((day) => ({ label: day.label, values: day.values })),
+    [heatmap.data],
+  );
   if (heatmap.isPending || heatmap.isError) {
     return (
       <Panel role="region" aria-label="近 7 天逐时用电">
@@ -173,23 +190,65 @@ function HourlyElectricity() {
       aria-label="近 7 天逐时用电"
       title={`近 ${HEATMAP_DAYS} 天空调用电`}
       deltaLabel="每格一小时 · 空白为无数据"
-      rows={heatmap.data.map((day) => ({ label: day.label, values: day.values }))}
+      rows={rows}
       columns={HOURS}
       columnLabelEvery={3}
       color="var(--chart-1)"
       unit="kWh"
-      valueFormatter={(value) => formatDecimal(value, 1)}
+      valueFormatter={formatHeatmapKWh}
     />
   );
-}
+});
+
+const OverviewLiveMeta = memo(function OverviewLiveMeta() {
+  const { mode } = useRealtimePlant();
+  return <LiveIndicator mode={mode} />;
+});
+
+const OverviewLiveActions = memo(function OverviewLiveActions({
+  timeZone,
+  onRefreshQueries,
+}: {
+  readonly timeZone: string;
+  readonly onRefreshQueries: () => void;
+}) {
+  const { plant, refresh } = useRealtimePlant();
+  return (
+    <>
+      {plant.latestSampleAt ? (
+        <span className="text-xs text-muted-foreground">数据时间 <span className="font-mono">{formatClock(plant.latestSampleAt, timeZone)}</span></span>
+      ) : null}
+      <Button
+        variant="outline"
+        onClick={() => {
+          refresh();
+          onRefreshQueries();
+        }}
+      >
+        <RefreshCw aria-hidden="true" data-icon="inline-start" />
+        刷新
+      </Button>
+    </>
+  );
+});
+
+const OverviewPlantNowSection = memo(function OverviewPlantNowSection({
+  siteId,
+  timeZone,
+}: {
+  readonly siteId: string;
+  readonly timeZone: string;
+}) {
+  const { plant, registry } = useRealtimePlant();
+  return <PlantNowPanel plant={plant} registryState={registry.status} siteId={siteId} timeZone={timeZone} />;
+});
 
 export function OverviewWorkspace() {
   const { site, principal } = siteRoute.useRouteContext();
   const search = pageRoute.useSearch();
   const navigate = useNavigate({ from: "/overview" });
   const queryClient = useQueryClient();
-  const { plant, mode, registry, refresh } = useRealtimePlant();
-  const deviceNames = useDeviceNames(site.id);
+  const equipment = useSiteEquipment(site.id);
   const capabilities = principal.authorization.capabilities;
   const canListAlarms = capabilities.includes("alarm.list");
   const canListWorkOrders = capabilities.includes("work-order.list");
@@ -197,39 +256,36 @@ export function OverviewWorkspace() {
   const workOrders = useQuery({ ...openWorkOrdersQuery(site.id), enabled: canListWorkOrders });
   const findings = useQuery(siteFindingsQuery(site.id));
 
-  const activeAlarms = sortAlarmsForOperators(alarms.data?.items ?? []);
-  const openOrders = sortWorkOrdersForOperators(workOrders.data ?? []);
-  const weekAgo = Date.now() - 7 * 86_400_000;
-  const recentFindings = (findings.data ?? []).filter((finding) => Date.parse(finding.evaluationTo) >= weekAgo);
-  const assetName = (assetId: string) => registry.data?.assetModel.assets.find((asset) => asset.id === assetId)?.displayName ?? "—";
+  const activeAlarms = useMemo(() => sortAlarmsForOperators(alarms.data?.items ?? []), [alarms.data]);
+  const openOrders = useMemo(() => sortWorkOrdersForOperators(workOrders.data ?? []), [workOrders.data]);
+  const recentFindings = useMemo(() => {
+    const weekAgo = Date.now() - 7 * 86_400_000;
+    return (findings.data ?? []).filter((finding) => Date.parse(finding.evaluationTo) >= weekAgo);
+  }, [findings.data]);
+  const deviceName = useCallback((deviceId: string) => equipment.nameByDevice.get(deviceId) ?? "—", [equipment.nameByDevice]);
+  const assetName = useCallback((assetId: string) => equipment.nameByAsset.get(assetId) ?? "—", [equipment.nameByAsset]);
+  const handleMetricChange = useCallback(
+    (metric: OverviewMetric) => void navigate({ search: (previous) => ({ ...previous, metric }), replace: true }),
+    [navigate],
+  );
+  const handleRefreshQueries = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: ["energy-series", site.id] });
+    void queryClient.invalidateQueries({ queryKey: dataGapsKeys.site(site.id) });
+    if (canListAlarms) void alarms.refetch();
+    if (canListWorkOrders) void workOrders.refetch();
+    void findings.refetch();
+  }, [alarms, canListAlarms, canListWorkOrders, findings, queryClient, site.id, workOrders]);
+  const retryAlarms = useCallback(() => { void alarms.refetch(); }, [alarms]);
+  const retryFindings = useCallback(() => { void findings.refetch(); }, [findings]);
+  const retryWorkOrders = useCallback(() => { void workOrders.refetch(); }, [workOrders]);
 
   return (
     <Main>
       <PageHeader
         title="总览"
         description={`${site.displayName} · ${todayLabel(site.timezone)} · 站点时间 ${offsetLabel(site.timezone)}`}
-        meta={<LiveIndicator mode={mode} />}
-        actions={
-          <>
-            {plant.latestSampleAt ? (
-              <span className="text-xs text-muted-foreground">数据时间 <span className="font-mono">{formatClock(plant.latestSampleAt, site.timezone)}</span></span>
-            ) : null}
-            <Button
-              variant="outline"
-              onClick={() => {
-                refresh();
-                void queryClient.invalidateQueries({ queryKey: ["energy-series", site.id] });
-                void queryClient.invalidateQueries({ queryKey: dataGapsKeys.site(site.id) });
-                if (canListAlarms) void alarms.refetch();
-                if (canListWorkOrders) void workOrders.refetch();
-                void findings.refetch();
-              }}
-            >
-              <RefreshCw aria-hidden="true" data-icon="inline-start" />
-              刷新
-            </Button>
-          </>
-        }
+        meta={<OverviewLiveMeta />}
+        actions={<OverviewLiveActions timeZone={site.timezone} onRefreshQueries={handleRefreshQueries} />}
       />
       <DataGapBanner siteId={site.id} timeZone={site.timezone} context="overview" />
 
@@ -237,9 +293,9 @@ export function OverviewWorkspace() {
         <div className="flex min-w-0 flex-col gap-4">
           <TodayAgainstYesterday
             metric={search.metric ?? "electricityKWh"}
-            onMetricChange={(metric) => void navigate({ search: (previous) => ({ ...previous, metric }), replace: true })}
+            onMetricChange={handleMetricChange}
           />
-          <PlantNowPanel plant={plant} registryState={registry.status} siteId={site.id} timeZone={site.timezone} />
+          <OverviewPlantNowSection siteId={site.id} timeZone={site.timezone} />
           <HourlyElectricity />
         </div>
         <div className="flex min-w-0 flex-col gap-4">
@@ -252,22 +308,22 @@ export function OverviewWorkspace() {
               isPending: canListAlarms && alarms.isPending,
               isError: canListAlarms && alarms.isError,
               allowed: canListAlarms,
-              onRetry: () => { void alarms.refetch(); },
+              onRetry: retryAlarms,
             }}
             findings={{
               data: recentFindings,
               isPending: findings.isPending,
               isError: findings.isError,
-              onRetry: () => { void findings.refetch(); },
+              onRetry: retryFindings,
             }}
             workOrders={{
               data: canListWorkOrders ? openOrders : undefined,
               isPending: canListWorkOrders && workOrders.isPending,
               isError: canListWorkOrders && workOrders.isError,
               allowed: canListWorkOrders,
-              onRetry: () => { void workOrders.refetch(); },
+              onRetry: retryWorkOrders,
             }}
-            deviceName={(deviceId) => deviceNames.get(deviceId) ?? "—"}
+            deviceName={deviceName}
             assetName={assetName}
           />
           <SavingsPanel siteId={site.id} timeZone={site.timezone} />

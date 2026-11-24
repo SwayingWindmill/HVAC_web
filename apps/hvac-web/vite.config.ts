@@ -22,6 +22,15 @@ function manualChunks(id: string) {
   ) {
     return 'vendor-react';
   }
+  if (normalized.includes('/src/api/generated/platformGateway.gen')) {
+    return 'api-contracts';
+  }
+  if (
+    (normalized.includes('/src/components/ui/') || normalized.includes('/src/blocks/')) &&
+    !/\/src\/components\/ui\/(?:chart|composed-chart)\.tsx$/.test(normalized)
+  ) {
+    return 'ui-core';
+  }
   if (!normalized.includes('node_modules')) return undefined;
 
   if (/node_modules\/(react|react-dom|scheduler)\//.test(normalized)) return 'vendor-react';
@@ -30,7 +39,9 @@ function manualChunks(id: string) {
   if (/node_modules\/@tanstack\//.test(normalized)) return 'vendor-query';
   if (/node_modules\/(?:@radix-ui|radix-ui)\//.test(normalized)) return 'vendor-radix';
   if (/node_modules\/lucide-react\//.test(normalized)) return 'vendor-icons';
-  if (/node_modules\/(?:recharts|d3-[a-z-]+|victory-vendor)\//.test(normalized)) return 'vendor-charts';
+  if (/node_modules\/(?:recharts|d3-[a-z-]+|victory-vendor|@reduxjs\/toolkit|immer|react-redux|reselect|es-toolkit|decimal\.js-light|decimal\.js|eventemitter3)\//.test(normalized)) {
+    return 'vendor-charts';
+  }
   if (/node_modules\/zod\//.test(normalized)) return 'vendor-zod';
   if (/node_modules\/zustand\//.test(normalized)) return 'vendor-state';
   // The digital twin's 3D stack loads only with its route (docs/specs/digital-twin.md).

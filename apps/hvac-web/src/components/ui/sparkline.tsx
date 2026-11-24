@@ -1,12 +1,11 @@
 import * as React from 'react';
-import {
-  Area,
-  AreaChart,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-} from 'recharts';
 import { cn } from '@/lib/utils';
+import {
+  buildSparklineGeometry,
+  SPARKLINE_VIEWBOX_HEIGHT,
+  SPARKLINE_VIEWBOX_WIDTH,
+  type SparklineCurve,
+} from './sparkline-path';
 
 export interface SparklineProps extends React.ComponentProps<'div'> {
   /** Series to plot, oldest first. Null entries leave an honest gap across missing buckets. */
@@ -14,26 +13,25 @@ export interface SparklineProps extends React.ComponentProps<'div'> {
   variant?: 'area' | 'line';
   /** Any CSS color or CSS variable. Defaults to var(--primary). */
   color?: string;
-  curve?: 'monotone' | 'linear' | 'step';
+  curve?: SparklineCurve;
   strokeWidth?: number;
   animate?: boolean;
   animationDuration?: number;
 }
 
-export function Sparkline({
+export const Sparkline = React.memo(function Sparkline({
   data,
   variant = 'area',
   color = 'var(--primary)',
   curve = 'monotone',
   strokeWidth = 1.5,
-  animate = false,
-  animationDuration = 500,
+  animate: _animate = false,
+  animationDuration: _animationDuration = 500,
   className,
   ...props
 }: SparklineProps) {
   const id = React.useId().replace(/:/g, '');
-  const points = React.useMemo(() => data.map((y, i) => ({ i, y })), [data]);
-  const margin = { top: 2, right: 0, bottom: 0, left: 0 };
+  const geometry = React.useMemo(() => buildSparklineGeometry(data, curve), [data, curve]);
 
   return (
     <div
@@ -42,44 +40,36 @@ export function Sparkline({
       className={cn('h-9 w-full', className)}
       {...props}
     >
-      <ResponsiveContainer width="100%" height="100%">
-        {variant === 'line' ? (
-          <LineChart data={points} margin={margin}>
-            <Line
-              type={curve}
-              dataKey="y"
+      <svg
+        viewBox={`0 0 ${SPARKLINE_VIEWBOX_WIDTH} ${SPARKLINE_VIEWBOX_HEIGHT}`}
+        preserveAspectRatio="none"
+        className="block size-full overflow-visible"
+      >
+        {variant === 'area' && geometry.segments.length > 0 ? (
+          <defs>
+            <linearGradient id={id} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={color} stopOpacity={0.25} />
+              <stop offset="100%" stopColor={color} stopOpacity={0} />
+            </linearGradient>
+          </defs>
+        ) : null}
+        {geometry.segments.map((segment, index) => (
+          <React.Fragment key={index}>
+            {variant === 'area' && segment.areaPath ? (
+              <path d={segment.areaPath} fill={`url(#${id})`} stroke="none" />
+            ) : null}
+            <path
+              d={segment.linePath}
+              fill="none"
               stroke={color}
               strokeWidth={strokeWidth}
-              dot={false}
-              connectNulls={false}
-              isAnimationActive={animate}
-              animationDuration={animationDuration}
-              animationEasing="ease-out"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              vectorEffect="non-scaling-stroke"
             />
-          </LineChart>
-        ) : (
-          <AreaChart data={points} margin={margin}>
-            <defs>
-              <linearGradient id={id} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={color} stopOpacity={0.25} />
-                <stop offset="100%" stopColor={color} stopOpacity={0.0} />
-              </linearGradient>
-            </defs>
-            <Area
-              type={curve}
-              dataKey="y"
-              stroke={color}
-              strokeWidth={strokeWidth}
-              fill={`url(#${id})`}
-              dot={false}
-              connectNulls={false}
-              isAnimationActive={animate}
-              animationDuration={animationDuration}
-              animationEasing="ease-out"
-            />
-          </AreaChart>
-        )}
-      </ResponsiveContainer>
+          </React.Fragment>
+        ))}
+      </svg>
     </div>
   );
-}
+});

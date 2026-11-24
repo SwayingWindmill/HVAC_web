@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useLocation } from '@tanstack/react-router';
+import { useLocation, useRouter } from '@tanstack/react-router';
 import { ChevronDown, PanelLeft } from 'lucide-react';
+import { preloadPathChunks } from '@/app/router';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
@@ -94,14 +95,18 @@ function CountBadge({ count, tone }: { readonly count: number; readonly tone: Co
 }
 
 function useLink(onNavigate: (target: string) => void) {
+  const router = useRouter();
   const { currentScope } = useScope();
   const snapshot = useShellSnapshot();
   const { setOpenMobile } = useSidebar();
   const siteId = currentScope?.siteId ?? snapshot.lastSiteId;
   return (item: AppNavigationItem) => {
     const href = navHref(item, siteId);
+    const preload = () => preloadPathChunks(router, href);
     return {
       href,
+      onMouseEnter: preload,
+      onFocus: preload,
       onClick: (event: React.MouseEvent) => {
         if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
         event.preventDefault();
@@ -188,6 +193,8 @@ function GroupItem({ group, counts, hasWaitingAlarms, currentPath, link }: {
                     key={item.id}
                     href={itemProps.href}
                     aria-current={active ? 'page' : undefined}
+                    onMouseEnter={itemProps.onMouseEnter}
+                    onFocus={itemProps.onFocus}
                     onClick={(event) => {
                       itemProps.onClick(event);
                       setFlyoutOpen(false);

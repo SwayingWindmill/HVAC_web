@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { getRouteApi } from '@tanstack/react-router';
 import { statusDotClass } from '@/components/status-badge';
@@ -18,13 +18,32 @@ const siteRoute = getRouteApi('/_app/_site');
  * One device on the wall: what it is and its state, its headline reading with the last day's
  * shape, two more readings, and whether its points, data and work are in order.
  */
-export function DeviceTile({ device, openWorkOrders, selected, onOpen }: {
+export const DeviceTile = memo(function DeviceTile({ device, openWorkOrders, selected, onOpen }: {
   readonly device: PlantUnit;
   readonly openWorkOrders: number;
   readonly selected: boolean;
-  readonly onOpen: () => void;
+  readonly onOpen: (deviceId: string) => void;
 }) {
   const { site, principal } = siteRoute.useRouteContext();
+  const tileRef = useRef<HTMLButtonElement | null>(null);
+  const [inView, setInView] = useState(() => typeof IntersectionObserver === 'undefined');
+  useEffect(() => {
+    if (inView) return;
+    const node = tileRef.current;
+    if (!node) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setInView(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: '200px' },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [inView]);
+  const handleOpen = useCallback(() => onOpen(device.deviceId), [onOpen, device.deviceId]);
   const status = deviceStatus(device);
   const { lead, facts } = tileReadings(
     device,
@@ -32,21 +51,38 @@ export function DeviceTile({ device, openWorkOrders, selected, onOpen }: {
     KEY_READINGS[device.category],
   );
   const historyTarget = lead ? unitPointTarget(device, lead.sourceKey) : null;
-  const window = useMemo(() => dayHistoryWindow(), [historyTarget?.deviceId ?? device.deviceId]);
+  const targetDeviceId = historyTarget?.deviceId ?? device.deviceId;
+  const window = useMemo(() => dayHistoryWindow(), [targetDeviceId]);
   const history = useQuery({
     ...deviceDayHistoryQuery({
       siteId: site.id,
-      deviceId: historyTarget?.deviceId ?? device.deviceId,
+      deviceId: targetDeviceId,
       keys: historyTarget ? [historyTarget.pointCode] : [],
       timezone: site.timezone,
       csrfToken: principal.session.csrfToken,
       window,
     }),
-    enabled: Boolean(historyTarget) && principal.authorization.capabilities.includes('telemetry.history.read'),
+    enabled: inView && Boolean(historyTarget) && principal.authorization.capabilities.includes('telemetry.history.read'),
   });
-  const series = historyTarget ? history.data?.get(historyTarget.pointCode) ?? [] : [];
-  const slots = buildTimeSlots({ fromMs: window.fromMs, toMs: window.toMs, granularity: 'HOUR', timeZone: site.timezone });
-  const values = fillGaugeSlots(slots, series).map((point) => point.average);
+  const series = useMemo(
+    () => (historyTarget ? history.data?.get(historyTarget.pointCode) ?? [] : []),
+    [history.data, historyTarget],
+  );
+  const slots = useMemo(
+    () => buildTimeSlots({ fromMs: window.fromMs, toMs: window.toMs, granularity: 'HOUR', timeZone: site.timezone }),
+    [site.timezone, window.fromMs, window.toMs],
+  );
+  const values = useMemo(() => fillGaugeSlots(slots, series).map((point) => point.average), [slots, series]);
+  const range = useMemo(() => {
+    if (series.length <= 1) return null;
+    let min = Infinity;
+    let max = -Infinity;
+    for (const point of series) {
+      if (point.minimum < min) min = point.minimum;
+      if (point.maximum > max) max = point.maximum;
+    }
+    return { min, max };
+  }, [series]);
   const unit = lead?.reading.unit ?? formatTelemetryUnit(undefined);
   const points = unitPoints(device);
   const healthy = points.filter((entry) => pointIsTrusted(entry.point)).length;
@@ -55,8 +91,9 @@ export function DeviceTile({ device, openWorkOrders, selected, onOpen }: {
 
   return (
     <button
+      ref={tileRef}
       type="button"
-      onClick={onOpen}
+      onClick={handleOpen}
       aria-current={selected ? 'true' : undefined}
       aria-label={`${device.name}，${status.label}`}
       className={cn(
@@ -94,11 +131,11 @@ export function DeviceTile({ device, openWorkOrders, selected, onOpen }: {
         ) : (
           <span className="flex h-9 items-center text-xs text-subtle-foreground">{history.isPending && historyTarget ? '' : '近 24 小时没有记录'}</span>
         )}
-        {series.length > 1 ? (
+        {range !== null ? (
           <span className="flex justify-between text-[11px] text-subtle-foreground">
             <span>24 小时</span>
             <span className="tabular-nums">
-              {formatDecimal(Math.min(...series.map((point) => point.minimum)), 1)} – {formatDecimal(Math.max(...series.map((point) => point.maximum)), 1)} {unit ?? ''}
+              {formatDecimal(range.min, 1)} – {formatDecimal(range.max, 1)} {unit ?? ''}
             </span>
           </span>
         ) : null}
@@ -113,4 +150,4 @@ export function DeviceTile({ device, openWorkOrders, selected, onOpen }: {
       </span>
     </button>
   );
-}
+});

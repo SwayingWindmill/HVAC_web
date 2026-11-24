@@ -44,6 +44,7 @@ import {
   parseTrendOverlays,
   type TrendOverlayAlarmInput,
 } from '../trends-overlays';
+import { createTrendsHoverStore } from '../trends-hover-store';
 import { PointPickerPopover } from './PointPickerPopover';
 import { TrendsChartStack } from './TrendsChartStack';
 import { TrendsEventRail } from './TrendsEventRail';
@@ -103,7 +104,7 @@ export function TrendsWorkspace() {
   const navigate = useNavigate({ from: '/operations/trends' });
   const queryClient = useQueryClient();
   const nowMs = useNow(60_000);
-  const [hoverAt, setHoverAt] = useState<number | null>(null);
+  const hoverStore = useMemo(() => createTrendsHoverStore(), []);
   const [workOrderAlarm, setWorkOrderAlarm] = useState<TrendOverlayAlarmInput | null>(null);
   const [customOpen, setCustomOpen] = useState(false);
   const [customFromDraft, setCustomFromDraft] = useState('');
@@ -218,6 +219,35 @@ export function TrendsWorkspace() {
       showCommandsActive,
       windowState,
     ],
+  );
+
+  const chartAlarmSpans = useMemo(
+    () =>
+      overlaysModel.alarmSpans.map((span) => ({
+        id: span.id,
+        fromMs: span.clampedStartMs,
+        toMs: Math.max(
+          span.clampedEndMs,
+          Math.min(
+            windowState.toMs,
+            span.clampedStartMs +
+              Math.max(15_000, Math.round((windowState.toMs - windowState.fromMs) * 0.004)),
+          ),
+        ),
+        severity: span.alarm.currentSeverity,
+        label: span.alarm.title,
+      })),
+    [overlaysModel.alarmSpans, windowState.fromMs, windowState.toMs],
+  );
+
+  const chartCommandMarks = useMemo(
+    () =>
+      overlaysModel.commandMarks.map((mark) => ({
+        id: mark.id,
+        atMs: mark.atMs,
+        label: mark.summaryLabel,
+      })),
+    [overlaysModel.commandMarks],
   );
 
   const currentQuery = useQuery(
@@ -735,35 +765,16 @@ export function TrendsWorkspace() {
                 timezone={site.timezone}
                 showCompare={showCompare}
                 compareLabel={windowState.compareLabel}
-                alarmSpans={overlaysModel.alarmSpans.map((span) => ({
-                  id: span.id,
-                  fromMs: span.clampedStartMs,
-                  toMs: Math.max(
-                    span.clampedEndMs,
-                    Math.min(
-                      windowState.toMs,
-                      span.clampedStartMs +
-                        Math.max(15_000, Math.round((windowState.toMs - windowState.fromMs) * 0.004)),
-                    ),
-                  ),
-                  severity: span.alarm.currentSeverity,
-                  label: span.alarm.title,
-                }))}
-                commandMarks={overlaysModel.commandMarks.map((mark) => ({
-                  id: mark.id,
-                  atMs: mark.atMs,
-                  label: mark.summaryLabel,
-                }))}
-                hoverAt={hoverAt}
-                onHoverAt={setHoverAt}
+                alarmSpans={chartAlarmSpans}
+                commandMarks={chartCommandMarks}
+                hoverStore={hoverStore}
               />
               <TrendsStateLane
                 tracks={viewModel.stateTracks}
                 fromMs={windowState.fromMs}
                 toMs={windowState.toMs}
                 timezone={site.timezone}
-                hoverAt={hoverAt}
-                onHoverAt={setHoverAt}
+                hoverStore={hoverStore}
               />
             </>
           )}

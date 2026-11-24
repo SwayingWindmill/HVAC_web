@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { memo, useMemo } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { Panel, PanelHeader, PanelLink } from '@/blocks/panel';
 import { cn } from '@/lib/utils';
@@ -356,7 +356,7 @@ function AnomalyStrip({ anomalies, onInspect }: {
   );
 }
 
-export function PlantHydraulicSchematic({
+export const PlantHydraulicSchematic = memo(function PlantHydraulicSchematic({
   plant,
   siteId,
   selectedDeviceId,
@@ -671,4 +671,4 @@ export function PlantHydraulicSchematic({
       </div>
     </Panel>
   );
-}
+});

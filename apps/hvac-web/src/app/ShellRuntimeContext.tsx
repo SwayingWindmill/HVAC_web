@@ -1,4 +1,4 @@
-import { createContext, useContext, useSyncExternalStore, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useSyncExternalStore, type ReactNode } from 'react';
 import type { ShellRuntime, ShellSnapshot } from './shell-runtime';
 
 const ShellRuntimeContext = createContext<ShellRuntime | null>(null);
@@ -15,5 +15,7 @@ export function useShellRuntime(): ShellRuntime {
 
 export function useShellSnapshot(): ShellSnapshot {
   const runtime = useShellRuntime();
-  return useSyncExternalStore(runtime.subscribe.bind(runtime), runtime.current.bind(runtime), runtime.current.bind(runtime));
+  const subscribe = useCallback((listener: () => void) => runtime.subscribe(listener), [runtime]);
+  const getSnapshot = useCallback(() => runtime.current(), [runtime]);
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
