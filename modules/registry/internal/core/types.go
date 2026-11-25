@@ -34,6 +34,8 @@ type Site struct {
 	FloorAreaM2 *float64 `json:"floorAreaM2"`
 	// ClimateZone is the GB 50176 thermal design zone; nil until recorded.
 	ClimateZone *string `json:"climateZone"`
+	// BuildingPlan declares the terminal-side building layout for the 3D digital twin; nil when cold-side only.
+	BuildingPlan *SiteBuildingPlan `json:"buildingPlan,omitempty"`
 }
 
 type Asset struct {

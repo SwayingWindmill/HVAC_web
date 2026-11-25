@@ -469,7 +469,10 @@ const schemaRequirements: Record<string, readonly [readonly string[], (readonly 
     'action', 'result', 'policyRevision', 'correlationId', 'causationId', 'traceId', 'payloadSha256', 'previousRecordHash',
     'recordHash', 'recordedAt',
   ]],
-  Site: [['id', 'tenantId', 'code', 'displayName', 'timezone', 'status', 'revision', 'createdAt', 'updatedAt', 'floorAreaM2', 'climateZone']],
+  Site: [['id', 'tenantId', 'code', 'displayName', 'timezone', 'status', 'revision', 'createdAt', 'updatedAt', 'floorAreaM2', 'climateZone'], ['buildingPlan']],
+  SiteBuildingRoom: [['id', 'name', 'kind', 'x', 'z']],
+  SiteBuildingFloor: [['level', 'label', 'height', 'rooms']],
+  SiteBuildingPlan: [['name', 'width', 'depth', 'floors']],
   Asset: [['id', 'tenantId', 'siteId', 'code', 'displayName', 'assetType', 'status', 'revision', 'createdAt', 'updatedAt'], ['ratedPower', 'ratedCapacity', 'tags', 'waterLoop', 'branchCode']],
   Device: [['id', 'tenantId', 'siteId', 'code', 'displayName', 'deviceType', 'status', 'revision', 'createdAt', 'updatedAt'], ['externalId', 'protocolAddress', 'tags', 'connectivityMode']],
   ReplaceDeviceHardwareResult: [[

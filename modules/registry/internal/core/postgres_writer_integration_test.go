@@ -317,6 +317,34 @@ func TestPostgresRegistryWriterKeepsTheSiteProfile(t *testing.T) {
 	if err != nil || cleared.FloorAreaM2 != nil || cleared.ClimateZone != nil {
 		t.Fatalf("clear Site profile = %#v err=%v", cleared, err)
 	}
+
+	plan := sampleValidBuildingPlan()
+	withPlan := SiteMutation{
+		ID: cleared.ID, Code: cleared.Code, DisplayName: cleared.DisplayName, Timezone: cleared.Timezone, Status: cleared.Status,
+		BuildingPlan: OptionalBuildingPlan{Set: true, Value: &plan},
+		Meta:         MutationMeta{ExpectedRevision: cleared.Revision, IdempotencyKey: "s485-plan-set-01", Reason: "set site buildingPlan"},
+	}
+	savedPlan, _, err := store.SaveSite(ctx, claims, withPlan)
+	if err != nil || savedPlan.BuildingPlan == nil || savedPlan.BuildingPlan.Width != plan.Width || len(savedPlan.BuildingPlan.Floors) != 1 {
+		t.Fatalf("set buildingPlan = %#v err=%v", savedPlan, err)
+	}
+
+	preserved, _, err := store.SaveSite(ctx, claims, SiteMutation{
+		ID: savedPlan.ID, Code: savedPlan.Code, DisplayName: savedPlan.DisplayName, Timezone: savedPlan.Timezone, Status: savedPlan.Status,
+		Meta: MutationMeta{ExpectedRevision: savedPlan.Revision, IdempotencyKey: "s485-plan-preserve-01", Reason: "omit buildingPlan on PATCH"},
+	})
+	if err != nil || preserved.BuildingPlan == nil || preserved.BuildingPlan.Name != plan.Name {
+		t.Fatalf("expected omitted buildingPlan to preserve existing plan, got %#v err=%v", preserved, err)
+	}
+
+	clearedPlan, _, err := store.SaveSite(ctx, claims, SiteMutation{
+		ID: preserved.ID, Code: preserved.Code, DisplayName: preserved.DisplayName, Timezone: preserved.Timezone, Status: preserved.Status,
+		BuildingPlan: OptionalBuildingPlan{Set: true, Value: nil},
+		Meta:         MutationMeta{ExpectedRevision: preserved.Revision, IdempotencyKey: "s485-plan-clear-01", Reason: "clear site buildingPlan"},
+	})
+	if err != nil || clearedPlan.BuildingPlan != nil {
+		t.Fatalf("expected explicit null buildingPlan to clear, got %#v err=%v", clearedPlan, err)
+	}
 }
 
 func TestPostgresRegistryGatewaySourceKeyBlocksAndUnblocksRetire(t *testing.T) {

@@ -110,8 +110,30 @@ export interface OnboardingAssetRelationship {
   role: string;
 }
 
+export interface OnboardingSiteBuildingRoom {
+  id: string;
+  name: string;
+  kind: 'hall' | 'private' | 'smallPrivate' | 'kitchen' | 'plantRoom' | 'service' | 'corridor' | 'core' | 'shaft';
+  x: [number, number];
+  z: [number, number];
+}
+
+export interface OnboardingSiteBuildingFloor {
+  level: number;
+  label: string;
+  height: number;
+  rooms: OnboardingSiteBuildingRoom[];
+}
+
+export interface OnboardingSiteBuildingPlan {
+  name: string;
+  width: number;
+  depth: number;
+  floors: OnboardingSiteBuildingFloor[];
+}
+
 export interface OnboardingProfile {
-  site: { id: string; code: string };
+  site: { id: string; code: string; buildingPlan?: OnboardingSiteBuildingPlan | null };
   assets: OnboardingAsset[];
   assetRelationships?: OnboardingAssetRelationship[];
   devices: OnboardingDevice[];
@@ -159,6 +181,7 @@ export interface OnboardingAlarmRules {
 export interface OnboardingState {
   site: string;
   siteRevision?: number | null;
+  siteBuildingPlan?: OnboardingSiteBuildingPlan | null;
   devices: Record<string, string>;
   points: Record<string, string>;
   assets: Record<string, string>;

@@ -38,4 +38,15 @@ func TestCanonicalRegistrySiteCarriesItsProfile(t *testing.T) {
 	if _, err := canonicalRegistrySuccess(registryauth.ActionSiteList, "", []byte(unknownZone)); err == nil {
 		t.Fatal("a climate zone outside GB 50176 was passed through")
 	}
+
+	withPlan := strings.Replace(string(raw), `"climateZone":"HOT_SUMMER_COLD_WINTER"`, `"climateZone":"HOT_SUMMER_COLD_WINTER","buildingPlan":{"name":"中央机房","width":20,"depth":12,"floors":[{"level":1,"label":"1F","height":4,"rooms":[{"id":"lobby","name":"大堂","kind":"hall","x":[0,12],"z":[0,12]}]}]}`, 1)
+	canonicalPlan, err := canonicalRegistrySuccess(registryauth.ActionSiteList, "", []byte(withPlan))
+	if err != nil || !strings.Contains(string(canonicalPlan), `"buildingPlan"`) {
+		t.Fatalf("canonicalRegistrySuccess(withPlan) = %s, error = %v", canonicalPlan, err)
+	}
+
+	outOfBoundsPlan := strings.Replace(withPlan, `"x":[0,12]`, `"x":[0,25]`, 1)
+	if _, err := canonicalRegistrySuccess(registryauth.ActionSiteList, "", []byte(outOfBoundsPlan)); err == nil {
+		t.Fatal("a buildingPlan room exceeding site width was passed through")
+	}
 }

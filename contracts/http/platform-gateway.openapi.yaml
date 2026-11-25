@@ -16893,6 +16893,141 @@
                 "type": "null"
               }
             ]
+          },
+          "buildingPlan": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SiteBuildingPlan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "SiteBuildingRoom": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "x",
+          "z"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "hall",
+              "private",
+              "smallPrivate",
+              "kitchen",
+              "plantRoom",
+              "service",
+              "corridor",
+              "core",
+              "shaft"
+            ]
+          },
+          "x": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": "number",
+              "minimum": 0
+            }
+          },
+          "z": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": "number",
+              "minimum": 0
+            }
+          }
+        }
+      },
+      "SiteBuildingFloor": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "level",
+          "label",
+          "height",
+          "rooms"
+        ],
+        "properties": {
+          "level": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "height": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 30
+          },
+          "rooms": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 200,
+            "items": {
+              "$ref": "#/components/schemas/SiteBuildingRoom"
+            }
+          }
+        }
+      },
+      "SiteBuildingPlan": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "width",
+          "depth",
+          "floors"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "width": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 1000
+          },
+          "depth": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 1000
+          },
+          "floors": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/SiteBuildingFloor"
+            }
           }
         }
       },

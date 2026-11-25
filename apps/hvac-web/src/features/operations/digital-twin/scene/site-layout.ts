@@ -1,12 +1,12 @@
-import type { TwinBuildingPlan } from '../twin-building';
+import { resolveBuildingRiser, resolveFrontGrounds, type TwinBuildingPlan } from '../twin-building';
 import { equipmentAsset } from './assets/equipment';
 import type { V3 } from './assets/kit';
 
 // The site as a model on a plinth: the building in the middle, the plant room on its left with the
 // cooling towers on a pad in front of it, roads along the front and right, parking, lawns and trees.
 // Plant positions come from how many of each machine the Registry has; water runs through headers in
-// the plant room like Songyaxuan's: pump suction low, pump discharge at mid height, condenser return
-// and chilled-water supply overhead, and the chilled-water mains crossing to the building's riser.
+// the plant room (pump suction low, pump discharge at mid height, condenser return and chilled-water
+// supply overhead), and the chilled-water mains cross to the building's riser from Site.buildingPlan.
 // Metres; x to the right, z towards the viewer, y up.
 
 export type CameraView = 'overview' | 'plant' | 'terminal';
@@ -86,8 +86,6 @@ const PLANT_X: readonly [number, number] = [-22.6, -7];
 const PLANT_BACK = -12;
 /** The building stands left of the plant room, a 3 m pipe bridge between them. */
 const BUILDING_GAP = 3;
-/** The riser's place in the building's shaft (building coordinates). */
-export const RISER_LOCAL = { supply: [27.0, 7.0] as const, return: [26.5, 7.6] as const };
 
 const add = (a: V3, b: V3): V3 => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 
@@ -148,9 +146,14 @@ export function buildSiteLayout(counts: EquipmentCounts, plan: TwinBuildingPlan 
 
   // ── Chilled water: building return → suction header → pumps → discharge header → evaporators → supply rack → building.
   const chilled: { runs: Run[]; valves: Fitting[] } = { runs: [], valves: [] };
+  const riserLocal = plan ? resolveBuildingRiser(plan) : null;
   const origin: V3 | null = plan ? [PLANT_X[0] - BUILDING_GAP - plan.width, 0, PLANT_BACK] : null;
-  const riserSupply: V3 = origin ? [origin[0] + RISER_LOCAL.supply[0], 3.8, origin[2] + RISER_LOCAL.supply[1]] : [PLANT_X[0] - 1.5, 3.8, PLANT_BACK + 3];
-  const riserReturn: V3 = origin ? [origin[0] + RISER_LOCAL.return[0], 4.4, origin[2] + RISER_LOCAL.return[1]] : [PLANT_X[0] - 1.5, 4.4, PLANT_BACK + 3.6];
+  const riserSupply: V3 = origin && riserLocal
+    ? [origin[0] + riserLocal.supply[0], 3.8, origin[2] + riserLocal.supply[1]]
+    : [PLANT_X[0] - 1.5, 3.8, PLANT_BACK + 3];
+  const riserReturn: V3 = origin && riserLocal
+    ? [origin[0] + riserLocal.return[0], 4.4, origin[2] + riserLocal.return[1]]
+    : [PLANT_X[0] - 1.5, 4.4, PLANT_BACK + 3.6];
   const chillSuctionX = CHILLED_PUMP_X - 1.7;
   const chillDischargeX = CHILLED_PUMP_X + pump.discharge[0];
   const chillSupplyX = -14.3;
@@ -239,7 +242,8 @@ export function buildSiteLayout(counts: EquipmentCounts, plan: TwinBuildingPlan 
   const fences: [V3, V3][] = [];
   const fenceZ = front - 1.7;
   const fenceX = right - 1.7;
-  const gaps = buildingRect ? [[buildingRect.x[0] + 7, buildingRect.x[0] + 15], [buildingRect.x[0] + 16, buildingRect.x[0] + 27.5]] : [];
+  const frontGrounds = plan && buildingRect ? resolveFrontGrounds(plan, buildingRect.x[0], buildingRect.x[1]) : null;
+  const gaps = frontGrounds ? frontGrounds.gaps : [];
   let fenceStart = plinth.x[0] + 1;
   for (const [from, to] of gaps) {
     if (from > fenceStart) fences.push([[fenceStart, 0, fenceZ], [from, 0, fenceZ]]);
@@ -247,24 +251,30 @@ export function buildSiteLayout(counts: EquipmentCounts, plan: TwinBuildingPlan 
   }
   fences.push([[fenceStart, 0, fenceZ], [fenceX, 0, fenceZ]]);
   fences.push([[fenceX, 0, plinth.z[0] + 1], [fenceX, 0, fenceZ]]);
-  cars.push({ at: [plinth.x[0] + 12, 0, front + 1.4], turn: 0 }, { at: [right - 30, 0, front + 4.1], turn: Math.PI }, { at: [right + 1.4, 0, PLANT_BACK - 8], turn: -Math.PI / 2 });
-  if (buildingRect) {
+  cars.push({ at: [plinth.x[0] + 12, 0, front + 1.4], turn: 0 }, { at: [Math.max(plinth.x[0] + 6, right - 30), 0, front + 4.1], turn: Math.PI }, { at: [right + 1.4, 0, PLANT_BACK - 8], turn: -Math.PI / 2 });
+  if (buildingRect && frontGrounds) {
     const [bx0, bx1] = buildingRect.x;
     const [bz0, bz1] = buildingRect.z;
     pavings.push({ x: [bx0 - 1.2, PLANT_X[0]], z: [bz0 - 1.2, bz1 + 1.2] });
-    pavings.push({ x: [bx0 + 7, bx0 + 15], z: [bz1, front - 1.4] });
-    lawns.push({ x: [plinth.x[0] + 0.6, bx0 + 6.4], z: [bz1 + 2, front - 2] });
-    lawns.push({ x: [plinth.x[0] + 0.6, bx0 - 2], z: [bz0 - 1.6, bz1 + 2] });
-    // Parking in front of the building's right half.
-    for (let index = 0; index < 5; index += 1) {
-      const x = bx0 + 16.2 + index * 2.7;
-      markings.push({ x: [x - 0.06, x + 0.06], z: [front - 7.2, front - 2] });
-      if (index < 4 && index !== 2) cars.push({ at: [x + 1.35, 0, front - 4.6], turn: Math.PI / 2 });
+    pavings.push({ x: frontGrounds.plaza, z: [bz1, front - 1.4] });
+    if (frontGrounds.plaza[0] - 0.6 > plinth.x[0] + 0.6) {
+      lawns.push({ x: [plinth.x[0] + 0.6, frontGrounds.plaza[0] - 0.6], z: [bz1 + 2, front - 2] });
     }
-    markings.push({ x: [bx0 + 16.14, bx0 + 27.06], z: [front - 7.26, front - 7.14] });
-    for (const x of [bx0 - 4.2, bx0 + 1.2, bx0 + 4.6]) trees.push({ at: [x, 0, front - 3.6], turn: x * 3 });
+    lawns.push({ x: [plinth.x[0] + 0.6, bx0 - 2], z: [bz0 - 1.6, bz1 + 2] });
+    if (frontGrounds.parking) {
+      const { x0: parkX0, slotCount } = frontGrounds.parking;
+      for (let index = 0; index <= slotCount; index += 1) {
+        const x = parkX0 + 0.2 + index * 2.7;
+        markings.push({ x: [x - 0.06, x + 0.06], z: [front - 7.2, front - 2] });
+        if (index < slotCount && index !== 2) cars.push({ at: [x + 1.35, 0, front - 4.6], turn: Math.PI / 2 });
+      }
+      markings.push({ x: [parkX0 + 0.14, parkX0 + 0.2 + slotCount * 2.7 + 0.06], z: [front - 7.26, front - 7.14] });
+    }
+    for (const x of [bx0 - 4.2, ...(frontGrounds.plaza[0] - bx0 >= 3 ? [bx0 + 1.2, frontGrounds.plaza[0] - 2.4] : [])]) {
+      trees.push({ at: [x, 0, front - 3.6], turn: x * 3 });
+    }
     for (let z = bz0 + 1.5; z < bz1 + 4; z += 5) trees.push({ at: [bx0 - 4.2, 0, z], turn: z * 5 });
-    for (const x of [bx0 + 6.6, bx0 + 15.4]) shrubs.push({ at: [x, 0, bz1 + 2.2], turn: x });
+    for (const x of [frontGrounds.plaza[0] - 0.4, frontGrounds.plaza[1] + 0.4]) shrubs.push({ at: [x, 0, bz1 + 2.2], turn: x });
     for (let x = bx0 + 1; x < bx1; x += 4.5) shrubs.push({ at: [x, 0, bz0 - 2.6], turn: x * 7 });
   }
 

@@ -113,6 +113,7 @@ services:
       - ./postgres/init/mlops-edge-domains.sql:/docker-entrypoint-initdb.d/1020.sql:ro
       - ../connectivity/postgres/init/gateway-shadow-edge-models.sql:/docker-entrypoint-initdb.d/1030.sql:ro
       - ../connectivity/postgres/init/gateway-waveform-and-diagnostics.sql:/docker-entrypoint-initdb.d/1040.sql:ro
+      - ./postgres/init/site-building-plan.sql:/docker-entrypoint-initdb.d/1050.sql:ro
     ports:
       - "127.0.0.1:${S1_POSTGRES_HOST_PORT:-55432}:5432"
     healthcheck:

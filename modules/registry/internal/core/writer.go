@@ -53,14 +53,15 @@ func (meta MutationMeta) validate(create bool) error {
 }
 
 type SiteMutation struct {
-	ID          string       `json:"id,omitempty"`
-	Code        string       `json:"code"`
-	DisplayName string       `json:"displayName"`
-	Timezone    string       `json:"timezone"`
-	Status      string       `json:"status"`
-	FloorAreaM2 *float64     `json:"floorAreaM2,omitempty"`
-	ClimateZone *string      `json:"climateZone,omitempty"`
-	Meta        MutationMeta `json:"meta"`
+	ID           string               `json:"id,omitempty"`
+	Code         string               `json:"code"`
+	DisplayName  string               `json:"displayName"`
+	Timezone     string               `json:"timezone"`
+	Status       string               `json:"status"`
+	FloorAreaM2  *float64             `json:"floorAreaM2,omitempty"`
+	ClimateZone  *string              `json:"climateZone,omitempty"`
+	BuildingPlan OptionalBuildingPlan `json:"buildingPlan,omitzero"`
+	Meta         MutationMeta         `json:"meta"`
 }
 
 type SpaceMutation struct {
@@ -169,6 +170,11 @@ func (input SiteMutation) Validate() error {
 		case "SEVERE_COLD", "COLD", "HOT_SUMMER_COLD_WINTER", "HOT_SUMMER_WARM_WINTER", "MILD":
 		default:
 			return ErrInvalidMutation
+		}
+	}
+	if input.BuildingPlan.Set && input.BuildingPlan.Value != nil {
+		if err := input.BuildingPlan.Value.Validate(); err != nil {
+			return err
 		}
 	}
 	return nil

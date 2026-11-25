@@ -14,7 +14,7 @@ import { copSeries, COOLING_KEY, hourAgo, POWER_KEY } from '../../realtime/plant
 import { coolingUncertaintyText, copUncertaintyText, plantReading, type PlantReading } from '../../realtime/plant-model';
 import { usePlantHistory } from '../../realtime/use-plant-history';
 import { useRealtimePlant } from '../../realtime/use-realtime-plant';
-import { BUILDING_PLANS, buildingTerminals } from '../twin-building';
+import { buildingTerminals, type TwinBuildingPlan } from '../twin-building';
 import { buildTwinPlant, type TwinEquipment } from '../twin-model';
 import { useScenePalette } from '../use-scene-palette';
 import {
@@ -43,10 +43,10 @@ export function DigitalTwinWorkspace() {
   const camera = useRef<TwinCamera>(null);
   const assets = registry.data?.assetModel.assets;
   const twin = useMemo(() => (assets ? buildTwinPlant(assets, plant) : null), [assets, plant]);
-  const plan = BUILDING_PLANS[site.code] ?? null;
+  const plan: TwinBuildingPlan | null = site.buildingPlan ?? null;
   const terminals = useMemo(() => (plan ? buildingTerminals(plan) : []), [plan]);
   const view: CameraView = search.view ?? 'overview';
-  const cut = plan && search.floor && search.floor <= plan.floors.length ? search.floor : null;
+  const cut = plan && search.floor && plan.floors.some((floor) => floor.level === search.floor) ? search.floor : null;
   const all = twin ? [...twin.chillers, ...twin.towers, ...twin.chilledPumps, ...twin.coolingPumps, ...terminals.map((terminal) => terminal.equipment)] : [];
   const inspectId = search.inspect;
   const selected = inspectId
