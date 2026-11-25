@@ -1,0 +1,94 @@
+{
+  "templateKey": "hvac.pump.vfd-modbus",
+  "templateKind": "DEVICE",
+  "defaultSampleSeconds": 60,
+  "description": "标准水泵变频器 Modbus 控制器：运行状态、当前频率、输入功率与频率调节命令",
+  "payload": {
+    "deviceType": "PUMP_CONTROLLER",
+    "standardPoints": [
+      {
+        "pointCode": "run_state",
+        "sourceKey": "chwp.run_state",
+        "displayName": "水泵运行状态",
+        "pointType": "STATE",
+        "valueType": "STRING",
+        "sampleIntervalMs": 60000,
+        "publishIntervalMs": 60000,
+        "staleAfterMs": 180000
+      },
+      {
+        "pointCode": "frequency",
+        "sourceKey": "chwp.frequency",
+        "displayName": "变频器运行频率",
+        "pointType": "TELEMETRY",
+        "valueType": "NUMBER",
+        "unit": "Hz",
+        "sampleIntervalMs": 60000,
+        "publishIntervalMs": 60000,
+        "staleAfterMs": 180000,
+        "minimumNumber": 0,
+        "maximumNumber": 60
+      },
+      {
+        "pointCode": "power_total",
+        "sourceKey": "chwp.power",
+        "displayName": "水泵有功功率",
+        "pointType": "TELEMETRY",
+        "valueType": "NUMBER",
+        "unit": "kW",
+        "sampleIntervalMs": 60000,
+        "publishIntervalMs": 60000,
+        "staleAfterMs": 180000,
+        "minimumNumber": 0,
+        "maximumNumber": 500
+      },
+      {
+        "pointCode": "set_frequency",
+        "sourceKey": "chwp.set_frequency",
+        "displayName": "变频器频率设定",
+        "pointType": "COMMAND",
+        "valueType": "NUMBER",
+        "unit": "Hz",
+        "writable": true,
+        "sampleIntervalMs": 60000,
+        "publishIntervalMs": 60000,
+        "staleAfterMs": 180000,
+        "sourceMetadata": {
+          "capability": "SET_FREQUENCY",
+          "capabilityRevision": "capability:set-frequency:v1",
+          "controlKind": "NUMBER",
+          "parameterKey": "frequencyHz",
+          "minimum": 25,
+          "maximum": 50,
+          "step": 0.5,
+          "feedbackPointKey": "frequency"
+        }
+      }
+    ],
+    "capabilityProfiles": [
+      {
+        "capabilityName": "SET_FREQUENCY",
+        "capabilityRevision": "capability:set-frequency:v1",
+        "status": "VERIFIED",
+        "canonicalUnit": "Hz",
+        "minimumValue": 25,
+        "maximumValue": 50,
+        "maximumDelta": 10,
+        "riskLevel": "MEDIUM",
+        "approvalPolicy": "NONE",
+        "retryPolicy": "PRE_SEND_ONLY",
+        "connectorKind": "MODBUS_RTU"
+      }
+    ]
+  },
+  "onboardingHints": {
+    "run_state": { "semanticRole": "RUN_STATE" },
+    "frequency": { "semanticRole": "VFD_FREQUENCY" },
+    "power_total": { "semanticRole": "ACTIVE_POWER" },
+    "set_frequency": { "semanticRole": "VFD_FREQUENCY_COMMAND" }
+  },
+  "releaseReferences": {
+    "catalog": "hvac-standard-v1",
+    "registrySchema": "v1"
+  }
+}

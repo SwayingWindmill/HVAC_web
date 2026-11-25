@@ -8,8 +8,8 @@
 
 ## 决定
 
-- **一个站点一份接入清单**：`deploy/sites/<站点>.site.json` 新增 `intelligence` 一段，写这个站点的低温差诊断（哪台资产、读哪台设备的供回水温度、多久跑一次、是否启用）、优化建议（策略的约束和目标、模型、多久跑一次）和告警规则文件名。
-- **两个动作**：`node scripts/site-onboarding.mjs validate <清单>` 只读数据库（一条只读 SELECT），按「站点和设备、点位、能耗和负荷预测、告警规则、诊断、优化建议」列出有、缺、要改、要人决定的项；`apply` 写入缺的和要改的，重跑不改没变的行。两个动作先检查清单本身：告警规则读的点位、诊断读的点位、优化策略的点位代码在本站是不是正好一个启用的点位，对不上就退出、什么都不写。部署（`deploy.sh` 的 songyaxuan 一步）每次运行 `apply`。
+- **一个站点一份接入清单**：`deploy/sites/<站点>.site.json` 新增 `intelligence` 一段，写这个站点的低温差诊断（哪台资产、读哪台设备的供回水温度、多久跑一次、是否启用）、优化建议（策略的约束和目标、模型、多久跑一次）和告警规则文件名。设备也可通过 `template` 字段引用 `deploy/templates/devices/*.json` 标准设备模板，并用 `pointOverrides` / `morePoints` 覆盖单点差异；新站点可用 `npm run site:init` 一键生成全套清单脚手架。
+- **两个动作（及 API 同步路径）**：`node scripts/site-onboarding.mjs validate <清单>` 只读数据库（一条只读 SELECT），按「站点和设备、点位、能耗和负荷预测、告警规则、诊断、优化建议」列出有、缺、要改、要人决定的项；`apply` 写入缺的和要改的，重跑不改没变的行。两个动作先检查清单本身：告警规则读的点位、诊断读的点位、优化策略的点位代码在本站是不是正好一个启用的点位，对不上就退出、什么都不写。生产部署脚本 `deploy.sh` 自动按字典序发现并 `apply` `deploy/sites/*.site.json` 下的全部非示例站点清单。另提供走 Registry HTTP 写接口（`Sites` + 两阶段 `Imports` + `Templates`）的 `npm run site:sync-api`（`scripts/site-onboarding-http.ts`），作为对接外部 SaaS/API 权责边界的幂等同步入口。
 - **租户共用的不由一个站点改**：优化策略和低温差诊断规则版本是租户下所有站点共用的。租户还没有时，`apply` 按清单建第 1 版；已经有而和清单不一致时，`validate` 标「要决定」，`apply` 不改，也不让部署失败。改诊断门槛用 `scripts/publish-fdd-rule-revision.mjs` 发新版本。
 - **优化建议只在策略一致时登记**：本站的优化模型部署和优化建议的调度定义，只在租户现在生效的策略和清单一致、租户有启用的这个模型的部署版本时才写。否则定时准备一定失败（#738 会显示缺什么），不如先不登记，在 `validate` 里说明原因。
 - **告警规则仍由 `alarm-rules` 发布**：告警规则在告警库里，有自己的发布、停用和版本，`site-onboarding` 不写告警库，只检查规则读的点位，并在 `validate` 里提醒用 `alarm-rules -print` 看差异。

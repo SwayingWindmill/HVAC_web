@@ -1,0 +1,134 @@
+{
+  "templateKey": "hvac.chiller.modbus-controller",
+  "templateKind": "DEVICE",
+  "defaultSampleSeconds": 60,
+  "description": "标准冷水机组 Modbus 控制器：运行状态、蒸发/冷凝进出水温度、压缩机负载与出水温度设定命令",
+  "payload": {
+    "deviceType": "CHILLER_CONTROLLER",
+    "standardPoints": [
+      {
+        "pointCode": "run_state",
+        "sourceKey": "chiller.run_state",
+        "displayName": "机组运行状态",
+        "pointType": "STATE",
+        "valueType": "STRING",
+        "sampleIntervalMs": 60000,
+        "publishIntervalMs": 60000,
+        "staleAfterMs": 180000
+      },
+      {
+        "pointCode": "leaving_chilled_water_temperature",
+        "sourceKey": "chiller.leaving_chilled_water_temperature",
+        "displayName": "冷冻水出水温度",
+        "pointType": "TELEMETRY",
+        "valueType": "NUMBER",
+        "unit": "Cel",
+        "sampleIntervalMs": 60000,
+        "publishIntervalMs": 60000,
+        "staleAfterMs": 180000,
+        "minimumNumber": -2,
+        "maximumNumber": 40
+      },
+      {
+        "pointCode": "entering_chilled_water_temperature",
+        "sourceKey": "chiller.entering_chilled_water_temperature",
+        "displayName": "冷冻水回水温度",
+        "pointType": "TELEMETRY",
+        "valueType": "NUMBER",
+        "unit": "Cel",
+        "sampleIntervalMs": 60000,
+        "publishIntervalMs": 60000,
+        "staleAfterMs": 180000,
+        "minimumNumber": -2,
+        "maximumNumber": 40
+      },
+      {
+        "pointCode": "leaving_cooling_water_temperature",
+        "sourceKey": "chiller.leaving_cooling_water_temperature",
+        "displayName": "冷却水出水温度",
+        "pointType": "TELEMETRY",
+        "valueType": "NUMBER",
+        "unit": "Cel",
+        "sampleIntervalMs": 60000,
+        "publishIntervalMs": 60000,
+        "staleAfterMs": 180000,
+        "minimumNumber": 0,
+        "maximumNumber": 50
+      },
+      {
+        "pointCode": "entering_cooling_water_temperature",
+        "sourceKey": "chiller.entering_cooling_water_temperature",
+        "displayName": "冷却水进水温度",
+        "pointType": "TELEMETRY",
+        "valueType": "NUMBER",
+        "unit": "Cel",
+        "sampleIntervalMs": 60000,
+        "publishIntervalMs": 60000,
+        "staleAfterMs": 180000,
+        "minimumNumber": 0,
+        "maximumNumber": 50
+      },
+      {
+        "pointCode": "compressor_load",
+        "sourceKey": "chiller.compressor_load",
+        "displayName": "压缩机负载率",
+        "pointType": "TELEMETRY",
+        "valueType": "NUMBER",
+        "unit": "%",
+        "sampleIntervalMs": 60000,
+        "publishIntervalMs": 60000,
+        "staleAfterMs": 180000,
+        "minimumNumber": 0,
+        "maximumNumber": 120
+      },
+      {
+        "pointCode": "set_chw_supply_temp",
+        "sourceKey": "chiller.set_chw_supply_temp",
+        "displayName": "冷冻水出水温度设定",
+        "pointType": "COMMAND",
+        "valueType": "NUMBER",
+        "unit": "Cel",
+        "writable": true,
+        "sampleIntervalMs": 60000,
+        "publishIntervalMs": 60000,
+        "staleAfterMs": 180000,
+        "sourceMetadata": {
+          "capability": "SET_CHILLED_WATER_TEMPERATURE_SETPOINT",
+          "capabilityRevision": "capability:set-chilled-water-temperature-setpoint:v1",
+          "controlKind": "NUMBER",
+          "parameterKey": "setpointC",
+          "minimum": 5,
+          "maximum": 12,
+          "step": 0.5,
+          "feedbackPointKey": "leaving_chilled_water_temperature"
+        }
+      }
+    ],
+    "capabilityProfiles": [
+      {
+        "capabilityName": "SET_CHILLED_WATER_TEMPERATURE_SETPOINT",
+        "capabilityRevision": "capability:set-chilled-water-temperature-setpoint:v1",
+        "status": "VERIFIED",
+        "canonicalUnit": "Cel",
+        "minimumValue": 5,
+        "maximumValue": 12,
+        "maximumDelta": 2,
+        "riskLevel": "MEDIUM",
+        "approvalPolicy": "NONE",
+        "retryPolicy": "PRE_SEND_ONLY",
+        "connectorKind": "MODBUS_RTU"
+      }
+    ]
+  },
+  "onboardingHints": {
+    "run_state": { "semanticRole": "RUN_STATE" },
+    "leaving_chilled_water_temperature": { "semanticRole": "CHW_LEAVING_TEMP" },
+    "entering_chilled_water_temperature": { "semanticRole": "CHW_ENTERING_TEMP" },
+    "leaving_cooling_water_temperature": { "semanticRole": "CW_LEAVING_TEMP" },
+    "entering_cooling_water_temperature": { "semanticRole": "CW_ENTERING_TEMP" }
+  },
+  "releaseReferences": {
+    "catalog": "hvac-standard-v1",
+    "registrySchema": "v1"
+  }
+}

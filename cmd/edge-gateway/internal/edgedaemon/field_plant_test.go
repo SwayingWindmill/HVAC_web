@@ -473,3 +473,23 @@ func TestFieldPlantArbitrarySiteBConfigAndShadowHotReload(t *testing.T) {
 		t.Fatalf("expected cleared shadow PointMappings to fall back to t1=7.0, got %+v", pt)
 	}
 }
+
+func TestAllDeployEdgePlantConfigsValidate(t *testing.T) {
+	files, err := filepath.Glob(filepath.Join("..", "..", "..", "..", "deploy", "sites", "*.edge-plant.json"))
+	if err != nil {
+		t.Fatalf("glob edge-plant configs: %v", err)
+	}
+	if len(files) == 0 {
+		t.Fatal("expected at least one *.edge-plant.json under deploy/sites")
+	}
+	for _, file := range files {
+		cfg, err := LoadFieldPlantConfigFile(file)
+		if err != nil {
+			t.Fatalf("LoadFieldPlantConfigFile(%s): %v", file, err)
+		}
+		cfg.ApplyDefaults()
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate(%s): %v", file, err)
+		}
+	}
+}
