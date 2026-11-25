@@ -150,6 +150,10 @@ while IFS=$'\t' read -r service image kind required package <&3; do
       continue
     fi
     resolved="$(resolve_image "$service" "$image")"
+    if [[ -z "$resolved" && "$required" != required && "${OCI_PULL_OPTIONAL:-0}" != 1 ]]; then
+      echo "skip ${service}: optional service is not installed on this host"
+      continue
+    fi
     if [[ -z "$resolved" ]]; then
       resolved="$image"
     fi
@@ -211,6 +215,25 @@ cleanup_candidates() {
 }
 trap cleanup_candidates EXIT
 
+oci_pull_attempts="${OCI_PULL_ATTEMPTS:-3}"
+oci_pull_retry_sleep="${OCI_PULL_RETRY_SLEEP:-3}"
+docker_pull_with_retry() {
+  local ref="$1"
+  local attempt=1
+  while true; do
+    if docker pull "$ref" </dev/null; then
+      return 0
+    fi
+    if (( attempt >= oci_pull_attempts )); then
+      return 1
+    fi
+    local delay=$(( oci_pull_retry_sleep * attempt ))
+    echo "warning: docker pull failed for ${ref} (attempt ${attempt}/${oci_pull_attempts}); retrying in ${delay}s" >&2
+    sleep "$delay"
+    attempt=$((attempt + 1))
+  done
+}
+
 if [[ "$oci_mode" == 1 ]]; then
   if [[ -n "${OCI_REGISTRY_LOGIN_CMD:-}" ]]; then
     bash -c "${OCI_REGISTRY_LOGIN_CMD}"
@@ -219,7 +242,7 @@ if [[ "$oci_mode" == 1 ]]; then
     service="${planned_services[$index]}"
     oci_ref="${planned_oci_refs[$index]}"
     echo "pulling ${service}: ${oci_ref}"
-    if ! docker pull "$oci_ref" </dev/null; then
+    if ! docker_pull_with_retry "$oci_ref"; then
       echo "error: failed to pull OCI image for ${service} (${oci_ref}); nothing on host was changed." >&2
       exit 1
     fi
@@ -533,7 +556,11 @@ if ! SMOKE_RESOLVE_IP=127.0.0.1 SMOKE_CHECK_CONTAINERS=1 bash "$script_dir/smoke
   exit 1
 fi
 bash "$release/observability-config.sh" apply "$platform_dir" "$compose_project"
-bash "$script_dir/prune-rollback-images.sh" 2
+if [[ "$oci_mode" == 1 ]]; then
+  bash "$script_dir/prune-rollback-images.sh" 2 --prune-deploy-base
+else
+  bash "$script_dir/prune-rollback-images.sh" 2
+fi
 
 echo "deployed $revision"
 echo "rollback tags use before-${stamp}"

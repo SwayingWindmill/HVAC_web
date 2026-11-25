@@ -358,3 +358,22 @@ func TestHostTextfileEmitsOffsiteMetricConditionally(t *testing.T) {
 		}
 	})
 }
+
+func TestBackupServiceAndDrillTableNames(t *testing.T) {
+	service := string(mustReadBackup(t, "hvac-backup.service"))
+	for _, want := range []string{"CacheDirectory=hvac-restic", "Environment=RESTIC_CACHE_DIR=/var/cache/hvac-restic"} {
+		if !strings.Contains(service, want) {
+			t.Fatalf("hvac-backup.service missing %q:\n%s", want, service)
+		}
+	}
+	drill := string(mustReadBackup(t, "run-offsite-restore-drill.sh"))
+	for _, want := range []string{
+		"core_registry.telemetry_points",
+		"command_runtime.command_intents",
+		"alarm_runtime.alarm_current",
+	} {
+		if !strings.Contains(drill, want) {
+			t.Fatalf("run-offsite-restore-drill.sh missing %q", want)
+		}
+	}
+}

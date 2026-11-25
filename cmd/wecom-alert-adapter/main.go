@@ -43,9 +43,10 @@ func run() int {
 	client := newBoundedHTTPClient(8*time.Second, refuseRedirect)
 	send := newSender(*sendTokenFile, *recipientsFile, *receiverDir, *urlFile, client)
 	send.logger = logger
+	wechatMP := newWeChatMPDeliverer(*receiverDir, client)
 	server := &http.Server{
 		Addr:              *addr,
-		Handler:           newHandlerWithLogger(*urlFile, client, send, logger),
+		Handler:           newHandlerWithAll(*urlFile, client, send, wechatMP, logger),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -197,13 +198,23 @@ func healthcheck(addr string, logger *slog.Logger) int {
 
 func newHandler(urlFile string, client *http.Client, send *sender) http.Handler {
 	var logger *slog.Logger
+	var receiverDir string
 	if send != nil {
 		logger = send.logger
+		receiverDir = send.receiverDir
 	}
-	return newHandlerWithLogger(urlFile, client, send, logger)
+	return newHandlerWithAll(urlFile, client, send, newWeChatMPDeliverer(receiverDir, client), logger)
 }
 
 func newHandlerWithLogger(urlFile string, client *http.Client, send *sender, logger *slog.Logger) http.Handler {
+	var receiverDir string
+	if send != nil {
+		receiverDir = send.receiverDir
+	}
+	return newHandlerWithAll(urlFile, client, send, newWeChatMPDeliverer(receiverDir, client), logger)
+}
+
+func newHandlerWithAll(urlFile string, client *http.Client, send *sender, wechatMP *wechatMPDeliverer, logger *slog.Logger) http.Handler {
 	if logger == nil {
 		logger = newJSONLogger(os.Stdout, slog.LevelInfo)
 	}
@@ -217,7 +228,7 @@ func newHandlerWithLogger(urlFile string, client *http.Client, send *sender, log
 		_, _ = writer.Write([]byte("ok\n"))
 	})
 	mux.HandleFunc("POST /alertmanager", func(writer http.ResponseWriter, request *http.Request) {
-		deliverWithLogger(writer, request, urlFile, client, logger)
+		deliverAll(writer, request, urlFile, client, wechatMP, logger)
 	})
 	return mux
 }
@@ -227,6 +238,10 @@ func deliver(writer http.ResponseWriter, request *http.Request, urlFile string, 
 }
 
 func deliverWithLogger(writer http.ResponseWriter, request *http.Request, urlFile string, client *http.Client, logger *slog.Logger) {
+	deliverAll(writer, request, urlFile, client, nil, logger)
+}
+
+func deliverAll(writer http.ResponseWriter, request *http.Request, urlFile string, client *http.Client, wechatMP *wechatMPDeliverer, logger *slog.Logger) {
 	if logger == nil {
 		logger = newJSONLogger(os.Stdout, slog.LevelInfo)
 	}
@@ -236,8 +251,17 @@ func deliverWithLogger(writer http.ResponseWriter, request *http.Request, urlFil
 		http.Error(writer, "wecom webhook file is invalid", http.StatusInternalServerError)
 		return
 	}
-	if webhookURL == "" {
-		logger.Info("alertmanager_webhook_dropped", "reason", "wecom_receiver_not_configured")
+	var mpConfig *wechatMPConfig
+	if wechatMP != nil {
+		mpConfig, err = wechatMP.loadConfig()
+		if err != nil {
+			logger.Error("wechat_mp_config_invalid", "error_code", "WECHAT_MP_CONFIG_INVALID", "cause", err.Error())
+			http.Error(writer, "wechat-mp config is invalid", http.StatusInternalServerError)
+			return
+		}
+	}
+	if webhookURL == "" && mpConfig == nil {
+		logger.Info("alertmanager_webhook_dropped", "reason", "no_receiver_configured")
 		writer.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -246,47 +270,74 @@ func deliverWithLogger(writer http.ResponseWriter, request *http.Request, urlFil
 		http.Error(writer, "read body", http.StatusBadRequest)
 		return
 	}
+
+	var wecomErr error
+	if webhookURL != "" {
+		var status int
+		var msg string
+		status, msg, wecomErr = postWeComWebhook(request.Context(), client, webhookURL, body, logger)
+		if wecomErr != nil && mpConfig == nil {
+			http.Error(writer, msg, status)
+			return
+		}
+	}
+
+	var mpErr error
+	if mpConfig != nil {
+		mpErr = wechatMP.deliverAlerts(request.Context(), mpConfig, body, logger)
+	}
+
+	if wecomErr != nil || mpErr != nil {
+		if mpConfig == nil && wecomErr == nil {
+			writer.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if mpErr != nil && strings.Contains(mpErr.Error(), "parse alertmanager payload") && webhookURL == "" {
+			http.Error(writer, "alertmanager payload", http.StatusBadRequest)
+			return
+		}
+		http.Error(writer, "upstream alert delivery failed", http.StatusBadGateway)
+		return
+	}
+	writer.WriteHeader(http.StatusNoContent)
+}
+
+func postWeComWebhook(ctx context.Context, client *http.Client, webhookURL string, body []byte, logger *slog.Logger) (int, string, error) {
 	text, err := formatAlerts(body)
 	if err != nil {
-		http.Error(writer, "alertmanager payload", http.StatusBadRequest)
-		return
+		return http.StatusBadRequest, "alertmanager payload", err
 	}
 	payload, err := json.Marshal(map[string]any{
 		"msgtype": "text",
 		"text":    map[string]string{"content": text},
 	})
 	if err != nil {
-		http.Error(writer, "encode", http.StatusInternalServerError)
-		return
+		return http.StatusInternalServerError, "encode", err
 	}
-	outbound, err := http.NewRequestWithContext(request.Context(), http.MethodPost, webhookURL, bytes.NewReader(payload))
+	outbound, err := http.NewRequestWithContext(ctx, http.MethodPost, webhookURL, bytes.NewReader(payload))
 	if err != nil {
-		http.Error(writer, "request", http.StatusInternalServerError)
-		return
+		return http.StatusInternalServerError, "request", err
 	}
 	outbound.Header.Set("Content-Type", "application/json")
 	response, err := client.Do(outbound)
 	if err != nil {
 		logger.Warn("wecom_post_failed", "error_code", "WECOM_POST_FAILED")
-		http.Error(writer, "wecom unreachable", http.StatusBadGateway)
-		return
+		return http.StatusBadGateway, "wecom unreachable", err
 	}
 	defer drainAndCloseBody(response.Body)
 	reply, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		logger.Warn("wecom_http_error", "error_code", "WECOM_HTTP_STATUS", "status", response.StatusCode)
-		http.Error(writer, "wecom rejected the post", http.StatusBadGateway)
-		return
+		return http.StatusBadGateway, "wecom rejected the post", fmt.Errorf("wecom http status %d", response.StatusCode)
 	}
 	var parsed struct {
 		ErrCode int `json:"errcode"`
 	}
 	if json.Unmarshal(reply, &parsed) == nil && parsed.ErrCode != 0 {
 		logger.Warn("wecom_errcode_rejected", "error_code", "WECOM_ERRCODE", "wecom_errcode", parsed.ErrCode)
-		http.Error(writer, "wecom rejected the message", http.StatusBadGateway)
-		return
+		return http.StatusBadGateway, "wecom rejected the message", fmt.Errorf("wecom errcode %d", parsed.ErrCode)
 	}
-	writer.WriteHeader(http.StatusNoContent)
+	return http.StatusNoContent, "", nil
 }
 
 func readWebhookURL(path string) (string, error) {

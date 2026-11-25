@@ -7,6 +7,8 @@ Requires=docker.service
 
 [Service]
 Type=oneshot
+CacheDirectory=hvac-restic
+Environment=RESTIC_CACHE_DIR=/var/cache/hvac-restic
 EnvironmentFile=/etc/hvac/backup.env
 WorkingDirectory=/opt/hvac-platform
 ExecStart=/opt/hvac-platform/deploy/platform/phase1/backup/run-scheduled-backups.sh

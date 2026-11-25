@@ -69,11 +69,21 @@ groups:
         expr: (sum(rate(hvac_s2_data_quality_records_total{quality="good"}[10m])) / sum(rate(hvac_s2_data_quality_records_total[10m]))) < 0.95 and sum(increase(hvac_s2_data_quality_records_total[10m])) > 100
         for: 10m
         labels:
-          severity: page
+          severity: warning
           primary_owner: telemetry-platform
           secondary_owner: energy-data
         annotations:
           summary: Telemetry data good rate is below 95 percent
+          runbook: docs/operations/alerts.md#读数合格率低
+      - alert: S2DataQualityCritical
+        expr: ((sum(rate(hvac_s2_data_quality_records_total{quality="good"}[10m])) / sum(rate(hvac_s2_data_quality_records_total[10m]))) < 0.85 or (sum(rate(hvac_s2_data_quality_records_total{quality=~"invalid|stale"}[10m])) / sum(rate(hvac_s2_data_quality_records_total[10m]))) > 0.05) and sum(increase(hvac_s2_data_quality_records_total[10m])) > 100
+        for: 10m
+        labels:
+          severity: page
+          primary_owner: telemetry-platform
+          secondary_owner: energy-data
+        annotations:
+          summary: Telemetry data quality critically degraded
           runbook: docs/operations/alerts.md#读数合格率低
       - alert: S2OutboxLagHigh
         expr: histogram_quantile(0.99, sum by (le) (rate(hvac_s2_outbox_lag_seconds_bucket[5m]))) > 5
