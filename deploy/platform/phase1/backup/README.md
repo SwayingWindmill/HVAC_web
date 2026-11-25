@@ -54,9 +54,12 @@ ENV
 sudo systemctl daemon-reload && sudo systemctl enable --now hvac-backup.timer
 ```
 
-在配置好拷到服务器以外之前，备份都和数据在同一块盘上：能防误操作和数据损坏，防不了整台服务器丢失。
+在配置好拷到服务器以外之前，备份都和数据在同一块盘上：能防误操作和数据损坏，防不了整台服务器丢失。搭配异地加密备份时，把 `/etc/hvac/backup-offsite.env`（权限必须 `0600`）写入 `RESTIC_REPOSITORY`、`RESTIC_PASSWORD` 和对象存储凭据，并在 `/etc/hvac/backup.env` 设置 `BACKUP_KEEP=1` 与 `BACKUP_OFFSITE_SYNC_CMD=/opt/hvac-platform/deploy/platform/phase1/backup/sync-offsite-restic.sh`：
 
-每次 PostgreSQL 或 ClickHouse 备份成功，脚本把当前时间写到运行目录的 `observability/postgres-backup.success` 或 `observability/clickhouse-backup.success`。主机上的 `hvac-host-metrics.timer` 读这两个文件（还没有文件时改看备份目录的修改时间），交给 Prometheus。超过 26 小时没有新的成功时间就会告警。
+- `sync-offsite-restic.sh` 会自动处理腾讯云 COS 域名查找参数（`-o s3.bucket-lookup=dns`）、首次初始化 restic 加密仓库、上传 PostgreSQL 基础备份、WAL 归档与 ClickHouse 备份目录，并按 `RESTIC_KEEP_DAILY`（默认 7）和 `RESTIC_KEEP_WEEKLY`（默认 4）修剪远端快照及抽样校验完整性（`check --read-data-subset=1%`）。
+- 演练异地恢复时直接运行 `run-offsite-restore-drill.sh`：它会在临时隔离目录还原最新快照并校验 `SHA256SUMS`，拉起只挂载临时卷的隔离 `postgres` 和 `clickhouse` 容器实测恢复表数据与行数统计，结束后自动清理全部临时容器和目录。
+
+每次 PostgreSQL 或 ClickHouse 备份成功，脚本把当前时间写到运行目录的 `observability/postgres-backup.success` 或 `observability/clickhouse-backup.success`；配置了 `BACKUP_OFFSITE_SYNC_CMD` 后成功同步还会写出 `observability/offsite-backup.success`（设 `BACKUP_OFFSITE_REQUIRED=1` 或该文件存在时，`host-textfile.sh` 会同步输出 `store="offsite"` 指标给 Prometheus）。主机上的 `hvac-host-metrics.timer` 读这些时间戳交给 Prometheus，超过 26 小时没有新的成功时间就会告警。
 
 基本的节奏：
 

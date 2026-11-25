@@ -10,7 +10,6 @@ ignore (
 	./deploy/acceptance
 	./deploy/analytics
 	./deploy/observability
-	./deploy/platform/phase1/backup
 	./deploy/platform/phase1/clickhouse
 	./deploy/platform/phase1/environments
 	./deploy/platform/phase1/images

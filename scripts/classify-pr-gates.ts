@@ -205,6 +205,9 @@ for (const file of files) {
       && !file.startsWith('deploy/platform/phase1/cd/'),
     () => {
       add(contractProfiles, ['core']);
+      if (file.startsWith('deploy/platform/phase1/backup/') || file === 'deploy/platform/phase1/observability/host-textfile.sh') {
+        add(unitProfiles, ['platform']);
+      }
       if (file.includes('compose') || file.includes('postgres') || file.includes('backup') || file.includes('clickhouse')) {
         add(integrationProfiles, ['platform']);
       }

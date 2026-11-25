@@ -9,12 +9,27 @@ on:
         description: "Rebuild every <service>:deploy-base as a verified one-layer copy of the running image before this deploy (docs/operations/disk-full.md)"
         type: boolean
         default: false
+      deploy_mode:
+        description: "Deployment delivery mode (auto uses OCI images when TCR_PASSWORD is configured)"
+        type: choice
+        options:
+          - auto
+          - oci
+          - tarball
+        default: auto
+      target_environment:
+        description: "Target GitHub Environment to deploy"
+        type: choice
+        options:
+          - production
+          - staging
+        default: production
 
 permissions:
   contents: read
 
 concurrency:
-  group: deploy-production
+  group: deploy-${{ inputs.target_environment || 'production' }}
   cancel-in-progress: false
 
 env:
@@ -25,13 +40,12 @@ env:
 
 jobs:
   deploy:
-    name: deploy / production
+    name: deploy / ${{ inputs.target_environment || 'production' }}
     runs-on: ubuntu-24.04
-    # GitHub-hosted jobs stop at 360 minutes. The build is a few minutes; the rest is the SSH step.
+    # GitHub-hosted jobs stop at 360 minutes. OCI mode finishes in minutes; tarball uploads can retry up to 330m.
     timeout-minutes: 360
-    # The production environment is expected to require a reviewer. Repo and environment
-    # copies of DEPLOY_SSH_PASSWORD both work; an environment secret wins when both exist.
-    environment: production
+    # The target environment is expected to require a reviewer when configured.
+    environment: ${{ inputs.target_environment || 'production' }}
     steps:
       - name: Deploy only main
         run: |
@@ -48,12 +62,47 @@ jobs:
           DEPLOY_SSH_PASSWORD: ${{ secrets.DEPLOY_SSH_PASSWORD }}
         run: bash deploy/platform/phase1/cd/push-release.sh --check-credentials
 
+      - name: Resolve deploy mode
+        id: mode
+        env:
+          INPUT_DEPLOY_MODE: ${{ inputs.deploy_mode || 'auto' }}
+          TCR_PASSWORD: ${{ secrets.TCR_PASSWORD }}
+          TCR_USERNAME: ${{ vars.TCR_USERNAME || secrets.TCR_USERNAME }}
+          TCR_REGISTRY: ${{ vars.TCR_REGISTRY || secrets.TCR_REGISTRY || 'ccr.ccs.tencentyun.com' }}
+          TCR_NAMESPACE: ${{ vars.TCR_NAMESPACE || secrets.TCR_NAMESPACE || 'hvac' }}
+        run: |
+          use_oci=false
+          case "${INPUT_DEPLOY_MODE}" in
+            oci)
+              if [ -z "${TCR_PASSWORD}" ] || [ -z "${TCR_USERNAME}" ]; then
+                echo "::error::deploy_mode=oci requires TCR_USERNAME and TCR_PASSWORD secrets." >&2
+                exit 1
+              fi
+              use_oci=true
+              ;;
+            auto)
+              if [ -n "${TCR_PASSWORD}" ] && [ -n "${TCR_USERNAME}" ]; then
+                use_oci=true
+              fi
+              ;;
+            tarball)
+              use_oci=false
+              ;;
+            *)
+              echo "::error::Unsupported deploy_mode=${INPUT_DEPLOY_MODE}" >&2
+              exit 1
+              ;;
+          esac
+          echo "use_oci=${use_oci}" >> "$GITHUB_OUTPUT"
+          echo "Resolved deploy mode: use_oci=${use_oci} (registry=${TCR_REGISTRY}, namespace=${TCR_NAMESPACE})"
+
       - uses: actions/setup-go@v7
         with:
           go-version: "1.27.4"
           cache: false
 
       - uses: actions/setup-node@v7
+        if: steps.mode.outputs.use_oci != 'true'
         with:
           node-version: "22.22.0"
           cache: npm
@@ -61,12 +110,25 @@ jobs:
             package-lock.json
             services/operations-agent-service/package-lock.json
 
-      - name: Build release artifacts
+      - name: Build and push immutable OCI images
+        if: steps.mode.outputs.use_oci == 'true'
+        env:
+          OCI_REGISTRY: ${{ vars.TCR_REGISTRY || secrets.TCR_REGISTRY || 'ccr.ccs.tencentyun.com' }}
+          OCI_NAMESPACE: ${{ vars.TCR_NAMESPACE || secrets.TCR_NAMESPACE || 'hvac' }}
+          TCR_USERNAME: ${{ vars.TCR_USERNAME || secrets.TCR_USERNAME }}
+          TCR_PASSWORD: ${{ secrets.TCR_PASSWORD }}
+        run: |
+          printf '%s\n' "${TCR_PASSWORD}" | docker login "${OCI_REGISTRY}" --username "${TCR_USERNAME}" --password-stdin
+          trap 'docker logout "${OCI_REGISTRY}" >/dev/null 2>&1 || true' EXIT
+          OCI_PUSH=1 bash deploy/platform/phase1/cd/build-oci-images.sh
+
+      - name: Build release artifacts (tarball mode)
+        if: steps.mode.outputs.use_oci != 'true'
         run: bash deploy/platform/phase1/cd/build-release.sh
 
       - name: Deploy over SSH
         # One attempt waits 0.5 MiB/min plus 25% and 3 minutes, then retries twice and resumes.
-        # 330 minutes covers three full attempts of a ~40 MiB archive, plus extract, apply, and smoke.
+        # 330 minutes covers three full attempts of a ~40 MiB archive (OCI control bundles finish in seconds).
         timeout-minutes: 330
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}

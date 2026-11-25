@@ -188,6 +188,13 @@ test('Phase 1 migration changes rerun the migration integration test and the fre
   assert.equal(cdClassification.broad, false);
   assert.deepEqual(cdClassification.unitDomainProfiles, ['platform']);
 
+  for (const backupFile of ['deploy/platform/phase1/backup/sync-offsite-restic.sh', 'deploy/platform/phase1/observability/host-textfile.sh']) {
+    const backupClassification = runClassification([backupFile]);
+    assert.equal(backupClassification.unknown, false);
+    assert.equal(backupClassification.broad, false);
+    assert.deepEqual(backupClassification.unitDomainProfiles, ['platform'], backupFile);
+  }
+
   const promoClassification = runClassification(['tools/promo-video/package-lock.json']);
   assert.equal(promoClassification.unknown, false);
   assert.equal(promoClassification.broad, false);
