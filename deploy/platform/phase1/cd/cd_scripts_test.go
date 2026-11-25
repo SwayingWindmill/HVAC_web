@@ -2268,3 +2268,310 @@ fi
 		})
 	}
 }
+
+func TestBuildOCIImagesManifestAndThinRelease(t *testing.T) {
+	const digestHex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+	for _, tc := range []struct {
+		name          string
+		missingDigest string
+		wantErr       bool
+	}{
+		{name: "builds thin manifest with immutable digests", missingDigest: "0", wantErr: false},
+		{name: "fails closed when pushed image has no sha256 repo digest", missingDigest: "1", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bin := t.TempDir()
+			dockerLog := filepath.Join(t.TempDir(), "docker.log")
+			staging := filepath.Join(t.TempDir(), "release")
+
+			writeExe(t, bin, "go", `#!/usr/bin/env bash
+set -euo pipefail
+out=""
+while [ $# -gt 0 ]; do
+  if [ "$1" = "-o" ]; then out="$2"; shift 2; continue; fi
+  shift
+done
+mkdir -p "$(dirname "$out")"
+printf '#!/bin/sh\nexit 0\n' > "$out"
+chmod 755 "$out"
+`)
+			writeExe(t, bin, "git", `#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+  rev-parse)
+    printf '%s\n' "0123456789abcdef0123456789abcdef01234567"
+    ;;
+  archive)
+    out=""
+    while [ $# -gt 0 ]; do
+      if [ "$1" = "-o" ]; then out="$2"; shift 2; continue; fi
+      shift
+    done
+    tmp="$(mktemp -d)"
+    printf 'stub\n' > "$tmp/README"
+    tar -C "$tmp" -cf "$out" README
+    rm -rf "$tmp"
+    ;;
+  *)
+    exec /usr/bin/git "$@"
+    ;;
+esac
+`)
+			writeExe(t, bin, "docker", `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$DOCKER_LOG"
+cmd="$1"; shift
+case "$cmd" in
+  build|push) exit 0 ;;
+  inspect)
+    if [ "${MOCK_MISSING_DIGEST:-0}" = "1" ]; then
+      exit 0
+    fi
+    last="${@: -1}"
+    repo="${last%:*}"
+    printf '%s@sha256:%s\n' "$repo" "$MOCK_DIGEST_HEX"
+    ;;
+esac
+`)
+
+			cmd := exec.Command("bash", "build-oci-images.sh")
+			cmd.Env = commandEnv(bin,
+				"DOCKER_LOG="+dockerLog,
+				"PRODUCTION_RELEASE_DIR="+staging,
+				"OCI_REGISTRY=ccr.ccs.tencentyun.com",
+				"OCI_NAMESPACE=hvac",
+				"OCI_PUSH=1",
+				"OCI_SERVICES_FILTER=energy-api,nginx,operations-agent-service,phase1-migrator",
+				"MOCK_DIGEST_HEX="+digestHex,
+				"MOCK_MISSING_DIGEST="+tc.missingDigest,
+			)
+			output, err := cmd.CombinedOutput()
+			if tc.wantErr {
+				if err == nil || !strings.Contains(string(output), "missing immutable sha256 RepoDigest") {
+					t.Fatalf("expected missing digest error, err=%v\n%s", err, output)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("build-oci-images.sh failed: %v\n%s", err, output)
+			}
+
+			manifest := string(mustRead(t, filepath.Join(staging, "image-manifest.tsv")))
+			for _, wantLine := range []string{
+				"energy-api\thvac/energy-api:0.1.0-dev\tccr.ccs.tencentyun.com/hvac/energy-api@sha256:" + digestHex,
+				"nginx\thvac/hvac-web-real:0.1.0-dev\tccr.ccs.tencentyun.com/hvac/hvac-web-real@sha256:" + digestHex,
+				"operations-agent-service\thvac/operations-agent-service:0.1.0-dev\tccr.ccs.tencentyun.com/hvac/operations-agent-service@sha256:" + digestHex,
+				"phase1-migrator\thvac/phase1-migrator:0.1.0-dev\tccr.ccs.tencentyun.com/hvac/phase1-migrator@sha256:" + digestHex,
+			} {
+				if !strings.Contains(manifest, wantLine) {
+					t.Fatalf("image-manifest.tsv missing %q:\n%s", wantLine, manifest)
+				}
+			}
+
+			for _, unwantedDir := range []string{"bins", "web", "agent", "migrator", "mqtt", "python"} {
+				if _, err := os.Stat(filepath.Join(staging, unwantedDir)); !os.IsNotExist(err) {
+					t.Fatalf("OCI control bundle must not stage heavy payload directory %s", unwantedDir)
+				}
+			}
+			for _, requiredFile := range []string{"REVISION", "services.tsv", "image-manifest.tsv", "source.tar", "apply-on-server.sh", "deploy.sh", "rollback.sh"} {
+				if _, err := os.Stat(filepath.Join(staging, requiredFile)); err != nil {
+					t.Fatalf("OCI release missing required file %s: %v", requiredFile, err)
+				}
+			}
+			dlog := string(mustRead(t, dockerLog))
+			if !strings.Contains(dlog, "-f ") || !strings.Contains(dlog, "deploy/platform/phase1/images/operations-agent.Dockerfile") || !strings.Contains(dlog, "push ccr.ccs.tencentyun.com/hvac/hvac-web-real:") {
+				t.Fatalf("unexpected docker invocations:\n%s", dlog)
+			}
+		})
+	}
+}
+
+func TestApplyOnServerOCIPullOnlyMode(t *testing.T) {
+	const digestA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const digestB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+	makeOciStoreAndRelease := func(t *testing.T, smokeScript, pullFailTarget string, manifestBody string) (bin, store, platform, release string) {
+		t.Helper()
+		bin = t.TempDir()
+		store = t.TempDir()
+		platform = t.TempDir()
+		release = t.TempDir()
+
+		writeExe(t, bin, "sudo", "#!/bin/sh\n[ \"$1\" = -n ] && shift\nexec \"$@\"\n")
+		writeExe(t, bin, "date", "#!/bin/sh\nprintf '%s\\n' \"$FAKE_STAMP\"\n")
+		writeExe(t, bin, "npm", "#!/bin/sh\necho 'error: npm must never run during OCI deploy' >&2\nexit 99\n")
+		writeExe(t, bin, "docker", `#!/usr/bin/env bash
+set -euo pipefail
+s="$DOCKER_STORE"
+mkdir -p "$s/tags" "$s/images"
+printf '%s\n' "$*" >> "$s/calls.log"
+key() { printf '%s' "$1" | tr '/:@' '___'; }
+resolve() {
+  if [[ -f "$s/tags/$(key "$1")" ]]; then cat "$s/tags/$(key "$1")"; return 0; fi
+  return 1
+}
+case "$1" in
+  ps) exit 0 ;;
+  build) echo "error: docker build must never run in OCI pull-only mode" >&2; exit 99 ;;
+  pull)
+    ref="$2"
+    if [[ -n "${MOCK_PULL_FAIL:-}" && "$ref" == *"$MOCK_PULL_FAIL"* ]]; then
+      echo "pull denied for $ref" >&2
+      exit 1
+    fi
+    id="pulled-$(key "$ref")"
+    mkdir -p "$s/images/$id"
+    printf '%s\n' "$id" > "$s/tags/$(key "$ref")"
+    ;;
+  tag)
+    id="$(resolve "$2")"
+    printf '%s\n' "$id" > "$s/tags/$(key "$3")"
+    ;;
+  image)
+    case "$2" in
+      inspect)
+        resolve "$3" >/dev/null || exit 1
+        ;;
+      prune|rm) exit 0 ;;
+    esac
+    ;;
+esac
+`)
+		// Seed only energy-api to also prove an optional/new image absent locally works in OCI mode.
+		if err := os.MkdirAll(filepath.Join(store, "tags"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(store, "tags", "hvac_energy-api_0.1.0-dev"), []byte("seed-energy-api\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := os.MkdirAll(filepath.Join(release, "src/deploy/platform/phase1/cd"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		files := map[string]string{
+			"REVISION":           strings.Repeat("d", 40) + "\n",
+			"services.tsv":       "energy-api\thvac/energy-api:0.1.0-dev\tgo\trequired\t./cmd/energy-api\noperations-agent-service\thvac/operations-agent-service:0.1.0-dev\tnode\trequired\t-\n",
+			"image-manifest.tsv": manifestBody,
+			"src/README":         "tree\n",
+			"src/deploy/platform/phase1/cd/observability-config.sh": "#!/bin/sh\nexit 0\n",
+			"rollback.sh":              string(mustRead(t, "rollback.sh")),
+			"smoke-release.sh":         smokeScript,
+			"prune-rollback-images.sh": "#!/bin/sh\nexit 0\n",
+		}
+		for name, body := range files {
+			if err := os.WriteFile(filepath.Join(release, name), []byte(body), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if out, err := exec.Command("tar", append([]string{"-C", filepath.Join(release, "src"), "-cf", filepath.Join(release, "source.tar")}, topLevel(t, filepath.Join(release, "src"))...)...).CombinedOutput(); err != nil {
+			t.Fatalf("tar: %v\n%s", err, out)
+		}
+		_ = pullFailTarget
+		return bin, store, platform, release
+	}
+
+	validManifest := strings.Join([]string{
+		"# service\tlocal_image\toci_ref",
+		"energy-api\thvac/energy-api:0.1.0-dev\tccr.ccs.tencentyun.com/hvac/energy-api@sha256:" + digestA,
+		"operations-agent-service\thvac/operations-agent-service:0.1.0-dev\tccr.ccs.tencentyun.com/hvac/operations-agent-service@sha256:" + digestB,
+	}, "\n") + "\n"
+
+	t.Run("pulls digests without build and tags rollback before image", func(t *testing.T) {
+		bin, store, platform, release := makeOciStoreAndRelease(t, "#!/bin/sh\nexit 0\n", "", validManifest)
+		cmd := exec.Command("bash", "apply-on-server.sh", release)
+		cmd.Env = commandEnv(bin,
+			"DOCKER_STORE="+store,
+			"HVAC_PLATFORM_DIR="+platform,
+			"HVAC_DEPLOY_SCRIPT="+writeExe(t, bin, "restart", "#!/bin/sh\nexit 0\n"),
+			"FAKE_STAMP=20261125T040000Z",
+		)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("apply-on-server OCI failed: %v\n%s", err, out)
+		}
+		calls := string(mustRead(t, filepath.Join(store, "calls.log")))
+		if !strings.Contains(calls, "pull ccr.ccs.tencentyun.com/hvac/energy-api@sha256:"+digestA) ||
+			!strings.Contains(calls, "pull ccr.ccs.tencentyun.com/hvac/operations-agent-service@sha256:"+digestB) {
+			t.Fatalf("missing expected docker pull calls:\n%s", calls)
+		}
+		if strings.TrimSpace(string(mustRead(t, filepath.Join(store, "tags", "hvac_energy-api_before-20261125T040000Z")))) != "seed-energy-api" {
+			t.Fatalf("expected previous energy-api image saved as before-* rollback tag")
+		}
+		rollbackManifest := string(mustRead(t, filepath.Join(platform, "rollbacks", "20261125T040000Z.tsv")))
+		if strings.Contains(rollbackManifest, "operations-agent-service\t\n") {
+			t.Fatalf("OCI rollback manifest must omit new images without a previous tag:\n%s", rollbackManifest)
+		}
+	})
+
+	t.Run("rolls back automatically when smoke fails in OCI mode", func(t *testing.T) {
+		bin, store, platform, release := makeOciStoreAndRelease(t, "#!/bin/sh\nexit 1\n", "", validManifest)
+		cmd := exec.Command("bash", "apply-on-server.sh", release)
+		cmd.Env = commandEnv(bin,
+			"DOCKER_STORE="+store,
+			"HVAC_PLATFORM_DIR="+platform,
+			"HVAC_DEPLOY_SCRIPT="+writeExe(t, bin, "restart", "#!/bin/sh\nexit 0\n"),
+			"FAKE_STAMP=20261125T040500Z",
+		)
+		out, err := cmd.CombinedOutput()
+		if err == nil || !strings.Contains(string(out), "Rolling back to before-20261125T040500Z") {
+			t.Fatalf("expected automatic rollback on smoke failure, err=%v\n%s", err, out)
+		}
+		got := strings.TrimSpace(string(mustRead(t, filepath.Join(store, "tags", "hvac_energy-api_0.1.0-dev"))))
+		if got != "seed-energy-api" {
+			t.Fatalf("energy-api tag = %q, want restored seed-energy-api", got)
+		}
+	})
+
+	t.Run("pull failure stops before changing platform dir or live tags", func(t *testing.T) {
+		bin, store, platform, release := makeOciStoreAndRelease(t, "#!/bin/sh\nexit 0\n", "operations-agent-service", validManifest)
+		cmd := exec.Command("bash", "apply-on-server.sh", release)
+		cmd.Env = commandEnv(bin,
+			"DOCKER_STORE="+store,
+			"HVAC_PLATFORM_DIR="+platform,
+			"HVAC_DEPLOY_SCRIPT="+writeExe(t, bin, "restart", "#!/bin/sh\nexit 0\n"),
+			"FAKE_STAMP=20261125T041000Z",
+			"MOCK_PULL_FAIL=operations-agent-service",
+		)
+		out, err := cmd.CombinedOutput()
+		if err == nil || !strings.Contains(string(out), "nothing on host was changed") {
+			t.Fatalf("expected pull failure to abort cleanly, err=%v\n%s", err, out)
+		}
+		if _, err := os.Stat(filepath.Join(platform, "REVISION")); !os.IsNotExist(err) {
+			t.Fatalf("failed docker pull must not unpack REVISION into platform dir")
+		}
+		got := strings.TrimSpace(string(mustRead(t, filepath.Join(store, "tags", "hvac_energy-api_0.1.0-dev"))))
+		if got != "seed-energy-api" {
+			t.Fatalf("live energy-api tag changed on aborted pull: %q", got)
+		}
+	})
+
+	t.Run("rejects mutable tags in image-manifest.tsv", func(t *testing.T) {
+		badManifest := "energy-api\thvac/energy-api:0.1.0-dev\tccr.ccs.tencentyun.com/hvac/energy-api:latest\n"
+		bin, store, platform, release := makeOciStoreAndRelease(t, "#!/bin/sh\nexit 0\n", "", badManifest)
+		cmd := exec.Command("bash", "apply-on-server.sh", release)
+		cmd.Env = commandEnv(bin, "DOCKER_STORE="+store, "HVAC_PLATFORM_DIR="+platform)
+		out, err := cmd.CombinedOutput()
+		if err == nil || !strings.Contains(string(out), "immutable @sha256 digest") {
+			t.Fatalf("expected mutable tag rejection, err=%v\n%s", err, out)
+		}
+		if _, err := os.Stat(filepath.Join(store, "calls.log")); !os.IsNotExist(err) {
+			t.Fatalf("docker must not even run on invalid manifest")
+		}
+	})
+}
+
+func TestDeployProductionWorkflowSupportsOCIMode(t *testing.T) {
+	workflow := string(mustRead(t, "../../../../.github/workflows/deploy-production.yml"))
+	for _, want := range []string{
+		"deploy_mode:",
+		"target_environment:",
+		"TCR_PASSWORD",
+		"ccr.ccs.tencentyun.com",
+		"bash deploy/platform/phase1/cd/build-oci-images.sh",
+	} {
+		if !strings.Contains(workflow, want) {
+			t.Fatalf("deploy-production.yml missing OCI configuration %q", want)
+		}
+	}
+}

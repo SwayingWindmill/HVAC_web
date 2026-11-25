@@ -68,7 +68,7 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
     // Every Go module, whatever the domain: selected by the classifier for any Go code, dependency or lint-rule change.
     go: Object.freeze([npmRun('go:lint'), npmRun('security:go-vuln')]),
     web: Object.freeze([npmRun('web:shell:test'), npmRun('web:model:test'), npmRun('web:e2e')]),
-    platform: Object.freeze([npmRun('test:identity'), npmRun('test:durable-unit')]),
+    platform: Object.freeze([npmRun('test:identity'), npmRun('test:durable-unit'), npmRun('test:phase1-scripts')]),
     registry: Object.freeze([
       nodeRun('scripts/run-go.mjs', 'test', './libs/planttwin/...', './modules/registry/...'),
       npmRun('test:registry-routing'),

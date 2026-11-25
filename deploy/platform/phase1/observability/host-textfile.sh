@@ -9,6 +9,8 @@ out_dir="${HOST_TEXTFILE_DIR:-$runtime/observability/textfile}"
 project="${HVAC_COMPOSE_PROJECT:-hvac-platform}"
 postgres_stamp="${POSTGRES_BACKUP_STAMP:-$runtime/observability/postgres-backup.success}"
 clickhouse_stamp="${CLICKHOUSE_BACKUP_STAMP:-$runtime/observability/clickhouse-backup.success}"
+offsite_stamp="${OFFSITE_BACKUP_STAMP:-$runtime/observability/offsite-backup.success}"
+offsite_required="${BACKUP_OFFSITE_REQUIRED:-0}"
 postgres_dir="${POSTGRES_BASE_BACKUP_DIR:-$runtime/backups/postgres/base}"
 clickhouse_dir="${CLICKHOUSE_BACKUP_DIR:-$runtime/backups/clickhouse}"
 
@@ -44,6 +46,11 @@ backup_timestamp() {
 
 postgres_ts=$(backup_timestamp "$postgres_stamp" "$postgres_dir")
 clickhouse_ts=$(backup_timestamp "$clickhouse_stamp" "$clickhouse_dir")
+offsite_line=""
+if [ "$offsite_required" = "1" ] || [ -e "$offsite_stamp" ]; then
+  offsite_ts=$(backup_timestamp "$offsite_stamp" "")
+  offsite_line="hvac_backup_last_success_timestamp_seconds{store=\"offsite\"} ${offsite_ts}"
+fi
 
 tmp=$(mktemp "$out_dir/.host.XXXXXX")
 samples=$(mktemp "$out_dir/.samples.XXXXXX")
@@ -78,6 +85,11 @@ fi
 # TYPE hvac_backup_last_success_timestamp_seconds gauge
 hvac_backup_last_success_timestamp_seconds{store="postgres"} ${postgres_ts}
 hvac_backup_last_success_timestamp_seconds{store="clickhouse"} ${clickhouse_ts}
+EOF
+  if [ -n "$offsite_line" ]; then
+    printf '%s\n' "$offsite_line"
+  fi
+  cat <<'EOF'
 # HELP hvac_container_restarts Docker RestartCount for one Compose service.
 # TYPE hvac_container_restarts counter
 EOF

@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Run on the production host. Swap new files into the local images, then restart.
-# Images are never pulled. Each previous image is kept as <name>:before-<timestamp>; new ones are
-# built FROM <name>:deploy-base (see stable_base), which prune-rollback-images.sh never removes.
-# HVAC_REBUILD_DEPLOY_BASE=1 (the deploy workflow's rebuild_base input) first replaces every
-# deploy-base with a verified one-layer copy of the running image (see rebuild-deploy-base.sh).
+# Run on the production host. Applies a staged release either by pulling immutable
+# OCI digest references (`image-manifest.tsv`, zero `docker build` / `npm ci`) or by
+# swapping new files into the local `<name>:deploy-base` images when `image-manifest.tsv`
+# is absent. Each previous image is kept as `<name>:before-<timestamp>`.
+# HVAC_REBUILD_DEPLOY_BASE=1 (the deploy workflow's rebuild_base input) only applies to
+# tarball-swap releases and replaces every deploy-base with a verified one-layer copy first.
 set -euo pipefail
 
 release="${1:-}"
@@ -22,6 +23,12 @@ if [[ "$rebuild_base" != 0 && "$rebuild_base" != 1 ]]; then
   exit 1
 fi
 
+oci_mode=0
+manifest_file="$release/image-manifest.tsv"
+if [[ -s "$manifest_file" ]]; then
+  oci_mode=1
+fi
+
 if ! command -v docker >/dev/null 2>&1; then
   echo "error: docker is not installed on the production host." >&2
   exit 1
@@ -30,7 +37,7 @@ if [[ ! -f "$release/source.tar" || ! -f "$release/REVISION" || ! -f "$release/s
   echo "error: release directory is incomplete ($release)." >&2
   exit 1
 fi
-if [[ ! -s "$release/bins/healthcheck" ]]; then
+if [[ "$oci_mode" -ne 1 && ! -s "$release/bins/healthcheck" ]]; then
   echo "error: release is missing the container healthcheck binary." >&2
   exit 1
 fi
@@ -108,13 +115,56 @@ stable_base() {
   printf '%s\t%s\n' "$base" "$recorded"
 }
 
+declare -A oci_ref_by_service=()
+if [[ "$oci_mode" == 1 ]]; then
+  while IFS=$'\t' read -r m_service m_local m_oci_ref <&4; do
+    [[ -z "${m_service:-}" || "$m_service" == \#* ]] && continue
+    if [[ -z "${m_oci_ref:-}" || ! "$m_oci_ref" =~ ^[^[:space:]]+@sha256:[0-9a-f]{64}$ ]]; then
+      echo "error: image-manifest.tsv requires an immutable @sha256 digest for ${m_service}: '${m_oci_ref:-}'." >&2
+      exit 1
+    fi
+    oci_ref_by_service["$m_service"]="$m_oci_ref"
+  done 4< "$manifest_file"
+  if [[ "${#oci_ref_by_service[@]}" -eq 0 ]]; then
+    echo "error: image-manifest.tsv contains no OCI image entries." >&2
+    exit 1
+  fi
+fi
+
 declare -a planned_services=()
 declare -a planned_images=()
 declare -a planned_kinds=()
 declare -a planned_previous=()
+declare -a planned_oci_refs=()
 
 while IFS=$'\t' read -r service image kind required package <&3; do
   [[ -z "${service:-}" || "$service" == \#* ]] && continue
+  if [[ "$oci_mode" == 1 ]]; then
+    oci_ref="${oci_ref_by_service[$service]:-}"
+    if [[ -z "$oci_ref" ]]; then
+      if [[ "$required" == required ]]; then
+        echo "error: image-manifest.tsv is missing required service ${service}." >&2
+        exit 1
+      fi
+      echo "skip ${service}: omitted from image-manifest.tsv"
+      continue
+    fi
+    resolved="$(resolve_image "$service" "$image")"
+    if [[ -z "$resolved" ]]; then
+      resolved="$image"
+    fi
+    previous=""
+    if docker image inspect "$resolved" >/dev/null 2>&1 </dev/null; then
+      previous="$(rollback_tag "$resolved")"
+    fi
+    planned_services+=("$service")
+    planned_images+=("$resolved")
+    planned_kinds+=("$kind")
+    planned_previous+=("$previous")
+    planned_oci_refs+=("$oci_ref")
+    continue
+  fi
+
   if [[ "$kind" == mqtt ]]; then
     resolved="$image"
   else
@@ -143,6 +193,7 @@ while IFS=$'\t' read -r service image kind required package <&3; do
   planned_images+=("$resolved")
   planned_kinds+=("$kind")
   planned_previous+=("$previous")
+  planned_oci_refs+=("")
 done 3< "$release/services.tsv"
 
 if [[ "${#planned_services[@]}" -eq 0 ]]; then
@@ -160,6 +211,20 @@ cleanup_candidates() {
 }
 trap cleanup_candidates EXIT
 
+if [[ "$oci_mode" == 1 ]]; then
+  if [[ -n "${OCI_REGISTRY_LOGIN_CMD:-}" ]]; then
+    bash -c "${OCI_REGISTRY_LOGIN_CMD}"
+  fi
+  for index in "${!planned_services[@]}"; do
+    service="${planned_services[$index]}"
+    oci_ref="${planned_oci_refs[$index]}"
+    echo "pulling ${service}: ${oci_ref}"
+    if ! docker pull "$oci_ref" </dev/null; then
+      echo "error: failed to pull OCI image for ${service} (${oci_ref}); nothing on host was changed." >&2
+      exit 1
+    fi
+  done
+else
 # rebuild_base: build and verify every new base under <name>:rebuilt-<stamp> first, and move the
 # deploy-base tags only when all of them match. The old bases are then untagged (image prune removes
 # them after a healthy deploy); before-<stamp> tags and rollback are not touched.
@@ -369,6 +434,7 @@ EOF
   fi
   rm -rf "$context"
 done
+fi
 
 mkdir -p "$platform_dir"
 tar -C "$release" -xf "$release/source.tar" --strip-components=4 deploy/platform/phase1/cd/observability-config.sh
@@ -384,7 +450,11 @@ for index in "${!planned_services[@]}"; do
   if [[ -n "${planned_previous[$index]}" ]]; then
     docker tag "${planned_images[$index]}" "${planned_previous[$index]}"
   fi
-  docker tag "${candidates[$index]}" "${planned_images[$index]}"
+  if [[ "$oci_mode" == 1 ]]; then
+    docker tag "${planned_oci_refs[$index]}" "${planned_images[$index]}"
+  else
+    docker tag "${candidates[$index]}" "${planned_images[$index]}"
+  fi
   if [[ -n "${planned_previous[$index]}" ]]; then
     echo "replaced ${planned_images[$index]} (previous ${planned_previous[$index]})"
   else
@@ -402,9 +472,16 @@ mkdir -p "$platform_dir/rollbacks"
 manifest="$platform_dir/rollbacks/${stamp}.tsv"
 : > "$manifest"
 for index in "${!planned_services[@]}"; do
+  if [[ "$oci_mode" == 1 && -z "${planned_previous[$index]}" ]]; then
+    continue
+  fi
   printf '%s\t%s\n' "${planned_images[$index]}" "${planned_previous[$index]}" >> "$manifest"
 done
-printf '%s\n' "$stamp" > "$platform_dir/rollbacks/latest"
+if [[ "$oci_mode" != 1 || -s "$manifest" ]]; then
+  printf '%s\n' "$stamp" > "$platform_dir/rollbacks/latest"
+else
+  rm -f "$manifest"
+fi
 
 # The restart script: the deploy.sh in the unpacked platform tree, else the host-only copy it replaced.
 # Under sudo the tree copy is used only when sudo already allows running it without a password.
