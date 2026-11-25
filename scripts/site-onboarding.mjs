@@ -53,6 +53,7 @@ import {
   planSiteBuildingPlan,
   validateSiteBuildingPlan,
 } from './lib/site-building-plan.ts';
+import { tpl } from './lib/site-onboarding-templates.ts';
 
 export { ASSET_RELATIONSHIP_ROLES, SEMANTIC_ROLES, SUBJECT_BINDING_LIFECYCLE };
 
@@ -371,9 +372,9 @@ function rowId(siteId, kind, index) {
   return siteId.replace(/^([0-9a-f]{8})-[0-9a-f]{4}-7000-8000-[0-9a-f]{12}$/, (_, head) => `${head}-${kind}-7000-8000-${index.toString(16).padStart(12, '0')}`);
 }
 
-// A device's points: its own list or the shared meter list, then any it adds (morePoints).
+// A device's points: its own list, the shared meter list, or an expanded standard template.
 export function expandPoints(device, meterPoints) {
-  return [...(device.points === 'meter' ? meterPoints : device.points), ...(device.morePoints ?? [])].map((point) => ({ ...point }));
+  return tpl.expand(device, meterPoints);
 }
 
 // A device has presence only when at least one active point comes from the device itself.
@@ -383,7 +384,10 @@ export function presenceApplicability(points) {
 
 // The site file's devices with their points, each point with the row id it is registered under.
 function siteRows(profile) {
-  const devices = profile.devices.map((device, deviceIndex) => ({ ...device, deviceIndex: deviceIndex + 1, points: expandPoints(device, profile.meterPoints) }));
+  const devices = profile.devices.map((raw, deviceIndex) => {
+    const device = tpl.hydrate(raw);
+    return { ...device, deviceIndex: deviceIndex + 1, points: expandPoints(device, profile.meterPoints) };
+  });
   const points = devices.flatMap((device) => device.points.map((point, pointIndex) => ({
     ...point, device, pointIndex, id: rowId(profile.site.id, '5000', device.deviceIndex * 0x10000 + pointIndex + 1),
   })));
@@ -933,6 +937,7 @@ ${scheduleUpsert({
 // point it refers to is in it. Returns the problems found, empty when there are none.
 export function checkSiteFile(profile, alarmRules = null) {
   const problems = [];
+  tpl.validate(profile, problems);
   const { devices } = siteRows(profile);
   const activePoints = new Map(devices.map((device) => [device.code, new Set(device.points.filter((point) => pointStatus(point) === 'ACTIVE').map((point) => point.code))]));
   const siteActive = (code) => devices.filter((device) => activePoints.get(device.code).has(code)).length;

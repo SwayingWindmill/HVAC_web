@@ -1,0 +1,87 @@
+{
+  "templateKey": "hvac.io-relay.8ch",
+  "templateKind": "DEVICE",
+  "defaultSampleSeconds": 60,
+  "description": "标准 8 路开关量 IO 控制器：do1..do8 继电器回读状态通道",
+  "payload": {
+    "deviceType": "IO_CONTROLLER",
+    "standardPoints": [
+      {
+        "pointCode": "do1",
+        "displayName": "输出通道 1 回读",
+        "pointType": "STATE",
+        "valueType": "BOOLEAN",
+        "sampleIntervalMs": 60000,
+        "publishIntervalMs": 60000,
+        "staleAfterMs": 180000
+      },
+      {
+        "pointCode": "do2",
+        "displayName": "输出通道 2 回读",
+        "pointType": "STATE",
+        "valueType": "BOOLEAN",
+        "sampleIntervalMs": 60000,
+        "publishIntervalMs": 60000,
+        "staleAfterMs": 180000
+      },
+      {
+        "pointCode": "do3",
+        "displayName": "输出通道 3 回读",
+        "pointType": "STATE",
+        "valueType": "BOOLEAN",
+        "sampleIntervalMs": 60000,
+        "publishIntervalMs": 60000,
+        "staleAfterMs": 180000
+      },
+      {
+        "pointCode": "do4",
+        "displayName": "输出通道 4 回读",
+        "pointType": "STATE",
+        "valueType": "BOOLEAN",
+        "sampleIntervalMs": 60000,
+        "publishIntervalMs": 60000,
+        "staleAfterMs": 180000
+      },
+      {
+        "pointCode": "do5",
+        "displayName": "输出通道 5 回读",
+        "pointType": "STATE",
+        "valueType": "BOOLEAN",
+        "sampleIntervalMs": 60000,
+        "publishIntervalMs": 60000,
+        "staleAfterMs": 180000
+      },
+      {
+        "pointCode": "do6",
+        "displayName": "输出通道 6 回读",
+        "pointType": "STATE",
+        "valueType": "BOOLEAN",
+        "sampleIntervalMs": 60000,
+        "publishIntervalMs": 60000,
+        "staleAfterMs": 180000
+      },
+      {
+        "pointCode": "do7",
+        "displayName": "输出通道 7 回读",
+        "pointType": "STATE",
+        "valueType": "BOOLEAN",
+        "sampleIntervalMs": 60000,
+        "publishIntervalMs": 60000,
+        "staleAfterMs": 180000
+      },
+      {
+        "pointCode": "do8",
+        "displayName": "输出通道 8 回读",
+        "pointType": "STATE",
+        "valueType": "BOOLEAN",
+        "sampleIntervalMs": 60000,
+        "publishIntervalMs": 60000,
+        "staleAfterMs": 180000
+      }
+    ]
+  },
+  "releaseReferences": {
+    "catalog": "hvac-standard-v1",
+    "registrySchema": "v1"
+  }
+}

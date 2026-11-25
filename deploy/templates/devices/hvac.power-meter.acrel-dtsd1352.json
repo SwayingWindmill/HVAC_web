@@ -1,0 +1,55 @@
+{
+  "templateKey": "hvac.power-meter.acrel-dtsd1352",
+  "templateKind": "DEVICE",
+  "defaultSampleSeconds": 60,
+  "description": "标准三相导轨式/盘装电表（安科瑞 DTSD1352 类 Modbus RTU 电表）：有功功率、正向有功总电能、运行状态推导",
+  "payload": {
+    "deviceType": "HVAC_POWER_METER",
+    "standardPoints": [
+      {
+        "pointCode": "power_total",
+        "sourceKey": "chiller.power",
+        "displayName": "有功功率",
+        "pointType": "TELEMETRY",
+        "valueType": "NUMBER",
+        "unit": "kW",
+        "sampleIntervalMs": 60000,
+        "publishIntervalMs": 60000,
+        "staleAfterMs": 180000,
+        "minimumNumber": 0,
+        "maximumNumber": 2000
+      },
+      {
+        "pointCode": "active_energy_total",
+        "sourceKey": "hvac_meter.energy",
+        "displayName": "累计电量",
+        "pointType": "COUNTER",
+        "valueType": "NUMBER",
+        "unit": "kWh",
+        "sampleIntervalMs": 60000,
+        "publishIntervalMs": 60000,
+        "staleAfterMs": 180000,
+        "counterDecreaseMode": "RESET_TO_ZERO"
+      },
+      {
+        "pointCode": "run_state",
+        "sourceKey": "chiller.run_state",
+        "displayName": "运行状态",
+        "pointType": "STATE",
+        "valueType": "STRING",
+        "sampleIntervalMs": 60000,
+        "publishIntervalMs": 60000,
+        "staleAfterMs": 180000
+      }
+    ]
+  },
+  "onboardingHints": {
+    "power_total": { "semanticRole": "ACTIVE_POWER", "critical": true },
+    "active_energy_total": { "critical": true },
+    "run_state": { "semanticRole": "RUN_STATE" }
+  },
+  "releaseReferences": {
+    "catalog": "hvac-standard-v1",
+    "registrySchema": "v1"
+  }
+}

@@ -41,6 +41,7 @@ export interface OnboardingAsset {
 export interface OnboardingPoint {
   id?: string;
   code: string;
+  sourceKey?: string;
   pointType?: string;
   valueType?: string;
   unit?: string;
@@ -62,14 +63,21 @@ export interface OnboardingPoint {
 export interface OnboardingDevice {
   id: string;
   code: string;
+  name?: string;
   sourceKey?: string;
   asset?: string;
   type?: string;
   sampleSeconds?: number;
+  template?: string;
+  pointOverrides?: Record<string, Record<string, unknown> & { omit?: boolean }>;
   running?: OnboardingRunningExpect[];
   points: OnboardingPoint[];
   morePoints?: OnboardingPoint[];
 }
+
+export type TemplateOnboardingDevice = Omit<OnboardingDevice, 'points'> & {
+  points?: 'meter' | OnboardingPoint[];
+};
 
 export interface OnboardingLowDeltaT {
   cron: string;
@@ -133,23 +141,38 @@ export interface OnboardingSiteBuildingPlan {
 }
 
 export interface OnboardingProfile {
-  site: { id: string; code: string; buildingPlan?: OnboardingSiteBuildingPlan | null };
+  tenantId?: string;
+  site: { id: string; code: string; name?: string; timezone?: string; buildingPlan?: OnboardingSiteBuildingPlan | null };
+  space?: { id: string; code: string; name: string; type: string };
+  gateway?: { id: string; code: string; name: string };
   assets: OnboardingAsset[];
   assetRelationships?: OnboardingAssetRelationship[];
   devices: OnboardingDevice[];
   meterPoints?: OnboardingPoint[];
   energy?: {
-    totalMeter?: string | { kind: string };
+    totalMeter?: string | { kind: string; branchMeters?: string[] };
+    branchMeters?: string[];
+    coolingMeter?: string;
     checkMeters?: string[];
   };
   physicsChecks?: Array<Record<string, unknown>>;
   qualityProfiles?: Record<string, OnboardingQualityProfile>;
   nameplateCatalog?: Record<string, OnboardingNameplate>;
   intelligence: {
+    alarmRules?: string;
     diagnosis: { lowDeltaT: OnboardingLowDeltaT };
     optimization?: OnboardingOptimization;
   };
 }
+
+export type TemplateOnboardingProfile = Omit<OnboardingProfile, 'devices' | 'intelligence'> & {
+  devices: TemplateOnboardingDevice[];
+  intelligence?: {
+    alarmRules?: string;
+    diagnosis?: { lowDeltaT?: OnboardingLowDeltaT };
+    optimization?: OnboardingOptimization;
+  };
+};
 
 export interface OnboardingAlarmRules {
   readingGaps?: {
@@ -216,12 +239,15 @@ export const SUBJECT_BINDING_LIFECYCLE: ReadonlyArray<readonly [string, string]>
 export const SEMANTIC_ROLES: readonly string[];
 export const ASSET_RELATIONSHIP_ROLES: readonly string[];
 export function pointStatus(point: Pick<OnboardingPoint, 'code' | 'status'>): 'ACTIVE' | 'INACTIVE' | 'RETIRED';
-export function expandPoints(device: OnboardingDevice | undefined, meterPoints?: OnboardingPoint[]): OnboardingPoint[];
+export function expandPoints(
+  device: OnboardingDevice | TemplateOnboardingDevice | undefined,
+  meterPoints?: OnboardingPoint[],
+): OnboardingPoint[];
 export function presenceApplicability(points: readonly OnboardingPoint[]): 'APPLICABLE' | 'NOT_APPLICABLE';
 export function pointQuality(
   point: OnboardingPoint,
-  profile: OnboardingProfile,
-  devicesByCode: Map<string, OnboardingDevice>,
+  profile: OnboardingProfile | TemplateOnboardingProfile,
+  devicesByCode: Map<string, OnboardingDevice | TemplateOnboardingDevice>,
 ): { staleAfterSeconds: number | null; range: { min: number; max: number } | null; checks: string | null };
 export function updateWhenChanged(
   table: string,
@@ -229,14 +255,22 @@ export function updateWhenChanged(
   options?: { revision?: string | false },
 ): string;
 export function buildOnboardingSql(
-  profile: OnboardingProfile,
+  profile: OnboardingProfile | TemplateOnboardingProfile,
   options?: { expectedSiteRevision?: number | null; principalId?: string },
 ): {
   registry: string;
   telemetry: string;
   energy: string;
   intelligence: string;
+  deviceCount: number;
+  pointCount: number;
 };
-export function checkSiteFile(profile: OnboardingProfile, alarmRules: OnboardingAlarmRules | null): string[];
-export function planOnboarding(profile: OnboardingProfile, state: OnboardingState): PlanItem[];
-export function siteStateQuery(profile: OnboardingProfile): string;
+export function checkSiteFile(
+  profile: OnboardingProfile | TemplateOnboardingProfile,
+  alarmRules: OnboardingAlarmRules | Record<string, unknown> | null,
+): string[];
+export function planOnboarding(
+  profile: OnboardingProfile | TemplateOnboardingProfile,
+  state: OnboardingState,
+): PlanItem[];
+export function siteStateQuery(profile: OnboardingProfile | TemplateOnboardingProfile): string;

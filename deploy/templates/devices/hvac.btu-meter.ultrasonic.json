@@ -1,0 +1,85 @@
+{
+  "templateKey": "hvac.btu-meter.ultrasonic",
+  "templateKind": "DEVICE",
+  "defaultSampleSeconds": 60,
+  "description": "标准超声波冷热量表 / 冷冻水总管流量温度计量终端：冷冻水流量、供回水温度、瞬时冷量与累计冷量",
+  "payload": {
+    "deviceType": "BTU_METER",
+    "standardPoints": [
+      {
+        "pointCode": "flow_rate",
+        "sourceKey": "btu_meter.flow_rate",
+        "displayName": "冷冻水流量",
+        "pointType": "TELEMETRY",
+        "valueType": "NUMBER",
+        "unit": "m3/h",
+        "sampleIntervalMs": 60000,
+        "publishIntervalMs": 60000,
+        "staleAfterMs": 180000,
+        "minimumNumber": 0,
+        "maximumNumber": 5000
+      },
+      {
+        "pointCode": "supply_water_temperature",
+        "sourceKey": "btu_meter.supply_water_temperature",
+        "displayName": "冷冻水供水温度",
+        "pointType": "TELEMETRY",
+        "valueType": "NUMBER",
+        "unit": "Cel",
+        "sampleIntervalMs": 60000,
+        "publishIntervalMs": 60000,
+        "staleAfterMs": 180000,
+        "minimumNumber": -2,
+        "maximumNumber": 40
+      },
+      {
+        "pointCode": "return_water_temperature",
+        "sourceKey": "btu_meter.return_water_temperature",
+        "displayName": "冷冻水回水温度",
+        "pointType": "TELEMETRY",
+        "valueType": "NUMBER",
+        "unit": "Cel",
+        "sampleIntervalMs": 60000,
+        "publishIntervalMs": 60000,
+        "staleAfterMs": 180000,
+        "minimumNumber": -2,
+        "maximumNumber": 40
+      },
+      {
+        "pointCode": "instant_cooling_capacity",
+        "sourceKey": "btu_meter.instant_cooling_capacity",
+        "displayName": "瞬时制冷量",
+        "pointType": "TELEMETRY",
+        "valueType": "NUMBER",
+        "unit": "kW",
+        "sampleIntervalMs": 60000,
+        "publishIntervalMs": 60000,
+        "staleAfterMs": 180000,
+        "minimumNumber": 0,
+        "maximumNumber": 20000
+      },
+      {
+        "pointCode": "accumulated_cooling_energy",
+        "sourceKey": "btu_meter.accumulated_cooling_energy",
+        "displayName": "累计制冷量",
+        "pointType": "COUNTER",
+        "valueType": "NUMBER",
+        "unit": "kWh",
+        "sampleIntervalMs": 60000,
+        "publishIntervalMs": 60000,
+        "staleAfterMs": 180000,
+        "counterDecreaseMode": "RESET_TO_ZERO"
+      }
+    ]
+  },
+  "onboardingHints": {
+    "flow_rate": { "semanticRole": "WATER_FLOW", "critical": true },
+    "supply_water_temperature": { "semanticRole": "SUPPLY_WATER_TEMP", "critical": true },
+    "return_water_temperature": { "semanticRole": "RETURN_WATER_TEMP", "critical": true },
+    "instant_cooling_capacity": { "semanticRole": "COOLING_LOAD" }
+  },
+  "releaseReferences": {
+    "catalog": "hvac-standard-v1",
+    "registrySchema": "v1"
+  }
+}

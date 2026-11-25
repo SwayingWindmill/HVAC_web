@@ -183,9 +183,40 @@ fi
 # Intelligence services, the Operations Agent included (DEEPSEEK_API_KEY in the runtime env, 2026-10-16).
 $L --integration --intelligence up -d --no-deps forecast-service optimization-service fdd-service mv-service report-service operations-agent-service
 
-step songyaxuan
-# Simulators stay off on this server (user, 2026-10-14); the real Site is registered from its site file.
-PHASE1_POSTGRES_CONTAINER=hvac-platform-postgres-1 node scripts/site-onboarding.mjs apply deploy/sites/songyaxuan.site.json
+step sites
+# Simulators stay off on this server (user, 2026-10-14); real Sites are registered from deploy/sites/*.site.json.
+declare -a onboarding_sites=()
+if [[ -n "${HVAC_ONBOARDING_SITES:-}" ]]; then
+  while IFS= read -r site_entry; do
+    [[ -n "$site_entry" ]] && onboarding_sites+=("$site_entry")
+  done < <(printf '%s\n' "$HVAC_ONBOARDING_SITES" | tr ': \t' '\n')
+  for site_file in "${onboarding_sites[@]+"${onboarding_sites[@]}"}"; do
+    if [[ ! -f "$site_file" ]]; then
+      echo "error: onboarding site file not found: $site_file" >&2
+      exit 1
+    fi
+  done
+else
+  shopt -s nullglob
+  for site_file in deploy/sites/*.site.json; do
+    case "$site_file" in
+      *.example.site.json|*.template.site.json) continue ;;
+    esac
+    onboarding_sites+=("$site_file")
+  done
+  shopt -u nullglob
+  if [[ "${#onboarding_sites[@]}" -gt 0 ]]; then
+    mapfile -t onboarding_sites < <(LC_ALL=C printf '%s\n' "${onboarding_sites[@]}" | LC_ALL=C sort)
+  fi
+fi
+if [[ "${#onboarding_sites[@]}" -eq 0 ]]; then
+  echo "error: no site manifests found under deploy/sites/*.site.json" >&2
+  exit 1
+fi
+for site_file in "${onboarding_sites[@]}"; do
+  echo "onboarding site: $site_file"
+  PHASE1_POSTGRES_CONTAINER="${HVAC_LOCAL_PROJECT}-postgres-1" node scripts/site-onboarding.mjs apply "$site_file"
+done
 
 step "done"
 $L --integration ps --format '{{.Service}} {{.Status}}'

@@ -1215,6 +1215,13 @@ func deployFixture(t *testing.T, revisionFile string) (platform, bin, log string
 	if err := os.WriteFile(filepath.Join(runtime, "identity-reconcile.json"), []byte("{}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	sitesDir := filepath.Join(platform, "deploy", "sites")
+	if err := os.MkdirAll(sitesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sitesDir, "songyaxuan.site.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if revisionFile != "" {
 		if err := os.WriteFile(filepath.Join(platform, "REVISION"), []byte(revisionFile+"\n"), 0o644); err != nil {
 			t.Fatal(err)
@@ -1277,6 +1284,59 @@ func TestDeployScriptRefusesToRunWithoutARevision(t *testing.T) {
 	output, err := cmd.CombinedOutput()
 	if err == nil || !strings.Contains(string(output), "no release revision") {
 		t.Fatalf("deploy.sh ran without a revision: %v\n%s", err, output)
+	}
+}
+
+func TestDeployScriptOnboardsMultipleSitesInSortedOrder(t *testing.T) {
+	revision := "0123456789abcdef0123456789abcdef01234567"
+	platform, bin, log := deployFixture(t, revision)
+	sitesDir := filepath.Join(platform, "deploy", "sites")
+	for _, name := range []string{"alpha.site.json", "beta.template.site.json", "demo.example.site.json"} {
+		if err := os.WriteFile(filepath.Join(sitesDir, name), []byte("{}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.Command("bash", "deploy.sh")
+	cmd.Env = commandEnv(bin, "HVAC_PLATFORM_DIR="+platform, "CALLS_LOG="+log)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("deploy.sh: %v\n%s", err, output)
+	}
+	calls := string(mustRead(t, log))
+	alphaIdx := strings.Index(calls, "node scripts/site-onboarding.mjs apply deploy/sites/alpha.site.json")
+	songIdx := strings.Index(calls, "node scripts/site-onboarding.mjs apply deploy/sites/songyaxuan.site.json")
+	if alphaIdx == -1 || songIdx == -1 || alphaIdx >= songIdx {
+		t.Fatalf("expected alpha before songyaxuan in:\n%s", calls)
+	}
+	if strings.Contains(calls, "demo.example.site.json") || strings.Contains(calls, "beta.template.site.json") {
+		t.Fatalf("example/template site files must not be onboarded automatically:\n%s", calls)
+	}
+}
+
+func TestDeployScriptRespectsOnboardingSitesOverrideAndFailsClosed(t *testing.T) {
+	revision := "0123456789abcdef0123456789abcdef01234567"
+	platform, bin, log := deployFixture(t, revision)
+	sitesDir := filepath.Join(platform, "deploy", "sites")
+	if err := os.WriteFile(filepath.Join(sitesDir, "alpha.site.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command("bash", "deploy.sh")
+	cmd.Env = commandEnv(bin, "HVAC_PLATFORM_DIR="+platform, "CALLS_LOG="+log, "HVAC_ONBOARDING_SITES=deploy/sites/alpha.site.json")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("deploy.sh with HVAC_ONBOARDING_SITES: %v\n%s", err, output)
+	}
+	calls := string(mustRead(t, log))
+	if !strings.Contains(calls, "apply deploy/sites/alpha.site.json") || strings.Contains(calls, "apply deploy/sites/songyaxuan.site.json") {
+		t.Fatalf("HVAC_ONBOARDING_SITES should select only alpha:\n%s", calls)
+	}
+
+	failCmd := exec.Command("bash", "deploy.sh")
+	failCmd.Env = commandEnv(bin, "HVAC_PLATFORM_DIR="+platform, "CALLS_LOG="+log, "HVAC_ONBOARDING_SITES=deploy/sites/missing.site.json")
+	failOut, failErr := failCmd.CombinedOutput()
+	if failErr == nil || !strings.Contains(string(failOut), "deploy/sites/missing.site.json") {
+		t.Fatalf("expected missing site override to fail closed, err=%v out=%s", failErr, failOut)
 	}
 }
 

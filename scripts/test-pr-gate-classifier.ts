@@ -479,6 +479,11 @@ test('repository governance enforces 1:1 skill parity, required hook files, and 
   assert.equal(siteManifest.unknown, false);
   assert.equal(siteManifest.broad, false);
 
+  const templateCatalog = runClassification(['deploy/templates/devices/hvac.power-meter.acrel-dtsd1352.json']);
+  assert.deepEqual(templateCatalog.unitProfiles, ['alarm', 'command', 'registry', 'telemetry']);
+  assert.equal(templateCatalog.unknown, false);
+  assert.equal(templateCatalog.broad, false);
+
   const onboardingControl = runClassification(['scripts/lib/site-onboarding-control.ts']);
   assert.deepEqual(onboardingControl.unitProfiles, ['command', 'registry', 'telemetry']);
   assert.equal(onboardingControl.unknown, false);

@@ -1,0 +1,119 @@
+{
+  "templateKey": "hvac.temp-module.8ch",
+  "templateKind": "DEVICE",
+  "defaultSampleSeconds": 60,
+  "description": "标准 8 通道温度采集模块：t1..t8 温度测量点，带坏值占位过滤与死值检查",
+  "payload": {
+    "deviceType": "TEMPERATURE_MODULE",
+    "standardPoints": [
+      {
+        "pointCode": "t1",
+        "displayName": "温度通道 1",
+        "pointType": "TELEMETRY",
+        "valueType": "NUMBER",
+        "unit": "Cel",
+        "sampleIntervalMs": 60000,
+        "publishIntervalMs": 60000,
+        "staleAfterMs": 180000,
+        "minimumNumber": -25,
+        "maximumNumber": 60,
+        "qualityChecks": { "sentinels": [-999, 85, 999], "flatlineSeconds": 1800 }
+      },
+      {
+        "pointCode": "t2",
+        "displayName": "温度通道 2",
+        "pointType": "TELEMETRY",
+        "valueType": "NUMBER",
+        "unit": "Cel",
+        "sampleIntervalMs": 60000,
+        "publishIntervalMs": 60000,
+        "staleAfterMs": 180000,
+        "minimumNumber": -25,
+        "maximumNumber": 60,
+        "qualityChecks": { "sentinels": [-999, 85, 999], "flatlineSeconds": 1800 }
+      },
+      {
+        "pointCode": "t3",
+        "displayName": "温度通道 3",
+        "pointType": "TELEMETRY",
+        "valueType": "NUMBER",
+        "unit": "Cel",
+        "sampleIntervalMs": 60000,
+        "publishIntervalMs": 60000,
+        "staleAfterMs": 180000,
+        "minimumNumber": -25,
+        "maximumNumber": 60,
+        "qualityChecks": { "sentinels": [-999, 85, 999], "flatlineSeconds": 1800 }
+      },
+      {
+        "pointCode": "t4",
+        "displayName": "温度通道 4",
+        "pointType": "TELEMETRY",
+        "valueType": "NUMBER",
+        "unit": "Cel",
+        "sampleIntervalMs": 60000,
+        "publishIntervalMs": 60000,
+        "staleAfterMs": 180000,
+        "minimumNumber": -25,
+        "maximumNumber": 60,
+        "qualityChecks": { "sentinels": [-999, 85, 999], "flatlineSeconds": 1800 }
+      },
+      {
+        "pointCode": "t5",
+        "displayName": "温度通道 5",
+        "pointType": "TELEMETRY",
+        "valueType": "NUMBER",
+        "unit": "Cel",
+        "sampleIntervalMs": 60000,
+        "publishIntervalMs": 60000,
+        "staleAfterMs": 180000,
+        "minimumNumber": -25,
+        "maximumNumber": 60,
+        "qualityChecks": { "sentinels": [-999, 85, 999], "flatlineSeconds": 1800 }
+      },
+      {
+        "pointCode": "t6",
+        "displayName": "温度通道 6",
+        "pointType": "TELEMETRY",
+        "valueType": "NUMBER",
+        "unit": "Cel",
+        "sampleIntervalMs": 60000,
+        "publishIntervalMs": 60000,
+        "staleAfterMs": 180000,
+        "minimumNumber": -25,
+        "maximumNumber": 60,
+        "qualityChecks": { "sentinels": [-999, 85, 999], "flatlineSeconds": 1800 }
+      },
+      {
+        "pointCode": "t7",
+        "displayName": "温度通道 7",
+        "pointType": "TELEMETRY",
+        "valueType": "NUMBER",
+        "unit": "Cel",
+        "sampleIntervalMs": 60000,
+        "publishIntervalMs": 60000,
+        "staleAfterMs": 180000,
+        "minimumNumber": -25,
+        "maximumNumber": 60,
+        "qualityChecks": { "sentinels": [-999, 85, 999], "flatlineSeconds": 1800 }
+      },
+      {
+        "pointCode": "t8",
+        "displayName": "温度通道 8",
+        "pointType": "TELEMETRY",
+        "valueType": "NUMBER",
+        "unit": "Cel",
+        "sampleIntervalMs": 60000,
+        "publishIntervalMs": 60000,
+        "staleAfterMs": 180000,
+        "minimumNumber": -25,
+        "maximumNumber": 60,
+        "qualityChecks": { "sentinels": [-999, 85, 999], "flatlineSeconds": 1800 }
+      }
+    ]
+  },
+  "releaseReferences": {
+    "catalog": "hvac-standard-v1",
+    "registrySchema": "v1"
+  }
+}

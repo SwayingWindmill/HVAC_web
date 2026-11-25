@@ -288,11 +288,11 @@ for (const file of files) {
     selectCommand(file, 'Edge Node-RED uplink or downlink logic changed');
     selectTelemetry(file, 'Edge Node-RED uplink or downlink logic changed');
   });
-  match(file.startsWith('deploy/sites/'), () => {
-    selectRegistry(file, 'site onboarding manifest changed');
-    selectTelemetry(file, 'site onboarding manifest changed');
-    selectCommand(file, 'site onboarding manifest changed');
-    selectAlarm(file, 'site onboarding manifest changed');
+  match(file.startsWith('deploy/sites/') || file.startsWith('deploy/templates/'), () => {
+    selectRegistry(file, 'site onboarding manifest or device template changed');
+    selectTelemetry(file, 'site onboarding manifest or device template changed');
+    selectCommand(file, 'site onboarding manifest or device template changed');
+    selectAlarm(file, 'site onboarding manifest or device template changed');
   });
   match(file.startsWith('libs/alarmexpr/'), () => {
     selectAlarm(file, 'Shared alarm expression evaluator changed', { integration: true });
