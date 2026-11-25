@@ -47,6 +47,12 @@ import {
   plantTwinStateSqlFields,
   validatePlantTwinFields,
 } from './lib/site-onboarding-twin.ts';
+import {
+  buildingPlanStateSqlField,
+  buildSiteRowSql,
+  planSiteBuildingPlan,
+  validateSiteBuildingPlan,
+} from './lib/site-building-plan.ts';
 
 export { ASSET_RELATIONSHIP_ROLES, SEMANTIC_ROLES, SUBJECT_BINDING_LIFECYCLE };
 
@@ -439,9 +445,7 @@ export function buildOnboardingSql(profile, options = {}) {
   const registry = `BEGIN;
 ${revisionCheckSql}${buildOnboardingAuditBeforeSql(tenant, siteId)}
 
-INSERT INTO core_registry.sites (id, code, display_name, timezone, status, revision, created_at, updated_at, tenant_id, floor_area_m2, climate_zone)
-VALUES (${siteId}, ${sqlLiteral(site.code)}, ${sqlLiteral(site.name)}, ${sqlLiteral(site.timezone)}, 'ACTIVE', 1, clock_timestamp(), clock_timestamp(), ${tenant}, NULL, NULL)
-ON CONFLICT (id) ${updateWhenChanged('sites', [...fromFile('code', 'display_name', 'timezone'), ...ACTIVE])};
+${buildSiteRowSql(site, tenant, siteId, { sqlLiteral, sqlJson, fromFile, ACTIVE, updateWhenChanged })}
 
 INSERT INTO core_registry.spaces (id, tenant_id, site_id, parent_space_id, code, display_name, space_type, status, revision, created_at, updated_at)
 VALUES (${sqlLiteral(space.id)}, ${tenant}, ${siteId}, NULL, ${sqlLiteral(space.code)}, ${sqlLiteral(space.name)}, ${sqlLiteral(space.type)}, 'ACTIVE', 1, clock_timestamp(), clock_timestamp())
@@ -965,6 +969,7 @@ export function checkSiteFile(profile, alarmRules = null) {
       }
     }
   }
+  validateSiteBuildingPlan(profile.site?.buildingPlan, problems);
   validatePlantTwinFields(profile, devices, problems);
   validateSiteQualityAdditions(profile, devices, activePoints, devicesByCode, pointQuality, problems);
   for (const asset of profile.assets ?? []) {
@@ -1078,6 +1083,7 @@ export function siteStateQuery(profile) {
 SELECT json_build_object(
   'site', (SELECT status FROM core_registry.sites WHERE id = ${st}),
   'siteRevision', (SELECT revision FROM core_registry.sites WHERE id = ${st}),
+${buildingPlanStateSqlField(st)}
   'devices', (SELECT coalesce(json_object_agg(id, status), '{}') FROM core_registry.devices WHERE site_id = ${st}),
   'points', (SELECT coalesce(json_object_agg(id, status), '{}') FROM core_registry.telemetry_points WHERE site_id = ${st}),
   'assets', (SELECT coalesce(json_object_agg(id, status), '{}') FROM core_registry.assets WHERE site_id = ${st}),
@@ -1108,6 +1114,7 @@ export function planOnboarding(profile, state) {
   const sql = buildOnboardingSql(profile);
 
   add('站点和设备', state.site === 'ACTIVE' ? 'ok' : state.site ? 'differs' : 'missing', `站点 ${profile.site.name}`);
+  planSiteBuildingPlan(profile, state, sameJson, add);
   const wanted = [{ id: profile.gateway.id, code: profile.gateway.code }, ...devices];
   const missingDevices = wanted.filter((device) => !state.devices[device.id]);
   const inactiveDevices = wanted.filter((device) => state.devices[device.id] && state.devices[device.id] !== 'ACTIVE');

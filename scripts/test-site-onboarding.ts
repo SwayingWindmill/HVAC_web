@@ -229,7 +229,7 @@ test('point status defaults to ACTIVE and rejects unknown values', () => {
 // A database that already holds everything the songyaxuan manifest describes.
 function completeState(profile: OnboardingProfile): OnboardingState {
   const synthesizedTotal = Boolean(profile.energy?.totalMeter && typeof profile.energy.totalMeter === 'object' && profile.energy.totalMeter.kind === 'sum-of-sub-meters');
-  const state: OnboardingState = { site: 'ACTIVE', devices: {}, points: {}, assets: {}, pointSemanticRoles: {}, assetRelationships: [], schedules: {}, topology: true, synthesizedTotal, tariff: true, forecast: true };
+  const state: OnboardingState = { site: 'ACTIVE', siteBuildingPlan: copy(profile.site.buildingPlan ?? null), devices: {}, points: {}, assets: {}, pointSemanticRoles: {}, assetRelationships: [], schedules: {}, topology: true, synthesizedTotal, tariff: true, forecast: true };
   for (const match of buildOnboardingSql(profile).registry.matchAll(/'(01a14000-4000-7000-8000-[0-9a-f]{12})'/g)) state.devices[match[1]] = 'ACTIVE';
   for (const row of pointRows(buildOnboardingSql(profile).registry)) {
     const [, id] = row.match(/^\('([0-9a-f-]{36})'/) ?? [];
@@ -1083,4 +1083,38 @@ test('real-site closed-loop setpoint, VFD, fan, local_remote_mode, and butterfly
   assert.match(invalidProblems, /unsupported hydraulicInterlock BOGUS_HINT/);
   assert.match(invalidProblems, /minimum < maximum/);
   assert.match(invalidProblems, /hard real-time safety points cannot be registered as writable COMMAND points/);
+});
+
+test('site onboarding validates, compiles, and diffs site.buildingPlan', () => {
+  const ready = completeState(songyaxuan);
+  assert.deepEqual(byStatus(planOnboarding(songyaxuan, ready), 'ok').includes('数字孪生建筑平面'), true);
+
+  const missing = planOnboarding(songyaxuan, { ...ready, siteBuildingPlan: null });
+  assert.deepEqual(byStatus(missing, 'missing'), ['数字孪生建筑平面']);
+
+  const changedPlan = copy(songyaxuan.site.buildingPlan);
+  if (!changedPlan) throw new Error('songyaxuan.site.buildingPlan missing');
+  changedPlan.width = 30;
+  const drifted = planOnboarding(songyaxuan, { ...ready, siteBuildingPlan: changedPlan });
+  assert.deepEqual(byStatus(drifted, 'differs'), ['数字孪生建筑平面']);
+
+  const sqlWithPlan = buildOnboardingSql(songyaxuan).registry;
+  assert.match(sqlWithPlan, /INSERT INTO core_registry\.sites \([^\n]*building_plan\)/);
+  assert.match(sqlWithPlan, /building_plan=EXCLUDED\.building_plan/);
+
+  const withoutPlan = copy(songyaxuan);
+  delete withoutPlan.site.buildingPlan;
+  const sqlWithoutPlan = buildOnboardingSql(withoutPlan).registry;
+  assert.doesNotMatch(sqlWithoutPlan, /building_plan=EXCLUDED\.building_plan/);
+  assert.deepEqual(planOnboarding(withoutPlan, ready).filter((item) => item.item === '数字孪生建筑平面'), []);
+
+  const invalid = copy(songyaxuan);
+  if (!invalid.site.buildingPlan) throw new Error('songyaxuan.site.buildingPlan missing');
+  invalid.site.buildingPlan.floors.push(copy(invalid.site.buildingPlan.floors[0]!));
+  invalid.site.buildingPlan.floors[0]!.rooms[0]!.x = [0, 35];
+  invalid.site.buildingPlan.floors[0]!.rooms[1]!.kind = 'rooftop' as typeof invalid.site.buildingPlan.floors[0]['rooms'][number]['kind'];
+  const invalidText = checkSiteFile(invalid, songyaxuanAlarmRules).join('\n');
+  assert.match(invalidText, /duplicate floor level 1/);
+  assert.match(invalidText, /0 <= x\[0\] < x\[1\] <= width/);
+  assert.match(invalidText, /unsupported/);
 });

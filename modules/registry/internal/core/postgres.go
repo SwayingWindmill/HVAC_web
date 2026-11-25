@@ -777,14 +777,22 @@ type rowScanner interface {
 }
 
 // siteColumns are what scanSite reads, in its order.
-const siteColumns = `id::text, tenant_id::text, code, display_name, timezone, status, revision, created_at, updated_at, floor_area_m2, climate_zone`
+const siteColumns = `id::text, tenant_id::text, code, display_name, timezone, status, revision, created_at, updated_at, floor_area_m2, climate_zone, building_plan`
 
 func scanSite(row rowScanner) (Site, error) {
 	var item Site
 	var createdAt time.Time
 	var updatedAt time.Time
-	if err := row.Scan(&item.ID, &item.TenantID, &item.Code, &item.DisplayName, &item.Timezone, &item.Status, &item.Revision, &createdAt, &updatedAt, &item.FloorAreaM2, &item.ClimateZone); err != nil {
+	var buildingPlanRaw []byte
+	if err := row.Scan(&item.ID, &item.TenantID, &item.Code, &item.DisplayName, &item.Timezone, &item.Status, &item.Revision, &createdAt, &updatedAt, &item.FloorAreaM2, &item.ClimateZone, &buildingPlanRaw); err != nil {
 		return Site{}, err
+	}
+	if len(buildingPlanRaw) > 0 && string(buildingPlanRaw) != "null" {
+		var plan SiteBuildingPlan
+		if err := json.Unmarshal(buildingPlanRaw, &plan); err != nil {
+			return Site{}, err
+		}
+		item.BuildingPlan = &plan
 	}
 	item.CreatedAt = formatInstant(createdAt)
 	item.UpdatedAt = formatInstant(updatedAt)

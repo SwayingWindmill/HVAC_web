@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -1231,6 +1232,45 @@ func validateSite(value platformapi.Site) error {
 		(value.FloorAreaM2 != nil && !(*value.FloorAreaM2 > 0)) ||
 		(value.ClimateZone != nil && !oneOf(*value.ClimateZone, "SEVERE_COLD", "COLD", "HOT_SUMMER_COLD_WINTER", "HOT_SUMMER_WARM_WINTER", "MILD")) {
 		return errors.New("invalid Site response")
+	}
+	if value.BuildingPlan != nil {
+		if err := validateSiteBuildingPlan(*value.BuildingPlan); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateSiteBuildingPlan(plan platformapi.SiteBuildingPlan) error {
+	finitePos := func(v, maxVal float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) && v > 0 && v <= maxVal }
+	finiteNonNeg := func(v, maxVal float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) && v >= 0 && v <= maxVal }
+	if !validRegistryString(plan.Name, 128) || !finitePos(plan.Width, 1000) || !finitePos(plan.Depth, 1000) || len(plan.Floors) < 1 || len(plan.Floors) > 100 {
+		return errors.New("invalid Site buildingPlan dimensions")
+	}
+	seenLevels := make(map[int]struct{}, len(plan.Floors))
+	for _, floor := range plan.Floors {
+		if floor.Level < 1 || floor.Level > 200 || !validRegistryString(floor.Label, 128) || !finitePos(floor.Height, 30) || len(floor.Rooms) < 1 || len(floor.Rooms) > 200 {
+			return errors.New("invalid Site buildingPlan floor")
+		}
+		if _, dup := seenLevels[floor.Level]; dup {
+			return errors.New("duplicate Site buildingPlan floor level")
+		}
+		seenLevels[floor.Level] = struct{}{}
+		seenRooms := make(map[string]struct{}, len(floor.Rooms))
+		for _, room := range floor.Rooms {
+			if !validRegistryString(room.ID, 64) || !validRegistryString(room.Name, 128) ||
+				!oneOf(room.Kind, "hall", "private", "smallPrivate", "kitchen", "plantRoom", "service", "corridor", "core", "shaft") {
+				return errors.New("invalid Site buildingPlan room")
+			}
+			if _, dup := seenRooms[room.ID]; dup {
+				return errors.New("duplicate Site buildingPlan room id")
+			}
+			seenRooms[room.ID] = struct{}{}
+			if !finiteNonNeg(room.X[0], plan.Width) || !finiteNonNeg(room.X[1], plan.Width) || room.X[0] >= room.X[1] ||
+				!finiteNonNeg(room.Z[0], plan.Depth) || !finiteNonNeg(room.Z[1], plan.Depth) || room.Z[0] >= room.Z[1] {
+				return errors.New("invalid Site buildingPlan room bounds")
+			}
+		}
 	}
 	return nil
 }

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import './test-real-digital-twin-building-plan.ts';
 import { buildTwinPlant } from '../apps/hvac-web/src/features/operations/digital-twin/twin-model.ts';
 
 const asset = (id, code, assetType, status = 'ACTIVE') => ({ id, code, displayName: code, assetType, status });

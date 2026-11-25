@@ -79,6 +79,7 @@ func TestPostgresLoginContextFlowKeepsSignInURLClean(t *testing.T) {
 		redirectURI:  "https://platform.example.test/api/v1/auth/callback",
 		signInURL:    "https://platform.example.test/sign-in",
 		mfaProtector: protector,
+		now:          time.Now,
 	}
 	handler := server.Handler()
 

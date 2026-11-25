@@ -152,7 +152,8 @@
         "infra/connectivity/postgres/init/gateway-factory-reset.sql",
         "infra/registry/postgres/init/mlops-edge-domains.sql",
         "infra/connectivity/postgres/init/gateway-shadow-edge-models.sql",
-        "infra/connectivity/postgres/init/gateway-waveform-and-diagnostics.sql"
+        "infra/connectivity/postgres/init/gateway-waveform-and-diagnostics.sql",
+        "infra/registry/postgres/init/site-building-plan.sql"
       ]
     },
     {

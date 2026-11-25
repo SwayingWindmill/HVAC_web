@@ -215,6 +215,28 @@ type AuditRecord struct {
 	RecordedAt            string `json:"recordedAt"`
 }
 
+type SiteBuildingRoom struct {
+	ID   string     `json:"id"`
+	Name string     `json:"name"`
+	Kind string     `json:"kind"`
+	X    [2]float64 `json:"x"`
+	Z    [2]float64 `json:"z"`
+}
+
+type SiteBuildingFloor struct {
+	Level  int                `json:"level"`
+	Label  string             `json:"label"`
+	Height float64            `json:"height"`
+	Rooms  []SiteBuildingRoom `json:"rooms"`
+}
+
+type SiteBuildingPlan struct {
+	Name   string              `json:"name"`
+	Width  float64             `json:"width"`
+	Depth  float64             `json:"depth"`
+	Floors []SiteBuildingFloor `json:"floors"`
+}
+
 type Site struct {
 	ID          string `json:"id"`
 	TenantID    string `json:"tenantId"`
@@ -226,8 +248,9 @@ type Site struct {
 	CreatedAt   string `json:"createdAt"`
 	UpdatedAt   string `json:"updatedAt"`
 	// FloorAreaM2 and ClimateZone are the Site profile; null until recorded.
-	FloorAreaM2 *float64 `json:"floorAreaM2"`
-	ClimateZone *string  `json:"climateZone"`
+	FloorAreaM2  *float64          `json:"floorAreaM2"`
+	ClimateZone  *string           `json:"climateZone"`
+	BuildingPlan *SiteBuildingPlan `json:"buildingPlan,omitempty"`
 }
 
 type Asset struct {
