@@ -64,9 +64,11 @@ if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
     case "$service" in
       ''|*[!a-zA-Z0-9_-]*) continue ;;
     esac
-    inspect=$(docker inspect --format '{{.RestartCount}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$cid" 2>/dev/null || true)
+    inspect=$(docker inspect --format '{{.RestartCount}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} {{.State.Running}} {{.HostConfig.RestartPolicy.Name}}' "$cid" 2>/dev/null || true)
     restarts=$(printf '%s' "$inspect" | awk '{print $1}')
     health=$(printf '%s' "$inspect" | awk '{print $2}')
+    running_raw=$(printf '%s' "$inspect" | awk '{print $3}')
+    restart_policy=$(printf '%s' "$inspect" | awk '{print $4}')
     case "$restarts" in
       ''|*[!0-9]*) continue ;;
     esac
@@ -76,6 +78,15 @@ if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
     fi
     printf 'hvac_container_restarts{service="%s"} %s\n' "$service" "$restarts"
     printf 'hvac_container_unhealthy{service="%s"} %s\n' "$service" "$unhealthy"
+    case "$restart_policy" in
+      always|unless-stopped)
+        running=0
+        if [ "$running_raw" = "true" ]; then
+          running=1
+        fi
+        printf 'hvac_container_running{service="%s"} %s\n' "$service" "$running"
+        ;;
+    esac
   done > "$samples"
 fi
 
@@ -102,6 +113,13 @@ EOF
 EOF
   if [ -s "$samples" ]; then
     grep '^hvac_container_unhealthy' "$samples" || true
+  fi
+  cat <<'EOF'
+# HELP hvac_container_running 1 when an always/unless-stopped Compose service container is running.
+# TYPE hvac_container_running gauge
+EOF
+  if [ -s "$samples" ]; then
+    grep '^hvac_container_running' "$samples" || true
   fi
   cat <<EOF
 # HELP hvac_container_metrics_up 1 when this host could read Docker container state.

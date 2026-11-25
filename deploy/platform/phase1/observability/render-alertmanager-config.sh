@@ -11,6 +11,8 @@ template="${3:?unconfigured template}"
 wecom_file="$secrets/wecom-webhook-url"
 smtp_env="$secrets/smtp.env"
 smtp_pass="$secrets/smtp-password"
+wechat_mp_env="$secrets/wechat-mp.env"
+wechat_mp_secret="$secrets/wechat-mp-secret"
 
 if [ ! -f "$template" ]; then
   echo "error: unconfigured alertmanager template is missing: $template" >&2
@@ -33,7 +35,7 @@ field() {
   if [ ! -f "$file" ]; then
     return 1
   fi
-  grep -E "^${key}=" "$file" | head -n 1 | cut -d= -f2- | tr -d '\r'
+  grep -E "^${key}=" "$file" | head -n 1 | cut -d= -f2- | tr -d '\r' | sed -e "s/^['\"]//" -e "s/['\"]$//"
 }
 
 has_smtp=0
@@ -73,9 +75,38 @@ if [ -f "$smtp_env" ]; then
   has_smtp=1
 fi
 
-if [ "$has_wecom" -eq 0 ] && [ "$has_smtp" -eq 0 ]; then
+has_wechat_mp=0
+if [ -f "$wechat_mp_env" ]; then
+  mp_app_id=$(field WECHAT_MP_APP_ID "$wechat_mp_env" || true)
+  mp_template_id=$(field WECHAT_MP_TEMPLATE_ID "$wechat_mp_env" || true)
+  mp_openids=$(field WECHAT_MP_OPENIDS "$wechat_mp_env" || true)
+  mp_url=$(field WECHAT_MP_URL "$wechat_mp_env" || true)
+  if ! printf '%s' "$mp_app_id" | grep -Eq '^[A-Za-z0-9_-]+$'; then
+    echo "error: WECHAT_MP_APP_ID is required and must match [A-Za-z0-9_-]+" >&2
+    exit 1
+  fi
+  if ! printf '%s' "$mp_template_id" | grep -Eq '^[A-Za-z0-9_-]+$'; then
+    echo "error: WECHAT_MP_TEMPLATE_ID is required and must match [A-Za-z0-9_-]+" >&2
+    exit 1
+  fi
+  if ! printf '%s' "$mp_openids" | grep -Eq '^[A-Za-z0-9_-]+(,[[:space:]]*[A-Za-z0-9_-]+)*$'; then
+    echo "error: WECHAT_MP_OPENIDS must be a comma-separated list of OpenIDs" >&2
+    exit 1
+  fi
+  if [ -n "$mp_url" ] && ! printf '%s' "$mp_url" | grep -Eq '^https://[^[:space:]]+$'; then
+    echo "error: WECHAT_MP_URL must start with https:// when set" >&2
+    exit 1
+  fi
+  if [ ! -s "$wechat_mp_secret" ]; then
+    echo "error: wechat-mp.env is present but wechat-mp-secret is missing or empty" >&2
+    exit 1
+  fi
+  has_wechat_mp=1
+fi
+
+if [ "$has_wecom" -eq 0 ] && [ "$has_smtp" -eq 0 ] && [ "$has_wechat_mp" -eq 0 ]; then
   cp "$template" "$out"
-  echo "alertmanager receiver: none (no wecom-webhook-url or smtp.env)"
+  echo "alertmanager receiver: none (no wecom-webhook-url, smtp.env, or wechat-mp.env)"
   exit 0
 fi
 
@@ -98,13 +129,16 @@ route:
   group_interval: 5m
   repeat_interval: 4h
   routes:
+    - matchers: ['severity=~"warning|ticket"']
+      receiver: none
     - matchers: ['severity=~"page|critical"']
       receiver: notify
       repeat_interval: 1h
 receivers:
+  - name: none
   - name: notify
 EOF
-  if [ "$has_wecom" -eq 1 ]; then
+  if [ "$has_wecom" -eq 1 ] || [ "$has_wechat_mp" -eq 1 ]; then
     cat <<'EOF'
     webhook_configs:
       - url: http://wecom-alert-adapter:9095/alertmanager
@@ -120,4 +154,4 @@ EOF
   fi
 } > "$out"
 
-echo "alertmanager receiver: notify (wecom=${has_wecom} smtp=${has_smtp})"
+echo "alertmanager receiver: notify (wecom=${has_wecom} wechat_mp=${has_wechat_mp} smtp=${has_smtp})"

@@ -94,6 +94,56 @@ func TestRenderAlertmanagerSMTPKeepsThePasswordInTheFile(t *testing.T) {
 	}
 }
 
+func TestRenderAlertmanagerWeChatMPSilencesWarningsAndOmitsSecrets(t *testing.T) {
+	root := repoRoot(t)
+	secrets := t.TempDir()
+	mpEnv := "WECHAT_MP_APP_ID=wx12345\nWECHAT_MP_TEMPLATE_ID=tmpl999\nWECHAT_MP_OPENIDS=oABC123,oXYZ789\nWECHAT_MP_URL=https://hvac.qlhtech.com/overview\n"
+	if err := os.WriteFile(filepath.Join(secrets, "wechat-mp.env"), []byte(mpEnv), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(secrets, "wechat-mp-secret"), []byte("top-secret-app-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "alertmanager.yml")
+	template := filepath.Join(root, "deploy", "platform", "phase1", "observability", "alertmanager.yaml")
+	cmd := exec.Command("sh", filepath.Join(root, "deploy", "platform", "phase1", "observability", "render-alertmanager-config.sh"), secrets, out, template)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("render: %v\n%s", err, output)
+	}
+	got, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(got)
+	for _, secret := range []string{"top-secret-app-secret", "oABC123", "wx12345", "tmpl999"} {
+		if strings.Contains(text, secret) {
+			t.Fatalf("wechat-mp secret/id %q leaked into alertmanager.yml:\n%s", secret, text)
+		}
+	}
+	for _, want := range []string{
+		"http://wecom-alert-adapter:9095/alertmanager",
+		`severity=~"warning|ticket"`,
+		"receiver: none",
+		`severity=~"page|critical"`,
+		"receiver: notify",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in alertmanager.yml:\n%s", want, text)
+		}
+	}
+
+	// Missing wechat-mp-secret must fail closed
+	badSecrets := t.TempDir()
+	if err := os.WriteFile(filepath.Join(badSecrets, "wechat-mp.env"), []byte(mpEnv), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	failCmd := exec.Command("sh", filepath.Join(root, "deploy", "platform", "phase1", "observability", "render-alertmanager-config.sh"), badSecrets, filepath.Join(t.TempDir(), "bad.yml"), template)
+	if err := failCmd.Run(); err == nil {
+		t.Fatal("expected render to fail when wechat-mp-secret is missing")
+	}
+}
+
 func TestRenderAlertmanagerRejectsABadWeComURL(t *testing.T) {
 	root := repoRoot(t)
 	secrets := t.TempDir()
@@ -122,8 +172,15 @@ func TestHostTextfileReadsTheBackupStampAndContainerHealth(t *testing.T) {
 	docker := filepath.Join(bin, "docker")
 	script := `#!/bin/sh
 if [ "$1" = info ]; then exit 0; fi
-if [ "$1" = ps ]; then printf 'abc energy-api\n'; exit 0; fi
-if [ "$1" = inspect ]; then printf '4 unhealthy\n'; exit 0; fi
+if [ "$1" = ps ]; then printf 'abc energy-api\ndef one-shot-migrator\nghi stopped-api\n'; exit 0; fi
+if [ "$1" = inspect ]; then
+  case "$4" in
+    abc) printf '4 unhealthy true unless-stopped\n' ;;
+    def) printf '0 none false no\n' ;;
+    ghi) printf '0 none false unless-stopped\n' ;;
+  esac
+  exit 0
+fi
 echo "unexpected: $*" >&2
 exit 1
 `
@@ -146,10 +203,15 @@ exit 1
 		`hvac_backup_last_success_timestamp_seconds{store="clickhouse"} 0`,
 		`hvac_container_restarts{service="energy-api"} 4`,
 		`hvac_container_unhealthy{service="energy-api"} 1`,
+		`hvac_container_running{service="energy-api"} 1`,
+		`hvac_container_running{service="stopped-api"} 0`,
 		"hvac_container_metrics_up 1",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %q in\n%s", want, text)
 		}
+	}
+	if strings.Contains(text, `hvac_container_running{service="one-shot-migrator"}`) {
+		t.Fatalf("one-shot restart=no container must be omitted from hvac_container_running:\n%s", text)
 	}
 }

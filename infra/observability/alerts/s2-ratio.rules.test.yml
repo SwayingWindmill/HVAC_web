@@ -18,7 +18,7 @@ tests:
         alertname: S2DataGoodRateLow
         exp_alerts: []
 
-  # Same 0.97 records/s, 90% good. The ratio is under 0.95 and the 10 minute volume is over 100.
+  # Same 0.97 records/s, 90% good and 10% stale: fires warning S2DataGoodRateLow and page S2DataQualityCritical.
   - interval: 1m
     input_series:
       - series: 'hvac_s2_data_quality_records_total{quality="good",outcome="accepted"}'
@@ -30,11 +30,62 @@ tests:
         alertname: S2DataGoodRateLow
         exp_alerts:
           - exp_labels:
-              severity: page
+              severity: warning
               primary_owner: telemetry-platform
               secondary_owner: energy-data
             exp_annotations:
               summary: Telemetry data good rate is below 95 percent
+              runbook: docs/operations/alerts.md#读数合格率低
+      - eval_time: 30m
+        alertname: S2DataQualityCritical
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              primary_owner: telemetry-platform
+              secondary_owner: energy-data
+            exp_annotations:
+              summary: Telemetry data quality critically degraded
+              runbook: docs/operations/alerts.md#读数合格率低
+
+  # 94% good + 6% partial (physically offline probes): warning only, does not page S2DataQualityCritical.
+  - interval: 1m
+    input_series:
+      - series: 'hvac_s2_data_quality_records_total{quality="good",outcome="accepted"}'
+        values: 0+54.708x40
+      - series: 'hvac_s2_data_quality_records_total{quality="partial",outcome="accepted"}'
+        values: 0+3.492x40
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: S2DataGoodRateLow
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              primary_owner: telemetry-platform
+              secondary_owner: energy-data
+            exp_annotations:
+              summary: Telemetry data good rate is below 95 percent
+              runbook: docs/operations/alerts.md#读数合格率低
+      - eval_time: 30m
+        alertname: S2DataQualityCritical
+        exp_alerts: []
+
+  # 80% good + 20% partial: drops below 85% critical threshold and pages S2DataQualityCritical.
+  - interval: 1m
+    input_series:
+      - series: 'hvac_s2_data_quality_records_total{quality="good",outcome="accepted"}'
+        values: 0+46.56x40
+      - series: 'hvac_s2_data_quality_records_total{quality="partial",outcome="accepted"}'
+        values: 0+11.64x40
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: S2DataQualityCritical
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              primary_owner: telemetry-platform
+              secondary_owner: energy-data
+            exp_annotations:
+              summary: Telemetry data quality critically degraded
               runbook: docs/operations/alerts.md#读数合格率低
 
   # Counters stay at 0. There is no ratio to judge, and the volume guard is not met.

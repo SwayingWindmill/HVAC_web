@@ -96,9 +96,11 @@ Prometheus 的告警规则在 `infra/observability/alerts/`，每条规则的 `r
 
 ### 读数合格率低
 
-告警：`S2DataGoodRateLow`。
+告警：`S2DataGoodRateLow`（`warning`，`< 95%`）、`S2DataQualityCritical`（`page`，`good < 85%` 或 `invalid|stale > 5%`）。
 
 `hvac_s2_data_quality_records_total` 记录有限的质量和接收结果，现在能报合格、可疑、拒收的比例。完整率和采样合规还算不出来，因为平台还不知道每个点位应有的上报频率。
+
+长期物理离线但已接入轮询的点位会持续上送 `PARTIAL`（不计入 `invalid|stale`），因此在 `good` 占比跌至 85%–95% 区间时仅触发 `S2DataGoodRateLow`（`warning`，只进 Grafana/Alertmanager 观察，不按小时弹窗轰炸）；只有当 `good < 85%` 或明确损坏/过期比例（`invalid` / `stale`）超过 5% 且 10 分钟内样本数大于 100 时，才触发 `S2DataQualityCritical`（`page`）通知值班人员。
 
 合格率是最近 10 分钟里 `quality="good"` 的条数除以全部条数。10 分钟里不到 100 条时不报：流量大约每秒不到 0.17 条，一个百分比还不稳定。以前分母用 `clamp_min(..., 1)`，流量不到每秒 1 条时分母被抬成 1，算出来的是「每秒合格条数」而不是比例。松雅轩大约每秒 0.97 条、真正的合格率约 0.983，那个式子却算出 0.913，从 2026-10-14 起一直误报。快照出错（`S2SnapshotErrorBudgetBurn`，5 分钟里至少 50 次）、断线补发失败（`S2RecoveryFailureRateHigh`，5 分钟里至少 20 次）、指令核对和接口 5xx、告警接口 5xx 和告警操作被拒绝，都改成同样的「先算比例，样本不够就不报」。Grafana 上的「Telemetry data good rate」（面板 10）只画真实比例，不再把分母抬到 1。
 
@@ -292,9 +294,9 @@ Prometheus 的告警规则在 `infra/observability/alerts/`，每条规则的 `r
 
 ### 容器反复重启或不健康
 
-告警：`Phase1ContainerRestartLoop`（30 分钟内重启超过 3 次）、`Phase1ContainerUnhealthy`（健康检查失败满 5 分钟）、`Phase1ContainerMetricsMissing`（主机脚本读不到 Docker）。
+告警：`Phase1ContainerRestartLoop`（30 分钟内重启超过 3 次）、`Phase1ContainerUnhealthy`（健康检查失败满 5 分钟）、`Phase1ContainerStopped`（常驻 `always`/`unless-stopped` 容器连续 5 分钟非运行）、`Phase1ContainerMetricsMissing`（主机脚本读不到 Docker）。
 
-指标由主机上的 `hvac-host-metrics.timer` 写进 node-exporter 的 textfile 目录，一分钟一次。
+指标由主机上的 `hvac-host-metrics.timer` 写进 node-exporter 的 textfile 目录，一分钟一次。一次性迁移/初始化容器（`restart: "no"`）不会计入 `hvac_container_running`。
 
 1. `docker ps -a --filter label=com.docker.compose.project=hvac-platform` 看是哪一个服务。
 2. `docker logs --tail 80 <容器>`。日志里的 `error` 字段是 `[REDACTED]`，要看原因就按 `AGENTS.md` 写一个直接调用那个函数的测试，或临时打 `[DEBUG-xxxx]`。
@@ -412,21 +414,23 @@ Centrifugo（v6.8.1）不走 8000。8000 是客户端端口，正式环境只开
 
 ## 告警怎么送到人
 
-Prometheus 把告警交给 Alertmanager。Alertmanager 和把告警转成企业微信消息的 `wecom-alert-adapter` 在 `alert-egress` 上，只有它们能访问外网。仓库里的 `deploy/platform/phase1/observability/alertmanager.yaml` 仍然是空接收方（`receiver: none`）。容器启动时用 `render-alertmanager-config.sh` 看运行目录里的文件：什么都没放，就原样用这个空接收方，告警留在 Alertmanager 里，不发出去。
+Prometheus 把告警交给 Alertmanager。Alertmanager 和转出告警的 `wecom-alert-adapter` 在 `alert-egress` 上，只有它们能访问外网。仓库里的 `deploy/platform/phase1/observability/alertmanager.yaml` 仍然是空接收方（`receiver: none`）。容器启动时用 `render-alertmanager-config.sh` 看运行目录里的文件：什么都没放，就原样用这个空接收方，告警留在 Alertmanager 里，不发出去。
 
 密钥放在 `${PHASE1_RUNTIME_DIR}/alert-receiver/`（正式机器上是 `deploy/platform/phase1/runtime/server/alert-receiver/`）。这个目录在被忽略的 `runtime/` 下面，不要提交。样例在 `deploy/platform/phase1/observability/alert-receiver.example/`。
 
-企业微信群机器人：把样例 `wecom-webhook-url.example` 复制成 `wecom-webhook-url`，里面只留一行 `https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...`。适配器每次发送时读这个文件，Alertmanager 的配置里只有内网地址 `http://wecom-alert-adapter:9095/alertmanager`，不会出现 key。
+微信公众号 / 官方测试号模板消息：把样例 `wechat-mp.env.example` 和 `wechat-mp-secret.example` 复制并去掉 `.example`（权限 `0640`、属组 `65532`）。既可填入已认证微信服务号的 `AppID`/`AppSecret`/模板 ID/关注人 OpenID，也可直接使用[微信公众平台测试号](https://mp.weixin.qq.com/debug/cgi-bin/sandbox?t=sandbox/login)免费扫码开通（4 个模板字段默认 `title`、`severity`、`summary`、`time`，支持 `WECHAT_MP_KEY_*` 映射）。`Alertmanager` 配置里只写内网地址 `http://wecom-alert-adapter:9095/alertmanager`，不出现 `AppSecret` 或 `OpenID`。
+
+企业微信群机器人：把样例 `wecom-webhook-url.example` 复制成 `wecom-webhook-url`，里面只留一行 `https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...`。适配器每次发送时读这个文件，Alertmanager 的配置里同样不会出现 key。
 
 邮件：把 `smtp.env.example` 复制成 `smtp.env`，把 `smtp-password.example` 复制成 `smtp-password`（文件内容就是密码，不要加引号）。465 端口一连上就是 TLS，样例里 `SMTP_REQUIRE_TLS=false` 就是这种连法。密码只出现在 `smtp-password` 里，生成的配置用 `smtp_auth_password_file` 指过去。
 
-两个都配了就两条一起发。只配一个就只发那一个。改完文件后重建这两个容器（要加 `--force-recreate`：Compose 定义没变时，光 `up -d` 不会重建，Alertmanager 仍用旧配置）：
+配了哪几条渠道就会同时往哪些渠道投递（默认 `warning` 与 `ticket` 分流至 `none` 避免低级别波动轰炸，仅 `page` 与 `critical` 以及手工测试告警会推送；`page` 与 `critical` 每小时再提醒一次，其他级别每 4 小时一次，恢复时也会发送）。改完文件后重建这两个容器（要加 `--force-recreate`：Compose 定义没变时，光 `up -d` 不会重建，Alertmanager 仍用旧配置）：
 
 ```bash
 node scripts/phase1-wsl-compose.mjs --integration --intelligence up -d --no-deps --force-recreate alertmanager wecom-alert-adapter
 ```
 
-`page` 和 `critical` 每小时再提醒一次，其他严重程度每 4 小时一次。恢复时也会发。
+`page` 和 `critical` 每小时再提醒一次，恢复时也会发。
 
 Prometheus 的抓取配置用仓库里的 `deploy/platform/phase1/observability/prometheus.yaml`。`wsl.override.yaml` 把这份和告警规则目录挂进容器，不再读运行目录里手改的那份。
 

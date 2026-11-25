@@ -133,10 +133,18 @@ func (s *sender) serve(writer http.ResponseWriter, request *http.Request) {
 
 // readEnvFile reads KEY=VALUE lines (# comments) from the receiver directory.
 func (s *sender) readEnvFile(name string) (map[string]string, error) {
-	body, err := os.ReadFile(filepath.Join(s.receiverDir, name))
+	return readEnvFilePath(filepath.Join(s.receiverDir, name))
+}
+
+func (s *sender) readSecret(name string) (string, error) {
+	return readSecretPath(filepath.Join(s.receiverDir, name))
+}
+
+func readEnvFilePath(path string) (map[string]string, error) {
+	body, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("%w: %s is missing", errNotConfigured, name)
+			return nil, fmt.Errorf("%w: %s is missing", errNotConfigured, filepath.Base(path))
 		}
 		return nil, err
 	}
@@ -156,10 +164,10 @@ func (s *sender) readEnvFile(name string) (map[string]string, error) {
 	return values, nil
 }
 
-func (s *sender) readSecret(name string) (string, error) {
-	body, err := os.ReadFile(filepath.Join(s.receiverDir, name))
+func readSecretPath(path string) (string, error) {
+	body, err := os.ReadFile(path)
 	if err != nil || strings.TrimSpace(string(body)) == "" {
-		return "", fmt.Errorf("%w: %s is missing or empty", errNotConfigured, name)
+		return "", fmt.Errorf("%w: %s is missing or empty", errNotConfigured, filepath.Base(path))
 	}
 	return strings.TrimSpace(string(body)), nil
 }

@@ -182,17 +182,17 @@ if [[ "$skip_docker" -ne 1 ]]; then
   pg_users="$(query_pg_count hvac_identity identity.users)"
   pg_sites="$(query_pg_count hvac_s1 core_registry.sites)"
   pg_devices="$(query_pg_count hvac_s1 core_registry.devices)"
-  pg_points="$(query_pg_count hvac_s1 core_registry.points)"
-  pg_commands="$(query_pg_count hvac_s3 command_runtime.commands)"
-  pg_alarms="$(query_pg_count hvac_s4 alarm_runtime.alarms)"
+  pg_points="$(query_pg_count hvac_s1 core_registry.telemetry_points)"
+  pg_commands="$(query_pg_count hvac_s3 command_runtime.command_intents)"
+  pg_alarms="$(query_pg_count hvac_s4 alarm_runtime.alarm_current)"
   pg_counts_json="$(
     node -e 'console.log(JSON.stringify({
       "hvac_identity.identity.users": Number(process.argv[1]),
       "hvac_s1.core_registry.sites": Number(process.argv[2]),
       "hvac_s1.core_registry.devices": Number(process.argv[3]),
-      "hvac_s1.core_registry.points": Number(process.argv[4]),
-      "hvac_s3.command_runtime.commands": Number(process.argv[5]),
-      "hvac_s4.alarm_runtime.alarms": Number(process.argv[6]),
+      "hvac_s1.core_registry.telemetry_points": Number(process.argv[4]),
+      "hvac_s3.command_runtime.command_intents": Number(process.argv[5]),
+      "hvac_s4.alarm_runtime.alarm_current": Number(process.argv[6]),
     }))' "$pg_users" "$pg_sites" "$pg_devices" "$pg_points" "$pg_commands" "$pg_alarms"
   )"
   pg_integrity=true

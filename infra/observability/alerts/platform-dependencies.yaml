@@ -134,6 +134,16 @@ groups:
           description: "{{ $labels.service }} 处于 unhealthy。"
           runbook: docs/operations/alerts.md#容器反复重启或不健康
 
+      - alert: Phase1ContainerStopped
+        expr: hvac_container_running == 0
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: 常驻容器已停止运行
+          description: "{{ $labels.service }} 连续 5 分钟处于非运行状态。"
+          runbook: docs/operations/alerts.md#容器反复重启或不健康
+
       - alert: Phase1ContainerMetricsMissing
         expr: hvac_container_metrics_up == 0
         for: 15m

@@ -10,6 +10,13 @@ if [[ ! "$keep" =~ ^[0-9]+$ ]] || (( keep < 1 )); then
   echo "error: keep count must be a positive integer" >&2
   exit 1
 fi
+prune_deploy_base=0
+if [[ "${2:-}" == "--prune-deploy-base" ]]; then
+  prune_deploy_base=1
+elif [[ -n "${2:-}" ]]; then
+  echo "error: unknown flag: $2" >&2
+  exit 1
+fi
 
 mapfile -t stamps < <(docker images --format '{{.Tag}}' | sed -n 's/^before-//p' | sort -u)
 if (( ${#stamps[@]} > keep )); then
@@ -24,6 +31,15 @@ if (( ${#stamps[@]} > keep )); then
   done
 else
   echo "rollback sets kept: ${#stamps[@]} (limit ${keep})"
+fi
+
+if [[ "$prune_deploy_base" -eq 1 ]]; then
+  while IFS=$'\t' read -r repository tag; do
+    if [[ "$tag" == "deploy-base" && -n "$repository" && "$repository" != "<none>" ]]; then
+      echo "removing legacy ${repository}:deploy-base"
+      docker image rm "${repository}:deploy-base" >/dev/null 2>&1 || echo "left ${repository}:deploy-base in place"
+    fi
+  done < <(docker images --format '{{.Repository}}\t{{.Tag}}')
 fi
 
 docker image prune -f >/dev/null

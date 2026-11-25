@@ -113,3 +113,25 @@ tests:
               summary: 核心服务必需依赖就绪探针异常
               description: "telemetry-worker 的必需依赖 clickhouse 连续两分钟探测失败，服务已退出就绪状态。"
               runbook: docs/operations/alerts.md#核心服务就绪探针依赖异常
+
+  # Stopped always/unless-stopped container for 5m fires Phase1ContainerStopped; running containers stay silent.
+  - interval: 1m
+    input_series:
+      - series: 'hvac_container_running{service="energy-api"}'
+        values: '1x15'
+      - series: 'hvac_container_running{service="wecom-alert-adapter"}'
+        values: '1x3 0x12'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: Phase1ContainerStopped
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: Phase1ContainerStopped
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              service: wecom-alert-adapter
+            exp_annotations:
+              summary: 常驻容器已停止运行
+              description: "wecom-alert-adapter 连续 5 分钟处于非运行状态。"
+              runbook: docs/operations/alerts.md#容器反复重启或不健康

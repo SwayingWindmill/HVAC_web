@@ -2575,3 +2575,232 @@ func TestDeployProductionWorkflowSupportsOCIMode(t *testing.T) {
 		}
 	}
 }
+
+func TestPruneDeployBaseFlagRemovesLegacyDeployBaseTags(t *testing.T) {
+	bin := t.TempDir()
+	log := filepath.Join(t.TempDir(), "docker.log")
+	writeExe(t, bin, "docker", `#!/bin/sh
+printf '%s\n' "$*" >> "$DOCKER_LOG"
+if [ "$1" = images ] && [ "$2" = --format ] && [ "$3" = '{{.Tag}}' ]; then
+  printf '%s\n' 0.1.0-dev deploy-base
+  exit 0
+fi
+if [ "$1" = images ]; then
+  printf '%s\t%s\n' hvac/energy-api 0.1.0-dev
+  printf '%s\t%s\n' hvac/energy-api deploy-base
+  exit 0
+fi
+exit 0
+`)
+	cmd := exec.Command("bash", "prune-rollback-images.sh", "2", "--prune-deploy-base")
+	cmd.Dir = "."
+	cmd.Env = commandEnv(bin, "DOCKER_LOG="+log)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("prune --prune-deploy-base: %v\n%s", err, output)
+	}
+	got := string(mustRead(t, log))
+	if !strings.Contains(got, "image rm hvac/energy-api:deploy-base") {
+		t.Fatalf("expected legacy deploy-base removal:\n%s", got)
+	}
+	if strings.Contains(got, "image rm hvac/energy-api:0.1.0-dev") {
+		t.Fatalf("running tag must not be removed:\n%s", got)
+	}
+}
+
+func TestBuildOCIImagesRetriesTransientPushFailure(t *testing.T) {
+	const digestHex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	bin := t.TempDir()
+	stateFile := filepath.Join(t.TempDir(), "push-count")
+	staging := filepath.Join(t.TempDir(), "release")
+
+	writeExe(t, bin, "go", `#!/usr/bin/env bash
+set -euo pipefail
+out=""
+while [ $# -gt 0 ]; do
+  if [ "$1" = "-o" ]; then out="$2"; shift 2; continue; fi
+  shift
+done
+mkdir -p "$(dirname "$out")"
+printf '#!/bin/sh\nexit 0\n' > "$out"
+chmod 755 "$out"
+`)
+	writeExe(t, bin, "git", `#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+  rev-parse) printf '%s\n' "0123456789abcdef0123456789abcdef01234567" ;;
+  archive)
+    out=""
+    while [ $# -gt 0 ]; do
+      if [ "$1" = "-o" ]; then out="$2"; shift 2; continue; fi
+      shift
+    done
+    tmp="$(mktemp -d)"
+    printf 'stub\n' > "$tmp/README"
+    tar -C "$tmp" -cf "$out" README
+    rm -rf "$tmp"
+    ;;
+  *) exec /usr/bin/git "$@" ;;
+esac
+`)
+	writeExe(t, bin, "docker", `#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  build) exit 0 ;;
+  push)
+    c=0
+    [ -f "$PUSH_COUNT_FILE" ] && c="$(cat "$PUSH_COUNT_FILE")"
+    c=$((c + 1))
+    printf '%s' "$c" > "$PUSH_COUNT_FILE"
+    if [ "$c" -eq 1 ]; then
+      echo "transient push timeout" >&2
+      exit 1
+    fi
+    exit 0
+    ;;
+  image) exit 0 ;;
+  inspect)
+    last="${@: -1}"
+    printf '%s@sha256:%s\n' "${last%:*}" "`+digestHex+`"
+    ;;
+esac
+`)
+
+	cmd := exec.Command("bash", "build-oci-images.sh")
+	cmd.Env = commandEnv(bin,
+		"PRODUCTION_RELEASE_DIR="+staging,
+		"OCI_REGISTRY=ccr.ccs.tencentyun.com",
+		"OCI_NAMESPACE=hvac",
+		"OCI_PUSH=1",
+		"OCI_PUSH_ATTEMPTS=2",
+		"OCI_PUSH_RETRY_SLEEP=0",
+		"OCI_SERVICES_FILTER=energy-api",
+		"PUSH_COUNT_FILE="+stateFile,
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("build-oci-images.sh failed after retry: %v\n%s", err, output)
+	}
+	if got := strings.TrimSpace(string(mustRead(t, stateFile))); got != "2" {
+		t.Fatalf("push attempts = %q, want 2", got)
+	}
+}
+
+func TestApplyOnServerOCISkipsAbsentOptionalServicesAndRetriesPull(t *testing.T) {
+	const digestA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const digestB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+	runCase := func(t *testing.T, pullOptional string) string {
+		t.Helper()
+		bin := t.TempDir()
+		store := t.TempDir()
+		platform := t.TempDir()
+		release := t.TempDir()
+		pullCountFile := filepath.Join(t.TempDir(), "pull-count")
+
+		writeExe(t, bin, "sudo", "#!/bin/sh\n[ \"$1\" = -n ] && shift\nexec \"$@\"\n")
+		writeExe(t, bin, "date", "#!/bin/sh\nprintf '20261126T010000Z\\n'\n")
+		writeExe(t, bin, "docker", `#!/usr/bin/env bash
+set -euo pipefail
+s="$DOCKER_STORE"
+mkdir -p "$s/tags" "$s/images"
+printf '%s\n' "$*" >> "$s/calls.log"
+key() { printf '%s' "$1" | tr '/:@' '___'; }
+resolve() {
+  if [[ -f "$s/tags/$(key "$1")" ]]; then cat "$s/tags/$(key "$1")"; return 0; fi
+  return 1
+}
+case "$1" in
+  ps) exit 0 ;;
+  pull)
+    ref="$2"
+    if [[ "$ref" == *energy-api* ]]; then
+      c=0
+      [ -f "$PULL_COUNT_FILE" ] && c="$(cat "$PULL_COUNT_FILE")"
+      c=$((c + 1))
+      printf '%s' "$c" > "$PULL_COUNT_FILE"
+      if [ "$c" -eq 1 ]; then
+        echo "transient pull error" >&2
+        exit 1
+      fi
+    fi
+    id="pulled-$(key "$ref")"
+    mkdir -p "$s/images/$id"
+    printf '%s\n' "$id" > "$s/tags/$(key "$ref")"
+    ;;
+  tag)
+    id="$(resolve "$2")"
+    printf '%s\n' "$id" > "$s/tags/$(key "$3")"
+    ;;
+  image)
+    case "$2" in
+      inspect) resolve "$3" >/dev/null || exit 1 ;;
+      prune|rm) exit 0 ;;
+    esac
+    ;;
+esac
+`)
+		if err := os.MkdirAll(filepath.Join(store, "tags"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(store, "tags", "hvac_energy-api_0.1.0-dev"), []byte("seed-energy\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(release, "src/deploy/platform/phase1/cd"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		pruneLog := filepath.Join(t.TempDir(), "prune.log")
+		files := map[string]string{
+			"REVISION": strings.Repeat("e", 40) + "\n",
+			"services.tsv": strings.Join([]string{
+				"energy-api\thvac/energy-api:0.1.0-dev\tgo\trequired\t./cmd/energy-api",
+				"ai-solver-service\thvac/ai-solver-service:0.1.0-dev\tpython\toptional\tservices/ai-solver-service",
+			}, "\n") + "\n",
+			"image-manifest.tsv": strings.Join([]string{
+				"# service\tlocal_image\toci_ref",
+				"energy-api\thvac/energy-api:0.1.0-dev\tccr.ccs.tencentyun.com/hvac/energy-api@sha256:" + digestA,
+				"ai-solver-service\thvac/ai-solver-service:0.1.0-dev\tccr.ccs.tencentyun.com/hvac/ai-solver-service@sha256:" + digestB,
+			}, "\n") + "\n",
+			"src/README": "tree\n",
+			"src/deploy/platform/phase1/cd/observability-config.sh": "#!/bin/sh\nexit 0\n",
+			"rollback.sh":              "#!/bin/sh\nexit 0\n",
+			"smoke-release.sh":         "#!/bin/sh\nexit 0\n",
+			"prune-rollback-images.sh": "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"" + pruneLog + "\"\n",
+		}
+		for name, body := range files {
+			if err := os.WriteFile(filepath.Join(release, name), []byte(body), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if out, err := exec.Command("tar", "-C", filepath.Join(release, "src"), "-cf", filepath.Join(release, "source.tar"), "README", "deploy").CombinedOutput(); err != nil {
+			t.Fatalf("tar: %v\n%s", err, out)
+		}
+
+		cmd := exec.Command("bash", "apply-on-server.sh", release)
+		cmd.Env = commandEnv(bin,
+			"DOCKER_STORE="+store,
+			"HVAC_PLATFORM_DIR="+platform,
+			"HVAC_DEPLOY_SCRIPT="+writeExe(t, bin, "restart", "#!/bin/sh\nexit 0\n"),
+			"PULL_COUNT_FILE="+pullCountFile,
+			"OCI_PULL_ATTEMPTS=2",
+			"OCI_PULL_RETRY_SLEEP=0",
+			"OCI_PULL_OPTIONAL="+pullOptional,
+		)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("apply-on-server.sh failed: %v\n%s", err, out)
+		}
+		if gotPrune := strings.TrimSpace(string(mustRead(t, pruneLog))); gotPrune != "2 --prune-deploy-base" {
+			t.Fatalf("prune args = %q, want '2 --prune-deploy-base'", gotPrune)
+		}
+		return string(mustRead(t, filepath.Join(store, "calls.log")))
+	}
+
+	callsDefault := runCase(t, "0")
+	if strings.Contains(callsDefault, "pull ccr.ccs.tencentyun.com/hvac/ai-solver-service") {
+		t.Fatalf("absent optional service must not be pulled by default:\n%s", callsDefault)
+	}
+	callsOpt := runCase(t, "1")
+	if !strings.Contains(callsOpt, "pull ccr.ccs.tencentyun.com/hvac/ai-solver-service") {
+		t.Fatalf("expected optional service pulled when OCI_PULL_OPTIONAL=1:\n%s", callsOpt)
+	}
+}

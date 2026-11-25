@@ -64,6 +64,9 @@ restic_load_offsite_env() {
   elif [[ "$RESTIC_REPOSITORY" =~ cos\.([a-z0-9-]+)\.myqcloud\.com ]]; then
     export AWS_DEFAULT_REGION="${BASH_REMATCH[1]}"
   fi
+  if [[ -z "${RESTIC_CACHE_DIR:-}" && -z "${XDG_CACHE_HOME:-}" && -z "${HOME:-}" ]]; then
+    export RESTIC_CACHE_DIR="/tmp/hvac-restic-cache"
+  fi
 }
 
 restic_has_timestamp_dir() {

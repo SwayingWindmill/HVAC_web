@@ -132,11 +132,21 @@ done
 
 healthcheck_bin="$work/healthcheck"
 healthcheck_built=0
+go_runtime_ready=0
 ensure_go_toolchain() {
   if ! command -v go >/dev/null 2>&1; then
     echo "error: go is required on PATH to build OCI Go images." >&2
     exit 1
   fi
+}
+ensure_go_runtime() {
+  if [[ "$go_runtime_ready" -eq 1 ]]; then
+    return
+  fi
+  if ! docker image inspect "${go_runtime_image}" >/dev/null 2>&1; then
+    docker pull --platform linux/amd64 "${go_runtime_image}" || true
+  fi
+  go_runtime_ready=1
 }
 ensure_healthcheck() {
   if [[ "$healthcheck_built" -eq 1 ]]; then
@@ -149,6 +159,30 @@ ensure_healthcheck() {
     -o "$healthcheck_bin" \
     ./tools/container-healthcheck/cmd/container-healthcheck/main.go
   healthcheck_built=1
+}
+
+oci_push_attempts="${OCI_PUSH_ATTEMPTS:-3}"
+oci_push_retry_sleep="${OCI_PUSH_RETRY_SLEEP:-5}"
+if [[ ! "$oci_push_attempts" =~ ^[1-9][0-9]*$ ]]; then
+  echo "error: OCI_PUSH_ATTEMPTS must be a positive integer (got '$oci_push_attempts')." >&2
+  exit 1
+fi
+docker_push_with_retry() {
+  local ref="$1"
+  local attempt=1
+  while true; do
+    if docker push "$ref"; then
+      return 0
+    fi
+    if (( attempt >= oci_push_attempts )); then
+      echo "error: docker push failed for ${ref} after ${attempt} attempts" >&2
+      return 1
+    fi
+    local delay=$(( oci_push_retry_sleep * attempt ))
+    echo "warning: docker push failed for ${ref} (attempt ${attempt}/${oci_push_attempts}); retrying in ${delay}s" >&2
+    sleep "$delay"
+    attempt=$((attempt + 1))
+  done
 }
 
 manifest_tmp="$work/image-manifest.tsv"
@@ -176,6 +210,7 @@ while IFS=$'\t' read -r service local_image kind required package <&3; do
         exit 1
       fi
       ensure_go_toolchain
+      ensure_go_runtime
       ensure_healthcheck
       CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
         go build -trimpath -buildvcs=false -ldflags="-s -w" \
@@ -212,6 +247,7 @@ EOF
         exit 1
       fi
       ensure_go_toolchain
+      ensure_go_runtime
       CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
         go build -trimpath -buildvcs=false -ldflags="-s -w" \
         -o "$svc_ctx/service" \
@@ -283,7 +319,7 @@ EOF
 
   if [[ "$push_images" == 1 ]]; then
     echo "pushing ${oci_tag_ref}"
-    docker push "$oci_tag_ref"
+    docker_push_with_retry "$oci_tag_ref"
   fi
   oci_ref="$(resolve_pushed_digest_ref "$oci_repo" "$oci_tag_ref")"
   printf '%s\t%s\t%s\n' "$service" "$local_image" "$oci_ref" >> "$manifest_tmp"
