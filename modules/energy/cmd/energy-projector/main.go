@@ -162,7 +162,7 @@ func run() int {
 		logger.Error("analytics_projector_configuration_invalid", "error_code", "ANALYTICS_PROJECTOR_CONFIGURATION_INVALID")
 		return 1
 	}
-	pollInterval, err := durationEnv("ANALYTICS_PROJECTOR_POLL_INTERVAL", 500*time.Millisecond, 25*time.Millisecond, time.Minute)
+	pollInterval, err := durationEnv("ANALYTICS_PROJECTOR_POLL_INTERVAL", defaultAnalyticsProjectorPollInterval, 25*time.Millisecond, time.Minute)
 	if err != nil {
 		logEnvError(logger, "analytics_projector_configuration_invalid", "ANALYTICS_PROJECTOR_CONFIGURATION_INVALID", err)
 		return 1
@@ -240,8 +240,12 @@ func run() int {
 				"analytics.model": "energy_interval_facts",
 			})
 			projectContext, projectCancel := context.WithTimeout(projectionContext, 20*time.Second)
-			projected, projectErr := projector.ProjectOnce(projectContext)
+			projected, projectErr := drainEnergyProjectionOnce(projectContext, projector.ProjectOnce)
 			projectCancel()
+			if projected > 0 {
+				_ = telemetry.Metrics.AddCounter("hvac_analytics_energy_intervals_projected_total", "Projected additive energy intervals.", map[string]string{"model": "energy_interval_facts"}, float64(projected))
+				logger.Debug("analytics_energy_intervals_projected", "interval_count", projected)
+			}
 			if projectErr != nil {
 				telemetry.MarkNotReady()
 				span.SetStatus("error", "projection failed")
@@ -256,12 +260,31 @@ func run() int {
 			telemetry.MarkReady()
 			span.SetStatus("ok", "")
 			span.End()
-			if projected > 0 {
-				_ = telemetry.Metrics.AddCounter("hvac_analytics_energy_intervals_projected_total", "Projected additive energy intervals.", map[string]string{"model": "energy_interval_facts"}, float64(projected))
-				logger.Debug("analytics_energy_intervals_projected", "interval_count", projected)
-			}
 		}
 	}
+}
+
+const (
+	defaultAnalyticsProjectorPollInterval = 3 * time.Second
+	maxEnergyProjectionDrainBatches       = 10
+)
+
+func drainEnergyProjectionOnce(ctx context.Context, project func(context.Context) (int, error)) (int, error) {
+	total := 0
+	for batch := 0; batch < maxEnergyProjectionDrainBatches; batch++ {
+		if ctx.Err() != nil {
+			break
+		}
+		projected, err := project(ctx)
+		if err != nil {
+			return total, err
+		}
+		total += projected
+		if projected == 0 {
+			break
+		}
+	}
+	return total, nil
 }
 
 type energyProjectorShutdownDeps struct {

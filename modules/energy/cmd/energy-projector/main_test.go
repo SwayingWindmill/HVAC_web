@@ -72,4 +72,19 @@ func TestEnergyProjectorEnvHelpersAndRunFailure(t *testing.T) {
 	if _, err := durationEnv("ANALYTICS_TOTAL_SUBMETER_INTERVAL", 5*time.Minute, 10*time.Second, time.Hour); err == nil {
 		t.Fatal("expected error for submeter interval below minimum")
 	}
+
+	if defaultAnalyticsProjectorPollInterval != 3*time.Second {
+		t.Fatalf("defaultAnalyticsProjectorPollInterval=%s, want 3s", defaultAnalyticsProjectorPollInterval)
+	}
+	calls := 0
+	total, err := drainEnergyProjectionOnce(context.Background(), func(context.Context) (int, error) {
+		calls++
+		if calls == 1 {
+			return 3, nil
+		}
+		return 0, nil
+	})
+	if err != nil || total != 3 || calls != 2 {
+		t.Fatalf("drainEnergyProjectionOnce=(%d, %d, %v)", total, calls, err)
+	}
 }

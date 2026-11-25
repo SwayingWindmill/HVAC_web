@@ -1,9 +1,10 @@
-import { queryOptions, skipToken } from '@tanstack/react-query';
+import { queryOptions, useQueries } from '@tanstack/react-query';
+import { useMemo } from 'react';
 import { z } from 'zod';
 import { failureStatus, gatewayPath, gatewayRequest, ROUTE_MISSING_MESSAGE } from '@/api/gateway-client';
 import { intelligencePaths, type SiteAssetModel } from '@/api/generated/platformGateway.gen';
-import { createS2TelemetryClient } from '@/api/generated/s2Telemetry.gen';
-import { demandWindows, quarterHours, type QuarterHour } from './demand-model';
+import { createS2TelemetryClient, type DeviceHistoryAggregateBucket } from '@/api/generated/s2Telemetry.gen';
+import { alignDemandEndToQuarter, demandChunkWindows, quarterHours, type QuarterHour } from './demand-model';
 import { parseLoadForecast, type LoadForecast, type PublishedForecast } from './forecast-model';
 
 const forecastQualitySchema = z.enum(['VALID', 'FALLBACK']);
@@ -30,34 +31,79 @@ export function plantPowerPoint(model: Pick<SiteAssetModel, 'telemetryPoints'>):
   return point ? { deviceId: point.reportingDeviceId, pointCode: point.pointCode } : null;
 }
 
-/** Quarter-hour demand from the earlier of the month's and yesterday's start until now. */
-export function plantDemandQuery(input: {
+/**
+ * Quarter-hour demand over `[from, to)`, split into 10-day owner chunks.
+ * Completed chunks carry immutable cache keys and long `staleTime`; the live trailing chunk aligns its end
+ * to the enclosing quarter-hour for rollup hits while computing bucket completion against real `now`.
+ */
+export function useDemandChunks(input: {
   readonly siteId: string;
   readonly timezone: string;
   readonly csrfToken: string;
   /** Null until the Registry names the meter; nothing is read before then. */
   readonly point: { deviceId: string; pointCode: string } | null;
+  readonly from: Date;
+  readonly to: Date;
   readonly now: Date;
+  readonly refetchIntervalMs?: number | false;
 }) {
   const { point } = input;
-  return queryOptions({
-    queryKey: ['demand', input.siteId, point?.deviceId, point?.pointCode, input.now.getTime()],
-    queryFn: point === null ? skipToken : async ({ signal }): Promise<QuarterHour[]> => {
-      const responses = await Promise.all(demandWindows(input.now, input.timezone).map((window) =>
-        client.queryDeviceHistoryAggregate({
-          deviceId: point.deviceId,
-          keys: [point.pointCode],
-          from: window.from.toISOString(),
-          to: window.to.toISOString(),
+  const chunks = useMemo(
+    () => (point === null ? [] : demandChunkWindows(input.from, input.to, input.now.getTime())),
+    [input.from, input.now, input.to, point],
+  );
+  const queries = useQueries({
+    queries: chunks.map((chunk) => queryOptions({
+      queryKey: [
+        'demand-chunk',
+        input.siteId,
+        point?.deviceId ?? 'NONE',
+        point?.pointCode ?? 'NONE',
+        chunk.from.toISOString(),
+        chunk.closed ? chunk.to.toISOString() : 'live',
+      ] as const,
+      enabled: point !== null,
+      queryFn: async ({ signal }): Promise<readonly DeviceHistoryAggregateBucket[]> => {
+        const toDate = chunk.closed ? chunk.to : alignDemandEndToQuarter(new Date(Math.max(chunk.to.getTime(), Date.now())));
+        const response = await client.queryDeviceHistoryAggregate({
+          deviceId: point!.deviceId,
+          keys: [point!.pointCode],
+          from: chunk.from.toISOString(),
+          to: toDate.toISOString(),
           granularity: 'QUARTER_HOUR',
           timezone: input.timezone,
           qualityPolicy: 'USABLE',
-        }, { csrfToken: input.csrfToken, signal })));
-      return quarterHours(responses.flatMap((response) => response.buckets), input.now);
-    },
-    staleTime: 60_000,
-    placeholderData: (previous) => previous,
+        }, { csrfToken: input.csrfToken, signal });
+        return response.buckets;
+      },
+      staleTime: chunk.closed ? 30 * 60_000 : 60_000,
+      refetchInterval: chunk.closed ? false : (input.refetchIntervalMs ?? false),
+      placeholderData: chunk.closed ? undefined : ((previous, previousQuery) =>
+        previousQuery?.queryKey[1] === input.siteId ? previous : undefined),
+    })),
   });
+
+  const buckets = useMemo(() => {
+    if (point === null || chunks.length === 0) return undefined;
+    if (queries.some((q) => q.data === undefined)) return undefined;
+    return queries.flatMap((q) => q.data ?? []);
+  }, [chunks.length, point, queries]);
+
+  const data = useMemo<QuarterHour[] | undefined>(
+    () => (buckets ? quarterHours(buckets, input.now) : undefined),
+    [buckets, input.now],
+  );
+
+  const isError = queries.some((q) => q.isError);
+  const isPending = point === null || (queries.some((q) => q.isPending) && data === undefined);
+  const refetch = () => Promise.all(queries.map((q) => q.refetch()));
+
+  return useMemo(() => ({
+    data,
+    isPending,
+    isError,
+    refetch,
+  }), [data, isError, isPending, queries]);
 }
 
 export class ForecastRequestError extends Error {

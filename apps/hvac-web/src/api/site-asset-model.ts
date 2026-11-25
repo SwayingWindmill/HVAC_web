@@ -37,7 +37,7 @@ export function siteAssetModelEnvelopeQuery(
     queryKey: siteAssetModelQueryKey(siteId),
     queryFn: ({ signal }) => client.getSiteAssetModel(siteId!, { signal }),
     enabled: Boolean(siteId) && (options.enabled ?? true),
-    staleTime: options.staleTime ?? 60_000,
+    staleTime: options.staleTime ?? 5 * 60_000,
     retry: options.retry ?? retrySiteAssetModelQuery,
   });
 }

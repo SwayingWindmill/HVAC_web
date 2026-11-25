@@ -3,22 +3,17 @@ import { getRouteApi } from '@tanstack/react-router';
 import { z } from 'zod';
 import { gatewayPath, gatewayRequest, publishedValueOf, valueOf } from '@/api/gateway-client';
 import { intelligencePaths } from '@/api/generated/platformGateway.gen';
-import { createS2TelemetryClient } from '@/api/generated/s2Telemetry.gen';
 import { siteAssetModelQuery } from '@/api/site-asset-model';
 import { listAlarms, type Alarm } from '@/features/alarms/alarm-api';
-import { quarterHours } from '@/features/load/demand-model';
-import { plantPowerPoint } from '@/features/load/query';
-import { siteMidnight, wallTime } from '@/features/energy-analysis/consumption/model';
+import { plantPowerPoint, useDemandChunks } from '@/features/load/query';
+import { energyRetryDelay, retryEnergyQuery, siteDayKey, siteMidnight, wallTime } from '@/features/energy-analysis/consumption/model';
 import { useEnergyReader } from '@/features/energy-analysis/consumption/query';
 import { siteTariffQuery } from '@/features/tariff/query';
 import { sumCosts } from '@/features/tariff/tariff-model';
 import { listView } from '@/features/work-orders/work-order-queries';
 import type { LiveMonth, ReportWindow, StoredReport } from './report-model';
 
-const telemetry = createS2TelemetryClient();
 const siteRoute = getRouteApi('/_app/_site');
-/** The history owner returns at most 1000 buckets: about ten days of quarter-hours. */
-const CHUNK_MS = 10 * 86_400_000;
 const ALARM_PAGES = 10;
 
 /** Alarms raised from `from` on, walking the newest-first pages until one reaches past it. */
@@ -123,6 +118,7 @@ export function monthlySnapshotQuery(siteId: string, month: string) {
       ARCHIVE_UNAVAILABLE,
     ),
     retry: false,
+    staleTime: 5 * 60_000,
   });
 }
 
@@ -141,14 +137,16 @@ export function yearSnapshotsQuery(siteId: string, year: number) {
       ARCHIVE_UNAVAILABLE,
     ),
     retry: false,
+    staleTime: 5 * 60_000,
   });
 }
 
 /** The month's electricity, its cost and cooling by day, against the month before. */
 export function useMonthEnergy(month: string, span: ReportWindow, enabled = true) {
   const { site, summary } = useEnergyReader();
+  const stateKey = span.complete ? 'closed' : siteDayKey(span.to, site.timezone);
   return useQuery({
-    queryKey: ['monthly-report', site.id, month, span.to.getTime(), 'energy'],
+    queryKey: ['monthly-report', site.id, month, stateKey, 'energy'],
     enabled,
     queryFn: async ({ signal }) => {
       const [current, previous] = await Promise.all([
@@ -157,37 +155,28 @@ export function useMonthEnergy(month: string, span: ReportWindow, enabled = true
       ]);
       return { current, previous };
     },
+    staleTime: span.complete ? 30 * 60_000 : 60_000,
     placeholderData: (previousData, previousQuery) =>
       previousQuery?.queryKey[1] === site.id ? previousData : undefined,
-    retry: false,
+    retry: retryEnergyQuery,
+    retryDelay: energyRetryDelay,
   });
 }
 
 /** The plant's quarter-hour demand over the month, from the HVAC total meter's power. */
 export function useMonthDemand(month: string, span: ReportWindow) {
+  void month;
   const { site, principal } = siteRoute.useRouteContext();
   const assetModel = useQuery(siteAssetModelQuery(site.id));
   const meter = assetModel.data ? plantPowerPoint(assetModel.data) : null;
-  const demand = useQuery({
-    queryKey: ['monthly-report', site.id, month, span.to.getTime(), 'demand', meter?.deviceId],
-    enabled: meter !== null,
-    queryFn: async ({ signal }) => {
-      const chunks: { from: Date; to: Date }[] = [];
-      for (let start = span.from.getTime(); start < span.to.getTime(); start += CHUNK_MS) {
-        chunks.push({ from: new Date(start), to: new Date(Math.min(start + CHUNK_MS, span.to.getTime())) });
-      }
-      const responses = await Promise.all(chunks.map((chunk) => telemetry.queryDeviceHistoryAggregate({
-        deviceId: meter!.deviceId,
-        keys: [meter!.pointCode],
-        from: chunk.from.toISOString(),
-        to: chunk.to.toISOString(),
-        granularity: 'QUARTER_HOUR',
-        timezone: site.timezone,
-        qualityPolicy: 'USABLE',
-      }, { csrfToken: principal.session.csrfToken, signal })));
-      return quarterHours(responses.flatMap((response) => response.buckets), span.to);
-    },
-    retry: false,
+  const demand = useDemandChunks({
+    siteId: site.id,
+    timezone: site.timezone,
+    csrfToken: principal.session.csrfToken,
+    point: meter,
+    from: span.from,
+    to: span.to,
+    now: span.to,
   });
   return { meter, demand };
 }
@@ -195,9 +184,11 @@ export function useMonthDemand(month: string, span: ReportWindow) {
 /** Alarms and work orders, which only their owners keep: never in a snapshot. */
 export function useMonthOperations(month: string, span: ReportWindow) {
   const { site } = siteRoute.useRouteContext();
-  const key = ['monthly-report', site.id, month, span.to.getTime()];
-  const alarms = useQuery({ queryKey: [...key, 'alarms'], queryFn: ({ signal }) => alarmsSince(site.id, span.from, signal), retry: false });
-  const workOrders = useQuery({ queryKey: [...key, 'work-orders'], queryFn: ({ signal }) => listView(site.id, [], undefined, signal), retry: false });
+  const stateKey = span.complete ? 'closed' : siteDayKey(span.to, site.timezone);
+  const key = ['monthly-report', site.id, month, stateKey];
+  const staleTime = span.complete ? 30 * 60_000 : 60_000;
+  const alarms = useQuery({ queryKey: [...key, 'alarms'], queryFn: ({ signal }) => alarmsSince(site.id, span.from, signal), staleTime, retry: false });
+  const workOrders = useQuery({ queryKey: [...key, 'work-orders'], queryFn: ({ signal }) => listView(site.id, [], undefined, signal), staleTime, retry: false });
   return { alarms, workOrders };
 }
 
@@ -214,9 +205,11 @@ export function useYearLive(year: number, now: Date) {
   const { site, summary } = useEnergyReader();
   const from = siteMidnight(year, 1, 1, site.timezone);
   const end = siteMidnight(year + 1, 1, 1, site.timezone);
-  const to = end.getTime() < now.getTime() ? end : now;
+  const complete = end.getTime() <= now.getTime();
+  const to = complete ? end : now;
+  const stateKey = complete ? 'closed' : siteDayKey(to, site.timezone);
   return useQuery({
-    queryKey: ['yearly-report', site.id, year, to.getTime()],
+    queryKey: ['yearly-report', site.id, year, stateKey],
     enabled: from.getTime() < to.getTime(),
     queryFn: async ({ signal }): Promise<Map<string, LiveMonth>> => {
       const months = await summary('month', from, to, signal);
@@ -235,8 +228,10 @@ export function useYearLive(year: number, now: Date) {
       }
       return live;
     },
+    staleTime: complete ? 30 * 60_000 : 60_000,
     placeholderData: (previousData, previousQuery) =>
       previousQuery?.queryKey[1] === site.id ? previousData : undefined,
-    retry: false,
+    retry: retryEnergyQuery,
+    retryDelay: energyRetryDelay,
   });
 }

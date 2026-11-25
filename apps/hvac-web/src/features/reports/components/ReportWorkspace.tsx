@@ -14,7 +14,7 @@ import { METER_SCOPE_LABEL } from '@/features/billing/billing-model';
 import { siteUtilityBillsQuery } from '@/features/billing/query';
 import { DataGapBanner } from '@/features/data-gaps/DataGapBanner';
 import { siteFindingsQuery } from '@/features/diagnostics/query';
-import { copUnavailableText, relativeChange, sanitizeReportedCop, summaryCostBuckets, wallTime } from '@/features/energy-analysis/consumption/model';
+import { copUnavailableText, energyQueryNow, relativeChange, sanitizeReportedCop, summaryCostBuckets, wallTime } from '@/features/energy-analysis/consumption/model';
 import { measuresQuery, summaryQuery } from '@/features/savings/query';
 import { monthToDate, STATUS_LABEL } from '@/features/savings/savings-model';
 import { demandCharges, sumCosts } from '@/features/tariff/tariff-model';
@@ -50,7 +50,7 @@ export function ReportWorkspace() {
   const { site } = siteRoute.useRouteContext();
   const search = useSearch({ from: '/_app/_site/reports' });
   const navigate = useNavigate({ from: '/reports' });
-  const now = useMemo(() => new Date(), []);
+  const now = useMemo(() => energyQueryNow(site.timezone), [site.timezone]);
   const view: ReportView = search.view ?? 'month';
   const months = useMemo(() => recentMonths(now, site.timezone), [now, site.timezone]);
   const month = search.month && months.includes(search.month) ? search.month : months[0];

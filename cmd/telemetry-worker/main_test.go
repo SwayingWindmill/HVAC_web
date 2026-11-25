@@ -852,3 +852,29 @@ func TestDeriveEdgeAlarmEventsURLAndShutdownDrainTarget(t *testing.T) {
 		t.Fatalf("expected EdgeAlarm relay drain on shutdown, got %v", called)
 	}
 }
+
+func TestDrainAnalyticsProjectionOnceStopsAtEmptyAndBoundsBatches(t *testing.T) {
+	if defaultAnalyticsProjectorPollInterval != 3*time.Second {
+		t.Fatalf("defaultAnalyticsProjectorPollInterval=%s, want 3s", defaultAnalyticsProjectorPollInterval)
+	}
+	calls := 0
+	total, err := drainAnalyticsProjectionOnce(t.Context(), func(context.Context) (int, error) {
+		calls++
+		if calls <= 2 {
+			return 5, nil
+		}
+		return 0, nil
+	})
+	if err != nil || total != 10 || calls != 3 {
+		t.Fatalf("drain empty: total=%d calls=%d err=%v, want 10/3/nil", total, calls, err)
+	}
+
+	boundedCalls := 0
+	boundedTotal, err := drainAnalyticsProjectionOnce(t.Context(), func(context.Context) (int, error) {
+		boundedCalls++
+		return 2, nil
+	})
+	if err != nil || boundedCalls != maxAnalyticsProjectionDrainBatches || boundedTotal != 2*maxAnalyticsProjectionDrainBatches {
+		t.Fatalf("drain bounded: total=%d calls=%d err=%v", boundedTotal, boundedCalls, err)
+	}
+}

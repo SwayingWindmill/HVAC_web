@@ -82,7 +82,7 @@ type BackfillRecalcCandidate struct {
 
 // BackfillObservationSource queries incremental late-arrival observation buckets.
 type BackfillObservationSource interface {
-	MaxHistorySequence(ctx context.Context) (uint64, error)
+	MaxHistorySequence(ctx context.Context, afterSeq uint64) (uint64, error)
 	ListBackfillDirtyBuckets(ctx context.Context, afterSeq, throughSeq uint64, minLagSeconds int64, limit int) ([]BackfillDirtyBucket, error)
 	ListBackfillDirtyBucketsAtSequence(ctx context.Context, seq uint64, minLagSeconds int64, afterKey *BackfillBucketCursor, limit int) ([]BackfillDirtyBucket, error)
 }
@@ -209,7 +209,7 @@ func (d *BackfillRecalcDetector) ensureWatermarkInitialized(ctx context.Context,
 			return true, nil
 		}
 	}
-	maxSeq, err := d.source.MaxHistorySequence(ctx)
+	maxSeq, err := d.source.MaxHistorySequence(ctx, 0)
 	if err != nil {
 		return false, err
 	}
@@ -270,7 +270,7 @@ func (d *BackfillRecalcDetector) DetectAndEnqueue(ctx context.Context, now time.
 	if err != nil || !shouldScan {
 		return 0, err
 	}
-	maxAvailSeq, err := d.source.MaxHistorySequence(ctx)
+	maxAvailSeq, err := d.source.MaxHistorySequence(ctx, d.watermark)
 	if err != nil {
 		return 0, err
 	}
@@ -990,9 +990,14 @@ func (s *ClickHouseBackfillSource) query(ctx context.Context, sql string) ([]byt
 	return doClickHouseHTTPQuery(ctx, s.base, s.user, s.password, s.client, http.MethodGet, sql, 4<<20, "metric backfill ClickHouse query")
 }
 
-// MaxHistorySequence returns the maximum observed history_sequence in telemetry_history.observations.
-func (s *ClickHouseBackfillSource) MaxHistorySequence(ctx context.Context) (uint64, error) {
-	body, err := s.query(ctx, "SELECT coalesce(max(history_sequence), 0) FROM telemetry_history.observations FORMAT TabSeparated")
+// MaxHistorySequence returns the maximum observed history_sequence in telemetry_history.observations,
+// filtering above afterSeq when provided so ClickHouse's history_sequence_minmax skip index prunes unchanged parts.
+func (s *ClickHouseBackfillSource) MaxHistorySequence(ctx context.Context, afterSeq uint64) (uint64, error) {
+	query := "SELECT coalesce(max(history_sequence), 0) FROM telemetry_history.observations FORMAT TabSeparated"
+	if afterSeq > 0 {
+		query = fmt.Sprintf("SELECT coalesce(max(history_sequence), 0) FROM telemetry_history.observations WHERE history_sequence > %d FORMAT TabSeparated", afterSeq)
+	}
+	body, err := s.query(ctx, query)
 	if err != nil {
 		return 0, err
 	}

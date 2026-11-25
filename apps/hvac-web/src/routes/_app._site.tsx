@@ -1,5 +1,7 @@
+import { useEffect } from 'react';
 import { Outlet, createFileRoute, redirect } from '@tanstack/react-router';
 import { z } from 'zod';
+import { siteAssetModelEnvelopeQuery } from '@/api/site-asset-model';
 import { RouteAccessError, requireSite } from '@/app/route-access';
 import type { ShellRuntime } from '@/app/shell-runtime';
 import { SiteRealtimeProvider } from '@/features/operations/realtime/site-realtime-context';
@@ -17,6 +19,13 @@ function defaultWorkspaceSiteId(runtime: ShellRuntime): string | undefined {
 }
 
 function SiteWorkspaceLayout() {
+  const { site, principal, queryClient } = Route.useRouteContext();
+  useEffect(() => {
+    if (__HVAC_WEB_FRONTEND_REVIEW__) return;
+    const capabilities = principal.authorization.capabilities;
+    if (!capabilities.includes('asset.read') || !capabilities.includes('device.read')) return;
+    void queryClient.prefetchQuery(siteAssetModelEnvelopeQuery(site.id));
+  }, [principal.authorization.capabilities, queryClient, site.id]);
   return (
     <SiteRealtimeProvider>
       <Outlet />
