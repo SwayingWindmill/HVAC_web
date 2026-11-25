@@ -11,6 +11,7 @@ import {
   periodWindow,
   previousWindow,
   retryEnergyQuery,
+  siteDayKey,
   siteDays,
   summarizeEnergy,
   type EnergyPeriod,
@@ -48,21 +49,14 @@ export function useEnergyReader() {
  */
 export function useEnergyComparison(period: EnergyPeriod) {
   const { site, summary } = useEnergyReader();
-  return useQuery({
-    queryKey: ['energy-series', site.id, 'comparison', period],
+  const dayKey = siteDayKey(energyQueryNow(site.timezone), site.timezone);
+  const currentQuery = useQuery({
+    queryKey: ['energy-series', site.id, 'comparison', period, 'current'],
     queryFn: async ({ signal }) => {
       const now = energyQueryNow(site.timezone);
       const current = periodWindow(period, now, site.timezone);
-      const before = previousWindow(period, now, site.timezone);
-      const [currentSummary, previousSummary] = await Promise.all([
-        summary(current.granularity, current.from, current.to, signal),
-        summary(before.granularity, before.from, before.to, signal),
-      ]);
-      return {
-        current: currentSummary,
-        previous: previousSummary,
-        buckets: comparePeriods(currentSummary, previousSummary, { from: current.from, previousFrom: before.from, now, timeZone: site.timezone }),
-      };
+      const data = await summary(current.granularity, current.from, current.to, signal);
+      return { now, from: current.from, data };
     },
     refetchInterval: 60_000,
     staleTime: 30_000,
@@ -71,6 +65,46 @@ export function useEnergyComparison(period: EnergyPeriod) {
     retry: retryEnergyQuery,
     retryDelay: energyRetryDelay,
   });
+  const previousQuery = useQuery({
+    queryKey: ['energy-series', site.id, 'comparison', period, 'previous', dayKey],
+    queryFn: async ({ signal }) => {
+      const now = energyQueryNow(site.timezone);
+      const before = previousWindow(period, now, site.timezone);
+      const data = await summary(before.granularity, before.from, before.to, signal);
+      return { from: before.from, data };
+    },
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey[1] === site.id ? previousData : undefined,
+    retry: retryEnergyQuery,
+    retryDelay: energyRetryDelay,
+  });
+  const currentData = currentQuery.data;
+  const previousData = previousQuery.data;
+  const data = useMemo(() => {
+    if (!currentData || !previousData) return undefined;
+    return {
+      current: currentData.data,
+      previous: previousData.data,
+      buckets: comparePeriods(currentData.data, previousData.data, {
+        from: currentData.from,
+        previousFrom: previousData.from,
+        now: currentData.now,
+        timeZone: site.timezone,
+      }),
+    };
+  }, [currentData, previousData, site.timezone]);
+
+  const refetch = () => Promise.all([currentQuery.refetch(), previousQuery.refetch()]);
+
+  if (currentQuery.isError || previousQuery.isError) {
+    return { data: undefined, isPending: false as const, isError: true as const, refetch };
+  }
+  if (currentQuery.isPending || previousQuery.isPending || !data) {
+    return { data: undefined, isPending: true as const, isError: false as const, refetch };
+  }
+  return { data, isPending: false as const, isError: false as const, refetch };
 }
 
 /** Today's cumulative Site-local hour energy, shared between overview and digital twin. */

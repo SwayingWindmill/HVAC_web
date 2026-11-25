@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { siteAssetModelQuery } from '@/api/site-asset-model';
-import { periodWindow, siteDayKey } from '@/features/energy-analysis/consumption/model';
+import { periodWindow, previousWindow, siteDayKey } from '@/features/energy-analysis/consumption/model';
 import { siteTariffQuery } from '@/features/tariff/query';
 import { demandCharges, periodAt, periodRanges } from '@/features/tariff/tariff-model';
 import { useNow } from '@/hooks/use-now';
@@ -21,7 +21,7 @@ import { cn } from '@/lib/utils';
 import { demandSummary, type DemandPeak, type QuarterHour } from '../demand-model';
 import { forecastBetween, forecastPeak, hourlyForecast, type LoadForecastPoint } from '../forecast-model';
 import { expensiveSpans, forecastEnergy, loadCurveRows, loadDays, meteredHour, nearestQuarter, type LoadDays } from '../load-model';
-import { plantDemandQuery, plantPowerPoint, siteLoadForecastQuery } from '../query';
+import { plantPowerPoint, siteLoadForecastQuery, useDemandChunks } from '../query';
 import { DailyPeaks, type DailyPeakBar } from './DailyPeaks';
 import { DemandCharge } from './DemandCharge';
 import { ForecastHours, type ForecastHour } from './ForecastHours';
@@ -121,7 +121,21 @@ export function LoadWorkspace() {
 
   const registry = useQuery(siteAssetModelQuery(site.id));
   const point = useMemo(() => (registry.data ? plantPowerPoint(registry.data) : null), [registry.data]);
-  const demand = useQuery(plantDemandQuery({ siteId: site.id, timezone: timeZone, csrfToken: principal.session.csrfToken, point, now: new Date(now) }));
+  const nowDate = useMemo(() => new Date(now), [now]);
+  const demandFrom = useMemo(
+    () => new Date(Math.min(periodWindow('month', nowDate, timeZone).from.getTime(), previousWindow('today', nowDate, timeZone).from.getTime())),
+    [nowDate, timeZone],
+  );
+  const demand = useDemandChunks({
+    siteId: site.id,
+    timezone: timeZone,
+    csrfToken: principal.session.csrfToken,
+    point,
+    from: demandFrom,
+    to: nowDate,
+    now: nowDate,
+    refetchIntervalMs: 60_000,
+  });
   const forecast = useQuery(siteLoadForecastQuery(site.id));
   const tariff = useQuery(siteTariffQuery(site.id));
   // Null when the Site has no Tariff: no price periods, no demand charge.
@@ -191,7 +205,7 @@ export function LoadWorkspace() {
               size="sm"
               onClick={() => {
                 void queryClient.invalidateQueries({ queryKey: ['forecast', site.id] });
-                void queryClient.invalidateQueries({ queryKey: ['demand', site.id] });
+                void queryClient.invalidateQueries({ queryKey: ['demand-chunk', site.id] });
               }}
             >
               <RefreshCw data-icon="inline-start" />

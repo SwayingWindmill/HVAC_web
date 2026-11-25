@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
@@ -46,6 +47,16 @@ type synthesizedHintEntry struct {
 	expiresAt   time.Time
 }
 
+type inFlightCubeLoad struct {
+	done           chan struct{}
+	res            loadResponse
+	err            error
+	mu             sync.Mutex
+	waiters        int
+	cancel         context.CancelFunc
+	inContinueWait atomic.Bool
+}
+
 type Client struct {
 	endpoint          *url.URL
 	datasetRevision   string
@@ -55,6 +66,8 @@ type Client struct {
 	now               func() time.Time
 	synthesizedHintMu sync.RWMutex
 	synthesizedHints  map[string]synthesizedHintEntry
+	inFlightMu        sync.Mutex
+	inFlight          map[string]*inFlightCubeLoad
 }
 
 func defaultContinueWaitDelay(attempt int) time.Duration {
@@ -123,6 +136,7 @@ func NewClient(config Config) (*Client, error) {
 		continueWaitDelay: defaultContinueWaitDelay,
 		now:               time.Now,
 		synthesizedHints:  make(map[string]synthesizedHintEntry),
+		inFlight:          make(map[string]*inFlightCubeLoad),
 	}, nil
 }
 
@@ -212,7 +226,7 @@ func (client *Client) QueryEnergySeries(ctx context.Context, caller analytics.Ca
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			res, err := client.load(runContext, token, query)
+			res, err := client.loadScoped(runContext, token, productQuery.TenantID, productQuery.SiteID, query)
 			if err != nil {
 				errOnce.Do(func() { firstErr = fmt.Errorf("%s: %w", label, err) })
 				cancelRun()
@@ -248,7 +262,7 @@ func (client *Client) QueryEnergySeries(ctx context.Context, caller analytics.Ca
 		if hasSeriesMeta {
 			response, err = mapEnergySeriesWithMetadata(series, seriesWatermark, seriesRevision, seriesSynthesized, productQuery, location, client.datasetRevision)
 		} else {
-			metadata, metaErr = client.load(queryContext, token, buildMetadataQuery(productQuery, location))
+			metadata, metaErr = client.loadScoped(queryContext, token, productQuery.TenantID, productQuery.SiteID, buildMetadataQuery(productQuery, location))
 			if metaErr != nil {
 				return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("query Cube energy metadata: %w", metaErr)
 			}
@@ -267,7 +281,7 @@ func (client *Client) QueryEnergySeries(ctx context.Context, caller analytics.Ca
 		}
 		if response.Metadata.Synthesized && len(response.Points) > 0 {
 			if !prefetchedMissing {
-				missing, err = client.load(queryContext, token, buildMissingMetersQuery(productQuery, location))
+				missing, err = client.loadScoped(queryContext, token, productQuery.TenantID, productQuery.SiteID, buildMissingMetersQuery(productQuery, location))
 				if err != nil {
 					return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("query Cube missing submeters: %w", err)
 				}
@@ -288,10 +302,76 @@ func (client *Client) QueryEnergySeries(ctx context.Context, caller analytics.Ca
 }
 
 func (client *Client) load(ctx context.Context, token string, query cubeQuery) (loadResponse, error) {
+	return client.loadScoped(ctx, token, "token:"+token, "", query)
+}
+
+func (client *Client) loadScoped(ctx context.Context, token, tenantScope, siteScope string, query cubeQuery) (loadResponse, error) {
+	if ctx.Err() != nil {
+		return loadResponse{}, ctx.Err()
+	}
 	body, err := json.Marshal(loadRequest{Query: query})
 	if err != nil {
 		return loadResponse{}, fmt.Errorf("encode Cube query: %w", err)
 	}
+	key := tenantScope + "\x00" + siteScope + "\x00" + string(body)
+
+	client.inFlightMu.Lock()
+	if client.inFlight == nil {
+		client.inFlight = make(map[string]*inFlightCubeLoad)
+	}
+	entry, joined := client.inFlight[key]
+	if joined {
+		entry.mu.Lock()
+		entry.waiters++
+		entry.mu.Unlock()
+		client.inFlightMu.Unlock()
+	} else {
+		upstreamCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), maximumCubeQueryDuration)
+		entry = &inFlightCubeLoad{
+			done:    make(chan struct{}),
+			waiters: 1,
+			cancel:  cancel,
+		}
+		client.inFlight[key] = entry
+		client.inFlightMu.Unlock()
+		go func() {
+			defer cancel()
+			defer func() {
+				client.inFlightMu.Lock()
+				if client.inFlight[key] == entry {
+					delete(client.inFlight, key)
+				}
+				client.inFlightMu.Unlock()
+				close(entry.done)
+			}()
+			entry.res, entry.err = client.executeLoad(upstreamCtx, token, body, &entry.inContinueWait)
+		}()
+	}
+
+	select {
+	case <-entry.done:
+		return entry.res, entry.err
+	case <-ctx.Done():
+		client.inFlightMu.Lock()
+		entry.mu.Lock()
+		entry.waiters--
+		shouldCancel := entry.waiters == 0
+		if shouldCancel && client.inFlight[key] == entry {
+			delete(client.inFlight, key)
+		}
+		entry.mu.Unlock()
+		client.inFlightMu.Unlock()
+		if shouldCancel {
+			entry.cancel()
+		}
+		if entry.inContinueWait.Load() {
+			return loadResponse{}, fmt.Errorf("cube query continue wait timed out: %w", ctx.Err())
+		}
+		return loadResponse{}, ctx.Err()
+	}
+}
+
+func (client *Client) executeLoad(ctx context.Context, token string, body []byte, inContinueWait *atomic.Bool) (loadResponse, error) {
 	delayFn := client.continueWaitDelay
 	if delayFn == nil {
 		delayFn = defaultContinueWaitDelay
@@ -309,6 +389,9 @@ func (client *Client) load(ctx context.Context, token string, query cubeQuery) (
 				return loadResponse{}, fmt.Errorf("cube query failed: %s", decoded.Error)
 			}
 			return decoded, nil
+		}
+		if inContinueWait != nil {
+			inContinueWait.Store(true)
 		}
 		timer := time.NewTimer(delayFn(attempt))
 		select {

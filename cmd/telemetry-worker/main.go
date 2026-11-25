@@ -823,7 +823,7 @@ func loadAnalyticsProjection(certificate tls.Certificate) (analyticsProjectionRu
 	if !strings.EqualFold(strings.TrimSpace(os.Getenv("ANALYTICS_PROJECTION_ENABLED")), "true") {
 		return analyticsProjectionRuntime{ctx: context.Background()}, nil
 	}
-	projectorInterval, err := durationEnv("ANALYTICS_PROJECTOR_POLL_INTERVAL", 500*time.Millisecond, 25*time.Millisecond, time.Minute)
+	projectorInterval, err := durationEnv("ANALYTICS_PROJECTOR_POLL_INTERVAL", defaultAnalyticsProjectorPollInterval, 25*time.Millisecond, time.Minute)
 	if err != nil {
 		return analyticsProjectionRuntime{}, err
 	}
@@ -956,12 +956,35 @@ func loadAnalyticsProjection(certificate tls.Certificate) (analyticsProjectionRu
 	}, nil
 }
 
+const (
+	defaultAnalyticsProjectorPollInterval = 3 * time.Second
+	maxAnalyticsProjectionDrainBatches    = 10
+)
+
+func drainAnalyticsProjectionOnce(ctx context.Context, project func(context.Context) (int, error)) (int, error) {
+	total := 0
+	for batch := 0; batch < maxAnalyticsProjectionDrainBatches; batch++ {
+		if ctx.Err() != nil {
+			break
+		}
+		projected, err := project(ctx)
+		if err != nil {
+			return total, err
+		}
+		total += projected
+		if projected == 0 {
+			break
+		}
+	}
+	return total, nil
+}
+
 func runAnalyticsProjectionCoordinated(ctx context.Context, projector *analyticsprojector.Projector, pollInterval time.Duration, runtime *observability.Runtime, locker leaseLocker, logger *slog.Logger) {
 	if projector == nil {
 		return
 	}
 	if pollInterval <= 0 {
-		pollInterval = 500 * time.Millisecond
+		pollInterval = defaultAnalyticsProjectorPollInterval
 	}
 	lastFailureLog := time.Time{}
 	logger.Info("analytics_read_model_projection_started", "poll_interval", pollInterval.String(), "deployment", "telemetry-runtime-in-process")
@@ -973,8 +996,12 @@ func runAnalyticsProjectionCoordinated(ctx context.Context, projector *analytics
 			"db.system": "clickhouse", "analytics.model": "energy_interval_facts",
 		})
 		projectContext, projectCancel := context.WithTimeout(projectionContext, 20*time.Second)
-		projected, err := projector.ProjectOnce(projectContext)
+		projected, err := drainAnalyticsProjectionOnce(projectContext, projector.ProjectOnce)
 		projectCancel()
+		if projected > 0 {
+			_ = runtime.Metrics.AddCounter("hvac_analytics_energy_intervals_projected_total", "Projected additive energy intervals.", map[string]string{"model": "energy_interval_facts"}, float64(projected))
+			logger.Debug("analytics_energy_intervals_projected", "interval_count", projected)
+		}
 		if err != nil {
 			span.SetStatus("error", "projection failed")
 			span.End()
@@ -987,10 +1014,6 @@ func runAnalyticsProjectionCoordinated(ctx context.Context, projector *analytics
 		}
 		span.SetStatus("ok", "")
 		span.End()
-		if projected > 0 {
-			_ = runtime.Metrics.AddCounter("hvac_analytics_energy_intervals_projected_total", "Projected additive energy intervals.", map[string]string{"model": "energy_interval_facts"}, float64(projected))
-			logger.Debug("analytics_energy_intervals_projected", "interval_count", projected)
-		}
 	})
 }
 

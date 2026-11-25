@@ -58,6 +58,13 @@ export function ConfigurationBlocked({ failures }: { failures: RuntimeConfigFail
 
 const AUTO_START_KEY = 'hvac.sign-in.auto-start';
 const AUTO_START_WINDOW_MS = 10_000;
+const IDLE_PRELOAD_ROUTES = ['/overview', '/energy-analysis/consumption', '/energy-analysis/load', '/reports'] as const;
+
+function prefersReducedData(): boolean {
+  if (typeof navigator === 'undefined' || !('connection' in navigator)) return false;
+  const conn: unknown = Reflect.get(navigator, 'connection');
+  return typeof conn === 'object' && conn !== null && Reflect.get(conn, 'saveData') === true;
+}
 
 function clearAutoStartAttempt(): void {
   try {
@@ -249,6 +256,25 @@ export function AppRuntimeHost({ config, queryClient }: { config: RuntimeConfig;
   const waitingForSites = snapshot.state === 'READY' && !showSignInPage && snapshot.sites?.state === 'checking';
   const bootstrapping = (snapshot.state === 'BOOTSTRAPPING' || waitingForSites) && !showSignInPage;
   const shellReady = snapshot.state === 'READY' && !waitingForSites && !showSignInPage;
+
+  useEffect(() => {
+    if (!shellReady || prefersReducedData()) return;
+    const run = () => {
+      for (const routePath of IDLE_PRELOAD_ROUTES) {
+        preloadPathChunks(resources.router, routePath);
+      }
+    };
+    if (typeof window.requestIdleCallback === 'function' && typeof window.cancelIdleCallback === 'function') {
+      const id = window.requestIdleCallback(run, { timeout: 2000 });
+      return () => {
+        window.cancelIdleCallback(id);
+      };
+    }
+    const timer = window.setTimeout(run, 1500);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [resources.router, shellReady]);
   const centeredUnavailable = snapshot.state === 'UNAVAILABLE' && !showSignInPage;
   // The authenticated shell's SidebarInset is the page's main landmark; other states are their own.
   const Root = shellReady ? 'div' : 'main';

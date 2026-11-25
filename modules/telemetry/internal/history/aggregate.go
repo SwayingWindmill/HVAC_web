@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/telemetryhistorymodel"
@@ -52,10 +53,25 @@ type aggregateRow struct {
 }
 
 type aggregateSnapshotRow struct {
-	SnapshotAt            string  `json:"snapshot_at"`
-	ProjectionWatermark   *string `json:"projection_watermark"`
-	HasConcurrentWrites   uint8   `json:"has_concurrent_writes"`
-	RawGaugeIncludedCount *int64  `json:"raw_gauge_included_count"`
+	SnapshotAt              string  `json:"snapshot_at"`
+	ProjectionWatermark     *string `json:"projection_watermark"`
+	HasConcurrentWrites     uint8   `json:"has_concurrent_writes"`
+	RawGaugeIncludedCount   *int64  `json:"raw_gauge_included_count"`
+	RawCounterIncludedCount *int64  `json:"raw_counter_included_count"`
+	RawStateIncludedCount   *int64  `json:"raw_state_included_count"`
+}
+
+type aggregateSnapshotInfo struct {
+	snapshotAt              time.Time
+	watermark               *time.Time
+	hasConcurrentWrites     bool
+	rawGaugeIncludedCount   *int64
+	rawCounterIncludedCount *int64
+	rawStateIncludedCount   *int64
+}
+
+func countMayHaveRows(count *int64) bool {
+	return count == nil || *count > 0
 }
 
 type calendarPeriod struct {
@@ -78,59 +94,71 @@ func (client *Client) QueryDeviceHistoryAggregate(ctx context.Context, query tel
 	if len(periods) > canonical.Granularity.MaxBucketsPerKey() {
 		return telemetryhistorymodel.DeviceHistoryAggregateResponse{}, errors.New("history aggregate query exceeds bucket limit")
 	}
-	snapshotAt, watermark, hasConcurrentWrites, rawGaugeIncludedCount, err := client.aggregateSnapshot(ctx, canonical)
+	snapshot, err := client.aggregateSnapshot(ctx, canonical)
 	if err != nil {
 		return telemetryhistorymodel.DeviceHistoryAggregateResponse{}, err
 	}
-	gaugeSQL, gaugeParams, usedRollup := client.gaugeAggregateQueryForSnapshot(canonical, snapshotAt, periods, hasConcurrentWrites)
+
+	needGauge := countMayHaveRows(snapshot.rawGaugeIncludedCount)
+	needCounter := countMayHaveRows(snapshot.rawCounterIncludedCount)
+	needState := countMayHaveRows(snapshot.rawStateIncludedCount)
+
+	var tasks []func(context.Context) ([]aggregateRow, error)
+	if needGauge {
+		tasks = append(tasks, func(runCtx context.Context) ([]aggregateRow, error) {
+			return client.executeGaugeAggregate(runCtx, canonical, snapshot, periods)
+		})
+	}
+	if needCounter {
+		tasks = append(tasks, func(runCtx context.Context) ([]aggregateRow, error) {
+			counterSQL, counterParams := client.counterAggregateQuery(canonical, snapshot.snapshotAt)
+			return client.executeAggregateRows(runCtx, counterSQL, counterParams)
+		})
+	}
+	if needState {
+		tasks = append(tasks, func(runCtx context.Context) ([]aggregateRow, error) {
+			stateSQL, stateParams := client.stateAggregateQuery(canonical, snapshot.snapshotAt)
+			return client.executeAggregateRows(runCtx, stateSQL, stateParams)
+		})
+	}
+
 	var rows []aggregateRow
-	needRawFallback := false
-	gaugePayload, err := client.execute(ctx, gaugeSQL, gaugeParams)
-	if err != nil {
-		if !usedRollup || !isRollupTableUnavailable(err) {
-			return telemetryhistorymodel.DeviceHistoryAggregateResponse{}, err
-		}
-		needRawFallback = true
-	} else {
-		rows, err = decodeAggregateRows(gaugePayload)
+	switch len(tasks) {
+	case 0:
+	case 1:
+		rows, err = tasks[0](ctx)
 		if err != nil {
 			return telemetryhistorymodel.DeviceHistoryAggregateResponse{}, err
 		}
-		if usedRollup && (rollupHasConcurrentWrites(rows, snapshotAt) ||
-			(rawGaugeIncludedCount != nil && sumAggregateIncludedCount(rows) != *rawGaugeIncludedCount)) {
-			needRawFallback = true
+	default:
+		results := make([][]aggregateRow, len(tasks))
+		runCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		var (
+			wg      sync.WaitGroup
+			errOnce sync.Once
+			first   error
+		)
+		for idx, task := range tasks {
+			wg.Add(1)
+			go func(index int, fn func(context.Context) ([]aggregateRow, error)) {
+				defer wg.Done()
+				part, partErr := fn(runCtx)
+				if partErr != nil {
+					errOnce.Do(func() { first = partErr })
+					cancel()
+					return
+				}
+				results[index] = part
+			}(idx, task)
 		}
-	}
-	if needRawFallback {
-		rawSQL, rawParams := client.rawGaugeAggregateQuery(canonical, snapshotAt)
-		rawPayload, rawErr := client.execute(ctx, rawSQL, rawParams)
-		if rawErr != nil {
-			return telemetryhistorymodel.DeviceHistoryAggregateResponse{}, rawErr
+		wg.Wait()
+		if first != nil {
+			return telemetryhistorymodel.DeviceHistoryAggregateResponse{}, first
 		}
-		rows, err = decodeAggregateRows(rawPayload)
-		if err != nil {
-			return telemetryhistorymodel.DeviceHistoryAggregateResponse{}, err
+		for _, part := range results {
+			rows = append(rows, part...)
 		}
-	}
-	type clickHouseQuery struct {
-		sql    string
-		params url.Values
-	}
-	counterSQL, counterParams := client.counterAggregateQuery(canonical, snapshotAt)
-	stateSQL, stateParams := client.stateAggregateQuery(canonical, snapshotAt)
-	for _, item := range []clickHouseQuery{
-		{sql: counterSQL, params: counterParams},
-		{sql: stateSQL, params: stateParams},
-	} {
-		payload, err := client.execute(ctx, item.sql, item.params)
-		if err != nil {
-			return telemetryhistorymodel.DeviceHistoryAggregateResponse{}, err
-		}
-		decoded, err := decodeAggregateRows(payload)
-		if err != nil {
-			return telemetryhistorymodel.DeviceHistoryAggregateResponse{}, err
-		}
-		rows = append(rows, decoded...)
 	}
 	buckets := make([]telemetryhistorymodel.DeviceHistoryAggregateBucket, 0, len(rows))
 	for _, row := range rows {
@@ -168,7 +196,7 @@ func (client *Client) QueryDeviceHistoryAggregate(ctx context.Context, query tel
 			Granularity:         canonical.Granularity,
 			Timezone:            canonical.Timezone,
 			QualityPolicy:       canonical.QualityPolicy,
-			ProjectionWatermark: watermark,
+			ProjectionWatermark: snapshot.watermark,
 			ReturnedBuckets:     len(buckets),
 		},
 	}
@@ -178,30 +206,115 @@ func (client *Client) QueryDeviceHistoryAggregate(ctx context.Context, query tel
 	return response, nil
 }
 
-func (client *Client) aggregateSnapshot(ctx context.Context, query telemetryhistorymodel.DeviceHistoryAggregateQuery) (time.Time, *time.Time, bool, *int64, error) {
+func (client *Client) executeAggregateRows(ctx context.Context, sql string, params url.Values) ([]aggregateRow, error) {
+	payload, err := client.execute(ctx, sql, params)
+	if err != nil {
+		return nil, err
+	}
+	return decodeAggregateRows(payload)
+}
+
+func (client *Client) executeGaugeAggregate(ctx context.Context, canonical telemetryhistorymodel.DeviceHistoryAggregateQuery, snapshot aggregateSnapshotInfo, periods []calendarPeriod) ([]aggregateRow, error) {
+	rollupTable, splitAt, ok := client.gaugeRollupPlan(canonical, periods, snapshot.hasConcurrentWrites)
+	if !ok {
+		rawSQL, rawParams := client.rawGaugeAggregateQuery(canonical, snapshot.snapshotAt)
+		return client.executeAggregateRows(ctx, rawSQL, rawParams)
+	}
+	if splitAt.Equal(canonical.To) {
+		rollupSQL, rollupParams := client.rollupGaugeAggregateQuery(canonical, rollupTable)
+		rows, err := client.executeAggregateRows(ctx, rollupSQL, rollupParams)
+		if err == nil && !rollupHasConcurrentWrites(rows, snapshot.snapshotAt) &&
+			(snapshot.rawGaugeIncludedCount == nil || sumAggregateIncludedCount(rows) == *snapshot.rawGaugeIncludedCount) {
+			return rows, nil
+		}
+		if err != nil && !isRollupTableUnavailable(err) {
+			return nil, err
+		}
+		rawSQL, rawParams := client.rawGaugeAggregateQuery(canonical, snapshot.snapshotAt)
+		return client.executeAggregateRows(ctx, rawSQL, rawParams)
+	}
+
+	prefixQuery := canonical
+	prefixQuery.To = splitAt
+	tailQuery := canonical
+	tailQuery.From = splitAt
+	rollupSQL, rollupParams := client.rollupGaugeAggregateQuery(prefixQuery, rollupTable)
+	tailSQL, tailParams := client.rawGaugeAggregateQuery(tailQuery, snapshot.snapshotAt)
+
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var (
+		wg         sync.WaitGroup
+		prefixRows []aggregateRow
+		tailRows   []aggregateRow
+		prefixErr  error
+		tailErr    error
+	)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		prefixRows, prefixErr = client.executeAggregateRows(runCtx, rollupSQL, rollupParams)
+		if prefixErr != nil && !isRollupTableUnavailable(prefixErr) {
+			cancel()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		tailRows, tailErr = client.executeAggregateRows(runCtx, tailSQL, tailParams)
+		if tailErr != nil {
+			cancel()
+		}
+	}()
+	wg.Wait()
+
+	if tailErr != nil {
+		return nil, tailErr
+	}
+	if prefixErr != nil && !isRollupTableUnavailable(prefixErr) {
+		return nil, prefixErr
+	}
+	if prefixErr == nil && !rollupHasConcurrentWrites(prefixRows, snapshot.snapshotAt) &&
+		(snapshot.rawGaugeIncludedCount == nil || sumAggregateIncludedCount(prefixRows)+sumAggregateIncludedCount(tailRows) == *snapshot.rawGaugeIncludedCount) {
+		combined := make([]aggregateRow, 0, len(prefixRows)+len(tailRows))
+		combined = append(combined, prefixRows...)
+		combined = append(combined, tailRows...)
+		return combined, nil
+	}
+	rawSQL, rawParams := client.rawGaugeAggregateQuery(canonical, snapshot.snapshotAt)
+	return client.executeAggregateRows(ctx, rawSQL, rawParams)
+}
+
+func (client *Client) aggregateSnapshot(ctx context.Context, query telemetryhistorymodel.DeviceHistoryAggregateQuery) (aggregateSnapshotInfo, error) {
 	sql, params := client.aggregateSnapshotQuery(query)
 	payload, err := client.execute(ctx, sql, params)
 	if err != nil {
-		return time.Time{}, nil, false, nil, err
+		return aggregateSnapshotInfo{}, err
 	}
 	var row aggregateSnapshotRow
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	if err := decoder.Decode(&row); err != nil {
-		return time.Time{}, nil, false, nil, fmt.Errorf("decode ClickHouse aggregate snapshot: %w", err)
+		return aggregateSnapshotInfo{}, fmt.Errorf("decode ClickHouse aggregate snapshot: %w", err)
 	}
 	snapshotAt, err := parseClickHouseTime(row.SnapshotAt)
 	if err != nil {
-		return time.Time{}, nil, false, nil, fmt.Errorf("decode ClickHouse aggregate snapshot time: %w", err)
+		return aggregateSnapshotInfo{}, fmt.Errorf("decode ClickHouse aggregate snapshot time: %w", err)
 	}
 	var watermark *time.Time
 	if row.ProjectionWatermark != nil && strings.TrimSpace(*row.ProjectionWatermark) != "" {
 		parsed, err := parseClickHouseTime(*row.ProjectionWatermark)
 		if err != nil {
-			return time.Time{}, nil, false, nil, fmt.Errorf("decode ClickHouse aggregate projection watermark: %w", err)
+			return aggregateSnapshotInfo{}, fmt.Errorf("decode ClickHouse aggregate projection watermark: %w", err)
 		}
 		watermark = &parsed
 	}
-	return snapshotAt, watermark, row.HasConcurrentWrites != 0, row.RawGaugeIncludedCount, nil
+	return aggregateSnapshotInfo{
+		snapshotAt:              snapshotAt,
+		watermark:               watermark,
+		hasConcurrentWrites:     row.HasConcurrentWrites != 0,
+		rawGaugeIncludedCount:   row.RawGaugeIncludedCount,
+		rawCounterIncludedCount: row.RawCounterIncludedCount,
+		rawStateIncludedCount:   row.RawStateIncludedCount,
+	}, nil
 }
 
 func isRollupTableUnavailable(err error) bool {
@@ -396,8 +509,10 @@ SELECT
   formatDateTime(snapshot_cutoff, '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS snapshot_at,
   if(countIf(projected_at < snapshot_cutoff) = 0, CAST(NULL, 'Nullable(String)'), formatDateTime(maxIf(projected_at, projected_at < snapshot_cutoff), '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC')) AS projection_watermark,
   if(countIf(projected_at >= snapshot_cutoff) > 0, toUInt8(1), toUInt8(0)) AS has_concurrent_writes,
-  toInt64(countIf(projected_at < snapshot_cutoff AND ifNull(point_type, '') IN ('TELEMETRY', 'SETTING') AND ifNull(value_type, '') = 'NUMBER' AND value_number IS NOT NULL AND ifNull(isFinite(value_number), 0) = 1 AND %s)) AS raw_gauge_included_count
-FROM %s.%s
+  toInt64(countIf(projected_at < snapshot_cutoff AND ifNull(point_type, '') IN ('TELEMETRY', 'SETTING') AND ifNull(value_type, '') = 'NUMBER' AND value_number IS NOT NULL AND ifNull(isFinite(value_number), 0) = 1 AND %[1]s)) AS raw_gauge_included_count,
+  toInt64(countIf(projected_at < snapshot_cutoff AND ifNull(point_type, '') = 'COUNTER' AND ifNull(value_type, '') = 'NUMBER' AND value_number IS NOT NULL AND ifNull(isFinite(value_number), 0) = 1 AND %[1]s)) AS raw_counter_included_count,
+  toInt64(countIf(projected_at < snapshot_cutoff AND ((ifNull(point_type, '') = 'STATE' AND ifNull(value_type, '') IN ('STRING', 'BOOLEAN', 'JSON', 'NUMBER')) OR (ifNull(point_type, '') IN ('TELEMETRY', 'SETTING') AND ifNull(value_type, '') IN ('STRING', 'BOOLEAN', 'JSON'))) AND value_json IS NOT NULL AND %[1]s)) AS raw_state_included_count
+FROM %[2]s.%[3]s
 WHERE tenant_id = toUUID({tenant_id:UUID})
   AND site_id = toUUID({site_id:UUID})
   AND device_id = toUUID({device_id:UUID})
@@ -412,7 +527,7 @@ FORMAT JSONEachRow`, included, client.database, client.table)
 }
 
 func (client *Client) gaugeAggregateQueryForSnapshot(query telemetryhistorymodel.DeviceHistoryAggregateQuery, snapshotAt time.Time, periods []calendarPeriod, hasConcurrentWrites bool) (string, url.Values, bool) {
-	if rollupTable, ok := client.gaugeRollupTable(query, periods, hasConcurrentWrites); ok {
+	if rollupTable, splitAt, ok := client.gaugeRollupPlan(query, periods, hasConcurrentWrites); ok && splitAt.Equal(query.To) {
 		sql, params := client.rollupGaugeAggregateQuery(query, rollupTable)
 		return sql, params, true
 	}
@@ -420,9 +535,9 @@ func (client *Client) gaugeAggregateQueryForSnapshot(query telemetryhistorymodel
 	return sql, params, false
 }
 
-func (client *Client) gaugeRollupTable(query telemetryhistorymodel.DeviceHistoryAggregateQuery, periods []calendarPeriod, hasConcurrentWrites bool) (string, bool) {
+func (client *Client) gaugeRollupPlan(query telemetryhistorymodel.DeviceHistoryAggregateQuery, periods []calendarPeriod, hasConcurrentWrites bool) (string, time.Time, bool) {
 	if client == nil || client.database != "telemetry_history" || client.table != "observations" || hasConcurrentWrites {
-		return "", false
+		return "", time.Time{}, false
 	}
 	var step time.Duration
 	var table string
@@ -438,21 +553,26 @@ func (client *Client) gaugeRollupTable(query telemetryhistorymodel.DeviceHistory
 		step = 15 * time.Minute
 		table = "telemetry_history.numeric_gauge_15min_states"
 	default:
-		return "", false
+		return "", time.Time{}, false
 	}
 	location, err := time.LoadLocation(query.Timezone)
 	if err != nil {
-		return "", false
+		return "", time.Time{}, false
 	}
-	if !alignedToStepAndTimezone(query.From, location, step) || !alignedToStepAndTimezone(query.To, location, step) {
-		return "", false
+	if !alignedToStepAndTimezone(query.From, location, step) {
+		return "", time.Time{}, false
 	}
+	var lastAlignedEnd time.Time
 	for _, period := range periods {
 		if !alignedToStepAndTimezone(period.Start, location, step) || !alignedToStepAndTimezone(period.End, location, step) {
-			return "", false
+			break
 		}
+		lastAlignedEnd = period.End
 	}
-	return table, true
+	if !lastAlignedEnd.After(query.From) {
+		return "", time.Time{}, false
+	}
+	return table, lastAlignedEnd, true
 }
 
 func alignedToStepAndTimezone(ts time.Time, location *time.Location, step time.Duration) bool {

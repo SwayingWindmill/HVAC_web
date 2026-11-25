@@ -19,6 +19,38 @@ export interface DemandPeak {
   readonly demandKW: number;
 }
 
+/** Align a demand window's end to the next quarter-hour unless it already lands on one, so ClickHouse uses 15-minute rollups cleanly. */
+export function alignDemandEndToQuarter(instant: Date): Date {
+  const ms = instant.getTime();
+  if (ms % QUARTER_HOUR_MS === 0) return instant;
+  return new Date(Math.floor(ms / QUARTER_HOUR_MS) * QUARTER_HOUR_MS + QUARTER_HOUR_MS);
+}
+
+export interface DemandChunkWindow {
+  readonly from: Date;
+  readonly to: Date;
+  readonly queryTo: Date;
+  readonly closed: boolean;
+}
+
+/** Split `[from, to)` into owner-sized chunks, marking immutable completed chunks as `closed` for long-lived caching. */
+export function demandChunkWindows(from: Date, to: Date, nowMs = Date.now()): DemandChunkWindow[] {
+  const currentQuarterStartMs = Math.floor(nowMs / QUARTER_HOUR_MS) * QUARTER_HOUR_MS;
+  const windows: DemandChunkWindow[] = [];
+  for (let start = from.getTime(); start < to.getTime(); start += CHUNK_MS) {
+    const endMs = Math.min(start + CHUNK_MS, to.getTime());
+    const end = new Date(endMs);
+    const closed = endMs <= currentQuarterStartMs;
+    windows.push({
+      from: new Date(start),
+      to: end,
+      queryTo: closed ? end : alignDemandEndToQuarter(end),
+      closed,
+    });
+  }
+  return windows;
+}
+
 /** The windows to read: from the earlier of the month's and yesterday's start, up to now, in owner-sized chunks. */
 export function demandWindows(now: Date, timeZone: string): { from: Date; to: Date }[] {
   const from = Math.min(periodWindow('month', now, timeZone).from.getTime(), previousWindow('today', now, timeZone).from.getTime());

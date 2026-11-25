@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -994,4 +995,228 @@ func TestClientPrefetchesMissingSubmetersInParallelForSynthesizedSite(t *testing
 			t.Fatal(err)
 		}
 	}
+}
+
+func TestClientCoalescesIdenticalInFlightLoadsPerTenantAndSite(t *testing.T) {
+	t.Run("coalesces concurrent plain and breakdown requests on identical site queries", func(t *testing.T) {
+		var (
+			seriesCalls    atomic.Int32
+			costCalls      atomic.Int32
+			equipmentCalls atomic.Int32
+			gate           = make(chan struct{})
+			closeGateOnce  sync.Once
+			releaseGate    = func() { closeGateOnce.Do(func() { close(gate) }) }
+		)
+		defer releaseGate()
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			var decoded loadRequest
+			if err := json.NewDecoder(request.Body).Decode(&decoded); err != nil {
+				t.Fatal(err)
+			}
+			writer.Header().Set("Content-Type", "application/json")
+			switch {
+			case len(decoded.Query.Measures) > 0 && decoded.Query.Measures[0] == "site_energy.energy_valid_kwh":
+				seriesCalls.Add(1)
+				select {
+				case <-gate:
+				case <-request.Context().Done():
+					return
+				}
+				_, _ = writer.Write([]byte(`{"data":[{"site_energy.period_end.day":"2026-07-01T00:00:00.000","site_energy.energy_valid_kwh":"100","site_energy.cross_gap_valid_kwh":null,"site_energy.valid_count":"2","site_energy.suspect_count":"0","site_energy.invalid_count":"0","site_energy.max_data_watermark":"2026-07-01T10:00:00.000Z","site_energy.max_dataset_revision":"10","site_energy.synthesized_total":"0"}]}`))
+			case len(decoded.Query.Measures) > 0 && strings.HasPrefix(decoded.Query.Measures[0], "site_energy_cost."):
+				costCalls.Add(1)
+				select {
+				case <-gate:
+				case <-request.Context().Done():
+					return
+				}
+				_, _ = writer.Write([]byte(`{"data":[{"site_energy_cost.period_end.day":"2026-07-01T00:00:00.000","site_energy_cost.tariff_period":"PEAK","site_energy_cost.cost_valid_cny":"120","site_energy_cost.priced_valid_kwh":"100","site_energy_cost.unpriced_valid_kwh":"0","site_energy_cost.cross_gap_cost_valid_cny":"0","site_energy_cost.cross_gap_priced_valid_kwh":"0","site_energy_cost.cross_gap_unpriced_valid_kwh":"0"}]}`))
+			case len(decoded.Query.Dimensions) == 1 && decoded.Query.Dimensions[0] == "equipment_energy.equipment_id":
+				equipmentCalls.Add(1)
+				select {
+				case <-gate:
+				case <-request.Context().Done():
+					return
+				}
+				_, _ = writer.Write([]byte(`{"data":[{"equipment_energy.equipment_id":"018f1e00-4000-7000-8000-000000000011","equipment_energy.period_end.day":"2026-07-01T00:00:00.000","equipment_energy.energy_valid_kwh":"60","equipment_energy.cross_gap_valid_kwh":null}]}`))
+			default:
+				_, _ = writer.Write([]byte(`{"data":[{"site_energy.max_data_watermark":"2026-07-01T10:00:00.000Z","site_energy.max_dataset_revision":"10","site_energy.synthesized_total":"0"}]}`))
+			}
+		}))
+		defer server.Close()
+
+		client, err := NewClient(Config{BaseURL: server.URL, DatasetRevision: "energy:v1", TokenFactory: fixedTokenFactory{}, HTTPClient: server.Client()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		plainQuery := validCubeEnergyQuery()
+		breakdownQuery := plainQuery
+		breakdownQuery.Breakdown = analyticsmodel.EnergyBreakdownDevice
+
+		var (
+			wg              sync.WaitGroup
+			plainResp       analyticsmodel.EnergySeriesResponse
+			breakdownResp   analyticsmodel.EnergySeriesResponse
+			plainErr, bdErr error
+		)
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			plainResp, plainErr = client.QueryEnergySeries(context.Background(), analytics.CallerContext{PrincipalID: "user-1", PolicyRevision: "policy-1"}, plainQuery)
+		}()
+		go func() {
+			defer wg.Done()
+			breakdownResp, bdErr = client.QueryEnergySeries(context.Background(), analytics.CallerContext{PrincipalID: "user-1", PolicyRevision: "policy-1"}, breakdownQuery)
+		}()
+		// Wait deterministically until both in-flight coalesced entries have >= 2 waiters registered (no sleep).
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			client.inFlightMu.Lock()
+			maxWaiters := 0
+			entryCount := len(client.inFlight)
+			for _, entry := range client.inFlight {
+				entry.mu.Lock()
+				if entry.waiters > maxWaiters {
+					maxWaiters = entry.waiters
+				}
+				entry.mu.Unlock()
+			}
+			client.inFlightMu.Unlock()
+			if entryCount == 3 && maxWaiters >= 2 {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for coalesced waiters: entries=%d maxWaiters=%d", entryCount, maxWaiters)
+			}
+			runtime.Gosched()
+		}
+		releaseGate()
+		wg.Wait()
+
+		if plainErr != nil || bdErr != nil {
+			t.Fatalf("plainErr=%v bdErr=%v", plainErr, bdErr)
+		}
+		if seriesCalls.Load() != 1 || costCalls.Load() != 1 || equipmentCalls.Load() != 1 {
+			t.Fatalf("expected coalesced calls 1/1/1, got series=%d cost=%d equipment=%d", seriesCalls.Load(), costCalls.Load(), equipmentCalls.Load())
+		}
+		if len(plainResp.Points) != 1 || len(breakdownResp.Points) != 1 || len(breakdownResp.Devices) != 1 {
+			t.Fatalf("unexpected responses: plain=%#v breakdown=%#v", plainResp, breakdownResp)
+		}
+	})
+
+	t.Run("never shares in-flight loads across different tenants and handles partial cancellation", func(t *testing.T) {
+		var calls atomic.Int32
+		entered := make(chan struct{}, 8)
+		canceledUpstream := make(chan struct{}, 8)
+		var release atomic.Pointer[chan struct{}]
+		phase1 := make(chan struct{})
+		release.Store(&phase1)
+		var closePhase1 sync.Once
+		defer closePhase1.Do(func() { close(phase1) })
+
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			// Drain request body so net/http activates background EOF monitoring for client cancellation.
+			_, _ = io.Copy(io.Discard, request.Body)
+			calls.Add(1)
+			entered <- struct{}{}
+			gate := *release.Load()
+			select {
+			case <-gate:
+				writer.Header().Set("Content-Type", "application/json")
+				_, _ = writer.Write([]byte(`{"data":[{"site_energy.period_end.day":"2026-07-01T00:00:00.000"}]}`))
+			case <-request.Context().Done():
+				canceledUpstream <- struct{}{}
+			}
+		}))
+		defer server.Close()
+
+		client, err := NewClient(Config{BaseURL: server.URL, DatasetRevision: "energy:v1", TokenFactory: fixedTokenFactory{}, HTTPClient: server.Client()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		q := buildSeriesQuery(validCubeEnergyQuery(), time.UTC)
+
+		// Different tenants must stay isolated.
+		ctxA, cancelA := context.WithCancel(context.Background())
+		var wg sync.WaitGroup
+		var errA, errB, errTenant2 error
+		wg.Add(3)
+		go func() { defer wg.Done(); _, errA = client.loadScoped(ctxA, "tok", testCubeTenantID, testCubeSiteID, q) }()
+		<-entered
+		go func() {
+			defer wg.Done()
+			_, errB = client.loadScoped(context.Background(), "tok", testCubeTenantID, testCubeSiteID, q)
+		}()
+		go func() {
+			defer wg.Done()
+			_, errTenant2 = client.loadScoped(context.Background(), "tok", "018f1d00-0000-7000-8000-000000000099", testCubeSiteID, q)
+		}()
+		<-entered
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			client.inFlightMu.Lock()
+			var firstEntry *inFlightCubeLoad
+			for k, entry := range client.inFlight {
+				if strings.HasPrefix(k, testCubeTenantID+"\x00") {
+					firstEntry = entry
+					break
+				}
+			}
+			waiters := 0
+			if firstEntry != nil {
+				firstEntry.mu.Lock()
+				waiters = firstEntry.waiters
+				firstEntry.mu.Unlock()
+			}
+			client.inFlightMu.Unlock()
+			if waiters == 2 {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for second waiter on same tenant/site key")
+			}
+			runtime.Gosched()
+		}
+
+		// Cancelling A leaves B waiting cleanly; upstream must NOT cancel.
+		cancelA()
+		closePhase1.Do(func() { close(phase1) })
+		wg.Wait()
+		if errA == nil || errB != nil || errTenant2 != nil {
+			t.Fatalf("unexpected errs: errA=%v errB=%v errTenant2=%v", errA, errB, errTenant2)
+		}
+		if calls.Load() != 2 {
+			t.Fatalf("expected 2 isolated upstream calls (one per tenant), got %d", calls.Load())
+		}
+
+		// When all waiters cancel, upstream cancels too and immediately evicts the in-flight key.
+		phase2 := make(chan struct{})
+		release.Store(&phase2)
+		var closePhase2 sync.Once
+		defer closePhase2.Do(func() { close(phase2) })
+		soleCtx, cancelSole := context.WithCancel(context.Background())
+		var soleErr error
+		var soleWG sync.WaitGroup
+		soleWG.Add(1)
+		go func() {
+			defer soleWG.Done()
+			_, soleErr = client.loadScoped(soleCtx, "tok", testCubeTenantID, testCubeSiteID, q)
+		}()
+		<-entered
+		cancelSole()
+		soleWG.Wait()
+		if soleErr == nil {
+			t.Fatal("expected sole caller cancel error")
+		}
+		select {
+		case <-canceledUpstream:
+		case <-time.After(time.Second):
+			t.Fatal("expected upstream Cube HTTP request to cancel when last waiter left")
+		}
+		closePhase2.Do(func() { close(phase2) })
+		// Follow-up identical request must succeed immediately rather than joining the canceled call.
+		if _, err := client.loadScoped(context.Background(), "tok", testCubeTenantID, testCubeSiteID, q); err != nil {
+			t.Fatalf("follow-up loadScoped() error = %v", err)
+		}
+	})
 }

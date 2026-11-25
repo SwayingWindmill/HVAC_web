@@ -374,25 +374,30 @@ func TestQueryDeviceHistoryAggregateEndToEndRollupAndConcurrentFallback(t *testi
 	t.Run("routes aligned query to numeric_gauge_15min_states", func(t *testing.T) {
 		var mu sync.Mutex
 		var queries []string
-		var paramsList []url.Values
-		responses := []string{
-			`{"snapshot_at":"2026-10-11T02:05:00.000Z","projection_watermark":"2026-10-11T02:04:00.000Z","has_concurrent_writes":0}` + "\n",
-			`{"telemetry_key":"zone.temperature","point_id":"` + historyPointID + `","point_revision":1,"point_type":"TELEMETRY","unit":"Cel","period_start":"2026-10-11T00:00:00.000Z","period_end":"2026-10-11T01:00:00.000Z","good_count":4,"partial_count":0,"estimated_count":0,"manual_count":0,"stale_count":1,"invalid_count":1,"total_count":6,"included_count":4,"average":22.5,"minimum":21.0,"maximum":24.0,"first":21.0,"last":24.0,"delta_sum":null,"delta_count":0,"reset_count":0,"rollover_count":0,"excluded_transition_count":0,"state_value_type":null,"state_last_value":null,"state_sample_count":0,"state_change_count":0,"state_values":[],"max_projected_at":"2026-10-11T02:04:00.000Z"}` + "\n",
-			"",
-			"",
-		}
+		var rollupSQL string
+		var rollupParams url.Values
+		snapshotReply := `{"snapshot_at":"2026-10-11T02:05:00.000Z","projection_watermark":"2026-10-11T02:04:00.000Z","has_concurrent_writes":0}` + "\n"
+		rollupReply := `{"telemetry_key":"zone.temperature","point_id":"` + historyPointID + `","point_revision":1,"point_type":"TELEMETRY","unit":"Cel","period_start":"2026-10-11T00:00:00.000Z","period_end":"2026-10-11T01:00:00.000Z","good_count":4,"partial_count":0,"estimated_count":0,"manual_count":0,"stale_count":1,"invalid_count":1,"total_count":6,"included_count":4,"average":22.5,"minimum":21.0,"maximum":24.0,"first":21.0,"last":24.0,"delta_sum":null,"delta_count":0,"reset_count":0,"rollover_count":0,"excluded_transition_count":0,"state_value_type":null,"state_last_value":null,"state_sample_count":0,"state_change_count":0,"state_values":[],"max_projected_at":"2026-10-11T02:04:00.000Z"}` + "\n"
 		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 			raw, err := io.ReadAll(request.Body)
 			if err != nil {
 				t.Fatal(err)
 			}
+			sql := string(raw)
 			mu.Lock()
-			queries = append(queries, string(raw))
-			paramsList = append(paramsList, request.URL.Query())
-			idx := len(queries) - 1
+			queries = append(queries, sql)
+			if strings.Contains(sql, "FROM telemetry_history.numeric_gauge_15min_states") {
+				rollupSQL = sql
+				rollupParams = request.URL.Query()
+			}
 			mu.Unlock()
 			writer.Header().Set("Content-Type", "application/x-ndjson")
-			_, _ = writer.Write([]byte(responses[idx]))
+			switch {
+			case strings.Contains(sql, "AS snapshot_cutoff"):
+				_, _ = writer.Write([]byte(snapshotReply))
+			case strings.Contains(sql, "FROM telemetry_history.numeric_gauge_15min_states"):
+				_, _ = writer.Write([]byte(rollupReply))
+			}
 		}))
 		defer server.Close()
 
@@ -413,15 +418,15 @@ func TestQueryDeviceHistoryAggregateEndToEndRollupAndConcurrentFallback(t *testi
 		if len(resp.Buckets) != 1 || resp.Buckets[0].Gauge == nil || resp.Buckets[0].Gauge.Average != 22.5 || resp.Buckets[0].Quality.Invalid != 1 {
 			t.Fatalf("unexpected aggregate response=%#v", resp)
 		}
-		if len(queries) != 4 || !strings.Contains(queries[1], "FROM telemetry_history.numeric_gauge_15min_states") {
+		if len(queries) != 4 || rollupSQL == "" {
 			t.Fatalf("expected 4 queries with rollup gauge query, got %d:\n%s", len(queries), strings.Join(queries, "\n---\n"))
 		}
-		if strings.Contains(queries[1], historyTenantID) ||
-			paramsList[1].Get("param_tenant_id") != historyTenantID ||
-			paramsList[1].Get("param_from_utc") != "2026-10-11 00:00:00" ||
-			paramsList[1].Get("param_to_utc") != "2026-10-11 01:00:00" ||
-			paramsList[1].Get("param_timezone") != "UTC" {
-			t.Fatalf("rollup request did not send parameterized URL args cleanly: params=%#v\n%s", paramsList[1], queries[1])
+		if strings.Contains(rollupSQL, historyTenantID) ||
+			rollupParams.Get("param_tenant_id") != historyTenantID ||
+			rollupParams.Get("param_from_utc") != "2026-10-11 00:00:00" ||
+			rollupParams.Get("param_to_utc") != "2026-10-11 01:00:00" ||
+			rollupParams.Get("param_timezone") != "UTC" {
+			t.Fatalf("rollup request did not send parameterized URL args cleanly: params=%#v\n%s", rollupParams, rollupSQL)
 		}
 		if !strings.Contains(queries[0], "has_concurrent_writes") {
 			t.Fatalf("snapshot query missing has_concurrent_writes:\n%s", queries[0])
@@ -431,23 +436,28 @@ func TestQueryDeviceHistoryAggregateEndToEndRollupAndConcurrentFallback(t *testi
 	t.Run("falls back to raw observations when snapshot reports concurrent writes", func(t *testing.T) {
 		var mu sync.Mutex
 		var queries []string
-		responses := []string{
-			`{"snapshot_at":"2026-10-11T02:05:00.000Z","projection_watermark":"2026-10-11T02:04:00.000Z","has_concurrent_writes":1}` + "\n",
-			`{"telemetry_key":"zone.temperature","point_id":"` + historyPointID + `","point_revision":1,"point_type":"TELEMETRY","unit":"Cel","period_start":"2026-10-11T00:00:00.000Z","period_end":"2026-10-11T01:00:00.000Z","good_count":4,"partial_count":0,"estimated_count":0,"manual_count":0,"stale_count":0,"invalid_count":0,"total_count":4,"included_count":4,"average":23.0,"minimum":23.0,"maximum":23.0,"first":23.0,"last":23.0,"delta_sum":null,"delta_count":0,"reset_count":0,"rollover_count":0,"excluded_transition_count":0,"state_value_type":null,"state_last_value":null,"state_sample_count":0,"state_change_count":0,"state_values":[]}` + "\n",
-			"",
-			"",
-		}
+		var rawGaugeSQL string
+		snapshotReply := `{"snapshot_at":"2026-10-11T02:05:00.000Z","projection_watermark":"2026-10-11T02:04:00.000Z","has_concurrent_writes":1}` + "\n"
+		rawReply := `{"telemetry_key":"zone.temperature","point_id":"` + historyPointID + `","point_revision":1,"point_type":"TELEMETRY","unit":"Cel","period_start":"2026-10-11T00:00:00.000Z","period_end":"2026-10-11T01:00:00.000Z","good_count":4,"partial_count":0,"estimated_count":0,"manual_count":0,"stale_count":0,"invalid_count":0,"total_count":4,"included_count":4,"average":23.0,"minimum":23.0,"maximum":23.0,"first":23.0,"last":23.0,"delta_sum":null,"delta_count":0,"reset_count":0,"rollover_count":0,"excluded_transition_count":0,"state_value_type":null,"state_last_value":null,"state_sample_count":0,"state_change_count":0,"state_values":[]}` + "\n"
 		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 			raw, err := io.ReadAll(request.Body)
 			if err != nil {
 				t.Fatal(err)
 			}
+			sql := string(raw)
 			mu.Lock()
-			queries = append(queries, string(raw))
-			idx := len(queries) - 1
+			queries = append(queries, sql)
+			if strings.Contains(sql, "avgIf(") && strings.Contains(sql, "FROM telemetry_history.observations") {
+				rawGaugeSQL = sql
+			}
 			mu.Unlock()
 			writer.Header().Set("Content-Type", "application/x-ndjson")
-			_, _ = writer.Write([]byte(responses[idx]))
+			switch {
+			case strings.Contains(sql, "AS snapshot_cutoff"):
+				_, _ = writer.Write([]byte(snapshotReply))
+			case strings.Contains(sql, "avgIf(") && strings.Contains(sql, "FROM telemetry_history.observations"):
+				_, _ = writer.Write([]byte(rawReply))
+			}
 		}))
 		defer server.Close()
 
@@ -468,7 +478,7 @@ func TestQueryDeviceHistoryAggregateEndToEndRollupAndConcurrentFallback(t *testi
 		if len(resp.Buckets) != 1 || resp.Buckets[0].Gauge == nil || resp.Buckets[0].Gauge.Average != 23.0 {
 			t.Fatalf("unexpected fallback response=%#v", resp)
 		}
-		if len(queries) != 4 || !strings.Contains(queries[1], "FROM telemetry_history.observations") {
+		if len(queries) != 4 || rawGaugeSQL == "" {
 			t.Fatalf("expected raw observations fallback, got:\n%s", strings.Join(queries, "\n---\n"))
 		}
 	})
@@ -476,24 +486,34 @@ func TestQueryDeviceHistoryAggregateEndToEndRollupAndConcurrentFallback(t *testi
 	t.Run("falls back to raw observations when rollup row reveals post-snapshot write", func(t *testing.T) {
 		var mu sync.Mutex
 		var queries []string
-		responses := []string{
-			`{"snapshot_at":"2026-10-11T02:05:00.000Z","projection_watermark":"2026-10-11T02:04:00.000Z","has_concurrent_writes":0}` + "\n",
-			`{"telemetry_key":"zone.temperature","point_id":"` + historyPointID + `","point_revision":1,"point_type":"TELEMETRY","unit":"Cel","period_start":"2026-10-11T00:00:00.000Z","period_end":"2026-10-11T01:00:00.000Z","good_count":5,"partial_count":0,"estimated_count":0,"manual_count":0,"stale_count":0,"invalid_count":0,"total_count":5,"included_count":5,"average":99.0,"minimum":23.0,"maximum":99.0,"first":23.0,"last":99.0,"delta_sum":null,"delta_count":0,"reset_count":0,"rollover_count":0,"excluded_transition_count":0,"state_value_type":null,"state_last_value":null,"state_sample_count":0,"state_change_count":0,"state_values":[],"max_projected_at":"2026-10-11T02:05:00.010Z"}` + "\n",
-			`{"telemetry_key":"zone.temperature","point_id":"` + historyPointID + `","point_revision":1,"point_type":"TELEMETRY","unit":"Cel","period_start":"2026-10-11T00:00:00.000Z","period_end":"2026-10-11T01:00:00.000Z","good_count":4,"partial_count":0,"estimated_count":0,"manual_count":0,"stale_count":0,"invalid_count":0,"total_count":4,"included_count":4,"average":23.0,"minimum":23.0,"maximum":23.0,"first":23.0,"last":23.0,"delta_sum":null,"delta_count":0,"reset_count":0,"rollover_count":0,"excluded_transition_count":0,"state_value_type":null,"state_last_value":null,"state_sample_count":0,"state_change_count":0,"state_values":[]}` + "\n",
-			"",
-			"",
-		}
+		var sawRollup, sawRawFallback bool
+		snapshotReply := `{"snapshot_at":"2026-10-11T02:05:00.000Z","projection_watermark":"2026-10-11T02:04:00.000Z","has_concurrent_writes":0}` + "\n"
+		rollupReply := `{"telemetry_key":"zone.temperature","point_id":"` + historyPointID + `","point_revision":1,"point_type":"TELEMETRY","unit":"Cel","period_start":"2026-10-11T00:00:00.000Z","period_end":"2026-10-11T01:00:00.000Z","good_count":5,"partial_count":0,"estimated_count":0,"manual_count":0,"stale_count":0,"invalid_count":0,"total_count":5,"included_count":5,"average":99.0,"minimum":23.0,"maximum":99.0,"first":23.0,"last":99.0,"delta_sum":null,"delta_count":0,"reset_count":0,"rollover_count":0,"excluded_transition_count":0,"state_value_type":null,"state_last_value":null,"state_sample_count":0,"state_change_count":0,"state_values":[],"max_projected_at":"2026-10-11T02:05:00.010Z"}` + "\n"
+		rawReply := `{"telemetry_key":"zone.temperature","point_id":"` + historyPointID + `","point_revision":1,"point_type":"TELEMETRY","unit":"Cel","period_start":"2026-10-11T00:00:00.000Z","period_end":"2026-10-11T01:00:00.000Z","good_count":4,"partial_count":0,"estimated_count":0,"manual_count":0,"stale_count":0,"invalid_count":0,"total_count":4,"included_count":4,"average":23.0,"minimum":23.0,"maximum":23.0,"first":23.0,"last":23.0,"delta_sum":null,"delta_count":0,"reset_count":0,"rollover_count":0,"excluded_transition_count":0,"state_value_type":null,"state_last_value":null,"state_sample_count":0,"state_change_count":0,"state_values":[]}` + "\n"
 		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 			raw, err := io.ReadAll(request.Body)
 			if err != nil {
 				t.Fatal(err)
 			}
+			sql := string(raw)
 			mu.Lock()
-			queries = append(queries, string(raw))
-			idx := len(queries) - 1
+			queries = append(queries, sql)
+			switch {
+			case strings.Contains(sql, "FROM telemetry_history.numeric_gauge_15min_states"):
+				sawRollup = true
+			case strings.Contains(sql, "avgIf(") && strings.Contains(sql, "FROM telemetry_history.observations"):
+				sawRawFallback = true
+			}
 			mu.Unlock()
 			writer.Header().Set("Content-Type", "application/x-ndjson")
-			_, _ = writer.Write([]byte(responses[idx]))
+			switch {
+			case strings.Contains(sql, "AS snapshot_cutoff"):
+				_, _ = writer.Write([]byte(snapshotReply))
+			case strings.Contains(sql, "FROM telemetry_history.numeric_gauge_15min_states"):
+				_, _ = writer.Write([]byte(rollupReply))
+			case strings.Contains(sql, "avgIf(") && strings.Contains(sql, "FROM telemetry_history.observations"):
+				_, _ = writer.Write([]byte(rawReply))
+			}
 		}))
 		defer server.Close()
 
@@ -514,7 +534,7 @@ func TestQueryDeviceHistoryAggregateEndToEndRollupAndConcurrentFallback(t *testi
 		if len(resp.Buckets) != 1 || resp.Buckets[0].Gauge == nil || resp.Buckets[0].Gauge.Average != 23.0 || resp.Buckets[0].Gauge.SampleCount != 4 {
 			t.Fatalf("expected raw snapshot result after mid-query write fallback, got %#v", resp)
 		}
-		if len(queries) != 5 || !strings.Contains(queries[1], "FROM telemetry_history.numeric_gauge_15min_states") || !strings.Contains(queries[2], "FROM telemetry_history.observations") {
+		if len(queries) != 5 || !sawRollup || !sawRawFallback {
 			t.Fatalf("expected rollup then raw fallback sequence, got:\n%s", strings.Join(queries, "\n---\n"))
 		}
 	})
@@ -522,29 +542,38 @@ func TestQueryDeviceHistoryAggregateEndToEndRollupAndConcurrentFallback(t *testi
 	t.Run("falls back to raw observations when rollup table returns UNKNOWN_TABLE", func(t *testing.T) {
 		var mu sync.Mutex
 		var queries []string
-		type mockReply struct {
-			status int
-			body   string
-		}
-		responses := []mockReply{
-			{status: http.StatusOK, body: `{"snapshot_at":"2026-10-11T02:05:00.000Z","projection_watermark":"2026-10-11T02:04:00.000Z","has_concurrent_writes":0,"raw_gauge_included_count":4}` + "\n"},
-			{status: http.StatusNotFound, body: `Code: 60. DB::Exception: Table telemetry_history.numeric_gauge_15min_states does not exist. (UNKNOWN_TABLE)`},
-			{status: http.StatusOK, body: `{"telemetry_key":"zone.temperature","point_id":"` + historyPointID + `","point_revision":1,"point_type":"TELEMETRY","unit":"Cel","period_start":"2026-10-11T00:00:00.000Z","period_end":"2026-10-11T01:00:00.000Z","good_count":4,"partial_count":0,"estimated_count":0,"manual_count":0,"stale_count":0,"invalid_count":0,"total_count":4,"included_count":4,"average":21.5,"minimum":21.0,"maximum":22.0,"first":21.0,"last":22.0,"delta_sum":null,"delta_count":0,"reset_count":0,"rollover_count":0,"excluded_transition_count":0,"state_value_type":null,"state_last_value":null,"state_sample_count":0,"state_change_count":0,"state_values":[]}` + "\n"},
-			{status: http.StatusOK, body: ""},
-			{status: http.StatusOK, body: ""},
-		}
+		var sawRollup, sawRawFallback bool
+		snapshotReply := `{"snapshot_at":"2026-10-11T02:05:00.000Z","projection_watermark":"2026-10-11T02:04:00.000Z","has_concurrent_writes":0,"raw_gauge_included_count":4}` + "\n"
+		rawReply := `{"telemetry_key":"zone.temperature","point_id":"` + historyPointID + `","point_revision":1,"point_type":"TELEMETRY","unit":"Cel","period_start":"2026-10-11T00:00:00.000Z","period_end":"2026-10-11T01:00:00.000Z","good_count":4,"partial_count":0,"estimated_count":0,"manual_count":0,"stale_count":0,"invalid_count":0,"total_count":4,"included_count":4,"average":21.5,"minimum":21.0,"maximum":22.0,"first":21.0,"last":22.0,"delta_sum":null,"delta_count":0,"reset_count":0,"rollover_count":0,"excluded_transition_count":0,"state_value_type":null,"state_last_value":null,"state_sample_count":0,"state_change_count":0,"state_values":[]}` + "\n"
 		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 			raw, err := io.ReadAll(request.Body)
 			if err != nil {
 				t.Fatal(err)
 			}
+			sql := string(raw)
 			mu.Lock()
-			queries = append(queries, string(raw))
-			idx := len(queries) - 1
+			queries = append(queries, sql)
+			switch {
+			case strings.Contains(sql, "FROM telemetry_history.numeric_gauge_15min_states"):
+				sawRollup = true
+			case strings.Contains(sql, "avgIf(") && strings.Contains(sql, "FROM telemetry_history.observations"):
+				sawRawFallback = true
+			}
 			mu.Unlock()
 			writer.Header().Set("Content-Type", "application/x-ndjson")
-			writer.WriteHeader(responses[idx].status)
-			_, _ = writer.Write([]byte(responses[idx].body))
+			switch {
+			case strings.Contains(sql, "AS snapshot_cutoff"):
+				writer.WriteHeader(http.StatusOK)
+				_, _ = writer.Write([]byte(snapshotReply))
+			case strings.Contains(sql, "FROM telemetry_history.numeric_gauge_15min_states"):
+				writer.WriteHeader(http.StatusNotFound)
+				_, _ = writer.Write([]byte(`Code: 60. DB::Exception: Table telemetry_history.numeric_gauge_15min_states does not exist. (UNKNOWN_TABLE)`))
+			case strings.Contains(sql, "avgIf(") && strings.Contains(sql, "FROM telemetry_history.observations"):
+				writer.WriteHeader(http.StatusOK)
+				_, _ = writer.Write([]byte(rawReply))
+			default:
+				writer.WriteHeader(http.StatusOK)
+			}
 		}))
 		defer server.Close()
 
@@ -565,7 +594,7 @@ func TestQueryDeviceHistoryAggregateEndToEndRollupAndConcurrentFallback(t *testi
 		if len(resp.Buckets) != 1 || resp.Buckets[0].Gauge == nil || resp.Buckets[0].Gauge.Average != 21.5 {
 			t.Fatalf("unexpected fallback response=%#v", resp)
 		}
-		if len(queries) != 5 || !strings.Contains(queries[1], "FROM telemetry_history.numeric_gauge_15min_states") || !strings.Contains(queries[2], "FROM telemetry_history.observations") {
+		if len(queries) != 5 || !sawRollup || !sawRawFallback {
 			t.Fatalf("expected rollup UNKNOWN_TABLE fallback to raw observations, got:\n%s", strings.Join(queries, "\n---\n"))
 		}
 	})
@@ -573,24 +602,31 @@ func TestQueryDeviceHistoryAggregateEndToEndRollupAndConcurrentFallback(t *testi
 	t.Run("falls back to raw observations when raw_gauge_included_count exceeds rollup sum", func(t *testing.T) {
 		var mu sync.Mutex
 		var queries []string
-		responses := []string{
-			`{"snapshot_at":"2026-10-11T02:05:00.000Z","projection_watermark":"2026-10-11T02:04:00.000Z","has_concurrent_writes":0,"raw_gauge_included_count":4}` + "\n",
-			`{"telemetry_key":"zone.temperature","point_id":"` + historyPointID + `","point_revision":1,"point_type":"TELEMETRY","unit":"Cel","period_start":"2026-10-11T00:00:00.000Z","period_end":"2026-10-11T01:00:00.000Z","good_count":1,"partial_count":0,"estimated_count":0,"manual_count":0,"stale_count":0,"invalid_count":0,"total_count":1,"included_count":1,"average":20.0,"minimum":20.0,"maximum":20.0,"first":20.0,"last":20.0,"delta_sum":null,"delta_count":0,"reset_count":0,"rollover_count":0,"excluded_transition_count":0,"state_value_type":null,"state_last_value":null,"state_sample_count":0,"state_change_count":0,"state_values":[],"max_projected_at":"2026-10-11T02:04:00.000Z"}` + "\n",
-			`{"telemetry_key":"zone.temperature","point_id":"` + historyPointID + `","point_revision":1,"point_type":"TELEMETRY","unit":"Cel","period_start":"2026-10-11T00:00:00.000Z","period_end":"2026-10-11T01:00:00.000Z","good_count":4,"partial_count":0,"estimated_count":0,"manual_count":0,"stale_count":0,"invalid_count":0,"total_count":4,"included_count":4,"average":22.5,"minimum":20.0,"maximum":25.0,"first":20.0,"last":25.0,"delta_sum":null,"delta_count":0,"reset_count":0,"rollover_count":0,"excluded_transition_count":0,"state_value_type":null,"state_last_value":null,"state_sample_count":0,"state_change_count":0,"state_values":[]}` + "\n",
-			"",
-			"",
-		}
+		var sawRawFallback bool
+		snapshotReply := `{"snapshot_at":"2026-10-11T02:05:00.000Z","projection_watermark":"2026-10-11T02:04:00.000Z","has_concurrent_writes":0,"raw_gauge_included_count":4}` + "\n"
+		rollupReply := `{"telemetry_key":"zone.temperature","point_id":"` + historyPointID + `","point_revision":1,"point_type":"TELEMETRY","unit":"Cel","period_start":"2026-10-11T00:00:00.000Z","period_end":"2026-10-11T01:00:00.000Z","good_count":1,"partial_count":0,"estimated_count":0,"manual_count":0,"stale_count":0,"invalid_count":0,"total_count":1,"included_count":1,"average":20.0,"minimum":20.0,"maximum":20.0,"first":20.0,"last":20.0,"delta_sum":null,"delta_count":0,"reset_count":0,"rollover_count":0,"excluded_transition_count":0,"state_value_type":null,"state_last_value":null,"state_sample_count":0,"state_change_count":0,"state_values":[],"max_projected_at":"2026-10-11T02:04:00.000Z"}` + "\n"
+		rawReply := `{"telemetry_key":"zone.temperature","point_id":"` + historyPointID + `","point_revision":1,"point_type":"TELEMETRY","unit":"Cel","period_start":"2026-10-11T00:00:00.000Z","period_end":"2026-10-11T01:00:00.000Z","good_count":4,"partial_count":0,"estimated_count":0,"manual_count":0,"stale_count":0,"invalid_count":0,"total_count":4,"included_count":4,"average":22.5,"minimum":20.0,"maximum":25.0,"first":20.0,"last":25.0,"delta_sum":null,"delta_count":0,"reset_count":0,"rollover_count":0,"excluded_transition_count":0,"state_value_type":null,"state_last_value":null,"state_sample_count":0,"state_change_count":0,"state_values":[]}` + "\n"
 		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 			raw, err := io.ReadAll(request.Body)
 			if err != nil {
 				t.Fatal(err)
 			}
+			sql := string(raw)
 			mu.Lock()
-			queries = append(queries, string(raw))
-			idx := len(queries) - 1
+			queries = append(queries, sql)
+			if strings.Contains(sql, "avgIf(") && strings.Contains(sql, "FROM telemetry_history.observations") {
+				sawRawFallback = true
+			}
 			mu.Unlock()
 			writer.Header().Set("Content-Type", "application/x-ndjson")
-			_, _ = writer.Write([]byte(responses[idx]))
+			switch {
+			case strings.Contains(sql, "AS snapshot_cutoff"):
+				_, _ = writer.Write([]byte(snapshotReply))
+			case strings.Contains(sql, "FROM telemetry_history.numeric_gauge_15min_states"):
+				_, _ = writer.Write([]byte(rollupReply))
+			case strings.Contains(sql, "avgIf(") && strings.Contains(sql, "FROM telemetry_history.observations"):
+				_, _ = writer.Write([]byte(rawReply))
+			}
 		}))
 		defer server.Close()
 
@@ -611,8 +647,249 @@ func TestQueryDeviceHistoryAggregateEndToEndRollupAndConcurrentFallback(t *testi
 		if len(resp.Buckets) != 1 || resp.Buckets[0].Gauge == nil || resp.Buckets[0].Gauge.SampleCount != 4 || resp.Buckets[0].Gauge.Average != 22.5 {
 			t.Fatalf("expected raw fallback with SampleCount=4, got %#v", resp)
 		}
-		if len(queries) != 5 || !strings.Contains(queries[2], "FROM telemetry_history.observations") {
+		if len(queries) != 5 || !sawRawFallback {
 			t.Fatalf("expected rollup-count mismatch fallback to raw observations, got:\n%s", strings.Join(queries, "\n---\n"))
+		}
+	})
+}
+
+func TestQueryDeviceHistoryAggregateSkipsEmptyTypesSplitsUnalignedTailAndMergesMixed(t *testing.T) {
+	t.Run("gauge-only snapshot skips counter and state queries", func(t *testing.T) {
+		var mu sync.Mutex
+		var queries []string
+		responses := []string{
+			`{"snapshot_at":"2026-10-11T02:05:00.000Z","projection_watermark":"2026-10-11T02:04:00.000Z","has_concurrent_writes":0,"raw_gauge_included_count":4,"raw_counter_included_count":0,"raw_state_included_count":0}` + "\n",
+			`{"telemetry_key":"hvac_meter.active_power","point_id":"` + historyPointID + `","point_revision":1,"point_type":"TELEMETRY","unit":"kW","period_start":"2026-10-11T00:00:00.000Z","period_end":"2026-10-11T01:00:00.000Z","good_count":4,"partial_count":0,"estimated_count":0,"manual_count":0,"stale_count":0,"invalid_count":0,"total_count":4,"included_count":4,"average":220.0,"minimum":200.0,"maximum":240.0,"first":205.0,"last":235.0,"delta_sum":null,"delta_count":0,"reset_count":0,"rollover_count":0,"excluded_transition_count":0,"state_value_type":null,"state_last_value":null,"state_sample_count":0,"state_change_count":0,"state_values":[],"max_projected_at":"2026-10-11T02:04:00.000Z"}` + "\n",
+		}
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			raw, err := io.ReadAll(request.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mu.Lock()
+			queries = append(queries, string(raw))
+			idx := len(queries) - 1
+			mu.Unlock()
+			writer.Header().Set("Content-Type", "application/x-ndjson")
+			_, _ = writer.Write([]byte(responses[idx]))
+		}))
+		defer server.Close()
+
+		client, err := NewClient(Config{BaseURL: server.URL, Database: "telemetry_history", Table: "observations", HTTPClient: server.Client()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := client.QueryDeviceHistoryAggregate(context.Background(), telemetryhistorymodel.DeviceHistoryAggregateQuery{
+			TenantID: historyTenantID, SiteID: historySiteID, DeviceID: historyDeviceID,
+			Keys: []string{"hvac_meter.active_power"}, Granularity: telemetryhistorymodel.AggregateGranularityHour,
+			Timezone: "UTC", QualityPolicy: telemetryhistorymodel.AggregateQualityUsable,
+			From: time.Date(2026, 10, 11, 0, 0, 0, 0, time.UTC), To: time.Date(2026, 10, 11, 1, 0, 0, 0, time.UTC),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(resp.Buckets) != 1 || resp.Buckets[0].Gauge == nil || resp.Buckets[0].Gauge.Average != 220.0 {
+			t.Fatalf("unexpected response = %#v", resp)
+		}
+		if len(queries) != 2 {
+			t.Fatalf("expected exactly 2 queries (snapshot + gauge rollup), got %d:\n%s", len(queries), strings.Join(queries, "\n---\n"))
+		}
+	})
+
+	t.Run("empty snapshot skips all aggregate subqueries", func(t *testing.T) {
+		var mu sync.Mutex
+		var queries []string
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			raw, err := io.ReadAll(request.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mu.Lock()
+			queries = append(queries, string(raw))
+			mu.Unlock()
+			writer.Header().Set("Content-Type", "application/x-ndjson")
+			_, _ = writer.Write([]byte(`{"snapshot_at":"2026-10-11T02:05:00.000Z","projection_watermark":null,"has_concurrent_writes":0,"raw_gauge_included_count":0,"raw_counter_included_count":0,"raw_state_included_count":0}` + "\n"))
+		}))
+		defer server.Close()
+
+		client, err := NewClient(Config{BaseURL: server.URL, Database: "telemetry_history", Table: "observations", HTTPClient: server.Client()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := client.QueryDeviceHistoryAggregate(context.Background(), telemetryhistorymodel.DeviceHistoryAggregateQuery{
+			TenantID: historyTenantID, SiteID: historySiteID, DeviceID: historyDeviceID,
+			Keys: []string{"hvac_meter.active_power"}, Granularity: telemetryhistorymodel.AggregateGranularityHour,
+			Timezone: "UTC", QualityPolicy: telemetryhistorymodel.AggregateQualityUsable,
+			From: time.Date(2026, 10, 11, 0, 0, 0, 0, time.UTC), To: time.Date(2026, 10, 11, 1, 0, 0, 0, time.UTC),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(resp.Buckets) != 0 || len(queries) != 1 {
+			t.Fatalf("expected 1 query and 0 buckets, got queries=%d buckets=%d", len(queries), len(resp.Buckets))
+		}
+	})
+
+	t.Run("unaligned to splits aligned prefix to rollup and tail to raw observations", func(t *testing.T) {
+		var mu sync.Mutex
+		var sawRollup, sawTail bool
+		var sawCounterOrState bool
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			raw, err := io.ReadAll(request.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sql := string(raw)
+			q := request.URL.Query()
+			writer.Header().Set("Content-Type", "application/x-ndjson")
+			switch {
+			case strings.Contains(sql, "AS snapshot_cutoff"):
+				_, _ = writer.Write([]byte(`{"snapshot_at":"2026-10-11T02:05:00.000Z","projection_watermark":"2026-10-11T01:37:00.000Z","has_concurrent_writes":0,"raw_gauge_included_count":6,"raw_counter_included_count":0,"raw_state_included_count":0}` + "\n"))
+			case strings.Contains(sql, "FROM telemetry_history.numeric_gauge_15min_states"):
+				mu.Lock()
+				sawRollup = true
+				mu.Unlock()
+				if q.Get("param_from_utc") != "2026-10-11 00:00:00" || q.Get("param_to_utc") != "2026-10-11 01:30:00" {
+					t.Fatalf("unexpected prefix bounds: from=%q to=%q", q.Get("param_from_utc"), q.Get("param_to_utc"))
+				}
+				_, _ = writer.Write([]byte(`{"telemetry_key":"hvac_meter.active_power","point_id":"` + historyPointID + `","point_revision":1,"point_type":"TELEMETRY","unit":"kW","period_start":"2026-10-11T00:00:00.000Z","period_end":"2026-10-11T00:15:00.000Z","good_count":4,"partial_count":0,"estimated_count":0,"manual_count":0,"stale_count":0,"invalid_count":0,"total_count":4,"included_count":4,"average":210.0,"minimum":200.0,"maximum":220.0,"first":200.0,"last":220.0,"delta_sum":null,"delta_count":0,"reset_count":0,"rollover_count":0,"excluded_transition_count":0,"state_value_type":null,"state_last_value":null,"state_sample_count":0,"state_change_count":0,"state_values":[],"max_projected_at":"2026-10-11T01:37:00.000Z"}` + "\n"))
+			case strings.Contains(sql, "avgIf(") && strings.Contains(sql, "FROM telemetry_history.observations"):
+				mu.Lock()
+				sawTail = true
+				mu.Unlock()
+				if q.Get("param_from_ts") != "2026-10-11T01:30:00.000Z" || q.Get("param_to_ts") != "2026-10-11T01:37:14.000Z" {
+					t.Fatalf("unexpected tail bounds: from=%q to=%q", q.Get("param_from_ts"), q.Get("param_to_ts"))
+				}
+				_, _ = writer.Write([]byte(`{"telemetry_key":"hvac_meter.active_power","point_id":"` + historyPointID + `","point_revision":1,"point_type":"TELEMETRY","unit":"kW","period_start":"2026-10-11T01:30:00.000Z","period_end":"2026-10-11T01:45:00.000Z","good_count":2,"partial_count":0,"estimated_count":0,"manual_count":0,"stale_count":0,"invalid_count":0,"total_count":2,"included_count":2,"average":250.0,"minimum":240.0,"maximum":260.0,"first":240.0,"last":260.0,"delta_sum":null,"delta_count":0,"reset_count":0,"rollover_count":0,"excluded_transition_count":0,"state_value_type":null,"state_last_value":null,"state_sample_count":0,"state_change_count":0,"state_values":[]}` + "\n"))
+			default:
+				mu.Lock()
+				sawCounterOrState = true
+				mu.Unlock()
+			}
+		}))
+		defer server.Close()
+
+		client, err := NewClient(Config{BaseURL: server.URL, Database: "telemetry_history", Table: "observations", HTTPClient: server.Client()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := client.QueryDeviceHistoryAggregate(context.Background(), telemetryhistorymodel.DeviceHistoryAggregateQuery{
+			TenantID: historyTenantID, SiteID: historySiteID, DeviceID: historyDeviceID,
+			Keys: []string{"hvac_meter.active_power"}, Granularity: telemetryhistorymodel.AggregateGranularityQuarterHour,
+			Timezone: "Asia/Shanghai", QualityPolicy: telemetryhistorymodel.AggregateQualityUsable,
+			From: time.Date(2026, 10, 11, 0, 0, 0, 0, time.UTC), To: time.Date(2026, 10, 11, 1, 37, 14, 0, time.UTC),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !sawRollup || !sawTail || sawCounterOrState {
+			t.Fatalf("unexpected query routing: rollup=%v tail=%v counterOrState=%v", sawRollup, sawTail, sawCounterOrState)
+		}
+		if len(resp.Buckets) != 2 || resp.Buckets[0].Gauge.Average != 210.0 || resp.Buckets[1].Gauge.Average != 250.0 {
+			t.Fatalf("unexpected combined split buckets = %#v", resp.Buckets)
+		}
+	})
+
+	t.Run("split rollup falls back to full raw observations when count mismatches", func(t *testing.T) {
+		var mu sync.Mutex
+		var fullRawSeen bool
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			raw, err := io.ReadAll(request.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sql := string(raw)
+			q := request.URL.Query()
+			writer.Header().Set("Content-Type", "application/x-ndjson")
+			switch {
+			case strings.Contains(sql, "AS snapshot_cutoff"):
+				_, _ = writer.Write([]byte(`{"snapshot_at":"2026-10-11T02:05:00.000Z","projection_watermark":"2026-10-11T01:37:00.000Z","has_concurrent_writes":0,"raw_gauge_included_count":6,"raw_counter_included_count":0,"raw_state_included_count":0}` + "\n"))
+			case strings.Contains(sql, "FROM telemetry_history.numeric_gauge_15min_states"):
+				_, _ = writer.Write([]byte(`{"telemetry_key":"hvac_meter.active_power","point_id":"` + historyPointID + `","point_revision":1,"point_type":"TELEMETRY","unit":"kW","period_start":"2026-10-11T00:00:00.000Z","period_end":"2026-10-11T00:15:00.000Z","good_count":1,"partial_count":0,"estimated_count":0,"manual_count":0,"stale_count":0,"invalid_count":0,"total_count":1,"included_count":1,"average":210.0,"minimum":210.0,"maximum":210.0,"first":210.0,"last":210.0,"delta_sum":null,"delta_count":0,"reset_count":0,"rollover_count":0,"excluded_transition_count":0,"state_value_type":null,"state_last_value":null,"state_sample_count":0,"state_change_count":0,"state_values":[],"max_projected_at":"2026-10-11T01:37:00.000Z"}` + "\n"))
+			case strings.Contains(sql, "FROM telemetry_history.observations") && q.Get("param_from_ts") == "2026-10-11T00:00:00.000Z":
+				mu.Lock()
+				fullRawSeen = true
+				mu.Unlock()
+				_, _ = writer.Write([]byte(`{"telemetry_key":"hvac_meter.active_power","point_id":"` + historyPointID + `","point_revision":1,"point_type":"TELEMETRY","unit":"kW","period_start":"2026-10-11T00:00:00.000Z","period_end":"2026-10-11T00:15:00.000Z","good_count":6,"partial_count":0,"estimated_count":0,"manual_count":0,"stale_count":0,"invalid_count":0,"total_count":6,"included_count":6,"average":215.0,"minimum":210.0,"maximum":220.0,"first":210.0,"last":220.0,"delta_sum":null,"delta_count":0,"reset_count":0,"rollover_count":0,"excluded_transition_count":0,"state_value_type":null,"state_last_value":null,"state_sample_count":0,"state_change_count":0,"state_values":[]}` + "\n"))
+			default:
+				// tail raw returns empty
+			}
+		}))
+		defer server.Close()
+
+		client, err := NewClient(Config{BaseURL: server.URL, Database: "telemetry_history", Table: "observations", HTTPClient: server.Client()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := client.QueryDeviceHistoryAggregate(context.Background(), telemetryhistorymodel.DeviceHistoryAggregateQuery{
+			TenantID: historyTenantID, SiteID: historySiteID, DeviceID: historyDeviceID,
+			Keys: []string{"hvac_meter.active_power"}, Granularity: telemetryhistorymodel.AggregateGranularityQuarterHour,
+			Timezone: "Asia/Shanghai", QualityPolicy: telemetryhistorymodel.AggregateQualityUsable,
+			From: time.Date(2026, 10, 11, 0, 0, 0, 0, time.UTC), To: time.Date(2026, 10, 11, 1, 37, 14, 0, time.UTC),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mu.Lock()
+		gotFullRaw := fullRawSeen
+		mu.Unlock()
+		if !gotFullRaw || len(resp.Buckets) != 1 || resp.Buckets[0].Gauge == nil || resp.Buckets[0].Gauge.Average != 215.0 || resp.Buckets[0].Gauge.SampleCount != 6 {
+			t.Fatalf("expected full raw fallback on split count mismatch (fullRaw=%v), got %#v", gotFullRaw, resp)
+		}
+	})
+
+	t.Run("mixed gauge counter and state snapshot runs all three and sorts merged buckets", func(t *testing.T) {
+		var mu sync.Mutex
+		var sawGauge, sawCounter, sawState bool
+		stateType := "STRING"
+		stateVal := `"\"RUNNING\""`
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			raw, err := io.ReadAll(request.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sql := string(raw)
+			writer.Header().Set("Content-Type", "application/x-ndjson")
+			switch {
+			case strings.Contains(sql, "AS snapshot_cutoff"):
+				_, _ = writer.Write([]byte(`{"snapshot_at":"2026-10-11T02:05:00.000Z","projection_watermark":"2026-10-11T02:04:00.000Z","has_concurrent_writes":0,"raw_gauge_included_count":2,"raw_counter_included_count":2,"raw_state_included_count":2}` + "\n"))
+			case strings.Contains(sql, "FROM telemetry_history.numeric_gauge_15min_states"):
+				mu.Lock()
+				sawGauge = true
+				mu.Unlock()
+				_, _ = writer.Write([]byte(`{"telemetry_key":"z.power","point_id":"` + historyPointID + `","point_revision":1,"point_type":"TELEMETRY","unit":"kW","period_start":"2026-10-11T00:00:00.000Z","period_end":"2026-10-11T01:00:00.000Z","good_count":2,"partial_count":0,"estimated_count":0,"manual_count":0,"stale_count":0,"invalid_count":0,"total_count":2,"included_count":2,"average":100.0,"minimum":90.0,"maximum":110.0,"first":90.0,"last":110.0,"delta_sum":null,"delta_count":0,"reset_count":0,"rollover_count":0,"excluded_transition_count":0,"state_value_type":null,"state_last_value":null,"state_sample_count":0,"state_change_count":0,"state_values":[],"max_projected_at":"2026-10-11T02:04:00.000Z"}` + "\n"))
+			case strings.Contains(sql, "counter_decrease_mode"):
+				mu.Lock()
+				sawCounter = true
+				mu.Unlock()
+				_, _ = writer.Write([]byte(`{"telemetry_key":"a.energy","point_id":"018f2e00-4000-7000-8000-000000000002","point_revision":1,"point_type":"COUNTER","unit":"kWh","period_start":"2026-10-11T00:00:00.000Z","period_end":"2026-10-11T01:00:00.000Z","good_count":2,"partial_count":0,"estimated_count":0,"manual_count":0,"stale_count":0,"invalid_count":0,"total_count":2,"included_count":2,"average":null,"minimum":null,"maximum":null,"first":null,"last":null,"delta_sum":50.0,"delta_count":2,"reset_count":0,"rollover_count":0,"excluded_transition_count":0,"state_value_type":null,"state_last_value":null,"state_sample_count":0,"state_change_count":0,"state_values":[]}` + "\n"))
+			case strings.Contains(sql, "previous_value_json"):
+				mu.Lock()
+				sawState = true
+				mu.Unlock()
+				_, _ = writer.Write([]byte(`{"telemetry_key":"m.run_state","point_id":"018f2e00-4000-7000-8000-000000000003","point_revision":1,"point_type":"STATE","unit":null,"period_start":"2026-10-11T00:00:00.000Z","period_end":"2026-10-11T01:00:00.000Z","good_count":2,"partial_count":0,"estimated_count":0,"manual_count":0,"stale_count":0,"invalid_count":0,"total_count":2,"included_count":2,"average":null,"minimum":null,"maximum":null,"first":null,"last":null,"delta_sum":null,"delta_count":0,"reset_count":0,"rollover_count":0,"excluded_transition_count":0,"state_value_type":"` + stateType + `","state_last_value":` + stateVal + `,"state_sample_count":2,"state_change_count":0,"state_values":[` + stateVal + `,` + stateVal + `]}` + "\n"))
+			}
+		}))
+		defer server.Close()
+
+		client, err := NewClient(Config{BaseURL: server.URL, Database: "telemetry_history", Table: "observations", HTTPClient: server.Client()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := client.QueryDeviceHistoryAggregate(context.Background(), telemetryhistorymodel.DeviceHistoryAggregateQuery{
+			TenantID: historyTenantID, SiteID: historySiteID, DeviceID: historyDeviceID,
+			Keys: []string{"z.power", "a.energy", "m.run_state"}, Granularity: telemetryhistorymodel.AggregateGranularityHour,
+			Timezone: "UTC", QualityPolicy: telemetryhistorymodel.AggregateQualityUsable,
+			From: time.Date(2026, 10, 11, 0, 0, 0, 0, time.UTC), To: time.Date(2026, 10, 11, 1, 0, 0, 0, time.UTC),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !sawGauge || !sawCounter || !sawState {
+			t.Fatalf("expected all three subqueries to run: gauge=%v counter=%v state=%v", sawGauge, sawCounter, sawState)
+		}
+		if len(resp.Buckets) != 3 || resp.Buckets[0].TelemetryKey != "a.energy" || resp.Buckets[1].TelemetryKey != "m.run_state" || resp.Buckets[2].TelemetryKey != "z.power" {
+			t.Fatalf("unexpected mixed buckets order/values = %#v", resp.Buckets)
 		}
 	})
 }

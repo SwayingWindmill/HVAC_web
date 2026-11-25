@@ -6,6 +6,7 @@ import { resolveAssetsProfile } from '../apps/hvac-web/src/features/assets/catal
 import { projectAssetsDeviceOperationalState } from '../apps/hvac-web/src/features/assets/operational-projection.ts';
 import { createAssetsRealtimeScope, projectAssetsRealtimeRow, type AssetsRealtimeState } from '../apps/hvac-web/src/features/assets/realtime.ts';
 import { createTrendsHoverStore } from '../apps/hvac-web/src/features/operations/trends/trends-hover-store.ts';
+import { alignDemandEndToQuarter, demandChunkWindows } from '../apps/hvac-web/src/features/load/demand-model.ts';
 import { createConcurrencyLimiter } from '../apps/hvac-web/src/lib/concurrency-limiter.ts';
 import {
   formatCompactTime,
@@ -286,4 +287,27 @@ test('projectAssetsRealtimeRow reuses the realtime snapshot reference without de
   if (projection.row.snapshotResult?.status === 'ok') {
     assert.equal(projection.row.snapshotResult.snapshot, liveSnapshot);
   }
+});
+
+test('alignDemandEndToQuarter and demandChunkWindows separate immutable closed chunks from quarter-aligned live chunk', () => {
+  assert.equal(alignDemandEndToQuarter(new Date('2026-10-11T14:34:14.327Z')).toISOString(), '2026-10-11T14:45:00.000Z');
+  assert.equal(alignDemandEndToQuarter(new Date('2026-10-10T16:00:00.000Z')).toISOString(), '2026-10-10T16:00:00.000Z');
+
+  const chunks = demandChunkWindows(
+    new Date('2026-09-30T16:00:00.000Z'),
+    new Date('2026-10-11T14:34:14.327Z'),
+    Date.parse('2026-10-11T14:34:14.327Z'),
+  );
+  assert.deepEqual(
+    chunks.map((c) => ({
+      from: c.from.toISOString(),
+      to: c.to.toISOString(),
+      queryTo: c.queryTo.toISOString(),
+      closed: c.closed,
+    })),
+    [
+      { from: '2026-09-30T16:00:00.000Z', to: '2026-10-10T16:00:00.000Z', queryTo: '2026-10-10T16:00:00.000Z', closed: true },
+      { from: '2026-10-10T16:00:00.000Z', to: '2026-10-11T14:34:14.327Z', queryTo: '2026-10-11T14:45:00.000Z', closed: false },
+    ],
+  );
 });

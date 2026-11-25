@@ -20,9 +20,11 @@ type fakeBackfillObservationSource struct {
 	lastAfterSeq   uint64
 	lastThroughSeq uint64
 	lastMinLagSec  int64
+	maxAfterSeqs   []uint64
 }
 
-func (f *fakeBackfillObservationSource) MaxHistorySequence(_ context.Context) (uint64, error) {
+func (f *fakeBackfillObservationSource) MaxHistorySequence(_ context.Context, afterSeq uint64) (uint64, error) {
+	f.maxAfterSeqs = append(f.maxAfterSeqs, afterSeq)
 	if f.maxSeqErr != nil {
 		return 0, f.maxSeqErr
 	}
@@ -594,11 +596,12 @@ func TestExtractBoundPointIDsAndClickHouseBackfillSourceHTTP(t *testing.T) {
 	}
 
 	var queries []string
+	var nextSeqReply = "42\n"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("query")
 		queries = append(queries, q)
 		if strings.Contains(q, "max(history_sequence)") && strings.Contains(q, "FORMAT TabSeparated") {
-			_, _ = w.Write([]byte("42\n"))
+			_, _ = w.Write([]byte(nextSeqReply))
 			return
 		}
 		row, _ := json.Marshal(map[string]any{
@@ -616,9 +619,20 @@ func TestExtractBoundPointIDsAndClickHouseBackfillSourceHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	maxSeq, err := src.MaxHistorySequence(context.Background())
+	maxSeq, err := src.MaxHistorySequence(context.Background(), 0)
 	if err != nil || maxSeq != 42 {
 		t.Fatalf("MaxHistorySequence=(%d, %v), want (42, nil)", maxSeq, err)
+	}
+	if strings.Contains(queries[0], "WHERE") {
+		t.Fatalf("cold-start MaxHistorySequence(0) should not include WHERE filter: %s", queries[0])
+	}
+	nextSeqReply = "0\n"
+	deltaSeq, err := src.MaxHistorySequence(context.Background(), 42)
+	if err != nil || deltaSeq != 0 {
+		t.Fatalf("MaxHistorySequence(42)=(%d, %v), want (0, nil)", deltaSeq, err)
+	}
+	if !strings.Contains(queries[1], "WHERE history_sequence > 42") {
+		t.Fatalf("incremental MaxHistorySequence(42) missing minmax predicate: %s", queries[1])
 	}
 	buckets, err := src.ListBackfillDirtyBuckets(context.Background(), 10, 42, 600, 2048)
 	if err != nil || len(buckets) != 1 {
@@ -627,7 +641,7 @@ func TestExtractBoundPointIDsAndClickHouseBackfillSourceHTTP(t *testing.T) {
 	if buckets[0].MaxSeq != 42 || !buckets[0].BucketStart.Equal(time.Date(2026, 10, 12, 16, 0, 0, 0, time.UTC)) {
 		t.Fatalf("unexpected bucket: %+v", buckets[0])
 	}
-	if len(queries) != 2 || !strings.Contains(queries[1], "telemetry_history.observations AS obs") || !strings.Contains(queries[1], "dateDiff('second', obs.sampled_at, obs.projected_at) >= 600") || !strings.Contains(queries[1], "GROUP BY tenant_key, site_key, point_key, dirty_bucket") {
+	if len(queries) != 3 || !strings.Contains(queries[2], "telemetry_history.observations AS obs") || !strings.Contains(queries[2], "dateDiff('second', obs.sampled_at, obs.projected_at) >= 600") || !strings.Contains(queries[2], "GROUP BY tenant_key, site_key, point_key, dirty_bucket") {
 		t.Fatalf("unexpected ClickHouse queries: %v", queries)
 	}
 	atSeqBuckets, err := src.ListBackfillDirtyBucketsAtSequence(context.Background(), 42, 600, &BackfillBucketCursor{
@@ -636,7 +650,7 @@ func TestExtractBoundPointIDsAndClickHouseBackfillSourceHTTP(t *testing.T) {
 	if err != nil || len(atSeqBuckets) != 1 {
 		t.Fatalf("ListBackfillDirtyBucketsAtSequence=(%+v, %v)", atSeqBuckets, err)
 	}
-	if !strings.Contains(queries[2], "HAVING (tenant_key, site_key, point_key, dirty_bucket) >") {
-		t.Fatalf("ListBackfillDirtyBucketsAtSequence missing non-colliding HAVING alias:\n%s", queries[2])
+	if !strings.Contains(queries[3], "HAVING (tenant_key, site_key, point_key, dirty_bucket) >") {
+		t.Fatalf("ListBackfillDirtyBucketsAtSequence missing non-colliding HAVING alias:\n%s", queries[3])
 	}
 }

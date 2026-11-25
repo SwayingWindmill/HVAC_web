@@ -43,7 +43,7 @@ export function useSiteAssetsData({
         if (init?.signal?.aborted) {
           return Promise.reject(new DOMException('The operation was aborted.', 'AbortError'));
         }
-        return queryClient.fetchQuery(siteAssetModelEnvelopeQuery(requestedSiteId, { staleTime: 60_000 }));
+        return queryClient.fetchQuery(siteAssetModelEnvelopeQuery(requestedSiteId, { staleTime: 5 * 60_000 }));
       },
     }),
     [queryClient],
@@ -95,7 +95,7 @@ export function useSiteAssetsData({
       );
     },
     enabled,
-    staleTime: 60_000,
+    staleTime: 5 * 60_000,
     retry: 1,
   });
 

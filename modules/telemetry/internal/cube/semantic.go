@@ -52,7 +52,7 @@ func (client *Client) QuerySemantic(ctx context.Context, caller analytics.Caller
 		cubeRequest.Measures = append(cubeRequest.Measures, member(query.View, name))
 		columns = append(columns, analyticsmodel.SemanticColumn{Name: name, Title: measure.Title, Kind: analyticsmodel.SemanticColumnMeasure})
 	}
-	decoded, err := client.load(queryContext, token, cubeRequest)
+	decoded, err := client.loadScoped(queryContext, token, query.TenantID, query.SiteID, cubeRequest)
 	if err != nil {
 		return analyticsmodel.SemanticQueryResponse{}, fmt.Errorf("query Cube semantic view: %w", err)
 	}
@@ -120,7 +120,7 @@ func mapSemanticRow(row map[string]json.RawMessage, period string, query analyti
 // semanticMetadata is how far the Site's metered energy reaches since the range began, whichever
 // view was asked: every view reads the same facts.
 func (client *Client) semanticMetadata(ctx context.Context, token string, query analyticsmodel.SemanticQuery, location *time.Location) (analyticsmodel.SemanticMetadata, error) {
-	decoded, err := client.load(ctx, token, cubeQuery{
+	decoded, err := client.loadScoped(ctx, token, query.TenantID, query.SiteID, cubeQuery{
 		Measures: []string{member(siteView, "max_data_watermark"), member(siteView, "max_dataset_revision")},
 		Filters: []cubeFilter{
 			{Member: member(siteView, "site_id"), Operator: "equals", Values: []string{query.SiteID}},
