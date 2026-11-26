@@ -79,8 +79,6 @@ go run ./tools/eg8200-simulator/cmd/eg8200-history-replay \
 - 空调总功率 = 机组 + 两台水泵 + 冷却塔风机；
 - 冷量计的制冷量和机组用同一个能量平衡。
 
-`cmd/eg8200-simulator`（旧的、经 ThingsBoard 发数据的程序）已经下线，运行时只提示改用 `eg8200-mqtt-publisher`。
-
 ## 测试
 
 ```bash

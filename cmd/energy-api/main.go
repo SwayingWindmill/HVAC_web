@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"crypto"
-	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
@@ -446,23 +445,19 @@ func loadIdentityConfig(ctx context.Context) (*gateway.IdentityConfig, *tls.Cert
 		oidcClient.Transport = workloadTransport(oidcRoots, nil, envOr("OIDC_SERVER_NAME", "localhost"))
 	}
 
-	var auditClient *http.Client
 	auditURL := os.Getenv("AUDIT_URL")
 	if auditURL == "" {
-		if os.Getenv("S0_ALLOW_NO_AUDIT_LEDGER") != "true" {
-			return nil, nil, func() {}, errors.New("AUDIT_URL is required unless S0_ALLOW_NO_AUDIT_LEDGER=true")
-		}
-	} else {
-		auditCAPath := os.Getenv("AUDIT_SERVER_CA")
-		if auditCAPath == "" {
-			return nil, nil, func() {}, errors.New("AUDIT_SERVER_CA is required when AUDIT_URL is configured")
-		}
-		auditRoots, err := loadCertPool(auditCAPath, "Audit server CA")
-		if err != nil {
-			return nil, nil, func() {}, err
-		}
-		auditClient = &http.Client{Timeout: 5 * time.Second, Transport: workloadTransport(auditRoots, &certificate, envOr("AUDIT_SERVER_NAME", "localhost"))}
+		return nil, nil, func() {}, errors.New("AUDIT_URL is required when OIDC_ISSUER is configured")
 	}
+	auditCAPath := os.Getenv("AUDIT_SERVER_CA")
+	if auditCAPath == "" {
+		return nil, nil, func() {}, errors.New("AUDIT_SERVER_CA is required when AUDIT_URL is configured")
+	}
+	auditRoots, err := loadCertPool(auditCAPath, "Audit server CA")
+	if err != nil {
+		return nil, nil, func() {}, err
+	}
+	auditClient := &http.Client{Timeout: 5 * time.Second, Transport: workloadTransport(auditRoots, &certificate, envOr("AUDIT_SERVER_NAME", "localhost"))}
 
 	stateTTL := 10 * time.Minute
 	if raw := strings.TrimSpace(os.Getenv("OIDC_STATE_TTL")); raw != "" {
@@ -496,40 +491,31 @@ func loadIdentityConfig(ctx context.Context) (*gateway.IdentityConfig, *tls.Cert
 		return nil, nil, func() {}, errors.New("shared OIDC state store is unavailable")
 	}
 
-	var store sessionstore.Store
-	var sessionStorePing func(context.Context) error
-	closeStore := func() { _ = loginStateStore.Close() }
-	if dsn := os.Getenv("GATEWAY_DATABASE_URL"); dsn != "" {
-		postgresStore, err := sessionstore.OpenPostgres(ctx, dsn, sessionstore.PostgresConfig{})
-		if err != nil {
-			closeStore()
-			return nil, nil, func() {}, errors.New("durable Session store is unavailable")
-		}
-		if err := postgresStore.VerifyProductSchema(ctx); err != nil {
-			postgresStore.Close()
-			closeStore()
-			return nil, nil, func() {}, fmt.Errorf("durable Session store schema incompatible: %w", err)
-		}
-		store = postgresStore
-		sessionStorePing = postgresStore.Ping
-		closeStore = func() {
-			postgresStore.Close()
-			_ = loginStateStore.Close()
-		}
-	} else if os.Getenv("S0_ALLOW_MEMORY_SESSION_STORE") == "true" {
-		store = sessionstore.NewMemoryStore()
-	} else {
-		closeStore()
-		return nil, nil, func() {}, errors.New("GATEWAY_DATABASE_URL is required unless S0_ALLOW_MEMORY_SESSION_STORE=true")
+	dsn := os.Getenv("GATEWAY_DATABASE_URL")
+	if dsn == "" {
+		_ = loginStateStore.Close()
+		return nil, nil, func() {}, errors.New("GATEWAY_DATABASE_URL is required")
+	}
+	postgresStore, err := sessionstore.OpenPostgres(ctx, dsn, sessionstore.PostgresConfig{})
+	if err != nil {
+		_ = loginStateStore.Close()
+		return nil, nil, func() {}, errors.New("durable Session store is unavailable")
+	}
+	if err := postgresStore.VerifyProductSchema(ctx); err != nil {
+		postgresStore.Close()
+		_ = loginStateStore.Close()
+		return nil, nil, func() {}, fmt.Errorf("durable Session store schema incompatible: %w", err)
+	}
+	var store sessionstore.Store = postgresStore
+	closeStore := func() {
+		postgresStore.Close()
+		_ = loginStateStore.Close()
 	}
 	readinessCheck := func(checkContext context.Context) error {
 		if err := loginStateStore.Ping(checkContext); err != nil {
 			return err
 		}
-		if sessionStorePing != nil {
-			return sessionStorePing(checkContext)
-		}
-		return nil
+		return postgresStore.Ping(checkContext)
 	}
 
 	key, err := sessionEncryptionKey()
@@ -975,19 +961,13 @@ func loadCertPool(path, label string) (*x509.CertPool, error) {
 }
 
 func sessionEncryptionKey() ([]byte, error) {
-	if encoded := os.Getenv("SESSION_TOKEN_KEY"); encoded != "" {
-		key, err := base64.RawURLEncoding.DecodeString(encoded)
-		if err != nil || len(key) != 32 {
-			return nil, errors.New("SESSION_TOKEN_KEY must be base64url-encoded 32 bytes")
-		}
-		return key, nil
+	encoded := os.Getenv("SESSION_TOKEN_KEY")
+	if encoded == "" {
+		return nil, errors.New("SESSION_TOKEN_KEY is required")
 	}
-	if os.Getenv("S0_ALLOW_EPHEMERAL_SESSION_KEY") != "true" {
-		return nil, errors.New("SESSION_TOKEN_KEY is required unless S0_ALLOW_EPHEMERAL_SESSION_KEY=true")
-	}
-	key := make([]byte, 32)
-	if _, err := rand.Read(key); err != nil {
-		return nil, err
+	key, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil || len(key) != 32 {
+		return nil, errors.New("SESSION_TOKEN_KEY must be base64url-encoded 32 bytes")
 	}
 	return key, nil
 }

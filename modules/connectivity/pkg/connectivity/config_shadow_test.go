@@ -356,7 +356,7 @@ func TestConfigShadowHTTPHandlersAndSPIFFEAuth(t *testing.T) {
 	}, func(gatewayID string) {
 		updatedHookID = gatewayID
 	})
-	handler := NewCredentialHandlerWithShadow(nil, nil, nil, nil, shadowHandler)
+	handler := NewCredentialHandler(nil, nil, WithConfigShadowHandler(shadowHandler))
 
 	gwURI, _ := url.Parse("spiffe://hvac.local/platform-gateway")
 	gwPeer := &x509.Certificate{URIs: []*url.URL{gwURI}}
@@ -1072,7 +1072,7 @@ func TestConfigShadowTemplateDriverUpsertHTTPAndSPIFFEACL(t *testing.T) {
 	}, func(gatewayID string) {
 		updatedCalls = append(updatedCalls, gatewayID)
 	})
-	handler := NewCredentialHandlerWithShadow(nil, nil, nil, nil, shadowHandler)
+	handler := NewCredentialHandler(nil, nil, WithConfigShadowHandler(shadowHandler))
 
 	coreURI, _ := url.Parse("spiffe://hvac.local/platform-core-service")
 	corePeer := &x509.Certificate{URIs: []*url.URL{coreURI}}
@@ -1138,7 +1138,7 @@ func TestConfigShadowTemplateDriverUpsertHTTPAndSPIFFEACL(t *testing.T) {
 	crossTenantHandler := NewConfigShadowHandler(store, fakePeerVerifier{gatewayID: gwID}, func(_ *http.Request, _ registryauth.Action) (registryauth.GrantClaims, error) {
 		return registryauth.GrantClaims{TenantID: tenantB}, nil
 	}, nil)
-	crossTenantOuter := NewCredentialHandlerWithShadow(nil, nil, nil, nil, crossTenantHandler)
+	crossTenantOuter := NewCredentialHandler(nil, nil, WithConfigShadowHandler(crossTenantHandler))
 	crossReq := httptest.NewRequest(http.MethodPost, "/internal/v1/gateways/"+gwID+"/config-shadow:upsert-template-driver", strings.NewReader(body))
 	crossReq.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{gwPeer}}}
 	crossRec := httptest.NewRecorder()

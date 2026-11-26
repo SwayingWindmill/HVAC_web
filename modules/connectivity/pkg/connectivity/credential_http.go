@@ -43,27 +43,49 @@ func ParseGatewayPeerCert(r *http.Request) (*x509.Certificate, error) {
 	return peer, nil
 }
 
-func NewCredentialHandler(service *CredentialService, authorize CredentialAuthorizer) http.Handler {
-	return NewCredentialHandlerWithExtensions(service, authorize, nil, nil)
+type credentialHandlerConfig struct {
+	tunnelHandler       http.Handler
+	concentratorHandler http.Handler
+	configShadowHandler http.Handler
+	diagnosticsHandler  http.Handler
+	otaHandler          http.Handler
 }
 
-func NewCredentialHandlerWithTunnel(service *CredentialService, authorize CredentialAuthorizer, tunnelHandler http.Handler) http.Handler {
-	return NewCredentialHandlerWithExtensions(service, authorize, tunnelHandler, nil)
+// CredentialHandlerOption configures optional extension handlers mounted on the credential server.
+type CredentialHandlerOption func(*credentialHandlerConfig)
+
+func WithTunnelHandler(handler http.Handler) CredentialHandlerOption {
+	return func(cfg *credentialHandlerConfig) { cfg.tunnelHandler = handler }
 }
 
-func NewCredentialHandlerWithExtensions(service *CredentialService, authorize CredentialAuthorizer, tunnelHandler, concentratorHandler http.Handler) http.Handler {
-	return NewCredentialHandlerWithShadow(service, authorize, tunnelHandler, concentratorHandler, nil)
+func WithConcentratorHandler(handler http.Handler) CredentialHandlerOption {
+	return func(cfg *credentialHandlerConfig) { cfg.concentratorHandler = handler }
 }
 
-func NewCredentialHandlerWithShadow(service *CredentialService, authorize CredentialAuthorizer, tunnelHandler, concentratorHandler, configShadowHandler http.Handler) http.Handler {
-	return NewCredentialHandlerWithDiagnostics(service, authorize, tunnelHandler, concentratorHandler, configShadowHandler, nil)
+func WithConfigShadowHandler(handler http.Handler) CredentialHandlerOption {
+	return func(cfg *credentialHandlerConfig) { cfg.configShadowHandler = handler }
 }
 
-func NewCredentialHandlerWithDiagnostics(service *CredentialService, authorize CredentialAuthorizer, tunnelHandler, concentratorHandler, configShadowHandler, diagnosticsHandler http.Handler) http.Handler {
-	return NewCredentialHandlerWithOTA(service, authorize, tunnelHandler, concentratorHandler, configShadowHandler, diagnosticsHandler, nil)
+func WithDiagnosticsHandler(handler http.Handler) CredentialHandlerOption {
+	return func(cfg *credentialHandlerConfig) { cfg.diagnosticsHandler = handler }
 }
 
-func NewCredentialHandlerWithOTA(service *CredentialService, authorize CredentialAuthorizer, tunnelHandler, concentratorHandler, configShadowHandler, diagnosticsHandler, otaHandler http.Handler) http.Handler {
+func WithOTAHandler(handler http.Handler) CredentialHandlerOption {
+	return func(cfg *credentialHandlerConfig) { cfg.otaHandler = handler }
+}
+
+func NewCredentialHandler(service *CredentialService, authorize CredentialAuthorizer, opts ...CredentialHandlerOption) http.Handler {
+	var cfg credentialHandlerConfig
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
+	tunnelHandler := cfg.tunnelHandler
+	concentratorHandler := cfg.concentratorHandler
+	configShadowHandler := cfg.configShadowHandler
+	diagnosticsHandler := cfg.diagnosticsHandler
+	otaHandler := cfg.otaHandler
 	mux := http.NewServeMux()
 	if configShadowHandler == nil && service != nil && service.store != nil {
 		configShadowHandler = NewConfigShadowHandler(service.store, service, authorize, nil)

@@ -49,13 +49,13 @@ func TestCredentialHTTPRejectsUnverifiedForwardedGatewayIdentity(t *testing.T) {
 
 func TestCredentialHandlerWithTunnelRoutingAndPeerCertParsing(t *testing.T) {
 	called := false
-	handler := NewCredentialHandlerWithTunnel(nil, nil, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := NewCredentialHandler(nil, nil, WithTunnelHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called = true
 		if r.URL.Path != "/gateway/v1/tunnel" {
 			t.Fatalf("unexpected tunnel path: %s", r.URL.Path)
 		}
 		w.WriteHeader(http.StatusSwitchingProtocols)
-	}))
+	})))
 	uri, _ := url.Parse("spiffe://hvac.local/platform-gateway")
 	workloadPeer := &x509.Certificate{URIs: []*url.URL{uri}}
 
@@ -113,7 +113,7 @@ func TestCredentialHTTPRetireRouteAuthorizationAndValidation(t *testing.T) {
 	concHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	handler := NewCredentialHandlerWithExtensions(&CredentialService{}, nil, nil, concHandler)
+	handler := NewCredentialHandler(&CredentialService{}, nil, WithConcentratorHandler(concHandler))
 
 	coreURI, _ := url.Parse("spiffe://hvac.local/platform-core-service")
 	corePeer := &x509.Certificate{URIs: []*url.URL{coreURI}}

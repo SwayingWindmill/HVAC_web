@@ -2383,7 +2383,7 @@ func TestRuntimeLiveMessagesJumpAheadOfReplayBacklogWithoutStarvingReplay(t *tes
 
 	const replayCount = 1000
 	for i := 2; i <= replayCount+1; i++ {
-		pub := testReplayPublish(testGatewayA, i, false)
+		pub := testReplayPublish(testGatewayA, i)
 		if i%4 == 0 {
 			pub = testLivePublishAt(testGatewayA, i, now.Add(-15*time.Minute))
 		}
@@ -2482,7 +2482,7 @@ func TestRuntimeGracefulDrainTimeoutPreservesBothLiveAndReplaySpools(t *testing.
 	replayPkt := packets.NewControlPacket(packets.PUBLISH)
 	rep := replayPkt.Content.(*packets.Publish)
 	rep.Topic = telemetryTopic(testGatewayA)
-	rep.Payload = testReplayPublish(testGatewayA, 2, false).Payload
+	rep.Payload = testReplayPublish(testGatewayA, 2).Payload
 	rep.QoS = 1
 	rep.PacketID = 2
 	if err := conn.write(replayPkt); err != nil {
@@ -2564,12 +2564,12 @@ func TestRuntimeReplayQueueDepthMetricTracksQueuedReplayItems(t *testing.T) {
 	<-telemetry.entered
 
 	for i := 2; i <= 4; i++ {
-		if err := runtime.enqueue(ctx, nil, testReplayPublish(testGatewayA, i, false), acks.ack(messageID(i))); err != nil {
+		if err := runtime.enqueue(ctx, nil, testReplayPublish(testGatewayA, i), acks.ack(messageID(i))); err != nil {
 			t.Fatalf("enqueue replay A %d: %v", i, err)
 		}
 	}
 	for i := 5; i <= 6; i++ {
-		if err := runtime.enqueue(ctx, nil, testReplayPublish(testGatewayB, i, false), acks.ack(messageID(i))); err != nil {
+		if err := runtime.enqueue(ctx, nil, testReplayPublish(testGatewayB, i), acks.ack(messageID(i))); err != nil {
 			t.Fatalf("enqueue replay B %d: %v", i, err)
 		}
 	}

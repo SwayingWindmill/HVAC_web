@@ -370,15 +370,11 @@ func encodeWALFrame(topic string, payload []byte) ([]byte, error) {
 type replayEnvelopeProbe struct {
 	Replay    bool            `json:"replay"`
 	Timestamp json.RawMessage `json:"timestamp"`
-	TS        json.RawMessage `json:"ts"`
 	Payload   *struct {
 		Devices []struct {
 			DeviceTimestamp json.RawMessage `json:"deviceTimestamp"`
 		} `json:"devices"`
 	} `json:"payload"`
-	Devs map[string]struct {
-		TS json.RawMessage `json:"ts"`
-	} `json:"devs"`
 }
 
 func isReplayUplink(topic string, payload []byte, receivedAt time.Time, autoBackfillLag time.Duration) bool {
@@ -408,23 +404,8 @@ func isReplayUplink(topic string, payload []byte, receivedAt time.Time, autoBack
 		}
 		return false
 	}
-	if len(probe.Devs) > 0 {
-		for _, dev := range probe.Devs {
-			tsRaw := dev.TS
-			if len(bytes.TrimSpace(tsRaw)) == 0 {
-				tsRaw = probe.TS
-			}
-			if isTimestampLagged(tsRaw, receivedAt, autoBackfillLag) {
-				return true
-			}
-		}
-		return false
-	}
 	if len(bytes.TrimSpace(probe.Timestamp)) > 0 {
 		return isTimestampLagged(probe.Timestamp, receivedAt, autoBackfillLag)
-	}
-	if len(bytes.TrimSpace(probe.TS)) > 0 {
-		return isTimestampLagged(probe.TS, receivedAt, autoBackfillLag)
 	}
 	return false
 }

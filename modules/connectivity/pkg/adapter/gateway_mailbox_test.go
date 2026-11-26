@@ -218,15 +218,8 @@ func TestRuntimeRecoversSpoolMailboxesOnRestart(t *testing.T) {
 	}, "recovered spool truncated back to header after drain")
 }
 
-func testReplayPublish(gatewayID string, index int, compact bool) *paho.Publish {
+func testReplayPublish(gatewayID string, index int) *paho.Publish {
 	msgID := messageID(index)
-	if compact {
-		return &paho.Publish{
-			Topic:   telemetryTopic(gatewayID),
-			Payload: []byte(fmt.Sprintf(`{"v":"1.0","gw":%q,"seq":%d,"ts":1786352400000,"replay":true,"devs":{"METER-01":{"pts":{"active_power":12.5}}}}`, gatewayID, index)),
-			QoS:     1,
-		}
-	}
 	return &paho.Publish{
 		Topic:   telemetryTopic(gatewayID),
 		Payload: []byte(fmt.Sprintf(`{"schemaVersion":"2.0","messageId":%q,"gatewayId":%q,"timestamp":1786352400000,"sequence":%d,"replay":true,"payload":{"devices":[{"deviceId":"METER-01","deviceTimestamp":1786352399000,"points":[{"code":"active_power","value":126.4,"quality":0,"unit":"kW"}]}]}}`, msgID, gatewayID, index)),
@@ -257,10 +250,8 @@ func TestGatewayMailboxDualLanePriorityAndStarvationGuard(t *testing.T) {
 		switch {
 		case i%10 == 0:
 			pub = testLivePublishAt(testGatewayA, i, now.Add(-10*time.Minute-time.Second))
-		case i%5 == 0:
-			pub = testReplayPublish(testGatewayA, i, true)
 		default:
-			pub = testReplayPublish(testGatewayA, i, false)
+			pub = testReplayPublish(testGatewayA, i)
 		}
 		res, err := mb.enqueueAt(pub, now)
 		if err != nil || res.shed {
@@ -285,7 +276,7 @@ func TestGatewayMailboxDualLanePriorityAndStarvationGuard(t *testing.T) {
 		case 1:
 			pub = &paho.Publish{Topic: eventTopic(testGatewayA), Payload: eventPayload(testGatewayA, messageID(seq), seq), QoS: 1}
 		case 2:
-			pub = &paho.Publish{Topic: "hvac/v1/" + testGatewayA + "/up/status", Payload: []byte(`{"online":true}`), QoS: 1}
+			pub = &paho.Publish{Topic: "hvac/v1/" + testGatewayA + "/up/status", Payload: []byte(fmt.Sprintf(`{"schemaVersion":"2.0","messageId":%q,"gatewayId":%q,"online":true}`, messageID(seq), testGatewayA)), QoS: 1}
 		case 3:
 			pub = testLivePublishAt(testGatewayA, seq, now.Add(-10*time.Minute))
 		default:
@@ -350,7 +341,7 @@ func TestGatewayMailboxRecoversBothLiveAndReplaySpoolsOnRestart(t *testing.T) {
 	dir := t.TempDir()
 	mb := newGatewayMailbox(testGatewayA, 4, 128, 32<<20, dir)
 	for i := 1; i <= 30; i++ {
-		if res, err := mb.enqueue(testReplayPublish(testGatewayA, i, false)); err != nil || res.shed {
+		if res, err := mb.enqueue(testReplayPublish(testGatewayA, i)); err != nil || res.shed {
 			t.Fatalf("enqueue replay %d failed: %+v %v", i, res, err)
 		}
 	}
@@ -409,7 +400,7 @@ func TestGatewayMailboxSharedBoundsAcrossLiveAndReplay(t *testing.T) {
 	t.Cleanup(func() { mb.close(true) })
 
 	for i := 1; i <= 3; i++ {
-		res, err := mb.enqueue(testReplayPublish(testGatewayA, i, false))
+		res, err := mb.enqueue(testReplayPublish(testGatewayA, i))
 		if err != nil || res.shed {
 			t.Fatalf("replay %d failed: %+v %v", i, res, err)
 		}
@@ -435,12 +426,12 @@ func TestGatewayMailboxReservesLiveHeadroomUnderReplayFlood(t *testing.T) {
 	t.Cleanup(func() { mb.close(true) })
 
 	for i := 1; i <= 16; i++ {
-		res, err := mb.enqueue(testReplayPublish(testGatewayA, i, false))
+		res, err := mb.enqueue(testReplayPublish(testGatewayA, i))
 		if err != nil || res.shed {
 			t.Fatalf("replay %d within reserved quota failed: %+v %v", i, res, err)
 		}
 	}
-	shedReplay, err := mb.enqueue(testReplayPublish(testGatewayA, 17, false))
+	shedReplay, err := mb.enqueue(testReplayPublish(testGatewayA, 17))
 	if err != nil || !shedReplay.shed {
 		t.Fatalf("expected 17th replay to shed while preserving live reserve, got %+v err=%v", shedReplay, err)
 	}

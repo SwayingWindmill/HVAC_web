@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -147,13 +146,11 @@ func run() int {
 		defer cancel()
 		_ = concentratorTransport.Close(ctx)
 	})
-	if mqttSession != nil {
-		addCloser(func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			_ = mqttSession.Close(ctx)
-		})
-	}
+	addCloser(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = mqttSession.Close(ctx)
+	})
 	telemetryRuntime, err := adapter.NewTelemetryRuntimeClientWithTracer(config.TelemetryRuntime, telemetry.Tracer)
 	if err != nil {
 		logger.Error("mqtt_telemetry_adapter_runtime_client_invalid", "error", err.Error())
@@ -163,7 +160,7 @@ func run() int {
 	presence := newGatewayOnlineTrackerWithMetrics(telemetry.Metrics)
 	otaPublicBaseURL := strings.TrimSpace(os.Getenv("CONNECTIVITY_OTA_PUBLIC_BASE_URL"))
 	diagBridge := connectivity.NewDiagnosticsMQTTBridge()
-	credentials, tunnelHub, mqttGuard, crlCtrl, err := newCredentialRuntime(credentialRuntimeConfig{
+	credentials, tunnelHub, crlCtrl, err := newCredentialRuntime(credentialRuntimeConfig{
 		RootCtx:             drainRootCtx,
 		Logger:              logger,
 		Metrics:             telemetry.Metrics,
@@ -172,7 +169,6 @@ func run() int {
 		ConcentratorService: concentratorService,
 		CoverageReporter:    telemetryRuntime,
 		Tap:                 tap,
-		EnableGuardFromEnv:  true,
 		MQTTSession:         mqttSession,
 		TunnelOptions:       []tunnel.Option{tunnel.WithObservability(logger, telemetry.Metrics)},
 		OTAPublicBaseURL:    otaPublicBaseURL,
@@ -181,13 +177,6 @@ func run() int {
 	if err != nil {
 		logger.Error("connectivity_credentials_unavailable", "error_code", "CREDENTIAL_MODULE_UNAVAILABLE", "error", err.Error())
 		return 1
-	}
-	if mqttGuard != nil {
-		addCloser(func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_ = mqttGuard.Shutdown(ctx)
-		})
 	}
 	addCloser(tunnelHub.Close)
 	addCloser(crlCtrl.Close)
@@ -286,31 +275,17 @@ func run() int {
 		},
 		adapter.WithBrokerLogObservability(logger, telemetry.Metrics),
 	)
-	if mqttGuard != nil {
-		mqttGuard.SetOnGatewayDisconnect(func(ctx context.Context, gatewayID string, disconnectedAt time.Time) {
-			if disconnectErr := processor.HandleBrokerGatewayDisconnect(ctx, gatewayID, disconnectedAt); disconnectErr != nil && ctx.Err() == nil {
-				logger.Warn("mqttguard_gateway_disconnect_handle_failed", "gateway_id", gatewayID, "error", disconnectErr.Error())
-			}
-		})
-	}
-	var unregisterBrokerLog func(context.Context) error
-	if mqttSession != nil {
-		unregisterBrokerLog, err = mqttSession.RegisterRoute("connectivity-broker-log", []string{adapter.BrokerNoticeLogTopic}, brokerLogWatcher.HandlePublish)
-		if err != nil {
-			brokerLogWatcher.Close()
-			logger.Error("connectivity_broker_log_route_failed", "error", err.Error())
-			return 1
-		}
+	unregisterBrokerLog, err := mqttSession.RegisterRoute("connectivity-broker-log", []string{adapter.BrokerNoticeLogTopic}, brokerLogWatcher.HandlePublish)
+	if err != nil {
+		brokerLogWatcher.Close()
+		logger.Error("connectivity_broker_log_route_failed", "error", err.Error())
+		return 1
 	}
 	runtimeOptions := []adapter.RuntimeOption{
 		adapter.WithCoverageReporter(connectivityStore, telemetryRuntime),
 		adapter.WithPacketHook(tap.Record),
 		adapter.WithOnlineGatewayCount(presence.Count),
-	}
-	if mqttSession != nil {
-		runtimeOptions = append(runtimeOptions, adapter.WithSharedSession(mqttSession))
-	} else {
-		runtimeOptions = append(runtimeOptions, adapter.WithBrokerLogWatcher(brokerLogWatcher))
+		adapter.WithSharedSession(mqttSession),
 	}
 	runtime, err := adapter.NewRuntime(
 		config,
@@ -342,7 +317,7 @@ func run() int {
 	}
 	telemetry.MarkReady()
 	diagnostics := diagnosticsServer(*diagnosticsAddress, runtime, telemetry, &shuttingDown)
-	diagnosticsErr := make(chan error, 3)
+	diagnosticsErr := make(chan error, 2)
 	credentialsDone := make(chan struct{})
 	go func() {
 		defer close(credentialsDone)
@@ -356,23 +331,6 @@ func run() int {
 			diagnosticsErr <- err
 		}
 	}()
-	mqttGuardDone := make(chan struct{})
-	if mqttGuard != nil {
-		go func() {
-			defer close(mqttGuardDone)
-			defer observability.Recover(logger, telemetry.Metrics, "connectivity.mqtt_guard_server", func(any) {
-				select {
-				case diagnosticsErr <- errors.New("mqttguard server panicked"):
-				default:
-				}
-			})
-			if guardErr := mqttGuard.ListenAndServe(); guardErr != nil && !errors.Is(guardErr, net.ErrClosed) {
-				diagnosticsErr <- guardErr
-			}
-		}()
-	} else {
-		close(mqttGuardDone)
-	}
 	diagnosticsDone := make(chan struct{})
 	go func() {
 		defer close(diagnosticsDone)
@@ -426,13 +384,6 @@ func run() int {
 			return credentials.Shutdown(ctx)
 		},
 		credentialsDone: credentialsDone,
-		shutdownMQTTGuard: func(ctx context.Context) error {
-			if mqttGuard == nil {
-				return nil
-			}
-			return mqttGuard.Shutdown(ctx)
-		},
-		mqttGuardDone:   mqttGuardDone,
 		closeTunnelHub:  tunnelHub.Close,
 		closeCRL:        crlCtrl.Close,
 		cancelIngress:   ingressCancel,
@@ -494,8 +445,6 @@ type connectivityShutdownDeps struct {
 	markShuttingDown    func()
 	shutdownCredentials func(context.Context) error
 	credentialsDone     <-chan struct{}
-	shutdownMQTTGuard   func(context.Context) error
-	mqttGuardDone       <-chan struct{}
 	closeTunnelHub      func()
 	closeCRL            func()
 	cancelIngress       func()
@@ -525,11 +474,7 @@ func shutdownConnectivityRuntime(deps connectivityShutdownDeps) {
 	if deps.shutdownCredentials != nil {
 		_ = deps.shutdownCredentials(credShutdownCtx)
 	}
-	if deps.shutdownMQTTGuard != nil {
-		_ = deps.shutdownMQTTGuard(credShutdownCtx)
-	}
 	awaitSignal(credShutdownCtx, deps.credentialsDone)
-	awaitSignal(credShutdownCtx, deps.mqttGuardDone)
 	credShutdownCancel()
 	if deps.closeTunnelHub != nil {
 		deps.closeTunnelHub()
@@ -984,11 +929,6 @@ func openConcentratorAndSharedSession(
 		Logger:     logger,
 		Metrics:    metrics,
 		PacketHook: tap.Record,
-	}
-	if override := strings.TrimSpace(os.Getenv("CONNECTIVITY_CONCENTRATOR_MQTT_CLIENT_ID")); override != "" && override != cfg.ClientID {
-		transportCfg.ClientID = override
-		transport, err := concentrator.NewMQTTTransport(ctx, transportCfg)
-		return nil, transport, err
 	}
 
 	session, err := mqttclient.NewSharedSession(ctx, buildSharedUplinkSessionConfig(cfg, logger, metrics))

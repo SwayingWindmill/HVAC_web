@@ -469,7 +469,7 @@ func TestHTTPHandlerSPIFFEAuthAndTimeoutAudit(t *testing.T) {
 	rawHandler := NewHTTPHandler(svc, func(_ *http.Request, _ registryauth.Action) (registryauth.GrantClaims, error) {
 		return testClaims(), nil
 	})
-	wrapped := connectivity.NewCredentialHandlerWithExtensions(nil, nil, nil, rawHandler)
+	wrapped := connectivity.NewCredentialHandler(nil, nil, connectivity.WithConcentratorHandler(rawHandler))
 
 	unauthReq := httptest.NewRequest(http.MethodPut, "/internal/v1/gateways/"+testGatewayID()+"/concentrators/1/params", strings.NewReader(`{"params":{"rfTxPower":20},"reason":"timeout test"}`))
 	unauthRec := httptest.NewRecorder()
@@ -541,17 +541,17 @@ func writeConcentratorTestPKI(t *testing.T) (TransportConfig, *tls.Config) {
 	roots := x509.NewCertPool()
 	roots.AddCert(caCert)
 	return TransportConfig{
-		ClientID:   "concentrator-test",
-		CAFile:     writePEM("ca.pem", "CERTIFICATE", caDER),
-		CertFile:   writePEM("client.pem", "CERTIFICATE", client.Certificate[0]),
-		KeyFile:    writePEM("client.key", "EC PRIVATE KEY", clientKey),
-		ServerName: "mqtt.local",
-	}, &tls.Config{
-		MinVersion:   tls.VersionTLS13,
-		Certificates: []tls.Certificate{issue(3, "mqtt.local", x509.ExtKeyUsageServerAuth)},
-		ClientCAs:    roots,
-		ClientAuth:   tls.RequireAndVerifyClientCert,
-	}
+			ClientID:   "concentrator-test",
+			CAFile:     writePEM("ca.pem", "CERTIFICATE", caDER),
+			CertFile:   writePEM("client.pem", "CERTIFICATE", client.Certificate[0]),
+			KeyFile:    writePEM("client.key", "EC PRIVATE KEY", clientKey),
+			ServerName: "mqtt.local",
+		}, &tls.Config{
+			MinVersion:   tls.VersionTLS13,
+			Certificates: []tls.Certificate{issue(3, "mqtt.local", x509.ExtKeyUsageServerAuth)},
+			ClientCAs:    roots,
+			ClientAuth:   tls.RequireAndVerifyClientCert,
+		}
 }
 
 func TestConcentratorMessageExpirySecondsAndSelfHealingTransport(t *testing.T) {

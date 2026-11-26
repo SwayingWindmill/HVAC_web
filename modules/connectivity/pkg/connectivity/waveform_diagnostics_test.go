@@ -160,7 +160,7 @@ func TestWaveformDiagnosticsHTTPHandlersAndRedaction(t *testing.T) {
 	}
 	tap := packettap.NewManager()
 	diagHandler := NewDiagnosticsHandlerWithWaveform(store, tap, authorize, bridge)
-	wrapped := NewCredentialHandlerWithOTA(nil, authorize, nil, nil, nil, diagHandler, nil)
+	wrapped := NewCredentialHandler(nil, authorize, WithDiagnosticsHandler(diagHandler))
 
 	gwURI, _ := url.Parse("spiffe://hvac.local/platform-gateway")
 	gwPeer := &x509.Certificate{URIs: []*url.URL{gwURI}}
