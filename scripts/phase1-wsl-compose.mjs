@@ -29,7 +29,6 @@ function takeFlag(flag) {
   return true;
 }
 
-const ownerSplit = takeFlag('--owner-split');
 const simulatorAcceptance = takeFlag('--simulator-acceptance');
 const atv630ProtocolAcceptance = takeFlag('--atv630-protocol-acceptance');
 const sourceDeploy = takeFlag('--source-deploy');
@@ -58,20 +57,13 @@ const localClickHouse = clickhouseMode === 'local';
 const localRedis = redisMode === 'local';
 const externalState = !localPostgres || !localClickHouse || !localRedis;
 const tierId = process.env.PHASE1_DEPLOYMENT_TIER || runtimeValues.PHASE1_DEPLOYMENT_TIER;
-if (ownerSplit && tierId !== 'single-full') {
-  throw new Error('The owner-split runtime mode requires PHASE1_DEPLOYMENT_TIER=single-full');
-}
 
-const ownerSplitCompose = ownerSplit
-  ? readFileSync(path.join(phase1Dir, 'owner-split.compose.yaml'), 'utf8')
-  : null;
 const runtimeProfiles = [
   ...(localPostgres ? ['local-postgres'] : []),
   ...(localClickHouse ? ['local-clickhouse'] : []),
   ...(localRedis ? ['local-redis'] : []),
   ...(integration ? ['integration'] : []),
   ...(intelligence ? ['intelligence'] : []),
-  ...(ownerSplit ? ['owner-split'] : []),
 ];
 const deploymentTier = resolveDeploymentTier({
   contract: deploymentTierContract,
@@ -79,7 +71,6 @@ const deploymentTier = resolveDeploymentTier({
   tierId,
   environment: process.env.HVAC_ENV || runtimeValues.HVAC_ENV,
   runtimeEnvironment: { ...runtimeValues, ...process.env },
-  additionalComposeDocuments: ownerSplitCompose ? [ownerSplitCompose] : [],
   additionalProfiles: runtimeProfiles,
 });
 
@@ -167,9 +158,6 @@ const composeFiles = [
   path.join(phase1Dir, 'compose.yaml'),
   path.join(phase1Dir, 'wsl.override.yaml'),
 ];
-if (ownerSplit) {
-  composeFiles.push(path.join(phase1Dir, 'owner-split.compose.yaml'));
-}
 if (simulatorAcceptance || atv630ProtocolAcceptance) {
   composeFiles.push(path.join(repoRoot, 'deploy', 'acceptance', 'phase1-simulator.compose.yaml'));
 }

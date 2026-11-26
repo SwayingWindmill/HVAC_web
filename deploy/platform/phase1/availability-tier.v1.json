@@ -148,14 +148,13 @@
       {
         "id": "stage-1",
         "name": "Toggle embedded owners to independent service containers",
-        "state": "implemented-runtime-drill-required",
+        "state": "deferred",
         "capabilities": [
-          "ENERGY_API_EMBEDDED_OWNERS selects the remaining in-process roles",
-          "existing Go owner binaries run in the owner-split Compose overlay",
-          "Notification remains the only embedded owner until it has an independently reviewed artifact"
+          "ENERGY_API_EMBEDDED_OWNERS selects the in-process roles inside energy-api",
+          "standalone owner processes remain deferred until single-process capacity limits require splitting"
         ],
         "exitEvidence": [
-          "owner-split-compose-config-gate",
+          "independent-owner-entrypoints",
           "same-version-live-contract-drill"
         ]
       },

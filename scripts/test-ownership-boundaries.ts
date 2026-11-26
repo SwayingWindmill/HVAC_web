@@ -166,22 +166,22 @@ test('Rule 1 enforces declared ownership exceptions and table-level analytics ru
 
   assert.deepEqual(
     checkCrossSchemaSqlInFile(
-      'services/settlement-service/internal/settlement/clickhouse.go',
-      'package settlement\nconst q = `SELECT val FROM analytics.metric_result_facts`',
+      'services/mv-service/internal/mv/clickhouse.go',
+      'package mv\nconst q = `SELECT val FROM analytics.metric_result_facts`',
     ),
     [],
   );
   assert.equal(
     checkCrossSchemaSqlInFile(
-      'services/settlement-service/internal/settlement/clickhouse.go',
-      'package settlement\nconst q = `SELECT val FROM analytics.energy_interval_facts`',
+      'services/mv-service/internal/mv/clickhouse.go',
+      'package mv\nconst q = `SELECT val FROM analytics.energy_interval_facts`',
     ).length,
     1,
   );
   assert.equal(
     checkCrossSchemaSqlInFile(
-      'services/settlement-service/internal/settlement/clickhouse.go',
-      'package settlement\nconst q = `INSERT INTO analytics.metric_result_facts VALUES ($1)`',
+      'services/mv-service/internal/mv/clickhouse.go',
+      'package mv\nconst q = `INSERT INTO analytics.metric_result_facts VALUES ($1)`',
     ).length,
     1,
   );

@@ -37,7 +37,6 @@ const paths = {
   baseline: 'deploy/platform/phase1/architecture-baseline.v1.json',
   matrix: 'deploy/platform/phase1/alignment-matrix.v1.json',
   compose: 'deploy/platform/phase1/compose.yaml',
-  ownerSplitCompose: 'deploy/platform/phase1/owner-split.compose.yaml',
   nginx: 'deploy/platform/phase1/nginx/nginx.conf',
   webDockerfile: 'deploy/platform/phase1/nginx/Dockerfile',
   prometheus: 'deploy/platform/phase1/observability/prometheus.yaml',
@@ -128,7 +127,7 @@ const [baseline, matrix, compose, nginx, webDockerfile, prometheus, hostAlerts, 
   read(paths.identityReset),
 ]);
 const envs = Object.fromEntries(await Promise.all(Object.entries(environmentFiles).map(async ([name, path]) => [name, await read(path)])));
-const [otelLogs, deploymentTiers, runtimeInventory, availabilityTier, recoveryAttainment, clickhouseResourceLimits, clickhouseSystemLogs, clickhouseQueryLogProfile, processFailureScenarios, ownerSplitCompose, embeddedEnergy] = await Promise.all([
+const [otelLogs, deploymentTiers, runtimeInventory, availabilityTier, recoveryAttainment, clickhouseResourceLimits, clickhouseSystemLogs, clickhouseQueryLogProfile, processFailureScenarios, embeddedEnergy] = await Promise.all([
   read(paths.otelLogs),
   readJSON(paths.deploymentTiers),
   readJSON(paths.runtimeInventory),
@@ -138,7 +137,6 @@ const [otelLogs, deploymentTiers, runtimeInventory, availabilityTier, recoveryAt
   read(paths.clickhouseSystemLogs),
   read(paths.clickhouseQueryLogProfile),
   readJSON(paths.processFailureScenarios),
-  read(paths.ownerSplitCompose),
   read(paths.embeddedEnergy),
 ]);
 const runtimeSources = Object.fromEntries(await Promise.all([
@@ -163,6 +161,11 @@ assert(productRelease.schemaVersion === 1 && productRelease.product === 'hvac-we
 assert(productRelease.schemaContract?.compatibilityMode === 'exact-product-and-manifest' && productRelease.schemaContract?.skipAllowed === false, 'Product Release must require exact non-skippable product/schema compatibility');
 assert(productRelease.startup?.failureMode === 'fail-closed', 'Product Release startup preflight must fail closed');
 assert(productRelease.platformPolicy?.limitPolicy === paths.limitPolicy, 'Product Release must pin the Phase 1 LimitPolicy artifact');
+const packageScripts = JSON.parse(packageJson).scripts ?? {};
+assert(Array.isArray(productRelease.criticalSmoke) && productRelease.criticalSmoke.length > 0, 'Product Release must declare criticalSmoke scripts');
+for (const smokeScript of productRelease.criticalSmoke ?? []) {
+  assert(typeof packageScripts[smokeScript] === 'string' && packageScripts[smokeScript].trim().length > 0, `Product Release criticalSmoke script ${smokeScript} must exist in package.json`);
+}
 assert(limitPolicy.schemaVersion === 1 && limitPolicy.policyId === 'phase1-high-risk-limits' && Number.isInteger(limitPolicy.revision) && limitPolicy.revision > 0, 'LimitPolicy identity must be versioned');
 assert(limitPolicy.limits?.operationsAgent?.backend === 'redis' && limitPolicy.limits?.operationsAgent?.failureMode === 'fail-closed' && limitPolicy.limits?.operationsAgent?.scope === 'session', 'Operations Agent limit must use the shared Redis fail-closed policy');
 assert(limitPolicy.limits?.operationsAgent?.windowSeconds === 60 && limitPolicy.limits?.operationsAgent?.maxRequests === 30, 'Operations Agent limit bounds must match the Phase 1 policy');
@@ -214,13 +217,8 @@ assert(compose.includes('./clickhouse/resource-limits.xml:/etc/clickhouse-server
 assert(clickhouseSystemLogs.includes('<ttl>event_date + INTERVAL 3 DAY DELETE</ttl>') && clickhouseQueryLogProfile.includes('<log_queries_min_type>QUERY_FINISH</log_queries_min_type>') && clickhouseQueryLogProfile.includes('<cancel_http_readonly_queries_on_client_close>1</cancel_http_readonly_queries_on_client_close>') && compose.includes('./clickhouse/query-log-profile.xml:/etc/clickhouse-server/users.d/query-log-profile.xml:ro'), 'ClickHouse query_log must keep three days, cancel orphaned HTTP read queries on client close, and log only finished or failed queries');
 assert(availabilityTier.schemaVersion === 1 && availabilityTier.currentTier === 'SINGLE_NODE_RECOVERABLE', 'availability tier contract must fix the current tier');
 const ownerSplitStage = availabilityTier.monolithToMultiInstancePath?.stages?.find((stage) => stage.id === 'stage-1');
-assert(ownerSplitStage?.state === 'implemented-runtime-drill-required' && ownerSplitStage.exitEvidence?.includes('same-version-live-contract-drill'), 'Stage 1 must remain implemented but uncertified until the live same-version drill');
-for (const owner of ['iam-owner', 'core-owner', 'telemetry-query-owner', 'command-owner', 'alarm-owner', 'work-order-owner']) {
-  assert(ownerSplitCompose.includes(`  ${owner}:`), `owner-split Compose must define ${owner}`);
-}
+assert(ownerSplitStage?.state === 'deferred', 'Stage 1 multi-process owner split must remain deferred');
 assert(compose.includes('dockerfile: deploy/platform/phase1/images/go-service.Dockerfile'), 'canonical Compose must build Go workloads from the canonical Phase 1 image definition');
-assert(ownerSplitCompose.includes('dockerfile: deploy/platform/phase1/images/go-service.Dockerfile'), 'owner-split overlay must reuse the canonical Phase 1 image definition');
-assert(ownerSplitCompose.includes('ENERGY_API_EMBEDDED_OWNERS: audit,notification') && !/kafka|zookeeper|redpanda/i.test(ownerSplitCompose), 'owner-split must retain only Audit and Notification in-process without adding a message backbone');
 assert(embeddedEnergy.includes('parseEmbeddedOwners') && embeddedEnergy.includes('ENERGY_API_EMBEDDED_OWNERS'), 'energy-api must implement exact embedded Owner selection');
 assert((availabilityTier.spofInventory ?? []).length >= 6 && availabilityTier.spofInventory.every((entry) => entry.spof === true && entry.component && Array.isArray(entry.upgradePath) && entry.upgradePath.length > 0), 'availability tier must enumerate SPOF impacts and upgrade costs');
 assert(availabilityTier.monolithToMultiInstancePath?.reference?.tag === 'v4.3.1.1' && availabilityTier.monolithToMultiInstancePath?.reference?.commit === 'c2a52e46c44e308ddee430e7266b8e10eddde9c4', 'upgrade path reference must pin the reviewed ThingsBoard source');
