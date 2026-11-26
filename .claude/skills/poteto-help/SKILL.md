@@ -41,13 +41,14 @@ All `pstack` skills in `HVAC_web` are already checked into `.agents/skills/` (mi
 
 Note that `HVAC_web`'s subagent tool mapping lives in [`agy-tools.md`](../poteto-mode/references/agy-tools.md): every subagent kickoff starts with `Read <abs-path-to-poteto-mode>/worker.md before anything else.` and uses `invoke_subagent` (`TypeName: "self"` for writable/shell work or `"research"` for read-only reading) instead of Cursor's `poteto-agent`.
 
-## Pick a skill (55 skills installed)
+## Pick a skill (56 skills installed)
 
 The default entry point for non-trivial work is [`poteto-mode`](../poteto-mode/SKILL.md). Name a specific skill directly when you want focused execution:
 
 | The user wants to | Skill |
 |---|---|
 | Run end-to-end tasks following pstack playbooks | [`poteto-mode`](../poteto-mode/SKILL.md) |
+| Apply personal HVAC_web engineering rules layered over poteto-mode (auto-triggered) | [`hao-mode`](../hao-mode/SKILL.md) |
 | Check understanding of goal, problem, and smallest change first | [`in-your-own-words`](../in-your-own-words/SKILL.md) |
 | Learn expert terms for what they're building (with verified sources) and rewrite their description | [`reframe`](../reframe/SKILL.md) |
 | Stress-test an open plan/idea round-by-round along a design tree | [`grilling`](../grilling/SKILL.md) |
