@@ -217,6 +217,15 @@ func NewCredentialHandler(service *CredentialService, authorize CredentialAuthor
 		mux.Handle("GET /internal/v1/sites/{siteId}/edge-rule-sync-status", configShadowHandler)
 	}
 	if diagnosticsHandler != nil {
+		gatewayDiagHandler := diagnosticsHandler
+		if service != nil {
+			if attacher, ok := diagnosticsHandler.(interface {
+				WithGatewayPeerVerifier(GatewayPeerVerifier) http.Handler
+			}); ok {
+				gatewayDiagHandler = attacher.WithGatewayPeerVerifier(service)
+			}
+		}
+		mux.Handle("GET /gateway/v1/waveform-rules", gatewayDiagHandler)
 		mux.Handle("GET /internal/v1/gateways/{gatewayId}/quarantine", diagnosticsHandler)
 		mux.Handle("GET /internal/v1/gateways/{gatewayId}/packet-capture", diagnosticsHandler)
 		mux.Handle("POST /internal/v1/gateways/{gatewayId}/packet-capture/start", diagnosticsHandler)

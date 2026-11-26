@@ -1,8 +1,12 @@
 package edgedaemon
 
 import (
+	"bytes"
+	"context"
+	"log/slog"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -21,14 +25,96 @@ type daemonLogEntry struct {
 // RemoteDiagnosticsCollector keeps a bounded in-memory daemon log ring and samples host/bus/MQTT
 // health metrics. It never spawns subshells or executes arbitrary remote commands.
 type RemoteDiagnosticsCollector struct {
-	mu        sync.Mutex
-	startedAt time.Time
-	stateDir  string
-	logs      []daemonLogEntry
-	txFrames  int64
-	rxErrors  int64
-	reconnect int64
-	lastRTTMs float64
+	mu          sync.Mutex
+	startedAt   time.Time
+	stateDir    string
+	logs        []daemonLogEntry
+	txFrames    int64
+	rxErrors    int64
+	reconnect   int64
+	lastRTTMs   float64
+	hasPrevCPU  bool
+	prevCPUWall time.Time
+	prevCPUTime time.Duration
+}
+
+type sharedDiagLogBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+type diagnosticsLogHandler struct {
+	inner  slog.Handler
+	text   slog.Handler
+	shared *sharedDiagLogBuffer
+	diag   *RemoteDiagnosticsCollector
+}
+
+// WrapLoggerWithDiagnostics returns an *slog.Logger that forwards all enabled log records
+// to base while also capturing redacted-ready log lines into diag's bounded in-memory ring.
+func WrapLoggerWithDiagnostics(base *slog.Logger, diag *RemoteDiagnosticsCollector) *slog.Logger {
+	if base == nil {
+		base = slog.Default()
+	}
+	if diag == nil {
+		return base
+	}
+	if _, already := base.Handler().(*diagnosticsLogHandler); already {
+		return base
+	}
+	shared := &sharedDiagLogBuffer{}
+	textHandler := slog.NewTextHandler(&shared.buf, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			if len(groups) == 0 && a.Key == slog.TimeKey {
+				return slog.Attr{}
+			}
+			return a
+		},
+	})
+	return slog.New(&diagnosticsLogHandler{
+		inner:  base.Handler(),
+		text:   textHandler,
+		shared: shared,
+		diag:   diag,
+	})
+}
+
+func (h *diagnosticsLogHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	return h.inner.Enabled(ctx, level)
+}
+
+func (h *diagnosticsLogHandler) Handle(ctx context.Context, r slog.Record) error {
+	h.shared.mu.Lock()
+	h.shared.buf.Reset()
+	_ = h.text.Handle(ctx, r)
+	line := strings.TrimSpace(h.shared.buf.String())
+	h.shared.mu.Unlock()
+
+	ts := r.Time
+	if ts.IsZero() {
+		ts = time.Now().UTC()
+	}
+	h.diag.RecordLogLine(ts, line)
+	return h.inner.Handle(ctx, r)
+}
+
+func (h *diagnosticsLogHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return &diagnosticsLogHandler{
+		inner:  h.inner.WithAttrs(attrs),
+		text:   h.text.WithAttrs(attrs),
+		shared: h.shared,
+		diag:   h.diag,
+	}
+}
+
+func (h *diagnosticsLogHandler) WithGroup(name string) slog.Handler {
+	return &diagnosticsLogHandler{
+		inner:  h.inner.WithGroup(name),
+		text:   h.text.WithGroup(name),
+		shared: h.shared,
+		diag:   h.diag,
+	}
 }
 
 func NewRemoteDiagnosticsCollector(stateDir string, startedAt time.Time) *RemoteDiagnosticsCollector {
@@ -128,15 +214,8 @@ func (c *RemoteDiagnosticsCollector) SampleHostMetrics(now time.Time, ring *Wave
 	if ts.IsZero() {
 		ts = time.Now().UTC()
 	}
-	var memStats runtime.MemStats
-	runtime.ReadMemStats(&memStats)
-	memPct := 0.0
-	if memStats.Sys > 0 {
-		memPct = float64(memStats.HeapAlloc) * 100.0 / float64(memStats.Sys)
-		if memPct > 100 {
-			memPct = 100
-		}
-	}
+	memPct := sampleMemoryUsedPercent()
+	cpuPct := c.sampleProcessCPUPercent(ts)
 
 	diskPct := 0.0
 	if c != nil && c.stateDir != "" {
@@ -172,7 +251,7 @@ func (c *RemoteDiagnosticsCollector) SampleHostMetrics(now time.Time, ring *Wave
 	}
 	return edgecontrol.GatewayHostMetricsPayload{
 		CollectedAtMs:      ts.UnixMilli(),
-		CPUPercent:         readProcessCPUEstimate(),
+		CPUPercent:         cpuPct,
 		MemoryUsedPercent:  roundTwoDecimals(memPct),
 		DiskUsedPercent:    roundTwoDecimals(diskPct),
 		UptimeSeconds:      uptime,
@@ -187,18 +266,117 @@ func (c *RemoteDiagnosticsCollector) SampleHostMetrics(now time.Time, ring *Wave
 	}
 }
 
-func readProcessCPUEstimate() float64 {
+func (c *RemoteDiagnosticsCollector) sampleProcessCPUPercent(now time.Time) float64 {
+	if c == nil {
+		return 0
+	}
 	var ru syscall.Rusage
 	if err := syscall.Getrusage(syscall.RUSAGE_SELF, &ru); err != nil {
 		return 0
 	}
-	pct := float64(runtime.NumGoroutine()) * 0.45
-	if pct > 95 {
-		pct = 95
+	cpuTotal := timevalToDuration(ru.Utime) + timevalToDuration(ru.Stime)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.hasPrevCPU {
+		c.hasPrevCPU = true
+		c.prevCPUWall = now
+		c.prevCPUTime = cpuTotal
+		return 0
+	}
+	wallDelta := now.Sub(c.prevCPUWall)
+	cpuDelta := cpuTotal - c.prevCPUTime
+	c.prevCPUWall = now
+	c.prevCPUTime = cpuTotal
+	if wallDelta <= 0 || cpuDelta <= 0 {
+		return 0
+	}
+	numCPU := runtime.NumCPU()
+	if numCPU < 1 {
+		numCPU = 1
+	}
+	pct := (cpuDelta.Seconds() / (wallDelta.Seconds() * float64(numCPU))) * 100.0
+	if pct < 0 {
+		pct = 0
+	} else if pct > 100 {
+		pct = 100
 	}
 	return roundTwoDecimals(pct)
 }
 
+func timevalToDuration(tv syscall.Timeval) time.Duration {
+	return time.Duration(tv.Sec)*time.Second + time.Duration(tv.Usec)*time.Microsecond
+}
+
+func sampleMemoryUsedPercent() float64 {
+	if runtime.GOOS == "linux" {
+		if pct, ok := readLinuxProcMemoryPercent("/proc/self/statm", "/proc/meminfo", os.Getpagesize()); ok {
+			return pct
+		}
+	}
+	var memStats runtime.MemStats
+	runtime.ReadMemStats(&memStats)
+	if memStats.Sys == 0 {
+		return 0
+	}
+	memPct := float64(memStats.HeapAlloc) * 100.0 / float64(memStats.Sys)
+	if memPct > 100 {
+		memPct = 100
+	}
+	return memPct
+}
+
+func readLinuxProcMemoryPercent(statmPath, meminfoPath string, pageSize int) (float64, bool) {
+	if pageSize <= 0 {
+		return 0, false
+	}
+	statmRaw, err := os.ReadFile(statmPath)
+	if err != nil {
+		return 0, false
+	}
+	statmFields := strings.Fields(string(statmRaw))
+	if len(statmFields) < 2 {
+		return 0, false
+	}
+	rssPages, err := strconv.ParseInt(statmFields[1], 10, 64)
+	if err != nil || rssPages < 0 {
+		return 0, false
+	}
+
+	meminfoRaw, err := os.ReadFile(meminfoPath)
+	if err != nil {
+		return 0, false
+	}
+	var totalKB int64
+	for _, line := range strings.Split(string(meminfoRaw), "\n") {
+		if !strings.HasPrefix(line, "MemTotal:") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) >= 2 {
+			if parsed, convErr := strconv.ParseInt(fields[1], 10, 64); convErr == nil {
+				totalKB = parsed
+			}
+		}
+		break
+	}
+	if totalKB <= 0 {
+		return 0, false
+	}
+	totalBytes := float64(totalKB) * 1024.0
+	rssBytes := float64(rssPages) * float64(pageSize)
+	pct := rssBytes * 100.0 / totalBytes
+	if pct < 0 {
+		pct = 0
+	} else if pct > 100 {
+		pct = 100
+	}
+	return pct, true
+}
+
 func roundTwoDecimals(v float64) float64 {
+	if v <= 0 {
+		return 0
+	}
 	return float64(int64(v*100+0.5)) / 100
 }

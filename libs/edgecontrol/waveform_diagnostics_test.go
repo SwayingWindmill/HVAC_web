@@ -75,4 +75,35 @@ func TestWaveformAndDiagnosticsCodecRoundTrip(t *testing.T) {
 	}, now); err == nil {
 		t.Fatal("expected arbitrary shell action to be rejected")
 	}
+
+	syncWire, err := EncodeDiagnosticsDownlink(gwID, DiagnosticsDownlinkPayload{
+		RequestID: "req-sync-1",
+		Action:    DiagnosticsActionSyncWaveformRules,
+		Rules: []WaveformRuleConfig{{
+			RuleID:         "0194f000-9900-7000-8000-000000000001",
+			RuleName:       "冷冻水高限",
+			Enabled:        true,
+			DeviceCode:     "chiller-01",
+			PointCode:      "chw_supply_temp",
+			TriggerType:    WaveformTriggerThresholdHigh,
+			ThresholdValue: 11.5,
+		}},
+	}, now)
+	if err != nil {
+		t.Fatalf("EncodeDiagnosticsDownlink SYNC_WAVEFORM_RULES: %v", err)
+	}
+	_, decodedSync, err := DecodeDiagnosticsDownlink(syncWire, gwID)
+	if err != nil || decodedSync.Action != DiagnosticsActionSyncWaveformRules || len(decodedSync.Rules) != 1 || decodedSync.Rules[0].SampleRateHz != 1 {
+		t.Fatalf("DecodeDiagnosticsDownlink SYNC_WAVEFORM_RULES: cmd=%+v err=%v", decodedSync, err)
+	}
+
+	if _, err := EncodeDiagnosticsDownlink(gwID, DiagnosticsDownlinkPayload{
+		RequestID: "req-sync-bad",
+		Action:    DiagnosticsActionSyncWaveformRules,
+		Rules: []WaveformRuleConfig{{
+			RuleName: "",
+		}},
+	}, now); err == nil {
+		t.Fatal("expected invalid waveform rule in SYNC_WAVEFORM_RULES to be rejected")
+	}
 }

@@ -1,14 +1,17 @@
 package edgedaemon
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -110,6 +113,7 @@ type Daemon struct {
 	doExecutor          *DOSequenceExecutor
 	concentratorRPC     *ConcentratorRPCExecutor
 	fieldPlant          *FieldPlantRunner
+	plantMirrors        *FieldPlantMirrorRegistry
 	lifecycleCtx        context.Context
 	lifecycleCancel     context.CancelFunc
 	ota                 *OTAAgent
@@ -123,10 +127,12 @@ type Daemon struct {
 	sequence            atomic.Uint64
 	mqttConnected       atomic.Bool
 	mqttHealthyGen      atomic.Uint64
+	mqttReconnectGen    atomic.Uint64
 	mqttNotifyCh        chan struct{}
 	connectedSessionGen atomic.Uint64
 	ready               atomic.Bool
 	now                 func() time.Time
+	waveformSyncMu      sync.Mutex
 	sessionMu           sync.Mutex
 	sessionID           string
 	sessionStartedAt    time.Time
@@ -143,10 +149,17 @@ func NewDaemon(cfg Config, opts DaemonOptions) (*Daemon, error) {
 		return nil, err
 	}
 
+	nowFn := opts.Now
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+
 	logger := opts.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
+	remoteDiag := NewRemoteDiagnosticsCollector(cfg.StateDir, nowFn())
+	logger = WrapLoggerWithDiagnostics(logger, remoteDiag)
 	obs := observability.NewRuntime(observability.RuntimeConfig{
 		Service: "edge-gateway",
 		Logger:  logger,
@@ -248,14 +261,10 @@ func NewDaemon(cfg Config, opts DaemonOptions) (*Daemon, error) {
 		)
 	}
 
-	nowFn := opts.Now
-	if nowFn == nil {
-		nowFn = time.Now
-	}
-
 	modelManager := NewEdgeModelManager(cfg.OTA.TrustedPublicKeys, logger)
+	scheduleController.SetModelSetpointProvider(modelManager.ActiveControlSetpointCForImage)
 	waveformRing := NewWaveformRingBuffer(defaultWaveformRingHorizon)
-	remoteDiag := NewRemoteDiagnosticsCollector(cfg.StateDir, nowFn())
+	loadPersistedWaveformRules(cfg.StateDir, waveformRing, logger)
 	shadow := NewShadowManager(cfg.GatewayID, cfg.StateDir, host, registry, interlock, fallback, ruleEngine, logger)
 	shadow.AttachPlantControllers(aggregator, scheduleController, clusterController)
 	shadow.AttachModelManager(modelManager)
@@ -366,6 +375,16 @@ func NewDaemon(cfg Config, opts DaemonOptions) (*Daemon, error) {
 			PublishTelemetry: func(pubCtx context.Context, payload []byte) {
 				d.publishOrSpool(pubCtx, "hvac/v1/"+cfg.GatewayID+"/up/telemetry", 1, EvidenceTelemetryMedium, payload)
 			},
+			OnObserved: func(ts time.Time, devices []mqttUplinkDevice) {
+				if d.plantMirrors != nil {
+					d.plantMirrors.Observe(ts, devices)
+				}
+			},
+			OnBusStats: func(txFrames, rxErrors int64) {
+				if d.remoteDiag != nil {
+					d.remoteDiag.RecordCycleBusStats(txFrames, rxErrors)
+				}
+			},
 			Now:    nowFn,
 			Logger: logger,
 		})
@@ -377,6 +396,14 @@ func NewDaemon(cfg Config, opts DaemonOptions) (*Daemon, error) {
 		}
 		d.fieldPlant = plantRunner
 		shadow.AttachFieldPlant(plantRunner)
+		plantMirrors, mirrorErr := NewFieldPlantMirrorRegistry(plantCfg, plantRunner.ActiveCopyRoutes(), host)
+		if mirrorErr != nil {
+			lifecycleCancel()
+			_ = commands.Close()
+			_ = registry.Close()
+			return nil, fmt.Errorf("init field plant mirrors: %w", mirrorErr)
+		}
+		d.plantMirrors = plantMirrors
 
 		if plantCfg.IsConcentratorRPCEnabled() {
 			concRPC, concErr := NewConcentratorRPCExecutor(ConcentratorExecutorOptions{
@@ -501,7 +528,7 @@ func (d *Daemon) RemoteDiagnostics() *RemoteDiagnosticsCollector {
 	return d.remoteDiag
 }
 
-// HandleDiagnosticsDownlink executes validated TRIGGER_WAVEFORM or PULL_LOG_BUNDLE commands.
+// HandleDiagnosticsDownlink executes validated TRIGGER_WAVEFORM, PULL_LOG_BUNDLE, or SYNC_WAVEFORM_RULES commands.
 func (d *Daemon) HandleDiagnosticsDownlink(ctx context.Context, payload []byte) error {
 	_, cmd, err := edgecontrol.DecodeDiagnosticsDownlink(payload, d.cfg.GatewayID)
 	if err != nil {
@@ -521,8 +548,150 @@ func (d *Daemon) HandleDiagnosticsDownlink(ctx context.Context, payload []byte) 
 		if wire, encErr := edgecontrol.EncodeDiagnosticsLogReply(d.cfg.GatewayID, reply, now); encErr == nil {
 			d.publishOrSpool(ctx, edgecontrol.DiagnosticsUplinkTopic(d.cfg.GatewayID), 1, EvidenceDiagnostic, wire)
 		}
+	case edgecontrol.DiagnosticsActionSyncWaveformRules:
+		if err := d.applyAndPersistWaveformRules(cmd.Rules); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+const waveformRulesFileName = "waveform-rules.json"
+
+func loadPersistedWaveformRules(stateDir string, ring *WaveformRingBuffer, logger *slog.Logger) {
+	trimmed := strings.TrimSpace(stateDir)
+	if trimmed == "" || ring == nil {
+		return
+	}
+	path := filepath.Join(trimmed, waveformRulesFileName)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) && logger != nil {
+			logger.Warn("edge_waveform_rules_read_failed", "error", err.Error())
+		}
+		return
+	}
+	var rules []edgecontrol.WaveformRuleConfig
+	if err := json.Unmarshal(raw, &rules); err != nil {
+		if logger != nil {
+			logger.Warn("edge_waveform_rules_decode_failed", "error", err.Error())
+		}
+		return
+	}
+	if err := ring.SetRules(rules); err != nil && logger != nil {
+		logger.Warn("edge_waveform_rules_apply_failed", "error", err.Error())
+	}
+}
+
+func (d *Daemon) applyAndPersistWaveformRules(rules []edgecontrol.WaveformRuleConfig) error {
+	if d == nil || d.waveformRing == nil {
+		return nil
+	}
+	d.waveformSyncMu.Lock()
+	defer d.waveformSyncMu.Unlock()
+
+	if err := d.waveformRing.SetRules(rules); err != nil {
+		return err
+	}
+	trimmed := strings.TrimSpace(d.cfg.StateDir)
+	if trimmed == "" {
+		return nil
+	}
+	if err := os.MkdirAll(trimmed, 0o750); err != nil {
+		return fmt.Errorf("create waveform rules state dir: %w", err)
+	}
+	snapshot := d.waveformRing.Rules()
+	if snapshot == nil {
+		snapshot = []edgecontrol.WaveformRuleConfig{}
+	}
+	encoded, err := json.MarshalIndent(snapshot, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal waveform rules: %w", err)
+	}
+	return writeFileAtomic(filepath.Join(trimmed, waveformRulesFileName), append(encoded, '\n'), 0o600)
+}
+
+func (d *Daemon) pullAndSyncWaveformRules(ctx context.Context) error {
+	if d == nil || d.waveformRing == nil {
+		return nil
+	}
+	baseURL := strings.TrimRight(strings.TrimSpace(d.cfg.PlatformBaseURL), "/")
+	if baseURL == "" {
+		return nil
+	}
+
+	var client *http.Client
+	var id tlsIdentity
+	if strings.TrimSpace(d.cfg.CAFile) != "" {
+		var err error
+		client, id, err = newMTLSHTTPClient(d.cfg.CAFile, d.cfg.CertFile, d.cfg.KeyFile, d.cfg.ServerName, 20*time.Second)
+		if err != nil {
+			return err
+		}
+	} else {
+		client = &http.Client{Timeout: 20 * time.Second}
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/gateway/v1/waveform-rules", nil)
+	if err != nil {
+		return err
+	}
+	if err := signHTTPPoPIfPresent(req, id, d.now().UTC()); err != nil {
+		return fmt.Errorf("sign waveform-rules pull PoP: %w", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("pull waveform rules: %w", err)
+	}
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
+	_ = resp.Body.Close()
+	if readErr != nil {
+		return fmt.Errorf("read waveform rules response: %w", readErr)
+	}
+	if len(body) > 1<<20 {
+		return errors.New("waveform rules pull response exceeds maximum size")
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("pull waveform rules failed with HTTP %d", resp.StatusCode)
+	}
+
+	var parsed struct {
+		GatewayID string                           `json:"gatewayId"`
+		Rules     []edgecontrol.WaveformRuleConfig `json:"rules"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return fmt.Errorf("decode waveform rules pull response: %w", err)
+	}
+	if gw := strings.TrimSpace(parsed.GatewayID); gw != "" && !strings.EqualFold(gw, strings.TrimSpace(d.cfg.GatewayID)) {
+		return fmt.Errorf("waveform rules gatewayId mismatch: got %q", gw)
+	}
+
+	cleaned := make([]edgecontrol.WaveformRuleConfig, 0, len(parsed.Rules))
+	for _, raw := range parsed.Rules {
+		v, valErr := edgecontrol.ValidateWaveformRuleConfig(raw)
+		if valErr != nil {
+			return valErr
+		}
+		cleaned = append(cleaned, v)
+	}
+	current := d.waveformRing.Rules()
+	if waveformRulesJSONEqual(current, cleaned) {
+		if trimmed := strings.TrimSpace(d.cfg.StateDir); trimmed != "" {
+			if _, statErr := os.Stat(filepath.Join(trimmed, waveformRulesFileName)); statErr == nil {
+				return nil
+			}
+		}
+	}
+	return d.applyAndPersistWaveformRules(cleaned)
+}
+
+func waveformRulesJSONEqual(a, b []edgecontrol.WaveformRuleConfig) bool {
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
+	ab, errA := json.Marshal(a)
+	bb, errB := json.Marshal(b)
+	return errA == nil && errB == nil && bytes.Equal(ab, bb)
 }
 
 // PublishHostMetricsOnce samples host, RS485 bus, and MQTT link metrics and publishes them.
@@ -550,7 +719,7 @@ func (d *Daemon) evaluateWaveformAndMetrics(ctx context.Context, img edgecontrol
 			}
 		}
 	}
-	if d.remoteDiag != nil {
+	if d.remoteDiag != nil && d.fieldPlant == nil {
 		snaps := img.Channels()
 		var errCount int64
 		for _, snap := range snaps {
@@ -828,6 +997,9 @@ func (d *Daemon) runShadowLoop(ctx context.Context) {
 		if err := d.shadow.PullAndSync(ctx, d.cfg); err != nil && ctx.Err() == nil {
 			d.logger.Warn("edge_shadow_sync_failed", "error", err.Error())
 		}
+		if err := d.pullAndSyncWaveformRules(ctx); err != nil && ctx.Err() == nil {
+			d.logger.Warn("edge_waveform_rules_sync_failed", "error", err.Error())
+		}
 	}
 	syncOnce()
 	for {
@@ -1083,17 +1255,35 @@ func (d *Daemon) startMQTTSession(ctx context.Context) error {
 	}
 
 	session.AddObserver(func(state mqttclient.SessionState) {
-		connected := state.Healthy()
-		if connected && state.Generation > 0 {
-			d.mqttHealthyGen.Store(state.Generation)
-		}
-		d.mqttConnected.Store(connected)
-		if connected {
-			d.notifyMQTTMaintenance()
-		}
+		d.handleMQTTSessionState(state)
 	})
 	d.mqttSession = session
 	return nil
+}
+
+func (d *Daemon) handleMQTTSessionState(state mqttclient.SessionState) {
+	connected := state.Healthy()
+	if connected && state.Generation > 0 {
+		d.mqttHealthyGen.Store(state.Generation)
+		if state.Generation > 1 {
+			for {
+				prev := d.mqttReconnectGen.Load()
+				if state.Generation <= prev {
+					break
+				}
+				if d.mqttReconnectGen.CompareAndSwap(prev, state.Generation) {
+					if d.remoteDiag != nil {
+						d.remoteDiag.RecordMQTTStatus(-1, true)
+					}
+					break
+				}
+			}
+		}
+	}
+	d.mqttConnected.Store(connected)
+	if connected {
+		d.notifyMQTTMaintenance()
+	}
 }
 
 func (d *Daemon) notifyMQTTMaintenance() {
@@ -1199,6 +1389,9 @@ func (d *Daemon) emitCycleTelemetry(ctx context.Context, img edgecontrol.Process
 			if !passRaw {
 				continue
 			}
+		}
+		if d.plantMirrors != nil && d.plantMirrors.HasDevice(snap.Descriptor.ComponentID) {
+			continue
 		}
 		if d.deadband != nil {
 			sample := edgecontrol.DeadbandSample{
@@ -1506,6 +1699,7 @@ func valueTypeForDescriptor(desc edgecontrol.ChannelDescriptor) string {
 func (d *Daemon) publishOrSpool(ctx context.Context, topic string, qos byte, class EvidenceClass, payload []byte) {
 	if d.mqttSession != nil && d.mqttConnected.Load() {
 		pubCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		started := time.Now()
 		_, err := d.mqttSession.Publish(pubCtx, &paho.Publish{
 			Topic:   topic,
 			QoS:     qos,
@@ -1513,6 +1707,10 @@ func (d *Daemon) publishOrSpool(ctx context.Context, topic string, qos byte, cla
 		})
 		cancel()
 		if err == nil {
+			if qos >= 1 && d.remoteDiag != nil {
+				rttMs := float64(time.Since(started).Nanoseconds()) / 1e6
+				d.remoteDiag.RecordMQTTStatus(rttMs, false)
+			}
 			return
 		}
 	}

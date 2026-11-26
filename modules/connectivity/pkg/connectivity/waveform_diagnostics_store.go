@@ -134,6 +134,7 @@ type GatewayHostMetricsSummary struct {
 type WaveformDiagnosticsStore interface {
 	CheckGatewayScopeForDiagnostics(ctx context.Context, claims registryauth.GrantClaims, gatewayID string) (tenantID, siteID string, err error)
 	ListGatewayWaveformRules(ctx context.Context, claims registryauth.GrantClaims, gatewayID string) ([]WaveformRuleRecord, error)
+	ListGatewayWaveformRulesForGateway(ctx context.Context, gatewayID string) ([]WaveformRuleRecord, error)
 	CreateGatewayWaveformRule(ctx context.Context, claims registryauth.GrantClaims, gatewayID string, input UpsertWaveformRuleInput) (WaveformRuleRecord, error)
 	UpdateGatewayWaveformRule(ctx context.Context, claims registryauth.GrantClaims, gatewayID, ruleID string, input UpsertWaveformRuleInput) (WaveformRuleRecord, error)
 	DeleteGatewayWaveformRule(ctx context.Context, claims registryauth.GrantClaims, gatewayID, ruleID string) error
@@ -184,7 +185,7 @@ func (b *DiagnosticsMQTTBridge) CompleteLogReply(_ context.Context, _ string, re
 	}
 }
 
-func (b *DiagnosticsMQTTBridge) PublishTriggerWaveform(ctx context.Context, gatewayID string, cmd edgecontrol.DiagnosticsDownlinkPayload) error {
+func (b *DiagnosticsMQTTBridge) publishDownlink(ctx context.Context, gatewayID string, cmd edgecontrol.DiagnosticsDownlinkPayload) error {
 	if b == nil {
 		return nil
 	}
@@ -195,6 +196,14 @@ func (b *DiagnosticsMQTTBridge) PublishTriggerWaveform(ctx context.Context, gate
 		return nil
 	}
 	return fn(ctx, gatewayID, cmd)
+}
+
+func (b *DiagnosticsMQTTBridge) PublishTriggerWaveform(ctx context.Context, gatewayID string, cmd edgecontrol.DiagnosticsDownlinkPayload) error {
+	return b.publishDownlink(ctx, gatewayID, cmd)
+}
+
+func (b *DiagnosticsMQTTBridge) PublishSyncWaveformRules(ctx context.Context, gatewayID string, cmd edgecontrol.DiagnosticsDownlinkPayload) error {
+	return b.publishDownlink(ctx, gatewayID, cmd)
 }
 
 func (b *DiagnosticsMQTTBridge) RequestLogBundle(ctx context.Context, gatewayID string, cmd edgecontrol.DiagnosticsDownlinkPayload) (edgecontrol.DiagnosticsLogReplyPayload, error) {
@@ -246,7 +255,7 @@ func (store *Store) writeAsTenant(ctx context.Context, tenantID string, write fu
 	return tx.Commit(ctx)
 }
 
-func (store *Store) resolveGatewayScopeForDiagnostics(ctx context.Context, claims registryauth.GrantClaims, gatewayID string) (string, string, error) {
+func (store *Store) resolveActiveGatewayTenantAndSite(ctx context.Context, gatewayID string) (string, string, error) {
 	if store == nil || store.pool == nil {
 		return "", "", errors.New("connectivity store is closed")
 	}
@@ -264,6 +273,14 @@ WHERE gateway_id = $1::uuid AND status = 'ACTIVE'
 	}
 	if err != nil {
 		return "", "", fmt.Errorf("read Registry gateway directory: %w", err)
+	}
+	return tenantID, siteID, nil
+}
+
+func (store *Store) resolveGatewayScopeForDiagnostics(ctx context.Context, claims registryauth.GrantClaims, gatewayID string) (string, string, error) {
+	tenantID, siteID, err := store.resolveActiveGatewayTenantAndSite(ctx, gatewayID)
+	if err != nil {
+		return "", "", err
 	}
 	if tenantID != claims.TenantID || !registryauth.ScopeAllows(claims, siteID) {
 		return "", "", ErrCredentialForbidden
@@ -301,8 +318,20 @@ func (store *Store) ListGatewayWaveformRules(ctx context.Context, claims registr
 	if err != nil {
 		return nil, err
 	}
+	return store.listGatewayWaveformRulesByTenant(ctx, tenantID, gatewayID)
+}
+
+func (store *Store) ListGatewayWaveformRulesForGateway(ctx context.Context, gatewayID string) ([]WaveformRuleRecord, error) {
+	tenantID, err := store.resolveActiveGatewayTenant(ctx, gatewayID)
+	if err != nil {
+		return nil, err
+	}
+	return store.listGatewayWaveformRulesByTenant(ctx, tenantID, gatewayID)
+}
+
+func (store *Store) listGatewayWaveformRulesByTenant(ctx context.Context, tenantID, gatewayID string) ([]WaveformRuleRecord, error) {
 	items := make([]WaveformRuleRecord, 0)
-	err = store.readAsTenant(ctx, tenantID, func(tx pgx.Tx) error {
+	err := store.readAsTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		rows, qErr := tx.Query(ctx, `
 SELECT id::text, tenant_id::text, site_id::text, gateway_id::text, rule_name, enabled,
        device_code, point_code, trigger_type, threshold_value, delta_window_seconds,

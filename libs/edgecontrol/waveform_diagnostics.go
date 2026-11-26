@@ -46,8 +46,9 @@ const (
 type DiagnosticsDownlinkAction string
 
 const (
-	DiagnosticsActionTriggerWaveform DiagnosticsDownlinkAction = "TRIGGER_WAVEFORM"
-	DiagnosticsActionPullLogBundle   DiagnosticsDownlinkAction = "PULL_LOG_BUNDLE"
+	DiagnosticsActionTriggerWaveform   DiagnosticsDownlinkAction = "TRIGGER_WAVEFORM"
+	DiagnosticsActionPullLogBundle     DiagnosticsDownlinkAction = "PULL_LOG_BUNDLE"
+	DiagnosticsActionSyncWaveformRules DiagnosticsDownlinkAction = "SYNC_WAVEFORM_RULES"
 )
 
 type WaveformRuleConfig struct {
@@ -102,6 +103,7 @@ type DiagnosticsDownlinkPayload struct {
 	RequestedBy   string                    `json:"requestedBy,omitempty"`
 	MaxBytes      int                       `json:"maxBytes,omitempty"`
 	SinceMinutes  int                       `json:"sinceMinutes,omitempty"`
+	Rules         []WaveformRuleConfig      `json:"rules,omitempty"`
 }
 
 type DiagnosticsLogReplyPayload struct {
@@ -317,18 +319,36 @@ func DecodeWaveformBurst(payload []byte, topicGatewayID string) (ShadowReplicati
 	return env, burst, nil
 }
 
+func validateDiagnosticsDownlink(cmd *DiagnosticsDownlinkPayload) error {
+	switch cmd.Action {
+	case DiagnosticsActionTriggerWaveform, DiagnosticsActionPullLogBundle, DiagnosticsActionSyncWaveformRules:
+	default:
+		return fmt.Errorf("unsupported diagnostics action %q", cmd.Action)
+	}
+	if strings.TrimSpace(cmd.RequestID) == "" {
+		return errors.New("diagnostics requestId is required")
+	}
+	if cmd.Action == DiagnosticsActionSyncWaveformRules && len(cmd.Rules) > 0 {
+		validated := make([]WaveformRuleConfig, len(cmd.Rules))
+		for i, rule := range cmd.Rules {
+			clean, err := ValidateWaveformRuleConfig(rule)
+			if err != nil {
+				return fmt.Errorf("waveform rule[%d]: %w", i, err)
+			}
+			validated[i] = clean
+		}
+		cmd.Rules = validated
+	}
+	return nil
+}
+
 func EncodeDiagnosticsDownlink(gatewayID string, cmd DiagnosticsDownlinkPayload, now time.Time) ([]byte, error) {
 	gwID := strings.TrimSpace(gatewayID)
 	if gwID == "" || len(gwID) > 128 {
 		return nil, errors.New("DIAGNOSTICS_COMMAND requires valid edgeId")
 	}
-	switch cmd.Action {
-	case DiagnosticsActionTriggerWaveform, DiagnosticsActionPullLogBundle:
-	default:
-		return nil, fmt.Errorf("unsupported diagnostics action %q", cmd.Action)
-	}
-	if strings.TrimSpace(cmd.RequestID) == "" {
-		return nil, errors.New("diagnostics requestId is required")
+	if err := validateDiagnosticsDownlink(&cmd); err != nil {
+		return nil, err
 	}
 	return encodeReplicationEnvelope(gwID, ReplicationTypeDiagnosticsCommand, cmd, now)
 }
@@ -342,13 +362,8 @@ func DecodeDiagnosticsDownlink(payload []byte, topicGatewayID string) (ShadowRep
 	if err := DecodeStrictShadowObject(env.Payload, &cmd, "DIAGNOSTICS_COMMAND payload"); err != nil {
 		return ShadowReplicationEnvelope{}, DiagnosticsDownlinkPayload{}, err
 	}
-	switch cmd.Action {
-	case DiagnosticsActionTriggerWaveform, DiagnosticsActionPullLogBundle:
-	default:
-		return ShadowReplicationEnvelope{}, DiagnosticsDownlinkPayload{}, fmt.Errorf("unsupported diagnostics action %q", cmd.Action)
-	}
-	if strings.TrimSpace(cmd.RequestID) == "" {
-		return ShadowReplicationEnvelope{}, DiagnosticsDownlinkPayload{}, errors.New("diagnostics requestId is required")
+	if err := validateDiagnosticsDownlink(&cmd); err != nil {
+		return ShadowReplicationEnvelope{}, DiagnosticsDownlinkPayload{}, err
 	}
 	return env, cmd, nil
 }
