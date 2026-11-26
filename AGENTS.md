@@ -4,7 +4,7 @@
 
 ## 先读什么
 
-- **流程与断点交接以 `pstack`（`.agents/skills/poteto-mode/SKILL.md`）为准**：先读对应剧本，断点续跑走 `poteto-mode/playbooks/session-pickup.md`（优先查 `resume.ts` 断点，再看会话记录、活跃分支和开放 PR）；需求与待办认领只看 GitHub Issues（`docs/agents/issue-tracker.md`），不再把 `docs/HANDOFF.md` 当作任务排期队列。
+- **流程与断点交接以 `pstack`（`.agents/skills/poteto-mode/SKILL.md`）为准**：先读对应剧本，派发子 Agent 时首行令其先读 `.agents/skills/poteto-mode/worker.md`，断点续跑走 `poteto-mode/playbooks/session-pickup.md`（优先查 `resume.ts` 断点，再看会话记录、活跃分支和开放 PR）；需求与待办认领只看 GitHub Issues（`docs/agents/issue-tracker.md`），不再把 `docs/HANDOFF.md` 当作任务排期队列。
 - `GLOSSARY.md` 和 `docs/adr/`：业务名词和架构决定。动一个领域的代码前，读相关的名词和决定。
 - `docs/specs/`：每个功能做什么、不做什么、怎么验收。
 - `DESIGN.md`：页面的设计系统。`PRODUCT.md`：用户是谁、要完成什么、哪些安全边界不能碰。
