@@ -326,3 +326,213 @@ func TestFileTimedataPurgeClearsMemoryAndDisk(t *testing.T) {
 		t.Fatalf("expected clean disk reopen LatestSequence=0, got %d", reopened.LatestSequence())
 	}
 }
+
+func TestFileTimedataDefaultsMatchEG8200RetentionLimits(t *testing.T) {
+	store, err := OpenFileTimedata(t.TempDir(), PriorityLow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.opts.MaxRecords != 50000 || store.opts.MaxDiskBytes != 32<<20 || store.opts.MaxAge != 7*24*time.Hour {
+		t.Fatalf("unexpected default retention options: %+v", store.opts)
+	}
+}
+
+func TestFileTimedataBoundsMaxRecordsAndPreservesMonotonicSequence(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenFileTimedataWithOptions(dir, PriorityLow, FileTimedataOptions{
+		MaxRecords: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := NewRuntime()
+	desc := timedataDescriptor("chiller01", "Power", "point-power", PriorityHigh, AccessReadOnly)
+	if err := rt.Register(desc); err != nil {
+		t.Fatal(err)
+	}
+
+	base := time.Date(2026, 11, 20, 0, 0, 0, 0, time.UTC)
+	for i := 1; i <= 12; i++ {
+		at := base.Add(time.Duration(i) * time.Second)
+		if err := rt.PublishNext(desc.Address(), Sample{Value: DoubleValue(float64(i * 10)), Quality: QualityGood, ObservedAt: at, Sequence: uint64(i)}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.RecordImage(rt.SwitchProcessImage(at)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if store.LatestSequence() != 12 {
+		t.Fatalf("LatestSequence = %d, want 12", store.LatestSequence())
+	}
+	recs, err := store.QueryAfterSequence(0, 100, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 5 || recs[0].Sequence != 8 || recs[4].Sequence != 12 {
+		t.Fatalf("retained records = %+v, want sequences 8..12", recs)
+	}
+
+	historyBytes, err := os.ReadFile(filepath.Join(dir, "history.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lines := strings.Split(strings.TrimSpace(string(historyBytes)), "\n"); len(lines) != 5 {
+		t.Fatalf("compacted history.jsonl lines = %d, want 5", len(lines))
+	}
+
+	reopened, err := OpenFileTimedataWithOptions(dir, PriorityLow, FileTimedataOptions{
+		MaxRecords: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened.LatestSequence() != 12 {
+		t.Fatalf("reopened LatestSequence = %d, want 12", reopened.LatestSequence())
+	}
+	at13 := base.Add(13 * time.Second)
+	if err := rt.PublishNext(desc.Address(), Sample{Value: DoubleValue(130), Quality: QualityGood, ObservedAt: at13, Sequence: 13}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reopened.RecordImage(rt.SwitchProcessImage(at13)); err != nil {
+		t.Fatal(err)
+	}
+	if reopened.LatestSequence() != 13 {
+		t.Fatalf("LatestSequence after reopen append = %d, want 13", reopened.LatestSequence())
+	}
+	recsAfter, err := reopened.QueryAfterSequence(0, 100, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recsAfter) != 5 || recsAfter[0].Sequence != 9 || recsAfter[4].Sequence != 13 {
+		t.Fatalf("retained records after reopen = %+v, want sequences 9..13", recsAfter)
+	}
+}
+
+func TestFileTimedataBoundsMaxDiskBytes(t *testing.T) {
+	dir := t.TempDir()
+	const maxDiskBytes = int64(600)
+	store, err := OpenFileTimedataWithOptions(dir, PriorityLow, FileTimedataOptions{
+		MaxRecords:   1000,
+		MaxDiskBytes: maxDiskBytes,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := NewRuntime()
+	desc := timedataDescriptor("chiller01", "Power", "point-power", PriorityHigh, AccessReadOnly)
+	if err := rt.Register(desc); err != nil {
+		t.Fatal(err)
+	}
+
+	base := time.Date(2026, 11, 20, 1, 0, 0, 0, time.UTC)
+	for i := 1; i <= 15; i++ {
+		at := base.Add(time.Duration(i) * time.Second)
+		_ = rt.PublishNext(desc.Address(), Sample{Value: DoubleValue(float64(i)), Quality: QualityGood, ObservedAt: at, Sequence: uint64(i)})
+		if _, err := store.RecordImage(rt.SwitchProcessImage(at)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	info, err := os.Stat(filepath.Join(dir, "history.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() > maxDiskBytes {
+		t.Fatalf("history.jsonl size = %d, exceeds MaxDiskBytes=%d", info.Size(), maxDiskBytes)
+	}
+	recs, err := store.QueryAfterSequence(0, 100, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) == 0 || len(recs) >= 15 || recs[len(recs)-1].Sequence != 15 {
+		t.Fatalf("expected trimmed newest records ending at seq 15, got %+v", recs)
+	}
+	if store.LatestSequence() != 15 {
+		t.Fatalf("LatestSequence = %d, want 15", store.LatestSequence())
+	}
+
+	reopened, err := OpenFileTimedataWithOptions(dir, PriorityLow, FileTimedataOptions{
+		MaxRecords:   1000,
+		MaxDiskBytes: maxDiskBytes,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened.LatestSequence() != 15 {
+		t.Fatalf("reopened LatestSequence = %d, want 15", reopened.LatestSequence())
+	}
+}
+
+func TestFileTimedataBoundsMaxAgeAndPreservesNextSequenceWhenAllExpired(t *testing.T) {
+	dir := t.TempDir()
+	curTime := time.Date(2026, 11, 20, 8, 0, 0, 0, time.UTC)
+	nowFn := func() time.Time { return curTime }
+
+	store, err := OpenFileTimedataWithOptions(dir, PriorityLow, FileTimedataOptions{
+		MaxAge: 24 * time.Hour,
+		Now:    nowFn,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := NewRuntime()
+	desc := timedataDescriptor("chiller01", "Power", "point-power", PriorityHigh, AccessReadOnly)
+	if err := rt.Register(desc); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 1; i <= 5; i++ {
+		at := curTime.Add(time.Duration(i) * time.Minute)
+		_ = rt.PublishNext(desc.Address(), Sample{Value: DoubleValue(float64(i)), Quality: QualityGood, ObservedAt: at, Sequence: uint64(i)})
+		if _, err := store.RecordImage(rt.SwitchProcessImage(at)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if store.LatestSequence() != 5 {
+		t.Fatalf("LatestSequence = %d, want 5", store.LatestSequence())
+	}
+
+	// Advance clock past MaxAge so all 5 samples expire on reopen.
+	curTime = curTime.Add(26 * time.Hour)
+	reopened, err := OpenFileTimedataWithOptions(dir, PriorityLow, FileTimedataOptions{
+		MaxAge: 24 * time.Hour,
+		Now:    nowFn,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened.LatestSequence() != 5 {
+		t.Fatalf("LatestSequence after full MaxAge expiry = %d, want 5", reopened.LatestSequence())
+	}
+	if _, ok := reopened.Latest(desc.Address()); ok {
+		t.Fatal("expected expired Latest sample to be evicted")
+	}
+	recs, err := reopened.QueryAfterSequence(0, 100, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 0 {
+		t.Fatalf("expected 0 retained records after MaxAge expiry, got %d", len(recs))
+	}
+	info, err := os.Stat(filepath.Join(dir, "history.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() != 0 {
+		t.Fatalf("expected compacted history.jsonl size=0 after all expired, got %d", info.Size())
+	}
+
+	// Subsequent sample continues monotonically at sequence 6.
+	_ = rt.PublishNext(desc.Address(), Sample{Value: DoubleValue(99), Quality: QualityGood, ObservedAt: curTime, Sequence: 6})
+	if _, err := reopened.RecordImage(rt.SwitchProcessImage(curTime)); err != nil {
+		t.Fatal(err)
+	}
+	if reopened.LatestSequence() != 6 {
+		t.Fatalf("LatestSequence after post-expiry append = %d, want 6", reopened.LatestSequence())
+	}
+	latest, ok := reopened.Latest(desc.Address())
+	if !ok || latest.Sequence != 6 || latest.Sample.Value.Double != 99 {
+		t.Fatalf("unexpected Latest after post-expiry append: %+v ok=%v", latest, ok)
+	}
+}

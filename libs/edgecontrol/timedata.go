@@ -15,6 +15,15 @@ import (
 	"time"
 )
 
+const (
+	DefaultFileTimedataMaxRecords   = 50000
+	DefaultFileTimedataMaxDiskBytes = int64(32 << 20)
+	DefaultFileTimedataMaxAge       = 7 * 24 * time.Hour
+
+	timedataDiskCompactBatchThreshold = 256
+	timedataImmediateDiskTrimRecords  = 2000
+)
+
 type TimedataRecord struct {
 	Sequence uint64 `json:"sequence"`
 	Address  string `json:"address"`
@@ -26,6 +35,18 @@ type TimedataRecorder interface {
 	RecordImage(ProcessImage) (int, error)
 }
 
+// FileTimedataOptions bounds FileTimedata memory and disk usage on edge flash storage.
+type FileTimedataOptions struct {
+	MaxRecords   int
+	MaxDiskBytes int64
+	MaxAge       time.Duration
+	Now          func() time.Time
+}
+
+type timedataMeta struct {
+	NextSequence uint64 `json:"nextSequence"`
+}
+
 // FileTimedata is the durable local Edge timeseries store. It deliberately does
 // not own Cloud resend cursors or live-publish state. Those are separate Edge↔Cloud
 // concerns, matching the pinned OpenEMS split between Timedata, live channel
@@ -35,12 +56,25 @@ type FileTimedata struct {
 
 	directory            string
 	minimumLocalPriority DataPriority
+	opts                 FileTimedataOptions
 	latest               map[string]TimedataRecord
 	records              []TimedataRecord
+	recordSizes          []int
+	historyBytes         int64
+	evictedOnDisk        int
 	nextSequence         uint64
 }
 
 func OpenFileTimedata(directory string, minimumLocalPriority DataPriority) (*FileTimedata, error) {
+	return OpenFileTimedataWithOptions(directory, minimumLocalPriority, FileTimedataOptions{
+		MaxRecords:   DefaultFileTimedataMaxRecords,
+		MaxDiskBytes: DefaultFileTimedataMaxDiskBytes,
+		MaxAge:       DefaultFileTimedataMaxAge,
+	})
+}
+
+// OpenFileTimedataWithOptions opens or recovers a bounded FileTimedata store under directory.
+func OpenFileTimedataWithOptions(directory string, minimumLocalPriority DataPriority, opts FileTimedataOptions) (*FileTimedata, error) {
 	directory = strings.TrimSpace(directory)
 	if directory == "" {
 		return nil, errors.New("timedata directory is required")
@@ -51,18 +85,42 @@ func OpenFileTimedata(directory string, minimumLocalPriority DataPriority) (*Fil
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return nil, fmt.Errorf("create Edge Timedata directory: %w", err)
 	}
+	opts = normalizeFileTimedataOptions(opts)
 	store := &FileTimedata{
 		directory:            directory,
 		minimumLocalPriority: minimumLocalPriority,
+		opts:                 opts,
 		latest:               map[string]TimedataRecord{},
 	}
+	if err := store.loadMetaLocked(); err != nil {
+		return nil, err
+	}
 	if err := store.recoverHistory(); err != nil {
+		return nil, err
+	}
+	if err := store.enforceRetentionLocked(time.Time{}, true); err != nil {
+		return nil, err
+	}
+	if err := store.persistMetaLocked(); err != nil {
 		return nil, err
 	}
 	if err := store.persistLatestLocked(); err != nil {
 		return nil, err
 	}
 	return store, nil
+}
+
+func normalizeFileTimedataOptions(opts FileTimedataOptions) FileTimedataOptions {
+	if opts.MaxRecords <= 0 {
+		opts.MaxRecords = DefaultFileTimedataMaxRecords
+	}
+	if opts.MaxDiskBytes <= 0 {
+		opts.MaxDiskBytes = DefaultFileTimedataMaxDiskBytes
+	}
+	if opts.MaxAge <= 0 {
+		opts.MaxAge = DefaultFileTimedataMaxAge
+	}
+	return opts
 }
 
 func priorityRank(priority DataPriority) int {
@@ -86,6 +144,32 @@ func priorityAtLeast(candidate, minimum DataPriority) bool {
 
 func (store *FileTimedata) historyPath() string {
 	return filepath.Join(store.directory, "history.jsonl")
+}
+
+func (store *FileTimedata) metaPath() string {
+	return filepath.Join(store.directory, "meta.json")
+}
+
+func (store *FileTimedata) loadMetaLocked() error {
+	raw, err := os.ReadFile(store.metaPath())
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read Edge Timedata meta: %w", err)
+	}
+	var meta timedataMeta
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		return fmt.Errorf("decode Edge Timedata meta: %w", err)
+	}
+	if meta.NextSequence > store.nextSequence {
+		store.nextSequence = meta.NextSequence
+	}
+	return nil
+}
+
+func (store *FileTimedata) persistMetaLocked() error {
+	return writeJSONAtomic(store.metaPath(), timedataMeta{NextSequence: store.nextSequence})
 }
 
 func (store *FileTimedata) recoverHistory() error {
@@ -136,16 +220,21 @@ func (store *FileTimedata) recoverHistory() error {
 			}
 
 			previous = record.Sequence
-			store.nextSequence = record.Sequence
+			if record.Sequence > store.nextSequence {
+				store.nextSequence = record.Sequence
+			}
+			lineLen := len(lineBytes)
+			if !hasNewline {
+				needsNewline = true
+				lineLen++
+			}
 			store.records = append(store.records, record)
+			store.recordSizes = append(store.recordSizes, lineLen)
 			if current, exists := store.latest[record.Address]; !exists || sampleIsNewer(record.Sample, current.Sample) {
 				store.latest[record.Address] = record
 			}
 			offset += int64(len(lineBytes))
 			validEndOffset = offset
-			if !hasNewline {
-				needsNewline = true
-			}
 		}
 		if errors.Is(readErr, io.EOF) {
 			break
@@ -163,6 +252,7 @@ func (store *FileTimedata) recoverHistory() error {
 		if err := os.Truncate(store.historyPath(), validEndOffset); err != nil {
 			return fmt.Errorf("truncate partial Edge Timedata history line: %w", err)
 		}
+		store.historyBytes = validEndOffset
 	} else if needsNewline {
 		appendFile, err := os.OpenFile(store.historyPath(), os.O_WRONLY|os.O_APPEND, 0o600)
 		if err != nil {
@@ -174,6 +264,9 @@ func (store *FileTimedata) recoverHistory() error {
 		if err := errors.Join(writeErr, syncErr, closeErr); err != nil {
 			return fmt.Errorf("terminate Edge Timedata history trailing line: %w", err)
 		}
+		store.historyBytes = validEndOffset + 1
+	} else {
+		store.historyBytes = validEndOffset
 	}
 	return nil
 }
@@ -250,6 +343,15 @@ func (store *FileTimedata) RecordImage(image ProcessImage) (int, error) {
 		selected = append(selected, channel)
 	}
 	if len(selected) == 0 {
+		prevLen := len(store.records)
+		if err := store.enforceRetentionLocked(image.At(), false); err != nil {
+			return 0, err
+		}
+		if len(store.records) != prevLen {
+			if err := store.persistLatestLocked(); err != nil {
+				return 0, err
+			}
+		}
 		return 0, nil
 	}
 	sort.Slice(selected, func(i, j int) bool {
@@ -281,6 +383,8 @@ func (store *FileTimedata) RecordImage(image ProcessImage) (int, error) {
 		}
 		store.latest[record.Address] = record
 		store.records = append(store.records, record)
+		store.recordSizes = append(store.recordSizes, len(payload))
+		store.historyBytes += int64(len(payload))
 		written++
 	}
 	if err := file.Sync(); err != nil {
@@ -290,10 +394,177 @@ func (store *FileTimedata) RecordImage(image ProcessImage) (int, error) {
 	if err := file.Close(); err != nil {
 		return written, fmt.Errorf("close Edge Timedata history: %w", err)
 	}
+	if err := store.enforceRetentionLocked(image.At(), false); err != nil {
+		return written, err
+	}
+	if err := store.persistMetaLocked(); err != nil {
+		return written, err
+	}
 	if err := store.persistLatestLocked(); err != nil {
 		return written, err
 	}
 	return written, nil
+}
+
+func (store *FileTimedata) referenceNowLocked(hintNow time.Time) time.Time {
+	if store.opts.Now != nil {
+		return store.opts.Now().UTC()
+	}
+	ref := hintNow.UTC()
+	for _, rec := range store.records {
+		obs := rec.Sample.ObservedAt.UTC()
+		if ref.IsZero() || obs.After(ref) {
+			ref = obs
+		}
+	}
+	return ref
+}
+
+func (store *FileTimedata) enforceRetentionLocked(hintNow time.Time, forceDiskCompact bool) error {
+	affected := make(map[string]uint64)
+	recordDrop := func(rec TimedataRecord) {
+		if prev, ok := affected[rec.Address]; !ok || rec.Sequence > prev {
+			affected[rec.Address] = rec.Sequence
+		}
+	}
+
+	pruned := 0
+
+	// 1. Age-based eviction.
+	refNow := store.referenceNowLocked(hintNow)
+	if !refNow.IsZero() && store.opts.MaxAge > 0 && len(store.records) > 0 {
+		cutoff := refNow.Add(-store.opts.MaxAge)
+		kept := store.records[:0]
+		keptSizes := store.recordSizes[:0]
+		for i, rec := range store.records {
+			if rec.Sample.ObservedAt.Before(cutoff) {
+				recordDrop(rec)
+				pruned++
+				continue
+			}
+			kept = append(kept, rec)
+			keptSizes = append(keptSizes, store.recordSizes[i])
+		}
+		if pruned > 0 {
+			store.records = append([]TimedataRecord(nil), kept...)
+			store.recordSizes = append([]int(nil), keptSizes...)
+		}
+	}
+
+	// 2. Count-based eviction.
+	if store.opts.MaxRecords > 0 && len(store.records) > store.opts.MaxRecords {
+		excess := len(store.records) - store.opts.MaxRecords
+		for i := range excess {
+			recordDrop(store.records[i])
+		}
+		store.records = append([]TimedataRecord(nil), store.records[excess:]...)
+		store.recordSizes = append([]int(nil), store.recordSizes[excess:]...)
+		pruned += excess
+	}
+
+	// 3. Disk-size-based eviction.
+	var retainedBytes int64
+	for _, sz := range store.recordSizes {
+		retainedBytes += int64(sz)
+	}
+	diskOverBudget := store.historyBytes > store.opts.MaxDiskBytes || retainedBytes > store.opts.MaxDiskBytes
+	if store.opts.MaxDiskBytes > 0 && retainedBytes > store.opts.MaxDiskBytes {
+		drop := 0
+		for drop < len(store.records) && retainedBytes > store.opts.MaxDiskBytes {
+			recordDrop(store.records[drop])
+			retainedBytes -= int64(store.recordSizes[drop])
+			drop++
+		}
+		if drop > 0 {
+			store.records = append([]TimedataRecord(nil), store.records[drop:]...)
+			store.recordSizes = append([]int(nil), store.recordSizes[drop:]...)
+			pruned += drop
+		}
+	}
+
+	if pruned > 0 {
+		store.evictedOnDisk += pruned
+		store.rebuildAffectedLatestLocked(affected)
+	}
+
+	needDiskCompact := diskOverBudget ||
+		(store.evictedOnDisk > 0 && (forceDiskCompact ||
+			len(store.records) == 0 ||
+			store.opts.MaxRecords <= timedataImmediateDiskTrimRecords ||
+			store.evictedOnDisk >= max(timedataDiskCompactBatchThreshold, store.opts.MaxRecords/10)))
+
+	if needDiskCompact {
+		return store.compactHistoryLocked()
+	}
+	return nil
+}
+
+func (store *FileTimedata) rebuildAffectedLatestLocked(affected map[string]uint64) {
+	if len(affected) == 0 {
+		return
+	}
+	dirty := make(map[string]struct{}, len(affected))
+	for addr, maxDroppedSeq := range affected {
+		if cur, exists := store.latest[addr]; exists && cur.Sequence <= maxDroppedSeq {
+			delete(store.latest, addr)
+			dirty[addr] = struct{}{}
+		}
+	}
+	if len(dirty) == 0 {
+		return
+	}
+	for _, rec := range store.records {
+		if _, need := dirty[rec.Address]; !need {
+			continue
+		}
+		if cur, exists := store.latest[rec.Address]; !exists || sampleIsNewer(rec.Sample, cur.Sample) {
+			store.latest[rec.Address] = rec
+		}
+	}
+}
+
+func (store *FileTimedata) compactHistoryLocked() error {
+	tmpPath := store.historyPath() + ".tmp"
+	file, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("create Edge Timedata compacted history: %w", err)
+	}
+
+	newSizes := make([]int, len(store.records))
+	var totalBytes int64
+	for i, record := range store.records {
+		payload, err := json.Marshal(record)
+		if err != nil {
+			_ = file.Close()
+			_ = os.Remove(tmpPath)
+			return err
+		}
+		payload = append(payload, '\n')
+		if _, err := file.Write(payload); err != nil {
+			_ = file.Close()
+			_ = os.Remove(tmpPath)
+			return fmt.Errorf("write Edge Timedata compacted history: %w", err)
+		}
+		newSizes[i] = len(payload)
+		totalBytes += int64(len(payload))
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("sync Edge Timedata compacted history: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("close Edge Timedata compacted history: %w", err)
+	}
+	if err := os.Rename(tmpPath, store.historyPath()); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("commit Edge Timedata compacted history: %w", err)
+	}
+	store.recordSizes = newSizes
+	store.historyBytes = totalBytes
+	store.evictedOnDisk = 0
+	return nil
 }
 
 func (store *FileTimedata) Latest(address string) (TimedataRecord, bool) {
@@ -502,15 +773,21 @@ func (store *FileTimedata) Purge() error {
 
 	store.latest = map[string]TimedataRecord{}
 	store.records = nil
+	store.recordSizes = nil
+	store.historyBytes = 0
+	store.evictedOnDisk = 0
 	store.nextSequence = 0
 
 	latestPath := filepath.Join(store.directory, "latest.json")
+	metaPath := store.metaPath()
 	var errs []error
 	for _, candidate := range []string{
 		store.historyPath(),
 		store.historyPath() + ".tmp",
 		latestPath,
 		latestPath + ".tmp",
+		metaPath,
+		metaPath + ".tmp",
 	} {
 		if err := os.Remove(candidate); err != nil && !errors.Is(err, os.ErrNotExist) {
 			errs = append(errs, fmt.Errorf("remove %s: %w", candidate, err))

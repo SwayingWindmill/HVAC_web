@@ -106,6 +106,7 @@ type Daemon struct {
 	remoteDiag          *RemoteDiagnosticsCollector
 	lastMetricsSent     time.Time
 	timedata            *edgecontrol.FileTimedata
+	timedataReplay      *TimedataReplayManager
 	deadband            *edgecontrol.DeadbandFilter
 	spool               *GradedSpool
 	shadow              *ShadowManager
@@ -261,6 +262,35 @@ func NewDaemon(cfg Config, opts DaemonOptions) (*Daemon, error) {
 		)
 	}
 
+	var d *Daemon
+	timedataReplay, err := NewTimedataReplayManager(TimedataReplayConfig{
+		GatewayID: cfg.GatewayID,
+		StateDir:  cfg.StateDir,
+		Timedata:  timedata,
+		PointMetadata: func(address string) TimedataReplayPointMeta {
+			desc, ok := host.ChannelDescriptor(address)
+			if !ok {
+				return TimedataReplayPointMeta{Priority: edgecontrol.PriorityMedium}
+			}
+			return TimedataReplayPointMeta{
+				DeviceID:  desc.ComponentID,
+				PointCode: desc.ChannelID,
+				Unit:      desc.Unit,
+				Priority:  normalizeTelemetryPriority(desc),
+			}
+		},
+		NextSequence: func() uint64 {
+			if d == nil {
+				return 1
+			}
+			return d.sequence.Add(1)
+		},
+		Now: nowFn,
+	})
+	if err != nil {
+		_ = registry.Close()
+		return nil, fmt.Errorf("open timedata replay manager: %w", err)
+	}
 	modelManager := NewEdgeModelManager(cfg.OTA.TrustedPublicKeys, logger)
 	scheduleController.SetModelSetpointProvider(modelManager.ActiveControlSetpointCForImage)
 	waveformRing := NewWaveformRingBuffer(defaultWaveformRingHorizon)
@@ -320,7 +350,7 @@ func NewDaemon(cfg Config, opts DaemonOptions) (*Daemon, error) {
 		}
 	}
 
-	d := &Daemon{
+	d = &Daemon{
 		cfg:                cfg,
 		obs:                obs,
 		logger:             logger,
@@ -337,6 +367,7 @@ func NewDaemon(cfg Config, opts DaemonOptions) (*Daemon, error) {
 		remoteDiag:         remoteDiag,
 		lastMetricsSent:    nowFn().UTC(),
 		timedata:           timedata,
+		timedataReplay:     timedataReplay,
 		deadband:           deadband,
 		spool:              spool,
 		shadow:             shadow,
@@ -486,6 +517,11 @@ func (d *Daemon) Spool() *GradedSpool {
 // Timedata returns the attached FileTimedata store.
 func (d *Daemon) Timedata() *edgecontrol.FileTimedata {
 	return d.timedata
+}
+
+// TimedataReplay returns the managed FileTimedata gap replay manager.
+func (d *Daemon) TimedataReplay() *TimedataReplayManager {
+	return d.timedataReplay
 }
 
 // CommandAdapter returns the managed MQTT CommandAdapter.
@@ -1355,8 +1391,27 @@ func (d *Daemon) maintainMQTTWithPublisher(ctx context.Context, publish func(con
 			Payload: payload,
 		})
 	})
-	if drainErr != nil && ctx.Err() == nil {
-		d.logger.Warn("edge_spool_drain_failed", "error", drainErr.Error())
+	if drainErr != nil {
+		if ctx.Err() == nil {
+			d.logger.Warn("edge_spool_drain_failed", "error", drainErr.Error())
+		}
+		return
+	}
+	if d.timedataReplay != nil && d.spool.UsedBytes() == 0 {
+		res, replayErr := d.timedataReplay.DrainBatch(ctx, 100, func(itemCtx context.Context, topic string, payload []byte) error {
+			pubCtx, cancel := context.WithTimeout(itemCtx, 10*time.Second)
+			defer cancel()
+			return publish(pubCtx, &paho.Publish{
+				Topic:   topic,
+				QoS:     1,
+				Payload: payload,
+			})
+		})
+		if replayErr != nil && ctx.Err() == nil {
+			d.logger.Warn("edge_timedata_replay_failed", "error", replayErr.Error())
+		} else if res.HasMore && ctx.Err() == nil {
+			d.notifyMQTTMaintenance()
+		}
 	}
 }
 
@@ -1718,13 +1773,18 @@ func (d *Daemon) publishOrSpool(ctx context.Context, topic string, qos byte, cla
 	if err != nil {
 		return
 	}
-	_, _ = d.spool.Admit(SpoolItem{
+	adm, admitErr := d.spool.Admit(SpoolItem{
 		ID:      id,
 		Topic:   topic,
 		QoS:     qos,
 		Class:   class,
 		Payload: payload,
 	})
+	if d.timedataReplay != nil && (len(adm.ShedIDs) > 0 || errors.Is(admitErr, ErrSpoolCapacity)) {
+		if markErr := d.timedataReplay.MarkShed(); markErr != nil {
+			d.logger.Warn("edge_timedata_replay_mark_shed_failed", "error", markErr.Error())
+		}
+	}
 }
 
 func valueToTelemetryJSON(v edgecontrol.Value) (any, bool) {
