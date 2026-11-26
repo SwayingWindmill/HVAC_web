@@ -76,7 +76,7 @@
         "operationId": "createCommand",
         "summary": "Create a governed canonical Command Intent",
         "x-activation-status": "expand-baseline",
-        "x-production-traffic-percent": 0,
+        "x-production-traffic-percent": 100,
         "x-client-forbidden-fields": [
           "tenantId",
           "siteId",
@@ -136,7 +136,7 @@
         "operationId": "getCommand",
         "summary": "Read a visible Command and its current timeline",
         "x-activation-status": "expand-baseline",
-        "x-production-traffic-percent": 0,
+        "x-production-traffic-percent": 100,
         "parameters": [
           {
             "name": "commandId",

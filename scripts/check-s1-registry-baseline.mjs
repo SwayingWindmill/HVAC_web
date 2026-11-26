@@ -106,7 +106,6 @@ assert(spatialDDL.includes("point_code text NOT NULL CHECK (point_code ~ '^[a-z]
 assert(spatialDDL.includes("point_type IN ('TELEMETRY', 'COUNTER', 'STATE', 'SETTING', 'COMMAND')"), 'database Point type invariant drifted');
 assert(!spatialDDL.includes('calculated_point_inputs') && !spatialDDL.includes('sensor_subject_bindings'), 'retired Point/Sensor relationship tables returned');
 assert(tenantDDL.includes('CREATE OR REPLACE FUNCTION core_registry.is_authorized_site(site_value uuid)'), 'exact Site authorization primitive is missing');
-assert(tenantDDL.includes("set_config") === false || true, 'noop');
 
 assert(!coreTypes.includes('type Organization struct'), 'Core public Organization type remains');
 assert(!coreTypes.includes('OwningOrganizationID'), 'Core public models still expose Organization');

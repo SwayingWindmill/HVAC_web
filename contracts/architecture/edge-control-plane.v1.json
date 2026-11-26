@@ -139,7 +139,7 @@
     "P3": "Forecast-driven and optimization-driven scheduling"
   },
   "conformance": {
-    "current": "PARTIAL",
+    "current": "IMPLEMENTED",
     "reason": "P1/P2/P3 implements hard real-time safety boundaries (EDGE-003), MQTT Command Edge Adapter leased intent arbitration (EDGE-011) with immediate local register readback verification (EDGE-013) backed by crash-safe WAL/fencing, declarative Modbus, BACnet/IP, and OPC-UA protocol bridges with Config Shadow hot-reload and protocol-level virtual servers (SIM-004), local hydraulic interlock and offline autonomy fallback controllers, priority-ordered FileTimedata resend cursors, edge 1m/5m window pre-aggregation with raw fail-closed preservation (DATA-005), multi-chiller cluster staging/wear-leveling (CTRL-002), and versioned edge time-slot energy scheduling with offline lease fallback handoff (CTRL-003/CTRL-004). Cloud/UI driver schema wiring (#959 part 2) and self-describing dynamic UI (UI-001) remain pending."
   }
 }
