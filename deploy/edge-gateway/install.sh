@@ -18,6 +18,8 @@ install -m 0755 "${BIN_SRC}" "${BASE_DIR}/ota/slots/slot-a.tmp"
 mv -f "${BASE_DIR}/ota/slots/slot-a.tmp" "${BASE_DIR}/ota/slots/slot-a"
 ln -sfn "slots/slot-a" "${BASE_DIR}/ota/current.tmp"
 mv -f "${BASE_DIR}/ota/current.tmp" "${BASE_DIR}/ota/current"
+install -m 0755 "${SCRIPT_DIR}/ota-boot-guard.sh" "${BASE_DIR}/ota-boot-guard.sh.tmp"
+mv -f "${BASE_DIR}/ota-boot-guard.sh.tmp" "${BASE_DIR}/ota-boot-guard.sh"
 
 if [[ -f "${BASE_DIR}/config.json" ]]; then
   "${BASE_DIR}/ota/current" --validate-config --config "${BASE_DIR}/config.json"

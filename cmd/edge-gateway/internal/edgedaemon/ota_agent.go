@@ -24,19 +24,23 @@ import (
 )
 
 const (
-	otaSlotA = "slot-a"
-	otaSlotB = "slot-b"
+	otaSlotA                   = "slot-a"
+	otaSlotB                   = "slot-b"
+	maxOTADesiredResponseBytes = 256 << 10
 )
 
 // OTAState tracks active slot, version, and pending boot health confirmation across restarts.
 type OTAState struct {
-	CurrentVersion       string                       `json:"currentVersion"`
-	PreviousVersion      string                       `json:"previousVersion,omitempty"`
-	ActiveSlot           string                       `json:"activeSlot,omitempty"`
-	PreviousSlot         string                       `json:"previousSlot,omitempty"`
-	Status               string                       `json:"status"`
-	PendingStage         *edgecontrol.OTAStagePayload `json:"pendingStage,omitempty"`
-	HealthDeadlineUnixMs int64                        `json:"healthDeadlineUnixMs,omitempty"`
+	CurrentVersion        string                        `json:"currentVersion"`
+	PreviousVersion       string                        `json:"previousVersion,omitempty"`
+	ActiveSlot            string                        `json:"activeSlot,omitempty"`
+	PreviousSlot          string                        `json:"previousSlot,omitempty"`
+	Status                string                        `json:"status"`
+	PendingStage          *edgecontrol.OTAStagePayload  `json:"pendingStage,omitempty"`
+	HealthDeadlineUnixMs  int64                         `json:"healthDeadlineUnixMs,omitempty"`
+	BootAttempts          int                           `json:"bootAttempts,omitempty"`
+	ErrorReason           string                        `json:"errorReason,omitempty"`
+	PendingRollbackReport *edgecontrol.OTAResultPayload `json:"pendingRollbackReport,omitempty"`
 }
 
 // OTAAgentOptions configures the A/B OTA download, cryptographic verification, and rollback agent.
@@ -178,6 +182,12 @@ func (a *OTAAgent) ApplyStage(ctx context.Context, stage edgecontrol.OTAStagePay
 	if err != nil {
 		return err
 	}
+	if stage.Action == edgecontrol.OTAActionApply &&
+		state.Status == edgecontrol.OTAStageHealthChecking &&
+		state.PendingStage != nil &&
+		state.PendingStage.TaskID == stage.TaskID {
+		return nil
+	}
 	curVer := firstNonEmpty(state.CurrentVersion, a.baseVersion)
 
 	emit := func(stageName string, pct int, errCode, errMsg string) {
@@ -262,6 +272,7 @@ func (a *OTAAgent) ApplyStage(ctx context.Context, stage edgecontrol.OTAStagePay
 		Status:               edgecontrol.OTAStageHealthChecking,
 		PendingStage:         &stageCopy,
 		HealthDeadlineUnixMs: a.now().UTC().Add(time.Duration(timeoutSec) * time.Second).UnixMilli(),
+		BootAttempts:         0,
 	}
 	if err := a.saveStateLocked(nextState); err != nil {
 		emit(edgecontrol.OTAStageFailed, 90, "STATE_SAVE_FAILED", err.Error())
@@ -290,6 +301,43 @@ func (a *OTAAgent) VerifyPendingUpdateOnBoot(
 	state, err := a.loadStateLocked()
 	if err != nil {
 		return false, err
+	}
+	if state.Status == edgecontrol.OTAStageRolledBack && (state.PendingRollbackReport != nil || state.PendingStage != nil) {
+		var pendingReport edgecontrol.OTAResultPayload
+		if state.PendingRollbackReport != nil {
+			pendingReport = *state.PendingRollbackReport
+			if pendingReport.OccurredAt < 1 {
+				pendingReport.OccurredAt = max(a.now().UTC().UnixMilli(), 1)
+			}
+			if strings.TrimSpace(pendingReport.CurrentVersion) == "" {
+				pendingReport.CurrentVersion = firstNonEmpty(state.CurrentVersion, a.baseVersion)
+			}
+		} else if state.PendingStage != nil {
+			pending := *state.PendingStage
+			pendingReport = edgecontrol.OTAResultPayload{
+				CampaignID:     pending.CampaignID,
+				TaskID:         pending.TaskID,
+				PackageID:      pending.PackageID,
+				Stage:          edgecontrol.OTAStageRolledBack,
+				ProgressPct:    100,
+				CurrentVersion: firstNonEmpty(state.CurrentVersion, a.baseVersion),
+				TargetVersion:  pending.Version,
+				ErrorCode:      "BOOT_GUARD_ROLLBACK",
+				ErrorMessage:   clampRunes(firstNonEmpty(state.ErrorReason, "boot guard triggered OTA rollback"), 1024),
+				OccurredAt:     max(a.now().UTC().UnixMilli(), 1),
+			}
+		}
+		state.PendingRollbackReport = nil
+		state.PendingStage = nil
+		state.HealthDeadlineUnixMs = 0
+		state.BootAttempts = 0
+		if err := a.saveStateLocked(state); err != nil {
+			return false, err
+		}
+		if report != nil {
+			report(pendingReport)
+		}
+		return false, nil
 	}
 	if state.Status != edgecontrol.OTAStageHealthChecking || state.PendingStage == nil {
 		return false, nil
@@ -336,6 +384,9 @@ func (a *OTAAgent) VerifyPendingUpdateOnBoot(
 	state.Status = edgecontrol.OTAStageSucceeded
 	state.PendingStage = nil
 	state.HealthDeadlineUnixMs = 0
+	state.BootAttempts = 0
+	state.ErrorReason = ""
+	state.PendingRollbackReport = nil
 	if err := a.saveStateLocked(state); err != nil {
 		return false, err
 	}
@@ -371,6 +422,9 @@ func (a *OTAAgent) rollbackToPreviousLocked(state *OTAState, emit func(string, i
 	state.Status = edgecontrol.OTAStageRolledBack
 	state.PendingStage = nil
 	state.HealthDeadlineUnixMs = 0
+	state.BootAttempts = 0
+	state.ErrorReason = ""
+	state.PendingRollbackReport = nil
 	if err := a.saveStateLocked(*state); err != nil {
 		return err
 	}
@@ -393,11 +447,140 @@ func (a *OTAAgent) restorePreviousOnHealthFailureLocked(state *OTAState, emit fu
 	state.Status = edgecontrol.OTAStageRolledBack
 	state.PendingStage = nil
 	state.HealthDeadlineUnixMs = 0
+	state.BootAttempts = 0
+	state.ErrorReason = clampRunes(strings.TrimSpace(reason), 1024)
+	state.PendingRollbackReport = nil
 	if err := a.saveStateLocked(*state); err != nil {
 		return err
 	}
 	emit(edgecontrol.OTAStageRolledBack, 100, "HEALTH_CHECK_FAILED", reason)
 	return nil
+}
+
+// RollbackPendingOTAOnEarlyFailure reverts an unconfirmed HEALTH_CHECKING OTA slot back to
+// the previous slot when startup fails before Config/Daemon/OTAAgent initialization completes.
+func RollbackPendingOTAOnEarlyFailure(otaDir, reason string) (bool, error) {
+	dir := strings.TrimSpace(otaDir)
+	if dir == "" {
+		return false, nil
+	}
+	statePath := filepath.Join(dir, "ota-state.json")
+	raw, err := os.ReadFile(statePath)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read OTA state %s: %w", statePath, err)
+	}
+
+	var state OTAState
+	if err := json.Unmarshal(raw, &state); err != nil {
+		return false, fmt.Errorf("decode OTA state %s: %w", statePath, err)
+	}
+	if state.Status != edgecontrol.OTAStageHealthChecking {
+		return false, nil
+	}
+
+	prevSlot := firstNonEmpty(state.PreviousSlot, slotNameFromSymlink(filepath.Join(dir, "previous")))
+	if prevSlot == "" {
+		return false, errors.New("cannot roll back: previous OTA slot missing")
+	}
+	prevPath := filepath.Join(dir, "slots", prevSlot)
+	if _, err := os.Stat(prevPath); err != nil {
+		return false, fmt.Errorf("cannot roll back: previous OTA slot %s unavailable: %w", prevSlot, err)
+	}
+	if err := swapSymlinkAtomic(filepath.Join(dir, "current"), filepath.Join("slots", prevSlot)); err != nil {
+		return false, fmt.Errorf("swap OTA current symlink to %s: %w", prevSlot, err)
+	}
+
+	trimmedReason := clampRunes(firstNonEmpty(strings.TrimSpace(reason), "early startup failure triggered OTA rollback"), 1024)
+	state.ActiveSlot = prevSlot
+	if strings.TrimSpace(state.PreviousVersion) != "" {
+		state.CurrentVersion = state.PreviousVersion
+	}
+	state.Status = edgecontrol.OTAStageRolledBack
+	state.BootAttempts = 0
+	state.HealthDeadlineUnixMs = 0
+	state.ErrorReason = trimmedReason
+	if state.PendingStage != nil {
+		pending := *state.PendingStage
+		state.PendingRollbackReport = &edgecontrol.OTAResultPayload{
+			CampaignID:     pending.CampaignID,
+			TaskID:         pending.TaskID,
+			PackageID:      pending.PackageID,
+			Stage:          edgecontrol.OTAStageRolledBack,
+			ProgressPct:    100,
+			CurrentVersion: firstNonEmpty(state.CurrentVersion, state.PreviousVersion, "0.1.0"),
+			TargetVersion:  pending.Version,
+			ErrorCode:      "EARLY_BOOT_ROLLBACK",
+			ErrorMessage:   trimmedReason,
+			OccurredAt:     max(time.Now().UTC().UnixMilli(), 1),
+		}
+		state.PendingStage = nil
+	}
+
+	encoded, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return false, err
+	}
+	if err := writeFileAtomic(statePath, append(encoded, '\n'), 0o600); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// PollDesired fetches any desired pending OTA stage from GET /gateway/v1/ota/desired using mTLS + PoP.
+func (a *OTAAgent) PollDesired(ctx context.Context) (*edgecontrol.OTAStagePayload, error) {
+	baseURL := strings.TrimRight(strings.TrimSpace(a.opts.PlatformBaseURL), "/")
+	if baseURL == "" {
+		return nil, errors.New("OTA platformBaseUrl is required")
+	}
+	client, id, err := a.httpClientAndIdentity()
+	if err != nil {
+		return nil, err
+	}
+	if a.opts.HTTPClient == nil {
+		defer client.CloseIdleConnections()
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/gateway/v1/ota/desired", nil)
+	if err != nil {
+		return nil, err
+	}
+	if err := signHTTPPoPIfPresent(req, id, a.now().UTC()); err != nil {
+		return nil, fmt.Errorf("sign OTA desired poll PoP: %w", err)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("poll OTA desired stage: %w", err)
+	}
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxOTADesiredResponseBytes+1))
+	_ = resp.Body.Close()
+	if readErr != nil {
+		return nil, fmt.Errorf("read OTA desired stage response: %w", readErr)
+	}
+	if int64(len(body)) > maxOTADesiredResponseBytes {
+		return nil, errors.New("OTA desired stage response exceeds maximum size")
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("poll OTA desired stage failed with HTTP %d", resp.StatusCode)
+	}
+
+	var parsed struct {
+		GatewayID string                       `json:"gatewayId"`
+		Stage     *edgecontrol.OTAStagePayload `json:"stage"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("decode OTA desired stage response: %w", err)
+	}
+	if parsed.Stage == nil {
+		return nil, nil
+	}
+	if err := parsed.Stage.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid OTA desired stage: %w", err)
+	}
+	return parsed.Stage, nil
 }
 
 func (a *OTAAgent) checkCompatibility(stage edgecontrol.OTAStagePayload, currentVer string) error {

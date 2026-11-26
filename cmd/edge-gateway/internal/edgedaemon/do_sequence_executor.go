@@ -446,9 +446,19 @@ func (e *DOSequenceExecutor) Close() {
 		return
 	}
 	e.bgCancel()
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 	defer cancel()
 	_ = e.WaitForActiveSequences(ctx)
+}
+
+// HasActiveSequences reports whether any DO sequence or direct actuation task is currently running.
+func (e *DOSequenceExecutor) HasActiveSequences() bool {
+	if e == nil {
+		return false
+	}
+	e.stateMu.Lock()
+	defer e.stateMu.Unlock()
+	return len(e.allTasks) > 0
 }
 
 // WaitForActiveSequences blocks until all accepted sequence goroutines complete or ctx expires.
@@ -620,6 +630,10 @@ func (e *DOSequenceExecutor) HandleCommand(ctx context.Context, env CommandEnvel
 		}
 		if _, protected := edgecontrol.ClassifyHardRealtimeProtection(env.PointCode, env.CommandCode, nil); protected {
 			rep := e.buildReply(env, "REJECTED", edgecontrol.ReasonHardRealtimeSafetyBoundary, env.CommandCode, "NOT_APPLIED")
+			return admissionResult{immediateReply: &rep}
+		}
+		if e.bgCtx.Err() != nil {
+			rep := e.buildReply(env, "REJECTED", "EXECUTOR_CLOSING", env.CommandCode, "NOT_APPLIED")
 			return admissionResult{immediateReply: &rep}
 		}
 
@@ -821,14 +835,14 @@ func (e *DOSequenceExecutor) executeUnitSequence(
 
 	checkAborted := func() error {
 		if err := lc.ctx.Err(); err != nil {
-			reason := "SEQUENCE_ABORTED_BY_OPERATOR"
-			if cause := context.Cause(lc.ctx); cause != nil && strings.TrimSpace(cause.Error()) != "" {
-				var sa doSequenceAbortErr
+			var sa doSequenceAbortErr
+			if cause := context.Cause(lc.ctx); cause != nil {
 				if errors.As(cause, &sa) {
-					reason = sa.reason
+					return sa
 				}
+				return cause
 			}
-			return doSequenceAbortErr{reason: reason}
+			return err
 		}
 		return nil
 	}
@@ -868,10 +882,7 @@ func (e *DOSequenceExecutor) executeUnitSequence(
 		}
 	}
 	if err := checkAborted(); err != nil {
-		var sa doSequenceAbortErr
-		if errors.As(err, &sa) {
-			return e.buildReply(env, "REJECTED", sa.reason, env.CommandCode, "ABORTED")
-		}
+		return e.handleForegroundSeqError(ctx, env, plan, startedAux, err)
 	}
 
 	if isStart {
@@ -1067,11 +1078,12 @@ func (e *DOSequenceExecutor) rollbackStartedAuxiliaries(
 	var rolledBack []doAuxPart
 	var rollbackFailed []string
 
-	resetCtx, cancel := context.WithTimeout(e.bgCtx, 5*time.Second)
+	resetCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	for i := len(startedAux) - 1; i >= 0; i-- {
-		if seqCtx.Err() != nil {
+		var sa doSequenceAbortErr
+		if seqCtx != nil && errors.As(context.Cause(seqCtx), &sa) {
 			break
 		}
 		part := startedAux[i]
@@ -1325,7 +1337,7 @@ func (e *DOSequenceExecutor) executePulse(
 	}
 
 	// Always force pulse coil back to 0 even if sleep/sequence was aborted or set write failed.
-	resetCtx, resetCancel := context.WithTimeout(e.bgCtx, 5*time.Second)
+	resetCtx, resetCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer resetCancel()
 	if resetErr := e.resetPulseCoilWithRetry(resetCtx, coil); resetErr != nil {
 		_ = e.persistCurrentState()

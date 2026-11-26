@@ -130,6 +130,7 @@ type Daemon struct {
 	sessionMu           sync.Mutex
 	sessionID           string
 	sessionStartedAt    time.Time
+	otaMu               sync.Mutex
 	mu                  sync.Mutex
 	closed              bool
 }
@@ -637,6 +638,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 	d.ready.Store(true)
 	d.obs.MarkReady()
+	_ = systemdNotifyReady()
 
 	if d.doExecutor != nil {
 		if initErr := d.doExecutor.Initialize(ctx); initErr != nil && ctx.Err() == nil {
@@ -678,6 +680,13 @@ func (d *Daemon) Run(ctx context.Context) error {
 			defer wg.Done()
 			d.runCertRenewLoop(ctx)
 		}()
+		if d.cfg.OTA.Enabled && d.ota != nil {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				d.runOTAPollLoop(ctx)
+			}()
+		}
 	}
 
 	if d.tunnelClient != nil {
@@ -689,6 +698,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 
 	<-ctx.Done()
+	_ = systemdNotifyStopping()
 	d.ready.Store(false)
 	d.obs.MarkNotReady()
 	wg.Wait()
@@ -803,6 +813,7 @@ func (d *Daemon) runCycleLoop(ctx context.Context) {
 			if _, err := d.StepCycle(ctx); err != nil && ctx.Err() == nil {
 				d.logger.Warn("edge_cycle_error", "error", err.Error())
 			}
+			_ = systemdNotifyWatchdog()
 			if d.now().UTC().Sub(d.lastMetricsSent) >= 30*time.Second {
 				_ = d.PublishHostMetricsOnce(ctx)
 			}
@@ -862,6 +873,78 @@ func (d *Daemon) runCertRenewLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			checkOnce()
+		}
+	}
+}
+
+func (d *Daemon) runOTAPollLoop(ctx context.Context) {
+	intervalSec := d.cfg.OTA.PollIntervalSec
+	if intervalSec <= 0 {
+		intervalSec = defaultOTAPollIntervalSec
+	}
+	ticker := time.NewTicker(time.Duration(intervalSec) * time.Second)
+	defer ticker.Stop()
+	pollOnce := func() {
+		stage, err := d.ota.PollDesired(ctx)
+		if err != nil {
+			if ctx.Err() == nil {
+				d.logger.Warn("edge_ota_poll_failed", "error", err.Error())
+			}
+			return
+		}
+		if stage != nil {
+			d.handleOTAStage(ctx, *stage)
+		}
+	}
+	pollOnce()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			pollOnce()
+		}
+	}
+}
+
+func (d *Daemon) handleOTAStage(ctx context.Context, stage edgecontrol.OTAStagePayload) {
+	if d == nil || d.ota == nil || !d.cfg.OTA.Enabled {
+		return
+	}
+	d.otaMu.Lock()
+	defer d.otaMu.Unlock()
+
+	if state, err := d.ota.State(); err == nil &&
+		state.Status == edgecontrol.OTAStageHealthChecking &&
+		state.PendingStage != nil &&
+		state.PendingStage.TaskID == stage.TaskID {
+		return
+	}
+
+	var switchPending bool
+	if err := d.ota.ApplyStage(ctx, stage, func(res edgecontrol.OTAResultPayload) {
+		if res.Stage == edgecontrol.OTAStageHealthChecking {
+			switchPending = true
+		}
+		wire, encErr := edgecontrol.EncodeOTAResult(d.cfg.GatewayID, res, d.now().UTC())
+		if encErr == nil {
+			d.publishOrSpool(ctx, edgecontrol.OTAUplinkTopic(d.cfg.GatewayID), 1, EvidenceOTAResult, wire)
+		}
+	}); err != nil && ctx.Err() == nil {
+		d.logger.Warn("edge_ota_apply_failed", "task_id", stage.TaskID, "version", stage.Version, "error", err.Error())
+	}
+
+	if switchPending {
+		if d.doExecutor != nil {
+			if d.doExecutor.HasActiveSequences() {
+				waitCtx, waitCancel := context.WithTimeout(ctx, 2*time.Second)
+				_ = d.doExecutor.WaitForActiveSequences(waitCtx)
+				waitCancel()
+			}
+			d.doExecutor.Close()
+		}
+		if d.onOTASwitch != nil {
+			d.onOTASwitch()
 		}
 	}
 }
@@ -939,19 +1022,7 @@ func (d *Daemon) startMQTTSession(ctx context.Context) error {
 			d.logger.Warn("edge_ota_decode_error", "error", err.Error())
 			return
 		}
-		var switchPending bool
-		_ = d.ota.ApplyStage(ctx, stage, func(res edgecontrol.OTAResultPayload) {
-			if res.Stage == edgecontrol.OTAStageHealthChecking {
-				switchPending = true
-			}
-			wire, encErr := edgecontrol.EncodeOTAResult(d.cfg.GatewayID, res, d.now().UTC())
-			if encErr == nil {
-				d.publishOrSpool(ctx, edgecontrol.OTAUplinkTopic(d.cfg.GatewayID), 1, EvidenceOTAResult, wire)
-			}
-		})
-		if switchPending && d.onOTASwitch != nil {
-			d.onOTASwitch()
-		}
+		d.handleOTAStage(ctx, stage)
 	}); err != nil {
 		return err
 	}

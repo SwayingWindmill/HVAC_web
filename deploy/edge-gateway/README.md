@@ -10,6 +10,13 @@
 - `/opt/hvac-edge-gateway/field-plant.json`：可选独立现场冷站声明式配置文件（由 `config.json` 中的 `fieldPlantFile` 引用；如松雅轩站点直接复用 [songyaxuan.edge-plant.json](../../deploy/sites/songyaxuan.edge-plant.json)），新站点接入只需编写 JSON，无需修改 `cmd/edge-gateway` Go 代码
 - `/opt/hvac-edge-gateway/state/`：配置影子快照与分级断点续传磁盘队列（`mqtt-spool.json`、`field-plant-state.json`、`do-executor-state.json`）
 - `/opt/hvac-edge-gateway/ota/slots/{slot-a,slot-b}`：A/B 双槽位可执行文件，`ota/current` 符号链接指向当前生效版本，`ota/previous` 指向回退版本
+- `/opt/hvac-edge-gateway/ota-boot-guard.sh`：systemd `ExecStartPre` 启动看门狗守卫，当 `HEALTH_CHECKING` 状态连续启动失败达 2 次时自动把 `ota/current` 切回上一版本并保留待上报的 `ROLLED_BACK` 回执
+
+## 4. 看门狗与防变砖 OTA 自愈机制
+
+- **systemd `Type=notify` + `WatchdogSec=30`**：进程就绪后发送 `READY=1`，每个主控周期发送 `WATCHDOG=1`；控制循环卡死时 systemd 自动重启。
+- **启动早期失败自动回退**：若新版本因配置解析或守护进程初始化失败提前退出，`main.go` 直接回退 `ota/current` 到旧槽位并记录待上报回执；若新版本发生段错误、缺库或看门狗超时，重启计数达到 `bootAttempts >= 2` 后由 `ota-boot-guard.sh pre-start` 自动切回旧槽位。
+- **HTTPS 兜底拉取 OTA 指令**：MQTT 下行不可达时，启用 `ota.enabled` 且配置了 `platformBaseUrl` 的网关按 `ota.pollIntervalSec` 定期以 mTLS+PoP 轮询 `GET /gateway/v1/ota/desired`。
 
 ## 2. 声明式现场冷站接入（`fieldPlant` / `fieldPlantFile`）
 
@@ -45,7 +52,7 @@ bash deploy/edge-gateway/build-armv7.sh 1.0.0
 
 通过 SSH `root` 登录网关后，`/etc` 与 `/etc/systemd/system` 在宿主机命名空间可直接写入（此前看到的 `/etc` 只读仅限 `node-red.service` 的 `ReadOnlyDirectories=/etc/` 沙箱）。
 
-1. 安装首版二进制到 `slot-a` 并安装 `/etc/systemd/system/hvac-edge-gateway.service`：
+1. 安装首版二进制到 `slot-a`、复制 `ota-boot-guard.sh` 并安装 `/etc/systemd/system/hvac-edge-gateway.service`：
    ```bash
    sudo bash deploy/edge-gateway/install.sh /root/edge-gateway-linux-armv7
    ```

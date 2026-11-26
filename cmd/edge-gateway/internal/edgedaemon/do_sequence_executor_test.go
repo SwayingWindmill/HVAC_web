@@ -59,6 +59,12 @@ func (b *fakeDOCoilBus) snapshotWrites() []doWriteOp {
 	return append([]doWriteOp(nil), b.writes...)
 }
 
+func (b *fakeDOCoilBus) coilValue(coil uint16) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.coils[coil]
+}
+
 type recordedDOEvent struct {
 	EventType string
 	Data      doDiagnosticData
@@ -411,5 +417,93 @@ func TestDOSequenceExecutorArbitrarySiteBTwoAuxTrain(t *testing.T) {
 	}
 	if !slices.Equal(writes, wantStopCoils) {
 		t.Fatalf("Site B stop coil order = %+v, want %+v", writes, wantStopCoils)
+	}
+}
+
+func TestDOSequenceExecutorShutdownRollsBackStartedAuxiliaries(t *testing.T) {
+	doCfg := loadSongyaxuanDOConfig(t)
+	bus := newFakeDOCoilBus()
+	var events []recordedDOEvent
+	var eventsMu sync.Mutex
+	curNow := time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC)
+
+	enteredSleep := make(chan struct{})
+	var sleepOnce sync.Once
+
+	exec, err := NewDOSequenceExecutor(DOSequenceExecutorOptions{
+		GatewayID: "01a14000-4000-7000-8000-000000000100",
+		StateDir:  t.TempDir(),
+		Config:    doCfg,
+		CoilBus:   bus,
+		Now:       func() time.Time { return curNow },
+		Sleep: func(ctx context.Context, _ time.Duration) error {
+			sleepOnce.Do(func() { close(enteredSleep) })
+			<-ctx.Done()
+			return context.Cause(ctx)
+		},
+		PublishEvent: func(_ context.Context, payload []byte) {
+			var env struct {
+				Payload struct {
+					EventType string           `json:"eventType"`
+					Data      doDiagnosticData `json:"data"`
+				} `json:"payload"`
+			}
+			if json.Unmarshal(payload, &env) == nil {
+				eventsMu.Lock()
+				events = append(events, recordedDOEvent{EventType: env.Payload.EventType, Data: env.Payload.Data})
+				eventsMu.Unlock()
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewDOSequenceExecutor: %v", err)
+	}
+	t.Cleanup(exec.Close)
+	if initErr := exec.Initialize(t.Context()); initErr != nil {
+		t.Fatalf("Initialize: %v", initErr)
+	}
+	bus.mu.Lock()
+	bus.writes = nil
+	bus.mu.Unlock()
+
+	replyBytes, ok := exec.HandlePayload(t.Context(), mkDOCmd("000000000091", "ctrl-chiller-a", "START_UNIT_SEQUENCE", "UNIT_SEQUENCE", "unit-a", 1))
+	if !ok {
+		t.Fatal("expected HandlePayload to accept START_UNIT_SEQUENCE")
+	}
+	if rep := decodeDOReply(t, replyBytes); rep.EdgeStatus != "EXECUTED" {
+		t.Fatalf("expected EXECUTED sequence-accepted reply, got %+v", rep)
+	}
+
+	select {
+	case <-enteredSleep:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for background sequence sleep after aux[0] started")
+	}
+	if !bus.coilValue(0) {
+		t.Fatal("expected first auxiliary coil 0 to be energized before Close()")
+	}
+	if !exec.HasActiveSequences() {
+		t.Fatal("expected HasActiveSequences() == true while START_UNIT_SEQUENCE is running")
+	}
+
+	exec.Close()
+
+	if bus.coilValue(0) {
+		t.Fatal("expected auxiliary coil 0 rolled back to false before Close() returned")
+	}
+	if exec.HasActiveSequences() {
+		t.Fatal("expected HasActiveSequences() == false after Close() returned")
+	}
+	wantWrites := []doWriteOp{
+		{unitID: doCfg.UnitID, coil: 0, value: true},
+		{unitID: doCfg.UnitID, coil: 0, value: false},
+	}
+	if got := bus.snapshotWrites(); !slices.Equal(got, wantWrites) {
+		t.Fatalf("coil writes = %+v, want %+v", got, wantWrites)
+	}
+	eventsMu.Lock()
+	defer eventsMu.Unlock()
+	if len(events) != 1 || events[0].EventType != "START_SEQUENCE_FAILED_ROLLED_BACK" || !slices.Equal(events[0].Data.RolledBackChannels, []string{"u11"}) {
+		t.Fatalf("expected START_SEQUENCE_FAILED_ROLLED_BACK for u11, got %+v", events)
 	}
 }

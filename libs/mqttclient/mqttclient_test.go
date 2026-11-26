@@ -281,8 +281,8 @@ func TestNewMTLSConfigTLS13AndValidation(t *testing.T) {
 	if cfg.ServerName != "mqtt.local" {
 		t.Fatalf("unexpected ServerName: %q", cfg.ServerName)
 	}
-	if len(cfg.Certificates) != 1 || cfg.RootCAs == nil {
-		t.Fatal("expected loaded client cert and CA pool")
+	if len(cfg.Certificates) != 0 || cfg.GetClientCertificate == nil || cfg.RootCAs == nil {
+		t.Fatal("expected dynamic GetClientCertificate without static Certificates and valid CA pool")
 	}
 
 	if _, err := NewMTLSConfig(TLSConfig{CACertFile: certs.caCertFile}); err == nil {
@@ -298,6 +298,157 @@ func TestNewMTLSConfigTLS13AndValidation(t *testing.T) {
 		ClientKeyFile:  certs.clientKeyFile,
 	}); err == nil {
 		t.Fatal("expected error when CA cert PEM is invalid")
+	}
+}
+
+func TestNewMTLSConfigLiveCertReloadOnHandshake(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caTmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "test-mqtt-reload-ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caCert, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caFile := filepath.Join(dir, "ca.crt")
+	if err := os.WriteFile(caFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	writeSignedLeaf := func(serial int64, cn string, dns []string, ips []net.IP, eku x509.ExtKeyUsage, certPath, keyPath string) tls.Certificate {
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tmpl := &x509.Certificate{
+			SerialNumber: big.NewInt(serial),
+			Subject:      pkix.Name{CommonName: cn},
+			NotBefore:    time.Now().Add(-time.Hour),
+			NotAfter:     time.Now().Add(24 * time.Hour),
+			KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+			ExtKeyUsage:  []x509.ExtKeyUsage{eku},
+			DNSNames:     dns,
+			IPAddresses:  ips,
+		}
+		der, err := x509.CreateCertificate(rand.Reader, tmpl, caCert, &key.PublicKey, caKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		keyDER, err := x509.MarshalECPrivateKey(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+		keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+		if err := os.WriteFile(certPath, certPEM, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(keyPath, keyPEM, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		pair, err := tls.X509KeyPair(certPEM, keyPEM)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return pair
+	}
+
+	serverCert := writeSignedLeaf(10, "localhost", []string{"localhost"}, []net.IP{net.ParseIP("127.0.0.1")}, x509.ExtKeyUsageServerAuth, filepath.Join(dir, "srv.crt"), filepath.Join(dir, "srv.key"))
+	clientCertFile := filepath.Join(dir, "client.crt")
+	clientKeyFile := filepath.Join(dir, "client.key")
+	writeSignedLeaf(101, "gw-v1", nil, nil, x509.ExtKeyUsageClientAuth, clientCertFile, clientKeyFile)
+
+	clientTLS, err := NewMTLSConfig(TLSConfig{
+		CACertFile:     caFile,
+		ClientCertFile: clientCertFile,
+		ClientKeyFile:  clientKeyFile,
+		ServerName:     "localhost",
+	})
+	if err != nil {
+		t.Fatalf("NewMTLSConfig: %v", err)
+	}
+
+	caPool := x509.NewCertPool()
+	caPool.AddCert(caCert)
+	serverTLS := &tls.Config{
+		MinVersion:   tls.VersionTLS13,
+		Certificates: []tls.Certificate{serverCert},
+		ClientCAs:    caPool,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+	}
+
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", serverTLS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	seenSerials := make(chan int64, 4)
+	go func() {
+		for {
+			conn, acceptErr := ln.Accept()
+			if acceptErr != nil {
+				return
+			}
+			tlsConn := conn.(*tls.Conn)
+			if hsErr := tlsConn.Handshake(); hsErr == nil {
+				state := tlsConn.ConnectionState()
+				if len(state.PeerCertificates) > 0 {
+					seenSerials <- state.PeerCertificates[0].SerialNumber.Int64()
+				}
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	dialOnce := func() int64 {
+		t.Helper()
+		conn, dialErr := tls.Dial("tcp", ln.Addr().String(), clientTLS)
+		if dialErr != nil {
+			t.Fatalf("tls.Dial failed: %v", dialErr)
+		}
+		_ = conn.Close()
+		select {
+		case s := <-seenSerials:
+			return s
+		case <-time.After(3 * time.Second):
+			t.Fatal("timed out waiting for server handshake")
+			return 0
+		}
+	}
+
+	if got := dialOnce(); got != 101 {
+		t.Fatalf("first handshake peer serial = %d, want 101", got)
+	}
+
+	// Rotate client cert + key on disk while reusing the exact same *tls.Config.
+	writeSignedLeaf(202, "gw-v2", nil, nil, x509.ExtKeyUsageClientAuth, clientCertFile, clientKeyFile)
+	if got := dialOnce(); got != 202 {
+		t.Fatalf("second handshake after cert rotation peer serial = %d, want 202", got)
+	}
+
+	// Transient unreadable/corrupt cert file falls back to last valid cached cert (202).
+	if err := os.WriteFile(clientCertFile, []byte("corrupt-pem"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := dialOnce(); got != 202 {
+		t.Fatalf("third handshake during transient file corruption = %d, want cached 202", got)
 	}
 }
 
