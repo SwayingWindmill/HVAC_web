@@ -5,8 +5,7 @@
 登记表：
 
 - `contracts/ownership/route-ownership.v1.json`：接口归属；
-- `contracts/ownership/data-ownership.v1.json`：数据归属；
-- `contracts/ownership/ownership.v1.lock.json`：兼容锁。
+- `contracts/ownership/data-ownership.v1.json`：数据归属。
 
 `npm run ownership:check` 拒绝：归属不明确、版本号倒退、无效的分流设置，以及没有授权的跨服务数据库写入。
 

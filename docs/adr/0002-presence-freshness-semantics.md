@@ -13,7 +13,7 @@
 - 质量：这个读数可不可信。
 - 能否判断：平台现在能不能下结论。
 
-所以要几个互不相干的维度，外加一个明确由它们推出来的、给界面用的五种状态。
+所以要几个互不相干的维度，外加一个明确由它们推出来的、给界面用的六种状态（包含低功耗设备的 `SLEEPING`）。
 
 ## 决定
 
@@ -25,7 +25,7 @@
 
 - **是否判断在线**：`APPLICABLE`（要判断）/ `NOT_APPLICABLE`（不判断）。不判断的设备没有在线状态，也没有设备显示状态；它不是「未知」，单独列出。
 - **能否判断**：`AVAILABLE` / `UNAVAILABLE`。不能判断是平台自己的问题（依赖出错、观察中断），不是设备的证据。
-- **在线状态**：`ONLINE` / `OFFLINE` / `UNKNOWN`。在线和离线是按在线策略从可信的在线信号得出的结论；未知是能判断、但证据不够下任何结论。不能判断时不给当前的在线状态，上一次的结论可以作为历史另外返回。
+- **在线状态**：`ONLINE` / `SLEEPING` / `OFFLINE` / `UNKNOWN`。在线和离线是按在线策略从可信的在线信号得出的结论；`SLEEPING`（休眠中，#980）表示低功耗设备在配置的休眠周期内（或收到明确的 `EXPLICIT_SLEEP` 休眠信号且未超过离线门槛）；未知是能判断、但证据不够下任何结论。不能判断时不给当前的在线状态，上一次的结论可以作为历史另外返回。
 - **读数新鲜度**（按点位、按用途的规则）：`FRESH`（有已接收的读数，且在新鲜时限内）/ `STALE`（有，但超过时限）/ `MISSING`（这个点位没有已接收的读数）。
 - **读数质量**：数据架构 V2（全平台的数据约定，见 `contracts/data/data-architecture.v2.json`）定的六档 `GOOD`、`PARTIAL`、`ESTIMATED`、`MANUAL`、`STALE`、`INVALID`。只有 `GOOD` 默认可以完全信任；`INVALID` 的读数只留作证据，从不替换最新的已接收值。被拒收、隔离、重复、乱序是接收时的处理结果，不是质量等级。
 - **读数就绪**：用途声明一份有版本的「必需读数」清单，合起来的结果是：
@@ -53,10 +53,10 @@
 
 在线和新鲜度的时限是按设备类别或单台设备设置的、有版本的策略，不在代码里写死几分钟。
 
-- 在线策略至少有：`policyRevision`、`onlineWithin`、`offlineAfter`、`maxFutureClockSkew`、`maxSourceLag`、`acceptedSignalTypes`。
+- 在线策略至少有：`policyRevision`、`onlineWithin`、`offlineAfter`、`maxFutureClockSkew`、`maxSourceLag`、`acceptedSignalTypes`；低功耗休眠设备另配可选的 `sleepCycle`（满足 `onlineWithin <= sleepCycle < offlineAfter`）。
 - 点位新鲜度策略至少有：`policyRevision`、`key`、`expectedSampleInterval`、`freshFor`、`valueType`、`unit`、`qualityRules`。
 
-约束：`onlineWithin` 为正；`offlineAfter` 大于 `onlineWithin`；没有明确理由时，`freshFor` 不短于应有的采样间隔；每个结果记下用的策略版本；改时限不改写历史，只影响之后的判断。
+约束：`onlineWithin` 为正；`offlineAfter` 大于 `onlineWithin`（配置 `sleepCycle` 时 `offlineAfter > sleepCycle >= onlineWithin`）；没有明确理由时，`freshFor` 不短于应有的采样间隔；每个结果记下用的策略版本；改时限不改写历史，只影响之后的判断。
 
 ### 5. 在线状态怎么判断
 
@@ -64,12 +64,13 @@
 
 1. 判断所需的依赖或观察覆盖不可用：能否判断为 `UNAVAILABLE`，不给当前的在线状态。
 2. 不判断在线：不给在线状态和显示状态。要判断、但没有有效的策略、来源对照或已接收的在线信号：`UNKNOWN`。
-3. `evaluatedAt - lastSeenAt <= onlineWithin`：`ONLINE`。
-4. 超过 `onlineWithin` 但不到 `offlineAfter`：`UNKNOWN`（这是故意留的不确定区间，免得一个稍晚的读数刚过时限就被误判为离线）。
-5. 达到 `offlineAfter`，并且这段决策时间里观察一直可用：`OFFLINE`。
-6. 观察中断过：`UNAVAILABLE`，不是 `OFFLINE`。
-7. 只有来源约定保证含义、且策略点名了这种信号时，可信的「明确断开」信号才能立刻判为 `OFFLINE`。
-8. 从观察中断中恢复后，按当前的证据重新判断；不能只因为最后上报时间早于中断，就立刻判为离线。
+3. 策略允许且最新信号为 `EXPLICIT_DISCONNECT`：`OFFLINE`。
+4. 策略允许且最新信号为 `EXPLICIT_SLEEP`（`DEVICE_SLEEPING`/`SLEEPING`/`ENTER_SLEEP`）：未超过 `offlineAfter` 时判为 `SLEEPING`，达到 `offlineAfter` 且观察持续可用时转为 `OFFLINE`。
+5. `evaluatedAt - lastSeenAt <= onlineWithin`：`ONLINE`。
+6. 超过 `onlineWithin` 但不到 `offlineAfter`：若策略配置了 `sleepCycle` 则判为 `SLEEPING`（低功耗设备正常休眠周期），否则判为 `UNKNOWN`（这是故意留的不确定区间，免得一个稍晚的读数刚过时限就被误判为离线）。
+7. 达到 `offlineAfter`，并且这段决策时间里观察一直可用：`OFFLINE`。
+8. 观察中断过：`UNAVAILABLE`，不是 `OFFLINE`。
+9. 从观察中断中恢复后，按当前的证据重新判断；不能只因为最后上报时间早于中断，就立刻判为离线。
 
 ### 6. 读数怎么接收和替换
 
@@ -77,7 +78,7 @@
 
 收到一条新的不代表有新的物理采样。重复或重放的读数不会让设备保持在线，也不会推进 `lastSeenAt`，除非来源另外提供了被接收的在线信号。
 
-### 7. 设备显示状态（五种）
+### 7. 设备显示状态（六种）
 
 对要判断在线的设备，接口返回上面这些维度；为了排序和简短的状态文字，还可以返回一个推出来的显示状态。按这个顺序取第一个符合的：
 
@@ -85,6 +86,7 @@
 |---|---|---|---|
 | `UNAVAILABLE` | 任意（上一次的值） | 任意 | `UNAVAILABLE`（无法判断） |
 | `AVAILABLE` | `OFFLINE` | 任意 | `OFFLINE`（离线） |
+| `AVAILABLE` | `SLEEPING` | 任意 | `SLEEPING`（休眠中） |
 | `AVAILABLE` | `UNKNOWN` | 任意 | `UNKNOWN`（未知） |
 | `AVAILABLE` | `ONLINE` | `INCOMPLETE` | `UNKNOWN` |
 | `AVAILABLE` | `ONLINE` | `DEGRADED` | `STALE`（读数过期） |
@@ -108,7 +110,7 @@
 ### 9. 怎么汇总
 
 - 点位到设备：只有用途的必需读数参与就绪。所以一台设备可以对一个页面是齐全的，对另一条诊断规则是不全的。
-- 设备到站点：只给按显示状态的计数和覆盖率（例如判断了多少台、在线 / 离线 / 过期 / 未知 / 无法判断各多少），没有一个「站点在线」的布尔值。没权限看的设备不进分子也不进分母；不判断在线的单独列出、不拉低覆盖率；未知和无法判断从不算作离线；分母为 0 时不给百分比；汇总记下判断时间和用到的策略版本。
+- 设备到站点：只给按显示状态的计数和覆盖率（例如判断了多少台、在线 / 休眠中 / 离线 / 过期 / 未知 / 无法判断各多少），没有一个「站点在线」的布尔值。没权限看的设备不进分子也不进分母；不判断在线的单独列出、不拉低覆盖率；未知和无法判断从不算作离线；分母为 0 时不给百分比；汇总记下判断时间和用到的策略版本。
 - 资产和点位组的汇总同样按计数和覆盖率，不能因为大多数值新鲜，就把部分结果说成健康。
 
 ### 10. 几个边界情况
@@ -141,7 +143,7 @@
 
 **控制**
 
-在线是控制的必要条件，但不够。控制前还必须分别满足：能否判断为 `AVAILABLE`；在线状态 `ONLINE`；这条指令需要的读数 `CURRENT`；需要的值质量 `GOOD`；当前的权限、控制能力、安全和审批检查都通过。显示状态是离线、读数过期、未知或无法判断时，默认不能控制。任何控制逻辑都不能只看推出来的显示状态。
+在线是控制的必要条件，但不够。控制前还必须分别满足：能否判断为 `AVAILABLE`；在线状态 `ONLINE`；这条指令需要的读数 `CURRENT`；需要的值质量 `GOOD`；当前的权限、控制能力、安全和审批检查都通过。显示状态是离线、休眠中、读数过期、未知或无法判断时，默认不能控制。任何控制逻辑都不能只看推出来的显示状态。
 
 ### 12. 不变的几条
 

@@ -1,8 +1,8 @@
 # ADR 0012：参照 OpenEMS 的现场控制层
 
-状态：已采纳（2026-08-17）。ADR 0027 修订：本 ADR 的现场控制层只用在我们自己的运行时（模拟冷站、ATV630 协议验收）上；真实站点的指令由站点自己的网关执行，检查在平台。名词按 ADR 0013（租户 / 空间 / 资产 / 可选的物理传感器）。逐项的对照结果在 `contracts/architecture/edge-control-plane.v1.json`。
+状态：已实现（2026-11-23；原于 2026-08-17 采纳，2026-10-22 的 ADR 0027 过渡修订已被取代）。名词按 `GLOSSARY.md` 与 ADR 0013（租户 / 空间 / 资产 / 可选的物理传感器）。逐项的对照结果在 `contracts/architecture/edge-control-plane.v1.json`。
 
-现在的情况：控制周期、过程映像、通道、驱动、协议桥（Modbus）、指令意图、现场时序数据这些基础在 `libs/edgecontrol` 里，模拟冷站和 ATV630 协议验收（`tools/eg8200-simulator`）用它们。松雅轩的真实网关是 Node-RED，不跑这套运行时；现场的指令下发也还没接到 Node-RED（见 `docs/specs/site-gateway-onboarding.md`）。
+现在的情况：控制周期、过程映像、通道、驱动、协议桥（Modbus、BACnet/IP、OPC UA）、安全 / 水力联锁控制器、群控控制器（`ClusterController`）、分时运行调度器（`EnergyScheduler`）、有租约的指令意图、边缘预聚合与 4 级分级补发、现场时序数据等现场控制层实现已落地在 `libs/edgecontrol` 与独立 Go 守护进程 `cmd/edge-gateway`（`hvac-edge-gateway`），并已通过声明式站点现场配置（`fieldPlant`）替代松雅轩原有的 Node-RED 流程上线运行；模拟冷站（`tools/eg8200-simulator`）共用同一套控制器与协议栈。
 
 ## 背景
 
@@ -57,7 +57,7 @@
 
 ### 8. 驱动和协议桥
 
-厂家和型号的细节放在设备驱动里；连接生命周期、重试、连接池、协议调度和序列化放在可复用的协议桥里。最初的协议桥：Modbus TCP、Modbus RTU、MQTT；BACnet 和 OPC UA 以后用同样的抽象。
+厂家和型号的细节放在设备驱动里；连接生命周期、重试、连接池、协议调度和序列化放在可复用的协议桥里。已实现的协议桥：Modbus TCP、Modbus RTU、BACnet/IP、OPC UA 与 MQTT。
 
 ### 9. 现场清单和对账
 
@@ -91,6 +91,6 @@
 
 - 新的真实设备接入，从「能力描述 + 驱动 + 协议桥」开始，不写某个厂家从头到尾的专用代码。
 - 光是 MQTT 读数和指令能来回，不能说第一阶段已经有了可正式使用的现场控制。
-- 要说现场控制架构完成，需要：通道运行时、过程映像、周期、控制器接口、调度器 / 仲裁、能力描述登记、设备驱动抽象、协议桥抽象、本地安全 / 联锁控制器、有租约的云端指令意图、现场清单、现场时序数据和按优先级补发、真实和模拟驱动一致。`libs/edgecontrol` 里已有通道、过程映像、周期、控制器接口、调度器和带约束 / 拒绝的控制计划、能力描述、驱动、Modbus 协议桥、指令意图和现场时序数据；还没有的是安全 / 联锁控制器、现场清单、群控，以及在真实站点上运行。
+- 现场控制架构已按上述清单全部落地：`libs/edgecontrol` 与 `cmd/edge-gateway`（`hvac-edge-gateway`）已实现通道运行时、过程映像、1 秒周期、控制器接口、调度器 / 仲裁、能力描述登记、设备驱动抽象、Modbus / BACnet/IP / OPC UA 协议桥抽象、安全与水力联锁控制器（`HydraulicInterlockController`）、群控控制器（`ClusterController`）、分时运行调度器（`EnergyScheduler`）、有租约的云端指令意图、声明式现场配置（`fieldPlant`）、现场时序数据与 4 级分级补发，并与模拟器驱动一致；2026-11-23 起已在松雅轩真实站点 EG8200 上替代 Node-RED 正式运行。
 
 参考：OpenEMS Edge 的架构、配置、设备实现和实时模拟文档（openems.github.io）。

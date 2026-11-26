@@ -272,19 +272,3 @@ npm run deployment:phase1:recovery:claim:check -- --file=/evidence/attainment.js
 ```
 
 预发环境的进程故障演练和灾难恢复是两回事：它逐个杀掉并重启关键容器，检查恢复时间，再跑一遍关键的冒烟测试，但永远记 `productionClaimAllowed=false`。
-
-### 把业务模块拆成单独进程
-
-参照 ThingsBoard 明确选择拓扑角色的做法（不采用它的内存队列或 Kafka / actor 运行方式），可以用同版本的各模块入口把它们拆成单独进程，只留通知嵌在 `energy-api` 里。需要 `single-full` 档位：
-
-```bash
-PHASE1_ENV_FILE=deploy/platform/phase1/environments/staging.runtime.env \
-  PHASE1_DEPLOYMENT_TIER=single-full \
-  node --experimental-strip-types scripts/phase1-compose.ts --owner-split config --quiet
-
-PHASE1_ENV_FILE=deploy/platform/phase1/environments/staging.runtime.env \
-  npm run deployment:phase1:owner-split:drill -- \
-  --confirm-staging-owner-split --output=/evidence/owner-split.json
-```
-
-配置通过不等于认证：在预发环境的真实接口演练通过之前，它一直是「已实现、需要演练」。运维人员要把 `owner-split-release.v1.json.example` 和 `owner-split-live-journeys.v1.json.example` 复制到 Git 忽略的运行时目录，替换所有占位符，把 `energy-api` 和各模块入口的镜像摘要绑定到同一个产品版本，设置批准的清单 SHA-256，并提供覆盖每个拆出模块的、带认证的真实接口操作。演练记录里不保存授权头和响应内容。
