@@ -4,10 +4,6 @@ import type { CurrentPrincipalResponse, Site } from '@/api/generated/platformGat
 import { siteAssetModelEnvelopeQuery, siteAssetModelQueryKey } from '@/api/site-asset-model';
 import type { HvacRouterContext } from '@/app/router-context';
 import {
-  createFrontendReviewAssetsCurrentState,
-  createFrontendReviewAssetsRegistry,
-} from '@/app/frontend-review-assets-data';
-import {
   assetsCurrentStateQueryKey,
   assetsProtectedQueryRoot,
   assetsRegistryQueryKey,
@@ -79,21 +75,16 @@ export function useSiteAssetsData({
 
   const registry = useQuery({
     queryKey: assetsRegistryQueryKey(protectedGeneration, tenantId, site.id),
-    queryFn: ({ signal }) => {
-      if (__HVAC_WEB_FRONTEND_REVIEW__) {
-        return Promise.resolve(createFrontendReviewAssetsRegistry(tenantId, site.id));
-      }
-      return runAssetsProtectedRequest(
-        runtime.protectedRequestToken(),
-        signal,
-        (protectedSignal) => loadAssetsRegistry({
-          client: sharedRegistryClient,
-          tenantId,
-          siteId: site.id,
-          signal: protectedSignal,
-        }),
-      );
-    },
+    queryFn: ({ signal }) => runAssetsProtectedRequest(
+      runtime.protectedRequestToken(),
+      signal,
+      (protectedSignal) => loadAssetsRegistry({
+        client: sharedRegistryClient,
+        tenantId,
+        siteId: site.id,
+        signal: protectedSignal,
+      }),
+    ),
     enabled,
     staleTime: 5 * 60_000,
     retry: 1,
@@ -106,25 +97,20 @@ export function useSiteAssetsData({
 
   const current = useQuery({
     queryKey: assetsCurrentStateQueryKey(protectedGeneration, tenantId, site.id, devices, telemetryPoints),
-    queryFn: ({ signal }) => {
-      if (__HVAC_WEB_FRONTEND_REVIEW__) {
-        return Promise.resolve(createFrontendReviewAssetsCurrentState(devices, telemetryPoints));
-      }
-      return runAssetsProtectedRequest(
-        runtime.protectedRequestToken(),
+    queryFn: ({ signal }) => runAssetsProtectedRequest(
+      runtime.protectedRequestToken(),
+      signal,
+      () => loadAssetsCurrentState({
+        client: telemetryRuntime.client,
+        devices,
+        telemetryPoints,
+        tenantId,
+        siteId: site.id,
+        csrfToken: principal.session.csrfToken,
+        currentRoutePolicyRevision: telemetryRuntime.currentRoutePolicyRevision,
         signal,
-        () => loadAssetsCurrentState({
-          client: telemetryRuntime.client,
-          devices,
-          telemetryPoints,
-          tenantId,
-          siteId: site.id,
-          csrfToken: principal.session.csrfToken,
-          currentRoutePolicyRevision: telemetryRuntime.currentRoutePolicyRevision,
-          signal,
-        }),
-      );
-    },
+      }),
+    ),
     enabled: currentEnabled,
     staleTime: 15_000,
     refetchInterval: enabled ? currentRefetchIntervalMs : false,

@@ -19,7 +19,6 @@ export function PageHeader({ title, description, meta, actions, className }: Pag
       <div className="flex min-w-0 flex-col gap-1">
         <div className="flex items-center gap-2.5">
           <h1 className="text-[26px] leading-[30px] font-bold tracking-[-0.03em] text-foreground">{title}</h1>
-          {__HVAC_WEB_FRONTEND_REVIEW__ ? <Badge variant="outline">评审构建</Badge> : null}
           {meta}
         </div>
         {description ? <p className="text-xs leading-[18px] text-muted-foreground">{description}</p> : null}

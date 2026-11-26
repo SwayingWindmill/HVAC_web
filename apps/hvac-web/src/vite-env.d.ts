@@ -3,4 +3,3 @@
 declare const __HVAC_WEB_BUILD_ID__: string;
 declare const __HVAC_WEB_GATEWAY_BASE_PATH__: string;
 declare const __HVAC_WEB_REALTIME_PROTOCOL__: string;
-declare const __HVAC_WEB_FRONTEND_REVIEW__: boolean;
