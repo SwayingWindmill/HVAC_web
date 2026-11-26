@@ -8,6 +8,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 var shareGroupPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
@@ -49,11 +50,24 @@ func NewMTLSConfig(cfg TLSConfig) (*tls.Config, error) {
 		return nil, errors.New("parse mqtt ca certificate")
 	}
 
+	var (
+		certMu     sync.Mutex
+		cachedCert = cert
+	)
+
 	return &tls.Config{
-		MinVersion:   tls.VersionTLS13,
-		Certificates: []tls.Certificate{cert},
-		RootCAs:      caPool,
-		ServerName:   strings.TrimSpace(cfg.ServerName),
+		MinVersion: tls.VersionTLS13,
+		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
+			certMu.Lock()
+			defer certMu.Unlock()
+			if fresh, loadErr := tls.LoadX509KeyPair(certFile, keyFile); loadErr == nil {
+				cachedCert = fresh
+			}
+			out := cachedCert
+			return &out, nil
+		},
+		RootCAs:    caPool,
+		ServerName: strings.TrimSpace(cfg.ServerName),
 	}, nil
 }
 
