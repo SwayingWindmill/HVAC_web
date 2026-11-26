@@ -1,11 +1,11 @@
 # 第三方与项目 skill
 
-本目录下包含以下来源的 skill（全部 **52 个技能**在 `.agents/skills/` 与 `.claude/skills/` 保持逐字节 1:1 镜像，由 `npm run repo:check` 自动校对）：
+本目录下包含以下来源的 skill（全部 **55 个技能**在 `.agents/skills/` 与 `.claude/skills/` 保持逐字节 1:1 镜像，由 `npm run repo:check` 自动校对）：
 
-1. [michael-denyer/pstack-claude](https://github.com/michael-denyer/pstack-claude) 与 [cursor/plugins `pstack`](https://github.com/cursor/plugins/tree/main/pstack)（MIT 协议，基于 Lauren Tan 的 `pstack` 与 `cursor-team-kit`）：版本 `0.9.138`，提交固定在 `2044f1810afc98c3aa80100587dd990c83cf6ea8`，授权文件见 `.agents/skills/PSTACK-LICENSE.txt`，筛选与本地化说明见 `docs/architecture/pstack-source-review-2026-11-13.md`。除依赖 Cursor 云端 Webhook 的 `make-bot-ui` 与已内联进 `poteto-mode` 的 23 个独立 `principle-*` 目录外，已安装全部 **43 个 `pstack` 技能**：
-   - **总控与规划（5 个）**：`poteto-mode`（`SKILL.md` 控制在截断上限 `24,000` 字节内，配 `references/{agy-tools,bugbot-triage,merge-safety,resume-storage}.md`、全量 **23 套剧本**与辅助脚本 `scripts/{check-plan,resume,worktree-audit}.ts` 及 `scripts/hitl-loop.template.sh`）、`figure-it-out`、`architect`、`blast-radius`、`setup-pstack`
-   - **实现、性能与状态建模（7 个）**：`tdd`、`swarm`、`arena`、`typescript-best-practices`、`correct`、`benchmark-checklist`、`statechart`（零 npm 运行依赖 `scripts/statechart`，需在 WSL 登录壳 `bash -lc` 下运行；本机 WSL 已在仓库外预装 `mise`、`java@temurin-25`、`http:tla2tools@1.7.4` 与 `pele@1.9.0`）
-   - **理解、提问、汇总与写作（13 个）**：`how`、`why`、`teach`、`in-your-own-words`、`sharpen`、`recall`、`what-did-i-get-done`、`ketchup`、`ketchup-video`（本机 WSL 已安装静态 `ffmpeg`/`ffprobe` 并复用 Playwright Chromium）、`bro`、`deslop`、`unslop`、`technical-writing`
+1. [cursor/plugins `pstack`](https://github.com/cursor/plugins/tree/main/pstack) 与 [michael-denyer/pstack-claude](https://github.com/michael-denyer/pstack-claude)（MIT 协议，基于 Lauren Tan 的 `pstack` 与 `cursor-team-kit`）：已同步至上游 `pstack` `0.15.48`（提交 `9e278fe4` / 仓库快照 `b1fbf4b60ac6813b4583ccc356850dafcf492665`），授权文件见 `.agents/skills/PSTACK-LICENSE.txt`，筛选与本地化说明见 `docs/architecture/pstack-source-review-2026-11-13.md`。除依赖 Cursor 云端 Webhook 的 `make-bot-ui` 外，已安装全部 **44 个 `pstack` 技能**（24 条 `principle-*` 以细则文档形式放在 `poteto-mode/references/principles/`）：
+   - **总控与规划（5 个）**：`poteto-mode`（`SKILL.md` 控制在截断上限 `24,000` 字节内，配 `worker.md`、`references/{agy-tools,bugbot-triage,merge-safety,resume-storage}.md`、24 条原则细则 `references/principles/*.md`、全量 **22 套剧本**与辅助脚本 `scripts/{resume,worktree-audit}.ts` 及 `scripts/hitl-loop.template.sh`）、`figure-it-out`、`architect`、`blast-radius`、`setup-pstack`
+   - **实现、性能与状态建模（7 个）**：`tdd`、`swarm`、`arena`、`typescript-best-practices`、`correct`、`benchmark-checklist`、`statechart`（零 npm 运行依赖 `scripts/statechart` / `scripts/statechart.ts`，支持 WSL 登录壳与原生 Windows 运行；本机 WSL 已在仓库外预装 `mise`、`java@temurin-25`、`http:tla2tools@1.7.4` 与 `pele@1.9.0`）
+   - **理解、提问、汇总与写作（14 个）**：`reframe`、`how`、`why`、`teach`、`in-your-own-words`、`sharpen`、`recall`、`what-did-i-get-done`、`ketchup`、`ketchup-video`（本机 WSL 已安装静态 `ffmpeg`/`ffprobe` 并复用 Playwright Chromium）、`bro`、`deslop`、`unslop`、`technical-writing`
    - **对抗审查、决策审计与自进化（8 个）**：`interrogate`、`thermo-nuclear-review`、`thermo-nuclear-code-quality-review`、`thermos`、`no-comments`（含 `references/comment-sicko-prompt.md`）、`show-me-your-work`（含 `scripts/log.sh` 与 TSV 模板，日志写入 `.scratch/`）、`reflect`、`automate-me`
    - **验证工程化维护（4 个）**：`create-verification-skill`、`maintain-verification-skill`、`create-formal-verification-skill`、`maintain-formal-verification-skill`
    - **GitHub PR 协作与导航（6 个）**：`make-pr-easy-to-review`、`babysit`、`fix-ci`、`fix-merge-conflicts`、`get-pr-comments`、`poteto-help`
@@ -13,8 +13,8 @@
    - `wizard`（含 `template.sh`）
    - `to-questionnaire`
    - `grilling`（约束为仅在显式要求拷问或 `improve-codebase-architecture` 调用时触发，不打断常规 `poteto-mode` 执行）
-   - `codebase-design`（含 `DEEPENING.md` 与 `DESIGN-IT-TWICE.md`，提供深模块词表与接缝分级参考，实施草图工作流仍归 `architect`）
+   - `codebase-design`（含 `DEEPENING.md` 与 `DESIGN-IT-TWICE.md`，提供深模块词表与接缝分级参考，实施草图仍归 `architect`）
    - `improve-codebase-architecture`（完整版，含 `HTML-REPORT.md` 并直接联动 `codebase-design` 与 `grilling`，报告输出至 `.scratch/` 后交棒 `architect`/`refactoring.md`）
-3. 项目专属验证与形式化验证技能（2 个）：按 `create-verification-skill` / `create-formal-verification-skill` 为 `HVAC_web` 生成的 `verify`（1440px Playwright 录制网关与实库验证）与 `command-safety`（`modules/command/pkg/commandformal` 状态机穷举检验）。
+3. 项目专属验证、形式化验证与现场运维技能（3 个）：按 `create-verification-skill` / `create-formal-verification-skill` 为 `HVAC_web` 生成的 `verify`（1440px Playwright 录制网关与实库验证）与 `command-safety`（`modules/command/pkg/commandformal` 状态机穷举检验），以及边缘网关访问技能 `eg8200-linux-access`。
 4. 项目前端与界面规范技能（2 个）：`shadcn`、`web-design-guidelines`（视觉与交互设计方向统一使用全局 `impeccable` 与项目 `DESIGN.md`）。
 5. 外部代码审查脚手架技能（1 个）：`alibaba/open-code-review` `v1.13.10`（Apache-2.0 协议，提交 `7e5ce06c88de5ce81df5dc4f24e2e485b517fae8`）的 `open-code-review-delegate`，配合仓库 `.opencodereview/rule.json` 供大改动分支做确定性文件筛选与规则分组（只报告发现不自动改码），筛选与裁剪说明见 `docs/architecture/open-code-review-source-review-2026-11-16.md`。

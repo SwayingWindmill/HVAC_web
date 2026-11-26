@@ -7,7 +7,7 @@ description: "Shared vocabulary and deepening reference for deep modules (module
 
 Design **deep modules**: a lot of behaviour behind a small interface, placed at a clean seam, testable through that interface. Use this language and these principles wherever code is being designed or restructured. The aim is leverage for callers, locality for maintainers, and testability for everyone.
 
-Relation to `pstack` workflows: when starting non-trivial feature design or writing implementation sketches (Phases A–E), [`../architect/SKILL.md`](../architect/SKILL.md) owns the execution workflow (`Ground -> Sketch -> Agree -> Implement -> Scrap`) and [`../architect/references/design-red-flags.md`](../architect/references/design-red-flags.md) checks repo-specific boundaries. `codebase-design` supplies the deep-module vocabulary, dependency categories, and interface-as-test-surface rules used by [`../improve-codebase-architecture/SKILL.md`](../improve-codebase-architecture/SKILL.md) and architecture reviews.
+Relation to `pstack` workflows: when starting non-trivial feature design or sketching types, signatures, and module boundaries, [`../architect/SKILL.md`](../architect/SKILL.md) owns the design brief (and [`../arena/SKILL.md`](../arena/SKILL.md) runs parallel candidates for large or contested designs). `codebase-design` supplies the deep-module vocabulary, dependency categories, and interface-as-test-surface rules used by [`../improve-codebase-architecture/SKILL.md`](../improve-codebase-architecture/SKILL.md) and architecture reviews.
 
 ## Glossary
 

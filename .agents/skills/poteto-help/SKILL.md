@@ -24,24 +24,24 @@ Infer the need from the message. If unclear, ask one multiple-choice question wi
 
 Check repository/user state and mention it only when relevant:
 
-- Absence of `~/.gemini/config/pstack-models.md` (or `.claude/pstack-models.md` / `~/.claude/pstack-models.md` in Claude Code) means `/setup-pstack` has not run, so Antigravity defaults every subagent to `Model: "inherit"`.
+- Absence of `~/.gemini/config/pstack-models.md` (or `~/.claude/rules/pstack-models.md` / `.claude/rules/pstack-models.md` in Claude Code) means `/setup-pstack` has not run, so Antigravity defaults every subagent to `Model: "inherit"`.
 - `HVAC_web` already provides project verification skills: [`verify`](../verify/SKILL.md) (1440px UI Playwright / live stack verification) and [`command-safety`](../command-safety/SKILL.md) (`npm run command:formal` model check). Remind users of [`maintain-verification-skill`](../maintain-verification-skill/SKILL.md) / [`maintain-formal-verification-skill`](../maintain-formal-verification-skill/SKILL.md) when verified code or UI features drift.
 
 ## Get set up
 
 All `pstack` skills in `HVAC_web` are already checked into `.agents/skills/` (mirrored byte-for-byte to `.claude/skills/` by `npm run repo:check`):
 
-1. By default, no model override sheet is required — Antigravity runs subagents with `Model: "inherit"`. Run [`/setup-pstack`](../setup-pstack/SKILL.md) only if you want per-role model overrides (such as `flash` or `pro` in Antigravity, or Claude slugs in Claude Code).
+1. By default, no model override sheet is required — Antigravity runs subagents with `Model: "inherit"`. Run [`/setup-pstack`](../setup-pstack/SKILL.md) only if you want per-role model overrides (such as `flash` or `pro` in Antigravity, or `large/medium/small` reasoning budgets and Claude slugs in `~/.claude/rules/pstack-models.md`).
 2. `HVAC_web` does not install an upstream `SessionStart` routing hook; mention `poteto-mode` (or `/poteto-mode` / a specific skill name) when starting non-trivial tasks.
 3. Frame your prompt with a goal and a pass/fail verification check, per [`references/prompting.md`](references/prompting.md).
 
 ## Start a task with `poteto-mode`
 
-[`poteto-mode`](../poteto-mode/SKILL.md) matches your task to one of 23 playbooks, copies its steps into your checklist (marking unused steps `skip: <reason>`), and orchestrates sibling skills as needed. State the goal and done check rather than hand-coding a skill sequence. Read [`references/prompting.md`](references/prompting.md) before helping word a prompt.
+[`poteto-mode`](../poteto-mode/SKILL.md) matches your task to one of 22 playbooks, copies its steps into your checklist (marking unused steps `skip: <reason>`), and orchestrates sibling skills as needed. State the goal and done check rather than hand-coding a skill sequence. Read [`references/prompting.md`](references/prompting.md) before helping word a prompt.
 
-Note that `HVAC_web`'s subagent tool mapping lives in [`agy-tools.md`](../poteto-mode/references/agy-tools.md): use `invoke_subagent` (`TypeName: "self"` for writable/shell work or `"research"` for read-only reading) instead of Cursor's `poteto-agent`.
+Note that `HVAC_web`'s subagent tool mapping lives in [`agy-tools.md`](../poteto-mode/references/agy-tools.md): every subagent kickoff starts with `Read <abs-path-to-poteto-mode>/worker.md before anything else.` and uses `invoke_subagent` (`TypeName: "self"` for writable/shell work or `"research"` for read-only reading) instead of Cursor's `poteto-agent`.
 
-## Pick a skill (53 skills installed)
+## Pick a skill (55 skills installed)
 
 The default entry point for non-trivial work is [`poteto-mode`](../poteto-mode/SKILL.md). Name a specific skill directly when you want focused execution:
 
@@ -49,12 +49,13 @@ The default entry point for non-trivial work is [`poteto-mode`](../poteto-mode/S
 |---|---|
 | Run end-to-end tasks following pstack playbooks | [`poteto-mode`](../poteto-mode/SKILL.md) |
 | Check understanding of goal, problem, and smallest change first | [`in-your-own-words`](../in-your-own-words/SKILL.md) |
+| Learn expert terms for what they're building (with verified sources) and rewrite their description | [`reframe`](../reframe/SKILL.md) |
 | Stress-test an open plan/idea round-by-round along a design tree | [`grilling`](../grilling/SKILL.md) |
 | Turn a decision blocked on someone else into an async questionnaire | [`to-questionnaire`](../to-questionnaire/SKILL.md) |
 | Generate an interactive bash wizard for human-only setup/secrets | [`wizard`](../wizard/SKILL.md) |
 | Scan active hot spots for deepening opportunities (visual HTML report) | [`improve-codebase-architecture`](../improve-codebase-architecture/SKILL.md) |
 | Apply deep-module vocabulary, seam rules, and deepening patterns | [`codebase-design`](../codebase-design/SKILL.md) |
-| Make a prompt deeper (raw sources, methods, outside checks) without running it | [`sharpen`](../sharpen/SKILL.md) |
+| Make a prompt deeper (raw sources, methods, outside checks, prototype forks) without running it | [`sharpen`](../sharpen/SKILL.md) |
 | Understand how code works or which layer/package owns something | [`how`](../how/SKILL.md) |
 | Research why code or a threshold exists (git, docs, ADRs, specs, PRs) | [`why`](../why/SKILL.md) |
 | Learn a change or subsystem plainly (`how` + `why` + diagrams) | [`teach`](../teach/SKILL.md) |
@@ -75,6 +76,7 @@ The default entry point for non-trivial work is [`poteto-mode`](../poteto-mode/S
 | Cut AI tells and fluff from prose and docs | [`unslop`](../unslop/SKILL.md) |
 | Write/review technical docs, PRs, commits, or specs (Diataxis + clarity) | [`technical-writing`](../technical-writing/SKILL.md) |
 | Prepare clean commits and a fast-to-review PR description | [`make-pr-easy-to-review`](../make-pr-easy-to-review/SKILL.md) |
+| Run deterministic file selection and rule grouping for large PR reviews (project) | [`open-code-review-delegate`](../open-code-review-delegate/SKILL.md) |
 | Shepherd an open PR to merge-ready green CI | [`babysit`](../babysit/SKILL.md) |
 | Diagnose and fix failing GitHub Actions checks | [`fix-ci`](../fix-ci/SKILL.md) |
 | Resolve merge conflicts non-interactively and validate | [`fix-merge-conflicts`](../fix-merge-conflicts/SKILL.md) |
@@ -97,16 +99,18 @@ The default entry point for non-trivial work is [`poteto-mode`](../poteto-mode/S
 | Navigate installed pstack skills and playbooks | [`poteto-help`](SKILL.md) |
 | Drive HVAC Web 1440px UI Playwright & live checks (project) | [`verify`](../verify/SKILL.md) |
 | Verify command intent, fence, MQTT commit, and recovery invariants (project) | [`command-safety`](../command-safety/SKILL.md) |
+| Establish/troubleshoot SSH & Node-RED tunnel access to EG8200 gateways (project) | [`eg8200-linux-access`](../eg8200-linux-access/SKILL.md) |
 | Add/style shadcn/ui components consistently (project) | [`shadcn`](../shadcn/SKILL.md) |
 | Audit web accessibility, keyboard, focus, and UX quality (project) | [`web-design-guidelines`](../web-design-guidelines/SKILL.md) |
 
 ### Not installed separately in `HVAC_web`
 
 - **`make-bot-ui`**: Cursor-cloud webhook automation UI builder (calls non-existent hosted Cursor webhook endpoints and secret-request UI). Excluded intentionally as non-portable.
-- **`principle-*` directories**: `poteto-mode` already embeds the non-negotiable engineering principles cleanly without creating 23 extra skill directories.
+- **24 standalone `principle-*` directories**: installed as 24 leaf reference sheets under [`poteto-mode/references/principles/`](../poteto-mode/references/principles/) and indexed inside [`poteto-mode`](../poteto-mode/SKILL.md) instead of adding 24 top-level skill directories.
 
 ## Close calls
 
+- `/reframe` teaches expert terms and borrows from neighboring fields before rewriting a vague description; `/sharpen` deepens an existing prompt with raw sources, methods, outside checks, and prototype-first instructions.
 - `/how` explains what code does; `/why` explains decisions/history; `/teach` runs both and teaches plainly.
 - `/arena` races parallel complete solutions and grafts the best parts; `/swarm` splits slices or independent workers into one report.
 - `/interrogate` challenges a diff/design with adversarial runs; `/blast-radius` traces breakage outside the diff and proves safety.
@@ -115,7 +119,7 @@ The default entry point for non-trivial work is [`poteto-mode`](../poteto-mode/S
 - `/statechart` model-checks ad-hoc TLA+ specs for state flows; `HVAC_web`'s command/MQTT state machine uses [`command-safety`](../command-safety/SKILL.md) (`npm run command:formal`).
 - `/grilling` runs an explicit multi-round interview over an open plan; normal `poteto-mode` coding tasks keep `in-your-own-words` + `Never Block on the Human`.
 - `/improve-codebase-architecture` surveys active `git log` hot spots into an HTML Before/After report using [`codebase-design`](../codebase-design/SKILL.md), then hands selected interface design/refactoring to [`architect`](../architect/SKILL.md) and [`refactoring.md`](../poteto-mode/playbooks/refactoring.md).
-- `/codebase-design` supplies deep-module vocabulary, dependency categories, and seam/test rules; `/architect` owns the multi-phase feature sketch and implementation workflow.
+- `/codebase-design` supplies deep-module vocabulary, dependency categories, and seam/test rules; `/architect` sketches two candidate shapes before coding (escalating large/contested designs to [`arena`](../arena/SKILL.md)).
 
 ## Phase boundaries (context transitions)
 
@@ -129,16 +133,16 @@ A **phase** is one chunk of work inside a session (exploration, planning, implem
 
 ## Playbooks
 
-Playbooks live in `../poteto-mode/playbooks/` (23 total). Describe the task with `poteto-mode` to match one automatically, or name it explicitly ("run the `prototype` playbook", "run the `babysit` playbook", "land the stack with `shipping`", "pause safely", "pick up this branch with `session-pickup`").
+Playbooks live in `../poteto-mode/playbooks/` (22 total). Describe the task with `poteto-mode` to match one automatically, or name it explicitly ("run the `prototype` playbook", "run the `babysit` playbook", "land the stack with `shipping`", "pause safely", "pick up this branch with `session-pickup`").
 
-Note on principles inside `HVAC_web`: refer to [`poteto-mode`](../poteto-mode/SKILL.md) "Non-negotiables" and "Principles" and `AGENTS.md` (e.g., "prove it works with real output", "no compatibility layers — delete old paths", "small verified increments").
+Note on principles inside `HVAC_web`: refer to [`poteto-mode`](../poteto-mode/SKILL.md) "Non-negotiables" and "Principles", the 24 leaf sheets in [`poteto-mode/references/principles/`](../poteto-mode/references/principles/), and `AGENTS.md` (e.g., "prove it works with real output", "no compatibility layers — delete old paths", "small verified increments").
 
 ## Fix a run that went wrong
 
 | Symptom | Fix |
 |---|---|
 | `poteto-mode` drifted mid-chat | Re-state `poteto-mode` or name the exact playbook step checklist you want followed. |
-| Model override change had no effect | Start a new chat and check `~/.gemini/config/pstack-models.md` (or `.claude/pstack-models.md`). |
+| Model override change had no effect | Start a new chat and check `~/.gemini/config/pstack-models.md` (or `~/.claude/rules/pstack-models.md`). |
 | Parallel workers stepped on each other's files | Require `Workspace: "share"` in `invoke_subagent` (or separate git worktrees). |
 | Scheduled/autonomous loop ran without finishing | Require a concrete pass/fail check predicate and decision log (`.scratch/` TSV), never just a time budget. |
 | Reply declared done from `build`/`typecheck` alone | Demand live repro, `verify` screenshots, `command:formal`, or `npm run check` output per `prove-it-works`. |

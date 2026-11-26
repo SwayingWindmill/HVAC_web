@@ -1,27 +1,9 @@
 ### Opening a PR
 
-Invoked at the end of Bug fix, Feature, and Refactoring (unless the task explicitly forbids opening a PR). Follow `AGENTS.md` and `docs/agents/issue-delivery.md` strictly.
+Invoked at the end of every other playbook (unless the task forbids opening a PR). Follow `AGENTS.md` and `docs/agents/issue-delivery.md`.
 
-**Workspace & subagents.** Before staging or committing, inspect `manage_subagents` (`Action: "list"`) and stop every child agent holding a shared/worktree directory. Confirm `git status` shows only intended changes and zero `.audit/`, `.scratch/` artifacts, or `[DEBUG-*]` markers.
+Work from a git worktree off trunk, stop child subagents (`manage_subagents`), and keep unrelated work, `.audit/`, `.scratch/`, and `[DEBUG-*]` markers out of git. Rebase into small, landable commits (`type(scope): subject`, LF line endings). Before committing, run [`deslop`](../../deslop/SKILL.md) over the diff, [`no-comments`](../../no-comments/SKILL.md) over touched code paths, [`open-code-review-delegate`](../../open-code-review-delegate/SKILL.md) when touching >10 files or multiple domains, [`make-pr-easy-to-review`](../../make-pr-easy-to-review/SKILL.md) (with a `changelog.d/YYYY-MM-DD-<slug>.md` fragment for user-visible changes), [`unslop`](../../unslop/SKILL.md) on PR copy/docs, and `npm run preflight` in WSL (`wsl -e bash -lc "cd /mnt/e/Code/HVAC_web && npm run preflight"`).
 
-**Commits & hygiene.** Commit cleanly with Conventional Commits (`type(scope): subject`, no trailing period; LF line endings). Activate each review skill by reading its `SKILL.md` with `read_file` before opening or updating the PR:
-1. Run [`deslop`](../../deslop/SKILL.md) over the branch diff against `main`.
-2. Run [`no-comments`](../../no-comments/SKILL.md) over touched code paths.
-3. For large or cross-module branches (>10 changed files vs `main` or multiple domains; otherwise `skip: <=10 files in single domain`), run [`open-code-review-delegate`](../../open-code-review-delegate/SKILL.md) in findings-only mode (`ocr delegate preview --from main --format json` + `ocr delegate rule`) so every reviewable file is checked before pushing.
-4. Run [`make-pr-easy-to-review`](../../make-pr-easy-to-review/SKILL.md) (check commit ordering and add a standalone `changelog.d/YYYY-MM-DD-<slug>.md` fragment for user-visible changes per `changelog.d/README.md` instead of editing `CHANGELOG.md` directly; update `docs/HANDOFF.md` only when server, site, or local-env facts changed, keeping it under `28 KiB`).
-5. Apply [`unslop`](../../unslop/SKILL.md) to PR copy/docs and run `npm run preflight` (which covers `npm run check` and every affected gate from `scripts/domain-task-matrix.ts`; use `--skip-e2e` for fast iteration before pushing) via `wsl -e bash -lc "..."` after your last edit.
+Title: `type(scope): subject`, naming a real symbol when one carries the change. Body: a one-minute briefing under 40 lines with these `##` headings in order, dropping empty ones: `## Why`, `## What changed`, `## Scope`, `## Tradeoffs` (only rejected alternatives a reviewer would otherwise ask about), `## Blast Radius`, `## Verification`.
 
-**PR body.** Keep the PR body concise and scannable (under ~40 lines when squashed):
-- `## Why`: 1-3 sentences stating the problem and approach.
-- `## What changed`: 1-3 crisp bullets naming real symbols/paths.
-- `## Scope`: what this covers and explicitly leaves out.
-- `## Tradeoffs`: only non-obvious rejected options (skip if none).
-- `## Blast Radius`: who/what this touches and why it is safe or risky.
-- `## Verification`: real commands run after the final edit and their observed counts/outcomes (`verify` screenshots referenced cleanly if UI changed).
-
-**Push, open, watch CI, and auto-merge (Repository rule).**
-- Push the feature branch using **Windows `git push`** (`git push -u origin <branch>`).
-- Create the ready (non-draft) PR via **WSL `gh`** (`gh pr create --title "..." --body "..."`, referencing closing/related issues as needed).
-- Do **not** stop at "PR opened". Immediately follow `gh pr checks --watch` (or invoke `babysit` / `fix-ci` / `fix-merge-conflicts` if CI fails or conflicts arise) until every GitHub Actions check is green.
-- Once all checks are green and reviewable findings are resolved, auto-merge using the repository convention: `gh pr merge --squash --delete-branch`, then pull/update local `main` and remove temporary scratch/worktree directories.
-- **Always pause first** only if crossing `AGENTS.md` human boundaries: production deploy trigger, destructive data reset, or external channel messages.
+Stack follow-ups by base branch. Push from Windows (`git push -u origin <branch>`) and open the PR ready (never `--draft`) via WSL `gh pr create`. By `AGENTS.md`, solo PRs immediately watch CI (`gh pr checks --watch`, using `babysit` / `fix-ci` / `fix-merge-conflicts` if needed) and squash-merge (`gh pr merge --squash --delete-branch`) once every check is green; stop only for human boundaries or explicit held/stacked queues.
