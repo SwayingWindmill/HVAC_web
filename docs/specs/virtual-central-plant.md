@@ -1,5 +1,7 @@
 # 模拟冷站
 
+> **定位边界**：`tools/eg8200-simulator/` 负责本地 Compose 物理冷站仿真、历史导入（`cmd/eg8200-history-replay`）与虚拟协议从站服务（如 `cmd/eg8200-virtual-atv630`）；正式边缘控制运行时与环回 Modbus/TCP 故障注入演练收敛在 `cmd/edge-gateway`（见 `cmd/edge-gateway/internal/edgedaemon/plant_fault_drill_test.go`）与 `libs/edgecontrol/`。
+
 用来在没有真实现场时，从设备一直到页面把整个平台跑一遍：模拟器像真的冷站一样运转、按真实网关的协议发数据，平台照常接收、算能耗、报警、诊断、开工单。2026-08 按问题单 #320–#330 定下，代码在 `tools/eg8200-simulator/`。冷站模型、场景、故障、ATV630 模拟从站和协议验收、历史导入都已实现；现场控制层里的安全 / 联锁控制器、现场清单和群控还没有（见 ADR 0012）。
 
 ## 它能做什么

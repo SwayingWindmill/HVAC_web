@@ -25,6 +25,7 @@ const (
 const (
 	SemanticRunState            SemanticChannel = "RunState"
 	SemanticFaultCode           SemanticChannel = "FaultCode"
+	SemanticLocalRemoteMode     SemanticChannel = "LocalRemoteMode"
 	SemanticStartCommand        SemanticChannel = "StartCommand"
 	SemanticStopCommand         SemanticChannel = "StopCommand"
 	SemanticResetFaultCommand   SemanticChannel = "ResetFaultCommand"
@@ -137,6 +138,7 @@ func StandardCapabilityProfiles() []CapabilityProfile {
 				{Semantic: SemanticFrequencySetpoint, DataType: DataTypeDouble, Unit: "Hz", Access: AccessWriteOnly, Required: true},
 				{Semantic: SemanticPower, DataType: DataTypeDouble, Unit: "kW", Access: AccessReadOnly, Required: false},
 				{Semantic: SemanticFlow, DataType: DataTypeDouble, Unit: "m3/h", Access: AccessReadOnly, Required: false},
+				{Semantic: SemanticLocalRemoteMode, DataType: DataTypeString, Access: AccessReadOnly, Required: false},
 			},
 			Controls: []ControlCapabilitySpec{
 				{CapabilityID: "START"}, {CapabilityID: "STOP"}, {CapabilityID: "RESET_FAULT"},
@@ -154,6 +156,7 @@ func StandardCapabilityProfiles() []CapabilityProfile {
 				{Semantic: SemanticTemperatureSetpoint, DataType: DataTypeDouble, Unit: "Cel", Access: AccessWriteOnly, Required: true},
 				{Semantic: SemanticLoadLimit, DataType: DataTypeDouble, Unit: "%", Access: AccessWriteOnly, Required: true},
 				{Semantic: SemanticPower, DataType: DataTypeDouble, Unit: "kW", Access: AccessReadOnly, Required: false},
+				{Semantic: SemanticLocalRemoteMode, DataType: DataTypeString, Access: AccessReadOnly, Required: false},
 			},
 			Controls: []ControlCapabilitySpec{
 				{CapabilityID: "START"}, {CapabilityID: "STOP"}, {CapabilityID: "RESET_FAULT"},
@@ -172,6 +175,7 @@ func StandardCapabilityProfiles() []CapabilityProfile {
 				{Semantic: SemanticFanSpeed, DataType: DataTypeDouble, Unit: "%", Access: AccessReadOnly, Required: true},
 				{Semantic: SemanticFanSpeedSetpoint, DataType: DataTypeDouble, Unit: "%", Access: AccessWriteOnly, Required: true},
 				{Semantic: SemanticPower, DataType: DataTypeDouble, Unit: "kW", Access: AccessReadOnly, Required: false},
+				{Semantic: SemanticLocalRemoteMode, DataType: DataTypeString, Access: AccessReadOnly, Required: false},
 			},
 			Controls: []ControlCapabilitySpec{
 				{CapabilityID: "START"}, {CapabilityID: "STOP"}, {CapabilityID: "RESET_FAULT"},

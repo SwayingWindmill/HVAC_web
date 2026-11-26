@@ -954,14 +954,19 @@ func (m *ShadowManager) refreshControllerBindings() {
 			}
 		}
 		if hasCapabilityProfile(comp.Profiles, edgecontrol.ProfileChiller) {
-			chillers = append(chillers, edgecontrol.ChillerInterlockBinding{
-				ComponentID:  comp.ID,
-				StartCommand: comp.ChannelBindings[edgecontrol.SemanticStartCommand],
-				StopCommand:  comp.ChannelBindings[edgecontrol.SemanticStopCommand],
-				RunState:     comp.ChannelBindings[edgecontrol.SemanticRunState],
-				FaultChannel: comp.ChannelBindings[edgecontrol.SemanticFaultCode],
-			})
 			spAddr := comp.ChannelBindings[edgecontrol.SemanticTemperatureSetpoint]
+			loadLimitAddr := comp.ChannelBindings[edgecontrol.SemanticLoadLimit]
+			localRemoteAddr := resolveLocalRemoteModeChannel(comp, manifest.Channels)
+			chillers = append(chillers, edgecontrol.ChillerInterlockBinding{
+				ComponentID:      comp.ID,
+				StartCommand:     comp.ChannelBindings[edgecontrol.SemanticStartCommand],
+				StopCommand:      comp.ChannelBindings[edgecontrol.SemanticStopCommand],
+				SetpointCommand:  spAddr,
+				LoadLimitCommand: loadLimitAddr,
+				RunState:         comp.ChannelBindings[edgecontrol.SemanticRunState],
+				FaultChannel:     comp.ChannelBindings[edgecontrol.SemanticFaultCode],
+				LocalRemoteMode:  localRemoteAddr,
+			})
 			if spAddr != "" {
 				fallbackChillers = append(fallbackChillers, edgecontrol.ChillerFallbackTarget{
 					ComponentID:        comp.ID,
@@ -978,7 +983,7 @@ func (m *ShadowManager) refreshControllerBindings() {
 				RunStateAddr:        comp.ChannelBindings[edgecontrol.SemanticRunState],
 				FaultAddr:           comp.ChannelBindings[edgecontrol.SemanticFaultCode],
 				SetpointAddr:        spAddr,
-				LoadLimitAddr:       comp.ChannelBindings[edgecontrol.SemanticLoadLimit],
+				LoadLimitAddr:       loadLimitAddr,
 				CoolingCapacityAddr: comp.ChannelBindings[edgecontrol.SemanticCoolingCapacity],
 				PowerAddr:           comp.ChannelBindings[edgecontrol.SemanticPower],
 			})
@@ -988,12 +993,16 @@ func (m *ShadowManager) refreshControllerBindings() {
 			runAddr := comp.ChannelBindings[edgecontrol.SemanticRunState]
 			flowAddr := comp.ChannelBindings[edgecontrol.SemanticFlow]
 			faultAddr := comp.ChannelBindings[edgecontrol.SemanticFaultCode]
+			localRemoteAddr := resolveLocalRemoteModeChannel(comp, manifest.Channels)
 			pumps = append(pumps, edgecontrol.PumpInterlockBinding{
 				ComponentID:      comp.ID,
+				StartCommand:     comp.ChannelBindings[edgecontrol.SemanticStartCommand],
+				StopCommand:      comp.ChannelBindings[edgecontrol.SemanticStopCommand],
 				RunState:         runAddr,
 				FlowFeedback:     flowAddr,
 				FaultChannel:     faultAddr,
 				FrequencyCommand: freqAddr,
+				LocalRemoteMode:  localRemoteAddr,
 			})
 			if freqAddr != "" {
 				pumpFreqAddrs = append(pumpFreqAddrs, freqAddr)
@@ -1040,6 +1049,28 @@ func (m *ShadowManager) refreshControllerBindings() {
 	if m.aggregator != nil {
 		m.aggregator.SetChannelSemantics(channelSemantics)
 	}
+}
+
+func resolveLocalRemoteModeChannel(comp edgecontrol.ManifestComponent, channels []edgecontrol.ChannelDescriptor) string {
+	if addr := strings.TrimSpace(comp.ChannelBindings[edgecontrol.SemanticLocalRemoteMode]); addr != "" {
+		return addr
+	}
+	for _, chID := range comp.Channels {
+		if strings.EqualFold(strings.TrimSpace(chID), "local_remote_mode") {
+			return comp.ID + "/" + chID
+		}
+	}
+	for _, ch := range channels {
+		if ch.ComponentID != comp.ID {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(ch.ChannelID), "local_remote_mode") ||
+			strings.EqualFold(strings.TrimSpace(ch.PointID), "local_remote_mode") ||
+			strings.HasSuffix(strings.ToLower(strings.TrimSpace(ch.PointID)), ":local_remote_mode") {
+			return ch.Address()
+		}
+	}
+	return ""
 }
 
 func parseComponentRatedCoolingKW(props map[string]json.RawMessage) float64 {
