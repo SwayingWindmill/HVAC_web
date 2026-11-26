@@ -108,6 +108,8 @@ type FieldPlantOptions struct {
 	Config           FieldPlantConfig
 	Bus              FieldPlantBus
 	PublishTelemetry func(ctx context.Context, payload []byte)
+	OnObserved       func(ts time.Time, devices []mqttUplinkDevice)
+	OnBusStats       func(txFrames, rxErrors int64)
 	Now              func() time.Time
 	UUIDv7           func(now time.Time) string
 	Logger           *slog.Logger
@@ -120,6 +122,8 @@ type FieldPlantRunner struct {
 	cfg              FieldPlantConfig
 	bus              FieldPlantBus
 	publishTelemetry func(ctx context.Context, payload []byte)
+	onObserved       func(ts time.Time, devices []mqttUplinkDevice)
+	onBusStats       func(txFrames, rxErrors int64)
 	now              func() time.Time
 	uuidv7           func(now time.Time) string
 	logger           *slog.Logger
@@ -200,12 +204,19 @@ func NewFieldPlantRunner(opts FieldPlantOptions) (*FieldPlantRunner, error) {
 		}
 	}
 
+	bus := opts.Bus
+	if opts.OnBusStats != nil {
+		bus = statsFieldPlantBus{inner: bus, onStats: opts.OnBusStats}
+	}
+
 	runner := &FieldPlantRunner{
 		gatewayID:        gwID,
 		statePath:        statePath,
 		cfg:              cfg,
-		bus:              opts.Bus,
+		bus:              bus,
 		publishTelemetry: opts.PublishTelemetry,
+		onObserved:       opts.OnObserved,
+		onBusStats:       opts.OnBusStats,
 		now:              nowFn,
 		uuidv7:           uuidFn,
 		logger:           logger,
@@ -914,7 +925,13 @@ func (r *FieldPlantRunner) readConcentratorBank(ctx context.Context, unitID uint
 }
 
 func (r *FieldPlantRunner) emitTelemetry(ctx context.Context, now time.Time, devices []mqttUplinkDevice) {
-	if r.publishTelemetry == nil || len(devices) == 0 {
+	if len(devices) == 0 {
+		return
+	}
+	if r.onObserved != nil {
+		r.onObserved(now.UTC(), cloneMQTTUplinkDevices(devices))
+	}
+	if r.publishTelemetry == nil {
 		return
 	}
 	tsMs := max(now.UTC().UnixMilli(), 1)
@@ -1144,4 +1161,50 @@ func clonePointCopyRoutes(src []PointCopyRouteConfig) []PointCopyRouteConfig {
 
 func plantRoundTo(value, scale float64) float64 {
 	return math.Round(value*scale) / scale
+}
+
+type statsFieldPlantBus struct {
+	inner   FieldPlantBus
+	onStats func(txFrames, rxErrors int64)
+}
+
+func (b statsFieldPlantBus) report(err error) {
+	if b.onStats == nil {
+		return
+	}
+	var rxErr int64
+	if err != nil {
+		rxErr = 1
+	}
+	b.onStats(1, rxErr)
+}
+
+func (b statsFieldPlantBus) ReadCoils(ctx context.Context, unitID uint8, address, quantity uint16) ([]uint16, error) {
+	res, err := b.inner.ReadCoils(ctx, unitID, address, quantity)
+	b.report(err)
+	return res, err
+}
+
+func (b statsFieldPlantBus) ReadHoldingRegisters(ctx context.Context, unitID uint8, address, quantity uint16) ([]uint16, error) {
+	res, err := b.inner.ReadHoldingRegisters(ctx, unitID, address, quantity)
+	b.report(err)
+	return res, err
+}
+
+func (b statsFieldPlantBus) ReadInputRegisters(ctx context.Context, unitID uint8, address, quantity uint16) ([]uint16, error) {
+	res, err := b.inner.ReadInputRegisters(ctx, unitID, address, quantity)
+	b.report(err)
+	return res, err
+}
+
+func cloneMQTTUplinkDevices(devices []mqttUplinkDevice) []mqttUplinkDevice {
+	out := make([]mqttUplinkDevice, len(devices))
+	for i, d := range devices {
+		cp := d
+		if len(d.Points) > 0 {
+			cp.Points = append([]mqttUplinkPoint(nil), d.Points...)
+		}
+		out[i] = cp
+	}
+	return out
 }

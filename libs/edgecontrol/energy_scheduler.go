@@ -186,13 +186,14 @@ type EnergyScheduleStatus struct {
 // EnergyScheduleController executes versioned cloud energy schedules locally on
 // the edge and relinquishes cleanly to local autonomy fallback when leases expire.
 type EnergyScheduleController struct {
-	mu             sync.Mutex
-	id             string
-	schedule       *EdgeEnergySchedule
-	cloudConnected bool
-	chillers       []ChillerFallbackTarget
-	pumps          []PumpFallbackTarget
-	towers         []ClusterTowerBinding
+	mu                    sync.Mutex
+	id                    string
+	schedule              *EdgeEnergySchedule
+	cloudConnected        bool
+	chillers              []ChillerFallbackTarget
+	pumps                 []PumpFallbackTarget
+	towers                []ClusterTowerBinding
+	modelSetpointProvider func(ProcessImage) (float64, bool)
 }
 
 // NewEnergyScheduleController creates a versioned schedule execution controller.
@@ -250,6 +251,17 @@ func (c *EnergyScheduleController) UpdateTargets(chillers []ChillerFallbackTarge
 	c.mu.Unlock()
 }
 
+// SetModelSetpointProvider configures an optional Edge AI setpoint provider
+// consulted when an active schedule slot does not fix SupplyTempSetpointC.
+func (c *EnergyScheduleController) SetModelSetpointProvider(fn func(ProcessImage) (float64, bool)) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.modelSetpointProvider = fn
+	c.mu.Unlock()
+}
+
 // IsActiveAt reports whether a valid schedule slot governs execution at at.
 func (c *EnergyScheduleController) IsActiveAt(at time.Time) bool {
 	c.mu.Lock()
@@ -297,6 +309,7 @@ func (c *EnergyScheduleController) Run(_ context.Context, img ProcessImage, plan
 	chillers := slices.Clone(c.chillers)
 	pumps := slices.Clone(c.pumps)
 	towers := slices.Clone(c.towers)
+	modelProvider := c.modelSetpointProvider
 	c.mu.Unlock()
 
 	if !st.Active || slot == nil {
@@ -314,12 +327,22 @@ func (c *EnergyScheduleController) Run(_ context.Context, img ProcessImage, plan
 			constrainDoubleWritable(img, plan, tower.FanSpeedAddr, c.id, reason, slot.TowerFanSpeedMinPct, slot.TowerFanSpeedMaxPct)
 		}
 	}
+	var targetSetpoint *float64
 	if slot.SupplyTempSetpointC != nil {
+		sp := *slot.SupplyTempSetpointC
+		targetSetpoint = &sp
+	} else if slot.Mode != ScheduleModeStandby && modelProvider != nil {
+		if sp, ok := modelProvider(img); ok && isFiniteFloat(sp) {
+			clamped := clampFloat(sp, 4, 18)
+			targetSetpoint = &clamped
+		}
+	}
+	if targetSetpoint != nil {
 		for _, ch := range chillers {
 			if faultChannelActive(img, ch.FaultAddr) {
 				continue
 			}
-			_ = reqDoubleWritable(img, plan, ch.SupplySetpointAddr, c.id, *slot.SupplyTempSetpointC)
+			_ = reqDoubleWritable(img, plan, ch.SupplySetpointAddr, c.id, *targetSetpoint)
 		}
 	}
 	return nil

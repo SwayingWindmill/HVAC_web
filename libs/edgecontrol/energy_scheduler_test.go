@@ -270,3 +270,94 @@ func TestEdgeEnergyScheduleValidationRejectsInvalidConfigs(t *testing.T) {
 		t.Fatal("expected missing scheduleId error")
 	}
 }
+
+func TestEnergyScheduleControllerModelSetpointProviderFallbackAndBounds(t *testing.T) {
+	t.Parallel()
+
+	day := time.Date(2026, 11, 22, 0, 0, 0, 0, time.UTC)
+	explicitSP := 6.5
+	schedule := &EdgeEnergySchedule{
+		ScheduleID: "sched-model-driven",
+		Version:    1,
+		IssuedAt:   day,
+		ValidFrom:  day,
+		ValidUntil: day.Add(24 * time.Hour),
+		Slots: []EnergyScheduleSlot{
+			{SlotID: "model-eco", StartMinute: 8 * 60, EndMinute: 12 * 60, Mode: ScheduleModeEco},
+			{SlotID: "explicit-precool", StartMinute: 12 * 60, EndMinute: 14 * 60, Mode: ScheduleModePreCool, SupplyTempSetpointC: &explicitSP},
+			{SlotID: "standby-slot", StartMinute: 14 * 60, EndMinute: 16 * 60, Mode: ScheduleModeStandby},
+		},
+	}
+
+	ch1 := makeClusterChillerAdapter("ch-1", day, "RUNNING", 300, false)
+	host, err := NewHost()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := host.RegisterAdapter(ch1); err != nil {
+		t.Fatal(err)
+	}
+
+	schedCtrl := NewEnergyScheduleController("")
+	if err := schedCtrl.UpdateSchedule(schedule); err != nil {
+		t.Fatal(err)
+	}
+	schedCtrl.UpdateTargets([]ChillerFallbackTarget{
+		{ComponentID: "ch-1", SupplySetpointAddr: "ch-1/SupplySp", RunStateAddr: "ch-1/RunState", FaultAddr: "ch-1/Fault"},
+	}, nil, nil)
+
+	providerVal := 9.25
+	providerOK := true
+	schedCtrl.SetModelSetpointProvider(func(img ProcessImage) (float64, bool) {
+		if _, ok := img.Get("ch-1/CapacityKW"); !ok {
+			return 0, false
+		}
+		return providerVal, providerOK
+	})
+
+	if err := host.Start([]ControllerBinding{{Priority: 50, Controller: schedCtrl}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Model-driven slot without explicit SupplyTempSetpointC uses model provider.
+	if _, err := host.RunCycle(context.Background(), day.Add(9*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if sp, ok := ch1.ReadValue("ch-1/SupplySp"); !ok || sp.Double != 9.25 {
+		t.Fatalf("expected model-driven setpoint 9.25C, got %+v", sp)
+	}
+
+	// 2. Out-of-bounds model setpoint is clamped to [4, 18].
+	providerVal = 25.0
+	if _, err := host.RunCycle(context.Background(), day.Add(9*time.Hour+time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if sp, ok := ch1.ReadValue("ch-1/SupplySp"); !ok || sp.Double != 18.0 {
+		t.Fatalf("expected clamped upper setpoint 18.0C, got %+v", sp)
+	}
+	providerVal = 1.5
+	if _, err := host.RunCycle(context.Background(), day.Add(9*time.Hour+2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if sp, ok := ch1.ReadValue("ch-1/SupplySp"); !ok || sp.Double != 4.0 {
+		t.Fatalf("expected clamped lower setpoint 4.0C, got %+v", sp)
+	}
+
+	// 3. Explicit slot SupplyTempSetpointC takes precedence over model provider.
+	providerVal = 11.0
+	if _, err := host.RunCycle(context.Background(), day.Add(12*time.Hour+30*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if sp, ok := ch1.ReadValue("ch-1/SupplySp"); !ok || sp.Double != 6.5 {
+		t.Fatalf("expected explicit slot setpoint 6.5C to override model 11.0C, got %+v", sp)
+	}
+
+	// 4. Standby slot does not push model setpoint.
+	ch1.SetValue("ch-1/SupplySp", DoubleValue(7.0), QualityGood, day.Add(14*time.Hour))
+	if _, err := host.RunCycle(context.Background(), day.Add(14*time.Hour+5*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if sp, ok := ch1.ReadValue("ch-1/SupplySp"); !ok || sp.Double != 7.0 {
+		t.Fatalf("expected standby slot to leave SupplySp untouched at 7.0C, got %+v", sp)
+	}
+}

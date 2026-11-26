@@ -25,6 +25,8 @@ type EdgeModelManager struct {
 	shadow         map[string]edgecontrol.EdgeModelBundle
 	statuses       map[string]*edgecontrol.EdgeModelRuntimeStatus
 	shadowSumAbs   map[string]float64
+	lastImage      edgecontrol.ProcessImage
+	hasLastImage   bool
 }
 
 func NewEdgeModelManager(trustedKeys map[string]string, logger *slog.Logger) *EdgeModelManager {
@@ -217,6 +219,8 @@ func (m *EdgeModelManager) EvaluateCycle(now time.Time, img edgecontrol.ProcessI
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.lastImage = img
+	m.hasLastImage = true
 	if len(m.active) == 0 && len(m.shadow) == 0 {
 		return m.sortedStatusesLocked()
 	}
@@ -286,6 +290,55 @@ func (m *EdgeModelManager) EvaluateCycle(now time.Time, img edgecontrol.ProcessI
 	}
 
 	return m.sortedStatusesLocked()
+}
+
+// ActiveControlSetpointC returns the bounded [4, 18]°C setpoint from the active
+// EDGE_CONTROL bundle evaluated on the latest ProcessImage (never SHADOW or rolled-back bundles).
+func (m *EdgeModelManager) ActiveControlSetpointC() (float64, bool) {
+	if m == nil {
+		return 0, false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.hasLastImage {
+		return 0, false
+	}
+	return m.activeControlSetpointCLocked(m.lastImage)
+}
+
+// ActiveControlSetpointCForImage evaluates active EDGE_CONTROL bundles against img
+// and returns a bounded [4, 18]°C setpoint without consulting SHADOW or rolled-back bundles.
+func (m *EdgeModelManager) ActiveControlSetpointCForImage(img edgecontrol.ProcessImage) (float64, bool) {
+	if m == nil {
+		return 0, false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.activeControlSetpointCLocked(img)
+}
+
+func (m *EdgeModelManager) activeControlSetpointCLocked(img edgecontrol.ProcessImage) (float64, bool) {
+	if len(m.active) == 0 {
+		return 0, false
+	}
+	keys := make([]string, 0, len(m.active))
+	for k, b := range m.active {
+		if b.Domain == edgecontrol.EdgeModelDomainControl {
+			keys = append(keys, k)
+		}
+	}
+	if len(keys) == 0 {
+		return 0, false
+	}
+	sort.Strings(keys)
+	signals := extractCycleNumericSignals(img)
+	for _, k := range keys {
+		out, ok := evaluateBundleOutput(m.active[k], signals)
+		if ok && !math.IsNaN(out) && !math.IsInf(out, 0) && out >= 4.0 && out <= 18.0 {
+			return out, true
+		}
+	}
+	return 0, false
 }
 
 func (m *EdgeModelManager) evictShadowLocked(key string, st *edgecontrol.EdgeModelRuntimeStatus, reason string) {

@@ -25,6 +25,7 @@ type waveformPointSample struct {
 type pendingWaveformCapture struct {
 	captureID     string
 	ruleID        string
+	deviceCode    string
 	triggerSource string
 	triggerReason string
 	triggeredAt   time.Time
@@ -35,12 +36,20 @@ type pendingWaveformCapture struct {
 	requestedBy   string
 }
 
+type ringSnapshotObs struct {
+	canon     string
+	val       float64
+	qualified []string
+	shortKey  string
+}
+
 // WaveformRingBuffer retains a bounded high-frequency raw process-image window (default 15m @ 1Hz)
 // before deadband/aggregation and produces pre/post transient bursts on auto-rule or manual trigger.
 type WaveformRingBuffer struct {
 	mu          sync.Mutex
 	horizon     time.Duration
 	points      map[string][]waveformPointSample
+	aliases     map[string]string
 	rules       []edgecontrol.WaveformRuleConfig
 	lastFiredAt map[string]time.Time
 	prevValues  map[string]float64
@@ -54,6 +63,7 @@ func NewWaveformRingBuffer(horizon time.Duration) *WaveformRingBuffer {
 	return &WaveformRingBuffer{
 		horizon:     horizon,
 		points:      make(map[string][]waveformPointSample),
+		aliases:     make(map[string]string),
 		lastFiredAt: make(map[string]time.Time),
 		prevValues:  make(map[string]float64),
 	}
@@ -119,6 +129,7 @@ func (r *WaveformRingBuffer) TriggerManual(cmd edgecontrol.DiagnosticsDownlinkPa
 	req := pendingWaveformCapture{
 		captureID:     captureID,
 		ruleID:        strings.TrimSpace(cmd.RuleID),
+		deviceCode:    strings.TrimSpace(cmd.DeviceCode),
 		triggerSource: "MANUAL",
 		triggerReason: firstNonEmpty(cmd.TriggerReason, "运维手动触发高频波形抓拍"),
 		triggeredAt:   ts,
@@ -149,7 +160,7 @@ func (r *WaveformRingBuffer) ObserveSnapshots(now time.Time, img edgecontrol.Pro
 	tsMs := ts.UnixMilli()
 	cutoffMs := ts.Add(-r.horizon).UnixMilli()
 
-	current := make(map[string]float64)
+	obsByCanon := make(map[string]ringSnapshotObs)
 	for _, snap := range img.Channels() {
 		if !snap.HasValue {
 			continue
@@ -158,21 +169,35 @@ func (r *WaveformRingBuffer) ObserveSnapshots(now time.Time, img edgecontrol.Pro
 		if !ok {
 			continue
 		}
-		comp := strings.TrimSpace(snap.Descriptor.ComponentID)
-		ch := strings.TrimSpace(snap.Descriptor.ChannelID)
-		pt := strings.TrimSpace(snap.Descriptor.PointID)
-		if comp != "" && ch != "" {
-			current[strings.ToLower(comp+"."+ch)] = num
+		obs, ok := buildRingSnapshotObs(snap, num)
+		if !ok {
+			continue
 		}
-		if comp != "" && pt != "" && pt != ch {
-			current[strings.ToLower(comp+"."+pt)] = num
+		obsByCanon[obs.canon] = obs
+	}
+
+	sortedObs := make([]ringSnapshotObs, 0, len(obsByCanon))
+	for _, obs := range obsByCanon {
+		sortedObs = append(sortedObs, obs)
+	}
+	sort.Slice(sortedObs, func(i, j int) bool {
+		return sortedObs[i].canon < sortedObs[j].canon
+	})
+
+	currentVals := make(map[string]float64, len(sortedObs))
+	cycleAliases := make(map[string]string, len(sortedObs)*4)
+	for _, obs := range sortedObs {
+		currentVals[obs.canon] = obs.val
+		for _, alias := range obs.qualified {
+			if _, exists := cycleAliases[alias]; !exists {
+				cycleAliases[alias] = obs.canon
+			}
 		}
-		for _, rawKey := range []string{snap.Descriptor.Address(), ch, pt} {
-			k := strings.ToLower(strings.TrimSpace(rawKey))
-			if k != "" {
-				if _, exists := current[k]; !exists {
-					current[k] = num
-				}
+	}
+	for _, obs := range sortedObs {
+		if obs.shortKey != "" {
+			if _, exists := cycleAliases[obs.shortKey]; !exists {
+				cycleAliases[obs.shortKey] = obs.canon
 			}
 		}
 	}
@@ -180,64 +205,53 @@ func (r *WaveformRingBuffer) ObserveSnapshots(now time.Time, img edgecontrol.Pro
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	for key, val := range current {
-		series, exists := r.points[key]
-		if !exists && len(r.points) >= maxWaveformRingPoints {
-			continue
+	for alias, canon := range cycleAliases {
+		r.aliases[alias] = canon
+	}
+
+	priorityCanons := r.priorityCanonicalSetLocked(cycleAliases)
+	for _, obs := range sortedObs {
+		if _, isPriority := priorityCanons[obs.canon]; isPriority {
+			r.appendCanonicalSampleLocked(obs.canon, tsMs, cutoffMs, obs.val, true, priorityCanons)
 		}
-		series = append(series, waveformPointSample{tsMs: tsMs, value: val})
-		// Drop expired samples beyond horizon and cap length.
-		dropIdx := 0
-		for dropIdx < len(series) && series[dropIdx].tsMs < cutoffMs {
-			dropIdx++
+	}
+	for _, obs := range sortedObs {
+		if _, isPriority := priorityCanons[obs.canon]; !isPriority {
+			r.appendCanonicalSampleLocked(obs.canon, tsMs, cutoffMs, obs.val, false, priorityCanons)
 		}
-		if len(series)-dropIdx > maxWaveformRingSamplesPerKey {
-			dropIdx = len(series) - maxWaveformRingSamplesPerKey
-		}
-		if dropIdx > 0 {
-			copy(series, series[dropIdx:])
-			series = series[:len(series)-dropIdx]
-		}
-		r.points[key] = series
 	}
 
 	for _, rule := range r.rules {
 		if !rule.Enabled {
 			continue
 		}
-		targetKey := strings.ToLower(strings.TrimSpace(rule.DeviceCode + "." + rule.PointCode))
-		fallbackKey := strings.ToLower(strings.TrimSpace(rule.PointCode))
-		val, ok := current[targetKey]
-		matchedKey := targetKey
-		if !ok {
-			val, ok = current[fallbackKey]
-			matchedKey = fallbackKey
-		}
+		canon, val, ok := lookupCurrentRuleValue(rule, currentVals, cycleAliases)
 		if !ok {
 			continue
 		}
-		prevVal, hadPrev := r.prevValues[matchedKey]
-		r.prevValues[matchedKey] = val
+		prevVal, hadPrev := r.prevValues[canon]
+		r.prevValues[canon] = val
 
 		cooldownKey := firstNonEmpty(rule.RuleID, rule.RuleName)
 		if last, fired := r.lastFiredAt[cooldownKey]; fired && ts.Sub(last) < time.Duration(rule.CooldownSeconds)*time.Second {
 			continue
 		}
 
-		triggered, reason := r.matchRuleLocked(rule, matchedKey, val, prevVal, hadPrev, tsMs)
+		triggered, reason := r.matchRuleLocked(rule, canon, val, prevVal, hadPrev, tsMs)
 		if triggered {
 			r.lastFiredAt[cooldownKey] = ts
 			captureID := fmt.Sprintf("0194f000-9900-7000-8000-%012x", ts.UnixNano()&0xffffffffffff)
 			r.pending = append(r.pending, pendingWaveformCapture{
 				captureID:     captureID,
 				ruleID:        rule.RuleID,
+				deviceCode:    strings.TrimSpace(rule.DeviceCode),
 				triggerSource: "AUTO_RULE",
 				triggerReason: reason,
 				triggeredAt:   ts,
 				windowStart:   ts.Add(-time.Duration(rule.PreSeconds) * time.Second),
 				windowEnd:     ts.Add(time.Duration(rule.PostSeconds) * time.Second),
 				sampleRateHz:  rule.SampleRateHz,
-				pointCodes:    append([]string(nil), rule.PointCodes...),
+				pointCodes:    cleanPointList(rule.DeviceCode, rule.PointCode, rule.PointCodes),
 				requestedBy:   "edge-rule:" + rule.RuleName,
 			})
 		}
@@ -256,6 +270,155 @@ func (r *WaveformRingBuffer) ObserveSnapshots(now time.Time, img edgecontrol.Pro
 	return completed
 }
 
+func buildRingSnapshotObs(snap edgecontrol.ChannelSnapshot, val float64) (ringSnapshotObs, bool) {
+	comp := strings.TrimSpace(snap.Descriptor.ComponentID)
+	ch := strings.TrimSpace(snap.Descriptor.ChannelID)
+	pt := strings.TrimSpace(snap.Descriptor.PointID)
+	addr := strings.TrimSpace(snap.Descriptor.Address())
+
+	var canon string
+	switch {
+	case comp != "" && ch != "":
+		canon = strings.ToLower(comp + "." + ch)
+	case comp != "" && pt != "":
+		canon = strings.ToLower(comp + "." + pt)
+	case addr != "":
+		canon = strings.ToLower(addr)
+	case pt != "":
+		canon = strings.ToLower(pt)
+	default:
+		return ringSnapshotObs{}, false
+	}
+
+	seen := make(map[string]struct{}, 5)
+	qualified := make([]string, 0, 5)
+	addQual := func(raw string) {
+		k := strings.ToLower(strings.TrimSpace(raw))
+		if k == "" {
+			return
+		}
+		if _, dup := seen[k]; dup {
+			return
+		}
+		seen[k] = struct{}{}
+		qualified = append(qualified, k)
+	}
+	addQual(canon)
+	if comp != "" && pt != "" && pt != ch {
+		addQual(comp + "." + pt)
+	}
+	addQual(addr)
+	if pt != "" && !strings.EqualFold(pt, ch) {
+		addQual(pt)
+	}
+	return ringSnapshotObs{
+		canon:     canon,
+		val:       val,
+		qualified: qualified,
+		shortKey:  strings.ToLower(ch),
+	}, true
+}
+
+func lookupCurrentRuleValue(rule edgecontrol.WaveformRuleConfig, currentVals map[string]float64, cycleAliases map[string]string) (string, float64, bool) {
+	candidates := make([]string, 0, 2)
+	if dev := strings.TrimSpace(rule.DeviceCode); dev != "" && strings.TrimSpace(rule.PointCode) != "" {
+		candidates = append(candidates, strings.ToLower(dev+"."+strings.TrimSpace(rule.PointCode)))
+	}
+	if pt := strings.TrimSpace(rule.PointCode); pt != "" {
+		candidates = append(candidates, strings.ToLower(pt))
+	}
+	for _, key := range candidates {
+		if canon, ok := cycleAliases[key]; ok {
+			if val, present := currentVals[canon]; present {
+				return canon, val, true
+			}
+		}
+		if val, present := currentVals[key]; present {
+			return key, val, true
+		}
+	}
+	return "", 0, false
+}
+
+func (r *WaveformRingBuffer) priorityCanonicalSetLocked(cycleAliases map[string]string) map[string]struct{} {
+	out := make(map[string]struct{})
+	addRef := func(devCode, raw string) {
+		trimmed := strings.ToLower(strings.TrimSpace(raw))
+		if trimmed == "" {
+			return
+		}
+		candidates := make([]string, 0, 2)
+		if dev := strings.ToLower(strings.TrimSpace(devCode)); dev != "" && !strings.ContainsAny(trimmed, "./:") {
+			candidates = append(candidates, dev+"."+trimmed)
+		}
+		candidates = append(candidates, trimmed)
+		for _, cand := range candidates {
+			if canon, ok := cycleAliases[cand]; ok {
+				out[canon] = struct{}{}
+				return
+			}
+			if canon, ok := r.aliases[cand]; ok {
+				out[canon] = struct{}{}
+				return
+			}
+			if _, exists := r.points[cand]; exists {
+				out[cand] = struct{}{}
+				return
+			}
+		}
+	}
+	for _, rule := range r.rules {
+		if !rule.Enabled {
+			continue
+		}
+		addRef(rule.DeviceCode, rule.PointCode)
+		for _, pt := range rule.PointCodes {
+			addRef(rule.DeviceCode, pt)
+		}
+	}
+	for _, item := range r.pending {
+		for _, pt := range item.pointCodes {
+			addRef(item.deviceCode, pt)
+		}
+	}
+	return out
+}
+
+func (r *WaveformRingBuffer) appendCanonicalSampleLocked(canon string, tsMs, cutoffMs int64, val float64, priority bool, prioritySet map[string]struct{}) {
+	series, exists := r.points[canon]
+	if !exists && len(r.points) >= maxWaveformRingPoints {
+		if !priority {
+			return
+		}
+		evictKey := ""
+		for k := range r.points {
+			if _, keep := prioritySet[k]; keep {
+				continue
+			}
+			if k > evictKey {
+				evictKey = k
+			}
+		}
+		if evictKey == "" {
+			return
+		}
+		delete(r.points, evictKey)
+	}
+	series = append(series, waveformPointSample{tsMs: tsMs, value: val})
+	dropIdx := 0
+	for dropIdx < len(series) && series[dropIdx].tsMs < cutoffMs {
+		dropIdx++
+	}
+	if len(series)-dropIdx > maxWaveformRingSamplesPerKey {
+		dropIdx = len(series) - maxWaveformRingSamplesPerKey
+	}
+	if dropIdx > 0 {
+		copy(series, series[dropIdx:])
+		series = series[:len(series)-dropIdx]
+	}
+	r.points[canon] = series
+}
+
 func (r *WaveformRingBuffer) matchRuleLocked(rule edgecontrol.WaveformRuleConfig, key string, val, prev float64, hadPrev bool, nowMs int64) (bool, string) {
 	switch rule.TriggerType {
 	case edgecontrol.WaveformTriggerThresholdHigh:
@@ -270,7 +433,7 @@ func (r *WaveformRingBuffer) matchRuleLocked(rule edgecontrol.WaveformRuleConfig
 		refVal := prev
 		refFound := hadPrev
 		sinceMs := nowMs - int64(rule.DeltaWindowSeconds)*1000
-		if series := r.points[key]; len(series) > 1 {
+		if series, ok := r.resolveSeriesLocked(rule.DeviceCode, key); ok && len(series) > 1 {
 			for i := len(series) - 2; i >= 0; i-- {
 				if series[i].tsMs <= sinceMs {
 					refVal = series[i].value
@@ -292,6 +455,44 @@ func (r *WaveformRingBuffer) matchRuleLocked(rule edgecontrol.WaveformRuleConfig
 	return false, ""
 }
 
+func (r *WaveformRingBuffer) resolveSeriesLocked(deviceCode, rawKey string) ([]waveformPointSample, bool) {
+	key := strings.ToLower(strings.TrimSpace(rawKey))
+	if key == "" {
+		return nil, false
+	}
+	if dev := strings.ToLower(strings.TrimSpace(deviceCode)); dev != "" && !strings.ContainsAny(key, "./:") {
+		qual := dev + "." + key
+		if series, ok := r.points[qual]; ok && len(series) > 0 {
+			return series, true
+		}
+		if canon, ok := r.aliases[qual]; ok {
+			if series, exists := r.points[canon]; exists && len(series) > 0 {
+				return series, true
+			}
+		}
+	}
+	if series, ok := r.points[key]; ok && len(series) > 0 {
+		return series, true
+	}
+	if canon, ok := r.aliases[key]; ok {
+		if series, exists := r.points[canon]; exists && len(series) > 0 {
+			return series, true
+		}
+	}
+	if dot := strings.LastIndex(key, "."); dot >= 0 && dot+1 < len(key) {
+		suf := key[dot+1:]
+		if series, ok := r.points[suf]; ok && len(series) > 0 {
+			return series, true
+		}
+		if canon, ok := r.aliases[suf]; ok {
+			if series, exists := r.points[canon]; exists && len(series) > 0 {
+				return series, true
+			}
+		}
+	}
+	return nil, false
+}
+
 func (r *WaveformRingBuffer) extractBurstLocked(req pendingWaveformCapture) edgecontrol.WaveformBurstPayload {
 	startMs := req.windowStart.UnixMilli()
 	endMs := req.windowEnd.UnixMilli()
@@ -304,20 +505,16 @@ func (r *WaveformRingBuffer) extractBurstLocked(req pendingWaveformCapture) edge
 	}
 	if len(targetKeys) == 0 {
 		for k := range r.points {
-			if strings.Contains(k, ".") {
-				targetKeys = append(targetKeys, k)
-			}
+			targetKeys = append(targetKeys, k)
 		}
 		sort.Strings(targetKeys)
 	}
 
 	byTimestamp := make(map[int64]map[string]float64)
 	for _, key := range targetKeys {
-		series := r.points[key]
-		if len(series) == 0 {
-			if dot := strings.LastIndex(key, "."); dot >= 0 && dot+1 < len(key) {
-				series = r.points[key[dot+1:]]
-			}
+		series, ok := r.resolveSeriesLocked(req.deviceCode, key)
+		if !ok {
+			continue
 		}
 		for _, pt := range series {
 			if pt.tsMs < startMs || pt.tsMs > endMs {

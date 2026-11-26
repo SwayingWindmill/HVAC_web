@@ -2,6 +2,7 @@ package connectivity
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -15,19 +16,59 @@ import (
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/packettap"
 )
 
+type waveformDiagnosticsHandler struct {
+	store       DiagnosticsStore
+	tap         *packettap.Manager
+	credentials GatewayPeerVerifier
+	authorize   CredentialAuthorizer
+	bridge      *DiagnosticsMQTTBridge
+	base        http.Handler
+}
+
+func (h *waveformDiagnosticsHandler) WithGatewayPeerVerifier(credentials GatewayPeerVerifier) http.Handler {
+	if h == nil || credentials == nil || h.credentials != nil {
+		return h
+	}
+	cp := *h
+	cp.credentials = credentials
+	return &cp
+}
+
+func (h *waveformDiagnosticsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet && r.URL.Path == "/gateway/v1/waveform-rules" {
+		serveGatewayWaveformRules(w, r, h.store, h.credentials)
+		return
+	}
+	if handled := serveWaveformDiagnosticsRoutes(w, r, h.store, h.authorize, h.bridge); handled {
+		return
+	}
+	h.base.ServeHTTP(w, r)
+}
+
 func NewDiagnosticsHandlerWithWaveform(
 	store DiagnosticsStore,
 	tap *packettap.Manager,
 	authorize CredentialAuthorizer,
 	bridge *DiagnosticsMQTTBridge,
 ) http.Handler {
-	baseHandler := NewDiagnosticsHandler(store, tap, authorize)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if handled := serveWaveformDiagnosticsRoutes(w, r, store, authorize, bridge); handled {
-			return
-		}
-		baseHandler.ServeHTTP(w, r)
-	})
+	return NewDiagnosticsHandlerWithWaveformAndVerifier(store, tap, nil, authorize, bridge)
+}
+
+func NewDiagnosticsHandlerWithWaveformAndVerifier(
+	store DiagnosticsStore,
+	tap *packettap.Manager,
+	credentials GatewayPeerVerifier,
+	authorize CredentialAuthorizer,
+	bridge *DiagnosticsMQTTBridge,
+) http.Handler {
+	return &waveformDiagnosticsHandler{
+		store:       store,
+		tap:         tap,
+		credentials: credentials,
+		authorize:   authorize,
+		bridge:      bridge,
+		base:        NewDiagnosticsHandler(store, tap, authorize),
+	}
 }
 
 func serveWaveformDiagnosticsRoutes(
@@ -104,6 +145,7 @@ func serveWaveformDiagnosticsRoutes(
 			writeMappedDiagnosticsError(w, err)
 			return true
 		}
+		pushWaveformRulesSync(r.Context(), wStore, claims, gatewayID, bridge)
 		writeWaveformJSON(w, http.StatusCreated, rec)
 		return true
 
@@ -118,6 +160,7 @@ func serveWaveformDiagnosticsRoutes(
 			writeMappedDiagnosticsError(w, err)
 			return true
 		}
+		pushWaveformRulesSync(r.Context(), wStore, claims, gatewayID, bridge)
 		writeWaveformJSON(w, http.StatusOK, rec)
 		return true
 
@@ -126,6 +169,7 @@ func serveWaveformDiagnosticsRoutes(
 			writeMappedDiagnosticsError(w, err)
 			return true
 		}
+		pushWaveformRulesSync(r.Context(), wStore, claims, gatewayID, bridge)
 		writeWaveformJSON(w, http.StatusOK, map[string]bool{"deleted": true})
 		return true
 
@@ -291,12 +335,97 @@ func decodeWaveformOptionalBody(w http.ResponseWriter, r *http.Request, dst any)
 	return nil
 }
 
+func serveGatewayWaveformRules(
+	w http.ResponseWriter,
+	r *http.Request,
+	store DiagnosticsStore,
+	credentials GatewayPeerVerifier,
+) {
+	wStore, hasWStore := store.(WaveformDiagnosticsStore)
+	if !hasWStore || store == nil || credentials == nil {
+		writeDiagnosticsErrorJSON(w, http.StatusServiceUnavailable, "WAVEFORM_DIAGNOSTICS_UNAVAILABLE", "waveform rules service is unavailable")
+		return
+	}
+	peer, err := ParseGatewayPeerCert(r)
+	if err != nil {
+		writeMappedDiagnosticsError(w, err)
+		return
+	}
+	gatewayID, err := credentials.VerifyActiveCredential(r.Context(), peer)
+	if err != nil {
+		writeMappedDiagnosticsError(w, err)
+		return
+	}
+	items, err := wStore.ListGatewayWaveformRulesForGateway(r.Context(), gatewayID)
+	if err != nil {
+		writeMappedDiagnosticsError(w, err)
+		return
+	}
+	writeWaveformJSON(w, http.StatusOK, struct {
+		GatewayID string                           `json:"gatewayId"`
+		Rules     []edgecontrol.WaveformRuleConfig `json:"rules"`
+	}{
+		GatewayID: gatewayID,
+		Rules:     waveformRuleConfigsFromRecords(items),
+	})
+}
+
+func pushWaveformRulesSync(
+	ctx context.Context,
+	wStore WaveformDiagnosticsStore,
+	claims registryauth.GrantClaims,
+	gatewayID string,
+	bridge *DiagnosticsMQTTBridge,
+) {
+	if bridge == nil || wStore == nil {
+		return
+	}
+	items, err := wStore.ListGatewayWaveformRules(ctx, claims, gatewayID)
+	if err != nil {
+		return
+	}
+	reqID, _ := newUUIDv7(time.Now().UTC())
+	if reqID == "" {
+		reqID = "0194f000-8800-7000-8000-000000000002"
+	}
+	_ = bridge.PublishSyncWaveformRules(ctx, gatewayID, edgecontrol.DiagnosticsDownlinkPayload{
+		RequestID:   reqID,
+		Action:      edgecontrol.DiagnosticsActionSyncWaveformRules,
+		Rules:       waveformRuleConfigsFromRecords(items),
+		RequestedBy: firstActorID(claims),
+	})
+}
+
+func waveformRuleConfigsFromRecords(records []WaveformRuleRecord) []edgecontrol.WaveformRuleConfig {
+	out := make([]edgecontrol.WaveformRuleConfig, 0, len(records))
+	for _, rec := range records {
+		out = append(out, edgecontrol.WaveformRuleConfig{
+			RuleID:             rec.ID,
+			RuleName:           rec.RuleName,
+			Enabled:            rec.Enabled,
+			DeviceCode:         rec.DeviceCode,
+			PointCode:          rec.PointCode,
+			TriggerType:        rec.TriggerType,
+			ThresholdValue:     rec.ThresholdValue,
+			DeltaWindowSeconds: rec.DeltaWindowSeconds,
+			PreSeconds:         rec.PreSeconds,
+			PostSeconds:        rec.PostSeconds,
+			SampleRateHz:       rec.SampleRateHz,
+			PointCodes:         append([]string(nil), rec.PointCodes...),
+			CooldownSeconds:    rec.CooldownSeconds,
+		})
+	}
+	return out
+}
+
 func writeMappedDiagnosticsError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrEnrollmentRejected), errors.Is(err, ErrWaveformInvalid):
 		writeDiagnosticsErrorJSON(w, http.StatusBadRequest, "WAVEFORM_DIAGNOSTICS_INVALID", err.Error())
 	case errors.Is(err, ErrCredentialForbidden):
 		writeDiagnosticsErrorJSON(w, http.StatusForbidden, "CREDENTIAL_FORBIDDEN", "gateway diagnostics outside authorized scope")
+	case errors.Is(err, ErrCredentialRevoked):
+		writeDiagnosticsErrorJSON(w, http.StatusConflict, "GATEWAY_REVOKED", "gateway identity has been revoked")
 	case errors.Is(err, ErrNotFound), errors.Is(err, ErrWaveformNotFound):
 		writeDiagnosticsErrorJSON(w, http.StatusNotFound, "RESOURCE_NOT_FOUND", "gateway diagnostics resource not found")
 	case errors.Is(err, ErrDiagnosticsOffline):
