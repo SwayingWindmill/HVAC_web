@@ -541,17 +541,17 @@ func writeConcentratorTestPKI(t *testing.T) (TransportConfig, *tls.Config) {
 	roots := x509.NewCertPool()
 	roots.AddCert(caCert)
 	return TransportConfig{
-			ClientID:   "concentrator-test",
-			CAFile:     writePEM("ca.pem", "CERTIFICATE", caDER),
-			CertFile:   writePEM("client.pem", "CERTIFICATE", client.Certificate[0]),
-			KeyFile:    writePEM("client.key", "EC PRIVATE KEY", clientKey),
-			ServerName: "mqtt.local",
-		}, &tls.Config{
-			MinVersion:   tls.VersionTLS13,
-			Certificates: []tls.Certificate{issue(3, "mqtt.local", x509.ExtKeyUsageServerAuth)},
-			ClientCAs:    roots,
-			ClientAuth:   tls.RequireAndVerifyClientCert,
-		}
+		ClientID:   "concentrator-test",
+		CAFile:     writePEM("ca.pem", "CERTIFICATE", caDER),
+		CertFile:   writePEM("client.pem", "CERTIFICATE", client.Certificate[0]),
+		KeyFile:    writePEM("client.key", "EC PRIVATE KEY", clientKey),
+		ServerName: "mqtt.local",
+	}, &tls.Config{
+		MinVersion:   tls.VersionTLS13,
+		Certificates: []tls.Certificate{issue(3, "mqtt.local", x509.ExtKeyUsageServerAuth)},
+		ClientCAs:    roots,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+	}
 }
 
 func TestConcentratorMessageExpirySecondsAndSelfHealingTransport(t *testing.T) {

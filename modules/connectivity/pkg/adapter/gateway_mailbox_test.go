@@ -247,10 +247,9 @@ func TestGatewayMailboxDualLanePriorityAndStarvationGuard(t *testing.T) {
 	const replayCount = 2500
 	for i := 1; i <= replayCount; i++ {
 		var pub *paho.Publish
-		switch {
-		case i%10 == 0:
+		if i%10 == 0 {
 			pub = testLivePublishAt(testGatewayA, i, now.Add(-10*time.Minute-time.Second))
-		default:
+		} else {
 			pub = testReplayPublish(testGatewayA, i)
 		}
 		res, err := mb.enqueueAt(pub, now)

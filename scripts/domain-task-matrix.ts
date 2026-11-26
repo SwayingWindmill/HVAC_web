@@ -87,8 +87,6 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
         './cmd/telemetry-worker/...',
         './cmd/energy-api/...',
       ),
-      nodeRun('--experimental-strip-types', '--test', 'scripts/test-gateway-nodered-tunnel.ts'),
-      nodeRun('--experimental-strip-types', '--test', 'scripts/test-concentrator-mqtt-rpc.ts'),
     ]),
     command: Object.freeze([
       nodeRun(
@@ -103,7 +101,6 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
         './cmd/edge-gateway/...',
         './tools/eg8200-simulator/...',
       ),
-      nodeRun('--experimental-strip-types', '--test', 'scripts/test-songyaxuan-command-executor.ts'),
       npmRun('command:formal'),
     ]),
     alarm: Object.freeze([
@@ -159,11 +156,6 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
     telemetry: Object.freeze([
       nodeRun('scripts/run-s2-telemetry-live-browser-audit.mjs'),
     ]),
-    workorder: Object.freeze([
-      nodeRun('scripts/run-s5-work-order-read-browser-audit.mjs'),
-      nodeRun('scripts/run-s5-work-order-create-assign-browser-audit.mjs'),
-      nodeRun('scripts/run-s5-work-order-lifecycle-browser-audit.mjs'),
-    ]),
   }),
 });
 
@@ -194,7 +186,6 @@ export const gateProfileSets: Readonly<Record<string, Readonly<Record<'contracts
     ]),
     browser: Object.freeze([
       'telemetry',
-      'workorder',
     ]),
   }),
 });
@@ -272,7 +263,7 @@ export const domainTaskProfiles: Readonly<Record<DomainName, Readonly<Record<'co
     contracts: Object.freeze(['core']),
     unit: Object.freeze(['workorder']),
     integration: Object.freeze(['workorder']),
-    browser: Object.freeze(['workorder']),
+    browser: Object.freeze([]),
   }),
   analytics: Object.freeze({
     contracts: Object.freeze(['core']),

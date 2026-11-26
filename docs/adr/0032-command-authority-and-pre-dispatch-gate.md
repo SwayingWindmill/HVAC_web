@@ -33,6 +33,6 @@
 
 ## 后果
 
-- `command-service`（嵌入式随 `energy-api` 或独立容器 `command-owner`）运行期需要 `IAM_URL`、`CORE_URL`、`TELEMETRY_RUNTIME_URL` 与对应 SPIFFE 信任配置（`spiffe://hvac.local/command-service` 仅在 IAM 获准 `RegistryDecisionPath` 和 `CommandDecisionPath`）。
+- `command-service`（嵌入在 `energy-api` 进程内运行）运行期需要 `IAM_URL`、`CORE_URL`、`TELEMETRY_RUNTIME_URL` 与对应 SPIFFE 信任配置（`spiffe://hvac.local/command-service` 仅在 IAM 获准 `RegistryDecisionPath` 和 `CommandDecisionPath`）。
 - 删除原有独立网关联锁测试文件 `control_interlock_test.go`，联锁与顺序不变量改由 `libs/commandmodel/control_gate_test.go`、`modules/command/pkg/commandservice/control_authority_test.go` 及端到端 `cmd/energy-api/internal/gateway/{command_test,control_exit_test}.go` 共同守住。
 - 面向外部浏览器与小程序的公共 HTTP 契约（OpenAPI 字段、状态码、`STEP_UP_REQUIRED` 流程）保持 100% 兼容。

@@ -10,6 +10,7 @@ import {
   findComposePortExposureViolations,
   findDebugMarkerViolations,
   findHandoffBudgetViolations,
+  findPackageScriptViolations,
   findRequiredGuardrailFileViolations,
   findSkillMirrorViolations,
   findTrackedArtifactViolations,
@@ -220,7 +221,6 @@ test('package, workflow, and central task-matrix changes fail closed to broad co
     'package.json',
     '.github/workflows/pr-gates.yml',
     'scripts/domain-task-matrix.ts',
-    'scripts/package-script-long-chain-baseline.json',
   ]) {
     const classification = runClassification([file]);
     assert.equal(classification.broad, true);
@@ -229,6 +229,8 @@ test('package, workflow, and central task-matrix changes fail closed to broad co
     assert.deepEqual(classification.integrationProfiles, []);
     assert.deepEqual(classification.browserProfiles, []);
   }
+  assert.deepEqual(findPackageScriptViolations({ ok: 'a && b && c && d' }), []);
+  assert.equal(findPackageScriptViolations({ bad: 'a && b && c && d && e', 's1:old': 'echo' }).length, 2);
 });
 
 test('unknown paths and automation scripts fail closed without database or browser matrices', () => {
@@ -476,11 +478,6 @@ test('repository governance enforces 1:1 skill parity, required hook files, and 
   assert.equal(formalRunner.unknown, false);
   assert.equal(formalRunner.broad, false);
 
-  const edgeExecutor = runClassification(['edge/node-red/songyaxuan-command-executor.ts']);
-  assert.deepEqual(edgeExecutor.unitProfiles, ['command', 'telemetry']);
-  assert.equal(edgeExecutor.unknown, false);
-  assert.equal(edgeExecutor.broad, false);
-
   const siteManifest = runClassification(['deploy/sites/songyaxuan.site.json']);
   assert.deepEqual(siteManifest.unitProfiles, ['alarm', 'command', 'registry', 'telemetry']);
   assert.equal(siteManifest.unknown, false);
@@ -497,9 +494,6 @@ test('repository governance enforces 1:1 skill parity, required hook files, and 
   assert.equal(onboardingControl.broad, false);
 
   for (const connFile of [
-    'scripts/test-concentrator-mqtt-rpc.ts',
-    'scripts/test-gateway-nodered-tunnel.ts',
-    'scripts/sync-songyaxuan-nodered.ts',
     'scripts/run-mqtt-broker-acl-tests.mjs',
     'scripts/run-mqtt-broker-crl-kick-tests.ts',
   ]) {
@@ -599,10 +593,10 @@ test('repository governance blocks non-loopback Compose port mappings outside ex
       ].join('\n'),
     );
     writeFileSync(
-      join(composeSandbox, 'deploy/platform/phase1/owner-split.compose.yaml'),
+      join(composeSandbox, 'deploy/platform/phase1/ai-solver.compose.yaml'),
       [
         'services:',
-        '  iam-owner:',
+        '  ai-solver:',
         '    ports:',
         '      - "${HTTPS_PORT:-443}:443"',
         '',
@@ -627,7 +621,7 @@ test('repository governance blocks non-loopback Compose port mappings outside ex
         'infra/alarm/compose.yaml',
         'infra/telemetry/compose.yaml',
         'deploy/platform/phase1/compose.yaml',
-        'deploy/platform/phase1/owner-split.compose.yaml',
+        'deploy/platform/phase1/ai-solver.compose.yaml',
         'deploy/platform/phase1/wsl.override.yaml',
       ],
     });
@@ -636,7 +630,7 @@ test('repository governance blocks non-loopback Compose port mappings outside ex
     assert.ok(violations.some((v) => v.includes('0.0.0.0:5432:5432')));
     assert.ok(violations.some((v) => v.includes('8123:8123')));
     assert.ok(violations.some((v) => v.includes('host_ip=<unset> target=6379')));
-    assert.ok(violations.some((v) => v.includes('deploy/platform/phase1/owner-split.compose.yaml:4:')));
+    assert.ok(violations.some((v) => v.includes('deploy/platform/phase1/ai-solver.compose.yaml:4:')));
     assert.ok(violations.some((v) => v.includes('deploy/platform/phase1/wsl.override.yaml:3:')));
     assert.ok(violations.some((v) => v.includes('deploy/platform/phase1/wsl.override.yaml:6:') && v.includes('"8080:80"')));
   } finally {

@@ -7,13 +7,13 @@
   "authorityLock": {
     "routeOwnership": {
       "path": "contracts/ownership/route-ownership.v1.json",
-      "registryRevision": 65,
-      "sha256": "693367427a06bd3288f41d12877fe9bea06bf7b8f090006aebc34666258a8401"
+      "registryRevision": 71,
+      "sha256": "71a7c6526c4fa3259c189c0f19f4d91fc1cd58a77253188c69db453f930264f5"
     },
     "dataOwnership": {
       "path": "contracts/ownership/data-ownership.v1.json",
-      "registryRevision": 24,
-      "sha256": "ebc70a71e6c3cae46c6fb1037311e077047933ec27b36bfe8b86793d01cd56d9"
+      "registryRevision": 26,
+      "sha256": "a8044ea5a338aa4877da0f74bf24320183bf6838437ff9aed91e70269be5ffab"
     },
     "httpContract": {
       "path": "contracts/http/platform-gateway.openapi.yaml",
@@ -21,7 +21,7 @@
     },
     "edgeReplicationContract": {
       "path": "contracts/mqtt/edge-replication-envelope.v1.schema.json",
-      "sha256": "d2ff9b916d0fb2b4e48a6bec8a529b82232567fdbeb78f8e80432d4fecab309d"
+      "sha256": "9edf24e6fc1b0427033b0f258644259c9e3b53d92c9904e201c761893a6744b6"
     }
   },
   "schemaContract": {
