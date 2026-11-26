@@ -25,18 +25,6 @@ type routingRuntime struct {
 }
 
 func loadRoutingRuntime(ctx context.Context, logger *slog.Logger, identityEnabled bool) (routingRuntime, error) {
-	if os.Getenv("S2_ALLOW_UNROUTED_GATEWAY_FIXTURE") == "true" {
-		if os.Getenv("S0_ALLOW_MEMORY_ROUTE_AUDIT") != "true" || os.Getenv("S0_ALLOW_MEMORY_SESSION_STORE") != "true" || !isLoopbackTelemetryFixtureURL(os.Getenv("TELEMETRY_RUNTIME_URL")) {
-			return routingRuntime{}, errors.New("S2 un-routed Gateway fixture requires memory-only test stores and a loopback Telemetry Runtime")
-		}
-		logger.Warn("s2_unrouted_gateway_fixture_enabled")
-		return routingRuntime{
-			close: func() {},
-			watch: func(watchContext context.Context) {
-				<-watchContext.Done()
-			},
-		}, nil
-	}
 	registryPath := envOr("ROUTE_OWNERSHIP_REGISTRY", "contracts/ownership/route-ownership.v1.json")
 	initialBytes, err := os.ReadFile(registryPath)
 	if err != nil {
@@ -47,24 +35,20 @@ func loadRoutingRuntime(ctx context.Context, logger *slog.Logger, identityEnable
 		return routingRuntime{}, err
 	}
 
-	var audit ownershipregistry.AuditSink
-	closeAudit := func() {}
-	if dsn := os.Getenv("GATEWAY_DATABASE_URL"); dsn != "" {
-		postgresAudit, err := ownershipregistry.OpenPostgresAudit(ctx, dsn)
-		if err != nil {
-			return routingRuntime{}, errors.New("durable route audit store is unavailable")
-		}
-		if err := postgresAudit.VerifyProductSchema(ctx); err != nil {
-			postgresAudit.Close()
-			return routingRuntime{}, fmt.Errorf("durable route audit store schema incompatible: %w", err)
-		}
-		audit = postgresAudit
-		closeAudit = postgresAudit.Close
-	} else if os.Getenv("S0_ALLOW_MEMORY_ROUTE_AUDIT") == "true" {
-		audit = ownershipregistry.NewMemoryAuditSink()
-	} else {
-		return routingRuntime{}, errors.New("GATEWAY_DATABASE_URL is required unless S0_ALLOW_MEMORY_ROUTE_AUDIT=true")
+	dsn := os.Getenv("GATEWAY_DATABASE_URL")
+	if dsn == "" {
+		return routingRuntime{}, errors.New("GATEWAY_DATABASE_URL is required")
 	}
+	postgresAudit, err := ownershipregistry.OpenPostgresAudit(ctx, dsn)
+	if err != nil {
+		return routingRuntime{}, errors.New("durable route audit store is unavailable")
+	}
+	if err := postgresAudit.VerifyProductSchema(ctx); err != nil {
+		postgresAudit.Close()
+		return routingRuntime{}, fmt.Errorf("durable route audit store schema incompatible: %w", err)
+	}
+	var audit ownershipregistry.AuditSink = postgresAudit
+	closeAudit := postgresAudit.Close
 
 	manager := ownershipregistry.NewManager(snapshot, audit, time.Now)
 	registry, err := loadRegistryConfig(snapshot, identityEnabled)
@@ -113,19 +97,6 @@ func parseActiveRouteRegistry(raw []byte) (*ownershipregistry.Snapshot, error) {
 		return nil, fmt.Errorf("validate Route Ownership Registry: %w", err)
 	}
 	return snapshot, nil
-}
-
-func isLoopbackTelemetryFixtureURL(value string) bool {
-	parsed, err := url.Parse(value)
-	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
-		return false
-	}
-	switch parsed.Hostname() {
-	case "127.0.0.1", "::1", "localhost":
-		return true
-	default:
-		return false
-	}
 }
 
 func loadRegistryConfig(snapshot *ownershipregistry.Snapshot, identityEnabled bool) (*gateway.RegistryConfig, error) {

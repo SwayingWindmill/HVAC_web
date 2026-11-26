@@ -1,6 +1,6 @@
 # 设备登记（Registry）
 
-登记服务（`platform-core-service`）负责平台的 `core_registry` 表：租户下的站点、空间、资产、设备、传感器、点位、计量绑定和电价。它只给内部的服务用，不面向浏览器；默认嵌在 `energy-api` 里运行，`modules/registry/cmd/registry-owner` 是单独运行的入口。
+登记服务（`platform-core-service`）负责平台的 `core_registry` 表：租户下的站点、空间、资产、设备、传感器、点位、计量绑定和电价。它只给内部的服务用，不面向浏览器，嵌在 `energy-api` 里运行。
 
 ## 内部接口
 
@@ -56,7 +56,6 @@
 
 ```bash
 npm run test:identity
-npm run build:registry-owner
 npm run registry:integration
 npm run domain:run -- --domain=registry --layers=contracts,unit,integration
 ```

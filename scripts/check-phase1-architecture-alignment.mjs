@@ -109,9 +109,9 @@ for (const id of ['DEPLOY-TIER-001', 'OBS-PROFILE-001', 'AVAILABILITY-001', 'REC
 }
 assert(byId.get('SCHEDULER-001')?.status === 'KEEP', 'unified Scheduler Coordination must remain implemented through the durable Job contract');
 assert(byId.get('RPO-RTO-001')?.status === 'KEEP', 'RPO/RTO objectives and the recovery evidence mechanism must remain implemented');
-assert(byId.get('EDGE-CONTROL-PLANE-001')?.status === 'MISSING', 'HVAC Edge Control Plane must remain an explicit gap until Process Image/Cycle/Controller/Scheduler are implemented');
-assert(byId.get('EDGE-CAPABILITY-001')?.status === 'MISSING', 'Capability Profile / Driver / Bridge foundation must remain an explicit gap until implemented');
-assert(byId.get('EDGE-TIMEDATA-001')?.status === 'MISSING', 'Edge Timedata must remain an explicit gap until local latest/history and priority resend are implemented');
+assert(byId.get('EDGE-CONTROL-PLANE-001')?.status === 'KEEP', 'HVAC Edge Control Plane must remain implemented through libs/edgecontrol and cmd/edge-gateway');
+assert(byId.get('EDGE-CAPABILITY-001')?.status === 'KEEP', 'Capability Profile / Driver / Bridge foundation must remain implemented');
+assert(byId.get('EDGE-TIMEDATA-001')?.status === 'KEEP', 'Edge Timedata must remain implemented with local latest/history and priority resend');
 
 if (failures.length > 0) {
   console.error('Phase 1 architecture alignment check failed:\n' + failures.map((failure) => `- ${failure}`).join('\n'));

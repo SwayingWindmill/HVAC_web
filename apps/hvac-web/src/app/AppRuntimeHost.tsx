@@ -8,7 +8,6 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
-import { createFrontendReviewPlatformClient } from './frontend-review-platform-client';
 import { useObservability } from './Observability';
 import { RouteLoading } from './RouteLoading';
 import { RuntimeFacts } from './RuntimeFacts';
@@ -20,14 +19,12 @@ import { shouldInvalidateRouter } from './shell-policy';
 import { createHvacRouter, preloadPathChunks } from './router';
 import type { RuntimeConfig, RuntimeConfigFailure } from './runtime-config';
 
-const WEB_GRAPH_MARKER = 'HVAC_WEB_AUTHORITATIVE_GRAPH_V1';
 const WEB_SHELL_MARKER = 'AUTHORITATIVE WEB SHELL';
 
 export function ConfigurationBlocked({ failures }: { failures: RuntimeConfigFailure[] }) {
   return (
     <main
       className="grid min-h-svh place-items-center bg-background p-6"
-      data-build-graph={WEB_GRAPH_MARKER}
       data-shell-state="UNAVAILABLE"
     >
       <section
@@ -202,9 +199,7 @@ function PrincipalUnavailableState({ config, snapshot, retry }: { config: Runtim
 export function AppRuntimeHost({ config, queryClient }: { config: RuntimeConfig; queryClient: QueryClient }) {
   const observability = useObservability();
   const resources = useMemo(() => {
-    const client = __HVAC_WEB_FRONTEND_REVIEW__
-      ? createFrontendReviewPlatformClient()
-      : createPlatformGatewayClient();
+    const client = createPlatformGatewayClient();
     let routerNavigate: (target: string) => void | Promise<unknown> = (target) => {
       window.location.assign(target);
     };
@@ -285,7 +280,6 @@ export function AppRuntimeHost({ config, queryClient }: { config: RuntimeConfig;
         centeredUnavailable && 'grid place-items-center bg-background p-6',
       )}
       aria-label={Root === 'main' ? WEB_SHELL_MARKER : undefined}
-      data-build-graph={WEB_GRAPH_MARKER}
       data-shell-state={showSignInPage ? 'LOGIN_REQUIRED' : waitingForSites ? 'BOOTSTRAPPING' : snapshot.state}
       data-protected-route-mounted={shellReady ? 'true' : 'false'}
     >

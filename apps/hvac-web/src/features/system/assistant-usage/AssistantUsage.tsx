@@ -61,7 +61,7 @@ export function AssistantUsage({ sites, canRead, active }: {
   const [siteId, setSiteId] = useState<string | undefined>();
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const site = sites.find((candidate) => candidate.id === siteId) ?? sites[0];
-  const usage = useAssistantUsage(site, canRead && active && !__HVAC_WEB_FRONTEND_REVIEW__);
+  const usage = useAssistantUsage(site, canRead && active);
   const forbidden = !canRead || (usage.error instanceof AssistantRequestError && usage.error.status === 403);
   const days = useMemo(() => [...(usage.data?.days ?? [])].reverse(), [usage.data]);
   const selectedDay = days.find((day) => day.date === selectedDate);
@@ -86,7 +86,6 @@ export function AssistantUsage({ sites, canRead, active }: {
         <span className="ml-auto text-xs text-muted-foreground">按站点当地日期，每天从 0 点算起</span>
       </div>
       {forbidden ? <Notice>当前账号没有查看操作记录的权限，看不到 AI 助手的使用情况</Notice>
-        : __HVAC_WEB_FRONTEND_REVIEW__ ? <Notice>评审构建不连接 AI 助手</Notice>
         : site === undefined ? <Notice>没有授权站点</Notice>
         : usage.isPending ? <div className="flex flex-col gap-2 p-4"><Skeleton className="h-9" /><Skeleton className="h-9" /><Skeleton className="h-9" /></div>
         : usage.isError ? <Notice>AI 助手的使用情况暂时读不到</Notice>

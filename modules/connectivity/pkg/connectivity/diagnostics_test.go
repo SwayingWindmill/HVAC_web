@@ -78,7 +78,7 @@ func TestDiagnosticsHTTPHandlersAndContract(t *testing.T) {
 	}
 
 	diagHandler := NewDiagnosticsHandler(store, tap, authorize)
-	wrapped := NewCredentialHandlerWithDiagnostics(nil, authorize, nil, nil, nil, diagHandler)
+	wrapped := NewCredentialHandler(nil, authorize, WithDiagnosticsHandler(diagHandler))
 
 	gwURI, _ := url.Parse("spiffe://hvac.local/platform-gateway")
 	gwPeer := &x509.Certificate{URIs: []*url.URL{gwURI}}
@@ -99,7 +99,7 @@ func TestDiagnosticsHTTPHandlersAndContract(t *testing.T) {
 		t.Fatalf("expected 403 on forged X-Gateway-Client-Cert, got %d", forgedRec.Code)
 	}
 
-	shadowOnly := NewCredentialHandlerWithShadow(nil, authorize, nil, nil, nil)
+	shadowOnly := NewCredentialHandler(nil, authorize)
 	missingReq := httptest.NewRequest(http.MethodGet, "/internal/v1/gateways/"+gwID+"/quarantine", nil)
 	missingReq.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{gwPeer}}}
 	missingRec := httptest.NewRecorder()

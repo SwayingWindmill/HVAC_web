@@ -1,5 +1,5 @@
 {
-  "maxTotal": 65,
+  "maxTotal": 64,
   "counts": {
     "cmd/connectivity/main_test.go": 1,
     "cmd/energy-api/internal/gateway/gateway_concentrator_test.go": 1,
@@ -23,7 +23,6 @@
     "modules/connectivity/pkg/connectivity/credentials_test.go": 2,
     "modules/connectivity/pkg/connectivity/uplink_cache_singleflight_test.go": 4,
     "modules/connectivity/pkg/tunnel/tunnel_test.go": 2,
-    "modules/energy/cmd/energy-projector/main_test.go": 1,
     "modules/maintenance/pkg/maintenance/worker_test.go": 1,
     "modules/telemetry/pkg/telemetry/history_clickhouse_benchmark_test.go": 1,
     "modules/telemetry/pkg/telemetry/history_test.go": 3,

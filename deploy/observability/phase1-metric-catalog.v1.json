@@ -60,8 +60,6 @@
     {"name":"hvac_mqtt_command_publishes_total","type":"counter","labels":["outcome"],"seriesBudget":8},
     {"name":"hvac_mqtt_command_reply_wait_seconds","type":"histogram","labels":["outcome"],"seriesBudget":8},
     {"name":"hvac_mqtt_crl_control_events_total","type":"counter","labels":["action","outcome"],"seriesBudget":8},
-    {"name":"hvac_mqtt_guard_handshakes_total","type":"counter","labels":["outcome"],"seriesBudget":8},
-    {"name":"hvac_mqtt_guard_active_sessions","type":"gauge","labels":[],"seriesBudget":1},
     {"name":"hvac_mqtt_shadow_replication_total","type":"counter","labels":["outcome"],"seriesBudget":8},
 
     {"name":"hvac_edge_mqtt_connected","type":"gauge","labels":[],"seriesBudget":1},

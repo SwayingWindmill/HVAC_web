@@ -501,18 +501,6 @@ func TestOpenConcentratorAndSharedSessionLifecycle(t *testing.T) {
 	_ = transport.Close(closeCtx)
 	_ = session.Close(closeCtx)
 	closeCancel()
-
-	t.Setenv("CONNECTIVITY_CONCENTRATOR_MQTT_CLIENT_ID", "custom-legacy-concentrator")
-	legacySession, legacyTransport, err := openConcentratorAndSharedSession(context.Background(), mqttCfg, logger, observability.NewRegistry(), tap)
-	if err != nil {
-		t.Fatalf("openConcentratorAndSharedSession override failed: %v", err)
-	}
-	if legacySession != nil || legacyTransport == nil {
-		t.Fatalf("expected standalone transport when CONNECTIVITY_CONCENTRATOR_MQTT_CLIENT_ID is overridden, got session=%v transport=%v", legacySession, legacyTransport)
-	}
-	closeCtx2, closeCancel2 := context.WithTimeout(context.Background(), 2*time.Second)
-	_ = legacyTransport.Close(closeCtx2)
-	closeCancel2()
 }
 
 func TestShutdownConnectivityRuntimeOrder(t *testing.T) {

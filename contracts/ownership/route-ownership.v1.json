@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 70,
+  "registryRevision": 71,
   "routes": [
     {
       "method": "GET",
@@ -2044,78 +2044,6 @@
         "site",
         "alarm",
         "principal"
-      ]
-    },
-    {
-      "method": "POST",
-      "path": "/api/v1/sites/{siteId}/alarms/{alarmId}:assign",
-      "owner": "alarm-service",
-      "publicIngress": "platform-gateway",
-      "revision": 1,
-      "rollout": {
-        "mode": "disabled"
-      },
-      "compatibilityMode": "native",
-      "allowedScopeDimensions": [
-        "tenant",
-        "site",
-        "alarm",
-        "principal",
-        "key"
-      ]
-    },
-    {
-      "method": "POST",
-      "path": "/api/v1/sites/{siteId}/alarms/{alarmId}:unassign",
-      "owner": "alarm-service",
-      "publicIngress": "platform-gateway",
-      "revision": 1,
-      "rollout": {
-        "mode": "disabled"
-      },
-      "compatibilityMode": "native",
-      "allowedScopeDimensions": [
-        "tenant",
-        "site",
-        "alarm",
-        "principal",
-        "key"
-      ]
-    },
-    {
-      "method": "POST",
-      "path": "/api/v1/sites/{siteId}/alarms/{alarmId}:suppress",
-      "owner": "alarm-service",
-      "publicIngress": "platform-gateway",
-      "revision": 1,
-      "rollout": {
-        "mode": "disabled"
-      },
-      "compatibilityMode": "native",
-      "allowedScopeDimensions": [
-        "tenant",
-        "site",
-        "alarm",
-        "principal",
-        "key"
-      ]
-    },
-    {
-      "method": "POST",
-      "path": "/api/v1/sites/{siteId}/alarms/{alarmId}:unsuppress",
-      "owner": "alarm-service",
-      "publicIngress": "platform-gateway",
-      "revision": 1,
-      "rollout": {
-        "mode": "disabled"
-      },
-      "compatibilityMode": "native",
-      "allowedScopeDimensions": [
-        "tenant",
-        "site",
-        "alarm",
-        "principal",
-        "key"
       ]
     },
     {

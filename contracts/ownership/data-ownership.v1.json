@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 25,
+  "registryRevision": 26,
   "resources": [
     {
       "kind": "schema",
@@ -421,8 +421,7 @@
       "name": "s2-telemetry-transport-redis",
       "writer": "centrifugo",
       "revision": 1,
-      "authority": false,
-      "sharedWithLegacy": false
+      "authority": false
     },
     {
       "kind": "projection",

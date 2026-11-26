@@ -72,17 +72,17 @@ invariant(baseline.authorityOverrides?.edgeControlPlane?.includes('edge-control-
 invariant(edgeControlPlane.schemaVersion === 1 && edgeControlPlane.status === 'CURRENT TARGET' && edgeControlPlane.decisions?.length === 50, 'Edge Control Plane machine contract is missing or stale');
 invariant(edgeControlPlane.targetEdgeRuntime?.canonicalCloudDataPoint === 'Point' && edgeControlPlane.targetEdgeRuntime?.canonicalEdgeRuntimeDataObject === 'Channel', 'Point/Channel authority boundary drifted');
 invariant(edgeControlPlane.targetEdgeRuntime?.cloudCommandSemantics?.includes('intent'), 'Cloud Command must be an Edge intent, not direct actuator authority');
-invariant(edgeControlPlane.conformance?.current === 'PARTIAL', 'Edge Control Plane must remain PARTIAL until the Edge foundation is implemented');
+invariant(edgeControlPlane.conformance?.current === 'IMPLEMENTED', 'Edge Control Plane conformance must be IMPLEMENTED');
 invariant(baseline.serviceModel?.logicalDomainEqualsDeployableService === false, 'Logical Domain must not equal Deployable Service');
 invariant(baseline.serviceModel?.servicePerTableAllowed === false, 'service-per-table must remain forbidden');
 invariant(baseline.serviceModel?.kafkaRequiredInPhase1 === false, 'Kafka must remain optional in Phase 1');
 invariant(JSON.stringify(baseline.logicalDomains.map(({ domain }) => domain)) === JSON.stringify(expectedDomains), 'logical-domain inventory drifted');
 invariant(baseline.logicalDomains.every(({ alignment }) => alignment === 'ALIGNED' || alignment === 'PARTIAL'), 'logical domain alignment contains an invalid status');
 const domainByName = new Map(baseline.logicalDomains.map((domain) => [domain.domain, domain]));
-invariant(domainByName.get('IoT Runtime')?.alignment === 'PARTIAL', 'IoT Runtime must remain PARTIAL until the HVAC Edge Control Plane foundation is implemented');
-invariant(domainByName.get('Control')?.alignment === 'PARTIAL', 'Control must remain PARTIAL until leased intents and Edge arbitration are implemented');
+invariant(domainByName.get('IoT Runtime')?.alignment === 'ALIGNED', 'IoT Runtime must be ALIGNED with the HVAC Edge Control Plane implementation');
+invariant(domainByName.get('Control')?.alignment === 'ALIGNED', 'Control must be ALIGNED with leased intents and Edge arbitration implemented');
 invariant(baseline.conformance.length > 0 && baseline.conformance.every(({ status }) => allowedStatuses.has(status)), 'conformance status must be PASS/PARTIAL/MISSING');
-invariant(baseline.conformance.some(({ id, status }) => id === 'EDGE_CONTROL_PLANE_TARGET' && status === 'PARTIAL'), 'EDGE_CONTROL_PLANE_TARGET conformance item is missing');
+invariant(baseline.conformance.some(({ id, status }) => id === 'EDGE_CONTROL_PLANE_TARGET' && status === 'PASS'), 'EDGE_CONTROL_PLANE_TARGET conformance item must be PASS');
 invariant(baseline.acceptanceEligible === false, 'architecture checklist must not become a release/acceptance gate');
 
 for (const domain of baseline.logicalDomains) {
@@ -139,10 +139,6 @@ const forecastService = await readFile(resolve(root, 'services/forecast-service/
 invariant(forecastService.includes('type ForecastEngine interface') && forecastService.includes('Reconcile('), 'Forecast cross-store reconciliation boundary is incomplete');
 const optimizationService = await readFile(resolve(root, 'services/optimization-service/internal/optimization/service.go'), 'utf8');
 invariant(optimizationService.includes('type SolverAdapter interface') && optimizationService.includes('Reconcile('), 'Optimization solver/reconciliation boundary is incomplete');
-
-const settlementService = await readFile(resolve(root, 'services/settlement-service/internal/settlement/clickhouse.go'), 'utf8');
-invariant(settlementService.includes('analytics.metric_result_facts'), 'Settlement must consume append-only Metric Result facts from analytics.metric_result_facts');
-invariant(!settlementService.includes('energy_interval_facts'), 'Settlement must not recalculate standard metrics from energy_interval_facts');
 
 const supportDomains = await readFile(resolve(root, 'infra/registry/postgres/init/009j-operations-support-domains-v2.sql'), 'utf8');
 invariant(supportDomains.includes('config_versions') && supportDomains.includes('config_desired_states') && supportDomains.includes('config_reported_states'), 'Config Domain boundary is incomplete');

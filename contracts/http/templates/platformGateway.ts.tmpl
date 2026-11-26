@@ -898,9 +898,9 @@ export const healthResponseSchema = z.object({
   status: z.literal('ok'), service: z.literal('platform-gateway'), checkedAt: z.string().datetime(), build: buildInfoSchema.optional(),
 }).strict();
 export const platformStatusResponseSchema = z.object({
-  status: z.enum(['ok', 'degraded']), service: z.literal('platform-status'), implementation: z.enum(['go', 'legacy']),
+  status: z.enum(['ok', 'degraded']), service: z.literal('platform-status'), implementation: z.enum(['go']),
   version: z.string(), checkedAt: z.string().datetime({ offset: true }), routePolicyRevision: z.number().int().positive(),
-  routeRevision: z.number().int().positive(), compatibilityMode: z.enum(['native', 'legacy-read']),
+  routeRevision: z.number().int().positive(), compatibilityMode: z.enum(['native']),
 }).strict();
 export const userPrincipalSchema = z.object({
   subject: z.string(), issuer: z.string().url(), displayName: z.string(), email: z.string(), roles: z.array(z.string()),

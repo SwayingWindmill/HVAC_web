@@ -1,5 +1,4 @@
 import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -11,7 +10,6 @@ import { goExecutableName, readGoWorkspace } from './lib/go-workspace.mjs';
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const maximumInlineCommands = 4;
 export const maximumHandoffBytes = 28 * 1024;
-const longChainBaselinePath = 'scripts/package-script-long-chain-baseline.json';
 const javascriptToolingBaselinePath = 'scripts/javascript-tooling-baseline.json';
 const requiredLinguistExclusions = Object.freeze([
   'scripts/** -linguist-detectable',
@@ -42,7 +40,6 @@ const forbiddenTrackedSuffixes = Object.freeze([
 const forbiddenTrackedBasenames = new Set(['.DS_Store', 'Thumbs.db']);
 
 const normalizePath = (value: string): string => value.split(sep).join('/').replaceAll('\\', '/');
-const hashScriptCommand = (command: string): string => createHash('sha256').update(command).digest('hex');
 const countInlineCommands = (command: string): number => command.split(/\s*&&\s*/u).filter(Boolean).length;
 
 type JavaScriptToolingFile = { path: string; bytes: number };
@@ -56,44 +53,8 @@ type JavaScriptToolingBaseline = {
   maxBytes: number;
 };
 
-type LongChainBaselineEntry = {
-  sha256?: string;
-  reason?: string;
-  mode?: string;
-};
-
-type LongChainBaseline = {
-  schemaVersion: number;
-  maximumInlineCommands: number;
-  scripts: Record<string, LongChainBaselineEntry>;
-};
-
-export const createPackageScriptLongChainBaseline = (scripts: Record<string, string>) => ({
-  schemaVersion: 1,
-  maximumInlineCommands,
-  scripts: Object.fromEntries(
-    Object.entries(scripts)
-      .filter(([, command]) => countInlineCommands(command) > maximumInlineCommands)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([name, command]) => [name, {
-        sha256: hashScriptCommand(command),
-        reason: 'Legacy inline orchestration; migrate to capabilityTaskMatrix before changing.',
-      }]),
-  ),
-});
-
-export const findPackageScriptViolations = ({
-  scripts,
-  baseline,
-}: {
-  scripts: Record<string, string>;
-  baseline: LongChainBaseline;
-}) => {
+export const findPackageScriptViolations = (scripts: Record<string, string>) => {
   const violations: string[] = [];
-  if (baseline?.schemaVersion !== 1 || baseline?.maximumInlineCommands !== maximumInlineCommands
-    || !baseline.scripts || typeof baseline.scripts !== 'object') {
-    return [`${longChainBaselinePath}: invalid or unsupported baseline schema`];
-  }
 
   const historicalStageScripts = Object.keys(scripts).filter((name) => /^s\d+:/u.test(name));
   for (const name of historicalStageScripts) {
@@ -102,21 +63,8 @@ export const findPackageScriptViolations = ({
 
   for (const [name, command] of Object.entries(scripts)) {
     const commandCount = countInlineCommands(command);
-    if (commandCount <= maximumInlineCommands) continue;
-    const baselineEntry = baseline.scripts[name];
-    if (!baselineEntry) {
-      violations.push(`package.json: script \`${name}\` contains ${commandCount} inline commands; migrate it or add a reviewed baseline entry`);
-      continue;
-    }
-    if (baselineEntry.mode !== 'explicit-operation' && baselineEntry.sha256 !== hashScriptCommand(command)) {
-      violations.push(`package.json: long-chain script \`${name}\` changed; migrate it instead of updating inline orchestration`);
-    }
-  }
-
-  for (const name of Object.keys(baseline.scripts)) {
-    const command = scripts[name];
-    if (!command || countInlineCommands(command) <= maximumInlineCommands) {
-      violations.push(`${longChainBaselinePath}: stale exemption for \`${name}\``);
+    if (commandCount > maximumInlineCommands) {
+      violations.push(`package.json: script \`${name}\` contains ${commandCount} inline commands; move orchestration into domain-task-matrix or a script`);
     }
   }
 
@@ -799,7 +747,6 @@ const findGoFormatViolations = (root: string, trackedFiles: readonly string[]): 
 
 export const checkRepositoryGovernance = (root = repositoryRoot) => {
   const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { scripts?: Record<string, string> };
-  const longChainBaseline = JSON.parse(readFileSync(join(root, longChainBaselinePath), 'utf8')) as LongChainBaseline;
   const trackedFiles = listTrackedFiles(root);
   const violations = [
     ...findTrackedArtifactViolations(trackedFiles),
@@ -809,10 +756,7 @@ export const checkRepositoryGovernance = (root = repositoryRoot) => {
     ...findVerifyFeatureMapViolations({ root, trackedFiles }),
     ...findComposePortExposureViolations({ root, trackedFiles }),
     ...collectJavascriptToolingViolations(root, trackedFiles),
-    ...findPackageScriptViolations({
-      scripts: packageJson.scripts ?? {},
-      baseline: longChainBaseline,
-    }),
+    ...findPackageScriptViolations(packageJson.scripts ?? {}),
     ...findWorkflowViolations(readFileSync(join(root, '.github/workflows/pr-gates.yml'), 'utf8')),
     ...findHandoffBudgetViolations({ bytes: readFileSync(join(root, 'docs/HANDOFF.md')).byteLength }),
     ...findGoFormatViolations(root, trackedFiles),

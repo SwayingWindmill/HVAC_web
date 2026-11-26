@@ -257,7 +257,7 @@ func TestHandleBrokerGatewayDisconnectIgnoresForwardGatewayClockSkew(t *testing.
 	}
 	processor.now = func() time.Time { return time.UnixMilli(1000).UTC() }
 
-	statusPayload := []byte(`{"v":"1.0","gw":"` + testGatewayA + `","sid":"s1","seq":1,"ts":601000,"online":true}`)
+	statusPayload := []byte(`{"schemaVersion":"2.0","messageId":"` + testMessageID + `","gatewayId":"` + testGatewayA + `","sessionId":"s1","sequence":1,"eventTime":601000,"online":true}`)
 	if _, err := processor.Process(t.Context(), "hvac/v1/"+testGatewayA+"/up/status", statusPayload); err != nil {
 		t.Fatalf("Process status: %v", err)
 	}

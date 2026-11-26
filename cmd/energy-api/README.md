@@ -56,8 +56,6 @@ npm run test:identity
 npm run test:durable-unit
 npm run test:durable-postgres
 npm run build:energy-api
-npm run build:iam-owner
-npm run build:oidc-fixture
 npm run lint
 npm run build
 ```

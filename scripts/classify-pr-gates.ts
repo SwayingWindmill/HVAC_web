@@ -135,11 +135,10 @@ const selectAlarm = (file: string, reason: string, { integration = false }: Flag
   addReason(file, reason);
 };
 
-const selectWorkOrder = (file: string, reason: string, { integration = false, browser = false }: FlagOptions = {}): void => {
+const selectWorkOrder = (file: string, reason: string, { integration = false }: FlagOptions = {}): void => {
   add(contractProfiles, ['core']);
   add(unitProfiles, ['workorder']);
   if (integration) add(integrationProfiles, ['workorder']);
-  if (browser) add(browserProfiles, ['workorder']);
   addReason(file, reason);
 };
 
@@ -233,15 +232,13 @@ for (const file of files) {
     'scripts/check-repository-governance.ts',
     'scripts/classify-pr-gates.ts',
     'scripts/domain-task-matrix.ts',
-    'scripts/package-script-long-chain-baseline.json',
     'scripts/run-domain-task.ts',
     'scripts/run-pr-gate.ts',
     'scripts/test-domain-task-matrix.ts',
     'scripts/test-pr-gate-classifier.ts',
-    'scripts/update-package-script-long-chain-baseline.mjs',
   ].includes(file), () => selectBroad(file, 'PR gate or domain task matrix implementation changed'));
 
-  match(file.startsWith('apps/hvac-web/') || file.startsWith('runtimes/copilot-runtime/'), () => selectWeb(file, 'HVAC Web runtime changed'));
+  match(file.startsWith('apps/hvac-web/'), () => selectWeb(file, 'HVAC Web runtime changed'));
   match(file.startsWith('apps/hvac-miniprogram/'), () => selectWeb(file, 'WeChat mini program changed'));
   // The Agent's semantic query whitelist is generated from the Cube model (#573).
   match(file.startsWith('semantic/cube/') || file === 'libs/analyticsmodel/semantic_catalog.json' || file === 'scripts/generate-semantic-catalog.mjs', () => add(contractProfiles, ['core']));
@@ -277,7 +274,7 @@ for (const file of files) {
     selectTelemetry(file, 'Connectivity database schema changed', { integration: true });
     selectRegistry(file, 'Connectivity database schema changed', { integration: true });
   });
-  match(file.startsWith('libs/measurement/') || file.startsWith('libs/nameplate/') || file.startsWith('libs/telemetryauth/') || file.startsWith('libs/telemetryhistorymodel/') || file.startsWith('modules/connectivity/') || file.startsWith('cmd/connectivity/') || file.startsWith('cmd/telemetry-worker/') || file.startsWith('modules/telemetry/pkg/telemetry/') || file.startsWith('modules/telemetry/pkg/telemetryapi/') || file.startsWith('modules/telemetry/cmd/telemetry-history-projector/') || file === 'modules/telemetry/go.mod' || file === 'modules/telemetry/go.sum' || file.startsWith('infra/telemetry/'), () => {
+  match(file.startsWith('libs/measurement/') || file.startsWith('libs/nameplate/') || file.startsWith('libs/telemetryauth/') || file.startsWith('libs/telemetryhistorymodel/') || file.startsWith('modules/connectivity/') || file.startsWith('cmd/connectivity/') || file.startsWith('cmd/telemetry-worker/') || file.startsWith('modules/telemetry/pkg/telemetry/') || file.startsWith('modules/telemetry/pkg/telemetryapi/') || file === 'modules/telemetry/go.mod' || file === 'modules/telemetry/go.sum' || file.startsWith('infra/telemetry/'), () => {
     const lower = file.toLowerCase();
     selectTelemetry(file, 'telemetry capability changed', {
       integration: true,
@@ -287,10 +284,6 @@ for (const file of files) {
   match(file.startsWith('libs/commandauth/') || file.startsWith('libs/commandmodel/') || file.startsWith('modules/command/') || file.startsWith('infra/command/'), () => selectCommand(file, 'command capability changed', { integration: true }));
   match(file === 'modules/connectivity/pkg/connectivity/store.go' || file === 'modules/connectivity/pkg/connectivity/command_route.go' || file === 'cmd/connectivity/command_runtime.go', () => selectCommand(file, 'connectivity command correlation or runtime changed'));
   match(file.startsWith('libs/edgecontrol/') || file.startsWith('tools/eg8200-simulator/') || file.startsWith('cmd/edge-gateway/') || file.startsWith('deploy/edge-gateway/'), () => selectCommand(file, 'Edge control, daemon, or plant simulator changed'));
-  match(file.startsWith('edge/'), () => {
-    selectCommand(file, 'Edge Node-RED uplink or downlink logic changed');
-    selectTelemetry(file, 'Edge Node-RED uplink or downlink logic changed');
-  });
   match(file.startsWith('deploy/sites/') || file.startsWith('deploy/templates/'), () => {
     selectRegistry(file, 'site onboarding manifest or device template changed');
     selectTelemetry(file, 'site onboarding manifest or device template changed');
@@ -303,7 +296,7 @@ for (const file of files) {
   });
   match(file.startsWith('libs/alarmauth/') || file.startsWith('libs/alarmmodel/') || file.startsWith('modules/alarm/') || file.startsWith('infra/alarm/'), () => selectAlarm(file, 'Alarm capability changed', { integration: true }));
   match(file.startsWith('libs/workorderauth/') || file.startsWith('libs/workordermodel/') || file.startsWith('modules/workorder/') || file.startsWith('infra/workorder/'), () => selectWorkOrder(file, 'Work Order capability changed', { integration: true }));
-  match(file.startsWith('libs/measurement/') || file.startsWith('libs/nameplate/') || file.startsWith('libs/analyticsmodel/') || file.startsWith('libs/energyseries/') || file.startsWith('modules/telemetry/internal/analytics/') || file.startsWith('modules/telemetry/internal/cube/') || file.startsWith('modules/telemetry/internal/history/') || file.startsWith('modules/telemetry/internal/query/') || file.startsWith('modules/telemetry/pkg/queryservice/') || file.startsWith('modules/telemetry/cmd/telemetry-query-owner/') || file === 'modules/telemetry/go.mod' || file === 'modules/telemetry/go.sum' || file.startsWith('modules/energy/') || file.startsWith('deploy/analytics/') || file.startsWith('libs/intelligencemodel/') || file.startsWith('modules/metric/') || file.startsWith('modules/scheduler/') || file.startsWith('cmd/metric-worker/') || file.startsWith('services/forecast-service/') || file.startsWith('services/optimization-service/') || file.startsWith('services/fdd-service/') || file.startsWith('services/mv-service/') || file.startsWith('services/report-service/') || file.startsWith('libs/schedulerjob/') || file.startsWith('libs/tariffmodel/'), () => selectAnalytics(file, 'analytics capability changed', { integration: true }));
+  match(file.startsWith('libs/measurement/') || file.startsWith('libs/nameplate/') || file.startsWith('libs/analyticsmodel/') || file.startsWith('libs/energyseries/') || file.startsWith('modules/telemetry/internal/analytics/') || file.startsWith('modules/telemetry/internal/cube/') || file.startsWith('modules/telemetry/internal/history/') || file.startsWith('modules/telemetry/internal/query/') || file.startsWith('modules/telemetry/pkg/queryservice/') || file === 'modules/telemetry/go.mod' || file === 'modules/telemetry/go.sum' || file.startsWith('modules/energy/') || file.startsWith('libs/intelligencemodel/') || file.startsWith('modules/metric/') || file.startsWith('modules/scheduler/') || file.startsWith('cmd/metric-worker/') || file.startsWith('services/forecast-service/') || file.startsWith('services/optimization-service/') || file.startsWith('services/fdd-service/') || file.startsWith('services/mv-service/') || file.startsWith('services/report-service/') || file.startsWith('libs/schedulerjob/') || file.startsWith('libs/tariffmodel/'), () => selectAnalytics(file, 'analytics capability changed', { integration: true }));
   match(file.startsWith('services/ai-solver-service/'), () => selectAnalytics(file, 'Python AI solver service changed', { integration: false }));
   match(file.startsWith('services/operations-agent-service/') || file.startsWith('infra/operations-agent/'), () => selectOperationsAgent(file, 'Operations Agent capability changed', { integration: true }));
 
@@ -330,12 +323,10 @@ for (const file of files) {
       'scripts/check-repository-governance.ts',
       'scripts/classify-pr-gates.ts',
       'scripts/domain-task-matrix.ts',
-      'scripts/package-script-long-chain-baseline.json',
       'scripts/run-domain-task.ts',
       'scripts/run-pr-gate.ts',
       'scripts/test-domain-task-matrix.ts',
       'scripts/test-pr-gate-classifier.ts',
-      'scripts/update-package-script-long-chain-baseline.mjs',
     ].includes(file), () => {});
     scriptMatch(['scripts/run-go.mjs', 'scripts/run-go-lint.mjs', 'scripts/run-go-vulnerability-scan.mjs', 'scripts/lib/go-workspace.mjs', 'scripts/lib/go-workspace.d.mts'].includes(file), () => {});
     scriptMatch([
@@ -348,6 +339,7 @@ for (const file of files) {
       'scripts/check-go-test-hygiene.ts',
       'scripts/go-test-sleep-baseline.json',
       'scripts/test-go-test-hygiene.ts',
+      'scripts/test-local-runtime-env.ts',
       'scripts/run-preflight.ts',
     ].includes(file), () => addReason(file, 'repository governance baseline or pre-tool hook guard changed (verified in static gate)'));
     scriptMatch(
@@ -368,10 +360,10 @@ for (const file of files) {
       selectCommand(file, 'site onboarding automation changed');
     });
     scriptMatch(lower.includes('s4-') || lower.includes('alarm'), () => selectAlarm(file, 'Alarm automation changed', { integration: lower.includes('postgres') }));
-    scriptMatch(lower.includes('s5-') || lower.includes('work-order') || lower.includes('workorder'), () => selectWorkOrder(file, 'Work Order automation changed', { integration: lower.includes('postgres'), browser: lower.includes('browser') }));
+    scriptMatch(lower.includes('s5-') || lower.includes('work-order') || lower.includes('workorder'), () => selectWorkOrder(file, 'Work Order automation changed', { integration: lower.includes('postgres') }));
     scriptMatch(lower.includes('analytics'), () => selectAnalytics(file, 'analytics automation changed', { integration: lower.includes('history') || lower.includes('cube') }));
     scriptMatch(lower.includes('operations-agent'), () => selectOperationsAgent(file, 'Operations Agent automation changed', { integration: lower.includes('postgres') || lower.includes('migration') }));
-    scriptMatch(lower.includes('concentrator') || lower.includes('mqtt-broker-acl') || lower.includes('mqtt-broker-crl') || lower.includes('gateway-nodered-tunnel') || lower.includes('nodered'), () => selectTelemetry(file, 'Connectivity or MQTT automation changed'));
+    scriptMatch(lower.includes('concentrator') || lower.includes('mqtt-broker-acl') || lower.includes('mqtt-broker-crl'), () => selectTelemetry(file, 'Connectivity or MQTT automation changed'));
     // The migration freeze and convention checks run in the contracts core; their tests run in every static gate.
     scriptMatch(
       lower.includes('ownership') ||

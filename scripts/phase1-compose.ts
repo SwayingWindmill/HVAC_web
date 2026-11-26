@@ -44,7 +44,6 @@ const takeFlag = (flag: string) => {
   return true;
 };
 
-const ownerSplit = takeFlag("--owner-split");
 const integration = takeFlag("--integration");
 const postgresMode =
   process.env.PHASE1_POSTGRES_MODE || runtimeValues.PHASE1_POSTGRES_MODE || "local";
@@ -68,21 +67,12 @@ const externalState = !localPostgres || !localClickHouse || !localRedis;
 const tierId =
   process.env.PHASE1_DEPLOYMENT_TIER || runtimeValues.PHASE1_DEPLOYMENT_TIER;
 if (!tierId) throw new Error("PHASE1_DEPLOYMENT_TIER is required");
-if (ownerSplit && tierId !== "single-full") {
-  throw new Error(
-    "The owner-split runtime mode requires PHASE1_DEPLOYMENT_TIER=single-full",
-  );
-}
 
-const ownerSplitCompose = ownerSplit
-  ? readFileSync(path.join(phase1Dir, "owner-split.compose.yaml"), "utf8")
-  : null;
 const runtimeProfiles: string[] = [
   ...(localPostgres ? ["local-postgres"] : []),
   ...(localClickHouse ? ["local-clickhouse"] : []),
   ...(localRedis ? ["local-redis"] : []),
   ...(integration ? ["integration"] : []),
-  ...(ownerSplit ? ["owner-split"] : []),
 ];
 const deploymentTier = resolveDeploymentTier({
   contract,
@@ -90,13 +80,10 @@ const deploymentTier = resolveDeploymentTier({
   tierId,
   environment: process.env.HVAC_ENV || runtimeValues.HVAC_ENV,
   runtimeEnvironment: { ...runtimeValues, ...process.env },
-  additionalComposeDocuments: ownerSplitCompose !== null ? [ownerSplitCompose] : [],
   additionalProfiles: runtimeProfiles,
 });
 
 const composeFiles = [path.join(phase1Dir, "compose.yaml")];
-if (ownerSplit)
-  composeFiles.push(path.join(phase1Dir, "owner-split.compose.yaml"));
 
 const result = spawnSync(
   "docker",

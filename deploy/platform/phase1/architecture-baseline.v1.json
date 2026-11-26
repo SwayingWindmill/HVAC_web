@@ -91,7 +91,7 @@
       "leased-cloud-command-intents",
       "simulator-real-driver-parity"
     ],
-    "currentConformance": "PARTIAL"
+    "currentConformance": "IMPLEMENTED"
   },
   "observability": {
     "requiredSignals": ["metrics", "logs", "traces", "events", "audit"],

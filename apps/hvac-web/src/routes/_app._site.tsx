@@ -21,7 +21,6 @@ function defaultWorkspaceSiteId(runtime: ShellRuntime): string | undefined {
 function SiteWorkspaceLayout() {
   const { site, principal, queryClient } = Route.useRouteContext();
   useEffect(() => {
-    if (__HVAC_WEB_FRONTEND_REVIEW__) return;
     const capabilities = principal.authorization.capabilities;
     if (!capabilities.includes('asset.read') || !capabilities.includes('device.read')) return;
     void queryClient.prefetchQuery(siteAssetModelEnvelopeQuery(site.id));

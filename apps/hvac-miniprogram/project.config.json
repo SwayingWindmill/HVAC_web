@@ -43,7 +43,6 @@
       { "type": "file", "value": "lib/agent-types.ts" },
       { "type": "file", "value": "lib/answer-nodes.ts" },
       { "type": "file", "value": "lib/assistant.ts" },
-      { "type": "file", "value": "lib/assistant-choice.ts" },
       { "type": "file", "value": "lib/conversations.ts" },
       { "type": "file", "value": "lib/line-image.ts" },
       { "type": "file", "value": "shared/answer-markdown.ts" },

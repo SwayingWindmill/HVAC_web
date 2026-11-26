@@ -1,6 +1,6 @@
 # 能源模块（energy）
 
-把电表、冷量计的累计读数算成每段时间的用电量（或冷量），并同步电价窗口。第一阶段它在 `cmd/telemetry-worker` 里运行；`modules/energy/cmd/energy-projector` 是单独构建和集成测试用的入口，默认不部署。
+把电表、冷量计的累计读数算成每段时间的用电量（或冷量），并同步电价窗口。第一阶段它在 `cmd/telemetry-worker` 里运行。
 
 ## 把累计读数算成用电量
 
@@ -70,7 +70,7 @@ telemetry_history.counter_arrivals        （检查点之后、按历史批次�
 npm run test:analytics
 npm run analytics:history:check
 npm run analytics:history:integration
-npm run build:analytics-read-model-projector
+npm run build:telemetry-worker
 ```
 
 集成测试写入正常的和乱序到达的累计读数，用一条测试绑定，检查读数增加和清零时算出的结果，并确认再算一遍不会重复写入。

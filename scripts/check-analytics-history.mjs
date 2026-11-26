@@ -11,11 +11,9 @@ const [
   rollupDDL,
   domain,
   clickHouseClient,
-  projector,
   cubeModel,
   cubeViews,
   queryClient,
-  compose,
   integration,
   cubeIntegration,
   ownership,
@@ -28,11 +26,9 @@ const [
   read('infra/telemetry/clickhouse/init/003-telemetry-rollups.sql'),
   read('modules/energy/internal/energy/projector.go'),
   read('modules/energy/internal/clickhouse/client.go'),
-  read('modules/energy/cmd/energy-projector/main.go'),
   read('semantic/cube/model/cubes/energy_facts.yml'),
   read('semantic/cube/model/views/energy.yml'),
   read('modules/telemetry/internal/cube/client.go'),
-  read('infra/telemetry/compose.yaml'),
   read('scripts/run-analytics-history-tests.mjs'),
   read('scripts/run-analytics-cube-tests.mjs'),
   read('contracts/ownership/data-ownership.v1.json'),
@@ -111,17 +107,6 @@ for (const marker of [
 for (const marker of ['counterDeltaQuery', "delta.transition_type IN ('INCREASE', 'UNCHANGED', 'RECOVERY', 'RESET', 'ROLLOVER')", 'source_event_id', 'insert_deduplication_token', 'JSONEachRow', 'observability.InjectHTTP']) {
   assert(clickHouseClient.includes(marker), `missing ClickHouse adapter marker ${marker}`);
 }
-for (const marker of [
-  'ANALYTICS_CLICKHOUSE_READER_USERNAME',
-  'ANALYTICS_CLICKHOUSE_WRITER_USERNAME',
-  'ANALYTICS_CORE_REGISTRY_URL',
-  'ANALYTICS_IAM_URL',
-  'ANALYTICS_PROJECTOR_DIAGNOSTICS_ADDR',
-  '127.0.0.1:19089',
-]) {
-  assert(projector.includes(marker), `missing analytics projector runtime marker ${marker}`);
-}
-assert(!projector.includes('modules/telemetry/pkg/telemetry'), 'analytics projector must not import Telemetry Runtime implementation');
 assert(!queryClient.includes('modules/energy'), 'Query Service must not import Analytics Projector implementation');
 
 for (const marker of ['max_data_watermark', 'max_dataset_revision', 'period_end', 'access_policy']) {
@@ -130,9 +115,6 @@ for (const marker of ['max_data_watermark', 'max_dataset_revision', 'period_end'
 assert(cubeViews.includes('access_policy'), 'Cube views must grant their members through an access policy');
 for (const marker of ['buildMetadataQuery', 'maximumCubeQueryDuration', 'Add(-time.Millisecond)', 'coversRequestedBuckets', '"site_energy"', '"equipment_energy"', 'partial = watermark.Before']) {
   assert(queryClient.includes(marker), `missing Query Service metadata marker ${marker}`);
-}
-for (const marker of ['analytics-read-model-projector:', 'analytics_projector_reader', 'analytics_projector_writer', ':19089']) {
-  assert(compose.includes(marker), `missing analytics compose marker ${marker}`);
 }
 for (const marker of ['TestCanonicalCounterDeltaProjectsEnergyFactsIdempotently', 'TestLateCounterObservationCorrectsSuccessorFactFromCheckpoint', 'TestClickHouseHistoryClientQueriesBoundedRealProjection', 'deviceHistoryQuery', "factCount !== '3'", 'readerCanSelectCanonical', 'readerCannotSelectRaw', 'historyQueryCanSelect', 'historyQueryCannotInsert', 'historyQueryCannotSelectAnalytics', 'readerCannotInsert', 'writerCannotSelect', 'cubeCannotInsert', 'boundedCounterDeltasIndex', 'hourlyRollupCorrection', 'hourlyRollupDrift', 'cubeCanSelectHourly']) {
   assert(integration.includes(marker), `missing analytics integration marker ${marker}`);

@@ -118,7 +118,6 @@ const UNIT_OWNED_SCHEMAS: Readonly<Record<string, readonly string[]>> = Object.f
   'services/forecast-service': ['core_registry'],
   'services/mv-service': ['core_registry'],
   'services/report-service': ['core_registry'],
-  'services/settlement-service': ['core_registry'],
   'services/optimization-service': ['core_registry', 'optimization'],
 });
 
@@ -140,7 +139,6 @@ const DECLARED_SQL_EXCEPTIONS: readonly ExceptionRule[] = Object.freeze([
   { unitPrefix: 'services/forecast-service/', schema: 'analytics', relations: ['metric_result_facts'], allowWrite: false },
   { unitPrefix: 'services/mv-service/', schema: 'analytics', relations: ['metric_result_facts'], allowWrite: false },
   { unitPrefix: 'services/mv-service/', schema: 'analytics', relations: ['site_condition_anchors_hourly_latest'], allowWrite: false },
-  { unitPrefix: 'services/settlement-service/', schema: 'analytics', relations: ['metric_result_facts'], allowWrite: false },
 ]);
 
 const normalizePath = (value: string): string => value.split(sep).join('/').replaceAll('\\', '/');

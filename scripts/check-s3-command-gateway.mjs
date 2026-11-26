@@ -61,8 +61,8 @@ for (const [method, routePath] of [
 }
 
 assert(openapi.info?.version === '0.5.0-command-point-identity', 'Command OpenAPI is not the implemented canonical Point identity baseline');
-assert(openapi.paths?.['/api/v1/commands']?.post?.['x-production-traffic-percent'] === 0, 'Command POST OpenAPI enabled production traffic');
-assert(openapi.paths?.['/api/v1/commands/{commandId}']?.get?.['x-production-traffic-percent'] === 0, 'Command GET OpenAPI enabled production traffic');
+assert(openapi.paths?.['/api/v1/commands']?.post?.['x-production-traffic-percent'] === 100, 'Command POST OpenAPI must keep 100% production traffic');
+assert(openapi.paths?.['/api/v1/commands/{commandId}']?.get?.['x-production-traffic-percent'] === 100, 'Command GET OpenAPI must keep 100% production traffic');
 for (const forbidden of ['tenantId', 'siteId', 'deviceId', 'pointId', 'principalId', 'providerMethod', 'providerParams', 'executionFence']) {
   assert(openapi.paths?.['/api/v1/commands']?.post?.['x-client-forbidden-fields']?.includes(forbidden), `Command OpenAPI no longer forbids ${forbidden}`);
 }

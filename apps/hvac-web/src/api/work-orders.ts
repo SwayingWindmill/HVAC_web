@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { getFrontendReviewWorkOrder, listFrontendReviewWorkOrders } from '@/app/frontend-review-work-orders-data';
 
 export const workOrderPrioritySchema = z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT']);
 export const workOrderStatusSchema = z.enum(['DRAFT', 'OPEN', 'IN_PROGRESS', 'BLOCKED', 'COMPLETED', 'CANCELLED']);
@@ -185,7 +184,6 @@ function mutationHeaders(options: WorkOrderRequestOptions): HeadersInit {
 }
 
 export function listWorkOrders(filter: WorkOrderListFilter, options: WorkOrderRequestOptions): Promise<WorkOrderList> {
-  if (__HVAC_WEB_FRONTEND_REVIEW__) return Promise.resolve(listFrontendReviewWorkOrders(filter));
   const query = new URLSearchParams();
   if (filter.status) query.set('status', filter.status);
   if (filter.priority) query.set('priority', filter.priority);
@@ -200,7 +198,6 @@ export function listWorkOrders(filter: WorkOrderListFilter, options: WorkOrderRe
 }
 
 export function getWorkOrder(workOrderId: string, options: WorkOrderRequestOptions): Promise<WorkOrder> {
-  if (__HVAC_WEB_FRONTEND_REVIEW__) return Promise.resolve(getFrontendReviewWorkOrder(workOrderId));
   return request<WorkOrder>(`/api/v1/sites/${encodeURIComponent(options.siteId)}/work-orders/${encodeURIComponent(workOrderId)}`, {
     method: 'GET', signal: options.signal, headers: { Accept: 'application/json, application/problem+json' },
   });

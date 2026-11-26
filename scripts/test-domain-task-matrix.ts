@@ -115,7 +115,6 @@ test('gate profiles use product domains rather than implementation stage numbers
   ]);
   assert.deepEqual(resolveGateProfileSet('browser', 'all'), [
     'telemetry',
-    'workorder',
   ]);
 
   const serialized = JSON.stringify({ gateProfileSets, domainTaskProfiles });

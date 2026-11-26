@@ -5,28 +5,28 @@
 ## 1. 整体
 
 ```text
-                    值班人员（浏览器）
-                          │ HTTPS / WSS
-                          ▼
-                 nginx  →  平台网关（energy-api）
-                          │
-        ┌─────────────────┼──────────────────┐
-        ▼                 ▼                  ▼
-   业务模块           设备数据             智能服务
- （登记、告警、     （设备接入、遥测、    （预测、优化、诊断、
-  工单、指令…）       指标计算）          节能验证、报表、AI 助手）
-        └─────────────────┼──────────────────┘
-                          ▼
-         PostgreSQL · ClickHouse · Redis · MQTT · Cube
-                          │ MQTT（TLS）
-                          ▼
-                    现场网关（Node-RED）
-                          │ Modbus / BACnet / …
-                          ▼
-                         设备
+             值班人员（浏览器 / 微信小程序）
+                           │ HTTPS / WSS
+                           ▼
+                  nginx  →  平台网关（energy-api）
+                           │
+         ┌─────────────────┼──────────────────┐
+         ▼                 ▼                  ▼
+    业务模块           设备数据             智能服务
+  （登记、告警、     （设备接入、遥测、    （预测、优化、诊断、
+   工单、指令…）       指标计算）          节能验证、报表、AI 助手）
+         └─────────────────┼──────────────────┘
+                           ▼
+          PostgreSQL · ClickHouse · Redis · MQTT · Cube
+                           │ MQTT（TLS）
+                           ▼
+             现场网关（hvac-edge-gateway）
+                           │ Modbus / BACnet / OPC UA / …
+                           ▼
+                          设备
 ```
 
-安全、监控、日志、追踪、备份和审计贯穿各层。浏览器只通过 nginx 和平台网关访问业务接口，不直接连数据库、MQTT 或内部服务。
+安全、监控、日志、追踪、备份和审计贯穿各层。浏览器和微信小程序（`apps/hvac-miniprogram`）只通过 nginx 和平台网关访问业务接口，不直接连数据库、MQTT 或内部服务。
 
 ## 2. 进程
 
@@ -44,7 +44,9 @@
 | `centrifugo` | 实时推送的内部传输；浏览器只看到网关的 `/realtime/` | 是 |
 | `postgres`、`clickhouse`、`redis`、`cube` | 数据和语义层 | 本机部署时 |
 | `connectivity`、`mqtt-broker` | 设备接入和 MQTT 服务器（ADR 0015） | 接现场或模拟器时 |
+| `wecom-alert-adapter` | 告警外发适配器：转发 Alertmanager 平台告警，并承接 `energy-api` 的邮件、企业微信与微信服务号设备告警投递 | 按需（观测档位） |
 | `forecast-service`、`optimization-service`、`fdd-service`、`mv-service`、`report-service`、`operations-agent-service` | 智能服务 | 按需（`intelligence`） |
+| `ai-solver-service` | 可选的 Python 外部暖通优化推理服务（`ai-solver.compose.yaml` 叠加，供 `optimization-service` 远端求解） | 按需（可选叠加 `intelligence`） |
 | 监控一组（`otel-collector`、`prometheus`、`alertmanager`、`loki`、`tempo`、`grafana` 等） | 指标、日志、追踪和告警 | 按档位选 |
 
 数据库迁移、启动前的表结构检查、身份初始化、备份都是一次性的运维操作，不算常驻进程。第一阶段不需要 Kubernetes、服务网格或 Kafka。
@@ -74,7 +76,7 @@ ADR 0012 定了现场控制层的设计（参照 OpenEMS），要点：
 - 云端的指令是「意图」：云端负责权限、审批、防重复和审计；现场在应用安全、联锁和设备限制之后决定实际写下去的值。远程意图有到期时间，云端断开或过期后，控制权回到现场的本地策略，不会一直停在最后一次远程设定值。
 - 模拟器和真实设备只在驱动、协议和物理模型上不同，控制和指令的路径共用。
 
-现在实际做到哪一步、还缺什么，见 ADR 0012 和 `libs/edgecontrol`；真实的现场网关目前跑的是 Node-RED。
+现场控制层已落地在 `libs/edgecontrol` 与独立 Go 守护进程 `cmd/edge-gateway`（`hvac-edge-gateway`），并已在松雅轩现场替代原 Node-RED 正式运行（见 ADR 0012 与 `contracts/architecture/edge-control-plane.v1.json`）。
 
 ## 5. 部署边界
 

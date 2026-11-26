@@ -469,7 +469,7 @@ func TestHTTPHandlerSPIFFEAuthAndTimeoutAudit(t *testing.T) {
 	rawHandler := NewHTTPHandler(svc, func(_ *http.Request, _ registryauth.Action) (registryauth.GrantClaims, error) {
 		return testClaims(), nil
 	})
-	wrapped := connectivity.NewCredentialHandlerWithExtensions(nil, nil, nil, rawHandler)
+	wrapped := connectivity.NewCredentialHandler(nil, nil, connectivity.WithConcentratorHandler(rawHandler))
 
 	unauthReq := httptest.NewRequest(http.MethodPut, "/internal/v1/gateways/"+testGatewayID()+"/concentrators/1/params", strings.NewReader(`{"params":{"rfTxPower":20},"reason":"timeout test"}`))
 	unauthRec := httptest.NewRecorder()

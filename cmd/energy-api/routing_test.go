@@ -40,26 +40,3 @@ func TestGatewayServerTLSConfigVerifiesOptionalClientCertificates(t *testing.T) 
 		t.Fatalf("unexpected Gateway TLS config: %#v", config)
 	}
 }
-
-func TestLoopbackTelemetryFixtureURL(t *testing.T) {
-	for _, value := range []string{
-		"https://127.0.0.1:18456",
-		"https://localhost:18456",
-		"https://[::1]:18456",
-	} {
-		if !isLoopbackTelemetryFixtureURL(value) {
-			t.Fatalf("loopback fixture URL rejected: %s", value)
-		}
-	}
-	for _, value := range []string{
-		"",
-		"http://127.0.0.1:18456",
-		"https://telemetry.example.test",
-		"https://127.0.0.1:18456/path",
-		"https://user@127.0.0.1:18456",
-	} {
-		if isLoopbackTelemetryFixtureURL(value) {
-			t.Fatalf("non-fixture URL accepted: %s", value)
-		}
-	}
-}

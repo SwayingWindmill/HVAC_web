@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import vm from 'node:vm';
 
 import {
   ASSET_RELATIONSHIP_ROLES, SEMANTIC_ROLES, SUBJECT_BINDING_LIFECYCLE, buildOnboardingSql, checkSiteFile, expandPoints, planOnboarding, pointQuality, pointStatus, presenceApplicability, siteStateQuery, updateWhenChanged,
@@ -509,133 +508,6 @@ test('concentrator voltage, rssi and status devices preserve ids and respect ala
   }
 });
 
-test('songyaxuan Node-RED envelope stays under edge byte cap and aligns with site manifest', () => {
-  const envelopeSource = readFileSync(new URL('../edge/node-red/songyaxuan-platform-envelope.js', import.meta.url), 'utf8');
-  assert.ok(Buffer.byteLength(envelopeSource, 'utf8') <= 12288, 'songyaxuan-platform-envelope.js exceeds 12288 byte governance cap');
-
-  const flowContext = new Map<string, unknown>();
-  const runEnvelope = (payload: Record<string, unknown>): {
-    payload: {
-      schemaVersion: string;
-      gatewayId: string;
-      payload: {
-        devices: Array<{
-          deviceId: string;
-          deviceTimestamp: number;
-          points: Array<{ code: string; value: number | string; quality: number; unit?: string }>;
-        }>;
-      };
-    };
-  } | null => {
-    const fn = new vm.Script(`(function(msg, context) { ${envelopeSource}\n })`).runInThisContext() as (
-      msg: { payload: Record<string, unknown> },
-      context: { get: (key: string) => unknown; set: (key: string, value: unknown) => void },
-    ) => ReturnType<typeof runEnvelope>;
-    return fn({ payload }, {
-      get: (key) => flowContext.get(key),
-      set: (key, value) => { flowContext.set(key, value); },
-    });
-  };
-
-  const ts = 1794643200000;
-  for (const unit of ['ammeter-unit1', 'ammeter-unit2', 'ammeter-unit3', 'ammeter-unit4']) {
-    runEnvelope({ [unit]: [{ ts, values: { powerTotal: 50, combinedActiveTotalElectricalEnergy: unit === 'ammeter-unit4' ? 77000 : 100 } }] });
-  }
-  runEnvelope({ waterflow: [{ ts, values: { flowMeter: 120, flowVelocity: 1.5 } }] });
-
-  const temps: Record<string, number> = {};
-  const volts: Record<string, number> = {};
-  const rssis: Record<string, number> = {};
-  const statuses: Record<string, number | string> = {
-    online_count: 17,
-    offline_count: 1,
-    low_battery_count: 1,
-    min_voltage_mv: 2650,
-    min_rssi_dbm: -88,
-  };
-  for (const ch of [...Array.from({ length: 20 }, (_, i) => i + 1), 51, 52, 53, 54, 55]) {
-    temps[`t${ch}`] = ch === 20 || ch === 51 || ch === 52 || ch === 8 ? 0 : ch === 18 ? 7.0 : ch === 16 ? 12.0 : 10 + ch / 10;
-    volts[`v${ch}`] = ch === 8 || ch === 51 || ch === 52 ? 0 : ch === 1 ? 2650 : 3550;
-    rssis[`rssi${ch}`] = ch === 8 || ch === 51 || ch === 52 ? 0 : ch === 1 ? -88 : -62;
-    statuses[`status${ch}`] = ch === 8 || ch === 51 || ch === 52 ? 'OFFLINE' : 'ONLINE';
-  }
-
-  const out = runEnvelope({
-    temperature: [{ ts, values: temps }],
-    'temperature-voltage': [{ ts, values: volts }],
-    'temperature-rssi': [{ ts, values: rssis }],
-    'temperature-status': [{ ts, values: statuses }],
-  });
-  assert.ok(out, 'expected combined envelope');
-  assert.equal(out.payload.schemaVersion, '2.0');
-
-  const activeBySourceKey = new Map(
-    songyaxuan.devices.map((device) => [
-      device.sourceKey,
-      new Map(expandPoints(device, songyaxuan.meterPoints).filter((p) => pointStatus(p) === 'ACTIVE').map((p) => [p.code, p])),
-    ]),
-  );
-
-  const byDevice = new Map(out.payload.payload.devices.map((entry) => [entry.deviceId, entry]));
-  for (const key of ['temperature', 'temperature-voltage', 'temperature-rssi', 'temperature-status', 'btu-calc', 'ammeter-unit1', 'cooling-tower', 'outdoor', 'room']) {
-    assert.ok(byDevice.has(key), `missing ${key} in combined envelope`);
-  }
-
-  for (const deviceEntry of out.payload.payload.devices) {
-    const manifestPoints = activeBySourceKey.get(deviceEntry.deviceId);
-    assert.ok(manifestPoints, `unknown deviceId ${deviceEntry.deviceId} emitted by envelope`);
-    for (const point of deviceEntry.points) {
-      const def = manifestPoints.get(point.code);
-      assert.ok(def, `inactive or unregistered point ${deviceEntry.deviceId}/${point.code}`);
-      if (def.unit) assert.equal(point.unit, def.unit, `${deviceEntry.deviceId}/${point.code} unit mismatch`);
-      else assert.equal(point.unit, undefined, `${deviceEntry.deviceId}/${point.code} unexpected unit`);
-    }
-  }
-
-  const voltPoints = new Map(byDevice.get('temperature-voltage')?.points.map((p) => [p.code, p]));
-  assert.equal(voltPoints.get('v8')?.quality, 1, 'offline probe voltage must carry quality=1');
-  assert.equal(voltPoints.get('v1')?.quality, 0);
-  assert.equal(voltPoints.get('v51'), undefined, 'empty slot 51 must not be reported');
-  assert.equal(voltPoints.get('v52'), undefined, 'disabled spare channel 52 must not be reported');
-  assert.equal(voltPoints.get('v55')?.quality, 0);
-  const rssiPoints = new Map(byDevice.get('temperature-rssi')?.points.map((p) => [p.code, p]));
-  assert.equal(rssiPoints.get('rssi8')?.quality, 1, 'offline probe rssi must carry quality=1');
-  assert.equal(rssiPoints.get('rssi1')?.value, -88);
-  const roomPoints = new Map(byDevice.get('room')?.points.map((p) => [p.code, p]));
-  assert.equal(roomPoints.get('room_temperature')?.value, 15.3);
-  assert.equal(roomPoints.get('banquet_room_temperature')?.value, 15.4);
-  const towerPoints = byDevice.get('cooling-tower')?.points ?? [];
-  const towerLeavingPoints = towerPoints.filter((p) => p.code === 'cooling_tower_leaving_temperature');
-  assert.equal(towerLeavingPoints.length, 1, 'coexisting t55 and t12 must emit only one cooling_tower_leaving_temperature');
-  assert.equal(towerLeavingPoints[0]?.value, 15.5, 'cooling_tower_leaving_temperature must prefer t55');
-  const meter1Points = new Map(byDevice.get('ammeter-unit1')?.points.map((p) => [p.code, p]));
-  assert.equal(meter1Points.get('cw_leaving_temperature'), undefined, 'offline t8 must not copy into ammeter-unit1');
-  const statusPoints = new Map(byDevice.get('temperature-status')?.points.map((p) => [p.code, p]));
-  assert.equal(statusPoints.get('status8')?.value, 'OFFLINE');
-  assert.equal(statusPoints.get('status8')?.quality, 0);
-  assert.equal(statusPoints.get('status51'), undefined, 'empty slot 51 status must not be reported');
-  assert.equal(statusPoints.get('min_voltage_mv')?.unit, 'mV');
-  assert.equal(statusPoints.get('min_rssi_dbm')?.unit, 'dBm');
-
-  // Verify coexistence between t55 and t12: t12 fallback when t55 is offline, and t55 when t12 is offline.
-  const fallbackOut = runEnvelope({
-    temperature: [{ ts: ts + 60000, values: { ...temps, t55: 0, t12: 28.4 } }],
-    'temperature-status': [{ ts: ts + 60000, values: { ...statuses, status55: 'OFFLINE', status12: 'ONLINE' } }],
-  });
-  assert.equal(
-    fallbackOut?.payload.payload.devices.find((d) => d.deviceId === 'cooling-tower')?.points.find((p) => p.code === 'cooling_tower_leaving_temperature')?.value,
-    28.4,
-  );
-  const primaryOut = runEnvelope({
-    temperature: [{ ts: ts + 120000, values: { ...temps, t55: 26.7, t12: 0 } }],
-    'temperature-status': [{ ts: ts + 120000, values: { ...statuses, status55: 'ONLINE', status12: 'OFFLINE' } }],
-  });
-  assert.equal(
-    primaryOut?.payload.payload.devices.find((d) => d.deviceId === 'cooling-tower')?.points.find((p) => p.code === 'cooling_tower_leaving_temperature')?.value,
-    26.7,
-  );
-});
-
 test('songyaxuan.site.json aligns chiller controller sampleSeconds and includes et1010 run_state and emergency_stop_all', () => {
   interface SitePoint {
     code: string;
@@ -670,65 +542,6 @@ test('songyaxuan.site.json aligns chiller controller sampleSeconds and includes 
   assert.equal(emergencyPt?.sourceMetadata?.feedbackPointKey, 'run_state');
   assert.equal(emergencyPt?.sourceMetadata?.actuationMode, 'EMERGENCY_DO_RELEASE');
   assert.equal(emergencyPt?.sourceMetadata?.channel, 'all-do');
-});
-
-test('songyaxuan-platform-envelope applies chiller power hysteresis and et1010 run_state', () => {
-  const script = readFileSync(new URL('../edge/node-red/songyaxuan-platform-envelope.js', import.meta.url), 'utf8');
-  const store = new Map<string, unknown>();
-  const runEnvelope = (payload: Record<string, Array<{ ts: number; values: Record<string, unknown> }>>) => {
-    const ctx = {
-      msg: { payload },
-      context: {
-        get: (key: string) => store.get(key),
-        set: (key: string, value: unknown) => {
-          store.set(key, value);
-        },
-      },
-      Date,
-      Math,
-    };
-    const out = vm.runInNewContext(`(() => { ${script} })()`, ctx) as {
-      payload: { payload: { devices: Array<{ deviceId: string; points: Array<{ code: string; value: unknown }> }> } };
-    };
-    return out.payload.payload.devices;
-  };
-  const readPoint = (devices: Array<{ deviceId: string; points: Array<{ code: string; value: unknown }> }>, deviceId: string, code: string) =>
-    devices.find((d) => d.deviceId === deviceId)?.points.find((p) => p.code === code)?.value;
-
-  const powerSteps: Array<[number, string]> = [
-    [0, 'STOPPED'],
-    [8, 'STOPPED'],
-    [12.75, 'STOPPED'],
-    [13, 'RUNNING'],
-    [8, 'RUNNING'],
-    [5, 'STOPPED'],
-    [8, 'STOPPED'],
-    [13, 'RUNNING'],
-    [4.8, 'STOPPED'],
-  ];
-  let ts = 1_760_000_000_000;
-  for (const [powerTotal, expected] of powerSteps) {
-    ts += 1000;
-    const devices = runEnvelope({
-      'ammeter-unit4': [{ ts, values: { powerTotal, combinedActiveTotalElectricalEnergy: 100 } }],
-    });
-    assert.equal(readPoint(devices, 'ammeter-unit4', 'run_state'), expected, `ammeter-unit4 at ${powerTotal}kW`);
-    assert.equal(readPoint(devices, 'ctrl-chiller-a', 'run_state'), expected, `ctrl-chiller-a at ${powerTotal}kW`);
-  }
-
-  const etStopped = runEnvelope({ et1010: [{ ts: ts + 1000, values: { u11: 0, u12: 0, u13: 0 } }] });
-  assert.equal(etStopped.filter((d) => d.deviceId === 'et1010').length, 1);
-  assert.equal(readPoint(etStopped, 'et1010', 'run_state'), 'STOPPED');
-  assert.equal(readPoint(etStopped, 'ctrl-chwp-1', 'run_state'), 'STOPPED');
-
-  const etRunning = runEnvelope({ et1010: [{ ts: ts + 2000, values: { u11: 1, u12: 0, u13: 0 } }] });
-  assert.equal(etRunning.filter((d) => d.deviceId === 'et1010').length, 1);
-  assert.equal(readPoint(etRunning, 'et1010', 'run_state'), 'RUNNING');
-  assert.equal(readPoint(etRunning, 'ctrl-chwp-1', 'run_state'), 'RUNNING');
-
-  const etPulseOnly = runEnvelope({ et1010: [{ ts: ts + 3000, values: { u14: 0, u51: 0 } }] });
-  assert.equal(etPulseOnly.filter((d) => d.deviceId === 'et1010').length, 1);
-  assert.equal(readPoint(etPulseOnly, 'et1010', 'run_state'), undefined);
 });
 
 test('feederAuxiliaryPowerKw, point running override, stabilizeSeconds and flatlineStabilizeSeconds compile and validate', () => {
@@ -1117,4 +930,35 @@ test('site onboarding validates, compiles, and diffs site.buildingPlan', () => {
   assert.match(invalidText, /duplicate floor level 1/);
   assert.match(invalidText, /0 <= x\[0\] < x\[1\] <= width/);
   assert.match(invalidText, /unsupported/);
+});
+
+test('songyaxuan.site.json enforces chwp-main start interlock and 120s run_state freshness', () => {
+  const site = JSON.parse(readFileSync(new URL('../deploy/sites/songyaxuan.site.json', import.meta.url), 'utf8')) as OnboardingProfile;
+  assert.deepEqual(checkSiteFile(site, songyaxuanAlarmRules), []);
+
+  for (const chillerCode of ['ctrl-chiller-a', 'ctrl-chiller-b', 'ctrl-chiller-c', 'ctrl-chiller-d']) {
+    const dev = site.devices.find((d) => d.code === chillerCode);
+    assert.ok(dev, `missing ${chillerCode}`);
+    const startPt = dev.points.find((p) => p.code === 'start');
+    const interlocks = (startPt?.sourceMetadata?.interlocks ?? []) as Array<{ device: string; point: string; expected: string }>;
+    const hasMainFlowInterlock = interlocks.some(
+      (item) => item.device === 'chwp-main' && item.point === 'run_state' && item.expected === 'RUNNING',
+    );
+    assert.equal(hasMainFlowInterlock, true, `${chillerCode}/start missing chwp-main interlock`);
+  }
+
+  const { telemetry } = buildOnboardingSql(site);
+  const expected120Devices = [
+    'chwp-main',
+    'ctrl-chwp-1', 'ctrl-chwp-2', 'ctrl-chwp-3', 'ctrl-chwp-4',
+    'ctrl-cwp-1', 'ctrl-cwp-2', 'ctrl-cwp-3', 'ctrl-cwp-4',
+    'ctrl-tower-1', 'ctrl-tower-2', 'ctrl-tower-3', 'ctrl-tower-4',
+  ];
+  for (const code of expected120Devices) {
+    const dev = site.devices.find((d) => d.code === code);
+    assert.ok(dev, `missing ${code}`);
+    const row = telemetry.split('\n').find((line: string) => line.startsWith(`('${dev.id}', 'run_state',`));
+    assert.ok(row, `missing freshness row for ${code}/run_state`);
+    assert.match(row, new RegExp(`^\\('${dev.id}', 'run_state', 1, 120, true, 60,`), `${code}/run_state must have fresh_within_seconds=120`);
+  }
 });

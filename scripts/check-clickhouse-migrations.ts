@@ -53,7 +53,6 @@ interface ComposeService {
 
 interface ComposeDocument {
   'x-default-env'?: Record<string, string>;
-  'x-owner-env'?: Record<string, string>;
   services?: Record<string, ComposeService>;
 }
 
@@ -287,15 +286,10 @@ export function checkClickHouseMigrations(repoRoot: string): void {
 
   const compose = yaml.load(readFileSync(join(repoRoot, 'deploy/platform/phase1/compose.yaml'), 'utf8')) as ComposeDocument;
   const wslOverride = yaml.load(readFileSync(join(repoRoot, 'deploy/platform/phase1/wsl.override.yaml'), 'utf8')) as ComposeDocument;
-  const ownerSplit = yaml.load(readFileSync(join(repoRoot, 'deploy/platform/phase1/owner-split.compose.yaml'), 'utf8')) as ComposeDocument;
 
   assert(
     compose['x-default-env']?.PHASE1_PRODUCT_VERSION !== undefined,
     'compose.yaml x-default-env must define PHASE1_PRODUCT_VERSION',
-  );
-  assert(
-    ownerSplit['x-owner-env']?.PHASE1_PRODUCT_VERSION !== undefined,
-    'owner-split.compose.yaml x-owner-env must define PHASE1_PRODUCT_VERSION',
   );
 
   for (const [name, doc] of [

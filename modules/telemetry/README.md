@@ -1,10 +1,9 @@
 # 遥测（telemetry）
 
-平台的设备读数模块：接收读数、维护每台设备的当前状态并实时推送、写历史，以及给能耗和设备历史提供查询。它分成几个进程跑，彼此的资源预算互不影响：
+平台的设备读数模块：接收读数、维护每台设备的当前状态并实时推送、写历史，以及给能耗和设备历史提供查询。它分成两部分运行：
 
 - `cmd/telemetry-worker`：接收读数、当前状态、实时推送、写历史，以及能源模块的用电量计算。
-- `modules/telemetry/cmd/telemetry-query-owner`：查询服务（`telemetry-query-service`），下面主要讲它。
-- `modules/telemetry/cmd/telemetry-history-projector`：把历史写进 ClickHouse 的单独入口。
+- `cmd/energy-api` 内嵌查询服务（`telemetry-query-service`）：下面主要讲它。
 
 ## 数据怎么流
 
@@ -122,7 +121,6 @@ Cube 的缓存刷新时间不会被当作数据截至时间。
 ```bash
 npm run test:analytics
 npm run test:analytics-gateway
-npm run build:telemetry-query-owner
 ```
 
 测试覆盖：固定字段翻译成 Cube 查询、租户条件、按质量区分的度量、数据截至时间和版本、是否不完整的判断、返回大小的预算、双向 TLS 身份、授权绑定查询摘要，以及拒绝伪造的请求头。

@@ -1,6 +1,6 @@
 # 权限（IAM）
 
-IAM 决定一个人或一个后台服务能在哪些站点做什么，并为每次允许的请求签一张短时授权。账号和密码由身份服务（`identity-service`）管；IAM 只保存「哪个登录身份对应平台里的哪个人」，不碰密码，也不面向浏览器。默认嵌在 `energy-api` 里运行，`modules/iam/cmd/iam-owner` 是单独运行的入口。
+IAM 决定一个人或一个后台服务能在哪些站点做什么，并为每次允许的请求签一张短时授权。账号和密码由身份服务（`identity-service`）管；IAM 只保存「哪个登录身份对应平台里的哪个人」，不碰密码，也不面向浏览器。它嵌在 `energy-api` 里运行。
 
 ## 网络边界
 
@@ -100,7 +100,7 @@ IAM 拒绝客户端自己带的人员、角色、租户、站点、管理员或�
 
 ## 环境变量
 
-主要的几个：`IAM_SERVICE_ADDR`、`IAM_TLS_CERT`、`IAM_TLS_KEY`、`IAM_CLIENT_CA`、`IAM_ALLOWED_WORKLOAD_SPIFFE`（网关的身份）、`IAM_CORE_WORKLOAD_SPIFFE`（登记服务的身份）、`IAM_OPERATIONS_AGENT_SPIFFE`、`IAM_REPORT_SERVICE_SPIFFE`、`IAM_OPTIMIZATION_SERVICE_SPIFFE`、`IAM_MV_SERVICE_SPIFFE`、`IAM_TELEMETRY_RUNTIME_SPIFFE`、`IAM_AUDIENCE`、`IAM_REGISTRY_GRANT_AUDIENCE`、`IAM_TELEMETRY_GRANT_AUDIENCE`、`IAM_COMMAND_GRANT_AUDIENCE`、`IAM_POLICY_REVISION`（只有单独部署的 `iam-owner` 读）、`IAM_DATABASE_URL`、`IAM_ADMIN_DATABASE_URL`、`IAM_TELEMETRY_GRANT_DATABASE_URL`。嵌在 `energy-api` 里时由 `cmd/energy-api/embedded_energy.go` 读取。
+主要的几个：`IAM_SERVICE_ADDR`、`IAM_TLS_CERT`、`IAM_TLS_KEY`、`IAM_CLIENT_CA`、`IAM_ALLOWED_WORKLOAD_SPIFFE`（网关的身份）、`IAM_CORE_WORKLOAD_SPIFFE`（登记服务的身份）、`IAM_OPERATIONS_AGENT_SPIFFE`、`IAM_REPORT_SERVICE_SPIFFE`、`IAM_OPTIMIZATION_SERVICE_SPIFFE`、`IAM_MV_SERVICE_SPIFFE`、`IAM_TELEMETRY_RUNTIME_SPIFFE`、`IAM_AUDIENCE`、`IAM_REGISTRY_GRANT_AUDIENCE`、`IAM_TELEMETRY_GRANT_AUDIENCE`、`IAM_COMMAND_GRANT_AUDIENCE`、`IAM_DATABASE_URL`、`IAM_ADMIN_DATABASE_URL`、`IAM_TELEMETRY_GRANT_DATABASE_URL`。嵌在 `energy-api` 里时由 `cmd/energy-api/embedded_energy.go` 读取。
 
 登记授权的签发方取自 IAM 自己 TLS 证书里的 SPIFFE 身份，不是可以随便改的环境变量。
 
@@ -109,5 +109,4 @@ IAM 拒绝客户端自己带的人员、角色、租户、站点、管理员或�
 ```bash
 npm run test:identity
 npm run registry:integration
-npm run build:iam-owner
 ```

@@ -12,7 +12,7 @@ export function FocusHeading({ children, className, style, ...props }: Component
       {...props}
       ref={headingRef}
       tabIndex={-1}
-      className={['real-focus-heading', className].filter(Boolean).join(' ')}
+      className={className}
       style={{ ...style, outline: 'none', boxShadow: 'none' }}
     >
       {children}

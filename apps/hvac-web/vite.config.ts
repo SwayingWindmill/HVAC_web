@@ -54,8 +54,6 @@ export default defineConfig(() => {
   const buildId = process.env.HVAC_WEB_BUILD_ID?.trim() || 'local';
   const gatewayBasePath = process.env.HVAC_WEB_GATEWAY_BASE_PATH?.trim() || '/api/v1';
   const realtimeProtocol = process.env.HVAC_WEB_REALTIME_PROTOCOL?.trim() || 'centrifugo-v1';
-  const frontendReview = process.env.HVAC_WEB_FRONTEND_REVIEW === 'true';
-  const buildOutDir = frontendReview ? 'dist-frontend-review' : 'dist';
 
   return {
     plugins: [
@@ -75,7 +73,6 @@ export default defineConfig(() => {
       __HVAC_WEB_BUILD_ID__: JSON.stringify(buildId),
       __HVAC_WEB_GATEWAY_BASE_PATH__: JSON.stringify(gatewayBasePath),
       __HVAC_WEB_REALTIME_PROTOCOL__: JSON.stringify(realtimeProtocol),
-      __HVAC_WEB_FRONTEND_REVIEW__: JSON.stringify(frontendReview),
     },
     server: {
       host: '0.0.0.0',
@@ -96,7 +93,7 @@ export default defineConfig(() => {
       },
     },
     build: {
-      outDir: buildOutDir,
+      outDir: 'dist',
       emptyOutDir: true,
       manifest: true,
       chunkSizeWarningLimit: 1200,

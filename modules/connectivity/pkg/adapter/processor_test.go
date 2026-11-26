@@ -643,7 +643,7 @@ func TestProcessorPacketHookCapturesTelemetryEventAndQuarantine(t *testing.T) {
 	}
 }
 
-func TestProcessorCompactV1BatchAndStatusLifecycleFencing(t *testing.T) {
+func TestProcessorV2BatchAndStatusLifecycleFencing(t *testing.T) {
 	t.Parallel()
 
 	identities := newFakeIdentities()
@@ -665,22 +665,18 @@ func TestProcessorCompactV1BatchAndStatusLifecycleFencing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Process compact v1.0 batch telemetry across two messages in one prefix.
-	v1A := []byte(`{"v":"1.0","gw":"` + testGatewayA + `","sid":"s2","seq":1,"ts":"2026-11-17T12:00:00Z","replay":true,"devs":{"METER-01":{"pts":{"active_power":55.5},"q":{"active_power":"GOOD"}}}}`)
-	v1B := []byte(`{"v":"1.0","gw":"` + testGatewayA + `","sid":"s2","seq":2,"ts":1786352402000,"replay":false,"devs":{"METER-01":{"pts":{"reactive_power":12.1},"q":{"reactive_power":"BAD"}}}}`)
+	// Process v2.0 batch telemetry across two messages in one prefix.
+	v2A := telemetryPayloadWithTimestamps(testGatewayA, messageID(1), 1, true, 1786352400000, "METER-01", "active_power")
+	v2B := telemetryPayloadWithTimestamps(testGatewayA, messageID(2), 2, false, 1786352402000, "METER-01", "reactive_power")
 	outcomes, err := processor.ProcessPrefix(context.Background(), []UplinkMessage{
-		{Topic: telemetryTopic(testGatewayA), Payload: v1A},
-		{Topic: telemetryTopic(testGatewayA), Payload: v1B},
+		{Topic: telemetryTopic(testGatewayA), Payload: v2A},
+		{Topic: telemetryTopic(testGatewayA), Payload: v2B},
 	})
 	if err != nil {
-		t.Fatalf("ProcessPrefix compact v1 failed: %v", err)
+		t.Fatalf("ProcessPrefix v2 failed: %v", err)
 	}
 	if len(outcomes) != 2 || outcomes[0].Result.Accepted != 1 || outcomes[1].Result.Accepted != 1 {
 		t.Fatalf("unexpected outcomes: %+v", outcomes)
-	}
-	accepted := telemetry.accepted()
-	if len(accepted) != 2 || accepted[0].WireQuality != 0 || accepted[1].WireQuality != 1 {
-		t.Fatalf("expected GOOD->0 and BAD->1 wire quality in accepted observations, got %+v", accepted)
 	}
 
 	// Valid s2 connect lifecycle event on /up/event sets session "s2" online.
@@ -696,13 +692,13 @@ func TestProcessorCompactV1BatchAndStatusLifecycleFencing(t *testing.T) {
 	}
 
 	// Superseded connect replay on /up/status with older timestamp or old session MUST suppress hooks.
-	staleStatusS1 := []byte(`{"v":"1.0","gw":"` + testGatewayA + `","sid":"s1","seq":3,"ts":1786352401000,"online":true}`)
+	staleStatusS1 := []byte(`{"schemaVersion":"2.0","messageId":"` + messageID(12) + `","gatewayId":"` + testGatewayA + `","sessionId":"s1","sequence":3,"eventTime":1786352401000,"online":true}`)
 	if _, err := processor.Process(context.Background(), "hvac/v1/"+testGatewayA+"/up/status", staleStatusS1); err != nil {
 		t.Fatal(err)
 	}
 
 	// Valid s2 disconnect on /up/status MUST trigger presence(false).
-	validOfflineS2 := []byte(`{"v":"1.0","gw":"` + testGatewayA + `","sid":"s2","seq":2,"ts":1786352412000,"online":false}`)
+	validOfflineS2 := []byte(`{"schemaVersion":"2.0","messageId":"` + messageID(13) + `","gatewayId":"` + testGatewayA + `","sessionId":"s2","sequence":2,"eventTime":1786352412000,"online":false}`)
 	res, err := processor.Process(context.Background(), "hvac/v1/"+testGatewayA+"/up/status", validOfflineS2)
 	if err != nil {
 		t.Fatal(err)
@@ -1107,12 +1103,13 @@ func TestDirectDeviceIsolationStatusAndEvents(t *testing.T) {
 		{seq: 2, online: false, wantEv: "DEVICE_DISCONNECTED"},
 	} {
 		payload := marshal(map[string]any{
-			"v":      "1.0",
-			"gw":     directID,
-			"sid":    "sess-direct-1",
-			"seq":    step.seq,
-			"ts":     now.Add(time.Duration(step.seq) * time.Second).Format(time.RFC3339),
-			"online": step.online,
+			"schemaVersion": "2.0",
+			"messageId":     messageID(int(11 + step.seq)),
+			"gatewayId":     directID,
+			"sessionId":     "sess-direct-1",
+			"sequence":      step.seq,
+			"eventTime":     now.Add(time.Duration(step.seq) * time.Second).Format(time.RFC3339),
+			"online":        step.online,
 		})
 		if _, err := processor.Process(context.Background(), statusTopic, payload); err != nil {
 			t.Fatalf("direct status online=%v failed: %v", step.online, err)
@@ -1397,8 +1394,8 @@ func TestProcessorDeviceActivityHookExcludesSleepAndDisconnectEvents(t *testing.
 	directProcessor.now = func() time.Time { return now }
 
 	statusPayload := func(seq int, online bool) []byte {
-		return []byte(fmt.Sprintf(`{"v":"1.0","gw":%q,"sid":"sess-direct-1","seq":%d,"ts":%q,"online":%t}`,
-			directID, seq, now.Add(time.Duration(seq)*time.Second).Format(time.RFC3339), online))
+		return []byte(fmt.Sprintf(`{"schemaVersion":"2.0","messageId":%q,"gatewayId":%q,"sessionId":"sess-direct-1","sequence":%d,"eventTime":%q,"online":%t}`,
+			messageID(20+seq), directID, seq, now.Add(time.Duration(seq)*time.Second).Format(time.RFC3339), online))
 	}
 	if _, err := directProcessor.Process(context.Background(), "hvac/v1/"+directID+"/up/status", statusPayload(1, false)); err != nil {
 		t.Fatalf("Process offline status failed: %v", err)

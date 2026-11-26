@@ -23,7 +23,6 @@ function withSandboxRepo(mutate: (sandboxRoot: string) => void): () => void {
       'deploy/platform/phase1/runtime-inventory.v1.json',
       'deploy/platform/phase1/compose.yaml',
       'deploy/platform/phase1/wsl.override.yaml',
-      'deploy/platform/phase1/owner-split.compose.yaml',
       'infra/telemetry/clickhouse/init',
     ]) {
       cpSync(join(repoRoot, rel), join(sandbox, rel), { recursive: true });
@@ -55,7 +54,6 @@ test('unregistered ClickHouse init SQL file fails closed', () => {
       'deploy/platform/phase1/runtime-inventory.v1.json',
       'deploy/platform/phase1/compose.yaml',
       'deploy/platform/phase1/wsl.override.yaml',
-      'deploy/platform/phase1/owner-split.compose.yaml',
       'infra/telemetry/clickhouse/init',
     ]) {
       cpSync(join(repoRoot, rel), join(sandbox, rel), { recursive: true });

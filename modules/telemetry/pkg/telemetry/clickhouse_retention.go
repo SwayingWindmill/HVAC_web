@@ -18,7 +18,6 @@ const (
 	DefaultClickHouseObservationsRetention            = 180 * 24 * time.Hour
 	DefaultClickHouseNumeric1MinRetention             = 365 * 24 * time.Hour
 	DefaultClickHouseNumeric15MinRetention            = 1825 * 24 * time.Hour
-	DefaultClickHouseNumericHourlyRetention           = 1825 * 24 * time.Hour
 	DefaultClickHouseEnergyIntervalRetention          = 1825 * 24 * time.Hour
 	DefaultClickHouseEnergyHourlyRetention            = 1825 * 24 * time.Hour
 	DefaultClickHouseMetricResultFactsRetention       = 1825 * 24 * time.Hour
@@ -58,7 +57,6 @@ type ClickHouseRetentionConfig struct {
 	ObservationsRetention            time.Duration
 	Numeric1MinRetention             time.Duration
 	Numeric15MinRetention            time.Duration
-	NumericHourlyRetention           time.Duration
 	EnergyIntervalRetention          time.Duration
 	EnergyHourlyRetention            time.Duration
 	MetricResultFactsRetention       time.Duration
@@ -161,9 +159,6 @@ func NewClickHouseRetentionPruner(config ClickHouseRetentionConfig) (*ClickHouse
 	}
 	numeric15MinRetention, err := resolveRetentionDuration(config.Numeric15MinRetention, DefaultClickHouseNumeric15MinRetention, "numeric_gauge_15min_states")
 	if err != nil {
-		return nil, err
-	}
-	if _, err := resolveRetentionDuration(config.NumericHourlyRetention, DefaultClickHouseNumericHourlyRetention, "numeric_hourly_retention"); err != nil {
 		return nil, err
 	}
 	energyIntervalRetention, err := resolveRetentionDuration(config.EnergyIntervalRetention, DefaultClickHouseEnergyIntervalRetention, "energy_interval_facts")

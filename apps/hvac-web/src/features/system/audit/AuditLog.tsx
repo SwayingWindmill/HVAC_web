@@ -41,7 +41,7 @@ function isAuditCategory(value: string): value is AuditCategory {
   return AUDIT_CATEGORIES.some((item) => item.value === value);
 }
 
-// The Tenant's newest audit records. Review builds have no Audit Ledger and never query it.
+// The Tenant's newest audit records.
 export function AuditLog({ viewer, canRead, active }: AuditLogProps) {
   const [category, setCategory] = useState<AuditCategory>('all');
   const [search, setSearch] = useState('');
@@ -49,7 +49,7 @@ export function AuditLog({ viewer, canRead, active }: AuditLogProps) {
     () => (category === 'all' ? { limit: AUDIT_SEARCH_LIMIT } : { limit: AUDIT_SEARCH_LIMIT, category }),
     [category],
   );
-  const query = useAuditSearch(filter, canRead && active && !__HVAC_WEB_FRONTEND_REVIEW__);
+  const query = useAuditSearch(filter, canRead && active);
   const rows = useMemo<AuditRow[]>(() => {
     const presented = (query.data ?? []).map((record) => presentAuditRecord(record, viewer));
     const term = search.trim();
@@ -62,11 +62,10 @@ export function AuditLog({ viewer, canRead, active }: AuditLogProps) {
       : presented;
   }, [query.data, search, viewer]);
   const forbidden = !canRead || (query.error instanceof PlatformApiError && query.error.problem.status === 403);
-  const ready = !forbidden && !__HVAC_WEB_FRONTEND_REVIEW__ && query.isSuccess;
+  const ready = !forbidden && query.isSuccess;
 
   function renderContent() {
     if (forbidden) return <Notice>当前账号没有查看操作记录的权限</Notice>;
-    if (__HVAC_WEB_FRONTEND_REVIEW__) return <Notice>评审构建不连接操作记录服务</Notice>;
     if (query.isPending) {
       return (
         <div className="flex flex-col gap-2 p-4">
@@ -140,7 +139,7 @@ export function AuditLog({ viewer, canRead, active }: AuditLogProps) {
             <ToggleGroupItem
               key={item.value}
               value={item.value}
-              disabled={forbidden || __HVAC_WEB_FRONTEND_REVIEW__}
+              disabled={forbidden}
               className="text-xs"
             >
               {item.label}

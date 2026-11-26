@@ -8,7 +8,6 @@ ignore (
 	./cd
 	./contracts
 	./deploy/acceptance
-	./deploy/analytics
 	./deploy/observability
 	./deploy/platform/phase1/clickhouse
 	./deploy/platform/phase1/environments
@@ -21,9 +20,7 @@ ignore (
 	./deploy/platform/phase1/runtime
 	./deploy/sites
 	./dist
-	./dist-frontend-review
 	./docs
-	./edge
 	./hvac-backend
 	./infra
 	./node_modules

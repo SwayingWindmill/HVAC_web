@@ -385,7 +385,7 @@ export function describeConcentratorError(
       case 'CONCENTRATOR_TRANSPORT_UNAVAILABLE':
         return '现场网关远程连接通道暂未就绪，请先到「现场网关」确认网关状态';
       case 'CONCENTRATOR_EDGE_FAILED':
-        return '现场网关转发集中器请求失败，请检查网关 Node-RED 运行状态与串口通信后重试';
+        return '现场网关转发集中器请求失败，请检查现场网关运行状态与串口通信后重试';
       case 'CONCENTRATOR_SERVICE_UNAVAILABLE':
         return '平台集中器管理服务暂时不可用，请稍后重试';
       default:
