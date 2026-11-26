@@ -1,10 +1,10 @@
-# Antigravity tool mapping for pstack (HVAC_web)
+# Antigravity & Claude Code tool mapping for pstack (HVAC_web)
 
-This repository runs dual-harness pure-Markdown skills under `.agents/skills/` (Antigravity) and `.claude/skills/` (Claude Code), kept byte-for-byte identical via `npm run repo:check`. Resolve Claude Code idioms named in pstack skills here.
+This repository runs dual-harness pure-Markdown skills under `.agents/skills/` (Antigravity) and `.claude/skills/` (Claude Code), kept byte-for-byte identical via `npm run repo:check`. Resolve Cursor/pstack idioms named in skills here.
 
-## Tool actions
+## Antigravity tool actions
 
-| pstack / Claude action | Antigravity equivalent |
+| pstack / Cursor action | Antigravity equivalent |
 |------------------------|------------------------|
 | Read a file | `read_file` (use `StartLine` / `EndLine` slices per `AGENTS.md`) |
 | Create / edit a file | `write_file` / `edit_file` (sync `.agents/skills/` and `.claude/skills/` when editing skills) |
@@ -15,29 +15,39 @@ This repository runs dual-harness pure-Markdown skills under `.agents/skills/` (
 | Dispatch subagents (`Agent` / `Task`) | `invoke_subagent` with `TypeName`, `Role`, `Prompt`, `Model`, and `Workspace` (`"inherit"`, `"share"` isolated worktree, or `"branch"` clone; multiple calls run in parallel; end turn to await). Note `"share"` does not inherit untracked main-repo `.scratch/` files |
 | Steer or stop subagents | `send_message` (`Recipient: conversationId`) and `manage_subagents` (`Action`: `"list"`, `"kill"` with required `ConversationIds: [...]`, `"kill_all"`) |
 | Track tasks (`TaskCreate` / `TodoWrite`) | Keep an untracked checklist in `.scratch/todo.md` or `<appDataDir>/brain/<conversation-id>/scratch/todo.md` (never `.audit/`) |
-| Ask user (`AskUserQuestion`) | `ask_question` (`questions: [{ question, options, is_multi_select }]`) |
+| Ask user (`AskUserQuestion` / `AskQuestion`) | `ask_question` (`questions: [{ question, options, is_multi_select }]`) |
 | Recurring/delayed check (`loop`) | `schedule` (`Prompt` plus `DurationSeconds` or `CronExpression`; returns immediately so end turn to receive wakeups; never shell `sleep`) |
 | MCP tool (`mcp__<server>__<tool>`) | `mcp_<serverName>_<toolName>` or `call_mcp_tool` after reading `<appDataDir>/mcp/<serverName>/<toolName>.json` (`~/.gemini/config/mcp_config.json`) |
 | Session transcript lookup | `<appDataDir>/brain/<conversation-id>/.system_generated/logs/transcript.jsonl` (`transcript_full.jsonl` when `truncated_fields` is present) |
 
-## Subagent policy
+## Antigravity subagent policy
 
+- **Worker kickoff**: Start every subagent prompt with `Read <abs-path-to-poteto-mode>/worker.md before anything else.` plus `AGENTS.md` and required `SKILL.md` paths (not full file dumps).
 - **Writable / shell / network work**: Use `TypeName: "self"`. Pass `Workspace: "share"` (or create an isolated git worktree) whenever multiple workers edit code or run builds concurrently.
 - **Read-only inspection / review**: Use `TypeName: "research"` (has `read_file`, `codegraph_explore`, read-only `run_command`, and MCP read tools; cannot edit/write files or access external network). When a reviewer needs `write_file`, `.scratch/` temp files, or network (`gh`), use `TypeName: "self"` with explicit instructions not to modify application code outside scope.
 - **Windows + WSL `Workspace: "share"` rule**: On Windows Antigravity, `Workspace: "share"` and Windows `git worktree add` create worktrees whose `.git` pointers store Windows paths (`E:/...`). Inside a Windows worktree, WSL `git` fails (`fatal: not a git repository`) and WSL `gh` requires `-R <owner>/<repo>` (or run `gh` from `/mnt/e/Code/HVAC_web`); run `git` commands inside that worktree via Windows `run_command`, keep builds/tests in WSL, and **never** run `git worktree prune` in WSL while Windows worktrees exist.
 - **Model selection**: Default to `Model: "inherit"` unless the user explicitly asks for another model (`flash`, `flash_lite`, `pro`) or explicitly configures `~/.gemini/config/pstack-models.md` (included from `~/.gemini/config/GEMINI.md`) via [`../../setup-pstack/SKILL.md`](../../setup-pstack/SKILL.md). Keep `"inherit"` whenever no override sheet exists.
-- **Brief hygiene**: Pass `AGENTS.md` and required `SKILL.md` paths (not full file dumps). Always end subagents holding shared/branched workspaces via `manage_subagents` before committing or merging.
+- **Cleanup**: Always list and stop subagents holding shared/branched workspaces via `manage_subagents` before committing or merging.
+
+## Claude Code harness parity
+
+When running this repo in Claude Code:
+
+- **Subagent dispatch**: Map `Task` -> `Agent` (runs in background by default; omit `run_in_background`). Map `readonly: true` -> `subagent_type: "Explore"` (still instruct `"do not edit files"` and check `git status` afterward because `Explore` keeps Bash). Map `readonly: false` -> `subagent_type: "general-purpose"` (keeps MCP servers). Map `environment: "cloud"` -> `isolation: "worktree"`. Map `resume` -> spawn a fresh `Agent` with the prior output in its brief.
+- **Models & rules**: Claude Code auto-loads `~/.claude/rules/pstack-models.md` (and `.claude/rules/pstack-models.md` if present). Map `<model> <effort>` values (for example `opus xhigh`) to `Agent` `model` (`opus`, `sonnet`, `haiku`, `fable`) and `effort` (`low`, `medium`, `high`, `xhigh`), and omit `model` for `inherit-parent` or `auto`.
+- **Cursor-only steps**: Skip Cursor Automations, `update_state`, or Bugbot dashboard waits with one line (`Skipped in Claude Code: <step>. <reason>.`), and triage GitHub PR comments via WSL `gh` + `bugbot-triage.md`.
 
 ## Repository skill equivalents
 
 | Upstream reference | Repository equivalent |
 |--------------------|-----------------------|
-| App UI driver / `verify` | Project [`../../verify/SKILL.md`](../../verify/SKILL.md) (Playwright 1440px against port `5190`/`5194` or `https://localhost:8443`, evidence in `.scratch/verify/`) |
+| App UI driver / `control-ui` | Project [`../../verify/SKILL.md`](../../verify/SKILL.md) (Playwright 1440px against port `5190`/`5194` or `https://localhost:8443`, evidence in `.scratch/verify/`) |
 | Formal invariant driver | Project [`../../command-safety/SKILL.md`](../../command-safety/SKILL.md) (`npm run command:formal`) |
 | `comment-sicko` agent (`no-comments`) | Read [`../../no-comments/references/comment-sicko-prompt.md`](../../no-comments/references/comment-sicko-prompt.md) and pass it to `invoke_subagent` |
+| `principle-*` leaf directories | [`../references/principles/`](principles/) (`24` principle guides) |
 | Skill authoring guidance | Built-in `agy-customizations` skill, keeping `AGENTS.md` + `npm run repo:check` mirror & LF rules |
 | Governance & static gates | `scripts/domain-task-matrix.ts`, `npm run check`, `npm run repo:check`, `npm run design:check` |
-| Skill helper scripts (WSL Node 24+ / Bash) | `scripts/{check-plan.ts,resume.ts,worktree-audit.ts}`, `show-me-your-work/scripts/log.sh`, `statechart/scripts/statechart` |
+| Skill helper scripts (WSL Node 24+ / Bash / Windows) | `scripts/{resume.ts,worktree-audit.ts}`, `show-me-your-work/scripts/log.sh`, `statechart/scripts/statechart` |
 
 ## Instructions & skill sync rule
 

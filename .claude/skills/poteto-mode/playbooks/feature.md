@@ -2,8 +2,8 @@
 
 **You own the design. Plan, review, verify.** Delegate implementation where beneficial and stay in the lead.
 
-1. `how` over the affected subsystem (`why` if touching historical defenses or thresholds, `GLOSSARY.md` + `docs/adr/` check).
-2. `architect` for parallel design exploration when crossing function/module boundaries, plus `blast-radius` when touching shared contracts or existing invariants.
+1. Trace the affected subsystem directly (`codegraph_explore`, `read_file`, `GLOSSARY.md` + `docs/adr/`, plus [`why`](../../why/SKILL.md) if touching historical defenses or thresholds).
+2. Run [`architect`](../../architect/SKILL.md) when crossing function or module boundaries (or [`arena`](../../arena/SKILL.md) for a large or contested design), plus [`blast-radius`](../../blast-radius/SKILL.md) when touching shared contracts or existing invariants.
 3. Write the throughput checkpoint as four todo items (write `n/a: <reason>` if single-file/no fan-out rather than dropping items):
    - **Blocking first steps.** Gates/grounding before fan-out.
    - **Independent workstreams.** Disjoint files/services/layers parallelize; shared writes serialize.

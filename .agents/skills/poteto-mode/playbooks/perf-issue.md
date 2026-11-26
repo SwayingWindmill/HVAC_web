@@ -3,7 +3,7 @@
 **You own the measurement story. Plan, review, verify the numbers.** Tie every fix to a measurement; never guess from source instead of profiling.
 
 1. Capture a baseline trace/measurement on the matching surface (Go `pprof`, browser trace via [`verify`](../../verify/SKILL.md) / Playwright, `node --cpu-prof`, or realistic load script). Vet the baseline and every subsequent number with [`benchmark-checklist`](../../benchmark-checklist/SKILL.md).
-2. Run [`how`](../../how/SKILL.md) to ground hypotheses. Never claim a ceiling without measuring first. Try performance mantras cheapest-first:
+2. Trace the hot path directly (`codegraph_explore`, `read_file`, `git grep -n`, plus [`why`](../../why/SKILL.md) if history matters) to ground hypotheses. Never claim a ceiling without measuring first. Try performance mantras cheapest-first:
    1. Don't do it (drop work whose result nothing consumes).
    2. Do it, but don't do it again (cache/reuse safely).
    3. Do it less (batch, narrow queries, trim allocations).

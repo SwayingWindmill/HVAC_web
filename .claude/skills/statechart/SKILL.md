@@ -12,10 +12,16 @@ Note for `HVAC_web`: for the repo's control-command and MQTT correlation state m
 
 ## Run
 
-Work in a scratch folder under `.scratch/` (or `/tmp` outside the repo). Run inside WSL with a **login shell** (`wsl -e bash -lc ...`) so Node 24+ and `/home/haozhang/.local/bin` (`mise`) are on `PATH`. Write a TLA+ spec and its config, then run:
+Work in a scratch folder under `.scratch/` (or `/tmp` outside the repo). Run inside WSL with a **login shell** (`wsl -e bash -lc ...`) so Node 24+ and `/home/haozhang/.local/bin` (`mise`) are on `PATH`, or run directly on native Windows with Node `22.18–22.x` or `>= 23.6`. Write a TLA+ spec and its config, then run:
 
 ```sh
 wsl -e bash -lc ".agents/skills/statechart/scripts/statechart SPEC.tla [--config FILE] [--view FILE] [--out DIR]"
+```
+
+On native Windows:
+
+```sh
+node --disable-warning=ExperimentalWarning .agents/skills/statechart/scripts/statechart.ts SPEC.tla [--config FILE] [--view FILE] [--out DIR]
 ```
 
 `scripts/statechart.ts` is TypeScript with no external npm runtime dependencies; the wrapper selects Node (`22.18–22.x` or `>= 23.6`), Bun, or Deno automatically.

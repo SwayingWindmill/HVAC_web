@@ -4,7 +4,7 @@ Resolve app verification through `poteto-mode`'s Non-negotiables (`verify`, `com
 
 **You own the contract. Structure changes; behavior does not.** If cleanup reveals a missing feature or real bug, split it out cleanly rather than smuggling behavior changes inside a refactor. Large cross-cutting overhauls route to `figure-it-out`.
 
-1. **Pin the behavior contract first.** Run `how` over the affected subsystem, then write a characterization test, snapshot, or equivalence check before moving code. Typecheck/lint alone is not a behavior pin.
+1. **Pin the behavior contract first.** Trace the affected subsystem directly, then write a characterization test, snapshot, or equivalence check before moving code. Typecheck/lint alone is not a behavior pin.
 2. **Name the missing structure** (`Model the Domain` in `poteto-mode`). Leave boring local code alone; a refactor must delete branches or impossible states rather than adding indirection.
 3. **Name the target shape** (`Foundational Thinking`, `Redesign from First Principles`). Run `architect` if reshaping module/function boundaries.
 4. **Subtract before you add.** Delete dead code, collapse one-caller wrappers, drop redundant checks (**Subtract Before You Add**, **Laziness Protocol**), and revert speculative cleanups.
