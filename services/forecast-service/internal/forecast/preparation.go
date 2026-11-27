@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -90,6 +91,10 @@ type FrozenFeatureValues struct {
 	SchemaVersion         int                  `json:"schemaVersion"`
 	TargetMetricVersionID string               `json:"targetMetricVersionId"`
 	Series                []FrozenMetricSeries `json:"series"`
+	Timezone              string               `json:"timezone,omitempty"`
+	WeatherObservations   []WeatherObservation `json:"weatherObservations,omitempty"`
+	WeatherSource         string               `json:"weatherSource,omitempty"`
+	WeatherFallbackReason string               `json:"weatherFallbackReason,omitempty"`
 }
 
 type PreparedInput struct {
@@ -131,20 +136,40 @@ type InputHistory interface {
 	ReadMetricSeries(context.Context, MetricHistoryQuery) ([]MetricFact, error)
 }
 
+type PreparerOptions struct {
+	WeatherHistory  WeatherHistoryReader
+	WeatherForecast WeatherForecastProvider
+	DefaultTimezone string
+}
+
 type Preparer struct {
-	store   PreparationStore
-	history InputHistory
-	clock   Clock
+	store           PreparationStore
+	history         InputHistory
+	weatherHistory  WeatherHistoryReader
+	weatherForecast WeatherForecastProvider
+	defaultTimezone string
+	clock           Clock
 }
 
 func NewPreparer(store PreparationStore, history InputHistory, clock Clock) (*Preparer, error) {
+	return NewPreparerWithOptions(store, history, clock, PreparerOptions{})
+}
+
+func NewPreparerWithOptions(store PreparationStore, history InputHistory, clock Clock, options PreparerOptions) (*Preparer, error) {
 	if store == nil || history == nil {
 		return nil, errors.New("forecast preparation store and authoritative history reader are required")
 	}
 	if clock == nil {
 		clock = time.Now
 	}
-	return &Preparer{store: store, history: history, clock: clock}, nil
+	return &Preparer{
+		store:           store,
+		history:         history,
+		weatherHistory:  options.WeatherHistory,
+		weatherForecast: options.WeatherForecast,
+		defaultTimezone: strings.TrimSpace(options.DefaultTimezone),
+		clock:           clock,
+	}, nil
 }
 
 func (preparer *Preparer) Prepare(ctx context.Context, request PreparationRequest) (PreparedForecast, error) {
@@ -167,8 +192,8 @@ func (preparer *Preparer) Prepare(ctx context.Context, request PreparationReques
 	if err != nil {
 		return PreparedForecast{}, fmt.Errorf("resolve Forecast feature metric provenance: %w", err)
 	}
-	// A week of history lets the baseline average each time of day over earlier days.
-	lookbackMinutes := max(profileDays*24*60, definition.HorizonMinutes, granularity*4)
+	// Four weeks of history covers weekday/weekend/holiday profiles and temperature regimes.
+	lookbackMinutes := max(historyLookbackDays*24*60, definition.HorizonMinutes, granularity*4)
 	from := forecastOrigin.Add(-time.Duration(lookbackMinutes) * time.Minute)
 	series := make([]FrozenMetricSeries, 0, len(metricRefs))
 	latestDataTime := time.Time{}
@@ -192,13 +217,31 @@ func (preparer *Preparer) Prepare(ctx context.Context, request PreparationReques
 		}
 		series = append(series, FrozenMetricSeries{MetricVersionID: metricVersionID, Unit: unit, Facts: facts})
 	}
-	values := FrozenFeatureValues{SchemaVersion: 1, TargetMetricVersionID: targetMetricVersionID, Series: series}
+	timezone := schemaTimezone(definition.FeatureSchema)
+	if timezone == "" {
+		timezone = preparer.defaultTimezone
+	}
+	siteWeather, externalWeather, weatherIssueTime, weatherSource, weatherFallback := preparer.collectWeather(ctx, request, from, forecastOrigin, definition.HorizonMinutes, granularity)
+	slot := time.Duration(granularity) * time.Minute
+	mergedWeather := mergeWeatherObservations(slot, siteWeather, externalWeather)
+	if len(mergedWeather) == 0 && weatherFallback == "" && (preparer.weatherHistory != nil || preparer.weatherForecast != nil) {
+		weatherFallback = "NO_WEATHER_OBSERVATIONS"
+	}
+	values := FrozenFeatureValues{
+		SchemaVersion:         1,
+		TargetMetricVersionID: targetMetricVersionID,
+		Series:                series,
+		Timezone:              timezone,
+		WeatherObservations:   mergedWeather,
+		WeatherSource:         weatherSource,
+		WeatherFallbackReason: weatherFallback,
+	}
 	prepared := PreparedInput{
 		TenantID: request.TenantID, SiteID: request.SiteID, SubjectType: request.SubjectType, SubjectID: request.SubjectID, Target: request.Target,
 		DeploymentID: definition.DeploymentID, ModelID: definition.ModelID, ModelVersionID: definition.ModelVersionID, ModelVersion: definition.ModelVersion,
 		FeatureSetVersionID: definition.FeatureSetVersionID, FeatureSetVersion: definition.FeatureSetVersion, TopologyVersionID: definition.TopologyVersionID,
 		ForecastOrigin: forecastOrigin, HorizonMinutes: definition.HorizonMinutes, Granularity: definition.Granularity,
-		LatestDataTime: latestDataTime, MetricVersionRefs: metricRefs, FeatureValues: values,
+		LatestDataTime: latestDataTime, WeatherIssueTime: weatherIssueTime, MetricVersionRefs: metricRefs, FeatureValues: values,
 	}
 	prepared.InputChecksum, err = checksumPreparedInput(prepared)
 	if err != nil {
@@ -332,19 +375,111 @@ func checksumPreparedInput(input PreparedInput) (string, error) {
 	return hex.EncodeToString(digest[:]), nil
 }
 
-func executionInput(values FrozenFeatureValues) ([]Observation, string, error) {
+func (preparer *Preparer) collectWeather(
+	ctx context.Context,
+	request PreparationRequest,
+	from time.Time,
+	forecastOrigin time.Time,
+	horizonMinutes int,
+	granularity int,
+) ([]WeatherObservation, []WeatherObservation, *time.Time, string, string) {
+	var (
+		siteObs        []WeatherObservation
+		extObs         []WeatherObservation
+		issueTime      *time.Time
+		fallbackReason string
+	)
+	if preparer.weatherHistory != nil {
+		obs, err := preparer.weatherHistory.ReadWeatherSeries(ctx, WeatherHistoryQuery{
+			TenantID: request.TenantID, SiteID: request.SiteID,
+			From: from, To: forecastOrigin, GranularityMinutes: granularity,
+		})
+		if err != nil {
+			fallbackReason = "SITE_WEATHER_UNAVAILABLE"
+		} else {
+			siteObs = obs
+		}
+	}
+	if preparer.weatherForecast != nil {
+		ext, issuedAt, err := preparer.weatherForecast.ForecastWeather(ctx, WeatherForecastRequest{
+			SiteID:             request.SiteID,
+			From:               forecastOrigin,
+			To:                 forecastOrigin.Add(time.Duration(horizonMinutes) * time.Minute),
+			GranularityMinutes: granularity,
+		})
+		if err != nil {
+			if fallbackReason != "" {
+				fallbackReason += ";OPEN_METEO_UNAVAILABLE"
+			} else {
+				fallbackReason = "OPEN_METEO_UNAVAILABLE"
+			}
+		} else if len(ext) > 0 {
+			extObs = ext
+			if !issuedAt.IsZero() {
+				clamped := issuedAt.UTC()
+				if clamped.After(forecastOrigin) {
+					clamped = forecastOrigin
+				}
+				issueTime = &clamped
+			}
+		}
+	}
+	source := ""
+	switch {
+	case len(siteObs) > 0 && len(extObs) > 0:
+		source = WeatherSourceSiteAndOpenMeteo
+	case len(siteObs) > 0:
+		source = WeatherSourceSiteSensors
+	case len(extObs) > 0:
+		source = WeatherSourceOpenMeteo
+	case preparer.weatherHistory != nil || preparer.weatherForecast != nil:
+		source = WeatherSourceNone
+	}
+	return siteObs, extObs, issueTime, source, fallbackReason
+}
+
+func schemaTimezone(featureSchema json.RawMessage) string {
+	if len(featureSchema) == 0 {
+		return ""
+	}
+	var parsed struct {
+		Timezone string `json:"timezone"`
+	}
+	if err := json.Unmarshal(featureSchema, &parsed); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(parsed.Timezone)
+}
+
+type executionInputData struct {
+	Observations          []Observation
+	Unit                  string
+	Timezone              string
+	WeatherObservations   []WeatherObservation
+	WeatherSource         string
+	WeatherFallbackReason string
+}
+
+func executionInput(values FrozenFeatureValues) (executionInputData, error) {
 	for _, series := range values.Series {
 		if series.MetricVersionID != values.TargetMetricVersionID {
 			continue
 		}
 		if len(series.Facts) < 4 {
-			return nil, "", errors.New("frozen target metric history has fewer than four facts")
+			return executionInputData{}, errors.New("frozen target metric history has fewer than four facts")
 		}
 		observations := make([]Observation, 0, len(series.Facts))
 		for _, fact := range series.Facts {
-			observations = append(observations, Observation{ObservedAt: fact.PeriodEnd.UTC(), Value: fact.Value})
+			observations = append(observations, Observation{ObservedAt: fact.PeriodStart.UTC(), Value: fact.Value})
 		}
-		return observations, series.Unit, nil
+		return executionInputData{
+			Observations:          observations,
+			Unit:                  series.Unit,
+			Timezone:              values.Timezone,
+			WeatherObservations:   slices.Clone(values.WeatherObservations),
+			WeatherSource:         values.WeatherSource,
+			WeatherFallbackReason: values.WeatherFallbackReason,
+		}, nil
 	}
-	return nil, "", errors.New("frozen feature values do not contain the target metric series")
+	return executionInputData{}, errors.New("frozen feature values do not contain the target metric series")
 }

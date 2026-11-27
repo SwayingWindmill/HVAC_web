@@ -137,6 +137,7 @@ const DECLARED_SQL_EXCEPTIONS: readonly ExceptionRule[] = Object.freeze([
   { unitPrefix: 'services/optimization-service/', schema: 'analytics', relations: ['optimization_evaluations'], allowWrite: true },
   { unitPrefix: 'services/forecast-service/', schema: 'analytics', relations: ['forecast_series'], allowWrite: true },
   { unitPrefix: 'services/forecast-service/', schema: 'analytics', relations: ['metric_result_facts'], allowWrite: false },
+  { unitPrefix: 'services/forecast-service/', schema: 'telemetry_history', relations: ['observations'], allowWrite: false },
   { unitPrefix: 'services/mv-service/', schema: 'analytics', relations: ['metric_result_facts'], allowWrite: false },
   { unitPrefix: 'services/mv-service/', schema: 'analytics', relations: ['site_condition_anchors_hourly_latest'], allowWrite: false },
 ]);

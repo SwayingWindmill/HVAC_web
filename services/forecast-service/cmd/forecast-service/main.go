@@ -148,7 +148,15 @@ func runService(logger *slog.Logger) error {
 		observability.Dependency{Name: "clickhouse", Required: true, Check: history.Ping},
 	)
 
-	preparer, err := forecast.NewPreparer(publication, history, time.Now)
+	openMeteoProvider, err := forecast.NewOpenMeteoProviderFromEnv()
+	if err != nil {
+		return err
+	}
+	preparer, err := forecast.NewPreparerWithOptions(publication, history, time.Now, forecast.PreparerOptions{
+		WeatherHistory:  history,
+		WeatherForecast: openMeteoProvider,
+		DefaultTimezone: envOrDefault("FORECAST_DEFAULT_TIMEZONE", "Asia/Shanghai"),
+	})
 	if err != nil {
 		return err
 	}
@@ -661,7 +669,16 @@ func executeForecastJob(ctx context.Context, queue forecastJobQueue, store forec
 	if len(points) > 0 {
 		quality = points[0].Quality
 	}
-	output := map[string]any{"forecastSnapshotId": request.ForecastSnapshotID, "forecastJobId": request.ForecastJobID, "pointCount": len(points), "quality": quality}
+	output := map[string]any{
+		"forecastSnapshotId": request.ForecastSnapshotID,
+		"forecastJobId":      request.ForecastJobID,
+		"pointCount":         len(points),
+		"quality":            quality,
+		"weatherSource":      request.WeatherSource,
+	}
+	if request.WeatherFallbackReason != "" {
+		output["weatherFallbackReason"] = request.WeatherFallbackReason
+	}
 	finalizeCtx, finalizeCancel := context.WithTimeout(context.WithoutCancel(ctx), defaultFinalizeJobTimeout)
 	err = queue.Complete(finalizeCtx, job, output, time.Now().UTC())
 	finalizeCancel()
