@@ -3,6 +3,7 @@ package optimization
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -209,6 +210,39 @@ func stagingTopologyFromTwin(twin planttwin.SiteTwin) StagingTopology {
 	}
 
 	return topology
+}
+
+// ListStagingSites enumerates distinct tenant/site pairs known from scheduled or manual
+// OPTIMIZATION_RUN jobs so sites whose policy/deployment/zone-temp preparation stalled still
+// participate in sensor-only staging evaluation.
+func (store *PostgresStore) ListStagingSites(ctx context.Context, _ time.Time) ([]StagingSiteScope, error) {
+	if store == nil || store.pool == nil {
+		return nil, errors.New("optimization postgres store is unavailable")
+	}
+	rows, err := store.pool.Query(ctx, `SELECT DISTINCT tenant_id::text, site_id::text
+FROM core_registry.job_instances
+WHERE job_type = 'OPTIMIZATION_RUN'
+  AND tenant_id IS NOT NULL
+  AND site_id IS NOT NULL
+ORDER BY tenant_id::text, site_id::text
+LIMIT 1000`)
+	if err != nil {
+		return nil, fmt.Errorf("list optimization staging sites from job_instances: %w", err)
+	}
+	defer rows.Close()
+
+	var scopes []StagingSiteScope
+	for rows.Next() {
+		var scope StagingSiteScope
+		if err := rows.Scan(&scope.TenantID, &scope.SiteID); err != nil {
+			return nil, fmt.Errorf("scan optimization staging site: %w", err)
+		}
+		scopes = append(scopes, scope)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate optimization staging sites: %w", err)
+	}
+	return scopes, nil
 }
 
 func collectBoundDeviceIdentifiers(devices []planttwin.TwinDevice) []string {

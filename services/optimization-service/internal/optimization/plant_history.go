@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -240,14 +241,19 @@ func aggregatePlantBucketsFromTwin(plan twinCOPQueryPlan, rows []plantMetricBuck
 				v := *ch.unit.RatedPowerKW
 				rated = &v
 			}
+			feederAux := 0.0
+			if finitePositive(ch.unit.FeederAuxiliaryPowerKW) {
+				feederAux = math.Max(0, ch.unit.FeederAuxiliaryPowerKW)
+			}
 			slotBuckets = append(slotBuckets, PlantBucket{
-				Bucket:       at,
-				DeviceID:     ch.unit.AssetID,
-				PowerKW:      pwr,
-				ChwLeavingC:  chwL,
-				ChwEnteringC: chwE,
-				CwLeavingC:   cwL,
-				RatedPowerKW: rated,
+				Bucket:                 at,
+				DeviceID:               ch.unit.AssetID,
+				PowerKW:                pwr,
+				FeederAuxiliaryPowerKW: feederAux,
+				ChwLeavingC:            chwL,
+				ChwEnteringC:           chwE,
+				CwLeavingC:             cwL,
+				RatedPowerKW:           rated,
 			})
 		}
 		for _, loadPB := range plan.coolingLoads {
@@ -305,13 +311,15 @@ func decodePlantMetricBucketRows(source io.Reader) ([]plantMetricBucketRow, erro
 
 func decodePlantBuckets(source io.Reader) ([]PlantBucket, error) {
 	type row struct {
-		Bucket       string   `json:"bucket"`
-		DeviceID     string   `json:"deviceId"`
-		PowerKW      *float64 `json:"powerKW"`
-		ChwLeavingC  *float64 `json:"chwLeavingC"`
-		ChwEnteringC *float64 `json:"chwEnteringC"`
-		CwLeavingC   *float64 `json:"cwLeavingC"`
-		CoolingKW    *float64 `json:"coolingKW"`
+		Bucket                 string   `json:"bucket"`
+		DeviceID               string   `json:"deviceId"`
+		PowerKW                *float64 `json:"powerKW"`
+		FeederAuxiliaryPowerKW float64  `json:"feederAuxiliaryPowerKW"`
+		ChwLeavingC            *float64 `json:"chwLeavingC"`
+		ChwEnteringC           *float64 `json:"chwEnteringC"`
+		CwLeavingC             *float64 `json:"cwLeavingC"`
+		CoolingKW              *float64 `json:"coolingKW"`
+		RatedPowerKW           *float64 `json:"ratedPowerKW"`
 	}
 	decoder := json.NewDecoder(source)
 	buckets := []PlantBucket{}
@@ -328,9 +336,14 @@ func decodePlantBuckets(source io.Reader) ([]PlantBucket, error) {
 		if err != nil {
 			return nil, err
 		}
+		feederAux := 0.0
+		if finitePositive(value.FeederAuxiliaryPowerKW) {
+			feederAux = value.FeederAuxiliaryPowerKW
+		}
 		buckets = append(buckets, PlantBucket{
-			Bucket: at.UTC(), DeviceID: value.DeviceID, PowerKW: value.PowerKW, ChwLeavingC: value.ChwLeavingC,
-			ChwEnteringC: value.ChwEnteringC, CwLeavingC: value.CwLeavingC, CoolingKW: value.CoolingKW,
+			Bucket: at.UTC(), DeviceID: value.DeviceID, PowerKW: value.PowerKW, FeederAuxiliaryPowerKW: feederAux,
+			ChwLeavingC: value.ChwLeavingC, ChwEnteringC: value.ChwEnteringC, CwLeavingC: value.CwLeavingC,
+			CoolingKW: value.CoolingKW, RatedPowerKW: value.RatedPowerKW,
 		})
 	}
 }

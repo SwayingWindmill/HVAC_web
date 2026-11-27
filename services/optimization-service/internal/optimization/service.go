@@ -149,6 +149,7 @@ type Service struct {
 	shadow             *shadowSolver
 	shadowReader       ShadowEvaluationReader
 	staging            *StagingEvaluator
+	stagingSiteLister  StagingSiteLister
 	solverResolver     ActiveSolverResolver
 	flywheelStore      GovernanceFlywheelStore
 	siteVisibility     SiteVisibilityChecker

@@ -518,3 +518,180 @@ func TestChillerCOPModelFiltersStandbyNaNInfAndBounds(t *testing.T) {
 		}
 	}
 }
+
+func TestFitPlantFeederAuxiliaryPowerAndColdSeasonCondenserWindow(t *testing.T) {
+	at := time.Date(2026, 11, 20, 0, 0, 0, 0, time.UTC)
+
+	t.Run("standby chiller with 30 kW feeder aux never triggers running or pollutes fit", func(t *testing.T) {
+		buckets := syntheticPlant(at, 120, true)
+		rated := 127.5
+		// Add standby chiller-c reading 30.2-36.0 kW gross with 30 kW feeder aux (0.2-6.0 kW net <= 10% rated).
+		for index := 0; index < 120; index++ {
+			when := at.Add(time.Duration(index-120) * 15 * time.Minute)
+			gross := 30.2 + float64(index%6) // up to 35.2 kW -> net 5.2 kW (< 12.75 kW = 10% of 127.5 kW)
+			buckets = append(buckets, PlantBucket{
+				Bucket:                 when,
+				DeviceID:               "chiller-c",
+				PowerKW:                ptr(gross),
+				FeederAuxiliaryPowerKW: 30,
+				ChwLeavingC:            ptr(7.2),
+				ChwEnteringC:           ptr(11.0),
+				CwLeavingC:             ptr(28.0),
+				RatedPowerKW:           &rated,
+			})
+		}
+		fit := FitPlant(buckets, at.Add(-120*15*time.Minute), at)
+		if fit.History.RunningBuckets != 120 {
+			t.Fatalf("expected 120 running buckets, got %d", fit.History.RunningBuckets)
+		}
+		if fit.History.LoadAllocation["evaporatorDeltaT"] != 120 {
+			t.Fatalf("standby chiller must not pollute evaporatorDeltaT load allocation: %+v", fit.History.LoadAllocation)
+		}
+		byID := map[string]ChillerFit{}
+		for _, ch := range fit.Chillers {
+			byID[ch.DeviceID] = ch
+		}
+		if byID["chiller-c"].Status != ChillerInsufficientData || byID["chiller-c"].Samples != 0 || byID["chiller-c"].MeanCOP != nil {
+			t.Fatalf("standby chiller-c with 30 kW feeder aux must not fit: %+v", byID["chiller-c"])
+		}
+		if byID["chiller-a"].Status != ChillerFitted || byID["chiller-b"].Status != ChillerFitted {
+			t.Fatalf("co-running chillers must remain cleanly fitted: a=%+v b=%+v", byID["chiller-a"], byID["chiller-b"])
+		}
+	})
+
+	t.Run("standby chiller without RatedPowerKW reading ~30-32 kW with 30 kW aux never fits", func(t *testing.T) {
+		var buckets []PlantBucket
+		for index := 0; index < 120; index++ {
+			when := at.Add(time.Duration(index-120) * 15 * time.Minute)
+			buckets = append(buckets,
+				PlantBucket{
+					Bucket:                 when,
+					DeviceID:               "chiller-d-standby",
+					PowerKW:                ptr(30.0 + 1.8*math.Sin(float64(index))),
+					FeederAuxiliaryPowerKW: 30,
+					ChwLeavingC:            ptr(7.0),
+					ChwEnteringC:           ptr(10.0),
+					CwLeavingC:             ptr(25.0),
+				},
+				PlantBucket{Bucket: when, DeviceID: "btu", CoolingKW: ptr(400)},
+			)
+		}
+		fit := FitPlant(buckets, at.Add(-120*15*time.Minute), at)
+		if fit.History.RunningBuckets != 0 {
+			t.Fatalf("expected 0 running buckets for standby 30 kW aux meter, got %+v", fit.History)
+		}
+		if len(fit.Chillers) != 1 || fit.Chillers[0].Status != ChillerInsufficientData || fit.Chillers[0].Samples != 0 {
+			t.Fatalf("expected INSUFFICIENT_DATA with 0 samples, got %+v", fit.Chillers)
+		}
+	})
+
+	t.Run("running chiller deducts 30 kW aux before COP regression and nameplate check", func(t *testing.T) {
+		copFn := func(plr, supply, condenser float64) float64 {
+			return 2 + 6*plr - 3*plr*plr + 0.15*supply - 0.05*condenser
+		}
+		ratedPower := 127.5
+		const auxKW = 30.0
+		var buckets []PlantBucket
+		for index := 0; index < 150; index++ {
+			when := at.Add(time.Duration(index-150) * 15 * time.Minute)
+			phase := float64(index)
+			plr := 0.35 + 0.55*(0.5+0.5*math.Sin(phase/6))
+			load := 450 * plr
+			supply := 6.5 + 1.5*math.Sin(phase/7)
+			condenser := 24.0 + 4.0*math.Sin(phase/11)
+			netPower := load / copFn(plr, supply, condenser)
+			grossMeterPower := netPower + auxKW
+			buckets = append(buckets,
+				PlantBucket{
+					Bucket:                 when,
+					DeviceID:               "chiller-c",
+					PowerKW:                ptr(grossMeterPower),
+					FeederAuxiliaryPowerKW: auxKW,
+					ChwLeavingC:            ptr(supply),
+					ChwEnteringC:           ptr(supply + 4.0),
+					CwLeavingC:             ptr(condenser),
+					RatedPowerKW:           &ratedPower,
+				},
+				PlantBucket{Bucket: when, DeviceID: "btu", CoolingKW: ptr(load)},
+			)
+		}
+		fit := FitPlant(buckets, at.Add(-150*15*time.Minute), at)
+		if len(fit.Chillers) != 1 || fit.Chillers[0].Status != ChillerFitted {
+			t.Fatalf("expected chiller-c fitted after deducting 30 kW aux, got %+v", fit.Chillers)
+		}
+		ch := fit.Chillers[0]
+		if ch.CVRMSEPower == nil || *ch.CVRMSEPower > 1e-4 {
+			t.Fatalf("expected near-exact fit after aux deduction, got CVRMSE=%v", ch.CVRMSEPower)
+		}
+		if math.Abs(ch.Coefficients["chilledWaterSupplyTempC"]-0.15) > 1e-4 || math.Abs(ch.Coefficients["condenserReturnTempC"]+0.05) > 1e-4 {
+			t.Fatalf("expected true compressor COP coefficients recovered, got %+v", ch.Coefficients)
+		}
+	})
+
+	t.Run("cold-season CwLeavingC=13.3C passes plausible while <10C rejects", func(t *testing.T) {
+		copFn := func(plr, supply, condenser float64) float64 {
+			return 2.4 + 5.0*plr - 2.5*plr*plr + 0.14*supply - 0.04*condenser
+		}
+		var buckets []PlantBucket
+		for index := 0; index < 140; index++ {
+			when := at.Add(time.Duration(index-140) * 15 * time.Minute)
+			phase := float64(index)
+			plr := 0.30 + 0.50*(0.5+0.5*math.Sin(phase/5))
+			load := 400 * plr
+			supply := 6.5 + 1.5*math.Sin(phase/7)
+			condenser := 13.3 + 2.0*math.Sin(phase/9) // spans 11.3..15.3 C, hitting Songyaxuan 13.3 C winter window
+			if index == 139 {
+				condenser = 9.5 // below 10 C floor -> implausibleReading
+			}
+			power := load / copFn(plr, supply, condenser)
+			buckets = append(buckets,
+				PlantBucket{
+					Bucket:       when,
+					DeviceID:     "chiller-winter",
+					PowerKW:      ptr(power),
+					ChwLeavingC:  ptr(supply),
+					ChwEnteringC: ptr(supply + 3.5),
+					CwLeavingC:   ptr(condenser),
+				},
+				PlantBucket{Bucket: when, DeviceID: "btu", CoolingKW: ptr(load)},
+			)
+		}
+		// Force an exact 13.3 C bucket inside the steady range.
+		buckets[40].CwLeavingC = ptr(13.3)
+		*buckets[40].PowerKW = (*buckets[41].CoolingKW) / copFn((*buckets[41].CoolingKW)/400, *buckets[40].ChwLeavingC, 13.3)
+
+		fit := FitPlant(buckets, at.Add(-140*15*time.Minute), at)
+		if fit.History.SetAside["implausibleReading"] != 1 {
+			t.Fatalf("expected only <10 C bucket rejected as implausibleReading, got setAside=%+v", fit.History.SetAside)
+		}
+		if len(fit.Chillers) != 1 || fit.Chillers[0].Status != ChillerFitted || fit.Chillers[0].Samples < 130 {
+			t.Fatalf("expected winter condenser buckets (>=10 C, including 13.3 C) to fit cleanly, got %+v", fit.Chillers)
+		}
+	})
+
+	t.Run("plantBucketsFromTwin carries FeederAuxiliaryPowerKW onto PlantBucket", func(t *testing.T) {
+		tenantID := "77777777-1000-7000-8000-000000000001"
+		siteID := "77777777-2000-7000-8000-000000000001"
+		chillerID := "77777777-3000-7000-8000-000000000001"
+		meterID := "77777777-4000-7000-8000-000000000001"
+		rated := 127.5
+		twin := planttwin.SiteTwin{
+			Scope: planttwin.SiteScope{TenantID: tenantID, SiteID: siteID},
+			Units: []planttwin.PlantUnit{
+				{AssetID: chillerID, AssetCode: "chiller-c", AssetType: planttwin.AssetTypeChiller, RatedPowerKW: &rated, FeederAuxiliaryPowerKW: 30},
+			},
+			PointBindings: []planttwin.PointBinding{
+				{PointID: "pt-p", DeviceID: meterID, PointCode: "p_kw", WireSourceKey: "p_kw", PointType: "TELEMETRY", SubjectType: planttwin.SubjectTypeAsset, AssetID: chillerID, BindingRole: planttwin.BindingMeters, SemanticRole: planttwin.RoleActivePower},
+				{PointID: "pt-t", DeviceID: meterID, PointCode: "chw_leaving_temperature", WireSourceKey: "chw_leaving_temperature", PointType: "TELEMETRY", SubjectType: planttwin.SubjectTypeAsset, AssetID: chillerID, BindingRole: planttwin.BindingDescribes, SemanticRole: planttwin.RoleCHWLeavingTemp},
+			},
+		}
+		plan := buildTwinCOPQueryPlan(twin)
+		buckets := aggregatePlantBucketsFromTwin(plan, []plantMetricBucketRow{
+			{Bucket: at, DeviceID: meterID, TelemetryKey: "p_kw", MeanValue: 31.2},
+			{Bucket: at, DeviceID: meterID, TelemetryKey: "chw_leaving_temperature", MeanValue: 7.5},
+		})
+		if len(buckets) != 1 || buckets[0].FeederAuxiliaryPowerKW != 30 {
+			t.Fatalf("expected FeederAuxiliaryPowerKW=30 on PlantBucket, got %+v", buckets)
+		}
+	})
+}
