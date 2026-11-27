@@ -3,6 +3,11 @@ import test from 'node:test';
 import type { Asset, AssetRelationship, Device, TelemetryPoint } from '../apps/hvac-web/src/api/generated/platformGateway.gen.ts';
 import type { PlantReading } from '../apps/hvac-web/src/features/operations/realtime/plant-model.ts';
 import { blockingInterlocks, controlTargets, deviceInlineReadings, plantUnits, unitActivePower } from '../apps/hvac-web/src/features/control/control-model.ts';
+import {
+  evaluateDeviceGates,
+  isSingleLoopCombined,
+  orderHydraulicChain,
+} from '../apps/hvac-web/src/features/control/control-gates.ts';
 import { controlErrorMessage, stepUpErrorPresentation } from '../apps/hvac-web/src/features/control/control-errors.ts';
 import {
   activePriorityLocks,
@@ -376,4 +381,126 @@ test('deviceInlineReadings returns curated present readings up to maxCount, pres
       ['valve.custom_target', '阀门反馈开度'],
     ],
   );
+});
+
+test('evaluateDeviceGates checks all five safety gates in order and surfaces interlock jump targets', () => {
+  const model = {
+    assets: [
+      asset('a-chiller', 'C 机组主机'),
+      asset('a-tower', '3 号冷却塔', 'COOLING_TOWER'),
+      asset('a-cwp', '3 号冷却泵', 'COOLING_WATER_PUMP'),
+      asset('a-chwp', '3 号冷冻泵', 'CHILLED_WATER_PUMP'),
+    ],
+    devices: [
+      device('d-chiller', 'ctrl-chiller-c'),
+      device('d-tower', 'ctrl-tower-3'),
+      device('d-cwp', 'ctrl-cwp-3'),
+      device('d-chwp', 'ctrl-chwp-3'),
+    ],
+    telemetryPoints: [
+      point('p-chiller-start', 'd-chiller', 'start', 'COMMAND', {
+        capability: 'START',
+        interlockChecks: [{ deviceId: 'd-tower', key: 'run_state', expected: 'RUNNING', reason: '须先开启 3 号冷却塔' }],
+      }, { displayName: '启动主机' }),
+      point('p-chiller-stop', 'd-chiller', 'stop', 'COMMAND', { capability: 'STOP' }, { displayName: '停止主机' }),
+      point('p-chiller-sp', 'd-chiller', 'set_chilled_water_temperature_setpoint', 'COMMAND', {
+        capability: 'SET_CHILLED_WATER_TEMPERATURE_SETPOINT',
+        parameterKey: 'setpointC',
+        minimum: 6,
+        maximum: 12,
+        step: 0.5,
+      }, { displayName: '冷冻水出水设定温度', unit: 'Cel' }),
+      point('p-tower-start', 'd-tower', 'start', 'COMMAND', { capability: 'START' }, { displayName: '启动冷却塔' }),
+      point('p-cwp-start', 'd-cwp', 'start', 'COMMAND', { capability: 'START' }, { displayName: '启动冷却泵' }),
+      point('p-chwp-start', 'd-chwp', 'start', 'COMMAND', { capability: 'START' }, { displayName: '启动冷冻泵' }),
+    ],
+    relationships: [
+      controls('r1', 'p-chiller-start', 'a-chiller'),
+      controls('r1b', 'p-chiller-stop', 'a-chiller'),
+      controls('r1c', 'p-chiller-sp', 'a-chiller'),
+      controls('r2', 'p-tower-start', 'a-tower'),
+      controls('r3', 'p-cwp-start', 'a-cwp'),
+      controls('r4', 'p-chwp-start', 'a-chwp'),
+    ],
+  };
+
+  const targets = controlTargets(model, now);
+  const { units, others } = plantUnits(targets, model, now);
+  const chillerTarget = targets.find((target) => target.assetId === 'a-chiller')!;
+  const deviceIdByCode = new Map(model.devices.map((item) => [item.code, item.id]));
+  const nameByDeviceCode = new Map([
+    ['ctrl-chiller-c', 'C 机组主机'],
+    ['ctrl-tower-3', '3 号冷却塔'],
+  ]);
+  const baseInput = {
+    target: chillerTarget,
+    device: { deviceId: 'd-chiller', connection: 'ONLINE' as const, runState: 'STOPPED' as const, latestSampleAt: '2026-10-11T00:00:00Z' },
+    mode: 'REMOTE_AUTO' as const,
+    maintenance: null,
+    lock: undefined,
+    priorityLock: undefined,
+    commands: [],
+    targets,
+    runStateByDeviceCode: new Map([['ctrl-tower-3', 'STOPPED'], ['ctrl-chiller-c', 'STOPPED']]),
+    nameByDeviceCode,
+    deviceIdByCode,
+    myId: 'u-1',
+    timeZone: 'Asia/Shanghai',
+    nowMs: Date.parse('2026-10-11T00:01:00Z'),
+  };
+
+  // Gate 5 blocked by stopped tower with jump target resolved to 3 号冷却塔.
+  const interlockBlocked = evaluateDeviceGates(baseInput);
+  assert.equal(interlockBlocked.canAct, false);
+  assert.equal(interlockBlocked.canSet, true);
+  assert.equal(interlockBlocked.blockingGateIndex, 4);
+  assert.equal(interlockBlocked.gates[4].status, 'fail');
+  assert.equal(interlockBlocked.gates[4].jumpTargetAssetId, 'a-tower');
+  assert.equal(interlockBlocked.gates[4].jumpTargetName, '3 号冷却塔');
+
+  // Gate 1 blocks everything in manual override.
+  const manualBlocked = evaluateDeviceGates({ ...baseInput, mode: 'MANUAL_OVERRIDE' });
+  assert.equal(manualBlocked.canAct, false);
+  assert.equal(manualBlocked.canSet, false);
+  assert.equal(manualBlocked.blockingGateIndex, 0);
+  assert.equal(manualBlocked.gates[0].status, 'fail');
+
+  // Gate 3 maintenance window blocks starting and setpoints, yet warns and permits stopping a running chiller.
+  const maintStart = evaluateDeviceGates({
+    ...baseInput,
+    maintenance: { id: 'm1', title: '冷却塔清洗', startDate: '2026-10-10', endDate: '2026-10-12', reason: '' },
+    runStateByDeviceCode: new Map([['ctrl-tower-3', 'RUNNING']]),
+  });
+  assert.equal(maintStart.canAct, false);
+  assert.equal(maintStart.canSet, false);
+  assert.equal(maintStart.gates[2].status, 'fail');
+
+  const maintStop = evaluateDeviceGates({
+    ...baseInput,
+    device: { deviceId: 'd-chiller', connection: 'ONLINE', runState: 'RUNNING', latestSampleAt: '2026-10-11T00:00:00Z' },
+    maintenance: { id: 'm1', title: '冷却塔清洗', startDate: '2026-10-10', endDate: '2026-10-12', reason: '' },
+  });
+  assert.equal(maintStop.canAct, true);
+  assert.equal(maintStop.canSet, false);
+  assert.equal(maintStop.gates[2].status, 'warn');
+
+  // Single-loop combined chain ordering places tower -> cooling pump -> chiller -> chilled pump.
+  const simTargets = targets.map((t) => ({ ...t }));
+  const standaloneOnly = controlTargets({
+    assets: model.assets,
+    devices: model.devices,
+    telemetryPoints: model.telemetryPoints.map((p) => (
+      p.id === 'p-chiller-start' ? { ...p, sourceMetadata: { capability: 'START' } } : p
+    )),
+    relationships: model.relationships,
+  }, now);
+  const simGrouped = plantUnits(standaloneOnly, model, now);
+  assert.equal(isSingleLoopCombined(simGrouped.units, simGrouped.others), true);
+  assert.deepEqual(
+    orderHydraulicChain(simGrouped.units[0]!, simGrouped.others).map((item) => item.assetType),
+    ['COOLING_TOWER', 'COOLING_WATER_PUMP', 'CHILLER', 'CHILLED_WATER_PUMP'],
+  );
+  assert.equal(units[0]?.members.length, 1);
+  assert.equal(others.length, 2);
+  assert.equal(simTargets.length, 4);
 });
