@@ -213,7 +213,13 @@ func TestClickHouseSinkPersistsAndDedupesStagingOnlyEvaluation(t *testing.T) {
 	var storedJSON string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("query")
+		user, _, _ := r.BasicAuth()
 		if strings.HasPrefix(q, "SELECT count()") {
+			if user != "optimization_service_reader" {
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = io.WriteString(w, "Code: 497. DB::Exception: "+user+": Not enough privileges (ACCESS_DENIED)")
+				return
+			}
 			hasChecks.Add(1)
 			if insertCount.Load() > 0 {
 				_, _ = io.WriteString(w, "1\n")
@@ -223,6 +229,11 @@ func TestClickHouseSinkPersistsAndDedupesStagingOnlyEvaluation(t *testing.T) {
 			return
 		}
 		if strings.HasPrefix(q, "INSERT INTO analytics.optimization_evaluations") {
+			if user != "optimization_service_writer" {
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = io.WriteString(w, "Code: 497. DB::Exception: "+user+": Not enough privileges (ACCESS_DENIED)")
+				return
+			}
 			insertCount.Add(1)
 			raw, _ := io.ReadAll(r.Body)
 			storedJSON = string(raw)
@@ -237,6 +248,7 @@ func TestClickHouseSinkPersistsAndDedupesStagingOnlyEvaluation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	sink.WithReader("optimization_service_reader", "")
 	const (
 		tenantID   = "55555555-1000-7000-8000-000000000001"
 		siteID     = "55555555-2000-7000-8000-000000000001"

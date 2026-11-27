@@ -180,6 +180,10 @@ func runService(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	evaluations.WithReader(
+		envOrDefault("OPTIMIZATION_CLICKHOUSE_READER_USERNAME", "optimization_service_reader"),
+		os.Getenv("OPTIMIZATION_CLICKHOUSE_READER_PASSWORD"),
+	)
 	closers = append(closers, evaluations.CloseIdleConnections)
 	tlsCert, err := requiredEnv("OPTIMIZATION_TLS_CERT")
 	if err != nil {
