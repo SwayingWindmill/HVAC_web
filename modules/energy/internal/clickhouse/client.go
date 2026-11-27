@@ -904,8 +904,20 @@ func (writer *Writer) InsertHourlyFactsV2(ctx context.Context, rows []energy.Hou
 		if a.SiteID != b.SiteID {
 			return a.SiteID < b.SiteID
 		}
+		if a.EnergyType != b.EnergyType {
+			return a.EnergyType < b.EnergyType
+		}
+		if a.AccountingScope != b.AccountingScope {
+			return a.AccountingScope < b.AccountingScope
+		}
+		if a.LoadDeviceID != b.LoadDeviceID {
+			return a.LoadDeviceID < b.LoadDeviceID
+		}
 		if a.PointID != b.PointID {
 			return a.PointID < b.PointID
+		}
+		if a.Quality != b.Quality {
+			return a.Quality < b.Quality
 		}
 		if a.TariffPeriod != b.TariffPeriod {
 			return a.TariffPeriod < b.TariffPeriod

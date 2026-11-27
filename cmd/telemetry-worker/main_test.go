@@ -878,3 +878,100 @@ func TestDrainAnalyticsProjectionOnceStopsAtEmptyAndBoundsBatches(t *testing.T) 
 		t.Fatalf("drain bounded: total=%d calls=%d err=%v", boundedTotal, boundedCalls, err)
 	}
 }
+
+func TestParseTelemetryWorkerCLIAndRunHourlyV2Backfill(t *testing.T) {
+	if cli, err := parseTelemetryWorkerCLI(nil, io.Discard); err != nil || cli.enabled {
+		t.Fatalf("empty args = (%+v, %v), want disabled", cli, err)
+	}
+	if _, err := parseTelemetryWorkerCLI([]string{"--tenant-id=018f4d00-0000-7000-8000-000000000001"}, io.Discard); err == nil {
+		t.Fatal("expected error when --tenant-id passed without --backfill-hourly-v2-since")
+	}
+	if _, err := parseTelemetryWorkerCLI([]string{
+		"--backfill-hourly-v2-since=2026-11-22T00:00:00Z",
+		"--backfill-hourly-v2-until=2026-11-22T00:00:00Z",
+	}, io.Discard); err == nil {
+		t.Fatal("expected error when until <= since")
+	}
+	subCLI, err := parseTelemetryWorkerCLI([]string{
+		"backfill-hourly-v2",
+		"--since=2026-11-21T00:00:00Z",
+		"--until=2026-11-21T02:00:00Z",
+		"--tenant-id=018f4d00-0000-7000-8000-000000000001",
+		"--site-id=018f4e00-1000-7000-8000-000000000001",
+	}, io.Discard)
+	if err != nil || !subCLI.enabled || subCLI.tenantID == "" || subCLI.siteID == "" {
+		t.Fatalf("subcommand CLI = (%+v, %v)", subCLI, err)
+	}
+
+	const (
+		tenantID = "018f4d00-0000-7000-8000-000000000001"
+		siteID   = "018f4e00-1000-7000-8000-000000000001"
+		pointID  = "018f4e00-2100-7000-8000-000000000001"
+	)
+	var insertedPayloads []string
+	chServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query().Get("query")
+		body, _ := io.ReadAll(r.Body)
+		sql := string(body)
+		switch {
+		case strings.Contains(query, "INSERT INTO analytics.energy_hourly_facts_v2 FORMAT JSONEachRow"):
+			insertedPayloads = append(insertedPayloads, sql)
+			w.WriteHeader(http.StatusNoContent)
+		case strings.Contains(sql, "FROM analytics.energy_hourly_facts_v2 AS f"):
+			// Return nothing (clean backfill target) for both bucket discovery and existing state lookup.
+		case strings.Contains(sql, "AS fact_version") && strings.Contains(sql, "has({point_hours:Array(String)}"):
+			_, _ = io.WriteString(w,
+				`{"fact_id":"f1","tenant_id":"`+tenantID+`","site_id":"`+siteID+`","meter_id":"m1","meter_binding_id":"b1","topology_version_id":"tv1","binding_version":"1","energy_type_id":"et1","energy_type":"electricity","meter_role":"PRIMARY","direction":"IMPORT","accounting_scope":"SITE","load_device_id":null,"device_id":"d1","point_id":"`+pointID+`","sensor_id":null,"telemetry_key":"site.energy","point_revision":"1","unit":"kWh","counter_decrease_mode":"RESET_TO_ZERO","counter_rollover_modulus":null,"period_start":"2026-11-21T01:00:00.000Z","period_end":"2026-11-21T01:15:00.000Z","energy_kwh":10,"transition_type":"INCREASE","quality":"VALID","quality_reasons":[],"source_previous_observation_id":"o0","source_current_observation_id":"o1","source_event_id":"e1","source_partition":"p0","source_offset":"1","dataset_revision":"1","data_watermark":"2026-11-21T01:15:00.000Z","projected_at":"2026-11-21T01:15:01.000Z","fact_revision":"0"}`+"\n"+
+					`{"fact_id":"f2","tenant_id":"`+tenantID+`","site_id":"`+siteID+`","meter_id":"m1","meter_binding_id":"b1","topology_version_id":"tv1","binding_version":"1","energy_type_id":"et1","energy_type":"electricity","meter_role":"PRIMARY","direction":"IMPORT","accounting_scope":"SITE","load_device_id":null,"device_id":"d1","point_id":"`+pointID+`","sensor_id":null,"telemetry_key":"site.energy","point_revision":"1","unit":"kWh","counter_decrease_mode":"RESET_TO_ZERO","counter_rollover_modulus":null,"period_start":"2026-11-21T01:15:00.000Z","period_end":"2026-11-21T01:30:00.000Z","energy_kwh":12,"transition_type":"INCREASE","quality":"VALID","quality_reasons":[],"source_previous_observation_id":"o1","source_current_observation_id":"o2","source_event_id":"e2","source_partition":"p0","source_offset":"2","dataset_revision":"2","data_watermark":"2026-11-21T01:30:00.000Z","projected_at":"2026-11-21T01:30:01.000Z","fact_revision":"0"}`+"\n")
+		case strings.Contains(sql, "toStartOfHour(addMilliseconds(v.period_end, -1))"):
+			_, _ = io.WriteString(w, `{"tenant_id":"`+tenantID+`","site_id":"`+siteID+`","point_id":"`+pointID+`","hour_utc":"2026-11-21T01:00:00Z"}`+"\n")
+		case strings.Contains(sql, "FROM analytics.tariff_price_windows AS w FINAL"):
+			_, _ = io.WriteString(w, `{"window_start":"2026-11-21T01:00:00.000Z","window_end":"2026-11-21T02:00:00.000Z","period_code":"PEAK","energy_rate_per_kwh":1.25,"tariff_version_id":"tv-1"}`+"\n")
+		case strings.Contains(sql, "dateDiff('millisecond', v.period_start, v.period_end) > 3600000"):
+			// No cross-gap intervals
+		default:
+			t.Errorf("unexpected ClickHouse request: query=%q body=%s", query, sql)
+		}
+	}))
+	defer chServer.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := runTelemetryWorkerArgs(
+		[]string{
+			"--backfill-hourly-v2-since=2026-11-21T00:00:00Z",
+			"--backfill-hourly-v2-until=2026-11-21T02:00:00Z",
+			"--tenant-id=" + tenantID,
+			"--site-id=" + siteID,
+		},
+		func(key string) string {
+			switch key {
+			case "TELEMETRY_CLICKHOUSE_HTTP_URL":
+				return chServer.URL
+			case "ANALYTICS_CLICKHOUSE_READER_USERNAME":
+				return "analytics_projector_reader"
+			case "ANALYTICS_CLICKHOUSE_WRITER_USERNAME":
+				return "analytics_projector_writer"
+			default:
+				return ""
+			}
+		},
+		&stdout,
+		&stderr,
+	)
+	if code != 0 {
+		t.Fatalf("backfill exited %d, stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if len(insertedPayloads) != 1 {
+		t.Fatalf("expected 1 v2 insert payload, got %d (%v)", len(insertedPayloads), insertedPayloads)
+	}
+	payload := insertedPayloads[0]
+	if !strings.Contains(payload, `"energy_kwh":"22.000000"`) ||
+		!strings.Contains(payload, `"cost_cny":"27.500000"`) ||
+		!strings.Contains(payload, `"interval_count":2`) ||
+		!strings.Contains(payload, `"tariff_period":"PEAK"`) {
+		t.Fatalf("unexpected backfill insert payload: %s", payload)
+	}
+	if !strings.Contains(stdout.String(), `"analytics_hourly_v2_backfill_completed"`) {
+		t.Fatalf("expected completion log, got: %s", stdout.String())
+	}
+}

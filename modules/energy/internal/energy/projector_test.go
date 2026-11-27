@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/tariffmodel"
 )
 
 const (
@@ -822,5 +825,566 @@ func TestProjectorRebuildDirtyWindowWritesHourlyV2(t *testing.T) {
 	}
 	if v2Sink.rows[0].LoadDeviceID != binding.LoadDeviceID || v2Sink.rows[0].EnergyKWh != 6.0 || v2Sink.rows[1].EnergyKWh != 12.0 {
 		t.Fatalf("unexpected rebuild v2 rows: %+v", v2Sink.rows)
+	}
+}
+
+type inMemoryHourlyStore struct {
+	factRevisions map[string][]EnergyIntervalFact
+	hourlyV2Rows  map[hourlyV2GroupKey]HourlyFactV2
+	tariffWindows map[string][]tariffmodel.Window
+	tariffErr     error
+	forceEmptyVis bool
+}
+
+func newInMemoryHourlyStore() *inMemoryHourlyStore {
+	return &inMemoryHourlyStore{
+		factRevisions: make(map[string][]EnergyIntervalFact),
+		hourlyV2Rows:  make(map[hourlyV2GroupKey]HourlyFactV2),
+		tariffWindows: make(map[string][]tariffmodel.Window),
+	}
+}
+
+func (s *inMemoryHourlyStore) AdvanceCheckpoint(context.Context, ProjectionCursor) error { return nil }
+func (s *inMemoryHourlyStore) AppendRebuildEvent(context.Context, RebuildEvent) error    { return nil }
+
+func (s *inMemoryHourlyStore) InsertFacts(_ context.Context, facts []EnergyIntervalFact) error {
+	for _, fact := range facts {
+		k := fact.LogicalKey()
+		s.factRevisions[k] = append(s.factRevisions[k], fact)
+	}
+	return nil
+}
+
+func (s *inMemoryHourlyStore) visibleFacts() []EnergyIntervalFact {
+	out := make([]EnergyIntervalFact, 0, len(s.factRevisions))
+	for _, revs := range s.factRevisions {
+		if len(revs) == 0 {
+			continue
+		}
+		best := revs[0]
+		for _, cand := range revs[1:] {
+			if cand.FactRevision > best.FactRevision ||
+				(cand.FactRevision == best.FactRevision && cand.ProjectedAt.After(best.ProjectedAt)) {
+				best = cand
+			}
+		}
+		out = append(out, best)
+	}
+	return out
+}
+
+func (s *inMemoryHourlyStore) VisibleIntervalsForHours(_ context.Context, buckets []HourlyBucketKey) ([]EnergyIntervalFact, error) {
+	if s.forceEmptyVis {
+		return nil, nil
+	}
+	wanted := make(map[HourlyBucketKey]struct{}, len(buckets))
+	for _, b := range buckets {
+		wanted[b.normalized()] = struct{}{}
+	}
+	var matched []EnergyIntervalFact
+	for _, f := range s.visibleFacts() {
+		for _, h := range factTouchedHours(f) {
+			bk := HourlyBucketKey{TenantID: f.TenantID, SiteID: f.SiteID, PointID: f.PointID, Hour: h}.normalized()
+			if _, ok := wanted[bk]; ok {
+				matched = append(matched, f)
+				break
+			}
+		}
+	}
+	return matched, nil
+}
+
+func (s *inMemoryHourlyStore) PriorIntervalsForCorrections(_ context.Context, facts []EnergyIntervalFact) ([]EnergyIntervalFact, error) {
+	var priors []EnergyIntervalFact
+	for _, f := range facts {
+		if f.FactRevision == 0 {
+			continue
+		}
+		for _, rev := range s.factRevisions[f.LogicalKey()] {
+			if rev.FactRevision < f.FactRevision {
+				priors = append(priors, rev)
+			}
+		}
+	}
+	return priors, nil
+}
+
+func (s *inMemoryHourlyStore) ExistingHourlyFactsV2(_ context.Context, buckets []HourlyBucketKey) ([]ExistingHourlyV2Key, error) {
+	wanted := make(map[HourlyBucketKey]struct{}, len(buckets))
+	for _, b := range buckets {
+		wanted[b.normalized()] = struct{}{}
+	}
+	var out []ExistingHourlyV2Key
+	for _, row := range s.hourlyV2Rows {
+		bk := HourlyBucketKey{TenantID: row.TenantID, SiteID: row.SiteID, PointID: row.PointID, Hour: row.Hour}.normalized()
+		if _, ok := wanted[bk]; !ok {
+			continue
+		}
+		out = append(out, ExistingHourlyV2Key{
+			TenantID:        row.TenantID,
+			SiteID:          row.SiteID,
+			EnergyType:      row.EnergyType,
+			AccountingScope: row.AccountingScope,
+			LoadDeviceID:    row.LoadDeviceID,
+			PointID:         row.PointID,
+			Quality:         row.Quality,
+			TariffPeriod:    row.TariffPeriod,
+			Hour:            row.Hour,
+			IntervalCount:   row.IntervalCount,
+			CalcVersion:     row.CalcVersion,
+			DataWatermark:   row.DataWatermark,
+			DatasetRevision: row.DatasetRevision,
+		})
+	}
+	return out, nil
+}
+
+func (s *inMemoryHourlyStore) InsertHourlyFactsV2(_ context.Context, rows []HourlyFactV2) error {
+	for _, row := range rows {
+		hourUTC := row.Hour.UTC().Truncate(time.Hour)
+		key := hourlyV2GroupKey{
+			tenantID:        row.TenantID,
+			siteID:          row.SiteID,
+			energyType:      row.EnergyType,
+			accountingScope: row.AccountingScope,
+			loadDeviceID:    normalizeStoredLoadDeviceID(row.LoadDeviceID, row.AccountingScope),
+			pointID:         row.PointID,
+			quality:         row.Quality,
+			tariffPeriod:    row.TariffPeriod,
+			hourUnix:        hourUTC.Unix(),
+		}
+		existing, ok := s.hourlyV2Rows[key]
+		if !ok || row.CalcVersion >= existing.CalcVersion {
+			s.hourlyV2Rows[key] = row
+		}
+	}
+	return nil
+}
+
+func (s *inMemoryHourlyStore) TariffPriceWindows(_ context.Context, tenantID, siteID string, from, to time.Time) ([]tariffmodel.Window, error) {
+	if s.tariffErr != nil {
+		return nil, s.tariffErr
+	}
+	var out []tariffmodel.Window
+	for _, w := range s.tariffWindows[tenantID+"|"+siteID] {
+		if w.End.After(from) && w.Start.Before(to) {
+			out = append(out, w)
+		}
+	}
+	return out, nil
+}
+
+func (s *inMemoryHourlyStore) ListHourlyBackfillBuckets(_ context.Context, query HourlyBackfillQuery) ([]HourlyBucketKey, error) {
+	sinceUTC := query.Since.UTC().Truncate(time.Hour)
+	untilUTC := query.Until.UTC()
+	seen := make(map[HourlyBucketKey]struct{})
+	add := func(tenantID, siteID, pointID string, h time.Time) {
+		if query.TenantID != "" && tenantID != query.TenantID {
+			return
+		}
+		if query.SiteID != "" && siteID != query.SiteID {
+			return
+		}
+		hUTC := h.UTC().Truncate(time.Hour)
+		if hUTC.Before(sinceUTC) || !hUTC.Before(untilUTC) {
+			return
+		}
+		seen[HourlyBucketKey{TenantID: tenantID, SiteID: siteID, PointID: pointID, Hour: hUTC}] = struct{}{}
+	}
+	for _, f := range s.visibleFacts() {
+		for _, h := range factTouchedHours(f) {
+			add(f.TenantID, f.SiteID, f.PointID, h)
+		}
+	}
+	for _, r := range s.hourlyV2Rows {
+		if r.IntervalCount != 0 {
+			add(r.TenantID, r.SiteID, r.PointID, r.Hour)
+		}
+	}
+	out := make([]HourlyBucketKey, 0, len(seen))
+	for bk := range seen {
+		out = append(out, bk)
+	}
+	sortHourlyBuckets(out)
+	return out, nil
+}
+
+type fakeCounterBatchQueue struct {
+	batches [][]CounterDelta
+	idx     int
+}
+
+func (q *fakeCounterBatchQueue) NextBatch(_ context.Context, _ int) (CounterBatch, error) {
+	if q.idx >= len(q.batches) {
+		return CounterBatch{}, nil
+	}
+	deltas := q.batches[q.idx]
+	q.idx++
+	through := ProjectionCursor{
+		HistorySequence: uint64(q.idx),
+		ObservationID:   deltas[len(deltas)-1].CurrentObservationID,
+	}
+	return CounterBatch{Deltas: deltas, Through: &through}, nil
+}
+
+func TestProjectorHourlyV2FullHourRollupAndTOUCostAcrossSequentialBatches(t *testing.T) {
+	hour10 := time.Date(2026, 11, 26, 10, 0, 0, 0, time.UTC)
+	now := time.Date(2026, 11, 26, 10, 35, 0, 0, time.UTC)
+	store := newInMemoryHourlyStore()
+	store.tariffWindows[testTenantID+"|"+testSiteID] = []tariffmodel.Window{
+		{
+			Start:            hour10,
+			End:              hour10.Add(30 * time.Minute),
+			PeriodCode:       tariffmodel.PeriodPeak,
+			EnergyRatePerKWh: 1.25,
+			VersionID:        "tv-1",
+		},
+		{
+			Start:            hour10.Add(30 * time.Minute),
+			End:              hour10.Add(time.Hour),
+			PeriodCode:       tariffmodel.PeriodFlat,
+			EnergyRatePerKWh: 0.75,
+			VersionID:        "tv-1",
+		},
+	}
+
+	d1Val := 10.0
+	d1 := validDelta()
+	d1.CurrentObservationID = "018f4e00-3000-7000-8000-000000000201"
+	d1.PreviousSampledAt = hour10
+	d1.CurrentSampledAt = hour10.Add(15 * time.Minute)
+	d1.CurrentSourceOffset = 1
+	d1.DeltaValue = &d1Val
+
+	d2Val := 12.0
+	d2 := validDelta()
+	d2.CurrentObservationID = "018f4e00-3000-7000-8000-000000000202"
+	d2.PreviousObservationID = d1.CurrentObservationID
+	d2.PreviousSampledAt = d1.CurrentSampledAt
+	d2.CurrentSampledAt = hour10.Add(30 * time.Minute) // anchor=10:29:59.999 -> PEAK
+	d2.CurrentSourceOffset = 2
+	d2.DeltaValue = &d2Val
+
+	d3Val := 4.0
+	d3 := validDelta()
+	d3.CurrentObservationID = "018f4e00-3000-7000-8000-000000000203"
+	d3.PreviousObservationID = d2.CurrentObservationID
+	d3.PreviousSampledAt = d2.CurrentSampledAt
+	d3.CurrentSampledAt = hour10.Add(45 * time.Minute) // anchor=10:44:59.999 -> FLAT
+	d3.CurrentSourceOffset = 3
+	d3.DeltaValue = &d3Val
+
+	queue := &fakeCounterBatchQueue{
+		batches: [][]CounterDelta{
+			{d1},
+			{d2},
+			{d3},
+		},
+	}
+	projector, err := NewProjector(ProjectorConfig{
+		CounterSource:        queue,
+		BindingResolver:      &fakeResolver{resolution: validBinding()},
+		FactSink:             store,
+		HourlyV2Sink:         store,
+		HourlyIntervalSource: store,
+		TariffWindowSource:   store,
+		RebuildEvents:        store,
+		BatchSize:            10,
+		Now:                  func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Batch 1: 10 kWh in 10:00 PEAK -> 10 kWh, 12.50 CNY, interval_count=1.
+	if n, err := projector.ProjectOnce(context.Background()); err != nil || n != 1 {
+		t.Fatalf("batch 1 ProjectOnce = (%d, %v)", n, err)
+	}
+	peakKey := hourlyV2GroupKey{
+		tenantID: testTenantID, siteID: testSiteID, energyType: EnergyTypeElectricity,
+		accountingScope: AccountingScopeSite, pointID: testPointID, quality: FactQualityValid,
+		tariffPeriod: tariffmodel.PeriodPeak, hourUnix: hour10.Unix(),
+	}
+	firstPeak := store.hourlyV2Rows[peakKey]
+	if firstPeak.EnergyKWh != 10 || firstPeak.CostCNY != 12.5 || firstPeak.IntervalCount != 1 {
+		t.Fatalf("after batch 1 peak row = %+v", firstPeak)
+	}
+
+	// Batch 2 (same hour 10:00, same millisecond clock): 12 kWh -> MUST total 22 kWh (count=2, cost=27.50 CNY), NOT 12 kWh.
+	if n, err := projector.ProjectOnce(context.Background()); err != nil || n != 1 {
+		t.Fatalf("batch 2 ProjectOnce = (%d, %v)", n, err)
+	}
+	secondPeak := store.hourlyV2Rows[peakKey]
+	if secondPeak.EnergyKWh != 22 || secondPeak.CostCNY != 27.5 || secondPeak.IntervalCount != 2 {
+		t.Fatalf("after batch 2 peak row = %+v, want EnergyKWh=22 CostCNY=27.5 IntervalCount=2", secondPeak)
+	}
+	if secondPeak.CalcVersion <= firstPeak.CalcVersion {
+		t.Fatalf("expected strictly monotonic calc_version across sequential batches: %d <= %d", secondPeak.CalcVersion, firstPeak.CalcVersion)
+	}
+
+	// Batch 3 (same hour 10:00, FLAT window): 4 kWh @ 0.75 -> 3.00 CNY, while PEAK stays at 22 kWh.
+	if n, err := projector.ProjectOnce(context.Background()); err != nil || n != 1 {
+		t.Fatalf("batch 3 ProjectOnce = (%d, %v)", n, err)
+	}
+	flatKey := peakKey
+	flatKey.tariffPeriod = tariffmodel.PeriodFlat
+	flatRow := store.hourlyV2Rows[flatKey]
+	if flatRow.EnergyKWh != 4 || flatRow.CostCNY != 3.0 || flatRow.IntervalCount != 1 {
+		t.Fatalf("after batch 3 flat row = %+v", flatRow)
+	}
+	if store.hourlyV2Rows[peakKey].EnergyKWh != 22 || store.hourlyV2Rows[peakKey].IntervalCount != 2 {
+		t.Fatalf("batch 3 altered PEAK bucket unexpectedly: %+v", store.hourlyV2Rows[peakKey])
+	}
+}
+
+func TestProjectorHourlyV2WritesZeroIntervalTombstoneWhenHourEmptiesOrChangesKey(t *testing.T) {
+	hour09 := time.Date(2026, 11, 26, 9, 0, 0, 0, time.UTC)
+	hour10 := hour09.Add(time.Hour)
+	now := time.Date(2026, 11, 26, 11, 5, 0, 0, time.UTC)
+
+	t.Run("correction invalidates only interval and tombstones old VALID PEAK row", func(t *testing.T) {
+		store := newInMemoryHourlyStore()
+		store.tariffWindows[testTenantID+"|"+testSiteID] = []tariffmodel.Window{{
+			Start: hour10, End: hour10.Add(time.Hour), PeriodCode: tariffmodel.PeriodPeak, EnergyRatePerKWh: 1.2, VersionID: "tv-1",
+		}}
+
+		d1Val := 15.0
+		d1 := validDelta()
+		d1.CurrentObservationID = "018f4e00-3000-7000-8000-000000000301"
+		d1.PreviousSampledAt = hour10
+		d1.CurrentSampledAt = hour10.Add(15 * time.Minute)
+		d1.CurrentSourceOffset = 1
+		d1.DeltaValue = &d1Val
+
+		d1Invalid := d1
+		d1Invalid.TransitionType = TransitionInvalidDecrease
+		d1Invalid.DeltaValue = nil
+		d1Invalid.ExistingFactFound = true
+		d1Invalid.ExistingFactMeterBindingID = testBindingID
+		d1Invalid.ExistingFactPreviousObservationID = d1.PreviousObservationID
+		d1Invalid.ExistingFactEnergyKWh = 15.0
+		d1Invalid.ExistingFactTransitionType = TransitionIncrease
+		d1Invalid.ExistingFactQuality = FactQualityValid
+		d1Invalid.ExistingFactRevision = 0
+		d1Invalid.CurrentSourceOffset = 2
+
+		queue := &fakeCounterBatchQueue{batches: [][]CounterDelta{{d1}, {d1Invalid}}}
+		projector, err := NewProjector(ProjectorConfig{
+			CounterSource:        queue,
+			BindingResolver:      &fakeResolver{resolution: validBinding()},
+			FactSink:             store,
+			HourlyV2Sink:         store,
+			HourlyIntervalSource: store,
+			TariffWindowSource:   store,
+			RebuildEvents:        store,
+			BatchSize:            10,
+			Now:                  func() time.Time { return now },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := projector.ProjectOnce(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		validPeakKey := hourlyV2GroupKey{
+			tenantID: testTenantID, siteID: testSiteID, energyType: EnergyTypeElectricity,
+			accountingScope: AccountingScopeSite, pointID: testPointID, quality: FactQualityValid,
+			tariffPeriod: tariffmodel.PeriodPeak, hourUnix: hour10.Unix(),
+		}
+		if got := store.hourlyV2Rows[validPeakKey]; got.EnergyKWh != 15 || got.CostCNY != 18 || got.IntervalCount != 1 {
+			t.Fatalf("unexpected initial valid row: %+v", got)
+		}
+
+		// Correction invalidates interval -> old VALID/PEAK key MUST receive IntervalCount=0 tombstone.
+		if _, err := projector.ProjectOnce(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		tombstone := store.hourlyV2Rows[validPeakKey]
+		if tombstone.IntervalCount != 0 || tombstone.EnergyKWh != 0 || tombstone.CostCNY != 0 {
+			t.Fatalf("expected zero-interval tombstone for invalidated VALID/PEAK row, got %+v", tombstone)
+		}
+		invalidPeakKey := validPeakKey
+		invalidPeakKey.quality = FactQualityInvalid
+		if inv := store.hourlyV2Rows[invalidPeakKey]; inv.IntervalCount != 1 || inv.EnergyKWh != 0 || inv.CostCNY != 0 {
+			t.Fatalf("unexpected INVALID row: %+v", inv)
+		}
+	})
+
+	t.Run("cross-gap shrunk out of earlier hour tombstones vacated hour", func(t *testing.T) {
+		store := newInMemoryHourlyStore()
+		// Initial cross-gap interval 09:00..11:00 touches both hour09 and hour10.
+		dGapVal := 20.0
+		dGap := validDelta()
+		dGap.CurrentObservationID = "018f4e00-3000-7000-8000-000000000310"
+		dGap.PreviousSampledAt = hour09
+		dGap.CurrentSampledAt = hour10.Add(time.Hour)
+		dGap.CurrentSourceOffset = 1
+		dGap.DeltaValue = &dGapVal
+
+		// Correction shrinks the interval to 10:15..11:00 (revision boundary -> INVALID/0 kWh), vacating hour09 completely.
+		dShrunk := dGap
+		dShrunk.PreviousObservationID = "018f4e00-3000-7000-8000-000000000309"
+		dShrunk.PreviousSampledAt = hour10.Add(15 * time.Minute)
+		dShrunk.TransitionType = TransitionRevisionBoundary
+		dShrunk.DeltaValue = nil
+		dShrunk.ExistingFactFound = true
+		dShrunk.ExistingFactMeterBindingID = testBindingID
+		dShrunk.ExistingFactPreviousObservationID = dGap.PreviousObservationID
+		dShrunk.ExistingFactEnergyKWh = 20.0
+		dShrunk.ExistingFactTransitionType = TransitionIncrease
+		dShrunk.ExistingFactQuality = FactQualityValid
+		dShrunk.ExistingFactRevision = 0
+		dShrunk.CurrentSourceOffset = 2
+
+		queue := &fakeCounterBatchQueue{batches: [][]CounterDelta{{dGap}, {dShrunk}}}
+		projector, err := NewProjector(ProjectorConfig{
+			CounterSource:        queue,
+			BindingResolver:      &fakeResolver{resolution: validBinding()},
+			FactSink:             store,
+			HourlyV2Sink:         store,
+			HourlyIntervalSource: store,
+			RebuildEvents:        store,
+			BatchSize:            10,
+			Now:                  func() time.Time { return now },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := projector.ProjectOnce(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		key09 := hourlyV2GroupKey{
+			tenantID: testTenantID, siteID: testSiteID, energyType: EnergyTypeElectricity,
+			accountingScope: AccountingScopeSite, pointID: testPointID, quality: FactQualitySuspect,
+			tariffPeriod: "", hourUnix: hour09.Unix(),
+		}
+		if store.hourlyV2Rows[key09].IntervalCount != 1 || store.hourlyV2Rows[key09].EnergyKWh != 10 {
+			t.Fatalf("expected initial hour09 cross-gap slice, got %+v", store.hourlyV2Rows[key09])
+		}
+
+		// Batch 2 vacates hour09 entirely -> hour09 MUST get zero-interval tombstone.
+		if _, err := projector.ProjectOnce(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if got09 := store.hourlyV2Rows[key09]; got09.IntervalCount != 0 || got09.EnergyKWh != 0 || got09.CostCNY != 0 {
+			t.Fatalf("expected zero-interval tombstone for vacated hour09, got %+v", got09)
+		}
+	})
+
+	t.Run("minimal source losing all intervals emits zero-interval tombstone", func(t *testing.T) {
+		store := newInMemoryHourlyStore()
+		store.forceEmptyVis = true
+		d1 := validDelta()
+		d1.PreviousSampledAt = hour10
+		d1.CurrentSampledAt = hour10.Add(15 * time.Minute)
+		v2Sink := &fakeHourlyV2Sink{}
+		projector, err := NewProjector(ProjectorConfig{
+			CounterSource:        &fakeSource{deltas: []CounterDelta{d1}},
+			BindingResolver:      &fakeResolver{resolution: validBinding()},
+			FactSink:             store,
+			HourlyV2Sink:         v2Sink,
+			HourlyIntervalSource: store,
+			RebuildEvents:        store,
+			BatchSize:            10,
+			Now:                  func() time.Time { return now },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := projector.ProjectOnce(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if len(v2Sink.rows) != 1 || v2Sink.rows[0].IntervalCount != 0 || v2Sink.rows[0].EnergyKWh != 0 || v2Sink.rows[0].CostCNY != 0 || v2Sink.rows[0].DataWatermark.IsZero() {
+			t.Fatalf("expected zero-interval tombstone row, got %+v", v2Sink.rows)
+		}
+	})
+}
+
+func TestBackfillHourlyV2IdempotentAndTombstonesStaleUnpricedRows(t *testing.T) {
+	hour10 := time.Date(2026, 11, 26, 10, 0, 0, 0, time.UTC)
+	now := time.Date(2026, 11, 27, 5, 0, 0, 0, time.UTC)
+	store := newInMemoryHourlyStore()
+	store.tariffWindows[testTenantID+"|"+testSiteID] = []tariffmodel.Window{{
+		Start: hour10, End: hour10.Add(time.Hour), PeriodCode: tariffmodel.PeriodPeak, EnergyRatePerKWh: 1.25, VersionID: "tv-1",
+	}}
+	// Seed two intervals in hour10 (10 + 12 = 22 kWh) plus a stale pre-fix row (tariff_period="", 1.5 kWh, count=1).
+	store.factRevisions["k1"] = []EnergyIntervalFact{{
+		FactID: "f1", TenantID: testTenantID, SiteID: testSiteID, PointID: testPointID,
+		EnergyType: EnergyTypeElectricity, AccountingScope: AccountingScopeSite, Quality: FactQualityValid,
+		PeriodStart: hour10, PeriodEnd: hour10.Add(15 * time.Minute), EnergyKWh: 10,
+		CurrentObservationID: "o1", DataWatermark: hour10.Add(15 * time.Minute), DatasetRevision: 10,
+	}}
+	store.factRevisions["k2"] = []EnergyIntervalFact{{
+		FactID: "f2", TenantID: testTenantID, SiteID: testSiteID, PointID: testPointID,
+		EnergyType: EnergyTypeElectricity, AccountingScope: AccountingScopeSite, Quality: FactQualityValid,
+		PeriodStart: hour10.Add(15 * time.Minute), PeriodEnd: hour10.Add(30 * time.Minute), EnergyKWh: 12,
+		CurrentObservationID: "o2", DataWatermark: hour10.Add(30 * time.Minute), DatasetRevision: 11,
+	}}
+	staleKey := hourlyV2GroupKey{
+		tenantID: testTenantID, siteID: testSiteID, energyType: EnergyTypeElectricity,
+		accountingScope: AccountingScopeSite, pointID: testPointID, quality: FactQualityValid,
+		tariffPeriod: "", hourUnix: hour10.Unix(),
+	}
+	store.hourlyV2Rows[staleKey] = HourlyFactV2{
+		TenantID: testTenantID, SiteID: testSiteID, EnergyType: EnergyTypeElectricity,
+		AccountingScope: AccountingScopeSite, PointID: testPointID, Quality: FactQualityValid,
+		TariffPeriod: "", Hour: hour10, EnergyKWh: 1.5, CostCNY: 0, IntervalCount: 1,
+		CalcVersion: uint64(now.Add(-time.Hour).UnixMilli()), DataWatermark: hour10.Add(30 * time.Minute),
+	}
+
+	res1, err := BackfillHourlyV2(context.Background(), HourlyV2BackfillConfig{
+		IntervalSource:     store,
+		BucketSource:       store,
+		HourlyV2Sink:       store,
+		TariffWindowSource: store,
+		Now:                func() time.Time { return now },
+		Since:              hour10,
+		Until:              hour10.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("BackfillHourlyV2 pass 1 failed: %v", err)
+	}
+	if res1.BucketsProcessed != 1 || res1.RowsWritten != 2 {
+		t.Fatalf("pass 1 result = %+v, want 1 bucket / 2 rows (PEAK + tombstone)", res1)
+	}
+	peakKey := staleKey
+	peakKey.tariffPeriod = tariffmodel.PeriodPeak
+	peakRow := store.hourlyV2Rows[peakKey]
+	if peakRow.EnergyKWh != 22 || peakRow.CostCNY != 27.5 || peakRow.IntervalCount != 2 {
+		t.Fatalf("backfill peak row = %+v", peakRow)
+	}
+	staleAfter := store.hourlyV2Rows[staleKey]
+	if staleAfter.IntervalCount != 0 || staleAfter.EnergyKWh != 0 || staleAfter.CostCNY != 0 {
+		t.Fatalf("expected stale unpriced row tombstoned, got %+v", staleAfter)
+	}
+
+	// Second idempotent pass should write only the authoritative PEAK row (1 row) with strictly higher CalcVersion.
+	res2, err := BackfillHourlyV2(context.Background(), HourlyV2BackfillConfig{
+		IntervalSource:     store,
+		BucketSource:       store,
+		HourlyV2Sink:       store,
+		TariffWindowSource: store,
+		Now:                func() time.Time { return now },
+		Since:              hour10,
+		Until:              hour10.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("BackfillHourlyV2 pass 2 failed: %v", err)
+	}
+	if res2.BucketsProcessed != 1 || res2.RowsWritten != 1 || store.hourlyV2Rows[peakKey].CalcVersion <= peakRow.CalcVersion {
+		t.Fatalf("pass 2 result = %+v, peakRow = %+v", res2, store.hourlyV2Rows[peakKey])
+	}
+
+	// Tariff lookup errors must propagate cleanly rather than silently writing zero CostCNY.
+	store.tariffErr = errors.New("clickhouse tariff read timeout")
+	if _, err := BackfillHourlyV2(context.Background(), HourlyV2BackfillConfig{
+		IntervalSource:     store,
+		BucketSource:       store,
+		HourlyV2Sink:       store,
+		TariffWindowSource: store,
+		Since:              hour10,
+		Until:              hour10.Add(time.Hour),
+	}); err == nil || !strings.Contains(err.Error(), "tariff price windows") {
+		t.Fatalf("expected tariff error propagation, got %v", err)
 	}
 }
