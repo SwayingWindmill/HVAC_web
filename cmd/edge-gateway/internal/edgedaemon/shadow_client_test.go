@@ -1,6 +1,7 @@
 package edgedaemon
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -181,4 +182,108 @@ func mustJSON(t *testing.T, v any) []byte {
 		t.Fatal(err)
 	}
 	return b
+}
+
+type shadowStubTowerAdapter struct {
+	component edgecontrol.ComponentDescriptor
+	channels  []edgecontrol.ChannelDescriptor
+	mode      string
+	fan       float64
+}
+
+func (a *shadowStubTowerAdapter) Component() edgecontrol.ComponentDescriptor { return a.component }
+func (a *shadowStubTowerAdapter) Channels() []edgecontrol.ChannelDescriptor  { return a.channels }
+func (a *shadowStubTowerAdapter) Poll(_ context.Context, at time.Time) ([]edgecontrol.ChannelUpdate, error) {
+	return []edgecontrol.ChannelUpdate{
+		{Address: a.component.ID + "/run_state", Sample: edgecontrol.Sample{Value: edgecontrol.StringValue("RUNNING"), Quality: edgecontrol.QualityGood, ObservedAt: at}},
+		{Address: a.component.ID + "/fault_code", Sample: edgecontrol.Sample{Value: edgecontrol.StringValue(""), Quality: edgecontrol.QualityGood, ObservedAt: at}},
+		{Address: a.component.ID + "/local_remote_mode", Sample: edgecontrol.Sample{Value: edgecontrol.StringValue(a.mode), Quality: edgecontrol.QualityGood, ObservedAt: at}},
+		{Address: a.component.ID + "/fan_speed", Sample: edgecontrol.Sample{Value: edgecontrol.DoubleValue(a.fan), Quality: edgecontrol.QualityGood, ObservedAt: at}},
+	}, nil
+}
+func (a *shadowStubTowerAdapter) Apply(_ context.Context, _ edgecontrol.ProcessImage, decisions []edgecontrol.Decision) ([]edgecontrol.DeviceWriteResult, error) {
+	var out []edgecontrol.DeviceWriteResult
+	for _, d := range decisions {
+		if !d.Accepted || d.Effective == nil {
+			continue
+		}
+		if d.Address == a.component.ID+"/fan_speed_sp" {
+			a.fan = d.Effective.Double
+		}
+		val := *d.Effective
+		out = append(out, edgecontrol.DeviceWriteResult{Address: d.Address, Success: true, Code: "APPLIED", AppliedValue: &val})
+	}
+	return out, nil
+}
+
+type shadowTowerIntentController struct {
+	target float64
+}
+
+func (c *shadowTowerIntentController) ID() string { return "test-tower-intent" }
+func (c *shadowTowerIntentController) Run(_ context.Context, _ edgecontrol.ProcessImage, plan *edgecontrol.ControlPlan) error {
+	_, _, _ = plan.Request("ct-01/fan_speed_sp", c.ID(), edgecontrol.DoubleValue(c.target))
+	return nil
+}
+
+func TestShadowManagerWiresCoolingTowerLocalRemoteInterlock(t *testing.T) {
+	now := time.Unix(1_760_200_000, 0).UTC()
+	host, err := edgecontrol.NewHost()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tower := &shadowStubTowerAdapter{
+		component: edgecontrol.ComponentDescriptor{
+			ID: "ct-01", Enabled: true, Kind: edgecontrol.ComponentDeviceDriver, Type: "COOLING_TOWER",
+			FactoryID: edgecontrol.DeclarativeModbusFactoryID, Version: "1.0.0",
+			Profiles: []edgecontrol.CapabilityProfileID{edgecontrol.ProfileCoolingTower},
+			ChannelBindings: map[edgecontrol.SemanticChannel]string{
+				edgecontrol.SemanticRunState:         "ct-01/run_state",
+				edgecontrol.SemanticFaultCode:        "ct-01/fault_code",
+				edgecontrol.SemanticLocalRemoteMode:  "ct-01/local_remote_mode",
+				edgecontrol.SemanticFanSpeed:         "ct-01/fan_speed",
+				edgecontrol.SemanticFanSpeedSetpoint: "ct-01/fan_speed_sp",
+			},
+		},
+		channels: []edgecontrol.ChannelDescriptor{
+			{ComponentID: "ct-01", ChannelID: "run_state", PointID: "ct:run", DataType: edgecontrol.DataTypeString, Access: edgecontrol.AccessReadOnly, Category: edgecontrol.ChannelCategoryOpenemsType, PollPriority: edgecontrol.PriorityHigh, LocalPersistencePriority: edgecontrol.PriorityHigh, RemotePersistencePriority: edgecontrol.PriorityHigh, AggregationPriority: edgecontrol.PriorityHigh, ResendPriority: edgecontrol.PriorityHigh},
+			{ComponentID: "ct-01", ChannelID: "fault_code", PointID: "ct:fault", DataType: edgecontrol.DataTypeString, Access: edgecontrol.AccessReadOnly, Category: edgecontrol.ChannelCategoryOpenemsType, PollPriority: edgecontrol.PriorityHigh, LocalPersistencePriority: edgecontrol.PriorityHigh, RemotePersistencePriority: edgecontrol.PriorityHigh, AggregationPriority: edgecontrol.PriorityHigh, ResendPriority: edgecontrol.PriorityHigh},
+			{ComponentID: "ct-01", ChannelID: "local_remote_mode", PointID: "ct:mode", DataType: edgecontrol.DataTypeString, Access: edgecontrol.AccessReadOnly, Category: edgecontrol.ChannelCategoryOpenemsType, PollPriority: edgecontrol.PriorityHigh, LocalPersistencePriority: edgecontrol.PriorityHigh, RemotePersistencePriority: edgecontrol.PriorityHigh, AggregationPriority: edgecontrol.PriorityHigh, ResendPriority: edgecontrol.PriorityHigh},
+			{ComponentID: "ct-01", ChannelID: "fan_speed", PointID: "ct:fan", DataType: edgecontrol.DataTypeDouble, Access: edgecontrol.AccessReadOnly, Category: edgecontrol.ChannelCategoryOpenemsType, PollPriority: edgecontrol.PriorityHigh, LocalPersistencePriority: edgecontrol.PriorityHigh, RemotePersistencePriority: edgecontrol.PriorityHigh, AggregationPriority: edgecontrol.PriorityHigh, ResendPriority: edgecontrol.PriorityHigh},
+			{ComponentID: "ct-01", ChannelID: "fan_speed_sp", PointID: "ct:fansp", DataType: edgecontrol.DataTypeDouble, Access: edgecontrol.AccessReadWrite, Category: edgecontrol.ChannelCategoryOpenemsType, PollPriority: edgecontrol.PriorityHigh, LocalPersistencePriority: edgecontrol.PriorityHigh, RemotePersistencePriority: edgecontrol.PriorityHigh, AggregationPriority: edgecontrol.PriorityHigh, ResendPriority: edgecontrol.PriorityHigh},
+		},
+		mode: "LOCAL",
+		fan:  72.0,
+	}
+	if err := host.RegisterAdapter(tower); err != nil {
+		t.Fatal(err)
+	}
+	interlock, err := edgecontrol.NewHydraulicInterlockController(edgecontrol.HydraulicInterlockConfig{
+		Policy: edgecontrol.DefaultAutonomyPolicyConfig(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := host.Start([]edgecontrol.ControllerBinding{
+		{Priority: 10, Critical: true, Controller: interlock},
+		{Priority: 100, Controller: &shadowTowerIntentController{target: 40.0}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr := NewShadowManager("0193f000-2000-7000-8000-000000000045", t.TempDir(), host, nil, interlock, nil, nil, nil)
+	mgr.now = func() time.Time { return now }
+	mgr.refreshControllerBindings()
+
+	res, err := host.RunCycle(context.Background(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Cycle.Decisions) != 1 || res.Cycle.Decisions[0].Accepted ||
+		res.Cycle.Decisions[0].ConstraintReasons[0].Reason != "CABINET_LOCAL_MANUAL" {
+		t.Fatalf("expected CABINET_LOCAL_MANUAL block on wired tower, got %+v", res.Cycle.Decisions)
+	}
+	if tower.fan != 72.0 {
+		t.Fatalf("expected local tower fan 72.0 preserved, got %v", tower.fan)
+	}
 }

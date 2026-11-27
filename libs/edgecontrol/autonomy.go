@@ -26,6 +26,7 @@ const (
 	autonomyReasonMinStopTime    = "COMPRESSOR_MIN_STOP_TIME"
 	autonomyReasonPumpFreqLimits = "PUMP_FREQUENCY_LIMIT"
 	autonomyReasonLocalManual    = "CABINET_LOCAL_MANUAL"
+	autonomyReasonTowerFault     = "HYDRAULIC_INTERLOCK_TOWER_FAULT"
 )
 
 // AutonomyPolicyConfig mirrors the edge autonomy & snapshot policy distributed
@@ -132,11 +133,24 @@ type PumpInterlockBinding struct {
 	LocalRemoteMode  string
 }
 
+// CoolingTowerInterlockBinding names the ProcessImage channels used to guard one cooling tower.
+type CoolingTowerInterlockBinding struct {
+	ComponentID     string
+	StartCommand    string
+	StopCommand     string
+	FanSpeedCommand string
+	RunState        string
+	FaultChannel    string
+	LocalRemoteMode string
+}
+
 // HydraulicInterlockConfig configures HydraulicInterlockController.
 type HydraulicInterlockConfig struct {
 	ID                 string
 	Chillers           []ChillerInterlockBinding
 	ChilledWaterPumps  []PumpInterlockBinding
+	CoolingWaterPumps  []PumpInterlockBinding
+	CoolingTowers      []CoolingTowerInterlockBinding
 	PumpFrequencyAddrs []string
 	Policy             AutonomyPolicyConfig
 }
@@ -160,15 +174,18 @@ type compressorCycleTracker struct {
 // intents commit, blocking unsafe chiller starts, tripping chillers on flow loss,
 // enforcing compressor min-run / min-stop timers, and clamping pump VFD bounds.
 type HydraulicInterlockController struct {
-	mu                 sync.Mutex
-	id                 string
-	chillers           []ChillerInterlockBinding
-	chwPumps           []PumpInterlockBinding
-	pumpFrequencyAddrs []string
-	policy             AutonomyPolicyConfig
-	trackers           map[string]*compressorCycleTracker
-	flowProven         bool
-	lastBlockedReasons map[string]string
+	mu                   sync.Mutex
+	id                   string
+	chillers             []ChillerInterlockBinding
+	chwPumps             []PumpInterlockBinding
+	cwPumps              []PumpInterlockBinding
+	coolingTowers        []CoolingTowerInterlockBinding
+	explicitPumpFreqAddr []string
+	pumpFrequencyAddrs   []string
+	policy               AutonomyPolicyConfig
+	trackers             map[string]*compressorCycleTracker
+	flowProven           bool
+	lastBlockedReasons   map[string]string
 }
 
 // NewHydraulicInterlockController creates a validated hydraulic safety controller.
@@ -182,13 +199,16 @@ func NewHydraulicInterlockController(cfg HydraulicInterlockConfig) (*HydraulicIn
 	}
 
 	return &HydraulicInterlockController{
-		id:                 id,
-		chillers:           slices.Clone(cfg.Chillers),
-		chwPumps:           slices.Clone(cfg.ChilledWaterPumps),
-		pumpFrequencyAddrs: collectPumpFrequencyAddrs(cfg.PumpFrequencyAddrs, cfg.ChilledWaterPumps),
-		policy:             cfg.Policy,
-		trackers:           make(map[string]*compressorCycleTracker, len(cfg.Chillers)),
-		lastBlockedReasons: make(map[string]string),
+		id:                   id,
+		chillers:             slices.Clone(cfg.Chillers),
+		chwPumps:             slices.Clone(cfg.ChilledWaterPumps),
+		cwPumps:              slices.Clone(cfg.CoolingWaterPumps),
+		coolingTowers:        slices.Clone(cfg.CoolingTowers),
+		explicitPumpFreqAddr: slices.Clone(cfg.PumpFrequencyAddrs),
+		pumpFrequencyAddrs:   collectPumpFrequencyAddrs(cfg.PumpFrequencyAddrs, cfg.ChilledWaterPumps, cfg.CoolingWaterPumps),
+		policy:               cfg.Policy,
+		trackers:             make(map[string]*compressorCycleTracker, len(cfg.Chillers)),
+		lastBlockedReasons:   make(map[string]string),
 	}, nil
 }
 
@@ -211,18 +231,36 @@ func (c *HydraulicInterlockController) UpdatePolicy(policy AutonomyPolicyConfig)
 
 // UpdateBindings hot-updates equipment bindings when driver config shadow changes.
 func (c *HydraulicInterlockController) UpdateBindings(chillers []ChillerInterlockBinding, chwPumps []PumpInterlockBinding, pumpFrequencyAddrs []string) {
-	dedup := collectPumpFrequencyAddrs(pumpFrequencyAddrs, chwPumps)
-
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.chillers = slices.Clone(chillers)
 	c.chwPumps = slices.Clone(chwPumps)
-	c.pumpFrequencyAddrs = dedup
+	c.explicitPumpFreqAddr = slices.Clone(pumpFrequencyAddrs)
+	c.pumpFrequencyAddrs = collectPumpFrequencyAddrs(c.explicitPumpFreqAddr, c.chwPumps, c.cwPumps)
 }
 
-func collectPumpFrequencyAddrs(pumpFrequencyAddrs []string, chwPumps []PumpInterlockBinding) []string {
-	freqSet := make(map[string]struct{}, len(pumpFrequencyAddrs)+len(chwPumps))
-	out := make([]string, 0, len(pumpFrequencyAddrs)+len(chwPumps))
+// UpdateCoolingWaterPumps hot-updates condenser pump interlock bindings.
+func (c *HydraulicInterlockController) UpdateCoolingWaterPumps(cwPumps []PumpInterlockBinding) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cwPumps = slices.Clone(cwPumps)
+	c.pumpFrequencyAddrs = collectPumpFrequencyAddrs(c.explicitPumpFreqAddr, c.chwPumps, c.cwPumps)
+}
+
+// UpdateCoolingTowers hot-updates cooling-tower interlock bindings.
+func (c *HydraulicInterlockController) UpdateCoolingTowers(towers []CoolingTowerInterlockBinding) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.coolingTowers = slices.Clone(towers)
+}
+
+func collectPumpFrequencyAddrs(pumpFrequencyAddrs []string, pumpGroups ...[]PumpInterlockBinding) []string {
+	totalPumps := 0
+	for _, group := range pumpGroups {
+		totalPumps += len(group)
+	}
+	freqSet := make(map[string]struct{}, len(pumpFrequencyAddrs)+totalPumps)
+	out := make([]string, 0, len(pumpFrequencyAddrs)+totalPumps)
 	addFreq := func(addr string) {
 		addr = strings.TrimSpace(addr)
 		if addr == "" {
@@ -237,8 +275,10 @@ func collectPumpFrequencyAddrs(pumpFrequencyAddrs []string, chwPumps []PumpInter
 	for _, addr := range pumpFrequencyAddrs {
 		addFreq(addr)
 	}
-	for _, pump := range chwPumps {
-		addFreq(pump.FrequencyCommand)
+	for _, group := range pumpGroups {
+		for _, pump := range group {
+			addFreq(pump.FrequencyCommand)
+		}
 	}
 	return out
 }
@@ -302,6 +342,24 @@ func (c *HydraulicInterlockController) Run(_ context.Context, img ProcessImage, 
 	for _, pump := range c.chwPumps {
 		if localRemoteChannelIsManual(img, pump.LocalRemoteMode) {
 			denyWritableChannels(img, plan, c.id, autonomyReasonLocalManual, blocked, pump.StartCommand, pump.StopCommand, pump.FrequencyCommand)
+		}
+	}
+
+	for _, pump := range c.cwPumps {
+		if localRemoteChannelIsManual(img, pump.LocalRemoteMode) {
+			denyWritableChannels(img, plan, c.id, autonomyReasonLocalManual, blocked, pump.StartCommand, pump.StopCommand, pump.FrequencyCommand)
+		}
+	}
+
+	for _, tower := range c.coolingTowers {
+		if localRemoteChannelIsManual(img, tower.LocalRemoteMode) {
+			denyWritableChannels(img, plan, c.id, autonomyReasonLocalManual, blocked, tower.StartCommand, tower.StopCommand, tower.FanSpeedCommand)
+			continue
+		}
+		if faultChannelActive(img, tower.FaultChannel) {
+			if denyWritableChannel(img, plan, tower.StartCommand, c.id, autonomyReasonTowerFault) {
+				blocked[tower.StartCommand] = autonomyReasonTowerFault
+			}
 		}
 	}
 

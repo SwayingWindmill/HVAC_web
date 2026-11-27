@@ -935,6 +935,8 @@ func (m *ShadowManager) refreshControllerBindings() {
 
 	var chillers []edgecontrol.ChillerInterlockBinding
 	var pumps []edgecontrol.PumpInterlockBinding
+	var cwPumps []edgecontrol.PumpInterlockBinding
+	var interlockTowers []edgecontrol.CoolingTowerInterlockBinding
 	var pumpFreqAddrs []string
 	var fallbackChillers []edgecontrol.ChillerFallbackTarget
 	var fallbackPumps []edgecontrol.PumpFallbackTarget
@@ -942,6 +944,7 @@ func (m *ShadowManager) refreshControllerBindings() {
 	var clusterPumps []edgecontrol.ClusterPumpBinding
 	var clusterTowers []edgecontrol.ClusterTowerBinding
 	var plantLoadAddr string
+	var clusterSensors edgecontrol.ClusterSensorBindings
 	channelSemantics := make(map[string]edgecontrol.SemanticChannel)
 
 	for _, comp := range manifest.Components {
@@ -986,15 +989,18 @@ func (m *ShadowManager) refreshControllerBindings() {
 				LoadLimitAddr:       loadLimitAddr,
 				CoolingCapacityAddr: comp.ChannelBindings[edgecontrol.SemanticCoolingCapacity],
 				PowerAddr:           comp.ChannelBindings[edgecontrol.SemanticPower],
+				LocalRemoteModeAddr: localRemoteAddr,
 			})
 		}
 		if hasCapabilityProfile(comp.Profiles, edgecontrol.ProfileVariableSpeedPump) {
 			freqAddr := comp.ChannelBindings[edgecontrol.SemanticFrequencySetpoint]
+			actualFreqAddr := comp.ChannelBindings[edgecontrol.SemanticFrequency]
 			runAddr := comp.ChannelBindings[edgecontrol.SemanticRunState]
 			flowAddr := comp.ChannelBindings[edgecontrol.SemanticFlow]
 			faultAddr := comp.ChannelBindings[edgecontrol.SemanticFaultCode]
 			localRemoteAddr := resolveLocalRemoteModeChannel(comp, manifest.Channels)
-			pumps = append(pumps, edgecontrol.PumpInterlockBinding{
+			pumpLoop := resolvePumpLoop(comp)
+			pumpBinding := edgecontrol.PumpInterlockBinding{
 				ComponentID:      comp.ID,
 				StartCommand:     comp.ChannelBindings[edgecontrol.SemanticStartCommand],
 				StopCommand:      comp.ChannelBindings[edgecontrol.SemanticStopCommand],
@@ -1003,7 +1009,12 @@ func (m *ShadowManager) refreshControllerBindings() {
 				FaultChannel:     faultAddr,
 				FrequencyCommand: freqAddr,
 				LocalRemoteMode:  localRemoteAddr,
-			})
+			}
+			if pumpLoop == edgecontrol.ClusterPumpLoopCW {
+				cwPumps = append(cwPumps, pumpBinding)
+			} else {
+				pumps = append(pumps, pumpBinding)
+			}
 			if freqAddr != "" {
 				pumpFreqAddrs = append(pumpFreqAddrs, freqAddr)
 				fallbackPumps = append(fallbackPumps, edgecontrol.PumpFallbackTarget{
@@ -1014,28 +1025,67 @@ func (m *ShadowManager) refreshControllerBindings() {
 				})
 			}
 			clusterPumps = append(clusterPumps, edgecontrol.ClusterPumpBinding{
-				ComponentID:   comp.ID,
-				FrequencyAddr: freqAddr,
-				RunStateAddr:  runAddr,
-				FaultAddr:     faultAddr,
-				FlowAddr:      flowAddr,
+				ComponentID:         comp.ID,
+				Loop:                pumpLoop,
+				FrequencyAddr:       freqAddr,
+				ActualFrequencyAddr: actualFreqAddr,
+				RunStateAddr:        runAddr,
+				FaultAddr:           faultAddr,
+				FlowAddr:            flowAddr,
+				LocalRemoteModeAddr: localRemoteAddr,
 			})
 		}
 		if hasCapabilityProfile(comp.Profiles, edgecontrol.ProfileCoolingTower) {
+			localRemoteAddr := resolveLocalRemoteModeChannel(comp, manifest.Channels)
+			fanSpeedAddr := comp.ChannelBindings[edgecontrol.SemanticFanSpeedSetpoint]
+			runAddr := comp.ChannelBindings[edgecontrol.SemanticRunState]
+			faultAddr := comp.ChannelBindings[edgecontrol.SemanticFaultCode]
+			interlockTowers = append(interlockTowers, edgecontrol.CoolingTowerInterlockBinding{
+				ComponentID:     comp.ID,
+				StartCommand:    comp.ChannelBindings[edgecontrol.SemanticStartCommand],
+				StopCommand:     comp.ChannelBindings[edgecontrol.SemanticStopCommand],
+				FanSpeedCommand: fanSpeedAddr,
+				RunState:        runAddr,
+				FaultChannel:    faultAddr,
+				LocalRemoteMode: localRemoteAddr,
+			})
 			clusterTowers = append(clusterTowers, edgecontrol.ClusterTowerBinding{
-				ComponentID:  comp.ID,
-				FanSpeedAddr: comp.ChannelBindings[edgecontrol.SemanticFanSpeedSetpoint],
-				RunStateAddr: comp.ChannelBindings[edgecontrol.SemanticRunState],
-				FaultAddr:    comp.ChannelBindings[edgecontrol.SemanticFaultCode],
+				ComponentID:         comp.ID,
+				FanSpeedAddr:        fanSpeedAddr,
+				ActualFanSpeedAddr:  comp.ChannelBindings[edgecontrol.SemanticFanSpeed],
+				RunStateAddr:        runAddr,
+				FaultAddr:           faultAddr,
+				LocalRemoteModeAddr: localRemoteAddr,
 			})
 		}
-		if plantLoadAddr == "" && hasCapabilityProfile(comp.Profiles, edgecontrol.ProfileThermalEnergyMeter) {
-			plantLoadAddr = comp.ChannelBindings[edgecontrol.SemanticCoolingCapacity]
+		if hasCapabilityProfile(comp.Profiles, edgecontrol.ProfileThermalEnergyMeter) {
+			if plantLoadAddr == "" {
+				plantLoadAddr = comp.ChannelBindings[edgecontrol.SemanticCoolingCapacity]
+			}
+			if clusterSensors.CHWSupplyTempAddr == "" {
+				clusterSensors.CHWSupplyTempAddr = comp.ChannelBindings[edgecontrol.SemanticSupplyTemperature]
+			}
+			if clusterSensors.CHWReturnTempAddr == "" {
+				clusterSensors.CHWReturnTempAddr = comp.ChannelBindings[edgecontrol.SemanticReturnTemperature]
+			}
+		}
+		if hasCapabilityProfile(comp.Profiles, edgecontrol.ProfileWeatherStation) {
+			if clusterSensors.OutdoorTempAddr == "" {
+				clusterSensors.OutdoorTempAddr = comp.ChannelBindings[edgecontrol.SemanticOutdoorTemperature]
+			}
+			if clusterSensors.OutdoorHumidityAddr == "" {
+				clusterSensors.OutdoorHumidityAddr = comp.ChannelBindings[edgecontrol.SemanticOutdoorHumidity]
+			}
+		}
+		if clusterSensors.ZoneTempAddr == "" && hasCapabilityProfile(comp.Profiles, edgecontrol.ProfileZoneTemperatureSensor) {
+			clusterSensors.ZoneTempAddr = comp.ChannelBindings[edgecontrol.SemanticZoneTemperature]
 		}
 	}
 
 	if m.interlock != nil {
 		m.interlock.UpdateBindings(chillers, pumps, pumpFreqAddrs)
+		m.interlock.UpdateCoolingWaterPumps(cwPumps)
+		m.interlock.UpdateCoolingTowers(interlockTowers)
 	}
 	if m.fallback != nil {
 		m.fallback.UpdateTargets(fallbackChillers, fallbackPumps)
@@ -1045,10 +1095,30 @@ func (m *ShadowManager) refreshControllerBindings() {
 	}
 	if m.clusterCtrl != nil {
 		m.clusterCtrl.UpdateBindings(clusterChillers, clusterPumps, clusterTowers, plantLoadAddr)
+		m.clusterCtrl.UpdateSensorBindings(clusterSensors)
 	}
 	if m.aggregator != nil {
 		m.aggregator.SetChannelSemantics(channelSemantics)
 	}
+}
+
+func resolvePumpLoop(comp edgecontrol.ManifestComponent) string {
+	if raw, ok := comp.Properties["loop"]; ok {
+		var loop string
+		if json.Unmarshal(raw, &loop) == nil {
+			switch strings.ToUpper(strings.TrimSpace(loop)) {
+			case edgecontrol.ClusterPumpLoopCW, "CONDENSER":
+				return edgecontrol.ClusterPumpLoopCW
+			case edgecontrol.ClusterPumpLoopCHW, "CHILLED":
+				return edgecontrol.ClusterPumpLoopCHW
+			}
+		}
+	}
+	upperID := strings.ToUpper(strings.TrimSpace(comp.ID))
+	if strings.HasPrefix(upperID, "CWP") || strings.Contains(upperID, "CONDENSER") {
+		return edgecontrol.ClusterPumpLoopCW
+	}
+	return edgecontrol.ClusterPumpLoopCHW
 }
 
 func resolveLocalRemoteModeChannel(comp edgecontrol.ManifestComponent, channels []edgecontrol.ChannelDescriptor) string {
