@@ -121,6 +121,8 @@ type GatewayDesiredConfig struct {
 	AutonomyPolicy      *GatewayAutonomyPolicy            `json:"autonomyPolicy,omitempty"`
 	EdgeRuleBundle      *edgecontrol.EdgeRuleBundle       `json:"edgeRuleBundle,omitempty"`
 	EdgeModels          []edgecontrol.EdgeModelBundle     `json:"edgeModels,omitempty"`
+	ClusterPolicy       *edgecontrol.ClusterControlPolicy `json:"clusterPolicy,omitempty"`
+	EnergySchedule      *edgecontrol.EdgeEnergySchedule   `json:"energySchedule,omitempty"`
 	UpdatedBy           string                            `json:"updatedBy"`
 	Reason              string                            `json:"reason"`
 	CreatedAt           time.Time                         `json:"createdAt"`
@@ -138,6 +140,8 @@ type GatewayReportedConfig struct {
 	EdgeRuleBundle      *edgecontrol.EdgeRuleBundle          `json:"edgeRuleBundle,omitempty"`
 	EdgeModels          []edgecontrol.EdgeModelBundle        `json:"edgeModels,omitempty"`
 	EdgeModelStatuses   []edgecontrol.EdgeModelRuntimeStatus `json:"edgeModelStatuses,omitempty"`
+	ClusterPolicy       *edgecontrol.ClusterControlPolicy    `json:"clusterPolicy,omitempty"`
+	EnergySchedule      *edgecontrol.EdgeEnergySchedule      `json:"energySchedule,omitempty"`
 	DriftDetails        []DriftDetail                        `json:"driftDetails"`
 	ErrorMessage        *string                              `json:"errorMessage,omitempty"`
 	ReportedAt          time.Time                            `json:"reportedAt"`
@@ -162,6 +166,8 @@ type UpdateDesiredConfigInput struct {
 	AutonomyPolicy          OptionalAutonomyPolicy             `json:"autonomyPolicy,omitzero"`
 	EdgeRuleBundle          OptionalEdgeRuleBundle             `json:"edgeRuleBundle,omitzero"`
 	EdgeModels              OptionalEdgeModelBundles           `json:"edgeModels,omitzero"`
+	ClusterPolicy           OptionalClusterControlPolicy       `json:"clusterPolicy,omitzero"`
+	EnergySchedule          OptionalEdgeEnergySchedule         `json:"energySchedule,omitzero"`
 	Reason                  string                             `json:"reason"`
 }
 
@@ -183,6 +189,8 @@ type GatewayShadowReportInput struct {
 	EdgeRuleBundle      *edgecontrol.EdgeRuleBundle          `json:"edgeRuleBundle,omitempty"`
 	EdgeModels          []edgecontrol.EdgeModelBundle        `json:"edgeModels,omitempty"`
 	EdgeModelStatuses   []edgecontrol.EdgeModelRuntimeStatus `json:"edgeModelStatuses,omitempty"`
+	ClusterPolicy       *edgecontrol.ClusterControlPolicy    `json:"clusterPolicy,omitempty"`
+	EnergySchedule      *edgecontrol.EdgeEnergySchedule      `json:"energySchedule,omitempty"`
 	DriftDetails        []DriftDetail                        `json:"driftDetails,omitempty"`
 	ErrorMessage        *string                              `json:"errorMessage,omitempty"`
 	ReportedAt          *time.Time                           `json:"reportedAt,omitempty"`
@@ -263,6 +271,9 @@ type validatedShadowSections struct {
 	drivers        []GatewayModbusDriverConfig
 	autonomy       *GatewayAutonomyPolicy
 	edgeRuleBundle *edgecontrol.EdgeRuleBundle
+	edgeModels     []edgecontrol.EdgeModelBundle
+	clusterPolicy  *edgecontrol.ClusterControlPolicy
+	energySchedule *edgecontrol.EdgeEnergySchedule
 	encoded        encodedShadowSections
 }
 
@@ -273,6 +284,9 @@ func normalizeAndValidateDesiredShadow(
 	driverConfigs []GatewayModbusDriverConfig,
 	autonomyPolicy *GatewayAutonomyPolicy,
 	edgeRuleBundle *edgecontrol.EdgeRuleBundle,
+	edgeModels []edgecontrol.EdgeModelBundle,
+	clusterPolicy *edgecontrol.ClusterControlPolicy,
+	energySchedule *edgecontrol.EdgeEnergySchedule,
 ) (validatedShadowSections, error) {
 	cleanedMappings, err := validatePointMappings(pointMappings)
 	if err != nil {
@@ -298,7 +312,29 @@ func normalizeAndValidateDesiredShadow(
 	if err != nil {
 		return validatedShadowSections{}, err
 	}
-	encoded, err := marshalShadowSections(cleanedMappings, cleanedPolicies, cleanedUnits, cleanedDrivers, cleanedAutonomy, cleanedEdgeRules, nil, nil)
+	cleanedEdgeModels, err := validateEdgeModelBundles(edgeModels)
+	if err != nil {
+		return validatedShadowSections{}, err
+	}
+	cleanedClusterPolicy, err := validateClusterPolicy(clusterPolicy)
+	if err != nil {
+		return validatedShadowSections{}, err
+	}
+	cleanedEnergySchedule, err := validateEnergySchedule(energySchedule)
+	if err != nil {
+		return validatedShadowSections{}, err
+	}
+	encoded, err := marshalDesiredShadowSections(
+		cleanedMappings,
+		cleanedPolicies,
+		cleanedUnits,
+		cleanedDrivers,
+		cleanedAutonomy,
+		cleanedEdgeRules,
+		cleanedEdgeModels,
+		cleanedClusterPolicy,
+		cleanedEnergySchedule,
+	)
 	if err != nil {
 		return validatedShadowSections{}, err
 	}
@@ -309,6 +345,9 @@ func normalizeAndValidateDesiredShadow(
 		drivers:        cleanedDrivers,
 		autonomy:       cleanedAutonomy,
 		edgeRuleBundle: cleanedEdgeRules,
+		edgeModels:     cleanedEdgeModels,
+		clusterPolicy:  cleanedClusterPolicy,
+		energySchedule: cleanedEnergySchedule,
 		encoded:        encoded,
 	}, nil
 }
@@ -612,6 +651,33 @@ type encodedShadowSections struct {
 	edgeRulesArg         *string
 	edgeModelsArg        *string
 	edgeModelStatusesArg *string
+	clusterPolicyArg     *string
+	energyScheduleArg    *string
+}
+
+func marshalDesiredShadowSections(
+	mappings []GatewayPointMapping,
+	policies []GatewaySamplingPolicy,
+	units map[string]ConcentratorUnitShadow,
+	drivers []GatewayModbusDriverConfig,
+	autonomy *GatewayAutonomyPolicy,
+	edgeRules *edgecontrol.EdgeRuleBundle,
+	edgeModels []edgecontrol.EdgeModelBundle,
+	clusterPolicy *edgecontrol.ClusterControlPolicy,
+	energySchedule *edgecontrol.EdgeEnergySchedule,
+) (encodedShadowSections, error) {
+	return marshalShadowSections(
+		mappings,
+		policies,
+		units,
+		drivers,
+		autonomy,
+		edgeRules,
+		edgeModels,
+		nil,
+		clusterPolicy,
+		energySchedule,
+	)
 }
 
 func marshalShadowSections(
@@ -623,6 +689,8 @@ func marshalShadowSections(
 	edgeRules *edgecontrol.EdgeRuleBundle,
 	edgeModels []edgecontrol.EdgeModelBundle,
 	edgeModelStatuses []edgecontrol.EdgeModelRuntimeStatus,
+	clusterPolicy *edgecontrol.ClusterControlPolicy,
+	energySchedule *edgecontrol.EdgeEnergySchedule,
 ) (encodedShadowSections, error) {
 	if mappings == nil {
 		mappings = []GatewayPointMapping{}
@@ -712,6 +780,30 @@ func marshalShadowSections(
 		encoded := string(encodedBytes)
 		edgeModelStatusesArg = &encoded
 	}
+	var clusterPolicyArg *string
+	if clusterPolicy != nil {
+		encodedBytes, err := json.Marshal(clusterPolicy)
+		if err != nil {
+			return encodedShadowSections{}, fmt.Errorf("%w: encode clusterPolicy: %v", ErrConfigShadowInvalid, err)
+		}
+		if estimatedPostgresJSONBTextBytes(encodedBytes) > maxClusterPolicyJSONBytes {
+			return encodedShadowSections{}, fmt.Errorf("%w: clusterPolicy exceeds %d bytes", ErrConfigShadowInvalid, maxClusterPolicyJSONBytes)
+		}
+		encoded := string(encodedBytes)
+		clusterPolicyArg = &encoded
+	}
+	var energyScheduleArg *string
+	if energySchedule != nil {
+		encodedBytes, err := json.Marshal(energySchedule)
+		if err != nil {
+			return encodedShadowSections{}, fmt.Errorf("%w: encode energySchedule: %v", ErrConfigShadowInvalid, err)
+		}
+		if estimatedPostgresJSONBTextBytes(encodedBytes) > maxEnergyScheduleJSONBytes {
+			return encodedShadowSections{}, fmt.Errorf("%w: energySchedule exceeds %d bytes", ErrConfigShadowInvalid, maxEnergyScheduleJSONBytes)
+		}
+		encoded := string(encodedBytes)
+		energyScheduleArg = &encoded
+	}
 	return encodedShadowSections{
 		mappingsJSON:         mappingsBytes,
 		policiesJSON:         policiesBytes,
@@ -721,6 +813,8 @@ func marshalShadowSections(
 		edgeRulesArg:         edgeRulesArg,
 		edgeModelsArg:        edgeModelsArg,
 		edgeModelStatusesArg: edgeModelStatusesArg,
+		clusterPolicyArg:     clusterPolicyArg,
+		energyScheduleArg:    energyScheduleArg,
 	}, nil
 }
 
@@ -749,6 +843,8 @@ func computeConfigShadowDrift(desired *GatewayDesiredConfig, reported *GatewayRe
 	var desiredAutonomy, reportedAutonomy *GatewayAutonomyPolicy
 	var desiredEdgeRules, reportedEdgeRules *edgecontrol.EdgeRuleBundle
 	var desiredEdgeModels, reportedEdgeModels []edgecontrol.EdgeModelBundle
+	var desiredClusterPolicy, reportedClusterPolicy *edgecontrol.ClusterControlPolicy
+	var desiredEnergySchedule, reportedEnergySchedule *edgecontrol.EdgeEnergySchedule
 	if desired != nil {
 		desiredMappings = desired.PointMappings
 		desiredPolicies = desired.SamplingPolicies
@@ -757,6 +853,8 @@ func computeConfigShadowDrift(desired *GatewayDesiredConfig, reported *GatewayRe
 		desiredAutonomy = desired.AutonomyPolicy
 		desiredEdgeRules = desired.EdgeRuleBundle
 		desiredEdgeModels = desired.EdgeModels
+		desiredClusterPolicy = desired.ClusterPolicy
+		desiredEnergySchedule = desired.EnergySchedule
 	}
 	if reported != nil {
 		reportedMappings = reported.PointMappings
@@ -766,6 +864,8 @@ func computeConfigShadowDrift(desired *GatewayDesiredConfig, reported *GatewayRe
 		reportedAutonomy = reported.AutonomyPolicy
 		reportedEdgeRules = reported.EdgeRuleBundle
 		reportedEdgeModels = reported.EdgeModels
+		reportedClusterPolicy = reported.ClusterPolicy
+		reportedEnergySchedule = reported.EnergySchedule
 	}
 	drift = append(drift, diffPointMappings(desiredMappings, reportedMappings)...)
 	drift = append(drift, diffSamplingPolicies(desiredPolicies, reportedPolicies)...)
@@ -774,6 +874,8 @@ func computeConfigShadowDrift(desired *GatewayDesiredConfig, reported *GatewayRe
 	drift = append(drift, diffAutonomyPolicy(desiredAutonomy, reportedAutonomy)...)
 	drift = append(drift, diffEdgeRuleBundle(desiredEdgeRules, reportedEdgeRules)...)
 	drift = append(drift, diffEdgeModelBundles(desiredEdgeModels, reportedEdgeModels)...)
+	drift = append(drift, diffClusterPolicy(desiredClusterPolicy, reportedClusterPolicy)...)
+	drift = append(drift, diffEnergySchedule(desiredEnergySchedule, reportedEnergySchedule)...)
 	return drift
 }
 
@@ -1065,6 +1167,7 @@ func loadDesiredConfigInTx(ctx context.Context, tx pgx.Tx, tenantID, gatewayID s
 	query := `
 SELECT desired_revision, point_mappings, sampling_policies, concentrator_configs,
        COALESCE(driver_configs, '[]'::jsonb), autonomy_policy, edge_rule_bundle, edge_models,
+       cluster_policy_json, energy_schedule_json,
        updated_by::text, reason, created_at, updated_at
 FROM connectivity.gateway_desired_configs
 WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
@@ -1073,10 +1176,11 @@ WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
 		query += "FOR UPDATE\n"
 	}
 	var cfg GatewayDesiredConfig
-	var mappingsJSON, policiesJSON, unitsJSON, driversJSON, autonomyJSON, edgeRulesJSON, edgeModelsJSON []byte
+	var mappingsJSON, policiesJSON, unitsJSON, driversJSON, autonomyJSON, edgeRulesJSON, edgeModelsJSON, clusterPolicyJSON, energyScheduleJSON []byte
 	err := tx.QueryRow(ctx, query, tenantID, gatewayID).Scan(
 		&cfg.DesiredRevision, &mappingsJSON, &policiesJSON, &unitsJSON,
 		&driversJSON, &autonomyJSON, &edgeRulesJSON, &edgeModelsJSON,
+		&clusterPolicyJSON, &energyScheduleJSON,
 		&cfg.UpdatedBy, &cfg.Reason, &cfg.CreatedAt, &cfg.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -1088,8 +1192,8 @@ WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
 	cfg.CreatedAt = cfg.CreatedAt.UTC()
 	cfg.UpdatedAt = cfg.UpdatedAt.UTC()
 	if err := decodeShadowConfigPayload(
-		mappingsJSON, policiesJSON, unitsJSON, driversJSON, autonomyJSON, edgeRulesJSON, edgeModelsJSON, nil,
-		&cfg.PointMappings, &cfg.SamplingPolicies, &cfg.ConcentratorConfigs, &cfg.DriverConfigs, &cfg.AutonomyPolicy, &cfg.EdgeRuleBundle, &cfg.EdgeModels, nil,
+		mappingsJSON, policiesJSON, unitsJSON, driversJSON, autonomyJSON, edgeRulesJSON, edgeModelsJSON, nil, clusterPolicyJSON, energyScheduleJSON,
+		&cfg.PointMappings, &cfg.SamplingPolicies, &cfg.ConcentratorConfigs, &cfg.DriverConfigs, &cfg.AutonomyPolicy, &cfg.EdgeRuleBundle, &cfg.EdgeModels, nil, &cfg.ClusterPolicy, &cfg.EnergySchedule,
 	); err != nil {
 		return nil, err
 	}
@@ -1100,6 +1204,7 @@ func loadReportedConfigInTx(ctx context.Context, tx pgx.Tx, tenantID, gatewayID 
 	query := `
 SELECT reported_revision, applied_status, point_mappings, sampling_policies, concentrator_configs,
        COALESCE(driver_configs, '[]'::jsonb), autonomy_policy, edge_rule_bundle, edge_models, edge_model_statuses,
+       cluster_policy_json, energy_schedule_json,
        drift_details, error_message, reported_at, updated_at
 FROM connectivity.gateway_reported_configs
 WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
@@ -1108,10 +1213,11 @@ WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
 		query += "FOR UPDATE\n"
 	}
 	var cfg GatewayReportedConfig
-	var mappingsJSON, policiesJSON, unitsJSON, driversJSON, autonomyJSON, edgeRulesJSON, edgeModelsJSON, edgeModelStatusesJSON, driftJSON []byte
+	var mappingsJSON, policiesJSON, unitsJSON, driversJSON, autonomyJSON, edgeRulesJSON, edgeModelsJSON, edgeModelStatusesJSON, clusterPolicyJSON, energyScheduleJSON, driftJSON []byte
 	err := tx.QueryRow(ctx, query, tenantID, gatewayID).Scan(
 		&cfg.ReportedRevision, &cfg.AppliedStatus, &mappingsJSON, &policiesJSON, &unitsJSON,
 		&driversJSON, &autonomyJSON, &edgeRulesJSON, &edgeModelsJSON, &edgeModelStatusesJSON,
+		&clusterPolicyJSON, &energyScheduleJSON,
 		&driftJSON, &cfg.ErrorMessage, &cfg.ReportedAt, &cfg.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -1123,8 +1229,8 @@ WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
 	cfg.ReportedAt = cfg.ReportedAt.UTC()
 	cfg.UpdatedAt = cfg.UpdatedAt.UTC()
 	if err := decodeShadowConfigPayload(
-		mappingsJSON, policiesJSON, unitsJSON, driversJSON, autonomyJSON, edgeRulesJSON, edgeModelsJSON, edgeModelStatusesJSON,
-		&cfg.PointMappings, &cfg.SamplingPolicies, &cfg.ConcentratorConfigs, &cfg.DriverConfigs, &cfg.AutonomyPolicy, &cfg.EdgeRuleBundle, &cfg.EdgeModels, &cfg.EdgeModelStatuses,
+		mappingsJSON, policiesJSON, unitsJSON, driversJSON, autonomyJSON, edgeRulesJSON, edgeModelsJSON, edgeModelStatusesJSON, clusterPolicyJSON, energyScheduleJSON,
+		&cfg.PointMappings, &cfg.SamplingPolicies, &cfg.ConcentratorConfigs, &cfg.DriverConfigs, &cfg.AutonomyPolicy, &cfg.EdgeRuleBundle, &cfg.EdgeModels, &cfg.EdgeModelStatuses, &cfg.ClusterPolicy, &cfg.EnergySchedule,
 	); err != nil {
 		return nil, err
 	}
@@ -1141,7 +1247,7 @@ WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
 }
 
 func decodeShadowConfigPayload(
-	mappingsJSON, policiesJSON, unitsJSON, driversJSON, autonomyJSON, edgeRulesJSON, edgeModelsJSON, edgeModelStatusesJSON []byte,
+	mappingsJSON, policiesJSON, unitsJSON, driversJSON, autonomyJSON, edgeRulesJSON, edgeModelsJSON, edgeModelStatusesJSON, clusterPolicyJSON, energyScheduleJSON []byte,
 	mappingsOut *[]GatewayPointMapping,
 	policiesOut *[]GatewaySamplingPolicy,
 	unitsOut *map[string]ConcentratorUnitShadow,
@@ -1150,6 +1256,8 @@ func decodeShadowConfigPayload(
 	edgeRulesOut **edgecontrol.EdgeRuleBundle,
 	edgeModelsOut *[]edgecontrol.EdgeModelBundle,
 	edgeModelStatusesOut *[]edgecontrol.EdgeModelRuntimeStatus,
+	clusterPolicyOut **edgecontrol.ClusterControlPolicy,
+	energyScheduleOut **edgecontrol.EdgeEnergySchedule,
 ) error {
 	*mappingsOut = []GatewayPointMapping{}
 	if len(mappingsJSON) > 0 {
@@ -1217,6 +1325,26 @@ func decodeShadowConfigPayload(
 		}
 		*edgeModelStatusesOut = parsed
 	}
+	if clusterPolicyOut != nil {
+		*clusterPolicyOut = nil
+		if trimmed := bytes.TrimSpace(clusterPolicyJSON); len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null")) {
+			var parsed edgecontrol.ClusterControlPolicy
+			if err := json.Unmarshal(trimmed, &parsed); err != nil {
+				return fmt.Errorf("decode clusterPolicy: %w", err)
+			}
+			*clusterPolicyOut = &parsed
+		}
+	}
+	if energyScheduleOut != nil {
+		*energyScheduleOut = nil
+		if trimmed := bytes.TrimSpace(energyScheduleJSON); len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null")) {
+			var parsed edgecontrol.EdgeEnergySchedule
+			if err := json.Unmarshal(trimmed, &parsed); err != nil {
+				return fmt.Errorf("decode energySchedule: %w", err)
+			}
+			*energyScheduleOut = &parsed
+		}
+	}
 	return nil
 }
 
@@ -1274,12 +1402,12 @@ func persistDesiredConfigInTx(
 		if _, err := tx.Exec(ctx, `
 INSERT INTO connectivity.gateway_desired_configs (
   tenant_id, gateway_id, desired_revision, point_mappings, sampling_policies, concentrator_configs,
-  driver_configs, autonomy_policy, edge_rule_bundle, edge_models, updated_by, reason, created_at, updated_at
+  driver_configs, autonomy_policy, edge_rule_bundle, edge_models, cluster_policy_json, energy_schedule_json, updated_by, reason, created_at, updated_at
 ) VALUES (
-  $1::uuid, $2::uuid, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, $11::uuid, $12, $13, $13
+  $1::uuid, $2::uuid, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, $11::jsonb, $12::jsonb, $13::uuid, $14, $15, $15
 )`, tenantID, gatewayID, desired.DesiredRevision,
 			string(encoded.mappingsJSON), string(encoded.policiesJSON), string(encoded.unitsJSON),
-			string(encoded.driversJSON), encoded.autonomyArg, encoded.edgeRulesArg, encoded.edgeModelsArg, desired.UpdatedBy, desired.Reason, desired.UpdatedAt); err != nil {
+			string(encoded.driversJSON), encoded.autonomyArg, encoded.edgeRulesArg, encoded.edgeModelsArg, encoded.clusterPolicyArg, encoded.energyScheduleArg, desired.UpdatedBy, desired.Reason, desired.UpdatedAt); err != nil {
 			return fmt.Errorf("insert gateway desired config: %w", err)
 		}
 		return nil
@@ -1294,13 +1422,15 @@ SET desired_revision = $3,
     autonomy_policy = $8::jsonb,
     edge_rule_bundle = $9::jsonb,
     edge_models = $10::jsonb,
-    updated_by = $11::uuid,
-    reason = $12,
-    updated_at = $13
+    cluster_policy_json = $11::jsonb,
+    energy_schedule_json = $12::jsonb,
+    updated_by = $13::uuid,
+    reason = $14,
+    updated_at = $15
 WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
 `, tenantID, gatewayID, desired.DesiredRevision,
 		string(encoded.mappingsJSON), string(encoded.policiesJSON), string(encoded.unitsJSON),
-		string(encoded.driversJSON), encoded.autonomyArg, encoded.edgeRulesArg, encoded.edgeModelsArg, desired.UpdatedBy, desired.Reason, desired.UpdatedAt); err != nil {
+		string(encoded.driversJSON), encoded.autonomyArg, encoded.edgeRulesArg, encoded.edgeModelsArg, encoded.clusterPolicyArg, encoded.energyScheduleArg, desired.UpdatedBy, desired.Reason, desired.UpdatedAt); err != nil {
 		return fmt.Errorf("update gateway desired config: %w", err)
 	}
 	return nil
@@ -1317,10 +1447,10 @@ func upsertReportedConfigInTx(
 	if _, err := tx.Exec(ctx, `
 INSERT INTO connectivity.gateway_reported_configs (
   tenant_id, gateway_id, reported_revision, applied_status,
-  point_mappings, sampling_policies, concentrator_configs, driver_configs, autonomy_policy, edge_rule_bundle, edge_models, edge_model_statuses, drift_details,
+  point_mappings, sampling_policies, concentrator_configs, driver_configs, autonomy_policy, edge_rule_bundle, edge_models, edge_model_statuses, cluster_policy_json, energy_schedule_json, drift_details,
   error_message, reported_at, updated_at
 ) VALUES (
-  $1::uuid, $2::uuid, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, $11::jsonb, $12::jsonb, $13::jsonb, $14, $15, $16
+  $1::uuid, $2::uuid, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16, $17, $18
 )
 ON CONFLICT (tenant_id, gateway_id) DO UPDATE SET
   reported_revision = EXCLUDED.reported_revision,
@@ -1333,13 +1463,15 @@ ON CONFLICT (tenant_id, gateway_id) DO UPDATE SET
   edge_rule_bundle = EXCLUDED.edge_rule_bundle,
   edge_models = EXCLUDED.edge_models,
   edge_model_statuses = EXCLUDED.edge_model_statuses,
+  cluster_policy_json = EXCLUDED.cluster_policy_json,
+  energy_schedule_json = EXCLUDED.energy_schedule_json,
   drift_details = EXCLUDED.drift_details,
   error_message = EXCLUDED.error_message,
   reported_at = EXCLUDED.reported_at,
   updated_at = EXCLUDED.updated_at
 `, tenantID, gatewayID, reported.ReportedRevision, reported.AppliedStatus,
 		string(encoded.mappingsJSON), string(encoded.policiesJSON), string(encoded.unitsJSON),
-		string(encoded.driversJSON), encoded.autonomyArg, encoded.edgeRulesArg, encoded.edgeModelsArg, encoded.edgeModelStatusesArg, string(driftJSON),
+		string(encoded.driversJSON), encoded.autonomyArg, encoded.edgeRulesArg, encoded.edgeModelsArg, encoded.edgeModelStatusesArg, encoded.clusterPolicyArg, encoded.energyScheduleArg, string(driftJSON),
 		reported.ErrorMessage, reported.ReportedAt, reported.UpdatedAt); err != nil {
 		return fmt.Errorf("upsert gateway reported config: %w", err)
 	}
@@ -1395,6 +1527,20 @@ func (store *Store) UpdateGatewayDesiredConfig(ctx context.Context, claims regis
 	var cleanedEdgeRules *edgecontrol.EdgeRuleBundle
 	if input.EdgeRuleBundle.Value != nil {
 		cleanedEdgeRules, err = validateEdgeRuleBundle(input.EdgeRuleBundle.Value)
+		if err != nil {
+			return GatewayConfigShadow{}, err
+		}
+	}
+	var cleanedClusterPolicy *edgecontrol.ClusterControlPolicy
+	if input.ClusterPolicy.Value != nil {
+		cleanedClusterPolicy, err = validateClusterPolicy(input.ClusterPolicy.Value)
+		if err != nil {
+			return GatewayConfigShadow{}, err
+		}
+	}
+	var cleanedEnergySchedule *edgecontrol.EdgeEnergySchedule
+	if input.EnergySchedule.Value != nil {
+		cleanedEnergySchedule, err = validateEnergySchedule(input.EnergySchedule.Value)
 		if err != nil {
 			return GatewayConfigShadow{}, err
 		}
@@ -1472,7 +1618,21 @@ func (store *Store) UpdateGatewayDesiredConfig(ctx context.Context, claims regis
 		effectiveEdgeModels = cloneEdgeModelBundles(existing.EdgeModels)
 	}
 
-	encoded, err := marshalShadowSections(effectiveMappings, effectivePolicies, effectiveUnits, effectiveDrivers, effectiveAutonomy, effectiveEdgeRules, effectiveEdgeModels, nil)
+	var effectiveClusterPolicy *edgecontrol.ClusterControlPolicy
+	if input.ClusterPolicy.IsSet() {
+		effectiveClusterPolicy = cleanedClusterPolicy
+	} else if existing != nil {
+		effectiveClusterPolicy = existing.ClusterPolicy.Clone()
+	}
+
+	var effectiveEnergySchedule *edgecontrol.EdgeEnergySchedule
+	if input.EnergySchedule.IsSet() {
+		effectiveEnergySchedule = cleanedEnergySchedule
+	} else if existing != nil {
+		effectiveEnergySchedule = existing.EnergySchedule.Clone()
+	}
+
+	encoded, err := marshalDesiredShadowSections(effectiveMappings, effectivePolicies, effectiveUnits, effectiveDrivers, effectiveAutonomy, effectiveEdgeRules, effectiveEdgeModels, effectiveClusterPolicy, effectiveEnergySchedule)
 	if err != nil {
 		return GatewayConfigShadow{}, err
 	}
@@ -1492,6 +1652,8 @@ func (store *Store) UpdateGatewayDesiredConfig(ctx context.Context, claims regis
 			AutonomyPolicy:      effectiveAutonomy,
 			EdgeRuleBundle:      effectiveEdgeRules,
 			EdgeModels:          effectiveEdgeModels,
+			ClusterPolicy:       effectiveClusterPolicy,
+			EnergySchedule:      effectiveEnergySchedule,
 			UpdatedBy:           claims.PrincipalID,
 			Reason:              reason,
 			CreatedAt:           now,
@@ -1513,6 +1675,8 @@ func (store *Store) UpdateGatewayDesiredConfig(ctx context.Context, claims regis
 			AutonomyPolicy:      effectiveAutonomy,
 			EdgeRuleBundle:      effectiveEdgeRules,
 			EdgeModels:          effectiveEdgeModels,
+			ClusterPolicy:       effectiveClusterPolicy,
+			EnergySchedule:      effectiveEnergySchedule,
 			UpdatedBy:           claims.PrincipalID,
 			Reason:              reason,
 			CreatedAt:           existing.CreatedAt,
@@ -1589,7 +1753,7 @@ func validateReportDriftDetails(details []DriftDetail) ([]DriftDetail, []byte, e
 		target := strings.TrimSpace(item.Target)
 		detail := strings.TrimSpace(item.Detail)
 		switch section {
-		case DriftSectionPointMappings, DriftSectionSamplingPolicies, DriftSectionConcentrator, DriftSectionDriverConfigs, DriftSectionAutonomyPolicy, DriftSectionEdgeRules, DriftSectionEdgeModels:
+		case DriftSectionPointMappings, DriftSectionSamplingPolicies, DriftSectionConcentrator, DriftSectionDriverConfigs, DriftSectionAutonomyPolicy, DriftSectionEdgeRules, DriftSectionEdgeModels, DriftSectionClusterPolicy, DriftSectionEnergySchedule:
 		default:
 			return nil, nil, fmt.Errorf("%w: driftDetails[%d].section %q is invalid", ErrConfigShadowInvalid, i, item.Section)
 		}
@@ -1690,6 +1854,14 @@ func (store *Store) ReportGatewayAppliedConfig(ctx context.Context, gatewayID st
 	if err != nil {
 		return GatewayConfigShadow{}, err
 	}
+	clusterPolicy, err := validateClusterPolicy(input.ClusterPolicy)
+	if err != nil {
+		return GatewayConfigShadow{}, err
+	}
+	energySchedule, err := validateEnergySchedule(input.EnergySchedule)
+	if err != nil {
+		return GatewayConfigShadow{}, err
+	}
 	inputDrifts, _, err := validateReportDriftDetails(input.DriftDetails)
 	if err != nil {
 		return GatewayConfigShadow{}, err
@@ -1740,7 +1912,7 @@ func (store *Store) ReportGatewayAppliedConfig(ctx context.Context, gatewayID st
 	if err != nil {
 		return GatewayConfigShadow{}, err
 	}
-	encoded, err := marshalShadowSections(mappings, policies, preservedUnits, drivers, autonomy, edgeRules, edgeModels, edgeModelStatuses)
+	encoded, err := marshalShadowSections(mappings, policies, preservedUnits, drivers, autonomy, edgeRules, edgeModels, edgeModelStatuses, clusterPolicy, energySchedule)
 	if err != nil {
 		return GatewayConfigShadow{}, err
 	}
@@ -1756,6 +1928,8 @@ func (store *Store) ReportGatewayAppliedConfig(ctx context.Context, gatewayID st
 		EdgeRuleBundle:      edgeRules,
 		EdgeModels:          edgeModels,
 		EdgeModelStatuses:   edgeModelStatuses,
+		ClusterPolicy:       clusterPolicy,
+		EnergySchedule:      energySchedule,
 		ErrorMessage:        errMsg,
 		ReportedAt:          reportedAt,
 		UpdatedAt:           now,
@@ -1899,6 +2073,9 @@ func (store *Store) UpsertConcentratorShadowState(
 		desired.DriverConfigs = cloneDriverConfigsList(desired.DriverConfigs)
 		desired.AutonomyPolicy = cloneAutonomyPolicy(desired.AutonomyPolicy)
 		desired.EdgeRuleBundle = desired.EdgeRuleBundle.Clone()
+		desired.EdgeModels = cloneEdgeModelBundles(desired.EdgeModels)
+		desired.ClusterPolicy = desired.ClusterPolicy.Clone()
+		desired.EnergySchedule = desired.EnergySchedule.Clone()
 	}
 
 	if !appliedToEdge && cleanedParams != nil && cleanedParams.ModbusID > 0 && cleanedParams.ModbusID != unitID {
@@ -1923,7 +2100,7 @@ func (store *Store) UpsertConcentratorShadowState(
 	}
 	desired.ConcentratorConfigs[targetUnitKey] = unitDesired
 
-	dEncoded, err := marshalShadowSections(desired.PointMappings, desired.SamplingPolicies, desired.ConcentratorConfigs, desired.DriverConfigs, desired.AutonomyPolicy, desired.EdgeRuleBundle, desired.EdgeModels, nil)
+	dEncoded, err := marshalDesiredShadowSections(desired.PointMappings, desired.SamplingPolicies, desired.ConcentratorConfigs, desired.DriverConfigs, desired.AutonomyPolicy, desired.EdgeRuleBundle, desired.EdgeModels, desired.ClusterPolicy, desired.EnergySchedule)
 	if err != nil {
 		return 0, err
 	}
@@ -1945,7 +2122,7 @@ func (store *Store) UpsertConcentratorShadowState(
 				ReportedAt:          now,
 				UpdatedAt:           now,
 			}
-			if len(desired.PointMappings) > 0 || len(desired.SamplingPolicies) > 0 || len(desired.DriverConfigs) > 0 || desired.AutonomyPolicy != nil || desired.EdgeRuleBundle != nil {
+			if len(desired.PointMappings) > 0 || len(desired.SamplingPolicies) > 0 || len(desired.DriverConfigs) > 0 || desired.AutonomyPolicy != nil || desired.EdgeRuleBundle != nil || len(desired.EdgeModels) > 0 || desired.ClusterPolicy != nil || desired.EnergySchedule != nil {
 				reported.ReportedRevision = 0
 			}
 		} else {
@@ -1958,6 +2135,10 @@ func (store *Store) UpsertConcentratorShadowState(
 			reported.DriverConfigs = cloneDriverConfigsList(existingReported.DriverConfigs)
 			reported.AutonomyPolicy = cloneAutonomyPolicy(existingReported.AutonomyPolicy)
 			reported.EdgeRuleBundle = existingReported.EdgeRuleBundle.Clone()
+			reported.EdgeModels = cloneEdgeModelBundles(existingReported.EdgeModels)
+			reported.EdgeModelStatuses = slices.Clone(existingReported.EdgeModelStatuses)
+			reported.ClusterPolicy = existingReported.ClusterPolicy.Clone()
+			reported.EnergySchedule = existingReported.EnergySchedule.Clone()
 			if oldDesiredRev > 0 && existingReported.ReportedRevision == oldDesiredRev && existingReported.AppliedStatus == AppliedStatusApplied {
 				reported.ReportedRevision = desired.DesiredRevision
 			}
@@ -1988,7 +2169,7 @@ func (store *Store) UpsertConcentratorShadowState(
 			reported.ErrorMessage = nil
 		}
 
-		rEncoded, err := marshalShadowSections(reported.PointMappings, reported.SamplingPolicies, reported.ConcentratorConfigs, reported.DriverConfigs, reported.AutonomyPolicy, reported.EdgeRuleBundle, reported.EdgeModels, reported.EdgeModelStatuses)
+		rEncoded, err := marshalShadowSections(reported.PointMappings, reported.SamplingPolicies, reported.ConcentratorConfigs, reported.DriverConfigs, reported.AutonomyPolicy, reported.EdgeRuleBundle, reported.EdgeModels, reported.EdgeModelStatuses, reported.ClusterPolicy, reported.EnergySchedule)
 		if err != nil {
 			return 0, err
 		}
@@ -2062,6 +2243,10 @@ func (store *Store) RecordConcentratorReconcileResult(
 		reported.DriverConfigs = cloneDriverConfigsList(existingReported.DriverConfigs)
 		reported.AutonomyPolicy = cloneAutonomyPolicy(existingReported.AutonomyPolicy)
 		reported.EdgeRuleBundle = existingReported.EdgeRuleBundle.Clone()
+		reported.EdgeModels = cloneEdgeModelBundles(existingReported.EdgeModels)
+		reported.EdgeModelStatuses = slices.Clone(existingReported.EdgeModelStatuses)
+		reported.ClusterPolicy = existingReported.ClusterPolicy.Clone()
+		reported.EnergySchedule = existingReported.EnergySchedule.Clone()
 		reported.DriftDetails = slices.Clone(existingReported.DriftDetails)
 	}
 
@@ -2108,7 +2293,7 @@ func (store *Store) RecordConcentratorReconcileResult(
 		}
 		if desiredChanged {
 			desired.ConcentratorConfigs = rekeyedDesired
-			dEncoded, err := marshalShadowSections(desired.PointMappings, desired.SamplingPolicies, desired.ConcentratorConfigs, desired.DriverConfigs, desired.AutonomyPolicy, desired.EdgeRuleBundle, desired.EdgeModels, nil)
+			dEncoded, err := marshalDesiredShadowSections(desired.PointMappings, desired.SamplingPolicies, desired.ConcentratorConfigs, desired.DriverConfigs, desired.AutonomyPolicy, desired.EdgeRuleBundle, desired.EdgeModels, desired.ClusterPolicy, desired.EnergySchedule)
 			if err != nil {
 				return err
 			}
@@ -2145,8 +2330,8 @@ WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
 
 	if sameDesiredRev {
 		edgeCaughtUp := (existingReported != nil && existingReported.ReportedRevision == desiredRevision) ||
-			(len(desired.PointMappings) == 0 && len(desired.SamplingPolicies) == 0 && len(desired.DriverConfigs) == 0 && desired.AutonomyPolicy == nil && desired.EdgeRuleBundle == nil && len(desired.EdgeModels) == 0 &&
-				len(reported.PointMappings) == 0 && len(reported.SamplingPolicies) == 0 && len(reported.DriverConfigs) == 0 && reported.AutonomyPolicy == nil && reported.EdgeRuleBundle == nil && len(reported.EdgeModels) == 0)
+			(len(desired.PointMappings) == 0 && len(desired.SamplingPolicies) == 0 && len(desired.DriverConfigs) == 0 && desired.AutonomyPolicy == nil && desired.EdgeRuleBundle == nil && len(desired.EdgeModels) == 0 && desired.ClusterPolicy == nil && desired.EnergySchedule == nil &&
+				len(reported.PointMappings) == 0 && len(reported.SamplingPolicies) == 0 && len(reported.DriverConfigs) == 0 && reported.AutonomyPolicy == nil && reported.EdgeRuleBundle == nil && len(reported.EdgeModels) == 0 && reported.ClusterPolicy == nil && reported.EnergySchedule == nil)
 
 		if len(failedDrifts) == 0 {
 			if edgeCaughtUp {
@@ -2212,7 +2397,7 @@ WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
 		}
 	}
 
-	rEncoded, err := marshalShadowSections(reported.PointMappings, reported.SamplingPolicies, reported.ConcentratorConfigs, reported.DriverConfigs, reported.AutonomyPolicy, reported.EdgeRuleBundle, reported.EdgeModels, reported.EdgeModelStatuses)
+	rEncoded, err := marshalShadowSections(reported.PointMappings, reported.SamplingPolicies, reported.ConcentratorConfigs, reported.DriverConfigs, reported.AutonomyPolicy, reported.EdgeRuleBundle, reported.EdgeModels, reported.EdgeModelStatuses, reported.ClusterPolicy, reported.EnergySchedule)
 	if err != nil {
 		return err
 	}

@@ -223,6 +223,8 @@ func (store *Store) UpsertGatewayTemplateDriverConfig(ctx context.Context, gatew
 	var effectiveAutonomy *GatewayAutonomyPolicy
 	var effectiveEdgeRules *edgecontrol.EdgeRuleBundle
 	var effectiveEdgeModels []edgecontrol.EdgeModelBundle
+	var effectiveClusterPolicy *edgecontrol.ClusterControlPolicy
+	var effectiveEnergySchedule *edgecontrol.EdgeEnergySchedule
 	if existing != nil {
 		effectiveMappings = clonePointMappingsList(existing.PointMappings)
 		effectivePolicies = cloneSamplingPoliciesList(existing.SamplingPolicies)
@@ -230,9 +232,11 @@ func (store *Store) UpsertGatewayTemplateDriverConfig(ctx context.Context, gatew
 		effectiveAutonomy = cloneAutonomyPolicy(existing.AutonomyPolicy)
 		effectiveEdgeRules = existing.EdgeRuleBundle.Clone()
 		effectiveEdgeModels = cloneEdgeModelBundles(existing.EdgeModels)
+		effectiveClusterPolicy = existing.ClusterPolicy.Clone()
+		effectiveEnergySchedule = existing.EnergySchedule.Clone()
 	}
 
-	encoded, err := marshalShadowSections(effectiveMappings, effectivePolicies, effectiveUnits, cleanedDrivers, effectiveAutonomy, effectiveEdgeRules, effectiveEdgeModels, nil)
+	encoded, err := marshalDesiredShadowSections(effectiveMappings, effectivePolicies, effectiveUnits, cleanedDrivers, effectiveAutonomy, effectiveEdgeRules, effectiveEdgeModels, effectiveClusterPolicy, effectiveEnergySchedule)
 	if err != nil {
 		return TemplateDriverUpsertResult{}, err
 	}
@@ -254,6 +258,8 @@ func (store *Store) UpsertGatewayTemplateDriverConfig(ctx context.Context, gatew
 		AutonomyPolicy:      effectiveAutonomy,
 		EdgeRuleBundle:      effectiveEdgeRules,
 		EdgeModels:          effectiveEdgeModels,
+		ClusterPolicy:       effectiveClusterPolicy,
+		EnergySchedule:      effectiveEnergySchedule,
 		UpdatedBy:           updatedBy,
 		Reason:              reason,
 		CreatedAt:           createdAt,

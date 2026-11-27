@@ -153,7 +153,8 @@
         "infra/registry/postgres/init/mlops-edge-domains.sql",
         "infra/connectivity/postgres/init/gateway-shadow-edge-models.sql",
         "infra/connectivity/postgres/init/gateway-waveform-and-diagnostics.sql",
-        "infra/registry/postgres/init/site-building-plan.sql"
+        "infra/registry/postgres/init/site-building-plan.sql",
+        "infra/connectivity/postgres/init/gateway-shadow-cluster-and-schedule.sql"
       ]
     },
     {

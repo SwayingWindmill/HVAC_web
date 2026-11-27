@@ -9,7 +9,9 @@ export type GatewayConfigShadowDriftSection =
   | 'DRIVER_CONFIGS'
   | 'AUTONOMY_POLICY'
   | 'EDGE_RULES'
-  | 'EDGE_MODELS';
+  | 'EDGE_MODELS'
+  | 'CLUSTER_POLICY'
+  | 'ENERGY_SCHEDULE';
 export type GatewayConfigShadowDriftReason =
   | 'VALUE_MISMATCH'
   | 'MISSING_ON_EDGE'
@@ -45,6 +47,8 @@ export const CONFIG_SHADOW_SECTION_LABELS: Readonly<Record<GatewayConfigShadowDr
   AUTONOMY_POLICY: '断网自治策略',
   EDGE_RULES: '边缘规则包',
   EDGE_MODELS: '端侧模型与超参',
+  CLUSTER_POLICY: '集群控制策略',
+  ENERGY_SCHEDULE: '用能调度计划',
 };
 
 export const CONFIG_SHADOW_REASON_LABELS: Readonly<Record<GatewayConfigShadowDriftReason, string>> = {
