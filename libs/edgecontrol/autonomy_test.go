@@ -579,3 +579,199 @@ func TestAutonomousFallbackIgnoresBadQualityZeroSetpoint(t *testing.T) {
 		t.Fatalf("expected bumpless seed 10.5 once QualityGood arrives, got %v", gotSP)
 	}
 }
+
+func TestLocalManualModeBlocksRemoteWritesAndRestoresOnRemote(t *testing.T) {
+	t.Parallel()
+
+	chiller := newStubAutonomyDeviceAdapter(
+		ComponentDescriptor{
+			ID:        "CH-01",
+			Enabled:   true,
+			Kind:      ComponentDeviceDriver,
+			Type:      "CHILLER",
+			FactoryID: DeclarativeModbusFactoryID,
+			Version:   "1.0.0",
+			Profiles:  []CapabilityProfileID{ProfileChiller},
+		},
+		[]ChannelDescriptor{
+			testChannelDesc("CH-01", "start_command", "ch:start", DataTypeBoolean, AccessReadWrite),
+			testChannelDesc("CH-01", "stop_command", "ch:stop", DataTypeBoolean, AccessReadWrite),
+			testChannelDesc("CH-01", "chw_supply_setpoint_c", "ch:sp", DataTypeDouble, AccessReadWrite),
+			testChannelDesc("CH-01", "load_limit_pct", "ch:limit", DataTypeDouble, AccessReadWrite),
+			testChannelDesc("CH-01", "run_state", "ch:run", DataTypeBoolean, AccessReadOnly),
+			testChannelDesc("CH-01", "fault_active", "ch:fault", DataTypeBoolean, AccessReadOnly),
+			testChannelDesc("CH-01", "local_remote_mode", "ch:mode", DataTypeString, AccessReadOnly),
+		},
+	)
+	pump := newStubAutonomyDeviceAdapter(
+		ComponentDescriptor{
+			ID:        "CHWP-01",
+			Enabled:   true,
+			Kind:      ComponentDeviceDriver,
+			Type:      "VARIABLE_SPEED_PUMP",
+			FactoryID: DeclarativeModbusFactoryID,
+			Version:   "1.0.0",
+			Profiles:  []CapabilityProfileID{ProfileVariableSpeedPump},
+		},
+		[]ChannelDescriptor{
+			testChannelDesc("CHWP-01", "start_command", "pump:start", DataTypeBoolean, AccessReadWrite),
+			testChannelDesc("CHWP-01", "stop_command", "pump:stop", DataTypeBoolean, AccessReadWrite),
+			testChannelDesc("CHWP-01", "frequency_setpoint_hz", "pump:freq", DataTypeDouble, AccessReadWrite),
+			testChannelDesc("CHWP-01", "run_state", "pump:run", DataTypeBoolean, AccessReadOnly),
+			testChannelDesc("CHWP-01", "flow_m3h", "pump:flow", DataTypeDouble, AccessReadOnly),
+			testChannelDesc("CHWP-01", "fault_active", "pump:fault", DataTypeBoolean, AccessReadOnly),
+			testChannelDesc("CHWP-01", "local_remote_mode", "pump:mode", DataTypeBoolean, AccessReadOnly),
+		},
+	)
+
+	host, err := NewHost()
+	if err != nil {
+		t.Fatalf("NewHost() error = %v", err)
+	}
+	if err := host.RegisterAdapter(chiller); err != nil {
+		t.Fatalf("RegisterAdapter chiller error = %v", err)
+	}
+	if err := host.RegisterAdapter(pump); err != nil {
+		t.Fatalf("RegisterAdapter pump error = %v", err)
+	}
+
+	interlock, err := NewHydraulicInterlockController(HydraulicInterlockConfig{
+		Chillers: []ChillerInterlockBinding{{
+			ComponentID:      "CH-01",
+			StartCommand:     "CH-01/start_command",
+			StopCommand:      "CH-01/stop_command",
+			SetpointCommand:  "CH-01/chw_supply_setpoint_c",
+			LoadLimitCommand: "CH-01/load_limit_pct",
+			RunState:         "CH-01/run_state",
+			FaultChannel:     "CH-01/fault_active",
+			LocalRemoteMode:  "CH-01/local_remote_mode",
+		}},
+		ChilledWaterPumps: []PumpInterlockBinding{{
+			ComponentID:      "CHWP-01",
+			StartCommand:     "CHWP-01/start_command",
+			StopCommand:      "CHWP-01/stop_command",
+			RunState:         "CHWP-01/run_state",
+			FlowFeedback:     "CHWP-01/flow_m3h",
+			FaultChannel:     "CHWP-01/fault_active",
+			FrequencyCommand: "CHWP-01/frequency_setpoint_hz",
+			LocalRemoteMode:  "CHWP-01/local_remote_mode",
+		}},
+		Policy: DefaultAutonomyPolicyConfig(),
+	})
+	if err != nil {
+		t.Fatalf("NewHydraulicInterlockController() error = %v", err)
+	}
+
+	intents := &intentRequestController{id: "cloud-intents", reqs: map[string]Value{}}
+	if err := host.Start([]ControllerBinding{
+		{Priority: 0, Critical: true, Controller: interlock},
+		{Priority: 100, Controller: intents},
+	}); err != nil {
+		t.Fatalf("host.Start() error = %v", err)
+	}
+
+	t0 := time.Date(2026, 11, 26, 10, 0, 0, 0, time.UTC)
+	chiller.SetValue("CH-01/run_state", BooleanValue(false), QualityGood, t0)
+	chiller.SetValue("CH-01/fault_active", BooleanValue(false), QualityGood, t0)
+	chiller.SetValue("CH-01/start_command", BooleanValue(false), QualityGood, t0)
+	chiller.SetValue("CH-01/stop_command", BooleanValue(false), QualityGood, t0)
+	chiller.SetValue("CH-01/chw_supply_setpoint_c", DoubleValue(7.0), QualityGood, t0)
+	chiller.SetValue("CH-01/load_limit_pct", DoubleValue(80.0), QualityGood, t0)
+	chiller.SetValue("CH-01/local_remote_mode", StringValue("REMOTE"), QualityGood, t0)
+
+	pump.SetValue("CHWP-01/run_state", BooleanValue(true), QualityGood, t0)
+	pump.SetValue("CHWP-01/flow_m3h", DoubleValue(42.0), QualityGood, t0)
+	pump.SetValue("CHWP-01/fault_active", BooleanValue(false), QualityGood, t0)
+	pump.SetValue("CHWP-01/start_command", BooleanValue(false), QualityGood, t0)
+	pump.SetValue("CHWP-01/stop_command", BooleanValue(false), QualityGood, t0)
+	pump.SetValue("CHWP-01/frequency_setpoint_hz", DoubleValue(35.0), QualityGood, t0)
+	pump.SetValue("CHWP-01/local_remote_mode", BooleanValue(true), QualityGood, t0)
+
+	now := t0
+	step := func() CycleResult {
+		t.Helper()
+		now = now.Add(time.Second)
+		res, err := host.RunCycle(context.Background(), now)
+		if err != nil {
+			t.Fatalf("RunCycle() error = %v", err)
+		}
+		return res.Cycle
+	}
+
+	// Verify all manual representations block writes on chiller/pump and preserve read-only channels.
+	for _, token := range []string{"LOCAL", "manual", "Local_Manual", "Hand", "FALSE", "0"} {
+		chiller.SetValue("CH-01/local_remote_mode", StringValue(token), QualityGood, now)
+		pump.SetValue("CHWP-01/local_remote_mode", BooleanValue(false), QualityGood, now)
+		intents.reqs = map[string]Value{
+			"CH-01/start_command":           BooleanValue(true),
+			"CH-01/stop_command":            BooleanValue(true),
+			"CH-01/chw_supply_setpoint_c":   DoubleValue(9.0),
+			"CH-01/load_limit_pct":          DoubleValue(60.0),
+			"CHWP-01/start_command":         BooleanValue(true),
+			"CHWP-01/stop_command":          BooleanValue(true),
+			"CHWP-01/frequency_setpoint_hz": DoubleValue(42.0),
+		}
+
+		cycle := step()
+		if len(cycle.Decisions) != 7 {
+			t.Fatalf("token %q: expected 7 arbitrated decisions, got %d", token, len(cycle.Decisions))
+		}
+		for _, d := range cycle.Decisions {
+			if d.Accepted || len(d.ConstraintReasons) == 0 || d.ConstraintReasons[0].Reason != autonomyReasonLocalManual {
+				t.Fatalf("token %q: expected %s denial for %s, got %+v", token, autonomyReasonLocalManual, d.Address, d)
+			}
+		}
+		blocked := interlock.Status().LastBlockedReasons
+		for _, writableAddr := range []string{
+			"CH-01/start_command", "CH-01/stop_command", "CH-01/chw_supply_setpoint_c", "CH-01/load_limit_pct",
+			"CHWP-01/start_command", "CHWP-01/stop_command", "CHWP-01/frequency_setpoint_hz",
+		} {
+			if blocked[writableAddr] != autonomyReasonLocalManual {
+				t.Fatalf("token %q: expected blocked[%s]=%s, got %+v", token, writableAddr, autonomyReasonLocalManual, blocked)
+			}
+		}
+		for _, roAddr := range []string{"CH-01/run_state", "CH-01/local_remote_mode", "CHWP-01/flow_m3h"} {
+			if _, found := blocked[roAddr]; found {
+				t.Fatalf("read-only channel %s must not be recorded in blocked: %+v", roAddr, blocked)
+			}
+			if snap, ok := cycle.Image.Get(roAddr); !ok || !snap.HasValue {
+				t.Fatalf("read-only channel %s must remain readable in ProcessImage", roAddr)
+			}
+		}
+		if sp, _ := chiller.ReadValue("CH-01/chw_supply_setpoint_c"); sp.Double != 7.0 {
+			t.Fatalf("token %q: chiller setpoint mutated under LOCAL_MANUAL: %v", token, sp.Double)
+		}
+		if fr, _ := pump.ReadValue("CHWP-01/frequency_setpoint_hz"); fr.Double != 35.0 {
+			t.Fatalf("token %q: pump frequency mutated under LOCAL_MANUAL: %v", token, fr.Double)
+		}
+	}
+
+	// Verify all REMOTE tokens clear denial immediately on the next cycle.
+	for idx, remoteToken := range []string{"REMOTE", "auto", "Remote_Auto", "TRUE", "1"} {
+		chiller.SetValue("CH-01/local_remote_mode", StringValue(remoteToken), QualityGood, now)
+		pump.SetValue("CHWP-01/local_remote_mode", BooleanValue(true), QualityGood, now)
+		targetSP := 8.0 + float64(idx)*0.2
+		targetHz := 40.0 + float64(idx)*0.5
+		intents.reqs = map[string]Value{
+			"CH-01/chw_supply_setpoint_c":   DoubleValue(targetSP),
+			"CH-01/load_limit_pct":          DoubleValue(75.0),
+			"CHWP-01/frequency_setpoint_hz": DoubleValue(targetHz),
+		}
+
+		cycle := step()
+		for _, d := range cycle.Decisions {
+			if !d.Accepted {
+				t.Fatalf("remote token %q: expected %s accepted immediately, got %+v", remoteToken, d.Address, d)
+			}
+		}
+		if len(interlock.Status().LastBlockedReasons) != 0 {
+			t.Fatalf("remote token %q: expected blocked reasons cleared, got %+v", remoteToken, interlock.Status().LastBlockedReasons)
+		}
+		if sp, _ := chiller.ReadValue("CH-01/chw_supply_setpoint_c"); sp.Double != targetSP {
+			t.Fatalf("remote token %q: chiller setpoint = %v, want %v", remoteToken, sp.Double, targetSP)
+		}
+		if fr, _ := pump.ReadValue("CHWP-01/frequency_setpoint_hz"); fr.Double != targetHz {
+			t.Fatalf("remote token %q: pump frequency = %v, want %v", remoteToken, fr.Double, targetHz)
+		}
+	}
+}

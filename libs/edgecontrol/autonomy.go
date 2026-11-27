@@ -25,6 +25,7 @@ const (
 	autonomyReasonMinRunTime     = "COMPRESSOR_MIN_RUN_TIME"
 	autonomyReasonMinStopTime    = "COMPRESSOR_MIN_STOP_TIME"
 	autonomyReasonPumpFreqLimits = "PUMP_FREQUENCY_LIMIT"
+	autonomyReasonLocalManual    = "CABINET_LOCAL_MANUAL"
 )
 
 // AutonomyPolicyConfig mirrors the edge autonomy & snapshot policy distributed
@@ -108,21 +109,27 @@ func isFiniteFloat(v float64) bool {
 
 // ChillerInterlockBinding names the ProcessImage channels used to guard one chiller.
 type ChillerInterlockBinding struct {
-	ComponentID  string
-	StartCommand string
-	StopCommand  string
-	RunState     string
-	FaultChannel string
+	ComponentID      string
+	StartCommand     string
+	StopCommand      string
+	SetpointCommand  string
+	LoadLimitCommand string
+	RunState         string
+	FaultChannel     string
+	LocalRemoteMode  string
 }
 
 // PumpInterlockBinding names the ProcessImage channels used to verify pump run/flow proof.
 type PumpInterlockBinding struct {
 	ComponentID      string
+	StartCommand     string
+	StopCommand      string
 	RunState         string
 	FlowFeedback     string
 	MinFlowRate      float64
 	FaultChannel     string
 	FrequencyCommand string
+	LocalRemoteMode  string
 }
 
 // HydraulicInterlockConfig configures HydraulicInterlockController.
@@ -292,6 +299,12 @@ func (c *HydraulicInterlockController) Run(_ context.Context, img ProcessImage, 
 	c.flowProven = flowProven
 	blocked := make(map[string]string)
 
+	for _, pump := range c.chwPumps {
+		if localRemoteChannelIsManual(img, pump.LocalRemoteMode) {
+			denyWritableChannels(img, plan, c.id, autonomyReasonLocalManual, blocked, pump.StartCommand, pump.StopCommand, pump.FrequencyCommand)
+		}
+	}
+
 	for _, ch := range c.chillers {
 		key := ch.ComponentID
 		if key == "" {
@@ -319,6 +332,11 @@ func (c *HydraulicInterlockController) Run(_ context.Context, img ProcessImage, 
 					tracker.lastStoppedAt = now
 				}
 			}
+		}
+
+		if localRemoteChannelIsManual(img, ch.LocalRemoteMode) {
+			denyWritableChannels(img, plan, c.id, autonomyReasonLocalManual, blocked, ch.StartCommand, ch.StopCommand, ch.SetpointCommand, ch.LoadLimitCommand)
+			continue
 		}
 
 		chFaulted := faultChannelActive(img, ch.FaultChannel)
@@ -371,6 +389,17 @@ func (c *HydraulicInterlockController) Run(_ context.Context, img ProcessImage, 
 	return nil
 }
 
+func denyWritableChannels(img ProcessImage, plan *ControlPlan, controllerID, reason string, blocked map[string]string, addrs ...string) {
+	for _, addr := range addrs {
+		if _, already := blocked[addr]; already {
+			continue
+		}
+		if denyWritableChannel(img, plan, addr, controllerID, reason) {
+			blocked[addr] = reason
+		}
+	}
+}
+
 func denyWritableChannel(img ProcessImage, plan *ControlPlan, addr, controllerID, reason string) bool {
 	if addr == "" {
 		return false
@@ -381,6 +410,34 @@ func denyWritableChannel(img ProcessImage, plan *ControlPlan, addr, controllerID
 	}
 	accepted, err := plan.Deny(addr, controllerID, reason)
 	return err == nil && accepted
+}
+
+func localRemoteChannelIsManual(img ProcessImage, addr string) bool {
+	if strings.TrimSpace(addr) == "" {
+		return false
+	}
+	snap, ok := img.Get(addr)
+	if !ok || !snap.HasValue || snap.Sample.Quality != QualityGood {
+		return false
+	}
+	switch snap.Sample.Value.Type {
+	case DataTypeBoolean:
+		return !snap.Sample.Value.Boolean
+	case DataTypeString:
+		switch strings.ToUpper(strings.TrimSpace(snap.Sample.Value.String)) {
+		case "LOCAL", "MANUAL", "LOCAL_MANUAL", "HAND", "FALSE", "0":
+			return true
+		case "REMOTE", "AUTO", "REMOTE_AUTO", "TRUE", "1":
+			return false
+		default:
+			return false
+		}
+	default:
+		if num, ok := snap.Sample.Value.NumericFloat64(); ok && isFiniteFloat(num) {
+			return num == 0
+		}
+		return false
+	}
 }
 
 func chilledWaterFlowProven(img ProcessImage, pumps []PumpInterlockBinding) bool {
