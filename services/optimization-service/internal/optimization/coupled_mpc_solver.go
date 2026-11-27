@@ -1459,7 +1459,6 @@ func (s *CoupledPlantMPCSolver) Recommend(_ context.Context, request Request, at
 		RollbackPlan:     standardRollbackPlan(request.Baseline.SupplyTempC),
 		VerificationPlan: standardVerificationPlan(),
 		Approval:         intelligencemodel.RecommendationDraft,
-		CommandIntentID:  deterministicV7(request.OptimizationRunID, "command-intent:1", request.ValidFrom.UTC()),
 		ValidUntil:       timePointer(at.UTC().Add(intelligencemodel.DefaultRecommendationTTL)),
 		CreatedAt:        at.UTC(),
 	}

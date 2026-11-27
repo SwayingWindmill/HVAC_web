@@ -187,6 +187,9 @@ func TestCoupledPlantMPCRecommendContractAndResidualAdaptation(t *testing.T) {
 	if err := rec.ValidateForApproval(); err != nil {
 		t.Fatalf("ValidateForApproval failed: %v", err)
 	}
+	if rec.CommandIntentID != "" || string(rec.Approval) != "DRAFT" {
+		t.Fatalf("draft recommendation must leave CommandIntentID empty and Approval=DRAFT, got approval=%q commandIntentId=%q", rec.Approval, rec.CommandIntentID)
+	}
 	if rec.Candidate.SupplyTempC < 5.0 || rec.Candidate.SupplyTempC > req.Constraints.SupplyTempMaxC {
 		t.Fatalf("candidate supply temp %.2f out of bounds", rec.Candidate.SupplyTempC)
 	}
