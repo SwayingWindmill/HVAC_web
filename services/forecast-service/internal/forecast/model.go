@@ -16,26 +16,30 @@ type Observation struct {
 }
 
 type Request struct {
-	TenantID            string        `json:"tenantId"`
-	SiteID              string        `json:"siteId"`
-	SubjectType         string        `json:"subjectType"`
-	SubjectID           string        `json:"subjectId"`
-	Target              string        `json:"target"`
-	ForecastJobID       string        `json:"forecastJobId"`
-	ForecastSnapshotID  string        `json:"forecastSnapshotId"`
-	DeploymentID        string        `json:"deploymentId"`
-	ModelID             string        `json:"modelId"`
-	ModelVersionID      string        `json:"modelVersionId"`
-	ModelVersion        uint64        `json:"modelVersion"`
-	FeatureSetVersionID string        `json:"featureSetVersionId"`
-	FeatureSetVersion   uint64        `json:"featureSetVersion"`
-	InputSnapshotID     string        `json:"inputSnapshotId"`
-	TopologyVersionID   string        `json:"topologyVersionId"`
-	ForecastOrigin      time.Time     `json:"forecastOrigin"`
-	HorizonMinutes      int           `json:"horizonMinutes"`
-	Granularity         string        `json:"granularity"`
-	Observations        []Observation `json:"observations"`
-	Unit                string        `json:"unit"`
+	TenantID              string               `json:"tenantId"`
+	SiteID                string               `json:"siteId"`
+	SubjectType           string               `json:"subjectType"`
+	SubjectID             string               `json:"subjectId"`
+	Target                string               `json:"target"`
+	ForecastJobID         string               `json:"forecastJobId"`
+	ForecastSnapshotID    string               `json:"forecastSnapshotId"`
+	DeploymentID          string               `json:"deploymentId"`
+	ModelID               string               `json:"modelId"`
+	ModelVersionID        string               `json:"modelVersionId"`
+	ModelVersion          uint64               `json:"modelVersion"`
+	FeatureSetVersionID   string               `json:"featureSetVersionId"`
+	FeatureSetVersion     uint64               `json:"featureSetVersion"`
+	InputSnapshotID       string               `json:"inputSnapshotId"`
+	TopologyVersionID     string               `json:"topologyVersionId"`
+	ForecastOrigin        time.Time            `json:"forecastOrigin"`
+	HorizonMinutes        int                  `json:"horizonMinutes"`
+	Granularity           string               `json:"granularity"`
+	Timezone              string               `json:"timezone,omitempty"`
+	Observations          []Observation        `json:"observations"`
+	WeatherObservations   []WeatherObservation `json:"weatherObservations,omitempty"`
+	WeatherSource         string               `json:"weatherSource,omitempty"`
+	WeatherFallbackReason string               `json:"weatherFallbackReason,omitempty"`
+	Unit                  string               `json:"unit"`
 }
 
 type Point struct {
@@ -116,6 +120,20 @@ func (request Request) Validate() error {
 			return fmt.Errorf("observation %d value must be finite", index)
 		}
 		previous = observation.ObservedAt
+	}
+	for index, wx := range request.WeatherObservations {
+		if wx.ObservedAt.IsZero() {
+			return fmt.Errorf("weather observation %d must have a timestamp", index)
+		}
+		for label, ptr := range map[string]*float64{
+			"dryBulbC":            wx.DryBulbC,
+			"wetBulbC":            wx.WetBulbC,
+			"relativeHumidityPct": wx.RelativeHumidityPct,
+		} {
+			if ptr != nil && (math.IsNaN(*ptr) || math.IsInf(*ptr, 0)) {
+				return fmt.Errorf("weather observation %d %s must be finite", index, label)
+			}
+		}
 	}
 	if request.Unit == "" {
 		return errors.New("unit is required")

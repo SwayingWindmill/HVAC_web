@@ -96,12 +96,19 @@ func TestPreparerFreezesAuthoritativeMetricHistoryDeterministically(t *testing.T
 	if frozen[1].Value != 775 || frozen[0].PeriodEnd.After(frozen[1].PeriodEnd) {
 		t.Fatalf("history was not normalized to latest revision in time order: %#v", frozen)
 	}
-	// A week of history lets a daily profile average the same time of day across days.
-	if history.query.From != origin.Add(-7*24*time.Hour) || history.query.To != origin {
+	// Four weeks of history covers weekday/weekend/holiday profiles and temperature regimes.
+	if history.query.From != origin.Add(-historyLookbackDays*24*time.Hour) || history.query.To != origin {
 		t.Fatalf("history window=%s..%s", history.query.From, history.query.To)
 	}
 	if first.LatestDataTime != origin.Add(-15*time.Minute) || first.ForecastOrigin != origin {
 		t.Fatalf("times latest=%s origin=%s", first.LatestDataTime, first.ForecastOrigin)
+	}
+	execInput, execErr := executionInput(first.FeatureValues)
+	if execErr != nil {
+		t.Fatal(execErr)
+	}
+	if len(execInput.Observations) != 4 || !execInput.Observations[3].ObservedAt.Equal(origin.Add(-30*time.Minute)) {
+		t.Fatalf("expected ObservedAt to match fact.PeriodStart (origin-30m), got %#v", execInput.Observations)
 	}
 }
 

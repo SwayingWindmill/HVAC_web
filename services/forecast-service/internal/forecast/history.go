@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -160,4 +161,121 @@ FORMAT JSONEachRow`, query.TenantID, query.SiteID, query.SubjectType, query.Subj
 
 func formatForecastHistoryTime(value time.Time) string {
 	return value.UTC().Format("2006-01-02T15:04:05.000Z")
+}
+
+// ReadWeatherSeries reads slot-aggregated outdoor dry-bulb, wet-bulb, and relative humidity
+// observations from telemetry_history.observations, preferring direct site sensors and applying
+// physical sanity bounds before and after aggregation.
+func (reader *ClickHouseHistoryReader) ReadWeatherSeries(ctx context.Context, query WeatherHistoryQuery) ([]WeatherObservation, error) {
+	if reader == nil || reader.baseURL == nil || reader.client == nil {
+		return nil, errors.New("forecast history reader is unavailable")
+	}
+	for field, value := range map[string]string{"tenantId": query.TenantID, "siteId": query.SiteID} {
+		if !uuidPattern.MatchString(value) {
+			return nil, fmt.Errorf("%s must be a UUID", field)
+		}
+	}
+	if query.From.IsZero() || !query.To.After(query.From) {
+		return nil, errors.New("weather history requires a valid half-open time window")
+	}
+	minutes := query.GranularityMinutes
+	if minutes <= 0 {
+		minutes = 15
+	}
+	intervalExpr := strconv.Itoa(minutes)
+	dryKeys := "'weather.ambient_dry_bulb_temperature','ambient_dry_bulb_temperature','outdoor_dry_bulb_temp','outdoor_dry_bulb','outdoor_dry_bulb_c','ambient_temp','ambient_temperature','outdoor_temp','weather.dry_bulb_temp','ambient.dry_bulb_temp','dry_bulb_temp'"
+	wetKeys := "'weather.ambient_wet_bulb_temperature','ambient_wet_bulb_temperature','outdoor_wet_bulb_temp','outdoor_wet_bulb','outdoor_wet_bulb_c','weather.wet_bulb_temp','ambient.wet_bulb_temp','wet_bulb_temp'"
+	rhKeys := "'weather.relative_humidity','relative_humidity','outdoor_relative_humidity','ambient_relative_humidity','outdoor_rh','ambient_rh','rh'"
+	allKeys := dryKeys + "," + wetKeys + "," + rhKeys
+
+	sql := fmt.Sprintf(`SELECT
+ formatDateTime(toDateTime(toStartOfInterval(obs.sampled_at, INTERVAL %s MINUTE), 'UTC'), '%%Y-%%m-%%dT%%H:%%i:%%SZ', 'UTC') AS bucket_utc,
+ if(countIf(obs.telemetry_key IN (%s) AND obs.value_number >= -25 AND obs.value_number <= 50) > 0,
+    toNullable(avgIf(obs.value_number, obs.telemetry_key IN (%s) AND obs.value_number >= -25 AND obs.value_number <= 50)),
+    CAST(NULL, 'Nullable(Float64)')) AS dry_bulb_c,
+ if(countIf(obs.telemetry_key IN (%s) AND obs.value_number >= -30 AND obs.value_number <= 45) > 0,
+    toNullable(avgIf(obs.value_number, obs.telemetry_key IN (%s) AND obs.value_number >= -30 AND obs.value_number <= 45)),
+    CAST(NULL, 'Nullable(Float64)')) AS wet_bulb_c,
+ if(countIf(obs.telemetry_key IN (%s) AND obs.value_number >= 1 AND obs.value_number <= 100) > 0,
+    toNullable(avgIf(obs.value_number, obs.telemetry_key IN (%s) AND obs.value_number >= 1 AND obs.value_number <= 100)),
+    CAST(NULL, 'Nullable(Float64)')) AS relative_humidity_pct
+FROM telemetry_history.observations AS obs
+WHERE obs.tenant_id = toUUID('%s')
+  AND obs.site_id = toUUID('%s')
+  AND obs.telemetry_key IN (%s)
+  AND obs.sampled_at >= parseDateTime64BestEffort('%s', 3, 'UTC')
+  AND obs.sampled_at < parseDateTime64BestEffort('%s', 3, 'UTC')
+  AND obs.received_at <= parseDateTime64BestEffort('%s', 3, 'UTC')
+  AND obs.acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER')
+  AND obs.quality IN ('GOOD', 'INTERPOLATED', 'AGGREGATED')
+  AND obs.value_number IS NOT NULL
+  AND isFinite(obs.value_number)
+GROUP BY bucket_utc
+ORDER BY bucket_utc ASC
+FORMAT JSONEachRow`,
+		intervalExpr,
+		dryKeys, dryKeys,
+		wetKeys, wetKeys,
+		rhKeys, rhKeys,
+		query.TenantID, query.SiteID, allKeys,
+		formatForecastHistoryTime(query.From), formatForecastHistoryTime(query.To), formatForecastHistoryTime(query.To),
+	)
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, reader.baseURL.String(), strings.NewReader(sql))
+	if err != nil {
+		return nil, fmt.Errorf("build forecast weather history request: %w", err)
+	}
+	request.Header.Set("Content-Type", "text/plain; charset=utf-8")
+	request.Header.Set("Accept", "application/x-ndjson")
+	if reader.username != "" {
+		request.SetBasicAuth(reader.username, reader.password)
+	}
+	response, err := reader.client.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("query forecast weather history: %w", err)
+	}
+	defer drainAndClose(response.Body)
+	payload, err := io.ReadAll(io.LimitReader(response.Body, maximumForecastHistoryResponseBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read forecast weather history: %w", err)
+	}
+	if int64(len(payload)) > maximumForecastHistoryResponseBytes {
+		return nil, errors.New("forecast weather history response exceeds 8 MiB")
+	}
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("forecast weather history returned %d: %s", response.StatusCode, strings.TrimSpace(string(payload)))
+	}
+
+	type row struct {
+		BucketUTC           string   `json:"bucket_utc"`
+		DryBulbC            *float64 `json:"dry_bulb_c"`
+		WetBulbC            *float64 `json:"wet_bulb_c"`
+		RelativeHumidityPct *float64 `json:"relative_humidity_pct"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	observations := make([]WeatherObservation, 0)
+	for {
+		var value row
+		if err = decoder.Decode(&value); errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("decode forecast weather history: %w", err)
+		}
+		observedAt, parseErr := time.Parse(time.RFC3339, value.BucketUTC)
+		if parseErr != nil {
+			return nil, fmt.Errorf("decode weather bucket_utc: %w", parseErr)
+		}
+		clean, ok := sanitizeWeatherObservation(WeatherObservation{
+			ObservedAt:          observedAt.UTC(),
+			DryBulbC:            value.DryBulbC,
+			WetBulbC:            value.WetBulbC,
+			RelativeHumidityPct: value.RelativeHumidityPct,
+			Source:              WeatherSourceSiteSensors,
+		})
+		if ok {
+			observations = append(observations, clean)
+		}
+	}
+	return observations, nil
 }

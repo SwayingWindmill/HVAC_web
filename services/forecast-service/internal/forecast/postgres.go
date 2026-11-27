@@ -19,24 +19,30 @@ type Publication struct {
 	ResultCount    int
 	ResultChecksum string
 	Quality        string
+	Metadata       ExecutionMetadata
 	WindowStart    time.Time
 	WindowEnd      time.Time
 }
 
 type ForecastSnapshotReference struct {
-	SnapshotID      string    `json:"snapshotId"`
-	ForecastJobID   string    `json:"forecastJobId"`
-	DeploymentID    string    `json:"deploymentId"`
-	ModelVersionID  string    `json:"modelVersionId"`
-	InputSnapshotID string    `json:"inputSnapshotId"`
-	SubjectType     string    `json:"subjectType"`
-	SubjectID       string    `json:"subjectId"`
-	Target          string    `json:"target"`
-	ForecastOrigin  time.Time `json:"forecastOrigin"`
-	WindowStart     time.Time `json:"windowStart"`
-	WindowEnd       time.Time `json:"windowEnd"`
-	ResultCount     int       `json:"resultCount"`
-	Quality         string    `json:"quality"`
+	SnapshotID            string    `json:"snapshotId"`
+	ForecastJobID         string    `json:"forecastJobId"`
+	DeploymentID          string    `json:"deploymentId"`
+	ModelVersionID        string    `json:"modelVersionId"`
+	InputSnapshotID       string    `json:"inputSnapshotId"`
+	SubjectType           string    `json:"subjectType"`
+	SubjectID             string    `json:"subjectId"`
+	Target                string    `json:"target"`
+	ForecastOrigin        time.Time `json:"forecastOrigin"`
+	WindowStart           time.Time `json:"windowStart"`
+	WindowEnd             time.Time `json:"windowEnd"`
+	ResultCount           int       `json:"resultCount"`
+	Quality               string    `json:"quality"`
+	ModelFamily           string    `json:"modelFamily,omitempty"`
+	WeatherMode           string    `json:"weatherMode,omitempty"`
+	WeatherSource         string    `json:"weatherSource,omitempty"`
+	WeatherFallbackReason string    `json:"weatherFallbackReason,omitempty"`
+	AlignedTo             string    `json:"alignedTo,omitempty"`
 }
 
 var ErrForecastNotFound = errors.New("forecast result not found")
@@ -158,13 +164,29 @@ WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND id=$3::uuid AND status='RUNNIN
 	if err != nil {
 		return err
 	}
-	evidence, _ := json.Marshal(map[string]any{
+	evidencePayload := map[string]any{
 		"resultCount":    publication.ResultCount,
 		"resultChecksum": publication.ResultChecksum,
 		"quality":        publication.Quality,
 		"windowStart":    publication.WindowStart.UTC(),
 		"windowEnd":      publication.WindowEnd.UTC(),
-	})
+	}
+	if publication.Metadata.ModelFamily != "" {
+		evidencePayload["modelFamily"] = publication.Metadata.ModelFamily
+	}
+	if publication.Metadata.WeatherMode != "" {
+		evidencePayload["weatherMode"] = publication.Metadata.WeatherMode
+	}
+	if publication.Metadata.WeatherSource != "" {
+		evidencePayload["weatherSource"] = publication.Metadata.WeatherSource
+	}
+	if publication.Metadata.WeatherFallbackReason != "" {
+		evidencePayload["weatherFallbackReason"] = publication.Metadata.WeatherFallbackReason
+	}
+	if publication.Metadata.AlignedTo != "" {
+		evidencePayload["alignedTo"] = publication.Metadata.AlignedTo
+	}
+	evidence, _ := json.Marshal(evidencePayload)
 	_, err = tx.Exec(ctx, `INSERT INTO core_registry.cross_store_publications(
 id,tenant_id,site_id,producer,run_id,result_id,target_store,target_dataset,publication_evidence,status,started_at,revision,created_at,updated_at)
 VALUES($1::uuid,$2::uuid,$3::uuid,'FORECAST',$4::uuid,$5::uuid,'CLICKHOUSE','analytics.forecast_series',$6::jsonb,'PERSISTING',$7,1,$7,$7)`,
@@ -196,6 +218,21 @@ WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND id=$3::uuid AND status IN ('PE
 		return err
 	}
 	quality := map[string]any{"resultQuality": publication.Quality}
+	if publication.Metadata.ModelFamily != "" {
+		quality["modelFamily"] = publication.Metadata.ModelFamily
+	}
+	if publication.Metadata.WeatherMode != "" {
+		quality["weatherMode"] = publication.Metadata.WeatherMode
+	}
+	if publication.Metadata.WeatherSource != "" {
+		quality["weatherSource"] = publication.Metadata.WeatherSource
+	}
+	if publication.Metadata.WeatherFallbackReason != "" {
+		quality["weatherFallbackReason"] = publication.Metadata.WeatherFallbackReason
+	}
+	if publication.Metadata.AlignedTo != "" {
+		quality["alignedTo"] = publication.Metadata.AlignedTo
+	}
 	_, err = tx.Exec(ctx, `INSERT INTO core_registry.forecast_snapshots(
 id,tenant_id,site_id,forecast_job_id,deployment_id,model_version_id,input_snapshot_id,forecast_origin,window_start,window_end,result_count,result_checksum,quality_summary,created_at)
 VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::uuid,$7::uuid,$8,$9,$10,$11,$12,$13::jsonb,$14)
@@ -294,16 +331,28 @@ ORDER BY p.updated_at,p.id LIMIT $2`, staleBefore, limit)
 		publication.Request.ModelVersion = modelVersion
 		publication.Request.FeatureSetVersion = featureSetVersion
 		var value struct {
-			ResultCount    int       `json:"resultCount"`
-			ResultChecksum string    `json:"resultChecksum"`
-			Quality        string    `json:"quality"`
-			WindowStart    time.Time `json:"windowStart"`
-			WindowEnd      time.Time `json:"windowEnd"`
+			ResultCount           int       `json:"resultCount"`
+			ResultChecksum        string    `json:"resultChecksum"`
+			Quality               string    `json:"quality"`
+			ModelFamily           string    `json:"modelFamily"`
+			WeatherMode           string    `json:"weatherMode"`
+			WeatherSource         string    `json:"weatherSource"`
+			WeatherFallbackReason string    `json:"weatherFallbackReason"`
+			AlignedTo             string    `json:"alignedTo"`
+			WindowStart           time.Time `json:"windowStart"`
+			WindowEnd             time.Time `json:"windowEnd"`
 		}
 		if err = json.Unmarshal(evidence, &value); err != nil {
 			return nil, err
 		}
 		publication.ResultCount, publication.ResultChecksum, publication.Quality = value.ResultCount, value.ResultChecksum, value.Quality
+		publication.Metadata = ExecutionMetadata{
+			ModelFamily:           value.ModelFamily,
+			WeatherMode:           value.WeatherMode,
+			WeatherSource:         value.WeatherSource,
+			WeatherFallbackReason: value.WeatherFallbackReason,
+			AlignedTo:             value.AlignedTo,
+		}
 		publication.WindowStart, publication.WindowEnd = value.WindowStart, value.WindowEnd
 		publications = append(publications, publication)
 	}
@@ -341,12 +390,22 @@ LIMIT 1`, tenantID, siteID, target).Scan(
 		return ForecastSnapshotReference{}, err
 	}
 	var quality struct {
-		ResultQuality string `json:"resultQuality"`
+		ResultQuality         string `json:"resultQuality"`
+		ModelFamily           string `json:"modelFamily"`
+		WeatherMode           string `json:"weatherMode"`
+		WeatherSource         string `json:"weatherSource"`
+		WeatherFallbackReason string `json:"weatherFallbackReason"`
+		AlignedTo             string `json:"alignedTo"`
 	}
 	if err = json.Unmarshal(qualitySummary, &quality); err != nil || (quality.ResultQuality != "VALID" && quality.ResultQuality != "DEGRADED" && quality.ResultQuality != "FALLBACK") {
 		return ForecastSnapshotReference{}, errors.New("persisted forecast quality summary is invalid")
 	}
 	reference.Quality = quality.ResultQuality
+	reference.ModelFamily = quality.ModelFamily
+	reference.WeatherMode = quality.WeatherMode
+	reference.WeatherSource = quality.WeatherSource
+	reference.WeatherFallbackReason = quality.WeatherFallbackReason
+	reference.AlignedTo = quality.AlignedTo
 	if err = tx.Commit(ctx); err != nil {
 		return ForecastSnapshotReference{}, err
 	}
@@ -539,10 +598,16 @@ WHERE j.tenant_id=$1::uuid AND j.site_id=$2::uuid AND j.id=$3::uuid`, tenantID, 
 	if recomputed != checksum {
 		return Request{}, errors.New("frozen Forecast input checksum does not match persisted provenance")
 	}
-	request.Observations, request.Unit, err = executionInput(snapshot.FeatureValues)
+	inputData, err := executionInput(snapshot.FeatureValues)
 	if err != nil {
 		return Request{}, fmt.Errorf("load frozen Forecast execution input: %w", err)
 	}
+	request.Observations = inputData.Observations
+	request.Unit = inputData.Unit
+	request.Timezone = inputData.Timezone
+	request.WeatherObservations = inputData.WeatherObservations
+	request.WeatherSource = inputData.WeatherSource
+	request.WeatherFallbackReason = inputData.WeatherFallbackReason
 	if err = request.Validate(); err != nil {
 		return Request{}, fmt.Errorf("validate frozen Forecast execution request: %w", err)
 	}

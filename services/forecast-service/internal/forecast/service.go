@@ -34,8 +34,12 @@ type ForecastEngine interface {
 	Generate(context.Context, Request, time.Time) ([]Point, error)
 }
 
-// profileDays is how many earlier days a forecast's time of day is averaged over.
-const profileDays = 7
+const (
+	// profileDays is how many earlier days BaselineEngine averages a time of day over.
+	profileDays = 7
+	// historyLookbackDays is how far back preparation reads load and weather history.
+	historyLookbackDays = 28
+)
 
 // BaselineEngine is the production baseline for the local Forecast chain. A chiller plant's
 // load follows the working day, so where earlier days cover a forecast's time of day it forecasts
@@ -132,10 +136,12 @@ func generateLastObservationFallback(request Request, generatedAt time.Time) []P
 func generatePoints(request Request, generatedAt time.Time, quality string, valueFor func(time.Time) (float64, *float64, *float64)) []Point {
 	minutes, _ := granularityMinutes(request.Granularity)
 	origin := request.ForecastOrigin.UTC()
+	slot := time.Duration(minutes) * time.Minute
+	firstSlot := origin.Truncate(slot).Add(slot)
 	pointCount := request.HorizonMinutes / minutes
 	points := make([]Point, 0, pointCount)
 	for index := 1; index <= pointCount; index++ {
-		forecastFor := origin.Add(time.Duration(index*minutes) * time.Minute)
+		forecastFor := firstSlot.Add(time.Duration(index-1) * slot)
 		value, lower, upper := valueFor(forecastFor)
 		points = append(points, Point{
 			ForecastID: deterministicForecastID(request.ForecastJobID, forecastFor), TenantID: request.TenantID, SiteID: request.SiteID,
@@ -160,7 +166,7 @@ type Service struct {
 }
 
 func NewService(sink Sink, publication PublicationStore, clock Clock) (*Service, error) {
-	return NewServiceWithEngine(sink, publication, BaselineEngine{}, clock)
+	return NewServiceWithEngine(sink, publication, WeatherChangePointEngine{}, clock)
 }
 
 func NewServiceWithEngine(sink Sink, publication PublicationStore, engine ForecastEngine, clock Clock) (*Service, error) {
@@ -184,12 +190,28 @@ func (service *Service) Forecast(ctx context.Context, request Request) ([]Point,
 	if err := service.publication.StartJob(ctx, request, startedAt); err != nil {
 		return nil, fmt.Errorf("start forecast job: %w", err)
 	}
-	points, err := service.engine.Generate(ctx, request, startedAt)
+	var (
+		points   []Point
+		metadata ExecutionMetadata
+		err      error
+	)
+	if metaEngine, ok := service.engine.(MetadataForecastEngine); ok {
+		points, metadata, err = metaEngine.GenerateWithMetadata(ctx, request, startedAt)
+	} else {
+		points, err = service.engine.Generate(ctx, request, startedAt)
+		metadata = ExecutionMetadata{
+			ModelFamily:           modelFamilyBaseline,
+			WeatherMode:           weatherModeNone,
+			WeatherSource:         WeatherSourceNone,
+			WeatherFallbackReason: request.WeatherFallbackReason,
+			AlignedTo:             alignmentModePeriodStart,
+		}
+	}
 	if err != nil {
 		_ = service.publication.FailJob(ctx, request, "ENGINE_FAILED", service.clock().UTC())
 		return nil, fmt.Errorf("forecast engine: %w", err)
 	}
-	publication, err := describePublication(request, points)
+	publication, err := describePublication(request, points, metadata)
 	if err != nil {
 		_ = service.publication.FailJob(ctx, request, "RESULT_INVALID", service.clock().UTC())
 		return nil, err
@@ -274,7 +296,7 @@ func (service *Service) Reconcile(ctx context.Context, staleBefore time.Time, li
 	return repaired, nil
 }
 
-func describePublication(request Request, points []Point) (Publication, error) {
+func describePublication(request Request, points []Point, metadata ExecutionMetadata) (Publication, error) {
 	if len(points) == 0 {
 		return Publication{}, fmt.Errorf("forecast engine returned no results")
 	}
@@ -299,8 +321,12 @@ func describePublication(request Request, points []Point) (Publication, error) {
 		return Publication{}, fmt.Errorf("encode forecast result digest: %w", err)
 	}
 	digest := sha256.Sum256(payload)
+	if metadata.AlignedTo == "" {
+		metadata.AlignedTo = alignmentModePeriodStart
+	}
 	return Publication{
 		Request: request, ResultCount: len(ordered), ResultChecksum: hex.EncodeToString(digest[:]), Quality: quality,
+		Metadata:    metadata,
 		WindowStart: ordered[0].ForecastFor.UTC(), WindowEnd: ordered[len(ordered)-1].ForecastFor.UTC(),
 	}, nil
 }
