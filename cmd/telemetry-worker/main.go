@@ -8,6 +8,9 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
+	"flag"
+	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -168,6 +171,174 @@ func waitWorkersBounded(wg *sync.WaitGroup, timeout time.Duration) bool {
 }
 
 func runTelemetryWorker() int {
+	return runTelemetryWorkerArgs(os.Args[1:], os.Getenv, os.Stdout, os.Stderr)
+}
+
+type hourlyV2BackfillCLI struct {
+	enabled  bool
+	since    time.Time
+	until    time.Time
+	tenantID string
+	siteID   string
+}
+
+func parseTelemetryWorkerCLI(args []string, errOut io.Writer) (hourlyV2BackfillCLI, error) {
+	if errOut == nil {
+		errOut = io.Discard
+	}
+	subcommand := false
+	parseArgs := args
+	if len(args) > 0 && args[0] == "backfill-hourly-v2" {
+		subcommand = true
+		parseArgs = args[1:]
+	}
+
+	fs := flag.NewFlagSet("telemetry-worker", flag.ContinueOnError)
+	fs.SetOutput(errOut)
+	sinceFlag := fs.String("backfill-hourly-v2-since", "", "inclusive UTC start timestamp (RFC3339 or YYYY-MM-DD) for hourly v2 backfill")
+	untilFlag := fs.String("backfill-hourly-v2-until", "", "exclusive UTC end timestamp (RFC3339 or YYYY-MM-DD) for hourly v2 backfill")
+	tenantFlag := fs.String("tenant-id", "", "optional tenant UUID filter for hourly v2 backfill")
+	siteFlag := fs.String("site-id", "", "optional site UUID filter for hourly v2 backfill")
+	var subSince, subUntil *string
+	if subcommand {
+		subSince = fs.String("since", "", "inclusive UTC start timestamp (RFC3339 or YYYY-MM-DD) for hourly v2 backfill")
+		subUntil = fs.String("until", "", "exclusive UTC end timestamp (RFC3339 or YYYY-MM-DD) for hourly v2 backfill")
+	}
+	if err := fs.Parse(parseArgs); err != nil {
+		return hourlyV2BackfillCLI{}, err
+	}
+	if fs.NArg() > 0 {
+		return hourlyV2BackfillCLI{}, fmt.Errorf("unexpected positional arguments: %s", strings.Join(fs.Args(), " "))
+	}
+
+	sinceRaw := strings.TrimSpace(*sinceFlag)
+	if subSince != nil && strings.TrimSpace(*subSince) != "" {
+		sinceRaw = strings.TrimSpace(*subSince)
+	}
+	untilRaw := strings.TrimSpace(*untilFlag)
+	if subUntil != nil && strings.TrimSpace(*subUntil) != "" {
+		untilRaw = strings.TrimSpace(*subUntil)
+	}
+	tenantID := strings.TrimSpace(*tenantFlag)
+	siteID := strings.TrimSpace(*siteFlag)
+
+	if !subcommand && sinceRaw == "" && untilRaw == "" && tenantID == "" && siteID == "" {
+		return hourlyV2BackfillCLI{}, nil
+	}
+	if sinceRaw == "" {
+		return hourlyV2BackfillCLI{}, errors.New("--backfill-hourly-v2-since is required when running hourly v2 backfill")
+	}
+	sinceTime, err := parseBackfillTimestamp(sinceRaw)
+	if err != nil {
+		return hourlyV2BackfillCLI{}, fmt.Errorf("invalid backfill since timestamp %q: %w", sinceRaw, err)
+	}
+	var untilTime time.Time
+	if untilRaw != "" {
+		untilTime, err = parseBackfillTimestamp(untilRaw)
+		if err != nil {
+			return hourlyV2BackfillCLI{}, fmt.Errorf("invalid backfill until timestamp %q: %w", untilRaw, err)
+		}
+		if !untilTime.After(sinceTime.UTC().Truncate(time.Hour)) {
+			return hourlyV2BackfillCLI{}, errors.New("backfill until timestamp must be after since hour")
+		}
+	}
+	return hourlyV2BackfillCLI{
+		enabled:  true,
+		since:    sinceTime,
+		until:    untilTime,
+		tenantID: tenantID,
+		siteID:   siteID,
+	}, nil
+}
+
+func parseBackfillTimestamp(raw string) (time.Time, error) {
+	trimmed := strings.TrimSpace(raw)
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02"} {
+		if parsed, err := time.Parse(layout, trimmed); err == nil {
+			return parsed.UTC(), nil
+		}
+	}
+	return time.Time{}, errors.New("expected RFC3339 timestamp or YYYY-MM-DD date")
+}
+
+func runTelemetryWorkerArgs(args []string, lookup func(string) string, out, errOut io.Writer) int {
+	if lookup == nil {
+		lookup = os.Getenv
+	}
+	if out == nil {
+		out = os.Stdout
+	}
+	if errOut == nil {
+		errOut = os.Stderr
+	}
+	cli, err := parseTelemetryWorkerCLI(args, errOut)
+	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		fmt.Fprintf(errOut, "invalid telemetry-worker flags: %v\n", err)
+		return 2
+	}
+	if cli.enabled {
+		logger := observability.NewJSONLogger(out, slog.LevelInfo)
+		signalCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer stopSignals()
+		if err := runHourlyV2Backfill(signalCtx, cli, lookup, logger); err != nil {
+			logger.Error("analytics_hourly_v2_backfill_failed", "error_code", "ANALYTICS_HOURLY_V2_BACKFILL_FAILED", "cause", err.Error())
+			fmt.Fprintf(errOut, "hourly v2 backfill failed: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	return runTelemetryWorkerDaemon()
+}
+
+func runHourlyV2Backfill(ctx context.Context, cli hourlyV2BackfillCLI, lookup func(string) string, logger *slog.Logger) error {
+	reader, writer, err := openAnalyticsClickHouseClients(lookup, true)
+	if err != nil {
+		return err
+	}
+	if logger != nil {
+		logger.Info("analytics_hourly_v2_backfill_started",
+			"since", cli.since.UTC().Format(time.RFC3339),
+			"until", formatOptionalRFC3339(cli.until),
+			"tenant_id", cli.tenantID,
+			"site_id", cli.siteID,
+		)
+	}
+	res, err := analyticsprojector.BackfillHourlyV2(ctx, analyticsprojector.HourlyV2BackfillConfig{
+		IntervalSource:     reader,
+		BucketSource:       reader,
+		HourlyV2Sink:       writer,
+		LoadProfileSource:  reader,
+		TariffWindowSource: reader,
+		Since:              cli.since,
+		Until:              cli.until,
+		TenantID:           cli.tenantID,
+		SiteID:             cli.siteID,
+	})
+	if err != nil {
+		return err
+	}
+	if logger != nil {
+		logger.Info("analytics_hourly_v2_backfill_completed",
+			"since", cli.since.UTC().Format(time.RFC3339),
+			"until", formatOptionalRFC3339(cli.until),
+			"buckets_processed", res.BucketsProcessed,
+			"rows_written", res.RowsWritten,
+		)
+	}
+	return nil
+}
+
+func formatOptionalRFC3339(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
+func runTelemetryWorkerDaemon() int {
 	observabilityRuntime := observability.NewRuntime(observability.RuntimeConfig{
 		Service: "telemetry-runtime-service", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
 		QueueSize: 1024, ExportTimeout: 500 * time.Millisecond,
@@ -843,34 +1014,7 @@ func loadAnalyticsProjection(certificate tls.Certificate) (analyticsProjectionRu
 	if err != nil {
 		return analyticsProjectionRuntime{}, err
 	}
-	httpClient, err := newAnalyticsHTTPClient(strings.TrimSpace(os.Getenv("ANALYTICS_CLICKHOUSE_CA")))
-	if err != nil {
-		return analyticsProjectionRuntime{}, err
-	}
-	baseURL, err := requiredEnv("ANALYTICS_CLICKHOUSE_HTTP_URL")
-	if err != nil {
-		return analyticsProjectionRuntime{}, err
-	}
-	reader, err := analyticsprojector.NewReader(analyticsprojector.ReaderConfig{
-		BaseURL:           baseURL,
-		SourceDatabase:    envOr("ANALYTICS_SOURCE_DATABASE", "telemetry_history"),
-		AnalyticsDatabase: envOr("ANALYTICS_DATABASE", "analytics"),
-		AnalyticsTable:    envOr("ANALYTICS_ENERGY_TABLE", "energy_interval_facts"),
-		Username:          strings.TrimSpace(os.Getenv("ANALYTICS_CLICKHOUSE_READER_USERNAME")),
-		Password:          os.Getenv("ANALYTICS_CLICKHOUSE_READER_PASSWORD"),
-		HTTPClient:        httpClient,
-	})
-	if err != nil {
-		return analyticsProjectionRuntime{}, err
-	}
-	writer, err := analyticsprojector.NewWriter(analyticsprojector.WriterConfig{
-		BaseURL:    baseURL,
-		Database:   envOr("ANALYTICS_DATABASE", "analytics"),
-		Table:      envOr("ANALYTICS_ENERGY_TABLE", "energy_interval_facts"),
-		Username:   strings.TrimSpace(os.Getenv("ANALYTICS_CLICKHOUSE_WRITER_USERNAME")),
-		Password:   os.Getenv("ANALYTICS_CLICKHOUSE_WRITER_PASSWORD"),
-		HTTPClient: httpClient,
-	})
+	reader, writer, err := openAnalyticsClickHouseClients(os.Getenv, false)
 	if err != nil {
 		return analyticsProjectionRuntime{}, err
 	}
@@ -907,14 +1051,16 @@ func loadAnalyticsProjection(certificate tls.Certificate) (analyticsProjectionRu
 		return analyticsProjectionRuntime{}, err
 	}
 	projector, err := analyticsprojector.NewProjector(analyticsprojector.ProjectorConfig{
-		CounterSource:       reader,
-		BindingResolver:     bindingResolver,
-		FactSink:            writer,
-		HourlyV2Sink:        writer,
-		LoadProfileSource:   reader,
-		RebuildEvents:       writer,
-		DirtyWindowEnqueuer: dirtyWindowEnqueuer,
-		BatchSize:           batchSize,
+		CounterSource:        reader,
+		BindingResolver:      bindingResolver,
+		FactSink:             writer,
+		HourlyV2Sink:         writer,
+		HourlyIntervalSource: reader,
+		TariffWindowSource:   reader,
+		LoadProfileSource:    reader,
+		RebuildEvents:        writer,
+		DirtyWindowEnqueuer:  dirtyWindowEnqueuer,
+		BatchSize:            batchSize,
 	})
 	if err != nil {
 		return analyticsProjectionRuntime{}, err
@@ -1100,6 +1246,48 @@ func runConditionAnchorProjectionCoordinated(ctx context.Context, projector cond
 			}
 		}
 	})
+}
+
+func openAnalyticsClickHouseClients(lookup func(string) string, allowTelemetryFallback bool) (*analyticsprojector.Reader, *analyticsprojector.Writer, error) {
+	caPath := strings.TrimSpace(lookup("ANALYTICS_CLICKHOUSE_CA"))
+	if caPath == "" && allowTelemetryFallback {
+		caPath = strings.TrimSpace(lookup("TELEMETRY_CLICKHOUSE_CA"))
+	}
+	httpClient, err := newAnalyticsHTTPClient(caPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	baseURL := strings.TrimSpace(lookup("ANALYTICS_CLICKHOUSE_HTTP_URL"))
+	if baseURL == "" && allowTelemetryFallback {
+		baseURL = strings.TrimSpace(lookup("TELEMETRY_CLICKHOUSE_HTTP_URL"))
+	}
+	if baseURL == "" {
+		return nil, nil, errors.New("ANALYTICS_CLICKHOUSE_HTTP_URL is required")
+	}
+	reader, err := analyticsprojector.NewReader(analyticsprojector.ReaderConfig{
+		BaseURL:           baseURL,
+		SourceDatabase:    envOrLookup(lookup, "ANALYTICS_SOURCE_DATABASE", "telemetry_history"),
+		AnalyticsDatabase: envOrLookup(lookup, "ANALYTICS_DATABASE", "analytics"),
+		AnalyticsTable:    envOrLookup(lookup, "ANALYTICS_ENERGY_TABLE", "energy_interval_facts"),
+		Username:          strings.TrimSpace(lookup("ANALYTICS_CLICKHOUSE_READER_USERNAME")),
+		Password:          lookup("ANALYTICS_CLICKHOUSE_READER_PASSWORD"),
+		HTTPClient:        httpClient,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	writer, err := analyticsprojector.NewWriter(analyticsprojector.WriterConfig{
+		BaseURL:    baseURL,
+		Database:   envOrLookup(lookup, "ANALYTICS_DATABASE", "analytics"),
+		Table:      envOrLookup(lookup, "ANALYTICS_ENERGY_TABLE", "energy_interval_facts"),
+		Username:   strings.TrimSpace(lookup("ANALYTICS_CLICKHOUSE_WRITER_USERNAME")),
+		Password:   lookup("ANALYTICS_CLICKHOUSE_WRITER_PASSWORD"),
+		HTTPClient: httpClient,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return reader, writer, nil
 }
 
 func newAnalyticsHTTPClient(caPath string) (*http.Client, error) {

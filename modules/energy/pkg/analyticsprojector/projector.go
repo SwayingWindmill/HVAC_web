@@ -1,6 +1,8 @@
 package analyticsprojector
 
 import (
+	"context"
+
 	clickhouseclient "github.com/quanlaihe/hvac-web/modules/energy/internal/clickhouse"
 	coreclient "github.com/quanlaihe/hvac-web/modules/energy/internal/coreclient"
 	"github.com/quanlaihe/hvac-web/modules/energy/internal/energy"
@@ -59,6 +61,12 @@ func NewTotalSubmeterSource(config RegistryClientConfig) (TotalSubmeterSource, e
 
 type DirtyWindowEnqueuer = energy.DirtyWindowEnqueuer
 type HourlyV2Sink = energy.HourlyV2Sink
+type HourlyIntervalSource = energy.HourlyIntervalSource
+type TariffWindowSource = energy.TariffWindowSource
+type HourlyBucketKey = energy.HourlyBucketKey
+type HourlyBackfillSource = energy.HourlyBackfillSource
+type HourlyV2BackfillConfig = energy.HourlyV2BackfillConfig
+type HourlyV2BackfillResult = energy.HourlyV2BackfillResult
 type LoadProfileSource = energy.LoadProfileSource
 type ConditionInputReader = energy.ConditionInputReader
 type ConditionAnchorWriter = energy.ConditionAnchorWriter
@@ -71,4 +79,8 @@ func NewDirtyWindowEnqueuer(config RegistryClientConfig) (DirtyWindowEnqueuer, e
 
 func NewConditionAnchorProjector(config ConditionAnchorProjectorConfig) (*ConditionAnchorProjector, error) {
 	return energy.NewConditionAnchorProjector(config)
+}
+
+func BackfillHourlyV2(ctx context.Context, config HourlyV2BackfillConfig) (HourlyV2BackfillResult, error) {
+	return energy.BackfillHourlyV2(ctx, config)
 }
