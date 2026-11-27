@@ -88,6 +88,67 @@ class HVACResponseModel:
 
 
 @dataclass(frozen=True)
+class CoupledChillerSpec:
+    id: str
+    rated_cooling_kw: float = 600.0
+    base_cop: float = 5.7
+
+
+@dataclass(frozen=True)
+class CoupledPlantSpec:
+    chillers: tuple[CoupledChillerSpec, ...] = (
+        CoupledChillerSpec(id="CHILLER-01", rated_cooling_kw=600.0, base_cop=5.8),
+        CoupledChillerSpec(id="CHILLER-02", rated_cooling_kw=600.0, base_cop=5.6),
+    )
+    chwp_rated_kw: float = 45.0
+    chwp_rated_flow_m3h: float = 220.0
+    chwp_static_head_frac: float = 0.10
+    chwp_min_hz: float = HARD_PUMP_FREQ_MIN_HZ
+    chwp_max_hz: float = HARD_PUMP_FREQ_MAX_HZ
+    cwp_rated_kw: float = 37.0
+    cwp_rated_flow_m3h: float = 260.0
+    cwp_static_head_frac: float = 0.12
+    cwp_min_hz: float = HARD_PUMP_FREQ_MIN_HZ
+    cwp_max_hz: float = HARD_PUMP_FREQ_MAX_HZ
+    tower_rated_kw: float = 22.0
+    tower_design_heat_rej_kw: float = 1420.0
+    tower_min_approach_c: float = 1.6
+    tower_load_approach_coeff: float = 1.8
+    tower_nonlinear_exp: float = 1.25
+    tower_low_fan_penalty_c: float = 1.4
+    tower_min_fan_pct: float = HARD_FAN_SPEED_MIN_PCT
+    tower_max_fan_pct: float = HARD_FAN_SPEED_MAX_PCT
+    zone_thermal_mass_kwh_per_c: float = 300.0
+    zone_setpoint_c: float = 24.0
+    design_supply_temp_c: float = 7.0
+    coil_approach_min_c: float = 4.5
+    coil_flow_exp: float = 0.72
+
+
+@dataclass(frozen=True)
+class CoupledHorizonSlot:
+    duration_hours: float
+    cooling_load_kw: float
+    ambient_dry_bulb_c: float
+    ambient_wet_bulb_c: float | None = None
+    rel_humidity_pct: float | None = None
+    tariff_rate_cny: float = 0.75
+
+
+@dataclass(frozen=True)
+class CoupledContext:
+    precooling_enabled: bool = False
+    cop_scale: float = 1.0
+    current_load_kw: float | None = None
+    ambient_dry_bulb_c: float = 30.0
+    ambient_wet_bulb_c: float | None = None
+    rel_humidity_pct: float | None = None
+    tariff_rate_cny: float | None = None
+    plant: CoupledPlantSpec = field(default_factory=CoupledPlantSpec)
+    horizon: tuple[CoupledHorizonSlot, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
 class SolverRequest:
     tenant_id: str
     site_id: str
@@ -104,6 +165,7 @@ class SolverRequest:
     response_model: HVACResponseModel
     subject_type: str = "SITE"
     subject_id: str = ""
+    coupled_context: CoupledContext | None = None
 
 
 @dataclass(frozen=True)
@@ -142,8 +204,24 @@ class SolverResponse:
     restore_supply_temp_c: float
     solver_version: str
     auxiliary_targets: tuple[AuxiliaryTargetRecommendation, ...] = field(default_factory=tuple)
+    coupled_plan: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        verification_plan: dict[str, Any] = {
+            "windowMinutes": 30,
+            "requiredSignals": [
+                "supply_temperature",
+                "zone_temperature",
+                "site_load",
+            ],
+            "successCriteria": [
+                "zone_temperature_within_frozen_constraint",
+                "site_load_not_worse_than_baseline",
+            ],
+        }
+        if self.coupled_plan:
+            verification_plan.update(self.coupled_plan)
+
         return {
             "id": self.id,
             "candidate": {
@@ -172,18 +250,7 @@ class SolverResponse:
                     "operator_cancelled",
                 ],
             },
-            "verificationPlan": {
-                "windowMinutes": 30,
-                "requiredSignals": [
-                    "supply_temperature",
-                    "zone_temperature",
-                    "site_load",
-                ],
-                "successCriteria": [
-                    "zone_temperature_within_frozen_constraint",
-                    "site_load_not_worse_than_baseline",
-                ],
-            },
+            "verificationPlan": verification_plan,
             "solverVersion": self.solver_version,
             "auxiliaryTargets": [item.to_dict() for item in self.auxiliary_targets],
         }
@@ -259,6 +326,11 @@ def parse_solver_request(payload: Any) -> SolverRequest:
         calibrated_at=str(raw_model.get("calibratedAt") or "").strip(),
     )
 
+    coupled_context: CoupledContext | None = None
+    raw_coupled = root.get("coupledContext")
+    if raw_coupled is not None:
+        coupled_context = _parse_coupled_context(raw_coupled)
+
     return SolverRequest(
         tenant_id=tenant_id,
         site_id=site_id,
@@ -275,4 +347,116 @@ def parse_solver_request(payload: Any) -> SolverRequest:
         response_model=response_model,
         subject_type=str(root.get("subjectType") or "SITE").strip() or "SITE",
         subject_id=str(root.get("subjectId") or site_id).strip() or site_id,
+        coupled_context=coupled_context,
+    )
+
+
+def _optional_finite(raw: Any, field_name: str, default: float | None = None) -> float | None:
+    if raw is None:
+        return default
+    return require_finite(raw, field_name)
+
+
+def _parse_coupled_plant_spec(raw: Any) -> CoupledPlantSpec:
+    if raw is None:
+        return CoupledPlantSpec()
+    obj = require_dict(raw, "coupledContext.plant")
+    defaults = CoupledPlantSpec()
+    chillers = defaults.chillers
+    raw_chillers = obj.get("chillers")
+    if raw_chillers is not None:
+        if not isinstance(raw_chillers, list) or not raw_chillers:
+            raise SolverInputError("coupledContext.plant.chillers must be a non-empty list")
+        parsed_chillers: list[CoupledChillerSpec] = []
+        for idx, item in enumerate(raw_chillers):
+            ch_obj = require_dict(item, f"coupledContext.plant.chillers[{idx}]")
+            parsed_chillers.append(
+                CoupledChillerSpec(
+                    id=str(ch_obj.get("id") or f"CHILLER-{idx + 1:02d}").strip(),
+                    rated_cooling_kw=require_positive(
+                        ch_obj.get("ratedCoolingKw", 600.0),
+                        f"coupledContext.plant.chillers[{idx}].ratedCoolingKw",
+                    ),
+                    base_cop=require_positive(
+                        ch_obj.get("baseCop", 5.7),
+                        f"coupledContext.plant.chillers[{idx}].baseCop",
+                    ),
+                )
+            )
+        chillers = tuple(parsed_chillers)
+
+    def pos(key: str, default_val: float) -> float:
+        if key not in obj or obj[key] is None:
+            return default_val
+        return require_positive(obj[key], f"coupledContext.plant.{key}")
+
+    def non_neg(key: str, default_val: float) -> float:
+        if key not in obj or obj[key] is None:
+            return default_val
+        return require_non_negative(obj[key], f"coupledContext.plant.{key}")
+
+    total_cap = sum(ch.rated_cooling_kw for ch in chillers)
+    weighted_cop = sum(ch.rated_cooling_kw * ch.base_cop for ch in chillers) / max(1.0, total_cap)
+    return CoupledPlantSpec(
+        chillers=chillers,
+        chwp_rated_kw=pos("chwpRatedKw", defaults.chwp_rated_kw),
+        chwp_rated_flow_m3h=pos("chwpRatedFlowM3h", defaults.chwp_rated_flow_m3h),
+        chwp_static_head_frac=non_neg("chwpStaticHeadFrac", defaults.chwp_static_head_frac),
+        chwp_min_hz=pos("chwpMinHz", defaults.chwp_min_hz),
+        chwp_max_hz=pos("chwpMaxHz", defaults.chwp_max_hz),
+        cwp_rated_kw=pos("cwpRatedKw", defaults.cwp_rated_kw),
+        cwp_rated_flow_m3h=pos("cwpRatedFlowM3h", defaults.cwp_rated_flow_m3h),
+        cwp_static_head_frac=non_neg("cwpStaticHeadFrac", defaults.cwp_static_head_frac),
+        cwp_min_hz=pos("cwpMinHz", defaults.cwp_min_hz),
+        cwp_max_hz=pos("cwpMaxHz", defaults.cwp_max_hz),
+        tower_rated_kw=pos("towerRatedKw", defaults.tower_rated_kw),
+        tower_design_heat_rej_kw=pos("towerDesignHeatRejKw", total_cap * (1.0 + 1.0 / weighted_cop)),
+        tower_min_approach_c=pos("towerMinApproachC", defaults.tower_min_approach_c),
+        tower_load_approach_coeff=non_neg("towerLoadApproachCoeff", defaults.tower_load_approach_coeff),
+        tower_nonlinear_exp=pos("towerNonlinearExp", defaults.tower_nonlinear_exp),
+        tower_low_fan_penalty_c=non_neg("towerLowFanPenaltyC", defaults.tower_low_fan_penalty_c),
+        tower_min_fan_pct=pos("towerMinFanPct", defaults.tower_min_fan_pct),
+        tower_max_fan_pct=pos("towerMaxFanPct", defaults.tower_max_fan_pct),
+        zone_thermal_mass_kwh_per_c=pos("zoneThermalMassKwhPerC", total_cap * 0.25),
+        zone_setpoint_c=require_finite(obj.get("zoneSetpointC", defaults.zone_setpoint_c), "coupledContext.plant.zoneSetpointC"),
+        design_supply_temp_c=require_finite(obj.get("designSupplyTempC", defaults.design_supply_temp_c), "coupledContext.plant.designSupplyTempC"),
+        coil_approach_min_c=pos("coilApproachMinC", defaults.coil_approach_min_c),
+        coil_flow_exp=pos("coilFlowExp", defaults.coil_flow_exp),
+    )
+
+
+def _parse_coupled_context(raw: Any) -> CoupledContext:
+    obj = require_dict(raw, "coupledContext")
+    precool = bool(obj.get("precoolingEnabled", False))
+    cop_scale = require_positive(obj.get("copScale", 1.0), "coupledContext.copScale")
+    plant = _parse_coupled_plant_spec(obj.get("plant"))
+
+    horizon_slots: list[CoupledHorizonSlot] = []
+    raw_horizon = obj.get("horizon")
+    if raw_horizon is not None:
+        if not isinstance(raw_horizon, list):
+            raise SolverInputError("coupledContext.horizon must be a list")
+        for idx, raw_slot in enumerate(raw_horizon):
+            sl = require_dict(raw_slot, f"coupledContext.horizon[{idx}]")
+            horizon_slots.append(
+                CoupledHorizonSlot(
+                    duration_hours=require_positive(sl.get("durationHours", 1.0), f"coupledContext.horizon[{idx}].durationHours"),
+                    cooling_load_kw=require_positive(sl.get("coolingLoadKw"), f"coupledContext.horizon[{idx}].coolingLoadKw"),
+                    ambient_dry_bulb_c=require_finite(sl.get("ambientDryBulbC", 30.0), f"coupledContext.horizon[{idx}].ambientDryBulbC"),
+                    ambient_wet_bulb_c=_optional_finite(sl.get("ambientWetBulbC"), f"coupledContext.horizon[{idx}].ambientWetBulbC"),
+                    rel_humidity_pct=_optional_finite(sl.get("relHumidityPct"), f"coupledContext.horizon[{idx}].relHumidityPct"),
+                    tariff_rate_cny=require_non_negative(sl.get("tariffRateCny", 0.75), f"coupledContext.horizon[{idx}].tariffRateCny"),
+                )
+            )
+
+    return CoupledContext(
+        precooling_enabled=precool,
+        cop_scale=max(0.55, min(1.35, cop_scale)),
+        current_load_kw=_optional_finite(obj.get("currentLoadKw"), "coupledContext.currentLoadKw"),
+        ambient_dry_bulb_c=float(_optional_finite(obj.get("ambientDryBulbC"), "coupledContext.ambientDryBulbC", 30.0) or 30.0),
+        ambient_wet_bulb_c=_optional_finite(obj.get("ambientWetBulbC"), "coupledContext.ambientWetBulbC"),
+        rel_humidity_pct=_optional_finite(obj.get("relHumidityPct"), "coupledContext.relHumidityPct"),
+        tariff_rate_cny=_optional_finite(obj.get("tariffRateCny"), "coupledContext.tariffRateCny"),
+        plant=plant,
+        horizon=tuple(horizon_slots),
     )

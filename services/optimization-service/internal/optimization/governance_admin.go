@@ -181,7 +181,7 @@ func NormalizeCanaryServingRef(raw string, allowedHosts []string) (string, error
 	}
 	lower := strings.ToLower(trimmed)
 	if strings.HasPrefix(lower, "builtin://") {
-		if lower != DefaultBuiltinSolverRef && lower != ChillerCOPBuiltinSolverRef {
+		if lower != DefaultBuiltinSolverRef && lower != ChillerCOPBuiltinSolverRef && lower != LegacyRecommendationBuiltinSolverRef {
 			return "", fmt.Errorf("%w: unsupported builtin solver", ErrCanaryInvalidRequest)
 		}
 		return lower, nil

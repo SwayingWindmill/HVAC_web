@@ -19,9 +19,10 @@ import (
 )
 
 const (
-	DefaultBuiltinSolverRef    = "builtin://hvac-recommendation-v1"
-	ChillerCOPBuiltinSolverRef = "builtin://chiller-cop-model"
-	DefaultSolverLoopKey       = "PLANT"
+	DefaultBuiltinSolverRef              = CoupledMPCBuiltinSolverRef
+	LegacyRecommendationBuiltinSolverRef = "builtin://hvac-recommendation-v1"
+	ChillerCOPBuiltinSolverRef           = "builtin://chiller-cop-model"
+	DefaultSolverLoopKey                 = "PLANT"
 
 	SolverSourceDefault           = "DEFAULT"
 	SolverSourceDeploymentBinding = "DEPLOYMENT_BINDING"
@@ -254,7 +255,7 @@ type RoutingSolverAdapter struct {
 func NewRoutingSolverAdapter(cfg RoutingSolverConfig) *RoutingSolverAdapter {
 	baseline := cfg.Baseline
 	if baseline == nil {
-		baseline = HVACRecommendationSolver{}
+		baseline = NewCoupledPlantMPCSolver()
 	}
 	breaker := cfg.Breaker
 	if breaker == nil {
@@ -308,7 +309,7 @@ func (adapter *RoutingSolverAdapter) baselineSolver() SolverAdapter {
 	if adapter != nil && adapter.Baseline != nil {
 		return adapter.Baseline
 	}
-	return HVACRecommendationSolver{}
+	return NewCoupledPlantMPCSolver()
 }
 
 func (adapter *RoutingSolverAdapter) logf(format string, args ...any) {
@@ -367,7 +368,7 @@ func (adapter *RoutingSolverAdapter) Recommend(ctx context.Context, request Requ
 		selection = resolved
 	}
 	servingRef := sanitizeServingRef(selection.ServingRef)
-	if servingRef == "" || servingRef == DefaultBuiltinSolverRef {
+	if servingRef == "" || servingRef == DefaultBuiltinSolverRef || servingRef == LegacyRecommendationBuiltinSolverRef {
 		return baseline.Recommend(ctx, request, at)
 	}
 	if servingRef == ChillerCOPBuiltinSolverRef {
