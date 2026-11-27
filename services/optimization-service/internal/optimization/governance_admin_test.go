@@ -77,6 +77,9 @@ func TestCanaryBindingValidationAndAllowlist(t *testing.T) {
 		t.Fatalf("expected invalid loopKey to fail")
 	}
 
+	if got, err := NormalizeCanaryServingRef("builtin://coupled-plant-mpc-v1", allowed); err != nil || got != DefaultBuiltinSolverRef {
+		t.Fatalf("coupled mpc builtin ref failed: %q, %v", got, err)
+	}
 	if got, err := NormalizeCanaryServingRef("builtin://chiller-cop-model", allowed); err != nil || got != ChillerCOPBuiltinSolverRef {
 		t.Fatalf("builtin ref failed: %q, %v", got, err)
 	}

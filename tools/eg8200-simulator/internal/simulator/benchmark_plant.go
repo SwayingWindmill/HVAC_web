@@ -17,18 +17,19 @@ import (
 // CoupledChillerPlantConfig defines a coupled multi-chiller central plant for
 // closed-loop mismatch benchmarking.
 type CoupledChillerPlantConfig struct {
-	Chillers          []ChillerConfig     `json:"chillers"`
-	ChilledWaterPump  PumpConfig          `json:"chilledWaterPump"`
-	CoolingWaterPump  PumpConfig          `json:"coolingWaterPump"`
-	CoolingTower      CoolingTowerConfig  `json:"coolingTower"`
-	PowerMeterID      string              `json:"powerMeterId"`
-	BTUMeterID        string              `json:"btuMeterId"`
-	WeatherStationID  string              `json:"weatherStationId"`
-	ZoneSensorID      string              `json:"zoneSensorId"`
-	ThermalLagSeconds int                 `json:"thermalLagSeconds,omitempty"`
-	ZoneTempMinC      float64             `json:"zoneTempMinC,omitempty"`
-	ZoneTempMaxC      float64             `json:"zoneTempMaxC,omitempty"`
-	Mismatch          PlantMismatchConfig `json:"mismatch,omitempty"`
+	Chillers           []ChillerConfig     `json:"chillers"`
+	ChilledWaterPump   PumpConfig          `json:"chilledWaterPump"`
+	CoolingWaterPump   PumpConfig          `json:"coolingWaterPump"`
+	CoolingTower       CoolingTowerConfig  `json:"coolingTower"`
+	PowerMeterID       string              `json:"powerMeterId"`
+	BTUMeterID         string              `json:"btuMeterId"`
+	WeatherStationID   string              `json:"weatherStationId"`
+	ZoneSensorID       string              `json:"zoneSensorId"`
+	ThermalLagSeconds  int                 `json:"thermalLagSeconds,omitempty"`
+	ZoneTempMinC       float64             `json:"zoneTempMinC,omitempty"`
+	ZoneTempMaxC       float64             `json:"zoneTempMaxC,omitempty"`
+	PrecoolingCoupling bool                `json:"precoolingCoupling,omitempty"`
+	Mismatch           PlantMismatchConfig `json:"mismatch,omitempty"`
 }
 
 func (c CoupledChillerPlantConfig) Validate() error {
@@ -387,6 +388,23 @@ func (p *CoupledChillerPlant) updateZoneDemandLocked() {
 		p.config.ChilledWaterPump.RatedFlowM3H,
 	)
 	correctionKW := math.Max(0, p.zone.temperatureC-zoneSetpointC-zoneDeadbandC) * p.zoneThermalMassKWhPerC() / zoneControlTimeConstant.Hours()
+	if p.config.PrecoolingCoupling && correctionKW == 0 {
+		subcoolSupplyC := math.Max(0, zoneDesignSupplyWaterC-p.headerLeavingCHWC)
+		minZoneFloorC := 22.0
+		if p.config.ZoneTempMinC > 0 {
+			minZoneFloorC = math.Max(p.config.ZoneTempMinC+0.8, 22.0)
+		}
+		effectiveTargetC := clamp(zoneSetpointC-0.9*subcoolSupplyC, minZoneFloorC, zoneSetpointC)
+		switch {
+		case subcoolSupplyC > 0.15 && p.zone.temperatureC > effectiveTargetC+0.1:
+			const precoolTimeConstantHours = 1.8
+			maxPrecoolPullKW := math.Max(totalRated*0.35, 250)
+			correctionKW = math.Min((p.zone.temperatureC-effectiveTargetC)*p.zoneThermalMassKWhPerC()/precoolTimeConstantHours, maxPrecoolPullKW)
+		case p.headerLeavingCHWC >= zoneDesignSupplyWaterC-0.05 && p.zone.temperatureC < zoneSetpointC-0.15:
+			dischargeFraction := clamp((zoneSetpointC-0.15-p.zone.temperatureC)/2.0, 0, 0.45)
+			correctionKW = -p.effectiveCoolingLoadKW() * dischargeFraction
+		}
+	}
 	p.zone.coolingDemandKW = clamp(p.effectiveCoolingLoadKW()+correctionKW, 0, coilLimitKW)
 }
 

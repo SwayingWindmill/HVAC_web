@@ -492,3 +492,22 @@ func TestRoutingSolverAdapterWithPythonSolverService(t *testing.T) {
 		t.Fatalf("unexpected provenance/approval on Python recommendation: %+v", rec)
 	}
 }
+
+func TestRoutingSolverAdapterDefaultsToCoupledPlantMPC(t *testing.T) {
+	if got := DefaultBuiltinSolverRef; got != "builtin://coupled-plant-mpc-v1" {
+		t.Fatalf("DefaultBuiltinSolverRef = %q, want %q", got, CoupledMPCBuiltinSolverRef)
+	}
+	adapter := NewRoutingSolverAdapter(RoutingSolverConfig{})
+	req := validRequest()
+	at := req.ValidFrom.Add(time.Minute)
+	rec, err := adapter.Recommend(t.Context(), req, at)
+	if err != nil {
+		t.Fatalf("default coupled MPC adapter.Recommend failed: %v", err)
+	}
+	if len(rec.AuxiliaryTargets) != 3 {
+		t.Fatalf("expected 3 coupled auxiliary targets from default builtin solver, got %d", len(rec.AuxiliaryTargets))
+	}
+	if err := rec.ValidateForApproval(); err != nil {
+		t.Fatalf("recommendation failed ValidateForApproval: %v", err)
+	}
+}

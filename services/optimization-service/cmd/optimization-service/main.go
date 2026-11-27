@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -81,6 +82,13 @@ func main() {
 }
 
 func run() int {
+	if len(os.Args) > 1 && os.Args[1] == "--coupled-mpc-http" {
+		if err := runCoupledMPCHTTPServer(); err != nil {
+			fmt.Fprintf(os.Stderr, "coupled mpc http server failed: %v\n", err)
+			return 1
+		}
+		return 0
+	}
 	logger := observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
 	slog.SetDefault(logger)
 	if err := runService(logger); err != nil {
@@ -88,6 +96,36 @@ func run() int {
 		return 1
 	}
 	return 0
+}
+
+func runCoupledMPCHTTPServer() error {
+	addr := strings.TrimSpace(os.Getenv("COUPLED_SOLVER_HTTP_ADDR"))
+	if addr == "" {
+		addr = "127.0.0.1:0"
+	}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("GO_SOLVER_LISTENING=http://%s\n", ln.Addr().String())
+	_ = os.Stdout.Sync()
+	srv := &http.Server{
+		Handler:           optimization.NewCoupledSolverHTTPHandler(optimization.NewCoupledPlantMPCSolver()),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	sigCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignals()
+	go func() {
+		<-sigCtx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutdownCtx)
+	}()
+	err = srv.Serve(ln)
+	if errors.Is(err, http.ErrServerClosed) {
+		return nil
+	}
+	return err
 }
 
 func runService(logger *slog.Logger) error {
@@ -200,7 +238,7 @@ func runService(logger *slog.Logger) error {
 	allowedSolverHosts := optimization.ParseAllowedSolverHosts(os.Getenv("OPTIMIZATION_ALLOWED_SOLVER_HOSTS"))
 	solverRouter := optimization.NewRoutingSolverAdapter(optimization.RoutingSolverConfig{
 		Resolver:     publication,
-		Baseline:     optimization.HVACRecommendationSolver{},
+		Baseline:     optimization.NewCoupledPlantMPCSolver(),
 		COPModel:     &optimization.COPModelSolver{History: inputs, Staging: inputs, StagingCatalog: publication},
 		AllowedHosts: allowedSolverHosts,
 		Timeout:      intelligencemodel.DefaultInferenceCallTimeout,

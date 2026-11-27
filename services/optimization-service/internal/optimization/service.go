@@ -419,7 +419,7 @@ func NewService(solver SolverAdapter, publication EvaluationPublicationStore, ev
 }
 
 func NewDefaultService(publication EvaluationPublicationStore, evaluations EvaluationSink, clock Clock) (*Service, error) {
-	return NewService(HVACRecommendationSolver{}, publication, evaluations, clock)
+	return NewService(NewCoupledPlantMPCSolver(), publication, evaluations, clock)
 }
 
 func (service *Service) Optimize(ctx context.Context, request Request) (Recommendation, error) {

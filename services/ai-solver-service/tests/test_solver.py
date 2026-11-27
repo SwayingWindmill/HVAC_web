@@ -10,7 +10,12 @@ import urllib.request
 
 from ai_solver.model import SolverInfeasibleError, SolverInputError, parse_solver_request
 from ai_solver.server import create_server
-from ai_solver.solver import HVACPhysicsSolver, SOLVER_VERSION
+from ai_solver.solver import (
+    HVACPhysicsSolver,
+    MonotonicChillerModel,
+    SOLVER_VERSION,
+    estimate_wet_bulb_c,
+)
 
 
 def valid_payload() -> dict:
@@ -169,6 +174,111 @@ class SolverHTTPTests(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as ctx_large:
             urllib.request.urlopen(huge_req, timeout=2)
         self.assertEqual(ctx_large.exception.code, 413)
+
+
+class CoupledMPCTests(unittest.TestCase):
+    def test_wet_bulb_stull_and_missing_rh_fallback(self) -> None:
+        wb = estimate_wet_bulb_c(30.0, 60.0)
+        self.assertGreater(wb, 23.0)
+        self.assertLess(wb, 24.5)
+        for bad_rh in (None, 0.0, -5.0, float("nan")):
+            fb = estimate_wet_bulb_c(32.0, bad_rh)
+            self.assertGreater(fb, 15.0)
+            self.assertLessEqual(fb, 32.0)
+
+    def test_monotonic_chiller_partial_derivatives(self) -> None:
+        model = MonotonicChillerModel(
+            base_cop=5.8,
+            tchw_slope_cop_per_c=-0.3,
+            tcw_slope_cop_per_c=-0.1,
+            plr_const_e0=-0.1,
+            cop_scale=0.85,
+        ).project_monotonic()
+        p_low_tchw, cop_low_tchw = model.power_kw(400.0, 600.0, 5.5, 29.0, 33.5)
+        p_high_tchw, cop_high_tchw = model.power_kw(400.0, 600.0, 9.0, 29.0, 33.5)
+        self.assertLessEqual(p_high_tchw, p_low_tchw)
+        self.assertGreaterEqual(cop_high_tchw, cop_low_tchw)
+
+        p_cool_cw, _ = model.power_kw(400.0, 600.0, 7.0, 24.0, 28.0)
+        p_hot_cw, _ = model.power_kw(400.0, 600.0, 7.0, 34.0, 38.0)
+        self.assertGreaterEqual(p_hot_cw, p_cool_cw)
+
+        p_part, _ = model.power_kw(250.0, 600.0, 7.0, 29.0, 33.5)
+        p_full, _ = model.power_kw(600.0, 600.0, 7.0, 29.0, 33.5)
+        self.assertGreater(p_full, p_part)
+
+    def test_coupled_context_http_solve_tou_precooling_and_schema(self) -> None:
+        srv = create_server("127.0.0.1:0")
+        t = threading.Thread(target=srv.serve_forever, daemon=True)
+        t.start()
+        host, port = srv.server_address[:2]
+        base_url = f"http://{host}:{port}"
+        try:
+            def run_solve(peak_price: float) -> dict:
+                payload = valid_payload()
+                payload["baseline"]["supplyTempC"] = 7.0
+                payload["baseline"]["zoneTempC"] = 24.0
+                payload["constraints"]["supplyTempMinC"] = 5.0
+                payload["constraints"]["supplyTempMaxC"] = 11.0
+                payload["constraints"]["zoneTempMinC"] = 21.0
+                payload["constraints"]["zoneTempMaxC"] = 25.0
+                payload["constraints"]["maxSupplyTempStepC"] = 1.5
+                payload["responseModel"]["zoneTempUncertaintyP90C"] = 0.2
+                horizon = []
+                for h in range(24):
+                    rate = 0.35 if h < 8 else (peak_price if h < 20 else 0.55)
+                    horizon.append({
+                        "durationHours": 1.0,
+                        "coolingLoadKw": 240.0 if h < 8 else (780.0 if h < 20 else 240.0),
+                        "ambientDryBulbC": 31.0,
+                        "ambientWetBulbC": 26.0,
+                        "tariffRateCny": rate,
+                    })
+                payload["coupledContext"] = {
+                    "precoolingEnabled": True,
+                    "copScale": 0.90,
+                    "horizon": horizon,
+                }
+                req = urllib.request.Request(
+                    base_url + "/v1/solve",
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=4) as res:
+                    self.assertEqual(res.status, 200)
+                    return json.loads(res.read())
+
+            flat_res = run_solve(0.35)
+            peak_res = run_solve(1.65)
+
+            allowed_top_keys = {
+                "id",
+                "candidate",
+                "expectedImpact",
+                "uncertainty",
+                "risk",
+                "rollbackPlan",
+                "verificationPlan",
+                "solverVersion",
+                "auxiliaryTargets",
+            }
+            self.assertTrue(set(peak_res.keys()).issubset(allowed_top_keys))
+            flat_slots = flat_res["verificationPlan"]["mpcSlots"]
+            peak_slots = peak_res["verificationPlan"]["mpcSlots"]
+            self.assertEqual(len(peak_slots), 24)
+
+            flat_valley_mean = sum(s["supplyTempC"] for s in flat_slots[1:8]) / 7.0
+            peak_valley_mean = sum(s["supplyTempC"] for s in peak_slots[1:8]) / 7.0
+            self.assertLess(peak_valley_mean, flat_valley_mean - 0.2)
+            for s in peak_slots:
+                self.assertGreaterEqual(s["supplyTempC"], 5.0)
+                self.assertLessEqual(s["supplyTempC"], 11.0)
+                self.assertLessEqual(s["projectedZoneTempC"] + 0.2, 25.0)
+                self.assertGreaterEqual(s["projectedZoneTempC"] - 0.2, 21.0)
+        finally:
+            srv.shutdown()
+            srv.server_close()
 
 
 if __name__ == "__main__":
