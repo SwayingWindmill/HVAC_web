@@ -22,7 +22,16 @@ from ai_solver.calibration import (
 from ai_solver.model import parse_solver_request
 from ai_solver.server import create_server
 from ai_solver.solver import HVACPhysicsSolver
-from ai_solver.trainer import main as trainer_main, train_profile_from_lines
+from ai_solver.trainer import (
+    CANONICAL_SAMPLE_KINDS,
+    SAMPLE_KIND_GUARDRAIL_CLAMPED,
+    SAMPLE_KIND_GUARDRAIL_VETOED,
+    SAMPLE_KIND_MANUAL_OVERRIDE,
+    SAMPLE_KIND_MONITOR_TRIPPED,
+    SAMPLE_KIND_TRACKING_DEVIATION,
+    main as trainer_main,
+    train_profile_from_lines,
+)
 from tests.test_solver import valid_payload
 
 
@@ -33,23 +42,24 @@ class TrainerUnitTests(unittest.TestCase):
         lines = [
             "",
             "not valid json at all",
-            json.dumps({"siteId": site_a, "sampleKind": "MANUAL_OVERRIDE"}),
-            json.dumps({"siteId": site_a, "sampleKind": "POST_CONTROL_ALARM"}),
-            json.dumps({"siteId": site_a, "sampleKind": "TRACKING_DRIFT"}),
+            json.dumps({"siteId": site_a, "sampleKind": SAMPLE_KIND_MANUAL_OVERRIDE}),
+            json.dumps({"siteId": site_a, "sampleKind": SAMPLE_KIND_MONITOR_TRIPPED}),
+            json.dumps({"siteId": site_a, "sampleKind": SAMPLE_KIND_TRACKING_DEVIATION}),
+            json.dumps({"siteId": site_a, "sampleKind": SAMPLE_KIND_GUARDRAIL_VETOED}),
             json.dumps({
                 "siteId": site_a,
-                "sampleKind": "GUARDRAIL_CLAMPED",
+                "sampleKind": SAMPLE_KIND_GUARDRAIL_CLAMPED,
                 "capability": "SET_FREQUENCY",
                 "loopKey": "chilled_water_pump_freq",
                 "clampedDelta": 3.0,
             }),
             json.dumps({
                 "siteId": site_b,
-                "sampleKind": "GUARDRAIL_CLAMPED",
+                "sampleKind": SAMPLE_KIND_GUARDRAIL_CLAMPED,
                 "capability": "SET_FAN_SPEED",
                 "loopKey": "cooling_tower_fan_speed",
                 "rawRecommendedValue": 20.0,
-                "clampedValue": 26.0,
+                "appliedOrClampedValue": 26.0,
             }),
             json.dumps({"siteId": site_b}),  # non-negative control tick
         ]
@@ -60,18 +70,71 @@ class TrainerUnitTests(unittest.TestCase):
         )
         self.assertEqual(profile.profile_id, "site-ab-v1")
         self.assertEqual(profile.calibrated_at, "2026-11-21T12:00:00Z")
-        self.assertEqual(profile.sample_count, 6)
-        self.assertEqual(profile.negative_sample_count, 5)
+        self.assertEqual(profile.sample_count, 7)
+        self.assertEqual(profile.negative_sample_count, 6)
+        self.assertEqual(
+            profile.sample_kind_counts,
+            {
+                SAMPLE_KIND_GUARDRAIL_CLAMPED: 2,
+                SAMPLE_KIND_GUARDRAIL_VETOED: 1,
+                SAMPLE_KIND_MANUAL_OVERRIDE: 1,
+                SAMPLE_KIND_TRACKING_DEVIATION: 1,
+                SAMPLE_KIND_MONITOR_TRIPPED: 1,
+            },
+        )
 
         cal_a = profile.calibration_for_site(site_a)
-        self.assertAlmostEqual(cal_a.comfort_margin_penalty_c, 0.23, places=4)
-        self.assertAlmostEqual(cal_a.supply_step_scale, 0.88, places=4)
+        # 0.08 (MANUAL_OVERRIDE) + 0.15 (MONITOR_TRIPPED) + 0.05 (GUARDRAIL_VETOED) = 0.28
+        self.assertAlmostEqual(cal_a.comfort_margin_penalty_c, 0.28, places=4)
+        # 1.0 - (0.04 + 0.06 + 0.02 + 0.03) = 0.85
+        self.assertAlmostEqual(cal_a.supply_step_scale, 0.85, places=4)
         self.assertAlmostEqual(cal_a.chw_pump_bias_hz, 1.5, places=4)
         self.assertAlmostEqual(cal_a.tower_fan_bias_pct, 0.0, places=4)
 
         cal_b = profile.calibration_for_site(site_b)
         self.assertAlmostEqual(cal_b.comfort_margin_penalty_c, 0.0, places=4)
         self.assertAlmostEqual(cal_b.tower_fan_bias_pct, 3.0, places=4)
+
+    def test_go_negative_sample_jsonl_contract_and_ignores_stale_enum_names(self) -> None:
+        repo_root = Path(__file__).resolve().parents[3]
+        fixture_path = (
+            repo_root
+            / "services"
+            / "optimization-service"
+            / "internal"
+            / "optimization"
+            / "testdata"
+            / "flywheel-negative-samples.contract.jsonl"
+        )
+        contract_lines = fixture_path.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(len(contract_lines), 5)
+
+        stale_lines = [
+            json.dumps({"sampleKind": "POST_CONTROL_ALARM"}),
+            json.dumps({"sampleKind": "TRACKING_DRIFT"}),
+        ]
+        profile = train_profile_from_lines(
+            contract_lines + stale_lines,
+            profile_id="contract-check-v1",
+            now_utc=datetime(2026, 11, 27, 8, 0, 0, tzinfo=timezone.utc),
+        )
+        self.assertEqual(profile.sample_count, 7)
+        self.assertEqual(profile.negative_sample_count, 5)
+        self.assertEqual(set(profile.sample_kind_counts.keys()), set(CANONICAL_SAMPLE_KINDS))
+        for kind in CANONICAL_SAMPLE_KINDS:
+            self.assertEqual(profile.sample_kind_counts[kind], 1, msg=f"expected count=1 for {kind}")
+
+        self.assertAlmostEqual(profile.global_calibration.comfort_margin_penalty_c, 0.28, places=4)
+        self.assertAlmostEqual(profile.global_calibration.supply_step_scale, 0.85, places=4)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "contract-profile.json"
+            raw_json = json.loads(json.dumps(profile.to_dict()))
+            self.assertEqual(raw_json["sampleKindCounts"], profile.sample_kind_counts)
+            self.assertEqual(trainer_main(["--input", str(fixture_path), "--output", str(out_path)]), 0)
+            reloaded = load_calibration_profile(out_path)
+            self.assertEqual(reloaded.negative_sample_count, 5)
+            self.assertEqual(reloaded.sample_kind_counts, profile.sample_kind_counts)
 
     def test_adversarial_extreme_profile_values_are_strictly_clamped(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

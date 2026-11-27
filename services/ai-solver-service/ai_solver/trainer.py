@@ -13,15 +13,30 @@ from typing import Any, Iterable
 
 from ai_solver.calibration import CalibrationProfile, SiteCalibration, save_calibration_profile
 
+SAMPLE_KIND_GUARDRAIL_CLAMPED = "GUARDRAIL_CLAMPED"
+SAMPLE_KIND_GUARDRAIL_VETOED = "GUARDRAIL_VETOED"
+SAMPLE_KIND_MANUAL_OVERRIDE = "MANUAL_OVERRIDE"
+SAMPLE_KIND_TRACKING_DEVIATION = "TRACKING_DEVIATION"
+SAMPLE_KIND_MONITOR_TRIPPED = "MONITOR_TRIPPED"
+
+CANONICAL_SAMPLE_KINDS: tuple[str, ...] = (
+    SAMPLE_KIND_GUARDRAIL_CLAMPED,
+    SAMPLE_KIND_GUARDRAIL_VETOED,
+    SAMPLE_KIND_MANUAL_OVERRIDE,
+    SAMPLE_KIND_TRACKING_DEVIATION,
+    SAMPLE_KIND_MONITOR_TRIPPED,
+)
+
 
 @dataclass
 class _Accumulator:
     total: int = 0
     negatives: int = 0
-    manual_overrides: int = 0
-    post_control_alarms: int = 0
-    tracking_drifts: int = 0
     guardrail_clamped: int = 0
+    guardrail_vetoed: int = 0
+    manual_overrides: int = 0
+    tracking_deviations: int = 0
+    monitor_tripped: int = 0
     chw_freq_clamps: list[float] = field(default_factory=list)
     cw_freq_clamps: list[float] = field(default_factory=list)
     fan_speed_clamps: list[float] = field(default_factory=list)
@@ -29,16 +44,18 @@ class _Accumulator:
     def add_record(self, rec: dict[str, Any]) -> None:
         self.total += 1
         kind = str(rec.get("sampleKind") or "").strip().upper()
-        if not kind:
+        if kind not in CANONICAL_SAMPLE_KINDS:
             return
         self.negatives += 1
-        if kind == "MANUAL_OVERRIDE":
+        if kind == SAMPLE_KIND_MANUAL_OVERRIDE:
             self.manual_overrides += 1
-        elif kind == "POST_CONTROL_ALARM":
-            self.post_control_alarms += 1
-        elif kind == "TRACKING_DRIFT":
-            self.tracking_drifts += 1
-        elif kind == "GUARDRAIL_CLAMPED":
+        elif kind == SAMPLE_KIND_MONITOR_TRIPPED:
+            self.monitor_tripped += 1
+        elif kind == SAMPLE_KIND_TRACKING_DEVIATION:
+            self.tracking_deviations += 1
+        elif kind == SAMPLE_KIND_GUARDRAIL_VETOED:
+            self.guardrail_vetoed += 1
+        elif kind == SAMPLE_KIND_GUARDRAIL_CLAMPED:
             self.guardrail_clamped += 1
             self._record_clamped_bias(rec)
 
@@ -48,7 +65,9 @@ class _Accumulator:
         delta = rec.get("clampedDelta")
         if isinstance(delta, bool) or not isinstance(delta, (int, float)) or not math.isfinite(float(delta)):
             raw_val = rec.get("rawRecommendedValue")
-            clamped_val = rec.get("clampedValue")
+            clamped_val = rec.get("appliedOrClampedValue")
+            if clamped_val is None:
+                clamped_val = rec.get("clampedValue")
             if (
                 not isinstance(raw_val, bool)
                 and isinstance(raw_val, (int, float))
@@ -69,10 +88,28 @@ class _Accumulator:
             else:
                 self.chw_freq_clamps.append(shift)
 
+    def sample_kind_counts(self) -> dict[str, int]:
+        return {
+            SAMPLE_KIND_GUARDRAIL_CLAMPED: self.guardrail_clamped,
+            SAMPLE_KIND_GUARDRAIL_VETOED: self.guardrail_vetoed,
+            SAMPLE_KIND_MANUAL_OVERRIDE: self.manual_overrides,
+            SAMPLE_KIND_TRACKING_DEVIATION: self.tracking_deviations,
+            SAMPLE_KIND_MONITOR_TRIPPED: self.monitor_tripped,
+        }
+
     def to_calibration(self) -> SiteCalibration:
-        # Safety-first damping: overrides/alarms tighten required comfort margin and shrink max step.
-        comfort_penalty = 0.08 * self.manual_overrides + 0.15 * self.post_control_alarms
-        step_reduction = 0.04 * self.manual_overrides + 0.06 * self.post_control_alarms + 0.02 * self.tracking_drifts
+        # Safety-first damping: overrides, trips, vetoes, and deviations tighten margin and shrink max step.
+        comfort_penalty = (
+            0.08 * self.manual_overrides
+            + 0.15 * self.monitor_tripped
+            + 0.05 * self.guardrail_vetoed
+        )
+        step_reduction = (
+            0.04 * self.manual_overrides
+            + 0.06 * self.monitor_tripped
+            + 0.02 * self.tracking_deviations
+            + 0.03 * self.guardrail_vetoed
+        )
         step_scale = 1.0 - step_reduction
 
         chw_bias = 0.5 * _mean(self.chw_freq_clamps)
@@ -132,6 +169,7 @@ def train_profile_from_lines(
         calibrated_at=ts.isoformat().replace("+00:00", "Z"),
         sample_count=global_acc.total,
         negative_sample_count=global_acc.negatives,
+        sample_kind_counts=global_acc.sample_kind_counts(),
         global_calibration=global_acc.to_calibration(),
         site_overrides=site_overrides,
     )
@@ -168,6 +206,7 @@ def main(argv: list[str] | None = None) -> int:
                 "profileId": profile.profile_id,
                 "sampleCount": profile.sample_count,
                 "negativeSampleCount": profile.negative_sample_count,
+                "sampleKindCounts": profile.sample_kind_counts,
                 "siteCount": len(profile.site_overrides),
                 "output": str(args.output),
             },

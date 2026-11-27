@@ -624,10 +624,13 @@ services:
       OPTIMIZATION_TLS_KEY: /run/hvac/pki/optimization/tls.key
       OPTIMIZATION_TLS_CA: /run/hvac/pki/ca.crt
       OPTIMIZATION_GATEWAY_DELEGATION_CERT: /run/hvac/pki/gateway/tls.crt
+      OPTIMIZATION_EDGE_MODEL_SIGNING_KEY_FILE: ${OPTIMIZATION_EDGE_MODEL_SIGNING_KEY_FILE:-}
+      OPTIMIZATION_EDGE_MODEL_SIGNING_KEY_ID: ${OPTIMIZATION_EDGE_MODEL_SIGNING_KEY_ID:-platform-ota-v1}
     volumes:
       - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}/ca.crt:/run/hvac/pki/ca.crt:ro
       - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}/gateway/tls.crt:/run/hvac/pki/gateway/tls.crt:ro
       - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}/optimization:/run/hvac/pki/optimization:ro
+      - ${PHASE1_RUNTIME_DIR:-./runtime}/gateway-ca:/run/hvac/gateway-ca:ro
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully

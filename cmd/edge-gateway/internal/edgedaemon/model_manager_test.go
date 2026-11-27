@@ -4,9 +4,12 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"math"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -520,5 +523,161 @@ func TestDaemonModelSetpointWiresIntoEnergyScheduleController(t *testing.T) {
 	}
 	if sp := chiller.SupplySp(); math.Abs(sp-8.8) > 1e-6 {
 		t.Fatalf("expected EnergyScheduleController to drive SupplySp from active EdgeModel (8.8°C), got %v", sp)
+	}
+}
+
+func TestShadowManagerHotReloadsPKCS8SignedEdgeModelsAndRejectsTampered(t *testing.T) {
+	now := time.Date(2026, 11, 27, 8, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+
+	// Marshal an Ed25519 private key in PKCS#8 PEM matching ota-signing-key.pem on disk.
+	_, rawPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(rawPriv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pemPath := filepath.Join(dir, "ota-signing-key.pem")
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+	if err := os.WriteFile(pemPath, pemBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	readPEM, err := os.ReadFile(pemPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, _ := pem.Decode(readPEM)
+	if block == nil {
+		t.Fatal("failed to decode PKCS#8 PEM")
+	}
+	parsedAny, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signingPriv, ok := parsedAny.(ed25519.PrivateKey)
+	if !ok {
+		t.Fatalf("unexpected private key type %T", parsedAny)
+	}
+	trustedPub := signingPriv.Public().(ed25519.PublicKey)
+
+	const keyID = "platform-ota-v1"
+	const gwID = "0193f000-2000-7000-8000-000000000096"
+
+	host, err := edgecontrol.NewHost()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := newWritableChillerTestAdapter(now, 80.0, 7.0)
+	if err := host.RegisterAdapter(adapter); err != nil {
+		t.Fatal(err)
+	}
+	if err := host.Start(nil); err != nil {
+		t.Fatal(err)
+	}
+	res, err := host.RunCycle(context.Background(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reg := NewProtocolBridgeRegistry(map[string]SerialBusConfig{
+		"/dev/ttyAS3": {Speed: 9600, DataBits: 8, Parity: "N", StopBits: 1},
+	})
+	t.Cleanup(func() { _ = reg.Close() })
+
+	interlock, err := edgecontrol.NewHydraulicInterlockController(edgecontrol.HydraulicInterlockConfig{Policy: edgecontrol.DefaultAutonomyPolicyConfig()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fallback, err := edgecontrol.NewAutonomousFallbackController(edgecontrol.AutonomousFallbackConfig{Policy: edgecontrol.DefaultAutonomyPolicyConfig()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ruleEngine := edgecontrol.NewEdgeRuleController(edgecontrol.EdgeRuleControllerConfig{})
+
+	modelMgr := NewEdgeModelManager(map[string]string{
+		keyID: base64.StdEncoding.EncodeToString(trustedPub),
+	}, nil)
+	shadowMgr := NewShadowManager(gwID, dir, host, reg, interlock, fallback, ruleEngine, nil)
+	shadowMgr.now = func() time.Time { return now }
+	shadowMgr.AttachModelManager(modelMgr)
+
+	minC, maxC := 5.0, 15.0
+	active := signBundleForTest(t, keyID, signingPriv, edgecontrol.EdgeModelBundle{
+		BundleID:           "019b0000-1000-7000-8000-000000000401",
+		Domain:             edgecontrol.EdgeModelDomainControl,
+		ModelKey:           "chiller-sp",
+		Version:            "1.0.0",
+		RolloutMode:        edgecontrol.EdgeModelRolloutActive,
+		MaxShadowDeviation: 2.0,
+		Hyperparams: edgecontrol.EdgeModelHyperparams{
+			COPCoefficients:        []float64{12.0, -4.0}, // 12.0 - 4.0 * 0.8 = 8.8°C
+			SupplyTempSetpointMinC: &minC,
+			SupplyTempSetpointMaxC: &maxC,
+		},
+		UpdatedAt: now,
+	})
+	shadow := signBundleForTest(t, keyID, signingPriv, edgecontrol.EdgeModelBundle{
+		BundleID:           "019b0000-1000-7000-8000-000000000402",
+		Domain:             edgecontrol.EdgeModelDomainControl,
+		ModelKey:           "chiller-sp",
+		Version:            "1.1.0-shadow",
+		RolloutMode:        edgecontrol.EdgeModelRolloutShadow,
+		MaxShadowDeviation: 2.0,
+		Hyperparams: edgecontrol.EdgeModelHyperparams{
+			COPCoefficients:        []float64{11.5, -3.0}, // 11.5 - 3.0 * 0.8 = 9.1°C (within 2.0°C)
+			SupplyTempSetpointMinC: &minC,
+			SupplyTempSetpointMaxC: &maxC,
+		},
+		UpdatedAt: now,
+	})
+
+	batch1, _, err := edgecontrol.EncodeShadowChangeBatch(gwID, 1, GatewayDesiredConfig{
+		DesiredRevision: 1,
+		EdgeModels:      []edgecontrol.EdgeModelBundle{active, shadow},
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ack1Bytes, err := shadowMgr.HandleMQTTChangeBatch(batch1)
+	if err != nil {
+		t.Fatalf("HandleMQTTChangeBatch(valid): %v", err)
+	}
+	_, ack1, err := edgecontrol.DecodeShadowChangeAck(ack1Bytes, gwID)
+	if err != nil || ack1.Status != edgecontrol.ShadowAckStatusAcked {
+		t.Fatalf("expected ACKED for valid PKCS#8 signed bundles, got %+v err=%v", ack1, err)
+	}
+
+	statuses := modelMgr.EvaluateCycle(now, res.Cycle.Image)
+	if len(statuses) != 1 || statuses[0].ShadowSampleCount != 1 || statuses[0].RollbackCount != 0 {
+		t.Fatalf("expected 1 evaluated shadow sample without rollback, got %+v", statuses)
+	}
+	if sp, ok := modelMgr.ActiveControlSetpointCForImage(res.Cycle.Image); !ok || math.Abs(sp-8.8) > 1e-6 {
+		t.Fatalf("ActiveControlSetpointCForImage = (%v, %v), want (8.8, true)", sp, ok)
+	}
+
+	// Tampered bundle payload (modified hyperparams without re-signing) must be quarantined and keep v1 active.
+	tampered := active.Clone()
+	tampered.Version = "1.2.0-tampered"
+	tampered.Hyperparams.COPCoefficients = []float64{9.0, 0.0}
+	batch2, _, err := edgecontrol.EncodeShadowChangeBatch(gwID, 2, GatewayDesiredConfig{
+		DesiredRevision: 2,
+		EdgeModels:      []edgecontrol.EdgeModelBundle{tampered},
+	}, now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ack2Bytes, err := shadowMgr.HandleMQTTChangeBatch(batch2)
+	if err != nil {
+		t.Fatalf("HandleMQTTChangeBatch(tampered): %v", err)
+	}
+	_, ack2, err := edgecontrol.DecodeShadowChangeAck(ack2Bytes, gwID)
+	if err != nil || ack2.Status != edgecontrol.ShadowAckStatusQuarantined {
+		t.Fatalf("expected QUARANTINED for tampered bundle, got %+v err=%v", ack2, err)
+	}
+	if sp, ok := modelMgr.ActiveControlSetpointCForImage(res.Cycle.Image); !ok || math.Abs(sp-8.8) > 1e-6 {
+		t.Fatalf("tampered bundle mutated running setpoint: got (%v, %v), want (8.8, true)", sp, ok)
 	}
 }
