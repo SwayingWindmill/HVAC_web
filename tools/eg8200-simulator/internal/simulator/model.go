@@ -446,7 +446,13 @@ func (plant *Plant) updatePump(state *pumpState, config PumpConfig, elapsed time
 
 	speedFraction := clamp(state.frequencyHz/pumpNominalFrequencyHz, 0, 1)
 	state.flowM3H = config.RatedFlowM3H * speedFraction
-	state.powerKW = config.RatedPowerKW * speedFraction * speedFraction * speedFraction
+	staticHead := 0.0
+	if state == &plant.chilledWaterPump {
+		staticHead = plant.config.Mismatch.CHWPStaticHeadFraction
+	} else if state == &plant.coolingWaterPump {
+		staticHead = plant.config.Mismatch.CWPStaticHeadFraction
+	}
+	state.powerKW = pumpPowerKW(config.RatedPowerKW, speedFraction, staticHead, state.running)
 }
 
 func (plant *Plant) updateCoolingTower(elapsed time.Duration) {
@@ -471,11 +477,16 @@ func (plant *Plant) updateCoolingTower(elapsed time.Duration) {
 
 	speedFraction := clamp(state.fanSpeedPct/100, 0, 1)
 	state.powerKW = plant.config.CoolingTower.RatedFanPowerKW * speedFraction * speedFraction * speedFraction
-	approachC := 2.5 + (1-speedFraction)*6
+	heatRejectionKW := plant.chiller.coolingCapacityKW + plant.chiller.powerKW
+	designHeatRejectionKW := plant.config.Chiller.RatedCoolingCapacityKW * (1 + 1/math.Max(plant.config.Chiller.BaseCOP, 1))
+	heatRejectionRatio := 0.0
+	if designHeatRejectionKW > 0 {
+		heatRejectionRatio = heatRejectionKW / designHeatRejectionKW
+	}
+	approachC := coolingTowerApproachC(plant.config.Mismatch, speedFraction, heatRejectionRatio)
 	leavingTargetC := plant.inputs.AmbientWetBulbC + approachC
 	enteringTargetC := leavingTargetC
 	if plant.coolingWaterPump.flowM3H > 0 {
-		heatRejectionKW := plant.chiller.coolingCapacityKW + plant.chiller.powerKW
 		enteringTargetC += heatRejectionKW / (waterHeatCapacityKWPerM3HDeltaC * plant.coolingWaterPump.flowM3H)
 	}
 	state.leavingWaterC = approach(state.leavingWaterC, leavingTargetC, elapsed, coolingTowerWaterTimeConstant)
@@ -515,17 +526,13 @@ func (plant *Plant) updateChiller(elapsed time.Duration) {
 		return
 	}
 
-	lowLoadPenalty := 0.0
-	if state.loadPct < 35 {
-		lowLoadPenalty = (35 - state.loadPct) * 0.025
-	}
-	state.cop = clamp(
-		plant.config.Chiller.BaseCOP+
-			0.14*(plant.effectiveChillerSetpointLocked()-6.5)-
-			0.045*(state.enteringCoolingWaterC-28)-
-			lowLoadPenalty,
-		2.5,
-		7.5,
+	state.cop = chillerEffectiveCOP(
+		plant.config.Chiller.BaseCOP,
+		plant.effectiveChillerSetpointLocked(),
+		state.enteringCoolingWaterC,
+		state.leavingCoolingWaterC,
+		state.loadPct,
+		plant.config.Mismatch,
 	)
 	state.powerKW = state.coolingCapacityKW / state.cop
 }
@@ -535,19 +542,30 @@ func (plant *Plant) zoneThermalMassKWhPerC() float64 {
 	return plant.config.Chiller.RatedCoolingCapacityKW * zoneThermalMassHours
 }
 
+func (plant *Plant) effectiveCoolingLoadKW() float64 {
+	return mismatchCoolingLoadKW(plant.inputs.CoolingLoadKW, plant.config.Mismatch)
+}
+
 // updateZoneDemand sets what the coil asks of the chilled water: the building's heat gain plus a
 // recovery toward the setpoint, no more than the coil can remove at the current supply water.
 func (plant *Plant) updateZoneDemand() {
 	coilKWPerC := plant.config.Chiller.RatedCoolingCapacityKW / (zoneSetpointC - zoneDesignSupplyWaterC)
-	coilLimitKW := coilKWPerC * math.Max(0, plant.zone.temperatureC-plant.chiller.leavingChilledWaterC)
+	coilLimitKW := coilCapacityLimitKW(
+		plant.config.Mismatch,
+		coilKWPerC,
+		plant.zone.temperatureC,
+		plant.chiller.leavingChilledWaterC,
+		plant.chilledWaterPump.flowM3H,
+		plant.config.ChilledWaterPump.RatedFlowM3H,
+	)
 	// Like a real zone control, it ignores drift inside its deadband and recovers only beyond it.
 	correctionKW := math.Max(0, plant.zone.temperatureC-zoneSetpointC-zoneDeadbandC) * plant.zoneThermalMassKWhPerC() / zoneControlTimeConstant.Hours()
-	plant.zone.coolingDemandKW = clamp(plant.inputs.CoolingLoadKW+correctionKW, 0, coilLimitKW)
+	plant.zone.coolingDemandKW = clamp(plant.effectiveCoolingLoadKW()+correctionKW, 0, coilLimitKW)
 }
 
 // updateZoneTemperature warms the zone by the heat the chilled water did not remove.
 func (plant *Plant) updateZoneTemperature(elapsed time.Duration) {
-	imbalanceKW := plant.inputs.CoolingLoadKW - plant.chiller.coolingCapacityKW
+	imbalanceKW := plant.effectiveCoolingLoadKW() - plant.chiller.coolingCapacityKW
 	plant.zone.temperatureC += imbalanceKW * elapsed.Hours() / plant.zoneThermalMassKWhPerC()
 }
 
@@ -570,14 +588,61 @@ func (plant *Plant) updateChilledWaterTemperatures(elapsed time.Duration) {
 	state.enteringChilledWaterC = state.leavingChilledWaterC + state.coolingCapacityKW/waterCapacityKWPerC
 }
 
+// PlantTruthState exposes uncorrupted physical plant states without telemetry sensor bias.
+type PlantTruthState struct {
+	ObservedAt            time.Time
+	TrueZoneTempC         float64
+	TrueCHWSupplyC        float64
+	TrueCHWReturnC        float64
+	TrueCoolingLoadKW     float64
+	TrueCoolingCapacityKW float64
+	TotalEnergyKWh        float64
+	ChillerEnergyKWh      float64
+	CHWPEnergyKWh         float64
+	CWPEnergyKWh          float64
+	TowerEnergyKWh        float64
+	ChillerCOP            float64
+	ChillerRunRequested   bool
+	ChillerRunning        bool
+	CHWPFlowM3H           float64
+	CWPFlowM3H            float64
+	TowerApproachC        float64
+}
+
+func (plant *Plant) TruthState() PlantTruthState {
+	plant.mu.RLock()
+	defer plant.mu.RUnlock()
+	return PlantTruthState{
+		ObservedAt:            plant.now,
+		TrueZoneTempC:         plant.zone.temperatureC,
+		TrueCHWSupplyC:        plant.chiller.leavingChilledWaterC,
+		TrueCHWReturnC:        plant.chiller.enteringChilledWaterC,
+		TrueCoolingLoadKW:     plant.effectiveCoolingLoadKW(),
+		TrueCoolingCapacityKW: plant.chiller.coolingCapacityKW,
+		TotalEnergyKWh:        plant.totalEnergyKWh,
+		ChillerEnergyKWh:      plant.chiller.energyKWh,
+		CHWPEnergyKWh:         plant.chilledWaterPump.energyKWh,
+		CWPEnergyKWh:          plant.coolingWaterPump.energyKWh,
+		TowerEnergyKWh:        plant.coolingTower.energyKWh,
+		ChillerCOP:            plant.chiller.cop,
+		ChillerRunRequested:   plant.chiller.runRequested,
+		ChillerRunning:        plant.chiller.running,
+		CHWPFlowM3H:           plant.chilledWaterPump.flowM3H,
+		CWPFlowM3H:            plant.coolingWaterPump.flowM3H,
+		TowerApproachC:        plant.coolingTower.leavingWaterC - plant.inputs.AmbientWetBulbC,
+	}
+}
+
 func (plant *Plant) snapshotLocked() Snapshot {
 	totalPowerKW := plant.chiller.powerKW + plant.chilledWaterPump.powerKW + plant.coolingWaterPump.powerKW + plant.coolingTower.powerKW
+	observedCHWSupplyC := plant.chiller.leavingChilledWaterC + plant.config.Mismatch.CHWSupplySensorBiasC
+	observedZoneTempC := plant.zone.temperatureC + plant.config.Mismatch.ZoneTempSensorBiasC
 	return Snapshot{
 		ObservedAt: plant.now,
 		Devices: map[string]DeviceTelemetry{
 			plant.config.Chiller.ID: {
 				"runState":                         runState(plant.chiller.running, plant.chiller.faultCode),
-				"leavingChilledWaterTemperatureC":  round(plant.chiller.leavingChilledWaterC, 3),
+				"leavingChilledWaterTemperatureC":  round(observedCHWSupplyC, 3),
 				"enteringChilledWaterTemperatureC": round(plant.chiller.enteringChilledWaterC, 3),
 				"chilledWaterTemperatureSetpointC": round(plant.effectiveChillerSetpointLocked(), 3),
 				"leavingCoolingWaterTemperatureC":  round(plant.chiller.leavingCoolingWaterC, 3),
@@ -616,15 +681,15 @@ func (plant *Plant) snapshotLocked() Snapshot {
 				"frequencyHz":   50.0,
 			},
 			plant.config.BTUMeterID: {
-				"supplyWaterTemperatureC":     round(plant.chiller.leavingChilledWaterC, 3),
+				"supplyWaterTemperatureC":     round(observedCHWSupplyC, 3),
 				"returnWaterTemperatureC":     round(plant.chiller.enteringChilledWaterC, 3),
-				"temperatureDifferenceC":      round(plant.chiller.enteringChilledWaterC-plant.chiller.leavingChilledWaterC, 3),
+				"temperatureDifferenceC":      round(plant.chiller.enteringChilledWaterC-observedCHWSupplyC, 3),
 				"flowRateM3h":                 round(plant.chilledWaterPump.flowM3H, 3),
 				"instantCoolingCapacityKw":    round(plant.chiller.coolingCapacityKW, 3),
 				"accumulatedCoolingEnergyKwh": round(plant.totalCoolingEnergyKWh, 6),
 			},
 			plant.config.ZoneSensorID: {
-				"zoneTemperatureC": round(plant.zone.temperatureC, 3),
+				"zoneTemperatureC": round(observedZoneTempC, 3),
 			},
 			plant.config.WeatherStationID: {
 				"ambientDryBulbTemperatureC": round(plant.inputs.AmbientDryBulbC, 3),
@@ -677,4 +742,89 @@ func round(value float64, places int) float64 {
 
 func ramp(current, target, maximumStep float64) float64 {
 	return current + clamp(target-current, -maximumStep, maximumStep)
+}
+
+func pumpPowerKW(ratedPowerKW, speedFraction, staticHeadFraction float64, running bool) float64 {
+	if !running || speedFraction <= 0 {
+		return 0
+	}
+	c0 := clamp(staticHeadFraction, 0, 0.5)
+	return ratedPowerKW * (c0 + (1-c0)*speedFraction*speedFraction*speedFraction)
+}
+
+func coolingTowerApproachC(mismatch PlantMismatchConfig, speedFraction, heatRejectionRatio float64) float64 {
+	if !mismatch.NonlinearTowerApproach {
+		return 2.5 + (1-speedFraction)*6
+	}
+	minApproach := mismatch.TowerMinApproachC
+	if minApproach <= 0 {
+		minApproach = 1.5
+	}
+	loadCoeff := mismatch.TowerLoadApproachCoeff
+	if loadCoeff <= 0 {
+		loadCoeff = 1.9
+	}
+	exp := mismatch.TowerNonlinearExp
+	if exp <= 0 {
+		exp = 1.25
+	}
+	lowFanPenalty := mismatch.TowerLowFanPenaltyC
+	if lowFanPenalty <= 0 {
+		lowFanPenalty = 1.2
+	}
+	rQ := clamp(heatRejectionRatio, 0, 2.5)
+	rAir := math.Max(speedFraction, 0.12)
+	return minApproach + loadCoeff*math.Pow(rQ/rAir, exp) + lowFanPenalty*(1-speedFraction)*(1-speedFraction)
+}
+
+func chillerEffectiveCOP(baseCOP, setpointC, enteringCW, leavingCW, loadPct float64, mismatch PlantMismatchConfig) float64 {
+	lowLoadPenalty := 0.0
+	if loadPct < 35 {
+		lowLoadPenalty = (35 - loadPct) * 0.025
+	}
+	highLoadPenalty := mismatch.HighLoadCOPPenaltyCoeff * math.Max(0, loadPct-80)
+	cwSlope := mismatch.CondenserCOPSlopePerC
+	if cwSlope <= 0 {
+		cwSlope = 0.045
+	}
+	cwRangeExcess := math.Max(0, (leavingCW-enteringCW)-4.7)
+	effectiveCW := enteringCW + mismatch.CondenserMeanTempWeight*cwRangeExcess
+	rawCOP := baseCOP + 0.14*(setpointC-6.5) - cwSlope*(effectiveCW-28) - lowLoadPenalty - highLoadPenalty
+
+	mult := mismatch.ChillerCOPMultiplier
+	if mult <= 0 {
+		mult = 1.0
+	}
+	adjusted := rawCOP*mult + mismatch.ChillerCOPOffset
+	if mult == 1.0 && mismatch.ChillerCOPOffset == 0 && mismatch.CondenserCOPSlopePerC == 0 && mismatch.CondenserMeanTempWeight == 0 && mismatch.HighLoadCOPPenaltyCoeff == 0 {
+		return clamp(adjusted, 2.5, 7.5)
+	}
+	return clamp(adjusted, 1.8, 8.5)
+}
+
+func mismatchCoolingLoadKW(baseLoadKW float64, mismatch PlantMismatchConfig) float64 {
+	mult := mismatch.ThermalLoadMultiplier
+	if mult <= 0 {
+		mult = 1.0
+	}
+	return math.Max(0, baseLoadKW*mult+mismatch.ThermalLoadBiasKW)
+}
+
+func coilCapacityLimitKW(mismatch PlantMismatchConfig, coilKWPerC, zoneTempC, leavingCHWC, chwFlowM3H, ratedCHWFlowM3H float64) float64 {
+	airDeltaC := math.Max(0, zoneTempC-leavingCHWC)
+	if !mismatch.CHWCoilFlowCoupling || ratedCHWFlowM3H <= 0 {
+		return coilKWPerC * airDeltaC
+	}
+	flowFrac := clamp(chwFlowM3H/ratedCHWFlowM3H, 0, 1.2)
+	if flowFrac <= 0 {
+		return 0
+	}
+	effectiveness := flowFrac / (0.45 + 0.55*flowFrac)
+	airLimit := effectiveness * coilKWPerC * airDeltaC
+	approachMin := mismatch.CHWCoilApproachMinC
+	if approachMin <= 0 {
+		approachMin = 4.5
+	}
+	waterLimit := waterHeatCapacityKWPerM3HDeltaC * chwFlowM3H * math.Max(0, zoneTempC-approachMin-leavingCHWC)
+	return math.Min(airLimit, waterLimit)
 }

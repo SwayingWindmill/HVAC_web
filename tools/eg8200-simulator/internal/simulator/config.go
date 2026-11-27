@@ -26,16 +26,40 @@ type Config struct {
 }
 
 type PlantConfig struct {
-	InitialEnergyKWh  float64            `json:"initialEnergyKwh,omitempty"`
-	ThermalLagSeconds int                `json:"thermalLagSeconds,omitempty"`
-	Chiller           ChillerConfig      `json:"chiller"`
-	ChilledWaterPump  PumpConfig         `json:"chilledWaterPump"`
-	CoolingWaterPump  PumpConfig         `json:"coolingWaterPump"`
-	CoolingTower      CoolingTowerConfig `json:"coolingTower"`
-	PowerMeterID      string             `json:"powerMeterId"`
-	BTUMeterID        string             `json:"btuMeterId"`
-	WeatherStationID  string             `json:"weatherStationId"`
-	ZoneSensorID      string             `json:"zoneSensorId"`
+	InitialEnergyKWh  float64             `json:"initialEnergyKwh,omitempty"`
+	ThermalLagSeconds int                 `json:"thermalLagSeconds,omitempty"`
+	Mismatch          PlantMismatchConfig `json:"mismatch,omitempty"`
+	Chiller           ChillerConfig       `json:"chiller"`
+	ChilledWaterPump  PumpConfig          `json:"chilledWaterPump"`
+	CoolingWaterPump  PumpConfig          `json:"coolingWaterPump"`
+	CoolingTower      CoolingTowerConfig  `json:"coolingTower"`
+	PowerMeterID      string              `json:"powerMeterId"`
+	BTUMeterID        string              `json:"btuMeterId"`
+	WeatherStationID  string              `json:"weatherStationId"`
+	ZoneSensorID      string              `json:"zoneSensorId"`
+}
+
+// PlantMismatchConfig holds optional plant-model mismatch and physical coupling parameters.
+// Zero values preserve the legacy NewPlant physics verbatim.
+type PlantMismatchConfig struct {
+	CHWPStaticHeadFraction  float64 `json:"chwpStaticHeadFraction,omitempty"`
+	CWPStaticHeadFraction   float64 `json:"cwpStaticHeadFraction,omitempty"`
+	NonlinearTowerApproach  bool    `json:"nonlinearTowerApproach,omitempty"`
+	TowerMinApproachC       float64 `json:"towerMinApproachC,omitempty"`
+	TowerLoadApproachCoeff  float64 `json:"towerLoadApproachCoeff,omitempty"`
+	TowerNonlinearExp       float64 `json:"towerNonlinearExp,omitempty"`
+	TowerLowFanPenaltyC     float64 `json:"towerLowFanPenaltyC,omitempty"`
+	ChillerCOPMultiplier    float64 `json:"chillerCopMultiplier,omitempty"`
+	ChillerCOPOffset        float64 `json:"chillerCopOffset,omitempty"`
+	CondenserMeanTempWeight float64 `json:"condenserMeanTempWeight,omitempty"`
+	CondenserCOPSlopePerC   float64 `json:"condenserCopSlopePerC,omitempty"`
+	HighLoadCOPPenaltyCoeff float64 `json:"highLoadCopPenaltyCoeff,omitempty"`
+	CHWCoilFlowCoupling     bool    `json:"chwCoilFlowCoupling,omitempty"`
+	CHWCoilApproachMinC     float64 `json:"chwCoilApproachMinC,omitempty"`
+	ThermalLoadMultiplier   float64 `json:"thermalLoadMultiplier,omitempty"`
+	ThermalLoadBiasKW       float64 `json:"thermalLoadBiasKw,omitempty"`
+	CHWSupplySensorBiasC    float64 `json:"chwSupplySensorBiasC,omitempty"`
+	ZoneTempSensorBiasC     float64 `json:"zoneTempSensorBiasC,omitempty"`
 }
 
 type ChillerConfig struct {
@@ -102,12 +126,65 @@ func (config Config) Validate() error {
 	return nil
 }
 
+func (m PlantMismatchConfig) Validate() error {
+	for name, val := range map[string]float64{
+		"chwpStaticHeadFraction":  m.CHWPStaticHeadFraction,
+		"cwpStaticHeadFraction":   m.CWPStaticHeadFraction,
+		"towerMinApproachC":       m.TowerMinApproachC,
+		"towerLoadApproachCoeff":  m.TowerLoadApproachCoeff,
+		"towerNonlinearExp":       m.TowerNonlinearExp,
+		"towerLowFanPenaltyC":     m.TowerLowFanPenaltyC,
+		"chillerCopMultiplier":    m.ChillerCOPMultiplier,
+		"chillerCopOffset":        m.ChillerCOPOffset,
+		"condenserMeanTempWeight": m.CondenserMeanTempWeight,
+		"condenserCopSlopePerC":   m.CondenserCOPSlopePerC,
+		"highLoadCopPenaltyCoeff": m.HighLoadCOPPenaltyCoeff,
+		"chwCoilApproachMinC":     m.CHWCoilApproachMinC,
+		"thermalLoadMultiplier":   m.ThermalLoadMultiplier,
+		"thermalLoadBiasKw":       m.ThermalLoadBiasKW,
+		"chwSupplySensorBiasC":    m.CHWSupplySensorBiasC,
+		"zoneTempSensorBiasC":     m.ZoneTempSensorBiasC,
+	} {
+		if math.IsNaN(val) || math.IsInf(val, 0) {
+			return fmt.Errorf("plant mismatch %s must be finite", name)
+		}
+	}
+	if m.CHWPStaticHeadFraction < 0 || m.CHWPStaticHeadFraction > 0.5 {
+		return errors.New("plant mismatch chwpStaticHeadFraction must be in [0, 0.5]")
+	}
+	if m.CWPStaticHeadFraction < 0 || m.CWPStaticHeadFraction > 0.5 {
+		return errors.New("plant mismatch cwpStaticHeadFraction must be in [0, 0.5]")
+	}
+	if m.ChillerCOPMultiplier < 0 || m.ChillerCOPMultiplier > 2.0 {
+		return errors.New("plant mismatch chillerCopMultiplier must be in [0, 2.0]")
+	}
+	if m.CondenserMeanTempWeight < 0 || m.CondenserMeanTempWeight > 1.0 {
+		return errors.New("plant mismatch condenserMeanTempWeight must be in [0, 1.0]")
+	}
+	if m.CondenserCOPSlopePerC < 0 || m.CondenserCOPSlopePerC > 1.0 {
+		return errors.New("plant mismatch condenserCopSlopePerC must be in [0, 1.0]")
+	}
+	if m.HighLoadCOPPenaltyCoeff < 0 || m.HighLoadCOPPenaltyCoeff > 0.5 {
+		return errors.New("plant mismatch highLoadCopPenaltyCoeff must be in [0, 0.5]")
+	}
+	if m.ThermalLoadMultiplier < 0 || m.ThermalLoadMultiplier > 3.0 {
+		return errors.New("plant mismatch thermalLoadMultiplier must be in [0, 3.0]")
+	}
+	if m.TowerNonlinearExp < 0 || m.TowerNonlinearExp > 4.0 {
+		return errors.New("plant mismatch towerNonlinearExp must be in [0, 4.0]")
+	}
+	return nil
+}
+
 func (config PlantConfig) Validate() error {
 	if config.InitialEnergyKWh < 0 || math.IsNaN(config.InitialEnergyKWh) || math.IsInf(config.InitialEnergyKWh, 0) {
 		return errors.New("plant initialEnergyKwh must be a finite non-negative number")
 	}
 	if config.ThermalLagSeconds != 0 && (config.ThermalLagSeconds < 60 || config.ThermalLagSeconds > 1800) {
 		return errors.New("plant thermalLagSeconds must be 0 or between 60 and 1800")
+	}
+	if err := config.Mismatch.Validate(); err != nil {
+		return err
 	}
 	if config.Chiller.RatedCoolingCapacityKW <= 0 || config.Chiller.BaseCOP < 2 || config.Chiller.BaseCOP > 9 || config.Chiller.InitialSetpointC < 5 || config.Chiller.InitialSetpointC > 12 || config.Chiller.InitialLoadLimitPct < 20 || config.Chiller.InitialLoadLimitPct > 100 {
 		return errors.New("chiller config is invalid")
