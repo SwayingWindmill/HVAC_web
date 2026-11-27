@@ -141,6 +141,7 @@ COPY infra/registry/postgres/init/mlops-edge-domains.sql /opt/hvac/repo/infra/re
 COPY infra/connectivity/postgres/init/gateway-shadow-edge-models.sql /opt/hvac/repo/infra/connectivity/postgres/init/gateway-shadow-edge-models.sql
 COPY infra/connectivity/postgres/init/gateway-waveform-and-diagnostics.sql /opt/hvac/repo/infra/connectivity/postgres/init/gateway-waveform-and-diagnostics.sql
 COPY infra/registry/postgres/init/site-building-plan.sql /opt/hvac/repo/infra/registry/postgres/init/site-building-plan.sql
+COPY infra/connectivity/postgres/init/gateway-shadow-cluster-and-schedule.sql /opt/hvac/repo/infra/connectivity/postgres/init/gateway-shadow-cluster-and-schedule.sql
 COPY infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql /opt/hvac/repo/infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql
 COPY infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql /opt/hvac/repo/infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql
 COPY infra/telemetry/postgres/init/003-s2-telemetry-ingest.sql /opt/hvac/repo/infra/telemetry/postgres/init/003-s2-telemetry-ingest.sql
@@ -154,10 +155,10 @@ COPY infra/telemetry/postgres/init/006-alarm-evaluation-delivery.sql /opt/hvac/r
 COPY infra/telemetry/postgres/init/007-historical-replay.sql /opt/hvac/repo/infra/telemetry/postgres/init/007-historical-replay.sql
 COPY infra/telemetry/postgres/init/008-subscription-client-handle.sql /opt/hvac/repo/infra/telemetry/postgres/init/008-subscription-client-handle.sql
 COPY infra/telemetry/postgres/init/009-realtime-revocation-relay.sql /opt/hvac/repo/infra/telemetry/postgres/init/009-realtime-revocation-relay.sql
-COPY infra/telemetry/postgres/init/010-runtime-retention.sql /opt/hvac/repo/infra/telemetry/postgres/init/010-runtime-retention.sql
 
 FROM scratch AS sources-3
 
+COPY infra/telemetry/postgres/init/010-runtime-retention.sql /opt/hvac/repo/infra/telemetry/postgres/init/010-runtime-retention.sql
 COPY infra/telemetry/postgres/init/011-point-quality.sql /opt/hvac/repo/infra/telemetry/postgres/init/011-point-quality.sql
 COPY infra/telemetry/postgres/init/012-measurement-uncertainty.sql /opt/hvac/repo/infra/telemetry/postgres/init/012-measurement-uncertainty.sql
 COPY infra/telemetry/postgres/init/013-schema-and-table-comments.sql /opt/hvac/repo/infra/telemetry/postgres/init/013-schema-and-table-comments.sql

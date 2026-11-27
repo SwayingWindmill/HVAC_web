@@ -11637,7 +11637,9 @@
               "DRIVER_CONFIGS",
               "AUTONOMY_POLICY",
               "EDGE_RULES",
-              "EDGE_MODELS"
+              "EDGE_MODELS",
+              "CLUSTER_POLICY",
+              "ENERGY_SCHEDULE"
             ]
           },
           "target": {
@@ -12160,6 +12162,200 @@
           }
         }
       },
+      "ClusterControlPolicy": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "enabled",
+          "minRunningChillers",
+          "maxRunningChillers",
+          "stageUpLoadPct",
+          "stageDownLoadPct",
+          "stageDwellSeconds",
+          "defaultSupplySetpointC",
+          "minPumpFrequencyHz",
+          "maxPumpFrequencyHz",
+          "minTowerFanSpeedPct",
+          "maxTowerFanSpeedPct"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "minRunningChillers": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 16
+          },
+          "maxRunningChillers": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 16
+          },
+          "stageUpLoadPct": {
+            "type": "number",
+            "exclusiveMinimum": 50,
+            "maximum": 100
+          },
+          "stageDownLoadPct": {
+            "type": "number",
+            "minimum": 5,
+            "exclusiveMaximum": 80
+          },
+          "stageDwellSeconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3600
+          },
+          "defaultSupplySetpointC": {
+            "type": "number",
+            "minimum": 4,
+            "maximum": 18
+          },
+          "minPumpFrequencyHz": {
+            "type": "number",
+            "minimum": 15,
+            "maximum": 50
+          },
+          "maxPumpFrequencyHz": {
+            "type": "number",
+            "minimum": 15,
+            "maximum": 50
+          },
+          "minTowerFanSpeedPct": {
+            "type": "number",
+            "minimum": 15,
+            "maximum": 100
+          },
+          "maxTowerFanSpeedPct": {
+            "type": "number",
+            "minimum": 15,
+            "maximum": 100
+          }
+        }
+      },
+      "EnergyScheduleSlot": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "slotId",
+          "startMinute",
+          "endMinute",
+          "mode"
+        ],
+        "properties": {
+          "slotId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "startMinute": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1439
+          },
+          "endMinute": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1440
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "NORMAL",
+              "ECO",
+              "PRE_COOL",
+              "PEAK_SHAVE",
+              "STANDBY"
+            ]
+          },
+          "supplyTempSetpointC": {
+            "type": "number",
+            "minimum": 4,
+            "maximum": 18
+          },
+          "pumpFrequencyMinHz": {
+            "type": "number",
+            "minimum": 15,
+            "maximum": 50
+          },
+          "pumpFrequencyMaxHz": {
+            "type": "number",
+            "minimum": 15,
+            "maximum": 50
+          },
+          "towerFanSpeedMinPct": {
+            "type": "number",
+            "minimum": 15,
+            "maximum": 100
+          },
+          "towerFanSpeedMaxPct": {
+            "type": "number",
+            "minimum": 15,
+            "maximum": 100
+          },
+          "maxRunningChillers": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 16
+          },
+          "targetCoolingLoadKw": {
+            "type": "number",
+            "minimum": 0
+          }
+        }
+      },
+      "EdgeEnergySchedule": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "scheduleId",
+          "version",
+          "issuedAt",
+          "validFrom",
+          "validUntil",
+          "continueOfflineWhileValid",
+          "slots"
+        ],
+        "properties": {
+          "scheduleId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "issuedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "validFrom": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "validUntil": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "leaseExpiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "continueOfflineWhileValid": {
+            "type": "boolean"
+          },
+          "slots": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 288,
+            "items": {
+              "$ref": "#/components/schemas/EnergyScheduleSlot"
+            }
+          }
+        }
+      },
       "GatewayDesiredConfig": {
         "type": "object",
         "additionalProperties": false,
@@ -12216,6 +12412,26 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/EdgeRuleBundle"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "clusterPolicy": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ClusterControlPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "energySchedule": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/EdgeEnergySchedule"
               },
               {
                 "type": "null"
@@ -12310,6 +12526,26 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/EdgeRuleBundle"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "clusterPolicy": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ClusterControlPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "energySchedule": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/EdgeEnergySchedule"
               },
               {
                 "type": "null"
@@ -12439,6 +12675,26 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/EdgeRuleBundle"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "clusterPolicy": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ClusterControlPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "energySchedule": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/EdgeEnergySchedule"
               },
               {
                 "type": "null"
