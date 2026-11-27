@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
+import { Skeleton } from '@/components/ui/skeleton';
 import {
   Timeline,
   TimelineConnector,
@@ -24,11 +25,12 @@ import {
   TimelineTime,
   TimelineTitle,
 } from '@/components/ui/timeline';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { formatClock } from '@/features/operations/realtime/device-presentation';
 import { formatCompactTime, formatTime } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import { WITHDRAWABLE, type Command, type ReconciledOutcome } from '../command-api';
-import { APPROVAL_LABEL, COMMAND_SOURCE_LABEL, commandSummary, PRIORITY_LABEL, RISK_LABEL, STATUS_PRESENTATION, transitionReasonNote } from '../command-presentation';
+import { APPROVAL_LABEL, COMMAND_SOURCE_LABEL, commandSummary, IN_FLIGHT, PRIORITY_LABEL, RISK_LABEL, STATUS_PRESENTATION, transitionReasonNote } from '../command-presentation';
 import type { CommandLabel } from '../control-model';
 import { CommandMark } from './CommandMark';
 
@@ -238,5 +240,106 @@ export function StepUpDialog({ command, describe, onClose }: {
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+export type ControlLogFilter = 'approval' | 'inflight' | 'unknown';
+
+const HISTORY_FILTERS: readonly {
+  readonly value: ControlLogFilter | 'all';
+  readonly label: string;
+  readonly matches: (command: Command) => boolean;
+}[] = [
+  { value: 'all', label: '全部', matches: () => true },
+  { value: 'approval', label: '待审批', matches: (command) => command.status === 'AWAITING_APPROVAL' },
+  { value: 'inflight', label: '执行中', matches: (command) => IN_FLIGHT.has(command.status) },
+  { value: 'unknown', label: '待现场确认', matches: (command) => command.status === 'OUTCOME_UNKNOWN' },
+];
+
+/** On-demand site-wide command audit drawer showing recent 50 commands with status filtering. */
+export function CommandHistoryDrawer({
+  open,
+  statusFilter,
+  commands,
+  isPending,
+  errorMessage,
+  labels,
+  timeZone,
+  selectedId,
+  actions,
+  onFilterChange,
+  onRetry,
+  onInspect,
+  onClose,
+}: {
+  readonly open: boolean;
+  readonly statusFilter: ControlLogFilter | undefined;
+  readonly commands: readonly Command[];
+  readonly isPending: boolean;
+  readonly errorMessage: string | null;
+  readonly labels: ReadonlyMap<string, CommandLabel>;
+  readonly timeZone: string;
+  readonly selectedId: string | undefined;
+  readonly actions: CommandActions;
+  readonly onFilterChange: (next: ControlLogFilter | undefined) => void;
+  readonly onRetry: () => void;
+  readonly onInspect: (commandId: string) => void;
+  readonly onClose: () => void;
+}) {
+  const filter = HISTORY_FILTERS.find((candidate) => candidate.value === (statusFilter ?? 'all'))!;
+  return (
+    <Sheet open={open} onOpenChange={(nextOpen) => { if (!nextOpen) onClose(); }}>
+      <SheetContent className="flex flex-col p-0 sm:max-w-[460px]">
+        <SheetHeader className="gap-1 border-b border-divider px-5 pt-4 pb-3">
+          <SheetTitle className="text-base">指令记录 ({commands.length})</SheetTitle>
+          <SheetDescription className="text-xs">近 50 条全站控制指令与审批流转记录</SheetDescription>
+        </SheetHeader>
+
+        <ToggleGroup
+          type="single"
+          value={filter.value}
+          onValueChange={(value) => {
+            const matched = HISTORY_FILTERS.find((option) => option.value === value);
+            if (matched) onFilterChange(matched.value === 'all' ? undefined : matched.value);
+          }}
+          aria-label="指令状态"
+          className="h-10 w-full shrink-0 justify-start gap-5 rounded-none border-b border-divider px-5"
+        >
+          {HISTORY_FILTERS.map((option) => (
+            <ToggleGroupItem
+              key={option.value}
+              value={option.value}
+              className="h-full flex-none gap-1.5 rounded-none border-0 px-0 text-[13px] font-medium text-muted-foreground shadow-[inset_0_-2px_0_transparent] hover:bg-transparent hover:text-foreground data-[state=on]:bg-transparent data-[state=on]:text-foreground data-[state=on]:shadow-[inset_0_-2px_0_var(--primary)]"
+            >
+              {option.label}
+              {!isPending && !errorMessage ? (
+                <span className="font-mono text-[11px] text-subtle-foreground">{commands.filter(option.matches).length}</span>
+              ) : null}
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
+
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {isPending ? (
+            <div className="flex flex-col gap-2 p-4"><Skeleton className="h-14" /><Skeleton className="h-14" /><Skeleton className="h-14" /></div>
+          ) : errorMessage ? (
+            <div className="flex flex-col items-start gap-2 px-5 py-6">
+              <p className="text-sm text-destructive-text">指令记录暂时读不到：{errorMessage}</p>
+              <Button variant="outline" size="sm" onClick={onRetry}>重试</Button>
+            </div>
+          ) : (
+            <CommandLog
+              commands={commands.filter(filter.matches)}
+              labels={labels}
+              timeZone={timeZone}
+              selectedId={selectedId}
+              filtered={filter.value !== 'all'}
+              actions={actions}
+              onInspect={onInspect}
+            />
+          )}
+        </div>
+      </SheetContent>
+    </Sheet>
   );
 }

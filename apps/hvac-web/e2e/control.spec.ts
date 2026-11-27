@@ -1,12 +1,18 @@
+import type { Page } from '@playwright/test';
 import { SITE_ID } from './gateway';
 import { expect, test } from './test';
 
-test('an operator sets the chilled water setpoint from the device row, confirmed before it is sent', async ({ page, gateway }) => {
+async function selectDevice(page: Page, assetName: string) {
+  await page.getByRole('group', { name: assetName }).getByRole('button').first().click();
+  await expect(page.getByRole('complementary', { name: '设备精密操控台' }).getByRole('heading', { level: 2 })).toHaveText(assetName);
+}
+
+test('an operator sets the chilled water setpoint from the device faceplate with IME guard, confirmed before it is sent', async ({ page, gateway }) => {
   await page.goto(`/operations/control?site=${SITE_ID}`);
 
-  await page.getByRole('button', { name: '调整 CHILLER-01 的设定值' }).click();
-  const settings = page.getByRole('dialog', { name: '调整 CHILLER-01 的设定值' });
-  const setpointInput = settings.getByRole('textbox', { name: '冷冻水出水设定温度目标值' });
+  const faceplate = page.getByRole('complementary', { name: '设备精密操控台' });
+  await expect(faceplate.getByRole('heading', { level: 2 })).toHaveText('CHILLER-01');
+  const setpointInput = faceplate.getByRole('textbox', { name: '冷冻水出水设定温度目标值' });
   await setpointInput.fill('7.5');
 
   // Confirming an IME candidate with Enter (including Safari's post-compositionend keyCode 229) must not submit.
@@ -24,6 +30,7 @@ test('an operator sets the chilled water setpoint from the device row, confirmed
   await expect(confirm.getByRole('textbox', { name: '动态口令' })).toHaveCount(0);
   await confirm.getByRole('button', { name: '确认下发' }).click();
 
+  await page.getByRole('button', { name: /^历史/ }).click();
   const log = page.getByRole('list', { name: '指令记录' });
   await expect(log.getByRole('listitem').first()).toContainText('CHILLER-01 · 冷冻水出水设定温度 → 7.5 °C');
   await expect(log.getByRole('listitem').first()).toContainText('已执行');
@@ -35,7 +42,9 @@ test('an operator sets the chilled water setpoint from the device row, confirmed
 test('stopping a pump asks for the one-time code and a site check, and approving it asks to verify identity again', async ({ page, gateway }) => {
   await page.goto(`/operations/control?site=${SITE_ID}`);
 
-  await page.getByRole('group', { name: 'CHWP-01' }).getByRole('button', { name: '停止' }).click();
+  await selectDevice(page, 'CHWP-01');
+  const faceplate = page.getByRole('complementary', { name: '设备精密操控台' });
+  await faceplate.getByRole('button', { name: '停止', exact: true }).click();
   const confirm = page.getByRole('alertdialog', { name: '停止 CHWP-01？' });
   const submit = confirm.getByRole('button', { name: '提交停止' });
   await expect(submit).toBeDisabled();
@@ -45,28 +54,32 @@ test('stopping a pump asks for the one-time code and a site check, and approving
   await confirm.getByRole('checkbox', { name: '我已和现场确认可以停' }).check();
   await submit.click();
 
-  const log = page.getByRole('list', { name: '指令记录' });
-  const stop = log.getByRole('listitem').filter({ hasText: '停止冷冻水泵' });
-  await expect(stop).toContainText('待审批 · 高风险 · 需一人审批 · 0/1');
+  const channel = page.getByRole('region', { name: '阻塞与执行通道' });
+  await expect(channel).toContainText('停止冷冻水泵');
+  await expect(channel).toContainText('待审批');
+  await expect(channel).toContainText('高风险 · 需一人审批 0/1');
   await expect(page.getByRole('group', { name: 'CHWP-01' })).toContainText('待审批');
   const submitted = gateway.writes.find((write) => write.path === '/api/v1/commands');
   expect(submitted?.body).toMatchObject({ parameters: {}, verificationCode: '123456' });
 
   // The session has no fresh two-step sign-in: confirming the approval dialog hits STEP_UP_REQUIRED and offers to verify.
-  await stop.getByRole('button', { name: '批准' }).click();
+  await channel.getByRole('button', { name: '批准' }).click();
   await page.getByRole('alertdialog', { name: '确认批准下发该控制指令？' }).getByRole('button', { name: '确认批准' }).click();
   const stepUp = page.getByRole('dialog', { name: '批准前要再验证一次身份' });
   await expect(stepUp).toContainText('CHWP-01 · 停止冷冻水泵');
   await stepUp.getByRole('button', { name: '取消' }).click();
 
   gateway.stepUpFresh = true;
-  await stop.getByRole('button', { name: '批准' }).click();
+  await channel.getByRole('button', { name: '批准' }).click();
   await page.getByRole('alertdialog', { name: '确认批准下发该控制指令？' }).getByRole('button', { name: '确认批准' }).click();
-  await expect(stop).toContainText('已执行');
+  await expect(channel).toHaveCount(0);
 
+  await page.getByRole('button', { name: /^历史/ }).click();
+  const stop = page.getByRole('list', { name: '指令记录' }).getByRole('listitem').filter({ hasText: '停止冷冻水泵' });
+  await expect(stop).toContainText('已执行');
   await stop.getByRole('button', { name: /停止冷冻水泵/ }).click();
   await expect(page).toHaveURL(new RegExp(`inspect=${gateway.commands.find((command) => command.capability === 'STOP')!.commandId}`));
-  const sheet = page.getByRole('dialog');
+  const sheet = page.getByRole('dialog', { name: /停止冷冻水泵/ });
   await expect(sheet).toContainText('需一人审批 · 1/1');
   await expect(sheet.getByRole('listitem')).toHaveText([/已提交/, /待审批/, /已批准/, /已执行/]);
 });
@@ -74,12 +87,14 @@ test('stopping a pump asks for the one-time code and a site check, and approving
 test('switching to manual control withdraws the pending command, pauses every device and shows in the top bar', async ({ page, gateway }) => {
   await page.goto(`/operations/control?site=${SITE_ID}`);
 
-  await page.getByRole('group', { name: 'CT-01' }).getByRole('button', { name: '停止' }).click();
+  await selectDevice(page, 'CT-01');
+  const faceplate = page.getByRole('complementary', { name: '设备精密操控台' });
+  await faceplate.getByRole('button', { name: '停止' }).click();
   const confirm = page.getByRole('alertdialog');
   await confirm.getByRole('textbox', { name: '动态口令' }).fill('654321');
   await confirm.getByRole('checkbox').check();
   await confirm.getByRole('button', { name: '提交停止' }).click();
-  await expect(page.getByRole('list', { name: '指令记录' }).getByRole('listitem').first()).toContainText('待审批');
+  await expect(page.getByRole('region', { name: '阻塞与执行通道' })).toContainText('待审批');
 
   const bar = page.getByRole('region', { name: '控制方式' });
   await expect(bar).toContainText('远程自动控制');
@@ -98,8 +113,13 @@ test('switching to manual control withdraws the pending command, pauses every de
   await expect(bar).toContainText('人工接管');
   await expect(bar).toContainText('原因：夜班人工巡检');
   await expect(page.getByRole('banner').getByRole('link', { name: '人工接管' })).toBeVisible();
-  await expect(page.getByRole('group', { name: 'CHWP-01' }).getByRole('button', { name: '停止' })).toBeDisabled();
+  await selectDevice(page, 'CHWP-01');
+  await expect(faceplate.getByRole('button', { name: '停止' })).toBeDisabled();
+  await expect(faceplate).toContainText('人工接管中，平台不下发指令');
+
+  await page.getByRole('button', { name: /^历史/ }).click();
   await expect(page.getByRole('list', { name: '指令记录' }).getByRole('listitem').first()).toContainText('已撤回');
+  await page.keyboard.press('Escape');
 
   // Safe exit waits for a command nobody has confirmed on site.
   gateway.commands[0].status = 'OUTCOME_UNKNOWN';
@@ -111,19 +131,20 @@ test('switching to manual control withdraws the pending command, pauses every de
   await expect(exit.getByRole('button', { name: '切换到安全退出' })).toBeDisabled();
 });
 
-test('locking a device withdraws its pending command and greys its controls until unlocked', async ({ page, gateway }) => {
+test('locking a device withdraws its pending command and blocks its faceplate controls until unlocked', async ({ page, gateway }) => {
   await page.goto(`/operations/control?site=${SITE_ID}`);
 
-  const pump = page.getByRole('group', { name: 'CWP-01' });
-  await pump.getByRole('button', { name: '停止' }).click();
+  await selectDevice(page, 'CWP-01');
+  const pumpCard = page.getByRole('group', { name: 'CWP-01' });
+  const faceplate = page.getByRole('complementary', { name: '设备精密操控台' });
+  await faceplate.getByRole('button', { name: '停止' }).click();
   const confirm = page.getByRole('alertdialog');
   await confirm.getByRole('textbox', { name: '动态口令' }).fill('111222');
   await confirm.getByRole('checkbox').check();
   await confirm.getByRole('button', { name: '提交停止' }).click();
-  await expect(pump).toContainText('待审批');
+  await expect(pumpCard).toContainText('待审批');
 
-  await pump.getByRole('button', { name: '管理 CWP-01 锁定' }).click();
-  await page.getByRole('menuitem', { name: /设备锁定/ }).click();
+  await faceplate.getByRole('button', { name: '管理 CWP-01 锁定' }).click();
   const dialog = page.getByRole('dialog', { name: '锁定 CWP-01？' });
   await dialog.getByText('检修锁定', { exact: true }).click();
   await expect(dialog).toContainText('锁定后会撤回这台设备 1 条还没下发的指令');
@@ -132,17 +153,16 @@ test('locking a device withdraws its pending command and greys its controls unti
 
   await expect(page.getByText('已检修锁定 CWP-01，撤回了 1 条指令')).toBeVisible();
   expect(gateway.writes.find((entry) => entry.path.endsWith('/control-lock'))?.body).toEqual({ lockMode: 'MAINTENANCE_LOCK', reason: '轴承异响，等维保' });
-  await expect(pump).toContainText('检修锁定');
-  await expect(pump.getByRole('button', { name: '停止' })).toBeDisabled();
-  await expect(page.getByRole('region', { name: '控制方式' })).toContainText('锁定设备1 台');
+  await expect(pumpCard).toContainText('检修锁定');
+  await expect(faceplate.getByRole('button', { name: '停止', exact: true })).toBeDisabled();
+  await expect(page.getByRole('region', { name: '控制方式' })).toContainText('锁定设备 1 台');
 
-  await pump.getByRole('button', { name: '管理 CWP-01 已锁定' }).click();
-  await page.getByRole('menuitem', { name: /解除或修改设备锁定/ }).click();
+  await faceplate.getByRole('button', { name: '管理 CWP-01 已锁定' }).click();
   const unlock = page.getByRole('dialog', { name: '解除 CWP-01 的锁定？' });
   await expect(unlock).toContainText('轴承异响，等维保');
   await unlock.getByRole('textbox', { name: '原因' }).fill('维保完成');
   await unlock.getByRole('button', { name: '解除锁定' }).click();
-  await expect(pump.getByRole('button', { name: '停止' })).toBeEnabled();
+  await expect(faceplate.getByRole('button', { name: '停止', exact: true })).toBeEnabled();
 });
 
 test('during a maintenance window only stopping and resetting stay available', async ({ page, gateway }) => {
@@ -153,18 +173,21 @@ test('during a maintenance window only stopping and resetting stay available', a
   await page.goto(`/operations/control?site=${SITE_ID}`);
 
   await expect(page.getByRole('region', { name: '控制方式' })).toContainText('检修窗口「冷却塔清洗」2026-11-15 至 2026-11-17，只能停机和复位');
-  await expect(page.getByRole('button', { name: '调整 CHILLER-01 的设定值' })).toBeDisabled();
-  await expect(page.getByRole('group', { name: 'CHWP-01' }).getByRole('button', { name: '停止' })).toBeEnabled();
+  const faceplate = page.getByRole('complementary', { name: '设备精密操控台' });
+  await expect(faceplate.getByRole('textbox', { name: '冷冻水出水设定温度目标值' })).toBeDisabled();
+  await selectDevice(page, 'CHWP-01');
+  await expect(faceplate.getByRole('button', { name: '停止' })).toBeEnabled();
 });
 
 test('a safe shutdown of the whole site asks for a reason, the code and a site check, then switches to safe exit', async ({ page, gateway }) => {
   await page.goto(`/operations/control?site=${SITE_ID}`);
-  await page.getByRole('group', { name: 'CT-01' }).getByRole('button', { name: '停止' }).click();
+  await selectDevice(page, 'CT-01');
+  await page.getByRole('complementary', { name: '设备精密操控台' }).getByRole('button', { name: '停止' }).click();
   const confirm = page.getByRole('alertdialog');
   await confirm.getByRole('textbox', { name: '动态口令' }).fill('654321');
   await confirm.getByRole('checkbox').check();
   await confirm.getByRole('button', { name: '提交停止' }).click();
-  await expect(page.getByRole('list', { name: '指令记录' }).getByRole('listitem').first()).toContainText('待审批');
+  await expect(page.getByRole('region', { name: '阻塞与执行通道' })).toContainText('待审批');
 
   await page.getByRole('region', { name: '控制方式' }).getByRole('button', { name: '停机…' }).click();
   const dialog = page.getByRole('dialog', { name: '安全停机整个站点？' });
@@ -290,8 +313,8 @@ test('control mode and asset locks show operator display names without fallback 
   const modeRegion = page.getByRole('region', { name: '控制方式' });
   await expect(modeRegion).toContainText(/设定\s*周敏/);
   await expect(modeRegion).not.toContainText('其他人员');
-  await page.getByRole('group', { name: 'CHWP-01' }).getByRole('button', { name: '管理 CHWP-01 已锁定' }).click();
-  await page.getByRole('menuitem', { name: /解除或修改设备锁定/ }).click();
+  await selectDevice(page, 'CHWP-01');
+  await page.getByRole('complementary', { name: '设备精密操控台' }).getByRole('button', { name: '管理 CHWP-01 已锁定' }).click();
   const lockDialog = page.getByRole('dialog', { name: '解除 CHWP-01 的锁定？' });
   await expect(lockDialog).toContainText('周敏');
   await lockDialog.getByRole('button', { name: '取消' }).click();
@@ -340,7 +363,7 @@ test('unit column header shows active power from bound HVAC_POWER_METER and fall
   await expect(page.getByRole('region', { name: 'CHILLER-01' })).toContainText('暂无读数');
 });
 
-test('compiled interlockChecks render interlock preconditions in unit group', async ({ page, gateway }) => {
+test('compiled interlockChecks render interlock preconditions on node and gate 5 with jump button', async ({ page, gateway }) => {
   const stopPoint = gateway.assetModel.telemetryPoints.find(
     (point: { id: string }) => point.id === '01910000-0000-7000-8000-500000000002',
   );
@@ -356,15 +379,22 @@ test('compiled interlockChecks render interlock preconditions in unit group', as
   await page.goto(`/operations/control?site=${SITE_ID}`);
   const chillerGroup = page.getByRole('group', { name: 'CHILLER-01' });
   await expect(chillerGroup).toContainText('先停 CHWP-01');
-  await expect(chillerGroup.getByRole('button', { name: '停止' })).toBeDisabled();
+
+  const faceplate = page.getByRole('complementary', { name: '设备精密操控台' });
+  await expect(faceplate).toContainText('先停 CHWP-01');
+  await expect(faceplate.getByRole('button', { name: '停止' })).toBeDisabled();
+  await faceplate.getByRole('button', { name: /选中 CHWP-01/ }).click();
+  await expect(faceplate.getByRole('heading', { level: 2 })).toHaveText('CHWP-01');
 });
 
 test('TOTP step-up failure reasons show actionable guidance and MFA enroll link', async ({ page, gateway }) => {
   await page.goto(`/operations/control?site=${SITE_ID}`);
+  await selectDevice(page, 'CT-01');
+  const faceplate = page.getByRole('complementary', { name: '设备精密操控台' });
 
   const submitWithReason = async (reason: 'CODE_INVALID' | 'CODE_REPLAYED' | 'MFA_LOCKED' | 'MFA_NOT_CONFIGURED') => {
     gateway.stepUpFailureReason = reason;
-    await page.getByRole('group', { name: 'CT-01' }).getByRole('button', { name: '停止' }).click();
+    await faceplate.getByRole('button', { name: '停止' }).click();
     const confirm = page.getByRole('alertdialog');
     await confirm.getByRole('textbox', { name: '动态口令' }).fill('111222');
     await confirm.getByRole('checkbox').check();
@@ -372,7 +402,7 @@ test('TOTP step-up failure reasons show actionable guidance and MFA enroll link'
     return confirm;
   };
 
-  await page.getByRole('group', { name: 'CT-01' }).getByRole('button', { name: '停止' }).click();
+  await faceplate.getByRole('button', { name: '停止' }).click();
   const imeConfirm = page.getByRole('alertdialog');
   const codeInput = imeConfirm.getByRole('textbox', { name: '动态口令' });
   await codeInput.fill('111222');
@@ -444,29 +474,29 @@ test('control mode bar displays active auto-control lease badge and link when ar
 test('command log and drawer show Chinese priority tier and translate DEVICE_PRIORITY_LOCKED refusals', async ({ page, gateway }) => {
   await page.goto(`/operations/control?site=${SITE_ID}`);
 
-  await page.getByRole('button', { name: '调整 CHILLER-01 的设定值' }).click();
-  const settings = page.getByRole('dialog', { name: '调整 CHILLER-01 的设定值' });
-  const setpointInput = settings.getByRole('textbox', { name: '冷冻水出水设定温度目标值' });
+  const faceplate = page.getByRole('complementary', { name: '设备精密操控台' });
+  const setpointInput = faceplate.getByRole('textbox', { name: '冷冻水出水设定温度目标值' });
   await setpointInput.fill('8.0');
   await setpointInput.press('Enter');
   await page.getByRole('alertdialog').getByRole('button', { name: '确认下发' }).click();
 
+  await page.getByRole('button', { name: /^历史/ }).click();
   const logItem = page.getByRole('list', { name: '指令记录' }).getByRole('listitem').first();
   await expect(logItem).toContainText('人工干预');
   await expect(logItem).not.toContainText(/MANUAL_OVERRIDE/);
   await logItem.getByRole('button', { name: /冷冻水出水设定温度/ }).click();
-  const sheet = page.getByRole('dialog');
+  const sheet = page.getByRole('dialog', { name: /冷冻水出水设定温度/ });
   await expect(sheet).toContainText('控制优先级');
   await expect(sheet).toContainText('人工干预');
   await expect(sheet).toContainText('值班人员操作');
   await page.keyboard.press('Escape');
   await expect(sheet).toHaveCount(0);
+  await page.getByRole('dialog', { name: /指令记录/ }).getByRole('button', { name: '关闭' }).click();
 
   const chillerPoint = gateway.assetModel.telemetryPoints.find((candidate: { reportingDeviceId: string; pointType: string }) => candidate.pointType === 'COMMAND');
   gateway.priorityLockedDeviceIds.add(chillerPoint.reportingDeviceId);
-  await page.getByRole('button', { name: '调整 CHILLER-01 的设定值' }).click();
-  await page.getByRole('dialog', { name: '调整 CHILLER-01 的设定值' }).getByRole('textbox', { name: '冷冻水出水设定温度目标值' }).fill('8.5');
-  await page.getByRole('dialog', { name: '调整 CHILLER-01 的设定值' }).getByRole('textbox', { name: '冷冻水出水设定温度目标值' }).press('Enter');
+  await setpointInput.fill('8.5');
+  await setpointInput.press('Enter');
   await page.getByRole('alertdialog').getByRole('button', { name: '确认下发' }).click();
   await expect(page.getByText('这台设备正由更高优先级的安全联锁或人工指令锁定，当前指令不能下发。').first()).toBeVisible();
 });
@@ -475,8 +505,8 @@ test('operators can acquire and release device priority locks and replay control
   await page.goto(`/operations/control?site=${SITE_ID}`);
 
   const chillerCard = page.getByRole('group', { name: 'CHILLER-01' });
-  await chillerCard.getByRole('button', { name: '管理 CHILLER-01 锁定' }).click();
-  await page.getByRole('menuitem', { name: /优先级仲裁锁/ }).click();
+  const faceplate = page.getByRole('complementary', { name: '设备精密操控台' });
+  await faceplate.getByRole('button', { name: '设置隔离' }).click();
   const lockDialog = page.getByRole('dialog', { name: /CHILLER-01 优先级仲裁锁/ });
   await lockDialog.getByText('安全联锁', { exact: true }).click();
   await lockDialog.getByRole('button', { name: '30 分钟' }).click();
@@ -494,8 +524,7 @@ test('operators can acquire and release device priority locks and replay control
     reason: '冷凝器压差高，高优先级保护锁机',
   });
 
-  await chillerCard.getByRole('button', { name: '管理 CHILLER-01 已锁定' }).click();
-  await page.getByRole('menuitem', { name: /管理优先级仲裁锁/ }).click();
+  await faceplate.getByRole('button', { name: '管理/解除' }).click();
   const editDialog = page.getByRole('dialog', { name: /CHILLER-01 优先级仲裁锁/ });
   await expect(editDialog).toContainText('冷凝器压差高，高优先级保护锁机');
   await editDialog.getByRole('textbox', { name: '更新或解除原因' }).fill('压差恢复正常');
@@ -518,7 +547,7 @@ test('operators can acquire and release device priority locks and replay control
   await expect(page.getByText('当前没有待重投的控制告警死信记录')).toBeVisible();
 });
 
-test('sidebar shows live pending control count and layout stacks without horizontal overflow when assistant opens at 1280px', async ({ page }) => {
+test('views switch between P&ID topology and Swiss track table, sidebar shows live count, and layout avoids horizontal overflow at 1280px', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto(`/operations/control?site=${SITE_ID}`);
 
@@ -533,7 +562,6 @@ test('sidebar shows live pending control count and layout stacks without horizon
   await expect(chillerRow).toContainText(/72\s*%/);
   await expect(chillerRow).toContainText('功率');
   await expect(chillerRow).toContainText(/155\.7\s*kW/);
-  await expect(chillerRow.getByRole('button', { name: '调整 CHILLER-01 的设定值' })).toContainText('设定值');
 
   const chwpRow = page.getByRole('group', { name: 'CHWP-01' });
   await expect(chwpRow).toContainText('频率');
@@ -541,17 +569,24 @@ test('sidebar shows live pending control count and layout stacks without horizon
   await expect(chwpRow).toContainText('流量');
   await expect(chwpRow).toContainText(/132\s*m³\/h/);
 
+  // Switch between P&ID topology and Swiss tabular views without losing faceplate state.
+  await page.getByRole('radio', { name: '精密横轨表' }).click();
+  await expect(page.getByText('水路设备（点击在右侧细控）')).toBeVisible();
+  await page.getByRole('radio', { name: '冷链水路拓扑' }).click();
+  await expect(page.getByLabel('冷却水总管')).toBeVisible();
+
   const shutdownBtnBox = await page.getByRole('region', { name: '控制方式' }).getByRole('button', { name: '停机…' }).boundingBox();
   expect(shutdownBtnBox).not.toBeNull();
   expect(shutdownBtnBox!.width).toBeLessThan(200);
 
-  await page.getByRole('group', { name: 'CHWP-01' }).getByRole('button', { name: '停止' }).click();
+  await selectDevice(page, 'CHWP-01');
+  await page.getByRole('complementary', { name: '设备精密操控台' }).getByRole('button', { name: '停止' }).click();
   const confirm = page.getByRole('alertdialog', { name: '停止 CHWP-01？' });
   await confirm.getByRole('textbox', { name: '动态口令' }).fill('123456');
   await confirm.getByRole('checkbox', { name: '我已和现场确认可以停' }).check();
   await confirm.getByRole('button', { name: '提交停止' }).click();
 
-  await expect(page.getByRole('listitem').filter({ hasText: '停止冷冻水泵' })).toContainText('待审批');
+  await expect(page.getByRole('region', { name: '阻塞与执行通道' })).toContainText('待审批');
   await expect(controlLink.locator('..')).toContainText('1');
 
   await page.getByRole('button', { name: 'AI 助手' }).click();

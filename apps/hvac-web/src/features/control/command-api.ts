@@ -2,13 +2,12 @@ import { queryOptions } from '@tanstack/react-query';
 import { failureStatus, gatewayPath, gatewayRequest, ROUTE_MISSING_MESSAGE, type GatewayRequest, type StepUpFailureReason } from '@/api/gateway-client';
 import { commandPaths } from '@/api/generated/platformGateway.gen';
 import { controlErrorMessage } from './control-errors';
+import { SETTLED, WITHDRAWABLE, type CommandStatus } from './control-constants';
 
 // Command governance through the Platform Gateway: an operator asks, the owner assesses the risk,
 // approvals are collected when the policy needs them, and an unknown outcome is reconciled by a person.
 
-export type CommandStatus =
-  | 'SUBMITTED' | 'VALIDATING' | 'AWAITING_APPROVAL' | 'APPROVED' | 'QUEUED' | 'DISPATCHING'
-  | 'SUCCEEDED' | 'FAILED' | 'REJECTED' | 'CANCELLED' | 'EXPIRED' | 'OUTCOME_UNKNOWN';
+export { SETTLED, WITHDRAWABLE, type CommandStatus };
 export type CommandRisk = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 export type CommandApprovalPolicy = 'NONE' | 'SINGLE_APPROVER' | 'TWO_PERSON';
 export type CommandPriorityTier = 'SAFETY_INTERLOCK' | 'MANUAL_OVERRIDE' | 'PROTECTION_RULE' | 'AI_OPTIMIZATION' | 'SCHEDULE';
@@ -114,8 +113,3 @@ export function siteCommandsQuery(siteId: string) {
     refetchInterval: (query) => (query.state.data?.some((command) => !SETTLED.has(command.status)) ? 3_000 : 30_000),
   });
 }
-
-export const SETTLED: ReadonlySet<CommandStatus> = new Set(['SUCCEEDED', 'FAILED', 'REJECTED', 'CANCELLED', 'EXPIRED']);
-
-/** Still before dispatch, so a person can withdraw it. */
-export const WITHDRAWABLE: ReadonlySet<CommandStatus> = new Set(['AWAITING_APPROVAL', 'QUEUED']);
