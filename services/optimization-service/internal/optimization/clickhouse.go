@@ -21,10 +21,12 @@ type EvaluationSink interface {
 }
 
 type ClickHouseSink struct {
-	baseURL  *url.URL
-	username string
-	password string
-	client   *http.Client
+	baseURL      *url.URL
+	username     string
+	password     string
+	readUsername string
+	readPassword string
+	client       *http.Client
 }
 
 func newPooledHTTPClient(timeout time.Duration, disableRedirects bool) *http.Client {
@@ -98,6 +100,17 @@ func NewClickHouseSink(baseURL, username, password string, client *http.Client) 
 		client = newPooledHTTPClient(10*time.Second, true)
 	}
 	return &ClickHouseSink{baseURL: parsed, username: username, password: password, client: client}, nil
+}
+
+// WithReader configures separate read credentials (e.g. optimization_service_reader)
+// for SELECT queries such as HasEvaluation while keeping InsertEvaluation on the writer role.
+func (sink *ClickHouseSink) WithReader(username, password string) *ClickHouseSink {
+	if sink == nil {
+		return nil
+	}
+	sink.readUsername = strings.TrimSpace(username)
+	sink.readPassword = password
+	return sink
 }
 
 // Ping executes a lightweight SELECT 1 query against ClickHouse for readiness checks.
@@ -195,8 +208,14 @@ func (sink *ClickHouseSink) HasEvaluation(ctx context.Context, evaluation Evalua
 	if err != nil {
 		return false, err
 	}
-	if sink.username != "" {
-		request.SetBasicAuth(sink.username, sink.password)
+	readUser := sink.readUsername
+	readPass := sink.readPassword
+	if readUser == "" {
+		readUser = sink.username
+		readPass = sink.password
+	}
+	if readUser != "" {
+		request.SetBasicAuth(readUser, readPass)
 	}
 	response, err := sink.client.Do(request)
 	if err != nil {

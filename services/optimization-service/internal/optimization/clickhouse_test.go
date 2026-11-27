@@ -93,3 +93,59 @@ func TestOptimizationClickHouseDeterministicDeduplicationAndPooledTransport(t *t
 		t.Fatalf("missing dedup query settings: %v", queries[0])
 	}
 }
+
+func TestClickHouseSinkSeparatesReaderAndWriterCredentials(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		q := request.URL.Query().Get("query")
+		user, pass, ok := request.BasicAuth()
+		if !ok {
+			writer.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if strings.HasPrefix(q, "SELECT ") {
+			if user != "optimization_service_reader" || pass != "rpw" {
+				writer.WriteHeader(http.StatusForbidden)
+				_, _ = io.WriteString(writer, "Code: 497. DB::Exception: "+user+": Not enough privileges (ACCESS_DENIED)")
+				return
+			}
+			_, _ = io.WriteString(writer, "0\n")
+			return
+		}
+		if strings.HasPrefix(q, "INSERT INTO analytics.optimization_evaluations") {
+			if user != "optimization_service_writer" || pass != "wpw" {
+				writer.WriteHeader(http.StatusForbidden)
+				_, _ = io.WriteString(writer, "Code: 497. DB::Exception: "+user+": Not enough privileges (ACCESS_DENIED)")
+				return
+			}
+			writer.WriteHeader(http.StatusOK)
+			return
+		}
+		writer.WriteHeader(http.StatusBadRequest)
+	}))
+	defer server.Close()
+
+	sink, err := NewClickHouseSink(server.URL, "optimization_service_writer", "wpw", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	eval := Evaluation{
+		EvaluationID:      "01990000-1980-7000-8000-000000000101",
+		TenantID:          "01990000-3000-7000-8000-000000000001",
+		SiteID:            "01990000-5000-7000-8000-000000000001",
+		OptimizationRunID: "01990000-1950-7000-8000-000000000001",
+		RecommendationID:  "01990000-1990-7000-8000-000000000101",
+		GeneratedAt:       time.Date(2026, 8, 20, 4, 0, 0, 0, time.UTC),
+	}
+	if _, hasErr := sink.HasEvaluation(t.Context(), eval); hasErr == nil {
+		t.Fatal("expected writer-only sink HasEvaluation SELECT to be rejected with ACCESS_DENIED")
+	}
+
+	sink.WithReader("optimization_service_reader", "rpw")
+	present, err := sink.HasEvaluation(t.Context(), eval)
+	if err != nil || present {
+		t.Fatalf("expected HasEvaluation via reader role to succeed with present=false, got present=%t err=%v", present, err)
+	}
+	if err := sink.InsertEvaluation(t.Context(), eval); err != nil {
+		t.Fatalf("expected InsertEvaluation via writer role to succeed, got err=%v", err)
+	}
+}
