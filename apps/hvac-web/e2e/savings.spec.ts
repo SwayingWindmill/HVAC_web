@@ -114,11 +114,13 @@ test("measures on two machines' sub-meters report side by side", async ({ page, 
 
 test('a measure cites the setpoint command it came from, named as the control page names it', async ({ page, gateway }) => {
   await page.goto(`/operations/control?site=${SITE_ID}`);
-  await page.getByRole('button', { name: '调整 CHILLER-01 的设定值' }).click();
-  const settings = page.getByRole('dialog', { name: '调整 CHILLER-01 的设定值' });
-  await settings.getByRole('textbox', { name: '冷冻水出水设定温度目标值' }).fill('8');
-  await settings.getByRole('textbox', { name: '冷冻水出水设定温度目标值' }).press('Enter');
+  const faceplate = page.getByRole('complementary', { name: '设备精密操控台' });
+  await expect(faceplate.getByRole('heading', { level: 2 })).toHaveText('CHILLER-01');
+  const setpointInput = faceplate.getByRole('textbox', { name: '冷冻水出水设定温度目标值' });
+  await setpointInput.fill('8');
+  await setpointInput.press('Enter');
   await page.getByRole('alertdialog').getByRole('button', { name: '确认下发' }).click();
+  await page.getByRole('button', { name: /^历史/ }).click();
   await expect(page.getByRole('list', { name: '指令记录' }).getByRole('listitem').first()).toContainText('已执行');
 
   await page.goto(`/energy-analysis/savings?site=${SITE_ID}`);
