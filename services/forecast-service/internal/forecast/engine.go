@@ -17,23 +17,23 @@ const (
 	weatherModeSiteAndNWP    = "SITE_AND_FORECAST_WEATHER"
 	alignmentModePeriodStart = "PERIOD_START"
 
-	calendarTauDays      = 7.0
-	weatherFitTauDays    = 14.0
-	dayTypeShrinkPrior   = 0.50
-	holidayShrinkPrior   = 0.25
-	activeBiasHalfLifeH  = 24.0
-	activeLevelDecayH    = 96.0
-	activeBiasPriorHours = 4.0
-	shortARHalfLifeH     = 2.5
-	shortAREWMAHalfLifeH = 0.75
-	changePointCoolLowC  = 15.0
-	changePointCoolHighC = 24.0
-	changePointWetBulbC  = 14.0
-	weatherRidgeLambda   = 25.0
-	minWeatherFitWeight  = 32.0
-	minDistinctWetBulbN  = 16
-	maxWeatherBetaSlope  = 30.0
-	maxScaleShift        = 0.80
+	calendarTauDays        = 7.0
+	weatherFitTauDays      = 14.0
+	dayTypeShrinkPrior     = 0.50
+	holidayShrinkPrior     = 0.25
+	activeBiasHalfLifeH    = 24.0
+	activeLevelDecayH      = 96.0
+	activeBiasPriorHours   = 4.0
+	shortARHalfLifeH       = 2.5
+	shortAREWMAHalfLifeH   = 0.75
+	changePointCoolLowC    = 15.0
+	changePointCoolHighC   = 24.0
+	changePointWetBulbC    = 14.0
+	weatherRidgeLambda     = 25.0
+	minWeatherFitWeight    = 32.0
+	minDistinctWetBulbN    = 16
+	maxWeatherBetaSlope    = 30.0
+	maxScaleShift          = 0.80
 	weatherDiurnalLookback = 5 * 24 * time.Hour
 	weatherDiurnalMaxAge   = 12 * time.Hour
 	weatherAnomalyDecayH   = 30.0
@@ -241,34 +241,34 @@ func (p calendarProfile) meanLoad() float64 {
 }
 
 type weatherSample struct {
-	dryC      float64
-	wetC      float64
-	hasDry    bool
-	hasWet    bool
-	source    string
+	dryC       float64
+	wetC       float64
+	hasDry     bool
+	hasWet     bool
+	source     string
 	observedAt time.Time
 }
 
 type weatherRegressionModel struct {
-	enabled         bool
-	hasDistinctWB   bool
-	beta            [3]float64
-	c1Bar           []float64
-	c2Bar           []float64
-	wbBar           []float64
-	pastBySlot      map[int64]weatherSample
-	futureBySlot    map[int64]weatherSample
-	diurnalDry      []float64
-	hasDiurnalDry   []bool
-	latestDryC      float64
-	latestDryAt     time.Time
-	latestDryAnom   float64
-	hasLatestDry    bool
-	hasFutureNWP    bool
-	hasPastSiteWx   bool
-	loc             *time.Location
-	minutes         int
-	slotDur         time.Duration
+	enabled       bool
+	hasDistinctWB bool
+	beta          [3]float64
+	c1Bar         []float64
+	c2Bar         []float64
+	wbBar         []float64
+	pastBySlot    map[int64]weatherSample
+	futureBySlot  map[int64]weatherSample
+	diurnalDry    []float64
+	hasDiurnalDry []bool
+	latestDryC    float64
+	latestDryAt   time.Time
+	latestDryAnom float64
+	hasLatestDry  bool
+	hasFutureNWP  bool
+	hasPastSiteWx bool
+	loc           *time.Location
+	minutes       int
+	slotDur       time.Duration
 }
 
 func weatherFeatures(dryC, wetC float64, hasWet bool) (float64, float64, float64) {
@@ -292,16 +292,16 @@ func fitWeatherModel(
 	slotDur := time.Duration(minutes) * time.Minute
 	slotsPerDay := calRecent.slotsPerDay
 	model := weatherRegressionModel{
-		c1Bar:        make([]float64, slotsPerDay),
-		c2Bar:        make([]float64, slotsPerDay),
-		wbBar:        make([]float64, slotsPerDay),
-		pastBySlot:   make(map[int64]weatherSample),
-		futureBySlot: make(map[int64]weatherSample),
-		diurnalDry:   make([]float64, slotsPerDay),
+		c1Bar:         make([]float64, slotsPerDay),
+		c2Bar:         make([]float64, slotsPerDay),
+		wbBar:         make([]float64, slotsPerDay),
+		pastBySlot:    make(map[int64]weatherSample),
+		futureBySlot:  make(map[int64]weatherSample),
+		diurnalDry:    make([]float64, slotsPerDay),
 		hasDiurnalDry: make([]bool, slotsPerDay),
-		loc:          loc,
-		minutes:      minutes,
-		slotDur:      slotDur,
+		loc:           loc,
+		minutes:       minutes,
+		slotDur:       slotDur,
 	}
 	if len(wxInput) == 0 {
 		return model

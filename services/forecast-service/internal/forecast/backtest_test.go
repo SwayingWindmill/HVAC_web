@@ -23,11 +23,11 @@ type songyaxuanDataset struct {
 }
 
 type backtestStep struct {
-	ts        time.Time
-	loadKW    *float64
-	siteLoad  *float64
-	dryBulbC  *float64
-	wetBulbC  *float64
+	ts       time.Time
+	loadKW   *float64
+	siteLoad *float64
+	dryBulbC *float64
+	wetBulbC *float64
 }
 
 type backtestMetrics struct {

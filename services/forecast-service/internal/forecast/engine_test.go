@@ -28,7 +28,7 @@ func TestPeriodStartAlignmentAtNonBoundaryOrigin(t *testing.T) {
 	// Cron runs at minute :07 (12:07:00Z). Facts complete by 12:00:00Z ([11:45, 12:00)).
 	origin := time.Date(2026, 10, 12, 4, 7, 0, 0, time.UTC) // 12:07 CST
 	facts := make([]MetricFact, 0, 2*96)
-	for at := origin.Truncate(15*time.Minute).Add(-48 * time.Hour); at.Before(origin.Truncate(15 * time.Minute)); at = at.Add(15 * time.Minute) {
+	for at := origin.Truncate(15 * time.Minute).Add(-48 * time.Hour); at.Before(origin.Truncate(15 * time.Minute)); at = at.Add(15 * time.Minute) {
 		cst := at.In(resolveSiteLocation("Asia/Shanghai"))
 		val := 10.0
 		if cst.Hour() == 12 && cst.Minute() == 15 {
@@ -347,7 +347,7 @@ func TestOfflineWeatherMissingGracefulDegradation(t *testing.T) {
 	}
 
 	facts := make([]MetricFact, 0, 2*96)
-	for at := origin.Truncate(15*time.Minute).Add(-48 * time.Hour); at.Before(origin.Truncate(15 * time.Minute)); at = at.Add(15 * time.Minute) {
+	for at := origin.Truncate(15 * time.Minute).Add(-48 * time.Hour); at.Before(origin.Truncate(15 * time.Minute)); at = at.Add(15 * time.Minute) {
 		facts = append(facts, metricFact(at.Add(15*time.Minute), 45.0, 1))
 	}
 	store := &preparationStoreStub{definition: preparationDefinition()}

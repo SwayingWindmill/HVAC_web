@@ -30,9 +30,9 @@ const (
 )
 
 const (
-	WeatherSourceNone            = "NONE"
-	WeatherSourceSiteSensors     = "SITE_SENSORS"
-	WeatherSourceOpenMeteo       = "OPEN_METEO"
+	WeatherSourceNone             = "NONE"
+	WeatherSourceSiteSensors      = "SITE_SENSORS"
+	WeatherSourceOpenMeteo        = "OPEN_METEO"
 	WeatherSourceSiteAndOpenMeteo = "SITE_AND_OPEN_METEO"
 )
 
