@@ -40,16 +40,17 @@ const (
 // PlantBucket is one device's 15-minute means. A field is nil when the device reported no
 // usable reading of it in the bucket.
 type PlantBucket struct {
-	Bucket           time.Time `json:"bucket"`
-	DeviceID         string    `json:"deviceId"`
-	PowerKW          *float64  `json:"powerKW"`
-	ChwLeavingC      *float64  `json:"chwLeavingC"`
-	ChwEnteringC     *float64  `json:"chwEnteringC"`
-	CwLeavingC       *float64  `json:"cwLeavingC"`
-	CoolingKW        *float64  `json:"coolingKW"`
-	RatedPowerKW     *float64  `json:"ratedPowerKW,omitempty"`
-	RatedCurrentA    *float64  `json:"ratedCurrentA,omitempty"`
-	MeasuredCurrentA *float64  `json:"measuredCurrentA,omitempty"`
+	Bucket                 time.Time `json:"bucket"`
+	DeviceID               string    `json:"deviceId"`
+	PowerKW                *float64  `json:"powerKW"`
+	FeederAuxiliaryPowerKW float64   `json:"feederAuxiliaryPowerKW,omitempty"`
+	ChwLeavingC            *float64  `json:"chwLeavingC"`
+	ChwEnteringC           *float64  `json:"chwEnteringC"`
+	CwLeavingC             *float64  `json:"cwLeavingC"`
+	CoolingKW              *float64  `json:"coolingKW"`
+	RatedPowerKW           *float64  `json:"ratedPowerKW,omitempty"`
+	RatedCurrentA          *float64  `json:"ratedCurrentA,omitempty"`
+	MeasuredCurrentA       *float64  `json:"measuredCurrentA,omitempty"`
 }
 
 type PlantHistoryQuery struct {
@@ -158,8 +159,10 @@ func FitPlant(buckets []PlantBucket, from, to time.Time) PlantFit {
 		}
 	}
 	for _, bucket := range buckets {
-		if chillerSet[bucket.DeviceID] && bucket.PowerKW != nil && finite(*bucket.PowerKW) && *bucket.PowerKW > maxPower[bucket.DeviceID] {
-			maxPower[bucket.DeviceID] = *bucket.PowerKW
+		if chillerSet[bucket.DeviceID] {
+			if netPower, ok := netChillerPowerKW(bucket); ok && netPower > maxPower[bucket.DeviceID] {
+				maxPower[bucket.DeviceID] = netPower
+			}
 		}
 	}
 	chillers := make([]string, 0, len(chillerSet))
@@ -180,10 +183,20 @@ func FitPlant(buckets []PlantBucket, from, to time.Time) PlantFit {
 	}
 	running := func(group map[string]PlantBucket, id string) bool {
 		bucket, ok := group[id]
-		return ok && bucket.PowerKW != nil && finite(*bucket.PowerKW) &&
-			maxPower[id] >= copMinimumRunningPowerKW &&
-			*bucket.PowerKW >= copMinimumRunningPowerKW &&
-			*bucket.PowerKW > copRunningPowerFraction*maxPower[id]
+		if !ok {
+			return false
+		}
+		netPower, ok := netChillerPowerKW(bucket)
+		if !ok ||
+			maxPower[id] < copMinimumRunningPowerKW ||
+			netPower < copMinimumRunningPowerKW ||
+			netPower <= copRunningPowerFraction*maxPower[id] {
+			return false
+		}
+		if bucket.RatedPowerKW != nil && finitePositive(*bucket.RatedPowerKW) && netPower <= copRunningPowerFraction**bucket.RatedPowerKW {
+			return false
+		}
+		return true
 	}
 	samples := map[string][]COPSample{}
 	for _, at := range times {
@@ -226,7 +239,12 @@ func FitPlant(buckets []PlantBucket, from, to time.Time) PlantFit {
 				continue
 			}
 			bucket := group[id]
-			sample := COPSample{Bucket: at, LoadKW: load * shares[index], PowerKW: *bucket.PowerKW, ChwSupplyC: *bucket.ChwLeavingC, CwReturnC: bucket.CwLeavingC, Allocation: method}
+			netPower, ok := netChillerPowerKW(bucket)
+			if !ok {
+				evidence.SetAside["implausibleCOP"]++
+				continue
+			}
+			sample := COPSample{Bucket: at, LoadKW: load * shares[index], PowerKW: netPower, ChwSupplyC: *bucket.ChwLeavingC, CwReturnC: bucket.CwLeavingC, Allocation: method}
 			if !finitePositive(sample.LoadKW) || !finitePositive(sample.PowerKW) || sample.PowerKW < copMinimumRunningPowerKW {
 				evidence.SetAside["implausibleCOP"]++
 				continue
@@ -236,7 +254,7 @@ func FitPlant(buckets []PlantBucket, from, to time.Time) PlantFit {
 				evidence.SetAside["implausibleCOP"]++
 				continue
 			}
-			if ratio, basis, ok := nameplate.LoadRatio(bucket.PowerKW, bucket.MeasuredCurrentA, nameplateFrom(bucket)); ok {
+			if ratio, basis, ok := nameplate.LoadRatio(&netPower, bucket.MeasuredCurrentA, nameplateFrom(bucket)); ok {
 				sample.ElectricalLoadRatio = &ratio
 				sample.LoadRatioBasis = basis
 				measured, rated := sample.PowerKW, 0.0
@@ -275,8 +293,17 @@ func FitPlant(buckets []PlantBucket, from, to time.Time) PlantFit {
 	return fit
 }
 
-// plausible rejects buckets whose temperatures cannot be a running Chiller's: supply outside
-// 2–12 ℃ or warmer than the return, condenser outside 15–45 ℃ or colder than the supply.
+func netChillerPowerKW(bucket PlantBucket) (float64, bool) {
+	if bucket.PowerKW == nil || !finite(*bucket.PowerKW) {
+		return 0, false
+	}
+	aux := 0.0
+	if finitePositive(bucket.FeederAuxiliaryPowerKW) {
+		aux = bucket.FeederAuxiliaryPowerKW
+	}
+	return math.Max(0, *bucket.PowerKW-aux), true
+}
+
 func nameplateFrom(bucket PlantBucket) nameplate.Plate {
 	plate := nameplate.Plate{}
 	if bucket.RatedPowerKW != nil {
@@ -288,6 +315,8 @@ func nameplateFrom(bucket PlantBucket) nameplate.Plate {
 	return plate
 }
 
+// plausible rejects buckets whose temperatures cannot be a running Chiller's: supply outside
+// 2–12 ℃ or warmer than the return, condenser outside 10–45 ℃ or colder than the supply.
 func plausible(group map[string]PlantBucket, runningIDs []string) bool {
 	for _, id := range runningIDs {
 		bucket := group[id]
@@ -301,7 +330,7 @@ func plausible(group map[string]PlantBucket, runningIDs []string) bool {
 		if bucket.ChwEnteringC != nil && (!finite(*bucket.ChwEnteringC) || supply > *bucket.ChwEnteringC+0.5) {
 			return false
 		}
-		if bucket.CwLeavingC != nil && (!finite(*bucket.CwLeavingC) || *bucket.CwLeavingC < 15 || *bucket.CwLeavingC > 45 || *bucket.CwLeavingC <= supply) {
+		if bucket.CwLeavingC != nil && (!finite(*bucket.CwLeavingC) || *bucket.CwLeavingC < 10 || *bucket.CwLeavingC > 45 || *bucket.CwLeavingC <= supply) {
 			return false
 		}
 	}
@@ -332,7 +361,8 @@ func allocate(group map[string]PlantBucket, runningIDs []string) ([]float64, str
 	}
 	total = 0
 	for index, id := range runningIDs {
-		drops[index] = *group[id].PowerKW
+		netPower, _ := netChillerPowerKW(group[id])
+		drops[index] = netPower
 		total += drops[index]
 	}
 	if !finitePositive(total) {

@@ -72,6 +72,10 @@ type stalePublicationReconciler interface {
 	Reconcile(context.Context, time.Time, int) (int, error)
 }
 
+type stagingSweepRunner interface {
+	EvaluateAndPersistAllSiteStaging(context.Context, time.Time) (optimization.StagingSweepSummary, error)
+}
+
 func main() {
 	os.Exit(run())
 }
@@ -218,6 +222,7 @@ func runService(logger *slog.Logger) error {
 		Catalog:  publication,
 		Policy:   optimization.DefaultStagingPolicy(),
 	})
+	service.WithStagingSiteLister(optimization.NewCompositeStagingSiteLister(inputs, publication))
 	// The Chiller COP Model runs as a shadow solver: it records what it would recommend beside
 	// every published run and never publishes. OPTIMIZATION_SHADOW_SOLVER=OFF turns it off.
 	switch shadow := envOrDefault("OPTIMIZATION_SHADOW_SOLVER", optimization.ChillerCOPSolverName); shadow {
@@ -325,6 +330,9 @@ func runService(logger *slog.Logger) error {
 	})
 	runSupervised(workerCtx, &bgWG, logger, metrics, "optimization.reconcile", defaultPanicRestartDelay, func() {
 		runReconcileLoop(workerCtx, 30*time.Second, service, logger)
+	})
+	runSupervised(workerCtx, &bgWG, logger, metrics, "optimization.staging_evaluation", defaultPanicRestartDelay, func() {
+		runStagingEvaluationLoop(workerCtx, optimization.DefaultStagingSweepInterval, service, logger)
 	})
 
 	server := &http.Server{
@@ -498,6 +506,37 @@ func runReconcileLoop(ctx context.Context, interval time.Duration, reconciler st
 			if reconcileErr != nil && ctx.Err() == nil && logger != nil {
 				logger.Warn("optimization_reconcile_failed", "error_code", "OPTIMIZATION_RECONCILE_FAILED", "error", reconcileErr)
 			}
+		}
+	}
+}
+
+func runStagingEvaluationLoop(ctx context.Context, interval time.Duration, runner stagingSweepRunner, logger *slog.Logger) {
+	if runner == nil {
+		return
+	}
+	if interval <= 0 {
+		interval = optimization.DefaultStagingSweepInterval
+	}
+	runOnce := func() {
+		if ctx.Err() != nil {
+			return
+		}
+		sweepCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		summary, sweepErr := runner.EvaluateAndPersistAllSiteStaging(sweepCtx, time.Now().UTC())
+		cancel()
+		if sweepErr != nil && ctx.Err() == nil && logger != nil {
+			logger.Warn("optimization_staging_sweep_failed", "error_code", "OPTIMIZATION_STAGING_SWEEP_FAILED", "sites", summary.Sites, "persisted", summary.Persisted, "failed", summary.Failed, "error", sweepErr)
+		}
+	}
+	runOnce()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			runOnce()
 		}
 	}
 }

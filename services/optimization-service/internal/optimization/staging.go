@@ -442,7 +442,7 @@ func (evaluator *StagingEvaluator) Evaluate(ctx context.Context, tenantID, siteI
 	evaluatedAt := at.UTC()
 	twin, topology, catErr := loadTwinAndTopology(ctx, tenantID, siteID, evaluatedAt, evaluator.TwinLoader, evaluator.Catalog)
 	if catErr != nil {
-		return StagingEvaluation{}, fmt.Errorf("%w: %v", ErrStagingTopologyUnavailable, catErr)
+		return StagingEvaluation{}, fmt.Errorf("%w: %w", ErrStagingTopologyUnavailable, catErr)
 	}
 	snapshot, err := evaluator.Snapshot.ReadStagingSnapshot(ctx, StagingSnapshotQuery{
 		TenantID: tenantID,

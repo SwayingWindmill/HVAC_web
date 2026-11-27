@@ -57,6 +57,49 @@ func (s *stubReconciler) Reconcile(ctx context.Context, _ time.Time, _ int) (int
 	return 0, nil
 }
 
+type stubStagingSweepRunner struct {
+	calls atomic.Int32
+	fn    func(ctx context.Context, call int32) error
+}
+
+func (s *stubStagingSweepRunner) EvaluateAndPersistAllSiteStaging(ctx context.Context, _ time.Time) (optimization.StagingSweepSummary, error) {
+	call := s.calls.Add(1)
+	if s.fn != nil {
+		return optimization.StagingSweepSummary{}, s.fn(ctx, call)
+	}
+	return optimization.StagingSweepSummary{}, nil
+}
+
+func TestRunStagingEvaluationLoopRunsAtStartupAndStopsOnCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	runner := &stubStagingSweepRunner{
+		fn: func(runCtx context.Context, call int32) error {
+			if _, ok := runCtx.Deadline(); !ok {
+				t.Errorf("staging sweep context missing timeout deadline")
+			}
+			if call >= 2 {
+				cancel()
+			}
+			return nil
+		},
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runStagingEvaluationLoop(ctx, 5*time.Millisecond, runner, nil)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runStagingEvaluationLoop did not stop after context cancellation")
+	}
+	if runner.calls.Load() < 2 {
+		t.Fatalf("staging sweep calls=%d, want >= 2", runner.calls.Load())
+	}
+}
+
 func TestRunMonitorLoopAndReconcileLoopRespectContextCancellation(t *testing.T) {
 	monitorCtx, monitorCancel := context.WithCancel(t.Context())
 	defer monitorCancel()
