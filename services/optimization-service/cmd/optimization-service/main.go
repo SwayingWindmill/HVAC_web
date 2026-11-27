@@ -212,6 +212,9 @@ func runService(logger *slog.Logger) error {
 	}
 	service.WithShadowReader(inputs)
 	service.WithAllowedSolverHosts(allowedSolverHosts)
+	if err := configureEdgeModelSigning(service, logger); err != nil {
+		return err
+	}
 	service.WithStaging(&optimization.StagingEvaluator{
 		History:  inputs,
 		Snapshot: inputs,
@@ -970,4 +973,20 @@ func defaultWorkerID() string {
 		return fmt.Sprintf("%s-%d", strings.TrimSpace(hostname), os.Getpid())
 	}
 	return fmt.Sprintf("%s-%d-%s", strings.TrimSpace(hostname), os.Getpid(), hex.EncodeToString(suffix))
+}
+
+func configureEdgeModelSigning(service *optimization.Service, logger *slog.Logger) error {
+	keyFile := strings.TrimSpace(os.Getenv("OPTIMIZATION_EDGE_MODEL_SIGNING_KEY_FILE"))
+	if keyFile == "" {
+		return nil
+	}
+	keyID, privateKey, err := optimization.LoadEdgeModelSigningKeyFromFile(os.Getenv("OPTIMIZATION_EDGE_MODEL_SIGNING_KEY_ID"), keyFile)
+	if err != nil {
+		return err
+	}
+	service.WithEdgeModelSigningKey(keyID, privateKey)
+	if logger != nil {
+		logger.Info("optimization_edge_model_signing_enabled", "key_id", keyID)
+	}
+	return nil
 }

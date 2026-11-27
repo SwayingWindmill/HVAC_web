@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -26,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/schedulerjob"
 	"github.com/quanlaihe/hvac-web/services/optimization-service/internal/optimization"
@@ -824,4 +827,249 @@ func TestShutdownServiceRuntimeStrictOrder(t *testing.T) {
 	if workerIdx >= telemetryIdx {
 		t.Fatalf("expected worker_exited before telemetry_shutdown: %v", got)
 	}
+}
+
+type mainStubPubStore struct{}
+
+func (mainStubPubStore) StartRun(context.Context, optimization.Request, time.Time) error {
+	return nil
+}
+func (mainStubPubStore) BeginPublication(context.Context, optimization.Request, optimization.Recommendation, optimization.Evaluation, time.Time) error {
+	return nil
+}
+func (mainStubPubStore) CompletePublication(context.Context, optimization.Evaluation, time.Time) error {
+	return nil
+}
+func (mainStubPubStore) FailRun(context.Context, optimization.Request, string, time.Time) error {
+	return nil
+}
+func (mainStubPubStore) ListStalePublications(context.Context, time.Time, int) ([]optimization.Evaluation, error) {
+	return nil, nil
+}
+func (mainStubPubStore) LatestRecommendation(context.Context, string, string) (optimization.PublishedRecommendation, error) {
+	return optimization.PublishedRecommendation{}, optimization.ErrOptimizationNotFound
+}
+func (mainStubPubStore) LatestPreparation(context.Context, string, string) (optimization.PreparationOutcome, error) {
+	return optimization.PreparationOutcome{}, nil
+}
+
+type mainStubEvalSink struct{}
+
+func (mainStubEvalSink) InsertEvaluation(context.Context, optimization.Evaluation) error {
+	return nil
+}
+func (mainStubEvalSink) HasEvaluation(context.Context, optimization.Evaluation) (bool, error) {
+	return false, nil
+}
+
+type mainStubEdgeModelStore struct {
+	artifact optimization.EdgeModelArtifactRecord
+	approval optimization.EdgeModelApprovalRecord
+}
+
+func (s *mainStubEdgeModelStore) LoadEdgeModelSiteSnapshot(_ context.Context, tenantID, siteID string) (optimization.EdgeModelSiteSnapshot, error) {
+	return optimization.EdgeModelSiteSnapshot{
+		Artifacts: []optimization.EdgeModelArtifactRecord{s.artifact},
+		Approvals: []optimization.EdgeModelApprovalRecord{s.approval},
+	}, nil
+}
+
+func (s *mainStubEdgeModelStore) InsertEdgeModelArtifact(_ context.Context, record optimization.EdgeModelArtifactRecord) (optimization.EdgeModelArtifactRecord, error) {
+	return record, nil
+}
+
+func (s *mainStubEdgeModelStore) InsertEdgeModelApproval(_ context.Context, record optimization.EdgeModelApprovalRecord) (optimization.EdgeModelApprovalRecord, error) {
+	return record, nil
+}
+
+func (s *mainStubEdgeModelStore) DeployEdgeModelVersion(_ context.Context, tenantID, siteID string, artifact optimization.EdgeModelArtifactRecord, approvalID, environment, servingRef string, at time.Time) (optimization.EdgeModelDeploymentRecord, []optimization.EdgeModelDeploymentRecord, error) {
+	dep := optimization.EdgeModelDeploymentRecord{
+		ID:            "019b0000-1000-7000-8000-000000000501",
+		TenantID:      tenantID,
+		SiteID:        siteID,
+		Domain:        artifact.Domain,
+		VersionID:     artifact.VersionID,
+		ApprovalID:    approvalID,
+		Environment:   environment,
+		Status:        "ACTIVE",
+		ServingRef:    servingRef,
+		EffectiveFrom: at,
+		Revision:      1,
+		CreatedAt:     at,
+		UpdatedAt:     at,
+	}
+	return dep, []optimization.EdgeModelDeploymentRecord{dep}, nil
+}
+
+func (s *mainStubEdgeModelStore) RollbackEdgeModelDeployment(context.Context, string, string, string, *optimization.EdgeModelArtifactRecord, string, string, string, string, string, time.Time) (optimization.EdgeModelRollbackRecord, *optimization.EdgeModelDeploymentRecord, []optimization.EdgeModelDeploymentRecord, error) {
+	return optimization.EdgeModelRollbackRecord{}, nil, nil, nil
+}
+
+func (s *mainStubEdgeModelStore) InsertEdgeModelEvaluation(context.Context, optimization.EdgeModelEvaluationRecord, *optimization.EdgeModelDriftRecord) error {
+	return nil
+}
+
+func newTestMainServiceWithEdgeModel(t *testing.T) (*optimization.Service, string, string, string, string) {
+	t.Helper()
+	svc, err := optimization.NewDefaultService(mainStubPubStore{}, mainStubEvalSink{}, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const (
+		tenantID   = "01990000-3000-7000-8000-000000000001"
+		siteID     = "01990000-5000-7000-8000-000000000001"
+		artifactID = "019b0000-1000-7000-8000-000000000502"
+		versionID  = "019b0000-1000-7000-8000-000000000503"
+		approvalID = "019b0000-1000-7000-8000-000000000504"
+		gatewayID  = "018f3d00-2000-7000-8000-000000000099"
+	)
+	minC, maxC := 6.5, 10.5
+	hp := edgecontrol.EdgeModelHyperparams{
+		COPCoefficients:        []float64{3.8, 0.06},
+		SupplyTempSetpointMinC: &minC,
+		SupplyTempSetpointMaxC: &maxC,
+	}
+	sha, err := edgecontrol.ComputeEdgeModelHyperparamsSHA256(hp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 11, 27, 8, 0, 0, 0, time.UTC)
+	svc.WithEdgeModelStore(&mainStubEdgeModelStore{
+		artifact: optimization.EdgeModelArtifactRecord{
+			ID:             artifactID,
+			TenantID:       tenantID,
+			SiteID:         siteID,
+			Domain:         edgecontrol.EdgeModelDomainControl,
+			VersionID:      versionID,
+			ObjectURI:      "inline://edge-models/test",
+			ChecksumSHA256: sha,
+			Metadata: optimization.EdgeModelArtifactMetadata{
+				ModelKey:           "chiller-cop-opt",
+				Version:            "1.0.0",
+				Name:               "main signing check",
+				MaxShadowDeviation: 1.5,
+				Hyperparams:        hp,
+				GatewayID:          gatewayID,
+			},
+			CreatedAt: now,
+		},
+		approval: optimization.EdgeModelApprovalRecord{
+			ID:        approvalID,
+			TenantID:  tenantID,
+			SiteID:    siteID,
+			Domain:    edgecontrol.EdgeModelDomainControl,
+			VersionID: versionID,
+			Decision:  "APPROVED",
+			DecidedAt: now,
+			CreatedAt: now,
+		},
+	})
+	return svc, tenantID, siteID, artifactID, gatewayID
+}
+
+func TestConfigureEdgeModelSigningFromEnv(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "ota-signing-key.pem")
+	if err := os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pubB64 := base64.StdEncoding.EncodeToString(pub)
+
+	t.Run("unset leaves signer unconfigured", func(t *testing.T) {
+		t.Setenv("OPTIMIZATION_EDGE_MODEL_SIGNING_KEY_FILE", "")
+		t.Setenv("OPTIMIZATION_EDGE_MODEL_SIGNING_KEY_ID", "")
+		svc, tenantID, siteID, artifactID, gatewayID := newTestMainServiceWithEdgeModel(t)
+		if err := configureEdgeModelSigning(svc, nil); err != nil {
+			t.Fatalf("configureEdgeModelSigning(unset): %v", err)
+		}
+		res, err := svc.DeployEdgeModelArtifact(t.Context(), tenantID, siteID, optimization.DeployEdgeModelRequest{
+			ArtifactID:  artifactID,
+			Environment: "PRODUCTION",
+			GatewayID:   gatewayID,
+		})
+		if err != nil {
+			t.Fatalf("DeployEdgeModelArtifact: %v", err)
+		}
+		if len(res.DesiredBundles) != 1 || res.DesiredBundles[0].Signature != "" {
+			t.Fatalf("expected unsigned bundle when key file env is unset, got %+v", res.DesiredBundles)
+		}
+	})
+
+	t.Run("configured file defaults keyID and signs verifiable bundle", func(t *testing.T) {
+		t.Setenv("OPTIMIZATION_EDGE_MODEL_SIGNING_KEY_FILE", keyPath)
+		t.Setenv("OPTIMIZATION_EDGE_MODEL_SIGNING_KEY_ID", "")
+		var logBuf bytes.Buffer
+		logger := slog.New(slog.NewJSONHandler(&logBuf, nil))
+		svc, tenantID, siteID, artifactID, gatewayID := newTestMainServiceWithEdgeModel(t)
+		if err := configureEdgeModelSigning(svc, logger); err != nil {
+			t.Fatalf("configureEdgeModelSigning(default keyID): %v", err)
+		}
+		if !strings.Contains(logBuf.String(), optimization.DefaultEdgeModelSigningKeyID) {
+			t.Fatalf("expected log to record key_id %q, got %s", optimization.DefaultEdgeModelSigningKeyID, logBuf.String())
+		}
+		if strings.Contains(logBuf.String(), "PRIVATE KEY") {
+			t.Fatalf("log must never contain private key material: %s", logBuf.String())
+		}
+		res, err := svc.DeployEdgeModelArtifact(t.Context(), tenantID, siteID, optimization.DeployEdgeModelRequest{
+			ArtifactID:  artifactID,
+			Environment: "PRODUCTION",
+			GatewayID:   gatewayID,
+		})
+		if err != nil {
+			t.Fatalf("DeployEdgeModelArtifact: %v", err)
+		}
+		if len(res.DesiredBundles) != 1 {
+			t.Fatalf("desiredBundles len = %d, want 1", len(res.DesiredBundles))
+		}
+		bundle := res.DesiredBundles[0]
+		if bundle.KeyID != optimization.DefaultEdgeModelSigningKeyID {
+			t.Fatalf("bundle keyId = %q, want %q", bundle.KeyID, optimization.DefaultEdgeModelSigningKeyID)
+		}
+		if err := edgecontrol.ValidateEdgeModelBundle(bundle, map[string]string{
+			optimization.DefaultEdgeModelSigningKeyID: pubB64,
+		}, true); err != nil {
+			t.Fatalf("ValidateEdgeModelBundle: %v", err)
+		}
+	})
+
+	t.Run("explicit keyID overrides default", func(t *testing.T) {
+		t.Setenv("OPTIMIZATION_EDGE_MODEL_SIGNING_KEY_FILE", keyPath)
+		t.Setenv("OPTIMIZATION_EDGE_MODEL_SIGNING_KEY_ID", "custom-edge-v2")
+		svc, tenantID, siteID, artifactID, gatewayID := newTestMainServiceWithEdgeModel(t)
+		if err := configureEdgeModelSigning(svc, nil); err != nil {
+			t.Fatalf("configureEdgeModelSigning(custom keyID): %v", err)
+		}
+		res, err := svc.DeployEdgeModelArtifact(t.Context(), tenantID, siteID, optimization.DeployEdgeModelRequest{
+			ArtifactID:  artifactID,
+			Environment: "PRODUCTION",
+			GatewayID:   gatewayID,
+		})
+		if err != nil {
+			t.Fatalf("DeployEdgeModelArtifact: %v", err)
+		}
+		bundle := res.DesiredBundles[0]
+		if bundle.KeyID != "custom-edge-v2" {
+			t.Fatalf("bundle keyId = %q, want custom-edge-v2", bundle.KeyID)
+		}
+		if err := edgecontrol.ValidateEdgeModelBundle(bundle, map[string]string{"custom-edge-v2": pubB64}, true); err != nil {
+			t.Fatalf("ValidateEdgeModelBundle(custom keyID): %v", err)
+		}
+	})
+
+	t.Run("missing configured file fails closed", func(t *testing.T) {
+		t.Setenv("OPTIMIZATION_EDGE_MODEL_SIGNING_KEY_FILE", filepath.Join(dir, "missing.pem"))
+		t.Setenv("OPTIMIZATION_EDGE_MODEL_SIGNING_KEY_ID", "platform-ota-v1")
+		svc, _, _, _, _ := newTestMainServiceWithEdgeModel(t)
+		if err := configureEdgeModelSigning(svc, nil); err == nil {
+			t.Fatal("expected error when OPTIMIZATION_EDGE_MODEL_SIGNING_KEY_FILE points to missing file")
+		}
+	})
 }

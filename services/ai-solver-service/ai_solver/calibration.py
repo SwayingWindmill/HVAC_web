@@ -81,6 +81,7 @@ class CalibrationProfile:
     calibrated_at: str = ""
     sample_count: int = 0
     negative_sample_count: int = 0
+    sample_kind_counts: dict[str, int] = field(default_factory=dict)
     global_calibration: SiteCalibration = field(default_factory=SiteCalibration)
     site_overrides: dict[str, SiteCalibration] = field(default_factory=dict)
 
@@ -97,6 +98,7 @@ class CalibrationProfile:
             "calibratedAt": self.calibrated_at,
             "sampleCount": self.sample_count,
             "negativeSampleCount": self.negative_sample_count,
+            "sampleKindCounts": {str(kind): int(count) for kind, count in sorted(self.sample_kind_counts.items())},
             "globalCalibration": self.global_calibration.to_dict(),
             "siteOverrides": {
                 site_id: cal.to_dict() for site_id, cal in sorted(self.site_overrides.items())
@@ -123,12 +125,25 @@ class CalibrationProfile:
                 overrides[key] = SiteCalibration.from_dict(cal_raw)
         sample_count = raw.get("sampleCount", 0)
         neg_count = raw.get("negativeSampleCount", 0)
+        raw_kind_counts = raw.get("sampleKindCounts")
+        sample_kind_counts: dict[str, int] = {}
+        if isinstance(raw_kind_counts, dict):
+            for raw_kind, raw_count in raw_kind_counts.items():
+                kind = str(raw_kind).strip().upper()
+                if (
+                    kind
+                    and isinstance(raw_count, int)
+                    and not isinstance(raw_count, bool)
+                    and raw_count >= 0
+                ):
+                    sample_kind_counts[kind] = raw_count
         return cls(
             schema_version=1,
             profile_id=raw_profile_id,
             calibrated_at=str(raw.get("calibratedAt") or "").strip(),
             sample_count=int(sample_count) if isinstance(sample_count, int) and not isinstance(sample_count, bool) and sample_count >= 0 else 0,
             negative_sample_count=int(neg_count) if isinstance(neg_count, int) and not isinstance(neg_count, bool) and neg_count >= 0 else 0,
+            sample_kind_counts=sample_kind_counts,
             global_calibration=SiteCalibration.from_dict(raw.get("globalCalibration")),
             site_overrides=overrides,
         )

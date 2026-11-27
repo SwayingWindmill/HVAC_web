@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"math"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -554,5 +557,102 @@ func TestServiceGovernanceSummaryBivariateCOPAndFlywheel(t *testing.T) {
 	}
 	if _, err := hiddenSvc.GovernanceSummary(t.Context(), tenantID, siteID, 14); err != ErrOptimizationNotFound {
 		t.Fatalf("expected ErrOptimizationNotFound for invisible site, got %v", err)
+	}
+}
+
+func TestNegativeSampleJSONLContractMatchesCanonicalEnums(t *testing.T) {
+	t.Parallel()
+
+	raw, err := os.ReadFile(filepath.Join("testdata", "flywheel-negative-samples.contract.jsonl"))
+	if err != nil {
+		t.Fatalf("read shared flywheel contract fixture: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(lines) != 5 {
+		t.Fatalf("contract fixture lines = %d, want 5", len(lines))
+	}
+
+	tenantID := "01990000-3000-7000-8000-000000000001"
+	siteID := "01990000-5000-7000-8000-000000000001"
+	baseTime := time.Date(2026, 11, 26, 8, 0, 0, 0, time.UTC)
+
+	fw := &memoryFlywheelStore{}
+	seenKinds := make(map[string]int, 5)
+	for i, line := range lines {
+		var item NegativeSampleItem
+		if err := json.Unmarshal([]byte(line), &item); err != nil {
+			t.Fatalf("unmarshal contract line %d: %v", i, err)
+		}
+		seenKinds[item.SampleKind]++
+
+		traceJSON, err := json.Marshal(item.GuardrailTrace)
+		if err != nil {
+			t.Fatalf("marshal trace %d: %v", i, err)
+		}
+		rec := NegativeSampleRecord{
+			ID:                    item.ID,
+			TenantID:              tenantID,
+			SiteID:                siteID,
+			DecisionID:            item.DecisionID,
+			RecommendationID:      item.RecommendationID,
+			MonitorID:             item.MonitorID,
+			TraceID:               item.TraceID,
+			SampleKind:            item.SampleKind,
+			ReasonCode:            item.ReasonCode,
+			SolverServingRef:      item.SolverServingRef,
+			RawRecommendedValue:   item.RawRecommendedValue,
+			AppliedOrClampedValue: item.AppliedOrClampedValue,
+			OccurredAt:            item.OccurredAt,
+			GuardrailTrace:        traceJSON,
+			FeatureSnapshot:       item.FeatureSnapshot,
+		}
+		serialized, err := json.Marshal(toNegativeSampleItem(rec))
+		if err != nil {
+			t.Fatalf("re-marshal NegativeSampleItem %d: %v", i, err)
+		}
+		if string(serialized) != strings.TrimSpace(line) {
+			t.Fatalf("contract line %d drifted from Go toNegativeSampleItem serialization:\ngot:  %s\nwant: %s", i, string(serialized), line)
+		}
+		if item.SampleKind == NegativeSampleGuardrailClamped && (len(item.GuardrailTrace) == 0 || item.GuardrailTrace[0].Stage == "") {
+			t.Fatalf("expected non-empty guardrail trace for clamped contract item: %+v", item)
+		}
+		if err := fw.RecordNegativeSample(t.Context(), rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, kind := range []string{
+		NegativeSampleGuardrailClamped,
+		NegativeSampleGuardrailVetoed,
+		NegativeSampleManualOverride,
+		NegativeSampleTrackingDeviation,
+		NegativeSampleMonitorTripped,
+	} {
+		if seenKinds[kind] != 1 {
+			t.Fatalf("contract fixture missing canonical kind %q (counts=%v)", kind, seenKinds)
+		}
+	}
+
+	svc, err := NewService(HVACRecommendationSolver{}, &stubGovernancePublicationStore{visible: true}, &captureEvaluationSink{}, func() time.Time {
+		return baseTime.Add(time.Hour)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.WithGovernanceFlywheel(fw)
+	summary, err := svc.GovernanceSummary(t.Context(), tenantID, siteID, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantSummary := GovernanceFlywheelSummary{
+		TotalSamples:      5,
+		GuardrailClamped:  1,
+		GuardrailVetoed:   1,
+		ManualOverride:    1,
+		MonitorTripped:    1,
+		TrackingDeviation: 1,
+	}
+	if summary.Flywheel != wantSummary {
+		t.Fatalf("GovernanceSummary flywheel = %+v, want %+v", summary.Flywheel, wantSummary)
 	}
 }
