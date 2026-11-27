@@ -132,10 +132,10 @@ type existingHourlyV2Row struct {
 	Quality         string     `json:"quality"`
 	TariffPeriod    string     `json:"tariff_period"`
 	HourUTC         string     `json:"hour_utc"`
-	IntervalCount   flexInt64  `json:"interval_count"`
-	CalcVersion     flexUint64 `json:"calc_version"`
-	DataWatermark   string     `json:"data_watermark"`
-	DatasetRevision flexUint64 `json:"dataset_revision"`
+	IntervalCount   flexInt64  `json:"latest_interval_count"`
+	CalcVersion     flexUint64 `json:"latest_calc_version"`
+	DataWatermark   string     `json:"latest_data_watermark"`
+	DatasetRevision flexUint64 `json:"latest_dataset_revision"`
 }
 
 type priorFactSpanRow struct {
@@ -553,10 +553,10 @@ func (reader *Reader) ExistingHourlyFactsV2(ctx context.Context, buckets []energ
   f.quality AS quality,
   f.tariff_period AS tariff_period,
   formatDateTime(f.hour, '%%Y-%%m-%%dT%%H:%%i:%%SZ', 'UTC') AS hour_utc,
-  argMax(f.interval_count, f.calc_version) AS interval_count,
-  max(f.calc_version) AS calc_version,
-  formatDateTime(argMax(f.data_watermark, f.calc_version), '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS data_watermark,
-  argMax(f.dataset_revision, f.calc_version) AS dataset_revision
+  argMax(f.interval_count, f.calc_version) AS latest_interval_count,
+  max(f.calc_version) AS latest_calc_version,
+  formatDateTime(argMax(f.data_watermark, f.calc_version), '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS latest_data_watermark,
+  argMax(f.dataset_revision, f.calc_version) AS latest_dataset_revision
 FROM %s.energy_hourly_facts_v2 AS f
 WHERE f.tenant_id = {tenant:UUID}
   AND f.site_id = {site:UUID}
