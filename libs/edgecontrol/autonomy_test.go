@@ -775,3 +775,155 @@ func TestLocalManualModeBlocksRemoteWritesAndRestoresOnRemote(t *testing.T) {
 		}
 	}
 }
+
+func TestCoolingTowerLocalRemoteInterlockRespectsTakeoverWithoutFalseChillerTrip(t *testing.T) {
+	t.Parallel()
+
+	chiller := newStubAutonomyDeviceAdapter(
+		ComponentDescriptor{
+			ID: "CH-01", Enabled: true, Kind: ComponentDeviceDriver, Type: "CHILLER",
+			FactoryID: DeclarativeModbusFactoryID, Version: "1.0.0", Profiles: []CapabilityProfileID{ProfileChiller},
+		},
+		[]ChannelDescriptor{
+			testChannelDesc("CH-01", "start_command", "ch:start", DataTypeBoolean, AccessReadWrite),
+			testChannelDesc("CH-01", "stop_command", "ch:stop", DataTypeBoolean, AccessReadWrite),
+			testChannelDesc("CH-01", "run_state", "ch:run", DataTypeBoolean, AccessReadOnly),
+			testChannelDesc("CH-01", "fault_active", "ch:fault", DataTypeBoolean, AccessReadOnly),
+		},
+	)
+	pump := newStubAutonomyDeviceAdapter(
+		ComponentDescriptor{
+			ID: "CHWP-01", Enabled: true, Kind: ComponentDeviceDriver, Type: "VARIABLE_SPEED_PUMP",
+			FactoryID: DeclarativeModbusFactoryID, Version: "1.0.0", Profiles: []CapabilityProfileID{ProfileVariableSpeedPump},
+		},
+		[]ChannelDescriptor{
+			testChannelDesc("CHWP-01", "run_state", "pump:run", DataTypeBoolean, AccessReadOnly),
+			testChannelDesc("CHWP-01", "flow_m3h", "pump:flow", DataTypeDouble, AccessReadOnly),
+			testChannelDesc("CHWP-01", "fault_active", "pump:fault", DataTypeBoolean, AccessReadOnly),
+			testChannelDesc("CHWP-01", "frequency_setpoint_hz", "pump:freq", DataTypeDouble, AccessReadWrite),
+		},
+	)
+	tower := newStubAutonomyDeviceAdapter(
+		ComponentDescriptor{
+			ID: "CT-01", Enabled: true, Kind: ComponentDeviceDriver, Type: "COOLING_TOWER",
+			FactoryID: DeclarativeModbusFactoryID, Version: "1.0.0", Profiles: []CapabilityProfileID{ProfileCoolingTower},
+		},
+		[]ChannelDescriptor{
+			testChannelDesc("CT-01", "start_command", "ct:start", DataTypeBoolean, AccessReadWrite),
+			testChannelDesc("CT-01", "stop_command", "ct:stop", DataTypeBoolean, AccessReadWrite),
+			testChannelDesc("CT-01", "fan_speed_setpoint_pct", "ct:fan", DataTypeDouble, AccessReadWrite),
+			testChannelDesc("CT-01", "run_state", "ct:run", DataTypeBoolean, AccessReadOnly),
+			testChannelDesc("CT-01", "fault_active", "ct:fault", DataTypeBoolean, AccessReadOnly),
+			testChannelDesc("CT-01", "local_remote_mode", "ct:mode", DataTypeString, AccessReadOnly),
+		},
+	)
+
+	host, err := NewHost()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ad := range []DeviceAdapter{chiller, pump, tower} {
+		if err := host.RegisterAdapter(ad); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	policy := DefaultAutonomyPolicyConfig()
+	policy.Enabled = true
+	interlock, err := NewHydraulicInterlockController(HydraulicInterlockConfig{
+		Policy: policy,
+		Chillers: []ChillerInterlockBinding{{
+			ComponentID: "CH-01", StartCommand: "CH-01/start_command", StopCommand: "CH-01/stop_command",
+			RunState: "CH-01/run_state", FaultChannel: "CH-01/fault_active",
+		}},
+		ChilledWaterPumps: []PumpInterlockBinding{{
+			ComponentID: "CHWP-01", RunState: "CHWP-01/run_state", FlowFeedback: "CHWP-01/flow_m3h",
+			MinFlowRate: 10, FaultChannel: "CHWP-01/fault_active", FrequencyCommand: "CHWP-01/frequency_setpoint_hz",
+		}},
+		CoolingTowers: []CoolingTowerInterlockBinding{{
+			ComponentID: "CT-01", StartCommand: "CT-01/start_command", StopCommand: "CT-01/stop_command",
+			FanSpeedCommand: "CT-01/fan_speed_setpoint_pct", RunState: "CT-01/run_state",
+			FaultChannel: "CT-01/fault_active", LocalRemoteMode: "CT-01/local_remote_mode",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	intents := &intentRequestController{id: "cloud-intents", reqs: map[string]Value{}}
+	if err := host.Start([]ControllerBinding{
+		{Priority: 0, Critical: true, Controller: interlock},
+		{Priority: 100, Controller: intents},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	t0 := time.Date(2026, 11, 27, 10, 0, 0, 0, time.UTC)
+	chiller.SetValue("CH-01/run_state", BooleanValue(true), QualityGood, t0)
+	chiller.SetValue("CH-01/fault_active", BooleanValue(false), QualityGood, t0)
+	chiller.SetValue("CH-01/start_command", BooleanValue(false), QualityGood, t0)
+	chiller.SetValue("CH-01/stop_command", BooleanValue(false), QualityGood, t0)
+	pump.SetValue("CHWP-01/run_state", BooleanValue(true), QualityGood, t0)
+	pump.SetValue("CHWP-01/flow_m3h", DoubleValue(80), QualityGood, t0)
+	pump.SetValue("CHWP-01/fault_active", BooleanValue(false), QualityGood, t0)
+	pump.SetValue("CHWP-01/frequency_setpoint_hz", DoubleValue(35), QualityGood, t0)
+	tower.SetValue("CT-01/run_state", BooleanValue(true), QualityGood, t0)
+	tower.SetValue("CT-01/fault_active", BooleanValue(false), QualityGood, t0)
+	tower.SetValue("CT-01/start_command", BooleanValue(false), QualityGood, t0)
+	tower.SetValue("CT-01/stop_command", BooleanValue(false), QualityGood, t0)
+	tower.SetValue("CT-01/fan_speed_setpoint_pct", DoubleValue(65), QualityGood, t0)
+	tower.SetValue("CT-01/local_remote_mode", StringValue("LOCAL"), QualityGood, t0)
+
+	// Operator flips tower to LOCAL: remote fan/start/stop writes are blocked, while running chiller is NOT tripped.
+	intents.reqs = map[string]Value{
+		"CT-01/start_command":          BooleanValue(true),
+		"CT-01/stop_command":           BooleanValue(true),
+		"CT-01/fan_speed_setpoint_pct": DoubleValue(30),
+	}
+	res, err := host.RunCycle(context.Background(), t0.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Cycle.Decisions) != 3 {
+		t.Fatalf("expected 3 tower decisions, got %d", len(res.Cycle.Decisions))
+	}
+	for _, d := range res.Cycle.Decisions {
+		if d.Accepted || len(d.ConstraintReasons) == 0 || d.ConstraintReasons[0].Reason != autonomyReasonLocalManual {
+			t.Fatalf("expected %s denial for %s, got %+v", autonomyReasonLocalManual, d.Address, d)
+		}
+	}
+	if fanVal, _ := tower.ReadValue("CT-01/fan_speed_setpoint_pct"); fanVal.Double != 65 {
+		t.Fatalf("local tower fan speed mutated to %v, want 65", fanVal.Double)
+	}
+	if stopCh, _ := chiller.ReadValue("CH-01/stop_command"); stopCh.Boolean {
+		t.Fatal("chiller must NOT be tripped during local tower panel takeover")
+	}
+
+	// Returning tower to REMOTE restores remote fan modulation immediately.
+	t1 := t0.Add(2 * time.Second)
+	tower.SetValue("CT-01/local_remote_mode", StringValue("REMOTE"), QualityGood, t1)
+	intents.reqs = map[string]Value{"CT-01/fan_speed_setpoint_pct": DoubleValue(48)}
+	resRemote, err := host.RunCycle(context.Background(), t1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resRemote.Cycle.Decisions) != 1 || !resRemote.Cycle.Decisions[0].Accepted {
+		t.Fatalf("expected REMOTE tower write accepted, got %+v", resRemote.Cycle.Decisions)
+	}
+	if fanVal, _ := tower.ReadValue("CT-01/fan_speed_setpoint_pct"); fanVal.Double != 48 {
+		t.Fatalf("expected tower fan speed 48 after REMOTE restore, got %v", fanVal.Double)
+	}
+
+	// Faulted tower in REMOTE mode must deny remote StartCommand without touching local manual protection.
+	t2 := t0.Add(3 * time.Second)
+	tower.SetValue("CT-01/fault_active", BooleanValue(true), QualityGood, t2)
+	intents.reqs = map[string]Value{"CT-01/start_command": BooleanValue(true)}
+	resFault, err := host.RunCycle(context.Background(), t2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resFault.Cycle.Decisions) != 1 || resFault.Cycle.Decisions[0].Accepted ||
+		resFault.Cycle.Decisions[0].ConstraintReasons[0].Reason != autonomyReasonTowerFault {
+		t.Fatalf("expected %s denial on faulted tower start, got %+v", autonomyReasonTowerFault, resFault.Cycle.Decisions)
+	}
+}
